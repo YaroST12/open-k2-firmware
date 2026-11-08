@@ -60,6 +60,14 @@
   <div class="hint" id="hint"></div>
 </div>
 
+<div class="card" id="latestCard" hidden>
+  <div class="row">
+    <button id="flashLatest" class="danger" disabled>Flash release</button>
+    <span id="latestInfo"></span>
+  </div>
+  <div class="hint" id="latestHint"></div>
+</div>
+
 <div class="card">
   <div class="row">
     <input type="file" id="file" accept=".k2,.bin,application/octet-stream">
@@ -107,6 +115,7 @@
     $("mode").textContent = m === "app" ? "application (remote link up)"
       : m === "bootloader" ? "bootloader (DFU)" : "unknown device";
     $("flash").disabled = !(m === "bootloader" || m === "app") || !S.fw;
+    refreshButtons();
   }
 
   function wireHid(dev, gen) {
@@ -179,27 +188,82 @@
     } catch (e) { fail(e); }
   };
 
+  // The one entry for a firmware image, whether it came from the file picker or from a release download.
+  function loadFirmware(bytes, name) {
+    try {
+      S.fw = K2Boot.Firmware.load(bytes);
+      log("loaded " + name + ": app " + S.fw.app.length + " B, container " + S.fw.source.length +
+          " B, version " + S.fw.version + " (" + S.fw.dateStr + "), " +
+          S.fw.eraseAddresses().length + " sectors to erase", "ok");
+      if (K2Boot.APP_START + S.fw.source.length > K2Boot.FS_START)
+        log("note: the image reaches the littlefs volume at 0x" + K2Boot.FS_START.toString(16) +
+            "; stored sessions and settings are lost and the K2 formats a new volume at the next boot");
+      $("flash").disabled = !(S.mode === "app" || S.mode === "bootloader");
+      return true;
+    } catch (e) {
+      S.fw = null; $("flash").disabled = true;
+      log("invalid firmware file: " + e.message, "err");
+      return false;
+    }
+  }
+
   $("file").onchange = function () {
     var f = this.files[0];
     if (!f) return;
     var rd = new FileReader();
-    rd.onload = function () {
-      try {
-        S.fw = K2Boot.Firmware.load(new Uint8Array(rd.result));
-        log("loaded " + f.name + ": app " + S.fw.app.length + " B, container " + S.fw.source.length +
-            " B, version " + S.fw.version + " (" + S.fw.dateStr + "), " +
-            S.fw.eraseAddresses().length + " sectors to erase", "ok");
-        if (K2Boot.APP_START + S.fw.source.length > K2Boot.FS_START)
-          log("note: the image reaches the littlefs volume at 0x" + K2Boot.FS_START.toString(16) +
-              "; stored sessions and settings are lost and the K2 formats a new volume at the next boot");
-        $("flash").disabled = !(S.mode === "app" || S.mode === "bootloader");
-      } catch (e) {
-        S.fw = null; $("flash").disabled = true;
-        log("invalid firmware file: " + e.message, "err");
-      }
-    };
+    rd.onload = function () { loadFirmware(new Uint8Array(rd.result), f.name); };
     rd.readAsArrayBuffer(f);
   };
+
+  // "Latest release": fw/latest.json is staged next to this page by the Pages workflow (the newest GitHub release,
+  // same origin because release assets carry no CORS headers) or by a local `make site`. Absent: the card stays hidden.
+  var LATEST = null;
+  function hex(buf) {
+    return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+  }
+  function showLatest(j) {
+    if (!j || typeof j.version !== "string" || typeof j.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(j.sha256)) return;
+    LATEST = j;
+    var local = /^local-/.test(j.version);
+    var when = j.built ? new Date(j.built) : null;
+    $("latestInfo").textContent = (local ? "Local build " : "Release ") + j.version +
+      (j.git && j.git !== j.version ? " (" + j.git + ")" : "") +
+      (when && !isNaN(when) ? ", " + when.toISOString().slice(0, 10) : "") +
+      (j.size ? ", " + j.size + " B" : "");
+    $("flashLatest").textContent = local ? "Flash local build" : "Flash release " + j.version;
+    $("latestHint").textContent = "Downloaded from this site and checked against SHA-256 " + j.sha256.slice(0, 12) +
+      "… before it is flashed. Connect the K2 first; flashing follows the same steps as a picked file.";
+    $("latestCard").hidden = false;
+    refreshButtons();
+  }
+  function refreshButtons() {
+    $("flashLatest").disabled = !LATEST || !(S.mode === "app" || S.mode === "bootloader");
+  }
+  async function fetchLatest() {
+    var r = await fetch("fw/open_k2.k2", { cache: "no-cache" });
+    if (!r.ok) throw new Error("fw/open_k2.k2: HTTP " + r.status);
+    var bytes = new Uint8Array(await r.arrayBuffer());
+    var sum = hex(await crypto.subtle.digest("SHA-256", bytes));
+    if (sum !== LATEST.sha256) throw new Error("SHA-256 mismatch: got " + sum.slice(0, 12) + "…, latest.json says " + LATEST.sha256.slice(0, 12) + "…");
+    if (LATEST.size && bytes.length !== LATEST.size) throw new Error("size " + bytes.length + " B, latest.json says " + LATEST.size + " B");
+    log("downloaded release " + LATEST.version + ", SHA-256 verified", "ok");
+    return bytes;
+  }
+  $("flashLatest").onclick = async function () {
+    if (!(S.mode === "app" || S.mode === "bootloader")) return;
+    $("flashLatest").disabled = true;
+    try {
+      var bytes = await fetchLatest();
+      if (loadFirmware(bytes, "open_k2.k2 (" + LATEST.version + ")")) await runFlash();
+    } catch (e) {
+      setStatus("download failed", "bad");
+      log("latest build: " + (e && e.message ? e.message : e), "err");
+    } finally { refreshButtons(); }
+  };
+  fetch("fw/latest.json", { cache: "no-cache" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(showLatest)
+    .catch(function () {});
 
   async function enterDfu() {
     log("asking the app to enter the bootloader (DFU_ENTER)...");
@@ -207,7 +271,9 @@
     log("DFU_ENTER accepted; the K2 is resetting.", "ok");
   }
 
-  $("flash").onclick = async function () {
+  $("flash").onclick = function () { return runFlash(); };
+
+  async function runFlash() {
     if (!S.fw || !S.dev) return;
     $("flash").disabled = true;
     try {
@@ -239,7 +305,7 @@
     } finally {
       $("flash").disabled = !S.fw || !S.mode;
     }
-  };
+  }
 
   // Auto-open a previously granted device; watch hot-plug.
   if ("hid" in navigator) {
