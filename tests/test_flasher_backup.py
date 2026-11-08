@@ -20,13 +20,17 @@ import k2_flasher as kf
 FLASH_END = 0x08100000
 
 
-def make_image():
+SIG = kf.APP_START - kf.FLASH_START + 2064      # the model signature word, 0x08004010
+
+
+def make_image(sig=b"K200"):
     img = bytearray((i * 7 + 3) & 0xFF for i in range(FLASH_END - kf.FLASH_START))
     off = kf.NAME_START - kf.FLASH_START
     img[off:off + 16] = b"K2\x00K2\x00K2\x00" + b"x" * 7
     a = kf.APP_START - kf.FLASH_START
     img[a:a + 8] = (0x20018000).to_bytes(4, "little") + (0x08003C01).to_bytes(4, "little")   # initial SP, reset vector
     img[a + 2048] = 0x58                                      # version byte
+    img[SIG:SIG + 4] = sig                                    # a DFU entry leaves 00000000 here
     m = kf.APP_START - kf.FLASH_START + kf.MARKER_OFFSET
     img[m:m + 4] = kf.COMMIT_MARKER
     img[-1] = 0x42                                            # no trailing 0xFF anywhere
@@ -157,6 +161,74 @@ class FullBackup(unittest.TestCase):
         text = kf.backup_summary({"complete": False, "last_readable_address": "0x080E2FFF", "refused_at": "0x080E3000"})
         self.assertIn("0x080E2FFF", text)
         self.assertIn("flash-dump", text)
+
+
+class RecoveryImage(unittest.TestCase):
+    """The recovery container: model signature, and where it stops."""
+
+    def recovery(self, files):
+        name = next(n for n in files if n.startswith("K2_RECOVERY_"))
+        return kf.Firmware.parse(files[name])
+
+    def test_zeroed_signature_is_restored_in_the_recovery_only(self):
+        img = make_image(sig=b"\x00\x00\x00\x00")
+        manifest, files = run_backup(FakeProtocol(img), full=False)
+        fw = self.recovery(files)
+        self.assertEqual(fw.app[2064:2068], b"K200")
+        self.assertTrue(manifest["signature_restored"])
+        self.assertTrue(json.loads(files["manifest.json"])["signature_restored"])
+        # the dump stays as read
+        self.assertEqual(files["app.bin"][2064:2068], b"\x00\x00\x00\x00")
+        self.assertEqual(files["flash.bin"][SIG:SIG + 4], b"\x00\x00\x00\x00")
+        # and nothing else in the image changed
+        self.assertEqual(fw.app[:2064], files["app.bin"][:2064])
+        self.assertEqual(fw.app[2068:kf.MARKER_OFFSET], files["app.bin"][2068:kf.MARKER_OFFSET])
+
+    def test_intact_signature_is_left_alone(self):
+        manifest, files = run_backup(FakeProtocol(make_image()), full=False)
+        self.assertEqual(self.recovery(files).app[2064:2068], b"K200")
+        self.assertFalse(manifest["signature_restored"])
+
+    def test_foreign_signature_is_refused(self):
+        proto = FakeProtocol(make_image(sig=b"K201"))
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(kf.UpgradeError) as ctx:
+                kf.K2Updater(proto).backup(Path(d) / "dump")
+        self.assertIn("4b323031", str(ctx.exception).lower())
+
+    def test_zero_signature_without_a_vector_table_is_refused(self):
+        img = bytearray(make_image(sig=b"\x00\x00\x00\x00"))
+        a = kf.APP_START - kf.FLASH_START
+        img[a:a + 8] = b"\xff" * 8
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(kf.UpgradeError) as ctx:
+                kf.K2Updater(FakeProtocol(bytes(img))).backup(Path(d) / "dump")
+        self.assertIn("vector table", str(ctx.exception))
+
+    def test_recovery_stops_at_the_littlefs_volume(self):
+        manifest, files = run_backup(FakeProtocol(make_image()), full=False)
+        # the image the container carries ends at the volume (the test image has no trailing 0xFF to trim)
+        self.assertEqual(len(self.recovery(files).app), kf.FS_START - kf.APP_START)
+        self.assertEqual(manifest["recovery_range"], "0x08003800-0x080B3000")
+
+
+class NativeAreaGuard(unittest.TestCase):
+    def container(self, size):
+        app = bytearray(b"\xa5" * size)
+        app[0:8] = (0x20018000).to_bytes(4, "little") + (0x08003C01).to_bytes(4, "little")
+        app[kf.MARKER_OFFSET:kf.MARKER_OFFSET + 4] = b"\xff\xff\xff\xff"
+        app[2048] = 0x10
+        return kf.Firmware.from_app(bytes(app)).source
+
+    def test_the_largest_container_that_ends_below_the_native_area_parses(self):
+        limit = kf.NVRAM_START - kf.APP_START
+        kf.Firmware.parse(self.container(limit - kf.HEADER_SIZE))
+
+    def test_a_container_whose_erase_span_reaches_the_native_area_is_refused(self):
+        limit = kf.NVRAM_START - kf.APP_START
+        with self.assertRaises(ValueError) as ctx:
+            kf.Firmware.parse(self.container(limit - kf.HEADER_SIZE + 4))
+        self.assertIn("native", str(ctx.exception))
 
 
 if __name__ == "__main__":

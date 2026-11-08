@@ -264,7 +264,8 @@ function fakeBootloader({ flash, refuseFrom = Infinity, silent = true }) {
   return { link, reads };
 }
 
-function makeFlash() {
+const SIG_OFFSET = 2064;                                         // 0x08004010 - APP_START: the model signature word
+function makeFlash(sig = [0x4B, 0x32, 0x30, 0x30]) {             // "K200"; a DFU entry leaves 00000000 there
   const flash = new Uint8Array(B.FLASH_END - B.FLASH_START).fill(0xFF);
   flash.fill(0xB0, 0, 0x1000);                                   // bootloader bytes below the name block
   const names = "K2\0WITRN\0K2(C)WITRN\0x\0";
@@ -273,6 +274,7 @@ function makeFlash() {
   for (let i = 8; i < 0x6000; i++) app[i] = (i * 7) & 0xFF;      // some code
   app.set([0x00, 0x00, 0x02, 0x20, 0x01, 0x38, 0x00, 0x08], 0);  // sp, reset
   app[2048] = 0x27;                                              // version 2.7
+  app.set(sig, SIG_OFFSET);
   app.set([0xFE, 0xFF, 0xFF, 0xFF], B.MARKER_OFFSET);            // committed
   app.fill(0x6C, B.FS_START - B.APP_START);                      // a used littlefs volume, through its last block
   flash.set(app, B.APP_START - B.FLASH_START);
@@ -375,4 +377,44 @@ test("a refusal below APP_LIMIT is an error, not a partial backup", async () => 
   const { flash } = makeFlash();
   const { link } = fakeBootloader({ flash, refuseFrom: 0x08010000 });
   await assert.rejects(link.backup({}), /timed out/i);
+});
+
+// ---- the model signature: a DFU entry zeroes "K200" in the app, the recovery container must carry it ----
+
+test("backup() restores K200 in the recovery container when a DFU entry zeroed it, and keeps the raw dump", async () => {
+  const { flash } = makeFlash([0, 0, 0, 0]);
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({});
+  assert.deepEqual([...r.app.slice(SIG_OFFSET, SIG_OFFSET + 4)], [0, 0, 0, 0]);          // app.bin is the faithful read
+  const o = B.APP_START - B.FLASH_START + SIG_OFFSET;
+  assert.deepEqual([...r.flash.slice(o, o + 4)], [0, 0, 0, 0]);
+  const fw = B.Firmware.parse(r.recovery.source);
+  assert.equal(Buffer.from(fw.app.slice(SIG_OFFSET, SIG_OFFSET + 4)).toString("latin1"), "K200");
+  assert.equal(r.manifest.signature_restored, true);
+  assert.equal(JSON.parse(r.manifestText).signature_restored, true);
+  // nothing else in the image changed: code before and after the word is as read
+  assert.deepEqual([...fw.app.slice(0, SIG_OFFSET)], [...r.app.slice(0, SIG_OFFSET)]);
+  assert.deepEqual([...fw.app.slice(SIG_OFFSET + 4, B.MARKER_OFFSET)], [...r.app.slice(SIG_OFFSET + 4, B.MARKER_OFFSET)]);
+});
+
+test("backup() leaves an intact K200 alone", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({});
+  const fw = B.Firmware.parse(r.recovery.source);
+  assert.equal(Buffer.from(fw.app.slice(SIG_OFFSET, SIG_OFFSET + 4)).toString("latin1"), "K200");
+  assert.equal(r.manifest.signature_restored, false);
+});
+
+test("backup() refuses to build a recovery when the signature word is neither K200 nor zero", async () => {
+  const { flash } = makeFlash([0x4B, 0x32, 0x30, 0x31]);                                  // "K201"
+  const { link } = fakeBootloader({ flash });
+  await assert.rejects(link.backup({}), /signature.*0x08004010.*4B323031/i);
+});
+
+test("backup() will not restore K200 into an image whose vector table is not an app's", async () => {
+  const { flash } = makeFlash([0, 0, 0, 0]);
+  flash.fill(0xFF, B.APP_START - B.FLASH_START, B.APP_START - B.FLASH_START + 8);        // blank vector table
+  const { link } = fakeBootloader({ flash });
+  await assert.rejects(link.backup({}), /vector table/i);
 });

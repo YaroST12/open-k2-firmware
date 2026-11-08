@@ -361,7 +361,8 @@
     var m = r.manifest;
     $("backupInfo").textContent = (m.complete ? "Complete, " : "PARTIAL (bootloader refused at " + m.refused_at + "), ") +
       m.flash_size + " B read twice and compared. App v" + m.identity.current_version + ", app SHA-256 " +
-      m.app_sha256.slice(0, 12) + "…. The recovery container holds the application code only (" + m.recovery_range + ").";
+      m.app_sha256.slice(0, 12) + "…. The recovery container holds the application code only (" + m.recovery_range + ")." +
+      (m.signature_restored ? " The model signature (K200), cleared when the K2 entered the bootloader, was put back in the recovery file; the other files are the raw read." : "");
     $("backupOut").hidden = false;
   }
 

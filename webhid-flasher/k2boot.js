@@ -24,6 +24,7 @@ var K2Boot = (function () {
   var READ_CHUNK = 1024;
   var NVRAM_START = 0x080E0000;   // the native data area (settings, e-marker records, assets): never erased or written
   var MAX_CONTAINER = NVRAM_START - APP_START;   // erase runs in 2 KB sectors from APP_START over the container length
+  var SIG_OFFSET = 2064, K200 = [0x4B, 0x32, 0x30, 0x30];   // model signature word at 0x08004010, checked by the bootloader
   var MARKER_OFFSET = 3072, COMMIT_MARKER = [0xFE, 0xFF, 0xFF, 0xFF];
   var K2_GUID_LE = [34, 133, 63, 90, 107, 54, 204, 70, 170, 204, 219, 251, 226, 254, 224, 42];   // uuid bytes_le
   var CMD = { ERROR: 1, ACK: 2, HANDSHAKE: 3, END_SESSION: 4, BEGIN_SESSION: 5, ERASE: 8,
@@ -442,6 +443,28 @@ var K2Boot = (function () {
     return { data: best, complete: false };
   };
 
+  // The application the recovery container carries. Entering the bootloader from the app (DFU_ENTER) clears the
+  // model signature word "K200" at SIG_OFFSET (0x08004010) so the bootloader stays in DFU; a backup taken after
+  // that holds 00000000 there and an image built from it fails the bootloader's boot check. A zeroed word in an
+  // image with a valid vector table is put back; any other value is refused, not guessed.
+  // Returns {app, restored}; the dump itself (app.bin, flash.bin) stays as read.
+  function recoveryApp(app) {
+    var word = app.slice(SIG_OFFSET, SIG_OFFSET + 4);
+    var intact = true, zero = true;
+    for (var i = 0; i < 4; i++) { if (word[i] !== K200[i]) intact = false; if (word[i] !== 0) zero = false; }
+    if (intact) return { app: app, restored: false };
+    if (!zero) throw new ProtocolError("Model signature at " + addr8(APP_START + SIG_OFFSET) + " is " +
+                                       hex(word).toUpperCase() + ", neither K200 nor 00000000: no recovery image built");
+    var sp = rd32(app, 0), reset = rd32(app, 4);
+    if (!(sp > 0x20000000 && sp <= 0x20040000 && sp % 4 === 0) || !(reset & 1) ||
+        !(reset - 1 >= APP_START && reset - 1 < APP_START + app.length))
+      throw new ProtocolError("Model signature is zero but the vector table (SP 0x" + sp.toString(16) + ", reset 0x" +
+                              reset.toString(16) + ") is not an application's: no recovery image built");
+    var fixed = app.slice();
+    fixed.set(K200, SIG_OFFSET);
+    return { app: fixed, restored: true };
+  }
+
   // Two-pass flash backup. Default 0x08000000..APP_LIMIT (bootloader and application area); opts.full also asks
   // for the rest of the 1 MB (the native data area from NVRAM_START up), best effort: if the bootloader refuses
   // above APP_LIMIT the readable part is kept and the manifest says where it stopped (complete: false). A failure
@@ -495,7 +518,8 @@ var K2Boot = (function () {
     // that long would run into the native storage; a container that ends at FS_START also leaves the volume
     // intact when it is flashed back.
     var now = opts.now || new Date();
-    var recovery = Firmware.fromApp(app.slice(0, FS_START - APP_START), now.toISOString().slice(0, 10));
+    var rec = recoveryApp(app.slice(0, FS_START - APP_START));
+    var recovery = Firmware.fromApp(rec.app, now.toISOString().slice(0, 10));
     var recoveryName = "K2_RECOVERY_" + recovery.version + ".k2";
 
     var manifest = {
@@ -514,6 +538,7 @@ var K2Boot = (function () {
       two_pass_verified: true,
       recovery_file: recoveryName,
       recovery_range: addr8(APP_START) + "-" + addr8(FS_START),
+      signature_restored: rec.restored,
       tool: "webhid-flasher"
     };
     if (nvram) manifest.native_nvram_file = "native_nvram.bin";

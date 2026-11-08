@@ -51,6 +51,10 @@ APP_LIMIT = APP_START + SECTOR_SIZE * SECTOR_COUNT   # 0x080E3000: end of what t
 FLASH_END = 0x08100000                               # end of the 1 MB flash
 NVRAM_START = 0x080E0000                             # the native device storage (settings, e-marker records, assets)
 READ_CHUNK = 1024
+FS_START = 0x080B3000                                # our littlefs volume (link.ld FLASH ends here)
+MAX_CONTAINER = NVRAM_START - APP_START              # erase runs in 2 KB sectors from APP_START over the container length
+SIG_OFFSET = 2064                                    # 0x08004010: the model signature word the bootloader checks
+K200 = b"K200"
 MARKER_OFFSET = 3072  # 0x08003800 + 3072 = 0x08004400
 COMMIT_MARKER = b"\xfe\xff\xff\xff"
 K2_GUID = uuid.UUID("5a3f8522-366b-46cc-aacc-dbfbe2fee02a")
@@ -369,6 +373,32 @@ class Protocol:
         return result
 
 
+def recovery_app(app: bytes):
+    """The application a recovery container carries, and whether the model signature had to be put back.
+
+    Entering the bootloader from the app (DFU_ENTER) clears the signature word "K200" at SIG_OFFSET so the
+    bootloader stays in DFU; a backup taken after that holds 00000000 there and an image built from it fails the
+    bootloader's boot check. A zeroed word in an image with a valid vector table is put back; any other value is
+    refused, not guessed. The dump itself (app.bin, flash.bin) stays as read.
+    """
+    word = app[SIG_OFFSET:SIG_OFFSET + 4]
+    if word == K200:
+        return app, False
+    if word != b"\x00" * 4:
+        raise ValueError(
+            f"Model signature at 0x{APP_START + SIG_OFFSET:08X} is {word.hex()}, neither K200 nor 00000000: "
+            "no recovery image built"
+        )
+    sp, reset = struct.unpack_from("<II", app)
+    if not (0x20000000 < sp <= 0x20040000 and sp % 4 == 0) or not (reset & 1) \
+            or not (APP_START <= (reset & ~1) < APP_START + len(app)):
+        raise ValueError(
+            f"Model signature is zero but the vector table (SP 0x{sp:08X}, reset 0x{reset:08X}) is not an "
+            "application's: no recovery image built"
+        )
+    return app[:SIG_OFFSET] + K200 + app[SIG_OFFSET + 4:], True
+
+
 # --- Firmware Container Management ---
 @dataclass(frozen=True)
 class Firmware:
@@ -384,6 +414,11 @@ class Firmware:
             raise ValueError("File is smaller than 48-byte header")
         if len(raw) > SECTOR_SIZE * SECTOR_COUNT:
             raise ValueError("File exceeds maximum K2 flash sector capacity")
+        if len(raw) > MAX_CONTAINER:
+            raise ValueError(
+                f"File ({len(raw)} B) would be erased into the native data area at 0x{NVRAM_START:08X} "
+                f"(limit {MAX_CONTAINER} B)"
+            )
 
         decoded = raw.translate(FIRMWARE_DECODE_TABLE)
         if decoded[:7] != b"gzutapp":
@@ -660,9 +695,13 @@ class K2Updater:
             (dest_dir / "app.bin").write_bytes(app)
 
             self._stage("backup-recovery")
-            # the recovery container carries the application only: the native device storage
-            # (0x080E0000 up) is user data, kept in native_nvram.bin, and is not part of a flashable app
-            rec_fw = Firmware.from_app(app[:NVRAM_START - APP_START])
+            # the recovery container carries the application code only, APP_START..FS_START (link.ld FLASH).
+            # Above it sit user data: the littlefs volume (kept in app.bin) and the native device storage
+            # (0x080E0000 up, kept in native_nvram.bin). Once the volume has been used its last block is not
+            # 0xFF, so trimming trailing 0xFF would not shorten the image below NVRAM_START, and a container
+            # that long erases into the native storage; one that ends at FS_START also leaves the volume intact.
+            rec_app, sig_restored = recovery_app(app[:FS_START - APP_START])
+            rec_fw = Firmware.from_app(rec_app)
             rec_path = dest_dir / f"K2_RECOVERY_{rec_fw.version}.k2"
             rec_path.write_bytes(rec_fw.source)
 
@@ -679,7 +718,9 @@ class K2Updater:
                 "flash_sha256": hashlib.sha256(full_flash).hexdigest(),
                 "app_sha256": hashlib.sha256(app).hexdigest(),
                 "two_pass_verified": True,
-                "recovery_file": str(rec_path.name)
+                "recovery_file": str(rec_path.name),
+                "recovery_range": f"0x{APP_START:08X}-0x{FS_START:08X}",
+                "signature_restored": sig_restored,
             }
             if len(full_flash) > NVRAM_START - FLASH_START:
                 manifest["native_nvram_file"] = "native_nvram.bin"
