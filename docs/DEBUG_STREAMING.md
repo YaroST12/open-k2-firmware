@@ -1,7 +1,7 @@
 # Debug streaming
 
-Goal: the coordinator reads one recorded log of a hardware run (charger test, PD session, cable check) instead of
-pulling rings off the device afterwards. This page has two parts: what the device holds and how it was read before
+Goal: read one recorded log of a hardware run (charger test, PD session, cable check) instead of pulling rings off
+the device afterwards. This page has two parts: what the device holds and how it was read before
 (the inventory), and the one live stream that now carries the debugging-relevant sources, with how to record and read it.
 
 Short version:

@@ -1,6 +1,7 @@
 # Coding standards
 
-Short rules for every agent. Design and module map: `docs/ARCHITECTURE.md`. Feature status: `docs/ROADMAP.md`.
+Short rules for everyone who writes code in this repository. Design and module map: `docs/ARCHITECTURE.md`. Feature
+status: `docs/ROADMAP.md`.
 
 1. **Self-contained drivers.** One header plus one .cpp per driver, in its own `k2::` namespace. A driver owns its pins,
    registers, clocks, DMA and IRQ setup and exposes a small init/poll/read API. Other code uses only that API; reaching into

@@ -1,7 +1,10 @@
-# K2 USB-C ports — per-port capability spec (2026-11-05)
+# K2 USB-C ports: per-port capability spec
+
+What each of the K2's USB-C connections (top plug, bottom receptacle, left PC port) can do electrically and in
+firmware. Written 2026-11-05.
 
 Sources: our firmware (`src/pd/emk_spoof.cpp`, `src/drivers/fusb302.cpp`, `include/k2/drivers/pins.hpp`), hardware runs
-2026-11-04/05 (`docs/CHARGER_QUIRKS.md`; top-port evidence `runs/emk-top/` in the main checkout, which is gitignored).
+2026-11-04/05 (`docs/CHARGER_QUIRKS.md`; top-port evidence is the local run recording `runs/emk-top/`, which is not in the repository).
 
 Evidence tags used below: **[measured]** hardware log or run, **[code]** our source, **[inferred]** reasoning with
 no direct witness.
@@ -11,7 +14,7 @@ no direct witness.
 Verdict: PC13 puts an Ra of about 1 kOhm on CC1 (cc1 about 322 mV with the charger waiting and the K2
 passive, as a real cable's Ra). With it high before Rd appears on CC2 alone, a source sees a sink plus a
 powered cable, sends SOP' Discover Identity, and the armed e-marker spoof answers on the Rd line
-[measured 2026-11-06, `runs/emk-ra/` in the main checkout, gitignored].
+[measured 2026-11-06, local run recording `runs/emk-ra/`].
 - Recipe (Ra mode: `fusb302::ra_set(true)`, then `rd_for_run(true)`): PC13 high, then Rd on CC2 only; the
   e-marker scan is skipped (VCONN would fight the Ra); spoof armed; the VCONN switches never close. Ra
   survives the units' detach/attach cycles until the run ends. `k2_remote pd-reread --ra on|off` is the

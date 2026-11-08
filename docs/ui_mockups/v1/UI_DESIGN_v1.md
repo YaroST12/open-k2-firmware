@@ -1,7 +1,10 @@
 # K2 UI design (240 x 240 ST7789)
 
-Status: design proposal, 2026-10-31. Nothing here is implemented yet. It is written against `k2/core`
-(`include/k2/ui/ui*.hpp`, `src/ui/ui*.cpp`). The mockups are in `docs/ui_mockups/`: 32 PNGs at x2 (480 x 480),
+Superseded: this is the first UI design proposal (2026-10-31), kept for its reasoning. The current design, which
+the firmware follows, is `docs/UI_DESIGN.md`. Page names and navigation below are those of the proposal and
+differ from the firmware.
+
+It is written against the UI code of that date (`include/k2/ui/ui*.hpp`, `src/ui/ui*.cpp`). The mockups are in `docs/ui_mockups/`: 32 PNGs at x2 (480 x 480),
 rendered from the repo's JetBrains Mono TTF by `render_mockups.py`. `screens.md` holds, for every
 screen, a grid sketch and a pixel table (x, y, w, h, font, token). That generated file is the
 pixel-accurate part of this spec. This document holds the system, the rules and the reasons.

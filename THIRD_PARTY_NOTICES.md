@@ -23,7 +23,7 @@ Each entry was checked against the licence file in the tree, not against upstrea
 ## Notes
 
 - **TinyUSB is MIT, not Apache-2.0.** The top-level licence and the headers of the files we build
-  (`src/tusb.c`, `device/`, `class/{cdc,hid,msc,net}`, `portable/st/stm32_fsdev`) are MIT. Other parts of
+  (`third_party/tinyusb/src/tusb.c`, `device/`, `class/{cdc,hid,msc,net}`, `portable/st/stm32_fsdev`) are MIT. Other parts of
   the TinyUSB repository (board and vendor-SDK code under `hw/` and `lib/`) carry their own licences, but
   none of that is compiled here: the `Makefile` builds only the files listed under `TUSB_SRCS`, plus
   `dhserver.c` in the network build.

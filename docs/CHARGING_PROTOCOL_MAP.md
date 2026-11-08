@@ -1,7 +1,7 @@
-# Charging Protocol Map — Proprietary Fast-Charge Families vs. Open Standards
+# Charging protocol map: proprietary fast-charge families vs. open standards
 
 A vendor-by-vendor map of the fast-charging protocol **families** in the phone/laptop ecosystem, written for the
-WITRN K2 tester / QC+PD spoofer project. Where `docs/FASTCHARGE_PROTOCOLS.md` covers the **wire-level**
+K2 tester and spoofer. Where `docs/FASTCHARGE_PROTOCOLS.md` covers the **wire-level**
 D+/D- protocols the K2 speaks, this document maps the **families**: who owns them, what transport they run on,
 their power tiers, and — critically for a tester — whether they need a special cable or are just PD/PPS in disguise.
 

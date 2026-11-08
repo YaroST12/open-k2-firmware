@@ -1,6 +1,9 @@
 # Charger test flow: units, sessions, order
 
-Status: merged to `main` 2026-11-04, hardware-verified on a Lenovo C135 (QC2/QC3 pass in the PD-silent session; see the end of this file and `docs/ARCHITECTURE.md`, "Charger test: PD re-attach for the low programmable rows" now describes the unit lifecycle). Agreed design 2026-11-03; replaces the single-sink "handover" flow in `src/chargertest/charger_test.cpp`. Also: exactly one owner of the Request in Pd mode (START race fix, 2026-11-04). All Legacy units share one PD-silent attach (2026-11-04).
+How the charger test is organised: independent units, each with a session mode (Pd or Legacy, PD-silent), the order they
+run in, how the results grid and the flash journal work. Code: `src/chargertest/charger_test.cpp`; the unit lifecycle
+is also summarised in `docs/ARCHITECTURE.md`. Hardware-verified on a Lenovo C135 (QC2/QC3 pass in the PD-silent session).
+Exactly one owner of the Request exists in Pd mode, and all Legacy units share one PD-silent attach.
 
 ## Why
 
