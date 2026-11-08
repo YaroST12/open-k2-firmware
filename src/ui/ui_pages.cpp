@@ -1963,7 +1963,11 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     switch (i) {
     case 0:
         out.chevron = true;
+#if K2_NET
         out.note = "HID, drive and network";
+#else
+        out.note = "HID and drive";   // this build has no Network row (kUlRows below)
+#endif
         break;
     case 1:
         out.tail = self->ctx_.ui->rotation_locked() ? "Locked" : "Auto";
