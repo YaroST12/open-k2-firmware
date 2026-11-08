@@ -36,6 +36,17 @@ void put_volts(StrBuf<32> &o, uint32_t mv) {
 
 }  // namespace
 
+void typec_row_text(std::int32_t vbus_mv, std::uint32_t typec_ma, StrBuf<28> &out) {
+    out.clear();
+    if (vbus_mv >= 1000) {
+        put_v(out, uint32_t(vbus_mv));
+        out.put_char('V');
+        if (typec_ma) out.put_char(' ');
+    }
+    if (typec_ma == 500) out.put("USB default");   // a default-USB Rp: 500 mA (USB 2.0) or 900 mA (USB 3.x)
+    else if (typec_ma) put_a(out, typec_ma);
+}
+
 void OfferBook::merge(const pd::SourceCaps &latest) {
     if (!latest.valid || latest.num_pdos == 0) return;
     const int n = std::min<int>(latest.num_pdos, int(pd::kMaxPdos));

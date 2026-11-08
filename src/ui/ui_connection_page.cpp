@@ -40,23 +40,6 @@ Tri sniffed_mismatch() {
     return (c.flags & pd::kRdoFMismatch) ? Tri::Yes : Tri::No;
 }
 
-template <size_t N>
-void put_a(StrBuf<N> &s, uint32_t ma) {   // "3A", "1.5A", "3.25A"
-    if (ma % 1000 == 0) s.put_u32(ma / 1000);
-    else if (ma % 100 == 0) s.put_fixed(int32_t(ma / 100 * 100), 1);
-    else if (ma % 10 == 0) s.put_fixed(int32_t(ma), 2);
-    else s.put_fixed(int32_t(ma), 3);
-    s.put_char('A');
-}
-
-template <size_t N>
-void put_v(StrBuf<N> &s, uint32_t mv) {
-    if (mv % 1000 == 0) s.put_u32(mv / 1000);
-    else if (mv % 100 == 0) s.put_fixed(int32_t(mv), 1);
-    else if (mv % 10 == 0) s.put_fixed(int32_t(mv), 2);
-    else s.put_fixed(int32_t(mv), 3);
-}
-
 uint32_t fnv(uint32_t h, uint32_t v) {
     for (int i = 0; i < 4; i++) { h ^= (v >> (8 * i)) & 0xFF; h *= 16777619u; }
     return h;
@@ -95,8 +78,12 @@ MatchResult match_live(const pd::Link &link) {
     const OfferBook &b = sync_book(link);
     const bool none = pd::is_fake() || (link.attached() && link.waiting());
     MatchResult r = match_compute({b.caps, none ? kNoContract : fusb302::contract(), sniffed_mismatch(), sniffed_sink_caps(), b.offered});
-    // No PD caps a second after attach: a plain Type-C source, shown with its Rp current.
-    if (!r.caps_seen && !pd::is_fake() && link.attached()) r.typec_ma = fusb302::typec_ma();
+    // An attached source that sent no PD caps is a plain Type-C source: its Rp is on the active line
+    // (attach latched the comparator), shown with its advertised current when it is decided.
+    if (!r.caps_seen && !pd::is_fake() && link.attached()) {
+        r.typec_ma = fusb302::typec_ma();
+        r.typec_rp = true;
+    }
     return r;
 }
 
@@ -362,7 +349,15 @@ struct TabData {
     usblink::Link ul;
     bool waiting, k2_sink, k2_sink_ok;
     fastcharge::Protocol fc;
+    int32_t vbus_mv = -1;   // the fast VBUS reading in 100 mV steps (what the Type-C row shows), -1 unknown
 };
+
+// The Type-C row's VBUS: the un-averaged reading, 100 mV steps (the row's resolution), -1 when the
+// monitor is offline or VBUS is down.
+int32_t typec_vbus_mv(bool pm_online, int32_t vbus_fast_mv) {
+    if (!pm_online || vbus_fast_mv < 1000) return -1;
+    return (vbus_fast_mv / 100) * 100;
+}
 
 uint16_t conf_colour(const usblink::Link &l) {
     return l.conf == usblink::Confidence::Negotiated ? kOk : l.conf == usblink::Confidence::Advertised ? kCaution : kFaint;
@@ -466,6 +461,7 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     else R.add("ID").put("unknown");
     const pd::SourceCaps &caps = *d.caps;
     StrBuf<28> &pdv = R.add("PD", r.caps_seen ? kEnergy : kFaint);
+    const bool traffic = fusb302::pd_traffic();
     if (r.caps_seen) {
         pdv.put(caps.spec_rev == 1 || caps.spec_rev == 2 ? pd::wire_revision_name(caps.spec_rev) : "no PD yet");
         if (caps.epr) pdv.put(" EPR");
@@ -477,15 +473,16 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
             range_row(R, p.type == pd::PdoType::Pps ? "PPS" : "AVS", p);
         }
         if (r.request_seen) put_request(R.add("Used", kOk), r, caps);
-    } else if (r.typec_ma) {
+    } else if (!traffic && (r.typec_ma || r.typec_rp)) {
+        // A Type-C Rp advertisement exists (the source is attached): show it with the measured VBUS
+        // and the advertised current, a default-USB Rp included.
         pdv.put("none");
         StrBuf<28> &v = R.add("Type-C", kText);
-        v.put("5V ");
-        put_a(v, r.typec_ma);
+        typec_row_text(d.vbus_mv, r.typec_ma, v);
     } else {
-        pdv.put(fusb302::pd_traffic() ? "active, no caps" : "no caps yet");
+        pdv.put(traffic ? "active, no caps" : "no caps yet");
     }
-    if (!r.caps_seen) {   // legacy fast-charge protocols the K2 detected
+    if (!r.caps_seen && legacy_row_protocol(d.fc)) {   // legacy fast-charge protocols the K2 detected
         StrBuf<6> fcn;
         fc_pill_text(d.fc, fcn);
         if (!fcn.view().empty() && d.fc != fastcharge::Protocol::Pending) R.add("Legacy", kEnergy).put(fcn.view());
@@ -567,8 +564,9 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
         const pdtabs::Limited lim = pdtabs::limit(t);
         const bool informative = lim.value >= 0 &&
             (lim.limit != pdtabs::Who::None || ul.dp || (t.cable >= 0 && t.sink < 0));
-        if (!attached) R.add("Data", kText).put("-");
-        else if (informative) {
+        // The Data row only when it says something the USB row does not (nothing known -> no row at
+        // all, the same rule as the plain-rate case above).
+        if (attached && informative) {
             StrBuf<28> &v = R.add("Data", kText);
             char line[24];
             bool warn = false;
@@ -657,6 +655,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.k2_sink = fusb302::self_powered();
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = ctx_.fc;
+    d.vbus_mv = typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv);
     Rows R;
     switch (tab_) {
     case conn::Tab::Source: source_rows(R, d); break;
@@ -800,6 +799,9 @@ void ConnectionPage::update(uint32_t now_ms) {
     const pd::VdmInfo &snk = fusb302::sink_vdm();
     const int32_t dp_mv = ctx_.analog ? ctx_.analog->dp_mv : -1;
     const int32_t dm_mv = ctx_.analog ? ctx_.analog->dm_mv : -1;
+    const int32_t cc1_mv = ctx_.analog ? ctx_.analog->cc1_mv : -1;
+    const int32_t cc2_mv = ctx_.analog ? ctx_.analog->cc2_mv : -1;
+    const int32_t vbus_mv = typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv);
     uint32_t c = 2166136261u;
     c = fnv(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
@@ -836,6 +838,9 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = fnv(c, uint32_t(ctx_.analog.has_value()));
     c = fnv(c, uint32_t(dp_mv));
     c = fnv(c, uint32_t(dm_mv));
+    c = fnv(c, uint32_t(cc1_mv));
+    c = fnv(c, uint32_t(cc2_mv));
+    c = fnv(c, uint32_t(vbus_mv));   // the Type-C row's VBUS (100 mV steps)
     if (sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
     cheap_sig_ = c;
 
@@ -849,7 +854,20 @@ void ConnectionPage::update(uint32_t now_ms) {
         return;
     }
 
-    const MatchResult r = match_live(link);
+    MatchResult r = match_live(link);
+    // The Rp advertisement of an attached source exists even when the chip's gated typec_ma() reads 0
+    // (a default-USB Rp, a load inline, before its 3 s mark): the active CC line driven into the Rp
+    // window says so, and its divider level gives the current.
+    if (!r.caps_seen && !pd::is_fake() && link.attached() && !fusb302::pd_traffic()) {
+        const uint8_t acc = fusb302::active_cc();
+        const int32_t cc_mv = !ctx_.analog ? -1
+            : acc == 2 ? int32_t(ctx_.analog->cc2_mv)
+            : acc == 1 ? int32_t(ctx_.analog->cc1_mv) : -1;
+        if (cc_line_has_rp(cc_mv)) {
+            r.typec_rp = true;
+            if (!r.typec_ma) r.typec_ma = typec_ma_from_cc_mv(cc_mv);
+        }
+    }
     const pd::SourceCaps *caps = &g_book.caps;   // filled by match_live above
     const WantsList wl = wants_now();
     const std::span<const uint32_t> sink = wl.pdos;
@@ -857,6 +875,8 @@ void ConnectionPage::update(uint32_t now_ms) {
     uint32_t h = 2166136261u;
     h = fnv(h, uint32_t(tab_) | uint32_t(link.cable_stale()) << 8 | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
     h = fnv(h, r.typec_ma | uint32_t(fusb302::pd_traffic()) << 16 | uint32_t(link.inline_mode()) << 17);
+    h = fnv(h, uint32_t(r.typec_rp));
+    h = fnv(h, uint32_t(vbus_mv));
     h = fnv(h, r.want_mv); h = fnv(h, r.want_ma); h = fnv(h, r.want_mw); h = fnv(h, uint32_t(r.want_pos));
     h = fnv(h, uint32_t(r.gone) | g_book.offered << 8); h = fnv(h, r.src_max_mw); h = fnv(h, r.sink_max_mv);
     for (int i = 0; i < r.rows; i++) {

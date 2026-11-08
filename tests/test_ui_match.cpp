@@ -343,6 +343,67 @@ void test_request_state_and_flags() {
     }
 }
 
+// The Source tab's Type-C row reads the Rp advertisement from the active CC line's level (the same
+// divider bands the Lines page names): idle/open lines vs the three Rp currents.
+void test_typec_cc_levels() {
+    CHECK_EQ(cc_line_has_rp(-1), false);      // no ADC reading
+    CHECK_EQ(cc_line_has_rp(0), false);       // idle net
+    CHECK_EQ(cc_line_has_rp(199), false);
+    CHECK_EQ(cc_line_has_rp(200), true);
+    CHECK_EQ(cc_line_has_rp(408), true);      // default-USB Rp over our Rd
+    CHECK_EQ(cc_line_has_rp(3300), true);     // open Rp (no Rd on the line)
+    CHECK_EQ(typec_ma_from_cc_mv(-1), 0u);
+    CHECK_EQ(typec_ma_from_cc_mv(0), 0u);
+    CHECK_EQ(typec_ma_from_cc_mv(199), 0u);
+    CHECK_EQ(typec_ma_from_cc_mv(408), 500u);    // default USB
+    CHECK_EQ(typec_ma_from_cc_mv(659), 500u);
+    CHECK_EQ(typec_ma_from_cc_mv(660), 1500u);
+    CHECK_EQ(typec_ma_from_cc_mv(920), 1500u);
+    CHECK_EQ(typec_ma_from_cc_mv(1229), 1500u);
+    CHECK_EQ(typec_ma_from_cc_mv(1230), 3000u);
+    CHECK_EQ(typec_ma_from_cc_mv(1678), 3000u);
+    CHECK_EQ(typec_ma_from_cc_mv(2199), 3000u);
+    CHECK_EQ(typec_ma_from_cc_mv(2200), 0u);     // open line: the level does not encode the current
+    CHECK_EQ(typec_ma_from_cc_mv(3300), 0u);
+}
+
+// The Type-C row value: the measured VBUS when it is known, then the Rp advertisement ("USB default"
+// for a 500 mA default-USB Rp, otherwise amps). Never more than the 19-cell value column.
+void test_typec_row_text() {
+    StrBuf<28> s;
+    typec_row_text(5000, 500, s);
+    CHECK_STR(s.c_str(), "5V USB default");
+    typec_row_text(20200, 3000, s);
+    CHECK_STR(s.c_str(), "20.2V 3A");
+    typec_row_text(9000, 1500, s);
+    CHECK_STR(s.c_str(), "9V 1.5A");
+    typec_row_text(20250, 500, s);
+    CHECK_STR(s.c_str(), "20.25V USB default");
+    CHECK_EQ(int(s.view().size() <= 19), 1);
+    typec_row_text(-1, 3000, s);             // VBUS unknown: no voltage, only the current
+    CHECK_STR(s.c_str(), "3A");
+    typec_row_text(5000, 0, s);              // Rp seen, current unknown
+    CHECK_STR(s.c_str(), "5V");
+    typec_row_text(-1, 0, s);
+    CHECK_STR(s.c_str(), "");
+    typec_row_text(900, 3000, s);            // VBUS down: no voltage
+    CHECK_STR(s.c_str(), "3A");
+}
+
+// The Legacy row of the Source tab lists D+/D- fast-charge protocols only: a PD-family verdict is a
+// CC verdict, never "legacy", never shown next to "PD none".
+void test_legacy_row_protocols() {
+    using P = fastcharge::Protocol;
+    CHECK_EQ(legacy_row_protocol(P::Pd), false);
+    CHECK_EQ(legacy_row_protocol(P::PdPe), false);
+    CHECK_EQ(legacy_row_protocol(P::PdMtk), false);
+    CHECK_EQ(legacy_row_protocol(P::PdLikely), false);
+    for (P p : {P::Pending, P::NoInput, P::NoQuick, P::Dcp5V, P::Qc3, P::Qc2_5V, P::Qc2_9V, P::Qc2_12V,
+                P::Qc2_20V, P::AfcFcp, P::Scp, P::Apple24, P::Apple21, P::Apple10, P::Usb2Hi, P::Usb11Low,
+                P::Sam20, P::VoocWarp, P::Svooc, P::UsbData})
+        CHECK_EQ(legacy_row_protocol(p), true);
+}
+
 void test_typec_only_source() {
     // A source with no PD (Rp only): no caps, Type-C current from Rp. Badge "Type-C only", never
     // the Waiting/No-caps look.
@@ -385,6 +446,9 @@ void test_agreement_badge() {
 int main() {
     test_agreement_badge();
     test_typec_only_source();
+    test_typec_cc_levels();
+    test_typec_row_text();
+    test_legacy_row_protocols();
     test_missing_data();
     test_request_only();
     test_match_ok();

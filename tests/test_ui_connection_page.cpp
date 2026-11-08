@@ -378,6 +378,87 @@ static int body_hairlines() {
     return n;
 }
 
+// A source without PD still advertises its Rp on the active CC line: once the "waiting for caps"
+// window is over, the Source tab shows "PD none" plus a Type-C row whenever an Rp is there -- a
+// default-USB Rp (CC 0.41 V) included -- with the measured VBUS in the row (never a hardcoded 5 V).
+static void test_source_tab_typec_advertisement() {
+    Ui &ui = fresh_ui();
+    g_stub.pm.vbus_mv = 5000;               // a plain 5 V port, no PD traffic at all
+    g_stub.cc = 1;                          // attach: CC back with VBUS up; the caps counter never moves
+    uint32_t t = 20000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().attached()), 1);
+    for (int i = 0; i < 55; i++) ui.tick(t += 100);    // 5.5 s with no caps: the wait is over
+    CHECK_EQ(int(ui.link().waiting()), 0);
+    set_cc(408, 1);                         // a default-USB Rp on the active line
+    ui.tick(t += 100);
+    show(ui, 0, t);
+    const int rows_typec = body_hairlines();            // ID, PD "none", Type-C, USB, ...
+    g_stub.pd_traffic = true;               // a PD-speaking source whose caps were missed: no Type-C row
+    ui.tick(t += 100);
+    show(ui, 0, t);
+    CHECK_EQ(body_hairlines(), rows_typec - 1);
+    g_stub.pd_traffic = false;
+    // A 3 A Rp while VBUS sits at 20.2 V: the same row, now showing the measured voltage (and the
+    // longest wording still fits the 19-cell column -- the trunc check at the end of main).
+    set_cc(1678, 3300);
+    g_stub.pm.vbus_mv = 20250;
+    ui.tick(t += 100);
+    show(ui, 0, t);
+    CHECK_EQ(body_hairlines(), rows_typec);
+    // Default-USB Rp at 20.2 V: the longest possible Type-C row ("20.2V USB default", 17 cells).
+    set_cc(408, 1);
+    ui.tick(t += 100);
+    show(ui, 0, t);
+    CHECK_EQ(body_hairlines(), rows_typec);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);   // every Type-C row above fit the 19-cell column
+#endif
+    g_stub.pm.vbus_mv = 5000;
+}
+
+// The Legacy row of the Source tab lists D+/D- fast-charge protocols only: a PD-family verdict (Pd,
+// PdPe, PdMtk, PdLikely) never gets a row there, next to "PD none".
+static void test_source_tab_legacy_row_skips_pd_verdicts() {
+    Ui &ui = fresh_ui();
+    g_stub.pm.vbus_mv = 5000;
+    g_stub.cc = 1;
+    uint32_t t = 20000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    for (int i = 0; i < 55; i++) ui.tick(t += 100);    // past the waiting window
+    set_cc(1678, 3300);
+    g_stub.fc = fastcharge::Protocol::Qc2_5V;           // a D+/D- protocol: the Legacy row appears
+    ui.tick(t += 100);
+    show(ui, 0, t);
+    const int rows_qc = body_hairlines();
+    for (fastcharge::Protocol p : {fastcharge::Protocol::Pd, fastcharge::Protocol::PdPe,
+                                   fastcharge::Protocol::PdMtk, fastcharge::Protocol::PdLikely}) {
+        g_stub.fc = p;                                  // a PD verdict: no Legacy row
+        ui.tick(t += 100);
+        show(ui, 0, t);
+        CHECK_EQ(body_hairlines(), rows_qc - 1);
+    }
+    g_stub.fc = fastcharge::Protocol::Pending;
+}
+
+// The Sink tab omits the Data row when the data line says nothing (the bug-9 rule): no "Data -"
+// placeholder. Rows here: ID, Request, State, Pwr, USB, Caps -- six rows, one closing hairline.
+static void test_sink_tab_omits_empty_data_row() {
+    Ui &ui = fresh_ui();
+    g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 1;
+    g_stub.contract.mv = 5000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    uint32_t t = 20000;
+    show(ui, 2, t);                                     // Sink tab, a sink was seen on CC, no charger attached
+    CHECK_EQ(body_hairlines(), 7);                      // no Data row: nothing is known about the data line
+    g_stub.ul.family = usblink::Family::Usb32; g_stub.ul.mbps = 5000;
+    g_stub.ul.conf = usblink::Confidence::Negotiated;
+    ui.tick(t += 100);
+    show(ui, 2, t);
+    CHECK_EQ(body_hairlines(), 7);                      // a plain "5G" would only repeat the USB row
+    g_stub.ul = {}; g_stub.contract = {};
+}
+
 // The Proto row must survive the 9-row cap: when the Alt row would only show "-", it is dropped and the
 // protocol name takes its slot. Ten rows are built here (ID, PD, Fixed, Fixed, PPS, PPS, Used, USB, Alt,
 // Proto), so without the fix the Proto row spills and adding an SVID changes nothing on the panel.
@@ -549,6 +630,9 @@ int main() {
     test_each_tab_shows_its_own_side();
     test_sink_tab_not_empty_when_a_sink_was_seen();
     test_source_tab_leaves_waiting_after_timeout();
+    test_source_tab_typec_advertisement();
+    test_source_tab_legacy_row_skips_pd_verdicts();
+    test_sink_tab_omits_empty_data_row();
     test_proto_row_survives_the_row_cap();
     test_data_row_only_when_it_adds_something();
     test_non_displayed_inputs_do_not_run_match_live();

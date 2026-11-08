@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/fastcharge/fastcharge_classify.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
@@ -15,6 +16,24 @@
 namespace k2 {
 
 enum class Tri : uint8_t { Unknown, No, Yes };
+
+// Fixed-point append helpers shared by the Connection page rows: "3A", "1.5A", "0.5A" / "5V", "20.2V".
+template <size_t N>
+void put_a(StrBuf<N> &s, uint32_t ma) {   // "3A", "1.5A", "3.25A"
+    if (ma % 1000 == 0) s.put_u32(ma / 1000);
+    else if (ma % 100 == 0) s.put_fixed(int32_t(ma / 100 * 100), 1);
+    else if (ma % 10 == 0) s.put_fixed(int32_t(ma), 2);
+    else s.put_fixed(int32_t(ma), 3);
+    s.put_char('A');
+}
+
+template <size_t N>
+void put_v(StrBuf<N> &s, uint32_t mv) {
+    if (mv % 1000 == 0) s.put_u32(mv / 1000);
+    else if (mv % 100 == 0) s.put_fixed(int32_t(mv), 1);
+    else if (mv % 10 == 0) s.put_fixed(int32_t(mv), 2);
+    else s.put_fixed(int32_t(mv), 3);
+}
 
 struct MatchInput {
     const pd::SourceCaps &caps;
@@ -72,9 +91,39 @@ struct MatchResult {
     uint32_t need_ma = 0, have_ma = 0;  // selected row: what the sink wants / the charger gives
     uint32_t src_max_mv = 0, src_max_mw = 0, sink_max_mv = 0;
     int flags = 0;
-    uint32_t typec_ma = 0;   // source without PD (Rp only): its Type-C current, 0 otherwise
+    uint32_t typec_ma = 0;   // source without PD (Rp only): its Type-C current, 0 when unknown
+    bool typec_rp = false;   // a Type-C Rp advertisement exists at all (a source is attached), even when the current is unknown
     Verdict verdict = Verdict::NoCaps;
 };
+
+// ---- the Source tab's no-PD rows: the Type-C advertisement of a source that sent no caps ----
+
+// True when the active CC line at `cc_mv` is driven by a source's Rp: with our Rd on the line the
+// Rp/Rd divider reads 0.4..1.7 V, without it the open pull-up reads ~3.3 V; an idle net sits below 200 mV.
+constexpr bool cc_line_has_rp(std::int32_t cc_mv) { return cc_mv >= 200; }
+
+// The Rp current a line at `cc_mv` advertises through the Rp/Rd divider (the bands the Lines page
+// names): 200..660 mV default USB (500/900 mA), 660..1230 mV 1.5 A, 1230..2200 mV 3 A. 0 when the line
+// is idle or open above 2.2 V (no Rd on it: the level does not encode the current).
+constexpr std::uint32_t typec_ma_from_cc_mv(std::int32_t cc_mv) {
+    if (cc_mv < 200) return 0;
+    if (cc_mv < 660) return 500;
+    if (cc_mv < 1230) return 1500;
+    if (cc_mv < 2200) return 3000;
+    return 0;
+}
+
+// The Type-C row's value: the measured VBUS when it is known ("20.2V"), then the Rp advertisement
+// ("USB default" for a 500 mA default-USB Rp, otherwise "3A" / "1.5A"); nothing when neither is known.
+// Always within the 19-cell value column of the Connection page.
+void typec_row_text(std::int32_t vbus_mv, std::uint32_t typec_ma, StrBuf<28> &out);
+
+// The Source tab's Legacy row lists D+/D- fast-charge protocols only. The PD-family verdicts (Pd,
+// PdPe, PdMtk, PdLikely) are CC verdicts: never "legacy", never shown next to "PD none".
+constexpr bool legacy_row_protocol(fastcharge::Protocol p) {
+    using P = fastcharge::Protocol;
+    return p != P::Pd && p != P::PdPe && p != P::PdMtk && p != P::PdLikely;
+}
 
 // The top badge of the PD test page: how well the sink's contract fits what the source offers.
 enum class Agreement : uint8_t { NoContract, Partial, Full, TypeCOnly };
