@@ -4,9 +4,13 @@
 # The container stores the version in one byte (two nibbles), so major and minor must each be 0-15; any other tag fails
 # before the build. Pre-release tags (`v1.2-rc1`) are rejected for the same reason: the Pages flasher offers releases only.
 #
-# The `pages` job then redeploys the site so the flasher's "Flash release" button follows the new release. A release
-# created with the workflow's own GITHUB_TOKEN does not fire the `release: published` trigger of pages.yml (GitHub does
-# not start workflows from events caused by GITHUB_TOKEN), so this workflow calls pages.yml itself (workflow_call).
+# After the release exists, the last step starts pages.yml on `main` (`gh workflow run pages.yml --ref main`) so the
+# flasher's "Flash release" button follows the new release. Two GitHub behaviours force this shape:
+#   - A release created with the workflow's own GITHUB_TOKEN does not fire the `release: published` trigger (GitHub
+#     does not start workflows from events caused by GITHUB_TOKEN). workflow_dispatch is the documented exception, so
+#     the dispatch works with GITHUB_TOKEN; it needs `actions: write`.
+#   - A Pages deploy that runs on a tag ref (a workflow_call from this tag-triggered workflow, or `release: published`)
+#     reports success but does not go live: Pages keeps serving the earlier deployment. A deploy run on `main` does.
 name: release
 
 on:
@@ -18,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,10 +56,8 @@ jobs:
             dist/open_k2.k2 dist/open_k2.bin dist/open_k2.elf dist/SHA256SUMS \
             --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
 
-  pages:
-    needs: release
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    uses: ./.github/workflows/pages.yml
+      - name: Redeploy the Pages site from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run pages.yml --ref main

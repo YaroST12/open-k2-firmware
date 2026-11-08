@@ -7,8 +7,11 @@
 # This workflow never builds firmware: the flasher offers tagged releases only (built by release.yml). With no
 # release yet, or one without open_k2.k2, the site ships without fw/ and the flasher hides its "Latest release" row.
 #
-# Triggers: a push to main (page and results viewer changes), a release published by hand in the GitHub UI, a manual
-# run, and workflow_call from release.yml (a release made with GITHUB_TOKEN does not trigger `release: published`).
+# Triggers: a push to main (page and results viewer changes) and workflow_dispatch. release.yml starts this workflow
+# with `gh workflow run pages.yml --ref main` after it creates a release. Pages deploys must run on `main`: a deploy
+# that runs on a tag ref (workflow_call from a tag-triggered workflow, or `release: published`) reports success but
+# does not go live. For that reason there is no `release` or `workflow_call` trigger. A release made by hand in the
+# GitHub UI therefore needs a manual "Run workflow" of this workflow on `main` (or a re-tag through release.yml).
 #
 # index.html loads k2proto.js (the app-mode remote link) from the directory it is served from; the file is not tracked
 # twice: `make site` stages tools/web/k2proto.js next to the page, the same layout `make webhid` builds for local use.
@@ -17,10 +20,7 @@ name: pages
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
