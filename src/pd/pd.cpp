@@ -38,7 +38,7 @@ constexpr std::uint32_t le32(const std::uint8_t* p) {
 
 namespace {
 struct Vendor { std::uint16_t vid; const char* name; };
-constexpr std::array<Vendor, 31> kVendors{{
+constexpr std::array<Vendor, 33> kVendors{{
     {0x05AC, "Apple"},     {0x04B4, "Cypress"},  {0x2E6B, "ChargerLAB"}, {0x0BDA, "Realtek"},
     {0x0424, "Microchip"}, {0x2970, "Analogix"}, {0x291A, "Hynetek"},    {0x2FCF, "Injoinic"},
     {0x31CA, "Leadtrend"}, {0x324B, "CP Power"}, {0x301E, "Gowin"},      {0x0716, "WITRN"},
@@ -47,6 +47,7 @@ constexpr std::array<Vendor, 31> kVendors{{
     {0x0483, "STMicro"},   {0x203A, "Parade"},   {0x1A40, "Terminus"},   {0x05E3, "Genesys"},
     {0x0403, "FTDI"},      {0x1A86, "WCH"},      {0x24C6, "Power-Z"},    {0x1037, "Anker"},
     {0x1FC9, "NXP"},       {0x0451, "TI"},       {0x2E22, "BizLink"},
+    {0x2109, "VIA Labs"},  {0x2095, "CE Link"},
 }};
 
 }  // namespace

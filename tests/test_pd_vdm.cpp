@@ -49,6 +49,9 @@ static void test_names() {
     CHECK_STR(svid_name(0x5FC9), "UFCS");
     CHECK_STR(svid_name(0x0451), "TI");       // falls back to the cable-vendor table
     CHECK_STR(svid_name(0x1234), "Unknown");
+    CHECK_STR(vendor_name(0x2109), "VIA Labs");
+    CHECK_STR(vendor_name(0x2095), "CE Link");
+    CHECK_STR(vendor_name(0x1234), "Unknown");
 }
 
 static void test_apple_model() {

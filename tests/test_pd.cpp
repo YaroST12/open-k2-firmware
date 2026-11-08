@@ -257,6 +257,15 @@ static void test_emarker() {
     CHECK_EQ(e.max_voltage_v, 20);
     CHECK_EQ(e.max_power_w, 60);
     CHECK_STR(e.speed_str, "USB 2.0 (480M)");
+    /* Hub-controller and cable VIDs from the public USB VID list resolve to their names. */
+    uint32_t f[4] = { 0, 0x2109u, 0, (0x0103u << 16) };
+    emarker(f, 4, &e);
+    CHECK_EQ(e.vid, 0x2109);
+    CHECK_STR(e.vendor_str, "VIA Labs");
+    uint32_t g[4] = { 0, 0x2095u, 0, (0x3100u << 16) };
+    emarker(g, 4, &e);
+    CHECK_EQ(e.vid, 0x2095);
+    CHECK_STR(e.vendor_str, "CE Link");
     emarker(d, 1, &e);
     CHECK_EQ(e.num_vdos, 1);
     CHECK_STR(e.vendor_str, "Unknown");
