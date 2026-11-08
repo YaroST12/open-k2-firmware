@@ -333,9 +333,9 @@ reads `unknown` or `-`.
 | Cable | `ID` (e-marker VID:PID and vendor), `Speed`, `Current`, `Voltage`, `EPR`, `Type`, `Length` |
 | Sink | `ID` (`unknown` until Identify answers), `Request` (PDO, volts, amps, `PPS`) with `State`, `Pwr` and `Data` (the match rows below), `USB`, `Alt`, `Proto`, `Caps` (the sink's own capabilities, whole entries, ` +` when more follow); when the K2 draws the power itself the tab reads `K2 (sink mode PLUS)` or `K2 (sink mode OK)` |
 
-Match rows (Sink tab): `Pwr` = source watts x cable amps x sink watts = result, `Data` = cable speed x device speed
-= result. The smallest known term (`pdtabs::limit`) is the result and the limiting row is drawn in amber (`kCaution`);
-unknown terms show `?`. Without an e-marker the power row assumes a 3 A cable (`3A?`).
+Match rows (Sink tab): `Pwr` reads `18W of 100W` (requested of offered) or `60W by cable` when the cable is the limit,
+`Data` reads `5G of 10G` or `5G by cable`; amber only when the cable limits the link, `?` when the cable is assumed
+(no e-marker read, 3 A). Full wording: the Connection page section below.
 Only real alt modes (DisplayPort, Thunderbolt) count as `Alt`: a vendor SVID such as 0x2717 is a charging protocol and shows as the
 Proto row (`Xiaomi PD`) of the side that listed it. A VDM answer is filed by the sender's power role (header bit 8): the Source tab
 reads the source's answers, the Sink tab the sink's (`pd::Engine::vdm` / `sink_vdm`), so a phone's ACK never overwrites the
