@@ -95,6 +95,14 @@ constexpr std::uint8_t rd_window_line(std::int32_t cc1_mv, std::int32_t cc2_mv) 
     return in1 ? 1 : 2;
 }
 
+// The Rd-window re-check target: the line the ADC levels name when it differs from the currently
+// attached `active` line, else 0 (no override). The attach scan runs before the UI has fed any levels
+// (cold boot), so when fresh levels arrive later the cross-check has to re-run outside the scan.
+constexpr std::uint8_t rd_window_override(std::int32_t cc1_mv, std::int32_t cc2_mv, std::uint8_t active) {
+    const std::uint8_t l = rd_window_line(cc1_mv, cc2_mv);
+    return (l != 0 && active != 0 && l != active) ? l : 0;
+}
+
 // Debug option (pd-reread --line N): only line `forced` (1/2) may be chosen; 0 = the normal choice. Isolated samples of
 // that line first, then any comp sample of it; the highest BC_LVL wins, the first one breaks a tie.
 constexpr CcChoice choose_cc_forced(std::span<const CcSample> samples, std::uint8_t forced) {

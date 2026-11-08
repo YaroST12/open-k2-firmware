@@ -81,6 +81,10 @@ std::int32_t g_vbus_mv = -1;  // last VBUS reading from sink_vbus(); -1 = unknow
 bool g_new_source = false;  // next Source_Capabilities on SOP starts a fresh source
 std::int32_t g_cc_sink_mv = -1;  // the CC voltage closest to the sink-Rd band (-1 unknown)
 std::int32_t g_cc1_mv = -1, g_cc2_mv = -1;  // latest ADC net levels from sink_cc(); -1 = unknown
+std::array<pd::CcSample, 6> g_scan_samples{};   // the last attach scan's comparator samples, for the Rd-window re-check
+unsigned g_scan_sample_n = 0;
+std::uint32_t g_cc_recheck_at = 0;   // rate limit of the Rd-window re-check (kCcRecheckMinMs)
+constexpr std::uint32_t kCcRecheckMinMs = 500;
 std::uint8_t g_pin_rd = 0;  // self-powered mode: the Rd bits SWITCHES0 keeps while no partner is attached (0 = free)
 std::uint8_t g_boot_pin_rd = 0;   // the boot mode's Rd bits, restored after a run's detach (self_power_restore)
 bool g_rd_inherited = false;      // the pin was kept across a warm reset by the pin mark (charger-powered K2), not set by a key mode
@@ -418,6 +422,40 @@ void apply_rd() {
 
 // ---- CC orientation ----
 
+// The attach half of a CC choice, shared by the scan (detect_cc_orientation) and the Rd-window re-check
+// (cc_window_recheck): route the chosen line to the chip, measure it, and reset the PD session exactly as
+// on a fresh attach (switches, SWITCHES0 measure bit, SWITCHES1 via write_sw1(), chip PD reset, FIFOs).
+void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both) {
+    g_cc_mask = pd::self_power_mask(c.mask, pinned);   // pinned: both closed, the Rd must reach the connector
+    cc_switches(false, g_cc_mask);
+    const int i = c.line - 1;
+    g_active_cc = std::uint8_t(c.line);
+    if (pinned) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
+    else wr(kSwitches0, std::uint8_t(rd_both | (i == 0 ? kMeasCc1 : kMeasCc2)));
+    delay_ms(2);
+    std::uint8_t status0 = 0;
+    rd(kStatus0, status0);
+    g_session.attach();
+    g_detach.reset();
+    g_attach_ms = systick::millis();
+    g_requests_base = g_engine.contract.requests;
+    g_pd_traffic = false;
+    g_pd_seen_attach = false;
+    g_engine.sink = {};   // the sniffed Sink_Capabilities belong to the previous partner
+    g_bc_max = std::uint8_t(status0 & 3);
+    g_vbus_mv = -1;  // a stale reading of the previous partner must not count
+    write_sw1();
+    // New attach: the PD logic and FIFOs still hold the previous partner's state, so
+    // reset them or the first Source_Capabilities of this partner can be lost.
+    wr(kReset, kPdReset);
+    flush_fifos();
+    clear_irqs();
+    g_hr_latched = false;   // the previous partner's Hard Reset is not this one's
+    K2LOG("[FUSB302] Active CC detected: CC%d (switches 0x%X: PC14 %s, PC15 %s)\n", c.line, c.mask,
+                 (c.mask & 1) ? "closed" : "open", (c.mask & 2) ? "closed" : "open");
+    pdtrace::cc(pdtrace::CcEvent::Attach, std::uint8_t(c.line), status0);
+}
+
 }  // namespace
 
 static void vconn_mark();   // defined with the VCONN glue below; handle_frame needs it earlier
@@ -517,41 +555,53 @@ void detect_cc_orientation() {
                      lv[4], lv[5], c.found ? "live" : "none");
     }
 
+    g_scan_samples = samples;
+    g_scan_sample_n = unsigned(n);
     if (c.found) {
-        g_cc_mask = pd::self_power_mask(c.mask, pinned);   // pinned: both closed, the Rd must reach the connector
-        cc_switches(false, g_cc_mask);
-        const int i = c.line - 1;
-        g_active_cc = std::uint8_t(c.line);
-        if (pinned) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
-        else wr(kSwitches0, rd_both | (i == 0 ? kMeasCc1 : kMeasCc2));
-        delay_ms(2);
-        std::uint8_t status0 = 0;
-        rd(kStatus0, status0);
-        g_session.attach();
-        g_detach.reset();
-        g_attach_ms = systick::millis();
-        g_requests_base = g_engine.contract.requests;
-        g_pd_traffic = false;
-        g_pd_seen_attach = false;
-        g_engine.sink = {};   // the sniffed Sink_Capabilities belong to the previous partner
-        g_bc_max = std::uint8_t(status0 & 3);
-        g_vbus_mv = -1;  // a stale reading of the previous partner must not count
-        write_sw1();
-        // New attach: the PD logic and FIFOs still hold the previous partner's state, so
-        // reset them or the first Source_Capabilities of this partner can be lost.
-        wr(kReset, kPdReset);
-        flush_fifos();
-        clear_irqs();
-        g_hr_latched = false;   // the previous partner's Hard Reset is not this one's
-        K2LOG("[FUSB302] Active CC detected: CC%d (switches 0x%X: PC14 %s, PC15 %s)\n", c.line, c.mask,
-                     (c.mask & 1) ? "closed" : "open", (c.mask & 2) ? "closed" : "open");
-        pdtrace::cc(pdtrace::CcEvent::Attach, std::uint8_t(c.line), status0);
+        apply_cc_choice(c, pinned, rd_both);
         return;
     }
     g_active_cc = 0;  // nothing attached yet: keep both Rd pull-downs, both switches closed
     g_cc_mask = 3;
     cc_switches(false, g_cc_mask);
     wr(kSwitches0, rd_both);
+}
+
+// Cold boot: the attach scan runs about 1 s after reset, before the UI has fed sink_cc() any ADC levels,
+// so its Rd-window cross-check saw -1/-1 and could not override a wrongly latched line (an open Rp net
+// won the comparator tie). Re-run the cross-check whenever fresh levels arrive while a line is attached
+// and no PD message has been decoded on it yet, rate-limited. Passive: comparator reads only, unless the
+// levels name another line. A forced debug line (g_force_cc) and a pinned self-power boot are explicit
+// choices and are never overridden; PD traffic already decoded on the attached line ends the re-check.
+void cc_window_recheck() {
+    if (g_active_cc == 0 || g_pd_traffic || g_force_cc != 0 || g_pin_rd != 0) return;
+    const std::uint32_t now = systick::millis();
+    if (std::int32_t(now - g_cc_recheck_at) < std::int32_t(kCcRecheckMinMs)) return;
+    g_cc_recheck_at = now;
+    const std::uint8_t rd_line = pd::rd_window_override(g_cc1_mv, g_cc2_mv, g_active_cc);
+    if (rd_line == 0) return;
+    pd::CcChoice alt = pd::choose_cc_forced({g_scan_samples.data(), g_scan_sample_n}, rd_line);
+    if (!alt.found) {
+        // The last scan's samples do not name the line (the comparator never saw it): a fresh mini-scan
+        // over the current routing, both lines measured against the 210 mV threshold.
+        std::uint8_t sw0 = 0;
+        rd(kSwitches0, sw0);
+        wr(kMeasure, kMdac210mV);
+        std::array<pd::CcSample, 2> mini{};
+        cc_switches(false, g_cc_mask);
+        for (int line = 1; line <= 2; line++) {
+            wr(kSwitches0, std::uint8_t(idle_rd() | (line == 1 ? kMeasCc1 : kMeasCc2)));
+            delay_ms(2);
+            std::uint8_t status0 = 0;
+            rd(kStatus0, status0);
+            mini[line - 1] = {g_cc_mask, std::uint8_t(line), (status0 & kComp) != 0, std::uint8_t(status0 & 3)};
+        }
+        alt = pd::choose_cc_forced(mini, rd_line);
+        if (!alt.found) { wr(kSwitches0, sw0); return; }   // the line is not there: leave the chip as it was
+    }
+    K2LOG("[FUSB302] CC override: ADC cc1=%d cc2=%d mV names CC%u, the comparator chose CC%u\n",
+              int(g_cc1_mv), int(g_cc2_mv), unsigned(rd_line), unsigned(g_active_cc));
+    apply_cc_choice(alt, false, idle_rd());
 }
 
 // ---- Source_Capabilities logging ----
@@ -1956,8 +2006,9 @@ void sink_hard_reset() {
 }
 void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
-    g_cc1_mv = cc1_mv;   // kept for the attach scan's ADC cross-check (pd::rd_window_line)
+    g_cc1_mv = cc1_mv;   // kept for the attach scan's ADC cross-check (pd::rd_window_line) and its re-run on fresh levels
     g_cc2_mv = cc2_mv;
+    cc_window_recheck();   // fresh levels while attached with no PD decoded yet: re-run the Rd-window cross-check
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
     auto dist = [](std::int32_t v) { const std::int32_t d = v - pd::kSinkBandCenterMv; return d < 0 ? -d : d; };
     g_cc_sink_mv = dist(cc1_mv) <= dist(cc2_mv) ? cc1_mv : cc2_mv;

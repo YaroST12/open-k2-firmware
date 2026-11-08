@@ -193,7 +193,7 @@ bool pd_seen_attach();
 void sink_release();
 void sink_hard_reset();  // user-requested hard reset
 void sink_set_cap(std::uint32_t mv);  // highest voltage a request may ask for (from the power monitor)
-void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv);  // measured CC voltages; inline, no sink Rd near 1.5 V = sink left. Also stored as the latest net levels (g_cc1_mv/g_cc2_mv) for the attach scan's Rd-window cross-check; -1 = unknown
+void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv);  // measured CC voltages; inline, no sink Rd near 1.5 V = sink left. Also stored as the latest net levels (g_cc1_mv/g_cc2_mv) for the attach scan's Rd-window cross-check and its re-run on fresh levels while a line is attached with no PD decoded yet; -1 = unknown
 void sink_vbus(std::int32_t mv);      // measured VBUS; the engine aborts to 5 V above target + 10 % / the cap
 const pd::SinkStatus& sink_status();
 // The sink's record of the last Request it sent and the Xiaomi chain around it (diagnostics for a refused 6 A row).

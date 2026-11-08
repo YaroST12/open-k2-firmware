@@ -131,5 +131,14 @@ int main() {
     CHECK_EQ(int(rd_window_line(2001, 3300)), 0);
     CHECK_EQ(int(rd_window_line(1600, 1600)), 0);   // shorted pair: both in the window
     CHECK_EQ(int(rd_window_line(-1, -1)), 0);       // nothing known
+    // The re-check target when fresh levels arrive after the attach scan ran with unknown levels:
+    // the named line only when it differs from the attached one.
+    CHECK_EQ(int(rd_window_override(1678, 3307, 2)), 1);   // attached CC2, the levels name CC1
+    CHECK_EQ(int(rd_window_override(3307, 1678, 1)), 2);   // flipped plug
+    CHECK_EQ(int(rd_window_override(1678, 3307, 1)), 0);   // already on the named line
+    CHECK_EQ(int(rd_window_override(408, 1, 2)), 0);       // ambiguous levels name nothing
+    CHECK_EQ(int(rd_window_override(3300, 3300, 2)), 0);   // both open
+    CHECK_EQ(int(rd_window_override(-1, -1, 2)), 0);       // unknown levels (the cold-boot scan saw these)
+    CHECK_EQ(int(rd_window_override(1678, 3307, 0)), 0);   // nothing attached
     return test_report("test_pd_ccscan");
 }

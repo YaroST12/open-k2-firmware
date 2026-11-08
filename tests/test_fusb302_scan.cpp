@@ -31,6 +31,7 @@ std::uint32_t g_ms = 1000;
 bool g_pin[3];                          // PC13, PC14, PC15
 std::uint8_t g_reg[256];
 int g_line_mv = 1600;   // level of the measured line when STATUS0.COMP is armed (a source Rp over a sink Rd)
+int g_line_mv_cc[2] = {-1, -1};   // per-line override (index 0 = CC1, 1 = CC2, selected by SWITCHES0 MEAS); -1 = use g_line_mv
 std::vector<std::uint8_t> g_txfifo;
 std::deque<std::uint8_t> g_rx;
 std::deque<std::uint8_t> g_ia_script;   // INTERRUPTA (0x3E) values handed out one per read (clear-on-read), then g_reg[0x3E]
@@ -163,7 +164,10 @@ bool read(Bus, std::uint8_t, std::uint8_t reg, std::span<std::uint8_t> out) {
     if (reg == 0x3E && g_auto_txsent) g_reg[0x3E] = 0;   // clear-on-read
     if (reg == 0x40 && (g_reg[0x40] & 0x20)) {   // COMP: the measured line is above the MDAC threshold (MEASURE[5:0] x 42 mV)
         const int thr = (g_reg[0x04] & 0x3F) * 42;
-        if (g_line_mv <= thr) for (auto& b : out) b &= std::uint8_t(~0x20);
+        const int meas = (g_reg[0x02] & 0x0C) == 0x08 ? 1 : (g_reg[0x02] & 0x0C) == 0x04 ? 0 : -1;   // MEAS_CC2 / MEAS_CC1 (SWITCHES0 bits 3:2)
+        const int mv = meas == 0 && g_line_mv_cc[0] >= 0 ? g_line_mv_cc[0]
+                     : meas == 1 && g_line_mv_cc[1] >= 0 ? g_line_mv_cc[1] : g_line_mv;
+        if (mv <= thr) for (auto& b : out) b &= std::uint8_t(~0x20);
     }
     return true;
 }
@@ -208,6 +212,7 @@ void reset_world() {
     g_vconn_since = 0;
     g_ms = 1000;
     g_line_mv = 1600;
+    g_line_mv_cc[0] = g_line_mv_cc[1] = -1;
     g_cable = Cable{};
     g_reg[0x02] = 0x03;                                      // PDWN1|PDWN2 (Rd), nothing measured
     g_reg[0x03] = 0x20;                                      // passive: SPECREV=01, Auto-CRC off
@@ -571,6 +576,82 @@ void test_good_vbus_and_rp_keep_the_attach() {
     g_log.clear();
     for (int i = 0; i < 200; i++) { g_ms += 20; fusb302::sink_vbus(5000); fusb302::poll(); }
     CHECK_EQ(find_from("W 0C=02"), -1);
+}
+
+// ---- Rd-window re-check on fresh ADC levels (the cold-boot case) ----
+// The attach scan runs ~1 s after reset, before the UI has fed sink_cc() any ADC levels, so its
+// cross-check saw -1/-1 and latched whatever the comparator saw. Attach on CC2 with unknown levels.
+void attach_cc2_unknown_levels() {
+    reset_world();
+    fusb302::sink_cc(-1, -1);                        // cold boot: no ADC levels yet
+    g_line_mv_cc[0] = 100; g_line_mv_cc[1] = 1600;   // the comparator sees Rp only on CC2 at scan time
+    g_reg[0x40] = 0x23;                               // COMP + BC_LVL=3
+    fusb302::init();
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    g_ms = 100000;   // the driver's re-check rate-limit timestamp survives this reset_world (g_ms restarts at 1000): jump past it
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    CHECK_EQ(int(fusb302::active_cc()), 2);
+    CHECK_EQ(usb_has("CC override"), false);          // unknown levels: the scan could not cross-check
+    g_log.clear(); g_usb.clear();
+}
+
+void detach_and_forget_levels() {
+    g_line_mv_cc[0] = g_line_mv_cc[1] = 100;
+    g_reg[0x40] = 0x00;                               // no Rp anywhere: the 500 ms rule detaches
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    fusb302::sink_cc(-1, -1);
+}
+
+// Fresh ADC levels arrive while CC2 is attached and no PD message was decoded on it yet: the Rd window
+// names CC1 (1678 mV against an open 3307 mV), so the attach moves to CC1, applied like a fresh attach
+// (switches, SWITCHES0 measure bit, SWITCHES1 routing, a new session), and the override is logged.
+void test_rd_window_recheck_moves_a_wrongly_latched_line_on_fresh_levels() {
+    attach_cc2_unknown_levels();
+    const auto session0 = fusb302::session();
+    g_line_mv_cc[0] = 1600; g_line_mv_cc[1] = 3300;   // the comparator agrees now: CC1 live, CC2 open Rp
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_cc(1678, 3307); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::active_cc()), 1);
+    CHECK_EQ(usb_has("[FUSB302] CC override"), true);
+    CHECK_EQ(int(g_reg[0x02]), 0x04);                 // SWITCHES0: MEAS_CC1, no Rd (plain passive boot)
+    CHECK_EQ(int(g_reg[0x03] & 0x03), 0x01);          // SWITCHES1: BMC/TX routed to CC1 (phy::sw1)
+    CHECK_EQ(fusb302::session() != session0, true);   // a new attach session: the PD state was reset
+    // stable: the same levels no longer name another line, the override fired once
+    g_usb.clear();
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_cc(1678, 3307); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::active_cc()), 1);
+    CHECK_EQ(usb_has("CC override"), false);
+    CHECK_EQ(usb_has("Detach"), false);               // Rp on the new line keeps the attach
+    detach_and_forget_levels();
+}
+
+// Negative: ambiguous levels (408, 1) name no line, and a forced debug line is an explicit choice.
+void test_rd_window_recheck_ignores_ambiguous_levels_and_a_forced_line() {
+    attach_cc2_unknown_levels();
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_cc(408, 1); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::active_cc()), 2);
+    CHECK_EQ(usb_has("CC override"), false);
+    fusb302::set_force_line(2);                       // pd-reread --line 2: never overridden
+    g_line_mv_cc[0] = 1600; g_line_mv_cc[1] = 3300;
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_cc(1678, 3307); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::active_cc()), 2);
+    CHECK_EQ(usb_has("CC override"), false);
+    fusb302::set_force_line(0);
+    detach_and_forget_levels();
+}
+
+// Negative: once a PD message was decoded on the attached line, CC is never touched again.
+void test_rd_window_recheck_never_runs_after_pd_traffic() {
+    attach_cc2_unknown_levels();
+    push_frame(0xE0, std::uint16_t(0x1001 | (2u << 6)), {0x0801912Cu});   // Source_Capabilities: 5 V 3 A
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(fusb302::pd_traffic(), true);
+    g_line_mv_cc[0] = 1600; g_line_mv_cc[1] = 3300;
+    g_usb.clear();
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_cc(1678, 3307); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::active_cc()), 2);
+    CHECK_EQ(int(g_reg[0x02] & 0x0C), 0x08);          // still measuring CC2
+    CHECK_EQ(usb_has("CC override"), false);
+    detach_and_forget_levels();
 }
 
 void test_rescan_is_only_the_cc_switch_cycle() {
@@ -2553,6 +2634,9 @@ int main() {
     test_inline_hold_ends_with_rd_back_even_when_nothing_is_there();
     test_source_alone_gets_rd_back_after_a_detach();
     test_good_vbus_and_rp_keep_the_attach();
+    test_rd_window_recheck_moves_a_wrongly_latched_line_on_fresh_levels();
+    test_rd_window_recheck_ignores_ambiguous_levels_and_a_forced_line();
+    test_rd_window_recheck_never_runs_after_pd_traffic();
     test_vconn_level_line_is_not_an_active_cc_and_detach_never_soft_resets();
     test_rescan_is_only_the_cc_switch_cycle();
     test_service_drains_the_fifo_past_the_four_packet_pass();
