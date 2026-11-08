@@ -369,6 +369,7 @@
   "366": "[CJRN] run not resumable: section %s does not match its header, journal dropped\n",
   "367": "[CJRN] begin cancelled after %u pumps\n",
   "368": "[CJRN] wait-for-replan ms=%u\n",
-  "369": "[CONN] body full=%d rows=%d\n"
+  "369": "[CONN] body full=%d rows=%d\n",
+  "370": "[FUSB302] CC override: ADC cc1=%d cc2=%d mV names CC%u, the comparator chose CC%u\n"
  }
 }

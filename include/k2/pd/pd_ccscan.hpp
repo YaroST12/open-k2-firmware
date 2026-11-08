@@ -79,6 +79,22 @@ constexpr std::uint8_t pinned_live_line(std::uint8_t pin, std::span<const CcSamp
     return 0;
 }
 
+// The Rd window on a CC net, in mV: a source's Rp over a sink's Rd divides down to ~0.2-2.0 V,
+// an open Rp (or VCONN) reads ~3.3 V, an Ra / grounded line reads low. The live wire is the one
+// net inside the window while the other net is open or unknown: exactly that pair names the line.
+// Both nets in the window (a shorted pair), neither in it, or a low reading on the other net
+// (Ra / short: not one-live-plus-one-open) are ambiguous and name nothing. -1 = unknown counts as
+// not-in-window and never as low.
+inline constexpr std::int32_t kRdWindowLoMv = 200, kRdWindowHiMv = 2000;
+constexpr std::uint8_t rd_window_line(std::int32_t cc1_mv, std::int32_t cc2_mv) {
+    const bool in1 = cc1_mv >= kRdWindowLoMv && cc1_mv <= kRdWindowHiMv;
+    const bool in2 = cc2_mv >= kRdWindowLoMv && cc2_mv <= kRdWindowHiMv;
+    if (in1 == in2) return 0;
+    const std::int32_t other = in1 ? cc2_mv : cc1_mv;
+    if (other >= 0 && other < kRdWindowLoMv) return 0;
+    return in1 ? 1 : 2;
+}
+
 // Debug option (pd-reread --line N): only line `forced` (1/2) may be chosen; 0 = the normal choice. Isolated samples of
 // that line first, then any comp sample of it; the highest BC_LVL wins, the first one breaks a tie.
 constexpr CcChoice choose_cc_forced(std::span<const CcSample> samples, std::uint8_t forced) {

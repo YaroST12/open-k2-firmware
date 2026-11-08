@@ -80,6 +80,7 @@ volatile bool g_irq = false;  // set by the EXTI12 ISR (INT_N fell), cleared by 
 std::int32_t g_vbus_mv = -1;  // last VBUS reading from sink_vbus(); -1 = unknown
 bool g_new_source = false;  // next Source_Capabilities on SOP starts a fresh source
 std::int32_t g_cc_sink_mv = -1;  // the CC voltage closest to the sink-Rd band (-1 unknown)
+std::int32_t g_cc1_mv = -1, g_cc2_mv = -1;  // latest ADC net levels from sink_cc(); -1 = unknown
 std::uint8_t g_pin_rd = 0;  // self-powered mode: the Rd bits SWITCHES0 keeps while no partner is attached (0 = free)
 std::uint8_t g_boot_pin_rd = 0;   // the boot mode's Rd bits, restored after a run's detach (self_power_restore)
 bool g_rd_inherited = false;      // the pin was kept across a warm reset by the pin mark (charger-powered K2), not set by a key mode
@@ -485,7 +486,24 @@ void detect_cc_orientation() {
             samples[n++] = {mask, std::uint8_t(line), comp, std::uint8_t(status0 & 3)};
         }
     }
-    const pd::CcChoice c = pd::choose_cc_forced(samples, g_force_cc != 0 ? g_force_cc : pin_line);
+    pd::CcChoice c = pd::choose_cc_forced(samples, g_force_cc != 0 ? g_force_cc : pin_line);
+    // Cross-check the comparator choice against the ADC net levels (Ui feeds sink_cc() every tick):
+    // the live wire is the one net inside the Rd window, an open Rp (~3.3 V) must never win. A pinned
+    // boot (g_pin_rd / pinned_live_line) and a forced debug line (g_force_cc) are explicit choices and
+    // are not overridden. The ~2 Hz rescan after a detach (poll() -> detach_reset() -> this function)
+    // lands here again with the fresh levels, so a VBUS collapse mid-negotiation cannot leave a wrong
+    // line latched from a bad first sample.
+    if (!pinned && g_force_cc == 0) {
+        const std::uint8_t rd_line = pd::rd_window_line(g_cc1_mv, g_cc2_mv);
+        if (rd_line != 0 && rd_line != c.line) {
+            const pd::CcChoice alt = pd::choose_cc_forced(samples, rd_line);
+            if (alt.found) {
+                K2LOG("[FUSB302] CC override: ADC cc1=%d cc2=%d mV names CC%u, the comparator chose CC%u\n",
+                          int(g_cc1_mv), int(g_cc2_mv), unsigned(rd_line), unsigned(c.line));
+                c = alt;
+            }
+        }
+    }
 
     // [PD] one line per scan result change: switch mask, per-line level (-: no Rp) for each setting.
     static std::uint32_t last_sig = 0xFFFFFFFFu;
@@ -1938,6 +1956,8 @@ void sink_hard_reset() {
 }
 void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
+    g_cc1_mv = cc1_mv;   // kept for the attach scan's ADC cross-check (pd::rd_window_line)
+    g_cc2_mv = cc2_mv;
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
     auto dist = [](std::int32_t v) { const std::int32_t d = v - pd::kSinkBandCenterMv; return d < 0 ? -d : d; };
     g_cc_sink_mv = dist(cc1_mv) <= dist(cc2_mv) ? cc1_mv : cc2_mv;

@@ -116,5 +116,20 @@ int main() {
     }
     // The scan order starts with both closed.
     CHECK_EQ(int(kCcScanMasks[0]), 3);
+    // The ADC cross-check of the attach scan: the live wire is the one net inside the Rd window
+    // (~0.2-2.0 V); an open Rp reads ~3.3 V and must never win, both-open and both-driven name nothing.
+    CHECK_EQ(int(rd_window_line(1678, 3307)), 1);    // Rp over Rd on CC1, open Rp on CC2
+    CHECK_EQ(int(rd_window_line(3307, 1678)), 2);   // flipped plug
+    CHECK_EQ(int(rd_window_line(3300, 3300)), 0);    // both open
+    CHECK_EQ(int(rd_window_line(408, 1)), 0);       // neither reads like one live + one open net
+    CHECK_EQ(int(rd_window_line(1500, 3300)), 1);
+    CHECK_EQ(int(rd_window_line(-1, 1600)), 2);      // unknown (-1) counts as not-in-window
+    // Window edges: [200, 2000] mV inclusive.
+    CHECK_EQ(int(rd_window_line(200, 3300)), 1);
+    CHECK_EQ(int(rd_window_line(2000, 3300)), 1);
+    CHECK_EQ(int(rd_window_line(199, 3300)), 0);
+    CHECK_EQ(int(rd_window_line(2001, 3300)), 0);
+    CHECK_EQ(int(rd_window_line(1600, 1600)), 0);   // shorted pair: both in the window
+    CHECK_EQ(int(rd_window_line(-1, -1)), 0);       // nothing known
     return test_report("test_pd_ccscan");
 }
