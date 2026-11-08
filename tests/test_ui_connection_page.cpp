@@ -428,6 +428,38 @@ static void test_data_row_only_when_it_adds_something() {
     g_stub.em = {}; g_stub.contract = {}; g_stub.caps = {}; g_stub.ul = {};
 }
 
+// The signatures cover displayed inputs only: a change that never reaches the screen (the Request
+// counter, the VDM request counter) must not even run match_live, and a displayed change must run it
+// exactly once. No pixel change either way.
+static void test_non_displayed_inputs_do_not_run_match_live() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 50000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Pps, 0, 5000, 11000, 5000, 55000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
+    g_stub.contract.pos = 3; g_stub.contract.mv = 8880; g_stub.contract.op_ma = g_stub.contract.max_ma = 2050;
+    uint32_t t = 51000;
+    ui.tick(t);
+    show(ui, 0, t);
+    for (int i = 0; i < 10; i++) ui.tick(t += 100);          // settled
+    const uint32_t base = g_match_live_calls;
+    const unsigned px0 = g_lcd_pixels;
+    g_stub.contract.requests += 5;                            // counters, never rendered
+    g_stub.vdm.requests += 3;
+    for (int i = 0; i < 10; i++) ui.tick(t += 100);
+    CHECK_EQ(g_match_live_calls - base, 0u);                  // the cheap signature did not even fire
+    CHECK_EQ(int(g_lcd_pixels - px0), 0);
+    g_stub.contract.mv += 60;                                 // a displayed input: exactly one run
+    const uint32_t c0 = g_match_live_calls;
+    ui.tick(t += 100);
+    CHECK_EQ(g_match_live_calls - c0, 1u);
+    g_stub.contract = {};
+}
+
 // ---- every row fits the 19-cell value column, worst case on every tab (test_report fails on any cut) ----
 
 static void test_worst_case_rows_fit() {
@@ -519,6 +551,7 @@ int main() {
     test_source_tab_leaves_waiting_after_timeout();
     test_proto_row_survives_the_row_cap();
     test_data_row_only_when_it_adds_something();
+    test_non_displayed_inputs_do_not_run_match_live();
     test_default_tab_on_open();
     test_topology_from_the_cc_lines();
     test_topology_unknown_unless_passive_and_dead();

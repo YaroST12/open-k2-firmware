@@ -783,11 +783,14 @@ void ConnectionPage::update(uint32_t now_ms) {
         paint_popup(now_ms);
         return;
     }
-    // Cheap pre-check: hash only scalar inputs first -- link state, caps header fields, contract, sink/identify
-    // list headers, e-marker and VDM scalar fields, fc, analog D+/D-, the topology facts. Only when that cheap
-    // signature changes do we run match_live() and the full paint signature; the full-sig gate below still
-    // decides the repaint, so the rendered output is identical. All reads are O(1) scalars or bounded fixed
-    // arrays: no heap, no match_compute, no usb_link() call, no paint.
+    // Cheap pre-check: hash only the inputs that can reach the screen -- link state, caps header fields,
+    // the displayed contract fields (flags/accepted/ready/rejected/pos/mv/op_ma/max_ma drive the Request /
+    // State / Used rows), sink/identify list headers, e-marker and VDM scalar fields, fc, analog D+/D-, the
+    // topology facts. Counters that are never rendered (ct.rdo, ct.requests, vdm.requests) are left out, so
+    // they do not even run match_live(). Only when that cheap signature changes do we run match_live() and
+    // the full paint signature; the full-sig gate below still decides the repaint, so the rendered output is
+    // identical. All reads are O(1) scalars or bounded fixed arrays: no heap, no match_compute, no usb_link()
+    // call, no paint.
     const pd::SourceCaps &live_caps = pd::active_caps();
     const pd::Contract &ct = fusb302::contract();
     const pd::SinkCapsSeen &sniffed = fusb302::sink_caps();
@@ -811,8 +814,6 @@ void ConnectionPage::update(uint32_t now_ms) {
               | uint32_t(ct.rejected) << 3 | uint32_t(ct.pos) << 8 | uint32_t(ct.flags) << 16);
     c = fnv(c, uint32_t(ct.mv) | uint32_t(ct.op_ma) << 16);
     c = fnv(c, ct.max_ma);
-    c = fnv(c, ct.rdo);
-    c = fnv(c, ct.requests);
     c = fnv(c, uint32_t(sniffed.valid) | uint32_t(sniffed.n) << 8);
     for (int i = 0; i < sniffed.n; i++) c = fnv(c, sniffed.raw[i]);
     c = fnv(c, uint32_t(fusb302::identify_current()) | uint32_t(idst.ok_mask) << 8 | uint32_t(idst.num_sink_pdos) << 16);
@@ -828,7 +829,6 @@ void ConnectionPage::update(uint32_t now_ms) {
     for (int i = 0; i < vdm.num_svids; i++) c = fnv(c, vdm.svids[i]);
     for (int i = 0; i < vdm.num_modes; i++) c = fnv(c, vdm.modes[i]);
     c = fnv(c, uint32_t(vdm.cuktech) | uint32_t(vdm.xiaomi) << 1 | uint32_t(vdm.xiaomi_cmd) << 2);
-    c = fnv(c, vdm.requests);
     c = fnv(c, uint32_t(snk.identity.valid) | uint32_t(snk.identity.vid) << 8 | uint32_t(snk.identity.pid) << 16);
     c = fnv(c, snk.identity.id_header);
     c = fnv(c, uint32_t(snk.num_svids));
@@ -858,7 +858,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     h = fnv(h, uint32_t(tab_) | uint32_t(link.cable_stale()) << 8 | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
     h = fnv(h, r.typec_ma | uint32_t(fusb302::pd_traffic()) << 16 | uint32_t(link.inline_mode()) << 17);
     h = fnv(h, r.want_mv); h = fnv(h, r.want_ma); h = fnv(h, r.want_mw); h = fnv(h, uint32_t(r.want_pos));
-    h = fnv(h, uint32_t(r.gone) | g_book.offered << 8); h = fnv(h, r.src_max_mw); h = fnv(h, r.sink_max_mv); h = fnv(h, r.need_ma); h = fnv(h, r.have_ma);
+    h = fnv(h, uint32_t(r.gone) | g_book.offered << 8); h = fnv(h, r.src_max_mw); h = fnv(h, r.sink_max_mv);
     for (int i = 0; i < r.rows; i++) {
         const pd::Pdo &p = caps->pdos[i];
         h = fnv(h, uint32_t(r.row[i]) | uint32_t(p.type) << 8);
