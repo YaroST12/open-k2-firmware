@@ -51,7 +51,12 @@ enum class Protocol : std::uint8_t {
 // reading, because a PD sink's data pair carries its own USB idle level, not a handshake.
 // `pd_likely` (k2::link::pd_likely): CC attached, VBUS above 5.5 V and load flowing but no caps seen;
 // the verdict is "PD?" instead of a data-pair guess.
-Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active = false, bool pd_likely = false);
+// `cc_source_no_pd`: CC shows an attached source (Rp) but no Source_Capabilities were decoded, i.e. a
+// default-USB data host. Its D+/D- pair carries data, so the 5 V band says USB data, never a short.
+// A DCP (D+ shorted to D-) is only concluded from a level that sits still over the whole window:
+// a live data link averages equal too, but its levels move with bus activity.
+Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active = false, bool pd_likely = false,
+                  bool cc_source_no_pd = false);
 
 // Display string of a verdict (including "NO INPUT" and "..."); "?" if unknown.
 const char* name(Protocol p);

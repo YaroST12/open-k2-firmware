@@ -240,6 +240,52 @@ static void test_pd_and_usb_data() {
     CHECK_STR(short_name(Protocol::UsbData), "USB DATA");
 }
 
+// A live USB data link can average D+ = D- (SE0 idle / high-speed signalling on both lines), so an
+// equal-level sample never proves a BC1.2 short: the levels have to sit still over the whole window.
+// Recorded on a data link behind a laptop port: D+ 0.59 V / D- 0.59 V on average, and D+ 2.03 V /
+// D- 0.59 V in an earlier capture of the same kind of link - the levels move with bus activity.
+static void test_dcp_needs_stability() {
+    // A steady short sits still: D+ = D- = 0.59 V for the whole window -> DCP stands.
+    Ring steady;
+    for (int i = 0; i < 50; i++) steady.push(590, 590);
+    CHECK_EQ(classify(steady, 590, 590, 5000), Protocol::Dcp5V);
+    // D+ alternating 0.59 / 2.03 V against a steady 0.59 V D-: traffic, not a short,
+    // whichever level the latest sample happens to hold.
+    Ring traffic;
+    for (int i = 0; i < 50; i++) traffic.push((i & 1) ? 2030 : 590, 590);
+    CHECK_EQ(classify(traffic, 590, 590, 5000), Protocol::UsbData);
+    CHECK_EQ(classify(traffic, 2030, 590, 5000), Protocol::UsbData);
+    // One equal-level sample at the end of an active window is not a short either.
+    Ring tail;
+    for (int i = 0; i < 49; i++) tail.push((i & 1) ? 2030 : 590, 590);
+    tail.push(590, 590);
+    CHECK_EQ(classify(tail, 590, 590, 5000), Protocol::UsbData);
+    // Both lines equal but varying together: still moving, still not a short.
+    Ring both;
+    for (int i = 0; i < 50; i++) { const int v = (i & 1) ? 2030 : 590; both.push(v, v); }
+    CHECK_EQ(classify(both, 2030, 2030, 5000), Protocol::UsbData);
+    // Full-speed J/K traffic on D+, D- low: activity on the pair reads as data.
+    Ring fs;
+    for (int i = 0; i < 50; i++) fs.push((i & 1) ? 3300 : 0, 0);
+    CHECK_EQ(classify(fs, 3300, 0, 5000), Protocol::UsbData);
+    CHECK_EQ(classify(fs, 0, 0, 5000), Protocol::UsbData);
+    // The steady shorts of the 5 V band test above keep their verdict.
+    CHECK_EQ(run(3300, 3300, 5000), Protocol::Dcp5V);
+    CHECK_EQ(run(3300, 3200, 5000), Protocol::Dcp5V);
+    CHECK_EQ(run(600, 600, 5000), Protocol::Dcp5V);
+    // A default-USB data host on CC (Rp attached, no PD contract): the pair is data even when
+    // the levels are equal or unrecognisable - never a dedicated charger.
+    CHECK_EQ(classify(steady, 590, 590, 5000, false, false, true), Protocol::UsbData);
+    CHECK_EQ(classify(traffic, 590, 590, 5000, false, false, true), Protocol::UsbData);
+    Ring unknown;
+    for (int i = 0; i < 50; i++) unknown.push(1500, 600);
+    CHECK_EQ(classify(unknown, 1500, 600, 5000, false, false, true), Protocol::UsbData);
+    CHECK_EQ(classify(unknown, 1500, 600, 5000), Protocol::NoQuick);
+    // A PD contract or a likely one still wins over the data-host flag.
+    CHECK_EQ(classify(steady, 590, 590, 5000, true, false, true), Protocol::Pd);
+    CHECK_EQ(classify(steady, 590, 590, 8900, false, true, true), Protocol::PdLikely);
+}
+
 int main() {
     test_ring();
     test_bucket();
@@ -252,5 +298,6 @@ int main() {
     test_idle();
     test_pd_and_usb_data();
     test_pd_likely();
+    test_dcp_needs_stability();
     return test_report("test_fastcharge_classify");
 }

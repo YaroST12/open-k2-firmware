@@ -22,7 +22,25 @@ constexpr int kBand20VMax = 21500;
 constexpr bool high(int b) { return b == 2 || b == 3 || b == 5; }     // 2.4 .. 3.3 V
 constexpr bool pulsing(int b) { return b == 4 || b == 7; }
 
-Protocol band_5v(int bdp, int bdm, int dp_mv, int dm_mv) {
+// A BC1.2 short ties D+ to D- at one level that sits still: every sample pair of the whole window
+// within 0.2 V of each other, at least 0.4 V high, and the combined level steady within 0.2 V.
+// A live data link can average equal (SE0 idle, high-speed signalling) but its levels move with
+// bus activity, so one equal-level sample never proves a short.
+bool dcp_shorted(const Ring& ring) {
+    int lo = 255, hi = 0;
+    for (std::size_t i = 0; i < kRingSize; i++) {
+        const int d = ring.dp[i], m = ring.dm[i];
+        const int diff = d > m ? d - m : m - d;
+        if (diff > 2) return false;
+        if (d < lo) lo = d;
+        if (m < lo) lo = m;
+        if (d > hi) hi = d;
+        if (m > hi) hi = m;
+    }
+    return lo >= 4 && hi - lo <= 2;
+}
+
+Protocol band_5v(const Ring& ring, int bdp, int bdm, int dp_mv, int dm_mv, bool cc_source_no_pd) {
     if (bdp == 1 && high(bdm)) return Protocol::Qc3;
     if (bdp == 1 && bdm == 0) return Protocol::AfcFcp;     // passive: QC2.0 5 V needs an active trigger
     if (bdp == 1 && bdm == 4) return Protocol::Scp;
@@ -33,8 +51,12 @@ Protocol band_5v(int bdp, int bdm, int dp_mv, int dm_mv) {
     if (high(bdp) && pulsing(bdm)) return Protocol::VoocWarp;
     if (bdp == 0 && high(bdm)) return Protocol::Usb11Low;
     if (dp_mv >= 1100 && dp_mv <= 1300 && dm_mv >= 1100 && dm_mv <= 1300) return Protocol::Sam20;
-    const int diff = dp_mv > dm_mv ? dp_mv - dm_mv : dm_mv - dp_mv;
-    if (diff <= 200 && dp_mv >= 400) return Protocol::Dcp5V;
+    // Tail of the 5 V band: a data host on CC (default-USB Rp, no PD contract) owns the pair.
+    if (cc_source_no_pd) return Protocol::UsbData;
+    // Only a short that stayed put over the whole window is a dedicated charger; activity on the
+    // pair (pulse train or mix) is a data link, and anything else is simply no handshake.
+    if (dcp_shorted(ring)) return Protocol::Dcp5V;
+    if (pulsing(bdp) || pulsing(bdm)) return Protocol::UsbData;
     return Protocol::NoQuick;
 }
 
@@ -100,7 +122,8 @@ int bucket(std::span<const std::uint8_t, kRingSize> samples) {
     return 7;
 }
 
-Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active, bool pd_likely) {
+Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active, bool pd_likely,
+                  bool cc_source_no_pd) {
     if (vbus_mv < kVbusPresentMv) return Protocol::NoInput;
     if (pd_active) return Protocol::Pd;
     if (pd_likely) return Protocol::PdLikely;
@@ -110,7 +133,7 @@ Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_a
     // A full-speed device idles with its D+ pull-up read through the divider at about 0.7..1.0 V and
     // D- near 0. The charger-driven 0.6 V of FCP/AFC reads below that window.
     if (bdp == 1 && bdm == 0 && dp_mv >= kDataIdleMinMv && dp_mv <= kDataIdleMaxMv) return Protocol::UsbData;
-    if (vbus_mv < kBand5VMax) return band_5v(bdp, bdm, dp_mv, dm_mv);
+    if (vbus_mv < kBand5VMax) return band_5v(ring, bdp, bdm, dp_mv, dm_mv, cc_source_no_pd);
     if (vbus_mv < kBand7VMax) return band_low_voltage(bdp, bdm);
     if (vbus_mv <= kBand9VMax) return band_9v(bdp, bdm);
     if (vbus_mv >= kBand12VMin && vbus_mv <= kBand12VMax) return band_12v(bdp, bdm);

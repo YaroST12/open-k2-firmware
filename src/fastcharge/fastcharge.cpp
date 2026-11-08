@@ -41,7 +41,12 @@ void poll() {
     }
     if (vbus < 4000) g_ring.clear();    // a new source starts a fresh window
     else g_ring.push(line->dp_mv, line->dm_mv);
-    g_verdict = classify(g_ring, line->dp_mv, line->dm_mv, vbus, link::pd_active(), link::pd_likely_now());
+    const link::Probe probe = link::probe_now();
+    // CC attached with no decoded Source_Capabilities is a default-USB data host (Rp on CC):
+    // its D+/D- pair carries data, so the classifier must not read a charger handshake into it.
+    const bool cc_source_no_pd = probe.cc_active && !probe.pd_active;
+    g_verdict = classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),
+                         cc_source_no_pd);
 }
 
 Protocol read() { return g_verdict; }
