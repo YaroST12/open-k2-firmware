@@ -355,7 +355,7 @@ struct TabData {
     const pd::SourceCaps *caps;
     std::span<const uint32_t> sink;
     usblink::Link ul;
-    bool waiting, k2_sink, k2_sink_ok, id_is_sink;
+    bool waiting, k2_sink, k2_sink_ok;
     fastcharge::Protocol fc;
 };
 
@@ -377,9 +377,9 @@ void link_rows(Rows &R, const TabData &d) {
     R.add("Alt", as == usblink::AltState::Entered ? kOk : as == usblink::AltState::Advertised ? kCaution : kFaint).put(ab.data());
 }
 
-// "Protocol: Xiaomi PD": the vendor PROTOCOL a partner advertises by SVID (names only; the row is left out when there is none).
-void proto_row(Rows &R) {
-    const pd::VdmInfo &vdm = fusb302::vdm();
+// "Proto Xiaomi PD": the vendor PROTOCOL one side lists by SVID (names only; the row is left out when there is none).
+// `vdm` is that side's own answers: the source's (fusb302::vdm) on the Source tab, the sink's (sink_vdm) on the Sink tab.
+void proto_row(Rows &R, const pd::VdmInfo &vdm) {
     StrBuf<28> t;
     if (conn::protocol_text(std::span<const uint16_t>(vdm.svids.data(), vdm.num_svids), t)) R.add("Proto", kEnergy).put(t.view());
 }
@@ -434,7 +434,7 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
         R.add("PD", kFaint).put("Waiting for caps...");
         return;
     }
-    if (id.valid && !d.id_is_sink) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
+    if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
     else R.add("ID").put("unknown");
     const pd::SourceCaps &caps = *d.caps;
     StrBuf<28> &pdv = R.add("PD", r.caps_seen ? kEnergy : kFaint);
@@ -469,7 +469,7 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
         if (!fcn.view().empty() && d.fc != fastcharge::Protocol::Pending) R.add("Legacy", kEnergy).put(fcn.view());
     }
     link_rows(R, d);
-    if (!d.id_is_sink) proto_row(R);
+    proto_row(R, fusb302::vdm());
 }
 
 [[gnu::noinline]] void cable_rows(Rows &R, const TabData &) {
@@ -557,15 +557,15 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
 
 [[gnu::noinline]] void sink_rows(Rows &R, const TabData &d) {
     const MatchResult &r = *d.r;
-    const pd::Identity &id = fusb302::vdm().identity;
+    const pd::Identity &id = fusb302::sink_vdm().identity;
     if (d.k2_sink) {   // the K2 draws the power itself
         R.add("ID", kFaint).put("K2");
         R.add("Sink", kOk).put(d.k2_sink_ok ? "K2 (sink mode OK)" : "K2 (sink mode PLUS)");
         link_rows(R, d);
         return;
     }
-    if (id.valid && d.id_is_sink) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
-    else R.add("ID").put("unknown");   // the sink's identity is not on the wire we sniff: Identify asks for it
+    if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
+    else R.add("ID").put("unknown");   // until the sink answers a Discover Identity (the charger's, or Identify's)
     if (r.request_seen) {
         StrBuf<28> &v = R.add("Request", kAmp);
         v.put("PDO").put_u32(uint32_t(r.want_pos)).put_char(' ');
@@ -583,7 +583,7 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
     }
     strip_rows(R, r, d.ul);
     link_rows(R, d);
-    if (d.id_is_sink) proto_row(R);
+    proto_row(R, fusb302::sink_vdm());
     if (!d.sink.empty()) put_sink_pdos(R, d.sink);
     else R.add("Caps", kFaint).put("not seen");
 }
@@ -635,8 +635,6 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.waiting = link.attached() && link.waiting();
     d.k2_sink = fusb302::self_powered();
     d.k2_sink_ok = fusb302::pin_rd() == 1;
-    // The identity and SVIDs the driver holds belong to the device when Identify ran inline in this attach, else to the charger.
-    d.id_is_sink = link.inline_mode() && fusb302::identify_current();
     d.fc = ctx_.fc;
     Rows R;
     switch (tab_) {
@@ -746,6 +744,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     const pd::IdStatus &idst = fusb302::identify_status();
     const pd::Emarker &em = fusb302::emarker();
     const pd::VdmInfo &vdm = fusb302::vdm();
+    const pd::VdmInfo &snk = fusb302::sink_vdm();
     const int32_t dp_mv = ctx_.analog ? ctx_.analog->dp_mv : -1;
     const int32_t dm_mv = ctx_.analog ? ctx_.analog->dm_mv : -1;
     uint32_t c = 2166136261u;
@@ -780,6 +779,10 @@ void ConnectionPage::update(uint32_t now_ms) {
     for (int i = 0; i < vdm.num_modes; i++) c = fnv(c, vdm.modes[i]);
     c = fnv(c, uint32_t(vdm.cuktech) | uint32_t(vdm.xiaomi) << 1 | uint32_t(vdm.xiaomi_cmd) << 2);
     c = fnv(c, vdm.requests);
+    c = fnv(c, uint32_t(snk.identity.valid) | uint32_t(snk.identity.vid) << 8 | uint32_t(snk.identity.pid) << 16);
+    c = fnv(c, snk.identity.id_header);
+    c = fnv(c, uint32_t(snk.num_svids));
+    for (int i = 0; i < snk.num_svids; i++) c = fnv(c, snk.svids[i]);
     c = fnv(c, uint32_t(ctx_.analog.has_value()));
     c = fnv(c, uint32_t(dp_mv));
     c = fnv(c, uint32_t(dm_mv));
@@ -822,8 +825,14 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = fnv(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
         h = fnv(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
         h = fnv(h, id.id_header);
+        const pd::Identity &sid = snk.identity;
+        h = fnv(h, uint32_t(sid.valid) | uint32_t(sid.vid) << 8 | uint32_t(sid.pid) << 16);
+        h = fnv(h, sid.id_header);
+        h = fnv(h, uint32_t(vdm.num_svids) | uint32_t(snk.num_svids) << 8);
+        for (int i = 0; i < vdm.num_svids; i++) h = fnv(h, vdm.svids[i]);
+        for (int i = 0; i < snk.num_svids; i++) h = fnv(h, snk.svids[i]);
         h = fnv(h, uint32_t(ul.family) | uint32_t(ul.tbt) << 4 | uint32_t(ul.dp) << 8 | uint32_t(ul.cable_limited) << 9 | ul.mbps << 12);
-        h = fnv(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3 | uint32_t(ul.n_other) << 4 | uint32_t(ul.other_svids[0]) << 8);
+        h = fnv(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3);
         h = fnv(h, uint32_t(ctx_.fc) | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
     }
     if (sig_valid_ && h == sig_) return;

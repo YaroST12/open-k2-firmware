@@ -336,6 +336,10 @@ reads `unknown` or `-`.
 Match rows (Sink tab): `Pwr` = source watts x cable amps x sink watts = result, `Data` = cable speed x device speed
 = result. The smallest known term (`pdtabs::limit`) is the result and the limiting row is drawn in amber (`kCaution`);
 unknown terms show `?`. Without an e-marker the power row assumes a 3 A cable (`3A?`).
+Only real alt modes (DisplayPort, Thunderbolt) count as `Alt`: a vendor SVID such as 0x2717 is a charging protocol and shows as the
+Proto row (`Xiaomi PD`) of the side that listed it. A VDM answer is filed by the sender's power role (header bit 8): the Source tab
+reads the source's answers, the Sink tab the sink's (`pd::Engine::vdm` / `sink_vdm`), so a phone's ACK never overwrites the
+charger's identity.
 
 Colour: negotiated or used = green, advertised = amber (`Alt`), unknown or none = faint. `USB` is the data speed only
 (`usblink::format_speed`); `Alt` is `usblink::format_alt`: entered modes green (`DP 2-lane`, `DP 4-lane`, `TB3/4`),

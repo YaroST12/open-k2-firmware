@@ -64,7 +64,7 @@ void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint
     } else if (!ext && type == 0x06 && ((header >> 12) & 7) == 0) {  // PS_RDY
         if (contract.valid) contract.ready = true;
     } else if (!ext && type == kMsgVendorDefined) {
-        parse_vdm(vdm, payload);
+        parse_vdm((header >> 8) & 1 ? vdm : sink_vdm, payload);  // bit 8 on SOP: the sender's power role
     } else if (type == kDataRevision && ((header >> 12) & 7) == 1 &&
                (header & (1u << 8)) && payload.size() >= 4) {
         parse_revision(payload.first(4), this->ext.revision);
@@ -76,6 +76,7 @@ void Engine::reset_source() {
     caps = {};
     epr_info = {};
     vdm = {};
+    sink_vdm = {};
     ext = {};
     usb.on_reset();
     contract = {};

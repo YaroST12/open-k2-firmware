@@ -269,7 +269,10 @@ const pd::Emarker& emarker();
 // Current-attach physical wire evidence only; injected frames and spoofing cannot raise this.
 const pd::CableLimits& physical_cable();
 const pd::Revision& source_revision();  // passively received source RMDO, never Identify's sink answer
+// Identity, SVIDs and modes the SOURCE (the charger) sent on SOP, and what the SINK (the device behind the K2) sent:
+// filed by the sender's power role, never mixed.
 const pd::VdmInfo& vdm();
+const pd::VdmInfo& sink_vdm();
 // USB / Thunderbolt link classified from the PD traffic seen on SOP, SOP' and SOP''; the idle D+/D- levels (mV, -1 unknown)
 // only decide when no PD data was seen. Passive: never transmits. Limits: k2/pd/usb_link.hpp.
 usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv);

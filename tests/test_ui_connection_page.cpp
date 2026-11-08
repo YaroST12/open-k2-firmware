@@ -3,9 +3,12 @@
 // Connection (page level, real Ui): which tab it opens on, the passive port topology it senses from the CC
 // lines, the tab switching and the action pop-up (greyed Spoof while a device is inline), the Tools shortcut
 // to Spoof, and that merely showing an empty state never drives the lines.
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "ui_stubs.h"
@@ -253,7 +256,76 @@ static void test_tools_spoof_shortcut_opens_the_cable_tab_list() {
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
 }
 
+// ---- which side a VDM answer belongs to (the engine files them by the sender's power role) ----
+
+static std::vector<uint16_t> frame() { return std::vector<uint16_t>(g_panel, g_panel + LCD_WIDTH * LCD_HEIGHT); }
+
+// The tab as the user sees it after the page had a second to settle.
+static std::vector<uint16_t> show(Ui &ui, uint8_t tab, uint32_t &t) {
+    ui.goto_page(static_cast<uint8_t>(kConnTabAlias + tab), t += 100);
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    if (const char *dir = std::getenv("K2_DUMP")) {
+        static int n = 0;
+        char path[256];
+        std::snprintf(path, sizeof path, "%s/k2_side%02d_tab%d.panel", dir, n++, tab);
+        if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f); std::fclose(f); }
+    }
+    return frame();
+}
+
+static void set_id(k2::pd::VdmInfo &v, uint16_t vid, uint16_t pid, const char *vendor) {
+    v.identity.valid = true; v.identity.vid = vid; v.identity.pid = pid; v.identity.vendor = vendor;
+    v.identity.id_header = 0x80000000u | vid;
+}
+
+// A charger and a phone behind the K2, as on the bench: the charger answered Discover Identity as the source, the phone
+// answered the charger's own Discover Identity as the sink. The Source tab shows the charger, the Sink tab the phone, and
+// neither tab moves when the other side's answer changes.
+static void test_each_tab_shows_its_own_side() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Pps, 0, 5000, 11000, 5000, 55000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;   // a Source_Capabilities arrived: the page is no longer waiting
+    uint32_t t = 21000;
+    ui.tick(t);
+    set_id(g_stub.vdm, 0x2B01, 0x0000, "Unknown");
+    set_id(g_stub.sink_vdm, 0x18D1, 0x4EE1, "Google");
+    const auto src_a = show(ui, 0, t);
+    const auto snk_a = show(ui, 2, t);
+    CHECK(src_a != snk_a);
+
+    set_id(g_stub.sink_vdm, 0x05AC, 0x1A2B, "Apple");   // another phone answers: only the Sink tab moves
+    const auto src_b = show(ui, 0, t);
+    const auto snk_b = show(ui, 2, t);
+    CHECK(src_b == src_a);
+    CHECK(snk_b != snk_a);
+
+    set_id(g_stub.vdm, 0x05AC, 0x1A2B, "Apple");        // another charger answers: only the Source tab moves
+    const auto src_c = show(ui, 0, t);
+    const auto snk_c = show(ui, 2, t);
+    CHECK(src_c != src_b);
+    CHECK(snk_c == snk_b);
+
+    // A vendor SVID is a protocol of the side that listed it, never a shared Alt entry.
+    g_stub.vdm.num_svids = 1; g_stub.vdm.svids[0] = 0x2717;
+    const auto src_d = show(ui, 0, t);
+    const auto snk_d = show(ui, 2, t);
+    CHECK(src_d != src_c);                              // the Source tab gains its Proto row
+    CHECK(snk_d == snk_c);                              // the Sink tab does not
+    g_stub.vdm.num_svids = 0;
+    g_stub.sink_vdm.num_svids = 1; g_stub.sink_vdm.svids[0] = 0x2717;
+    CHECK(show(ui, 0, t) == src_c);                     // the Source tab is back to what it was
+    CHECK(show(ui, 2, t) != snk_c);
+    g_stub.vdm = {};
+    g_stub.sink_vdm = {};
+}
+
 int main() {
+    test_each_tab_shows_its_own_side();
     test_default_tab_on_open();
     test_topology_from_the_cc_lines();
     test_topology_unknown_unless_passive_and_dead();

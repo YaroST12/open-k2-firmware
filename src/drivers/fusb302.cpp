@@ -608,11 +608,11 @@ void log_ext(unsigned type) {
     }
 }
 
-void log_vdm(std::span<const std::uint8_t> payload) {
+void log_vdm(std::uint16_t header, std::span<const std::uint8_t> payload) {
     if (payload.size() < 4) return;
     const std::uint32_t hdr = payload[0] | (payload[1] << 8) | (payload[2] << 16) | (std::uint32_t(payload[3]) << 24);
     const unsigned cmd_type = (hdr >> 6) & 3, cmd = hdr & 0x1F;
-    const pd::VdmInfo& v = g_engine.vdm;
+    const pd::VdmInfo& v = (header >> 8) & 1 ? g_engine.vdm : g_engine.sink_vdm;  // the engine filed it by sender
     K2LOG("[VDM] hdr=0x%08X SVID=0x%04X (%s) type=%u cmd=%u\n", unsigned(hdr), unsigned(hdr >> 16),
                 pd::svid_name(hdr >> 16), cmd_type, cmd);
     if (cmd_type != 1 || (hdr >> 16) != pd::kSvidPd) return;
@@ -795,7 +795,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             for (int i = 0; i < c.num_pdos; i++) log_pdo(i + 1, c.pdos[i]);
         }
     } else if (sop == pd::Sop::Sop && !ext && msg_type == pd::kMsgVendorDefined) {
-        log_vdm(payload);
+        log_vdm(header, payload);
     } else if (sop == pd::Sop::Sop && ext) {
         log_ext(msg_type);
     } else if (sop == pd::Sop::Sop && !ext && msg_type == pd::kDataRevision) {
@@ -1580,8 +1580,10 @@ void active_tick() {
         }
     }
     if (g_ident.running()) {
-        std::array<std::uint16_t, pd::kMaxSvids> sv = g_engine.vdm.svids;
-        g_ident.tick(now, true, {sv.data(), g_engine.vdm.num_svids});
+        // Inline, the SVIDs worth a Discover Modes are the sink's when it listed any; else the charger's.
+        const pd::VdmInfo& iv = inline_now() && g_engine.sink_vdm.num_svids ? g_engine.sink_vdm : g_engine.vdm;
+        std::array<std::uint16_t, pd::kMaxSvids> sv = iv.svids;
+        g_ident.tick(now, true, {sv.data(), iv.num_svids});
         if (g_ident.take_tx(m)) g_ident.on_tx_result(transmit(m), now);
     }
 }
@@ -2095,6 +2097,7 @@ void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> 
 const pd::SourceCaps& caps() { return g_engine.caps; }
 const pd::Emarker& emarker() { return g_engine.cable; }
 const pd::VdmInfo& vdm() { return g_engine.vdm; }
+const pd::VdmInfo& sink_vdm() { return g_engine.sink_vdm; }
 usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv) {
     usblink::Classifier c = g_engine.usb;
     c.on_lines(dp_mv, dm_mv);

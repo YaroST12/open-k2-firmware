@@ -1349,11 +1349,12 @@ static void test_identify_page() {
     CHECK_EQ(g_stub.identifies, 1);
     g_stub.ident.state = pd::IdState::Done;
     g_stub.ident.ok_mask = 1;
-    g_stub.vdm.identity.valid = true;
-    g_stub.vdm.identity.vid = 0x05AC;
+    g_stub.sink_vdm.identity.valid = true;
+    g_stub.sink_vdm.identity.vid = 0x05AC;
     ui.tick(70300);
     CHECK_EQ(on_pd(ui), 1);
     g_stub.ident = {};
+    g_stub.sink_vdm = {};
     g_stub.vdm = {};
 }
 

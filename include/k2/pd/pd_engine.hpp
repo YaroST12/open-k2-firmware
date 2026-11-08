@@ -77,7 +77,10 @@ public:
     // is set (the glue sets it while the sink's own query is pending), so the live `caps` never claims EPR.
     SourceCaps epr_info;
     bool epr_info_only = false;
-    VdmInfo vdm;  // identity, SVIDs and modes seen on SOP
+    // Identity, SVIDs and modes seen on SOP, filed by who sent them (header bit 8, the power role): `vdm` is what the
+    // source (the charger) said, `sink_vdm` what the sink said. Passive inline sees both partners answer on SOP.
+    VdmInfo vdm;
+    VdmInfo sink_vdm;
     ExtInfo ext;  // latest extended messages seen from the source
     Emarker cable;      // Discover Identity ACK from the cable (SOP' or SOP'')
     std::uint32_t cable_acks = 0;  // Discover Identity ACKs accepted from a cable since boot

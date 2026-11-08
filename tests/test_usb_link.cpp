@@ -375,16 +375,18 @@ void test_split_usb_alt() {
     format_speed(l, b);
     CHECK_STR(b, "3.2 Gen2 10G");
     CHECK_EQ(int(format_alt(l, b)), int(AltState::Advertised));
-    CHECK_STR(b, "DP, TB, Xiaomi (adv)");
+    CHECK_STR(b, "DP, TB (adv)");                  // the Xiaomi vendor SVID is a protocol, not an alt mode
     format_alt(l, b, false);
-    CHECK_STR(b, "DP, TB, Xiaomi");
-    CHECK_EQ(int(l.n_other), 1);
-    // an unknown vendor SVID shows its hex
+    CHECK_STR(b, "DP, TB");
+    // a vendor SVID alone (a charger's charging protocol) is no alt mode at all
     Classifier u;
     identity(u, Sop::Sop, kIdDockHub, {kUfpGen2});
-    vdm(u, Sop::Sop, {0xFF00A042u, 0xFF01ABCDu});
+    vdm(u, Sop::Sop, {0xFF00A042u, 0x27170000u});
+    CHECK_EQ(int(format_alt(u.link(), b)), int(AltState::None));
+    CHECK_STR(b, "-");
+    vdm(u, Sop::Sop, {0xFF00A042u, 0xFF01ABCDu});  // an unknown SVID beside DP: DP only
     format_alt(u.link(), b);
-    CHECK_STR(b, "DP, ABCD (adv)");
+    CHECK_STR(b, "DP (adv)");
     // nothing advertised or entered
     Classifier n;
     CHECK_EQ(int(format_alt(n.link(), b)), int(AltState::None));

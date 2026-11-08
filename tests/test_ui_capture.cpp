@@ -385,10 +385,10 @@ static void test_connection_gallery() {
         for (int i = 0; i < 4; i++) ui->tick(now += 100);
         open(0); shot("source_filled"); popup("source_popup");
         open(1); shot("cable_filled"); popup("cable_popup");
-        g_stub.vdm.identity.valid = true; g_stub.vdm.identity.vid = 0x05AC; g_stub.vdm.identity.pid = 0x1A2B;
-        g_stub.vdm.identity.vendor = "Apple"; g_stub.vdm.identity.model = "iPad Air 5";
-        g_stub.vdm.num_svids = 2; g_stub.vdm.svids[0] = 0x05AC; g_stub.vdm.svids[1] = 0x8087;
-        g_stub.vdm.identity.id_header = 0xC0000000u | (2u << 27);
+        g_stub.sink_vdm.identity.valid = true; g_stub.sink_vdm.identity.vid = 0x05AC; g_stub.sink_vdm.identity.pid = 0x1A2B;
+        g_stub.sink_vdm.identity.vendor = "Apple"; g_stub.sink_vdm.identity.model = "iPad Air 5";
+        g_stub.sink_vdm.num_svids = 2; g_stub.sink_vdm.svids[0] = 0x05AC; g_stub.sink_vdm.svids[1] = 0x8087;
+        g_stub.sink_vdm.identity.id_header = 0xC0000000u | (2u << 27);
         g_stub.ident.state = k2::pd::IdState::Done; g_stub.ident.ok_mask = 0x1F; g_stub.ident.revision = 0x30000000;
         open(2); shot("sink_filled"); popup("sink_popup");
         // Tools: the new row order
@@ -947,16 +947,16 @@ int main() {
         ui.tick(14390); ui.tick(14395);
     }
     {   // Identify result: an iPad, answered, with a sink PDO and two SVIDs, one step unanswered
-        g_stub.vdm.identity.valid = true; g_stub.vdm.identity.vid = 0x05AC; g_stub.vdm.identity.pid = 0x1A2B;
-        g_stub.vdm.identity.vendor = "Apple"; g_stub.vdm.identity.model = "iPad Air 5";
-        g_stub.vdm.num_svids = 2; g_stub.vdm.svids[0] = 0x05AC; g_stub.vdm.svids[1] = 0x8087;
-        g_stub.vdm.identity.id_header = 0xC0000000u | (2u << 27);   // USB host+device, peripheral
+        g_stub.sink_vdm.identity.valid = true; g_stub.sink_vdm.identity.vid = 0x05AC; g_stub.sink_vdm.identity.pid = 0x1A2B;
+        g_stub.sink_vdm.identity.vendor = "Apple"; g_stub.sink_vdm.identity.model = "iPad Air 5";
+        g_stub.sink_vdm.num_svids = 2; g_stub.sink_vdm.svids[0] = 0x05AC; g_stub.sink_vdm.svids[1] = 0x8087;
+        g_stub.sink_vdm.identity.id_header = 0xC0000000u | (2u << 27);   // USB host+device, peripheral
         g_stub.ident.state = k2::pd::IdState::Done; g_stub.ident.ok_mask = 0x1F; g_stub.ident.skipped_mask = 0x24;
         g_stub.ident.revision = 0x30000000;
         g_stub.ident.num_sink_pdos = 1; g_stub.ident.sink_pdos[0] = (uint32_t(400) << 10) | 150;
         test_screen(ui, "conn_sink_result", 14500);
         CHECK_EQ(g_panel[230 * 240 + 100] != k2::kBg, 1);    // status bar
-        g_stub.vdm = {}; g_stub.ident = {};
+        g_stub.sink_vdm = {}; g_stub.ident = {};
     }
     {   // Aborted names its reason: "Aborted: unplugged" runs well past the 7 characters of a bare "Aborted"
         ui.on_button(Button::Ok, ButtonEvent::Short, 14740);   // pop-up

@@ -16,10 +16,11 @@ static void put(std::uint32_t* v, unsigned n) {
     for (unsigned i = 0; i < n; i++)
         for (int b = 0; b < 4; b++) g_buf[4 * i + b] = std::uint8_t(v[i] >> (8 * b));
 }
-// A Vendor_Defined (type 0x0F) message on SOP with `n` data objects.
-static void vdm(Engine& e, std::uint32_t* v, unsigned n, Sop sop = Sop::Sop) {
+// A Vendor_Defined (type 0x0F) message on SOP with `n` data objects. Header bit 8 is the sender's power role
+// on SOP: `src` true = from the source (the charger), false = from the sink (the phone behind the K2).
+static void vdm(Engine& e, std::uint32_t* v, unsigned n, Sop sop = Sop::Sop, bool src = true) {
     put(v, n);
-    e.on_message(sop, std::uint16_t((n << 12) | (2u << 6) | 0x0F), {g_buf, n * 4}, 1);
+    e.on_message(sop, std::uint16_t((n << 12) | (src ? 1u << 8 : 0u) | (2u << 6) | 0x0F), {g_buf, n * 4}, 1);
 }
 
 // PD page rows are 22 characters wide: "SVID xxxx <name>", "VID xxxx <vendor>" and the Apple model.
@@ -173,7 +174,42 @@ static void test_product_type_and_role() {
     CHECK_STR(id_usb_role(0u), "");
 }
 
+// Passive inline: both partners answer on SOP. The source's answers (header bit 8 set) fill `vdm`; the sink's
+// (bit 8 clear) fill `sink_vdm` and never overwrite the source's identity, SVIDs or modes.
+static void test_sink_answers_stay_on_the_sink_side() {
+    Engine e;
+    std::uint32_t src_id[4] = {0xFF008041, 0x00002B01, 0, 0};          // charger: Discover Identity ACK
+    vdm(e, src_id, 4);
+    std::uint32_t src_sv[2] = {0xFF008042, 0x27170000};                // charger lists SVID 0x2717
+    vdm(e, src_sv, 2);
+    std::uint32_t snk_id[4] = {0xFF008041, 0x000018D1, 0, (0x4EE1u << 16)};  // phone: its own Discover Identity ACK
+    vdm(e, snk_id, 4, Sop::Sop, false);
+    std::uint32_t snk_sv[2] = {0xFF008042, 0xFF010000};
+    vdm(e, snk_sv, 2, Sop::Sop, false);
+    CHECK_EQ(e.vdm.identity.valid, true);
+    CHECK_EQ(e.vdm.identity.vid, 0x2B01);                              // the charger's, not the phone's
+    CHECK_EQ(e.vdm.num_svids, 1);
+    CHECK_EQ(e.vdm.svids[0], 0x2717);
+    CHECK_EQ(e.sink_vdm.identity.valid, true);
+    CHECK_EQ(e.sink_vdm.identity.vid, 0x18D1);
+    CHECK_EQ(e.sink_vdm.identity.pid, 0x4EE1);
+    CHECK_STR(e.sink_vdm.identity.vendor, "Google");
+    CHECK_EQ(e.sink_vdm.num_svids, 1);
+    CHECK_EQ(e.sink_vdm.svids[0], 0xFF01);
+    // A vendor flag set by the sink is the sink's, not the charger's.
+    Engine x;
+    std::uint32_t xm[2] = {0x27170003, 0x00000000};
+    vdm(x, xm, 2, Sop::Sop, false);
+    CHECK_EQ(x.vdm.xiaomi, false);
+    CHECK_EQ(x.sink_vdm.xiaomi, true);
+    // A new charger clears both sides.
+    e.reset_source();
+    CHECK_EQ(e.vdm.identity.valid, false);
+    CHECK_EQ(e.sink_vdm.identity.valid, false);
+}
+
 int main() {
+    test_sink_answers_stay_on_the_sink_side();
     test_product_type_and_role();
     test_names();
     test_names_fit_a_row();

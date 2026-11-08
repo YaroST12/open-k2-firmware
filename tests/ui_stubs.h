@@ -57,6 +57,7 @@ struct StubState {
     k2::pd::CableLimits cable_limits{};
     k2::pd::Revision source_revision{};
     k2::pd::VdmInfo vdm{};
+    k2::pd::VdmInfo sink_vdm{};
     bool cable_tb = false;
     uint8_t cc = 1;
     k2::pd::Contract contract{};

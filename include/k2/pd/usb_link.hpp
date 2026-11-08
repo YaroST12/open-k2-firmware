@@ -57,8 +57,6 @@ struct Link {
     bool billboard = false;        // partner is a Billboard device (alt mode not entered)
     bool dp_2lane = false;         // DP entered with a 2-lane pin assignment (B, D, F): USB 3 stays alongside
     bool dp_adv = false, tbt_adv = false;  // SVIDs the partner advertised (Discover SVIDs / UFP alt-mode flag)
-    std::array<std::uint16_t, 3> other_svids{};  // any other advertised SVID (vendor-specific modes), 0 = unused
-    std::uint8_t n_other = 0;
 };
 
 // Display text, e.g. "USB4 40G TBT4", "USB 3.2 Gen2 10G", "USB 1.1/2.0 FS". Returns a static string.
@@ -77,12 +75,13 @@ std::size_t format_ui(const Link& l, std::span<char> out);
 
 // Split readout for the Detail page and the PD tabs: "USB" = the data speed alone ("3.2 Gen2 10G", "USB4 40G",
 // "Unkn"), "Alt" = the alternate mode. Alt: modes ENTERED ("DP 2-lane", "DP 4-lane", "DP", "TB3/4") ->
-// Entered; none entered but some advertised ("DP, TB, Xiaomi (adv)", the tag only when `tag`) -> Advertised;
-// "-" -> None. Unknown SVIDs show the vendor name, else the 4-digit hex SVID. The UI colours by the state.
+// Entered; none entered but some advertised ("DP, TB (adv)", the tag only when `tag`) -> Advertised;
+// "-" -> None. Only real alternate modes count (DisplayPort, Thunderbolt): a vendor SVID (a charging protocol such
+// as 0x2717) is not an alt mode and never appears here; it is a protocol of the source or sink (conn::protocol_text).
+// The UI colours by the state.
 enum class AltState : std::uint8_t { None, Advertised, Entered };
 std::size_t format_speed(const Link& l, std::span<char> out);
 AltState format_alt(const Link& l, std::span<char> out, bool tag = true);
-const char* svid_name(std::uint16_t svid);  // nullptr when not in the small table
 
 class Classifier {
 public:
@@ -95,8 +94,6 @@ public:
 
 private:
     Link link_core() const;
-    std::array<std::uint16_t, 3> other_{};
-    std::uint8_t n_other_ = 0;
     // Partner (SOP) Discover Identity.
     bool id_ = false;
     bool id_usb_host_ = false, id_usb_dev_ = false;

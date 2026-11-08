@@ -160,20 +160,6 @@ std::size_t format_speed(const Link& l, std::span<char> out) {
     return o.finish();
 }
 
-const char* svid_name(std::uint16_t svid) {
-    switch (svid) {
-        case 0x05AC: return "Apple";
-        case 0x2717: return "Xiaomi";
-        case 0x2E87: return "Cuktech";
-        case 0x17EF: return "Lenovo";
-        case 0x04E8: return "Samsung";
-        case 0x18D1: return "Google";
-        case 0x03F0: return "HP";
-        case 0x413C: return "Dell";
-        default: return nullptr;
-    }
-}
-
 AltState format_alt(const Link& l, std::span<char> out, bool tag) {
     Out o(out);
     bool first = true;
@@ -186,17 +172,6 @@ AltState format_alt(const Link& l, std::span<char> out, bool tag) {
     }
     if (l.dp_adv) { sep(); o.put("DP"); }
     if (l.tbt_adv) { sep(); o.put("TB"); }
-    for (unsigned i = 0; i < l.n_other && i < l.other_svids.size(); i++) {
-        sep();
-        const char* nm = svid_name(l.other_svids[i]);
-        if (nm) o.put(nm);
-        else {
-            char hx[5];
-            for (int k = 0; k < 4; k++) hx[k] = "0123456789ABCDEF"[(l.other_svids[i] >> (12 - 4 * k)) & 15];
-            hx[4] = 0;
-            o.put(hx);
-        }
-    }
     if (first) { o.put("-"); o.finish(); return AltState::None; }
     if (tag) o.put(" (adv)");
     o.finish();
@@ -278,9 +253,6 @@ void Classifier::on_vdm(Sop sop, std::span<const std::uint8_t> payload) {
                 for (const std::uint16_t s : {std::uint16_t(v[i] >> 16), std::uint16_t(v[i] & 0xFFFF)}) {
                     if (s == kSvidTbt) tbt_svid_ = true;
                     if (s == kSvidDp) dp_svid_ = true;
-                    if (s != 0 && s != kSvidPd && s != kSvidTbt && s != kSvidDp && n_other_ < other_.size() &&
-                        std::find(other_.begin(), other_.begin() + n_other_, s) == other_.begin() + n_other_)
-                        other_[n_other_++] = s;
                 }
         }
         return;
@@ -358,8 +330,6 @@ Link Classifier::link() const {
     l.dp_adv = dp_svid_;
     l.tbt_adv = tbt_svid_ || (ufp_alt_ & 1);
     l.dp_2lane = dp_active_ && dp_pin_ != 0 && (dp_pin_ & 0x14) == 0;
-    l.other_svids = other_;
-    l.n_other = n_other_;
     return l;
 }
 

@@ -58,6 +58,7 @@ std::uint8_t pin_rd() { return g_stub.self_powered ? 2 : 0; }
 bool rd_inherited() { return g_stub.rd_inherited; }
 void self_power_release() { g_stub.rd_releases++; g_stub.rd_inherited = false; }
 const pd::VdmInfo& vdm() { return g_stub.vdm; }
+const pd::VdmInfo& sink_vdm() { return g_stub.sink_vdm; }
 usblink::Link usb_link(std::int32_t, std::int32_t) { return {}; }
 bool cable_thunderbolt() { return g_stub.cable_tb; }
 void rescan() { g_stub.rescans++; }
