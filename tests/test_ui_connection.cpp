@@ -11,15 +11,16 @@
 using namespace k2;
 using namespace k2::conn;
 
-static Facts facts(bool inl, bool charger, bool cable, Topology t = Topology::Unknown) {
+static Facts facts(bool inl, bool charger, bool cable, Topology t = Topology::Unknown, bool seen = false) {
     Facts f;
-    f.inline_sink = inl; f.charger = charger; f.cable = cable; f.topo = t;
+    f.inline_sink = inl; f.sink_seen = seen; f.charger = charger; f.cable = cable; f.topo = t;
     return f;
 }
 
 static void test_default_tab() {
     CHECK_EQ(int(default_tab(facts(true, true, true))), int(Tab::Sink));      // a device inline wins over everything
     CHECK_EQ(int(default_tab(facts(true, false, false))), int(Tab::Sink));
+    CHECK_EQ(int(default_tab(facts(false, true, true, Topology::Unknown, true))), int(Tab::Sink));  // seen on CC (e.g. after a role swap)
     CHECK_EQ(int(default_tab(facts(false, true, true))), int(Tab::Source));   // a charger seen
     CHECK_EQ(int(default_tab(facts(false, true, false))), int(Tab::Source));
     CHECK_EQ(int(default_tab(facts(false, false, true))), int(Tab::Cable));   // only a cable
@@ -33,6 +34,8 @@ static void test_tab_empty() {
     CHECK_EQ(tab_empty(Tab::Cable, facts(false, false, true)), false);
     CHECK_EQ(tab_empty(Tab::Sink, facts(false, true, true)), true);
     CHECK_EQ(tab_empty(Tab::Sink, facts(true, false, false)), false);
+    CHECK_EQ(tab_empty(Tab::Sink, facts(false, true, true, Topology::Unknown, true)), false);  // a sink was seen on CC
+    CHECK_EQ(tab_empty(Tab::Sink, facts(false, false, false, Topology::Unknown, true)), false);
 }
 
 static void test_topology_word() {
@@ -119,6 +122,8 @@ static void test_status_text() {
     status_text(in, s); CHECK_STR(s.c_str(), "Cable read");
     in.tab = Tab::Sink; in.f = facts(true, true, true);
     status_text(in, s); CHECK_STR(s.c_str(), "Device inline");
+    in.f = facts(false, true, true, Topology::Unknown, true);   // seen on CC but not inline any more
+    status_text(in, s); CHECK_STR(s.c_str(), "Sink seen on CC");
     in.f = facts(false, false, false);
     status_text(in, s); CHECK_STR(s.c_str(), "No device");
     // An action message wins; the spoof note shows only with a charger already attached.

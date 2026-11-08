@@ -324,6 +324,30 @@ static void test_each_tab_shows_its_own_side() {
     g_stub.sink_vdm = {};
 }
 
+// A sink that negotiated behind the K2 (a sniffed Request: the engine's contract) stays "seen" after the
+// inline latch expires (2 s quiet, no current, no new Request): the Sink tab then shows the sink's rows,
+// not the NO DEVICE empty state. The empty frame is captured on the same page first, nothing attached.
+static void test_sink_tab_not_empty_when_a_sink_was_seen() {
+    Ui &ui = fresh_ui();
+    g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;
+    // A Request was sniffed on CC; set before the attach so the attach edge itself does not count it as
+    // a "new" Request for the inline detector.
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
+    g_stub.contract.pos = 1; g_stub.contract.mv = 9000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
+    g_stub.contract.requests = 1;
+    uint32_t t = 20000;
+    const auto empty = show(ui, 2, t);              // Sink tab, nothing attached: the empty state
+    g_stub.cc = 1; g_stub.pm.current_ma = 2000;     // attach with a load behind the K2: inline latches
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 1);
+    g_stub.pm.current_ma = 0;                       // the sink goes quiet: the latch expires after 2 s
+    for (int i = 0; i < 30; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    const auto seen = show(ui, 2, t);               // same tab, a sink was seen on CC
+    CHECK(seen != empty);                           // rows, not the empty state
+    g_stub.contract = {};
+}
+
 // ---- every row fits the 19-cell value column, worst case on every tab (test_report fails on any cut) ----
 
 static void test_worst_case_rows_fit() {
@@ -411,6 +435,7 @@ int main() {
     test_live_request_repaints_only_its_rows();
     test_worst_case_rows_fit();
     test_each_tab_shows_its_own_side();
+    test_sink_tab_not_empty_when_a_sink_was_seen();
     test_default_tab_on_open();
     test_topology_from_the_cc_lines();
     test_topology_unknown_unless_passive_and_dead();

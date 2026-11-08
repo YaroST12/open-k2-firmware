@@ -35,22 +35,23 @@ constexpr const char *tab_name(Tab t) {
 // What the passive readers say right now.
 struct Facts {
     bool inline_sink = false;   // a live sink is attached on the far port (pd::Link::inline_mode)
+    bool sink_seen = false;     // a sink's Request / Sink_Capabilities was decoded on CC (roles follow a power-role swap)
     bool charger = false;       // a source is attached or its capabilities were seen
     bool cable = false;         // e-marker data is held (read by VCONN or sniffed from the charger's own query)
     Topology topo = Topology::Unknown;
 };
 
-// The tab to open on: Sink when a device is inline, else Source when a charger is seen, else Cable when
-// a cable is present, else Source (empty).
+// The tab to open on: Sink when a device is inline or was seen on CC, else Source when a charger is seen,
+// else Cable when a cable is present, else Source (empty).
 constexpr Tab default_tab(const Facts &f) {
-    if (f.inline_sink) return Tab::Sink;
+    if (f.inline_sink || f.sink_seen) return Tab::Sink;
     if (f.charger) return Tab::Source;
     if (f.cable) return Tab::Cable;
     return Tab::Source;
 }
 
 constexpr bool tab_empty(Tab t, const Facts &f) {
-    return t == Tab::Source ? !f.charger : t == Tab::Cable ? !f.cable : !f.inline_sink;
+    return t == Tab::Source ? !f.charger : t == Tab::Cable ? !f.cable : !(f.inline_sink || f.sink_seen);
 }
 
 // "top plug" / "via cable" when the lines say so, "" otherwise (status bar).
@@ -122,7 +123,7 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
     switch (s.tab) {
     case Tab::Source: out.put(s.f.charger ? "Charger" : "No charger"); break;
     case Tab::Cable:  out.put(s.f.cable ? "Cable read" : "No cable"); break;
-    case Tab::Sink:   out.put(s.f.inline_sink ? "Device inline" : "No device"); break;
+    case Tab::Sink:   out.put(s.f.inline_sink ? "Device inline" : s.f.sink_seen ? "Sink seen on CC" : "No device"); break;
     }
     const char *w = topology_word(s.f.topo);
     if (w[0]) out.put(", ").put(w);

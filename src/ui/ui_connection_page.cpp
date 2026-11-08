@@ -114,7 +114,7 @@ void ConnectionPage::enter() {
     id_asked_ = false;
     sig_valid_ = false;
     sense(ctx_.now);                    // facts only; the topology window starts with this one sample
-    tab_ = conn::default_tab(facts_);   // Sink if a device is inline, else Source if a charger is seen, else Cable if a cable is held
+    tab_ = conn::default_tab(facts_);   // Sink if a device is inline or was seen on CC, else Source if a charger is seen, else Cable if a cable is held
     defaulted_ = true;
 }
 
@@ -317,6 +317,10 @@ void ConnectionPage::sense(uint32_t now_ms) {
     facts_.charger = link.attached();
     facts_.cable = fusb302::emarker().valid;
     facts_.inline_sink = link.inline_mode();
+    // A decoded Request or Sink_Capabilities was received from a sink (the engine only sees received
+    // frames, so the K2's own trigger requests never set these): the sink stays seen after a power-role
+    // swap and after the inline latch expires.
+    facts_.sink_seen = fusb302::contract().valid || fusb302::sink_caps().valid;
 }
 
 // ---------------------------------------------------------------------------------------
