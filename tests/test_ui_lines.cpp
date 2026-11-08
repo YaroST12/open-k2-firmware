@@ -64,38 +64,73 @@ static void test_mcu() {
 }
 
 static void test_verdicts() {
-    LinesVerdict v = lines_verdict(Protocol::Dcp5V);
+    LinesVerdict v = lines_verdict(Protocol::Dcp5V, true);
     CHECK_STR(v.main.c_str(), "DCP short");
     CHECK_STR(v.extra.c_str(), "");
     CHECK_EQ(static_cast<int>(v.tone), static_cast<int>(Tone::Ok));
     CHECK_STR(v.footer.c_str(), "D+ = D-: dedicated charger");
 
-    v = lines_verdict(Protocol::Apple24);
+    v = lines_verdict(Protocol::Apple24, true);
     CHECK_STR(v.main.c_str(), "Divider");
     CHECK_STR(v.extra.c_str(), "Apple 2.4A");
-    v = lines_verdict(Protocol::Qc2_9V);
+    v = lines_verdict(Protocol::Qc2_9V, true);
     CHECK_STR(v.main.c_str(), "QC2.0");
     CHECK_STR(v.extra.c_str(), "9V");
-    v = lines_verdict(Protocol::Qc2_20V);
+    v = lines_verdict(Protocol::Qc2_20V, true);
     CHECK_STR(v.extra.c_str(), "20V");
-    v = lines_verdict(Protocol::Qc3);
+    v = lines_verdict(Protocol::Qc3, true);
     CHECK_STR(v.main.c_str(), "QC3.0");
-    v = lines_verdict(Protocol::Pending);
+    v = lines_verdict(Protocol::Pending, true);
     CHECK_EQ(static_cast<int>(v.tone), static_cast<int>(Tone::Dim));
-    v = lines_verdict(Protocol::NoInput);
+    v = lines_verdict(Protocol::NoInput, true);
     CHECK_EQ(static_cast<int>(v.tone), static_cast<int>(Tone::Caution));
-    v = lines_verdict(Protocol::PdLikely);
+    v = lines_verdict(Protocol::PdLikely, false);
     CHECK_EQ(static_cast<int>(v.tone), static_cast<int>(Tone::Caution));
 
     // Every verdict fits its slots: pill 8 chars of room in the card, footer 26 chars at 7 px.
+    for (int decoded = 0; decoded <= 1; decoded++)
+        for (int p = 0; p <= static_cast<int>(Protocol::PdLikely); p++) {
+            v = lines_verdict(static_cast<Protocol>(p), decoded != 0);
+            CHECK_EQ(v.main.view().size() > 0 && v.main.view().size() <= 10, 1);
+            CHECK_EQ(v.extra.view().size() <= 11, 1);
+            CHECK_EQ(v.footer.view().size() > 0 && v.footer.view().size() <= 26, 1);
+            // main + extra pills side by side fit the 224 px card (x 10 + pills + gap).
+            CHECK_EQ(10 + pill_width(static_cast<int>(v.main.view().size())) + 6 +
+                     pill_width(static_cast<int>(v.extra.view().size())) <= 220, 1);
+        }
+}
+
+static void test_verdict_pd_decoded() {
+    // The green PD chip follows a decoded PD message, not just the line levels: without a decoded
+    // contract or source caps, a PD-family classifier result stays a neutral "PD?" caution.
+    LinesVerdict v = lines_verdict(Protocol::Pd, false);
+    CHECK_STR(v.main.c_str(), "PD?");
+    CHECK_EQ(static_cast<int>(v.tone), static_cast<int>(Tone::Caution));
+    CHECK_STR(v.footer.c_str(), "No caps seen");
+    v = lines_verdict(Protocol::Pd, true);
+    CHECK_STR(v.main.c_str(), "PD");
+    CHECK_EQ(static_cast<int>(v.tone), static_cast<int>(Tone::Ok));
+    CHECK_STR(v.footer.c_str(), "PD contract: Connection");
+
+    // The other PD-family verdicts follow the same rule.
+    for (Protocol p : {Protocol::PdPe, Protocol::PdMtk}) {
+        const LinesVerdict no = lines_verdict(p, false);
+        CHECK_STR(no.main.c_str(), "PD?");
+        CHECK_EQ(static_cast<int>(no.tone), static_cast<int>(Tone::Caution));
+        const LinesVerdict yes = lines_verdict(p, true);
+        CHECK_EQ(static_cast<int>(yes.tone), static_cast<int>(Tone::Ok));
+        CHECK_EQ(yes.main.view().size() > 2, 1);   // "PD PE" / "PD MTK", not the plain PD chip
+    }
+
+    // Non-PD protocols are unchanged by the flag.
     for (int p = 0; p <= static_cast<int>(Protocol::PdLikely); p++) {
-        v = lines_verdict(static_cast<Protocol>(p));
-        CHECK_EQ(v.main.view().size() > 0 && v.main.view().size() <= 10, 1);
-        CHECK_EQ(v.extra.view().size() <= 11, 1);
-        CHECK_EQ(v.footer.view().size() > 0 && v.footer.view().size() <= 26, 1);
-        // main + extra pills side by side fit the 224 px card (x 10 + pills + gap).
-        CHECK_EQ(10 + pill_width(static_cast<int>(v.main.view().size())) + 6 +
-                 pill_width(static_cast<int>(v.extra.view().size())) <= 220, 1);
+        const Protocol pr = static_cast<Protocol>(p);
+        if (pr == Protocol::Pd || pr == Protocol::PdPe || pr == Protocol::PdMtk) continue;
+        const LinesVerdict a = lines_verdict(pr, false), b = lines_verdict(pr, true);
+        CHECK_STR(a.main.c_str(), b.main.c_str());
+        CHECK_STR(a.extra.c_str(), b.extra.c_str());
+        CHECK_STR(a.footer.c_str(), b.footer.c_str());
+        CHECK_EQ(static_cast<int>(a.tone), static_cast<int>(b.tone));
     }
 }
 
@@ -104,5 +139,6 @@ int main() {
     test_rp();
     test_mcu();
     test_verdicts();
+    test_verdict_pd_decoded();
     return test_report("test_ui_lines");
 }

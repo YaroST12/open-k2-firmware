@@ -748,8 +748,10 @@ void LinesPage::paint_bar(int i, int32_t mv, bool have) {
 void LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms) {
     const Surface &c = ctx_.content;
     const fastcharge::Protocol fp = ctx_.fc;
-    LinesVerdict v = lines_verdict(fp);
     const pd::SourceCaps &caps = pd::active_caps();
+    // The green PD chip follows a decoded PD message (a contract or source caps), not just the line levels.
+    const bool pd_decoded = fusb302::contract().valid || caps.valid;
+    LinesVerdict v = lines_verdict(fp, pd_decoded);
     if (caps.valid && caps.num_pdos > 0 && v.extra.view().empty()) {   // a live PD source: its power summary
         const ai::Banner b = ai::recognise(fp, caps, now_ms);
         if (b.source == ai::Source::Pd) v.extra.put(b.line1.view());

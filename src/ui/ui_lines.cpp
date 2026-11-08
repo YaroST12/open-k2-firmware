@@ -24,12 +24,18 @@ void mcu_text(StrBuf<24> &s, bool valid, int32_t d) {
     s.put_fixed(whole * 1000, 0).put("\xC2\xB0" "C");
 }
 
-LinesVerdict lines_verdict(fastcharge::Protocol p) {
+LinesVerdict lines_verdict(fastcharge::Protocol p, bool pd_decoded) {
     using fastcharge::Protocol;
     LinesVerdict v;
     auto set = [&](const char *main, const char *extra, Tone t, const char *foot) {
         v.main.put(main); v.extra.put(extra); v.tone = t; v.footer.put(foot);
     };
+    // A PD-family verdict is only proven by a decoded PD message (a contract or source caps); without
+    // one the chip stays a neutral "PD?" caution, whatever the CC and D+/D- levels suggest.
+    if (!pd_decoded && (p == Protocol::Pd || p == Protocol::PdPe || p == Protocol::PdMtk)) {
+        set("PD?", "", Tone::Caution, "No caps seen");
+        return v;
+    }
     switch (p) {
     case Protocol::Pending:  set("...", "", Tone::Dim, "Reading the data lines"); break;
     case Protocol::NoInput:  set("No VBUS", "", Tone::Caution, "Plug in a source"); break;
@@ -52,7 +58,7 @@ LinesVerdict lines_verdict(fastcharge::Protocol p) {
     case Protocol::Svooc:    set("SVOOC", "", Tone::Info, "Super VOOC handshake"); break;
     case Protocol::PdPe:     set("PD PE", "", Tone::Ok, "PD on CC, PE on D+/D-"); break;
     case Protocol::PdMtk:    set("PD MTK", "", Tone::Ok, "PD on CC, MTK on D+/D-"); break;
-    case Protocol::Pd:       set("PD", "", Tone::Ok, "PD contract: see PD page"); break;
+    case Protocol::Pd:       set("PD", "", Tone::Ok, "PD contract: Connection"); break;
     case Protocol::UsbData:  set("USB data", "", Tone::Dim, "A data device idles here"); break;
     case Protocol::PdLikely: set("PD?", "", Tone::Caution, "Load above 5.5 V, no caps"); break;
     }

@@ -32,6 +32,9 @@ struct LinesVerdict {
     Tone tone = Tone::Dim;
     StrBuf<28> footer;   // one line, <= 26 characters
 };
-LinesVerdict lines_verdict(fastcharge::Protocol p);
+// pd_decoded: a PD message was actually decoded on CC (a contract or source caps), not just inferred
+// from the line levels. The green PD chip appears only then; PD-family verdicts without it fall back
+// to a neutral "PD?" caution.
+LinesVerdict lines_verdict(fastcharge::Protocol p, bool pd_decoded);
 
 }  // namespace k2
