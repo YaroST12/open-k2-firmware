@@ -313,18 +313,30 @@ void test_request_state_and_flags() {
     c.accepted = true;
     CHECK_STR(request_state_name(c), "Accepted");
     c.ready = true;
-    CHECK_STR(request_state_name(c), "PS_RDY");
+    CHECK_STR(request_state_name(c), "Ready");
     c = pd::Contract{};
     c.valid = true; c.rejected = true;
     CHECK_STR(request_state_name(c), "Rejected");
 
     StrBuf<32> t;
-    rdo_flags_text(0, t);
+    rdo_flags_text(0, 19, t);
     CHECK_STR(t.c_str(), "");
-    rdo_flags_text(pd::kRdoFUsbComm | pd::kRdoFNoSuspend, t);
-    CHECK_STR(t.c_str(), "USB comm, no suspend");
-    rdo_flags_text(pd::kRdoFGiveBack | pd::kRdoFMismatch, t);
-    CHECK_STR(t.c_str(), "Give-back, mismatch");
+    rdo_flags_text(pd::kRdoFUsbComm | pd::kRdoFNoSuspend, 30, t);
+    CHECK_STR(t.c_str(), "USB comm, No suspend");
+    rdo_flags_text(pd::kRdoFGiveBack | pd::kRdoFMismatch, 30, t);
+    CHECK_STR(t.c_str(), "Mismatch, Give-back");   // the abnormal one first
+    // Whole names only: what does not fit becomes " +", never a cut word.
+    const uint8_t all = pd::kRdoFGiveBack | pd::kRdoFMismatch | pd::kRdoFUsbComm | pd::kRdoFNoSuspend | pd::kRdoFEpr;
+    rdo_flags_text(all, 13, t);
+    CHECK_STR(t.c_str(), "Mismatch +");              // "Mismatch, Give-back +" would be 21
+    rdo_flags_text(all, 19, t);
+    CHECK_STR(t.c_str(), "Mismatch +");              // " +" counts against the room, so the second name waits
+    rdo_flags_text(all, 21, t);
+    CHECK_STR(t.c_str(), "Mismatch, Give-back +");
+    rdo_flags_text(pd::kRdoFMismatch | pd::kRdoFEpr, 19, t);
+    CHECK_STR(t.c_str(), "Mismatch, EPR");           // the last name needs no " +" room
+    rdo_flags_text(pd::kRdoFMismatch, 3, t);
+    CHECK_STR(t.c_str(), "+");                       // nothing fits: just the marker
 }
 
 void test_typec_only_source() {

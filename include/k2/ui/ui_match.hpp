@@ -84,8 +84,9 @@ MatchResult match_compute(const MatchInput &in);
 Severity verdict_severity(Verdict v);
 bool gone_footer(const MatchResult &r, StrBuf<32> &out);              // "2 offers not sent now"; false when none
 void match_footer(const MatchResult &r, StrBuf<32> &out);             // one line, <= 30 characters
-const char *request_state_name(const pd::Contract &c);               // "", Requested, Accepted, PS_RDY, Rejected
-void rdo_flags_text(uint8_t flags, StrBuf<32> &out);                  // "USB comm, no suspend"; empty when none
+const char *request_state_name(const pd::Contract &c);               // "", Requested, Accepted, Ready, Rejected
+// RDO flags as whole names, most abnormal first ("Mismatch, USB comm"), at most `room` cells; " +" when some did not fit.
+void rdo_flags_text(uint8_t flags, std::size_t room, StrBuf<32> &out);
 void sink_summary(std::span<const uint32_t> sink, StrBuf<32> &out);   // "Sink caps 5 9 15 20V +PPS"
 
 // ---- The sink's wants list: every Sink_Capabilities PDO of the current attach, lined up with the offers ----

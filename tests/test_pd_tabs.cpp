@@ -84,7 +84,80 @@ static void test_cable_speed() {
     CHECK_EQ(cable_mbps(1, 0x8087), 5000);
 }
 
+static void test_power_line() {
+    struct C { Terms t; bool assumed; const char *text; bool warn; };
+    static const C cases[] = {
+        {{100, 100, 18}, false, "18W of 100W", false},          // the phone draws part of the offer: normal, neutral
+        {{100, 60, 18}, false, "18W of 100W", false},           // a thin cable that still carries the draw is no finding
+        {{100, 60, kUnknown}, false, "60W by cable", true},     // the cable holds a bigger offer down: the one amber case
+        {{100, 60, 80}, false, "60W by cable", true},
+        {{100, 60, kUnknown}, true, "60W by cable?", false},    // no e-marker read: 3 A assumed, not alarming
+        {{100, kUnknown, kUnknown}, false, "100W", false},
+        {{60, 60, 60}, false, "60W", false},
+        {{30, 100, 100}, false, "30W", false},                  // the source is the small one: plain
+        {{kUnknown, kUnknown, kUnknown}, false, "?", false},
+        {{kUnknown, 100, 18}, false, "18W of 100W", false},
+        {{240, 240, 240}, false, "240W", false},
+        {{240, 100, kUnknown}, true, "100W by cable?", false},
+        {{240, 240, 100}, false, "100W of 240W", false},
+    };
+    for (const C &c : cases) {
+        char b[32];
+        bool warn = !c.warn;
+        const std::size_t n = power_line(b, c.t, c.assumed, warn);
+        CHECK_STR(b, c.text);
+        CHECK_EQ(n, strlen(c.text));
+        CHECK_EQ(warn, c.warn);
+        CHECK_EQ(n <= 19, true);                                // the value column of the Connection page
+    }
+}
+
+static void test_data_line() {
+    struct C { Terms t; bool dp; const char *text; bool warn; };
+    static const C cases[] = {
+        {{kUnknown, 480, 480}, false, "480M", false},
+        {{kUnknown, 10000, 5000}, false, "5G of 10G", false},
+        {{kUnknown, 5000, 10000}, false, "5G by cable", true},
+        {{kUnknown, 40000, 10000}, true, "10G of 40G +DP", false},
+        {{kUnknown, 5000, 10000}, true, "5G by cable +DP", true},
+        {{kUnknown, 80000, kUnknown}, false, "80G cable", false},   // only the cable is known
+        {{kUnknown, kUnknown, 480}, false, "480M", false},
+        {{kUnknown, kUnknown, kUnknown}, false, "?", false},
+        {{kUnknown, kUnknown, kUnknown}, true, "?", false},        // nothing known: no DP tag either
+        {{kUnknown, 5000, 480}, true, "480M of 5G +DP", false},
+    };
+    for (const C &c : cases) {
+        char b[32];
+        bool warn = !c.warn;
+        const std::size_t n = data_line(b, c.t, c.dp, warn);
+        CHECK_STR(b, c.text);
+        CHECK_EQ(n, strlen(c.text));
+        CHECK_EQ(warn, c.warn);
+        CHECK_EQ(n <= 19, true);
+    }
+}
+
+static void test_speed_short() {
+    struct C { const char *in, *out; };
+    static const C cases[] = {
+        {"Thunderbolt (40G)", "TB 40G"}, {"USB 3.2 Gen1 (5G)", "3.2 Gen1 5G"}, {"USB 3.2 Gen2 (10G)", "3.2 Gen2 10G"},
+        {"USB4 Gen3 (40G)", "USB4 40G"}, {"USB4 Gen4 (80G)", "USB4 80G"}, {"USB 2.0 (480M)", "2.0 480M"},
+        {"", ""}, {"odd", "odd"},
+    };
+    for (const C &c : cases) {
+        char b[32];
+        const std::size_t n = speed_short(b, c.in);
+        CHECK_STR(b, c.out);
+        CHECK_EQ(n, strlen(c.out));
+    }
+    // The longest result plus both tags still fits the 19-cell value column ("3.2 Gen2 10G x2 TB" = 18).
+    CHECK_EQ(strlen("3.2 Gen2 10G") + strlen(" x2") + strlen(" TB") <= 19, true);
+}
+
 int main() {
+    test_speed_short();
+    test_power_line();
+    test_data_line();
     test_tabs();
     test_gate();
     test_limit();

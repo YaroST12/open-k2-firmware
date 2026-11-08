@@ -215,27 +215,33 @@ void sink_summary(std::span<const uint32_t> sink, StrBuf<32> &out) {
 
 const char *request_state_name(const pd::Contract &c) {
     if (!c.valid) return "";
-    if (c.ready) return "PS_RDY";
+    if (c.ready) return "Ready";
     if (c.rejected) return "Rejected";
     if (c.accepted) return "Accepted";
     return "Requested";
 }
 
-void rdo_flags_text(uint8_t flags, StrBuf<32> &out) {
+void rdo_flags_text(uint8_t flags, std::size_t room, StrBuf<32> &out) {
     out.clear();
-    struct F { uint8_t bit; const char *first, *rest; };
-    static constexpr F kFlags[] = {
-        {pd::kRdoFGiveBack, "Give-back", "give-back"}, {pd::kRdoFMismatch, "Mismatch", "mismatch"},
-        {pd::kRdoFUsbComm, "USB comm", "USB comm"}, {pd::kRdoFNoSuspend, "No suspend", "no suspend"},
-        {pd::kRdoFEpr, "EPR", "EPR"},
+    struct F { uint8_t bit; const char *name; };
+    static constexpr F kFlags[] = {   // the abnormal one first, so a short row still shows it
+        {pd::kRdoFMismatch, "Mismatch"}, {pd::kRdoFGiveBack, "Give-back"}, {pd::kRdoFUsbComm, "USB comm"},
+        {pd::kRdoFNoSuspend, "No suspend"}, {pd::kRdoFEpr, "EPR"},
     };
-    bool first = true;
+    std::size_t total = 0;
+    for (const F &f : kFlags) total += (flags & f.bit) ? 1 : 0;
+    std::size_t shown = 0, used = 0;
     for (const F &f : kFlags) {
         if (!(flags & f.bit)) continue;
-        if (!first) out.put(", ");
-        out.put(first ? f.first : f.rest);
-        first = false;
+        const std::size_t need = (shown ? 2 : 0) + std::string_view(f.name).size();
+        const std::size_t keep = shown + 1 < total ? 2 : 0;   // a flag that is not the last leaves room for " +"
+        if (used + need + keep > room) break;
+        if (shown) out.put(", ");
+        out.put(f.name);
+        used += need;
+        shown++;
     }
+    if (shown < total) out.put(shown ? " +" : "+");
 }
 
 

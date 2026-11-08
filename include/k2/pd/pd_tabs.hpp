@@ -100,4 +100,73 @@ constexpr std::int32_t cable_mbps(std::uint8_t bits, std::uint16_t vid) {
     }
 }
 
+// ---- the two summary rows of the Sink tab, worded by who holds the number down ----
+// Both fit the 19-cell value column of the Connection page in every case (checked in tests/test_pd_tabs.cpp).
+// `warn` is set only when the CABLE is what holds the link below what the other parties could do: that is the one
+// abnormal reading (ISA-101); a sink that draws less than it is offered is the normal state and stays neutral.
+struct Cat {   // a bounded append into a caller's buffer, NUL-terminated by end()
+    std::span<char> out;
+    std::size_t n = 0;
+    constexpr void s(std::string_view v) { for (char c : v) if (n + 1 < out.size()) out[n++] = c; }
+    constexpr void w(std::int32_t x) { n += fmt_watts(out.subspan(n), x); }
+    constexpr void r(std::int32_t x) { n += fmt_rate(out.subspan(n), x); }
+    constexpr std::size_t end() { if (!out.empty()) out[n] = '\0'; return n; }
+};
+
+// "Pwr": "18W of 100W" (the sink draws part of the offer), "60W by cable" (the cable holds it down; "?" after it when
+// the cable is only assumed to be 3 A), "100W" (one party known, or all agree), "?" (nothing known).
+constexpr std::size_t power_line(std::span<char> out, const Terms &t, bool cable_assumed, bool &warn) {
+    Cat c{out};
+    warn = false;
+    const Limited lim = limit(t);
+    if (lim.value < 0) { c.s("?"); return c.end(); }
+    c.w(lim.value);
+    if (lim.limit == Who::Cable) {
+        c.s(" by cable");
+        if (cable_assumed) c.s("?");
+        else warn = true;
+    } else if (lim.limit == Who::Sink) {
+        c.s(" of ");
+        c.w(t.source >= 0 ? t.source : t.cable);
+    }
+    return c.end();
+}
+
+// "Data": "5G of 10G" (the device runs below what the cable carries), "5G by cable" (the cable is the slower one),
+// "10G cable" (only the cable is known), "480M" (the device alone, or both agree), "?"; " +DP" when DisplayPort runs.
+// Terms: `cable` = the e-marker's speed, `sink` = the device's speed (source is not used).
+constexpr std::size_t data_line(std::span<char> out, const Terms &t, bool dp, bool &warn) {
+    Cat c{out};
+    warn = false;
+    Terms d;
+    d.cable = t.cable;
+    d.sink = t.sink;
+    const Limited lim = limit(d);
+    if (lim.value < 0) { c.s("?"); return c.end(); }
+    c.r(lim.value);
+    if (lim.limit == Who::Cable) { c.s(" by cable"); warn = true; }
+    else if (lim.limit == Who::Sink) { c.s(" of "); c.r(d.cable); }
+    else if (d.sink < 0) c.s(" cable");
+    if (dp) c.s(" +DP");
+    return c.end();
+}
+
+// The e-marker's speed name without its filler, to leave room for the lane and Thunderbolt tags on the Cable tab:
+// "USB 3.2 Gen2 (10G)" -> "3.2 Gen2 10G", "USB4 Gen3 (40G)" -> "USB4 40G", "Thunderbolt (40G)" -> "TB 40G",
+// "USB 2.0 (480M)" -> "2.0 480M". An unknown wording is copied as it is, only without parentheses.
+constexpr std::size_t speed_short(std::span<char> out, std::string_view s) {
+    Cat c{out};
+    auto starts = [&](std::string_view p) { return s.substr(0, p.size()) == p; };
+    if (starts("Thunderbolt")) { c.s("TB"); s.remove_prefix(11); }
+    else if (starts("USB ")) s.remove_prefix(4);
+    const bool usb4 = starts("USB4");
+    if (usb4) { c.s("USB4"); s.remove_prefix(4); }
+    for (std::size_t i = 0; i < s.size(); i++) {
+        if (usb4 && (s.substr(i, 5) == " Gen3" || s.substr(i, 5) == " Gen4")) { i += 4; continue; }
+        if (s[i] == '(' || s[i] == ')') continue;
+        c.s(s.substr(i, 1));
+    }
+    return c.end();
+}
+
 }  // namespace k2::pdtabs

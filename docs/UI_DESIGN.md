@@ -564,6 +564,18 @@ One page for "what is plugged in": Tools -> Connection (menu page 16). Pure row 
   current always at the end of its own line, nothing cut), then one PPS / AVS row each (`3.3-11V 5A`, range in
   `kVolt`, current in `kAmp`). The sink Caps row lists whole entries and ends with ` +` when more follow.
   The Actions pop-up is the shared kit `RowList` (`ctx_.rows`).
+  **Every value fits the 19 cells whole** (host gate: `fit_text` fails on a cut, `test_worst_case_rows_fit`).
+  Optional parts are added only when the whole part fits: the vendor name after VID:PID (a 10-character name
+  leaves the ids alone), the ` x2` and ` TB` / ` USB4` tags after the cable speed, the RDO flag names after the
+  State. A request row names the offer type first (`PDO3 9V 3A`, `PPS6 8.88V 2.05A`, `AVS8 20V 5A`, `BAT5 15V 45W`),
+  the same text on the Source tab's Used row and the Sink tab's Request row. State reads `Requested`, `Accepted`,
+  `Ready`, `Rejected`, then the flags most abnormal first (`Ready, Mismatch +`; ` +` = more flags did not fit).
+  The cable speed drops its filler (`3.2 Gen2 10G`, `USB4 40G`, `TB 40G`, `2.0 480M`); VCONN is its own row.
+  The Sink tab's two summary rows say who holds the number down (`pdtabs::power_line` / `data_line`):
+  `Pwr 18W of 100W` (the sink asks for part of what is offered, neutral), `60W by cable` (the cable holds a bigger
+  offer down, amber; `60W by cable?` neutral when no e-marker was read and 3 A is only assumed), `Data 5G of 10G`,
+  `5G by cable` (amber), `80G cable` (only the cable is known), `+DP` when DisplayPort runs. Amber is for the cable
+  limiting the link, never for a sink that asks for less than it is offered.
 - **Actions pop-up** (OK; BACK closes it). Source: Refresh, Share (QR). Cable: Read cable, Save cable,
   Spoof as... (greyed "Live sink: unplug load" while a sink is inline; arming while a charger is attached shows
   "Armed, replug to apply"), Saved cables, Share (QR). Sink: Identify. A greyed row carries its reason. Long OK

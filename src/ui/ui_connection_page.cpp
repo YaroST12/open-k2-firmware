@@ -365,7 +365,27 @@ uint16_t conf_colour(const usblink::Link &l) {
 
 void put_id(StrBuf<28> &v, uint16_t vid, uint16_t pid, const char *vendor) {
     v.put_hex(vid, 4).put_char(':').put_hex(pid, 4);
-    if (vendor && vendor[0]) v.put_char(' ').put(vendor);
+    // The ids always show; the vendor name only when the whole name fits the value column (never a cut name).
+    if (vendor && vendor[0] && v.view().size() + 1 + std::string_view(vendor).size() <= static_cast<std::size_t>(kValCells))
+        v.put_char(' ').put(vendor);
+}
+
+// Appends `tag` only when it fits the value column whole.
+void put_if_fits(StrBuf<28> &v, std::string_view tag) {
+    if (v.view().size() + tag.size() <= static_cast<std::size_t>(kValCells)) v.put(tag);
+}
+
+// "PDO3 9V 3A", "PPS6 8.88V 2.05A", "AVS8 20V 5A", "BAT5 15V 45W": which offer the sink asked for and what it asked.
+// The type leads, so PPS and AVS need no suffix; the longest case "PPS11 21.12V 3.25A" is 18 cells.
+void put_request(StrBuf<28> &v, const MatchResult &r, const pd::SourceCaps &caps) {
+    const pd::Pdo *p = r.want_pos > 0 && r.want_pos <= caps.num_pdos ? &caps.pdos[r.want_pos - 1] : nullptr;
+    const pd::PdoType ty = p ? p->type : pd::PdoType::Fixed;
+    v.put(ty == pd::PdoType::Pps ? "PPS" : ty == pd::PdoType::Avs ? "AVS" : ty == pd::PdoType::Battery ? "BAT" : "PDO");
+    v.put_u32(uint32_t(r.want_pos)).put_char(' ');
+    put_v(v, r.want_mv);
+    v.put("V ");
+    if (ty == pd::PdoType::Battery) v.put_u32(r.want_mw / 1000).put_char('W');
+    else put_a(v, r.want_ma);
 }
 
 // USB / Alt rows of the live link: data speed alone, then the alt mode (entered green, advertised amber).
@@ -380,7 +400,7 @@ void link_rows(Rows &R, const TabData &d) {
 // "Proto Xiaomi PD": the vendor PROTOCOL one side lists by SVID (names only; the row is left out when there is none).
 // `vdm` is that side's own answers: the source's (fusb302::vdm) on the Source tab, the sink's (sink_vdm) on the Sink tab.
 void proto_row(Rows &R, const pd::VdmInfo &vdm) {
-    StrBuf<28> t;
+    StrBuf<kValCells + 1> t;   // protocol_text keeps whole names within what it is given
     if (conn::protocol_text(std::span<const uint16_t>(vdm.svids.data(), vdm.num_svids), t)) R.add("Proto", kEnergy).put(t.view());
 }
 
@@ -448,13 +468,7 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
             if (p.type != pd::PdoType::Pps && p.type != pd::PdoType::Avs) continue;
             range_row(R, p.type == pd::PdoType::Pps ? "PPS" : "AVS", p);
         }
-        if (r.request_seen) {
-            StrBuf<28> &v = R.add("Used", kOk);
-            v.put("PDO").put_u32(uint32_t(r.want_pos)).put_char(' ');
-            put_v(v, r.want_mv);
-            v.put("V ");
-            put_a(v, r.want_ma);
-        }
+        if (r.request_seen) put_request(R.add("Used", kOk), r, caps);
     } else if (r.typec_ma) {
         pdv.put("none");
         StrBuf<28> &v = R.add("Type-C", kText);
@@ -476,10 +490,13 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     const pd::Emarker &em = fusb302::emarker();
     put_id(R.add("ID"), em.vid, em.pid, em.vendor_str);
     StrBuf<28> &sp = R.add("Speed", kText);
-    sp.put(em.speed_str ? em.speed_str : "?");
-    if (em.is_active && em.vdo2_valid && em.usb_lanes == 2) sp.put(" x2");
-    if (em.vid == 0x8087 || fusb302::cable_thunderbolt()) sp.put(" TB");
-    else if (em.usb4_supported) sp.put(" USB4");
+    char sb[24];
+    pdtabs::speed_short(sb, em.speed_str ? em.speed_str : "?");
+    sp.put(sb);
+    // The lane and Thunderbolt / USB4 tags follow while they fit; the speed itself is always whole.
+    if (em.is_active && em.vdo2_valid && em.usb_lanes == 2) put_if_fits(sp, " x2");
+    if (em.vid == 0x8087 || fusb302::cable_thunderbolt()) { if (sp.view().substr(0, 2) != "TB") put_if_fits(sp, " TB"); }
+    else if (em.usb4_supported && sp.view().substr(0, 4) != "USB4") put_if_fits(sp, " USB4");
     put_a(R.add("Current", kAmp), uint32_t(em.max_current_a) * 1000);
     StrBuf<28> &volt = R.add("Voltage", kVolt);
     volt.put_u32(em.max_voltage_v).put_char('V').put_char(' ').put_u32(em.max_power_w).put_char('W');
@@ -487,7 +504,7 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     StrBuf<28> &ty = R.add("Type", kText);
     ty.put(em.is_active ? "Active" : "Passive");
     ty.put(em.type_c_plug ? ", Type-C" : ", captive");
-    if (em.vconn_required) ty.put(", VCONN");
+    if (em.vconn_required) R.add("VCONN", kText).put("required");
     R.add("Length", kText).put(em.latency_str ? em.latency_str : "?");
 }
 
@@ -510,47 +527,41 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
     if (shown < sink.size()) cur.put(shown ? " +" : "+");
 }
 
-// The match summary as two list rows: power (source offer x cable x sink request) and data
-// (cable x device). The smallest known term is the result; the limiting party is amber.
+// The match summary as two list rows, worded by who holds the number down (pdtabs::power_line / data_line):
+// "Pwr 18W of 100W" (the sink draws part of the offer), "Pwr 60W by cable", "Data 5G of 10G". The row is amber
+// only when the cable is what limits the link; a sink that draws less than it is offered is the normal state.
 [[gnu::noinline]] void strip_rows(Rows &R, const MatchResult &r, const usblink::Link &ul) {
     const pd::Emarker &em = fusb302::emarker();
     const bool attached = r.caps_seen || r.typec_ma;
     {   // power
-        pdtabs::Terms t;
         StrBuf<28> &v = R.add("Pwr", kText);
         if (!attached) v.put("-");
         else {
-            char s[12] = "?", c[12] = "?", k[12] = "?";
-            if (r.caps_seen) { t.source = static_cast<int32_t>(r.src_max_mw / 1000); pdtabs::fmt_watts(s, t.source); }
-            else if (r.typec_ma) { t.source = static_cast<int32_t>(5u * r.typec_ma / 1000); pdtabs::fmt_watts(s, t.source); }
-            if (em.valid) {
-                t.cable = em.max_power_w;
-                StrBuf<12> a;
-                put_a(a, uint32_t(em.max_current_a) * 1000);
-                std::copy_n(a.c_str(), a.view().size() + 1, c);
-            } else if (r.caps_seen) {
-                t.cable = 60;   // no e-marker: 3 A at 20 V assumed
-                std::copy_n("3A?", 4, c);
-            }
-            if (r.request_seen) { t.sink = static_cast<int32_t>(r.want_mw / 1000); pdtabs::fmt_watts(k, t.sink); }
-            v.put(s).put("\xC3\x97").put(c).put("\xC3\x97").put(k).put("=");   // no spaces: "140W×5A×?=140W" fits the value column
-            const pdtabs::Limited lim = pdtabs::limit(t);
-            if (lim.value >= 0) { char w[12]; pdtabs::fmt_watts(w, lim.value); v.put(w); } else v.put("?");
-            if (lim.limit != pdtabs::Who::None) R.colour(kCaution);
+            pdtabs::Terms t;
+            if (r.caps_seen) t.source = static_cast<int32_t>(r.src_max_mw / 1000);
+            else t.source = static_cast<int32_t>(5u * r.typec_ma / 1000);
+            if (em.valid) t.cable = em.max_power_w;
+            else if (r.caps_seen) t.cable = 60;   // no e-marker: 3 A at 20 V assumed
+            if (r.request_seen) t.sink = static_cast<int32_t>(r.want_mw / 1000);
+            char line[24];
+            bool warn = false;
+            pdtabs::power_line(line, t, !em.valid, warn);
+            v.put(line);
+            if (warn) R.colour(kCaution);
         }
     }
     {   // data
-        pdtabs::Terms t;
         StrBuf<28> &v = R.add("Data", kText);
         if (!attached) v.put("-");
         else {
-            char c[12] = "?", k[12] = "?";
-            if (em.valid) { t.cable = pdtabs::cable_mbps(em.raw_vdos[4] & 7, em.vid); pdtabs::fmt_rate(c, t.cable); }
-            if (ul.family != usblink::Family::Unknown && ul.mbps > 0) { t.sink = static_cast<int32_t>(ul.mbps); pdtabs::fmt_rate(k, t.sink); }
-            v.put(c).put("\xC3\x97").put(k).put("=");
-            const pdtabs::Limited lim = pdtabs::limit(t);
-            if (lim.value >= 0) { char w[12]; pdtabs::fmt_rate(w, lim.value); v.put(w); if (ul.dp) v.put(" +DP"); } else v.put("?");
-            if (lim.limit != pdtabs::Who::None) R.colour(kCaution);
+            pdtabs::Terms t;
+            if (em.valid) t.cable = pdtabs::cable_mbps(em.raw_vdos[4] & 7, em.vid);
+            if (ul.family != usblink::Family::Unknown && ul.mbps > 0) t.sink = static_cast<int32_t>(ul.mbps);
+            char line[24];
+            bool warn = false;
+            pdtabs::data_line(line, t, ul.dp, warn);
+            v.put(line);
+            if (warn) R.colour(kCaution);
         }
     }
 }
@@ -567,16 +578,12 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
     if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
     else R.add("ID").put("unknown");   // until the sink answers a Discover Identity (the charger's, or Identify's)
     if (r.request_seen) {
-        StrBuf<28> &v = R.add("Request", kAmp);
-        v.put("PDO").put_u32(uint32_t(r.want_pos)).put_char(' ');
-        put_v(v, r.want_mv);
-        v.put("V ");
-        put_a(v, r.want_ma);
-        if (r.want_pos > 0 && r.want_pos <= d.caps->num_pdos && d.caps->pdos[r.want_pos - 1].type == pd::PdoType::Pps) v.put(" PPS");
+        put_request(R.add("Request", kAmp), r, *d.caps);
         StrBuf<28> &st = R.add("State", kDim);
         st.put(request_state_name(fusb302::contract()));
         StrBuf<32> fl;
-        rdo_flags_text(fusb302::contract().flags, fl);
+        const std::size_t room = st.view().size() + 2 < static_cast<std::size_t>(kValCells) ? kValCells - st.view().size() - 2 : 0;
+        rdo_flags_text(fusb302::contract().flags, room, fl);
         if (!fl.view().empty()) st.put(", ").put(fl.view());
     } else {
         R.add("Request", kFaint).put("none seen");
@@ -656,8 +663,9 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
             gfx_text(c, kSmall, kValX, vy, all.substr(0, row.cut), dim ? kStale : row.c, kBg);
             gfx_text(c, kSmall, static_cast<int16_t>(kValX + row.cut * kSmall.adv), vy, all.substr(row.cut), dim ? kStale : kAmp, kBg);
         } else {
-            // The values are read off the connected device (vendor strings, ids): data, so a long one is cut, not a copy bug.
-            gfx_text(c, kSmall, kValX, vy, fit_data(kSmall, all, c.w - kValX - 4, buf), dim ? kStale : row.c, kBg);
+            // Every row is built to fit the value column (vendor names, tags and flags are added whole or not at all),
+            // so a cut here is a copy bug: fit_text fails the host gate on it.
+            gfx_text(c, kSmall, kValX, vy, fit_text(kSmall, all, c.w - kValX - 4, buf), dim ? kStale : row.c, kBg);
         }
     }
     if (R.n < kMaxList) gfx_fill(c, 0, static_cast<int16_t>(kRowY0 + R.n * kRowPitch), c.w, 1, kRule);   // closes the table

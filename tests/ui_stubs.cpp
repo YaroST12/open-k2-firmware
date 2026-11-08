@@ -59,7 +59,7 @@ bool rd_inherited() { return g_stub.rd_inherited; }
 void self_power_release() { g_stub.rd_releases++; g_stub.rd_inherited = false; }
 const pd::VdmInfo& vdm() { return g_stub.vdm; }
 const pd::VdmInfo& sink_vdm() { return g_stub.sink_vdm; }
-usblink::Link usb_link(std::int32_t, std::int32_t) { return {}; }
+usblink::Link usb_link(std::int32_t, std::int32_t) { return g_stub.ul; }
 bool cable_thunderbolt() { return g_stub.cable_tb; }
 void rescan() { g_stub.rescans++; }
 void set_inline(bool on) { g_stub.inl = on; }

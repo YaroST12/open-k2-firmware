@@ -324,7 +324,49 @@ static void test_each_tab_shows_its_own_side() {
     g_stub.sink_vdm = {};
 }
 
+// ---- every row fits the 19-cell value column, worst case on every tab (test_report fails on any cut) ----
+
+static void test_worst_case_rows_fit() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 30000);
+    g_stub.pm_online = true;
+    // A charger with the full 11 PDOs, a PPS last, and a sink that asked for it at its most digits.
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 11;
+    for (int i = 0; i < 10; i++) g_stub.caps.pdos[i] = {pd::PdoType::Fixed, 0, uint32_t(5000 + 1000 * i), uint32_t(5000 + 1000 * i), 3000, uint32_t(15000 + 3000 * i)};
+    g_stub.caps.pdos[10] = {pd::PdoType::Pps, 0, 3300, 21120, 3250, 68640};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
+    g_stub.contract.pos = 11; g_stub.contract.mv = 21120; g_stub.contract.op_ma = 3250; g_stub.contract.max_ma = 3250;
+    g_stub.contract.flags = pd::kRdoFGiveBack | pd::kRdoFMismatch | pd::kRdoFUsbComm | pd::kRdoFNoSuspend | pd::kRdoFEpr;
+    // The ten-character vendor "ChargerLAB" on every side, an active TB cable that needs VCONN, a 5 G device with DP.
+    set_id(g_stub.vdm, 0x2B01, 0x0000, "ChargerLAB");
+    set_id(g_stub.sink_vdm, 0x2B01, 0x0000, "ChargerLAB");
+    g_stub.vdm.num_svids = 3; g_stub.vdm.svids[0] = 0x2717; g_stub.vdm.svids[1] = 0x22D9; g_stub.vdm.svids[2] = 0x1D45;
+    g_stub.sink_vdm = g_stub.vdm;
+    pd::Emarker &em = g_stub.em;
+    em.valid = true; em.is_active = true; em.vid = 0x2B01; em.pid = 0x0000; em.vendor_str = "ChargerLAB";
+    em.speed_str = "USB 3.2 Gen2 (10G)"; em.latency_str = "50-60 ns (~6 m)";
+    em.max_current_a = 5; em.max_voltage_v = 50; em.max_power_w = 250; em.epr_capable = true;
+    em.vdo2_valid = true; em.usb_lanes = 2; em.usb4_supported = true; em.vconn_required = true; em.type_c_plug = true;
+    g_stub.cable_tb = true;
+    g_stub.ul.family = usblink::Family::Usb32; g_stub.ul.mbps = 5000; g_stub.ul.dp = true;
+    g_stub.ul.conf = usblink::Confidence::Negotiated;
+    uint32_t t = 31000;
+    ui.tick(t);
+    show(ui, 0, t); show(ui, 1, t); show(ui, 2, t);
+    // The thin-cable case: a 3 A cable under a 100 W offer, sink unknown, draws nothing yet.
+    em.max_current_a = 3; em.max_power_w = 60; em.vconn_required = false;
+    g_stub.contract = {};
+    g_stub.ul.mbps = 10000;
+    show(ui, 1, t); show(ui, 2, t);
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {}; g_stub.vdm = {}; g_stub.sink_vdm = {}; g_stub.ul = {}; g_stub.cable_tb = false;
+}
+
 int main() {
+    test_worst_case_rows_fit();
     test_each_tab_shows_its_own_side();
     test_default_tab_on_open();
     test_topology_from_the_cc_lines();

@@ -12,6 +12,7 @@
 #include "k2/fastcharge/ufcs_probe.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/emrec.hpp"
+#include "k2/pd/usb_link.hpp"
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -59,6 +60,7 @@ struct StubState {
     k2::pd::VdmInfo vdm{};
     k2::pd::VdmInfo sink_vdm{};
     bool cable_tb = false;
+    k2::usblink::Link ul{};               // what fusb302::usb_link() returns (the USB / Data rows of the Connection page)
     uint8_t cc = 1;
     k2::pd::Contract contract{};
     k2::pd::SinkCapsSeen sink_seen{};
