@@ -8,7 +8,9 @@
 //
 //  detach  = VBUS below vSafe0V (0.8 V) for more than 300 ms, OR no CC for more than 300 ms
 //  attach  = VBUS above vSafe5V min (4.75 V), OR a CC line back
-//  charger data is stale while detached and while "waiting" (attached again, no new caps yet)
+//  charger data is stale while detached and while "waiting" (attached again, no new caps yet); "waiting"
+//  also ends after kWaitingCapsMs without new Source_Capabilities, so a non-PD (Type-C only) source does
+//  not keep the pages on "waiting for caps" forever
 //  cable data is stale after a CC detach (a VBUS loss alone does not touch the cable)
 //
 // Inline detection: the K2 sits between a charger and a real sink (a laptop). Anything that
@@ -27,6 +29,10 @@ inline constexpr std::int32_t kVSafe0Mv = 800;
 inline constexpr std::int32_t kVSafe5MinMv = 4750;
 inline constexpr std::int32_t kVSafe5MaxMv = 5500;
 inline constexpr std::uint32_t kDetachDebounceMs = 300;
+// An attached source that sends no Source_Capabilities within this long is not PD (a plain Type-C port):
+// stop "waiting" and let the callers show the Type-C advertisement. Longer than the ~3 s after which
+// fusb302::typec_ma() reports the source's Rp current, so the data is there when waiting ends.
+inline constexpr std::uint32_t kWaitingCapsMs = 5000;
 
 constexpr bool is_vsafe5(std::int32_t mv) { return mv >= kVSafe5MinMv && mv <= kVSafe5MaxMv; }
 
@@ -93,7 +99,7 @@ private:
     bool vbus_low_ = false, cc_gone_ = false;
     bool low_timing_ = false, gone_timing_ = false;
     std::uint32_t low_since_ = 0, gone_since_ = 0;
-    std::uint32_t detach_at_ = 0;
+    std::uint32_t detach_at_ = 0, attach_at_ = 0;
     std::uint32_t rx_at_detach_ = 0, last_rx_ = 0;
     bool scanned_ = false, cable_dirty_ = false;
     std::uint32_t scan_at_ = 0;

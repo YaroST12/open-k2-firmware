@@ -93,6 +93,50 @@ static void test_waiting_until_new_caps() {
     CHECK_EQ(l.charger_stale(), 0);
 }
 
+// A source that never sends Source_Capabilities (a plain Type-C 5 V port): "waiting" must end after
+// kWaitingCapsMs, so the pages can fall through to the Type-C advertisement instead of waiting forever.
+static void test_waiting_clears_on_timeout() {
+    Link l;
+    l.update(in(0, 5000, 1, 7));
+    l.update(in(100, 0, 1, 7));
+    l.update(in(500, 0, 1, 7));
+    CHECK_EQ(l.attached(), 0);
+    l.update(in(2000, 5000, 1, 7));                 // re-attach, caps count unchanged: waiting
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.waiting(), 1);
+    l.update(in(2000 + kWaitingCapsMs, 5000, 1, 7));      // not yet "more than" the timeout
+    CHECK_EQ(l.waiting(), 1);
+    l.update(in(2000 + kWaitingCapsMs + 1, 5000, 1, 7));
+    CHECK_EQ(l.waiting(), 0);                       // timeout: the source is not PD, show what is known
+    CHECK_EQ(l.charger_stale(), 0);
+    // Caps arriving still clears it early.
+    Link m;
+    m.update(in(0, 5000, 1, 7));
+    m.update(in(100, 0, 1, 7));
+    m.update(in(500, 0, 1, 7));
+    m.update(in(2000, 5000, 1, 7));
+    CHECK_EQ(m.waiting(), 1);
+    m.update(in(3000, 5000, 1, 8));                 // new Source_Capabilities before the timeout
+    CHECK_EQ(m.waiting(), 0);
+    // A detach while waiting restarts the window on the next attach.
+    Link n;
+    n.update(in(0, 5000, 1, 7));
+    n.update(in(100, 0, 1, 7));
+    n.update(in(500, 0, 1, 7));
+    n.update(in(2000, 5000, 1, 7));
+    n.update(in(2000 + kWaitingCapsMs + 1, 5000, 1, 7));
+    CHECK_EQ(n.waiting(), 0);
+    n.update(in(9000, 0, 1, 7));
+    n.update(in(9400, 0, 1, 7));
+    CHECK_EQ(n.attached(), 0);
+    n.update(in(10000, 5000, 1, 7));
+    CHECK_EQ(n.waiting(), 1);                       // fresh attach: waiting again, full window
+    n.update(in(10000 + kWaitingCapsMs, 5000, 1, 7));
+    CHECK_EQ(n.waiting(), 1);
+    n.update(in(10000 + kWaitingCapsMs + 1, 5000, 1, 7));
+    CHECK_EQ(n.waiting(), 0);
+}
+
 static void test_cable_stale_on_cc_edge_only() {
     Link l;
     l.update(in(0, 5000));
@@ -286,6 +330,7 @@ int main() {
     test_attach_threshold_and_hysteresis();
     test_unknown_vbus_uses_cc_only();
     test_waiting_until_new_caps();
+    test_waiting_clears_on_timeout();
     test_cable_stale_on_cc_edge_only();
     test_inline_by_current();
     test_self_supply_is_not_a_load();

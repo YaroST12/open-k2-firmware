@@ -15,9 +15,10 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         inline_ = false;
         own_seen_ = false;
     } else {
-        waiting_ = true;  // old data stays until new Source_Capabilities arrive
+        waiting_ = true;  // old data stays until new Source_Capabilities arrive (or kWaitingCapsMs pass)
         new_source_ = true;
         vbus_was_low_ = false;
+        attach_at_ = at_ms;
     }
 }
 
@@ -65,7 +66,8 @@ void Link::update(const LinkInput& in) {
     } else if (want && !attached_) {
         set_attached(true, in.now_ms);
     }
-    if (waiting_ && in.caps_rx != rx_at_detach_) waiting_ = false;
+    if (waiting_ && in.caps_rx != rx_at_detach_) waiting_ = false;   // new Source_Capabilities arrived
+    else if (waiting_ && in.now_ms - attach_at_ > kWaitingCapsMs) waiting_ = false;   // a non-PD source
 
     if (attached_) {
         const std::int32_t mag = power::abs_sat(in.current_ma);

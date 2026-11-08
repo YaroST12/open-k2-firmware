@@ -348,6 +348,23 @@ static void test_sink_tab_not_empty_when_a_sink_was_seen() {
     g_stub.contract = {};
 }
 
+// A non-PD source (attached, but Source_Capabilities never arrive): "waiting for caps" ends after
+// pd::kWaitingCapsMs and the Source tab falls through to what is known instead of the single waiting row.
+static void test_source_tab_leaves_waiting_after_timeout() {
+    Ui &ui = fresh_ui();                    // detached: cc 0, VBUS 0
+    g_stub.pm.vbus_mv = 5000;              // a plain 5 V port, no PD traffic at all
+    g_stub.cc = 1;                         // attach: CC back with VBUS up; the caps counter never moves
+    uint32_t t = 20000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().attached()), 1);
+    CHECK_EQ(int(ui.link().waiting()), 1);
+    const auto waiting_frame = show(ui, 0, t);        // Source tab: "Waiting for caps..."
+    for (int i = 0; i < 55; i++) ui.tick(t += 100);    // 5.5 s with no caps
+    CHECK_EQ(int(ui.link().waiting()), 0);             // the timeout ended the wait
+    const auto after = show(ui, 0, t);
+    CHECK(after != waiting_frame);                     // the tab now shows what is known
+}
+
 // ---- every row fits the 19-cell value column, worst case on every tab (test_report fails on any cut) ----
 
 static void test_worst_case_rows_fit() {
@@ -436,6 +453,7 @@ int main() {
     test_worst_case_rows_fit();
     test_each_tab_shows_its_own_side();
     test_sink_tab_not_empty_when_a_sink_was_seen();
+    test_source_tab_leaves_waiting_after_timeout();
     test_default_tab_on_open();
     test_topology_from_the_cc_lines();
     test_topology_unknown_unless_passive_and_dead();
