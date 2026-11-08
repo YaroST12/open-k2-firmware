@@ -57,17 +57,41 @@ void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint
         sink.valid = payload.size() >= n * 4;
         sink.n = sink.valid ? std::uint8_t(n) : 0;
         for (unsigned i = 0; sink.valid && i < n; i++) sink.raw[i] = le32(payload.data() + 4 * i);
-    } else if (!ext && ((header >> 12) & 7) == 0 && contract.valid &&
-               (type == 0x03 || type == 0x04 || type == 0x0C)) {  // Accept / Reject / Wait after the Request
-        if (type == 0x03) { contract.accepted = true; contract.rejected = false; }
-        else { contract.rejected = true; contract.accepted = false; }
-    } else if (!ext && type == 0x06 && ((header >> 12) & 7) == 0) {  // PS_RDY
-        if (contract.valid) contract.ready = true;
     } else if (!ext && type == kMsgVendorDefined) {
         parse_vdm((header >> 8) & 1 ? vdm : sink_vdm, payload);  // bit 8 on SOP: the sender's power role
+    } else if (!ext && ((header >> 12) & 7) == 0) {  // a control message on SOP
+        on_sop_control(type);
     } else if (type == kDataRevision && ((header >> 12) & 7) == 1 &&
                (header & (1u << 8)) && payload.size() >= 4) {
         parse_revision(payload.first(4), this->ext.revision);
+    }
+}
+
+// Control messages on SOP. Besides the Request answer tracking, a PR_Swap (type 0x0A, sent by either
+// partner) is followed to its completion: Accept + PS_RDY exchange the power roles, so the per-side
+// VDM records swap with them. Reject / Wait cancel it, a PS_RDY without Accept does not complete it.
+void Engine::on_sop_control(std::uint8_t type) {
+    if (type == 0x0A) {  // PR_Swap
+        pr_swap_pending_ = true;
+        pr_swap_accepted_ = false;
+        return;
+    }
+    if (type == 0x03) {  // Accept
+        if (pr_swap_pending_) pr_swap_accepted_ = true;
+        if (contract.valid) { contract.accepted = true; contract.rejected = false; }
+        return;
+    }
+    if (type == 0x04 || type == 0x0C) {  // Reject / Wait
+        pr_swap_pending_ = pr_swap_accepted_ = false;
+        if (contract.valid) { contract.rejected = true; contract.accepted = false; }
+        return;
+    }
+    if (type == 0x06) {  // PS_RDY
+        if (pr_swap_pending_ && pr_swap_accepted_) {
+            std::swap(vdm, sink_vdm);  // the power roles just exchanged; the data roles did not
+            pr_swap_pending_ = pr_swap_accepted_ = false;
+        }
+        if (contract.valid) contract.ready = true;
     }
 }
 
@@ -84,6 +108,7 @@ void Engine::reset_source() {
     contract.requests = req;
     epr_total_ = 0;
     epr_mask_ = 0;
+    pr_swap_pending_ = pr_swap_accepted_ = false;
 }
 
 // A Request (type 2, or EPR_Request type 9 with the RDO first) from a sink: power role bit 8 clear.

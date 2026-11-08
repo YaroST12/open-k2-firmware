@@ -195,11 +195,101 @@ static void test_ignores_other_sop() {
 static const uint32_t kCableAck[5] = { 0xFF00A041u, (3u << 27) | 0x05ACu, 0, 0x12340005u,
                                        (3u << 9) | (2u << 5) | 2u };
 
-static void feed_vdm(Engine& e, Sop sop, const uint32_t* v, unsigned n, uint16_t rev = 2) {
+static void feed_vdm(Engine& e, Sop sop, const uint32_t* v, unsigned n, uint16_t rev = 2,
+                     bool src = false) {
     uint8_t pl[28] = {0};
     for (unsigned i = 0; i < n; i++) put_le32(pl + 4 * i, v[i]);
-    uint16_t h = (uint16_t)(0x0F | (rev << 6) | (n << 12));
+    uint16_t h = (uint16_t)(0x0F | (rev << 6) | (n << 12) | (src ? 0x100 : 0));  // bit 8: sender's power role
     e.on_message(sop, h, {pl, n * 4u}, 1);
+}
+
+// A control message on SOP (no data objects), rev 2; `src` sets the sender's power-role bit 8.
+static void feed_ctl(Engine& e, uint16_t type, bool src = false) {
+    const uint16_t h = (uint16_t)(type | (2u << 6) | (src ? 0x100 : 0));
+    e.on_message(Sop::Sop, h, {}, 1);
+}
+
+// Discover Identity ACK of the dock from the recorded trace: VID 0x2109, PID 0x0103.
+static const uint32_t kDockId[5] = {0xFF00A041u, (1u << 27) | 0x2109u, 0, 0x0103u << 16, 0};
+
+/* PR_Swap, recorded dock sequence: the snk/ufp (header bit 8 clear) answers Discover Identity /
+   SVIDs, so sink_vdm holds the dock (VID 0x2109, SVIDs [0xFF01]). PR_Swap + Accept + PS_RDY exchange
+   the power roles, so the per-side records swap: vdm (source side) holds the dock, and sink_vdm is
+   unknown again because the new sink never answered an identity request. */
+static void test_pr_swap_swaps_side_records() {
+    Engine e;
+    feed_vdm(e, Sop::Sop, kDockId, 5);
+    CHECK_EQ(e.sink_vdm.identity.valid, true);
+    CHECK_EQ(e.sink_vdm.identity.vid, 0x2109);
+    CHECK_EQ(e.sink_vdm.identity.pid, 0x0103);
+    CHECK_EQ(e.vdm.identity.valid, false);
+    const uint32_t svids[2] = {0xFF00A042u, 0xFF010000u};
+    feed_vdm(e, Sop::Sop, svids, 2);
+    CHECK_EQ(e.sink_vdm.num_svids, 1);
+    CHECK_EQ(e.sink_vdm.svids[0], 0xFF01);
+    feed_ctl(e, 0x0A);                        // PR_Swap (control type 0x0A) from the dock
+    feed_ctl(e, 0x03, true);                  // Accept from the laptop
+    CHECK_EQ(e.vdm.identity.valid, false);    // not yet: PS_RDY completes the swap
+    CHECK_EQ(e.sink_vdm.identity.valid, true);
+    feed_ctl(e, 0x06, true);                  // PS_RDY: the power roles have exchanged
+    CHECK_EQ(e.vdm.identity.valid, true);
+    CHECK_EQ(e.vdm.identity.vid, 0x2109);
+    CHECK_EQ(e.vdm.num_svids, 1);
+    CHECK_EQ(e.vdm.svids[0], 0xFF01);
+    CHECK_EQ(e.sink_vdm.identity.valid, false);  // the new sink never answered: unknown
+    CHECK_EQ(e.sink_vdm.num_svids, 0);
+}
+
+/* Both partners answered identity before the swap: each keeps its own data under its NEW role
+   (the side that changed role keeps its data; nothing is cleared). When the new sink then answers
+   an identity request, sink_vdm holds that answer. */
+static void test_pr_swap_keeps_each_side_and_new_sink_answer() {
+    Engine e;
+    const uint32_t laptop[5] = {0xFF00A041u, (2u << 27) | 0x18D1u, 0, 0x1234u << 16, 0};
+    feed_vdm(e, Sop::Sop, laptop, 5, 2, true);   // src/dfp (bit 8 set) answered first
+    CHECK_EQ(e.vdm.identity.valid, true);
+    CHECK_EQ(e.vdm.identity.vid, 0x18D1);
+    feed_vdm(e, Sop::Sop, kDockId, 5);           // snk/ufp answered too
+    CHECK_EQ(e.sink_vdm.identity.vid, 0x2109);
+    feed_ctl(e, 0x0A, true);                     // PR_Swap from either side
+    feed_ctl(e, 0x03);
+    feed_ctl(e, 0x06);
+    CHECK_EQ(e.vdm.identity.vid, 0x2109);       // dock is now the source: its data moved to vdm
+    CHECK_EQ(e.sink_vdm.identity.vid, 0x18D1);   // laptop is now the sink: its data moved to sink_vdm
+    const uint32_t phone[5] = {0xFF00A041u, (2u << 27) | 0x05ACu, 0, 0x7510u << 16, 0};
+    feed_vdm(e, Sop::Sop, phone, 5);             // the new sink (bit 8 clear) answers identity
+    CHECK_EQ(e.sink_vdm.identity.vid, 0x05AC);
+    CHECK_EQ(e.sink_vdm.identity.pid, 0x7510);
+    CHECK_EQ(e.vdm.identity.vid, 0x2109);       // the source side is untouched
+}
+
+/* A rejected or incomplete PR_Swap (Reject / Wait, or PS_RDY without Accept) must not move the
+   per-side records. */
+static void test_pr_swap_rejected_or_incomplete_keeps_records() {
+    Engine e;
+    feed_vdm(e, Sop::Sop, kDockId, 5);
+    feed_ctl(e, 0x0A);
+    feed_ctl(e, 0x04);                        // Reject: no swap
+    CHECK_EQ(e.sink_vdm.identity.valid, true);
+    CHECK_EQ(e.vdm.identity.valid, false);
+    feed_ctl(e, 0x0A);
+    feed_ctl(e, 0x0C);                        // Wait: no swap either
+    CHECK_EQ(e.sink_vdm.identity.valid, true);
+    CHECK_EQ(e.vdm.identity.valid, false);
+    feed_ctl(e, 0x0A);
+    feed_ctl(e, 0x03);
+    feed_ctl(e, 0x03);                        // a second Accept still is not a completion
+    CHECK_EQ(e.sink_vdm.identity.valid, true);
+    CHECK_EQ(e.vdm.identity.valid, false);
+    feed_ctl(e, 0x0A);
+    feed_ctl(e, 0x06);                        // PS_RDY without Accept: no swap
+    CHECK_EQ(e.sink_vdm.identity.valid, true);
+    CHECK_EQ(e.vdm.identity.valid, false);
+    feed_ctl(e, 0x0A);                        // now it completes
+    feed_ctl(e, 0x03);
+    feed_ctl(e, 0x06);
+    CHECK_EQ(e.vdm.identity.vid, 0x2109);
+    CHECK_EQ(e.sink_vdm.identity.valid, false);
 }
 
 static void test_cable_sop_prime_and_double_prime() {
@@ -307,5 +397,8 @@ int main() {
     test_cable_ignores_requests_and_nak();
     test_cable_svids_and_modes();
     test_apple_chunks();
+    test_pr_swap_swaps_side_records();
+    test_pr_swap_keeps_each_side_and_new_sink_answer();
+    test_pr_swap_rejected_or_incomplete_keeps_records();
     return test_report("test_pd_engine");
 }

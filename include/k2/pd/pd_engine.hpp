@@ -79,6 +79,8 @@ public:
     bool epr_info_only = false;
     // Identity, SVIDs and modes seen on SOP, filed by who sent them (header bit 8, the power role): `vdm` is what the
     // source (the charger) said, `sink_vdm` what the sink said. Passive inline sees both partners answer on SOP.
+    // A completed PR_Swap exchanges the power roles, so the two records are swapped with them (each partner keeps
+    // its own data under its new role; a partner that never answered stays unknown).
     VdmInfo vdm;
     VdmInfo sink_vdm;
     ExtInfo ext;  // latest extended messages seen from the source
@@ -86,7 +88,9 @@ public:
     std::uint32_t cable_acks = 0;  // Discover Identity ACKs accepted from a cable since boot
     VdmInfo cable_vdm;  // cable SVIDs and modes (SOP' / SOP'' ACKs)
     AppleCable apple;
-    usblink::Classifier usb;  // USB / Thunderbolt link seen on SOP, SOP' and SOP'' (cleared with the source)
+    usblink::Classifier usb;  // USB / Thunderbolt link seen on SOP, SOP' and SOP'' (cleared with the source). One
+                              // combined record, not per side: a PR_Swap exchanges power roles only, the data
+                              // roles and the link stay, so it is kept across the swap.
 
     // `payload` = the data objects (for an extended message: ext header first). `cc` = the
     // CC line the frame arrived on (0 none, 1, 2).
@@ -104,10 +108,13 @@ private:
     void on_cable_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload);
     void on_ext_message(std::uint8_t type, std::span<const std::uint8_t> payload);
     void on_epr_caps_chunk(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint8_t cc);
+    void on_sop_control(std::uint8_t type);
 
     std::array<std::uint8_t, kMaxPdos * 4> epr_buf_{};
     std::uint16_t epr_total_ = 0;  // data_size of the message in progress, 0 = none
     std::uint8_t epr_mask_ = 0;    // chunks received, bit n = chunk n
+    bool pr_swap_pending_ = false;   // a PR_Swap was seen on SOP and not answered yet
+    bool pr_swap_accepted_ = false;  // it was Accepted; PS_RDY completes the swap
 };
 
 }  // namespace k2::pd
