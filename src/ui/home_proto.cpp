@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+#include "k2/ui/home_proto.hpp"
+
+namespace k2::home {
+namespace {
+
+using fastcharge::Protocol;
+
+constexpr uint32_t kCableMaxMa = 5000;   // a standard cable carries 5 A: the cap of an AVS current figure
+
+uint32_t nominal_mv(int32_t vbus_mv) {
+    return vbus_mv <= 0 ? 0 : (static_cast<uint32_t>(vbus_mv) + 500) / 1000 * 1000;
+}
+
+ProtoInfo from_pd(const ProtoSource &s) {
+    ProtoInfo p;
+    p.kind = ProtoKind::PdFixed;
+    p.mv = s.ctr.mv;
+    p.ma = s.ctr.max_ma;
+    p.max_mv = s.ctr.mv;
+    const pd::SourceCaps *c = s.caps;
+    if (!c || !c->valid || c->num_pdos == 0) return p;
+    uint32_t top = 0;
+    for (int i = 0; i < c->num_pdos && i < static_cast<int>(pd::kMaxPdos); i++)
+        top = c->pdos[i].max_mv > top ? c->pdos[i].max_mv : top;
+    if (top) p.max_mv = top;
+    if (s.ctr.pos < 1 || s.ctr.pos > c->num_pdos) return p;
+    const pd::Pdo &o = c->pdos[s.ctr.pos - 1];
+    switch (o.type) {
+    case pd::PdoType::Pps:
+        p.kind = ProtoKind::Pps;
+        p.lo_mv = o.min_mv; p.hi_mv = o.max_mv;
+        if (o.max_ma) p.ma = o.max_ma;
+        break;
+    case pd::PdoType::Avs: {
+        p.kind = ProtoKind::Avs;
+        p.lo_mv = o.min_mv; p.hi_mv = o.max_mv; p.mw = o.max_mw;
+        const uint32_t ref = s.ctr.mv ? s.ctr.mv : o.max_mv;
+        if (o.max_ma) p.ma = o.max_ma;
+        else if (o.max_mw && ref) { const uint32_t a = static_cast<uint32_t>(static_cast<uint64_t>(o.max_mw) * 1000 / ref); p.ma = a > kCableMaxMa ? kCableMaxMa : a; }
+        break;
+    }
+    default:
+        p.kind = (s.ctr.pos >= 8 || s.ctr.mv > 20000) ? ProtoKind::PdEpr : ProtoKind::PdFixed;
+        if (!p.mv) p.mv = o.max_mv;
+        if (o.max_ma) p.ma = o.max_ma;
+        break;
+    }
+    return p;
+}
+
+ProtoInfo fixed_info(ProtoKind k, uint32_t mv, uint32_t ma, uint32_t max_mv) {
+    ProtoInfo p;
+    p.kind = k; p.mv = mv; p.ma = ma; p.max_mv = max_mv;
+    return p;
+}
+
+}  // namespace
+
+ProtoInfo derive_proto(const ProtoSource &s) {
+    if (s.ctr.valid && (s.pd_link || s.caps)) return from_pd(s);
+    const uint32_t v = nominal_mv(s.vbus_mv);
+    switch (s.fc) {
+    case Protocol::Pending: return {ProtoKind::Detecting};
+    case Protocol::NoInput: return {};
+    case Protocol::NoQuick:
+    case Protocol::Usb2Hi: case Protocol::Usb11Low: case Protocol::UsbData:
+        return fixed_info(ProtoKind::TypeC, v, s.typec_ma, 5000);
+    case Protocol::Dcp5V: case Protocol::Sam20: return fixed_info(ProtoKind::Dcp, 5000, 0, 5000);
+    case Protocol::Apple24: return fixed_info(ProtoKind::Dcp, 5000, 2400, 5000);
+    case Protocol::Apple21: return fixed_info(ProtoKind::Dcp, 5000, 2100, 5000);
+    case Protocol::Apple10: return fixed_info(ProtoKind::Dcp, 5000, 1000, 5000);
+    case Protocol::Qc2_5V: return fixed_info(ProtoKind::Qc2, 5000, 0, 12000);
+    case Protocol::Qc2_9V: return fixed_info(ProtoKind::Qc2, 9000, 0, 12000);
+    case Protocol::Qc2_12V: return fixed_info(ProtoKind::Qc2, 12000, 0, 12000);
+    case Protocol::Qc2_20V: return fixed_info(ProtoKind::Qc2, 20000, 0, 20000);
+    case Protocol::Qc3: {
+        ProtoInfo p;
+        p.kind = ProtoKind::Qc3; p.lo_mv = 3600; p.hi_mv = 12000; p.max_mv = 12000;
+        return p;
+    }
+    case Protocol::AfcFcp: return fixed_info(ProtoKind::Fcp, v, 0, 0);
+    case Protocol::Scp: return fixed_info(ProtoKind::Scp, v, 0, 0);
+    case Protocol::VoocWarp: case Protocol::Svooc: return fixed_info(ProtoKind::Svooc, v, 0, 0);
+    case Protocol::PdPe: case Protocol::PdMtk: case Protocol::Pd: case Protocol::PdLikely:
+        return fixed_info(ProtoKind::PdFixed, v, 0, 0);
+    }
+    return {ProtoKind::Unknown};
+}
+
+}  // namespace k2::home

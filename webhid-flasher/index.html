@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later
+     Copyright (C) 2026 Yaraslau Furman -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open-K2 WebHID Flasher</title>
+<!--
+  Open-K2 firmware flasher over WebHID, hosted on GitHub Pages (see .github/workflows/pages.yml).
+  Pure static page: no build step, no backend. Chrome/Edge (Chromium) only, over https.
+  Protocols: app remote link via k2proto.js (tools/web/k2proto.js, staged next to this page by the
+  workflow and by `make webhid`), bootloader + .k2 container via k2boot.js (mirrors
+  tools/k2_flasher.py).
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { background: #101418; color: #cfd8dc; font: 14px/1.45 system-ui, sans-serif;
+         max-width: 760px; margin: 24px auto; padding: 0 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h1 .k2 { color: #4fc3f7; }
+  .sub { color: #78909c; margin-bottom: 20px; }
+  .card { background: #1a2027; border: 1px solid #263238; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+  button { background: #0277bd; color: #fff; border: 0; border-radius: 6px; padding: 8px 16px;
+           font-size: 14px; cursor: pointer; margin-right: 8px; }
+  button:disabled { background: #37474f; color: #90a4ae; cursor: default; }
+  button.secondary { background: #37474f; }
+  button.danger { background: #b71c1c; }
+  input[type=file] { color: #90a4ae; }
+  .row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  #status { font-weight: 600; }
+  .ok { color: #69f0ae; } .bad { color: #ff8a80; } .warn { color: #ffd740; }
+  #bar { height: 10px; background: #263238; border-radius: 5px; overflow: hidden; margin: 10px 0 4px; }
+  #bar > div { height: 100%; width: 0; background: #4fc3f7; transition: width .15s; }
+  #stage { color: #78909c; font-size: 12px; min-height: 16px; }
+  #log { background: #0b0e11; border: 1px solid #263238; border-radius: 6px; padding: 8px 10px;
+         height: 260px; overflow-y: auto; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; }
+  #log .err { color: #ff8a80; } #log .ok { color: #69f0ae; } #log .dim { color: #78909c; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 2px 10px; font-size: 13px; }
+  .kv b { color: #78909c; font-weight: 600; }
+  .hint { color: #78909c; font-size: 12px; margin-top: 8px; }
+  code { background: #263238; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1><span class="k2">Open-K2</span> WebHID Flasher</h1>
+<div class="sub">Flash firmware to a WITRN K2 straight from the browser. Chromium only (Chrome/Edge), served over https.</div>
+
+<div class="card">
+  <div class="row">
+    <button id="connect">Connect</button>
+    <span id="status">not connected</span>
+  </div>
+  <div class="kv" style="margin-top:10px">
+    <b>Mode</b><span id="mode">—</span>
+    <b>Firmware</b><span id="fw">—</span>
+    <b>Git</b><span id="git">—</span>
+  </div>
+  <div class="hint" id="hint"></div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <input type="file" id="file" accept=".k2,.bin,application/octet-stream">
+    <button id="flash" class="danger" disabled>Flash firmware</button>
+  </div>
+  <div id="bar"><div></div></div>
+  <div id="stage"></div>
+  <div class="hint">
+    Accepts a <code>.k2</code> container or a raw app <code>.bin</code> (auto-wrapped, like
+    <code>tools/k2_flasher.py</code>). If the K2 runs the app, it is sent into the
+    bootloader first (DFU_ENTER); if it is already in DFU (hold MINUS while plugging in), it is flashed directly.
+    Full erase + write + read-back verify + commit marker, then reboot.
+  </div>
+</div>
+
+<div class="card"><div id="log"></div></div>
+
+<script src="k2proto.js"></script>
+<script src="k2boot.js"></script>
+<script>
+(function () {
+  "use strict";
+  var VID = 0x0716, PID = 0x5060;
+  var BOOT_PRODUCT = "WITRN.K2", BOOT_SERIAL = "20230727";
+  var $ = function (id) { return document.getElementById(id); };
+  var S = { dev: null, mode: null, fw: null, appLink: null, bootLink: null, gen: 0 };
+
+  function log(msg, cls) {
+    var d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = msg;
+    var el = $("log"); el.appendChild(d); el.scrollTop = el.scrollHeight;
+  }
+  function setStatus(t, cls) { var s = $("status"); s.textContent = t; s.className = cls || ""; }
+  function setStage(t) { $("stage").textContent = t; }
+  function setBar(cur, tot) { $("bar").firstElementChild.style.width = tot ? (100 * cur / tot) + "%" : "0"; }
+  function classify(dev) {
+    var p = dev.productName || "", s = dev.serialNumber || "";
+    if (p.indexOf(BOOT_PRODUCT) >= 0 || s === BOOT_SERIAL) return "bootloader";
+    if (p.indexOf("Open-K2") === 0) return "app";
+    return "unknown";
+  }
+  function setMode(m) {
+    S.mode = m;
+    $("mode").textContent = m === "app" ? "application (remote link up)"
+      : m === "bootloader" ? "bootloader (DFU)" : "unknown device";
+    $("flash").disabled = !(m === "bootloader" || m === "app") || !S.fw;
+  }
+
+  function wireHid(dev, gen) {
+    if (!dev.opened) return dev.open();
+    return Promise.resolve();
+  }
+
+  function openApp(dev, gen) {
+    return wireHid(dev, gen).then(function () {
+      S.dev = dev; S.gen = gen;
+      var link = new K2Proto.Link({ send: function (f) { return dev.sendReport(0, f); } }, { timeoutMs: 1500 });
+      dev.oninputreport = function (ev) { link.feed(new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength)); };
+      S.appLink = link;
+      setMode("app");
+      setStatus("connected (app)", "ok");
+      log("connected: " + dev.productName + " (app mode)");
+      return new K2Proto.K2Remote(link).ping().then(function (info) {
+        if (S.gen !== gen) return;
+        $("fw").textContent = info.version; $("git").textContent = info.git;
+        log("firmware " + info.version + " (" + info.git + "), proto " + info.proto, "ok");
+        $("hint").textContent = "To flash: pick a file, then Flash firmware — the K2 will be reset into the bootloader automatically.";
+      });
+    });
+  }
+
+  function openBoot(dev, gen) {
+    return wireHid(dev, gen).then(function () {
+      S.dev = dev; S.gen = gen;
+      var link = new K2Boot.BootLink({ send: function (f) { return dev.sendReport(0, f); } }, { timeoutMs: 3000 });
+      dev.oninputreport = function (ev) { link.feed(new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength)); };
+      link.onLog = function (p) { log("[boot] " + new TextDecoder().decode(p).replace(/\0.*$/, ""), "dim"); };
+      S.bootLink = link;
+      setMode("bootloader");
+      setStatus("connected (bootloader)", "ok");
+      log("connected: " + dev.productName + " (bootloader)");
+      $("hint").textContent = "In DFU mode: pick a firmware file and press Flash firmware.";
+    });
+  }
+
+  function open(dev) {
+    var gen = ++S.gen;
+    var mode = classify(dev);
+    if (mode === "app") return openApp(dev, gen).catch(fail);
+    if (mode === "bootloader") return openBoot(dev, gen).catch(fail);
+    setStatus("unknown device", "bad");
+    log("not a K2: product=" + dev.productName + " serial=" + dev.serialNumber, "err");
+  }
+
+  function fail(e) {
+    setStatus("error", "bad");
+    log("error: " + (e && e.message ? e.message : e), "err");
+  }
+
+  $("connect").onclick = async function () {
+    if (S.dev) {
+      try { await S.dev.close(); } catch (e) {}
+      S.dev = null; S.appLink = null; S.bootLink = null;
+      setStatus("not connected"); setMode(null);
+      $("fw").textContent = $("git").textContent = "—";
+      log("disconnected", "dim");
+      return;
+    }
+    if (!("hid" in navigator)) {
+      log("WebHID is not available: use Chrome or Edge, on https (github.io counts) or http://localhost.", "err");
+      return;
+    }
+    try {
+      var devs = await navigator.hid.requestDevice({ filters: [{ vendorId: VID, productId: PID }] });
+      if (devs.length) await open(devs[0]);
+    } catch (e) { fail(e); }
+  };
+
+  $("file").onchange = function () {
+    var f = this.files[0];
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () {
+      try {
+        S.fw = K2Boot.Firmware.load(new Uint8Array(rd.result));
+        log("loaded " + f.name + ": app " + S.fw.app.length + " B, container " + S.fw.source.length +
+            " B, version " + S.fw.version + " (" + S.fw.dateStr + "), " +
+            S.fw.eraseAddresses().length + " sectors to erase", "ok");
+        if (K2Boot.APP_START + S.fw.source.length > K2Boot.FS_START)
+          log("note: the image reaches the littlefs volume at 0x" + K2Boot.FS_START.toString(16) +
+              "; stored sessions and settings are lost and the K2 formats a new volume at the next boot");
+        $("flash").disabled = !(S.mode === "app" || S.mode === "bootloader");
+      } catch (e) {
+        S.fw = null; $("flash").disabled = true;
+        log("invalid firmware file: " + e.message, "err");
+      }
+    };
+    rd.readAsArrayBuffer(f);
+  };
+
+  async function enterDfu() {
+    log("asking the app to enter the bootloader (DFU_ENTER)...");
+    await S.appLink.call(K2Proto.CMD.DFU_ENTER, Uint8Array.from(K2Proto.DFU_MAGIC));
+    log("DFU_ENTER accepted; the K2 is resetting.", "ok");
+  }
+
+  $("flash").onclick = async function () {
+    if (!S.fw || !S.dev) return;
+    $("flash").disabled = true;
+    try {
+      if (S.mode === "app") {
+        await enterDfu();
+        setStatus("rebooting into bootloader — connect again", "warn");
+        log("click Connect and pick the WITRN.K2 device to continue flashing", "warn");
+        try { await S.dev.close(); } catch (e) {}
+        S.dev = null; S.appLink = null; setMode(null);
+        return;   // the user clicks Connect on the re-enumerated bootloader, then Flash again
+      }
+      var fw = S.fw, boot = S.bootLink;
+      setStatus("flashing...", "warn");
+      var ident = await boot.flash(fw, {
+        progress: function (stage, cur, tot) {
+          setStage(stage + (tot ? " " + cur + " / " + tot : ""));
+          setBar(cur, tot);
+          if (stage === "erase" || stage === "write" || stage === "verify") log(stage + ": " + cur + " / " + tot, "dim");
+        },
+      });
+      setStatus("flashed OK", "ok");
+      setBar(1, 1);
+      log("flashed " + fw.source.length + " B container (" + fw.app.length + " B app, v" + fw.version + "). " +
+          "was: v" + ident.currentVersion + " marker " + ident.currentMarker, "ok");
+      log("done — the K2 reboots into the new firmware. Reconnect to verify.", "ok");
+    } catch (e) {
+      setStatus("flash failed", "bad");
+      log("flash failed: " + (e && e.message ? e.message : e), "err");
+    } finally {
+      $("flash").disabled = !S.fw || !S.mode;
+    }
+  };
+
+  // Auto-open a previously granted device; watch hot-plug.
+  if ("hid" in navigator) {
+    navigator.hid.addEventListener("disconnect", function (ev) {
+      if (S.dev === ev.device) {
+        log("device disconnected", "dim");
+        S.dev = null; S.appLink = null; S.bootLink = null;
+        setStatus("not connected"); setMode(null);
+      }
+    });
+    navigator.hid.getDevices().then(function (devs) {
+      var d = devs.filter(function (x) { return x.vendorId === VID && x.productId === PID; })[0];
+      if (d) open(d);
+    });
+  } else {
+    setStatus("WebHID unavailable", "bad");
+    log("WebHID is not available: use Chrome or Edge, on https (github.io counts) or http://localhost.", "err");
+  }
+})();
+</script>
+</body>
+</html>

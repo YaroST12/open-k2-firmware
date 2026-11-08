@@ -1,0 +1,114 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later
+     Copyright (C) 2026 Yaraslau Furman -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>Open-K2 results</title>
+<style>
+:root {
+  color-scheme: dark light;
+  --bg: #0f1216; --panel: #181d23; --rule: #2a313a; --text: #e8ecf0; --dim: #98a2ad; --focus: #4cc9f0;
+  --pass: #3ddc84; --pass-bg: #12301f; --partial: #ffb300; --partial-bg: #3a2b05;
+  --fail: #ff5c5c; --fail-bg: #3c1717; --skip: #98a2ad; --skip-bg: #1d2228;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f6f8; --panel: #ffffff; --rule: #d5dbe1; --text: #14181d; --dim: #55606b; --focus: #0b6e99;
+    --pass: #0b6b32; --pass-bg: #dff5e7; --partial: #7a5200; --partial-bg: #fff0cc;
+    --fail: #a31616; --fail-bg: #fde0e0; --skip: #55606b; --skip-bg: #e9edf0;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 16px 12px 40px; }
+h1 { margin: 0; font-size: 24px; line-height: 1.2; overflow-wrap: anywhere; }
+h2 { margin: 20px 0 8px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+h4 { margin: 0 0 4px; font-size: 15px; }
+.kicker { margin: 0 0 4px; font-size: 13px; color: var(--dim); letter-spacing: .04em; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 8px 0 0; padding: 0; }
+.facts li { border: 1px solid var(--rule); border-radius: 4px; padding: 1px 8px; font-size: 14px; }
+.ident { margin: 10px 0 0; font-size: 13px; color: var(--dim); overflow-wrap: anywhere; }
+.badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; list-style: none; margin: 0; padding: 0; }
+.badge { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); }
+.badge .glyph { font-weight: 700; font-size: 20px; line-height: 1.1; width: 1.1em; text-align: center; flex: none; }
+.badge .body { display: flex; flex-direction: column; min-width: 0; }
+.badge .label { font-weight: 600; overflow-wrap: anywhere; }
+.badge .status { font-size: 13px; color: var(--dim); overflow-wrap: anywhere; }
+.badge.pass { border-color: var(--pass); background: var(--pass-bg); }
+.badge.partial { border-color: var(--partial); background: var(--partial-bg); }
+.badge.fail { border-color: var(--fail); background: var(--fail-bg); }
+.badge.skip { background: var(--skip-bg); }
+.badge.info .glyph:empty { display: none; }
+.pass .glyph, .row.pass dd { color: var(--pass); }
+.partial .glyph, .row.partial dd { color: var(--partial); }
+.fail .glyph, .row.fail dd { color: var(--fail); }
+.skip .glyph, .skip .label { color: var(--skip); }
+.group.pass { border-left-color: var(--pass); } .group.partial { border-left-color: var(--partial); }
+.group.fail { border-left-color: var(--fail); } .group.skip { border-left-color: var(--skip); }
+.section { border-top: 1px solid var(--rule); }
+.section summary { cursor: pointer; padding: 12px 0; font-weight: 600; min-height: 44px; }
+.section[open] summary { color: var(--focus); }
+.group { padding: 4px 0 4px 10px; margin: 0 0 10px; border-left: 4px solid var(--rule); }
+.rows { margin: 0; }
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--rule); }
+.row dt { color: var(--dim); font-size: 14px; flex: none; }
+.row dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.note, .hint { color: var(--dim); font-size: 14px; }
+.callout { border: 1px solid var(--partial); background: var(--partial-bg); border-radius: 6px; padding: 10px 12px; }
+form { margin-top: 24px; border-top: 1px solid var(--rule); padding-top: 12px; }
+label { display: block; font-size: 14px; color: var(--dim); margin-bottom: 4px; }
+textarea { width: 100%; min-height: 72px; padding: 8px; font: 14px/1.3 ui-monospace, Menlo, Consolas, monospace; color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; }
+button { margin-top: 8px; min-height: 44px; padding: 0 18px; font: inherit; font-weight: 600; color: var(--bg); background: var(--focus); border: 0; border-radius: 6px; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+footer { margin-top: 28px; font-size: 13px; color: var(--dim); }
+a { color: var(--focus); }
+</style>
+</head>
+<body>
+<main>
+  <p id="kicker" class="kicker">Open-K2 charger test</p>
+
+  <section id="welcome">
+    <h1>Open-K2 results</h1>
+    <p>Scan the code on the K2 screen with your phone camera to see it here: charger test results, a charger's offers, a cable's e-marker, or the firmware and boot facts. On the K2, open the screen and long-press OK to share it.</p>
+  </section>
+
+  <section id="problem" class="callout" hidden>
+    <strong>This link did not open</strong>
+    <p id="problem-text"></p>
+    <p class="hint">Scan the code again, or paste the whole link below.</p>
+  </section>
+
+  <article id="card" hidden>
+    <h1 id="title"></h1>
+    <ul id="facts" class="facts"></ul>
+    <p id="ident" class="ident"></p>
+    <h2 id="badges-title">What this charger did</h2>
+    <ul id="badges" class="badges"></ul>
+    <h2 id="full-title">Full results</h2>
+    <div id="full"></div>
+  </article>
+
+  <form id="paste-form">
+    <label for="paste">Paste a link from the K2</label>
+    <textarea id="paste" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="The whole link, starting with https"></textarea>
+    <button type="submit">Show results</button>
+  </form>
+
+  <footer>
+    The results are inside the link itself. This page reads them in your browser; nothing is sent anywhere.
+    <a href="https://github.com/YaroST12/open-k2-firmware">Open-K2 firmware</a>
+  </footer>
+</main>
+<script src="card.js"></script>
+<script src="records.js"></script>
+<script src="view.js"></script>
+</body>
+</html>

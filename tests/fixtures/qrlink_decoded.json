@@ -1,0 +1,675 @@
+{
+ "boot": {
+  "data": {
+   "cc1_mv": 3290,
+   "cc2_mv": 0,
+   "fw": "1.0",
+   "git": "fcb3128-dirty",
+   "keys": 8,
+   "keys_pressed": [
+    "PLUS"
+   ],
+   "mark": null,
+   "mode": "plus",
+   "move": {
+    "cc1_mv": 3300,
+    "cc2_mv": 150,
+    "from": 2,
+    "ms": 650,
+    "to": 1,
+    "vbus_mv": 0
+   },
+   "notes": [
+    {
+     "kind": "sw0",
+     "ms": 3,
+     "val": 2
+    },
+    {
+     "kind": "cc",
+     "ms": 4,
+     "val": 3
+    },
+    {
+     "kind": "sw0",
+     "ms": 652,
+     "val": 1
+    }
+   ],
+   "notes_not_shown": 0,
+   "pa": 13,
+   "pin": {
+    "boot": 1,
+    "inherited": false,
+    "initial": 2,
+    "now": 1
+   },
+   "pins_low": [
+    "PLUS"
+   ],
+   "plus_held": true,
+   "proto": 1,
+   "readbacks": [
+    {
+     "ms": 50,
+     "sw0": 2
+    },
+    {
+     "ms": 600,
+     "sw0": 2
+    },
+    {
+     "ms": 3001,
+     "sw0": 1
+    }
+   ],
+   "reset_flags": 603979776,
+   "t_ms": 12345,
+   "vbus_mv": 5012,
+   "warm": false
+  },
+  "kind": "boot"
+ },
+ "boot_lz": {
+  "data": {
+   "cc1_mv": 3290,
+   "cc2_mv": 0,
+   "fw": "1.0",
+   "git": "fcb3128-dirty",
+   "keys": 8,
+   "keys_pressed": [
+    "PLUS"
+   ],
+   "mark": null,
+   "mode": "plus",
+   "move": {
+    "cc1_mv": 3300,
+    "cc2_mv": 150,
+    "from": 2,
+    "ms": 650,
+    "to": 1,
+    "vbus_mv": 0
+   },
+   "notes": [
+    {
+     "kind": "sw0",
+     "ms": 3,
+     "val": 2
+    },
+    {
+     "kind": "cc",
+     "ms": 4,
+     "val": 3
+    },
+    {
+     "kind": "sw0",
+     "ms": 652,
+     "val": 1
+    }
+   ],
+   "notes_not_shown": 0,
+   "pa": 13,
+   "pin": {
+    "boot": 1,
+    "inherited": false,
+    "initial": 2,
+    "now": 1
+   },
+   "pins_low": [
+    "PLUS"
+   ],
+   "plus_held": true,
+   "proto": 1,
+   "readbacks": [
+    {
+     "ms": 50,
+     "sw0": 2
+    },
+    {
+     "ms": 600,
+     "sw0": 2
+    },
+    {
+     "ms": 3001,
+     "sw0": 1
+    }
+   ],
+   "reset_flags": 603979776,
+   "t_ms": 12345,
+   "vbus_mv": 5012,
+   "warm": false
+  },
+  "kind": "boot"
+ },
+ "emk_clone": {
+  "data": {
+   "name": "OnePlus 100W mag",
+   "quirks": {
+    "flags": 3,
+    "msgid_echo": true,
+    "rows": [],
+    "sop_pp": true,
+    "unmatched": "Nak"
+   },
+   "record": {
+    "checksum_ok": true,
+    "max_a": 5,
+    "max_v": 30,
+    "name": "[OnePlus mag]",
+    "pid": "0x1196",
+    "product_type": "passive cable",
+    "spec_rev": 2,
+    "speed": "USB 2.0",
+    "termination": 1,
+    "vdos": [
+     "0xFF00A041",
+     "0x180022D9",
+     "0x00000000",
+     "0x11960000",
+     "0x60082A40"
+    ],
+    "vid": "0x22D9"
+   }
+  },
+  "kind": "emarker"
+ },
+ "emk_plain": {
+  "data": {
+   "name": "EPR 50V 5A",
+   "record": {
+    "checksum_ok": true,
+    "max_a": 5,
+    "max_v": 50,
+    "name": "[EPR 50V 5A]",
+    "pid": "0x4051",
+    "product_type": "passive cable",
+    "spec_rev": 2,
+    "speed": "USB 2.0",
+    "termination": 0,
+    "vdos": [
+     "0xFF00A041",
+     "0x18002B01",
+     "0x00000910",
+     "0x40516910",
+     "0x000A2640"
+    ],
+    "vid": "0x2B01"
+   }
+  },
+  "kind": "emarker"
+ },
+ "emk_rows2": {
+  "data": {
+   "name": "OnePlus 100W mag",
+   "quirks": {
+    "flags": 3,
+    "msgid_echo": true,
+    "rows": [
+     {
+      "hdr_mask": "0xFFFF80DF",
+      "hdr_val": "0x22D98010",
+      "kind": "Ack",
+      "nrep": 3,
+      "nreq": 0,
+      "rep": [
+       "0xAAAA0000",
+       "0xBBBB0000",
+       "0xCCCC0000"
+      ],
+      "req_mask": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "req_val": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "sop": "P"
+     },
+     {
+      "hdr_mask": "0xFFFF80DF",
+      "hdr_val": "0x22D98011",
+      "kind": "Ack",
+      "nrep": 3,
+      "nreq": 0,
+      "rep": [
+       "0xAAAA0001",
+       "0xBBBB0001",
+       "0xCCCC0001"
+      ],
+      "req_mask": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "req_val": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "sop": "PP"
+     }
+    ],
+    "sop_pp": true,
+    "unmatched": "Nak"
+   },
+   "record": {
+    "checksum_ok": true,
+    "max_a": 5,
+    "max_v": 30,
+    "name": "[OnePlus mag]",
+    "pid": "0x1196",
+    "product_type": "passive cable",
+    "spec_rev": 2,
+    "speed": "USB 2.0",
+    "termination": 1,
+    "vdos": [
+     "0xFF00A041",
+     "0x180022D9",
+     "0x00000000",
+     "0x11960000",
+     "0x60082A40"
+    ],
+    "vid": "0x22D9"
+   }
+  },
+  "kind": "emarker"
+ },
+ "emk_rows4": {
+  "data": {
+   "name": "OnePlus 100W mag",
+   "quirks": {
+    "flags": 3,
+    "msgid_echo": true,
+    "rows": [
+     {
+      "hdr_mask": "0xFFFF80DF",
+      "hdr_val": "0x22D98010",
+      "kind": "Ack",
+      "nrep": 3,
+      "nreq": 0,
+      "rep": [
+       "0xAAAA0000",
+       "0xBBBB0000",
+       "0xCCCC0000"
+      ],
+      "req_mask": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "req_val": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "sop": "P"
+     },
+     {
+      "hdr_mask": "0xFFFF80DF",
+      "hdr_val": "0x22D98011",
+      "kind": "Ack",
+      "nrep": 3,
+      "nreq": 0,
+      "rep": [
+       "0xAAAA0001",
+       "0xBBBB0001",
+       "0xCCCC0001"
+      ],
+      "req_mask": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "req_val": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "sop": "PP"
+     },
+     {
+      "hdr_mask": "0xFFFF80DF",
+      "hdr_val": "0x22D98012",
+      "kind": "Ack",
+      "nrep": 3,
+      "nreq": 0,
+      "rep": [
+       "0xAAAA0002",
+       "0xBBBB0002",
+       "0xCCCC0002"
+      ],
+      "req_mask": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "req_val": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "sop": "P"
+     },
+     {
+      "hdr_mask": "0xFFFF80DF",
+      "hdr_val": "0x22D98013",
+      "kind": "Ack",
+      "nrep": 3,
+      "nreq": 0,
+      "rep": [
+       "0xAAAA0003",
+       "0xBBBB0003",
+       "0xCCCC0003"
+      ],
+      "req_mask": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "req_val": [
+       "0x00000000",
+       "0x00000000"
+      ],
+      "sop": "PP"
+     }
+    ],
+    "sop_pp": true,
+    "unmatched": "Nak"
+   },
+   "record": {
+    "checksum_ok": true,
+    "max_a": 5,
+    "max_v": 30,
+    "name": "[OnePlus mag]",
+    "pid": "0x1196",
+    "product_type": "passive cable",
+    "spec_rev": 2,
+    "speed": "USB 2.0",
+    "termination": 1,
+    "vdos": [
+     "0xFF00A041",
+     "0x180022D9",
+     "0x00000000",
+     "0x11960000",
+     "0x60082A40"
+    ],
+    "vid": "0x22D9"
+   }
+  },
+  "kind": "emarker"
+ },
+ "identity": {
+  "data": {
+   "dirty": true,
+   "fw": "1.0",
+   "git": "fcb3128-dirty",
+   "proto": 1
+  },
+  "kind": "identity"
+ },
+ "identity_lz": {
+  "data": {
+   "dirty": true,
+   "fw": "1.0",
+   "git": "fcb3128-dirty",
+   "proto": 1
+  },
+  "kind": "identity"
+ },
+ "pdcaps_epr": {
+  "data": {
+   "active_cc": "CC2",
+   "epr": true,
+   "epr_partial": false,
+   "header": "0x5BB1",
+   "pdos": [
+    {
+     "flags": [
+      "DRP",
+      "unconstrained",
+      "DRD",
+      "EPR"
+     ],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 5000,
+     "pos": 1,
+     "raw": "0x2A81912C",
+     "text": "fixed 5 V 3 A [DRP,unconstrained,DRD,EPR]"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 9000,
+     "pos": 2,
+     "raw": "0x0002D12C",
+     "text": "fixed 9 V 3 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 12000,
+     "pos": 3,
+     "raw": "0x0003C12C",
+     "text": "fixed 12 V 3 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 5000,
+     "mv": 15000,
+     "pos": 4,
+     "raw": "0x0004B1F4",
+     "text": "fixed 15 V 5 A"
+    },
+    {
+     "kind": "pps",
+     "max_ma": 5000,
+     "max_mv": 21000,
+     "min_mv": 3300,
+     "pos": 5,
+     "power_limited": false,
+     "raw": "0xC1A42164",
+     "text": "PPS 3.3-21 V 5 A"
+    },
+    {
+     "kind": "empty",
+     "pos": 6,
+     "raw": "0x00000000",
+     "text": "empty (all-zero word, padding)"
+    },
+    {
+     "kind": "empty",
+     "pos": 7,
+     "raw": "0x00000000",
+     "text": "empty (all-zero word, padding)"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 5000,
+     "mv": 28000,
+     "pos": 8,
+     "raw": "0x0008C1F4",
+     "text": "fixed 28 V 5 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 4000,
+     "mv": 36000,
+     "pos": 9,
+     "raw": "0x000B4190",
+     "text": "fixed 36 V 4 A"
+    },
+    {
+     "kind": "epr-avs",
+     "max_mv": 28000,
+     "min_mv": 15000,
+     "pdp_w": 140,
+     "pos": 10,
+     "raw": "0xD230968C",
+     "text": "EPR-AVS 15-28 V 140 W"
+    }
+   ],
+   "spec_rev": 2
+  },
+  "kind": "pdcaps"
+ },
+ "pdcaps_epr_lz": {
+  "data": {
+   "active_cc": "CC2",
+   "epr": true,
+   "epr_partial": false,
+   "header": "0x5BB1",
+   "pdos": [
+    {
+     "flags": [
+      "DRP",
+      "unconstrained",
+      "DRD",
+      "EPR"
+     ],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 5000,
+     "pos": 1,
+     "raw": "0x2A81912C",
+     "text": "fixed 5 V 3 A [DRP,unconstrained,DRD,EPR]"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 9000,
+     "pos": 2,
+     "raw": "0x0002D12C",
+     "text": "fixed 9 V 3 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 12000,
+     "pos": 3,
+     "raw": "0x0003C12C",
+     "text": "fixed 12 V 3 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 5000,
+     "mv": 15000,
+     "pos": 4,
+     "raw": "0x0004B1F4",
+     "text": "fixed 15 V 5 A"
+    },
+    {
+     "kind": "pps",
+     "max_ma": 5000,
+     "max_mv": 21000,
+     "min_mv": 3300,
+     "pos": 5,
+     "power_limited": false,
+     "raw": "0xC1A42164",
+     "text": "PPS 3.3-21 V 5 A"
+    },
+    {
+     "kind": "empty",
+     "pos": 6,
+     "raw": "0x00000000",
+     "text": "empty (all-zero word, padding)"
+    },
+    {
+     "kind": "empty",
+     "pos": 7,
+     "raw": "0x00000000",
+     "text": "empty (all-zero word, padding)"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 5000,
+     "mv": 28000,
+     "pos": 8,
+     "raw": "0x0008C1F4",
+     "text": "fixed 28 V 5 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 4000,
+     "mv": 36000,
+     "pos": 9,
+     "raw": "0x000B4190",
+     "text": "fixed 36 V 4 A"
+    },
+    {
+     "kind": "epr-avs",
+     "max_mv": 28000,
+     "min_mv": 15000,
+     "pdp_w": 140,
+     "pos": 10,
+     "raw": "0xD230968C",
+     "text": "EPR-AVS 15-28 V 140 W"
+    }
+   ],
+   "spec_rev": 2
+  },
+  "kind": "pdcaps"
+ },
+ "pdcaps_spr": {
+  "data": {
+   "active_cc": "CC1",
+   "epr": false,
+   "epr_partial": false,
+   "header": "0x51A1",
+   "pdos": [
+    {
+     "flags": [
+      "unconstrained"
+     ],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 5000,
+     "pos": 1,
+     "raw": "0x0801912C",
+     "text": "fixed 5 V 3 A [unconstrained]"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 9000,
+     "pos": 2,
+     "raw": "0x0002D12C",
+     "text": "fixed 9 V 3 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 12000,
+     "pos": 3,
+     "raw": "0x0003C12C",
+     "text": "fixed 12 V 3 A"
+    },
+    {
+     "flags": [],
+     "kind": "fixed",
+     "ma": 3000,
+     "mv": 15000,
+     "pos": 4,
+     "raw": "0x0004B12C",
+     "text": "fixed 15 V 3 A"
+    },
+    {
+     "kind": "pps",
+     "max_ma": 3200,
+     "max_mv": 600,
+     "min_mv": 2900,
+     "pos": 5,
+     "power_limited": false,
+     "raw": "0xC00C1DC0",
+     "text": "PPS 2.9-0.6 V 3.2 A"
+    }
+   ],
+   "spec_rev": 2
+  },
+  "kind": "pdcaps"
+ }
+}

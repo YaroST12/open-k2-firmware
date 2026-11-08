@@ -1,0 +1,794 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+// The share view (ui_share.hpp): the layout rule inside a rectangle, the page through the real Ui (open, auto-cycle, paging,
+// BACK), the panel read back by an independent QR reader in every rotation, and the Share action of each opener.
+#include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <string_view>
+
+#include "fake_lcd.h"
+#include <cstdarg>
+
+#include "k2/core/binlog.hpp"
+#include "k2/pd/emk_quirk.hpp"
+#include "k2/core/version.hpp"
+#include "k2/core/lz.hpp"
+#include "k2/pd/pd_source.hpp"
+#include "k2/ui/qrshare.hpp"
+#include "k2/ui/qrshare_link.hpp"
+#include "k2/ui/qrshare_records.hpp"
+#include "k2/ui/qrview.hpp"
+#include "k2/chargertest/report_card_hw.hpp"
+#include "qr_decode.hpp"
+#include "qrshare_fixtures.h"
+#include "test_util.h"
+#include "k2/ui/ui.hpp"
+#include "ui_nav.h"
+#include "ui_stubs.h"
+
+#define CHECK(cond) CHECK_EQ((cond) ? 1 : 0, 1)
+
+using namespace k2;
+namespace qs = k2::qrshare;
+namespace rec = k2::qrshare::records;
+namespace rc = k2::report_card;
+namespace lk = k2::qrshare::link;
+
+// ---- the layout rule -------------------------------------------------------------------------------------------------------
+
+static void test_plan_in() {
+    const qrview::Area portrait{0, 0, 224, 240}, landscape{0, 0, 240, 224};
+    // Version 11 (61 modules) is what a 510-byte record needs per part: 3 px per module in either orientation.
+    constexpr int th = SharePage::kTextH;
+    qrview::Plan p = qrview::plan_in(portrait, 61, th, 3);
+    CHECK_EQ(p.px, 3); CHECK_EQ(p.box, 207); CHECK_EQ(p.x0, 8); CHECK_EQ(p.y0, 0);
+    p = qrview::plan_in(landscape, 61, th, 3);
+    CHECK_EQ(p.px, 3); CHECK_EQ(p.box, 207); CHECK_EQ(p.x0, 16);
+    // Version 12 (65): 3 px only fits the portrait area; the landscape one drops to 2 px, and refuses at a 3 px floor.
+    p = qrview::plan_in(portrait, 65, th, 3);
+    CHECK_EQ(p.px, 3); CHECK_EQ(p.box, 219);
+    p = qrview::plan_in(landscape, 65, th, 3);
+    CHECK_EQ(p.px, 0);
+    p = qrview::plan_in(landscape, 65, th, 2);
+    CHECK_EQ(p.px, 2); CHECK_EQ(p.box, 146);
+    // An area that sits right of the panel's left edge keeps the box inside it.
+    const qrview::Area right{16, 0, 224, 240};
+    p = qrview::plan_in(right, 41, th, 3);
+    CHECK_EQ(p.x0, 16 + (224 - p.box) / 2);
+    CHECK_EQ(qrview::plan_in(portrait, 0, th, 3).px, 0);
+    // The whole-panel plan is unchanged.
+    CHECK_EQ(qrview::plan(57, 14).px, qrview::plan_in(qrview::Area{}, 57, 14, qrview::kMinModulePx).px);
+}
+
+// ---- reading the panel back --------------------------------------------------------------------------------------------------
+
+// The code on the panel -> the reader -> the frame text of the part on show; "" when it does not read.
+static std::string read_panel(const Ui& ui) {
+    const int n = ui.share().modules();
+    const qrview::Plan p = qrview::plan_in(ui.share().area(), n, SharePage::kTextH, SharePage::kMinModulePx);
+    if (n == 0 || p.px == 0) return "";
+    const qrdec::Result r = qrdec::decode(n, [&](int x, int y) {
+        const int px = p.x0 + (x + qrview::kQuietModules) * p.px + p.px / 2;
+        const int py = p.y0 + (y + qrview::kQuietModules) * p.px + p.px / 2;
+        return g_panel[py * 240 + px] == 0x0000;
+    });
+    return r.ok ? r.text : "";
+}
+
+static void fill_record(Ui& ui, std::size_t len) {
+    auto b = ui.share_buffer();
+    unsigned x = 11;   // random-looking bytes: they do not pack, so the page keeps the record as built
+    for (std::size_t i = 0; i < len; i++) { x = x * 1103515245u + 12345u; b[i] = static_cast<std::uint8_t>(x >> 16); }
+}
+
+static std::string label(Ui& ui, Button b) {
+    static char buf[24];
+    label_text(buf, ui.labels().b[int(b)], label_max_chars(b));
+    return buf;
+}
+
+// Feeds the part on the panel to the assembler; its Result.
+static qs::Assembler::Result feed(Ui& ui, qs::Assembler& a) {
+    const std::string t = read_panel(ui);
+    if (t.empty()) return qs::Assembler::Result::Bad;
+    return a.feed(t);
+}
+
+// The link form on the panel -> the record it carries (inflated when the link says 'z'); 0 when the code does not read, is not
+// a link of this base and version, or carries a bad record. `kind` gets the link's kind letter.
+static char link_kind = 0;
+static std::size_t read_link(const Ui& ui, std::span<std::uint8_t> out) {
+    const std::string t = read_panel(ui);
+    std::string_view s = t;
+    link_kind = 0;
+    if (s.substr(0, lk::kBase.size()) != lk::kBase) return 0;
+    s.remove_prefix(lk::kBase.size());
+    if (s.size() < 3 || s[0] != lk::kVersion || s[2] != '.') return 0;
+    link_kind = s[1];
+    s.remove_prefix(3);
+    std::array<std::uint8_t, 256> raw{};
+    std::size_t n = 0;
+    unsigned acc = 0, bits = 0;
+    for (const char c : s) {
+        const char* a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        const char* p = std::strchr(a, c);
+        if (c == 0 || !p) return 0;
+        acc = acc << 6 | unsigned(p - a);
+        bits += 6;
+        if (bits >= 8) { bits -= 8; raw[n++] = std::uint8_t(acc >> bits); acc &= (1u << bits) - 1; }
+    }
+    if (std::strchr("cepib", link_kind)) {   // lowercase: the record as built
+        std::memcpy(out.data(), raw.data(), n);
+        return n;
+    }
+    if (!std::strchr("zEPIB", link_kind)) return 0;   // uppercase (and z, the card's): an LZ4 block
+    const std::size_t m = lz::decompress({raw.data(), n}, out);
+    return m == lz::kError ? 0 : m;
+}
+
+// The type a link's kind letter names ("cz" card, "eE" cable, "pP" source caps, "iI" identity, "bB" boot info).
+static qs::Type link_type(char kind) {
+    switch (kind) {
+        case 'c': case 'z': return qs::Type::Card;
+        case 'e': case 'E': return qs::Type::Emarker;
+        case 'p': case 'P': return qs::Type::PdCaps;
+        case 'i': case 'I': return qs::Type::Identity;
+        case 'b': case 'B': return qs::Type::BootInfo;
+        default: return qs::Type::Log;   // no link kind: never a link
+    }
+}
+
+// K2_DUMP=<dir>: the panel as it is now, for tools/panel2png.py (docs and the renders of a change).
+static void dump_panel(const char* name) {
+    const char* d = std::getenv("K2_DUMP");
+    if (!d || !name) return;
+    char path[256];
+    std::snprintf(path, sizeof path, "%s/%s.panel", d, name);
+    if (FILE* f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, 240 * 240, f); std::fclose(f); }
+}
+
+// ---- the page ----------------------------------------------------------------------------------------------------------------
+
+static void test_two_parts(uint8_t rotation) {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.set_rotation(rotation, 1000);
+    ui.tick(1100);
+    fill_record(ui, 510);
+    std::array<std::uint8_t, 510> want;
+    for (std::size_t i = 0; i < want.size(); i++) want[i] = ui.share_buffer()[i];
+
+    ui.tick(2000);
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Test cable", 510, 2000));
+    CHECK(ui.menu() == Menu::Share);
+    CHECK_EQ(int(ui.menu_depth()), 1);
+    CHECK_EQ(int(ui.page_index()), int(kMenuPageBase) + int(Menu::Share));
+    CHECK_EQ(int(ui.share().parts()), 2);
+    CHECK(ui.share().cycling());
+    CHECK_EQ(int(ui.share().index()), 0);
+    CHECK(ui.share().title() == "Test cable");
+    CHECK_STR(label(ui, Button::Ok).c_str(), "Hold");
+    CHECK_STR(label(ui, Button::Minus).c_str(), "Prev");
+    CHECK_STR(label(ui, Button::Plus).c_str(), "Next");
+    CHECK(ui.share().modules() >= 21);
+
+    // Part 1 on the panel reads and is part 0 of the record.
+    std::array<std::uint8_t, 600> got{};
+    qs::Assembler as(got);
+    CHECK(feed(ui, as) == qs::Assembler::Result::Accepted);
+    CHECK_EQ(int(as.count()), 2);
+    CHECK(as.type() == qs::Type::Emarker);
+
+    // No repaint, no new code, until the cycle time passes.
+    const unsigned enc = ui.share().encodes(), pnt = ui.share().paints();
+    for (uint32_t t = 2100; t < 2000 + SharePage::kCycleMs; t += 100) ui.tick(t);
+    CHECK_EQ(int(ui.share().encodes()), int(enc));
+    CHECK_EQ(int(ui.share().paints()), int(pnt));
+    CHECK_EQ(int(ui.share().index()), 0);
+
+    // The next part comes up by itself, once.
+    ui.tick(2000 + SharePage::kCycleMs + 100);
+    CHECK_EQ(int(ui.share().index()), 1);
+    CHECK_EQ(int(ui.share().encodes()), int(enc) + 1);
+    CHECK_EQ(int(ui.share().paints()), int(pnt) + 1);
+    CHECK(feed(ui, as) == qs::Assembler::Result::Done);
+    CHECK_EQ(int(as.record().size()), 510);
+    CHECK(std::memcmp(as.record().data(), want.data(), 510) == 0);
+
+    // A hand on [+] stops the cycling and stays on the part chosen.
+    ui.on_button(Button::Plus, ButtonEvent::Short, 3800);
+    CHECK_EQ(int(ui.share().index()), 0);
+    CHECK(!ui.share().cycling());
+    CHECK_STR(label(ui, Button::Ok).c_str(), "Auto");
+    qs::Assembler again(got);
+    CHECK(feed(ui, again) == qs::Assembler::Result::Accepted);
+    const unsigned enc2 = ui.share().encodes();
+    for (uint32_t t = 3900; t < 12000; t += 100) ui.tick(t);
+    CHECK_EQ(int(ui.share().index()), 0);
+    CHECK_EQ(int(ui.share().encodes()), int(enc2));
+    ui.on_button(Button::Minus, ButtonEvent::Short, 12100);
+    CHECK_EQ(int(ui.share().index()), 1);
+    CHECK(feed(ui, again) == qs::Assembler::Result::Done);
+
+    // OK resumes the cycling.
+    ui.on_button(Button::Ok, ButtonEvent::Short, 12200);
+    CHECK(ui.share().cycling());
+    ui.tick(12200 + SharePage::kCycleMs + 100);
+    CHECK_EQ(int(ui.share().index()), 0);
+
+    // A repaint (capture strip, resync) draws the same part again (it encodes it once more: the workspace is not kept).
+    const unsigned enc3 = ui.share().encodes();
+    ui.resync(15000);
+    CHECK_EQ(int(ui.share().encodes()), int(enc3) + 1);
+    qs::Assembler third(got);
+    CHECK(feed(ui, third) == qs::Assembler::Result::Accepted);
+
+    ui.on_button(Button::Back, ButtonEvent::Short, 16000);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+    CHECK(ui.menu() == Menu::Count);
+}
+
+static void test_one_part_and_refusals() {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.tick(1100);
+    CHECK(!ui.open_share(qs::Type::Card, 1, "none", 0, 1200));        // nothing built
+    CHECK(!ui.open_share(qs::Type::Card, 1, "big", SharePage::kBuffer + 1, 1200));
+    CHECK_EQ(int(ui.menu_depth()), 0);
+
+    // A failed open leaves the page without a record. The capture and rotation tests push every menu, so such a page says
+    // "Nothing to share" and takes every key without crashing.
+    CHECK(ui.push_menu(Menu::Share, 1250));
+    CHECK_EQ(int(ui.share().parts()), 0);
+    CHECK_EQ(int(ui.share().modules()), 0);
+    ui.tick(1300);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1310);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 1320);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 1330);
+    ui.on_button(Button::Back, ButtonEvent::Short, 1340);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+
+    fill_record(ui, 300);
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "A very long card name that does not fit the line", 300, 1300));   // too big for a link: just one code
+    CHECK_EQ(int(ui.share().parts()), 1);
+    CHECK(!ui.share().has_link_form());
+    CHECK(!ui.share().link());
+    CHECK(!ui.share().cycling());
+    CHECK_EQ(int(ui.share().title().size()), int(SharePage::kTitleMax));
+    CHECK_STR(label(ui, Button::Ok).c_str(), "");
+    CHECK_STR(label(ui, Button::Plus).c_str(), "");
+    std::array<std::uint8_t, 600> got{};
+    qs::Assembler as(got);
+    CHECK(feed(ui, as) == qs::Assembler::Result::Done);
+    CHECK_EQ(int(as.record().size()), 300);
+    const unsigned pnt = ui.share().paints();
+    for (uint32_t t = 1400; t < 9000; t += 100) ui.tick(t);
+    CHECK_EQ(int(ui.share().paints()), int(pnt));          // a steady single code is never redrawn
+    ui.on_button(Button::Plus, ButtonEvent::Short, 9100);   // no parts to step: nothing happens
+    CHECK_EQ(int(ui.share().index()), 0);
+    CHECK_EQ(int(ui.share().paints()), int(pnt));
+    ui.on_button(Button::Back, ButtonEvent::Short, 9200);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+}
+
+// ---- the openers ---------------------------------------------------------------------------------------------------------------
+
+static bool last_packed = false;   // read_record(): the code carried an LZ4 block
+
+// The record the share view holds, read back from the panel (every part, part 0 on show to start with) into `out`; its
+// length, 0 when a part does not read.
+// A packed record (the LZ4 flag) is inflated, so the openers' tests compare the record the builder made.
+// A record that opens as its link form is switched to the K2 data frames first (OK) and stays there: the frames are what this
+// reads; read_link() reads the link.
+static std::size_t read_record(Ui& ui, std::span<std::uint8_t> out, qs::Type& type) {
+    static std::array<std::uint8_t, qs::kMaxRecord> joined;
+    if (ui.share().link()) ui.on_button(Button::Ok, ButtonEvent::Short, 19990);
+    qs::Assembler as(joined);
+    const unsigned parts = ui.share().parts();
+    for (unsigned i = 0; i < parts; i++) {
+        if (i != 0) ui.on_button(Button::Plus, ButtonEvent::Short, 20000 + i);   // stops the cycling and steps
+        const auto r = feed(ui, as);
+        if (r != qs::Assembler::Result::Accepted && r != qs::Assembler::Result::Done) return 0;
+    }
+    type = as.type();
+    if (!as.complete()) return 0;
+    last_packed = as.packed();
+    if (!as.packed()) {
+        std::memcpy(out.data(), as.record().data(), as.record().size());
+        return as.record().size();
+    }
+    const std::size_t n = lz::decompress(as.record(), out);
+    return n == lz::kError ? 0 : n;
+}
+
+static emk_quirk::Quirks eight_rows() {
+    emk_quirk::Quirks q;
+    q.flags = emk_quirk::kQSopPP | emk_quirk::kQMsgIdEcho;
+    q.unmatched = emk_quirk::Unmatched::Nak;
+    for (unsigned i = 0; i < emk_quirk::kMaxRows; i++) {
+        const std::uint32_t w[3] = {0xAAAA0000u + i, 0xBBBB0000u + i, 0xCCCC0000u + i};
+        emk_quirk::add_row(q, emk_quirk::svdm_row(0x22D9, std::uint8_t(16 + i), emk_quirk::Kind::Ack, w,
+                                                   i & 1 ? emk_quirk::kSopPP : emk_quirk::kSopP));
+    }
+    return q;
+}
+
+static void test_emarker_opener() {
+    const auto old = g_stub;
+    g_stub = {};
+    g_stub.em.valid = true; g_stub.em.num_vdos = 5; g_stub.em.spec_rev = 2;
+    g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
+    emlib::Entry saved;   // a saved clone with the full quirk table: the 510-byte record, two parts
+    saved.seq = 1; saved.version = 1;
+    saved.rec = emrec::make({g_stub.em.raw_vdos.data(), 5}, 2);
+    std::snprintf(saved.name.data(), saved.name.size(), "OnePlus 100W mag");
+    g_stub.lib = {saved};
+    g_stub.lib_quirks = {{1, eight_rows()}};
+    static Ui ui;
+    ui.init(1000); ui.set_rotation(0, 1000); ui.tick(1000); ui.goto_page(static_cast<uint8_t>(Page::Tools), 1100);
+    ui.goto_page(kConnTabAlias + 1, 1200);                 // Connection, Cable tab (the remote's alias index)
+    ui.tick(1350);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1400);    // the action pop-up
+    for (int i = 0; i < 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 1500 + i);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1550);    // Saved cables
+    CHECK(ui.menu() == Menu::Emarker);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1600);    // the cable's card
+    ui.tick(1650);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1700);
+    CHECK(ui.menu() == Menu::Share);
+    CHECK_EQ(int(ui.menu_depth()), 3);
+    CHECK(ui.share().type() == qs::Type::Emarker);
+    CHECK_EQ(int(ui.share().parts()), 1);                    // the 510-byte record packs to a single part
+
+    emlib::Entry e;
+    emk_quirk::Quirks got_q;
+    CHECK(storage::lib_get(1, e, got_q));
+    std::array<std::uint8_t, rec::kMaxEmarker> want{};
+    const std::size_t wl = rec::emarker(e.rec, std::string_view(e.name.data()), got_q, want);
+    CHECK_EQ(int(wl), int(rec::kMaxEmarker));
+    CHECK(ui.share().title() == std::string_view(e.name.data()));
+    std::array<std::uint8_t, 600> got{};
+    qs::Type type = qs::Type::BootInfo;
+    const std::size_t n = read_record(ui, got, type);
+    CHECK_EQ(int(n), int(wl));
+    CHECK(type == qs::Type::Emarker);
+    CHECK(n == wl && std::memcmp(got.data(), want.data(), wl) == 0);
+    CHECK(last_packed);                                      // the code carried the LZ4 block
+
+    if (const char* d = std::getenv("K2_DUMP")) {   // the two-part code of a saved clone, for docs/ui_mockups/share_cable.png
+        while (ui.share().index() != 0) ui.on_button(Button::Plus, ButtonEvent::Short, 22000);
+        char path[256];
+        std::snprintf(path, sizeof path, "%s/k2_share_cable.panel", d);
+        if (FILE* f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, 240 * 240, f); std::fclose(f); }
+    }
+
+    ui.on_button(Button::Back, ButtonEvent::Short, 23000);   // back to the cable's card, one level
+    CHECK(ui.menu() == Menu::Emarker);
+    CHECK_EQ(int(ui.menu_depth()), 2);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].shrt, "Delete");
+    g_stub = old;
+}
+
+static void test_cards_opener() {
+    const auto old = g_stub;
+    g_stub = {};
+    stub_cards_reset();
+    rc::Card c;
+    c.id = {0x1A2B3C4D, 0x0B05, 0x1234};
+    c.num_pdos = 5; c.spec_rev = 2; c.boots = 4; c.fw = 0x0FF2C610; c.uptime_s = 300;
+    c.group[0] = {rc::GV::Pass, 20000, 0, 0};
+    c.group[2] = {rc::GV::Fail, 0, 0, uint8_t(charger_test::Reason::Timeout)};
+    c.n_ranges = 2;
+    c.range[0] = {uint8_t(charger_test::Algorithm::Pps), 0, 33, 210, 200, 130};
+    c.range[1] = {uint8_t(charger_test::Algorithm::SprAvs), 0, 150, 280, 280, 0};
+    rc::set_name(c, "Anker 735");
+    CHECK_EQ(int(rc::hw::put(c)), int(rc::Err::Ok));
+    static Ui ui;
+    ui.init(1000); ui.tick(1000);
+    ui.goto_page(uint8_t(Page::Tools), 1050);
+    ui.push_menu(Menu::Cards, 1100);
+    ui.tick(1150);
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1200);       // the list has no Share
+    CHECK(ui.menu() == Menu::Cards);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1300);      // the card
+    ui.tick(1350);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1400);
+    CHECK(ui.menu() == Menu::Share);
+    CHECK(ui.share().type() == qs::Type::Card);
+    CHECK_EQ(int(ui.share().parts()), 1);
+    CHECK(ui.share().title() == "Anker 735");
+    rc::Card stored;
+    CHECK(rc::hw::find(0x1A2B3C4D, stored));
+    CHECK(ui.share().title() == "Anker 735");
+    std::array<std::uint8_t, rec::kMaxCard> want{};
+    const std::size_t wl = rec::card(stored, want);
+    CHECK(wl > 0);
+    std::array<std::uint8_t, 600> got{};
+    CHECK(ui.share().link());                                // a card opens as the link a phone camera follows
+    CHECK_EQ(int(read_link(ui, got)), int(wl));
+    CHECK(std::memcmp(got.data(), want.data(), wl) == 0);
+    dump_panel("k2_share_card_link");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 1450);      // OK: the K2 data code, for tools/k2_qr.py
+    CHECK(!ui.share().link());
+    dump_panel("k2_share_card_data");
+    qs::Type type = qs::Type::BootInfo;
+    const std::size_t n = read_record(ui, got, type);
+    CHECK(n == wl && std::memcmp(got.data(), want.data(), wl) == 0);
+    CHECK(type == qs::Type::Card);
+    ui.on_button(Button::Back, ButtonEvent::Short, 1500);
+    CHECK(ui.menu() == Menu::Cards);
+    stub_cards_reset();
+    g_stub = old;
+}
+
+static void test_pd_opener() {
+    const auto old = g_stub;
+    g_stub = {};
+    g_stub.caps.valid = true;
+    g_stub.caps.num_pdos = 5;
+    g_stub.caps.active_cc = 1;
+    g_stub.caps.spec_rev = 2;
+    g_stub.caps.raw_header = 0x51A1;
+    const std::uint32_t w[5] = {0x0801912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0xC1DC0 | (0x3u << 30)};
+    for (unsigned i = 0; i < 5; i++) g_stub.caps.pdos[i].raw = w[i];
+    static Ui ui;
+    ui.init(1000); ui.tick(1000);
+    ui.goto_page(kPdPage, 1050);
+    ui.tick(1200);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1300);
+    CHECK(ui.menu() == Menu::Share);
+    CHECK(ui.share().type() == qs::Type::PdCaps);
+    CHECK_EQ(int(ui.share().parts()), 1);
+    std::array<std::uint8_t, rec::kMaxPdCaps> want{};
+    const std::size_t wl = rec::pdcaps(g_stub.caps, want);
+    CHECK_EQ(int(wl), 6 + 4 * 5);
+    std::array<std::uint8_t, 600> got{};
+    CHECK(ui.share().link());                                // the source's PDOs open as a link: the page shows the table
+    CHECK_EQ(int(read_link(ui, got)), int(wl));
+    CHECK(std::memcmp(got.data(), want.data(), wl) == 0);
+    CHECK(link_type(link_kind) == qs::Type::PdCaps);
+    dump_panel("k2_share_pdcaps_link");
+    qs::Type type = qs::Type::BootInfo;
+    const std::size_t n = read_record(ui, got, type);
+    CHECK(n == wl && std::memcmp(got.data(), want.data(), wl) == 0);
+    CHECK(type == qs::Type::PdCaps);
+    ui.on_button(Button::Back, ButtonEvent::Short, 1400);
+    CHECK_EQ(int(ui.menu_depth()), 1);   // back on Connection (Tools > Connection > Share)
+    CHECK(on_pd(ui));
+
+    // The Cable tab has no Share without a cable read, and neither does a page without caps.
+    ui.on_button(Button::Plus, ButtonEvent::Short, 1500);
+    ui.tick(1600);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "");
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1700);
+    CHECK_EQ(int(ui.menu_depth()), 1);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 1800);
+    g_stub.caps.valid = false;
+    ui.tick(1900);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "");
+    ui.on_button(Button::Ok, ButtonEvent::Long, 2000);
+    CHECK_EQ(int(ui.menu_depth()), 1);
+    g_stub = old;
+}
+
+// The charger test's Results: long OK shares the report card the run saved.
+static void test_charger_results_opener() {
+    const auto old = g_stub;
+    g_stub = {}; pd::set_fake(0); stub_cards_reset();
+    g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000;
+    g_stub.caps.valid = true; g_stub.caps.num_pdos = 1; g_stub.caps.active_cc = 1; g_stub.caps.spec_rev = 2;
+    g_stub.caps.pdos[0] = pd::decode_pdo((100u << 10) | 300);
+    g_stub.caps.raw_header = 0x1181;
+    static Ui ui;
+    ui.init(0); ui.set_rotation(0, 0); ui.tick(1000);
+    ui.goto_page(uint8_t(Page::ChargerTest), 1100);
+    auto press = [&](Button b, std::uint32_t t) { ui.on_button(b, ButtonEvent::Short, t); };
+    for (unsigned i = 0; i < charger_test::kMaxSteps; ++i) press(Button::Minus, 1200);
+    press(Button::Ok, 1200);                       // Algorithms -> Cable
+    press(Button::Ok, 1200);                       // Cable -> Review
+    CHECK_EQ(ui.charger_test_stage(), 4);
+    // Before a run there is nothing to share.
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1250);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+    press(Button::Ok, 1300);                       // START: the wait, then the confirm window
+    for (std::uint32_t t = 1320; t < 41320 && ui.charger_test_stage() == 13; t += 20) { fusb302::service(); ui.tick(t); }
+    press(Button::Ok, 1400);
+    for (std::uint32_t t = 1500; t <= 600000; t += 100) ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);          // Results
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
+    ui.on_button(Button::Ok, ButtonEvent::Long, 700000);
+    CHECK(ui.menu() == Menu::Share);
+    CHECK(ui.share().type() == qs::Type::Card);
+    CHECK_EQ(int(ui.share().parts()), 1);
+    std::array<report_card::Card, 1> cards{};
+    CHECK_EQ(int(report_card::hw::list(cards)), 1);
+    std::array<std::uint8_t, rec::kMaxCard> want{};
+    const std::size_t wl = rec::card(cards[0], want);
+    std::array<std::uint8_t, 600> got{};
+    CHECK(ui.share().link());
+    CHECK_EQ(int(read_link(ui, got)), int(wl));
+    CHECK(std::memcmp(got.data(), want.data(), wl) == 0);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 700050);    // the K2 data code
+    qs::Type type = qs::Type::BootInfo;
+    const std::size_t n = read_record(ui, got, type);
+    CHECK(n == wl && std::memcmp(got.data(), want.data(), wl) == 0);
+    ui.on_button(Button::Back, ButtonEvent::Short, 700100);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    g_stub = old;
+}
+
+// A record that shrinks by a quarter goes out as an LZ4 block (one part instead of two); one that does not goes out as built.
+static void test_packs_when_it_pays() {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.tick(1100);
+    auto b = ui.share_buffer();
+    for (std::size_t i = 0; i < 510; i++) b[i] = std::uint8_t(i % 31 < 20 ? 0x55 : i % 5);
+    std::array<std::uint8_t, 510> want;
+    for (std::size_t i = 0; i < want.size(); i++) want[i] = b[i];
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Packed", 510, 2000));
+    CHECK(ui.share().packed());
+    CHECK(ui.share().record().size() * 4 <= 510u * 3);
+    CHECK_EQ(int(ui.share().parts()), 1);
+    std::array<std::uint8_t, 600> got{};
+    qs::Type type = qs::Type::BootInfo;
+    CHECK_EQ(int(read_record(ui, got, type)), 510);
+    CHECK(last_packed && std::memcmp(got.data(), want.data(), 510) == 0);
+    ui.on_button(Button::Back, ButtonEvent::Short, 3000);
+
+    fill_record(ui, 300);                                          // random bytes: kept as built
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Plain", 300, 4000));
+    CHECK(!ui.share().packed());
+    CHECK_EQ(int(ui.share().record().size()), 300);
+    CHECK_EQ(int(read_record(ui, got, type)), 300);
+    CHECK(!last_packed);
+}
+
+static void bin_push(BinLog<200>& ring, std::uint32_t ms, std::uint16_t id, std::uint32_t sig, ...) {
+    std::va_list ap;
+    va_start(ap, sig);
+    ring.push(ms, id, sig, ap);
+    va_end(ap);
+}
+
+// Diag: long OK shares the newest log entries; the record carries the build's git string and the uptime base.
+static void test_log_opener() {
+    const auto old = g_stub;
+    g_stub = {};
+    BinLog<200> ring;
+    bin_push(ring, 100, 6, logfmt::kString, "OK");
+    bin_push(ring, 140, 8, logfmt::kSigned, -7);
+    bin_push(ring, 141, 2, 0);
+    std::array<std::uint8_t, 200> snap{};
+    const BinLogSnapshot s = ring.snapshot(snap);
+    g_stub.bin_log.assign(snap.begin(), snap.begin() + s.len);
+    g_stub.bin_base = 55;
+    g_stub.bin_older = true;
+    static Ui ui;
+    ui.init(1000); ui.tick(1000);
+    ui.goto_page(kDiagPage, 1050);
+    ui.tick(1200);
+    CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
+    CHECK_STR(ui.labels().b[int(Button::Ok)].shrt, "");
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1300);
+    CHECK(ui.menu() == Menu::Share);
+    CHECK(ui.share().type() == qs::Type::Log);
+    std::array<std::uint8_t, 600> got{};
+    qs::Type type = qs::Type::BootInfo;
+    const std::size_t n = read_record(ui, got, type);
+    const std::string_view git = kGitHash;
+    CHECK_EQ(int(n), int(1 + git.size() + 1 + 8 + s.len));
+    CHECK_EQ(int(got[0]), int(git.size()));
+    CHECK(std::memcmp(got.data() + 1, git.data(), git.size()) == 0);
+    const std::uint8_t* p = got.data() + 1 + git.size();
+    CHECK_EQ(int(p[0]), int(rec::kLogOlder));
+    CHECK_EQ(int(p[1] | p[2] << 8), 55);
+    CHECK(std::memcmp(p + 9, snap.data(), s.len) == 0);
+    ui.on_button(Button::Back, ButtonEvent::Short, 1400);
+    CHECK_EQ(int(ui.menu_depth()), 1);   // back on Diag (Tools > Diag > Share)
+    CHECK(on_diag(ui));
+
+    // An empty ring has nothing to share: the press does nothing.
+    g_stub.bin_log.clear();
+    ui.on_button(Button::Ok, ButtonEvent::Long, 1500);
+    CHECK_EQ(int(ui.menu_depth()), 1);
+    g_stub = old;
+}
+
+// A card opens as the link form; OK switches to the K2 data code and back; the other keys do nothing; the worst case still reads.
+static void test_link_form(uint8_t rotation) {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.set_rotation(rotation, 1000);
+    ui.tick(1100);
+    for (const bool packs : {false, true}) {
+        auto b = ui.share_buffer();
+        if (packs) for (std::size_t i = 0; i < 184; i++) b[i] = std::uint8_t(i % 31 < 20 ? 0x55 : i % 5);
+        else fill_record(ui, 184);                        // incompressible: the worst-case 296-character link
+        std::array<std::uint8_t, 184> want;
+        for (std::size_t i = 0; i < want.size(); i++) want[i] = b[i];
+        CHECK(ui.open_share(qs::Type::Card, 5, "Anker 735", 184, 2000));
+        CHECK(ui.share().link());
+        CHECK_EQ(int(ui.share().packed()), int(packs));
+        CHECK(!ui.share().cycling());
+        ui.tick(2100);
+        std::array<std::uint8_t, 600> got{};
+        CHECK_EQ(int(read_link(ui, got)), 184);
+        CHECK(std::memcmp(got.data(), want.data(), 184) == 0);
+        CHECK_EQ(int(link_kind), int(packs ? lk::kKindCardPacked : lk::kKindCard));
+        if (!packs) {   // 296 characters: version 11 (61 modules) at 3 px, the camera-safe size
+            CHECK_EQ(ui.share().modules(), 61);
+            CHECK_EQ(qrview::plan_in(ui.share().area(), 61, SharePage::kTextH, SharePage::kMinModulePx).px, 3);
+        }
+        CHECK_STR(label(ui, Button::Ok).c_str(), "K2 data");
+        CHECK_STR(label(ui, Button::Plus).c_str(), "");
+        CHECK_STR(label(ui, Button::Minus).c_str(), "");
+        dump_panel(rotation == 3 && !packs ? "k2_share_link_worst" : rotation == 3 ? "k2_share_link" : nullptr);
+
+        const unsigned pnt = ui.share().paints();
+        for (uint32_t t = 2200; t < 9000; t += 100) ui.tick(t);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 9100);
+        ui.on_button(Button::Minus, ButtonEvent::Short, 9110);
+        ui.tick(9200);
+        CHECK_EQ(int(ui.share().paints()), int(pnt));     // a steady code is never redrawn; the other keys do nothing
+        CHECK(ui.share().link());
+
+        ui.on_button(Button::Ok, ButtonEvent::Short, 9300);   // the data code
+        ui.tick(9400);
+        CHECK(!ui.share().link());
+        CHECK_STR(label(ui, Button::Ok).c_str(), "Link");
+        CHECK(ui.share().title() == "Anker 735");
+        std::array<std::uint8_t, 600> rec_got{};
+        qs::Type type = qs::Type::BootInfo;
+        CHECK_EQ(int(read_record(ui, rec_got, type)), 184);
+        CHECK(std::memcmp(rec_got.data(), want.data(), 184) == 0);
+        CHECK(type == qs::Type::Card);
+        CHECK_EQ(int(read_link(ui, got)), 0);             // the panel holds the frame text now
+
+        ui.on_button(Button::Ok, ButtonEvent::Short, 9500);   // and back
+        ui.tick(9600);
+        CHECK(ui.share().link());
+        CHECK_EQ(int(read_link(ui, got)), 184);
+        ui.on_button(Button::Back, ButtonEvent::Short, 9700);
+        CHECK_EQ(int(ui.menu_depth()), 0);
+    }
+}
+
+// Every kind that fits one link opens as a link; the kind letter and the caption follow the type; a record one byte over the limit
+// has no link and no toggle; one that packs under the limit has the uppercase letter.
+static void test_link_kinds() {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.tick(1100);
+    struct Case { qs::Type type; std::size_t len; char kind; std::string_view caption; };
+    const Case cases[] = {
+        {qs::Type::Emarker, 91, 'e', "Scan: cable details"},
+        {qs::Type::Emarker, lk::kMaxRecord, 'e', "Scan: cable details"},
+        {qs::Type::PdCaps, 26, 'p', "Scan: charger offers"},
+        {qs::Type::PdCaps, 50, 'p', "Scan: charger offers"},
+        {qs::Type::Identity, 40, 'i', "Scan: firmware info"},
+        {qs::Type::BootInfo, 180, 'b', "Scan: firmware info"},
+        {qs::Type::Card, 184, 'c', "Scan: full results"},
+    };
+    std::uint32_t t = 2000;
+    for (const Case& c : cases) {
+        CHECK(SharePage::link_caption(c.type) == c.caption);
+        CHECK(c.caption.size() <= 37);                       // a 224 px line of 6 px cells
+        CHECK(lk::kMaxRecord < 255);
+        fill_record(ui, c.len);
+        std::array<std::uint8_t, 256> want{};
+        for (std::size_t i = 0; i < c.len; i++) want[i] = ui.share_buffer()[i];
+        CHECK(ui.open_share(c.type, 1, "Some name", c.len, t));
+        CHECK(ui.share().has_link_form());
+        CHECK(ui.share().link());
+        CHECK(!ui.share().cycling());
+        ui.tick(t + 100);
+        std::array<std::uint8_t, 600> got{};
+        CHECK_EQ(int(read_link(ui, got)), int(c.len));
+        CHECK(std::memcmp(got.data(), want.data(), c.len) == 0);
+        CHECK_EQ(int(link_kind), int(c.kind));
+        CHECK(link_type(link_kind) == c.type);
+        CHECK(ui.share().modules() <= 61);                    // version 11 at most: 3 px on the panel
+        CHECK_STR(label(ui, Button::Ok).c_str(), "K2 data");
+        ui.on_button(Button::Ok, ButtonEvent::Short, t + 200);
+        CHECK(!ui.share().link());
+        CHECK_STR(label(ui, Button::Ok).c_str(), "Link");
+        qs::Type type = qs::Type::Log;
+        std::array<std::uint8_t, 600> rec_got{};
+        CHECK_EQ(int(read_record(ui, rec_got, type)), int(c.len));
+        CHECK(type == c.type && std::memcmp(rec_got.data(), want.data(), c.len) == 0);
+        ui.on_button(Button::Back, ButtonEvent::Short, t + 300);
+        CHECK_EQ(int(ui.menu_depth()), 0);
+        t += 1000;
+    }
+
+    // A record that packs under the limit takes the uppercase letter.
+    auto b = ui.share_buffer();
+    for (std::size_t i = 0; i < 400; i++) b[i] = std::uint8_t(i % 31 < 20 ? 0x55 : i % 5);
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Packed", 400, t));
+    CHECK(ui.share().packed());
+    CHECK(ui.share().link());
+    ui.tick(t + 100);
+    std::array<std::uint8_t, 600> got{};
+    CHECK_EQ(int(read_link(ui, got)), 400);
+    CHECK_EQ(int(link_kind), int('E'));
+    ui.on_button(Button::Back, ButtonEvent::Short, t + 200);
+    t += 1000;
+
+    // One byte over: no link form, no toggle, the data frames (two parts here) cycle as they always did.
+    fill_record(ui, lk::kMaxRecord + 1);
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Big", lk::kMaxRecord + 1, t));
+    CHECK(!ui.share().packed());
+    CHECK(!ui.share().has_link_form());
+    CHECK(!ui.share().link());
+    ui.tick(t + 100);
+    CHECK_STR(label(ui, Button::Ok).c_str(), ui.share().parts() > 1 ? "Hold" : "");
+    ui.on_button(Button::Ok, ButtonEvent::Short, t + 200);   // OK never makes a link out of it
+    ui.tick(t + 300);
+    CHECK(!ui.share().link());
+    CHECK_EQ(int(read_link(ui, got)), 0);
+    ui.on_button(Button::Back, ButtonEvent::Short, t + 400);
+    t += 1000;
+
+    // The real records of each kind: the link opens, and the screens are dumped for the renders of a change (K2_DUMP).
+    {
+        struct Real { qs::Type type; const char* name; const char* dump; };
+        const Real reals[3] = {{qs::Type::Emarker, "OnePlus 100W mag", "k2_share_cable_link"},
+                               {qs::Type::Identity, "Firmware", "k2_share_identity_link"},
+                               {qs::Type::BootInfo, "Boot report", "k2_share_boot_link"}};
+        for (const Real& r : reals) {
+            std::array<std::uint8_t, 256> bytes{};
+            std::size_t n = 0;
+            if (r.type == qs::Type::Emarker) n = rec::emarker(qsfx::oneplus_mag_clone(), r.name, qsfx::quirk_rows(2), bytes);
+            else if (r.type == qs::Type::Identity) n = rec::identity("1.0", "fcb3128-dirty", 1, bytes);
+            else n = rec::boot(qsfx::boot_snapshot(), bytes);
+            CHECK(n > 0);
+            auto b2 = ui.share_buffer();
+            for (std::size_t i = 0; i < n; i++) b2[i] = bytes[i];
+            CHECK(ui.open_share(r.type, 1, r.name, n, t));
+            CHECK(ui.share().has_link_form());
+            ui.tick(t + 100);
+            std::array<std::uint8_t, 600> got2{};
+            CHECK_EQ(int(read_link(ui, got2)), int(n));
+            CHECK(std::memcmp(got2.data(), bytes.data(), n) == 0);
+            CHECK(ui.share().modules() <= 61);
+            dump_panel(r.dump);
+            ui.on_button(Button::Back, ButtonEvent::Short, t + 200);
+            t += 1000;
+        }
+    }
+
+    // The log has no link form at any size.
+    fill_record(ui, 20);
+    CHECK(ui.open_share(qs::Type::Log, 1, "Log", 20, t));
+    CHECK(!ui.share().has_link_form());
+    CHECK(!ui.share().link());
+    ui.on_button(Button::Back, ButtonEvent::Short, t + 100);
+}
+
+int main() {
+    for (uint8_t r = 0; r < 4; r++) test_link_form(r);
+    test_link_kinds();
+    test_plan_in();
+    test_packs_when_it_pays();
+    for (uint8_t r = 0; r < 4; r++) test_two_parts(r);
+    test_one_part_and_refusals();
+    test_emarker_opener();
+    test_cards_opener();
+    test_pd_opener();
+    test_charger_results_opener();
+    test_log_opener();
+    return test_report("test_ui_share");
+}

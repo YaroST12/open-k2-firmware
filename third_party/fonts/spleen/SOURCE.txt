@@ -1,0 +1,2 @@
+Spleen 2.2.0 (BSD-2-Clause, LICENSE). See ../PINNED.txt for URL and checksums.
+Only spleen-6x12.bdf and spleen-8x16.bdf are kept.

@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+#pragma once
+#include "k2/drivers/usbcfg.hpp"
+#include "k2/ui/uiprefs.hpp"
+#include "k2/chargertest/cablepref.hpp"
+#include <stdint.h>
+#include <optional>
+#include <vector>
+#include <string>
+#include "k2/fastcharge/fc_scan.hpp"
+#include "k2/fastcharge/ufcs_probe.hpp"
+#include "k2/drivers/adc.hpp"
+#include "k2/pd/emrec.hpp"
+#include "k2/fastcharge/fastcharge.hpp"
+#include "k2/pd/emk_spoof.hpp"
+#include "k2/drivers/fusb302.hpp"
+#include "k2/core/storage.hpp"
+#include "k2/drivers/power_monitor.hpp"
+#include "k2/pd/transcap.hpp"
+#include "k2/chargertest/charger_journal.hpp"
+struct StubState {
+    uint32_t ms = 1000;
+    // The charger-test journal as the boot finds it (load() answers journal_load) and what the page wrote back.
+    k2::charger_journal::Replay journal{};
+    bool journal_load = false, rd_inherited = false;
+    int journal_finishes = 0, journal_resumes = 0, journal_attempts = 0, journal_metas = 0, rd_releases = 0;
+    int bb_holds = 0;   // bbpersist::hold_run() calls: a live charger-test run renews it every tick
+    int bb_make_rooms = 0;   // bbpersist::make_room() calls: START frees the journal's blocks before Rd goes on
+    // The journal's polled jobs (arm = rows and header of a run start, replan = the changed rows). A job needs `arm_pumps` /
+    // `replan_pumps` pump() calls to finish (0 = one per row plus the header, as the real one writes them).
+    int journal_arms = 0, journal_pumps = 0, journal_cancels = 0, journal_replan_starts = 0;
+    int arm_pumps = 0, replan_pumps = 3;
+    bool journal_job = false, journal_job_arm = false, journal_arm_open = false;   // a job runs / it is the arm / arm or meta still due
+    int journal_job_left = 0;
+    // The noted-but-unwritten state of the real journal: rows whose result is to go into a section file, and a plan whose section
+    // files differ from the flash (a replan job: `replan_pumps` pump() calls, one file each, then the header).
+    std::vector<size_t> journal_noted;
+    bool journal_plan_dirty = false;
+    int journal_replan_left = 0;
+    int journal_writes_in_arm = 0;   // step / phase / replan writes between arm_start() and meta(): there must be none
+    std::string journal_log;         // one letter per hw call: A arm_start, P pump, H arm done, M meta, F phase, S step, R replan done, N finish
+    int journal_skips = 0, journal_skips_before_finish = 0;   // Skip rows journaled, and how many came before any Finish
+    std::vector<size_t> journal_skip_rows_before_finish;      // which rows those were
+    // Every journal write (step / replan / phase) and how many of them landed while the probe said a row was in flight.
+    // A test points `journal_quiet` at the page's Runner::quiet(); null = not probing.
+    int journal_writes = 0, journal_writes_quiet = 0, journal_phase_writes = 0, journal_replans = 0;
+    bool (*journal_quiet)() = nullptr;
+    std::vector<uint8_t> journal_verdicts;   // the last verdict journaled for each step index (0xFF = never written)
+    k2::charger_journal::RunMeta journal_meta{};   // the last meta the page journaled
+    // What the scratch arena looked like while the boot replayed the journal: the holder's tag (null = none) and whether the
+    // Replay the caller handed over lies in the arena. The Replay is too big to keep in .bss: it is transient.
+    const char* journal_load_owner = nullptr;
+    bool journal_load_in_arena = false;
+    k2::pd::SourceCaps caps{};
+    k2::pd::Emarker em{};
+    k2::pd::CableLimits cable_limits{};
+    k2::pd::Revision source_revision{};
+    k2::pd::VdmInfo vdm{};
+    bool cable_tb = false;
+    uint8_t cc = 1;
+    k2::pd::Contract contract{};
+    k2::pd::SinkCapsSeen sink_seen{};
+    k2::pd::XiaomiTrace xm{};             // the sink's Request / Xiaomi chain record (fusb302::xiaomi_trace)
+    k2::pd::SourceCaps epr_info_caps{};   // the list an informational EPR_Get_Source_Cap returned
+    int epr_info_asks = 0; bool epr_info_forced = false; k2::pd::Err epr_info_err = k2::pd::Err::Ok;
+    bool link_inline = false, inl = false, scan_confirmed = false, self_powered = false;
+    bool bus_powered = false, supply_decided = true;   // power_source: no host and VBUS at boot / the host window is over
+    bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;
+    int rd_run_changes = 0;
+    int rd_pauses = 0;       // rd_for_run_pause(): Rd off that keeps the scanned cable
+    bool ra_on = false, ra_refuse = false;   // fusb302::ra_set(): the Ra mode, and a forced refusal
+    int ra_ons = 0, ra_offs = 0;             // ra_set(true) / (false) that changed the mode
+    int ra_owned = 0;                        // ra_run_own() calls that found the Ra mode on (a run took it over)
+    int force_line = 0;                      // fusb302::set_force_line()
+    int unit_detaches = 0, unit_attaches = 0, unit_holds = 0; bool legacy_attach = false;   // charger test units
+    bool pd_chatter = false;        // a Legacy attach whose charger never goes PD-quiet
+    bool model_units = true; int32_t unit_vbus_mv = 5000;   // detach drops VBUS, attach restores it (and a 5 V contract)
+    uint32_t delays_ms = 0;
+    void (*delay_hook)() = nullptr;   // runs inside delay_ms, like usb::service() runs remote presses on the K2
+    int rescans = 0, scans = 0, new_sources = 0, clear_sources = 0, cc_detaches = 0;
+    k2::pd::EmarkerMode last_scan_mode = k2::pd::EmarkerMode::Vconn;
+    bool scan_result = true;           // what read_emarker() returns
+    void (*on_scan)() = nullptr;   // called inside read_emarker: lets a test capture the scanning screen
+    std::uint32_t session = 1;         // fusb302::session()
+    std::uint32_t cable_seq = 0;       // fusb302::cable_seq()
+    k2::power::Metrics pm{};
+    bool pm_online = true;
+    int32_t vbus_ceiling_mv = 0;  // > 0: a request moves VBUS to its target, clamped here (a converter that stops short); a release goes back to 5 V
+    bool pm_fast_set = false;     // pm_fast_mv overrides power::vbus_fast_mv(); unset it follows pm.vbus_mv
+    int32_t pm_fast_mv = 0;       // pm is the 2.5 s average, this the un-averaged latest sample
+    bool pm_display_set = false;       // pm_display is what power::read_display() returns; unset it follows pm
+    k2::power::Metrics pm_display{};   // the One Euro filtered view; pm above is the 2.5 s average
+    k2::power::Chip power_chip = k2::power::Chip::Ina226;
+    std::optional<k2::adc::Reading> adc;
+    k2::fastcharge::Protocol fc = k2::fastcharge::Protocol::Pending;
+    int polls = 0;
+    k2::pd::SinkStatus sink{};
+    k2::pd::IdStatus ident{};
+    k2::pd::ProbeStatus probe{};
+    k2::pd::ExtInfo ext{};
+    int probes = 0; bool probe_ok = true;   // probe_start() calls and its answer
+    k2::pd::Err request_err = k2::pd::Err::Ok;
+    k2::pd::Choice last_choice{};
+    bool last_confirmed = false;
+    int requests = 0, releases = 0, hard_resets = 0, getcaps = 0, identifies = 0;
+    uint32_t sink_cap = 0;
+    int32_t sink_vbus = 0;
+    bool identify_ok = true;
+    bool pd_traffic = false;      // fusb302::pd_traffic(): a PD message was seen this attach
+    bool pd_seen_attach = false;  // fusb302::pd_seen_attach(): the same, cleared only by a new attach
+    bool ident_current = false;   // identify_current(): the stored Identify answers belong to this attach
+    int fc_stops = 0, fc_scans = 0;
+    int fc_starts = 0, fc_inline_ok = 0;   // fctrig::start calls, and those carrying the override
+    int fc_start_mv = 0;
+    bool fc_confirmed = false;
+    int fc_start_fail = 0;       // k2::fc::Fail returned by fctrig::start while non-zero
+    int fc_retargets = 0, fc_retarget_mv = 0, fc_retarget_fail = 0;   // fctrig::set_target calls
+    int max_vbus_mv = 36000;     // power::max_vbus_mv() of the stub (INA226)
+    int fc_state = 0;            // k2::fc::State returned by the fctrig stub
+    k2::fc::Caps fc_caps;        // fctrig::caps() of the stub: what the SCP / UFCS sessions read
+    bool fc_critical = false;    // fctrig::paint_critical(): an engine window the idle hook does not service
+    bool fc_answers = false;    // fctrig::start reaches Active (the charger answered); false stays Negotiating forever
+    int fc_proto = 0, fc_target_mv = 0;   // the fctrig stub's status protocol and target
+    bool fc_scanning = false;    // fctrig::scan_running
+    int fc_scan_step = 0;
+    k2::ufcs::Tuner ufcs_tuner{};            // fctrig::ufcs_tuner(): the stub's RAM tuner
+    bool ufcs_probe_run = false;             // fctrig::ufcs_probe_running(): a probe "runs" until the test clears it
+    int ufcs_probe_starts = 0, ufcs_probe_stops = 0;
+    int ufcs_probe_refuse = 0;               // k2::ufcs::ProbeStart returned by ufcs_probe_start while non-zero
+    std::vector<uint8_t> ufcs_blob;          // what ufcs_probe_blob() returns
+    k2::ufcs::ProbeResult ufcs_result{};     // what ufcs_probe_result() returns
+    k2::fc::Scanner *reader_scanner = nullptr;  // real UI -> scanner -> fake charger seam
+    std::vector<k2::fc::ScanResult> fc_scan_res;   // fctrig::scan_results
+    std::vector<k2::emlib::Entry> lib;    // storage::lib_*: the stub library, numbers 1.. in order
+    k2::emlib::Err lib_err = k2::emlib::Err::Ok;   // forced error for lib_save_current / lib_remove
+    int lib_saves = 0, lib_removes = 0;
+    std::uint32_t spoof_requests = 0;
+    bool spoof_on = false;
+    int spoof_arms = 0, spoof_disarms = 0;
+    uint32_t spoof_generation = 0;
+    k2::emrec::Record spoof_record{};
+    k2::emk_quirk::Quirks spoof_quirks{};                    // what arm() was given
+    std::vector<std::pair<std::uint16_t, k2::emk_quirk::Quirks>> lib_quirks;   // per saved clone (seq -> table)
+    k2::emk_spoof::Err spoof_err = k2::emk_spoof::Err::Ok;
+    k2::usbcfg::Setting usb_stored{};     // usbcfg::stored() / set()
+    int usb_sets = 0;
+    k2::uiprefs::Prefs prefs{};           // uiprefs::stored() / set()
+    int prefs_sets = 0;
+    k2::ctcable::Choice cable_pref{};     // cablepref::stored() / set(): the remembered cable selection, kept across a stub "reboot"
+    int cable_pref_sets = 0;
+    bool cable_pref_ok = true;            // false = flash refuses the write
+    k2::smoothing::Preset smoothing_applied = k2::smoothing::kDefault;   // power::set_smoothing()
+    bool usb_set_ok = true;
+    // transition capture stub (k2::transcap): the calls the charger test makes, and a stored capture to find
+    k2::transcap::State tc_state = k2::transcap::State::Off;
+    k2::transcap::ArmResult tc_arm_result = k2::transcap::ArmResult::Ok;
+    bool tc_freeze_on_arm = false;   // an earlier event (the detach of the cut) freezes the capture before the step's verdict
+    int tc_arms = 0, tc_disarms = 0, tc_triggers = 0, tc_keeps = 0;
+    int tc_arm_pos = 0, tc_arm_mv = 0;
+    k2::transcap::Reason tc_reason = k2::transcap::Reason::None;
+    uint32_t tc_keep_run = 0;
+    int tc_keep_step = -1;
+    bool tc_has_meta = false;             // find_stored() answers with tc_meta (run / step must match)
+    k2::transcap::Meta tc_meta{};
+    std::vector<std::vector<uint8_t>> reports;
+    void (*on_report)() = nullptr;
+    std::vector<uint8_t> bin_log;          // usb::log_bin(): the K2LOG entries the stub ring holds (whole entries, oldest first)
+    uint32_t bin_base = 0;
+    bool bin_older = false;
+};
+extern StubState g_stub;
+void stub_cards_reset();   // empties the RAM-backed report card store

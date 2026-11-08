@@ -1,0 +1,7 @@
+QR Code generator library (C) by Project Nayuki, MIT License (the notice stays at the top of qrcodegen.c).
+Upstream: https://www.nayuki.io/page/qr-code-generator-library (github.com/nayuki/QR-Code-generator).
+Vendored from a copy that only added a build guard around the whole .c file; that guard is removed here.
+Local changes: (1) qrcodegen_VERSION_MAX is 10 instead of 40, so a symbol buffer is 407 bytes
+(qrcodegen_BUFFER_LEN_MAX 3918 would not fit the stack or the scratch arena); (2) the .c is built with -DNDEBUG,
+the argument asserts are programmer checks that the fixed call in src/qr.cpp cannot trip.
+Used only through include/k2/qr.hpp (byte mode, level L, versions 1..10).

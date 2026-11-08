@@ -1,0 +1,618 @@
+# Charger quirks log
+
+Observed behaviour of real chargers that a strict sink trips over. This is a log of evidence, not a
+quirks table: the plan is to recognise **behaviour patterns** at runtime (like a real USB sink would),
+never to key fixes on VID:PID. Each entry names the pattern, the evidence and what we changed (if
+anything). Add to it whenever a run needs a retry, a reset or a workaround.
+
+Patterns so far (names used below):
+
+| Pattern | What the source does | Current handling |
+|---|---|---|
+| `slow-vbus-ramp` | VBUS takes > 0.6 s to reach vSafe5V after Rd appears. **Not seen on any charger so far**: the C135 reading of 2026-11-03 was the 128-sample VBUS average (~2.5 s) lagging a real step; the C135 switches VBUS on ~190 ms after Rd | START waits for VBUS (5 s, 10 s attached), then for the Source_Capabilities (below); Source_Capabilities prove VBUS, so the PD engine sends Request PDO 1 on the caps with no VBUS gate (`start_request_blockers`); the wait loop calls `fusb302::attach_scan()` because it never returns to `poll()`; Black Box marks `start-request` and `start-wait` show what happened |
+| `late-source-caps` | Source_Capabilities arrive a few hundred ms after VBUS (C135: ~670 ms after Rd; spec tTypeCSinkWaitCap 310-620 ms) | START keeps waiting after VBUS is up until the caps are valid, or 2 s of PD silence after VBUS up (a non-PD source then proceeds without caps) (`pd::VbusWait`, `kStartCapsWaitMs`); the confirmation proposal is taken after the wait, so the caps are in it |
+| `silent-sink-output-off` | Switches its output off (VBUS to 0 and staying there) when the sink stays PD-silent in a Legacy attach; only a PD attach brings it back (GaN3 65W) | legacy units skipped as `PdOnly` ("PD only (output off)"), re-attach in PD mode, Pd unit runs; host-tested, not yet on hardware |
+| `silent-sink-reset` | Hard-resets when the sink stops GoodCRC-ing its Source_Capabilities | auto re-request PDO1 after a hard reset; START must act as a sink while waiting (in progress) |
+| `double-request-on-start` | Not a charger quirk: two K2 requesters on the same caps. UGREEN X865, 2026-11-04: the START's Request id 0 was pending (TXSENT) when the START wait ended, the run preview refused, `rd_for_run(false)` released the sink and `begin_abort` sent Request id 1 12 ms later: TX timeout, sink aborting, two Accept/PS_RDY pairs, "START did not start a run" | exactly one owner of the Request in Pd mode: `pd::VbusWait` holds the START wait while the sink is Requesting/Transition/Aborting (`kStartContractWaitMs`, 3 s bound), and `Sink::release` with a PDO 1 Request in flight only clears `held` and sends nothing |
+| `avs-after-skedb` | Lists its SPR AVS APDO (0xE...) only after the sink answered its Get_Sink_Cap_Extended with a Sink_Capabilities_Extended that declares AVS + PPS. After the first caps and our Request, the source sends Get_Sink_Cap, then Get_Sink_Cap_Extended on its own (6 ms after our Sink_Capabilities), and re-sends Source_Capabilities with the extra PDO ~15 ms after our SKEDB. Silence or Not_Supported leaves the list one PDO short | the Pd-mode sink answers Get_Sink_Cap with Sink_Capabilities and Get_Sink_Cap_Extended with a spec SKEDB, Sink Modes 0x23 (bit 5 AVS, bit 0 PPS, bit 1 VBUS powered), the default (`pd::SinkCapExtMode::Skedb`); the PD rows are re-planned from the list in hand when the 5 V contract settles, because the longer list arrives ~350 ms after the first one |
+| `no-psrdy-on-downstep` | Accepts a lower PPS voltage with no load but never sends PS_RDY (VBUS drains ~2 V/s) | PPS/AVS step upward first; a down-step counts as ready once VBUS is at or below the target band (no Hard Reset); VBUS stuck high still times out at 4 s |
+| `reannounce-after-reset` | Re-sends an identical Source_Capabilities after a hard reset | identical PDO words no longer stop the run |
+| `src-reset-after-pps` | Sends unsolicited caps then a Hard Reset after a few PPS low-voltage steps; may then stay dark | rides through via auto re-request; a source that is dark is "source lost" (not "offers changed"), the row fails and the run waits up to 10 s for it, then continues; root cause unknown |
+| `latch-off-low-pps` | Accepts a PPS/AVS step below 5 V (C135: 3.3 V) at no load, stops regulating, VBUS decays to 0; no PS_RDY, no Hard Reset. Either latched until a mains replug (C135 on 09f8571) or **cut-and-recover**: the source returns by itself ~3.3 s after the cut with its own Hard Reset when the sink does not send one (C135 on 474449f, Black Box capture) | the run schedules every programmable step below 5 V LAST of the entire run (after the legacy groups, with a PD re-attach: Rd off, VBUS dark, Rd on, caps, PDO 1; no caps = rows fail "no PD after re-attach"); if VBUS is dark and does not return within 10 s the row fails as "source shut off (needs replug)" and the run ends Done (not Stopped); nothing is skipped that could still run; a row cut below 85 % of its target is recorded "VBUS cut, source recovered" (`Reason::CutRecovered`) and not retried, and the runner waits for valid caps (bounded, `kCapsReturnMs`) before the next PD row, so a source that comes back is not mistaken for a latched one |
+| `usb-a-cuts-on-low-dpdm` | A USB-A port drops VBUS to ~2-2.5 V for ~4 s when D+/D- are held near 0 V for about a second or more (SCP detect, VOOC listen, VIVO); brief lows (FCP, AFC, QC handshakes) do not trigger it. An A-to-C cable's Rp is fed from VBUS, so CC vanishes with the output and returns (a new attach session) ~80 ms after VBUS is back at 5 V. CUKTECH 120W USB-A, 2026-11-07, VOOC row | the row fails as "source lost"; Releasing waits for vSafe5V (`recover_`); a new attach session within `kSagAdoptMs` (5 s) of that recovery is adopted in the next Baseline/legacy row when VBUS is at vSafe5V, waited for (bounded) while VBUS is 1 V up to there, and still ends the run as Lost under 1 V or past the window. PD units are not covered |
+| `auto-off-no-load` | Output switches off, or falls back to plain 5 V with no negotiation, when no current is drawn (power banks). USB-A case: the port idles at ~2.3 V (PPCJB-10A0 A1). USB-C case: VBUS 5.14 V and Rp up within ~1 s of Rd, but no Source_Capabilities, D+/D- shorted (DCP), no legacy handshake, output off after ~25 s (Qoovi 20W 10k) | none in firmware (the K2 draws ~0 mA); test with the bank's trickle/low-current mode on, else park until a load is available |
+| `output-capped-below-advertised` | A PPS / AVS range advertises a top it cannot deliver with no load: the output climbs, then holds at one level (Baseus FH22: ~19.4 V of a 21 V PPS). The Accept and PS_RDY arrive, the contract is live, VBUS never enters the band | the step is recorded Fail with `Reason::Capped` ("capped below target", `measured_mv` = the ceiling) instead of a plain timeout, and the chain goes on (the lower levels already passed; later ranges and rows still run). Capped = VBUS above 5.5 V and steady (within 1 %, at least 100 mV) for 3 s, or equal within 1 % to the highest level a passed PD row measured. The Results chip reads amber (Partial) and its footer says "caps 19.4V of 21V"; the Detail page reads CAPPED and "Reached 3.3-19.4V of 21V" |
+| `qc3-coarse-step` | QC3 continuous-mode step differs from 200 mV; overshoot trips protection | closed-loop stepping (QC3 and QC3+, host-tested; QC3 verified on the Baseus 140W 2026-11-04, see its entry): after every batch the engine waits until VBUS is stable (3 samples within 50 mV, plus a quiet stretch; 500 ms without movement ends the wait), the last two QC3 steps go out as single pulses, the aim is target - 100 mV, the pass band is -300/+150 mV, and a level above the expected pulse count plus one step is `Overvoltage`; after any QC session both lines sit at 0 V for 500 ms before the next detection. Still needs a per-pulse trace (gap versus pulse width) on the Baseus; every batch leaves a Black Box `qc3-batch` mark |
+| `hard-reset-on-late-request` | Source sends a Hard Reset when the sink's Request is not on the wire within its SenderResponseTimer after the caps (Baseus 140W: ~30 ms; C135 allows ~57 ms) | the sink's receive and answer path (`fusb302::service()`) has to run about as often as the main loop; the START wait ran it every ~56 ms (20 ms delay + a 30 ms power read) and now runs it every ~3 ms. A Hard Reset that reaches the K2 as a bare INTERRUPTA bit (the read right after a packet, or a TX wait loop) is latched (`g_hr_latched`) and handled on the next `service()` pass, so it can no longer be swallowed (2026-11-04) |
+| `qc3plus-down-needs-wide-pulse` | A QC3+ source follows 40 us up pulses but ignores 40 us down pulses: 50+50+35 down pulses leave VBUS flat to the millivolt and the row ends "no response" (Xiaomi 20K, 2026-11-07). A down pulse of 40, 100 or 150 us (also 40 us with a 500 us gap) changes nothing; 175 and 200 us step it down | QC3+ down pulses are held 250 us (`qc::kQc3PlusDownPulseUs`), up pulses stay 40 us; host-tested (`tests/test_qc.cpp`); signature, not VID: a source whose down steps still do not move at 250 us fails the row as before |
+| `chunked-only-extended` | Does not advertise "Unchunked Extended Messages Supported": answers an unchunked extended message (EPR_KeepAlive) with Not_Supported, then Hard Resets the EPR contract (Baseus 140W) | every extended message the sink sends carries the Chunked bit (ext header 0x8002 for Extended_Control); no per-charger table |
+| `epr-entry-hard-reset` | EPR entry completes (Enter_Succeeded, EPR_Source_Capabilities chunk 0) but the source never sends chunk 1 and Hard Resets 66-85 ms after our chunk-1 request; VBUS sags 5 V to about 3 V for ~1.3 s, the SPR list is back ~1.5 s after the reset (Baseus 140W) | a source Hard Reset during EPR entry is not a verdict: wait for re-attach and the SPR contract to settle (2 s, plus 2 s per retry), retry the EPR row at most 2 times; the row says "passed on retry N"; a partial (chunk 0 only) list never counts as "offers changed" |
+| `reject-then-reduced-list` | After a Reject of our deliberate over-offer probe (6 A PPS hunt) the source re-announces a shorter list: no PPS APDO, PDO1 without the EPR bit (Baseus 140W) | a list announced after the hunt row's own Reject is the source's answer to the probe, not a changed charger: the hunt row ends as "not unlocked" (or the Reject), the rows still offered follow the new list, the rows it dropped (PPS, EPR) are skipped as not offered; the same list again changes nothing. A list change at any other time stays "offers changed". The next row that needs a fresh entry (EPR from SPR) waits 1.5 s after the Reject before renegotiating. Since 2026-11-07 the probe only goes out against a list that advertises 6 A, so this pattern needs one (the Baseus 140W, advertising 5 A, no longer meets it) |
+| `epr-exit-returns-spr-list` | EPR_Mode Exit is followed by a fresh SPR Source_Capabilities (no EPR PDOs) | EPR rows stay valid while the SPR list offers EPR; the sink re-enters EPR on the next EPR request |
+| `placeholder-vid` | Reports VID/PID FFFF:FFFF | treated as no identity |
+| `pd2-ama-identity` | Dock identity uses the PD 2.0 Alternate Mode Adapter product type | AMA VDO parsed for USB speed |
+| `proprietary-power-path` | Higher power only over a proprietary cable/connector (e.g. Lenovo slim tip), not over PD | none; note on card |
+| `needs-load` | Protocol handshake only completes with current flowing (VOOC/SVOOC) | reported as "needs load" |
+| `cable-gated-port` | Source_Capabilities_Extended PDP is higher than the best SPR PDO power (e.g. SCEDB PDP 120 W, fixed PDOs stop at 20 V 3 A = 60 W); the extra power is released only when the source reads a cable e-marker over SOP' (needs Ra at attach) | none at run time; the card shows both numbers. The charger-test EPR rows already say "EPR offered: needs EPR cable" when the informational EPR list (EPR_Get_Source_Cap in SPR mode) shows PDOs the plug cannot carry. No retry loop, no cable-guessing |
+| `strict-ra-cable-check` | PDO1 EPR bit set, EPR_Mode Enter -> Enter_Acknowledged -> **Enter_Failed data 2** (source could not become VCONN source), sink VCONN_Swap -> Not_Supported, no SOP' traffic at any time | an EPR attempt through a plug or cable without a readable e-marker is expected to fail at Enter; reported as such, not retried. The informational ask (never an EPR_Request) tells the user what the cable would unlock |
+| `vconn-swap-accept-then-vbus-drop` | Accepts a sink VCONN_Swap, then loses its CC Rp as soon as the sink drives VCONN onto the net where the source still shows Rp, and VBUS falls to 0 in ~0.3 s with no Hard Reset message | the VCONN_Swap route stays debug-only; it is never part of a test run. Detected only after the fact (VBUS to 0 right after a swap Accept), where it ends the run as "source lost" |
+| `rd-rd-debug-accessory-latch` | A source that sees Rd on **both** CC pins on a direct plug takes it for a Debug Accessory (Type-C), turns its Rp off on both pins and **stays off until a physical detach**: VBUS 0 V, cc1 and cc2 at 0 V, no recovery from our side (OnePlus 120W SUPERVOOC brick on the top plug, K2 on HID power, PLUS held at boot, 2026-11-06: the old 300 ms "widen" put Rd on CC1 and CC2, the brick went dark and needed a re-plug; Rd on CC2 alone had given VBUS 5.26 V within ~150 ms, `runs/t23-diag/`) | a K2 never presents Rd on both lines: a key mode pins ONE line (PLUS = CC2, OK = CC1); with no VBUS after 600 ms, no Rp on that line and an Rp on the other, the single Rd MOVES to the other line, once (`bootmode::moved_pin`, `fusb302::self_power_move`); a direct plug (Rp on both lines) stays. The chip's SW_RES default (SWITCHES0 0x03) is overwritten at once after the reset (`init()`), a run start adds no second Rd to a key pin (`pd::key_rd_lines`), and a pin mark that says both lines is no mark. Detected by the signature (Rp gone from both pins after Rd/Rd), never by VID:PID |
+| `acked-caps-without-request` | Not a charger quirk (spec-compliant source), a K2 bug: Source_Capabilities that got our GoodCRC start the source's SenderResponseTimer (24-30 ms); with no Request by then it sends a Hard Reset and VBUS drops (OnePlus 120W, 2026-11-06, `pd-reread` on a line the passive scan had already taken: first caps acked by Auto-CRC, no Request, Hard Reset 26-27 ms later, VBUS ~0.37 V for ~650 ms; harmless on HID power, fatal on a charger-powered K2) | whenever the chip acked the caps (Auto-CRC on, whoever turned it on) and nobody else owns the answer, the PD engine Requests PDO 1 in the same frame (`pd::acked_caps_need_request`, `fusb302.cpp handle_frame`; black box mark `start-request` with a = 0x200 + the error code, log `[PD] acked caps: request PDO 1`); with Auto-CRC off (the passive idle path of a plain boot) the caps are not acked, the source hears nothing, and the K2 stays PD-silent; a self-powered K2 never idles that way (`caps-retry-window`) |
+| `caps-retry-window` | A source that gets no GoodCRC for its Source_Capabilities retries about every 150 ms and gives PD up after 7-10 s of the attach (OnePlus 120W, 2026-11-06, PLUS boot on the top plug); VBUS stays 5 V, no caps after that, only a detach or a Hard Reset revives PD | a K2 with a pinned Rd (key mode or inherited pin) turns Auto-CRC on from the attach and takes a plain 5 V contract (Request PDO 1, 1 A) as soon as caps arrive, stays Ready, answers re-announces, never a Hard Reset (`pd::self_hold_wanted`); START plans from the held caps, and a list that is gone while PD was seen this attach is the reason "PD gave up before START" (`fusb302::pd_seen_attach`) |
+| `legacy-off-on-direct-plug` (was `ra-disables-legacy`, WRONG) | Plugged straight into the K2's top plug, the Baseus EnerCore CJ11 70W never answers any D+/D- handshake (FCP, SCP, QC2/3/3+, UFCS, VIVO), on every firmware (incl. the known-good 663b67e) and freshly powered; through a USB-C cable into the bottom port the same unit passes QC2 to 12.12 V. The earlier "Ra disables legacy" reading confused the spoof with the first direct-plug run (2026-11-07 bisect). The K2's top-plug D+/D- path is fine: the Baseus 140W on the top plug passes QC2 to 12 V, QC2 Class B 20 V, FCP 12 V. Likely cue: Rp on both CC pins (direct plug) vs one (cable) | test such a charger's D+/D- protocols through a cable; a result card from a direct top-plug run should say the source may hide legacy there. The Ra-per-unit change (identity only for PD units) stays: harmless and correct, but not the fix |
+| `reannounce-after-cable-discovery` | Announces a different list after reading the cable e-marker: the same PDOs with higher currents (PPS 3.3-11 V 3.3 A became 5 A) and possibly extra APDOs (Baseus EnerCore CJ11 70W, 2026-11-07, EPR 50V 5A identity) | a re-announce that still offers every planned row (same type and voltage range, current equal or higher) is followed, not a fault (`Runner::follow_list`): re-planned while no PD row has run (extra APDOs get rows, rows carry the new currents), otherwise Pending rows are remapped in place. A list that drops or narrows a row, moves a Running row's slot or changes the PD revision stays "offers changed". Built and host-tested, not yet re-run on hardware |
+| `preauth-list-after-reset` | A source that listed SVID 0x2717 Hard Resets and comes back with its fixed PDOs ALONE (5 PDOs, no APDO) before its auth chain has run again, then re-announces the full list (APDOs included) ~0.6 s later once the chain is done (Xiaomi 20K, 2026-11-07: Hard Reset at 122497, 5 PDOs at 123504, the full 7 PDOs at 124146, no PDO changed). The sink forgets SVID/auth on every Hard Reset, so the list looks like a different, shorter charger | a cut-short list is not "offers changed" while the run saw the chain, a Hard Reset hit it afterwards and the chain is not done again, at most `kXiaomiAuthWaitMs` from the first cut-short list (`Runner::preauth_tail`); the next row waits for the list instead of asking a position that is not there; every position the short list does carry is still checked row by row; a list that stays short past the bound, or a source with no 0x2717, is "offers changed" as before. Host-tested (`tests/test_charger_test.cpp`), not yet re-run on hardware |
+| `hard-reset-on-6a-over-offer` | A 6 A hunt row (RDO above the advertised 3 A) is answered by a source Hard Reset instead of a Reject (Xiaomi 20K, 2026-11-07: Mi 11V 6A RDO 0x63044C78 at 122490, Hard Reset at 122497; the chain had finished, the post-chain list showed no 6 A). The second hunt row (Mi 20V 6A) gets the same reset | the row is a Skip / "not unlocked" like a Reject, not a retry (the same Request gets the same reset and the re-announced list is the pre-auth one) and not a run-level HardReset fail. The detail keeps the chain and cable reasons from the sink's state before the reset (no OEM chain, chain unfinished, a read 3 A cable, a spoofed 5 A identity not accepted); an unread cable and a proven 5 A cable with the chain done read "not unlocked (source reset)" (detail 159). The evidence slot carries `HfHardReset`. The Request is still sent: a CUKTECH over a dumb cable can accept an over-offer it never advertised. Host-tested (`tests/test_charger_test.cpp`), not yet re-run on hardware. Since 2026-11-07 the Request is sent only when the list advertises 6 A, so an over-offer can no longer provoke this reset; the handling stays for a source that resets on an advertised one |
+
+## Per charger
+
+### Lenovo C135 (USB-C, own 20 V 5 A cable 17EF:A211)
+- Offers: 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3–21 V 5 A. No >5 A offer to the K2 or to a Lenovo laptop (17EF:A4BE).
+- `slow-vbus-ramp` (misread, see the table): the "VBUS at 0.47 V after 0.6 s of Rd from passive" of 2026-11-03 was the averaged VBUS reading lagging a step; the wait loop now reads `power::sample_now()` and every judgement of a VBUS transition (START, the runner, the PD engine's guards, the fast-charge engine, the black-box VBUS trace) reads `power::vbus_fast_mv()` (latest sample, no 2.5 s average); `power::read()` stays for display. Caps arrived at 12852 ms, Hard Reset 57 ms later: the source's SenderResponseTimer (tSenderResponse, the C135 allows ~57 ms) ran out because no Request went out.
+- `silent-sink-reset`: sends Source_Capabilities ~670 ms after Rd; with no GoodCRC it gives up after ~2.4 s.
+- `no-psrdy-on-downstep`: Request PPS 3.3 V from 5 V → Accept, no PS_RDY, VBUS drained 5.0 → 2.1 V; our 1.5 s timeout then sent the Hard Reset.
+- `reannounce-after-reset`: identical 6 PDOs after the reset stopped the run as "offers changed" (fixed).
+- 2026-11-03, Black Box capture (bottom port, passive, nothing else attached): PPS step 7.72 V → 3.3 V got Accept and no PS_RDY; the 4 s deadline sent a Hard Reset; the source's output then collapsed to 0 V over ~9 s (~3.5 V/s) and never came back, CC showed a short Ra/open blip. Every later group was skipped as "offers changed" (the caps list was gone because VBUS was gone). After that the charger stayed dead (no CC activity with Rd, cc1 7 mV, VBUS 0) until it is unplugged from mains.
+- Handling now (firmware 35e531e): the sink takes the down-step as ready when VBUS is within the target band, so no Hard Reset is sent; the runner treats VBUS < 1 V as "source lost" (caps grace restarts when VBUS returns), fails only the row that was cut and continues; two cuts on one row fail the row as Lost/HardReset and the run goes on. Superseded by the `latch-off-low-pps` handling below; hardware re-run pending (charger needs a power cycle).
+- Cable e-marker on START: reading SOP' as a sink with VBUS 0 is possible (the K2 supplies VCONN on the non-CC pin; an old capture shows a full SOP' Discover Identity with this cable). The 09f8571 run still showed "20 V/3 A assumed" and had no log, so the cause is undetermined. New `[TEST] START e-marker scan ...` log lines make the next run observable. Gap: no scan when VBUS is 0.8–4.5 V (decaying rail). When the cable is not read the card now says "cable not read, default limit 20 V/3 A".
+- 2026-11-03 hardware, START with the VCONN e-marker scan (bb16c40): the scan worked (SOP' Discover Identity ACK 17EF:A211) but the C135 then sent a Hard Reset 180 ms after our Rd and no run started. In passive the C135 cycles Rp (on ~5.5 s, off ~6 s), so the scan very likely ran while its Rp was on and the charger heard our SOP' and the cable's replies on its CC wire. Pattern `rp-cycling-hears-sop-prime` (suspected, not proven). Handling: the START skips the scan when a source's Rp is on the wire (`fusb302::rp_on_line()`, `pd::start_scan_wanted`) and presents Rd first, the flow that passed on 09f8571; the card then says "cable not read, default limit 20 V/3 A". The scan still runs on a dead line. The scan restore itself was checked in the capture (SWITCHES0 0x00, SWITCHES1 0x20, then TXCC 0x21/0x25 at attach) and is pinned by a host test.
+- Cause found 2026-11-04 (was "Open": in the second START of that session every PD row timed out at 4.91 V with the FUSB302 reporting no TXSENT/RETRYFAIL while RX worked; the start window was lost to the Black Box ring wrap). Same mechanism as the Baseus 140W below (`hard-reset-on-late-request`): the source sent a Hard Reset after the caps because the START wait serviced the PD engine too rarely, the Hard Reset was swallowed, and the engine kept sending Requests for dead caps. Not re-run on the C135 itself after the fix; the Baseus reproduction and fix are hardware-verified. The averaged-VBUS lag is ruled out as the cause: a PD row needs Sink Ready (a completed Request/Accept/PS_RDY), and its 12 s row timeout is far above the 2.5 s window.
+- 2026-11-04 re-run on merged main 5f6a9a3 (confirms the late-Request/Hard-Reset fix on this charger; card 17, fp 3CC08070, 17EF:A211, 6 PDOs): `--units qc2,qc3,qc3+` 9 pass / 0 fail / 4 skip (QC2 5/9/12 V pass 4.91-12.15 V, QC3 all pass, QC3+ 5 V pass / rest skip "no QC3+ response"); full run 20/19/7 - PD fixed 5/9/12/15/20 V all pass (4.92-20.02 V), PPS 3.3-21 V rows 12.14/21/21->12.14/12.14->7.72 V pass, 3.3 V row "VBUS cut, source recovered at 0.94 V" (the known `latch-off-low-pps` cut-and-recover edge, handled as CutRecovered, not retried); legacy fails are capability rows (FCP/SCP/AFC/UFCS no response, VOOC/SVOOC need load, VIVO 9/11 V not reached). No Hard Reset, no unsafe abort. QC4+/QC5 label correctly absent (VID 17EF is not Qualcomm; label needs VID 0x05C6).
+- `cut-and-recover` timeline (2026-11-03, 474449f, transition capture of the PPS 5 V to 3.3 V step plus the Black Box, no load): VBUS starts to fall +27 ms after the Request; the CC Rp drops at +44 ms with VBUS still ~3.0 V, which supports a PD-controller brown-out rather than a deliberate shut-off (the controller loses its supply before the cable-side Rp); VBUS holds a ~1.95 V plateau until +225 ms; the source then sends its own Hard Reset and is back ~3.3 s after the cut (VBUS 5 V, fresh Source_Capabilities). Without a sink Request at that point the old runner retried the row into the recovering source and logged it as a latch-off.
+- `reset-after-rescan` (2026-11-03, 474449f, Black Box): the handover's in-contract rescan (CC cycled 150 ms) made the C135 re-announce Source_Capabilities 1.4 s later; the K2's sink was already in `ready` and the auto PDO 1 request is once per Rd presentation, so no Request went out and the C135 sent a Hard Reset 28 ms after the caps (tSenderResponse), VBUS fell to 0.05 V and its Rp dropped 1 s later. That run had no Rd on the line (the first START press was refused and dropped its Rd, the second press found VBUS up and presented none), so the dark C135 never re-attached, the rescan timed out and the legacy groups were skipped as "charger stayed in PD"; the re-attach 14 s later (Rd on) brought it back in 0.4 s. Handling: a source dark (< vSafe0V) for `kRescanDarkMs` during the rescan wait is given Rd once (`Env::reattach(true)`), a no-op when Rd is on already. QC2/QC3 passed on the same charger when Rd was present (c135_run3).
+- `reannounce-request` (2026-11-03, b7952eb, Black Box 33.77 s): while Ready and not holding a higher voltage, the sink answers a re-announced Source_Capabilities with a Request (same position if still offered, else PDO 1); the C135 re-sends its caps after the handover's in-contract rescan and Hard Resets 28 ms later when they get no Request (`reset-after-rescan`). Verified: Request 1.7 ms after the caps, Accept, PS_RDY, no Hard Reset. Open (diagnosis only): `legacy_only(true)` releases the sink but leaves it Ready, so the same answer, the auto re-request after a Hard Reset and the run-start Auto-CRC may re-establish a PD contract after the handover's CC detach; the legacy rows then failed at 4.9 V in the following Black Box (Request at 41.08 s, Ready, no PD traffic for 100 s). Whether the C135 keeps D+/D- QC dead while a contract exists is a hypothesis (QC2/QC3 passed only in c135_run3, where no contract was ever made).
+- Unit design (k2/test-units, host-tested, not yet on hardware): the diagnosis above is addressed by structure, not a patch. Every test session starts detached (Rd off, VBUS dark) and the Legacy units share one PD-silent attach (caps heard, never acknowledged; no re-attach between them), so no PD contract exists while the legacy rows run; the old `legacy_only(true)` (release only) is not used by the units. Hardware check pending: `tools/ct_start.py --units qc2,qc3` on the C135. If QC2/QC3 still fail there, START itself (which makes a PD contract on its first caps) is the next suspect: change it to a PD-silent listen for legacy-only lists.
+- Label on the charger lists only fixed 5/9/12/15 V 3 A and 20 V 6.75 A (the slim-tip mode). PPS is not on the label at all, yet the PDOs advertise PPS 3.3–21 V 5 A, and the 3.3 V edge latches the output off at no load (`latch-off-low-pps`).
+- Hardware run of 09f8571 (2026-11-03): the 3.3 V step latched the charger dead again; the run ended Stopped / "source lost" and later groups were skipped. Fix: low PPS rows are planned last and a latch-off ends the run as Done with the row marked "source shut off (needs replug)".
+- Spec (Lenovo table, 2026-11-03): PD 3.0 capped at 100 W; the 135 W mode (20 V 6.75 A) is proprietary and only available through the bundled USB-C to Slim Tip cable. Over C-to-C it is a 100 W PD charger by design, not a quirk.
+- A Lenovo laptop over C-to-C loops Discover SVIDs → Not_Supported and stays at 20 V 5 A (consistent with the above).
+- Captures: `docs/captures/lenovo-c135-*`, `docs/captures/lenovo-laptop-17EF-A4BE-*`.
+
+### Baseus 140W PD3.1
+- SPR offers: 5/9/12/15 V 3 A, 20 V 5 A (with a 5 A cable), PPS 3.3–11 V 5 A. PDO1 has EPR Mode Capable. EPR list (hardware 2026-11-04, 44dc8f6): 8 PDOs, PDO8 = fixed 28 V 5 A (EPR), no 36/48 V level and no EPR AVS, so the 36 V guard and the 48 V "above the monitor" skip were not exercised on this source (host tests only).
+- EPR info correction (2026-11-05, top plug, no EPR cable, raw words from `[PD] EPR caps info`, build 728b0b6) [measured]: the Baseus DOES list its EPR levels through EPR_Get_Source_Cap while in SPR mode. Words: PDO1 0x0881912C, PDO2 0x0002D12C, PDO3 0x0003C12C, PDO4 0x0004B12C, PDO5 0x0006412C, PDO6 0xC0DC213C (SPR PPS), PDO7 0x00000000 (zero padding, not a PDO), PDO8 0x0088C1F4 (fixed 28 V 5 A: voltage field 560 x 50 mV, current field 500 x 10 mA). An earlier note here and in the build-b432a59 run logs said the list was "withheld without an EPR cable" and that the source showed no PDO >= 8; that was wrong, it came from Black Box chunk decoding (each extended chunk was decoded alone, so chunk 2 never showed as PDO8), fixed in 037fac6. Handling: the card keeps one row per listed level ("EPR offered", detail 147); if the entry is then refused the Enter_Failed reason joins the same row (detail 149 + data), it no longer overwrites the listed level.
+- `epr-entry` (2026-11-04, Black Box; three separate causes, in the order they showed up): (1) EPR_Mode Enter was never accepted: the sink Request did not set RDO bit 22 (EPR Mode Capable) and Enter carried Operational PDP 0 W; fixed with bit 22 on every Request while PDO1 has the EPR bit and PDP 140 W (`kEprSinkPdpW`); the source then answers `Enter_Acknowledged` + `Enter_Succeeded` 13 ms after our Enter and sends the EPR list in two chunks (7 SPR slots, slot 7 empty, EPR PDO8 28 V 5 A; the Black Box shows chunk 1 as "PDO7 PPS 0-25 V 0 A" because it decodes per chunk, the sink reassembles correctly). (2) The EPR contract was dropped by a source Hard Reset about 1 s after entry: the sink's EPR_KeepAlive (Extended_Control, ECDB type 3) was sent unchunked (ext header 0x0002) and the Baseus does not advertise "Unchunked Extended Messages Supported", so it answered `Not_Supported` twice, then Hard Reset (PD 3.2 6.2.1.2: such a partner needs the Chunked bit on every extended message). With ext header 0x8002 the source acks every keep-alive (type 4, 6.4 ms after ours) and the contract holds. (3) The runner skipped every row after the first release with "offers changed": a release in EPR mode ends with EPR_Mode Exit and the source announces its SPR list again, so the EPR rows (position 8+) were missing from the list in hand; they stay valid while the SPR list offers EPR, and the sink re-enters EPR when one is requested. Result: PD 5/9/12/15/20 V, EPR 28 V (28.27-28.29 V measured), PPS 3.3-11 V all pass, two runs. The e-marker is not needed: an unread cable (START skips the scan when Rp is on the line) no longer blocks the EPR attempt, an accepted Enter is the source's own cable check, and the EPR rows then count as cable proof (50 V / 5 A).
+- `epr-hard-reset-after-chunk-request` (2026-11-04, pd_trace + Black Box, 9c4f897): after several failed EPR sessions the source sent a Hard Reset ~105 ms after our chunk-1 request for EPR_Source_Capabilities (Enter_Acknowledged 6.2 ms, Enter_Succeeded 13 ms, chunk 0 at +2.3 ms, chunk-1 request at +3.8 ms, Hard Reset at ~+105 ms), then re-announced SPR caps. No PD timer matches 105 ms (a protocol-error Hard Reset must complete within tProtErrHardReset 15 ms of the offending GoodCRC; keep-alive Hard Reset fires at 750-1000 ms), and the sink side was verified spec-clean: the chunk request carries Chunked=1, Request Chunk=1, Chunk Number=n+1, Data Size=0, Message Type 0x11, and a 4 B payload = the 2 B extended header padded to the 4-byte boundary as PD R3.2 6.5.1.1 requires for a chunked message with Data Size < 26 (the unpadded 2 B form was tried and this unit stopped answering chunk requests entirely). Conclusion: charger-side state left over from the earlier failed runs, not a sink bug; a re-attach (device flash) restored normal operation and EPR 28 V then passed consistently (28.28-28.29 V, full `--units pd` run: 10 pass, 0 fail, 2 skip). If it recurs, power-cycle the charger's mains first.
+- `epr-entry-hard-reset` timeline (2026-11-06, charger-test runs with the Ra-mode spoofed EPR cable, pd_trace dumps): runs 4, 6, 7, 8, 10 passed EPR 28 V; run 5 failed, and runs 1 and 3 (an older cable identity) failed the same way. The wire is identical in fail and pass up to our chunk-1 request: Enter_Acknowledged, SOP' Discover_Identity, Enter_Succeeded, EPR_Source_Capabilities chunk 0 (26 B), our chunk-1 request 1.6-1.7 ms later (MessageIDs increment correctly, Chunked=1, Request Chunk=1, Chunk Number=1, padded 4 B payload). Passing runs get chunk 1 8-9 ms after chunk 0; failing runs get a Hard Reset at +66..85 ms instead, and nothing the sink did differs. No PD timer matches (tChunkSenderRequest/tChunkSenderResponse 24-30 ms are the sender's, tChunkingNotSupported 40-50 ms does not apply to a source that already sent chunk 0, tEnterEPR 450-550 ms is far longer). Charger-side fragility, about 65-70 % confidence; a local FUSB302 stall cannot be excluded from the traces. Two K2-side defects made it worse and are fixed: chunk 0 was published as the live caps (6 PDOs), so the Runner compared the 28 V row (position 8) against a 6-PDO list and ended the row "offers changed" before the Hard Reset check could retry it; and the EPR row followed a Reject probe by ~570 ms. Handling: retry after the source re-attaches (VBUS recovered, SPR list back), 2 s settle plus 2 s per retry, at most 2 retries, recorded as "passed on retry N" (`Step.tries`).
+- `reject-then-reduced-list` (2026-11-06): the "PPS 11 V offers changed at 5.12 V" row seen with and without the spoof is the deterministic 6 A PPS hunt row, not a reset: the source Rejects it, then re-announces 5 PDOs without the PPS APDO and without the EPR bit in PDO1. 5.12 V is the live VBUS, nothing sagged. A settle delay does not change the outcome, so it is not the same shape as `epr-entry-hard-reset`; the Reject guard (1.5 s before an EPR entry row that follows) only protects the row after it.
+- SKEDB EPR min/op/max PDP (bytes 21..23) are 0 in our Sink_Capabilities_Extended and the source still accepts Enter, so they were left alone; revisit only if another source answers Enter_Failed reason 4 or 1 with a good cable.
+- `hard-reset-on-late-request` (2026-11-04, Black Box): `ct_start.py --units qc2,qc3,qc3+` presented Rd and received the caps, but every Request ended `TX_RESULT timeout (no TXSENT / RETRYFAIL)` and START failed. Evidence: the Request left 175 ms after the caps (the START wait's service() cadence was 56.3 ms, and the charger's SenderResponseTimer is ~30 ms), the charger then sent a Hard Reset, and that INTERRUPTA I_HARDRST bit was consumed by `clear_irqs()` (the read right after the caps packet) and by the `transmit()` wait loop, so no PD_RESET ran and the engine went on sending Requests for stale caps (about 40 blind attempts, ~117 ms each) while the charger was power-cycling. Ruled out: TXCC/SWITCHES1 (CC1 was right), AUTO_RETRY, an unflushed TX FIFO, a VBUS brownout, legacy-only leaking in. Fix (2ee005c, f3fd687): the Hard Reset bit is latched wherever INTERRUPTA is read and handled at the top of the next `service()` pass; the TX wait ends on it; the START wait calls `service()` every ~1 ms step (3.4 ms measured between entries) and paces the attach scan and the VBUS read at 20 ms. After the fix: Request 1.7 ms after the caps, TXSENT after 1 ms, Accept +8.6 ms, PS_RDY +134 ms, `SINK state=ready`. Tooling note: `ct_start.py` started within seconds of a finished run can hit "needs --confirm: a live sink is attached" from its `pd-rescan` preflight; a retry after VBUS has decayed works.
+- `src-reset-after-pps`: after PPS Requests (3.3 V region, VBUS down to 3.29 V) it sent unsolicited caps and a Hard Reset 28 ms later.
+- `silent-sink-reset`: after a suite run, looped Source_Capabilities every ~192 ms until a hard reset, which power-cycled the VBUS-powered K2.
+- `qc3-coarse-step`: QC3 9 V "timeout at 9.35 V" (loose band) then "source lost at 9.67 V" (tight band). QC3+ 9 V times out at 5.10 V (likely unsupported). Both observations are from the open-loop firmware. Closed loop on this charger (2026-11-04, f3fd687, full-order run, no load): QC3 5 V 5119 mV, 9 V 8760 mV (-240 mV, inside the -300/+150 band; the same 8761 in an earlier run), 12 V 11804 mV, 12 to 9 V 8963 mV, 9 to 5 V 5119 mV, all pass. Black Box `qc3-batch` marks: single-pulse batches moved VBUS by 196-204 mV, so the step is 200 mV; the 4-pulse batches read 160-250 mV per pulse because the next mark is taken ~18 ms after the batch, mid-slew; the engine corrected the last steps with single pulses. QC3+ is not implemented by this charger: +10 probe pulses then 50+50+44 fast pulses left VBUS at 5119-5120 mV, so the unit ends as "no QC3+ response" and the rest of the group is skipped.
+- QC3+ never leaving ~5 V: the unit now ends as "no QC3+ response" and the group is a Skip, not a Fail (VBUS still within 150 mV of the entry level after 100 QC3+ pulses, `fc::Fail::NoResponse`, `Reason::NoQc3Plus`). A QC3+ attempt that moves VBUS and then misses the band is still a Fail.
+- Label (passive, from the card's facts): a Qualcomm VID in Discover Identity plus a PPS range shows "QC4+" in the legacy/QC section of the results and the report card; 100 W or more (PDP or EPR) shows "QC5". Behaviour never keys on it. Whether this charger reports that VID is not recorded here yet.
+- Passes: PD fixed 5–20 V, PPS 3.3–11 V, QC2 ≤12 V, AFC ≤12 V, FCP ≤12 V, SCP detected + 4.5 V.
+- Top captive plug, dumb (2026-11-05, build e1692fa): the charger offers 5/9/12/15/20 V 3 A +
+  PPS 3.3–11 V 3 A in its SPR list. **Correction**: that list has no EPR *PDOs*, but PDO1 has the EPR
+  Mode Capable bit set, so the old wording "no EPR" was wrong (the same charger entered EPR 28 V on
+  2026-11-04, see above). The run's "0 SOP' requests" (plug-in, Hard Reset, Get_Caps, CC-matrix pulses,
+  QC2/QC3 traffic, spoof armed) was **blind**: SOP' receive (ENSOP1) was off under Auto-CRC, fixed in
+  636bdd3. QC2/QC3 5/9/12 V pass on this unit. PD unit run: 9 pass, 2 fail (a 20 V re-request rejected,
+  an 11 V PPS re-request timeout), 3 skip (the EPR list was not read). See `docs/K2_PORTS_SPEC.md`.
+- `epr-enter-failed-vconn` (2026-11-05, top plug, receiver fixed, `runs/emk-top/c3s`): EPR_Mode Enter ->
+  Enter_Acknowledged, then **Enter_Failed data 2** (source failed to become VCONN source); a sink
+  VCONN_Swap -> **Not_Supported**; **no SOP' at any time**, fresh Rd attaches included. Signature: PDO1
+  EPR bit + Enter_Failed 2 + Not_Supported to VCONN_Swap. Handling: an EPR attempt through a plug with no
+  e-marker is expected to fail at Enter; not a sink bug, no retry loop. Which cable/port made the
+  2026-11-04 EPR 28 V runs succeed was not recorded.
+
+- **Re-validation, full run** (2026-11-07, 32a279f, cable into the bottom port, Cable off, `runs/revalidate/baseus140-full.log`):
+  32 pass / 11 fail / 14 skip, no Hard Reset abort. PD fixed 5-20 V (20 V 5 A, "source offers 5 A") and **EPR 28 V 5 A** pass
+  (28.27 V); PPS 3.3-11 V 5 A steps pass incl. 3.3 V; **QC2 Class B 20 V and QC3 Class B 5/12/20/12/5 V pass** (rows new
+  since the last run); QC2 5/9/12, QC3 continuous, FCP 5/9/12 V pass; SCP detected + 4.5 V 5 A pass, 10 V timeout, 5 V 4.5 A
+  skipped "PD active" (the source started PD during the SCP unit); AFC 9 V pass. Fails that are real negatives now:
+  **UFCS no handshake** (3 tries, D+ follows the pulses as a DCP short and never rises: `fin=-1`), **VIVO no response** on
+  every row. The 6 A hunt row hit `reject-then-reduced-list` again (Reject, then 5 fixed PDOs), shown "offers changed".
+  - `afc-redetect-after-reset` (open): AFC 12 V "unsupported" (it passed on 11-04/06). The row starts 0.7 s after the 9 V
+    row's reset with VBUS still falling (6.7 V) and gives up 0.5 s later with no AFC answer: the charger has not redone its
+    D+/D- detection (same shape as the Xiaomi bank's AFC 12 V row in `qc-follows-ping-level`). Handling (f4920bc): the AFC
+    12 V level is a retarget in the 9 V session. **Verified** 2026-11-07 on 56b3e7e (top plug direct, `--units afc`,
+    `runs/revalidate/baseus140-afc.log`): 9 V 8.963 V, then 12 V 12.006 V, 88 ms from the new byte to Active.
+
+### Baseus "Blade HD 100W" power bank (part number PPBLD100HD; 12000 mAh / 74 Wh; C1/C2 20 V 5 A, A1/A2 4.5 V 5 A SCP)
+- Label says 20 V 5 A; with no e-marked cable (direct plug) it offers 3 A only (60 W). The K2 cannot present Ra, so it cannot unlock 5 A on its own.
+- **USB-C, 2026-11-08** (004c593, C-to-C cable into the bottom port, `runs/new-chargers/bladehd-c.log`): 11 pass / 0 fail /
+  44 skip, no Hard Reset. PD 5/9/12/15 V 3 A and 20 V 3.25 A pass (4.98-19.94 V); **PPS 3.3-13 V 5 A** all steps pass incl.
+  3.3 V and 13 V 5 A. Every D+/D- unit "blocked by PD": the bank keeps PD alive on its C port (no legacy fallback there).
+  No 6 A hunt rows (no 0x2717).
+- QC3+ coarse step handled in d14c704: a QC3+ session whose first up batch moves > 100 mV/pulse ends "no QC3+ response"
+  (`[QC3] coarse step ~N mV/pulse on QC3+`). **Verified** on the USB-A 2026-11-08 (15b7bfd,
+  `runs/new-chargers/bladehd-usba-15b7bfd.log`): `coarse step ~160 mV/pulse`, QC3+ 9 V and up skipped "no QC3+", no
+  overvoltage (14 pass / 12 fail / 21 skip). The QC3+ 5 V row still shows a pass (it is reached before any stepping).
+  Run-to-run differences on this port: SCP 5 V 4.5 A "unsupported" (passed the night before), AFC 9 V "unsupported at
+  8.30 V" (VBUS followed the D+/D- levels without an AFC answer, `qc-only-unacked-rise`).
+- `qc3-coarse-step` candidate: QC3+ 9 V "overvoltage at 9.99 V" on an earlier firmware. Cause (inferred): QC3+ batches of 50 pulses at 40/50 us with a fixed 40 ms settle overshot when the adapter was slower than the loop. The closed loop (stable-VBUS wait, a shrinking final batch, stop at target - 100 mV, open-loop bound) replaces that; hardware re-run pending.
+- SCP 4.5 V passes (its USB-A ports list 4.5 V 5 A SCP).
+
+- **USB-A, 2026-11-08** (2b774f9, A-to-C cable into the bottom port,
+  `runs/new-chargers/bladehd-usba.log`): 16 pass / 12 fail / 19 skip. QC2 5/9/12 V, QC3 continuous, QC3 Class B 5/12 V pass
+  (20 V "Class A only"); SCP detected + 4.5 V 5 A + 5 V 4.5 A pass, 10 V timeout; FCP 5 V pass, 9 V unsupported; AFC
+  unsupported; UFCS no handshake; VIVO no response; VOOC never clocked. `qc3-coarse-step` again on QC3+: 9 -> 12 V moved
+  ~180 mV per QC3+ pulse (18 pulses: 8.97 -> 12.28 V in 44 ms), the engine had learned 80 mV/pulse and aborted at 12.28 V
+  as "overvoltage" (+2.3 %). The bank does not support QC3+: it steps like QC3. Wanted verdict (user, 2026-11-08): a
+  charger that answers QC3+ pulses with QC3-sized steps reads "no QC3+", not pass/overvoltage; fix in progress
+  (k2/qc3plus-coarse).
+
+### Baseus power bank PPCJB-10A0 (36 Wh, 4x 18650; C1 cable / C2 5-15 V 3 A, 20 V 5 A; A1 5/9 V 3 A, 10 V 2.25 A, 12 V 2.5 A)
+- USB-A1, 2026-11-08 (15b7bfd, A-to-C cable into the bottom port, `runs/new-chargers/ppcjb-usba.log`): 25 pass / 8 fail /
+  14 skip, no sag, no reset. FCP 5/9/12 V, AFC 9/12 V, QC2 5/9/12 V, QC3 continuous, QC3 Class B 5/12 V pass (20 V "Class
+  A only"); SCP detected + 4.5 V 5 A + 5 V 4.5 A pass, 10 V timeout; QC3+ "no response" (VBUS stayed at 5 V: a real
+  no-QC3+); VIVO no response; VOOC family never clocked.
+  - **UFCS on the USB-A: 5/9/11/5/12/20 V all pass**, not on the label: three modes 3.4-5.5 V, 5.5-11 V, 11-21 V, all
+    0.2-5.0 A (Output_Capabilities say 21 V 5 A = 105 W on an A port; no load drawn, so only the contract is proven).
+    Handshake answered 68 us after the D- release (`fin=8068 us`).
+- USB-C (C2), 2026-11-08 (15b7bfd, K2 top plug directly in the port, `runs/new-chargers/ppcjb-c.log`): 32 pass / 8 fail /
+  15 skip, no reset. PD 5/9/12/15 V 3 A and 20 V 3 A pass (3 A: no e-marked cable on a direct plug), PPS 5-21 V 3 A all
+  steps pass incl. 21 V; legacy on the C port too: QC2 5/9/12, QC3 continuous, QC3B 5/12 V, AFC 9/12 V, FCP 5 V, SCP
+  detected pass, **UFCS 5/9/11/5/12/20 V all pass**; FCP 9 V and the SCP rows after detection read "PD active: use QC
+  port" (the bank re-entered PD during the vendor units). QC3+ no response, VIVO no response. Earlier attempts through a
+  C-to-C cable on the bottom port found no Rp at all (CC 0/0): the bank's UI showed only A1 active after trickle mode;
+  with trickle off and the bank asleep, the direct top-plug attach woke it.
+  - `auto-off-no-load` (USB-A case; first named `usb-a-standby-without-load`): the A port idles at ~2.3 V and drops back to it within seconds after a button
+    wake when nothing draws current (the K2 on HID power draws ~0 mA); the bank's own "trickle" (low-current) mode keeps
+    it at 5.13 V for the whole run. Handling: none in firmware; test with trickle mode on.
+
+### Qoovi 20W 10000 mAh power bank (Lightning in, USB-C out) (2026-11-08, bb86a71)
+- **USB-C output, no load** (`runs/new-chargers/qoovi-usbc-2-bb86a71.log`, `rec-bb86a71-b`): VBUS 5.136 V within ~0.5-1 s of
+  Rd on every attach, CC 885 mV (Rp 1.5 A), but **no Source_Capabilities** over two PD attaches (~3 s each): PD rows
+  "not advertised". D+/D- shorted (DCP 5 V); AFC, FCP, SCP unsupported, QC2/QC2B no handshake. About 25 s in, VBUS went
+  to 0 and the run stopped "source lost". Pattern `auto-off-no-load` (USB-C case). The `[PWR]` log lines read 2.7-3.1 V
+  during the attaches: that is the 2.5 s VBUS average lagging the step (see `slow-vbus-ramp`), not a slow ramp.
+- Most PD banks tested (Xiaomi 20K, CUKTECH 10, Blade HD 100W C, PPCJB-10A0 C) send caps with no load; this one does not.
+  Inferred, not proven: its fast-charge controller starts only on current draw. Parked until a load is available.
+- **Through a Lightning-to-C cable into the bank's Lightning (input) socket** (`runs/new-chargers/qoovi-summary.log`,
+  `qoovi-results.log`, 55b13fc): one run saw 5 PDOs (5 V 3 A, 9 V 2.22 A, 12 V 1.67 A, ...) and **AFC 9 V = 9.12 V,
+  12 V = 12.10 V** (valid readings); FCP 5 V and SCP detected, FCP 9 V / SCP 10 V no rise. The run stopped "5V release
+  failed" after SVOOC (output off). A second run on the same cable saw an unregulated VBUS (3-4 V with no load), no
+  caps, DCP only. Not reproducible: Lightning has no CC, so the PD seen depends on the cable's own chip. Not counted as
+  this bank's behaviour.
+- The K2 power-cycled once during the cable swap (reset flags 0x0C000000, POR + pin, CDC moved ACM0 -> ACM1): its own
+  USB cable, not a firmware fault.
+
+### REMAX 10K 22.5W power bank, USB-A port (2026-11-08, bb86a71, `runs/new-chargers/rec-bb86a71-c`, `rec-remax-2`)
+- DCP 5 V with a QC3 controller: VBUS rests at **5.174-5.176 V unloaded** in every mode, QC2 5/9/12 V pass, QC2 Class B
+  20 V ends "source lost" (VBUS 0.46 V), the detector reads `QC3.0`, SCP is "unsupported". After a failed release the
+  output sat at a ~2.05 V standby (pattern `usb-a-cuts-on-low-dpdm`, USB-A port).
+- Bug found: the QC3 5 V row timed out (12 s, "[QC3] vbus=5176 pending=0 step=200 n=-1" every 500 ms) because the engine's
+  pass band for a 5 V target tops out at 5.15 V and the bank ignores the one down pulse that would bring it under. It
+  reproduces on a fresh boot (`rec-remax-2`, no earlier source loss), so it is not a leftover of the handshake. Fixed
+  (host-tested, not yet on hardware): 5 V target, a measured pulse batch that moved nothing, VBUS inside vSafe5V
+  (4.75-5.5 V) is Active; VBUS outside vSafe5V that ignores the pulse still times out.
+- Bug found: a failed 5 V release with VBUS at the 2.05 V standby ended the run "UNSAFE: unplug; verify 5 V release
+  failed" forever (the unplug clear needed VBUS under 1 V). Unsafe guards a source left above vSafe5V; VBUS under the
+  vSafe5V low end holds nothing elevated, so that case now ends as "source lost" (Stopped), and Unsafe clears after
+  `kUnsafeGoneMs` under 4.75 V. VBUS above vSafe5V (a stuck 9 V, 5.5 V and up) still never clears.
+- Tapping the bank's power button cycles VBUS to ~1.8 V; a "source lost 0.48 V" row in `rec-remax-2` was that tap, not a
+  reaction of the charger.
+- **Hardware verification of both fixes** (f2837f5, `runs/new-chargers/rec-f2837f5`): QC3 5→9→12→9→5 V all pass (5.18 /
+  8.79-9.15 / 11.89 V; the 5 V rows go Active in ~0.5 s), QC3 Class B 5 V pass; a lost source ends "Stopped (source lost)"
+  at the 2.05 V standby, no Unsafe. No trickle mode: the A port drops to the 2 V standby with no load and only the power
+  button wakes it (that press also cycles VBUS).
+- **QC3 Class B 12 V cuts the output, reproducibly** (two runs, `remax-usba-3-f2837f5.log`, `remax-qc3b-repro.log`): the
+  QC3 row climbs 8.79 → 11.89 V and holds; the QC3B row climbs 5.17 → 11.69 V in 0.75 s (seven 4-pulse batches 38 ms
+  apart, ~31 up pulses against ~27 for the QC3 climbs) and the next single pulse drops VBUS to 1.75 V, then the 2 V
+  standby. D+/D- were at the continuous-mode levels (0.65 / 3.0 V). Same voltage as the QC3 row that held, so not a 12 V
+  limit: candidates are a pulse-count limit (the bank counts pulses that did not all move VBUS) or a slew guard on a
+  5→12 V climb. Not resolved; QC3+ / AFC not run on this port.
+- **Huawei** (f2837f5, port awake, `runs/new-chargers/remax-huawei.log`): **FCP 5/9/12 V all pass** (5.17-12.03 V; the
+  register handshake reads 0x21 = 0x02 and acks the 0x2C/0x2D/0x2B writes). **SCP unsupported** (a second time, port
+  awake): the "22.5 W / 4 A on USB-A" label is not SCP 4.5 V 5 A / 5 V 4.5 A / 10 V 2.25 A on this port.
+
+### Baseus EnerFill FH22 100W charger (USB-C brick) (2026-11-07, 6930481, bottom port, CUKTECH e-marked cable, `runs/baseus-fh22/`)
+- 7 PDOs, 5 A offered through the cable: fixed 5/9/12/15 V 3 A, 20 V 5 A, **SPR AVS 9-20 V 5 A** (first SPR AVS source seen; every AVS row passes, 8.98-19.42 V), PPS 5-21 V 5 A. Card 18 (fp 16F36DAF). Full run (`run2-full.log`): 22 pass / 16 fail / 21 skip, no Hard Reset, no unsafe abort.
+- `output-capped-below-advertised` (new pattern): the converter tops out at ~19.4 V whatever is asked. Fixed 20 V lands at 19.41 V (inside PD's ±5 %, passes), AVS 20 V at 19.42 V (passes), but the PPS 21 V rows stop at 19.43 V and fail "timeout"; the rest of that PPS chain is skipped. The APDO advertises 21 V it cannot deliver with no load. Handled (k2/ct-range-rules): the stalled step is now `Reason::Capped` and the chain continues, see the pattern table. Not yet re-run on this charger.
+- Legacy: QC2 5/9/12 V and QC3 5→12→5 V pass; QC3+ 5 V pass then "no QC3+ response"; QC3 Class B 20 V skipped (Class A only). FCP, SCP, AFC end Unsupported (no ack, no rise) and skip their other rows as designed. VOOC/SVOOC need load; VIVO no response.
+- UFCS: the first runs (`run1-ufcs.log`) showed every row "no response". Cause found with the wire diagnostics: the K2's USART2 clock was wrong (baud doubled, fixed in fa966dc), then the engine mistook the source's Soft_Reset code (4) for Accept. The charger is a standard UFCS source (T/TAF 083-2024, `docs/FASTCHARGE_PROTOCOLS.md` section 4): after the handshake it answers Ping `AA 20 08 00 63` with ACK `AA 40 08 01 DF`, Get_Output_Capabilities `AA 22 08 06 D6` with ACK `AA 42 08 01 9C` and then Output_Capabilities (receiver address 2, message 0); our ACK `AA 20 08 01 4A`; Request `AA 24 09 02 08 ...` gets ACK `AA 44 08 01 59` and Accept `AA 42 08 03 CE`.
+- UFCS output modes (decoded from the Output_Capabilities payload `18 02 26 01 54 01 2C 64 | 28 04 4C 02 26 01 90 64`): mode 1 3.40-5.50 V 1.00-3.00 A, mode 2 5.50-11.00 V 1.00-4.00 A, steps 50 mA and 10 mV. No level above 11 V is offered, so the charger test's 12 V UFCS row (levels 5/9/12/5 V) ends with the "no band" failure (level not offered) by design; 9 V is mode 2 at 2 A (cable unknown, worst case of the standard's cable table).
+- **UFCS hardware pass** (591e88e, 2026-11-07, `runs/baseus-fh22/run9-ufcs-session.log`): 5 V pass (4.999 V), **9 V pass (8.975 V)**, back to 5 V pass (5.005 V), 12 V "unsupported" (not offered). First UFCS pass on any source.
+- **UFCS 11 V pass** (2016132, 2026-11-07, `runs/baseus-fh22/run11-ufcs-11v.log`): 11 V 10.970 V, the top of its 5.5-11 V
+  4 A mode (44 W); 12 V "unsupported" (not offered), as expected.
+- `ufcs-exit-cuts-vbus` (new pattern): after Exit_UFCS_Mode / our bus reset the charger drops VBUS (to 0.36 V) before it comes back at 5 V. A fresh UFCS session per row ran its handshake into the dark source ("source lost"). Handling: the UFCS rows share one session (each level is a new Request), so the exit happens once, at the unit's end.
+- Handshake note: the standard has the sink keep D- low during tDet4, while the K2 releases D- there; the charger accepts it (handshake and Ping/ACK work). The Accept is the last frame in the log; Power_Ready, the 9 V band and the keep-alive were seen working on 591e88e (5/9/5 V pass).
+- Mi 11 V / 20 V 6 A hunt rows rejected in 11-52 ms (not a Xiaomi OEM source; expected).
+
+### Xiaomi 20K power bank (full charger test, 2026-11-07, `runs/xiaomi20k/rec2`)
+- Source_Capabilities: 5 V 3 A, 9 V 3 A, 12 V 3 A, 15 V 3 A, 20 V 2 A, PPS 5-11 V 3 A (PDO 6), PPS 5-20 V 2 A (PDO 7). SVID 0x2717 is listed and the auth chain finishes; the post-chain list is identical (no 6 A).
+- `hard-reset-on-6a-over-offer`: the Mi 11V 6A row (RDO 0x63044C78) is answered by a source Hard Reset 7 ms after the Request.
+- `qc3plus-down-needs-wide-pulse`: the QC3+ unit walked 5, 9, 12 V up, then the 12 to 9 V step sent 135 down pulses of 40 us and VBUS stayed at 11993 mV; the engine ended the row "no response" and skipped the rest as "no QC3+ resp". A lab sweep of the down pulse width at the same point (VBUS read each batch): 40, 100, 150 us flat; 175, 200 us stepped down, about 200 mV per 50-pulse batch, 12 to 9 to 5 V all passing. The bank slews at a fixed rate toward the commanded level (each 50-pulse batch moves about 200 mV whatever the pulse count), so the learned "step" of 5 mV per pulse is not a per-pulse step.
+- `preauth-list-after-reset`: the source announced 5 fixed PDOs ~1 s after the reset (123504) and the full 7 PDOs at 124146. Before the fix the runner read the short list as "offers changed", skipped every row from PDO 6 up and never tested PDO 7 (PPS 5-20 V).
+- `qc-only-unacked-rise` (`runs/xiaomi20k/run7`, same day): the bank is QC-only. It follows D+/D- levels and moves VBUS on the AFC / FCP / SCP handshake levels alone, never answering the protocol itself: AFC 9 V "overvoltage" at 9.69 V and 12 V "no response", SCP all rows 6.7 V. Handling: an AFC / FCP / SCP session that never got a protocol answer (a CRC-valid ACCP frame or ack, or an AFC byte exchange) ends Unsupported whatever VBUS did, and the rest of that protocol's rows are skipped as unsupported. A real overvoltage still aborts and drops VBUS (the abort resets both lines to 0 V); only the label changes. Once the charger has answered, an overshoot stays an overvoltage. Open: FCP 5 V in the same log read CRC-valid ACCP frames before its overvoltage and 9/12 V passed with acked frames, so those rows are not covered by the rule. The user decided to keep the FCP 9/12 V passes: the bank really answers FCP.
+- `qc-follows-ping-level` (`runs/xiaomi20k/rec2,3,4,7,9`, same day; inferred from VBUS and D-, the logs hold no AFC wire bytes): the AFC 9 V row never meets a 9 V level. In all five recordings VBUS leaves 5 V at about +505 ms after `start AFC` (the 500 ms settle ends, the first master ping puts D- at 2.0 V, D+ stays 0.6 V) and climbs about 120 mV/ms toward **12 V**: rec2 6546 mV at +520 ms, 11993 mV at +572; rec4 9483 at +546, 11993 at +577; rec7 5964 at +521, 11994 at +572; rec3 10144 at +549; rec9 6.13 V at +518, 9986 at +549 (the engine then resets the bus; the row's "measured" 8.98 to 10.17 V is just where VBUS was at the next sample). The D- samples in that window read 1.95 to 2.04 V, our own ping level. A QC2 front end that compares D- against its low threshold reads D+ 0.6 V with D- 2.0 V as the 0.6 V / 0.6 V request (12 V); an AFC charger given 0x46 would stop at 9 V. The bank regulates a real 9 V at 8.98 V in QC2, FCP and QC3+ rows, so 9.99 V is not an AFC 9 V overshoot. The AFC 12 V row in the same runs never moves from 4.96 V: the bank's QC detect needs D+ at 0.6 V for about 1.25 s, the 9 V row starts with the lines already up (about 0.9 s) plus the 500 ms settle, the 12 V row starts 0.5 s after our own abort reset, so it is most likely a timing artifact and not a second protocol answer. rec9 (firmware with the unanswered-session rule) still ended Overvoltage, which means `Engine::acked_` was set: at least one of the first two AFC exchanges (about +500 and +525 ms) passed the two slave-ping width checks and the one-byte frame decode (parity and content are not checked). Whether that was a real answer or the bank's own D- activity is not known. Handling: none yet. The 110 % guard did its job (the abort fired just past 9.9 V and VBUS dropped); only the label is open. Open decisions: log each AFC exchange (n, ok, VBUS) to prove the ack; require all three sends before an AFC answer counts; or re-run the HVDCP handshake before AFC.
+- `cable-gated-5a-apdo` (`runs/xiaomi20k/rec9`, aad7018, same day): with the cable shipped with the bank (e-marked; the bank is the VCONN source and reads it, the K2 sink does not see SOP'), PDO 6 becomes PPS 5-11 V **5 A** (raw 0xC0DC3264, 55 W) instead of 3 A; every other PDO is unchanged. This is the "10 V 5 A" mode: a manual PPS request on PDO 6 at 10 V 5 A is accepted and settles at 9985 mV. Without an e-marked cable the bank caps PDO 6 at 3 A whatever the 0x2717 chain does. Full run on that cable: 36 pass / 14 fail / 9 skip, QC3+ all five pass, the Mi 6 A rows still end "not unlocked (source reset)" (6 A is over the 5 A APDO). The Mi 11 kernel (`docs/research/xiaomi-10v5a.md`) never asks above the advertised APDO current, so the unlock is the cable, not the auth chain. A generic e-marked EPR cable (50 V 5 A) gives the same 5 A PDO 6 (same raw 0xC0DC3264): any 5 A e-marker unlocks it, nothing Xiaomi-specific.
+- `spoof-not-enough-for-5a` (`runs/xiaomi20k/rec11`, same day): on the K2 top port the bank offers PDO 6 at 3 A with the real EPR cable, and still 3 A with the byte-exact EPR 50V 5A identity spoofed in Ra mode, although it sent SOP' Discover Identity, got our reply 0.6 ms later and GoodCRC'd it (Source_Capabilities 195 ms after). Cause not proven (inferred: VCONN current sensing, or top-port CC wiring hides the cable). Back on the bottom port with the real cable: PPS PDO 6 at 11 V 5 A accepted, VBUS 10988 mV (no load).
+- OP15 inline, 2026-11-07 (32a279f, bank -> its own e-marked cable -> K2 bottom, K2 top -> OnePlus 15; `runs/op15-inline/rec-32a279f`):
+  the K2 sent no frame at all (0 TX lines, auto-GoodCRC off) over two attaches; the phone's Discover Identity was answered by
+  the bank only, PPS stepped without a reset. Two patterns:
+  - `cable-read-race-at-attach`: on the same cable the bank's SOP' cable read failed on one attach (`SOP' msg 0x0081, 0 objects`)
+    and the list stayed 3 A (20 V 2 A, PPS 5-20 V 2 A; the OP15 took 18.8 W on PPS 7.6 V); on the next attach the read returned
+    5 objects and the list rose to **20 V 5 A, PPS 5-11 V 5 A, PPS 5-20 V 5 A** (the OP15 took 39.2 W at 14.9 V 2.63 A). So the
+    5 A list covers all three PDOs, not only PDO 6 (the earlier runs had 20 V 2 A there). The 5 A list also set the fixed PDO 1
+    "unconstrained power" bit (raw 0x0A01912C vs 0x0201912C); whether the bank was on external power is not known. Handling:
+    a 3 A list on a known 5 A cable is not proof the cable or source lacks 5 A; a re-attach may differ.
+  - `shared-pd-firmware-0xa819`: Discover Identity VID 0x2B01, PID 0, bcdDevice 0xA819, ID header 0x05802B01 (DFP product type
+    power brick, modal operation, connector type unset) - the same VID and bcdDevice as the CUKTECH 10 Ultra C1 (header
+    0x05C02B01, connector type receptacle). Same PD firmware family, configured per product (inferred; bcdDevice is a vendor
+    value). The OP15 sent this bank an unstructured VDM on SVID 0x2B01 (cmd 18), so the phone knows this vendor.
+
+### Xiaomi PB200SZM power bank
+- `auto-off-no-load`: USB-A output switched off during QC2 9 V with no load; a full run needed trickle mode (double-press).
+- USB-C: PD 5–20 V, PPS 5–11 V and 5–20 V, QC2/QC3 ≤12 V, FCP ≤12 V; no AFC on C (AFC 9 V on A). Ports use different protocol sets.
+
+### UGREEN Nexode Air 65W (X865)
+- `avs-after-skedb` (2026-11-04, bottom port, Black Box): first Source_Capabilities has 6 PDOs (5/9/12/15/20 V fixed, PPS); the 7th, an SPR AVS APDO (0xE004B145: 9-15 V 3 A, 15-20 V 3.25 A), appears only after our Sink_Capabilities_Extended. Sequence: Get_Sink_Cap, our Sink_Capabilities 1.6 ms later, Get_Sink_Cap_Extended 6.3 ms after that, our SKEDB (Sink Modes 0x23) 1.6 ms later, Source_Capabilities with 7 PDOs 14.6 ms later. Not_Supported or no answer: 6 PDOs. Without the answer to Get_Sink_Cap_Extended it is a PD 3.0 charger to us.
+- Source_Capabilities_Extended (25 B): VID 0x2FE6, PID 0, XID 0, FW 1, HW 1, PDP 65 W, EPR PDP 0, source inputs 0x03, no batteries. No AVS bits there.
+- Discover Identity on SOP' gets Not_Supported.
+- Its GoodCRC for our Get_Source_Cap_Extended arrives ~118-121 ms after TX_START, so the TX result window had to be understood as ambiguous (not "no answer").
+- SPR AVS rows pass consistently (2026-11-04, 5c548f7, bottom port, two back-to-back `--units pd` runs, 7 PDOs both times so the AVS APDO was listed): 19 pass / 0 fail / 2 skip each run, AVS 14.5 / 20 / 20→14.5 / 14.5→11.7 / 11.7→9 V all pass in both runs, no Hard Reset, no reboot. Skips are EPR fixed + EPR AVS (not offered by this 65 W unit).
+- Spec-validated 2026-11-04 against USB PD R3.2 V1.2 (Table 6.15, Table 4.3, Table 6.22, Table 6.61 byte 17, §7.9.2, §7.31.3): APDO 0xE004B145 is the spec's own 65 W example; SPR AVS has a fixed 9-20 V range and the APDO carries only the two current fields (a PDP byte exists only in EPR AVS, Table 6.16); the SKEDB-gated re-announce is a permitted capability-change Source_Capabilities and re-planning from the latest caps is required; settled AVS accuracy is ±5 % + 0.5 V, so our pass band (target + max(10 %, 600 mV)) is wider than spec, never stricter.
+
+### Anker Prime 100W (USB-C)
+- `placeholder-vid`: identity FFFF:FFFF.
+- Locked PD after repeated hard resets; needed a replug.
+- 2026-11-04 (5c548f7, bottom port; card 19, fp ADC8AB3D, 6 PDOs, 100 W): PD fixed 5/9/12/15/20 V all pass (5.10-19.79 V), PPS 3.3-11 V 5 A whole range pass; no SPR AVS / EPR fixed / EPR AVS advertised (the manufacturer's manual lists only the fixed PDOs + PPS). Two full runs identical (24 pass / 10 fail / 12 skip each) plus one `--units pd` run (9/0/3): legacy rows QC2 up to 12.1 V and QC3 up to 11.8 V pass, AFC 9 V pass, SCP detected, FCP 9 V fails "PD active: use QC port", VOOC/SVOOC "needs load", UFCS no response, VIVO 9/11 V not reached, QC3+ no response. No Hard Reset and no lock-up this session - the old "locked PD after repeated hard resets" did not recur. Second run read the cable e-marker (50 V/5 A) yet the source still offers no EPR.
+
+### Baseus EnerCore CJ11 70W (model E0307E)
+- 2026-11-07 (65aaeaf, old legacy-first order, HID-powered, Ra spoof armed; `runs/home1`): legacy units on real handshakes:
+  FCP 5/9/12.10 V pass, QC2 5/9/12.11 V pass, QC3 continuous 5/9/12/9/5 V pass, SCP detected + 4.5/5 V pass (10 V timeout),
+  QC3+ no response, AFC/UFCS/VIVO no response, VOOC/SVOOC "needs load" (= no frames heard). The run then STOPPED
+  "source lost" at the first PD row (step 33/35): the legacy -> PD unit boundary detached and re-attached with the Ra spoof on,
+  and VBUS never came back. Unverified which part (Ra at re-attach vs the charger's detach handling) causes it; re-run on
+  663b67e with Cable OFF, then with the spoof, to separate them. PD caps not captured yet.
+  Re-run 2026-11-07 on 663b67e (new order: vendor modes -> PD -> QC/UFCS, Cable OFF, HID-powered; `runs/baseus70/run1_off.log`):
+  27 pass / 16 fail / 11 skip, completed, no "source lost". 6 PDOs: PD 5/9/12/15 V 3 A, 20 V 3.5 A (70 W), PPS 3.3-11 V
+  3.3 A; all PD fixed (5.08-19.94 V) and PPS steps pass; Mi 20V/11V 6A rejected (no 0x2717). FCP 5/9/12 V, QC2 to 12.11 V,
+  QC3 continuous, QC3 Class B 5/12 V pass (20 V not reached = Class A), QC2 Class B "Class A only"; SCP detected 4.5/5 V
+  (10 V timeout); AFC, VIVO, UFCS no response; VOOC/SVOOC no frames. A spoofed run (`--cable builtin:1`) is refused by the
+  Ra guard ("charger through a cable, not on the top plug") in this setup, so the earlier "source lost" most likely came
+  from the Ra spoof presented through a cable on the old firmware (no guard decision recorded then).
+  Spoofed run 2026-11-07 (a86a139, top plug directly in the charger, EPR 50V 5A identity; `runs/baseus70/run2_epr.log`):
+  1 pass / 27 fail / 26 skip. The spoof works: the charger re-announced PPS 3.3-11 V **5 A** (3.3 A without it). Two patterns:
+  - ~~`ra-disables-legacy`~~ corrected the same day: the real cause is `legacy-off-on-direct-plug` (table above). Plugged
+    straight into the K2's top plug this charger hides all D+/D- protocols (any firmware, fresh charger); through a USB-C cable
+    into the bottom port QC2 passes to 12.12 V (`runs/baseus70/run9_qc2_cable.log`). The Ra-per-unit change stays but was not the fix.
+  - `reannounce-after-cable-discovery`: the run planned from the first caps (3.3 A), the post-discovery re-announce (5 A)
+    made the PD rows "offers changed" and skipped the rest. Handling built (k2/ra-per-unit): a list that still offers every
+    row is followed (re-plan, or remap when a row already ran). The exact trigger of the re-announce (SOP' query or Ra) is
+    not provable from the logs. Both are host-tested with a scripted Baseus-like source; not yet re-run on hardware.
+
+- **Re-validation, built-in USB-C cable** (2026-11-07, 981c831, into the bottom port, Cable off, `runs/revalidate/cj11-full.log`):
+  36 pass / 11 fail / 16 skip, no Hard Reset. PD fixed 5-20 V (20 V 3.35 A) and both PPS ranges pass (PPS 5-11 V 5 A, PPS
+  5-21 V 3.2 A, 21 V reached); QC2 5/9/12, QC3 continuous, **QC3 Class B 5/12/20/12/5 V pass (19.74 V)**; FCP 5/9/12 V
+  pass; SCP detected + 5 V 4.5 A pass, 10 V and 4.5 V 5 A timeout; QC3+ 5 V only. Real negatives: UFCS (no handshake, 3
+  tries, `fin=-1`), VIVO, AFC (unsupported). VOOC family "needs load" (= never clocked, see the OnePlus section).
+  - `qc3-20v-without-qc2-20v` (new): the QC2 Class B 20 V level (D+ 3.3 V / D- 3.3 V) stays at 5.10 V for 13 s ("voltage
+    not reached"), while the QC3 continuous ramp in the same run reaches 19.74 V. The run labels the QC2 row "Class A only
+    (12 V max)", which is wrong for this charger: it is Class B, only the discrete 20 V level is missing. Handling (k2/qc2b-label): that row is now a fail, "20 V via QC3 only" (Reason::Qc3Only20V),
+    whichever of the two units ran first.
+
+### CUKTECH 10 GaN Ultra 120W (4x USB-C)
+- Top port (C1), 2026-11-04 (cf064ec): 7 PDOs - 5/9/12/15 V 3 A, 20 V 5 A (100 W), PPS 5-11 V 5 A, PPS 5-20 V 5 A; no EPR fixed / SPR AVS / EPR AVS. `--units pd` 15 pass / 0 fail / 3 skip; full runs 20/22/9 identical across three runs (EPR cable and 6 A cable), PD fixed 5.20-19.94 V and both PPS ranges all pass; legacy rows "no handshake" (PD-only port). The QC2/QC3/QC3+/VIVO 5 V rows that counted as passes in these runs were an artifact, not detection: QC 5 V passed on a single vSafe5V reading before any D+/D- handshake, and the VIVO 5 V pass is most likely the K2's own request frame coming back through the DCP short (hypothesis, not proven on hardware). Since the fix a plain 5 V source passes no legacy row, so on this port every legacy unit reads "No reply". No Hard Reset, no unsafe abort. Source identity VID 0x2B01 with SVID 0x2717 (Xiaomi); also answers the Cuktech SVID 0x2E87 signature. Reproduced identically on merged main 5f6a9a3 (2026-11-04: 20/22/9, no Hard Reset, no QC4+/QC5 label as designed for non-Qualcomm VID).
+- `xiaomi-120w-auth-implemented`: the manufacturer's manual lists C1/C2 as 20 V 6 A (120 W, PD 3.1). The 120 W PDO is NOT advertised initially with a standard EPR 50 V/5 A cable nor with the included 6 A cable - the 6 A cable has no readable e-marker (e-marker valid=False). The extended range is unlocked via the Xiaomi Mi Turbo Charge auth handshake (SVID 0x2717 VDM sequence 0x27170201..0x2717020A; measured on the wire). After the K2 answers with the correct VDM responses, the charger re-announces Source_Capabilities including a 20 V 6 A (120 W) PPS APDO. The VDM reply logic is implemented in `pd_sink` (SVID 0x2717 activates it). **UNLOCKED on hardware 2026-11-04 (build e39af46, C1)**: the auth chain is SINK-initiated (reverse-engineered from the wire): after the Discover-SVIDs exchange shows 0x2717 the sink sends the 1-DO opener `0x27170101` on SOP (~200 ms paced), the charger then drives the full 9-step unstructured VDM chain `0x27170201..0x2717020A` (step-1 reply must be `0x27170102`; `0x27170106` makes the charger skip to step 06 and NOT unlock), and after `0x2717020A` the charger re-announces Source_Capabilities with both PPS APDOs raised to 6 A: PPS 5-11 V 6 A (66 W), PPS 5-20 V 6 A (120 W). Identity ACK uses the recorded bytes (`0xFF00A041, 0x05C02717, 0x00000000, 0x0000A486`). Trace: /tmp/k2runs/c1-step1-0102.jsonl. The unlocked contract is accepted end-to-end: `pd-reread` then `pd attach 20000 6000` -> PDO 7 (PPS 5-20 V) at 20 V 6 A, VBUS 19.94 V, hard_resets=0 (build 647a87b, 2026-11-04). Earlier deadlock cause: our sink waited passively for `0x271702xx` while the charger waited for the phone-side opener. Port C3 answers Not_Supported to Discover SVIDs and never initiates identity - no 0x2717 flow there (the box's 11 V 4.1 A on C3, if real, is not reachable this way; unverified). Known limitation: with the proactive Discover-SVIDs REQ now default-on (647a87b), a scripted full run on an auth-capable charger completes the chain mid-run, the charger re-announces the 6 A caps, and the row in flight fails "offers changed" (observed: /tmp/k2runs/c1-authed-full-run.log, run stopped "source lost" after the re-announce); use `pd-reread` + `pdos`/`pd attach` to read the unlocked offers instead.
+- `auth-capped-by-cable` (2026-11-04, 3-cycle validation /tmp/k2runs/validate-2026-11-04.log): the auth chain runs to completion every time (RX 0x2717020A each cycle, after a hard reset too), but the re-announced PPS APDO carries 6 A only when the cable e-marker is unreadable (the included 6 A cable) - over a cable whose e-marker the charger reads as 5 A (an EPR cable identified as Xiaomi 5 A) the charger caps the APDO at 5 A, so 20 V works but the contract stays 100 W. Cable current limit, not an auth failure.
+- `xiaomi-chain-killed-by-sink-request` (2026-11-06, CUKTECH 120 W C1 with its 6 A cable, runs/cuktech6a-scheme1-mi): a sink-initiated Request sent 35 ms after the last 0x2717 VDM (the Runner's first row on a re-attach) makes the charger drop the chain: no further 0x2717 VDM, no 0x2717020A, no Get_Source_Cap, no 6 A caps for the rest of the session, and the 6 A hunt rows are Rejected on the 5 A list. Signature: source listed SVID 0x2717, not authed, 0x2717 VDMs younger than ~300 ms. Handling (`pd::Sink::xiaomi_chain_active`): hold back every sink-initiated Request, EPR entry and Get_Source_Cap while the chain runs; release when authed and the re-announced caps arrived (1 s at most), when the chain was quiet for 600 ms (the CUKTECH pauses up to ~336 ms between two of its own steps, so 300 ms was too short), or 2.5 s after the SVID listing. Verified 2026-11-06 (f1b0944, `runs/cuktech6a-guard`): with the guard, `Mi 11V 6A` (11.00 V) and `Mi 20V 6A` (19.95 V) both pass on the PPS APDOs. Answers to the source's own messages (re-announced caps) are never held.
+- USB-A port, 2026-11-06 (76d7e3d, card #8; `runs/cuktech-usba`): the user confirms it is this CUKTECH 120W charger, so the
+  charger has a USB-A port and the "4x USB-C" in this heading is wrong; exact port layout not yet recorded. USB-A to C
+  cable into the K2's bottom port, HID unplugged (the K2 runs on this port, bus-powered). Real handshakes: QC2 5/9.10/12.13 V,
+  QC3 5/8.9/11.7/9.1/5 V (continuous mode), FCP 5/9.10 V (12 V no response), SCP detected + 4.6/5 V (10 V timeout); AFC,
+  VIVO no response; QC3+ no response; VOOC/SVOOC need load. Patterns:
+  - `usb-a-no-load-auto-off`: with nothing drawing current (K2 powered over HID) the port switches VBUS off every ~6.5 s
+    (about 3-4 s at 5.12 V, then ~3.95 V) and re-probes; with the K2 itself as the load (bus-powered) it stays on.
+  - ~~`ufcs-cuts-a-port-power`~~ **WITHDRAWN 2026-11-07**: recorded under the doubled USART2 baud. Re-run on 32a279f
+    (`runs/revalidate/cuktech-usba-qc.log`, HID-powered): UFCS 5/9/11/5 V pass on this port, one mode 5.00-11.00 V
+    0.30-3.00 A (33 W), handshake answered after the D- release (`fin=9132 us`), no VBUS cut during the UFCS rows.
+  - `usb-a-cuts-on-low-dpdm` (2026-11-07, 32a279f, HID-powered; same with the OnePlus A-to-C cable and a plain USB3 A-to-C
+    cable, so the port, not the cable; `runs/revalidate/cuktech-usba-{full,qc,plain}.log`): when D+/D- sit near 0 V for about a
+    second or more (SCP detect-only 5 V row, SCP 5 V 4.5 A, VOOC listen, one VIVO row) the port sags VBUS to ~2.0-2.5 V and
+    comes back by itself in ~4 s. Brief lows (FCP, AFC, QC2/QC3 handshakes, SCP 4.5 V 5 A, UFCS) do not trigger it. Through
+    an A-to-C cable the CC Rp is fed from VBUS, so each sag is also a CC detach/attach (a new attach session). The VOOC sag
+    stopped the full runs ("source lost") because the new session arrived after the row had finished. Runner fix a76a207
+    (adopt the tail session for 5 s after a legacy recovery); **verified** 2026-11-07 (981c831, plain cable,
+    `runs/revalidate/cuktech-usba-sagfix.log`): the full run completed (18/13/16, done) through six sags (SCP 5 V, SCP 4.5 V,
+    VOOC, SVOOC, SVOOC65, VIVO 11 V). AFC 9 V read "unsupported" in that run, right after the SCP sags; alone
+    (`--units afc` twice, 114979e, `cuktech-usba-afc{1,2}.log`) AFC 9 V and 12 V pass both times (12 V newly, via the
+    f4920bc retarget). So the full-run miss is the port still settling after a sag. Open: a longer settle before the next
+    unit after a sag recovery. With HID power and no load the port did NOT auto-off in these runs
+    (`usb-a-no-load-auto-off` not reproduced: VBUS held 5.12 V for 10+ s before each start).
+  - Re-validation results on 32a279f (units run without the sag rows): QC2 5/9/12 V, QC3 continuous, QC3B 5/12 V pass
+    (20 V "Class A only"); FCP 5/9 V pass, 12 V refused (write 0x2C REFUSED); AFC 9 V pass, 12 V unsupported; SCP 4.5 V 5 A
+    pass; QC3+ 5 V pass, 9 V no response; VIVO no response (real negative).
+  - The K2's own ~95 mA through the shunt read as "Load attached" / "PD or load active" when bus-powered; fixed (8ed1cae,
+    0ec2477: a 150 mA self-supply allowance without a USB host).
+- **UFCS on C1, 60 W** (2026-11-07, branch k2/ufcs-hs-early on b18f861, K2 top plug directly in C1, Cable off,
+  `runs/cuktech-ufcs/`): the earlier "no handshake" on this port was our bug, not the charger. Patterns:
+  - `ufcs-answer-inside-tdet4` (new): the source ends its D+/D- short and pulls D+ high 6.0 ms into the 4th handshake
+    signal (D- still low; `fin=6006 us`, three runs), i.e. at tDet4's minimum. The old check demanded D+ low at the end of
+    that 8 ms and failed it every time (`run1..3`, `fin=0 ok=0`). T/TAF 083-2024 7.3 starts the D+ high watch at the 4th
+    signal's start, so the handshake now watches from there (D- held low keeps a plain DCP short low, no false pass) and
+    releases D- only if nothing answered inside it (the Baseus FH22 answers ~1 ms after that release). Up to 3 tries.
+  - Output_Capabilities: mode 1 5.00-11.00 V 0.50-3.00 A, mode 2 5.00-20.00 V 0.50-3.00 A. The 5-11 V 5 A mode some
+    lists show for CUKTECH chargers is not offered here (no cable info; this run had no cable at all).
+  - **Hardware pass, one session** (`run6-60w.log`, `run7-60w-wire.log`): 5 V 5.005, 9 V 8.999, 11 V 10.995, 5 V 5.005,
+    12 V 11.991, **20 V 3 A 19.941 V**. The 20 V Request on the wire `AA 34 09 02 08 20 00 00 00 07 D0 01 2C` (mode 2,
+    20.00 V, 3.00 A) got ACK, Accept, Power_Ready: a 60 W UFCS contract. No load, so the 3 A is a contract, not a draw.
+- **Re-validation, C1 full run** (2026-11-07, 32a279f, top plug direct, Cable off, `runs/revalidate/cuktech-c1-full.log`):
+  23 pass / 16 fail / 24 skip, no Hard Reset, no reboot. PD fixed 5-20 V 3 A and both PPS ranges pass (5.20-19.93 V, 3 A
+  without a cable, as `no-sop-prime-for-dumb-plug`); **UFCS 5/9/11/5/12/20 V all pass in the full sequence**; VIVO "no
+  response" on every row now with the right baud (so a real negative); QC2/QC3/QC3+/QC3B "no handshake" and FCP/SCP/AFC
+  unsupported (C1 is PD + UFCS only on D+/D-); VOOC family needs load; Mi 6 A rows skipped (3 A cable).
+- Identity on C1, 2026-11-07 (32a279f, `pd-reread --mask 6`, top plug direct): VID 0x2B01, PID 0, bcdDevice 0xA819, ID header
+  0x05C02B01 (DFP power brick, modal operation, USB-C receptacle), SVID 0x2717 and the 9-step Mi chain. Same VID and bcdDevice
+  as the Xiaomi 20K bank (`shared-pd-firmware-0xa819`, see that section).
+- Spoofed identities on C1, 2026-11-07 (2c70fa6, K2 top plug directly in C1, fresh mains power per run, `--units pd`;
+  `runs/cuktech-ids/`): the built-in CUKTECH 6A identity unlocks PPS 5-11 V and 5-20 V at 6 A and both Mi rows pass
+  (11.00 V and 19.94 V at 6 A) with no real cable. The Kowsi X1 "Mi 6A" clone (VID 0x2717, sniffed identity only) gets
+  PPS 5 A and the Mi rows read "not unlocked"; the charger also sends that cable identity Xiaomi-specific SOP' requests the
+  clone does not answer. Rule: when a built-in identity and a sniffed clone cover the same vendor, the built-in is listed
+  first / used by default. The Kowsi "Nubia 6A" clone (VID 0x2E87, the CUKTECH family SVID) also gets PPS 5 A only, Mi rows
+  "not unlocked", and the charger sends it no vendor cable requests at all (`run2_nubia6a.log`): the family VID alone does
+  not unlock 6 A. Display bug seen in these runs: the Mi rows said "(3 A cable)" although the spoofed identity is a 5 A cable;
+  fixed (host-tested, not yet re-run on hardware): a spoofed identity's own cable VDO limits are the cable limit used, and the rows now read
+  "not unlocked (vendor not accepted)" (detail 158).
+- C3/C4 are 30 W ports per the manufacturer's manual (5/9 V 3 A, 12 V 2.5 A, 15 V 2 A, 20 V 1.5 A, PPS) - not tested yet.
+- Port C3, 2026-11-04 (cf064ec): 5 PDOs - 5/9 V 3 A, 12 V 2.5 A, 15 V 2 A, PPS 5-11 V 3 A (no 20 V fixed). The "11 V mode" is the PPS 5-11 V APDO: `--units pd` 9/0/3 with the 11 V row passing (8/11/11->8/8->6.5/6.5->5 V all pass). Full run 25/13/7: PD fixed 5.12-15.16 V all pass; legacy better than C1 here (FCP 5/9 V, SCP 5 detected/4.5/5, QC2 5/9/12 V, QC3 all pass); fails are capability rows (FCP 12, SCP 10 timeout, AFC, VOOC/SVOOC need load, VIVO 9/11 V). No Hard Reset, no unsafe. Note: during the UFCS rows VBUS sagged to ~2.4 V (no reset, recovered).
+  Re-run 2026-11-06 (65aaeaf, HID-powered, honest legacy rows; `runs/cuktech-c3`): 23 pass / 16 fail / 7 skip. PD 5/9 V 3 A,
+  12 V 2.5 A, 15 V 2 A all pass (5.12-15.16 V); PPS 5-11 V 3 A all steps pass; Mi 11 V 6 A rejected (no 0x2717 on C3);
+  QC2 5/9/12.13 V and QC3 continuous all pass on real handshakes; FCP 5/9 V pass, 12 V no response; SCP detected, 4.5/5 V
+  pass, 10 V timeout; QC3+, AFC, UFCS, VIVO no response; VOOC/SVOOC need load. No UFCS power cut on this C port (only "no
+  response"), unlike the USB-A port.
+- **Re-validation, C3 full run** (2026-11-07, 32a279f, top plug direct, Cable off, `runs/revalidate/cuktech-c3-full.log`):
+  30 pass / 11 fail / 14 skip, no Hard Reset. PD 5/9 V 3 A, 12 V 2.5 A, 15 V 2 A and PPS 5-11 V 3 A all pass; QC2 5/9/12 V,
+  QC3 continuous, QC3B 5/12 V pass (20 V: "Class A only"); FCP 5/9 V, SCP detected + 4.5 V 5 A + 5 V 4.5 A pass (unchanged
+  fails: FCP 12 V no response, SCP 10 V timeout); QC3+ 5 V pass, 9 V no response; AFC unsupported; VIVO "no response" on
+  every row (real negative now). **UFCS works on C3**: one mode 5.00-11.00 V 0.30-3.00 A (33 W, not the 44 W some lists
+  give this port), 5/9/11/5 V pass, 12 V unsupported. The C3 answers the handshake **after** the D- release (`fin=8804 us`,
+  like the Baseus FH22), C1 inside tDet4: two answer timings on one charger, both handled by 4a95bbf. The earlier "UFCS no
+  response" and the ~2.4 V VBUS sag during the UFCS rows did not recur.
+- `no-sop-prime-for-dumb-plug` (2026-11-05, K2 top captive plug, receiver fixed, `runs/emk-top/c4`, `c4-replug`): Source_Caps stop at 20 V 3 A (PDO1-5 fixed 5/9/12/15/20 V 3 A, PPS 5-11 V and 5-20 V 3 A, both power-limited) while its SCEDB PDP is 120 W; the K2 answers with a Request 1.8 ms after the caps. A fresh Rd attach with the spoof armed and ENSOP1 on produced **no SOP' Discover Identity** (the charger needs Ra at attach to query a cable, and the plug shows none). This is a real negative, unlike the blind 2026-11-04 sweep below.
+- `vconn-swap-accept-then-cc-drop` (2026-11-05, same setup, `runs/emk-top/c4/s5-*`): sink VCONN_Swap -> **Accept** 6.1 ms later; the K2 then put VCONN on the non-active net (`SWITCHES0=0x25 PDWN1 MEAS_CC1 VCONN_CC2`, PC13 on, net read 3292 mV, the ADC ceiling). Within ~3 ms the charger's CC dropped (BC_LVL 1), PS_RDY retries failed and VBUS fell to 0 in ~320 ms with **no Hard Reset message**; a re-attach recovered. Signature: Accept to VCONN_Swap, then a CC fault as soon as the sink drives its own VCONN onto the net where the charger still shows Rp. Handling: `vconn_sync` only allows VCONN when the other net reads above 2000 mV (an open-Rp-like line), which is exactly the state that collapsed this charger, so the VCONN_Swap route stays a debug-only action and must not be used on this charger family outside a test.
+
+### Power strip with 65W GaN charger CCGAN65-1ACE (2C2A; USB2 A port: 5/9/12 V 3 A, 20 V 3 A)
+- USB2 (A), 2026-11-07 (92d8b60, C-to-C cable + C-female-to-A-male adapter into the bottom port; D+/D- pass through it,
+  orientation as first plugged; `runs/new-chargers/strip-usba-full.log`): 11 pass / 16 fail / 20 skip. **QC2 Class B
+  20 V pass (20.13 V)** (also in a `--units qc2` run, 5/9/12/20 V all pass); QC3 continuous 5/9/12/9/5 V pass; FCP 5/9 V
+  pass, 12 V unsupported; QC3+ 5 V only; SCP, AFC, UFCS, VIVO real negatives; VOOC family never clocked.
+  - `qc-redetect-after-reset` (same shape as `afc-redetect-after-reset`): QC2 12 V failed "no handshake" when it
+    started 0.7 s after the 9 V row's reset (it passed in the qc2-only run), and QC3 Class B 5 V failed when it started 0.5 s
+    after the QC3 unit's last reset, right after QC3 passed. Handling (host-tested, not yet re-run on hardware): one HVDCP
+    handshake per unit. QC2 5 V opens the session; 9 V, 12 V and the Class B 20 V row are retargets in it (Class B selected
+    alone opens its own). The QC3 Class B ramp continues the QC3 session (the engine takes 20 V in a QC3 session). A failed
+    level skips the later levels of the same algorithm; a Class B row after it still runs (fresh session) and keeps its
+    "Class A only" / handshake-failure labels.
+
+### TOPADRE GaN 65W RCE-6507ACXL (C1 cable + C2 + A; A: 5/9 V 3 A, 12 V 2.5 A)
+- USB-A, 2026-11-07 (92d8b60, C-to-C cable + C-female-to-A-male adapter into the bottom port,
+  `runs/new-chargers/topadre-usba-full.log`): 19 pass / 9 fail / 19 skip. QC2 5/9/12 V, QC3 continuous, QC3 Class B 5/12 V,
+  FCP 5/9/12 V, AFC 9/12 V pass; SCP detected + 4.5 V 5 A + 5 V 4.5 A pass, 10 V timeout; QC3+ 5 V only. Class B 20 V
+  "Class A only" on both QC2 and QC3 (matches the label, 12 V max). UFCS, VIVO real negatives; VOOC family never clocked.
+
+- USB-C1 (own cable), 2026-11-07 (92d8b60, bottom port, `runs/new-chargers/topadre-c-full.log`, `topadre-c-ufcs-pd.log`):
+  32 pass / 11 fail / 14 skip. PD 5/9/12/15 V 3 A pass, PPS 3.3-11 V 5 A steps pass incl. 3.3 V; FCP 5/9/12, AFC 9/12, QC2
+  5/9/12, QC3 continuous, QC3B 5/12 V pass (20 V "Class A only"); SCP detected, 10 V timeout, then "PD active" (the source
+  started PD during the SCP unit); VIVO real negative. **UFCS not on the label but works: 5/9/11/5/12/20 V all pass**,
+  three modes 3.4-5.5 V, 5.5-11 V, 11-21 V, all 1-3 A (63 W); handshake answered 7.8 ms into the 4th signal (inside tDet4).
+  - `burst-mode-ripple-at-20v` (new): the PD 20 V 3.35 A row times out although the contract is fine (Accept, PS_RDY): with
+    no load VBUS swings 18.39-20.70 V at 20 Hz (mean 19.80 V, sigma 0.70 V, 22 % of samples outside the +-5 % band;
+    `topadre-20v-hold/power.jsonl`), so the row never holds in band for 500 ms. Light-load burst mode. Handling: a PD fixed row
+    above 5 V (SPR and EPR) is judged on a running mean of VBUS with a 250 ms time constant (`VbusMean`, `kBandTauMs`), recorded as the
+    row's measured value; one sample beyond 15 % of the level fails at once, and OverCap / CableLimit still read the raw sample.
+  - The Mi 11 V 6 A hunt got a source Hard Reset (`hard-reset-on-6a-over-offer`) and the list came back without the PPS
+    APDO (5 fixed PDOs), so PPS 11 V 3 A read "offers changed"; the hunt-Reject list adoption (a92f0af) covers a Reject, not
+    a Hard Reset.
+
+### ASUS AD2166020 30W (1C; PD 5/9 V 3 A, 12 V 2.5 A, 15 V 2 A, 20 V 1.5 A, PPS 3.3-11 V 3 A)
+- 2026-11-07 (f88efcb, own cable into the bottom port, `runs/new-chargers/asus-full.log`): 11 pass / 16 fail / 30 skip,
+  no Hard Reset. PD fixed 5-20 V all pass (5.12-20.03 V); PPS 3.3-11 V 3 A all steps pass incl. the 3.3 V edge and the
+  11 V 3 A full-current row. PD-only charger: QC2/QC3/QC3+/UFCS no handshake, FCP/SCP/AFC unsupported, VIVO no response,
+  VOOC family never clocked. The QC2 Class B row now reads "no handshake" (not "Class A only"), as the 40ea773 label fix
+  intends.
+
+### Chicony W20-045N1B 45W (Steam Deck LCD charger, built-in cable; PD 5/9/15 V 3 A, 20 V 2.25 A)
+- 2026-11-07 (f88efcb, built-in cable into the bottom port, `runs/new-chargers/chicony-full.log`): 4 pass / 16 fail / 30
+  skip. PD fixed 5/9/15 V 3 A and 20 V 2.25 A all pass (5.00-20.13 V); no PPS, no 12 V. Every D+/D- protocol is a real
+  negative (QC no handshake, FCP/SCP/AFC unsupported, VIVO no response, VOOC never clocked).
+  - `dcp-pullup-false-ufcs-handshake` (new): UFCS read "no response" instead of "no handshake". D+ rose 0.64 ms after our
+    D- release (`fin=8641 us`, which passes the handshake) although the charger has no UFCS, and every frame we sent came
+    back through its D+/D- short (`AA 20 08 00 63` = our own Ping, receiver address 001 = source); the engine ACKed its own
+    echoes. Verdict right by luck. Fixed in 70cca1d (frames not addressed to the sink are ignored, an echo-only session is
+    "no handshake"); **verified** 2026-11-08 on 6fce997 (`runs/new-chargers/chicony-6fce997.log`): the handshake still
+    passes falsely (`fin=10081 us`), the log then reads `echo: own frames only, D+/D- shorted (no UFCS)` and the row is
+    "no handshake". The 6 A hunt row is gone (no 0x2717).
+
+### GaN3 65W Adapter A2412-65CC (2C; PD 5/9/12/15 V 3 A, 20 V 3.25 A, PPS 5-20 V 3 A)
+- 2026-11-08 (b14139c, C-to-C e-marked cable into the bottom port; also tried on the top plug directly):
+  - `--units pd` (`runs/new-chargers/gan3-pd.log`): 11 pass / 0 fail / 3 skip. PD fixed 5-20 V pass (20 V 3.25 A with the
+    5 A cable, 19.86 V), PPS 5-21 V 3 A steps pass incl. 21 V. The 6 A hunt rows are gone from the card (no SVID 0x2717:
+    the 2026-11-07 hunt rule, verified).
+  - `pd-stays-in-silent-attach` (new): the full run ends "unsafe (5V release failed)" before any row, three times, cable
+    and direct: in the PD-silent attach of the first legacy unit the source keeps sending Source_Capabilities (48 repeats),
+    then ~0.4 s into the legacy 5 V check a "Rescan requested: Cycling CC lines" drops Rd and VBUS, and the check calls the
+    self-inflicted drop unsafe (`runs/new-chargers/gan3-rec3`). Fixed in 36d1617 / 8be051b (a revival sag in the
+    first silent Baseline waits; unplug acknowledges Unsafe), but the full run still ends unsafe on 6fce997
+    (`gan3-6fce997.log`, `rec-6fce997` t 478157-491705): ~1.2 s into the legacy 5 V check VBUS sags to 4.1 V, the K2 sees
+    "Detach: VBUS low" and VBUS stays at 0 V. `silent-sink-output-off` (new): the GaN3 switches its output OFF when the
+    sink stays silent on PD (no D+/D- fallback), it does not come back until a PD attach. Wanted handling: end the legacy
+    units with an honest reason ("PD only: output off on a silent sink"), re-attach PD and run the Pd unit; never Unsafe.
+    **Verified** 2026-11-08 on 15b7bfd (a04a702, `runs/new-chargers/gan3-15b7bfd.log`): full run **done**, 11 pass /
+    0 fail / 44 skip; PD 5-20 V and PPS 5-21 V all pass; every D+/D- unit "PD only (output off)"; never Unsafe.
+    Done (host-tested, not yet on hardware): in a Legacy attach, VBUS under 1 V past the first Baseline's adopt window
+    (kRecoverMs from its start) before any legacy row has a Pass/Fail verdict is the charger's answer. Every legacy unit of
+    the run is skipped as `Reason::PdOnly` ("PD only (output off)"; no second silent attach), the sink detaches and the
+    next unit is the normal PD attach, so the run ends Done. A legacy source that loses VBUS after a row (the USB-A sag
+    tail, `usb-a-cuts-on-low-dpdm`) or sags without going dark (stuck at 3 V) keeps the old recover / Lost / Unsafe path (since the
+    REMAX 10K fix a level that stays under vSafe5V clears Unsafe as Stopped after one second, see that charger's section).
+
+- Re-check on b14139c (2026-11-08, `runs/new-chargers/topadre-c-b14139c.log`): 30 pass / 10 fail / 15 skip. **PD 20 V
+  3.35 A now passes (19.80 V)** (the 250 ms band mean, e5ac2b7) and **PPS 11 V 3 A passes** (no 6 A over-ask, so no Hard
+  Reset; the hunt rows are gone, no 0x2717). New: UFCS 11 V "voltage not reached": the source's Accept was read 65 ms late,
+  4 retries in one buffer, then Soft_Reset (`ufcs-accept-missed-on-loop-stall`, `gan3-rec4` t 348761-349431). The K2's main
+  loop stalled after the Request (a blocking LCD redraw is the likely cause; nothing polled UFCS during it). Fixed:
+  0a7af11 serves UFCS from the LCD DMA-wait idle hook and ACKs identical retries once; 1cbe4c9 re-opens the exchange after
+  a source Soft_Reset in any live phase. **Verified** on 24119bc and 6fce997 (`topadre-c-24119bc.log`,
+  `topadre-c-6fce997.log`): full runs 31 pass, UFCS 5/9/11/5/12/20 V all pass, PD 20 V and PPS 11 V 3 A pass.
+
+### Lenovo 65W ADLX65YGSST3B (PN SA10R17017, built-in cable; label: 5/9/15 V 3 A, 20 V 3.25 A)
+- 2026-11-08 (15b7bfd, built-in cable into the bottom port, `runs/new-chargers/lenovo65.log`): 16 pass / 16 fail / 30 skip.
+  PD 5/9/15 V 3 A, 20 V 3.25 A pass (no 12 V, as labelled); **PPS 5-11 V 3 A and 5-21 V 3 A, not on the label**, all steps
+  pass incl. 21 V. PD-only on D+/D- (QC/UFCS no handshake, FCP/SCP/AFC unsupported, VIVO no response).
+  - `source-asks-sink-svids` (new): the brick sends its own Discover SVIDs REQUEST to the sink (`hdr=0xFF00A002`). The K2
+    answered listing 0x2717 and also marked the SOURCE as Xiaomi (pd_sink.cpp note_xiaomi_svid on a REQ), so the 6 A rows
+    read "not unlocked (chain unfinished)" instead of being dropped. Fixed in bc0781d: only an SVIDs ACK listing 0x2717 or a 0x2717
+    chain VDM from the source marks it Xiaomi. **Verified** 2026-11-08 on ed9e7bf (`--units pd`,
+    `runs/new-chargers/lenovo65-pd-ed9e7bf.log`): 16 pass / 0 fail / 3 skip, the 6 A rows are gone.
+
+### Baseus PowerCombo Tower power strip CCGAN35-S3ACE (35 W; C1/C2 5/9 V 3 A, 12 V 2.5 A, 15 V 2 A, 20 V 1.5 A; USB-1 A 5/9 V 3 A, 12 V 2.5 A; USB-2 A 5 V 1 A)
+- C1, 2026-11-08 (15b7bfd, K2 top plug directly in the port, `runs/new-chargers/tower35-c1.log`): 11 pass / 16 fail / 28
+  skip, no reset. PD 5/9 V 3 A, 12 V 2.5 A, 15 V 2 A, 20 V 1.5 A all pass (5.19-20.11 V); **PPS 3.3-11 V 3 A, not in the
+  web specs**, all steps pass incl. 3.3 V and 11 V 3 A. No D+/D- protocol on the C port (QC/UFCS no handshake,
+  FCP/SCP/AFC unsupported, VIVO no response). No 6 A rows (no 0x2717).
+- USB-1 (A), 2026-11-08 (15b7bfd, A-to-C cable into the bottom port, `runs/new-chargers/tower35-usb1.log`): 22 pass /
+  10 fail / 15 skip. FCP 5/9/12 V, AFC 9/12 V, QC2 5/9/12 V (one HVDCP session, retargets: **the QC continuity fix
+  08ff03d verified**), QC3 continuous, **QC3 Class B 5/12/20/12/5 V pass** although the specs say 12 V max on USB-1;
+  QC2 Class B 20 V reads **"20 V via QC3 only"** (8f76d13 verified: the discrete QC2 20 V level stays at 12.14 V while the
+  QC3 ramp reaches 20 V); SCP detected + 4.5 V 5 A + 5 V 4.5 A pass, 10 V timeout; QC3+ no response; UFCS, VIVO real
+  negatives.
+
+### JT-P18 30W (1C1A; C: PD 5-20 V + PPS 3.3-11 V 3 A; A: 5-20 V, QC Class B per the label)
+- USB-A, 2026-11-07 (92d8b60, plain A-to-C cable into the bottom port, HID-powered, `runs/new-chargers/jtp18-usba-full4.log`):
+  23 pass / 9 fail / 15 skip. **QC2 Class B 20 V pass (20.16 V)** and **QC3 Class B 5/12/20/12/5 V pass**; QC2 5/9/12, QC3
+  continuous, FCP 5/9/12 V, AFC 9/12 V pass; SCP detected + 4.5 V 5 A + 5 V 4.5 A pass, 10 V timeout; QC3+ 5 V only. UFCS,
+  VIVO real negatives; VOOC family never clocked.
+- USB-C, 2026-11-07 (92d8b60, K2 top plug directly in the port, Cable off, `runs/new-chargers/jtp18-c-full.log`): 11 pass /
+  18 fail / 29 skip. PD 5 V 3 A, 9 V 3 A, 10 V 2.25 A, 12 V 2.5 A, 15 V 2 A, 20 V 1.5 A all pass (5.16-20.15 V); PPS 3.3-11 V
+  3 A steps pass incl. 3.3 V. Every D+/D- protocol fails on this port (QC2/QC3/QC3+/UFCS no handshake, FCP/SCP/AFC
+  unsupported, VIVO no response), matching the label (QC only on the A port); a direct top-plug run cannot rule out
+  `legacy-off-on-direct-plug`, a cable run would. The 6 A hunt row got a Reject and a re-announced list; the PPS 11 V 3 A
+  row after it was then skipped "offers changed" (runner follow-up). QC2 Class B read "Class A only" although QC2 had no
+  handshake at all (label follow-up).
+- `usb-a-cuts-on-low-dpdm`, mild form: every row's own 0 V reset sags VBUS (2 s samples 3.6-3.9 V; the fast reading dips to
+  0.65 V for an instant) and drops the A-to-C cable's Rp. The first three runs stopped at the SCP -> AFC boundary, each a
+  different way: "source lost" in the next 5 V check (a76a207's window only opened after a Lost row), "source lost" on the
+  sub-1 V dip, "5V release failed" (VBUS below vSafe5V with the session unchanged). Fixed in three steps (a708f8a mid-row
+  session change opens the window, 43ae3b0 sub-1 V dips wait, 92d8b60 the 5 V check waits for any VBUS outside vSafe5V,
+  all inside the 5 s window); the fourth run completed.
+
+### Anker Nano II 100W (A2145, USB-C)
+- 2026-11-04 (5c548f7, bottom port): 5 PDOs - 5/9/15 V 3 A, 20 V 5 A, PPS 3.3-16 V 5 A 80 W (matches the manufacturer's manual). No SPR AVS / EPR advertised. `--units pd` clean: 8 pass / 0 fail / 3 skip (PD fixed 5.16-19.97 V, PPS 9.64/16/16->9.64/9.64->6.46 V all pass).
+- `hard-reset-after-legacy-timeout` (2026-11-04, Black Box hard_reset capture, run 8): full run passed FCP 5/9/12 V and SCP 5 V (detected) / 4.5 V / 5 V, but the SCP 10 V row timed out at 5.15 V; VBUS then collapsed to ~2.2 V and the source sent a Hard Reset ~1.2 s later (after a SOP' Discover_Identity exchange), so the runner's 5 V release failed and the run aborted `unsafe (5V release failed)` with the remaining 38 rows skipped. The K2 handled the Hard Reset correctly (latched I_HARDRST, PD_RESET, sink idle) - the abort is the runner's safe response, not a firmware bug. The source self-recovered afterwards (PD answers again, VBUS 5.15 V) - no mains replug needed this time. After a replug a full run completed normally (25 pass / 13 fail / 7 skip; PD fixed 5/9/15/20 V and PPS 3.3-16 V all pass; legacy fails are capability rows: AFC/UFCS no response, VOOC/SVOOC need load, VIVO 9/11 V not reached, SCP 10 V timeout, QC3 9->5 V outside band).
+
+### OnePlus / OPPO SUPERVOOC chargers
+- `needs-load`: VOOC/SVOOC ident answers, but the 0x82 status step needs current flowing.
+- `rd-rd-debug-accessory-latch` (2026-11-06, 120 W brick on the top plug, K2 on HID power, `runs/t23-diag/`): Rd on CC2 alone (PLUS boot, or `pd-reread --line 2`) gives VBUS 5.26 V within ~150 ms. Rd on both lines (the retired widen, 300 ms after reset) made the brick turn its Rp off on both pins and stay off until the plug was pulled.
+- `acked-caps-without-request` (same day, `pd-reread` attach): the first Source_Capabilities got our GoodCRC, no Request followed, the brick sent a Hard Reset 26-27 ms later and VBUS fell to ~0.37 V for ~650 ms before it came back. Fixed by the acked-caps rule (see the pattern table).
+- `caps-retry-window` (same day, PLUS boot on the top plug, K2 charger-powered, Auto-CRC off): the brick sent Source_Capabilities every ~150 ms, got no GoodCRC, and gave PD up after 7-10 s; VBUS stayed 5 V but no caps ever came again, so START found `pdo_count 0` and every PD row said "not advertised". Only a detach or a Hard Reset brings PD back, and either one kills a self-powered K2. Handled by taking a plain 5 V contract as soon as the first caps arrive (the window is the first 7-10 s of the attach, and a key-mode boot is inside it only when the firmware is up within that time; the self-hold: a self-powered K2 keeps a plain 5 V contract); if PD is gone anyway, the START reason is "PD gave up before START" instead of "not advertised". Not verified on hardware yet (T23 part B0). The window length is from one log; measure it on other chargers before relying on it.
+
+- **Re-validation, 120 W brick C port** (2026-11-07, 56b3e7e, its own OnePlus C-to-C cable into the bottom port, Cable off,
+  `runs/revalidate/oneplus120-full.log`): 21 pass / 12 fail / 24 skip, no Hard Reset, no Rd-Rd latch. Caps: 5/9/12/15 V
+  3 A, 20 V 3.25 A, PPS 5-21 V 3.25 A (68 W); Discover SVIDs lists **0x22D9 (OPPO)** only. PD fixed 5-20 V and PPS
+  13/21/13/9/5 V pass (21.04 V); QC2 5/9/12, QC3 continuous, QC3B 5/12 V pass (20 V "Class A only"); QC3+ 5 V only.
+  Real negatives with the right baud and the 4a95bbf handshake: **UFCS no handshake** (3 tries; D+ follows the pulses in
+  1-2 us, never rises: a DCP short), **VIVO no response**; FCP/SCP/AFC unsupported. **VOOC/SVOOC/SVOOC65 "no response"**
+  on this C port (frames read as cmd 0xFF / 0x1FF, D+ falling in 3 ms), not the "needs load" of the earlier runs: the D+/D-
+  VOOC path is not what this port speaks over C-to-C; the 120 W path is presumably behind the OPPO SVID 0x22D9 (not
+  implemented, unverified). The 6 A hunt row got a Reject and a re-announced list ("offers changed").
+
+- **Re-validation, USB-A port** (2026-11-07, 56b3e7e, OnePlus C-to-A cable into the bottom port, `runs/revalidate/oneplus-usba-full.log`):
+  11 pass / 11 fail / 25 skip, legacy-only (no PD). QC2 5/9/12, QC3 continuous, QC3B 5/12 V pass; QC3+ 5 V only. UFCS no
+  handshake, VIVO no response, FCP/SCP/AFC unsupported. VOOC/SVOOC/SVOOC65 "no response" with the same 0x1FF frames as the C
+  port. No run in `runs/` has ever decoded a real VOOC frame from any charger, and the old "needs load" label also appears on
+  non-VOOC chargers (Baseus, CUKTECH, Xiaomi), so it was never evidence of a VOOC answer: VOOC is unverified on hardware.
+- Label (model **OSABBCBBAE**, 1C1A, read 2026-11-07): rated by mains input. 200-240 V: Type-C 5/9/12/15 V 3 A, 20 V 3.25 A
+  (65 W), PPS 5-21 V 3.25 A (65 W), SUPERVOOC 11 V 11 A = **120 W**; USB-A 5/9/12 V 3 A and 11 V 11 A (120 W). 100-130 V:
+  20 V 3 A, PPS 5-21 V 3 A, 11 V 7.3 A = **80 W**. The PD list read on EU mains matches the 200-240 V line exactly (20 V
+  3.25 A, PPS 3.25 A). No UFCS on the label (a 2C sibling, OSABBCBBAC, is listed elsewhere with UFCS 44 W; this 1C1A unit
+  showed none on either port). The 120 W path (11 V 11 A) is SUPERVOOC only: not reachable without VOOC.
+
+- **VOOC wake investigation (parked 2026-11-07, branch `k2/vooc-phone-wake`, `runs/vooc-debug/`)**, USB-A port, OnePlus
+  C-to-A cable:
+  - Idle, the brick does **not** short D+/D-: D+ ~0.72 V (its own), D- ~0 V.
+  - OP15 at plug-in (20 Hz ADC + edge capture): BC1.2 on the pair (+0.3-0.9 s), then a **wake burst of 40 x 300 us high /
+    300 us low** on the shorted pair (`wake-op15.edges`), then D+ = D- ~0.32 V for ~0.5 s while the phone ramps to ~2 A, then
+    (+1.45 s) the brick opens the short and raises D+ to 3.1 V (the VOOC clock line); VBUS 7.85 V at +2.45 s, then the phone
+    took 8.25 A at 8.7 V for 25 s through the K2 (10.6 A peak, no harm to the K2).
+  - The K2 with the phone's burst (3.3 V) and a 0.6 V plateau: the brick **closes** its short (D+ = D- = 0.65 V) but never
+    opens it into VOOC mode. Hypothesis
+    (unproven): the brick needs ~2 A of load current at 5 V before VOOC. Next step when a quiet ~2 A 5 V load (no D+/D-
+    activity, e.g. behind a USB-C PD trigger) is available: repeat the branch's wake with the load on the K2 top plug.
+  - A wake train of 13 pulses (506/510/1010/1510 us) never made any charger clock; no run in `runs/` ever decoded a VOOC
+    frame from a charger.
+
+### VIA Labs dock (042B:0211, via TB3 dock tests)
+- `pd2-ama-identity`: ID header product type 5 (AMA), AMA VDO 0x0000000A = USB 3.2 Gen1+Gen2.
+- Advertises DP and TB SVIDs; hosts without TB enter DP only.
+
+### NoName 30W (USB-A)
+- QC Class B (20 V) present; QC2 12 V "source lost at 7.37 V" once.
+- FCP rejects the current-limit write (reg 0x2D NACK) but switches voltage fine.
+
+### E-marker response faking (quirk table and learn, 2026-11-06, host-tested only)
+- Why: the OnePlus brick (cable VID 0x22D9, PID 0x0015) sends an SOP' Discover Identity and then an SOP' "SVID-specific command 31, REQ, SVID 0x22D9" about 17.4 ms later (`runs/oneplus/04-spoof-dump.txt`). The old spoof answered only the Discover Identity with a fixed 66-byte record and GoodCRC'd the rest, and the brick settled on 3 A offers. The reply to command 31 is unknown until captured.
+- Framework: each saved clone carries an ordered quirk table (first match wins). Matching is by header and data-word value/mask, never by VID:PID in code. Unmatched SOP'/SOP'' requests are logged (`[EMK] unmatched ...`) and the last 4 are readable with `k2_remote.py emarker unmatched`.
+- Capture: `k2_remote.py emarker learn [--seed 22D9:31] [--sweep] --save` with the cable alone in the bottom port (no charger). The K2 powers the cable, replays Discover Identity, Discover SVIDs and Discover Modes per SVID, sends the seeds, and records every reply. The vendor command's raw request word is not known; the first seed guess is header `0x22D9A01F` (SVID 0x22D9, structured, command 31) and the `unmatched` log from a real brick attach gives the exact words.
+- SOP'' (S7, host-tested, not measured on hardware): the FUSB302 hook now delivers SOP' and SOP'' with a kind argument (1 or 2); the passive profile has always listened on both, and the e-marker read now listens on both even with Auto-CRC on. The spoof ignores SOP'': the quirk flag `kQSopPP` stays "not done", so the K2 never poses as cable plug 2 and never GoodCRCs a SOP'' frame.
+- Not done: a SOP'' reply (cable plug 2 answer) and a per-row reply delay.
+
+### E-marker spoof activation (2026-11-04, build be291b6)
+- `debug cc-matrix <0-7> [--modes HEX]` (remote) sweeps the PC13/14/15 CC matrix levels and pin modes. Swept 13 level/mode combos (incl. InPull-down on the non-active CC) with the spoof armed (`cuktech-120w`, id 5) and a hard-reset re-attach each: **0 SOP' Discover Identity requests in every combo**. **Corrected 2026-11-05: this sweep was blind.** With Auto-CRC on, SOP' receive (CONTROL1 ENSOP1) was clear even with the spoof armed (fixed in 636bdd3), so the FUSB302 would have dropped any SOP' frame; "0 requests" says nothing, and the conclusion written here ("no Ra path on its CC lines") is not supported by it. What stands is the hardware fact: the FUSB302 has only Rd pull-downs (no Ra, ~1 kΩ, no Rp source), and PC13/14/15 drive switch inputs, so no combo can create an Ra resistor (`docs/K2_PORTS_SPEC.md`, C3). The spoof reply path itself is built and host-tested; it can only fire if something on the FUSB302 port sends SOP'. The charger reads the e-marker from the real cable plugged into it (VID 0x2B01 = "Xiaomi 6A"), so 120 W needs the real cable; the clone stays saved as id 5 for the library/record. The 2026-11-05 top-plug runs with the fixed receiver are the first valid negative: no SOP' to the dumb captive plug (CUKTECH, Baseus above).
+
+### E-marker spoof over a "dumb cable" (2026-11-04, build ecd43f6) — unreconciled
+- **Status 2026-11-05: reported, not reproduced, evidence not kept.** The commit message of the note
+  (`bc4d78a`) has no log, the cable's e-marker status and the port were not recorded, and the same
+  charger sent no SOP' to the top captive plug on 2026-11-05 with the receiver fixed. Two explanations
+  fit: (a) the PLUS/OK key coupling (a ~5 kΩ extra pull-down on CC2, see the PLUS section below; OK on
+  CC1 not measured) gave the charger an Ra-like level at attach; (b) the "dumb" cable was e-marked and the
+  K2 heard the charger's SOP' on the shared CC wire. A repeat with a known-dumb cable on the bottom
+  port and the fixed receiver tells them apart (`docs/K2_PORTS_SPEC.md`, C3 proposal).
+- PLUS- and OK-boot both engage a CC resistor, the CUKTECH then sends SOP' Discover Identity on
+  re-attach and the armed spoof (saved clone id 5 or builtin `cuktech-240w`) answers with the full
+  VDO set; the charger GoodCRCs and continues (SVIDs 0x2E99). The Xiaomi 0x2717 auth chain also
+  completes (RX 0x2717020A). Still the re-announced PPS APDO stays 5 A and a 20 V/6 A request lands
+  at 5 A: the 6 A decision is a physical property of the real cable (its plug termination), not the
+  e-marker identity content. Spoofing the cable identity alone does not unlock 120 W on this
+  charger; the real 120 W cable is required.
+  **CORRECTED 2026-11-06:** the paragraph above is wrong. It came from the blind-receiver period
+  (ENSOP1 off under Auto-CRC). Measured 2026-11-06 [measured]:
+  - **Real cable.** The bundled CUKTECH 6 A cable DOES carry a readable e-marker: VID 0x2B01,
+    PID 0x4051, 50 V 5 A EPR, VDOs `FF00A041 18602B01 00000A2E 40516910 000A2640`. Through it, the
+    Xiaomi auth re-announces PPS 5-11 V 6 A and 5-20 V 6 A, and 20 V 6 A (19.95 V) and 11 V 6 A
+    (11.00 V) are accepted (`runs/cuktech-6a/`).
+  - **No cable.** CUKTECH directly on the K2 TOP plug, Ra mode (PC13 high = Ra on CC1, Rd on CC2),
+    spoof = the byte-exact clone or the built-in "CUKTECH 6A". The charger sends SOP' and the spoof
+    answers. Result: 20 V 5 A plus PPS 6 A (66 W / 120 W); 20 V 6 A and 11 V 6 A accepted, and the
+    charger's own display shows "Xiaomi 6A".
+  - **Control, spoof off, fresh attach.** Everything is 3 A (`runs/cuktech-6a-spoof/`,
+    `runs/cuktech-6a-builtin/`).
+- `cable-discovery-once-per-power-up` (CUKTECH C1, 2026-11-06) [measured]:
+  - After its first cable check, the CUKTECH sends no SOP' on later attaches. This holds through
+    physical replugs, K2 reboots (VBUS to 0) and a ~15 s mains unplug. Its CC still sees our Ra
+    (0.32 V) and it attaches normally, but it caps at 3 A.
+  - Only a long mains power-off brings cable discovery back. The user confirmed both CC lines fell
+    to 0 V before re-plugging. The next attach then sent SOP' and the spoof unlocked 6 A.
+  - A spoof test on this charger therefore needs a "power the charger fully off first" step.
+  - REFINED 2026-11-06 03:36-03:40 (`runs/cuktech-negcache/`):
+    - It is not "once per power-up" and not a negative cache. After a full power-off, the sequence
+      spoof, spoof, spoof, control (no Ra), spoof gave 6 A, 6 A, 6 A, 3 A, 6 A, with an SOP' query
+      every spoof attach.
+    - Then, about 40 s later, it stopped querying with nothing unusual in between. A 20 V 6 A
+      contract was not the trigger: the stop came before it.
+    - Two candidates remain:
+      - (A) a budget of about 4 cable discoveries per power-up;
+      - (B) a time window of about 2 min after power-up.
+    - Discriminating test: power off, wait 4 min with the K2 passive, then one spoof attach.
+    - The 12/12 real-cable 6 A cycles (`runs/cuktech-cycles/`) can't tell them apart, because a
+      positive result may be reused.
+  - VCONN was NOT seen on CC1 even in the successful run (CC1 stayed at 0.32 V). The CUKTECH asks
+    SOP' without visibly powering VCONN, so "no VCONN on CC1" does not mean "no cable check".
+
+### 6 A hunt rows, every PD source, 2026-11-05
+- **Rule since 2026-11-07: a hunt row sends its 6 A Request only against a list that advertises it.** Hardware never produced a grant without an advertised 6 A (Reject, a shorter list or a source Hard Reset); the one unlock is the CUKTECH SVID 0x2717 chain, after which the source re-announces its PPS APDOs at 6 A. So: the source lists 0x2717: the chain runs and the row waits for it, then asks if the re-announced APDO covers the target at 6 A (a fixed 20 V row only if a fixed PDO really offers 6 A); no 0x2717 and no advertised 6 A: the row is dropped from the plan at run time, quietly (no skip, nothing on the card or in the counts, no Request); 0x2717 listed but the list stays at its own limit: a neutral skip, "not unlocked" with the missing link (no 6 A is ever sent). The over-ask text below is the plan as it was until then.
+- (Until 2026-11-07, then gated by the rule above:) the PD plan always grows explicit 6 A probe rows (not gated on SVID 0x2717 - every charger gets interrogated): fixed 20 V 6 A, PPS 11 V 6 A and PPS 20 V 6 A where the PDO/APDO ranges cover them (the RDO carries the full 6000 mA, above the advertised limit; a pass is the source's Accept + PS_RDY at the target voltage, not the granted amps - over a 5 A cable the plain 20 V / 11 V rows still pass at 19.94 V / ~11 V). A Reject is the clean "not granted" answer.
+- CUKTECH 120 W on C1 over a dumb cable, sink mode, 2 runs (2026-11-05): plain rows all pass (20 V at 19.94 V, PPS 5-11 V and 5-20 V full ramps); every 6 A hunt row is **Rejected** by the charger (RDO pos 6/7 at 11000/20000 mV 6000 mA -> Reject, trace /tmp/k2runs/trace-hunt.jsonl). So the 11 V 6 A (66 W) and 20 V 6 A (120 W) modes are NOT granted over a dumb cable even with the auth chain complete - they need the real 6 A cable (its plug termination), matching `auth-capped-by-cable`. With the real cable the APDOs re-announce at 6 A after auth and the same rows pass.
+
+### Hardware quirk: PLUS key is coupled to CC2 (2026-11-05, measured)
+- The PLUS button (PA13) is galvanically coupled to the CC2 net on this board. Runtime firmware has no PLUS-to-CC path (PLUS is UI-only; boot-time PLUS = Rd on CC2 per `bootmode.hpp`); the coupling is pure hardware.
+- Measured with raw ADC ch5 (CC2, 12-bit, 3.3 V ref), unplugged: CC2 idles at 2114-2119 raw (1.707 V), CC1 ~9 raw (~7 mV). PLUS held ~13 s: CC2 clamped at 1-4 raw (~2 mV, hard low) with ~1 Hz spikes to 4065 raw (3.28 V, FUSB302 measurement pulses during the hold). Release: back to ~2119. CC1 never moved.
+- With a charger attached (Apple 60 W on the top port, CC2 active): a PLUS tap only sags CC2 to ~592 raw (477 mV) / the FUSB302 comparator dips BC_LVL 660-1230 mV -> 200-660 mV for ~185 ms, then recovers. The charger ignores it: VBUS stable at 5215 mV, caps unchanged, no Hard Reset, no re-advertised Source_Capabilities.
+- Consequence: the PLUS coupling is NOT a usable "virtual detach" or CC poke against a live source - with Rp driving the line the pull-down stays above the <200 mV detach threshold. It is a noise source: CC2 readings glitch on every PLUS press, so attach/detach logic must keep its debounce (the 500 ms no-Rp rule already covers it). Logs: /tmp/cc_monitor.log, /tmp/cc_fast.log, /tmp/cc_fast2.log.
+- Reading added 2026-11-05 (inferred, one measurement): the Apple 60 W source was a 1.5 A Rp (BC_LVL 2 before the press), so 477 mV on CC2 means Rd || coupling = ~2.65 kΩ and the coupling is ~5.5 kΩ, an extra Rd-class pull-down, not a ~1 kΩ Ra. Together with PDWN2 it reads ~0.88 V at a 3 A Rp, just above the Ra band. A held-PLUS plug-in also keeps a bottom-port charger's VBUS up "with or without our Rd" (measured 2026-11-04), so the coupling is itself a pull-down the charger accepts as a sink. See `docs/K2_PORTS_SPEC.md`, C3.
+- Clean hold result, 2026-11-05 (measured; Baseus 140 W on the top plug, K2 passive so no Rd of ours on the line; `runs/epr/buttons/hold2.tsv`): at rest cc1 = cc2 = ~3208 mV (raw ~3973, the 3 A Rp). PLUS held ~5 s: CC2 steady 1.72 V (raw 2130), CC1 unchanged, so the coupling alone is ~5.2 kΩ against the 3 A Rp (330 µA), an Rd. The Baseus accepted it as a sink and raised VBUS to 5.12 V at no load, then fell back on release. PLUS also changes the UI page. OK held: no change on either net (minimum 3199 / 3200 mV). This replaces the ~5.5 kΩ estimate above (that tap also had our own Rd on). Neither key presents Ra, so neither opens the cable query on the top plug.

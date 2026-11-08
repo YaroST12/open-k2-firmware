@@ -1,0 +1,44 @@
+# Publish the WebHID firmware flasher (webhid-flasher/) and the results viewer (docs/site/r/, opened by the QR link a K2
+# shows after a charger test) to GitHub Pages on every push to main. `make site` stages the same tree under build/site/.
+# One-time repo setup: Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+# The page then lives at https://<owner>.github.io/<repo>/
+#
+# index.html loads k2proto.js (the app-mode remote link) from the directory it is served from; the
+# file is not tracked twice: this workflow stages tools/web/k2proto.js next to the page, the same
+# layout `make webhid` builds under build/webhid/ for local use.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage the page with the protocol file
+        run: |
+          mkdir -p _site
+          cp webhid-flasher/index.html webhid-flasher/k2boot.js _site/
+          cp tools/web/k2proto.js _site/
+          cp -r docs/site/. _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

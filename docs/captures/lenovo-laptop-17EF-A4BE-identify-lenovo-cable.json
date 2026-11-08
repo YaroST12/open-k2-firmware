@@ -1,0 +1,1 @@
+{"identify": {"state": "done", "step": "done", "answered": ["sink-cap"], "no_answer": ["identity", "svids", "modes", "status", "revision"], "retries": 6, "revision": 0, "sink_pdos": [906072364, 2567098693]}, "identity": {"valid": false, "epr": false, "epr_partial": false, "cuktech": false, "xiaomi": false, "vid": 0, "pid": 0, "bcd": 0, "svids": [], "vendor": "", "model": ""}}

@@ -1,0 +1,16 @@
+build/
+build-net/
+*.o
+*.elf
+*.bin
+*.k2
+*.map
+__pycache__/
+*.pyc
+.claude/
+host-build/
+host-asan/
+runs/
+
+# Proprietary / vendor-derived material: local only, never published
+/private/

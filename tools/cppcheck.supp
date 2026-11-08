@@ -1,0 +1,9 @@
+// cppcheck suppressions for tools/static_check.sh (style noise on bare-metal code)
+missingIncludeSystem
+missingInclude
+unusedFunction
+unmatchedSuppression
+checkersReport
+normalCheckLevelMaxBranches
+useStlAlgorithm
+*:third_party/*

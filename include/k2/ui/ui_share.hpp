@@ -1,0 +1,123 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+// The share view: one record (a saved cable, the source's PDOs, a report card) as the QR code(s) of the generic share frame
+// (k2/ui/qrshare.hpp), a page of its own opened from a Share action (long OK) elsewhere. See docs/QR_SHARE.md.
+//
+// The opener builds its record straight into Ui::share_buffer() (k2/ui/qrshare_records.hpp), then Ui::open_share() names it
+// (ShareRecord::begin) and pushes the page. begin() LZ4-packs the record in place when that saves a quarter (qrshare::pack, frame flag kPackedFlag), so a
+// record that needed two parts may need one. The page shows part i of n under the code as "title i/n"; with more than one part it steps through them by itself
+// every kCycleMs (a phone that holds still catches each part in turn) until [+] / [-] pick one by hand. It repaints only when
+// the part changes (or after a capture / resync). A record that fits one link code (a report card, a cable, the source's PDOs,
+// the identity, boot info) opens as its link form (k2/ui/qrshare_link.hpp): one code holding a web address, so a phone camera
+// opens the page that shows it; OK switches to the K2 data frame (what tools/k2_qr.py imports) and back. A record too big for
+// one link code (a cable with a long quirk block) shows only the K2 data frames, as before. The link text is built at paint time in the same scratch as the frame text. The encoder workspace is not kept: each paint takes the scratch arena,
+// encodes the part, draws it and gives the arena back, so the view costs only the record buffer in RAM.
+#pragma once
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <string_view>
+
+#include "k2/ui/qr.hpp"
+#include "k2/ui/qrshare.hpp"
+#include "k2/ui/qrshare_link.hpp"
+#include "k2/ui/qrshare_records.hpp"
+#include "k2/ui/qrview.hpp"
+#include "k2/ui/ui_pages.hpp"
+
+namespace k2 {
+
+// The record a Share action hands to the view. The opener fills it BEFORE the page exists (the page is built on the open),
+// so it lives in Ui, not in the page: the one resident piece of the share feature.
+class ShareRecord {
+public:
+    // The record buffer: the largest record any opener builds (a saved cable with its quirk rows, two parts).
+    static constexpr std::size_t kBuffer = qrshare::records::kMaxEmarker;
+    static constexpr std::size_t kTitleMax = 24;
+
+    std::span<std::uint8_t> buffer() { return rec_; }
+    // The record in buffer() (`len` bytes) becomes the one shown; false when it has no part (empty or over kMaxRecord).
+    bool begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len);
+
+    qrshare::Type type() const { return type_; }
+    std::uint8_t schema() const { return schema_; }
+    bool packed() const { return packed_; }            // record() is the LZ4 block of what the opener built
+    std::span<const std::uint8_t> record() const { return {rec_.data(), len_}; }
+    std::string_view title() const { return {title_buf_.data(), title_len_}; }
+    unsigned parts() const { return parts_; }
+
+private:
+    std::array<std::uint8_t, kBuffer> rec_{};
+    std::array<char, kTitleMax + 1> title_buf_{};
+    std::size_t len_ = 0;
+    std::size_t title_len_ = 0;
+    qrshare::Type type_ = qrshare::Type::Emarker;
+    std::uint8_t schema_ = 1;
+    unsigned parts_ = 0;
+    bool packed_ = false;
+};
+
+class SharePage final : public PageBase {
+public:
+    SharePage(UiContext &c, ShareRecord &r) : PageBase(c, Page::Count, "Share"), r_(r) {}
+
+    static constexpr std::size_t kBuffer = ShareRecord::kBuffer;
+    static constexpr std::size_t kTitleMax = ShareRecord::kTitleMax;
+    static constexpr uint32_t kCycleMs = 1500;
+    static constexpr int kMaxVersion = 12;     // 65 modules; two parts of a 510-byte record need version 11
+    static constexpr int kMinModulePx = 2;     // the content area is 224 px on one side: 3 px fits up to version 11, 2 px beyond
+    // Under the link form's code: what the phone will show. At most 37 characters (a 224 px line of 6 px cells).
+    static constexpr std::string_view link_caption(qrshare::Type t) {
+        switch (t) {
+            case qrshare::Type::Emarker: return "Scan: cable details";
+            case qrshare::Type::PdCaps: return "Scan: charger offers";
+            case qrshare::Type::Identity:
+            case qrshare::Type::BootInfo: return "Scan: firmware info";
+            default: return "Scan: full results";   // the report card
+        }
+    }
+
+    void draw_static() override;
+    void update(uint32_t now_ms) override;
+    bool on_event(Event e) override;
+    PanelLabels labels() const override;
+    void invalidate() override { painted_ = false; }
+    void enter() override;
+
+    qrshare::Type type() const { return r_.type(); }
+    std::uint8_t schema() const { return r_.schema(); }
+    bool packed() const { return r_.packed(); }
+    std::span<const std::uint8_t> record() const { return r_.record(); }
+    std::string_view title() const { return r_.title(); }
+    unsigned parts() const { return r_.parts(); }
+    unsigned index() const { return index_; }
+    bool cycling() const { return cycling_; }
+    bool link() const { return link_; }                // the code on show is the web link (a card's default), not the K2 data frame
+    int modules() const { return n_; }                 // modules per side of the code last drawn, 0 when it did not encode
+    unsigned encodes() const { return encodes_; }      // codes built since the page was opened (one per paint)
+    unsigned paints() const { return paints_; }        // codes drawn on the panel since the page was opened
+    qrview::Area area() const;                         // where the code and its line go: the content area in panel pixels
+    static constexpr int kTextH = qrview::kLineH + 2;
+
+private:
+public:
+    // The record has a link form (a supported type whose record, packed or not, fits one code): OK switches link and data frame.
+    // A cable whose quirk block does not pack small enough has none and offers only the K2 data frames.
+    bool has_link_form() const { return parts() != 0 && qrshare::link::fits(type(), record().size()); }
+private:
+    void show(unsigned index, uint32_t now_ms);        // pick a part; the next update encodes and draws it
+    void paint(bool clear);
+
+    ShareRecord &r_;
+    unsigned index_ = 0;
+    bool cycling_ = false;
+    bool link_ = false;          // showing the link form (qrshare_link.hpp); OK switches it with the K2 data frame
+    uint32_t shown_ms_ = 0;
+    int n_ = 0;
+    bool painted_ = false;       // the code on the panel is the part and title now selected
+    int drawn_n_ = 0;            // modules per side of the box the panel holds (a smaller one leaves the old edge behind)
+    unsigned encodes_ = 0, paints_ = 0;
+};
+
+}  // namespace k2

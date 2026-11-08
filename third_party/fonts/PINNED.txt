@@ -1,0 +1,39 @@
+Font sources. The TTF/BDF files are data only: tools/gen_font.py rasterises them into src/fonts/*.cpp
+and include/font_aa.hpp, the firmware never reads them. The shipped UI font is Atkinson Hyperlegible
+Mono (4 bits per pixel) at four cell sizes: 12 px = 6 px advance, 16 px = 8, 24 px = 12, 48 px (Home
+readings, digits only) = 24 px advance. Spleen stays vendored as the 1 bpp fallback
+(python3 tools/gen_font.py --source spleen).
+
+atkinson-hyperlegible-mono/  Atkinson Hyperlegible Mono (variable, wght axis 200..800), font version 2.001,
+  SIL OFL 1.1 (OFL.txt), Copyright 2020-2024 The Atkinson Hyperlegible Mono Project Authors.
+  https://github.com/googlefonts/atkinson-hyperlegible-next-mono/raw/main/fonts/variable/AtkinsonHyperlegibleMono%5Bwght%5D.ttf
+  kept: AtkinsonHyperlegibleMono[wght].ttf  sha256 5ce8b1698d1ded7dff2178c1a3ad159470085a58ea239e8b2cb88f4fb4a6f646
+        OFL.txt                             sha256 1ebb31cf7393164f20d10c1d48406cddb5314feff8465531cf1e4ba37e9dd740
+  Downloaded on the host into an empty directory; the TTF hash was checked again against a second download.
+  Weight pinned per size in memory by tools/gen_font.py (fontTools instancer): 12 px 500, 16 px 450,
+  24 px and 48 px 400. Rasterised with FreeType's light auto-hinter, one size fitted per role.
+  It lacks the four arrows U+2190..U+2193 the firmware uses; those come from jetbrains-mono/ below,
+  scaled to the same cell width. Every other glyph of the firmware set is Atkinson's own.
+
+jetbrains-mono/  JetBrains Mono 2.304, SIL OFL 1.1 (OFL.txt). Used for the borrowed arrows only
+  (U+2190..U+2193) and by docs/ui_mockups/render_mockups*.py.
+  zip sha256 6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf (details in SOURCE.txt)
+
+spleen/          Spleen 2.2.0, BSD-2-Clause (LICENSE), (C) 2018-2026 Frederic Cambus. Fallback source
+  (--source spleen): 12 px = 6x12, 16 px = 8x16, 24 px = 12x24, 48 px = 16x32 scaled 3/2 (nearest
+  neighbour, advance 24, 30 px digits).
+  https://github.com/fcambus/spleen/releases/download/2.2.0/spleen-2.2.0.tar.gz
+  tarball sha256 ec42925c6b56d2138c862b2f97147c872e472f674bf03423417d827a08d69a89
+  kept: spleen-6x12.bdf   sha256 fc0743d164690f99b7e2e1b9d503180e4c719a9831ae03fd8f6da18c857dee27
+        spleen-8x16.bdf   sha256 4a3d97ee61a8c86a7525d8c723cb8a14081f395cd2feb4227ba5e3baf0629bae
+        spleen-12x24.bdf  sha256 181989f2c5f47b34c2474cd424b387b0002aa77fc970e59ee31e16733af24687
+        spleen-16x32.bdf  sha256 f6db2549d46c5699ceca7ccc26e747c8bdad3af76239f86aae6ed995bd2f3d37
+        LICENSE           sha256 f33fe8679d5b2abecc4f1313ce6c6bfa58262964de5f7bca146596a7318047af
+  Hand-drawn in tools/font_overrides.py: 6x12 lacks U+03A9 (Omega), U+2191, U+2193; 12x24 lacks
+  U+03A9, U+2190, U+2191, U+2192, U+2193. 8x16 and 16x32 have every glyph the firmware uses.
+  Evaluated and rejected: spleen-32x64 (sha256 46897e4c11aec89547805c329b1e8fb572f7580ccb2f7217f5b82aff3b035a71)
+  for the Home readings: 40 px digits leave no gap between the three 44 px rows and their gauges.
+
+Spleen archives were downloaded on the host into empty directories and only the BDF text files were
+parsed (tools/gen_font.py parse_bdf: keywords only, nothing executed). The TTFs are read by FreeType and
+fontTools only on the host, at generation time.

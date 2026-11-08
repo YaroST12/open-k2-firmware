@@ -1,0 +1,4 @@
+littlefs v2.11.0, vendored unmodified (lfs.c, lfs.h, lfs_util.c, lfs_util.h, LICENSE.md: BSD-3-Clause).
+Upstream: https://github.com/littlefs-project/littlefs, commit 16ceb6793449fa159f99aed4a766c2823f59cf3e.
+Configured through include/k2/lfs_cfg.h (LFS_NO_MALLOC, no asserts/printing, LFS_NAME_MAX 40), which the
+Makefile force-includes into both files. Used only through include/k2/fs.hpp.

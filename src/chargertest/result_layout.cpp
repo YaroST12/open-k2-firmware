@@ -1,0 +1,581 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+#include "k2/chargertest/result_layout.hpp"
+#include "k2/pd/pd.hpp"
+#include "k2/fastcharge/fc_engine.hpp"
+#include "k2/chargertest/step_label.hpp"
+#include <algorithm>
+#include <cstring>
+#include <string_view>
+
+namespace k2::result_layout {
+namespace ct = charger_test;
+using A = ct::Algorithm;
+namespace {
+struct Out {
+    char* p; size_t n; size_t len = 0;
+    void put(char c) { if (len + 1 < n) p[len++] = c; p[len] = 0; }
+    void put(const char* s) { while (*s) put(*s++); }
+    void num(unsigned v) { char t[8]; int k = 0; do { t[k++] = char('0' + v % 10); v /= 10; } while (v && k < 8); while (k) put(t[--k]); }
+};
+// The chip words come from k2::step_label (one wording for the rows, the chips and the report card).
+void put_text(Token& k, const char* s) { Out o{k.text, sizeof k.text}; o.put(s); }
+// One step into a chip's tally. A Capped step is its own column: it is a fail by verdict, but the source delivered up to its
+// ceiling, so the tone table reads it as "reached something" (amber), never as "none passed" (red).
+void count(Tally& t, const ct::Step& y) {
+    switch (y.verdict) {
+    case ct::Verdict::Pass: ++t.pass; break;
+    case ct::Verdict::Fail: y.reason == ct::Reason::Capped ? ++t.capped : ++t.fail; break;
+    case ct::Verdict::Skip: ++t.skip; break;
+    default: ++t.pending; break;
+    }
+}
+Tone tone(const ct::Step& x) {   // a chip of one step (a fixed level, a 6 A probe)
+    Tally t;
+    count(t, x);
+    return roll_up(t);
+}
+struct Builder {
+    Layout& l;
+    Row* row = nullptr;
+    // Copies `s` into a fixed field; a text that does not fit is cut AND counted (Layout::cuts, a gate failure), never silent.
+    void put(char* dst, size_t cap, std::string_view s) {
+        const size_t n = std::min(s.size(), cap - 1);
+        std::memcpy(dst, s.data(), n);
+        dst[n] = 0;
+        if (n < s.size() && l.cuts < 255) ++l.cuts;
+    }
+    void begin(std::string_view label, Tone label_tone, A a) {
+        if (l.row_count >= l.rows.size()) { row = nullptr; return; }
+        row = &l.rows[l.row_count++];
+        *row = {};
+        put(row->label, sizeof row->label, label);
+        row->label_tone = label_tone; row->algorithm = a; row->first = static_cast<uint8_t>(l.token_count);
+    }
+    Token* token(bool chip, Tone t, bool glue = false) {
+        if (!row || l.token_count >= l.tokens.size()) return nullptr;
+        Token& k = l.tokens[l.token_count++];
+        k = {}; k.chip = chip; k.tone = t; k.glue = glue; ++row->count;
+        return &k;
+    }
+    void word(std::string_view s, Tone t) { if (Token* k = token(false, t)) put(k->text, sizeof k->text, s); }
+    // `s` as plain tokens: whole words packed into tokens of at most 15 characters, so a long label wraps onto further grid
+    // lines instead of being cut. `split_at_number`: the first word that starts with a digit opens a new token ("via PPS" |
+    // "5-20V 5A"), keeping a range and its current together.
+    void phrase(std::string_view s, Tone t, bool split_at_number) {
+        constexpr size_t kMax = sizeof Token::text - 1;
+        Token* cur = nullptr;
+        size_t len = 0;
+        bool numbered = false;
+        while (!s.empty()) {
+            while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
+            const size_t sp = std::min(s.find(' '), s.size());
+            const std::string_view w = s.substr(0, sp);
+            s.remove_prefix(sp);
+            if (w.empty()) break;
+            if (split_at_number && !numbered && w.front() >= '0' && w.front() <= '9') { numbered = true; cur = nullptr; }
+            if (cur && len + 1 + w.size() <= kMax) {
+                cur->text[len++] = ' ';
+                std::memcpy(cur->text + len, w.data(), w.size());
+                len += w.size();
+                cur->text[len] = 0;
+            } else {
+                cur = token(false, t);
+                if (!cur) return;
+                put(cur->text, sizeof cur->text, w);
+                len = std::min(w.size(), kMax);
+            }
+        }
+    }
+};
+bool is_revision(A a) { return a >= A::Pd30Revision && a <= A::Pd32Revision; }
+bool is_range(A a) { return a == A::Pps || a == A::SprAvs || a == A::EprAvs; }
+// Nothing to show for this protocol: every step is "not advertised", or a legacy protocol never answered at 5 V.
+bool is_absent(std::span<const ct::Step> s, A a) {
+    bool pass = false, all_none = true;
+    for (const auto& x : s) {
+        if (x.algorithm != a) continue;
+        pass |= x.verdict == ct::Verdict::Pass;
+        all_none &= x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::NoOffer;
+    }
+    if (pass) return false;
+    if (all_none) return true;
+    if (ct::group(a) == ct::Group::Pd) return false;
+    for (const auto& x : s) if (x.algorithm == a) return x.verdict == ct::Verdict::Fail;   // the first (5 V) step failed
+    return false;
+}
+bool is_skipped_only(std::span<const ct::Step> s, A a) {
+    for (const auto& x : s) if (x.algorithm == a && x.verdict != ct::Verdict::Skip) return false;
+    return true;
+}
+// A QC Class B (20 V) row the charger did not follow: a Class A charger. It keeps its own row with a neutral "Class A" chip.
+bool is_class_a_only(std::span<const ct::Step> s, A a) {
+    for (const auto& x : s) if (x.algorithm == a && x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::ClassAOnly) return true;
+    return false;
+}
+// A QC3+ run the charger does not do (no movement, or QC3-sized steps): its raised rows are skipped "no QC3+". The row reads as
+// one neutral word instead of chips, so the 5 V baseline that passed does not look like partial QC3+ support.
+bool is_no_qc3plus(std::span<const ct::Step> s, A a) {
+    for (const auto& x : s) if (x.algorithm == a && x.verdict == ct::Verdict::Skip && x.reason == ct::Reason::NoQc3Plus) return true;
+    return false;
+}
+// Why a skipped PD level did not run, in a word that sits next to its chip (the chip's colour alone does not say). Mirrors
+// ct::explanation(): the monitor ceiling for an over-cap level (kDetailMonitor*), the source's refusal, the cable limit.
+const char* skip_tag(const ct::Step& x) {
+    if (x.verdict != ct::Verdict::Skip) return nullptr;
+    switch (x.reason) {
+    case ct::Reason::OverCap: return x.detail == ct::kDetailMonitor36 ? ">36V" : x.detail == ct::kDetailMonitor48 ? ">48V" : ">cap";
+    case ct::Reason::CableLimit: return "cable";
+    case ct::Reason::EprRefused: return "refused";
+    case ct::Reason::NoContract: return "no PD";
+    case ct::Reason::ClassAOnly: return "Class A";   // neutral: the charger tops out at 12 V, the 20 V level was never expected
+    case ct::Reason::NotUnlocked: return x.detail == ct::kDetailCableCap ? "cable" : "locked";   // a 6 A hunt the source did not offer
+    default: return nullptr;
+    }
+}
+void tag(Builder& b, const ct::Step& x) {
+    if (const char* t = skip_tag(x))
+        if (Token* k = b.token(false, Tone::Caution, true)) std::strncpy(k->text, t, sizeof k->text - 1);
+}
+void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
+    for (const auto& x : s) {
+        if (x.algorithm != a || !x.mv || x.hunt) continue;   // hunt rows live in the OEM / PD section
+        Token* k = b.token(true, tone(x));
+        if (!k) return;
+        k->mv = x.mv;
+        put_text(*k, step_label::params(x).c_str());   // "9V 3A", "20V 3.35A", "28V 5A"
+        tag(b, x);
+    }
+}
+void range_row(Builder& b, std::span<const ct::Step> s, A a) {
+    for (size_t i = 0; i < s.size(); ++i) {
+        const auto& x = s[i];
+        if (x.algorithm != a || !x.pdo || x.hunt) continue;
+        bool seen = false;
+        for (size_t j = 0; j < i; ++j) seen |= s[j].algorithm == a && s[j].pos == x.pos && !s[j].hunt;
+        if (seen) continue;
+        // One chip per advertised range, rolled up by the shared tone table (roll_up). PPS / AVS ranges are continuous; the
+        // steps only sample them. The chip text stays the advertised range: reach() says how far the source got.
+        Tally t;
+        for (const auto& y : s)
+            if (y.algorithm == a && y.pos == x.pos && !y.hunt) count(t, y);   // hunt rows live in the OEM / PD section
+        const Tone tn = roll_up(t);
+        Token* k = b.token(true, tn);
+        if (!k) return;
+        put_text(*k, step_label::range(x.pdo).c_str());   // "3.3-21V 5A", "15-28V 5A"
+        if (tn == Tone::Skip) tag(b, x);   // every step was skipped: say why
+    }
+}
+void legacy_row(Builder& b, std::span<const ct::Step> s, A a) {
+    for (size_t i = 0; i < s.size(); ++i) {
+        const auto& x = s[i];
+        if (x.algorithm != a || !x.mv) continue;
+        bool seen = false;
+        for (size_t j = 0; j < i; ++j) seen |= s[j].algorithm == a && s[j].mv == x.mv;
+        if (seen) continue;
+        bool detected = false, hs_ok = false, class_a = false;
+        Tally t;   // the up and down steps of one level roll up through the shared tone table
+        for (const auto& y : s) {
+            if (y.algorithm != a || y.mv != x.mv) continue;
+            class_a |= y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::ClassAOnly;
+            hs_ok |= y.verdict == ct::Verdict::Pass && y.detail == uint8_t(fc::Fail::NoVoltage);
+            detected |= y.verdict == ct::Verdict::Pass && y.detail == uint8_t(fc::Fail::Detected);
+            count(t, y);
+        }
+        const bool fail = t.fail != 0;
+        Token* k = b.token(true, roll_up(t));
+        if (!k) return;
+        k->mv = x.mv;
+        Out o{k->text, sizeof k->text};
+        if (hs_ok && !fail) { for (const char* w = "handshake ok"; *w; ++w) o.put(*w); }
+        else if (detected && !fail) { for (const char* w = "detected"; *w; ++w) o.put(*w); }   // answered SVOOC frames, no voltage proof
+        else if (a == A::Ufcs) put_text(*k, step_label::ufcs_level(x).c_str());   // "9V 3A": the mode's top current; "9V" before the list was read
+        else put_text(*k, step_label::params(x).c_str());   // "9V"; SCP also its limit: "10V 2.25A"
+        if (class_a && !t.pass && !fail) {   // a Class A charger: the neutral chip says why the 20 V level shows no verdict
+            if (Token* t = b.token(false, Tone::Dim, true)) std::strncpy(t->text, "Class A", sizeof t->text - 1);
+        }
+    }
+}
+// Reach of one PDO slot's range steps.
+Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
+    Reach r;
+    Tally t;
+    for (const auto& y : s) {
+        if (y.algorithm != a || y.pos != pos || y.hunt || !y.pdo || !y.mv) continue;
+        count(t, y);
+        if (!r.adv_mv) r.adv_mv = uint16_t(pd::decode_pdo(y.pdo).max_mv);
+        if (y.verdict == ct::Verdict::Pass) {
+            if (!r.lo_mv || y.mv < r.lo_mv) r.lo_mv = y.mv;
+            r.hi_mv = std::max(r.hi_mv, y.mv);
+        } else if (y.verdict == ct::Verdict::Fail && y.reason == ct::Reason::Capped) {
+            r.capped = true;
+            r.hi_mv = std::max(r.hi_mv, y.measured_mv);   // the ceiling the source held
+        }
+    }
+    r.tone = roll_up(t);
+    return r;
+}
+// Levels at 0.1 V: 19419 -> "19.4", 21000 -> "21".
+void put_level(step_label::Text& t, unsigned mv) {
+    const unsigned d = mv / 100;
+    char b[12]; unsigned k = 0;
+    auto num = [&](unsigned v) { char x[6]; unsigned n = 0; do { x[n++] = char('0' + v % 10); v /= 10; } while (v && n < 6); while (n) b[k++] = x[--n]; };
+    num(d / 10);
+    if (d % 10) { b[k++] = '.'; num(d % 10); }
+    for (unsigned i = 0; i < k && t.len + 1 < step_label::kMax; ++i) t.s[t.len++] = b[i];
+    t.s[t.len] = 0;
+}
+void put_word(step_label::Text& t, const char* w) {
+    while (*w && t.len + 1 < step_label::kMax) t.s[t.len++] = *w++;
+    t.s[t.len] = 0;
+}
+}  // namespace
+
+Tone roll_up(const Tally& t) {
+    if (t.pending) return Tone::Pending;
+    if (!t.pass && !t.fail && !t.capped) return t.skip ? Tone::Skip : Tone::Pending;
+    if (!t.fail && !t.capped && !t.skip) return Tone::Pass;
+    return t.pass || t.capped ? Tone::Partial : Tone::Fail;
+}
+
+Reach reach(std::span<const ct::Step> s, A a, int pos) {
+    if (pos >= 0) return reach_of(s, a, uint8_t(pos));
+    Reach last;
+    uint32_t seen = 0;   // PDO slots already looked at (slots are small: at most 15)
+    for (const auto& x : s) {
+        if (x.algorithm != a || x.hunt || !x.pdo || x.pos >= 32 || (seen >> x.pos & 1)) continue;
+        seen |= 1u << x.pos;
+        last = reach_of(s, a, x.pos);
+        if (last.tone != Tone::Pass) return last;   // the first range that is not clean tells the story
+    }
+    return last;
+}
+
+step_label::Text reach_footer(const Reach& r) {
+    step_label::Text t;
+    if (r.capped) {
+        put_word(t, "caps "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
+    } else if (r.tone == Tone::Pending) {
+        put_word(t, "not finished");
+    } else if (r.tone == Tone::Skip || !r.adv_mv) {
+        put_word(t, "not run");
+    } else if (!r.lo_mv) {
+        put_word(t, "none reached");
+    } else if (r.tone == Tone::Pass) {
+        put_word(t, "reached "); put_level(t, r.lo_mv); put_word(t, "-"); put_level(t, r.hi_mv); put_word(t, "V");
+    } else {
+        put_word(t, "max "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
+    }
+    return t;
+}
+
+step_label::Text reach_span(const Reach& r) {
+    step_label::Text t;
+    if (!r.hi_mv) return t;
+    if (r.lo_mv && r.lo_mv != r.hi_mv) { put_level(t, r.lo_mv); put_word(t, "-"); }
+    put_level(t, r.hi_mv); put_word(t, "V");
+    if (r.hi_mv < r.adv_mv) { put_word(t, " of "); put_level(t, r.adv_mv); put_word(t, "V"); }
+    return t;
+}
+
+const char* section_name(Section s) {
+    switch (s) {
+    case Section::Huawei: return "Huawei";
+    case Section::Samsung: return "Samsung";
+    case Section::Oppo: return "OPPO";
+    case Section::Xiaomi: return "Xiaomi";
+    case Section::OemPd: return "OEM / PD";
+    case Section::UsbPd: return "USB PD";
+    case Section::Qc: return "QC/UFCS";
+    default: return "?";
+    }
+}
+Section section_of(A a) {
+    switch (a) {
+    case A::Fcp: case A::Scp: return Section::Huawei;
+    case A::Afc: return Section::Samsung;
+    case A::Vooc: case A::SuperVooc: case A::SuperVooc65: case A::Vivo: return Section::Oppo;
+    default: return ct::group(a) == ct::Group::Pd ? Section::UsbPd : Section::Qc;   // QC2 / QC3 / QC3+ / Class B / UFCS
+    }
+}
+// PD-derived OEM protocols are named from the source VID only (a VID may drive a label, never
+// behaviour). 0x05C6 Qualcomm is covered by the QC4+/QC5 label itself; 0x17EF Lenovo (the C140/C135
+// slim-tip 7 A mode is not PD-visible over C-to-C), 0x03F0 HP, 0x2717/0x2B01 Xiaomi-ecosystem.
+// A separate list from report_card::brand(): that one names only usb.ids vendors for the card name, this one also maps the
+// Xiaomi-ecosystem VID 0x2B01 (Zimi/CUKTECH), which usb.ids does not list.
+const char* vendor_oem_name(uint16_t vid) {
+    switch (vid) {
+    case 0x17EF: return "Lenovo";
+    case 0x03F0: return "HP";
+    case 0x2717: case 0x2B01: return "Xiaomi";
+    default: return nullptr;
+    }
+}
+
+const char* display_name(A a) {
+    switch (a) {
+    case A::Pd2Fixed: return "PD2.0";
+    case A::Pd3Fixed: return "PD3.x";
+    case A::Epr: return "EPR";
+    case A::SprAvs: return "SPR AVS";
+    case A::Pps: return "PPS";
+    case A::EprAvs: return "EPR AVS";
+    case A::Qc2: return "QC2";
+    case A::Qc3: return "QC3";
+    case A::Qc3Plus: return "QC3+";
+    case A::Qc2ClassB: return "QC2B";
+    case A::Qc3ClassB: return "QC3B";
+    case A::Afc: return "AFC";
+    case A::Fcp: return "FCP";
+    case A::Scp: return "SCP";
+    case A::Vooc: return "VOOC";
+    case A::SuperVooc: return "SVOOC";
+    case A::SuperVooc65: return "SVOOC65";
+    case A::Ufcs: return "UFCS";
+    case A::Vivo: return "VIVO";
+    default: return "?";
+    }
+}
+
+void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
+    // Reset in place: `l = {}` builds a whole Layout on the stack first (about 2 KB, over the frame limit).
+    for (Token& k : l.tokens) k = {};
+    for (Row& r : l.rows) r = {};
+    l.token_count = l.row_count = 0;
+    l.cuts = 0;
+    Builder b{l};
+    constexpr A order[] = {A::Fcp, A::Scp, A::Afc, A::Vooc, A::SuperVooc, A::SuperVooc65, A::Vivo,
+                           A::Pd2Fixed, A::Pd3Fixed, A::Epr, A::SprAvs, A::Pps, A::EprAvs,
+                           A::Qc2, A::Qc3, A::Qc3Plus, A::Qc2ClassB, A::Qc3ClassB, A::Ufcs};
+    bool present[unsigned(A::Count)] = {}, absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {};
+    for (const auto& s : steps) if (!is_revision(s.algorithm)) present[unsigned(s.algorithm)] = true;
+    auto header = [&](Section s) {
+        if (!oem.headers || l.row_count >= l.rows.size()) { b.row = nullptr; return; }
+        Row* r = &l.rows[l.row_count++];
+        *r = {};
+        std::strncpy(r->label, section_name(s), sizeof r->label - 1);
+        r->label_tone = Tone::Caution;
+        r->algorithm = A::Count;
+        r->header = true;
+        b.row = nullptr;
+    };
+    auto any_in = [&](Section s) {
+        for (const A a : order) if (present[unsigned(a)] && section_of(a) == s) return true;
+        return false;
+    };
+    auto rows_for = [&](Section s) {
+        for (const A a : order) {
+            if (!present[unsigned(a)] || section_of(a) != s) continue;
+            const bool legacy = ct::group(a) != ct::Group::Pd;
+            if (is_absent(steps, a)) {
+                // A range the charger does not offer keeps its own row: "PPS None". A legacy unit keeps its chips when not folding.
+                if (is_range(a)) { b.begin(display_name(a), Tone::Dim, a); b.word("None", Tone::Dim); continue; }
+                if (oem.fold || !legacy) { absent[unsigned(a)] = true; continue; }
+            }
+            if (is_no_qc3plus(steps, a)) { b.begin(display_name(a), Tone::Dim, a); b.word("no QC3+", Tone::Dim); continue; }
+            if (oem.fold && legacy && is_skipped_only(steps, a) && !is_class_a_only(steps, a)) { skipped[unsigned(a)] = true; continue; }
+            b.begin(display_name(a), Tone::Dim, a);
+            if (is_range(a)) range_row(b, steps, a);
+            else if (ct::group(a) == ct::Group::Pd) fixed_row(b, steps, a);
+            else legacy_row(b, steps, a);
+            // Skipped before any voltage or PDO was known (an EPR step held back by the cable): no chip to show, so no row
+            // of its own; a bare label under the neighbouring row reads as a blank line.
+            if (b.row && b.row->count == 0 && is_skipped_only(steps, a)) { --l.row_count; skipped[unsigned(a)] = true; }
+        }
+    };
+    // A section whose protocols all fold into "No reply" / "Skipped" shows no rows of its own, so its header is dropped
+    // again (a bare header above the next header reads as an empty family).
+    auto section = [&](Section s) {
+        if (!any_in(s)) return;
+        const size_t before = l.row_count;
+        header(s);
+        const size_t after_header = l.row_count;
+        rows_for(s);
+        if (after_header > before && l.row_count == after_header) l.row_count = before;
+    };
+    // The sections follow the default run order: OEM vendor modes by company, Xiaomi (PD-based), USB PD, QC / UFCS.
+    // Sections 1-3: Huawei / Honor, Samsung, OPPO / OnePlus / vivo (OEM protocols over D+/D- or proprietary pins).
+    for (const Section s : {Section::Huawei, Section::Samsung, Section::Oppo}) section(s);
+    // Section 4: Xiaomi / Redmi - the Mi 6A probes ride PD (they run at the end of the PD unit) but read under the
+    // family: the auth fact plus the 6 A hunt rows, no PD test rows. Omitted when nothing was detected.
+    bool any_hunt = false;
+    for (const auto& s : steps) if (s.hunt) any_hunt = true;
+    if (oem.mi_auth || any_hunt) {
+        header(Section::Xiaomi);
+        if (oem.mi_auth) { b.begin("Mi Turbo", Tone::Pass, A::Count); b.word("auth ok", Tone::Dim); }
+        // The 6 A probes (Mi Turbo 20 V 6 A / 11 V 6 A and any other OEM unlocked mode): one chip per probe,
+        // always labelled with the probed current (6 A), green only when the source accepted it.
+        if (any_hunt) {
+            b.begin("Turbo 6A", Tone::Dim, A::Count);   // Row.label holds 8 chars
+            for (const auto& x : steps) {
+                if (!x.hunt) continue;
+                Token* k = b.token(true, tone(x));
+                if (!k) break;
+                put_text(*k, step_label::params(x).c_str());   // always the probed current: "20V 6A", not the advertised max
+                tag(b, x);
+            }
+        }
+    }
+    // Section 5: facts of a PD source's identity (the passive QC4+/QC5 label, the VID-driven OEM name). Omitted when
+    // nothing was detected.
+    if (oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap) {
+        header(Section::OemPd);
+        if (oem.qc_label) {
+            // The label is the full name ("Samsung SFC 2.0", "Moto TurboPower", "QC5"): its first word fits the 8-character
+            // row label, the rest and the justification ("via PPS 5-20V 5A") are tokens, which the grid wraps onto more lines.
+            const std::string_view name = oem.qc_label;
+            const size_t sp = std::min(name.find(' '), name.size());
+            b.begin(name.substr(0, sp), Tone::Pass, A::Count);
+            b.phrase(name.substr(sp), Tone::Dim, false);
+            if (oem.qc_why) b.phrase(oem.qc_why, Tone::Dim, true);
+        }
+        if (oem.vendor) { b.begin("OEM", Tone::Dim, A::Count); b.phrase(oem.vendor, Tone::Dim, false); }
+        if (oem.oppo_svid) {   // the same words as report_card::oppo_note(); discovery only, no VDM is ever sent to it
+            b.begin("OPPO", Tone::Dim, A::Count);
+            b.phrase("SVID 0x22D9 (discovery only)", Tone::Dim, false);
+        }
+        if (oem.scp_cap) {   // what the adapter reported to the SCP session: "20V 6A"
+            b.begin("SCP cap", Tone::Dim, A::Count);
+            b.phrase(oem.scp_cap, Tone::Dim, false);
+        }
+    }
+    // Section 6: compliant USB-C (PD over CC).
+    section(Section::UsbPd);
+    // Section 7: QC / UFCS (standard D+/D- protocols; QC runs on USB-C as well, so not "USB-A").
+    section(Section::Qc);
+    auto collapsed = [&](const bool (&set)[unsigned(A::Count)], const char* label, Tone t) {
+        bool any = false;
+        for (const A a : order) any |= set[unsigned(a)];
+        if (!any) return;
+        b.begin(label, t, A::Count);
+        for (const A a : order) if (set[unsigned(a)]) b.word(display_name(a), t);
+    };
+    collapsed(absent, "No reply", Tone::Dim);
+    collapsed(skipped, "Skipped", Tone::Caution);
+}
+
+void add_note(Layout& l, const char* label, Tone t, std::initializer_list<const char*> words) {
+    Builder b{l};
+    b.begin(label, t, A::Count);
+    if (!b.row) return;
+    for (const char* w : words) b.word(w, Tone::Dim);
+}
+
+namespace {
+enum class Fam : uint8_t { Pd, Mi, Qc, Afc, Huawei, Oppo, Ufcs, Count };
+Fam family_of(const ct::Step& x) {
+    if (x.hunt) return Fam::Mi;
+    switch (x.algorithm) {
+    case A::Qc2: case A::Qc3: case A::Qc3Plus: case A::Qc2ClassB: case A::Qc3ClassB: return Fam::Qc;
+    case A::Afc: return Fam::Afc;
+    case A::Fcp: case A::Scp: return Fam::Huawei;
+    case A::Vooc: case A::SuperVooc: case A::SuperVooc65: return Fam::Oppo;
+    case A::Ufcs: case A::Vivo: return Fam::Ufcs;
+    default: return ct::group(x.algorithm) == ct::Group::Pd ? Fam::Pd : Fam::Count;
+    }
+}
+// The current a step is ranked by: what its label shows, or for an AVS offer (no amps in the words) the offer's limit at the
+// step's voltage, so a 28 V AVS offer is not outranked by a 20 V fixed one.
+unsigned rank_ma(const ct::Step& x) {
+    if (const unsigned ma = step_label::amps_ma(x)) return ma;
+    return x.avs && x.pdo ? pd::current_limit_ma(pd::decode_pdo(x.pdo), x.mv) : 0u;
+}
+struct Best { bool have = false; const ct::Step* step = nullptr; unsigned mw = 0, mv = 0, ma = 0; bool hs = false; };
+}  // namespace
+
+size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
+    Best best[unsigned(Fam::Count)];
+    for (const auto& x : steps) {
+        const Fam f = family_of(x);
+        if (f == Fam::Count || x.verdict != ct::Verdict::Pass || is_revision(x.algorithm)) continue;
+        if (x.algorithm == A::Qc3Plus && is_no_qc3plus(steps, A::Qc3Plus)) continue;   // the 5 V baseline of a charger without QC3+
+        const bool pd = f == Fam::Pd;
+        const unsigned ma = pd || x.hunt ? rank_ma(x) : 0;
+        // A D+/D- handshake that proved no voltage (VOOC 5 V handshake, SVOOC frames seen) has no voltage to rank by.
+        const bool unproven = !pd && !x.hunt && (x.detail == uint8_t(fc::Fail::NoVoltage) || x.detail == uint8_t(fc::Fail::Detected));
+        const unsigned mv = unproven ? 0 : x.mv;
+        if (!unproven && !mv) continue;
+        const unsigned mw = static_cast<unsigned>(uint64_t(mv) * ma / 1000);
+        Best& b = best[unsigned(f)];
+        // On a tie the later (more capable) protocol of the family wins.
+        if (!b.have || mw > b.mw || (mw == b.mw && mv > b.mv) || (mw == b.mw && mv == b.mv && x.algorithm >= b.step->algorithm))
+            b = {true, &x, mw, mv, ma, unproven && x.detail == uint8_t(fc::Fail::NoVoltage)};
+    }
+    Fam order[unsigned(Fam::Count)];
+    size_t n = 0;
+    for (unsigned f = 0; f < unsigned(Fam::Count); ++f) if (best[f].have) order[n++] = Fam(f);
+    // Insertion sort, stable and allocation-free (std::stable_sort would pull in the heap): watts, then volts, descending.
+    const auto before = [&](Fam a, Fam b) {
+        const Best& x = best[unsigned(a)];
+        const Best& y = best[unsigned(b)];
+        return x.mw != y.mw ? x.mw > y.mw : x.mv > y.mv;
+    };
+    for (size_t i = 1; i < n; ++i)
+        for (size_t j = i; j > 0 && before(order[j], order[j - 1]); --j) std::swap(order[j], order[j - 1]);
+    size_t written = 0;
+    for (size_t i = 0; i < n && written < out.size(); ++i) {
+        const Best& b = best[unsigned(order[i])];
+        SummaryLine& line = out[written++];
+        line = {};
+        Out o{line.text, sizeof line.text};
+        o.put(step_label::protocol(*b.step).c_str());
+        o.put(' ');
+        if (b.mv) o.put(step_label::params(*b.step).c_str());   // "20V 3.35A", "12V", "SCP 10V 2.25A"
+        else o.put(b.hs ? "ok" : "seen");
+        line.mw = b.mw; line.mv = b.mv;
+    }
+    return written;
+}
+
+int token_width(const Token& t, const Metrics& m) {
+    return int(std::strlen(t.text)) * m.adv + (t.chip ? 2 * m.pad + m.mark : 0);
+}
+int cell_width(const Token& t, const Metrics& m) {
+    int n = 0;
+    while (t.text[n] && (!t.chip || t.text[n] != ' ')) ++n;   // a chip's volt text; a word is whole
+    return n * m.adv + 2 * m.pad;
+}
+char mark(Tone t) {
+    switch (t) {
+    case Tone::Pass: return '\x01';
+    case Tone::Fail: return '\x02';
+    case Tone::Partial: return '~';
+    case Tone::Skip: return '-';
+    case Tone::Pending: return '.';
+    default: return ' ';
+    }
+}
+
+size_t wrap(const Layout& l, const Metrics& m, std::span<Line> out) {
+    size_t n = 0;
+    auto emit = [&](const Line& line) { if (n < out.size()) out[n++] = line; };
+    for (size_t r = 0; r < l.row_count; ++r) {
+        const Row& row = l.rows[r];
+        if (row.header) { emit({static_cast<uint8_t>(r), row.first, 0, true}); continue; }
+        const unsigned stop = unsigned(row.first) + row.count;
+        Line cur{static_cast<uint8_t>(r), row.first, 0, true};
+        int x = 0, groups = 0, widest = 0;
+        for (unsigned i = row.first; i < stop;) {
+            unsigned end = i + 1;
+            int gw = token_width(l.tokens[i], m);
+            while (end < stop && l.tokens[end].glue) { gw += m.gap + token_width(l.tokens[end], m); ++end; }
+            if (m.cells) gw = cell_width(l.tokens[i], m);   // the verdict grid: equal cells, only the head's volt text counts
+            // A line breaks when the chips no longer fit: side by side (x), or in `groups` equal cells of the widest one's width.
+            const bool full = m.cells ? (groups + 1) * (std::max(widest, gw) + m.gap) - m.gap > m.avail
+                                      : x + m.gap + gw > m.avail;
+            if (cur.count && (full || (m.max_groups && groups >= m.max_groups))) {
+                emit(cur);
+                cur = {static_cast<uint8_t>(r), static_cast<uint8_t>(i), 0, false};
+                x = 0; groups = 0; widest = 0;
+            }
+            ++groups;
+            widest = std::max(widest, gw);
+            x += (cur.count ? m.gap : 0) + gw;
+            cur.count = static_cast<uint8_t>(cur.count + (end - i));
+            i = end;
+        }
+        emit(cur);
+    }
+    return n;
+}
+}  // namespace k2::result_layout

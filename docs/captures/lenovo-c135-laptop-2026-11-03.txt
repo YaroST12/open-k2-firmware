@@ -1,0 +1,353 @@
+--- records lost: the ring wrapped before they were read ---
+    1396.438 ms           MARK      trace-start
+    1396.787 ms +   0.349  REG       RESET <= 0x01  SW_RES
+    1426.215 ms +  29.428  REG       POWER <= 0x0F  PWR_BANDGAP PWR_RX_REFS PWR_MEASURE PWR_OSC
+    1426.343 ms +   0.128  REG       SWITCHES0 <= 0x00  -
+    1426.472 ms +   0.129  REG       SWITCHES1 <= 0x20  SPECREV=PD2.0
+    1426.600 ms +   0.128  REG       CONTROL3 <= 0x07  AUTO_RETRY N_RETRIES=3
+    1426.728 ms +   0.128  REG       MASKA <= 0xFC
+    1426.856 ms +   0.128  REG       MASKB <= 0x01
+    1426.985 ms +   0.129  REG       MASK <= 0xEF  M_BC_LVL M_COLLISION M_WAKE M_ALERT M_COMP_CHNG M_ACTIVITY M_VBUSOK
+    1427.113 ms +   0.128  REG       CONTROL0 <= 0x00  HOST_CUR=0
+    1427.241 ms +   0.128  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    1427.370 ms +   0.129  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    1427.498 ms +   0.128  REG       RESET <= 0x02  PD_RESET
+    1427.626 ms +   0.128  REG       SWITCHES0 <= 0x00  -
+    1428.266 ms +   0.640  REG       CONTROL0 <= 0x40  TX_FLUSH HOST_CUR=0
+    1428.394 ms +   0.128  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    1428.523 ms +   0.129  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    1428.653 ms +   0.130  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    1435.040 ms +   6.387  REG       SWITCHES0 <= 0x08  MEAS_CC2
+    1440.843 ms +   5.803  REG       MEASURE <= 0x3E  MDAC=62 (2646 mV)
+    1443.895 ms +   3.052  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    1444.036 ms +   0.141  REG       SWITCHES0 <= 0x08  MEAS_CC2
+    1450.431 ms +   6.395  REG       SWITCHES1 <= 0x22  TXCC2 SPECREV=PD2.0
+    1450.559 ms +   0.128  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    1450.688 ms +   0.129  REG       RESET <= 0x02  PD_RESET
+    1450.816 ms +   0.128  REG       CONTROL0 <= 0x40  TX_FLUSH HOST_CUR=0
+    1450.944 ms +   0.128  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    1451.457 ms +   0.513  IRQ       INTERRUPT=I_COMP_CHNG
+    1451.470 ms +   0.013  CC        attach CC2, STATUS0 COMP BC_LVL=3 >1230 mV (3 A)
+    1946.346 ms + 494.876  SINK      state=idle result=none held=no pos=0
+    1965.519 ms +  19.173  STATUS0   0x23 COMP BC_LVL=3 >1230 mV (3 A)
+    1966.430 ms +   0.911  VBUS      1.02 V 0 mA
+    2878.422 ms + 911.992  VBUS      0.92 V 0 mA
+    3897.422 ms +1019.000  VBUS      0.81 V 0 mA
+    3996.519 ms +  99.097  STATUS0   0x00 BC_LVL=0 <200 mV (Ra/open)
+    4496.539 ms + 500.020  CC        detach CC2, STATUS0 BC_LVL=0 <200 mV (Ra/open)
+    4496.686 ms +   0.147  REG       RESET <= 0x02  PD_RESET
+    4496.815 ms +   0.129  REG       SWITCHES0 <= 0x00  -
+    4496.950 ms +   0.135  REG       POWER <= 0x0F  PWR_BANDGAP PWR_RX_REFS PWR_MEASURE PWR_OSC
+    4497.079 ms +   0.129  REG       SWITCHES0 <= 0x00  -
+    4497.208 ms +   0.129  REG       SWITCHES1 <= 0x20  SPECREV=PD2.0
+    4497.337 ms +   0.129  REG       CONTROL3 <= 0x07  AUTO_RETRY N_RETRIES=3
+    4497.465 ms +   0.128  REG       MASKA <= 0xFC
+    4497.594 ms +   0.129  REG       MASKB <= 0x01
+    4497.723 ms +   0.129  REG       MASK <= 0xEF  M_BC_LVL M_COLLISION M_WAKE M_ALERT M_COMP_CHNG M_ACTIVITY M_VBUSOK
+    4497.852 ms +   0.129  REG       CONTROL0 <= 0x00  HOST_CUR=0
+    4497.980 ms +   0.128  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    4498.109 ms +   0.129  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    4498.238 ms +   0.129  REG       RESET <= 0x02  PD_RESET
+    4498.367 ms +   0.129  REG       SWITCHES0 <= 0x00  -
+    4498.880 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_COMP_CHNG
+    4499.009 ms +   0.129  REG       CONTROL0 <= 0x40  TX_FLUSH HOST_CUR=0
+    4499.138 ms +   0.129  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    4576.909 ms +  77.771  VBUS      0.71 V 0 mA
+    4736.304 ms + 159.395  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    4736.436 ms +   0.132  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    4742.851 ms +   6.415  REG       MEASURE <= 0x3E  MDAC=62 (2646 mV)
+    4745.902 ms +   3.051  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    4746.031 ms +   0.129  REG       SWITCHES0 <= 0x08  MEAS_CC2
+    4751.848 ms +   5.817  REG       SWITCHES0 <= 0x00  -
+    5306.304 ms + 554.456  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    5306.436 ms +   0.132  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    5312.239 ms +   5.803  REG       MEASURE <= 0x3E  MDAC=62 (2646 mV)
+    5315.291 ms +   3.052  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    5315.419 ms +   0.128  REG       SWITCHES0 <= 0x08  MEAS_CC2
+    5321.225 ms +   5.806  REG       SWITCHES0 <= 0x00  -
+    5386.909 ms +  65.684  VBUS      0.61 V 0 mA
+    5806.304 ms + 419.395  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    5806.433 ms +   0.129  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    5812.237 ms +   5.804  REG       MEASURE <= 0x3E  MDAC=62 (2646 mV)
+    5815.288 ms +   3.051  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    5815.416 ms +   0.128  REG       SWITCHES0 <= 0x08  MEAS_CC2
+    5821.222 ms +   5.806  REG       SWITCHES0 <= 0x00  -
+    6266.909 ms + 445.687  VBUS      0.51 V 0 mA
+    6306.304 ms +  39.395  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    6306.433 ms +   0.129  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    6312.237 ms +   5.804  REG       MEASURE <= 0x3E  MDAC=62 (2646 mV)
+    6315.288 ms +   3.051  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    6315.416 ms +   0.128  REG       SWITCHES0 <= 0x08  MEAS_CC2
+    6321.222 ms +   5.806  REG       SWITCHES0 <= 0x00  -
+    6806.304 ms + 485.082  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    6806.433 ms +   0.129  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    6812.237 ms +   5.804  REG       MEASURE <= 0x3E  MDAC=62 (2646 mV)
+    6815.288 ms +   3.051  REG       MEASURE <= 0x05  MDAC=5 (252 mV)
+    6815.416 ms +   0.128  REG       SWITCHES0 <= 0x08  MEAS_CC2
+    6821.232 ms +   5.816  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    6827.037 ms +   5.805  REG       SWITCHES1 <= 0x21  TXCC1 SPECREV=PD2.0
+    6827.165 ms +   0.128  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    6827.293 ms +   0.128  REG       RESET <= 0x02  PD_RESET
+    6827.422 ms +   0.129  REG       CONTROL0 <= 0x40  TX_FLUSH HOST_CUR=0
+    6827.550 ms +   0.128  REG       CONTROL1 <= 0x67  ENSOP1 ENSOP2 RX_FLUSH ENSOP1DB ENSOP2DB
+    6828.063 ms +   0.513  IRQ       INTERRUPT=I_COMP_CHNG
+    6828.075 ms +   0.012  CC        attach CC1, STATUS0 COMP BC_LVL=3 >1230 mV (3 A)
+    6828.248 ms +   0.173  STATUS0   0x23 COMP BC_LVL=3 >1230 mV (3 A)
+    6877.344 ms +  49.096  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    6878.029 ms +   0.685  RX        SOP' Vendor_Defined (id 0, PD3.x, dfp/ufp)  crc=a4450272
+                                    | Discover_Identity REQ SVID 0xFF00
+    6878.543 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    6879.259 ms +   0.716  RX        SOP' GoodCRC (id 0, unknown, cable-plug)  crc=2813c52f
+    6879.772 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_COMP_CHNG I_ACTIVITY
+    6881.245 ms +   1.473  RX        SOP' Vendor_Defined (id 0, PD3.x, cable-plug)  crc=98c629da [period 3.2 ms since the previous Vendor_Defined]
+                                    | Discover_Identity ACK SVID 0xFF00 VID 0x17EF PID 0xA211
+    6881.760 ms +   0.515  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    6882.519 ms +   0.759  RX        SOP' GoodCRC (id 0, PD3.x, dfp/ufp)  crc=f5bb4163
+    6890.519 ms +   8.000  STATUS0   0x33 CRC_CHK COMP BC_LVL=3 >1230 mV (3 A)
+    7330.519 ms + 440.000  STATUS0   0x62 COMP ACTIVITY BC_LVL=2 660-1230 mV (1.5 A)
+    7330.863 ms +   0.344  POLL      RX FIFO non-empty; previous service() entry 0.86 ms earlier (latency <= that)
+    7331.548 ms +   0.685  RX        SOP' Vendor_Defined (id 0, PD3.x, dfp/ufp)  crc=a4450272 [period 450.3 ms since the previous Vendor_Defined]
+                                    | Discover_Identity REQ SVID 0xFF00
+    7332.062 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7332.803 ms +   0.741  RX        SOP' GoodCRC (id 0, unknown, cable-plug)  crc=2813c52f
+    7333.316 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_COMP_CHNG I_ACTIVITY
+    7334.789 ms +   1.473  RX        SOP' Vendor_Defined (id 0, PD3.x, cable-plug)  crc=98c629da [period 3.2 ms since the previous Vendor_Defined]
+                                    | Discover_Identity ACK SVID 0xFF00 VID 0x17EF PID 0xA211
+    7335.304 ms +   0.515  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7336.047 ms +   0.743  RX        SOP' GoodCRC (id 0, PD3.x, dfp/ufp)  crc=f5bb4163
+    7350.519 ms +  14.472  STATUS0   0x33 CRC_CHK COMP BC_LVL=3 >1230 mV (3 A)
+    7391.422 ms +  40.903  VBUS      0.64 V 0 mA
+    7451.422 ms +  60.000  VBUS      0.74 V 0 mA
+    7488.344 ms +  36.922  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    7489.789 ms +   1.445  RX        SOP  Source_Capabilities (id 0, PD3.x, src/dfp)  crc=c340aa77
+                                    | PDO1 fixed 5 V 3 A [unconstrained,DRD]
+                                    | PDO2 fixed 9 V 3 A
+                                    | PDO3 fixed 12 V 3 A
+                                    | PDO4 fixed 15 V 3 A
+                                    | PDO5 fixed 20 V 5 A
+                                    | PDO6 PPS 3.3-21 V 5 A [power-limited]
+    7490.305 ms +   0.516  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7490.310 ms +   0.005  MARK      caps-seen: auto_sink=False inline=False held=False sink_state=idle
+    7491.081 ms +   0.771  RX        SOP  GoodCRC (id 0, PD2.0, snk/ufp)  crc=bb6cbba8
+    7493.519 ms +   2.438  STATUS0   0x62 COMP ACTIVITY BC_LVL=2 660-1230 mV (1.5 A)
+    7493.863 ms +   0.344  POLL      RX FIFO non-empty; previous service() entry 0.86 ms earlier (latency <= that)
+    7494.548 ms +   0.685  RX        SOP  Request (id 0, PD3.x, snk/ufp)  crc=2626eb80
+                                    | PDO 5 operating 3.25 A (max 3.25 A) [usb-comms,no-suspend,unchunked]
+    7495.061 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7495.766 ms +   0.705  RX        SOP  GoodCRC (id 0, PD3.x, src/dfp)  crc=c1afc281
+    7499.350 ms +   3.584  POLL      RX FIFO non-empty; previous service() entry 5.83 ms earlier (latency <= that)
+    7499.882 ms +   0.532  RX        SOP  Accept (id 1, PD3.x, src/dfp)  crc=6facfa5d
+    7500.396 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7501.119 ms +   0.723  RX        SOP  GoodCRC (id 1, PD2.0, snk/ufp)  crc=970db546
+    7513.519 ms +  12.400  STATUS0   0x33 CRC_CHK COMP BC_LVL=3 >1230 mV (3 A)
+    7514.424 ms +   0.905  VBUS      0.85 V 0 mA
+    7574.422 ms +  59.998  VBUS      1.11 V 0 mA
+    7635.440 ms +  61.018  VBUS      1.41 V 0 mA
+    7656.344 ms +  20.904  POLL      RX FIFO non-empty; previous service() entry 1.82 ms earlier (latency <= that)
+    7656.877 ms +   0.533  RX        SOP  PS_RDY (id 2, PD3.x, src/dfp)  crc=1ffdeec9
+    7657.390 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7658.114 ms +   0.724  RX        SOP  GoodCRC (id 2, PD2.0, snk/ufp)  crc=a2a8d6af
+    7695.422 ms +  37.308  VBUS      1.87 V 0 mA
+    7734.344 ms +  38.922  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    7735.029 ms +   0.685  RX        SOP  Vendor_Defined (id 3, PD3.x, src/dfp)  crc=829c8ec7 [period 400.2 ms since the previous Vendor_Defined]
+                                    | Discover_Identity REQ SVID 0xFF00
+    7735.543 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7736.272 ms +   0.729  RX        SOP  GoodCRC (id 3, PD2.0, snk/ufp)  crc=8ec9d841
+    7739.346 ms +   3.074  POLL      RX FIFO non-empty; previous service() entry 1.86 ms earlier (latency <= that)
+    7740.487 ms +   1.141  RX        SOP  Vendor_Defined (id 1, PD3.x, snk/ufp)  crc=dfe4b1d1 [period 5.5 ms since the previous Vendor_Defined]
+                                    | Discover_Identity ACK SVID 0xFF00 VID 0x17EF PID 0xA4BE
+    7741.002 ms +   0.515  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    7741.757 ms +   0.755  RX        SOP  GoodCRC (id 1, PD3.x, src/dfp)  crc=edcecc6f
+    7755.422 ms +  13.665  VBUS      2.33 V 0 mA
+    7841.435 ms +  86.013  VBUS      2.78 V 0 mA
+    7901.422 ms +  59.987  VBUS      3.24 V 41 mA
+    7961.422 ms +  60.000  VBUS      3.69 V 132 mA
+    8021.423 ms +  60.001  VBUS      4.14 V 219 mA
+    8081.422 ms +  59.999  VBUS      4.60 V 310 mA
+    8102.155 ms +  20.733  REG       SWITCHES0 <= 0x04  MEAS_CC1
+    8102.157 ms +   0.002  LINK      inline=yes auto_sink=no
+    8148.435 ms +  46.278  VBUS      4.90 V 376 mA
+    8184.344 ms +  35.909  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    8185.029 ms +   0.685  RX        SOP  Vendor_Defined (id 2, PD3.x, snk/ufp)  crc=64e38287 [period 444.5 ms since the previous Vendor_Defined]
+                                    | Discover_Identity REQ SVID 0xFF00
+    8185.543 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8186.264 ms +   0.721  RX        SOP  GoodCRC (id 2, PD3.x, src/dfp)  crc=d86baf86
+    8186.777 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_COMP_CHNG I_ACTIVITY
+    8188.098 ms +   1.321  RX        SOP  Vendor_Defined (id 4, PD3.x, src/dfp)  crc=9e0a69be [period 3.1 ms since the previous Vendor_Defined]
+                                    | Discover_Identity ACK SVID 0xFF00 VID 0x17EF PID 0xA211
+    8188.613 ms +   0.515  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8189.365 ms +   0.752  RX        SOP  GoodCRC (id 4, PD2.0, snk/ufp)  crc=89e460a6
+    8193.344 ms +   3.979  POLL      RX FIFO non-empty; previous service() entry 1.82 ms earlier (latency <= that)
+    8193.877 ms +   0.533  RX        SOP  VCONN_Swap (id 3, PD3.x, snk/ufp)  crc=4af6cd70
+    8194.390 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8195.103 ms +   0.713  RX        SOP  GoodCRC (id 3, PD3.x, src/dfp)  crc=f40aa168
+    8196.773 ms +   1.670  POLL      RX FIFO non-empty; previous service() entry 3.77 ms earlier (latency <= that)
+    8197.306 ms +   0.533  RX        SOP  Accept (id 5, PD3.x, src/dfp)  crc=5d242153 [period 697.4 ms since the previous Accept]
+    8197.819 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8198.542 ms +   0.723  RX        SOP  GoodCRC (id 5, PD2.0, snk/ufp)  crc=a5856e48
+    8203.344 ms +   4.802  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    8203.877 ms +   0.533  RX        SOP  PS_RDY (id 4, PD3.x, snk/ufp)  crc=00a5db22 [period 547.0 ms since the previous PS_RDY]
+    8204.390 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8205.112 ms +   0.722  RX        SOP  GoodCRC (id 4, PD3.x, src/dfp)  crc=f327198f
+    8212.422 ms +   7.310  VBUS      5.36 V 471 mA
+    8251.344 ms +  38.922  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    8251.877 ms +   0.533  RX        SOP' Soft_Reset (id 0, PD3.x, dfp/ufp)  crc=f9f4f4cf
+    8251.879 ms +   0.002  RESET     *** Soft_Reset received ***
+    8252.392 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8253.106 ms +   0.714  RX        SOP' GoodCRC (id 0, unknown, cable-plug)  crc=2813c52f
+    8253.619 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8254.332 ms +   0.713  RX        SOP' Accept (id 0, PD3.x, cable-plug)  crc=e1e97026 [period 57.0 ms since the previous Accept]
+    8254.845 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_ACTIVITY
+    8255.557 ms +   0.712  RX        SOP' GoodCRC (id 0, PD2.0, dfp/ufp)  crc=bb6cbba8
+    8258.345 ms +   2.788  POLL      RX FIFO non-empty; previous service() entry 1.75 ms earlier (latency <= that)
+    8259.030 ms +   0.685  RX        SOP' Vendor_Defined (id 1, PD3.x, dfp/ufp)  crc=c416c208 [period 70.9 ms since the previous Vendor_Defined]
+                                    | Discover_Identity REQ SVID 0xFF00
+    8259.544 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8260.287 ms +   0.743  RX        SOP' GoodCRC (id 1, unknown, cable-plug)  crc=0472cbc1
+    8260.800 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_COMP_CHNG I_ACTIVITY
+    8262.273 ms +   1.473  RX        SOP' Vendor_Defined (id 1, PD3.x, cable-plug)  crc=e5c7ed3e [period 3.2 ms since the previous Vendor_Defined]
+                                    | Discover_Identity ACK SVID 0xFF00 VID 0x17EF PID 0xA211
+    8262.788 ms +   0.515  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8263.536 ms +   0.748  RX        SOP' GoodCRC (id 1, PD2.0, dfp/ufp)  crc=970db546
+    8268.344 ms +   4.808  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    8269.029 ms +   0.685  RX        SOP  Vendor_Defined (id 5, PD3.x, snk/ufp)  crc=ebf2072a [period 6.8 ms since the previous Vendor_Defined]
+                                    | Discover_SVIDs REQ SVID 0xFF00
+    8269.543 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8270.262 ms +   0.719  RX        SOP  GoodCRC (id 5, PD3.x, src/dfp)  crc=df461761
+    8272.344 ms +   2.082  POLL      RX FIFO non-empty; previous service() entry 4.34 ms earlier (latency <= that)
+    8272.877 ms +   0.533  RX        SOP  Not_Supported (id 6, PD3.x, src/dfp)  crc=fac0addb
+    8273.390 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8274.103 ms +   0.713  RX        SOP  GoodCRC (id 6, PD2.0, snk/ufp)  crc=90200da1
+    8274.616 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL
+    8276.216 ms +   1.600  VBUS      5.81 V 556 mA
+    8278.344 ms +   2.128  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    8279.029 ms +   0.685  RX        SOP' Vendor_Defined (id 2, PD3.x, dfp/ufp)  crc=172247a9 [period 10.0 ms since the previous Vendor_Defined]
+                                    | Enter_Mode REQ SVID 0xFF01
+    8279.543 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8280.284 ms +   0.741  RX        SOP' GoodCRC (id 2, unknown, cable-plug)  crc=31d7a828
+    8280.797 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_COMP_CHNG I_ACTIVITY
+    8281.662 ms +   0.865  RX        SOP' Vendor_Defined (id 2, PD3.x, cable-plug)  crc=9cbd7e79 [period 2.6 ms since the previous Vendor_Defined]
+                                    | Enter_Mode NAK SVID 0xFF01
+    8282.175 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8282.914 ms +   0.739  RX        SOP' GoodCRC (id 2, PD2.0, dfp/ufp)  crc=a2a8d6af
+    8333.423 ms +  50.509  VBUS      6.27 V 634 mA
+    8393.423 ms +  60.000  VBUS      6.72 V 715 mA
+    8453.433 ms +  60.010  VBUS      7.03 V 769 mA
+    8513.423 ms +  59.990  VBUS      7.49 V 859 mA
+    8573.423 ms +  60.000  VBUS      7.94 V 939 mA
+    8589.344 ms +  15.921  POLL      RX FIFO non-empty; previous service() entry 1.34 ms earlier (latency <= that)
+    8590.029 ms +   0.685  RX        SOP  Vendor_Defined (id 6, PD3.x, snk/ufp)  crc=4b0747a5 [period 308.4 ms since the previous Vendor_Defined]
+                                    | Discover_SVIDs REQ SVID 0xFF00
+    8590.543 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8591.262 ms +   0.719  RX        SOP  GoodCRC (id 6, PD3.x, src/dfp)  crc=eae37488
+    8593.519 ms +   2.257  STATUS0   0x51 CRC_CHK ACTIVITY BC_LVL=1 200-660 mV (Rd, default USB)
+    8593.863 ms +   0.344  POLL      RX FIFO non-empty; previous service() entry 0.86 ms earlier (latency <= that)
+    8594.396 ms +   0.533  RX        SOP  Not_Supported (id 7, PD3.x, src/dfp)  crc=d6a1a335 [period 321.5 ms since the previous Not_Supported]
+    8594.909 ms +   0.513  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    8595.621 ms +   0.712  RX        SOP  GoodCRC (id 7, PD2.0, snk/ufp)  crc=bc41034f
+    8596.135 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL
+    8613.519 ms +  17.384  STATUS0   0x33 CRC_CHK COMP BC_LVL=3 >1230 mV (3 A)
+    8634.422 ms +  20.903  VBUS      8.40 V 1032 mA
+    8694.423 ms +  60.001  VBUS      8.86 V 1121 mA
+    8759.433 ms +  65.010  VBUS      9.16 V 1174 mA
+    8819.423 ms +  59.990  VBUS      9.62 V 1254 mA
+    8879.423 ms +  60.000  VBUS      10.07 V 1334 mA
+    8939.423 ms +  60.000  VBUS      10.53 V 1415 mA
+    8999.423 ms +  60.000  VBUS      10.99 V 1501 mA
+    9066.354 ms +  66.931  POLL      RX FIFO non-empty; previous service() entry 47.83 ms earlier (latency <= that)
+    9067.039 ms +   0.685  RX        SOP  Vendor_Defined (id 7, PD3.x, snk/ufp)  crc=2b5487df [period 477.0 ms since the previous Vendor_Defined]
+                                    | Discover_SVIDs REQ SVID 0xFF00
+    9067.553 ms +   0.514  IRQ       INTERRUPT=I_BC_LVL I_CRC_CHK I_COMP_CHNG I_ACTIVITY
+    9068.274 ms +   0.721  RX        SOP  GoodCRC (id 7, PD3.x, src/dfp)  crc=c6827a66
+    9069.498 ms +   1.224  RX        SOP  Not_Supported (id 0, PD3.x, src/dfp)  crc=d18c1bd2 [period 475.1 ms since the previous Not_Supported]
+    9070.721 ms +   1.223  RX        SOP  GoodCRC (id 0, PD2.0, snk/ufp)  crc=bb6cbba8
+    9072.664 ms +   1.943  VBUS      11.29 V 1554 mA
+    9127.423 ms +  54.759  VBUS      11.75 V 1651 mA
+    9187.423 ms +  60.000  VBUS      12.21 V 1760 mA
+    9247.423 ms +  60.000  VBUS      12.67 V 1868 mA
+    9307.423 ms +  60.000  VBUS      13.13 V 1975 mA
+    9372.433 ms +  65.010  VBUS      13.45 V 2047 mA
+    9432.423 ms +  59.990  VBUS      13.91 V 2156 mA
+    9492.423 ms +  60.000  VBUS      14.38 V 2265 mA
+    9552.423 ms +  60.000  VBUS      14.84 V 2373 mA
+    9612.423 ms +  60.000  VBUS      15.24 V 2479 mA
+    9685.436 ms +  73.013  VBUS      15.49 V 2552 mA
+    9745.423 ms +  59.987  VBUS      15.93 V 2660 mA
+    9806.423 ms +  61.000  VBUS      16.39 V 2769 mA
+    9866.423 ms +  60.000  VBUS      16.86 V 2878 mA
+    9926.423 ms +  60.000  VBUS      17.32 V 2987 mA
+    9994.434 ms +  68.011  VBUS      17.63 V 3054 mA
+   10054.423 ms +  59.989  VBUS      18.10 V 3153 mA
+   10117.423 ms +  63.000  VBUS      18.53 V 3261 mA
+   10177.423 ms +  60.000  VBUS      18.88 V 3370 mA
+   10237.423 ms +  60.000  VBUS      19.23 V 3479 mA
+   10305.436 ms +  68.013  VBUS      19.46 V 3551 mA
+   10365.423 ms +  59.987  VBUS      19.81 V 3660 mA
+   10427.423 ms +  62.000  VBUS      19.89 V 3760 mA
+   10487.423 ms +  60.000  VBUS      19.89 V 3869 mA
+   10547.423 ms +  60.000  VBUS      19.89 V 3971 mA
+   10620.434 ms +  73.011  VBUS      19.89 V 4042 mA
+   10680.423 ms +  59.989  VBUS      19.88 V 4144 mA
+   10740.423 ms +  60.000  VBUS      19.89 V 4186 mA
+   10820.423 ms +  80.000  VBUS      19.89 V 4210 mA
+   10933.436 ms + 113.013  VBUS      19.89 V 4232 mA
+   11093.423 ms + 159.987  VBUS      19.89 V 4257 mA
+   11153.423 ms +  60.000  VBUS      19.89 V 4288 mA
+   11241.434 ms +  88.011  VBUS      19.89 V 4316 mA
+   11301.423 ms +  59.989  VBUS      19.89 V 4338 mA
+   11361.423 ms +  60.000  VBUS      19.89 V 4362 mA
+   11441.423 ms +  80.000  VBUS      19.89 V 4383 mA
+   11574.423 ms + 133.000  VBUS      19.89 V 4410 mA
+   11634.438 ms +  60.015  VBUS      19.89 V 4439 mA
+   11694.423 ms +  59.985  VBUS      19.89 V 4468 mA
+   11774.423 ms +  80.000  VBUS      19.89 V 4496 mA
+   11887.423 ms + 113.000  VBUS      19.89 V 4518 mA
+   11948.439 ms +  61.016  VBUS      19.89 V 4542 mA
+   12381.423 ms + 432.984  VBUS      19.89 V 4517 mA
+   13363.423 ms + 982.000  VBUS      19.89 V 4542 mA
+   13871.423 ms + 508.000  VBUS      19.89 V 4566 mA
+   14185.423 ms + 314.000  VBUS      19.89 V 4544 mA
+   15248.423 ms +1063.000  VBUS      19.89 V 4567 mA
+   16255.436 ms +1007.013  VBUS      19.89 V 4545 mA
+   16998.423 ms + 742.987  VBUS      19.89 V 4570 mA
+   17412.423 ms + 414.000  VBUS      19.89 V 4596 mA
+   17875.423 ms + 463.000  VBUS      19.89 V 4570 mA
+   19246.423 ms +1371.000  VBUS      19.89 V 4549 mA
+   20392.423 ms +1146.000  VBUS      19.89 V 4525 mA
+   20512.423 ms + 120.000  VBUS      19.89 V 4548 mA
+   21175.423 ms + 663.000  VBUS      19.89 V 4569 mA
+   22127.423 ms + 952.000  VBUS      19.89 V 4596 mA
+   25375.423 ms +3248.000  VBUS      19.89 V 4566 mA
+   25967.423 ms + 592.000  VBUS      19.89 V 4535 mA
+   26601.423 ms + 634.000  VBUS      19.89 V 4512 mA
+   27232.423 ms + 631.000  VBUS      19.90 V 4483 mA
+   28256.423 ms +1024.000  VBUS      19.90 V 4505 mA
+   28844.423 ms + 588.000  VBUS      19.90 V 4530 mA
+   30097.423 ms +1253.000  VBUS      19.90 V 4552 mA
+   30386.423 ms + 289.000  VBUS      19.90 V 4524 mA
+   31134.423 ms + 748.000  VBUS      19.90 V 4546 mA
+   31657.423 ms + 523.000  VBUS      19.90 V 4525 mA
+   31971.423 ms + 314.000  VBUS      19.90 V 4500 mA
+   32151.423 ms + 180.000  VBUS      19.90 V 4522 mA
+   33167.438 ms +1016.015  VBUS      19.90 V 4543 mA
+   35221.423 ms +2053.985  VBUS      19.89 V 4520 mA
+   36517.423 ms +1296.000  VBUS      19.89 V 4498 mA
+   37042.423 ms + 525.000  VBUS      19.89 V 4519 mA
+   37232.437 ms + 190.014  VBUS      19.89 V 4498 mA
+   37412.423 ms + 179.986  VBUS      19.89 V 4520 mA
+   39686.422 ms +2273.999  VBUS      19.90 V 4498 mA
+   40255.423 ms + 569.001  VBUS      19.90 V 4477 mA
+   40803.423 ms + 548.000  VBUS      19.90 V 4451 mA
+   40997.437 ms + 194.014  VBUS      19.90 V 4426 mA
+   41157.423 ms + 159.986  VBUS      19.89 V 4403 mA
+   41331.423 ms + 174.000  VBUS      19.89 V 4381 mA
+   41491.423 ms + 160.000  VBUS      19.90 V 4357 mA
+   41665.423 ms + 174.000  VBUS      19.90 V 4332 mA
+   41939.438 ms + 274.015  VBUS      19.90 V 4311 mA
+   42513.423 ms + 573.985  VBUS      19.90 V 4290 mA
+   42702.423 ms + 189.000  VBUS      19.90 V 4266 mA
+   43076.423 ms + 374.000  VBUS      19.90 V 4241 mA
+   44053.423 ms + 977.000  VBUS      19.90 V 4265 mA
+   44247.423 ms + 194.000  VBUS      19.90 V 4243 mA
+   44975.423 ms + 728.000  VBUS      19.90 V 4222 mA
+   45378.459 ms + 403.036  VBUS      19.90 V 4201 mA

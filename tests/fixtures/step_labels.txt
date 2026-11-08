@@ -1,0 +1,62 @@
+# Golden step labels, shared by tests/test_step_label.cpp (the firmware's include/k2/chargertest/step_label.hpp) and
+# tests/test_step_label.py (tools/step_label.py), so the device, the host tools and the screenshots word a step the same.
+# Fields, separated by '|': algorithm | pos | target mV | requested mA | PDO (hex, 0 = none) | flags | previous row's mV | label
+#   algorithm: the wire name of the protocol (tools/k2_remote.py TEST_ALGORITHMS, with the PD rows as pd2 / pd3 / epr / epr-avs)
+#   flags: h = hunt (OEM 6 A probe), a = AVS offer, c = continuous (a ramp step), - = none
+#   previous row's mV: the preceding row of the same protocol and PDO position (0 = none), what a ramp row reads "from"
+# Amps are shown only where the step has a meaningful current: a PD fixed / PPS row shows the PDO's advertised current (the
+# row itself requests at most 1 A), a hunt row its probe current, SCP its limit; AVS and the D+/D- modes show volts only.
+# The one exception is the full-current PPS row (top voltage at the APDO's whole current): it shows what it requests.
+#
+# PD fixed
+pd2     | 1 |  5000 | 1000 | 0x1912c | - |     0 | PD 5V 3A
+pd3     | 2 |  9000 | 1000 | 0x2d12c | - |     0 | PD 9V 3A
+pd3     | 5 | 20000 | 1000 | 0x6412c | - |     0 | PD 20V 3A
+pd3     | 5 | 20000 | 1000 | 0x641f4 | - |     0 | PD 20V 5A
+pd3     | 0 |     0 |    0 |       0 | - |     0 | PD3.x
+pd2     | 0 |     0 |    0 |       0 | - |     0 | PD2.0
+# PPS: the requested target and the APDO's current; a ramp row reads from the previous target
+pps     | 6 | 20000 | 1000 | 0xc1a42164 | - |     0 | PPS 20V 5A
+pps     | 6 |  3300 | 1000 | 0xc1a42164 | c | 12140 | PPS 12.14→3.3V
+pps     | 6 | 11000 | 1000 | 0xc1a42164 | - |     0 | PPS 11V 5A
+pps     | 7 |  8000 | 1000 | 0xc0dc213c | c | 11000 | PPS 11→8V
+pps     | 7 | 11000 | 1000 | 0xc0dc213c | c |  5000 | PPS 5→11V
+pps     | 7 |  7720 | 1000 | 0xc0dc213c | c | 12140 | PPS 12.14→7.72V
+pps     | 7 |  5000 | 1000 | 0xc0dc213c | c |  5000 | PPS 5V 3A
+pps     | 0 |     0 |    0 |          0 | - |     0 | PPS
+# PPS full-current row: the label is the requested current, clamped to the cable (3 A when unread), not the advertised one
+pps     | 6 | 11000 | 5000 | 0xc0dc3264 | - |     0 | PPS 11V 5A
+pps     | 6 | 11000 | 3000 | 0xc0dc3264 | - |     0 | PPS 11V 3A
+pps     | 7 | 20000 | 2000 | 0xc1903228 | - |     0 | PPS 20V 2A
+# AVS: volts only, the ramp reads the same way
+spr-avs | 4 | 15000 | 1000 | 0xe004b000 | a |     0 | AVS 15V
+spr-avs | 4 |  9000 | 1000 | 0xe004b000 | ac | 15000 | AVS 15→9V
+epr-avs | 9 | 28000 | 1000 | 0xd230968c | a |     0 | AVS 28V
+spr-avs | 0 |     0 |    0 |          0 | - |     0 | AVS
+# EPR fixed
+epr     | 8 | 28000 | 1000 | 0x8c1f4 | - |     0 | EPR 28V 5A
+epr     | 0 |     0 |    0 |       0 | - |     0 | EPR
+# Mi 6 A hunt rows (a fixed or a PPS offer; the probe current is the requested one)
+pd3     | 5 | 20000 | 6000 | 0x6412c | h |     0 | Mi 20V 6A
+pps     | 6 | 11000 | 6000 | 0xc1a42164 | h | 0 | Mi 11V 6A
+pps     | 6 | 20000 | 6000 | 0xc1a42164 | h | 0 | Mi 20V 6A
+# PD revision rows
+pd30rev | 0 |     0 |    0 |       0 | - |     0 | PD3.0 rev
+pd31rev | 0 |     0 |    0 |       0 | - |     0 | PD3.1 rev
+pd32rev | 0 |     0 |    0 |       0 | - |     0 | PD3.2 rev
+# D+/D- and vendor modes: volts only (SCP also its current limit); a ramp is just its target
+qc2     | 0 |  9000 |    0 |       0 | - |     0 | QC2 9V
+qc3     | 0 | 12000 |    0 |       0 | c |  9000 | QC3 12V
+qc3+    | 0 |  9000 |    0 |       0 | - |     0 | QC3+ 9V
+afc     | 0 |  9000 |    0 |       0 | - |     0 | AFC 9V
+fcp     | 0 |  9000 |    0 |       0 | - |     0 | FCP 9V
+scp     | 0 | 10000 | 2250 |       0 | - |     0 | SCP 10V 2.25A
+scp     | 0 |  4500 | 5000 |       0 | - |     0 | SCP 4.5V 5A
+scp     | 0 |  5000 |    0 |       0 | - |     0 | SCP 5V
+vooc    | 0 |  5000 |    0 |       0 | - |     0 | VOOC 5V
+svooc   | 0 | 10000 |    0 |       0 | - |     0 | SVOOC 10V
+svooc65 | 0 | 10000 |    0 |       0 | - |     0 | SVOOC65 10V
+ufcs    | 0 |  9000 |    0 |       0 | - |     0 | UFCS 9V
+vivo    | 0 | 11000 |    0 |       0 | - |     0 | VIVO 11V
+qc2b    | 0 | 20000 |    0 |       0 | - |     0 | QC2B 20V
+qc3b    | 0 | 12000 |    0 |       0 | c |  5000 | QC3B 12V
