@@ -9,18 +9,15 @@ components and their licences.
 
 ## What it does
 
-- **Power meter**: VBUS, current and power from the INA226 / INA228 / INA237 on the PB8/PB9 bus (auto-detected), magnitudes with a flow arrow, energy counter, board and MCU temperature, D+/D-/CC1/CC2 lines.
-- **USB-PD**: passive by default (the chip only listens). Decodes Source_Capabilities (Fixed, PPS, AVS, EPR), extended messages, VDMs. A **PD trigger** requests a PDO or a PPS/AVS voltage (verified on a lone charger), **Identify device** asks the partner for identity, SVIDs, modes and sink caps (verified on a Pixel).
-- **Fast-charge triggers and detector** on D+/D-: QC 2.0/3.0, AFC, FCP/SCP, VOOC, and a one-click auto detector.
-- **Charger test** tab before PD: confirmed, no-load fixed/PPS/AVS voltage sweeps and selectable legacy
-  tests, with timed holds, per-step results and a verified 5 V return. Defaults: PD, QC2 through 12 V,
-  QC3 through 20 V. Legacy tests remain blocked on a live PD link; use a separate QC-only setup.
-  This verifies voltage negotiation, not maximum current or loaded power.
-- **Cables**: e-marker read (VCONN or sniff mode), save to a library of up to 140 cables, JSON export on the USB drive, optional Spoof (answer a charger's SOP' query with a saved cable). Five captured or generic cable identities are built in and always available to the spoof and to the charger-test "Cable identity" dialog: generic 20 V 5 A, EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W (mag) and OnePlus 100W (30 V 5 A); ids 2 to 4 were captured from the author's cables 2026-11-06 (`docs/K2_PORTS_SPEC.md`). The OnePlus USB-C to USB-A SUPERVOOC cable has no e-marker, so A-to-C SUPERVOOC identification is not supported.
-- **Black Box**: a raw FUSB302/PD trace recorder with trigger-frozen captures (contract change, hard reset, VBUS dip, detach), kept in flash across power-off. Read with `tools/pd_trace.py`.
-- **Self-powered boot modes** (hold PLUS or OK at power-up). Not finished: see `docs/HANDOFF.md`.
-- **Remote control** over USB (`tools/k2_remote.py`, a WebHID/HTTP dashboard in `tools/web`, screenshots of the 240x240 screen).
+- **Power meter**: volts, amps, watts and energy, trend graphs, D+/D-/CC1/CC2 line levels.
+- **USB-PD analyzer**: passive by default; decodes the charger's offers (Fixed, PPS, AVS, EPR), reads the partner's identity, and can request a PDO or a PPS/AVS voltage (**PD trigger**).
+- **Fast-charge triggers** on D+/D-: QC, AFC, FCP/SCP, VOOC and a one-click auto detector.
+- **Charger test**: guided no-load voltage sweeps with per-step results, saved as report cards you can share as a QR code.
+- **Cables**: e-marker read and save (library of up to 140), cable-identity Spoof, cable resistance.
+- **Black Box**: a PD trace recorder with trigger-frozen captures that survive power-off.
+- **USB**: remote control (`tools/k2_remote.py`), a browser dashboard, a read-only drive, and a WebHID flasher.
 
+How to use all of it: **[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)**, with a short Getting started part and a full reference of every page, tool and setting.
 Feature status, with what is verified on hardware and what is not, is in `docs/ROADMAP.md`.
 Step-by-step hardware test procedures for every protocol and feature, with a results log: `docs/HW_TEST_PROCEDURES.md`.
 
@@ -77,7 +74,7 @@ The network mode is not in the default build (`K2_NET=0`: no lwIP, no NCM, no HT
 
 Drive and Network cannot be combined (USB packet memory). **The HID port needs a USB C-to-A cable**: a C-to-C cable does not enumerate on the left port. Enable HID in Settings > USB Link before you use any `tools/k2_remote.py` command or `make smoke`.
 
-**Orientation:** Settings follows Tools. Open Settings > Autorotate, select Auto or
+**Orientation:** open Settings > Autorotate, select Auto or
 Manual 0/90/180/270 deg with short PLUS/MINUS, then press OK to apply. Auto follows gravity;
 Manual stays fixed. Orientation choices last for the current boot.
 
@@ -117,7 +114,7 @@ so the signature comes back with the next firmware.
 
 ## USB drive
 
-The K2 enumerates as a composite device: the HID logger (unchanged) plus a read-only mass-storage drive named `K2 DRIVE` (when the USB link tool has the Drive on; HID-only is a runtime mode of the same firmware image, and Drive cannot be combined with the network mode). In the network mode (a `make docker-build K2_NET=1` image only; Settings > USB Link > Network, replug) the K2 serves the dashboard itself: open http://192.168.7.1/ (the host gets 192.168.7.2 by DHCP; Linux, macOS and Windows 11 need no driver). Files:
+The K2 enumerates as a composite device: the HID logger (unchanged) plus a read-only mass-storage drive named `K2 DRIVE` (when Settings > USB Link has the Drive on; HID-only is a runtime mode of the same firmware image, and Drive cannot be combined with the network mode). In the network mode (a `make docker-build K2_NET=1` image only; Settings > USB Link > Network, replug) the K2 serves the dashboard itself: open http://192.168.7.1/ (the host gets 192.168.7.2 by DHCP; Linux, macOS and Windows 11 need no driver). Files:
 
 - `README.TXT`, `STATUS.TXT` (live V/A/W, source caps, cable), `LOG.TXT` (recent log lines)
 - `CABLES/<name>.JSN`: one JSON file per saved cable (see `docs/EMARKER_JSON.md`); manage them with `python3 tools/k2_remote.py emarker list | save | rename <id> "<name>" | delete <id> --confirm | spoof <id>|builtin:<id|name>|off`
@@ -184,7 +181,7 @@ can always be restored:
    0x08000000..0x08100000 twice and compares. Exit 3 means the bootloader refused above some address; the
    readable part is saved and `manifest.json` names `last_readable_address`.
 3. Only if the dump is partial: `python3 tools/k2_flasher.py flash build/open_k2.k2` (safe: no wipe, no
-   format of the device-storage area), enable USB HID in Tools > USB link, replug (left port needs a C-to-A cable),
+   format of the device-storage area), enable USB HID in Settings > USB Link, replug (left port needs a C-to-A cable),
    then `python3 tools/k2_remote.py flash-dump /path/outside/the/repo/k2-dump`.
 4. Store the dump outside the repo, then flash and use this firmware normally.
 
@@ -196,7 +193,7 @@ Whether the bootloader reads above 0x080E3000 is unverified.
 0x080B3000..0x080E0000 and, on units that ran older builds, legacy stores above 0x080E4000) and leaves the K2
 in the bootloader, ready for another `.k2` container:
 
-1. Flash this firmware (`make flash`) and enable USB HID in Tools > USB link, so the remote works.
+1. Flash this firmware (`make flash`) and enable USB HID in Settings > USB Link, so the remote works.
 2. `python3 tools/k2_remote.py factory-wipe --confirm`. The K2 unmounts the volume, erases its 90 sectors and
    the legacy pages that carry our own old signature (the rest of 0x080E0000.., the bootloader and
    the info page are never touched), reads every erased one back
