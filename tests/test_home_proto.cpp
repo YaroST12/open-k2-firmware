@@ -145,9 +145,35 @@ static void test_pending_unknown_and_none() {
     CHECK_EQ(static_cast<int>(derive_proto(s).kind), static_cast<int>(ProtoKind::Detecting));
     s.fc = Protocol::NoInput;
     CHECK_EQ(static_cast<int>(derive_proto(s).kind), static_cast<int>(ProtoKind::None));
-    s.fc = Protocol::PdLikely;            // a contract must exist, but its caps were not seen
+    s.fc = Protocol::PdLikely;            // no contract and no caps: no PD was decoded
     s.vbus_mv = 20100;
     ProtoInfo p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::TypeC));
+    CHECK_EQ(p.mv, 20000);
+    CHECK_EQ(p.ma, 0);
+}
+
+static void test_pd_labels_need_decoded_pd() {
+    // A PD-ish D+/D- verdict without a decoded contract and without Source_Capabilities must not
+    // produce a "PD" label: show what is known (the level, the Rp current), like the plain 5 V setup.
+    const Protocol pdish[] = {Protocol::Pd, Protocol::PdMtk, Protocol::PdPe, Protocol::PdLikely};
+    for (const Protocol fc : pdish) {
+        ProtoSource s;
+        s.fc = fc;
+        s.vbus_mv = 8940;
+        s.typec_ma = 1500;
+        const ProtoInfo p = derive_proto(s);
+        CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::TypeC));
+        CHECK_EQ(p.mv, 9000);
+        CHECK_EQ(p.ma, 1500);
+    }
+    // Source_Capabilities were seen (no contract yet): the caps justify the PD label.
+    const pd::SourceCaps c = caps_epr();
+    ProtoSource s;
+    s.fc = Protocol::Pd;
+    s.caps = &c;
+    s.vbus_mv = 20100;
+    const ProtoInfo p = derive_proto(s);
     CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::PdFixed));
     CHECK_EQ(p.mv, 20000);
     CHECK_EQ(p.ma, 0);
@@ -162,5 +188,6 @@ int main() {
     test_non_pd_protocols();
     test_type_c_and_dcp();
     test_pending_unknown_and_none();
+    test_pd_labels_need_decoded_pd();
     return test_report("test_home_proto");
 }

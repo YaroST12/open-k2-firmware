@@ -84,7 +84,11 @@ ProtoInfo derive_proto(const ProtoSource &s) {
     case Protocol::Scp: return fixed_info(ProtoKind::Scp, v, 0, 0);
     case Protocol::VoocWarp: case Protocol::Svooc: return fixed_info(ProtoKind::Svooc, v, 0, 0);
     case Protocol::PdPe: case Protocol::PdMtk: case Protocol::Pd: case Protocol::PdLikely:
-        return fixed_info(ProtoKind::PdFixed, v, 0, 0);
+        // A "PD" label needs a decoded PD message: here that is the Source_Capabilities (a decoded
+        // contract is handled by the first branch). Otherwise only the level and the Rp current are
+        // known, so show those, like a plain Type-C source.
+        if (s.caps && s.caps->valid) return fixed_info(ProtoKind::PdFixed, v, 0, 0);
+        return fixed_info(ProtoKind::TypeC, v, s.typec_ma, 0);
     }
     return {ProtoKind::Unknown};
 }
