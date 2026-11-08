@@ -306,7 +306,7 @@ selects a 5 V source or ground.
 | PD sink (Rd presented, trigger/requests) | yes | yes | Boot modes: PLUS held = Rd on CC2, OK held = Rd on CC1; run START presents Rd on the Rp line |
 | PD passive sniffing | yes | yes | FUSB302 on the active line |
 | E-marker read (SOP'/SOP'' interrogation) | yes | yes | VCONN on the inactive CC (PC13). SOP'' is received (CONTROL1 0x67 for the whole read) but never answered. |
-| Cable sniff (charger's own SOP' exchange, no VCONN) | untested | untested | S7 built the counters-free measurement: `pd_trace.py live` shows every Rx with its SOP kind. Procedure in `docs/DETECTION_IMPLEMENTATION_PLAN.md` S7; replace "untested" with the result |
+| Cable sniff (charger's own SOP' exchange, no VCONN) | untested | untested | S7 built the counters-free measurement: `pd_trace.py live` shows every Rx with its SOP kind. Procedure in `docs/agents/DETECTION_IMPLEMENTATION_PLAN.md` S7; replace "untested" with the result |
 | E-marker spoof | yes | yes | Only in response to a charger SOP'; on the top plug none seen (see above) |
 | QC2/QC3/AFC/FCP/SCP/VOOC on D+/D- | yes | yes | `dpdm` switch network |
 | VBUS/current measure | yes | yes | INA226 (36 V ceiling) / INA228/237 (48 V) |

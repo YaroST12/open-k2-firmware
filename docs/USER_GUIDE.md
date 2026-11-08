@@ -293,7 +293,7 @@ Spoof is a shortcut: it opens Connection on the Cable tab and then the Spoof pag
 
 ![FC trigger](guide/img/fc-trigger.png)
 
-**Puts voltage on the output.** Requests a voltage over D+/D- from fast-charge chargers. Protocol facts: [`FASTCHARGE_PROTOCOLS.md`](FASTCHARGE_PROTOCOLS.md) (Quick Charge facts: [`QC_RESEARCH.md`](QC_RESEARCH.md)). Status: **not verified on hardware in this build** (VOOC and related modes need a load to be meaningful); UFCS handshake verified on one charger.
+**Puts voltage on the output.** Requests a voltage over D+/D- from fast-charge chargers. Protocol facts: [`FASTCHARGE_PROTOCOLS.md`](FASTCHARGE_PROTOCOLS.md) (Quick Charge is its section 1). Status: **not verified on hardware in this build** (VOOC and related modes need a load to be meaningful); UFCS handshake verified on one charger.
 
 Stages: **Pick** (header "1/3 FC trigger"), **Edit**, **Review**, **Live**.
 

@@ -569,7 +569,7 @@ coverage must demonstrate real measured transitions, not merely a reset log.
   M replies`.
 - **Pass:** read and save as above (done); spoof counts `Replied` equal to `Asked` and the charger offers
   its 5 A / higher PDOs (compare `R pdos` with and without Spoof). **Fail:** `Replied` 0 (known open issue:
-  reply timing, `HANDOFF.md` Open issues), or a charger Hard Reset after the reply.
+  reply timing, `agents/HANDOFF.md` Open issues), or a charger Hard Reset after the reply.
 - **Cleanup:** `R emarker spoof off`; delete test entries if you saved extras.
 
 ### T16 Cable resistance (passive and Kelvin)
@@ -655,7 +655,7 @@ coverage must demonstrate real measured transitions, not merely a reset log.
 
 - **Risk:** low. **Status:** **known failing** (2026-11-01, k2/core): with a charger alone on the bottom
   port the K2 runs only while PLUS is held and dies on release; `SELF-PWR` stays up only on a laptop USB-C
-  port. Do **not** treat a repeat of this as a regression; see `HANDOFF.md` Open issues.
+  port. Do **not** treat a repeat of this as a regression; see `agents/HANDOFF.md` Open issues.
 - **Prerequisites:** the K2 unplugged from everything; a charger on the **bottom** port; a PC cable
   with 5 V cut (data only) for log visibility if you have one.
 - **Steps:** hold `PLUS` (Rd on CC2) or `OK` (Rd on CC1) while connecting the charger; the screen shows the

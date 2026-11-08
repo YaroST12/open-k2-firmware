@@ -6,7 +6,7 @@
 //  * Meter: PASSIVE two-point differential. It only watches VBUS and bus current from the power
 //    monitor. A light-load reading (< 200 mA) is the reference; once the user's load draws at least
 //    1 A more at the same negotiated voltage, R = (V_idle - V_load) / (I_load - I_idle)
-//    (FEATURE_PROTOTYPES prototype 6). The figure covers everything between the source's regulation
+//    (docs/agents/FEATURE_PROTOTYPES.md, prototype 6). The figure covers everything between the source's regulation
 //    point and the K2's VBUS tap: cable, both connectors and the K2's own path before the shunt tap.
 //  * kelvin(): 8-wire formulas. It needs a
 //    pass-through fixture that routes the far-end VBUS / GND sense points onto CC1, CC2 and D-. The

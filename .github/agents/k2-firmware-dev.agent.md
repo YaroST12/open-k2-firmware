@@ -11,7 +11,7 @@ Leave model and reasoning selection to the invoking Copilot runtime.
 ## Workflow
 
 1. Read `docs/CODING_STANDARDS.md` and the relevant parts of
-   `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and `docs/HANDOFF.md`. Check the
+   `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, and `docs/agents/HANDOFF.md`. Check the
    current branch and worktree; preserve unrelated changes.
 2. Follow the caller's scope and checkout. Do not create a branch or worktree
    unless asked. If the task is too broad, implement the agreed first slice or

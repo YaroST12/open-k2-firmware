@@ -1,9 +1,9 @@
 # Open-K2 firmware architecture
 
 Bare-metal C++23 for the WITRN K2 (Artery AT32F403A, Cortex-M4F, no OS, no heap). Everything under
-`src/` is C++; only TinyUSB, lwIP and littlefs (under `third_party/`) are C. Hardware facts and open
-issues live in [HANDOFF.md](HANDOFF.md), rules in [CODING_STANDARDS.md](CODING_STANDARDS.md), feature status
-in [ROADMAP.md](ROADMAP.md). This file says how the code is organised and where things go.
+`src/` is C++; only TinyUSB, lwIP and littlefs (under `third_party/`) are C. Rules are in
+[CODING_STANDARDS.md](CODING_STANDARDS.md), feature status in [ROADMAP.md](ROADMAP.md), the document index in
+[README.md](README.md). This file says how the code is organised and where things go.
 
 Contents: 1 At a glance, 2 Boot, linker script and memory, 3 Layers, 4 Data flows, 5 Common helpers,
 6 Rules of the road, 7 How to add a page / protocol / remote command / module, then the detailed
@@ -445,7 +445,7 @@ Reuse these before writing a new one. Headers under `include/k2/<group>/` unless
 
 Write the host test first for pure logic (`tests/test_<name>.cpp`; add the source to `TEST_CXX_LIB` in the
 `Makefile` if it is not header-only). Hardware-facing code is verified on the device. Commit format:
-`<type>(<scope>): <summary>` plus Summary, Rationale, Key Changes sections (GEMINI.md).
+`<type>(<scope>): <summary>` plus Summary, Rationale, Key Changes sections ([agents/GEMINI.md](agents/GEMINI.md)).
 
 ## 7. How to add things
 

@@ -3,9 +3,9 @@
 # WITRN K2 (AT32F403A) - Handoff
 
 Entry point for a new contributor: how to build, test, flash and debug, the hardware facts the firmware relies
-on, and the open issues. Feature status and what is verified on hardware: [`ROADMAP.md`](ROADMAP.md). Code layout,
-flash map, USB modes, PD driver model: [`ARCHITECTURE.md`](ARCHITECTURE.md). Screen design:
-[`UI_DESIGN.md`](UI_DESIGN.md). Rules: [`CODING_STANDARDS.md`](CODING_STANDARDS.md).
+on, and the open issues. Feature status and what is verified on hardware: [`ROADMAP.md`](../ROADMAP.md). Code layout,
+flash map, USB modes, PD driver model: [`ARCHITECTURE.md`](../ARCHITECTURE.md). Screen design:
+[`UI_DESIGN.md`](../UI_DESIGN.md). Rules: [`CODING_STANDARDS.md`](../CODING_STANDARDS.md).
 
 ## Hardware summary
 
@@ -97,7 +97,7 @@ cable resistance (not implemented; the passive estimate is unchecked).
 
 ## Protocol and format references
 
-[`FASTCHARGE_PROTOCOLS.md`](FASTCHARGE_PROTOCOLS.md) (D+/D- and UFCS: decisions and measurements),
-[`K2_PORTS_SPEC.md`](K2_PORTS_SPEC.md), [`EMARKER_JSON.md`](EMARKER_JSON.md),
-[`FEATURE_PROTOTYPES.md`](FEATURE_PROTOTYPES.md), [`CHARGER_QUIRKS.md`](CHARGER_QUIRKS.md). No analysis of any
-other firmware application is included; see [`PROVENANCE.md`](../PROVENANCE.md).
+[`FASTCHARGE_PROTOCOLS.md`](../FASTCHARGE_PROTOCOLS.md) (D+/D- and UFCS: decisions and measurements),
+[`K2_PORTS_SPEC.md`](../K2_PORTS_SPEC.md), [`EMARKER_JSON.md`](../EMARKER_JSON.md),
+[`FEATURE_PROTOTYPES.md`](FEATURE_PROTOTYPES.md), [`CHARGER_QUIRKS.md`](../CHARGER_QUIRKS.md). Where the hardware
+knowledge comes from: [`PROVENANCE.md`](../../PROVENANCE.md).

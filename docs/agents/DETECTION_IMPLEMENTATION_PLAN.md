@@ -1,11 +1,11 @@
 # Detection implementation plan: review of the research notes, gap list, step plan
 
 Date: 2026-11-07. Base: `main` 663b67e. Review of the two untracked research notes
-`docs/TRIGGER_RESEARCH_NOTES.md` and `docs/SOURCE_SINK_DETECTION.md` against the code and the
+`docs/agents/TRIGGER_RESEARCH_NOTES.md` and `docs/SOURCE_SINK_DETECTION.md` against the code and the
 hardware record, then a ranked gap list and a step-by-step plan for the feasible items.
 
 Evidence rules used here: a verdict cites a repo `file:line` at 663b67e, a hardware result in
-`docs/CHARGER_QUIRKS.md` / `docs/HANDOFF_2026-11-06.md`, or a public source. It cites no vendor
+`docs/CHARGER_QUIRKS.md` / `docs/agents/HANDOFF_2026-11-06.md`, or a public source. It cites no vendor
 documents. Charger behaviour is detected by patterns (`docs/CHARGER_QUIRKS.md`), never
 by VID:PID.
 
@@ -17,7 +17,7 @@ or a hardware result), **unverified** (plausible, nothing in the repo proves it)
 
 ## 1. Claim-by-claim review
 
-### 1.1 `docs/TRIGGER_RESEARCH_NOTES.md`
+### 1.1 `docs/agents/TRIGGER_RESEARCH_NOTES.md`
 
 | # | Claim (note section) | Verdict | Evidence |
 |---|---|---|---|
@@ -36,7 +36,7 @@ or a hardware result), **unverified** (plausible, nothing in the repo proves it)
 | T13 | AFC byte `(V<<4)|I`, 9 V = 0x46, 12 V = 0x79, sent 3x 10 ms apart (§5) | correct | `include/k2/fastcharge/afc.hpp:9-16`. |
 | T14 | "AFC/FCP/SCP commands are sent 3x with 10 ms spacing" (§8.3) | correct for AFC only | AFC: `afc.hpp:9-10`. FCP/SCP: the ACCP engine retries per register read/write, not a fixed 3x10 ms (unverified for the note's wording). |
 | T15 | SFC = PD PPS (§5) | correct, public | Nothing Samsung-proprietary over CC in the repo. |
-| T16 | "USB-C 120 W HyperCharge is plain PD PPS, gated only by the 6 A e-marker; a non-Xiaomi phone gets standard PD/PPS only" (§6) | **wrong** | Repo proof: the 6 A APDOs appear only after the sink-initiated SVID 0x2717 VDM chain. Opener `kXiaomiOpenerVdo = 0x27170101` (`src/pd/pd_sink.cpp:30`), chain guard `xiaomi_chain_active` (`:335-341`), step-1 reply `kXiaomiStep1ReplyVdo = 0x27170102` (`include/k2/pd/pd_sink.hpp:321`, used `src/pd/pd_sink.cpp:933-935`), step 0x0A sets `xiaomi_authed_` and re-asks caps (`:984-993`). Hardware 2026-11-04/06 on CUKTECH C1: PPS APDOs rise 5 A → 6 A ~0.7 s after the contract, Mi 20 V 6 A and 11 V 6 A pass with the real 6 A cable (`docs/HANDOFF_2026-11-06.md:201`; `docs/CHARGER_QUIRKS.md` xiaomi-120w-auth-implemented, auth-capped-by-cable, xiaomi-chain-killed-by-sink-request). The cable *also* caps (auth-capped-by-cable), so the note's cable half is right; "plain PPS" is not. |
+| T16 | "USB-C 120 W HyperCharge is plain PD PPS, gated only by the 6 A e-marker; a non-Xiaomi phone gets standard PD/PPS only" (§6) | **wrong** | Repo proof: the 6 A APDOs appear only after the sink-initiated SVID 0x2717 VDM chain. Opener `kXiaomiOpenerVdo = 0x27170101` (`src/pd/pd_sink.cpp:30`), chain guard `xiaomi_chain_active` (`:335-341`), step-1 reply `kXiaomiStep1ReplyVdo = 0x27170102` (`include/k2/pd/pd_sink.hpp:321`, used `src/pd/pd_sink.cpp:933-935`), step 0x0A sets `xiaomi_authed_` and re-asks caps (`:984-993`). Hardware 2026-11-04/06 on CUKTECH C1: PPS APDOs rise 5 A → 6 A ~0.7 s after the contract, Mi 20 V 6 A and 11 V 6 A pass with the real 6 A cable (`docs/agents/HANDOFF_2026-11-06.md:201`; `docs/CHARGER_QUIRKS.md` xiaomi-120w-auth-implemented, auth-capped-by-cable, xiaomi-chain-killed-by-sink-request). The cable *also* caps (auth-capped-by-cable), so the note's cable half is right; "plain PPS" is not. |
 | T17 | USB-A 120 W HyperCharge is proprietary on D+/D- with a 6 A A-to-C cable ID (§6) | unverified | No capture of a CUKTECH/Xiaomi USB-A port handshake in the repo; the USB-A port on CUKTECH 120W shows `usb-a-no-load-auto-off` only. |
 | T18 | Reset: D+ = D- = 0 V for 500 ms returns HVDCP/AFC/FCP/SCP to 5 V (§4, §8.5) | correct | `src/drivers/dpdm.cpp:22` `kResetHoldMs = 500`, discharge at `:261-265`. |
 | T19 | HVDCP entry = D+ 0.6 V first (§8.2) | correct | `src/fastcharge/fc_engine.cpp:10` (kDischargeMs 100 / kFloatDpMs 100 / kBiasMs 50), `include/k2/fastcharge/qc.hpp:32-33` handshake window 350-1150 mV, drop ≥ 350 mV. |
@@ -135,7 +135,7 @@ three parallel agents (cap: 4). Every step: pure logic + host tests first (red, 
 `make gate`, then the hardware proof listed. Stack: no new frame over 1024 B; new `.bss` is
 counted (it costs stack directly); the gate's depth check (`tools/stack_depth.py`, `STACK_MARGIN`
 1024 in `tools/gate.py`) must stay green and the heartbeat `stack_free` must not drop below the
-2026-11-06 figure (1.2 KB spare on the HTTP path, `docs/HANDOFF_2026-11-06.md:219`). Flash: each
+2026-11-06 figure (1.2 KB spare on the HTTP path, `docs/agents/HANDOFF_2026-11-06.md:219`). Flash: each
 step states its expected `text` delta; anything over +5 % needs an explanation in the commit body.
 
 ### S1. Answer role-swap requests (DR_Swap / PR_Swap / FR_Swap) in the sink
@@ -313,7 +313,7 @@ step states its expected `text` delta; anything over +5 % needs an explanation i
 ### S9. Doc fixes (one small docs commit, no code)
 
 - `docs/SOURCE_SINK_DETECTION.md` (fix S2 and S5, refresh the 21 moved lines, strip nothing else);
-  `docs/TRIGGER_RESEARCH_NOTES.md` (mark T5/T6/T7/T16/T21 with the verdicts above). Can run with any step.
+  `docs/agents/TRIGGER_RESEARCH_NOTES.md` (mark T5/T6/T7/T16/T21 with the verdicts above). Can run with any step.
 
 ### Order and parallelism
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// UI review scratch harness (docs/UI_REVIEW_2026-11-06.md). Not a regression test: it renders
+// UI review scratch harness (docs/agents/UI_REVIEW_2026-11-06.md). Not a regression test: it renders
 //   - "before": real Ui pages at the bottom-strip 240x220 canvas that tests/test_ui_capture.cpp and
 //     tests/test_ui_mockup.cpp do not reach (a finished charger run: results, steps, detail, the
 //     Ask dialog, the running list), and

@@ -1,8 +1,8 @@
 # Open-K2 feature roadmap
 
 Status of every feature, checked against the code on `k2/core` on 2026-11-01. The entry point is
-`HANDOFF.md`; this file is the feature list. Protocol facts: `FASTCHARGE_PROTOCOLS.md`; ideas:
-`FEATURE_PROTOTYPES.md`. How to test each row on the device: `HW_TEST_PROCEDURES.md`.
+`agents/HANDOFF.md`; this file is the feature list. Protocol facts: `FASTCHARGE_PROTOCOLS.md`; ideas:
+`agents/FEATURE_PROTOTYPES.md`. How to test each row on the device: `HW_TEST_PROCEDURES.md`.
 
 Two separate questions per row:
 

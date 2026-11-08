@@ -1,7 +1,7 @@
 # Trigger Research Notes — OEM Fast-Charge Trigger Playbooks
 
 > **Review status (2026-11-07):** written by another model and reviewed against the code and hardware results in
-> `docs/DETECTION_IMPLEMENTATION_PLAN.md` §1. Where they disagree, the plan wins. Known corrections: Xiaomi 120 W needs the
+> `docs/agents/DETECTION_IMPLEMENTATION_PLAN.md` §1. Where they disagree, the plan wins. Known corrections: Xiaomi 120 W needs the
 > SVID 0x2717 auth chain (the 6 A APDOs appear only after it); VOOC clocks without a load (frames are 9 clocks, accept
 > 0x04D); UFCS: D+/D- on USB-A (what the K2 implements, USART2) and CC/BMC on USB-C per docs/CHARGING_PROTOCOL_MAP.md §14; DR_Swap/PR_Swap are control types 9/10; several file:line citations moved.
 

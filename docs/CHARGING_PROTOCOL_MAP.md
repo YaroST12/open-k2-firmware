@@ -180,7 +180,7 @@ against a primary or reputable secondary source is marked *(uncertain)*. Compile
 
 ## 12. Qualcomm Quick Charge 2.0 → 5
 
-(Also covered in `docs/QC_RESEARCH.md`; the QC3 stepping loop in `docs/FASTCHARGE_PROTOCOLS.md` §1.)
+(Also covered in `docs/agents/QC_RESEARCH.md`; the QC3 stepping loop in `docs/FASTCHARGE_PROTOCOLS.md` §1.)
 
 - **QC 2.0** (2013): HVDCP on **D+/D-**, fixed 5/9/12/20V. **QC 3.0** (2015): same D+/D- but **200mV steps**
   3.6–12V (Class A) / up to 20V (Class B). **QC 3+** (2020): **20mV steps**.
@@ -322,7 +322,7 @@ version of the research brief; every claim was re-checked by a dedicated subagen
   protocol ICs); whatcable e-marker reports (#525 OPPO 0x22D9; #138/#540/#628 Zimi 0x2B01).
 - Forums: 4PDA 1102294/1062207, XDA 4659776, r/Xiaomi, r/PocoPhones, r/oneplus, r/UsbCHardware, r/motorola,
   r/RedMagic, CSDN UFCS dissection.
-- Our own: `docs/FASTCHARGE_PROTOCOLS.md`, `docs/CHARGER_QUIRKS.md`, `docs/research/xiaomi-10v5a.md`,
+- Our own: `docs/FASTCHARGE_PROTOCOLS.md`, `docs/CHARGER_QUIRKS.md`, `docs/agents/research/xiaomi-10v5a.md`,
   `docs/captures/` [HW].
 
 ### 18.5 Cable marking for >5A (Q5) + validation log + open items
@@ -396,4 +396,4 @@ version of the research brief; every claim was re-checked by a dedicated subagen
   [Motorola 6.5A e-marked cable P/N 78811036](https://www.motorola.com/us/p/motoaccessories/power-charging/78811036),
   [mi.com 120W combo specs (11V/6A, 20V/6A)](https://www.mi.com/global/product/xiaomi-120w-charging-combo-type-a/specs/),
   [tinkervault: hypercharge](https://www.tinkervault.com/usb-fast-charging-protocols/hypercharge) [moto-turbopower](https://www.tinkervault.com/usb-fast-charging-protocols/moto-turbopower) [ufcs](https://www.tinkervault.com/usb-fast-charging-protocols/ufcs) [samsung-afc-sfc](https://www.tinkervault.com/usb-fast-charging-protocols/samsung-afc-sfc) [huawei-fcp-scp](https://www.tinkervault.com/usb-fast-charging-protocols/huawei-fcp-scp) [vfcp](https://www.tinkervault.com/usb-fast-charging-protocols/vfcp)
-- Repo-internal: `docs/FASTCHARGE_PROTOCOLS.md`, `docs/QC_RESEARCH.md`, `docs/CHARGER_QUIRKS.md`, `docs/research/xiaomi-10v5a.md`
+- Repo-internal: `docs/FASTCHARGE_PROTOCOLS.md`, `docs/agents/QC_RESEARCH.md`, `docs/CHARGER_QUIRKS.md`, `docs/agents/research/xiaomi-10v5a.md`
