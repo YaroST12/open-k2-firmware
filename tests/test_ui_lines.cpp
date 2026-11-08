@@ -25,9 +25,9 @@ static void test_bars() {
     for (int mv = 0; mv <= 3400; mv += 10) { CHECK_EQ(lines_bar_px(mv) >= prev, 1); prev = lines_bar_px(mv); }
 }
 
-static std::string rp(int cc1, int cc2, bool have = true) {
+static std::string rp(int cc1, int cc2, int active = 0, bool have = true) {
     StrBuf<24> s;
-    rp_text(s, have, cc1, cc2);
+    rp_text(s, have, static_cast<std::uint8_t>(active), cc1, cc2);
     return std::string(s.view());
 }
 
@@ -39,9 +39,17 @@ static void test_rp() {
     CHECK_STR(rp(0, 0).c_str(), "none on CC");
     CHECK_STR(rp(150, 120).c_str(), "none on CC");
     CHECK_STR(rp(2300, 0).c_str(), "? on CC1");   // above the 3 A window: not a sane Rp
-    CHECK_STR(rp(0, 0, false).c_str(), "--");
+    CHECK_STR(rp(0, 0, 0, false).c_str(), "--");
     // Both pins live (a debug-accessory or a 5.1k pair): the higher one is reported.
     CHECK_STR(rp(400, 900).c_str(), "1.5A on CC2");
+    // The named wire is the active CC line (the one the PD engine listens on), even when it is the
+    // lower-voltage one; with no active line the higher-voltage wire is reported.
+    CHECK_STR(rp(408, 520, 1).c_str(), "USB on CC1");
+    CHECK_STR(rp(408, 520, 2).c_str(), "USB on CC2");
+    CHECK_STR(rp(408, 520, 0).c_str(), "USB on CC2");
+    // The band follows the active wire's own level, not the other wire's.
+    CHECK_STR(rp(408, 1680, 1).c_str(), "USB on CC1");
+    CHECK_STR(rp(408, 1680, 2).c_str(), "3.0A on CC2");
 }
 
 static void test_mcu() {

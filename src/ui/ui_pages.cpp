@@ -755,7 +755,7 @@ void LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         if (b.source == ai::Source::Pd) v.extra.put(b.line1.view());
     }
     StrBuf<24> rp, mcu;
-    rp_text(rp, r.has_value(), r ? r->cc1_mv : 0, r ? r->cc2_mv : 0);
+    rp_text(rp, r.has_value(), fusb302::active_cc(), r ? r->cc1_mv : 0, r ? r->cc2_mv : 0);
     mcu_text(mcu, r && r->mcu.valid, r ? r->mcu.deci_c : 0);
     uint32_t sig = mix(mix(2166136261u, v.main.view()), v.extra.view());
     sig = sig * 31 + static_cast<uint32_t>(v.tone) + 1;

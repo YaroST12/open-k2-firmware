@@ -18,7 +18,8 @@ constexpr int lines_tick_px(int32_t mv) { return static_cast<int>(static_cast<in
 constexpr int32_t kLinesTickLowMv = 400, kLinesTickHighMv = 2000;
 
 // "3.0A on CC1" (the page draws the "Rp" label once, at the left): the source's current advertisement as a CC pin voltage window (USB-C vRd).
-void rp_text(StrBuf<24> &out, bool have_reading, int32_t cc1_mv, int32_t cc2_mv);
+// Names the active CC wire (fusb302::active_cc(), 0 = none) and its own level, even when it is the lower-voltage one; without an active line, falls back to the higher-voltage wire.
+void rp_text(StrBuf<24> &out, bool have_reading, std::uint8_t active_cc, int32_t cc1_mv, int32_t cc2_mv);
 
 // "32\xC2\xB0"C" (whole degrees, round half away from zero) or "--" without a die reading; the page draws the "MCU" label.
 void mcu_text(StrBuf<24> &out, bool valid, int32_t deci_c);

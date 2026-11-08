@@ -4,9 +4,11 @@
 
 namespace k2 {
 
-void rp_text(StrBuf<24> &s, bool have, int32_t cc1, int32_t cc2) {
+void rp_text(StrBuf<24> &s, bool have, std::uint8_t active_cc, int32_t cc1, int32_t cc2) {
     if (!have) { s.put("--"); return; }
-    const bool second = cc2 > cc1;
+    // The live Rp-over-Rd wire is the one the PD engine listens on; name that wire even when it is
+    // the lower-voltage one. Without an active line, fall back to the higher-voltage wire.
+    const bool second = active_cc == 2 || (active_cc != 1 && cc2 > cc1);
     const int32_t mv = second ? cc2 : cc1;
     if (mv < 200) { s.put("none on CC"); return; }
     if (mv < 660) s.put("USB");
