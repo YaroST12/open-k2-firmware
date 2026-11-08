@@ -325,18 +325,22 @@ void test_request_state_and_flags() {
     CHECK_STR(t.c_str(), "USB comm, No suspend");
     rdo_flags_text(pd::kRdoFGiveBack | pd::kRdoFMismatch, 30, t);
     CHECK_STR(t.c_str(), "Mismatch, Give-back");   // the abnormal one first
-    // Whole names only: what does not fit becomes " +", never a cut word.
+    // Whole names only, most important first; what does not fit is dropped silently, never a bare "+".
     const uint8_t all = pd::kRdoFGiveBack | pd::kRdoFMismatch | pd::kRdoFUsbComm | pd::kRdoFNoSuspend | pd::kRdoFEpr;
     rdo_flags_text(all, 13, t);
-    CHECK_STR(t.c_str(), "Mismatch +");              // "Mismatch, Give-back +" would be 21
+    CHECK_STR(t.c_str(), "Mismatch");
     rdo_flags_text(all, 19, t);
-    CHECK_STR(t.c_str(), "Mismatch +");              // " +" counts against the room, so the second name waits
+    CHECK_STR(t.c_str(), "Mismatch, Give-back");     // exactly 19 cells fits
     rdo_flags_text(all, 21, t);
-    CHECK_STR(t.c_str(), "Mismatch, Give-back +");
+    CHECK_STR(t.c_str(), "Mismatch, Give-back");
     rdo_flags_text(pd::kRdoFMismatch | pd::kRdoFEpr, 19, t);
-    CHECK_STR(t.c_str(), "Mismatch, EPR");           // the last name needs no " +" room
+    CHECK_STR(t.c_str(), "Mismatch, EPR");
     rdo_flags_text(pd::kRdoFMismatch, 3, t);
-    CHECK_STR(t.c_str(), "+");                       // nothing fits: just the marker
+    CHECK_STR(t.c_str(), "");                        // nothing fits: empty, never "+"
+    for (std::size_t room = 0; room <= 32; room++) {  // no room value ever yields a "+" marker
+        rdo_flags_text(all, room, t);
+        CHECK_EQ(std::string(t.c_str()).find('+') == std::string::npos, true);
+    }
 }
 
 void test_typec_only_source() {

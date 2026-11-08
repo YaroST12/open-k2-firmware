@@ -228,20 +228,18 @@ void rdo_flags_text(uint8_t flags, std::size_t room, StrBuf<32> &out) {
         {pd::kRdoFMismatch, "Mismatch"}, {pd::kRdoFGiveBack, "Give-back"}, {pd::kRdoFUsbComm, "USB comm"},
         {pd::kRdoFNoSuspend, "No suspend"}, {pd::kRdoFEpr, "EPR"},
     };
-    std::size_t total = 0;
-    for (const F &f : kFlags) total += (flags & f.bit) ? 1 : 0;
-    std::size_t shown = 0, used = 0;
+    // Whole names only; what does not fit is dropped silently (the list is most-important-first), never a
+    // bare "+". Empty output is fine: the caller checks for it.
+    std::size_t used = 0, shown = 0;
     for (const F &f : kFlags) {
         if (!(flags & f.bit)) continue;
         const std::size_t need = (shown ? 2 : 0) + std::string_view(f.name).size();
-        const std::size_t keep = shown + 1 < total ? 2 : 0;   // a flag that is not the last leaves room for " +"
-        if (used + need + keep > room) break;
+        if (used + need > room) break;
         if (shown) out.put(", ");
         out.put(f.name);
         used += need;
         shown++;
     }
-    if (shown < total) out.put(shown ? " +" : "+");
 }
 
 

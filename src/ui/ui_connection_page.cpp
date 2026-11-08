@@ -393,13 +393,16 @@ void put_request(StrBuf<28> &v, const MatchResult &r, const pd::SourceCaps &caps
     else put_a(v, r.want_ma);
 }
 
-// USB / Alt rows of the live link: data speed alone, then the alt mode (entered green, advertised amber).
+// USB / Alt rows of the live link: the data speed always, then the alt mode (entered green, advertised
+// amber). With no alt mode at all the Alt row would only show "-", so it is dropped and the freed row
+// lets the Proto row survive the 9-row cap.
 void link_rows(Rows &R, const TabData &d) {
     std::array<char, usblink::kUiMaxChars + 1> ub{}, ab{};
     usblink::format_speed(d.ul, ub);
     R.add("USB", conf_colour(d.ul)).put(ub.data());
     const usblink::AltState as = usblink::format_alt(d.ul, ab);
-    R.add("Alt", as == usblink::AltState::Entered ? kOk : as == usblink::AltState::Advertised ? kCaution : kFaint).put(ab.data());
+    if (as == usblink::AltState::None) return;
+    R.add("Alt", as == usblink::AltState::Entered ? kOk : kCaution).put(ab.data());
 }
 
 // "Proto Xiaomi PD": the vendor PROTOCOL one side lists by SVID (names only; the row is left out when there is none).
@@ -555,13 +558,18 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
             if (warn) R.colour(kCaution);
         }
     }
-    {   // data
-        StrBuf<28> &v = R.add("Data", kText);
-        if (!attached) v.put("-");
-        else {
-            pdtabs::Terms t;
-            if (em.valid) t.cable = pdtabs::cable_mbps(em.raw_vdos[4] & 7, em.vid);
-            if (ul.family != usblink::Family::Unknown && ul.mbps > 0) t.sink = static_cast<int32_t>(ul.mbps);
+    {   // data: only when it says something the USB row does not. A plain rate ("480M": sink-only known,
+        // or cable and sink agree) or "?" would just repeat the USB row, so the row is omitted; "5G of 10G",
+        // "5G by cable", "10G cable" and "+DP" stay.
+        pdtabs::Terms t;
+        if (em.valid) t.cable = pdtabs::cable_mbps(em.raw_vdos[4] & 7, em.vid);
+        if (ul.family != usblink::Family::Unknown && ul.mbps > 0) t.sink = static_cast<int32_t>(ul.mbps);
+        const pdtabs::Limited lim = pdtabs::limit(t);
+        const bool informative = lim.value >= 0 &&
+            (lim.limit != pdtabs::Who::None || ul.dp || (t.cable >= 0 && t.sink < 0));
+        if (!attached) R.add("Data", kText).put("-");
+        else if (informative) {
+            StrBuf<28> &v = R.add("Data", kText);
             char line[24];
             bool warn = false;
             pdtabs::data_line(line, t, ul.dp, warn);

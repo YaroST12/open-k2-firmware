@@ -365,6 +365,69 @@ static void test_source_tab_leaves_waiting_after_timeout() {
     CHECK(after != waiting_frame);                     // the tab now shows what is known
 }
 
+// Count the full-width hairlines of the Connection list area: one per row top plus the closing rule when
+// the list is short (kRowY0 = kit::kBodyY + 18, pitch 20, nine rows max -- ui_connection_page.cpp).
+static int body_hairlines() {
+    const int y0 = kit::kBodyY + 18, pitch = 20;
+    int n = 0;
+    for (int y = y0; y < 222; y += pitch) {
+        int rule = 0;
+        for (int x = 0; x < LCD_WIDTH; x++) rule += g_panel[y * LCD_WIDTH + x] == kRule;
+        if (rule >= LCD_WIDTH - 20) n++;   // a hairline spans the width (the panel edge pixels differ)
+    }
+    return n;
+}
+
+// The Proto row must survive the 9-row cap: when the Alt row would only show "-", it is dropped and the
+// protocol name takes its slot. Ten rows are built here (ID, PD, Fixed, Fixed, PPS, PPS, Used, USB, Alt,
+// Proto), so without the fix the Proto row spills and adding an SVID changes nothing on the panel.
+static void test_proto_row_survives_the_row_cap() {
+    Ui &ui = fresh_ui();
+    ui.debug_link(true, 20000);            // attached, not waiting
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 5;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
+    g_stub.caps.pdos[3] = {pd::PdoType::Pps, 0, 3300, 11000, 5000, 55000};
+    g_stub.caps.pdos[4] = {pd::PdoType::Pps, 0, 3300, 21000, 3250, 68250};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
+    g_stub.contract.pos = 5; g_stub.contract.mv = 21000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3250;
+    set_id(g_stub.vdm, 0x2B01, 0x0000, "Unknown");
+    uint32_t t = 21000;
+    ui.tick(t);
+    g_stub.vdm.num_svids = 0;
+    const auto no_proto = show(ui, 0, t);
+    g_stub.vdm.num_svids = 1; g_stub.vdm.svids[0] = 0x2717;   // a vendor protocol SVID: the Proto row appears
+    const auto with_proto = show(ui, 0, t);
+    CHECK(with_proto != no_proto);
+    g_stub.vdm = {}; g_stub.contract = {}; g_stub.caps = {};
+}
+
+// The Data row only appears when it says something the USB row does not: a plain rate that would just
+// repeat the USB row ("5G" with no cable read) is omitted; "5G of 10G" (the cable carries more) stays.
+static void test_data_row_only_when_it_adds_something() {
+    Ui &ui = fresh_ui();
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 1;
+    g_stub.contract.mv = 5000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000; g_stub.contract.requests = 1;
+    make_inline(ui, 30000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.ul.family = usblink::Family::Usb32; g_stub.ul.mbps = 5000; g_stub.ul.conf = usblink::Confidence::Negotiated;
+    uint32_t t = 31000;
+    ui.tick(t);
+    show(ui, 2, t);                                   // Sink tab, no cable read: Data would be plain "5G"
+    const int rows_plain = body_hairlines();
+    g_stub.em.valid = true; g_stub.em.raw_vdos[4] = 2;  // a 10G cable: Data "5G of 10G" says something
+    g_stub.em.max_power_w = 100;
+    show(ui, 2, t);
+    const int rows_cable = body_hairlines();
+    CHECK_EQ(rows_cable, rows_plain + 1);             // the Data row appeared exactly there
+    g_stub.em = {}; g_stub.contract = {}; g_stub.caps = {}; g_stub.ul = {};
+}
+
 // ---- every row fits the 19-cell value column, worst case on every tab (test_report fails on any cut) ----
 
 static void test_worst_case_rows_fit() {
@@ -454,6 +517,8 @@ int main() {
     test_each_tab_shows_its_own_side();
     test_sink_tab_not_empty_when_a_sink_was_seen();
     test_source_tab_leaves_waiting_after_timeout();
+    test_proto_row_survives_the_row_cap();
+    test_data_row_only_when_it_adds_something();
     test_default_tab_on_open();
     test_topology_from_the_cc_lines();
     test_topology_unknown_unless_passive_and_dead();
