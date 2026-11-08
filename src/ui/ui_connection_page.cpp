@@ -9,6 +9,7 @@
 // and the port-aware empty states come from raguard::classify over the CC levels the ADC already averages;
 // reading them never starts an active CC operation. Active work (Refresh, Read cable, Identify) happens only
 // from the pop-up, through Ui::run_action and its inline confirm.
+#include "k2/core/log.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/pd/pd_source.hpp"
@@ -622,6 +623,7 @@ void ConnectionPage::paint_empty() {
     const Surface &c = ctx_.content;
     gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);
     paint_tab_indicator();
+    body_ = Body::Empty;
     const conn::Empty e = conn::empty_state(tab_, facts_);
     char buf[kFitBuf];
     gfx_text(c, kMid, 8, 74, fit_text(kMid, e.title, c.w - 16, buf), kText, kBg);
@@ -631,10 +633,10 @@ void ConnectionPage::paint_empty() {
         gfx_text(c, kSmall, 8, static_cast<int16_t>(112 + i * 20), lines[static_cast<std::size_t>(i)], kDim, kBg);
 }
 
-void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink) {
+void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
+                                bool redraw) {
+    static_assert(kBodyRows == kMaxList, "one stored hash per visible row");
     const Surface &c = ctx_.content;
-    gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);   // below the bar's rule
-    paint_tab_indicator();
     const pd::Link &link = ctx_.ui->link();
     TabData d;
     d.r = &r; d.caps = &caps; d.sink = sink;
@@ -652,9 +654,31 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
     char buf[kFitBuf];
     constexpr int16_t kKeyDy = kit::row_text_y(kRowPitch, 12), kValDy = kit::row_text_y(kRowPitch, 16);
+
+    // A whole-body pass when the area was wiped or never drawn here (new tab, pop-up closed, empty state left) or the
+    // row count moved (the closing hairline shifts); otherwise a row repaints alone when its hash changed. A live PPS
+    // request moves the Request, Used and Pwr rows every second or two, the other rows stay put.
+    const bool full = redraw || body_ != Body::Rows || body_tab_ != tab_ || body_n_ != R.n;
+    std::array<uint32_t, kBodyRows> sigs{};
     for (int i = 0; i < R.n; i++) {
         const Rows::R &row = R.r[i];
+        uint32_t h = fnv(2166136261u, uint32_t(row.c) | uint32_t(row.cut) << 16 | uint32_t(dim) << 24);
+        for (const char *k = row.key; *k; k++) h = fnv(h, uint8_t(*k));
+        h = fnv(h, 0x100u);   // key / value separator
+        for (char ch : row.v.view()) h = fnv(h, uint8_t(ch));
+        sigs[static_cast<std::size_t>(i)] = h;
+    }
+    int painted = 0;
+    if (full) {
+        gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);   // below the bar's rule
+        paint_tab_indicator();
+    }
+    for (int i = 0; i < R.n; i++) {
+        if (!full && sigs[static_cast<std::size_t>(i)] == row_sig_[static_cast<std::size_t>(i)]) continue;
+        painted++;
+        const Rows::R &row = R.r[i];
         const int16_t y = static_cast<int16_t>(kRowY0 + i * kRowPitch);
+        if (!full) gfx_fill(c, 0, y, c.w, kRowPitch, kBg);   // the row's own slot only; the next row's hairline is its own
         gfx_fill(c, 0, y, c.w, 1, kRule);
         gfx_text(c, kLabelFont, kKeyX, static_cast<int16_t>(y + kKeyDy), row.key, kDim, kBg);
         const std::string_view all = row.v.view();
@@ -668,7 +692,12 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
             gfx_text(c, kSmall, kValX, vy, fit_text(kSmall, all, c.w - kValX - 4, buf), dim ? kStale : row.c, kBg);
         }
     }
-    if (R.n < kMaxList) gfx_fill(c, 0, static_cast<int16_t>(kRowY0 + R.n * kRowPitch), c.w, 1, kRule);   // closes the table
+    if (full && R.n < kMaxList) gfx_fill(c, 0, static_cast<int16_t>(kRowY0 + R.n * kRowPitch), c.w, 1, kRule);   // closes the table
+    body_ = Body::Rows;
+    body_tab_ = tab_;
+    body_n_ = static_cast<uint8_t>(R.n);
+    row_sig_ = sigs;
+    K2LOG("[CONN] body full=%d rows=%d\n", full ? 1 : 0, painted);
 }
 
 void ConnectionPage::popup_row(void *self, int index, bool, kit::RowSpec &out) {
@@ -687,6 +716,7 @@ void ConnectionPage::paint_popup(uint32_t now_ms) {
         ctx_.rows.init(c, kRowY0, popup_row, this);
         ctx_.rows.invalidate();
         popup_drawn_ = true;
+        body_ = Body::Popup;
     }
     ctx_.rows.set_count(n_items_);
     ctx_.rows.select(popup_sel_);
@@ -844,9 +874,10 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = fnv(h, uint32_t(ctx_.fc) | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
     }
     if (sig_valid_ && h == sig_) return;
+    const bool redraw = !sig_valid_;   // invalidated (page entered, tab, pop-up closed, repaint pass): the area is stale
     sig_ = h;
     sig_valid_ = true;
-    paint_body(r, *caps, sink);
+    paint_body(r, *caps, sink, redraw);
 }
 
 }  // namespace k2

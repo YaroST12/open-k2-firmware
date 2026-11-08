@@ -576,6 +576,11 @@ One page for "what is plugged in": Tools -> Connection (menu page 16). Pure row 
   offer down, amber; `60W by cable?` neutral when no e-marker was read and 3 A is only assumed), `Data 5G of 10G`,
   `5G by cable` (amber), `80G cable` (only the cable is known), `+DP` when DisplayPort runs. Amber is for the cable
   limiting the link, never for a sink that asks for less than it is offered.
+  **A live link repaints only the rows that changed.** The page keeps one hash per painted row (key, value, colour,
+  cut, dim) and the kind, tab and row count of what the body shows. The whole body repaints only when the area was
+  wiped or is stale (new tab, pop-up closed, empty state left, page entered, repaint pass) or the row count moved;
+  a PPS phone that re-requests every second or two repaints its Request and Pwr rows and nothing else (host:
+  `test_live_request_repaints_only_its_rows`; the log line `[CONN] body full=<0|1> rows=<painted>` counts it).
 - **Actions pop-up** (OK; BACK closes it). Source: Refresh, Share (QR). Cable: Read cable, Save cable,
   Spoof as... (greyed "Live sink: unplug load" while a sink is inline; arming while a charger is attached shows
   "Armed, replug to apply"), Saved cables, Share (QR). Sink: Identify. A greyed row carries its reason. Long OK

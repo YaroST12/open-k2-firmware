@@ -368,6 +368,7 @@
   "365": "[CJRN] journal header unreadable, dropped\n",
   "366": "[CJRN] run not resumable: section %s does not match its header, journal dropped\n",
   "367": "[CJRN] begin cancelled after %u pumps\n",
-  "368": "[CJRN] wait-for-replan ms=%u\n"
+  "368": "[CJRN] wait-for-replan ms=%u\n",
+  "369": "[CONN] body full=%d rows=%d\n"
  }
 }

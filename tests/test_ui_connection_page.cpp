@@ -332,7 +332,7 @@ static void test_worst_case_rows_fit() {
     g_stub.pm_online = true;
     // A charger with the full 11 PDOs, a PPS last, and a sink that asked for it at its most digits.
     g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 11;
-    for (int i = 0; i < 10; i++) g_stub.caps.pdos[i] = {pd::PdoType::Fixed, 0, uint32_t(5000 + 1000 * i), uint32_t(5000 + 1000 * i), 3000, uint32_t(15000 + 3000 * i)};
+    for (int i = 0; i < 10; i++) g_stub.caps.pdos[i] = {pd::PdoType::Fixed, 0, uint16_t(5000 + 1000 * i), uint16_t(5000 + 1000 * i), 3000, uint32_t(15000 + 3000 * i)};
     g_stub.caps.pdos[10] = {pd::PdoType::Pps, 0, 3300, 21120, 3250, 68640};
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
@@ -365,7 +365,50 @@ static void test_worst_case_rows_fit() {
     g_stub.em = {}; g_stub.vdm = {}; g_stub.sink_vdm = {}; g_stub.ul = {}; g_stub.cable_tb = false;
 }
 
+// ---- a live link repaints the rows that changed, not the whole tab ----
+
+// A PPS phone behind the K2 re-requests every second or two (volts and amps move by a step): the Request and Pwr rows
+// change, the rest of the tab must not be touched.
+static void test_live_request_repaints_only_its_rows() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 40000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 3;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.pdos[2] = {pd::PdoType::Pps, 0, 5000, 11000, 5000, 55000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
+    g_stub.contract.pos = 3; g_stub.contract.mv = 8880; g_stub.contract.op_ma = 2050; g_stub.contract.max_ma = 2050;
+    uint32_t t = 41000;
+    ui.tick(t);
+    for (uint8_t tab = 0; tab < 3; tab++) {
+        show(ui, tab, t);
+        // A steady link repaints nothing.
+        const unsigned still0 = g_lcd_pixels;
+        for (int i = 0; i < 10; i++) ui.tick(t += 100);
+        CHECK_EQ(int(g_lcd_pixels - still0), 0);
+        // The sink steps its request: only the changed rows repaint, well under the 45 k px of the body.
+        g_stub.contract.mv += 60; g_stub.contract.op_ma += 50; g_stub.contract.max_ma += 50;
+        const unsigned px0 = g_lcd_pixels;
+        for (int i = 0; i < 10; i++) ui.tick(t += 100);
+        const unsigned moved = g_lcd_pixels - px0;
+        std::printf("[live-request] tab %d: %u px for one request step\n", tab, moved);
+        CHECK(moved < 12000);   // at most a few 224 x 20 rows (4.5 k px each)
+        // What is on the panel equals a whole-body repaint of the same data.
+        const auto partial = frame();
+        const auto full = show(ui, tab, t);
+        CHECK(partial == full);
+    }
+    // A tab change repaints the whole body.
+    const unsigned p0 = g_lcd_pixels;
+    show(ui, 0, t);
+    CHECK(g_lcd_pixels - p0 > 30000);
+    g_stub.contract = {};
+}
+
 int main() {
+    test_live_request_repaints_only_its_rows();
     test_worst_case_rows_fit();
     test_each_tab_shows_its_own_side();
     test_default_tab_on_open();

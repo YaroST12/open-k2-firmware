@@ -624,7 +624,9 @@ private:
     void share_caps(uint32_t now_ms);
     void share_cable(uint32_t now_ms);
     void paint_status(uint32_t now_ms);
-    void paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink);
+    // `redraw` = the body area was wiped or never drawn (a new paint pass, tab, pop-up or empty state): paint it all.
+    // Otherwise only the rows whose text, colour or key changed are repainted.
+    void paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
     void paint_tab_indicator();
     void paint_empty();
     void paint_popup(uint32_t now_ms);
@@ -647,6 +649,14 @@ private:
     bool sig_valid_ = false;
     uint32_t cheap_sig_ = 0;               // scalar pre-check signature; only meaningful while sig_valid_
     bool defaulted_ = false;               // the tab was chosen by default_tab() on enter, not by the user
+    // What the body area shows, so a changed row repaints alone: the kind, its tab, its row count and one hash per
+    // painted row (key, value, colour, cut, dim). 40 bytes, no copy of the text.
+    static constexpr int kBodyRows = 9;
+    enum class Body : uint8_t { None, Rows, Empty, Popup };
+    Body body_ = Body::None;
+    conn::Tab body_tab_ = conn::Tab::Source;
+    uint8_t body_n_ = 0;
+    std::array<uint32_t, kBodyRows> row_sig_{};
 };
 
 class EmarkerPage final : public PageBase {
