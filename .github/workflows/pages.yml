@@ -1,26 +1,36 @@
 # Publish the WebHID firmware flasher (webhid-flasher/) and the results viewer (docs/site/r/, opened by the QR link a K2
-# shows after a charger test) to GitHub Pages on every push to main. `make site` stages the same tree under build/site/.
+# shows after a charger test) to GitHub Pages. `make site SITE_DIR=_site` stages the tree (the same target a local
+# `make site` runs), then the newest published release's firmware is added as fw/open_k2.k2 + fw/latest.json.
 # One-time repo setup: Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
 # The page then lives at https://<owner>.github.io/<repo>/
 #
-# index.html loads k2proto.js (the app-mode remote link) from the directory it is served from; the
-# file is not tracked twice: this workflow stages tools/web/k2proto.js next to the page, the same
-# layout `make webhid` builds under build/webhid/ for local use.
+# This workflow never builds firmware: the flasher offers tagged releases only (built by release.yml). With no
+# release yet, or one without open_k2.k2, the site ships without fw/ and the flasher hides its "Latest release" row.
+#
+# Triggers: a push to main (page and results viewer changes), a release published by hand in the GitHub UI, a manual
+# run, and workflow_call from release.yml (a release made with GITHUB_TOKEN does not trigger `release: published`).
+#
+# index.html loads k2proto.js (the app-mode remote link) from the directory it is served from; the file is not tracked
+# twice: `make site` stages tools/web/k2proto.js next to the page, the same layout `make webhid` builds for local use.
 name: pages
 
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# One deploy at a time, none cancelled: a release deploy must not be dropped for a push that read the release list earlier.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -30,12 +40,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Stage the page with the protocol file
+
+      - name: Stage the page and the results viewer
+        run: make site BUILD_DIR=build SITE_DIR=_site
+
+      - name: Add the latest release's firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          mkdir -p _site
-          cp webhid-flasher/index.html webhid-flasher/k2boot.js _site/
-          cp tools/web/k2proto.js _site/
-          cp -r docs/site/. _site/
+          # `gh release view` without a tag is the newest non-draft, non-prerelease release.
+          if ! meta="$(gh release view --json tagName,publishedAt --jq '.tagName + " " + .publishedAt' 2>release.err)"; then
+            if grep -qi "not found" release.err; then
+              echo "::notice::no release yet: the site ships without fw/"
+              exit 0
+            fi
+            cat release.err
+            exit 1
+          fi
+          tag="${meta% *}"; published="${meta#* }"
+          echo "latest release: $tag ($published)"
+          # A release that lacks the container or fails its checksum must not stop the page from deploying.
+          if ! { mkdir rel \
+                 && gh release download "$tag" --dir rel --pattern open_k2.k2 --pattern SHA256SUMS \
+                 && python3 tools/stage_fw.py --release-dir rel --tag "$tag" --published "$published" --out _site; }; then
+            echo "::warning::release $tag has no usable open_k2.k2 + SHA256SUMS: the site ships without fw/"
+            rm -rf _site/fw
+          fi
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

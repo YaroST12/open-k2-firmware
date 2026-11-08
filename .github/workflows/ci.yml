@@ -1,0 +1,54 @@
+# Build and check every push to main and every pull request with the same `make gate` a developer runs, and keep the
+# resulting images as a workflow artifact (a build artifact, not a release: releases come from release.yml on a tag).
+#
+# What runs (see .github/actions/build-firmware): the toolchain image from ./Dockerfile, then `make gate` =
+#   -Werror build of our sources in the container, bootloader layout invariants, stack budget, map check (no
+#   malloc / operator new / __cxa_), remote command id uniqueness, all host tests (C++, Python, node), size against
+#   tools/size_baseline.txt, and the K2_NET=1 variant (-Werror, layout, stack, map).
+# Skipped: only what needs the device. `make smoke` (flash + exercise the K2) and the opt-in `make gate` ASan/UBSan
+# step (`--static`, a local pre-merge check) do not run here.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - uses: ./.github/actions/build-firmware
+        with:
+          gate: "true"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open_k2-${{ github.sha }}
+          path: |
+            build/open_k2.k2
+            build/open_k2.bin
+            build/open_k2.elf
+          if-no-files-found: error
+
+      - name: Keep the gate logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-logs-${{ github.sha }}
+          path: |
+            build/gate_build.log
+            build-net/gate_build.log
+          if-no-files-found: ignore

@@ -416,15 +416,20 @@ webhid:
 	@(sleep 1; xdg-open http://localhost:$(WEB_PORT)/ >/dev/null 2>&1 || true) &
 	@python3 -m http.server --bind 127.0.0.1 -d $(BUILD_DIR)/webhid $(WEB_PORT)
 
-# The whole GitHub Pages site, staged the way .github/workflows/pages.yml does it: the flasher at the root, then docs/site/
-# copied over it (the results viewer at /r/). Open http://localhost:$(WEB_PORT)/r/#<link> to try a K2 results link.
+# The whole GitHub Pages site: .github/workflows/pages.yml builds the firmware, then runs this very target with
+# SITE_DIR=_site, so the workflow and a local run cannot drift. Layout: the flasher at the root, docs/site/ copied over it
+# (the results viewer at /r/), and, when $(BUILD_DIR)/open_k2.k2 exists, fw/open_k2.k2 + fw/latest.json (tools/stage_fw.py;
+# the flasher's "Latest build" row reads them). Without a build the site is staged without fw/ and the row stays hidden.
+# Open http://localhost:$(WEB_PORT)/r/#<link> to try a K2 results link.
+SITE_DIR ?= $(BUILD_DIR)/site
 .PHONY: site
 site:
-	@rm -rf $(BUILD_DIR)/site
-	@mkdir -p $(BUILD_DIR)/site
-	@cp webhid-flasher/index.html webhid-flasher/k2boot.js tools/web/k2proto.js $(BUILD_DIR)/site/
-	@cp -r docs/site/. $(BUILD_DIR)/site/
-	@echo "Staged in $(BUILD_DIR)/site (serve it: python3 -m http.server -d $(BUILD_DIR)/site $(WEB_PORT))"
+	@rm -rf $(SITE_DIR)
+	@mkdir -p $(SITE_DIR)
+	@cp webhid-flasher/index.html webhid-flasher/k2boot.js tools/web/k2proto.js $(SITE_DIR)/
+	@cp -r docs/site/. $(SITE_DIR)/
+	@$(PYTHON) tools/stage_fw.py --build $(BUILD_DIR) --out $(SITE_DIR) --optional
+	@echo "Staged in $(SITE_DIR) (serve it: python3 -m http.server -d $(SITE_DIR) $(WEB_PORT))"
 
 # Host Flashing Targets (Requires physical tester in DFU mode)
 probe:
@@ -444,7 +449,7 @@ docker-image:
 DOCKER_RUN = docker run --rm --user $(shell id -u):$(shell id -g) -v $(CURDIR):/workspace -w /workspace
 
 docker-build:
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_WERROR=$(K2_WERROR) K2_NET=$(K2_NET) BUILD_DIR=$(BUILD_DIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_NET=$(K2_NET) BUILD_DIR=$(BUILD_DIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

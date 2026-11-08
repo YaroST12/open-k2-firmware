@@ -1,0 +1,54 @@
+# The firmware build shared by ci.yml and release.yml, so the two cannot drift: builds the toolchain image from
+# ./Dockerfile (layer cache in the GitHub Actions cache), then builds in it. Call it after actions/checkout with
+# fetch-depth: 0 and submodules: true (git describe needs the tags; TinyUSB and lwIP are submodules).
+# Result: build/open_k2.{k2,bin,elf} (and build-net/ when the gate ran).
+name: Build firmware
+description: Build open_k2 in the Docker toolchain image, optionally through the full make gate
+
+inputs:
+  version:
+    description: "Firmware version stamped into the image and the .k2 container (K2_FW_VERSION, major.minor, each 0-15)"
+    default: "1.0"
+  gate:
+    description: "true: run make gate (-Werror build, invariants, stack, map, ids, host tests, size, K2_NET=1 variant); false: plain make docker-build"
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+
+    - name: Build the toolchain image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        load: true
+        tags: open-k2-builder:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    # make gate and make test run on the runner itself: the firmware builds in the container (make docker-build,
+    # as the runner uid), but the host tests need a C++23 host compiler (GCC 14, the runner default is older),
+    # python3 and node (preinstalled) and pytest (tests/test_report_card_py.py).
+    - name: Host test tools
+      if: inputs.gate == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends g++-14 gcc-14 python3-pytest
+
+    # The container has no git view of the checkout: the build identity is computed here and passed in
+    # (make docker-build forwards K2_GIT and K2_FW_VERSION). The container never runs git, so git's
+    # safe.directory check does not apply to it.
+    - name: Build
+      shell: bash
+      env:
+        K2_FW_VERSION: ${{ inputs.version }}
+        HOST_CXX: g++-14
+        HOST_CC: gcc-14
+      run: |
+        export K2_GIT="$(git describe --always --dirty)"
+        echo "firmware ${K2_FW_VERSION}, git ${K2_GIT}"
+        if [ "${{ inputs.gate }}" = "true" ]; then make gate; else make docker-build; fi
+        ls -l build/open_k2.k2 build/open_k2.bin build/open_k2.elf
+        strings build/open_k2.elf | grep -cF -- "$K2_GIT" >/dev/null || { echo "image does not carry git ${K2_GIT}"; exit 1; }

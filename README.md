@@ -35,6 +35,14 @@ Step-by-step hardware test procedures for every protocol and feature, with a res
 
 ---
 
+## Download / flash
+
+- **From the browser** (Chrome or Edge, WebHID): open <https://yarost12.github.io/open-k2-firmware/>, press **Connect**, pick the K2, then **Flash release vX.Y**. The page offers the newest tagged release only; it downloads the image from the site itself and checks its SHA-256 before flashing. The K2 needs USB HID enabled (Settings > USB Link) to be sent into the bootloader without the button, or hold **MINUS** while plugging in; see "Flashing" below.
+- **A release asset**: every release on the [Releases page](https://github.com/YaroST12/open-k2-firmware/releases) carries `open_k2.k2` (the container to flash), `open_k2.bin`, `open_k2.elf` and `SHA256SUMS`. Flash the `.k2` with the page above (file picker) or `python3 tools/k2_flasher.py flash open_k2.k2 --auto-dfu`.
+- **CI builds** of `main` and of pull requests are workflow artifacts (Actions > ci), not releases; the flasher page never offers them.
+
+Cut a release (maintainers): `git tag vX.Y && git push origin vX.Y`. `release.yml` runs the full gate with the version taken from the tag (`X.Y`, or `X.Y.Z`; major and minor 0 to 15, the container stores them in one byte), creates the GitHub Release with the assets and notes, and redeploys the Pages site so the flasher follows. One-time repo setup: Settings > Pages > Source: GitHub Actions.
+
 ## Build
 
 The host has no ARM toolchain; everything builds in the `open-k2-builder` Docker image.
@@ -138,7 +146,7 @@ Click **Connect** and pick the K2. On Linux the hidraw node needs the udev rule 
 make webhid   # stages the page with tools/web/k2proto.js under build/webhid/ and serves it on http://localhost:8765/
 ```
 
-The page is published to GitHub Pages by `.github/workflows/pages.yml` on pushes to `main` (one-time setup: Settings → Pages → Source: GitHub Actions; the workflow stages `tools/web/k2proto.js` next to the page, so nothing is tracked twice), reachable at `https://<owner>.github.io/<repo>/`. Protocol code: `webhid-flasher/k2boot.js` (bootloader protocol + `.k2` container, byte-tested against `tools/k2_flasher.py` in `tests/test_k2boot.mjs`).
+The page is published to GitHub Pages by `.github/workflows/pages.yml` on pushes to `main` and when a release is published (one-time setup: Settings → Pages → Source: GitHub Actions; the workflow stages `tools/web/k2proto.js` next to the page, so nothing is tracked twice), reachable at `https://<owner>.github.io/<repo>/`. Pages never builds firmware: it adds the newest release's `open_k2.k2` as `fw/open_k2.k2` plus `fw/latest.json` (`tools/stage_fw.py`, checked against the release's `SHA256SUMS`), and the page's release card reads them (GitHub release assets carry no CORS headers, so the page cannot fetch them from GitHub directly). Without a release there is no `fw/` and the card stays hidden; `make site` stages a local build the same way, labelled `local-<git>`. Protocol code: `webhid-flasher/k2boot.js` (bootloader protocol + `.k2` container, byte-tested against `tools/k2_flasher.py` in `tests/test_k2boot.mjs`).
 
 ### Site layout and the results page
 
@@ -148,6 +156,7 @@ The Pages site is the flasher at the root plus everything under `docs/site/`, wh
 | Path on the site | Source | What |
 |---|---|---|
 | `/` | `webhid-flasher/` | the WebHID firmware flasher |
+| `/fw/` | newest GitHub release | `open_k2.k2` + `latest.json`, staged by the workflow (absent until a release exists) |
 | `/r/` | `docs/site/r/` | charger-test results: the page a K2 report-card QR code opens |
 
 The K2 shows a report card as a link code (long OK on the charger test Results page or in Tools, Report cards); a phone

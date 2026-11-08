@@ -1,0 +1,60 @@
+# Cut a release: push a tag `vMAJOR.MINOR` (e.g. `git tag v1.2 && git push origin v1.2`; a third `.PATCH` part is accepted).
+# The firmware is built through the full gate with K2_FW_VERSION = the tag without its `v`, and a GitHub Release is
+# created with open_k2.k2, open_k2.bin, open_k2.elf and SHA256SUMS attached (release notes generated from the commits).
+# The container stores the version in one byte (two nibbles), so major and minor must each be 0-15; any other tag fails
+# before the build. Pre-release tags (`v1.2-rc1`) are rejected for the same reason: the Pages flasher offers releases only.
+#
+# The `pages` job then redeploys the site so the flasher's "Flash release" button follows the new release. A release
+# created with the workflow's own GITHUB_TOKEN does not fire the `release: published` trigger of pages.yml (GitHub does
+# not start workflows from events caused by GITHUB_TOKEN), so this workflow calls pages.yml itself (workflow_call).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Version from the tag
+        id: ver
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          if [[ ! "$v" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]] || (( 10#${BASH_REMATCH[1]} > 15 || 10#${BASH_REMATCH[2]} > 15 )); then
+            echo "::error::tag '${GITHUB_REF_NAME}' is not vMAJOR.MINOR[.PATCH] with major and minor 0-15"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/build-firmware
+        with:
+          version: ${{ steps.ver.outputs.version }}
+          gate: "true"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          cp build/open_k2.k2 build/open_k2.bin build/open_k2.elf dist/
+          (cd dist && sha256sum open_k2.k2 open_k2.bin open_k2.elf > SHA256SUMS && cat SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" \
+            dist/open_k2.k2 dist/open_k2.bin dist/open_k2.elf dist/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  pages:
+    needs: release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
