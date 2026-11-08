@@ -40,6 +40,8 @@
   .kv { display: grid; grid-template-columns: 130px 1fr; gap: 2px 10px; font-size: 13px; }
   .kv b { color: #78909c; font-weight: 600; }
   .hint { color: #78909c; font-size: 12px; margin-top: 8px; }
+  a.dl { color: #4fc3f7; font-size: 13px; margin-right: 10px; }
+  a.dl.primary { background: #0277bd; color: #fff; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-size: 14px; }
   code { background: #263238; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 </style>
 </head>
@@ -83,6 +85,30 @@
   </div>
 </div>
 
+<div class="card" id="backupCard">
+  <div class="row">
+    <button id="backup" class="secondary" disabled>Back up the K2</button>
+    <label class="hint" style="margin:0"><input type="checkbox" id="backupFull">
+      also try the native storage above <code>0x080E3000</code> (read-only, best effort)</label>
+  </div>
+  <div id="backupOut" hidden>
+    <div class="row" style="margin-top:10px">
+      <a id="dlRecovery" class="dl primary" download>Download recovery .k2</a>
+      <button id="restoreBackup" class="danger" disabled>Restore this backup</button>
+    </div>
+    <div class="hint" id="backupInfo"></div>
+    <div class="hint">Also: <span id="dlMore"></span></div>
+  </div>
+  <div class="hint">
+    Reads the bootloader and the application area twice, compares both passes, and offers a recovery
+    <code>.k2</code> container of the application code (the same read as <code>tools/k2_flasher.py backup</code>).
+    <b>To restore later, pick the backup you saved</b> (<code>K2_RECOVERY_*.k2</code>) in the Flash firmware row above:
+    it is flashed like any firmware. The K2's stored data (the sessions and settings volume, the native storage with
+    e-marker records) is <b>saved in flash.bin but not restored</b>: the flasher never writes it back, and flashing the
+    recovery container leaves it where it is.
+  </div>
+</div>
+
 <div class="card"><div id="log"></div></div>
 
 <script src="k2proto.js"></script>
@@ -93,7 +119,7 @@
   var VID = 0x0716, PID = 0x5060;
   var BOOT_PRODUCT = "WITRN.K2", BOOT_SERIAL = "20230727";
   var $ = function (id) { return document.getElementById(id); };
-  var S = { dev: null, mode: null, fw: null, appLink: null, bootLink: null, gen: 0 };
+  var S = { dev: null, mode: null, fw: null, appLink: null, bootLink: null, gen: 0, busy: false, backup: null };
 
   function log(msg, cls) {
     var d = document.createElement("div");
@@ -237,7 +263,10 @@
     refreshButtons();
   }
   function refreshButtons() {
-    $("flashLatest").disabled = !LATEST || !(S.mode === "app" || S.mode === "bootloader");
+    var linked = S.mode === "app" || S.mode === "bootloader";
+    $("flashLatest").disabled = S.busy || !LATEST || !linked;
+    $("backup").disabled = S.busy || !linked;
+    $("restoreBackup").disabled = S.busy || !S.backup || !linked;
   }
   async function fetchLatest() {
     var r = await fetch("fw/open_k2.k2", { cache: "no-cache" });
@@ -274,8 +303,9 @@
   $("flash").onclick = function () { return runFlash(); };
 
   async function runFlash() {
-    if (!S.fw || !S.dev) return;
+    if (!S.fw || !S.dev || S.busy) return;
     $("flash").disabled = true;
+    S.busy = true; refreshButtons();
     try {
       if (S.mode === "app") {
         await enterDfu();
@@ -303,9 +333,80 @@
       setStatus("flash failed", "bad");
       log("flash failed: " + (e && e.message ? e.message : e), "err");
     } finally {
+      S.busy = false;
       $("flash").disabled = !S.fw || !S.mode;
+      refreshButtons();
     }
   }
+
+  // ---- backup ----
+  var urls = [];
+  function offer(blob, name, el, primary) {
+    var url = URL.createObjectURL(blob);
+    urls.push(url);
+    var a = el.tagName === "A" ? el : document.createElement("a");
+    a.href = url; a.download = name; a.textContent = el.tagName === "A" ? "Download " + name : name;
+    if (el !== a) { a.className = "dl"; el.appendChild(a); }
+    return a;
+  }
+  function showBackup(r, stamp) {
+    urls.forEach(function (u) { URL.revokeObjectURL(u); }); urls = [];
+    var more = $("dlMore"); more.textContent = "";
+    offer(new Blob([r.recovery.source], { type: "application/octet-stream" }), r.recoveryName, $("dlRecovery"));
+    offer(new Blob([r.manifestText], { type: "application/json" }), "k2-backup-" + stamp + "-manifest.json", more);
+    offer(new Blob([r.flash], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-flash.bin", more);
+    offer(new Blob([r.bootloader], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-bootloader.bin", more);
+    offer(new Blob([r.app], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-app.bin", more);
+    if (r.nvram) offer(new Blob([r.nvram], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-native_nvram.bin", more);
+    var m = r.manifest;
+    $("backupInfo").textContent = (m.complete ? "Complete, " : "PARTIAL (bootloader refused at " + m.refused_at + "), ") +
+      m.flash_size + " B read twice and compared. App v" + m.identity.current_version + ", app SHA-256 " +
+      m.app_sha256.slice(0, 12) + "…. The recovery container holds the application code only (" + m.recovery_range + ").";
+    $("backupOut").hidden = false;
+  }
+
+  $("backup").onclick = async function () {
+    if (!S.dev || S.busy) return;
+    S.busy = true; refreshButtons();
+    try {
+      if (S.mode === "app") {
+        await enterDfu();
+        setStatus("rebooting into bootloader — connect again", "warn");
+        log("click Connect and pick the WITRN.K2 device, then press Back up the K2 again", "warn");
+        try { await S.dev.close(); } catch (e) {}
+        S.dev = null; S.appLink = null; setMode(null);
+        return;
+      }
+      setStatus("backing up...", "warn");
+      var r = await S.bootLink.backup({
+        full: $("backupFull").checked,
+        progress: function (stage, cur, tot) {
+          setStage(stage + (tot ? " " + cur + " / " + tot : ""));
+          setBar(cur, tot);
+          if (stage.indexOf("backup") === 0 && tot && cur === tot) log(stage + ": " + cur + " B", "dim");
+        },
+      });
+      S.backup = r;
+      showBackup(r, new Date().toISOString().replace(/[-:]/g, "").slice(0, 15));
+      setStatus(r.manifest.complete ? "backup OK" : "backup partial", r.manifest.complete ? "ok" : "warn");
+      setBar(1, 1);
+      log("backup done: " + r.manifest.flash_size + " B, app v" + r.manifest.identity.current_version +
+          ", SHA-256 " + r.manifest.app_sha256, "ok");
+      log("save the downloads somewhere safe; nothing was written to the K2", "ok");
+    } catch (e) {
+      setStatus("backup failed", "bad");
+      log("backup failed: " + (e && e.message ? e.message : e), "err");
+    } finally {
+      S.busy = false; refreshButtons();
+    }
+  };
+
+  // One click from the backup just made: the in-memory recovery container goes through the normal flash path.
+  $("restoreBackup").onclick = async function () {
+    if (!S.backup || S.busy) return;
+    if (!loadFirmware(S.backup.recovery.source, S.backup.recoveryName)) return;
+    await runFlash();
+  };
 
   // Auto-open a previously granted device; watch hot-plug.
   if ("hid" in navigator) {

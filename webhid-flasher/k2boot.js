@@ -20,6 +20,8 @@ var K2Boot = (function () {
   var SECTOR_SIZE = 2048, SECTOR_COUNT = 447;
   var APP_LIMIT = APP_START + SECTOR_SIZE * SECTOR_COUNT;   // 0x080E3000: what the bootloader is known to serve
   var FS_START = 0x080B3000;      // our littlefs volume (link.ld); an image reaching it costs the volume, not the device
+  var FLASH_END = 0x08100000;     // end of the 1 MB flash
+  var READ_CHUNK = 1024;
   var NVRAM_START = 0x080E0000;   // the native data area (settings, e-marker records, assets): never erased or written
   var MAX_CONTAINER = NVRAM_START - APP_START;   // erase runs in 2 KB sectors from APP_START over the container length
   var MARKER_OFFSET = 3072, COMMIT_MARKER = [0xFE, 0xFF, 0xFF, 0xFF];
@@ -326,15 +328,14 @@ var K2Boot = (function () {
     return s;
   }
 
-  // Full flash sequence (tools/k2_flasher.py K2Updater.flash). progress(stage, cur, tot).
-  BootLink.prototype.flash = async function (fw, opts) {
-    opts = opts || {};
-    var progress = opts.progress || function () {};
-    var stage = function (name, cur, tot) { progress(name, cur || 0, tot || 0); };
-
+  // Handshake + bootloader strings + installed version and marker (tools/k2_flasher.py K2Updater._identify).
+  // Throws unless the strings name a K2. `info` is the raw 1 KB identity block (hash it for a manifest).
+  BootLink.prototype.identify = async function (stage) {
+    stage = stage || function () {};
     stage("handshake");
     await this.command(CMD.HANDSHAKE);
     stage("identify");
+    var info = await this.readMemory(INFO_START, 1024);
     var names = await this.readMemory(NAME_START, 256);
     var parts = [], cur = [];
     for (var i = 0; i < names.length; i++) {
@@ -350,7 +351,16 @@ var K2Boot = (function () {
     if (!confirmed) throw new ProtocolError("Connected hardware not confirmed as K2: " + JSON.stringify(strings));
     var verByte = (await this.readMemory(APP_START + 2048, 1))[0];
     var marker = await this.readMarker(APP_START + MARKER_OFFSET);
-    var ident = { bootStrings: strings, currentVersion: (verByte >> 4) + "." + (verByte & 15), currentMarker: hex(marker) };
+    return { bootStrings: strings, info: info, currentVersion: (verByte >> 4) + "." + (verByte & 15), currentMarker: hex(marker) };
+  };
+
+  // Full flash sequence (tools/k2_flasher.py K2Updater.flash). progress(stage, cur, tot).
+  BootLink.prototype.flash = async function (fw, opts) {
+    opts = opts || {};
+    var progress = opts.progress || function () {};
+    var stage = function (name, cur, tot) { progress(name, cur || 0, tot || 0); };
+
+    var ident = await this.identify(stage);
 
     stage("log-reset");
     await this.command(CMD.LOG_RESET);
@@ -401,11 +411,122 @@ var K2Boot = (function () {
     return ident;
   };
 
+  // ---- backup (tools/k2_flasher.py K2Updater.backup) ---------------------------------------------
+
+  async function sha256Hex(bytes) {
+    var subtle = typeof crypto !== "undefined" && crypto.subtle;
+    if (!subtle) throw new ProtocolError("SHA-256 is not available (crypto.subtle needs https or localhost)");
+    return hex(new Uint8Array(await subtle.digest("SHA-256", bytes)));
+  }
+  function addr8(a) { return "0x" + a.toString(16).toUpperCase().padStart(8, "0"); }
+
+  // Reads a chunk at or above APP_LIMIT, where the bootloader may refuse. Resolves {data, complete}.
+  // A failed read is repeated once (a timeout is not yet a refusal); on a second failure a fresh session is
+  // started (handshake, best effort) and the chunk is bisected in 4-byte steps: `data` is the readable
+  // prefix, `complete` is false when the chunk was cut short.
+  BootLink.prototype.readAboveApp = async function (address, size) {
+    var isProto = function (e) { return e instanceof ProtocolError; };
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try { return { data: await this.readMemory(address, size), complete: true }; }
+      catch (e) { if (!isProto(e)) throw e; }
+    }
+    try { await this.command(CMD.HANDSHAKE); } catch (e) { if (!isProto(e)) throw e; }
+    var lo = 0, hi = size, best = new Uint8Array(0);   // hi: known unreadable
+    try { best = await this.readMemory(address, 4); lo = 4; }
+    catch (e) { if (!isProto(e)) throw e; return { data: new Uint8Array(0), complete: false }; }
+    while (hi - lo > 4) {
+      var mid = lo + (Math.floor((hi - lo) / 2) & ~3);
+      try { best = await this.readMemory(address, mid); lo = mid; }
+      catch (e) { if (!isProto(e)) throw e; hi = mid; }
+    }
+    return { data: best, complete: false };
+  };
+
+  // Two-pass flash backup. Default 0x08000000..APP_LIMIT (bootloader and application area); opts.full also asks
+  // for the rest of the 1 MB (the native data area from NVRAM_START up), best effort: if the bootloader refuses
+  // above APP_LIMIT the readable part is kept and the manifest says where it stopped (complete: false). A failure
+  // below APP_LIMIT is an error. Resolves {ident, flash, bootloader, app, nvram, recovery (Firmware), recoveryName,
+  // manifest, manifestText}; the caller offers the files (K2_RECOVERY_<ver>.k2 is the one to flash back).
+  // opts: {full, progress(stage, cur, tot), now (Date, for tests)}.
+  BootLink.prototype.backup = async function (opts) {
+    opts = opts || {};
+    var progress = opts.progress || function () {};
+    var stage = function (name, cur, tot) { progress(name, cur || 0, tot || 0); };
+
+    var ident = await this.identify(stage);
+    var infoSha = await sha256Hex(ident.info);
+    var wantEnd = opts.full ? FLASH_END : APP_LIMIT;
+    var total = wantEnd - FLASH_START;
+    var buf = new Uint8Array(total);
+    var readEnd = wantEnd, refusedAt = null;
+
+    stage("backup-read", 0, total);
+    for (var off = 0; off < total; off += READ_CHUNK) {
+      var addr = FLASH_START + off, n = Math.min(READ_CHUNK, total - off), chunk, ok = true;
+      if (addr < APP_LIMIT) chunk = await this.readMemory(addr, n);
+      else { var r = await this.readAboveApp(addr, n); chunk = r.data; ok = r.complete; }
+      buf.set(chunk, off);
+      if (!ok) { readEnd = addr + chunk.length; refusedAt = readEnd; break; }
+      stage("backup-read", off + chunk.length, total);
+    }
+
+    var readSize = readEnd - FLASH_START;
+    var flash = buf.slice(0, readSize);
+    stage("backup-verify", 0, readSize);
+    for (off = 0; off < readSize; off += READ_CHUNK) {
+      var again = await this.readMemory(FLASH_START + off, Math.min(READ_CHUNK, readSize - off));
+      for (var i = 0; i < again.length; i++) {
+        if (again[i] !== flash[off + i]) throw new ProtocolError("Backup verification mismatch at " + addr8(FLASH_START + off + i));
+      }
+      stage("backup-verify", off + again.length, readSize);
+    }
+
+    var bootloader = flash.slice(0, APP_START - FLASH_START);
+    var app = flash.slice(APP_START - FLASH_START, APP_LIMIT - FLASH_START);
+    var nvram = flash.length > NVRAM_START - FLASH_START ? flash.slice(NVRAM_START - FLASH_START) : null;
+    ident.currentVersion = (app[2048] >> 4) + "." + (app[2048] & 15);
+    ident.currentMarker = hex(app.slice(MARKER_OFFSET, MARKER_OFFSET + 4));
+
+    stage("backup-recovery");
+    // the recovery container carries the application code only, APP_START..FS_START (the linker script's FLASH
+    // range). Above it sit user data: the littlefs volume (kept in app.bin/flash.bin) and the native device
+    // storage (NVRAM_START up, kept in `nvram`). On hardware the volume reaches its last block after some use, so
+    // trimming trailing 0xFF no longer shortens the image below NVRAM_START and the erase span of a container
+    // that long would run into the native storage; a container that ends at FS_START also leaves the volume
+    // intact when it is flashed back.
+    var now = opts.now || new Date();
+    var recovery = Firmware.fromApp(app.slice(0, FS_START - APP_START), now.toISOString().slice(0, 10));
+    var recoveryName = "K2_RECOVERY_" + recovery.version + ".k2";
+
+    var manifest = {
+      timestamp_utc: now.toISOString(),
+      identity: { boot_strings: ident.bootStrings, info_sha256: infoSha, confirmed_k2: true,
+                  current_version: ident.currentVersion, current_marker: ident.currentMarker },
+      mode: opts.full ? "full" : "app",
+      requested_range: addr8(FLASH_START) + "-" + addr8(wantEnd),
+      flash_range: addr8(FLASH_START) + "-" + addr8(readEnd),
+      complete: refusedAt === null,
+      last_readable_address: addr8(readEnd - 1),
+      refused_at: refusedAt === null ? null : addr8(refusedAt),
+      flash_size: flash.length,
+      flash_sha256: await sha256Hex(flash),
+      app_sha256: await sha256Hex(app),
+      two_pass_verified: true,
+      recovery_file: recoveryName,
+      recovery_range: addr8(APP_START) + "-" + addr8(FS_START),
+      tool: "webhid-flasher"
+    };
+    if (nvram) manifest.native_nvram_file = "native_nvram.bin";
+    stage("backup-complete", readSize, readSize);
+    return { ident: ident, flash: flash, bootloader: bootloader, app: app, nvram: nvram, recovery: recovery,
+             recoveryName: recoveryName, manifest: manifest, manifestText: JSON.stringify(manifest, null, 2) + "\n" };
+  };
+
   return {
     FRAME_SIZE: FRAME_SIZE, PAYLOAD_SIZE: PAYLOAD_SIZE, WRITE_SIZE: WRITE_SIZE, HEADER_SIZE: HEADER_SIZE,
     FLASH_START: FLASH_START, APP_START: APP_START, INFO_START: INFO_START, NAME_START: NAME_START,
     SECTOR_SIZE: SECTOR_SIZE, SECTOR_COUNT: SECTOR_COUNT, APP_LIMIT: APP_LIMIT, FS_START: FS_START,
-    NVRAM_START: NVRAM_START, MAX_CONTAINER: MAX_CONTAINER,
+    NVRAM_START: NVRAM_START, MAX_CONTAINER: MAX_CONTAINER, FLASH_END: FLASH_END, READ_CHUNK: READ_CHUNK,
     MARKER_OFFSET: MARKER_OFFSET, COMMIT_MARKER: COMMIT_MARKER, CMD: CMD,
     DECODE_TABLE: DECODE_TABLE, ProtocolError: ProtocolError,
     buildFrame: buildFrame, parseFrame: parseFrame, isBootloaderFrame: isBootloaderFrame,

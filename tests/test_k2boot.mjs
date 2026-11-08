@@ -230,3 +230,149 @@ test("flash() runs handshake->erase->write->verify->commit->reboot and lands the
   assert.equal(sent[sent.length - 1], B.CMD.REBOOT);
   assert.ok(stages.includes("complete:" + fw.app.length + "/" + fw.app.length));
 });
+
+// ---- backup against a fake bootloader ---------------------------------------------------------
+
+// A 1 MB fake flash behind the real frame format. Reads reaching past `refuseFrom` are not answered
+// (a timeout, like a refusing bootloader) when `silent`, else answered with an error frame.
+function fakeBootloader({ flash, refuseFrom = Infinity, silent = true }) {
+  const le = (p) => (p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24) >>> 0;
+  const reads = [];
+  const link = new B.BootLink({
+    send: (f) => {
+      const p = B.parseFrame(f);
+      if (p.command === B.CMD.HANDSHAKE) {
+        link.feed(B.buildFrame(B.CMD.ACK, u8(), { reply: true, tick: 1 }));
+      } else if (p.command === B.CMD.READ) {
+        const addr = le(p.payload), size = p.payload[4] | p.payload[5] << 8;
+        reads.push([addr, size]);
+        if (addr + size > refuseFrom) {
+          if (!silent) link.feed(B.buildFrame(B.CMD.ERROR, u8(1), { reply: true, tick: 1 }));
+          return;
+        }
+        for (let off = 0; off < size; off += B.WRITE_SIZE) {
+          const n = Math.min(B.WRITE_SIZE, size - off);
+          const a = addr - B.FLASH_START + off;
+          link.feed(B.buildFrame(B.CMD.READ, flash.slice(a, a + n), { reply: true, tick: 1 }));
+        }
+      } else if (p.command === B.CMD.READ_MARKER) {
+        const a = le(p.payload) - B.FLASH_START;
+        link.feed(B.buildFrame(B.CMD.READ_MARKER, flash.slice(a, a + 4), { reply: true, tick: 1 }));
+      }
+    },
+  }, { timeoutMs: 20 });
+  return { link, reads };
+}
+
+function makeFlash() {
+  const flash = new Uint8Array(B.FLASH_END - B.FLASH_START).fill(0xFF);
+  flash.fill(0xB0, 0, 0x1000);                                   // bootloader bytes below the name block
+  const names = "K2\0WITRN\0K2(C)WITRN\0x\0";
+  for (let i = 0; i < names.length; i++) flash[B.NAME_START - B.FLASH_START + i] = names.charCodeAt(i);
+  const app = new Uint8Array(B.NVRAM_START - B.APP_START).fill(0xFF);
+  for (let i = 8; i < 0x6000; i++) app[i] = (i * 7) & 0xFF;      // some code
+  app.set([0x00, 0x00, 0x02, 0x20, 0x01, 0x38, 0x00, 0x08], 0);  // sp, reset
+  app[2048] = 0x27;                                              // version 2.7
+  app.set([0xFE, 0xFF, 0xFF, 0xFF], B.MARKER_OFFSET);            // committed
+  app.fill(0x6C, B.FS_START - B.APP_START);                      // a used littlefs volume, through its last block
+  flash.set(app, B.APP_START - B.FLASH_START);
+  for (let i = 0; i < 0x4000; i++) flash[B.NVRAM_START - B.FLASH_START + i] = 0xA5 ^ (i & 0xFF);   // native storage
+  return { flash, app };
+}
+const sha = async (b) => toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", b)));
+const a8 = (a) => "0x" + a.toString(16).toUpperCase().padStart(8, "0");
+
+test("backup() reads the app area twice, splits it and builds a flashable recovery container", async () => {
+  const { flash, app } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const stages = new Set();
+  const r = await link.backup({ now: new Date("2026-11-08T10:00:00Z"), progress: (s) => stages.add(s) });
+
+  assert.equal(r.flash.length, B.APP_LIMIT - B.FLASH_START);
+  assert.deepEqual([...r.flash], [...flash.slice(0, r.flash.length)]);
+  assert.equal(r.bootloader.length, B.APP_START - B.FLASH_START);
+  assert.deepEqual([...r.app], [...flash.slice(B.APP_START - B.FLASH_START, B.APP_LIMIT - B.FLASH_START)]);
+  assert.equal(r.nvram.length, B.APP_LIMIT - B.NVRAM_START);   // default mode: only the part below APP_LIMIT
+  assert.equal(r.manifest.complete, true);
+  assert.equal(r.manifest.mode, "app");
+  assert.equal(r.manifest.two_pass_verified, true);
+  assert.equal(r.manifest.flash_range, "0x08000000-0x080E3000");
+  assert.equal(r.manifest.app_sha256, await sha(r.app));
+  assert.equal(r.manifest.flash_sha256, await sha(r.flash));
+  assert.equal(r.manifest.identity.current_version, "2.7");
+  assert.equal(r.manifest.identity.current_marker, "feffffff");
+  assert.deepEqual(r.manifest.identity.boot_strings, ["K2", "WITRN", "K2(C)WITRN"]);
+  assert.equal(r.manifest.native_nvram_file, "native_nvram.bin");
+  assert.deepEqual([...stages].filter((s) => s.startsWith("backup")),
+                   ["backup-read", "backup-verify", "backup-recovery", "backup-complete"]);
+
+  // the recovery container re-parses, holds the application only (never the native area), uncommitted
+  assert.equal(r.recoveryName, "K2_RECOVERY_2.7.k2");
+  const fw = B.Firmware.parse(r.recovery.source);
+  assert.equal(fw.version, "2.7");
+  assert.equal(fw.dateStr, "2026-11-08");
+  const want = app.slice(0, 0x6000);
+  want.fill(0xFF, B.MARKER_OFFSET, B.MARKER_OFFSET + 4);
+  assert.deepEqual([...fw.app.slice(0, 0x6000)], [...want]);
+  // the used littlefs volume (non-0xFF up to NVRAM_START) must not lengthen it: it ends by FS_START
+  assert.ok(B.APP_START + fw.source.length <= B.FS_START);
+  assert.equal(r.app[B.NVRAM_START - B.APP_START - 1], 0x6C);   // the volume is in app.bin, just not in the container
+  assert.equal(r.manifest.recovery_range, "0x08003800-0x080B3000");
+  assert.equal(JSON.parse(r.manifestText).recovery_file, r.recoveryName);
+});
+
+test("backup() fails on a mismatch between the two passes", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const real = link.transport.send;
+  let atStart = 0;
+  link.transport.send = (f) => {
+    const p = B.parseFrame(f);
+    // reads of 0x08000000 in order: pass 1, then pass 2 (identify reads other addresses)
+    if (p.command === B.CMD.READ && p.payload[0] === 0 && p.payload[1] === 0 && p.payload[2] === 0 && p.payload[3] === 0x08) {
+      if (++atStart === 2) flash[5] ^= 0xFF;
+    }
+    return real(f);
+  };
+  await assert.rejects(link.backup({}), /verification mismatch at 0x08000005/);
+});
+
+test("backup() refuses when the bootloader strings are not a K2", async () => {
+  const { flash } = makeFlash();
+  flash.fill(0x00, B.NAME_START - B.FLASH_START, B.NAME_START - B.FLASH_START + 256);
+  flash.set([...Buffer.from("X\0Y\0Z\0w\0")], B.NAME_START - B.FLASH_START);
+  const { link } = fakeBootloader({ flash });
+  await assert.rejects(link.backup({}), /not confirmed as K2/);
+});
+
+test("backup({full}) keeps the readable prefix when the bootloader refuses above APP_LIMIT", async () => {
+  const { flash } = makeFlash();
+  const edge = B.APP_LIMIT + B.READ_CHUNK + 8;   // one full chunk and 8 bytes of the next are served
+  for (const silent of [true, false]) {
+    const { link } = fakeBootloader({ flash, refuseFrom: edge, silent });
+    const r = await link.backup({ full: true });
+    assert.equal(r.manifest.complete, false);
+    assert.equal(r.manifest.mode, "full");
+    assert.equal(r.flash.length, edge - B.FLASH_START);
+    assert.equal(r.manifest.refused_at, a8(edge));
+    assert.equal(r.manifest.last_readable_address, a8(edge - 1));
+    assert.deepEqual([...r.flash], [...flash.slice(0, r.flash.length)]);
+    assert.equal(r.nvram.length, edge - B.NVRAM_START);
+  }
+});
+
+test("backup({full}) reads the whole 1 MB when nothing is refused", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({ full: true });
+  assert.equal(r.manifest.complete, true);
+  assert.equal(r.flash.length, B.FLASH_END - B.FLASH_START);
+  assert.equal(r.nvram.length, B.FLASH_END - B.NVRAM_START);
+  assert.equal(r.manifest.refused_at, null);
+});
+
+test("a refusal below APP_LIMIT is an error, not a partial backup", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash, refuseFrom: 0x08010000 });
+  await assert.rejects(link.backup({}), /timed out/i);
+});
