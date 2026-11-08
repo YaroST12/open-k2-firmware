@@ -295,16 +295,16 @@ step states its expected `text` delta; anything over +5 % needs an explanation i
      the reply; the pass criterion is an `[EMARK] SOP' PD...` line and a SOP' Rx in the trace.
   Write the (a)/(b)/(c) answers into the "Cable sniff" row of `docs/K2_PORTS_SPEC.md`.
 
-### S8. Far-side role observer + report-card v6
+### S8. Far-side role observer + report-card v7
 
 - Files: `include/k2/pd/pdtrace_link.hpp` (add `peer_dfp`, `pr_swap_seen`, `dr_swap_seen`,
   `vconn_swap_seen`; the decoder at `src/pd/pdtrace_link.cpp:89-92` already reads bit 8; add bit 5),
   `src/ui/ui_lines.cpp` (one line "peer: SRC/SNK DFP/UFP, swaps: PR DR VC"), `include/k2/chargertest/report_card.hpp`
-  (`kFormat = 6`: add the swap counters from S1 and the peer role byte; fix the stale "formats 0-2"
+  (`kFormat = 7` (6 is taken by the UFCS modes): add the swap counters from S1 and the peer role byte; fix the stale "formats 0-2"
   comment at `:18`/`:33`), `tools/k2_remote.py` card decoder, `tests/test_pdtrace_link.cpp`,
   `tests/test_report_card.cpp`.
 - Tests first: feed a header stream with DR_Swap/Accept, PR_Swap/Accept/PS_RDY and assert the
-  observer flags; card round-trip v6 and v5-read compatibility.
+  observer flags; card round-trip v7 and v6-read compatibility.
 - Hardware: passive inline between Baseus and a laptop (the laptop usually DR_Swaps to DFP);
   evidence: lines page screenshot + `pd_trace.py capture`.
 - Cost: ~400 B text, ~8 B bss. Risk: none.
@@ -337,7 +337,7 @@ step states its expected `text` delta; anything over +5 % needs an explanation i
 | UFCS handshake attempt | CUKTECH C3, CUKTECH USB-A | S5 | `[UFCS] hs:` lines; `transition dump --png` (VBUS cut on A port expected); card row reason |
 | VOOC clock + accepted ident | OnePlus 120W + both cables | S6 | `vooc_edges.py` decode of the edge capture: 0x88 → 0x04D; card row Pass or `NoClock` |
 | SOP'' / cable sniff | Baseus + EPR cable, direct and inline | S7 | `pd_trace.py live` frame count by SOP type; result row in K2_PORTS_SPEC |
-| Far-side role line | laptop inline + Baseus | S8 | lines page screenshot; card v6 peer byte; `pd_trace.py capture` with the swap |
+| Far-side role line | laptop inline + Baseus | S8 | lines page screenshot; card v7 peer byte; `pd_trace.py capture` with the swap |
 | Self-powered safety (every device step) | any | all | `k2_remote ping` uptime vs wall clock before and after; `-dirty` absent in the hash |
 
 ---
@@ -351,7 +351,7 @@ step states its expected `text` delta; anything over +5 % needs an explanation i
    either fixes them in-tree or they stay untracked with this review as the record.
 3. **UFCS label.** If S5 finds no UFCS source among the chargers on hand, should the unit show
    "UFCS (unverified)" in Results, or be hidden from the default order until proven?
-4. **Report-card format bump (S8).** v6 adds swap counters and the peer role; the web decoder
+4. **Report-card format bump (S8).** v7 adds swap counters and the peer role; the web decoder
    and `k2_remote` need the matching change. Bump now, or hold until a bigger card change?
 5. **S7 priority.** The sniff measurement answers a yes/no about a feature that may not exist;
    run it only if a free device slot appears, or drop it.
@@ -368,7 +368,7 @@ step states its expected `text` delta; anything over +5 % needs an explanation i
   literal `0x27170106u` for the 0x27170205 reply with no named constant.
 - `include/k2/pd/pd_sink.hpp:216-219` says proactive Discover SVIDs is "Default OFF"; `:299` is
   `proactive_discover_ = true` and CHARGER_QUIRKS says default-on.
-- `include/k2/chargertest/report_card.hpp:18` and `:33` list formats 0-2; `kFormat = 5` at `:56`.
+- `include/k2/chargertest/report_card.hpp:18` and `:33` list formats 0-2; `kFormat` was 5 when this was written (now 6, the UFCS modes).
 - `src/fastcharge/dpsniff.cpp:218-229` `selftest()` drives D+ (V0/V3p3 twice) while `include/k2/fastcharge/dpsniff.hpp:9`
   says the sniffer never drives. Guarded by "only with nothing attached" in a comment, not in code.
 - "~25 ms Request after Source_Capabilities" is documented (`docs/HW_TEST_PROCEDURES.md:696`) but

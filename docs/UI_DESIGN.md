@@ -1,10 +1,10 @@
-# K2 UI design v2 (240 x 240 ST7789)
+# K2 UI design (240 x 240 ST7789)
 
-Status: design v2, revision 2, 2026-10-31. Implemented in `k2/core` (the capture harness
-`tests/test_ui_capture.cpp` pins it); where the firmware and a mockup differ, the QA polish pass
-(2026-10-31) records the deliberate differences in section 6. It is written
-against `k2/core` (`include/k2/ui/ui*.hpp`, `src/ui/ui*.cpp`). v1, which was text-led and used IN/OUT port
-naming, is kept in `ui_mockups/v1/`.
+The screen design of the firmware: geometry, palette, components, navigation and the layout of every page. Last
+reviewed against the code on 2026-11-08 (`include/k2/ui/`, `src/ui/`). The host capture harness
+`tests/test_ui_capture.cpp` pins the layouts. Where this document and the code differ, the code is right; the
+deliberate differences from the mock-ups are recorded in section 6. The first design (text-led, with IN/OUT port
+naming) is kept in `ui_mockups/v1/`.
 
 - Mockups: `docs/ui_mockups/*.png`, 32 screens at 240 x 240, saved at x2. They are rendered from the
   repo's JetBrains Mono TTF by `render_mockups.py`, with ligatures off as on the device.
@@ -100,7 +100,7 @@ the restored sensor and rotated controller offsets still need hardware validatio
 
 ## 2 Users and posture
 
-- **Home and PD are sovereign**: glanced at for minutes from 30-60 cm. They should be dense, use
+- **Home and Connection are sovereign**: glanced at for minutes from 30-60 cm. They should be dense, use
   colour for quantities, and keep numbers in stable columns.
 - **Tools are transient**: one task, one verdict. Show the prerequisites as shapes (a port diagram
   and a checklist), not as paragraphs.
@@ -186,7 +186,7 @@ direction) and a word (`READY`, `NO PD`, `LAST`).
 - Fit names within the available row width with the existing text fitter, leaving state prefixes
   visible. No checkbox or leading selection arrow is needed in these menus. Explicit warning and
   result icons remain appropriate elsewhere. USB Link shows `ON`/`OFF` as a right-aligned value (RowList tail), not a pill.
-- Home, Tools, the PD comparison and PD trigger remain the visual references. E-marker actions,
+- Home, Tools, Connection and PD trigger remain the visual references. E-marker actions,
   FC protocol choices, charger setup, Spoof and settings now use the same focus treatment;
   read-only lists use scrolling rather than a false selectable focus.
 
@@ -257,20 +257,19 @@ Rules:
 | | `home_stale` | unplugged: grey values kept, LAST0:42 pill, the A badge back to "A", sparkline frozen |
 | | `home_error` | no meter: dashes, red footer |
 | | `home_reboot_hold` | BACK held: HoldCard |
-| PD | `pd_live` / `pd_wait` / `pd_detached` | agreement badge and SRC/SINK columns; four two-line PDO rows with short +/- scrolling, explicit request and compatibility words, and no truncation of displayed voltage/current; passive empty-state text stays inside its column |
 | Connection | `conn_gal_rot{0,3}_<scene>` (`docs/ui_review_2026-11-06/connection/`; scenes source/cable/sink `_filled`, `_popup`, and the port-aware `_empty` variants) | header "Connection", tab strip Source / Cable / Sink, label/value rows, bottom status bar; see 5.1 |
 | Diag | `diag` | kit KvTable of nine rows at a 22 px pitch (26 px would not fit above the footer; the one pitch deviation), S12 keys, S16 values, a verdict marker per group (USB / PD / SYS); the footer gives the worst state; reached from Tools |
 | Lines | `lines` | D+/D-/CC1/CC2 tags + 0..3.3 V bars with 0.4 V and 2.0 V ticks; the decoded result in pills, then Rp and MCU as a kit KvTable; footer via the shared cache |
 | Tools | `tools_ready` / `tools_caution` / `tools_blocked` | RowList, 26 px rows (7 visible plus a thumb), icon marker per tool, a chevron when ready, otherwise the readiness tag as value; the footer gives the reason |
 | Settings | (host render `mock_settings`) | RowList, 26 px rows: icon marker, title, the current value as right-aligned tail; USB Link and Autorotate open their pages (chevron); Rotate buttons toggles directional remapping for this boot; Screenshot toggles remote capture; Smoothing cycles Off / Low / Medium / High; footer says whether the value is kept across boots |
 | Autorotate | `mock_autorotate` | RowList with radio markers: Auto plus four Manual angles (0/90/180/270 deg); the selected row opens to show its note; OK applies; the solid square (hollow when not picked; the kit's pick-one marker has no circle) marks the current choice |
-| E-marker | (live scan) | the scan, its checklist and the verdict `5A 50V 240W` live on the Connection Cable tab (Read cable); no Tools row. Saved cables below |
-| Identify | `identify_setup/refused/result` | opened from Connection (Sink tab, Identify), no Tools row |
+| E-marker | (live scan) | the cable scan and its result (rating, speed, VID:PID) are rows of the Connection Cable tab (Actions: Read cable); progress and refusals show in the page footer; no Tools row and no separate page. Saved cables below |
+| Identify | (footer status) | Actions pop-up of the Connection Sink tab; its progress and result are footer text on that page and the ID rows fill in; no Tools row and no separate page |
 | FC trigger | `fc_setup/edit/edit_coarse/review/armed/requesting/run/live_edit/live_review/live_edit_down/releasing/release_after_exit/safe/scan/refused` | staged protocol list → numeric draft → exact review → apply; live edit separates DRAFT, HELD and MEASURED. Every above-5V apply, including downward retargets, needs two short OKs within 3 s. Live retains the 0–20V, 10 s trace; refusal stays beside the reviewed request, never grants an inline bypass. Cleanup is measured asynchronously, including after menu exit |
 | PD trigger | `wiz_offer*`, `wiz_voltage_pps*`, `wiz_current_*`, `wiz_confirm_*`, `wiz_live_*`, `pdtrigger_refused` | step wizard: dots plus `Step N/M: NAME`, one decision per screen. OFFER (list, [+]/[-] pick, OK next), VOLTAGE (PPS/AVS only: big value, ◀ ▶ markers, range bar; 20 mV / 100 mV steps, long [+]/[-] = 1 V), CURRENT (50 mA, long = 0.5 A, capped at the offer, default = offer max), CONFIRM (summary card `9.00V 3.00A = 27.0W`, offer power, above-5V caution band; OK twice above 5 V), LIVE (state banner Requesting / Accepted / PS_RDY / Rejected / Hard reset, REQUESTED vs MEASURED V and A). BACK goes one step back, exits from OFFER, releases to 5 V from LIVE. The footer states a fact about the step ("50mA steps", "Above 5V: send twice"), never the keys, at most 30 characters |
 | USB link | `usblink_off`, `usblink_hid_pending` | RowList of three rows (HID, Drive, Network), ON/OFF as the value, the focused row opens to show its hint; OK toggles the selected row (Network turns HID on and Drive off, Drive on turns Network off, HID off turns Network off), [+]/[-] pick; footer "Replug to apply" until the next boot matches |
 | Saved cables | `em_saved*`, `emarker_none` | RowList of saved cable identities (marker, name as a data cell, rating tail); the detail is a KvTable, a delete confirmation and an empty state are AlertBand pages; the e-marker live scan is on the Connection Cable tab, not here |
-| Cable R | `cabler_wait/result/poor/fair/kelvin/kelvin_nofix/meter_missing` (host renders in `runs/ui-wave2/tools-b/after/`) | kit KvTable (IDLE / LOAD, or LIVE / SENSE in Kelvin mode, plus `Port: load on top`), then S48 `110` + S24 `mΩ`, a verdict cell (green / amber / solid red) and a flat three-segment scale (66 x 6, lit in the grade colour, otherwise `rule`) with a detail line; a missing meter is the red `METER MISSING` AlertBand; footer facts only |
+| Cable R | `cabler_wait/result/poor/fair/kelvin/kelvin_nofix/meter_missing` | kit KvTable (IDLE / LOAD, or LIVE / SENSE in Kelvin mode, plus `Port: load on top`), then S48 `110` + S24 `mΩ`, a verdict cell (green / amber / solid red) and a flat three-segment scale (66 x 6, lit in the grade colour, otherwise `rule`) with a detail line; a missing meter is the red `METER MISSING` AlertBand; footer facts only |
 | Black Box | (no mockup yet) | state of the trace recorder: captures in RAM and in flash, the last trigger reason; OK freezes a capture by hand. Read on the host with `tools/pd_trace.py` |
 | Spoof | `docs/ui_review_2026-11-06/wizard3/wiz3_rot*_spoof_*` | pick an identity from the shared cable list (Off, built-in chips, saved clones) and turn the SOP' answer on or off; the footer reads `Spoof on` / `Spoof off` style facts. Kit RowList (radio marker; the amber `ARMED` pill is the only tail pill, saved clones carry a dim `saved` tail) under a two-row KvTable (State; Asked / Replied counts) at y 24..76, list from y 76. Not verified on hardware |
 | Report cards | `cards_empty/list/detail/detail_worst/detail_fail/confirm` (+ rot90/180/270) | the charger report cards saved by the charger test (section 4.4). Not verified on hardware |
@@ -320,34 +319,27 @@ both directions; no chevron while idle (inside the deadband), stale (LAST pill) 
 The readout repaints on a direction or rotation change as well as on a value change. Home has no bar
 readout, so only the hero arrow shows there.
 
-### 4.0.1 PD page v3: Source / Cable / Sink tabs
+### 4.0.1 Connection tabs: rows per tab
 
-Keys on the PD page (page index 3): short +/- = next/prev tab; LONG +/- = next/prev page (as everywhere);
-OK = refresh; Back as before. A side indicator (three segments at the right edge, plus the tab names with an
-underline under the active one at y 22) shows the active tab. State machine: `k2::pdtabs` (`pd_tabs.hpp`).
+The Source / Cable / Sink tabs of the Connection page (section 5.1) replace the former PD, E-marker and Identify
+pages. The tab state machine and the match arithmetic are pure code in `k2::pdtabs` (`include/k2/pd/pd_tabs.hpp`,
+host-tested in `tests/test_pd_tabs.cpp`); the rows are built in `src/ui/ui_connection_page.cpp`. Nothing scrolls:
+every tab shows at most nine rows (key in S12 at x 6, value in S16 at x 64, 20 px pitch). An undetermined value
+reads `unknown` or `-`.
 
-Inline (a real sink downstream) the first OK only shows `Query live link? OK=yes` (4 s); a second OK within
-that window runs the active Discover Identity. Not inline, OK refreshes at once. Switching tab drops the prompt.
+| Tab | Rows (key) |
+|---|---|
+| Source | `ID` (VID:PID and vendor of the charger), `PD` (revision, `EPR` when advertised, maximum watts), `Fixed` (one row per current group, `5/9/15V 3A`), `PPS` / `AVS` (voltage range and current), `Used` (the PDO the sink requested), then `USB`, `Alt` and `Proto` when a link is known. A charger without PD caps shows `Type-C` (the Rp current) and `Legacy` (the detected fast-charge protocol). Waiting for caps shows one `PD` row |
+| Cable | `ID` (e-marker VID:PID and vendor), `Speed`, `Current`, `Voltage`, `EPR`, `Type`, `Length` |
+| Sink | `ID` (`unknown` until Identify answers), `Request` (PDO, volts, amps, `PPS`) with `State`, `Pwr` and `Data` (the match rows below), `USB`, `Alt`, `Proto`, `Caps` (the sink's own capabilities, whole entries, ` +` when more follow); when the K2 draws the power itself the tab reads `K2 (sink mode PLUS)` or `K2 (sink mode OK)` |
 
-Nothing scrolls: every tab fits one screen. Fixed columns (dim key at x 4, value at x 54, 13 px pitch). A common
-subsection of four rows (PD rev / ID VID:PID vendor / USB speed / Alt) sits at the same x/y (y 40..79) on all three
-tabs, a rule at y 93, then up to six party rows from y 97. Undetermined values read `Unkn`, `-` = not applicable.
-- Source: common = PD rev (+EPR), source VID:PID + vendor, USB link, DP/TB alt. Party = Role (W, DRP/DRD/USB/Unc
-  flags, product type), Fixed PDOs grouped by current (`5/15V 3A 20V 5A`), PPS / AVS ranges, the PDO in use;
-  legacy chargers show the Type-C Rp current and the detected fast-charge protocol.
-- Cable: common = e-marker PD rev, VID:PID + vendor, speed (x2 lanes), TB/USB4. Party = Rating (A, V, W, EPR),
-  Type (active/passive, Type-C/captive, VCONN), Length, Term, Temp (active), HW/FW and SOP'. None =
-  `no e-marker -> 3A assumed`; legacy = `legacy A-C`.
-- Sink: common = `Unkn` PD/ID (not on the wire we sniff), USB link, alt. Party = Request (PDO, V, A, PPS), State +
-  RDO flags, Sink_Capabilities in two compact rows (V and A per PDO), sink flags (DRP, FRS, higher cap...), verdict;
-  `K2 (sink mode PLUS)` when the K2 is the sink.
-Colour: negotiated green, advertised amber, hint/none grey (USB row, Home data half).
-USB = data speed only (`usblink::format_speed`); Alt = `usblink::format_alt`: entered modes green (`DP 2-lane`, `DP 4-lane`, `TB3/4`), else advertised ones amber (`DP, TB, Xiaomi (adv)`; any other SVID by vendor name or hex), `-` none. Detail shows both on its last row (USB at x 58, Alt at x 134, no `(adv)` tag, amber says it); Home keeps the combined `usblink::format_ui`.
+Match rows (Sink tab): `Pwr` = source watts x cable amps x sink watts = result, `Data` = cable speed x device speed
+= result. The smallest known term (`pdtabs::limit`) is the result and the limiting row is drawn in amber (`kCaution`);
+unknown terms show `?`. Without an e-marker the power row assumes a 3 A cable (`3A?`).
 
-Every tab ends in a two-line match strip (y 198 and 212): power `source x cable x sink = result` and data
-`host x cable x device = result`, with 8 px party glyphs (charger / cable / device). The smallest known term
-(`pdtabs::limit`) is the limiting one and is drawn in amber (kCaution); unknown terms show `?`.
-The old Wants-vs-Offers PDO list and the long-OK Offers/reader view are gone from this page (long +/- still pages).
+Colour: negotiated or used = green, advertised = amber (`Alt`), unknown or none = faint. `USB` is the data speed only
+(`usblink::format_speed`); `Alt` is `usblink::format_alt`: entered modes green (`DP 2-lane`, `DP 4-lane`, `TB3/4`),
+else advertised ones amber, `-` for none. Home keeps the combined `usblink::format_ui` in its data half.
 
 ### 4.1 Home: per-element rationale
 
@@ -388,51 +380,24 @@ The old Wants-vs-Offers PDO list and the long-OK Offers/reader view are gone fro
   with), with a red footer.
 
 ### 4.2 Other pages: key decisions
-- **PD sink comparison (offers vs request).** This is part of the PD page; there is no separate Match page. Offers are listed in the charger's own PDO order; an unknown comparison has no compatibility word. Rescan stays on OK. Passive: it only reads what the engine has decoded
-  and never transmits (no Get_Sink_Cap while inline).
-  - **Side-by-side layout.** Top badge: FULL MATCH (a Request is on the wire and nothing is wrong), PARTIAL (Capability Mismatch bit, less current than wanted, the sink wants a higher voltage than offered, or a Request beyond the offer), NO CONTRACT (no Request seen). Four 30 px rows scroll with short +/-; the left column shows the offer index/type above its maximum V and A. The right column shows the sink voltage or full range above its type, limit and `OK` / `LOW` / `NO` / `GONE` state; the active request instead shows its exact voltage and `REQ` current, with `LOW` when appropriate. A vertical rule separates the columns. The smaller number of rows leaves space for complete values and sink flags.
-  - All first-PDO flags fit in two S12 lines, including `Unconstrained`, `Higher cap` and each
-    FR-swap level (`FR USB`, `FR1.5A`, `FR3A`). The lines use a 14 px pitch so native glyphs
-    remain separate in quarter-turn orientations.
-  - Matrix: each source PDO is **REQ** (the RDO points at it; `LOW` warns that the source current is below what the sink needs), **OK** (a sink PDO can use it), **NO** (no sink PDO can use it), or has no word when compatibility is unknown.
-  - Footer: the verdict (`Wants 20V, charger max 15V`, `Charger gives 2.25A, wants 3A`) or the way to get
-    missing data (`Replug device on the charger`: the Request is only on the wire during negotiation).
-  - Seven rotation pages: the page dots are 6 px apart.
-- **PD.**
-  - Long OK switches between Offers (the existing comparison) and Charger (protocol reader).
-    Switching tabs is passive; short +/- scroll the Charger's thirteen rows.
-  - Charger shows PD/PPS/EPR only when advertised by the current source; absence is "not observed",
-    not proof of no support. D+/D- is a passive signature, not a capability claim.
-  - Scan requires two short OK presses within five seconds: first shows
-    `Unplug load; VBUS to 9V!`, second confirms there is no inline load.
-    Inline/fake-source, missing monitor/source and voltage-limit refusals never override the guard.
-    BACK cancels confirmation or stops the reader's scan to 5 V; leaving/tab switching also releases
-    a running reader scan. Entering/capturing the page never starts or restarts it.
-  - Probes are FCP, SCP, AFC, QC2, QC3, VOOC and QC3+; results distinguish answered (measured VBUS),
-    no reply, skipped with a reason, and not tested. UFCS/VIVO active discovery is unimplemented.
-    SCP/VOOC stay at 5 V; QC3/QC3+ at 6 V; other probes at 9 V, with reset between probes.
-    These are replies, not adapter power/voltage ratings. A new source session/detach clears results.
+- **Connection.** The offers-versus-request comparison, the e-marker reader and Identify are tabs and actions of
+  the Connection page (4.0.1, 5.1); there is no separate PD, Match or protocol-reader page. The page is passive:
+  it only reads what the PD engine has decoded and transmits only from an action (Refresh, Read cable, Identify),
+  never while it is merely open.
 - **Diag.** Grouped cards with accent colours and status dots. Compact counter pairs use their own
   wide value column, while the other values remain aligned.
 - **Lines.**
   - Each line has a tag and a bar against fixed 0.4 V and 2.0 V ticks, so the BC1.2/QC pattern is
     visible as shape.
   - The verdict card puts the decoded result in pills.
-  - An `NTC --` row is reserved (see open question 2).
-- **Tools hub.**
-  - Rows are the tool badge (state colour), the name, a hint that names ports only as "top or bottom"
-    or "either port", and a state dot.
-  - The selected row gets a solid status pill. The footer gives the reason in words.
-  - Blocked tools still open, into their refused state.
-- **Tool template.** Flow diagram on the left, card column on the right, footer. The phases are:
-  - setup: checklist all ✓, footer `Ready`;
-  - refused: ✗ items and a red or amber footer with the reason;
-  - running: step segments or a trace;
-  - result: a verdict card with pills, then KV rows.
-
-  Role pills come from what the K2 knows (it is the source in Identify/E-marker, so the pill says
-  `K2`), or from PD roles. A pill never says SRC because of the port's position. When nothing is
-  known it shows `?`.
+  - There is no NTC row (see open question 2).
+- **Tools hub.** A kit `RowList` (see the Tools row in section 4): icon, name, a chevron when the tool is ready,
+  otherwise the readiness tag, and the reason in the footer. Blocked tools still open, into their refused state.
+  Hints name ports only as "top or bottom" or "either port".
+- **Tool template (PD trigger refusal).** The refused PD trigger screen is the one place that keeps the flow
+  diagram on the left, a card column on the right and a footer with the reason. Role pills come from what the K2
+  knows (`K2` when it is the source) or from PD roles. A pill never says SRC because of the port's position. When
+  nothing is known it shows `?`. The other tools are on the kit (RowList, KvTable, AlertBand).
 
 ### 4.3 Project-wide theme inventory
 
@@ -441,8 +406,7 @@ host-render audit, not a claim that every dynamic state was visually checked on 
 
 | Screen or state | Theme treatment and audit outcome |
 |---|---|
-| Home; PD comparison | Preserved approved layouts, quantity colors, flow and SOURCE/SINK columns. |
-| PD protocol reader | Read-only rows and state words retained; scroll thumb. Rows fit the available B16 width with an ellipsis; the S12 status line retains the complete no-load/9V warning and the footer carries the cancel/return hint. |
+| Home; Connection | Preserved approved layouts, quantity colors and flow; the Connection tabs use the kit tab strip and RowList rows. |
 | Diag; Lines | Retained status cards, measured-value colors, words and warnings; no selectable rows. Diag uses compact counter rows sized for full 32-bit values, including both members of a pair. |
 | Tools; Settings | Retained the tool reference and matching cyan focus rail. |
 | USB Link; Autorotate | Focus is separate from ON/OFF or ACTIVE; pending USB changes retain the replug warning. |
@@ -451,7 +415,6 @@ host-render audit, not a claim that every dynamic state was visually checked on 
 | Charger test, result tones | One table (`result_layout::roll_up`, `Tone`) colours every Results chip, fixed, range and legacy alike: **every sampled step passed = green** (`kOkT`); **some passed, or the output capped = amber** (`kCautionT` tint, `kCaution` ink, and a 2 px bar under the label: never colour alone); **none passed = red** (solid `kError`); **all skipped = grey with the reason**. A pass with a skip and no fail is amber too (the row is only partly proven). A range chip keeps the advertised range text ("5-21V 3.2A"); how far it got is said where there is room: the Results footer for the focused row ("PPS: caps 19.4V of 21V", "max 13V of 21V", "reached 5-21V", "none reached", at most 27 cells), the Steps lead cell (amber for a Capped step) and the Detail page (band "CAPPED", the **Reached** row "3.3-19.4V of 21V" in place of Window, Reason "output capped"). A Capped step does not end its chain: the levels after it still run. Every one of these strings is width-tested (`test_ui_no_truncation`). Not verified on hardware. |
 | FC trigger | Protocol picker now has the reference focus rail and neutral scroll thumb. Draft, review, live and cleanup retain their established measured/requested and warning layouts. |
 | E-marker (Saved cables) | Kit RowList with the focus rail and fitted names; detail is a KvTable, delete confirmation and the empty state are AlertBands. |
-| Identify | Retained flow diagram, readiness, result cards and warnings; a data/step screen, not a selection list. |
 | Cable R | Edge-to-edge table, verdict cell and flat scale segments; no cards, no flow diagram (the load port is a table row). |
 | PD trigger | Preserved approved offer, edit, confirm and live screens; focused row and held contract remain distinct. Long ranges, currents and edit context use smaller native fonts before they can cross their columns. Live flow is in the measured heading, separate from the full measured value and unit. |
 | Black Box | Capture/live-link picker already uses the focus rail; timeline and link screens are read-only. |
@@ -469,6 +432,19 @@ checks in all four rotations. This does not cover every derived value or every l
 The shared mini status readout uses `OVR` when a value cannot fit its slot, rather than overwriting
 the adjacent value or flow symbol; the main measurement retains its value and units. Seven-page
 dots start 3 px farther right to keep the adjacent flow glyph intact.
+
+### 4.4 Report cards (Tools > Report cards)
+
+Source: `k2/chargertest/report_card_hw.hpp` (`list` newest first, `remove`); page in `src/ui/ui_cards.cpp`. All text builders are host-tested (`tests/test_ui_cards.cpp`), every screen has a capture (`tests/test_ui_capture.cpp`, `cards_*`).
+
+| Screen | Content |
+|---|---|
+| Empty | `No report cards yet`, three dim explanation lines, footer `0 cards saved`. OK is blank, long BACK does nothing. |
+| List | Up to 8 rows (`ListView`, 20 px): title (name, else `VID:PID`, else `#fingerprint`), `b<boots>` (the card's boot counter; there is no RTC, so no date), `nP nF` passed/failed groups. Full title under the list, footer `i/N chargers`. |
+| Card | Title and overall PASS/FAIL pill, id line `VID:PID  fp XXXXXXXX`, `PD fixed` verdict with highest passing V, one row per PPS/AVS range (`3.3-21V`, `max 20V`, `fail 13V`), `Handover` outcome and PD give-up time (`fell back 3.2s`), then the legacy groups in two columns (name coloured by verdict, max V, `fail` or `skip`; the name of a skipped row is dim and struck through like a skipped Results cell, the row's verdict glyph being a label-less dash). Footer: `run 3  boot 4  fw 0FF2C610`. The worst case (12 groups, 4 ranges, long name) fits above the footer line. |
+| Delete confirm | `Delete this card?`, the charger name, what is lost; OK `Delete`, BACK `Cancel`. A note (`Card deleted` / `Delete failed`) shows in the footer on return. |
+
+Buttons: the BACK slot reads `Back/Del` in the list and `List/Del` on a card (long press deletes; the full word does not fit the slot).
 
 ## 5 Navigation map
 ```
@@ -534,11 +510,11 @@ dots start 3 px farther right to keep the adjacent flow glyph intact.
   Review explains when an SPR PPS request reaches 21 V on a 20 V wire; the wire rating remains
   distinct from the allowable PPS request.
                 BACK stops first; leaving also cancels, with verified 5V cleanup.
-  Home: long OK resets energy. PD: OK Rescan / Clear (stale).
+  Home: long OK resets energy.
   Tools: short -/+ selects; eight rows, no scroll, in this order: FC trigger, PD trigger, Spoof, Cable R,
          Connection, Black Box, Report cards, Diag. OK opens the row. BACK returns to Tools (selection kept).
          Spoof is a shortcut into Connection on the Cable tab's Spoof list (same list, same arming rules).
-         Diag is the old Diag page; long OK there still shares the log.
+         Diag: long OK shares the log.
   Connection (5.1): three tabs Source / Cable / Sink; short +/- switch tabs, OK opens the Actions pop-up,
          BACK closes the pop-up, else leaves to Tools. Long OK = Share.
   Report cards: list; -/+ select, OK opens a card, long BACK asks to delete.
@@ -623,17 +599,16 @@ button; entering the page and reading/capturing it remain passive.
    until release.
 4. **Hazardous applies are deliberate.** FC uses a Review screen and two released short OK presses
    above 5V; no navigation or hold sends voltage. FC has no on-device inline override. Existing
-   Identify overrides retain their separate two-press rule. Energy reset can be undone for 5 s.
+   The Connection Identify and Read cable actions ask for a second OK while a live sink is inline. Energy reset can be undone for 5 s.
 5. **The reboot hold is visible** (HoldCard).
 6. **Stale lifecycle.**
    - Unplug: the screen goes grey and shows the LAST pill.
-   - OK (PD) or long OK (Home) clears it.
+   - Long OK on Home clears it.
    - Replug replaces it.
-   - The badge age caps at `9:59+`.
 7. **Direction.** One static arrow changes only with flow state or orientation. Digits
    change at most 4 times a second, behind a display filter.
 8. **Copy.**
-   - The footer pattern is `[state]. [cause or action]`, at most 27 chars (the footer's 27 cells, see 9).
+   - The footer pattern is `[state]. [cause or action]`, at most 27 chars (the footer's 27 cells, item 9 below).
    - Ports are "top port", "bottom port", "either port". Never IN/OUT, input/output, forward/reverse,
      or source/sink by position.
    - OK verbs: Scan, Listen, Run, Force, Start, Stop, Send, Rescan, Clear, Open, Reset (the full
@@ -738,61 +713,18 @@ PD/FC requests and charger-test starts remain blocked until verification; main-t
 and read-only state/captures remain usable. A later safe measurement can clear the unsafe guard.
 The charger runner keeps its existing release implementation; no generic wizard framework is added.
 
-### Polish pass rules (2026-10-31)
+### Polish rules
 
 - Footers and status titles fit or end in "..." (`fit_text`); menu titles keep x 20..94, so the V/A
   readout starts at x 100 on menus (x 92 on pages, which have page dots).
 - Stale Home is grey throughout (digits, badges, units, PD chip without its wattage, D+/D- tags).
 - Coral (`kWatt`) is the watt colour only; neutral groups such as Diag SYS use `kDim`.
 - An instruction footer carries no success icon; a Dim-tone footer draws none.
-- Identify only reads "Aborted: <reason>" after a run that was cut short.
-- Lists longer than their rows show a thin right-edge thumb (PD list, Tools hub).
+- The Connection footer reads "Aborted: <reason>" for Identify only after a run that was cut short.
+- Lists longer than their rows show a thin right-edge thumb (Tools hub).
 - Counts carry their unit ("15 msg").
 
-## 7 Critique of the current UI (still valid from v1, plus new items)
-| # | finding | heuristic | sev |
-|---|---|---|---|
-| C1 | The flow arrow is horizontal (→/←), which does not match the physical top/bottom ports. Reverse and LAST share `kWatt` orange with the W digits | match real world, similarity | 3 |
-| C2 | The Tools hub has no setup hints and no readiness | recognition, H9 | 3 |
-| C3 | Refusals are dim prose with no visual cue | H9, hierarchy | 3 |
-| C4 | Long-press actions are hidden | H6 | 2 |
-| C5 | The 5 s reboot hold is invisible | H1, H5 | 3 |
-| C6 | Home lacks Ah, load R, a trend and contract headroom | density | 2 |
-| C7 | No live V/A outside Home | working memory | 2 |
-| C8 | Everything is text. No shape coding, so scanning is slow | aesthetic-usability, Prägnanz | 2 |
-| C9 | The e-marker verdict is buried in the rows | hierarchy | 2 |
-
-## 8 Ranked change list (for k2-dev)
-Sizes: **S** ≤ ½ day, one file, no new state. **M** ≤ 2 days. **L** > 2 days or several pages.
-
-| rank | change | size | files | done when |
-|---|---|---|---|---|
-| 1 | **Flow arrow up/down to match the ports.** Positive (after `kInaForwardSign`) draws ↑ and negative draws ↓, the same in Home, `[PWR]` log text and WebHID. Use one `flow` colour for both directions | S | `ui_pages.cpp` (HomePage `kFlowX`, arrow glyph `\xE2\x86\x91`/`\x93`), `web/` arrow | charger on the bottom, phone on the top shows ↑ |
-| 2 | **Colour tokens + tints** (`kSurface, kRule, kFaint, kCharge, kOhm, kCaution, kStale, kFlow, kDPlus, kDMinus`, plus a tint per hue); move LAST off `kWatt` | S | `ui_style.hpp`, `title_badge` | no `kWatt` outside W/PPS |
-| 3 | **Primitive kit**: rounded fill, frame, 1-bit icon blit, pill, gauge, chevron, port symbol, all row-streamed through the line buffer; 12 icon masks | M | new `ui_widgets.hpp/.cpp`, `gfx.hpp` (rounded-span helper), host unit test for the inset table and pill width | the mockup shapes render on device; full Home repaint ≤ 30 ms |
-| 4 | **Footer** (icon + S12 message) on every page via `PageBase::footer()` | M | `ui_pages.hpp/.cpp`, `ui.cpp` | every page shows its footer per `screens.md` |
-| 5 | **Home v2**: badges, D48 + gauges vs contract, FlowRail, A badge ↑/↓, lines card (D+/D- tags, load R), totals card (Wh, Ah, time, FC pill) | L | `HomePage`; Ah from `meter` (add `mah()` if absent); load R = V/I with a 50 mA floor | matches `home_*.png` ±1 px |
-| 6 | **Tools hub v2**: ListRow2 with badge, port-neutral hints, state dot and tag; `Readiness ready()` reusing each tool's guard; reason in the footer | M | `ToolsPage` + pure guard fns + unit test | the tag agrees with the refusal in every case |
-| 7 | **Tool template**: FlowDiagram + Checklist + StepCard; rebuild the setup/refused states of all 5 tools; role pills from K2/PD role only | L | all tool pages | refused states show ✗ + footer reason; no port-position role words |
-| 8 | **StatusBar v2**: S12 18 px, icons, MiniReadout with ↑/↓, page dots, LAST pill | M | `PageBase::title_bar/title_badge`, `kHomeBar` | body starts at y 20 on every page |
-| 9 | **Reboot HoldCard** | S | `ui.cpp` | release at 3 cancels |
-| 10 | **Sparkline widget** + 60-sample W ring (1 Hz) on Home; 10 s VBUS trace in FC trigger | M | `ui_widgets`, `HomePage`, `TriggerPage` | updates at 1 Hz, ≤ 2.5 k px per redraw |
-| 11 | **PD page v2**: contract card, type pills, W bars, footer pills, empty-state checklist | M | `ConnectionPage` Source tab (`fixed_rows`, `range_row`; the old `PdPage` / `pdo_row_text` are gone, see 5.1) | `conn_gal_*_source_*.png` |
-| 12 | **Stale states** everywhere (grey + LAST + A badge back to "A") | S | Home, PD, `title_badge` | after unplug, both pages show LAST |
-| 13 | **E-marker / Identify verdict cards** (T24 + pills) | S | `EmarkerPage`, `IdentifyPage` | verdict visible without scrolling |
-| 14 | **Lines bars + verdict pills**, D+/D- tags | M | `LinesPage` | bars follow a QC handshake |
-| 15 | **Cable R result**: D48, grade scale, StepCards | S | `CableRPage` | `cabler_result.png` |
-| 16 | **Diag grouped cards** | S | `DiagPage` | `diag.png` |
-| 17 | **Short BACK → Home, `*` long-press marker, 120 ms press flash** | S | `ui.cpp`, `ui_labels.cpp` | |
-| 18 | **Static direction arrow** (above the deadband) and a 250 ms digit display filter | S | `HomePage::update` | no timer-driven flow repaint; ≤ 4 digit changes/s |
-
-Order:
-1. Items 1 and 2 first. They are independent S jobs and can run in parallel.
-2. Then 3 → 4 → 8, the chrome every screen depends on.
-3. Then 5, 6, 7.
-4. Items 9, 12, 13, 15, 16 and 17 can run in parallel at any time (at most 4 agents).
-
-## 9 Open questions
+## 7 Open questions
 1. **Lightning + key.** The label says the lightning (+) key "activates the PD screen". Should a
    long + on Home jump straight to PD trigger? That would conflict with long + = next page.
 2. **NTC.** The label shows "NTC" next to USB HID. There may be an NTC (temperature probe) input on
@@ -809,15 +741,3 @@ Order:
 Closed: **the direction of `kInaForwardSign`**. Positive current means bottom → top, so it draws ↑.
 The user verified this with a charger on the bottom and a Pixel on the top.
 
-### 4.4 Report cards (Tools > Report cards)
-
-Source: `k2/chargertest/report_card_hw.hpp` (`list` newest first, `remove`); page in `src/ui/ui_cards.cpp`. All text builders are host-tested (`tests/test_ui_cards.cpp`), every screen has a capture (`tests/test_ui_capture.cpp`, `cards_*`).
-
-| Screen | Content |
-|---|---|
-| Empty | `No report cards yet`, three dim explanation lines, footer `0 cards saved`. OK is blank, long BACK does nothing. |
-| List | Up to 8 rows (`ListView`, 20 px): title (name, else `VID:PID`, else `#fingerprint`), `b<boots>` (the card's boot counter; there is no RTC, so no date), `nP nF` passed/failed groups. Full title under the list, footer `i/N chargers`. |
-| Card | Title and overall PASS/FAIL pill, id line `VID:PID  fp XXXXXXXX`, `PD fixed` verdict with highest passing V, one row per PPS/AVS range (`3.3-21V`, `max 20V`, `fail 13V`), `Handover` outcome and PD give-up time (`fell back 3.2s`), then the legacy groups in two columns (name coloured by verdict, max V, `fail` or `skip`; the name of a skipped row is dim and struck through like a skipped Results cell, the row's verdict glyph being a label-less dash). Footer: `run 3  boot 4  fw 0FF2C610`. The worst case (12 groups, 4 ranges, long name) fits above the footer line. |
-| Delete confirm | `Delete this card?`, the charger name, what is lost; OK `Delete`, BACK `Cancel`. A note (`Card deleted` / `Delete failed`) shows in the footer on return. |
-
-Buttons: the BACK slot reads `Back/Del` in the list and `List/Del` on a card (long press deletes; the full word does not fit the slot).

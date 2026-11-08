@@ -51,7 +51,7 @@ make test             # host unit tests (C++, Python, node)
 make gate             # build with -Werror, invariants, map check, command ids, all tests, size
 ```
 
-`make gate` takes 15 to 20 minutes (the whole test suite); run it in the background. A normal `make docker-build` is quick.
+`make gate` runs the whole test suite: a cold run takes about 10 minutes in CI, and a local incremental run is much faster. A normal `make docker-build` is quick.
 
 **`third_party/` must be populated.** TinyUSB and lwIP are git submodules (`third_party/tinyusb`, `third_party/lwip`), and a fresh clone or a new git worktree has them empty, so the build fails. Run `git submodule update --init third_party/tinyusb third_party/lwip`, or in a new worktree copy them from a populated checkout: `cp -a /path/to/open-k2-firmware/third_party/{tinyusb,lwip} third_party/`.
 

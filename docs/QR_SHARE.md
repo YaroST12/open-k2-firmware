@@ -151,7 +151,7 @@ landscape up to version 11; version 12 in landscape drops to 2 px (the camera-sa
   record cycle every 1.5 s; long [+] / [-] page and stop the cycling, OK holds or resumes it, BACK returns. The screen repaints
   only when the part changes. The record lives in a static 510 byte buffer; each paint encodes its part in the shared scratch
   arena (text, encoder workspace and one pixel line, about 2.1 KB) and gives it back: no heap, frames under 1024 bytes.
-- **Long OK = Share** (`docs/UI_DESIGN.md`) on: a saved cable (Tools, E-marker, saved detail), the PD page Source tab, a report
+- **Long OK = Share** (`docs/UI_DESIGN.md`) on: a saved cable (Connection, Actions, Saved cables), the Connection Source tab, a report
   card (Tools, Report cards, detail), the charger test Results page (the card of that run) and the Diag page (the log).
   A record that LZ4 shrinks by 25 % or more goes out packed (the flag above); the share view packs in place in the scratch arena.
 - Left out: built-in chips and the identity record have no opener (the LOG head carries the git string and uptime; no text
@@ -163,7 +163,7 @@ landscape up to version 11; version 12 in landscape drops to 2 px (the camera-sa
   over one code). Until then they are the K2 data frames and `tools/k2_qr.py`.
 - **A record that fits one link opens as a link, not as the K2 data frame.** The kinds with a link form are the report card,
   a cable (e-marker record), the source's PDOs, the firmware identity and the boot info (table under "Link form"). Long OK on the
-  charger test Results page, the Cards detail, a saved cable, a live e-marker read or the PD page Source tab opens the Share view
+  charger test Results page, the Cards detail, a saved cable, a live e-marker read or the Connection Source tab opens the Share view
   showing one code that holds a web address; a phone camera opens the results page (`docs/site/r/`) and the page shows the
   record. OK in the Share view switches to the K2 data frame (what `tools/k2_qr.py` imports) and back; the strip names the code
   the press switches to (`Link` / `K2 data`). The caption under the link follows the kind: `Scan: full results` (card),

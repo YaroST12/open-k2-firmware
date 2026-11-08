@@ -1,10 +1,10 @@
 # Hardware test procedures
 
 Step-by-step procedures to test every charging protocol and active feature of the K2 on real hardware.
-A human, or the coordinator, runs them: **the K2 is a shared device with one owner, the coordinator.**
-Agents do not run these unattended, and nothing here changes VBUS without someone watching.
+The person who owns the device runs them: **the K2 is a shared device with one owner.** Nothing runs unattended, and
+nothing here changes VBUS without someone watching.
 
-Every command below exists in the CLI as of 2026-11-01 (`python3 tools/k2_remote.py <command> --help`,
+Every command below exists in the CLI (`python3 tools/k2_remote.py <command> --help`,
 `python3 tools/pd_trace.py <command> --help`) and every menu name is the one on the device (`docs/UI_DESIGN.md`,
 section 5, and `src/ui/ui_pages.cpp`). Where the CLI or menu does not exist, the section says so.
 Status per feature is kept in [`ROADMAP.md`](ROADMAP.md); this file holds the "how" and the results log
@@ -174,7 +174,7 @@ and read-only behavior in active/releasing/finished states. The grouped suite's 
 PPS results have partial hardware coverage; see section 3. QC remains unverified. Flashing or
 safe UI inspection alone is not a charging-protocol pass.
 
-Status notes: **verified** = seen on the K2 with real log lines or a screenshot (date, `k2/core`);
+Status notes: **verified** = seen on the K2 with real log lines or a screenshot (with the date);
 **not verified** = code and host tests exist, nobody has watched it work.
 
 ### T01 PD fixed: 5 / 9 / 12 / 15 / 20 V
@@ -183,7 +183,7 @@ Status notes: **verified** = seen on the K2 with real log lines or a screenshot 
   `4d396cd` and `71ed6b5` with a 1 A request and no downstream load (2026-11-02);
   rated-current and rated-power operation remain untested.
 - **Prerequisites:** a PD charger with fixed PDOs at the voltages under test, on the **bottom port**; nothing
-  on the top port (no inline load); Black Box cleared; PD page shows the PDO list (`R pdos`).
+  on the top port (no inline load); Black Box cleared; Connection page Source tab shows the PDO list (`R pdos`).
 - **Steps, on-device:**
   1. Page PD (long `plus` from Home, or `R page pd`): the offers list shows the charger's PDOs.
   2. Tools, open `PD trigger`. OFFER step: `plus`/`minus` pick the PDO, OK next.
@@ -297,7 +297,7 @@ Status notes: **verified** = seen on the K2 with real log lines or a screenshot 
 
 - **Risk:** PASSIVE. **Status:** **not verified** as a dedicated test.
 - **Prerequisites:** a plain Type-C 5 V source (Rp 1.5 A or 3 A, no PD, no D+/D-) on the bottom port.
-- **Steps:** Home and PD pages; `R state`; `R pdos`; Lines page (`R page lines`). On-device: PD page empty
+- **Steps:** Home and Connection pages; `R state`; `R pdos`; Lines page (`R page lines`). On-device: Connection page empty
   state with the checklist, Home shows VBUS about 5 V.
 - **Expected:** `state.pd_valid` false, `num_pdos` 0, `fc` a no-PD classification (`DCP 5V`, `NO QUICK`
   or `USB DATA`; `NO INPUT` only without VBUS). In the Black Box the CC line shows an attach
@@ -518,7 +518,7 @@ coverage must demonstrate real measured transitions, not merely a reset log.
 
 ### T14 Identify (Pixel)
 
-- **Risk:** low (PD VDMs only; idle CC). **Status:** **verified** on a Pixel (2026-11-01, k2/core: VID 18D1,
+- **Risk:** low (PD VDMs only; idle CC). **Status:** **verified** on a Pixel (2026-11-01: VID 18D1,
   PID 4EE1). **Pixel replug behaviour after Identify: not verified.**
 - **Prerequisites:** the device on the **top** port (the K2 is the source toward it: the K2 must be
   unpowered by a charger on the bottom port or powered from the PC; follow the Identify setup card). No charger
@@ -538,8 +538,9 @@ coverage must demonstrate real measured transitions, not merely a reset log.
 ### T15 E-marker: read, save, rename, spoof
 
 - **Risk:** read VCONN 5 V on CC; save/rename/delete **FLASH**; Spoof **HV** (a faked 5 A / 50 V cable).
-  **Status:** read and save **verified** (2026-11-01, k2/core). Rename and delete: library code
-  **verified**, remote paths not run as a dedicated test. Spoof acceptance by a charger: **not verified**.
+  **Status:** read and save **verified** (2026-11-01). Rename and delete: library code
+  **verified**, remote paths not run as a dedicated test. Spoof acceptance by a charger: **verified** on the top
+  plug (2026-11-06: a Baseus 140 W offered 5 A and EPR 28 V with no e-marked cable; `K2_PORTS_SPEC.md`).
 - **Prerequisites:** an e-marked 5 A USB-C cable and, for the Spoof part, a PD charger and a **non-e-marked**
   cable. Read: the cable alone, **no charger**.
 - **Read, on-device:** Tools, `E-marker`; connect the cable between the two ports (the K2 powers VCONN);
@@ -568,8 +569,8 @@ coverage must demonstrate real measured transitions, not merely a reset log.
   then `[SPOOF] Discover Identity on SOP': reply msg_id=.. sent` per charger query, `[SPOOF] off: N requests,
   M replies`.
 - **Pass:** read and save as above (done); spoof counts `Replied` equal to `Asked` and the charger offers
-  its 5 A / higher PDOs (compare `R pdos` with and without Spoof). **Fail:** `Replied` 0 (known open issue:
-  reply timing, `agents/HANDOFF.md` Open issues), or a charger Hard Reset after the reply.
+  its 5 A / higher PDOs (compare `R pdos` with and without Spoof). **Fail:** `Replied` 0 (an early reply-timing
+  problem; the top-plug Ra mode in `K2_PORTS_SPEC.md` is the working recipe), or a charger Hard Reset after the reply.
 - **Cleanup:** `R emarker spoof off`; delete test entries if you saved extras.
 
 ### T16 Cable resistance (passive and Kelvin)
@@ -597,7 +598,7 @@ coverage must demonstrate real measured transitions, not merely a reset log.
 ### T17 Black Box capture and persistence
 
 - **Risk:** PASSIVE (flash writes by the ring, when the link is quiet). **Status:** **verified**
-  (2026-11-01, k2/core): capture and persistence across power-off.
+  (2026-11-01): capture and persistence across power-off.
 - **Steps:**
   ```bash
   T status                      # ring fill / frozen
@@ -653,9 +654,9 @@ coverage must demonstrate real measured transitions, not merely a reset log.
 
 ### T19 Self-power (PLUS held at plug-in)
 
-- **Risk:** low. **Status:** **known failing** (2026-11-01, k2/core): with a charger alone on the bottom
+- **Risk:** low. **Status:** **known failing** (2026-11-01): with a charger alone on the bottom
   port the K2 runs only while PLUS is held and dies on release; `SELF-PWR` stays up only on a laptop USB-C
-  port. Do **not** treat a repeat of this as a regression; see `agents/HANDOFF.md` Open issues.
+  port. Do **not** treat a repeat of this as a regression; see `ROADMAP.md` (Self-powered boot) and T23.
 - **Prerequisites:** the K2 unplugged from everything; a charger on the **bottom** port; a PC cable
   with 5 V cut (data only) for log visibility if you have one.
 - **Steps:** hold `PLUS` (Rd on CC2) or `OK` (Rd on CC1) while connecting the charger; the screen shows the
@@ -674,7 +675,7 @@ No load attached. A session never mixes PD and D+/D- in one attach, so the sessi
 2. Expected per legacy unit: caps are heard but never answered, the charger falls back to legacy within 20 s (one longer retry of 60 s), VBUS stays at 5 V for 500 ms after 2.5 s without PD frames, then the unit's rows run (never with an inline load).
 3. Failure case: a charger that never falls back gets "blocked by PD" on that unit's rows; the run goes on with the next unit. A charger that does not come back after a Detach gets "no PD after re-attach" for a Pd unit.
 4. Full run: `python3 tools/ct_start.py` runs every legacy unit, then the Pd unit, then the low PPS/AVS rows last. Compare K2 uptime with the run duration: it must not reboot.
-5. Cancel during a Detach / Attach ends the run and leaves the sink PD-active (Rd as before). Replug or Rescan if the PD page shows no caps.
+5. Cancel during a Detach / Attach ends the run and leaves the sink PD-active (Rd as before). Replug or Rescan if the Connection page shows no caps.
 Pass: legacy rows get a verdict on a charger that falls back; no step requests above 5 V before the Pd unit; exactly one Request goes out at START (Black Box: one Request id 0, no second one while it is pending).
 
 #### T20b Reading a refused Mi 6 A row (hunt evidence)
@@ -765,7 +766,7 @@ Pass: card saved on every Done run, delta lines match the earlier run, nothing s
 
 ### T25 Record everything while running a charger test (the debug stream)
 
-Purpose: one recorded log of a run (run events with verdicts and reasons, K2LOG lines, every PD message, VBUS/IBUS/CC/D+/D- samples, heartbeat) that the coordinator reads afterwards, instead of polling rings that wrap. Built on the host and in the firmware; hardware-verification pending (`docs/DEBUG_STREAMING.md`).
+Purpose: one recorded log of a run (run events with verdicts and reasons, K2LOG lines, every PD message, VBUS/IBUS/CC/D+/D- samples, heartbeat) that you read afterwards, instead of polling rings that wrap. Built on the host and in the firmware; hardware-verification pending (`docs/DEBUG_STREAMING.md`).
 
 Setup: the charger test setup of T20, USB HID enabled in Tools and the K2 on the left port with a C-to-A cable (the debug shell, a serial port, exists in HID and HID+Drive modes). The recorder uses the CDC port and takes no device lock, so it runs in parallel with `ct_start.py` and `k2_remote.py` (HID). Output goes under `runs/` (gitignored). Never run a second reader on the CDC port (`sniff stream`, `trace stream`, `picocom`) at the same time: they share a 16 B endpoint.
 
@@ -790,17 +791,17 @@ Copy one row per run. Evidence names follow `$EV/<test-id>-*` (section 1.6).
 | Date | Firmware hash | Charger model | Test | Result (pass / fail / partial) | Evidence file |
 |---|---|---|---|---|---|
 | 2026-11-02 | host only | none | PPS step-down guard change (not yet hardware-verified) | The +10% guard in `Sink::on_vbus` (`src/pd/pd_sink.cpp`) fired because VBUS was still falling after `kSettleMs`. It now waits while samples keep falling (>= 50 mV per 600 ms) for up to 3 s more (`kDescentMs`), and aborts on a rise > 150 mV, a stall, or the window ending. The `cap_mv_` ceiling, cable limit, inline guards and release checks are unchanged. Host tests in `tests/test_pd_sink.cpp`. Needs a re-run of the direct 11-to-8 V and 21-to-13 V step-downs on hardware. | |
-| 2026-11-02 | `71ed6b5` | user-identified 120 W OnePlus, no load | PPS 21-to-13 V in 1 V steps | pass: 21 V and each 1 V decrement through 13 V remained within +/-5% for one second; cleanup reached 5.025 V. This does not pass the direct step-down or verify rated power. | external session artifact: `pps-stepdown-small-steps.jsonl` |
-| 2026-11-02 | `71ed6b5` | user-identified 120 W OnePlus, no load | Direct 21-to-13 V PPS retarget | fail: 21 V settled at 21.020 V; the sink reported ready for 13 V while measured VBUS descended from 21 V, and the guard aborted at a sampled 15.436 V; cleanup reached 5.025 V. This is not a rated-power test. | external session artifact: `pps-stepdown-repro.jsonl` |
-| 2026-11-02 | `71ed6b5` | user-identified 120 W OnePlus, no load | Grouped charger suite | partial: 8 pass, 1 fail, 32 skip; 5/9/12/15/20 V fixed and 5/13/21 V PPS passed; 21-to-13 V PPS failed the existing guard, QC skipped on PD traffic; final VBUS 5.025 V | external session artifacts: `results.json`, `monitor.jsonl`, `trace.txt` |
-| 2026-11-02 | `2aeff99` | 67 W PD/PPS charger, no load | Grouped PPS, 21 V endpoint | partial: 21 V passed at 20.945 V with a 1 A request and 30 s hold; direct 11-to-8 V and 21-to-13 V step-downs failed the +10% guard; 6 pass, 2 fail, 4 skip overall | external session artifacts: `results.json`, `monitor.jsonl`, `trace.txt` |
-| 2026-11-02 | `4d396cd` | 67 W PD/PPS charger, no load | Grouped PD fixed + PPS + QC2/3 | partial: 11 pass, 2 fail, 15 skip; fixed 5/9/12/15/20 V passed; 11-to-8 V and 20-to-12.5 V PPS step-downs tripped the +10% guard 1.5 s after PS_RDY; 21 V and QC skipped | external session artifacts: `run2-results.json`, `run2-trace.txt` |
-| 2026-11-02 | `4d396cd` | same | Supplemental PPS step-down | pass: 1 V down-steps 11-to-5 V and 20-to-13 V plus 13-to-12.5 V, with samples in the +/-5% band for 5.5 s per target; each range returned to 5 V | external session artifact: `pps-small-steps.jsonl` |
-| 2026-11-01 | k2/core (`R ping` hash) | lone PD charger | T01 PD fixed 9 V | pass: PS_RDY, VBUS 9.34 V | (commit messages) |
-| 2026-11-01 | k2/core | lone PD charger (PPS) | T02 PPS 9 V | pass | (commit messages) |
-| 2026-11-01 | k2/core | Pixel on top | T14 Identify | pass: VID 18D1 PID 4EE1 | (commit messages) |
-| 2026-11-01 | k2/core | none | T18 USB network + dashboard | pass | |
-| 2026-11-01 | k2/core | none | T15 e-marker read + save | pass | |
-| 2026-11-01 | k2/core | lone PD charger | T17 Black Box capture + persist | pass | |
-| 2026-11-01 | k2/core | lone PD charger + load | inline loop fix | pass | |
+| 2026-11-02 | `71ed6b5` | user-identified 120 W OnePlus, no load | PPS 21-to-13 V in 1 V steps | pass: 21 V and each 1 V decrement through 13 V remained within +/-5% for one second; cleanup reached 5.025 V. This does not pass the direct step-down or verify rated power. | recording not kept in the repository |
+| 2026-11-02 | `71ed6b5` | user-identified 120 W OnePlus, no load | Direct 21-to-13 V PPS retarget | fail: 21 V settled at 21.020 V; the sink reported ready for 13 V while measured VBUS descended from 21 V, and the guard aborted at a sampled 15.436 V; cleanup reached 5.025 V. This is not a rated-power test. | recording not kept in the repository |
+| 2026-11-02 | `71ed6b5` | user-identified 120 W OnePlus, no load | Grouped charger suite | partial: 8 pass, 1 fail, 32 skip; 5/9/12/15/20 V fixed and 5/13/21 V PPS passed; 21-to-13 V PPS failed the existing guard, QC skipped on PD traffic; final VBUS 5.025 V | recording not kept in the repository |
+| 2026-11-02 | `2aeff99` | 67 W PD/PPS charger, no load | Grouped PPS, 21 V endpoint | partial: 21 V passed at 20.945 V with a 1 A request and 30 s hold; direct 11-to-8 V and 21-to-13 V step-downs failed the +10% guard; 6 pass, 2 fail, 4 skip overall | recording not kept in the repository |
+| 2026-11-02 | `4d396cd` | 67 W PD/PPS charger, no load | Grouped PD fixed + PPS + QC2/3 | partial: 11 pass, 2 fail, 15 skip; fixed 5/9/12/15/20 V passed; 11-to-8 V and 20-to-12.5 V PPS step-downs tripped the +10% guard 1.5 s after PS_RDY; 21 V and QC skipped | recording not kept in the repository |
+| 2026-11-02 | `4d396cd` | same | Supplemental PPS step-down | pass: 1 V down-steps 11-to-5 V and 20-to-13 V plus 13-to-12.5 V, with samples in the +/-5% band for 5.5 s per target; each range returned to 5 V | recording not kept in the repository |
+| 2026-11-01 | not recorded | lone PD charger | T01 PD fixed 9 V | pass: PS_RDY, VBUS 9.34 V | (commit messages) |
+| 2026-11-01 | not recorded | lone PD charger (PPS) | T02 PPS 9 V | pass | (commit messages) |
+| 2026-11-01 | not recorded | Pixel on top | T14 Identify | pass: VID 18D1 PID 4EE1 | (commit messages) |
+| 2026-11-01 | not recorded | none | T18 USB network + dashboard | pass | |
+| 2026-11-01 | not recorded | none | T15 e-marker read + save | pass | |
+| 2026-11-01 | not recorded | lone PD charger | T17 Black Box capture + persist | pass | |
+| 2026-11-01 | not recorded | lone PD charger + load | inline loop fix | pass | |
 | | | | | | |
