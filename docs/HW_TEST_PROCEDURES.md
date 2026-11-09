@@ -780,6 +780,31 @@ A busier recording (everything at 50 Hz, history from the oldest ring entry): `-
 
 Saturation: when the CDC pipe (about 16 KB/s) cannot carry everything, power samples fold into min/max windows first, trace and log fall behind in their rings, and a ring that wraps shows up as a `GAP ... DEVICE LOST` row with the count. A row that reads `INCOMPLETE` is a finding to report with the folder, not a retry reason.
 
+### T26 QR scan-test rig (qrtest)
+
+Purpose: check what a phone camera can actually read from this 240x240 panel, per QR version and per pixels-per-module, with the quiet zone as a parameter. The rig draws ONE full-screen test QR (the whole panel, button strip included, no caption) filled with the longest kind-'t' link that version carries, so a scan both proves readability and shows the label "QR scan test v<NN> <N>px" on the results page. It only draws: no VBUS, CC, D+/D- or load is touched, no confirm is needed; it is refused (busy) while a charger test runs.
+
+Commands (USB HID, `tools/k2_remote.py`):
+
+- `qrtest list` - the fit table from the device, computed there from the QR capacity table and the panel geometry (box = (modules + 2*quiet) * px <= 240). One text line per row, a header first: `# v m p q box fit c r`, then per (px, quiet) combo (px 3 then 2, quiet 4..1) the largest version that fits and the first that does not, e.g. `v13 m69 p3 q4 box231 fit c425 r281` (version, modules, px, quiet, box px, fits, byte-L chars, max record B) and `v14 m73 p3 q4 box243 no c458 r306` for the refusal. Chunked 48 bytes per reply; the tool reassembles and prints it.
+- `qrtest <version> <px> [quiet]` - show the test screen (quiet defaults to 4). version 1..40, px 2..3, quiet 1..4; a box that does not fit the panel is refused with the reason, e.g. `qrtest 25 2 2` answers bad argument (box 242 px over the 240 px panel).
+- `qrtest stop` - leave the test screen remotely (BACK on the device pops it too).
+
+Owner scan matrix (geometry corrected: v25 at 2 px with a 2-module quiet zone needs 242 px and does NOT fit; the true maxima are v24 at 2 px quiet 2, box 234, and v25 only at quiet 1, box 238; full-screen v13 at 3 px quiet 4 needs the caption hidden, box 231):
+
+| # | command | box | what to check |
+|---|---|---|---|
+| 1 | `qrtest 11 3 4` | 207 px | today's share geometry (v11 in the 224 area is 3 px) - the baseline a phone already reads |
+| 2 | `qrtest 12 3 4` | 219 px | full-screen v12, quiet 4, no caption |
+| 3 | `qrtest 13 3 4` | 231 px | full-screen v13, quiet 4, no caption (425-char link) |
+| 4 | `qrtest 14 3 2` | 231 px | v14 at 3 px with a 2-module quiet zone |
+| 5 | `qrtest 21 2 2` | 210 px | v21 at 2 px (the share area holds v21 at 2 px quiet 2 as well) |
+| 6 | `qrtest 23 2 2` | 226 px | v23 full-screen at 2 px quiet 2 |
+| 7 | `qrtest 24 2 2` | 234 px | v24 full-screen at 2 px quiet 2 - the largest at quiet 2 |
+| 8 | `qrtest 25 2 1` | 238 px | v25 only at quiet 1 (`qrtest 25 2 2` is refused, box 242) |
+
+For each row: run the command, scan with the phone, note whether it reads, what the results page labels it ("QR scan test v<NN> <N>px"), and from how far away it still reads; then BACK (or `qrtest stop`) to leave. Record one row per scan in section 3.
+
 ### T20 hardware plan summary
 
 Handover (T20) and journal (T21) were built on the host only; nothing here is hardware-verified yet. First hardware run: T20 with the CJ21 (confirm the 300 ms CC detach makes the charger drop PD and offer QC3/AFC/FCP; measure the 20 s timeout), then T21 steps 1 to 5.
