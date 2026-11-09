@@ -1126,7 +1126,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     session_ = in.session; resets_ = link_resets(in.pd);
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
-    rp_restart_ = false; attach_max_mv_ = 0;
+    rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = hunt_reject_until_ = 0; auth_open_ = false;
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
@@ -1490,7 +1490,7 @@ void Runner::begin_unit(Unit u, Input in) {
     }
     unit_ = u; mode_ = mode(u);
     attached_ = silent_ = ending_ = false; attach_try_ = 0; pd_retry_ = cut_index_ = SIZE_MAX;
-    rp_restart_ = false; attach_max_mv_ = 0;
+    rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false;   // a detach/attach boundary: the window does not cross it
     unit_ms_ = in.now; pre_ms_ = 0;
     if (mode_ == Mode::Legacy) env_.phase(Phase::Handover, index_);   // journal marker BEFORE the detach: a reboot from here is a skipped handover
@@ -1529,7 +1529,7 @@ void Runner::poll_detach(Input in) {
 }
 void Runner::begin_attach(Input in) {
     state_ = State::Attach; att_ = Att::Caps; att_ms_ = in.now; stable_ = dark_ = false;
-    rp_restart_ = false; attach_max_mv_ = std::max(in.vbus_mv, 0);
+    rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = std::max(in.vbus_mv, 0);
     detached_ = false; legacy_active_ = mode_ == Mode::Legacy;
     wait_ = pd::VbusWait(); wait_.begin(in.now);
     if (selfpwr_) { env_.hold(mode_); return; }
@@ -1537,11 +1537,12 @@ void Runner::begin_attach(Input in) {
     env_.attach(mode_);
 }
 // The unit's charger never came back: the rows fail with NoReattach, or, when no list was ever heard (not a PD source), are skipped.
-// A granted PDO 1 contract (PS_RDY seen) that kAttachContractMs ran out on with VBUS outside vSafe5V fails WrongVoltage instead
-// (pattern shared-bus-split), with the highest VBUS seen during the wait, not the reading at the timeout.
+// A PDO 1 contract whose PS_RDY was seen during the wait (contract_wrong_, latched in poll_attach) with VBUS outside vSafe5V
+// fails WrongVoltage instead (pattern shared-bus-split), with the highest VBUS seen during the wait, not the reading at the timeout.
 void Runner::fail_unit(Input in, const pd::SourceCaps& caps, Reason reason, int measured_mv) {
     if (late_pd_ && !caps.valid && !evidence_.num_pdos) replan_pd(caps, in, true);   // no PD source at all: the plan says NoOffer
-    const int measured = reason == Reason::WrongVoltage ? std::max(attach_max_mv_, 0) : measured_mv;
+    const int measured = reason == Reason::WrongVoltage ? std::max(attach_max_mv_, 0)
+                                                        : (measured_mv >= 0 ? measured_mv : in.vbus_mv);   // -1 default: the live reading
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
         if (s.verdict != Verdict::Pending || unit_of(s) != unit_) continue;
         s.verdict = Verdict::Fail; s.reason = reason;
@@ -1571,15 +1572,21 @@ void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {  
         ending_ = true; begin_detach(in);
         return;
     }
+    // The highest VBUS of the wait and the wrong-contract latch, updated on every poll of the wait (both phases): a
+    // WrongVoltage failure records the max, not the reading at the timeout, and PS_RDY at PDO 1 seen with VBUS outside
+    // vSafe5V stays latched even after the source tears the port down (pattern shared-bus-split: the splitter cuts
+    // VBUS+Rp before kAttachContractMs runs out, so the fail sites below cannot re-ask the sink state).
+    if (in.vbus_mv > attach_max_mv_) attach_max_mv_ = in.vbus_mv;
+    if (in.pd.state == pd::SinkState::Ready && in.pd.pos == 1 && !safe5(in.vbus_mv)) contract_wrong_ = true;
     if (att_ == Att::Caps) {
         const auto st = wait_.update(in.now, in.vbus_mv, caps.active_cc != 0, caps.valid);
         if (st == pd::VbusWait::State::Waiting) return;
-        if (st != pd::VbusWait::State::Ready || !caps.valid || !caps.active_cc) { fail_unit(in, caps); return; }
+        if (st != pd::VbusWait::State::Ready || !caps.valid || !caps.active_cc) {
+            fail_unit(in, caps, contract_wrong_ ? Reason::WrongVoltage : Reason::NoReattach); return;
+        }
         att_ = Att::Contract; att_ms_ = in.now;
         if (late_pd_) replan_pd(caps, in, true);
     }
-    // The highest VBUS of the wait: a WrongVoltage failure records this, not the reading at the timeout.
-    if (in.vbus_mv > attach_max_mv_) attach_max_mv_ = in.vbus_mv;
     // A source-side drop (Rp gone) during the attach wait restarts the wait once (pattern slow-rp-wake: the standby
     // pull-up answers ~1.1-1.7 s after a steady Rd) instead of letting the kAttachContractMs timer run on.
     if (!caps.active_cc && !rp_restart_) {
@@ -1591,11 +1598,10 @@ void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {  
     const bool late = in.now - att_ms_ >= kAttachContractMs;
     if (!settled && !(late && caps.valid && safe5(in.vbus_mv))) {
         if (late) {
-            // PS_RDY at PDO 1 with VBUS outside vSafe5V: the source holds the wrong voltage on the 5 V contract
-            // (pattern shared-bus-split) - that is not "no PD after re-attach": PD came back, the voltage was wrong.
-            if (caps.valid && in.pd.state == pd::SinkState::Ready && in.pd.pos == 1 && !safe5(in.vbus_mv))
-                fail_unit(in, caps, Reason::WrongVoltage);
-            else fail_unit(in, caps);
+            // PS_RDY at PDO 1 was seen during the wait with VBUS outside vSafe5V (contract_wrong_): the source holds
+            // the wrong voltage on the 5 V contract (pattern shared-bus-split) - that is not "no PD after re-attach":
+            // PD came back, the voltage was wrong.
+            fail_unit(in, caps, contract_wrong_ ? Reason::WrongVoltage : Reason::NoReattach);
         }
         return;
     }
@@ -1690,7 +1696,7 @@ Reason Runner::resume(Input in, bool confirmed) {
     const size_t first = pick();
     unit_ = first == SIZE_MAX ? Unit::Count : unit_of(steps_[first]); mode_ = unit_ == Unit::Count ? Mode::Pd : mode(unit_);
     attached_ = first != SIZE_MAX && mode_ == Mode::Pd; detached_ = ending_ = silent_ = legacy_active_ = false; attach_try_ = 0; unit_ms_ = in.now;
-    rp_restart_ = false; attach_max_mv_ = 0;
+    rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = sag_cut_ = sag_open_ = false;
     reason_ = Reason::None; loaded_ = false; suspended_ = false;
     selfpwr_ = in.self_powered; adopt_ = true; held_ = false; jwait_ms_ = 0;   // the page arms the spoof/cable now: that session change is not a loss

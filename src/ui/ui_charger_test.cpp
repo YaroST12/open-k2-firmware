@@ -37,11 +37,12 @@
 
 namespace k2 {
 // A reason as the screen words it. charger_test::name() is the vocabulary the card export, the web tools and the report cards
-// share (it never changes for a display budget); the two reasons whose shared name does not fit the 26-27 cell lines say it shorter.
+// share (it never changes for a display budget); the reasons whose shared name does not fit the 26-27 cell lines say it shorter.
 const char* reason_text(charger_test::Reason r) {
     switch (r) {
     case charger_test::Reason::Release: return "VBUS not safe 5V";
     case charger_test::Reason::ShutOff: return "Source shut off: replug";
+    case charger_test::Reason::WrongVoltage: return "wrong V on 5V contract";
     default: return charger_test::name(r);
     }
 }
