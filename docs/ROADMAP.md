@@ -186,6 +186,28 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     8. **`tools/k2_remote.py` cannot decode the new reason** (#42 `Withdrawn`): `ct_start.py` crashed at the summary with
        `FrameError: invalid charger-test row`. Add it to the decoder (and `card.js`/`k2_qr.py` if carried), with a test.
     9. A re-announce that changes nothing still logs "re-plan: N rows follow, 0 withdrawn, 0 back" on every run (item 2).
+  - **Restart rules for a mid-run re-announce** (user decision 2026-11-09, from the runs above; they extend items 1-6 of
+    the Fix and replace any all-or-nothing path left in the runner):
+    1. Settle first: after any new list (Source_Capabilities, or a complete EPR_Source_Capabilities outside the K2's own
+       EPR entry/exit) send no Request until the list has been unchanged for `kListSettleMs` (~1500 ms). Each list that
+       arrives inside the window restarts it. The sink's single-Request gate still applies.
+    2. The row in flight: if its voltage (fixed) or target (PPS/AVS range) is still offered, restart it at the new slot
+       and current word; the restart is not a try (`tries` counts only source failures). Not offered: Withdrawn, then
+       release to 5 V through the sink gate.
+    3. Pending rows follow per row: still offered (also at a lower current, user decision above) -> keep at the new word;
+       gone -> Withdrawn; offered again -> revived (pending), as long as the unit has not ended.
+    4. End-of-unit sweep: before the PD unit closes, re-check the Withdrawn rows once against the current list (after a
+       settle) and run the ones that came back. Withdrawn stays only for rows still not offered then.
+    5. `CapsChanged` ("offers changed") only for a different charger: another wire revision, or no list back within
+       `kCapsReturnMs` after a detach / Hard Reset. Never for a re-split while attached.
+    6. Flapping is not a failure: no counter that gives up; keep settling and re-planning. The card and journal note
+       "source rebalanced Nx" (count only re-plans that changed the plan, item 2 of the review).
+    - Tests (red first, `tests/test_charger_test.cpp`): two lists 300 ms apart -> one Request, after the second settles;
+      re-split during row 0 (5 V 3 A -> 1.5 A, as an EPR_Source_Capabilities) -> row 0 restarts and passes, tries=0;
+      re-split during 15 V -> 15/20/28 V rows keep at the new words, PPS rows Withdrawn; list restored before the unit
+      ends -> sweep runs the PPS rows; wire revision change -> `CapsChanged`.
+    - Hardware: the splitter runs above (`ct_start.py --units pd`, Rd pinned on CC2 until `slow-rp-wake` lands), second
+      device plugged at "Running" and unplugged later: no row ends `CapsChanged`, the card shows "rebalanced".
     Not a K2 bug, for the quirks doc: on this splitter every PPS Request is Accepted, VBUS then falls 5 V -> 2 V instead
     of rising, PS_RDY is sent anyway and the Rp drops ~500 ms later (`pps-accept-then-collapse`, `A2-runlog.txt`; the
     card's "source lost" fail is correct). EPR 28 V passes through the splitter when its budget allows.
