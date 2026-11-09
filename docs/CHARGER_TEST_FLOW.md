@@ -344,6 +344,11 @@ Back, and treats Review after a "waiting" as the K2's refusal. `tools/ui_walk.py
 device had" after a pick (`None`), since Back lands on the pick in force.
 
 The Refuse stage (12) explains the guard's refusal and offers `Start anyway`, `Start, cable OFF` and `Cancel`.
+It has a second reason, `refuse_late_` ("Self-powered", footer "Cable arrives after attach"): a START with an
+identity on a self-powered or bus-powered K2 (`self_supplied()`) whose guard did not already refuse. Such a K2 boots from
+the charger's VBUS, so the Ra can only follow the charger's attach, and a charger that reads the cable at attach
+(`cable-look-at-attach` in `CHARGER_QUIRKS.md`) has already decided without it. The choices and the recording are the
+same (`Start anyway` is bit 7 of the guard byte).
 `Start anyway` arms the identity against the guarded reading. The run records it: the
 journal's meta byte 19 (`RunMeta.guard`: 0 = not judged, else topology + 1, bit 7 = started anyway), the report card's
 `Cable.flags` (bits 3..5 = guard + 1, bit 6 = started anyway) and, in the card JSON, `"guard":"<unknown|none|cable|direct>"`
@@ -510,6 +515,16 @@ unit in the journal's `at.rec` entry, across resumes). Losses 1 and 2 resume the
 rows are skipped with the reason "rebooted 3x" (`Reason::RebootLimit`) and the run continues with the next unit; it never
 stops because of this. A suspend with the K2 still running (VBUS dipped and came back) is not charged to the budget, it is
 bounded by `kMaxResumes` (16 per run).
+
+**A cable identity cannot reach a charger that reads it at attach.** A self-powered K2 boots from the charger's VBUS, which
+exists only after the charger decided on its attach; the Ra (PC13 high, CC1) can only follow. Measured on the CUKTECH 10
+GaN Ultra 120 W (`runs/selfpwr-6a`): the SOP' Discover Identity comes about 213 ms after the attach and only when the Ra
+was there first; a Ra raised 160 ms after the Rd, 12 s into a live contract or after a Soft_Reset re-announce gives no
+cable look, and the charger offers the 3 A caps of an unmarked cable. An automatic warm reboot (the pin is kept, so there
+is no fresh attach) and a guided replug holding PLUS (the same order) cannot change that, so neither is built. The Ra is
+still armed beside the self-hold contract (`emkra::Ctx::self_hold`, best effort: it serves a charger that reads the cable
+later), START with an identity shows the "Self-powered" warning (Refuse stage, above), and the footer of a refused arming
+states the real reason (`emkra::refuse_footer`). For 6 A rows use a HID-powered K2.
 
 The Review note reads "Self-powered: VBUS stays up"; the card records it (cable flags bit 2), the Cards page shows
 "self-powered" in its stats line, the JSON cable object gains `"self_powered":1`, and the card summary header ends in
