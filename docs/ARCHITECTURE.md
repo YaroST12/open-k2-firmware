@@ -53,7 +53,7 @@ checked against the code or hardware when this was written.
    at 0x08004400) and jumps through the vector table at 0x08003800.
 2. `Reset_Handler` (`src/drivers/startup.cpp`), in this order: VTOR = 0x08003800, CPACR (CP10/CP11, FPU on),
    clear NVIC ICER/ICPR, copy `.data` from flash, zero `.bss` (this includes the `.mode_*` overlay
-   region), paint both stacks with 0xA5A5A5A5 (the watermark behind `stack_free` / `msp_free`), switch
+   region; `.noinit` sits below `_sbss` and is deliberately NOT zeroed), paint both stacks with 0xA5A5A5A5 (the watermark behind `stack_free` / `msp_free`), switch
    thread mode to the PSP (CONTROL.SPSEL, top `_psp_top`; the naked trampoline then calls `k2_reset_main`),
    run `.preinit_array` / `.init_array`, call `main`. `main` enables the MPU stack guard in `fault::init()`.
 3. `main` (`src/core/main.cpp`), in this order: `sysreset::capture_flags` (reset cause), VTOR again,
@@ -118,6 +118,7 @@ RAM is 96 KB at 0x20000000 (`link.ld`); never touch SRAM above it. Layout, low t
 | Region | Content |
 | :--- | :--- |
 | `.data` | initialised data and `.ramfunc` (flash programming runs from RAM); about 0.9 KB |
+| `.noinit` | the Rd intent marker's SRAM canary (`src/core/rd_comeback.cpp`, `rdintent::Canary`): NOLOAD, **not zeroed at reset** (the zero loop starts at `_sbss`), so it survives warm resets and whatever dark period SRAM itself survives; 16 B |
 | `OVERLAY` `.mode_net` / `.mode_drive` / `.mode_sniff` / `.mode_trans` | one shared region at the same address, sized to the largest tenant. Default build (`K2_NET=0`): 16 KB, the D+/D- edge buffer (`.mode_sniff`) is the largest, the transition recorder is 15.9 KB, the drive image about 8 KB. `K2_NET=1` build: about 24 KB, lwIP + NCM + DHCP + HTTP (`.mode_net`) is the largest, which is the ~8 KB the default build gets back |
 | `.bss` | everything else (about 55 KB in the build inspected, 859f858) |
 | `.stack_guard` | 128 B no-access MPU region (`_sguard`..`_eguard`, 128-aligned) right above `.bss` (`end`/`_end` symbols for newlib's `_sbrk`) |

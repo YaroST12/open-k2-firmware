@@ -97,6 +97,20 @@ SECTIONS
     _edata = .;
   } > RAM AT > FLASH
 
+  /* The .noinit canary of the Rd intent marker (src/core/rd_comeback.cpp): NOT zeroed at reset - Reset_Handler's zero loop
+     starts at _sbss below - so it survives warm resets and whatever dark (VBUS loss) SRAM itself survives. NOLOAD: nothing is
+     copied into it, its content at boot is whatever SRAM holds (the canary's magic+check say whether that is a live voucher).
+     sysreset::wipe_and_reset (the DFU entry) zeroes all of SRAM, so a reflashed K2 never carries one. */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(8);
+    _snoinit = .;
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(8);
+    _enoinit = .;
+  } > RAM
+
   /* Zeroed RAM starts here: the USB-mode overlay first, then .bss (Reset_Handler zeroes both). */
   . = ALIGN(8);
   _sbss = .;
