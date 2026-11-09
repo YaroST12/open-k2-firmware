@@ -285,7 +285,47 @@ void test_the_rescan_kind() {
 }
 }  // namespace
 
+// Hardware 2026-11-09 (build b00178c): a plain boot on HID power with a record left on the volume came up with Rd on CC2 at 30 ms,
+// Requested 12 times over 3 s and collided with the phone behind the K2. The aux rail says who powers the K2 (about 5 V from a
+// host, nothing on a charger-powered or comeback boot), and a record never describes a boot that a host powers.
+void test_a_host_powered_boot_ignores_the_record() {
+    using bootmode::Mode;
+    CHECK_EQ(host_powered(5041), true);       // the HID boot of the capture
+    CHECK_EQ(host_powered(4600), true);
+    CHECK_EQ(host_powered(0), false);         // comeback / charger-powered: the rail is dead
+    CHECK_EQ(host_powered(300), false);
+    CHECK_EQ(host_powered(kHostAuxMv - 1), false);
+    CHECK_EQ(host_powered(kHostAuxMv), true);
+    // The record is read, but a host-powered cold boot stays plain whatever it says.
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2, true)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kReattachB2, true)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession1, true)), int(Mode::Plain));
+    // Without a host the decision is unchanged.
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2, false)), int(Mode::PlusRdCc2));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2)), int(Mode::PlusRdCc2));
+    // A key held decides regardless (the user asked for the Rd).
+    CHECK_EQ(int(boot_mode(Mode::PlusRdCc2, false, kNone, true)), int(Mode::PlusRdCc2));
+    CHECK_EQ(int(boot_mode(Mode::OkRdCc1, false, kNone, true)), int(Mode::OkRdCc1));
+}
+
+// A sink behind the K2 (the Link's inline latch, or another sink's Request on the wire) is the end of a self-powered session: the K2
+// presents no Rd for it, so no record may bring the Rd back on the next boot.
+void test_a_sink_downstream_scrubs_the_record() {
+    Follower f;
+    CHECK_EQ(f.update({true, 2, true, false}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.wanted() == kSession2, 1);
+    CHECK_EQ(f.update({true, 2, true, false, kOff, true}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.wanted() == kNone, 1);
+    CHECK_EQ(f.update({true, 2, true, false, kOff, true}) == Follower::Act::Hold, 1);
+    Follower g;   // seen before the contract was ever Ready: the record is scrubbed at once, never written
+    CHECK_EQ(g.update({true, 2, false, false, kOff, true}) == Follower::Act::Apply, 1);
+    CHECK_EQ(g.wanted() == kNone, 1);
+    CHECK_EQ(g.update({true, 2, true, false, kOff, true}) == Follower::Act::Hold, 1);
+}
+
 int main() {
+    test_a_host_powered_boot_ignores_the_record();
+    test_a_sink_downstream_scrubs_the_record();
     test_record_format();
     test_the_rescan_kind();
     test_damage_reads_as_none();

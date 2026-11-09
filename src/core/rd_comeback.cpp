@@ -6,6 +6,7 @@
 #include "k2/core/log.hpp"
 #include "k2/core/rescan_bridge.hpp"
 #include "k2/core/storage.hpp"
+#include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/systick.hpp"
@@ -51,6 +52,19 @@ const char* kind_name(IntentKind k) {
     return emk_spoof::arm(e.rec, quirks) == emk_spoof::Err::Ok;
 }
 
+// The aux rail, once, before the Rd is decided: a USB host feeds it ~5 V, a comeback boot (powered through the charger's Rp by our own
+// Rd) has it dead. Only called when a record exists. The ADC starts here (its init is idempotent) and the first full ring takes ~15 ms;
+// no reading in 40 ms = unknown = not a host (the comeback is kept, as before).
+bool host_powered_now() {
+    if (!adc::init()) return false;
+    const std::uint32_t t0 = systick::millis();
+    while (systick::millis() - t0 < 40) {
+        adc::poll();
+        if (const auto r = adc::read()) return rdintent::host_powered(static_cast<int>(r->aux_mv));
+    }
+    return false;
+}
+
 void release() {
     g_pending = false;
     if (g_spoof) emk_spoof::disarm();
@@ -67,7 +81,10 @@ bootmode::Mode begin(bootmode::Mode keys, bool warm) {
     fs::Fs& f = fs::instance();
     if (f.mount() != fs::Err::Ok) return keys;   // never formats here: the ordinary init does, after the Rd is decided
     const Intent in = rdintent::load(f);
-    const bootmode::Mode mode = rdintent::boot_mode(keys, warm, in);
+    const bool host = in.kind != IntentKind::None && host_powered_now();
+    if (host) K2LOG("[RDI] record %s pin=%u ignored: a USB host powers this boot (aux rail up), plain boot stays passive\n", kind_name(in.kind),
+                    static_cast<unsigned>(in.pin));
+    const bootmode::Mode mode = rdintent::boot_mode(keys, warm, in, host);
     g_pending = mode != keys;
     if (g_pending) g_found = in;
     return mode;
@@ -126,6 +143,7 @@ void poll() {
     s.pin = s.pinned ? pin : 0;
     s.ready = fusb302::sink_status().state == pd::SinkState::Ready;
     s.host = usb::configured();
+    s.sink_downstream = fusb302::sink_downstream();
     s.cable = g_run_cable;
     if (g_follower.update(s) == rdintent::Follower::Act::Apply) g_dirty = true;
     if (!g_dirty || pdtrace::since_activity_ms() < kQuietMs) return;

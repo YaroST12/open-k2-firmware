@@ -13,6 +13,8 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         rx_at_detach_ = last_rx_;
         waiting_ = false;
         own_seen_ = false;   // inline_ stays: a collapse of VBUS is not proof that the sink left (see kInlineHoldMs)
+        own_ever_ = false;
+        foreign_timing_ = false;
     } else {
         waiting_ = true;  // old data stays until new Source_Capabilities arrive (or kWaitingCapsMs pass)
         new_source_ = true;
@@ -79,8 +81,17 @@ void Link::update(const LinkInput& in) {
         // below 5.5 V while attached. A charger already sitting at 9 V is not a sink.
         // "Ours" lasts kOwnHoldMs past the end of the K2's trigger: a trigger that gave up releases the data lines and the
         // charger answers a few ms later, when the trigger is already Failed or Idle.
-        if (in.own_contract) { own_seen_ = true; own_last_ms_ = in.now_ms; }
+        if (in.own_contract) { own_seen_ = true; own_ever_ = true; own_last_ms_ = in.now_ms; }
         const bool own_recent = in.own_contract || (own_seen_ && in.now_ms - own_last_ms_ <= kOwnHoldMs);
+        // The lines alone: a PD-level VBUS nobody on this side asked for, or a sink's Rd on CC (see kInlineForeignMs).
+        const bool foreign_now = !own_recent && ((in.vbus_known && in.vbus_mv > kInlineVbusMv && !own_ever_) || in.far_sink_cc);
+        bool foreign = false;
+        if (foreign_now) {
+            if (!foreign_timing_) { foreign_timing_ = true; foreign_since_ = in.now_ms; }
+            foreign = in.now_ms - foreign_since_ >= kInlineForeignMs;
+        } else {
+            foreign_timing_ = false;
+        }
         bool rise = false;
         if (in.vbus_known) {
             if (in.vbus_mv <= kInlineVbusMv) vbus_was_low_ = true;
@@ -90,8 +101,8 @@ void Link::update(const LinkInput& in) {
             }
         }
         if (!inline_) {
-            if (loaded || in.requests != requests_at_attach_ || rise) { inline_ = true; quiet_since_ = in.now_ms; }
-        } else if (loaded || new_request || rise) {
+            if (loaded || in.requests != requests_at_attach_ || rise || foreign) { inline_ = true; quiet_since_ = in.now_ms; }
+        } else if (loaded || new_request || rise || foreign_now) {
             quiet_since_ = in.now_ms;    // live traffic: keep the guard
         } else if (in.now_ms - quiet_since_ > kInlineQuietMs) {
             inline_ = false;             // the sink left without a CC detach: Auto-CRC comes back

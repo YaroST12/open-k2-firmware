@@ -106,6 +106,10 @@ std::uint32_t pd_quiet_ms();
 // Inline does not change the chip: it is passive (Auto-CRC off) except during an active operation.
 void set_inline(bool on);
 bool inline_mode();
+// A sink sits behind the K2: the inline latch, or another sink's Request on the wire in this attach (the fast proof, before the
+// Link has a tick to latch). While true the K2 presents no Rd, sends no Request and no reply for the device behind it, and
+// opens no CC line. The far-sink half ends with the attach; the latch is the Link's to clear.
+bool sink_downstream();
 
 // A run start (charger test START, PD trigger / request) presents Rd itself while no sink is inline: on the
 // line that sees Rp, both lines while none is detected, so a charger alone on the bottom port turns VBUS on
@@ -201,6 +205,10 @@ void sink_release();
 void sink_hard_reset();  // user-requested hard reset
 void sink_set_cap(std::uint32_t mv);  // highest voltage a request may ask for (from the power monitor)
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv);  // measured CC voltages; inline, no sink Rd near 1.5 V = sink left. Also stored as the latest net levels (g_cc1_mv/g_cc2_mv) for the attach scan's Rd-window cross-check and its re-run on fresh levels while a line is attached with no PD decoded yet; -1 = unknown
+// A sink's Rd level (the sink band, about 1.5 V) on a CC line while the K2 pulls none down itself, from the latest sink_cc() levels:
+// a phone or laptop on the other end of an inline K2, visible even when no PD message is ever exchanged. False while the K2's own
+// Rd is on (the level is then its own divider) and while the levels are unknown.
+bool sink_cc_far();
 void sink_vbus(std::int32_t mv);      // measured VBUS; the engine aborts to 5 V above target + 10 % / the cap
 const pd::SinkStatus& sink_status();
 // The sink's record of the last Request it sent and the Xiaomi chain around it (diagnostics for a refused 6 A row).

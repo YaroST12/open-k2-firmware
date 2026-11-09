@@ -87,6 +87,8 @@ std::int32_t g_vbus_mv = -1;  // last VBUS reading from sink_vbus(); -1 = unknow
 bool g_new_source = false;  // next Source_Capabilities on SOP starts a fresh source
 std::int32_t g_cc_sink_mv = -1;  // the CC voltage closest to the sink-Rd band (-1 unknown)
 std::int32_t g_cc1_mv = -1, g_cc2_mv = -1;  // latest ADC net levels from sink_cc(); -1 = unknown
+std::uint8_t g_sw0 = 0;          // the last SWITCHES0 written: whether the K2 itself pulls a CC line down (PDWN1/PDWN2)
+bool g_far_sink = false;         // a sink's Rd level on CC while the K2 presents none (sink_cc_far())
 std::array<pd::CcSample, 6> g_scan_samples{};   // the last attach scan's comparator samples, for the Rd-window re-check
 unsigned g_scan_sample_n = 0;
 std::uint32_t g_cc_recheck_at = 0;   // rate limit of the Rd-window re-check (kCcRecheckMinMs)
@@ -184,7 +186,10 @@ void boot_note(std::uint8_t kind, std::uint8_t val) {
 bool wr(Reg r, std::uint8_t v) {
     const bool ok = i2c::write_reg(Bus::Fusb, kAddr, r, v);
     pdtrace::reg_write(r, v, ok);
-    if (r == kSwitches0) boot_note(0, v);
+    if (r == kSwitches0) {
+        if (ok) g_sw0 = v;
+        boot_note(0, v);
+    }
     return ok;
 }
 bool rd(Reg r, std::uint8_t& v) { return i2c::read_reg(Bus::Fusb, kAddr, r, v); }
@@ -374,6 +379,7 @@ void flush_rx() { wr(kControl1, ctl1()); }
 // Back to the passive profile after init and every detach: nothing ACKs, nothing transmits.
 void apply_rd();
 std::uint8_t idle_rd();
+bool downstream_now();
 
 void configure_passive() {
     g_crc_on = false;
@@ -413,6 +419,7 @@ void update_crc(bool crc_busy, bool rd_busy) {
 // adds its own presentation (both lines while no CC is known), but never a second Rd next to a key mode's pin: Rd on both lines
 // is the Debug Accessory signature (pd::key_rd_lines).
 std::uint8_t idle_rd() {
+    if (downstream_now()) return 0;   // a sink behind the K2 has its own Rd on the line: ours would be a second sink
     const std::uint8_t run = g_rd_start ? pd::key_rd_lines(emkra::run_rd_lines(g_ra, g_inline, 0), g_pin_rd, 0) : std::uint8_t(0);
     return std::uint8_t(g_pin_rd | run) & (kPdwn1 | kPdwn2);
 }
@@ -422,17 +429,27 @@ bool inline_now() { return g_inline; }
 
 // A sink other than the K2 asked the source for power in this attach (a Request with the power-role bit clear: the K2 never
 // hears its own TX). The wire shows it a UI tick before the Link latches inline, and it also covers a K2 plugged in after
-// the contract was made. Cleared with the attach (g_requests_base).
+// the contract was made. Cleared with the attach and with the detach (g_requests_base).
 bool far_sink_seen() { return g_engine.contract.requests != g_requests_base; }
+bool g_down_prev = false;       // downstream_now() at the last downstream_edge()
+void rebase_far_sink() {        // a new attach or a detach: no other sink's Request is on record any more
+    g_requests_base = g_engine.contract.requests;
+    g_down_prev = g_inline;     // the far-sink part is now false; a still-latched inline is no new edge
+}
+
+// A sink sits behind the K2: the Link latched it (held through a VBUS gap, see pd::kInlineHoldMs) or another sink's Request is on
+// the wire in this attach. The latch is the slow proof (UI-tick fed, blind during the boot's slow init), the Request the fast one.
+bool downstream_now() { return g_inline || far_sink_seen(); }
 
 // The K2 answers its partner (SOP replies, Sink_Capabilities, swaps) only when it is the one sink on the link.
-bool sole_sink() { return !inline_now() && !far_sink_seen(); }
+bool sole_sink() { return !downstream_now(); }
 
 // SWITCHES0 for the active line: the Rd the policy allows (pd_ccmode.hpp) plus the measured line.
 void apply_rd() {
     if (g_active_cc == 0) { wr(kSwitches0, idle_rd()); return; }
-    std::uint8_t lines = pd::rd_lines(g_pin_rd, g_rd_op, g_inline, g_active_cc);
-    if (g_rd_start) lines |= pd::key_rd_lines(emkra::run_rd_lines(g_ra, g_inline, g_active_cc), g_pin_rd, g_active_cc);
+    const bool down = downstream_now();
+    std::uint8_t lines = pd::rd_lines(g_pin_rd, g_rd_op, down, g_active_cc);
+    if (g_rd_start) lines |= pd::key_rd_lines(emkra::run_rd_lines(g_ra, down, g_active_cc), g_pin_rd, g_active_cc);
     // VCONN (experiment): the chip's supply goes onto the line opposite the active one, never onto a line we pull down.
     std::uint8_t vconn = 0;
     if (g_vconn_applied) {
@@ -466,7 +483,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     g_session.attach();
     g_detach.reset();
     g_attach_ms = systick::millis();
-    g_requests_base = g_engine.contract.requests;
+    rebase_far_sink();
     g_pd_traffic = false;
     g_pd_seen_attach = false;
     g_engine.sink = {};   // the sniffed Sink_Capabilities belong to the previous partner
@@ -834,7 +851,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             }
         }
         bool requested_now = false;   // one of the branches below already asked for PDO 1 in this frame
-        if (sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap && g_sink.take_resume() && !inline_now() && g_active_cc != 0 &&
+        if (sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap && g_sink.take_resume() && !downstream_now() && g_active_cc != 0 &&
             !g_legacy_only) {
             // After a source hard reset the contract is gone: ask for PDO 1 (5 V) again on our own.
             const pd::Err e = g_sink.trigger({1, 0, 0}, now);
@@ -863,10 +880,10 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
         if (sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap) {
             // A self-powered K2 (pinned Rd) asks for 5 V at a modest current and never lets a failed attempt leave the source
             // without a Request: Failed counts as idle there, so the next re-announce is asked again (nothing sends a Hard Reset).
-            const bool hold = !g_rd_start && pd::self_hold_wanted(g_pin_rd, inline_now(), g_legacy_only);
+            const bool hold = !g_rd_start && pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only);
             const pd::SinkState st = g_sink.status().state;
             const bool sink_idle = st == pd::SinkState::Idle || (hold && st == pd::SinkState::Failed);
-            if (pd::acked_caps_need_request(g_caps_acked, inline_now(), g_active_cc, g_legacy_only, sink_idle, g_prep.active(),
+            if (pd::acked_caps_need_request(g_caps_acked, downstream_now(), g_active_cc, g_legacy_only, sink_idle, g_prep.active(),
                                             requested_now)) {
                 const pd::Err e = g_sink.trigger({1, 0, hold ? pd::kSelfHoldMa : std::uint16_t(0)}, now);
                 pdtrace::mark(pdtrace::kMarkAutoReq, std::uint16_t((hold ? 0x300 : 0x200) | unsigned(e)));
@@ -1137,7 +1154,7 @@ std::uint32_t pd_quiet_ms() { return std::uint32_t(systick::millis() - g_last_rx
 
 void rescan() {
     if (g_legacy_only) return;   // the charger test holds the line quiet for a legacy fast-charge probe
-    if (inline_now()) {
+    if (downstream_now()) {
         // A real sink is attached: stay off the line. The source's next Source_Capabilities
         // (a sink Request, a charger re-announce) starts a new source in the engine.
         K2LOG("[PD] Rescan (inline): passive, waiting for the next Source_Capabilities\n");
@@ -1160,7 +1177,7 @@ void rescan() {
 }
 
 bool cc_open(std::uint32_t ms) {
-    if (inline_now() || ms < 1 || ms > 1000) return false;   // a live sink is attached: never open the lines
+    if (downstream_now() || ms < 1 || ms > 1000) return false;   // a live sink is attached: never open the lines
     K2LOG("[PD] CC open %u ms\n", static_cast<unsigned>(ms));
     pins::cc1_switch.clear();
     pins::cc2_switch.clear();
@@ -1184,6 +1201,7 @@ void set_inline(bool on) {
                 : "[PD] Inline cleared\n");
 }
 bool inline_mode() { return inline_now(); }
+bool sink_downstream() { return downstream_now(); }
 
 namespace {
 bool set_rd_for_run(bool on, bool keep_scan) {
@@ -1651,8 +1669,22 @@ void vconn_sync(std::uint32_t now) {
 // (it never transmits one). The explicit sink_hard_reset() tool is not covered.
 void sync_hard_reset_policy() { g_sink.set_never_hard_reset(g_pin_rd != 0); }
 
+// A sink behind the K2 became known (the inline latch, or another sink's Request on the line): whatever the K2 had started as the
+// device stops here. The sink engine drops its contract (no Request, no Soft Reset, no re-request) and the pin's Rd comes off.
+static void downstream_edge() {
+    const bool down = downstream_now();
+    if (down && !g_down_prev) {
+        if (g_sink.status().state != pd::SinkState::Idle) g_sink.detach();
+        apply_rd();
+        K2LOG("[PD] Sink downstream (inline=%d far request=%d): Rd off, no Request, no VDM answers\n", g_inline ? 1 : 0,
+              far_sink_seen() ? 1 : 0);
+    }
+    g_down_prev = down;
+}
+
 void active_tick() {
     const std::uint32_t now = systick::millis();
+    downstream_edge();
     sync_hard_reset_policy();
     prep_tick(now);
     const pd::EprInfo info_was = g_sink.status().epr_info;
@@ -1680,7 +1712,7 @@ void active_tick() {
                         .prep = g_prep.crc_wanted(),
                         .run_start = g_rd_start && !inline_now() && !g_legacy_only,   // legacy-only: no GoodCRC for the source's caps
                         .spoof = g_sop_prime_hook != nullptr,   // the armed spoof needs our GoodCRC on SOP', no Rd
-                        .self_hold = pd::self_hold_wanted(g_pin_rd, inline_now(), g_legacy_only)};   // pinned Rd: the brick feeds us, keep its PD alive
+                        .self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only)};   // pinned Rd: the brick feeds us, keep its PD alive
         // A Ready contract nobody holds counts only for kSinkIdleLingerMs after the last thing that used it.
         const bool engaged = in_flight || pd::rd_demand(d);
         const bool counts = g_contract_linger.update(now, engaged);
@@ -1779,8 +1811,11 @@ static void detach_reset(std::uint8_t status0) {
     // Passive: no SW_RES. It restores the chip's power-on SWITCHES0 (Rd on both lines) until the next
     // write, which a host and a dock negotiating through the K2 can see.
     wr(kReset, g_pin_rd != 0 ? std::uint8_t(kSwReset | kPdReset) : kPdReset);
-    wr(kSwitches0, g_pin_rd);
-    g_inline = false;
+    // A far sink belongs to one attach (g_requests_base moves on). The inline latch is the Link's: it holds it through a VBUS gap and
+    // clears it with set_inline(false), so a detach never clears it nor writes the pin's Rd back under it (hardware 2026-11-09: that
+    // write and the clear made a hub-powered K2 flap, Rd -> Request -> load -> inline -> VBUS collapse -> detach -> Rd again).
+    rebase_far_sink();
+    wr(kSwitches0, downstream_now() ? std::uint8_t(0) : g_pin_rd);
     g_rd_op = false;
     g_cc_sink_mv = -1;
     g_active_cc = 0;
@@ -2117,7 +2152,11 @@ void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
     auto dist = [](std::int32_t v) { const std::int32_t d = v - pd::kSinkBandCenterMv; return d < 0 ? -d : d; };
     g_cc_sink_mv = dist(cc1_mv) <= dist(cc2_mv) ? cc1_mv : cc2_mv;
+    // With no Rd of our own on any line, a level in the sink band is somebody else's Rd (the source's Rp into a sink behind the K2).
+    // With our Rd on, the level is the K2's own divider and says nothing: no verdict.
+    g_far_sink = (g_sw0 & (kPdwn1 | kPdwn2)) == 0 && g_cc_sink_mv >= 0 && pd::sink_present(g_cc_sink_mv);
 }
+bool sink_cc_far() { return g_far_sink; }
 void sink_vbus(std::int32_t mv) {
     g_vbus_mv = mv;
     g_sink.on_vbus(mv, systick::millis());
@@ -2245,7 +2284,7 @@ bool ra_set(bool on) {
     emkra::Ctx c;
     c.inline_sink = inline_now();
     c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
-    c.self_hold = pd::self_hold_wanted(g_pin_rd, inline_now(), g_legacy_only);   // the contract is our own 5 V hold
+    c.self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only);   // the contract is our own 5 V hold
     c.busy =g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
     c.pinned_rd = g_pin_rd;
     c.vconn = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;

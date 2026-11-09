@@ -101,7 +101,7 @@ void on_refresh(rescan::Result r, bool charger_test) {
     const pd::SinkStatus& ss = fusb302::sink_status();
     const pd::SourceCaps& caps = fusb302::caps();
     pd::SvCtx c;
-    c.inline_sink = fusb302::inline_mode();
+    c.inline_sink = fusb302::inline_mode() || fusb302::sink_downstream() || fusb302::sink_cc_far();   // possibly inline counts
     // A sink inline blocks every field with its reason; otherwise only a live contract (the Refresh's Get_Source_Cap went into the
     // sink's gate) is asked. A CC cycle or a PD-silent session leaves every field NotAsked.
     c.contract = c.inline_sink || (r == rescan::Result::Asked && ss.state == pd::SinkState::Ready && caps.valid);

@@ -16,9 +16,11 @@
 // Inline detection: the K2 sits between a charger and a real sink (a laptop). Anything that
 // touches Rd, the CC switches or transmits can then break the live contract, so every active
 // operation asks inline() first. It latches while attached on: more than 50 mA flowing, a sink's
-// Request decoded that the K2 did not send, or a VBUS rise above 5.5 V that the K2 did not cause
-// (own_contract false, and not within kOwnHoldMs of the K2's own trigger). VBUS merely being high is not enough: a charger can sit at 9 V alone.
-// It clears on detach, or after 2 s with no new Request and below 50 mA (Auto-CRC returns).
+// Request decoded that the K2 did not send, a VBUS rise above 5.5 V that the K2 did not cause
+// (own_contract false, and not within kOwnHoldMs of the K2's own trigger), or the lines alone: VBUS above 5.5 V with no contract of
+// the K2's own in this attach, or a sink's Rd on CC with no Rd of the K2 (kInlineForeignMs). "Possibly inline" is the default
+// until proven standalone. It clears only on proof: kInlineQuietMs with no load, no Request and no such evidence while attached,
+// or a detach that outlasts kInlineHoldMs.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -50,6 +52,9 @@ struct LinkInput {
     // its ~60-100 mA (LCD, MCU) reads as a load (hardware 2026-11-06, USB-A port, "Load attached" with nothing on the other
     // port). That much is not a sink.
     std::int32_t self_supply_ma = 0;
+    // A sink's Rd (about 1.5 V) on a CC line while the K2 presents none itself: something is plugged into the other end and
+    // announces itself as a sink. The driver decides it (fusb302::sink_cc_far()); false when unknown.
+    bool far_sink_cc = false;
 };
 
 // Allowance for the K2's own supply current while it runs on the measured VBUS (no USB host enumerated).
@@ -63,6 +68,11 @@ inline constexpr std::uint32_t kInlineQuietMs = 10000;
 // The inline state outlives a VBUS collapse (a hub or charger re-negotiating, a swap) for this long: "possibly inline" is the safe
 // state, the K2 stays passive through the gap. Detached longer than this = unplugged for real, the next attach starts standalone.
 inline constexpr std::uint32_t kInlineHoldMs = 15000;
+// "Possibly inline" from what the lines show, without any traffic: VBUS above vSafe5V that this K2 never asked for (it has had no
+// contract of its own in this attach), or a sink's Rd on CC with no Rd of the K2. A live dock - K2 - laptop contract is silent
+// to a K2 that booted into it. Continuous for this long before it latches (the K2's own contract ending, a sample glitch), and it
+// holds for as long as the evidence lasts: the quiet window only runs once the lines show nothing.
+inline constexpr std::uint32_t kInlineForeignMs = 1500;
 // A VBUS rise this soon after the K2's own trigger ended is still the K2's doing: a legacy trigger that gives up (abort,
 // reset_bus) releases D+/D- and the charger answers a few ms later, when fctrig is no longer Negotiating or Active.
 // The reset hold of the data lines is 500 ms; a real sink behind the K2 still latches by its current or its Request.
@@ -102,6 +112,9 @@ private:
     std::uint32_t requests_at_attach_ = 0, requests_seen_ = 0, quiet_since_ = 0;
     bool vbus_was_low_ = false;
     bool own_seen_ = false;
+    bool own_ever_ = false;   // the K2 had a contract of its own at any time since this attach: a high VBUS is then its doing
+    bool foreign_timing_ = false;
+    std::uint32_t foreign_since_ = 0;
     std::uint32_t own_last_ms_ = 0;
     bool vbus_low_ = false, cc_gone_ = false;
     bool low_timing_ = false, gone_timing_ = false;

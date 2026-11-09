@@ -526,7 +526,8 @@ void test_inline_drops_rd_and_detects_the_sink_leaving() {
     for (int i = 0; i < 8; i++) { g_ms += 20; fusb302::sink_vbus(5000); fusb302::sink_cc(3300, 100); fusb302::poll(); }
     CHECK_EQ(find_from("W 0C=02") >= 0, true);           // past 500 ms: detach
     CHECK_EQ(usb_has("the sink left"), true);
-    CHECK_EQ(fusb302::inline_mode(), false);
+    CHECK_EQ(fusb302::inline_mode(), true);              // the latch is the Link's (held kInlineHoldMs): a detach does not clear it
+    fusb302::set_inline(false);
 }
 
 // Inline (a real sink on the other port): after the sink left, the line stays at SWITCHES0 = 0 (no Rd in
@@ -547,6 +548,7 @@ void test_inline_rd_stays_off_after_a_detach_then_comes_back() {
     for (int i = 0; i < 30; i++) { g_ms += 20; fusb302::poll(); }
     CHECK_EQ(usb_has("Active CC detected"), true);
     CHECK_EQ(find_from("W 02=03"), -1);
+    fusb302::set_inline(false);
 }
 
 void test_inline_hold_ends_with_rd_back_even_when_nothing_is_there() {
@@ -557,6 +559,7 @@ void test_inline_hold_ends_with_rd_back_even_when_nothing_is_there() {
     g_log.clear();
     for (int i = 0; i < 85; i++) { g_ms += 20; fusb302::poll(); }      // 1.7 s: the hold is over
     CHECK_EQ(find_from("W 02=03"), -1);                  // plain boot: Rd never comes back (passive)
+    fusb302::set_inline(false);                          // the Link's latch outlives the detach: this test ends it
 }
 
 // Plain boot is the passive state: after a detach SWITCHES0 is left at 0 (no Rd); a cheap charger
@@ -2915,6 +2918,159 @@ void test_seek_never_moves_a_pinned_rd() {
     power_cycle_forget_pin();
 }
 
+// ---- A sink behind the K2 is the end of the K2's own Rd and Requests (hardware 2026-11-09, build b00178c) ----
+// Hub - K2 - phone: the K2 booted with Rd on CC2 from the first write (a stale record), Requested PDO 1 at 272 ms, and went on
+// Requesting on every re-announce (12 times over 3 s) until the phone's own Request collided with one. The inline latch alone was
+// too slow and too narrow: the pinned boot's Rd, the self-hold Request, the VDM replies and the Rescan's CC open each looked at
+// the latch only. One rule now: a sink downstream (the latch, or another sink's Request in this attach) means no Rd of ours, no
+// Request of ours, no reply for the device behind us, and nothing that opens the lines.
+void pixel_requests() {
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x1001912Cu});          // the phone's own Request (power-role bit clear), PDO 1
+    push_frame(0xC0, hdr(1, 0, true, 0), {});                      // the source's GoodCRC for it
+    service_ms(5);
+}
+
+void test_a_far_sinks_request_takes_the_pinned_rd_off_and_ends_the_k2s_requests() {
+    const unsigned pin = self_hold_boot(0);                         // PLUS: Rd on CC2, self-hold on
+    CHECK_EQ(pin, 2u);
+    service_ms(3);
+    g_txfifo.clear();
+    send_caps_5v_9v(0);
+    int passes = 0;
+    while (passes < 10 && !pdo_request_on_the_wire()) { service_ms(1); ++passes; }
+    CHECK_EQ(pdo_request_on_the_wire(), true);                      // before any evidence the first Request goes out: unavoidable
+    CHECK_EQ(sw0_rd(), pin);
+    CHECK_EQ(fusb302::sink_downstream(), false);
+    pixel_requests();                                               // the evidence: another sink asks the source
+    settle_ms(60);
+    CHECK_EQ(fusb302::sink_downstream(), true);
+    CHECK_EQ(sw0_rd(), 0u);                                         // our Rd comes off: the phone's Rd alone is on the line
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Idle));   // the Request is the phone's now, not ours
+    const std::size_t from = g_log.size();
+    g_txfifo.clear();
+    for (unsigned id = 1; id <= 4; ++id) {                          // the source re-announces its caps (12 Requests of ours in the capture)
+        send_caps_5v_9v(id);
+        service_ms(40);
+    }
+    CHECK_EQ(pdo_request_on_the_wire(), false);
+    CHECK_EQ(fifo_loads(from), 0);
+    CHECK_EQ(sw0_rd(), 0u);
+    CHECK_EQ(usb_has("[PD] Sink downstream"), true);                // the decision is in the log
+    self_hold_end();
+}
+
+// Same with the inline latch alone (the Link got there first): the pinned boot's Rd is already off, and nothing is answered.
+void test_a_far_sink_downstream_keeps_the_k2_off_the_line_for_vdms_and_resets() {
+    self_hold_boot(0);
+    service_ms(3);
+    g_txfifo.clear();
+    send_caps_5v_9v(0);
+    service_ms(10);
+    pixel_requests();
+    settle_ms(60);
+    const std::size_t from = g_log.size();
+    g_txfifo.clear();
+    push_frame(0xE0, hdr(0x0F, 1, false), {kDiscoverIdentityReq});   // the phone asks the source for its identity
+    service_ms(10);
+    push_frame(0xE0, hdr(0x0D, 0, false, 1), {});                    // the phone's Soft_Reset
+    service_ms(10);
+    push_frame(0xE0, hdr(0x0F, 1, true), {kDiscoverIdentityReq});    // the source's identity request, to the phone
+    service_ms(10);
+    push_frame(0xE0, hdr(8, 0, true), {});                           // Get_Sink_Cap from the source
+    service_ms(10);
+    CHECK_EQ(fifo_loads(from), 0);
+    CHECK_EQ(sw0_rd(), 0u);
+    self_hold_end();
+}
+
+// The Link holds the inline latch across a VBUS gap (kInlineHoldMs), so the driver must not drop it at a detach either: a detach
+// that wrote the pin's Rd back and cleared the latch is what made the capture flap (Rd, Request, VBUS back with load, inline, Rd off,
+// VBUS collapses, again). While the latch holds, the pinned Rd stays off through the detach and the scans after it.
+void test_inline_survives_a_detach_and_the_pinned_rd_stays_off_until_the_link_clears_it() {
+    const unsigned pin = self_hold_boot(0);
+    CHECK_EQ(pin, 2u);
+    service_ms(3);
+    send_caps_5v_9v(0);                                             // the hub's caps: the K2 is attached
+    service_ms(10);
+    fusb302::set_inline(true);                                      // the Link: a load, a foreign Request
+    CHECK_EQ(sw0_rd(), 0u);
+    for (int i = 0; i < 10; i++) { g_ms += 20; fusb302::sink_vbus(5000); fusb302::sink_cc(100, 1500); fusb302::poll(); }   // the hub is on CC2
+    g_log.clear();
+    g_reg[0x40] = 0x00;                                             // the source side collapses (the hub browned out)
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_vbus(5000); fusb302::sink_cc(100, 3300); fusb302::poll(); }
+    CHECK_EQ(usb_has("[FUSB302] Detach:"), true);                   // the detach was processed ...
+    CHECK_EQ(fusb302::inline_mode(), true);                         // ... and the latch is the Link's to clear
+    CHECK_EQ(sw0_rd(), 0u);
+    for (const std::string& s : g_log)                              // no write in the gap ever put the pin's Rd back
+        if (s.rfind("W 02=", 0) == 0) CHECK_EQ(int(std::stoul(s.substr(5), nullptr, 16) & 3u), 0);
+    g_reg[0x40] = 0x20;                                             // the source is back
+    for (int i = 0; i < 30; i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected"), true);
+    CHECK_EQ(sw0_rd(), 0u);                                         // the re-attach under the latch: still no Rd
+    fusb302::set_inline(false);                                     // the Link's proof: the phone is gone
+    CHECK_EQ(sw0_rd(), pin);                                        // the pinned boot's Rd is back
+    self_hold_end();
+}
+
+// A Refresh (rescan) or a CC open on a K2 that a sink sits behind would drop the cable's CC for 150 ms: the phone's source sees a
+// detach, and a K2 living on that VBUS dies. With another sink's Request on the wire it stays passive, latch or no latch.
+void test_rescan_and_cc_open_are_passive_with_a_far_sink() {
+    passive_attach();
+    settle_ms(100);
+    far_sink_negotiates();
+    CHECK_EQ(fusb302::inline_mode(), false);
+    CHECK_EQ(fusb302::sink_downstream(), true);
+    g_log.clear();
+    fusb302::rescan();
+    CHECK_EQ(find_from("PC14=0"), -1);
+    CHECK_EQ(find_from("PC15=0"), -1);
+    CHECK_EQ(usb_has("Rescan (inline)"), true);
+    CHECK_EQ(fusb302::cc_open(150), false);
+    CHECK_EQ(find_from("PC14=0"), -1);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+
+// A far sink belongs to one attach: after the detach the next charger straight into the K2 is a sole-sink case again (the pinned Rd
+// follows), unless the Link's latch is still held.
+void test_the_far_sink_belongs_to_one_attach_for_the_rd_policy() {
+    const unsigned pin = self_hold_boot(0);
+    service_ms(3);
+    send_caps_5v_9v(0);
+    service_ms(10);
+    pixel_requests();
+    settle_ms(60);
+    CHECK_EQ(fusb302::sink_downstream(), true);
+    g_reg[0x40] = 0x00;                                             // everything leaves
+    for (int i = 0; i < 80; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::sink_cc(0, 0); fusb302::poll(); }
+    CHECK_EQ(fusb302::sink_downstream(), false);                    // the latch was never set: nothing downstream any more
+    CHECK_EQ(sw0_rd(), pin);                                        // the pinned boot's Rd is back for the next charger
+    self_hold_end();
+}
+
+// A sink's Rd in the sink band on a CC line while the K2 pulls none down: the evidence the Link turns into "possibly inline" when a
+// dock - K2 - laptop session is silent (hardware 2026-11-09: cc1 1676 mV against an open 3303 mV). The K2's own Rd gives no verdict.
+void test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink() {
+    reset_world();
+    g_mark = 0;
+    fusb302::init();                                   // plain boot: SWITCHES0 without Rd
+    fusb302::sink_cc(3303, 3303);
+    CHECK_EQ(fusb302::sink_cc_far(), false);           // open Rp on both lines: a source alone
+    fusb302::sink_cc(1676, 3303);
+    CHECK_EQ(fusb302::sink_cc_far(), true);            // Rp 3 A into the laptop's Rd
+    fusb302::sink_cc(3303, 1676);
+    CHECK_EQ(fusb302::sink_cc_far(), true);            // either line
+    fusb302::sink_cc(410, 3303);
+    CHECK_EQ(fusb302::sink_cc_far(), false);           // default Rp into an Rd is out of the band: not enough to call it
+    fusb302::sink_cc(-1, -1);
+    CHECK_EQ(fusb302::sink_cc_far(), false);           // unknown is not evidence
+    const unsigned pin = self_hold_boot(0);            // PLUS boot, the brick attached: the K2's own Rd on CC2
+    CHECK_EQ(sw0_rd(), pin);
+    fusb302::sink_cc(3303, 1676);
+    CHECK_EQ(fusb302::sink_cc_far(), false);           // that level is the K2's own divider
+    self_hold_end();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3020,5 +3176,11 @@ int main() {
     test_seek_ignores_an_attach_that_was_picked_with_rd_on();
     test_seek_never_runs_inline_in_the_ra_mode_or_on_a_forced_line();
     test_seek_never_moves_a_pinned_rd();
+    test_a_far_sinks_request_takes_the_pinned_rd_off_and_ends_the_k2s_requests();   // last: each one ends with a detach / Rd off
+    test_a_far_sink_downstream_keeps_the_k2_off_the_line_for_vdms_and_resets();
+    test_inline_survives_a_detach_and_the_pinned_rd_stays_off_until_the_link_clears_it();
+    test_rescan_and_cc_open_are_passive_with_a_far_sink();
+    test_the_far_sink_belongs_to_one_attach_for_the_rd_policy();
+    test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink();
     return test_report("test_fusb302_scan");
 }

@@ -67,6 +67,7 @@ bool cable_thunderbolt() { return g_stub.cable_tb; }
 void rescan() { g_stub.rescans++; }
 void set_inline(bool on) { g_stub.inl = on; }
 bool inline_mode() { return g_stub.inl; }
+bool sink_cc_far() { return g_stub.far_cc; }
 void new_source() { g_stub.new_sources++; }
 void clear_source() { g_stub.clear_sources++; g_stub.caps.num_pdos = 0; }
 bool cc_detach() { g_stub.cc_detaches++; return true; }

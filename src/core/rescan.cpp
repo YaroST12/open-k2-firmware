@@ -19,7 +19,7 @@ rescanbridge::Facts facts() {
     const pd::SinkStatus& s = fusb302::sink_status();
     rescanbridge::Facts f;
     f.legacy_only = fusb302::legacy_only_active();
-    f.inline_mode = fusb302::inline_mode();
+    f.inline_mode = fusb302::inline_mode() || fusb302::sink_downstream() || fusb302::sink_cc_far();   // a sink behind the K2: never open the CC lines
     f.contract_live = s.state == pd::SinkState::Ready && fusb302::caps().valid;
     f.negotiating = s.state != pd::SinkState::Idle && s.state != pd::SinkState::Ready && s.state != pd::SinkState::Failed;
     f.epr_mode = s.epr_mode;

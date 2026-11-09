@@ -80,8 +80,15 @@ constexpr bool reads_marker(bootmode::Mode keys, bool warm) { return keys == boo
 
 // The boot mode the Rd decision runs on: a key held decides; otherwise a cold boot with a record is the sink mode of the record's
 // pin (so the driver's key-mode path, which keeps the pin from the first write and never calls it inherited, serves it).
-constexpr bootmode::Mode boot_mode(bootmode::Mode keys, bool warm, const Intent& in) {
-    if (!reads_marker(keys, warm) || in.kind == IntentKind::None) return keys;
+//
+// A K2 that a USB host powers (the aux rail near 5 V) has no charger to come back from: the record is a leftover (a failed scrub, a
+// reflash, a stale session) and a plain boot there stays passive. Hardware 2026-11-09: a hub-powered, HID-attached K2 with a leftover
+// record put Rd on CC2 from its first write, Requested 12 times and collided with the phone behind it. A comeback boot is powered
+// by the charger through its own Rd, so its aux rail is dead; the rail is sampled once, early, and only when a record exists.
+inline constexpr int kHostAuxMv = 3500;
+constexpr bool host_powered(int aux_mv) { return aux_mv >= kHostAuxMv; }
+constexpr bootmode::Mode boot_mode(bootmode::Mode keys, bool warm, const Intent& in, bool host = false) {
+    if (!reads_marker(keys, warm) || in.kind == IntentKind::None || host) return keys;
     return in.pin == 1 ? bootmode::Mode::OkRdCc1 : in.pin == 2 ? bootmode::Mode::PlusRdCc2 : keys;
 }
 
@@ -125,12 +132,13 @@ public:
         bool ready = false;     // the sink contract (self-hold or a request) is Ready
         bool host = false;      // a USB host is configured
         ctcable::Choice cable{};   // the spoof identity of the run in progress (Off = none)
+        bool sink_downstream = false;   // a sink sits behind the K2 (inline latch, or another sink's Request): not a session
     };
     enum class Act : std::uint8_t { Hold, Apply };
 
     Act update(const Sample& s) {
         Intent want;
-        if (s.pinned && !s.host) {
+        if (s.pinned && !s.host && !s.sink_downstream) {
             if (!s.ready) return Act::Hold;
             want = {IntentKind::Session, s.pin, {}};
             if (s.pin == 2 && s.cable.kind != ctcable::Kind::Off && ctcable::valid(s.cable)) want.cable = ctcable::canonical(s.cable);

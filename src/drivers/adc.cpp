@@ -124,6 +124,7 @@ bool calibrate() {
 }  // namespace
 
 bool init() {
+    if (g_ready) return true;   // the Rd comeback samples the aux rail early: the boot trace's init then finds the scan running
     reg::Crm& c = reg::crm();
     c.APB2EN |= reg::Crm::APB2EN_GPIOA | kApb2enAdc1;
     c.AHBEN |= kAhbenDma1;

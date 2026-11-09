@@ -204,12 +204,17 @@ static void test_inline_by_foreign_request() {
 }
 
 static void test_inline_by_vbus_without_own_contract() {
-    // A charger that sits at 9 V (a leftover contract, PE+/QC) with no Request seen is not a
-    // live sink: latching inline here turned Auto-CRC off and broke PD for the charger.
+    // VBUS at a PD level that this K2 did not ask for is somebody else's contract: possibly inline until proven otherwise.
+    // (Hardware 2026-11-09: a dock at 20 V feeding a laptop through the K2 is silent after the K2 boots into it: no load
+    // above 50 mA, no Request, no rise. The old rule called the K2 standalone and its Refresh transmitted into the session.)
     Link l;
     l.update(inl(0, 9000, 0, 0, false));
     l.update(inl(100, 9000, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 0);            // not for a sample or two
+    l.update(inl(kInlineForeignMs - 1, 9000, 0, 0, false));
     CHECK_EQ(l.inline_mode(), 0);
+    l.update(inl(kInlineForeignMs + 1, 9000, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 1);            // a debounced foreign PD-level VBUS
     // Our own trigger asked for it: a rise from 5 V is ours.
     Link o;
     o.update(inl(0, 5000, 0, 0, true));
@@ -337,6 +342,77 @@ static void test_inline_stays_while_active() {
     CHECK_EQ(l.inline_mode(), 0);
 }
 
+// Dock (20 V) - K2 - laptop, captured 2026-11-09: the K2 boots into a live contract. Nothing flows that it could measure as a load
+// (the laptop is full), nobody sends a Request, VBUS never rises. VBUS at 20 V that this K2 did not ask for is the evidence, and it
+// holds as long as it lasts: no quiet window can clear a state the data still shows.
+static void test_a_boot_into_a_live_contract_is_possibly_inline_and_stays() {
+    Link l;
+    for (std::uint32_t t = 0; t <= 1000; t += 100) l.update(inl(t, 20190, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 0);                         // still inside the debounce
+    for (std::uint32_t t = 1100; t <= 3000; t += 100) l.update(inl(t, 20190, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 1);
+    for (std::uint32_t t = 3100; t <= 60000; t += 100) l.update(inl(t, 20190, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 1);                         // 57 s of silence is not proof of a standalone K2
+    for (std::uint32_t t = 60100; t <= 62000; t += 100) l.update(inl(t, 0, 0, 0, false));   // the dock is unplugged
+    CHECK_EQ(l.attached(), 0);
+    CHECK_EQ(l.inline_mode(), 1);                         // held across the gap
+    l.update(inl(62000 + kInlineHoldMs + 100, 0, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 0);
+}
+
+// A leftover 9 V that the K2 itself set earlier in this attach (a trigger that has ended) is its own doing, however long it lasts.
+static void test_a_voltage_the_k2_set_itself_is_never_foreign() {
+    Link l;
+    for (std::uint32_t t = 0; t < 3000; t += 100) l.update(inl(t, 5000, 0, 0, true));
+    for (std::uint32_t t = 3000; t < 9000; t += 100) l.update(inl(t, 9000, 0, 0, true));      // the K2's own contract
+    for (std::uint32_t t = 9000; t < 40000; t += 100) l.update(inl(t, 9000, 0, 0, false));    // the trigger ended, the charger stays
+    CHECK_EQ(l.inline_mode(), 0);
+    Link o;                                                // an own contract right now masks everything
+    for (std::uint32_t t = 0; t < 20000; t += 100) {
+        LinkInput i = inl(t, 20000, 0, 0, true);
+        i.far_sink_cc = true;
+        o.update(i);
+    }
+    CHECK_EQ(o.inline_mode(), 0);
+}
+
+// A sink's Rd on a CC line while the K2 itself presents none and has no contract: a phone or laptop on the far side.
+static void test_a_sink_on_the_far_cc_is_possibly_inline() {
+    Link l;
+    for (std::uint32_t t = 0; t < 600; t += 100) {
+        LinkInput i = inl(t, 5000, 0, 0, false);
+        i.far_sink_cc = true;
+        l.update(i);
+    }
+    CHECK_EQ(l.inline_mode(), 0);                          // a blip
+    l.update(inl(700, 5000, 0, 0, false));
+    for (std::uint32_t t = 800; t < 800 + kInlineForeignMs + 200; t += 100) {
+        LinkInput i = inl(t, 5000, 0, 0, false);
+        i.far_sink_cc = true;
+        l.update(i);
+    }
+    CHECK_EQ(l.inline_mode(), 1);                          // 1.5 s of continuous evidence
+    const std::uint32_t t1 = 800 + kInlineForeignMs + 200;
+    for (std::uint32_t t = t1; t < t1 + 30000; t += 100) {
+        LinkInput i = inl(t, 5000, 0, 0, false);
+        i.far_sink_cc = true;
+        l.update(i);
+    }
+    CHECK_EQ(l.inline_mode(), 1);                          // evidence present: no unlatch
+    const std::uint32_t t2 = t1 + 30000;
+    for (std::uint32_t t = t2; t < t2 + kInlineQuietMs - 500; t += 100) l.update(inl(t, 5000, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 1);                          // evidence gone, the quiet window runs
+    l.update(inl(t2 + kInlineQuietMs + 600, 5000, 0, 0, false));
+    CHECK_EQ(l.inline_mode(), 0);                          // proof: 10 s without it
+}
+
+// 5 V alone (a hub or a plain charger, nobody behind the K2) never latches.
+static void test_five_volts_alone_is_a_standalone_k2() {
+    Link l;
+    for (std::uint32_t t = 0; t < 30000; t += 100) l.update(inl(t, 5120, 10, 0, false));
+    CHECK_EQ(l.inline_mode(), 0);
+}
+
 static void test_force() {
     Link l;
     l.force_detached(1000);
@@ -382,6 +458,10 @@ int main() {
     test_a_short_lull_is_not_proof_of_a_standalone_k2();
     test_inline_survives_a_vbus_collapse_and_the_reattach();
     test_inline_clears_after_a_long_detach();
+    test_a_boot_into_a_live_contract_is_possibly_inline_and_stays();
+    test_a_voltage_the_k2_set_itself_is_never_foreign();
+    test_a_sink_on_the_far_cc_is_possibly_inline();
+    test_five_volts_alone_is_a_standalone_k2();
     test_force();
     test_format_ago();
     return test_report("test_pd_link");

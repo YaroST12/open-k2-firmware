@@ -869,6 +869,7 @@ void Ui::tick(uint32_t now_ms) {
     in.cc = fusb302::active_cc();
     in.caps_rx = fusb302::rx_count();
     in.requests = fusb302::contract().requests;
+    in.far_sink_cc = fusb302::sink_cc_far();   // a sink's Rd on CC with none of ours: "possibly inline" even when the link is silent
     in.self_supply_ma = usb::configured() ? 0 : pd::kSelfSupplyAllowanceMa;   // no USB host: the K2 may run on this VBUS
     {   // VBUS this K2 drives itself: the PD trigger (held or mid-negotiation) or a fast-charge trigger
         const pd::SinkStatus &sk = fusb302::sink_status();

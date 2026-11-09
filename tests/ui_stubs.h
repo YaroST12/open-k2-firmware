@@ -70,6 +70,7 @@ struct StubState {
     k2::pd::XiaomiTrace xm{};             // the sink's Request / Xiaomi chain record (fusb302::xiaomi_trace)
     k2::pd::SourceCaps epr_info_caps{};   // the list an informational EPR_Get_Source_Cap returned
     int epr_info_asks = 0; bool epr_info_forced = false; k2::pd::Err epr_info_err = k2::pd::Err::Ok;
+    bool far_cc = false;                  // fusb302::sink_cc_far
     bool link_inline = false, inl = false, scan_confirmed = false, self_powered = false;
     bool bus_powered = false, supply_decided = true;   // power_source: no host and VBUS at boot / the host window is over
     bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;
