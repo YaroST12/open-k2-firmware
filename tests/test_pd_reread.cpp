@@ -17,8 +17,14 @@ struct Rig {
     std::uint32_t now = 8000;
     std::vector<TxMsg> sent;
     RereadLink link{.contract = true, .pdos = 6, .rev = 0};
-    void start(std::uint8_t mask = kRereadDefault, std::uint8_t rev = 2, std::uint8_t pdos = 6, bool attach = false) {
-        r.start(rev, mask, pdos, now, attach);
+    std::uint16_t svids_[4] = {};
+    void start(std::uint8_t mask = kRereadDefault, std::uint8_t rev = 2, std::uint8_t pdos = 6, bool attach = false, RereadOpts opts = {}) {
+        r.start(rev, mask, pdos, now, attach, opts);
+    }
+    void set_svids(std::initializer_list<std::uint16_t> l) {
+        unsigned n = 0;
+        for (std::uint16_t s : l) svids_[n++] = s;
+        link.svids = {svids_, n};
     }
     bool step(bool tx_ok = true, bool idle = true) {
         r.tick(now, idle, link);
@@ -259,9 +265,183 @@ void test_an_existing_contract_still_settles_before_the_first_message() {
     CHECK_EQ(g.now - t0 >= kRereadSettleMs, true);
 }
 
+// ---- the survey's extension: Manufacturer_Info, Discover Modes per SVID, the survey order, pacing, per-step outcome ----
+
+constexpr std::uint8_t kSurveyMask = kRereadIdentity | kRereadSvids | kRereadModes | kRereadCapsExt | kRereadMfrInfo;
+
+// Discover Modes answer for `svid` (cmd 3); ctype 1 = ACK, 2 = NAK.
+void modes_ack(Rig &g, std::uint16_t svid, std::uint8_t ctype = 1) {
+    const std::uint8_t d[8] = {std::uint8_t(3 | (ctype << 6)), 0xA0, std::uint8_t(svid), std::uint8_t(svid >> 8), 0x01, 0x00, 0x01, 0x00};
+    g.deliver(Sop::Sop, make_header(kMsgVendorDefined, 2, 2), d, 8);
+}
+
+void mfr_info_answer(Rig &g) {
+    const std::uint8_t d[8] = {26, 0x80};
+    g.deliver(Sop::Sop, std::uint16_t(0x8000 | (7u << 12) | (2u << 6) | kExtManufacturerInfo), d, 8);
+}
+
+void test_lab_order_is_unchanged_and_mfr_info_comes_last() {
+    Rig g; g.start(kRereadDefault | kRereadMfrInfo);
+    CHECK_EQ(g.next(), true); CHECK_EQ(g.sent[0].header, 0x0091); g.ext_caps();
+    CHECK_EQ(g.next(), true); g.vdm(1, 1);
+    CHECK_EQ(g.next(), true); g.vdm(2, 1);
+    CHECK_EQ(g.next(), true); CHECK_EQ(g.sent[3].header, 0x0087); g.source_cap(6, false);
+    CHECK_EQ(g.next(), true);
+    CHECK_EQ(g.sent[4].header, std::uint16_t(0x8000 | (1u << 12) | (2u << 6) | kExtGetManufacturerInfo));   // unchunked extended, one DO
+    CHECK_EQ(g.sent[4].len, 4);
+    CHECK_EQ(g.sent[4].data[0], 2);
+    CHECK_EQ(g.sent[4].data[1], 0);
+    mfr_info_answer(g);
+    CHECK_EQ(g.r.status().state == RereadState::Done, true);
+    CHECK_EQ(g.r.status().ok_mask, kRereadDefault | kRereadMfrInfo);
+}
+
+void test_survey_order_identity_svids_modes_capsext_mfr() {
+    Rig g;
+    RereadOpts o; o.survey_order = true;
+    g.start(kSurveyMask, 2, 6, false, o);
+    g.set_svids({0xFF01, 0x2717});
+    CHECK_EQ(g.next(), true); CHECK_EQ(g.sent[0].header, 0x108F); CHECK_EQ(g.sent[0].data[0], 0x01); g.vdm(1, 1);
+    CHECK_EQ(g.next(), true); CHECK_EQ(g.sent[1].data[0], 0x02); g.vdm(2, 1);
+    CHECK_EQ(g.next(), true);                                                    // Discover Modes for the first SVID
+    CHECK_EQ(g.sent[2].header, 0x108F);
+    CHECK_EQ(g.sent[2].data[0], 0x03); CHECK_EQ(g.sent[2].data[1], 0xA0);
+    CHECK_EQ(g.sent[2].data[2], 0x01); CHECK_EQ(g.sent[2].data[3], 0xFF);        // 0xFF01A003
+    modes_ack(g, 0xFF01);
+    CHECK_EQ(g.next(), true);                                                    // then the second
+    CHECK_EQ(g.sent[3].data[2], 0x17); CHECK_EQ(g.sent[3].data[3], 0x27);
+    modes_ack(g, 0x2717);
+    CHECK_EQ(g.next(), true); CHECK_EQ(g.sent[4].header, 0x0091); g.ext_caps();  // Get_Source_Cap_Extended
+    CHECK_EQ(g.next(), true); CHECK_EQ(g.sent[5].header & 0x8000, 0x8000);       // Get_Manufacturer_Info
+    mfr_info_answer(g);
+    CHECK_EQ(g.r.status().state == RereadState::Done, true);
+    CHECK_EQ(g.r.status().ok_mask, kSurveyMask);
+    CHECK_EQ(g.r.status().skipped_mask, 0);
+    CHECK_EQ(g.sent.size(), 6u);
+}
+
+void test_modes_outcome_follows_the_svid_answers() {
+    {   // one ACK among refusals is a Got
+        Rig g; RereadOpts o; o.survey_order = true;
+        g.start(kRereadModes, 2, 6, false, o);
+        g.set_svids({0xFF01, 0x2717});
+        g.next(); modes_ack(g, 0xFF01, 2);       // NAK
+        g.next(); modes_ack(g, 0x2717);
+        CHECK_EQ(g.r.status().ok_mask, kRereadModes);
+        CHECK_EQ(g.r.status().notsup_mask, 0);
+    }
+    {   // every SVID refused: NotSupported
+        Rig g; RereadOpts o; o.survey_order = true;
+        g.start(kRereadModes, 2, 6, false, o);
+        g.set_svids({0xFF01});
+        g.next(); modes_ack(g, 0xFF01, 2);
+        CHECK_EQ(g.r.status().state == RereadState::Done, true);
+        CHECK_EQ(g.r.status().ok_mask, 0);
+        CHECK_EQ(g.r.status().notsup_mask, kRereadModes);
+        CHECK_EQ(g.r.status().skipped_mask, kRereadModes);
+    }
+    {   // silence on an SVID: no answer, and no retry
+        Rig g; RereadOpts o; o.survey_order = true;
+        g.start(kRereadModes, 2, 6, false, o);
+        g.set_svids({0xFF01});
+        g.next();
+        for (unsigned t = 0; t < 2 * kRereadRespMs && g.r.running(); t += 10) g.step();
+        CHECK_EQ(g.r.status().state == RereadState::Done, true);
+        CHECK_EQ(g.r.status().skipped_mask, kRereadModes);
+        CHECK_EQ(g.r.status().notsup_mask, 0);
+        CHECK_EQ(g.sent.size(), 1u);
+    }
+    {   // no SVID to ask about: nothing is sent and nothing is claimed
+        Rig g; RereadOpts o; o.survey_order = true;
+        g.start(kRereadModes, 2, 6, false, o);
+        g.set_svids({});
+        g.next(100);
+        CHECK_EQ(g.sent.size(), 0u);
+        CHECK_EQ(g.r.status().state == RereadState::Done, true);
+        CHECK_EQ(g.r.status().notsup_mask, 0);
+        CHECK_EQ(g.r.status().skipped_mask, kRereadModes);
+    }
+}
+
+void test_modes_asks_at_most_the_first_three_svids() {
+    Rig g; RereadOpts o; o.survey_order = true;
+    g.start(kRereadModes, 2, 6, false, o);
+    g.set_svids({0xFF01, 0x2717, 0x1234, 0x5678});
+    for (int i = 0; i < 6; i++) {
+        if (!g.next()) break;
+        modes_ack(g, std::uint16_t(g.sent.back().data[2] | (g.sent.back().data[3] << 8)));
+    }
+    CHECK_EQ(g.sent.size(), unsigned(kRereadModeSvids));
+    CHECK_EQ(g.r.status().state == RereadState::Done, true);
+}
+
+void test_notsup_mask_tells_refusal_from_silence() {
+    Rig g; RereadOpts o; o.survey_order = true;
+    g.start(kRereadIdentity | kRereadSvids | kRereadCapsExt | kRereadMfrInfo, 2, 6, false, o);
+    g.next(); g.vdm(1, 2);                      // NAK: refusal
+    g.next(); g.vdm(2, 3);                      // BUSY: the source is occupied, not a refusal
+    g.next(); g.control(kCtlNotSupported);      // Get_Source_Cap_Extended
+    g.next(); g.control(kCtlReject);            // Get_Manufacturer_Info
+    CHECK_EQ(g.r.status().state == RereadState::Done, true);
+    CHECK_EQ(g.r.status().skipped_mask, kRereadIdentity | kRereadSvids | kRereadCapsExt | kRereadMfrInfo);
+    CHECK_EQ(g.r.status().notsup_mask, kRereadIdentity | kRereadCapsExt | kRereadMfrInfo);
+}
+
+void test_a_failed_transmit_is_silence_not_refusal() {
+    Rig g; RereadOpts o; o.survey_order = true;
+    g.start(kRereadIdentity, 2, 6, false, o);
+    g.step(false, true);                        // sent, no GoodCRC
+    CHECK_EQ(g.r.status().skipped_mask, kRereadIdentity);
+    CHECK_EQ(g.r.status().notsup_mask, 0);
+}
+
+void test_pd2_source_skips_both_extended_steps() {
+    Rig g; RereadOpts o; o.survey_order = true;
+    g.start(kSurveyMask, 1, 6, false, o);
+    g.set_svids({});
+    CHECK_EQ(g.r.status().skipped_mask, kRereadCapsExt | kRereadMfrInfo);
+    g.next(); g.vdm(1, 1);
+    g.next(); g.vdm(2, 1);
+    g.next(100);
+    CHECK_EQ(g.r.status().state == RereadState::Done, true);
+    CHECK_EQ(g.sent.size(), 2u);
+}
+
+void test_pacing_spaces_the_messages() {
+    Rig g; RereadOpts o; o.survey_order = true; o.pace_ms = 220;
+    g.start(kRereadIdentity | kRereadSvids, 2, 6, false, o);
+    CHECK_EQ(g.next(), true);
+    const std::uint32_t t0 = g.now;
+    g.vdm(1, 1);
+    CHECK_EQ(g.next(1000), true);
+    CHECK_EQ(g.now - t0 >= 220, true);
+    CHECK_EQ(g.now - t0 < 300, true);
+}
+
+void test_survey_budget_is_longer_than_the_lab_one() {
+    Rig g; RereadOpts o; o.survey_order = true; o.pace_ms = 1000; o.total_ms = 6000;
+    g.start(kSurveyMask, 2, 6, false, o);
+    g.set_svids({0xFF01});
+    for (unsigned t = 0; t < 2600; t += 10) g.step();   // silent source: the lab budget of kRereadTotalMs would have cut it
+    CHECK_EQ(g.r.running(), true);
+    for (unsigned t = 0; t < 6500 && g.r.running(); t += 10) g.step();
+    CHECK_EQ(g.r.running(), false);
+    CHECK_EQ(g.r.status().state == RereadState::Done, true);
+    CHECK_EQ(g.r.status().skipped_mask, kSurveyMask);
+}
+
 }  // namespace
 
 int main() {
+    test_lab_order_is_unchanged_and_mfr_info_comes_last();
+    test_survey_order_identity_svids_modes_capsext_mfr();
+    test_modes_outcome_follows_the_svid_answers();
+    test_modes_asks_at_most_the_first_three_svids();
+    test_notsup_mask_tells_refusal_from_silence();
+    test_a_failed_transmit_is_silence_not_refusal();
+    test_pd2_source_skips_both_extended_steps();
+    test_pacing_spaces_the_messages();
+    test_survey_budget_is_longer_than_the_lab_one();
     test_attach_waits_for_the_contract_then_settles();
     test_attach_budget_starts_after_the_settle();
     test_attach_that_never_gets_a_contract_fails_without_sending();
