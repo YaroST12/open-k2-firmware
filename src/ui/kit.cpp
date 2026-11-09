@@ -225,21 +225,33 @@ void draw_drill(const Surface &s, int16_t right, int16_t cy, uint16_t color) {
 void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint16_t bg) {
     const bool on = r.state != 0;
     const uint16_t col = r.marker_color ? r.marker_color : on ? kFocus : kDim;
+    // The square is drawn at its native size, clipped to the viewport (not squeezed with the row body like a plain
+    // fill): in a landscape rotation the row mapping can squeeze a 1 px border line away to zero physical rows,
+    // and which lines vanish moves as the rows scroll — the selection squares then lose their top or bottom edge.
+    // The whole square is mapped once and every sub-rect is offset in native pixels, so the 1 px frame survives.
+    const Rect m = gfx_native_rect(s, x, y, kMarkSize, kMarkSize);
+    if (m.w <= 0 || m.h <= 0) return;
+    const auto fill = [&](int16_t ox, int16_t oy, int16_t fw, int16_t fh, uint16_t c) {
+        gfx_fill_panel({static_cast<int16_t>(m.x + ox), static_cast<int16_t>(m.y + oy), fw, fh}, c);
+    };
     switch (r.marker) {
     case Marker::None: break;
     case Marker::Radio:
         // A square, no circle to rasterise: the pick is a solid block, the others a hollow 1 px frame. The whole 12 px
         // square is repainted on every state, so a half-drawn one cannot exist; solid versus hollow is the shape cue.
-        gfx_fill(s, x, y, kMarkSize, kMarkSize, col);
-        if (!on) gfx_fill(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), kMarkSize - 2, kMarkSize - 2, bg);
+        fill(0, 0, m.w, m.h, col);
+        if (!on) fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
         break;
     case Marker::Box3:
     case Marker::Check:
-        gfx_fill(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), kMarkSize - 2, kMarkSize - 2, bg);
-        outline(s, x, y, kMarkSize, kMarkSize, 1, col);
+        fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
+        fill(0, 0, m.w, 1, col);
+        fill(0, static_cast<int16_t>(m.h - 1), m.w, 1, col);
+        fill(0, 1, 1, static_cast<int16_t>(m.h - 2), col);
+        fill(static_cast<int16_t>(m.w - 1), 1, 1, static_cast<int16_t>(m.h - 2), col);
         if (r.marker == Marker::Box3) {
-            if (r.state >= 2) gfx_fill(s, static_cast<int16_t>(x + 3), static_cast<int16_t>(y + 3), 6, 6, col);
-            else if (r.state == 1) gfx_fill(s, static_cast<int16_t>(x + 3), static_cast<int16_t>(y + 5), 6, 2, col);
+            if (r.state >= 2) fill(3, 3, 6, 6, col);
+            else if (r.state == 1) fill(3, 5, 6, 2, col);
         } else if (on) {
             draw_mark(s, static_cast<int16_t>(x + 2), static_cast<int16_t>(y + 2), 8, true, col, bg);
         }

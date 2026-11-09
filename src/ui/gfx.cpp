@@ -21,6 +21,26 @@ void gfx_fill(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint
                      static_cast<uint16_t>(w), static_cast<uint16_t>(h), color);
 }
 
+Rect gfx_native_rect(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h) {
+    if (x < 0 || y < 0) return {0, 0, 0, 0};
+    if (x + w > s.w) w = static_cast<int16_t>(s.w - x);
+    if (y + h > s.h) h = static_cast<int16_t>(s.h - y);
+    if (w <= 0 || h <= 0) return {0, 0, 0, 0};
+    return ContentViewport::native_rect(
+        {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h});
+}
+
+void gfx_fill_panel(const Rect &r, uint16_t color) {
+    if (r.w <= 0 || r.h <= 0) return;
+    ContentViewport::Pause unscaled;   // the box is already in panel pixels: draw it directly
+    lcd::fill_rect(static_cast<uint16_t>(r.x), static_cast<uint16_t>(r.y),
+                   static_cast<uint16_t>(r.w), static_cast<uint16_t>(r.h), color);
+}
+
+void gfx_fill_native(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+    gfx_fill_panel(gfx_native_rect(s, x, y, w, h), color);
+}
+
 void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
               uint16_t fg, uint16_t bg, int16_t cell_offset K2_TRUNC_DEF) {
     if (x < 0 || y < 0 || x >= s.w || y >= s.h || text.empty()) return;

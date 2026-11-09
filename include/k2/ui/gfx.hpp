@@ -19,6 +19,19 @@ constexpr Surface surface_of(const Rect &r) { return {r.x, r.y, r.w, r.h}; }
 
 void gfx_fill(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
 
+// Map a logical rect to its NATIVE panel rect: the origin goes through the ContentViewport
+// mapping, the size never scales, and the box is clipped to the viewport's destination rectangle
+// (exactly like a glyph box in gfx_text). Identity when no viewport is active (a 1:1 rotation).
+// An empty rect (w or h <= 0) comes back when the box lies outside the surface or the viewport.
+Rect gfx_native_rect(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h);
+// Fill an already-mapped native rect straight to the panel, at its native size in every rotation.
+// Frames and marker squares must keep all four border lines: a fill through the viewport mapping
+// can have a 1 px edge squeezed away to zero physical rows in a landscape rotation, and which
+// edges vanish moves as the rows scroll.
+void gfx_fill_panel(const Rect &r, uint16_t color);
+// Convenience: gfx_fill_panel(gfx_native_rect(...)).
+void gfx_fill_native(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+
 // Draw UTF-8 text with its line box's top-left at (x, y); the box is painted in `bg`
 // (glyphs are blended between fg and bg), so no separate clear is needed.
 // Text that runs past the surface's right edge is clipped there; host builds report that to the no-truncation
