@@ -44,10 +44,15 @@ public:
     // the active line. Returns true once when the Rd should move to the other line; the caller then attaches there (the
     // next update starts a new dwell).
     bool update(std::uint32_t now, std::uint8_t line, bool eligible, bool rp_seen) {
-        (void)line;
         if (!eligible || rp_seen) { silent_ = false; return false; }
+        if (moves_ >= kRdSeekMoves) return false;
+        // pattern slow-rp-wake: the active line read the standby signature open and is now collapsing under our Rd (no
+        // Rp) - the source is there but asleep, its Rp measured 1072 ms after the Rd: stay kSlowWakeDwellMs before
+        // moving. If only the OTHER line had the signature, go there first: move at the first silent poll.
+        if (!standby(line) && standby(line == 1 ? 2 : 1)) { ++moves_; silent_ = false; return true; }
+        const std::uint32_t dwell = standby(line) ? kSlowWakeDwellMs : kRdSeekDwellMs;
         if (!silent_) { silent_ = true; since_ = now; return false; }
-        if (moves_ >= kRdSeekMoves || now - since_ < kRdSeekDwellMs) return false;
+        if (now - since_ < dwell) return false;
         ++moves_;
         silent_ = false;
         return true;

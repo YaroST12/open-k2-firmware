@@ -72,11 +72,10 @@ void test_a_standby_signature_line_gets_the_slow_dwell_and_no_move_before_the_rp
     std::uint32_t t = 1000;
     for (int i = 0; i < 55; i++, t += 20) CHECK_EQ(s.update(t, 2, true, false), false);   // 1100 ms of no Rp under the Rd
     CHECK_EQ(int(s.moves()), 0);                    // 1100 ms > kRdSeekDwellMs, but the standby line gets kSlowWakeDwellMs
+    CHECK_EQ(s.holding_slow(t, 2), true);           // inside the window the 500 ms no-Rp detach is held off
     CHECK_EQ(s.update(t, 2, true, true), false);    // the Rp at 1100 ms: attach on CC2, never a move
     CHECK_EQ(int(s.moves()), 0);
-    // and the 500 ms no-Rp detach is held off inside the window:
-    CHECK_EQ(s.holding_slow(t - 20, 2), true);
-    CHECK_EQ(s.holding_slow(pd::kSlowWakeDwellMs + t, 2), false);   // the window ends with the dwell
+    CHECK_EQ(s.holding_slow(t, 2), false);          // the Rp ended the window
 }
 // No standby signature on either line (a coupled net, nothing): the moves stay at the unchanged 200 ms dwell.
 void test_a_line_without_the_signature_keeps_the_200ms_moves() {
