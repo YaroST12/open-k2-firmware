@@ -71,25 +71,16 @@ static std::vector<ct::Step> without_hunts(std::vector<ct::Step> v) {
     v.erase(std::remove_if(v.begin(), v.end(), [](const ct::Step& s) { return s.hunt; }), v.end());
     return v;
 }
-// The rows in the order the journal replays them: the plan's own order. The small fixtures of plan(n) are not in the planner's
-// order (their Pd and Qc3 rows alternate); they come back Pd unit first, because the default unit order runs Pd before Qc3.
-static std::vector<ct::Step> canon(const std::vector<ct::Step>& v) {
-    const bool alternating = !v.empty() && v.size() > 1 && v[0].group == ct::Group::Pd && v[1].group == ct::Group::Qc3;
-    if (!alternating) return v;
-    std::vector<ct::Step> o;
-    for (const auto& s : v) if (s.group == ct::Group::Pd) o.push_back(s);
-    for (const auto& s : v) if (s.group != ct::Group::Pd) o.push_back(s);
-    return o;
-}
 static bool same_row(const ct::Step& a, const ct::Step& b) {
     return a.group == b.group && a.algorithm == b.algorithm && a.pos == b.pos && a.verdict == b.verdict && a.mv == b.mv && a.ma == b.ma &&
            a.measured_mv == b.measured_mv && a.reason == b.reason && a.detail == b.detail && a.continuous == b.continuous &&
            a.avs == b.avs && a.hunt == b.hunt && a.tries == b.tries && a.pdo == b.pdo;
 }
+// The rows come back in the order the journal replayed them: the plan's own order, exactly as it was armed (the header's
+// order is written from the planner's step list, so a resumed run executes in the order it was planned in).
 static bool rows_are(const cj::Replay& r, const std::vector<ct::Step>& plan_rows) {
-    const auto c = canon(plan_rows);
-    if (r.count != c.size()) return false;
-    for (size_t n = 0; n < c.size(); ++n) if (!same_row(r.steps[n], c[n])) return false;
+    if (r.count != plan_rows.size()) return false;
+    for (size_t n = 0; n < plan_rows.size(); ++n) if (!same_row(r.steps[n], plan_rows[n])) return false;
     return true;
 }
 static ct::Evidence evidence() {
@@ -222,8 +213,8 @@ static void test_roundtrip() {
     CHECK_EQ(r.evidence.reported.valid, true); CHECK_EQ(r.evidence.reported.rev_major, 3); CHECK_EQ(r.evidence.reported.ver_minor, 2);
     CHECK_EQ(rows_are(r, steps), true);
     CHECK_EQ(int(r.steps[0].verdict), int(ct::Verdict::Pass)); CHECK_EQ(r.steps[0].measured_mv, 5050);
-    CHECK_EQ(r.steps[4].pdo, 0x12345678u + 3);   // the QC3 rows follow the PPS rows: canonical index 3 + ordinal = plan row 3
-    CHECK_EQ(int(r.phase), int(cj::Phase::Request)); CHECK_EQ(r.phase_index, 3u);   // row 1 = the first QC3 row = canonical index 3
+    CHECK_EQ(r.steps[4].pdo, 0x12345678u + 4);   // the rows come back in the armed order: plan row 4 at index 4
+    CHECK_EQ(int(r.phase), int(cj::Phase::Request)); CHECK_EQ(r.phase_index, 1u);   // the marker was written for plan row 1
     // A final result for the step clears the marker; Finish closes the run.
     cj::Journal& k = *v.j;
     steps[1].verdict = ct::Verdict::Fail;
@@ -242,7 +233,7 @@ static void test_capped_step_roundtrip() {
     v.reboot();
     cj::Replay r; v.j->replay(r);
     CHECK_EQ(rows_are(r, steps), true);
-    CHECK_EQ(int(r.steps[2].reason), int(ct::Reason::Capped)); CHECK_EQ(r.steps[2].measured_mv, 19419);   // canonical: pps 0,2 then qc 1
+    CHECK_EQ(int(r.steps[1].reason), int(ct::Reason::Capped)); CHECK_EQ(r.steps[1].measured_mv, 19419);   // the armed order: row 1 keeps its result
 }
 
 static void test_a_late_avs_list_rewrites_only_the_pps_section() {
@@ -741,14 +732,27 @@ static void test_an_old_layout_is_discarded_not_read() {
     // A format byte that is not ours (a newer layout) is treated the same.
     Vol w;
     arm(w, plan(4));
-    std::array<uint8_t, 128> b{};
+    std::array<uint8_t, cj::kMaxRecord> b{};
     std::size_t n = 0;
     CHECK_EQ(int(w.fs->read_file(cj::kHeaderPath, b, n)), 0);
     b[4 + 8] = 9;                                         // the format field
-    const std::uint16_t crc = bbstore::crc16(0xFFFF, {b.data(), n - 2});
+    std::uint16_t crc = bbstore::crc16(0xFFFF, {b.data(), n - 2});
     b[n - 2] = uint8_t(crc); b[n - 1] = uint8_t(crc >> 8);
     w.fs->write_file(cj::kHeaderPath, {b.data(), n});
     w.j->replay(r);
+    CHECK_EQ(r.found, false); CHECK_EQ(int(r.problem), int(cj::Problem::OldFormat));
+    // Format 2 (sections, no order in the header: a 60-byte payload) is old too: dropped, never read.
+    Vol x;
+    arm(x, plan(4));
+    std::array<uint8_t, cj::kMaxRecord> c{};
+    CHECK_EQ(int(x.fs->read_file(cj::kHeaderPath, c, n)), 0);
+    CHECK_EQ(n, 6 + cj::kHeaderPayload);
+    const std::size_t old_n = 6 + 60;
+    c[2] = 60; c[4 + 8] = 2;                              // payload length 60, format byte 2
+    crc = bbstore::crc16(0xFFFF, {c.data(), old_n - 2});
+    c[old_n - 2] = uint8_t(crc); c[old_n - 1] = uint8_t(crc >> 8);
+    x.fs->write_file(cj::kHeaderPath, {c.data(), old_n});
+    x.j->replay(r);
     CHECK_EQ(r.found, false); CHECK_EQ(int(r.problem), int(cj::Problem::OldFormat));
 }
 // A section that does not match the header (torn, flipped, from another plan, missing) makes the run NOT resumable: re-running a
@@ -855,44 +859,60 @@ static void test_phase_marker_maps_through_sections() {
     v.j->replay(r); CHECK_EQ(int(r.phase), int(cj::Phase::None));
 }
 
-// The sections hold rows section by section; plan_order puts them back in the plan's order.
-static std::vector<ct::Step> section_major(const std::vector<ct::Step>& v) {
-    std::vector<ct::Step> o;
-    for (size_t sec = 0; sec < cj::kSections; ++sec)
-        for (const auto& s : v) if (size_t(cj::section_of(s)) == sec) o.push_back(s);
-    return o;
-}
-static std::vector<ct::Step> merged(const std::vector<ct::Step>& sm, const ct::UnitList& units) {
-    std::vector<std::uint8_t> order(sm.size());
-    std::vector<ct::Step> o = sm;
-    cj::detail::plan_order({o.data(), o.size()}, units, order.data());
-    cj::detail::apply_order({o.data(), o.size()}, order.data());
-    return o;
-}
+// The header carries the plan's order (format 3), written from the planner's step list when the plan is journaled;
+// replay applies it verbatim. encode_order is the mechanical section-by-section indexing of that list - no rule of its own.
 static bool same_rows(const std::vector<ct::Step>& a, const std::vector<ct::Step>& b) {
     if (a.size() != b.size()) return false;
     for (size_t n = 0; n < a.size(); ++n) if (!same_row(a[n], b[n])) return false;
     return true;
 }
-static void test_plan_order_merges_sections_back() {
-    const auto units = ct::unit_order(kOpt);
-    // The FH22 plan: the 6 A hunts (oem section) land before the full-current row of their APDO, not at the end of the unit.
-    for (const bool avs : {false, true}) {
-        const auto want = fh22(avs);
-        CHECK_EQ(same_rows(merged(section_major(want), units), want), true);
-    }
-    // The run's own unit order wins over the default one.
-    ct::UnitList qc_first; qc_first.add(ct::Unit::Qc3); qc_first.add(ct::Unit::Pd);
-    std::vector<ct::Step> want{row(G::Qc3, A::Qc3, 0, 5000, 0), row(G::Qc3, A::Qc3, 0, 9000, 0, true),
-                               row(G::Pd, A::Pd3Fixed, 1, 5000), row(G::Pd, A::Pd3Fixed, 2, 9000)};
-    CHECK_EQ(same_rows(merged(section_major(want), qc_first), want), true);
-    // A hunt with no row of its algorithm to follow goes to the end of its unit, ahead of the next unit.
-    std::vector<ct::Step> lone{row(G::Pd, A::Pd3Fixed, 1, 5000), row(G::Pd, A::Pps, 6, 20000, 6000, false, true), row(G::Qc3, A::Qc3, 0, 5000, 0)};
-    CHECK_EQ(same_rows(merged(section_major(lone), units), lone), true);
-    // Nothing to merge: empty and single-row plans pass through.
-    CHECK_EQ(merged({}, units).size(), 0u);
-    std::vector<ct::Step> one{row(G::Pd, A::Pd3Fixed, 1, 5000)};
-    CHECK_EQ(same_rows(merged(one, units), one), true);
+static void test_the_header_carries_the_plan_order() {
+    // The header's order bytes are exactly encode_order of the armed plan: order[k] = where the plan's k-th row sits
+    // in the section-by-section array.
+    Vol v;
+    const auto steps = fh22(true);
+    arm(v, steps);
+    std::array<uint8_t, cj::kMaxRecord> b{};
+    std::size_t n = 0;
+    CHECK_EQ(int(v.fs->read_file(cj::kHeaderPath, b, n)), 0);
+    CHECK_EQ(n, cj::kRecordOverhead + cj::kHeaderPayload);
+    CHECK_EQ(b[4 + 8], cj::kFormat);
+    std::array<uint8_t, cj::kOrderBytes> order{};
+    cj::detail::encode_order(steps, order.data());
+    size_t total = 0;
+    for (size_t s = 0; s < cj::kSections; ++s) total += cj::section_rows(steps, cj::Section(s));
+    CHECK_EQ(total, steps.size());
+    for (size_t k = 0; k < total; ++k) CHECK_EQ(b[4 + cj::kHeaderBase + k], order[k]);
+    for (size_t k = total; k < cj::kOrderBytes; ++k) CHECK_EQ(b[4 + cj::kHeaderBase + k], 0xFF);
+    // Replay puts the rows back in exactly that order (the FH22 plan: the 6 A hunts land before their APDO's full-current row).
+    v.reboot();
+    cj::Replay r; v.j->replay(r);
+    CHECK_EQ(r.found, true); CHECK_EQ(rows_are(r, steps), true);
+    // An order that is not a permutation of the rows (a flipped byte, crc fixed) is a bad header: not resumable, dropped.
+    Vol w;
+    arm(w, steps);
+    CHECK_EQ(int(w.fs->read_file(cj::kHeaderPath, b, n)), 0);
+    b[4 + cj::kHeaderBase + 2] = uint8_t(b[4 + cj::kHeaderBase + 2] ^ 0x05);   // not a permutation any more
+    const std::uint16_t crc = bbstore::crc16(0xFFFF, {b.data(), n - 2});
+    b[n - 2] = uint8_t(crc); b[n - 1] = uint8_t(crc >> 8);
+    w.fs->write_file(cj::kHeaderPath, {b.data(), n});
+    w.j->replay(r);
+    CHECK_EQ(r.found, false); CHECK_EQ(int(r.problem), int(cj::Problem::BadHeader));
+    // A replan that moves rows rewrites the header too: the order is part of the plan's shape, and the moved order is
+    // what a resume comes back in.
+    Vol x;
+    auto live = fh22(true);
+    arm(x, live);
+    x.reboot(); cj::Replay rr; x.j->replay(rr); x.j->adopt(rr);
+    std::vector<ct::Step> moved = live;
+    const size_t pps0 = first_of(moved, A::Pps);
+    std::rotate(moved.begin() + long(pps0), moved.begin() + long(pps0) + 1, moved.begin() + long(pps0) + 2);   // two PPS rows swap places
+    x.j->note_plan(moved);
+    CHECK_EQ(x.j->plan_pending(), true);          // the plan moved: sections and header are stale
+    x.settle(moved);
+    CHECK_EQ(x.j->plan_pending(), false);
+    x.reboot(); x.j->replay(rr);
+    CHECK_EQ(rr.found, true); CHECK_EQ(rows_are(rr, moved), true);   // the moved order is what comes back
 }
 // ROADMAP 2026-11-09 "Charger-test journal keeps its own row order": a resume mid-PD (Mi 6 A rows in the plan) must rebuild the
 // steps in the planner's step-list order - the order the run executes and the grid shows - not an order re-derived from the
@@ -949,7 +969,7 @@ static void test_plan_pending_ignores_verdicts() {
 
 int main() {
     test_a_resume_mid_pd_keeps_the_planners_step_order();
-    test_plan_order_merges_sections_back(); test_plan_pending_ignores_verdicts();
+    test_the_header_carries_the_plan_order(); test_plan_pending_ignores_verdicts();
     test_section_mapping();
     test_a_late_avs_list_rewrites_only_the_pps_section(); test_dropping_the_turbo_rows_rewrites_only_the_oem_section();
     test_a_verdict_rewrites_only_its_section_and_not_the_header(); test_a_pump_writes_one_file_and_its_cost_is_bounded();

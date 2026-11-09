@@ -612,20 +612,24 @@ list rewrite `pps` only; a verdict rewrites the one section of its row. `Journal
 marks the sections whose row count or layout hash changed. The page pumps one dirty file per tick (`hw::pump`), the header goes
 last, and only when a section's count or hash changed.
 
-**Replay.** The sections hold the rows section by section. Replay puts them back in the plan's order: the unit order of the run
-(`mt.rec`, `charger_test::unit_order`), the planner's algorithm order inside a unit (`kPlanOrder`), and each hunt row after the
-last non-hunt row of its PDO with a current of 1 A or less (the full-current row follows its hunts). A hunt with no such row goes
-to the end of its unit. The phase marker (section, ordinal, group, algorithm, position, voltage) is checked against the row it
-names; a marker for a row the plan moved from under it is void.
+**Replay.** The sections hold the rows section by section. The header (format 3) also carries the plan's order - one byte per
+row, `order[k]` = where the plan's k-th row sits in the section-by-section array - written from the planner's step list
+(`Runner::steps()`, the same structure the grid uses since 98e2f39) when the plan is journaled or re-planned. Replay applies it
+verbatim, so a resumed run executes exactly in the order it was planned in; no order (where the 6 A hunt rows sit) is re-derived
+from the rows. An order that is not a permutation of the rows is a bad header: the run is not resumable. The phase marker
+(section, ordinal, group, algorithm, position, voltage) is checked against the row it names; a marker for a row the plan moved
+from under it is void.
 
 **Crash safety.** An arm drops the header first, sweeps stale files, writes the sections, and writes the header last, so a cut
 anywhere in it leaves no run at all. A cut in the middle of the rewrite of one section leaves the other four valid (each has its
-own crc and hash). Replay checks every section against the five hashes of the header. A mismatch, a bad crc or a missing file is
-`Problem::BadSection`: the run is NOT resumable (chosen policy; it never resumes with rows it cannot vouch for), the boot logs
+own crc and hash). Replay checks every section against the five hashes of the header, and the order against the rows. A
+mismatch, a bad crc or a missing file is
+`Problem::BadSection`, a broken order `Problem::BadHeader`: the run is NOT resumable (chosen policy; it never resumes with rows
+it cannot vouch for), the boot logs
 `[CJRN] run not resumable: section X does not match its header, journal dropped` and drops the header. The one window is between a section's rename and the header write that follows it (one file write): a
 cut there leaves a section newer than the header, which reads as a mismatch and costs the resume of that run. An old journal
-(format 1 or any other format byte) is dropped at boot with a log line (`Problem::OldFormat`) and never read; its stale
-`s###.rec` files are swept at the next arm.
+(format 2 without the order, format 1, or any other format byte) is dropped at boot with a log line (`Problem::OldFormat`) and
+never read; its stale `s###.rec` files are swept at the next arm.
 
 **No drain, a wait instead.** A request above 5 V that starts a contract names its row in the phase marker, and the marker must
 point at a row that is on flash. If the plan changed (a replan, a late AVS list) and its files are not yet written

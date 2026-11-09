@@ -4,8 +4,8 @@
 // powered from VBUS; the run is therefore kept on the littlefs volume (k2/core/fs.hpp) and rebuilt at the next boot.
 // Pure logic over k2::fs::Fs, host-tested by tests/test_charger_journal.cpp on a RAM disk that can lose power.
 //
-// Format 2. The plan is five independent section files, so a plan change rewrites only the section it touched:
-//   /jr/h.rec       Header  (run id, selection, evidence, and per section: row count + layout hash); written LAST by an arm
+// Format 3. The plan is five independent section files, so a plan change rewrites only the section it touched:
+//   /jr/h.rec       Header  (run id, selection, evidence, per section: row count + layout hash, and the plan order); written LAST by an arm
 //   /jr/pd.sec      PD fixed, EPR fixed, the EPR levels, PD revision rows
 //   /jr/pps.sec     PPS, SPR AVS, EPR AVS
 //   /jr/qc.sec      QC2, QC3, QC3+, AFC, FCP, SCP (and their Class B rows)
@@ -20,22 +20,27 @@
 // row (the plan row and its result). Rows are addressed by (section, ordinal): the n-th row of the plan that belongs to the
 // section. The layout hash covers what makes a row that row (group, algorithm, position, level, current, flags, PDO), never
 // its result, so a verdict rewrites one file and a replan rewrites the sections whose hash moved plus the header.
+// The header's last kMaxSteps payload bytes are the plan order the arm/replan read from the planner's step list
+// (Runner::steps(), the one structure the grid also uses since 98e2f39): order[k] = the index of the plan's k-th row in the
+// section-by-section array the sections are read back into. Replay applies it verbatim, so a resumed run executes exactly
+// in the order it was planned in - no second copy of the order (where the 6 A hunt rows sit) is re-derived from the rows.
 // Other records: 0 u8 0xA5  1 u8 type  2 u8 payload length (even)  3 u8 0  4.. payload  crc16 (CCITT, bytes 0..3+len).
 // littlefs commits a file atomically on close, so a power cut leaves the old file or the new one.
 //
-// Resume policy: every section named by the header is read and must match it (size, crc, id, row count, layout hash). A section
-// that does not makes the run NOT resumable (Problem::BadSection, `bad` names it): a plan that is only partly known would put the
-// pending rows at the wrong addresses, and a "last good copy" would need a second copy of every section (flash and a second
-// consistency story). The one window is the gap between a section file replaced and the header that names its new hash (one
+// Resume policy: every section named by the header is read and must match it (size, crc, id, row count, layout hash), and the
+// order must be a permutation of the rows. Anything that does not makes the run NOT resumable (Problem::BadSection, `bad`
+// names the section; a broken order is Problem::BadHeader): a plan that is only partly known would put the pending rows at
+// the wrong addresses, and a "last good copy" would need a second copy of every section (flash and a second consistency
+// story). The one window is the gap between a section file replaced and the header that names its new hash and order (one
 // flash write, tens of ms); it is the only way a clean power cut loses a run, and it is reported, never mis-read.
-// Format 1 (one file per row, header payload 30) and any other format byte are Problem::OldFormat: dropped at boot, never read.
+// Format 2 (sections, the order re-derived at replay), format 1 (one file per row, header payload 30) and any other format
+// byte are Problem::OldFormat: dropped at boot, never read.
 //
 // Order of an arm: header dropped FIRST (a cut during the rest leaves no run at all), stale files swept, every section
 // written, the header LAST. Replay order: header, sections, phase (void unless it still names a pending row), resume, meta,
 // attempt, finish.
-// The sections hold the rows section by section; replay puts them back in the plan's order (detail::plan_order: the run's unit
-// order from the meta record, the planner's algorithm order inside a unit, the hunt rows inside their PDO's rows), so a resumed
-// run executes in the order it was planned in.
+// The sections hold the rows section by section; replay puts them back in the plan's order with the order the header carries
+// (written from the planner's step list), so a resumed run executes in the order it was planned in.
 #pragma once
 #include <array>
 #include <cstddef>
@@ -53,7 +58,7 @@ namespace k2::charger_journal {
 inline constexpr std::uint8_t kMagic = 0xA5;
 inline constexpr const char* kDir = "/jr";
 inline constexpr const char* kHeaderPath = "/jr/h.rec";
-inline constexpr std::uint8_t kFormat = 2;
+inline constexpr std::uint8_t kFormat = 3;
 
 // Type::Step is the format 1 record (one row per file); nothing writes it any more.
 enum class Type : std::uint8_t { Header = 1, Step = 2, Phase = 3, Finish = 4, Resume = 5, Meta = 6, Attempt = 7 };
@@ -65,7 +70,9 @@ inline constexpr std::size_t kSections = 5;
 // Why a replay found no run although a header was there.
 enum class Problem : std::uint8_t { None, OldFormat, BadHeader, BadSection };
 
-inline constexpr std::size_t kHeaderPayload = 60, kPhasePayload = 10, kFinishPayload = 2, kResumePayload = 2;
+inline constexpr std::size_t kHeaderBase = 60;   // evidence + per-section counts and hashes, as in format 2
+inline constexpr std::size_t kOrderBytes = charger_test::kMaxSteps;   // the plan order rides in the header, one byte per row
+inline constexpr std::size_t kHeaderPayload = kHeaderBase + kOrderBytes, kPhasePayload = 10, kFinishPayload = 2, kResumePayload = 2;
 inline constexpr std::size_t kMetaPayload = 24, kAttemptPayload = 4;
 inline constexpr std::size_t kRecordOverhead = 6;
 inline constexpr std::size_t kMaxRecord = kRecordOverhead + kHeaderPayload;
@@ -73,6 +80,7 @@ inline constexpr std::size_t kOldHeaderPayload = 30;
 inline constexpr std::size_t kSecHeader = 8, kRowBytes = 18;
 static_assert(kMetaPayload <= kHeaderPayload && charger_test::kMaxUnits == 16, "the meta record is sized for 16 units");
 static_assert(charger_test::kMaxSteps < 255, "a section header counts rows in a byte");
+static_assert(kHeaderPayload <= 254 && kHeaderPayload % 2 == 0, "a record payload length is one even byte");
 static_assert(kSecHeader + kRowBytes * charger_test::kMaxSteps <= fs::kBlockSize - 8, "a section is at most one block");
 
 inline const char* section_path(Section s) {
@@ -143,7 +151,7 @@ struct Replay {
     std::uint32_t run_id = 0;
     charger_test::Options options{};
     charger_test::Evidence evidence{};
-    std::array<charger_test::Step, charger_test::kMaxSteps> steps{};   // the plan's order (see detail::plan_order)
+    std::array<charger_test::Step, charger_test::kMaxSteps> steps{};   // the plan's order (the order the header carries, from the planner's step list)
     std::size_t count = 0;
     std::uint8_t resumed = 0;
     Phase phase = Phase::None;          // marker with no final result after it
@@ -172,10 +180,12 @@ inline std::size_t finish_record(std::span<std::uint8_t> out, Type t, std::size_
     detail::put16(out.data() + 4 + len, crc);
     return 4 + len + 2;
 }
-// What the header says about the section files: row count and layout hash of each.
+// What the header says about the plan: row count and layout hash of each section file, and the plan order over the
+// section-by-section array (order[k] = the index of the plan's k-th row there; 0xFF past the last row).
 struct SectionInfo {
     std::array<std::uint16_t, kSections> rows{};
     std::array<std::uint32_t, kSections> sig{};
+    std::array<std::uint8_t, kOrderBytes> order{};
 };
 inline std::size_t encode_header(std::span<std::uint8_t> out, std::uint32_t run_id, const charger_test::Options& o,
                                  const charger_test::Evidence& e, const SectionInfo& si) {
@@ -192,6 +202,7 @@ inline std::size_t encode_header(std::span<std::uint8_t> out, std::uint32_t run_
     p[28] = std::uint8_t((e.reported.ver_major << 4) | (e.reported.ver_minor & 15));
     p[29] = e.reported.valid ? 1 : 0;
     for (std::size_t n = 0; n < kSections; ++n) { detail::put16(p + 30 + 6 * n, si.rows[n]); detail::put32(p + 32 + 6 * n, si.sig[n]); }
+    for (std::size_t n = 0; n < kOrderBytes; ++n) p[kHeaderBase + n] = si.order[n];
     return finish_record(out, Type::Header, kHeaderPayload);
 }
 // One plan row and its result, 18 bytes.
@@ -311,56 +322,31 @@ inline void conclude(Replay& r) {
     r.unfinished = r.unfinished && open;
 }
 
-// A run's rows come off the disk section by section; the Runner wants them in the plan's order: unit-major (the units in the run's
-// order), inside a unit by the planner's algorithm order (charger_test::kPlanOrder) and, inside one algorithm, as the section holds
-// them (the plan order). The 6 A hunt rows (oem) sit inside their PDO's rows: after the last row of the same unit, algorithm and
-// position that asks no more than kPlanRowMa, i.e. before the full-current PPS row that closes an APDO. A hunt with no such row
-// goes to the end of its unit. order[k] = the index in `rows` of the plan's k-th row.
+// A run's rows come off the disk section by section; the Runner wants them in the plan's order - the order of the planner's step
+// list (Runner::steps()) the sections were written from, which the header carries (format 3). encode_order is the mechanical
+// translation of that list into section-by-section indexing (a stable partition by section, no rule of its own), so the 6 A hunt
+// rows land exactly where the planner emitted them, whatever the run did to a row in between. order[k] = the index in `rows`
+// of the plan's k-th row; 0xFF past the last row.
 namespace detail {
-inline std::size_t unit_rank(const charger_test::UnitList& u, const charger_test::Step& s) {
-    const charger_test::Unit x = charger_test::unit_of(s);
-    for (std::size_t k = 0; k < u.n; ++k) if (u.u[k] == x) return k;
-    return u.n;
-}
-inline std::size_t alg_rank(const charger_test::Step& s) {
-    constexpr std::size_t n = std::size(charger_test::kPlanOrder);
-    for (std::size_t k = 0; k < n; ++k) if (charger_test::kPlanOrder[k] == s.algorithm) return k;
-    return n;
-}
-inline void plan_order(std::span<const charger_test::Step> rows, const charger_test::UnitList& units, std::uint8_t* order) {
-    const std::size_t n = rows.size();
-    std::size_t m = 0;
-    for (std::size_t i = 0; i < n; ++i) {   // the rows that are not hunts: stable insertion sort by (unit rank, algorithm rank)
-        if (rows[i].hunt) continue;
-        const std::size_t ur = unit_rank(units, rows[i]), ar = alg_rank(rows[i]);
-        std::size_t j = m;
-        while (j > 0) {
-            const charger_test::Step& p = rows[order[j - 1]];
-            const std::size_t pu = unit_rank(units, p);
-            if (pu < ur || (pu == ur && alg_rank(p) <= ar)) break;
-            order[j] = order[j - 1]; --j;
-        }
-        order[j] = std::uint8_t(i); ++m;
+inline void encode_order(std::span<const charger_test::Step> steps, std::uint8_t* order) {
+    std::array<std::uint16_t, kSections> base{};
+    std::uint16_t at = 0;
+    for (std::size_t s = 0; s < kSections; ++s) { base[s] = at; at = std::uint16_t(at + section_rows(steps, Section(s))); }
+    std::array<std::uint8_t, kSections> seen{};
+    for (std::size_t k = 0; k < steps.size() && k < kOrderBytes; ++k) {
+        const std::size_t sec = std::size_t(section_of(steps[k]));
+        order[k] = std::uint8_t(base[sec] + seen[sec]++);
     }
-    for (std::size_t i = 0; i < n; ++i) {   // then each hunt, in section order, into its place
-        if (!rows[i].hunt) continue;
-        const charger_test::Step& h = rows[i];
-        const charger_test::Unit hu = charger_test::unit_of(h);
-        std::size_t at = 0;
-        bool found = false;
-        for (std::size_t k = 0; k < m; ++k) {
-            const charger_test::Step& s = rows[order[k]];
-            if (!s.hunt && s.algorithm == h.algorithm && s.pos == h.pos && s.ma <= charger_test::kPlanRowMa && charger_test::unit_of(s) == hu)
-                at = k + 1, found = true;
-        }
-        if (!found) {
-            const std::size_t hr = unit_rank(units, h);
-            for (std::size_t k = 0; k < m; ++k) if (unit_rank(units, rows[order[k]]) <= hr) at = k + 1;
-        }
-        while (at < m && rows[order[at]].hunt) ++at;   // after the hunts of this PDO already placed
-        for (std::size_t k = m; k > at; --k) order[k] = order[k - 1];
-        order[at] = std::uint8_t(i); ++m;
-    }
+    for (std::size_t k = steps.size(); k < kOrderBytes; ++k) order[k] = 0xFF;
+}
+// The fingerprint of the plan order the header names, so a replan that moved rows (a re-announce re-placing a hunt, a dropped
+// row) rewrites the header too even when no section's rows or hash changed.
+inline std::uint32_t order_sig(std::span<const charger_test::Step> steps) {
+    std::array<std::uint8_t, kOrderBytes> order{};
+    encode_order(steps, order.data());
+    std::uint32_t h = 2166136261u;
+    for (std::size_t k = 0; k < steps.size() && k < kOrderBytes; ++k) h = (h ^ order[k]) * 16777619u;
+    return h;
 }
 // rows[k] = old rows[order[k]], in place (cycle by cycle, one spare row).
 inline void apply_order(std::span<charger_test::Step> rows, const std::uint8_t* order) {
@@ -418,13 +404,13 @@ public:
             at += si.rows[s];
         }
         r.count = at;
-        read_small("/jr/mt.rec", b, r);   // the unit order, which the rows are put back in
+        read_small("/jr/mt.rec", b, r);   // the unit order (the Runner's own copy; the row order comes from the header now)
         replay_phase(r, base, si);
-        std::array<std::uint8_t, charger_test::kMaxSteps> order{};
-        detail::plan_order({r.steps.data(), r.count}, charger_test::unit_order(r.options), order.data());
+        // The plan's order as the planner's step list had it, carried by the header: map the phase marker through it, then
+        // put the rows back in it.
         if (r.phase != Phase::None && r.phase_index < r.count)
-            for (std::size_t k = 0; k < r.count; ++k) if (order[k] == r.phase_index) { r.phase_index = k; break; }
-        detail::apply_order({r.steps.data(), r.count}, order.data());
+            for (std::size_t k = 0; k < r.count; ++k) if (si.order[k] == r.phase_index) { r.phase_index = k; break; }
+        detail::apply_order({r.steps.data(), r.count}, si.order.data());
         read_small("/jr/rs.rec", b, r);
         read_small("/jr/at.rec", b, r);
         read_small("/jr/fin.rec", b, r);
@@ -450,10 +436,10 @@ public:
     // An arm is in progress (the run is not yet on flash).
     bool working() const { return stage_ != Stage::Idle; }
     // Something is still to be written: an arm in progress, a section to rewrite, or a header that does not name what the
-    // section files hold. The Runner does not start an above-5 V request while this is true.
+    // section files hold or the order it was written with. The Runner does not start an above-5 V request while this is true.
     bool pending() const { return !broken_ && (stage_ != Stage::Idle || dirty_ != 0 || header_stale()); }
-    // The same, for the plan's SHAPE only: an arm, a section whose rows or layout changed, the header naming them. What the phase
-    // marker's (section, ordinal) address depends on; a section that is only dirty for a verdict does not hold anything back.
+    // The same, for the plan's SHAPE only: an arm, a section whose rows or layout changed, the header naming them, the plan's
+    // order moved. What the phase marker's address depends on; a section that is only dirty for a verdict does not hold anything back.
     bool plan_pending() const { return !broken_ && (stage_ != Stage::Idle || plan_dirty_ != 0 || header_stale()); }
 
     // A row of the plan changed (its result): its section file is rewritten by a later pump().
@@ -462,7 +448,8 @@ public:
         dirty_ |= bit(section_of(steps[idx]));
     }
     // The plan may have changed shape (rows added, dropped, moved): the sections whose row count or layout hash differ from what
-    // is on flash are rewritten, and the header after them. Costs a hash pass, no flash.
+    // is on flash are rewritten, and the header after them - also when only the plan's ORDER moved (a re-announce re-placing a
+    // row, a dropped hunt): the header names the order, so it is rewritten too. Costs a hash pass, no flash.
     void note_plan(std::span<const charger_test::Step> steps) {
         if (!live()) return;
         for (std::size_t s = 0; s < kSections; ++s) {
@@ -470,6 +457,8 @@ public:
             if (srows_[s] != section_rows(steps, Section(s)) || ssig_[s] != layout_sig(Section(s), steps))
                 dirty_ |= bit(Section(s)), plan_dirty_ |= bit(Section(s));
         }
+        if (hord_known_ && steps.size() <= charger_test::kMaxSteps && detail::order_sig(steps) != hord_sig_)
+            dirty_ |= kOrderBit, plan_dirty_ |= kOrderBit;
     }
     // The journal now mirrors a run read back at boot (its sections are on flash as read): later changes are written as changes.
     void adopt(const Replay& r) {
@@ -479,6 +468,7 @@ public:
             srows_[s] = hrows_[s] = std::uint16_t(section_rows(all, Section(s)));
             ssig_[s] = hsig_[s] = layout_sig(Section(s), all);
         }
+        hord_sig_ = detail::order_sig(all); hord_known_ = true;   // r.steps is in the plan's order: this is the order the header named
         armed_ = true;
     }
     // A journal in the old layout is dropped at boot (the header only; the next arm sweeps the rest).
@@ -512,8 +502,8 @@ public:
                 ++cur_;
                 break;
             case Stage::Header:
-                if (dirty_ != 0) { stage_ = Stage::Late; break; }   // the plan moved while the sections were written
-                if (const Err x = write_header(run_id, o, e); x != Err::Ok) return stop(x);
+                if (dirty_ & kSectionMask) { stage_ = Stage::Late; break; }   // the plan moved while the sections were written
+                if (const Err x = write_header(run_id, o, e, steps); x != Err::Ok) return stop(x);
                 stage_ = Stage::Idle; armed_ = true;
                 return Err::Ok;
             case Stage::Late: {
@@ -573,14 +563,17 @@ private:
     static constexpr std::uint16_t kUnknown = 0xFFFF;
     enum class Stage : std::uint8_t { Idle, Mkdir, DropHeader, Sweep, Sections, Header, Late };
     static constexpr std::uint8_t bit(Section s) { return std::uint8_t(1u << unsigned(s)); }
+    static constexpr std::uint8_t kSectionMask = 0x1F, kOrderBit = 0x20;   // dirty_ bits: one per section, plus "the header's plan order is stale"
     bool live() const { return armed_ || stage_ != Stage::Idle; }
     void forget() {
         armed_ = false; dirty_ = plan_dirty_ = 0;
         srows_.fill(kUnknown); hrows_.fill(kUnknown); ssig_.fill(0); hsig_.fill(0);
+        hord_sig_ = 0; hord_known_ = false;
     }
-    // The header names the section files as they were last written.
+    // The header names the section files as they were last written, and the plan order as it was last written.
     bool header_stale() const {
         if (!armed_) return false;
+        if (dirty_ & kOrderBit) return true;
         for (std::size_t s = 0; s < kSections; ++s)
             if (srows_[s] != hrows_[s] || ssig_[s] != hsig_[s]) return true;
         return false;
@@ -592,7 +585,7 @@ private:
         if (broken_) { dirty_ = plan_dirty_ = 0; return Err::Broken; }
         bool did = false;
         Err x = write_dirty(steps, did);
-        if (x == Err::Ok && !did && header_stale()) x = write_header(run_id, o, e);
+        if (x == Err::Ok && !did && header_stale()) x = write_header(run_id, o, e, steps);
         if (x != Err::Ok) dirty_ = plan_dirty_ = 0;   // nothing more is tried on a failed volume
         return x;
     }
@@ -631,12 +624,16 @@ private:
         plan_dirty_ &= std::uint8_t(~bit(sec));
         return Err::Ok;
     }
-    Err write_header(std::uint32_t run_id, const charger_test::Options& o, const charger_test::Evidence& e) {
+    Err write_header(std::uint32_t run_id, const charger_test::Options& o, const charger_test::Evidence& e,
+                     std::span<const charger_test::Step> steps) {
         SectionInfo si;
         for (std::size_t s = 0; s < kSections; ++s) { si.rows[s] = srows_[s] == kUnknown ? 0 : srows_[s]; si.sig[s] = ssig_[s]; }
+        detail::encode_order(steps, si.order.data());   // the plan's order as the planner's step list (Runner::steps()) has it
         std::array<std::uint8_t, kMaxRecord> buf{};
         if (const Err x = put(kHeaderPath, {buf.data(), encode_header(buf, run_id, o, e, si)}); x != Err::Ok) return x;
         hrows_ = srows_; hsig_ = ssig_;
+        hord_sig_ = detail::order_sig(steps); hord_known_ = true;
+        dirty_ &= std::uint8_t(~kOrderBit); plan_dirty_ &= std::uint8_t(~kOrderBit);
         return Err::Ok;
     }
 
@@ -716,6 +713,16 @@ private:
             total += si.rows[n];
         }
         if (total > kMaxSteps || total != detail::get16(p + 10)) return Problem::BadHeader;
+        for (std::size_t k = 0; k < total; ++k) si.order[k] = p[kHeaderBase + k];
+        for (std::size_t k = total; k < kOrderBytes; ++k) si.order[k] = 0xFF;
+        {   // the order must be a permutation of the rows: a torn or foreign header is not a run
+            std::array<bool, kOrderBytes> seen{};
+            for (std::size_t k = 0; k < total; ++k) {
+                const std::uint8_t o = si.order[k];
+                if (o >= total || seen[o]) return Problem::BadHeader;
+                seen[o] = true;
+            }
+        }
         r.unfinished = true;
         return Problem::None;
     }
@@ -814,6 +821,8 @@ private:
     std::uint8_t plan_dirty_ = 0;                           // the subset of dirty_ whose rows or layout changed (not only a verdict)
     std::array<std::uint16_t, kSections> srows_{}, hrows_{};   // row count of each section file / as the header names it
     std::array<std::uint32_t, kSections> ssig_{}, hsig_{};     // layout hash of each section file / as the header names it
+    std::uint32_t hord_sig_ = 0;        // fingerprint of the plan order the header names
+    bool hord_known_ = false;           // false until a header was written (or a replay adopted)
 };
 
 // Resume gate: the OK press is accepted only after VBUS sat in vSafe5V (4.75..5.50 V) for kStableMs.
