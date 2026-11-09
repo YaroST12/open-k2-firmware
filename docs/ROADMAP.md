@@ -223,6 +223,33 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     (slot-move re-queue, rebalanced in the journal header byte 9 and card format v8, the 43-values comment, the
     logdb id 418 / post-rebase hashes in the branch commits, the guarded `&steps_[index_]`); tests red first in
     ff42512.
+- **A source holding the wrong voltage on the 5 V contract fails the unit as "no reattach"** (2026-11-09, open, found
+  in the hardware run of a1da8c3; `runs/2026-11-09-splitter/streamB2/`, `ct-B2` output in the session log). Anker
+  2-way splitter behind the Baseus 140 W, OnePlus 15 plugged into its other output during the unit detach (PPS, ~8.7 V).
+  - Evidence: the unit attach got the re-split list 5/9/12/15 V 1.5 A + 20 V 2.5 A (the re-plan skipped PPS/EPR rows as
+    NoOffer, correct), Requested PDO 1, Accept + PS_RDY, but VBUS read 7.55-7.60 V the whole time (149.57 s on). The
+    attach waits for `safe5(vbus)` (`poll_attach`, `src/chargertest/charger_test.cpp` ~:1576), so it never settled;
+    at 151.73 s the splitter cut VBUS and Rp (the K2 detached at 152.24 s, "no Rp"), and at 152.73 s
+    `kAttachContractMs` (3000 ms from the caps) ran out: `fail_unit` failed all six PD rows `NoReattach`, tries=0,
+    "measured 1633 mV" (a VBUS reading mid-decay). The card says "no PD after re-attach at 1.63 V", which is false: PD
+    came back, the voltage was wrong.
+  - Fix: tell the cases apart in `poll_attach` when `kAttachContractMs` runs out. A contract at PDO 1 (PS_RDY seen) with
+    VBUS outside vSafe5V is a new reason (e.g. `WrongVoltage`, "5 V contract held at 7.6 V") that records the highest
+    VBUS seen during the wait, not the reading at the timeout; no caps at all stays `NoReattach`. Also a source-side
+    drop (Rp gone) during the attach wait restarts the wait once (the splitter came back with its standby pull-up,
+    `slow-rp-wake`, ~1.1-1.7 s after a steady Rd) instead of letting the timer run on. Decoder entries in
+    `k2_remote.py`, `k2proto.js`, `qr_corpus.py`, `report_card.py`, `card.js` (same pattern as #42 Withdrawn).
+  - Not a K2 bug, for `docs/CHARGER_QUIRKS.md`: pattern `shared-bus-split`: on this splitter, with a PPS sink on the
+    other output, the K2's port carries that output's voltage (7.6 V) under a 5 V contract. The other device's PPS
+    voltage sets both ports; the 5 V contract is not honoured.
+  - Validate: host tests (red first) in `tests/test_charger_test.cpp`: PS_RDY at PDO 1 + VBUS 7600 mV for
+    kAttachContractMs -> WrongVoltage with measured 7600; no caps -> NoReattach as before; Rp lost at 1.5 s then caps
+    again at 3.2 s -> the unit runs. Hardware: the same setup, OnePlus on PPS before START: the card names the wrong
+    voltage; OnePlus unplugged: the unit runs.
+  - Still unverified on a1da8c3: a re-split **while a row runs** (restart rules 2-6) - in this run the OnePlus went in
+    during the unit detach, so the first list was already the split one. Next try: plug it after the first row passes.
+  - `slow-rp-wake` partly seen: START held a steady Rd and the sleeping splitter (CC2 2990 mV open) answered 1680 ms
+    later; a plain `pd-reread` attached in 179 ms (the port was awake). The Rd-seek path itself is not yet exercised.
 - **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in 1d45a76, hardware check
   pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
