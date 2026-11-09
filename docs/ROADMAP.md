@@ -39,6 +39,19 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Run ends "unsafe (5V release failed)" with 15 V on the port after a mid-run re-announce** (2026-11-09, Anker 2-way
+  splitter behind a Baseus 140 W, charger test "PD only"): the splitter re-split its budget and re-announced a shorter
+  list while the K2 held 15 V; the runner's release then sent a second Request (PDO 1) before the first Request's
+  PS_RDY, and the sink took the first Request's Accept/PS_RDY for the second's: Ready at "5 V" with VBUS at 14.85 V.
+  Fixed in 3d8fa2c (sink) and aaa4756 (runner), hardware check pending (pattern `budget-reannounce-mid-run` in
+  CHARGER_QUIRKS): the sink is the single gate for Requests (a hand-back is held until PS_RDY, Reject or Wait; a
+  re-announce while a hand-back is wanted gets PDO 1 directly), the 5 V release is verified against VBUS
+  (4.75-5.5 V, 1.5 s, two PDO 1 retries, then a sink Hard Reset; none on a self-powered K2, which ends Failed and
+  reports unsafe). Check: splitter plus Baseus 140 W, charger test "PD only", wait for the splitter's re-announce
+  mid-run (Black Box `pd_trace.py dump`): one Request at a time on the wire, VBUS back at 5 V after the release,
+  (a retry, if VBUS did not follow, is a PDO 1 Request about 1.5 s after the release PS_RDY, a Hard Reset the last
+  resort), no "unsafe (5V release failed)" while VBUS is at 5 V.
+
 - **Passive pick on the wrong CC line** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W): the Rd-less scan
   read CC2 high (floating or the PLUS-key coupling) and attached CC2; the Rd that `pd-reread` / START / a trigger
   then put there read 0 V, the attach ended in the 500 ms no-Rp detach and CC1 was never tried. Fixed in d615f3e,
