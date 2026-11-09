@@ -1507,16 +1507,19 @@ static void test_faults() {
         if (mode == 1) ++f.in.session;
         if (mode == 2) f.in.vbus_mv = -1;
         if (mode == 3) ++f.in.pd.source_hard_resets;
-        if (mode == 4) --f.caps.pdos[0].raw;   // current limit dropped: the planned row is no longer covered
+        if (mode == 4) --f.caps.pdos[0].raw;   // current limit dropped on the row's own PDO
         if (mode == 5) f.in.vbus_mv = 5501;
         f.tick(r, 100);
         // A source loss or hard reset mid-row costs one retry of the row (see the hard-reset tests); everything else fails it.
-        // mode 4 is the exception: the source re-announced with a lower current on the row's own PDO, so the row in flight is
-        // withdrawn by the source (pattern budget-reannounce-mid-run) and released to 5 V, not failed.
+        // mode 4 is the exception (user decision 2026-11-09): a fixed offer whose current drops keeps its row - the row in
+        // flight runs on at the new, lower current word, not withdrawn (only a voltage no longer offered is), not failed.
         CHECK_EQ(r.steps()[0].verdict,
-                 (mode == 1 || mode == 3) ? ct::Verdict::Pending : mode == 4 ? ct::Verdict::Skip : ct::Verdict::Fail);
-        if (mode == 4) CHECK_EQ(r.steps()[0].reason, ct::Reason::Withdrawn);
-        CHECK_EQ(f.releases > 0, mode != 1 && mode != 3);
+                 (mode == 1 || mode == 3) ? ct::Verdict::Pending : mode == 4 ? ct::Verdict::Running : ct::Verdict::Fail);
+        if (mode == 4) {
+            CHECK_EQ(int(r.steps()[0].reason), int(ct::Reason::None));
+            CHECK_EQ(pd::decode_pdo(r.steps()[0].pdo).max_ma, 3240u);   // the word was refreshed to the lower current
+        }
+        CHECK_EQ(f.releases > 0, mode != 1 && mode != 3 && mode != 4);
     }
 }
 static void test_timeouts_and_skips() {
@@ -4887,9 +4890,17 @@ static void test_a_genuinely_different_list_replans_per_row_but_another_revision
             continue;
         }
         CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
-        CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn) > 0, true);
+        if (variant == 0) {
+            // 20 V 3.5 A -> 2 A is only a current drop: per the 2026-11-09 decision the fixed row keeps its row and runs
+            // at the new, lower current word - nothing is withdrawn.
+            CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
+            for (const auto& s : r.steps())
+                if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 2000u); }
+        } else {
+            CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn) > 0, true);
+        }
         CHECK_EQ(only_pass_or_skip(r), true);
-        CHECK_EQ(f.replans.empty(), false);
+        CHECK_EQ(f.replans.empty(), variant == 0);   // a word-only change is not a re-plan
     }
 }
 
@@ -5005,13 +5016,15 @@ static void test_a_reannounce_that_places_no_row_is_still_offers_changed() {
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
     CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 1; }), true);   // the 5 V row is in flight
     f.caps = splitter_reannounced(); f.caps.num_pdos = 1;
-    f.caps.pdos[0] = pd::decode_pdo((100u << 10) | 50);   // only a 5 V 0.5 A PDO: even the row in flight is not covered
+    f.caps.pdos[0] = pd::decode_pdo((240u << 10) | 300);   // only a 12 V 3 A PDO: no offered voltage matches any row (not even the 5 V row in flight)
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged) > 0, true);
     CHECK_EQ(f.replans.empty(), true);
     CHECK_EQ(r.evidence().rebalanced, 0u);
 }
+// (A current-only drop on a fixed PDO does NOT count as "places no row": per the 2026-11-09 decision the fixed row whose
+// voltage is still offered keeps its row and runs at the new, lower current word - see the fixed-offer test below.)
 
 // ---- review of k2/reannounce-replan (2026-11-09), red first: the re-plan semantics of the mid-run re-announce ----
 
@@ -5067,7 +5080,7 @@ static void test_a_pps_change_during_the_pd_unit_does_not_withdraw_the_pdlow_row
         f.tick(r, 100);
         for (const auto& s : r.steps())
             if (ct::unit_of(s) == ct::Unit::PdLow) { CHECK_EQ(s.verdict, ct::Verdict::Pending); CHECK_EQ(int(s.reason), int(ct::Reason::None)); }
-        CHECK_EQ(f.plan_changes, pc);   // another unit's rows are re-queued silently, never counted
+        CHECK_EQ(f.plan_changes, pc + 1);   // exactly the running unit's own PPS rows were withdrawn; the PdLow rows added no count
     }
 }
 // Item 2: rebalanced / revision_ / plan_changed() only when a row was withdrawn, came back or moved slot. A
@@ -5112,13 +5125,13 @@ static void test_a_pps_change_keeps_the_rows_whose_target_still_fits() {
         unsigned full_withdrawn = 0, pps_pass = 0;
         for (const auto& s : r.steps()) {
             if (s.algorithm != A::Pps) continue;
-            if (s.ma >= 5000 && s.reason == ct::Reason::Withdrawn) ++full_withdrawn;   // 3 A < 5 A: no longer fits
+            if (s.ma > 3000 && s.reason == ct::Reason::Withdrawn) ++full_withdrawn;   // the full-current row (5 A) and the 6 A hunt: 3 A no longer fits
             if (s.verdict == ct::Verdict::Pass && s.ma <= 1000) {
                 ++pps_pass;
                 CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 3000u);   // kept, at the new lower word
             }
         }
-        CHECK_EQ(full_withdrawn, 1u);
+        CHECK_EQ(full_withdrawn, 2u);
         CHECK_EQ(pps_pass >= 3u, true);
     }
     {   // APDO 3.3-11 V -> 7-11 V: the 5.2 V row's target is outside the new range, the higher ones run
@@ -5148,14 +5161,13 @@ static void test_a_fixed_offer_whose_current_drops_keeps_its_row_at_the_lower_wo
     ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
     CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 2; }), true);   // the 5 V row done, the 9 V row in flight
-    const int pc = f.plan_changes;
     f.caps = four_pdo_caps(150);   // 15 V 1.5 A: only the current drops
     f.tick(r, 300000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
     CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
     CHECK_EQ(r.evidence().rebalanced, 0u);   // a word-only change is not a re-plan
-    CHECK_EQ(f.plan_changes, pc);
+    CHECK_EQ(f.replans.empty(), true);   // no re-plan was logged for it either
     for (const auto& s : r.steps())
         if (s.mv == 15000 && !s.hunt) {
             CHECK_EQ(s.verdict, ct::Verdict::Pass);
@@ -5239,6 +5251,7 @@ static void test_a_slot_only_move_of_the_row_in_flight_requeues_it() {
     c.pdos[3] = pd::decode_pdo((300u << 10) | 150);   // 15 V 1.5 A, now slot 4
     c.pdos[4] = pd::decode_pdo((400u << 10) | 250);   // 20 V 2.5 A, slot 5
     f.caps = c;
+    f.in.pd.pos = 4;   // the sink answered the re-announce by re-requesting the held 15 V at its new slot
     f.tick(r, 300000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);

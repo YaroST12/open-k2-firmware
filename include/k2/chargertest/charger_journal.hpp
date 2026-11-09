@@ -183,7 +183,7 @@ inline std::size_t encode_header(std::span<std::uint8_t> out, std::uint32_t run_
     std::size_t total = 0;
     for (const auto r : si.rows) total += r;
     detail::put32(p, run_id); detail::put32(p + 4, o.selected);
-    p[8] = kFormat; p[9] = 0;
+    p[8] = kFormat; p[9] = e.rebalanced;   // byte 9 was reserved 0 before: old journals read as "no re-balance"
     detail::put16(p + 10, std::uint16_t(total));
     detail::put32(p + 12, e.session); detail::put16(p + 16, e.monitor_mv); detail::put16(p + 18, e.cable_mv);
     detail::put16(p + 20, e.cable_ma); detail::put16(p + 22, e.raw_header);
@@ -707,7 +707,7 @@ private:
         e.selected = r.options.selected; e.session = detail::get32(p + 12);
         e.monitor_mv = detail::get16(p + 16); e.cable_mv = detail::get16(p + 18);
         e.cable_ma = detail::get16(p + 20); e.raw_header = detail::get16(p + 22);
-        e.wire_rev = p[24]; e.flags = p[25]; e.num_pdos = p[26];
+        e.wire_rev = p[24]; e.flags = p[25]; e.num_pdos = p[26]; e.rebalanced = p[9];   // reserved 0 on older journals
         e.reported.rev_major = p[27] >> 4; e.reported.rev_minor = p[27] & 15;
         e.reported.ver_major = p[28] >> 4; e.reported.ver_minor = p[28] & 15; e.reported.valid = p[29] != 0;
         std::size_t total = 0;
