@@ -562,11 +562,9 @@ void ChargerTestSession::save_card() {
         cable.flags |= uint8_t(((run_guard_ & 0x7F) << report_card::kCableGuardShift) & report_card::kCableGuardMask);
         if (run_guard_ & 0x80) cable.flags |= report_card::kCableGuardBypassed;
     }
-    // A fresh card per run (the fields build_into does not set: name, card_no, runs, ...). memset, not `= {}`,
-    // so no Card temporary lands on this frame; the two NSDMI values memset clears are restored by hand.
-    std::memset(&card_, 0, sizeof card_);
-    card_.format = report_card::kFormat;
-    card_.times = 1;
+    // A fresh card per run (the fields build_into does not set: name, card_no, runs, ...); the NSDMI values
+    // (format, times) come back through the default constructor.
+    card_ = report_card::Card{};
     report_card::build_into(card_, runner_.steps(), runner_.evidence(), runner_.handover(), card_id_,
                             report_card::hw::context(), runner_.state(), runner_.reason(), cable, runner_.resumed());
     report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
