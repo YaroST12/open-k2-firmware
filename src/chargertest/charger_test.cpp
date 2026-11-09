@@ -897,18 +897,21 @@ void Runner::regrow_plan(const pd::SourceCaps& caps, Input in) {
 }
 // A source that announces its list again mid-run (pattern budget-reannounce-mid-run: a shared-port splitter re-splitting its budget,
 // Anker 2-way behind a Baseus 140 W, 20 V dropped while 15 V stayed at a higher current; also reannounce-after-cable-discovery, Baseus
-// 70 W after the SOP' cable query, CUKTECH C1 after the Xiaomi auth with an APDO inserted ahead of ours). Same wire revision and none
-// of the excluded cases (VBUS dark, no list back within kCapsReturnMs, the preauth_tail window, EPR entry/exit or a partial EPR list,
-// the hunt-Reject answer): the list is re-planned PER ROW instead of the unit ending as "offers changed":
+// 70 W after the SOP' cable query, CUKTECH C1 after the Xiaomi auth with an APDO inserted ahead of ours; or the splitter's re-split
+// delivered as a COMPLETE EPR_Source_Capabilities, 2026-11-09 run A6). Same wire revision and none of the excluded cases (VBUS dark,
+// no list back within kCapsReturnMs, the preauth_tail window, the K2's own EPR entry (epr_stage_ == 2) or a partial EPR chunk, the
+// hunt-Reject answer): the list is re-planned PER ROW instead of the unit ending as "offers changed":
 //  - no PD row has run yet: the PD rows are planned again from the new list (replan_pd, extra APDOs get rows);
 //  - a Pending row the new list still offers takes its new slot and PDO word; a row it no longer offers (type or voltage range gone,
 //    a lower current, a dropped PDO, EPR without the EPR bit in PDO1) is skipped as Withdrawn ("withdrawn by source"), not
 //    CapsChanged, and the unit goes on against the new list; a row a withdrawn PDO comes back for is Pending again ("back"), as long
 //    as its unit has not ended;
-//  - the row in flight: if its own slot still offers it, it finishes (the word is refreshed); if not, it ends as withdrawn and is
-//    released to 5 V (the sink's single-Request gate serialises that release).
+//  - the row in flight: if its voltage (fixed) or target (PPS/AVS range) is still offered, it is RESTARTED at the new slot and
+//    current word once the list has settled (rule 1/2: no Request until kListSettleMs unchanged; the restart is not a try -
+//    flight_restart_, sent by poll_impl); if not offered, it ends as withdrawn and is released to 5 V (the sink's single-Request
+//    gate serialises that release).
 // A list that places no PD row of the RUNNING unit at all (pending or in flight), another wire revision, and no list back
-// within kCapsReturnMs stay CapsChanged (the caller's check below), as before.
+// within kCapsReturnMs stay CapsChanged (the caller's check below), as before - never a re-split while attached (rule 5).
 // Only rows of the running unit (unit_of(s) == unit_) may be withdrawn here or counted as placeable (review 2026-11-09):
 // a re-announce during the Pd unit must not withdraw the PdLow rows for good. Their pending rows are re-queued silently
 // when the list still offers them, so they are not stale when their unit starts; the running unit's own rows are re-placed
@@ -918,9 +921,17 @@ void Runner::regrow_plan(const pd::SourceCaps& caps, Input in) {
 // row, a current-only raise such as the Xiaomi post-auth 5 -> 6 A, the pre-auth short list): a word-only change still
 // refreshes the row's PDO word (a fixed offer whose current dropped runs at the new, lower word).
 void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
-    if (mode_ != Mode::Pd || late_pd_ || !caps.valid || caps.epr || caps.epr_partial || epr_stage_ == 2 ||
+    // A COMPLETE EPR_Source_Capabilities outside the K2's own EPR entry/exit (epr_stage_ == 2) is a re-announce like any
+    // other (2026-11-09, run A6); only a partial chunk stays excluded.
+    if (mode_ != Mode::Pd || late_pd_ || !caps.valid || caps.epr_partial || epr_stage_ == 2 ||
         caps.spec_rev != evidence_.wire_rev) return;
     if (in.vbus_mv >= 0 && in.vbus_mv < 1000) return;   // VBUS dark: excluded, the source is not announcing a budget
+    // Where the list in hand offers a row: on an EPR list the EPR rows (pos >= 8) are placed on its positions 8+ like any
+    // other row; on an SPR list an EPR row stays valid while PDO 1 still carries the EPR bit (the entry is made when the
+    // row asks), else it is withdrawn.
+    const auto offer_at = [&](const Step& s) -> int {
+        return s.pos >= 8 ? (caps.epr ? find_offer(caps, s) : (epr_capable_caps(caps) ? 0 : -1)) : find_offer(caps, s);
+    };
     bool started = false;
     for (const auto& s : steps()) {
         if (mode(unit_of(s)) != Mode::Pd) continue;
@@ -937,7 +948,7 @@ void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
         bool stale = false;
         for (const auto& s : steps()) {
             if (s.verdict != Verdict::Pending || unit_of(s) != unit_ || mode(unit_of(s)) != Mode::Pd) continue;
-            const int at = s.pos >= 8 ? (epr_capable_caps(caps) ? 0 : -1) : find_offer(caps, s);
+            const int at = offer_at(s);
             if (at < 0 || (s.pos < 8 && (size_t(at) != s.pos - 1u || caps.pdos[static_cast<size_t>(at)].raw != s.pdo))) { stale = true; break; }
         }
         if (!stale) return;
@@ -952,14 +963,11 @@ void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
     Step* flight0 = index_ < count_ && steps_[index_].verdict == Verdict::Running && mode(unit_of(steps_[index_])) == Mode::Pd
                        ? &steps_[index_] : nullptr;
     bool any_row = flight0 != nullptr, any_placeable = false;
-    if (flight0) {
-        const Step& s = *flight0;
-        any_placeable = s.pos >= 8 ? epr_capable_caps(caps) : find_offer(caps, s) >= 0;
-    }
+    if (flight0) any_placeable = offer_at(*flight0) >= 0;
     for (const auto& s : steps()) {
         if (mode(unit_of(s)) != Mode::Pd || s.verdict != Verdict::Pending || unit_of(s) != unit_) continue;
         any_row = true;
-        if (s.pos >= 8) { any_placeable |= epr_capable_caps(caps); continue; }
+        if (s.pos >= 8) { any_placeable |= offer_at(s) >= 0; continue; }
         if (s.pos > caps.num_pdos && tail_wait) { any_placeable = true; continue; }
         any_placeable |= find_offer(caps, s) >= 0;
     }
@@ -974,14 +982,19 @@ void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
     Step* flight = flight0;
     if (flight) {
         Step& s = *flight;
-        const int at = s.pos >= 8 ? (epr_capable_caps(caps) ? 0 : -1) : find_offer(caps, s);
+        const int at = offer_at(s);
         if (at < 0) { finish(in, Verdict::Skip, Reason::Withdrawn); ++withdrawn; moved = plan_moved = true; flight = nullptr; }
-        else if (s.pos < 8) {
+        else if (s.pos >= 8 && !caps.epr) {
+            ++follow;   // an EPR row of an SPR list that still offers EPR: the entry is made when the row asks
+        } else {
             const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
             if (s.pos != at + 1) plan_moved = true;   // only a slot move changes the plan
-            if (s.pos != at + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; moved = true; }
+            if (s.pos != at + 1 || s.pdo != raw) {
+                s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; moved = true;
+                flight_restart_ = true;   // rule 2: restart the row in flight at the new slot / current word (not a try)
+            }
             ++follow;
-        } else ++follow;   // an EPR row of a list that still offers EPR
+        }
     }
     const Step* flight_row = index_ < count_ ? &steps_[index_] : nullptr;   // index_ may be count_: no &steps_[count_]
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
@@ -999,8 +1012,18 @@ void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
                 continue;
             }
             if (s.pos >= 8) {
-                if (epr_capable_caps(caps)) continue;   // an EPR row of an SPR list that still offers EPR: the entry is made when the row asks
-                withdraw(s); ++withdrawn; moved = plan_moved = true; continue;
+                if (!caps.epr) {
+                    if (epr_capable_caps(caps)) continue;   // an EPR row of an SPR list that still offers EPR: the entry is made when the row asks
+                    withdraw(s); ++withdrawn; moved = plan_moved = true; continue;
+                }
+                const int at8 = find_offer(caps, s);
+                if (at8 >= 0) {
+                    const uint32_t raw = caps.pdos[static_cast<size_t>(at8)].raw;
+                    if (s.pos != at8 + 1) plan_moved = true;
+                    if (s.pos != at8 + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at8 + 1); s.pdo = raw; moved = true; }
+                    ++follow;
+                } else { withdraw(s); ++withdrawn; moved = plan_moved = true; }
+                continue;
             }
             const int at = find_offer(caps, s);
             if (at >= 0) {
@@ -1015,10 +1038,9 @@ void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
             }
         } else if (s.verdict == Verdict::Skip && s.reason == Reason::Withdrawn && &s != flight_row && unit_of(s) == unit_) {
             // A PDO that came back: the row is pending again (its unit has not ended).
-            const bool offered = s.pos >= 8 ? epr_capable_caps(caps) : find_offer(caps, s) >= 0;
-            if (offered) {
-                const int at = s.pos >= 8 ? 0 : find_offer(caps, s);
-                if (at >= 0 && s.pos < 8) {
+            const int at = offer_at(s);
+            if (at >= 0) {
+                if (s.pos < 8 || caps.epr) {
                     const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
                     if (s.pos != at + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; }
                 }
@@ -1108,6 +1130,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     pd_retry_ = cut_index_ = SIZE_MAX; retries_ = epr_tries_ = 0; settle_ms_ = settle_until_ = hunt_reject_until_ = 0; auth_open_ = false;
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
+    list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll, not opened by START
     reason_ = Reason::None;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
     state_ = State::Baseline;
@@ -1176,6 +1199,10 @@ void Runner::request(Input in) {
     if (s.group == Group::Pd) {
         pd_owned_ = true;
         if (s.hunt) hunt_seq_ = in.xm ? in.xm->req_n : uint8_t(0);
+        // Restart rules, rule 1 (settle first): no Request until the list in hand has been unchanged for kListSettleMs.
+        // The park rides the Busy-retry path below (busy_retry_at_); the row's own timeout bounds the wait, and the
+        // restart is not a try (tries is set only in finish(), from source failures).
+        if (!list_settled(in.now)) { busy_retry_at_ = list_ms_ + kListSettleMs; return; }
         const auto err = env_.request_pd({s.pos, s.mv, s.ma, s.hunt});
         // Busy = identify/probe/prep still running (CUKTECH C1: the first 5 V row raced the probe, flaky fail):
         // retry within the row's normal timeout instead of failing instantly.
@@ -1326,6 +1353,30 @@ size_t Runner::pick() const {
 void Runner::next(Input in) {
     const size_t i = pick();
     if (i != SIZE_MAX && attached_ && !ending_ && unit_of(steps_[i]) == unit_) { index_ = i; request(in); return; }
+    // Restart rules, rule 4 (end-of-unit sweep): before the PD unit closes, re-check the Withdrawn rows ONCE against the
+    // list in hand (after a settle) and run the ones that came back; Withdrawn stays only for rows still not offered then.
+    if (attached_ && !ending_ && mode_ == Mode::Pd && (i == SIZE_MAX || unit_of(steps_[i]) != unit_) &&
+        caps_now_.valid && list_settled(in.now)) {
+        unsigned back = 0;
+        for (auto& s : std::span<Step>(steps_.data(), count_)) {
+            if (s.verdict != Verdict::Skip || s.reason != Reason::Withdrawn || unit_of(s) != unit_) continue;
+            const int at = s.pos >= 8 ? (caps_now_.epr ? find_offer(caps_now_, s) : (epr_capable_caps(caps_now_) ? 0 : -1))
+                                       : find_offer(caps_now_, s);
+            if (at < 0) continue;
+            if (s.pos < 8 || caps_now_.epr) {
+                const uint32_t raw = caps_now_.pdos[static_cast<size_t>(at)].raw;
+                s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw;
+            }
+            s.verdict = Verdict::Pending; s.reason = Reason::None; env_.record(s); ++back;
+        }
+        if (back) {
+            ++revision_; env_.plan_changed();
+            if (evidence_.rebalanced < 255) ++evidence_.rebalanced;
+            env_.replan(0, 0, back);
+            const size_t j = pick();
+            if (j != SIZE_MAX && attached_ && !ending_ && unit_of(steps_[j]) == unit_) { index_ = j; request(in); return; }
+        }
+    }
     index_ = i == SIZE_MAX ? count_ : i;
     if (attached_) {
         if (pd_owned_ || fc_owned_) { release(in, false); return; }   // Done only after the 5 V confirmation
@@ -1583,6 +1634,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     }
     index_ = 0;
     while (index_ < count_ && steps_[index_].verdict != Verdict::Pending) ++index_;
+    list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll after the resume
     state_ = State::Stopped;
 }
 bool Runner::unfinished() const {
@@ -1649,6 +1701,17 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         return;
     }
     const uint32_t gap = in.now - last_ms_; last_ms_ = in.now;
+    // Restart rules (2026-11-09), rule 1: every new list opens a settle window - no Request until the list in hand has
+    // been unchanged for kListSettleMs, and each list arriving inside the window restarts it. Attach/Detach settle the
+    // list on their own (poll_attach waits for caps + contract), so the window is tracked only in the run states; the
+    // first run-state poll after start()/restore() seeds it (the START / resumed list is already settled).
+    if (state_ != State::Detach && state_ != State::Attach) {
+        caps_now_ = caps;
+        if (!list_tracking_) { list_tracking_ = true; list_valid_ = caps.valid; list_sig_ = caps.valid ? caps_sig(caps) : 0; list_ms_ = 0; }
+        else if (caps.valid && !caps.epr_partial && epr_stage_ != 2 &&
+                 (!list_valid_ || caps_sig(caps) != list_sig_)) { list_ms_ = in.now; list_sig_ = caps_sig(caps); }
+        list_valid_ = caps.valid;
+    }
     // The sink refuses a release while Requesting/Transition/Aborting: ask again until it lets go.
     // Only the sink: an fc release restarts the D+/D- reset hold, so it is issued once (see release()).
     if ((state_ == State::Releasing || state_ == State::Unsafe) && in.now - release_ms_ >= 250) {
@@ -1736,6 +1799,27 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     // withholds chunk 1 and Hard Resets leaves that window open. The rows above it are not "changed", the entry is incomplete:
     // the Hard Reset check below retries the row. (A stalled entry without a reset ends in the row's own timeout.)
     if (caps.valid && caps.epr && caps.epr_partial) offers_changed = false;
+    // Restart rules, rule 2: the row in flight was re-placed by follow_list (new slot / current word) - re-ask it there
+    // once the list has settled. If the sink already answered the re-announce itself (its re-request of the held level
+    // by voltage, pd_sink), in.pd sits at the new slot and nothing is sent; while the sink is mid-negotiation the
+    // parked Busy-retry carries the new slot. The restart is not a try.
+    if (flight_restart_) {
+        if (index_ >= count_ || steps_[index_].verdict != Verdict::Running || steps_[index_].group != Group::Pd ||
+            (state_ == State::Requesting && busy_retry_at_)) {
+            flight_restart_ = false;   // the row left the plan, or the parked request already carries the new slot
+        } else {
+            const Step& fs = steps_[index_];
+            if (in.pd.held && in.pd.pos == fs.pos && in.pd.mv == fs.mv && in.pd.state == pd::SinkState::Ready) {
+                flight_restart_ = false;   // the sink's own answer is at the new slot already: the hold stands
+            } else if (list_settled(in.now) && in.pd.state != pd::SinkState::Requesting &&
+                       in.pd.state != pd::SinkState::Transition) {
+                flight_restart_ = false;
+                const auto err = env_.request_pd({fs.pos, fs.mv, fs.ma, fs.hunt});
+                if (err == pd::Err::Busy) { flight_restart_ = true; busy_retry_at_ = in.now + 200; }
+                else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
+            }
+        }
+    }
     // A Legacy unit sits PD-silent: any PD frame is PD traffic. (A resumed unit has no such proof: it asks the sink.)
     const bool pd_active = mode_ == Mode::Legacy &&
         (silent_ ? in.pd_quiet_ms < kLegacyQuietMs : (caps.valid && caps.active_cc) || in.pd_traffic);
@@ -2055,10 +2139,13 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     const bool banded = band_ok(s, in, gap);
     if (state_ == State::Requesting) {
         if (busy_retry_at_ && in.now >= busy_retry_at_) {
-            busy_retry_at_ = 0;
-            const auto err = env_.request_pd({s.pos, s.mv, s.ma, s.hunt});
-            if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
-            else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
+            if (!list_settled(in.now)) busy_retry_at_ = list_ms_ + kListSettleMs;   // a list arrived inside the window: restart it
+            else {
+                busy_retry_at_ = 0;
+                const auto err = env_.request_pd({s.pos, s.mv, s.ma, s.hunt});
+                if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
+                else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
+            }
         }
         if (ready && banded) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }

@@ -492,7 +492,11 @@ private:
     void regrow_plan(const pd::SourceCaps&, Input);
     void follow_list(const pd::SourceCaps&, Input);   // the source announced again mid-run (pattern budget-reannounce-mid-run): per PD row the
     // new list is followed where it still offers the row (new slot and PDO word), rows with no offer are skipped as Withdrawn, rows a
-    // withdrawn PDO comes back for are Pending again; before the first PD row the plan is rebuilt from the new list (replan_pd)
+    // withdrawn PDO comes back for are Pending again; before the first PD row the plan is rebuilt from the new list (replan_pd).
+    // A COMPLETE EPR_Source_Capabilities outside the K2's own EPR entry/exit (epr_stage_ == 2) is a re-announce like any other (2026-11-09);
+    // only a partial chunk stays excluded. When the row in flight was re-placed (new slot / word) it is restarted there once the list
+    // has settled - the restart is not a try (flight_restart_).
+    bool list_settled(uint32_t now) const { return list_ms_ == 0 || now - list_ms_ >= kListSettleMs; }   // rule 1: no Request until the list in hand is kListSettleMs unchanged
     // pattern reject-then-reduced-list: the running hunt row's own Request was Rejected (hunt_own_reject), or the hunt row that was
     // Rejected is still being released (hunt_reject_until_): the list announced again is the source's answer to that probe, taken as
     // the new offer (adopt_list: rows it still offers follow it, rows it dropped are skipped as not offered).
@@ -600,6 +604,14 @@ private:
     bool dipped_ = false;         // VBUS fell during this detach
     bool late_pd_ = false;        // no source caps at START: the PD rows are planned from the first list heard
     uint32_t plan_sig_ = 0;       // caps_sig() of the list the PD rows were last planned from
+    // Restart rules for a mid-run re-announce (2026-11-09): every new list opens a settle window (list_ms_ = when the
+    // list in hand first arrived, list_sig_ = its caps_sig; an invalid->valid transition is a new list too). No Request
+    // is sent while the window is open (list_settled()). The window is tracked only in the run states - Attach/Detach
+    // settle the list on their own - and is seeded (not opened) by the first run-state poll after start()/restore().
+    uint32_t list_ms_ = 0, list_sig_ = 0;
+    bool list_valid_ = false, list_tracking_ = false;
+    bool flight_restart_ = false;   // the row in flight was re-placed by follow_list: re-ask at the new slot/word once the list settles
+    pd::SourceCaps caps_now_{};     // the list of the last poll (the end-of-unit sweep re-checks the Withdrawn rows against it)
     bool plan_frozen_ = false;    // a restored run: the journaled rows are the plan, a later list does not replan them
     uint8_t fc_replanned_ = 0;    // bit 0: the SCP rows follow the adapter's limits already, bit 1: the UFCS rows follow its modes
     bool pd_skips_recorded_ = true, probe_asked_ = false;
