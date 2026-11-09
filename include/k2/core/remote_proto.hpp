@@ -1078,13 +1078,14 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     }
     case Cmd::PdReread: {
         if (p.empty()) return reply(Status::BadLength);
-        if (p[0] > 5) return reply(Status::BadArg);
-        const bool has_arg = p[0] == 1 || p[0] == 3 || p[0] == 4 || p[0] == 5;
+        if (p[0] > 7) return reply(Status::BadArg);
+        const bool has_arg = p[0] == 1 || p[0] == 3 || p[0] == 4 || p[0] == 5 || p[0] == 6;
         if (p.size() != (has_arg ? 2u : 1u)) return reply(Status::BadLength);
         if (p[0] == 1 && (p[1] == 0 || p[1] > kRereadMaxMask)) return reply(Status::BadArg);
         if (p[0] == 3 && p[1] > kSinkCapExtMaxMode) return reply(Status::BadArg);
         if (p[0] == 4 && p[1] > 2) return reply(Status::BadArg);
         if (p[0] == 5 && p[1] > 1) return reply(Status::BadArg);
+        if (p[0] == 6 && p[1] > 2) return reply(Status::BadArg);
         const RereadResult res = backend.reread(p[0], has_arg ? p[1] : uint8_t{0});
         if (res.status != Status::Ok) return reply(res.status);
         return reply_n(encode_reread(buf, res.info));

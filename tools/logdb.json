@@ -373,6 +373,10 @@
   "370": "[FUSB302] CC override: ADC cc1=%d cc2=%d mV names CC%u, the comparator chose CC%u\n",
   "371": "[FUSB302] TX refused (passive): type %d%s\n",
   "372": "[FUSB302] SOP' TX refused (passive)\n",
-  "373": "[CARD] save #%u fp=%08x runs=%u times=%u -> %d\n"
+  "373": "[CARD] save #%u fp=%08x runs=%u times=%u -> %d\n",
+  "374": "[RMT] reread pin %u\n",
+  "375": "[RMT] reread relook\n",
+  "376": "[PIN] released\n",
+  "377": "[PIN] Rd pinned on CC%u (mark written)\n"
  }
 }

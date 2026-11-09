@@ -243,6 +243,9 @@ void set_force_line(std::uint8_t line);
 // its START and releases it when the run is over) or a reboot. Logs [EMKRA].
 bool ra_set(bool on);
 bool ra_active();
+// `pd-reread` op 6 (lab): pin the Rd on CC1/CC2 (0 = release) as a key-mode boot does, mark included, so a HID-powered K2 can
+// stand in for a charger-powered one (a following warm reset inherits the pin).
+bool debug_pin(std::uint8_t line);
 // A charger-test run takes over the Ra mode that is on (the mode then survives the run's unit detaches, as after a START's
 // rd_for_run(true)). ra_set(false) hands it back, so a run that drops the Ra for its Legacy units calls this after each ra_set(true).
 void ra_run_own();

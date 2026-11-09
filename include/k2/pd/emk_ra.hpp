@@ -24,6 +24,9 @@ constexpr bool pc13_high(bool vconn_rail, bool ra) { return vconn_rail || ra; }
 struct Ctx {
     bool inline_sink = false;   // a real sink is attached downstream
     bool contract = false;      // a contract or negotiation is running
+    // The only contract is the K2's own self-hold (pd::self_hold_wanted: a pinned Rd that lives on the source it tests). It sits
+    // on the Rd line, the Ra goes on the other one and the Rd is never touched, so it does not refuse the mode.
+    bool self_hold = false;
     bool busy = false;          // identify / probe / re-read / prepare is running
     // The boot mode's pinned Rd bits (bit0 = CC1, bit1 = CC2; 0 = none). PLUS pins CC2 alone: the very line this mode
     // presents Rd on, so a charger-powered run can spoof. A pin that reaches CC1 (OK key, or PLUS's Rd moved there when
@@ -36,7 +39,7 @@ enum class Refuse : std::uint8_t { None, Inline, Contract, Busy, PinnedRd, Vconn
 
 constexpr Refuse check(const Ctx& c) {
     if (c.inline_sink) return Refuse::Inline;
-    if (c.contract) return Refuse::Contract;
+    if (c.contract && !c.self_hold) return Refuse::Contract;
     if (c.busy) return Refuse::Busy;
     if (c.pinned_rd & 1) return Refuse::PinnedRd;
     if (c.vconn) return Refuse::Vconn;

@@ -995,6 +995,27 @@ void self_power_restore() {
 bool self_powered() { return g_pin_rd != 0; }
 std::uint8_t pin_rd() { return g_pin_rd; }
 
+// `debug pin`: a HID-powered K2 acts like a charger-powered one (lab only). The pin, its mark (so a warm reset inherits it, as
+// after a key-mode boot) and SWITCHES0 follow; 0 gives it back. Refused with a sink inline.
+bool debug_pin(std::uint8_t line) {
+    if (line > 2 || inline_now()) return false;
+    if (line == 0) {
+        g_rd_inherited = false;
+        set_boot_pin(0);
+        self_power_leave();
+        K2LOG("[PIN] released\n");
+        return true;
+    }
+    const std::uint8_t bit = line == 1 ? kPdwn1 : kPdwn2;
+    g_pin_moved = false;
+    g_pin_rd = bit;
+    g_rd_inherited = true;
+    set_boot_pin(bit);
+    if (g_active_cc == 0) wr(kSwitches0, g_pin_rd);
+    K2LOG("[PIN] Rd pinned on CC%u (mark written)\n", unsigned(line));
+    return true;
+}
+
 bool init() {
     pdtrace::init();
     g_engine.reset();
@@ -2125,7 +2146,8 @@ bool ra_set(bool on) {
     emkra::Ctx c;
     c.inline_sink = inline_now();
     c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
-    c.busy = g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
+    c.self_hold = pd::self_hold_wanted(g_pin_rd, inline_now(), g_legacy_only);   // the contract is our own 5 V hold
+    c.busy =g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
     c.pinned_rd = g_pin_rd;
     c.vconn = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;
     const emkra::Refuse why = emkra::check(c);
@@ -2133,7 +2155,9 @@ bool ra_set(bool on) {
         K2LOG("[EMKRA] refused: %s\n", emkra::refuse_name(why));
         return false;
     }
-    if (g_active_cc != 0) detach_reset(0);   // a fresh attach: the Ra goes on before any Rd
+    // A fresh attach: the Ra goes on before any Rd. A pinned (self-powered) K2 cannot detach: the charger would cut the VBUS
+    // that feeds it, so there the Ra goes on beside the Rd that stays (the source's re-look is the caller's business).
+    if (g_active_cc != 0 && g_pin_rd == 0) detach_reset(0);
     g_ra = true;
     g_force_cc = emkra::kLine;
     cc_switches(false, g_cc_mask);   // PC13 high now, ahead of Rd

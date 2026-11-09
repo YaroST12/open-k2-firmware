@@ -382,6 +382,12 @@ remote::RereadResult Remote::reread(uint8_t op, uint8_t mask) {
     } else if (op == 5) {   // Ra mode (PC13 high, Rd on CC2 alone): the top-plug e-marker spoof
         K2LOG("[RMT] reread ra %u\n", static_cast<unsigned>(mask));
         if (!fusb302::ra_set(mask != 0)) { r.status = remote::Status::Busy; return r; }
+    } else if (op == 6) {   // lab: pin the Rd (1 / 2, 0 = release) so a HID-powered K2 stands in for a charger-powered one
+        K2LOG("[RMT] reread pin %u\n", static_cast<unsigned>(mask));
+        if (!fusb302::debug_pin(mask)) { r.status = remote::Status::Busy; return r; }
+    } else if (op == 7) {   // lab: the unit boundary's Soft_Reset (the source re-announces, the Rd is kept)
+        K2LOG("[RMT] reread relook\n");
+        fusb302::unit_hold(false);
     }
     const pd::RereadStatus &s = fusb302::reread_status();
     r.info.state = static_cast<uint8_t>(s.state);
