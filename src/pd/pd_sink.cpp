@@ -168,6 +168,21 @@ Plan plan_request(const SourceCaps& caps, Choice c, std::uint32_t cap_mv, bool e
     return p;
 }
 
+Choice lookup_held(const SourceCaps& caps, std::uint16_t mv, std::uint16_t ma, PdoType type) {
+    Choice c;
+    if (!caps.valid || !mv) return c;
+    const std::size_t n = std::min<std::size_t>(caps.num_pdos, caps.pdos.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        const Pdo& d = caps.pdos[i];
+        if (type == PdoType::Fixed) {
+            if (d.type == PdoType::Fixed && d.max_mv == mv) { c.pos = std::uint8_t(i + 1); c.mv = mv; c.ma = ma; return c; }
+        } else if (type == PdoType::Pps || type == PdoType::Avs) {
+            if (d.type == type && mv >= d.min_mv && mv <= d.max_mv) { c.pos = std::uint8_t(i + 1); c.mv = mv; c.ma = ma; return c; }
+        }
+    }
+    return c;   // pos 0: the list no longer offers the held level
+}
+
 std::array<std::uint8_t, 24> make_skedb() {
     std::array<std::uint8_t, 24> s{};
     s[0] = 0x16; s[1] = 0x07;   // VID 0x0716
@@ -716,21 +731,33 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
                 begin_abort(SinkResult::Ok, now);
             } else if (st_.state == SinkState::Aborting && caps_) {
                 restart_abort(now);   // the 5 V Request in flight was for the old list: the source wants the answer to the new one
-            } else if (st_.held && (st_.state == SinkState::Ready || st_.state == SinkState::Requesting) && caps_) {
-                const Plan p = plan_request(*caps_, want_, cap_mv_, st_.epr_mode);
-                if (p.err != Err::Ok) { begin_abort(SinkResult::Aborted, now); return; }
-                // Also the answer to our own Refresh (request_source_caps): a Source_Capabilities, asked for or not, starts the
-                // source's tSenderResponse, and with no Request it Hard Resets. An unchanged list plans the same RDO: Accept +
-                // PS_RDY, no voltage change.
-                plan_ = p;
-                st_.state = SinkState::Requesting;
-                send_request(now);
+            } else if (st_.held && (st_.state == SinkState::Ready || st_.state == SinkState::Requesting ||
+                                    st_.state == SinkState::Transition) && caps_) {
+                // A re-announce while held: answer with a Request for the HELD LEVEL looked up in the new list by
+                // voltage (fixed) or range (programmable) - never by position (review 2026-11-09: a list that moved
+                // the held PDO must not change what we hold). Found -> its new slot and current word, the hold stands.
+                // Not found -> the hold is lost: ask PDO 1 (5 V) and report it (begin_abort: held off, Aborted).
+                // In Transition the source restarts negotiation: the fresh list is answered the same way, with a
+                // Request inside tSenderResponse (with none the source Hard Resets).
+                // Also the answer to our own Refresh (request_source_caps): a Source_Capabilities, asked for or not,
+                // starts the source's tSenderResponse. An unchanged list plans the same RDO: Accept + PS_RDY, no change.
+                Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
+                if (hc.pos) {
+                    const Plan p = plan_request(*caps_, hc, cap_mv_, st_.epr_mode);
+                    if (p.err != Err::Ok) { begin_abort(SinkResult::Aborted, now); return; }
+                    plan_ = p;
+                    st_.state = SinkState::Requesting;
+                    send_request(now);
+                } else {
+                    begin_abort(SinkResult::Aborted, now);   // the Request for PDO 1, and the hold reported lost
+                }
             } else if (!st_.held && st_.state == SinkState::Ready && contract_ && caps_) {
                 // Re-announce with a contract but no trigger (the 5 V contract after a release, caps repeated after
                 // our CC rescan): stay silent and a source such as the C135 sends a Hard Reset 28 ms later. Ask for
-                // the same position again, else PDO 1.
-                Plan p = plan_request(*caps_, {st_.pos, st_.mv, st_.ma}, cap_mv_, st_.epr_mode);
-                if (p.err != Err::Ok) p = plan_request(*caps_, {1, 0, kReleaseMaxMa}, cap_mv_, st_.epr_mode);
+                // the contract's own level looked up by voltage, else PDO 1.
+                Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
+                if (!hc.pos) hc = {1, 0, kReleaseMaxMa};
+                const Plan p = plan_request(*caps_, hc, cap_mv_, st_.epr_mode);
                 if (p.err != Err::Ok) return;
                 plan_ = p;
                 st_.state = SinkState::Requesting;

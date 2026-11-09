@@ -1563,7 +1563,7 @@ int main() {
         r.caps.valid = true; r.caps.spec_rev = 2; r.caps.num_pdos = 3;
         r.caps.pdos[0] = decode_pdo(0x0001912C);   // 5 V 3 A
         r.caps.pdos[1] = decode_pdo(0x0002D12C);   // 9 V 3 A
-        r.caps.pdos[2] = decode_pdo(0x0004B12C);   // 20 V 3 A: PDO 3 is now 20 V
+        r.caps.pdos[2] = decode_pdo(0x000640C8);   // 20 V 3 A: PDO 3 is now 20 V
         const std::size_t n = r.sent.size();
         const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
         r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 3, 2) | (1u << 8), caps_bytes, r.now);
@@ -1575,7 +1575,10 @@ int main() {
         CHECK_EQ(int(r.sink.status().held), 0);                              // the hold is reported lost
         CHECK_EQ(int(r.sink.status().result), int(SinkResult::Aborted));
         CHECK_EQ(int(r.sink.status().pos), 1); CHECK_EQ(int(r.sink.status().mv), 5000);
-        for (const TxMsg& m : r.sent) CHECK_EQ(int((m.header & 0x1F) == kDataRequest ? int((m.data[0] >> 4) & 7) : 0), 0);   // no Request ever pointed at 20 V
+        for (std::size_t i = n; i < r.sent.size(); ++i) {   // after the re-announce, every Request is PDO 1 (20 V sits at PDO 3 now)
+            const TxMsg& m = r.sent[i];
+            CHECK_EQ(int((m.header & 0x1F) == kDataRequest ? int((m.data[3] >> 4) & 7) : 9), 1);
+        }
     }
     {   // the same hold, the source re-announces 5/15/20 V: 15 V moved to PDO 2, the answer is a Request for
         // PDO 2 at the new current word, and the hold stands.
@@ -1584,8 +1587,8 @@ int main() {
         r.caps = SourceCaps{};
         r.caps.valid = true; r.caps.spec_rev = 2; r.caps.num_pdos = 3;
         r.caps.pdos[0] = decode_pdo(0x0001912C);   // 5 V 3 A
-        r.caps.pdos[1] = decode_pdo(0x0002D096);   // 15 V 1.5 A: the held level at slot 2, lower current
-        r.caps.pdos[2] = decode_pdo(0x0004B12C);   // 20 V 3 A
+        r.caps.pdos[1] = decode_pdo(0x0004B096);   // 15 V 1.5 A: the held level at slot 2, lower current
+        r.caps.pdos[2] = decode_pdo(0x000640C8);   // 20 V 3 A
         const std::size_t n = r.sent.size();
         const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
         r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 3, 2) | (1u << 8), caps_bytes, r.now);
@@ -1604,9 +1607,8 @@ int main() {
         CHECK_EQ(r.sink.status().pos, 5); CHECK_EQ(r.sink.status().mv, 9000);
         r.caps = make_caps();
         r.caps.num_pdos = 6;
-        r.caps.pdos[4] = decode_pdo(0xC0DC2164);   // the 3.3-11 V APDO stays at PDO 5... move it to PDO 6:
-        r.caps.pdos[5] = r.caps.pdos[4];
-        r.caps.pdos[4] = decode_pdo(0xC1A4213C);   // ...behind a 3.3-21 V one
+        r.caps.pdos[5] = r.caps.pdos[4];            // the held 3.3-11 V APDO moves to PDO 6
+        r.caps.pdos[4] = decode_pdo(0xC0000000u | (210u << 17) | (110u << 8) | 100u);   // an 11-21 V APDO at PDO 5: it does not cover the held 9 V
         const std::size_t n = r.sent.size();
         const std::uint8_t caps_bytes[4] = {0x64, 0x21, 0xDC, 0xC0};
         r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 6, 2) | (1u << 8), caps_bytes, r.now);

@@ -101,6 +101,12 @@ struct Plan {
 // 5 V is treated as 5 V). `epr_mode` selects the EPR flag in the RDO.
 Plan plan_request(const SourceCaps& caps, Choice c, std::uint32_t cap_mv, bool epr_mode);
 
+// The held level (mv, type, ma) looked up in a re-announced list by voltage (fixed) or range (programmable),
+// NEVER by position (review 2026-11-09: a re-announce that moved the held PDO must not change what the sink holds -
+// a source re-announcing 5/9/20 V while the K2 holds 15 V at PDO 3 must not be asked 20 V). Returns pos 0 when the
+// list no longer offers the level: the caller then asks PDO 1 (5 V) and reports the hold lost.
+Choice lookup_held(const SourceCaps& caps, std::uint16_t mv, std::uint16_t ma, PdoType type);
+
 // Voltage cap from the power monitor: the lower of the two limits; 5 V when either is unknown (0).
 std::uint32_t request_cap_mv(std::int32_t max_request_mv, std::int32_t max_vbus_mv);
 

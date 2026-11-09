@@ -236,7 +236,7 @@ void test_a_changed_list_is_renegotiated_with_a_different_request() {
     r.sink.request_source_caps(r.now); r.pump();
     const std::size_t req0 = r.count(kDataRequest);
     // the source's list now offers PDO 2 with less current: the held choice plans a different RDO
-    r.caps.pdos[1] = decode_pdo(0x0001912C | (0x0002D12Cu & 0xFFFFF000u) | 100u);   // 9 V at 1 A
+    r.caps.pdos[1] = decode_pdo((180u << 10) | 100u);   // 9 V at 1 A: the held level, less current
     r.source_caps();
     CHECK_EQ(r.count(kDataRequest), req0 + 1);
     CHECK_EQ(r.last_rdo() != rdo0, true);
