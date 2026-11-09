@@ -222,6 +222,35 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   - Validate: the plan names every `kSysclkHz` user (a `git grep kSysclkHz` count matches the list) and the USB clock
     option chosen, with the draw at 48/72/96/120 MHz to be measured when implemented.
 
+- **Who's attached: one survey owner, run on Refresh** (decided 2026-11-09: active queries only on Refresh).
+  - Today (mapped on be58a25): the page (`src/ui/ui_connection_page.cpp`) only shows what passes on the wire. Nothing
+    it runs sends a source Discover Identity (only Identify, the lab `pd-reread` and the charger test's probe do);
+    `ext()` (Manufacturer_Info, Source_Cap_Extended), `epr_info_list()`, Discover Modes and the cable's SVIDs/modes
+    are collected elsewhere but never shown; `pd::Sink::request_epr_info` has no internal caller although its comment
+    says "once per attach"; Refresh (`fusb302::rescan`) clears no caps, so the old list shows until the re-announce;
+    the comment on `set_proactive_discover` (pd_sink.hpp) says default OFF while the member defaults ON. An empty row
+    cannot say why it is empty.
+  - Fix: a `pd::Survey` (pure plan + status table in a host-testable header; the driver runs it through the sink's
+    single message gate, reusing `pd_reread`'s sequencer rather than a third copy). One ordered plan per Refresh:
+    caps (Get_Source_Cap without a VBUS dark; the bridged CC cycle of `k2/rescan-bridge` as the fallback), source
+    Discover Identity -> SVIDs -> Modes per known SVID (bounded), Get_Source_Cap_Extended and Get_Manufacturer_Info
+    (PD 3 only), EPR_Get_Source_Cap in SPR mode (only when PDO 1 is EPR-capable), the cable (sniffed first; the VCONN
+    SOP' read only standalone), the sink (passive; Identify stays a confirmed action). Every field carries a status:
+    Got / NotSupported (Not_Supported or Reject) / NoAnswer / Blocked(reason: inline sink, charger test, Xiaomi chain,
+    PD 2.0, no VCONN path) / NotAsked. Attach stays passive (no unsolicited VDMs). Refresh clears the source view
+    first and fills it as answers arrive. Fix the proactive-discover comment to match the code.
+  - UI: rows show the status instead of a blank ("not supported", "no answer", "inline: blocked"); while any field of
+    the open tab is NotAsked, the status bar reads "OK > Refresh to read all" (one message, same on every tab); a
+    Refresh shows progress ("Reading 3/7") and ends with "Read: 5 got, 2 not supported". New rows for Manufacturer
+    (Source tab), Modes (Source/Cable Proto), EPR list; the page does not scroll today: fit them in tab rows or a
+    second page per tab (k2-micro-gui rules).
+  - Validate: host tests for the plan order, the gating (inline / charger test / Xiaomi chain / PD 2.0 skip their
+    steps with the right Blocked reason), status mapping (Not_Supported, Reject, timeout), and that nothing active is
+    sent before Refresh (red before green); render tests for the hint and status rows; `make gate`. Hardware: Baseus
+    140 W, CUKTECH 10 and Apple on the bottom port, HID connected: open the page (no TX in the black box until
+    Refresh), Refresh on each tab, every row Got or a named status, black box shows one message in flight at a time
+    and no VBUS dark on the PD sources; Xiaomi charger: the 6 A chain still completes after a Refresh.
+
 - **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
   - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns
     512 samples at every sample-time code; mid-scale ~2056 counts (AC-coupled bias), floor 44-47 counts p-p at code
