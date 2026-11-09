@@ -659,8 +659,10 @@ bool rd_seek_wanted() {
 }
 void rd_seek_move() {
     const std::uint8_t to = g_active_cc == 1 ? 2 : 1;
+    // the dwell that just ran: the slow one on a standby-signature line (pattern slow-rp-wake), the ordinary one otherwise
+    const std::uint32_t dwell = g_rdseek.standby(g_active_cc) ? pd::kSlowWakeDwellMs : pd::kRdSeekDwellMs;
     K2LOG("[FUSB302] Rd seek: no Rp on CC%u over our Rd for %u ms, Rd moves to CC%u (move %u of %u)\n", unsigned(g_active_cc),
-          unsigned(pd::kRdSeekDwellMs), unsigned(to), unsigned(g_rdseek.moves()), unsigned(pd::kRdSeekMoves));
+          unsigned(dwell), unsigned(to), unsigned(g_rdseek.moves()), unsigned(pd::kRdSeekMoves));
     apply_cc_choice({true, g_cc_mask, to}, false, 0, true);
 }
 
@@ -2017,8 +2019,11 @@ void poll() {
         // starts after that, never for a line that has not shown a sink since inline began.
         if (inline_now() && g_cc_sink_mv >= 0 && sink_ok) g_detach.sink_seen();
         // Our Rd on a line a Rd-less scan picked, and no Rp answers it: try the other line before the no-Rp rule gives up.
-        if (got && g_rdseek.update(systick::millis(), rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
-        else if (got && g_detach.update(systick::millis(), g_vbus_mv, (status0 & kComp) != 0, sink_ok)) {
+        // pattern slow-rp-wake: while the seek dwells on a standby-signature line (a sleeping source, its Rp measured
+        // 1072 ms after the Rd), the 500 ms no-Rp detach must not fire inside that window - only the CC rule is held off.
+        if (got && g_rdseek.update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
+        else if (got && g_detach.update(systick::millis(), g_vbus_mv,
+                                        (status0 & kComp) != 0 || g_rdseek.holding_slow(systick::millis(), g_active_cc), sink_ok)) {
             K2LOG("[FUSB302] Detach: %s (cc=%d mV, inline=%d)\n", pd::detach_reason_name(g_detach.reason()),
                          int(g_cc_sink_mv), int(inline_now()));
             detach_reset(status0);
@@ -2148,6 +2153,10 @@ void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     g_cc1_mv = cc1_mv;   // kept for the attach scan's ADC cross-check (pd::rd_window_line) and its re-run on fresh levels
     g_cc2_mv = cc2_mv;
+    // pattern slow-rp-wake: keep the OPEN level per line from before our Rd went on - the Rd seek reads it back to tell
+    // a sleeping source's standby pull-up (~3.0-3.3 V open, collapsing under our Rd) from a coupled net. Under our Rd the
+    // level is our own divider and says nothing, so nothing is noted while any Rd is presented.
+    if ((g_sw0 & (kPdwn1 | kPdwn2)) == 0) { g_rdseek.note_open(1, cc1_mv); g_rdseek.note_open(2, cc2_mv); }
     cc_window_recheck();   // fresh levels while attached with no PD decoded yet: re-run the Rd-window cross-check
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
     auto dist = [](std::int32_t v) { const std::int32_t d = v - pd::kSinkBandCenterMv; return d < 0 ? -d : d; };
