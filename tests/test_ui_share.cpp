@@ -44,7 +44,7 @@ static void test_plan_in() {
     // Version 11 (61 modules) is what a 510-byte record needs per part: 3 px per module in either orientation.
     constexpr int th = SharePage::kTextH;
     qrview::Plan p = qrview::plan_in(portrait, 61, th, 3);
-    CHECK_EQ(p.px, 3); CHECK_EQ(p.box, 207); CHECK_EQ(p.x0, 8); CHECK_EQ(p.y0, 0);
+    CHECK_EQ(p.px, 3); CHECK_EQ(p.box, 207); CHECK_EQ(p.x0, 8); CHECK_EQ(p.y0, (240 - th - 207) / 2);   // the box and its text row centred as one block
     p = qrview::plan_in(landscape, 61, th, 3);
     CHECK_EQ(p.px, 3); CHECK_EQ(p.box, 207); CHECK_EQ(p.x0, 16);
     // Version 12 (65): 3 px only fits the portrait area; the landscape one drops to 2 px, and refuses at a 3 px floor.

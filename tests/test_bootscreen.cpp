@@ -52,7 +52,7 @@ static void test_plan() {
         CHECK(p.box + bootscreen::kTextH <= 240);                      // the text lines fit under it
         CHECK(p.x0 >= 0 && p.x0 + p.box <= 240);
         CHECK_EQ(p.x0, (240 - p.box) / 2);
-        CHECK_EQ(p.y0, 0);
+        CHECK_EQ(p.y0, (240 - bootscreen::kTextH - p.box) / 2);       // box + text lines centred as one block
     }
     CHECK_EQ(bootscreen::plan(57).px, 3);
     CHECK(bootscreen::plan(21).px > 3);                                // a small symbol gets bigger modules

@@ -21,7 +21,8 @@ Plan plan_in(const Area& a, int n, int text_h, int min_px, int quiet, int px) {
     if (use < min_px || use <= 0) return {};
     const int box = cells * use;
     if (box > room) return {};                     // an explicit px whose box does not fit is refused, not clipped
-    return {use, box, a.x + (a.w - box) / 2, a.y};
+    // box and the text under it are centred as one block (text_h == 0: the box alone, centred on both axes)
+    return {use, box, a.x + (a.w - box) / 2, a.y + (a.h - text_h - box) / 2};
 }
 
 Plan plan(int n, int text_h) { return plan_in(Area{}, n, text_h, kMinModulePx); }

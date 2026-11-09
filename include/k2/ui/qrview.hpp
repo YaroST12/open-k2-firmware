@@ -3,7 +3,7 @@
 // Putting a QR symbol on the panel: layout and drawing shared by the boot-info screen and the share view.
 //
 // Black modules on white, at least kMinModulePx pixels per module, a kQuietModules-module quiet zone on every side (part of
-// the box), the box centred at the top, readable text lines under it. draw_code() streams the box row by row through the
+// the box), the box and the text under it centred on the panel as one block. draw_code() streams the box row by row through the
 // lcd stream API (each module row built once into one pixel line, pushed px times), so no frame buffer is needed.
 #pragma once
 #include <cstdint>
@@ -29,7 +29,7 @@ struct Plan {
 Plan plan(int n, int text_h);
 
 // The same inside a rectangle of the panel (the share view: the content area beside the button strip, 224 x 240 or 240 x 224
-// by rotation). Plan::x0 / y0 are panel coordinates; the box is centred across the area at its top. `min_px` is the least
+// by rotation). Plan::x0 / y0 are panel coordinates; the box and its `text_h` text rows are centred in the area as one block. `min_px` is the least
 // pixels per module accepted (the share view takes 2 where 3 does not fit; 3 is the camera-safe size the boot screen holds).
 // `quiet` is the quiet zone in modules (default kQuietModules, the QR specification's 4) and `px` the pixels per module:
 // 0 = the largest whole px that keeps the box and the text on the panel (the default, what the share view and the boot
@@ -38,6 +38,28 @@ struct Area {
     int x = 0, y = 0, w = kPanelPx, h = kPanelPx;
 };
 Plan plan_in(const Area& a, int n, int text_h, int min_px, int quiet = kQuietModules, int px = 0);
+
+// The share view's look policy: the SMALLEST QR version that fits the link is shown FULL SCREEN and centred, at the module
+// size and quiet zone the version allows. A phone's main camera reads up to version 21 (3 px modules to version 13, 2 px
+// from 14 to 21, quiet zone 4); versions 22 to 24 need the wide camera (2 px, quiet 4 up to 23 and quiet 2 at 24 so the box
+// still fits 240 px). `px == 0` for a version the panel cannot show.
+struct Look {
+    int px = 0;
+    int quiet = 0;
+    bool wide = false;   // read only by the wide (ultrawide) camera: the page tells the user
+};
+inline constexpr int kLookMaxVersion = 24;
+inline constexpr int modules_of(int version) { return version * 4 + 17; }
+inline constexpr int version_of(int modules) { return (modules - 17) / 4; }
+constexpr Look look_for(int version) {
+    if (version < 1 || version > kLookMaxVersion) return {};
+    if (version <= 13) return {3, kQuietModules, false};
+    if (version <= 21) return {2, kQuietModules, false};
+    return {2, version == 24 ? 2 : kQuietModules, true};
+}
+constexpr int box_of(int version, const Look& l) { return (modules_of(version) + 2 * l.quiet) * l.px; }
+// True when the margin below a centred box holds a text line of `text_h` pixels (the caption sits there, never over the code).
+constexpr bool caption_fits(int box, int text_h) { return (kPanelPx - box) / 2 >= text_h; }
 
 // Streams the symbol of `w` (n modules per side) into the area as plan_in() lays it out, over what is there: the caller clears
 // the area first when the old box may be bigger. `line` is a kPanelPx-pixel work row. Returns the panel y where the text
