@@ -6,6 +6,11 @@ Rp/Rd advertisement, VCONN, the negotiated PD contract, e-marker identity, and t
 data protocol. Complements `docs/ARCHITECTURE.md` ("PD driver model"); this document covers what
 our firmware does.
 
+> **Ground truth:** every connection combination (K2 power, partners, cables, orientation), the reaction the K2 must
+> have and the evidence or test plan per row is [`docs/CONNECTION_MATRIX.md`](CONNECTION_MATRIX.md). Where this page
+> disagrees with it, the matrix wins. In particular the K2 does present Rd (passive plain boots excepted) and, in Ra
+> mode, an Ra on CC1; it never presents Rp.
+
 > **Review status (2026-11-07):** reviewed against the code and the hardware results in
 > `docs/agents/DETECTION_IMPLEMENTATION_PLAN.md` §1. Known corrections to the text below: Xiaomi 120 W needs the
 > SVID 0x2717 auth chain (the 6 A APDOs appear only after it); VOOC clocks without a load (frames are 9 clocks, accept

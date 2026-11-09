@@ -6,6 +6,9 @@ firmware. Written 2026-11-05.
 Sources: our firmware (`src/pd/emk_spoof.cpp`, `src/drivers/fusb302.cpp`, `include/k2/drivers/pins.hpp`), hardware runs
 2026-11-04/05 (`docs/CHARGER_QUIRKS.md`; top-port evidence is the local run recording `runs/emk-top/`, which is not in the repository).
 
+The per-combination ground truth (power, partners, cables, orientation, with a status per row) is
+[`CONNECTION_MATRIX.md`](CONNECTION_MATRIX.md); where this page disagrees with it, the matrix wins.
+
 Evidence tags used below: **[measured]** hardware log or run, **[code]** our source, **[inferred]** reasoning with
 no direct witness.
 
@@ -314,7 +317,7 @@ selects a 5 V source or ground.
 | QC2/QC3/AFC/FCP/SCP/VOOC on D+/D- | yes | yes | `dpdm` switch network |
 | VBUS/current measure | yes | yes | INA226 (36 V ceiling) / INA228/237 (48 V) |
 | Test load | yes | yes | PA8 PWM, device-wide |
-| Present Ra to a charger (provoke SOP', act as e-marker uninvited) | no firmware path | no firmware path | Rd-only pull-downs; see C3 |
+| Present Ra to a charger (provoke SOP', act as e-marker uninvited) | yes (PC13 = Ra on CC1, Rd on CC2) | untested | Superseded: the old "no firmware path" is disproven by the working Ra mode and the top-plug spoof (2026-11-06); see `CONNECTION_MATRIX.md` rows H3, H4, H21 and exception X7 |
 | Present Rp | no | no | FUSB302 pull-up path not used |
 
 ## Known port-specific quirk

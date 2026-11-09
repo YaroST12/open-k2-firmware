@@ -20,6 +20,7 @@ Index of the user and developer documentation. The project overview, build, flas
 | [`UI_DESIGN.md`](UI_DESIGN.md) | Screen design: geometry, palette, components, navigation, per-page layout |
 | [`K2_PORTS_SPEC.md`](K2_PORTS_SPEC.md) | What each of the K2's two USB-C ports can do, with the evidence |
 | [`SOURCE_SINK_DETECTION.md`](SOURCE_SINK_DETECTION.md) | How the firmware tells what is connected to each port |
+| [`CONNECTION_MATRIX.md`](CONNECTION_MATRIX.md) | Every way to hook up the K2 (power, partners, cables, orientation), what it must do, and the evidence per row |
 | [`CHARGER_TEST_FLOW.md`](CHARGER_TEST_FLOW.md) | The charger test: units, sessions, order |
 | [`DEBUG_STREAMING.md`](DEBUG_STREAMING.md) | The sources the device holds and the live stream that records a hardware run |
 | [`PROTOCOL_LAB.md`](PROTOCOL_LAB.md) | The CDC debug-shell commands that drive every charging protocol by hand |
