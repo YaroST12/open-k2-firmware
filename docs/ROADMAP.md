@@ -48,6 +48,39 @@ Every row below carries **Fix** (what to change, where) and **Validate** (what p
 and the hardware check). A row leaves this list when its fix is merged and the hardware check has passed; move it to
 "Verified on hardware" with the date and the evidence path.
 
+- **Connection -> Source -> Refresh kills a self-powered K2** (2026-11-09, user report): fixed in 667bca2 (+ 7f73ddf,
+  8cdc8c3), hardware check pending.
+  - Evidence: PLUS-boot K2 powered only by the charger on the bottom port; Actions -> Refresh ran `fusb302::rescan()`,
+    which opens both CC lines for 150 ms. The source dropped VBUS, the K2 died, and the next boot was a cold plain boot
+    without Rd (the user had to hold PLUS again).
+  - Fix, two layers (`src/core/rescan.cpp`, pure rules in `include/k2/core/rescan_bridge.hpp`):
+    1. A live explicit contract (any non-inline K2, SPR mode) is refreshed with a Get_Source_Cap through the sink's one
+       message gate (`pd::Sink::request_source_caps`): no CC change, no dark. Never sent while a Request or another
+       message is outstanding, never in EPR mode (an unsolicited caps there is a hard reset). The answer is Requested
+       like any Source_Capabilities (the source's tSenderResponse runs from its send, solicited or not, and it Hard
+       Resets without a Request): an unchanged list gives the same RDO, so Accept + PS_RDY with no voltage change; a
+       changed list is renegotiated. The 150 ms window covers the caps arriving only, not the PS_RDY. A source silent
+       for 150 ms falls through to layer 2; a gate busy for 250 ms gives "Busy, retry" and sends and cycles nothing.
+    2. The CC cycle (no contract, EPR mode, silent source). On a K2 that lives on the charger (pinned Rd, no USB host) the
+       Rescan marker (`IntentKind::Rescan`, pin only, no identity) is written and read back BEFORE the lines open; a failed
+       write refuses the cycle. The comeback keeps Rd from the first instruction and lands on Connection -> Source with
+       "Rescanned (rebooted)". It is not a charger-test resume (`supports_run_resume`). A K2 that survives the gap
+       hands the marker back (`end_reattach()`).
+  - Callers: the Connection page and the remote `action` (same `Ui::run_action`) use both layers. The lab shell
+    `pd rescan` (`shell_hw.cpp`) and the charger test's `pd_rescan()` still call `fusb302::rescan()` directly: both can
+    still kill a self-powered K2; the charger test is covered by its run journal and Session marker.
+  - Validate (host): `tests/test_rescan_bridge.cpp`, `tests/test_pd_sink_getcap.cpp`, `tests/test_rd_intent.cpp`,
+    `tests/test_ui_connection_page.cpp`; `make gate`.
+  - Validate (hardware, self-powered K2 on a Baseus or CUKTECH bottom port, no USB host): Connection -> Source ->
+    Actions -> Refresh, twice.
+    1. (a) PD source: `[RESCAN] live contract: Get_Source_Cap` then `[RESCAN] source capabilities refreshed, no CC
+       change`; the caps list refreshes, no reboot, `k2_remote ping` uptime continuous, no `[PD] CC open`. The
+       Black Box (`pd_trace.py dump`) shows Get_Source_Cap, Source_Capabilities, a Request with the same RDO, Accept,
+       PS_RDY, and VBUS flat.
+    2. (b) Fallback: a non-PD source or a source that ignores Get_Source_Cap (or Refresh in EPR mode): `[RESCAN] bridged
+       cycle: Rescan marker written`, the K2 reboots once and returns on Connection -> Source with Rd and
+       "Rescanned (rebooted)"; `[RDI] comeback boot: rescan pin=...` then `[RDI] comeback vouched`. Evidence into
+       `runs/<date>-rescan/`.
 - **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, open, fix specified below).
   - Evidence: Anker 2-way splitter behind a Baseus 140 W, charger test "PD only", 3a37f22. First list: 5/9/15 V 1.5 A
     + 20 V 2.5 A. About 4 s into the run, the splitter re-split its budget with the dock on its other output and
