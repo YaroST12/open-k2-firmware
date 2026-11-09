@@ -124,6 +124,35 @@ static void arm(Vol& v, const std::vector<ct::Step>& steps, std::uint32_t run = 
     CHECK_EQ(int(v.j->begin(run, kOpt, evidence(), steps)), int(cj::Err::Ok));
 }
 
+// A fresh plan made by the real planner (the same step list the grid reads since 98e2f39): a Xiaomi-style source list with two
+// PPS APDOs, so the plan carries the two Mi 6 A hunt rows (11 V 6 A on the first APDO, 20 V 6 A on the 5-21 V one).
+struct PlanEnv final : ct::Env {
+    pd::Err request_pd(pd::Choice) override { return pd::Err::NoCaps; }
+    fc::Fail request_fc(fc::Proto, int, bool, int) override { return fc::Fail::None; }
+    void release(bool) override {}
+    void record(const ct::Step&) override {}
+};
+static std::vector<ct::Step> planner_plan() {
+    pd::SourceCaps c;
+    c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.raw_header = 0x7181;
+    const unsigned fv[] = {5000, 9000, 12000, 15000, 20000};
+    size_t n = 0;
+    for (unsigned f : fv) c.pdos[n++] = pd::decode_pdo(((f / 50) << 10) | 325);
+    c.pdos[n++] = pd::decode_pdo(0xc0000000u | (110u << 17) | (50u << 8) | 64u);   // APDO pos 6: 2.5-11 V, 3.2 A
+    c.pdos[n++] = pd::decode_pdo(0xc0000000u | (210u << 17) | (50u << 8) | 64u);   // APDO pos 7: 2.5-21 V, 3.2 A
+    c.num_pdos = uint8_t(n);
+    PlanEnv env;
+    ct::Input in;
+    in.vbus_mv = 5000; in.cap_mv = 36000; in.cable_mv = 50000; in.cable_ma = 3000;
+    ct::Runner r(env);
+    CHECK_EQ(int(r.start(c, kOpt, in, true)), int(ct::Reason::None));
+    return std::vector<ct::Step>(r.steps().begin(), r.steps().end());
+}
+static size_t hunt_at(const std::vector<ct::Step>& v, unsigned mv) {
+    for (size_t n = 0; n < v.size(); ++n) if (v[n].hunt && v[n].mv == mv) return n;
+    return v.size();
+}
+
 // The files of the plan as they lie on flash: a test names what a change rewrote by comparing two snapshots.
 using Snap = std::map<std::string, std::vector<uint8_t>>;
 static Snap snap(Vol& v) {
@@ -865,6 +894,43 @@ static void test_plan_order_merges_sections_back() {
     std::vector<ct::Step> one{row(G::Pd, A::Pd3Fixed, 1, 5000)};
     CHECK_EQ(same_rows(merged(one, units), one), true);
 }
+// ROADMAP 2026-11-09 "Charger-test journal keeps its own row order": a resume mid-PD (Mi 6 A rows in the plan) must rebuild the
+// steps in the planner's step-list order - the order the run executes and the grid shows - not an order re-derived from the
+// rows. Mid-PD the runner can mark a hunt row "gone" in place (adopt_list: the re-announced list dropped the 6 A offer, so the
+// row keeps its place with pos=0/pdo=0, Skip NoOffer); the journal must put it back exactly there.
+static void test_a_resume_mid_pd_keeps_the_planners_step_order() {
+    // Guard: an untouched fresh plan round-trips in its own order.
+    {
+        Vol v;
+        const auto fresh = planner_plan();
+        CHECK_EQ(hunt_at(fresh, 11000) < fresh.size(), true);
+        CHECK_EQ(hunt_at(fresh, 20000) < fresh.size(), true);
+        arm(v, fresh);
+        v.reboot();
+        cj::Replay r; v.j->replay(r);
+        CHECK_EQ(r.found, true); CHECK_EQ(rows_are(r, fresh), true);
+    }
+    // Mid-PD: the fixed rows passed, the 20 V 6 A hunt was answered by a list without its offer and marked gone in place,
+    // and a phase marker sits at the 11 V 6 A hunt before its above-5 V request.
+    Vol v;
+    auto live = planner_plan();
+    arm(v, live);
+    for (size_t n = 0; n < 5; ++n) { live[n].verdict = ct::Verdict::Pass; live[n].measured_mv = live[n].mv; }
+    CHECK_EQ(int(v.commit(live, 0)), 0);
+    const size_t gone = hunt_at(live, 20000);
+    CHECK_EQ(gone < live.size(), true);
+    live[gone].pos = 0; live[gone].pdo = 0; live[gone].verdict = ct::Verdict::Skip; live[gone].reason = ct::Reason::NoOffer;
+    CHECK_EQ(int(v.commit(live, gone)), 0);
+    const size_t hunt11 = hunt_at(live, 11000);
+    CHECK_EQ(hunt11 < live.size(), true);
+    CHECK_EQ(int(v.j->phase(cj::Phase::Request, live, hunt11)), 0);
+    v.reboot();
+    cj::Replay r; v.j->replay(r);
+    CHECK_EQ(r.found, true);
+    CHECK_EQ(rows_are(r, live), true);   // the resumed step order equals the fresh plan's order
+    CHECK_EQ(int(r.phase), int(cj::Phase::Request));
+    CHECK_EQ(r.steps[r.phase_index].hunt, true); CHECK_EQ(r.steps[r.phase_index].mv, 11000u);
+}
 // plan_pending() is what the Runner waits for before an above-5 V request: only a change of the plan itself counts.
 static void test_plan_pending_ignores_verdicts() {
     Vol v;
@@ -882,6 +948,7 @@ static void test_plan_pending_ignores_verdicts() {
 }
 
 int main() {
+    test_a_resume_mid_pd_keeps_the_planners_step_order();
     test_plan_order_merges_sections_back(); test_plan_pending_ignores_verdicts();
     test_section_mapping();
     test_a_late_avs_list_rewrites_only_the_pps_section(); test_dropping_the_turbo_rows_rewrites_only_the_oem_section();
