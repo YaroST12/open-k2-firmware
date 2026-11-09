@@ -78,6 +78,9 @@ TC_STATUS, TC_ARM, TC_TRIGGER, TC_DISARM, TC_SAVE, TC_LIVE, TC_LIST, TC_STORED, 
 CMD_LAB = 0x51            # lab probes: PA8 load pulse
 CMD_CABLE_R = 0x50        # passive cable resistance (two-point method), status / reset
 CMD_UFCS = 0x52           # UFCS frame/timing tuner (RAM only) and the 5 V handshake + opener probe (tools/ufcs_sweep.py)
+CMD_QRTEST = 0x53         # QR scan-test rig (k2/ui/ui_qrtest.hpp): fit table / full-screen test QR / stop; draws only
+QRTEST_LIST, QRTEST_SHOW, QRTEST_STOP = 0, 1, 2
+QRTEST_CHUNK = 48
 UFCS_STATUS, UFCS_GET, UFCS_SET, UFCS_RESET, UFCS_PROBE, UFCS_STOP, UFCS_READ = range(7)
 UFCS_CHUNK = 48
 # Same order and ranges as k2::ufcs::kFields (include/k2/fastcharge/ufcs_tune.hpp); tests/test_k2_remote_ufcs.py checks the sync.
@@ -108,7 +111,7 @@ ACTIONS = {"pd-rescan": 1, "emarker": 2, "energy-reset": 3, "identify": 6}
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag"]
+PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest"]
 ROTATION_PAGES = 6
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
@@ -230,6 +233,8 @@ class RemoteError(RuntimeError):
             text += " (sw0 with a pull-up bit, a VCONN bit with PC13 high or with PDWN on the same line; ms 10..5000; pc 0..7)"
         if cmd in (CMD_PD_REQUEST, CMD_PD_RESET, CMD_PD_RELEASE) and payload and payload[0] < len(PD_ERRS) and payload[0]:
             text += f" ({PD_ERRS[payload[0]]})"
+        if cmd == CMD_QRTEST and status == STATUS_BAD_ARG and payload:
+            text += f" ({payload.decode('ascii', errors='replace')})"   # the show op's reason (range / box fit)
         super().__init__(text)
 
 
@@ -1500,6 +1505,51 @@ def cmd_cable_r(link, a):
     return decode_cable_r(link.call(CMD_CABLE_R, bytes([op])).payload)
 
 
+def cmd_qrtest(link, a):
+    """The QR scan-test rig (Cmd::QrTest): list the fit table, stop the test screen, or show one full-screen test QR."""
+    args = a.args
+    if args[0] == "list":
+        if len(args) != 1:
+            raise SystemExit("qrtest list takes no arguments")
+        chunks, off, total = [], 0, None
+        while total is None or off < total:
+            p = link.call(CMD_QRTEST, bytes([QRTEST_LIST]) + off.to_bytes(2, "little")).payload
+            _need(p, 5, "qrtest list")
+            n = p[4]
+            _need(p, 5 + n, "qrtest list")
+            if int.from_bytes(p[0:2], "little") != off:
+                raise FrameError("qrtest list: the reply answers a different window; the firmware does not match this tool")
+            if total is not None and int.from_bytes(p[2:4], "little") != total:
+                raise FrameError("qrtest list: the table length changed between chunks; run it again")
+            total = int.from_bytes(p[2:4], "little")
+            chunks.append(bytes(p[5:5 + n]))
+            off += n
+            if n == 0:
+                break
+        text = b"".join(chunks).decode("ascii")
+        if len(text) != total:
+            raise FrameError(f"qrtest list: got {len(text)} of {total} bytes")
+        return {"qrtest_list": text}
+    if args[0] == "stop":
+        if len(args) != 1:
+            raise SystemExit("qrtest stop takes no arguments")
+        p = link.call(CMD_QRTEST, bytes([QRTEST_STOP])).payload
+        _need(p, 1, "qrtest stop")
+        return {"qrtest_stop": bool(p[0])}
+    if len(args) not in (2, 3):
+        raise SystemExit("usage: qrtest list | qrtest stop | qrtest VERSION PX [QUIET]")
+    try:
+        version, px = int(args[0]), int(args[1])
+        quiet = int(args[2]) if len(args) == 3 else 4
+    except ValueError:
+        raise SystemExit("qrtest: VERSION, PX and QUIET are integers")
+    if not (1 <= version <= 40 and 2 <= px <= 3 and 1 <= quiet <= 4):
+        raise SystemExit("qrtest: version 1..40, px 2..3, quiet 1..4 (the K2 also checks the box fit and answers the reason)")
+    p = link.call(CMD_QRTEST, bytes([QRTEST_SHOW, version, px, quiet])).payload
+    _need(p, 3, "qrtest show")
+    return {"qrtest_show": {"version": p[0], "px": p[1], "quiet": p[2]}}
+
+
 def _name_of(table, i):
     return table[i] if i < len(table) else i
 
@@ -2427,6 +2477,15 @@ def _render(name, r):
         return "\n".join(lines)
     if name == "ufcs":
         return render_ufcs(r)
+    if name == "qrtest":
+        if "qrtest_list" in r:
+            return r["qrtest_list"].rstrip("\n")
+        if "qrtest_show" in r:
+            s = r["qrtest_show"]
+            return (f"qrtest: showing v{s['version']} at {s['px']} px, quiet {s['quiet']} as one full-screen QR "
+                    "(BACK or `qrtest stop` leaves)")
+        if "qrtest_stop" in r:
+            return "qrtest: test screen popped" if r["qrtest_stop"] else "qrtest: no test screen was showing"
     if name == "cable-r" and r["kelvin"]:
         if not r["valid"]:
             return ("cable resistance (kelvin): waiting for sense wires on CC1/CC2/D- and a load of 0.45 A or more"
@@ -2466,7 +2525,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread,
             "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "cards": cmd_cards}
 
 
@@ -2707,6 +2766,10 @@ def build_parser():
     scs.add_parser("reset", help="clear the reference and start over")
     scs.add_parser("passive", help="select the passive two-point meter (includes the K2's own path)")
     scs.add_parser("kelvin", help="select the 8-wire Kelvin mode (sense fixture on CC1/CC2/D-, >= 0.45 A)")
+    sq = sub.add_parser("qrtest", help="QR scan-test rig (draws a full-screen test QR only): list the fit table, "
+                    "stop the test screen, or show one: qrtest VERSION PX [QUIET]")
+    sq.add_argument("args", nargs="+", metavar="ARG",
+                    help="list | stop | VERSION PX [QUIET] (version 1..40, px 2..3, quiet 1..4, default 4)")
     sw = sub.add_parser("watch", help="poll the state and print one V/A/W line")
     sw.add_argument("--interval", type=int, default=500, help="poll period in ms")
     sw.add_argument("--count", type=int, default=0, help="stop after N lines (0 = forever)")
