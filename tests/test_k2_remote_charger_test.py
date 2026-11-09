@@ -218,6 +218,19 @@ class ChargerTest(unittest.TestCase):
                 with self.subTest(wire=wire, code=code, ran=result), self.assertRaises(kr.FrameError):
                     kr.decode_charger_test(page(meta_with(wire), 0, [row(code, result)]))
 
+    def test_reason_42_withdrawn_by_source_decodes(self):
+        # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
+        # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.
+        self.assertEqual(len(kr.TEST_REASONS), 43)
+        self.assertEqual(kr.TEST_REASONS[42], "withdrawn by source")
+        row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 0, 0, 4, 42, 0, 0)   # a pd3-fixed 20 V row, skip, why 42
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"]), ("skip", "withdrawn by source"))
+        self.assertEqual(step["explanation"], "withdrawn by source")
+        bad = bytearray(row); bad[10] = 43   # the why byte, one past the last reason, still fails the row check
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
+
     def test_schema2_epr_avs_is_a_programmable_test(self):
         meta = bytearray(HEADER2)
         struct.pack_into("<I", meta, 15, 1 << 19)

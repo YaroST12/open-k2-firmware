@@ -199,6 +199,11 @@ struct Input {
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;
 inline constexpr uint32_t kCapsReturnMs = 8000;   // how long an invalid cap list (hard reset, re-announce) is tolerated
+// Restart rules for a mid-run re-announce (user decision 2026-11-09): after any new list (Source_Capabilities, or a
+// complete EPR_Source_Capabilities outside the K2's own EPR entry/exit) no Request is sent until the list has been
+// unchanged for kListSettleMs; each list that arrives inside the window restarts it. The sink's single-Request gate
+// still applies (the Runner sends every Request through it).
+inline constexpr uint32_t kListSettleMs = 1500;
 inline constexpr uint32_t kEprInfoBusyMs = 1000;   // how long the informational EPR_Get_Source_Cap retries a busy line
 inline constexpr uint32_t kEprReadyMs = 8000;   // how long EPR entry waits for a live contract to enter from
 // pattern epr-entry-hard-reset (Baseus 140W, 2026-11-05): the source Hard Resets in the middle of the EPR entry (after our
