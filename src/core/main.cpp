@@ -67,6 +67,8 @@ k2::Ui g_ui;
 k2::Remote g_remote{g_ui};
 k2::bootscreen::Controller g_bootscreen;  // the boot-info QR screen of a key-mode boot (drawn from the loop, below)
 ButtonDetector g_det[4];                  // indexed by Button: Back, Minus, Ok, Plus
+bool g_boot_key_swallow = false;          // the key that chose a key-mode boot is still down: its events are not the user's
+Button g_boot_key = Button::Plus;         // that key (PLUS for the CC2 mode, OK for the CC1 mode)
 k2::accelerometer::Driver g_accelerometer;
 
 // Buttons are active low with pull-ups (pin map in k2/drivers/pins.hpp).
@@ -232,8 +234,14 @@ void dfu_now() {
     k2::fastcharge::init();
 
     g_ui.init(k2::systick::millis(), g_boot_back_held);
-    // A key-mode boot shows what it decided as a QR code; the first frame is drawn by the main loop, not from here.
-    if (k2::bootmode::self_powered(keys_mode)) g_bootscreen.start(k2::systick::millis());   // a held key, not a marker's comeback
+    // A key-mode boot whose key stays down for 3 s from the plug-in shows what it decided as a QR code (the first frame is drawn by the
+    // main loop, not from here); a key released sooner goes straight to the UI. A marker's comeback has no key and never shows it.
+    // The threshold counts from reset (the uptime clock starts there), not from this line.
+    if (k2::bootmode::self_powered(keys_mode)) {
+        g_bootscreen.start(0);
+        g_boot_key_swallow = true;
+        g_boot_key = keys_mode == k2::bootmode::Mode::OkRdCc1 ? Button::Ok : Button::Plus;
+    }
     K2LOG("[ACCEL] compatible gravity sensor %s at INA bus 0x18\n",
                     g_accelerometer.init(k2::systick::millis()) ? "online" : "unavailable");
 
@@ -300,8 +308,8 @@ void end_boot_screen(uint32_t now) {
     k2::session::poll();                    // PD session record into the backup registers on change
     k2::rdcomeback::poll();                 // the Rd intent marker (/rd.rec) in step with the session, written on a quiet link
     k2::bbpersist::poll();                  // saves finished captures once the link is quiet
-    if (g_bootscreen.active()) boot_screen_step(now);   // the QR screen owns the panel: the UI does not draw meanwhile
-    else g_ui.tick(now);
+    if (g_bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
+    if (!g_bootscreen.showing()) g_ui.tick(now);        // the QR screen owns the panel: the UI does not draw meanwhile
 }
 
 // Stack watermark: one line each time the free application stack reaches a new low below 1 KB (the gate's margin),
@@ -384,8 +392,14 @@ extern "C" int main(void) {
                 // An injected press is a virtual pin level, OR-ed in before the debouncer.
                 const bool down = raw_down(b) || g_remote.button_down(b, now);
                 const ButtonEvent ev = g_det[i].update(down, now);
-                if (g_bootscreen.active()) {   // the QR screen takes no input but the early close
+                if (g_bootscreen.showing()) {   // the QR screen takes no input but the early close
                     if (b == Button::Back && ev == ButtonEvent::Short) end_boot_screen(now);
+                    continue;
+                }
+                // The key that chose the boot mode is still down (its Long / Hold would reach the UI, Hold is the reboot gesture):
+                // its events are the boot's, not the user's, until it is up. Other keys work at once.
+                if (g_boot_key_swallow && b == g_boot_key) {
+                    if (!down && !g_det[i].pressed()) g_boot_key_swallow = false;
                     continue;
                 }
                 g_ui.set_pressed(b, g_det[i].pressed(), now);

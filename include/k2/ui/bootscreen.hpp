@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The boot-info screen: in a key-mode boot (PLUS or OK held at reset) the LCD shows the K2B1 text (k2/core/bootinfo.hpp) as a QR
-// code with three readable lines under it, so the self-powered boot decision can be read from a photo or a phone scan on a
-// K2 that has no USB host and no log.
+// The boot-info screen: in a key-mode boot (PLUS or OK held at reset) whose key stays down for kShowAfterMs, the LCD shows the K2B1
+// text (k2/core/bootinfo.hpp) as a QR code with three readable lines under it, so the self-powered boot decision can be read from
+// a photo or a phone scan on a K2 that has no USB host and no log. A key released sooner (an ordinary PLUS or OK plug-in) never
+// shows it: the normal UI owns the panel from the start. The key picks the mode at reset either way; only the screen is gated.
+// A comeback boot (no key) never starts the Controller.
 //
 //   - the code is a k2/ui/qrshare.hpp frame (type BootInfo, record = the K2B1 text), alphanumeric mode, ECC level L, version <= 10,
 //     laid out by k2/ui/qrview.hpp (black on white, at least 3 px per module, 4-module quiet zone, centred), the readable lines
@@ -29,6 +31,7 @@ inline constexpr int kTextH = 40;               // under the box: three 12 px li
 inline constexpr int kMaxVersion = 10;          // the three lines leave room for version 10 at 3 px per module
 inline constexpr std::uint32_t kRefreshMs = 500;
 inline constexpr std::uint32_t kHoldMs = 30000;
+inline constexpr std::uint32_t kShowAfterMs = 3000;   // the key must stay down this long from start() for the screen to appear
 
 using Plan = qrview::Plan;
 inline Plan plan(int n) { return qrview::plan(n, kTextH); }
@@ -50,15 +53,20 @@ class Controller {
 public:
     enum class Action : std::uint8_t { None, Redraw, Exit };
 
+    // Called once at boot of a key-mode boot: waits for the key to stay down kShowAfterMs. A release before that ends it silently
+    // (tick returns None, active() goes false, nothing was drawn, nothing to repaint).
     void start(std::uint32_t now_ms);
     // Call every main-loop pass while active(). `key_down`: the key that selected the boot mode is down right now.
     Action tick(std::uint32_t now_ms, bool key_down);
     void dismiss() { active_ = false; }
-    bool active() const { return active_; }
+    bool active() const { return active_; }     // waiting for the 3 s or showing
+    bool showing() const { return active_ && shown_; }   // the QR owns the panel: the UI neither ticks nor takes buttons
     std::uint32_t frame() const { return frame_; }   // frames drawn so far (1 after the first Redraw)
 
 private:
     bool active_ = false;
+    bool shown_ = false;              // the key was held kShowAfterMs: the first frame is due or drawn
+    std::uint32_t start_ms_ = 0;
     bool first_ = false;
     bool released_ = false;
     std::uint32_t last_ms_ = 0;       // the last Redraw

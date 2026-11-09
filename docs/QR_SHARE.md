@@ -208,7 +208,9 @@ geometry"): a version 12 frame is a 219 px box at 3 px per module, centred.
   `Scan: cable details`, `Scan: charger offers`, `Scan: firmware info` (identity and boot info). A record that does not fit
   one link (the log) has no link form and no toggle: it opens as the K2 data frames, as before. The card and the cable go out
   as version '2' links (their schema 2 record, packed in place in the share record buffer); the other kinds stay version '1'.
-- **Boot info**: a key-mode boot shows the BI record as a QR code on the boot screen (`docs/ui_mockups/bootscreen.png`). It stays
+- **Boot info**: a key-mode boot whose key (PLUS or OK) is held 3 s from the plug-in shows the BI record as a QR code on the boot
+  screen (`docs/ui_mockups/bootscreen.png`); a key released sooner goes straight to the normal UI, and a comeback boot (no key)
+  never shows it. The remote `bootinfo` command has the record either way. It stays
   the K2 data frame: the boot info as a link is 290 characters, QR version 11, which is 61 modules, and at the screen's 3 px
   per module that is 207 px beside the 40 px text block, over the 240 px panel. The results page reads that data frame: scan it
   with a text scanner and paste the `K2:BI1:...` text into the page (or after its `#`), and it opens the boot report. The link

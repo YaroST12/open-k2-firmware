@@ -62,51 +62,81 @@ static void test_plan() {
 
 static void test_timeline() {
     using A = bootscreen::Controller::Action;
+    constexpr std::uint32_t kA = bootscreen::kShowAfterMs;
     bootscreen::Controller c;
     CHECK(!c.active());
     CHECK(c.tick(0, true) == A::None);                    // not started: nothing
+    // A key held from the plug-in: nothing for kShowAfterMs (the UI is on the panel), then the first frame.
     c.start(1000);
     CHECK(c.active());
-    CHECK(c.tick(1000, true) == A::Redraw);               // the first frame at once
+    CHECK(!c.showing());
+    CHECK(c.tick(1000, true) == A::None);
+    CHECK(c.tick(1000 + kA - 1, true) == A::None);
+    CHECK(!c.showing());
+    CHECK(c.tick(1000 + kA, true) == A::Redraw);
+    CHECK(c.showing());
+    const std::uint32_t t0 = 1000 + kA;
     CHECK_EQ(c.frame(), 1u);
-    CHECK(c.tick(1200, true) == A::None);
-    CHECK(c.tick(1499, true) == A::None);
-    CHECK(c.tick(1500, true) == A::Redraw);               // every 500 ms while the key is held
+    CHECK(c.tick(t0 + 200, true) == A::None);
+    CHECK(c.tick(t0 + 499, true) == A::None);
+    CHECK(c.tick(t0 + 500, true) == A::Redraw);           // every 500 ms while the key is held
     CHECK_EQ(c.frame(), 2u);
-    CHECK(c.tick(2000, true) == A::Redraw);
+    CHECK(c.tick(t0 + 1000, true) == A::Redraw);
     CHECK_EQ(c.frame(), 3u);
-    // Released at 2300: the last frame stays 30 s, no more redraws, then Exit.
-    CHECK(c.tick(2300, false) == A::None);
-    CHECK(c.tick(2800, false) == A::None);
-    CHECK(c.tick(2300 + 29999, false) == A::None);
+    // Released: the last frame stays 30 s, no more redraws, then Exit.
+    const std::uint32_t r = t0 + 1300;
+    CHECK(c.tick(r, false) == A::None);
+    CHECK(c.tick(r + 500, false) == A::None);
+    CHECK(c.tick(r + 29999, false) == A::None);
     CHECK(c.active());
-    CHECK(c.tick(2300 + 30000, false) == A::Exit);
+    CHECK(c.showing());
+    CHECK(c.tick(r + 30000, false) == A::Exit);
     CHECK(!c.active());
-    CHECK(c.tick(2300 + 31000, false) == A::None);
+    CHECK(!c.showing());
+    CHECK(c.tick(r + 31000, false) == A::None);
     // Pressed again during the hold: refresh resumes and the 30 s restart from the next release.
     c.start(0);
-    CHECK(c.tick(0, true) == A::Redraw);
-    CHECK(c.tick(100, false) == A::None);
-    CHECK(c.tick(20000, true) == A::Redraw);
-    CHECK(c.tick(20100, false) == A::None);
-    CHECK(c.tick(20100 + 29000, false) == A::None);
-    CHECK(c.tick(20100 + 30000, false) == A::Exit);
-    // The key was already up when the first tick came: one frame is drawn anyway, then the hold runs from there.
-    c.start(5000);
-    CHECK(c.tick(5000, false) == A::Redraw);
-    CHECK_EQ(c.frame(), 1u);
-    CHECK(c.tick(5000 + 29999, false) == A::None);
-    CHECK(c.tick(5000 + 30000, false) == A::Exit);
-    // dismiss() ends it at once.
+    CHECK(c.tick(kA, true) == A::Redraw);
+    CHECK(c.tick(kA + 100, false) == A::None);
+    CHECK(c.tick(kA + 20000, true) == A::Redraw);
+    CHECK(c.tick(kA + 20100, false) == A::None);
+    CHECK(c.tick(kA + 20100 + 29000, false) == A::None);
+    CHECK(c.tick(kA + 20100 + 30000, false) == A::Exit);
+    // An ordinary PLUS / OK plug-in: the key is up before the threshold. No frame, no Exit (nothing to repaint), no takeover.
     c.start(0);
-    CHECK(c.tick(0, true) == A::Redraw);
+    CHECK(c.tick(10, true) == A::None);
+    CHECK(c.tick(400, false) == A::None);
+    CHECK(!c.active());
+    CHECK(!c.showing());
+    CHECK(c.tick(kA + 100, true) == A::None);             // pressing the key again later does not bring the screen back
+    CHECK(c.tick(2 * kA, true) == A::None);
+    // Released just before the threshold: still nothing.
+    c.start(500);
+    CHECK(c.tick(500 + kA - 1, true) == A::None);
+    CHECK(c.tick(500 + kA, false) == A::None);
+    CHECK(!c.active());
+    // The key was already up when the first tick came (released during the boot): nothing is drawn.
+    c.start(5000);
+    CHECK(c.tick(5000, false) == A::None);
+    CHECK(!c.active());
+    // A loop that first ran after the threshold with the key now up: nothing (the hold is not proven).
+    c.start(0);
+    CHECK(c.tick(kA + 500, false) == A::None);
+    CHECK(!c.active());
+    // dismiss() ends it at once, waiting or showing.
+    c.start(0);
     c.dismiss();
     CHECK(!c.active());
     CHECK(c.tick(10, true) == A::None);
+    c.start(0);
+    CHECK(c.tick(kA, true) == A::Redraw);
+    c.dismiss();
+    CHECK(!c.active());
+    CHECK(c.tick(kA + 10, true) == A::None);
     // The millisecond clock wrapping does not freeze it.
     c.start(0xFFFFFF00u);
-    CHECK(c.tick(0xFFFFFF00u, true) == A::Redraw);
-    CHECK(c.tick(0xFFFFFF00u + 500, true) == A::Redraw);
+    CHECK(c.tick(0xFFFFFF00u + kA, true) == A::Redraw);
+    CHECK(c.tick(0xFFFFFF00u + kA + 500, true) == A::Redraw);
 }
 
 static void test_lines() {

@@ -59,6 +59,8 @@ void draw(const bootinfo::Snapshot& s, std::uint32_t frame) {
 
 void Controller::start(std::uint32_t now_ms) {
     active_ = true;
+    shown_ = false;
+    start_ms_ = now_ms;
     first_ = true;
     released_ = false;
     last_ms_ = now_ms;
@@ -68,6 +70,13 @@ void Controller::start(std::uint32_t now_ms) {
 
 Controller::Action Controller::tick(std::uint32_t now_ms, bool key_down) {
     if (!active_) return Action::None;
+    if (!shown_) {
+        if (!key_down) { active_ = false; return Action::None; }   // an ordinary key-mode plug-in: the UI was never covered
+        if (now_ms - start_ms_ < kShowAfterMs) return Action::None;
+        shown_ = true;                                              // held past the threshold: the first frame follows below
+        last_ms_ = now_ms;
+        released_ms_ = now_ms;
+    }
     if (key_down) {
         released_ = false;
     } else if (!released_) {
