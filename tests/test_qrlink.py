@@ -3,10 +3,9 @@
 """The results link a K2 shows (src/ui/qrshare_link.cpp, docs/QR_SHARE.md "Link form") read back in Python.
 
 tests/fixtures/qrlink.tsv is written by tests/test_qrshare_link.cpp from the firmware's own encoder: record hex, the link text
-and the card as the firmware's JSON renderer writes it. Here the link is decoded with tools/k2_qr.py and tools/report_card.py,
-an implementation independent of the firmware, and must give the same record and the same card. The web page's decoder
-(docs/site/r/card.js) has the same check in tests/test_cardpage.mjs."""
-import base64
+and the card as the firmware's JSON renderer writes it. Here the link is decoded with tools/k2_qr.py (versions '1' and '2', every
+kind, 't' too), an implementation independent of the firmware, and must give the same record and the same card. The web page's
+decoder (docs/site/r/card.js) has the same check in tests/test_cardpage.mjs."""
 import json
 import os
 import re
@@ -21,10 +20,10 @@ BASE = "https://yarost12.github.io/open-k2-firmware/r/#"
 
 
 DECODED = os.path.join(HERE, "fixtures", "qrlink_decoded.json")
-# the link's kind letter: lower case is the record as built, upper case (and the card's z) an LZ4 block of it
+# the link's kind letter: lower case is the record as built (or its schema v2 record on a version '2' link), upper case (and
+# the card's z) an LZ4 block of it
 KINDS = {"c": "card", "z": "card", "e": "emarker", "E": "emarker", "p": "pdcaps", "P": "pdcaps", "i": "identity",
-         "I": "identity", "b": "boot", "B": "boot"}
-DECODERS = {"emarker": q.decode_emarker, "pdcaps": q.decode_pdcaps, "identity": q.decode_identity, "boot": q.decode_boot}
+         "I": "identity", "b": "boot", "B": "boot", "t": "text"}
 QR_V11_BYTES = 321   # byte-mode capacity of a version 11 code at level L
 
 
@@ -41,22 +40,21 @@ def load(name="qrlink.tsv"):
 
 
 def read_link(text):
-    """The link -> (kind letter, record), the way the page reads it."""
-    m = re.fullmatch(r"(\d)([a-zA-Z])\.([A-Za-z0-9_-]*)", text.split("#", 1)[1])
-    assert m and m.group(1) == "1", text
-    raw = m.group(3)
-    body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
-    letter = m.group(2)
-    return letter, (q.lz4_decompress(body) if letter in "zEPIB" else body)
+    """The link -> (kind letter, the record it carries, inflated when the letter says an LZ4 block)."""
+    d = q.decode_link(text)
+    rec = bytes.fromhex(d["record_hex"])
+    if d.get("packed"):
+        rec = q.lz4_decompress(rec)
+    return d["kind"], rec, d
 
 
 def decoded_kinds(golden):
     """Every golden that is not a card, decoded by tools/k2_qr.py: what the page's decoders must also give."""
     out = {}
     for name, g in golden.items():
-        letter, rec = read_link(g["link"])
-        if KINDS[letter] != "card":
-            out[name] = {"kind": KINDS[letter], "data": DECODERS[KINDS[letter]](rec)}
+        d = q.decode_link(g["link"])
+        if d["record_kind"] != "card":
+            out[name] = {"kind": d["record_kind"], "version": d["version"], "data": d["record"]}
     return out
 
 
@@ -81,24 +79,46 @@ class QrLink(unittest.TestCase):
             with self.subTest(name):
                 self.assertTrue(g["link"].startswith(BASE))
                 self.assertLessEqual(len(g["link"]), QR_V11_BYTES)   # QR version 11, 61 modules
-                letter, rec = read_link(g["link"])
+                letter, rec, d = read_link(g["link"])
                 self.assertEqual(letter.isupper() or letter == "z", g["packed"])
+                self.assertEqual(KINDS[letter], d["record_kind"])
                 if g["json"] is None:
                     continue
-                self.assertEqual(KINDS[letter], "card")
-                self.assertEqual(len(rec), 202)   # v7: 196 byte payload + 6 framing
-                card = q.decode_card(rec)
-                self.assertTrue(card.pop("_store_crc_ok"))
+                self.assertEqual(d["record_kind"], "card")
+                card = d["record"]
+                self.assertTrue(card.pop("_store_crc_ok"))          # the v2 record carries the v1 CRC-16
                 self.assertEqual(normalise(card), normalise(g["json"]))
 
+    def test_v2_rows_carry_the_v2_record(self):
+        """The card and cable rows are version '2' links: the record is the bit-packed v2 record (schema byte 2), not the v1
+        one, and it decodes to the same card as the pinned version '1' row of the same card."""
+        golden = load()
+        for name in ("fh22", "allpass", "fh22_full", "ufcs_modes", "fh22_repeat", "emk_plain", "emk_clone", "emk_rows2",
+                     "emk_rows4", "emk_rows8", "emk_req"):
+            with self.subTest(name):
+                d = q.decode_link(golden[name]["link"])
+                self.assertEqual(d["version"], 2)
+                self.assertEqual(d["kind"], "c" if d["record_kind"] == "card" else "e")
+                self.assertFalse(golden[name]["packed"])
+                self.assertEqual(golden[name]["record"][0], 2)      # the schema byte
+                self.assertEqual(bytes.fromhex(d["record_hex"]), golden[name]["record"])
+        # the same card through the v1 and the v2 link: one JSON
+        for v2name, v1name in (("fh22", "fh22_plain"), ("fh22", "fh22_lz")):
+            with self.subTest((v2name, v1name)):
+                a = q.decode_link(golden[v2name]["link"])["record"]
+                b = q.decode_link(golden[v1name]["link"])["record"]
+                a.pop("_store_crc_ok"), b.pop("_store_crc_ok")
+                self.assertEqual(normalise(a), normalise(b))
+
     def test_v5_cards_still_decode(self):
-        """tests/fixtures/qrlink_v5.tsv is frozen: links made before the UFCS modes (184 byte records, format 5). They decode,
-        the CRC holds, and the card has no "ufcs" key (its UFCS amps are unknown)."""
+        """tests/fixtures/qrlink_v5.tsv is frozen: links made before the UFCS modes (184 byte records, format 5, version '1').
+        They decode, the CRC holds, and the card has no "ufcs" key (its UFCS amps are unknown)."""
         golden = load("qrlink_v5.tsv")
         self.assertEqual(len(golden), 5)
         for name, g in golden.items():
             with self.subTest(name):
-                rec = read_link(g["link"])[1]
+                letter, rec, d = read_link(g["link"])
+                self.assertEqual(d["version"], 1)
                 self.assertEqual(len(rec), 184)
                 card = q.decode_card(rec)
                 self.assertTrue(card.pop("_store_crc_ok"))
@@ -106,31 +126,58 @@ class QrLink(unittest.TestCase):
                 self.assertEqual(normalise(card), normalise(g["json"]))
 
     def test_ufcs_modes_golden_carries_the_current(self):
-        card = q.decode_card(read_link(load()["ufcs_modes"]["link"])[1])
+        card = q.decode_link(load()["ufcs_modes"]["link"])["record"]
         self.assertEqual(card["ufcs"], [{"lo_mv": 3300, "hi_mv": 5500, "max_ma": 5000},
                                         {"lo_mv": 5000, "hi_mv": 11000, "max_ma": 3000},
                                         {"lo_mv": 5000, "hi_mv": 20000, "max_ma": 3000}])
 
     def test_worst_card_link_fits_one_code(self):
-        longest = max(len(g["link"]) for g in load().values())
-        self.assertEqual(longest, 320)   # format 7: the 202 byte record is 270 characters after the 50 character head
+        golden = load()
+        longest = max(len(g["link"]) for g in golden.values())
+        self.assertEqual(longest, 320)   # the pinned version '1' plain row: the 202 byte record is 270 characters after the 50 character head
         self.assertLessEqual(longest, QR_V11_BYTES)
+        # the links the Share view now shows (version '2' card rows) stay well under the cap: at most 85 % of the 321 characters
+        v2_cards = [len(g["link"]) for n, g in golden.items()
+                    if q.decode_link(g["link"])["version"] == 2 and q.decode_link(g["link"])["record_kind"] == "card"]
+        self.assertTrue(v2_cards)
+        self.assertLessEqual(max(v2_cards) * 100, 85 * QR_V11_BYTES)
+
+    def test_the_8_row_cable_has_a_v2_link(self):
+        """The cable with all eight quirk rows is 510 B raw (no version '1' link): its version '2' link is 302 characters."""
+        d = q.decode_link(load()["emk_rows8"]["link"])
+        self.assertEqual((d["version"], d["kind"], d["record_kind"]), (2, "e", "emarker"))
+        self.assertEqual(len(d["link"] if "link" in d else load()["emk_rows8"]["link"]), 302)
+        self.assertEqual(len(bytes.fromhex(d["record_hex"])), 189)
+        self.assertLessEqual(len(load()["emk_rows8"]["link"]), QR_V11_BYTES)
+        self.assertIn("quirks", d["record"])
+        self.assertEqual(len(d["record"]["quirks"]["rows"]), 8)
+
+    def test_kind_t_is_the_text_record(self):
+        d = q.decode_link(load()["qrtest"]["link"])
+        self.assertEqual((d["version"], d["kind"], d["record_kind"]), (1, "t", "text"))
+        self.assertEqual(d["text"], "QR scan test v11 3px")     # the ASCII text up to the first NUL
+        self.assertEqual(bytes.fromhex(d["record_hex"]), load()["qrtest"]["record"])
 
     def test_every_kind_has_a_golden(self):
-        kinds = {KINDS[read_link(g["link"])[0]] for g in load().values()}
-        self.assertEqual(kinds, {"card", "emarker", "pdcaps", "identity", "boot"})
+        kinds = {q.decode_link(g["link"])["record_kind"] for g in load().values()}
+        self.assertEqual(kinds, {"card", "emarker", "pdcaps", "identity", "boot", "text"})
 
     def test_packed_and_plain_are_one_card(self):
         golden = load()
-        for name in ("fh22", "allpass"):
-            with self.subTest(name):
-                self.assertEqual(read_link(golden[name]["link"])[1], read_link(golden[name + "_plain"]["link"])[1])
+        for a, b in (("fh22", "fh22_plain"), ("fh22", "fh22_lz")):
+            with self.subTest((a, b)):
+                ca = q.decode_link(golden[a]["link"])["record"]
+                cb = q.decode_link(golden[b]["link"])["record"]
+                ca.pop("_store_crc_ok"), cb.pop("_store_crc_ok")
+                self.assertEqual(normalise(ca), normalise(cb))
 
     def test_packed_and_plain_are_one_record(self):
         golden = load()
-        for a, b in (("pdcaps_epr", "pdcaps_epr_lz"), ("identity", "identity_lz"), ("boot", "boot_lz")):
+        for a, b in (("pdcaps_epr", "pdcaps_epr_lz"), ("identity", "identity_lz"), ("boot", "boot_lz"),
+                     ("emk_rows4", "emk_rows4_lz")):
             with self.subTest(a):
-                self.assertEqual(read_link(golden[a]["link"])[1], read_link(golden[b]["link"])[1])
+                # the v1 plain/packed pair carries the same bytes; the v2 row decodes to the same record as its v1 twin
+                self.assertEqual(q.decode_link(golden[a]["link"])["record"], q.decode_link(golden[b]["link"])["record"])
 
     def test_decoded_kinds_are_pinned(self):
         """tests/fixtures/qrlink_decoded.json is what these decoders give for the non-card goldens; the web page's decoders
@@ -148,10 +195,25 @@ class QrLink(unittest.TestCase):
         self.assertEqual(d["pdos"][0]["kind"], "fixed")
 
     def test_capped_range_is_in_the_record(self):
-        card = q.decode_card(read_link(load()["fh22"]["link"])[1])
+        card = q.decode_link(load()["fh22"]["link"])["record"]
         self.assertEqual(card["groups"]["PD"]["reason"], "capped below target")
         r = card["ranges"][0]
         self.assertEqual((r["alg"], r["max_mv"], r["hi_mv"]), ("PPS (PD3.x)", 19400, 21000))
+
+    def test_bad_links_are_refused(self):
+        for bad in (BASE + "3c.AAAA", BASE + "2p.AAAA", BASE + "1x.AAAA", BASE + "1c", "https://example.com/#1c.AAAA"):
+            with self.subTest(bad):
+                with self.assertRaises(q.QrError):
+                    q.decode_link(bad)
+
+    def test_decode_link_cli(self):
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = q.main(["decode-link", load()["qrtest"]["link"]])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())[0]["text"], "QR scan test v11 3px")
 
 
 if __name__ == "__main__":

@@ -98,7 +98,8 @@ static qs::Assembler::Result feed(Ui& ui, qs::Assembler& a) {
 }
 
 // The link form on the panel -> the record it carries (inflated when the link says 'z'); 0 when the code does not read, is not
-// a link of this base and version, or carries a bad record. `kind` gets the link's kind letter.
+// a link of this base and version, or carries a bad record. `kind` gets the link's kind letter. Version '2' links (the card and
+// the cable) carry the bit-packed v2 record as they are.
 static char link_kind = 0;
 static std::size_t read_link(const Ui& ui, std::span<std::uint8_t> out) {
     const std::string t = read_panel(ui);
@@ -106,7 +107,7 @@ static std::size_t read_link(const Ui& ui, std::span<std::uint8_t> out) {
     link_kind = 0;
     if (s.substr(0, lk::kBase.size()) != lk::kBase) return 0;
     s.remove_prefix(lk::kBase.size());
-    if (s.size() < 3 || s[0] != lk::kVersion || s[2] != '.') return 0;
+    if (s.size() < 3 || (s[0] != lk::kVersion && s[0] != lk::kVersionV2) || s[2] != '.') return 0;
     link_kind = s[1];
     s.remove_prefix(3);
     std::array<std::uint8_t, 256> raw{};
@@ -127,6 +128,15 @@ static std::size_t read_link(const Ui& ui, std::span<std::uint8_t> out) {
     if (!std::strchr("zEPIB", link_kind)) return 0;   // uppercase (and z, the card's): an LZ4 block
     const std::size_t m = lz::decompress({raw.data(), n}, out);
     return m == lz::kError ? 0 : m;
+}
+
+// The record a link of the current share carries: the schema v2 record when the page re-packed the record (card, cable),
+// else the record as the opener built it. Returns the length, written into `out`.
+static std::size_t link_payload(const Ui& ui, const std::uint8_t* rec, std::size_t len, std::span<std::uint8_t> out) {
+    if (ui.share().v2()) return qs::records::pack_v2(ui.share().type(), {rec, len}, out);
+    if (out.size() < len) return 0;
+    std::memcpy(out.data(), rec, len);
+    return len;
 }
 
 // The type a link's kind letter names ("cz" card, "eE" cable, "pP" source caps, "iI" identity, "bB" boot info).
@@ -344,7 +354,9 @@ static void test_emarker_opener() {
     CHECK(ui.menu() == Menu::Share);
     CHECK_EQ(int(ui.menu_depth()), 3);
     CHECK(ui.share().type() == qs::Type::Emarker);
-    CHECK_EQ(int(ui.share().parts()), 1);                    // the 510-byte record packs to a single part
+    CHECK_EQ(int(ui.share().parts()), 1);                    // the 510-byte record re-packs to v2: a single part
+    CHECK(ui.share().v2());
+    CHECK(ui.share().has_link_form());                       // 189 B v2 -> a 302-character link: the 8-row cable has one now
 
     emlib::Entry e;
     emk_quirk::Quirks got_q;
@@ -356,10 +368,12 @@ static void test_emarker_opener() {
     std::array<std::uint8_t, 600> got{};
     qs::Type type = qs::Type::BootInfo;
     const std::size_t n = read_record(ui, got, type);
-    CHECK_EQ(int(n), int(wl));
+    std::array<std::uint8_t, rec::kMaxEmarker> exp{};
+    const std::size_t en = link_payload(ui, want.data(), wl, exp);
+    CHECK_EQ(int(n), int(en));                               // the data code carries the schema v2 record
     CHECK(type == qs::Type::Emarker);
-    CHECK(n == wl && std::memcmp(got.data(), want.data(), wl) == 0);
-    CHECK(last_packed);                                      // the code carried the LZ4 block
+    CHECK(n == en && std::memcmp(got.data(), exp.data(), en) == 0);
+    CHECK(!last_packed);                                     // no LZ4 block: the v2 record is the smaller form
 
     if (const char* d = std::getenv("K2_DUMP")) {   // the two-part code of a saved clone, for docs/ui_mockups/share_cable.png
         while (ui.share().index() != 0) ui.on_button(Button::Plus, ButtonEvent::Short, 22000);
@@ -412,15 +426,18 @@ static void test_cards_opener() {
     CHECK(wl > 0);
     std::array<std::uint8_t, 600> got{};
     CHECK(ui.share().link());                                // a card opens as the link a phone camera follows
-    CHECK_EQ(int(read_link(ui, got)), int(wl));
-    CHECK(std::memcmp(got.data(), want.data(), wl) == 0);
+    std::array<std::uint8_t, rec::kMaxCard> exp{};
+    const std::size_t en = link_payload(ui, want.data(), wl, exp);
+    CHECK_EQ(int(read_link(ui, got)), int(en));              // the version '2' link carries the v2 record
+    CHECK(std::memcmp(got.data(), exp.data(), en) == 0);
+    CHECK_EQ(link_kind, 'c');
     dump_panel("k2_share_card_link");
     ui.on_button(Button::Ok, ButtonEvent::Short, 1450);      // OK: the K2 data code, for tools/k2_qr.py
     CHECK(!ui.share().link());
     dump_panel("k2_share_card_data");
     qs::Type type = qs::Type::BootInfo;
     const std::size_t n = read_record(ui, got, type);
-    CHECK(n == wl && std::memcmp(got.data(), want.data(), wl) == 0);
+    CHECK(n == en && std::memcmp(got.data(), exp.data(), en) == 0);   // the schema 2 frame carries the same v2 record
     CHECK(type == qs::Type::Card);
     ui.on_button(Button::Back, ButtonEvent::Short, 1500);
     CHECK(ui.menu() == Menu::Cards);
@@ -514,12 +531,14 @@ static void test_charger_results_opener() {
     const std::size_t wl = rec::card(cards[0], want);
     std::array<std::uint8_t, 600> got{};
     CHECK(ui.share().link());
-    CHECK_EQ(int(read_link(ui, got)), int(wl));
-    CHECK(std::memcmp(got.data(), want.data(), wl) == 0);
+    std::array<std::uint8_t, rec::kMaxCard> exp{};
+    const std::size_t en = link_payload(ui, want.data(), wl, exp);
+    CHECK_EQ(int(read_link(ui, got)), int(en));
+    CHECK(std::memcmp(got.data(), exp.data(), en) == 0);
     ui.on_button(Button::Ok, ButtonEvent::Short, 700050);    // the K2 data code
     qs::Type type = qs::Type::BootInfo;
     const std::size_t n = read_record(ui, got, type);
-    CHECK(n == wl && std::memcmp(got.data(), want.data(), wl) == 0);
+    CHECK(n == en && std::memcmp(got.data(), exp.data(), en) == 0);
     ui.on_button(Button::Back, ButtonEvent::Short, 700100);
     CHECK_EQ(int(ui.menu_depth()), 0);
     CHECK_EQ(ui.charger_test_stage(), 6);
@@ -761,8 +780,10 @@ static void test_link_kinds() {
             CHECK(ui.share().has_link_form());
             ui.tick(t + 100);
             std::array<std::uint8_t, 600> got2{};
-            CHECK_EQ(int(read_link(ui, got2)), int(n));
-            CHECK(std::memcmp(got2.data(), bytes.data(), n) == 0);
+            std::array<std::uint8_t, rec::kMaxEmarker> exp2{};
+            const std::size_t en = link_payload(ui, bytes.data(), n, exp2);
+            CHECK_EQ(int(read_link(ui, got2)), int(en));      // the cable's version '2' link carries its v2 record
+            CHECK(std::memcmp(got2.data(), exp2.data(), en) == 0);
             CHECK(ui.share().modules() <= 61);
             dump_panel(r.dump);
             ui.on_button(Button::Back, ButtonEvent::Short, t + 200);

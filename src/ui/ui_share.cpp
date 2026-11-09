@@ -41,7 +41,18 @@ bool ShareRecord::begin(qrshare::Type type, std::uint8_t schema, std::string_vie
     title_buf_[title_len_] = '\0';
     len_ = len <= rec_.size() ? len : 0;
     packed_ = false;
-    if (len_ != 0) {   // LZ4 the record in place when that saves a quarter (the block is built in the scratch arena)
+    v2_ = false;
+    if (len_ != 0 && qrshare::records::has_v2(type)) {
+        // the card and the cable re-pack to schema v2 in place, in the one share record buffer (never longer than the v1
+        // record, and smaller than any LZ4 block of it): the link form comes out as the smaller code
+        const std::size_t n = qrshare::records::pack_v2_in_place(type, {rec_.data(), len_});
+        if (n != 0) {
+            len_ = n;
+            schema_ = qrshare::records::kSchemaV2;
+            v2_ = true;
+        }
+    }
+    if (!v2_ && len_ != 0) {   // LZ4 the record in place when that saves a quarter (the block is built in the scratch arena)
         scratch::Lease lease("share");
         auto &z = scratch::as<PackWork>();
         const std::size_t n = qrshare::pack({rec_.data(), len_}, z.out);
@@ -79,8 +90,10 @@ void SharePage::paint(bool clear) {
     n_ = 0;
     if (parts() != 0) {
         encodes_++;
-        const std::size_t tn = link_ ? qrshare::link::encode(type(), record(), packed(), k.text)
-                                     : qrshare::encode_part(type(), schema(), record(), index_, k.text, packed());
+        const std::size_t tn = link_
+                                   ? (v2() ? qrshare::link::encode_v2(type(), record(), k.text)
+                                           : qrshare::link::encode(type(), record(), packed(), k.text))
+                                   : qrshare::encode_part(type(), schema(), record(), index_, k.text, packed());
         if (tn != 0) n_ = qr::encode_text(k.text, k.w, kMaxVersion);
     }
     const qrview::Plan p = qrview::plan_in(a, n_, kTextH, kMinModulePx);

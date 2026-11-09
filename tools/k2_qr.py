@@ -14,6 +14,7 @@ Python side of the frame format in include/k2/ui/qrshare.hpp (an independent imp
 vectors in tests/fixtures/qrshare.tsv).
 """
 import argparse
+import base64
 import json
 import os
 import re
@@ -409,6 +410,231 @@ DECODERS = {"BI": decode_boot, "ID": decode_identity, "EMK": decode_emarker, "PD
             "LOG": decode_log}
 
 
+# ---- schema v2: the bit-packed link records (the twin of k2/ui/qrshare_records.hpp pack_v2) ----
+# LSB-first bit stream; varint = 7 value bits + 1 continuation bit. The v2 record expands back to the exact v1 record, so the
+# v1 decoders above give the same JSON for a version '2' link as for the version '1' link of the same record.
+
+class BitR:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+
+    def get(self, width: int) -> int:
+        v = 0
+        for i in range(width):
+            byte = self.data[(self.pos + i) >> 3] if ((self.pos + i) >> 3) < len(self.data) else 0
+            v |= ((byte >> ((self.pos + i) & 7)) & 1) << i
+        self.pos += width
+        return v
+
+    def varint(self) -> int:
+        v, shift = 0, 0
+        while True:
+            v |= self.get(7) << shift
+            if not self.get(1):
+                return v
+            shift += 7
+
+
+SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F
+EPR_DV = [0, 280, 360, 480]
+CABLE_KIND_DEC = {0: 0, 1: 1, 2: 2, 3: 4, 4: 0xFF}
+
+
+def expand_card_v2(b: bytes) -> bytes:
+    """A schema v2 card record -> the 202-byte v1 record (format 7), so decode_card() reads it as before."""
+    r = BitR(b)
+    if r.get(8) != 2:
+        raise QrError("not a schema v2 record")
+    rec = bytearray(202)
+    rec[0], rec[1], rec[2], rec[3] = 0xA6, 1, 196, 0
+    p = 4   # the payload starts at record offset 4; the put16/put32 below take absolute record offsets
+
+    def put16(o, v):
+        rec[o] = v & 0xFF
+        rec[o + 1] = (v >> 8) & 0xFF
+
+    def put32(o, v):
+        put16(o, v & 0xFFFF)
+        put16(o + 2, (v >> 16) & 0xFFFF)
+
+    def group():
+        verdict, reason, detail = r.get(2), r.get(6), r.get(6)
+        max_dv = r.get(9) if r.get(1) else 0
+        fail_dv = r.get(9) if r.get(1) else 0
+        return verdict, reason, detail, max_dv, fail_dv
+
+    put32(p + 0, r.get(32))
+    put16(p + 4, r.get(16))
+    put16(p + 6, r.get(16))
+    put16(p + 8, r.varint())    # card_no
+    put16(p + 10, r.varint())   # runs
+    put32(p + 12, r.varint())   # boots
+    put32(p + 16, r.varint())   # uptime_s
+    put32(p + 20, r.get(32))    # fw
+    put16(p + 24, r.varint())   # handover_ds
+    rec[p + 26] = r.get(2)          # spec_rev
+    rec[p + 27] = r.get(4)          # num_pdos
+    rec[p + 28] = r.get(3)          # handover
+    rec[p + 29] = r.get(4)          # state
+    rec[p + 30] = r.get(6)          # reason
+    n_ranges = r.get(3)
+    rec[p + 31] = n_ranges
+    rec[p + 32] = r.get(8)          # ev_flags
+    rec[p + 33] = 7                 # format: v2 only encodes format-7 cards
+    nl = r.get(5)
+    rec[p + 34:p + 34 + nl] = bytes(r.get(7) for _ in range(nl))
+    rec[p + 54] = r.get(8)                                   # pdp_w
+    rec[p + 55] = r.get(1) | (r.get(7) << 1)                 # name_auto | pd_ma50 << 1
+    for g in range(12):
+        verdict, reason, detail, max_dv, fail_dv = group()
+        q = p + 56 + 4 * g
+        rec[q] = (verdict << 6) | (reason & 0x3F)
+        v = max_dv | (fail_dv << 9) | (detail << 18)
+        rec[q + 1], rec[q + 2], rec[q + 3] = v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF
+    for i in range(n_ranges):
+        q = p + 104 + 10 * i
+        rec[q] = r.get(5)          # alg
+        rec[q + 1] = r.get(8)      # pos
+        lo = r.get(9)
+        hi, mx, fail, ma50 = r.get(9), r.get(9), r.get(9), r.get(7)
+        put16(q + 2, lo | (ma50 << 9))   # lo_dv | ma50 << 9
+        put16(q + 4, hi)           # hi_dv
+        put16(q + 6, mx)           # max_dv
+        put16(q + 8, fail)         # fail_dv
+    for i in range(3):
+        q = p + 144 + 6 * i
+        code = r.get(2)
+        put16(q, EPR_DV[code] if code < len(EPR_DV) else 0)
+        verdict, reason, detail, max_dv, fail_dv = group()
+        rec[q + 2] = (verdict << 6) | (reason & 0x3F)
+        v = max_dv | (fail_dv << 9) | (detail << 18)
+        rec[q + 3], rec[q + 4], rec[q + 5] = v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF
+    if r.get(1):   # a cable block follows
+        q = p + 162
+        put32(q, r.varint())       # seq
+        put16(q + 4, r.get(16))    # vid
+        put16(q + 6, r.get(16))    # pid
+        put16(q + 8, r.get(16))    # max_mv
+        put16(q + 10, r.get(16))   # max_ma
+        rec[q + 12] = CABLE_KIND_DEC.get(r.get(3), 0)
+        rec[q + 13] = r.get(8)     # flags
+        rec[q + 14] = r.get(8)     # resumed
+        rec[q + 15] = r.get(8)     # src_flags
+    n_ufcs = r.get(3)
+    for i in range(n_ufcs):
+        q = p + 178 + 3 * i
+        v = r.get(8) | (r.get(9) << 8) | (r.get(7) << 17)
+        rec[q], rec[q + 1], rec[q + 2] = v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF
+    times = r.varint()
+    rec[p + 190] = times
+    if times > 1:
+        put16(p + 191, r.get(16))                  # last_boots
+        up = r.get(24)
+        rec[p + 193], rec[p + 194], rec[p + 195] = up & 0xFF, (up >> 8) & 0xFF, (up >> 16) & 0xFF
+    rec[200] = r.get(8)      # the v1 record's CRC-16, carried so the integrity check is unchanged
+    rec[201] = r.get(8)
+    return bytes(rec)
+
+
+def expand_emk_v2(b: bytes) -> bytes:
+    """A schema v2 e-marker record -> the v1 record (flags, name[24], the 66-byte emrec with its reserved zeros, the quirk
+    block), so decode_emarker() reads it as before."""
+    r = BitR(b)
+    if r.get(8) != 2:
+        raise QrError("not a schema v2 record")
+    nl = r.get(5)
+    name = bytes(r.get(7) for _ in range(nl))
+    flags = r.get(8)
+    rl = r.get(5)
+    rname = bytes(r.get(7) for _ in range(rl))
+    spec_rev = r.get(2)
+    vdos = [r.get(32) for _ in range(5)]
+    checksum = r.get(8)
+    rec = bytearray([flags])
+    nm = bytearray(24)
+    nm[:len(name)] = name
+    rec += nm
+    em = bytearray(66)
+    em[:len(rname)] = rname
+    em[20] = spec_rev
+    for i, v in enumerate(vdos):
+        em[21 + 4 * i:25 + 4 * i] = v.to_bytes(4, "little")
+    em[65] = checksum
+    rec += em
+    if r.get(1):
+        qflags, unmatched, count = r.get(2), r.get(2), r.get(4)
+        rec += bytes([qflags, unmatched, count])
+        for _ in range(count):
+            sop, kind, nreq, nrep = r.get(2), r.get(2), r.get(2), r.get(3)
+            full = r.get(1)
+            hdr_val = r.get(32)
+            hdr_mask = SVDM_MASK if full else r.get(32)
+            req = [(r.get(32), r.get(32)) for _ in range(nreq)]
+            rep = [r.get(32) for _ in range(nrep)]
+            row = bytearray(52)
+            row[0], row[1], row[2], row[3] = sop, kind, nreq, nrep
+            row[4:8] = hdr_val.to_bytes(4, "little")
+            row[8:12] = hdr_mask.to_bytes(4, "little")
+            for k, (val, mask) in enumerate(req):
+                row[12 + 4 * k:16 + 4 * k] = val.to_bytes(4, "little")
+                row[20 + 4 * k:24 + 4 * k] = mask.to_bytes(4, "little")
+            for k, v in enumerate(rep):
+                row[28 + 4 * k:32 + 4 * k] = v.to_bytes(4, "little")
+            rec += row
+    return bytes(rec)
+
+
+def decode_card_v2(rec: bytes):
+    return decode_card(expand_card_v2(rec))
+
+
+def decode_emarker_v2(rec: bytes):
+    return decode_emarker(expand_emk_v2(rec))
+
+
+# ---- the link form (k2/ui/qrshare_link.hpp): <base>#<version><kind>.<base64url record> ----
+LINK_BASE = "https://yarost12.github.io/open-k2-firmware/r/#"
+LINK_KINDS = {"c": "card", "z": "card", "e": "emarker", "E": "emarker", "p": "pdcaps", "P": "pdcaps", "i": "identity",
+              "I": "identity", "b": "boot", "B": "boot", "t": "text"}
+LINK_DECODERS = {"card": decode_card, "emarker": decode_emarker, "pdcaps": decode_pdcaps, "identity": decode_identity,
+                 "boot": decode_boot}
+
+
+def decode_link(text: str) -> dict:
+    """One link text -> {"version", "kind" (letter), "record_kind", "record"}: version '1' links carry the record as the K2
+    data frame does (upper case letters and 'z' are LZ4 blocks), version '2' links the bit-packed schema v2 record of the card
+    or the cable (decoded to the same JSON as version '1'), kind 't' a plain ASCII text record (read up to the first NUL)."""
+    if LINK_BASE not in text:
+        raise QrError("not a K2 results link (no known base address)")
+    frag = text.split("#", 1)[1]
+    m = re.fullmatch(r"(\d)([a-zA-Z])\.([A-Za-z0-9_-]*)", frag)
+    if not m:
+        raise QrError(f"bad link fragment {frag!r}")
+    version, letter, raw = m.group(1), m.group(2), m.group(3)
+    if letter not in LINK_KINDS:
+        raise QrError(f"unknown kind letter {letter!r}")
+    body = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+    kind = LINK_KINDS[letter]
+    out = {"version": int(version), "kind": letter, "record_kind": kind, "record_hex": body.hex()}
+    if version == "2":
+        if kind not in ("card", "emarker"):
+            raise QrError(f"version '2' exists only for the card and the cable, not {kind!r}")
+        out["record"] = (decode_card_v2 if kind == "card" else decode_emarker_v2)(body)
+    elif version == "1":
+        if letter in "zEPIB":
+            body = lz4_decompress(body)
+            out["packed"] = True
+        if kind == "text":
+            out["text"] = body.split(b"\0")[0].decode("ascii", errors="replace")
+            out["record"] = {"text": out["text"]}
+        else:
+            out["record"] = LINK_DECODERS[kind](body)
+    else:
+        raise QrError(f"unknown link version {version!r}")
+    return out
+
+
 def decode_texts(texts):
     """Part texts -> (result dict, exit code)."""
     info, rec = assemble(texts)
@@ -419,6 +645,10 @@ def decode_texts(texts):
             info["sent_len"] = len(rec)
             rec = lz4_decompress(rec)
             info["record_len"] = len(rec)
+        if info["schema"] == 2 and info["type"] in ("CARD", "EMK"):
+            # a schema 2 frame carries the bit-packed v2 record: expand it to the v1 record and decode as before
+            rec = expand_card_v2(rec) if info["type"] == "CARD" else expand_emk_v2(rec)
+            info["v2_expanded"] = True
         info["record_hex"] = rec.hex()
         info["record"] = DECODERS[info["type"]](rec)
     except (QrError, ValueError, KeyError, report_card.BadCard) as e:
@@ -461,6 +691,8 @@ def main(argv=None):
     d = sub.add_parser("decode")
     d.add_argument("texts", nargs="+")
     d.add_argument("--lines", action="store_true", help="a LOG record: print its 't=+<ms>ms [TAG] message' lines, not JSON")
+    dl = sub.add_parser("decode-link", help="a results link (the fragment after '#'): version '1' and '2', every kind, 't' too")
+    dl.add_argument("links", nargs="+")
     di = sub.add_parser("decode-image")
     di.add_argument("images", nargs="+")
     e = sub.add_parser("encode")
@@ -474,6 +706,9 @@ def main(argv=None):
     try:
         if a.cmd == "decode":
             res, code = decode_texts(_read_texts(a.texts))
+        elif a.cmd == "decode-link":
+            res = [decode_link(t.strip("\r\n")) for t in _read_texts(a.links)]
+            code = 0
         elif a.cmd == "decode-image":
             texts = scan_images(a.images)
             if texts is None:

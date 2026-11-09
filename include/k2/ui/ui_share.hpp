@@ -4,14 +4,18 @@
 // (k2/ui/qrshare.hpp), a page of its own opened from a Share action (long OK) elsewhere. See docs/QR_SHARE.md.
 //
 // The opener builds its record straight into Ui::share_buffer() (k2/ui/qrshare_records.hpp), then Ui::open_share() names it
-// (ShareRecord::begin) and pushes the page. begin() LZ4-packs the record in place when that saves a quarter (qrshare::pack, frame flag kPackedFlag), so a
-// record that needed two parts may need one. The page shows part i of n under the code as "title i/n"; with more than one part it steps through them by itself
-// every kCycleMs (a phone that holds still catches each part in turn) until [+] / [-] pick one by hand. It repaints only when
-// the part changes (or after a capture / resync). A record that fits one link code (a report card, a cable, the source's PDOs,
-// the identity, boot info) opens as its link form (k2/ui/qrshare_link.hpp): one code holding a web address, so a phone camera
-// opens the page that shows it; OK switches to the K2 data frame (what tools/k2_qr.py imports) and back. A record too big for
-// one link code (a cable with a long quirk block) shows only the K2 data frames, as before. The link text is built at paint time in the same scratch as the frame text. The encoder workspace is not kept: each paint takes the scratch arena,
-// encodes the part, draws it and gives the arena back, so the view costs only the record buffer in RAM.
+// (ShareRecord::begin) and pushes the page. begin() re-packs a card or cable record to schema v2 in place in the record buffer
+// (k2/ui/qrshare_records.hpp pack_v2_in_place: the bit-packed link form, smaller than any LZ4 block, so those two kinds never
+// LZ4-pack), and LZ4-packs the other records in place when that saves a quarter (qrshare::pack, frame flag kPackedFlag), so a
+// record that needed two parts may need one. The page shows part i of n under the code as "title i/n"; with more than one part it steps
+// through them by itself every kCycleMs (a phone that holds still catches each part in turn) until [+] / [-] pick one by hand. It
+// repaints only when the part changes (or after a capture / resync). A record that fits one link code (a report card, a cable,
+// the source's PDOs, the identity, boot info) opens as its link form (k2/ui/qrshare_link.hpp): one code holding a web address,
+// so a phone camera opens the page that shows it; OK switches to the K2 data frame (what tools/k2_qr.py imports) and back. The
+// card and the cable come out as the smaller schema v2 link (version '2'); every cable now fits one code, including the 8-row
+// quirk one (510 B raw -> 189 B v2). The log is far too big for one link code and shows only the K2 data frames, as before. The
+// link text is built at paint time in the same scratch as the frame text. The encoder workspace is not kept: each paint takes
+// the scratch arena, encodes the part, draws it and gives the arena back, so the view costs only the record buffer in RAM.
 #pragma once
 #include <array>
 #include <cstddef>
@@ -38,11 +42,14 @@ public:
 
     std::span<std::uint8_t> buffer() { return rec_; }
     // The record in buffer() (`len` bytes) becomes the one shown; false when it has no part (empty or over kMaxRecord).
+    // A card or cable record is re-packed to schema v2 in place (the bit-packed link form, always at most the v1 record);
+    // any other record is LZ4-packed in place when that saves a quarter, as before.
     bool begin(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len);
 
     qrshare::Type type() const { return type_; }
     std::uint8_t schema() const { return schema_; }
     bool packed() const { return packed_; }            // record() is the LZ4 block of what the opener built
+    bool v2() const { return v2_; }                    // record() is the schema v2 (bit-packed) form, not the v1 record
     std::span<const std::uint8_t> record() const { return {rec_.data(), len_}; }
     std::string_view title() const { return {title_buf_.data(), title_len_}; }
     unsigned parts() const { return parts_; }
@@ -56,6 +63,7 @@ private:
     std::uint8_t schema_ = 1;
     unsigned parts_ = 0;
     bool packed_ = false;
+    bool v2_ = false;
 };
 
 class SharePage final : public PageBase {
@@ -88,6 +96,7 @@ public:
     qrshare::Type type() const { return r_.type(); }
     std::uint8_t schema() const { return r_.schema(); }
     bool packed() const { return r_.packed(); }
+    bool v2() const { return r_.v2(); }
     std::span<const std::uint8_t> record() const { return r_.record(); }
     std::string_view title() const { return r_.title(); }
     unsigned parts() const { return r_.parts(); }
@@ -102,8 +111,9 @@ public:
 
 private:
 public:
-    // The record has a link form (a supported type whose record, packed or not, fits one code): OK switches link and data frame.
-    // A cable whose quirk block does not pack small enough has none and offers only the K2 data frames.
+    // The record has a link form (a supported type whose record, v2-packed or packed or as built, fits one code): OK switches
+    // link and data frame. The card and the cable always have one now (schema v2 shrinks them under the limit, the 8-row
+    // quirk cable included); only the log never does.
     bool has_link_form() const { return parts() != 0 && qrshare::link::fits(type(), record().size()); }
 private:
     void show(unsigned index, uint32_t now_ms);        // pick a part; the next update encodes and draws it
