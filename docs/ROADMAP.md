@@ -527,6 +527,33 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   - Validate: host tests for the stats (red before green), `make gate`; on hardware the TOPADRE 20 V reads a p-p within
     20 % of the INA's swing, HID-only reads "< floor", and a charger-test card shows a ripple figure per fixed PDO.
 
+- **PPS coverage: floor, 20 mV steps, accuracy spread** (2026-11-10, user decision; start after `k2/pps-needs-load`
+  is merged - both touch the PPS rows in `src/chargertest/charger_test.cpp`). Today a PPS APDO gets 7.14 V, 11 V,
+  the 7.14 <-> 11 V jumps, 7.14 -> 5.22 V and the full-current top row; the low edge (< 5 V) lives in the separate
+  `PdLow` unit (patterns `latch-off-low-pps`, `cut-and-recover-low-pps`). All new rows stay polite: inside the APDO,
+  at or below its current, 1 A like the other plan rows.
+  1. Floor: the `PdLow` low-edge row must report the measured floor, not only pass/fail - a source that advertises
+     3.3 V but regulates at 5 V is a fail "floor at 5.0 V" with measured_mv = the reached level (reuse `Capped`'s
+     ceiling logic mirrored for a floor). Keep it in `PdLow` (it can cut the output); the results tab names the floor.
+  2. Step resolution: one row per PPS APDO, from a mid level (e.g. 7.0 V), five Requests of +20 mV each: every step
+     needs Accept + PS_RDY and a measured VBUS move of 20 mV +- the meter's resolution (state the tolerance from the
+     INA226 LSB and the existing band rules); a source that rounds to 100 mV or ignores small steps fails "step
+     resolution N mV". A phone's PPS loop walks in 20-40 mV steps (OnePlus 15 capture, `runs/2026-11-10-op15-sniff/`).
+  3. Accuracy spread: three or four levels across the APDO (low, mid, high, spaced by the range) record the setpoint
+     error in mV per level on the card (not only pass/fail), so a converter that drifts at the ends shows. Card
+     format bump if a field is needed; every host decoder (`k2_remote.py`, `k2proto.js`, `qr_corpus.py`,
+     `report_card.py`, `card.js`) in the same change.
+  - Validate: host tests (red first) for each new row's verdict, including the failing shapes (floor at 5 V, steps
+    of 100 mV, steps ignored); hardware: a source with a working PPS (CUKTECH 10 or FH22 brick) passes all three,
+    the splitter shows "needs load" (pattern `pps-off-at-no-load`).
+- **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
+  above). Opt-in, never in the default preset: every 100 mV across each PPS APDO (and SPR AVS range), 1 A, Accept +
+  PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint strip on the results tab and the card
+  (min / max / worst error and where). Long by design (about 77 points for 3.3-11 V, about 180 for 3.3-21 V), so the
+  Tests list shows it as its own line with a point count. Stops at the first lost source (pattern handling as the
+  other PPS rows). Validate: host tests for the point plan and the summary; hardware: one full sweep on a working
+  PPS source, no reboot, journal intact.
+
 ## Not verified on hardware
 
 - A direct large PPS step-down of a running contract: 21 V to 13 V aborts at the +10 % overvoltage guard
