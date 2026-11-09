@@ -34,7 +34,7 @@ Users and contributors should start from the [documentation index](../README.md)
 
 | File | What it is |
 |---|---|
-| [`GEMINI.md`](GEMINI.md) | Commit message format (header, Summary / Rationale / Details, co-author trailer) |
+| [`COMMITS.md`](COMMITS.md) | Commit message format (header, Summary / Rationale / Details, co-author trailer) |
 | [`../../.github/agents/`](../../.github/agents/) | Custom agent definitions (firmware development, UI design, UI QA). They stay under `.github/` because GitHub reads them there |
 
 Coding rules for everyone are in [`../CODING_STANDARDS.md`](../CODING_STANDARDS.md).

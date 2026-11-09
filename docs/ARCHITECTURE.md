@@ -447,7 +447,7 @@ Reuse these before writing a new one. Headers under `include/k2/<group>/` unless
 
 Write the host test first for pure logic (`tests/test_<name>.cpp`; add the source to `TEST_CXX_LIB` in the
 `Makefile` if it is not header-only). Hardware-facing code is verified on the device. Commit format:
-`<type>(<scope>): <summary>` plus Summary, Rationale, Key Changes sections ([agents/GEMINI.md](agents/GEMINI.md)).
+`<type>(<scope>): <summary>` plus Summary, Rationale, Key Changes sections ([agents/COMMITS.md](agents/COMMITS.md)).
 
 ## 7. How to add things
 
