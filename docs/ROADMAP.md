@@ -39,6 +39,56 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, open, fix specified below).
+  - Evidence: Anker 2-way splitter behind a Baseus 140 W, charger test "PD only", 3a37f22. First list: 5/9/15 V 1.5 A
+    + 20 V 2.5 A. About 4 s into the run, the splitter re-split its budget with the dock on its other output and
+    re-announced 5 V 1.5 A, 9 V 3 A, 15 V 3 A (20 V gone). The run: 5 V pass, 9 V pass, then 15 V AND both 20 V rows
+    "skip (offers changed)". 15 V was still offered, now at 3 A instead of 1.5 A; only 20 V was withdrawn.
+  - Root cause: `Runner::follow_list` (`src/chargertest/charger_test.cpp`, the block above `follow_list`) is
+    all-or-nothing. It walks the pending PD rows, and the first row that `find_offer` cannot place (here a 20 V row)
+    makes it `return` without following anything. The check after it in the poll loop (`offers_changed`, the
+    `pdo_covers` test per row) then sets `Reason::CapsChanged`, and `skip_unit` ends every pending row of the unit,
+    the still-offered 15 V row included.
+  - The per-row behaviour already exists in `Runner::adopt_list`, used only after the K2's own 6 A hunt Reject
+    (pattern `reject-then-reduced-list`): rows the new list still offers take the new slot and PDO word; rows it no
+    longer offers are skipped as not offered; the run goes on against the new list.
+  - Fix (user decision 2026-11-09: re-plan, do not give up):
+    1. On a mid-run re-announce with the same wire revision, outside the excluded cases (VBUS dark, a Hard Reset's
+       missing list within `kCapsReturnMs`, `preauth_tail`, EPR entry/exit with `epr_stage_ == 2` or a partial EPR
+       list, the hunt-Reject path), apply `adopt_list` semantics per row instead of `follow_list`'s early return.
+       Rows still offered follow the new slot and word (the 15 V row then asks 15 V at the new 3 A word); only rows
+       with no offer are skipped.
+    2. A row skipped this way gets a new `Reason` (suggested `Withdrawn`, card/UI text "withdrawn by source"), not
+       `CapsChanged`, so the card says the source took that level away mid-run rather than "offers changed". Add the
+       text to the reason table at the top of `charger_test.cpp`, the report card JSON and the Python/JS decoders
+       (`tools/k2_qr.py`, `docs/site/r/card.js`) if the reason is carried in the card record; check
+       `docs/QR_SHARE.md` for the reason code width before adding a value.
+    3. The row in flight when the list changes: if its slot still offers it, let it finish; if not, end it as
+       withdrawn and release to 5 V (the sink's single-Request gate from 3d8fa2c already serialises that release).
+    4. Keep `CapsChanged` for the cases that really are a different charger: another wire revision, no list back
+       after `kCapsReturnMs`, or a list where no pending PD row can be placed at all.
+    5. The progress grid needs no change: it is built from the step list (98e2f39), so a re-planned list shows by
+       itself. Check that `revision_` is bumped and `env_.plan_changed()` is called once per re-plan.
+    6. General rebalancing (user requirement 2026-11-09: other Anker multi-port devices rebalance the same way; one more
+       is tested on hardware the same evening). Every mid-run re-announce goes through the same per-row re-plan, not only
+       a shrink: a list that RAISES an offer (more current, a higher voltage or an APDO coming back) re-plans too, and a
+       PDO that comes back after it was withdrawn gets its rows back (pending again, not left as withdrawn) as long as the
+       unit has not ended. Several re-announces in one run are normal (re-plan each time, no counter that gives up after
+       N). A PPS/AVS APDO whose range or current changes keeps its row when the row's target still fits the new range;
+       a target outside it is withdrawn. Note on the card how often the source rebalanced (e.g. "source rebalanced 2x")
+       so a short result is explained, and log each re-plan (`[TEST] re-plan: <n> rows follow, <m> withdrawn,
+       <k> back`). A rebalance never counts as a failure of the row that was running, and no Request is sent before the
+       pending one finishes (the sink gate). Name the pattern `budget-reannounce-mid-run` (already in CHARGER_QUIRKS) and
+       detect it by behaviour, not by vendor or VID (project rule: patterns, no VID:PID tables).
+  - Tests (`tests/test_charger_test.cpp`): replay the splitter sequence (4-PDO list, rows 5 V/9 V pass, re-announce
+    5 V 1.5 A / 9 V 3 A / 15 V 3 A while at 15 V or between rows) and expect 15 V run (pass at the 3 A word), both
+    20 V rows `Withdrawn`, the unit not ended, and a single Request in flight throughout. Keep the existing
+    `reannounce-after-cable-discovery`, `reject-then-reduced-list`, `preauth-list-after-reset` and EPR-exit tests green.
+  - Docs: extend the `budget-reannounce-mid-run` row in `docs/CHARGER_QUIRKS.md` with the handling, and
+    `docs/CHARGER_TEST_FLOW.md` where "offers changed" is described.
+  - Hardware check: the same splitter setup, `python3 tools/ct_start.py --units pd --wait 540` (release any held PD
+    contract first with `k2_remote pd release`, or START refuses with "PD hold: release it"). Expect 5/9/15 V pass and
+    20 V "withdrawn by source".
 - **Run ends "unsafe (5V release failed)" with 15 V on the port after a mid-run re-announce** (2026-11-09, Anker 2-way
   splitter behind a Baseus 140 W, charger test "PD only"): the splitter re-split its budget and re-announced a shorter
   list while the K2 held 15 V; the runner's release then sent a second Request (PDO 1) before the first Request's
