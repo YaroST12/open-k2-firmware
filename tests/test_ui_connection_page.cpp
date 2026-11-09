@@ -421,6 +421,32 @@ static void test_source_tab_typec_advertisement() {
     g_stub.pm.vbus_mv = 5000;
 }
 
+// Dock -> K2 -> laptop with no PD traffic of its own (hardware 2026-11-09): a sink's Rd on the far side. Once the Link calls it
+// possibly inline, the Source tab's "PD none" row says the line is in use, and the Sink tab is not the NO DEVICE empty state.
+static void test_source_and_sink_tabs_say_in_use_when_possibly_inline() {
+    Ui &ui = fresh_ui();
+    g_stub.pm.vbus_mv = 5000;                          // 5 V alone is a standalone K2; the far Rd is what says "possibly inline"
+    g_stub.cc = 1;
+    uint32_t t = 20000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    for (int i = 0; i < 55; i++) ui.tick(t += 100);   // the waiting-for-caps window is over
+    set_cc(1676, 3303);
+    ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    const auto src_alone = show(ui, 0, t);
+    const auto snk_alone = show(ui, 2, t);
+    g_stub.far_cc = true;                              // a sink-band level with no Rd of the K2's own
+    for (uint32_t i = 0; i < k2::pd::kInlineForeignMs / 100 + 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 1);
+    CHECK(show(ui, 0, t) != src_alone);                // "PD none, line in use"
+    CHECK(show(ui, 2, t) != snk_alone);                // the Sink tab leaves the empty state
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.far_cc = false;
+    g_stub.pm.vbus_mv = 5000;
+}
+
 // The Legacy row of the Source tab lists D+/D- fast-charge protocols only: a PD-family verdict (Pd,
 // PdPe, PdMtk, PdLikely) never gets a row there, next to "PD none".
 static void test_source_tab_legacy_row_skips_pd_verdicts() {
@@ -883,6 +909,7 @@ int main() {
     test_sink_tab_not_empty_when_a_sink_was_seen();
     test_source_tab_leaves_waiting_after_timeout();
     test_source_tab_typec_advertisement();
+    test_source_and_sink_tabs_say_in_use_when_possibly_inline();
     test_source_tab_legacy_row_skips_pd_verdicts();
     test_sink_tab_omits_empty_data_row();
     test_sink_tab_pwr_row_is_a_budget_without_pd();

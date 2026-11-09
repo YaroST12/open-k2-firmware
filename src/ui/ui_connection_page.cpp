@@ -357,6 +357,7 @@ struct TabData {
     std::span<const uint32_t> sink;
     usblink::Link ul;
     bool waiting, k2_sink, k2_sink_ok;
+    bool in_use = false;    // possibly inline: the line is live and a device behind the K2 may be using it
     fastcharge::Protocol fc;
     int32_t vbus_mv = -1;   // the fast VBUS reading in 100 mV steps (what the Type-C row shows), -1 unknown
 };
@@ -488,11 +489,11 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     } else if (!traffic && (r.typec_ma || r.typec_rp)) {
         // A Type-C Rp advertisement exists (the source is attached): show it with the measured VBUS
         // and the advertised current, a default-USB Rp included.
-        pdv.put("none");
+        pdv.put(d.in_use ? "none, in use" : "none");
         StrBuf<28> &v = R.add("Type-C", kText);
         typec_row_text(d.vbus_mv, r.typec_ma, v);
     } else {
-        pdv.put(traffic ? "active, no caps" : "no caps yet");
+        pdv.put(traffic ? "active, no caps" : d.in_use ? "none, in use" : "no caps yet");
     }
     if (!r.caps_seen && legacy_row_protocol(d.fc)) {   // legacy fast-charge protocols the K2 detected
         StrBuf<6> fcn;
@@ -758,6 +759,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.k2_sink = fusb302::self_powered();
     d.k2_sink_ok = fusb302::pin_rd() == 1;
     d.fc = ctx_.fc;
+    d.in_use = link.inline_mode();
     d.vbus_mv = typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv);
     Rows R;
     switch (tab_) {
@@ -953,7 +955,7 @@ void ConnectionPage::update(uint32_t now_ms) {
 
     const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && fusb302::self_powered());
     if (empty) {
-        uint32_t h = fnv(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8);
+        uint32_t h = fnv(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9);
         if (sig_valid_ && h == sig_) return;
         sig_ = h;
         sig_valid_ = true;

@@ -50,9 +50,9 @@ static void test_empty_states() {
     const auto e = [](Tab t, Topology o) { return empty_state(t, facts(false, false, false, o)); };
     // Source
     CHECK_STR(e(Tab::Source, Topology::NoSource).title, "NO CHARGER");
-    CHECK_STR(e(Tab::Source, Topology::NoSource).hint, "Use the top or bottom port");   // one short line: the footer already says "No charger"
+    CHECK_STR(e(Tab::Source, Topology::NoSource).hint, "Use either port");   // one short line: the footer already says "No charger"
     CHECK_STR(e(Tab::Source, Topology::Unknown).title, "NO CHARGER");
-    CHECK_STR(e(Tab::Source, Topology::Unknown).hint, "Use the top or bottom port");
+    CHECK_STR(e(Tab::Source, Topology::Unknown).hint, "Use either port");
     {   // the empty Source tab is one line of 26 cells (the page paints the hint at 8 px advance in 224 - 16 px)
         std::array<std::string_view, 4> ln{};
         CHECK_EQ(wrap(e(Tab::Source, Topology::NoSource).hint, 26, ln), 1);
@@ -61,19 +61,20 @@ static void test_empty_states() {
     CHECK_STR(e(Tab::Source, Topology::CableSingleCc).title, "CHARGER WAITING");
     // Sink
     CHECK_STR(e(Tab::Sink, Topology::DirectReceptacle).title, "NO DEVICE");
-    CHECK_STR(e(Tab::Sink, Topology::DirectReceptacle).hint, "Plug a device into the bottom port.");
+    // The two ports share one CC network and one rail (docs/K2_PORTS_SPEC.md): no copy names a port as "the" device port.
+    CHECK_STR(e(Tab::Sink, Topology::DirectReceptacle).hint, "Plug a device into the other port.");
     CHECK_STR(e(Tab::Sink, Topology::CableSingleCc).title, "NO DEVICE");
-    CHECK_STR(e(Tab::Sink, Topology::CableSingleCc).hint, "Charger is on the bottom port: no device side in this setup.");
-    CHECK_STR(e(Tab::Sink, Topology::NoSource).hint, "Plug a device into the bottom port.");
+    CHECK_STR(e(Tab::Sink, Topology::CableSingleCc).hint, "Charger is on one port: no device side in this setup.");
+    CHECK_STR(e(Tab::Sink, Topology::NoSource).hint, "Plug a device into either port.");
     CHECK_STR(e(Tab::Sink, Topology::Unknown).title, "NO DEVICE");
-    CHECK_STR(e(Tab::Sink, Topology::Unknown).hint, "Plug a device into the bottom port.");
+    CHECK_STR(e(Tab::Sink, Topology::Unknown).hint, "Plug a device into either port.");
     // Cable
     CHECK_STR(e(Tab::Cable, Topology::DirectReceptacle).title, "NO CABLE");
     CHECK_STR(e(Tab::Cable, Topology::DirectReceptacle).hint, "Charger is plugged straight in (no cable).");
     CHECK_STR(e(Tab::Cable, Topology::CableSingleCc).title, "CABLE NOT READ");
     CHECK_STR(e(Tab::Cable, Topology::CableSingleCc).hint, "OK -> Read cable (unplug the charger first).");
     CHECK_STR(e(Tab::Cable, Topology::Unknown).title, "NO CABLE READ");
-    CHECK_STR(e(Tab::Cable, Topology::Unknown).hint, "Plug a cable into the bottom port, then OK -> Read cable.");
+    CHECK_STR(e(Tab::Cable, Topology::Unknown).hint, "Plug a cable into either port, then OK -> Read cable.");
     CHECK_STR(e(Tab::Cable, Topology::NoSource).title, "NO CABLE READ");
     // Titles fit the big font (12 px per character) in 224 px; every hint wraps into at most 4 lines of 27.
     for (int t = 0; t < kTabs; t++) {
@@ -88,6 +89,34 @@ static void test_empty_states() {
             CHECK_STR(joined.c_str(), em.hint);   // nothing lost in the wrap
         }
     }
+}
+
+// A K2 that sees a live line it did not make (VBUS, or a sink's Rd on the far side) says "in use", never "no device",
+// and never names a port: a dock -> K2 -> laptop chain with no PD traffic of its own showed NO DEVICE on the Sink tab.
+static void test_empty_states_when_possibly_inline() {
+    const auto e = [](Tab t, Topology o) { return empty_state(t, facts(true, false, false, o)); };
+    for (int t = 0; t < kTabs; t++) {
+        for (int o = 0; o < 4; o++) {
+            const Empty em = e(static_cast<Tab>(t), static_cast<Topology>(o));
+            CHECK_EQ(std::strstr(em.title, "NO DEVICE") == nullptr, 1);
+            CHECK_EQ(std::strstr(em.title, "NO CHARGER") == nullptr, 1);
+            CHECK_EQ(std::strstr(em.hint, "bottom") == nullptr && std::strstr(em.hint, "top port") == nullptr, 1);
+            CHECK_EQ(std::strlen(em.title) <= 18, 1);
+            std::array<std::string_view, 4> ln{};
+            const int n = wrap(em.hint, 27, ln);
+            CHECK_EQ(n >= 1 && n <= 4, 1);
+            std::size_t kept = 0;
+            for (int i = 0; i < n; i++) kept += ln[std::size_t(i)].size();
+            CHECK_EQ(kept + std::size_t(n - 1) >= std::strlen(em.hint), 1);   // nothing lost in the wrap
+        }
+    }
+    CHECK_STR(e(Tab::Source, Topology::Unknown).title, "LINE IN USE");
+    CHECK_STR(e(Tab::Sink, Topology::Unknown).title, "DEVICE IN USE");
+    CHECK_STR(e(Tab::Cable, Topology::Unknown).title, "CABLE NOT READ");
+    // The other empty states do not name a port either.
+    const auto n = [](Tab t, Topology o) { return empty_state(t, facts(false, false, false, o)); };
+    for (int t = 0; t < kTabs; t++)
+        for (int o = 0; o < 4; o++) CHECK_EQ(std::strstr(n(static_cast<Tab>(t), static_cast<Topology>(o)).hint, "bottom") == nullptr, 1);
 }
 
 static void test_wrap() {
@@ -327,6 +356,7 @@ int main() {
     test_tab_empty();
     test_topology_word();
     test_empty_states();
+    test_empty_states_when_possibly_inline();
     test_wrap();
     test_status_text();
     test_status_survey();

@@ -63,21 +63,27 @@ constexpr const char *topology_word(Topology t) {
 // Empty state of a tab: a large message and one hint (wrapped by the page).
 struct Empty { const char *title; const char *hint; };
 
+// The two ports share one CC network and one rail (docs/K2_PORTS_SPEC.md), so no text names one port as the device's.
+// A K2 that is possibly inline (a live line it did not make: VBUS or a sink's Rd on the far side, no contract of its own)
+// never says "no device" or "no charger": something is on the line, the K2 just cannot see it talk.
 constexpr Empty empty_state(Tab t, const Facts &f) {
     const bool direct = f.topo == Topology::DirectReceptacle, via_cable = f.topo == Topology::CableSingleCc;
     switch (t) {
     case Tab::Source:
+        if (f.inline_sink) return {"LINE IN USE", "VBUS is live, no source PD seen: a device may be in use."};
         // Rp on a line with VBUS down: a charger that waits for a sink (the K2 is passive until a test starts).
         if (direct || via_cable) return {"CHARGER WAITING", "Charger waits for a sink: start a charger test."};
-        return {"NO CHARGER", "Use the top or bottom port"};   // one line: the footer already states "No charger"
+        return {"NO CHARGER", "Use either port"};   // one line: the footer already states "No charger"
     case Tab::Sink:
-        if (direct) return {"NO DEVICE", "Plug a device into the bottom port."};
-        if (via_cable) return {"NO DEVICE", "Charger is on the bottom port: no device side in this setup."};
-        return {"NO DEVICE", "Plug a device into the bottom port."};
+        if (f.inline_sink) return {"DEVICE IN USE", "Something is on the line behind the K2: nothing is asked of it."};
+        if (direct) return {"NO DEVICE", "Plug a device into the other port."};
+        if (via_cable) return {"NO DEVICE", "Charger is on one port: no device side in this setup."};
+        return {"NO DEVICE", "Plug a device into either port."};
     case Tab::Cable:
+        if (f.inline_sink) return {"CABLE NOT READ", "A device may be in use: OK -> Read cable asks first."};
         if (direct) return {"NO CABLE", "Charger is plugged straight in (no cable)."};
         if (via_cable) return {"CABLE NOT READ", "OK -> Read cable (unplug the charger first)."};
-        return {"NO CABLE READ", "Plug a cable into the bottom port, then OK -> Read cable."};
+        return {"NO CABLE READ", "Plug a cable into either port, then OK -> Read cable."};
     }
     return {"", ""};
 }
