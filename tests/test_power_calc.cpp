@@ -195,7 +195,18 @@ static void test_forward_sign() {
     CHECK_EQ(e.mwh() > 37000 && e.mwh() < 37500, 1);   // 37.3 W for an hour = 37.3 Wh
 }
 
+// A meter missed at the first probe (the VBUS rail of a key-mode boot is still ramping) is probed again every 100 ms for the first
+// six seconds, then once a second: found within a few frames of the rail coming up, quiet after.
+static void test_probe_period() {
+    CHECK_EQ(probe_period_ms(0), 100u);
+    CHECK_EQ(probe_period_ms(kFastProbeWindowMs - 1), 100u);
+    CHECK_EQ(probe_period_ms(kFastProbeWindowMs), 1000u);
+    CHECK_EQ(probe_period_ms(60000), 1000u);
+    CHECK_EQ(kFastProbeWindowMs >= 3000u + 1000u, true);   // covers the bring-up (3 s) and the slow init (~1 s)
+}
+
 int main() {
+    test_probe_period();
     test_deadband_edges();
     test_flow_direction();
     test_magnitude();

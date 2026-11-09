@@ -101,7 +101,7 @@ void poll() {
     if (t >= g_next_sensor_ms) {
         g_next_sensor_ms = t + kSensorPeriodMs;
         g_busy = true;
-        if (power::chip() != power::Chip::None) power::poll();   // never the probe-and-retry path (it waits)
+        power::poll();   // no chip yet: the probe-and-retry path, every 100 ms in the first seconds (a few NACKed reads each)
         adc::poll();
         g_busy = false;
     }

@@ -607,14 +607,15 @@ void DiagPage::draw_static() {
     foot_.invalidate();
 }
 
-void DiagPage::paint_marks(bool usb_ok, bool fusb_ok, bool meter_ok) {
-    const uint8_t sig = static_cast<uint8_t>(usb_ok | (fusb_ok << 1) | (meter_ok << 2));
+void DiagPage::paint_marks(bool usb_ok, bool fusb_ok, bool meter_ok, bool meter_wait) {
+    const uint8_t sig = static_cast<uint8_t>(usb_ok | (fusb_ok << 1) | (meter_ok << 2) | (meter_wait << 3));
     if (sig == marks_) return;
     marks_ = sig;
     const bool ok[3] = {usb_ok, fusb_ok, meter_ok};
     for (int g = 0; g < 3; g++) {
-        // USB not configured is "waiting" (dim dash); a missing FUSB302 or meter is a fault (red cross).
-        const kit::Verdict v = ok[g] ? kit::Verdict::Pass : g == 0 ? kit::Verdict::None : kit::Verdict::Fail;
+        // USB not configured is "waiting" (dim dash), and so is a meter in its first seconds; a missing FUSB302 or a meter still
+        // missing after the grace is a fault (red cross).
+        const kit::Verdict v = ok[g] ? kit::Verdict::Pass : (g == 0 || (g == 2 && meter_wait)) ? kit::Verdict::None : kit::Verdict::Fail;
         const int16_t y = static_cast<int16_t>(kit::kv_row_y(kDgLayout, g * 3) + 1 + (kDgLayout.pitch - 1 - kit::kMarkSize) / 2);
         kit::draw_verdict(ctx_.content, kit::kMarkX, y, kit::kMarkSize, kit::kMarkSize, v, {}, kBg);
     }
@@ -623,6 +624,7 @@ void DiagPage::paint_marks(bool usb_ok, bool fusb_ok, bool meter_ok) {
 void DiagPage::update(uint32_t now_ms) {
     title_badge(false);
     const bool on = ctx_.pm_online;
+    const bool meter_wait = home::meter_starting(on, now_ms);   // still being found: not yet an error
     const uint8_t fusb_id = fusb302::device_id();
     StrBuf<24> t[kRows];
     t[0].put(live_.configured ? "ready" : "waiting");
@@ -632,7 +634,7 @@ void DiagPage::update(uint32_t now_ms) {
     t[3].put("ID 0x").put_hex(fusb_id, 2);
     t[4].put_u32(live_.rx_count).put(live_.cc == 1 ? " on CC1" : live_.cc == 2 ? " on CC2" : " on CC-");
     t[5].put_u32(live_.poll_gap_max).put(" ms");
-    if (on) t[6].put(power::name(power::chip())); else t[6].put("missing");
+    if (on) t[6].put(power::name(power::chip())); else t[6].put(meter_wait ? "wait" : "missing");
     t[7].put_hms(now_ms / 1000);
     model_row_text(power::chip(), t[8]);
     for (int i = 0; i < kRows; i++) {
@@ -641,15 +643,16 @@ void DiagPage::update(uint32_t now_ms) {
         if (i == 2 && live_.log_dropped > 0 && !count_overflowed(live_.log_dropped) &&
             !count_overflowed(live_.log_sent))
             col = kCaution;
-        if (i == 6 && !on) col = kError;
+        if (i == 6 && !on && !meter_wait) col = kError;
         val_[i].set_colors(col, kBg);
         val_[i].draw(t[i].view());
     }
-    paint_marks(live_.configured, fusb_id != 0, on);
+    paint_marks(live_.configured, fusb_id != 0, on, meter_wait);
     const bool usb_ok = live_.configured, fusb_ok = fusb_id != 0;
-    const int state = !on ? 1 : !usb_ok ? 2 : !fusb_ok ? 3 : 0;
-    static const char *const msg[4] = {"All subsystems up", "Power meter not found", "USB not configured", "FUSB302 not answering"};
-    draw_footer_cached(ctx_.content, state == 0 ? FooterTone::Ok : state == 2 ? FooterTone::Caution : FooterTone::Error,
+    const int state = !on ? (meter_wait ? 4 : 1) : !usb_ok ? 2 : !fusb_ok ? 3 : 0;
+    static const char *const msg[5] = {"All subsystems up", "Power meter not found", "USB not configured", "FUSB302 not answering",
+                                       "Power meter starting"};
+    draw_footer_cached(ctx_.content, state == 0 ? FooterTone::Ok : state == 4 ? FooterTone::Info : state == 2 ? FooterTone::Caution : FooterTone::Error,
                        msg[state], foot_);
 }
 

@@ -73,6 +73,13 @@ std::uint32_t magnitude(std::int32_t v);  // |v|, safe for INT32_MIN
 // |v| as int32, INT32_MIN saturated to INT32_MAX (no UB on a garbage reading).
 constexpr std::int32_t abs_sat(std::int32_t v) { return v >= 0 ? v : v == INT32_MIN ? INT32_MAX : -v; }
 
+// How soon a meter that was not found is probed again. The first probe runs at reset, on a VBUS rail that a key-mode boot is still
+// ramping (the chip may not answer yet), and the main loop that retried once a second is not reached for seconds (the charger link
+// bring-up, the slow init): so the first kFastProbeWindowMs after init retry every 100 ms from the boot trace hook and the bring-up
+// loop, then the ordinary once a second.
+inline constexpr std::uint32_t kFastProbeWindowMs = 6000;
+constexpr std::uint32_t probe_period_ms(std::uint32_t since_init_ms) { return since_init_ms < kFastProbeWindowMs ? 100u : 1000u; }
+
 // Sliding average of raw counts over the last kAvgLen samples (one ring per quantity).
 inline constexpr std::size_t kAvgLen = 128;
 

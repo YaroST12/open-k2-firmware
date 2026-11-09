@@ -35,6 +35,7 @@ std::int32_t g_raw_ma;      // forward current of the latest sample, not average
 bool g_fast_valid;
 smoothing::Readout g_disp;  // One Euro filters behind read_display()
 std::uint32_t g_last_probe_ms;
+std::uint32_t g_init_ms;
 bool g_fast;   // transition capture's fast VBUS mode is on (INA226: 0x0007 instead of 0x4407)
 
 bool read16(std::uint8_t reg, std::uint16_t& out) {
@@ -103,7 +104,7 @@ constexpr std::uint16_t kIna226Fast = 0x0007;     // 1 average, 140 us, continuo
 
 bool init() {
     g_chip = Chip::None;
-    g_last_probe_ms = systick::millis();
+    g_init_ms = g_last_probe_ms = systick::millis();
     if (detect()) return true;
     K2LOG("[PWR] no INA228/INA226/INA237 at 0x40\n");
     return false;
@@ -116,7 +117,7 @@ std::int32_t max_vbus_mv() { return max_vbus_mv(g_chip); }
 void poll() {
     if (g_chip == Chip::None) {
         const std::uint32_t now = systick::millis();
-        if (now - g_last_probe_ms >= 1000) {
+        if (now - g_last_probe_ms >= probe_period_ms(now - g_init_ms)) {
             g_last_probe_ms = now;
             detect();
         }

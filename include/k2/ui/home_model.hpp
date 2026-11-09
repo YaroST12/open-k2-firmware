@@ -115,6 +115,11 @@ void format_proto(const ProtoInfo &p, ProtoText &out);
 
 // ---- cell state --------------------------------------------------------------------------------
 enum class Mode : uint8_t { NoMeter, Idle, Live, Stale };
+// The power meter has not answered YET: the first seconds of a boot, while the chip is still being found (a key-mode boot lives on a
+// VBUS that is still ramping when the first probe runs, and the main loop is busy with the charger link for seconds). The page says
+// "starting" in a neutral colour; only a meter still missing after the grace is an error. Uptime in ms (the Ui clock starts at boot).
+inline constexpr uint32_t kMeterGraceMs = 6000;
+constexpr bool meter_starting(bool pm_online, uint32_t uptime_ms) { return !pm_online && uptime_ms < kMeterGraceMs; }
 // The one exception badge in the VBUS cell's upper right. Normal operation shows the dim "max NNV".
 enum class Pill : uint8_t { None, Last, NoVbus, Over };
 constexpr Pill pill_of(Mode m, Alarm a) {

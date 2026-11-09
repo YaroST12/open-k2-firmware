@@ -31,8 +31,8 @@ Chip chip();  // Chip::None until detection succeeds
 // triggers never request or tolerate more than this.
 std::int32_t max_vbus_mv();
 
-// Take one sample into the averages; call every ~20 ms. With no chip present, retries
-// detection at most once per second.
+// Take one sample into the averages; call every ~20 ms. With no chip present, retries detection (every 100 ms for the first six
+// seconds after init(), then once a second: probe_period_ms in power_calc.hpp).
 void poll();
 
 // Averaged readings (128-sample window, ~2.5 s), or nullopt while offline or before the first sample. For

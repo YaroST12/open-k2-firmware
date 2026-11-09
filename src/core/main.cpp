@@ -129,6 +129,7 @@ k2::bootmode::Mode sample_boot_mode() {
         const uint32_t t = k2::systick::millis();
         if (t != last) { last = t; k2::fusb302::service(); }
         if (t - last_poll >= 10) { last_poll = t; k2::fusb302::poll(); }
+        k2::boottrace::poll();   // the power trace and the meter's late-probe go on through the bring-up (no-op before boottrace::init)
         if (k2::rdcomeback::pending() && k2::rdcomeback::judge_step(t - t0)) break;   // released: an ordinary plain boot from here
         if (k2::fusb302::sink_status().state == k2::pd::SinkState::Ready) break;
     }

@@ -732,7 +732,7 @@ private:
         uint8_t cc = 0;
         bool configured = false;
     };
-    void paint_marks(bool usb_ok, bool fusb_ok, bool meter_ok);
+    void paint_marks(bool usb_ok, bool fusb_ok, bool meter_ok, bool meter_wait);
     Live live_;
     Field val_[kRows];
     uint8_t marks_ = 0xFF;       // group markers last painted (2 bits per group), 0xFF = none yet

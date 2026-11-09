@@ -373,11 +373,12 @@ void HomePage::paint_info(const Frame &f) {
 
     // Row 2: protocol tag, value, role.
     hm::ProtoText pt;
-    if (m == hm::Mode::NoMeter) pt.value.put("Power meter not found");
+    const bool starting = m == hm::Mode::NoMeter && hm::meter_starting(false, f.now);
+    if (m == hm::Mode::NoMeter) pt.value.put(starting ? "Power meter starting" : "Power meter not found");
     else hm::format_proto(f.proto, pt);
     const bool known = (live || stale) && f.proto.kind != hm::ProtoKind::None;
     const uint16_t tcol = known ? kDim : kFaint;
-    const uint16_t vcol = m == hm::Mode::NoMeter ? kError
+    const uint16_t vcol = m == hm::Mode::NoMeter ? (starting ? kDim : kError)
                         : stale ? kStale
                         : (live && f.proto.kind != hm::ProtoKind::None && f.proto.kind != hm::ProtoKind::Detecting
                            && f.proto.kind != hm::ProtoKind::Unknown) ? kText : kDim;

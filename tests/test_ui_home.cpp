@@ -405,6 +405,27 @@ static void test_nometer_home() {
     CHECK_EQ(ink_logical(ui, 0, 0, 224, 142, kVolt), 0);
 }
 
+// The first seconds of a boot: the meter is still being found, so the row says "starting" in the neutral colour and only a meter
+// still missing after hm::kMeterGraceMs is the red error (hardware 2026-11-09: a key-mode boot showed the error for seconds, then the
+// chip answered by itself).
+static void test_nometer_grace() {
+    CHECK_EQ(hm::meter_starting(false, 0), true);
+    CHECK_EQ(hm::meter_starting(false, hm::kMeterGraceMs - 1), true);
+    CHECK_EQ(hm::meter_starting(false, hm::kMeterGraceMs), false);
+    CHECK_EQ(hm::meter_starting(true, 0), false);
+    const uint32_t saved = g_t;
+    g_t = 1000;
+    Ui &ui = home_ui();
+    g_stub.pm_online = false;
+    run(ui, 10);                                                        // 2 s of uptime
+    CHECK_EQ(ink_logical(ui, 4, 223, 220, 16, kError), 0);              // no red yet
+    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 20);            // "Power meter starting"
+    g_t = hm::kMeterGraceMs + 100;
+    run(ui, 4);
+    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kError) > 20);          // the grace is over: the error
+    g_t = saved;
+}
+
 // ---- direction arrow: a 22 px glyph beside the current ----------------------------------------------
 
 static constexpr int kAx = 8, kAy = 101, kAs = 22;
@@ -505,6 +526,7 @@ int main() {
     test_stale_home();
     test_alarms();
     test_nometer_home();
+    test_nometer_grace();
     test_flow_arrow_geometry();
     test_flow_arrow();
     test_animation_frames();
