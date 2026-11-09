@@ -450,12 +450,12 @@ Nine rows: Link (USB), RST/ISR, TX/drop, FUSB302 (PD chip, its ID), RX (which CC
 
 ## Share (QR)
 
-Any "Share (QR)" action opens a QR screen.
+Any "Share (QR)" action opens a QR screen. The code fills the whole screen, centred, with no button labels. A bigger record needs a bigger code, so its modules get smaller (3 px up to a medium code, 2 px above); hold the phone a little further back and let it focus. A big link shows "Preparing code..." for a moment first.
 
 - **Link form** (charger cards, cable records, source offers): a phone camera opens a page on the project's site (`https://yarost12.github.io/open-k2-firmware/r/#1<kind>.<data>`). All data is after the `#`, so it never reaches the server; the page works offline once opened. OK toggles **Link** and **K2 data**; K2 data is the raw frame that `tools/k2_qr.py` imports.
 - **Multi-part** (for example the log): the QR is several frames. OK cycles **Auto** and **Hold**; +/- go to the previous or next frame; BACK returns.
 
-Captions say what the code contains: "Scan: full results" (card), "Scan: cable details", "Scan: charger offers", "Scan: firmware info". Format: [`QR_SHARE.md`](QR_SHARE.md).
+Captions say what the code contains: "Scan: full results" (card), "Scan: cable details", "Scan: charger offers", "Scan: firmware info". A caption shows under the code only when the margin has room for it. **Long OK** shows a text view instead (what the code is, its QR version and module size, the keys); long OK or BACK returns to the code, any other key acts on it. A code too dense for the main camera says "Use the wide camera" there (none of today's records need it). Format: [`QR_SHARE.md`](QR_SHARE.md).
 
 ---
 

@@ -169,24 +169,33 @@ Text length of one part is `len("K2:<tag><schema>:") + 3 * ceil(frame / 2)` with
 | card, LZ4 flag | 109 B packed | 1 | 197 | 7 |
 
 The worst case is 330 payload bytes per part: a 346 byte frame, 519 base45 characters, 527 with the prefix, version 12 (65
-modules, 73 with the 4 module quiet zone). The share view draws into the content area beside the key labels (224 by 240 px
-portrait, 240 by 224 landscape) and keeps one text line under the code: 3 px per module in portrait up to version 12 and in
-landscape up to version 11; version 12 in landscape drops to 2 px (the camera-safe 3 px of the boot screen does not fit there).
+modules, 73 with the 4 module quiet zone). The share view draws the code over the whole panel (look policy under "Link code
+geometry"): a version 12 frame is a 219 px box at 3 px per module, centred.
 
 ## On the K2
 
-- **Share view** (`Menu::Share`, remote page 18, `src/ui/ui_share.cpp`): title, one QR code, `part i/n`. The parts of a multi part
-  record cycle every 1.5 s; long [+] / [-] page and stop the cycling, OK holds or resumes it, BACK returns. The screen repaints
+- **Share view** (`Menu::Share`, remote page 18, `src/ui/ui_share.cpp`): one QR code, full screen and centred on the whole panel
+  (the page hides the button strip, `PageIf::hides_strip`), the smallest version that holds the text, at the module size the
+  look policy gives that version. The caption (the title and `part i/n` for a K2 data frame, `Scan: ...` for a link) sits in the
+  margin under the code when that holds a 14 px line (versions up to 11 and 14 to 20; not at 12, 13 or 21); otherwise it is
+  left out and **long OK** shows a text view instead (what the code is, its QR version and module size, the wide-camera hint
+  for a code that needs it, the keys); long OK or BACK returns to the code, any other key acts on it. The parts of a multi
+  part record cycle every 1.5 s; [+] / [-] page and stop the cycling, OK holds or resumes it, BACK returns. The screen repaints
   only when the part changes. The record lives in a static 510 byte buffer; each paint encodes its part in the shared scratch
-  arena (text, encoder workspace and one pixel line, about 2.1 KB) and gives it back: no heap, frames under 1024 bytes.
+  arena and gives it back: no heap, no page member for the encoder. The arena holds, per paint, either a link (code and temp,
+  2 x 1280 B, the link text built at the front of temp and the pixel line over temp after the encode) or a K2 data frame (its
+  text, code and temp, about 1.6 KB); a union of the two, 2560 B of the 2816 B arena, so bss is unchanged.
+  A link of more than 644 characters (version 18 and up) first wipes the panel and says `Preparing code...` in the middle,
+  then encodes with the generator's poll hook set to `lcd::pump` (USB and the idle hook are served once per mask candidate,
+  eight times), wipes and draws the code.
 - **Long OK = Share** (`docs/UI_DESIGN.md`) on: a saved cable (Connection, Actions, Saved cables), the Connection Source tab, a report
   card (Tools, Report cards, detail), the charger test Results page (the card of that run) and the Diag page (the log).
   A record that LZ4 shrinks by 25 % or more goes out packed (the flag above); the share view packs in place in the scratch arena.
 - Left out: built-in chips and the identity record have no opener (the LOG head carries the git string and uptime; no text
   headroom left for a second chooser; the identity and boot-info links and page views exist and are tested, so an opener is
   all that is missing); Black Box rings and captures are several KB, far over the 1320 B record limit (use `tools/pd_trace.py`).
-- **Multi-part links are deferred.** A record that needs more than one code (the log; a cable whose quirk rows grow past the
-  one-code cap) has no link form: the page would have to gather the parts of one record (links with a part number, kept in the
+- **Multi-part links are deferred.** A record that needs more than one code (the log; a record whose link passes the one-code
+  cap of 929 characters, QR version 21) has no link form: the page would have to gather the parts of one record (links with a part number, kept in the
   browser until the set is complete). The 8-row quirk cable now fits one code as a version '2' link (189 B schema 2 record,
   302 characters, QR version 11), so every cable with up to 8 quirk rows has a link; until the rest fit, they are the K2 data
   frames and `tools/k2_qr.py`.
@@ -202,7 +211,8 @@ landscape up to version 11; version 12 in landscape drops to 2 px (the camera-sa
 - **Boot info**: a key-mode boot shows the BI record as a QR code on the boot screen (`docs/ui_mockups/bootscreen.png`). It stays
   the K2 data frame: the boot info as a link is 290 characters, QR version 11, which is 61 modules, and at the screen's 3 px
   per module that is 207 px beside the 40 px text block, over the 240 px panel. The link form of the boot info is for the Share
-  view only (nothing opens it yet; see "Left out").
+  view only (nothing opens it yet; see "Left out"). The boot screen's block of code and text is centred like the share code
+  (a few pixels off the old position).
 - Log lines: `[SHARE] type=<n> <bytes>B in <parts> part(s)` when a share opens, `[SHARE] nothing to share (<bytes> bytes)` when
   the record is empty or too large.
 
@@ -247,8 +257,12 @@ the BI record.
   | `t` | a plain ASCII text record, NUL padded, read up to the first NUL; version '1' only, never packed — the code of the QR scan test (below) | – |
 
 - Which records get a link form is one rule (`qrshare::link::fits()`): the record that goes into the link (packed or not, or
-  already a v2 record) must make a link of at most 321 characters, the byte-mode capacity of QR version 11 at level L (61 modules, 3 px each on the
-  panel). The base (with the `#`) is 47 characters and `<version><kind>.` 3, which leaves 271 characters of base64url: at most 203 record bytes. That holds for the card (as a version '2' link: 68 to 109 B for the golden and captured cards,
+  already a v2 record) must make a link of at most 929 characters, the byte-mode capacity of QR version 21 at level L (101
+  modules, 2 px each on the panel, read by the main camera in the owner's scans). The base (with the `#`) is 47 characters and `<version><kind>.` 3,
+  which leaves 879 characters of base64url: at most 659 record bytes. Every record an opener builds is at most the 510 byte
+  share buffer, so the largest link in practice is 730 characters, QR version 19; versions 20 and 21 are headroom. (Before the
+  look policy the limit was one version 11 code, 321 characters and 203 bytes: a cable with many quirk rows, a 510 byte
+  record, had no link until now.) That holds for the card (as a version '2' link: 68 to 109 B for the golden and captured cards,
   141 to 196 characters, and 187 B, 300 characters, in the synthetic all-limits worst case, so the v2 card always fits with
   room; as a version '1' link the format-7 card is 202 B and makes a 320 character link, one character to spare, and formats
   3 to 6 were at most 196 B, 312 characters, and still decode), the identity (at most 64 B), the PDOs (at most 50 B), the boot info (about 180 B, 290 characters) and a
@@ -286,10 +300,10 @@ the BI record.
 
 ### Link code geometry
 
-One link code is byte mode at level L, drawn with one text line under the box in the content area beside the key labels (224 by
-240 px portrait, 240 by 224 landscape). The box is `(modules + 2 * quiet) * px` and must fit the area, or the area minus the
-14 px text line when the caption is shown. Byte-mode capacity at level L and the largest record whose link fits it, measured on
-the vendored generator:
+One link code is byte mode at level L: the smallest version that holds the link, drawn **full screen and centred** on the
+240 by 240 px panel (the page hides the button strip). The box is `(modules + 2 * quiet) * px`, modules = 4 * version + 17,
+and the box and its caption line (14 px) are centred as one block (the box alone when the caption is not shown). Byte-mode
+capacity at level L and the largest record whose link fits it, measured on the vendored generator:
 
 | QR version | modules | byte-L chars | max record B |
 |---|---|---|---|
@@ -298,14 +312,38 @@ the vendored generator:
 | 13 | 69 | 425 | 281 |
 | 14 | 73 | 458 | 306 |
 | 15 | 77 | 520 | 352 |
+| 17 | 85 | 644 | 445 |
+| 18 | 89 | 718 | 501 |
 | 20 | 97 | 858 | 606 |
-| 25 | 117 | 1273 | 917 |
+| 21 | 101 | 929 | 659 |
+| 24 | 113 | 1171 | 840 |
 
-Geometry on the 240 px panel, corrected: **v25 at 2 px needs a quiet zone of at most 1 module** ((117 + 2) * 2 = 238 px; a
-2-module quiet zone needs 242 px and does not fit) — the true 2 px maximum at quiet 2 is **v24** ((113 + 4) * 2 = 234 px).
-Full-screen **v13 at 3 px with the 4-module quiet zone** (425 characters, a 281 B record) needs a 231 px box, so the
-caption/chrome must be hidden; with the 14 px caption line it is v12 (219 px). In the 224 px share area at 3 px the share
-code stays at version 11 with the caption (207 px box).
+#### Look policy
+
+One table (`qrview::look_for`) gives the module size and quiet zone of each version; the share view and the QR test page both
+use it. It follows what the owner's phone cameras read:
+
+| QR version | px per module | quiet | box (px) | camera |
+|---|---|---|---|---|
+| 1 to 13 | 3 | 4 | up to 231 (v13) | main |
+| 14 to 21 | 2 | 4 | 162 (v14) to 218 (v21) | main |
+| 22 and 23 | 2 | 4 | 226, 234 | wide camera only; hint `Use the wide camera` |
+| 24 | 2 | 2 | 234 | wide camera only; hint `Use the wide camera` |
+| 25 and up | none | | | not drawn |
+
+The hint is for the text view (long OK) and the margin under the code when it holds a line; v22 to v24 are reached only by a
+record over 929 characters, which the link rule does not produce today (the cap is version 21), so that row is the policy
+for a later, bigger cap. Owner scans (qrtest rig, 2026-11-09): v13 at 3 px / quiet 4 (231 px, 425 characters) read with the
+main camera; v18 at 2 px / quiet 4 (194 px, about 670 characters) read comfortably with the main camera; v21 at 2 px (about
+930 characters) read; v24 at 2 px / quiet 2 (234 px, 1171 characters) read with the ultrawide camera only. (The v21 scan was
+logged at a 210 px box; at quiet 4 the box is 218 px.) A 2 px, quiet 2 version 25 would be 238 px at quiet 1: out of the
+policy. The look table is checked on the host for every version it can pick: the box is centred within 1 px (`test_qrview`,
+`test_ui_share`), and decodes for the sizes the vendored decoder reaches (up to version 24).
+
+The 14 px caption fits under the code only when the box leaves it room (versions up to 11 and 14 to 20); at 12, 13 and 21 the
+margin is too small and the caption is left out: long OK shows the text view instead. Encoding a link of more than 644
+characters (version 18 and up) takes a noticeable moment on the device, so the page says `Preparing code...` first and keeps
+USB served through the encode (the poll hook runs once per mask candidate; the time per encode on the K2 is not measured yet).
 
 ## Capacity
 
