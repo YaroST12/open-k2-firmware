@@ -21,6 +21,7 @@
 #include "k2/ui/qrshare_link.hpp"
 #include "k2/ui/qrshare_records.hpp"
 #include "k2/ui/qrview.hpp"
+#include "k2/ui/ui_qrtest.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "qr_decode.hpp"
 #include "qrshare_fixtures.h"
@@ -68,11 +69,12 @@ static void test_plan_in() {
 // The code on the panel -> the reader -> the frame text of the part on show; "" when it does not read.
 static std::string read_panel(const Ui& ui) {
     const int n = ui.share().modules();
-    const qrview::Plan p = qrview::plan_in(ui.share().area(), n, SharePage::kTextH, SharePage::kMinModulePx);
+    const qrview::Plan p = ui.share().plan();
+    const int quiet = ui.share().look().quiet;
     if (n == 0 || p.px == 0) return "";
     const qrdec::Result r = qrdec::decode(n, [&](int x, int y) {
-        const int px = p.x0 + (x + qrview::kQuietModules) * p.px + p.px / 2;
-        const int py = p.y0 + (y + qrview::kQuietModules) * p.px + p.px / 2;
+        const int px = p.x0 + (x + quiet) * p.px + p.px / 2;
+        const int py = p.y0 + (y + quiet) * p.px + p.px / 2;
         return g_panel[py * 240 + px] == 0x0000;
     });
     return r.ok ? r.text : "";
@@ -110,7 +112,7 @@ static std::size_t read_link(const Ui& ui, std::span<std::uint8_t> out) {
     if (s.size() < 3 || (s[0] != lk::kVersion && s[0] != lk::kVersionV2) || s[2] != '.') return 0;
     link_kind = s[1];
     s.remove_prefix(3);
-    std::array<std::uint8_t, 256> raw{};
+    std::array<std::uint8_t, 700> raw{};   // a link carries up to lk::kMaxRecord (659) bytes
     std::size_t n = 0;
     unsigned acc = 0, bits = 0;
     for (const char c : s) {
@@ -173,7 +175,7 @@ static void test_two_parts(uint8_t rotation) {
     for (std::size_t i = 0; i < want.size(); i++) want[i] = ui.share_buffer()[i];
 
     ui.tick(2000);
-    CHECK(ui.open_share(qs::Type::Emarker, 1, "Test cable", 510, 2000));
+    CHECK(ui.open_share(qs::Type::Log, 1, "Test cable", 510, 2000));   // the log has no link form: only the frames, two parts
     CHECK(ui.menu() == Menu::Share);
     CHECK_EQ(int(ui.menu_depth()), 1);
     CHECK_EQ(int(ui.page_index()), int(kMenuPageBase) + int(Menu::Share));
@@ -191,7 +193,7 @@ static void test_two_parts(uint8_t rotation) {
     qs::Assembler as(got);
     CHECK(feed(ui, as) == qs::Assembler::Result::Accepted);
     CHECK_EQ(int(as.count()), 2);
-    CHECK(as.type() == qs::Type::Emarker);
+    CHECK(as.type() == qs::Type::Log);
 
     // No repaint, no new code, until the cycle time passes.
     const unsigned enc = ui.share().encodes(), pnt = ui.share().paints();
@@ -264,7 +266,7 @@ static void test_one_part_and_refusals() {
     CHECK_EQ(int(ui.menu_depth()), 0);
 
     fill_record(ui, 300);
-    CHECK(ui.open_share(qs::Type::Emarker, 1, "A very long card name that does not fit the line", 300, 1300));   // too big for a link: just one code
+    CHECK(ui.open_share(qs::Type::Log, 1, "A very long card name that does not fit the line", 300, 1300));   // no link form (the log): just one code
     CHECK_EQ(int(ui.share().parts()), 1);
     CHECK(!ui.share().has_link_form());
     CHECK(!ui.share().link());
@@ -646,9 +648,11 @@ static void test_link_form(uint8_t rotation) {
         CHECK_EQ(int(read_link(ui, got)), 184);
         CHECK(std::memcmp(got.data(), want.data(), 184) == 0);
         CHECK_EQ(int(link_kind), int(packs ? lk::kKindCardPacked : lk::kKindCard));
-        if (!packs) {   // 296 characters: version 11 (61 modules) at 3 px, the camera-safe size
+        if (!packs) {   // 296 characters: version 11 (61 modules) at 3 px, the camera-safe size, quiet zone 4
             CHECK_EQ(ui.share().modules(), 61);
-            CHECK_EQ(qrview::plan_in(ui.share().area(), 61, SharePage::kTextH, SharePage::kMinModulePx).px, 3);
+            CHECK_EQ(ui.share().plan().px, 3);
+            CHECK_EQ(ui.share().look().quiet, 4);
+            CHECK_EQ(ui.share().plan().box, 207);
         }
         CHECK_STR(label(ui, Button::Ok).c_str(), "K2 data");
         CHECK_STR(label(ui, Button::Plus).c_str(), "");
@@ -694,7 +698,7 @@ static void test_link_kinds() {
     struct Case { qs::Type type; std::size_t len; char kind; std::string_view caption; };
     const Case cases[] = {
         {qs::Type::Emarker, 91, 'e', "Scan: cable details"},
-        {qs::Type::Emarker, lk::kMaxRecord, 'e', "Scan: cable details"},
+        {qs::Type::Emarker, ShareRecord::kBuffer, 'e', "Scan: cable details"},   // 510 B: a 730 character link, version 19 (2 px)
         {qs::Type::PdCaps, 26, 'p', "Scan: charger offers"},
         {qs::Type::PdCaps, 50, 'p', "Scan: charger offers"},
         {qs::Type::Identity, 40, 'i', "Scan: firmware info"},
@@ -705,9 +709,8 @@ static void test_link_kinds() {
     for (const Case& c : cases) {
         CHECK(SharePage::link_caption(c.type) == c.caption);
         CHECK(c.caption.size() <= 37);                       // a 224 px line of 6 px cells
-        CHECK(lk::kMaxRecord < 255);
         fill_record(ui, c.len);
-        std::array<std::uint8_t, 256> want{};
+        std::array<std::uint8_t, 512> want{};
         for (std::size_t i = 0; i < c.len; i++) want[i] = ui.share_buffer()[i];
         CHECK(ui.open_share(c.type, 1, "Some name", c.len, t));
         CHECK(ui.share().has_link_form());
@@ -719,7 +722,8 @@ static void test_link_kinds() {
         CHECK(std::memcmp(got.data(), want.data(), c.len) == 0);
         CHECK_EQ(int(link_kind), int(c.kind));
         CHECK(link_type(link_kind) == c.type);
-        CHECK(ui.share().modules() <= 61);                    // version 11 at most: 3 px on the panel
+        CHECK(ui.share().modules() > 0 && ui.share().modules() <= qrview::modules_of(lk::kMaxVersion));   // one code within the policy
+        CHECK(ui.share().plan().px >= 2);                    // 3 px up to version 13, 2 px beyond
         CHECK_STR(label(ui, Button::Ok).c_str(), "K2 data");
         ui.on_button(Button::Ok, ButtonEvent::Short, t + 200);
         CHECK(!ui.share().link());
@@ -746,9 +750,9 @@ static void test_link_kinds() {
     ui.on_button(Button::Back, ButtonEvent::Short, t + 200);
     t += 1000;
 
-    // One byte over: no link form, no toggle, the data frames (two parts here) cycle as they always did.
-    fill_record(ui, lk::kMaxRecord + 1);
-    CHECK(ui.open_share(qs::Type::Emarker, 1, "Big", lk::kMaxRecord + 1, t));
+    // A type without a link form (the log): no toggle, the data frames (two parts here) cycle as they always did.
+    fill_record(ui, ShareRecord::kBuffer);
+    CHECK(ui.open_share(qs::Type::Log, 1, "Big", ShareRecord::kBuffer, t));
     CHECK(!ui.share().packed());
     CHECK(!ui.share().has_link_form());
     CHECK(!ui.share().link());
@@ -799,7 +803,208 @@ static void test_link_kinds() {
     ui.on_button(Button::Back, ButtonEvent::Short, t + 100);
 }
 
+// ---- the full-screen look -----------------------------------------------------------------------------------------------------
+
+static bool row_has_black(int y, int x0 = 0, int x1 = 240) {
+    for (int x = x0; x < x1; x++) if (g_panel[y * 240 + x] == 0x0000) return true;
+    return false;
+}
+
+// A code shows full screen and centred, at the size its version allows, whatever the rotation; the button strip is not drawn
+// (the code may cover it), the corners stay white, a steady screen is not redrawn, and the code reads back.
+static void test_full_screen_centred(uint8_t rotation) {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.set_rotation(rotation, 1000);
+    ui.tick(1100);
+    bool saw3 = false, saw2 = false;
+    std::uint32_t t = 2000;
+    for (const std::size_t len : {20u, 91u, 184u, 210u, 270u, 330u, 400u, 510u}) {
+        fill_record(ui, len);
+        std::array<std::uint8_t, 512> want{};
+        for (std::size_t i = 0; i < len; i++) want[i] = ui.share_buffer()[i];
+        CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", len, t));
+        ui.tick(t + 100);
+        const int n = ui.share().modules();
+        const int v = qrview::version_of(n);
+        const qrview::Look lo = qrview::look_for(v);
+        CHECK(n > 0 && lo.px >= 2);
+        CHECK(!lo.wide);
+        CHECK_EQ(lo.px, v <= 13 ? 3 : 2);
+        (lo.px == 3 ? saw3 : saw2) = true;
+        const int box = qrview::box_of(v, lo);
+        CHECK_EQ(ui.share().plan().px, lo.px);
+        CHECK_EQ(ui.share().plan().box, box);
+        CHECK_EQ(ui.share().look().quiet, lo.quiet);
+
+        // the panel itself: the first black module row and column (the top finder patterns, above any caption) and the last
+        // black column are as far from the edges as the box centred on the 240 px panel puts them
+        int top = 240, left = 240, right = -1;
+        for (int y = 0; y < 120; y++)
+            for (int x = 0; x < 240; x++)
+                if (g_panel[y * 240 + x] == 0x0000) { top = std::min(top, y); left = std::min(left, x); right = std::max(right, x); }
+        CHECK_EQ(left, (240 - box) / 2 + lo.quiet * lo.px);
+        CHECK_EQ(top, left);
+        CHECK(std::abs(left - (239 - right)) <= 1);
+        for (const int c : {0, 239, 239 * 240, 239 * 240 + 239}) CHECK_EQ(int(g_panel[c]), 0xFFFF);   // no strip, no chrome
+
+        std::array<std::uint8_t, 600> got{};
+        CHECK_EQ(int(read_link(ui, got)), int(len));
+        CHECK(std::memcmp(got.data(), want.data(), len) == 0);
+
+        // the caption sits in the margin under the box when the margin holds a line, else nothing is drawn there
+        CHECK_EQ(int(ui.share().caption_shown()), int(qrview::caption_fits(box, SharePage::kTextH)));
+        bool below = false;
+        for (int y = (240 - box) / 2 + box; y < 240; y++) below = below || row_has_black(y);
+        CHECK_EQ(int(below), int(ui.share().caption_shown()));
+
+        static std::array<std::uint16_t, 240 * 240> snap;
+        std::copy(g_panel, g_panel + 240 * 240, snap.begin());
+        const unsigned pnt = ui.share().paints(), win = g_lcd_windows;
+        for (std::uint32_t k = t + 200; k < t + 6000; k += 100) ui.tick(k);
+        ui.on_button(Button::Plus, ButtonEvent::Short, t + 6100);
+        ui.on_button(Button::Minus, ButtonEvent::Short, t + 6110);
+        ui.tick(t + 6200);
+        CHECK_EQ(int(ui.share().paints()), int(pnt));
+        CHECK_EQ(int(g_lcd_windows), int(win));
+        CHECK(std::equal(snap.begin(), snap.end(), g_panel));
+        ui.on_button(Button::Back, ButtonEvent::Short, t + 6300);
+        CHECK_EQ(int(ui.menu_depth()), 0);
+        t += 10000;
+    }
+    CHECK(saw3 && saw2);
+}
+
+// The look policy's constants the page relies on.
+static void test_look_constants() {
+    CHECK_EQ(int(SharePage::kBusyChars), qrtest::byte_l(SharePage::kBusyVersion - 1));   // past version 17's capacity
+    CHECK(SharePage::hint_for(qrview::look_for(21)).empty());
+    CHECK(SharePage::hint_for(qrview::look_for(13)).empty());
+    for (const int v : {22, 23, 24}) CHECK(SharePage::hint_for(qrview::look_for(v)) == "Use the wide camera");
+    CHECK(SharePage::kBusyText.size() <= 40);
+    CHECK(SharePage::kWideHint.size() <= 39);
+}
+
+// Long OK shows the text view (what the code is, and the wide-camera hint for a code that needs it) and back; BACK from the
+// text view returns to the code instead of leaving the share. A code whose margin cannot hold the caption has it there.
+static void test_info_view() {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.tick(1100);
+    static std::array<std::uint16_t, 240 * 240> code_panel;
+
+    fill_record(ui, 180);   // a 290 character link: version 11, the caption fits the margin
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", 180, 2000));
+    ui.tick(2100);
+    CHECK_EQ(qrview::version_of(ui.share().modules()), 11);
+    CHECK(ui.share().caption_shown());
+    ui.on_button(Button::Back, ButtonEvent::Short, 2200);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+
+    fill_record(ui, 210);   // 330 characters: version 12, box 219 px, the caption does not fit
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", 210, 3000));
+    ui.tick(3100);
+    CHECK_EQ(qrview::version_of(ui.share().modules()), 12);
+    CHECK(!ui.share().caption_shown());
+    CHECK(!ui.share().info());
+    std::copy(g_panel, g_panel + 240 * 240, code_panel.begin());
+    const unsigned enc = ui.share().encodes();
+
+    ui.on_button(Button::Ok, ButtonEvent::Long, 3200);
+    CHECK(ui.share().info());
+    CHECK_EQ(int(ui.share().encodes()), int(enc));                       // text only: no code is built for it
+    CHECK(!std::equal(code_panel.begin(), code_panel.end(), g_panel));
+    bool text_rows = false;
+    for (int y = 16; y < 64; y++) text_rows = text_rows || row_has_black(y);   // the text lines
+    CHECK(text_rows);
+    ui.tick(3300 + SharePage::kCycleMs * 3);
+    CHECK(ui.share().info());                                            // stays until a key
+    ui.on_button(Button::Back, ButtonEvent::Short, 3400);
+    CHECK(!ui.share().info());
+    CHECK(ui.menu() == Menu::Share);                                     // BACK left the text view, not the share
+    CHECK_EQ(int(ui.menu_depth()), 1);
+    CHECK_EQ(int(ui.share().encodes()), int(enc) + 1);
+    CHECK(std::equal(code_panel.begin(), code_panel.end(), g_panel));
+
+    ui.on_button(Button::Ok, ButtonEvent::Long, 3500);                   // and Long OK again returns
+    CHECK(ui.share().info());
+    ui.on_button(Button::Ok, ButtonEvent::Long, 3600);
+    CHECK(!ui.share().info());
+    CHECK(std::equal(code_panel.begin(), code_panel.end(), g_panel));
+    ui.on_button(Button::Ok, ButtonEvent::Long, 3700);
+    ui.on_button(Button::Ok, ButtonEvent::Short, 3800);                  // a key in the text view acts, and shows its result
+    CHECK(!ui.share().info());
+    CHECK(!ui.share().link());                                           // OK switched to the K2 data code
+    ui.on_button(Button::Back, ButtonEvent::Short, 3900);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+
+    // Nothing to share: the text view does not open.
+    CHECK(!ui.open_share(qs::Type::Card, 1, "none", 0, 3950));
+    CHECK(ui.push_menu(Menu::Share, 4000));
+    ui.on_button(Button::Ok, ButtonEvent::Long, 4100);
+    CHECK(!ui.share().info());
+    ui.on_button(Button::Back, ButtonEvent::Short, 4200);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+}
+
+// A code of version 18 and up says "Preparing code..." before the slow encode and keeps servicing USB through it (one poll per mask
+// candidate); a smaller code does neither. The erase pass of a page change builds no code at all.
+static void test_busy_and_erase() {
+    g_stub = {};
+    static Ui ui;
+    ui.init(1000);
+    ui.tick(1100);
+
+    fill_record(ui, 180);   // version 11
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", 180, 2000));
+    CHECK_EQ(int(ui.share().busy_shown()), 0);
+    ui.on_button(Button::Back, ButtonEvent::Short, 2100);
+
+    fill_record(ui, 510);   // a 730 character link: version 19
+    std::array<std::uint8_t, 512> want{};
+    for (std::size_t i = 0; i < 510; i++) want[i] = ui.share_buffer()[i];
+    g_pump_snap_armed = true;
+    const unsigned pumps = g_lcd_pumps;
+    CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", 510, 3000));
+    CHECK_EQ(qrview::version_of(ui.share().modules()), 19);
+    CHECK_EQ(int(ui.share().busy_shown()), 1);
+    CHECK(g_lcd_pumps - pumps >= 8);
+    CHECK(!g_pump_snap_armed);                                           // the first poll came during the encode
+    // what the panel showed then: the notice on one row, nothing else
+    bool notice = false, stray = false;
+    for (int y = 0; y < 240; y++) {
+        bool black = false;
+        for (int x = 0; x < 240; x++) black = black || g_pump_panel[y * 240 + x] == 0x0000;
+        if (y >= 114 && y < 126) notice = notice || black; else stray = stray || black;
+    }
+    CHECK(notice);
+    CHECK(!stray);
+    std::array<std::uint8_t, 600> got{};
+    CHECK_EQ(int(read_link(ui, got)), 510);                              // and then the code
+    CHECK(std::memcmp(got.data(), want.data(), 510) == 0);
+    CHECK_EQ(ui.share().plan().px, 2);
+
+    // The erase pass paints the background and builds nothing.
+    const unsigned enc = ui.share().encodes(), pumps2 = g_lcd_pumps;
+    lcd::set_erase(true);
+    const_cast<SharePage&>(ui.share()).draw_static();
+    lcd::set_erase(false);
+    CHECK_EQ(int(ui.share().encodes()), int(enc));
+    CHECK_EQ(int(g_lcd_pumps), int(pumps2));
+    bool all_bg = true;
+    for (int i = 0; i < 240 * 240; i++) all_bg = all_bg && g_panel[i] == 0;
+    CHECK(all_bg);
+    ui.on_button(Button::Back, ButtonEvent::Short, 3500);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+}
+
 int main() {
+    for (uint8_t r = 0; r < 4; r++) test_full_screen_centred(r);
+    test_look_constants();
+    test_info_view();
+    test_busy_and_erase();
     for (uint8_t r = 0; r < 4; r++) test_link_form(r);
     test_link_kinds();
     test_plan_in();

@@ -14,8 +14,14 @@
 // so a phone camera opens the page that shows it; OK switches to the K2 data frame (what tools/k2_qr.py imports) and back. The
 // card and the cable come out as the smaller schema v2 link (version '2'); every cable now fits one code, including the 8-row
 // quirk one (510 B raw -> 189 B v2). The log is far too big for one link code and shows only the K2 data frames, as before. The
-// link text is built at paint time in the same scratch as the frame text. The encoder workspace is not kept: each paint takes
-// the scratch arena, encodes the part, draws it and gives the arena back, so the view costs only the record buffer in RAM.
+// link text is built at paint time in the scratch arena. The encoder workspace is not kept: each paint takes the scratch arena,
+// encodes the part, draws it and gives the arena back, so the view costs only the record buffer in RAM.
+//
+// The code is shown FULL SCREEN and centred, the smallest QR version that holds the text, at the module size and quiet zone
+// the look policy gives that version (qrview.hpp look_for: 3 px up to version 13, 2 px from 14 to 21, versions 22 to 24 only
+// for the wide camera). The page owns the whole panel, button strip included (hides_strip). The caption goes in the margin
+// under the code when that holds a line; a long OK shows the text view (what the code is, the wide-camera hint, the keys)
+// and back. A code of version 18 or more says "Preparing code..." first and polls USB through the encode.
 #pragma once
 #include <array>
 #include <cstddef>
@@ -73,8 +79,15 @@ public:
     static constexpr std::size_t kBuffer = ShareRecord::kBuffer;
     static constexpr std::size_t kTitleMax = ShareRecord::kTitleMax;
     static constexpr uint32_t kCycleMs = 1500;
-    static constexpr int kMaxVersion = 12;     // 65 modules; two parts of a 510-byte record need version 11
-    static constexpr int kMinModulePx = 2;     // the content area is 224 px on one side: 3 px fits up to version 11, 2 px beyond
+    static constexpr int kFrameMaxVersion = 12;   // the K2 data frames: 65 modules, three px each; two parts of a 510-byte record need 11
+    static constexpr int kMinModulePx = 2;        // the least the look policy ever picks (versions 14 and up)
+    // A link of more characters than this needs QR version 18 or more: encoding it takes long enough on the device that the page
+    // says so first (the notice below), and keeps USB and the PD engine serviced through it (one poll per mask candidate).
+    static constexpr int kBusyVersion = 18;
+    static constexpr int kBusyChars = 644;                                   // version 17's byte capacity at level L
+    static constexpr std::string_view kBusyText = "Preparing code...";
+    static constexpr std::string_view kWideHint = "Use the wide camera";   // a code the main camera does not read (version 22 and up)
+    static constexpr std::string_view hint_for(const qrview::Look& l) { return l.wide ? kWideHint : std::string_view{}; }
     // Under the link form's code: what the phone will show. At most 37 characters (a 224 px line of 6 px cells).
     static constexpr std::string_view link_caption(qrshare::Type t) {
         switch (t) {
@@ -92,6 +105,7 @@ public:
     PanelLabels labels() const override;
     void invalidate() override { painted_ = false; }
     void enter() override;
+    bool hides_strip() const override { return true; }   // the code covers the whole panel, button strip included
 
     qrshare::Type type() const { return r_.type(); }
     std::uint8_t schema() const { return r_.schema(); }
@@ -104,9 +118,15 @@ public:
     bool cycling() const { return cycling_; }
     bool link() const { return link_; }                // the code on show is the web link (a card's default), not the K2 data frame
     int modules() const { return n_; }                 // modules per side of the code last drawn, 0 when it did not encode
+    int version() const { return n_ > 0 ? qrview::version_of(n_) : 0; }
     unsigned encodes() const { return encodes_; }      // codes built since the page was opened (one per paint)
     unsigned paints() const { return paints_; }        // codes drawn on the panel since the page was opened
-    qrview::Area area() const;                         // where the code and its line go: the content area in panel pixels
+    qrview::Area area() const { return {}; }           // the whole panel: the code is centred on it
+    const qrview::Plan &plan() const { return plan_; } // where the code last drawn sits (px == 0: none)
+    const qrview::Look &look() const { return look_; } // the policy row of its version
+    bool info() const { return info_; }                // the text view (Long OK) is on
+    bool caption_shown() const { return caption_shown_; }   // the line under the code is on the panel (the margin holds it)
+    bool busy_shown() const { return busy_shown_; }    // the last paint said "Preparing code..." before the encode
     static constexpr int kTextH = qrview::kLineH + 2;
 
 private:
@@ -118,15 +138,21 @@ public:
 private:
     void show(unsigned index, uint32_t now_ms);        // pick a part; the next update encodes and draws it
     void paint(bool clear);
+    void paint_info();                                 // the text view: what the code is, the camera hint, the keys
+    void wipe();                                       // the whole panel white (in an erase pass: the background)
 
     ShareRecord &r_;
     unsigned index_ = 0;
     bool cycling_ = false;
     bool link_ = false;          // showing the link form (qrshare_link.hpp); OK switches it with the K2 data frame
+    bool info_ = false;          // the text view is on (Long OK), not the code
     uint32_t shown_ms_ = 0;
     int n_ = 0;
     bool painted_ = false;       // the code on the panel is the part and title now selected
     int drawn_n_ = 0;            // modules per side of the box the panel holds (a smaller one leaves the old edge behind)
+    bool caption_shown_ = false, busy_shown_ = false;
+    qrview::Plan plan_{};
+    qrview::Look look_{};
     unsigned encodes_ = 0, paints_ = 0;
 };
 

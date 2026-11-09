@@ -130,9 +130,10 @@ static void test_captures_and_keys() {
         for (uint8_t p = 0; p < pages + static_cast<uint8_t>(Menu::Count); ++p) {
             CHECK_EQ(ui.goto_page(p < pages ? p : static_cast<uint8_t>(Page::Tools), 6000), true);
             if (p >= pages) CHECK_EQ(ui.push_menu(static_cast<Menu>(p - pages), 6000), true);
-            // The QR scan-test screen covers the whole panel, button strip included (chrome hidden while shown),
-            // so the slot pixels are the code's there, not the panel's: skip only that check for it.
-            const bool qrtest = p >= pages && static_cast<Menu>(p - pages) == Menu::QrTest;
+            // The QR scan-test and share screens cover the whole panel, button strip included (chrome hidden while
+            // shown), so the slot pixels are the code's there, not the panel's: skip only that check for them.
+            const bool qrtest = p >= pages && (static_cast<Menu>(p - pages) == Menu::QrTest ||
+                                               static_cast<Menu>(p - pages) == Menu::Share);
             std::copy(std::begin(g_panel), std::end(g_panel), expected.begin());
             CHECK_EQ(capture_begin(ui), true);
             for (int strip = 0; strip < kCaptureStrips; ++strip) {
