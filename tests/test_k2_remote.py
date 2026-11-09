@@ -991,6 +991,10 @@ class ActivePd(unittest.TestCase):
         link = L({})
         kr.cmd_pd_reread(link, self.args(mask=None, wait=1, relook=True), sleep=lambda s: None)
         self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([7]))])      # op 7: Soft_Reset, Rd kept
+        for ms, step in ((30, 3), (5, 1), (100000, 255)):                   # op 8: the Rd glitch in 10 ms steps, clamped to 1..255
+            link = L({})
+            kr.cmd_pd_reread(link, self.args(mask=None, wait=1, rd_glitch=ms), sleep=lambda s: None)
+            self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([8, step]))])
 
     def test_reread_decodes_the_attach_flags(self):
         a = kr.decode_reread(bytes([1, 0, 15, 0, 0, 0, 0, 0, 2]))   # waiting for the contract

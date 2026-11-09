@@ -560,6 +560,9 @@ def cmd_pd_reread(link, a, sleep=time.sleep, clock=time.monotonic):
         out = decode_reread(link.call(CMD_PD_REREAD, bytes([6, pin])).payload)
         if getattr(a, "no_run", False):
             return out
+    glitch = getattr(a, "rd_glitch", None)
+    if glitch is not None:   # lab: a controlled re-attach, the Rd off for this many ms (10 ms steps), Ra kept; the result is in the K2 log
+        return decode_reread(link.call(CMD_PD_REREAD, bytes([8, max(1, min(255, glitch // 10))])).payload)
     if getattr(a, "relook", False):   # lab: the unit boundary's Soft_Reset (the source re-announces, the Rd stays)
         return decode_reread(link.call(CMD_PD_REREAD, bytes([7])).payload)
     ra = getattr(a, "ra", None)
@@ -2631,6 +2634,9 @@ def build_parser():
     sr.add_argument("--pin", type=int, choices=(0, 1, 2), default=None,
                     help="lab: pin the Rd on CC1 or CC2 (0 = release) the way a key-mode boot does, mark included, so a HID-powered "
                          "K2 acts like a charger-powered one and a warm reset (reboot) inherits the pin; refused inline. Use with --no-run")
+    sr.add_argument("--rd-glitch", type=int, metavar="MS", default=None,
+                    help="lab: drop the Rd for MS ms (10 ms steps, Ra kept) so the source sees a detach and a fresh attach; "
+                         "VBUS min and the time below 4 V go to the K2 log ([RMT] rd glitch)")
     sr.add_argument("--relook", action="store_true",
                     help="lab: send the unit boundary's Soft_Reset (the source re-announces its caps, the Rd stays); nothing else runs")
     sr.add_argument("--sink-cap-ext", choices=SINK_CAP_EXT_MODES, default=None,

@@ -386,6 +386,41 @@ remote::RereadResult Remote::reread(uint8_t op, uint8_t mask) {
     } else if (op == 6) {   // lab: pin the Rd (1 / 2, 0 = release) so a HID-powered K2 stands in for a charger-powered one
         K2LOG("[RMT] reread pin %u\n", static_cast<unsigned>(mask));
         if (!fusb302::debug_pin(mask)) { r.status = remote::Status::Busy; return r; }
+    } else if (op == 8) {   // lab: a controlled re-attach, the Rd off for mask x 10 ms (Ra kept), VBUS watched every ms
+        if (fusb302::inline_mode()) { r.status = remote::Status::Busy; return r; }   // never drive CC with a host's link inline
+        const uint32_t gap = static_cast<uint32_t>(mask) * 10u;
+        int32_t vmin = INT32_MAX, vend = -1;
+        uint32_t below4 = 0;
+        power::poll();
+        const int32_t vstart = power::vbus_fast_mv().value_or(-1);
+        auto watch = [&](bool serve) {   // one pass per millisecond
+            power::poll();
+            if (serve) fusb302::service();
+            const int32_t v = power::vbus_fast_mv().value_or(-1);
+            if (v >= 0 && v < vmin) vmin = v;
+            if (v >= 0 && v < 4000) below4++;
+            vend = v;
+        };
+        fusb302::rd_glitch_begin();
+        const uint32_t t0 = systick::millis();
+        uint32_t last = t0;
+        while (systick::millis() - t0 < gap) {
+            const uint32_t t = systick::millis();
+            if (t == last) continue;
+            last = t;
+            watch(false);
+        }
+        fusb302::rd_glitch_end();
+        const uint32_t t1 = systick::millis();
+        last = t1;
+        while (systick::millis() - t1 < 1500) {   // the re-attach too
+            const uint32_t t = systick::millis();
+            if (t == last) continue;
+            last = t;
+            watch(true);
+        }
+        K2LOG("[RMT] rd glitch %u ms: vbus start %d min %d end %d mV, %u ms below 4 V\n", static_cast<unsigned>(gap),
+              static_cast<int>(vstart), static_cast<int>(vmin == INT32_MAX ? -1 : vmin), static_cast<int>(vend), static_cast<unsigned>(below4));
     } else if (op == 7) {   // lab: the unit boundary's Soft_Reset (the source re-announces, the Rd is kept)
         K2LOG("[RMT] reread relook\n");
         fusb302::unit_hold(false);

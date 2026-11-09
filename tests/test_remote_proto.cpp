@@ -1250,8 +1250,21 @@ static void test_active_pd_commands() {
     check_header(r, 0x47, 25, Status::BadArg, 0);
     run(f, request(0x47, 26, {1, 32}), r);       // only five steps
     check_header(r, 0x47, 26, Status::BadArg, 0);
-    run(f, request(0x47, 27, {8}), r);           // unknown op
+    run(f, request(0x47, 27, {9}), r);           // unknown op
     check_header(r, 0x47, 27, Status::BadArg, 0);
+    // op 8 [8, ms/10] (lab): the Rd off for that many 10 ms steps (Ra kept), then back: the source sees a detach and a fresh attach
+    run(f, request(0x47, 70, {8, 3}), r);
+    check_header(r, 0x47, 70, Status::Ok, 9);
+    CHECK_EQ(f.rr_op, 8); CHECK_EQ(f.rr_mask, 3);
+    run(f, request(0x47, 71, {8, 255}), r);
+    check_header(r, 0x47, 71, Status::Ok, 9);
+    CHECK_EQ(f.rr_mask, 255);
+    run(f, request(0x47, 72, {8, 0}), r);        // no gap
+    check_header(r, 0x47, 72, Status::BadArg, 0);
+    run(f, request(0x47, 73, {8}), r);           // the gap is required
+    check_header(r, 0x47, 73, Status::BadLength, 0);
+    run(f, request(0x47, 74, {8, 1, 1}), r);
+    check_header(r, 0x47, 74, Status::BadLength, 0);
     // op 6 [6, line] (lab): pin the Rd on CC1 / CC2 as a key-mode boot does, 0 releases; op 7 (lab): a Soft_Reset with the Rd kept
     run(f, request(0x47, 60, {6, 2}), r);
     check_header(r, 0x47, 60, Status::Ok, 9);

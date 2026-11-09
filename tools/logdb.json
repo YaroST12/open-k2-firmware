@@ -386,6 +386,10 @@
   "383": "[VCONN] round trip: role taken, handing it back\n",
   "384": "[VCONN] round trip refused: cc=%u inline=%d sink state %u\n",
   "385": "[VCONN] round trip %s (ra=%d)\n",
-  "386": "[VCONN] Data_Reset %s\n"
+  "386": "[VCONN] Data_Reset %s\n",
+  "387": "[EMKRA] early off\n",
+  "388": "[PD] rd glitch: Rd off (ra=%d)\n",
+  "389": "[PD] rd glitch: Rd back\n",
+  "390": "[RMT] rd glitch %u ms: vbus start %d min %d end %d mV, %u ms below 4 V\n"
  }
 }

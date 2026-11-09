@@ -328,7 +328,7 @@ enum class Cmd : uint8_t {
     PdRelease = 0x44,       // back to 5 V (Request PDO 1)
     PdMatch = 0x45,         // passive wants-vs-offers verdict -> MatchSnapshot (see encode_match)
     UsbLink = 0x46,         // USB / Thunderbolt link classified from sniffed PD -> UsbLinkSnapshot (see encode_usb_link)
-    PdReread = 0x47,        // [op, mask] source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode -> RereadInfo (see above)
+    PdReread = 0x47,        // [op, mask] source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, ..., 8 Rd glitch of mask x 10 ms -> RereadInfo (see above)
     PdAttach = 0x48,        // [target_mv u16] [target_ma u16] -> PdTriggerSnapshot; default 9000 mV, clamped to 36000 mV
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
     Fc = 0x32,          // active fast-charge trigger, see the layout above
@@ -1102,14 +1102,15 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     }
     case Cmd::PdReread: {
         if (p.empty()) return reply(Status::BadLength);
-        if (p[0] > 7) return reply(Status::BadArg);
-        const bool has_arg = p[0] == 1 || p[0] == 3 || p[0] == 4 || p[0] == 5 || p[0] == 6;
+        if (p[0] > 8) return reply(Status::BadArg);
+        const bool has_arg = p[0] == 1 || p[0] == 3 || p[0] == 4 || p[0] == 5 || p[0] == 6 || p[0] == 8;
         if (p.size() != (has_arg ? 2u : 1u)) return reply(Status::BadLength);
         if (p[0] == 1 && (p[1] == 0 || p[1] > kRereadMaxMask)) return reply(Status::BadArg);
         if (p[0] == 3 && p[1] > kSinkCapExtMaxMode) return reply(Status::BadArg);
         if (p[0] == 4 && p[1] > 2) return reply(Status::BadArg);
         if (p[0] == 5 && p[1] > 1) return reply(Status::BadArg);
         if (p[0] == 6 && p[1] > 2) return reply(Status::BadArg);
+        if (p[0] == 8 && p[1] == 0) return reply(Status::BadArg);   // the Rd gap in 10 ms steps: 0 would be no gap
         const RereadResult res = backend.reread(p[0], has_arg ? p[1] : uint8_t{0});
         if (res.status != Status::Ok) return reply(res.status);
         return reply_n(encode_reread(buf, res.info));
