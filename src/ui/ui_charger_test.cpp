@@ -1394,7 +1394,7 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         f.put(row.label).put(": ");
         if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
         if (!row.probe && (ct::kPpsAlgorithms & ct::bit(row.algorithm))) {   // a range says how far the source got, not a count
-            const auto rc = result_layout::reach(runner_.steps(), row.algorithm);
+            const auto rc = result_layout::reach(runner_.steps(), row.algorithm, row.pos);   // one row per APDO: its own reach
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution

@@ -148,18 +148,15 @@ void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
         tag(b, x);
     }
 }
-void range_row(Builder& b, std::span<const ct::Step> s, A a) {
-    for (size_t i = 0; i < s.size(); ++i) {
-        const auto& x = s[i];
-        if (x.algorithm != a || !x.pdo || x.hunt) continue;
-        bool seen = false;
-        for (size_t j = 0; j < i; ++j) seen |= s[j].algorithm == a && s[j].pos == x.pos && !s[j].hunt;
-        if (seen) continue;
-        // One chip per advertised range, rolled up by the shared tone table (roll_up). PPS / AVS ranges are continuous; the
-        // steps only sample them. The chip text stays the advertised range: reach() says how far the source got.
+// One chip for one APDO (`pos`): the row is one advertised range, so a probe the plan runs between two APDOs lands
+// between their rows. Rolled up by the shared tone table (roll_up). PPS / AVS ranges are continuous; the steps only
+// sample them. The chip text stays the advertised range: reach() says how far the source got.
+void range_row(Builder& b, std::span<const ct::Step> s, A a, uint8_t pos) {
+    for (const auto& x : s) {
+        if (x.algorithm != a || !x.pdo || x.hunt || x.pos != pos) continue;
         Tally t;
         for (const auto& y : s)
-            if (y.algorithm == a && y.pos == x.pos && !y.hunt) count(t, y);   // a 6 A probe is a row of its own (probe_row)
+            if (y.algorithm == a && y.pos == pos && !y.hunt) count(t, y);   // a 6 A probe is a row of its own (probe_row)
         const Tone tn = roll_up(t);
         Token* k = b.token(true, tn);
         if (!k) return;
@@ -167,11 +164,12 @@ void range_row(Builder& b, std::span<const ct::Step> s, A a) {
         if (tn == Tone::Skip) tag(b, x);   // every step was skipped: say why
         else {   // some levels ran: a "needs load" level (pattern pps-off-at-no-load) still says so next to the range
             for (const auto& y : s)
-                if (y.algorithm == a && y.pos == x.pos && !y.hunt && y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::NeedsLoad) {
+                if (y.algorithm == a && y.pos == pos && !y.hunt && y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::NeedsLoad) {
                     tag(b, y);
                     break;
                 }
         }
+        return;   // one row per APDO: this row is that one chip
     }
 }
 void legacy_row(Builder& b, std::span<const ct::Step> s, A a) {
@@ -361,16 +359,19 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
     Builder b{l};
     // The rows come from the plan itself: the steps ARE the execution order (the runner walks them by index), so each row is a
     // group of steps, placed where the plan first runs one of them. A group is a protocol's steps (Revision rows are no grid
-    // rows), or the 6 A probes of one level (every hunt step at that voltage): a probe is a row of its own, wherever the planner
-    // put it (inside the PPS rows, or after the fixed ones), and it moves with the plan when a re-plan regrows the rows.
+    // rows; a range algorithm groups per APDO slot, so a probe the planner runs between two APDOs lands between their
+    // rows), or the 6 A probes of one level (every hunt step at that voltage): a probe is a row of its own, wherever the
+    // planner put it (between the PPS rows, or after the fixed ones), and it moves with the plan when a re-plan regrows the rows.
+    // Key::mv carries the probed level of a probe key, the PDO slot of a range key, else 0.
     struct Key { A a; bool probe; uint16_t mv; };
-    Key keys[unsigned(A::Count) + 4];
+    Key keys[unsigned(A::Count) + 2 * pd::kMaxPdos + 4];   // worst case: every algorithm, both lists' PDO slots, the hunt levels
     size_t key_n = 0;
-    bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {};
+    bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {}, range_none[unsigned(A::Count)] = {};
     bool any_probe = false;
     for (const auto& s : steps) {
         if (is_revision(s.algorithm)) continue;
-        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt, s.hunt ? s.mv : uint16_t(0)};
+        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt,
+                    s.hunt ? s.mv : uint16_t(is_range(s.algorithm) ? s.pos : 0)};
         bool seen = false;
         for (size_t i = 0; i < key_n && !seen; ++i) seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].mv == k.mv;
         if (seen || key_n == std::size(keys)) continue;
@@ -416,19 +417,31 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
             const A a = key.a;
             const bool legacy = ct::group(a) != ct::Group::Pd;
             if (is_absent(steps, a)) {
-                // A range the charger does not offer keeps its own row: "PPS None". A legacy unit keeps its chips when not folding.
-                if (is_range(a)) { b.begin(display_name(a), Tone::Dim, a); b.word("None", Tone::Dim); continue; }
+                // A range the charger does not offer keeps its own row: "PPS None" (once per algorithm, not per APDO slot).
+                // A legacy unit keeps its chips when not folding.
+                if (is_range(a)) {
+                    if (range_none[unsigned(a)]) continue;
+                    range_none[unsigned(a)] = true;
+                    b.begin(display_name(a), Tone::Dim, a); b.word("None", Tone::Dim); continue;
+                }
                 if (oem.fold || !legacy) { absent[unsigned(a)] = true; continue; }
             }
             if (is_no_qc3plus(steps, a)) { b.begin(display_name(a), Tone::Dim, a); b.word("no QC3+", Tone::Dim); continue; }
             if (oem.fold && legacy && is_skipped_only(steps, a) && !is_class_a_only(steps, a)) { skipped[unsigned(a)] = true; continue; }
             b.begin(display_name(a), Tone::Dim, a);
-            if (is_range(a)) range_row(b, steps, a);
+            if (is_range(a)) {
+                if (b.row) b.row->pos = uint8_t(key.mv);   // one row per APDO: the row carries its PDO slot
+                range_row(b, steps, a, uint8_t(key.mv));
+            }
             else if (ct::group(a) == ct::Group::Pd) fixed_row(b, steps, a);
             else legacy_row(b, steps, a);
-            // Skipped before any voltage or PDO was known (an EPR step held back by the cable): no chip to show, so no row
-            // of its own; a bare label under the neighbouring row reads as a blank line.
-            if (b.row && b.row->count == 0 && is_skipped_only(steps, a)) { --l.row_count; skipped[unsigned(a)] = true; }
+            // Skipped before any voltage or PDO was known (an EPR step held back by the cable), or a range key whose slot
+            // has no step of its own: no chip to show, so no row of its own; a bare label under the neighbouring row reads
+            // as a blank line.
+            if (b.row && b.row->count == 0 && (is_skipped_only(steps, a) || is_range(a))) {
+                --l.row_count;
+                if (is_skipped_only(steps, a)) skipped[unsigned(a)] = true;
+            }
         }
     };
     // A section whose protocols all fold into "No reply" / "Skipped" shows no rows of its own, so its header is dropped
@@ -505,7 +518,12 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
         for (size_t i = 0; i < key_n; ++i) any |= !keys[i].probe && set[unsigned(keys[i].a)];
         if (!any) return;
         b.begin(label, t, A::Count);
-        for (size_t i = 0; i < key_n; ++i) if (!keys[i].probe && set[unsigned(keys[i].a)]) b.word(display_name(keys[i].a), t);
+        bool said[unsigned(A::Count)] = {};   // one word per protocol: a range has a key per APDO slot, the fold names it once
+        for (size_t i = 0; i < key_n; ++i)
+            if (!keys[i].probe && set[unsigned(keys[i].a)] && !said[unsigned(keys[i].a)]) {
+                said[unsigned(keys[i].a)] = true;
+                b.word(display_name(keys[i].a), t);
+            }
     };
     collapsed(absent, "No reply", Tone::Dim);
     collapsed(skipped, "Skipped", Tone::Caution);
@@ -513,7 +531,9 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
 
 bool row_has(const Row& r, const ct::Step& s) {
     if (r.header) return false;
-    return r.probe ? s.hunt && s.mv == r.mv : !s.hunt && r.algorithm == s.algorithm;
+    if (r.probe) return s.hunt && s.mv == r.mv;
+    if (s.hunt || r.algorithm != s.algorithm) return false;
+    return !is_range(r.algorithm) || s.pos == r.pos;   // one row per APDO: a range row owns only its slot's steps
 }
 
 void add_note(Layout& l, const char* label, Tone t, std::initializer_list<const char*> words) {

@@ -3538,9 +3538,14 @@ static ct::Options with_units(uint32_t selected, std::initializer_list<ct::Unit>
     return o;
 }
 // ---- Running grid order: the rows list the algorithms in the order the plan executes them ------
-// A grid row's identity: a protocol row is its algorithm, a Mi 6A probe row 1000 + its level in mV (a hunt step belongs to no protocol row).
-static int row_key(A a, bool hunt, unsigned mv) { return hunt ? 1000 + int(mv) : int(a); }
-static int step_key(const ct::Step& s) { return row_key(s.algorithm, s.hunt, s.mv); }
+// A grid row's identity: a protocol row is its algorithm, a PPS / AVS row its algorithm and PDO slot (one row per APDO),
+// a Mi 6A probe row 1000 + its level in mV (a hunt step belongs to no protocol row).
+static int row_key(A a, bool hunt, unsigned mv, unsigned pos = 0) {
+    if (hunt) return 1000 + int(mv);
+    if (ct::kPpsAlgorithms & ct::bit(a)) return 100000 + int(a) * 32 + int(pos);
+    return int(a);
+}
+static int step_key(const ct::Step& s) { return row_key(s.algorithm, s.hunt, s.mv, s.pos); }
 static bool is_revision_step(const ct::Step& s) { return !s.hunt && s.algorithm >= A::Pd30Revision && s.algorithm <= A::Pd32Revision; }
 static void push_first(std::vector<int>& out, int k) { if (std::find(out.begin(), out.end(), k) == out.end()) out.push_back(k); }
 // The rows of the plan in execution order: the step list is walked front to back by index, so first appearance = order of execution
@@ -3561,7 +3566,7 @@ static std::vector<int> grid_keys(const ct::Runner& r) {
     for (size_t i = 0; i < l.row_count; ++i) {
         const auto& row = l.rows[i];
         if (row.probe) out.push_back(row_key(A::Count, true, row.mv));
-        else if (row.algorithm != A::Count) out.push_back(row_key(row.algorithm, false, 0));
+        else if (row.algorithm != A::Count) out.push_back(row_key(row.algorithm, false, 0, row.pos));
     }
     return out;
 }
@@ -3605,20 +3610,23 @@ static void test_running_grid_follows_the_users_unit_order() {
         CHECK_EQ(grid.size() + 3 > run.size(), true);
     }
 }
-// Mi 6A probes are grid rows of their own, at the place the planner runs them: after the PPS row (the hunt step follows its APDO's
-// steps), before the next unit, in plan order; the grid holds no other order than the step list's.
+// Mi 6A probes are grid rows of their own, at the place the planner runs them: the hunt step follows its own APDO's steps, so with
+// two APDOs the 11 V probe stands between the two PPS rows and the 20 V probe after the second one, before the next unit, in plan
+// order; the grid holds no other order than the step list's.
 static void test_running_grid_places_the_mi_probes_where_the_plan_runs_them() {
     Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, ct::Options{}, f.in, true), ct::Reason::None);
     const auto run = executed_keys(r), grid = grid_keys(r);
-    const int mi11 = row_key(A::Count, true, 11000), mi20 = row_key(A::Count, true, 20000), pps = int(A::Pps);
+    const int mi11 = row_key(A::Count, true, 11000), mi20 = row_key(A::Count, true, 20000);
+    const int pps6 = row_key(A::Pps, false, 0, 6), pps7 = row_key(A::Pps, false, 0, 7);   // 3.3-11V, then 5-20V
     CHECK_EQ(key_at(run, mi11) < long(run.size()) && key_at(run, mi20) < long(run.size()), true);
     CHECK_EQ(key_at(grid, mi11) < long(grid.size()) && key_at(grid, mi20) < long(grid.size()), true);
-    CHECK_EQ(key_at(grid, pps) < key_at(grid, mi11) && key_at(grid, mi11) < key_at(grid, mi20), true);
-    // nothing of the PD unit's later rows sits between the PPS row and the probes, and the probes come before the legacy units
+    CHECK_EQ(key_at(grid, pps6) < key_at(grid, mi11) && key_at(grid, mi11) < key_at(grid, pps7) && key_at(grid, pps7) < key_at(grid, mi20), true);
+    // the probes come before the legacy units
     CHECK_EQ(key_at(grid, mi20) < key_at(grid, int(A::Qc2)), true);
     // the same positions in the step list itself
-    CHECK_EQ(key_at(run, pps) < key_at(run, mi11) && key_at(run, mi11) < key_at(run, mi20) && key_at(run, mi20) < key_at(run, int(A::Qc2)), true);
+    CHECK_EQ(key_at(run, pps6) < key_at(run, mi11) && key_at(run, mi11) < key_at(run, pps7) && key_at(run, pps7) < key_at(run, mi20)
+             && key_at(run, mi20) < key_at(run, int(A::Qc2)), true);
     // the grid has no "Turbo" block ahead of PD: the first row is whatever the plan starts with
     CHECK_EQ(grid.front(), run.front());
     // a custom unit order moves the probes with their unit (the legacy unit first, PD last)
@@ -3666,7 +3674,7 @@ static void test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run() {
     const auto before_run = executed_keys(r), before_grid = grid_keys(r);
     CHECK_EQ(before, A::Pd3Fixed);                             // planned against the short list: the 20 V probe rides the fixed 20 V PDO
     CHECK_EQ(key_at(before_grid, mi20) < long(before_grid.size()), true);
-    CHECK_EQ(key_at(before_grid, mi20) < key_at(before_grid, int(A::Pps)), true);   // so its row stands among the fixed rows, before the PPS row
+    CHECK_EQ(key_at(before_grid, mi20) < key_at(before_grid, row_key(A::Pps, false, 0, 6)), true);   // its row stands among the fixed rows, before the PPS row
     CHECK_EQ(grid_follows(before_grid, before_run), true);
     for (unsigned n = 0; n < 6000 && r.state() != ct::State::Done; ++n) {
         f.tick(r, 100);
@@ -3675,8 +3683,8 @@ static void test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run() {
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(hunt20(), A::Pps);                                // the rebuilt plan moved it onto the 5-20 V APDO
     const auto grid = grid_keys(r);
-    CHECK_EQ(key_at(grid, mi20) < long(grid.size()), true);    // the rebuilt plan brought it, and the grid shows it after the PPS row
-    CHECK_EQ(key_at(grid, int(A::Pps)) < key_at(grid, mi20), true);
+    CHECK_EQ(key_at(grid, mi20) < long(grid.size()), true);    // the rebuilt plan brought it, and the grid shows it after its APDO's row
+    CHECK_EQ(key_at(grid, row_key(A::Pps, false, 0, 7)) < key_at(grid, mi20), true);
     CHECK_EQ(grid_follows(grid, executed_keys(r)), true);
 }
 

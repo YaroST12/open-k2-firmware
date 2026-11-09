@@ -84,13 +84,18 @@ static void test_chip_width_includes_the_mark_cell() {
 }
 static void test_pps_one_coloured_chip_per_range() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
-    const size_t r = row_of(l, "PPS");
-    CHECK_STR(chips(l, r).c_str(), "5-11V 5A 5-21V 3.2A");
+    const size_t r = row_of(l, "PPS");                    // one row per APDO: slot 6 first, slot 7 right after
+    CHECK_STR(chips(l, r).c_str(), "5-11V 5A");
     const auto& row = l.rows[r];
-    CHECK_EQ(row.count, 2);
+    CHECK_EQ(row.count, 1);
+    CHECK_EQ(row.pos, 6);
     CHECK_EQ(l.tokens[row.first].chip, true);
     CHECK_EQ(int(l.tokens[row.first].tone), int(rl::Tone::Partial));       // a step failed and one skipped
-    CHECK_EQ(int(l.tokens[row.first + 1].tone), int(rl::Tone::Pass));       // every step of the second PDO passed
+    const size_t r2 = r + 1;
+    CHECK_STR(l.rows[r2].label, "PPS");
+    CHECK_EQ(l.rows[r2].pos, 7);
+    CHECK_STR(chips(l, r2).c_str(), "5-21V 3.2A");
+    CHECK_EQ(int(l.tokens[l.rows[r2].first].tone), int(rl::Tone::Pass));    // every step of the second PDO passed
 }
 // ---- The tone rules (one table for fixed, range and legacy chips) ------------------------------------------------------------
 //   a step still to run  -> Pending      nothing sampled (all skipped) -> Skip (grey, the tag says why)
@@ -354,10 +359,12 @@ static void test_wrap_breaks_between_chips_and_keeps_range_with_its_chip() {
     CHECK_EQ(lines[0].head, true); CHECK_EQ(lines[0].count, 0); CHECK_EQ(l.rows[lines[0].row].header, true);
     CHECK_EQ(lines[1].head, true); CHECK_EQ(lines[1].count, 3);
     CHECK_EQ(lines[2].head, false); CHECK_EQ(lines[2].count, 2); CHECK_EQ(lines[2].row, 1);
-    // SPR AVS "None" (row 2), then PPS: "5-11V 5A"(63) + "5-21V 3.2A"(75) = 63+2+75 = 140 fits on one line.
+    // SPR AVS "None" (row 2), then PPS slot 6 "5-11V 5A"(63) on its own line (row 3), then PPS slot 7 "5-21V 3.2A"(75)
+    // (row 4): one row per APDO, each chip on its row's line.
     CHECK_EQ(lines[3].row, 2); CHECK_EQ(lines[3].count, 1);
-    CHECK_EQ(lines[4].row, 3); CHECK_EQ(lines[4].count, 2); CHECK_EQ(lines[4].head, true);
-    CHECK_EQ(n, 8);   // header, PD3.x 2, SPR AVS 1, PPS 1, EPR AVS 1, No reply 1 (FCP EPR UFCS), Skipped 1
+    CHECK_EQ(lines[4].row, 3); CHECK_EQ(lines[4].count, 1); CHECK_EQ(lines[4].head, true);
+    CHECK_EQ(lines[5].row, 4); CHECK_EQ(lines[5].count, 1); CHECK_EQ(lines[5].head, true);
+    CHECK_EQ(n, 9);   // header, PD3.x 2, SPR AVS 1, PPS 1+1, EPR AVS 1, No reply 1 (FCP EPR UFCS), Skipped 1
 }
 static void test_wrap_never_splits_a_glued_pair() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
@@ -660,7 +667,9 @@ static void test_hunt_rows_live_in_the_xiaomi_section() {
     CHECK_EQ(int(l.tokens[l.rows[r11].first].tone), int(rl::Tone::Pass));
     // The PD chips keep the advertised currents and pass counts, untouched by the hunt rows.
     CHECK_STR(chips(l, row_of(l, "PD3.x")).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
-    CHECK_STR(chips(l, row_of(l, "PPS")).c_str(), "5-11V 5A 5-21V 3.2A");
+    const size_t pps = row_of(l, "PPS");   // one row per APDO: slot 6, then slot 7
+    CHECK_STR(chips(l, pps).c_str(), "5-11V 5A");
+    CHECK_STR(chips(l, pps + 1).c_str(), "5-21V 3.2A");
 }
 // The rows follow the step list: a probe the planner runs between two PD rows stands between them, and a section header repeats
 // where the family changes (no hand-kept order puts the Xiaomi block ahead of the PD rows).

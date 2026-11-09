@@ -3,8 +3,9 @@
 // Charger-test Results screen, pure layout: the run's steps become one row per protocol (a label plus
 // chips), then the rows wrap into display lines. No drawing here; host-tested in tests/test_result_layout.cpp.
 //   Fixed PD:  one chip per offered PDO, "5V 3A" (the advertised current, from the PDO in the run evidence).
-//   PPS / AVS: one chip per advertised range, "3.3-11V 3A", coloured by how many of its steps passed;
-//              a range the charger does not offer reads "None".
+//   PPS / AVS: one row per advertised range (APDO), one chip in it, "3.3-11V 3A", coloured by how many of its
+//              steps passed; a range the charger does not offer reads "None". One row per APDO keeps a Mi 6A
+//              probe the plan runs between two APDOs between their rows, where it executes.
 //   Legacy:    one chip per distinct target voltage ("9V"), so QC3 up and down steps collapse; SCP adds its limit ("10V 2.25A").
 //   Mi 6 A:    one row "Mi 6A" per probed level, a chip per probe step, "20V 6A", where the plan runs it.
 //   The words are k2/chargertest/step_label.hpp's, the same as the Running / Steps rows and the report card.
@@ -51,6 +52,7 @@ struct Row {
     charger_test::Algorithm algorithm = charger_test::Algorithm::Count;   // Count: a collapsed row or a header
     bool header = false;            // section header row: no tokens, not openable
     bool probe = false;             // a Mi 6A probe row (algorithm Count): the 6 A hunt steps at `mv`
+    uint8_t pos = 0;                // the PDO slot of a range row (one row per APDO, Row::mv is 0 there); 0: not a range row
     uint16_t mv = 0;                // the probed level of a probe row
     uint8_t first = 0, count = 0;   // tokens
 };
@@ -102,10 +104,12 @@ struct OemNotes {
 const char* vendor_oem_name(uint16_t vid);
 
 // The rows come from the steps alone: they are the plan, in the order the runner executes them, so a row stands where the plan first
-// runs one of its steps. A row is a protocol's steps, or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the
-// planner put them. The Running grid, the Results page and the Steps page read the same step list, so none keeps an order of its own.
+// runs one of its steps. A row is a protocol's steps (a fixed PD row: one per algorithm; a PPS / AVS row: one per APDO, Row::pos),
+// or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the planner put them. The Running grid, the Results page
+// and the Steps page read the same step list, so none keeps an order of its own.
 void build(Layout&, std::span<const charger_test::Step>, const OemNotes& = {});
-// Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a protocol row the protocol's other steps.
+// Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a range row (one per APDO) owns
+// its slot's steps only; any other protocol row the protocol's other steps.
 bool row_has(const Row& r, const charger_test::Step& s);
 // Appends a fact row of plain words after the protocol rows (a collapsed row: its OK opens the whole step list).
 // Dropped when the layout is full.
