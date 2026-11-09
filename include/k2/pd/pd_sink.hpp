@@ -143,6 +143,14 @@ constexpr std::int32_t programmable_ceiling_mv(std::int32_t target_mv) {
 }
 inline constexpr std::uint8_t kMaxTxRetries = 2;
 
+// Release verification (pattern budget-reannounce-mid-run): the PS_RDY of a 5 V release is not proof that VBUS came down (an
+// Anker splitter kept 15 V under a "5 V" contract, hardware 2026-11-09). With a live VBUS feed the sink waits kSettleMs after that
+// PS_RDY (longer while the samples keep falling, kDescentMs at most, same rule as the hold guard) for VBUS <= vSafe5V max; then it
+// asks for PDO 1 again, at most kVerifyRetries times, then a Hard Reset (never on the wire for a self-powered K2: the state is
+// Failed and the charger test reports the port as unsafe). A sample older than kVerifyFreshMs is no feed: nothing is verified.
+inline constexpr std::uint8_t kVerifyRetries = 2;
+inline constexpr std::uint32_t kVerifyFreshMs = 1000;
+
 // Xiaomi chain guard (hardware 2026-11-06, CUKTECH 120 W C1): a sink-initiated Request in the middle of the 0x2717 VDM
 // exchange makes the charger drop the chain (no 0x2717020A, no Get_Source_Cap, no 6 A caps for the session). While the
 // chain runs the sink holds back its own Requests / EPR entry / Get_Source_Cap; answers to the source's messages go out.
@@ -164,6 +172,9 @@ struct SinkStatus {
     EprInfo epr_info = EprInfo::None;
     SinkResult result = SinkResult::None;
     bool held = false;        // a trigger is active (keep-alive running)
+    // A release's PS_RDY is in: the sink is checking that VBUS really came down to vSafe5V (and re-asks, then Hard Resets, when it
+    // does not). The charger test keeps its release window open while this is set. Never set without a live VBUS feed.
+    bool verifying = false;
     bool epr_mode = false;
     std::uint8_t pos = 0;     // contract position when Ready
     std::uint16_t mv = 0, ma = 0;
@@ -294,6 +305,11 @@ private:
     void proceed_after_epr_caps(std::uint32_t now);
     void queue_epr_control(std::uint8_t kind);
     void begin_abort(SinkResult why, std::uint32_t now);
+    void restart_abort(std::uint32_t now);                  // (re)send the Request for PDO 1 of the abort in progress
+    void settle_release(std::uint32_t now);                 // the Request a release waited behind is over: send the release now
+    void fail_keep_release(SinkResult r, SinkState to, std::uint32_t now);
+    void arm_verify(std::uint32_t now);
+    void verify_vbus(std::uint32_t now);
     void after_ps_rdy(std::uint32_t now);
     void request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload);
     void update_rev();
@@ -320,6 +336,18 @@ private:
     std::uint32_t sr_at_ = 0;
     SinkResult abort_result_ = SinkResult::Ok;
     bool accepted_ = false;      // Accept seen for the abort request
+    // A release arrived while another Request was in flight: one Request at a time (USB PD forbids a second before the
+    // PS_RDY / Reject), so the release waits and goes out when that one is over (settle_release).
+    bool release_pending_ = false;
+    bool verify_ = false;                  // a release's PS_RDY is in and VBUS is still to be confirmed (status().verifying)
+    std::uint8_t verify_tries_ = 0;        // 5 V Requests repeated so far because VBUS stayed up
+    std::uint32_t verify_at_ = 0;          // the PS_RDY the window counts from
+    std::int32_t vref_mv_ = 0;             // lowest sample of the verify descent
+    std::uint32_t vref_at_ = 0;            // when vref_mv_ last improved by kFallStepMv
+    bool vref_set_ = false;
+    std::int32_t vbus_mv_ = 0;             // latest sample from on_vbus
+    std::uint32_t vbus_at_ = 0;
+    bool vbus_seen_ = false;
     std::int32_t ref_mv_ = 0;    // lowest VBUS sample of the current descent
     std::uint32_t ref_at_ = 0;   // when ref_mv_ last improved by kFallStepMv
     bool tracking_ = false;

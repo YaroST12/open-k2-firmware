@@ -538,13 +538,232 @@ int main() {
         CHECK_EQ(r.sent.size(), n);
     }
     {
-        Rig r;   // a Request for anything above 5 V in flight is still pulled back with PDO 1
+        Rig r;   // a Request for anything above 5 V in flight is pulled back with PDO 1 - once it has settled, never beside it
         r.sink.trigger({2, 0, 0}, r.now); r.pump();
         const auto n = r.sent.size();
         r.sink.release(r.now); r.pump();
+        CHECK_EQ(r.sent.size(), n);                                          // the Request in flight is the only one on the wire
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Requesting));
+        r.ctl(kCtlAccept);
+        CHECK_EQ(r.sent.size(), n);
+        r.ctl(kCtlPsRdy);                                                    // 9 V is up: now the way back goes out
         CHECK_EQ(r.sent.size(), n + 1);
         CHECK_EQ(r.last_rdo(), rdo_fixed(1, 3000, 3000, false));
         CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().pos), 1); CHECK_EQ(int(r.sink.status().held), 0);
+        CHECK_EQ(int(r.sink.status().result), int(SinkResult::Ok));
+    }
+
+    // ---- pattern budget-reannounce-mid-run (hardware 2026-11-09, Anker 2-way splitter, runs/anker-split/bb9.txt): the source
+    // re-announces a shorter list while the K2 holds 15 V; the sink answers it with a Request for the held position and the
+    // runner's release arrives while that Request is in flight. Exactly one Request is ever outstanding: the release waits
+    // for the PS_RDY, then goes out, and VBUS ends at 5 V. ----
+    {
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();    // 15 V
+        CHECK_EQ(int(r.sink.status().pos), 3);
+        r.caps = SourceCaps{};                                               // 5 V 1.5 A, 9 V 3 A, 15 V 3 A (20 V gone)
+        r.caps.valid = true; r.caps.spec_rev = 2; r.caps.num_pdos = 3;
+        r.caps.pdos[0] = decode_pdo(0x0001905A); r.caps.pdos[1] = decode_pdo(0x0002D12C); r.caps.pdos[2] = decode_pdo(0x0004B12C);
+        const std::size_t n = r.sent.size();
+        const std::uint8_t caps_bytes[4] = {0x5A, 0x90, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 3, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), n + 1);                                      // the sink's answer: PDO 3 again
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 3);
+        r.ctl(kCtlAccept);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        r.sink.release(r.now); r.pump();                                     // the runner's release, 1.7 ms after the Accept
+        CHECK_EQ(r.sent.size(), n + 1);                                      // not beside the first Request
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        r.sink.release(r.now); r.pump();                                     // the runner asks every 250 ms: still nothing
+        CHECK_EQ(r.sent.size(), n + 1);
+        r.ctl(kCtlPsRdy);                                                    // PS_RDY of the first Request (VBUS stays 15 V)
+        CHECK_EQ(r.sent.size(), n + 2);                                      // now the release goes out
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 1);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
+        r.accept_and_ready();
+        CHECK_EQ(r.sent.size(), n + 2);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().pos), 1); CHECK_EQ(int(r.sink.status().mv), 5000);
+        CHECK_EQ(int(r.sink.status().held), 0);
+        for (const TxMsg& m : r.sent) CHECK_EQ(int(m.hard_reset), 0);
+    }
+    {   // the same with the release landing before the Accept (Requesting)
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 1, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        const std::size_t n = r.sent.size();
+        r.sink.release(r.now); r.pump();
+        CHECK_EQ(r.sent.size(), n);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Requesting));
+        r.accept_and_ready();
+        CHECK_EQ(r.sent.size(), n + 1);
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 1);
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().pos), 1); CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+    }
+    {   // caps re-announced while a release waits behind a Request: the answer is PDO 1 directly, one Request for the new list
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump();                          // Request for 15 V in flight
+        r.sink.release(r.now); r.pump();                                     // the release waits
+        const std::size_t n = r.sent.size();
+        const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 1, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), n + 1);
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 1);                          // not PDO 3 first
+        r.accept_and_ready();
+        CHECK_EQ(r.sent.size(), n + 1);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().pos), 1); CHECK_EQ(int(r.sink.status().held), 0);
+    }
+    {   // caps re-announced while the 5 V Request itself is out (Aborting): the answer replaces it with a Request for the new list
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        r.sink.release(r.now); r.pump();                                     // abort Request out
+        const std::size_t n = r.sent.size();
+        const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 1, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), n + 1);
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 1);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready)); CHECK_EQ(int(r.sink.status().pos), 1);
+    }
+    {   // the Request the release waited behind is Rejected: the old contract stands (15 V), the release goes out then
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 1, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        const std::size_t n = r.sent.size();
+        r.sink.release(r.now); r.pump();
+        CHECK_EQ(r.sent.size(), n);
+        r.ctl(kCtlReject);
+        CHECK_EQ(r.sent.size(), n + 1);
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 1);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().pos), 1);
+    }
+    {   // a trigger is Busy while a release waits; once the release has landed, a new trigger starts clean
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump();
+        r.sink.release(r.now); r.pump();
+        const std::size_t n = r.sent.size();
+        CHECK_EQ(int(r.sink.trigger({2, 0, 0}, r.now)), int(Err::Busy));
+        r.pump();
+        CHECK_EQ(r.sent.size(), n);
+        r.accept_and_ready(); r.accept_and_ready();                          // 15 V up, then 5 V
+        CHECK_EQ(int(r.sink.status().pos), 1);
+        CHECK_EQ(int(r.sink.trigger({2, 0, 0}, r.now)), int(Err::Ok));
+        r.pump();
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().pos), 2);                               // and no stale release drags it back
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().held), 1);
+    }
+
+    // ---- the 5 V release is verified: after its PS_RDY VBUS must be at vSafe5V, else retry, then Hard Reset ----
+    {
+        auto feed = [](Rig& r, int mv, std::uint32_t ms) {
+            for (std::uint32_t i = 0; i < ms; i += 10) { r.now += 10; r.sink.on_vbus(mv, r.now); r.sink.tick(r.now); r.pump(); }
+        };
+        auto requests = [](const Rig& r) {
+            std::size_t n = 0;
+            for (const TxMsg& m : r.sent) if (!m.hard_reset && (m.header & 0x1F) == kDataRequest) ++n;
+            return n;
+        };
+        {   // VBUS stays at 15 V: the release Request is repeated twice, then the sink sends a Hard Reset
+            Rig r;
+            r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+            feed(r, 14850, 100);
+            r.sink.release(r.now); r.pump(); r.accept_and_ready();
+            CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+            CHECK_EQ(int(r.sink.status().verifying), 1);
+            const std::size_t first = requests(r);
+            feed(r, 14850, kSettleMs - 100);
+            CHECK_EQ(requests(r), first);                                    // still inside the window
+            feed(r, 14850, 200);
+            CHECK_EQ(requests(r), first + 1);                                // retry 1: PDO 1 again
+            CHECK_EQ(int((r.last_rdo() >> 28) & 7), 1);
+            CHECK_EQ(int(r.sink.status().verifying), 1);
+            r.accept_and_ready();
+            feed(r, 14850, kSettleMs + 200);
+            CHECK_EQ(requests(r), first + 2);                                // retry 2
+            r.accept_and_ready();
+            CHECK_EQ(r.sink.status().hard_resets, 0u);
+            feed(r, 14850, kSettleMs + 200);
+            CHECK_EQ(requests(r), first + 2);                                // bounded: no third retry
+            CHECK_EQ(r.sent.back().hard_reset ? 1 : 0, 1);                   // the Hard Reset
+            CHECK_EQ(r.sink.status().hard_resets, 1u);
+            CHECK_EQ(int(r.sink.status().verifying), 0);
+            CHECK_EQ(int(r.sink.status().held), 0);
+        }
+        {   // VBUS comes down to 5 V in time: verified, no retry
+            Rig r;
+            r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+            feed(r, 14850, 100);
+            r.sink.release(r.now); r.pump(); r.accept_and_ready();
+            const std::size_t first = requests(r);
+            feed(r, 5050, 100);
+            CHECK_EQ(int(r.sink.status().verifying), 0);
+            feed(r, 5050, kSettleMs + kDescentMs);
+            CHECK_EQ(requests(r), first);
+            CHECK_EQ(r.sink.status().hard_resets, 0u);
+        }
+        {   // a no-load source still draining (falling >= 50 mV per 600 ms) gets the descent window, not a retry
+            Rig r;
+            r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+            feed(r, 14850, 100);
+            r.sink.release(r.now); r.pump(); r.accept_and_ready();
+            const std::size_t first = requests(r);
+            int mv = 14000;
+            for (int i = 0; i < 20; ++i) { feed(r, mv, 200); mv -= 100; }    // 4 s: ~0.5 V/s fall
+            CHECK_EQ(requests(r), first);
+            CHECK_EQ(r.sink.status().hard_resets, 0u);
+            feed(r, 5100, 100);
+            CHECK_EQ(int(r.sink.status().verifying), 0);
+        }
+        {   // no VBUS samples at all (monitor offline): nothing to verify against, the release is taken as done
+            Rig r;
+            r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+            r.sink.release(r.now); r.pump(); r.accept_and_ready();
+            CHECK_EQ(int(r.sink.status().verifying), 0);
+            r.run(kSettleMs * 3);
+            CHECK_EQ(r.sink.status().hard_resets, 0u);
+        }
+        {   // a self-powered K2 retries the same way but never puts the Hard Reset on the wire
+            Rig r;
+            r.sink.set_never_hard_reset(true);
+            r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+            feed(r, 14850, 100);
+            r.sink.release(r.now); r.pump(); r.accept_and_ready();
+            const std::size_t first = requests(r);
+            feed(r, 14850, kSettleMs + 200); r.accept_and_ready();
+            feed(r, 14850, kSettleMs + 200); r.accept_and_ready();
+            feed(r, 14850, kSettleMs + 200);
+            CHECK_EQ(requests(r), first + 2);
+            for (const TxMsg& m : r.sent) CHECK_EQ(int(m.hard_reset), 0);
+            CHECK_EQ(r.sink.status().hard_resets, 0u);
+            CHECK_EQ(int(r.sink.status().state), int(SinkState::Failed));
+            CHECK_EQ(int(r.sink.status().verifying), 0);
+        }
+        {   // a retry that is not answered ends in the abort timeout, as before (no extra machinery)
+            Rig r;
+            r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+            feed(r, 14850, 100);
+            r.sink.release(r.now); r.pump(); r.accept_and_ready();
+            feed(r, 14850, kSettleMs + 200);                                 // retry out, nobody answers
+            feed(r, 14850, kAcceptMs + 100);
+            CHECK_EQ(r.sent.back().hard_reset ? 1 : 0, 1);
+        }
     }
 
     // ---- VBUS guard ----

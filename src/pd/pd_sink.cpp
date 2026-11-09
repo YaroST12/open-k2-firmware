@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "k2/pd/pd_link.hpp"
+
 namespace k2::pd {
 
 namespace {
@@ -238,6 +240,17 @@ void Sink::fail(SinkResult r, SinkState to) {
     retry_pending_ = false;
     retx_pending_ = false;
     deferred_ = Deferred::None;
+    release_pending_ = false;   // whatever ended the attempt also ends the wish and the VBUS check that hung on it
+    verify_ = false;
+    st_.verifying = false;
+}
+
+// The attempt a release waited behind failed (Reject, Wait exhausted): the release is still wanted, so it survives fail().
+void Sink::fail_keep_release(SinkResult r, SinkState to, std::uint32_t now) {
+    const bool rp = release_pending_;
+    fail(r, to);
+    release_pending_ = rp;
+    settle_release(now);
 }
 
 void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
@@ -463,6 +476,8 @@ Err Sink::trigger(Choice c, std::uint32_t now) {
     st_.held = true;
     st_.result = SinkResult::None;
     wait_retries_ = 0;
+    verify_ = false;            // a new wish ends the check of the last release
+    st_.verifying = false;
     if (defer) {
         if (st_.epr_mode) { proceed_after_epr_caps(now); return Err::Ok; }
         epr_caps_seen_ = false;
@@ -500,17 +515,57 @@ void Sink::begin_abort(SinkResult why, std::uint32_t now) {
     abort_result_ = why;
     st_.held = false;
     retry_pending_ = false;
+    release_pending_ = false;
     abort_at_ = now;
+    st_.state = SinkState::Aborting;
+    restart_abort(now);
+}
+
+// The Request for 5 V (PDO 1 of the list in force) of the abort in progress; also the answer to caps re-announced meanwhile.
+void Sink::restart_abort(std::uint32_t now) {
     accepted_ = false;
     Plan p;
     if (caps_) p = plan_request(*caps_, {1, 0, kReleaseMaxMa}, cap_mv_, st_.epr_mode);
     if (p.err != Err::Ok) {  // no way to ask for 5 V
-        do_hard_reset(why, SinkState::Failed);
+        do_hard_reset(abort_result_, SinkState::Failed);
         return;
     }
     plan_ = p;
-    st_.state = SinkState::Aborting;
     send_request(now);
+}
+
+// The one Request in flight is over (PS_RDY, Reject, Wait given up): a release that waited behind it goes out now.
+void Sink::settle_release(std::uint32_t now) {
+    if (!release_pending_) return;
+    release_pending_ = false;
+    if (st_.state != SinkState::Ready) return;
+    if (contract_ && st_.pos == 1 && st_.mv <= kVsafe5vMv) { st_.held = false; return; }   // already at 5 V
+    begin_abort(SinkResult::Ok, now);
+}
+
+// Verification of a release (see kVerifyRetries). Armed by the PS_RDY of the 5 V Request, only with a live VBUS feed.
+void Sink::arm_verify(std::uint32_t now) {
+    if (!vbus_seen_ || now - vbus_at_ > kVerifyFreshMs) { verify_ = false; st_.verifying = false; return; }
+    if (!verify_) verify_tries_ = 0;   // a retry's PS_RDY keeps counting
+    verify_ = true;
+    st_.verifying = true;
+    verify_at_ = now;
+    vref_set_ = false;
+}
+
+void Sink::verify_vbus(std::uint32_t now) {
+    if (now - vbus_at_ > kVerifyFreshMs) { verify_ = false; st_.verifying = false; return; }   // the feed stopped: cannot judge
+    if (vbus_mv_ <= kVSafe5MaxMv) { verify_ = false; st_.verifying = false; return; }
+    const std::uint32_t elapsed = now - verify_at_;
+    const bool falling = vref_set_ && now - vref_at_ <= kStallMs && elapsed < kSettleMs + kDescentMs;
+    if (elapsed < kSettleMs || falling) return;
+    if (verify_tries_ < kVerifyRetries) {
+        verify_tries_++;
+        vref_set_ = false;
+        begin_abort(abort_result_, now);   // verify_ stays set: the retry's PS_RDY starts the next window
+        return;
+    }
+    do_hard_reset(SinkResult::Aborted, SinkState::Failed);   // bounded: a Hard Reset on the wire unless never_hard_reset
 }
 
 void Sink::release(std::uint32_t now) {
@@ -530,6 +585,17 @@ void Sink::release(std::uint32_t now) {
         return;
     }
     if (!st_.held && contract_ && st_.pos == 1 && st_.state == SinkState::Ready) return;
+    // Another Request is in flight (for a voltage above 5 V): the sink is the single gate, so the release is queued behind it
+    // and goes out at its PS_RDY / Reject (settle_release). A second Request now would be sent before the first one's PS_RDY, the
+    // source's Accept and PS_RDY for the first would be taken as the answer to the second, and the sink would believe in 5 V while
+    // VBUS stays up (Anker splitter after its mid-run re-announce, hardware 2026-11-09, runs/anker-split/bb9.txt).
+    // (A Request that is only waiting - the Wait retry timer, the Xiaomi chain guard - has not gone out: nothing to queue behind.)
+    const bool in_flight = st_.state == SinkState::Transition ||
+                           (st_.state == SinkState::Requesting && !retry_pending_ && deferred_ == Deferred::None);
+    if (in_flight) {
+        release_pending_ = true;
+        return;
+    }
     begin_abort(SinkResult::Ok, now);
 }
 
@@ -553,6 +619,7 @@ void Sink::after_ps_rdy(std::uint32_t now) {
     if (fresh_) { ready_at_ = now; fresh_ = false; tracking_ = false; }
     next_keepalive_ = now + kPpsKeepAliveMs;
     if (st_.epr_mode) next_epr_ka_ = now + kEprKeepAliveMs;
+    settle_release(now);   // a release that waited behind this Request goes out now (not for the abort's own PS_RDY)
 }
 
 void Sink::request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload) {
@@ -621,7 +688,13 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             // caps; without a fresh one the source's tSenderResponse expires and it Hard Resets
             // (CUKTECH C1 right after the Xiaomi auth unlock re-announces, hardware 2026-11-04; that source
             // has no EPR bit and was never in EPR mode, so it does not argue for answering in EPR mode).
-            if (st_.held && (st_.state == SinkState::Ready || st_.state == SinkState::Requesting) && caps_) {
+            if (release_pending_ && caps_ && (st_.state == SinkState::Requesting || st_.state == SinkState::Transition)) {
+                // The runner already wants 5 V and its release waits behind a Request for the old list: answer the new list
+                // with the release itself (PDO 1), one Request, instead of PDO N first and the release after it.
+                begin_abort(SinkResult::Ok, now);
+            } else if (st_.state == SinkState::Aborting && caps_) {
+                restart_abort(now);   // the 5 V Request in flight was for the old list: the source wants the answer to the new one
+            } else if (st_.held && (st_.state == SinkState::Ready || st_.state == SinkState::Requesting) && caps_) {
                 const Plan p = plan_request(*caps_, want_, cap_mv_, st_.epr_mode);
                 if (p.err != Err::Ok) { begin_abort(SinkResult::Aborted, now); return; }
                 plan_ = p;
@@ -677,6 +750,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
                 after_ps_rdy(now);  // plan_ holds PDO 1
                 st_.held = false;
                 st_.result = abort_result_;
+                arm_verify(now);   // PS_RDY is a promise, VBUS is the proof
                 if (st_.epr_mode) {
                     TxMsg exit;
                     exit.header = make_header(kDataEprMode, 1, rev_);
@@ -695,7 +769,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
                 st_.epr_info = EprInfo::Refused;
             } else if (st_.state == SinkState::Requesting) {
                 xm_.answer = ReqAnswer::Reject; xm_.answer_at = now;
-                fail(SinkResult::Rejected, SinkState::Ready);
+                fail_keep_release(SinkResult::Rejected, SinkState::Ready, now);
             } else if (st_.state == SinkState::Aborting) {
                 do_hard_reset(abort_result_, SinkState::Failed);
             }
@@ -704,7 +778,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             if (st_.state == SinkState::Requesting) {
                 xm_.answer = ReqAnswer::Wait; xm_.answer_at = now;
                 if (wait_retries_ >= kMaxWaitRetries) {
-                    fail(SinkResult::WaitExhausted, SinkState::Ready);
+                    fail_keep_release(SinkResult::WaitExhausted, SinkState::Ready, now);
                 } else {
                     wait_retries_++;
                     retry_pending_ = true;
@@ -775,6 +849,11 @@ void Sink::on_tx_result(bool ok, std::uint32_t now) {
 }
 
 void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
+    vbus_mv_ = mv; vbus_at_ = now; vbus_seen_ = true;
+    if (verify_ && st_.state == SinkState::Ready) {   // the descent after a release: progress is a sample >= kFallStepMv below the last best
+        if (!vref_set_ || mv + kFallStepMv <= vref_mv_) { vref_mv_ = mv; vref_at_ = now; vref_set_ = true; }
+        if (mv <= kVSafe5MaxMv) { verify_ = false; st_.verifying = false; }
+    }
     const bool active = st_.held || st_.state == SinkState::Requesting || st_.state == SinkState::Transition ||
                         st_.state == SinkState::Aborting;
     if (!active) return;
@@ -885,6 +964,7 @@ void Sink::tick(std::uint32_t now) {
             break;
         case SinkState::Ready:
             if (tx_pending_) break;
+            if (verify_) { verify_vbus(now); break; }
             if (st_.held && contract_ && (plan_.type == PdoType::Pps || plan_.type == PdoType::Avs) &&
                 due(next_keepalive_)) {
                 st_.state = SinkState::Requesting;  // the same Request again, answered with Accept + PS_RDY
