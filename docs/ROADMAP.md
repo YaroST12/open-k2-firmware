@@ -222,6 +222,28 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   - Validate: the plan names every `kSysclkHz` user (a `git grep kSysclkHz` count matches the list) and the USB clock
     option chosen, with the draw at 48/72/96/120 MHz to be measured when implemented.
 
+- **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
+  - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns
+    512 samples at every sample-time code; mid-scale ~2056 counts (AC-coupled bias), floor 44-47 counts p-p at code
+    0 (1072 kS/s), 3 (366 kS/s) and 7 (60 kS/s). The floor is the same at every rate, so it is ADC/board noise.
+  - Step 1, calibrate (hardware, no code): TOPADRE 65 W on the bottom port, HID connected, hold 20 V unloaded
+    (`k2_remote pd-reread --wait 10`, then request the 20 V PDO) so the charger runs in burst mode
+    (`burst-mode-ripple-at-20v`: ~1 V swing, INA sigma ~0.70 V). Take `ripple --code 7 --png` (8.6 ms window, whole
+    burst cycles) and `--code 3` several times, and the INA samples over the same seconds (`k2_stream.py record
+    --kinds power=50`). Counts per volt = PA1 p-p counts / INA p-p volts; repeat at 5 V and 9 V on a second charger
+    to check it is linear and level-independent (AC coupling: the bias must not move with the level). Note the
+    coupling's low corner if slow bursts look sagged (droop across the window). Record the factor and the floor in mV.
+  - Step 2, firmware: a pure `k2::ripple` stats module (p-p, RMS, dominant period from zero crossings of the
+    mean-removed signal, floor subtraction; mV from the step-1 factor as one named constant) with host tests on
+    synthetic waveforms (sine, burst, noise-only -> "below floor").
+  - Step 3, UI: on the Detail (or Lines) page a ripple readout (mV p-p, frequency) refreshed on demand or every few
+    seconds (a capture pauses the ADC scan: keep it short and never during a transition capture); "< floor" when under
+    the noise. The k2-micro-gui skill applies.
+  - Step 4, charger test: a ripple figure per fixed PDO row, taken after the level settles, reported in the journal and
+    card as information (no pass/fail until a threshold is agreed).
+  - Validate: host tests for the stats (red before green), `make gate`; on hardware the TOPADRE 20 V reads a p-p within
+    20 % of the INA's swing, HID-only reads "< floor", and a charger-test card shows a ripple figure per fixed PDO.
+
 ## Not verified on hardware
 
 - A direct large PPS step-down of a running contract: 21 V to 13 V aborts at the +10 % overvoltage guard
