@@ -48,7 +48,8 @@ Every row below carries **Fix** (what to change, where) and **Validate** (what p
 and the hardware check). A row leaves this list when its fix is merged and the hardware check has passed; move it to
 "Verified on hardware" with the date and the evidence path.
 
-- **An inline K2 hijacks the link** (2026-11-09, user report, build b00178c): hub or charger -> K2 -> USB 2 C-C cable ->
+- **An inline K2 hijacks the link** (2026-11-09, user report, build b00178c): fixed in 026e516 (+ 5334c08, 122412f),
+  hardware check pending. The report: hub or charger -> K2 -> USB 2 C-C cable ->
   Pixel, HID-powered plain boot, no PLUS. The K2 put Rd on CC2 from the first instruction, Requested 12 times in 3 s
   while the Pixel Requested too, answered the Pixel's VDMs as the device, flapped inline yes/no, and Refresh (which opens
   CC ~150 ms) rebooted the hub-powered K2. Dock -> K2 -> laptop (same day): no PD traffic after a clean boot, yet the page
