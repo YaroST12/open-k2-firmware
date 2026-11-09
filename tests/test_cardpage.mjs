@@ -38,7 +38,7 @@ function recordOf(payload) {   // 0xA6, type 1, length, 0, payload, CRC-16 littl
   return r;
 }
 
-const payloadOf = (name) => fromHex(golden[name + "_plain"].hex).slice(4, 4 + 190);
+const payloadOf = (name) => fromHex(golden[name + "_plain"].hex).slice(4, 4 + 196);   // the format 7 payload
 
 // tests/fixtures/qrlink_v5.tsv is frozen: the links of the cards made before the UFCS modes (184 byte records, format 5).
 const v5 = Object.fromEntries(readFileSync(new URL("./fixtures/qrlink_v5.tsv", import.meta.url), "utf8")
@@ -191,6 +191,20 @@ test("the full results hold the numbers the badges leave out", () => {
   assert.ok(cable, "a real cable block is shown");
 });
 
+test("a repeated run shows how many times it was seen and when, a single run shows no repeat", () => {
+  const card = K2Card.parseLink(golden.fh22_repeat.link).card;
+  assert.equal(card.times, 4);
+  assert.equal(card.last_boots, 44);
+  assert.equal(card.last_uptime_s, 3725);
+  const run = K2Card.sections(card).find((x) => x.title === "Run");
+  assert.ok(run.groups[0].rows.some((r) => r.label === "Same result" && r.value === "4 runs, last at boot 44, up 1h 2m"));
+  assert.match(K2Card.header(card).ident, /same result x4/);
+  // The single run of the same charger carries no repeat keys and no row.
+  const once = K2Card.parseLink(golden.fh22.link).card;
+  assert.equal(once.times, undefined);
+  assert.ok(!K2Card.sections(once).find((x) => x.title === "Run").groups[0].rows.some((r) => r.label === "Same result"));
+});
+
 test("older card formats decode: 144 bytes at format 3 has no EPR levels and no cable", () => {
   const p = payloadOf("allpass").slice(0, 144);
   p[33] = 3;
@@ -288,6 +302,21 @@ test("v5 cards still read: no UFCS modes, the badge shows volts only", () => {
   assert.equal(badge.label, "UFCS 19.9V");
   assert.equal(badge.status, "up to 19.9V");
   assert.ok(!K2Card.sections(allpass).flatMap((s) => s.groups).find((x) => x.title === "UFCS").rows.some((r) => /^Mode/.test(r.label)));
+});
+
+test("v6 cards still read: the UFCS modes stay, the CRC bytes where format 7 keeps its repeat block are never read as one", () => {
+  const p = payloadOf("fh22_repeat").slice(0, 190);   // a 190 byte format 6 payload of a card that, as format 7, repeated
+  p[33] = 6;
+  const card = K2Card.parseLink(BASE + "1c." + toB64url(recordOf(p))).card;
+  assert.equal(card.times, undefined);
+  assert.equal(card.last_boots, undefined);
+  assert.equal(card.runs, 5);
+  // The same 190 bytes zero padded to 196 by a store that keeps the old CRC where the block is (nothing readable there).
+  const q = new Uint8Array(196);
+  q.set(p);
+  q.set([0x12, 0x34, 0x56, 0x78], 190);
+  const padded = K2Card.parseLink(BASE + "1c." + toB64url(recordOf(q.fill(6, 33, 34)))).card;
+  assert.equal(padded.times, undefined);
 });
 
 test("the SCP current limit (src_flags bits 1..7, 50 mA units) decodes as scp_ma, only when set", () => {

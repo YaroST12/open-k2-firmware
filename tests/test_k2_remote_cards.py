@@ -61,6 +61,20 @@ class Cards(unittest.TestCase):
         self.assertIn("- SCP: ✗ no power monitor", text)
         self.assertIn("- AFC: ✓ up to 9 V, ✗ 12 V (no response)", text)
 
+    def test_a_repeated_card_lists_and_shows_its_repeat(self):
+        rec = bytearray(PAYLOAD)
+        rec[33] = 7
+        rec.extend(b"\0" * (196 - len(rec)))
+        rec[190:196] = bytes([3, 9, 0, 0x10, 0x0E, 0])   # x3, last at boot 9, uptime 3600 s
+        r, l = run(["cards", "list"], [bytes([0, 1, 1, 3, 0])] + chunks(bytes(rec)))
+        self.assertEqual(len(l.sent), 1 + 5)   # a 196 byte payload is five chunks of 48
+        text = kr.render("cards", r)
+        self.assertIn("same x3, last boot 9 up 3600s", text)
+        r, _ = run(["cards", "show", "3"], chunks(bytes(rec)))
+        self.assertIn("same result x3, last boot 9 uptime 3600 s", kr.render("cards", r))
+        r, _ = run(["cards", "list"], [bytes([0, 1, 1, 3, 0])] + chunks())   # a card seen once has no such text
+        self.assertNotIn("same", kr.render("cards", r))
+
     def test_export_writes_a_json_array(self):
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "x.json")

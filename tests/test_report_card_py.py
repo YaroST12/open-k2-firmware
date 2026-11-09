@@ -299,7 +299,7 @@ def test_v6_ufcs_modes_decode_as_the_firmware_renders_them():
     # offset 178: four u24 modes (lo 100 mV in 8 bits, hi 100 mV in 9 bits, current in 50 mA in 7 bits); hi 0 = unused.
     rec = bytearray(PAYLOAD)
     rec[33] = 6
-    rec.extend(b"\0" * (report_card.PAYLOAD - len(rec)))
+    rec.extend(b"\0" * (report_card.PAYLOAD_V6 - len(rec)))
     assert len(rec) == 190
     assert "ufcs" not in report_card.decode(bytes(rec))                    # no modes stored: the key is absent
     rec[178:184] = _ufcs_mode(33, 55, 100) + _ufcs_mode(50, 200, 60)
@@ -310,6 +310,25 @@ def test_v6_ufcs_modes_decode_as_the_firmware_renders_them():
     rec[187:190] = _ufcs_mode(255, 511, 127)                               # the saturated values
     modes = report_card.decode(bytes(rec))["ufcs"]
     assert len(modes) == 4 and modes[3] == {"lo_mv": 25500, "hi_mv": 51100, "max_ma": 6350}
+
+
+def test_v7_repeat_block_decodes_only_for_v7():
+    # offset 190: times u8, last_boots u16, last_uptime_s u24; keys appear only when times > 1 (as in the firmware's JSON).
+    rec = bytearray(PAYLOAD)
+    rec[33] = 7
+    rec.extend(b"\0" * (report_card.PAYLOAD - len(rec)))
+    assert len(rec) == 196
+    assert "times" not in report_card.decode(bytes(rec))                   # zero count: once
+    rec[190] = 1
+    assert "times" not in report_card.decode(bytes(rec))                   # one run: no repeat keys
+    rec[190:196] = bytes([3, 0x34, 0x12, 0x56, 0x34, 0x12])
+    c = report_card.decode(bytes(rec))
+    assert (c["times"], c["last_boots"], c["last_uptime_s"]) == (3, 0x1234, 0x123456)
+    assert list(c).index("times") == list(c).index("uptime_s") + 1         # the key order of the renderer
+    # A v6 payload (190 bytes, or zero padded to 196 by the store, with the old CRC bytes there) has no repeat block.
+    rec[33] = 6
+    assert "times" not in report_card.decode(bytes(rec))
+    assert "times" not in report_card.decode(bytes(rec[:190]))
 
 
 def test_v5_payloads_have_no_ufcs_modes():

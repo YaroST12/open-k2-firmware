@@ -159,12 +159,13 @@ static void test_worst_case_fits_version_11() {
     }
 }
 
-// The worst report card: format 6, the full 196 byte record (four ranges, four UFCS modes, every group failed, every field at its
-// limit), plain and incompressible. It is 50 + 262 = 312 characters, inside the 321 of one version 11 code, with seven bytes to spare.
+// The worst report card: format 7, the full 202 byte record (four ranges, four UFCS modes, every group failed, every field at its
+// limit, the repeat block full), plain and incompressible. It is 50 + 270 = 320 characters, inside the 321 of one version 11 code,
+// with one byte to spare: the next field that grows the card has to go to a second code or be packed.
 static void test_worst_card_fits_one_code() {
     static_assert(rc::kMaxRecord <= lk::kMaxRecord, "the worst card record fits one code");
-    CHECK_EQ(rc::kMaxRecord, 196u);
-    CHECK_EQ(lk::b64_len(rc::kMaxRecord), 262u);
+    CHECK_EQ(rc::kMaxRecord, 202u);
+    CHECK_EQ(lk::b64_len(rc::kMaxRecord), 270u);
     CHECK(lk::fits(qs::Type::Card, rc::kMaxRecord));
     rc::Card c = cardfx::fh22_full();
     c.n_ranges = rc::kMaxRanges;
@@ -174,11 +175,12 @@ static void test_worst_card_fits_one_code() {
     c.cable = {0xFFFFFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFF, 0xFF};
     c.id = {0xFFFFFFFF, 0xFFFF, 0xFFFF, 255};
     c.fw = c.boots = c.uptime_s = 0xFFFFFFFF;
+    c.times = 255; c.last_boots = 0xFFFF; c.last_uptime_s = 0xFFFFFF;
     std::strcpy(c.name, "12345678901234567890");
     Bytes rec(rc::kMaxRecord);
     CHECK_EQ(rc::encode_card(rec, c), size_t(rc::kMaxRecord));
     const std::string t = link_of(qs::Type::Card, rec, false);
-    CHECK_EQ(t.size(), 312u);
+    CHECK_EQ(t.size(), 320u);
     CHECK(t.size() <= lk::kMaxText);
     static qr::Workspace w;
     const int modules = qr::encode_text(t.c_str(), w, qr::kMaxVersion);
@@ -224,6 +226,14 @@ static rc::Card card_fh22() {
                            ct::State::Done, ct::Reason::None);
     c.card_no = 7; c.runs = 2;
     std::strcpy(c.name, "FH22 100W");
+    return c;
+}
+
+// The FH22 card re-tested three more times with the same results (format 7 repeat block): 4 runs of one result, the latest at boot 44
+// after 1 h 2 m of uptime. The links and the decoders must show the repeat count.
+static rc::Card card_fh22_repeat() {
+    rc::Card c = card_fh22();
+    c.runs = 5; c.times = 4; c.last_boots = 44; c.last_uptime_s = 3725;
     return c;
 }
 
@@ -319,7 +329,8 @@ static std::vector<Golden> goldens() {
     using T = qs::Type;
     std::vector<Golden> g = {golden_of("fh22", card_fh22()), golden_of("allpass", card_all_pass()), golden_of("fh22_plain", card_fh22(), false),
             golden_of("allpass_plain", card_all_pass(), false), golden_of("fh22_full", cardfx::fh22_full()),
-            golden_of("ufcs_modes", cardfx::ufcs_modes())};
+            golden_of("ufcs_modes", cardfx::ufcs_modes()), golden_of("fh22_repeat", card_fh22_repeat()),
+            golden_of("fh22_repeat_plain", card_fh22_repeat(), false)};
     g.push_back(golden_of("emk_plain", T::Emarker,
                           build([](auto o) { return r::emarker(emrec::builtin_cable(1), "EPR 50V 5A", {}, o); }, r::kMaxEmarker)));
     g.push_back(cable("emk_clone", 0));

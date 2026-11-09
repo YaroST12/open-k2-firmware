@@ -1097,7 +1097,8 @@ def render_unmatched(r):
 
 
 CARD_ERRS = ["Ok", "Invalid", "NotFound", "Flash", "Full", "Busy"]
-CARD_CHUNKS = 4   # v4: 162 bytes / 48 = 3.375 -> 4 chunks
+CARD_CHUNKS = 5   # v7: 196 bytes / 48 = 4.08 -> 5 chunks (v6 190 bytes: 4); the short last chunk ends the read
+CARD_CHUNK = 48
 
 
 class CardsFailed(Exception):
@@ -1131,6 +1132,8 @@ def _card_get(link, no):
         p = _cards(link, [1, no & 255, no >> 8, k], "get")
         _need(p, 2, "cards get")
         raw += bytes(p[2:])
+        if len(p) - 2 < CARD_CHUNK:   # a short chunk is the last one: an older firmware has fewer chunks than CARD_CHUNKS
+            break
     try:
         return report_card.decode(raw)
     except report_card.BadCard as e:
@@ -2322,7 +2325,9 @@ def _render(name, r):
             if not r["list"]:
                 return "no report cards"
             return "\n".join(f"  {c['no']:4} {c['name'] or '(unnamed)':20} fp={c['fp']} {c['vid']:04X}:{c['pid']:04X} "
-                             f"{c.get('brand', ''):8} {str(c['pdp_w']) + 'W' if c.get('pdp_w') else '':5} runs={c['runs']}" for c in r["list"])
+                             f"{c.get('brand', ''):8} {str(c['pdp_w']) + 'W' if c.get('pdp_w') else '':5} runs={c['runs']}"
+                             + (f" same x{c['times']}, last boot {c['last_boots']} up {c['last_uptime_s']}s" if c.get("times", 1) > 1 else "")
+                             for c in r["list"])
         if k == "show":
             return charger_summary.summarize_card(r["card"])
         if k == "export":

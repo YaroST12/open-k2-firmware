@@ -25,6 +25,9 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     // The passive OEM label's bare name (tools/report_card.py and the results page write the same); the fact line behind it is UI text.
     if (const QcLabel l = qc_label(c); l != QcLabel::None) t.put("\"qc\":\"%s\",", qc_label_name(l));
     t.put("\"runs\":%u,\"boots\":%u,\"uptime_s\":%u,", unsigned(c.runs), unsigned(c.boots), unsigned(c.uptime_s));
+    // Repeats of the stored run (v7), only when there were any: how many identical runs and when the newest one was.
+    if (c.times > 1)
+        t.put("\"times\":%u,\"last_boots\":%u,\"last_uptime_s\":%u,", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
     t.put("\"fw\":\"%08x\",\"state\":\"%s\",\"reason\":\"%s\",\"pdos\":%u,\"spec_rev\":%u,", unsigned(c.fw), ct::name(c.state),
           ct::name(c.reason), unsigned(c.num_pdos), unsigned(c.spec_rev));
     t.put("\"handover\":\"%s\",\"handover_ms\":%u,\"groups\":{", kHandover[unsigned(c.handover)], unsigned(c.handover_ds) * 100u);
@@ -121,7 +124,10 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     t.put(" \xC2\xB7 fw %08x\n", unsigned(c.fw));
     t.put("%u pass, %u fail, %u skip \xC2\xB7 %s", unsigned(n.pass), unsigned(n.fail), unsigned(n.skip), ct::name(c.state));
     if (c.reason != ct::Reason::None) t.put(" (%s)", ct::name(c.reason));
-    t.put("\nIdentity %08X \xC2\xB7 boot %u \xC2\xB7 uptime %u s\n", unsigned(c.id.fp), unsigned(c.boots), unsigned(c.uptime_s));
+    t.put("\nIdentity %08X \xC2\xB7 boot %u \xC2\xB7 uptime %u s", unsigned(c.id.fp), unsigned(c.boots), unsigned(c.uptime_s));
+    if (c.times > 1)
+        t.put(" \xC2\xB7 same result x%u, last boot %u uptime %u s", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
+    t.put("\n");
     if (c.handover != ct::HandoverOutcome::NotTried) {
         t.put("Handover: %s after ", kHandover[unsigned(c.handover)]);
         t.put("%u.%u s\n", unsigned(c.handover_ds) / 10, unsigned(c.handover_ds) % 10);

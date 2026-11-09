@@ -495,7 +495,7 @@ static void test_group_codec_edges() {
     CHECK_EQ(rec[4 + 33], rc::kFormat);                            // record format 5: cable block
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
-    CHECK_EQ(rc::kPayload + rc::kRecordOverhead, 196u);   // v6: 190 + 6 = 196
+    CHECK_EQ(rc::kPayload + rc::kRecordOverhead, 202u);   // v7: 196 + 6 = 202
 }
 
 // V5: the cable block round-trips, and a v4 payload (format byte 4, zero-padded to kPayload) decodes with an
@@ -659,7 +659,7 @@ static void test_codec_identity_fields_and_old_formats() {
     CHECK_STR(c.name, "Anker 65W"); CHECK_EQ(c.name_auto, 1);
     std::array<uint8_t, rc::kMaxRecord> buf{};
     rc::encode_card(buf, c);
-    CHECK_EQ(buf[4 + 33], rc::kFormat);                // format 6 (UFCS modes)
+    CHECK_EQ(buf[4 + 33], rc::kFormat);                // format 7 (repeat counter)
     CHECK_EQ(buf[4 + 54], 65);                         // pdp_w sits in the spare bytes after the 20 name characters
     CHECK_EQ(buf[4 + 55], 1);                          // flags: name is automatic
     rc::Card d;
@@ -890,17 +890,18 @@ static ct::Step ufcs_step(unsigned mv, int lo_mv, int hi_mv, int ma) {
 }
 static void test_v6_ufcs_modes() {
     static_assert(rc::kMaxUfcs == 4);
-    CHECK_EQ(rc::kFormat, 6u);
+    CHECK_EQ(rc::kFormat, 7u);
     CHECK_EQ(unsigned(rc::off::kUfcs), 178u);
-    CHECK_EQ(rc::kPayload, 190u);
-    CHECK_EQ(rc::kMaxRecord, 196u);
+    CHECK_EQ(unsigned(rc::off::kRepeat), 190u);
+    CHECK_EQ(rc::kPayload, 196u);
+    CHECK_EQ(rc::kMaxRecord, 202u);
     std::vector<ct::Step> steps = {
         ufcs_step(5000, 3400, 5500, 3000),
         ufcs_step(5000, 5000, 11000, 3000), ufcs_step(11000, 5000, 11000, 3000),      // the same mode again: one entry
         ufcs_step(20000, 5000, 20000, 5000),
     };
     rc::Card c = rc::build(steps, evidence(), {}, rc::Identity{.fp = 0x30000001u}, {}, ct::State::Done, ct::Reason::None);
-    CHECK_EQ(c.format, 6u);
+    CHECK_EQ(c.format, 7u);
     CHECK_EQ(rc::ufcs_modes(c), 3u);
     CHECK_EQ(c.ufcs[0].lo_dv, 34u); CHECK_EQ(c.ufcs[0].hi_dv, 55u); CHECK_EQ(c.ufcs[0].ma, 3000u);
     CHECK_EQ(c.ufcs[1].lo_dv, 50u); CHECK_EQ(c.ufcs[1].hi_dv, 110u); CHECK_EQ(c.ufcs[1].ma, 3000u);
@@ -908,10 +909,10 @@ static void test_v6_ufcs_modes() {
     CHECK_EQ(c.ufcs[3].hi_dv, 0u);
     uint8_t rec[rc::kMaxRecord]; rc::Card d;
     CHECK_EQ(rc::encode_card(rec, c), size_t(rc::kMaxRecord));
-    CHECK_EQ(rec[4 + 33], 6u);
+    CHECK_EQ(rec[4 + 33], 7u);
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
-    CHECK_EQ(d.format, 6u);
+    CHECK_EQ(d.format, 7u);
     // u24 per mode, little endian: bits 0..7 lo, 8..16 hi, 17..23 current.
     const uint32_t m2 = rec[4 + 178 + 6] | uint32_t(rec[4 + 178 + 7]) << 8 | uint32_t(rec[4 + 178 + 8]) << 16;
     CHECK_EQ(m2, 50u | 200u << 8 | 100u << 17);
@@ -947,8 +948,113 @@ static void test_v5_payload_has_no_ufcs_modes() {
     CHECK_EQ(rc::ufcs_modes(d), 0u);
     CHECK_EQ(d.group[0].max_mv, 20000u);
     rc::migrate_to_current(d);
-    CHECK_EQ(d.format, 6u);
+    CHECK_EQ(d.format, 7u);
     CHECK_EQ(rc::ufcs_modes(d), 0u);
+}
+
+// V7: the repeat block (payload 190): times u8 (the runs that gave exactly these results, 1 = once), last_boots u16 and
+// last_uptime_s u24 (the newest of them). A v6 payload (190 bytes, zero-padded; its CRC bytes sit where the block is) reads as
+// "tested once" whatever those bytes hold, and a card that was never repeated carries times 1.
+static void test_v7_repeat_block() {
+    rc::Card c;
+    c.group[0] = {rc::GV::Pass, 20000, 0, 0, 0};
+    CHECK_EQ(c.times, 1u);                                   // a fresh card was run once
+    c.times = 3; c.last_boots = 0x1234; c.last_uptime_s = 0xABCDEF;
+    uint8_t rec[rc::kMaxRecord]; rc::Card d;
+    rc::encode_card(rec, c);
+    CHECK_EQ(rec[4 + 190], 3u);
+    CHECK_EQ(rec[4 + 191] | rec[4 + 192] << 8, 0x1234);
+    CHECK_EQ(rec[4 + 193] | rec[4 + 194] << 8 | rec[4 + 195] << 16, 0xABCDEF);
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d == c, 1);
+    CHECK_EQ(d.times, 3u); CHECK_EQ(d.last_boots, 0x1234u); CHECK_EQ(d.last_uptime_s, 0xABCDEFu);
+    // Saturation: the count at 255, the boot at 65535, the uptime at 2^24 - 1.
+    c.times = 255; c.last_boots = 65535; c.last_uptime_s = 0xFFFFFFFFu;
+    rc::encode_card(rec, c);
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d.times, 255u); CHECK_EQ(d.last_boots, 65535u); CHECK_EQ(d.last_uptime_s, 0xFFFFFFu);
+    // A zero count in a v7 payload (never written by this firmware) reads as once.
+    rec[4 + 190] = 0;
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d.times, 1u);
+    // A v6 payload: format byte 6, and the bytes at 190..195 are the old CRC and padding, not a repeat block.
+    c.times = 1; c.last_boots = 0; c.last_uptime_s = 0;
+    rc::encode_card(rec, c);
+    rec[4 + 33] = 6;
+    std::memset(rec + 4 + 190, 0xEE, 6);
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d.format, 6u);
+    CHECK_EQ(d.times, 1u); CHECK_EQ(d.last_boots, 0u); CHECK_EQ(d.last_uptime_s, 0u);
+    CHECK_EQ(d.group[0].max_mv, 20000u);
+    rc::migrate_to_current(d);
+    CHECK_EQ(d.format, 7u);
+    CHECK_EQ(d.times, 1u);
+}
+
+// The identity rule of a re-run (same_results): the semantic results, never the clock. Everything below is built the way a run
+// builds its card, from steps.
+static rc::Card run_card(const std::vector<ct::Step>& steps, uint32_t boots = 1, uint32_t uptime = 100, uint32_t fw = 0x1234ABCD) {
+    return rc::build(steps, evidence(), {ct::HandoverOutcome::StayedPd, 60000}, rc::Identity{.fp = 0xAABB0001u, .vid = 0x2717, .pid = 7, .pdp_w = 65},
+                     {.fw = fw, .boots = boots, .uptime_s = uptime}, ct::State::Done, ct::Reason::None);
+}
+static void test_same_results_ignores_the_clock_and_bookkeeping() {
+    const rc::Card a = run_card(run_a(), 1, 100);
+    rc::Card b = run_card(run_a(), 9, 5000);       // another boot, another uptime
+    b.card_no = 4; b.runs = 12; b.times = 7; b.last_boots = 3; b.last_uptime_s = 9;
+    rc::set_name(b, "Renamed");
+    b.handover_ds = a.handover_ds + 50;            // the handover took longer: timing, not a result
+    b.resumed = 2;                                 // the run lost power and went on
+    b.cable.seq = 99; b.cable.flags = rc::kCableSpoofed;   // library entry number and the guard's reading are bookkeeping
+    CHECK_EQ(rc::same_results(a, b), true);
+    CHECK_EQ(rc::same_results(b, a), true);
+    CHECK_EQ(rc::same_results(a, a), true);
+}
+static void test_same_results_notices_any_row() {
+    const rc::Card a = run_card(run_a());
+    auto changed = [&](auto edit) { std::vector<ct::Step> s = run_a(); edit(s); return rc::same_results(a, run_card(s)); };
+    // One verdict, one reason, the failing target, a range's failure, a skip's cause: each makes a new run.
+    CHECK_EQ(changed([](auto& s) { s[5].verdict = V::Fail; s[5].reason = ct::Reason::Voltage; }), false);      // QC3 pass -> fail
+    CHECK_EQ(changed([](auto& s) { s[6].reason = ct::Reason::Timeout; }), false);                               // AFC skip, another reason
+    CHECK_EQ(changed([](auto& s) { s[4].reason = ct::Reason::Request; }), false);                              // PD fail, another reason
+    CHECK_EQ(changed([](auto& s) { s[4].mv = 15000; }), false);                                                  // the PPS target that failed
+    CHECK_EQ(changed([](auto& s) { s[3].verdict = V::Fail; }), false);                                           // the PPS top step failed too
+    CHECK_EQ(changed([](auto& s) { s.pop_back(); }), false);                                                     // AFC not part of the run
+    CHECK_EQ(changed([](auto& s) { s[2].measured_mv = 15000; }), false);                                         // the PD max moved far
+    CHECK_EQ(changed([](auto&) {}), true);
+    // A different firmware build, or a different charger (PDO count, evidence flags), is a new run.
+    CHECK_EQ(rc::same_results(a, run_card(run_a(), 1, 100, 0x77777777u)), false);
+    rc::Card d = a; d.num_pdos = 5;     CHECK_EQ(rc::same_results(a, d), false);
+    d = a; d.ev_flags ^= 1;             CHECK_EQ(rc::same_results(a, d), false);
+    d = a; d.state = ct::State::Stopped; CHECK_EQ(rc::same_results(a, d), false);
+    d = a; d.cable.max_ma = 3000;       CHECK_EQ(rc::same_results(a, d), false);
+    d = a; d.handover = ct::HandoverOutcome::InContract; CHECK_EQ(rc::same_results(a, d), false);
+    d = a; d.ufcs[0] = {50, 200, 3000}; CHECK_EQ(rc::same_results(a, d), false);
+}
+// What the card keeps is 100 mV: two runs whose measured levels round to the same step are the same card, and a level that sits on
+// a rounding boundary and fell into the next step (noise below the card's resolution) is still the same run. A change of two
+// steps is a real change, and so is a moved target (fail_mv, a range's fail_dv).
+static void test_same_results_tolerates_one_stored_step_of_noise() {
+    auto with = [](unsigned pd_meas, unsigned qc_meas, unsigned range_meas) {
+        std::vector<ct::Step> s = run_a();
+        s[2].measured_mv = uint16_t(pd_meas); s[5].measured_mv = uint16_t(qc_meas); s[3].measured_mv = uint16_t(range_meas);
+        return run_card(s);
+    };
+    const rc::Card a = with(19950, 8900, 20990);                // stored: 20.0 V, 8.9 V, range 21.0 V
+    CHECK_EQ(rc::same_results(a, with(19951, 8949, 20999)), true);   // below the resolution: the same stored values
+    CHECK_EQ(rc::same_results(a, with(19949, 8951, 20940)), true);   // 19.9 / 9.0 / 20.9: one step across a boundary
+    CHECK_EQ(rc::same_results(a, with(19849, 8900, 20990)), false);  // 19.8 V: two steps below the stored 20.0 V
+    CHECK_EQ(rc::same_results(a, with(19950, 8700, 20990)), false);  // 8.7 V against 8.9 V
+    CHECK_EQ(rc::same_results(a, with(19950, 8900, 20790)), false);  // the range reached 20.8 V against 21.0 V
+    // A moved target is a different failure, however small the move.
+    auto fail_at = [](unsigned fixed_mv, unsigned pps_mv) {
+        std::vector<ct::Step> s = run_a();
+        s[5].verdict = V::Fail; s[5].mv = uint16_t(fixed_mv); s[5].reason = ct::Reason::Voltage;
+        s[4].mv = uint16_t(pps_mv);
+        return run_card(s);
+    };
+    CHECK_EQ(rc::same_results(fail_at(9000, 13000), fail_at(9000, 13000)), true);
+    CHECK_EQ(rc::same_results(fail_at(9000, 13000), fail_at(9100, 13000)), false);   // group fail_mv
+    CHECK_EQ(rc::same_results(fail_at(9000, 13000), fail_at(9000, 13100)), false);   // range fail_dv
 }
 
 
@@ -992,5 +1098,9 @@ int main() {
     test_qc_label_justification();
     test_v6_ufcs_modes();
     test_v5_payload_has_no_ufcs_modes();
+    test_v7_repeat_block();
+    test_same_results_ignores_the_clock_and_bookkeeping();
+    test_same_results_notices_any_row();
+    test_same_results_tolerates_one_stored_step_of_noise();
     return test_report("test_report_card");
 }

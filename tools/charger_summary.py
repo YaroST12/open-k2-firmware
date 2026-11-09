@@ -186,7 +186,8 @@ def summarize_card(c):
            + (f" · {c['pdp_w']} W" if c.get("pdp_w") else "") + f" · fw {c['fw']}" + _card_spoof(c.get("cable")),
            f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip · {c['state']}"
            + (f" ({c['reason']})" if c["reason"] else ""),
-           f"Identity {c['fp']} · boot {c['boots']} · uptime {c['uptime_s']} s"]
+           f"Identity {c['fp']} · boot {c['boots']} · uptime {c['uptime_s']} s"
+           + (f" · same result x{c['times']}, last boot {c['last_boots']} uptime {c['last_uptime_s']} s" if c.get("times", 1) > 1 else "")]
     if c["handover"] != "not tried":
         out.append(f"Handover: {c['handover']} after {c['handover_ms'] / 1000:g} s")
     out.append("")

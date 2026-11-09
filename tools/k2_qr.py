@@ -300,7 +300,7 @@ def decode_pdcaps(rec):
 
 
 def decode_card(rec):
-    # A stored card: 0xA6, type, payload length, 0, payload, CRC. The payload grew with the formats (v5 178, v6 190); the
+    # A stored card: 0xA6, type, payload length, 0, payload, CRC. The payload grew with the formats (v5 178, v6 190, v7 196); the
     # length byte says which, and report_card.decode() accepts the lengths of every format.
     if len(rec) < 6 or rec[0] != 0xA6 or len(rec) != rec[2] + 6:
         raise QrError("report card record is not a stored card (0xA6, length byte, payload, CRC)")

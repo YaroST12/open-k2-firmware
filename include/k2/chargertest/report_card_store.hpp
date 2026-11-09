@@ -4,15 +4,18 @@
 // (k2/core/fs.hpp). Pure logic over k2::fs::Fs, host-tested by tests/test_report_card_store.cpp on a RAM disk
 // that can lose power at any operation.
 //
-// File /cards/<fingerprint, 8 hex digits>.card, kFileSize = 204 bytes with v6 (older cards are 192 bytes for v5, 176 for v4
-// and 158 for v3; all are read, zero-padded, and rewritten as v6 by the next save). Small file, so it lives inside the directory
-// metadata and costs about 204 bytes of flash:
+// File /cards/<fingerprint, 8 hex digits>.card, kFileSize = 210 bytes with v7 (older cards are 204 bytes for v6, 192 for v5,
+// 176 for v4 and 158 for v3; all are read, zero-padded, and rewritten as v7 by the next save). Small file, so it lives inside
+// the directory metadata and costs about 210 bytes of flash:
 //     +0   "K2C1"   magic and format version
 //     +4   stamp    u32, a counter that grows with every save: newest card = highest stamp
-//     +8   record   the card as k2/chargertest/report_card.hpp frames it (4 byte header, kPayload=190 bytes, or the shorter payload of an older format, CRC16)
+//     +8   record   the card as k2/chargertest/report_card.hpp frames it (4 byte header, kPayload=196 bytes, or the shorter payload of an older format, CRC16)
 // A save replaces the file atomically (littlefs commit + rename), so a power cut leaves the old card or the
 // new one. A card keeps its number (id), run count and name through re-tests; a rename keeps its place in
 // the order. kMaxCards = 64 live cards; saving a new charger when full drops the one with the lowest stamp.
+// A run whose results are identical to the stored card (same_results(), rule in report_card.hpp) is not stored
+// as a second copy: the stored card gets its repeat count (times) and the time of the latest repeat, and the
+// file is rewritten with a new stamp, so the charger still counts as the most recently tested.
 // The in-RAM index (fingerprint, number, stamp per card, 768 bytes) is built on the first use and after each
 // write by this object.
 #pragma once
@@ -30,6 +33,7 @@ namespace k2::report_card {
 
 inline constexpr unsigned kMaxCards = 64;
 inline constexpr std::size_t kFileSize = 8 + kMaxRecord;
+inline constexpr std::size_t kFileSizeV6 = 204;  // v6 cards (payload 190) are 204 bytes
 inline constexpr std::size_t kFileSizeV5 = 192;  // v5 cards (payload 178) are 192 bytes
 inline constexpr std::size_t kFileSizeV4 = 176;  // v4 cards (payload 162) are 176 bytes
 inline constexpr std::size_t kFileSizeV3 = 158;  // old v3 cards are 158 bytes
@@ -77,6 +81,13 @@ public:
         Card prev;
         bool had = false;
         for (unsigned i = 0; i < n_ && !had; ++i) if (idx_[i].fp == c.id.fp) had = load(c.id.fp, prev);
+        c.times = 1; c.last_boots = 0; c.last_uptime_s = 0;      // a new run is one run, never a repeat of itself
+        std::uint32_t top_stamp = 0;
+        for (unsigned i = 0; i < n_; ++i) if (idx_[i].stamp > top_stamp) top_stamp = idx_[i].stamp;
+        if (had && same_results(prev, c)) {                       // identical to the stored run: count it, keep one copy
+            c = repeat_of(prev, c);
+            return write(c, top_stamp + 1);
+        }
         if (had) {
             c.card_no = prev.card_no;
             c.runs = prev.runs == 0xFFFF ? prev.runs : std::uint16_t(prev.runs + 1);
@@ -92,8 +103,6 @@ public:
             c.card_no = std::uint16_t(top + 1) ? std::uint16_t(top + 1) : std::uint16_t(1);
             c.runs = 1;
         }
-        std::uint32_t top_stamp = 0;
-        for (unsigned i = 0; i < n_; ++i) if (idx_[i].stamp > top_stamp) top_stamp = idx_[i].stamp;
         return write(c, top_stamp + 1);
     }
     Err rename(std::uint16_t card_no, std::string_view name) {
@@ -125,7 +134,7 @@ private:
     mutable std::array<Ent, kMaxCards> idx_{};
     mutable unsigned n_ = 0;
     mutable bool valid_ = false;
-    static constexpr bool known_size(std::size_t n) { return n == kFileSize || n == kFileSizeV5 || n == kFileSizeV4 || n == kFileSizeV3; }
+    static constexpr bool known_size(std::size_t n) { return n == kFileSize || n == kFileSizeV6 || n == kFileSizeV5 || n == kFileSizeV4 || n == kFileSizeV3; }
     static bool parse_name(const char* n, std::uint32_t& fp) {
         if (std::strlen(n) != 13 || std::memcmp(n + 8, ".card", 5) != 0) return false;
         std::uint32_t v = 0;
@@ -145,10 +154,10 @@ private:
         make_path(fp, path);
         std::size_t n = 0;
         if (fs_.read_file(path, b, n) != fs::Err::Ok) return false;
-        // Accept current (204 bytes), v5 (192), v4 (176) and old v3 (158) card files
+        // Accept current (210 bytes), v6 (204), v5 (192), v4 (176) and old v3 (158) card files
         if (!known_size(n)) return false;
         if (std::memcmp(b.data(), kFileMagic.data(), 4) != 0) return false;
-        // Zero-pad old v3/v4/v5 cards to kFileSize; decode_card then migrates by the format byte (33)
+        // Zero-pad old v3..v6 cards to kFileSize; decode_card then migrates by the format byte (33)
         if (n != kFileSize) std::memset(b.data() + n, 0, kFileSize - n);
         return true;
     }
@@ -172,7 +181,7 @@ private:
         unsigned nf = 0;
         fs_.list(kDir, [&](const fs::Info& i) {
             std::uint32_t fp;
-            // Accept every card file size ever written (v3 158, v4 176, v5 192, current 204 bytes)
+            // Accept every card file size ever written (v3 158, v4 176, v5 192, v6 204, current 210 bytes)
             if (i.dir || !known_size(i.size) || !parse_name(i.name, fp)) return true;
             if (nf < fps.size()) fps[nf++] = fp;
             return nf < fps.size();

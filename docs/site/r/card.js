@@ -15,11 +15,13 @@
 // Loaded by the page as a script (window.K2Card) and by Node as a module (module.exports).
 var K2Card = (function () {
   var LINK_VERSION = "1";
-  var PAYLOAD = 190;      // card format 6; formats 3, 4 and 5 are 144, 162 and 178 bytes
+  var PAYLOAD = 196;      // card format 7; formats 3, 4, 5 and 6 are 144, 162, 178 and 190 bytes
+  var V6_PAYLOAD = 190;   // format 6 ends with the UFCS modes; format 7 adds the repeat block after them
   var V5_PAYLOAD = 178;   // format 5 ends with the cable block; format 6 adds the UFCS modes after it
+  var REPEAT_AT = 190;    // format 7: times u8, last_boots u16, last_uptime_s u24 (a format 6 payload has its CRC here)
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 6;         // the newest card format this file reads
+  var FORMAT = 7;         // the newest card format this file reads
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -194,11 +196,11 @@ var K2Card = (function () {
     }
   }
 
-  // The card payload (144, 162, 178 or 190 bytes) -> the card object tools/report_card.py decode() returns (and the firmware's
+  // The card payload (144, 162, 178, 190 or 196 bytes) -> the card object tools/report_card.py decode() returns (and the firmware's
   // JSON renderer writes: key "seq" of the cable only when it is not 0).
   function decodePayload(b) {
-    if (b.length !== 144 && b.length !== 162 && b.length !== V5_PAYLOAD && b.length !== PAYLOAD) {
-      throw CardError("bad-card", "The card is " + b.length + " bytes; a card is 144, 162, " + V5_PAYLOAD + " or " + PAYLOAD + ".");
+    if (b.length !== 144 && b.length !== 162 && b.length !== V5_PAYLOAD && b.length !== V6_PAYLOAD && b.length !== PAYLOAD) {
+      throw CardError("bad-card", "The card is " + b.length + " bytes; a card is 144, 162, " + V5_PAYLOAD + ", " + V6_PAYLOAD + " or " + PAYLOAD + ".");
     }
     var fmt = b[33];
     if (fmt > FORMAT) throw CardError("newer-card", "This card was made by a newer K2 than this page understands (format " + fmt + ").");
@@ -266,6 +268,11 @@ var K2Card = (function () {
     card.runs = u(b, 10, 2);
     card.boots = u(b, 12, 4);
     card.uptime_s = u(b, 16, 4);
+    if (fmt >= 7 && b.length >= PAYLOAD && b[REPEAT_AT] > 1) {   // identical repeats of the stored run (keys only when there were any)
+      card.times = b[REPEAT_AT];
+      card.last_boots = u(b, REPEAT_AT + 1, 2);
+      card.last_uptime_s = u(b, REPEAT_AT + 3, 3);
+    }
     card.fw = hex8(u(b, 20, 4));
     card.state = STATES[b[29]];
     card.reason = REASONS[b[30]];
@@ -296,7 +303,7 @@ var K2Card = (function () {
       if (b[q + 15] & 1) card.oppo_svid = 1;   // src_flags: the source listed OPPO's SVID (key only then, as in the firmware's JSON)
       if (b[q + 15] >> 1) card.scp_ma = (b[q + 15] >> 1) * 50;   // bits 1..7: the adapter's SCP current limit, 50 mA units (key only when read)
     }
-    if (fmt >= 6 && b.length >= PAYLOAD) {   // the UFCS modes; older cards have none (their UFCS amps are unknown: volts only)
+    if (fmt >= 6 && b.length >= V6_PAYLOAD) {   // the UFCS modes; older cards have none (their UFCS amps are unknown: volts only)
       var modes = [];
       for (i = 0; i < MAX_UFCS; i++) {
         v = u(b, UFCS_AT + 3 * i, 3);
@@ -528,7 +535,7 @@ var K2Card = (function () {
     return {title: title(card), auto_name: !!card.name_auto, facts: facts, fingerprint: card.fp, no: card.no,
       boot: card.boots, run: card.runs, uptime: duration(card.uptime_s),
       ident: "Card #" + card.no + " · run " + card.runs + " · boot " + card.boots + " · up " + duration(card.uptime_s) +
-        " · fingerprint " + card.fp};
+        (card.times > 1 ? " · same result x" + card.times : "") + " · fingerprint " + card.fp};
   }
 
   function row(label, value, tone) { return {label: label, value: value, tone: tone || ""}; }
@@ -610,6 +617,8 @@ var K2Card = (function () {
     if (card.reason) run.push(row("Reason", card.reason));
     run.push(row("Source PDOs", String(card.pdos)), row("Card number", "#" + card.no), row("Run", "#" + card.runs + ", boot " + card.boots),
       row("K2 uptime", duration(card.uptime_s)), row("Firmware", card.fw), row("Fingerprint", card.fp));
+    // Identical re-runs are counted on this card, not stored again: say how many and when the newest one was.
+    if (card.times > 1) run.splice(run.length - 3, 0, row("Same result", card.times + " runs, last at boot " + card.last_boots + ", up " + duration(card.last_uptime_s)));
     if (card.vid || card.pid) run.splice(2, 0, row("USB ID", hex4(card.vid) + ":" + hex4(card.pid) + (card.brand ? " (" + card.brand + ")" : "")));
     out.push({title: "Run", groups: [{title: "The test run", tone: "", rows: run}]});
     return out;

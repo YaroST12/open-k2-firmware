@@ -86,7 +86,7 @@ class QrLink(unittest.TestCase):
                 if g["json"] is None:
                     continue
                 self.assertEqual(KINDS[letter], "card")
-                self.assertEqual(len(rec), 196)   # v6: 190 byte payload + 6 framing
+                self.assertEqual(len(rec), 202)   # v7: 196 byte payload + 6 framing
                 card = q.decode_card(rec)
                 self.assertTrue(card.pop("_store_crc_ok"))
                 self.assertEqual(normalise(card), normalise(g["json"]))
@@ -113,7 +113,7 @@ class QrLink(unittest.TestCase):
 
     def test_worst_card_link_fits_one_code(self):
         longest = max(len(g["link"]) for g in load().values())
-        self.assertEqual(longest, 312)
+        self.assertEqual(longest, 320)   # format 7: the 202 byte record is 270 characters after the 50 character head
         self.assertLessEqual(longest, QR_V11_BYTES)
 
     def test_every_kind_has_a_golden(self):

@@ -35,6 +35,22 @@
 //  178 ufcs[4] x 3 (format v6 only): a u24 per UFCS mode of the charger's Output_Capabilities, planner order (lowest minimum first), unused
 //      slots all zero: bits 0..7 lo (100 mV, saturates at 25.5 V), bits 8..16 hi (100 mV), bits 17..23 the mode's maximum current in 50 mA
 //      units (saturates at 6.35 A). A source listing more than four modes keeps the first four. Older formats decode with no modes.
+//  190 repeat x 6 (format v7 only): u8 times (how many runs gave exactly the results this card holds; 1 = tested once, saturates at 255),
+//      u16 last_boots and u24 last_uptime_s (the session boot counter and uptime of the newest of those runs; read only when times > 1,
+//      zero otherwise; saturate at 65535 and 2^24 - 1). boots / uptime_s above stay those of the run that was stored first. Older
+//      formats decode as times = 1 (their bytes at 190.. are a CRC and padding, never read).
+//
+// A re-run that gives the same results is counted, not stored (same_results, repeat_of; the store applies them): the card keeps its
+// rows, runs goes up (the charger was tested again), times goes up and last_* name the newest run. Two runs are "the same" when
+// every stored result row is equal: verdict, reason and detail of each group, the failing targets (fail_mv, fail_dv), each range's
+// offer and each EPR level, the UFCS modes, the PD offer facts (PDO count, spec revision, evidence flags, highest fixed current, source
+// flags), the handover outcome, the final state and reason, the firmware build and the cable's identity (vid, pid, kind, limits).
+// The measured maxima (group max_mv, range max_dv, EPR max_mv) compare within one stored step (100 mV): the card keeps no more
+// resolution than that, so a level that sits on a rounding boundary and fell into the next step is noise, not a change. The
+// comparison is always against the card that is stored (never against the previous repeat), so a slow drift is a new run once it
+// reaches two steps. Never compared: boots, uptime_s, the repeat block, card number and run count, the name, vid / pid / pdp_w (a
+// probe that answered once and not the next time is no change; the stored card learns what the repeat adds), the handover time
+// (handover_ds), the number of power-loss resumes and the cable block's library entry number and flag byte.
 #pragma once
 #include <algorithm>
 #include <array>
@@ -59,7 +75,7 @@ inline constexpr unsigned kNameMax = 20;
 inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Capped) + 1;
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
-inline constexpr uint8_t kFormat = 6;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes
+inline constexpr uint8_t kFormat = 7;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter
 inline constexpr unsigned kMaxUfcs = 4;
 
 // Card verdict of one protocol group: None = the group was not part of the run.
@@ -167,6 +183,9 @@ struct Card {
     ct::Reason reason = ct::Reason::None;
     uint32_t fw = 0, boots = 0, uptime_s = 0;
     uint16_t card_no = 0, runs = 0;
+    uint8_t times = 1;           // v7: runs that gave exactly these results (1 = once); boots / uptime_s are the first of them
+    uint16_t last_boots = 0;     // v7: the newest of those runs (valid when times > 1)
+    uint32_t last_uptime_s = 0;  // v7: its uptime, 24 bits on the card
     char name[kNameMax + 1] = {};
     bool name_auto = false;   // name came from auto_name(), not from the user
     Counts counts() const {
@@ -181,7 +200,7 @@ struct Card {
                n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && src_flags == o.src_flags && format == o.format &&
                handover == o.handover && handover_ds == o.handover_ds &&
                state == o.state && reason == o.reason && fw == o.fw && boots == o.boots && uptime_s == o.uptime_s &&
-               card_no == o.card_no && runs == o.runs && std::memcmp(name, o.name, sizeof name) == 0 && name_auto == o.name_auto;
+               card_no == o.card_no && runs == o.runs && times == o.times && last_boots == o.last_boots && last_uptime_s == o.last_uptime_s && std::memcmp(name, o.name, sizeof name) == 0 && name_auto == o.name_auto;
     }
 };
 
@@ -579,6 +598,50 @@ inline void inherit(Card& c, const Card& prev) {
 }
 
 namespace detail {
+constexpr bool within(unsigned a, unsigned b, unsigned step) { return (a > b ? a - b : b - a) <= step; }
+// One stored result (a group's or an EPR level's): everything but the measured maximum must match, the maximum within one step.
+constexpr bool same_result(const GroupResult& a, const GroupResult& b) {
+    return a.verdict == b.verdict && a.reason == b.reason && a.detail == b.detail && a.fail_mv == b.fail_mv && within(a.max_mv, b.max_mv, 100);
+}
+}  // namespace detail
+
+// True when `run` gave the same results as the stored card `prev`: the rule written at the top of this file. Pure, symmetric
+// except for the one-step tolerance, which is the same both ways.
+inline bool same_results(const Card& prev, const Card& run) {
+    if (prev.id.fp != run.id.fp || prev.num_pdos != run.num_pdos || prev.spec_rev != run.spec_rev || prev.ev_flags != run.ev_flags ||
+        prev.pd_ma != run.pd_ma || prev.src_flags != run.src_flags || prev.fw != run.fw || prev.handover != run.handover ||
+        prev.state != run.state || prev.reason != run.reason || prev.n_ranges != run.n_ranges || prev.ufcs != run.ufcs)
+        return false;
+    const Cable &a = prev.cable, &b = run.cable;
+    if (a.vid != b.vid || a.pid != b.pid || a.max_mv != b.max_mv || a.max_ma != b.max_ma || a.kind != b.kind) return false;
+    for (unsigned g = 0; g < kGroups; ++g) if (!detail::same_result(prev.group[g], run.group[g])) return false;
+    for (unsigned i = 0; i < kMaxRanges; ++i) {
+        const Range &x = prev.range[i], &y = run.range[i];
+        if (x.alg != y.alg || x.pos != y.pos || x.lo_dv != y.lo_dv || x.hi_dv != y.hi_dv || x.ma != y.ma || x.fail_dv != y.fail_dv || !detail::within(x.max_dv, y.max_dv, 1))
+            return false;
+    }
+    for (unsigned i = 0; i < kEprLevels; ++i)
+        if (prev.epr[i].dv != run.epr[i].dv || !detail::same_result(prev.epr[i].r, run.epr[i].r)) return false;
+    return true;
+}
+
+// The card that results from a run that repeated the stored card `prev` (same_results): the stored rows and first-run time stay,
+// the run counts, the repeat counter grows and last_* name the newest run. What only the repeat learned (an identity the first
+// probe missed, an automatic name where the stored card had none) is added; a user name always stays.
+inline Card repeat_of(const Card& prev, const Card& run) {
+    Card m = prev;
+    m.format = kFormat;
+    m.runs = prev.runs == 0xFFFF ? prev.runs : uint16_t(prev.runs + 1);
+    m.times = prev.times == 0xFF ? prev.times : uint8_t(prev.times + 1);
+    m.last_boots = run.boots > 0xFFFF ? uint16_t(0xFFFF) : uint16_t(run.boots);
+    m.last_uptime_s = run.uptime_s > 0xFFFFFF ? 0xFFFFFFu : run.uptime_s;
+    if (!(m.name[0] && !m.name_auto) && run.name[0]) { std::memcpy(m.name, run.name, sizeof m.name); m.name_auto = run.name_auto; }
+    if (m.id.vid == 0 && m.id.pid == 0) { m.id.vid = run.id.vid; m.id.pid = run.id.pid; }
+    if (m.id.pdp_w == 0) m.id.pdp_w = run.id.pdp_w;
+    return m;
+}
+
+namespace detail {
 constexpr uint16_t dv_round(unsigned mv) { return uint16_t((mv + 50) / 100); }
 constexpr void put16(uint8_t* p, uint32_t v) { p[0] = uint8_t(v); p[1] = uint8_t(v >> 8); }
 constexpr void put32(uint8_t* p, uint32_t v) { put16(p, v); put16(p + 2, v >> 16); }
@@ -724,8 +787,9 @@ inline constexpr unsigned kRanges = kGroups + 4 * report_card::kGroups;  // 104
 inline constexpr unsigned kEpr = kRanges + 10 * kMaxRanges;              // 144: start of EPR levels
 inline constexpr unsigned kCable = kEpr + 6 * kEprLevels;                // 162: v5 cable block, 16 bytes
 inline constexpr unsigned kUfcs = kCable + 16;                           // 178: v6 UFCS modes, kMaxUfcs x 3 bytes
+inline constexpr unsigned kRepeat = kUfcs + 3 * kMaxUfcs;                // 190: v7 repeat block, 6 bytes
 }  // namespace off
-inline constexpr unsigned kPayload = off::kUfcs + 3 * kMaxUfcs;          // 190 (178 + 12 for the v6 UFCS modes)
+inline constexpr unsigned kPayload = off::kRepeat + 6;                   // 196 (190 + 6 for the v7 repeat block)
 inline constexpr uint8_t kFlagNameAuto = 1;
 inline constexpr unsigned kRecordOverhead = 6, kMaxRecord = kRecordOverhead + kPayload;
 static_assert(kPayload % 2 == 0 && kPayload <= 250);
@@ -784,6 +848,13 @@ inline size_t encode_card(std::span<uint8_t> out, const Card& c) {
         const UfcsRange& r = c.ufcs[i];
         const uint32_t v = r.hi_dv == 0 ? 0u : std::min<unsigned>(r.lo_dv, 255u) | std::min<unsigned>(r.hi_dv, 511u) << 8 | std::min<unsigned>(r.ma / 50u, 127u) << 17;
         q[0] = uint8_t(v); q[1] = uint8_t(v >> 8); q[2] = uint8_t(v >> 16);
+    }
+    // V7: the repeat block: times u8, last_boots u16, last_uptime_s u24 (all saturating)
+    {
+        uint8_t* q = p + off::kRepeat;
+        const uint32_t up = c.last_uptime_s > 0xFFFFFFu ? 0xFFFFFFu : c.last_uptime_s;
+        q[0] = c.times; put16(q + 1, c.last_boots);
+        q[3] = uint8_t(up); q[4] = uint8_t(up >> 8); q[5] = uint8_t(up >> 16);
     }
     put16(b + 4 + kPayload, bbstore::crc16(0xFFFF, {b, 4 + kPayload}));
     return kMaxRecord;
@@ -852,6 +923,13 @@ inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
             const uint32_t v = q[0] | uint32_t(q[1]) << 8 | uint32_t(q[2]) << 16;
             if ((v >> 8 & 0x1FF) != 0) d.ufcs[i] = {uint16_t(v & 0xFF), uint16_t(v >> 8 & 0x1FF), uint16_t((v >> 17) * 50)};
         }
+    }
+    // V7: the repeat block; older formats were run once (their bytes here are a CRC and padding)
+    if (p[33] >= 7) {
+        const uint8_t* q = p + off::kRepeat;
+        d.times = q[0] ? q[0] : uint8_t(1);
+        d.last_boots = get16(q + 1);
+        d.last_uptime_s = q[3] | uint32_t(q[4]) << 8 | uint32_t(q[5]) << 16;
     }
     c = d;
     return true;

@@ -11,7 +11,7 @@
 //            2 PD 3.x), active_cc u8 (0 none, 1 CC1, 2 CC2), raw message header u16 LE, then num_pdos raw PDO words u32 LE by
 //            position (an unused slot is 0).
 //   Card     schema 1: the report card record as the store keeps it (k2/chargertest/report_card.hpp encode_card(): 0xA6, type, payload length,
-//            0, the payload, CRC-16), 196 bytes.
+//            0, the payload, CRC-16), 202 bytes.
 //   Identity schema 1: ASCII "fw=<version> g=<git, -dirty when dirty> p=<remote proto>", the strings PING answers.
 //   BootInfo schema 1: the K2B1 text (k2/core/bootinfo.hpp).
 //   Log      schema 1: git_len u8, the firmware git string (git_len bytes, as `git describe --always --dirty`), flags u8 (bit0:
@@ -41,7 +41,7 @@ inline constexpr std::size_t kPdCapsHead = 6;
 inline constexpr std::size_t kMaxPdCaps = kPdCapsHead + 4 * pd::kMaxPdos;          // 50
 inline constexpr std::uint8_t kPdCapsEpr = 1, kPdCapsEprPartial = 2;               // flags
 
-inline constexpr std::size_t kMaxCard = report_card::kMaxRecord;                   // 196
+inline constexpr std::size_t kMaxCard = report_card::kMaxRecord;                   // 202
 inline constexpr std::size_t kMaxIdentity = 64;
 
 inline constexpr std::size_t kLogGit = 39;

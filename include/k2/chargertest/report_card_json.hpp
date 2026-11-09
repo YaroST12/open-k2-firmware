@@ -4,7 +4,8 @@
 // (`k2_remote.py cards export`). Pure logic, host-tested by tests/test_report_card_json.cpp against
 // tests/fixtures/report_card_sample.json, which tests/test_report_card_py.py decodes independently.
 //
-// Keys: no, name, fp (8 hex digits, upper case), vid, pid, runs, boots, uptime_s, fw (8 hex), state, reason, pdos, spec_rev,
+// Keys: no, name, fp (8 hex digits, upper case), vid, pid, runs, boots, uptime_s, then times, last_boots, last_uptime_s only when
+// times > 1 (identical repeats of the stored run, see report_card.hpp), fw (8 hex), state, reason, pdos, spec_rev,
 // handover, handover_ms, groups{<group>: {verdict, max_mv, reason, detail}}, ranges[{alg, lo_mv, hi_mv, max_mv,
 // fail_mv}]. Groups that were not part of the run are left out; zero max_mv/reason/detail are left out.
 #pragma once

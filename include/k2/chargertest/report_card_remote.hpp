@@ -6,7 +6,7 @@
 //
 //   LIST    req [0] or [0, offset]   rsp [err, total, n, card_no u16 * n]     newest first, from `offset`, at most 27
 //   GET     req [1, no u16, chunk]   rsp [err, chunk, bytes...]               the kPayload byte card payload
-//                                    (k2/chargertest/report_card.hpp "Payload"), kChunk bytes per chunk (4 chunks for v6: 190 bytes)
+//                                    (k2/chargertest/report_card.hpp "Payload"), kChunk bytes per chunk (5 chunks for v7: 196 bytes; v6 was 4)
 //   RENAME  req [2, no u16, name]    rsp [err, no u16]                        name 1..20 of [A-Za-z0-9 -_.]
 //   DELETE  req [3, no u16, 1]       rsp [err]                                the trailing 1 confirms
 // err: report_card::Err (0 Ok, 1 Invalid, 2 NotFound, 3 Flash, 4 Full) or kCardsErrBusy (a charger test runs).

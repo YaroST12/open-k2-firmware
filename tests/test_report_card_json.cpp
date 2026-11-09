@@ -185,6 +185,7 @@ static void test_worst_case_fits() {
     rc::set_name(c, "12345678901234567890");
     c.handover = ct::HandoverOutcome::StayedPd; c.handover_ds = 65535;
     c.uptime_s = 0xFFFFFFFF; c.boots = 0xFFFFFFFF; c.fw = 0xFFFFFFFF; c.id = {0xFFFFFFFF, 0xFFFF, 0xFFFF};
+    c.times = 255; c.last_boots = 0xFFFF; c.last_uptime_s = 0xFFFFFF;
     for (auto& g : c.group) g = {rc::GV::Fail, 65535, uint8_t(k2::fc::Fail::Inline), uint8_t(ct::Reason::Voltage), 65535};
     c.n_ranges = 4;
     for (auto& r : c.range) r = {uint8_t(ct::Algorithm::SprAvs), 255, uint16_t(65535), uint16_t(65535), uint16_t(65535), uint16_t(65535)};
@@ -230,6 +231,25 @@ static void test_summary_text() {
     CHECK_EQ(std::string(sb.data(), m2).find("- AVS 15-28V: reached 20 V\n") != std::string::npos, true);
 }
 
+// A card seen again with the same result carries the repeat count and the time of the latest repeat; a card seen once has
+// none of those keys and no line in the summary.
+static void test_repeat_renders() {
+    rc::Card c = sample();
+    std::array<char, rc::kJsonMax> jb;
+    std::array<char, rc::kSummaryMax> sb;
+    std::string j(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"times\"") == std::string::npos, true);
+    CHECK_EQ(j.find("last_boots") == std::string::npos, true);
+    size_t m = rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1));
+    CHECK_EQ(std::string(sb.data(), m).find("same result") == std::string::npos, true);
+
+    c.times = 3; c.last_boots = 9; c.last_uptime_s = 4567;
+    j.assign(jb.data(), rc::render_json(c, jb));
+    CHECK_EQ(j.find("\"uptime_s\":123,\"times\":3,\"last_boots\":9,\"last_uptime_s\":4567,") != std::string::npos, true);
+    m = rc::render_summary(c, std::span<char>(sb.data(), sb.size() - 1));
+    CHECK_EQ(std::string(sb.data(), m).find("same result x3, last boot 9 uptime 4567 s") != std::string::npos, true);
+}
+
 static void test_in_contract_handover_renders() {
     rc::Card c = sample();
     c.handover = ct::HandoverOutcome::InContract;
@@ -256,6 +276,7 @@ static void test_qc3plus_skip_reads_no_qc3plus() {
 }
 
 int main() {
+    test_repeat_renders();
     test_qc3plus_skip_reads_no_qc3plus();
     test_in_contract_handover_renders();
     test_probe_identity_fields_render();
