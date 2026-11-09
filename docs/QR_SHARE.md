@@ -61,7 +61,7 @@ reuse the serialisers the firmware already has, so an import on the K2 can call 
 | BI | the `K2B1` text of `k2/core/bootinfo.hpp`, ASCII: `K2B1 fw=1.0 g=<git[-dirty]> p=<proto> t=<uptime> ...` | about 170 B |
 | EMK | `flags` u8 (bit0: a quirk block follows), `name[24]` (the user's name, NUL padded), the 66-byte e-marker record (`k2/pd/emrec.hpp`), then the quirk block (`k2/pd/emk_quirk.hpp` `encode()`) when bit0 is set | 91 B plain, at most 510 B |
 | PDC | `num_pdos` u8, `flags` u8 (bit0 EPR caps, bit1 EPR chunks incomplete), `spec_rev` u8 (1 PD 2.0, 2 PD 3.x), `active_cc` u8 (0 none, 1 CC1, 2 CC2), raw message header u16, then `num_pdos` raw PDO words u32 by position (an unused slot is 0) | 6 + 4 per PDO, at most 50 B |
-| CARD | the report card as the store keeps it (`k2/chargertest/report_card.hpp` `encode_card()`: 0xA6, type, payload length, 0, the payload, CRC-16; card format 6) | 196 B (formats 3 to 5: 150 to 184 B) |
+| CARD | the report card as the store keeps it (`k2/chargertest/report_card.hpp` `encode_card()`: 0xA6, type, payload length, 0, the payload, CRC-16; card format 7) | 202 B (formats 3 to 6: 150 to 196 B) |
 | ID | ASCII `fw=<version> g=<git, -dirty when dirty> p=<remote proto>`, the strings PING answers | at most 64 B |
 | LOG | `git_len` u8, the git string, `flags` u8 (bit0: older entries were dropped), `base_ms` u32 (uptime of the entry before the first one), `now_ms` u32 (uptime when the record was made), then whole log entries to the end | 10 + git + entries, at most 510 B |
 
@@ -106,7 +106,7 @@ Question: does a compressor pay for a 330 B QR part? Candidates measured on real
 | EMK with 8 quirk rows | 510 | 239 | 171 | 190 |
 | PDC SPR | 26 | 28 | 29 | 29 |
 | PDC EPR | 46 | 44 | 44 | 45 |
-| card (format 5, 184 B; format 6 measured only with LZ4: 196 B to 107 B) | 184 | 107 | 86 | 94 |
+| card (format 5, 184 B; format 7 measured only with LZ4: 202 B to 109 B) | 184 | 107 | 86 | 94 |
 | log, 1024 B ring | 1023 | 580 | 454 | 504 |
 | log, 510 B record | 499 | 260 | 220 | 217 |
 | log, 1024 B ring (second capture) | 1013 | 445 | 327 | 358 |
@@ -120,7 +120,7 @@ over LZ4 on a payload that already fits; tamp was not adopted for the same reaso
 already: the log record's ids, varints and zigzag arguments shrink the log before any compressor sees it, and the e-marker
 record is a binary struct. Small records (boot info, identity, PDC) stay plain: LZ4 does not pay there and the 75 % rule keeps
 them so. The two that pack are the EMK record with quirks (510 to 239 B: two parts of 415 characters become one of 391, QR version 11 to 10)
-and the card (format 6: 196 to 107 B, 327 to 194 characters, QR version 9 to 6; the format 5 card was 184 to 107 B, 309 to 194 characters).
+and the card (format 7: 202 to 109 B, 336 to 197 characters, QR version 10 to 7; the format 5 card was 184 to 107 B, 309 to 194 characters).
 Golden vectors with the flag: `emk_rows_lz`, `card_lz` in `tests/fixtures/qrshare.tsv`.
 
 ## Measured capacity per part
@@ -135,10 +135,10 @@ Text length of one part is `len("K2:<tag><schema>:") + 3 * ceil(frame / 2)` with
 | pdcaps EPR (10 PDOs) | 46 B | 1 | 101 | 4 |
 | emk plain | 91 B | 1 | 169 | 6 |
 | boot | 173 B | 1 | 291 | 9 |
-| card (format 6) | 196 B | 1 | 327 | 9 |
+| card (format 7) | 202 B | 1 | 336 | 10 |
 | emk with 8 quirk rows | 510 B | 2 (255 B each) | 415 | 11 |
 | emk with 8 quirk rows, LZ4 flag | 239 B packed | 1 | 391 | 10 |
-| card, LZ4 flag | 107 B packed | 1 | 194 | 6 |
+| card, LZ4 flag | 109 B packed | 1 | 197 | 7 |
 
 The worst case is 330 payload bytes per part: a 346 byte frame, 519 base45 characters, 527 with the prefix, version 12 (65
 modules, 73 with the 4 module quiet zone). The share view draws into the content area beside the key labels (224 by 240 px
@@ -205,7 +205,7 @@ the BI record.
 
   | Letter (as built / packed) | Record | Frame type |
   |---|---|---|
-  | `c` / `z` | charger report card, as the store keeps it: `0xA6`, type, length, 0, payload (card format 3 to 6), CRC-16/CCITT-FALSE (little endian); the page checks the CRC and the length | CARD |
+  | `c` / `z` | charger report card, as the store keeps it: `0xA6`, type, length, 0, payload (card format 3 to 7), CRC-16/CCITT-FALSE (little endian); the page checks the CRC and the length | CARD |
   | `e` / `E` | cable: the EMK record (name, e-marker record, quirk block when present) | EMK |
   | `p` / `P` | the source's PDOs | PDC |
   | `i` / `I` | firmware identity | ID |
@@ -213,9 +213,10 @@ the BI record.
 
 - Which records get a link form is one rule (`qrshare::link::fits()`): the record that goes into the link (packed or not) must
   make a link of at most 321 characters, the byte-mode capacity of QR version 11 at level L (61 modules, 3 px each on the
-  panel). The base (with the `#`) is 47 characters and `1<kind>.` 3, which leaves 271 characters of base64url: at most 203 record bytes. That holds for the card (format 6, the
-  worst card is 196 B and makes a 312 character link: a QR version 11 code; formats 3 to 5 were at most 184 B, 296 characters,
-  and still decode; the UFCS mode block of format 6 is the 12 bytes at payload offset 178), the identity (at most 64 B), the PDOs (at most 50 B), the boot info (about 180 B, 290 characters) and a
+  panel). The base (with the `#`) is 47 characters and `1<kind>.` 3, which leaves 271 characters of base64url: at most 203 record bytes. That holds for the card (format 7, the
+  worst card is 202 B and makes a 320 character link: a QR version 11 code with one character to spare, so the next growth of the
+  card needs a second code; formats 3 to 6 were at most 196 B, 312 characters, and still decode; the UFCS mode block of format 6 is
+  the 12 bytes at payload offset 178, the repeat block of format 7 the 6 bytes at 190), the identity (at most 64 B), the PDOs (at most 50 B), the boot info (about 180 B, 290 characters) and a
   cable with up to 4 quirk rows (261 characters packed; the 8-row record is 239 B packed, a 369 character link, so it has none).
   The log has no link form. The text is built at paint time in the share view's scratch text buffer: no new resident buffer.
 - The page (`docs/site/r/`) reads the fragment and shows, for every kind, a header, a row of tiles and a full view in sections:
@@ -228,7 +229,9 @@ the BI record.
 
   A missing or damaged fragment gives a plain message and a paste box; pasting the K2 data frame (`K2:CARD1:...`) says it is the
   data code and asks for the link. A link of a letter the page does not know says so. It makes no network request.
-- A card holds no date. The page shows the card number, run number, boot count and K2 uptime instead.
+- A card holds no date. The page shows the card number, run number, boot count and K2 uptime instead. A charger tested again with
+  the same result (`docs/CHARGER_TEST_FLOW.md`, "Repeated runs") keeps one card; the Run section then adds a "Same result" row
+  (`N runs, last at boot B, up <time>`) and the header says `same result xN`. The repeat count is the most the format keeps (255).
 - Decoders: `docs/site/r/card.js` (the link, LZ4, the card) and `docs/site/r/records.js` (the other kinds) are the JavaScript
   twins of `tools/k2_qr.py`, key for key. Golden vectors: `tests/fixtures/qrlink.tsv` (written by `tests/test_qrshare_link.cpp`
   from the firmware's own encoder; a card row also holds the card as the firmware's JSON renderer writes it), read by

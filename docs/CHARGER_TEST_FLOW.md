@@ -129,7 +129,7 @@ mode at payload offset 178, bits 0..7 the low voltage and bits 8..16 the high vo
 25.5 V), bits 17..23 the current in 50 mA units (saturates at 6.35 A); a slot with a high voltage of 0 is unused and ends the
 list. The K2 card detail sheet of the UFCS row lists `Mode 1..4` (`5-20V 3A`), the web page shows the same per mode and its
 UFCS badge names the top mode. Cards of format 1 to 5 carry no modes (`ufcs_modes()` is 0): they show volts only, and a run
-that updates such a card rewrites it as format 6. A card update does not inherit modes from the old card.
+that updates such a card rewrites it as format 7. A card update does not inherit modes from the old card.
 
 The charger test stays polite: no row asks a voltage or a current that the adapter did not advertise. The SCP current
 limit read this way is also kept as `Evidence::scp_ma` and shown as "SCP cap 20V 6A" in Results, on the open card (a
@@ -145,6 +145,44 @@ Host tests: `test_charger_test` (`test_scp_rows_follow_the_reported_capabilities
 The UFCS current words: `test_charger_test` (`test_ufcs_steps_carry_their_mode`), `test_step_label` (`test_the_ufcs_mode_words`,
 `test_every_ufcs_mode_range_fits_the_detail_value`), `test_result_layout` (`test_ufcs_chips_*`), `test_ui_charger_test`
 (`test_ufcs_results_and_detail_show_the_mode_current`).
+
+## Repeated runs (report card format 7)
+
+A charger has one card (`/cards/<fp>.card`, the newest run). When a finished run gives the same results as the stored card, no
+second copy is written: the store folds the run into the stored card (`report_card::same_results`, `repeat_of`, applied in
+`Store::put`). The card keeps its rows and the boot / uptime of the run that was stored first; `runs` goes up (the charger was
+tested again), and a repeat block records how often and when:
+
+| Field | Payload offset | Meaning |
+|---|---|---|
+| `times` | 190, u8 | how many runs gave exactly these results (1 = seen once; saturates at 255) |
+| `last_boots` | 191, u16 | boot counter of the newest of them (saturates at 65535) |
+| `last_uptime_s` | 193, u24 | uptime at the end of the newest of them (saturates at 2^24 - 1 s) |
+
+The K2 has no clock, so "when" is the boot counter plus the uptime in that boot. A card of format 6 or older reads as `times = 1`
+(offset 190 held its CRC, the reader looks at the block only when the format byte is 7 or more) and is rewritten as format 7 the
+next time it is updated.
+
+**Identity rule.** Two runs are the same when every stored semantic result is equal: each group's verdict, reason, detail and
+failing target; each PPS / AVS range's offer, failing step and reason; each EPR level; the UFCS modes; the PD offer facts (PDO
+count, spec revision, evidence flags, highest fixed current, source flags); the handover outcome; the final state and reason; the
+firmware build; the cable's identity (vid, pid, kind, limits). The measured maxima (group maximum, range maximum, EPR maximum)
+compare within one stored step, 100 mV: the card keeps nothing finer, so a level on a rounding boundary that fell into the next
+step is noise, not a change. Never compared: boot counter, uptime, the repeat block, card number, run count, the name, vid / pid /
+rated power (a probe that answered once and not the next time is no change; the card learns what the repeat adds), the handover
+time, the number of power-loss resumes, the cable's library number and flag byte. The comparison is always against the stored card,
+never against the previous repeat, so a slow drift becomes a new run once it reaches two steps. A run that differs in any compared
+field is stored as a new run, as before (the stored card is replaced and the Changes list shows the difference). A firmware update
+changes `fw`, so the first run after it is always a new run.
+
+A repeat produces an empty diff (`report_card::delta` of the stored card against the merged one): the Results screen has no
+Changes row for it. The card shows the repeat: the Cards page note reads `x3 boot 9` (count and boot of the newest repeat), the
+detail footer `run 4 boot 4 x3 last boot 9`, the web page a "Same result" row and `same result xN` in the header,
+`tools/k2_remote.py cards list|show` and `tools/charger_summary.py` the count with the last boot and uptime. The JSON has
+`times`, `last_boots`, `last_uptime_s` right after `uptime_s`, only when `times` is above 1. Host tests: `test_report_card`,
+`test_report_card_store` (`test_identical_run_is_counted_not_stored`, `test_different_run_is_stored_and_resets_the_counter`,
+`test_noise_within_the_stored_resolution_is_a_repeat`, `test_v6_file_loads_unchanged_and_takes_a_repeat`), `test_report_card_json`,
+`test_ui_cards`, `test_report_card_py.py`, `test_k2_remote_cards.py`, `test_cardpage.mjs`.
 
 ## Default order (company families, 2026-11-06)
 
