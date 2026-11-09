@@ -31,15 +31,24 @@ Plan plan(int n, int text_h);
 // The same inside a rectangle of the panel (the share view: the content area beside the button strip, 224 x 240 or 240 x 224
 // by rotation). Plan::x0 / y0 are panel coordinates; the box is centred across the area at its top. `min_px` is the least
 // pixels per module accepted (the share view takes 2 where 3 does not fit; 3 is the camera-safe size the boot screen holds).
+// `quiet` is the quiet zone in modules (default kQuietModules, the QR specification's 4) and `px` the pixels per module:
+// 0 = the largest whole px that keeps the box and the text on the panel (the default, what the share view and the boot
+// screen use), a positive px = exactly that size, refused (px == 0) when the box does not fit the area at it.
 struct Area {
     int x = 0, y = 0, w = kPanelPx, h = kPanelPx;
 };
-Plan plan_in(const Area& a, int n, int text_h, int min_px);
+Plan plan_in(const Area& a, int n, int text_h, int min_px, int quiet = kQuietModules, int px = 0);
 
 // Streams the symbol of `w` (n modules per side) into the area as plan_in() lays it out, over what is there: the caller clears
 // the area first when the old box may be bigger. `line` is a kPanelPx-pixel work row. Returns the panel y where the text
 // starts (box + 2 below the box's top), or 0 when the symbol does not fit.
-int draw_code_in(const Area& a, const qr::Workspace& w, int n, int text_h, int min_px, std::uint16_t* line);
+int draw_code_in(const Area& a, const qr::Workspace& w, int n, int text_h, int min_px, std::uint16_t* line,
+                 int quiet = kQuietModules, int px = 0);
+
+// The same for a symbol in a caller buffer (a workspace above qr::kMaxVersion, the QR scan-test path): `code` is the
+// packed bitmap, `quiet` and `px` are explicit (no defaults: the caller chose them).
+int draw_code_raw_in(const Area& a, const std::uint8_t* code, int n, int text_h, int min_px, std::uint16_t* line,
+                     int quiet, int px);
 
 // Draws the symbol held in `w` (n modules per side) on the whole panel. The panel is cleared to white first when `fresh` is set
 // or the symbol size differs from the last one drawn (a different size leaves the old box's edge behind). `line` is a

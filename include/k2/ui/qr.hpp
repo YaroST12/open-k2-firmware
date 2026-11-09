@@ -16,6 +16,18 @@ inline constexpr int kMaxModules = kMaxVersion * 4 + 17;                 // 65
 inline constexpr std::size_t kBufLen = ((kMaxModules * kMaxModules) + 7) / 8 + 1;   // 530, the generator's buffer for version 12
 inline constexpr std::size_t kMaxBytes = 367;                            // version 12, level L, byte mode
 inline constexpr std::size_t kMaxAlnum = 535;                            // version 12, level L, alphanumeric mode
+// The vendored generator's own tables cover every version up to 40 (its header caps qrcodegen_VERSION_MAX at 10, but
+// the asserts that enforce the cap are compiled out, NDEBUG, and the capacity tool tools/qr_capacity.c relies on the
+// same); only a workspace's size limits a call above kMaxVersion. The QR scan-test path (k2/ui/ui_qrtest.hpp) uses this.
+inline constexpr int kMaxVersionAny = 40;
+
+// The buffer length the generator needs for `version` (its qrcodegen_BUFFER_LEN_FOR_VERSION, spelled out so this header
+// does not include the vendored one): ceil(modules^2 / 8) + 1.
+constexpr std::size_t buf_len_for(int version) {
+    const int m = version * 4 + 17;
+    return (static_cast<std::size_t>(m) * m + 7) / 8 + 1;
+}
+static_assert(kBufLen == buf_len_for(kMaxVersion), "kBufLen is the version-12 buffer length");
 
 struct Workspace {
     std::uint8_t code[kBufLen];   // the finished symbol (the generator's packed module bitmap)
@@ -30,7 +42,17 @@ int encode(std::string_view text, Workspace& w);
 // kMaxVersion). Returns the modules per side, or 0 when it is empty or does not fit.
 int encode_text(const char* text, Workspace& w, int max_version = kMaxVersion);
 
+// Byte-mode encode into caller-owned buffers, for versions above kMaxVersion: `data_temp` must hold the payload at its
+// front on entry (the generator uses the rest as working storage) and `code` receives the symbol; each buffer must be
+// at least buf_len_for(max_version) bytes. Returns the modules per side, or 0 when the payload is empty, the buffers
+// are too small or the payload does not fit `max_version` at level L.
+int encode_placed(std::uint8_t* code, std::uint8_t* data_temp, std::size_t len, int max_version);
+// The same with the payload copied in from `text` first: `buf_len` is the size of each of `code` / `data_temp`.
+int encode_version(std::string_view text, std::uint8_t* code, std::uint8_t* data_temp, std::size_t buf_len, int max_version);
+
 // Module (x, y) of the symbol encode() just made; false outside it.
 bool dark(const Workspace& w, int x, int y);
+// The same for a symbol in a caller buffer (a workspace above kMaxVersion): `code` is the packed bitmap encode_placed wrote.
+bool dark_code(const std::uint8_t* code, int x, int y);
 
 }  // namespace k2::qr
