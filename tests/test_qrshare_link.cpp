@@ -223,8 +223,8 @@ static void test_worst_case_fits_version_21() {
 static void test_worst_card_fits_one_code() {
     static_assert(rc::kMaxRecord <= lk::kMaxRecord, "the worst card record fits one code");
     static_assert(qs::records::kMaxCardV2 <= lk::kMaxRecord, "the worst v2 card record fits one code");
-    CHECK_EQ(rc::kMaxRecord, 202u);
-    CHECK_EQ(lk::b64_len(rc::kMaxRecord), 270u);
+    CHECK_EQ(rc::kMaxRecord, 204u);
+    CHECK_EQ(lk::b64_len(rc::kMaxRecord), 272u);
     CHECK(lk::fits(qs::Type::Card, rc::kMaxRecord));
     rc::Card c = cardfx::fh22_full();
     c.n_ranges = rc::kMaxRanges;
@@ -241,19 +241,20 @@ static void test_worst_card_fits_one_code() {
     const Bytes rec = card_record(c);
     CHECK_EQ(rec.size(), rc::kMaxRecord);
     const std::string t = link_of(qs::Type::Card, rec, false, true);
-    CHECK_EQ(t.size(), 320u);
+    CHECK_EQ(t.size(), 322u);
     CHECK(t.size() <= lk::kMaxText);
-    // ... and its v2 form: 187 B worst case, 300 characters, still a version 11 code
+    // ... and its v2 form: 188 B worst case, 301 characters, still a version 11 code
     Bytes v2(qs::records::kMaxEmarker);
     const std::size_t vn = qs::records::pack_v2(qs::Type::Card, rec, v2);
-    CHECK_EQ(vn, qs::records::kMaxCardV2);
+    CHECK(vn <= qs::records::kMaxCardV2);   // the bit-count bound reserves the varint's 2-byte worst case; the packed worst card is 188 B
+    CHECK_EQ(vn, 188u);
     v2.resize(vn);
     char out[lk::kMaxText + 1];
     const std::size_t n2 = lk::encode_v2(qs::Type::Card, v2, out);
     CHECK(n2 != 0);
     CHECK(std::string(out, n2).rfind(std::string(lk::kBase) + "2c.", 0) == 0);
     CHECK_EQ(n2, lk::kHead + lk::b64_len(vn));
-    CHECK_EQ(n2, 300u);
+    CHECK_EQ(n2, 301u);
     CHECK(n2 <= lk::kQrBytes);
     static qr::Workspace w;
     const int modules = qr::encode_text(out, w, qr::kMaxVersion);
@@ -585,6 +586,7 @@ static void dump_corpus(const char* path) {
     c.card_no = 0xFFFF; c.runs = 0xFFFF; c.handover_ds = 0xFFFF;
     c.fw = c.boots = c.uptime_s = 0xFFFFFFFF;
     c.times = 255; c.last_boots = 0xFFFF; c.last_uptime_s = 0xFFFFFF;
+    c.rebalanced = 255;   // the v8 varint's worst case (2 bytes)
     std::strcpy(c.name, "12345678901234567890");
     const Bytes rec = card_record(c);
     Bytes v2(qs::records::kMaxEmarker);
@@ -662,10 +664,10 @@ static void test_golden() {
                 CHECK(rec == gs[i].raw);
             }
         }
-        // And it is one QR symbol of version 11 or less.
+        // And it is one QR symbol of version 11 or less (a card link grew to 322 characters with v8: version 12 is allowed there).
         static qr::Workspace w;
         const int n = qr::encode_text(t.c_str(), w, qr::kMaxVersion);
-        CHECK(n >= 21 && n <= 61);
+        CHECK(n >= 21 && n <= (gs[i].type == qs::Type::Card ? 65 : 61));
         const qrdec::Result q = qrdec::decode(n, [&](int x, int y) { return qr::dark(w, x, y); });
         CHECK(q.ok);
         CHECK(q.text == t);

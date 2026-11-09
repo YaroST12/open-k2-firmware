@@ -156,9 +156,9 @@ def group_pack(q):
 
 
 def parse_card(rec: bytes) -> dict:
-    """The format-7 card record (202 B) as a dict, per include/k2/chargertest/report_card.hpp."""
-    assert len(rec) == 202 and rec[0] == 0xA6, "not a format-7 card record"
-    p = rec[4:200]
+    """The card record (204 B with v8, 202 B with v7) as a dict, per include/k2/chargertest/report_card.hpp."""
+    assert len(rec) in (202, 204) and rec[0] == 0xA6, "not a card record"
+    p = rec[4:4 + (len(rec) - 6)]
     name = p[34:54].split(b"\0")[0]
     d = {
         "fp": u32(p, 0), "vid": u16(p, 4), "pid": u16(p, 6),
@@ -172,7 +172,8 @@ def parse_card(rec: bytes) -> dict:
         "groups": [group_pack(p[56 + 4 * g:56 + 4 * g + 4]) for g in range(12)],
         "ranges": [], "epr": [], "cable": None, "ufcs": [], "times": p[190],
         "last_boots": u16(p, 191), "last_uptime_s": p[193] | (p[194] << 8) | (p[195] << 16),
-        "crc16": u16(rec, 200),
+        "rebalanced": p[196] if len(rec) == 204 and p[33] >= 8 else 0,
+        "crc16": u16(rec, len(rec) - 2),
     }
     for i in range(4):
         q = p[104 + 10 * i:104 + 10 * i + 10]
@@ -198,7 +199,7 @@ def card_payload_from_json(j: dict) -> bytes:
     """Re-encode a card from its CARDS.JSON rendering (what the captures hold). Fields the JSON does not
     carry (evidence flags detail, the APDO position, the reserved bytes) are approximated; everything
     else is exact."""
-    p = bytearray(196)
+    p = bytearray(198)
 
     def put16(o, v): p[o] = v & 0xFF; p[o + 1] = (v >> 8) & 0xFF
     def put32(o, v): put16(o, v & 0xFFFF); put16(o + 2, (v >> 16) & 0xFFFF)
@@ -278,12 +279,13 @@ def card_payload_from_json(j: dict) -> bytes:
     put16(191, j.get("last_boots", 0))
     up = j.get("last_uptime_s", 0) & 0xFFFFFF
     p[193] = up & 0xFF; p[194] = (up >> 8) & 0xFF; p[195] = (up >> 16) & 0xFF
-    rec = bytearray(202)
-    rec[0] = 0xA6; rec[1] = 1; rec[2] = 196
-    rec[4:200] = p
-    put16_r = lambda o, v: None
-    rec[200] = crc16_ccitt(bytes(rec[:200])) & 0xFF
-    rec[201] = (crc16_ccitt(bytes(rec[:200])) >> 8) & 0xFF
+    p[33] = 8   # v8: the re-balance count (captures predate it: 0)
+    p[196] = j.get("rebalanced", 0) & 0xFF
+    rec = bytearray(204)
+    rec[0] = 0xA6; rec[1] = 1; rec[2] = 198
+    rec[4:202] = p
+    rec[202] = crc16_ccitt(bytes(rec[:202])) & 0xFF
+    rec[203] = (crc16_ccitt(bytes(rec[:202])) >> 8) & 0xFF
     return bytes(rec)
 
 
@@ -441,6 +443,7 @@ def pack_card_v2(c: dict) -> bytes:
     w.varint(c["times"])
     if c["times"] > 1:
         w.put(c["last_boots"], 16); w.put(c["last_uptime_s"], 24)
+    w.varint(c.get("rebalanced", 0))   # v8: the source's mid-run re-balance count
     w.put(c["crc16"], 16)             # the v1 record's CRC-16, kept: the integrity check is unchanged
     return w.bytes()
 
@@ -477,6 +480,7 @@ def unpack_card_v2(b: bytes) -> dict:
     c["times"] = r.varint()
     c["last_boots"] = r.get(16) if c["times"] > 1 else 0
     c["last_uptime_s"] = r.get(24) if c["times"] > 1 else 0
+    c["rebalanced"] = r.varint() if len(b) * 8 - r.pos > 16 else 0   # v8 (absent in records packed before it)
     c["crc16"] = r.get(16)
     return c
 
@@ -828,7 +832,7 @@ def v2_check(work: Path, quiet: bool):
         typ = int(typ)
         v1, fw = bytes.fromhex(v1hex), bytes.fromhex(v2hex)
         v1_json = None
-        if typ == 4 and len(v1) == 202:
+        if typ == 4 and len(v1) in (202, 204):
             proto = pack_card_v2(parse_card(v1))
             try:
                 v1_json = k2_qr.decode_card(v1)
@@ -925,7 +929,7 @@ def main():
     # ---- candidate 1: schema v2 over the corpus ----------------------------
     v2_rows = []
     for r in records:
-        if r["type"] == 4 and len(r["raw"]) == 202:
+        if r["type"] == 4 and len(r["raw"]) in (202, 204):
             c = parse_card(r["raw"])
             v2 = pack_card_v2(c)
             back = unpack_card_v2(v2)

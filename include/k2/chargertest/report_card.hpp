@@ -72,10 +72,10 @@ namespace ct = k2::charger_test;
 inline constexpr unsigned kGroups = unsigned(ct::Group::Count);
 inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Withdrawn) + 1;   // 44 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Withdrawn) + 1;   // 43 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
-inline constexpr uint8_t kFormat = 7;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter
+inline constexpr uint8_t kFormat = 8;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count
 inline constexpr unsigned kMaxUfcs = 4;
 
 // Card verdict of one protocol group: None = the group was not part of the run.
@@ -175,6 +175,7 @@ struct Card {
     std::array<UfcsRange, kMaxUfcs> ufcs{};   // the charger's UFCS modes, planner order, unused slots last (v6 only; see ufcs_modes())
     Cable cable{};             // the cable of the run (v5 only; older cards decode to an empty cable)
     uint8_t resumed = 0;       // times the run lost power and resumed (cable block byte 14; 0 on older cards)
+    uint8_t rebalanced = 0;    // how often the source re-announced mid-run and the PD rows were re-planned (v8 byte 196; 0 on older cards): the "SOURCE rebalanced Nx" note
     uint8_t src_flags = 0;     // what the source's own messages showed (cable block byte 15; 0 on older cards): kSrcOppoSvid, bits 1..7 the SCP limit (scp_cap_ma)
     uint8_t format = kFormat;   // payload byte 33 this card was decoded from (kFormat when built): renderers gate v4/v5 fields on it
     ct::HandoverOutcome handover = ct::HandoverOutcome::NotTried;
@@ -197,7 +198,7 @@ struct Card {
     }
     bool operator==(const Card& o) const {
         return id == o.id && num_pdos == o.num_pdos && spec_rev == o.spec_rev && ev_flags == o.ev_flags && group == o.group &&
-               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && src_flags == o.src_flags && format == o.format &&
+               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && rebalanced == o.rebalanced && src_flags == o.src_flags && format == o.format &&
                handover == o.handover && handover_ds == o.handover_ds &&
                state == o.state && reason == o.reason && fw == o.fw && boots == o.boots && uptime_s == o.uptime_s &&
                card_no == o.card_no && runs == o.runs && times == o.times && last_boots == o.last_boots && last_uptime_s == o.last_uptime_s && std::memcmp(name, o.name, sizeof name) == 0 && name_auto == o.name_auto;
@@ -675,6 +676,7 @@ inline void migrate_to_current(Card& c) { if (c.format < kFormat) c.format = kFo
 inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
                        ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0) {
     c.id = id; c.num_pdos = ev.num_pdos; c.spec_rev = ev.wire_rev; c.ev_flags = ev.flags; c.cable = cable; c.resumed = resumed;
+    c.rebalanced = ev.rebalanced;   // v8: the source's mid-run re-balance count goes on the shared card
     c.src_flags = uint8_t(((ev.seen & ct::SeenOppoSvid) ? kSrcOppoSvid : 0) | (std::min<unsigned>(ev.scp_ma / 50u, 127u) << 1));
     c.handover = h.outcome; c.handover_ds = h.ms / 100 > 65535 ? uint16_t(65535) : uint16_t(h.ms / 100);
     c.state = state; c.reason = reason; c.fw = cx.fw; c.boots = cx.boots; c.uptime_s = cx.uptime_s;
@@ -800,8 +802,9 @@ inline constexpr unsigned kEpr = kRanges + 10 * kMaxRanges;              // 144:
 inline constexpr unsigned kCable = kEpr + 6 * kEprLevels;                // 162: v5 cable block, 16 bytes
 inline constexpr unsigned kUfcs = kCable + 16;                           // 178: v6 UFCS modes, kMaxUfcs x 3 bytes
 inline constexpr unsigned kRepeat = kUfcs + 3 * kMaxUfcs;                // 190: v7 repeat block, 6 bytes
+inline constexpr unsigned kV8 = kRepeat + 6;                             // 196: v8 block, 2 bytes (rebalanced u8 + spare)
 }  // namespace off
-inline constexpr unsigned kPayload = off::kRepeat + 6;                   // 196 (190 + 6 for the v7 repeat block)
+inline constexpr unsigned kPayload = off::kV8 + 2;                       // 198 (196 + 2 for the v8 block; v7 cards are 196)
 inline constexpr uint8_t kFlagNameAuto = 1;
 inline constexpr unsigned kRecordOverhead = 6, kMaxRecord = kRecordOverhead + kPayload;
 static_assert(kPayload % 2 == 0 && kPayload <= 250);
@@ -868,14 +871,20 @@ inline size_t encode_card(std::span<uint8_t> out, const Card& c) {
         q[0] = c.times; put16(q + 1, c.last_boots);
         q[3] = uint8_t(up); q[4] = uint8_t(up >> 8); q[5] = uint8_t(up >> 16);
     }
+    // V8: the re-balance count u8 (+ a spare byte: the payload stays even)
+    {
+        uint8_t* q = p + off::kV8;
+        q[0] = c.rebalanced; q[1] = 0;
+    }
     put16(b + 4 + kPayload, bbstore::crc16(0xFFFF, {b, 4 + kPayload}));
     return kMaxRecord;
 }
 
 // Parses a payload (the bytes after the 4 byte record header). False on a wrong length or an out of range field.
+// A v7 payload (196 bytes, kPayload - 2) is accepted too: its v8 bytes are the CRC/padding and read as 0.
 inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
     using namespace detail;
-    if (payload.size() != kPayload) return false;
+    if (payload.size() != kPayload && payload.size() != kPayload - 2) return false;
     const uint8_t* p = payload.data();
     Card d;
     d.id.fp = get32(p); d.id.vid = get16(p + 4); d.id.pid = get16(p + 6);
@@ -943,6 +952,8 @@ inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
         d.last_boots = get16(q + 1);
         d.last_uptime_s = q[3] | uint32_t(q[4]) << 8 | uint32_t(q[5]) << 16;
     }
+    // V8: the re-balance count; a v7 payload has no such byte (its CRC/padding sits there and is not read)
+    if (p[33] >= 8 && payload.size() == kPayload) d.rebalanced = p[off::kV8];
     c = d;
     return true;
 }

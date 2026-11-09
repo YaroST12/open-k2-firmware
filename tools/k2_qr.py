@@ -442,12 +442,13 @@ CABLE_KIND_DEC = {0: 0, 1: 1, 2: 2, 3: 4, 4: 0xFF}
 
 
 def expand_card_v2(b: bytes) -> bytes:
-    """A schema v2 card record -> the 202-byte v1 record (format 7), so decode_card() reads it as before."""
+    """A schema v2 card record -> the 204-byte v1 record (format 8), so decode_card() reads it as before.
+    A v2 record packed before the rebalanced varint existed ends at the CRC: the varint is then absent and reads 0."""
     r = BitR(b)
     if r.get(8) != 2:
         raise QrError("not a schema v2 record")
-    rec = bytearray(202)
-    rec[0], rec[1], rec[2], rec[3] = 0xA6, 1, 196, 0
+    rec = bytearray(204)
+    rec[0], rec[1], rec[2], rec[3] = 0xA6, 1, 198, 0
     p = 4   # the payload starts at record offset 4; the put16/put32 below take absolute record offsets
 
     def put16(o, v):
@@ -481,7 +482,7 @@ def expand_card_v2(b: bytes) -> bytes:
     n_ranges = r.get(3)
     rec[p + 31] = n_ranges
     rec[p + 32] = r.get(8)          # ev_flags
-    rec[p + 33] = 7                 # format: v2 only encodes format-7 cards
+    rec[p + 33] = 8                 # format 8 (v2 always expands to the current format; the v8 byte below)
     nl = r.get(5)
     rec[p + 34:p + 34 + nl] = bytes(r.get(7) for _ in range(nl))
     rec[p + 54] = r.get(8)                                   # pdp_w
@@ -532,8 +533,10 @@ def expand_card_v2(b: bytes) -> bytes:
         put16(p + 191, r.get(16))                  # last_boots
         up = r.get(24)
         rec[p + 193], rec[p + 194], rec[p + 195] = up & 0xFF, (up >> 8) & 0xFF, (up >> 16) & 0xFF
-    rec[200] = r.get(8)      # the v1 record's CRC-16, carried so the integrity check is unchanged
-    rec[201] = r.get(8)
+    rebalanced = r.varint() if len(b) * 8 - r.pos > 16 else 0   # v8 (absent in records packed before it)
+    rec[p + 196] = rebalanced & 0xFF
+    rec[202] = r.get(8)      # the v1 record's CRC-16, carried so the integrity check is unchanged
+    rec[203] = r.get(8)
     return bytes(rec)
 
 

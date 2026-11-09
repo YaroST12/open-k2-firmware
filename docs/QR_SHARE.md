@@ -64,7 +64,7 @@ reuse the serialisers the firmware already has, so an import on the K2 can call 
 | BI | the `K2B1` text of `k2/core/bootinfo.hpp`, ASCII: `K2B1 fw=1.0 g=<git[-dirty]> p=<proto> t=<uptime> ...` | about 170 B |
 | EMK | schema 1: `flags` u8 (bit0: a quirk block follows), `name[24]` (the user's name, NUL padded), the 66-byte e-marker record (`k2/pd/emrec.hpp`), then the quirk block (`k2/pd/emk_quirk.hpp` `encode()`) when bit0 is set. Schema 2: the bit-packed record below | 91 B plain, at most 510 B as schema 1; 44 B to 189 B as schema 2 |
 | PDC | `num_pdos` u8, `flags` u8 (bit0 EPR caps, bit1 EPR chunks incomplete), `spec_rev` u8 (1 PD 2.0, 2 PD 3.x), `active_cc` u8 (0 none, 1 CC1, 2 CC2), raw message header u16, then `num_pdos` raw PDO words u32 by position (an unused slot is 0) | 6 + 4 per PDO, at most 50 B |
-| CARD | schema 1: the report card as the store keeps it (`k2/chargertest/report_card.hpp` `encode_card()`: 0xA6, type, payload length, 0, the payload, CRC-16; card format 7). Schema 2: the bit-packed record below | 202 B as schema 1 (formats 3 to 6: 150 to 196 B); 68 to 187 B as schema 2 |
+| CARD | schema 1: the report card as the store keeps it (`k2/chargertest/report_card.hpp` `encode_card()`: 0xA6, type, payload length, 0, the payload, CRC-16; card format 8). Schema 2: the bit-packed record below | 204 B as schema 1 (formats 3 to 7: 150 to 198 B); 68 to 188 B as schema 2 |
 | ID | ASCII `fw=<version> g=<git, -dirty when dirty> p=<remote proto>`, the strings PING answers | at most 64 B |
 | LOG | `git_len` u8, the git string, `flags` u8 (bit0: older entries were dropped), `base_ms` u32 (uptime of the entry before the first one), `now_ms` u32 (uptime when the record was made), then whole log entries to the end | 10 + git + entries, at most 510 B |
 
@@ -77,14 +77,14 @@ packing in place never grows the record. The full layout is the comment at the t
 (`pack_v2`), with host twins `expand_card_v2` / `expand_emk_v2` in `tools/k2_qr.py` and in `docs/site/r/card.js` (the results
 page). Summary:
 
-- **Card v2** (replaces the 202 B schema 1 record): schema u8 = 2; `fp` u32, `vid` u16, `pid` u16; varint `card_no`, `runs`,
+- **Card v2** (replaces the 204 B schema 1 record): schema u8 = 2; `fp` u32, `vid` u16, `pid` u16; varint `card_no`, `runs`,
   `boots`, `uptime_s`; `fw` u32; varint `handover_ds`; `spec_rev` u2, `num_pdos` u4, `handover` u3, `state` u4, `reason` u6;
   `n_ranges` u3, `ev_flags` u8; `name_len` u5 (at most 20) and the name as u7 chars; `pdp_w` u8, `name_auto` u1, `pd_ma50` u7;
   12 group results (verdict u2, reason u6, detail u6, has_max u1 [+ max_dv u9], has_fail u1 [+ fail_dv u9]); `n_ranges` ranges
   (alg u5, pos u8, lo_dv u9, hi_dv u9, max_dv u9, fail_dv u9, ma50 u7); 3 EPR slots (dv code u2: 0 none, 1 = 280, 2 = 360,
   3 = 480, then a group result); `cable_present` u1 [+ varint seq, vid u16, pid u16, max_mv u16, max_ma u16, kind code u3
   (0 = 0, 1 = 1, 2 = 2, 3 = 4, 4 = 0xFF), flags u8, resumed u8, src_flags u8]; `n_ufcs` u3 and its modes (lo_dv u8, hi_dv u9,
-  ma50 u7); varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; crc16 u16 of the v1 record.
+  ma50 u7); varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; varint rebalanced (v8: the source's mid-run re-balance count, 0 on a format-7 record); crc16 u16 of the v1 record.
   The `reason` u6 fields hold the `ct::Reason` index (6 bits, so up to 64 codes; 43 are defined, 0..42, listed in the
   REASONS table of `tools/report_card.py`; 42 = "withdrawn by source", a row the source's mid-run re-announce dropped,
   pattern `budget-reannounce-mid-run`).
@@ -93,8 +93,8 @@ page). Summary:
   `has_quirks` u1 [+ flags u2, unmatched u2, count u4, then per row: sop u2, kind u2, nreq u2, nrep u3, mask_is_standard u1,
   hdr_val u32, hdr_mask u32 when the mask is not the standard SVDM one, nreq x (req_val u32, req_mask u32), nrep x rep u32)].
 
-Measured on the golden vectors and the captured cards: a format-7 card is 68 to 109 B as schema 2 (the synthetic all-limits worst
-case 187 B) against 202 B as schema 1; the 8-row quirk cable is 189 B as schema 2 against 510 B raw and 239 B LZ4 as schema 1.
+Measured on the golden vectors and the captured cards: a format-8 card is 68 to 109 B as schema 2 (the synthetic all-limits worst
+case 188 B) against 204 B as schema 1; the 8-row quirk cable is 189 B as schema 2 against 510 B raw and 239 B LZ4 as schema 1.
 
 ### Log record
 
@@ -137,7 +137,7 @@ Question: does a compressor pay for a 330 B QR part? Candidates measured on real
 | EMK with 8 quirk rows | 510 | 239 | 171 | 190 |
 | PDC SPR | 26 | 28 | 29 | 29 |
 | PDC EPR | 46 | 44 | 44 | 45 |
-| card (format 5, 184 B; format 7 measured only with LZ4: 202 B to 109 B) | 184 | 107 | 86 | 94 |
+| card (format 5, 184 B; format 8 measured only with LZ4: 204 B to 109 B) | 184 | 107 | 86 | 94 |
 | log, 1024 B ring | 1023 | 580 | 454 | 504 |
 | log, 510 B record | 499 | 260 | 220 | 217 |
 | log, 1024 B ring (second capture) | 1013 | 445 | 327 | 358 |
@@ -151,7 +151,7 @@ over LZ4 on a payload that already fits; tamp was not adopted for the same reaso
 already: the log record's ids, varints and zigzag arguments shrink the log before any compressor sees it, and the e-marker
 record is a binary struct. Small records (boot info, identity, PDC) stay plain: LZ4 does not pay there and the 75 % rule keeps
 them so. The two that pack are the EMK record with quirks (510 to 239 B: two parts of 415 characters become one of 391, QR version 11 to 10)
-and the card (format 7: 202 to 109 B, 336 to 197 characters, QR version 10 to 7; the format 5 card was 184 to 107 B, 309 to 194 characters).
+and the card (format 8: 204 to 109 B, 338 to 197 characters, QR version 10 to 7; the format 5 card was 184 to 107 B, 309 to 194 characters).
 Golden vectors with the flag: `emk_rows_lz`, `card_lz` in `tests/fixtures/qrshare.tsv`.
 
 ## Measured capacity per part
@@ -166,7 +166,7 @@ Text length of one part is `len("K2:<tag><schema>:") + 3 * ceil(frame / 2)` with
 | pdcaps EPR (10 PDOs) | 46 B | 1 | 101 | 4 |
 | emk plain | 91 B | 1 | 169 | 6 |
 | boot | 173 B | 1 | 291 | 9 |
-| card (format 7) | 202 B | 1 | 336 | 10 |
+| card (format 8) | 204 B | 1 | 338 | 10 |
 | emk with 8 quirk rows | 510 B | 2 (255 B each) | 415 | 11 |
 | emk with 8 quirk rows, LZ4 flag | 239 B packed | 1 | 391 | 10 |
 | card, LZ4 flag | 109 B packed | 1 | 197 | 7 |
@@ -270,7 +270,7 @@ the BI record.
   look policy the limit was one version 11 code, 321 characters and 203 bytes: a cable with many quirk rows, a 510 byte
   record, had no link until now.) That holds for the card (as a version '2' link: 68 to 109 B for the golden and captured cards,
   141 to 196 characters, and 187 B, 300 characters, in the synthetic all-limits worst case, so the v2 card always fits with
-  room; as a version '1' link the format-7 card is 202 B and makes a 320 character link, one character to spare, and formats
+  room; as a version '1' link the format-8 card is 204 B and makes a 322 character link, one character to spare, and formats
   3 to 6 were at most 196 B, 312 characters, and still decode), the identity (at most 64 B), the PDOs (at most 50 B), the boot info (about 180 B, 290 characters) and a
   cable with up to 8 quirk rows (189 B as a version '2' record, a 302 character link; as a version '1' link a cable with up to
   4 quirk rows is 261 characters packed). The log has no link form. The text is built at paint time in the share view's

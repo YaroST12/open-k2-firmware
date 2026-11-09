@@ -4,12 +4,12 @@
 // (k2/core/fs.hpp). Pure logic over k2::fs::Fs, host-tested by tests/test_report_card_store.cpp on a RAM disk
 // that can lose power at any operation.
 //
-// File /cards/<fingerprint, 8 hex digits>.card, kFileSize = 210 bytes with v7 (older cards are 204 bytes for v6, 192 for v5,
-// 176 for v4 and 158 for v3; all are read, zero-padded, and rewritten as v7 by the next save). Small file, so it lives inside
-// the directory metadata and costs about 210 bytes of flash:
+// File /cards/<fingerprint, 8 hex digits>.card, kFileSize = 212 bytes with v8 (older cards are 210 bytes for v7, 204 for v6,
+// 192 for v5, 176 for v4 and 158 for v3; all are read, zero-padded, and rewritten as v8 by the next save). Small file, so it
+// lives inside the directory metadata and costs about 212 bytes of flash:
 //     +0   "K2C1"   magic and format version
 //     +4   stamp    u32, a counter that grows with every save: newest card = highest stamp
-//     +8   record   the card as k2/chargertest/report_card.hpp frames it (4 byte header, kPayload=196 bytes, or the shorter payload of an older format, CRC16)
+//     +8   record   the card as k2/chargertest/report_card.hpp frames it (4 byte header, kPayload=198 bytes, or the shorter payload of an older format, CRC16)
 // A save replaces the file atomically (littlefs commit + rename), so a power cut leaves the old card or the
 // new one. A card keeps its number (id), run count and name through re-tests; a rename keeps its place in
 // the order. kMaxCards = 64 live cards; saving a new charger when full drops the one with the lowest stamp.
@@ -33,6 +33,7 @@ namespace k2::report_card {
 
 inline constexpr unsigned kMaxCards = 64;
 inline constexpr std::size_t kFileSize = 8 + kMaxRecord;
+inline constexpr std::size_t kFileSizeV7 = 210;  // v7 cards (payload 196) are 210 bytes
 inline constexpr std::size_t kFileSizeV6 = 204;  // v6 cards (payload 190) are 204 bytes
 inline constexpr std::size_t kFileSizeV5 = 192;  // v5 cards (payload 178) are 192 bytes
 inline constexpr std::size_t kFileSizeV4 = 176;  // v4 cards (payload 162) are 176 bytes
@@ -134,7 +135,7 @@ private:
     mutable std::array<Ent, kMaxCards> idx_{};
     mutable unsigned n_ = 0;
     mutable bool valid_ = false;
-    static constexpr bool known_size(std::size_t n) { return n == kFileSize || n == kFileSizeV6 || n == kFileSizeV5 || n == kFileSizeV4 || n == kFileSizeV3; }
+    static constexpr bool known_size(std::size_t n) { return n == kFileSize || n == kFileSizeV7 || n == kFileSizeV6 || n == kFileSizeV5 || n == kFileSizeV4 || n == kFileSizeV3; }
     static bool parse_name(const char* n, std::uint32_t& fp) {
         if (std::strlen(n) != 13 || std::memcmp(n + 8, ".card", 5) != 0) return false;
         std::uint32_t v = 0;
@@ -154,7 +155,7 @@ private:
         make_path(fp, path);
         std::size_t n = 0;
         if (fs_.read_file(path, b, n) != fs::Err::Ok) return false;
-        // Accept current (210 bytes), v6 (204), v5 (192), v4 (176) and old v3 (158) card files
+        // Accept current (212 bytes), v7 (210), v6 (204), v5 (192), v4 (176) and old v3 (158) card files
         if (!known_size(n)) return false;
         if (std::memcmp(b.data(), kFileMagic.data(), 4) != 0) return false;
         // Zero-pad old v3..v6 cards to kFileSize; decode_card then migrates by the format byte (33)
@@ -181,7 +182,7 @@ private:
         unsigned nf = 0;
         fs_.list(kDir, [&](const fs::Info& i) {
             std::uint32_t fp;
-            // Accept every card file size ever written (v3 158, v4 176, v5 192, v6 204, current 210 bytes)
+            // Accept every card file size ever written (v3 158, v4 176, v5 192, v6 204, v7 210, current 212 bytes)
             if (i.dir || !known_size(i.size) || !parse_name(i.name, fp)) return true;
             if (nf < fps.size()) fps[nf++] = fp;
             return nf < fps.size();

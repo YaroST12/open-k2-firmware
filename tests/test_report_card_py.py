@@ -316,7 +316,7 @@ def test_v7_repeat_block_decodes_only_for_v7():
     # offset 190: times u8, last_boots u16, last_uptime_s u24; keys appear only when times > 1 (as in the firmware's JSON).
     rec = bytearray(PAYLOAD)
     rec[33] = 7
-    rec.extend(b"\0" * (report_card.PAYLOAD - len(rec)))
+    rec.extend(b"\0" * (report_card.PAYLOAD_V7 - len(rec)))
     assert len(rec) == 196
     assert "times" not in report_card.decode(bytes(rec))                   # zero count: once
     rec[190] = 1
@@ -329,6 +329,19 @@ def test_v7_repeat_block_decodes_only_for_v7():
     rec[33] = 6
     assert "times" not in report_card.decode(bytes(rec))
     assert "times" not in report_card.decode(bytes(rec[:190]))
+
+
+def test_v8_rebalanced_decodes_only_for_v8():
+    # offset 196: rebalanced u8 (+ a spare byte); the key appears only when the count is non-zero (as in the firmware's JSON).
+    rec = bytearray(PAYLOAD)
+    rec.extend(b"\0" * (report_card.PAYLOAD - len(rec)))
+    assert len(rec) == 198
+    rec[33] = 8
+    assert "rebalanced" not in report_card.decode(bytes(rec))             # zero count: no key
+    rec[196] = 2
+    assert report_card.decode(bytes(rec))["rebalanced"] == 2
+    rec[33] = 7                                                             # a v7 payload ends at 196: no v8 byte there
+    assert "rebalanced" not in report_card.decode(bytes(rec[:196]))
 
 
 def test_v5_payloads_have_no_ufcs_modes():

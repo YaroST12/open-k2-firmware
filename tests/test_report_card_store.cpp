@@ -155,7 +155,8 @@ static void test_forty_cards_and_capacity() {
 // V3 cards (158 bytes, format byte 3) coexist with v4 cards (176 bytes, format byte 4) on flash.
 // The Store's ensure() and read() functions accept both file sizes.
 static void test_v3_v4_file_sizes_are_both_accepted() {
-    CHECK_EQ(rc::kFileSize, 210u);
+    CHECK_EQ(rc::kFileSize, 212u);
+    CHECK_EQ(rc::kFileSizeV7, 210u);
     CHECK_EQ(rc::kFileSizeV6, 204u);
     CHECK_EQ(rc::kFileSizeV5, 192u); CHECK_EQ(rc::kFileSizeV4, 176u); CHECK_EQ(rc::kFileSizeV3, 158u);
 }

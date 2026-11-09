@@ -244,7 +244,7 @@ static void test_pack_v2() {
     CHECK(r::has_v2(qs::Type::Card) && r::has_v2(qs::Type::Emarker));
     CHECK(!r::has_v2(qs::Type::PdCaps) && !r::has_v2(qs::Type::Log) && !r::has_v2(qs::Type::Identity) &&
           !r::has_v2(qs::Type::BootInfo));
-    CHECK_EQ(r::kMaxCardV2, 187u);
+    CHECK_EQ(r::kMaxCardV2, 189u);
     CHECK_EQ(r::kMaxEmkV2, 459u);
 
     // A card: valid v1 record in, v2 out; in place gives the same bytes; the v2 record is never longer.

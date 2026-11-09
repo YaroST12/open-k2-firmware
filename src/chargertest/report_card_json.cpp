@@ -28,6 +28,9 @@ std::size_t render_json(const Card& c, std::span<char> out) {
     // Repeats of the stored run (v7), only when there were any: how many identical runs and when the newest one was.
     if (c.times > 1)
         t.put("\"times\":%u,\"last_boots\":%u,\"last_uptime_s\":%u,", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
+    // v8: how often the source re-announced its list mid-run and the PD rows were re-planned (budget-reannounce-mid-run).
+    if (c.format >= 8 && c.rebalanced)
+        t.put("\"rebalanced\":%u,", unsigned(c.rebalanced));
     t.put("\"fw\":\"%08x\",\"state\":\"%s\",\"reason\":\"%s\",\"pdos\":%u,\"spec_rev\":%u,", unsigned(c.fw), ct::name(c.state),
           ct::name(c.reason), unsigned(c.num_pdos), unsigned(c.spec_rev));
     t.put("\"handover\":\"%s\",\"handover_ms\":%u,\"groups\":{", kHandover[unsigned(c.handover)], unsigned(c.handover_ds) * 100u);
@@ -127,6 +130,8 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     t.put("\nIdentity %08X \xC2\xB7 boot %u \xC2\xB7 uptime %u s", unsigned(c.id.fp), unsigned(c.boots), unsigned(c.uptime_s));
     if (c.times > 1)
         t.put(" \xC2\xB7 same result x%u, last boot %u uptime %u s", unsigned(c.times), unsigned(c.last_boots), unsigned(c.last_uptime_s));
+    if (c.format >= 8 && c.rebalanced)
+        t.put(" \xC2\xB7 source rebalanced x%u", unsigned(c.rebalanced));
     t.put("\n");
     if (c.handover != ct::HandoverOutcome::NotTried) {
         t.put("Handover: %s after ", kHandover[unsigned(c.handover)]);

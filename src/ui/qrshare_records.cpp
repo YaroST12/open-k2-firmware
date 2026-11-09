@@ -96,11 +96,12 @@ bool valid_v1(Type type, std::span<const std::uint8_t> rec) {
     return rec.size() == kEmarkerHead;
 }
 
-// The format-7 card record (202 B) -> the v2 record. The payload is copied to a local first, so `out` may alias `in` (the
-// varints can run the write pointer a few bytes ahead of the read pointer).
+// The card record (204 B with v8, 202 B with v7) -> the v2 record. The payload is copied to a local first, so `out` may
+// alias `in` (the varints can run the write pointer a few bytes ahead of the read pointer); an older, shorter record is
+// zero-padded, so its v8 byte reads 0.
 static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std::uint8_t> out) {
     std::array<std::uint8_t, rc::kPayload> pl{};
-    std::memcpy(pl.data(), rec.data() + 4, rc::kPayload);
+    std::memcpy(pl.data(), rec.data() + 4, std::min<std::size_t>(rc::kPayload, rec.size() > 4 ? rec.size() - 4 : 0));
     const std::uint16_t crc16 = rc::detail::get16(rec.data() + rc::kMaxRecord - 2);
     const std::uint8_t* p = pl.data();
     if (p[31] > rc::kMaxRanges) return 0;
@@ -189,6 +190,7 @@ static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std
                   std::uint32_t(p[rc::off::kRepeat + 5]) << 16,
               24);                                     // last_uptime_s
     }
+    w.varint(p[33] >= 8 ? p[rc::off::kV8] : 0);   // v8: the source's mid-run re-balance count (0 on a v7 record)
     w.put(crc16, 16);                           // the v1 record's CRC-16: the integrity check is unchanged
     return w.finish();
 }

@@ -25,13 +25,15 @@
 // Loaded by the page as a script (window.K2Card) and by Node as a module (module.exports).
 var K2Card = (function () {
   var LINK_VERSION = "1";
-  var PAYLOAD = 196;      // card format 7; formats 3, 4, 5 and 6 are 144, 162, 178 and 190 bytes
+  var PAYLOAD = 198;      // card format 8; formats 3, 4, 5, 6 and 7 are 144, 162, 178, 190 and 196 bytes
+  var V7_PAYLOAD = 196;   // format 7 ends with the repeat block; format 8 adds the re-balance count after it
   var V6_PAYLOAD = 190;   // format 6 ends with the UFCS modes; format 7 adds the repeat block after them
   var V5_PAYLOAD = 178;   // format 5 ends with the cable block; format 6 adds the UFCS modes after it
   var REPEAT_AT = 190;    // format 7: times u8, last_boots u16, last_uptime_s u24 (a format 6 payload has its CRC here)
+  var V8_AT = 196;        // format 8: rebalanced u8 + spare (a format 7 payload ends here: its CRC is not read)
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 7;         // the newest card format this file reads
+  var FORMAT = 8;         // the newest card format this file reads
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -192,7 +194,7 @@ var K2Card = (function () {
   var CABLE_KIND_V2 = {0: 0, 1: 1, 2: 2, 3: 4, 4: 255};    // the 3-bit cable kind code -> the v1 kind byte
   var SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F;            // the standard SVDM header mask, when a v2 row omits it
 
-  // A schema v2 card record -> the 202-byte version "1" record (format 7), so decodeRecord() reads it as before.
+  // A schema v2 card record -> the 204-byte version "1" record (format 8), so decodeRecord() reads it as before.
   function expandCardV2(b) {
     var r = new BitReader(b);
     if (r.get(8) !== 2) throw CardError("bad-record", "This is not a version 2 card record.");
@@ -278,8 +280,10 @@ var K2Card = (function () {
       var up = r.get(24);
       rec[p + 193] = up & 0xFF; rec[p + 194] = (up >> 8) & 0xFF; rec[p + 195] = (up >> 16) & 0xFF;
     }
-    rec[200] = r.get(8);                                  // the v1 record's CRC-16, carried so the integrity check is unchanged
-    rec[201] = r.get(8);
+    var rebalanced = (b.length * 8 - r.pos > 16) ? r.varint() : 0;   // v8 (absent in records packed before it)
+    rec[p + 196] = rebalanced & 0xFF;
+    rec[202] = r.get(8);                                  // the v1 record's CRC-16, carried so the integrity check is unchanged
+    rec[203] = r.get(8);
     return rec;
   }
 
@@ -533,11 +537,11 @@ var K2Card = (function () {
     }
   }
 
-  // The card payload (144, 162, 178, 190 or 196 bytes) -> the card object tools/report_card.py decode() returns (and the firmware's
-  // JSON renderer writes: key "seq" of the cable only when it is not 0).
+  // The card payload (144, 162, 178, 190, 196 or 198 bytes) -> the card object tools/report_card.py decode() returns (and the
+  // firmware's JSON renderer writes: key "seq" of the cable only when it is not 0).
   function decodePayload(b) {
-    if (b.length !== 144 && b.length !== 162 && b.length !== V5_PAYLOAD && b.length !== V6_PAYLOAD && b.length !== PAYLOAD) {
-      throw CardError("bad-card", "The card is " + b.length + " bytes; a card is 144, 162, " + V5_PAYLOAD + ", " + V6_PAYLOAD + " or " + PAYLOAD + ".");
+    if (b.length !== 144 && b.length !== 162 && b.length !== V5_PAYLOAD && b.length !== V6_PAYLOAD && b.length !== V7_PAYLOAD && b.length !== PAYLOAD) {
+      throw CardError("bad-card", "The card is " + b.length + " bytes; a card is 144, 162, " + V5_PAYLOAD + ", " + V6_PAYLOAD + ", " + V7_PAYLOAD + " or " + PAYLOAD + ".");
     }
     var fmt = b[33];
     if (fmt > FORMAT) throw CardError("newer-card", "This card was made by a newer K2 than this page understands (format " + fmt + ").");
@@ -605,11 +609,12 @@ var K2Card = (function () {
     card.runs = u(b, 10, 2);
     card.boots = u(b, 12, 4);
     card.uptime_s = u(b, 16, 4);
-    if (fmt >= 7 && b.length >= PAYLOAD && b[REPEAT_AT] > 1) {   // identical repeats of the stored run (keys only when there were any)
+    if (fmt >= 7 && b.length >= V7_PAYLOAD && b[REPEAT_AT] > 1) {   // identical repeats of the stored run (keys only when there were any)
       card.times = b[REPEAT_AT];
       card.last_boots = u(b, REPEAT_AT + 1, 2);
       card.last_uptime_s = u(b, REPEAT_AT + 3, 3);
     }
+    if (fmt >= 8 && b.length >= PAYLOAD && b[V8_AT]) card.rebalanced = b[V8_AT];   // v8: the source re-balanced mid-run this often
     card.fw = hex8(u(b, 20, 4));
     card.state = STATES[b[29]];
     card.reason = REASONS[b[30]];
@@ -885,7 +890,8 @@ var K2Card = (function () {
     return {title: title(card), auto_name: !!card.name_auto, facts: facts, fingerprint: card.fp, no: card.no,
       boot: card.boots, run: card.runs, uptime: duration(card.uptime_s),
       ident: "Card #" + card.no + " · run " + card.runs + " · boot " + card.boots + " · up " + duration(card.uptime_s) +
-        (card.times > 1 ? " · same result x" + card.times : "") + " · fingerprint " + card.fp};
+        (card.times > 1 ? " · same result x" + card.times : "") +
+        (card.rebalanced ? " · source rebalanced x" + card.rebalanced : "") + " · fingerprint " + card.fp};
   }
 
   function row(label, value, tone) { return {label: label, value: value, tone: tone || ""}; }

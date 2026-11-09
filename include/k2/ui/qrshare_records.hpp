@@ -11,7 +11,7 @@
 //            2 PD 3.x), active_cc u8 (0 none, 1 CC1, 2 CC2), raw message header u16 LE, then num_pdos raw PDO words u32 LE by
 //            position (an unused slot is 0).
 //   Card     schema 1: the report card record as the store keeps it (k2/chargertest/report_card.hpp encode_card(): 0xA6, type, payload length,
-//            0, the payload, CRC-16), 202 bytes.
+//            0, the payload, CRC-16), 204 bytes (v8; 202 with v7).
 //   Identity schema 1: ASCII "fw=<version> g=<git, -dirty when dirty> p=<remote proto>", the strings PING answers.
 //   BootInfo schema 1: the K2B1 text (k2/core/bootinfo.hpp).
 //   Log      schema 1: git_len u8, the firmware git string (git_len bytes, as `git describe --always --dirty`), flags u8 (bit0:
@@ -30,7 +30,8 @@
 //             fail_dv u9, ma50 u7); 3 EPR slots of (dv code u2: 0 none, 1 = 280, 2 = 360, 3 = 480, then a group result);
 //             cable_present u1 [+ varint seq, vid u16, pid u16, max_mv u16, max_ma u16, kind code u3 (0 = 0, 1 = 1, 2 = 2,
 //             3 = 4, 4 = 0xFF), flags u8, resumed u8, src_flags u8]; n_ufcs u3, that many modes of (lo_dv u8, hi_dv u9, ma50 u7);
-//             varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; crc16 u16 of the v1 record.
+//             varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; varint rebalanced (v8: the source's mid-run
+//             re-balance count, 0 on a v7 record); crc16 u16 of the v1 record.
 //   Emarker v2: schema u8 = 2; name_len u5 (<= 24), the name as u7 chars; flags u8; the emrec: name_len u5 (<= 20), the name as
 //             u7 chars, spec_rev u2, five VDOs u32, checksum u8; has_quirks u1 [+ flags u2, unmatched u2, count u4, then count
 //             rows of (sop u2, kind u2, nreq u2, nrep u3, mask_is_kSvdmMask u1, hdr_val u32, hdr_mask u32 when the mask is not
@@ -105,7 +106,8 @@ consteval std::size_t card_v2_worst_bits() {
     b += 1 + 40 + 4 * 16 + 3 + 3 * 8;                       // cable (seq varint worst, kind code, flags/resumed/src_flags)
     b += 3 + 4 * (8 + 9 + 7);                               // n_ufcs + modes
     b += 16 + 16 + 24 + 16;                                 // times varint, last_boots, last_uptime_s, crc16
-    return b;                                               // 1490 bits
+    b += 16;                                                // the v8 rebalanced varint (worst case 2 bytes)
+    return b;                                               // 1506 bits
 }
 consteval std::size_t emk_v2_worst_bits() {
     std::size_t b = 8 + 5 + 24 * 7 + 8;                     // schema, name, flags
@@ -114,8 +116,8 @@ consteval std::size_t emk_v2_worst_bits() {
     b += emk_quirk::kMaxRows * (2 + 2 + 2 + 3 + 1 + 32 + 32 + 2 * 64 + 6 * 32);   // rows, full mask
     return b;                                               // 3665 bits
 }
-inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 187 B
+inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 189 B
 inline constexpr std::size_t kMaxEmkV2 = (emk_v2_worst_bits() + 7) / 8;     // 459 B
-static_assert(kMaxCardV2 == 187 && kMaxEmkV2 == 459);
+static_assert(kMaxCardV2 == 189 && kMaxEmkV2 == 459);
 
 }  // namespace k2::qrshare::records

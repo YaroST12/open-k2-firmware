@@ -10,10 +10,12 @@ The name tables mirror src/chargertest/charger_test.cpp; tests/test_report_card_
 import json
 import sys
 
-PAYLOAD = 196   # v7: 190 (v6: 178 (v5: 162 (v4: 144 + 18 for 3 EPR entries) + 16 for the cable block) + 12 for the UFCS modes) + 6 repeat block
+PAYLOAD = 198   # v8: 196 (v7: 190 (v6: 178 (v5: 162 (v4: 144 + 18 for 3 EPR entries) + 16 for the cable block) + 12 for the UFCS modes) + 6 repeat block) + 2 v8 bytes
+PAYLOAD_V7 = 196
 PAYLOAD_V6 = 190
 UFCS_AT = 178   # v6: 4 modes of u24 (lo_dv 8 bits, hi_dv 9 bits, current in 50 mA units 7 bits); hi_dv 0 = unused slot
 REPEAT_AT = 190   # v7: times u8, last_boots u16, last_uptime_s u24 (a v6 payload has its CRC here: read only when b[33] >= 7)
+V8_AT = 196     # v8: rebalanced u8 + spare (a v7 payload ends at 196: its CRC sits here and is not read)
 MAX_UFCS = 4
 ALGORITHMS = ["PD2.0 fixed", "PD3.x fixed", "PD3.1+ EPR", "PD3.2+ SPR AVS", "PPS (PD3.x)",
               "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC 5V handshake", "SVOOC 5V handshake",
@@ -50,7 +52,7 @@ EPR_DETAILS = {136: "EPR: entry refused", 137: "EPR: source rejects cable", 138:
                153: "EPR offered; entry: unable now", 154: "EPR offered; entry: 5V PDO lacks EPR bit",
                155: "not unlocked (no OEM chain)", 156: "not unlocked (chain unfinished)", 157: "not unlocked (3 A cable)",
                158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)"}
-FORMAT = 7   # payload byte 33: 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail,
+FORMAT = 8   # payload byte 33: 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT
              # 2 = byte 54 pdp_w and byte 55 flags (bit0 name_auto),
              # 3 = range lo bits 9..15 = APDO max current (50 mA), flags bits 1..7 = highest fixed PDO current (50 mA),
              # 4 = per-EPR-level verdicts (3 entries of 6 bytes: u16 dv + 4-byte group packing),
@@ -122,8 +124,8 @@ def qc_label(vid, pdp_w, ranges, cable_ma=0):
 def decode(b):
     """Payload bytes -> card dict (key order and omissions as in the C++ renderer)."""
     b = bytes(b)
-    if len(b) not in (144, 162, 178, PAYLOAD_V6, PAYLOAD):   # accept v3 (144), v4 (162), v5 (178), v6 (190) and v7 (196) payloads
-        raise BadCard(f"card payload is {len(b)} bytes, expected 144, 162, 178, {PAYLOAD_V6} or {PAYLOAD}")
+    if len(b) not in (144, 162, 178, PAYLOAD_V6, PAYLOAD_V7, PAYLOAD):   # accept v3 (144), v4 (162), v5 (178), v6 (190), v7 (196) and v8 (198) payloads
+        raise BadCard(f"card payload is {len(b)} bytes, expected 144, 162, 178, {PAYLOAD_V6}, {PAYLOAD_V7} or {PAYLOAD}")
     if b[33] > FORMAT:
         raise BadCard("card format is newer than this decoder")
     if b[28] >= len(HANDOVER) or b[29] >= len(STATES) or b[30] >= len(REASONS) or b[31] > MAX_RANGES:
@@ -204,8 +206,10 @@ def decode(b):
     if label:
         card["qc"] = label
     card.update({"runs": _u(b, 10, 2), "boots": _u(b, 12, 4), "uptime_s": _u(b, 16, 4)})
-    if b[33] >= 7 and len(b) >= PAYLOAD and b[REPEAT_AT] > 1:   # v7: identical repeats of the stored run (key only when there were any)
+    if b[33] >= 7 and len(b) >= PAYLOAD_V7 and b[REPEAT_AT] > 1:   # v7: identical repeats of the stored run (key only when there were any)
         card.update({"times": b[REPEAT_AT], "last_boots": _u(b, REPEAT_AT + 1, 2), "last_uptime_s": _u(b, REPEAT_AT + 3, 3)})
+    if b[33] >= 8 and len(b) >= PAYLOAD and b[V8_AT]:   # v8: the source re-balanced its budget mid-run this often
+        card["rebalanced"] = b[V8_AT]
     card.update({"fw": f"{_u(b, 20, 4):08X}",
             "state": STATES[b[29]], "reason": REASONS[b[30]], "pdos": b[27], "spec_rev": b[26],
             "handover": HANDOVER[b[28]], "handover_ms": _u(b, 24, 2) * 100, "groups": groups, "ranges": ranges})
