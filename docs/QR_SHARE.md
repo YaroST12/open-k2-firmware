@@ -53,17 +53,45 @@ record (`qrshare::pack()`), which is decided per record, so a small or dense rec
 
 ## Record schemas
 
-All schema numbers are 1. Builders: `include/k2/ui/qrshare_records.hpp` (pure code, `tests/test_qrshare_records.cpp`). The payloads
+Schema numbers: 1 for every type as laid out below; the card and the e-marker (cable) record are additionally sent as
+**schema 2**, the bit-packed form below, which is what their K2 data frames (`K2:CARD2:...`, `K2:EMK2:...`) and their version '2'
+links carry. A reader takes both: `tools/k2_qr.py` expands a schema 2 CARD/EMK frame back to the schema 1 record and decodes it
+as before. Builders: `include/k2/ui/qrshare_records.hpp` (pure code, `tests/test_qrshare_records.cpp`). The payloads
 reuse the serialisers the firmware already has, so an import on the K2 can call the parsers that exist.
 
 | Type | Layout (little endian) | Size |
 |---|---|---|
 | BI | the `K2B1` text of `k2/core/bootinfo.hpp`, ASCII: `K2B1 fw=1.0 g=<git[-dirty]> p=<proto> t=<uptime> ...` | about 170 B |
-| EMK | `flags` u8 (bit0: a quirk block follows), `name[24]` (the user's name, NUL padded), the 66-byte e-marker record (`k2/pd/emrec.hpp`), then the quirk block (`k2/pd/emk_quirk.hpp` `encode()`) when bit0 is set | 91 B plain, at most 510 B |
+| EMK | schema 1: `flags` u8 (bit0: a quirk block follows), `name[24]` (the user's name, NUL padded), the 66-byte e-marker record (`k2/pd/emrec.hpp`), then the quirk block (`k2/pd/emk_quirk.hpp` `encode()`) when bit0 is set. Schema 2: the bit-packed record below | 91 B plain, at most 510 B as schema 1; 44 B to 189 B as schema 2 |
 | PDC | `num_pdos` u8, `flags` u8 (bit0 EPR caps, bit1 EPR chunks incomplete), `spec_rev` u8 (1 PD 2.0, 2 PD 3.x), `active_cc` u8 (0 none, 1 CC1, 2 CC2), raw message header u16, then `num_pdos` raw PDO words u32 by position (an unused slot is 0) | 6 + 4 per PDO, at most 50 B |
-| CARD | the report card as the store keeps it (`k2/chargertest/report_card.hpp` `encode_card()`: 0xA6, type, payload length, 0, the payload, CRC-16; card format 7) | 202 B (formats 3 to 6: 150 to 196 B) |
+| CARD | schema 1: the report card as the store keeps it (`k2/chargertest/report_card.hpp` `encode_card()`: 0xA6, type, payload length, 0, the payload, CRC-16; card format 7). Schema 2: the bit-packed record below | 202 B as schema 1 (formats 3 to 6: 150 to 196 B); 68 to 187 B as schema 2 |
 | ID | ASCII `fw=<version> g=<git, -dirty when dirty> p=<remote proto>`, the strings PING answers | at most 64 B |
 | LOG | `git_len` u8, the git string, `flags` u8 (bit0: older entries were dropped), `base_ms` u32 (uptime of the entry before the first one), `now_ms` u32 (uptime when the record was made), then whole log entries to the end | 10 + git + entries, at most 510 B |
+
+### Schema 2: the bit-packed card and e-marker record
+
+The two big kinds have a second, bit-packed schema: an LSB-first bit stream, varint = 7 value bits + 1 continuation bit. It drops
+what the schema 1 layout repeats or reserves (the unused group and range slots, the e-marker record's 24 reserved zero bytes) and
+keeps the v1 card's CRC-16 at the end, so the integrity check is unchanged; every field is at most as wide as in schema 1, so
+packing in place never grows the record. The full layout is the comment at the top of `include/k2/ui/qrshare_records.hpp`
+(`pack_v2`), with host twins `expand_card_v2` / `expand_emk_v2` in `tools/k2_qr.py` and in `docs/site/r/card.js` (the results
+page). Summary:
+
+- **Card v2** (replaces the 202 B schema 1 record): schema u8 = 2; `fp` u32, `vid` u16, `pid` u16; varint `card_no`, `runs`,
+  `boots`, `uptime_s`; `fw` u32; varint `handover_ds`; `spec_rev` u2, `num_pdos` u4, `handover` u3, `state` u4, `reason` u6;
+  `n_ranges` u3, `ev_flags` u8; `name_len` u5 (at most 20) and the name as u7 chars; `pdp_w` u8, `name_auto` u1, `pd_ma50` u7;
+  12 group results (verdict u2, reason u6, detail u6, has_max u1 [+ max_dv u9], has_fail u1 [+ fail_dv u9]); `n_ranges` ranges
+  (alg u5, pos u8, lo_dv u9, hi_dv u9, max_dv u9, fail_dv u9, ma50 u7); 3 EPR slots (dv code u2: 0 none, 1 = 280, 2 = 360,
+  3 = 480, then a group result); `cable_present` u1 [+ varint seq, vid u16, pid u16, max_mv u16, max_ma u16, kind code u3
+  (0 = 0, 1 = 1, 2 = 2, 3 = 4, 4 = 0xFF), flags u8, resumed u8, src_flags u8]; `n_ufcs` u3 and its modes (lo_dv u8, hi_dv u9,
+  ma50 u7); varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; crc16 u16 of the v1 record.
+- **E-marker v2** (replaces 91 + 3 + 52 per quirk row B): schema u8 = 2; `name_len` u5 (at most 24) and the name as u7 chars;
+  flags u8; the e-marker record: `name_len` u5 (at most 20) and its name as u7 chars, `spec_rev` u2, five VDOs u32, checksum u8;
+  `has_quirks` u1 [+ flags u2, unmatched u2, count u4, then per row: sop u2, kind u2, nreq u2, nrep u3, mask_is_standard u1,
+  hdr_val u32, hdr_mask u32 when the mask is not the standard SVDM one, nreq x (req_val u32, req_mask u32), nrep x rep u32)].
+
+Measured on the golden vectors and the captured cards: a format-7 card is 68 to 109 B as schema 2 (the synthetic all-limits worst
+case 187 B) against 202 B as schema 1; the 8-row quirk cable is 189 B as schema 2 against 510 B raw and 239 B LZ4 as schema 1.
 
 ### Log record
 
@@ -157,10 +185,11 @@ landscape up to version 11; version 12 in landscape drops to 2 px (the camera-sa
 - Left out: built-in chips and the identity record have no opener (the LOG head carries the git string and uptime; no text
   headroom left for a second chooser; the identity and boot-info links and page views exist and are tested, so an opener is
   all that is missing); Black Box rings and captures are several KB, far over the 1320 B record limit (use `tools/pd_trace.py`).
-- **Multi-part links are deferred.** A record that needs more than one code (a cable whose quirk rows do not fit one link even packed, such as the 8-row record; the log) has no link form:
-  the page would have to gather the parts of one record (links with a part number, kept in the browser until the set is
-  complete). That waits for a better compression of these records (the 8-row cable is 239 B after LZ4, a 369 character link,
-  over one code). Until then they are the K2 data frames and `tools/k2_qr.py`.
+- **Multi-part links are deferred.** A record that needs more than one code (the log; a cable whose quirk rows grow past the
+  one-code cap) has no link form: the page would have to gather the parts of one record (links with a part number, kept in the
+  browser until the set is complete). The 8-row quirk cable now fits one code as a version '2' link (189 B schema 2 record,
+  302 characters, QR version 11), so every cable with up to 8 quirk rows has a link; until the rest fit, they are the K2 data
+  frames and `tools/k2_qr.py`.
 - **A record that fits one link opens as a link, not as the K2 data frame.** The kinds with a link form are the report card,
   a cable (e-marker record), the source's PDOs, the firmware identity and the boot info (table under "Link form"). Long OK on the
   charger test Results page, the Cards detail, a saved cable, a live e-marker read or the Connection Source tab opens the Share view
@@ -168,7 +197,8 @@ landscape up to version 11; version 12 in landscape drops to 2 px (the camera-sa
   record. OK in the Share view switches to the K2 data frame (what `tools/k2_qr.py` imports) and back; the strip names the code
   the press switches to (`Link` / `K2 data`). The caption under the link follows the kind: `Scan: full results` (card),
   `Scan: cable details`, `Scan: charger offers`, `Scan: firmware info` (identity and boot info). A record that does not fit
-  one link (a cable with many quirk rows, the log) has no link form and no toggle: it opens as the K2 data frames, as before.
+  one link (the log) has no link form and no toggle: it opens as the K2 data frames, as before. The card and the cable go out
+  as version '2' links (their schema 2 record, packed in place in the share record buffer); the other kinds stay version '1'.
 - **Boot info**: a key-mode boot shows the BI record as a QR code on the boot screen (`docs/ui_mockups/bootscreen.png`). It stays
   the K2 data frame: the boot info as a link is 290 characters, QR version 11, which is 61 modules, and at the screen's 3 px
   per module that is 207 px beside the 40 px text block, over the 240 px panel. The link form of the boot info is for the Share
@@ -194,50 +224,88 @@ the BI record.
 
 ## Link form (one code, one record)
 
-    https://yarost12.github.io/open-k2-firmware/r/#1<kind>.<base64url>
+    https://yarost12.github.io/open-k2-firmware/r/#<version><kind>.<base64url>
 
 - The base is one constant (`qrshare::link::kBase`, `include/k2/ui/qrshare_link.hpp`). Everything after `#` is the data: a
   browser never sends the fragment to the server, so the page decodes it on the phone and nothing is logged anywhere.
-- `1` is the link version, and means schema 1 of every record below. `<kind>` is one letter: lower case is the record as the K2
-  builds it for the K2 data frame (`include/k2/ui/qrshare_records.hpp`), upper case is its LZ4 block, used when LZ4 saves at
-  least 25 %, the same rule and the same block as the frame's packed flag. The card's packed letter is `z` (kept from the first
+- `<version>` is the link version digit. `1` means schema 1 of every record below. `2` means the bit-packed schema 2 record
+  (section "Schema 2" above) of the card and the cable, uncompressed, with the same kind letters as version '1'. Version '1'
+  links stay valid; a page that does not know a version digit, or a version '2' form of a kind that has none, says so instead
+  of guessing. `<kind>` is one letter: lower case is the record as the K2 builds it for the K2 data frame
+  (`include/k2/ui/qrshare_records.hpp`), upper case is its LZ4 block, used when LZ4 saves at
+  least 25 %, the same rule and the same block as the frame's packed flag (on a version '2' link the record is already the v2
+  form, never packed). The card's packed letter is `z` (kept from the first
   version of the link, so links already in circulation read the same). `<base64url>` is RFC 4648 section 5 without padding.
 
   | Letter (as built / packed) | Record | Frame type |
   |---|---|---|
-  | `c` / `z` | charger report card, as the store keeps it: `0xA6`, type, length, 0, payload (card format 3 to 7), CRC-16/CCITT-FALSE (little endian); the page checks the CRC and the length | CARD |
-  | `e` / `E` | cable: the EMK record (name, e-marker record, quirk block when present) | EMK |
+  | `c` / `z` | charger report card: as the store keeps it (`0xA6`, type, length, 0, payload (card format 3 to 7), CRC-16/CCITT-FALSE (little endian); the page checks the CRC and the length) on version '1'; its schema 2 record on version '2' | CARD |
+  | `e` / `E` | cable: the EMK record (name, e-marker record, quirk block when present) on version '1'; its schema 2 record on version '2' | EMK |
   | `p` / `P` | the source's PDOs | PDC |
   | `i` / `I` | firmware identity | ID |
   | `b` / `B` | boot info | BI |
+  | `t` | a plain ASCII text record, NUL padded, read up to the first NUL; version '1' only, never packed — the code of the QR scan test (below) | – |
 
-- Which records get a link form is one rule (`qrshare::link::fits()`): the record that goes into the link (packed or not) must
-  make a link of at most 321 characters, the byte-mode capacity of QR version 11 at level L (61 modules, 3 px each on the
-  panel). The base (with the `#`) is 47 characters and `1<kind>.` 3, which leaves 271 characters of base64url: at most 203 record bytes. That holds for the card (format 7, the
-  worst card is 202 B and makes a 320 character link: a QR version 11 code with one character to spare, so the next growth of the
-  card needs a second code; formats 3 to 6 were at most 196 B, 312 characters, and still decode; the UFCS mode block of format 6 is
-  the 12 bytes at payload offset 178, the repeat block of format 7 the 6 bytes at 190), the identity (at most 64 B), the PDOs (at most 50 B), the boot info (about 180 B, 290 characters) and a
-  cable with up to 4 quirk rows (261 characters packed; the 8-row record is 239 B packed, a 369 character link, so it has none).
-  The log has no link form. The text is built at paint time in the share view's scratch text buffer: no new resident buffer.
+- Which records get a link form is one rule (`qrshare::link::fits()`): the record that goes into the link (packed or not, or
+  already a v2 record) must make a link of at most 321 characters, the byte-mode capacity of QR version 11 at level L (61 modules, 3 px each on the
+  panel). The base (with the `#`) is 47 characters and `<version><kind>.` 3, which leaves 271 characters of base64url: at most 203 record bytes. That holds for the card (as a version '2' link: 68 to 109 B for the golden and captured cards,
+  141 to 196 characters, and 187 B, 300 characters, in the synthetic all-limits worst case, so the v2 card always fits with
+  room; as a version '1' link the format-7 card is 202 B and makes a 320 character link, one character to spare, and formats
+  3 to 6 were at most 196 B, 312 characters, and still decode), the identity (at most 64 B), the PDOs (at most 50 B), the boot info (about 180 B, 290 characters) and a
+  cable with up to 8 quirk rows (189 B as a version '2' record, a 302 character link; as a version '1' link a cable with up to
+  4 quirk rows is 261 characters packed). The log has no link form. The text is built at paint time in the share view's
+  scratch text buffer: no new resident buffer.
 - The page (`docs/site/r/`) reads the fragment and shows, for every kind, a header, a row of tiles and a full view in sections:
-  - card: one badge per capability (what the charger achieved, with a glyph and a word besides the colour) above the full results;
-  - cable: name, type, maker, current, voltage, USB speed, EPR, whether the record check value matches, the five identity words, and
+  - card (version '1' or '2' — both give the same view): one badge per capability (what the charger achieved, with a glyph and a word besides the colour) above the full results;
+  - cable (version '1' or '2'): name, type, maker, current, voltage, USB speed, EPR, whether the record check value matches, the five identity words, and
     the quirk policy and rows when the cable has them;
   - source: one tile per PDO (voltage, current, power), the full PDO table, EPR, the PD revision;
   - identity and boot info: firmware version, build (a `-dirty` build is amber), remote protocol; boot mode, keys held, reset
-    cause, VBUS and CC voltages, the Rd move, the first seconds' writes.
+    cause, VBUS and CC voltages, the Rd move, the first seconds' writes;
+  - text (`t`): one tile, "QR scan test" with the text the code carried.
 
   A missing or damaged fragment gives a plain message and a paste box; pasting the K2 data frame (`K2:CARD1:...`) says it is the
-  data code and asks for the link. A link of a letter the page does not know says so. It makes no network request.
+  data code and asks for the link. A link of a letter the page does not know, or of a version it does not read, says so. It
+  makes no network request.
 - A card holds no date. The page shows the card number, run number, boot count and K2 uptime instead. A charger tested again with
   the same result (`docs/CHARGER_TEST_FLOW.md`, "Repeated runs") keeps one card; the Run section then adds a "Same result" row
   (`N runs, last at boot B, up <time>`) and the header says `same result xN`. The repeat count is the most the format keeps (255).
-- Decoders: `docs/site/r/card.js` (the link, LZ4, the card) and `docs/site/r/records.js` (the other kinds) are the JavaScript
+- **QR scan test.** The `qrtest` remote command (`tools/k2_remote.py qrtest list` prints the fit table — version, px, quiet
+  zone, box size, byte-mode characters, record bytes; `qrtest <version> <px> [quiet]` shows a full-screen code of that
+  geometry, `qrtest stop` ends it) fills the panel with a valid max-length kind-'t' link: the record is the ASCII text
+  `QR scan test v<NN> <N>px` NUL-padded to the version's record cap, so the link is exactly the longest one that version
+  holds and the page (which reads the text up to the first NUL) labels it. Scan each row of the table with a phone and note
+  which read and from how far; the owner's scan matrix is in `docs/HW_TEST_PROCEDURES.md`.
+- Decoders: `docs/site/r/card.js` (the link, LZ4, the version '2' expansion, the card) and `docs/site/r/records.js` (the other
+  kinds, the 't' text) are the JavaScript
   twins of `tools/k2_qr.py`, key for key. Golden vectors: `tests/fixtures/qrlink.tsv` (written by `tests/test_qrshare_link.cpp`
   from the firmware's own encoder; a card row also holds the card as the firmware's JSON renderer writes it), read by
   `tests/test_qrlink.py` (Python, via `tools/k2_qr.py`) and `tests/test_cardpage.mjs` (the card), and
   `tests/fixtures/qrlink_decoded.json`, what the Python decoders give for every other kind (`K2_QRLINK_WRITE=1` rewrites it),
   which `tests/test_recordspage.mjs` requires the page's decoders to give too.
+
+### Link code geometry
+
+One link code is byte mode at level L, drawn with one text line under the box in the content area beside the key labels (224 by
+240 px portrait, 240 by 224 landscape). The box is `(modules + 2 * quiet) * px` and must fit the area, or the area minus the
+14 px text line when the caption is shown. Byte-mode capacity at level L and the largest record whose link fits it, measured on
+the vendored generator:
+
+| QR version | modules | byte-L chars | max record B |
+|---|---|---|---|
+| 11 | 61 | 321 | 203 |
+| 12 | 65 | 367 | 237 |
+| 13 | 69 | 425 | 281 |
+| 14 | 73 | 458 | 306 |
+| 15 | 77 | 520 | 352 |
+| 20 | 97 | 858 | 606 |
+| 25 | 117 | 1273 | 917 |
+
+Geometry on the 240 px panel, corrected: **v25 at 2 px needs a quiet zone of at most 1 module** ((117 + 2) * 2 = 238 px; a
+2-module quiet zone needs 242 px and does not fit) — the true 2 px maximum at quiet 2 is **v24** ((113 + 4) * 2 = 234 px).
+Full-screen **v13 at 3 px with the 4-module quiet zone** (425 characters, a 281 B record) needs a 231 px box, so the
+caption/chrome must be hidden; with the 14 px caption line it is v12 (219 px). In the 224 px share area at 3 px the share
+code stays at version 11 with the caption (207 px box).
 
 ## Capacity
 
