@@ -3071,6 +3071,47 @@ void test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink() {
     self_hold_end();
 }
 
+// ---- No SW_RES on a pinned or comeback boot: both Rd for 0.13 ms (roadmap 2026-11-09) ----
+// init() wrote SW_RES unconditionally: on a pinned boot the CC switches are already closed and SWITCHES0 holds the
+// pin (self_power_early wrote it before routing), so the soft reset restored the chip's power-on 0x03 - Rd on BOTH
+// lines, the Debug Accessory signature - for the ~0.13 ms until the next SWITCHES0 write; a detach on a pinned boot
+// did the same (RESET = SW_RES|PD_RESET). Walk the wire log as the chip holds it: every "W 02=" write sets SWITCHES0,
+// every RESET write with SW_RES (bit 0) restores the power-on 0x03. After the first SWITCHES0 write (the power-on
+// 0x03 before it is the unavoidable boot default, the CC switches still open) no value with both PDWN bits may be
+// held - on the boot path, the attach and the detach alike.
+bool sw0_held_rd_pair_after_first_write() {
+    bool seen_write = false;
+    unsigned sw0 = 0x03;                       // the chip's power-on default until the first SWITCHES0 write
+    for (const std::string& s : g_log) {
+        if (s.rfind("W 02=", 0) == 0) { sw0 = std::stoul(s.substr(5), nullptr, 16); seen_write = true; }
+        else if (s.rfind("W 0C=", 0) == 0 && (std::stoul(s.substr(5), nullptr, 16) & 1u) != 0) sw0 = 0x03;
+        if (seen_write && (sw0 & 3u) == 3u) return true;
+    }
+    return false;
+}
+
+void test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res() {
+    for (int how : {0, 1, 2}) {   // 0 PLUS key mode, 1 OK key mode, 2 the pin inherited across a warm reset (a comeback)
+        const unsigned pin = self_hold_boot(how);   // reset_world + self_power_early + init + an attach, log kept
+        CHECK_EQ(pin == 1u || pin == 2u, true);
+        // (a) boot path and attach: no SW_RES anywhere on a pinned boot, SWITCHES0 never holds both PDWN bits
+        CHECK_EQ(find_from("W 0C=01"), -1);         // no SW_RES write ...
+        CHECK_EQ(find_from("W 0C=03"), -1);         // ... and no SW_RES|PD_RESET either
+        CHECK_EQ(sw0_held_rd_pair_after_first_write(), false);
+        CHECK_EQ(int(g_reg[0x02] & 3), int(pin));
+        // (b) a detach on the pinned boot: the detach's chip reset is PD_RESET only, the pin never leaves
+        const std::size_t from = g_log.size();
+        g_reg[0x40] = 0x00;                         // the charger goes quiet: no Rp on the active line
+        for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::sink_vbus(5000); fusb302::poll(); fusb302::service(); }
+        CHECK_EQ(usb_has("[FUSB302] Detach:"), true);
+        CHECK_EQ(find_from("W 0C=01", from), -1);
+        CHECK_EQ(find_from("W 0C=03", from), -1);
+        CHECK_EQ(sw0_held_rd_pair_after_first_write(), false);   // the whole log: boot, attach and detach
+        CHECK_EQ(int(g_reg[0x02] & 3), int(pin));   // the pinned Rd is what the chip holds after the detach
+        self_hold_end();                            // ends with a detach and no pin (the statics leak between cases)
+    }
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3182,5 +3223,6 @@ int main() {
     test_rescan_and_cc_open_are_passive_with_a_far_sink();
     test_the_far_sink_belongs_to_one_attach_for_the_rd_policy();
     test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink();
+    test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res();   // last: ends with a detach / Rd off
     return test_report("test_fusb302_scan");
 }
