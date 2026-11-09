@@ -114,6 +114,27 @@ k2::bootmode::Mode sample_boot_mode() {
     return mode;
 }
 
+// A self-powered boot (a pinned Rd, k2/pd/pd_ccmode.hpp self_hold_wanted) runs on the charger's VBUS, and the charger wants a
+// Request within tSenderResponse (24-30 ms) of every capabilities message the chip acknowledges. The init after
+// fusb302::init() (black box reload, report cards, the first UI build) keeps the main loop away for about a second with a full
+// store: Auto-CRC came on late, an acknowledged capabilities message went unanswered, the source sent a Hard Reset and cut
+// VBUS, and a K2 without another supply died (CUKTECH 120 W, 2026-11-09, runs/selfpwr-drop/cap1). So the PD link is served
+// here, before that init, until the self-hold contract is Ready or kBringupMs pass.
+[[gnu::noinline]] void self_power_bringup() {
+    constexpr uint32_t kBringupMs = 3000;
+    const uint32_t t0 = k2::systick::millis();
+    uint32_t last = t0, last_poll = t0;
+    while (k2::systick::millis() - t0 < kBringupMs) {
+        const uint32_t t = k2::systick::millis();
+        if (t != last) { last = t; k2::fusb302::service(); }
+        if (t - last_poll >= 10) { last_poll = t; k2::fusb302::poll(); }
+        if (k2::fusb302::sink_status().state == k2::pd::SinkState::Ready) break;
+    }
+    K2LOG("[PD] self-power bring-up: %s after %u ms\n",
+          k2::fusb302::sink_status().state == k2::pd::SinkState::Ready ? "contract ready" : "no contract",
+          static_cast<unsigned>(k2::systick::millis() - t0));
+}
+
 [[noreturn]] void system_reset() {
     *reinterpret_cast<volatile uint32_t *>(0xE000ED0C) = 0x05FA0004u;
     for (;;) {}
@@ -177,6 +198,7 @@ void dfu_now() {
     K2LOG("[I2C] Dual I2C busses initialized\n");
 
     k2::fusb302::init();
+    if (k2::fusb302::self_powered()) self_power_bringup();   // before the slow init below: the charger feeds this boot
     k2::boottrace::report_previous();       // what the previous boot's supply / CC / PLUS trace ended with
     k2::session::init();                    // backup registers: what the previous boot was doing (PD session record)
     k2::bbpersist::init();                  // black box: remount the flash ring, reload the newest captures
