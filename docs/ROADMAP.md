@@ -31,6 +31,29 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 - E-marker read and save (library, `CABLES/*.JSN`).
 - Black Box capture and persistence across power-off.
 - Inline-load loop fix (PD detect while a load is inline).
+- Self-powered 6 A by a planned re-attach (2026-11-09, 1e3b67b): PLUS boot on a CUKTECH 120 W C1, the built-in
+  CUKTECH 6A identity, START blinks the K2 off once and the run restarts by itself; card "PPS 5-11V 6A: whole range,
+  PPS 5-20V 6A: reached 19.9 V". The same build ran a self-powered Apple PD 2.0 charger to the end.
+
+## Current bugs
+
+Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
+
+- **Charger test progress order** (2026-11-09, user report): the order the run tests the algorithms in does not match
+  the order the progress section lists them in (where the algorithm under test is shown). Not investigated yet.
+- **Planned re-attach counts as a resume** (2026-11-09): the card's "resumed" counter is not masked after the planned
+  reboot, so a clean 6 A run reads as resumed once.
+- **Stale Rd marker** (2026-11-09, accepted for now): a bare unplug after a self-powered run leaves `/rd.rec`; the next
+  plain boot shows Rd for 0.5-1.5 s before it releases the marker. A `.noinit` SRAM canary would close it.
+- **Both Rd for 0.13 ms at SW_RES** (2026-11-09): the FUSB302 soft reset on a pinned boot has a 0.13 ms window with
+  both pull-downs on. Below every debounce; not seen to matter.
+- **Self-powered source loss at the legacy -> PD boundary** (2026-11-09, Apple PD 2.0, step 16/49 on 091e80e): VBUS
+  went away and the run stopped until a replug. The K2 takes no VBUS action there, so the cause is the source's
+  reaction (unproven). Since 1e3b67b a self-powered run comes back by itself; a trigger-frozen Black Box capture
+  (`pd_trace.py captures`) would show the cause.
+- **Flaky host test** (2026-11-09): `tests/test_k2proto.mjs` "screenshot: chunked strips with log noise" failed once
+  in `make gate` and passed on the re-run; timing-sensitive.
+- **Wrong comment** in `tools/k2_qr.py`: "a space can end a part" is false (a base45 part never ends in a space).
 
 ## Not verified on hardware
 
@@ -45,8 +68,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
   a sense fixture on CC1, CC2 and D-.
 - WebHID dashboard in Chrome (Linux hidraw path tested with the Python tools only).
 - OPPO VOOC / SVOOC: no handshake seen yet (CHARGER_QUIRKS).
-- The reboot-resume of a charger run: the self-powered case is unverified; a host-powered K2 waited forever for
-  stable 5 V on 2026-11-07.
+- The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
+  1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 
 ## Core platform
 
