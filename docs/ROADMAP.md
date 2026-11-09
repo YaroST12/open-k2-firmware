@@ -185,6 +185,26 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests in `tests/test_pd_sink*.cpp` (red first): 15 V held at PDO 3, re-announce 5/9/20 V -> Request
     PDO 1, never 20 V; re-announce 5/15/20 V -> Request 15 V at slot 2; re-announce in Transition -> a Request within
     tSenderResponse; `make gate`. Hardware: the splitter re-plan run above shows no unrequested level in the black box.
+- **Rd seek leaves before a slow source wakes (`slow-rp-wake`)** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W,
+  dock on its other output, HID-powered K2 on 85b9ff0; `runs/2026-11-09-splitter/`). A re-read on a plain boot got
+  nothing: the Rd seek put Rd on CC1, CC2, CC1 for ~200 ms each (`kRdSeekDwellMs`, `include/k2/pd/pd_rdseek.hpp`),
+  every attach read BC_LVL=0, "no Source_Capabilities came back". With the Rd pinned on CC2 (`pd-reread --pin 2
+  --no-run`) the splitter's 3 A Rp appeared **1072 ms** after the Rd, VBUS 5.1 V 28 ms later, Source_Capabilities at
+  +1243 ms (5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A; `bb-pin2b.txt`). A phone on the same port also wakes it late.
+  - Signature (behaviour, no VID:PID): with no Rd of ours a CC line reads ~3.0-3.3 V (the source's standby sink-detect
+    pull-up, high impedance), and under our Rd it falls below 200 mV (BC_LVL=0). A real Rp never does that: even the
+    default-USB Rp holds ~0.4 V against 5.1 kOhm. So "high open, collapses under Rd" = a source that is there but asleep.
+  - Fix: the scan keeps the open-level reading per line from before our Rd went on. When the Rd seek's line read the
+    standby signature, stay on that line for `kSlowWakeDwellMs` (~2000 ms; measured 1072 ms) before moving, and if the
+    other line had it, go there first. Lines without the signature keep the 200 ms dwell (the wrong-line case of
+    d615f3e). The 500 ms no-Rp detach on the active line must not fire inside that window. Name the pattern
+    `slow-rp-wake` in `docs/CHARGER_QUIRKS.md` (signature, the 1072 ms figure, handling). Apply the same dwell to the
+    charger-test START attach and the rescan bridge, which use the same seek. Never Rd on both lines (Debug Accessory).
+  - Tests (red first): `tests/test_rdseek.cpp`: standby signature on CC2, Rp after 1100 ms -> no move, attach on CC2;
+    no signature -> unchanged 200 ms moves; standby on CC1 while the pick was CC2 -> CC1 first. `make gate`.
+  - Validate: same setup (splitter port idle, dock on the other output), plain boot, `k2_remote pd-reread` with no pin:
+    Source_Capabilities within ~1.5 s, no line move after the Rd lands on the standby line; then `ct_start.py --units pd`
+    attaches without `--pin`.
 - **Passive pick on the wrong CC line** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W). Fixed in d615f3e,
   partly verified: on hardware the Rd seek moved CC2 -> CC1 -> CC2 -> CC1 and ended cleanly with no source attached,
   and the re-read on the splitter got its 4 PDOs; the exact case (passive CC2 pick, Rp only on CC1) has not been caught
