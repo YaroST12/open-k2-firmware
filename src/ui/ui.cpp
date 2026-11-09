@@ -59,6 +59,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Share: return pages_.push<SharePage>(ctx_, share_rec_);
     case Menu::UsbLink: return pages_.push<UsbLinkPage>(ctx_);
     case Menu::Autorotate: return pages_.push<AutorotatePage>(ctx_);
+    case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -724,7 +725,7 @@ bool Ui::goto_page(uint8_t page, uint32_t now_ms) {
         return open_connection(static_cast<conn::Tab>(page - kConnTabAlias), false, now_ms);
     if (page < kMenuPageBase + static_cast<uint8_t>(Menu::Count)) {
         const Menu m = static_cast<Menu>(page - kMenuPageBase);
-        if (m == Menu::Share) return false;   // needs a record; only open_share makes one
+        if (m == Menu::Share || m == Menu::QrTest) return false;   // Share needs a record, QrTest its params: only their openers make them
         if (m == Menu::Connection && menu() == Menu::Connection) return true;   // already there
         if (depth_ > 0) set_page(page_, now_ms);
         return push_menu(m, now_ms);

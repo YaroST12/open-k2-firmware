@@ -22,6 +22,7 @@
 #include "k2/ui/ui_match.hpp"
 #include "k2/ui/ui_tools.hpp"
 #include "k2/ui/ui_emmenu.hpp"
+#include "k2/ui/ui_qrtest.hpp"
 #include "k2/ui/ui_events.hpp"
 #include "k2/ui/ui_labels.hpp"
 #include "k2/ui/ui_types.hpp"
@@ -84,6 +85,9 @@ struct UiContext {
     uint32_t cap_mv = 5000;      // highest voltage a request may ask for (power monitor limits)
     cable_r::Meter cable;                                        // passive two-point cable resistance
     cable_r::Mode cable_mode = cable_r::Mode::Passive;           // Cable R submenu: passive meter or Kelvin 8-wire
+    // The pending QR scan-test request (remote Cmd::QrTest op 1, k2/ui/ui_qrtest.hpp): the (version, px, quiet) of
+    // the next show, consumed by QrTestPage::enter(). The page itself lives in the page arena.
+    struct QrTestReq { std::uint8_t version = 0, px = 0, quiet = 0; } qrtest;
     std::optional<cable_r::Kelvin> kelvin;                       // Kelvin mode: latest valid sense reading
     // Stale lifecycle (design 6.6): when VBUS goes away the screens keep the last live reading.
     LiveTracker live;                                            // when VBUS was last present
@@ -948,6 +952,38 @@ private:
     usbcfg::Setting pending_{};
     int sel_ = 0;
     Elem foot_;                  // footer element cache (draw_footer_cached)
+};
+
+// The QR scan-test screen (remote Cmd::QrTest op 1; the model is k2/ui/ui_qrtest.hpp): ONE full-screen QR over the
+// whole 240x240 panel (the button strip included: chrome and caption hidden while it is shown) at the requested
+// (version, px, quiet), filled with the max-length kind-'t' link of that version, so a phone scan reads
+// "QR scan test v<NN> <N>px". The code is drawn in update(), after the panel, so it covers the strip. BACK pops the
+// page (the Ui does it). The encode workspace is a member, so it lives in the page arena, not in .bss.
+class QrTestPage final : public PageBase {
+public:
+    explicit QrTestPage(UiContext &c) : PageBase(c, Page::Count, "QrTest") {}
+    void draw_static() override;
+    void update(uint32_t now_ms) override;
+    bool on_event(Event e) override;
+    PanelLabels labels() const override;
+    void invalidate() override { painted_ = false; }
+    void enter() override;
+
+    int version() const { return version_; }
+    int px() const { return px_; }
+    int quiet() const { return quiet_; }
+    int modules() const { return n_; }                    // modules per side of the code drawn, 0 = none
+    std::size_t link_len() const { return link_len_; }    // the link length the code carries
+    // Rebuilds the link text (the generator uses ws_.temp as working storage, so the text is not kept there).
+    std::size_t link_text(std::span<char> out) const { return qrtest::build_link(version_, px_, out); }
+    const std::uint8_t* code() const { return ws_.code; } // the packed symbol (for host tests)
+
+private:
+    void paint();
+    qrtest::Workspace ws_;        // the v25-sized encode workspace (member: page arena)
+    int version_ = 0, px_ = 0, quiet_ = 0, n_ = 0;
+    std::size_t link_len_ = 0;
+    bool painted_ = false;
 };
 
 }  // namespace k2

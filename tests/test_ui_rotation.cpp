@@ -130,6 +130,9 @@ static void test_captures_and_keys() {
         for (uint8_t p = 0; p < pages + static_cast<uint8_t>(Menu::Count); ++p) {
             CHECK_EQ(ui.goto_page(p < pages ? p : static_cast<uint8_t>(Page::Tools), 6000), true);
             if (p >= pages) CHECK_EQ(ui.push_menu(static_cast<Menu>(p - pages), 6000), true);
+            // The QR scan-test screen covers the whole panel, button strip included (chrome hidden while shown),
+            // so the slot pixels are the code's there, not the panel's: skip only that check for it.
+            const bool qrtest = p >= pages && static_cast<Menu>(p - pages) == Menu::QrTest;
             std::copy(std::begin(g_panel), std::end(g_panel), expected.begin());
             CHECK_EQ(capture_begin(ui), true);
             for (int strip = 0; strip < kCaptureStrips; ++strip) {
@@ -153,7 +156,8 @@ static void test_captures_and_keys() {
                     const auto& box = layout.slot[slot];
                     const int px = box.x + (panel_is_column(orient.edge) ? 1 : 10);
                     const int py = box.y + (panel_is_column(orient.edge) ? 10 : 1);
-                    CHECK_EQ(g_panel[py * 240 + px], slot_button(orient, slot) == static_cast<Button>(key) ? kPanelHi : kPanelBg);
+                    if (!qrtest)
+                        CHECK_EQ(g_panel[py * 240 + px], slot_button(orient, slot) == static_cast<Button>(key) ? kPanelHi : kPanelBg);
                     // Independently apply the MADCTL coordinate permutation back to physical glass.
                     const int lx = box.x + box.w / 2, ly = box.y + box.h / 2;
                     const int physical_y = r == 0 ? ly : r == 1 ? lx : r == 2 ? 239 - ly : 239 - lx;

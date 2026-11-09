@@ -25,6 +25,10 @@
 #include "k2/drivers/usb.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/ui/qrshare_records.hpp"
+#include "k2/ui/qrview.hpp"
+#include "k2/ui/ui_viewport.hpp"
+#include "k2/core/scratch.hpp"
+#include "k2/drivers/lcd.hpp"
 #include "k2/core/version.hpp"
 #include "k2/pd/link.hpp"
 #include "k2/ui/ui.hpp"
@@ -2167,6 +2171,54 @@ PanelLabels UsbLinkPage::labels() const {
 void UsbLinkPage::invalidate() {
     ctx_.rows.invalidate();
     foot_.invalidate();
+}
+
+// ---------------------------------------------------------------------------------------
+// QR scan-test screen (see k2/ui/ui_qrtest.hpp)
+// ---------------------------------------------------------------------------------------
+
+void QrTestPage::enter() {
+    const UiContext::QrTestReq r = ctx_.qrtest;   // set by the remote before the page is pushed
+    version_ = r.version;
+    px_ = r.px;
+    quiet_ = r.quiet;
+    n_ = 0;
+    link_len_ = 0;
+    painted_ = false;
+}
+
+void QrTestPage::draw_static() {
+    // Nothing here: the code is drawn in update(), which runs after draw_panel(), so it covers the button strip
+    // (chrome hidden while the test screen is shown). The erase pass replays update() the same way.
+}
+
+void QrTestPage::update(uint32_t) {
+    if (!painted_) paint();
+}
+
+void QrTestPage::paint() {
+    ContentViewport::Pause unscaled;   // the code is drawn in panel pixels over the whole 240x240
+    struct LineWork { std::uint16_t line[qrview::kPanelPx]; };
+    scratch::Lease lease("qrtest");   // only the pixel line is leased; the workspace is the page's own member
+    auto &lw = scratch::as<LineWork>();
+    link_len_ = qrtest::build_link(version_, px_, std::span<char>(reinterpret_cast<char*>(ws_.temp), qrtest::kWsBufLen));
+    n_ = link_len_ != 0 && version_ >= qrtest::kVersionMin && version_ <= qrtest::kMaxShownVersion
+             ? qr::encode_placed(ws_.code, ws_.temp, link_len_, version_)
+             : 0;
+    lcd::fill(qrview::kWhite);   // the whole panel, button strip included (erase pass: to the background)
+    if (n_ != 0)
+        qrview::draw_code_raw_in(qrview::Area{}, ws_.code, n_, 0, px_, lw.line, quiet_, px_);
+    painted_ = true;
+}
+
+bool QrTestPage::on_event(Event) {
+    return false;   // every button is declined: a short BACK pops the page (the Ui does it)
+}
+
+PanelLabels QrTestPage::labels() const {
+    PanelLabels l = base_labels();
+    for (Button b : {Button::Ok, Button::Minus, Button::Plus}) l.b[static_cast<int>(b)] = {};
+    return l;
 }
 
 }  // namespace k2

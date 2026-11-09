@@ -53,6 +53,9 @@ inline constexpr std::size_t kPageArenaBytes = std::max(kLargestBase + kLargestM
 static_assert(kPageArenaBytes >= kLargestBase + kLargestMenu, "any rotation page takes any one menu");
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest menu chain fits");
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, SharePage>(), "the charger test shares its card");
+// The QR scan-test page carries its encode workspace as a member, so it is opened only over a base page small
+// enough for both (qrtest::show lands on Tools first when the current base is too big); it never takes a menu on top.
+static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page with its workspace fits over the Tools base");
 
 class Ui {
 public:
@@ -115,6 +118,8 @@ public:
     bool open_share(qrshare::Type type, std::uint8_t schema, std::string_view title, std::size_t len, uint32_t now_ms);
     // The open Share view (host tests); it exists only while Menu::Share is on the stack.
     const SharePage &share() const { return *find<SharePage>(Menu::Share); }
+    // The open QR scan-test page (host tests); it exists only while Menu::QrTest is on the stack.
+    const QrTestPage &qrtest_page() const { return *find<QrTestPage>(Menu::QrTest); }
     // Top submenu; Menu::Count when none is open.
     Menu menu() const { return depth_ ? stack_[depth_ - 1] : Menu::Count; }
     // Page index for the remote: the rotation page, or kMenuPageBase + menu while one is open.
@@ -144,6 +149,7 @@ public:
     Page page() const { return page_; }
     int32_t energy_mwh() const { return ctx_.meter.mwh(); }
     const UiContext &context() const { return ctx_; }   // read-only view for tests and diagnostics
+    UiContext &context() { return ctx_; }               // the remote sets the pending qrtest request through this one
     // Passive cable-resistance meter (fed by tick); the remote reads and clears it.
     const cable_r::Meter &cable() const { return ctx_.cable; }
     void cable_reset() { ctx_.cable.reset(); ctx_.kelvin.reset(); }
