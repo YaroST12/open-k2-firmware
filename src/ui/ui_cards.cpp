@@ -172,10 +172,41 @@ void cards_title_text(const rc::Card &c, StrBuf<24> &out) {
     put_fp(out, c.id.fp);
 }
 
+namespace {
+
+// A card the charger was tested on again with the same result (rc::same_results) says how often and when it last was: the
+// fullest of "x3 last boot 9", "x3 b9", "x3" that fits `room` cells. Nothing for a card seen once; nothing is ever cut.
+void put_repeat(StrBuf<32> &out, const rc::Card &c, size_t room) {
+    if (c.times <= 1) return;
+    for (int form = 0; form < 3; ++form) {
+        StrBuf<32> t;
+        t.put(" x").put_u32(c.times);
+        if (form == 0) t.put(" last boot ").put_u32(c.last_boots);
+        else if (form == 1) t.put(" b").put_u32(c.last_boots);
+        if (t.view().size() <= room) { out.put(t.view()); return; }
+    }
+}
+
+}  // namespace
+
+// The open list row's note: the name and the boot counter, 30 cells at most. A repeated card shows the boot of its latest repeat
+// instead ("x3 boot 9"): that is when it was last seen, and the first boot is in the card's detail footer.
 void cards_note_text(const rc::Card &c, StrBuf<32> &out) {
+    constexpr size_t kNoteCells = 30;
     StrBuf<24> t;
     cards_title_text(c, t);
-    out.put(t.view()).put("  boot ").put_u32(std::min<uint32_t>(c.boots, 999));
+    out.put(t.view());
+    if (c.times <= 1) { out.put("  boot ").put_u32(std::min<uint32_t>(c.boots, 999)); return; }
+    const size_t room = kNoteCells - t.view().size();
+    StrBuf<32> tail;
+    for (int form = 0; form < 3; ++form) {   // "  x3 boot 9", "  x3 b9", "  x3"
+        tail.clear();
+        tail.put("  x").put_u32(c.times);
+        if (form == 0) tail.put(" boot ").put_u32(std::min<uint32_t>(c.last_boots, 999));
+        else if (form == 1) tail.put(" b").put_u32(std::min<uint32_t>(c.last_boots, 999));
+        if (tail.view().size() <= room) break;
+    }
+    out.put(tail.view());
 }
 
 void cards_range_text(const rc::Range &r, StrBuf<32> &out) {
@@ -269,6 +300,8 @@ void cards_handover_text(const rc::Card &c, StrBuf<32> &out) {
 
 void cards_stats_text(const rc::Card &c, StrBuf<32> &out) {
     out.put("run ").put_u32(c.runs).put(" boot ").put_u32(std::min<uint32_t>(c.boots, 99999));
+    // A repeated card ("x3 last boot 9") comes first: it is the newer fact, and it takes the room before the optional tail.
+    put_repeat(out, c, static_cast<size_t>(kFooterCells) - out.view().size());
     // One optional tail, the fullest form that still fits the 27-cell footer: a run that went through power losses says so (in
     // place of the firmware), and a run the charger itself powered says so too; the words shorten before anything is cut.
     const bool self = (c.cable.flags & rc::kCableSelfPowered) != 0;

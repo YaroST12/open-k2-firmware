@@ -24,7 +24,7 @@ bool find(std::uint32_t fp, Card& c) { return g_store.find(fp, c); }
 bool get(std::uint16_t card_no, Card& c) { return g_store.get(card_no, c); }
 Err put(Card& c) {
     const Err e = g_store.put(c);
-    K2LOG("[CARD] save #%u fp=%08x runs=%u -> %d\n", unsigned(c.card_no), unsigned(c.id.fp), unsigned(c.runs), int(e));
+    K2LOG("[CARD] save #%u fp=%08x runs=%u times=%u -> %d\n", unsigned(c.card_no), unsigned(c.id.fp), unsigned(c.runs), unsigned(c.times), int(e));
     return written(e);
 }
 Err rename(std::uint16_t card_no, std::string_view name) { return written(g_store.rename(card_no, name)); }

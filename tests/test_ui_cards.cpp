@@ -150,6 +150,38 @@ static void test_text() {
     CHECK_STR(t.view().data(), "run 99 boot 99999 self r16");
     CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
     c.runs = 3; c.boots = 4; c.resumed = 0; c.cable.flags = 0;
+
+    // A card the charger was tested on again with the same result: how often and when it last was, the fullest form that fits.
+    c.times = 3; c.last_boots = 9;
+    t.clear(); cards_stats_text(c, t);
+    CHECK_STR(t.view().data(), "run 3 boot 4 x3 last boot 9");
+    CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
+    c.runs = 99; c.boots = 99999; c.times = 99; c.last_boots = 9999; c.resumed = 16;
+    t.clear(); cards_stats_text(c, t);
+    CHECK_STR(t.view().data(), "run 99 boot 99999 x99 b9999");
+    CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
+    c.runs = 255; c.times = 255; c.last_boots = 65535;
+    t.clear(); cards_stats_text(c, t);
+    CHECK_STR(t.view().data(), "run 255 boot 99999 x255 r16");   // the shortest form leaves room for the resume count
+    CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
+    // The open list row's note: the boot of the latest repeat, inside 30 cells even with the longest name.
+    rc::Card d = make_card(0x1A2B3C4D, "Anker 735");
+    d.times = 3; d.last_boots = 9;
+    n.clear(); cards_note_text(d, n);
+    CHECK_STR(n.view().data(), "Anker 735  x3 boot 9");
+    d = make_card(0x1A2B3C4D, "A very long name 20ch");   // stored 20 characters long
+    d.times = 2; d.last_boots = 5;
+    n.clear(); cards_note_text(d, n);
+    CHECK_STR(n.view().data(), "A very long name 20c  x2 b5");
+    d.times = 255; d.last_boots = 12345;
+    n.clear(); cards_note_text(d, n);
+    CHECK_EQ(n.view().size() <= 30, 1);
+    CHECK_STR(n.view().data(), "A very long name 20c  x255");
+    d.times = 1;   // seen once: the note is the old one
+    n.clear(); cards_note_text(d, n);
+    CHECK_STR(n.view().data(), "A very long name 20c  boot 4");
+    c.times = 1; c.last_boots = 0;
+    c.runs = 3; c.boots = 4; c.resumed = 0; c.cable.flags = 0;
     t.clear(); cards_id_text(c, t);
     CHECK_STR(t.view().data(), "0B05:1234  fp 1A2B3C4D");
     c.id.pdp_w = 65;   // the charger's rated power follows the VID:PID, and the line still fits
