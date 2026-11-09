@@ -333,8 +333,10 @@ reads `unknown` or `-`.
 | Cable | `ID` (e-marker VID:PID and vendor), `Speed`, `Current`, `Voltage`, `EPR`, `Type`, `Length` |
 | Sink | `ID` (`unknown` until Identify answers), `Request` (PDO, volts, amps, `PPS`) with `State`, `Pwr` and `Data` (the match rows below), `USB`, `Alt`, `Proto`, `Caps` (the sink's own capabilities, whole entries, ` +` when more follow); when the K2 draws the power itself the tab reads `K2 (sink mode PLUS)` or `K2 (sink mode OK)` |
 
-Match rows (Sink tab): `Pwr` reads `18W of 100W` (requested of offered) or `60W by cable` when the cable is the limit,
-`Data` reads `5G of 10G` or `5G by cable`; amber only when the cable limits the link, `?` when the cable is assumed
+Match rows (Sink tab): `Pwr` reads `18W of 100W` (requested of offered) or `60W by cable` when the cable is the limit;
+without a decoded PD contract it reads the Type-C default budget instead, `up to 2.5W` / `up to 15W` (5 V x the advertised
+current, exact, `pdtabs::budget_line`), never a bare wattage that reads as a measurement. `Data` reads `5G of 10G` or
+`5G by cable`; amber only when the cable limits the link, `?` when the cable is assumed
 (no e-marker read, 3 A). Full wording: the Connection page section below.
 Only real alt modes (DisplayPort, Thunderbolt) count as `Alt`: a vendor SVID such as 0x2717 is a charging protocol and shows as the
 Proto row (`Xiaomi PD`) of the side that listed it. A VDM answer is filed by the sender's power role (header bit 8): the Source tab
@@ -575,7 +577,9 @@ One page for "what is plugged in": Tools -> Connection (menu page 16). Pure row 
   `Pwr 18W of 100W` (the sink asks for part of what is offered, neutral), `60W by cable` (the cable holds a bigger
   offer down, amber; `60W by cable?` neutral when no e-marker was read and 3 A is only assumed), `Data 5G of 10G`,
   `5G by cable` (amber), `80G cable` (only the cable is known), `+DP` when DisplayPort runs. Amber is for the cable
-  limiting the link, never for a sink that asks for less than it is offered.
+  limiting the link, never for a sink that asks for less than it is offered. On a link without a decoded PD contract
+  (no Source_Capabilities seen) the `Pwr` row is the Type-C default budget instead, labelled as a budget and exact:
+  `Pwr up to 2.5W` (500 mA Rp), `up to 7.5W` (1.5 A), `up to 15W` (3 A) -- 5 V x the advertised current, `pdtabs::budget_line`.
   **A live link repaints only the rows that changed.** The page keeps one hash per painted row (key, value, colour,
   cut, dim) and the kind, tab and row count of what the body shows. The whole body repaints only when the area was
   wiped or is stale (new tab, pop-up closed, empty state left, page entered, repaint pass) or the row count moved;

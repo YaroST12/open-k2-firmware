@@ -107,7 +107,8 @@ constexpr std::int32_t cable_mbps(std::uint8_t bits, std::uint16_t vid) {
 struct Cat {   // a bounded append into a caller's buffer, NUL-terminated by end()
     std::span<char> out;
     std::size_t n = 0;
-    constexpr void s(std::string_view v) { for (char c : v) if (n + 1 < out.size()) out[n++] = c; }
+    constexpr void p(char ch) { if (n + 1 < out.size()) out[n++] = ch; }
+    constexpr void s(std::string_view v) { for (char ch : v) p(ch); }
     constexpr void w(std::int32_t x) { n += fmt_watts(out.subspan(n), x); }
     constexpr void r(std::int32_t x) { n += fmt_rate(out.subspan(n), x); }
     constexpr std::size_t end() { if (!out.empty()) out[n] = '\0'; return n; }
@@ -129,6 +130,32 @@ constexpr std::size_t power_line(std::span<char> out, const Terms &t, bool cable
         c.s(" of ");
         c.w(t.source >= 0 ? t.source : t.cable);
     }
+    return c.end();
+}
+
+// The Type-C default budget of a link without a decoded PD contract: 5 V x the advertised current
+// (`typec_ma`), labelled as a budget, never as a measurement: "up to 2.5W" (500 mA), "up to 7.5W"
+// (1.5 A), "up to 15W" (3 A). Exact -- 5 V x mA is a whole mW, so the fraction prints without any
+// rounding that changes the number ("up to 6.17W" for an odd 1234 mA). "?" when no current is
+// advertised. Every output fits the 19-cell value column of the Connection page.
+constexpr std::size_t budget_line(std::span<char> out, std::uint32_t typec_ma) {
+    Cat c{out};
+    const std::uint32_t mw = 5u * typec_ma;
+    if (mw == 0) { c.s("?"); return c.end(); }
+    c.s("up to ");
+    auto digits = [&](std::uint32_t v) {
+        char t[10]; int k = 0;
+        do { t[k++] = static_cast<char>('0' + v % 10); v /= 10; } while (v);
+        while (k) c.p(t[--k]);
+    };
+    digits(mw / 1000);
+    const std::uint32_t rem = mw % 1000;
+    if (rem != 0) {
+        c.p('.');
+        c.p(static_cast<char>('0' + rem / 100));
+        if (rem % 100 != 0) c.p(static_cast<char>('0' + (rem / 10) % 10));
+    }
+    c.p('W');
     return c.end();
 }
 

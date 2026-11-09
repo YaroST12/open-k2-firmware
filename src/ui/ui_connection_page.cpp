@@ -533,20 +533,28 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
 }
 
 // The match summary as two list rows, worded by who holds the number down (pdtabs::power_line / data_line):
-// "Pwr 18W of 100W" (the sink draws part of the offer), "Pwr 60W by cable", "Data 5G of 10G". The row is amber
-// only when the cable is what limits the link; a sink that draws less than it is offered is the normal state.
+// "Pwr 18W of 100W" (the sink draws part of the offer), "Pwr 60W by cable", "Data 5G of 10G". On a link
+// without a decoded PD contract the Pwr row is the Type-C default budget instead, labelled as a budget
+// ("Pwr up to 2.5W", pdtabs::budget_line): never a bare wattage that reads as a measurement. The row is
+// amber only when the cable is what limits the link; a sink that draws less than it is offered is the
+// normal state.
 [[gnu::noinline]] void strip_rows(Rows &R, const MatchResult &r, const usblink::Link &ul) {
     const pd::Emarker &em = fusb302::emarker();
     const bool attached = r.caps_seen || r.typec_ma;
     {   // power
         StrBuf<28> &v = R.add("Pwr", kText);
         if (!attached) v.put("-");
-        else {
+        else if (!r.caps_seen) {
+            // No decoded PD contract: the only figure is the Type-C default budget (5 V x the advertised
+            // current), and without PD there is no e-marker either, so no cable term. Budget wording, exact.
+            char line[24];
+            pdtabs::budget_line(line, r.typec_ma);
+            v.put(line);
+        } else {
             pdtabs::Terms t;
-            if (r.caps_seen) t.source = static_cast<int32_t>(r.src_max_mw / 1000);
-            else t.source = static_cast<int32_t>(5u * r.typec_ma / 1000);
+            t.source = static_cast<int32_t>(r.src_max_mw / 1000);
             if (em.valid) t.cable = em.max_power_w;
-            else if (r.caps_seen) t.cable = 60;   // no e-marker: 3 A at 20 V assumed
+            else t.cable = 60;   // no e-marker: 3 A at 20 V assumed
             if (r.request_seen) t.sink = static_cast<int32_t>(r.want_mw / 1000);
             char line[24];
             bool warn = false;

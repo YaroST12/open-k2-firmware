@@ -112,6 +112,32 @@ static void test_power_line() {
     }
 }
 
+// The Type-C default budget of a link without a decoded PD contract, labelled as a budget ("up to ..."),
+// never as a measurement: exact (5 V x mA is a whole mW, so no rounding that changes the number) and
+// within the 19-cell value column of the Connection page in every case.
+static void test_budget_line() {
+    struct C { std::uint32_t ma; const char *text; };
+    static const C cases[] = {
+        {500, "up to 2.5W"},      // 5 V x 500 mA
+        {900, "up to 4.5W"},
+        {1500, "up to 7.5W"},     // 5 V x 1.5 A
+        {3000, "up to 15W"},      // 5 V x 3 A
+        {5000, "up to 25W"},
+        {1234, "up to 6.17W"},    // an odd current still prints exactly in hundredths
+        {0, "?"},                 // no current advertised
+    };
+    for (const C &c : cases) {
+        char b[32];
+        const std::size_t n = budget_line(b, c.ma);
+        CHECK_STR(b, c.text);
+        CHECK_EQ(n, strlen(c.text));
+        CHECK_EQ(n <= 19, true);  // the value column of the Connection page (kValCells)
+    }
+    char tiny[3];
+    CHECK_EQ(int(budget_line(tiny, 3000)), 2);   // truncated, NUL kept
+    CHECK_STR(tiny, "up");
+}
+
 static void test_data_line() {
     struct C { Terms t; bool dp; const char *text; bool warn; };
     static const C cases[] = {
@@ -157,6 +183,7 @@ static void test_speed_short() {
 int main() {
     test_speed_short();
     test_power_line();
+    test_budget_line();
     test_data_line();
     test_tabs();
     test_gate();

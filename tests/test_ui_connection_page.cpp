@@ -14,6 +14,7 @@
 #include "ui_stubs.h"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pages.hpp"
+#include "k2/ui/ui_style.hpp"
 #include "ui_nav.h"
 
 using namespace k2;
@@ -541,6 +542,88 @@ static void test_non_displayed_inputs_do_not_run_match_live() {
     g_stub.contract = {};
 }
 
+// True when the value column of list row `idx` shows exactly `text`: the band the page painted is saved,
+// the candidate is drawn the same way the row draws it (kSmall at kValX, kText on kBg) and compared pixel
+// for pixel, then the page's band is restored. The row geometry is ui_connection_page.cpp's (kRowY0 =
+// kit::kBodyY + 18, pitch 20, value at x 64).
+static bool row_value_is(int idx, const char *text) {
+    constexpr int kValX = 64, kPitch = 20, kRowY0 = kit::kBodyY + 18;
+    constexpr int W = 224 - kValX;   // the value column up to the right edge
+    const int y = kRowY0 + idx * kPitch;
+    const int vy = y + kit::row_text_y(kPitch, 16);
+    uint16_t saved[W * (kPitch - 1)];
+    for (int dy = 1; dy < kPitch; dy++)
+        for (int x = 0; x < W; x++) saved[(dy - 1) * W + x] = g_panel[(y + dy) * LCD_WIDTH + kValX + x];
+    const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
+    gfx_fill(s, kValX, y + 1, W, kPitch - 1, kBg);
+    gfx_text(s, kSmall, kValX, vy, text, kText, kBg);
+    bool same = true;
+    for (int dy = 1; dy < kPitch && same; dy++)
+        for (int x = 0; x < W; x++)
+            if (g_panel[(y + dy) * LCD_WIDTH + kValX + x] != saved[(dy - 1) * W + x]) { same = false; break; }
+    for (int dy = 1; dy < kPitch; dy++)   // restore what the page painted
+        for (int x = 0; x < W; x++) g_panel[(y + dy) * LCD_WIDTH + kValX + x] = saved[(dy - 1) * W + x];
+    return same;
+}
+
+// A plain 5 V source without PD (only its Rp advertises the current) plus a sink seen on CC: the Sink
+// tab's Pwr row is the Type-C default budget, labelled as a budget ("up to 2.5W" for a 500 mA Rp,
+// "up to 15W" for 3 A) -- never a bare "2W"/"15W" that reads as a measurement. With a decoded PD
+// contract the row is unchanged ("18W of 100W").
+static void test_sink_tab_pwr_row_is_a_budget_without_pd() {
+    {   // default-USB Rp (CC 0.41 V -> 500 mA): "up to 2.5W"
+        Ui &ui = fresh_ui();
+        g_stub.pm.vbus_mv = 5000;
+        g_stub.cc = 1;                        // attach: CC back with VBUS up, no PD traffic at all
+        g_stub.contract.valid = true;         // a sink was seen on CC: the Sink tab shows rows, not the empty state
+        uint32_t t = 20000;
+        for (int i = 0; i < 3; i++) ui.tick(t += 100);
+        CHECK_EQ(int(ui.link().attached()), 1);
+        set_cc(408, 1);                       // the Rp advertisement on the active line: 500 mA
+        ui.tick(t += 100);
+        show(ui, 2, t);                       // Sink tab
+        CHECK_EQ(body_hairlines(), 6);        // ID, Request, Pwr, USB, Caps + the closing rule
+        CHECK(row_value_is(2, "up to 2.5W"));
+        CHECK(!row_value_is(2, "2W"));        // the old integer-math reading is gone
+        g_stub.contract = {};
+    }
+    {   // 3 A Rp (CC 1.68 V): "up to 15W"
+        Ui &ui = fresh_ui();
+        g_stub.pm.vbus_mv = 5000;
+        g_stub.cc = 1;
+        g_stub.contract.valid = true;
+        uint32_t t = 20000;
+        for (int i = 0; i < 3; i++) ui.tick(t += 100);
+        CHECK_EQ(int(ui.link().attached()), 1);
+        set_cc(1678, 1);
+        ui.tick(t += 100);
+        show(ui, 2, t);
+        CHECK_EQ(body_hairlines(), 6);
+        CHECK(row_value_is(2, "up to 15W"));
+        CHECK(!row_value_is(2, "15W"));
+        g_stub.contract = {};
+    }
+    {   // a decoded PD contract: the Pwr row is unchanged
+        Ui &ui = fresh_ui();
+        g_stub.pm.vbus_mv = 5000; g_stub.cc = 1;
+        g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 1;
+        g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000};
+        g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;   // a Source_Capabilities arrived
+        g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
+        g_stub.contract.pos = 1; g_stub.contract.mv = 9000; g_stub.contract.op_ma = g_stub.contract.max_ma = 2000;
+        uint32_t t = 20000;
+        ui.tick(t);
+        show(ui, 2, t);                       // Sink tab
+        CHECK_EQ(body_hairlines(), 7);        // ID, Request, State, Pwr, USB, Caps + the closing rule
+        CHECK(row_value_is(3, "18W of 100W"));
+        CHECK(!row_value_is(3, "up to 15W"));
+        g_stub.caps = {}; g_stub.contract = {};
+    }
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);   // every Pwr row above fit the 19-cell value column whole
+#endif
+}
+
 // ---- every row fits the 19-cell value column, worst case on every tab (test_report fails on any cut) ----
 
 static void test_worst_case_rows_fit() {
@@ -633,6 +716,7 @@ int main() {
     test_source_tab_typec_advertisement();
     test_source_tab_legacy_row_skips_pd_verdicts();
     test_sink_tab_omits_empty_data_row();
+    test_sink_tab_pwr_row_is_a_budget_without_pd();
     test_proto_row_survives_the_row_cap();
     test_data_row_only_when_it_adds_something();
     test_non_displayed_inputs_do_not_run_match_live();
