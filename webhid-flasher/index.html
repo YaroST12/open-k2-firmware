@@ -62,6 +62,19 @@
   <div class="hint" id="hint"></div>
 </div>
 
+<div class="card">
+  <label class="row" style="gap:6px"><input type="checkbox" id="backupFirst" autocomplete="off" checked>
+    <b>Back up this K2 first (full backup)</b></label>
+  <div class="hint" id="backupFirstHint">
+    Every flash starts with a full backup of the K2 (bootloader, application and device storage), saved as one ZIP.
+    It is the only way back to the firmware that is on the K2 now.
+  </div>
+  <div class="hint warn" id="noBackupWarn" hidden>
+    No backup will be made. Flashing erases the firmware that is on this K2 now, and without a backup it cannot be
+    brought back.
+  </div>
+</div>
+
 <div class="card" id="latestCard" hidden>
   <div class="row">
     <button id="flashLatest" class="danger" disabled>Flash release</button>
@@ -72,15 +85,17 @@
 
 <div class="card">
   <div class="row">
-    <input type="file" id="file" accept=".k2,.bin,application/octet-stream">
+    <input type="file" id="file" accept=".k2,.bin,.zip,application/octet-stream">
     <button id="flash" class="danger" disabled>Flash firmware</button>
   </div>
   <div id="bar"><div></div></div>
   <div id="stage"></div>
   <div class="hint">
-    Accepts a <code>.k2</code> container or a raw app <code>.bin</code> (auto-wrapped, like
-    <code>tools/k2_flasher.py</code>). If the K2 runs the app, it is sent into the
+    Accepts a <code>.k2</code> container, a raw app <code>.bin</code> (auto-wrapped, like
+    <code>tools/k2_flasher.py</code>) or a <code>K2_BACKUP_*.zip</code> (its <code>K2_RECOVERY_*.k2</code> is flashed).
+    If the K2 runs the app, it is sent into the
     bootloader first (DFU_ENTER); if it is already in DFU (hold MINUS while plugging in), it is flashed directly.
+    With <b>Back up this K2 first</b> ticked the full backup runs before the erase.
     Full erase + write + read-back verify + commit marker, then reboot.
   </div>
 </div>
@@ -88,24 +103,32 @@
 <div class="card" id="backupCard">
   <div class="row">
     <button id="backup" class="secondary" disabled>Back up the K2</button>
-    <label class="hint" style="margin:0"><input type="checkbox" id="backupFull">
-      also try the native storage above <code>0x080E3000</code> (read-only, best effort)</label>
+    <span class="hint" style="margin:0">Backup only, nothing is flashed.</span>
   </div>
   <div id="backupOut" hidden>
     <div class="row" style="margin-top:10px">
-      <a id="dlRecovery" class="dl primary" download>Download recovery .k2</a>
+      <a id="dlZip" class="dl primary" download>Download backup ZIP</a>
       <button id="restoreBackup" class="danger" disabled>Restore this backup</button>
     </div>
     <div class="hint" id="backupInfo"></div>
-    <div class="hint">Also: <span id="dlMore"></span></div>
+    <details class="hint"><summary>Individual files</summary>
+      <div style="margin-top:6px"><span id="dlMore"></span></div>
+    </details>
   </div>
+  <details class="hint"><summary>Advanced</summary>
+    <label style="display:block;margin-top:6px"><input type="checkbox" id="backupAppOnly" autocomplete="off">
+      application area only (leaves out the device storage above <code>0x080E3000</code>)</label>
+  </details>
   <div class="hint">
-    Reads the bootloader and the application area twice, compares both passes, and offers a recovery
-    <code>.k2</code> container of the application code (the same read as <code>tools/k2_flasher.py backup</code>).
-    <b>To restore later, pick the backup you saved</b> (<code>K2_RECOVERY_*.k2</code>) in the Flash firmware row above:
-    it is flashed like any firmware. The K2's stored data (the sessions and settings volume, the native storage with
-    e-marker records) is <b>saved in flash.bin but not restored</b>: the flasher never writes it back, and flashing the
-    recovery container leaves it where it is.
+    Reads the whole 1 MB twice (bootloader, application, device storage) and compares both passes. The result is one
+    ZIP, <code>K2_BACKUP_&lt;version&gt;_&lt;UTC time&gt;.zip</code>, holding <code>K2_RECOVERY_*.k2</code>,
+    <code>flash.bin</code>, <code>app.bin</code>, <code>bootloader.bin</code>, <code>native_nvram.bin</code> and
+    <code>manifest.json</code>. <b>Keep that file.</b> To restore later, pick the ZIP (or the
+    <code>K2_RECOVERY_*.k2</code> in it) in the Flash firmware row above: the recovery container is flashed like any
+    firmware. The K2's stored data (the sessions and settings volume, the native storage with e-marker records) is
+    <b>saved in flash.bin but not written back</b>: the flasher never writes it, and flashing the recovery container
+    leaves it where it is. If the bootloader refuses to serve the device storage, the backup says so and is marked
+    partial.
   </div>
 </div>
 
@@ -119,7 +142,9 @@
   var VID = 0x0716, PID = 0x5060;
   var BOOT_PRODUCT = "WITRN.K2", BOOT_SERIAL = "20230727";
   var $ = function (id) { return document.getElementById(id); };
-  var S = { dev: null, mode: null, fw: null, appLink: null, bootLink: null, gen: 0, busy: false, backup: null };
+  // backup: the last backup result of this page; backupFresh: it still describes what is on the K2 (cleared
+  // when a flash starts writing), so the next flash makes a new one.
+  var S = { dev: null, mode: null, fw: null, appLink: null, bootLink: null, gen: 0, busy: false, backup: null, backupFresh: false };
 
   function log(msg, cls) {
     var d = document.createElement("div");
@@ -183,6 +208,7 @@
 
   function open(dev) {
     var gen = ++S.gen;
+    S.backupFresh = false;   // a (re)connected K2 may not be the one that was backed up: the next flash backs up again
     var mode = classify(dev);
     if (mode === "app") return openApp(dev, gen).catch(fail);
     if (mode === "bootloader") return openBoot(dev, gen).catch(fail);
@@ -237,7 +263,21 @@
     var f = this.files[0];
     if (!f) return;
     var rd = new FileReader();
-    rd.onload = function () { loadFirmware(new Uint8Array(rd.result), f.name); };
+    rd.onload = async function () {
+      var bytes = new Uint8Array(rd.result);
+      if (K2Boot.isZip(bytes)) {   // a K2_BACKUP_*.zip: flash the recovery container inside it
+        try {
+          var rec = await K2Boot.recoveryFromBackupZip(bytes);
+          log("backup ZIP " + f.name + ": using " + rec.name, "dim");
+          loadFirmware(rec.data, rec.name);
+        } catch (e) {
+          S.fw = null; refreshButtons();
+          log("cannot use " + f.name + ": " + e.message, "err");
+        }
+        return;
+      }
+      loadFirmware(bytes, f.name);
+    };
     rd.readAsArrayBuffer(f);
   };
 
@@ -302,7 +342,8 @@
 
   $("flash").onclick = function () { return runFlash(); };
 
-  async function runFlash() {
+  // opts.skipBackup: the caller flashes a backup it already holds (Restore this backup).
+  async function runFlash(opts) {
     if (!S.fw || !S.dev || S.busy) return;
     $("flash").disabled = true;
     S.busy = true; refreshButtons();
@@ -310,12 +351,25 @@
       if (S.mode === "app") {
         await enterDfu();
         setStatus("rebooting into bootloader — connect again", "warn");
-        log("click Connect and pick the WITRN.K2 device to continue flashing", "warn");
+        log("click Connect and pick the WITRN.K2 device to continue" +
+            ($("backupFirst").checked ? ": the full backup runs first, then the flash" : " flashing"), "warn");
         try { await S.dev.close(); } catch (e) {}
         S.dev = null; S.appLink = null; setMode(null);
         return;   // the user clicks Connect on the re-enumerated bootloader, then Flash again
       }
       var fw = S.fw, boot = S.bootLink;
+      if (opts && opts.skipBackup) {
+        // flashing the backup from this page: nothing to back up first
+      } else if (!$("backupFirst").checked) {
+        log("flashing without a backup: the firmware that is on this K2 now cannot be brought back", "warn");
+      } else if (S.backupFresh) {
+        log("using the backup made a moment ago (" + S.backup.zipName + ")", "dim");
+      } else {
+        var r = await doBackup(true);
+        if (!r.manifest.complete)
+          log("the backup is PARTIAL (" + r.manifest.backup_kind + "): the device-storage part is missing. Flashing goes on; it never writes there.", "warn");
+      }
+      S.backupFresh = false;   // from here the K2 changes: the backup describes the old firmware
       setStatus("flashing...", "warn");
       var ident = await boot.flash(fw, {
         progress: function (stage, cur, tot) {
@@ -332,6 +386,7 @@
     } catch (e) {
       setStatus("flash failed", "bad");
       log("flash failed: " + (e && e.message ? e.message : e), "err");
+      if (e && e.backupStep) log("the backup comes first and it failed, so nothing was erased or written", "warn");
     } finally {
       S.busy = false;
       $("flash").disabled = !S.fw || !S.mode;
@@ -349,21 +404,54 @@
     if (el !== a) { a.className = "dl"; el.appendChild(a); }
     return a;
   }
-  function showBackup(r, stamp) {
+  function showBackup(r) {
     urls.forEach(function (u) { URL.revokeObjectURL(u); }); urls = [];
     var more = $("dlMore"); more.textContent = "";
-    offer(new Blob([r.recovery.source], { type: "application/octet-stream" }), r.recoveryName, $("dlRecovery"));
-    offer(new Blob([r.manifestText], { type: "application/json" }), "k2-backup-" + stamp + "-manifest.json", more);
-    offer(new Blob([r.flash], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-flash.bin", more);
-    offer(new Blob([r.bootloader], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-bootloader.bin", more);
-    offer(new Blob([r.app], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-app.bin", more);
-    if (r.nvram) offer(new Blob([r.nvram], { type: "application/octet-stream" }), "k2-backup-" + stamp + "-native_nvram.bin", more);
-    var m = r.manifest;
-    $("backupInfo").textContent = (m.complete ? "Complete, " : "PARTIAL (bootloader refused at " + m.refused_at + "), ") +
-      m.flash_size + " B read twice and compared. App v" + m.identity.current_version + ", app SHA-256 " +
-      m.app_sha256.slice(0, 12) + "…. The recovery container holds the application code only (" + m.recovery_range + ")." +
+    var zipLink = offer(new Blob([r.zip], { type: "application/zip" }), r.zipName, $("dlZip"));
+    r.files.forEach(function (f) {
+      offer(new Blob([f.data], { type: /\.json$/.test(f.name) ? "application/json" : "application/octet-stream" }), f.name, more);
+    });
+    var m = r.manifest, what;
+    if (m.backup_kind === "full") what = "Full backup (bootloader, application and device storage), ";
+    else if (m.backup_kind === "app-only") what = "APPLICATION AREA ONLY: the device storage is not in this backup. ";
+    else what = "PARTIAL: the bootloader refused the read at " + m.refused_at + ", so the part of the device storage above it is missing. ";
+    $("backupInfo").textContent = what + m.flash_size + " B read twice and compared. App v" + m.identity.current_version +
+      ", app SHA-256 " + m.app_sha256.slice(0, 12) + "…. The recovery container holds the application code only (" +
+      m.recovery_range + ")." +
       (m.signature_restored ? " The model signature (K200), cleared when the K2 entered the bootloader, was put back in the recovery file; the other files are the raw read." : "");
     $("backupOut").hidden = false;
+    return zipLink;
+  }
+
+  // Reads the K2 (bootloader mode), shows and offers the result. `autoSave`: also start the ZIP download, because
+  // the flash that follows would otherwise leave no time to notice the link. Throws (marked backupStep) on failure.
+  async function doBackup(autoSave) {
+    setStatus("backing up...", "warn");
+    var r;
+    try {
+      r = await S.bootLink.backup({
+        appOnly: $("backupAppOnly").checked,
+        progress: function (stage, cur, tot) {
+          setStage(stage + (tot ? " " + cur + " / " + tot : ""));
+          setBar(cur, tot);
+          if (stage.indexOf("backup") === 0 && tot && cur === tot) log(stage + ": " + cur + " B", "dim");
+        },
+      });
+    } catch (e) {
+      setStatus("backup failed", "bad");
+      log("backup failed: " + (e && e.message ? e.message : e), "err");
+      e.backupStep = true;
+      throw e;
+    }
+    S.backup = r; S.backupFresh = true;
+    var zipLink = showBackup(r);
+    setStatus(r.manifest.complete ? "backup OK" : "backup partial", r.manifest.complete ? "ok" : "warn");
+    setBar(1, 1);
+    log("backup done (" + r.manifest.backup_kind + "): " + r.manifest.flash_size + " B, app v" +
+        r.manifest.identity.current_version + ", SHA-256 " + r.manifest.app_sha256, r.manifest.complete ? "ok" : "warn");
+    log("keep " + r.zipName + " somewhere safe; nothing was written to the K2", "ok");
+    if (autoSave) { try { zipLink.click(); } catch (e) { log("the ZIP did not start downloading; use the Download backup ZIP link", "warn"); } }
+    return r;
   }
 
   $("backup").onclick = async function () {
@@ -378,35 +466,27 @@
         S.dev = null; S.appLink = null; setMode(null);
         return;
       }
-      setStatus("backing up...", "warn");
-      var r = await S.bootLink.backup({
-        full: $("backupFull").checked,
-        progress: function (stage, cur, tot) {
-          setStage(stage + (tot ? " " + cur + " / " + tot : ""));
-          setBar(cur, tot);
-          if (stage.indexOf("backup") === 0 && tot && cur === tot) log(stage + ": " + cur + " B", "dim");
-        },
-      });
-      S.backup = r;
-      showBackup(r, new Date().toISOString().replace(/[-:]/g, "").slice(0, 15));
-      setStatus(r.manifest.complete ? "backup OK" : "backup partial", r.manifest.complete ? "ok" : "warn");
-      setBar(1, 1);
-      log("backup done: " + r.manifest.flash_size + " B, app v" + r.manifest.identity.current_version +
-          ", SHA-256 " + r.manifest.app_sha256, "ok");
-      log("save the downloads somewhere safe; nothing was written to the K2", "ok");
+      await doBackup(false);
     } catch (e) {
-      setStatus("backup failed", "bad");
-      log("backup failed: " + (e && e.message ? e.message : e), "err");
+      if (!e.backupStep) fail(e);
     } finally {
       S.busy = false; refreshButtons();
     }
   };
 
-  // One click from the backup just made: the in-memory recovery container goes through the normal flash path.
+  // The box is ticked on every page load (autocomplete="off" keeps the browser from restoring an unticked state);
+  // unticking it shows the warning.
+  function syncBackupFirst() { $("noBackupWarn").hidden = $("backupFirst").checked; }
+  $("backupFirst").checked = true;
+  $("backupFirst").onchange = syncBackupFirst;
+  syncBackupFirst();
+
+  // One click from the backup just made: the in-memory recovery container goes through the normal flash path
+  // (no new backup first: the one being restored is the one just made).
   $("restoreBackup").onclick = async function () {
     if (!S.backup || S.busy) return;
     if (!loadFirmware(S.backup.recovery.source, S.backup.recoveryName)) return;
-    await runFlash();
+    await runFlash({ skipBackup: true });
   };
 
   // Auto-open a previously granted device; watch hot-plug.

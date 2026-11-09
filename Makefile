@@ -392,7 +392,7 @@ $(HOST_DIR)/run/%.ok: $(HOST_DIR)/%
 test-run: $(TEST_STAMPS)
 test-py: test-run
 	@python3 -m unittest discover -s tests -p 'test_*.py'
-	@if command -v node >/dev/null 2>&1; then node --test tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs; \
+	@if command -v node >/dev/null 2>&1; then node --test tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs; \
 	else echo "node not found: skipping node tests"; fi
 test: test-py
 
