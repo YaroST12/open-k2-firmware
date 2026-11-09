@@ -109,7 +109,8 @@ QR_SRCS = $(QR_DIR)/qrcodegen.c
 QR_OBJS = $(patsubst $(QR_DIR)/%.c, $(BUILD_DIR)/qrcodegen/%.o, $(QR_SRCS))
 OBJS += $(QR_OBJS)
 
-CFLAGS  =-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
+ARCH_FLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
+CFLAGS  =$(ARCH_FLAGS)
 CFLAGS += -Os -g3 -Wall -Wextra -ffunction-sections -fdata-sections
 # Identical constant objects share one copy. Not ISO-conforming (two const objects may get one
 # address); nothing here compares the addresses of two const tables.
@@ -128,7 +129,7 @@ CFLAGS += -I$(LWIP_DIR)/include -I$(TUSB_NET_DIR) -I$(LFS_DIR) -I$(QR_DIR)
 CXXFLAGS  = $(CFLAGS) -std=c++23 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
 CXXFLAGS += -Wno-volatile
 
-LDFLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
+LDFLAGS = $(ARCH_FLAGS)
 ifeq ($(K2_NET),1)
 LDFLAGS += -Wl,--wrap=udp_sendto
 endif
@@ -179,9 +180,24 @@ LDFLAGS += $(STACK_PARAMS)
 
 DOCKER_IMG = open-k2-builder:latest
 
-.PHONY: all clean flash probe reboot docker-build docker-flash test web web-sync webhid gate smoke stack-report
+.PHONY: all clean flash probe reboot nav-headers docker-build docker-flash test web web-sync webhid gate smoke stack-report
 
 all: $(BUILD_DIR)/$(TARGET).k2
+	@$(COMPDB)
+
+# compile_commands.json at the repo root, merged from the <object>.cmd fragments of build/ (firmware) and host-build/
+# (tests) by tools/compdb.py; see "Code navigation" in docs/DEVELOPING.md. Only the default build directory owns the
+# file: build-net/ and experiment directories (BUILD_DIR=...) leave it alone. K2_HOST_ROOT is the repo's host path
+# (docker-build passes it; the container sees the repo as /workspace); it becomes `directory` in every entry.
+K2_HOST_ROOT ?= $(CURDIR)
+ifeq ($(BUILD_DIR),build)
+COMPDB = K2_HOST_ROOT=$(K2_HOST_ROOT) $(PYTHON) tools/compdb.py
+else
+COMPDB = :
+endif
+.PHONY: compdb
+compdb:
+	@$(COMPDB)
 
 # K2LOG format table (include/k2/core/log.hpp): tools/logdb.py scans the sources, extends the
 # append-only tools/logdb.json and rewrites the header only when it changes.
@@ -199,15 +215,26 @@ CFG_STAMP := $(BUILD_DIR)/.cfg-$(word 1,$(shell printf '%s' '$(subst ','"'"',$(C
 # A missing stamp must rebuild (.SECONDARY would otherwise treat it as an intermediate and skip it).
 .NOTINTERMEDIATE: $(CFG_STAMP)
 
+# Compile database (compile_commands.json for clangd, tools/compdb.py): every compile recipe is `$(call RUN,<var>)`
+# where <var> names the variable holding the full command. RUN writes that command to <object>.cmd (make's $(file),
+# no extra process; the directory is created first) and expands to the very same text for the shell to run, so the
+# recorded command and the executed one cannot drift. The variables are recursive: $< $@ and the target-specific
+# flags (version.o, -DK2_HOST_PINS, ...) resolve per target when the recipe runs.
+RUN = $(shell mkdir -p $(dir $@))$(file >$@.cmd,$($(1)))$($(1))
+
+FW_CC_CMD    = $(CC) $(CFLAGS) $(LTO) $(OWN_WERROR) -c $< -o $@
+FW_CXX_CMD   = $(CXX) $(CXXFLAGS) $(LTO) $(OWN_WERROR) -c $< -o $@
+TP_CC_CMD    = $(CC) $(CFLAGS) $(LTO) -Wno-unused-parameter -c $< -o $@
+LFS_CC_CMD   = $(CC) $(CFLAGS) $(LTO) -Wno-unused-parameter -Wno-cast-function-type -include k2/core/lfs_cfg.h -c $< -o $@
+QR_CC_CMD    = $(CC) $(CFLAGS) $(LTO) -DNDEBUG -Wno-unused-parameter -c $< -o $@
+
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(CFG_STAMP) | $(BUILD_DIR) $(LOGDB_HDR)
 	@echo "  CC    $<"
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(LTO) $(OWN_WERROR) -c $< -o $@
+	@$(call RUN,FW_CC_CMD)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(CFG_STAMP) | $(BUILD_DIR) $(LOGDB_HDR)
 	@echo "  CXX   $<"
-	@mkdir -p $(dir $@)
-	@$(CXX) $(CXXFLAGS) $(LTO) $(OWN_WERROR) -c $< -o $@
+	@$(call RUN,FW_CXX_CMD)
 
 # The dashboard served over USB networking: tools/web/k2.html, gzip-compressed into flash.
 $(BUILD_DIR)/web_asset.cpp: tools/web/k2.html tools/embed_web.py | $(BUILD_DIR)
@@ -216,7 +243,7 @@ $(BUILD_DIR)/web_asset.cpp: tools/web/k2.html tools/embed_web.py | $(BUILD_DIR)
 
 $(BUILD_DIR)/web_asset.o: $(BUILD_DIR)/web_asset.cpp $(CFG_STAMP)
 	@echo "  CXX   $<"
-	@$(CXX) $(CXXFLAGS) $(LTO) $(OWN_WERROR) -c $< -o $@
+	@$(call RUN,FW_CXX_CMD)
 
 $(BUILD_DIR)/core/version.o: CXXFLAGS += -DK2_FW_VERSION='"$(K2_FW_VERSION)"' -DK2_GIT_HASH='"$(K2_GIT)"'
 $(BUILD_DIR)/core/version.o: $(GIT_STAMP)
@@ -227,29 +254,24 @@ $(GIT_STAMP): | $(BUILD_DIR)
 
 $(BUILD_DIR)/tusb/%.o: $(TUSB_DIR)/%.c $(CFG_STAMP) | $(BUILD_DIR)
 	@echo "  CC    $<"
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(LTO) -Wno-unused-parameter -c $< -o $@
+	@$(call RUN,TP_CC_CMD)
 
 $(BUILD_DIR)/tusb/net/%.o: $(TUSB_NET_DIR)/%.c $(CFG_STAMP) | $(BUILD_DIR)
 	@echo "  CC    $<"
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(LTO) -Wno-unused-parameter -c $< -o $@
+	@$(call RUN,TP_CC_CMD)
 
 $(BUILD_DIR)/littlefs/%.o: $(LFS_DIR)/%.c $(CFG_STAMP) include/k2/core/lfs_cfg.h | $(BUILD_DIR)
 	@echo "  CC    $<"
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(LTO) -Wno-unused-parameter -Wno-cast-function-type -include k2/core/lfs_cfg.h -c $< -o $@
+	@$(call RUN,LFS_CC_CMD)
 
 # NDEBUG: the library's argument asserts are programmer checks; none can fire for the fixed, bounded call in src/ui/qr.cpp.
 $(BUILD_DIR)/qrcodegen/%.o: $(QR_DIR)/%.c $(CFG_STAMP) | $(BUILD_DIR)
 	@echo "  CC    $<"
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(LTO) -DNDEBUG -Wno-unused-parameter -c $< -o $@
+	@$(call RUN,QR_CC_CMD)
 
 $(BUILD_DIR)/lwip/%.o: $(LWIP_DIR)/%.c $(CFG_STAMP) | $(BUILD_DIR)
 	@echo "  CC    $<"
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(LTO) -Wno-unused-parameter -c $< -o $@
+	@$(call RUN,TP_CC_CMD)
 
 -include $(OBJS:.o=.d)
 
@@ -288,9 +310,9 @@ TEST_LIB_SRCS =
 TEST_SRCS     = $(wildcard tests/test_*.c)
 TEST_BINS     = $(patsubst tests/%.c, $(HOST_DIR)/%, $(TEST_SRCS))
 
+HOST_TESTC_CMD = $(HOST_CC) $(HOST_CFLAGS) $< $(TEST_LIB_SRCS) -o $@
 $(HOST_DIR)/%: tests/%.c $(TEST_LIB_SRCS) $(wildcard tests/*.h) $(wildcard $(INC_DIR)/*.h)
-	@mkdir -p $(dir $@)
-	@$(HOST_CC) $(HOST_CFLAGS) $< $(TEST_LIB_SRCS) -o $@
+	@$(call RUN,HOST_TESTC_CMD)
 
 HOST_CXX       ?= g++
 # The host tests build with the network function in (K2_NET=1) because they cover its pure logic and
@@ -316,26 +338,25 @@ TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 OBJ_DIR        = $(HOST_DIR)/obj
 LIB_OBJS       = $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(TEST_CXX_LIB)) $(patsubst %.c, $(OBJ_DIR)/lfs/%.o, $(LFS_SRCS)) $(patsubst %.c, $(OBJ_DIR)/lfs/%.o, $(QR_SRCS))
 # The QR generator is C as well, built the same way (its asserts off, as on the device).
+HOST_QR_CMD    = $(HOST_CC) -c -O0 -g -w -DNDEBUG -MMD -MP -I$(QR_DIR) $< -o $@
+HOST_LFS_CMD   = $(HOST_CC) -c -O0 -g -w -MMD -MP -I$(INC_DIR) -I$(LFS_DIR) -include k2/core/lfs_cfg.h $< -o $@
 $(OBJ_DIR)/lfs/$(QR_DIR)/%.o: $(QR_DIR)/%.c
-	@mkdir -p $(dir $@)
-	@$(HOST_CC) -c -O0 -g -w -DNDEBUG -MMD -MP -I$(QR_DIR) $< -o $@
+	@$(call RUN,HOST_QR_CMD)
 # littlefs is C: compiled with the host cc and linked into every test (a few unused functions are dropped).
 $(OBJ_DIR)/lfs/%.o: %.c include/k2/core/lfs_cfg.h
-	@mkdir -p $(dir $@)
-	@$(HOST_CC) -c -O0 -g -w -MMD -MP -I$(INC_DIR) -I$(LFS_DIR) -include k2/core/lfs_cfg.h $< -o $@
+	@$(call RUN,HOST_LFS_CMD)
 SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp
 SCAN_OBJS      = $(patsubst %.cpp, $(OBJ_DIR)/scan/%.o, $(SCAN_TEST_LIB))
 
+HOST_CXX_CMD   = $(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@
+HOST_SCAN_CMD  = $(HOST_CXX) $(HOST_CXXFLAGS) -DK2_HOST_PINS -MMD -MP -c $< -o $@
 $(OBJ_DIR)/lib/%.o: %.cpp
-	@mkdir -p $(dir $@)
-	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@
+	@$(call RUN,HOST_CXX_CMD)
 $(OBJ_DIR)/scan/%.o: %.cpp
-	@mkdir -p $(dir $@)
-	@$(HOST_CXX) $(HOST_CXXFLAGS) -DK2_HOST_PINS -MMD -MP -c $< -o $@
+	@$(call RUN,HOST_SCAN_CMD)
 $(OBJ_DIR)/tests/%.o: tests/%.cpp
-	@mkdir -p $(dir $@)
-	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@
+	@$(call RUN,HOST_CXX_CMD)
 
 # The descriptor tests include src/drivers/usb_descriptors.cpp, which needs TinyUSB's headers.
 USB_DESC_TESTS = test_usb_desc_msc1 test_usb_desc_hidonly test_usb_desc_net test_usb_desc_nonet test_usb_desc_shell test_usb_pma
@@ -364,16 +385,14 @@ $(HOST_DIR)/test_accelerometer: $(OBJ_DIR)/tests/test_accelerometer.o $(OBJ_DIR)
 NETTEST_C      = $(LWIP_SRCS) $(TUSB_NET_SRCS)
 NETTEST_OBJS   = $(patsubst %.c, $(HOST_DIR)/nettest/%.o, $(NETTEST_C))
 NET_FLAGS      = -I$(LWIP_DIR)/include -I$(TUSB_NET_DIR) -isystem $(TUSB_DIR) -DCFG_TUSB_MCU=OPT_MCU_AT32F403A_407
+HOST_NETC_CMD  = $(HOST_CC) -c -O0 -g -w -MMD -MP -I$(INC_DIR) -I$(LWIP_DIR)/include -I$(TUSB_NET_DIR) $< -o $@
 $(HOST_DIR)/nettest/%.o: %.c include/lwipopts.h
-	@mkdir -p $(dir $@)
-	@$(HOST_CC) -c -O0 -g -w -MMD -MP -I$(INC_DIR) -I$(LWIP_DIR)/include -I$(TUSB_NET_DIR) $< -o $@
+	@$(call RUN,HOST_NETC_CMD)
 $(OBJ_DIR)/tests/test_net_dhcp.o $(OBJ_DIR)/net/net.o: HOST_CXXFLAGS += $(NET_FLAGS)
 $(OBJ_DIR)/net/net.o: $(SRC_DIR)/net/net.cpp
-	@mkdir -p $(dir $@)
-	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@
+	@$(call RUN,HOST_CXX_CMD)
 $(OBJ_DIR)/net/mode_ram.o: $(SRC_DIR)/drivers/mode_ram.cpp
-	@mkdir -p $(dir $@)
-	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@
+	@$(call RUN,HOST_CXX_CMD)
 $(HOST_DIR)/test_net_dhcp: $(OBJ_DIR)/tests/test_net_dhcp.o $(OBJ_DIR)/net/net.o $(OBJ_DIR)/net/mode_ram.o $(NETTEST_OBJS)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -Wl,--wrap=udp_sendto -o $@
 
@@ -390,6 +409,7 @@ $(HOST_DIR)/run/%.ok: $(HOST_DIR)/%
 	@mkdir -p $(dir $@)
 	@K2_DUMP=$(HOST_DIR) $< && touch $@
 test-run: $(TEST_STAMPS)
+	@$(COMPDB)
 test-py: test-run
 	@python3 -m unittest discover -s tests -p 'test_*.py'
 	@if command -v node >/dev/null 2>&1; then node --test tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs; \
@@ -448,8 +468,24 @@ docker-image:
 # Runs as the host uid so build/ stays owned by the caller (a root-owned build/ breaks later host runs).
 DOCKER_RUN = docker run --rm --user $(shell id -u):$(shell id -g) -v $(CURDIR):/workspace -w /workspace
 
-docker-build:
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_NET=$(K2_NET) BUILD_DIR=$(BUILD_DIR)
+# Code navigation: the ARM compiler's system include directories, copied out of the build image into
+# $(NAV_DIR)/root (dirs.txt lists them, as paths inside the image) so clangd on the host finds <cstdint> and the
+# rest of newlib / libstdc++ (tools/compdb.py adds them to the firmware entries). Done once, by the first docker-build
+# (a failure only costs the std headers); `make nav-headers` redoes it after a toolchain image change.
+NAV_DIR = .cache/arm-none-eabi
+$(NAV_DIR)/dirs.txt:
+	-@rm -rf $(NAV_DIR) && mkdir -p $(NAV_DIR)/root \
+	  && $(DOCKER_RUN) $(DOCKER_IMG) sh -c 'arm-none-eabi-g++ $(ARCH_FLAGS) -std=c++23 -x c++ -E -v /dev/null 2>&1 | sed -n "/^#include <...>/,/^End of search/p" | grep "^ /" | while read p; do realpath "$$p"; done' > $(NAV_DIR)/dirs.tmp \
+	  && $(DOCKER_RUN) $(DOCKER_IMG) sh -c 'cd / && tar -cf - $$(sed "s|^/||" /workspace/$(NAV_DIR)/dirs.tmp)' | tar -C $(NAV_DIR)/root -xf - \
+	  && mv $(NAV_DIR)/dirs.tmp $@ && echo "  NAV   $(NAV_DIR) (ARM system headers for clangd)"
+
+nav-headers:
+	@rm -rf $(NAV_DIR)
+	@$(MAKE) --no-print-directory $(NAV_DIR)/dirs.txt
+	@$(COMPDB)
+
+docker-build: | $(NAV_DIR)/dirs.txt
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_NET=$(K2_NET) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

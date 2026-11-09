@@ -59,6 +59,12 @@ All firmware is C++23 under `src/` and `include/` (only TinyUSB and lwIP are C).
 Build identity stamps are non-intermediate: a changed git hash recompiles the version object
 even when the host-test object cache uses `.SECONDARY`.
 
+### Code navigation (clangd, IDEs)
+
+Every build writes `compile_commands.json` at the repo root (gitignored): each compile recipe records its exact command in `<object>.cmd`, and `tools/compdb.py` merges them (`make docker-build` for `build/`, `make test` for the host tests in `host-build/`, `make compdb` to merge what exists). Firmware entries use the ARM compiler, files only the tests build (`tests/*.cpp`) use the host `g++`; a file built by both is listed once, as firmware. `build-net/` and other `BUILD_DIR`s never touch the file, and an unchanged build leaves it untouched (no reindex).
+
+The ARM compiler is not on the host, so the first `make docker-build` also copies its system headers (newlib, libstdc++, 24 MB) out of the image into `.cache/arm-none-eabi/` and `compdb.py` adds them to the firmware entries; `make nav-headers` redoes the copy after a toolchain image change. The committed `.clangd` drops the GCC-only flags clangd does not know. Open the repo with clangd from the repo root; `clangd --check=src/ui/ui_home.cpp` is the quick test (its "errors" count includes harmless "tweak: ... FAIL" probes; real parse errors are the lines without `tweak:`). A user-level `~/.config/clangd/config.yaml` that removes `-m*`/`-f*` flags makes clangd parse the firmware as armv4t instead of Thumb-2; drop that rule for exact parsing.
+
 ## USB link modes
 
 **USB is off by default.** After a flash the K2 does not enumerate on the HID port until you enable it on the device: Settings > USB Link. Choices, applied after a replug (kept in flash):

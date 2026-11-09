@@ -12,5 +12,10 @@ host-build/
 host-asan/
 runs/
 
+# Code navigation: written by every build (tools/compdb.py) and clangd's index cache
+/compile_commands.json
+*.o.cmd
+/.cache/
+
 # Proprietary / vendor-derived material: local only, never published
 /private/

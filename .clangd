@@ -1,0 +1,7 @@
+# clangd for the firmware and the host tests. The root compile_commands.json is written by every build
+# (tools/compdb.py, see "Code navigation" in README.md); these flags are in it because the real compiler is GCC.
+CompileFlags:
+  Remove:
+    - -fcallgraph-info*   # GCC-only (stack report); clangd warns about it
+    - -flto*              # irrelevant to a syntax-only parse
+    - -Werror*            # navigation must not turn a clang-only warning into an error
