@@ -399,6 +399,7 @@
   "396": "[RDI] comeback identity dropped: no run took it over\n",
   "397": "[TEST] planned re-attach skipped: the intent marker is not on the volume\n",
   "398": "[TEST] planned re-attach: Rd off for %u ms, cable %u/%u\n",
-  "399": "[TEST] planned re-attach: %s after %u ms, the run goes on\n"
+  "399": "[TEST] planned re-attach: %s after %u ms, the run goes on\n",
+  "400": "[FUSB302] Rd seek: no Rp on CC%u over our Rd for %u ms, Rd moves to CC%u (move %u of %u)\n"
  }
 }

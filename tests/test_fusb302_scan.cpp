@@ -32,6 +32,11 @@ bool g_pin[3];                          // PC13, PC14, PC15
 std::uint8_t g_reg[256];
 int g_line_mv = 1600;   // level of the measured line when STATUS0.COMP is armed (a source Rp over a sink Rd)
 int g_line_mv_cc[2] = {-1, -1};   // per-line override (index 0 = CC1, 1 = CC2, selected by SWITCHES0 MEAS); -1 = use g_line_mv
+// A source that shows its Rp only to a sink (g_rd_model on): the level of each line depends on whether the K2's own Rd (SWITCHES0
+// PDWN1 = CC1, PDWN2 = CC2) is on it. Overrides both of the above while on.
+bool g_rd_model;
+int g_lvl_rd[2] = {0, 0};     // line level with the K2's Rd on that line
+int g_lvl_nord[2] = {0, 0};   // line level with no Rd on it (a floating or coupled net)
 std::vector<std::uint8_t> g_txfifo;
 std::deque<std::uint8_t> g_rx;
 std::deque<std::uint8_t> g_ia_script;   // INTERRUPTA (0x3E) values handed out one per read (clear-on-read), then g_reg[0x3E]
@@ -165,9 +170,10 @@ bool read(Bus, std::uint8_t, std::uint8_t reg, std::span<std::uint8_t> out) {
     if (reg == 0x40 && (g_reg[0x40] & 0x20)) {   // COMP: the measured line is above the MDAC threshold (MEASURE[5:0] x 42 mV)
         const int thr = (g_reg[0x04] & 0x3F) * 42;
         const int meas = (g_reg[0x02] & 0x0C) == 0x08 ? 1 : (g_reg[0x02] & 0x0C) == 0x04 ? 0 : -1;   // MEAS_CC2 / MEAS_CC1 (SWITCHES0 bits 3:2)
-        const int mv = meas == 0 && g_line_mv_cc[0] >= 0 ? g_line_mv_cc[0]
-                     : meas == 1 && g_line_mv_cc[1] >= 0 ? g_line_mv_cc[1] : g_line_mv;
-        if (mv <= thr) for (auto& b : out) b &= std::uint8_t(~0x20);
+        int mv = meas == 0 && g_line_mv_cc[0] >= 0 ? g_line_mv_cc[0]
+               : meas == 1 && g_line_mv_cc[1] >= 0 ? g_line_mv_cc[1] : g_line_mv;
+        if (g_rd_model && meas >= 0) mv = (g_reg[0x02] & (1u << meas)) ? g_lvl_rd[meas] : g_lvl_nord[meas];
+        if (mv <= thr) for (auto& b : out) b &= std::uint8_t(~0x23);   // no Rp: COMP and BC_LVL both read 0
     }
     return true;
 }
@@ -213,6 +219,8 @@ void reset_world() {
     g_ms = 1000;
     g_line_mv = 1600;
     g_line_mv_cc[0] = g_line_mv_cc[1] = -1;
+    g_rd_model = false;
+    g_lvl_rd[0] = g_lvl_rd[1] = g_lvl_nord[0] = g_lvl_nord[1] = 0;
     g_cable = Cable{};
     g_reg[0x02] = 0x03;                                      // PDWN1|PDWN2 (Rd), nothing measured
     g_reg[0x03] = 0x20;                                      // passive: SPECREV=01, Auto-CRC off
@@ -2723,6 +2731,190 @@ void test_rd_glitch_drops_the_rd_keeps_the_ra_and_restores_the_pin() {
     self_hold_end();
 }
 
+// ---- the Rd seek: a passive pick on the wrong line (hardware 2026-11-09, an Anker 2-way splitter behind a 140 W charger) ----
+// The passive scan (no Rd anywhere) reads CC2 high and CC1 low and attaches on CC2. The splitter shows its Rp only once it sees an
+// Rd, and only on CC1. A re-read (or a run start, or a PD trigger) puts the K2's Rd on the active line, CC2, which reads 0 V, so
+// the attach ended in a 500 ms "no Rp" detach and the other line was never tried. The Rd now moves, one line at a time.
+void seek_world() {
+    power_cycle_forget_pin();                                // the earlier tests may leave a boot-mode pin behind
+    fusb302::set_force_line(0);                              // ... or a forced debug line
+    reread_style_boot();                                   // reset_world + init, passive (Rd off), nothing attached
+    g_rd_model = true;
+    g_lvl_nord[1] = 1600;                                    // CC2 floats high with nothing behind it (a coupled net)
+    g_lvl_rd[1] = 0;                                         // ... and reads nothing once our Rd is on it
+    g_lvl_nord[0] = 0;                                       // CC1 is dead to a passive scan
+    g_lvl_rd[0] = 1600;                                      // ... and carries the Rp only over our Rd
+    g_reg[0x40] = 0x23;                                      // COMP armed, BC_LVL 3 while a line is above the threshold
+}
+void seek_attach_cc2() {
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    CHECK_EQ(sw0_rd(), 0u);                                  // the scan was passive: no Rd on any line
+}
+// Every SWITCHES0 write from `from` on keeps at most one Rd line (two is the Debug Accessory signature).
+bool never_rd_on_both_lines(std::size_t from, std::size_t to = std::size_t(-1)) {
+    for (std::size_t i = from; i < g_log.size() && i < to; i++)
+        if (g_log[i].rfind("W 02=", 0) == 0 && (std::stoul(g_log[i].substr(5), nullptr, 16) & 3u) == 3u) return false;
+    return true;
+}
+int seek_moves_logged() {
+    int n = 0;
+    for (const auto& s : g_usb) if (s.find("Rd seek:") != std::string::npos) ++n;
+    return n;
+}
+
+void test_seek_moves_the_rd_to_the_line_that_answers_and_keeps_the_attach() {
+    seek_world();
+    seek_attach_cc2();
+    g_log.clear();
+    CHECK_EQ(fusb302::rd_for_run(true), true);               // the re-read's Rd goes on CC2
+    CHECK_EQ(sw0_rd(), 2u);
+    const std::uint32_t t0 = g_ms;
+    std::uint32_t moved_at = 0;
+    for (int i = 0; i < 100 && !usb_has("Active CC detected: CC1"); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    moved_at = g_ms - t0;
+    CHECK_EQ(usb_has("Active CC detected: CC1"), true);
+    CHECK_EQ(moved_at >= 200u, true);                     // not before the dwell ...
+    CHECK_EQ(moved_at < 400u, true);                         // ... and far inside the old 500 ms give-up
+    CHECK_EQ(sw0_rd(), 1u);                                  // the single Rd followed
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    CHECK_EQ(seek_moves_logged(), 1);
+    settle_ms(3000);                                         // the Rp is there now: no detach, no second move, no Rd pair
+    CHECK_EQ(usb_has("Detach"), false);
+    CHECK_EQ(seek_moves_logged(), 1);
+    CHECK_EQ(sw0_rd(), 1u);
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    clean_up_rd_tests();
+}
+
+// The chip's own signature: the move is a new attach for the sink side (session, PD reset) but never a detach for the source.
+void test_seek_move_is_an_attach_not_a_detach() {
+    seek_world();
+    seek_attach_cc2();
+    CHECK_EQ(fusb302::rd_for_run(true), true);
+    g_log.clear();
+    settle_ms(400);
+    CHECK_EQ(find_from("W 0C=02") >= 0, true);               // the new attach resets the PD logic (an ordinary attach does) ...
+    CHECK_EQ(find_from("W 0C=01"), -1);                      // ... but the chip is never soft-reset by a move (SW_RES)
+    CHECK_EQ(usb_has("Detach"), false);
+    clean_up_rd_tests();
+}
+
+// Nothing answers on either line: three moves, then the ordinary no-Rp detach; about a second in all, never an Rd pair.
+void test_seek_is_bounded_and_ends_in_the_ordinary_detach() {
+    seek_world();
+    g_lvl_rd[0] = 0;                                         // no line ever shows an Rp
+    seek_attach_cc2();
+    g_log.clear();
+    CHECK_EQ(fusb302::rd_for_run(true), true);
+    const std::uint32_t t0 = g_ms;
+    std::size_t before_detach = 0;                           // the log up to the poll that detached (a detach's own rescan is the START's)
+    for (int i = 0; i < 200 && !usb_has("Detach"); i++) {
+        before_detach = g_log.size();
+        g_ms += 20; fusb302::poll(); fusb302::service();
+    }
+    const std::uint32_t gave_up = g_ms - t0;
+    CHECK_EQ(usb_has("Detach"), true);
+    CHECK_EQ(seek_moves_logged(), 3);
+    CHECK_EQ(gave_up >= 1000u, true);                        // a real sink's debounce plus the source's VBUS-on
+    CHECK_EQ(gave_up <= 1300u, true);
+    CHECK_EQ(never_rd_on_both_lines(0, before_detach), true);
+    fusb302::rd_for_run(false);
+    settle_ms(100);
+    clean_up_rd_tests();
+}
+
+// The seek only starts from a passive pick: a line the scan took while our Rd was on it was verified by its Rp already.
+void test_seek_ignores_an_attach_that_was_picked_with_rd_on() {
+    seek_world();
+    g_lvl_rd[1] = 1600;                                      // an ordinary source: its Rp shows over our Rd on CC2
+    CHECK_EQ(fusb302::rd_for_run(true), true);               // Rd on from the start (both lines while none is known)
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(usb_has("Active CC detected"), true);
+    g_lvl_rd[0] = g_lvl_rd[1] = 0;                           // the source drops its Rp (a real detach)
+    const std::uint32_t t0 = g_ms;
+    for (int i = 0; i < 100 && !usb_has("Detach"); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(usb_has("Detach"), true);
+    CHECK_EQ(g_ms - t0 < 700u, true);                        // the plain 500 ms rule, not stretched by a seek
+    CHECK_EQ(seek_moves_logged(), 0);
+    fusb302::rd_for_run(false);
+    settle_ms(100);
+    clean_up_rd_tests();
+}
+
+// Never inline (a real sink's Rd must stay alone on the line), never in the Ra mode (CC2 Rd by design), never on a forced line.
+void test_seek_never_runs_inline_in_the_ra_mode_or_on_a_forced_line() {
+    {   // inline
+        seek_world();
+        seek_attach_cc2();
+        CHECK_EQ(fusb302::rd_for_run(true), true);
+        fusb302::set_inline(true);                           // a sink arrived: our Rd comes off, active features refuse
+        g_log.clear();
+        settle_ms(2000);
+        CHECK_EQ(seek_moves_logged(), 0);
+        CHECK_EQ(sw0_rd(), 0u);
+        CHECK_EQ(usb_has("Active CC detected: CC1"), false);
+        fusb302::set_inline(false);
+        fusb302::rd_for_run(false);
+        settle_ms(100);
+        clean_up_rd_tests();
+    }
+    {   // the Ra mode: Rd on CC2 alone, the Ra on CC1
+        seek_world();
+        CHECK_EQ(fusb302::ra_set(true), true);
+        CHECK_EQ(fusb302::rd_for_run(true), true);
+        g_lvl_rd[1] = 1600;                                  // the source answers on CC2 so the attach happens
+        for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+        CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+        g_lvl_rd[1] = 0;                                     // then it goes quiet
+        g_log.clear();
+        settle_ms(440);                                      // inside the 500 ms no-Rp rule: a seek (200 ms dwell) would have moved by now
+        CHECK_EQ(seek_moves_logged(), 0);
+        for (const auto& e : g_log)
+            if (e.rfind("W 02=", 0) == 0) CHECK_EQ(int(std::stoul(e.substr(5), nullptr, 16) & 3u), 2);   // PDWN2 alone, always
+        fusb302::rd_for_run(false);
+        settle_ms(100);
+        clean_up_rd_tests();
+    }
+    {   // a forced line (pd-reread --line 2)
+        seek_world();
+        fusb302::set_force_line(2);
+        seek_attach_cc2();
+        CHECK_EQ(fusb302::rd_for_run(true), true);
+        g_log.clear();
+        settle_ms(800);
+        CHECK_EQ(seek_moves_logged(), 0);
+        CHECK_EQ(usb_has("Active CC detected: CC1"), false);
+        fusb302::rd_for_run(false);
+        settle_ms(100);
+        clean_up_rd_tests();
+    }
+}
+
+// A key mode's pinned Rd (self-powered boot) is the charger's own supply: it only ever moves through self_power_move.
+void test_seek_never_moves_a_pinned_rd() {
+    reset_world();
+    g_mark = 0;
+    fusb302::self_power_early(bootmode::Mode::PlusRdCc2, false);
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    g_rd_model = true;
+    g_lvl_rd[1] = 1600;                                      // the charger answers the pinned Rd on CC2
+    g_lvl_nord[1] = 1600;
+    g_reg[0x40] = 0x23;
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    g_lvl_rd[1] = g_lvl_nord[1] = 0;                         // quiet: the ordinary 500 ms rule applies, no seek
+    g_lvl_rd[0] = 1600;
+    g_log.clear();
+    settle_ms(800);
+    CHECK_EQ(seek_moves_logged(), 0);
+    CHECK_EQ(int(fusb302::pin_rd()), 2);
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    self_hold_end();
+    power_cycle_forget_pin();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -2822,5 +3014,11 @@ int main() {
     test_comeback_boot_never_writes_a_rd_less_switches0_and_has_the_ra_first();
     test_comeback_release_gives_the_pin_and_the_early_ra_back();
     test_rd_glitch_drops_the_rd_keeps_the_ra_and_restores_the_pin();
+    test_seek_moves_the_rd_to_the_line_that_answers_and_keeps_the_attach();   // last: each one ends with a detach / Rd off
+    test_seek_move_is_an_attach_not_a_detach();
+    test_seek_is_bounded_and_ends_in_the_ordinary_detach();
+    test_seek_ignores_an_attach_that_was_picked_with_rd_on();
+    test_seek_never_runs_inline_in_the_ra_mode_or_on_a_forced_line();
+    test_seek_never_moves_a_pinned_rd();
     return test_report("test_fusb302_scan");
 }

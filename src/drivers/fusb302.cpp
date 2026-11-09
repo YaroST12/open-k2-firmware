@@ -35,6 +35,7 @@
 #include "k2/pd/pd_reread.hpp"
 #include "k2/pd/pd_passive.hpp"
 #include "k2/pd/pd_phy.hpp"
+#include "k2/pd/pd_rdseek.hpp"
 #include "k2/pd/pd_rescan.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/pd_vconn.hpp"
@@ -73,6 +74,10 @@ pd::DetachTracker g_detach;
 std::uint32_t g_requests_base = 0;
 bool g_pd_traffic = false;           // any PD message (any SOP) seen since attach
 bool g_pd_seen_attach = false;       // the same, but only a new attach clears it (a unit hold / start-up does not)
+// The Rd seek (k2/pd/pd_rdseek.hpp): the line was picked by a scan that had no Rd on any line, so our later Rd on it may be on the wrong
+// one. `g_seek_passive` marks such an attach; a move to the other line keeps it, a fresh attach (scan, window re-check) decides again.
+pd::RdSeek g_rdseek;
+bool g_seek_passive = false;
 std::uint32_t g_ident_session = 0;   // attach session of the latest identify_start (its Sink_Caps belong to it)   // contract.requests at attach: later ones came from a sink on the far side
 std::uint32_t g_attach_ms = 0;   // millis() at the attach of the current partner
 std::uint8_t g_bc_max = 0;       // highest BC_LVL (Rp level) read since attach
@@ -441,12 +446,18 @@ void apply_rd() {
 // The attach half of a CC choice, shared by the scan (detect_cc_orientation) and the Rd-window re-check
 // (cc_window_recheck): route the chosen line to the chip, measure it, and reset the PD session exactly as
 // on a fresh attach (switches, SWITCHES0 measure bit, SWITCHES1 via write_sw1(), chip PD reset, FIFOs).
-void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both) {
+// `seek_move`: the Rd seek's move to the other line (pd_rdseek.hpp): the Rd the policy gives follows the line like a pinned one
+// (one line only, apply_rd), and the seek's budget and "picked passively" mark carry over instead of starting again.
+void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, bool seek_move = false) {
     g_cc_mask = pd::self_power_mask(c.mask, pinned);   // pinned: both closed, the Rd must reach the connector
     cc_switches(false, g_cc_mask);
     const int i = c.line - 1;
     g_active_cc = std::uint8_t(c.line);
-    if (pinned) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
+    if (!seek_move) {
+        g_rdseek.reset();
+        g_seek_passive = !pinned && (rd_both & (kPdwn1 | kPdwn2)) == 0;   // no Rd on any line while the scan read: the pick is unverified
+    }
+    if (pinned || seek_move) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
     else wr(kSwitches0, std::uint8_t(rd_both | (i == 0 ? kMeasCc1 : kMeasCc2)));
     delay_ms(2);
     std::uint8_t status0 = 0;
@@ -591,6 +602,7 @@ void detect_cc_orientation() {
 // choices and are never overridden; PD traffic already decoded on the attached line ends the re-check.
 void cc_window_recheck() {
     if (g_active_cc == 0 || g_pd_traffic || g_force_cc != 0 || g_pin_rd != 0) return;
+    if (g_rdseek.moves() != 0) return;   // the Rd seek found the line by the Rp itself: the ADC levels do not overrule that
     const std::uint32_t now = systick::millis();
     if (std::int32_t(now - g_cc_recheck_at) < std::int32_t(kCcRecheckMinMs)) return;
     g_cc_recheck_at = now;
@@ -618,6 +630,20 @@ void cc_window_recheck() {
     K2LOG("[FUSB302] CC override: ADC cc1=%d cc2=%d mV names CC%u, the comparator chose CC%u\n",
               int(g_cc1_mv), int(g_cc2_mv), unsigned(rd_line), unsigned(g_active_cc));
     apply_cc_choice(alt, false, idle_rd());
+}
+
+// The Rd seek (k2/pd/pd_rdseek.hpp): our Rd sits on a line a Rd-less scan picked and no Rp answers it. The source may show its Rp only
+// on the other line (an Anker splitter behind a 140 W charger, hardware 2026-11-09). The single Rd moves there, the way a real sink's
+// CC logic toggles; never both lines (the Debug Accessory signature), never inline, and never where Rd is not ours to move.
+bool rd_seek_wanted() {
+    return g_seek_passive && (g_rd_op || g_rd_start) && !inline_now() && !g_ra && g_pin_rd == 0 && g_force_cc == 0 &&
+           !g_pd_traffic && g_vbus_mv < 3000;   // PD traffic or a live VBUS: the line is the source's, whatever the comparator says
+}
+void rd_seek_move() {
+    const std::uint8_t to = g_active_cc == 1 ? 2 : 1;
+    K2LOG("[FUSB302] Rd seek: no Rp on CC%u over our Rd for %u ms, Rd moves to CC%u (move %u of %u)\n", unsigned(g_active_cc),
+          unsigned(pd::kRdSeekDwellMs), unsigned(to), unsigned(g_rdseek.moves()), unsigned(pd::kRdSeekMoves));
+    apply_cc_choice({true, g_cc_mask, to}, false, 0, true);
 }
 
 // ---- Source_Capabilities logging ----
@@ -1759,6 +1785,8 @@ static void detach_reset(std::uint8_t status0) {
     g_bc_max = 0;
     g_cc_mask = 3;  // the next scan tries every routing again
     g_vbus_mv = -1;
+    g_rdseek.reset();   // the next attach decides again whether its line was picked without Rd
+    g_seek_passive = false;
     g_detach.reset();
     g_sink.detach();
     g_prep.abort();
@@ -1951,7 +1979,9 @@ void poll() {
         // Only a known reading inside the sink band proves a sink is on the line; the sink-left timer
         // starts after that, never for a line that has not shown a sink since inline began.
         if (inline_now() && g_cc_sink_mv >= 0 && sink_ok) g_detach.sink_seen();
-        if (got && g_detach.update(systick::millis(), g_vbus_mv, (status0 & kComp) != 0, sink_ok)) {
+        // Our Rd on a line a Rd-less scan picked, and no Rp answers it: try the other line before the no-Rp rule gives up.
+        if (got && g_rdseek.update(systick::millis(), rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
+        else if (got && g_detach.update(systick::millis(), g_vbus_mv, (status0 & kComp) != 0, sink_ok)) {
             K2LOG("[FUSB302] Detach: %s (cc=%d mV, inline=%d)\n", pd::detach_reason_name(g_detach.reason()),
                          int(g_cc_sink_mv), int(inline_now()));
             detach_reset(status0);
