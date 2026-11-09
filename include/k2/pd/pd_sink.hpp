@@ -166,6 +166,9 @@ inline constexpr std::uint32_t kXiaomiCapsWaitMs = 1000;     // after 0x2717020A
 // (a source that cannot be an EPR source), Timeout = no answer.
 enum class EprInfo : std::uint8_t { None, Pending, Got, Refused, Timeout };
 inline constexpr std::uint32_t kEprInfoMs = 1500;   // EPR_Get_Source_Cap -> the whole list (or a refusal)
+// request_source_caps(): how long the sink counts a Source_Capabilities as the answer to its Get_Source_Cap. A source answers within
+// tSenderResponse (30 ms at most); the Connection page's Refresh gives up at 150 ms (k2/core/rescan_bridge.hpp), this is a little more.
+inline constexpr std::uint32_t kGetCapAnswerMs = 200;
 
 struct SinkStatus {
     SinkState state = SinkState::Idle;
@@ -223,6 +226,13 @@ public:
     // Busy = not Ready, in EPR mode, already asked, or the line is occupied; NoCaps = nothing bound. `force` skips the EPR-bit
     // gate (the remote debug ask, to record how a charger without the bit answers).
     Err request_epr_info(std::uint32_t now, bool force = false);
+    // The Connection page's Refresh on a live contract: ask the source for its capabilities (Get_Source_Cap) and refresh the list
+    // without touching CC. The only sender of this message besides the post-Soft_Reset and Xiaomi paths, and like them it goes through
+    // the sink's one gate: Ok = queued (the answer refreshes the engine's caps and is answered with a Request, the same RDO when the list is
+    // unchanged: a source that sent Source_Capabilities Hard Resets when none comes);
+    // Busy = not Ready, in EPR mode (an unsolicited Source_Capabilities there is a hard reset), or a Request / message / release /
+    // Xiaomi chain is outstanding, or the last ask is still inside kGetCapAnswerMs; NoCaps = nothing bound.
+    Err request_source_caps(std::uint32_t now);
     void set_cap_mv(std::uint32_t mv) { cap_mv_ = mv < kVsafe5vMv ? kVsafe5vMv : mv; }
     std::uint32_t cap_mv() const { return cap_mv_; }
 
@@ -331,6 +341,8 @@ private:
     bool epr_get_sent_ = false;
     bool resume_ = false;       // a source hard reset dropped a contract; re-request on the next caps
     bool get_cap_sent_ = false; // our Get_Source_Cap is out: the next Source_Capabilities answers it (not unsolicited in EPR mode)
+    bool refresh_pending_ = false;   // request_source_caps(): its answer window is open until refresh_deadline_ (get_cap_sent_ is set with it)
+    std::uint32_t refresh_deadline_ = 0;
     bool contract_ = false;     // a PS_RDY was seen for plan_
     bool sr_wait_ = false;      // a Soft_Reset is out: ask for the caps at sr_at_ if the source has not sent them
     std::uint32_t sr_at_ = 0;

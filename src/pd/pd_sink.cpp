@@ -264,6 +264,7 @@ void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     sink_cap_ext_pending_ = false;
     swap_reply_ = 0;
     get_cap_sent_ = false;
+    refresh_pending_ = false;
     sr_wait_ = false;
     if (wire) {
         queue(m);
@@ -318,6 +319,7 @@ void Sink::on_hard_reset_rx(std::uint32_t) {
     xm_ = {};
     resume_ = resume_ || owned;   // a second Hard Reset right behind the first finds the sink already idle: keep the flag
     get_cap_sent_ = false;
+    refresh_pending_ = false;
     sr_wait_ = false;
     rev_ = 2;   // headers stay PD3.x until the re-announced Source_Capabilities say otherwise (EPR needs PD3)
     fail(SinkResult::HardReset, SinkState::Idle);
@@ -326,6 +328,7 @@ void Sink::on_hard_reset_rx(std::uint32_t) {
 void Sink::detach() {
     resume_ = false;
     get_cap_sent_ = false;
+    refresh_pending_ = false;
     sr_wait_ = false;
     st_.epr_info = EprInfo::None;   // asked once per attach
     tx_pending_ = false;
@@ -355,6 +358,7 @@ void Sink::soft_reset(std::uint32_t now) {
     sink_cap_ext_pending_ = false;
     swap_reply_ = 0;
     get_cap_sent_ = false;
+    refresh_pending_ = false;
     TxMsg m;
     m.header = make_header(kCtlSoftReset, 0, rev_);
     m.restart_id = true;   // the MessageID counters restart on both sides
@@ -452,6 +456,23 @@ Err Sink::request_epr_info(std::uint32_t now, bool force) {
     queue_epr_control(kEprGetSourceCap);
     st_.epr_info = EprInfo::Pending;
     info_deadline_ = now + kEprInfoMs;
+    return Err::Ok;
+}
+
+Err Sink::request_source_caps(std::uint32_t now) {
+    if (!caps_) return Err::NoCaps;
+    // One negotiation in flight: Ready only (no Request, Accept wait or PS_RDY outstanding), nothing of ours queued or being
+    // retransmitted, no release / abort / VBUS check hanging on a Request, no Xiaomi chain (it holds our own Request back too), and
+    // not still inside the last ask's answer window. EPR mode: an unsolicited Source_Capabilities there is a Hard Reset.
+    if (st_.state != SinkState::Ready || st_.epr_mode || !contract_ || tx_pending_ || retx_pending_ || release_pending_ || verify_ ||
+        deferred_ != Deferred::None || sr_wait_ || get_cap_sent_ || st_.epr_info == EprInfo::Pending || xiaomi_chain_active(now))
+        return Err::Busy;
+    TxMsg m;
+    m.header = make_header(kCtlGetSourceCap, 0, rev_);
+    queue(m);
+    get_cap_sent_ = true;
+    refresh_pending_ = true;
+    refresh_deadline_ = now + kGetCapAnswerMs;
     return Err::Ok;
 }
 
@@ -676,6 +697,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             if (xiaomi_authed_ && !xm_.reannounced) { xm_.reannounced = true; xm_.reannounce_at = now; }
             const bool solicited = get_cap_sent_;
             get_cap_sent_ = false;
+            refresh_pending_ = false;   // an answer to our Refresh (request_source_caps) ends its wait window
             if (st_.epr_mode && !solicited) {
                 // USB PD R3.2 7.30.5: in EPR mode the source only sends EPR_Source_Capabilities, and a Source_Capabilities
                 // that is not the answer to our Get_Source_Cap makes the SINK initiate a Hard Reset. The re-announce
@@ -697,6 +719,9 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             } else if (st_.held && (st_.state == SinkState::Ready || st_.state == SinkState::Requesting) && caps_) {
                 const Plan p = plan_request(*caps_, want_, cap_mv_, st_.epr_mode);
                 if (p.err != Err::Ok) { begin_abort(SinkResult::Aborted, now); return; }
+                // Also the answer to our own Refresh (request_source_caps): a Source_Capabilities, asked for or not, starts the
+                // source's tSenderResponse, and with no Request it Hard Resets. An unchanged list plans the same RDO: Accept +
+                // PS_RDY, no voltage change.
                 plan_ = p;
                 st_.state = SinkState::Requesting;
                 send_request(now);
@@ -810,6 +835,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             sink_cap_ext_pending_ = false;
             swap_reply_ = 0;
             get_cap_sent_ = false;
+            refresh_pending_ = false;
             sr_wait_ = false;
             if (answers_sop_) {   // a far sink's Soft_Reset is not ours to Accept
                 TxMsg m;
@@ -920,6 +946,10 @@ void Sink::tick(std::uint32_t now) {
         queue(m);
         get_cap_sent_ = true;
         return;
+    }
+    if (refresh_pending_ && due(refresh_deadline_)) {   // a silent source: the answer window of our Refresh is over
+        refresh_pending_ = false;
+        get_cap_sent_ = false;
     }
     if (st_.epr_info == EprInfo::Pending && due(info_deadline_)) st_.epr_info = EprInfo::Timeout;
     if (deferred_ != Deferred::None) {   // a Request / EPR entry held back by the Xiaomi chain guard
