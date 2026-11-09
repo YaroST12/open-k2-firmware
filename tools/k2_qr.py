@@ -151,7 +151,9 @@ def encode(type_, schema, record, packed=False):
 
 def parse_part(text):
     """One part text -> dict (type, schema, index, count, record_len, record_crc, payload)."""
-    text = text.strip("\r\n")   # a space is a base45 digit (it can end a part), so only line ends are trimmed
+    # A space is a base45 digit (index 36) but can never end a part: the last base45 character of a
+    # frame is at most index 32 (65535 // 2025; 255 // 45 = 5 when the frame length is odd).
+    text = text.strip("\r\n")   # so only line ends (scanner/copy artifacts) are trimmed
     if not text.startswith("K2:"):
         raise QrError("not a K2 share part (no K2: prefix)")
     try:
