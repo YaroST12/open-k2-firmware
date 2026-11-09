@@ -259,6 +259,41 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     during the unit detach, so the first list was already the split one. Next try: plug it after the first row passes.
   - `slow-rp-wake` partly seen: START held a steady Rd and the sleeping splitter (CC2 2990 mV open) answered 1680 ms
     later; a plain `pd-reread` attached in 179 ms (the port was awake). The Rd-seek path itself is not yet exercised.
+- **PPS collapses on the splitter when the RDO carries the EPR Mode Capable bit (`pps-epr-bit-collapse`, suspected)**
+  (2026-11-10, open, diagnosis needs one lab option; `runs/2026-11-10-splitter-pps/`, `runs/2026-11-10-op15-sniff/`).
+  Anker 2-way splitter behind the Baseus 140 W, list 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A, EPR 28 V 5 A.
+  - Evidence: the charger test (run 9, be3f589) passes every fixed row and EPR 28 V, and fails all five PPS rows "source
+    lost" (~1.8 V). On the wire: Request PDO 6 PPS 11 V 5 A -> Accept -> VBUS falls 4.81 -> 1.98 V in ~300 ms at 0 mA,
+    no PS_RDY, port restarts ~2.3 s later (`bb.txt`). Manual `pd request 6 --mv 7200 --ma 3000` and
+    `--mv 5500 --ma 2000` collapse the same way (`manual.txt`, `bb-manual.txt`). A OnePlus 15 on the same port (sniffed
+    inline) charges on PPS: 5.5 V 2 A, 7.5, 8.0, 8.2 V, then +40 mV steps up to 9.24 V 3.5 A, every step Accept + PS_RDY.
+    Its 5.5 V 2 A RDO and the K2's differ only in bit 22 (EPR Mode Capable): the K2 sets it for any source that
+    offers EPR (`plan_request`, `src/pd/pd_sink.cpp`, needed by the Baseus for EPR entry, 2026-11-04).
+  - Step 1 (diagnosis): a lab option `k2_remote.py pd request N --no-epr-bit` (firmware: a one-shot flag that clears
+    bit 22 in that RDO only). Hardware: the same splitter, `pd request 6 --mv 5500 --ma 2000 --confirm --no-epr-bit`:
+    holds at 5.5 V -> the bit is the trigger; collapses -> not the bit (next suspects: the OnePlus's VDM exchange
+    before its PPS Request, or a sink load).
+  - Step 2 (only if step 1 confirms): pattern handling in the charger test - a PPS/AVS row that gets Accept then a
+    VBUS collapse without PS_RDY is retried once without the EPR bit when the run is not in EPR mode; the result
+    records the quirk; fixed/EPR rows keep the bit. Catalogue entry in `docs/CHARGER_QUIRKS.md`.
+  - Validate: host tests (red first) for the RDO bit of the lab flag and the retry rule; hardware as above, then a
+    `ct_start.py --units pd` run whose PPS rows pass via the retry.
+- **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589): idle
+  K2 on the splitter with nothing attached, VBUS 78 mV, "No source"; `pd-reread` without a pin answered "busy" and
+  `pd attach 5000` did nothing; `pd-reread --pin 2 --no-run` woke it at once. 5926abb's slow-wake dwell only acts
+  inside the Rd seek after a passive pick, and the open standby reading is wiped by `RdSeek::reset()` on attach, so an
+  idle K2 never holds a steady Rd long enough. Fix: the idle/no-source path treats a line with the standby signature
+  (open ~3.0-3.3 V, `kStandbyOpenMv`) as a sleeping source and holds Rd on it for `kSlowWakeDwellMs`; keep the open
+  readings across `reset()`. Validate: host test on the decision; hardware: idle K2, plug into the sleeping splitter
+  port, PD list on screen without any pin.
+- **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note): with `pd-reread --pin 2`
+  still set, splitter -> K2 -> OnePlus 15: the K2 sent two Requests (one collided with the phone's) before the far
+  Request made it go passive (~2.3 s). The pin is a lab option and did what it says; the gap is that nothing shows it
+  is still set. Fix: show the pin on the Home status line (e.g. "Rd pin CC2") and in `pd status`; clear it on
+  detach of the far end.
+- **`k2_remote.py cards` cannot read format v8 cards** (2026-11-10): "card payload is 198 bytes, expected 144, 162,
+  178, 190 or 196" after b193e56 made the shared card v8 (rebalanced count). Add the v8 size and field to the host
+  decoder (`tools/k2_remote.py`, same layout as `tools/report_card.py`), with a test.
 - **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in 1d45a76, hardware check
   pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
