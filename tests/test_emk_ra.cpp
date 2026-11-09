@@ -26,10 +26,24 @@ int main() {
     CHECK(check({.pinned_rd = 3}) == Refuse::PinnedRd);    // both lines (no longer reached, still refused)
     CHECK(check({.inline_sink = true, .pinned_rd = 2}) == Refuse::Inline);   // the other reasons still hold with the PLUS pin
     CHECK(check({.contract = true, .pinned_rd = 2}) == Refuse::Contract);
+    // A self-powered K2 (PLUS boot, Rd pinned on CC2) holds a 5 V contract of its own the moment caps arrive: that contract
+    // does not block the Ra (it sits on CC1, the PD line is CC2), so the identity can be armed beside it.
+    CHECK(check({.contract = true, .self_hold = true, .pinned_rd = 2}) == Refuse::None);
+    CHECK(check({.contract = true, .self_hold = true, .pinned_rd = 1}) == Refuse::PinnedRd);   // a CC1 pin still collides
+    CHECK(check({.inline_sink = true, .contract = true, .self_hold = true, .pinned_rd = 2}) == Refuse::Inline);
+    CHECK(check({.contract = true, .self_hold = true, .busy = true, .pinned_rd = 2}) == Refuse::Busy);   // a tool running still refuses
+    CHECK(check({.contract = true, .self_hold = true, .pinned_rd = 2, .vconn = true}) == Refuse::Vconn);
+    CHECK(check({.contract = true, .self_hold = false}) == Refuse::Contract);   // a contract a tool owns still refuses
     CHECK(check({.pinned_rd = 2, .vconn = true}) == Refuse::Vconn);
     CHECK(check({.vconn = true}) == Refuse::Vconn);
     CHECK(check({.inline_sink = true, .contract = true}) == Refuse::Inline);   // the first reason wins
-    CHECK(std::string(refuse_name(Refuse::None)) == "ok" && std::string(refuse_name(Refuse::Contract)) == "contract");
+    for (const auto r : {Refuse::Inline, Refuse::Contract, Refuse::Busy, Refuse::PinnedRd, Refuse::Vconn}) {
+        const std::string t = refuse_footer(r);
+        CHECK(!t.empty() && t.size() <= 27);   // the footer holds 27 characters
+        CHECK(t != "Ra mode refused; tool busy");
+    }
+    CHECK(std::string(refuse_footer(Refuse::None)).empty());
+    CHECK(std::string(refuse_name(Refuse::None)) == "ok"&& std::string(refuse_name(Refuse::Contract)) == "contract");
 
     // Rd while the mode is on: CC2 alone (never CC1, where the Ra sits), none with a sink inline
     CHECK(run_rd_lines(true, false, 0) == 2 && run_rd_lines(true, false, 2) == 2 && run_rd_lines(true, false, 1) == 2);

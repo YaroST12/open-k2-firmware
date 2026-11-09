@@ -136,6 +136,7 @@ SopPrimeHook g_sop_prime_hook = nullptr;  // k2::emk_spoof, null when off
 pd::Vconn g_vconn;                // VCONN_Swap experiment (remote only): the K2 takes the VCONN source role
 bool g_vconn_applied = false;     // PC13 high and the chip's VCONN switch closed on the line opposite the active one
 bool g_ra = false;                // Ra mode (k2/pd/emk_ra.hpp): PC13 high = Ra on CC1, Rd on CC2 alone; ends on detach, abort, `ra off`, reboot
+emkra::Refuse g_ra_refused = emkra::Refuse::None;   // why the last ra_set(true) said no (None when it did not)
 bool g_ra_run = false;            // a charger-test run owns the Ra mode: its units detach and re-attach, the mode survives them
 std::uint32_t g_vconn_on_ms = 0;  // when it went on; the settled reading is logged ~5 ms later
 bool g_vconn_logged = true;
@@ -2151,6 +2152,7 @@ bool ra_set(bool on) {
     c.pinned_rd = g_pin_rd;
     c.vconn = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;
     const emkra::Refuse why = emkra::check(c);
+    g_ra_refused = why;
     if (why != emkra::Refuse::None) {
         K2LOG("[EMKRA] refused: %s\n", emkra::refuse_name(why));
         return false;
@@ -2166,6 +2168,7 @@ bool ra_set(bool on) {
     return true;
 }
 bool ra_active() { return g_ra; }
+emkra::Refuse ra_refusal() { return g_ra_refused; }
 void ra_run_own() { if (g_ra) g_ra_run = true; }
 // `debug detach`: every owner of Rd is dropped (the re-read's attach, the run's Rd, the forced line, the Ra mode), the
 // partner is forgotten as on a real detach, and Rd stays off for kRdHoldMs, far longer than the source's tPDDebounce, so

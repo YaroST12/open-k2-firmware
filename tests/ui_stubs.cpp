@@ -80,6 +80,7 @@ bool ra_set(bool on) {
     return true;
 }
 bool ra_active() { return g_stub.ra_on; }
+emkra::Refuse ra_refusal() { return g_stub.inl ? emkra::Refuse::Inline : g_stub.ra_refuse ? emkra::Refuse::Contract : emkra::Refuse::None; }
 void ra_run_own() { if (g_stub.ra_on) g_stub.ra_owned++; }   // a run takes the Ra mode over (it survives the unit detaches)
 void set_force_line(std::uint8_t line) { g_stub.force_line = line; }
 static void set_rd(bool on) { if (on != g_stub.rd_run) { g_stub.rd_run = on; g_stub.rd_run_changes++; } }

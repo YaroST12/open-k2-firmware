@@ -77,6 +77,14 @@ constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V too"
                                                 "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
 static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
 static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
+// The warning of a START with a cable identity on a K2 that runs on the measured port (Refuse stage, refuse_late_): the alert
+// word (font 24 beside the triangle), two lines at x6 (16 px, 212 px wide) and the footer (27 characters).
+constexpr const char* kLateWord = "Self-powered";
+constexpr const char* kLateLines[2] = {"A charger reads the cable", "at plug-in, before the Ra."};
+constexpr const char* kLateFooter = "Cable arrives after attach";
+static_assert(all_fit(kLateLines, kSmallAdvPx, 212), "a self-powered warning line is wider than the screen");
+static_assert(fits_px(kSmallAdvPx, kLateFooter, 216), "the self-powered footer is wider than the footer");
+static_assert(fits_px(12, kLateWord, 180), "the self-powered alert word is wider than the band");
 constexpr uint32_t kPresetMasks[kPresets] = {
     ct::kDefaultAlgorithms, ct::kDefaultAlgorithms & kFamilies[kFamPd],
     ct::kDefaultAlgorithms & ~kFamilies[kFamPd],
@@ -853,7 +861,7 @@ __attribute__((noinline)) bool ChargerTestSession::arm_cable(ctcable::Choice c, 
     }
     if (!fusb302::ra_set(true)) {
         if (!already) ctx_.cables.disarm();
-        message("Ra mode refused; tool busy");
+        message(emkra::refuse_footer(fusb302::ra_refusal()));   // the reason: a contract, a tool, a pin, a live sink
         return false;
     }
     dialog_spoof_ = dialog_ra_ = true;
@@ -887,9 +895,13 @@ void ChargerTestSession::confirmed_start() {
     if (choice.kind != ctcable::Kind::Off) {
         topology_ = guard_topology(ctx_.now);
         const bool refused = !raguard::spoof_allowed(topology_);
-        if (refused && !bypass) { set_stage(Stage::Refuse); return; }
-        run_guard_ = static_cast<uint8_t>((1 + static_cast<uint8_t>(topology_)) | (refused ? 0x80 : 0));
+        // A K2 that runs on the measured port is attached to the charger before it can show a cable, and a charger that reads the
+        // e-marker does so at its attach: the identity would come late (runs/selfpwr-6a/). The user is told and can go on.
+        const bool late = !refused && self_supplied();
+        if ((refused || late) && !bypass) { refuse_late_ = late; set_stage(Stage::Refuse); return; }
+        run_guard_ = static_cast<uint8_t>((1 + static_cast<uint8_t>(topology_)) | ((refused || late) ? 0x80 : 0));
         if (refused) K2LOG("[GUARD] started anyway against a %s reading\n", raguard::name(topology_));
+        else if (late) K2LOG("[GUARD] started anyway, self-supplied: the Ra follows the attach\n");
     }
     if (apply_cable(choice)) press_start();
     else invalidate_confirmation();   // refused (message on the footer): the next OK is a first one again
@@ -1257,7 +1269,7 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         f.put("Runs without a load");
         return FooterTone::Info;
     }
-    case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
+    case Stage::Refuse: f.put(refuse_late_ ? kLateFooter : "Direct plug is the sure way"); return FooterTone::Caution;
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
         const int32_t vbus = ctx_.vbus_fast_mv;
@@ -1480,9 +1492,9 @@ void ChargerTestPage::paint_list() {
 void ChargerTestPage::paint_warning() {
     if (!laid_) {
         const Surface &c = ctx_.content;
-        kit::draw_alert_band(c, 22, false, "Cable on plug");
-        gfx_text(c, kSmall, 6, 64, "The spoof may not reach", kText, kBg);
-        gfx_text(c, kSmall, 6, 84, "the charger.", kText, kBg);
+        kit::draw_alert_band(c, 22, false, refuse_late_ ? kLateWord : "Cable on plug");
+        gfx_text(c, kSmall, 6, 64, refuse_late_ ? kLateLines[0] : "The spoof may not reach", kText, kBg);
+        gfx_text(c, kSmall, 6, 84, refuse_late_ ? kLateLines[1] : "the charger.", kText, kBg);
     }
     paint_list();
 }

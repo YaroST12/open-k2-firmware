@@ -58,6 +58,19 @@ constexpr const char* refuse_name(Refuse r) {
     return "?";
 }
 
+// The footer for a refused arming (27 characters at most): the reason the mode says no, never a bare "tool busy".
+constexpr const char* refuse_footer(Refuse r) {
+    switch (r) {
+        case Refuse::None: return "";
+        case Refuse::Inline: return "Live sink: unplug load";
+        case Refuse::Contract: return "Ra refused: contract live";
+        case Refuse::Busy: return "Ra refused: tool running";
+        case Refuse::PinnedRd: return "Ra refused: Rd on CC1";
+        case Refuse::Vconn: return "Ra refused: VCONN role";
+    }
+    return "";
+}
+
 // Rd lines a run start presents: with the mode on, CC2 alone (CC1 carries the Ra); otherwise the plain run-start rule.
 constexpr std::uint8_t run_rd_lines(bool ra, bool inline_sink, std::uint8_t cc) {
     if (!ra) return pd::start_rd_lines(inline_sink, cc);

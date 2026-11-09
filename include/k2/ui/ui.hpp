@@ -160,6 +160,8 @@ public:
     bool charger_test_set_units(std::span<const uint8_t> units) { return charger_test_.set_units(units); }
     bool charger_test_set_cable(ctcable::Choice c) { return charger_test_.set_cable_choice(c); }
     ctcable::Info charger_test_cable_info() const { return charger_test_.cable_info(); }
+    bool charger_test_refuse_late() const { return charger_test_.refuse_late(); }   // the warning is the self-supplied one
+    uint8_t charger_test_run_guard() const { return charger_test_.run_guard(); }    // the guard byte the run records
     bool ports_busy() const { return charger_test_busy() || fc_release_.busy(); }
     const char *busy_reason() const;   // why an identity / START is refused right now, nullptr = free
     bool spoof_busy() const { return busy_reason() != nullptr; }

@@ -377,6 +377,7 @@
   "374": "[RMT] reread pin %u\n",
   "375": "[RMT] reread relook\n",
   "376": "[PIN] released\n",
-  "377": "[PIN] Rd pinned on CC%u (mark written)\n"
+  "377": "[PIN] Rd pinned on CC%u (mark written)\n",
+  "378": "[GUARD] started anyway, self-supplied: the Ra follows the attach\n"
  }
 }

@@ -9,6 +9,7 @@
 #include "k2/core/bootmode.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/emk_learn.hpp"
+#include "k2/pd/emk_ra.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
 #include "k2/pd/pd_engine.hpp"
@@ -238,11 +239,14 @@ void reread_abort();
 void set_force_line(std::uint8_t line);
 // Top-plug e-marker spoof (k2/pd/emk_ra.hpp): PC13 high = an Ra on CC1, Rd on CC2 alone, attach scan forced to CC2, the
 // chip's VCONN switches never closed. PC13 goes high at once, before any Rd. Refused (false) with a sink inline, a
-// contract or tool running, a boot-pinned Rd or the VCONN experiment on; a partner already seen without a contract is
-// detached first. Ends with ra_set(false), reread_abort(), a detach (except inside a charger-test run, which owns it from
-// its START and releases it when the run is over) or a reboot. Logs [EMKRA].
+// contract or tool running, a boot-pinned Rd on CC1 or the VCONN experiment on; a partner already seen without a contract
+// is detached first. A pinned CC2 Rd (PLUS boot) and the contract of its own 5 V hold do not refuse: the Ra goes on beside
+// them, but the source has already attached, so it may never look at the cable. Ends with ra_set(false),
+// reread_abort(), a detach (except inside a charger-test run, which owns it from its START and releases it when the run is
+// over) or a reboot. Logs [EMKRA].
 bool ra_set(bool on);
 bool ra_active();
+emkra::Refuse ra_refusal();   // why the last ra_set(true) was refused (Refuse::None when it was not)
 // `pd-reread` op 6 (lab): pin the Rd on CC1/CC2 (0 = release) as a key-mode boot does, mark included, so a HID-powered K2 can
 // stand in for a charger-powered one (a following warm reset inherits the pin).
 bool debug_pin(std::uint8_t line);

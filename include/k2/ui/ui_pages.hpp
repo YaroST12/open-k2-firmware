@@ -244,6 +244,8 @@ public:
     bool set_cable_choice(ctcable::Choice c);
     ctcable::Info cable_info() const;
     Stage stage() const { return stage_; }
+    bool refuse_late() const { return refuse_late_; }
+    uint8_t run_guard() const { return run_guard_; }
     int cursor() const { return selection_; }
     void invalidate_confirmation();
     void emit_end(uint32_t now);   // run event for a run that just ended (live debug stream)
@@ -374,6 +376,7 @@ private:
     uint32_t guard_t_ = 0;               // when the last sample went into guard_
     raguard::Topology topology_ = raguard::Topology::Unknown;   // the guard's last reading (the Warning screen, the run's journal)
     bool guard_bypass_ = false;           // "Start anyway": the guard's reading is recorded, the spoof runs regardless
+    bool refuse_late_ = false;            // the Refuse stage is the self-supplied warning (Ra comes after the attach), not "Cable on plug"
     uint32_t confirm_until_ = 0;
     Proposal confirm_proposal_{};
     bool entering_ = false;       // enter() is switching the stage: nothing of this page is on screen yet
@@ -444,6 +447,7 @@ private:
     uint32_t& scroll_ms_ = s_.scroll_ms_;
     size_t& scroll_step_ = s_.scroll_step_;
     bool& guard_bypass_ = s_.guard_bypass_;
+    bool& refuse_late_ = s_.refuse_late_;
     bool& auto_resume_ = s_.auto_resume_;
     bool& resume_hold_ = s_.resume_hold_;
     pd::VbusWait& wait_ = s_.wait_;
