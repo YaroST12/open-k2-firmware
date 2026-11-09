@@ -41,6 +41,9 @@ void poll();
 
 // The charger test tells which spoof identity its run presents (Off = none / the run is over), so the comeback arms it.
 void set_run_cable(ctcable::Choice cable);
+// The charger test's boot restore found no run to give the armed identity to (the journal is gone, closed or cancelled): the
+// identity and its Ra go; the Rd stays for the judge. No-op when arm() armed nothing.
+void drop_identity();
 
 // Charger test, at START: the planned re-attach. Writes the Reattach record for `cable` at once and reads it back (true = it is
 // on the volume). The caller then drops the Rd for a moment (fusb302::rd_glitch_begin/end); end_reattach() follows once the K2

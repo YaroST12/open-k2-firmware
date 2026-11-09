@@ -14,6 +14,7 @@
 #include "k2/pd/power_source.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/core/scratch.hpp"
+#include "k2/core/rd_comeback.hpp"
 #include <algorithm>
 #include <cstring>
 #include "k2/drivers/systick.hpp"
@@ -83,7 +84,17 @@ bool ra_active() { return g_stub.ra_on; }
 emkra::Refuse ra_refusal() { return g_stub.inl ? emkra::Refuse::Inline : g_stub.ra_refuse ? emkra::Refuse::Contract : emkra::Refuse::None; }
 void ra_run_own() { if (g_stub.ra_on) g_stub.ra_owned++; }   // a run takes the Ra mode over (it survives the unit detaches)
 void set_force_line(std::uint8_t line) { g_stub.force_line = line; }
-static void set_rd(bool on) { if (on != g_stub.rd_run) { g_stub.rd_run = on; g_stub.rd_run_changes++; } }
+void rd_glitch_begin() {
+    if (g_stub.ra_ons_at_glitch < 0) { g_stub.ra_ons_at_glitch = g_stub.ra_ons; g_stub.ra_on_at_glitch = g_stub.ra_on; }
+    g_stub.glitch_begins++;
+}
+void rd_glitch_end() { g_stub.glitch_ends++; }
+static void set_rd(bool on) {
+    if (on != g_stub.rd_run) {
+        if (on && g_stub.ra_at_first_rd < 0) g_stub.ra_at_first_rd = g_stub.ra_on ? 1 : 0;
+        g_stub.rd_run = on; g_stub.rd_run_changes++;
+    }
+}
 bool rd_for_run(bool on) {
     if (on && g_stub.inl) return false;
     if (!on) ra_set(false);   // the Ra mode goes with the run, as in src/drivers/fusb302.cpp
@@ -171,6 +182,19 @@ std::uint32_t cable_seq() { return g_stub.cable_seq; }
 std::uint32_t session() { return g_stub.session; }
 void sink_cc(std::int32_t, std::int32_t) {}
 }  // namespace fusb302
+
+namespace rdcomeback {
+bool pending() { return false; }
+const rdintent::Intent& found() { return g_stub.rdc_found; }
+void set_run_cable(ctcable::Choice cable) { g_stub.rdc_run_cable = cable; g_stub.rdc_run_sets++; }
+void drop_identity() { g_stub.rdc_drops++; }
+bool begin_reattach(ctcable::Choice cable) {
+    g_stub.rdc_begins++;
+    g_stub.rdc_begin_cable = cable;
+    return g_stub.rdc_begin_ok;
+}
+void end_reattach() { g_stub.rdc_ends++; }
+}  // namespace rdcomeback
 
 namespace bbpersist {
 void hold_run() { g_stub.bb_holds++; }

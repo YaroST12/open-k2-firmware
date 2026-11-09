@@ -136,9 +136,6 @@ static void finish_wait(Ui& ui, uint32_t now, void (*hook)(uint32_t) = nullptr, 
 // The confirming press, then the wait out: the run (or a refusal on Review) is what the caller sees next.
 static void confirm_press(Ui& ui, uint32_t now = 1200) {
     confirm_press_nowait(ui, now);
-    // A self-supplied K2 with an identity is warned that the Ra comes after the attach: these tests are about what follows, so
-    // they answer "Start anyway" (the default row). test_self_supplied_cable_warning drives the dialog itself.
-    if (ui.charger_test_stage() == kRefuseStage && ui.charger_test_refuse_late()) press(ui, Button::Ok, now);
     finish_wait(ui, now);
 }
 // Both presses and the wait: the whole START.
@@ -3276,88 +3273,73 @@ static void test_ra_guard_lets_a_direct_charger_through() {
         CHECK_EQ(ui.charger_test_stage() == kRefuseStage, false);
     }
     // A PLUS boot (Rd pinned on CC2): PLUS pulls CC2 down, so the lines can never both read as Rp. The guard cannot judge
-    // and assumes the direct receptacle: the charger powers the K2 through the top plug, so it is not the "cable on plug"
-    // warning that speaks (the late-Ra one does, below: test_self_supplied_cable_warning).
+    // and assumes the direct receptacle: the charger powers the K2 through the top plug, so no "cable on plug" refusal speaks
+    // and no warning of any kind: the START goes straight on (test_self_supplied_start, below).
     for (const int vbus : {0, 5000}) {
         for (const auto& lines : {std::pair{3300, 600}, std::pair{3300, 0}, std::pair{0, 3300}}) {
             fixture(); g_stub.pm.vbus_mv = vbus; g_stub.vbus_on_rd = true; g_stub.self_powered = true;
             set_cc(lines.first, lines.second);
             Ui ui; open(ui); review(ui);
             pick_builtin(ui);
-            CHECK_EQ(ui.charger_test_stage(), kRefuseStage);   // the late-Ra warning, with no verdict on the plug
-            CHECK_EQ(ui.charger_test_refuse_late(), true);
-            nothing_armed();
+            CHECK_EQ(ui.charger_test_stage() == kRefuseStage, false);
+            CHECK_EQ(g_stub.spoof_arms, 1);
         }
     }
 }
-// A K2 that runs on the measured port (PLUS boot: pinned Rd; or bus-powered) is attached to the charger before it can show
-// a cable: the charger decides whether to read the e-marker when it attaches, and an Ra raised afterwards did not make this
-// one look (runs/selfpwr-6a/). START with an identity says so, and the user can still go ahead: "Start anyway" arms it (the
-// run's guard byte records the choice), "Start, cable OFF" is the honest run, Cancel changes nothing.
+// A K2 that runs on the measured port (PLUS boot: pinned Rd; or bus-powered) is attached to the charger before it can show a
+// cable, and a charger that reads the e-marker does so at its attach (docs/CHARGER_QUIRKS.md `cable-look-at-attach`). There is no
+// warning for that any more: START with an identity goes straight on, with the identity armed and no Refuse stage. Only the
+// topology-based "Cable on plug" refusal keeps its own screen. The planned re-attach (below) is a footer note, not a stage.
 static void self_supplied_start(Ui& ui, bool plus) {
     fixture(); g_stub.pm.vbus_mv = 0; g_stub.vbus_on_rd = true;
     if (plus) g_stub.self_powered = true; else g_stub.bus_powered = true;
     set_cc(3300, plus ? 600 : 3300);   // PLUS sags CC2; a bus-powered K2 on a receptacle charger reads Rp on both
     ui.init(0);
 }
-static void test_self_supplied_cable_warning() {
+static void test_self_supplied_start() {
     for (const bool plus : {true, false}) {
-        { // the warning replaces the arming; nothing is armed before the answer
+        { // the identity is armed beside the pinned Rd and the START waits for the charger: no stage in between
             Ui ui; self_supplied_start(ui, plus); open(ui); review(ui);
             pick_builtin(ui);
-            CHECK_EQ(ui.charger_test_stage(), kRefuseStage); CHECK_EQ(ui.charger_test_cursor(), 0);
-            CHECK_EQ(ui.charger_test_refuse_late(), true);
-            CHECK_EQ(ui.list_state().count, 3);
-            nothing_armed();
-            ui.tick(1500);
-            check_row_text(0, "Start anyway", kCaution, kFocusT, -1, 150, kRefuseY);
-            check_row_text(1, "Start, cable OFF", kText, kBg, -1, 150, kRefuseY);
-            check_row_text(2, "Cancel", kText, kBg, -1, 150, kRefuseY);
-            if (plus) dump_screen("selfpwr_warning");   // K2_DUMP: the screen for the design review
-        }
-        { // Start anyway: the identity is armed beside the pinned Rd, the run records that the user went on
-            Ui ui; self_supplied_start(ui, plus); open(ui); review(ui);
-            pick_builtin(ui);
-            press(ui, Button::Ok, 1800);
-            CHECK_EQ(g_stub.spoof_arms, 1); CHECK_EQ(g_stub.ra_ons, 1);
             CHECK_EQ(ui.charger_test_stage(), kWaitStage);
-            CHECK_EQ(ui.charger_test_run_guard() & 0x80, 0x80);
+            CHECK_EQ(g_stub.spoof_arms, 1); CHECK_EQ(g_stub.ra_ons, 1);
+            CHECK_EQ(ui.charger_test_run_guard() != 0 && (ui.charger_test_run_guard() & 0x80) == 0, true);   // a reading, no "started anyway" bit
         }
-        { // Start, cable OFF: no identity, no Ra, the Rd and the wait as for any plain START
+        { // Start with the cable OFF: no identity, no Ra, the Rd and the wait as for any plain START
             Ui ui; self_supplied_start(ui, plus); open(ui); review(ui);
-            pick_builtin(ui);
-            move(ui, 1, 1700); press(ui, Button::Ok, 1800);
+            start_press(ui, 1300); confirm_press_nowait(ui, 1400);
             CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0);
             CHECK_EQ(ui.charger_test_cable_info().run == kOff, true);
             CHECK_EQ(ui.charger_test_stage(), kWaitStage);
         }
-        { // BACK and Cancel: back on Review, nothing armed
-            Ui ui; self_supplied_start(ui, plus); open(ui); review(ui);
-            pick_builtin(ui);
-            press(ui, Button::Back, 1600);
-            CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
-            pick_builtin(ui, 1700);
-            move(ui, 2, 1800); press(ui, Button::Ok, 1900);
-            CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
-        }
-        { // OFF is never warned about
-            Ui ui; self_supplied_start(ui, plus); open(ui); review(ui);
-            start_press(ui, 1300); confirm_press_nowait(ui, 1400);
-            CHECK_EQ(ui.charger_test_stage(), kWaitStage); CHECK_EQ(g_stub.spoof_arms, 0);
+        { // the confirmation window on a self-supplied K2 is the plain one unless the planned re-attach applies
+            Ui ui; self_supplied_start(ui, plus); g_stub.pm.vbus_mv = 5000; open(ui); review(ui);   // the charger is the supply: VBUS is up
+            press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+            start_press(ui, 1400); ui.tick(1500);
+            CHECK_EQ(ui.charger_test_confirm_reattach(), false);
+            CHECK_EQ(footer_says("Press again to start", kCaution), true);
+            nothing_armed();
         }
     }
-    { // a K2 powered on its own (HID) is not warned: its START detaches and the Ra goes on first
+    { // a K2 powered on its own (HID) goes straight on too: its START detaches and the Ra goes on first
         rd_fixture(); set_cc(3300, 3300);
         Ui ui; open(ui); review(ui);
         pick_builtin(ui);
-        CHECK_EQ(ui.charger_test_stage(), kWaitStage); CHECK_EQ(ui.charger_test_refuse_late(), false);
+        CHECK_EQ(ui.charger_test_stage(), kWaitStage);
         CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.ra_on, true);
     }
-    { // the cable-on-plug warning keeps its own text and precedence on a K2 that is not self-supplied
+    { // the cable-on-plug refusal keeps its own screen and precedence on a K2 that is not self-supplied
         rd_fixture(); set_cc(3300, 0);
         Ui ui; open(ui); review(ui);
         pick_builtin(ui);
-        CHECK_EQ(ui.charger_test_stage(), kRefuseStage); CHECK_EQ(ui.charger_test_refuse_late(), false);
+        CHECK_EQ(ui.charger_test_stage(), kRefuseStage);
+        ui.tick(1500);
+        check_row_text(0, "Start anyway", kCaution, kFocusT, -1, 150, kRefuseY);
+        CHECK_EQ(footer_says("Direct plug is the sure way", kCaution), true);
+        CHECK_EQ(ui.charger_test_run_guard(), 0);
+        press(ui, Button::Ok, 1600);   // Start anyway: the identity runs and the run records that the reading was overruled
+        CHECK_EQ(g_stub.spoof_arms, 1);
+        CHECK_EQ(ui.charger_test_run_guard() & 0x80, 0x80);
     }
     { // an Ra refusal says why on the footer, never the bare "tool busy"
         rd_fixture(); set_cc(3300, 3300); g_stub.ra_refuse = true;
@@ -3366,6 +3348,130 @@ static void test_self_supplied_cable_warning() {
         CHECK_EQ(ui.charger_test_stage(), 4);
         ui.tick(1700);
         CHECK_EQ(footer_says("Ra refused: contract live", kCaution), true);
+    }
+}
+// ---- the planned re-attach (rdintent::plan_reattach, src/ui/ui_charger_test.cpp reattach_*) -------------------------------------
+// A self-powered K2 on the CC2-pinned Rd, a source that lists SVID 0x2717 and a cable that claims 5 A: the run is journaled, the
+// intent marker written, then the Rd drops for a moment with the Ra kept, so the charger reads the cable at a real attach. The
+// K2 normally dies in the dark and the comeback boot (rd_comeback.cpp) finishes the story; here it survives and the run goes on.
+static void planned_fixture() {
+    fixture(); g_stub.self_powered = true; g_stub.sink.xiaomi_svid = true; g_stub.sink.state = pd::SinkState::Ready;
+    set_cc(3300, 600);
+}
+// Ticks in 20 ms steps from `t` (the PD engine's service() each pass) until `stop()` holds, at most `max` ticks.
+static uint32_t tick_until(Ui& ui, uint32_t t, bool (*stop)(), unsigned max = 600) {
+    for (unsigned n = 0; n < max && !stop(); ++n) { t += 20; fusb302::service(); ui.tick(t); }
+    return t;
+}
+static void test_planned_reattach() {
+    { // applies: the confirmation announces the blink, the run takes its journal, the marker and the gap come in that order
+        planned_fixture();
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); ui.tick(1450);
+        CHECK_EQ(ui.charger_test_confirm_reattach(), true);
+        CHECK_EQ(footer_says("Press again, K2 blinks once", kCaution), true);
+        CHECK_EQ(g_stub.rdc_begins, 0); CHECK_EQ(g_stub.glitch_begins, 0);   // nothing yet: the second press starts it
+        dump_screen("planned_reattach_confirm");
+        confirm_press_nowait(ui, 1500);
+        CHECK_EQ(ui.charger_test_reattach_planned(), true);
+        CHECK_EQ(g_stub.rdc_run_cable.kind == ctcable::Kind::Builtin, true);   // the follower records the run's identity
+        CHECK_EQ(g_stub.glitch_begins, 0);                                    // the journal comes first
+        uint32_t t = tick_until(ui, 1500, [] { return g_stub.glitch_begins > 0; });
+        CHECK_EQ(g_stub.glitch_begins, 1); CHECK_EQ(g_stub.rdc_begins, 1);
+        CHECK_EQ(g_stub.rdc_begin_cable.kind == ctcable::Kind::Builtin, true);   // the marker names the cable the run presents
+        CHECK_EQ(g_stub.journal_arm_open, false);                                // after the journal's meta record
+        CHECK_EQ(g_stub.ra_on_at_glitch, true);                                  // the Ra is on before the Rd edge
+        CHECK_EQ(ui.charger_test_reattach_state(), 1);
+        CHECK_EQ(g_stub.glitch_ends, 0); CHECK_EQ(g_stub.rdc_ends, 0);
+        g_stub.sink.state = pd::SinkState::Idle;    // the charger's contract is gone while the Rd is back
+        for (unsigned n = 0; n < 4; ++n) { t += 20; fusb302::service(); ui.tick(t); }
+        CHECK_EQ(g_stub.glitch_ends, 1);            // the gap is over (30 ms)
+        CHECK_EQ(ui.charger_test_reattach_state(), 2);
+        CHECK_EQ(g_stub.rdc_ends, 0);               // not alive until the new contract
+        g_stub.sink.state = pd::SinkState::Ready;
+        t += 20; ui.tick(t);
+        CHECK_EQ(ui.charger_test_reattach_state(), 0); CHECK_EQ(g_stub.rdc_ends, 1);
+        CHECK_EQ(g_stub.glitch_ends, 1);            // closed once
+        CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+    }
+    { // a K2 that survives with no new contract goes on after 5 s
+        planned_fixture();
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+        uint32_t t = tick_until(ui, 1500, [] { return g_stub.glitch_begins > 0; });
+        g_stub.sink.state = pd::SinkState::Idle;
+        t += 100; ui.tick(t);
+        CHECK_EQ(ui.charger_test_reattach_state(), 2);
+        t += 4900; ui.tick(t);
+        CHECK_EQ(ui.charger_test_reattach_state(), 2);
+        t += 200; ui.tick(t);
+        CHECK_EQ(ui.charger_test_reattach_state(), 0); CHECK_EQ(g_stub.rdc_ends, 1);
+    }
+    { // the marker did not make it to the volume: no blink (the K2 would not be known to come back), the run goes on
+        planned_fixture(); g_stub.rdc_begin_ok = false;
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+        tick_until(ui, 1500, [] { return g_stub.rdc_begins > 0; });
+        CHECK_EQ(g_stub.rdc_begins, 1);
+        CHECK_EQ(g_stub.glitch_begins, 0); CHECK_EQ(g_stub.glitch_ends, 0); CHECK_EQ(g_stub.rdc_ends, 0);
+        CHECK_EQ(ui.charger_test_reattach_state(), 0); CHECK_EQ(ui.charger_test_reattach_planned(), false);
+        CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+    }
+    { // BACK / a stop during the gap: the Rd comes back, the marker is the follower's again
+        planned_fixture();
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+        tick_until(ui, 1500, [] { return g_stub.glitch_begins > 0; });
+        CHECK_EQ(ui.charger_test_reattach_state(), 1);
+        ui.cancel_charger_test();
+        CHECK_EQ(g_stub.glitch_ends, 1); CHECK_EQ(g_stub.rdc_ends, 1); CHECK_EQ(ui.charger_test_reattach_state(), 0);
+        CHECK_EQ(g_stub.rdc_run_cable.kind == ctcable::Kind::Off, true);   // the run's identity is no longer recorded
+    }
+    { // a stop after the gap (waiting for the contract) ends the marker's hand-over once and does not touch the Rd again
+        planned_fixture();
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+        uint32_t t = tick_until(ui, 1500, [] { return g_stub.glitch_begins > 0; });
+        g_stub.sink.state = pd::SinkState::Idle;
+        for (unsigned n = 0; n < 4; ++n) { t += 20; ui.tick(t); }
+        CHECK_EQ(ui.charger_test_reattach_state(), 2);
+        ui.cancel_charger_test();
+        CHECK_EQ(g_stub.glitch_ends, 1); CHECK_EQ(g_stub.rdc_ends, 1);
+    }
+    // Not applicable: no blink, no marker, the plain footer, and the run starts as it always did.
+    struct Case { const char* what; void (*set)(); bool cable_on; };
+    static const Case cases[] = {
+        {"source without the 0x2717 pattern", [] { g_stub.sink.xiaomi_svid = false; }, true},
+        {"not self-powered (HID or bus power)", [] { g_stub.self_powered = false; g_stub.bus_powered = true; }, true},
+        {"cable OFF", [] {}, false},
+    };
+    for (const auto& c : cases) {
+        planned_fixture(); c.set();
+        Ui ui; open(ui); review(ui);
+        if (c.cable_on) { press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300); }
+        start_press(ui, 1400); ui.tick(1450);
+        CHECK_EQ(ui.charger_test_confirm_reattach(), false);
+        CHECK_EQ(footer_says("Press again to start", kCaution), true);
+        confirm_press_nowait(ui, 1500);
+        tick_until(ui, 1500, [] { return false; }, 300);
+        CHECK_EQ(ui.charger_test_reattach_planned(), false);
+        CHECK_EQ(g_stub.rdc_begins, 0); CHECK_EQ(g_stub.glitch_begins, 0); CHECK_EQ(g_stub.glitch_ends, 0); CHECK_EQ(g_stub.rdc_ends, 0);
+        if (c.what[0] == 'c') CHECK_EQ(g_stub.rdc_run_cable.kind == ctcable::Kind::Off, true);
+        (void)c.what;
+    }
+    { // an HID-powered START presents the Ra before the Rd (apply_cable arms the identity, then the Rd goes on), and never blinks
+        rd_fixture(); set_cc(3300, 3300);
+        Ui ui; open(ui); review(ui);
+        pick_builtin(ui);
+        CHECK_EQ(g_stub.ra_at_first_rd, 1);
+        CHECK_EQ(g_stub.rd_run, true);
+        tick_until(ui, 1500, [] { return false; }, 100);
+        CHECK_EQ(g_stub.glitch_begins, 0); CHECK_EQ(g_stub.rdc_begins, 0);
     }
 }
 // ---- the session outlives the page (the page arena builds the page only while it is shown) -----------------------------------
@@ -3414,7 +3520,8 @@ int main() {
     test_ra_guard_refuses_a_cable();
     test_ra_guard_speaks_on_the_second_ok();
     test_ra_guard_lets_a_direct_charger_through();
-    test_self_supplied_cable_warning();
+    test_self_supplied_start();
+    test_planned_reattach();
     test_resume_unattended_goes_on_by_itself();
     test_self_powered_vbus_loss_keeps_the_journal_open();
     test_resume_rearms_the_cable_identity();

@@ -166,7 +166,9 @@ public:
     bool charger_test_set_units(std::span<const uint8_t> units) { return charger_test_.set_units(units); }
     bool charger_test_set_cable(ctcable::Choice c) { return charger_test_.set_cable_choice(c); }
     ctcable::Info charger_test_cable_info() const { return charger_test_.cable_info(); }
-    bool charger_test_refuse_late() const { return charger_test_.refuse_late(); }   // the warning is the self-supplied one
+    bool charger_test_reattach_planned() const { return charger_test_.reattach_planned(); }   // the run does the planned re-attach
+    uint8_t charger_test_reattach_state() const { return charger_test_.reattach_state(); }   // 0 none, 1 Rd off, 2 awaiting the contract
+    bool charger_test_confirm_reattach() const { return charger_test_.confirm_reattach(); }   // the confirmation announces the blink
     uint8_t charger_test_run_guard() const { return charger_test_.run_guard(); }    // the guard byte the run records
     bool ports_busy() const { return charger_test_busy() || fc_release_.busy(); }
     const char *busy_reason() const;   // why an identity / START is refused right now, nullptr = free

@@ -20,6 +20,7 @@
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/pd/transcap.hpp"
 #include "k2/chargertest/charger_journal.hpp"
+#include "k2/core/rd_intent.hpp"
 struct StubState {
     uint32_t ms = 1000;
     // The charger-test journal as the boot finds it (load() answers journal_load) and what the page wrote back.
@@ -75,6 +76,16 @@ struct StubState {
     bool ra_on = false, ra_refuse = false;   // fusb302::ra_set(): the Ra mode, and a forced refusal
     int ra_ons = 0, ra_offs = 0;             // ra_set(true) / (false) that changed the mode
     int ra_owned = 0;                        // ra_run_own() calls that found the Ra mode on (a run took it over)
+    // The Rd comeback (k2/core/rd_comeback.hpp) and the planned re-attach's Rd gap (fusb302::rd_glitch_begin/end).
+    k2::rdintent::Intent rdc_found{};        // rdcomeback::found(): what the boot's marker said (None = an ordinary boot)
+    k2::ctcable::Choice rdc_run_cable{};     // the last rdcomeback::set_run_cable()
+    int rdc_run_sets = 0, rdc_begins = 0, rdc_ends = 0, rdc_drops = 0;
+    bool rdc_begin_ok = true;                // begin_reattach()'s answer: the record is on the volume
+    k2::ctcable::Choice rdc_begin_cable{};   // the identity begin_reattach() was asked to record
+    int ra_at_first_rd = -1;                 // 1 when the Ra mode was already on at the run's first Rd edge, 0 when not, -1 no Rd yet
+    int glitch_begins = 0, glitch_ends = 0;  // rd_glitch_begin / rd_glitch_end
+    int ra_ons_at_glitch = -1;               // ra_ons when the first gap opened: the Ra went on BEFORE the Rd edge
+    bool ra_on_at_glitch = false;
     int force_line = 0;                      // fusb302::set_force_line()
     int unit_detaches = 0, unit_attaches = 0, unit_holds = 0; bool legacy_attach = false;   // charger test units
     bool pd_chatter = false;        // a Legacy attach whose charger never goes PD-quiet

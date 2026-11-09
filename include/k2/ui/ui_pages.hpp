@@ -251,7 +251,9 @@ public:
     bool set_cable_choice(ctcable::Choice c);
     ctcable::Info cable_info() const;
     Stage stage() const { return stage_; }
-    bool refuse_late() const { return refuse_late_; }
+    bool reattach_planned() const { return reattach_plan_; }
+    uint8_t reattach_state() const { return reattach_; }
+    bool confirm_reattach() const { return confirm_reattach_; }
     uint8_t run_guard() const { return run_guard_; }
     int cursor() const { return selection_; }
     void invalidate_confirmation();
@@ -341,7 +343,8 @@ private:
     // in one go: journal_pump() does ONE file per tick behind the row, and only while the PD link has been quiet (see record()).
     uint32_t jr_wait_ms_ = 0;               // when the pending records began to wait for a quiet link (0 = nothing waiting)
     // The run's journal is armed (its whole plan written, header last) in pieces too, one write per tick on a quiet link, while the
-    // Runner is held in its first Baseline: arm_ 1 = rows and header, 2 = the run's meta record (one more write), 0 = done.
+    // Runner is held in its first Baseline: arm_ 1 = rows and header, 2 = the run's meta record (one more write), 3 = the planned
+    // re-attach's marker and Rd gap (one more write), 0 = done.
     uint8_t arm_ = 0;
     uint32_t arm_t0_ = 0;
     charger_journal::RunMeta arm_meta_{};
@@ -385,7 +388,17 @@ private:
     uint32_t guard_t_ = 0;               // when the last sample went into guard_
     raguard::Topology topology_ = raguard::Topology::Unknown;   // the guard's last reading (the Warning screen, the run's journal)
     bool guard_bypass_ = false;           // "Start anyway": the guard's reading is recorded, the spoof runs regardless
-    bool refuse_late_ = false;            // the Refuse stage is the self-supplied warning (Ra comes after the attach), not "Cable on plug"
+    // The planned re-attach (rdintent::plan_reattach): a self-powered START with a 6 A identity against a source that lists SVID
+    // 0x2717 makes the K2 blink off once, so the charger reads the cable at a real attach. confirm_reattach_ = the confirmation on
+    // screen announces it; reattach_plan_ = this run does it (begin_run); reattach_ 1 = the Rd is off for the gap, 2 = the Rd is
+    // back and the charger's new contract is awaited (the Runner stays held in its Baseline until then or until the K2 died).
+    bool confirm_reattach_ = false;
+    bool reattach_plan_ = false;
+    uint8_t reattach_ = 0;
+    uint32_t reattach_t0_ = 0;
+    void reattach_begin(uint32_t now);
+    void reattach_step(uint32_t now);
+    void reattach_drop();
     uint32_t confirm_until_ = 0;
     Proposal confirm_proposal_{};
     bool entering_ = false;       // enter() is switching the stage: nothing of this page is on screen yet
@@ -456,7 +469,7 @@ private:
     uint32_t& scroll_ms_ = s_.scroll_ms_;
     size_t& scroll_step_ = s_.scroll_step_;
     bool& guard_bypass_ = s_.guard_bypass_;
-    bool& refuse_late_ = s_.refuse_late_;
+    bool& confirm_reattach_ = s_.confirm_reattach_;
     bool& auto_resume_ = s_.auto_resume_;
     bool& resume_hold_ = s_.resume_hold_;
     pd::VbusWait& wait_ = s_.wait_;

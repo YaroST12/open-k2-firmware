@@ -395,6 +395,10 @@
   "392": "[RDI] identity not armed (spoof=%d); Rd kept, no Ra\n",
   "393": "[RDI] comeback vouched after %u ms (caps seen)\n",
   "394": "[RDI] comeback released after %u ms (%s): Rd, Ra, spoof and record dropped\n",
-  "395": "[RDI] marker %s: %s pin=%u cable=%u/%u (%s, %u ms)\n"
+  "395": "[RDI] marker %s: %s pin=%u cable=%u/%u (%s, %u ms)\n",
+  "396": "[RDI] comeback identity dropped: no run took it over\n",
+  "397": "[TEST] planned re-attach skipped: the intent marker is not on the volume\n",
+  "398": "[TEST] planned re-attach: Rd off for %u ms, cable %u/%u\n",
+  "399": "[TEST] planned re-attach: %s after %u ms, the run goes on\n"
  }
 }

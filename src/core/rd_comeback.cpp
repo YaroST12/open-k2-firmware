@@ -135,6 +135,14 @@ void poll() {
 
 void set_run_cable(ctcable::Choice cable) { g_run_cable = cable; }
 
+void drop_identity() {
+    if (!g_spoof) return;
+    emk_spoof::disarm();
+    g_spoof = false;
+    fusb302::ra_set(false);
+    K2LOG("[RDI] comeback identity dropped: no run took it over\n");
+}
+
 bool begin_reattach(ctcable::Choice cable) {
     const std::uint8_t pin = fusb302::pin_rd();
     if (pin != 2) return false;

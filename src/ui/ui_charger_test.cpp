@@ -8,6 +8,7 @@
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/rd_comeback.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/boot_ra.hpp"
 #include "k2/chargertest/charger_journal_hw.hpp"
@@ -77,14 +78,14 @@ constexpr const char* kPresetNotes[kPresets] = {"Everything, QC Class B 20V too"
                                                 "D+/D-: vendor modes, QC, UFCS", "Huawei, Samsung, OPPO, vivo"};
 static_assert(all_fit(kPresetNotes, kLabelAdv, kit::kNoteMaxPx), "a preset note is wider than the row note");
 static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider than its row");
-// The warning of a START with a cable identity on a K2 that runs on the measured port (Refuse stage, refuse_late_): the alert
-// word (font 24 beside the triangle), two lines at x6 (16 px, 212 px wide) and the footer (27 characters).
-constexpr const char* kLateWord = "Self-powered";
-constexpr const char* kLateLines[2] = {"A charger reads the cable", "at plug-in, before the Ra."};
-constexpr const char* kLateFooter = "Cable arrives after attach";
-static_assert(all_fit(kLateLines, kSmallAdvPx, 212), "a self-powered warning line is wider than the screen");
-static_assert(fits_px(kSmallAdvPx, kLateFooter, 216), "the self-powered footer is wider than the footer");
-static_assert(fits_px(12, kLateWord, 180), "the self-powered alert word is wider than the band");
+// The planned re-attach (rdintent::plan_reattach) is announced on the footer of the START confirmation, never as a warning or a
+// stage of its own (27 characters at most): the second press goes straight on.
+constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
+static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
+// The Rd gap of the planned re-attach (measured on the lab recipe: 30 ms is enough for the charger to drop VBUS, and the cable
+// look follows the fresh attach) and how long the charger's new contract is awaited before the run goes on regardless.
+constexpr uint32_t kReattachGapMs = 30;
+constexpr uint32_t kReattachWaitMs = 5000;
 constexpr uint32_t kPresetMasks[kPresets] = {
     ct::kDefaultAlgorithms, ct::kDefaultAlgorithms & kFamilies[kFamPd],
     ct::kDefaultAlgorithms & ~kFamilies[kFamPd],
@@ -326,16 +327,61 @@ void ChargerTestSession::arm_step(uint32_t now) {
         if (!cj::hw::working()) arm_ = 2;
         return;
     }
-    cj::hw::meta(arm_meta_);
+    if (arm_ == 2) {
+        cj::hw::meta(arm_meta_);
+        K2LOG("[TEST] journal armed in %u ms\n", unsigned(now - arm_t0_));
+        if (reattach_plan_) { arm_ = 3; return; }   // the marker and the gap are the next quiet tick's: one flash write per tick
+        arm_ = 0;
+        runner_.hold(false);
+        return;
+    }
     arm_ = 0;
+    reattach_begin(now);
+}
+// The planned re-attach (the K2 lives on the charger's VBUS and the charger skipped the cable at its attach): the run is journaled,
+// the identity armed. The intent marker goes to the volume first, then the Rd drops for kReattachGapMs with the Ra kept. The
+// charger sees a detach and cuts VBUS, which the K2 does not outlive (about 165 ms dark); the comeback boot keeps the Rd and the
+// Ra from its first instruction and the journal resumes the run. A K2 that does outlive it (a host on the other port) goes on
+// as it is once the charger's new contract is up (reattach_step). The Runner stays held until then.
+void ChargerTestSession::reattach_begin(uint32_t now) {
+    if (!rdcomeback::begin_reattach(run_cable_)) {
+        K2LOG("[TEST] planned re-attach skipped: the intent marker is not on the volume\n");
+        reattach_plan_ = false;
+        runner_.hold(false);
+        return;
+    }
+    fusb302::rd_glitch_begin();
+    reattach_ = 1; reattach_t0_ = now;
+    K2LOG("[TEST] planned re-attach: Rd off for %u ms, cable %u/%u\n", unsigned(kReattachGapMs), unsigned(run_cable_.kind), unsigned(run_cable_.seq));
+}
+void ChargerTestSession::reattach_step(uint32_t now) {
+    if (reattach_ == 1) {
+        if (now - reattach_t0_ < kReattachGapMs) return;
+        fusb302::rd_glitch_end();
+        reattach_ = 2; reattach_t0_ = now;
+        return;
+    }
+    if (reattach_ != 2) return;
+    // rd_glitch_end forgot the old contract, so Ready here is the charger's new one: this K2 outlived the gap.
+    const bool ready = fusb302::sink_status().state == pd::SinkState::Ready;
+    if (!ready && now - reattach_t0_ < kReattachWaitMs) return;
+    K2LOG("[TEST] planned re-attach: %s after %u ms, the run goes on\n", ready ? "new contract" : "no new contract", unsigned(now - reattach_t0_));
+    reattach_drop();
     runner_.hold(false);
-    K2LOG("[TEST] journal armed in %u ms\n", unsigned(now - arm_t0_));
+}
+// The planned re-attach is over (or the run ended inside it): the Rd is given back if the gap is still open and the marker is the
+// follower's again.
+void ChargerTestSession::reattach_drop() {
+    if (reattach_ == 1) fusb302::rd_glitch_end();
+    if (reattach_) rdcomeback::end_reattach();
+    reattach_ = 0;
+    reattach_plan_ = false;
 }
 // The run ended before its plan was on flash: the header goes in last, so no run of this one is there to resume, and there is
 // nothing to close either.
 void ChargerTestSession::arm_abort() {
     charger_journal::hw::cancel();
-    arm_ = 0; journal_active_ = false;
+    arm_ = 0; journal_active_ = false; reattach_plan_ = false;
     runner_.hold(false);
     K2LOG("[TEST] journal arm abandoned: the run ended before its plan was written\n");
 }
@@ -345,7 +391,7 @@ void ChargerTestSession::arm_abort() {
 void ChargerTestSession::closing(ct::Reason r) {
     if (!journal_active_ || journal_closed_) return;
     if (arm_ == 1) { arm_abort(); return; }
-    if (arm_ == 2) { arm_ = 0; runner_.hold(false); }   // the header is in; the meta record of a run that ends here is not worth a write
+    if (arm_ >= 2) { arm_ = 0; reattach_plan_ = false; runner_.hold(false); }   // the header is in; the meta record of a run that ends here is not worth a write
     // Nothing is drained: the section files still to be written are moot for a run that is over (Finish closes it, a closed
     // run is never resumed, and no write here may take more than its own one file).
     charger_journal::hw::cancel();
@@ -384,6 +430,9 @@ void ChargerTestSession::attempt(size_t index, uint8_t count) {
 bool ChargerTestSession::boot_restore(bool cancel) {
     const bool resume = boot_load(cancel);
     boot_arm_cable();   // after the Rd decision above: a released inherited pin is no longer a self-powered boot
+    // A comeback boot armed the recorded identity before there was a page. When no run takes it over (the journal is gone, closed
+    // or cancelled, and the boot did not arm the selection) it ends here, with its Ra; the Rd stays (the comeback's judge decides).
+    if (!resume && !dialog_spoof_) rdcomeback::drop_identity();
     return resume;
 }
 bool ChargerTestSession::boot_load(bool cancel) {
@@ -408,6 +457,8 @@ bool ChargerTestSession::boot_load(bool cancel) {
         self_run_ = r.has_meta && r.meta.unattended;   // unattended is what self_powered() was when the run started
         run_guard_ = r.has_meta ? r.meta.guard : uint8_t(0);   // the guard's reading at START stays with the run (its card)
         resume_cable_ = r.has_meta ? ctcable::Choice{static_cast<ctcable::Kind>(r.meta.cable_kind), r.meta.cable_seq} : ctcable::Choice{};
+        // The run's identity rides in the intent marker from this boot on (a second power loss before the resume re-arms it).
+        if (resume_pending_) rdcomeback::set_run_cable(resume_cable_);
         gate_.reset();
         resume_rd_ = resume_hold_ = resume_refused_ = false; resume_judged_ = 0; guard_.clear();
         K2LOG("[TEST] journal: run %u unfinished, %u steps, phase %u, lost %u, resumed %u -> %s\n", unsigned(r.run_id), unsigned(r.count),
@@ -443,7 +494,12 @@ void ChargerTestSession::boot_arm_cable() {
     in.journaled = resume_pending_ && in.identity;
     in.inline_sink = fusb302::inline_mode();
     in.pinned_rd = fusb302::pin_rd();
-    if (const auto a = adc::read()) { in.cc1_mv = a->cc1_mv; in.cc2_mv = a->cc2_mv; }
+    // A comeback boot (k2/core/rd_comeback.hpp) has had its own Ra on CC1 since its first instruction, so CC1 reads low: that is not a
+    // cable in between, and the run's START already passed the guard (journaled): no reading, the journaled identity arms.
+    const bool comeback = rdcomeback::found().kind != rdintent::IntentKind::None;
+    if (!(comeback && in.journaled)) {
+        if (const auto a = adc::read()) { in.cc1_mv = a->cc1_mv; in.cc2_mv = a->cc2_mv; }
+    }
     bootra::Verdict v = bootra::decide(in);
     if (v == bootra::Verdict::Arm && !arm_cable(c)) v = bootra::Verdict::Failed;   // the reason is on the footer
     bootra::note(v);
@@ -696,6 +752,7 @@ void ChargerTestSession::poll(uint32_t now) {
     const auto before = runner_.state();
     // The journal's own plan write (still arming) goes before the Runner: it is held in Baseline until the header is on flash.
     if (arm_) arm_step(now);
+    if (reattach_) reattach_step(now);
     runner_.poll(input(now), fusb302::caps());
     // A live run: the Black Box writes nothing but the rare-event captures (hard reset, detach, refusal) until the run is over;
     // every save stalls the main loop 100-250 ms. Renewed each tick, it also covers the arm.
@@ -766,6 +823,8 @@ void ChargerTestSession::emit_end(uint32_t now) {
 // `rd_for_run(false)` already drops the Ra mode of a run that owns it; the explicit off covers a START that never got
 // as far as the Rd, and the forced scan line goes with it.
 void ChargerTestSession::release_run() {
+    reattach_drop();   // a run that ends inside the planned re-attach gives the Rd back and the marker to the follower first
+    rdcomeback::set_run_cable({});   // no run: the intent marker follows a session without an identity
     fusb302::rd_for_run(false);
     drop_identity();
 }
@@ -880,6 +939,17 @@ __attribute__((noinline)) bool ChargerTestSession::arm_cable(ctcable::Choice c, 
     K2LOG("[TEST] cable identity: %s (Ra mode)\n", name);
     return true;
 }
+// The limits of a choice that is not armed yet (the planned re-attach is announced before the START arms anything).
+__attribute__((noinline)) static bool selected_facts(ctcable::Choice c, ctcable::Facts& f) {
+    c = ctcable::canonical(c);
+    if (!ctcable::valid(c) || c.kind == ctcable::Kind::Off) return false;
+    if (c.kind == ctcable::Kind::Builtin) { f = ctcable::facts(emrec::builtin_cable(c.seq)); return true; }
+    emlib::Entry e;
+    emk_quirk::Quirks quirks;
+    if (!storage::lib_get(c.seq, e, quirks)) return false;
+    f = ctcable::facts(e.rec);
+    return true;
+}
 // START is two OK presses on Review, in this order: the confirmation (the "no load" warning, nothing touched), then the
 // guard, the identity, and last of all the Rd with the wait for the charger; the run starts by itself when VBUS is ready.
 // The first press: open the confirm window. No Rd, no identity, no guard, no e-marker scan. A source that is not up
@@ -891,6 +961,11 @@ void ChargerTestSession::open_confirmation() {
     const bool later = (preview.refusal == ct::Reason::NoSource || preview.refusal == ct::Reason::Release) &&
                        pd::start_needs_rd(ctx_.inline_mode, ctx_.vbus_fast_mv);
     if (preview.refusal != ct::Reason::None && !later) { message(review_refusal(preview.refusal, ctx_.ui->busy_reason())); return; }
+    // The same rule begin_run applies to the identity the START arms: the footer says so when the K2 is going to blink off.
+    const auto sel = ctx_.cables.selected();
+    ctcable::Facts fx;
+    confirm_reattach_ = selected_facts(sel, fx) &&
+        rdintent::plan_reattach(sel, fx, fusb302::pin_rd(), fusb302::self_powered(), in.pd.xiaomi_svid);
     confirming_ = true; confirm_until_ = ctx_.now + Ui::kConfirmWindowMs; confirm_proposal_ = proposal(in);
 }
 // The second press: an identity needs the charger directly on the plug (include/k2/pd/ra_guard.hpp), so the guard judges
@@ -904,14 +979,12 @@ void ChargerTestSession::confirmed_start() {
     if (choice.kind != ctcable::Kind::Off) {
         topology_ = guard_topology(ctx_.now);
         const bool refused = !raguard::spoof_allowed(topology_);
-        // A K2 that runs on the measured port is attached to the charger before it can show a cable, and a charger that reads the
-        // e-marker does so at its attach: the identity would come late (runs/selfpwr-6a/). The user is told and can go on.
-        const bool late = !refused && self_supplied();
-        if ((refused || late) && !bypass) { refuse_late_ = late; set_stage(Stage::Refuse); return; }
-        run_guard_ = static_cast<uint8_t>((1 + static_cast<uint8_t>(topology_)) | ((refused || late) ? 0x80 : 0));
+        if (refused && !bypass) { set_stage(Stage::Refuse); return; }
+        run_guard_ = static_cast<uint8_t>((1 + static_cast<uint8_t>(topology_)) | (refused ? 0x80 : 0));
         if (refused) K2LOG("[GUARD] started anyway against a %s reading\n", raguard::name(topology_));
-        else if (late) K2LOG("[GUARD] started anyway, self-supplied: the Ra follows the attach\n");
     }
+    // A self-powered K2 is attached to the charger before it can show a cable, and a charger that reads the e-marker does so at its
+    // attach: no warning for that. The run goes straight on; begin_run plans the re-attach when it pays (plan_reattach).
     if (apply_cable(choice)) press_start();
     else invalidate_confirmation();   // refused (message on the footer): the next OK is a first one again
 }
@@ -935,7 +1008,7 @@ void ChargerTestSession::launch() {
 }
 void ChargerTestSession::begin_run() {
     const auto in = input(ctx_.now);
-    journal_active_ = false; capture_kept_ = false;
+    journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ = 0;
     capture_identity();
     const auto r = runner_.start(fusb302::caps(), options_, in, true);
     K2LOG("[TEST] start selected=%u units=%u -> %s\n", unsigned(options_.selected), unsigned(options_.units.n), ct::name(r));
@@ -953,6 +1026,11 @@ void ChargerTestSession::begin_run() {
         // The plan goes to flash in pieces, one file per tick on a quiet link (a synchronous begin held the main loop 1.5-2.2 s with
         // the charger's contract up, 2026-11-08: no GoodCRC, hard reset). The Runner waits in its Baseline for it (hold), so no
         // request, and no phase marker, comes before the header; the meta record follows the header.
+        // The identity rides in the intent marker for the whole run (a charger Hard Reset or a lost VBUS brings the K2 back as the
+        // same sink, k2/core/rd_comeback.hpp). The planned re-attach comes after the journal is armed, before any row.
+        rdcomeback::set_run_cable(run_cable_);
+        reattach_plan_ = r == ct::Reason::None &&
+            rdintent::plan_reattach(run_cable_, run_facts_, fusb302::pin_rd(), fusb302::self_powered(), in.pd.xiaomi_svid);
         arm_meta_ = meta; arm_ = 1; arm_t0_ = ctx_.now; jr_wait_ms_ = 0;
         charger_journal::hw::arm_start();
         runner_.hold(true);
@@ -1272,13 +1350,13 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
             return FooterTone::Caution;
         }
         if (!summary_.runnable) { f.put("Nothing to run: all skip"); return FooterTone::Caution; }
-        if (confirming_) { f.put("Press again to start"); return FooterTone::Caution; }
+        if (confirming_) { f.put(confirm_reattach_ ? kReattachConfirm : "Press again to start"); return FooterTone::Caution; }
         if (in.cable_mv == 20000 && summary_.max_mv == 21000) { f.put("PPS: 21V on 20V wire"); return FooterTone::Info; }
         if (self_supplied()) { f.put("Self-powered: VBUS stays up"); return FooterTone::Info; }
         f.put("Runs without a load");
         return FooterTone::Info;
     }
-    case Stage::Refuse: f.put(refuse_late_ ? kLateFooter : "Direct plug is the sure way"); return FooterTone::Caution;
+    case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
         const int32_t vbus = ctx_.vbus_fast_mv;
@@ -1501,9 +1579,9 @@ void ChargerTestPage::paint_list() {
 void ChargerTestPage::paint_warning() {
     if (!laid_) {
         const Surface &c = ctx_.content;
-        kit::draw_alert_band(c, 22, false, refuse_late_ ? kLateWord : "Cable on plug");
-        gfx_text(c, kSmall, 6, 64, refuse_late_ ? kLateLines[0] : "The spoof may not reach", kText, kBg);
-        gfx_text(c, kSmall, 6, 84, refuse_late_ ? kLateLines[1] : "the charger.", kText, kBg);
+        kit::draw_alert_band(c, 22, false, "Cable on plug");
+        gfx_text(c, kSmall, 6, 64, "The spoof may not reach", kText, kBg);
+        gfx_text(c, kSmall, 6, 84, "the charger.", kText, kBg);
     }
     paint_list();
 }
