@@ -85,10 +85,11 @@ page). Summary:
   3 = 480, then a group result); `cable_present` u1 [+ varint seq, vid u16, pid u16, max_mv u16, max_ma u16, kind code u3
   (0 = 0, 1 = 1, 2 = 2, 3 = 4, 4 = 0xFF), flags u8, resumed u8, src_flags u8]; `n_ufcs` u3 and its modes (lo_dv u8, hi_dv u9,
   ma50 u7); varint times [+ last_boots u16, last_uptime_s u24 when times > 1]; varint rebalanced (v8: the source's mid-run re-balance count, 0 on a format-7 record); crc16 u16 of the v1 record.
-  The `reason` u6 fields hold the `ct::Reason` index (6 bits, so up to 64 codes; 44 are defined, 0..43, listed in the
+  The `reason` u6 fields hold the `ct::Reason` index (6 bits, so up to 64 codes; 45 are defined, 0..44, listed in the
   REASONS table of `tools/report_card.py`; 42 = "withdrawn by source", a row the source's mid-run re-announce dropped,
   pattern `budget-reannounce-mid-run`; 43 = "wrong voltage on 5V contract", a granted 5 V contract (PS_RDY at PDO 1)
-  held at another voltage on VBUS when the attach wait ran out, pattern `shared-bus-split`).
+  held at another voltage on VBUS when the attach wait ran out, pattern `shared-bus-split`; 44 = "needs load", a
+  programmable level the source accepted and dropped at no load, a skip, pattern `pps-off-at-no-load`).
 - **E-marker v2** (replaces 91 + 3 + 52 per quirk row B): schema u8 = 2; `name_len` u5 (at most 24) and the name as u7 chars;
   flags u8; the e-marker record: `name_len` u5 (at most 20) and its name as u7 chars, `spec_rev` u2, five VDOs u32, checksum u8;
   `has_quirks` u1 [+ flags u2, unmatched u2, count u4, then per row: sop u2, kind u2, nreq u2, nrep u3, mask_is_standard u1,

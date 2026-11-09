@@ -281,9 +281,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     K2 -> the USB light (Rd on both CC, ~390 mA at 5 V), `pd-reread --pin 2 --no-run`, then
     `pd request 6 --mv 5500 --ma 2000 --confirm --over-load`: holds -> no-load is the trigger; collapses -> look at
     what else the phone does (its Request timing is ~1.5 s after PS_RDY, the K2's is longer).
-  - Step 2 (only if step 1 confirms): the charger test records a PPS row with the signature "Accept, VBUS falls at
-    ~0 mA, no PS_RDY" as a skip "needs load" (pattern `pps-off-at-no-load`), not a fail; catalogue entry in
-    `docs/CHARGER_QUIRKS.md` (behaviour, no VID:PID).
+  - Step 2 (done ahead of step 1 on a user decision, 2026-11-10, 96a798d; hardware check pending): the charger test
+    records a PPS row with the signature "Accept, VBUS falls at ~0 mA, no PS_RDY" as a skip "needs load" (`Reason::NeedsLoad`,
+    #44, pattern `pps-off-at-no-load`), not a fail; catalogue entry in `docs/CHARGER_QUIRKS.md` (behaviour, no VID:PID).
+    Rule: programmable row, Accepted, no PS_RDY, VBUS under 85 % of the level, current under 50 mA; fixed rows, a seen
+    PS_RDY, current drawn, Hard Reset and Reject keep their reasons; no chain skip. Host-tested. Still open: the
+    cause is unproven until step 1 (a load decides), and the same signature on another source would read "needs load"
+    too, so step 1 may narrow the rule.
   - Validate: host tests (red first) for the `--over-load` gate (refused after any far PD message, refused with no
     far sink) and the signature rule; the hardware step above.
 - **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589): idle

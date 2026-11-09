@@ -81,6 +81,15 @@ another. The runner does this:
   wait, not the reading at the timeout. A source-side Rp drop during the wait (caps gone, no active CC) restarts the
   wait once (`slow-rp-wake`: the standby pull-up answers ~1.1-1.7 s after a steady Rd) instead of letting the timer
   run on.
+- A **programmable row dropped at no load** is a skip, not a failure (pattern `pps-off-at-no-load`, suspected, in
+  `docs/CHARGER_QUIRKS.md`). The runner latches per Request: the sink was Accepted (it waited in Transition), PS_RDY
+  was never seen for the row's own PDO and level, and the highest current the port drew. A PPS / SPR AVS / EPR AVS row
+  whose source is then lost (after the one retry) with VBUS under 85 % of the row's level and a current under
+  `kNeedsLoadMaxMa` (50 mA) ends `Verdict::Skip` / `Reason::NeedsLoad` ("needs load", reason 44), measured = the
+  collapsed VBUS. It is no chain skip: the other levels run once the source is back (Releasing waits for it, as for
+  Lost). Everything else keeps its reason: a fixed row (Lost), a seen PS_RDY (Lost), a current over `kLoadAbortMa`
+  (Inline), a Hard Reset (HardReset), a Reject, a low-edge cut (CutRecovered). On the results tab the PPS chip reads
+  "needs load" in the skip style and the group summary does not count it as a fail.
 
 ## What a legacy 5 V row proves
 
