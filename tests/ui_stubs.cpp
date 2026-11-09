@@ -16,6 +16,7 @@
 #include "k2/core/scratch.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rescan.hpp"
+#include "k2/core/survey.hpp"
 #include <algorithm>
 #include <cstring>
 #include "k2/drivers/systick.hpp"
@@ -211,7 +212,16 @@ Result request() {
     return g_stub.rescan_result;
 }
 void poll() {}
+bool active() { return false; }
 }  // namespace rescan
+
+namespace survey {
+// The page's Refresh starts the survey and the Connection page reads its table; the real runner is core/survey.cpp.
+void on_refresh(rescan::Result r, bool) { g_stub.survey_refreshes++; g_stub.survey_last = r; }
+void poll(bool) {}
+const pd::Survey& state() { return g_stub.survey; }
+bool running() { return g_stub.survey.running(); }
+}  // namespace survey
 
 namespace bbpersist {
 void hold_run() { g_stub.bb_holds++; }

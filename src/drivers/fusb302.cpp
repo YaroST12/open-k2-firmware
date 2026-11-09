@@ -38,6 +38,7 @@
 #include "k2/pd/pd_rdseek.hpp"
 #include "k2/pd/pd_rescan.hpp"
 #include "k2/pd/pd_sink.hpp"
+#include "k2/pd/pd_survey.hpp"
 #include "k2/pd/pd_vconn.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/pdtrace.hpp"
@@ -1521,7 +1522,8 @@ void prep_tick(std::uint32_t now) {
 pd::RereadLink reread_link() {
     return {.contract = g_sink.status().state == pd::SinkState::Ready,
             .pdos = std::uint8_t(g_engine.caps.valid ? g_engine.caps.num_pdos : 0),
-            .rev = std::uint8_t(g_engine.caps.valid ? g_engine.caps.spec_rev : 0)};
+            .rev = std::uint8_t(g_engine.caps.valid ? g_engine.caps.spec_rev : 0),
+            .svids = std::span<const std::uint16_t>(g_engine.vdm.svids.data(), g_engine.vdm.num_svids)};
 }
 
 // Once per pass: logs a finished re-read (Black Box mark and log line) and ends the attach it made itself: back to PDO 1,
@@ -1536,9 +1538,9 @@ void reread_housekeeping(std::uint32_t now) {
         const unsigned held = g_engine.caps.valid ? g_engine.caps.num_pdos : 0;
         pdtrace::mark(pdtrace::kMarkReread, std::uint16_t(0x8000 | (rs.skipped_mask << 8) | rs.ok_mask),
                       std::uint16_t((rs.avs_seen ? 0x8000 : 0) | (rs.caps_rx << 8) | rs.pdos_last));
-        K2LOG("[REREAD] %s ok=0x%02X skipped=0x%02X caps_rx=%u pdos %u -> %u (last list %u) avs=%d attach_failed=%d\n",
+        K2LOG("[REREAD] %s ok=0x%02X skipped=0x%02X notsup=0x%02X caps_rx=%u pdos %u -> %u (last list %u) avs=%d attach_failed=%d\n",
               rs.state == pd::RereadState::Aborted ? "aborted" : "done", unsigned(rs.ok_mask), unsigned(rs.skipped_mask),
-              unsigned(rs.caps_rx), unsigned(rs.pdos_before), held, unsigned(rs.pdos_last), int(rs.avs_seen), int(rs.attach_failed));
+              unsigned(rs.notsup_mask), unsigned(rs.caps_rx), unsigned(rs.pdos_before), held, unsigned(rs.pdos_last), int(rs.avs_seen), int(rs.attach_failed));
         const bool nothing = rs.attach_failed || rs.state == pd::RereadState::Aborted;
         g_reread_release_at = nothing ? now : now + kRereadLingerMs;
     }
@@ -2201,6 +2203,24 @@ bool reread_start(std::uint8_t mask) {
     }
     return true;
 }
+// The survey's wire run: reread_start without the attach. It rides a Ready contract only and never touches Rd, the CC line
+// or the sink's contract flags, so the housekeeping above has nothing to release when it ends.
+bool survey_wire_start(std::uint8_t mask) {
+    if (inline_now() || g_legacy_only || g_active_cc == 0 || g_ident.running() || g_probe.running() || g_reread.running() ||
+        g_prep.active() || g_sink.status().state != pd::SinkState::Ready || !g_reread_logged)
+        return false;
+    const unsigned held = g_engine.caps.valid ? g_engine.caps.num_pdos : 0;
+    g_reread_logged = false;
+    pd::RereadOpts opts;
+    opts.survey_order = true;
+    opts.pace_ms = pd::kSurveyPaceMs;
+    opts.total_ms = pd::kSurveyWireMs;
+    g_reread.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, mask, std::uint8_t(held), systick::millis(), false, opts);
+    pdtrace::mark(pdtrace::kMarkReread, g_reread.status().mask, std::uint16_t(held));
+    K2LOG("[SURVEY] wire started mask=0x%02X, %u PDOs held\n", unsigned(g_reread.status().mask), held);
+    return true;
+}
+bool xiaomi_chain_active() { return g_sink.xiaomi_chain_active(systick::millis()); }
 void set_force_line(std::uint8_t line) {
     g_force_cc = line <= 2 ? line : 0;
     K2LOG("[PD] CC scan forced line %u\n", unsigned(g_force_cc));

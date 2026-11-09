@@ -20,5 +20,8 @@ enum class Result : std::uint8_t {
 Result request();
 // Main loop: feeds the Get_Source_Cap flow. A source that stays silent turns into the (bridged) cycle here.
 void poll();
+// A Refresh's Get_Source_Cap is still waiting for its answer (or for the sink's gate); false once it was answered, gave up or
+// fell back to the CC cycle.
+bool active();
 
 }  // namespace k2::rescan

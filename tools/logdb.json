@@ -408,6 +408,13 @@
   "405": "[RESCAN] live contract: Get_Source_Cap instead of a CC cycle\n",
   "406": "[RESCAN] source capabilities refreshed, no CC change\n",
   "407": "[RESCAN] sink gate busy: nothing sent, ask again\n",
-  "408": "[RESCAN] no answer in %u ms: CC cycle\n"
+  "408": "[RESCAN] no answer in %u ms: CC cycle\n",
+  "409": "[SURVEY] wire refused\n",
+  "410": "[SURVEY] refresh r=%u contract=%d inline=%d test=%d chain=%d pd20=%d epr=%d planned=%u blocked=%u\n",
+  "411": "[SURVEY] attach changed: view cleared\n",
+  "412": "[SURVEY] charger test: run abandoned\n",
+  "413": "[SURVEY] done: %u got, %u not supported, %u no answer, %u blocked\n",
+  "414": "[REREAD] %s ok=0x%02X skipped=0x%02X notsup=0x%02X caps_rx=%u pdos %u -> %u (last list %u) avs=%d attach_failed=%d\n",
+  "415": "[SURVEY] wire started mask=0x%02X, %u PDOs held\n"
  }
 }

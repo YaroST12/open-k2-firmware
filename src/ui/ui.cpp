@@ -4,6 +4,7 @@
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/rescan.hpp"
+#include "k2/core/survey.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
@@ -493,8 +494,13 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         link_.clear_force();
         // core/rescan.cpp decides: passive inline, a Get_Source_Cap on a live contract, else the CC cycle (bridged by the Rescan
         // marker on a K2 that lives on the charger). Busy = a negotiation is in flight: nothing happened.
+        // The survey (core/survey.cpp) runs from the same press: the questions the page cannot answer from what it heard. A survey
+        // still reading owns the sink's gate, so a second press waits for it.
         {
-            const bool busy = rescan::request() == rescan::Result::Busy;
+            const bool reading = survey::running();
+            const rescan::Result res = reading ? rescan::Result::Busy : rescan::request();
+            const bool busy = res == rescan::Result::Busy;
+            if (!reading) survey::on_refresh(res, false);   // ports_busy() was refused above: no charger test
             if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
             if (busy) return false;
         }

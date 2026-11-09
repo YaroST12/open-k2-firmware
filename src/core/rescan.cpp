@@ -68,6 +68,8 @@ Result request() {
     return Result::Busy;
 }
 
+bool active() { return g_flow.active(); }
+
 void poll() {
     if (!g_flow.active()) return;
     const std::uint32_t now = systick::millis();

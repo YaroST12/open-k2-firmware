@@ -22,6 +22,7 @@
 #include "k2/chargertest/charger_journal.hpp"
 #include "k2/core/rd_intent.hpp"
 #include "k2/core/rescan.hpp"
+#include "k2/pd/pd_survey.hpp"
 struct StubState {
     uint32_t ms = 1000;
     // The charger-test journal as the boot finds it (load() answers journal_load) and what the page wrote back.
@@ -98,6 +99,8 @@ struct StubState {
     int rescan_requests = 0; k2::rescan::Result rescan_result = k2::rescan::Result::Passive;
     int refresh_asks = 0; k2::pd::Err refresh_err = k2::pd::Err::Ok; bool legacy_active = false;
     int rdc_rescan_begins = 0; bool rdc_rescan_ok = true, rdc_rescan_landing = false;
+    // The survey (core/survey.hpp): the page reads this table; tests fill it through start()/set(), on_refresh() is counted.
+    k2::pd::Survey survey; int survey_refreshes = 0; k2::rescan::Result survey_last = k2::rescan::Result::Busy;
     k2::pd::EmarkerMode last_scan_mode = k2::pd::EmarkerMode::Vconn;
     bool scan_result = true;           // what read_emarker() returns
     void (*on_scan)() = nullptr;   // called inside read_emarker: lets a test capture the scanning screen

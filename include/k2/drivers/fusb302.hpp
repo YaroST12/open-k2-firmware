@@ -249,6 +249,13 @@ const pd::ProbeStatus& probe_status();
 // and a Black Box mark.
 bool reread_start(std::uint8_t mask = pd::kRereadDefault);
 void reread_abort();
+// The survey's wire questions (k2/core/survey.hpp, pd::Survey): the same sequencer on a contract that is already there,
+// in the survey's order, 220 ms between messages, bounded by kSurveyWireMs. Never attaches (no Rd, no Request): false when
+// there is no Ready contract, a sink inline, the PD-silent mode, or anything else owns the wire. The answer is in
+// reread_status() (ok_mask / notsup_mask / skipped_mask) once it is no longer running.
+bool survey_wire_start(std::uint8_t mask);
+// A Xiaomi 0x2717 auth chain is in progress (the sink holds its own Request back; so does the survey).
+bool xiaomi_chain_active();
 // Debug option for the next re-read (pd-reread --line N): the attach scan may take only CC line N (1/2); 0 = normal.
 // With another line already taken (and no contract) the run forgets it first. It stays for every later attach scan (a
 // charger test START as well) until reread_abort() or set_force_line(0) or a reboot: RAM only.

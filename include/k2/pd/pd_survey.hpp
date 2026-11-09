@@ -29,6 +29,7 @@ enum class SvOutcome : std::uint8_t { Answered, Refused, Silent };
 
 inline constexpr std::uint32_t kSurveyPaceMs = 220;      // quiet time between two actions
 inline constexpr std::uint32_t kSurveyTotalMs = 12000;   // the whole survey, from Refresh
+inline constexpr std::uint32_t kSurveyWireMs = 6500;     // the Wire action's own budget inside it (pd::Reread, from its first step)
 
 // What the glue tells the survey when it starts: the state of the world the gating needs.
 struct SvCtx {
@@ -45,11 +46,18 @@ struct SvEntry {
     SvWhy why = SvWhy::None;
 };
 
+// How one Wire field ended, from the finished pd::Reread run: its step answered, refused (notsup_mask) or neither (silence, BUSY,
+// a failed transmit, a step that never ran). Fields that have no Reread step are Silent.
+SvOutcome wire_outcome(const RereadStatus& rs, SvField f);
+
 class Survey {
 public:
     // Plan one run. Without a contract nothing is asked and every field stays NotAsked (the hint stays).
     void start(const SvCtx& ctx, std::uint32_t now);
     void clear();   // forget the whole view (the source went away): every field NotAsked, not running
+    // End a run early (a charger test took the line, the source stopped answering): every Pending field becomes NoAnswer, the
+    // answers and the Blocked reasons stay, nothing more is handed out.
+    void abandon();
 
     // The next action to do, or None. Pass sink_quiet = the sink is Ready (no message of its own in flight) and
     // line_idle = the CC line is idle. Abort once, when the whole-run bound hits while an action was in flight.

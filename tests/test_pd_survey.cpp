@@ -250,6 +250,48 @@ void test_clear_forgets_the_source_view() {
     CHECK_EQ(int(s.got()), 0);
 }
 
+// A run that is cut short (a charger test took the line, the source stopped answering) ends: nothing stays Pending.
+void test_abandon_ends_the_run_and_keeps_the_answers() {
+    Survey s;
+    std::uint32_t now = 0;
+    s.start(kOpen, now);
+    CHECK_EQ(int(s.poll(now, true, true)), int(SvAct::Caps));
+    s.set(SvField::Caps, SvOutcome::Answered);
+    s.finish(now);
+    s.abandon();
+    CHECK_EQ(int(s.running()), 0);
+    CHECK_EQ(int(s.in_flight()), 0);
+    CHECK_EQ(int(st(s, SvField::Caps)), int(SvState::Got));
+    CHECK_EQ(int(st(s, SvField::Identity)), int(SvState::NoAnswer));
+    CHECK_EQ(int(st(s, SvField::Cable)), int(SvState::NoAnswer));
+    CHECK_EQ(int(s.resolved()), int(s.planned()));
+    CHECK_EQ(int(s.ran()), 1);
+    CHECK_EQ(int(s.poll(now + 5000, true, true)), int(SvAct::None));
+    // Blocked fields keep their reason.
+    Survey b;
+    b.start({.contract = true, .inline_sink = false, .charger_test = false, .xiaomi_chain = false, .pd20 = true, .epr_capable = true}, now);
+    b.abandon();
+    CHECK_EQ(int(st(b, SvField::CapsExt)), int(SvState::Blocked));
+    CHECK_EQ(int(why(b, SvField::CapsExt)), int(SvWhy::Pd20));
+}
+
+// What the finished Reread run says about one Wire field: answered, refused (Not_Supported / Reject / NAK) or silent.
+void test_wire_outcome_maps_the_reread_masks() {
+    RereadStatus rs;
+    rs.ok_mask = kRereadIdentity | kRereadSvids;
+    rs.skipped_mask = kRereadModes | kRereadCapsExt | kRereadMfrInfo;
+    rs.notsup_mask = kRereadCapsExt;
+    CHECK_EQ(int(wire_outcome(rs, SvField::Identity)), int(SvOutcome::Answered));
+    CHECK_EQ(int(wire_outcome(rs, SvField::Svids)), int(SvOutcome::Answered));
+    CHECK_EQ(int(wire_outcome(rs, SvField::Modes)), int(SvOutcome::Silent));
+    CHECK_EQ(int(wire_outcome(rs, SvField::CapsExt)), int(SvOutcome::Refused));
+    CHECK_EQ(int(wire_outcome(rs, SvField::MfrInfo)), int(SvOutcome::Silent));
+    // A step that never ran (aborted run) is silence, not a refusal.
+    CHECK_EQ(int(wire_outcome(RereadStatus{}, SvField::Identity)), int(SvOutcome::Silent));
+    // Only the five Wire fields have a step.
+    CHECK_EQ(int(wire_outcome(rs, SvField::Cable)), int(SvOutcome::Silent));
+}
+
 }  // namespace
 
 int main() {
@@ -268,5 +310,7 @@ int main() {
     test_the_whole_survey_is_bounded();
     test_counts_and_progress();
     test_clear_forgets_the_source_view();
+    test_abandon_ends_the_run_and_keeps_the_answers();
+    test_wire_outcome_maps_the_reread_masks();
     return test_report("test_pd_survey");
 }

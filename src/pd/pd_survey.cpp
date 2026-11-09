@@ -31,10 +31,24 @@ constexpr SvAct kPlan[] = {SvAct::Caps, SvAct::Wire, SvAct::Epr, SvAct::Cable};
 
 }  // namespace
 
+SvOutcome wire_outcome(const RereadStatus& rs, SvField f) {
+    const std::uint8_t bit = wire_bit(f);
+    if (bit == 0) return SvOutcome::Silent;
+    if (rs.ok_mask & bit) return SvOutcome::Answered;
+    if (rs.notsup_mask & bit) return SvOutcome::Refused;
+    return SvOutcome::Silent;
+}
+
 void Survey::clear() {
     for (SvEntry& e : e_) e = {};
     started_ = running_ = false;
     act_ = SvAct::None;
+}
+
+void Survey::abandon() {
+    open_to_no_answer(SvAct::None);
+    act_ = SvAct::None;
+    running_ = false;
 }
 
 void Survey::start(const SvCtx& ctx, std::uint32_t now) {
