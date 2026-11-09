@@ -21,6 +21,7 @@
 #include "k2/pd/transcap.hpp"
 #include "k2/chargertest/charger_journal.hpp"
 #include "k2/core/rd_intent.hpp"
+#include "k2/core/rescan.hpp"
 struct StubState {
     uint32_t ms = 1000;
     // The charger-test journal as the boot finds it (load() answers journal_load) and what the page wrote back.
@@ -93,6 +94,10 @@ struct StubState {
     uint32_t delays_ms = 0;
     void (*delay_hook)() = nullptr;   // runs inside delay_ms, like usb::service() runs remote presses on the K2
     int rescans = 0, scans = 0, new_sources = 0, clear_sources = 0, cc_detaches = 0;
+    // Refresh (core/rescan.hpp): what the stub request() answers and how often the page asked; the driver half of it
+    int rescan_requests = 0; k2::rescan::Result rescan_result = k2::rescan::Result::Passive;
+    int refresh_asks = 0; k2::pd::Err refresh_err = k2::pd::Err::Ok; bool legacy_active = false;
+    int rdc_rescan_begins = 0; bool rdc_rescan_ok = true, rdc_rescan_landing = false;
     k2::pd::EmarkerMode last_scan_mode = k2::pd::EmarkerMode::Vconn;
     bool scan_result = true;           // what read_emarker() returns
     void (*on_scan)() = nullptr;   // called inside read_emarker: lets a test capture the scanning screen

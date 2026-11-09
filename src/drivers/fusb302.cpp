@@ -2125,6 +2125,16 @@ const pd::XiaomiTrace& xiaomi_trace() { return g_sink.xiaomi_trace(); }
 pd::Err epr_info_request(bool force) { return g_sink.request_epr_info(systick::millis(), force); }
 const pd::SourceCaps& epr_info_list() { return g_engine.epr_info; }
 
+// Refresh on a live contract: the sink's own Get_Source_Cap (its single message gate decides Busy). The engine owners that talk on
+// the line themselves (identify, probe, re-read, trigger prepare) and the PD-silent / inline / detached states refuse.
+pd::Err refresh_source_caps() {
+    if (g_active_cc == 0 || inline_now() || g_legacy_only) return pd::Err::Busy;
+    if (g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active()) return pd::Err::Busy;
+    return g_sink.request_source_caps(systick::millis());
+}
+std::uint32_t caps_count() { return g_caps_count; }
+bool legacy_only_active() { return g_legacy_only; }
+
 bool get_source_caps(bool confirmed) {
     if (g_active_cc == 0 || (inline_now() && !confirmed)) return false;
     g_getcap_armed = true;

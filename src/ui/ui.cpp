@@ -3,6 +3,7 @@
 #include "k2/ui/ui.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/rescan.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
@@ -490,8 +491,13 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
     case Action::PdRescan:
         pd::set_fake(0);
         link_.clear_force();
-        fusb302::rescan();   // passive inline (the driver knows), Rd/CC cycle standalone
-        if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
+        // core/rescan.cpp decides: passive inline, a Get_Source_Cap on a live contract, else the CC cycle (bridged by the Rescan
+        // marker on a K2 that lives on the charger). Busy = a negotiation is in flight: nothing happened.
+        {
+            const bool busy = rescan::request() == rescan::Result::Busy;
+            if (menu() == Menu::Connection) top_as<ConnectionPage>().update(now_ms);
+            if (busy) return false;
+        }
         break;
     case Action::EmarkerScan: {
         // The method follows the link: nothing supplies VBUS = inject VCONN and ask the cable; a source
@@ -713,6 +719,15 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     conn.open_tab(tab);
     if (spoof) return push_menu(Menu::Spoof, now_ms);
     ContentViewport viewport(layout_.content);
+    conn.update(now_ms);
+    return true;
+}
+
+bool Ui::land_rescanned(uint32_t now_ms) {
+    if (!open_connection(conn::Tab::Source, false, now_ms)) return false;
+    ContentViewport viewport(layout_.content);
+    ConnectionPage &conn = top_as<ConnectionPage>();
+    conn.say("Rescanned (rebooted)", now_ms);
     conn.update(now_ms);
     return true;
 }

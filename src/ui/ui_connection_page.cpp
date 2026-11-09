@@ -240,8 +240,8 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     bool keep_open = false;
     switch (it.act) {
     case conn::Act::Refresh:
-        ctx_.ui->run_action(Action::PdRescan, now_ms);
-        set_op("Rescanning...", now_ms, 1500);
+        if (ctx_.ui->run_action(Action::PdRescan, now_ms)) set_op("Rescanning...", now_ms, 1500);
+        else set_op("Busy, retry", now_ms, 1500);   // a negotiation in flight: the refresh waits for it
         break;
     case conn::Act::ShareCaps:
         close_popup();

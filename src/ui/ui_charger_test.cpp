@@ -9,6 +9,7 @@
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/rd_comeback.hpp"
+#include "k2/core/rescan_bridge.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/boot_ra.hpp"
 #include "k2/chargertest/charger_journal_hw.hpp"
@@ -495,8 +496,9 @@ void ChargerTestSession::boot_arm_cable() {
     in.inline_sink = fusb302::inline_mode();
     in.pinned_rd = fusb302::pin_rd();
     // A comeback boot (k2/core/rd_comeback.hpp) has had its own Ra on CC1 since its first instruction, so CC1 reads low: that is not a
-    // cable in between, and the run's START already passed the guard (journaled): no reading, the journaled identity arms.
-    const bool comeback = rdcomeback::found().kind != rdintent::IntentKind::None;
+    // cable in between, and the run's START already passed the guard (journaled): no reading, the journaled identity arms. A Rescan
+    // comeback (the Connection page's Refresh) never had an Ra and was never a run: its CC1 reading is a real one.
+    const bool comeback = rescanbridge::supports_run_resume(rdcomeback::found().kind);
     if (!(comeback && in.journaled)) {
         if (const auto a = adc::read()) { in.cc1_mv = a->cc1_mv; in.cc2_mv = a->cc2_mv; }
     }

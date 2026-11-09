@@ -4,6 +4,7 @@
 #include "k2/core/rd_comeback.hpp"
 
 #include "k2/core/log.hpp"
+#include "k2/core/rescan_bridge.hpp"
 #include "k2/core/storage.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -26,6 +27,7 @@ constexpr std::uint32_t kRpLookEveryMs = 50; // the Rp comparator look is a few 
 
 Intent g_found;                  // what begin() read (None unless this boot is a comeback)
 bool g_pending = false;          // comeback boot, no verdict yet
+bool g_vouched = false;          // the judge vouched for this comeback (caps seen in time)
 bool g_spoof = false;            // arm() armed the recorded identity
 bool g_rp_seen = false;
 std::uint32_t g_rp_look = 0;
@@ -33,7 +35,9 @@ rdintent::Follower g_follower;
 bool g_dirty = false;            // the follower's record is not on the volume yet
 ctcable::Choice g_run_cable{};
 
-const char* kind_name(IntentKind k) { return k == IntentKind::Session ? "session" : k == IntentKind::Reattach ? "reattach" : "none"; }
+const char* kind_name(IntentKind k) {
+    return k == IntentKind::Session ? "session" : k == IntentKind::Reattach ? "reattach" : k == IntentKind::Rescan ? "rescan" : "none";
+}
 
 // A recorded identity, armed like the cable dialog arms it (k2/ui/ui_cable_list.cpp arm()) but without the page.
 [[gnu::noinline]] bool arm_identity(ctcable::Choice c) {
@@ -103,6 +107,7 @@ bool judge_step(std::uint32_t ms) {
     case rdintent::Verdict::Wait: return false;
     case rdintent::Verdict::Vouched:
         g_pending = false;
+        g_vouched = true;
         K2LOG("[RDI] comeback vouched after %u ms (caps seen)\n", static_cast<unsigned>(ms));
         return false;
     case rdintent::Verdict::Release: break;
@@ -155,5 +160,15 @@ void end_reattach() {
     g_follower.forget();   // the volume holds the Reattach: the follower's next look writes the session over it
     g_dirty = false;
 }
+
+bool begin_rescan() {
+    const std::uint8_t pin = fusb302::pin_rd();
+    if (pin != 1 && pin != 2) return false;
+    const Intent in{IntentKind::Rescan, pin, {}};
+    if (!rdintent::save(fs::instance(), in)) return false;
+    return rdintent::load(fs::instance()) == in;
+}
+
+bool rescan_landing() { return rescanbridge::lands_on_page(g_found.kind, g_vouched ? rdintent::Verdict::Vouched : rdintent::Verdict::Wait); }
 
 }  // namespace k2::rdcomeback

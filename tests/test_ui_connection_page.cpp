@@ -707,7 +707,39 @@ static void test_live_request_repaints_only_its_rows() {
     g_stub.contract = {};
 }
 
+// Refresh goes through the rescan module (a live contract asks for the caps instead of cycling CC; the cycle and its marker are the
+// module's business, tests/test_rescan_bridge.cpp), and a refused one (a negotiation in flight) is said on the page.
+static void test_refresh_goes_through_the_rescan_module() {
+    Ui &ui = fresh_ui();
+    ui.goto_page(kMenuPageBase + uint8_t(Menu::Connection), 20000);
+    g_stub.rescan_result = rescan::Result::Asked;
+    CHECK_EQ(ui.run_action(Action::PdRescan, 20100), true);
+    CHECK_EQ(g_stub.rescan_requests, 1);
+    CHECK_EQ(g_stub.rescans, 0);                 // no CC cycle behind a Get_Source_Cap
+    g_stub.rescan_result = rescan::Result::Cycled;
+    CHECK_EQ(ui.run_action(Action::PdRescan, 20200), true);
+    CHECK_EQ(g_stub.rescan_requests, 2);
+    g_stub.rescan_result = rescan::Result::Busy;
+    CHECK_EQ(ui.run_action(Action::PdRescan, 20300), false);   // a negotiation in flight: nothing happened, ask again
+    CHECK_EQ(g_stub.rescan_requests, 3);
+}
+
+// The comeback of a bridged Refresh lands on Connection -> Source, whatever page the boot opened.
+static void test_the_rescan_comeback_lands_on_the_source_tab() {
+    Ui &ui = fresh_ui();
+    ui.goto_page(uint8_t(Page::Home), 20000);
+    CHECK_EQ(ui.menu() == Menu::Connection, false);
+    CHECK_EQ(ui.land_rescanned(20100), true);
+    CHECK_EQ(ui.menu() == Menu::Connection, true);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+    ui.open_connection(conn::Tab::Cable, false, 20150);   // from another tab: back on Source
+    CHECK_EQ(ui.land_rescanned(20200), true);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+}
+
 int main() {
+    test_refresh_goes_through_the_rescan_module();
+    test_the_rescan_comeback_lands_on_the_source_tab();
     test_live_request_repaints_only_its_rows();
     test_worst_case_rows_fit();
     test_each_tab_shows_its_own_side();

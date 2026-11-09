@@ -51,4 +51,12 @@ void drop_identity();
 bool begin_reattach(ctcable::Choice cable);
 void end_reattach();
 
+// The Connection page's Refresh, when it has to cycle CC on a K2 that lives on the charger's VBUS (core/rescan.cpp): writes the
+// Rescan record (the pinned Rd, no identity) and reads it back (true = it is on the volume; false = the caller must NOT open CC).
+// end_reattach() hands the record back when the K2 turns out to be alive after the gap.
+bool begin_rescan();
+// This boot is a vouched Rescan comeback: the UI lands on Connection -> Source with "Rescanned (rebooted)". False for every other
+// boot, and for a Rescan the judge released (nothing served it: an ordinary plain boot).
+bool rescan_landing();
+
 }  // namespace k2::rdcomeback

@@ -31,6 +31,7 @@
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/bootmode.hpp"
 #include "k2/core/rd_comeback.hpp"
+#include "k2/core/rescan.hpp"
 #include "k2/ui/bootscreen.hpp"
 #include "k2/ui/bootscreen_hw.hpp"
 #include "k2/pd/pdtrace.hpp"
@@ -95,6 +96,7 @@ void buttons_init() {
 // harmlessly) and the keys get their pull-ups; the 8 MHz HICK start-up is slower than the RC
 // settling, so no extra delay is added beyond a short spin.
 bool g_boot_back_held = false;   // BACK down at power-up: cancels the resume of an interrupted charger test
+bool g_rescan_landing_due = false;   // a Rescan comeback is being judged: the UI lands on Connection -> Source once it is vouched
 
 k2::bootmode::Mode sample_boot_mode() {
     k2::reg::crm().APB2EN |= k2::reg::Crm::APB2EN_GPIOA | k2::reg::Crm::APB2EN_GPIOB | k2::reg::Crm::APB2EN_AFIO;
@@ -234,6 +236,7 @@ void dfu_now() {
     k2::fastcharge::init();
 
     g_ui.init(k2::systick::millis(), g_boot_back_held);
+    g_rescan_landing_due = k2::rdcomeback::found().kind == k2::rdintent::IntentKind::Rescan;   // the verdict lands in slow_tasks()
     // A key-mode boot whose key stays down for 3 s from the plug-in shows what it decided as a QR code (the first frame is drawn by the
     // main loop, not from here); a key released sooner goes straight to the UI. A marker's comeback has no key and never shows it.
     // The threshold counts from reset (the uptime clock starts there), not from this line.
@@ -307,6 +310,11 @@ void end_boot_screen(uint32_t now) {
     k2::boottrace::flush_log();             // queued [BOOT] trace lines of the first seconds
     k2::session::poll();                    // PD session record into the backup registers on change
     k2::rdcomeback::poll();                 // the Rd intent marker (/rd.rec) in step with the session, written on a quiet link
+    k2::rescan::poll();                     // a Refresh's Get_Source_Cap: the answer, or the CC cycle when the source stays silent
+    if (g_rescan_landing_due && !k2::rdcomeback::pending()) {   // a Refresh's CC cycle took the K2 down: back on Connection -> Source
+        g_rescan_landing_due = false;
+        if (k2::rdcomeback::rescan_landing()) g_ui.land_rescanned(now);
+    }
     k2::bbpersist::poll();                  // saves finished captures once the link is quiet
     if (g_bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
     if (!g_bootscreen.showing()) g_ui.tick(now);        // the QR screen owns the panel: the UI does not draw meanwhile

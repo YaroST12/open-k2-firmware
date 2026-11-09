@@ -211,8 +211,18 @@ const pd::XiaomiTrace& xiaomi_trace();
 pd::Err epr_info_request(bool force = false);
 const pd::SourceCaps& epr_info_list();
 
-// Ask the source for its capabilities now. Inline it needs `confirmed`.
+// Ask the source for its capabilities now. Inline it needs `confirmed`. Sent by the driver outside the sink's gate: the lab
+// shell only. The Connection page's Refresh uses refresh_source_caps().
 bool get_source_caps(bool confirmed = false);
+
+// The Connection page's Refresh on a live contract (core/rescan.cpp): the sink's own Get_Source_Cap through its one message gate
+// (pd::Sink::request_source_caps). Ok = queued; Busy = refused (inline, PD-silent session, no CC attached, a trigger prepare or an
+// identify/probe/re-read running, or the gate says so). The answer shows as caps_count() moving.
+pd::Err refresh_source_caps();
+// Source_Capabilities messages received since boot.
+std::uint32_t caps_count();
+// A charger-test legacy unit holds the line PD-silent (legacy_only(true)): a rescan changes nothing then.
+bool legacy_only_active();
 
 // Identify the port partner (SOP Discover Identity / SVIDs / Modes, Get_Sink_Cap, Get_Status,
 // Get_Revision), only on an idle CC line. False when refused: no CC, or inline without `confirmed`.

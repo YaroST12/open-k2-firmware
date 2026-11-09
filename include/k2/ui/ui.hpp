@@ -106,6 +106,8 @@ public:
     bool goto_page(uint8_t page, uint32_t now_ms);
     // Opens Connection (Tools) on `tab`; `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
+    // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
+    bool land_rescanned(uint32_t now_ms);
     // Submenus: a small stack (depth 3: Tools > Connection > Saved cables > Share). While one is open it gets every event,
     // the global paging is off and a short BACK pops it. push_menu fails when the stack is full.
     bool push_menu(Menu m, uint32_t now_ms);

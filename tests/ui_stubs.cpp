@@ -15,6 +15,7 @@
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/core/scratch.hpp"
 #include "k2/core/rd_comeback.hpp"
+#include "k2/core/rescan.hpp"
 #include <algorithm>
 #include <cstring>
 #include "k2/drivers/systick.hpp"
@@ -163,6 +164,9 @@ const pd::XiaomiTrace& xiaomi_trace() { return g_stub.xm; }
 pd::Err epr_info_request(bool force) { g_stub.epr_info_asks++; g_stub.epr_info_forced = force; return g_stub.epr_info_err; }
 const pd::SourceCaps& epr_info_list() { return g_stub.epr_info_caps; }
 bool get_source_caps(bool confirmed) { g_stub.getcaps++; g_stub.last_confirmed = confirmed; return true; }
+pd::Err refresh_source_caps() { g_stub.refresh_asks++; return g_stub.refresh_err; }
+std::uint32_t caps_count() { return g_stub.caps.rx_count; }
+bool legacy_only_active() { return g_stub.legacy_active; }
 bool identify_start(bool confirmed) { g_stub.identifies++; g_stub.last_confirmed = confirmed; return g_stub.identify_ok; }
 void identify_abort() {}
 bool probe_start() { g_stub.probes++; return g_stub.probe_ok; }
@@ -194,7 +198,20 @@ bool begin_reattach(ctcable::Choice cable) {
     return g_stub.rdc_begin_ok;
 }
 void end_reattach() { g_stub.rdc_ends++; }
+bool begin_rescan() { g_stub.rdc_rescan_begins++; return g_stub.rdc_rescan_ok; }
+bool rescan_landing() { return g_stub.rdc_rescan_landing; }
 }  // namespace rdcomeback
+
+namespace rescan {
+// The page's Refresh goes through here; the stub answers what the test set and counts the asks (the real one decides on the
+// sink, the link and the marker: tests/test_rescan_bridge.cpp).
+Result request() {
+    g_stub.rescan_requests++;
+    if (g_stub.rescan_result == Result::Passive || g_stub.rescan_result == Result::Cycled) g_stub.rescans++;
+    return g_stub.rescan_result;
+}
+void poll() {}
+}  // namespace rescan
 
 namespace bbpersist {
 void hold_run() { g_stub.bb_holds++; }

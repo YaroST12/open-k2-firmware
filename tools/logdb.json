@@ -400,6 +400,14 @@
   "397": "[TEST] planned re-attach skipped: the intent marker is not on the volume\n",
   "398": "[TEST] planned re-attach: Rd off for %u ms, cable %u/%u\n",
   "399": "[TEST] planned re-attach: %s after %u ms, the run goes on\n",
-  "400": "[FUSB302] Rd seek: no Rp on CC%u over our Rd for %u ms, Rd moves to CC%u (move %u of %u)\n"
+  "400": "[FUSB302] Rd seek: no Rp on CC%u over our Rd for %u ms, Rd moves to CC%u (move %u of %u)\n",
+  "401": "[RESCAN] marker not written: no CC cycle\n",
+  "402": "[RESCAN] bridged cycle: Rescan marker written, opening CC\n",
+  "403": "[RESCAN] K2 survived the gap: marker handed back\n",
+  "404": "[RESCAN] busy: a negotiation or a rescan is in flight\n",
+  "405": "[RESCAN] live contract: Get_Source_Cap instead of a CC cycle\n",
+  "406": "[RESCAN] source capabilities refreshed, no CC change\n",
+  "407": "[RESCAN] sink gate busy: nothing sent, ask again\n",
+  "408": "[RESCAN] no answer in %u ms: CC cycle\n"
  }
 }

@@ -641,6 +641,8 @@ public:
     int popup_count() const { return n_items_; }
     const conn::Item &popup_item(int i) const { return items_[static_cast<std::size_t>(i)]; }
     int popup_selected() const { return popup_sel_; }
+    // A short note on the status line (what an action did, or what a reboot carried over).
+    void say(const char *text, uint32_t now_ms, uint32_t ms = 4000) { set_op(text, now_ms, ms); }
 private:
     static void popup_row(void *self, int index, bool focused, kit::RowSpec &out);
     void sense(uint32_t now_ms);           // topology window + facts, once per update
