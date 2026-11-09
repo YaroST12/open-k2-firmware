@@ -88,6 +88,9 @@ RESOLVE = [
     (r"k2::http_server::.*::start\(", r"^k2::capture_begin\(", ("hook",)),     # Shot::begin is main's capture lambda
     (r"^(Reset_Handler|k2_reset_main)$", r"^_GLOBAL__sub_I_", ("init",)),        # the static constructors
     (r"k2::ListView::", r"k2::\w+Page::(draw_row|row_sig)\(", ("row",)),
+    # ResultGrid's row-spec callback fn_ (grid_.init(..., &Page::result_row_fn, this)); the call site shows up
+    # in the page's paint methods too when anchor_bottom/draw_some are inlined into them.
+    (r"k2::kit::ResultGrid::|k2::\w+Page::", r"k2::\w+Page::result_row_fn\(", ("row",)),
     (r"^lfs_", r"k2::fs::.*cb_(read|prog|erase|sync)", ("lfs",)),
     (r"k2::systick::tick\(", r"k2::load::.*tick_hook", ("hook",)),
     (r"k2::systick::delay_ms\(", r"k2::boottrace\w*::.*poll", ("hook",)),
