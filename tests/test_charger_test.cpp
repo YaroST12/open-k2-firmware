@@ -290,6 +290,13 @@ struct Fake final : ct::Env {
     bool no_contract = false;          // a Pd attach whose 5 V contract never comes
     uint32_t contract_delay_ms = 0, contract_at = 0;   // ... or comes this long after the caps
     uint32_t dark_ms = 1500, back_ms = 700, rd_off_at = 0, rd_on_at = 0; bool back_done = false;
+    // pattern shared-bus-split: the Pd attach's 5 V contract (PS_RDY at PDO 1) lands, but the source holds this
+    // voltage on VBUS instead of 5 V (0 = 5 V). wrong_decay_rel / wrong_decay_mv: the reading falls to that level
+    // this long after the contract landed (the row must record the highest VBUS of the wait, not the timeout reading).
+    int attach_wrong_mv = 0; uint32_t wrong_decay_rel = 0, wrong_decay_at = 0; int wrong_decay_mv = 0;
+    // pattern slow-rp-wake: the source's Rp drops rp_drop_rel ms after the attach's Rd went on (caps invalid, no
+    // active CC, VBUS dark) and its standby pull-up answers with fresh caps rp_back_rel ms after the Rd.
+    uint32_t rp_drop_rel = 0, rp_back_rel = 0; bool rp_dropped = false;
     ct::Mode attach_mode = ct::Mode::Pd;
     int fc_at_off = -1, pd_at_off = -1;
     pd::SourceCaps saved;   // the list the charger announces again after an attach (a non-PD source has none)
@@ -368,7 +375,11 @@ struct Fake final : ct::Env {
                     if (attach_mode == ct::Mode::Pd) {
                         if (!silent_after_rd && saved.valid && !no_contract) {
                             if (contract_delay_ms) { contract_at = in.now + contract_delay_ms; in.pd.state = pd::SinkState::Idle; }
-                            else { in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok; in.pd.mv = 5000; in.pd.pos = 1; in.pd.held = false; }
+                            else {
+                                in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok; in.pd.mv = 5000; in.pd.pos = 1; in.pd.held = false;
+                                if (attach_wrong_mv) in.vbus_mv = attach_wrong_mv;
+                                if (wrong_decay_rel) wrong_decay_at = in.now + wrong_decay_rel;
+                            }
                         }
                     } else { ++handovers; handed = true; handed_at = in.now; in.pd_quiet_ms = saved.valid && !silent_after_rd ? 0 : 1000000; }
                 } else if (!keep_vbus) in.vbus_mv = 0;
@@ -389,6 +400,16 @@ struct Fake final : ct::Env {
                 in.vbus_mv = 0; in.pd_quiet_ms = 1000000;
             }
             if (contract_at && in.now >= contract_at) { contract_at = 0; in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok; in.pd.mv = 5000; in.pd.pos = 1; in.pd.held = false; }
+            if (wrong_decay_at && in.now >= wrong_decay_at) { wrong_decay_at = 0; in.vbus_mv = wrong_decay_mv; }
+            if (rp_drop_rel && rd_on && back_done && !rp_dropped && in.now - rd_on_at >= rp_drop_rel) {
+                rp_dropped = true; caps.valid = false; caps.active_cc = 0; in.vbus_mv = 0;
+                in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.mv = 5000;
+            }
+            if (rp_back_rel && rp_dropped && in.now - rd_on_at >= rp_back_rel) {
+                rp_dropped = false; if (saved.valid) { caps = saved; caps.valid = true; caps.active_cc = 1; }
+                in.vbus_mv = 5000; in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok;
+                in.pd.mv = 5000; in.pd.pos = 1; in.pd.held = false; ++in.session;
+            }
             if (low_now) in.vbus_mv = 4200;
             if (latch_at && in.now >= latch_at) { latch_at = 0; latched = true; latched_at = in.now; ++in.session; }
             if (latched && recover_after_ms && in.now - latched_at >= recover_after_ms) {
@@ -4128,6 +4149,56 @@ static void test_pd_attach_without_vbus_or_caps_is_no_reattach() {
         CHECK_EQ(f.rd_on, true);
     }
 }
+// Reason::WrongVoltage is not in the enum yet (the fix commit adds it as #43, after Withdrawn); these tests
+// pin the wire value so they compile and fail before the fix.
+constexpr ct::Reason kWrongVoltage = static_cast<ct::Reason>(43);
+// pattern shared-bus-split (2026-11-09, runs/2026-11-09-splitter): the attach's 5 V contract is granted
+// (PS_RDY at PDO 1) but the source holds 7.6 V on VBUS the whole time (the other output's PPS level),
+// decaying to 1.63 V before the timeout. When kAttachContractMs runs out the unit's rows must fail with
+// WrongVoltage and the HIGHEST VBUS seen during the wait (7600), not the reading at the timeout (1633).
+// Today they fail NoReattach with 1633 (red).
+static void test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage() {
+    Fake f; ct::Runner r(f);
+    f.attach_wrong_mv = 7600; f.wrong_decay_rel = 2000; f.wrong_decay_mv = 1633;
+    CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Pd3Fixed), {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
+    unsigned wrong = 0;
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(s.verdict == ct::Verdict::Pending || s.verdict == ct::Verdict::Running, false);
+        if (s.group != ct::Group::Pd) continue;
+        CHECK_EQ(s.verdict, ct::Verdict::Fail);
+        CHECK_EQ(s.reason, kWrongVoltage);
+        CHECK_EQ(s.measured_mv, 7600u);   // the highest of the wait, not the 1633 read at the timeout
+        ++wrong;
+    }
+    CHECK_EQ(wrong > 0, true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::NoReattach), 0u);
+}
+// No caps at all after the attach: still NoReattach ("no PD after re-attach"), never WrongVoltage - a contract
+// that was never granted cannot hold a wrong voltage.
+static void test_pd_attach_without_any_caps_stays_no_reattach() {
+    Fake f; ct::Runner r(f);
+    f.silent_after_rd = true;   // the source answers the Rd with VBUS but never announces a list
+    CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Pd3Fixed), {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::NoReattach) > 0, true);
+    CHECK_EQ(count_reason_all(r, kWrongVoltage), 0u);
+}
+// pattern slow-rp-wake: during the attach wait the source's Rp drops (caps gone, no active CC, VBUS dark)
+// 1.5 s after the caps and its standby pull-up brings fresh caps back 3.2 s after the caps - past
+// kAttachContractMs (3000 ms) from the first caps. The wait restarts once at the drop, so the unit runs.
+// Today the timer runs on and the unit fails NoReattach at 3.0 s (red).
+static void test_pd_attach_rp_drop_restarts_the_wait_once() {
+    Fake f; ct::Runner r(f);
+    f.no_contract = true;      // the 5 V contract is still being negotiated when the Rp drops
+    f.rp_drop_rel = 2200;      // 1.5 s after the caps (back_ms 700 + 1500)
+    f.rp_back_rel = 3900;      // 3.2 s after the caps
+    CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Pd3Fixed), {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::NoReattach), 0u);
+    CHECK_EQ(count_reason_all(r, kWrongVoltage), 0u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Pass) > 0, true);   // the unit ran
+}
 // The PD plan comes from the list the first attach hears, not from START's.
 static void test_pd_plan_comes_from_the_first_attach() {
     Fake f; ct::Runner r(f);
@@ -5465,6 +5536,9 @@ int main() {
     test_failed_release_at_low_vbus_is_a_lost_source_not_unsafe();
     test_unsafe_clears_when_vbus_stays_under_vsafe5();
     test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
+    test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage();
+    test_pd_attach_without_any_caps_stays_no_reattach();
+    test_pd_attach_rp_drop_restarts_the_wait_once();
     test_cancel_during_a_unit_restores_the_pd_policy();
     test_resume_reboot_in_request(); test_pd_replan_rewrites_the_journal(); test_resume_in_a_vendor_unit_goes_on_in_the_default_order(); test_resume_in_the_pd_unit_runs_the_legacy_units_after_it(); test_resume_refusals_and_abandon();
     test_reboot_budget_skips_the_unit_on_the_third_loss(); test_reboot_budget_covers_the_ufcs_unit(); test_legacy_preset_plans_no_pd_rows();

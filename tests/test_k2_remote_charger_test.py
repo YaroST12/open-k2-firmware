@@ -221,13 +221,27 @@ class ChargerTest(unittest.TestCase):
     def test_reason_42_withdrawn_by_source_decodes(self):
         # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
         # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.
-        self.assertEqual(len(kr.TEST_REASONS), 43)
+        self.assertEqual(len(kr.TEST_REASONS), 44)   # 43 reasons + WrongVoltage (#43, added with the wrong5v fix)
         self.assertEqual(kr.TEST_REASONS[42], "withdrawn by source")
         row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 0, 0, 4, 42, 0, 0)   # a pd3-fixed 20 V row, skip, why 42
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "withdrawn by source"))
         self.assertEqual(step["explanation"], "withdrawn by source")
-        bad = bytearray(row); bad[10] = 43   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 44   # the why byte, one past the last reason, still fails the row check
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
+
+    def test_reason_43_wrong_voltage_on_5v_contract_decodes(self):
+        # ROADMAP 2026-11-09 (runs/2026-11-09-splitter/streamB2): a 5 V contract (PS_RDY at PDO 1) held at the
+        # wrong voltage (pattern shared-bus-split) fails the unit as Reason::WrongVoltage (#43), not "no PD
+        # after re-attach" - the row must decode with the measured (highest) VBUS, not raise FrameError.
+        self.assertEqual(kr.TEST_REASONS[43], "wrong voltage on 5V contract")
+        row = struct.pack("<BBBHHHBBBI", 2, 1, 0, 5000, 0, 7600, 3, 43, 0, 0)   # a PD-row 5 V, fail, why 43, measured 7.6 V
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"]), ("fail", "wrong voltage on 5V contract"))
+        self.assertEqual(step["explanation"], "wrong voltage on 5V contract")
+        self.assertEqual(step["measured_mv"], 7600)
+        bad = bytearray(row); bad[10] = 44   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
