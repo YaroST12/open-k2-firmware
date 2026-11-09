@@ -223,7 +223,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     (slot-move re-queue, rebalanced in the journal header byte 9 and card format v8, the 43-values comment, the
     logdb id 418 / post-rebase hashes in the branch commits, the guarded `&steps_[index_]`); tests red first in
     ff42512.
-- **A source holding the wrong voltage on the 5 V contract fails the unit as "no reattach"** (2026-11-09, open, found
+- **A source holding the wrong voltage on the 5 V contract fails the unit as "no reattach"** (2026-11-09, fixed in 7d892ed,
+  hardware check pending, found
   in the hardware run of a1da8c3; `runs/2026-11-09-splitter/streamB2/`, `ct-B2` output in the session log). Anker
   2-way splitter behind the Baseus 140 W, OnePlus 15 plugged into its other output during the unit detach (PPS, ~8.7 V).
   - Evidence: the unit attach got the re-split list 5/9/12/15 V 1.5 A + 20 V 2.5 A (the re-plan skipped PPS/EPR rows as
