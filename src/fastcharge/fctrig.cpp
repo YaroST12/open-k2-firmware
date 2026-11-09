@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Fast-charge trigger driver, see k2/fastcharge/fctrig.hpp.
 #include "k2/core/log.hpp"
+#include "k2/core/scratch.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 
 #include <algorithm>
@@ -58,7 +59,12 @@ bool exchange_once(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx)
     dpdm::delay_us(50);
     if (!slave_ping()) return false;
     if (!rx.empty()) {
-        static std::array<std::uint8_t, kMaxRxBytes * kRxSamplesPerByte + 60> s;
+        // The D- capture window is transient (capture_dm overwrites every byte before decode_frame reads
+        // them), so it comes from the scratch arena instead of a 585 B static in .bss. Main loop only, and
+        // nothing on this path leases the arena (the leases are bootscreen, share pack/paint, bbpersist,
+        // emlib, transcap.save, the journal replay - none of them run the wire exchange).
+        const scratch::Lease lease("fctrig.exchange");
+        auto& s = scratch::as<std::array<std::uint8_t, kMaxRxBytes * kRxSamplesPerByte + 60>>();
         const std::span<std::uint8_t> cap{s.data(), rx.size() * kRxSamplesPerByte + 60};
         dpdm::capture_dm(cap, wire::kRxPeriodUs);
         if (wire::decode_frame(cap, rx) != rx.size()) return false;
