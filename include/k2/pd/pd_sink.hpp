@@ -272,10 +272,11 @@ public:
     // did before). Subject to set_gives_sink_cap like the Sink_Capabilities answer.
     void set_sink_cap_ext_mode(SinkCapExtMode m) { sink_cap_ext_mode_ = m; if (m == SinkCapExtMode::Silent) sink_cap_ext_pending_ = false; }
     SinkCapExtMode sink_cap_ext_mode() const { return sink_cap_ext_mode_; }
-    // Proactive Discover SVIDs once the contract settles. Default OFF: hardware 2026-11-04
-    // (CUKTECH 10, C1) shows the charger runs its own VDM sequence (identity REQ, then
-    // Discover SVIDs REQ) and an early sink-side SVIDs REQ desyncs it - the auth chain never
-    // starts. The charger-driven flow answers its REQs and sends none first.
+    // Proactive Discover SVIDs once the contract settles. Default ON (proactive_discover_ is initialised true). It is
+    // sent once, only while the sink answers Get_Sink_Cap, and not once the source has listed SVID 0x2717: hardware
+    // 2026-11-04 (CUKTECH 10, C1) showed that an early sink-side SVIDs REQ desyncs the charger's own VDM sequence
+    // (identity REQ, then Discover SVIDs REQ) and the auth chain never starts. Turning it off leaves the
+    // charger-driven flow, which answers its REQs and sends none first.
     void set_proactive_discover(bool on) { proactive_discover_ = on; }
     bool proactive_discover() const { return proactive_discover_; }
 
