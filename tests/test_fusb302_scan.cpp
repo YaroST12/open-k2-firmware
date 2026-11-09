@@ -1840,7 +1840,8 @@ void test_key_mode_never_presents_rd_on_both_lines() {
         fusb302::self_power_early(m, false);
         g_log.clear();
         fusb302::init();
-        // SW_RES puts the chip's own Rd/Rd (power-on SWITCHES0) on the lines: the next register write restores the pin
+        // On a pinned boot the boot reset is PD_RESET only (SW_RES would restore the power-on Rd/Rd for ~0.13 ms),
+        // so SWITCHES0 never leaves the pin; the write right after the reset restates it anyway.
         const int r = first_log("W 0C=");
         CHECK_EQ(r >= 0 && r + 1 < int(g_log.size()), true);
         if (r >= 0 && r + 1 < int(g_log.size())) CHECK_EQ(g_log[std::size_t(r + 1)] == "W 02=" + hex(pin), true);
@@ -2666,7 +2667,8 @@ void test_passive_cold_boot_never_transmits_on_a_live_link() {
 
 // A planned re-attach's comeback boot (k2/core/rd_intent.hpp): Rd on CC2 from the first write, PC13 (Ra) high from the same moment,
 // and nothing on the boot path writes a Rd-less SWITCHES0 (hardware, a comeback trace: init used to write 0x00 and the pin again
-// 1.3 ms later, a detach the charger can see). The chip's own SW_RES default (Rd on both) is the chip's, not a write.
+// 1.3 ms later, a detach the charger can see). The chip's power-on default (Rd on both, 0x03) is the chip's, not a write, and
+// the boot path never SW_RESes a pinned boot, so no write of ours ever carries it either.
 void test_comeback_boot_never_writes_a_rd_less_switches0_and_has_the_ra_first() {
     reset_world();
     g_mark = 0;

@@ -1112,10 +1112,13 @@ bool init() {
     K2LOG("[FUSB302] Detected ID: 0x%02X (version 0x%X, rev 0x%X)\n", g_device_id,
                 (g_device_id >> 4) & 0xF, g_device_id & 0xF);
 
-    wr(kReset, kSwReset);
-    // SW_RES puts the chip's own power-on SWITCHES0 (0x03, Rd on both lines) on the connector through the closed CC switches:
-    // write the pin (or 0) before anything slow, so a key mode's source never sees the Debug Accessory pair, not even for the
-    // 10 ms the chip needs (hardware 2026-11-06: that pair latches a source's Rp off).
+    // A pinned or comeback boot (g_pin_rd != 0) already closed the CC switches and wrote SWITCHES0 = the pin
+    // (self_power_early, before anything slow): SW_RES would restore the chip's power-on 0x03 (Rd on BOTH lines, the
+    // Debug Accessory signature) for the ~0.13 ms until the next write, and a source can latch its Rp off on that pair
+    // (hardware 2026-11-06). PD_RESET resets the PD engine only and leaves SWITCHES0 alone; a plain boot keeps the full
+    // SW_RES (parity with a power cycle). Either way the write below restates the pin (or 0) before anything slow, and
+    // configure_passive() rewrites the whole profile afterwards.
+    wr(kReset, g_pin_rd != 0 ? kPdReset : kSwReset);
     wr(kSwitches0, g_pin_rd);
     delay_ms(10);
     g_active_cc = 0;
@@ -1799,8 +1802,8 @@ void clear_source() {
     g_new_source = true;
 }
 
-// Partner gone: RESET=0x03 (SW_RES + PD_RESET), then SWITCHES0=0, then the whole
-// passive profile again (the soft reset wiped it) and a fresh start for every protocol engine.
+// Partner gone: RESET=PD_RESET, then SWITCHES0 (0, or the pinned boot's Rd), then the whole passive profile
+// again (configure_passive() rewrites it in full) and a fresh start for every protocol engine.
 static void detach_reset(std::uint8_t status0) {
     pdtrace::cc(pdtrace::CcEvent::Detach, g_active_cc, status0);
     if (g_ra && !emkra::survives_detach(g_ra_run)) {
@@ -1810,9 +1813,11 @@ static void detach_reset(std::uint8_t status0) {
     pins::cc_vconn_gnd.write(g_ra);   // VCONN off before anything else changes (the Ra mode keeps PC13 high)
     g_vconn_applied = false;
     g_vconn.reset(pd::VconnWhy::Abort);
-    // Passive: no SW_RES. It restores the chip's power-on SWITCHES0 (Rd on both lines) until the next
-    // write, which a host and a dock negotiating through the K2 can see.
-    wr(kReset, g_pin_rd != 0 ? std::uint8_t(kSwReset | kPdReset) : kPdReset);
+    // No SW_RES, on a plain or a pinned boot alike: it restores the chip's power-on SWITCHES0 (0x03, Rd on both
+    // lines) until the next write - through the closed CC switches a pinned boot's source would see the Debug
+    // Accessory pair for ~0.13 ms, and on a plain boot a host and a dock negotiating through the K2 can see it.
+    // PD_RESET leaves SWITCHES0 alone; the write below and configure_passive() put everything back.
+    wr(kReset, kPdReset);
     // A far sink belongs to one attach (g_requests_base moves on). The inline latch is the Link's: it holds it through a VBUS gap and
     // clears it with set_inline(false), so a detach never clears it nor writes the pin's Rd back under it (hardware 2026-11-09: that
     // write and the clear made a hub-powered K2 flap, Rd -> Request -> load -> inline -> VBUS collapse -> detach -> Rd again).
