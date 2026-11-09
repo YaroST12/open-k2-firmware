@@ -344,11 +344,19 @@ Back, and treats Review after a "waiting" as the K2's refusal. `tools/ui_walk.py
 device had" after a pick (`None`), since Back lands on the pick in force.
 
 The Refuse stage (12) explains the guard's refusal and offers `Start anyway`, `Start, cable OFF` and `Cancel`.
-It has a second reason, `refuse_late_` ("Self-powered", footer "Cable arrives after attach"): a START with an
-identity on a self-powered or bus-powered K2 (`self_supplied()`) whose guard did not already refuse. Such a K2 boots from
-the charger's VBUS, so the Ra can only follow the charger's attach, and a charger that reads the cable at attach
-(`cable-look-at-attach` in `CHARGER_QUIRKS.md`) has already decided without it. The choices and the recording are the
-same (`Start anyway` is bit 7 of the guard byte).
+It has one reason: the topology guard ("Cable on plug"). There used to be a second one, a late "Self-powered" warning for a
+START with an identity on a self-powered or bus-powered K2; it is gone. Such a K2 boots from the charger's VBUS, so the Ra
+can only follow the charger's attach, and a charger that reads the cable at attach (`cable-look-at-attach` in
+`CHARGER_QUIRKS.md`) has already decided without it, but the START now just goes on (nothing to answer). When it can pay, the
+run begins with a **planned re-attach**: a self-powered START (pinned Rd on CC2, no host) with a spoof cable that claims
+5 A or more, against a source that lists SVID 0x2717 (`rdintent::plan_reattach`). The confirmation footer then reads
+"Press again, K2 blinks once"; no other message, no extra stage. After the journal's header and meta record (arm step 3) the
+page writes the intent marker (`rdcomeback::begin_reattach`, written and read back; if that fails the blink is skipped and the
+run goes on), drops the Rd for 30 ms with the Ra kept (`fusb302::rd_glitch_begin/end`) and holds the Runner in its Baseline
+(nothing is judged). The K2 normally dies in the VBUS dark and the comeback boot resumes the journaled run with the same
+identity armed; a K2 that survives (a host on the other port) goes on at the new contract, or after 5 s without one. BACK,
+a stop or the end of the run give the Rd and the marker back at once (`reattach_drop`). The run-time marker
+(`rdcomeback::set_run_cable`) also brings a K2 back pinned after any mid-run VBUS loss, planned or not.
 `Start anyway` arms the identity against the guarded reading. The run records it: the
 journal's meta byte 19 (`RunMeta.guard`: 0 = not judged, else topology + 1, bit 7 = started anyway), the report card's
 `Cable.flags` (bits 3..5 = guard + 1, bit 6 = started anyway) and, in the card JSON, `"guard":"<unknown|none|cable|direct>"`
@@ -521,10 +529,12 @@ exists only after the charger decided on its attach; the Ra (PC13 high, CC1) can
 GaN Ultra 120 W (`runs/selfpwr-6a`): the SOP' Discover Identity comes about 213 ms after the attach and only when the Ra
 was there first; a Ra raised 160 ms after the Rd, 12 s into a live contract or after a Soft_Reset re-announce gives no
 cable look, and the charger offers the 3 A caps of an unmarked cable. An automatic warm reboot (the pin is kept, so there
-is no fresh attach) and a guided replug holding PLUS (the same order) cannot change that, so neither is built. The Ra is
+is no fresh attach) and a guided replug holding PLUS (the same order) cannot change that, so neither is built. What does work
+is a real Rd edge with the Ra already on: the planned re-attach above (the K2 dies in the dark and the comeback boot answers
+the charger's fresh attach), which a self-powered START with a 5 A+ identity against a 0x2717 source does by itself. The Ra is
 still armed beside the self-hold contract (`emkra::Ctx::self_hold`, best effort: it serves a charger that reads the cable
-later), START with an identity shows the "Self-powered" warning (Refuse stage, above), and the footer of a refused arming
-states the real reason (`emkra::refuse_footer`). For 6 A rows use a HID-powered K2.
+later) and the footer of a refused arming states the real reason (`emkra::refuse_footer`). Without the pattern (an
+Apple-like charger) there is no blink; a HID-powered K2 still presents the Ra before the Rd.
 
 The Review note reads "Self-powered: VBUS stays up"; the card records it (cable flags bit 2), the Cards page shows
 "self-powered" in its stats line, the JSON cable object gains `"self_powered":1`, and the card summary header ends in
