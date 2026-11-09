@@ -8,10 +8,12 @@
 #include <cstring>
 
 #include "k2/pd/emrec.hpp"
+#include "k2/core/scratch.hpp"
 #include "k2/drivers/flash_map.hpp"   // compile-time check that the flash regions do not overlap
 #include "k2/drivers/flash.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/fusb302.hpp"
+#include "k2/drivers/mode_ram.hpp"
 #include "k2/drivers/usb.hpp"
 
 namespace k2::storage {
@@ -26,10 +28,12 @@ Result finish(const char* what, store::Err e, unsigned slot = 0) {
 }
 
 // The log snapshot: the newest kLogKeep bytes of the log ring in /log.txt, mirrored in RAM for the drive.
-// Small on purpose: .bss growth comes straight out of the stack (tools/gate.py checks the budget).
+// Small on purpose: .bss growth comes straight out of the stack (tools/gate.py checks the budget). The buffer
+// itself lives in the .mode_drive overlay: only the MSC drive serves SAVEDLOG.TXT from RAM, and in Drive mode
+// that tenant owns the region for the whole session. Every other mode reads just the length from the volume.
 constexpr std::size_t kLogKeep = 512;
 constexpr const char* kLogPath = "/log.txt";
-char g_log[kLogKeep];
+K2_MODE_RAM_DRIVE char g_log[kLogKeep];
 std::size_t g_log_len = 0;
 bool g_log_loaded = false;
 
@@ -38,25 +42,38 @@ void load_log() {
     g_log_loaded = true;
     g_log_len = 0;
     std::size_t n = 0;
-    if (fs::instance().read_file(kLogPath, {reinterpret_cast<std::uint8_t*>(g_log), kLogKeep}, n) == fs::Err::Ok) g_log_len = n;
+    if (mode_ram::owner() == mode_ram::Tenant::Drive) {
+        if (fs::instance().read_file(kLogPath, {reinterpret_cast<std::uint8_t*>(g_log), kLogKeep}, n) == fs::Err::Ok) g_log_len = n;
+    } else if (fs::instance().size_of(kLogPath, n) == fs::Err::Ok && n <= kLogKeep) {
+        // read_file would answer TooBig for a file larger than the mirror; the length then stays 0, as before.
+        g_log_len = n;
+    }
 }
 }  // namespace
 
 store::Info info() {
     store::Info i = store::Store<store::RealHw>(g_hw).load();
-    i.log_len = static_cast<std::uint32_t>(saved_log().size());
+    i.log_len = static_cast<std::uint32_t>(saved_log_len());
     return i;
 }
 
 store::Brief brief() {
     store::Brief b = store::Store<store::RealHw>(g_hw).brief();
-    b.log_len = static_cast<std::uint32_t>(saved_log().size());
+    b.log_len = static_cast<std::uint32_t>(saved_log_len());
     return b;
 }
 
 std::span<const char> saved_log() {
     load_log();
+    // The mirror buffer is in the .mode_drive overlay; outside Drive mode the region belongs to another
+    // tenant (or is free), so only the length (saved_log_len) is meaningful there.
+    if (mode_ram::owner() != mode_ram::Tenant::Drive) return {};
     return {g_log, g_log_len};
+}
+
+std::size_t saved_log_len() {
+    load_log();
+    return g_log_len;
 }
 
 Result save_emarker() {
@@ -75,14 +92,18 @@ Result save_log() {
     const auto text = usb::log_view();
     std::size_t total = text[0].size() + text[1].size();
     std::size_t skip = total > kLogKeep ? total - kLogKeep : 0;       // keep the newest text
+    // Staged in the scratch arena: the RAM mirror itself lives in the .mode_drive overlay (see load_log),
+    // which another tenant may own while this runs.
+    const scratch::Lease lease("storage.save_log");
+    auto& stage = scratch::as<std::array<char, kLogKeep>>();
     std::size_t n = 0;
     for (const auto part : text) {
         const std::size_t cut = std::min(skip, part.size());
         skip -= cut;
-        std::memcpy(g_log + n, part.data() + cut, part.size() - cut);
+        std::memcpy(stage.data() + n, part.data() + cut, part.size() - cut);
         n += part.size() - cut;
     }
-    const fs::Err e = n ? fs::instance().write_file(kLogPath, {reinterpret_cast<const std::uint8_t*>(g_log), n})
+    const fs::Err e = n ? fs::instance().write_file(kLogPath, {reinterpret_cast<const std::uint8_t*>(stage.data()), n})
                         : fs::instance().remove(kLogPath);
     const bool ok = e == fs::Err::Ok || e == fs::Err::NotFound;
     g_log_loaded = ok;

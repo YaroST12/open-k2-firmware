@@ -53,5 +53,8 @@ private:
 bool claim(Tenant t);
 // Releases `t`'s claim (the region is zeroed first); false when `t` does not own it.
 bool release(Tenant t);
+// Who owns the region now (Tenant::None when free), so a buffer placed in one tenant's section is only
+// touched while that tenant owns the region.
+Tenant owner();
 
 }  // namespace k2::mode_ram

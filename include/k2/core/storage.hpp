@@ -26,7 +26,8 @@ inline constexpr store::Err kNoEmarker = store::Err::Empty;
 
 store::Info info();
 store::Brief brief();   // the flags only, no decoded tables: prefer it to info() when only flags are read (a full Info is ~1.5 KB of stack)
-std::span<const char> saved_log();   // the flash snapshot in place; empty when none
+std::span<const char> saved_log();   // the flash snapshot in place; empty unless Drive owns the overlay (then it is the SAVEDLOG.TXT mirror)
+std::size_t saved_log_len();         // the snapshot length in every mode (0 when none); cheap, no buffer touched
 Result save_emarker();            // the cable held by fusb302 into the library (lib_save_current); Err::Empty when none
 Result save_log();                // RAM log ring -> flash snapshot
 // The e-marker library (k2/pd/emlib.hpp): saved cables, one entry each, numbered 1..9999.

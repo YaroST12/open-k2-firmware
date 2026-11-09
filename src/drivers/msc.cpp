@@ -30,7 +30,9 @@ namespace {
 alignas(drive::Drive) K2_MODE_RAM_DRIVE std::byte g_drive_mem[sizeof(drive::Drive)];
 drive::Drive* g_drive = nullptr;
 std::uint32_t g_gen = 0, g_card_gen = 0;
-std::array<std::uint16_t, drive::kMaxCards> g_cards{};   // card numbers, newest first
+// Card numbers, newest first. Drive-only state like the Drive object: the .mode_drive overlay is ours for the
+// whole session in Drive mode and never touched in the others (the region is zeroed at boot, like .bss).
+K2_MODE_RAM_DRIVE std::array<std::uint16_t, drive::kMaxCards> g_cards;
 unsigned g_caps = 0;   // bit per black box slot that holds a capture
 
 unsigned cap_mask() {

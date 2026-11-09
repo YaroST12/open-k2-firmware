@@ -15,4 +15,6 @@ bool release(Tenant t) {
     return g_lease.release(t);
 }
 
+Tenant owner() { return g_lease.owner(); }
+
 }  // namespace k2::mode_ram
