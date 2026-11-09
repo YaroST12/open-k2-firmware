@@ -105,7 +105,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
        cycle: Rescan marker written`, the K2 reboots once and returns on Connection -> Source with Rd and
        "Rescanned (rebooted)"; `[RDI] comeback boot: rescan pin=...` then `[RDI] comeback vouched`. Evidence into
        `runs/<date>-rescan/`.
-- **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, fixed in c51cf6d, hardware check pending).
+- **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, fixed in 9078279 (re-plan in c51cf6d), hardware check pending).
   - Evidence: Anker 2-way splitter behind a Baseus 140 W, charger test "PD only", 3a37f22. First list: 5/9/15 V 1.5 A
     + 20 V 2.5 A. About 4 s into the run, the splitter re-split its budget with the dock on its other output and
     re-announced 5 V 1.5 A, 9 V 3 A, 15 V 3 A (20 V gone). The run: 5 V pass, 9 V pass, then 15 V AND both 20 V rows
@@ -211,8 +211,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     Not a K2 bug, for the quirks doc: on this splitter every PPS Request is Accepted, VBUS then falls 5 V -> 2 V instead
     of rising, PS_RDY is sent anyway and the Rp drops ~500 ms later (`pps-accept-then-collapse`, `A2-runlog.txt`; the
     card's "source lost" fail is correct). EPR 28 V passes through the splitter when its budget allows.
-- **The sink re-requests a held contract by position on a re-announce** (2026-11-09, review finding, not seen on the
-  wire yet). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requests `want_.pos`, and
+    Done in 9078279 (+ 5c9590a): items 1-5 implemented in `src/chargertest/charger_test.cpp` (running-unit scoping,
+    plan_moved-only counting, two-tier voltage-based find_offer, fixed current drop keeps its row), all nits
+    (slot-move re-queue, rebalanced in the journal header byte 9 and card format v8, the 43-values comment, the
+    logdb id 416 / post-rebase hashes in the branch commits, the guarded `&steps_[index_]`); tests red first in
+    25cbf61.
+- **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in d70df9a, hardware check
+  pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
   K2 holds 15 V at PDO 3 makes the sink ask 20 V by itself: a legal Request (advertised) but a voltage nobody chose,
   with the cable limit unchecked. Also a Source_Capabilities that arrives in `Transition` while held, with no release
