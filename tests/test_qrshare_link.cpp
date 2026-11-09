@@ -89,7 +89,7 @@ static void test_base64url() {
 // The link text of a record, in the form encode() picks (v2 first for a v1 card/cable record). `v1` forces the version '1'
 // form, which stays valid and decodable.
 static std::string link_of(qs::Type t, const Bytes& rec, bool packed, bool v1 = false) {
-    char out[qs::kTextBuf];
+    char out[lk::kMaxText + 1];
     const std::size_t n = lk::encode(t, rec, packed, out, !v1);
     return std::string(out, n);
 }
@@ -148,7 +148,7 @@ static void test_kind_letters() {
         std::memcpy(b.data(), s, std::strlen(s));
         return b;
     }();
-    char out[qs::kTextBuf];
+    char out[lk::kMaxText + 1];
     const std::size_t n = lk::encode_kind('t', text, out);
     CHECK(n != 0);
     const std::string t(out, n);
@@ -163,14 +163,17 @@ static void test_kind_letters() {
     CHECK(std::string(out, lk::encode_kind('E', rec, out)) == link_of(qs::Type::Emarker, rec, true));
 }
 
-// One code or none: the rule that decides whether the Share view offers a Link at all. A v1 card/cable record is judged by its
-// v2 size, so the 8-row-quirk cable (510 B raw, 189 B v2) has a link form even though the raw record is far over the cap.
+// One code or none: the rule that decides whether the Share view offers a Link at all. The cap is one code within the look
+// policy (QR version 21, 929 characters), so every record the share view can hold fits, the 510 B cable record as held too;
+// a v1 card/cable record is still judged by its (smaller) v2 size first.
 static void test_fits_rule() {
-    CHECK_EQ(lk::kMaxRecord, 203u);                                        // 321 - the 50 character head, 4 characters per 3 bytes
+    CHECK_EQ(lk::kMaxVersion, 21);
+    CHECK_EQ(lk::kQrBytes, 929u);                                          // version 21, level L, byte mode
+    CHECK_EQ(lk::kMaxRecord, 659u);                                        // 929 - the 50 character head, 4 characters per 3 bytes
     CHECK(lk::fits(qs::Type::Emarker, 91));                                // a plain cable record as held
     CHECK(lk::fits(qs::Type::Emarker, lk::kMaxRecord));
     CHECK(!lk::fits(qs::Type::Emarker, lk::kMaxRecord + 1));
-    CHECK(!lk::fits(qs::Type::Emarker, 510));                              // as held: over the cap...
+    CHECK(lk::fits(qs::Type::Emarker, 510));                               // as held, every quirk row: under the cap now
     CHECK(!lk::fits(qs::Type::Emarker, 0));
     CHECK(lk::fits(qs::Type::Card, qs::records::kMaxCard));
     CHECK(lk::fits(qs::Type::PdCaps, qs::records::kMaxPdCaps));
@@ -180,35 +183,42 @@ static void test_fits_rule() {
 
     const Bytes eight = cable_record(8);
     CHECK_EQ(eight.size(), qs::records::kMaxEmarker);
-    CHECK(lk::fits(qs::Type::Emarker, {eight.data(), eight.size()}, false));   // ...but via v2 it fits: 189 B -> 302 chars
-    CHECK(!lk::fits(qs::Type::Emarker, {eight.data(), eight.size()}, true));
+    CHECK(lk::fits(qs::Type::Emarker, {eight.data(), eight.size()}, false));   // via v2 it is 189 B -> 302 chars
+    CHECK(lk::fits(qs::Type::Emarker, {eight.data(), eight.size()}, true));    // and the 510 B as held fits too (<= 659)
     CHECK(lk::fits(qs::Type::Card, {pattern(40).data(), 40}, false));        // not a card record: the plain length rule, no v2
     const Bytes card = card_record(card_fh22());
     CHECK(lk::fits(qs::Type::Card, {card.data(), card.size()}, false));
 }
 
-// The worst case: an incompressible record of kMaxRecord bytes. At most 321 characters, a version 11 symbol, and the independent
-// reader gets the text back from the matrix.
-static void test_worst_case_fits_version_11() {
-    CHECK_EQ(lk::kMaxText, 321u);
-    CHECK(lk::kMaxText <= lk::kQrBytesV11);
+// The worst case: an incompressible record of kMaxRecord bytes. At most 929 characters, a version 21 symbol (101 modules, the
+// largest the look policy shows to a main camera), and the independent reader gets the text back from the matrix. One record
+// byte more is refused (it would be version 22).
+static void test_worst_case_fits_version_21() {
+    CHECK_EQ(lk::kMaxText, 929u);
+    CHECK(lk::kMaxText <= lk::kQrBytes);
     for (unsigned seed : {1u, 2u, 3u}) {
         const Bytes rec = pattern(lk::kMaxRecord, seed);
-        char out[qs::kTextBuf];
+        char out[lk::kMaxText + 1];
         const std::size_t n = lk::encode(qs::Type::Emarker, rec, false, out);
         CHECK_EQ(n, lk::kMaxText);
-        static qr::Workspace w;
-        const int modules = qr::encode_text(out, w, qr::kMaxVersion);
-        CHECK_EQ(modules, 61);                                                 // version 11
-        const qrdec::Result d = qrdec::decode(modules, [&](int x, int y) { return qr::dark(w, x, y); });
+        static std::uint8_t code[qr::buf_len_for(lk::kMaxVersion)], temp[qr::buf_len_for(lk::kMaxVersion)];
+        std::memcpy(temp, out, n);
+        const int modules = qr::encode_placed(code, temp, n, lk::kMaxVersion);
+        CHECK_EQ(modules, 101);                                                // version 21
+        const qrdec::Result d = qrdec::decode(modules, [&](int x, int y) { return qr::dark_code(code, x, y); });
         CHECK(d.ok);
-        CHECK_EQ(d.version, 11);
+        CHECK_EQ(d.version, 21);
         CHECK(d.text == std::string(out, n));
+        out[n] = 'x';                                                          // one character more needs version 22
+        std::memcpy(temp, out, n + 1);
+        CHECK_EQ(qr::encode_placed(code, temp, n + 1, lk::kMaxVersion), 0);
     }
+    char big[1000];
+    CHECK_EQ(lk::encode(qs::Type::Emarker, pattern(lk::kMaxRecord + 1, 1), false, big), 0u);   // refused, not a v22 code
 }
 
 // The worst report card as the store keeps it: format 7, the full 202 byte record, plain and incompressible, 320 characters of
-// the 321 of one version 11 code. Its v2 form is 83 B for a real card and at most 187 B with every field at its limit (300
+// the 929 of one version 21 code. Its v2 form is 83 B for a real card and at most 187 B with every field at its limit (300
 // characters), still one code.
 static void test_worst_card_fits_one_code() {
     static_assert(rc::kMaxRecord <= lk::kMaxRecord, "the worst card record fits one code");
@@ -238,13 +248,13 @@ static void test_worst_card_fits_one_code() {
     const std::size_t vn = qs::records::pack_v2(qs::Type::Card, rec, v2);
     CHECK_EQ(vn, qs::records::kMaxCardV2);
     v2.resize(vn);
-    char out[qs::kTextBuf];
+    char out[lk::kMaxText + 1];
     const std::size_t n2 = lk::encode_v2(qs::Type::Card, v2, out);
     CHECK(n2 != 0);
     CHECK(std::string(out, n2).rfind(std::string(lk::kBase) + "2c.", 0) == 0);
     CHECK_EQ(n2, lk::kHead + lk::b64_len(vn));
     CHECK_EQ(n2, 300u);
-    CHECK(n2 <= lk::kQrBytesV11);
+    CHECK(n2 <= lk::kQrBytes);
     static qr::Workspace w;
     const int modules = qr::encode_text(out, w, qr::kMaxVersion);
     CHECK(modules >= 21 && modules <= 61);
@@ -444,7 +454,7 @@ static std::vector<Golden> goldens() {
 }
 
 static std::string link_of(const Golden& g) {
-    char out[qs::kTextBuf];
+    char out[lk::kMaxText + 1];
     std::size_t n = 0;
     if (g.name == "qrtest") n = lk::encode_kind('t', g.rec, out);
     else if (g.v2) n = lk::encode_v2(g.type, g.rec, out);
@@ -452,13 +462,14 @@ static std::string link_of(const Golden& g) {
     return std::string(out, n);
 }
 
-// The 8-row quirk cable: 510 B raw, 239 B packed — over one code either way in v1, so it used to have no link form. Its v2 record
-// is 189 B, a 302 character link: now it fits and opens as a link. Zero, two and four rows fit v1 packed as well.
+// The 8-row quirk cable: 510 B raw, 239 B packed. Under the old one-v11-code cap (203 B) it had no link form in v1; its v2 record
+// is 189 B, a 302 character link, a v11 code. The cap is now one v21 code (659 B), so the 510 B record as held fits too, but the
+// smaller v2 code still wins in encode().
 static void test_big_cable_has_a_v2_link() {
     const Golden eight = golden_v2("rows8", qs::Type::Emarker, cable_record(8));
     CHECK_EQ(eight.raw.size(), qs::records::kMaxEmarker);
     CHECK_EQ(eight.rec.size(), 189u);
-    CHECK(!lk::fits(qs::Type::Emarker, eight.raw.size()));               // as held in v1: no link
+    CHECK(lk::fits(qs::Type::Emarker, eight.raw.size()));                // as held in v1: a link form too, since the cap is v21
     CHECK(lk::fits(qs::Type::Emarker, {eight.raw.data(), eight.raw.size()}, false));
     const std::string t = link_of(eight);
     CHECK(t.rfind(std::string(lk::kBase) + "2e.", 0) == 0);
@@ -496,7 +507,7 @@ static void test_encode_picks_v2() {
     CHECK(link_of(qs::Type::Card, z, true).rfind(std::string(lk::kBase) + "1z.", 0) == 0);              // a block stays v1 packed
     CHECK(link_of(qs::Type::Card, z, true, true).size() == link_of(qs::Type::Card, z, true).size());
     // encode_v2 emits an already packed v2 record; garbage is refused
-    char out[qs::kTextBuf];
+    char out[lk::kMaxText + 1];
     CHECK_EQ(lk::encode_v2(qs::Type::Card, v2, out), lk::kHead + lk::b64_len(vn));
     CHECK_EQ(lk::encode_v2(qs::Type::Card, card, out), 0u);             // not a v2 record
     CHECK_EQ(lk::encode_v2(qs::Type::PdCaps, v2, out), 0u);             // only the card and the cable have v2
@@ -558,7 +569,7 @@ static void dump_corpus(const char* path) {
         const std::size_t n = qs::records::pack_v2(g.type, g.raw, v2);
         if (n == 0) continue;
         v2.resize(n);
-        char out[qs::kTextBuf];
+        char out[lk::kMaxText + 1];
         const std::size_t ln = lk::encode_v2(g.type, v2, out);
         o << g.name << "\t" << unsigned(g.type) << "\t" << hex(g.raw) << "\t" << hex(v2) << "\t" << std::string(out, ln) << "\n";
     }
@@ -579,7 +590,7 @@ static void dump_corpus(const char* path) {
     Bytes v2(qs::records::kMaxEmarker);
     const std::size_t n = qs::records::pack_v2(qs::Type::Card, rec, v2);
     v2.resize(n);
-    char out[qs::kTextBuf];
+    char out[lk::kMaxText + 1];
     const std::size_t ln = lk::encode_v2(qs::Type::Card, v2, out);
     o << "card_worst\t4\t" << hex(rec) << "\t" << hex(v2) << "\t" << std::string(out, ln) << "\n";
     std::printf("wrote %s\n", path);
@@ -659,14 +670,15 @@ static void test_golden() {
         CHECK(q.ok);
         CHECK(q.text == t);
     }
-    // The real cards' v2 links stay well under the cap: at most 85 % of the 321 characters of a version 11 code.
+    // The real cards' v2 links stay well under the cap: at most 40 % of the 929 characters of a version 21 code (they are version
+    // 11 or smaller, so a card never needs the 2 px symbol).
     CHECK(worst_card_link != 0);
-    CHECK(worst_card_link * 100 <= 85 * lk::kQrBytesV11);
+    CHECK(worst_card_link * 100 <= 40 * lk::kQrBytes);
 }
 
 // The frozen v5 cards (tests/fixtures/qrlink_v5.tsv, 184 byte records from before the UFCS modes): their version '1' links still
 // decode, the card reads back with no modes, and its JSON is what v5 firmware wrote (no "ufcs" key). A 184 byte record is under
-// the 203 limit.
+// the 659 limit.
 static void test_v5_links_still_decode() {
     const auto rows = read_golden("tests/fixtures/qrlink_v5.tsv");
     CHECK_EQ(rows.size(), 5u);
@@ -701,7 +713,7 @@ int main() {
     test_text_and_refusals();
     test_kind_letters();
     test_fits_rule();
-    test_worst_case_fits_version_11();
+    test_worst_case_fits_version_21();
     test_worst_card_fits_one_code();
     test_encode_picks_v2();
     test_big_cable_has_a_v2_link();
