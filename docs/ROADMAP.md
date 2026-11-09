@@ -105,7 +105,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
        cycle: Rescan marker written`, the K2 reboots once and returns on Connection -> Source with Rd and
        "Rescanned (rebooted)"; `[RDI] comeback boot: rescan pin=...` then `[RDI] comeback vouched`. Evidence into
        `runs/<date>-rescan/`.
-- **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, open, fix specified below).
+- **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, fixed in c51cf6d, hardware check pending).
   - Evidence: Anker 2-way splitter behind a Baseus 140 W, charger test "PD only", 3a37f22. First list: 5/9/15 V 1.5 A
     + 20 V 2.5 A. About 4 s into the run, the splitter re-split its budget with the dock on its other output and
     re-announced 5 V 1.5 A, 9 V 3 A, 15 V 3 A (20 V gone). The run: 5 V pass, 9 V pass, then 15 V AND both 20 V rows
