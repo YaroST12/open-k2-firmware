@@ -284,7 +284,9 @@ the pick that was made.
    probes run inside the PD unit, so the row is not toggleable), `USB PD`, `QC / UFCS` (QC2, QC3, QC3+, Class B, UFCS);
    the "select / clear all" row is gone); a short OK on a family toggles the whole family, a long OK
    opens its Group page (stage 1: `PD fixed`, `PPS`, or one row per algorithm; a short OK toggles a row there).
-   The result rows follow the same family order. The text layouts (report card, `charger_summary.py`) separate them with
+   The result rows follow the same family order. The rows (Running grid and Results) are derived from the run's unit
+   order and the planner's table (`charger_test::algorithm_order`), never from a copy of the order: QC2 is followed by QC2
+   Class B, QC3 by QC3 Class B, and a custom unit order (`charger-units`) moves the rows with it. The text layouts (report card, `charger_summary.py`) separate them with
    short section headers (`Huawei`, `Samsung`, `OPPO`, `Xiaomi`, `USB PD`, `QC/UFCS`, plus `OEM / PD` for the
    vendor-label facts of a PD source; `Row.label` holds 8 characters); a section whose rows all fold into the `No reply` /
    `Skipped` summary rows drops its header. The on-device grid is units only (no header rows).

@@ -43,8 +43,11 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   step 2/3 (cable / spoof choice), scrolling down makes the selection squares lose their bottom or top border line.
 - **Home screen fonts stretched or squeezed in landscape** (2026-11-09, user report): on the Home page in a landscape
   rotation the text glyphs look stretched or squeezed compared with portrait. Not investigated; the user takes it.
-- **Charger test progress order** (2026-11-09, user report): the order the run tests the algorithms in does not match
-  the order the progress section lists them in (where the algorithm under test is shown). Not investigated yet.
+- **Charger test progress order** (2026-11-09, user report): the order the run tests the algorithms in did not match
+  the order the progress grid listed them in. Fixed in 182eee3, hardware check pending (the grid kept its own copy of the
+  order, Class B rows after the Class A ones, and ignored a custom unit order; it now derives the rows from the run's
+  unit order and the planner's table). Open until a run on the K2 shows QC2, QC2B, QC3, QC3B, QC3+, UFCS top to bottom.
+  Residual: the Mi 6A probes stay one "Turbo 6A" row in front of the PD rows (some probes run inside the PD rows).
 - **Planned re-attach counts as a resume** (2026-11-09): the card's "resumed" counter is not masked after the planned
   reboot, so a clean 6 A run reads as resumed once.
 - **Stale Rd marker** (2026-11-09, accepted for now): a bare unplug after a self-powered run leaves `/rd.rec`; the next
