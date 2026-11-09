@@ -284,9 +284,12 @@ the pick that was made.
    probes run inside the PD unit, so the row is not toggleable), `USB PD`, `QC / UFCS` (QC2, QC3, QC3+, Class B, UFCS);
    the "select / clear all" row is gone); a short OK on a family toggles the whole family, a long OK
    opens its Group page (stage 1: `PD fixed`, `PPS`, or one row per algorithm; a short OK toggles a row there).
-   The result rows follow the same family order. The rows (Running grid and Results) are derived from the run's unit
-   order and the planner's table (`charger_test::algorithm_order`), never from a copy of the order: QC2 is followed by QC2
-   Class B, QC3 by QC3 Class B, and a custom unit order (`charger-units`) moves the rows with it. The text layouts (report card, `charger_summary.py`) separate them with
+   The result rows follow the same family order. The rows (Running grid, Results, Steps filter) come from the step list
+   alone (`result_layout::build`): the runner walks that list by index, so the list is the execution order, and a row
+   stands where the plan first runs one of its steps. No copy of the order exists: QC2 is followed by QC2 Class B, QC3
+   by QC3 Class B, a custom unit order (`charger-units`) moves the rows with it, and each Mi 6A probe level is a row of
+   its own ("Mi 6A", the 6 A hunt steps at that voltage) at the place the planner runs it, after the PPS row it rides on
+   (a re-plan that regrows the rows moves it with the plan). The text layouts (report card, `charger_summary.py`) separate them with
    short section headers (`Huawei`, `Samsung`, `OPPO`, `Xiaomi`, `USB PD`, `QC/UFCS`, plus `OEM / PD` for the
    vendor-label facts of a PD source; `Row.label` holds 8 characters); a section whose rows all fold into the `No reply` /
    `Skipped` summary rows drops its header. The on-device grid is units only (no header rows).
@@ -562,7 +565,7 @@ row), and the small records `ph.rec` (phase marker), `rs.rec` (resume), `mt.rec`
 | `pd` | PD fixed (2.0 and 3.x), EPR fixed and the EPR levels, the PD revision rows |
 | `pps` | PPS, SPR AVS and EPR AVS rows |
 | `qc` | QC2, QC3, QC3+ (and the Class B rows), AFC, FCP, SCP |
-| `oem` | VOOC and SuperVOOC (both), vivo, and every 6 A hunt row (Xiaomi 6 A, Turbo 6A, the fixed 20 V hunt) |
+| `oem` | VOOC and SuperVOOC (both), vivo, and every 6 A hunt row (Xiaomi 6 A, the "Mi 6A" rows, the fixed 20 V hunt) |
 | `ext` | UFCS and anything else |
 
 Rows are addressed by (section, ordinal). Dropping or inserting a row in `oem` rewrites `oem` only; the late AVS rows of the FH22

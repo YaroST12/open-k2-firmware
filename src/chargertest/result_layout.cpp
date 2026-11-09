@@ -139,7 +139,7 @@ void tag(Builder& b, const ct::Step& x) {
 }
 void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
     for (const auto& x : s) {
-        if (x.algorithm != a || !x.mv || x.hunt) continue;   // hunt rows live in the OEM / PD section
+        if (x.algorithm != a || !x.mv || x.hunt) continue;   // a 6 A probe is a row of its own (probe_row)
         Token* k = b.token(true, tone(x));
         if (!k) return;
         k->mv = x.mv;
@@ -158,7 +158,7 @@ void range_row(Builder& b, std::span<const ct::Step> s, A a) {
         // steps only sample them. The chip text stays the advertised range: reach() says how far the source got.
         Tally t;
         for (const auto& y : s)
-            if (y.algorithm == a && y.pos == x.pos && !y.hunt) count(t, y);   // hunt rows live in the OEM / PD section
+            if (y.algorithm == a && y.pos == x.pos && !y.hunt) count(t, y);   // a 6 A probe is a row of its own (probe_row)
         const Tone tn = roll_up(t);
         Token* k = b.token(true, tn);
         if (!k) return;
@@ -344,14 +344,25 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
     l.token_count = l.row_count = 0;
     l.cuts = 0;
     Builder b{l};
-    // The rows follow the order the plan executes the algorithms in (the run's unit order, then the planner's table inside a unit):
-    // one table with the planner, not a copy of it. Revision rows are no grid rows.
-    A order_buf[unsigned(A::Count)];
-    size_t order_n = ct::algorithm_order(oem.units, order_buf);
-    order_n = size_t(std::remove_if(order_buf, order_buf + order_n, [](A a) { return is_revision(a); }) - order_buf);
-    const std::span<const A> order{order_buf, order_n};
-    bool present[unsigned(A::Count)] = {}, absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {};
-    for (const auto& s : steps) if (!is_revision(s.algorithm)) present[unsigned(s.algorithm)] = true;
+    // The rows come from the plan itself: the steps ARE the execution order (the runner walks them by index), so each row is a
+    // group of steps, placed where the plan first runs one of them. A group is a protocol's steps (Revision rows are no grid
+    // rows), or the 6 A probes of one level (every hunt step at that voltage): a probe is a row of its own, wherever the planner
+    // put it (inside the PPS rows, or after the fixed ones), and it moves with the plan when a re-plan regrows the rows.
+    struct Key { A a; bool probe; uint16_t mv; };
+    Key keys[unsigned(A::Count) + 4];
+    size_t key_n = 0;
+    bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {};
+    bool any_probe = false;
+    for (const auto& s : steps) {
+        if (is_revision(s.algorithm)) continue;
+        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt, s.hunt ? s.mv : uint16_t(0)};
+        bool seen = false;
+        for (size_t i = 0; i < key_n && !seen; ++i) seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].mv == k.mv;
+        if (seen || key_n == std::size(keys)) continue;
+        keys[key_n++] = k;
+        any_probe |= k.probe;
+    }
+    auto section_of_key = [](const Key& k) { return k.probe ? Section::Xiaomi : section_of(k.a); };
     auto header = [&](Section s) {
         if (!oem.headers || l.row_count >= l.rows.size()) { b.row = nullptr; return; }
         Row* r = &l.rows[l.row_count++];
@@ -362,15 +373,32 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
         r->header = true;
         b.row = nullptr;
     };
-    // A run = consecutive protocols of the order that share a section: the default order has one run per section.
-    using Run = std::span<const A>;
-    auto any_in = [&](Run run) {
-        for (const A a : run) if (present[unsigned(a)]) return true;
-        return false;
+    // A run = consecutive rows of the plan that share a section: the default order has one run per section.
+    using Run = std::span<const Key>;
+    // The 6 A probes of one level (Mi Turbo 20 V 6 A / 11 V 6 A and any other OEM unlocked mode): one chip per probe step, always
+    // labelled with the probed current (6 A), green only when the source accepted it.
+    auto probe_row = [&](uint16_t mv) {
+        b.begin("Mi 6A", Tone::Dim, A::Count);   // Row.label holds 8 chars
+        if (b.row) { b.row->probe = true; b.row->mv = mv; }
+        for (const auto& x : steps) {
+            if (!x.hunt || x.mv != mv) continue;
+            Token* k = b.token(true, tone(x));
+            if (!k) break;
+            put_text(*k, step_label::params(x).c_str());   // the probed current: "20V 6A", not the advertised max
+            tag(b, x);
+        }
+    };
+    bool mi_shown = false;
+    auto mi_auth_row = [&] {   // the SVID 0x2717 auth fact, once, in front of the first probe (or alone when no probe is in the plan)
+        if (!oem.mi_auth || mi_shown) return;
+        mi_shown = true;
+        b.begin("Mi Turbo", Tone::Pass, A::Count);
+        b.word("auth ok", Tone::Dim);
     };
     auto rows_for = [&](Run run) {
-        for (const A a : run) {
-            if (!present[unsigned(a)]) continue;
+        for (const Key& key : run) {
+            if (key.probe) { probe_row(key.mv); continue; }
+            const A a = key.a;
             const bool legacy = ct::group(a) != ct::Group::Pd;
             if (is_absent(steps, a)) {
                 // A range the charger does not offer keeps its own row: "PPS None". A legacy unit keeps its chips when not folding.
@@ -391,48 +419,33 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
     // A section whose protocols all fold into "No reply" / "Skipped" shows no rows of its own, so its header is dropped
     // again (a bare header above the next header reads as an empty family).
     auto section = [&](Run run) {
-        if (!any_in(run)) return;
+        const Section sec = section_of_key(run[0]);
         const size_t before = l.row_count;
-        header(section_of(run[0]));
+        header(sec);
         const size_t after_header = l.row_count;
+        if (sec == Section::Xiaomi) mi_auth_row();
         rows_for(run);
         if (after_header > before && l.row_count == after_header) l.row_count = before;
     };
-    // The sections follow the run order (the default: OEM vendor modes by company, USB PD, QC / UFCS), with the PD source's own
-    // facts (Xiaomi, OEM / PD) in front of USB PD. A custom unit order moves the rows and their sections with it; a family the
-    // order splits shows as two runs, so the rows stay in the order they are tested in.
-    Run runs[unsigned(A::Count)];
-    size_t run_n = 0, split = 0;
-    for (size_t at = 0; at < order.size();) {
+    // The sections follow the plan (the default: OEM vendor modes by company, USB PD, QC / UFCS; the Xiaomi probes where the
+    // planner runs them, inside or after the PD rows). A custom unit order moves the rows and their sections with it; a family
+    // the plan splits shows as two runs, so the rows stay in the order they are tested in.
+    Run runs[unsigned(A::Count) + 4];
+    size_t run_n = 0;
+    for (size_t at = 0; at < key_n;) {
         size_t end = at + 1;
-        while (end < order.size() && section_of(order[end]) == section_of(order[at])) ++end;
-        runs[run_n++] = order.subspan(at, end - at);
+        while (end < key_n && section_of_key(keys[end]) == section_of_key(keys[at])) ++end;
+        runs[run_n++] = Run{keys + at, end - at};
         at = end;
     }
-    while (split < run_n && section_of(runs[split][0]) != Section::UsbPd) section(runs[split++]);   // OEM vendor modes (Huawei / Honor, Samsung, OPPO / OnePlus / vivo) and what the user put before PD
-    // Section 4: Xiaomi / Redmi - the Mi 6A probes ride PD (they run at the end of the PD unit) but read under the
-    // family: the auth fact plus the 6 A hunt rows, no PD test rows. Omitted when nothing was detected.
-    bool any_hunt = false;
-    for (const auto& s : steps) if (s.hunt) any_hunt = true;
-    if (oem.mi_auth || any_hunt) {
-        header(Section::Xiaomi);
-        if (oem.mi_auth) { b.begin("Mi Turbo", Tone::Pass, A::Count); b.word("auth ok", Tone::Dim); }
-        // The 6 A probes (Mi Turbo 20 V 6 A / 11 V 6 A and any other OEM unlocked mode): one chip per probe,
-        // always labelled with the probed current (6 A), green only when the source accepted it.
-        if (any_hunt) {
-            b.begin("Turbo 6A", Tone::Dim, A::Count);   // Row.label holds 8 chars
-            for (const auto& x : steps) {
-                if (!x.hunt) continue;
-                Token* k = b.token(true, tone(x));
-                if (!k) break;
-                put_text(*k, step_label::params(x).c_str());   // always the probed current: "20V 6A", not the advertised max
-                tag(b, x);
-            }
-        }
-    }
-    // Section 5: facts of a PD source's identity (the passive QC4+/QC5 label, the VID-driven OEM name). Omitted when
-    // nothing was detected.
-    if (oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap) {
+    // Facts of a PD source's identity (the passive QC4+/QC5 label, the VID-driven OEM name, the Mi Turbo auth state when the plan
+    // holds no probe to carry it): in front of the first PD or Xiaomi run, or after the last run. Omitted when nothing was detected.
+    bool facts_done = false;
+    auto facts = [&] {
+        if (facts_done) return;
+        facts_done = true;
+        if (oem.mi_auth && !any_probe) { header(Section::Xiaomi); mi_auth_row(); }
+        if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap)) return;
         header(Section::OemPd);
         if (oem.qc_label) {
             // The label is the full name ("Samsung SFC 2.0", "Moto TurboPower", "QC5"): its first word fits the 8-character
@@ -452,19 +465,29 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
             b.begin("SCP cap", Tone::Dim, A::Count);
             b.phrase(oem.scp_cap, Tone::Dim, false);
         }
-    }
+    };
     // USB PD (compliant USB-C, PD over CC) and QC / UFCS (standard D+/D- protocols; QC runs on USB-C as well, so not "USB-A"),
-    // each where the run puts it.
-    while (split < run_n) section(runs[split++]);
+    // each where the plan puts it.
+    for (size_t r = 0; r < run_n; ++r) {
+        const Section sec = section_of_key(runs[r][0]);
+        if (sec == Section::UsbPd || sec == Section::Xiaomi) facts();
+        section(runs[r]);
+    }
+    facts();
     auto collapsed = [&](const bool (&set)[unsigned(A::Count)], const char* label, Tone t) {
         bool any = false;
-        for (const A a : order) any |= set[unsigned(a)];
+        for (size_t i = 0; i < key_n; ++i) any |= !keys[i].probe && set[unsigned(keys[i].a)];
         if (!any) return;
         b.begin(label, t, A::Count);
-        for (const A a : order) if (set[unsigned(a)]) b.word(display_name(a), t);
+        for (size_t i = 0; i < key_n; ++i) if (!keys[i].probe && set[unsigned(keys[i].a)]) b.word(display_name(keys[i].a), t);
     };
     collapsed(absent, "No reply", Tone::Dim);
     collapsed(skipped, "Skipped", Tone::Caution);
+}
+
+bool row_has(const Row& r, const ct::Step& s) {
+    if (r.header) return false;
+    return r.probe ? s.hunt && s.mv == r.mv : !s.hunt && r.algorithm == s.algorithm;
 }
 
 void add_note(Layout& l, const char* label, Tone t, std::initializer_list<const char*> words) {

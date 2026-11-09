@@ -285,7 +285,7 @@ static void test_chips_carry_their_level() {
 }
 static void test_absent_protocols_fold_into_one_row() {
     rl::Layout l; auto s = baseus(); rl::build(l, s);
-    CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "FCP EPR UFCS");   // run order: the OEM modes come first
+    CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "EPR FCP UFCS");   // the words follow the plan's order (here: the fixture's)
     CHECK_EQ(int(find(l, "No reply")->label_tone), int(rl::Tone::Dim));
     CHECK_STR(chips(l, row_of(l, "Skipped")).c_str(), "QC2 QC3");
     CHECK_EQ(int(find(l, "Skipped")->label_tone), int(rl::Tone::Caution));
@@ -303,7 +303,7 @@ static void test_a_legacy_unit_keeps_its_row_when_folding_is_off() {
     CHECK_EQ(find(l, "QC2") != nullptr, true);          // skipped-only units keep their rows too
     CHECK_EQ(find(l, "UFCS") != nullptr, true);
     CHECK_EQ(find(l, "EPR") == nullptr, true);          // a PD protocol the source does not offer still folds
-    CHECK_EQ(find(l, "FCP") < find(l, "QC2"), true);    // plan order, not "failed units last"
+    CHECK_EQ(find(l, "QC2") < find(l, "FCP"), true);    // plan order (the fixture runs QC2 first), not "failed units last"
     CHECK_EQ(find(l, "No reply") != nullptr, true);     // ...into the trailing words row
     CHECK_STR(chips(l, row_of(l, "No reply")).c_str(), "EPR");
 }
@@ -418,12 +418,12 @@ static void test_note_row_is_appended_as_plain_words() {
 // facts), USB PD (CC protocols), QC/UFCS (standard D+/D-).
 static std::vector<ct::Step> every_family() {
     std::vector<ct::Step> s;
-    s.push_back(step(A::Qc2, 9000, V::Pass));
+    s.push_back(step(A::Fcp, 9000, V::Pass));
+    s.push_back(step(A::Afc, 9000, V::Pass));
     s.push_back(step(A::Vooc, 5000, V::Pass));
     s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
-    s.push_back(step(A::Afc, 9000, V::Pass));
-    s.push_back(step(A::Fcp, 9000, V::Pass));
-    return s;   // deliberately not in run order: the layout sorts by section
+    s.push_back(step(A::Qc2, 9000, V::Pass));
+    return s;   // the default run order: the layout keeps the plan's order and cuts a section wherever the family changes
 }
 static void test_results_split_into_sections() {
     rl::Layout l; rl::build(l, every_family());
@@ -609,25 +609,62 @@ static void test_headers_can_be_left_out() {
     const size_t n = rl::wrap(without, {}, lines);
     for (size_t i = 0; i < n; ++i) CHECK_EQ(lines[i].count > 0, true);
 }
-// The 6 A hunt probes live in the Xiaomi section under "Turbo 6A", always labelled with the probed 6 A
-// (never the advertised PDO max), and stay out of the USB PD fixed/PPS chips.
+static ct::Step hunt_step(A a, unsigned mv, V v, unsigned pos, uint32_t pdo) {
+    ct::Step h = step(a, mv, v, pos, pdo); h.hunt = true; h.ma = 6000;
+    return h;
+}
+// Row labels in layout order, "*" for a section header ("Xiaomi" -> "*Xiaomi"), to compare whole layouts at once.
+static std::string row_order(const rl::Layout& l) {
+    std::string out;
+    for (size_t i = 0; i < l.row_count; ++i) { if (i) out += ","; if (l.rows[i].header) out += "*"; out += l.rows[i].label; }
+    return out;
+}
+// The 6 A hunt probes are rows of their own ("Mi 6A", one per probed level) in the Xiaomi section, always labelled with the probed
+// 6 A (never the advertised PDO max), and stay out of the USB PD fixed/PPS chips.
 static void test_hunt_rows_live_in_the_xiaomi_section() {
     auto s = baseus();
-    ct::Step h20 = step(A::Pd3Fixed, 20000, V::Fail, 5, 409935u); h20.hunt = true; h20.ma = 6000;
-    ct::Step h11 = step(A::Pps, 11000, V::Pass, 6, 3235656292u); h11.hunt = true; h11.ma = 6000;
-    s.push_back(h20); s.push_back(h11);
+    s.push_back(hunt_step(A::Pd3Fixed, 20000, V::Fail, 5, 409935u));
+    s.push_back(hunt_step(A::Pps, 11000, V::Pass, 6, 3235656292u));
     rl::Layout l; rl::build(l, s);
     const size_t xiaomi = row_of(l, "Xiaomi");
     CHECK_EQ(l.rows[xiaomi].header, true);
-    const size_t r = row_of(l, "Turbo 6A");
-    CHECK_EQ(r > xiaomi, true);
-    CHECK_EQ(r < row_of(l, "USB PD"), true);   // the family reads before the USB PD rows it rides on
-    CHECK_STR(chips(l, r).c_str(), "20V 6A 11V 6A");
-    CHECK_EQ(int(l.tokens[l.rows[r].first].tone), int(rl::Tone::Fail));
-    CHECK_EQ(int(l.tokens[l.rows[r].first + 1].tone), int(rl::Tone::Pass));
+    const size_t r20 = row_of(l, "Mi 6A"), r11 = r20 + 1;
+    CHECK_EQ(r20 > xiaomi, true);
+    CHECK_EQ(r20 > row_of(l, "PPS"), true);   // the probes stand where the plan runs them: after the PD rows they follow
+    CHECK_STR(l.rows[r11].label, "Mi 6A");
+    CHECK_EQ(l.rows[r20].probe && l.rows[r11].probe, true);
+    CHECK_EQ(l.rows[r20].mv, 20000); CHECK_EQ(l.rows[r11].mv, 11000);
+    CHECK_STR(chips(l, r20).c_str(), "20V 6A");
+    CHECK_STR(chips(l, r11).c_str(), "11V 6A");
+    CHECK_EQ(int(l.tokens[l.rows[r20].first].tone), int(rl::Tone::Fail));
+    CHECK_EQ(int(l.tokens[l.rows[r11].first].tone), int(rl::Tone::Pass));
     // The PD chips keep the advertised currents and pass counts, untouched by the hunt rows.
     CHECK_STR(chips(l, row_of(l, "PD3.x")).c_str(), "5V 3A 9V 3A 12V 3A 15V 3A 20V 3.35A");
     CHECK_STR(chips(l, row_of(l, "PPS")).c_str(), "5-11V 5A 5-21V 3.2A");
+}
+// The rows follow the step list: a probe the planner runs between two PD rows stands between them, and a section header repeats
+// where the family changes (no hand-kept order puts the Xiaomi block ahead of the PD rows).
+static void test_mi_probe_rows_stand_where_the_plan_runs_them() {
+    std::vector<ct::Step> s;
+    s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
+    s.push_back(hunt_step(A::Pd3Fixed, 20000, V::Pass, 5, 409935u));
+    s.push_back(step(A::Pps, 11000, V::Pass, 6, 3235656292u));
+    s.push_back(hunt_step(A::Pps, 11000, V::Pass, 6, 3235656292u));
+    s.push_back(step(A::Qc2, 9000, V::Pass));
+    rl::Layout l; rl::build(l, s);
+    CHECK_STR(row_order(l).c_str(), "*USB PD,PD3.x,*Xiaomi,Mi 6A,*USB PD,PPS,*Xiaomi,Mi 6A,*QC/UFCS,QC2");
+    // the dense Results / Running grids leave the headers out: the rows alone are the plan's order
+    rl::OemNotes dense; dense.headers = false;
+    rl::build(l, s, dense);
+    CHECK_STR(row_order(l).c_str(), "PD3.x,Mi 6A,PPS,Mi 6A,QC2");
+    CHECK_EQ(l.rows[1].mv, 20000); CHECK_EQ(l.rows[3].mv, 11000);
+    // The usual plan (the probes after the PD rows): one Xiaomi section, the auth fact in front of the probes.
+    std::vector<ct::Step> t{step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u), step(A::Pps, 11000, V::Pass, 6, 3235656292u),
+                            hunt_step(A::Pps, 11000, V::Pass, 6, 3235656292u), hunt_step(A::Pps, 20000, V::Fail, 7, 3235656292u),
+                            step(A::Qc2, 9000, V::Pass)};
+    rl::OemNotes notes; notes.mi_auth = true;
+    rl::build(l, t, notes);
+    CHECK_STR(row_order(l).c_str(), "*USB PD,PD3.x,PPS,*Xiaomi,Mi Turbo,Mi 6A,Mi 6A,*QC/UFCS,QC2");
 }
 
 // ---- summarize(): the best passing mode per protocol family, as words with volts and amps ---------------------------
@@ -640,8 +677,11 @@ static void test_hunt_rows_the_source_did_not_unlock_read_locked() {
     ct::Step a = hunt(20000, 6000, V::Skip); a.reason = ct::Reason::NotUnlocked; a.detail = ct::kDetailNoChain;
     ct::Step b = hunt(11000, 6000, V::Skip); b.reason = ct::Reason::NotUnlocked; b.detail = ct::kDetailCableCap;
     rl::Layout l; rl::build(l, std::vector<ct::Step>{a, b});
-    CHECK_STR(chips(l, row_of(l, "Turbo 6A")).c_str(), "20V 6A locked 11V 6A cable");
-    CHECK_EQ(int(l.tokens[l.rows[row_of(l, "Turbo 6A")].first].tone) != int(rl::Tone::Fail), true);
+    const size_t r20 = row_of(l, "Mi 6A");
+    CHECK_STR(chips(l, r20).c_str(), "20V 6A locked");
+    CHECK_STR(chips(l, r20 + 1).c_str(), "11V 6A cable");
+    CHECK_EQ(int(l.tokens[l.rows[r20].first].tone) != int(rl::Tone::Fail), true);
+    CHECK_EQ(int(l.tokens[l.rows[r20 + 1].first].tone) != int(rl::Tone::Fail), true);
 }
 static std::string line_text(const std::vector<rl::SummaryLine>& v, size_t i) { return v[i].text; }
 static std::vector<rl::SummaryLine> summary_of(const std::vector<ct::Step>& s, size_t max = 3) {
@@ -815,7 +855,7 @@ int main() {
     test_class_b_pass_reads_as_a_normal_pass();
     test_results_split_into_sections();
     test_oem_notes_get_their_own_section_between_xiaomi_and_usb_pd();
-    test_hunt_rows_live_in_the_xiaomi_section();
+    test_hunt_rows_live_in_the_xiaomi_section(); test_mi_probe_rows_stand_where_the_plan_runs_them();
     test_hunt_rows_the_source_did_not_unlock_read_locked();
     test_empty_sections_are_omitted();
     test_a_section_that_folds_away_loses_its_header();

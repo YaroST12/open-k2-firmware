@@ -3364,64 +3364,146 @@ static ct::Options with_units(uint32_t selected, std::initializer_list<ct::Unit>
     return o;
 }
 // ---- Running grid order: the rows list the algorithms in the order the plan executes them ------
-// The algorithms of the plan in execution order (first appearance in the rows, revisions are no grid rows).
-static std::vector<A> executed_algorithms(const ct::Runner& r) {
-    std::vector<A> out;
-    for (const auto& s : r.steps()) {
-        if (s.algorithm >= A::Pd30Revision && s.algorithm <= A::Pd32Revision) continue;
-        if (std::find(out.begin(), out.end(), s.algorithm) == out.end()) out.push_back(s.algorithm);
-    }
+// A grid row's identity: a protocol row is its algorithm, a Mi 6A probe row 1000 + its level in mV (a hunt step belongs to no protocol row).
+static int row_key(A a, bool hunt, unsigned mv) { return hunt ? 1000 + int(mv) : int(a); }
+static int step_key(const ct::Step& s) { return row_key(s.algorithm, s.hunt, s.mv); }
+static bool is_revision_step(const ct::Step& s) { return !s.hunt && s.algorithm >= A::Pd30Revision && s.algorithm <= A::Pd32Revision; }
+static void push_first(std::vector<int>& out, int k) { if (std::find(out.begin(), out.end(), k) == out.end()) out.push_back(k); }
+// The rows of the plan in execution order: the step list is walked front to back by index, so first appearance = order of execution
+// (revisions are no grid rows).
+static std::vector<int> executed_keys(const ct::Runner& r) {
+    std::vector<int> out;
+    for (const auto& s : r.steps()) if (!is_revision_step(s)) push_first(out, step_key(s));
     return out;
 }
-// The algorithms of the Running verdict grid's rows, top to bottom (the way ChargerTestPage::build_running_grid builds it).
-static std::vector<A> grid_algorithms(const ct::Runner& r) {
+// The rows of the Running verdict grid, top to bottom (the way ChargerTestPage::build_running_grid builds it).
+static std::vector<int> grid_keys(const ct::Runner& r) {
     namespace rl = k2::result_layout;
     static rl::Layout l;
     rl::OemNotes oem;
     oem.headers = false; oem.fold = false;
-    oem.units = r.unit_order();
     rl::build(l, r.steps(), oem);
-    std::vector<A> out;
-    for (size_t i = 0; i < l.row_count; ++i) if (l.rows[i].algorithm != A::Count) out.push_back(l.rows[i].algorithm);
+    std::vector<int> out;
+    for (size_t i = 0; i < l.row_count; ++i) {
+        const auto& row = l.rows[i];
+        if (row.probe) out.push_back(row_key(A::Count, true, row.mv));
+        else if (row.algorithm != A::Count) out.push_back(row_key(row.algorithm, false, 0));
+    }
     return out;
 }
 // A row with nothing to show (an EPR step the cable held back) has no grid row, so the grid is the executed order minus such rows:
 // every grid row is in `run`, in the same relative order, none twice.
-static bool grid_follows(const std::vector<A>& grid, const std::vector<A>& run) {
+static bool grid_follows(const std::vector<int>& grid, const std::vector<int>& run) {
     size_t at = 0;
-    for (const A a : grid) {
+    for (const int a : grid) {
         while (at < run.size() && run[at] != a) ++at;
         if (at == run.size()) return false;
         ++at;
     }
     return true;
 }
+static long key_at(const std::vector<int>& v, int k) { return std::find(v.begin(), v.end(), k) - v.begin(); }
 // User report 2026-11-09: the grid listed QC2, QC3, QC3+, QC2B, QC3B, UFCS while the run went QC2, QC2B, QC3, QC3B, QC3+, UFCS
 // (hardware journal, steps 23-48): the grid kept its own copy of the order, with the Class B rows after the Class A ones.
 static void test_running_grid_lists_the_algorithms_in_the_order_the_plan_runs_them() {
     Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
     CHECK_EQ(r.start(f.caps, ct::Options{}, f.in, true), ct::Reason::None);
-    const auto run = executed_algorithms(r);
+    const auto run = executed_keys(r), grid = grid_keys(r);
     CHECK_EQ(run.size() > 12, true);
-    CHECK_EQ(grid_follows(grid_algorithms(r), run), true);
-    CHECK_EQ(grid_algorithms(r).size() + 3 > run.size(), true);   // at most a few rows with nothing to show (a cable-limited EPR) are left out
+    CHECK_EQ(grid_follows(grid, run), true);
+    CHECK_EQ(grid.size() + 3 > run.size(), true);   // at most a few rows with nothing to show (a cable-limited EPR) are left out
     // the hardware order of the Class B rows, spelled out
-    const auto at = [&](A a) { return std::find(run.begin(), run.end(), a) - run.begin(); };
+    const auto at = [&](A a) { return key_at(run, int(a)); };
     CHECK_EQ(at(A::Qc2) + 1 == at(A::Qc2ClassB) && at(A::Qc2ClassB) < at(A::Qc3), true);
     CHECK_EQ(at(A::Qc3) + 1 == at(A::Qc3ClassB) && at(A::Qc3ClassB) < at(A::Qc3Plus), true);
 }
 // The user's unit order (remote `charger-units`, ct_start.py --units) is the order of the grid too.
 static void test_running_grid_follows_the_users_unit_order() {
     for (const auto& order : {std::initializer_list<ct::Unit>{ct::Unit::Ufcs, ct::Unit::Qc3, ct::Unit::Pd, ct::Unit::Fcp, ct::Unit::Qc2},
-                              std::initializer_list<ct::Unit>{ct::Unit::Pd, ct::Unit::Vooc, ct::Unit::Afc, ct::Unit::Qc2, ct::Unit::PdLow}}) {
+                              std::initializer_list<ct::Unit>{ct::Unit::Pd, ct::Unit::Vooc, ct::Unit::Afc, ct::Unit::Qc2, ct::Unit::PdLow},
+                              std::initializer_list<ct::Unit>{ct::Unit::Qc2, ct::Unit::Pd, ct::Unit::Qc3}}) {
         Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
         ct::Options o = with_units(ct::kDefaultAlgorithms, order);
         CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
-        const auto run = executed_algorithms(r);
+        const auto run = executed_keys(r), grid = grid_keys(r);
         CHECK_EQ(run.size() > 5, true);
-        CHECK_EQ(grid_follows(grid_algorithms(r), run), true);
-        CHECK_EQ(grid_algorithms(r).size() + 3 > run.size(), true);
+        CHECK_EQ(grid_follows(grid, run), true);
+        CHECK_EQ(grid.size() + 3 > run.size(), true);
     }
+}
+// Mi 6A probes are grid rows of their own, at the place the planner runs them: after the PPS row (the hunt step follows its APDO's
+// steps), before the next unit, in plan order; the grid holds no other order than the step list's.
+static void test_running_grid_places_the_mi_probes_where_the_plan_runs_them() {
+    Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::Options{}, f.in, true), ct::Reason::None);
+    const auto run = executed_keys(r), grid = grid_keys(r);
+    const int mi11 = row_key(A::Count, true, 11000), mi20 = row_key(A::Count, true, 20000), pps = int(A::Pps);
+    CHECK_EQ(key_at(run, mi11) < long(run.size()) && key_at(run, mi20) < long(run.size()), true);
+    CHECK_EQ(key_at(grid, mi11) < long(grid.size()) && key_at(grid, mi20) < long(grid.size()), true);
+    CHECK_EQ(key_at(grid, pps) < key_at(grid, mi11) && key_at(grid, mi11) < key_at(grid, mi20), true);
+    // nothing of the PD unit's later rows sits between the PPS row and the probes, and the probes come before the legacy units
+    CHECK_EQ(key_at(grid, mi20) < key_at(grid, int(A::Qc2)), true);
+    // the same positions in the step list itself
+    CHECK_EQ(key_at(run, pps) < key_at(run, mi11) && key_at(run, mi11) < key_at(run, mi20) && key_at(run, mi20) < key_at(run, int(A::Qc2)), true);
+    // the grid has no "Turbo" block ahead of PD: the first row is whatever the plan starts with
+    CHECK_EQ(grid.front(), run.front());
+    // a custom unit order moves the probes with their unit (the legacy unit first, PD last)
+    Fake g; g.caps = cuktech_caps(); ct::Runner q(g);
+    ct::Options o = with_units(ct::kDefaultAlgorithms, {ct::Unit::Qc2, ct::Unit::Pd});
+    CHECK_EQ(q.start(g.caps, o, g.in, true), ct::Reason::None);
+    const auto run2 = executed_keys(q), grid2 = grid_keys(q);
+    CHECK_EQ(grid_follows(grid2, run2), true);
+    CHECK_EQ(key_at(grid2, int(A::Qc2)) < key_at(grid2, mi11), true);
+    CHECK_EQ(key_at(grid2, mi11) < long(grid2.size()), true);
+}
+// The independent oracle: drive the run and record which step is in flight. The index never goes backwards, so the order in which
+// the rows were first worked on is the plan's order, and the grid built from the finished plan lists the rows in that order.
+static void test_running_grid_matches_the_order_the_run_worked_through() {
+    Fake f; f.caps = cuktech_caps(6000); ct::Runner r(f); f.rn = &r;
+    CHECK_EQ(r.start(f.caps, ct::Options{}, f.in, true), ct::Reason::None);
+    std::vector<int> worked;
+    size_t last = 0; bool backwards = false;
+    for (unsigned n = 0; n < 6000 && r.state() != ct::State::Done; ++n) {
+        f.tick(r, 100);
+        const auto st = r.state();
+        if (st != ct::State::Requesting && st != ct::State::Holding) continue;
+        const size_t i = r.index();
+        if (i < r.steps().size()) {
+            backwards |= i < last; last = std::max(last, i);
+            if (!is_revision_step(r.steps()[i])) push_first(worked, step_key(r.steps()[i]));
+        }
+    }
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(backwards, false);
+    CHECK_EQ(worked.size() > 8, true);
+    CHECK_EQ(grid_follows(worked, grid_keys(r)), true);   // every row the run worked on is a grid row, in the grid's order
+    CHECK_EQ(key_at(worked, row_key(A::Count, true, 11000)) < long(worked.size()), true);   // the Mi probes were worked on, among the PD rows
+}
+// A plan that grows at run time (the source's list arrives late, a re-announced list): the grid is read from the plan as it stands,
+// so it still lists the rows in the order of the step list, probes included.
+static void test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run() {
+    Fake f; f.caps = cuktech_caps(); f.caps.num_pdos = 6;   // the first list has no 5-20 V APDO: one probe row, the second comes with the list
+    f.grown = cuktech_caps(6000); f.grow_after_ms = 400; f.contract_delay_ms = 100;
+    ct::Runner r(f); f.rn = &r;
+    CHECK_EQ(r.start(f.caps, with_units(kPd.selected, {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+    const int mi20 = row_key(A::Count, true, 20000);
+    const auto hunt20 = [&] { for (const auto& s : r.steps()) if (s.hunt && s.mv == 20000) return s.algorithm; return A::Count; };
+    const A before = hunt20();
+    const auto before_run = executed_keys(r), before_grid = grid_keys(r);
+    CHECK_EQ(before, A::Pd3Fixed);                             // planned against the short list: the 20 V probe rides the fixed 20 V PDO
+    CHECK_EQ(key_at(before_grid, mi20) < long(before_grid.size()), true);
+    CHECK_EQ(key_at(before_grid, mi20) < key_at(before_grid, int(A::Pps)), true);   // so its row stands among the fixed rows, before the PPS row
+    CHECK_EQ(grid_follows(before_grid, before_run), true);
+    for (unsigned n = 0; n < 6000 && r.state() != ct::State::Done; ++n) {
+        f.tick(r, 100);
+        CHECK_EQ(grid_follows(grid_keys(r), executed_keys(r)), true);
+    }
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(hunt20(), A::Pps);                                // the rebuilt plan moved it onto the 5-20 V APDO
+    const auto grid = grid_keys(r);
+    CHECK_EQ(key_at(grid, mi20) < long(grid.size()), true);    // the rebuilt plan brought it, and the grid shows it after the PPS row
+    CHECK_EQ(key_at(grid, int(A::Pps)) < key_at(grid, mi20), true);
+    CHECK_EQ(grid_follows(grid, executed_keys(r)), true);
 }
 
 // ---- unit lifecycle (docs/CHARGER_TEST_FLOW.md) -----------------------------------------------
@@ -4834,5 +4916,7 @@ int main() {
     test_power_loss_at_every_event_matches_an_uninterrupted_run();
     test_a_final_stop_closes_before_it_skips();
     test_running_grid_lists_the_algorithms_in_the_order_the_plan_runs_them(); test_running_grid_follows_the_users_unit_order();
+    test_running_grid_places_the_mi_probes_where_the_plan_runs_them(); test_running_grid_matches_the_order_the_run_worked_through();
+    test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run();
     return test_report("test_charger_test");
 }

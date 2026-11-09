@@ -1086,7 +1086,6 @@ void ChargerTestPage::build_results() {
     const auto card = report_card::build(runner_.steps(), runner_.evidence(), runner_.handover(), card_id_, {}, runner_.state(), runner_.reason());
     result_layout::OemNotes oem;
     oem.headers = false;   // the grid is units only: no separator rows between the sections
-    oem.units = runner_.unit_order();   // the rows list the protocols in the order the run tests them
     oem.vendor = result_layout::vendor_oem_name(card_id_.vid);
     if (!oem.vendor && fusb302::vdm().xiaomi) oem.vendor = "Xiaomi";   // SVID 0x2717 seen on the wire even without a VID
     oem.mi_auth = fusb302::sink_status().xiaomi_authed;
@@ -1383,8 +1382,8 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         if (selection_ >= static_cast<int>(line_n_)) { f.put("Compare with the last card"); return FooterTone::Info; }
         const auto &row = layout_.rows[lines_[selection_].row];
         f.put(row.label).put(": ");
-        if (row.algorithm == A::Count) { f.put("see steps"); return FooterTone::Info; }
-        if (ct::kPpsAlgorithms & ct::bit(row.algorithm)) {   // a range says how far the source got, not a count
+        if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
+        if (!row.probe && (ct::kPpsAlgorithms & ct::bit(row.algorithm))) {   // a range says how far the source got, not a count
             const auto rc = result_layout::reach(runner_.steps(), row.algorithm);
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;
@@ -1393,7 +1392,7 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         }
         unsigned pass = 0, fail = 0, other = 0;
         for (const auto &s : runner_.steps()) {
-            if (s.algorithm != row.algorithm) continue;
+            if (!result_layout::row_has(row, s)) continue;
             pass += s.verdict == ct::Verdict::Pass;
             fail += s.verdict == ct::Verdict::Fail;
             other += s.verdict != ct::Verdict::Pass && s.verdict != ct::Verdict::Fail;
@@ -1617,8 +1616,10 @@ void put_clip(char (&dst)[12], std::string_view s) {
 }
 // The section of the layout row `row`: the section of the last protocol row at or before it (a collapsed row follows its neighbour).
 int row_section(const result_layout::Layout &l, size_t row) {
-    for (size_t r = row + 1; r-- > 0;)
+    for (size_t r = row + 1; r-- > 0;) {
+        if (l.rows[r].probe) return static_cast<int>(result_layout::Section::Xiaomi);   // a Mi 6A probe, wherever the plan put it
         if (l.rows[r].algorithm != A::Count) return static_cast<int>(result_layout::section_of(l.rows[r].algorithm));
+    }
     return -1;
 }
 // The head line of a row whose section differs from the line above opens with a 2 px rule.
@@ -1648,18 +1649,18 @@ int running_token(const result_layout::Layout &l, const ct::Runner &runner, size
     if (runner.index() >= steps.size()) return -1;
     const ct::Verdict v = steps[runner.index()].verdict;
     if (v != ct::Verdict::Running && v != ct::Verdict::Pending) return -1;
-    if (l.rows[row].algorithm != steps[runner.index()].algorithm) return -1;
+    if (!result_layout::row_has(l.rows[row], steps[runner.index()])) return -1;   // a 6 A probe has a row of its own
     return pending_chip(l, row, steps[runner.index()].mv);
 }
 // The grid line the step `index` belongs to, known as soon as the runner moves to it (its verdict need not be Running yet):
 // the line holding the first pending chip of its protocol's row, else the head line of that row, else the top (0).
 int follow_line(const result_layout::Layout &l, std::span<const result_layout::Line> lines, std::span<const ct::Step> steps, size_t index) {
     if (steps.empty()) return 0;
-    const auto alg = steps[std::min(index, steps.size() - 1)].algorithm;
+    const ct::Step &now = steps[std::min(index, steps.size() - 1)];
     int head = 0;
     for (size_t i = 0; i < lines.size(); ++i) {
-        if (l.rows[lines[i].row].algorithm != alg) continue;
-        const int tk = pending_chip(l, lines[i].row, steps[std::min(index, steps.size() - 1)].mv);
+        if (!result_layout::row_has(l.rows[lines[i].row], now)) continue;
+        const int tk = pending_chip(l, lines[i].row, now.mv);
         if (tk >= lines[i].first && tk < lines[i].first + lines[i].count) return static_cast<int>(i);
         if (lines[i].head) head = static_cast<int>(i);
     }
@@ -1840,8 +1841,7 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
 // The Running verdict grid: the light layout of the plan (no card), wrapped the way Results wraps it.
 void ChargerTestPage::build_running_grid() {
     result_layout::OemNotes oem;
-    oem.headers = false;
-    oem.units = runner_.unit_order();   // the rows list the protocols in the order the run tests them
+    oem.headers = false;   // the rows are the plan's steps, in the order the runner walks them
     oem.fold = false;  // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
     result_layout::build(layout_, runner_.steps(), oem);
     line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
@@ -2326,7 +2326,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         } else if (!layout_.rows[lines_[static_cast<size_t>(selection_)].row].header) {   // section headers are not openable
             const auto &row = layout_.rows[lines_[static_cast<size_t>(selection_)].row];
             results_row_ = selection_;
-            result_family_ = row.algorithm != A::Count ? family(row.algorithm) : std::strcmp(row.label, "Turbo 6A") == 0 ? kFamXiaomi : -1;   // the Mi 6A probes
+            result_family_ = row.algorithm != A::Count ? family(row.algorithm) : row.probe ? kFamXiaomi : -1;   // the Mi 6A probes
             set_stage(Stage::Steps);
         }
         break;
