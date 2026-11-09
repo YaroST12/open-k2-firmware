@@ -219,6 +219,78 @@ static void test_builders() {
     CHECK_EQ(r::log(long_git, 1, 0, false, 6, lb), 1u + 39 + 1 + 4 + 4 + 6);      // the hash is cut to 39 characters
 }
 
+static std::vector<std::uint8_t> pattern_bytes(std::size_t n) {
+    std::vector<std::uint8_t> v(n);
+    unsigned x = 7;
+    for (auto& b : v) { x = x * 1103515245u + 12345u; b = std::uint8_t(x >> 16); }
+    return v;
+}
+
+// ---- schema v2: the bit-packed link form of the card and the cable (k2/ui/qrshare_records.hpp) ----
+static void test_pack_v2() {
+    namespace r = qs::records;
+    CHECK(r::has_v2(qs::Type::Card) && r::has_v2(qs::Type::Emarker));
+    CHECK(!r::has_v2(qs::Type::PdCaps) && !r::has_v2(qs::Type::Log) && !r::has_v2(qs::Type::Identity) &&
+          !r::has_v2(qs::Type::BootInfo));
+    CHECK_EQ(r::kMaxCardV2, 187u);
+    CHECK_EQ(r::kMaxEmkV2, 459u);
+
+    // A card: valid v1 record in, v2 out; in place gives the same bytes; the v2 record is never longer.
+    const Bytes card = build([](auto o) { return r::card(card_v5(), o); }, r::kMaxCard);
+    CHECK(r::valid_v1(qs::Type::Card, card));
+    Bytes v2(r::kMaxEmarker), inplace = card;
+    const std::size_t n = r::pack_v2(qs::Type::Card, card, v2);
+    CHECK(n != 0 && n < card.size());
+    CHECK_EQ(n, r::pack_v2_in_place(qs::Type::Card, inplace));
+    v2.resize(n);
+    inplace.resize(n);
+    CHECK(v2 == inplace);
+    CHECK_EQ(v2[0], r::kSchemaV2);
+    // the other kinds and the malformed records refuse
+    CHECK(!r::valid_v1(qs::Type::Card, pattern_bytes(202)));
+    CHECK_EQ(r::pack_v2(qs::Type::Card, pattern_bytes(202), v2), 0u);
+    CHECK_EQ(r::pack_v2(qs::Type::Card, pattern_bytes(184), v2), 0u);   // a v5-length record is not re-packed
+    CHECK(!r::valid_v1(qs::Type::PdCaps, card));
+    CHECK_EQ(r::pack_v2(qs::Type::PdCaps, card, v2), 0u);
+    Bytes small(8);
+    CHECK_EQ(r::pack_v2(qs::Type::Card, card, small), 0u);               // out too small
+    // a 184 byte record that happens to start with 0xA6 but has no payload length byte of 196
+    Bytes fake = pattern_bytes(184);
+    fake[0] = 0xA6;
+    CHECK(!r::valid_v1(qs::Type::Card, fake));
+
+    // A cable: 91 B plain and 510 B with eight rows; the quirk block must fit its row count.
+    const Bytes emk = build([](auto o) { return r::emarker(emrec::builtin_cable(1), "EPR 50V 5A", {}, o); }, r::kMaxEmarker);
+    const Bytes emk8 = build([](auto o) { return r::emarker(oneplus_mag_clone(), "OnePlus 100W mag", eight_rows(), o); },
+                             r::kMaxEmarker);
+    CHECK_EQ(emk8.size(), r::kMaxEmarker);
+    CHECK(r::valid_v1(qs::Type::Emarker, emk));
+    CHECK(r::valid_v1(qs::Type::Emarker, emk8));
+    Bytes e2(r::kMaxEmarker), e8(r::kMaxEmarker);
+    const std::size_t n91 = r::pack_v2(qs::Type::Emarker, emk, e2);
+    const std::size_t n510 = r::pack_v2(qs::Type::Emarker, emk8, e8);
+    CHECK_EQ(n91, 44u);
+    CHECK_EQ(n510, 189u);                                                 // the 8-row cable: 189 B -> a 302 character link
+    CHECK(n510 <= r::kMaxEmkV2);
+    Bytes ip8 = emk8;
+    CHECK_EQ(r::pack_v2_in_place(qs::Type::Emarker, ip8), n510);
+    e8.resize(n510);
+    ip8.resize(n510);
+    CHECK(e8 == ip8);
+    // malformed: a quirk flag without a block, a row count past the table, a block that does not fit its count
+    Bytes bad = emk8;
+    bad[0] = 0;
+    CHECK(!r::valid_v1(qs::Type::Emarker, bad) && r::pack_v2(qs::Type::Emarker, bad, e2) == 0);
+    bad = emk8;
+    bad[r::kEmarkerHead + 2] = 9;
+    CHECK(!r::valid_v1(qs::Type::Emarker, bad));
+    bad = emk8;
+    bad[r::kEmarkerHead + emk_quirk::kBlockHeader + 3] = 7;   // nrep past kMaxWords in row 0
+    CHECK(!r::valid_v1(qs::Type::Emarker, bad));
+    CHECK(!r::valid_v1(qs::Type::Emarker, pattern_bytes(50)));
+    CHECK_EQ(r::pack_v2(qs::Type::Emarker, pattern_bytes(300), e2), 0u);
+}
+
 // What the firmware's own parsers read back from each record.
 static void test_firmware_parsers_read_the_records() {
     for (const Fixture& x : fixtures()) {
@@ -328,7 +400,7 @@ static void test_golden() {
 // Part counts by record: the multipart share the UI shows (the eight-row clone) needs two.
 static void test_part_counts() {
     for (const Fixture& x : fixtures()) {
-        const unsigned want = x.name == "emk_rows" ? 2u : 1u;   // its packed form is one part
+        const unsigned want = x.name == "emk_rows" ? 2u : 1u;   // its packed form and its v2 form are one part
         CHECK_EQ(qs::part_count(x.rec.size()), want);
         if (x.packed) CHECK(x.rec.size() * 4 <= (x.name == "emk_rows_lz" ? 510u : 184u) * 3);
     }
@@ -336,6 +408,7 @@ static void test_part_counts() {
 
 int main() {
     test_builders();
+    test_pack_v2();
     test_firmware_parsers_read_the_records();
     test_golden();
     test_part_counts();

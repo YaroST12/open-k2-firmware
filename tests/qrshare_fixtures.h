@@ -57,6 +57,43 @@ inline k2::emk_quirk::Quirks quirk_rows(unsigned rows) {
     return q;
 }
 
+// Quirk rows that also constrain the request data objects (nreq 1 and 2, with a header mask that is not the full
+// kSvdmMask, so the v2 record carries it): the case the plain quirk_rows() above never covers.
+inline k2::emk_quirk::Quirks quirk_rows_req() {
+    using namespace k2;
+    emk_quirk::Quirks q;
+    q.flags = emk_quirk::kQMsgIdEcho;
+    q.unmatched = emk_quirk::Unmatched::NotSupported;
+    emk_quirk::Row r0;
+    r0.sop = emk_quirk::kSopP | emk_quirk::kSopPP;
+    r0.kind = emk_quirk::Kind::Ack;
+    r0.nreq = 1;
+    r0.nrep = 2;
+    r0.hdr_val = emk_quirk::svdm_req(0x22D9, 16);
+    r0.hdr_mask = 0xFFFF8000u | 0x1Fu;   // not kSvdmMask: the v2 form stores it
+    r0.req_val[0] = 0x11223344u;
+    r0.req_mask[0] = 0xFF00FF00u;
+    r0.rep[0] = 0xDEADBEEFu;
+    r0.rep[1] = 0xCAFEBABEu;
+    emk_quirk::add_row(q, r0);
+    emk_quirk::Row r1;
+    r1.sop = emk_quirk::kSopP;
+    r1.kind = emk_quirk::Kind::Raw;
+    r1.nreq = 2;
+    r1.nrep = 3;
+    r1.hdr_val = emk_quirk::svdm_req(0xFF00, 31);
+    r1.hdr_mask = emk_quirk::kSvdmMask;   // the full mask: the v2 form stores only the flag
+    r1.req_val[0] = 0x01020304u;
+    r1.req_val[1] = 0x05060708u;
+    r1.req_mask[0] = 0xFFFFFFFFu;
+    r1.req_mask[1] = 0x0F0F0F0Fu;
+    r1.rep[0] = 0xAA55AA55u;
+    r1.rep[1] = 0x55AA55AAu;
+    r1.rep[2] = 0x12345678u;
+    emk_quirk::add_row(q, r1);
+    return q;
+}
+
 inline k2::pd::SourceCaps caps_spr() {
     k2::pd::SourceCaps c;
     c.valid = true;
