@@ -47,9 +47,9 @@ const char* name(Reason r) {
         "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered",
         "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
-        "withdrawn by source", "wrong voltage on 5V contract"
+        "withdrawn by source", "wrong voltage on 5V contract", "needs load"
     };
-    static_assert(std::size(names) == unsigned(Reason::WrongVoltage) + 1);
+    static_assert(std::size(names) == unsigned(Reason::NeedsLoad) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* name(State s) {
@@ -1196,6 +1196,7 @@ void Runner::request(Input in) {
     s.verdict = Verdict::Running;
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0;
+    row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
     state_ = State::Requesting;
     if (s.group == Group::Pd) {
         pd_owned_ = true;
@@ -1330,7 +1331,8 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     } else {
         // A row lost to a source drop (Reason::Lost) is no verdict on the levels after it: the source is recovered and they get their
         // turn, each in a session of its own (a bank that resets on one level, test_source_drop_recovers_on_a_non_pd_source).
-        if ((v == Verdict::Fail || v == Verdict::Skip) && r != Reason::Lost && r != Reason::Capped) {
+        if ((v == Verdict::Fail || v == Verdict::Skip) && r != Reason::Lost && r != Reason::Capped &&
+            r != Reason::NeedsLoad) {
             // Later retargets cannot prove anything after the initial handshake/contract failed (or the charger gave no response).
             // They are the levels of the same algorithm: the Class B rows that follow a QC2 / QC3 row in its session are rows of their
             // own algorithm and keep their verdict logic (a failed 12 V still leaves "Class A only" / the handshake failure to the
@@ -1424,6 +1426,25 @@ bool Runner::legacy_row_ran() const {
     for (size_t n = 0; n < count_; ++n)
         if ((steps_[n].verdict == Verdict::Pass || steps_[n].verdict == Verdict::Fail) && mode(unit_of(steps_[n])) == Mode::Legacy) return true;
     return false;
+}
+// pattern pps-off-at-no-load (suspected): the per-poll latch of a PD row. Accepted = the sink waits in Transition (Accept seen, no
+// PS_RDY yet) in this attach session; PS_RDY = Ready on this row's PDO; the current is the highest the port drew since the Request.
+void Runner::latch_row(const Input& in) {
+    const auto& s = steps_[index_];
+    if (in.session == session_ && in.pd.state == pd::SinkState::Transition) row_accepted_ = true;
+    if (in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos && in.pd.mv == s.mv)
+        row_ps_rdy_ = true;
+    row_max_ma_ = std::max(row_max_ma_, in.ibus_ma);
+}
+// A programmable row the source Accepted and never made ready, whose VBUS collapsed (under 85 % of the row's level, as a cut)
+// while the port drew next to nothing: the source turned its output off for lack of load. A fixed row, a PS_RDY that was seen,
+// a current drawn and a Hard Reset all stay what they were (Lost / Inline / HardReset).
+bool Runner::needs_load(const Input& in) const {
+    const auto& s = steps_[index_];
+    const bool programmable = s.group == Group::Pd &&
+        (s.algorithm == Algorithm::Pps || s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs);
+    return programmable && row_accepted_ && !row_ps_rdy_ && row_max_ma_ < kNeedsLoadMaxMa &&
+        in.vbus_mv >= 0 && in.vbus_mv < int(s.mv) * 85 / 100;
 }
 // The source hard-reset (or detached) in the middle of a PD row: its contract is gone. Wait for it to come back
 // (recover_ lets Releasing wait for vSafe5V) and ask the row once more; a further loss ends it as before. An EPR row (the entry
@@ -1934,7 +1955,9 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     // level (-15 %): a charger that glitched the CC line but still holds its target keeps the row going. The check is
     // relative to the row, so a 4.5 V SCP row or a 5 V VOOC row that sags to 4.5-4.7 V is not "source lost".
     const bool baseline = state_ == State::Baseline;
-    const bool legacy_row = !baseline && steps_[index_].group != Group::Pd && !pd_owned_;
+    if (!baseline && (state_ == State::Requesting || state_ == State::Holding) && index_ < count_ && steps_[index_].group == Group::Pd)
+        latch_row(in);
+    const bool legacy_row =!baseline && steps_[index_].group != Group::Pd && !pd_owned_;
     const int level_mv = legacy_row && steps_[index_].mv ? int(steps_[index_].mv) : 5000;
     // A session change the row survived (VBUS back within 15 % of its level) is adopted. It is also the sign of a port that sags on
     // D+/D- lows (pattern usb-a-cuts-on-low-dpdm, JT-P18 USB-A 2026-11-07: every row's own 0 V reset sags VBUS to ~3.6 V and drops
@@ -2007,7 +2030,9 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             // (Releasing waits for it; a source that never returns still ends the run there, as Lost).
             if (low_programmable(steps_[index_])) cut_index_ = index_;
             pd_owned_ = false; recover_ = true; session_ = in.session;
-            finish(in, Verdict::Fail, cut ? Reason::CutRecovered : fault);
+            // pattern pps-off-at-no-load: Accepted, no PS_RDY, VBUS collapsed at no load: "needs load", a skip (see needs_load)
+            const bool nl = !cut && needs_load(in);
+            finish(in, nl ? Verdict::Skip : Verdict::Fail, nl ? Reason::NeedsLoad : cut ? Reason::CutRecovered : fault);
             if (state_ == State::Releasing) phase_ms_ = in.now;
             return;
         }

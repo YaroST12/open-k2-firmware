@@ -99,6 +99,7 @@ uint8_t legacy_reason(charger_test::Reason r, const charger_test::Step* step = n
     case R::EprRefused: return static_cast<uint8_t>(R::Request);
     case R::StayedPd: case R::BlockedByPd: return static_cast<uint8_t>(R::PdActive);
     case R::RebootRequest: case R::RebootHandover: case R::RebootLimit: case R::ShutOff: case R::NoReattach: case R::CutRecovered: return static_cast<uint8_t>(R::Lost);
+    case R::NeedsLoad: return static_cast<uint8_t>(R::Lost);               // schema 1 has no "needs load": the source dropped out (what it was before)
     case R::CableLimit:
         return static_cast<uint8_t>(step && e && step->mv > e->cable_mv ? R::OverCap : R::NoOffer);
     default: return static_cast<uint8_t>(r);

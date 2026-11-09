@@ -3499,12 +3499,14 @@ static void test_no_request_into_an_invalid_list_after_a_recovered_cut() {
     CHECK_EQ(no_caps, 0u);
 }
 static void test_every_reason_has_a_name() {
-    for (unsigned v = 1; v <= unsigned(ct::Reason::WrongVoltage); ++v) {   // 0 = None, shown as nothing
+    for (unsigned v = 1; v <= unsigned(ct::Reason::NeedsLoad); ++v) {   // 0 = None, shown as nothing
         const char* n = ct::name(static_cast<ct::Reason>(v));
         CHECK_EQ(n != nullptr && n[0] != 0, true);
     }
     CHECK_STR(ct::name(ct::Reason::Withdrawn), "withdrawn by source");
     CHECK_STR(ct::name(ct::Reason::WrongVoltage), "wrong voltage on 5V contract");
+    CHECK_STR(ct::name(ct::Reason::NeedsLoad), "needs load");
+    CHECK_EQ(unsigned(ct::Reason::NeedsLoad), 44u);
 }
 static unsigned count_reason(const ct::Runner& r, ct::Group g, ct::Reason why) {
     unsigned n = 0;
@@ -3517,6 +3519,7 @@ static void test_every_failure_kind_has_a_capture_reason() {
     CHECK_EQ(int(ct::capture_reason(R::CutRecovered)), int(T::ShutOff));
     CHECK_EQ(int(ct::capture_reason(R::NoReattach)), int(T::Other));   // the C135 3.3 V row: kept nothing before
     CHECK_EQ(int(ct::capture_reason(R::WrongVoltage)), int(T::Other));   // the 5 V contract held at the wrong voltage: the PS_RDY is the evidence
+    CHECK_EQ(int(ct::capture_reason(R::NeedsLoad)), int(T::None));       // a skip, not a failure: no capture
     CHECK_EQ(int(ct::capture_reason(R::Timeout)), int(T::Timeout));
     CHECK_EQ(int(ct::capture_reason(R::HardReset)), int(T::HardReset));
     CHECK_EQ(int(ct::capture_reason(R::Request)), int(T::NoPsRdy));

@@ -24,6 +24,7 @@ constexpr transcap::Reason capture_reason(Reason r) {
     case Reason::NoQc3Plus:                                        // a skip, not a failure: no capture
     case Reason::ClassAOnly:                                       // a skip, not a failure: no capture
     case Reason::NotUnlocked:                                      // a skip, not a failure: no capture
+    case Reason::NeedsLoad:                                        // a skip, not a failure: no capture
     default: return transcap::Reason::None;
     }
 }

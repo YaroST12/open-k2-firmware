@@ -844,7 +844,25 @@ static void test_ufcs_chips_without_a_mode_stay_volts_only() {
     rl::Layout l; rl::build(l, s);
     CHECK_STR(chips(l, row_of(l, "UFCS")).c_str(), "5V 9V 11V");
 }
+// pattern pps-off-at-no-load: a raised PPS level the source accepted and dropped at no load is skipped "needs load": the range
+// chip is amber (some levels ran) or neutral (none did), carries the words, and nothing on the row is a red fail.
+static void test_pps_needs_load_reads_as_a_skip_not_a_fail() {
+    const uint32_t pdo = 3248763456u;
+    std::vector<ct::Step> s{step(A::Pps, 5000, V::Pass, 7, pdo), step(A::Pps, 13000, V::Skip, 7, pdo, ct::Reason::NeedsLoad),
+                            step(A::Pps, 21000, V::Skip, 7, pdo, ct::Reason::NeedsLoad)};
+    rl::Layout l; rl::build(l, s);
+    const rl::Row* r = find(l, "PPS");
+    CHECK_EQ(r != nullptr, true);
+    CHECK_EQ(chips(l, row_of(l, "PPS")).find("needs load") != std::string::npos, true);
+    for (unsigned i = r->first; i < unsigned(r->first) + r->count; ++i) CHECK_EQ(int(l.tokens[i].tone) != int(rl::Tone::Fail), true);
+    CHECK_EQ(l.cuts, 0u);
+    std::vector<ct::Step> all_skipped{step(A::Pps, 13000, V::Skip, 7, pdo, ct::Reason::NeedsLoad)};
+    rl::Layout m; rl::build(m, all_skipped);
+    CHECK_EQ(chips(m, row_of(m, "PPS")).find("needs load") != std::string::npos, true);
+    CHECK_EQ(int(m.tokens[find(m, "PPS")->first].tone), int(rl::Tone::Skip));
+}
 int main() {
+    test_pps_needs_load_reads_as_a_skip_not_a_fail();
     test_ufcs_chips_carry_the_mode_current();
     test_ufcs_chips_follow_the_modes_current_when_it_changes();
     test_ufcs_chips_without_a_mode_stay_volts_only();

@@ -130,6 +130,7 @@ const char* skip_tag(const ct::Step& x) {
     case ct::Reason::NoContract: return "no PD";
     case ct::Reason::ClassAOnly: return "Class A";   // neutral: the charger tops out at 12 V, the 20 V level was never expected
     case ct::Reason::NotUnlocked: return x.detail == ct::kDetailCableCap ? "cable" : "locked";   // a 6 A hunt the source did not offer
+    case ct::Reason::NeedsLoad: return "needs load";   // pattern pps-off-at-no-load: a skip, never a fail (10 chars: fits a token)
     default: return nullptr;
     }
 }
@@ -164,6 +165,13 @@ void range_row(Builder& b, std::span<const ct::Step> s, A a) {
         if (!k) return;
         put_text(*k, step_label::range(x.pdo).c_str());   // "3.3-21V 5A", "15-28V 5A"
         if (tn == Tone::Skip) tag(b, x);   // every step was skipped: say why
+        else {   // some levels ran: a "needs load" level (pattern pps-off-at-no-load) still says so next to the range
+            for (const auto& y : s)
+                if (y.algorithm == a && y.pos == x.pos && !y.hunt && y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::NeedsLoad) {
+                    tag(b, y);
+                    break;
+                }
+        }
     }
 }
 void legacy_row(Builder& b, std::span<const ct::Step> s, A a) {

@@ -48,8 +48,11 @@ enum class Reason : uint8_t {
                          // for the compliance verdict, measured_mv = the ceiling; the levels after it still run (no chain skip)
     Withdrawn,            // pattern budget-reannounce-mid-run: the source re-announced its list mid-run without this row's offer: the row is skipped as
                          // "withdrawn by source", the unit goes on against the new list (a PDO that comes back later revives the row)
-    WrongVoltage          // pattern shared-bus-split: the attach's 5 V contract (PS_RDY at PDO 1, seen at any poll of the wait) was granted
+    WrongVoltage,         // pattern shared-bus-split: the attach's 5 V contract (PS_RDY at PDO 1, seen at any poll of the wait) was granted
                          // but the source holds another voltage on VBUS (outside vSafe5V): a fail, measured_mv = the highest VBUS seen during the wait
+    NeedsLoad             // pattern pps-off-at-no-load (suspected): a source that turns a PPS output off when the port draws ~0 mA. A programmable
+                         // row it Accepted (no PS_RDY) and then dropped with VBUS collapsed at under kNeedsLoadMaxMa: a skip, not a failure
+                         // (measured_mv = the collapsed VBUS); the levels after it still run (no chain skip)
 };
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
@@ -224,6 +227,8 @@ inline constexpr uint32_t kXiaomiAuthWaitMs = 2000;
 // (the sink stamps it, XiaomiTrace::reannounced): a row whose chain just finished waits this long for that list before it ends.
 inline constexpr uint32_t kXiaomiReannounceMs = 400;
 inline constexpr int kLoadAbortMa = 100;
+// Pattern pps-off-at-no-load: the port drew less than this (a reading at the power monitor's noise floor) in the whole row.
+inline constexpr int kNeedsLoadMaxMa = 50;
 enum EvidenceFlag : uint8_t {
     Rmdo = 1, PpsOffer = 2, EprTable = 4, SprAvsOffer = 8, EprCapable = 16,
     PhysicalCable = 32, PartialEpr = 64, SpoofOn = 128
@@ -630,6 +635,11 @@ private:
                                     // (pattern shared-bus-split). The source may tear the port down before the timeout, so the
                                     // fail sites cannot re-ask the sink state - they read this latch.
     int attach_max_mv_ = 0;     // the highest VBUS seen during the current attach wait (WrongVoltage records this, not the timeout reading)
+    // Latched per PD row (reset in request()), read where a lost programmable row ends: pattern pps-off-at-no-load = accepted (the
+    // sink waited in Transition), never PS_RDY (Ready with this row's PDO), the port drew under kNeedsLoadMaxMa the whole row.
+    bool row_accepted_ = false, row_ps_rdy_ = false; int row_max_ma_ = 0;
+    void latch_row(const Input&);
+    bool needs_load(const Input&) const;
     enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ = Probe::Off;
     uint32_t probe_ms_ = 0;
     Options opts_{};
