@@ -445,8 +445,19 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
         if (facts_done) return;
         facts_done = true;
         if (oem.mi_auth && !any_probe) { header(Section::Xiaomi); mi_auth_row(); }
-        if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap)) return;
+        if (!(oem.qc_label || oem.vendor || oem.oppo_svid || oem.scp_cap || oem.rebalanced)) return;
         header(Section::OemPd);
+        if (oem.rebalanced) {   // the source re-split its budget mid-run and the PD rows were re-planned per row
+            b.begin("SOURCE", Tone::Caution, A::Count);
+            b.word("rebalanced", Tone::Caution);
+            char nx[5] = {};   // "<n>x"; no stdio on the device (snprintf would drag newlib's stdio into the link)
+            char rev[3] = {};
+            unsigned v = oem.rebalanced, n = 0;
+            do { rev[n++] = char('0' + v % 10); v /= 10; } while (v && n < sizeof rev);
+            for (unsigned i = 0; i < n; ++i) nx[i] = rev[n - 1 - i];
+            nx[n] = 'x';
+            b.word(nx, Tone::Caution);
+        }
         if (oem.qc_label) {
             // The label is the full name ("Samsung SFC 2.0", "Moto TurboPower", "QC5"): its first word fits the 8-character
             // row label, the rest and the justification ("via PPS 5-20V 5A") are tokens, which the grid wraps onto more lines.

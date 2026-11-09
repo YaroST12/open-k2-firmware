@@ -96,6 +96,7 @@ struct OemNotes {
     bool fold = true;
     bool oppo_svid = false;   // the source listed OPPO's SVID: a passive "OPPO SVID 0x22D9 (discovery only)" row, nothing sent
     const char* scp_cap = nullptr;   // what the adapter's SCP readout reported, the words after "SCP cap " of report_card::scp_note ("20V 6A")
+    unsigned rebalanced = 0;   // how often the source re-announced its list mid-run (budget-reannounce-mid-run): a passive "SOURCE rebalanced Nx" row
 };
 // Vendor-VID label for the OEM section; nullptr when the VID has no PD-derived OEM protocol to name.
 const char* vendor_oem_name(uint16_t vid);

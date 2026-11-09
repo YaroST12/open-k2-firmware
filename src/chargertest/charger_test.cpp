@@ -46,9 +46,10 @@ const char* name(Reason r) {
         "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused",
         "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered",
         "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
-        "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target"
+        "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
+        "withdrawn by source"
     };
-    static_assert(std::size(names) == unsigned(Reason::Capped) + 1);
+    static_assert(std::size(names) == unsigned(Reason::Withdrawn) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* name(State s) {
@@ -874,36 +875,105 @@ void Runner::regrow_plan(const pd::SourceCaps& caps, Input in) {
         if (mode(unit_of(steps_[n])) == Mode::Pd && steps_[n].verdict != Verdict::Pending && steps_[n].verdict != Verdict::Skip) return;
     replan_pd(caps, in, true);
 }
-// A source that announces its list again with every planned row still on offer (CUKTECH C1 after the Xiaomi auth: PPS 5 A -> 6 A;
-// pattern reannounce-after-cable-discovery, Baseus 70 W after the SOP' cable query: PPS 3.3 A -> 5 A, an APDO inserted ahead of ours)
-// has not changed its offer: the rows follow the new list instead of ending the unit as "offers changed". No row has run yet: the PD
-// rows are planned again from the new list (extra APDOs get rows). A row has run: the rows still to run take the slot and the
-// word of the new list. A list that no longer offers a row (type, voltage range, a lower current, a dropped PDO, another
-// revision) is not followed: the caller's check ends the unit as before, and so does a row in flight whose slot moved (its contract
-// belongs to the old slot).
+// A source that announces its list again mid-run (pattern budget-reannounce-mid-run: a shared-port splitter re-splitting its budget,
+// Anker 2-way behind a Baseus 140 W, 20 V dropped while 15 V stayed at a higher current; also reannounce-after-cable-discovery, Baseus
+// 70 W after the SOP' cable query, CUKTECH C1 after the Xiaomi auth with an APDO inserted ahead of ours). Same wire revision and none
+// of the excluded cases (VBUS dark, no list back within kCapsReturnMs, the preauth_tail window, EPR entry/exit or a partial EPR list,
+// the hunt-Reject answer): the list is re-planned PER ROW instead of the unit ending as "offers changed":
+//  - no PD row has run yet: the PD rows are planned again from the new list (replan_pd, extra APDOs get rows);
+//  - a Pending row the new list still offers takes its new slot and PDO word; a row it no longer offers (type or voltage range gone,
+//    a lower current, a dropped PDO, EPR without the EPR bit in PDO1) is skipped as Withdrawn ("withdrawn by source"), not
+//    CapsChanged, and the unit goes on against the new list; a row a withdrawn PDO comes back for is Pending again ("back"), as long
+//    as its unit has not ended;
+//  - the row in flight: if its own slot still offers it, it finishes (the word is refreshed); if not, it ends as withdrawn and is
+//    released to 5 V (the sink's single-Request gate serialises that release).
+// A list that places no PD row at all (pending or in flight), another wire revision, and no list back within kCapsReturnMs stay
+// CapsChanged (the caller's check below), as before.
 void Runner::follow_list(const pd::SourceCaps& caps, Input in) {
     if (mode_ != Mode::Pd || late_pd_ || !caps.valid || caps.epr || caps.epr_partial || epr_stage_ == 2 ||
         caps.spec_rev != evidence_.wire_rev || caps_sig(caps) == plan_sig_) return;
+    if (in.vbus_mv >= 0 && in.vbus_mv < 1000) return;   // VBUS dark: excluded, the source is not announcing a budget
     bool started = false;
     for (const auto& s : steps()) {
         if (mode(unit_of(s)) != Mode::Pd) continue;
         if (s.verdict != Verdict::Pending && s.verdict != Verdict::Skip) started = true;
-        if (s.verdict != Verdict::Pending && s.verdict != Verdict::Running) continue;
-        if (s.pos >= 8) { if (!epr_capable_caps(caps)) return; continue; }   // an EPR row of an SPR list that still offers EPR
-        const int at = find_offer(caps, s);
-        if (at < 0 || (s.verdict == Verdict::Running && at != s.pos - 1)) return;
     }
     if (!started && !plan_frozen_ && epr_stage_ == 0) { replan_pd(caps, in, true); return; }
-    bool changed = false;
+    // The preauth_tail window (pattern preauth-list-after-reset): rows above a cut-short list are tolerated, not withdrawn, while
+    // the source's chain re-runs.
+    bool tail_wait = false;
+    preauth_tail(in, tail_wait);
+    // A list that places no PD row at all - pending or in flight - is a different charger: leave the rows to the caller's
+    // CapsChanged check. (The row in flight counts: if its own slot still offers it, it finishes and the rest is re-planned.)
+    Step* flight0 = index_ < count_ && steps_[index_].verdict == Verdict::Running && mode(unit_of(steps_[index_])) == Mode::Pd
+                       ? &steps_[index_] : nullptr;
+    bool any_row = flight0 != nullptr, any_placeable = false;
+    if (flight0) {
+        const Step& s = *flight0;
+        any_placeable = s.pos >= 8 ? epr_capable_caps(caps)
+            : s.pos <= caps.num_pdos && (caps.pdos[s.pos - 1].raw == s.pdo || pdo_covers(caps.pdos[s.pos - 1].raw, s.pdo));
+    }
+    for (const auto& s : steps()) {
+        if (mode(unit_of(s)) != Mode::Pd || s.verdict != Verdict::Pending) continue;
+        any_row = true;
+        if (s.pos >= 8) { any_placeable |= epr_capable_caps(caps); continue; }
+        if (s.pos > caps.num_pdos && tail_wait) { any_placeable = true; continue; }
+        any_placeable |= find_offer(caps, s) >= 0;
+    }
+    if (any_row && !any_placeable) return;
+    unsigned follow = 0, withdrawn = 0, back = 0;
+    bool moved = false;
+    const auto withdraw = [this](Step& s) { s.verdict = Verdict::Skip; s.reason = Reason::Withdrawn; env_.record(s); };
+    // The row in flight first: its contract belongs to the slot it asked, so only its own slot can let it finish.
+    Step* flight = flight0;
+    if (flight) {
+        Step& s = *flight;
+        const bool offered = s.pos >= 8 ? epr_capable_caps(caps)
+            : s.pos <= caps.num_pdos && (caps.pdos[s.pos - 1].raw == s.pdo || pdo_covers(caps.pdos[s.pos - 1].raw, s.pdo));
+        if (!offered) { finish(in, Verdict::Skip, Reason::Withdrawn); ++withdrawn; moved = true; flight = nullptr; }
+        else {
+            if (s.pos < 8 && s.pdo != caps.pdos[s.pos - 1].raw) { s.pdo = caps.pdos[s.pos - 1].raw; moved = true; }   // the word grew: the row asks at it
+            ++follow;
+        }
+    }
     for (auto& s : std::span<Step>(steps_.data(), count_)) {
-        if (mode(unit_of(s)) != Mode::Pd || s.pos >= 8 || (s.verdict != Verdict::Pending && s.verdict != Verdict::Running)) continue;
-        const int at = find_offer(caps, s);
-        if (at < 0) continue;
-        const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
-        if (s.pos != at + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; changed = true; }
+        if (mode(unit_of(s)) != Mode::Pd || &s == flight) continue;
+        if (s.verdict == Verdict::Pending || s.verdict == Verdict::Running) {
+            if (s.pos >= 8) {
+                if (epr_capable_caps(caps)) continue;   // an EPR row of an SPR list that still offers EPR: the entry is made when the row asks
+                withdraw(s); ++withdrawn; moved = true; continue;
+            }
+            const int at = find_offer(caps, s);
+            if (at >= 0) {
+                const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
+                if (s.pos != at + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; moved = true; }
+                ++follow;
+            } else if (s.pos > caps.num_pdos && tail_wait) {
+                continue;   // the preauth tail: tolerated while the chain re-runs
+            } else {
+                withdraw(s); ++withdrawn; moved = true;
+            }
+        } else if (s.verdict == Verdict::Skip && s.reason == Reason::Withdrawn && &s != &steps_[index_] && unit_of(s) == unit_) {
+            // A PDO that came back: the row is pending again (its unit has not ended).
+            const bool offered = s.pos >= 8 ? epr_capable_caps(caps) : find_offer(caps, s) >= 0;
+            if (offered) {
+                const int at = find_offer(caps, s);
+                if (at >= 0) {
+                    const uint32_t raw = caps.pdos[static_cast<size_t>(at)].raw;
+                    if (s.pos != at + 1 || s.pdo != raw) { s.pos = static_cast<uint8_t>(at + 1); s.pdo = raw; }
+                }
+                s.verdict = Verdict::Pending; s.reason = Reason::None; env_.record(s);
+                ++back; moved = true;
+            }
+        }
     }
     plan_sig_ = caps_sig(caps);
-    if (changed) { caps_evidence(caps); ++revision_; env_.plan_changed(); }
+    if (moved) caps_evidence(caps);   // the evidence follows the list only when a row actually moved (an EPR exit keeps EprTable)
+    if (follow || withdrawn || back) {
+        ++revision_; env_.plan_changed();   // once per re-plan
+        if (evidence_.rebalanced < 255) ++evidence_.rebalanced;
+        env_.replan(follow, withdrawn, back);
+    }
 }
 // pattern reject-then-reduced-list (Baseus 140W, JT-P18 USB-C): the source Rejects the 6 A over-offer probe and announces a shorter list
 // (no PPS APDO, PDO1 without the EPR bit). That list is its answer to our probe, not a charger that changed under the run. Is the

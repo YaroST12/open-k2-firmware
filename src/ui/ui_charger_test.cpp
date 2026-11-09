@@ -256,6 +256,7 @@ void ChargerTestSession::record(const ct::Step& s) {
     // here (the row's section is marked dirty, no flash); journal_pump() rewrites it, one file per tick, in the gap behind the row
     // once the link is quiet.
     if (journal_active_ && !journal_closed_ && idx < runner_.steps().size()) charger_journal::hw::note(runner_.steps(), idx);
+    if (s.verdict == ct::Verdict::Pending) return;   // a withdrawn row a later re-announce brought back: the journal is dirty, no event
     // A failure skips every row behind it in one pass (55 on a full run): those rows are one run event and one log line per
     // range of equal reason, not one each, which overflowed the 16-event ring and the 1 KB log ring (hardware 2026-11-07).
     if (s.verdict == ct::Verdict::Skip) {
@@ -274,6 +275,11 @@ void ChargerTestSession::record(const ct::Step& s) {
     // What held the loop while the row was in flight: the longest main-loop iteration (1 ms when healthy) and the longest
     // gap between two UI ticks (20 ms when healthy), in ms since the row began. A big number names a blocking path.
     K2LOG("[CT] gap row=%u loop=%ums ui=%ums\n", unsigned(idx), unsigned(gap::loop.peak()), unsigned(gap::ui.peak()));
+}
+// pattern budget-reannounce-mid-run: the source re-announced its list mid-run and the PD rows were re-planned per row (the row in
+// flight finished or was withdrawn, the still-offered rows follow the new list, the dropped ones read "withdrawn by source").
+void ChargerTestSession::replan(unsigned follow, unsigned withdrawn, unsigned back) {
+    K2LOG("[TEST] re-plan: %u rows follow, %u withdrawn, %u back\n", follow, withdrawn, back);
 }
 // A 6 A hunt row the source refused: one tagged line with the whole evidence, a Black Box mark and a frozen capture (the ring wraps in
 // seconds on a chatty source). Reads and logs only; the row's verdict is written by the Runner right after this returns.
@@ -1092,6 +1098,7 @@ void ChargerTestPage::build_results() {
     if (!oem.vendor && fusb302::vdm().xiaomi) oem.vendor = "Xiaomi";   // SVID 0x2717 seen on the wire even without a VID
     oem.mi_auth = fusb302::sink_status().xiaomi_authed;
     oem.oppo_svid = report_card::oppo_note(card) != nullptr;
+    oem.rebalanced = runner_.evidence().rebalanced;   // the source re-split its budget mid-run this many times
     char scp_note[24] = {};   // "SCP cap 20V 6A": the row's label is the first two words
     if (report_card::scp_note(card, scp_note, sizeof scp_note)) oem.scp_cap = scp_note + 8;
     char justification[48] = {};

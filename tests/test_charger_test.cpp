@@ -254,6 +254,9 @@ struct Fake final : ct::Env {
         ++plan_changes;
         if (jr && rn) { jr->note_plan(rn->steps()); jr->settle(rn->run_id(), jopts, rn->evidence(), rn->steps()); }
     }
+    // pattern budget-reannounce-mid-run: (follow, withdrawn, back) of every mid-run re-plan, in call order.
+    std::vector<std::array<unsigned, 3>> replans;
+    void replan(unsigned follow, unsigned withdrawn, unsigned back) override { replans.push_back({follow, withdrawn, back}); }
     std::vector<bool> record_quiet;   // Runner::quiet() at the moment of each record() (a row's verdict is decided while it is in flight)
     void record(const ct::Step& s) override {
         if (!alive()) return;
@@ -1010,6 +1013,15 @@ static bool any_caps_changed(const ct::Runner& r) {
     for (const auto& s : r.steps()) if (s.reason == ct::Reason::CapsChanged) return true;
     return false;
 }
+static unsigned count_reason_all(const ct::Runner& r, ct::Reason why) {
+    unsigned n = 0;
+    for (const auto& s : r.steps()) n += s.reason == why;
+    return n;
+}
+static bool only_pass_or_skip(const ct::Runner& r) {
+    for (const auto& s : r.steps()) if (s.verdict != ct::Verdict::Pass && s.verdict != ct::Verdict::Skip) return false;
+    return true;
+}
 static void test_a_cut_short_list_that_never_grows_is_still_offers_changed() {
     // The tolerance is bounded: a list that stays cut short past kXiaomiAuthWaitMs is another charger (or a dead chain).
     Fake f; ct::Runner r(f); hunt_reset_run(f, r, true, ct::kXiaomiAuthWaitMs + 4000);
@@ -1021,8 +1033,7 @@ static void test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed
     // The pattern belongs to a source that listed SVID 0x2717: any other source that comes back with fewer PDOs changed its offers.
     Fake f; ct::Runner r(f); hunt_reset_run(f, r, false);
     CHECK_EQ(any_caps_changed(r), true);
-}
-// ---- pattern reject-then-reduced-list: the list announced again after the hunt row's own Reject ----
+}// ---- pattern reject-then-reduced-list: the list announced again after the hunt row's own Reject ----
 // A CUKTECH-like source without SVID 0x2717 (a Rejected hunt row reads "not unlocked (no OEM chain)") announces `again` reannounce_ms
 // after its first Reject. 100 ms is before the runner has looked at the Reject (row Requesting), 600 ms while the row is released.
 static void rejected_hunt_run(Fake& f, ct::Runner& r, const pd::SourceCaps& again, uint32_t reannounce_ms) {
@@ -1071,13 +1082,21 @@ static void test_hunt_reject_then_a_list_without_the_pps_apdos_skips_only_those_
         CHECK_EQ(gone >= 1, true);
     }
 }
-static void test_an_unsolicited_list_change_during_a_normal_row_is_still_offers_changed() {
+static void test_an_unsolicited_list_change_during_a_normal_row_replans_per_row() {
     Fake f; f.caps = cuktech_caps(); ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
     CHECK_EQ(run_until(f, r, [&] { return f.pd_requests == 1; }), true);
-    f.caps = without_pps(f.caps);   // nobody was Rejected: the source simply changed its offer
-    f.tick(r, 700);
-    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail); CHECK_EQ(r.steps()[0].reason, ct::Reason::CapsChanged);
-    // After a hunt Reject the allowance is spent: a later unsolicited change is "changed" as well.
+    f.caps = without_pps(f.caps);   // nobody was Rejected: the source simply re-announced without the APDOs
+    f.tick(r, 200000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    // The row in flight (its own slot still offers it) finished; the APDO rows it no longer offers are withdrawn by the
+    // source, not "offers changed"; the unit went on and the run completed.
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn) > 0, true);
+    CHECK_EQ(only_pass_or_skip(r), true);
+    CHECK_EQ(f.replans.empty(), false);   // the re-plan was logged once, with its counts
+    // A later unsolicited change is re-planned the same way - unless no pending PD row can be placed at all (here only APDO
+    // rows are left and the APDOs are gone): that is still "offers changed".
     // (6 A advertised so a hunt row is sent and Rejected)
     Fake g; g.caps = cuktech_caps(6000); g.reject_hunts = true; ct::Runner rg(g); rg.start(g.caps, kPd, g.in, true);
     CHECK_EQ(run_until(g, rg, [&] { return g.hunt_times.size() == 1 && rg.state() == ct::State::Requesting && !rg.steps()[rg.index()].hunt; }), true);
@@ -1492,7 +1511,11 @@ static void test_faults() {
         if (mode == 5) f.in.vbus_mv = 5501;
         f.tick(r, 100);
         // A source loss or hard reset mid-row costs one retry of the row (see the hard-reset tests); everything else fails it.
-        CHECK_EQ(r.steps()[0].verdict, (mode == 1 || mode == 3) ? ct::Verdict::Pending : ct::Verdict::Fail);
+        // mode 4 is the exception: the source re-announced with a lower current on the row's own PDO, so the row in flight is
+        // withdrawn by the source (pattern budget-reannounce-mid-run) and released to 5 V, not failed.
+        CHECK_EQ(r.steps()[0].verdict,
+                 (mode == 1 || mode == 3) ? ct::Verdict::Pending : mode == 4 ? ct::Verdict::Skip : ct::Verdict::Fail);
+        if (mode == 4) CHECK_EQ(r.steps()[0].reason, ct::Reason::Withdrawn);
         CHECK_EQ(f.releases > 0, mode != 1 && mode != 3);
     }
 }
@@ -3362,10 +3385,11 @@ static void test_no_request_into_an_invalid_list_after_a_recovered_cut() {
     CHECK_EQ(no_caps, 0u);
 }
 static void test_every_reason_has_a_name() {
-    for (unsigned v = 1; v <= unsigned(ct::Reason::NeedsExternalPower); ++v) {   // 0 = None, shown as nothing
+    for (unsigned v = 1; v <= unsigned(ct::Reason::Withdrawn); ++v) {   // 0 = None, shown as nothing
         const char* n = ct::name(static_cast<ct::Reason>(v));
         CHECK_EQ(n != nullptr && n[0] != 0, true);
     }
+    CHECK_STR(ct::name(ct::Reason::Withdrawn), "withdrawn by source");
 }
 static unsigned count_reason(const ct::Runner& r, ct::Group g, ct::Reason why) {
     unsigned n = 0;
@@ -4793,15 +4817,6 @@ static pd::SourceCaps baseus70_reannounced(bool shifted) {
     c.pdos[6] = pd::decode_pdo(kPps11v | 100);
     return c;
 }
-static unsigned count_reason_all(const ct::Runner& r, ct::Reason why) {
-    unsigned n = 0;
-    for (const auto& s : r.steps()) n += s.reason == why;
-    return n;
-}
-static bool only_pass_or_skip(const ct::Runner& r) {
-    for (const auto& s : r.steps()) if (s.verdict != ct::Verdict::Pass && s.verdict != ct::Verdict::Skip) return false;
-    return true;
-}
 static bool a_pd_row_is_running(const ct::Runner& r) {
     for (const auto& s : r.steps()) if (s.group == ct::Group::Pd && s.verdict == ct::Verdict::Running) return true;
     return false;
@@ -4851,8 +4866,9 @@ static void test_reannounce_during_the_first_row_follows_the_new_slots() {
         CHECK_EQ(at_pps > 0, true);
     }
 }
-// A list that is not a superset of the plan is still a change: a lower current, a narrower range, a dropped PDO, another revision.
-static void test_a_genuinely_different_list_is_still_caps_changed() {
+// A list that is not a superset of the plan re-plans per row (pattern budget-reannounce-mid-run): the rows it no longer offers
+// are withdrawn by the source and the rest follow and run. Only another wire revision is still "offers changed".
+static void test_a_genuinely_different_list_replans_per_row_but_another_revision_is_caps_changed() {
     for (unsigned variant = 0; variant < 4; ++variant) {
         Fake f; f.caps = baseus70_caps();
         ct::Runner r(f);
@@ -4866,14 +4882,145 @@ static void test_a_genuinely_different_list_is_still_caps_changed() {
         f.caps = c; f.caps.valid = true;
         f.tick(r, 170000);
         CHECK_EQ(r.state(), ct::State::Done);
-        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged) > 0, true);
+        if (variant == 3) {   // another wire revision: a different charger, "offers changed" as before
+            CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged) > 0, true);
+            continue;
+        }
+        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+        CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn) > 0, true);
+        CHECK_EQ(only_pass_or_skip(r), true);
+        CHECK_EQ(f.replans.empty(), false);
     }
+}
+
+// ---- pattern budget-reannounce-mid-run: a mid-run re-announce that drops one offer re-plans the PD rows per row ----
+// Anker 2-way splitter behind a Baseus 140 W (2026-11-09, runs/anker-split): first list 5/9/15 V 1.5 A + 20 V 2.5 A; ~4 s into
+// the run it re-split its budget with the dock on its other output and re-announced 5 V 1.5 A, 9 V 3 A, 15 V 3 A (20 V gone).
+static pd::SourceCaps splitter_caps() {
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 4; c.raw_header = 0x7181;
+    const unsigned volts[] = {5000, 9000, 15000, 20000}, mas[] = {150, 150, 150, 250};
+    for (unsigned n = 0; n < 4; ++n) c.pdos[n] = pd::decode_pdo(((volts[n] / 50) << 10) | mas[n]);
+    return c;
+}
+static pd::SourceCaps splitter_reannounced() {   // 20 V withdrawn, 9 V and 15 V raised to 3 A
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 3; c.raw_header = 0x7181;
+    const unsigned volts[] = {5000, 9000, 15000}, mas[] = {150, 300, 300};
+    for (unsigned n = 0; n < 3; ++n) c.pdos[n] = pd::decode_pdo(((volts[n] / 50) << 10) | mas[n]);
+    return c;
+}
+static pd::SourceCaps splitter_rebalanced_back() {   // the re-announced list with the 20 V PDO back at 2.5 A
+    pd::SourceCaps c = splitter_reannounced();
+    c.num_pdos = 4;
+    c.pdos[3] = pd::decode_pdo((400u << 10) | 250);
+    return c;
+}
+static const ct::Options kSplitterPd = with_units(ct::bit(A::Pd2Fixed) | ct::bit(A::Pd3Fixed), {ct::Unit::Pd});
+// The re-announce lands between rows (while the 9 V row is in flight) or while the 15 V row is in flight: the 15 V row follows
+// the new list and passes at the new 3 A word, both 20 V rows (the ordinary one and the 6 A hunt) are withdrawn by the source,
+// the unit is not ended, one re-plan ran.
+static void test_midrun_reannounce_dropping_one_offer_replans_per_row() {
+    for (const unsigned when : {0u, 1u}) {
+        Fake f; f.caps = splitter_caps();
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+        if (when == 0) CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 2; }), true);   // the 5 V row done, the 9 V row in flight
+        else CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
+        f.caps = splitter_reannounced();
+        f.tick(r, 200000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+        unsigned v15 = 0, v20 = 0;
+        for (const auto& s : r.steps()) {
+            if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 3000u); ++v15; }
+            if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+        }
+        CHECK_EQ(v15, 1u); CHECK_EQ(v20, 2u);   // the 20 V row and its 6 A hunt
+        // The 15 V request went to the new slot (PDO 3), one Request per row, never two in flight.
+        unsigned at15 = 0;
+        for (const auto& c : f.choices) if (c.pos == 3 && c.mv == 15000) ++at15;
+        CHECK_EQ(at15, 1u);
+        CHECK_EQ(f.pd_requests, 3u);   // 5 V, 9 V, 15 V: the re-plan sent no Request of its own
+        CHECK_EQ(f.replans.size(), 1u);
+        CHECK_EQ(f.replans[0][1] >= 2u, true);   // both 20 V rows withdrawn in the one re-plan
+        CHECK_EQ(r.evidence().rebalanced, 1u);
+        CHECK_EQ(f.plan_changes >= 1, true);
+    }
+}
+// The row in flight when the list changes loses its offer (here the 15 V PDO is withdrawn while the 15 V row runs): it ends as
+// withdrawn and is released to 5 V (the sink's single-Request gate serialises that release); the rows still offered follow the
+// new list and run.
+static void test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_releases() {
+    Fake f; f.caps = splitter_caps();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
+    const unsigned releases_before = f.releases;
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 3; c.raw_header = 0x7181;
+    c.pdos[0] = pd::decode_pdo((100u << 10) | 150);   // 5 V 1.5 A
+    c.pdos[1] = pd::decode_pdo((180u << 10) | 150);   // 9 V 1.5 A
+    c.pdos[2] = pd::decode_pdo((400u << 10) | 250);   // 20 V 2.5 A: the 15 V PDO is withdrawn
+    f.caps = c;
+    f.tick(r, 200000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    for (const auto& s : r.steps()) {
+        if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); }
+        if (s.mv == 20000 && !s.hunt) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.pos, 3u); }
+        if (s.mv < 15000) CHECK_EQ(s.verdict, ct::Verdict::Pass);
+    }
+    CHECK_EQ(f.releases > releases_before, true);   // the withdrawn row was released to 5 V
+    CHECK_EQ(f.in.vbus_mv, 5000);
+    CHECK_EQ(f.replans.size(), 1u);
+    CHECK_EQ(f.replans[0][1] >= 1u, true);   // the row in flight counted as withdrawn
+}
+// A withdrawn PDO that comes back revives its rows (pending again, not left as withdrawn), as long as the unit has not ended;
+// several re-announces in one run are normal (re-plan each time, no counter that gives up).
+static void test_a_withdrawn_pdo_that_comes_back_revives_its_rows() {
+    Fake f; f.caps = splitter_caps();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
+    f.caps = splitter_reannounced(); f.tick(r, 100);   // 20 V withdrawn
+    CHECK_EQ(f.replans.size(), 1u);
+    f.caps = splitter_rebalanced_back(); f.tick(r, 100);   // the splitter re-balanced back: the 20 V PDO is offered again
+    CHECK_EQ(f.replans.size(), 2u);
+    f.caps = splitter_reannounced(); f.tick(r, 100);   // and away again
+    CHECK_EQ(f.replans.size(), 3u);
+    f.tick(r, 200000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(r.evidence().rebalanced, 3u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    CHECK_EQ(f.replans[1][2] >= 2u, true);   // the second re-plan brought both 20 V rows back
+    unsigned v20 = 0, v15 = 0;
+    for (const auto& s : r.steps()) {
+        if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+        if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v15; }
+    }
+    CHECK_EQ(v20, 2u); CHECK_EQ(v15, 1u);   // the third re-announce withdrew them again before they ran; the 15 V row passed
+}
+// A re-announce that places no PD row at all - the row in flight included - is still a different charger: "offers changed".
+static void test_a_reannounce_that_places_no_row_is_still_offers_changed() {
+    Fake f; f.caps = splitter_caps();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 1; }), true);   // the 5 V row is in flight
+    f.caps = splitter_reannounced(); f.caps.num_pdos = 1;
+    f.caps.pdos[0] = pd::decode_pdo((100u << 10) | 50);   // only a 5 V 0.5 A PDO: even the row in flight is not covered
+    f.tick(r, 200000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged) > 0, true);
+    CHECK_EQ(f.replans.empty(), true);
+    CHECK_EQ(r.evidence().rebalanced, 0u);
 }
 
 int main() {
     test_an_above_5v_request_waits_for_the_journal_without_blocking();
     test_reannounce_before_the_first_row_replans(); test_reannounce_during_the_first_row_follows_the_new_slots();
-    test_a_genuinely_different_list_is_still_caps_changed();
+    test_a_genuinely_different_list_replans_per_row_but_another_revision_is_caps_changed();
+    test_midrun_reannounce_dropping_one_offer_replans_per_row();
+    test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_releases();
+    test_a_withdrawn_pdo_that_comes_back_revives_its_rows();
+    test_a_reannounce_that_places_no_row_is_still_offers_changed();
     test_identity_follows_the_unit_mode(); test_identity_is_back_for_the_pd_unit_after_a_legacy_one();
     test_identity_matches_every_attach_of_the_default_order(); test_self_powered_run_never_touches_the_identity();
     test_self_powered_start_plans_from_the_held_caps(); test_self_powered_start_without_caps_but_pd_seen_says_pd_gave_up();
@@ -4911,7 +5058,7 @@ int main() {
     test_a_cut_short_list_without_a_xiaomi_chain_is_still_offers_changed();
     test_hunt_reject_then_the_same_list_again_keeps_the_rows();
     test_hunt_reject_then_a_list_without_the_pps_apdos_skips_only_those_rows();
-    test_an_unsolicited_list_change_during_a_normal_row_is_still_offers_changed();
+    test_an_unsolicited_list_change_during_a_normal_row_replans_per_row();
     test_hunt_answered_by_a_hard_reset_reads_not_unlocked(); test_hunt_hard_reset_keeps_the_chain_and_cable_reasons();
     test_hunt_evidence_names_each_refusal_cause(); test_hunt_evidence_records_what_the_sink_saw();
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();

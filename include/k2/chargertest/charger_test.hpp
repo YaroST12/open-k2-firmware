@@ -44,8 +44,10 @@ enum class Reason : uint8_t {
     NotUnlocked,         // a 6 A hunt row the source did not offer: the OEM mode is not unlocked (detail: why), a skip, not a failure
     Qc3Only20V,          // QC2 Class B 20 V did not come although QC3 Class B reached 20 V in the same run (pattern qc3-20v-without-qc2-20v): a fail
     PdOnly,              // the source switched its output off on a PD-silent attach and stays off (pattern silent-sink-output-off): a skip, not a failure
-    Capped               // a PPS/AVS level the source accepted but whose output stopped at a steady ceiling below it (pattern output-capped-below-advertised): a fail
+    Capped,              // a PPS/AVS level the source accepted but whose output stopped at a steady ceiling below it (pattern output-capped-below-advertised): a fail
                          // for the compliance verdict, measured_mv = the ceiling; the levels after it still run (no chain skip)
+    Withdrawn            // pattern budget-reannounce-mid-run: the source re-announced its list mid-run without this row's offer: the row is skipped as
+                         // "withdrawn by source", the unit goes on against the new list (a PDO that comes back later revives the row)
 };
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
@@ -223,6 +225,7 @@ struct Evidence {
     uint16_t monitor_mv = 0, cable_mv = 20000, cable_ma = 3000, raw_header = 0;
     uint16_t scp_ma = 0;   // the SCP current limit the adapter reported (0 = not read); a card keeps it in 50 mA units
     uint8_t wire_rev = 0, flags = 0, num_pdos = 0, seen = 0;
+    uint8_t rebalanced = 0;   // how often the source re-announced its list mid-run and the PD rows were re-planned per row (budget-reannounce-mid-run)
     pd::Revision reported{};
 };
 struct Summary {
@@ -366,6 +369,11 @@ struct Env {
     // stopped run behind that the next boot resumes. Not called for a suspended run (that one is only interrupted).
     virtual void closing(Reason) {}
     virtual void record(const Step&) = 0;
+    // pattern budget-reannounce-mid-run: the source announced its list again mid-run (same wire revision, none of the excluded
+    // cases) and the PD rows were re-planned per row instead of the unit ending as "offers changed": `follow` rows take the new
+    // slot and PDO word, `withdrawn` rows have no offer any more (Reason::Withdrawn), `back` rows a PDO came back for. Called once
+    // per re-plan; the page logs it and the count is noted on the results card (Evidence::rebalanced).
+    virtual void replan(unsigned follow, unsigned withdrawn, unsigned back) { (void)follow; (void)withdrawn; (void)back; }
     // A hunt row the source refused: the evidence snapshot is final (called once per row, right before record()). The page logs it,
     // marks the Black Box and freezes a capture; nothing here changes the row's verdict.
     virtual void hunt_evidence(const Step&, const HuntEvidence&) {}
@@ -477,7 +485,9 @@ private:
     void replan_pd(const pd::SourceCaps&, Input, bool refresh_evidence);
     void replan_fc(Input);   // the SCP / UFCS rows still to run, planned again from what the unit's first row read (fc::Caps)
     void regrow_plan(const pd::SourceCaps&, Input);
-    void follow_list(const pd::SourceCaps&, Input);   // the source announced again with every planned row still offered
+    void follow_list(const pd::SourceCaps&, Input);   // the source announced again mid-run (pattern budget-reannounce-mid-run): per PD row the
+    // new list is followed where it still offers the row (new slot and PDO word), rows with no offer are skipped as Withdrawn, rows a
+    // withdrawn PDO comes back for are Pending again; before the first PD row the plan is rebuilt from the new list (replan_pd)
     // pattern reject-then-reduced-list: the running hunt row's own Request was Rejected (hunt_own_reject), or the hunt row that was
     // Rejected is still being released (hunt_reject_until_): the list announced again is the source's answer to that probe, taken as
     // the new offer (adopt_list: rows it still offers follow it, rows it dropped are skipped as not offered).

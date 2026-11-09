@@ -72,7 +72,7 @@ namespace ct = k2::charger_test;
 inline constexpr unsigned kGroups = unsigned(ct::Group::Count);
 inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Capped) + 1;
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Withdrawn) + 1;   // 44 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
 inline constexpr uint8_t kFormat = 7;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter

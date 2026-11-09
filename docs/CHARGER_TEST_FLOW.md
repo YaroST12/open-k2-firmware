@@ -392,18 +392,25 @@ with `ra-disables-legacy` are not valid there. Run those units with the cable OF
 A source may announce its capabilities again after the cable discovery (SOP' query), with different currents or extra
 APDOs (pattern `reannounce-after-cable-discovery`). `Runner::follow_list` runs in `poll_impl` before the "offers changed"
 check, in Pd mode only, when the caps signature changed at the same spec revision, with no EPR stage and no partial EPR
-list. The new list is followed when it still offers every Pending or Running row (`find_offer`: the same slot, or a slot
-of the same kind, SPR 1-7 or EPR 8+, carrying the planned PDO or one that covers it: same type and voltage range, current
-equal or higher, extra APDOs allowed):
+list. The new list is re-planned PER ROW (pattern `budget-reannounce-mid-run`: a shared-port splitter re-splitting its budget
+mid-run drops one offer while the rest stay or grow):
 
 - No PD row has started and the plan is not frozen: the PD unit is planned again (`replan_pd`). Extra APDOs get rows and the
   rows carry the new currents (the summary shows PPS 5 A).
-- Otherwise: Pending rows are remapped in place (slot and PDO word, SPR rows only), the evidence is refreshed and the
-  journal rewritten (`plan_changed`). No new rows.
+- Otherwise: a Pending or Running row the new list still offers (`find_offer`: the same slot, or a slot of the same kind,
+  SPR 1-7 or EPR 8+, carrying the planned PDO or one that covers it: same type and voltage range, current equal or higher,
+  extra APDOs allowed) takes the new slot and PDO word. The row in flight is held to its own slot: if that still offers it,
+  it finishes; otherwise it ends as `Withdrawn` and is released to 5 V (the sink's single-Request gate serialises the release).
+- A row the new list no longer offers is skipped with `Reason::Withdrawn` ("withdrawn by source") — not `CapsChanged` — and
+  the unit goes on against the new list. A withdrawn PDO that comes back revives its rows (Pending again) while the unit has
+  not ended. Each re-plan bumps `revision_`, calls `plan_changed()` once, logs `[TEST] re-plan: <n> rows follow, <m>
+  withdrawn, <k> back` and counts into `Evidence::rebalanced` (noted "SOURCE rebalanced Nx" on the results card).
 
-Limits: a Running row whose slot moved, a row that is no longer offered, and a `spec_rev` change are a genuinely different
-list and stay `CapsChanged` ("offers changed": the unit is skipped, the run continues). The cause of the Baseus re-announce
-(the SOP' query itself, or the Ra) is not provable from the logs; the planner follows the list either way.
+Limits: a list that places no PD row at all (pending or in flight), a `spec_rev` change, and no list back within
+`kCapsReturnMs` are a genuinely different list and stay `CapsChanged` ("offers changed": the unit is skipped, the run
+continues). The excluded cases (VBUS dark, the `preauth_tail` window, EPR entry/exit, the hunt-Reject answer) keep their
+own handling. The cause of the Baseus re-announce (the SOP' query itself, or the Ra) is not provable from the logs; the
+planner follows the list either way.
 
 ## Results grid
 

@@ -302,6 +302,7 @@ private:
     bool probe_identity(bool) override;
     pd::Err epr_info_ask() override;
     void record(const charger_test::Step&) override;
+    void replan(unsigned follow, unsigned withdrawn, unsigned back) override;   // [TEST] re-plan: a mid-run re-announce was re-planned per row
     void hunt_evidence(const charger_test::Step&, const charger_test::HuntEvidence&) override;
     void plan_changed() override;
     bool journal_ready() override;     // no replan's section files are still to be written (an above-5 V request waits for it)

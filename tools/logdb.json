@@ -417,6 +417,7 @@
   "414": "[REREAD] %s ok=0x%02X skipped=0x%02X notsup=0x%02X caps_rx=%u pdos %u -> %u (last list %u) avs=%d attach_failed=%d\n",
   "415": "[SURVEY] wire started mask=0x%02X, %u PDOs held\n",
   "416": "[RDI] record %s pin=%u ignored: a USB host powers this boot (aux rail up), plain boot stays passive\n",
-  "417": "[PD] Sink downstream (inline=%d far request=%d): Rd off, no Request, no VDM answers\n"
+  "417": "[PD] Sink downstream (inline=%d far request=%d): Rd off, no Request, no VDM answers\n",
+  "418": "[TEST] re-plan: %u rows follow, %u withdrawn, %u back\n"
  }
 }
