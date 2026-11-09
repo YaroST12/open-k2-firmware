@@ -818,13 +818,16 @@ ctcable::Info ChargerTestSession::cable_info() const {
     return i;
 }
 // The dialog's OK: the identity answers the charger's SOP' Discover Identity (spoof) and the Ra mode makes the charger
-// ask (PC13 high = an Ra on CC1, Rd on CC2 alone, from before the Rd until the run ends). Off leaves everything as the
-// user set it. False = refused with the reason on the footer, nothing left armed by this call.
+// ask (PC13 high = an Ra on CC1, Rd on CC2 alone, from before the Rd until the run ends). START takes the spoof over:
+// whatever is armed now (a Tools -> Spoof arming, a boot arming, the remote) is disarmed unless it is the pick, which
+// arms again below; Off arms nothing, so a START with Off leaves nothing armed. False = refused with the reason on
+// the footer, nothing left armed by this call.
 bool ChargerTestSession::apply_cable(ctcable::Choice c) {
     const bool applied = c == run_cable_ &&
-        (c.kind == ctcable::Kind::Off ? !dialog_spoof_ : dialog_spoof_ && dialog_ra_ && emk_spoof::active());
+        (c.kind == ctcable::Kind::Off ? !dialog_spoof_ && !emk_spoof::active() : dialog_spoof_ && dialog_ra_ && emk_spoof::active());
     if (applied) return true;   // the confirm window was dropped and START is pressed again: same identity, nothing to redo
     release_run();
+    if (emk_spoof::active() && !(ctx_.cables.armed() && ctx_.cables.armed_choice() == c)) ctx_.cables.disarm();
     return arm_cable(c);
 }
 // The arming half of apply_cable (also the resume path, which must not drop the Rd the run already owns).
@@ -874,8 +877,8 @@ void ChargerTestSession::open_confirmation() {
     confirming_ = true; confirm_until_ = ctx_.now + Ui::kConfirmWindowMs; confirm_proposal_ = proposal(in);
 }
 // The second press: an identity needs the charger directly on the plug (include/k2/pd/ra_guard.hpp), so the guard judges
-// the lines first and a refusal opens the Refuse stage; then the identity is armed (Off arms nothing) and the start goes
-// on with the Rd and the wait.
+// the lines first and a refusal opens the Refuse stage; then the identity is armed — whatever was armed is disarmed
+// first and the pick takes over (Off arms nothing) — and the start goes on with the Rd and the wait.
 void ChargerTestSession::confirmed_start() {
     const auto choice = ctx_.cables.selected();
     const bool bypass = guard_bypass_;   // "Start anyway" on the Cable-on-plug warning: the identity runs, the reading is recorded
@@ -1234,7 +1237,7 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     case Stage::Cable: case Stage::Identity: case Stage::Ask: {
         const auto sel = ctx_.cables.selected();
         if (sel.kind == ctcable::Kind::Off) { f.put("Picked: no identity"); return FooterTone::Info; }
-        row_ = ctx_.cables.row(ctx_.cables.index_of(sel));
+        row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         f.put("Picked: ");
         const size_t room = kFooterCells - 8 - (row_.rating.empty() ? 0 : row_.rating.size() + 1);
         f.put(row_.text.view().substr(0, room));
@@ -1380,7 +1383,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         break;
     }
     case Stage::Cable: case Stage::Identity: case Stage::Ask:
-        row_ = ctx_.cables.row(index);
+        row_ = ctx_.cables.row(index, CableIdentityList::View::CableStep);
         CableIdentityList::fill_spec(row_, out);
         if (focused) out.note = row_.note;
         break;
@@ -1641,17 +1644,14 @@ void ChargerTestPage::paint_review() {
     kv(1, "Peak", pk.view(), pk.view() == "--" ? kDim : kText);
 
     StrBuf<48> cb;
-    uint16_t cable_color = kText;
     const auto sel = ctx_.cables.selected();
-    if (sel.kind == ctcable::Kind::Off) {
-        if (emk_spoof::active()) { cb.put("OFF (Tools: ON)"); cable_color = kCaution; }
-        else cb.put("OFF");
-    } else {
-        row_ = ctx_.cables.row(ctx_.cables.index_of(sel));
+    if (sel.kind == ctcable::Kind::Off) cb.put("OFF");   // plain: a START with Off disarms whatever is armed
+    else {
+        row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         cb.put(row_.text.view());
         if (!row_.rating.empty()) cb.put_char(' ').put(row_.rating);
     }
-    kv(2, "Cable", cb.view(), cable_color);
+    kv(2, "Cable", cb.view(), kText);
 
     StrBuf<48> hd;
     if (caps.valid) put_revision(hd, caps.spec_rev, in.reported);

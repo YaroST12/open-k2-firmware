@@ -4,9 +4,12 @@
 //
 // One index space, shared by both screens: 0 Off, 1..kBuiltins the built-in chips (their emrec ids), then every saved
 // clone of the e-marker library in library order. One row model: the same entries, the same short names, ratings and
-// notes (the kit's radio / name / dim rating column / note under the focused row), the same amber ARMED pill. One selection: the identity the next charger-test START presents. One armed marker:
-// "what this list armed is still what the spoof is answering with" (the arm's generation is still emk_spoof's), so a
-// disarm or a re-arm anywhere else (a run ending, the remote, Tools) clears it with nobody resetting a flag.
+// notes (the kit's radio / name / dim rating column / note under the focused row), the same pills. The pill depends on
+// the View the row is built for: Tools -> Spoof arms and disarms on OK, so there the answering row alone wears ARMED;
+// the wizard's Cable step applies the pick only at START, so there the pick wears NEXT and the answering row CURR while
+// they differ (the shared row keeps ARMED). One selection: the identity the next charger-test START presents. One armed
+// marker: "what this list armed is still what the spoof is answering with" (the arm's generation is still emk_spoof's),
+// so a disarm or a re-arm anywhere else (a run ending, the remote, Tools) clears it with nobody resetting a flag.
 //
 // Persistence: the selection is remembered across a power cycle (k2/chargertest/cablepref.hpp, /cable.cfg, written only when it changes,
 // read back by load() at Ui init), so a self-powered boot can arm it before the charger's first attach. The armed note is RAM
@@ -48,7 +51,9 @@ public:
     ctcable::Choice choice_at(int index) const;   // Off for index 0 and for anything past the end
     int index_of(ctcable::Choice) const;          // the row of a choice; Off's row for one not in the list
 
-    enum class Mark : uint8_t { None, Use, Armed };   // Armed wins when one row is both the use and the armed one
+    // The two screens of the one list; a row is built for one of them (the default is the Spoof screen).
+    enum class View : uint8_t { Spoof, CableStep };
+    enum class Mark : uint8_t { None, Use, Armed, Next, Curr };   // Armed wins when one row is both the pick and the armed one
     struct Row {
         StrBuf<emlib::kNameMax + 1> text;   // the short name: "OFF", "EPR", "CUKTECH", "OnePlus", or a clone's name (24 cells at most)
         std::string_view rating;  // dim column ("50V 5A", "no identity"); empty for a clone
@@ -56,11 +61,11 @@ public:
         std::string_view tail;    // dim word at the right end: "saved" for a clone, so a clone named like a built-in reads apart
         Mark mark = Mark::None;
     };
-    // The kit row both screens show for the row `r` (radio, name, rating column, the dim "saved" tail or the amber ARMED pill).
-    // The pick is the radio alone: no word. The note (focused row only) is left to the caller. `out` points into `r`
-    // (the name), so `r` must outlive the paint of the row.
+    // The kit row both screens show for the row `r` (radio, name, rating column, the dim "saved" tail or the mark's
+    // pill: ARMED / NEXT / CURR). The pick alone is the radio: no word. The note (focused row only) is left to the
+    // caller. `out` points into `r` (the name), so `r` must outlive the paint of the row.
     static void fill_spec(const Row& r, kit::RowSpec& out);
-    Row row(int index) const;                     // cached names only: an unread clone says "Clone #n"
+    Row row(int index, View v = View::Spoof) const;   // cached names only: an unread clone says "Clone #n"
     // The names of the rows [first, first + n) that are not cached yet, one library read each (never from a paint).
     void fill_names(int first, int n);
     // First visible row of a `visible`-row window currently at `offset`, moved only as far as the selection needs.
@@ -97,7 +102,7 @@ private:
     static void put_label(char (&dst)[emlib::kNameMax + 1], const char* src);
     void refresh();
     void persist();   // writes selected_ when it is not what the record holds (never per tick; a refused write is retried later)
-    Mark mark_of(ctcable::Choice) const;
+    Mark mark_of(ctcable::Choice, View) const;
 
     std::array<uint16_t, emlib::kCapacity> saved_{};
     int saved_count_ = 0;

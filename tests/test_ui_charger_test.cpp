@@ -25,6 +25,8 @@
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/ui_setup_page.hpp"
 #include "k2/ui/text.hpp"
+#include "k2/ui/trunc.hpp"
+#include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/blend.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -334,6 +336,25 @@ static void check_radio(int row, bool on, int open = -1, uint16_t ground = kBg, 
             ink += g_panel[(row_top(row, open, y0) + 7 + y) * LCD_WIDTH + kit::kMarkX + x] != ground;
     CHECK_EQ(ink != 0, on);
 }
+// A list row's tail pill as the kit draws it: a kPillH-high rounded fill whose right edge is kit::kTailX, the 12 px tag
+// inside (`open` = the focused row when it shows a note, which shifts the rows below it).
+static void check_row_pill(int row, std::string_view tag, uint16_t color, uint16_t tint, int open = -1, int y0 = kit::kBodyY) {
+    const int pw = pill_width(text_cells(tag));
+    const int16_t px0 = static_cast<int16_t>(kit::kTailX - pw);
+    const int y = row_top(row, open, y0);
+    const int16_t py = static_cast<int16_t>(y + 1 + (kit::kRowH - 1 - kPillH) / 2);
+    std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> actual;
+    std::copy_n(g_panel, actual.size(), actual.begin());
+    fill_round({0, 0, 224, 240}, px0, py, pw, kPillH, 3, tint);
+    gfx_text({0, 0, 224, 240}, kLabelFont, px0 + 4, py + 1, tag, color, tint);
+    unsigned diff = 0;
+    for (int yy = y; yy < y + kit::kRowH; ++yy)
+        for (int x = px0; x < kit::kTailX; ++x)
+            diff += actual[yy * LCD_WIDTH + x] != g_panel[yy * LCD_WIDTH + x];
+    if (diff) std::fprintf(stderr, "  pill '%.*s' row %d differs\n", int(tag.size()), tag.data(), row);
+    CHECK_EQ(diff, 0);
+    std::copy(actual.begin(), actual.end(), g_panel);
+}
 static void test_selection_and_focus_rendering() {
     fixture(); g_stub.lib = {saved(1), saved(2)};
     Ui ui; open(ui); ui.tick(1200);
@@ -461,12 +482,13 @@ static void test_cable_pick_only_selects_and_start_arms() {
     }
     CHECK_EQ(g_stub.scans + g_stub.lib_saves + g_stub.requests + g_stub.fc_starts, 0);
 }
-// Off leaves everything as the user set it: a spoof armed from Tools stays on, START never disarms it.
-static void test_start_with_off_keeps_a_tools_spoof() {
+// START with Off disarms whatever is armed: a spoof armed from Tools (or the remote) goes with the START, the pick
+// (Off) takes over and arms nothing.
+static void test_start_with_off_disarms_a_tools_spoof() {
     fixture(); g_stub.lib = {saved(1)};
     g_stub.spoof_on = true; g_stub.spoof_record = g_stub.lib[0].rec; ++g_stub.spoof_generation;
     Ui ui; open(ui); review(ui); start_run(ui, 1300);
-    CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_disarms, 0); CHECK_EQ(g_stub.spoof_arms, 0);
+    CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_disarms, 1); CHECK_EQ(g_stub.spoof_arms, 0);
 }
 static void test_cable_page_never_writes_flash() {
     // The "Try QC after PD" row is gone: every unit detaches on its own, so the cable page has no
@@ -730,9 +752,10 @@ static void test_review_shows_the_armed_identity() {
     confirm_press(ui, 1600);                                 // the second OK arms the identity and the run starts
     CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
 }
-// ONE armed marker, ONE list: an identity armed on Tools -> Spoof shows ARMED on the wizard's Cable step, and one armed
-// from the wizard shows ARMED on the Spoof page, with the same names and the same colours. Both lists are kit rows: the name at
-// x28 (kCaution for the armed row, kText otherwise), the rating in the second column, the ARMED pill at the tail.
+// ONE armed marker, ONE list: an identity armed on Tools -> Spoof shows ARMED on the Spoof page and on the wizard's Cable
+// step while it is the pick, with the same names and the same colours. Both lists are kit rows: the name at x28 (kCaution
+// for the armed row), the rating in the second column, the pill at the tail. On the Cable step a different pick splits
+// the marks: the pick wears NEXT, the identity answering now wears CURR (the Spoof view keeps ARMED only).
 static void test_armed_marker_is_shared_with_tools_spoof() {
     fixture(); Ui ui; open(ui);
     const std::string name = face_name(emrec::builtin_info(2).label);
@@ -745,18 +768,22 @@ static void test_armed_marker_is_shared_with_tools_spoof() {
     CHECK_EQ(g_stub.spoof_on, true);
     ui.tick(1350);
     check_row_text(2, name, kCaution, kFocusT, -1, kit::kCol2X - kit::kTextX, kSpoofY);
+    check_row_pill(2, "ARMED", kCaution, kCautionT, -1, kSpoofY);                // the Spoof view: ARMED only, never CURR/NEXT
     ui.on_button(Button::Back, ButtonEvent::Short, 1400);                       // back to the charger test
     ui.tick(1410);
     cable(ui, 1500); ui.tick(1510);                                             // the cursor starts on the identity in force
     check_row_text(kBuiltinRow + 1, name, kCaution, kFocusT, kBuiltinRow + 1, kit::kCol2X - kit::kTextX);   // the same row, the same colour
-    // Picking another identity on the wizard only selects: the armed marker stays where the arm is.
+    check_row_pill(kBuiltinRow + 1, "ARMED", kCaution, kCautionT, kBuiltinRow + 1);   // pick == armed: ARMED on the Cable step too
+    // Picking another identity on the wizard only selects: the armed row wears CURR, the pick NEXT.
     pick_row(ui, kBuiltinRow + 2, 1600);
     CHECK_EQ(ui.charger_test_stage(), 4);
     press(ui, Button::Back, 1650); ui.tick(1660);
     CHECK_EQ(ui.charger_test_stage(), 2); CHECK_EQ(ui.charger_test_cursor(), kBuiltinRow + 2);
     CHECK_EQ(g_stub.spoof_arms, 1);
     check_row_text(kBuiltinRow + 1, name, kCaution, kBg, kBuiltinRow + 2, kit::kCol2X - kit::kTextX);
-    check_row_text(kBuiltinRow + 2, face_name(emrec::builtin_info(4).label), kText, kFocusT, kBuiltinRow + 2, kit::kCol2X - kit::kTextX);
+    check_row_pill(kBuiltinRow + 1, "CURR", kCaution, kDimT, kBuiltinRow + 2);
+    check_row_text(kBuiltinRow + 2, face_name(emrec::builtin_info(4).label), kOk, kFocusT, kBuiltinRow + 2, kit::kCol2X - kit::kTextX);
+    check_row_pill(kBuiltinRow + 2, "NEXT", kOk, kOkT, kBuiltinRow + 2);
 }
 // The footer message line (what a refused START says) as the panel shows it.
 static bool footer_says(std::string_view text, uint16_t color) {
@@ -793,8 +820,9 @@ static void test_busy_refusal_names_the_cause_and_the_way_out() {
         nothing_armed_stub();
     }
 }
-// A spoof armed on Tools -> Spoof is the user's: a run that starts with "Off" never touches it, however the run ends, and Review
-// says so ("OFF (Tools: ON)"). A run's own identity is gone at its end, Review shows it as chosen but no longer armed.
+// A spoof armed on Tools -> Spoof is the user's while the run presents it: however the run ends, the identity stays armed.
+// A run that starts with "Off" disarms it at START (the pick takes over; Off arms nothing), however the run ends, and
+// Review says plain "OFF". A run's own identity is gone at its end, Review shows it as chosen but no longer armed.
 static void arm_tools_spoof(Ui& ui) {
     ui.push_menu(Menu::Spoof, 1300); ui.tick(1310);
     press(ui, Button::Plus, 1320); press(ui, Button::Plus, 1330);
@@ -810,25 +838,26 @@ static void test_tools_spoof_survives_a_runs_end() {
         fixture(); Ui ui; open(ui);
         arm_tools_spoof(ui);                       // Tools -> Spoof arms AND selects the identity
         if (presents) { review(ui, 1500); ui.tick(1510); check_review_spoof(label, kText); }
-        else { cable(ui, 1500); pick_row(ui, kOffRow, 1500); top(ui, 1500); press(ui, Button::Ok, 1500); ui.tick(1510); check_review_spoof("OFF (Tools: ON)", kCaution); }
+        else { cable(ui, 1500); pick_row(ui, kOffRow, 1500); top(ui, 1500); press(ui, Button::Ok, 1500); ui.tick(1510); check_review_spoof("OFF", kText); }
         start_press(ui, 1600); confirm_press(ui, 1700);
         CHECK_EQ(ui.charger_test_busy(), true);
         CHECK_EQ(g_stub.ra_on, presents);          // the Ra mode belongs to the run; Off never turns it on
+        if (!presents) { CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_disarms, 1); }   // START with Off disarmed the Tools spoof
         uint32_t now = 1800;
         if (how == 1 || how == 2) { for (int i = 0; i < 20; ++i, now += 100) ui.tick(now); }
         if (how == 1) press(ui, Button::Back, now);
         if (how == 2) ui.goto_page(static_cast<uint8_t>(Page::Home), now);
         for (; now <= 900000 && ui.charger_test_busy(); now += 100) ui.tick(now);
         CHECK_EQ(ui.charger_test_busy(), false);
-        CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_disarms, 0);   // the user's spoof is still answering
+        CHECK_EQ(g_stub.spoof_on, presents); CHECK_EQ(g_stub.spoof_disarms, presents ? 0 : 1);   // presented: still answering / Off: disarmed at START
         CHECK_EQ(g_stub.ra_on, false);
         ui.goto_page(static_cast<uint8_t>(Page::Home), now + 100);
         ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), now + 200);
         review(ui, now + 300); ui.tick(now + 400);
         if (presents) check_review_spoof(label, kText);
-        else check_review_spoof("OFF (Tools: ON)", kCaution);
+        else check_review_spoof("OFF", kText);
     }
-    { // a suspended run abandoned on the Resume page leaves it alone too
+    { // a suspended run abandoned on the Resume page leaves the presented spoof alone too
         fixture(); g_stub.self_powered = true;
         g_stub.caps.num_pdos = 3; g_stub.caps.pdos[1] = pd::decode_pdo((180u << 10) | 300); g_stub.caps.pdos[2] = pd::decode_pdo((240u << 10) | 300);
         Ui ui; open(ui); arm_tools_spoof(ui);
@@ -2222,6 +2251,60 @@ static void test_boot_does_not_arm_without_an_identity_or_when_not_self_powered_
         CHECK_EQ(int(bootra::last()), int(bootra::Verdict::Failed));
     }
 }
+// The Cable step with a boot-armed identity and a different pick: the pick wears NEXT, the identity answering now wears
+// CURR (the old bug: the ARMED pill stayed on the boot/Tools identity while OFF had the radio). START disarms the old
+// identity and arms the pick; with pick Off nothing stays armed. Review shows the pick plain.
+static void test_cable_step_next_curr_and_start_takes_over() {
+    {   // pick Off: OFF wears NEXT, the boot-armed row CURR; START with Off disarms it
+        boot_with_selection(true, 3290, true);
+        Ui ui; CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);   // the saved pick: the PLUS boot arms it
+        ui.init(0); ui.set_rotation(0, 0); ui.tick(1000);
+        CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
+        ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100); ui.tick(1100);
+        cable(ui, 1200); ui.tick(1210);
+        CHECK_EQ(ui.charger_test_stage(), 2); CHECK_EQ(ui.charger_test_cursor(), kBuiltinRow);
+        check_row_pill(kBuiltinRow, "ARMED", kCaution, kCautionT, kBuiltinRow);   // pick == armed
+        CHECK_EQ(ui.charger_test_set_cable(kOff), true);   // pick Off while the boot identity answers
+        ui.tick(1300);
+        CHECK_EQ(ui.charger_test_cursor(), kOffRow);
+        check_row_text(kOffRow, "OFF", kOk, kFocusT, kOffRow, kit::kCol2X - 4 - kit::kTextX);
+        check_row_pill(kOffRow, "NEXT", kOk, kOkT, kOffRow);
+        check_row_pill(kBuiltinRow, "CURR", kCaution, kDimT, kOffRow);
+        press(ui, Button::Ok, 1400);                    // OK on the Off row: selects and advances to Review
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        ui.tick(1410); check_review_spoof("OFF", kText);
+        start_press(ui, 1500); confirm_press(ui, 1600); // START with Off disarms the boot-armed identity
+        CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_disarms, 1); CHECK_EQ(g_stub.spoof_arms, 1);
+        CHECK_EQ(ui.charger_test_busy(), true);
+        for (uint32_t now = 1700; now <= 900000 && ui.charger_test_busy(); now += 100) ui.tick(now);
+        CHECK_EQ(ui.charger_test_busy(), false);
+        CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_disarms, 1);
+    }
+    {   // a different pick: START disarms the old identity and arms the pick
+        boot_with_selection(true, 3290, true);
+        Ui ui; CHECK_EQ(ui.charger_test_set_cable(kBuiltin), true);
+        ui.init(0); ui.set_rotation(0, 0); ui.tick(1000);
+        CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_arms, 1);
+        ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), 1100); ui.tick(1100);
+        cable(ui, 1200); ui.tick(1210);
+        const Choice cuck{Kind::Builtin, 2};            // CUKTECH, row kBuiltinRow + 1
+        CHECK_EQ(ui.charger_test_set_cable(cuck), true);
+        ui.tick(1300);
+        CHECK_EQ(ui.charger_test_cursor(), kBuiltinRow + 1);
+        check_row_pill(kBuiltinRow + 1, "NEXT", kOk, kOkT, kBuiltinRow + 1);
+        check_row_pill(kBuiltinRow, "CURR", kCaution, kDimT, kBuiltinRow + 1);
+        press(ui, Button::Ok, 1400);                    // OK on the pick: Review
+        CHECK_EQ(ui.charger_test_stage(), 4);
+        ui.tick(1410); check_review_spoof(std::string(emrec::builtin_info(2).label), kText);
+        start_press(ui, 1500); confirm_press(ui, 1600);
+        CHECK_EQ(g_stub.spoof_on, true); CHECK_EQ(g_stub.spoof_record == emrec::builtin_cable(2), true);
+        CHECK_EQ(g_stub.spoof_disarms, 1); CHECK_EQ(g_stub.spoof_arms, 2);   // the old identity went, the pick armed
+        CHECK_EQ(ui.charger_test_busy(), true);
+        for (uint32_t now = 1700; now <= 900000 && ui.charger_test_busy(); now += 100) ui.tick(now);
+        CHECK_EQ(ui.charger_test_busy(), false);
+        CHECK_EQ(g_stub.spoof_on, false);               // the run's own arming went with its end
+    }
+}
 // ---- the selection outlives a power cycle ---------------------------------------------------------------------------------
 // "Reboot" = a new Ui over the same stub volume (g_stub holds the remembered record, the library and the spoof state).
 static void reboot_with(bool self_powered, int cc1_mv = 3290) {
@@ -3288,6 +3371,7 @@ int main() {
     test_run_identity_is_released_when_the_run_ends(); test_run_identity_survives_no_run_in_a_session();
     test_abandoned_resume_releases_the_runs_identity();
     test_busy_refusal_names_the_cause_and_the_way_out(); test_tools_spoof_survives_a_runs_end(); test_review_after_a_run_with_an_identity();
+    test_cable_step_next_curr_and_start_takes_over();
     test_cable_dialog_saved_clone();
     test_cable_dialog_every_builtin_row();
     test_cable_dialog_scrolls_with_many_clones();
@@ -3327,7 +3411,7 @@ int main() {
     test_full_help_text();
     test_confirmation_and_capture(); test_fake_offers_refused();
     test_group_selection_and_empty_refusal(); test_cable_pick_only_selects_and_start_arms();
-    test_start_with_off_keeps_a_tools_spoof();
+    test_start_with_off_disarms_a_tools_spoof();
     test_cable_page_never_writes_flash(); test_spoof_refusals_and_shared_busy(); test_confirmation_bound_to_exact_proposal();
     test_skip_results_and_deselection(); test_navigation_and_stop_controls();
     test_start_waits_for_the_caps();

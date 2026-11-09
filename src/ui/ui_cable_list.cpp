@@ -12,6 +12,8 @@
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/core/storage.hpp"
 #include "k2/ui/kit.hpp"
+#include "k2/ui/text.hpp"
+#include "k2/ui/trunc.hpp"
 #include "k2/ui/ui_style.hpp"
 
 namespace k2 {
@@ -90,12 +92,19 @@ int CableIdentityList::index_of(ctcable::Choice c) const {
     return kOff;
 }
 
-CableIdentityList::Mark CableIdentityList::mark_of(ctcable::Choice c) const {
-    if (c.kind != ctcable::Kind::Off && armed() && c == armed_) return Mark::Armed;
+CableIdentityList::Mark CableIdentityList::mark_of(ctcable::Choice c, View v) const {
+    const bool is_armed = c.kind != ctcable::Kind::Off && armed() && c == armed_;
+    if (v == View::CableStep && armed()) {
+        // The pick applies at START: while another identity answers, the pick is NEXT and the answering row CURR;
+        // pick and armed on the same row stay ARMED.
+        if (is_armed) return c == selected_ ? Mark::Armed : Mark::Curr;
+        return c == selected_ ? Mark::Next : Mark::None;
+    }
+    if (is_armed) return Mark::Armed;
     return c == selected_ ? Mark::Use : Mark::None;
 }
 
-CableIdentityList::Row CableIdentityList::row(int index) const {
+CableIdentityList::Row CableIdentityList::row(int index, View v) const {
     Row r;
     const auto c = choice_at(index);
     if (c.kind == ctcable::Kind::Off) {
@@ -114,7 +123,7 @@ CableIdentityList::Row CableIdentityList::row(int index) const {
         r.note = "Saved from the e-marker";
         r.tail = "saved";
     }
-    r.mark = mark_of(c);
+    r.mark = mark_of(c, v);
     return r;
 }
 
@@ -128,8 +137,13 @@ void CableIdentityList::fill_spec(const Row& r, kit::RowSpec& out) {
     out.text_color = st.color;
     out.data = !r.tail.empty();   // a clone's name comes from the library; the built-in names are literals
     out.col2 = r.rating;
+    if (!st.tag.empty() && !r.rating.empty()) {
+        // A pill takes the tail's room: the rating column stays only when it fits beside the pill (copy is never cut).
+        const int room = kit::kTailX - pill_width(text_cells(st.tag)) - kit::kTailGap - kit::kCol2X;
+        if (text_width(kSmall, r.rating) > room) out.col2 = {};
+    }
     out.tail_yields = true;     // the name is what the user reads: a long one takes the room of the "saved" word or the pill
-    if (!st.tag.empty()) {        // ARMED: an amber pill that wins over the dim word
+    if (!st.tag.empty()) {        // a pill (ARMED / NEXT / CURR) wins over the dim word
         out.tail = st.tag;
         out.tail_color = st.tag_color;
         out.tail_tint = st.tag_tint;
@@ -161,6 +175,8 @@ CableIdentityList::Style CableIdentityList::style(Mark m) {
     switch (m) {
     case Mark::Use: return {kText, {}, kDim, kDimT};   // the picked row is the radio, not a pill
     case Mark::Armed: return {kCaution, "ARMED", kCaution, kCautionT};
+    case Mark::Next: return {kOk, "NEXT", kOk, kOkT};   // the pick of the next run (the Cable step)
+    case Mark::Curr: return {kCaution, "CURR", kCaution, kDimT};   // answering now, but not the pick: dim amber
     case Mark::None: break;
     }
     return {kText, {}, kDim, kDimT};

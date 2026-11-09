@@ -6,6 +6,8 @@
 #include "ui_stubs.h"
 #include "k2/ui/ui_cable_list.hpp"
 #include "k2/ui/kit.hpp"
+#include "k2/ui/trunc.hpp"
+#include "k2/ui/ui_widgets.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/core/storage.hpp"
 #include <string.h>
@@ -209,6 +211,43 @@ static void test_armed_marker() {
     emk_spoof::disarm();
 }
 
+// The Cable step's view: while the pick and the identity answering now differ, the pick wears NEXT and the answering
+// row CURR (the Spoof view keeps ARMED only, since its OK arms/disarms at once). Pick == armed keeps ARMED; nothing
+// armed leaves the pick as the plain radio (Use).
+static void test_cable_step_marks() {
+    g_stub = StubState();
+    add_clone(3, "Anker-USB2-60W");
+    CableIdentityList l;
+    l.sync();
+    using V = CableIdentityList::View;
+    ctcable::Facts f;
+    char name[emlib::kNameMax + 1] = {};
+    // Nothing armed: the pick is the radio alone (Use), in both views.
+    CHECK_EQ(l.select(Choice{Kind::Builtin, 2}) ? 1 : 0, 1);
+    CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Use));
+    CHECK_EQ(int(l.row(2).mark), int(CableIdentityList::Mark::Use));
+    // Armed CUKTECH (row 2), pick Off: NEXT on Off, CURR on CUKTECH in the Cable step; the Spoof view keeps ARMED.
+    CHECK_EQ(int(l.arm(Choice{Kind::Builtin, 2}, f, name)), int(CableIdentityList::ArmErr::Ok));
+    CHECK_EQ(l.select(Choice{}) ? 1 : 0, 1);
+    CHECK_EQ(int(l.row(0, V::CableStep).mark), int(CableIdentityList::Mark::Next));
+    CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Curr));
+    CHECK_EQ(int(l.row(3, V::CableStep).mark), int(CableIdentityList::Mark::None));
+    CHECK_EQ(int(l.row(2).mark), int(CableIdentityList::Mark::Armed));   // the Spoof view: armed only
+    CHECK_EQ(int(l.row(0).mark), int(CableIdentityList::Mark::Use));
+    // Pick == armed: ARMED in both views.
+    CHECK_EQ(l.select(Choice{Kind::Builtin, 2}) ? 1 : 0, 1);
+    CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Armed));
+    CHECK_EQ(int(l.row(2).mark), int(CableIdentityList::Mark::Armed));
+    // Armed + a different pick (a saved clone): the pick wears NEXT, the armed row CURR.
+    CHECK_EQ(l.select(Choice{Kind::Saved, 3}) ? 1 : 0, 1);
+    CHECK_EQ(int(l.row(4, V::CableStep).mark), int(CableIdentityList::Mark::Next));
+    CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::Curr));
+    // Disarmed anywhere: the pick is Use again in the Cable step, the armed row plain.
+    emk_spoof::disarm();
+    CHECK_EQ(int(l.row(4, V::CableStep).mark), int(CableIdentityList::Mark::Use));
+    CHECK_EQ(int(l.row(2, V::CableStep).mark), int(CableIdentityList::Mark::None));
+}
+
 static void test_arm_errors() {
     g_stub = StubState();
     CableIdentityList l;
@@ -240,10 +279,23 @@ static void test_pill_style() {
     const auto none = CableIdentityList::style(CableIdentityList::Mark::None);
     CHECK_EQ(int(none.tag.size()), 0);
     const auto use = CableIdentityList::style(CableIdentityList::Mark::Use);
-    CHECK_EQ(int(use.tag.size()), 0);   // the picked row is the radio; only ARMED is a pill
+    CHECK_EQ(int(use.tag.size()), 0);   // the picked row is the radio; only the marks below are pills
     const auto armed = CableIdentityList::style(CableIdentityList::Mark::Armed);
     CHECK_STR(std::string(armed.tag).c_str(), "ARMED");
+    const auto next = CableIdentityList::style(CableIdentityList::Mark::Next);
+    CHECK_STR(std::string(next.tag).c_str(), "NEXT");
+    const auto curr = CableIdentityList::style(CableIdentityList::Mark::Curr);
+    CHECK_STR(std::string(curr.tag).c_str(), "CURR");
     CHECK_EQ(armed.tag_color != use.tag_color ? 1 : 0, 1);   // two states, two colours
+    // Three pills, three colour pairs, so the states read apart.
+    CHECK_EQ(armed.tag_color != next.tag_color || armed.tag_tint != next.tag_tint ? 1 : 0, 1);
+    CHECK_EQ(armed.tag_color != curr.tag_color || armed.tag_tint != curr.tag_tint ? 1 : 0, 1);
+    CHECK_EQ(next.tag_color != curr.tag_color || next.tag_tint != curr.tag_tint ? 1 : 0, 1);
+    // Kit rule: a pill is right-aligned to kTailX and must not reach the rating column (the tail never runs past kTailX).
+    for (const auto* st : {&armed, &next, &curr}) {
+        CHECK_EQ(pill_width(text_cells(st->tag)) + kit::kTailGap <= kit::kTailX - kit::kCol2X, 1);
+        CHECK_EQ(fits_px(kLabelAdv, st->tag, kit::kTailX - kit::kCol2X - kit::kTailGap) ? 1 : 0, 1);
+    }
 }
 
 static void test_fill_spec() {
@@ -261,6 +313,16 @@ static void test_fill_spec() {
     CableIdentityList::fill_spec(r, sp);
     CHECK_STR(std::string(sp.tail).c_str(), "ARMED");      // the amber pill wins
     CHECK_EQ(sp.tail_tint != 0 ? 1 : 0, 1);
+    r.mark = CableIdentityList::Mark::Next;
+    CableIdentityList::fill_spec(r, sp);
+    CHECK_STR(std::string(sp.tail).c_str(), "NEXT");       // the pick of the next run
+    CHECK_EQ(sp.tail_tint != 0 ? 1 : 0, 1);
+    CHECK_EQ(sp.state, 1);
+    r.mark = CableIdentityList::Mark::Curr;
+    CableIdentityList::fill_spec(r, sp);
+    CHECK_STR(std::string(sp.tail).c_str(), "CURR");       // the identity answering now
+    CHECK_EQ(sp.tail_tint != 0 ? 1 : 0, 1);
+    CHECK_EQ(sp.state, 1);
 }
 
 int main() {
@@ -271,6 +333,7 @@ int main() {
     test_longest_name_is_held_whole();
     test_selection();
     test_armed_marker();
+    test_cable_step_marks();
     test_arm_errors();
     test_window();
     test_pill_style();

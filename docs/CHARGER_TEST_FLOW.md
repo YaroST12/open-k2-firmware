@@ -252,9 +252,9 @@ the pick that was made.
    `Skipped` summary rows drops its header. The on-device grid is units only (no header rows).
 2. **Cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
 3. **Review** (stage 4). One START row, then the summary rows `Tests`, `Peak` (the caps PDO with the highest wattage),
-   `Cap`, `Header`, `Cable` (the short identity name plus its rating, kCaution plus "(Tools: ON)" for Off while Tools ->
-   Spoof is active) and one free row for status lines such as a self-powered charger. The first OK on START opens the
-   confirm window, the second starts.
+   `Cap`, `Header`, `Cable` (the short identity name plus its rating, plain `OFF` when the pick is Off — a START with
+   Off disarms whatever is armed) and one free row for status lines such as a self-powered charger. The first OK on
+   START opens the confirm window, the second starts.
 
 Back is always `Back` and retreats one level: Group -> Custom -> Tests, Cable -> Tests (cursor on the preset in force),
 Review -> Cable (cursor on the identity in force), Results -> Tests. Running (5), Results (6), Steps (7), Detail (8),
@@ -268,9 +268,11 @@ The cable identity is the one list shared with Tools -> Spoof (`CableIdentityLis
 order, one selection and one armed marker. A row is a short name (`EPR`, `CUKTECH`, `OnePlus`) with its rating in a second
 column (`50V 5A`, `6A`, `100W`); a saved clone shows its library name in data colour with a dim "saved" tail, so it reads
 apart from the built-ins. The solid square marks the pick (there is no "USE" word). OK on a row of the Cable step selects it
-and goes to Review; nothing is armed while browsing. A row whose identity is answering right now wears the amber "ARMED"
-pill as the tail, on this step and in Tools -> Spoof alike (`CableIdentityList::fill_spec` builds the row for both).
-Review shows the choice as the "Cable" row.
+and goes to Review; nothing is armed while browsing. The tail pill depends on the screen the row is built for
+(`CableIdentityList::fill_spec` builds the row for both): in Tools -> Spoof the identity answering right now wears the
+amber "ARMED" pill; on the Cable step the pick wears "NEXT" and the identity answering now "CURR" (dim amber) while they
+differ, and the shared row keeps "ARMED" when pick and armed are the same (with nothing armed the pick is the radio
+alone). Review shows the choice as the "Cable" row.
 The selection is remembered across power cycles (`/cable.cfg`, `include/k2/chargertest/cablepref.hpp`): it is written only when it
 changes, read at Ui init before the boot arming, so "pick a cable, then PLUS-boot" arms it on a self-powered boot (a
 saved clone that is gone, or a damaged record, reads as Off; a HID-powered boot restores it but does not arm).
@@ -286,7 +288,8 @@ START is two OK presses on Review, in this order (reordered 2026-11-06: the conf
    the wait. Back, a changed proposal or 5 s without the second OK close the window; nothing needs undoing.
 2. **Second OK** (`confirmed_start`): the Ra guard (`guard_topology` / `raguard::spoof_allowed`; a cable or no charger
    refuses with the Refuse stage, still before anything is armed: "Start, cable OFF" goes on without asking again, "Start anyway" arms the identity and records the reading, "Cancel"
-   returns to Review), then the identity is armed (Off arms nothing, a Tools -> Spoof arming is left alone), then the
+   returns to Review), then the identity is armed — whatever was armed is disarmed first and the pick takes over (Off
+   arms nothing, so a START with Off disarms a Tools -> Spoof arming too), then the
    **last stage**: the Rd is presented and the Waiting stage (13, "Waiting for charger") follows the VBUS and the source's
    capabilities (`start_begin`, `wait_step`). A charger that is already up (or a self-powered or bus-powered K2) passes
    through it at once.
