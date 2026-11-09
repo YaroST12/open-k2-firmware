@@ -9,6 +9,7 @@
 #include "k2/pd/link.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
 #include "k2/pd/pd_source.hpp"
+#include "k2/pd/power_source.hpp"
 #include "k2/drivers/power_calc.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
@@ -197,17 +198,20 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     paint_incoming(now_ms, t0);
 }
 
-// The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool.
+// The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool, and neither is the
+// self-hold of a self-powered or bus-powered K2 (its own plain 5 V contract): that hold is the K2's supply, so releasing it
+// would cut the K2's power and it never blocks.
 // What keeps an identity (or a START) out, said as a footer line (at most 24 characters) that names the cause and the way out;
-// nullptr = nothing does. An identity armed in Tools -> Spoof is not one of them: START with "Off" leaves it armed, and a
-// START with an identity of its own replaces it.
+// nullptr = nothing does. An identity armed in Tools -> Spoof is not one of them either: START disarms whatever is armed and
+// the pick takes over ("Off" arms nothing).
 const char *Ui::busy_reason() const {
     const auto& sink = fusb302::sink_status();
     const auto fs = fctrig::status();
     if (charger_test_busy()) return "Test running: stop it";
     if (fc_release_.busy()) return "5V release: wait";
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return "QC trigger: stop it";
-    if (sink.held && !fusb302::rd_for_run_on()) return "PD hold: release it";
+    if (sink.held && !fusb302::rd_for_run_on() && !fusb302::self_powered() && !power_source::bus_powered())
+        return "PD hold: release it";
     if (sink.epr_mode) return "EPR contract: exit it";
     if (sink.state != pd::SinkState::Idle && sink.state != pd::SinkState::Ready && sink.state != pd::SinkState::Failed)
         return "PD request: wait";
