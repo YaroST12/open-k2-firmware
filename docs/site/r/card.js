@@ -12,6 +12,11 @@
 //                  expandEmkV2() below turn it back into the exact version "1" record, so every decoder and view here reads
 //                  a version "2" link exactly as the version "1" link of the same record
 //
+// splitLink() reads the K2 data frame as well ("K2:<tag><schema>:<base45>", what the boot screen and the Share view's
+// "K2 data" code carry; pasted, or after a "#"; several pasted lines for a record of several parts), the twin of
+// tools/k2_qr.py parse_part / assemble / decode_texts: base45, frame and record check values, packed (LZ4) frames, and
+// schema 2 expanded to the schema 1 record. It gives the same {version, letter, kind, record} as a link of the same record.
+//
 // (the other kinds, a cable, the source's PDOs, the firmware identity and the boot report, are read by records.js on top of
 // splitLink() here) and turns the charger report card inside into (1) the card as plain data, the same keys tools/report_card.py and the
 // firmware's CARDS.JSON write, and (2) a view model: the badges (one per capability, what was achieved) and the full
@@ -333,6 +338,156 @@ var K2Card = (function () {
   // The kinds a version "2" link can carry: the card and the cable, uncompressed (the same kind letters as version "1").
   var V2_EXPANDERS = {card: expandCardV2, emarker: expandEmkV2};
 
+  // ---- the K2 data frame ("K2:<tag><schema>:<base45 frame>") ------------------------------------------------------------
+  // What the QR on the K2's boot screen (and the Share view's "K2 data" code) carries instead of a link. The JavaScript twin of
+  // tools/k2_qr.py (b45decode, parse_part, assemble, decode_texts) and of include/k2/ui/qrshare.hpp: docs/QR_SHARE.md has the
+  // frame. One part or several, one text per line; the record comes out at the version "1" shape, like a link's.
+  var B45 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+  var FRAME_TAGS = {BI: 1, EMK: 2, PDC: 3, CARD: 4, ID: 5, LOG: 6};
+  var FRAME_KINDS = {1: "boot", 2: "emarker", 3: "pdcaps", 4: "card", 5: "identity"};
+  var FRAME_PACKED = 0x80;      // bit 7 of the type byte: the record is an LZ4 block
+  var FRAME_HEADER = 12, FRAME_CRC = 4, FRAME_PART_PAYLOAD = 330, FRAME_MAX_PARTS = 4, FRAME_MAX_RECORD = 1320;
+  var FRAME_MAX_UNPACKED = 1 << 16;
+
+  var CRC32_TABLE = (function () {
+    var t = [];
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t.push(c >>> 0);
+    }
+    return t;
+  })();
+
+  function crc32(b) {   // zlib's CRC-32
+    var c = 0xFFFFFFFF;
+    for (var i = 0; i < b.length; i++) c = CRC32_TABLE[(c ^ b[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function frameError(message) { return CardError("bad-frame", message); }
+
+  // RFC 9285 base45: 3 characters = 2 bytes, a last pair = 1 byte.
+  function base45Decode(text) {
+    var d = [], i;
+    for (i = 0; i < text.length; i++) {
+      var v = B45.indexOf(text.charAt(i));
+      if (v < 0) throw frameError("This K2 data code has a character that is not part of one (letters must be capitals).");
+      d.push(v);
+    }
+    var out = [];
+    for (i = 0; i < d.length; i += 3) {
+      var left = d.length - i;
+      if (left >= 3) {
+        var w = d[i] + 45 * d[i + 1] + 2025 * d[i + 2];
+        if (w > 0xFFFF) throw frameError("This K2 data code is damaged (a character group is out of range).");
+        out.push(w >> 8, w & 0xFF);
+      } else if (left === 2) {
+        var b = d[i] + 45 * d[i + 1];
+        if (b > 0xFF) throw frameError("This K2 data code is damaged (a character group is out of range).");
+        out.push(b);
+      } else throw frameError("This K2 data code is cut short.");
+    }
+    return Uint8Array.from(out);
+  }
+
+  // One part's text -> {type, schema, packed, index, count, recLen, recCrc, payload}; tools/k2_qr.py parse_part.
+  function parseFramePart(text) {
+    if (text.slice(0, 3) !== "K2:") throw frameError("This is not a K2 data code (it does not start with K2:).");
+    var colon = text.indexOf(":", 3);
+    if (colon < 0) throw frameError("This K2 data code is cut short (no second colon).");
+    var head = /^(.*?)(\d*)$/.exec(text.slice(3, colon)), tag = head[1], digits = head[2];
+    if (!Object.prototype.hasOwnProperty.call(FRAME_TAGS, tag) || !digits || digits.length > 3) {
+      throw frameError("This K2 data code has a record type this page does not know (" + text.slice(3, colon) + ").");
+    }
+    var f = base45Decode(text.slice(colon + 1));
+    if (f.length < FRAME_HEADER + FRAME_CRC + 1) throw frameError("This K2 data code is too short.");
+    if (f[0] !== 0x4B || f[1] !== 0x32) throw frameError("This is not a K2 data code (bad frame mark).");
+    var n = f.length;
+    if (((f[n - 4] | (f[n - 3] << 8) | (f[n - 2] << 16) | (f[n - 1] << 24)) >>> 0) !== crc32(f.subarray(0, n - 4))) {
+      throw frameError("This K2 data code is damaged: its check value does not match (a bad scan or a changed character).");
+    }
+    var type = f[2], packed = (type & FRAME_PACKED) !== 0, count = f[5], index = f[4];
+    var recLen = f[6] | (f[7] << 8), recCrc = (f[8] | (f[9] << 8) | (f[10] << 16) | (f[11] << 24)) >>> 0;
+    type &= ~FRAME_PACKED;
+    if (type !== FRAME_TAGS[tag] || f[3] !== parseInt(digits, 10)) throw frameError("The start of this K2 data code does not match what is inside it.");
+    if (count < 1 || count > FRAME_MAX_PARTS || index >= count || recLen < 1 || recLen > FRAME_MAX_RECORD) {
+      throw frameError("This K2 data code is damaged (its header is out of range).");
+    }
+    if (Math.ceil(recLen / FRAME_PART_PAYLOAD) !== count) throw frameError("This K2 data code is damaged (its part count does not fit its length).");
+    var size = Math.ceil(recLen / count), want = index + 1 < count ? size : recLen - size * (count - 1);
+    if (n - FRAME_HEADER - FRAME_CRC !== want) throw frameError("This K2 data code is damaged (its length does not fit its part number).");
+    return {type: type, schema: f[3], packed: packed, index: index, count: count, recLen: recLen, recCrc: recCrc,
+      payload: f.subarray(FRAME_HEADER, n - FRAME_CRC)};
+  }
+
+  // A part's text may have gained what a paste or a browser adds: blanks at its end (base45 never ends a text with a space,
+  // its last character is at most 32, so they are padding), and an address bar turns each inner space into %20. The inner
+  // spaces are digits and stay. When the line has %20, the plain reading goes first and the frame check value arbitrates.
+  function parseFrameLine(line) {
+    var bases = [line], first = null, out = null;
+    if (line.indexOf("%20") >= 0) bases.push(line.replace(/%20/g, " "));
+    bases.forEach(function (b) {
+      if (out) return;
+      try { out = parseFramePart(b.replace(/\s+$/, "")); } catch (e) { if (!first) first = e; }
+    });
+    if (out) return out;
+    throw first;
+  }
+
+  function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+
+  // The text lines of one record (parts in any order, repeats allowed) -> {type, schema, packed, record}; assemble() in Python.
+  function assembleFrames(lines) {
+    var parts = [], first = null, have = {}, p, i;
+    for (i = 0; i < lines.length; i++) {
+      p = parseFrameLine(lines[i]);
+      var key = [p.type, p.schema, p.packed, p.count, p.recLen, p.recCrc].join("/");
+      if (first === null) first = {key: key, p: p};
+      else if (key !== first.key) throw frameError("These lines are parts of different records. Paste the parts of one record only.");
+      if (have[p.index]) {
+        for (var k = 0; k < p.payload.length; k++) {
+          if (p.payload[k] !== have[p.index][k]) throw frameError("Part " + (p.index + 1) + " appears twice with different data.");
+        }
+      }
+      have[p.index] = p.payload;
+    }
+    p = first.p;
+    var missing = [], got = [];
+    for (i = 0; i < p.count; i++) (have[i] ? got : missing).push(i + 1);
+    if (missing.length) {
+      var e = CardError("incomplete", "This record has " + p.count + " parts and you gave " + plural(got.length, "part", "parts") + " (part " + got.join(", ") +
+        "). Paste " + (missing.length === 1 ? "part " : "parts ") + missing.join(", ") + " too, one per line, or read it with tools/k2_qr.py.");
+      e.parts = p.count;
+      e.missing = missing;
+      throw e;
+    }
+    var rec = new Uint8Array(p.recLen), at = 0;
+    for (i = 0; i < p.count; i++) { rec.set(have[i], at); at += have[i].length; }
+    if (crc32(rec) !== p.recCrc) throw frameError("The parts do not add up to one record (the record check value does not match).");
+    return {type: p.type, schema: p.schema, packed: p.packed, record: rec};
+  }
+
+  // Text of one or more frames -> {version (the schema), letter (the tag), kind, record, frame: true}, the same shape as a
+  // link's. The record is inflated when the frame says packed, and a schema 2 card or cable is expanded, as decode_texts() does.
+  function splitFrames(text) {
+    var lines = String(text).split(/\r\n|\r|\n/).map(function (l) { return l.replace(/^\s+/, ""); })
+      .filter(function (l) { return l.replace(/\s+$/, "") !== ""; });
+    var a = assembleFrames(lines), tag = "";
+    Object.keys(FRAME_TAGS).forEach(function (t) { if (FRAME_TAGS[t] === a.type) tag = t; });
+    if (!Object.prototype.hasOwnProperty.call(FRAME_KINDS, a.type)) {
+      throw CardError("unsupported-kind", "This page does not show " + tag + " records (they are for the import tool). Read it with tools/k2_qr.py decode.");
+    }
+    var kind = FRAME_KINDS[a.type], expand = V2_EXPANDERS[kind], rec = a.record;
+    if (a.schema !== 1 && !(a.schema === 2 && expand)) {
+      throw CardError("bad-version", "This K2 data code is schema " + a.schema + " of the " + tag + " record; this page reads schema 1" +
+        (expand ? " and 2" : "") + ". Update the K2 firmware or reload the page, or use tools/k2_qr.py.");
+    }
+    if (a.packed) rec = lz4Inflate(rec, FRAME_MAX_UNPACKED);
+    if (a.schema === 2) rec = expand(rec);
+    return {version: String(a.schema), letter: tag, kind: kind, record: rec, frame: true};
+  }
+
   // ---- the card --------------------------------------------------------------------------------------------------------
 
   function groupWhy(group, detail, reason) {
@@ -525,14 +680,16 @@ var K2Card = (function () {
   // the record bytes of whatever the link carries, at the version "1" shape (a version "2" record expanded, a packed letter
   // inflated); records.js decodes the kinds that are not a card.
   function splitLink(text) {
-    var s = String(text == null ? "" : text).trim();
+    var raw = String(text == null ? "" : text);
+    if (/^\s*K2:/.test(raw)) return splitFrames(raw);   // a K2 data frame as scanned (or several parts, one per line)
+    var s = raw.trim();
     var at = s.indexOf("#");
-    if (at >= 0) s = s.slice(at + 1);
-    else if (/^https?:\/\//i.test(s)) s = "";   // an address with no "#": the code part never arrived
+    if (at >= 0) {
+      s = s.slice(at + 1);
+      var rest = raw.slice(raw.indexOf("#") + 1);
+      if (/^K2:/.test(rest)) return splitFrames(rest);   // a data frame in the fragment: the page address with #K2:... or the fragment alone
+    } else if (/^https?:\/\//i.test(s)) s = "";   // an address with no "#": the code part never arrived
     if (s === "") throw CardError("missing", "There is nothing to show in this address.");
-    if (/^K2:/i.test(s)) {
-      throw CardError("data-frame", "That is the K2 data code, which is for the import tool. Scan the link code instead (OK on the K2 switches).");
-    }
     var m = /^(\d)([a-zA-Z])\.([^\s]*)$/.exec(s);
     if (!m) throw CardError("bad-link", "This is not a K2 results link.");
     if (m[1] !== LINK_VERSION && m[1] !== LINK_VERSION_V2) {

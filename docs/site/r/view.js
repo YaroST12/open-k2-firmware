@@ -104,9 +104,12 @@
       ev.preventDefault();
       var text = $("paste").value;
       if (render(text)) {
-        var at = text.indexOf("#");
-        // keep the address in step with what is shown, so the page can be bookmarked or shared
-        try { history.replaceState(null, "", "#" + (at >= 0 ? text.slice(at + 1) : text).trim()); } catch (x) { /* a file:// page may refuse */ }
+        var at = text.indexOf("#"), one = text.trim();
+        // keep the address in step with what is shown, so the page can be bookmarked or shared (a record of several
+        // pasted K2 data lines has no single address)
+        if (!/[\r\n]/.test(one)) {
+          try { history.replaceState(null, "", "#" + (at >= 0 ? text.slice(at + 1) : text).trim()); } catch (x) { /* a file:// page may refuse */ }
+        }
         window.scrollTo(0, 0);
       }
     });

@@ -236,7 +236,7 @@ test("bad fragments say what is wrong", () => {
   assert.equal(code(BASE), "missing");
   assert.equal(code("https://example.org/r/"), "missing");
   assert.equal(code("hello"), "bad-link");
-  assert.equal(code("K2:CARD1:ABC"), "data-frame");
+  assert.equal(code("K2:CARD1:ABC"), "bad-frame");   // a K2 data frame is read, and this one is damaged
   assert.equal(code(BASE + "9" + frag.slice(1)), "bad-version");
   assert.equal(code(BASE + "3c." + frag.slice(3)), "bad-version");
   assert.equal(code(BASE + "0c." + frag.slice(3)), "bad-version");

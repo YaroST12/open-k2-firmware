@@ -210,8 +210,9 @@ geometry"): a version 12 frame is a 219 px box at 3 px per module, centred.
   as version '2' links (their schema 2 record, packed in place in the share record buffer); the other kinds stay version '1'.
 - **Boot info**: a key-mode boot shows the BI record as a QR code on the boot screen (`docs/ui_mockups/bootscreen.png`). It stays
   the K2 data frame: the boot info as a link is 290 characters, QR version 11, which is 61 modules, and at the screen's 3 px
-  per module that is 207 px beside the 40 px text block, over the 240 px panel. The link form of the boot info is for the Share
-  view only (nothing opens it yet; see "Left out"). The boot screen's block of code and text is centred like the share code
+  per module that is 207 px beside the 40 px text block, over the 240 px panel. The results page reads that data frame: scan it
+  with a text scanner and paste the `K2:BI1:...` text into the page (or after its `#`), and it opens the boot report. The link
+  form of the boot info is for the Share view. The boot screen's block of code and text is centred like the share code
   (a few pixels off the old position).
 - Log lines: `[SHARE] type=<n> <bytes>B in <parts> part(s)` when a share opens, `[SHARE] nothing to share (<bytes> bytes)` when
   the record is empty or too large.
@@ -278,9 +279,19 @@ the BI record.
     cause, VBUS and CC voltages, the Rd move, the first seconds' writes;
   - text (`t`): one tile, "QR scan test" with the text the code carried.
 
-  A missing or damaged fragment gives a plain message and a paste box; pasting the K2 data frame (`K2:CARD1:...`) says it is the
-  data code and asks for the link. A link of a letter the page does not know, or of a version it does not read, says so. It
-  makes no network request.
+  A missing or damaged fragment gives a plain message and a paste box. **The page reads the K2 data frame too**
+  (`K2:<tag><schema>:<base45>`, what a phone scanner shows for the boot screen's code or the Share view's "K2 data" code): paste
+  it into the box, or put it after the `#` (`.../r/#K2:BI1:...`; a browser's `%20` for a base45 space is read back). The
+  reader in `docs/site/r/card.js` (`splitFrames()`, called by `splitLink()`) is the JS twin of `tools/k2_qr.py`: base45, the
+  frame and record CRC-32, the tag to kind map (BI, EMK, PDC, CARD, ID), packed (LZ4) frames, and schema 2 card and cable frames
+  expanded to the schema 1 record; the record then goes through the same decoders and views as a link of the same kind.
+  A record of several parts takes one `K2:` line per part, in any order (blank lines and CRLF are fine); with a part missing
+  the page says how many parts the record has and which are missing. A part is checked on its own and the parts are checked
+  against each other (same record, no duplicate part), so a mixed or damaged set is refused. The log (LOG) is not a record
+  the page shows: it says to use `tools/k2_qr.py`. A frame of a schema the page does not read says so. A link of a letter
+  the page does not know, or of a version it does not read, says so. It makes no network request.
+  Tests: `tests/test_dataframes.mjs` (the boot screen's real frame, every single-part golden of `tests/fixtures/qrshare.tsv`,
+  two-part cables, damaged and mixed sets).
 - A card holds no date. The page shows the card number, run number, boot count and K2 uptime instead. A charger tested again with
   the same result (`docs/CHARGER_TEST_FLOW.md`, "Repeated runs") keeps one card; the Run section then adds a "Same result" row
   (`N runs, last at boot B, up <time>`) and the header says `same result xN`. The repeat count is the most the format keeps (255).

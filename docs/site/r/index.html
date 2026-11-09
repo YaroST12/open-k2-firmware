@@ -77,13 +77,13 @@ a { color: var(--focus); }
 
   <section id="welcome">
     <h1>Open-K2 results</h1>
-    <p>Scan the code on the K2 screen with your phone camera to see it here: charger test results, a charger's offers, a cable's e-marker, or the firmware and boot facts. On the K2, open the screen and long-press OK to share it.</p>
+    <p>Scan the code on the K2 screen with your phone camera to see it here: charger test results, a charger's offers, a cable's e-marker, or the firmware and boot facts. On the K2, open the screen and long-press OK to share it. A code that shows a text starting with K2: (the boot screen's code is one) works too: scan it with any scanner and paste the text below.</p>
   </section>
 
   <section id="problem" class="callout" hidden>
     <strong>This link did not open</strong>
     <p id="problem-text"></p>
-    <p class="hint">Scan the code again, or paste the whole link below.</p>
+    <p class="hint">Scan the code again, or paste the whole link, or the K2: text of the code, below. A record of several codes takes one K2: line per code.</p>
   </section>
 
   <article id="card" hidden>
@@ -97,8 +97,8 @@ a { color: var(--focus); }
   </article>
 
   <form id="paste-form">
-    <label for="paste">Paste a link from the K2</label>
-    <textarea id="paste" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="The whole link, starting with https"></textarea>
+    <label for="paste">Paste a link or a K2 data code from the K2</label>
+    <textarea id="paste" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="The whole link, starting with https, or the text of a K2 data code, starting with K2:"></textarea>
     <button type="submit">Show results</button>
   </form>
 
