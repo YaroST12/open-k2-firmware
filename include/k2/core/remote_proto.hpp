@@ -233,6 +233,22 @@
 //                                    op 6 read, args off(2): rsp off(2) total(2) n(1) data(n), n <= kUfcsChunk (48). The result blob
 //                                      (layout in k2/fastcharge/ufcs_probe.hpp: header with verdict, handshake timings, counts, errors, then the
 //                                      TX/RX event log), valid at any time and frozen once the probe is done. BadArg for off > total.
+//   0x53 QRTEST      req op(1) [args]  rsp per op
+//                                    The QR scan-test rig (k2/ui/ui_qrtest.hpp): a full-screen test QR on the panel for
+//                                    phone-camera scan checks. It only draws (read-only for the ports); it needs no confirm.
+//                                    op 0 list, args off(2) (default 0): rsp off(2) total(2) n(1) data(n), n <= kQrTestChunk (48):
+//                                      the fit table as text lines, computed on the device from the QR capacity table and the
+//                                      panel geometry box = (modules + 2*quiet) * px <= 240, one line per row:
+//                                      "v13 m69 p3 q4 box231 fit c425 r281" = version, modules, px, quiet, box px, fits,
+//                                      byte-L chars, max record B; per (px, quiet) combo (px 3 then 2, quiet 4..1) the largest
+//                                      version that fits and the first that does not. BadArg for off > total.
+//                                    op 1 show, args version(1) px(1) quiet(1): rsp version(1) px(1) quiet(1). Validates
+//                                      version 1..40, px 2..3, quiet 1..4 and refuses BadArg with a reason text in the payload
+//                                      when the box does not fit the 240 px panel at that px/quiet. Opens the QrTest page
+//                                      (full-screen code, chrome hidden; BACK or op 2 leaves it); Busy when the arena or the
+//                                      ports refuse it now (a charger test running).
+//                                    op 2 stop: rsp showing(1) = 1 when a test screen was on the stack and is popped now.
+//                                    Wrong length BadLength, unknown op BadArg.
 //   0x32 FC          req op(1) [args] [args]  rsp state proto fail scan_flags scan_step target_mv(2) vbus_mv(2)
 //                                    num_results(1) { proto outcome mv(2) } x num_results
 //                                    op 0 status; op 1 reset (to 5 V, then passive idle);
@@ -265,6 +281,7 @@
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
+#include "k2/ui/ui_qrtest.hpp"
 
 namespace k2::remote {
 
@@ -321,6 +338,7 @@ enum class Cmd : uint8_t {
     Lab = 0x51,         // lab probes: PA8 load pulse, see the layout above
     CableR = 0x50,      // passive cable resistance (k2/pd/cable_r.hpp), see the layout above
     Ufcs = 0x52,        // UFCS tuner and 5 V probe (k2/fastcharge/ufcs_tune.hpp, k2/fastcharge/ufcs_probe.hpp), see the layout above
+    QRTest = 0x53,      // QR scan-test rig (k2/ui/ui_qrtest.hpp): fit table, full-screen test QR, stop; see the layout above
     BlackBox = 0x70,    // PD black box ring: read / clear / freeze / status, see the layout above
     TransCap = 0x71,    // transition capture: arm / trigger / status / read, see the layout above
     ChargerTest = 0x0B, // read-only RAM charger-suite metadata / paged results
@@ -337,7 +355,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe,
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
     Cmd::PdAttach,
-    Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
+    Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::BootInfo,
 };
 
@@ -438,6 +456,10 @@ constexpr uint8_t kUfcsStatus = 0, kUfcsGet = 1, kUfcsSet = 2, kUfcsReset = 3, k
 constexpr size_t kUfcsChunk = 48, kUfcsFieldBytes = 17;
 static_assert(5 + kUfcsChunk <= kMaxRspPayload);
 static_assert(kUfcsFieldBytes <= kMaxRspPayload);
+// QRTEST op codes (first payload byte of Cmd::QrTest); the list reply header is off(2) total(2) n(1).
+constexpr uint8_t kQrTestList = 0, kQrTestShow = 1, kQrTestStop = 2;
+constexpr size_t kQrTestChunk = 48;
+static_assert(5 + kQrTestChunk <= kMaxRspPayload);
 
 constexpr uint8_t kCmdScreenData = 0x8A;     // stream frames of a screenshot (not a request id)
 constexpr uint8_t kShotFlagLast = 0x01;      // last chunk of a strip
@@ -811,6 +833,8 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ufcs_set(u8, std::uint32_t{}) } -> std::same_as<Status>;         // field, value (range checked); Busy while a probe runs
     { b.ufcs_op(u8) } -> std::same_as<Status>;                           // kUfcsReset / kUfcsProbe / kUfcsStop
     { b.ufcs_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // blob bytes from off, returns how many
+    { b.qrtest_show(u8, u8, u8) } -> std::same_as<Status>;   // version, px, quiet: open the full-screen test QR page
+    { b.qrtest_stop() } -> std::same_as<bool>;               // pop the test page when it is showing
     { b.blackbox(u8, std::uint32_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // op, arg, out; returns the payload size
     { b.emlib(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // whole request payload (checked), out; returns the payload size
     { b.cards(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
@@ -1228,6 +1252,37 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             if (st != Status::Ok) return reply(st);
         }
         return reply_n(encode_ufcs(buf, backend.ufcs_info()));
+    }
+    case Cmd::QRTest: {
+        if (p.empty()) return reply(Status::BadLength);
+        switch (p[0]) {
+        case kQrTestList: {
+            if (p.size() != 1 && p.size() != 3) return reply(Status::BadLength);
+            const uint16_t off = p.size() == 3 ? detail::rd16(&p[1]) : 0;
+            if (off > qrtest::list_total()) return reply(Status::BadArg);
+            return reply_n(qrtest::list_chunk(off, buf));
+        }
+        case kQrTestShow: {
+            if (p.size() != 4) return reply(Status::BadLength);
+            // The argument validation is pure (k2/ui/ui_qrtest.hpp) and runs here, before the backend: a bad
+            // range or a box that does not fit the panel answers BadArg with the reason as the payload text.
+            char reason[qrtest::kReasonMax];
+            const int rn = qrtest::check_show(p[1], p[2], p[3], reason);
+            if (rn != 0)
+                return reply(Status::BadArg,
+                             std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(reason), static_cast<size_t>(rn)));
+            const Status st = backend.qrtest_show(p[1], p[2], p[3]);
+            if (st != Status::Ok) return reply(st);
+            buf[0] = p[1]; buf[1] = p[2]; buf[2] = p[3];
+            return reply_n(3);
+        }
+        case kQrTestStop:
+            if (p.size() != 1) return reply(Status::BadLength);
+            buf[0] = backend.qrtest_stop() ? 1 : 0;
+            return reply_n(1);
+        default:
+            return reply(Status::BadArg);
+        }
     }
     case Cmd::EmLib: {
         if (p.empty()) return reply(Status::BadLength);

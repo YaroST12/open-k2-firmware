@@ -190,6 +190,15 @@ struct Fake {
         for (; n < out.size() && off + n < ufcs_blob.size(); n++) out[n] = ufcs_blob[off + n];
         return n;
     }
+    // QrTest (Cmd::QrTest): the dispatcher validates and builds the list itself; the backend only opens/pops the page.
+    Status qrtest_status = Status::Ok;
+    std::array<uint8_t, 3> qrtest_shown{}; bool qrtest_show_called = false; bool qrtest_stopped = false;
+    Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet) {
+        calls++; qrtest_show_called = true; qrtest_shown = {version, px, quiet};
+        return qrtest_status;
+    }
+    bool qrtest_stop() { calls++; qrtest_stopped = true; return qrtest_stopped_value; }
+    bool qrtest_stopped_value = false;
     CableRInfo cable_r_info() { return {3, 1, 0x0064, 5100, 40, 4900, 2050, 0x0032, 0x0046}; }
     uint8_t bb_op = 0xFF; uint32_t bb_arg = 0xFFFFFFFF;
     size_t blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out) {

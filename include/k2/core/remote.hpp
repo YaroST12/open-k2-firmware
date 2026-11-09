@@ -96,6 +96,10 @@ public:
     remote::Status ufcs_set(uint8_t field, uint32_t value);
     remote::Status ufcs_op(uint8_t op);                    // kUfcsReset / kUfcsProbe / kUfcsStop
     size_t ufcs_read(uint16_t off, std::span<uint8_t> out);
+    // Cmd::QrTest: the QR scan-test rig (k2/ui/ui_qrtest.hpp). Op 1 opens the full-screen test QR page
+    // (Busy when the arena or the ports refuse it now); op 2 pops it when it is showing.
+    remote::Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet);
+    bool qrtest_stop();
     size_t blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out);   // PD black box ring (k2::pdtrace)
     size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out);   // saved-cable library and spoof (k2::storage, k2::emk_spoof)
     size_t cards(std::span<const uint8_t> req, std::span<uint8_t> out);   // charger report cards (k2::report_card::hw)

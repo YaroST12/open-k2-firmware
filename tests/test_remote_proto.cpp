@@ -19,6 +19,8 @@ static_assert(kCardsChunks == k2::report_card::remote::kChunks);
 
 #include "fake_remote_backend.hpp"
 
+#define CHECK(cond) CHECK_EQ((cond) ? 1 : 0, 1)
+
 using Frame = std::array<uint8_t, kFrameSize>;
 
 static std::vector<uint8_t> request(uint8_t cmd, uint8_t seq, std::initializer_list<uint8_t> payload) {
@@ -1542,6 +1544,98 @@ static void test_charger_hunt() {
     CHECK_EQ(f.calls, calls);
 }
 
+static void test_qrtest() {
+    Fake f; Frame r;
+    // list, no args: the first chunk of the fit table (off 0), header off(2) total(2) n(1).
+    const std::size_t total = k2::qrtest::list_total();
+    CHECK(total > 0);
+    CHECK_EQ(run(f, request(0x53, 1, {kQrTestList}), r), 1);
+    check_header(r, 0x53, 1, Status::Ok, 5 + std::min<std::size_t>(kQrTestChunk, total));
+    CHECK_EQ(r[kRspHeader] | r[kRspHeader + 1] << 8, 0);
+    CHECK_EQ(r[kRspHeader + 2] | r[kRspHeader + 3] << 8, total);
+    CHECK_EQ(r[kRspHeader + 4], std::min<std::size_t>(kQrTestChunk, total));
+    // The chunks from 0 reassemble the whole table (the same text list_line() builds).
+    std::string all;
+    {
+        char line[48];
+        for (int i = 0; i < k2::qrtest::kListLines; i++) {
+            const int n = k2::qrtest::list_line(i, line);
+            CHECK(n > 0);
+            all.append(line, static_cast<std::size_t>(n));
+        }
+    }
+    CHECK_EQ(all.size(), total);
+    std::string got;
+    for (std::size_t off = 0; off < total;) {
+        CHECK_EQ(run(f, request(0x53, 2, {kQrTestList, uint8_t(off), uint8_t(off >> 8)}), r), 1);
+        CHECK_EQ(r[kRspHeader] | r[kRspHeader + 1] << 8, off);
+        CHECK_EQ(r[kRspHeader + 2] | r[kRspHeader + 3] << 8, total);
+        const uint8_t n = r[kRspHeader + 4];
+        CHECK_EQ(r[4], static_cast<uint8_t>(Status::Ok));
+        CHECK_EQ(r[5], 5 + n);
+        got.append(reinterpret_cast<const char*>(&r[kRspHeader + 5]), n);
+        off += n;
+        if (n == 0) break;
+    }
+    CHECK(got == all);
+    // list with a bad length / an offset past the end.
+    CHECK_EQ(run(f, request(0x53, 3, {kQrTestList, 0}), r), 1);
+    check_header(r, 0x53, 3, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x53, 4, {kQrTestList, uint8_t(total + 1), uint8_t((total + 1) >> 8)}), r), 1);
+    check_header(r, 0x53, 4, Status::BadArg, 0);
+    // show: ok echoes version px quiet and calls the backend once.
+    CHECK_EQ(run(f, request(0x53, 5, {kQrTestShow, 13, 3, 4}), r), 1);
+    check_header(r, 0x53, 5, Status::Ok, 3);
+    check_bytes(r, kRspHeader, {13, 3, 4});
+    CHECK(f.qrtest_show_called);
+    CHECK_EQ(f.qrtest_shown[0], 13); CHECK_EQ(f.qrtest_shown[1], 3); CHECK_EQ(f.qrtest_shown[2], 4);
+    // show: bad ranges answer BadArg with the reason as the payload, and the backend is not called.
+    f.qrtest_show_called = false;
+    auto show_bad = [&](std::initializer_list<uint8_t> p, const char* needle) {
+        CHECK_EQ(run(f, request(0x53, 6, p), r), 1);
+        CHECK_EQ(r[4], static_cast<uint8_t>(Status::BadArg));
+        const std::string reason(reinterpret_cast<const char*>(&r[kRspHeader]), r[5]);
+        CHECK(reason.find(needle) != std::string::npos);
+        CHECK(!f.qrtest_show_called);
+    };
+    show_bad({kQrTestShow, 0, 3, 4}, "version 0");
+    show_bad({kQrTestShow, 41, 3, 4}, "41");
+    show_bad({kQrTestShow, 13, 1, 4}, "px 1");
+    show_bad({kQrTestShow, 13, 4, 4}, "px 4");
+    show_bad({kQrTestShow, 13, 3, 0}, "quiet 0");
+    show_bad({kQrTestShow, 13, 3, 5}, "quiet 5");
+    // show: the box does not fit the 240 px panel -> BadArg with the box size in the reason.
+    show_bad({kQrTestShow, 25, 2, 2}, "242");
+    show_bad({kQrTestShow, 14, 3, 4}, "243");
+    show_bad({kQrTestShow, 26, 2, 1}, "246");
+    // show: wrong lengths.
+    CHECK_EQ(run(f, request(0x53, 7, {kQrTestShow, 13, 3}), r), 1);
+    check_header(r, 0x53, 7, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x53, 8, {kQrTestShow, 13, 3, 4, 0}), r), 1);
+    check_header(r, 0x53, 8, Status::BadLength, 0);
+    // show: the backend's refusal is relayed.
+    f.qrtest_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x53, 9, {kQrTestShow, 11, 3, 4}), r), 1);
+    check_header(r, 0x53, 9, Status::Busy, 0);
+    f.qrtest_status = Status::Ok;
+    // stop: reports whether a test screen was showing; unknown op and empty payload.
+    f.qrtest_stopped_value = true;
+    CHECK_EQ(run(f, request(0x53, 10, {kQrTestStop}), r), 1);
+    check_header(r, 0x53, 10, Status::Ok, 1);
+    CHECK_EQ(r[kRspHeader], 1);
+    CHECK(f.qrtest_stopped);
+    f.qrtest_stopped_value = false;
+    CHECK_EQ(run(f, request(0x53, 11, {kQrTestStop}), r), 1);
+    check_header(r, 0x53, 11, Status::Ok, 1);
+    CHECK_EQ(r[kRspHeader], 0);
+    CHECK_EQ(run(f, request(0x53, 12, {kQrTestStop, 0}), r), 1);
+    check_header(r, 0x53, 12, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x53, 13, {7}), r), 1);
+    check_header(r, 0x53, 13, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x53, 14, {}), r), 1);
+    check_header(r, 0x53, 14, Status::BadLength, 0);
+}
+
 int main() {
     test_charger_hunt();
     test_charger_cable();
@@ -1586,6 +1680,7 @@ int main() {
     test_flash_dump();
     test_boot_info();
     test_ufcs();
+    test_qrtest();
     test_debug_fault();
     test_build_response_pads_and_cuts();
     return test_report("test_remote_proto");

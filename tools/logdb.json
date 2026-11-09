@@ -378,6 +378,9 @@
   "375": "[RMT] reread relook\n",
   "376": "[PIN] released\n",
   "377": "[PIN] Rd pinned on CC%u (mark written)\n",
-  "378": "[GUARD] started anyway, self-supplied: the Ra follows the attach\n"
+  "378": "[GUARD] started anyway, self-supplied: the Ra follows the attach\n",
+  "379": "[QRTEST] show refused: v%u px%u q%u\n",
+  "380": "[QRTEST] show v%u px%u q%u\n",
+  "381": "[QRTEST] stop\n"
  }
 }

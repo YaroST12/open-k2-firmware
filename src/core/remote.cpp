@@ -38,6 +38,7 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/pd/transcap.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/ui/ui_qrtest.hpp"
 #include "k2/core/version.hpp"
 
 namespace k2 {
@@ -870,6 +871,21 @@ size_t Remote::ufcs_read(uint16_t off, std::span<uint8_t> out) {
     const size_t n = std::min(out.size(), b.size() - off);
     std::copy_n(b.begin() + off, n, out.begin());
     return n;
+}
+
+remote::Status Remote::qrtest_show(uint8_t version, uint8_t px, uint8_t quiet) {
+    if (!qrtest::show(ui_, version, px, quiet, systick::millis())) {
+        K2LOG("[QRTEST] show refused: v%u px%u q%u\n", unsigned(version), unsigned(px), unsigned(quiet));
+        return remote::Status::Busy;
+    }
+    K2LOG("[QRTEST] show v%u px%u q%u\n", unsigned(version), unsigned(px), unsigned(quiet));
+    return remote::Status::Ok;
+}
+
+bool Remote::qrtest_stop() {
+    const bool was = qrtest::stop(ui_, systick::millis());
+    if (was) K2LOG("[QRTEST] stop\n");
+    return was;
 }
 
 remote::CableRInfo Remote::cable_r_info() {
