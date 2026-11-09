@@ -248,6 +248,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     kAttachContractMs -> WrongVoltage with measured 7600; no caps -> NoReattach as before; Rp lost at 1.5 s then caps
     again at 3.2 s -> the unit runs. Hardware: the same setup, OnePlus on PPS before START: the card names the wrong
     voltage; OnePlus unplugged: the unit runs.
+  - Hardware on be3f589 (2026-11-10, `runs/2026-11-09-splitter/`): (B3) OnePlus on PPS before START: START's own
+    preflight refuses with "VBUS not safe 5V" on screen (VBUS 7.7 V under the PDO 1 contract), so the new attach-wait
+    path is not reachable that way; the refusal reason is on screen only (no `[TEST]` log line, `ct_start.py` prints
+    just "run id still 0" - small follow-up: log the preflight reason and have `ct_start.py` print it). (B4) OnePlus
+    plugged around the unit detach: the attach got the split list at a clean 5 V, 5 pass / 4 skip (EPR, SPR AVS, PPS,
+    EPR AVS not offered), card correct. WrongVoltage itself stays covered by the streamB2 replay test only; the splitter
+    did not repeat the 7.6 V attach.
   - Still unverified on a1da8c3: a re-split **while a row runs** (restart rules 2-6) - in this run the OnePlus went in
     during the unit detach, so the first list was already the split one. Next try: plug it after the first row passes.
   - `slow-rp-wake` partly seen: START held a steady Rd and the sleeping splitter (CC2 2990 mV open) answered 1680 ms
