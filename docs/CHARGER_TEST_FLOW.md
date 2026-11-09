@@ -149,7 +149,7 @@ The UFCS current words: `test_charger_test` (`test_ufcs_steps_carry_their_mode`)
 ## Repeated runs (report card format 7)
 
 A charger has one card (`/cards/<fp>.card`, the newest run). When a finished run gives the same results as the stored card, no
-second copy is written: the store folds the run into the stored card (`report_card::same_results`, `repeat_of`, applied in
+second copy is written: the store folds the run into the stored card (`report_card::same_results`, `fold_repeat`, applied in
 `Store::put`). The card keeps its rows and the boot / uptime of the run that was stored first; `runs` goes up (the charger was
 tested again), and a repeat block records how often and when:
 

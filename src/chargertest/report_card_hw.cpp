@@ -22,7 +22,7 @@ std::size_t numbers(std::span<std::uint16_t> out) { return g_store.numbers(out);
 std::uint32_t generation() { return g_gen; }
 bool find(std::uint32_t fp, Card& c) { return g_store.find(fp, c); }
 bool get(std::uint16_t card_no, Card& c) { return g_store.get(card_no, c); }
-Err put(Card& c) {
+[[gnu::noinline]] Err put(Card& c) {   // not inlined into save_card: Store::put holds a Card of its own, and that frame is stack-gated
     const Err e = g_store.put(c);
     K2LOG("[CARD] save #%u fp=%08x runs=%u times=%u -> %d\n", unsigned(c.card_no), unsigned(c.id.fp), unsigned(c.runs), unsigned(c.times), int(e));
     return written(e);

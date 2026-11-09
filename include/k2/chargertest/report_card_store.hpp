@@ -85,7 +85,7 @@ public:
         std::uint32_t top_stamp = 0;
         for (unsigned i = 0; i < n_; ++i) if (idx_[i].stamp > top_stamp) top_stamp = idx_[i].stamp;
         if (had && same_results(prev, c)) {                       // identical to the stored run: count it, keep one copy
-            c = repeat_of(prev, c);
+            fold_repeat(prev, c);
             return write(c, top_stamp + 1);
         }
         if (had) {

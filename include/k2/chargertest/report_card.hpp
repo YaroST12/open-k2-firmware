@@ -40,7 +40,7 @@
 //      zero otherwise; saturate at 65535 and 2^24 - 1). boots / uptime_s above stay those of the run that was stored first. Older
 //      formats decode as times = 1 (their bytes at 190.. are a CRC and padding, never read).
 //
-// A re-run that gives the same results is counted, not stored (same_results, repeat_of; the store applies them): the card keeps its
+// A re-run that gives the same results is counted, not stored (same_results, fold_repeat; the store applies them): the card keeps its
 // rows, runs goes up (the charger was tested again), times goes up and last_* name the newest run. Two runs are "the same" when
 // every stored result row is equal: verdict, reason and detail of each group, the failing targets (fail_mv, fail_dv), each range's
 // offer and each EPR level, the UFCS modes, the PD offer facts (PDO count, spec revision, evidence flags, highest fixed current, source
@@ -625,20 +625,25 @@ inline bool same_results(const Card& prev, const Card& run) {
     return true;
 }
 
-// The card that results from a run that repeated the stored card `prev` (same_results): the stored rows and first-run time stay,
-// the run counts, the repeat counter grows and last_* name the newest run. What only the repeat learned (an identity the first
-// probe missed, an automatic name where the stored card had none) is added; a user name always stays.
-inline Card repeat_of(const Card& prev, const Card& run) {
-    Card m = prev;
-    m.format = kFormat;
-    m.runs = prev.runs == 0xFFFF ? prev.runs : uint16_t(prev.runs + 1);
-    m.times = prev.times == 0xFF ? prev.times : uint8_t(prev.times + 1);
-    m.last_boots = run.boots > 0xFFFF ? uint16_t(0xFFFF) : uint16_t(run.boots);
-    m.last_uptime_s = run.uptime_s > 0xFFFFFF ? 0xFFFFFFu : run.uptime_s;
-    if (!(m.name[0] && !m.name_auto) && run.name[0]) { std::memcpy(m.name, run.name, sizeof m.name); m.name_auto = run.name_auto; }
-    if (m.id.vid == 0 && m.id.pid == 0) { m.id.vid = run.id.vid; m.id.pid = run.id.pid; }
-    if (m.id.pdp_w == 0) m.id.pdp_w = run.id.pdp_w;
-    return m;
+// Turns `c`, a run that repeated the stored card `prev` (same_results), into the card to store: the stored rows and first-run time
+// stay, the run counts, the repeat counter grows and last_* name the newest run. What only the repeat learned (an identity the
+// first probe missed, an automatic name where the stored card had none) is added; a user name always stays. It works in place
+// (no second Card on the stack: the save path runs on the UI task's small frame).
+inline void fold_repeat(const Card& prev, Card& c) {
+    char name[sizeof c.name];
+    std::memcpy(name, c.name, sizeof name);
+    const bool name_auto = c.name_auto;
+    const uint32_t boots = c.boots, uptime_s = c.uptime_s;
+    const uint16_t vid = c.id.vid, pid = c.id.pid, pdp_w = c.id.pdp_w;
+    c = prev;
+    c.format = kFormat;
+    c.runs = prev.runs == 0xFFFF ? prev.runs : uint16_t(prev.runs + 1);
+    c.times = prev.times == 0xFF ? prev.times : uint8_t(prev.times + 1);
+    c.last_boots = boots > 0xFFFF ? uint16_t(0xFFFF) : uint16_t(boots);
+    c.last_uptime_s = uptime_s > 0xFFFFFF ? 0xFFFFFFu : uptime_s;
+    if (!(c.name[0] && !c.name_auto) && name[0]) { std::memcpy(c.name, name, sizeof name); c.name_auto = name_auto; }
+    if (c.id.vid == 0 && c.id.pid == 0) { c.id.vid = vid; c.id.pid = pid; }
+    if (c.id.pdp_w == 0) c.id.pdp_w = pdp_w;
 }
 
 namespace detail {
