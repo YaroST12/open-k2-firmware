@@ -5,6 +5,7 @@
 // written independently of the encoder (own CRC, own parser) so a shared mistake cannot hide.
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "k2/pd/pdtrace.hpp"
@@ -292,7 +293,11 @@ int main() {
         }
         std::printf("trace stream pass cost (host -O0): mean %.0f ns, worst %.0f ns, %u frames max per pass\n",
                     total_ns / kPasses, worst_ns, unsigned(ts::kMaxFramesPerPass));
-        CHECK_EQ(total_ns / kPasses < 100000.0, true);      // mean under 100 us even at -O0 on a busy host
+        // Wall-clock bound moved behind an opt-in flag, outside `make gate`: on a loaded host the mean can
+        // exceed any limit (same flake class as test_dbg_stream, ROADMAP 2026-11-09). The functional bound is
+        // the work counted below (records sent vs lost). Timing check: K2_TEST_TIMING=1 ./host-build/test_trace_stream
+        if (std::getenv("K2_TEST_TIMING"))
+            CHECK_EQ(total_ns / kPasses < 100000.0, true);   // mean under 100 us even at -O0 on a busy host
         // two records per frame, four frames per pass: each pass sent what the loop pushed, minus the
         // Start frame's slot on pass one
         CHECK_EQ(t.stats().records >= std::uint32_t(kPasses) * 8u - 8u, true);

@@ -412,7 +412,10 @@ test-run: $(TEST_STAMPS)
 	@$(COMPDB)
 test-py: test-run
 	@python3 -m unittest discover -s tests -p 'test_*.py'
-	@if command -v node >/dev/null 2>&1; then node --test tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs; \
+	# --test-timeout is only a hang guard: the functional node rigs disable their own wall-clock watchdogs
+	# (count work, not time), so a rig that stops replying would otherwise hang `make gate` forever. 10 min is
+	# far beyond any load-induced slowness of these tests, so the guard itself cannot flake.
+	@if command -v node >/dev/null 2>&1; then node --test --test-timeout=600000 tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs; \
 	else echo "node not found: skipping node tests"; fi
 test: test-py
 

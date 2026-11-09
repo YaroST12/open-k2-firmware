@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -585,7 +586,13 @@ void test_every_pass_is_bounded() {
     }
     std::printf("dbg stream pass cost (host -O0): mean %.1f us, worst %.1f us, %u frames max per pass\n", total / 2000, worst,
                 dbg::kMaxFramesPerPass);
-    CHECK_EQ(worst < 5000.0, true);
+    // The wall-clock bound is a timing check, not a functional one: on a loaded host a single preempted pass
+    // blows any limit, which is what made `make gate` flaky (ROADMAP 2026-11-09, reproduced by
+    // tools/flaky_repro.sh: worst 8426 us on a loaded host). The functional bound is the work counted above
+    // (frames and bytes per pass, at most one probe read). The timing check runs only when explicitly asked
+    // for, outside `make gate`: K2_TEST_TIMING=1 ./host-build/test_dbg_stream
+    if (std::getenv("K2_TEST_TIMING"))
+        CHECK_EQ(worst < 5000.0, true);
 }
 
 void test_nothing_is_sent_when_stopped_and_stats_survive_the_stop() {

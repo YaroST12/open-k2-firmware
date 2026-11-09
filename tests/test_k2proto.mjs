@@ -411,6 +411,9 @@ test("rgb565 to rgba expansion", () => {
 // ---- link: seq matching, log skipping, bootloader, timeout, busy retry -------------------------
 
 // A transport whose replies are scripted per request: replies(req) -> array of frames to feed.
+// Functional rig: every reply is scripted, so the tests count work, not time -- the wall-clock watchdogs
+// are off (timeoutMs/streamTimeoutMs 0) and cannot fire on a loaded host; the timeout tests below pass
+// their own small values on purpose (they test the watchdog itself).
 function rig(replies, opts = {}) {
   const sent = [];
   const logs = [];
@@ -421,7 +424,7 @@ function rig(replies, opts = {}) {
       const out = replies(f, sent.length) || [];
       for (const r of out) setImmediate(() => link.feed(r));
     },
-  }, { timeoutMs: 100, busyPollMs: 5, screenshotBusyMs: 20, ...opts });
+  }, { timeoutMs: 0, streamTimeoutMs: 0, busyPollMs: 5, screenshotBusyMs: 20, ...opts });
   link.onLog = (t) => logs.push(t);
   link.onBootloader = () => { boot++; };
   return { link, sent, logs, boots: () => boot };
@@ -472,7 +475,9 @@ test("error status rejects with RemoteError", async () => {
 test("busy is retried within the limit, then succeeds", async () => {
   let n = 0;
   const { link, sent } = rig((f) => [rsp(2, f[3], ++n < 3 ? 4 : 0)]);
-  await link.call(P.CMD.BUTTON, u8(1, 100, 0), { busyMs: 500 });
+  // the retry budget is wall-clock by design and covered by the give-up test below; this functional test
+  // keeps a budget no host load can exhaust, so it cannot flake under `make gate`
+  await link.call(P.CMD.BUTTON, u8(1, 100, 0), { busyMs: 60000 });
   assert.equal(sent.length, 3);
   assert.deepEqual(sent.map((f) => f[3]), [1, 2, 3]);
 });
@@ -1210,7 +1215,7 @@ function httpRig(answer) {
     return answer(url, calls[calls.length - 1]);
   };
   const t = P.httpTransport("", { fetch });
-  const link = new P.Link(t, { timeoutMs: 200 });
+  const link = new P.Link(t, { timeoutMs: 0 });   // the fetch mock answers immediately; no wall-clock watchdog
   return { calls, link, t };
 }
 const jsonRes = (obj, status = 200) => ({ ok: status === 200, status, json: async () => obj, arrayBuffer: async () => new ArrayBuffer(0) });

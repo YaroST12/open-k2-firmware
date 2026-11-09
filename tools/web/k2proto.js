@@ -548,12 +548,13 @@ var K2Proto = (function () {
   // Request/response over a transport {send(Uint8Array) -> Promise|void}; the owner calls feed(report)
   // for every IN report. One request is in flight at a time (the firmware answers one at a time, and
   // a screenshot owns the IN endpoint while it streams). Log text goes to onLog, a bootloader
-  // frame to onBootloader.
+  // frame to onBootloader. timeoutMs/streamTimeoutMs are wall-clock watchdogs; pass 0 to disable
+  // one (functional host tests count work, not time, so a loaded host cannot flake them).
   function Link(transport, opts) {
     opts = opts || {};
     this.transport = transport;
-    this.timeoutMs = opts.timeoutMs || 1000;
-    this.streamTimeoutMs = opts.streamTimeoutMs || 2000;
+    this.timeoutMs = opts.timeoutMs === undefined ? 1000 : opts.timeoutMs;
+    this.streamTimeoutMs = opts.streamTimeoutMs === undefined ? 2000 : opts.streamTimeoutMs;
     this.busyPollMs = opts.busyPollMs || 100;
     this.screenshotBusyMs = opts.screenshotBusyMs === undefined ? 1500 : opts.screenshotBusyMs;   // retry Busy/abort this long
     this.seq = 0;
@@ -586,6 +587,7 @@ var K2Proto = (function () {
 
   Link.prototype._arm = function (e, ms, msg) {
     clearTimeout(e.timer);
+    if (!(ms > 0)) return;            // watchdog disabled (0): the caller counts work, not time
     var self = this;
     e.timer = setTimeout(function () { self._finish(e, new RemoteTimeout(msg)); }, ms);
   };
@@ -610,7 +612,7 @@ var K2Proto = (function () {
     return new Promise(function (resolve, reject) {
       var e = { seq: seq, handler: handler, resolve: resolve, reject: reject, timer: 0 };
       self.pending = e;
-      self._arm(e, o.timeoutMs || self.timeoutMs, "no response");
+      self._arm(e, o.timeoutMs !== undefined ? o.timeoutMs : self.timeoutMs, "no response");
       Promise.resolve().then(function () { return self.transport.send(packRequest(cmd, seq, payload)); })
         .catch(function (err) { self._finish(e, err); });
     });
