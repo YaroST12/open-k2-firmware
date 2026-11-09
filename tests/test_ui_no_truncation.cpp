@@ -443,9 +443,35 @@ void test_resume_words() {
     }
 }
 
+// The Tools entry that opens the Connection page is called "Who's attached" (14 cells, the longest Tools name): its menu row and
+// the page's title bar must be drawn whole in every rotation (the font has the apostrophe: Spleen and Atkinson cover ASCII 32..126).
+void test_whos_attached() {
+    CHECK_STR(ToolsPage::tool_name(4), "Who's attached");
+    CHECK_EQ(fits_px(kSmallAdvPx, "Who's attached", 130), true);   // the Tools row title box
+    apply(kScenarios[0]);
+    static Ui ui;
+    g_t += 1000;
+    ui.init(g_t);
+    const int cuts_before = trunc::failures();
+    for (int rot = 0; rot < 4; ++rot) {
+        ui.set_rotation(static_cast<uint8_t>(rot), g_t);
+        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+        for (int row = 0; row < 8; ++row) {   // every Tools row has been the focused one: the long name is drawn selected too
+            draw_for_a_while(ui, "whos-attached tools", rot, "idle");
+            g_t += 150; ui.on_button(Button::Plus, ButtonEvent::Short, g_t); ui.tick(g_t + 50); g_t += 50;
+        }
+        CHECK_EQ(ui.push_menu(Menu::Connection, g_t), true);
+        draw_for_a_while(ui, "whos-attached title", rot, "idle");
+        ui.on_button(Button::Back, ButtonEvent::Short, g_t);
+    }
+    CHECK_EQ(trunc::failures(), cuts_before);
+    trunc::context("");
+}
+
 }  // namespace
 
 int main() {
+    test_whos_attached();
     test_reason_words();
     test_reach_words();
     test_builtin_cables();

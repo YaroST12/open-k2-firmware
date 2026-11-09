@@ -625,7 +625,7 @@ extern uint32_t g_match_live_calls;
 // averages (raguard::classify) and never start an active CC operation.
 class ConnectionPage final : public PageBase {
 public:
-    explicit ConnectionPage(UiContext &c) : PageBase(c, Page::Count, "Connection", Icon::Plug) {}
+    explicit ConnectionPage(UiContext &c) : PageBase(c, Page::Count, "Who's attached", Icon::Plug) {}
     void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;

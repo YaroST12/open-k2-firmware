@@ -188,7 +188,7 @@ geometry"): a version 12 frame is a 219 px box at 3 px per module, centred.
   A link of more than 644 characters (version 18 and up) first wipes the panel and says `Preparing code...` in the middle,
   then encodes with the generator's poll hook set to `lcd::pump` (USB and the idle hook are served once per mask candidate,
   eight times), wipes and draws the code.
-- **Long OK = Share** (`docs/UI_DESIGN.md`) on: a saved cable (Connection, Actions, Saved cables), the Connection Source tab, a report
+- **Long OK = Share** (`docs/UI_DESIGN.md`) on: a saved cable (Who's attached, Actions, Saved cables), the Who's attached Source tab, a report
   card (Tools, Report cards, detail), the charger test Results page (the card of that run) and the Diag page (the log).
   A record that LZ4 shrinks by 25 % or more goes out packed (the flag above); the share view packs in place in the scratch arena.
 - Left out: built-in chips and the identity record have no opener (the LOG head carries the git string and uptime; no text
@@ -201,7 +201,7 @@ geometry"): a version 12 frame is a 219 px box at 3 px per module, centred.
   frames and `tools/k2_qr.py`.
 - **A record that fits one link opens as a link, not as the K2 data frame.** The kinds with a link form are the report card,
   a cable (e-marker record), the source's PDOs, the firmware identity and the boot info (table under "Link form"). Long OK on the
-  charger test Results page, the Cards detail, a saved cable, a live e-marker read or the Connection Source tab opens the Share view
+  charger test Results page, the Cards detail, a saved cable, a live e-marker read or the Who's attached Source tab opens the Share view
   showing one code that holds a web address; a phone camera opens the results page (`docs/site/r/`) and the page shows the
   record. OK in the Share view switches to the K2 data frame (what `tools/k2_qr.py` imports) and back; the strip names the code
   the press switches to (`Link` / `K2 data`). The caption under the link follows the kind: `Scan: full results` (card),

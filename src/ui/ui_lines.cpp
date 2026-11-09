@@ -58,7 +58,7 @@ LinesVerdict lines_verdict(fastcharge::Protocol p, bool pd_decoded) {
     case Protocol::Svooc:    set("SVOOC", "", Tone::Info, "Super VOOC handshake"); break;
     case Protocol::PdPe:     set("PD PE", "", Tone::Ok, "PD on CC, PE on D+/D-"); break;
     case Protocol::PdMtk:    set("PD MTK", "", Tone::Ok, "PD on CC, MTK on D+/D-"); break;
-    case Protocol::Pd:       set("PD", "", Tone::Ok, "PD contract: Connection"); break;
+    case Protocol::Pd:       set("PD", "", Tone::Ok, "PD: see Who's attached"); break;
     case Protocol::UsbData:  set("USB data", "", Tone::Dim, "A data device idles here"); break;
     case Protocol::PdLikely: set("PD?", "", Tone::Caution, "Load above 5.5 V, no caps"); break;
     }

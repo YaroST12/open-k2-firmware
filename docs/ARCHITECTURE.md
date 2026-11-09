@@ -218,6 +218,8 @@ no `malloc`, `operator new` or `__cxa_*`. A wrong layout leaves the K2 in DFU.
 Settings 5 (`Count` = 6); `Menu` (modal submenus, never in the rotation) = Trigger, Emarker (the cable e-marker/saved-cables list, opened
 from Connection), PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag. `GET_STATE.page` reports
 `kMenuPageBase` (= `Page::Count` = 6) + `Menu` while a submenu is open, so Connection is 16 and Diag 17.
+(The Connection page is shown on screen, in the Tools list and in its title bar, as "Who's attached"; the identifiers
+`Menu::Connection`, `ConnectionPage`, the remote id `tools/connection` and the page name `connection` keep the old name.)
 The Connection tabs have remote-only aliases `kConnTabAlias` = 18 Source, 19 Cable, 20 Sink (SET_PAGE opens
 Connection on that tab; `k2_remote.py` maps pd/source, emarker/cable, identify/sink to them). The offers-versus-request comparison lives in
 `ui_connection_page.cpp`; the pure row model

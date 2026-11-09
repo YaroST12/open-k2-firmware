@@ -181,7 +181,7 @@ The K2 is passive by default, so classification is evidence-based, per arm:
 - Active capture: the sink engine's own `Plan`/`SinkStatus` (`include/k2/pd/pd_sink.hpp:158-170`) —
   pos/mv/ma, EPR mode, hard-reset count, Xiaomi auth state; logged to pdtrace as Sink records
   (`src/drivers/fusb302.cpp:638` `trace_sink()`).
-- Display: Connection page and `pdtrace_view` (`src/pd/pdtrace_view.cpp`, message-name table :23), PD trace
+- Display: Who's attached page and `pdtrace_view` (`src/pd/pdtrace_view.cpp`, message-name table :23), PD trace
   marks `kMarkCaps`/`kMarkAutoReq` (`include/k2/pd/pdtrace.hpp:52-53`), report-card group/range/EPR
   fields (`include/k2/chargertest/report_card.hpp:73-97`), plus `pdtrace::view::Link` for Enter_USB/TBT/DP
   (`include/k2/pd/pdtrace_link.hpp:14-44`).
@@ -253,7 +253,7 @@ charger-to-charger; sink-only; e-marked cable alone; EPR source) capture:
 2. **K2LOG lines**: `[FUSB302] Active CC detected` / `Detach:` (`src/drivers/fusb302.cpp:520, 1788`),
    `[PD] CC scan ...` (:512), `[EMK]`/`[VCONN]` lines (:1229-1330, 1419-1454), `[PD] Rd/Auto-CRC`
    (:380-384).
-3. **Screens/JSON**: Connection page (caps, contract, VDM), Detail page (cable `emarker_kv`), Lines page
+3. **Screens/JSON**: Who's attached page (caps, contract, VDM), Detail page (cable `emarker_kv`), Lines page
    (CC1/CC2/D+/D- mV, `src/ui/ui_pages.cpp:1369`), Diag page (`rx_count`, `device_id`, `active_cc`),
    and for runs the **report card JSON** (`include/k2/chargertest/report_card.hpp:99-140` incl. the v5 cable
    block and EPR levels).

@@ -214,7 +214,7 @@ component value below is therefore **[inferred]** unless tagged.
   cannot be ruled in or out.
 - Which side of the switches the ADC taps is **not established**: all hardware runs had both switches closed
   (mask 3); the mask-0 data of the 2026-11-04 sweep was not retained.
-  Consequence for the UI: the Connection page's port-aware empty-state hints ("top plug" / "via cable") are a
+  Consequence for the UI: the Who's attached page's port-aware empty-state hints ("top plug" / "via cable") are a
   **passive** classification of the Rp level on the two CC lines (`raguard::classify`; Rp >= 2400 mV on both =
   direct receptacle, on one = single-CC cable; Unknown unless passive and VBUS < 1000 mV). They are the likely
   reading of that pattern, not proof of which physical port or side is sensed, and the hint never drives an

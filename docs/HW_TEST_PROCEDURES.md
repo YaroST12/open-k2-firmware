@@ -183,7 +183,7 @@ Status notes: **verified** = seen on the K2 with real log lines or a screenshot 
   `4d396cd` and `71ed6b5` with a 1 A request and no downstream load (2026-11-02);
   rated-current and rated-power operation remain untested.
 - **Prerequisites:** a PD charger with fixed PDOs at the voltages under test, on the **bottom port**; nothing
-  on the top port (no inline load); Black Box cleared; Connection page Source tab shows the PDO list (`R pdos`).
+  on the top port (no inline load); Black Box cleared; Who's attached page Source tab shows the PDO list (`R pdos`).
 - **Steps, on-device:**
   1. Page PD (long `plus` from Home, or `R page pd`): the offers list shows the charger's PDOs.
   2. Tools, open `PD trigger`. OFFER step: `plus`/`minus` pick the PDO, OK next.
@@ -297,7 +297,7 @@ Status notes: **verified** = seen on the K2 with real log lines or a screenshot 
 
 - **Risk:** PASSIVE. **Status:** **not verified** as a dedicated test.
 - **Prerequisites:** a plain Type-C 5 V source (Rp 1.5 A or 3 A, no PD, no D+/D-) on the bottom port.
-- **Steps:** Home and Connection pages; `R state`; `R pdos`; Lines page (`R page lines`). On-device: Connection page empty
+- **Steps:** Home and Who's attached pages; `R state`; `R pdos`; Lines page (`R page lines`). On-device: Who's attached page empty
   state with the checklist, Home shows VBUS about 5 V.
 - **Expected:** `state.pd_valid` false, `num_pdos` 0, `fc` a no-PD classification (`DCP 5V`, `NO QUICK`
   or `USB DATA`; `NO INPUT` only without VBUS). In the Black Box the CC line shows an attach
@@ -675,7 +675,7 @@ No load attached. A session never mixes PD and D+/D- in one attach, so the sessi
 2. Expected per legacy unit: caps are heard but never answered, the charger falls back to legacy within 20 s (one longer retry of 60 s), VBUS stays at 5 V for 500 ms after 2.5 s without PD frames, then the unit's rows run (never with an inline load).
 3. Failure case: a charger that never falls back gets "blocked by PD" on that unit's rows; the run goes on with the next unit. A charger that does not come back after a Detach gets "no PD after re-attach" for a Pd unit.
 4. Full run: `python3 tools/ct_start.py` runs every legacy unit, then the Pd unit, then the low PPS/AVS rows last. Compare K2 uptime with the run duration: it must not reboot.
-5. Cancel during a Detach / Attach ends the run and leaves the sink PD-active (Rd as before). Replug or Rescan if the Connection page shows no caps.
+5. Cancel during a Detach / Attach ends the run and leaves the sink PD-active (Rd as before). Replug or Rescan if the Who's attached page shows no caps.
 Pass: legacy rows get a verdict on a charger that falls back; no step requests above 5 V before the Pd unit; exactly one Request goes out at START (Black Box: one Request id 0, no second one while it is pending).
 
 #### T20b Reading a refused Mi 6 A row (hunt evidence)

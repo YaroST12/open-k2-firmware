@@ -110,7 +110,7 @@ static void test_verdict_pd_decoded() {
     v = lines_verdict(Protocol::Pd, true);
     CHECK_STR(v.main.c_str(), "PD");
     CHECK_EQ(static_cast<int>(v.tone), static_cast<int>(Tone::Ok));
-    CHECK_STR(v.footer.c_str(), "PD contract: Connection");
+    CHECK_STR(v.footer.c_str(), "PD: see Who's attached");
 
     // The other PD-family verdicts follow the same rule.
     for (Protocol p : {Protocol::PdPe, Protocol::PdMtk}) {

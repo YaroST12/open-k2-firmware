@@ -69,7 +69,7 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
  |        |            |            |            PD trigger     pick a PDO or PPS/AVS voltage
  |        |            |            |            Spoof          answer a charger as a saved cable
  |        |            |            |            Cable R        cable resistance
- |        |            |            |            Connection     Source | Cable | Sink
+ |        |            |            |            Who's attached Source | Cable | Sink
  |        |            |            |            |                 +-- Actions: Read cable, Save cable,
  |        |            |            |            |                     Spoof as, Saved cables, Share, Identify
  |        |            |            |            Black Box      PD trace captures, Link view
@@ -95,7 +95,7 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
 ### See what a charger offers over PD
 
 1. Plug the charger in.
-2. Go to **Tools > Connection** and stay on the **Source** tab: every offer (fixed, PPS, AVS, EPR) is listed.
+2. Go to **Tools > Who's attached** and stay on the **Source** tab: every offer (fixed, PPS, AVS, EPR) is listed.
 3. For a one-glance view with the contract, open **Detail**.
 
 ### Run the charger test and share the result
@@ -107,7 +107,7 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
 
 ### Read a cable's e-marker
 
-1. Go to **Tools > Connection > Cable** (the chip in an e-marked cable tells its current and voltage rating).
+1. Go to **Tools > Who's attached > Cable** (the chip in an e-marked cable tells its current and voltage rating).
 2. Plug the cable into the bottom port with **nothing else** connected, press OK, choose **Read cable**.
 3. Choose **Save cable** to keep it. Saved cables are listed under **Saved cables** and exported as JSON on the USB drive.
 
@@ -140,7 +140,7 @@ For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**)
 
 - [Controls in detail](#controls-in-detail)
 - [Top-level pages](#top-level-pages): [Home](#home), [Detail](#detail), [Charger test](#charger-test), [Lines](#lines), [Tools](#tools), [Settings](#settings)
-- [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Connection](#connection), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Diag](#diag)
+- [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Diag](#diag)
 - [Share (QR)](#share-qr)
 - [Settings](#settings-reference): [USB Link](#usb-link), [Autorotate](#autorotate), [Rotate buttons, Screenshot, Smoothing](#other-settings)
 - [USB link modes](#usb-link-modes) and [USB drive contents](#usb-drive-contents)
@@ -268,12 +268,12 @@ The hub. Eight entries; each row shows a readiness tag, or a chevron when it is 
 | PD trigger | PD charger, either port | LOAD, or NO PD (no PD source) |
 | Spoof | act as a saved cable | LOAD (a live sink is inline) |
 | Cable R | charger + cable + load | NO PM (power monitor not found) |
-| Connection | source, cable and device | always ready |
+| Who's attached | source, cable and device | always ready |
 | Black Box | passive PD recorder | always ready |
 | Report cards | saved charger results | always ready |
 | Diag | USB, PD and system state | always ready |
 
-Spoof is a shortcut: it opens Connection on the Cable tab and then the Spoof page.
+Spoof is a shortcut: it opens Who's attached on the Cable tab and then the Spoof page.
 
 ### Settings
 
@@ -353,9 +353,9 @@ Rows: IDLE (the no-load reading), LOAD (the loaded reading) and Port (which side
 
 Buttons: OK = Reset (clear the readings), PLUS = Mode (**Passive** <-> **Kelvin**; Kelvin needs at least 450 mA), MINUS unused.
 
-### Connection
+### Who's attached
 
-![Connection, Source tab](guide/img/connection-source.png)
+![Who's attached, Source tab](guide/img/connection-source.png)
 
 One screen for the three parties on the two ports: **Source** (charger), **Cable** and **Sink** (device). Background: [`SOURCE_SINK_DETECTION.md`](SOURCE_SINK_DETECTION.md).
 
@@ -371,7 +371,7 @@ One screen for the three parties on the two ports: **Source** (charger), **Cable
 | Cable | The e-marker: ratings, VID/PID, USB speed, VDOs |
 | Sink | The attached device's identity and modes |
 
-![Connection, Cable tab](guide/img/connection-cable.png) ![Connection, Sink tab](guide/img/connection-sink.png)
+![Who's attached, Cable tab](guide/img/connection-cable.png) ![Who's attached, Sink tab](guide/img/connection-sink.png)
 
 **Actions pop-up** (Select, Up, Dn, Back):
 
@@ -396,7 +396,7 @@ A greyed item tells you why when chosen: "No caps yet", "No cable read", "Live s
 
 ![Saved cables](guide/img/saved-cables.png)
 
-Reached from Connection > Cable > Actions > Saved cables. A list ("Cable 1 of 12") of your library, which holds up to 140 cables. Labels: Back, Up, **View**, Dn. OK opens the detail:
+Reached from Who's attached > Cable > Actions > Saved cables. A list ("Cable 1 of 12") of your library, which holds up to 140 cables. Labels: Back, Up, **View**, Dn. OK opens the detail:
 
 ![Saved cable detail](guide/img/saved-cable-detail.png)
 

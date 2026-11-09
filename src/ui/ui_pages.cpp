@@ -1274,7 +1274,7 @@ void PdTriggerPage::invalidate() { reset_paint(); }
 // ---------------------------------------------------------------------------------------
 
 const char *ToolsPage::tool_name(int i) {
-    static constexpr const char *kNames[kTools] = {"FC trigger", "PD trigger", "Spoof", "Cable R", "Connection", "Black Box", "Report cards", "Diag"};
+    static constexpr const char *kNames[kTools] = {"FC trigger", "PD trigger", "Spoof", "Cable R", "Who's attached", "Black Box", "Report cards", "Diag"};
     // A Tools row is the 12 px icon, the title and the readiness tag (at most 6 characters, 48 px) at the right: the title gets
     // x28 up to the tag less its gap, 130 px.
     static_assert(all_fit(kNames, kSmallAdvPx, 130), "a Tools entry name is wider than its row");
