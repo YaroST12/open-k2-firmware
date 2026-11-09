@@ -4,6 +4,7 @@
 #include "k2/drivers/lcd.hpp"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/text.hpp"
+#include "k2/ui/ui_viewport.hpp"
 
 namespace k2::home {
 namespace {
@@ -100,9 +101,20 @@ uint16_t bg_at(const Cell &c, int x, int y) {
     return k < r ? c.tint : k == r ? c.line : c.bg;
 }
 
-void compose_row(const Cell &c, int y, int x0, int x1, uint16_t *out) {
+namespace {
+// with_text=false leaves the Text items out: the stretched-rotation pass that owns the cell area
+// paints the background under a glyph, and the glyph itself is painted natively in a second pass.
+void compose_row_impl(const Cell &c, int y, int x0, int x1, uint16_t *out, bool with_text) {
     for (int x = x0; x <= x1; x++) out[x - x0] = bg_at(c, x, y);
-    for (const Item &it : c.items) put_item_row(it, y, x0, x1, out);
+    for (const Item &it : c.items) {
+        if (!with_text && it.kind == ItemKind::Text) continue;
+        put_item_row(it, y, x0, x1, out);
+    }
+}
+}  // namespace
+
+void compose_row(const Cell &c, int y, int x0, int x1, uint16_t *out) {
+    compose_row_impl(c, y, x0, x1, out, true);
 }
 
 void paint(const Cell &c, int x0, int y0, int x1, int y1) {
@@ -112,12 +124,56 @@ void paint(const Cell &c, int x0, int y0, int x1, int y1) {
     if (y1 > c.geom.bottom) y1 = c.geom.bottom;
     if (x0 > x1 || y0 > y1) return;
     uint16_t row[kW];
+    if (!ContentViewport::stretched()) {
+        lcd::stream_begin(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1), static_cast<uint16_t>(y1));
+        for (int y = y0; y <= y1; y++) {
+            compose_row(c, y, x0, x1, row);
+            lcd::stream_pixels({row, static_cast<size_t>(x1 - x0 + 1)});
+        }
+        lcd::stream_end();
+        return;
+    }
+    // A landscape rotation maps the 224x240 logical content onto a 240x224 panel box with a
+    // non-integer, non-square stretch. Fills, the sweep, arrows and the warning own that stretch
+    // (they cover the whole cell), but a glyph must keep its native pixel size in every rotation,
+    // so the text items go in a second pass: the box origin is mapped like gfx_text and the size
+    // never scales (ContentViewport::native_rect + Pause), blended against the same text-less row.
     lcd::stream_begin(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1), static_cast<uint16_t>(y1));
     for (int y = y0; y <= y1; y++) {
-        compose_row(c, y, x0, x1, row);
+        compose_row_impl(c, y, x0, x1, row, false);
         lcd::stream_pixels({row, static_cast<size_t>(x1 - x0 + 1)});
     }
     lcd::stream_end();
+    for (const Item &it : c.items) {
+        if (it.kind != ItemKind::Text || !it.font) continue;
+        const Font &f = *it.font;
+        const int tw = text_width(f, it.text);
+        const int ix0 = it.x > x0 ? it.x : x0;                          // clip the glyph box to the paint rect
+        const int ix1 = it.x + tw - 1 < x1 ? it.x + tw - 1 : x1;
+        const int iy0 = it.y > y0 ? it.y : y0;
+        const int iy1 = it.y + f.height - 1 < y1 ? it.y + f.height - 1 : y1;
+        if (ix0 > ix1 || iy0 > iy1) continue;
+        // Map the FULL glyph box once, then add the clip offset in native pixels: a partial repaint
+        // (e.g. the changed hero digits) must land on the same native advance grid as a full draw.
+        const Rect full = ContentViewport::native_rect(
+            {it.x, it.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)});
+        if (full.w <= 0 || full.h <= 0) continue;
+        int nx = full.x + (ix0 - it.x), ny = full.y + (iy0 - it.y);
+        int nw = ix1 - ix0 + 1, nh = iy1 - iy0 + 1;
+        if (nx + nw > full.x + full.w) nw = full.x + full.w - nx;
+        if (ny + nh > full.y + full.h) nh = full.y + full.h - ny;
+        if (nw <= 0 || nh <= 0) continue;
+        Cell text_only = c;                                             // bg + this item: the same blend as compose_row
+        text_only.items = std::span<const Item>(&it, 1);
+        ContentViewport::Pause unscaled;
+        lcd::stream_begin(static_cast<uint16_t>(nx), static_cast<uint16_t>(ny),
+                          static_cast<uint16_t>(nx + nw - 1), static_cast<uint16_t>(ny + nh - 1));
+        for (int ry = iy0; ry < iy0 + nh; ry++) {
+            compose_row(text_only, ry, ix0, ix0 + nw - 1, row);
+            lcd::stream_pixels({row, static_cast<size_t>(nw)});
+        }
+        lcd::stream_end();
+    }
 }
 
 }  // namespace k2::home

@@ -125,7 +125,10 @@ struct Cell {
 uint16_t bg_at(const Cell &c, int x, int y);
 // Compose pixels x0..x1 of row y into out[0 .. x1-x0] (bg, then every item in order).
 void compose_row(const Cell &c, int y, int x0, int x1, uint16_t *out);
-// Stream the rectangle (inclusive, logical content coordinates) through lcd::.
+// Stream the rectangle (inclusive, logical content coordinates) through lcd::. Through a stretched
+// (landscape) ContentViewport the non-text items keep the stretch, but Text items are re-streamed in
+// a second pass at their native pixel size (native_rect origin + Pause, like gfx_text), so glyphs
+// render at the same pixel size in every rotation.
 void paint(const Cell &c, int x0, int y0, int x1, int y1);
 
 // ---- digit field -----------------------------------------------------------------------------
