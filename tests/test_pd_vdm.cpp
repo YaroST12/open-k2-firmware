@@ -62,14 +62,15 @@ static void test_apple_model() {
     CHECK_STR(apple_model(0x7323), "MacBook Air 13");
     CHECK_STR(apple_model(0x7512), "iPhone 15 Pro");
     CHECK_STR(apple_model(0x0159), "iPhone 17e");
-    CHECK_STR(apple_model(0x751F), "iPhone 18 P/PM");
+    CHECK_STR(apple_model(0x751F), "iPhone 18 Pro");
+    CHECK_STR(apple_model(0x7522), "iPhone 18 PM");
     CHECK_EQ(apple_model(0x7777) == nullptr, true);
     CHECK_EQ(apple_model(0x0000) == nullptr, true);
     CHECK_EQ(apple_model(0xFFFF) == nullptr, true);
-    // The table has 43 entries: 12 iPad, 13 Mac, 18 iPhone.
+    // The table has 44 entries: 12 iPad, 13 Mac, 19 iPhone.
     int n = 0;
     for (unsigned pid = 0; pid <= 0xFFFF; pid++) n += apple_model(std::uint16_t(pid)) != nullptr;
-    CHECK_EQ(n, 43);
+    CHECK_EQ(n, 44);
 }
 
 static void test_identity_apple() {

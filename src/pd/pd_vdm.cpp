@@ -46,7 +46,7 @@ constexpr std::array<Named, 22> kSvids{{
     {0x2B16, "UGREEN"},  {0x5FC9, "UFCS"},
 }};
 
-constexpr std::array<Named, 43> kApple{{
+constexpr std::array<Named, 44> kApple{{
     {0x7108, "iPad Air 4"}, {0x710C, "iPad mini 6"}, {0x710D, "iPad Air 5"}, {0x710E, "iPad Pro 11"},
     {0x7112, "iPad 10"}, {0x7116, "iPad mini A17 Pro"}, {0x0707, "iPad Air"}, {0x711D, "iPad Air"},
     {0x7117, "iPad Pro"}, {0x711E, "iPad Pro"}, {0x711B, "iPad A16"}, {0x711C, "iPad Air 11 M2"},
@@ -59,7 +59,8 @@ constexpr std::array<Named, 43> kApple{{
     {0x7510, "iPhone 15"}, {0x7511, "iPhone 15 Plus"}, {0x7512, "iPhone 15 Pro"},
     {0x7513, "iPhone 15 PM"}, {0x7515, "iPhone 16/16Plus"}, {0x7517, "iPhone 16 P/PM"},
     {0x7518, "iPhone Air"}, {0x7519, "iPhone 17 P/PM"}, {0x751B, "iPhone 17"},
-    {0x0159, "iPhone 17e"}, {0x751C, "iPhone 16e"}, {0x751F, "iPhone 18 P/PM"},
+    {0x0159, "iPhone 17e"}, {0x751C, "iPhone 16e"}, {0x751F, "iPhone 18 Pro"},
+    {0x7522, "iPhone 18 PM"},
 }};
 
 template <std::size_t N>
