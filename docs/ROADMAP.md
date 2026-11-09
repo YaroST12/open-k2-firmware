@@ -34,10 +34,19 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 - Self-powered 6 A by a planned re-attach (2026-11-09, 1e3b67b): PLUS boot on a CUKTECH 120 W C1, the built-in
   CUKTECH 6A identity, START blinks the K2 off once and the run restarts by itself; card "PPS 5-11V 6A: whole range,
   PPS 5-20V 6A: reached 19.9 V". The same build ran a self-powered Apple PD 2.0 charger to the end.
+- Charger-test grid follows the run (2026-11-09, 971cac4 on the Anker splitter): rows listed in execution order,
+  fixed PD rows first and the Mi 6A row after them (screenshot `runs/anker-split/s2.png`, local).
+- One Request in flight and the verified 5 V release (2026-11-09, 3a37f22, Anker splitter re-announcing mid-run):
+  a single PDO 1 Request after the re-announce, VBUS back at 5 V, run "done" instead of "unsafe (5V release
+  failed)" (Black Box `runs/anker-split/bb12.txt`, local).
 
 ## Current bugs
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
+
+Every row below carries **Fix** (what to change, where) and **Validate** (what proves it: host tests, `make gate`,
+and the hardware check). A row leaves this list when its fix is merged and the hardware check has passed; move it to
+"Verified on hardware" with the date and the evidence path.
 
 - **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, open, fix specified below).
   - Evidence: Anker 2-way splitter behind a Baseus 140 W, charger test "PD only", 3a37f22. First list: 5/9/15 V 1.5 A
@@ -89,52 +98,129 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   - Hardware check: the same splitter setup, `python3 tools/ct_start.py --units pd --wait 540` (release any held PD
     contract first with `k2_remote pd release`, or START refuses with "PD hold: release it"). Expect 5/9/15 V pass and
     20 V "withdrawn by source".
-- **Run ends "unsafe (5V release failed)" with 15 V on the port after a mid-run re-announce** (2026-11-09, Anker 2-way
-  splitter behind a Baseus 140 W, charger test "PD only"): the splitter re-split its budget and re-announced a shorter
-  list while the K2 held 15 V; the runner's release then sent a second Request (PDO 1) before the first Request's
-  PS_RDY, and the sink took the first Request's Accept/PS_RDY for the second's: Ready at "5 V" with VBUS at 14.85 V.
-  Fixed in 3d8fa2c (sink) and aaa4756 (runner), hardware check pending (pattern `budget-reannounce-mid-run` in
-  CHARGER_QUIRKS): the sink is the single gate for Requests (a hand-back is held until PS_RDY, Reject or Wait; a
-  re-announce while a hand-back is wanted gets PDO 1 directly), the 5 V release is verified against VBUS
-  (4.75-5.5 V, 1.5 s, two PDO 1 retries, then a sink Hard Reset; none on a self-powered K2, which ends Failed and
-  reports unsafe). Check: splitter plus Baseus 140 W, charger test "PD only", wait for the splitter's re-announce
-  mid-run (Black Box `pd_trace.py dump`): one Request at a time on the wire, VBUS back at 5 V after the release,
-  (a retry, if VBUS did not follow, is a PDO 1 Request about 1.5 s after the release PS_RDY, a Hard Reset the last
-  resort), no "unsafe (5V release failed)" while VBUS is at 5 V.
-
-- **Passive pick on the wrong CC line** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W): the Rd-less scan
-  read CC2 high (floating or the PLUS-key coupling) and attached CC2; the Rd that `pd-reread` / START / a trigger
-  then put there read 0 V, the attach ended in the 500 ms no-Rp detach and CC1 was never tried. Fixed in d615f3e,
-  hardware check pending: the Rd now moves to the other line after 200 ms without an Rp (up to three moves), never
-  inline and never both lines (`rp-after-rd-on-cc1` in CHARGER_QUIRKS). Check: HID-powered K2, plain boot, splitter
-  plus Baseus 140 W, `k2_remote pd-reread` must log `attach CC2`, then `[FUSB302] Rd seek: ... Rd moves to CC1`
-  within ~200 ms, `Active CC detected: CC1`, the Source_Capabilities (5/9/15 V + 20 V) and no detach. A direct
-  charger and the inline sink case must behave as before.
-- **Charger-test spoof list loses selection borders on scroll** (2026-11-09, user report): in the charger test's
-  step 2/3 (cable / spoof choice), scrolling down makes the selection squares lose their bottom or top border line.
+- **Passive pick on the wrong CC line** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W). Fixed in d615f3e,
+  partly verified: on hardware the Rd seek moved CC2 -> CC1 -> CC2 -> CC1 and ended cleanly with no source attached,
+  and the re-read on the splitter got its 4 PDOs; the exact case (passive CC2 pick, Rp only on CC1) has not been caught
+  live since the fix.
+  - Validate: HID-powered K2, plain boot, splitter on the bottom port with the cable plugged so the source sits on CC1;
+    `k2_remote pd-reread` logs `attach CC2`, then `[FUSB302] Rd seek: ... Rd moves to CC1` within ~200 ms, then
+    Source_Capabilities and no detach. A charger plugged straight into the top plug and an inline phone show no
+    `Rd seek` line. Evidence into `runs/<date>-rdseek/`.
+- **Charger-test spoof list loses selection borders on scroll** (2026-11-09, user report): in step 2/3 (cable / spoof
+  choice), scrolling down makes the selection squares lose their bottom or top border line.
+  - Fix: the scrolled list repaints row bodies but not the full selection frame; a row that moves under the viewport
+    edge keeps a clipped frame. Find the list draw in `src/ui/ui_charger_test.cpp` (the Cable stage) and the shared kit
+    list component (`k2-micro-gui` skill, `include/k2/ui/`); on a scroll step repaint every visible row's frame (or the
+    whole list viewport) and clip the frame to the viewport, not the row body.
+  - Validate: host render test that scrolls the list one row at a time to the end and back and checks that each visible
+    row's frame has all four edges (pixel check in the host renderer); hardware: scroll the spoof list on the K2 end to
+    end with `k2_remote press` and `k2_remote screenshot` each step; every frame closed.
 - **Home screen fonts stretched or squeezed in landscape** (2026-11-09, user report): on the Home page in a landscape
-  rotation the text glyphs look stretched or squeezed compared with portrait. Not investigated; the user takes it.
-- **Charger test progress order** (2026-11-09, user report): the order the run tests the algorithms in did not match
-  the order the progress grid listed them in. Fixed in 182eee3 and the commit after it (see `git log`), hardware check
-  pending (the grid kept its own copy of the order: Class B rows after the Class A ones, a custom unit order ignored, the
-  Mi 6A probes one "Turbo 6A" block in front of PD. Now the grid, the Results page and the Steps filter read the rows from
-  the step list alone, which is the order the runner executes, and each Mi 6A probe is a row of its own "Mi 6A" at the
-  place the planner runs it). Open until a run on the K2 shows QC2, QC2B, QC3, QC3B, QC3+, UFCS top to bottom and the Mi
-  6A rows after the PPS row, not ahead of PD. Residual: a PPS row holds the chips of all its APDOs, so a probe the planner
-  runs between two APDOs reads after the whole PPS row.
+  rotation the glyphs look stretched or squeezed compared with portrait.
+  - Fix: compare the glyph path in landscape and portrait (`set_rotation`, the LCD MADCTL / address window in
+    `src/drivers/lcd.cpp`, the font blit in the gfx layer, and Home's landscape layout in `src/ui/ui_home.cpp`). Suspects:
+    a width/height swap in the address window or the blit stride, or a landscape layout that scales a font (a non-integer
+    or non-square scale). Glyphs must render at the same pixel size in every rotation.
+  - Validate: a host test that renders the same string in rotation 0 and 1 and compares the glyph bitmaps (equal after
+    rotating by 90 degrees); hardware screenshots of Home in all four rotations, text the same size and shape.
 - **Planned re-attach counts as a resume** (2026-11-09): the card's "resumed" counter is not masked after the planned
   reboot, so a clean 6 A run reads as resumed once.
+  - Fix: the planned re-attach writes its intent marker (`/rd.rec`, `src/core/rd_comeback.cpp`); the run journal's
+    resume path should read that the reboot was planned and not count it (keep a separate "planned re-attach" flag on
+    the card if it helps the reader).
+  - Validate: host test (journal resume after a planned re-attach: resumed stays 0, after an unplanned VBUS loss: 1);
+    hardware: self-powered CUKTECH 6 A run (PLUS boot, built-in CUKTECH 6A identity) ends with a card showing no resume.
 - **Stale Rd marker** (2026-11-09, accepted for now): a bare unplug after a self-powered run leaves `/rd.rec`; the next
-  plain boot shows Rd for 0.5-1.5 s before it releases the marker. A `.noinit` SRAM canary would close it.
-- **Both Rd for 0.13 ms at SW_RES** (2026-11-09): the FUSB302 soft reset on a pinned boot has a 0.13 ms window with
-  both pull-downs on. Below every debounce; not seen to matter.
+  plain boot shows Rd for 0.5-1.5 s before it releases the marker.
+  - Fix: add a `.noinit` SRAM canary written with the marker; a comeback boot trusts the flash marker only when the
+    canary survived (a short VBUS loss keeps SRAM long enough? if not, bound the marker by a boot counter instead).
+    Measure first whether SRAM survives the comeback's dark period on this board.
+  - Validate: host tests of the decision table; hardware: (a) the CUKTECH 6 A planned re-attach still comes back with
+    Rd from the first instruction, (b) unplug after a self-powered run, wait 10 s, plug into HID only: `k2_remote
+    bootinfo` shows no Rd at any time (SWITCHES0 notes without PDWN bits).
+- **Both Rd for 0.13 ms at SW_RES** (2026-11-09): the FUSB302 soft reset on a pinned boot leaves the chip default
+  SWITCHES0 = 0x03 (both pull-downs) for 0.13 ms until the pin is written again. Below every debounce; not seen to matter.
+  - Fix: on a pinned or comeback boot, skip SW_RES and use PD_RESET only, or write SWITCHES0 in the same I2C burst.
+  - Validate: host fusb302 scan test asserting no SWITCHES0 value with both PDWN bits on a pinned boot;
+    `k2_remote bootinfo` notes on hardware show no 0x03.
 - **Self-powered source loss at the legacy -> PD boundary** (2026-11-09, Apple PD 2.0, step 16/49 on 091e80e): VBUS
-  went away and the run stopped until a replug. The K2 takes no VBUS action there, so the cause is the source's
-  reaction (unproven). Since 1e3b67b a self-powered run comes back by itself; a trigger-frozen Black Box capture
-  (`pd_trace.py captures`) would show the cause.
-- **Flaky host test** (2026-11-09): `tests/test_k2proto.mjs` "screenshot: chunked strips with log noise" failed once
-  in `make gate` and passed on the re-run; timing-sensitive.
-- **Wrong comment** in `tools/k2_qr.py`: "a space can end a part" is false (a base45 part never ends in a space).
+  went away and the run stopped until a replug. The K2 takes no VBUS action there; the cause is unproven. Since 1e3b67b
+  a self-powered run comes back by itself.
+  - Fix: diagnosis first. Arm a trigger-frozen Black Box capture on VBUS loss (`pd_trace.py captures`), re-run the Apple
+    charger self-powered, read what the K2 sent in the last 500 ms before the loss (a Hard Reset? a Request the source
+    disliked? the legacy unit's D+/D- release?).
+  - Validate: the capture names the trigger; then a fix that keeps VBUS up, or a CHARGER_QUIRKS pattern if it is the
+    source's behaviour, and a self-powered Apple run that finishes with no comeback boot in `bootinfo`.
+- **Flaky host tests** (2026-11-09): `tests/test_k2proto.mjs` "screenshot: chunked strips with log noise" and the C++
+  `test_dbg_stream` (fails when its worst pass is over 5 ms on a loaded machine) failed once each in `make gate` and
+  passed on re-runs.
+  - Fix: remove wall-clock limits from functional tests (count work, not time), or move timing checks behind an
+    opt-in flag outside `make gate`.
+  - Validate: `make gate` passes 10 times in a row while the machine runs another build (`make -j` in a second tree).
+- **Wrong comment** in `tools/k2_qr.py`: "a space can end a part" is false (the last base45 character of a part is at
+  most index 32; a space is 36).
+  - Fix: correct the comment. Validate: `make gate`.
+- **Charger-test journal keeps its own row order** (2026-11-09): `charger_journal.hpp` `detail::plan_order` places the
+  6 A hunt rows by its own rule when it rebuilds the steps on a resume: a third copy of the order the grid fix removed.
+  - Fix: rebuild from the planner's step list (the same structure the grid uses since 98e2f39).
+  - Validate: host test resuming a journal mid-PD with Mi 6A rows: resumed step order equals a fresh plan's order.
+- **A PPS row shows a probe after all its APDOs** (2026-11-09, residual of the grid fix): a PPS row holds the chips of
+  every APDO, so a Mi 6A probe the planner runs between APDO 1 and APDO 2 reads after the whole PPS row.
+  - Fix: one grid row per APDO (or a probe chip inside the PPS row at its place).
+  - Validate: host grid test with two APDOs and a probe between them: the grid order equals the executed order.
+
+## Specified work (not started)
+
+Features the user asked for on 2026-11-09, specified for a later implementer. Partial work of a stopped agent is on
+local branch `k2/power-levels-wip` (f8226a4: clock/systick/crm/fusb302/power_monitor edits, unfinished, not built);
+reuse it or start over. The measured ladder is from the lab op on local commit 5d83a3f.
+
+Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
+
+| Level | State | Draw |
+|---|---|---|
+| 0 | full speed (240 MHz), panel on | 0.58 W (~114 mA) |
+| 1 | panel off | 0.38 W |
+| 2 | HCLK /512 on the PLL | 0.076 W |
+| 3 | HICK /512, PLL and HEXT off | 0.053 W |
+| 4 | + peripheral clocks off | 0.051 W |
+| 5 | + FUSB302 POWER=0x01, INA226 power-down | 0.038 W (~7.5 mA) |
+
+- **Idle sleep in the main loop** (largest saving: the 240 MHz core is ~0.3 W of the 0.58 W).
+  - Do: when a main-loop pass finds nothing to do, `WFI` until the next SysTick or IRQ. The FUSB302 INT pin must wake
+    the core (EXTI) so a Source_Capabilities is still answered inside tSenderResponse (24-30 ms); USB servicing and the
+    1 ms button sampling must keep working.
+  - Validate: host tests unchanged; hardware: meter on the HID port shows the full-on draw falling (target: well under
+    0.5 W with the panel on); CUKTECH and Apple charger runs pass as before with Request latency in the Black Box still
+    ~2 ms after the caps; USB screenshots and `k2_remote` keep working.
+- **Backlight brightness** (PB7 `pins::lcd_bl` is a plain GPIO today).
+  - Do: drive PB7 as TMR4_CH2 PWM (verify the pin mux in the repo's AT32 tables) at 20 kHz or more; Settings
+    "Brightness" slider with 5-10 steps, stored in prefs, applied live; full = today's level.
+  - Validate: host tests for the setting; hardware: each step visibly different, no flicker on a phone camera, no
+    audible whine; meter shows draw falling with brightness.
+- **Screen timeout (powersave)**.
+  - Do: Settings "Screen timeout" Off / 15 s / 30 s / 1 min / 5 min. After it, dim to a low level, then backlight off
+    after a further period (document the choice). Any button wakes the screen and that press does nothing else. A running
+    charger test only dims, never turns off.
+  - Validate: host tests of the timeout state machine (dim, off, wake, the wake press swallowed, a running test never
+    off); hardware: each timeout value observed, START is never pressed by a wake press.
+- **Low-power level API and lab op** (from the experiment's ladder).
+  - Do: a `k2::lowpower` module with `enter(Level)` / `leave()` that restores clocks, peripheral clocks, FUSB302 POWER,
+    INA226 config, LCD and USB; `k2_remote power-level N [--hold S]` and `--steps` (the old 6 x 6 s ladder for a meter).
+    Document per level what still works (USB, I2C, PD response, measurement, ADC, buttons, display, flash writes,
+    logging), each marked "derived from code" or "measured". Candidate uses for the user to pick from: power-bank
+    auto-off threshold tests (the K2's own draw no longer keeps a bank awake), duty-cycled long logging, a standby
+    state. Not a use: riding through a VBUS dark (hold-up was infeasible even at level 5; the comeback marker handles
+    VBUS loss by rebooting).
+  - Validate: `make gate`; hardware: each level entered and left 3 times with the meter reading the table above
+    (+-10 %), USB and the display back after every `leave()`, PD contract still held at levels where PD is claimed to work.
+- **CPU frequency plan** (no implementation yet).
+  - Do: a costed plan in the docs. Facts to confirm: PLL input 4 MHz x up to 64, AHB /1 to /512; USB needs exactly
+    48 MHz (today PLL 240 MHz / 5) or the HICK 48 MHz with ACC (`crm.hpp` mentions the gates), which would free SYSCLK.
+    List the compile-time 240 MHz users that a runtime change must convert (`systick::kSysclkHz`: SysTick reload, the
+    bit-banged I2C timing, the D+/D- DWT edge timing, LCD delays, flash wait states).
+  - Validate: the plan names every `kSysclkHz` user (a `git grep kSysclkHz` count matches the list) and the USB clock
+    option chosen, with the draw at 48/72/96/120 MHz to be measured when implemented.
 
 ## Not verified on hardware
 
