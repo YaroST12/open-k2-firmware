@@ -19,6 +19,7 @@ constexpr transcap::Reason capture_reason(Reason r) {
     case Reason::Lost: return transcap::Reason::Detach;
     case Reason::Voltage: return transcap::Reason::Voltage;
     case Reason::NoReattach:                                       // no PD after the re-attach: the cut's trace is the evidence
+    case Reason::WrongVoltage:                                     // the 5 V contract held at the wrong voltage: the PS_RDY at the wrong level is the evidence
     case Reason::BlockedByPd: return transcap::Reason::Other;      // a Legacy attach that never fell back: the PD chatter is the evidence
     case Reason::NoQc3Plus:                                        // a skip, not a failure: no capture
     case Reason::ClassAOnly:                                       // a skip, not a failure: no capture

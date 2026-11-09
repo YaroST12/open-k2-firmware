@@ -296,7 +296,7 @@ struct Fake final : ct::Env {
     int attach_wrong_mv = 0; uint32_t wrong_decay_rel = 0, wrong_decay_at = 0; int wrong_decay_mv = 0;
     // pattern slow-rp-wake: the source's Rp drops rp_drop_rel ms after the attach's Rd went on (caps invalid, no
     // active CC, VBUS dark) and its standby pull-up answers with fresh caps rp_back_rel ms after the Rd.
-    uint32_t rp_drop_rel = 0, rp_back_rel = 0; bool rp_dropped = false;
+    uint32_t rp_drop_rel = 0, rp_back_rel = 0; bool rp_dropped = false, rp_done = false;
     ct::Mode attach_mode = ct::Mode::Pd;
     int fc_at_off = -1, pd_at_off = -1;
     pd::SourceCaps saved;   // the list the charger announces again after an attach (a non-PD source has none)
@@ -401,12 +401,12 @@ struct Fake final : ct::Env {
             }
             if (contract_at && in.now >= contract_at) { contract_at = 0; in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok; in.pd.mv = 5000; in.pd.pos = 1; in.pd.held = false; }
             if (wrong_decay_at && in.now >= wrong_decay_at) { wrong_decay_at = 0; in.vbus_mv = wrong_decay_mv; }
-            if (rp_drop_rel && rd_on && back_done && !rp_dropped && in.now - rd_on_at >= rp_drop_rel) {
+            if (rp_drop_rel && rd_on && back_done && !rp_dropped && !rp_done && in.now - rd_on_at >= rp_drop_rel) {
                 rp_dropped = true; caps.valid = false; caps.active_cc = 0; in.vbus_mv = 0;
                 in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.mv = 5000;
             }
-            if (rp_back_rel && rp_dropped && in.now - rd_on_at >= rp_back_rel) {
-                rp_dropped = false; if (saved.valid) { caps = saved; caps.valid = true; caps.active_cc = 1; }
+            if (rp_back_rel && rp_dropped && !rp_done && in.now - rd_on_at >= rp_back_rel) {
+                rp_dropped = false; rp_done = true; if (saved.valid) { caps = saved; caps.valid = true; caps.active_cc = 1; }
                 in.vbus_mv = 5000; in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok;
                 in.pd.mv = 5000; in.pd.pos = 1; in.pd.held = false; ++in.session;
             }
@@ -3410,11 +3410,12 @@ static void test_no_request_into_an_invalid_list_after_a_recovered_cut() {
     CHECK_EQ(no_caps, 0u);
 }
 static void test_every_reason_has_a_name() {
-    for (unsigned v = 1; v <= unsigned(ct::Reason::Withdrawn); ++v) {   // 0 = None, shown as nothing
+    for (unsigned v = 1; v <= unsigned(ct::Reason::WrongVoltage); ++v) {   // 0 = None, shown as nothing
         const char* n = ct::name(static_cast<ct::Reason>(v));
         CHECK_EQ(n != nullptr && n[0] != 0, true);
     }
     CHECK_STR(ct::name(ct::Reason::Withdrawn), "withdrawn by source");
+    CHECK_STR(ct::name(ct::Reason::WrongVoltage), "wrong voltage on 5V contract");
 }
 static unsigned count_reason(const ct::Runner& r, ct::Group g, ct::Reason why) {
     unsigned n = 0;
@@ -3426,6 +3427,7 @@ static void test_every_failure_kind_has_a_capture_reason() {
     CHECK_EQ(int(ct::capture_reason(R::ShutOff)), int(T::ShutOff));
     CHECK_EQ(int(ct::capture_reason(R::CutRecovered)), int(T::ShutOff));
     CHECK_EQ(int(ct::capture_reason(R::NoReattach)), int(T::Other));   // the C135 3.3 V row: kept nothing before
+    CHECK_EQ(int(ct::capture_reason(R::WrongVoltage)), int(T::Other));   // the 5 V contract held at the wrong voltage: the PS_RDY is the evidence
     CHECK_EQ(int(ct::capture_reason(R::Timeout)), int(T::Timeout));
     CHECK_EQ(int(ct::capture_reason(R::HardReset)), int(T::HardReset));
     CHECK_EQ(int(ct::capture_reason(R::Request)), int(T::NoPsRdy));
@@ -4149,9 +4151,9 @@ static void test_pd_attach_without_vbus_or_caps_is_no_reattach() {
         CHECK_EQ(f.rd_on, true);
     }
 }
-// Reason::WrongVoltage is not in the enum yet (the fix commit adds it as #43, after Withdrawn); these tests
-// pin the wire value so they compile and fail before the fix.
-constexpr ct::Reason kWrongVoltage = static_cast<ct::Reason>(43);
+// Reason::WrongVoltage (#43, after Withdrawn): a 5 V contract (PS_RDY at PDO 1) held at the wrong voltage
+// on VBUS when kAttachContractMs runs out (pattern shared-bus-split).
+constexpr ct::Reason kWrongVoltage = ct::Reason::WrongVoltage;
 // pattern shared-bus-split (2026-11-09, runs/2026-11-09-splitter): the attach's 5 V contract is granted
 // (PS_RDY at PDO 1) but the source holds 7.6 V on VBUS the whole time (the other output's PPS level),
 // decaying to 1.63 V before the timeout. When kAttachContractMs runs out the unit's rows must fail with

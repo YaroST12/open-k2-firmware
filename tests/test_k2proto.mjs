@@ -306,7 +306,7 @@ test("charger-test schema2: every EPR skip names its reason (mirrors ct::explana
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
   for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x80],
-                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 43]]) {
+                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 44]]) {   // 44 = one past the last reason (43 = WrongVoltage)
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }

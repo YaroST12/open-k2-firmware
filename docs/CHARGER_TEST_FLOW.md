@@ -73,6 +73,14 @@ another. The runner does this:
 - The shared session is kept only while the line stays PD-quiet at 5 V. If PD traffic returns, or VBUS leaves 5 V,
   between two Legacy units, the runner falls back to a detach plus a fresh PD-silent attach: a unit never runs in a
   session the charger may have changed.
+- A **Pd attach wait** is bounded: after the caps arrive, the 5 V contract (the engine's Request for PDO 1, Accept +
+  PS_RDY) has `kAttachContractMs` (3000 ms). When it runs out, the cases are told apart: no caps at all means the
+  unit's rows fail with `Reason::NoReattach` ("no PD after re-attach"), but a granted PDO 1 contract (PS_RDY seen)
+  with VBUS outside vSafe5V fails with `Reason::WrongVoltage` ("wrong voltage on 5V contract", reason 43, pattern
+  `shared-bus-split` in `docs/CHARGER_QUIRKS.md`) and the row's measured value is the HIGHEST VBUS seen during the
+  wait, not the reading at the timeout. A source-side Rp drop during the wait (caps gone, no active CC) restarts the
+  wait once (`slow-rp-wake`: the standby pull-up answers ~1.1-1.7 s after a steady Rd) instead of letting the timer
+  run on.
 
 ## What a legacy 5 V row proves
 

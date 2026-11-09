@@ -51,7 +51,7 @@ var K2Card = (function () {
     "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
     "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
     "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source"];
+    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract"];
   var CAPPED = "capped below target";
   var STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
     "UNSAFE: unplug source", "Detach charger", "Initializing..."];

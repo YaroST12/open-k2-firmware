@@ -46,8 +46,10 @@ enum class Reason : uint8_t {
     PdOnly,              // the source switched its output off on a PD-silent attach and stays off (pattern silent-sink-output-off): a skip, not a failure
     Capped,              // a PPS/AVS level the source accepted but whose output stopped at a steady ceiling below it (pattern output-capped-below-advertised): a fail
                          // for the compliance verdict, measured_mv = the ceiling; the levels after it still run (no chain skip)
-    Withdrawn            // pattern budget-reannounce-mid-run: the source re-announced its list mid-run without this row's offer: the row is skipped as
+    Withdrawn,            // pattern budget-reannounce-mid-run: the source re-announced its list mid-run without this row's offer: the row is skipped as
                          // "withdrawn by source", the unit goes on against the new list (a PDO that comes back later revives the row)
+    WrongVoltage          // pattern shared-bus-split: the attach's 5 V contract (PS_RDY at PDO 1) was granted but the source holds another voltage on
+                         // VBUS (outside vSafe5V) when kAttachContractMs runs out: a fail, measured_mv = the highest VBUS seen during the wait
 };
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
@@ -106,7 +108,9 @@ inline constexpr uint32_t kLegacyFirstWaitMs = 1000, kLegacyGapMs = 500, kAfcPre
 // go, a USB-A port, gets kDetachQuickMs from the second unit on).
 inline constexpr uint32_t kDetachDarkMs = 10000, kDetachDarkHoldMs = 300, kDetachQuickMs = 1500;
 // Pd attach: kAttachContractMs for the 5 V contract after the caps (pd::VbusWait covers VBUS + caps). Nothing back in time: the
-// unit's rows fail with Reason::NoReattach.
+// unit's rows fail with Reason::NoReattach; a granted PDO 1 contract (PS_RDY seen) with VBUS outside vSafe5V fails with
+// Reason::WrongVoltage instead (pattern shared-bus-split), measured_mv = the highest VBUS of the wait. A source-side Rp drop
+// during the wait restarts the wait once (pattern slow-rp-wake: the standby pull-up answers ~1.1-1.7 s after a steady Rd).
 inline constexpr uint32_t kAttachContractMs = 3000;
 // A non-PD source that browned out gets this long (from the drop) to be back at vSafe5V before the run ends.
 inline constexpr uint32_t kRecoverMs = 10000;
@@ -527,7 +531,7 @@ private:
     void begin_detach(Input);
     void poll_detach(Input);
     void poll_attach(Input, const pd::SourceCaps&, uint32_t gap);
-    void fail_unit(Input, const pd::SourceCaps&);
+    void fail_unit(Input, const pd::SourceCaps&, Reason = Reason::NoReattach, int measured_mv = -1);
     void end_legacy();
     void end_probe();
     void end_sag_recovery(const Input& in);
@@ -619,6 +623,8 @@ private:
     uint32_t unit_ms_ = 0, att_ms_ = 0;   // the unit's detach began; this attach phase began
     uint32_t pre_ms_ = 0;                 // extra quiet before the unit's first handshake, on top of the 500 ms baseline settle
     enum class Att : uint8_t { Caps, Contract } att_ = Att::Caps;
+    bool rp_restart_ = false;   // the attach wait was restarted once after a source-side Rp drop (pattern slow-rp-wake)
+    int attach_max_mv_ = 0;     // the highest VBUS seen during the current attach wait (WrongVoltage records this, not the timeout reading)
     enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ = Probe::Off;
     uint32_t probe_ms_ = 0;
     Options opts_{};
