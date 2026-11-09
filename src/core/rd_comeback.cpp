@@ -92,6 +92,7 @@ bootmode::Mode begin(bootmode::Mode keys, bool warm) {
 
 bool pending() { return g_pending; }
 const Intent& found() { return g_found; }
+bool planned_reattach() { return rdintent::planned_reattach(g_found.kind); }
 
 void early() {
     if (g_pending && g_found.cable.kind != ctcable::Kind::Off) fusb302::self_power_early_ra();

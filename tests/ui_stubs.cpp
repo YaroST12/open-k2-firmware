@@ -192,6 +192,7 @@ void sink_cc(std::int32_t, std::int32_t) {}
 namespace rdcomeback {
 bool pending() { return false; }
 const rdintent::Intent& found() { return g_stub.rdc_found; }
+bool planned_reattach() { return rdintent::planned_reattach(g_stub.rdc_found.kind); }
 void set_run_cable(ctcable::Choice cable) { g_stub.rdc_run_cable = cable; g_stub.rdc_run_sets++; }
 void drop_identity() { g_stub.rdc_drops++; }
 bool begin_reattach(ctcable::Choice cable) {

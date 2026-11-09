@@ -555,6 +555,21 @@ static void test_resumed_count_roundtrip() {
     CHECK_EQ(d.resumed, 0u);
 }
 
+// The planned re-attach flag (cable flags bit 7): rides the same byte with no format bump, round-trips, and never forks
+// the card (same_results does not compare the cable flag byte, like the resume count).
+static void test_reattach_flag_roundtrip() {
+    rc::Card c;
+    c.cable = {42, 0x2B01, 0x0001, 50000, 6000, 2, rc::kCableSpoofed | rc::kCableReattach};
+    uint8_t rec[rc::kMaxRecord]; rc::Card d;
+    rc::encode_card(rec, c);
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ((d.cable.flags & rc::kCableReattach) != 0, true);
+    CHECK_EQ(d.cable == c.cable, 1);
+    CHECK_EQ(d == c, 1);
+    c.cable.flags &= ~rc::kCableReattach;
+    CHECK_EQ(rc::same_results(c, d), 1);   // the flag byte is bookkeeping, never a new card
+}
+
 // A record written before format 1 (byte 33 = 0): group = verdict/reason, detail, max in mV. It decodes to the same group,
 // with the max rounded to 100 mV and no failing target (the old record never kept one).
 static void test_legacy_group_record_migrates() {
@@ -1098,7 +1113,7 @@ int main() {
     test_qc3plus_without_response_is_a_skipped_group();
     test_class_b_on_class_a_is_a_skip_not_a_fail();
     test_group_codec_edges();
-    test_v5_cable_roundtrip_and_migration(); test_resumed_count_roundtrip();
+    test_v5_cable_roundtrip_and_migration(); test_resumed_count_roundtrip(); test_reattach_flag_roundtrip();
     test_currents_survive_the_record();
     test_legacy_group_record_migrates();
     test_handover_fields();

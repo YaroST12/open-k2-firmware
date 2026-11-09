@@ -104,6 +104,12 @@ static void test_v5_sample_adds_the_cable_object() {
     n = rc::render_json(c, buf);
     CHECK_STR(std::string(buf.data(), n).c_str(),
               (v4 + ",\"cable\":{\"seq\":42,\"vid\":11009,\"pid\":1,\"max_mv\":50000,\"max_ma\":5000,\"kind\":2,\"observed\":1,\"spoofed\":1,\"guard\":\"cable\",\"guard_bypassed\":1}}").c_str());
+    // The planned re-attach (bit 7) is one more cable key, only when set: every other card renders as before.
+    c.cable.flags |= rc::kCableReattach;
+    n = rc::render_json(c, buf);
+    CHECK_STR(std::string(buf.data(), n).c_str(),
+              (v4 + ",\"cable\":{\"seq\":42,\"vid\":11009,\"pid\":1,\"max_mv\":50000,\"max_ma\":5000,\"kind\":2,\"observed\":1,\"spoofed\":1,\"guard\":\"cable\",\"guard_bypassed\":1,\"reattach\":1}}").c_str());
+    c.cable.flags &= ~rc::kCableReattach;
     // The OPPO SVID note is a top-level key after the cable, only when the source listed it.
     c.src_flags = rc::kSrcOppoSvid;
     n = rc::render_json(c, buf);

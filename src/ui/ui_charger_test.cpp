@@ -458,8 +458,11 @@ bool ChargerTestSession::boot_load(bool cancel) {
         }
         options_ = r.options;
         journal_active_ = true; journal_closed_ = false;   // the interrupted-step marks are journaled too
+        // A comeback boot whose marker said Reattach (the planned re-attach) resumes without counting a resume.
+        const bool planned = rdcomeback::planned_reattach();
         runner_.restore(r.options, r.evidence, r.run_id, std::span<const ct::Step>(r.steps.data(), r.count),
-                        r.phase, r.phase_index, r.resumed, r.attempt_index, r.attempts);
+                        r.phase, r.phase_index, r.resumed, r.attempt_index, r.attempts, planned);
+        if (planned) K2LOG("[TEST] planned re-attach boot: the resume is not counted as a power loss\n");
         resume_pending_ = runner_.resumable() && !cancel;
         auto_resume_ = resume_pending_;   // every interrupted run resumes by itself once VBUS has been steady (BACK at boot cancels)
         self_run_ = r.has_meta && r.meta.unattended;   // unattended is what self_powered() was when the run started
@@ -627,6 +630,7 @@ void ChargerTestSession::save_card() {
         cable.flags |= uint8_t(((run_guard_ & 0x7F) << report_card::kCableGuardShift) & report_card::kCableGuardMask);
         if (run_guard_ & 0x80) cable.flags |= report_card::kCableGuardBypassed;
     }
+    if (runner_.reattach_count()) cable.flags |= report_card::kCableReattach;   // the run went through the planned re-attach (its reboot is not a resume)
     // A fresh card per run (the fields build_into does not set: name, card_no, runs, ...); the NSDMI values
     // (format, times) come back through the default constructor.
     card_ = report_card::Card{};

@@ -418,6 +418,7 @@
   "415": "[SURVEY] wire started mask=0x%02X, %u PDOs held\n",
   "416": "[RDI] record %s pin=%u ignored: a USB host powers this boot (aux rail up), plain boot stays passive\n",
   "417": "[PD] Sink downstream (inline=%d far request=%d): Rd off, no Request, no VDM answers\n",
-  "418": "[TEST] re-plan: %u rows follow, %u withdrawn, %u back\n"
+  "418": "[TEST] re-plan: %u rows follow, %u withdrawn, %u back\n",
+  "419": "[TEST] planned re-attach boot: the resume is not counted as a power loss\n"
  }
 }

@@ -150,6 +150,14 @@ static void test_text() {
     CHECK_STR(t.view().data(), "run 99 boot 99999 self r16");
     CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
     c.runs = 3; c.boots = 4; c.resumed = 0; c.cable.flags = 0;
+    c.cable.flags = rc::kCableReattach;   // the planned re-attach says so in place of the firmware, without a resume count
+    t.clear(); cards_stats_text(c, t);
+    CHECK_STR(t.view().data(), "run 3 boot 4 re-attach");
+    CHECK_EQ(t.view().size() <= static_cast<size_t>(kFooterCells), 1);
+    c.runs = 99; c.boots = 99999;   // the words shorten before anything is cut
+    t.clear(); cards_stats_text(c, t);
+    CHECK_STR(t.view().data(), "run 99 boot 99999 re-attach");
+    c.runs = 3; c.boots = 4; c.cable.flags = 0;
 
     // A card the charger was tested on again with the same result: how often and when it last was, the fullest form that fits.
     c.times = 3; c.last_boots = 9;

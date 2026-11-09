@@ -12,7 +12,7 @@
 //   /jr/oem.sec     vendor modes (VOOC, SuperVOOC, vivo) and every 6 A hunt row
 //   /jr/ext.sec     UFCS and anything else
 //   /jr/ph.rec      Phase   (written BEFORE an above 5 V request and before the handover)
-//   /jr/rs.rec      Resume  (a resumed run, counted)
+//   /jr/rs.rec      Resume  (a resumed run, counted; the planned re-attach's reboot is not written as a resume)
 //   /jr/mt.rec      Meta    (unit order, unattended flag, cable identity of the run)
 //   /jr/at.rec      Attempt (which unit lost power how many times)
 //   /jr/fin.rec     Finish  (the run ended: Done, Stopped or abandoned)

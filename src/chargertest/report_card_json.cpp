@@ -86,6 +86,7 @@ std::size_t render_json(const Card& c, std::span<char> out) {
         if (const unsigned g = (cb.flags & kCableGuardMask) >> kCableGuardShift; g && g <= 4)
             t.put(",\"guard\":\"%s\"", raguard::name(raguard::Topology(g - 1)));
         if (cb.flags & kCableGuardBypassed) t.put(",\"guard_bypassed\":1");
+        if (cb.flags & kCableReattach) t.put(",\"reattach\":1");   // only then: every other card renders as before
         t.put("}");
         if (c.src_flags & kSrcOppoSvid) t.put(",\"oppo_svid\":1");   // only then: every other card renders as before
         if (const unsigned ma = scp_cap_ma(c)) t.put(",\"scp_ma\":%u", ma);   // the adapter's SCP current limit, when it was read

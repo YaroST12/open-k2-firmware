@@ -23,6 +23,9 @@ bootmode::Mode begin(bootmode::Mode keys, bool warm);
 bool pending();
 // The recorded intent (None unless pending() or a verdict has run).
 const rdintent::Intent& found();
+// This boot came back from the charger test's planned re-attach (the marker said Reattach, rdintent::planned_reattach):
+// a run resumed on this boot is that re-attach, not a power loss, and the run journal does not count it as a resume.
+bool planned_reattach();
 
 // Right after self_power_early() on a comeback boot: PC13 high (the Ra on CC1) in the Rd's first moments, when an identity was
 // recorded, so the charger's cable look at its fresh attach finds it.

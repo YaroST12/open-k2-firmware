@@ -30,7 +30,7 @@
 //  162 cable x 16 (format v5 only): u32 seq (e-marker library entry used, 0 = none/read-only cable), u16 vid, u16 pid,
 //      u16 max_mv, u16 max_ma (the cable limits the run used), u8 kind (a built-in cable id 1..4, 0 = saved clone, 0xFF = a real cable),
 //      u8 flags (bit0 observed via SOP'/SOP'', bit1 spoofed, bit2 self-powered run, bits 3..5 Ra guard reading + 1,
-//      bit6 started anyway against a refusing guard; older cards hold 0 in bits 3..6), u8 resumed (how many times the run lost power and went on; older
+//      bit6 started anyway against a refusing guard, bit7 the planned re-attach; older cards hold 0 in bits 3..7), u8 resumed (how many times the run lost power and went on; older
 //      cards hold 0 here), u8 src_flags (bit0 the source listed OPPO's SVID, bits 1..7 the SCP current limit the adapter reported in 50 mA units; older cards hold 0). Older formats decode with an empty cable.
 //  178 ufcs[4] x 3 (format v6 only): a u24 per UFCS mode of the charger's Output_Capabilities, planner order (lowest minimum first), unused
 //      slots all zero: bits 0..7 lo (100 mV, saturates at 25.5 V), bits 8..16 hi (100 mV), bits 17..23 the mode's maximum current in 50 mA
@@ -125,7 +125,8 @@ struct Cable {
     uint16_t max_mv = 0, max_ma = 0;   // limits the run used (mV, mA)
     uint8_t kind = 0;          // a built-in cable's emrec::builtin_info id (1 EPR 50V, 2 CUKTECH 6A, 4 OnePlus; 3 was "OnePlus mag", retired and recorded as 4), 0 = saved clone, 0xFF = real cable
     uint8_t flags = 0;         // bit0 observed, bit1 spoofed, bit2 the run was self-powered (the charger under test powered the K2),
-                               // bits 3..5 the Ra guard's reading + 1 (0 = not judged), bit6 started anyway against a refusing reading
+                               // bits 3..5 the Ra guard's reading + 1 (0 = not judged), bit6 started anyway against a refusing reading,
+                               // bit7 the run went through the charger test's planned re-attach (that reboot is not a resume)
     bool operator==(const Cable&) const = default;
 };
 // Card::src_flags (cable block byte 15): the source listed OPPO's SVID 0x22D9 in its Discover SVIDs answer. A note only: the K2 sends
@@ -135,6 +136,9 @@ inline constexpr uint8_t kCableObserved = 1, kCableSpoofed = 2, kCableSelfPowere
 // The Ra guard's reading when the run's identity was started (bits 3..5 hold raguard::Topology + 1, 0 = not judged, as
 // every card before this field) and bit 6: the user started anyway against a refusing reading ("Cable on plug" warning).
 inline constexpr uint8_t kCableGuardShift = 3, kCableGuardMask = 7 << kCableGuardShift, kCableGuardBypassed = 0x40;
+// Bit 7: the run went through the planned re-attach (the K2 blinked off once so the charger reads the cable at a real
+// attach). Its reboot is not counted in Card::resumed.
+inline constexpr uint8_t kCableReattach = 0x80;
 
 // One UFCS mode of the charger's Output_Capabilities (v6): the voltage range and the mode's current limit. hi_dv == 0 marks an
 // unused slot. Older cards hold no modes and show the UFCS volts alone.

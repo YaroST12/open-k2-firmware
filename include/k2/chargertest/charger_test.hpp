@@ -450,14 +450,17 @@ public:
     // for 500 ms, then the usual guards). A Pd unit goes on in the live attach, a Legacy unit does its normal detach and
     // PD-silent attach (the same sequence as in an uninterrupted run), never above 5 V by itself, and the units after it
     // attach as usual. A run resumed kMaxResumes times is not resumable any more.
+    // `planned_reattach` = this boot's /rd.rec marker said Reattach (the charger test's planned re-attach rebooted the
+    // K2): the resume() this boot performs is that re-attach, not a power loss, and is not counted in resumed_.
     void restore(const Options&, const Evidence&, uint32_t run_id, std::span<const Step>, Phase, size_t phase_index, uint8_t resumed,
-                 size_t attempt_unit = 0, uint8_t attempts = 0);
+                 size_t attempt_unit = 0, uint8_t attempts = 0, bool planned_reattach = false);
     bool resumable() const;
     // A self-powered run that lost VBUS: Stopped, every unfinished row still Pending (nothing skipped, no verdict), resumable
     // from memory when the power comes back, and from the journal after a reboot. The page must not close the journal then.
     bool suspended() const { return suspended_; }
     Reason resume(Input, bool confirmed);
     uint8_t resumed() const { return resumed_; }
+    uint8_t reattach_count() const { return reattach_; }   // how many times the run went through the planned re-attach
     bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach; }
     // The page scans for the source's Rp while a unit attaches (the main loop's own scan is too slow for a fast announcer).
     bool attaching() const { return state_ == State::Attach; }
@@ -585,6 +588,8 @@ private:
     uint32_t release_ms_ = 0, phase_ms_ = 0, stable_ms_ = 0, last_ms_ = 0, session_ = 0, resets_ = 0;
     uint32_t run_id_ = 0, revision_ = 0;
     uint8_t resumed_ = 0;
+    uint8_t reattach_ = 0;        // planned re-attaches this run went through (not counted in resumed_)
+    bool reattach_planned_ = false;   // latched from restore(): this boot came back from the planned re-attach
     bool loaded_ = false;
     bool selfpwr_ = false;     // latched from Input::self_powered at start()/resume(): fusb302::self_powered() flips with a detach
     bool suspended_ = false;   // a self-powered VBUS loss ended the run without a verdict (see suspended())

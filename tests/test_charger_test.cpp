@@ -3845,13 +3845,13 @@ struct Boot {
     explicit Boot(k2test::RamDisk& flash) : fl(flash), js(flash), r(f), j(js.j) {
         j.replay(rep);
         f.jr = &j; f.rn = &r;
-        // rdcomeback::begin() reads the same record on the device; the fix passes this flag to restore() as its last argument.
+        // rdcomeback::begin() reads the same record on the device; restore() takes the flag as its last argument.
         planned_ = rdintent::planned_reattach(rdintent::load(js.fs).kind);
         if (rep.found && rep.unfinished) {
             j.adopt(rep);   // the journal mirrors the run read back: later changes are written as changes to its section files
             f.jopts = rep.options;
             r.restore(rep.options, rep.evidence, rep.run_id, {rep.steps.data(), rep.count}, rep.phase, rep.phase_index, rep.resumed,
-                      rep.attempt_index, rep.attempts);
+                      rep.attempt_index, rep.attempts, planned_);
         }
     }
 };
@@ -4430,15 +4430,15 @@ static void test_resume_after_planned_reattach_is_not_counted() {
     CHECK_EQ(b.planned_, true);
     CHECK_EQ(b.rep.unfinished, true); CHECK_EQ(b.r.resumable(), true); CHECK_EQ(b.r.resumed(), 0);
     CHECK_EQ(int(b.r.resume(b.f.in, true)), int(ct::Reason::None));
-    CHECK_EQ(b.r.resumed(), 0);   // RED until the fix: today the planned re-attach is counted as a resume
+    CHECK_EQ(b.r.resumed(), 0);   // the planned re-attach is not counted as a resume
     b.j.resumed(b.r.resumed());   // what the UI journals right after a resume
     const auto snap = remote::charger_test_snapshot(b.r);
-    CHECK_EQ(snap.resumed, 0);    // RED until the fix: the wire carries 1 today
+    CHECK_EQ(snap.resumed, 0);    // the wire carries no resume
     // Power goes again before the run ends, this time unplanned: by now the follower has rewritten the marker as Session
     // (the contract was Ready), so the next boot is not planned and the loss counts.
     CHECK_EQ(rdintent::save(js.fs, rdintent::Intent{rdintent::IntentKind::Session, 2, {}}), true);
     Boot c(fl);
-    CHECK_EQ(c.planned_, false); CHECK_EQ(c.rep.resumed, 0);   // RED until the fix: the journal replays 1 today
+    CHECK_EQ(c.planned_, false); CHECK_EQ(c.rep.resumed, 0);   // the journal replays the planned re-attach as no resume
     CHECK_EQ(c.r.resumable(), true);
     CHECK_EQ(int(c.r.resume(c.f.in, true)), int(ct::Reason::None));
     CHECK_EQ(c.r.resumed(), 1);   // the unplanned VBUS loss counts

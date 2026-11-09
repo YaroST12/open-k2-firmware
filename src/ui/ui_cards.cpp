@@ -311,6 +311,7 @@ void cards_stats_text(const rc::Card &c, StrBuf<32> &out) {
         tail.clear();
         if (self) tail.put(form == 0 ? " self-powered" : form == 1 ? " self-pwr" : " self");
         if (c.resumed) tail.put(!self && form == 0 ? " resumed " : " r").put_u32(c.resumed);
+        else if (c.cable.flags & rc::kCableReattach) tail.put(form == 0 ? " re-attach" : form == 1 ? " reatt" : " re");   // the planned re-attach, not a resume
         else if (!self && c.fw && form == 0) tail.put(" fw ").put_hex(c.fw, 8);
         if (tail.view().size() <= room) { out.put(tail.view()); break; }
     }

@@ -1121,7 +1121,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
                  (!caps.valid || (!caps.epr && epr_capable_caps(caps))) ? 3 : 0;
     pd_skips_recorded_ = !late_pd_;
     for (size_t n = 0; n < count_; ++n) if (steps_[n].verdict == Verdict::Skip && (mode(unit_of(steps_[n])) != Mode::Pd || pd_skips_recorded_)) env_.record(steps_[n]);
-    resumed_ = 0; loaded_ = false; plan_frozen_ = false;
+    resumed_ = 0; reattach_ = 0; reattach_planned_ = false; loaded_ = false; plan_frozen_ = false;
     selfpwr_ = in.self_powered; suspended_ = adopt_ = held_ = false; jwait_ms_ = 0;
     session_ = in.session; resets_ = link_resets(in.pd);
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
@@ -1650,10 +1650,10 @@ void Runner::cancel(Input in) {
     release(in, true);
 }
 void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::span<const Step> steps, Phase phase,
-                     size_t phase_index, uint8_t resumed, size_t attempt_unit, uint8_t attempts) {
+                     size_t phase_index, uint8_t resumed, size_t attempt_unit, uint8_t attempts, bool planned_reattach) {
     count_ = std::min(steps.size(), steps_.size());
     std::copy_n(steps.begin(), count_, steps_.begin());
-    evidence_ = e; run_id_ = run_id; ++revision_; resumed_ = resumed; loaded_ = true; plan_frozen_ = true;
+    evidence_ = e; run_id_ = run_id; ++revision_; resumed_ = resumed; reattach_planned_ = planned_reattach; loaded_ = true; plan_frozen_ = true;
     opts_ = o; opts_.units = resolve(o); n_order_ = opts_.units.n; order_ = opts_.units.u;
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false; n_hunt_ = 0; hunt_seq_ = 0;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = late_pd_ = dark_ = false; pd_skips_recorded_ = true;
@@ -1708,7 +1708,11 @@ Reason Runner::resume(Input in, bool confirmed) {
     if (!resumable()) return Reason::Busy;
     const Reason denied = refusal({.selected = kAllAlgorithms}, in, busy(), confirmed);
     if (denied != Reason::None) return denied;
-    ++resumed_; ++revision_;
+    // A resume on a boot whose /rd.rec said Reattach is the charger test's planned re-attach, not a power loss: it is
+    // counted separately (the card's re-attach flag) and never in resumed_ (the card's resume counter, the reboot budget).
+    if (reattach_planned_) { reattach_planned_ = false; if (reattach_ < 255) ++reattach_; }
+    else ++resumed_;
+    ++revision_;
     session_ = in.session; resets_ = hr_count_ = link_resets(in.pd);
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0;
     // A Pd unit goes on in the live attach (the K2 booted into a 5 V contract). A Legacy unit does what an uninterrupted run does:
