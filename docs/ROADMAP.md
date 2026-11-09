@@ -39,6 +39,14 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Passive pick on the wrong CC line** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W): the Rd-less scan
+  read CC2 high (floating or the PLUS-key coupling) and attached CC2; the Rd that `pd-reread` / START / a trigger
+  then put there read 0 V, the attach ended in the 500 ms no-Rp detach and CC1 was never tried. Fixed in d615f3e,
+  hardware check pending: the Rd now moves to the other line after 200 ms without an Rp (up to three moves), never
+  inline and never both lines (`rp-after-rd-on-cc1` in CHARGER_QUIRKS). Check: HID-powered K2, plain boot, splitter
+  plus Baseus 140 W, `k2_remote pd-reread` must log `attach CC2`, then `[FUSB302] Rd seek: ... Rd moves to CC1`
+  within ~200 ms, `Active CC detected: CC1`, the Source_Capabilities (5/9/15 V + 20 V) and no detach. A direct
+  charger and the inline sink case must behave as before.
 - **Charger-test spoof list loses selection borders on scroll** (2026-11-09, user report): in the charger test's
   step 2/3 (cable / spoof choice), scrolling down makes the selection squares lose their bottom or top border line.
 - **Home screen fonts stretched or squeezed in landscape** (2026-11-09, user report): on the Home page in a landscape
