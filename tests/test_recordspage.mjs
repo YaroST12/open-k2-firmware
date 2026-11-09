@@ -25,13 +25,36 @@ test("every non-card golden decodes to what the Python decoders give", () => {
   assert.equal(others.length, Object.keys(pinned).length);
   for (const name of others) {
     const r = K2Records.read(golden[name].link);
+    assert.equal(Number(r.version), pinned[name].version, name);   // '1' rows stay version 1, the cable's v2 rows are '2', 't' is '1'
     assert.equal(r.kind, pinned[name].kind, name);
     assert.deepEqual(plain(r.data), pinned[name].data, name);
   }
 });
 
 test("every kind has a golden", () => {
-  assert.deepEqual([...new Set(others.map((n) => K2Records.read(golden[n].link).kind))].sort(), ["boot", "emarker", "identity", "pdcaps"]);
+  assert.deepEqual([...new Set(others.map((n) => K2Records.read(golden[n].link).kind))].sort(),
+    ["boot", "emarker", "identity", "pdcaps", "text"]);
+});
+
+test("a version '2' cable link gives the same record as the version '1' packed link of the same cable", () => {
+  const v2 = K2Records.read(golden.emk_rows4.link);
+  const v1 = K2Records.read(golden.emk_rows4_lz.link);
+  assert.equal(v2.version, "2");
+  assert.equal(v1.version, "1");
+  assert.deepEqual(plain(v2.data), plain(v1.data));
+  assert.deepEqual(v2.view, v1.view);
+});
+
+test("the kind 't' row (the QR scan test) decodes to the trimmed text and renders one test tile", () => {
+  const r = K2Records.read(golden.qrtest.link);
+  assert.equal(r.version, "1");
+  assert.equal(r.kind, "text");
+  assert.deepEqual(plain(r.data), pinned.qrtest.data);
+  assert.equal(r.data.text, "QR scan test v11 3px");   // the record is NUL padded; the text reads up to the first NUL
+  assert.equal(r.view.header.title, "QR scan test");
+  assert.equal(r.view.badges.length, 1);
+  assert.equal(r.view.badges[0].label, "QR scan test");
+  assert.equal(r.view.badges[0].status, "QR scan test v11 3px");
 });
 
 test("a card link reads through the same entry point as a card", () => {
@@ -96,12 +119,15 @@ test("a link of a kind this page does not know, a cut link and a damaged record 
   const code = (s) => { try { K2Records.read(s); return "none"; } catch (e) { assert.equal(e.name, "CardError"); return e.code; } };
   const frag = golden.pdcaps_spr.link.slice(BASE.length);
   assert.equal(code(BASE + "1q." + frag.slice(3)), "bad-link");
-  assert.equal(code(BASE + "2" + frag.slice(1)), "bad-version");
+  assert.equal(code(BASE + "2" + frag.slice(1)), "bad-version");   // version '2' exists only for the card and the cable
+  assert.equal(code(BASE + "2t." + frag.slice(3)), "bad-version");  // kind 't' is a version '1' form
+  assert.equal(code(BASE + "3" + frag.slice(1)), "bad-version");
   assert.equal(code(BASE + frag.slice(0, 19)), "bad-record");    // the length no longer fits the PDO count
   assert.equal(code(BASE + "1p.AAAA"), "bad-record");
   assert.equal(code(BASE + "1i."), "bad-record");
   assert.equal(code(BASE), "missing");
   assert.equal(code(BASE + "1e." + Buffer.from(new Uint8Array(40)).toString("base64url")), "bad-record");
+  assert.equal(code(BASE + "2e." + Buffer.from(new Uint8Array(40)).toString("base64url")), "bad-record");   // not a schema 2 record
   const kinds = { ...K2Card.splitLink(golden.boot.link) };
   assert.equal(kinds.kind, "boot");
   assert.equal(K2Card.splitLink(golden.boot_lz.link).kind, "boot");

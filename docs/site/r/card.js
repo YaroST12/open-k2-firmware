@@ -5,7 +5,12 @@
 //
 // Reads the link a K2 shows as a QR code (docs/QR_SHARE.md, "Link form"):
 //
-//   <this page>#<version><kind>.<base64url record>      version "1"; kind "c" plain record, "z" LZ4 block of it
+//   <this page>#<version><kind>.<base64url record>
+//     version "1": the record as the K2 data frame carries it; kind "c" the plain record, "z" its LZ4 block, the other
+//                  letters the same (upper case = packed); kind "t" a plain ASCII text record, never packed
+//     version "2": the bit-packed schema v2 record of the card ("c") and the cable ("e"), uncompressed; expandCardV2() /
+//                  expandEmkV2() below turn it back into the exact version "1" record, so every decoder and view here reads
+//                  a version "2" link exactly as the version "1" link of the same record
 //
 // (the other kinds, a cable, the source's PDOs, the firmware identity and the boot report, are read by records.js on top of
 // splitLink() here) and turns the charger report card inside into (1) the card as plain data, the same keys tools/report_card.py and the
@@ -150,6 +155,183 @@ var K2Card = (function () {
     for (var i = n - 1; i >= 0; i--) v = v * 256 + b[at + i];
     return v;
   }
+
+  // ---- schema v2 link records (version "2") ----------------------------------------------------------------------------
+  // The JavaScript twins of tools/k2_qr.py expand_card_v2 / expand_emk_v2, key for key: a version "2" link carries the
+  // bit-packed v2 record (LSB-first bit stream; varint = 7 value bits + 1 continuation bit) and expands back to the exact
+  // version "1" record, so the v1 decoders above read it unchanged. The card's v2 record carries the v1 CRC-16 at its end,
+  // which decodeRecord() then checks as before.
+
+  function BitReader(b) { this.b = b; this.pos = 0; }
+  BitReader.prototype.get = function (width) {   // LSB-first; past the end reads zero, as the Python twin
+    var v = 0, p = 1;
+    for (var i = 0; i < width; i++) {
+      var at = this.pos + i;
+      var byte = (at >> 3) < this.b.length ? this.b[at >> 3] : 0;
+      if ((byte >> (at & 7)) & 1) v += p;
+      p *= 2;
+    }
+    this.pos += width;
+    return v;
+  };
+  BitReader.prototype.varint = function () {
+    var v = 0, shift = 0;
+    for (;;) {
+      v += this.get(7) * Math.pow(2, shift);
+      if (!this.get(1)) return v;
+      shift += 7;
+    }
+  };
+
+  var EPR_DV = [0, 280, 360, 480];                        // the v1 EPR level word (100 mV units) per 2-bit code
+  var CABLE_KIND_V2 = {0: 0, 1: 1, 2: 2, 3: 4, 4: 255};    // the 3-bit cable kind code -> the v1 kind byte
+  var SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F;            // the standard SVDM header mask, when a v2 row omits it
+
+  // A schema v2 card record -> the 202-byte version "1" record (format 7), so decodeRecord() reads it as before.
+  function expandCardV2(b) {
+    var r = new BitReader(b);
+    if (r.get(8) !== 2) throw CardError("bad-record", "This is not a version 2 card record.");
+    var rec = new Uint8Array(4 + PAYLOAD + 2);
+    rec[0] = RECORD_MAGIC; rec[1] = 1; rec[2] = PAYLOAD; rec[3] = 0;
+    var p = 4;   // the payload starts at record offset 4; put16/put32 take absolute record offsets
+    function put16(o, v) { rec[o] = v & 0xFF; rec[o + 1] = (v >> 8) & 0xFF; }
+    function put32(o, v) { put16(o, v & 0xFFFF); put16(o + 2, (v >> 16) & 0xFFFF); }
+    function group() {   // verdict u2, reason u6, detail u6, then the optional max / fail, each behind its own flag bit
+      var verdict = r.get(2), reason = r.get(6), detail = r.get(6);
+      var maxDv = r.get(1) ? r.get(9) : 0;
+      var failDv = r.get(1) ? r.get(9) : 0;
+      return [verdict, reason, detail, maxDv, failDv];
+    }
+    function putGroup(q, g) {
+      rec[q] = (g[0] << 6) | (g[1] & 0x3F);
+      var v = g[3] | (g[4] << 9) | (g[2] << 18);
+      rec[q + 1] = v & 0xFF; rec[q + 2] = (v >> 8) & 0xFF; rec[q + 3] = (v >> 16) & 0xFF;
+    }
+    put32(p + 0, r.get(32));                              // fingerprint
+    put16(p + 4, r.get(16));                              // vid
+    put16(p + 6, r.get(16));                              // pid
+    put16(p + 8, r.varint());                             // card number
+    put16(p + 10, r.varint());                            // runs
+    put32(p + 12, r.varint());                            // boots
+    put32(p + 16, r.varint());                            // uptime_s
+    put32(p + 20, r.get(32));                             // fw
+    put16(p + 24, r.varint());                            // handover_ds
+    rec[p + 26] = r.get(2);                               // spec_rev
+    rec[p + 27] = r.get(4);                               // num_pdos
+    rec[p + 28] = r.get(3);                               // handover
+    rec[p + 29] = r.get(4);                               // state
+    rec[p + 30] = r.get(6);                               // reason
+    var nRanges = r.get(3);
+    rec[p + 31] = nRanges;
+    rec[p + 32] = r.get(8);                               // ev_flags
+    rec[p + 33] = FORMAT;                                 // v2 only encodes format-7 cards
+    var nl = r.get(5);
+    if (nl > 20) throw CardError("bad-record", "The version 2 card record has a name that does not fit.");
+    for (var i = 0; i < nl; i++) rec[p + 34 + i] = r.get(7);
+    rec[p + 54] = r.get(8);                               // pdp_w
+    rec[p + 55] = r.get(1) | (r.get(7) << 1);             // name_auto | pd_ma50 << 1
+    var g, q, v;
+    for (g = 0; g < GROUPS.length; g++) putGroup(p + 56 + 4 * g, group());
+    for (i = 0; i < nRanges; i++) {
+      q = p + 104 + 10 * i;
+      rec[q] = r.get(5);                                  // alg
+      rec[q + 1] = r.get(8);                              // pos
+      var lo = r.get(9);
+      var hi = r.get(9), mx = r.get(9), fail = r.get(9), ma50 = r.get(7);
+      put16(q + 2, lo | (ma50 << 9));                     // lo_dv | ma50 << 9
+      put16(q + 4, hi); put16(q + 6, mx); put16(q + 8, fail);
+    }
+    for (i = 0; i < EPR_LEVELS.length; i++) {
+      q = p + 144 + 6 * i;
+      var code = r.get(2);
+      put16(q, code < EPR_DV.length ? EPR_DV[code] : 0);
+      putGroup(q + 2, group());
+    }
+    if (r.get(1)) {                                       // a cable block follows
+      q = p + 162;
+      put32(q, r.varint());                               // seq
+      put16(q + 4, r.get(16));                            // vid
+      put16(q + 6, r.get(16));                            // pid
+      put16(q + 8, r.get(16));                            // max_mv
+      put16(q + 10, r.get(16));                           // max_ma
+      var kindCode = r.get(3);
+      rec[q + 12] = Object.prototype.hasOwnProperty.call(CABLE_KIND_V2, kindCode) ? CABLE_KIND_V2[kindCode] : 0;
+      rec[q + 13] = r.get(8);                             // flags
+      rec[q + 14] = r.get(8);                             // resumed
+      rec[q + 15] = r.get(8);                             // src_flags
+    }
+    var nUfcs = r.get(3);
+    for (i = 0; i < nUfcs; i++) {
+      q = p + 178 + 3 * i;
+      v = r.get(8) | (r.get(9) << 8) | (r.get(7) << 17);
+      rec[q] = v & 0xFF; rec[q + 1] = (v >> 8) & 0xFF; rec[q + 2] = (v >> 16) & 0xFF;
+    }
+    var times = r.varint();
+    rec[p + 190] = times;
+    if (times > 1) {
+      put16(p + 191, r.get(16));                          // last_boots
+      var up = r.get(24);
+      rec[p + 193] = up & 0xFF; rec[p + 194] = (up >> 8) & 0xFF; rec[p + 195] = (up >> 16) & 0xFF;
+    }
+    rec[200] = r.get(8);                                  // the v1 record's CRC-16, carried so the integrity check is unchanged
+    rec[201] = r.get(8);
+    return rec;
+  }
+
+  // A schema v2 e-marker record -> the version "1" record (flags, name[24], the 66-byte e-marker record with its reserved
+  // zeros, the quirk block), so records.js decodeEmarker() reads it as before.
+  function expandEmkV2(b) {
+    var r = new BitReader(b);
+    if (r.get(8) !== 2) throw CardError("bad-record", "This is not a version 2 cable record.");
+    var i, k, v;
+    var nl = r.get(5);
+    if (nl > 24) throw CardError("bad-record", "The version 2 cable record has a name that does not fit.");
+    var name = [];
+    for (i = 0; i < nl; i++) name.push(r.get(7));
+    var flags = r.get(8);
+    var rl = r.get(5);
+    if (rl > 20) throw CardError("bad-record", "The version 2 cable record has an e-marker name that does not fit.");
+    var rname = [];
+    for (i = 0; i < rl; i++) rname.push(r.get(7));
+    var specRev = r.get(2);
+    var vdos = [];
+    for (i = 0; i < 5; i++) vdos.push(r.get(32));
+    var checksum = r.get(8);
+    var rec = [flags];
+    for (i = 0; i < 24; i++) rec.push(i < nl ? name[i] : 0);
+    for (i = 0; i < 66; i++) rec.push(0);                  // the e-marker record, its reserved bytes zero
+    for (i = 0; i < rl; i++) rec[25 + i] = rname[i];
+    rec[25 + 20] = specRev;
+    for (i = 0; i < 5; i++) {
+      v = vdos[i] >>> 0;
+      rec[25 + 21 + 4 * i] = v & 0xFF; rec[25 + 22 + 4 * i] = (v >> 8) & 0xFF;
+      rec[25 + 23 + 4 * i] = (v >> 16) & 0xFF; rec[25 + 24 + 4 * i] = (v >>> 24) & 0xFF;
+    }
+    rec[25 + 65] = checksum;
+    function put32le(a, o, val) {
+      a[o] = val & 0xFF; a[o + 1] = (val >> 8) & 0xFF; a[o + 2] = (val >> 16) & 0xFF; a[o + 3] = (val >>> 24) & 0xFF;
+    }
+    if (r.get(1)) {                                       // a quirk block follows
+      var qflags = r.get(2), unmatched = r.get(2), count = r.get(4);
+      rec.push(qflags, unmatched, count);
+      for (var row = 0; row < count; row++) {
+        var sop = r.get(2), kind = r.get(2), nreq = r.get(2), nrep = r.get(3);
+        var full = r.get(1);
+        var hdrVal = r.get(32);
+        var hdrMask = full ? SVDM_MASK : r.get(32);
+        var w = new Array(52).fill(0);
+        w[0] = sop; w[1] = kind; w[2] = nreq; w[3] = nrep;
+        put32le(w, 4, hdrVal); put32le(w, 8, hdrMask);
+        for (k = 0; k < nreq; k++) { var rv = r.get(32); var rm = r.get(32); put32le(w, 12 + 4 * k, rv); put32le(w, 20 + 4 * k, rm); }
+        for (k = 0; k < nrep; k++) put32le(w, 28 + 4 * k, r.get(32));
+        for (i = 0; i < 52; i++) rec.push(w[i]);
+      }
+    }
+    return Uint8Array.from(rec);
+  }
+
+  // The kinds a version "2" link can carry: the card and the cable, uncompressed (the same kind letters as version "1").
+  var V2_EXPANDERS = {card: expandCardV2, emarker: expandEmkV2};
 
   // ---- the card --------------------------------------------------------------------------------------------------------
 
@@ -333,12 +515,15 @@ var K2Card = (function () {
   }
 
   // The kind letters of a link: lowercase = the record as built, uppercase (and the card's "z") = the LZ4 block of it.
+  // "t" is a plain ASCII text record (version "1" only, never packed), the QR scan test's code.
   var KIND_LETTERS = {c: "card", z: "card", e: "emarker", E: "emarker", p: "pdcaps", P: "pdcaps",
-    i: "identity", I: "identity", b: "boot", B: "boot"};
+    i: "identity", I: "identity", b: "boot", B: "boot", t: "text"};
   var PACKED_LETTERS = "zEPIB";
+  var LINK_VERSION_V2 = "2";
 
   // What the page is given: the address with "#...", the fragment, or just "1z.xxx". Returns {version, letter, kind, record}:
-  // the record bytes (inflated) of whatever the link carries; records.js decodes the kinds that are not a card.
+  // the record bytes of whatever the link carries, at the version "1" shape (a version "2" record expanded, a packed letter
+  // inflated); records.js decodes the kinds that are not a card.
   function splitLink(text) {
     var s = String(text == null ? "" : text).trim();
     var at = s.indexOf("#");
@@ -350,14 +535,22 @@ var K2Card = (function () {
     }
     var m = /^(\d)([a-zA-Z])\.([^\s]*)$/.exec(s);
     if (!m) throw CardError("bad-link", "This is not a K2 results link.");
-    if (m[1] !== LINK_VERSION) {
-      throw CardError("bad-version", "This link is version " + m[1] + "; this page reads version " + LINK_VERSION + ". Update the K2 firmware or reload the page.");
+    if (m[1] !== LINK_VERSION && m[1] !== LINK_VERSION_V2) {
+      throw CardError("bad-version", "This link is version " + m[1] + "; this page reads versions " + LINK_VERSION + " and " +
+        LINK_VERSION_V2 + ". Update the K2 firmware or reload the page.");
     }
     if (!Object.prototype.hasOwnProperty.call(KIND_LETTERS, m[2])) {
       throw CardError("bad-link", "This link has a form (" + m[2] + ") this page does not know. Reload the page, or update it.");
     }
     var bytes = base64urlDecode(m[3]);
-    if (PACKED_LETTERS.indexOf(m[2]) >= 0) bytes = lz4Inflate(bytes);
+    if (m[1] === LINK_VERSION_V2) {
+      var expand = V2_EXPANDERS[KIND_LETTERS[m[2]]];
+      if (!expand) {
+        throw CardError("bad-version", "A version " + LINK_VERSION_V2 + " link exists only for the card and the cable, not for the form (" +
+          m[2] + ") of this link.");
+      }
+      bytes = expand(bytes);
+    } else if (PACKED_LETTERS.indexOf(m[2]) >= 0) bytes = lz4Inflate(bytes);
     return {version: m[1], letter: m[2], kind: KIND_LETTERS[m[2]], record: bytes};
   }
 
@@ -629,8 +822,9 @@ var K2Card = (function () {
   }
 
   return {
-    LINK_VERSION: LINK_VERSION, CardError: CardError,
+    LINK_VERSION: LINK_VERSION, LINK_VERSION_V2: LINK_VERSION_V2, CardError: CardError,
     base64urlDecode: base64urlDecode, lz4Inflate: lz4Inflate, crc16: crc16,
+    expandCardV2: expandCardV2, expandEmkV2: expandEmkV2, BitReader: BitReader,
     decodePayload: decodePayload, decodeRecord: decodeRecord, parseLink: parseLink, splitLink: splitLink,
     badges: badges, sections: sections, header: header, view: view,
     rangeVerdict: rangeVerdict, volts: volts, BRANDS: BRANDS

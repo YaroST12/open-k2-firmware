@@ -7,7 +7,9 @@
 //
 // Each decoder is the JavaScript twin of one in tools/k2_qr.py (decode_emarker, decode_pdcaps, decode_identity, decode_boot),
 // key for key: tests/fixtures/qrlink_decoded.json is what the Python decoders give for every golden link of
-// tests/fixtures/qrlink.tsv, and tests/test_cardpage.mjs requires this file to give the same. Record layouts are in
+// tests/fixtures/qrlink.tsv, and tests/test_cardpage.mjs requires this file to give the same. A version "2" link (the card and
+// the cable) is already expanded back to its version "1" record by card.js splitLink() (the twin of expand_card_v2 /
+// expand_emk_v2 there), so the decoders below see the same bytes whatever the version digit was. Record layouts are in
 // docs/QR_SHARE.md and include/k2/ui/qrshare_records.hpp. The views at the end turn the decoded record into what a phone shows,
 // in the shape of a card's view (header, tiles, sections) so view.js draws every kind the same way.
 // Loaded by the page as a script (window.K2Records, after card.js) and by Node as a module (module.exports).
@@ -214,7 +216,14 @@ var K2Records = (function () {
       header: hex(u16(rec, 4), 4), pdos: pdos};
   }
 
-  var DECODERS = {emarker: decodeEmarker, pdcaps: decodePdcaps, identity: decodeIdentity, boot: decodeBoot};
+  var DECODERS = {emarker: decodeEmarker, pdcaps: decodePdcaps, identity: decodeIdentity, boot: decodeBoot,
+    text: decodeText};
+
+  // Kind 't' (the QR scan test): a plain ASCII text record, read up to the first NUL (the Python twin: the record split at
+  // its first NUL byte). Never packed, version "1" only.
+  function decodeText(rec) {
+    return {text: asciiz(rec, 0, rec.length)};
+  }
 
   // ---- the views ---------------------------------------------------------------------------------------------------------------
   // A tile is {label, status, tone, glyph, word}; tone "info" is a neutral tile (a fact, not a verdict). Rows and groups are
@@ -407,7 +416,15 @@ var K2Records = (function () {
       badges: tiles, sections: sections};
   }
 
-  var VIEWS = {emarker: emarkerView, pdcaps: pdcapsView, identity: identityView, boot: bootView};
+  var VIEWS = {emarker: emarkerView, pdcaps: pdcapsView, identity: identityView, boot: bootView, text: textView};
+
+  // Kind 't' (the QR scan test): one tile, "QR scan test" with the trimmed text the code carried.
+  function textView(d) {
+    return {kind: "text", kicker: "Open-K2 QR scan test", badges_title: "Scan test", full_title: "Scan test",
+      header: {title: "QR scan test", facts: [d.text], ident: "QR scan test · plain text record"},
+      badges: [tile("QR scan test", d.text)],
+      sections: [{title: "Scan test", groups: [{title: "What the code said", tone: "", rows: [row("Text", d.text)]}], empty: ""}]};
+  }
 
   function decode(kind, bytes) {
     if (kind === "card") return C.decodeRecord(bytes);

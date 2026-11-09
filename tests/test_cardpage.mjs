@@ -38,7 +38,7 @@ function recordOf(payload) {   // 0xA6, type 1, length, 0, payload, CRC-16 littl
   return r;
 }
 
-const payloadOf = (name) => fromHex(golden[name + "_plain"].hex).slice(4, 4 + 196);   // the format 7 payload
+const payloadOf = (name) => K2Card.splitLink(golden[name].link).record.slice(4, 4 + 196);   // the format 7 payload, from a version '1' or '2' link
 
 // tests/fixtures/qrlink_v5.tsv is frozen: the links of the cards made before the UFCS modes (184 byte records, format 5).
 const v5 = Object.fromEntries(readFileSync(new URL("./fixtures/qrlink_v5.tsv", import.meta.url), "utf8")
@@ -50,8 +50,20 @@ test("every golden link decodes to the card the firmware wrote", () => {
     assert.ok(g.link.startsWith(BASE), name);
     if (!g.json) continue;   // the other kinds: tests/test_recordspage.mjs
     const r = K2Card.parseLink(g.link);
+    assert.equal(r.version, g.link.charAt(BASE.length), name);   // the version digit of the link: '1' or '2'
     assert.equal(r.kind, g.packed ? "z" : "c", name);
     assert.deepEqual(normalise(r.card), normalise(g.json), name);
+  }
+});
+
+test("a version '2' card link shows the same card and the same view as the version '1' link of the same record", () => {
+  for (const name of ["fh22", "allpass", "fh22_full", "ufcs_modes", "fh22_repeat"]) {
+    const v2 = K2Card.parseLink(golden[name].link);
+    assert.equal(v2.version, "2", name);
+    const v1 = K2Card.parseLink(BASE + "1c." + toB64url(recordOf(payloadOf(name))));
+    assert.equal(v1.version, "1", name);
+    assert.deepEqual(v2.card, v1.card, name);
+    assert.deepEqual(K2Card.view(v2.card), K2Card.view(v1.card), name);
   }
 });
 
@@ -65,7 +77,9 @@ test("the fragment alone, with and without the address, reads the same", () => {
 
 test("packed and plain links of one card are the same card", () => {
   assert.deepEqual(K2Card.parseLink(golden.fh22.link).card, K2Card.parseLink(golden.fh22_plain.link).card);
-  assert.deepEqual(K2Card.parseLink(golden.allpass.link).card, K2Card.parseLink(golden.allpass_plain.link).card);
+  assert.deepEqual(K2Card.parseLink(golden.fh22.link).card, K2Card.parseLink(golden.fh22_lz.link).card);
+  const v1 = BASE + "1c." + toB64url(recordOf(payloadOf("allpass")));   // the version '1' link of the same record, built from its payload
+  assert.deepEqual(K2Card.parseLink(golden.allpass.link).card, K2Card.parseLink(v1).card);
 });
 
 test("the FH22 card: fixed levels green, PPS amber and capped, the rest grey", () => {
@@ -224,11 +238,21 @@ test("bad fragments say what is wrong", () => {
   assert.equal(code("hello"), "bad-link");
   assert.equal(code("K2:CARD1:ABC"), "data-frame");
   assert.equal(code(BASE + "9" + frag.slice(1)), "bad-version");
+  assert.equal(code(BASE + "3c." + frag.slice(3)), "bad-version");
+  assert.equal(code(BASE + "0c." + frag.slice(3)), "bad-version");
+  assert.equal(code(BASE + "2t." + frag.slice(3)), "bad-version");   // kind 't' is a version '1' form only
+  assert.equal(code(BASE + "2p." + frag.slice(3)), "bad-version");   // version '2' exists only for the card and the cable
   assert.equal(code(BASE + "1x." + frag.slice(3)), "bad-link");
+  assert.equal(code(BASE + "2c." + toB64url(fromHex(golden.fh22_plain.hex))), "bad-record");   // a version '1' record is not schema 2
+  const v2 = fromHex(golden.fh22.hex);
+  v2[v2.length - 1] ^= 1;   // the v2 record carries the v1 CRC-16 at its end: it is checked like a version '1' link's
+  assert.equal(code(BASE + "2c." + toB64url(v2)), "bad-crc");
   assert.equal(code(golden.pdcaps_spr.link), "not-a-card");   // a good link of another kind, handed to the card reader
   assert.equal(code(BASE + "1c.!!!"), "bad-base64");
-  assert.equal(code(BASE + frag.slice(0, 41)), "bad-lz4");      // cut inside the first run of literals
-  assert.equal(code(BASE + frag.slice(0, 40)), "bad-base64");    // a base64 text never ends one character into a group
+  const zfrag = golden.fh22_lz.link.slice(BASE.length);   // a packed version '1' link, for the LZ4 cuts
+  assert.equal(code(BASE + zfrag.slice(0, 41)), "bad-lz4");      // cut inside the first run of literals
+  assert.equal(code(BASE + zfrag.slice(0, 40)), "bad-base64");    // a base64 text never ends one character into a group
+  assert.equal(code(BASE + frag.slice(0, 41)), "bad-crc");        // a cut version '2' record: the carried CRC-16 no longer matches
   assert.equal(code(BASE + "1c.AAAA"), "bad-record");
   const plain = golden.fh22_plain.link.slice(BASE.length);
   assert.equal(code(BASE + plain.slice(0, 61)), "bad-record");   // cut short: the length no longer fits
@@ -282,7 +306,7 @@ test("format 6 cards carry the UFCS modes: the badge and the detail show each mo
 });
 
 test("a UFCS mode with no current read is the span alone, and an unused slot ends the list", () => {
-  const p = K2Card.splitLink(golden.ufcs_modes.link).record.slice(4, 4 + 190);   // the golden is a packed link: inflate it
+  const p = K2Card.splitLink(golden.ufcs_modes.link).record.slice(4, 4 + 190);   // a version '2' link: splitLink expands it to the version '1' record
   const mode = (lo, hi, units) => { const v = lo | hi << 8 | units << 17; return [v & 0xFF, v >> 8 & 0xFF, v >> 16 & 0xFF]; };   // u24 LE
   p.set(mode(50, 110, 0), 178 + 3);   // mode 2: 5-11 V, no current known
   p.fill(0, 178 + 6, 178 + 9);        // mode 3 unused
