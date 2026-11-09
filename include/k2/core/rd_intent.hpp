@@ -17,7 +17,8 @@
 //   * only a cold plain boot reads it (reads_marker): a warm reset is the pin mark's business;
 //   * the comeback is judged in the first 1.5 s (judge): capabilities seen = vouched; no Rp on any line after kNoRpMs, or no
 //     capabilities after kGiveUpMs = released (Rd, Ra, spoof dropped, the record removed). One boot at most carries a stale one;
-//   * a vouched Reattach becomes a Session (after_vouch): the planned re-attach is consumed by the boot that served it;
+//   * a vouched Reattach is consumed by the boot that served it: the follower rewrites it as the Session that boot now is, as
+//     soon as its contract is Ready (a boot that never gets there leaves the Reattach, which the next comeback judges again);
 //   * the follower rewrites it only on a state change, and scrubs it on the first look of any boot that does not pin.
 #pragma once
 #include <array>
@@ -55,8 +56,8 @@ constexpr std::array<std::uint8_t, kSize> encode(Intent in) {
     return {kMagic[0], kMagic[1], kMagic[2], kMagic[3], kind, in.pin, ck, lo, hi, check_of(kind, in.pin, ck, lo, hi)};
 }
 
-// A missing, damaged or impossible record is no intent. Impossible: an unknown kind, a pin that is not exactly one line, a Session
-// that names a cable, a cable on the CC1 pin (the Ra sits on CC1: the Rd and the Ra would share the line), an invalid cable.
+// A missing, damaged or impossible record is no intent. Impossible: an unknown kind, a pin that is not exactly one line, a cable
+// on the CC1 pin (the Ra sits on CC1: the Rd and the Ra would share the line), an invalid cable.
 constexpr Intent decode(const std::array<std::uint8_t, kSize>& r) {
     for (std::size_t i = 0; i < kMagic.size(); i++) if (r[i] != kMagic[i]) return {};
     if (check_of(r[4], r[5], r[6], r[7], r[8]) != r[9]) return {};
@@ -65,10 +66,8 @@ constexpr Intent decode(const std::array<std::uint8_t, kSize>& r) {
     if (r[6] > static_cast<std::uint8_t>(ctcable::Kind::Saved)) return {};
     const ctcable::Choice c{static_cast<ctcable::Kind>(r[6]), static_cast<std::uint16_t>(r[7] | (r[8] << 8))};
     if (!ctcable::valid(c)) return {};
-    const IntentKind kind = static_cast<IntentKind>(r[4]);
-    if (kind == IntentKind::Session && c.kind != ctcable::Kind::Off) return {};
     if (c.kind != ctcable::Kind::Off && r[5] != 2) return {};
-    return {kind, r[5], ctcable::canonical(c)};
+    return {static_cast<IntentKind>(r[4]), r[5], ctcable::canonical(c)};
 }
 
 // Only a cold plain boot looks: a key mode pins its own line, a warm reset keeps (or does not keep) the pin mark's pin.
@@ -98,16 +97,21 @@ constexpr Verdict judge(const Watch& w) {
     return Verdict::Wait;
 }
 
-// What stays on the volume once the comeback is vouched: the planned re-attach is consumed (it becomes an ordinary session of the
-// same pin); a session stays one.
-constexpr Intent after_vouch(const Intent& in) {
-    if (in.kind == IntentKind::None) return {};
-    return {IntentKind::Session, in.pin, {}};
+// The charger test's planned re-attach (the K2 blinks off once so the charger reads the cable at a real attach) is worth its
+// blink only when ALL of these hold, and never otherwise (an Apple-like charger never looks at the cable; a bus-powered K2 loses
+// nothing and needs no blink): a spoof cable that claims 5 A (the 6 A rows), the Ra side of the plug (the Rd on CC2, so the Ra
+// can sit on CC1), a K2 living on the charger's VBUS, and a source that shows the Xiaomi pattern (lists SVID 0x2717).
+constexpr bool plan_reattach(ctcable::Choice cable, const ctcable::Facts& facts, std::uint8_t pin, bool self_powered,
+                             bool xiaomi_source) {
+    if (cable.kind == ctcable::Kind::Off || !ctcable::valid(cable)) return false;
+    return facts.max_ma >= 5000 && pin == 2 && self_powered && xiaomi_source;
 }
 
 // Keeps the record in step with the boot's own state, in RAM, so the main loop pays nothing per pass and flash is touched on a
 // change only. Self-powered here means a pinned Rd (the boot pin, stable across a run's own detach) and no host: a K2 with a USB
-// host lives on that host and has nothing to come back from. A pinned K2 waits for its contract before it says anything.
+// host lives on that host and has nothing to come back from. A pinned K2 waits for its contract before it says anything; once it
+// has, a drop of the contract changes nothing (the record is already on the volume when the charger cuts VBUS). The cable of a
+// running charger test rides in the session record, so the comeback answers the charger's first look with that identity.
 class Follower {
 public:
     struct Sample {
@@ -115,6 +119,7 @@ public:
         std::uint8_t pin = 0;
         bool ready = false;     // the sink contract (self-hold or a request) is Ready
         bool host = false;      // a USB host is configured
+        ctcable::Choice cable{};   // the spoof identity of the run in progress (Off = none)
     };
     enum class Act : std::uint8_t { Hold, Apply };
 
@@ -123,6 +128,7 @@ public:
         if (s.pinned && !s.host) {
             if (!s.ready) return Act::Hold;
             want = {IntentKind::Session, s.pin, {}};
+            if (s.pin == 2 && s.cable.kind != ctcable::Kind::Off && ctcable::valid(s.cable)) want.cable = ctcable::canonical(s.cable);
         }
         if (primed_ && want == last_) return Act::Hold;
         primed_ = true;
@@ -130,6 +136,8 @@ public:
         return Act::Apply;
     }
     const Intent& wanted() const { return last_; }
+    // Something else wrote the record (the planned re-attach): the next look writes the follower's state again, change or not.
+    void forget() { primed_ = false; }
 
 private:
     bool primed_ = false;

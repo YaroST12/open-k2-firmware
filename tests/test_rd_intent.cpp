@@ -23,6 +23,8 @@ constexpr Choice kB2{Kind::Builtin, 2}, kS7{Kind::Saved, 7};
 constexpr Intent kNone{};
 constexpr Intent kSession1{IntentKind::Session, 1, kOff};
 constexpr Intent kSession2{IntentKind::Session, 2, kOff};
+constexpr Intent kSessionB2{IntentKind::Session, 2, kB2};
+constexpr Intent kSessionS7{IntentKind::Session, 2, kS7};
 constexpr Intent kReattachB2{IntentKind::Reattach, 2, kB2};
 constexpr Intent kReattachS7{IntentKind::Reattach, 2, kS7};
 constexpr Intent kReattachBare{IntentKind::Reattach, 2, kOff};
@@ -59,12 +61,13 @@ void test_damage_reads_as_none() {
     std::array<std::uint8_t, 10> blank{};
     blank.fill(0xFF);               // a never-written, erased page
     CHECK_EQ(decode(blank) == kNone, 1);
-    // Well-formed record, impossible content: an unknown kind, no pin, both pins, a session with a cable, a cable on the CC1 pin
-    // (the Ra sits on CC1), a clone without its id, a built-in past the table.
+    // Well-formed record, impossible content: an unknown kind, no pin, both pins, a cable on the CC1 pin (the Ra sits on CC1), a
+    // clone without its id, a built-in past the table. A session may carry the cable of the run it serves (pin 2 only).
     CHECK_EQ(decode(encode({static_cast<IntentKind>(3), 2, kOff})) == kNone, 1);
     CHECK_EQ(decode(encode({IntentKind::Session, 0, kOff})) == kNone, 1);
     CHECK_EQ(decode(encode({IntentKind::Session, 3, kOff})) == kNone, 1);
-    CHECK_EQ(decode(encode({IntentKind::Session, 2, kB2})) == kNone, 1);
+    CHECK_EQ(decode(encode(kSessionB2)) == kSessionB2, 1);
+    CHECK_EQ(decode(encode({IntentKind::Session, 1, kB2})) == kNone, 1);
     CHECK_EQ(decode(encode({IntentKind::Reattach, 1, kB2})) == kNone, 1);
     CHECK_EQ(decode(encode({IntentKind::Reattach, 2, Choice{Kind::Saved, 0}})) == kNone, 1);
     CHECK_EQ(decode(encode({IntentKind::Reattach, 2, Choice{Kind::Builtin, 40}})) == kNone, 1);
@@ -117,14 +120,20 @@ void test_the_comeback_judge() {
     CHECK_EQ(1, kNoRpMs < kGiveUpMs);
 }
 
-void test_what_a_vouched_comeback_leaves() {
-    // The record is consumed on use: a planned re-attach becomes an ordinary session, a session stays one, nothing stays a
-    // planned re-attach after the boot that served it.
-    CHECK_EQ(after_vouch(kReattachB2) == kSession2, 1);
-    CHECK_EQ(after_vouch(kReattachBare) == kSession2, 1);
-    CHECK_EQ(after_vouch({IntentKind::Reattach, 1, kOff}) == kSession1, 1);
-    CHECK_EQ(after_vouch(kSession1) == kSession1, 1);
-    CHECK_EQ(after_vouch(kNone) == kNone, 1);
+void test_the_planned_reattach_gate() {
+    constexpr Choice kSaved5A{Kind::Saved, 9};
+    const ctcable::Facts a5{0x2717, 0x3202, 50000, 5000}, a3{0x04b4, 1, 20000, 3000};
+    // Every condition holds: a 6 A spoof cable, the Ra side (CC2 pin), self-powered, the source shows the Xiaomi chain.
+    CHECK_EQ(plan_reattach(kB2, a5, 2, true, true), true);
+    CHECK_EQ(plan_reattach(kSaved5A, a5, 2, true, true), true);
+    // The blink must pay off: each missing condition cancels it (an Apple-like source, a plain PLUS boot, no cable, a 3 A cable, ...).
+    CHECK_EQ(plan_reattach(kB2, a5, 2, true, false), false);     // the source does not list SVID 0x2717
+    CHECK_EQ(plan_reattach(kB2, a5, 2, false, true), false);     // bus-powered: nothing dies, nothing to come back from
+    CHECK_EQ(plan_reattach(kOff, a5, 2, true, true), false);     // no spoof identity chosen
+    CHECK_EQ(plan_reattach(kB2, a3, 2, true, true), false);      // a 3 A cable: the 6 A rows are not asked for
+    CHECK_EQ(plan_reattach(kB2, a5, 1, true, true), false);      // Rd on CC1: the Ra shares that line
+    CHECK_EQ(plan_reattach(kB2, a5, 0, true, true), false);
+    CHECK_EQ(plan_reattach(Choice{Kind::Builtin, 99}, a5, 2, true, true), false);   // an invalid choice
 }
 
 void test_the_follower() {
@@ -161,6 +170,42 @@ void test_the_follower() {
     Follower h;
     CHECK_EQ(h.update({true, 2, true, true}) == Follower::Act::Apply, 1);
     CHECK_EQ(h.wanted() == kNone, 1);
+}
+
+void test_the_follower_carries_a_runs_cable() {
+    Follower f;
+    CHECK_EQ(f.update({true, 2, true, false, kOff}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.wanted() == kSession2, 1);
+    // A charger run starts with a spoof identity: the record says which, once (the comeback arms it before the charger's look).
+    CHECK_EQ(f.update({true, 2, true, false, kB2}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.wanted() == kSessionB2, 1);
+    CHECK_EQ(f.update({true, 2, true, false, kB2}) == Follower::Act::Hold, 1);
+    // The contract drops mid-run (the charger cut VBUS, this is the moment the K2 dies): nothing changes, nothing is written.
+    CHECK_EQ(f.update({true, 2, false, false, kB2}) == Follower::Act::Hold, 1);
+    CHECK_EQ(f.wanted() == kSessionB2, 1);
+    // A saved clone is carried the same way; the run ends: the cable goes, the session stays.
+    CHECK_EQ(f.update({true, 2, true, false, kS7}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.wanted() == kSessionS7, 1);
+    CHECK_EQ(f.update({true, 2, true, false, kOff}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.wanted() == kSession2, 1);
+    // On the CC1 pin the Ra cannot be raised: no cable is recorded, whatever the run chose.
+    Follower g;
+    CHECK_EQ(g.update({true, 1, true, false, kB2}) == Follower::Act::Apply, 1);
+    CHECK_EQ(g.wanted() == kSession1, 1);
+    // An impossible choice is not recorded either.
+    CHECK_EQ(g.update({true, 2, true, false, Choice{Kind::Builtin, 99}}) == Follower::Act::Apply, 1);
+    CHECK_EQ(g.wanted() == kSession2, 1);
+}
+
+void test_forget_rewrites_what_the_volume_may_have_lost() {
+    // The planned re-attach writes its own record behind the follower's back: forget() makes the next look write the follower's.
+    Follower f;
+    CHECK_EQ(f.update({true, 2, true, false, kB2}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.update({true, 2, true, false, kB2}) == Follower::Act::Hold, 1);
+    f.forget();
+    CHECK_EQ(f.update({true, 2, true, false, kB2}) == Follower::Act::Apply, 1);
+    CHECK_EQ(f.wanted() == kSessionB2, 1);
+    CHECK_EQ(f.update({true, 2, true, false, kB2}) == Follower::Act::Hold, 1);
 }
 
 void test_save_and_reload() {
@@ -213,8 +258,10 @@ int main() {
     test_damage_reads_as_none();
     test_the_boot_mode_decision();
     test_the_comeback_judge();
-    test_what_a_vouched_comeback_leaves();
+    test_the_planned_reattach_gate();
     test_the_follower();
+    test_the_follower_carries_a_runs_cable();
+    test_forget_rewrites_what_the_volume_may_have_lost();
     test_save_and_reload();
     test_save_writes_only_on_change();
     test_a_damaged_file_reads_as_none();
