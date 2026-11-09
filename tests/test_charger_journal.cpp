@@ -94,7 +94,7 @@ static bool rows_are(const cj::Replay& r, const std::vector<ct::Step>& plan_rows
 }
 static ct::Evidence evidence() {
     ct::Evidence e; e.selected = 0x1234; e.session = 77; e.monitor_mv = 36000; e.cable_mv = 50000; e.cable_ma = 5000;
-    e.raw_header = 0x7181; e.wire_rev = 2; e.flags = 0x23; e.num_pdos = 7;
+    e.raw_header = 0x7181; e.wire_rev = 2; e.flags = 0x23; e.num_pdos = 7; e.rebalanced = 3;   // the re-plan count survives a comeback
     e.reported = {}; e.reported.valid = true; e.reported.rev_major = 3; e.reported.rev_minor = 1;
     e.reported.ver_major = 1; e.reported.ver_minor = 2;
     return e;
@@ -189,6 +189,7 @@ static void test_roundtrip() {
     CHECK_EQ(r.found, true); CHECK_EQ(r.unfinished, true); CHECK_EQ(r.run_id, 5u); CHECK_EQ(r.count, 6u);
     CHECK_EQ(r.options.selected, ct::kAllAlgorithms);
     CHECK_EQ(r.evidence.session, 77u); CHECK_EQ(r.evidence.cable_mv, 50000); CHECK_EQ(r.evidence.flags, 0x23);
+    CHECK_EQ(r.evidence.rebalanced, 3u);   // journaled in the header: the count survives the reboot
     CHECK_EQ(r.evidence.reported.valid, true); CHECK_EQ(r.evidence.reported.rev_major, 3); CHECK_EQ(r.evidence.reported.ver_minor, 2);
     CHECK_EQ(rows_are(r, steps), true);
     CHECK_EQ(int(r.steps[0].verdict), int(ct::Verdict::Pass)); CHECK_EQ(r.steps[0].measured_mv, 5050);

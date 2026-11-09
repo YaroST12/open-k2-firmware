@@ -5013,6 +5013,244 @@ static void test_a_reannounce_that_places_no_row_is_still_offers_changed() {
     CHECK_EQ(r.evidence().rebalanced, 0u);
 }
 
+// ---- review of k2/reannounce-replan (2026-11-09), red first: the re-plan semantics of the mid-run re-announce ----
+
+// A source with one PPS APDO besides the fixed PDOs: 5 V 3 A, 9 V 3 A, APDO lo-hi V at ma50 * 50 mA.
+static pd::SourceCaps pps_src_caps(unsigned apdo_ma50 = 100, unsigned apdo_hi_dv = 110, unsigned apdo_lo_dv = 33) {
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 3; c.raw_header = 0x7181;
+    c.pdos[0] = pd::decode_pdo((100u << 10) | 300);   // 5 V 3 A
+    c.pdos[1] = pd::decode_pdo((180u << 10) | 300);   // 9 V 3 A
+    c.pdos[2] = pd::decode_pdo(0xc0000000u | (apdo_hi_dv << 17) | (apdo_lo_dv << 8) | apdo_ma50);
+    return c;
+}
+// 5/9/15/20 V, 15 V at v15_ma (10 mA units): a fixed list whose one current can drop.
+static pd::SourceCaps four_pdo_caps(unsigned v15_ma) {
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 4; c.raw_header = 0x7181;
+    const unsigned volts[] = {5000, 9000, 15000, 20000}, mas[] = {300, 300, v15_ma, 300};
+    for (unsigned n = 0; n < 4; ++n) c.pdos[n] = pd::decode_pdo(((volts[n] / 50) << 10) | mas[n]);
+    return c;
+}
+// Item 1: only rows of the running unit may be withdrawn or counted as placeable. The APDO disappears during the
+// Pd unit and comes back before the PdLow unit runs: the PdLow row stays Pending the whole time (never withdrawn
+// for good - revival used to look at the running unit only) and runs when its unit comes.
+static void test_a_pps_change_during_the_pd_unit_does_not_withdraw_the_pdlow_rows() {
+    {   // the APDO comes back: the PdLow row was never withdrawn and runs
+        Fake f; f.caps = pps_src_caps();
+        ct::Runner r(f);
+        const auto o = with_units(ct::bit(A::Pd3Fixed) | ct::bit(A::Pps), {ct::Unit::Pd, ct::Unit::PdLow});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
+        pd::SourceCaps gone = pps_src_caps(); gone.num_pdos = 2;   // the APDO is withdrawn mid-run
+        f.caps = gone;
+        f.tick(r, 100);
+        for (const auto& s : r.steps())
+            if (ct::unit_of(s) == ct::Unit::PdLow) CHECK_EQ(s.verdict, ct::Verdict::Pending);   // not withdrawn here
+        f.caps = pps_src_caps();   // and back before the PdLow unit
+        f.tick(r, 400000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+        CHECK_EQ(only_pass_or_skip(r), true);
+        unsigned low_pass = 0;
+        for (const auto& s : r.steps())
+            if (ct::unit_of(s) == ct::Unit::PdLow && s.verdict == ct::Verdict::Pass) ++low_pass;
+        CHECK_EQ(low_pass, 1u);   // the 3.3 V row ran and passed
+    }
+    {   // the APDO stays gone: right after the re-announce the PdLow row is still Pending (red today: Skip/Withdrawn)
+        Fake f; f.caps = pps_src_caps();
+        ct::Runner r(f);
+        const auto o = with_units(ct::bit(A::Pd3Fixed) | ct::bit(A::Pps), {ct::Unit::Pd, ct::Unit::PdLow});
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
+        pd::SourceCaps gone = pps_src_caps(); gone.num_pdos = 2;
+        f.caps = gone;
+        const int pc = f.plan_changes;
+        f.tick(r, 100);
+        for (const auto& s : r.steps())
+            if (ct::unit_of(s) == ct::Unit::PdLow) { CHECK_EQ(s.verdict, ct::Verdict::Pending); CHECK_EQ(int(s.reason), int(ct::Reason::None)); }
+        CHECK_EQ(f.plan_changes, pc);   // another unit's rows are re-queued silently, never counted
+    }
+}
+// Item 2: rebalanced / revision_ / plan_changed() only when a row was withdrawn, came back or moved slot. A
+// re-announce that only raises a current (the Xiaomi post-auth 5 -> 6 A) changes nothing for the plan: the count
+// stays exactly where it was.
+static void test_a_reannounce_that_only_raises_a_current_counts_nothing() {
+    Fake f; f.caps = pps_src_caps(100);   // APDO 3.3-11 V 5 A
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Pd3Fixed) | ct::bit(A::Pps), {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
+    const int pc = f.plan_changes;
+    f.caps = pps_src_caps(120);   // the same APDO at 6 A: same slot, same range, more current
+    f.tick(r, 100);
+    CHECK_EQ(f.plan_changes, pc);            // == : no row moved, withdrew or came back
+    CHECK_EQ(r.evidence().rebalanced, 0u);
+    CHECK_EQ(f.replans.empty(), true);
+    f.tick(r, 300000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
+    unsigned pps_pass = 0;
+    for (const auto& s : r.steps())
+        if (s.algorithm == A::Pps && s.verdict == ct::Verdict::Pass && s.ma <= 1000) {
+            ++pps_pass;
+            CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 6000u);   // the rows run at the new, higher word
+        }
+    CHECK_EQ(pps_pass >= 3u, true);
+}
+// Item 3: a programmable row is still offered when the type matches, its target voltage is inside the new range
+// and its current fits the new limit. A PPS current drop 5 A -> 3 A withdraws only the rows that asked more than
+// 3 A (the full-current row); the 1 A rows run at the new word. A range that no longer covers a target withdraws
+// that row alone.
+static void test_a_pps_change_keeps_the_rows_whose_target_still_fits() {
+    {   // APDO 3.3-11 V 5 A -> 3.3-11 V 3 A
+        Fake f; f.caps = pps_src_caps(100);
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Pd3Fixed) | ct::bit(A::Pps), {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
+        f.caps = pps_src_caps(60);   // 3 A
+        f.tick(r, 300000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+        unsigned full_withdrawn = 0, pps_pass = 0;
+        for (const auto& s : r.steps()) {
+            if (s.algorithm != A::Pps) continue;
+            if (s.ma >= 5000 && s.reason == ct::Reason::Withdrawn) ++full_withdrawn;   // 3 A < 5 A: no longer fits
+            if (s.verdict == ct::Verdict::Pass && s.ma <= 1000) {
+                ++pps_pass;
+                CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 3000u);   // kept, at the new lower word
+            }
+        }
+        CHECK_EQ(full_withdrawn, 1u);
+        CHECK_EQ(pps_pass >= 3u, true);
+    }
+    {   // APDO 3.3-11 V -> 7-11 V: the 5.2 V row's target is outside the new range, the higher ones run
+        Fake f; f.caps = pps_src_caps(100, 110, 33);
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Pd3Fixed) | ct::bit(A::Pps), {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
+        f.caps = pps_src_caps(100, 110, 70);   // 7-11 V
+        f.tick(r, 300000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+        unsigned low_out = 0, pps_pass = 0;
+        for (const auto& s : r.steps()) {
+            if (s.algorithm != A::Pps) continue;
+            if (s.mv < 7000 && s.reason == ct::Reason::Withdrawn) ++low_out;
+            if (s.verdict == ct::Verdict::Pass) ++pps_pass;
+        }
+        CHECK_EQ(low_out >= 1u, true);   // the target below the new range is withdrawn
+        CHECK_EQ(pps_pass >= 2u, true);
+    }
+}
+// Item 4 (user decision 2026-11-09): a fixed offer whose current drops (15 V 3 A -> 15 V 1.5 A) keeps its row: it
+// runs at the new, lower current word and the card notes the reduced current. Only a voltage that is no longer
+// offered is Withdrawn. A word-only change is not a re-plan: the count stays 0.
+static void test_a_fixed_offer_whose_current_drops_keeps_its_row_at_the_lower_word() {
+    Fake f; f.caps = four_pdo_caps(300);   // 15 V 3 A
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return f.pd_requests >= 2; }), true);   // the 5 V row done, the 9 V row in flight
+    const int pc = f.plan_changes;
+    f.caps = four_pdo_caps(150);   // 15 V 1.5 A: only the current drops
+    f.tick(r, 300000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    CHECK_EQ(r.evidence().rebalanced, 0u);   // a word-only change is not a re-plan
+    CHECK_EQ(f.plan_changes, pc);
+    for (const auto& s : r.steps())
+        if (s.mv == 15000 && !s.hunt) {
+            CHECK_EQ(s.verdict, ct::Verdict::Pass);
+            CHECK_EQ(pd::decode_pdo(s.pdo).max_ma, 1500u);   // the reduced current is on the row / the card
+        }
+    unsigned at15 = 0;
+    for (const auto& ch : f.choices) if (ch.pos == 3 && ch.mv == 15000) ++at15;
+    CHECK_EQ(at15, 1u);
+}
+// Item 5: a revived row actually runs and passes (the withdrawn PDO comes back and its rows are pending again).
+static void test_a_revived_row_actually_runs_and_passes() {
+    Fake f; f.caps = splitter_caps();
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 9000; }), true);
+    f.caps = splitter_reannounced(); f.tick(r, 100);   // 20 V withdrawn
+    CHECK_EQ(f.replans.size(), 1u);
+    f.caps = splitter_rebalanced_back(); f.tick(r, 100);   // 20 V back: the rows are pending again
+    CHECK_EQ(f.replans.size(), 2u);
+    f.tick(r, 300000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    for (const auto& s : r.steps())
+        if (s.mv == 20000 && !s.hunt) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the revived row ran and passed
+    CHECK_EQ(r.evidence().rebalanced, 2u);
+}
+// Item 5: a "between rows" re-announce - the list changes while the runner is in Releasing (after a row finished,
+// before the next one) or in the Baseline - re-plans the pending rows, with the counts exactly right.
+static void test_a_reannounce_between_rows_replans_with_the_counts_exact() {
+    {   // a tick in Releasing: the 5 V row is done, its release is in progress
+        Fake f; f.caps = splitter_caps();
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Releasing && f.pd_requests >= 1; }), true);
+        const int pc = f.plan_changes;
+        f.caps = splitter_reannounced();   // 20 V withdrawn, 9/15 V raised to 3 A
+        f.tick(r, 100);
+        CHECK_EQ(f.replans.size(), 1u);
+        CHECK_EQ(f.plan_changes, pc + 1);   // == : exactly one re-plan
+        CHECK_EQ(r.evidence().rebalanced, 1u);
+        f.tick(r, 300000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+        unsigned v20 = 0, v15 = 0;
+        for (const auto& s : r.steps()) {
+            if (s.mv == 20000) { CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Withdrawn); ++v20; }
+            if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); ++v15; }
+        }
+        CHECK_EQ(v20, 2u); CHECK_EQ(v15, 1u);
+    }
+    {   // a tick in the first Baseline (no PD row has started): the plan is rebuilt from the new list, no re-plan count
+        Fake f; f.caps = splitter_caps();
+        ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Baseline && f.attaches_pd >= 1 && f.pd_requests == 0; }), true);
+        const int pc = f.plan_changes;
+        f.caps = splitter_reannounced();
+        f.tick(r, 100);
+        CHECK_EQ(f.replans.empty(), true);
+        CHECK_EQ(r.evidence().rebalanced, 0u);
+        f.tick(r, 300000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+        CHECK_EQ(only_pass_or_skip(r), true);
+        unsigned v20 = 0;
+        for (const auto& s : r.steps()) if (s.mv == 20000) ++v20;
+        CHECK_EQ(v20, 0u);   // replanned from the new list: no 20 V rows in the plan at all
+    }
+}
+// Nit: a row whose offer only moved slot is re-queued, not Withdrawn - the row in flight included (an APDO
+// inserted ahead of its fixed PDO moves it from slot 3 to slot 4: the running row finishes at the new slot).
+static void test_a_slot_only_move_of_the_row_in_flight_requeues_it() {
+    Fake f; f.caps = splitter_caps();   // 5/9/15/20 V at slots 1..4
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kSplitterPd, f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return a_pd_row_is_running(r) && r.steps()[r.index()].mv == 15000; }), true);
+    pd::SourceCaps c; c.valid = true; c.spec_rev = 2; c.active_cc = 1; c.num_pdos = 5; c.raw_header = 0x7181;
+    c.pdos[0] = pd::decode_pdo((100u << 10) | 150);   // 5 V 1.5 A
+    c.pdos[1] = pd::decode_pdo((180u << 10) | 150);   // 9 V 1.5 A
+    c.pdos[2] = pd::decode_pdo(0xc0000000u | (210u << 17) | (33u << 8) | 66);   // a PPS APDO inserted at slot 3
+    c.pdos[3] = pd::decode_pdo((300u << 10) | 150);   // 15 V 1.5 A, now slot 4
+    c.pdos[4] = pd::decode_pdo((400u << 10) | 250);   // 20 V 2.5 A, slot 5
+    f.caps = c;
+    f.tick(r, 300000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Withdrawn), 0u);
+    CHECK_EQ(count_reason_all(r, ct::Reason::CapsChanged), 0u);
+    for (const auto& s : r.steps())
+        if (s.mv == 15000) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.pos, 4u); }   // re-queued at the new slot
+    CHECK_EQ(r.evidence().rebalanced, 1u);   // the slot move is the one re-plan
+    unsigned at15 = 0;
+    for (const auto& ch : f.choices) if (ch.mv == 15000) ++at15;
+    CHECK_EQ(at15, 1u);   // the row in flight was not ended and re-asked
+}
+
 int main() {
     test_an_above_5v_request_waits_for_the_journal_without_blocking();
     test_reannounce_before_the_first_row_replans(); test_reannounce_during_the_first_row_follows_the_new_slots();
@@ -5021,6 +5259,13 @@ int main() {
     test_midrun_reannounce_withdrawing_the_row_in_flight_ends_it_and_releases();
     test_a_withdrawn_pdo_that_comes_back_revives_its_rows();
     test_a_reannounce_that_places_no_row_is_still_offers_changed();
+    test_a_pps_change_during_the_pd_unit_does_not_withdraw_the_pdlow_rows();
+    test_a_reannounce_that_only_raises_a_current_counts_nothing();
+    test_a_pps_change_keeps_the_rows_whose_target_still_fits();
+    test_a_fixed_offer_whose_current_drops_keeps_its_row_at_the_lower_word();
+    test_a_revived_row_actually_runs_and_passes();
+    test_a_reannounce_between_rows_replans_with_the_counts_exact();
+    test_a_slot_only_move_of_the_row_in_flight_requeues_it();
     test_identity_follows_the_unit_mode(); test_identity_is_back_for_the_pd_unit_after_a_legacy_one();
     test_identity_matches_every_attach_of_the_default_order(); test_self_powered_run_never_touches_the_identity();
     test_self_powered_start_plans_from_the_held_caps(); test_self_powered_start_without_caps_but_pd_seen_says_pd_gave_up();

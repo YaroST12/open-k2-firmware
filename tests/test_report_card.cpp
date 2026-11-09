@@ -674,6 +674,26 @@ static void test_codec_identity_fields_and_old_formats() {
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 0);
 }
 
+// V8: the source's mid-run re-balance count (Evidence::rebalanced, "SOURCE rebalanced Nx") is carried on the
+// shared card and survives the record: build a card from a run with two re-plans, encode, decode, compare.
+static void test_v8_rebalanced_roundtrip() {
+    ct::Evidence e = evidence(); e.rebalanced = 2;
+    rc::Card c = rc::build(run_a(), e, {ct::HandoverOutcome::FellBack, 1200}, {.fp = 0xAABBCCDDu, .vid = 0x2717, .pid = 9, .pdp_w = 67}, {},
+                           ct::State::Done, ct::Reason::None);
+    CHECK_EQ(c.rebalanced, 2u);   // build_into carries the evidence's count onto the card
+    std::array<uint8_t, rc::kMaxRecord> buf{};
+    rc::encode_card(buf, c);
+    CHECK_EQ(buf[4 + 33], rc::kFormat);
+    rc::Card d;
+    CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d.rebalanced, 2u);
+    CHECK_EQ(d == c, 1);
+    // an older card (format byte below 8) decodes with the count at 0
+    buf[4 + 33] = rc::kFormat - 1;
+    CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d.rebalanced, 0u);
+}
+
 static void test_inherit_rules() {
     rc::Card prev; prev.id = {.fp = 5, .vid = 0x2717, .pid = 3, .pdp_w = 67};
     rc::set_name(prev, "Desk charger");
@@ -1087,6 +1107,7 @@ int main() {
     test_brand_table();
     test_auto_name_rules();
     test_codec_identity_fields_and_old_formats();
+    test_v8_rebalanced_roundtrip();
     test_inherit_rules();
     test_epr_per_level_verdicts();
     test_epr_levels_offered_without_an_epr_cable();
