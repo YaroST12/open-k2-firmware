@@ -1086,6 +1086,7 @@ void ChargerTestPage::build_results() {
     const auto card = report_card::build(runner_.steps(), runner_.evidence(), runner_.handover(), card_id_, {}, runner_.state(), runner_.reason());
     result_layout::OemNotes oem;
     oem.headers = false;   // the grid is units only: no separator rows between the sections
+    oem.units = runner_.unit_order();   // the rows list the protocols in the order the run tests them
     oem.vendor = result_layout::vendor_oem_name(card_id_.vid);
     if (!oem.vendor && fusb302::vdm().xiaomi) oem.vendor = "Xiaomi";   // SVID 0x2717 seen on the wire even without a VID
     oem.mi_auth = fusb302::sink_status().xiaomi_authed;
@@ -1840,7 +1841,8 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
 void ChargerTestPage::build_running_grid() {
     result_layout::OemNotes oem;
     oem.headers = false;
-    oem.fold = false;   // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
+    oem.units = runner_.unit_order();   // the rows list the protocols in the order the run tests them
+    oem.fold = false;  // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
     result_layout::build(layout_, runner_.steps(), oem);
     line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
 }

@@ -706,6 +706,22 @@ uint32_t layout_sig(std::span<const Step> rows) {
 }
 }
 UnitList unit_order(const Options& o) { return resolve(o); }
+size_t algorithm_order(std::span<const Unit> units, std::span<Algorithm> out) {
+    UnitList dflt;
+    if (units.empty()) { dflt = resolve(Options{}); units = {dflt.u.data(), dflt.n}; }
+    size_t n = 0;
+    bool pd_listed = false;
+    for (const Unit u : units) {
+        const bool pd = mode(u) == Mode::Pd;
+        if (pd && pd_listed) continue;
+        pd_listed |= pd;
+        for (const Algorithm a : kPlanOrder) {
+            if (pd ? group(a) != Group::Pd : group(a) != static_cast<Group>(u)) continue;
+            if (n < out.size()) out[n++] = a;
+        }
+    }
+    return n;
+}
 Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     Summary out;
     in.epr_info = nullptr;   // a preview plans from the source list alone

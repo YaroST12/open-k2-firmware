@@ -4,6 +4,7 @@
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/charger_journal.hpp"
 #include "k2/chargertest/step_label.hpp"
+#include "k2/chargertest/result_layout.hpp"
 #include "k2/pd/transcap_reason.hpp"
 #include "ramdisk.hpp"
 #include "k2/core/remote_proto.hpp"
@@ -3357,12 +3358,73 @@ static void test_every_failure_kind_has_a_capture_reason() {
     CHECK_EQ(int(R::NotUnlocked), 38);                                 // append-only: the wire and the card store the number
 }
 
-// ---- unit lifecycle (docs/CHARGER_TEST_FLOW.md) -----------------------------------------------
 static ct::Options with_units(uint32_t selected, std::initializer_list<ct::Unit> l) {
     ct::Options o{.selected = selected};
     for (const ct::Unit u : l) o.units.add(u);
     return o;
 }
+// ---- Running grid order: the rows list the algorithms in the order the plan executes them ------
+// The algorithms of the plan in execution order (first appearance in the rows, revisions are no grid rows).
+static std::vector<A> executed_algorithms(const ct::Runner& r) {
+    std::vector<A> out;
+    for (const auto& s : r.steps()) {
+        if (s.algorithm >= A::Pd30Revision && s.algorithm <= A::Pd32Revision) continue;
+        if (std::find(out.begin(), out.end(), s.algorithm) == out.end()) out.push_back(s.algorithm);
+    }
+    return out;
+}
+// The algorithms of the Running verdict grid's rows, top to bottom (the way ChargerTestPage::build_running_grid builds it).
+static std::vector<A> grid_algorithms(const ct::Runner& r) {
+    namespace rl = k2::result_layout;
+    static rl::Layout l;
+    rl::OemNotes oem;
+    oem.headers = false; oem.fold = false;
+    oem.units = r.unit_order();
+    rl::build(l, r.steps(), oem);
+    std::vector<A> out;
+    for (size_t i = 0; i < l.row_count; ++i) if (l.rows[i].algorithm != A::Count) out.push_back(l.rows[i].algorithm);
+    return out;
+}
+// A row with nothing to show (an EPR step the cable held back) has no grid row, so the grid is the executed order minus such rows:
+// every grid row is in `run`, in the same relative order, none twice.
+static bool grid_follows(const std::vector<A>& grid, const std::vector<A>& run) {
+    size_t at = 0;
+    for (const A a : grid) {
+        while (at < run.size() && run[at] != a) ++at;
+        if (at == run.size()) return false;
+        ++at;
+    }
+    return true;
+}
+// User report 2026-11-09: the grid listed QC2, QC3, QC3+, QC2B, QC3B, UFCS while the run went QC2, QC2B, QC3, QC3B, QC3+, UFCS
+// (hardware journal, steps 23-48): the grid kept its own copy of the order, with the Class B rows after the Class A ones.
+static void test_running_grid_lists_the_algorithms_in_the_order_the_plan_runs_them() {
+    Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, ct::Options{}, f.in, true), ct::Reason::None);
+    const auto run = executed_algorithms(r);
+    CHECK_EQ(run.size() > 12, true);
+    CHECK_EQ(grid_follows(grid_algorithms(r), run), true);
+    CHECK_EQ(grid_algorithms(r).size() + 3 > run.size(), true);   // at most a few rows with nothing to show (a cable-limited EPR) are left out
+    // the hardware order of the Class B rows, spelled out
+    const auto at = [&](A a) { return std::find(run.begin(), run.end(), a) - run.begin(); };
+    CHECK_EQ(at(A::Qc2) + 1 == at(A::Qc2ClassB) && at(A::Qc2ClassB) < at(A::Qc3), true);
+    CHECK_EQ(at(A::Qc3) + 1 == at(A::Qc3ClassB) && at(A::Qc3ClassB) < at(A::Qc3Plus), true);
+}
+// The user's unit order (remote `charger-units`, ct_start.py --units) is the order of the grid too.
+static void test_running_grid_follows_the_users_unit_order() {
+    for (const auto& order : {std::initializer_list<ct::Unit>{ct::Unit::Ufcs, ct::Unit::Qc3, ct::Unit::Pd, ct::Unit::Fcp, ct::Unit::Qc2},
+                              std::initializer_list<ct::Unit>{ct::Unit::Pd, ct::Unit::Vooc, ct::Unit::Afc, ct::Unit::Qc2, ct::Unit::PdLow}}) {
+        Fake f; f.caps = cuktech_caps(); ct::Runner r(f);
+        ct::Options o = with_units(ct::kDefaultAlgorithms, order);
+        CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+        const auto run = executed_algorithms(r);
+        CHECK_EQ(run.size() > 5, true);
+        CHECK_EQ(grid_follows(grid_algorithms(r), run), true);
+        CHECK_EQ(grid_algorithms(r).size() + 3 > run.size(), true);
+    }
+}
+
+// ---- unit lifecycle (docs/CHARGER_TEST_FLOW.md) -----------------------------------------------
 static std::string seq_of(const Fake& f) { return std::string(f.seq.begin(), f.seq.end()); }
 static unsigned count_unit_verdict(const ct::Runner& r, ct::Unit u, ct::Verdict v, ct::Reason why = ct::Reason::None, bool any = true) {
     unsigned n = 0;
@@ -4771,5 +4833,6 @@ int main() {
     test_resumed_baseline_adopts_a_session_change(); test_self_powered_vbus_loss_suspends_the_run(); test_hid_powered_vbus_loss_still_stops_the_run();
     test_power_loss_at_every_event_matches_an_uninterrupted_run();
     test_a_final_stop_closes_before_it_skips();
+    test_running_grid_lists_the_algorithms_in_the_order_the_plan_runs_them(); test_running_grid_follows_the_users_unit_order();
     return test_report("test_charger_test");
 }

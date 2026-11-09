@@ -313,6 +313,10 @@ inline constexpr Algorithm kPlanOrder[] = {
 static_assert(std::size(kPlanOrder) == unsigned(Algorithm::Count));
 // The units in the order a run with these options executes them (what the Runner resolves its unit list to).
 UnitList unit_order(const Options&);
+// The algorithms in the order a run over `units` executes them (empty = the default unit order): unit by unit, kPlanOrder inside a
+// unit (so a Class B row follows the Class A row of its unit). Pd and PdLow share the PD rows: listed once, at the first of them.
+// Returns how many entries it wrote to `out` (Algorithm::Count at most). The one table the plan and the verdict grid share.
+size_t algorithm_order(std::span<const Unit> units, std::span<Algorithm> out);
 // One verdict for a unit's rows: Pending (something left), Fail (any), Pass (any, no fail), Skip (nothing ran).
 Verdict unit_outcome(std::span<const Step>, Unit);
 struct Env {

@@ -344,9 +344,12 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
     l.token_count = l.row_count = 0;
     l.cuts = 0;
     Builder b{l};
-    constexpr A order[] = {A::Fcp, A::Scp, A::Afc, A::Vooc, A::SuperVooc, A::SuperVooc65, A::Vivo,
-                           A::Pd2Fixed, A::Pd3Fixed, A::Epr, A::SprAvs, A::Pps, A::EprAvs,
-                           A::Qc2, A::Qc3, A::Qc3Plus, A::Qc2ClassB, A::Qc3ClassB, A::Ufcs};
+    // The rows follow the order the plan executes the algorithms in (the run's unit order, then the planner's table inside a unit):
+    // one table with the planner, not a copy of it. Revision rows are no grid rows.
+    A order_buf[unsigned(A::Count)];
+    size_t order_n = ct::algorithm_order(oem.units, order_buf);
+    order_n = size_t(std::remove_if(order_buf, order_buf + order_n, [](A a) { return is_revision(a); }) - order_buf);
+    const std::span<const A> order{order_buf, order_n};
     bool present[unsigned(A::Count)] = {}, absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {};
     for (const auto& s : steps) if (!is_revision(s.algorithm)) present[unsigned(s.algorithm)] = true;
     auto header = [&](Section s) {
@@ -359,13 +362,15 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
         r->header = true;
         b.row = nullptr;
     };
-    auto any_in = [&](Section s) {
-        for (const A a : order) if (present[unsigned(a)] && section_of(a) == s) return true;
+    // A run = consecutive protocols of the order that share a section: the default order has one run per section.
+    using Run = std::span<const A>;
+    auto any_in = [&](Run run) {
+        for (const A a : run) if (present[unsigned(a)]) return true;
         return false;
     };
-    auto rows_for = [&](Section s) {
-        for (const A a : order) {
-            if (!present[unsigned(a)] || section_of(a) != s) continue;
+    auto rows_for = [&](Run run) {
+        for (const A a : run) {
+            if (!present[unsigned(a)]) continue;
             const bool legacy = ct::group(a) != ct::Group::Pd;
             if (is_absent(steps, a)) {
                 // A range the charger does not offer keeps its own row: "PPS None". A legacy unit keeps its chips when not folding.
@@ -385,17 +390,26 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
     };
     // A section whose protocols all fold into "No reply" / "Skipped" shows no rows of its own, so its header is dropped
     // again (a bare header above the next header reads as an empty family).
-    auto section = [&](Section s) {
-        if (!any_in(s)) return;
+    auto section = [&](Run run) {
+        if (!any_in(run)) return;
         const size_t before = l.row_count;
-        header(s);
+        header(section_of(run[0]));
         const size_t after_header = l.row_count;
-        rows_for(s);
+        rows_for(run);
         if (after_header > before && l.row_count == after_header) l.row_count = before;
     };
-    // The sections follow the default run order: OEM vendor modes by company, Xiaomi (PD-based), USB PD, QC / UFCS.
-    // Sections 1-3: Huawei / Honor, Samsung, OPPO / OnePlus / vivo (OEM protocols over D+/D- or proprietary pins).
-    for (const Section s : {Section::Huawei, Section::Samsung, Section::Oppo}) section(s);
+    // The sections follow the run order (the default: OEM vendor modes by company, USB PD, QC / UFCS), with the PD source's own
+    // facts (Xiaomi, OEM / PD) in front of USB PD. A custom unit order moves the rows and their sections with it; a family the
+    // order splits shows as two runs, so the rows stay in the order they are tested in.
+    Run runs[unsigned(A::Count)];
+    size_t run_n = 0, split = 0;
+    for (size_t at = 0; at < order.size();) {
+        size_t end = at + 1;
+        while (end < order.size() && section_of(order[end]) == section_of(order[at])) ++end;
+        runs[run_n++] = order.subspan(at, end - at);
+        at = end;
+    }
+    while (split < run_n && section_of(runs[split][0]) != Section::UsbPd) section(runs[split++]);   // OEM vendor modes (Huawei / Honor, Samsung, OPPO / OnePlus / vivo) and what the user put before PD
     // Section 4: Xiaomi / Redmi - the Mi 6A probes ride PD (they run at the end of the PD unit) but read under the
     // family: the auth fact plus the 6 A hunt rows, no PD test rows. Omitted when nothing was detected.
     bool any_hunt = false;
@@ -439,10 +453,9 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
             b.phrase(oem.scp_cap, Tone::Dim, false);
         }
     }
-    // Section 6: compliant USB-C (PD over CC).
-    section(Section::UsbPd);
-    // Section 7: QC / UFCS (standard D+/D- protocols; QC runs on USB-C as well, so not "USB-A").
-    section(Section::Qc);
+    // USB PD (compliant USB-C, PD over CC) and QC / UFCS (standard D+/D- protocols; QC runs on USB-C as well, so not "USB-A"),
+    // each where the run puts it.
+    while (split < run_n) section(runs[split++]);
     auto collapsed = [&](const bool (&set)[unsigned(A::Count)], const char* label, Tone t) {
         bool any = false;
         for (const A a : order) any |= set[unsigned(a)];

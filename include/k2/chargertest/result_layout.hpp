@@ -93,6 +93,9 @@ struct OemNotes {
     // fails would take the finished rows from above the running one and shuffle the window mid-run.
     bool fold = true;
     bool oppo_svid = false;   // the source listed OPPO's SVID: a passive "OPPO SVID 0x22D9 (discovery only)" row, nothing sent
+    // The run's units in execution order (charger_test::Runner::unit_order()); empty = the default order. The rows follow the
+    // order the plan runs the algorithms in (charger_test::algorithm_order), so the grid lists them as they are tested.
+    std::span<const charger_test::Unit> units{};
     const char* scp_cap = nullptr;   // what the adapter's SCP readout reported, the words after "SCP cap " of report_card::scp_note ("20V 6A")
 };
 // Vendor-VID label for the OEM section; nullptr when the VID has no PD-derived OEM protocol to name.
