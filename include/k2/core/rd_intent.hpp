@@ -119,6 +119,10 @@ constexpr bool plan_reattach(ctcable::Choice cable, const ctcable::Facts& facts,
     return facts.max_ma >= 5000 && pin == 2 && self_powered && xiaomi_source;
 }
 
+// The marker kind that says the reboot this boot came back from was the charger test's planned re-attach: a run resumed on
+// such a boot is that re-attach, not a power loss, and the run journal does not count it as a resume.
+constexpr bool planned_reattach(IntentKind k) { return k == IntentKind::Reattach; }
+
 // Keeps the record in step with the boot's own state, in RAM, so the main loop pays nothing per pass and flash is touched on a
 // change only. Self-powered here means a pinned Rd (the boot pin, stable across a run's own detach) and no host: a K2 with a USB
 // host lives on that host and has nothing to come back from. A pinned K2 waits for its contract before it says anything; once it

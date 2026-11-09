@@ -5,6 +5,7 @@
 #include "k2/chargertest/charger_journal.hpp"
 #include "k2/chargertest/step_label.hpp"
 #include "k2/chargertest/result_layout.hpp"
+#include "k2/core/rd_intent.hpp"
 #include "k2/pd/transcap_reason.hpp"
 #include "ramdisk.hpp"
 #include "k2/core/remote_proto.hpp"
@@ -3840,9 +3841,12 @@ struct JStore {   // the littlefs volume of a boot; the disk is the "flash" that
 };
 struct Boot {
     k2test::RamDisk& fl; JStore js; Fake f; ct::Runner r; cj::Journal& j; cj::Replay rep;
+    bool planned_ = false;   // this boot's /rd.rec said Reattach: the reboot was the charger test's planned re-attach
     explicit Boot(k2test::RamDisk& flash) : fl(flash), js(flash), r(f), j(js.j) {
         j.replay(rep);
         f.jr = &j; f.rn = &r;
+        // rdcomeback::begin() reads the same record on the device; the fix passes this flag to restore() as its last argument.
+        planned_ = rdintent::planned_reattach(rdintent::load(js.fs).kind);
         if (rep.found && rep.unfinished) {
             j.adopt(rep);   // the journal mirrors the run read back: later changes are written as changes to its section files
             f.jopts = rep.options;
@@ -4406,6 +4410,43 @@ static void test_resume_reboot_in_request() {
     for (const auto& s : b.r.steps()) CHECK_EQ(int(s.verdict) != int(ct::Verdict::Pending) && int(s.verdict) != int(ct::Verdict::Running), true);
     const auto snap = remote::charger_test_snapshot(b.r);
     CHECK_EQ(snap.resumed, 1);
+}
+// The planned re-attach (rdintent::plan_reattach, the 6 A hunt on a self-powered K2) reboots the K2 on purpose: it writes the
+// Reattach record (/rd.rec) before it drops the Rd, and the comeback boot's journal resumes the run. That resume is the
+// planned re-attach, not a power loss: the "resumed" counter must stay 0 (ROADMAP 2026-11-09, "Planned re-attach counts as a
+// resume"). An unplanned VBUS loss in the same run still counts 1.
+static void test_resume_after_planned_reattach_is_not_counted() {
+    k2test::RamDisk fl(96); JStore js(fl); cj::Journal& j = js.j;
+    Fake f; ct::Runner r(f);
+    CHECK_EQ(journaled_start(f, r, j, kPd), ct::Reason::None);
+    for (int n = 0; n < 2000 && f.phases.empty(); ++n) f.tick(r, 100);
+    CHECK_EQ(f.phases.empty(), false);
+    CHECK_EQ(int(f.phases[0].first), int(ct::Phase::Request));
+    const size_t cut = f.phases[0].second;
+    CHECK_EQ(r.steps()[cut].mv > 5000, true);
+    // The planned re-attach wrote its intent marker before the reboot (rdcomeback::begin_reattach on the device):
+    CHECK_EQ(rdintent::save(js.fs, rdintent::Intent{rdintent::IntentKind::Reattach, 2, {}}), true);
+    Boot b(fl);   // the comeback boot: the marker says this reboot was planned
+    CHECK_EQ(b.planned_, true);
+    CHECK_EQ(b.rep.unfinished, true); CHECK_EQ(b.r.resumable(), true); CHECK_EQ(b.r.resumed(), 0);
+    CHECK_EQ(int(b.r.resume(b.f.in, true)), int(ct::Reason::None));
+    CHECK_EQ(b.r.resumed(), 0);   // RED until the fix: today the planned re-attach is counted as a resume
+    b.j.resumed(b.r.resumed());   // what the UI journals right after a resume
+    const auto snap = remote::charger_test_snapshot(b.r);
+    CHECK_EQ(snap.resumed, 0);    // RED until the fix: the wire carries 1 today
+    // Power goes again before the run ends, this time unplanned: by now the follower has rewritten the marker as Session
+    // (the contract was Ready), so the next boot is not planned and the loss counts.
+    CHECK_EQ(rdintent::save(js.fs, rdintent::Intent{rdintent::IntentKind::Session, 2, {}}), true);
+    Boot c(fl);
+    CHECK_EQ(c.planned_, false); CHECK_EQ(c.rep.resumed, 0);   // RED until the fix: the journal replays 1 today
+    CHECK_EQ(c.r.resumable(), true);
+    CHECK_EQ(int(c.r.resume(c.f.in, true)), int(ct::Reason::None));
+    CHECK_EQ(c.r.resumed(), 1);   // the unplanned VBUS loss counts
+    c.j.resumed(c.r.resumed());
+    Boot d(fl);
+    CHECK_EQ(d.rep.resumed, 1);
+    const auto snap2 = remote::charger_test_snapshot(d.r);
+    CHECK_EQ(snap2.resumed, 1);
 }
 // The reboot budget: a unit (protocol) may take the K2 down kRebootBudget (3) times. Losses 1 and 2 resume the same row, loss 3
 // skips what is left of the unit ("rebooted 3x") and the next unit runs: never an endless boot loop on one protocol, and the run
@@ -5672,7 +5713,7 @@ int main() {
     test_pd_attach_without_any_caps_stays_no_reattach();
     test_pd_attach_rp_drop_restarts_the_wait_once();
     test_cancel_during_a_unit_restores_the_pd_policy();
-    test_resume_reboot_in_request(); test_pd_replan_rewrites_the_journal(); test_resume_in_a_vendor_unit_goes_on_in_the_default_order(); test_resume_in_the_pd_unit_runs_the_legacy_units_after_it(); test_resume_refusals_and_abandon();
+    test_resume_reboot_in_request(); test_resume_after_planned_reattach_is_not_counted(); test_pd_replan_rewrites_the_journal(); test_resume_in_a_vendor_unit_goes_on_in_the_default_order(); test_resume_in_the_pd_unit_runs_the_legacy_units_after_it(); test_resume_refusals_and_abandon();
     test_reboot_budget_skips_the_unit_on_the_third_loss(); test_reboot_budget_covers_the_ufcs_unit(); test_legacy_preset_plans_no_pd_rows();
     test_always_on_source_never_stalls(); test_resume_count_is_bounded(); test_resume_cancel_key();
     test_resumed_baseline_adopts_a_session_change(); test_self_powered_vbus_loss_suspends_the_run(); test_hid_powered_vbus_loss_still_stops_the_run();

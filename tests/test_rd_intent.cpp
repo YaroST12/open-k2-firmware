@@ -136,6 +136,15 @@ void test_the_planned_reattach_gate() {
     CHECK_EQ(plan_reattach(Choice{Kind::Builtin, 99}, a5, 2, true, true), false);   // an invalid choice
 }
 
+// Only the Reattach kind marks a boot whose reboot was the planned re-attach: the run journal's resume on that boot is not
+// a power loss and must not be counted as one.
+void test_only_the_reattach_kind_is_a_planned_reattach() {
+    CHECK_EQ(planned_reattach(IntentKind::Reattach), true);
+    CHECK_EQ(planned_reattach(IntentKind::Session), false);
+    CHECK_EQ(planned_reattach(IntentKind::Rescan), false);
+    CHECK_EQ(planned_reattach(IntentKind::None), false);
+}
+
 void test_the_follower() {
     Follower f;
     // A plain boot that is not self-powered: the first look scrubs (writes None) once, then nothing.
@@ -332,6 +341,7 @@ int main() {
     test_the_boot_mode_decision();
     test_the_comeback_judge();
     test_the_planned_reattach_gate();
+    test_only_the_reattach_kind_is_a_planned_reattach();
     test_the_follower();
     test_the_follower_carries_a_runs_cable();
     test_forget_rewrites_what_the_volume_may_have_lost();
