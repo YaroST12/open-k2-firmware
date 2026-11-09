@@ -48,6 +48,30 @@ Every row below carries **Fix** (what to change, where) and **Validate** (what p
 and the hardware check). A row leaves this list when its fix is merged and the hardware check has passed; move it to
 "Verified on hardware" with the date and the evidence path.
 
+- **An inline K2 hijacks the link** (2026-11-09, user report, build b00178c): hub or charger -> K2 -> USB 2 C-C cable ->
+  Pixel, HID-powered plain boot, no PLUS. The K2 put Rd on CC2 from the first instruction, Requested 12 times in 3 s
+  while the Pixel Requested too, answered the Pixel's VDMs as the device, flapped inline yes/no, and Refresh (which opens
+  CC ~150 ms) rebooted the hub-powered K2. Dock -> K2 -> laptop (same day): no PD traffic after a clean boot, yet the page
+  said "PD none" / "NO DEVICE" at 20 V. Matrix rows H6, H7, C3, C4 (`docs/CONNECTION_MATRIX.md`, exceptions X1 to X3).
+  - Diagnosis (code reading plus host tests, hardware pending): a stale `/rd.rec` was read on a host-powered boot and
+    converted to a key mode (`src/core/rd_comeback.cpp`); `pd::Link` is UI-tick fed, was blind during the slow init and
+    a detach cleared its latch, so the Rd -> self-hold Request -> VBUS returns under load -> inline -> Rd off -> VBUS
+    collapses loop ran; the Request and the VDM answers were gated on the latch only; Refresh's `CycleBridged` opens CC.
+  - Fix: (1) a boot with a host or a 5 V aux rail ignores the marker (`rd_intent.hpp`, `rd_comeback.cpp`); (2) `pd::Link`
+    latches inline on a load, a foreign Request, a VBUS rise, or foreign evidence held 1.5 s (VBUS above 5.5 V or a sink-band
+    CC level with no Rd of ours, no contract of our own), clears only after a quiet window of proof, and survives a VBUS gap
+    (`src/pd/pd_link.cpp`); (3) the driver mirrors it and also gates on `sink_downstream()` / `sink_cc_far()`: no Rd, no
+    Request, no SOP answers (`src/drivers/fusb302.cpp`); (4) Refresh and the survey are passive and Blocked(inline)
+    while inline or possibly inline (`src/core/rescan.cpp`, `src/core/survey.cpp`); (5) empty states say "in use", never
+    "no device", and name no port (`include/k2/ui/ui_connection.hpp`).
+  - Validate: host tests (`tests/test_pd_link.cpp`, `test_fusb302_scan.cpp`, `test_rd_intent.cpp`, `test_ui_connection*.cpp`),
+    `make gate`; hardware, one device tool at a time, no active PD with a laptop inline: **H6** charger -> K2 -> Pixel,
+    HID, plain boot: `bootinfo` shows `pin=0`, Black Box shows no K2 Request and no SOP TX, LINK `inline=yes`, UI "Live sink";
+    **H7** hub 5 V 0.9 A -> K2 -> Pixel: same, no VDM answers, inline never flaps, hub keeps VBUS; **C4** plant a stale
+    `/rd.rec` (self-powered run, bare unplug), plug into HID only: no Rd at any time; **C3** Connection -> Source ->
+    Refresh with a sink behind: no CC open, K2 does not reboot, survey shows Blocked(inline); dock -> K2 -> laptop: with no
+    PD traffic the Source / Sink / Cable tabs say "in use", never "NO DEVICE", and the K2 transmits nothing.
+
 - **Connection -> Source -> Refresh kills a self-powered K2** (2026-11-09, user report): fixed in 667bca2 (+ 7f73ddf,
   8cdc8c3), hardware check pending.
   - Evidence: PLUS-boot K2 powered only by the charger on the bottom port; Actions -> Refresh ran `fusb302::rescan()`,
@@ -199,8 +223,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     the card if it helps the reader).
   - Validate: host test (journal resume after a planned re-attach: resumed stays 0, after an unplanned VBUS loss: 1);
     hardware: self-powered CUKTECH 6 A run (PLUS boot, built-in CUKTECH 6A identity) ends with a card showing no resume.
-- **Stale Rd marker** (2026-11-09, accepted for now): a bare unplug after a self-powered run leaves `/rd.rec`; the next
-  plain boot shows Rd for 0.5-1.5 s before it releases the marker.
+- **Stale Rd marker** (2026-11-09, re-rated from "accepted for now": a bug when a real sink is behind the K2): a bare
+  unplug after a self-powered run leaves `/rd.rec`; the next plain boot read it and showed Rd. Measured on build
+  b00178c (`runs/2026-11-09-rescan/bb1.txt`, matrix rows H6 / C4): Rd on CC2 from 30 ms, 12 K2 Requests over 3 s and a
+  collision with the Pixel's own Request, not "0.5-1.5 s of Rd". The host-powered half is fixed on `k2/inline-passive`
+  (a boot with a USB host or a 5 V aux rail never reads the marker); what stays open is a hub-powered boot without HID
+  (no aux rail to tell it from a comeback), covered only by the downstream gates and the Link's foreign-evidence latch.
   - Fix: add a `.noinit` SRAM canary written with the marker; a comeback boot trusts the flash marker only when the
     canary survived (a short VBUS loss keeps SRAM long enough? if not, bound the marker by a boot counter instead).
     Measure first whether SRAM survives the comeback's dark period on this board.
