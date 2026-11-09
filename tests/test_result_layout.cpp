@@ -686,6 +686,42 @@ static void test_mi_probe_rows_stand_where_the_plan_runs_them() {
     rl::build(l, t, notes);
     CHECK_STR(row_order(l).c_str(), "*USB PD,PD3.x,PPS,*Xiaomi,Mi Turbo,Mi 6A,Mi 6A,*QC/UFCS,QC2");
 }
+// The grid order is the executed order, APDO by APDO: the planner emits a 6 A hunt right after the sample steps of the
+// APDO that covers the probed level, so with two PPS APDOs the 11 V probe runs between APDO 1 and APDO 2. One grid row
+// per APDO puts the probe row between the two PPS rows; a single PPS row holding every APDO's chip would read the probe
+// after the whole row. (ROADMAP 2026-11-09, "a PPS row shows a probe after all its APDOs".)
+static void test_probe_between_two_apdos_stands_between_their_rows() {
+    const uint32_t pdo6 = 3235656292u;   // PPS 3.3-11V 5A, slot 6
+    const uint32_t pdo7 = 3248763456u;   // PPS 5-21V 3.2A, slot 7
+    std::vector<ct::Step> s;
+    for (unsigned t : {5000u, 8000u, 11000u}) s.push_back(step(A::Pps, t, V::Pass, 6, pdo6));
+    s.push_back(hunt_step(A::Pps, 11000, V::Pass, 6, pdo6));   // the plan's order: after APDO 1's steps, before APDO 2's
+    for (unsigned t : {5000u, 13000u, 21000u}) s.push_back(step(A::Pps, t, V::Pass, 7, pdo7));
+    rl::Layout l; rl::build(l, s);
+    CHECK_STR(row_order(l).c_str(), "*USB PD,PPS,*Xiaomi,Mi 6A,*USB PD,PPS");
+    // the dense Results / Running grids leave the headers out: the rows alone are the plan's order
+    rl::OemNotes dense; dense.headers = false;
+    rl::build(l, s, dense);
+    CHECK_STR(row_order(l).c_str(), "PPS,Mi 6A,PPS");
+    CHECK_EQ(l.rows[1].probe && l.rows[1].mv == 11000, true);
+    // Every step's row sits at or after the previous step's row: the grid never reorders the run it shows.
+    auto row_of_step = [&](const ct::Step& x) {
+        for (size_t r = 0; r < l.row_count; ++r) if (rl::row_has(l.rows[r], x)) return int(r);
+        return -1;
+    };
+    int prev = -1;
+    bool mono = true;
+    for (const auto& x : s) {
+        const int r = row_of_step(x);
+        if (r < 0 || (prev >= 0 && r < prev)) mono = false;
+        prev = r;
+    }
+    CHECK_EQ(mono, true);
+    // The APDO rows keep their own chips: "5-11V 5A" before the probe, "5-21V 3.2A" after it.
+    CHECK_STR(chips(l, 0).c_str(), "5-11V 5A");
+    CHECK_STR(chips(l, 1).c_str(), "11V 6A");
+    CHECK_STR(chips(l, 2).c_str(), "5-21V 3.2A");
+}
 
 // ---- summarize(): the best passing mode per protocol family, as words with volts and amps ---------------------------
 static ct::Step hunt(unsigned mv, unsigned ma, V v) {
@@ -894,6 +930,7 @@ int main() {
     test_results_split_into_sections();
     test_oem_notes_get_their_own_section_between_xiaomi_and_usb_pd();
     test_hunt_rows_live_in_the_xiaomi_section(); test_mi_probe_rows_stand_where_the_plan_runs_them();
+    test_probe_between_two_apdos_stands_between_their_rows();
     test_hunt_rows_the_source_did_not_unlock_read_locked();
     test_empty_sections_are_omitted();
     test_a_section_that_folds_away_loses_its_header();
