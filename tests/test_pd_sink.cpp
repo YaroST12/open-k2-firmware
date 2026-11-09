@@ -1551,5 +1551,90 @@ int main() {
         CHECK_EQ(int(r.sink.swaps_rx(SwapKind::Dr)), 0);
     }
 
+    // ---- review 2026-11-09, red first: a re-announce while held re-requests the held LEVEL by voltage
+    // (fixed) or range (programmable), never by position ----
+    {   // 15 V held at PDO 3, the source re-announces 5/9/20 V: the held level is gone, so the answer is a
+        // Request for PDO 1 (5 V) - never PDO 3, which now holds 20 V (a legal but unchosen voltage) - and the
+        // hold is reported lost (held off, result Aborted) once that Request is over.
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();   // hold 15 V at PDO 3
+        CHECK_EQ(int(r.sink.status().pos), 3); CHECK_EQ(r.sink.status().mv, 15000);
+        r.caps = SourceCaps{};
+        r.caps.valid = true; r.caps.spec_rev = 2; r.caps.num_pdos = 3;
+        r.caps.pdos[0] = decode_pdo(0x0001912C);   // 5 V 3 A
+        r.caps.pdos[1] = decode_pdo(0x0002D12C);   // 9 V 3 A
+        r.caps.pdos[2] = decode_pdo(0x0004B12C);   // 20 V 3 A: PDO 3 is now 20 V
+        const std::size_t n = r.sent.size();
+        const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 3, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), n + 1);                                      // the re-announce is answered
+        CHECK_EQ(r.last_type(), unsigned(kDataRequest));
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 1);                          // PDO 1, never 20 V
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().held), 0);                              // the hold is reported lost
+        CHECK_EQ(int(r.sink.status().result), int(SinkResult::Aborted));
+        CHECK_EQ(int(r.sink.status().pos), 1); CHECK_EQ(int(r.sink.status().mv), 5000);
+        for (const TxMsg& m : r.sent) CHECK_EQ(int((m.header & 0x1F) == kDataRequest ? int((m.data[0] >> 4) & 7) : 0), 0);   // no Request ever pointed at 20 V
+    }
+    {   // the same hold, the source re-announces 5/15/20 V: 15 V moved to PDO 2, the answer is a Request for
+        // PDO 2 at the new current word, and the hold stands.
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();   // hold 15 V at PDO 3
+        r.caps = SourceCaps{};
+        r.caps.valid = true; r.caps.spec_rev = 2; r.caps.num_pdos = 3;
+        r.caps.pdos[0] = decode_pdo(0x0001912C);   // 5 V 3 A
+        r.caps.pdos[1] = decode_pdo(0x0002D096);   // 15 V 1.5 A: the held level at slot 2, lower current
+        r.caps.pdos[2] = decode_pdo(0x0004B12C);   // 20 V 3 A
+        const std::size_t n = r.sent.size();
+        const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 3, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), n + 1);
+        CHECK_EQ(r.last_type(), unsigned(kDataRequest));
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 2);                          // the held 15 V at its new slot
+        CHECK_EQ(r.last_rdo(), rdo_fixed(2, 1500, 1500, false));             // the new, lower current word
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().held), 1);                              // the hold stands
+        CHECK_EQ(int(r.sink.status().pos), 2); CHECK_EQ(int(r.sink.status().mv), 15000); CHECK_EQ(int(r.sink.status().ma), 1500);
+    }
+    {   // a PPS hold: the APDO moved to another slot but still covers the held voltage: re-request there
+        Rig r;
+        r.sink.trigger({5, 9000, 2000}, r.now); r.pump(); r.accept_and_ready();   // hold PPS 9 V at PDO 5
+        CHECK_EQ(r.sink.status().pos, 5); CHECK_EQ(r.sink.status().mv, 9000);
+        r.caps = make_caps();
+        r.caps.num_pdos = 6;
+        r.caps.pdos[4] = decode_pdo(0xC0DC2164);   // the 3.3-11 V APDO stays at PDO 5... move it to PDO 6:
+        r.caps.pdos[5] = r.caps.pdos[4];
+        r.caps.pdos[4] = decode_pdo(0xC1A4213C);   // ...behind a 3.3-21 V one
+        const std::size_t n = r.sent.size();
+        const std::uint8_t caps_bytes[4] = {0x64, 0x21, 0xDC, 0xC0};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 6, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), n + 1);
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 6);                          // the APDO at its new slot
+        CHECK_EQ(int((r.last_rdo() >> 9) & 0x1FF), 9000 / 20);               // the held 9 V target
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().held), 1); CHECK_EQ(int(r.sink.status().pos), 6); CHECK_EQ(r.sink.status().mv, 9000);
+    }
+    {   // a Source_Capabilities arriving in Transition while held, with no release pending, gets a Request
+        // within tSenderResponse (the source Hard Resets otherwise); the source restarts negotiation, so the
+        // fresh list is answered like any re-announce.
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump();                          // Request for 15 V out
+        r.ctl(kCtlAccept);                                                   // Transition, held, no release
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        const std::size_t n = r.sent.size();
+        const std::uint8_t caps_bytes[4] = {0x2C, 0x91, 0x01, 0x00};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 1, 2) | (1u << 8), caps_bytes, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), n + 1);                                      // a Request answered the caps
+        CHECK_EQ(r.last_type(), unsigned(kDataRequest));
+        CHECK_EQ(int((r.last_rdo() >> 28) & 7), 3);                          // the held 15 V, still at PDO 3 here
+        r.accept_and_ready();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().held), 1); CHECK_EQ(int(r.sink.status().mv), 15000);
+    }
+
     return test_report("test_pd_sink");
 }
