@@ -12,13 +12,13 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         detach_at_ = at_ms;
         rx_at_detach_ = last_rx_;
         waiting_ = false;
-        inline_ = false;
-        own_seen_ = false;
+        own_seen_ = false;   // inline_ stays: a collapse of VBUS is not proof that the sink left (see kInlineHoldMs)
     } else {
         waiting_ = true;  // old data stays until new Source_Capabilities arrive (or kWaitingCapsMs pass)
         new_source_ = true;
         vbus_was_low_ = false;
         attach_at_ = at_ms;
+        quiet_since_ = at_ms;   // a held inline state is judged from this attach on, not from the load before the gap
     }
 }
 
@@ -66,6 +66,7 @@ void Link::update(const LinkInput& in) {
     } else if (want && !attached_) {
         set_attached(true, in.now_ms);
     }
+    if (!attached_ && inline_ && in.now_ms - detach_at_ > kInlineHoldMs) inline_ = false;   // gone for real
     if (waiting_ && in.caps_rx != rx_at_detach_) waiting_ = false;   // new Source_Capabilities arrived
     else if (waiting_ && in.now_ms - attach_at_ > kWaitingCapsMs) waiting_ = false;   // a non-PD source
 
@@ -110,6 +111,7 @@ void Link::force_attached(std::uint32_t now_ms) {
 void Link::force_detached(std::uint32_t now_ms) {
     forced_ = true;
     if (attached_) set_attached(false, now_ms);
+    inline_ = false;   // an explicit debug detach is a statement, not a VBUS gap
 }
 
 bool Link::take_new_source() {

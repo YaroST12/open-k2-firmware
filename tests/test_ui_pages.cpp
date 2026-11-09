@@ -29,6 +29,9 @@ static void fill_pdos(int n) {
 
 static Ui &fresh_ui() {
     static Ui ui;
+    // The inline latch survives a VBUS gap (pd::kInlineHoldMs), so a case no longer ends with the Link back at "standalone" by itself:
+    // start from a new Link (the rest of the Ui carries over between cases as before).
+    const_cast<pd::Link &>(ui.link()) = pd::Link{};
     g_stub.ms = 10000;
     ui.init(g_stub.ms);
     ui.set_rotation(0, g_stub.ms);   // boot default is bottom-edge@0; the pixel checks below assume the right edge (logical == physical, no scaling)
@@ -1057,6 +1060,7 @@ static void test_inline_gates_emarker_scan() {
     CHECK_EQ(ui.run_action(Action::PdRescan, 40200) ? 1 : 0, 1);
     g_stub.pm = {};
     g_stub.inl = false;
+    ui.debug_link(false, 40300);   // the latch is held through a VBUS gap now: an explicit detach ends it for the next case
 }
 
 // Which e-marker method runs depends on the link: no source = VCONN scan (also with nothing attached,

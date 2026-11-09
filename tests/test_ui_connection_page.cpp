@@ -333,18 +333,19 @@ static void test_each_tab_shows_its_own_side() {
 static void test_sink_tab_not_empty_when_a_sink_was_seen() {
     Ui &ui = fresh_ui();
     g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0;
+    uint32_t t = 20000;
+    const auto empty = show(ui, 2, t);              // Sink tab, nothing attached, no sink seen: the empty state
     // A Request was sniffed on CC; set before the attach so the attach edge itself does not count it as
     // a "new" Request for the inline detector.
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
     g_stub.contract.pos = 1; g_stub.contract.mv = 9000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
     g_stub.contract.requests = 1;
-    uint32_t t = 20000;
-    const auto empty = show(ui, 2, t);              // Sink tab, nothing attached: the empty state
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
     g_stub.cc = 1; g_stub.pm.current_ma = 2000;     // attach with a load behind the K2: inline latches
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().inline_mode()), 1);
-    g_stub.pm.current_ma = 0;                       // the sink goes quiet: the latch expires after 2 s
-    for (int i = 0; i < 30; i++) ui.tick(t += 100);
+    g_stub.pm.current_ma = 0;                       // the sink goes quiet: the latch expires after the quiet window
+    for (uint32_t i = 0; i < k2::pd::kInlineQuietMs / 100 + 10; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().inline_mode()), 0);
     const auto seen = show(ui, 2, t);               // same tab, a sink was seen on CC
     CHECK(seen != empty);                           // rows, not the empty state

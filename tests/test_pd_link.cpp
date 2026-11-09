@@ -266,13 +266,63 @@ static void test_inline_clears_when_idle() {
     l.update(inl(0, 5000, 2000, 1));
     CHECK_EQ(l.inline_mode(), 1);
     l.update(inl(100, 5000, 0, 1));     // load gone: 0 mA, no new Request
-    l.update(inl(1500, 5000, 0, 1));
-    CHECK_EQ(l.inline_mode(), 1);       // not yet 2 s
-    l.update(inl(3100, 5000, 0, 1));
-    CHECK_EQ(l.inline_mode(), 0);       // 3 s idle: restored without a detach
+    l.update(inl(kInlineQuietMs - 500, 5000, 0, 1));
+    CHECK_EQ(l.inline_mode(), 1);       // not yet quiet for the whole window
+    l.update(inl(kInlineQuietMs + 1100, 5000, 0, 1));
+    CHECK_EQ(l.inline_mode(), 0);       // idle for the whole window: restored without a detach
     CHECK_EQ(l.attached(), 1);
-    l.update(inl(3200, 5000, 0, 1));
+    l.update(inl(kInlineQuietMs + 1200, 5000, 0, 1));
     CHECK_EQ(l.inline_mode(), 0);       // the old Request count must not re-latch
+}
+
+// A flip back to "standalone" needs proof, not a missed sample: a phone that sips less than 50 mA for a few seconds (full battery,
+// screen off) is still a phone. Hardware 2026-11-09: 2 s of quiet was enough to put the K2's Rd back on a hub - K2 - phone chain.
+static void test_a_short_lull_is_not_proof_of_a_standalone_k2() {
+    Link l;
+    l.update(inl(0, 5000, 900, 1));
+    CHECK_EQ(l.inline_mode(), 1);
+    l.update(inl(100, 5000, 20, 1));
+    l.update(inl(9000, 5000, 20, 1));   // 9 s below 50 mA
+    CHECK_EQ(l.inline_mode(), 1);
+    l.update(inl(9100, 5000, 900, 1));  // the phone draws again: the window restarts
+    l.update(inl(9200, 5000, 20, 1));
+    l.update(inl(9200 + kInlineQuietMs - 100, 5000, 20, 1));
+    CHECK_EQ(l.inline_mode(), 1);
+}
+
+// The inline state outlives a VBUS collapse: the hub or the charger dropping VBUS for a moment (Rd off, a swap, a re-negotiation)
+// is not the sink leaving. Before this the latch cleared on every detach and re-applied the K2's Rd, which made the next
+// attach a K2 sink again: the flap loop of the 2026-11-09 capture (inline yes / no every 0.5 s, 181502..183788 ms).
+static void test_inline_survives_a_vbus_collapse_and_the_reattach() {
+    Link l;
+    l.update(inl(0, 5000, 900, 3));
+    CHECK_EQ(l.inline_mode(), 1);
+    l.update(inl(100, 0, 0, 3));
+    l.update(inl(500, 0, 0, 3));
+    CHECK_EQ(l.attached(), 0);
+    CHECK_EQ(l.inline_mode(), 1);       // detached for a moment: still possibly inline
+    l.update(inl(1500, 0, 0, 3));
+    CHECK_EQ(l.inline_mode(), 1);
+    l.update(inl(2000, 5000, 0, 3));    // back, no load yet, the old Request count must not matter
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.inline_mode(), 1);
+    l.update(inl(2000 + kInlineQuietMs - 500, 5000, 0, 3));   // the quiet window starts at the re-attach, not at the old load
+    CHECK_EQ(l.inline_mode(), 1);
+}
+
+// Gone for real: nothing came back for kInlineHoldMs, the next attach starts from "standalone".
+static void test_inline_clears_after_a_long_detach() {
+    Link l;
+    l.update(inl(0, 5000, 900, 3));
+    l.update(inl(100, 0, 0, 3));
+    l.update(inl(500, 0, 0, 3));
+    CHECK_EQ(l.attached(), 0);
+    l.update(inl(100 + kInlineHoldMs - 100, 0, 0, 3));
+    CHECK_EQ(l.inline_mode(), 1);
+    l.update(inl(100 + kInlineHoldMs + 100, 0, 0, 3));
+    CHECK_EQ(l.inline_mode(), 0);
+    l.update(inl(100 + kInlineHoldMs + 2000, 5000, 0, 3));
+    CHECK_EQ(l.inline_mode(), 0);       // the old Request count must not re-trigger
 }
 
 static void test_inline_stays_while_active() {
@@ -281,21 +331,9 @@ static void test_inline_stays_while_active() {
     for (std::uint32_t t = 100; t < 6000; t += 100) l.update(inl(t, 5000, (t / 100) % 2 ? 0 : 80, 1));
     CHECK_EQ(l.inline_mode(), 1);       // current above 50 mA every 200 ms keeps the window open
     l.update(inl(6100, 5000, 0, 2));    // a fresh Request restarts it too
-    l.update(inl(7000, 5000, 0, 2));
+    l.update(inl(6100 + kInlineQuietMs - 1000, 5000, 0, 2));
     CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(8200, 5000, 0, 2));
-    CHECK_EQ(l.inline_mode(), 0);
-}
-
-static void test_inline_clears_on_detach() {
-    Link l;
-    l.update(inl(0, 5000, 2000, 3));
-    CHECK_EQ(l.inline_mode(), 1);
-    l.update(inl(100, 0, 0, 3));
-    l.update(inl(500, 0, 0, 3));
-    CHECK_EQ(l.attached(), 0);
-    CHECK_EQ(l.inline_mode(), 0);
-    l.update(inl(2000, 5000, 0, 3));    // re-attach; the old Request count must not re-trigger
+    l.update(inl(6100 + kInlineQuietMs + 100, 5000, 0, 2));
     CHECK_EQ(l.inline_mode(), 0);
 }
 
@@ -341,7 +379,9 @@ int main() {
     test_inline_by_request_then_vbus();
     test_inline_clears_when_idle();
     test_inline_stays_while_active();
-    test_inline_clears_on_detach();
+    test_a_short_lull_is_not_proof_of_a_standalone_k2();
+    test_inline_survives_a_vbus_collapse_and_the_reattach();
+    test_inline_clears_after_a_long_detach();
     test_force();
     test_format_ago();
     return test_report("test_pd_link");

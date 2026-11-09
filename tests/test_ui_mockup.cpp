@@ -89,7 +89,7 @@ int main() {
     // ChargerTest: setup page, then a full PD-only run to the results view. START refuses a live load, so the
     // meter reads an idle 5 V line (the same thing the run's own VBUS-safe check needs).
     g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;
-    for (int i = 0; i < 30; ++i) { t += 100; ui.tick(t); }   // the inline-load detection and the readout filters settle
+    for (uint32_t i = 0; i < k2::pd::kInlineQuietMs / 100 + 20; ++i) { t += 100; ui.tick(t); }   // the inline latch (quiet window) and the readout filters settle
     ui.goto_page(uint8_t(Page::ChargerTest), t + 100); render(ui, t, "ct_setup");
     static const uint8_t kPdOnly[] = {uint8_t(ct::Unit::Pd), uint8_t(ct::Unit::PdLow)};
     CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);

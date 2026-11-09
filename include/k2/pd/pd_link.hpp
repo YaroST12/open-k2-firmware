@@ -57,7 +57,12 @@ inline constexpr std::int32_t kSelfSupplyAllowanceMa = 150;
 
 inline constexpr std::int32_t kInlineCurrentMa = 50;
 inline constexpr std::int32_t kInlineVbusMv = kVSafe5MaxMv;
-inline constexpr std::uint32_t kInlineQuietMs = 2000;   // no Request and below 50 mA this long: not inline
+// A flip back to "standalone" needs proof, never a missed sample: no Request and below 50 mA for this long. A phone that sips
+// less than 50 mA for a few seconds is still a phone, and the K2's Rd on top of its own breaks the sink's contract.
+inline constexpr std::uint32_t kInlineQuietMs = 10000;
+// The inline state outlives a VBUS collapse (a hub or charger re-negotiating, a swap) for this long: "possibly inline" is the safe
+// state, the K2 stays passive through the gap. Detached longer than this = unplugged for real, the next attach starts standalone.
+inline constexpr std::uint32_t kInlineHoldMs = 15000;
 // A VBUS rise this soon after the K2's own trigger ended is still the K2's doing: a legacy trigger that gives up (abort,
 // reset_bus) releases D+/D- and the charger answers a few ms later, when fctrig is no longer Negotiating or Active.
 // The reset hold of the data lines is 500 ms; a real sink behind the K2 still latches by its current or its Request.
@@ -75,7 +80,9 @@ public:
     bool attached() const { return attached_; }
     bool waiting() const { return waiting_; }  // attached after a detach, no new caps yet
     bool charger_stale() const { return !attached_ || waiting_; }
-    bool inline_mode() const { return attached_ && inline_; }
+    // Latched by a load, a foreign Request or a foreign VBUS rise; held across a short detach (kInlineHoldMs) and left only on proof
+    // (kInlineQuietMs of quiet while attached, or a detach that outlasts the hold).
+    bool inline_mode() const { return inline_; }
     std::uint32_t detached_for_s(std::uint32_t now_ms) const { return now_ms > detach_at_ ? (now_ms - detach_at_) / 1000 : 0; }
     // True once per attach edge: the caller drops the previous charger's decoded data when
     // the first new Source_Capabilities arrive.
