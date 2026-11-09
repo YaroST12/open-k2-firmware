@@ -221,13 +221,13 @@ class ChargerTest(unittest.TestCase):
     def test_reason_42_withdrawn_by_source_decodes(self):
         # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
         # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.
-        self.assertEqual(len(kr.TEST_REASONS), 44)   # 43 reasons + WrongVoltage (#43, added with the wrong5v fix)
+        self.assertEqual(len(kr.TEST_REASONS), 45)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44)
         self.assertEqual(kr.TEST_REASONS[42], "withdrawn by source")
         row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 0, 0, 4, 42, 0, 0)   # a pd3-fixed 20 V row, skip, why 42
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "withdrawn by source"))
         self.assertEqual(step["explanation"], "withdrawn by source")
-        bad = bytearray(row); bad[10] = 44   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 45   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -241,7 +241,20 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("fail", "wrong voltage on 5V contract"))
         self.assertEqual(step["explanation"], "wrong voltage on 5V contract")
         self.assertEqual(step["measured_mv"], 7600)
-        bad = bytearray(row); bad[10] = 44   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 45   # the why byte, one past the last reason, still fails the row check
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
+
+    def test_reason_44_needs_load_decodes(self):
+        # pattern pps-off-at-no-load (splitter run 2026-11-10): a PPS level the source accepted and then dropped at ~0 mA
+        # is Reason::NeedsLoad (#44), a Skip - the row must decode with the measured collapse voltage, not raise FrameError.
+        self.assertEqual(kr.TEST_REASONS[44], "needs load")
+        row = struct.pack("<BBBHHHBBBI", 4, 6, 0, 11000, 3200, 1800, 4, 44, 0, 0)   # a PPS 11 V row, skip, why 44, measured 1.8 V
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"]), ("skip", "needs load"))
+        self.assertEqual(step["explanation"], "needs load")
+        self.assertEqual(step["measured_mv"], 1800)
+        bad = bytearray(row); bad[10] = 45   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 

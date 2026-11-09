@@ -53,7 +53,12 @@ struct Fake final : ct::Env {
     // pattern output-capped-below-advertised (Baseus FH22, 2026-11-08): a PD source accepts every request of its list (PS_RDY, the
     // contract is live) but the converter stops at this level (0 = no cap).
     int pd_max_mv = 0;
-    bool qc2_no_20v = false;                          // pattern qc3-20v-without-qc2-20v: QC2's discrete 20 V level stays at 5 V, QC3 still ramps to 20 V
+    // pattern pps-off-at-no-load (splitter run, 2026-11-10): the source takes a Request at a level of collapse_on's PDO type, then
+    // drops its output while the port draws collapse_ma: VBUS 3.5 V, 1.8 V, then the port tears the session down (one new session,
+    // VBUS stays at 1.8 V until the port restarts by itself 2.5 s after the Request). collapse_after_ready: the Request is answered with PS_RDY first (the contract is
+    // live), the collapse starts 200 ms later. Unknown = no collapse.
+    pd::PdoType collapse_on = pd::PdoType::Unknown; int collapse_ma = 0; bool collapse_after_ready = false; uint32_t collapse_t0 = 0;
+    bool qc2_no_20v = false;                         // pattern qc3-20v-without-qc2-20v: QC2's discrete 20 V level stays at 5 V, QC3 still ramps to 20 V
     // pattern qc-redetect-after-reset (power strip USB-A, 2026-11-07): the HVDCP detection needs a quiet gap after the lines' last
     // reset. A fresh QC2 / QC3 handshake that starts less than this long after the previous session's release gets no answer; a
     // retarget in the live session never does.
@@ -188,6 +193,14 @@ struct Fake final : ct::Env {
             in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.mv = 5000;
             return pd::Err::Ok;
         }
+        if (collapse_on != pd::PdoType::Unknown && c.pos <= caps.num_pdos && caps.pdos[c.pos - 1].type == collapse_on) {
+            if (c.mv > 5000) collapse_t0 = in.now + (collapse_after_ready ? 200 : 0);
+            if (c.mv > 5000 && !collapse_after_ready) {   // Accept, no PS_RDY: the sink waits in Transition
+                in.pd.state = pd::SinkState::Transition; in.pd.result = pd::SinkResult::None; in.pd.held = true;
+                in.pd.pos = c.pos; in.pd.mv = c.mv;
+                return pd::Err::Ok;
+            }
+        }
         in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok;
         if (c.pos >= 8 && !in.pd.epr_mode && epr_caps.valid) { spr_caps = caps; caps = epr_caps; }   // the sink enters EPR first
         in.pd.held = true; in.pd.epr_mode = in.pd.epr_mode || c.pos >= 8;
@@ -223,6 +236,7 @@ struct Fake final : ct::Env {
     void release(bool pd) override {
         if (!alive()) return;
         ++releases; fc_releases += !pd;
+        collapse_t0 = 0; in.ibus_ma = 0;
         if (!pd) { fc_released = true; fc_released_at = in.now; }
         if (!release_ok || latched) return;
         in.vbus_mv = 5000;
@@ -365,6 +379,17 @@ struct Fake final : ct::Env {
             if (auth_caps_on && in.pd.xiaomi_authed && in.now >= auth_at + auth_caps_delay_ms) { auth_caps_on = false; caps = auth_caps; xm_reannounce = true; }
             xm.authed = in.pd.xiaomi_authed; xm.authed_at = xm.authed ? auth_at : 0; xm.reannounced = xm.authed && xm_reannounce;
             xm.last_step = xm_last_step; xm.opener_sent = xiaomi_svid;
+            if (collapse_t0 && in.now > collapse_t0) {   // pattern pps-off-at-no-load: the output falls, the port then restarts
+                const uint32_t t = in.now - collapse_t0;
+                in.ibus_ma = collapse_ma;
+                if (t == 100) in.vbus_mv = 3500;
+                else if (t == 200) in.vbus_mv = 1800;
+                else if (t == 300) { in.vbus_mv = 1800; ++in.session; in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.mv = 5000; }
+                else if (t == 2500) {   // the port restarts by itself: 5 V, a contract at PDO 1
+                    collapse_t0 = 0; in.ibus_ma = 0; in.vbus_mv = 5000;
+                    in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok; in.pd.pos = 1; in.pd.mv = 5000;
+                }
+            }
             if (!rd_on && !never_dark) in.vbus_mv = in.now - rd_off_at < dark_ms ? 2500 : 0;
             if (rd_on && !back_done && rd_on_at && !never_dark) {
                 if (no_vbus_after_rd) in.vbus_mv = 0;
@@ -3208,6 +3233,70 @@ static void test_pd_row_gives_up_after_a_second_source_hard_reset() {
     for (const auto& s : r.steps()) { lost += s.verdict == ct::Verdict::Fail && s.reason == ct::Reason::Lost; pass += s.group == ct::Group::Pd && s.verdict == ct::Verdict::Pass; }
     CHECK_EQ(lost, 1u); CHECK_EQ(pass >= 5, true);
 }
+// pattern pps-off-at-no-load (splitter run, 2026-11-10): a programmable level the source accepts and then drops while the port
+// draws ~0 mA is "needs load" (a Skip), not "source lost". Only that exact signature: Accept, no PS_RDY, VBUS collapsed, ~0 mA.
+struct CollapseRows { unsigned n = 0, needs_load = 0, lost = 0, other_fail = 0, passed = 0; };
+static CollapseRows collapse_rows(const ct::Runner& r, A algorithm) {
+    CollapseRows c;
+    for (const auto& s : r.steps()) {
+        if (s.group != ct::Group::Pd || s.algorithm != algorithm || s.mv <= 5000 || s.hunt) continue;
+        ++c.n;
+        c.needs_load += s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::NeedsLoad;
+        c.lost += s.verdict == ct::Verdict::Fail && s.reason == ct::Reason::Lost;
+        c.other_fail += s.verdict == ct::Verdict::Fail && s.reason != ct::Reason::Lost;
+        c.passed += s.verdict == ct::Verdict::Pass;
+    }
+    return c;
+}
+static void test_pps_accepted_then_dropped_at_no_load_is_needs_load() {
+    for (const int ma : {0, 10}) {
+        Fake f; f.collapse_on = pd::PdoType::Pps; f.collapse_ma = ma;
+        ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+        f.tick(r, 400000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        const auto c = collapse_rows(r, A::Pps);
+        CHECK_EQ(c.n >= 2u, true);
+        CHECK_EQ(c.needs_load, c.n); CHECK_EQ(c.lost, 0u); CHECK_EQ(c.other_fail, 0u);   // every raised PPS row of the run, none chain-skipped
+        CHECK_STR(ct::name(ct::Reason::NeedsLoad), "needs load");
+        for (const auto& s : r.steps()) {
+            if (s.reason == ct::Reason::NeedsLoad) CHECK_EQ(s.verdict, ct::Verdict::Skip);
+            if (s.algorithm == A::Pd3Fixed) CHECK_EQ(s.verdict, ct::Verdict::Pass);   // the fixed rows of the same source are untouched
+            CHECK_EQ(s.verdict == ct::Verdict::Running || s.verdict == ct::Verdict::Pending, false);
+        }
+    }
+}
+static void test_pps_collapse_with_current_drawn_stays_lost() {
+    // 80 mA is over the no-load bound and under the load abort (kLoadAbortMa): the source lost a row that carried a load
+    Fake f; f.collapse_on = pd::PdoType::Pps; f.collapse_ma = 80;
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto c = collapse_rows(r, A::Pps);
+    CHECK_EQ(c.n >= 2u, true); CHECK_EQ(c.lost, c.n); CHECK_EQ(c.needs_load, 0u);
+    // 400 mA is a load abort (Inline) today: it must not read "needs load" either
+    Fake g; g.collapse_on = pd::PdoType::Pps; g.collapse_ma = 400;
+    ct::Runner q(g); q.start(g.caps, kPd, g.in, true);
+    g.tick(q, 400000);
+    CHECK_EQ(count_reason_all(q, ct::Reason::NeedsLoad), 0u);
+}
+static void test_fixed_row_collapse_stays_lost() {
+    Fake f; f.collapse_on = pd::PdoType::Fixed; f.collapse_ma = 0;
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto c = collapse_rows(r, A::Pd3Fixed);
+    CHECK_EQ(c.n >= 2u, true); CHECK_EQ(c.lost, c.n); CHECK_EQ(c.needs_load, 0u);   // a fixed source output must hold at no load
+    CHECK_EQ(count_reason_all(r, ct::Reason::NeedsLoad), 0u);
+}
+static void test_pps_collapse_after_ps_rdy_stays_lost() {
+    Fake f; f.collapse_on = pd::PdoType::Pps; f.collapse_ma = 0; f.collapse_after_ready = true;
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto c = collapse_rows(r, A::Pps);
+    CHECK_EQ(c.n >= 2u, true); CHECK_EQ(c.lost, c.n); CHECK_EQ(c.needs_load, 0u);   // the source did deliver the level: PS_RDY was the proof
+    CHECK_EQ(count_reason_all(r, ct::Reason::NeedsLoad), 0u);
+}
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
 static void run_to_pd_row(Fake& f, ct::Runner& r, size_t row) {
@@ -5581,5 +5670,7 @@ int main() {
     test_running_grid_lists_the_algorithms_in_the_order_the_plan_runs_them(); test_running_grid_follows_the_users_unit_order();
     test_running_grid_places_the_mi_probes_where_the_plan_runs_them(); test_running_grid_matches_the_order_the_run_worked_through();
     test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run();
+    test_pps_accepted_then_dropped_at_no_load_is_needs_load(); test_pps_collapse_with_current_drawn_stays_lost();
+    test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
     return test_report("test_charger_test");
 }

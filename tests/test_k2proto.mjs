@@ -306,7 +306,7 @@ test("charger-test schema2: every EPR skip names its reason (mirrors ct::explana
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
   for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x80],
-                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 44]]) {   // 44 = one past the last reason (43 = WrongVoltage)
+                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 45]]) {   // 45 = one past the last reason (44 = NeedsLoad)
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }
@@ -314,6 +314,16 @@ test("charger-test schema2 rejects malformed shapes, unknown masks and unselecte
   assert.throws(() => P.decodeChargerTest(unselected), P.FrameError);
   for (const bad of [TEST_HEADER2.slice(0, 39), u8(...TEST_HEADER2, 0), u8(...good, ...TEST_ROWS[0]), good.slice(0, -1)])
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError);
+});
+
+test("charger-test reason 44 is 'needs load': a PPS row skipped with the collapse voltage decodes", () => {
+  // pattern pps-off-at-no-load (splitter run 2026-11-10): Reason::NeedsLoad (#44) is a Skip, not a source-lost fail
+  const row = new Uint8Array(TEST_ROWS[1]);
+  row[7] = 1800 & 0xFF; row[8] = 1800 >> 8;   // measured 1.8 V
+  row[9] = 4; row[10] = 44;                   // skip, why 44
+  const step = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [row])).steps[0];
+  assert.equal(step.result, "skip"); assert.equal(step.reason, "needs load");
+  assert.equal(step.explanation, "needs load"); assert.equal(step.measured_mv, 1800);
 });
 
 test("charger-test evidence, draft and final metadata races abort rather than mix snapshots", async () => {
