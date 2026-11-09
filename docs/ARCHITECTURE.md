@@ -577,6 +577,8 @@ Pure logic (`pd`, `fmt`, `power_calc`, `net_frame`, `ui_calc`, `ui_layout`, `tex
 
 The FUSB302 is passive by default: on the meter screen the chip only listens, with Auto-CRC off and SOP, SOP' and SOP'' receive enabled, so a charger-to-device conversation is decoded without the K2 answering and without disturbing it. The register profiles live in `pd_phy`; `pd_passive` holds the policy for that mode and `pd_link` the attach, detach and inline detection (a device load inline with a source) that decides what the K2 may do. `link` / `link_guard` refuse any active operation while a live sink or an inline load makes it unsafe.
 
+**Passive mode means no CC transmit at all.** While passive, the driver never puts a frame on CC: no GoodCRC auto-reply (Auto-CRC stays off), no Reject/Accept/Soft_Reset answer, not even a Hard Reset — including the window before the inline/topology decision and every CC re-selection, where a link between two other devices is live. The only sends come from an active user feature (trigger, charger test, spoof, Read cable, Identify, probe, re-read, Get_Source_Cap, VCONN swap, self-powered sink mode). The choke point is the driver's `transmit()` / `send_sop_prime_frame()`, which refuse and log (`[FUSB302] TX refused (passive)`) whenever no active feature demands the wire: the flag is the same `pd::crc_demand` that drives Auto-CRC, recomputed in `active_tick()` (default false, cleared on detach/init).
+
 **Who may keep Rd (CC pull-down) presented.** Rd is demand-driven (`pd::rd_demand`, `pd::rd_lines`); Auto-CRC is a wider demand (`pd::crc_demand` = Rd demand plus the armed e-marker spoof, which needs the GoodCRC but must never present Rd). Each owner has a lifetime and none may outlive it:
 
 | Owner | Lifetime |

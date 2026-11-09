@@ -2612,6 +2612,47 @@ void test_a_new_attach_forgets_the_far_sink() {
     power_cycle_forget_pin();
 }
 
+// ---- A passive K2 never transmits on a live link, pre-inline window included ----
+// Cold boot, laptop - K2 - dock (the K2's HID cable on the dock's hub): in the ~1 s between "attach CC1" and the
+// inline decision sole_sink() is true (no inline latch, no far sink's Request on the wire yet), so the sink policy
+// armed its answers - PR_Swap -> Reject, Soft_Reset -> Accept, Get_Sink_Cap -> Sink_Capabilities - and transmit()
+// sent them, forcing a Soft_Reset on the laptop - dock link. Passive mode must refuse every TX at the choke point:
+// zero TX FIFO loads / TX_STARTs, Auto-CRC off in SWITCHES1 throughout, until an active feature demands the wire.
+void test_passive_cold_boot_never_transmits_on_a_live_link() {
+    passive_attach();                                            // cold-boot attach on CC1
+    fusb302::sink_vbus(5000);                                    // VBUS present (the dock's port)
+    settle_ms(100);
+    CHECK_EQ(fusb302::inline_mode(), false);                     // the pre-inline window: sole_sink() is true
+    CHECK_EQ(auto_crc(), false);                                 // Auto-CRC off before the traffic
+    const std::size_t from = g_log.size();
+    push_frame(0xE0, hdr(10, 0, false), {});                     // PR_Swap from the dock (snk/ufp asks to swap)
+    service_ms(10);
+    CHECK_EQ(auto_crc(), false);
+    push_frame(0xC0, hdr(0x0F, 1, true), {kDiscoverIdentityReq});   // SOP' Discover Identity REQ (laptop to the cable)
+    service_ms(10);
+    push_frame(0xE0, hdr(13, 0, false, 1), {});                  // Soft_Reset from the laptop (snk/dfp)
+    service_ms(10);
+    push_frame(0xE0, hdr(8, 0, true), {});                       // Get_Sink_Cap from the source
+    service_ms(10);
+    settle_ms(200);
+    CHECK_EQ(fifo_loads(from), 0);                               // zero TX records
+    CHECK_EQ(find_from("W 06=01", from) == -1, true);            // no TX_START either
+    CHECK_EQ(passive_stayed_silent(from), true);                 // no Rd, no Auto-CRC write, no FIFO, no TX_START
+    CHECK_EQ(auto_crc(), false);                                 // SWITCHES1 still has Auto-CRC off
+    CHECK_EQ(usb_has("TX refused (passive)"), true);             // the refusal is logged, not silent
+    // Positive control: an active feature (the run start's Rd) demands the wire, TX is allowed again.
+    CHECK_EQ(fusb302::rd_for_run(true), true);
+    g_txfifo.clear();
+    const std::size_t from2 = g_log.size();
+    send_caps_5v3a();
+    int passes = 0;
+    while (passes < 10 && !pdo_request_on_the_wire()) { g_ms += 1; fusb302::service(); ++passes; }
+    CHECK_EQ(pdo_request_on_the_wire(), true);                   // the run start's Request for PDO 1 went out
+    CHECK_EQ(fifo_loads(from2) > 0, true);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -2707,5 +2748,6 @@ int main() {
     test_the_inline_latch_alone_silences_the_identity_and_soft_reset_replies();
     test_the_k2_as_the_only_sink_still_answers_identity_and_soft_reset();
     test_a_new_attach_forgets_the_far_sink();
+    test_passive_cold_boot_never_transmits_on_a_live_link();
     return test_report("test_fusb302_scan");
 }

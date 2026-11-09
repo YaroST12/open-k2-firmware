@@ -370,6 +370,8 @@
   "367": "[CJRN] begin cancelled after %u pumps\n",
   "368": "[CJRN] wait-for-replan ms=%u\n",
   "369": "[CONN] body full=%d rows=%d\n",
-  "370": "[FUSB302] CC override: ADC cc1=%d cc2=%d mV names CC%u, the comparator chose CC%u\n"
+  "370": "[FUSB302] CC override: ADC cc1=%d cc2=%d mV names CC%u, the comparator chose CC%u\n",
+  "371": "[FUSB302] TX refused (passive): type %d%s\n",
+  "372": "[FUSB302] SOP' TX refused (passive)\n"
  }
 }

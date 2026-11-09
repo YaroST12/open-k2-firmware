@@ -105,6 +105,9 @@ pd::AutoCrcGate g_rd_gate;  // Rd on the active line only while a sink operation
 pd::ContractLinger g_contract_linger;   // a contract nobody holds times out after kSinkIdleLingerMs
 bool g_legacy_only = false;  // charger test: no PD sink policy, no rescan
 bool g_crc_on = false;      // what SWITCHES1 holds
+bool g_tx_allowed = false;  // passive by default: transmit() / send_sop_prime_frame() refuse every frame while no
+                            // active feature demands the wire (updated from the pd::CrcDemand in active_tick())
+bool g_hr_tool_armed = false;  // the explicit sink_hard_reset() tool: one Hard Reset may go out even from idle
 bool g_cable_read = false;  // e-marker read in progress: CONTROL1 listens on SOP' and SOP'' even with Auto-CRC on
 pd::TriggerPrep g_prep;     // re-announce before a trigger when the last caps went un-ACKed
 pd::Choice g_prep_choice;   // the trigger waiting for the prepare to finish
@@ -232,6 +235,12 @@ bool g_tx_timed_out = false;
 
 bool transmit(const pd::TxMsg& m) {
     g_tx_timed_out = false;
+    if (!g_tx_allowed) {
+        // Passive mode: no frame ever goes on CC - no GoodCRC, no Reject/Accept/Soft_Reset answer, not even a Hard
+        // Reset - until an active user feature demands the wire (see the CrcDemand in active_tick()).
+        K2LOG("[FUSB302] TX refused (passive): type %d%s\n", m.header & 0x1F, m.hard_reset ? " (hard reset)" : "");
+        return false;
+    }
     if (m.hard_reset) {
         pdtrace::reset(pdtrace::ResetKind::HardTx);
         wr(kControl3, kRetries3Auto | kSendHardReset);  // self-clearing
@@ -359,6 +368,8 @@ std::uint8_t idle_rd();
 
 void configure_passive() {
     g_crc_on = false;
+    g_tx_allowed = false;
+    g_hr_tool_armed = false;
     g_rd_op = false;
     g_crc.reset();
     g_rd_gate.reset();
@@ -1310,6 +1321,8 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
         K2LOG("[EMARK] Refused: inline with a live sink; VCONN and SOP' may interrupt charging\n");
         return false;
     }
+    const bool tx_was_allowed = g_tx_allowed;
+    g_tx_allowed = true;   // the VCONN scan is an active feature: its SOP' Discover Identity goes on the wire
     g_engine.reset_cable();
     g_scanned_valid = false;
     struct Pre { std::uint8_t power = kPwrAll, sw0 = 0, sw1 = 0; } pre;
@@ -1345,6 +1358,7 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
         K2LOG("[EMK] cable session closed\n");
     }
     g_cable_read = false;
+    g_tx_allowed = tx_was_allowed;   // the scan is over: back to whatever the demand model says
 
     // Back to the pre-scan state, whatever happened above: VCONN off, then the registers the scan
     // touched are written back from the snapshot taken before it (Rd, measure line, BMC routing,
@@ -1590,11 +1604,15 @@ void active_tick() {
         const bool counts = g_contract_linger.update(now, engaged);
         d.sink_active = in_flight || (ready && counts);
         update_crc(pd::crc_demand(d), pd::rd_demand(d));
+        // The TX choke point's input: the same demand that drives Auto-CRC (plus the explicit hard-reset tool).
+        // transmit() refuses everything while this is false, so a passive K2 can never put a frame on CC.
+        g_tx_allowed = pd::crc_demand(d) || g_hr_tool_armed;
         if (ready && !counts) contract_expired(now);
     }
     pd::TxMsg m;
     bool sent = false;
     if (g_sink.take_tx(m)) {
+        if (m.hard_reset) g_hr_tool_armed = false;   // the tool's one Hard Reset went out (or was refused)
         g_sink.on_tx_result(transmit(m), now);
         sent = true;
     } else if (g_vconn.take_tx(m, g_sink.rev())) {
@@ -2002,6 +2020,7 @@ void sink_release() {
 }
 void sink_hard_reset() {
     if (inline_now() || g_active_cc == 0) return;
+    g_hr_tool_armed = true;   // the explicit tool is an active feature: its one Hard Reset may go out even from idle
     g_sink.hard_reset(systick::millis());
 }
 void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
@@ -2184,6 +2203,7 @@ const pd::SinkCapsSeen& sink_caps() { return g_engine.sink; }
 
 void set_sop_prime_hook(SopPrimeHook hook) {
     g_sop_prime_hook = hook;
+    if (hook != nullptr) g_tx_allowed = true;   // the armed spoof is an active feature: its SOP' replies may go out at once
     if (g_active_cc != 0) write_sw1();   // SOP' enable follows the hook
 }
 
@@ -2213,6 +2233,10 @@ VconnInfo vconn_info() {
 
 bool send_sop_prime_frame(std::span<const std::uint8_t> tokens) {
     if (g_active_cc == 0) return false;
+    if (!g_tx_allowed) {   // passive mode: no SOP' frame either (only the armed spoof ever calls this)
+        K2LOG("[FUSB302] SOP' TX refused (passive)\n");
+        return false;
+    }
     // Token stream: SYNC x4, PACKSYM|len, header lo/hi, objects, JAM_CRC, EOP, TXOFF. Parse it so the
     // Black Box sees the spoof reply too.
     std::uint16_t header = 0;
