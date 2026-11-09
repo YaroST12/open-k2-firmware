@@ -30,6 +30,7 @@
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/bootmode.hpp"
+#include "k2/core/rd_comeback.hpp"
 #include "k2/ui/bootscreen.hpp"
 #include "k2/ui/bootscreen_hw.hpp"
 #include "k2/pd/pdtrace.hpp"
@@ -128,6 +129,7 @@ k2::bootmode::Mode sample_boot_mode() {
         const uint32_t t = k2::systick::millis();
         if (t != last) { last = t; k2::fusb302::service(); }
         if (t - last_poll >= 10) { last_poll = t; k2::fusb302::poll(); }
+        if (k2::rdcomeback::pending() && k2::rdcomeback::judge_step(t - t0)) break;   // released: an ordinary plain boot from here
         if (k2::fusb302::sink_status().state == k2::pd::SinkState::Ready) break;
     }
     K2LOG("[PD] self-power bring-up: %s after %u ms\n",
@@ -160,16 +162,30 @@ void dfu_now() {
 [[gnu::noinline]] void boot() {
     k2::sysreset::capture_flags();          // reset cause first, before anything can reset again
     k2::reg::scb().VTOR = 0x08003800;
-    const k2::bootmode::Mode boot_mode = sample_boot_mode();   // buttons first, before any slow init
+    const k2::bootmode::Mode keys_mode = sample_boot_mode();   // buttons first, before any slow init
     k2::crm::init();
     k2::systick::init();
     k2::i2c::init();
+    // A cold plain boot reads the Rd intent marker (k2/core/rd_comeback.hpp): the comeback of a self-powered session the charger
+    // cut VBUS under, or of a planned re-attach. Only that boot mounts the volume here (read-only, never formats).
+    const bool warm_reset = k2::sysreset::warm(k2::sysreset::reset_flags());
+    const k2::bootmode::Mode boot_mode = k2::rdcomeback::begin(keys_mode, warm_reset);
     // Before the LCD and USB init: sink modes put Rd out so the charger starts VBUS (and keeps it) at once;
     // a plain boot writes SWITCHES0 = 0 (no Rd; the chip's default is Rd on both) BEFORE the CC switches close, and keeps an
     // Rd only after a warm reset that follows a pinned boot (the pin mark in DR21): a K2 powered over HID has no pin, so a
     // flash, `reboot` or watchdog is a detach for it. Both CC switches are routed closed in every mode.
-    k2::fusb302::self_power_early(boot_mode, k2::sysreset::warm(k2::sysreset::reset_flags()));
-    k2::boottrace::init(boot_mode);          // ADC + power monitor up, 50 ms power trace for the first 3 s
+    k2::fusb302::self_power_early(boot_mode, warm_reset);
+    k2::rdcomeback::early();                 // a recorded cable identity: the Ra rises with the Rd, before the charger's cable look
+    // A comeback serves the charger NOW: the source looks at the cable ~130 ms after its attach and wants a Request within ~25 ms
+    // of its capabilities (measured: the look at 136 ms uptime, hardware 2026-11-09). Chip, Ra, spoof and the bring-up loop run
+    // before the slow init; the loop also gives the verdict (k2/core/rd_intent.hpp judge): no source, no capabilities = released.
+    const bool comeback = k2::rdcomeback::pending();
+    if (comeback) {
+        k2::fusb302::init();
+        k2::rdcomeback::arm();
+        self_power_bringup();
+    }
+    k2::boottrace::init(boot_mode);         // ADC + power monitor up, 50 ms power trace for the first 3 s
     k2::lcd::init();
     buttons_init();
     k2::dpdm::init();
@@ -197,8 +213,10 @@ void dfu_now() {
     K2LOG("[LCD] LCD initialized & backlight ON\n");
     K2LOG("[I2C] Dual I2C busses initialized\n");
 
-    k2::fusb302::init();
-    if (k2::fusb302::self_powered()) self_power_bringup();   // before the slow init below: the charger feeds this boot
+    if (!comeback) {   // a comeback did both above
+        k2::fusb302::init();
+        if (k2::fusb302::self_powered()) self_power_bringup();   // before the slow init below: the charger feeds this boot
+    }
     k2::boottrace::report_previous();       // what the previous boot's supply / CC / PLUS trace ended with
     k2::session::init();                    // backup registers: what the previous boot was doing (PD session record)
     k2::bbpersist::init();                  // black box: remount the flash ring, reload the newest captures
@@ -214,7 +232,7 @@ void dfu_now() {
 
     g_ui.init(k2::systick::millis(), g_boot_back_held);
     // A key-mode boot shows what it decided as a QR code; the first frame is drawn by the main loop, not from here.
-    if (k2::bootmode::self_powered(boot_mode)) g_bootscreen.start(k2::systick::millis());
+    if (k2::bootmode::self_powered(keys_mode)) g_bootscreen.start(k2::systick::millis());   // a held key, not a marker's comeback
     K2LOG("[ACCEL] compatible gravity sensor %s at INA bus 0x18\n",
                     g_accelerometer.init(k2::systick::millis()) ? "online" : "unavailable");
 
@@ -279,6 +297,7 @@ void end_boot_screen(uint32_t now) {
     k2::fastcharge::poll();
     k2::boottrace::flush_log();             // queued [BOOT] trace lines of the first seconds
     k2::session::poll();                    // PD session record into the backup registers on change
+    k2::rdcomeback::poll();                 // the Rd intent marker (/rd.rec) in step with the session, written on a quiet link
     k2::bbpersist::poll();                  // saves finished captures once the link is quiet
     if (g_bootscreen.active()) boot_screen_step(now);   // the QR screen owns the panel: the UI does not draw meanwhile
     else g_ui.tick(now);

@@ -390,6 +390,11 @@
   "387": "[EMKRA] early off\n",
   "388": "[PD] rd glitch: Rd off (ra=%d)\n",
   "389": "[PD] rd glitch: Rd back\n",
-  "390": "[RMT] rd glitch %u ms: vbus start %d min %d end %d mV, %u ms below 4 V\n"
+  "390": "[RMT] rd glitch %u ms: vbus start %d min %d end %d mV, %u ms below 4 V\n",
+  "391": "[RDI] comeback boot: %s pin=%u cable=%u/%u\n",
+  "392": "[RDI] identity not armed (spoof=%d); Rd kept, no Ra\n",
+  "393": "[RDI] comeback vouched after %u ms (caps seen)\n",
+  "394": "[RDI] comeback released after %u ms (%s): Rd, Ra, spoof and record dropped\n",
+  "395": "[RDI] marker %s: %s pin=%u cable=%u/%u (%s, %u ms)\n"
  }
 }
