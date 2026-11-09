@@ -529,10 +529,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 - **Wrong comment** in `tools/k2_qr.py`: "a space can end a part" is false (the last base45 character of a part is at
   most index 32; a space is 36).
   - Fix: correct the comment. Validate: `make gate`. Fixed in 8f4acaf, hardware check pending.
-- **Charger-test journal keeps its own row order** (2026-11-09): `charger_journal.hpp` `detail::plan_order` places the
-  6 A hunt rows by its own rule when it rebuilds the steps on a resume: a third copy of the order the grid fix removed.
+- **Charger-test journal keeps its own row order** (2026-11-09, fixed in 5a0220f, hardware check pending): `charger_journal.hpp`
+  `detail::plan_order` placed the 6 A hunt rows by its own rule when it rebuilt the steps on a resume: a third copy of the
+  order the grid fix removed. The header (format 3) now carries the plan's order, written from the planner's step list
+  (`Runner::steps()`, the same structure the grid uses since 98e2f39), and replay applies it verbatim.
   - Fix: rebuild from the planner's step list (the same structure the grid uses since 98e2f39).
-  - Validate: host test resuming a journal mid-PD with Mi 6A rows: resumed step order equals a fresh plan's order.
+  - Validate: host test resuming a journal mid-PD with Mi 6A rows: resumed step order equals a fresh plan's order
+    (`test_a_resume_mid_pd_keeps_the_planners_step_order`, green since 5a0220f).
 - **A PPS row shows a probe after all its APDOs** (2026-11-09, residual of the grid fix, fixed in dfc5918, hardware check
   pending): a PPS row held the chips of every APDO, so a Mi 6A probe the planner runs between APDO 1 and APDO 2 read after the
   whole PPS row. Now one grid row per APDO (`Row::pos`), so the probe row stands between the APDO rows where it executes.
