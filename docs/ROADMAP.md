@@ -105,7 +105,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
        cycle: Rescan marker written`, the K2 reboots once and returns on Connection -> Source with Rd and
        "Rescanned (rebooted)"; `[RDI] comeback boot: rescan pin=...` then `[RDI] comeback vouched`. Evidence into
        `runs/<date>-rescan/`.
-- **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, fixed in 9078279 (re-plan in c51cf6d), hardware check pending).
+- **A mid-run re-announce that drops one offer skips every remaining PD row** (2026-11-09, fixed in f6884c6 (re-plan in f63637d, restart rules in c6d45c9), hardware check pending).
   - Evidence: Anker 2-way splitter behind a Baseus 140 W, charger test "PD only", 3a37f22. First list: 5/9/15 V 1.5 A
     + 20 V 2.5 A. About 4 s into the run, the splitter re-split its budget with the dock on its other output and
     re-announced 5 V 1.5 A, 9 V 3 A, 15 V 3 A (20 V gone). The run: 5 V pass, 9 V pass, then 15 V AND both 20 V rows
@@ -155,7 +155,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Hardware check: the same splitter setup, `python3 tools/ct_start.py --units pd --wait 540` (release any held PD
     contract first with `k2_remote pd release`, or START refuses with "PD hold: release it"). Expect 5/9/15 V pass and
     20 V "withdrawn by source".
-  - Review of `k2/reannounce-replan` (1ff23a4, 2026-11-09): not merged. Gate passes; no unsafe wire behaviour in the
+  - Review of `k2/reannounce-replan` (f63637d, the rebased 1ff23a4, 2026-11-09): not merged. Gate passes; no unsafe wire behaviour in the
     branch itself. Required before merge (rebase onto `public` first):
     1. Only rows of the running unit (`unit_of(s) == unit_`) may be withdrawn or counted as placeable; today a PPS change
        during the Pd unit withdraws the PdLow rows for good (revival only looks at the running unit).
@@ -172,7 +172,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     Nits: a row whose offer only moved slot is re-queued, not Withdrawn; `rebalanced` belongs in the journal (survives a
     comeback) and the shared card; `report_card.hpp:75` says 44 values (43); commit body logdb id 409 not 401; subject
     names a pre-rebase hash; `&steps_[index_]` when `index_ == count_`.
-  - Hardware runs of c51cf6d (the rebased 1ff23a4), 2026-11-09, splitter behind the Baseus 140 W, HID-powered K2 with
+  - Hardware runs of f63637d (the rebased 1ff23a4), 2026-11-09, splitter behind the Baseus 140 W, HID-powered K2 with
     the Rd pinned on CC2 (see `slow-rp-wake`), second device (OnePlus 15) plugged mid-run; `runs/2026-11-09-splitter/`:
     6. **A re-split during row 15 V withdrew rows that are still offered** (`A3-runlog.txt`): the list went 5/9/12/15 V
        3 A, 20 V 5 A, PPS 5 A, EPR 28 V 5 A -> 5/9/12/15 V 1.5 A, 20 V 4.1 A, EPR 28 V 4 A. The re-plan logged "0 rows
@@ -208,15 +208,22 @@ and the hardware check). A row leaves this list when its fix is merged and the h
       ends -> sweep runs the PPS rows; wire revision change -> `CapsChanged`.
     - Hardware: the splitter runs above (`ct_start.py --units pd`, Rd pinned on CC2 until `slow-rp-wake` lands), second
       device plugged at "Running" and unplugged later: no row ends `CapsChanged`, the card shows "rebalanced".
+    Done in c6d45c9, hardware check pending: items 6-9 and the restart rules 1-6 in `src/chargertest/charger_test.cpp`
+    (settle window kListSettleMs with window restart, in-flight row restarted at the new slot/word without counting a
+    try, complete EPR_Source_Capabilities re-splits through the per-row re-plan with EPR rows placed on positions 8+,
+    end-of-unit sweep in next(), CapsChanged only for another wire revision or no list back within kCapsReturnMs, no
+    give-up counter, no-op re-announces not counted or logged); item 8's decoder entry ("withdrawn by source", #42)
+    was already carried by f63637d in k2_remote.py / k2proto.js / qr_corpus.py / report_card.py / card.js, now locked
+    by a test. Tests red first in 07e8965 (21 failing checks), green after.
     Not a K2 bug, for the quirks doc: on this splitter every PPS Request is Accepted, VBUS then falls 5 V -> 2 V instead
     of rising, PS_RDY is sent anyway and the Rp drops ~500 ms later (`pps-accept-then-collapse`, `A2-runlog.txt`; the
     card's "source lost" fail is correct). EPR 28 V passes through the splitter when its budget allows.
-    Done in 9078279 (+ 5c9590a): items 1-5 implemented in `src/chargertest/charger_test.cpp` (running-unit scoping,
+    Done in f6884c6 (+ b193e56): items 1-5 implemented in `src/chargertest/charger_test.cpp` (running-unit scoping,
     plan_moved-only counting, two-tier voltage-based find_offer, fixed current drop keeps its row), all nits
     (slot-move re-queue, rebalanced in the journal header byte 9 and card format v8, the 43-values comment, the
-    logdb id 416 / post-rebase hashes in the branch commits, the guarded `&steps_[index_]`); tests red first in
-    25cbf61.
-- **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in d70df9a, hardware check
+    logdb id 418 / post-rebase hashes in the branch commits, the guarded `&steps_[index_]`); tests red first in
+    ff42512.
+- **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in 1d45a76, hardware check
   pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
   K2 holds 15 V at PDO 3 makes the sink ask 20 V by itself: a legal Request (advertised) but a voltage nobody chose,
@@ -229,7 +236,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests in `tests/test_pd_sink*.cpp` (red first): 15 V held at PDO 3, re-announce 5/9/20 V -> Request
     PDO 1, never 20 V; re-announce 5/15/20 V -> Request 15 V at slot 2; re-announce in Transition -> a Request within
     tSenderResponse; `make gate`. Hardware: the splitter re-plan run above shows no unrequested level in the black box.
-- **Rd seek leaves before a slow source wakes (`slow-rp-wake`)** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W,
+- **Rd seek leaves before a slow source wakes (`slow-rp-wake`)** (2026-11-09, fixed in 5926abb, hardware check pending, Anker 2-way splitter behind a Baseus 140 W,
   dock on its other output, HID-powered K2 on 85b9ff0; `runs/2026-11-09-splitter/`). A re-read on a plain boot got
   nothing: the Rd seek put Rd on CC1, CC2, CC1 for ~200 ms each (`kRdSeekDwellMs`, `include/k2/pd/pd_rdseek.hpp`),
   every attach read BC_LVL=0, "no Source_Capabilities came back". With the Rd pinned on CC2 (`pd-reread --pin 2

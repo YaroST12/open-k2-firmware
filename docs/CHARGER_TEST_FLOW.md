@@ -391,9 +391,9 @@ with `ra-disables-legacy` are not valid there. Run those units with the cable OF
 
 A source may announce its capabilities again after the cable discovery (SOP' query), with different currents or extra
 APDOs (pattern `reannounce-after-cable-discovery`). `Runner::follow_list` runs in `poll_impl` before the "offers changed"
-check, in Pd mode only, when the caps signature changed at the same spec revision, with no EPR stage and no partial EPR
-list. The new list is re-planned PER ROW (pattern `budget-reannounce-mid-run`: a shared-port splitter re-splitting its budget
-mid-run drops one offer while the rest stay or grow):
+check, in Pd mode only, when the caps signature changed at the same spec revision, outside the K2's own EPR entry
+(`epr_stage_ == 2`) and with no partial EPR chunk. The new list is re-planned PER ROW (pattern `budget-reannounce-mid-run`:
+a shared-port splitter re-splitting its budget mid-run drops one offer while the rest stay or grow):
 
 - No PD row has started and the plan is not frozen: the PD unit is planned again (`replan_pd`). Extra APDOs get rows and the
   rows carry the new currents (the summary shows PPS 5 A).
@@ -404,13 +404,28 @@ mid-run drops one offer while the rest stay or grow):
 - A row the new list no longer offers is skipped with `Reason::Withdrawn` ("withdrawn by source") — not `CapsChanged` — and
   the unit goes on against the new list. A withdrawn PDO that comes back revives its rows (Pending again) while the unit has
   not ended. Each re-plan bumps `revision_`, calls `plan_changed()` once, logs `[TEST] re-plan: <n> rows follow, <m>
-  withdrawn, <k> back` and counts into `Evidence::rebalanced` (noted "SOURCE rebalanced Nx" on the results card).
+  withdrawn, <k> back` and counts into `Evidence::rebalanced` (noted "SOURCE rebalanced Nx" on the results card). A
+  re-announce that changes nothing for the plan (a word-only current change, an identical list) is not counted and not
+  logged.
+
+A complete `EPR_Source_Capabilities` outside the K2's own EPR entry/exit (`epr_stage_ == 2`) is a re-announce like any
+other; only a partial chunk stays excluded.
+
+Restart rules for a mid-run re-announce (user decision 2026-11-09):
+
+- Settle first: after any new list, no Request is sent until the list has been unchanged for `kListSettleMs` (1500 ms);
+  each list that arrives inside the window restarts it. The sink's single-Request gate still applies.
+- The row in flight is restarted at its new slot and current word once the list has settled (the restart is not a try:
+  `tries` counts only source failures). Not offered: `Withdrawn`, then a release to 5 V through the sink gate.
+- Before the PD unit closes, the Withdrawn rows are re-checked once against the list in hand (after a settle) and the ones
+  that came back run (the end-of-unit sweep in `next()`).
+- Flapping is not a failure: no counter gives up; keep settling and re-planning.
 
 Limits: a list that places no PD row at all (pending or in flight), a `spec_rev` change, and no list back within
 `kCapsReturnMs` are a genuinely different list and stay `CapsChanged` ("offers changed": the unit is skipped, the run
-continues). The excluded cases (VBUS dark, the `preauth_tail` window, EPR entry/exit, the hunt-Reject answer) keep their
-own handling. The cause of the Baseus re-announce (the SOP' query itself, or the Ra) is not provable from the logs; the
-planner follows the list either way.
+continues) — never a re-split while attached. The excluded cases (VBUS dark, the `preauth_tail` window, EPR entry/exit,
+the hunt-Reject answer) keep their own handling. The cause of the Baseus re-announce (the SOP' query itself, or the Ra) is
+not provable from the logs; the planner follows the list either way.
 
 ## Results grid
 
