@@ -4144,7 +4144,12 @@ static void test_pd_attach_without_vbus_or_caps_is_no_reattach() {
         unsigned noreattach = 0;
         for (const auto& s : r.steps()) {
             CHECK_EQ(s.verdict == ct::Verdict::Pending || s.verdict == ct::Verdict::Running, false);
-            noreattach += s.reason == ct::Reason::NoReattach;
+            if (s.reason == ct::Reason::NoReattach) {
+                ++noreattach;
+                // a genuine NoReattach records the live VBUS at the fail (5000 with a silent source, 0 when the
+                // source never brought VBUS up), not a clamped 0
+                CHECK_EQ(s.measured_mv, mode == 0 ? 0u : 5000u);
+            }
         }
         if (mode < 2) { CHECK_EQ(noreattach > 0, true); CHECK_EQ(f.pd_requests, 0); }
         else { CHECK_EQ(noreattach, 0u); CHECK_EQ(f.pd_requests > 0, true); }
@@ -4171,6 +4176,30 @@ static void test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage
         CHECK_EQ(s.verdict, ct::Verdict::Fail);
         CHECK_EQ(s.reason, kWrongVoltage);
         CHECK_EQ(s.measured_mv, 7600u);   // the highest of the wait, not the 1633 read at the timeout
+        ++wrong;
+    }
+    CHECK_EQ(wrong > 0, true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::NoReattach), 0u);
+}
+// The streamB2 replay (2026-11-09, runs/2026-11-09-splitter/streamB2/timeline.txt): the attach's 5 V contract is
+// granted at 7.6 V (PS_RDY at PDO 1, the other output's PPS level) and ~2 s into the 3 s kAttachContractMs wait
+// the splitter cuts VBUS and Rp and never comes back. PS_RDY was SEEN during the wait, so the rows must fail
+// WrongVoltage with the highest VBUS of the wait (7600) - not NoReattach. Today the teardown wins: the Rp-restart
+// re-arms the wait, the contract is gone at the timeout, and the rows fail NoReattach (red).
+static void test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage() {
+    Fake f; ct::Runner r(f);
+    f.attach_wrong_mv = 7600;   // the contract lands at 7.6 V
+    f.rp_drop_rel = 2700;       // VBUS+Rp cut 2 s into the 3 s wait (the caps arrived at back_ms 700)
+    // rp_back_rel = 0: the source never comes back
+    CHECK_EQ(r.start(f.caps, with_units(ct::bit(A::Pd3Fixed), {ct::Unit::Pd}), f.in, true), ct::Reason::None);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 200000), true);
+    unsigned wrong = 0;
+    for (const auto& s : r.steps()) {
+        CHECK_EQ(s.verdict == ct::Verdict::Pending || s.verdict == ct::Verdict::Running, false);
+        if (s.group != ct::Group::Pd) continue;
+        CHECK_EQ(s.verdict, ct::Verdict::Fail);
+        CHECK_EQ(s.reason, kWrongVoltage);
+        CHECK_EQ(s.measured_mv, 7600u);   // the highest of the wait, latched before the cut
         ++wrong;
     }
     CHECK_EQ(wrong > 0, true);
@@ -5539,6 +5568,7 @@ int main() {
     test_unsafe_clears_when_vbus_stays_under_vsafe5();
     test_pd_attach_without_vbus_or_caps_is_no_reattach(); test_pd_plan_comes_from_the_first_attach(); test_source_gone_in_a_unit_skips_the_remaining_units();
     test_pd_attach_5v_contract_held_at_wrong_voltage_fails_wrong_voltage();
+    test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage();
     test_pd_attach_without_any_caps_stays_no_reattach();
     test_pd_attach_rp_drop_restarts_the_wait_once();
     test_cancel_during_a_unit_restores_the_pd_policy();
