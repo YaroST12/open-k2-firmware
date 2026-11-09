@@ -260,7 +260,7 @@ def _main(argv=None):
     code = 0
     try:
         if not a.no_flash:
-            r = run([PY, "tools/k2_flasher.py", "flash", str(fw), "--auto-dfu"], FLASH_TIMEOUT_S)
+            r = run([PY, "tools/k2_flasher.py", "flash", str(fw), "--auto-dfu", "--no-backup"], FLASH_TIMEOUT_S)
             (outdir / "flash.log").write_text(r.stdout + r.stderr)
             if not rep.add("flash --auto-dfu", r.returncode == 0, f"exit {r.returncode}; log flash.log"):
                 raise SmokeError("flash failed")

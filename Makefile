@@ -436,7 +436,7 @@ probe:
 	@$(PYTHON) tools/k2_flasher.py probe
 
 flash: $(BUILD_DIR)/$(TARGET).k2
-	@$(PYTHON) tools/k2_flasher.py flash $< --auto-dfu
+	@$(PYTHON) tools/k2_flasher.py flash $< --auto-dfu $(FLASH_ARGS)
 
 reboot:
 	@$(PYTHON) tools/k2_flasher.py reboot

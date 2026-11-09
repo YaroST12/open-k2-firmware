@@ -28,6 +28,7 @@ import sys
 import time
 import traceback
 import uuid
+import zipfile
 
 import k2_lock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -627,14 +628,15 @@ class K2Updater:
                 hi = mid
         return best, False
 
-    def backup(self, dest_dir: Path, full: bool = False) -> dict:
+    def backup(self, dest_dir: Path, full: bool = True) -> dict:
         """Two-pass flash backup.
 
-        Default: 0x08000000..APP_LIMIT (bootloader and application area). With full=True the whole 1 MB
-        (0x08000000..0x08100000) is requested, including the native device storage from
-        0x080E0000. The bootloader is only known to serve up to APP_LIMIT: if it refuses above that, the
-        readable part is kept, compared twice, and the manifest names the last readable address
-        (complete=False). A failure below APP_LIMIT is always an error.
+        Default (full=True): the whole 1 MB (0x08000000..0x08100000) is requested, including the native
+        device storage from 0x080E0000. The bootloader is only known to serve up to APP_LIMIT: if it refuses
+        above that, the readable part is kept, compared twice, and the manifest names the last readable
+        address (complete=False, backup_kind "partial"). With full=False only 0x08000000..APP_LIMIT
+        (bootloader and application area) is read (backup_kind "app-only"). A failure below APP_LIMIT is
+        always an error. The files also go into one K2_BACKUP_<version>_<UTC time>.zip next to dest_dir.
         """
         if dest_dir.exists() and any(dest_dir.iterdir()):
             raise ValueError(f"Destination directory {dest_dir} already exists and is not empty")
@@ -721,10 +723,14 @@ class K2Updater:
                 "recovery_file": str(rec_path.name),
                 "recovery_range": f"0x{APP_START:08X}-0x{FS_START:08X}",
                 "signature_restored": sig_restored,
+                "backup_kind": "app-only" if not full else ("full" if refused_at is None else "partial"),
             }
             if len(full_flash) > NVRAM_START - FLASH_START:
                 manifest["native_nvram_file"] = "native_nvram.bin"
+                manifest["native_nvram_sha256"] = hashlib.sha256(full_flash[NVRAM_START - FLASH_START:]).hexdigest()
             (dest_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+            self._stage("backup-zip")
+            write_backup_zip(dest_dir, manifest, rec_path.name)
             self._stage("backup-complete")
             return manifest
         except (OSError, ProtocolError, ValueError) as exc:
@@ -1023,22 +1029,80 @@ def format_progress(stage, cur, tot):
         print(f"  [{stage.upper():14s}] ...")
 
 
+def backup_zip_path(dest_dir, manifest):
+    """K2_BACKUP_<version>_<UTC time>.zip next to the backup directory, named from the manifest."""
+    stamp = datetime.fromisoformat(manifest["timestamp_utc"]).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    version = manifest["identity"]["current_version"]
+    return Path(dest_dir).parent / f"K2_BACKUP_{version}_{stamp}.zip"
+
+
+def write_backup_zip(dest_dir, manifest, recovery_name):
+    """Pack the six backup files (recovery .k2, flash.bin, app.bin, bootloader.bin, native_nvram.bin when
+    present, manifest.json) into one store-only ZIP; returns its path."""
+    dest_dir = Path(dest_dir)
+    names = [recovery_name, "flash.bin", "app.bin", "bootloader.bin", "native_nvram.bin", "manifest.json"]
+    path = backup_zip_path(dest_dir, manifest)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for name in names:
+            if (dest_dir / name).exists():
+                z.write(dest_dir / name, name)
+    return path
+
+
+def default_backup_dir(now=None):
+    """runs/k2-backup-<UTC time> under the repository root (runs/ is not tracked)."""
+    now = now or datetime.now(timezone.utc)
+    return DEFAULT_LOG.parent.parent / "runs" / f"k2-backup-{now.strftime('%Y%m%dT%H%M%SZ')}"
+
+
 def backup_exit_code(manifest):
     """0 for a complete backup, 3 when the bootloader refused part of the requested range."""
     return 0 if manifest.get("complete", True) else 3
 
 
 def backup_summary(manifest):
+    kind = manifest.get("backup_kind")
+    if kind == "app-only":
+        return (
+            "\nAPPLICATION AREA ONLY backup (--app-only): 0x08000000..0x080E3000 was read twice and compared.\n"
+            "The device storage from 0x080E3000 up has NOT been saved."
+        )
     if manifest.get("complete", True):
-        return "\nBackup completed successfully!"
+        return "\nFull backup completed: the whole 1 MB was read twice and compared." if kind == "full" \
+            else "\nBackup completed successfully!"
     return (
-        "\nPARTIAL backup: the bootloader refused the read at "
+        "\nPARTIAL backup: the device storage part is missing. The bootloader refused the read at "
         f"{manifest['refused_at']}; the last readable address is {manifest['last_readable_address']}.\n"
         "Everything it served was read twice and compared. The rest of the native area has NOT been saved.\n"
         "Next: flash our app (it never erases or programs above 0x080E0000 except its own old pages), then run\n"
         "  python3 tools/k2_remote.py flash-dump <outdir>\n"
         "to read 0x080E0000..0x08100000 from the running app, and keep both dumps outside the repo."
     )
+
+
+def flash_with_backup(updater, fw, backup_dir, no_backup=False, auto_reboot=True, out=None):
+    """Step 0 of every flash: a full backup into backup_dir, then the flash on the same session.
+
+    A failed backup stops here, before anything is erased. A partial or app-only backup is reported and the
+    flash goes on (the flasher never writes above the application area). no_backup=True skips the backup.
+    """
+    out = out if out is not None else sys.stdout
+    if no_backup:
+        print("WARNING: flashing without a backup. The flash erases the firmware that is on this K2 now, "
+              "and without a backup it cannot be brought back.", file=out)
+    else:
+        print(f"Backing up this K2 first (full backup) -> {backup_dir}", file=out)
+        try:
+            manifest = updater.backup(Path(backup_dir), full=True)
+        except (UpgradeError, ProtocolError, ValueError) as exc:
+            stage = getattr(exc, "stage", "backup")
+            raise UpgradeError(stage, f"the backup comes first and it failed, so nothing was erased or "
+                                      f"written: {exc}") from exc
+        print(backup_summary(manifest), file=out)
+        if manifest.get("backup_kind") != "full":
+            print("Flashing goes on: the device storage part of the backup is missing.", file=out)
+        print(f"Backup ZIP: {backup_zip_path(backup_dir, manifest)}\n", file=out)
+    return updater.flash(fw, auto_reboot=auto_reboot)
 
 
 def build_parser():
@@ -1060,18 +1124,28 @@ def build_parser():
     p_pack.add_argument("--version", default="1.0", help="Firmware version string (default: 1.0)")
 
     # backup
-    p_backup = subparsers.add_parser("backup", help="Perform 2-pass flash memory backup")
+    p_backup = subparsers.add_parser(
+        "backup", help="Full 2-pass flash backup (the whole 1 MB), files plus one K2_BACKUP_*.zip next to outdir")
     p_backup.add_argument("outdir", help="Output directory to store backup files")
-    p_backup.add_argument("--full", action="store_true",
-                          help="read the whole 1 MB (0x08000000..0x08100000), including the native device "
-                               "storage from 0x080E0000; a refusal above 0x080E3000 ends the dump cleanly "
-                               "(exit code 3, last readable address in manifest.json)")
+    kind = p_backup.add_mutually_exclusive_group()
+    kind.add_argument("--full", action="store_true",
+                      help="no-op: the backup is full by default (the whole 1 MB, 0x08000000..0x08100000, "
+                           "including the native device storage from 0x080E0000); a refusal above 0x080E3000 "
+                           "ends the dump cleanly (exit code 3, last readable address in manifest.json)")
+    kind.add_argument("--app-only", action="store_true",
+                      help="read the application area only (0x08000000..0x080E3000); the device storage "
+                           "above it is NOT saved")
     p_backup.add_argument("--path", help="Target device path")
 
     # flash
     p_flash = subparsers.add_parser("flash", help="Flash .k2 or .bin firmware onto K2")
     p_flash.add_argument("file", help="Path to .k2 or .bin firmware file")
     p_flash.add_argument("--path", help="Target device path")
+    p_flash.add_argument("--no-backup", action="store_true",
+                         help="skip the full backup that every flash makes first (the flash erases the "
+                              "firmware that is on the K2 now)")
+    p_flash.add_argument("--backup-dir", help="where the pre-flash backup goes (default: runs/k2-backup-<UTC time>); "
+                                              "the K2_BACKUP_*.zip lands next to it")
     p_flash.add_argument("--no-reboot", action="store_true", help="Do not reboot device after commit")
     p_flash.add_argument("--monitor", action="store_true", help="Immediately monitor device logs after flashing")
     p_flash.add_argument("--timeout", type=float, default=0, help="Stop monitoring after N seconds (0 for indefinite)")
@@ -1178,8 +1252,9 @@ def run(args, log):
 
         elif args.command == "backup":
             print(f"Starting 2-pass backup from K2 at {transport.path.decode('latin1', errors='replace')} -> {args.outdir}")
-            manifest = updater.backup(Path(args.outdir), full=args.full)
+            manifest = updater.backup(Path(args.outdir), full=not args.app_only)
             print(backup_summary(manifest))
+            print(f"Backup ZIP: {backup_zip_path(Path(args.outdir), manifest)}")
             print(json.dumps(manifest, indent=2))
             if backup_exit_code(manifest):
                 sys.exit(backup_exit_code(manifest))
@@ -1189,7 +1264,9 @@ def run(args, log):
             fw = Firmware.load(args.file)
             print(f"Package: v{fw.version} (released {fw.date_str}), {len(fw.app)} bytes, {len(fw.erase_addresses)} sectors")
             print(f"Programming K2 at {transport.path.decode('latin1', errors='replace')}...")
-            ident = updater.flash(fw, auto_reboot=not args.no_reboot)
+            ident = flash_with_backup(
+                updater, fw, Path(args.backup_dir) if args.backup_dir else default_backup_dir(),
+                no_backup=args.no_backup, auto_reboot=not args.no_reboot)
             print(f"\nFlashing completed and verified! Device upgraded from v{ident.current_version} to v{fw.version}")
 
             if args.monitor and not args.no_reboot:
