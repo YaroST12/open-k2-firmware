@@ -223,7 +223,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     (slot-move re-queue, rebalanced in the journal header byte 9 and card format v8, the 43-values comment, the
     logdb id 418 / post-rebase hashes in the branch commits, the guarded `&steps_[index_]`); tests red first in
     ff42512.
-- **A source holding the wrong voltage on the 5 V contract fails the unit as "no reattach"** (2026-11-09, fixed in 7d892ed,
+- **A source holding the wrong voltage on the 5 V contract fails the unit as "no reattach"** (2026-11-09, fixed in 77b8fe8,
   hardware check pending, found
   in the hardware run of a1da8c3; `runs/2026-11-09-splitter/streamB2/`, `ct-B2` output in the session log). Anker
   2-way splitter behind the Baseus 140 W, OnePlus 15 plugged into its other output during the unit detach (PPS, ~8.7 V).
@@ -234,8 +234,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     `kAttachContractMs` (3000 ms from the caps) ran out: `fail_unit` failed all six PD rows `NoReattach`, tries=0,
     "measured 1633 mV" (a VBUS reading mid-decay). The card says "no PD after re-attach at 1.63 V", which is false: PD
     came back, the voltage was wrong.
-  - Fix: tell the cases apart in `poll_attach` when `kAttachContractMs` runs out. A contract at PDO 1 (PS_RDY seen) with
-    VBUS outside vSafe5V is a new reason (e.g. `WrongVoltage`, "5 V contract held at 7.6 V") that records the highest
+  - Fix: tell the cases apart in `poll_attach` when the wait fails. A contract at PDO 1 whose PS_RDY was seen at any poll
+    of the wait (latched, `contract_wrong_`) with VBUS outside vSafe5V is a new reason (e.g. `WrongVoltage`, "5 V contract
+    held at 7.6 V") that records the highest
     VBUS seen during the wait, not the reading at the timeout; no caps at all stays `NoReattach`. Also a source-side
     drop (Rp gone) during the attach wait restarts the wait once (the splitter came back with its standby pull-up,
     `slow-rp-wake`, ~1.1-1.7 s after a steady Rd) instead of letting the timer run on. Decoder entries in
