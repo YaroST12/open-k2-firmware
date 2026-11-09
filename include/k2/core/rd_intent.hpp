@@ -11,6 +11,7 @@
 // record says it was meant to:
 //   Session   a self-powered sink was running (its pin): the charger's own Hard Reset brings the K2 back as the same sink.
 //   Reattach  the charger test planned this re-attach: the pin, and the cable identity to answer the charger's first look with.
+//   Rescan    the Connection page's Refresh cycled CC on a self-powered K2: the pin only, no identity (core/rescan_bridge.hpp).
 // An ordinary plain cold boot (no record: HID, a phone, a flash) never presents an Rd: boot_mode() hands back Plain.
 //
 // Bounds on a stale record (the K2 cannot clear it when a charger is simply unplugged: it dies with the marker in place):
@@ -31,7 +32,10 @@
 
 namespace k2::rdintent {
 
-enum class IntentKind : std::uint8_t { None = 0, Session = 1, Reattach = 2 };
+// Rescan: the Connection page's Refresh had to cycle CC on a self-powered K2 (the source did not answer a Get_Source_Cap). The cycle
+// drops VBUS, the K2 dies and comes back cold. The comeback keeps its Rd (either pin) and lands on the page again. It carries no
+// identity, and it is never a charger-test resume (that is the run journal's business, not the marker's).
+enum class IntentKind : std::uint8_t { None = 0, Session = 1, Reattach = 2, Rescan = 3 };
 
 struct Intent {
     IntentKind kind = IntentKind::None;
@@ -61,12 +65,13 @@ constexpr std::array<std::uint8_t, kSize> encode(Intent in) {
 constexpr Intent decode(const std::array<std::uint8_t, kSize>& r) {
     for (std::size_t i = 0; i < kMagic.size(); i++) if (r[i] != kMagic[i]) return {};
     if (check_of(r[4], r[5], r[6], r[7], r[8]) != r[9]) return {};
-    if (r[4] != static_cast<std::uint8_t>(IntentKind::Session) && r[4] != static_cast<std::uint8_t>(IntentKind::Reattach)) return {};
+    if (r[4] < static_cast<std::uint8_t>(IntentKind::Session) || r[4] > static_cast<std::uint8_t>(IntentKind::Rescan)) return {};
     if (r[5] != 1 && r[5] != 2) return {};
     if (r[6] > static_cast<std::uint8_t>(ctcable::Kind::Saved)) return {};
     const ctcable::Choice c{static_cast<ctcable::Kind>(r[6]), static_cast<std::uint16_t>(r[7] | (r[8] << 8))};
     if (!ctcable::valid(c)) return {};
     if (c.kind != ctcable::Kind::Off && r[5] != 2) return {};
+    if (c.kind != ctcable::Kind::Off && r[4] == static_cast<std::uint8_t>(IntentKind::Rescan)) return {};   // a rescan carries no identity
     return {static_cast<IntentKind>(r[4]), r[5], ctcable::canonical(c)};
 }
 

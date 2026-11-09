@@ -63,7 +63,7 @@ void test_damage_reads_as_none() {
     CHECK_EQ(decode(blank) == kNone, 1);
     // Well-formed record, impossible content: an unknown kind, no pin, both pins, a cable on the CC1 pin (the Ra sits on CC1), a
     // clone without its id, a built-in past the table. A session may carry the cable of the run it serves (pin 2 only).
-    CHECK_EQ(decode(encode({static_cast<IntentKind>(3), 2, kOff})) == kNone, 1);
+    CHECK_EQ(decode(encode({static_cast<IntentKind>(4), 2, kOff})) == kNone, 1);
     CHECK_EQ(decode(encode({IntentKind::Session, 0, kOff})) == kNone, 1);
     CHECK_EQ(decode(encode({IntentKind::Session, 3, kOff})) == kNone, 1);
     CHECK_EQ(decode(encode(kSessionB2)) == kSessionB2, 1);
@@ -251,10 +251,43 @@ void test_a_damaged_file_reads_as_none() {
     CHECK_EQ(save(v.f, kSession2), true);
     CHECK_EQ(load(v.f) == kSession2, 1);
 }
+// The Connection page's bridged rescan (kind 3): the K2 lives on the charger's VBUS, the CC cycle kills it, the comeback keeps Rd.
+// It carries no spoof identity (a page-armed identity is not in the record), and the older kinds keep their bytes.
+void test_the_rescan_kind() {
+    constexpr Intent kRescan1{IntentKind::Rescan, 1, kOff};
+    constexpr Intent kRescan2{IntentKind::Rescan, 2, kOff};
+    const std::array<std::uint8_t, 10> rescan2{'K', '2', 'R', 'I', 3, 2, 0, 0, 0, std::uint8_t(3 ^ 2 ^ 0x5A)};
+    CHECK_EQ(int(IntentKind::Rescan), 3);
+    CHECK_EQ(encode(kRescan2) == rescan2, 1);
+    CHECK_EQ(decode(rescan2) == kRescan2, 1);
+    CHECK_EQ(decode(encode(kRescan1)) == kRescan1, 1);
+    // no identity rides in it, no unknown kind after it
+    CHECK_EQ(decode(encode({IntentKind::Rescan, 2, kB2})) == kNone, 1);
+    CHECK_EQ(decode(encode({IntentKind::Rescan, 0, kOff})) == kNone, 1);
+    auto bad = encode(kRescan2);
+    bad[4] = 4; bad[9] = check_of(4, 2, 0, 0, 0);
+    CHECK_EQ(decode(bad) == kNone, 1);
+    // a cold plain boot keeps the Rd of the record's pin; a warm reset or a key mode does not take it over
+    CHECK_EQ(int(boot_mode(bootmode::Mode::Plain, false, kRescan2)), int(bootmode::Mode::PlusRdCc2));
+    CHECK_EQ(int(boot_mode(bootmode::Mode::Plain, false, kRescan1)), int(bootmode::Mode::OkRdCc1));
+    CHECK_EQ(int(boot_mode(bootmode::Mode::Plain, true, kRescan2)), int(bootmode::Mode::Plain));
+    CHECK_EQ(int(boot_mode(bootmode::Mode::OkRdCc1, false, kRescan2)), int(bootmode::Mode::OkRdCc1));
+    // it is judged like any comeback, and a vouched one is consumed by the follower's Session rewrite
+    CHECK_EQ(int(judge({100, true, true})), int(Verdict::Vouched));
+    CHECK_EQ(int(judge({kNoRpMs, false, false})), int(Verdict::Release));
+    Vol v;
+    CHECK_EQ(save(v.f, kRescan2), true);
+    CHECK_EQ(load(v.f) == kRescan2, 1);
+    Follower fo;
+    CHECK_EQ(int(fo.update({true, 2, false, false, {}})), int(Follower::Act::Hold));   // not Ready yet: the record stays
+    CHECK_EQ(int(fo.update({true, 2, true, false, {}})), int(Follower::Act::Apply));
+    CHECK_EQ(fo.wanted() == kSession2, 1);
+}
 }  // namespace
 
 int main() {
     test_record_format();
+    test_the_rescan_kind();
     test_damage_reads_as_none();
     test_the_boot_mode_decision();
     test_the_comeback_judge();
