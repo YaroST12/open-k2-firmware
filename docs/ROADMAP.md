@@ -487,10 +487,15 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests of the decision table; hardware: (a) the CUKTECH 6 A planned re-attach still comes back with
     Rd from the first instruction, (b) unplug after a self-powered run, wait 10 s, plug into HID only: `k2_remote
     bootinfo` shows no Rd at any time (SWITCHES0 notes without PDWN bits).
-- **Both Rd for 0.13 ms at SW_RES** (2026-11-09): the FUSB302 soft reset on a pinned boot leaves the chip default
-  SWITCHES0 = 0x03 (both pull-downs) for 0.13 ms until the pin is written again. Below every debounce; not seen to matter.
+- **Both Rd for 0.13 ms at SW_RES** (2026-11-09, fixed in a605db3, hardware check pending): the FUSB302 soft reset on a
+  pinned boot leaves the chip default SWITCHES0 = 0x03 (both pull-downs) for 0.13 ms until the pin is written again.
+  Below every debounce; not seen to matter.
   - Fix: on a pinned or comeback boot, skip SW_RES and use PD_RESET only, or write SWITCHES0 in the same I2C burst.
-  - Validate: host fusb302 scan test asserting no SWITCHES0 value with both PDWN bits on a pinned boot;
+    Done as the first option: init() and detach_reset() write PD_RESET only when g_pin_rd != 0 (key modes, the
+    inherited pin after a warm reset, the comeback marker); a plain boot keeps SW_RES at init and already used
+    PD_RESET at detach. park() (DFU teardown only) is unchanged.
+  - Validate: host fusb302 scan test asserting no SWITCHES0 value with both PDWN bits on a pinned boot
+    (test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res, red in 166ca72, green in a605db3);
     `k2_remote bootinfo` notes on hardware show no 0x03.
 - **Self-powered source loss at the legacy -> PD boundary** (2026-11-09, Apple PD 2.0, step 16/49 on 091e80e): VBUS
   went away and the run stopped until a replug. The K2 takes no VBUS action there; the cause is unproven. Since 1e3b67b
