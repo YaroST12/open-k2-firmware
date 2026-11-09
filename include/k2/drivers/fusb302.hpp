@@ -317,6 +317,8 @@ struct VconnInfo {
     std::uint16_t cc1_mv = 0, cc2_mv = 0;   // ADC, no divider: a 5 V net reads the 3.3 V rail
 };
 bool vconn_request();
+bool vconn_roundtrip();
+bool data_reset();        // lab: send Data_Reset (the VCONN source cycles VCONN; a DFP may re-read the cable)   // lab: take the VCONN role without driving it, then hand it back (the source turns VCONN on)
 void vconn_off();
 VconnInfo vconn_info();
 

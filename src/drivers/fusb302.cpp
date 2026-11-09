@@ -135,6 +135,7 @@ constexpr std::uint32_t kRereadLingerMs = 30000;
 SopPrimeHook g_sop_prime_hook = nullptr;  // k2::emk_spoof, null when off
 pd::Vconn g_vconn;                // VCONN_Swap experiment (remote only): the K2 takes the VCONN source role
 bool g_vconn_applied = false;     // PC13 high and the chip's VCONN switch closed on the line opposite the active one
+bool g_vconn_give = false;      // lab VCONN round trip: hand the role back once it is ours (vconn_roundtrip)
 bool g_ra = false;                // Ra mode (k2/pd/emk_ra.hpp): PC13 high = Ra on CC1, Rd on CC2 alone; ends on detach, abort, `ra off`, reboot
 emkra::Refuse g_ra_refused = emkra::Refuse::None;   // why the last ra_set(true) said no (None when it did not)
 bool g_ra_run = false;            // a charger-test run owns the Ra mode: its units detach and re-attach, the mode survives them
@@ -1607,6 +1608,14 @@ void active_tick() {
     g_sink.tick(now);
     if (g_sink.status().epr_info != info_was) log_epr_info(g_sink.status().epr_info);
     g_vconn.tick(now);
+    if (g_vconn_give && g_vconn.state() == pd::VconnState::On && g_vconn.tx_idle()) {   // lab round trip: the role is ours (not driven), hand it back
+        g_vconn_give = false;
+        g_vconn.give(now);
+        K2LOG("[VCONN] round trip: role taken, handing it back\n");
+        vconn_mark();
+    } else if (g_vconn_give && (g_vconn.state() == pd::VconnState::Failed || g_vconn.state() == pd::VconnState::Off)) {
+        g_vconn_give = false;
+    }
     vconn_sync(now);
     {   // Fully active for the whole contract: a running or held trigger, Identify, a pending
         // Get_Source_Cap or the prepare. Passive again only after release / detach (plus the linger).
@@ -2242,6 +2251,30 @@ bool vconn_request() {
     const bool ok = g_vconn.request(systick::millis());
     K2LOG("[VCONN] request %s\n", ok ? "queued" : "refused: a swap is running");
     if (ok) vconn_mark();
+    return ok;
+}
+
+// Lab: the VCONN role round trip (pd::Vconn fake + give). The K2 takes the VCONN source role without driving VCONN, then hands it
+// back at once: the source turns VCONN on, now with the Ra mode's resistor present, and as the new VCONN source it may run the
+// cable discovery it skipped at an attach that had no Ra (`cable-look-at-attach`, docs/CHARGER_QUIRKS.md). Needs a Ready contract.
+bool vconn_roundtrip() {
+    if (g_active_cc == 0 || inline_now() || g_legacy_only || g_sink.status().state != pd::SinkState::Ready) {
+        K2LOG("[VCONN] round trip refused: cc=%u inline=%d sink state %u\n", unsigned(g_active_cc), int(inline_now()), unsigned(g_sink.status().state));
+        return false;
+    }
+    const bool ok = g_vconn.request(systick::millis(), true);
+    g_vconn_give = ok;
+    K2LOG("[VCONN] round trip %s (ra=%d)\n", ok ? "queued" : "refused: a swap is running", int(g_ra));
+    if (ok) vconn_mark();
+    return ok;
+}
+
+// Lab: send Data_Reset (control 14, PD 3.1): the VCONN source power-cycles VCONN, which resets the cable plug; a DFP may then
+// run the cable discovery again. Needs a Ready contract; the answer (Accept / Not_Supported, Data_Reset_Complete) is in the trace.
+bool data_reset() {
+    if (g_active_cc == 0 || inline_now() || g_sink.status().state != pd::SinkState::Ready) return false;
+    const bool ok = g_vconn.send_raw(14);
+    K2LOG("[VCONN] Data_Reset %s\n", ok ? "queued" : "refused: TX slot busy");
     return ok;
 }
 

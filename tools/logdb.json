@@ -381,6 +381,11 @@
   "378": "[GUARD] started anyway, self-supplied: the Ra follows the attach\n",
   "379": "[QRTEST] show refused: v%u px%u q%u\n",
   "380": "[QRTEST] show v%u px%u q%u\n",
-  "381": "[QRTEST] stop\n"
+  "381": "[QRTEST] stop\n",
+  "382": "[PD] self-power bring-up: %s after %u ms\n",
+  "383": "[VCONN] round trip: role taken, handing it back\n",
+  "384": "[VCONN] round trip refused: cc=%u inline=%d sink state %u\n",
+  "385": "[VCONN] round trip %s (ra=%d)\n",
+  "386": "[VCONN] Data_Reset %s\n"
  }
 }

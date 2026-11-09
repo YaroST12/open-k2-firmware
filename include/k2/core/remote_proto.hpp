@@ -1059,9 +1059,9 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (st != Status::Ok) return reply(st);
         return reply_n(0);
     }
-    case Cmd::DebugVconn:   // [op]: 0 status, 1 send VCONN_Swap, 2 VCONN off
+    case Cmd::DebugVconn:   // [op]: 0 status, 1 send VCONN_Swap, 2 VCONN off, 3 lab round trip (take the role undriven, hand it back)
         if (p.size() != 1) return reply(Status::BadLength);
-        if (p[0] > 2) return reply(Status::BadArg);
+        if (p[0] > 4) return reply(Status::BadArg);
         return reply_n(encode_vconn(buf, backend.debug_vconn(p[0])));
     case Cmd::DebugEprInfo:   // [op]: 0 status, 1 ask (gated), 2 ask regardless of the EPR bit
         if (p.size() != 1) return reply(Status::BadLength);

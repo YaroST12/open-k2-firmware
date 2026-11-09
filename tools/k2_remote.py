@@ -1929,8 +1929,8 @@ def cmd_debug(link, a):
         link.call(CMD_DEBUG_CC_MATRIX, payload)
         return {"cc_matrix": a.v, "cc_modes": a.modes}
     if a.debug_cmd == "vconn":
-        p = link.call(CMD_DEBUG_VCONN, bytes([{"status": 0, "swap": 1, "off": 2}[a.op]])).payload
-        st = ["off", "swap-sent", "settling", "on", "releasing", "failed"]
+        p = link.call(CMD_DEBUG_VCONN, bytes([{"status": 0, "swap": 1, "off": 2, "roundtrip": 3, "data-reset": 4}[a.op]])).payload
+        st = ["off", "swap-sent", "settling", "on", "releasing", "failed", "give-sent", "give-wait"]
         why = ["none", "accepted", "rejected", "wait", "not-supported", "timeout", "released-by-partner", "refused", "abort"]
         return {"vconn": {"ok": bool(p[0]), "state": st[p[1]] if p[1] < len(st) else p[1],
                           "why": why[p[2]] if p[2] < len(why) else p[2], "pin_on": bool(p[3]), "swaps_rx": p[4],
@@ -2709,7 +2709,7 @@ def build_parser():
     scp.add_argument("--modes", type=lambda x: int(x, 16), default=None, metavar="HEX",
                      help="CRH mode nibbles for PC13/14/15 (bits 0-3/4-7/8-11); default: leave them")
     svc = sds.add_parser("vconn", help="debug: VCONN_Swap experiment (swap = ask the source for the VCONN role, off = drop it)")
-    svc.add_argument("op", choices=["status", "swap", "off"])
+    svc.add_argument("op", choices=["status", "swap", "off", "roundtrip", "data-reset"])
     sde = sds.add_parser("epr-info", help="debug: informational EPR_Get_Source_Cap (ask = only when PDO 1 has the EPR bit, "
                                           "force = ask any source; needs an active sink, never starts an EPR contract)")
     sde.add_argument("op", choices=["status", "ask", "force"])

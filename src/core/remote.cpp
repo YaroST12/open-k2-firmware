@@ -682,6 +682,8 @@ remote::VconnSnapshot Remote::debug_vconn(uint8_t op) {
     if (ui_.charger_test_busy()) { K2LOG("[TEST] debug refused: test running\n"); s.ok = 0; }
     else if (op == 1) s.ok = fusb302::vconn_request() ? 1 : 0;
     else if (op == 2) fusb302::vconn_off();
+    else if (op == 3) s.ok = fusb302::vconn_roundtrip() ? 1 : 0;
+    else if (op == 4) s.ok = fusb302::data_reset() ? 1 : 0;
     const fusb302::VconnInfo v = fusb302::vconn_info();
     s.state = v.state; s.why = v.why; s.applied = v.applied; s.swaps_rx = v.swaps_rx; s.active_cc = v.active_cc;
     s.cc1_mv = v.cc1_mv; s.cc2_mv = v.cc2_mv;
