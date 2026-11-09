@@ -1365,6 +1365,37 @@ static void test_cancel_and_failed_release() {
     f.tick(r, 700); CHECK_EQ(r.state(), ct::State::Stopped);
     read_only(r, f);
 }
+// Pattern budget-reannounce-mid-run (Anker 2-way splitter): the sink verifies the 5 V release against VBUS, retries, and as the
+// last step sends a Hard Reset of its own. While it verifies the release window stays open (no Unsafe after 8 s); its own Hard Reset
+// is a recovery (VBUS dips and returns), never "source lost".
+static void test_release_waits_for_the_sink_verification_and_its_hard_reset() {
+    auto at_9v = [](Fake& f, ct::Runner& r) {
+        r.start(f.caps, kPd, f.in, true);
+        for (unsigned n = 0; n < 150 && f.pd_requests < 2; ++n) f.tick(r, 100);
+        CHECK_EQ(f.in.vbus_mv, 9000);
+        f.release_ok = false;   // the fake source does not follow the release: VBUS stays up
+        f.in.pd.verifying = true; f.in.pd.held = false; f.in.pd.state = pd::SinkState::Ready; f.in.pd.mv = 5000;
+        r.cancel(f.in);
+    };
+    {   // verification running: the window stays open far past 8 s, then the sink's Hard Reset brings the port to 5 V
+        Fake f; ct::Runner r(f); at_9v(f, r);
+        f.tick(r, 20000);
+        CHECK_EQ(r.state(), ct::State::Releasing);
+        ++f.in.pd.hard_resets; f.in.pd.verifying = false; f.in.pd.state = pd::SinkState::Failed;
+        f.in.vbus_mv = 0; f.tick(r, 500);
+        CHECK_EQ(r.state() != ct::State::Unsafe, true);
+        f.in.vbus_mv = 5000; f.tick(r, 3000);
+        CHECK_EQ(r.state(), ct::State::Stopped);
+        CHECK_EQ(r.reason() != ct::Reason::Lost, true);
+    }
+    {   // verification over without a result (no Hard Reset allowed): the old 8 s window then ends it as Unsafe
+        Fake f; ct::Runner r(f); at_9v(f, r);
+        f.tick(r, 20000); CHECK_EQ(r.state(), ct::State::Releasing);
+        f.in.pd.verifying = false; f.in.pd.state = pd::SinkState::Failed;
+        f.tick(r, 1000);
+        CHECK_EQ(r.state(), ct::State::Unsafe);
+    }
+}
 // Unsafe is acknowledged by the unplug: VBUS absent (under 1 V) for kUnsafeGoneMs ends it (Stopped, a new run may start). VBUS present
 // and outside vSafe5V never does, and a dark blip shorter than the debounce does not either (GaN3 65W, 2026-11-08: unplug and replug
 // left "unsafe" until a reboot).
@@ -4885,7 +4916,7 @@ int main() {
     test_hunt_evidence_names_each_refusal_cause(); test_hunt_evidence_records_what_the_sink_saw();
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
-    test_plan_and_run(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release();
+    test_plan_and_run(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
     test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_pps_min_step_accepts_unloaded_floor();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();

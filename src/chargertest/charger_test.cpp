@@ -1125,7 +1125,7 @@ void Runner::release(Input in, bool stop) {
     reissue_release();
     // Nothing is held and VBUS never left vSafe5V: there is nothing to wait for.
     if (!stop && !pd_owned_ && !fc_owned_ && !hot_ && !recover_ && safe5(in.vbus_mv)) { next(in); return; }   // the sink may refuse and is asked again by poll(); the legacy engine always lets go
-    state_ = State::Releasing; phase_ms_ = release_ms_ = in.now; stable_ = false;
+    state_ = State::Releasing; phase_ms_ = release_ms_ = in.now; stable_ = false; rel_hr_ = in.pd.hard_resets;
 }
 void Runner::reissue_release() {
     if (pd_owned_) env_.release(true);
@@ -1604,6 +1604,11 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     if (state_ == State::Releasing) {
         // A non-PD source that browned out (a bank asked for a level it does not have) comes back on its own:
         // wait for vSafe5V instead of ending the run. A PD contract that vanished still stops it.
+        // pattern budget-reannounce-mid-run: the sink verifies the 5 V release against VBUS and, as the last resort, sends a
+        // Hard Reset of its own. That dip is the recovery of this release (the port comes back at 5 V), not a lost source.
+        if (pd_owned_ && in.pd.hard_resets != rel_hr_) {
+            pd_owned_ = false; recover_ = true; phase_ms_ = in.now; stable_ = false; rel_hr_ = in.pd.hard_resets;
+        }
         bool dropped = in.session != session_ || (in.vbus_mv >= 0 && in.vbus_mv < 1000);
         if (dropped && pd_owned_ && !stopping_ && index_ < count_ && low_programmable(steps_[index_])) {
             // The low edge cost the source its output while the row was handed back: wait for it like a cut row.
@@ -1652,7 +1657,10 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
                 else next(in);
             }
         } else stable_ = false;
-        if (state_ == State::Releasing && !(wait_caps && safe5(in.vbus_mv)) && in.now - phase_ms_ >= (recover_ ? kRecoverMs : 8000)) {
+        // The sink is still verifying VBUS after its 5 V release (retries, then its own Hard Reset): its window is bounded by the
+        // sink, so this one is not cut short at 8 s.
+        if (state_ == State::Releasing && !in.pd.verifying && !(wait_caps && safe5(in.vbus_mv)) &&
+            in.now - phase_ms_ >= (recover_ ? kRecoverMs : 8000)) {
             if (recover_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 && cut_index_ < count_) {
                 // pattern latch-off-low-pps: the source shut its output off on the low edge and stays dead until a replug.
                 // That row carries the reason; the run is complete (everything before it ran), not "source lost".

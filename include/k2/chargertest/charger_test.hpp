@@ -566,6 +566,9 @@ private:
     // gone_ = Unsafe is timing the unplug (VBUS under 1 V since stable_ms_, see kUnsafeGoneMs); fits the padding before sag_ms_.
     bool sag_cut_ = false, sag_open_ = false, gone_ = false; uint32_t sag_ms_ = 0;
     bool recover_ = false, hot_ = false, stable_ = false, stopping_ = false, pd_owned_ = false, fc_owned_ = false;
+    // Sink Hard Resets sent when the release started: a later one is the sink's own last resort for a release that did not
+    // bring VBUS down (pattern budget-reannounce-mid-run), a recovery and not a lost source.
+    uint32_t rel_hr_ = 0;
     uint32_t busy_retry_at_ = 0;   // a PD request refused Busy (identify/probe/prep running) is retried, not failed
     HandoverInfo handover_{};
     // The units of the run in execution order (the rows are laid out in the same order) and the one running.
