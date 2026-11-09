@@ -4,6 +4,7 @@
 // Expected bytes are written out literally from the layout in remote_proto.hpp.
 #include "test_util.h"
 #include "k2/core/remote_proto.hpp"
+#include "k2/chargertest/report_card_remote.hpp"
 #include <initializer_list>
 #include <array>
 #include <cstdio>
@@ -11,6 +12,10 @@
 #include <vector>
 
 using namespace k2::remote;
+
+// The dispatcher refuses a Cards GET past kCardsChunks: it must be exactly the chunks of one card payload (a card that grows
+// needs this bumped, or its last chunk is refused on the wire and `k2_remote cards show` reads a short card).
+static_assert(kCardsChunks == k2::report_card::remote::kChunks);
 
 #include "fake_remote_backend.hpp"
 
@@ -280,7 +285,10 @@ static void test_cards() {
     check_header(r, 0x62, 4, Status::Ok, 2);
     CHECK_EQ(int(f.cards_req.size()), 4); CHECK_EQ(int(f.cards_req[3]), 3);
     f.calls = 0;
-    CHECK_EQ(run(f, request(0x62, 5, {1, 3, 0, 4}), r), 1);             // chunk 4 does not exist
+    CHECK_EQ(run(f, request(0x62, 4, {1, 3, 0, 4}), r), 1);             // format 7 payload: 196 bytes = chunks 0..4
+    check_header(r, 0x62, 4, Status::Ok, 2);
+    f.calls = 0;
+    CHECK_EQ(run(f, request(0x62, 5, {1, 3, 0, 5}), r), 1);             // chunk 5 does not exist
     check_header(r, 0x62, 5, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x62, 5, {1, 3, 0}), r), 1);
     check_header(r, 0x62, 5, Status::BadLength, 0);

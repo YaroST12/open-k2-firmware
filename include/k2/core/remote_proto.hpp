@@ -387,7 +387,7 @@ constexpr uint8_t kStoreFlagSingle = 1, kStoreFlagForeign = 2, kStoreFlagLog = 4
 // CARDS op codes (first payload byte of Cmd::Cards); the layouts are in k2/chargertest/report_card_remote.hpp, which
 // src/core/remote.cpp checks against these. Delete needs the trailing 1; rename takes a 1..20 byte name.
 inline constexpr uint8_t kCardsList = 0, kCardsGet = 1, kCardsRename = 2, kCardsDelete = 3;
-inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 4;   // 162 bytes / 48 = 3.375 -> 4 chunks
+inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 5;   // 196 bytes / 48 = 4.08 -> 5 chunks (report_card::remote::kChunks, static_asserted in remote.cpp)
 
 // EMLIB op codes (first payload byte of Cmd::EmLib), the saved-cable library of k2/pd/emlib.hpp. Every
 // response starts with err (k2::emlib::Err: 0 Ok, 1 Full, 2 Invalid, 3 NotFound, 4 Flash, 5 Exists;
