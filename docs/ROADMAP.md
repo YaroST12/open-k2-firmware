@@ -172,6 +172,23 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     Nits: a row whose offer only moved slot is re-queued, not Withdrawn; `rebalanced` belongs in the journal (survives a
     comeback) and the shared card; `report_card.hpp:75` says 44 values (43); commit body logdb id 409 not 401; subject
     names a pre-rebase hash; `&steps_[index_]` when `index_ == count_`.
+  - Hardware runs of c51cf6d (the rebased 1ff23a4), 2026-11-09, splitter behind the Baseus 140 W, HID-powered K2 with
+    the Rd pinned on CC2 (see `slow-rp-wake`), second device (OnePlus 15) plugged mid-run; `runs/2026-11-09-splitter/`:
+    6. **A re-split during row 15 V withdrew rows that are still offered** (`A3-runlog.txt`): the list went 5/9/12/15 V
+       3 A, 20 V 5 A, PPS 5 A, EPR 28 V 5 A -> 5/9/12/15 V 1.5 A, 20 V 4.1 A, EPR 28 V 4 A. The re-plan logged "0 rows
+       follow, 9 withdrawn": 15 V, 20 V and EPR 28 V were Withdrawn although offered at a lower current (item 4), and the
+       later EPR row ended `CapsChanged`. Expected: 15/20/28 V keep their rows at the new current; only PPS is Withdrawn.
+    7. **A re-split delivered as EPR_Source_Capabilities ends the whole run** (`A6-runlog.txt`): during row 0 (5 V) the
+       splitter pushed an unsolicited, complete 8-PDO EPR_Source_Capabilities with the reduced list. The runner took the
+       old all-or-nothing path: row 0 Fail `CapsChanged` (5 V 1.5 A still covers the 1 A ask), rows 1..13 Skip
+       `CapsChanged`, 0 pass. A complete EPR list outside the K2's own EPR entry/exit is a re-announce like any other and
+       goes through the per-row re-plan; only a partial chunk or `epr_stage_ == 2` stays excluded.
+    8. **`tools/k2_remote.py` cannot decode the new reason** (#42 `Withdrawn`): `ct_start.py` crashed at the summary with
+       `FrameError: invalid charger-test row`. Add it to the decoder (and `card.js`/`k2_qr.py` if carried), with a test.
+    9. A re-announce that changes nothing still logs "re-plan: N rows follow, 0 withdrawn, 0 back" on every run (item 2).
+    Not a K2 bug, for the quirks doc: on this splitter every PPS Request is Accepted, VBUS then falls 5 V -> 2 V instead
+    of rising, PS_RDY is sent anyway and the Rp drops ~500 ms later (`pps-accept-then-collapse`, `A2-runlog.txt`; the
+    card's "source lost" fail is correct). EPR 28 V passes through the splitter when its budget allows.
 - **The sink re-requests a held contract by position on a re-announce** (2026-11-09, review finding, not seen on the
   wire yet). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requests `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
