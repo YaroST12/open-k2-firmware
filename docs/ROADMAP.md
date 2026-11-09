@@ -507,7 +507,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: `make gate` passes 10 times in a row while the machine runs another build (`make -j` in a second tree).
 - **Wrong comment** in `tools/k2_qr.py`: "a space can end a part" is false (the last base45 character of a part is at
   most index 32; a space is 36).
-  - Fix: correct the comment. Validate: `make gate`.
+  - Fix: correct the comment. Validate: `make gate`. Fixed in 8f4acaf, hardware check pending.
 - **Charger-test journal keeps its own row order** (2026-11-09): `charger_journal.hpp` `detail::plan_order` places the
   6 A hunt rows by its own rule when it rebuilds the steps on a resume: a third copy of the order the grid fix removed.
   - Fix: rebuild from the planner's step list (the same structure the grid uses since 98e2f39).
