@@ -3,5 +3,8 @@ Upstream: https://www.nayuki.io/page/qr-code-generator-library (github.com/nayuk
 Vendored from a copy that only added a build guard around the whole .c file; that guard is removed here.
 Local changes: (1) qrcodegen_VERSION_MAX is 10 instead of 40, so a symbol buffer is 407 bytes
 (qrcodegen_BUFFER_LEN_MAX 3918 would not fit the stack or the scratch arena); (2) the .c is built with -DNDEBUG,
-the argument asserts are programmer checks that the fixed call in src/qr.cpp cannot trip.
+the argument asserts are programmer checks that the fixed call in src/qr.cpp cannot trip; (3) qrcodegen_setPoll(), an
+optional hook called at the start of each of the eight automatic-mask candidates, so a large symbol's slow encode can keep
+servicing USB (the generator itself reads no other global state). The tables cover versions 1..40; the header cap of 10
+is not enforced (asserts are compiled out), a caller sizes its buffers for the version it asks for.
 Used only through include/k2/qr.hpp (byte mode, level L, versions 1..10).

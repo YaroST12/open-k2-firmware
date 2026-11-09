@@ -27,13 +27,19 @@ int encode_version(std::string_view text, std::uint8_t* code, std::uint8_t* data
     return encode_placed(code, data_temp, text.size(), max_version);
 }
 
-int encode_text(const char* text, Workspace& w, int max_version) {
+int encode_text_placed(const char* text, std::uint8_t* code, std::uint8_t* temp, int max_version) {
     if (!text || !*text || max_version < 1 || max_version > kMaxVersion) return 0;
-    if (!qrcodegen_encodeText(text, w.temp, w.code, qrcodegen_Ecc_LOW, qrcodegen_VERSION_MIN, max_version,
+    if (!qrcodegen_encodeText(text, temp, code, qrcodegen_Ecc_LOW, qrcodegen_VERSION_MIN, max_version,
                               qrcodegen_Mask_AUTO, false))
         return 0;
-    return qrcodegen_getSize(w.code);
+    return qrcodegen_getSize(code);
 }
+
+int encode_text(const char* text, Workspace& w, int max_version) {
+    return encode_text_placed(text, w.code, w.temp, max_version);
+}
+
+void set_poll(void (*poll)()) { qrcodegen_setPoll(poll); }
 
 bool dark(const Workspace& w, int x, int y) { return dark_code(w.code, x, y); }
 

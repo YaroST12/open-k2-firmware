@@ -50,6 +50,14 @@ int encode_placed(std::uint8_t* code, std::uint8_t* data_temp, std::size_t len, 
 // The same with the payload copied in from `text` first: `buf_len` is the size of each of `code` / `data_temp`.
 int encode_version(std::string_view text, std::uint8_t* code, std::uint8_t* data_temp, std::size_t buf_len, int max_version);
 
+// encode_text() into caller-owned buffers (`code` and `temp`, each at least buf_len_for(max_version) bytes, max_version at
+// most kMaxVersion: the text modes pack up to the version-12 alphanumeric capacity). Returns the modules per side, or 0.
+int encode_text_placed(const char* text, std::uint8_t* code, std::uint8_t* temp, int max_version = kMaxVersion);
+
+// A hook the generator calls at the start of each of its eight mask candidates, so a caller can keep servicing USB and the
+// PD engine through the slow encode of a large symbol. nullptr (the default) removes it; the hook must not encode.
+void set_poll(void (*poll)());
+
 // Module (x, y) of the symbol encode() just made; false outside it.
 bool dark(const Workspace& w, int x, int y);
 // The same for a symbol in a caller buffer (a workspace above kMaxVersion): `code` is the packed bitmap encode_placed wrote.

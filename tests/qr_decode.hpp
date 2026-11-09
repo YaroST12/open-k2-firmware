@@ -3,7 +3,7 @@
 // A minimal QR reader for the tests: format bits -> mask -> zig-zag codeword read -> byte-mode payload.
 // It does not run the Reed-Solomon correction (a clean matrix needs none), so a test that decodes through it
 // proves the symbol layout (finder-relative placement, mask, interleave) independently of the encoder under test.
-// Supports versions 1..12, error-correction level L or M, one byte-mode or alphanumeric segment.
+// Supports versions 1..24 at level L (level M up to version 12), one byte-mode or alphanumeric segment.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -33,9 +33,12 @@ inline bool is_function(int v, int n, int x, int y) {
         if (y >= n - 11 && x < 6) return true;
     }
     if (v >= 2) {                                     // alignment patterns
-        static const int pos[13][8] = {
+        static const int pos[25][8] = {
             {0}, {0}, {6, 18, 0}, {6, 22, 0}, {6, 26, 0}, {6, 30, 0}, {6, 34, 0},
-            {6, 22, 38, 0}, {6, 24, 42, 0}, {6, 26, 46, 0}, {6, 28, 50, 0}, {6, 30, 54, 0}, {6, 32, 58, 0}};
+            {6, 22, 38, 0}, {6, 24, 42, 0}, {6, 26, 46, 0}, {6, 28, 50, 0}, {6, 30, 54, 0}, {6, 32, 58, 0},
+            {6, 34, 62, 0}, {6, 26, 46, 66, 0}, {6, 26, 48, 70, 0}, {6, 26, 50, 74, 0}, {6, 30, 54, 78, 0},
+            {6, 30, 56, 82, 0}, {6, 30, 58, 86, 0}, {6, 34, 62, 90, 0}, {6, 28, 50, 72, 94, 0},
+            {6, 26, 50, 74, 98, 0}, {6, 30, 54, 78, 102, 0}, {6, 28, 54, 80, 106, 0}};
         const int* p = pos[v];
         int cnt = 0;
         while (p[cnt]) cnt++;
@@ -65,7 +68,7 @@ inline Result decode(int n, const Dark& dark) {
     Result r;
     if (n < 21 || (n - 17) % 4 != 0) return r;
     const int v = (n - 17) / 4;
-    if (v > 12) return r;
+    if (v > 24) return r;
     // Format word (15 bits, XOR 0x5412): first copy around the top-left finder.
     unsigned fmt = 0;
     const int fx[15] = {8, 8, 8, 8, 8, 8, 8, 8, 7, 5, 4, 3, 2, 1, 0};
@@ -94,13 +97,15 @@ inline Result decode(int n, const Dark& dark) {
     // Data codewords are interleaved block by block; deinterleave for the version / level in use.
     // Total codewords and EC codewords per block, blocks (g1 blocks of len1, g2 blocks of len1+1), levels L and M.
     struct Blk { int total, ec, b1, b2; };
-    static const Blk L[13] = {{0, 0, 0, 0}, {26, 7, 1, 0}, {44, 10, 1, 0}, {70, 15, 1, 0}, {100, 20, 1, 0}, {134, 26, 1, 0},
+    static const Blk L[25] = {{0, 0, 0, 0}, {26, 7, 1, 0}, {44, 10, 1, 0}, {70, 15, 1, 0}, {100, 20, 1, 0}, {134, 26, 1, 0},
                               {172, 18, 2, 0}, {196, 20, 2, 0}, {242, 24, 2, 0}, {292, 30, 2, 0}, {346, 18, 2, 2},
-                              {404, 20, 4, 0}, {466, 24, 2, 2}};
+                              {404, 20, 4, 0}, {466, 24, 2, 2}, {532, 26, 4, 0}, {581, 30, 3, 1}, {655, 22, 5, 1},
+                              {733, 24, 5, 1}, {815, 28, 1, 5}, {901, 30, 5, 1}, {991, 28, 3, 4}, {1085, 28, 3, 5},
+                              {1156, 28, 4, 4}, {1258, 28, 2, 7}, {1364, 30, 4, 5}, {1474, 30, 6, 4}};
     static const Blk M[13] = {{0, 0, 0, 0}, {26, 10, 1, 0}, {44, 16, 1, 0}, {70, 26, 1, 0}, {100, 18, 2, 0}, {134, 24, 2, 0},
                               {172, 16, 4, 0}, {196, 18, 4, 0}, {242, 22, 2, 2}, {292, 22, 3, 2}, {346, 26, 4, 1},
                               {404, 30, 1, 4}, {466, 22, 6, 2}};
-    if (r.ecl > 1) return r;
+    if (r.ecl > 1 || (r.ecl == 1 && v > 12)) return r;   // level M has its table only up to version 12
     const Blk b = (r.ecl == 0 ? L : M)[v];
     const int blocks = b.b1 + b.b2;
     const int data_total = b.total - b.ec * blocks;

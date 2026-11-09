@@ -68,4 +68,8 @@ DmaInfo dma_info();
 // answering PD messages, keeps running while a page draws. nullptr disables it.
 void set_idle_hook(void (*hook)());
 
+// One round of the same service work outside a stream (usb::service() and the idle hook), for a long computation that
+// must not starve USB and the PD engine (the QR encoder of a large symbol polls it between its mask candidates).
+void pump();
+
 }  // namespace k2::lcd

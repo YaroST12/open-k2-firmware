@@ -339,6 +339,8 @@ void set_sink(const Sink* sink) { g_sink = sink; }
 const Sink* get_sink() { return g_sink; }
 void set_idle_hook(void (*hook)()) { g_idle_hook = hook; }
 
+void pump() { serve(); }
+
 DmaInfo dma_info() { return {kLcdDma, kLcdDma && g_dma_ok, g_dma_done, g_dma_stalls}; }
 
 bool g_erase = false;

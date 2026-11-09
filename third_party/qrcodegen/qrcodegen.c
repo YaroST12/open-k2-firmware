@@ -120,6 +120,10 @@ static const int PENALTY_N2 =  3;
 static const int PENALTY_N3 = 40;
 static const int PENALTY_N4 = 10;
 
+// Open-K2 addition: see qrcodegen_setPoll() in the header.
+static void (*pollHook)(void) = NULL;
+void qrcodegen_setPoll(void (*poll)(void)) { pollHook = poll; }
+
 
 
 /*---- High-level QR Code encoding functions ----*/
@@ -264,6 +268,8 @@ bool qrcodegen_encodeSegmentsAdvanced(const struct qrcodegen_Segment segs[], siz
 		long minPenalty = LONG_MAX;
 		for (int i = 0; i < 8; i++) {
 			enum qrcodegen_Mask msk = (enum qrcodegen_Mask)i;
+			if (pollHook != NULL)
+				pollHook();
 			applyMask(tempBuffer, qrcode, msk);
 			drawFormatBits(ecl, msk, qrcode);
 			long penalty = getPenaltyScore(qrcode);

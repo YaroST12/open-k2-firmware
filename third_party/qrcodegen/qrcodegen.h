@@ -298,6 +298,16 @@ struct qrcodegen_Segment qrcodegen_makeEci(long assignVal, uint8_t buf[]);
 int qrcodegen_getSize(const uint8_t qrcode[]);
 
 
+/*---- Open-K2 addition ----*/
+
+/*
+ * Installs a hook the encoder calls at the start of every automatic-mask candidate (eight per encode, nothing to do for a
+ * fixed mask), so a caller that must keep servicing other work during a slow encode of a large symbol can do it.
+ * NULL (the default) removes it. The hook must not call the encoder.
+ */
+void qrcodegen_setPoll(void (*poll)(void));
+
+
 /*
  * Returns the color of the module (pixel) at the given coordinates, which is false
  * for white or true for black. The top left corner has the coordinates (x=0, y=0).

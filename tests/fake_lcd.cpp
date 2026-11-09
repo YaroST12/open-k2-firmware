@@ -9,6 +9,7 @@
 uint16_t g_panel[LCD_WIDTH * LCD_HEIGHT];
 unsigned g_lcd_windows;
 unsigned g_lcd_pixels;
+unsigned g_lcd_pumps;
 
 namespace {
 const k2::lcd::Sink* g_sink;
@@ -63,6 +64,7 @@ void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t 
 
 void fill(std::uint16_t color) { fill_rect(0, 0, kWidth, kHeight, color); }
 void set_rotation(std::uint8_t) {}
+void pump() { g_lcd_pumps++; }
 void set_erase(bool erase) { g_erase = erase; }
 bool get_erase() { return g_erase; }
 DmaInfo dma_info() { return {}; }
