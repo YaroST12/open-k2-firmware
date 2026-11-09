@@ -283,6 +283,12 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     140 W, CUKTECH 10 and Apple on the bottom port, HID connected: open the page (no TX in the black box until
     Refresh), Refresh on each tab, every row Got or a named status, black box shows one message in flight at a time
     and no VBUS dark on the PD sources; Xiaomi charger: the 6 A chain still completes after a Refresh.
+  - Status: **built, hardware check pending** (branch `k2/survey`: 92295e0 Reread gains Modes, Manufacturer_Info, survey
+    order and pacing; 362cd32 `k2_remote pd-reread` numbering; 927b559 pure `pd::Survey`; cba04c7 glue through the sink
+    gate; f1f26a5 UI). Details: Source tab pop-up item "Details" opens the second page (Caps, Mfr, Ext, SVIDs, Modes,
+    EPR); Refresh is the last item of the Cable and Sink pop-ups. Open: the sink's once-per-attach proactive Discover
+    SVIDs (`pd_sink.cpp`, default ON) is still an unsolicited VDM at attach, against "attach stays passive"; the
+    Cable field is a check of the sniffed e-marker, not a VCONN read.
 
 - **Ripple: calibrate PA1, then show it** (the capture works; its scale is unknown).
   - Seen on hardware (2026-11-09, HID power only, no charger, `runs/2026-11-09-ripple/`): `k2_remote ripple` returns
