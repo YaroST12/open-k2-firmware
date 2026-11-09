@@ -314,11 +314,13 @@ private:
     void abandon_run();
     void capture_identity();   // charger fingerprint, VID/PID and rated power, taken while the source caps are live
     void save_card();          // report card of a Done run; delta against the charger's earlier card
+    [[gnu::noinline]] void save_card_store();   // save_card's tail: the previous card, the write and the delta, on its own frame
     UiContext& ctx_;
     ChargerTestPage* view_ = nullptr;   // the painted half while it exists
     charger_test::Runner runner_;
     char card_name_[24] = {};  // saved card name of this run, the Results heading
     report_card::Identity card_id_{};
+    report_card::Card card_{};   // the run's card while save_card builds and stores it; a member, not a stack copy (the save path is stack-gated, tools/stack_depth.py)
     char mfr_[13] = {};   // Manufacturer_Info name from the source probe, only used to name the card
     std::array<report_card::DeltaLine, 8> delta_{};
     size_t delta_n_ = 0;

@@ -670,9 +670,10 @@ constexpr uint16_t apdo_ma(ct::Algorithm alg, uint32_t raw, unsigned hi_dv) {
 // the format bit is the migration marker — fields the old format did not carry stay zeroed (e.g. the cable).
 inline void migrate_to_current(Card& c) { if (c.format < kFormat) c.format = kFormat; }
 
-inline Card build(std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
-                  ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0) {
-    Card c;
+// Fills `c` with the card of a finished run. The out-param form is for the one stack-gated caller
+// (ChargerTestSession::save_card): returning a Card by value puts a second Card on that frame.
+inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
+                       ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0) {
     c.id = id; c.num_pdos = ev.num_pdos; c.spec_rev = ev.wire_rev; c.ev_flags = ev.flags; c.cable = cable; c.resumed = resumed;
     c.src_flags = uint8_t(((ev.seen & ct::SeenOppoSvid) ? kSrcOppoSvid : 0) | (std::min<unsigned>(ev.scp_ma / 50u, 127u) << 1));
     c.handover = h.outcome; c.handover_ds = h.ms / 100 > 65535 ? uint16_t(65535) : uint16_t(h.ms / 100);
@@ -780,6 +781,12 @@ inline Card build(std::span<const ct::Step> steps, const ct::Evidence& ev, ct::H
         else if (r.verdict == GV::Pass) r.detail = proven[g] ? uint8_t(0) : pass_detail[g];
         else if (r.verdict == GV::Skip) { r.detail = first_skip[g].detail; r.reason = first_skip[g].reason; }
     }
+}
+
+inline Card build(std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
+                  ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0) {
+    Card c;
+    build_into(c, steps, ev, h, id, cx, state, reason, cable, resumed);
     return c;
 }
 

@@ -562,16 +562,27 @@ void ChargerTestSession::save_card() {
         cable.flags |= uint8_t(((run_guard_ & 0x7F) << report_card::kCableGuardShift) & report_card::kCableGuardMask);
         if (run_guard_ & 0x80) cable.flags |= report_card::kCableGuardBypassed;
     }
-    auto card = report_card::build(runner_.steps(), runner_.evidence(), runner_.handover(), card_id_,
-                                   report_card::hw::context(), runner_.state(), runner_.reason(), cable, runner_.resumed());
-    report_card::set_auto_name(card, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
+    // A fresh card per run (the fields build_into does not set: name, card_no, runs, ...). memset, not `= {}`,
+    // so no Card temporary lands on this frame; the two NSDMI values memset clears are restored by hand.
+    std::memset(&card_, 0, sizeof card_);
+    card_.format = report_card::kFormat;
+    card_.times = 1;
+    report_card::build_into(card_, runner_.steps(), runner_.evidence(), runner_.handover(), card_id_,
+                            report_card::hw::context(), runner_.state(), runner_.reason(), cable, runner_.resumed());
+    report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
+    save_card_store();
+}
+// save_card's tail, on its own frame: it holds the charger's previous Card (292 B) that save_card used to keep
+// beside the new one — with both on save_card's stack the frame was stack-gated (tools/stack_depth.py). The order
+// is unchanged: prev is read before the write (after put the file holds the new card), the delta is taken after it.
+[[gnu::noinline]] void ChargerTestSession::save_card_store() {
     report_card::Card prev;
-    const bool had = report_card::hw::find(card.id.fp, prev);
-    const auto err = report_card::hw::put(card);
+    const bool had = report_card::hw::find(card_.id.fp, prev);
+    const auto err = report_card::hw::put(card_);
     if (err != report_card::Err::Ok) { K2LOG("[CARD] save failed %d\n", int(err)); return; }
-    card_no_ = card.card_no;
-    std::memcpy(card_name_, card.name, std::min(sizeof card_name_ - 1, sizeof card.name)); card_name_[sizeof card_name_ - 1] = 0;
-    if (had) { delta_n_ = report_card::delta(prev, card, delta_); delta_runs_ = prev.runs; }
+    card_no_ = card_.card_no;
+    std::memcpy(card_name_, card_.name, std::min(sizeof card_name_ - 1, sizeof card_.name)); card_name_[sizeof card_name_ - 1] = 0;
+    if (had) { delta_n_ = report_card::delta(prev, card_, delta_); delta_runs_ = prev.runs; }
 }
 // A charger alone on the bottom port never turns VBUS on without Rd and plain boot presents none: the START
 // presents it (no sink inline) and enters Waiting, which poll() carries until VBUS and the caps are up (or the wait
