@@ -39,6 +39,8 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Home screen fonts stretched or squeezed in landscape** (2026-11-09, user report): on the Home page in a landscape
+  rotation the text glyphs look stretched or squeezed compared with portrait. Not investigated; the user takes it.
 - **Charger test progress order** (2026-11-09, user report): the order the run tests the algorithms in does not match
   the order the progress section lists them in (where the algorithm under test is shown). Not investigated yet.
 - **Planned re-attach counts as a resume** (2026-11-09): the card's "resumed" counter is not masked after the planned
