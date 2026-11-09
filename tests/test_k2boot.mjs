@@ -8,6 +8,10 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
 
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -288,7 +292,7 @@ test("backup() reads the app area twice, splits it and builds a flashable recove
   const { flash, app } = makeFlash();
   const { link } = fakeBootloader({ flash });
   const stages = new Set();
-  const r = await link.backup({ now: new Date("2026-11-08T10:00:00Z"), progress: (s) => stages.add(s) });
+  const r = await link.backup({ appOnly: true, now: new Date("2026-11-08T10:00:00Z"), progress: (s) => stages.add(s) });
 
   assert.equal(r.flash.length, B.APP_LIMIT - B.FLASH_START);
   assert.deepEqual([...r.flash], [...flash.slice(0, r.flash.length)]);
@@ -297,6 +301,7 @@ test("backup() reads the app area twice, splits it and builds a flashable recove
   assert.equal(r.nvram.length, B.APP_LIMIT - B.NVRAM_START);   // default mode: only the part below APP_LIMIT
   assert.equal(r.manifest.complete, true);
   assert.equal(r.manifest.mode, "app");
+  assert.equal(r.manifest.backup_kind, "app-only");
   assert.equal(r.manifest.two_pass_verified, true);
   assert.equal(r.manifest.flash_range, "0x08000000-0x080E3000");
   assert.equal(r.manifest.app_sha256, await sha(r.app));
@@ -417,4 +422,184 @@ test("backup() will not restore K200 into an image whose vector table is not an 
   flash.fill(0xFF, B.APP_START - B.FLASH_START, B.APP_START - B.FLASH_START + 8);        // blank vector table
   const { link } = fakeBootloader({ flash });
   await assert.rejects(link.backup({}), /vector table/i);
+});
+
+// ---- the backup is full by default, one ZIP carries it ------------------------------------------
+
+const NOW = new Date("2026-11-08T10:00:00Z");
+
+test("backup() with no options is a full 1 MB backup", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({ now: NOW });
+  assert.equal(r.flash.length, B.FLASH_END - B.FLASH_START);
+  assert.equal(r.manifest.mode, "full");
+  assert.equal(r.manifest.backup_kind, "full");
+  assert.equal(r.manifest.complete, true);
+  assert.equal(r.nvram.length, B.FLASH_END - B.NVRAM_START);
+});
+
+test("backup({full: true}) is still accepted and means the same", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({ full: true, now: NOW });
+  assert.equal(r.manifest.backup_kind, "full");
+});
+
+test("backup({appOnly}) reads the application area only and says so", async () => {
+  const { flash } = makeFlash();
+  const { link, reads } = fakeBootloader({ flash });
+  const r = await link.backup({ appOnly: true, now: NOW });
+  assert.equal(r.manifest.backup_kind, "app-only");
+  assert.equal(r.manifest.mode, "app");
+  assert.ok(reads.every(([a, n]) => a + n <= B.APP_LIMIT));
+});
+
+test("a refusal above the app area gives backup_kind partial", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash, refuseFrom: B.APP_LIMIT + B.READ_CHUNK });
+  const r = await link.backup({ now: NOW });
+  assert.equal(r.manifest.backup_kind, "partial");
+  assert.equal(r.manifest.complete, false);
+});
+
+test("the manifest carries the sha256 of native_nvram.bin when there is one", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({ now: NOW });
+  assert.equal(r.manifest.native_nvram_sha256, await sha(r.nvram));
+  assert.equal(JSON.parse(r.manifestText).native_nvram_sha256, await sha(r.nvram));
+});
+
+// ---- ZIP writer / reader ----------------------------------------------------------------------
+
+const PY_ZIP_CHECK = [
+  "import sys, zipfile, hashlib, json",
+  "z = zipfile.ZipFile(sys.argv[1])",
+  "bad = z.testzip()",
+  "print(json.dumps({'bad': bad, 'files': {i.filename: [hashlib.sha256(z.read(i)).hexdigest(), i.compress_type, i.file_size]",
+  "                                       for i in z.infolist()}}))",
+].join("\n");
+const havePython = spawnSync("python3", ["-I", "-c", "pass"]).status === 0;
+function pythonView(zipBytes) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "k2zip-"));
+  const p = path.join(dir, "t.zip");
+  writeFileSync(p, zipBytes);
+  const r = spawnSync("python3", ["-I", "-c", PY_ZIP_CHECK, p], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+const text = (s) => new TextEncoder().encode(s);
+const sha256Sync = (b) => createHash("sha256").update(b).digest("hex");
+
+test("crc32 matches the standard check value", () => {
+  assert.equal(B.crc32(text("123456789")), 0xCBF43926);
+  assert.equal(B.crc32(new Uint8Array(0)), 0);
+});
+
+test("makeZip output reads back through readZip, names and bytes intact", async () => {
+  const big = new Uint8Array(70000).map((_, i) => (i * 13) & 0xFF);
+  const zip = B.makeZip([{ name: "a.bin", data: big }, { name: "empty.txt", data: new Uint8Array(0) },
+                         { name: "manifest.json", data: text('{"k":"ü"}\n') }], NOW);
+  const back = await B.readZip(zip);
+  assert.deepEqual(back.map((e) => e.name), ["a.bin", "empty.txt", "manifest.json"]);
+  assert.deepEqual([...back[0].data], [...big]);
+  assert.equal(back[1].data.length, 0);
+  assert.equal(new TextDecoder().decode(back[2].data), '{"k":"ü"}\n');
+});
+
+test("makeZip is a store-only ZIP with the layout the format asks for", () => {
+  const zip = B.makeZip([{ name: "x", data: text("hello") }], NOW);
+  const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  assert.equal(dv.getUint32(0, true), 0x04034B50);                 // local header
+  assert.equal(dv.getUint16(8, true), 0);                          // method: stored
+  assert.equal(dv.getUint32(14, true), B.crc32(text("hello")));
+  assert.equal(dv.getUint32(18, true), 5);
+  assert.equal(dv.getUint32(22, true), 5);
+  assert.equal(dv.getUint32(zip.length - 22, true), 0x06054B50);   // end of central directory, no comment
+  assert.equal(dv.getUint16(zip.length - 22 + 10, true), 1);       // entries
+  const cdOffset = dv.getUint32(zip.length - 22 + 16, true);
+  assert.equal(dv.getUint32(cdOffset, true), 0x02014B50);          // central directory header
+  // 2026-11-08 10:00:00 as MS-DOS time/date
+  assert.equal(dv.getUint16(10, true), (10 << 11) | (0 << 5) | 0);
+  assert.equal(dv.getUint16(12, true), ((2026 - 1980) << 9) | (11 << 5) | 8);
+});
+
+test("Python's zipfile opens the ZIP and sees the same bytes", { skip: !havePython }, () => {
+  const big = new Uint8Array(200000).map((_, i) => (i * 7 + (i >> 8)) & 0xFF);
+  const view = pythonView(B.makeZip([{ name: "flash.bin", data: big }, { name: "manifest.json", data: text("{}\n") }], NOW));
+  assert.equal(view.bad, null);
+  assert.deepEqual(Object.keys(view.files), ["flash.bin", "manifest.json"]);
+  assert.equal(view.files["flash.bin"][0], sha256Sync(big));
+  assert.equal(view.files["flash.bin"][1], 0);                     // stored
+  assert.equal(view.files["flash.bin"][2], 200000);
+});
+
+test("readZip also reads a deflated ZIP made by another tool", { skip: !havePython }, async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "k2zip-"));
+  const p = path.join(dir, "d.zip");
+  const r = spawnSync("python3", ["-I", "-c",
+    "import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as z:\n z.writestr('K2_RECOVERY_2.7.k2', b'abc' * 5000)\n z.writestr('manifest.json', '{}')",
+    p], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  const back = await B.readZip(new Uint8Array(readFileSync(p)));
+  assert.deepEqual(back.map((e) => e.name), ["K2_RECOVERY_2.7.k2", "manifest.json"]);
+  assert.equal(back[0].data.length, 15000);
+  assert.equal(new TextDecoder().decode(back[0].data.slice(0, 6)), "abcabc");
+});
+
+test("readZip rejects bytes that are not a ZIP and a damaged entry", async () => {
+  await assert.rejects(B.readZip(text("not a zip file at all, just text")), /not a ZIP/i);
+  const zip = B.makeZip([{ name: "x", data: text("hello world") }], NOW);
+  zip[30 + 1 + 3] ^= 0x01;                                         // a data byte
+  await assert.rejects(B.readZip(zip), /CRC/i);
+});
+
+test("backup() packs everything into one K2_BACKUP ZIP that Python can open", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({ now: NOW });
+  assert.equal(r.zipName, "K2_BACKUP_2.7_20261108T100000Z.zip");
+  const back = await B.readZip(r.zip);
+  const byName = Object.fromEntries(back.map((e) => [e.name, e.data]));
+  assert.deepEqual(Object.keys(byName).sort(),
+                   ["K2_RECOVERY_2.7.k2", "app.bin", "bootloader.bin", "flash.bin", "manifest.json", "native_nvram.bin"]);
+  assert.deepEqual([...byName["flash.bin"]], [...r.flash]);
+  assert.deepEqual([...byName["app.bin"]], [...r.app]);
+  assert.deepEqual([...byName["bootloader.bin"]], [...r.bootloader]);
+  assert.deepEqual([...byName["native_nvram.bin"]], [...r.nvram]);
+  assert.deepEqual([...byName["K2_RECOVERY_2.7.k2"]], [...r.recovery.source]);
+  assert.equal(new TextDecoder().decode(byName["manifest.json"]), r.manifestText);
+  if (havePython) {
+    const view = pythonView(r.zip);
+    assert.equal(view.bad, null);
+    assert.equal(view.files["flash.bin"][0], r.manifest.flash_sha256);
+    assert.equal(view.files["native_nvram.bin"][0], r.manifest.native_nvram_sha256);
+  }
+});
+
+test("a partial backup still packs what was read, with its manifest", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash, refuseFrom: B.APP_LIMIT + B.READ_CHUNK });
+  const r = await link.backup({ now: NOW });
+  const back = await B.readZip(r.zip);
+  const m = JSON.parse(new TextDecoder().decode(back.find((e) => e.name === "manifest.json").data));
+  assert.equal(m.backup_kind, "partial");
+  assert.equal(back.find((e) => e.name === "flash.bin").data.length, r.flash.length);
+});
+
+test("recoveryFromBackupZip picks the recovery container out of a backup ZIP", async () => {
+  const { flash } = makeFlash();
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({ now: NOW });
+  const got = await B.recoveryFromBackupZip(r.zip);
+  assert.equal(got.name, "K2_RECOVERY_2.7.k2");
+  assert.deepEqual([...got.data], [...r.recovery.source]);
+  await assert.rejects(B.recoveryFromBackupZip(B.makeZip([{ name: "flash.bin", data: text("x") }], NOW)), /no K2_RECOVERY/);
+});
+
+test("isZip tells a ZIP from a .k2 container", () => {
+  assert.equal(B.isZip(B.makeZip([], NOW)), true);
+  assert.equal(B.isZip(B.makeZip([{ name: "a", data: text("b") }], NOW)), true);
+  assert.equal(B.isZip(u8(0xDE, 0xAD, 0xBE, 0xEF)), false);
 });

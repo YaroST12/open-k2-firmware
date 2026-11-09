@@ -465,20 +465,139 @@ var K2Boot = (function () {
     return { app: fixed, restored: true };
   }
 
-  // Two-pass flash backup. Default 0x08000000..APP_LIMIT (bootloader and application area); opts.full also asks
-  // for the rest of the 1 MB (the native data area from NVRAM_START up), best effort: if the bootloader refuses
-  // above APP_LIMIT the readable part is kept and the manifest says where it stopped (complete: false). A failure
-  // below APP_LIMIT is an error. Resolves {ident, flash, bootloader, app, nvram, recovery (Firmware), recoveryName,
-  // manifest, manifestText}; the caller offers the files (K2_RECOVERY_<ver>.k2 is the one to flash back).
-  // opts: {full, progress(stage, cur, tot), now (Date, for tests)}.
+  // ---- ZIP (store only: no compression, no library) ------------------------------------------------
+  // makeZip packs [{name, data}] into one archive; readZip reads one back (stored entries, and deflated ones
+  // when the runtime has DecompressionStream, so a re-zipped backup still restores).
+
+  var crcTable = null;
+  function crc32(bytes) {
+    if (!crcTable) {
+      crcTable = new Uint32Array(256);
+      for (var n = 0; n < 256; n++) {
+        var c = n;
+        for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        crcTable[n] = c >>> 0;
+      }
+    }
+    var crc = 0xFFFFFFFF;
+    for (var i = 0; i < bytes.length; i++) crc = crcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function makeZip(entries, when) {
+    when = when || new Date();
+    var enc = new TextEncoder();
+    var year = Math.max(1980, when.getUTCFullYear());
+    var dosTime = (when.getUTCHours() << 11) | (when.getUTCMinutes() << 5) | (when.getUTCSeconds() >> 1);
+    var dosDate = ((year - 1980) << 9) | ((when.getUTCMonth() + 1) << 5) | when.getUTCDate();
+    var parts = [], central = [], offset = 0;
+    entries.forEach(function (e) {
+      var name = enc.encode(e.name), data = e.data, crc = crc32(data);
+      var lh = new Uint8Array(30 + name.length), lv = new DataView(lh.buffer);
+      lv.setUint32(0, 0x04034B50, true);
+      lv.setUint16(4, 20, true);              // version needed
+      lv.setUint16(6, 0x0800, true);          // names are UTF-8
+      lv.setUint16(8, 0, true);               // method: stored
+      lv.setUint16(10, dosTime, true); lv.setUint16(12, dosDate, true);
+      lv.setUint32(14, crc, true); lv.setUint32(18, data.length, true); lv.setUint32(22, data.length, true);
+      lv.setUint16(26, name.length, true);
+      lh.set(name, 30);
+      var ch = new Uint8Array(46 + name.length), cv = new DataView(ch.buffer);
+      cv.setUint32(0, 0x02014B50, true);
+      cv.setUint16(4, (3 << 8) | 20, true);   // made by: Unix, 2.0
+      cv.setUint16(6, 20, true);
+      cv.setUint16(8, 0x0800, true);
+      cv.setUint16(10, 0, true);
+      cv.setUint16(12, dosTime, true); cv.setUint16(14, dosDate, true);
+      cv.setUint32(16, crc, true); cv.setUint32(20, data.length, true); cv.setUint32(24, data.length, true);
+      cv.setUint16(28, name.length, true);
+      cv.setUint32(38, (0o100644 << 16) >>> 0, true);   // regular file, rw-r--r--
+      cv.setUint32(42, offset, true);
+      ch.set(name, 46);
+      central.push(ch);
+      parts.push(lh, data);
+      offset += lh.length + data.length;
+    });
+    var cdSize = central.reduce(function (s, c) { return s + c.length; }, 0);
+    var eocd = new Uint8Array(22), ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054B50, true);
+    ev.setUint16(8, entries.length, true); ev.setUint16(10, entries.length, true);
+    ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+    var all = parts.concat(central, [eocd]);
+    var out = new Uint8Array(offset + cdSize + 22), at = 0;
+    all.forEach(function (p) { out.set(p, at); at += p.length; });
+    return out;
+  }
+
+  function isZip(bytes) {
+    return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B &&
+           ((bytes[2] === 3 && bytes[3] === 4) || (bytes[2] === 5 && bytes[3] === 6));
+  }
+
+  async function inflateRaw(data) {
+    if (typeof DecompressionStream === "undefined") throw new ProtocolError("this ZIP is compressed and this browser cannot unpack it");
+    var stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function readZip(bytes) {
+    if (!isZip(bytes)) throw new ProtocolError("not a ZIP file");
+    var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var eocd = -1;
+    for (var i = bytes.length - 22; i >= 0 && i >= bytes.length - 22 - 65535; i--) {
+      if (dv.getUint32(i, true) === 0x06054B50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new ProtocolError("not a ZIP file (no end-of-archive record)");
+    var count = dv.getUint16(eocd + 10, true), p = dv.getUint32(eocd + 16, true);
+    var dec = new TextDecoder(), out = [];
+    for (var n = 0; n < count; n++) {
+      if (p + 46 > bytes.length || dv.getUint32(p, true) !== 0x02014B50) throw new ProtocolError("ZIP directory is damaged");
+      var method = dv.getUint16(p + 10, true), crc = dv.getUint32(p + 16, true);
+      var csize = dv.getUint32(p + 20, true), usize = dv.getUint32(p + 24, true);
+      var nameLen = dv.getUint16(p + 28, true), extraLen = dv.getUint16(p + 30, true), commentLen = dv.getUint16(p + 32, true);
+      var local = dv.getUint32(p + 42, true);
+      var name = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+      p += 46 + nameLen + extraLen + commentLen;
+      if (name.charAt(name.length - 1) === "/") continue;
+      if (local + 30 > bytes.length || dv.getUint32(local, true) !== 0x04034B50) throw new ProtocolError("ZIP entry " + name + " is damaged");
+      var start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+      var raw = bytes.subarray(start, start + csize);
+      var data;
+      if (method === 0) data = raw.slice();
+      else if (method === 8) data = await inflateRaw(raw);
+      else throw new ProtocolError("ZIP entry " + name + " uses compression method " + method + ", which is not supported");
+      if (data.length !== usize || crc32(data) !== crc) throw new ProtocolError("ZIP entry " + name + " fails its CRC check");
+      out.push({ name: name, data: data });
+    }
+    return out;
+  }
+
+  // The recovery container inside a K2_BACKUP ZIP: {name, data} of its K2_RECOVERY_*.k2.
+  async function recoveryFromBackupZip(bytes) {
+    var entries = await readZip(bytes);
+    for (var i = 0; i < entries.length; i++) {
+      if (/^K2_RECOVERY_.*\.k2$/.test(entries[i].name)) return entries[i];
+    }
+    throw new ProtocolError("no K2_RECOVERY_*.k2 in this ZIP");
+  }
+
+  // Two-pass flash backup of the whole 1 MB, 0x08000000..0x08100000: bootloader, application area and the device
+  // storage from NVRAM_START up. The part above APP_LIMIT is best effort: if the bootloader refuses there the
+  // readable part is kept and the manifest says where it stopped (complete: false, backup_kind "partial"). A
+  // failure below APP_LIMIT is an error. opts.appOnly reads 0x08000000..APP_LIMIT only (backup_kind "app-only").
+  // Resolves {ident, flash, bootloader, app, nvram, recovery (Firmware), recoveryName, manifest, manifestText,
+  // zip, zipName, files}; the caller offers the ZIP (everything in one file, K2_RECOVERY_<ver>.k2 inside is the
+  // one to flash back) and, secondarily, the single files.
+  // opts: {appOnly, full (accepted, the default), progress(stage, cur, tot), now (Date, for tests)}.
   BootLink.prototype.backup = async function (opts) {
     opts = opts || {};
     var progress = opts.progress || function () {};
     var stage = function (name, cur, tot) { progress(name, cur || 0, tot || 0); };
+    var appOnly = opts.appOnly === true || opts.full === false;
 
     var ident = await this.identify(stage);
     var infoSha = await sha256Hex(ident.info);
-    var wantEnd = opts.full ? FLASH_END : APP_LIMIT;
+    var wantEnd = appOnly ? APP_LIMIT : FLASH_END;
     var total = wantEnd - FLASH_START;
     var buf = new Uint8Array(total);
     var readEnd = wantEnd, refusedAt = null;
@@ -526,7 +645,8 @@ var K2Boot = (function () {
       timestamp_utc: now.toISOString(),
       identity: { boot_strings: ident.bootStrings, info_sha256: infoSha, confirmed_k2: true,
                   current_version: ident.currentVersion, current_marker: ident.currentMarker },
-      mode: opts.full ? "full" : "app",
+      mode: appOnly ? "app" : "full",
+      backup_kind: appOnly ? "app-only" : (refusedAt === null ? "full" : "partial"),
       requested_range: addr8(FLASH_START) + "-" + addr8(wantEnd),
       flash_range: addr8(FLASH_START) + "-" + addr8(readEnd),
       complete: refusedAt === null,
@@ -541,10 +661,21 @@ var K2Boot = (function () {
       signature_restored: rec.restored,
       tool: "webhid-flasher"
     };
-    if (nvram) manifest.native_nvram_file = "native_nvram.bin";
+    if (nvram) {
+      manifest.native_nvram_file = "native_nvram.bin";
+      manifest.native_nvram_sha256 = await sha256Hex(nvram);
+    }
+    var manifestText = JSON.stringify(manifest, null, 2) + "\n";
+    var enc = new TextEncoder();
+    var files = [{ name: recoveryName, data: recovery.source }, { name: "flash.bin", data: flash },
+                 { name: "app.bin", data: app }, { name: "bootloader.bin", data: bootloader }];
+    if (nvram) files.push({ name: "native_nvram.bin", data: nvram });
+    files.push({ name: "manifest.json", data: enc.encode(manifestText) });
+    var zipName = "K2_BACKUP_" + ident.currentVersion + "_" + now.toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z.zip";
     stage("backup-complete", readSize, readSize);
     return { ident: ident, flash: flash, bootloader: bootloader, app: app, nvram: nvram, recovery: recovery,
-             recoveryName: recoveryName, manifest: manifest, manifestText: JSON.stringify(manifest, null, 2) + "\n" };
+             recoveryName: recoveryName, manifest: manifest, manifestText: manifestText,
+             files: files, zip: makeZip(files, now), zipName: zipName };
   };
 
   return {
@@ -555,6 +686,7 @@ var K2Boot = (function () {
     MARKER_OFFSET: MARKER_OFFSET, COMMIT_MARKER: COMMIT_MARKER, CMD: CMD,
     DECODE_TABLE: DECODE_TABLE, ProtocolError: ProtocolError,
     buildFrame: buildFrame, parseFrame: parseFrame, isBootloaderFrame: isBootloaderFrame,
+    crc32: crc32, makeZip: makeZip, readZip: readZip, isZip: isZip, recoveryFromBackupZip: recoveryFromBackupZip,
     Firmware: Firmware, BootLink: BootLink, hex: hex
   };
 })();
