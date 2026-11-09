@@ -945,7 +945,7 @@ class ActivePd(unittest.TestCase):
         self.assertEqual(link.calls[0][1], bytes([2]))
 
     REREAD_RUN = bytes([1, 1, 15, 1, 0, 6, 0, 0, 0])
-    REREAD_DONE = bytes([2, 5, 15, 15, 0, 6, 7, 1, 1])
+    REREAD_DONE = bytes([2, 7, 15, 15, 0, 6, 7, 1, 1])   # step 7 = RereadStep::Done
 
     def test_reread_decodes_the_status(self):
         d = kr.decode_reread(self.REREAD_DONE)
@@ -953,7 +953,7 @@ class ActivePd(unittest.TestCase):
         self.assertEqual(d["answered"], ["caps-ext", "identity", "svids", "get-cap"])
         self.assertEqual(d["skipped"], [])
         self.assertEqual((d["pdos_before"], d["pdos_last"], d["caps_rx"], d["avs"]), (6, 7, 1, True))
-        r = kr.decode_reread(bytes([2, 5, 8, 0, 8, 6, 0, 0, 0]))
+        r = kr.decode_reread(bytes([2, 7, 8, 0, 8, 6, 0, 0, 0]))
         self.assertEqual((r["answered"], r["skipped"], r["avs"]), ([], ["get-cap"], False))
         with self.assertRaises(kr.FrameError):
             kr.decode_reread(self.REREAD_DONE[:8])
@@ -1000,7 +1000,7 @@ class ActivePd(unittest.TestCase):
         a = kr.decode_reread(bytes([1, 0, 15, 0, 0, 0, 0, 0, 2]))   # waiting for the contract
         self.assertEqual((a["state"], a["attaching"], a["attach_failed"], a["avs"]), ("running", True, False, False))
         self.assertIn("attaching", kr.render("pd-reread", a))
-        f = kr.decode_reread(bytes([2, 5, 15, 0, 15, 0, 0, 0, 4]))   # no contract in time, nothing sent
+        f = kr.decode_reread(bytes([2, 7, 15, 0, 15, 0, 0, 0, 4]))   # no contract in time, nothing sent
         self.assertEqual((f["state"], f["attaching"], f["attach_failed"]), ("done", False, True))
         self.assertIn("no contract", kr.render("pd-reread", f))
         self.assertNotIn("no contract", kr.render("pd-reread", kr.decode_reread(self.REREAD_DONE)))
@@ -1075,8 +1075,8 @@ class ActivePd(unittest.TestCase):
         link = self.Link({kr.CMD_PD_REREAD: self.REREAD_DONE})   # --no-run: the mode only (charger test START follows)
         kr.cmd_pd_reread(link, self.args(mask=8, wait=1, ra="on", no_run=True), sleep=lambda s: None)
         self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([5, 1]))])
-        self.assertTrue(kr.decode_reread(bytes([2, 5, 8, 0, 8, 6, 0, 0, 8]))["ra"])
-        self.assertIn(" ra", kr.render("pd-reread", kr.decode_reread(bytes([2, 5, 8, 0, 8, 6, 0, 0, 8]))))
+        self.assertTrue(kr.decode_reread(bytes([2, 7, 8, 0, 8, 6, 0, 0, 8]))["ra"])
+        self.assertIn(" ra", kr.render("pd-reread", kr.decode_reread(bytes([2, 7, 8, 0, 8, 6, 0, 0, 8]))))
         self.assertEqual(kr.build_parser().parse_args(["pd-reread", "--ra", "on"]).ra, "on")
         self.assertIsNone(kr.build_parser().parse_args(["pd-reread"]).ra)
         with self.assertRaises(SystemExit):

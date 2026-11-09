@@ -161,7 +161,7 @@ ID_STEPS =["identity", "svids", "modes", "sink-cap", "status", "revision", "done
 ID_POLL_S = 8.0
 # include/k2/pd/pd_reread.hpp: RereadState, RereadStep (the mask bit of a step is 1 << its index)
 REREAD_STATES = ["idle", "running", "done", "aborted"]
-REREAD_STEPS = ["caps-ext", "identity", "svids", "get-cap", "get-cap-2", "done"]
+REREAD_STEPS = ["caps-ext", "identity", "svids", "get-cap", "get-cap-2", "modes", "mfr-info", "done"]   # the last two steps are the survey's, never asked by the lab command
 REREAD_DEFAULT_MASK = 15   # caps-ext, identity, svids, one Get_Source_Cap
 SINK_CAP_EXT_MODES = ["silent", "skedb", "not-supported"]   # pd::SinkCapExtMode, PD_REREAD op 3
 REREAD_POLL_S = 14.0       # attach 8 s + settle 1 s + steps 2.5 s (include/k2/pd/pd_reread.hpp)
