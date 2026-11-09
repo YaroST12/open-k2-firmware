@@ -141,13 +141,19 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     `Rd seek` line. Evidence into `runs/<date>-rdseek/`.
 - **Charger-test spoof list loses selection borders on scroll** (2026-11-09, user report): in step 2/3 (cable / spoof
   choice), scrolling down makes the selection squares lose their bottom or top border line.
-  - Fix: the scrolled list repaints row bodies but not the full selection frame; a row that moves under the viewport
-    edge keeps a clipped frame. Find the list draw in `src/ui/ui_charger_test.cpp` (the Cable stage) and the shared kit
-    list component (`k2-micro-gui` skill, `include/k2/ui/`); on a scroll step repaint every visible row's frame (or the
-    whole list viewport) and clip the frame to the viewport, not the row body.
-  - Validate: host render test that scrolls the list one row at a time to the end and back and checks that each visible
-    row's frame has all four edges (pixel check in the host renderer); hardware: scroll the spoof list on the K2 end to
-    end with `k2_remote press` and `k2_remote screenshot` each step; every frame closed.
+  - Status: fixed in b9119fc, hardware check pending. The selection squares were drawn with plain fills, which go
+    through the ContentViewport mapping; in a landscape rotation the 240->224 y squeeze can map a 1 px border line to
+    zero physical rows, and which rows lose their top/bottom line moved as the list scrolled (the open row's focus
+    expansion shifts the rows below it). The marker square is now drawn at its native size clipped to the viewport
+    (`gfx_native_rect`/`gfx_fill_panel`, like glyph boxes), so all four frame edges survive in every rotation;
+    ListView already repaints every visible row on a scroll step. Host render test `test_ui_ct_list_frame` scrolls the
+    Cable-step list one row at a time to the end and back in all four rotations and pixel-checks every visible row's
+    frame has all four edges (red before: 7942 wrong edge pixels in the landscape rotations, green after).
+  - Validate (host, done in b9119fc): `tests/test_ui_ct_list_frame.cpp`; hardware: scroll the spoof list on the K2 end
+    to end with `k2_remote press` and `k2_remote screenshot` each step; every frame closed, in a landscape rotation
+    (1 or 3) where the host render reproduced it. Review 2026-11-09: portrait already rendered whole frames at the
+    base, so a gap seen in portrait is a different cause and reopens this row. Follow-ups: a landscape pixel pass over
+    the Tests step's Box3/Check squares; clamp the marker sub-fills to the clipped square (`kit.cpp` fill lambda).
 - **Home screen fonts stretched or squeezed in landscape** (2026-11-09, user report): on the Home page in a landscape
   rotation the glyphs look stretched or squeezed compared with portrait.
   - Fix: compare the glyph path in landscape and portrait (`set_rotation`, the LCD MADCTL / address window in
