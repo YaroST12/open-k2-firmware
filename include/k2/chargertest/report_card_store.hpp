@@ -187,12 +187,21 @@ private:
             return nf < fps.size();
         });
         for (unsigned k = 0; k < nf; ++k) {
-            Card c;
-            std::array<std::uint8_t, kFileSize> b{};
-            if (!read(fps[k], b) || !decode_card({b.data() + 8 + 4, kPayload}, c) || c.id.fp != fps[k]) continue;
-            idx_[n_++] = {fps[k], detail::get32(&b[4]), c.card_no};
+            Ent e;
+            if (read_entry(fps[k], e)) idx_[n_++] = e;
         }
         valid_ = true;
+    }
+    // One card file of the index build: reads the file and decodes it into e. noinline on purpose: the
+    // 210-byte file buffer and the decoded Card live on this frame only — ensure() runs under every
+    // put/find/list and with both on its own frame it was the largest frame on the card-save path
+    // (tools/stack_depth.py).
+    [[gnu::noinline]] bool read_entry(std::uint32_t fp, Ent& e) const {
+        std::array<std::uint8_t, kFileSize> b{};
+        Card c;
+        if (!read(fp, b) || !decode_card({b.data() + 8 + 4, kPayload}, c) || c.id.fp != fp) return false;
+        e = {fp, detail::get32(&b[4]), c.card_no};
+        return true;
     }
     // Indexes into idx_, newest first (insertion sort, 64 entries at most).
     Order order() const {
