@@ -550,6 +550,13 @@ def cmd_pd_reread(link, a, sleep=time.sleep, clock=time.monotonic):
     mode = getattr(a, "sink_cap_ext", None)
     if mode is not None:   # how the sink answers Get_Sink_Cap_Extended during this run (RAM only)
         link.call(CMD_PD_REREAD, bytes([3, SINK_CAP_EXT_MODES.index(mode)]))
+    pin = getattr(a, "pin", None)
+    if pin is not None:   # lab: pin the Rd on CC1/CC2 (0 = release) so a HID-powered K2 stands in for a charger-powered one
+        out = decode_reread(link.call(CMD_PD_REREAD, bytes([6, pin])).payload)
+        if getattr(a, "no_run", False):
+            return out
+    if getattr(a, "relook", False):   # lab: the unit boundary's Soft_Reset (the source re-announces, the Rd stays)
+        return decode_reread(link.call(CMD_PD_REREAD, bytes([7])).payload)
     ra = getattr(a, "ra", None)
     if ra is not None:   # Ra mode: PC13 high (an Ra on CC1) before Rd goes on CC2; held until detach, --abort, --ra off or reboot
         out = decode_reread(link.call(CMD_PD_REREAD, bytes([5, 1 if ra == "on" else 0])).payload)
@@ -2561,7 +2568,12 @@ def build_parser():
                          "powered cable and may probe the cable (SOP' Discover Identity, answered by an armed e-marker spoof). "
                          "Held until detach, --abort, --ra off or a reboot; refused inline with a sink, with a contract or "
                          "while another run is active. Stays on for a charger test START too")
-    sr.add_argument("--no-run", action="store_true", help="with --ra on: only set the mode, start no run")
+    sr.add_argument("--no-run", action="store_true", help="with --ra on or --pin: only set the mode, start no run")
+    sr.add_argument("--pin", type=int, choices=(0, 1, 2), default=None,
+                    help="lab: pin the Rd on CC1 or CC2 (0 = release) the way a key-mode boot does, mark included, so a HID-powered "
+                         "K2 acts like a charger-powered one and a warm reset (reboot) inherits the pin; refused inline. Use with --no-run")
+    sr.add_argument("--relook", action="store_true",
+                    help="lab: send the unit boundary's Soft_Reset (the source re-announces its caps, the Rd stays); nothing else runs")
     sr.add_argument("--sink-cap-ext", choices=SINK_CAP_EXT_MODES, default=None,
                     help="before the run, set how the sink answers Get_Sink_Cap_Extended: skedb (the firmware default, "
                          "Sink_Capabilities_Extended: AVS + PPS capable), not-supported or silent; RAM only, reboot = skedb")

@@ -1248,8 +1248,24 @@ static void test_active_pd_commands() {
     check_header(r, 0x47, 25, Status::BadArg, 0);
     run(f, request(0x47, 26, {1, 32}), r);       // only five steps
     check_header(r, 0x47, 26, Status::BadArg, 0);
-    run(f, request(0x47, 27, {6}), r);           // unknown op
+    run(f, request(0x47, 27, {8}), r);           // unknown op
     check_header(r, 0x47, 27, Status::BadArg, 0);
+    // op 6 [6, line] (lab): pin the Rd on CC1 / CC2 as a key-mode boot does, 0 releases; op 7 (lab): a Soft_Reset with the Rd kept
+    run(f, request(0x47, 60, {6, 2}), r);
+    check_header(r, 0x47, 60, Status::Ok, 9);
+    CHECK_EQ(f.rr_op, 6); CHECK_EQ(f.rr_mask, 2);
+    run(f, request(0x47, 61, {6, 0}), r);
+    check_header(r, 0x47, 61, Status::Ok, 9);
+    CHECK_EQ(f.rr_op, 6); CHECK_EQ(f.rr_mask, 0);
+    run(f, request(0x47, 62, {6, 3}), r);        // only two lines
+    check_header(r, 0x47, 62, Status::BadArg, 0);
+    run(f, request(0x47, 63, {6}), r);           // the line is required
+    check_header(r, 0x47, 63, Status::BadLength, 0);
+    run(f, request(0x47, 64, {7}), r);
+    check_header(r, 0x47, 64, Status::Ok, 9);
+    CHECK_EQ(f.rr_op, 7);
+    run(f, request(0x47, 65, {7, 1}), r);        // no argument
+    check_header(r, 0x47, 65, Status::BadLength, 0);
     // op 5 [5, on]: the Ra mode (PC13 high, Rd on CC2 alone); on is 0 or 1
     run(f, request(0x47, 50, {5, 1}), r);
     check_header(r, 0x47, 50, Status::Ok, 9);

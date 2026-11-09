@@ -976,6 +976,22 @@ class ActivePd(unittest.TestCase):
         self.assertIn("pdos 6 -> 7", text)
         self.assertIn("avs=yes", text)
 
+    def test_reread_lab_ops_pin_and_relook(self):
+        class L(self.Link):
+            def call(s, cmd, payload=b""):
+                s.calls.append((cmd, bytes(payload)))
+                return kr.Response(cmd, 0, 0, self.REREAD_DONE)
+        link = L({})
+        out = kr.cmd_pd_reread(link, self.args(mask=None, wait=1, pin=2, no_run=True), sleep=lambda s: None)
+        self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([6, 2]))])   # op 6: pin the Rd on CC2, no run
+        self.assertEqual(out["state"], "done")
+        link = L({})
+        kr.cmd_pd_reread(link, self.args(mask=None, wait=1, pin=0, no_run=True), sleep=lambda s: None)
+        self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([6, 0]))])   # 0 releases it
+        link = L({})
+        kr.cmd_pd_reread(link, self.args(mask=None, wait=1, relook=True), sleep=lambda s: None)
+        self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([7]))])      # op 7: Soft_Reset, Rd kept
+
     def test_reread_decodes_the_attach_flags(self):
         a = kr.decode_reread(bytes([1, 0, 15, 0, 0, 0, 0, 0, 2]))   # waiting for the contract
         self.assertEqual((a["state"], a["attaching"], a["attach_failed"], a["avs"]), ("running", True, False, False))
