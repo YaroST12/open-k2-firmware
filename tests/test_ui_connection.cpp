@@ -138,22 +138,132 @@ static void test_status_text() {
     status_text(in, s); CHECK_EQ(s.view().size() <= 24, 1);
 }
 
+// A survey driven to its end with every action answered as `o` (the actions the plan hands out are answered at once).
+static void finish_survey(pd::Survey &s, const pd::SvCtx &c, pd::SvOutcome o) {
+    std::uint32_t now = 1000;
+    s.start(c, now);
+    for (int guard = 0; guard < 400 && s.running(); guard++) {
+        const pd::SvAct a = s.poll(now, true, true);
+        now += 10;
+        if (a == pd::SvAct::None) continue;
+        switch (a) {
+        case pd::SvAct::Caps: s.set(pd::SvField::Caps, o); break;
+        case pd::SvAct::Wire:
+            for (pd::SvField f : {pd::SvField::Identity, pd::SvField::Svids, pd::SvField::Modes, pd::SvField::CapsExt, pd::SvField::MfrInfo}) s.set(f, o);
+            break;
+        case pd::SvAct::Epr: s.set(pd::SvField::EprList, o); break;
+        case pd::SvAct::Cable: s.set(pd::SvField::Cable, o); break;
+        default: break;
+        }
+        s.finish(now);
+    }
+}
+
+static const pd::SvCtx kLive{.contract = true, .inline_sink = false, .charger_test = false, .xiaomi_chain = false, .pd20 = false, .epr_capable = true};
+
+// The hint, the progress and the summary of a Refresh in the status bar; the strings fit the 27-cell footer.
+static void test_status_survey() {
+    StrBuf<40> s;
+    StatusIn in;
+    in.tab = Tab::Source; in.f = facts(false, true, true);
+    pd::Survey sv;
+    in.sv = &sv;
+    status_text(in, s); CHECK_STR(s.c_str(), "OK > Refresh to read all");   // nothing asked yet, same words on every tab
+    in.tab = Tab::Cable;
+    status_text(in, s); CHECK_STR(s.c_str(), "OK > Refresh to read all");
+    in.tab = Tab::Sink; in.f = facts(true, true, true);
+    status_text(in, s); CHECK_STR(s.c_str(), "Device inline");              // the sink side is passive: nothing for Refresh to read
+    in.tab = Tab::Source; in.f = facts(false, false, false);
+    status_text(in, s); CHECK_STR(s.c_str(), "No charger");                 // an empty tab has no fields to ask
+    in.f = facts(false, true, true);
+
+    sv.start(kLive, 1000);                                                  // running: progress, resolved / planned
+    CHECK_EQ(int(sv.planned()), 8);
+    status_text(in, s); CHECK_STR(s.c_str(), "Reading 0/8");
+    sv.poll(1000, true, true);
+    sv.set(pd::SvField::Caps, pd::SvOutcome::Answered);
+    sv.finish(1010);
+    status_text(in, s); CHECK_STR(s.c_str(), "Reading 1/8");
+    in.op = "Rescanning...";
+    status_text(in, s); CHECK_STR(s.c_str(), "Rescanning...");              // an action message still wins
+    in.op = "";
+
+    pd::Survey ok;
+    in.sv = &ok;
+    finish_survey(ok, kLive, pd::SvOutcome::Answered);
+    status_text(in, s); CHECK_STR(s.c_str(), "Read: 8 got");
+    pd::Survey mix;
+    in.sv = &mix;
+    finish_survey(mix, kLive, pd::SvOutcome::Refused);
+    status_text(in, s); CHECK_STR(s.c_str(), "Read: 0 got, 8 unsupported");
+    pd::Survey quiet;
+    in.sv = &quiet;
+    finish_survey(quiet, kLive, pd::SvOutcome::Silent);
+    status_text(in, s); CHECK_STR(s.c_str(), "Read: 0 got, 8 no answer");
+    CHECK_EQ(s.view().size() <= 27, 1);
+
+    pd::Survey blocked;                                                     // a blocked sink: reasons in the rows, no hint, no summary
+    in.sv = &blocked;
+    pd::SvCtx c = kLive; c.inline_sink = true;
+    blocked.start(c, 1000);
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger");
+    in.sv = nullptr;
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger");
+}
+
+// A row says why it is empty: one word per status, each fits the 19-cell value column.
+static void test_survey_words() {
+    using pd::SvState; using pd::SvWhy;
+    CHECK_STR(sv_word({SvState::NotAsked, SvWhy::None}), "not asked");
+    CHECK_STR(sv_word({SvState::Pending, SvWhy::None}), "asking...");
+    CHECK_STR(sv_word({SvState::Got, SvWhy::None}), "");
+    CHECK_STR(sv_word({SvState::NotSupported, SvWhy::None}), "not supported");
+    CHECK_STR(sv_word({SvState::NoAnswer, SvWhy::None}), "no answer");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::Inline}), "inline: blocked");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::ChargerTest}), "charger test");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::XiaomiChain}), "Xiaomi chain");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::Pd20}), "not in PD 2.0");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::NoEpr}), "no EPR bit");
+    for (unsigned st = 0; st <= unsigned(SvState::Blocked); st++)
+        for (unsigned w = 0; w <= unsigned(SvWhy::NoEpr); w++)
+            CHECK_EQ(std::strlen(sv_word({SvState(st), SvWhy(w)})) <= 19, 1);
+    // Which fields a tab shows: Source everything the wire answers, Cable its own, Sink none.
+    CHECK_EQ(tab_shows(Tab::Source, pd::SvField::MfrInfo), true);
+    CHECK_EQ(tab_shows(Tab::Source, pd::SvField::Cable), false);
+    CHECK_EQ(tab_shows(Tab::Cable, pd::SvField::Cable), true);
+    CHECK_EQ(tab_shows(Tab::Cable, pd::SvField::Identity), false);
+    CHECK_EQ(tab_shows(Tab::Sink, pd::SvField::Identity), false);
+}
+
 static void test_actions() {
     std::array<Item, kMaxItems> it{};
     ActFacts a;
     a.attached = true; a.caps_valid = true; a.cable_valid = true;
     int n = actions(Tab::Source, a, it);
-    CHECK_EQ(n, 2);
+    CHECK_EQ(n, 3);                                                         // Refresh, Details, Share (QR)
     CHECK_STR(it[0].label, "Refresh");
-    CHECK_STR(it[1].label, "Share (QR)");
+    CHECK_EQ(int(it[1].act), int(Act::Details));
+    CHECK_STR(it[1].label, "Details");
     CHECK_EQ(it[1].enabled, true);
+    CHECK_STR(it[2].label, "Share (QR)");
+    CHECK_EQ(it[2].enabled, true);
+    a.more = true;                                                          // on the second page the same item goes back
+    actions(Tab::Source, a, it);
+    CHECK_STR(it[1].label, "Main page");
+    a.more = false;
+    a.attached = false;
+    actions(Tab::Source, a, it);
+    CHECK_EQ(it[1].enabled, false);                                         // no source: no details
+    CHECK_STR(it[1].why, "No charger");
+    CHECK_EQ(it[0].enabled, true);
+    a.attached = true;
     a.caps_valid = false;
     actions(Tab::Source, a, it);
-    CHECK_EQ(it[1].enabled, false);                                         // nothing to share yet
+    CHECK_EQ(it[2].enabled, false);                                         // nothing to share yet
 
     a.caps_valid = true;
     n = actions(Tab::Cable, a, it);
-    CHECK_EQ(n, 5);
+    CHECK_EQ(n, 6);                                                         // the existing items keep their place, Refresh is last
     CHECK_STR(it[0].label, "Read cable");
     CHECK_STR(it[1].label, "Save cable");
     CHECK_EQ(it[1].enabled, true);
@@ -162,24 +272,29 @@ static void test_actions() {
     CHECK_STR(it[3].label, "Saved cables");
     CHECK_STR(it[4].label, "Share (QR)");
     CHECK_EQ(it[4].enabled, true);
+    CHECK_EQ(int(it[5].act), int(Act::Refresh));
+    CHECK_EQ(it[5].enabled, true);
     a.inline_sink = true;                                                    // a live sink: Spoof is greyed with the reason
     actions(Tab::Cable, a, it);
     CHECK_EQ(it[2].enabled, false);
     CHECK_STR(it[2].why, "Live sink: unplug load");
     CHECK_EQ(it[0].enabled, true);                                           // Read cable stays (it has its own inline confirm)
+    CHECK_EQ(it[5].enabled, true);                                           // Refresh stays: the survey blocks its own fields
     a.cable_valid = false;
     actions(Tab::Cable, a, it);
     CHECK_EQ(it[1].enabled, false);                                          // nothing to save / share without a read
     CHECK_EQ(it[4].enabled, false);
 
     n = actions(Tab::Sink, a, it);
-    CHECK_EQ(n, 1);
+    CHECK_EQ(n, 2);
     CHECK_STR(it[0].label, "Identify");
     CHECK_EQ(it[0].enabled, true);
+    CHECK_EQ(int(it[1].act), int(Act::Refresh));
     a.attached = false;
     actions(Tab::Sink, a, it);
     CHECK_EQ(it[0].enabled, false);
     CHECK_STR(it[0].why, "No device seen");
+    CHECK_EQ(it[1].enabled, true);
     for (int t = 0; t < kTabs; t++) {                                         // every label fits the pop-up row (title at x 10, <= 24 chars)
         ActFacts all;
         all.attached = all.caps_valid = all.cable_valid = true;
@@ -214,6 +329,8 @@ int main() {
     test_empty_states();
     test_wrap();
     test_status_text();
+    test_status_survey();
+    test_survey_words();
     test_actions();
     test_protocol();
     return test_report("test_ui_connection");

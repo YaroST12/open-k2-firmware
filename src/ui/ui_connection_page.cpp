@@ -10,6 +10,7 @@
 // reading them never starts an active CC operation. Active work (Refresh, Read cable, Identify) happens only
 // from the pop-up, through Ui::run_action and its inline confirm.
 #include "k2/core/log.hpp"
+#include "k2/core/survey.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/pd/pd_source.hpp"
@@ -96,11 +97,12 @@ void ConnectionPage::enter() {
     guard_primed_ = false;
     popup_ = false;
     popup_drawn_ = false;
+    more_ = false;
     op_ = StrBuf<24>();
     op_until_ = 0;
     id_asked_ = false;
     sig_valid_ = false;
-    sense(ctx_.now);                    // facts only; the topology window starts with this one sample
+    sense(ctx_.now);                   // facts only; the topology window starts with this one sample
     tab_ = conn::default_tab(facts_);   // Sink if a device is inline or was seen on CC, else Source if a charger is seen, else Cable if a cable is held
     defaulted_ = true;
 }
@@ -132,6 +134,7 @@ void ConnectionPage::invalidate() {
 void ConnectionPage::open_tab(conn::Tab t) {
     tab_ = t;
     defaulted_ = false;
+    more_ = false;
     if (popup_) close_popup();
     sig_valid_ = false;
 }
@@ -178,6 +181,7 @@ bool ConnectionPage::on_event(Event e) {
     if (shrt && (e.button == Button::Plus || e.button == Button::Minus)) {
         tab_ = e.button == Button::Plus ? pdtabs::next(tab_) : pdtabs::prev(tab_);
         defaulted_ = false;
+        more_ = false;
         sig_valid_ = false;
         update(ctx_.now);
         return true;
@@ -230,7 +234,8 @@ void ConnectionPage::build_items() {
     a.attached = facts_.charger || facts_.inline_sink;
     a.caps_valid = pd::active_caps().valid;
     a.cable_valid = fusb302::emarker().valid;
-    n_items_ = conn::actions(tab_, a, items_);
+    a.more = more_;
+    n_items_= conn::actions(tab_, a, items_);
     if (popup_sel_ >= n_items_) popup_sel_ = n_items_ - 1;
     if (popup_sel_ < 0) popup_sel_ = 0;
 }
@@ -243,6 +248,9 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
         if (ctx_.ui->run_action(Action::PdRescan, now_ms)) set_op("Rescanning...", now_ms, 1500);
         else set_op("Busy, retry", now_ms, 1500);   // a negotiation in flight: the refresh waits for it
         break;
+    case conn::Act::Details:
+        more_ = !more_;
+        break;   // closes the pop-up and repaints the body (the signature carries more_)
     case conn::Act::ShareCaps:
         close_popup();
         share_caps(now_ms);
@@ -323,6 +331,7 @@ constexpr int16_t kTabY = kit::kBodyY, kTabH = 18, kRowY0 = kTabY + kTabH, kRowP
 constexpr int kMaxList = 9;
 constexpr int kValCells = (224 - kValX - 4) / 8;   // 19 cells of S16 in the value column
 static_assert(kRowY0 + kMaxList * kRowPitch <= kFooterY, "the nine rows end at the footer");
+static_assert(conn::kStatusCells <= static_cast<std::size_t>(kFooterCells), "the survey texts fit the footer line");
 
 // A value row. `cut` > 0 splits the value there: the head in `c`, the tail (the current) in kAmp; so a "20/28V 5A" line
 // reads in unit colours. 0 = one colour.
@@ -458,7 +467,10 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
         return;
     }
     if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
-    else R.add("ID").put("unknown");
+    else {   // the row says why it is empty: not asked yet (Refresh reads it), asking, no answer, not supported...
+        const char *w = conn::sv_word(survey::state().entry(pd::SvField::Identity));
+        R.add("ID", kFaint).put(w[0] ? w : "unknown");
+    }
     const pd::SourceCaps &caps = *d.caps;
     StrBuf<28> &pdv = R.add("PD", r.caps_seen ? kEnergy : kFaint);
     const bool traffic = fusb302::pd_traffic();
@@ -514,8 +526,8 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
 }
 
 // One row: "5V 3A 9V 3A" whole entries that fit the 19 cells, then a "+" when more follow (never a cut entry).
-void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
-    StrBuf<28> &cur = R.add("Caps", kText);
+void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink) {
+    StrBuf<28> &cur = R.add(key, kText);
     std::size_t shown = 0;
     for (uint32_t raw : sink) {
         const pd::Pdo p = pd::decode_pdo(raw);
@@ -610,8 +622,91 @@ void put_sink_pdos(Rows &R, std::span<const uint32_t> sink) {
     strip_rows(R, r, d.ul);
     link_rows(R, d);
     proto_row(R, fusb302::sink_vdm());
-    if (!d.sink.empty()) put_sink_pdos(R, d.sink);
+    if (!d.sink.empty()) put_sink_pdos(R, "Caps", d.sink);
     else R.add("Caps", kFaint).put("not seen");
+}
+
+// One survey field as a row of the Details page: what was read, else the word for why it was not (conn::sv_word).
+void word_row(Rows &R, const char *key, pd::SvField f) {
+    const char *w = conn::sv_word(survey::state().entry(f));
+    R.add(key, kFaint).put(w[0] ? w : "unknown");
+}
+
+// The Source tab's second page: what the Refresh survey reads beyond the main rows. An answer that is in is shown whatever
+// the survey says (a sniffed one counts); a field without one says its status. Values are built to fit the 19 cells: the
+// external name is copied up to them, lists keep whole entries.
+[[gnu::noinline]] void details_rows(Rows &R) {
+    const pd::SourceCaps &caps = pd::active_caps();
+    if (caps.valid) {
+        StrBuf<28> &v = R.add("Caps", kText);
+        v.put_u32(caps.num_pdos).put(caps.num_pdos == 1 ? " PDO" : " PDOs");
+        if (caps.epr) put_if_fits(v, " EPR");
+    } else word_row(R, "Caps", pd::SvField::Caps);
+
+    const pd::ManufacturerInfo &mi = fusb302::ext().mfr;
+    if (mi.valid && mi.name[0]) {
+        StrBuf<28> &v = R.add("Mfr", kText);
+        for (std::size_t i = 0; i < sizeof mi.name && mi.name[i] && v.view().size() < static_cast<std::size_t>(kValCells); i++) v.put_char(mi.name[i]);
+    } else if (mi.valid) {
+        put_id(R.add("Mfr", kText), mi.vid, mi.pid, nullptr);
+    } else word_row(R, "Mfr", pd::SvField::MfrInfo);
+
+    const pd::SourceCapsExt &ce = fusb302::ext().caps_ext;
+    if (ce.valid) {
+        StrBuf<28> &v = R.add("Ext", kText);
+        v.put("PDP ").put_u32(ce.pdp_w).put_char('W');
+        if (ce.epr_pdp_w) {
+            StrBuf<12> e;
+            e.put(" EPR ").put_u32(ce.epr_pdp_w).put_char('W');
+            put_if_fits(v, e.view());
+        }
+    } else word_row(R, "Ext", pd::SvField::CapsExt);
+
+    const pd::VdmInfo &vdm = fusb302::vdm();
+    if (vdm.num_svids > 0) {   // "2717 2E87 +": whole four-digit entries, a "+" when more follow
+        StrBuf<28> &v = R.add("SVIDs", kText);
+        std::size_t shown = 0;
+        for (; shown < vdm.num_svids; shown++) {
+            const bool last = shown + 1 == vdm.num_svids;
+            const std::size_t after = v.view().size() + (shown ? 1 : 0) + 4;
+            if (after + (last ? 0 : 2) > static_cast<std::size_t>(kValCells)) break;
+            if (shown) v.put_char(' ');
+            v.put_hex(vdm.svids[shown], 4);
+        }
+        if (shown < vdm.num_svids) v.put(shown ? " +" : "+");
+    } else word_row(R, "SVIDs", pd::SvField::Svids);
+
+    if (vdm.num_modes > 0) {
+        StrBuf<28> &v = R.add("Modes", kText);
+        v.put_hex(vdm.modes_svid, 4).put(": ").put_u32(vdm.num_modes).put(vdm.num_modes == 1 ? " mode" : " modes");
+    } else word_row(R, "Modes", pd::SvField::Modes);
+
+    const pd::SourceCaps &epr = fusb302::epr_info_list();
+    if (epr.valid && epr.num_pdos > 0) {   // the EPR positions (8 on) when the list has them, else what it lists
+        uint32_t raw[pd::kMaxPdos];
+        const std::size_t from = epr.num_pdos > 7 ? 7 : 0;
+        std::size_t n = 0;
+        for (std::size_t i = from; i < epr.num_pdos && i < pd::kMaxPdos; i++) raw[n++] = epr.pdos[i].raw;
+        put_sink_pdos(R, "EPR", std::span<const uint32_t>(raw, n));
+    } else word_row(R, "EPR", pd::SvField::EprList);
+}
+
+// What the Details page and the status line read from the survey and the extended answers, hashed for the paint signatures.
+uint32_t survey_sig(bool more) {
+    const pd::Survey &sv = survey::state();
+    uint32_t h = fnv(2166136261u, uint32_t(more) | uint32_t(sv.running()) << 1 | uint32_t(sv.ran()) << 2 | sv.resolved() << 8 | sv.planned() << 16);
+    for (unsigned i = 0; i < pd::kSvFields; i++) {
+        const pd::SvEntry &e = sv.entry(static_cast<pd::SvField>(i));
+        h = fnv(h, uint32_t(e.state) | uint32_t(e.why) << 8);
+    }
+    const pd::ExtInfo &ex = fusb302::ext();
+    h = fnv(h, uint32_t(ex.mfr.valid) | uint32_t(ex.mfr.vid) << 8 | uint32_t(ex.mfr.pid) << 24);
+    for (char ch : ex.mfr.name) { if (!ch) break; h = fnv(h, uint8_t(ch)); }
+    h = fnv(h, uint32_t(ex.caps_ext.valid) | uint32_t(ex.caps_ext.pdp_w) << 8 | uint32_t(ex.caps_ext.epr_pdp_w) << 16);
+    const pd::SourceCaps &epr = fusb302::epr_info_list();
+    h = fnv(h, uint32_t(epr.valid) | uint32_t(epr.num_pdos) << 8);
+    for (std::size_t i = 0; i < epr.num_pdos && i < pd::kMaxPdos; i++) h = fnv(h, epr.pdos[i].raw);
+    return h;
 }
 
 }  // namespace
@@ -666,7 +761,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.vbus_mv = typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv);
     Rows R;
     switch (tab_) {
-    case conn::Tab::Source: source_rows(R, d); break;
+    case conn::Tab::Source: if (more_) details_rows(R); else source_rows(R, d); break;
     case conn::Tab::Cable: cable_rows(R, d); break;
     case conn::Tab::Sink: sink_rows(R, d); break;
     }
@@ -773,11 +868,13 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
         s.tab = tab_;
         s.f = facts_;
         s.spoof_armed = ctx_.cables.armed();
+        s.sv = &survey::state();
         const bool op = before(now_ms, op_until_);
         if (op) s.op = op_.view();
         conn::status_text(s, txt);
         if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
     }
+    status_txt_ = txt;
     draw_footer_cached(ctx_.content, tone, txt.view(), status_);
 }
 
@@ -849,6 +946,8 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = fnv(c, uint32_t(cc1_mv));
     c = fnv(c, uint32_t(cc2_mv));
     c = fnv(c, uint32_t(vbus_mv));   // the Type-C row's VBUS (100 mV steps)
+    const uint32_t svs = survey_sig(more_);
+    c = fnv(c, svs);
     if (sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
     cheap_sig_ = c;
 
@@ -894,6 +993,7 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = fnv(h, p.max_ma);
     }
     for (uint32_t raw : sink) h = fnv(h, raw);
+    h = fnv(h, svs);
     h = fnv(h, uint32_t(wl.src));
     h = fnv(h, uint32_t(ct.flags) | uint32_t(ct.accepted) << 8 | uint32_t(ct.ready) << 9 | uint32_t(ct.rejected) << 10);
     {   // the tab bodies read more than the match: cable, identity, USB link, protocol, sink mode

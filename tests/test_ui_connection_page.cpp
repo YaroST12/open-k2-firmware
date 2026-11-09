@@ -198,20 +198,22 @@ static void test_popup_per_tab() {
     ui.tick(20050);
     ui.on_button(Button::Ok, ButtonEvent::Short, 20100);
     CHECK_EQ(cp(ui).popup_open(), true);
-    CHECK_EQ(cp(ui).popup_count(), 2);                              // Source: Refresh, Share (QR)
+    CHECK_EQ(cp(ui).popup_count(), 3);                              // Source: Refresh, Details, Share (QR)
     CHECK_EQ(cp(ui).popup_item(0).enabled, true);                   // Refresh is always available
-    CHECK_EQ(cp(ui).popup_item(1).enabled, false);                  // nothing to share yet
+    CHECK_EQ(cp(ui).popup_item(1).enabled, false);                  // no charger: no details
+    CHECK_EQ(cp(ui).popup_item(2).enabled, false);                  // nothing to share yet
     ui.on_button(Button::Back, ButtonEvent::Short, 20200);          // BACK closes the pop-up, does not leave
     CHECK_EQ(cp(ui).popup_open(), false);
     CHECK_EQ(on_pd(ui), 1);
     ui.on_button(Button::Plus, ButtonEvent::Short, 20300);          // Cable
     ui.on_button(Button::Ok, ButtonEvent::Short, 20350);
-    CHECK_EQ(cp(ui).popup_count(), 5);                              // Read, Save, Spoof as..., Saved cables, Share
+    CHECK_EQ(cp(ui).popup_count(), 6);                              // Read, Save, Spoof as..., Saved cables, Share, Refresh
     ui.on_button(Button::Back, ButtonEvent::Short, 20400);
     ui.on_button(Button::Plus, ButtonEvent::Short, 20450);          // Sink
     ui.on_button(Button::Ok, ButtonEvent::Short, 20500);
-    CHECK_EQ(cp(ui).popup_count(), 1);                              // Identify
+    CHECK_EQ(cp(ui).popup_count(), 2);                              // Identify, Refresh
     CHECK_EQ(cp(ui).popup_item(0).enabled, false);                  // no device attached
+    CHECK_EQ(cp(ui).popup_item(1).enabled, true);
     ui.on_button(Button::Back, ButtonEvent::Short, 20550);
     ui.on_button(Button::Back, ButtonEvent::Short, 20600);          // second BACK leaves Connection
     CHECK_EQ(on_pd(ui), 0);
@@ -737,7 +739,141 @@ static void test_the_rescan_comeback_lands_on_the_source_tab() {
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
 }
 
+// ---- the survey on the page: nothing asked until Refresh, a hint, progress, a summary, a Details page ----
+
+static const pd::SvCtx kSurveyCtx{.contract = true, .inline_sink = false, .charger_test = false, .xiaomi_chain = false, .pd20 = false, .epr_capable = true};
+
+// A PD charger behind a plain attach (no load, so not inline): the Source tab has rows.
+static void attach_charger(Ui &ui, uint32_t &t) {
+    g_stub.cc = 1; g_stub.pm.vbus_mv = 9000; g_stub.pm.current_ma = 0; g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().attached()), 1);
+}
+
+static void settle(Ui &ui, uint32_t &t) { for (int i = 0; i < 12; i++) ui.tick(t += 100); }
+
+// Opening the page, switching tabs and opening Details never ask the charger anything: only Refresh does.
+static void test_survey_nothing_active_before_refresh() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    attach_charger(ui, t);
+    const int base = acts();
+    show(ui, 0, t); show(ui, 1, t); show(ui, 2, t); show(ui, 0, t);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // pop-up open
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);       // Details
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(int(cp(ui).details_open()), 1);
+    CHECK_EQ(acts(), base);
+    CHECK_EQ(g_stub.survey_refreshes, 0);
+}
+
+// The Refresh item is what starts the survey; the pop-up's result goes with it.
+static void test_survey_refresh_item_starts_it() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    attach_charger(ui, t);
+    show(ui, 0, t);
+    g_stub.rescan_result = rescan::Result::Asked;
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // pop-up, Refresh is first
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(g_stub.survey_refreshes, 1);
+    CHECK_EQ(int(g_stub.survey_last), int(rescan::Result::Asked));
+}
+
+// The status bar: the hint while the open tab has unasked fields, "Reading r/p" during the run, the summary after it.
+static void test_survey_status_line() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    attach_charger(ui, t);
+    show(ui, 0, t);
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "OK > Refresh to read all");
+    show(ui, 1, t);                                                 // Cable tab: its own field is unasked too
+    show(ui, 0, t);
+    g_stub.survey.start(kSurveyCtx, t);
+    settle(ui, t);
+    char want[40];
+    std::snprintf(want, sizeof want, "Reading %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), want);
+    g_stub.survey.set(pd::SvField::Caps, pd::SvOutcome::Answered);
+    settle(ui, t);
+    std::snprintf(want, sizeof want, "Reading %u/%u", g_stub.survey.resolved(), g_stub.survey.planned());
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), want);
+    g_stub.survey.abandon();                                        // the run is over: one got, the rest silent
+    settle(ui, t);
+    CHECK(g_stub.survey.ran());
+    StrBuf<40> sum;
+    conn::read_summary(g_stub.survey, sum);
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), std::string(sum.view()).c_str());
+    CHECK(std::strncmp(cp(ui).status_line().data(), "Read: 1 got", 11) == 0);
+}
+
+// The Details item opens the second page of the Source tab, a second press goes back; a tab change closes it.
+static void test_survey_details_page_toggle() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    attach_charger(ui, t);
+    const auto main_page = show(ui, 0, t);
+    CHECK_EQ(int(cp(ui).details_open()), 0);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(int(cp(ui).popup_item(1).act == conn::Act::Details), 1);
+    CHECK_EQ(int(cp(ui).popup_item(1).enabled), 1);                 // a charger is attached
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(int(cp(ui).details_open()), 1);
+    CHECK_EQ(int(cp(ui).popup_open()), 0);
+    const auto details = frame();
+    CHECK(details != main_page);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // the same item now says "Main page"
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    CHECK_EQ(int(cp(ui).details_open()), 0);
+    CHECK(frame() == main_page);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);         // open Details again, then change the tab
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(int(cp(ui).details_open()), 1);
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);       // Cable
+    CHECK_EQ(int(cp(ui).details_open()), 0);
+}
+
+// The Details rows say what each field is (a word per status) and show the answers once they are in.
+static void test_survey_details_rows_follow_the_survey() {
+    Ui &ui = fresh_ui();
+    uint32_t t = 20000;
+    attach_charger(ui, t);
+    show(ui, 0, t);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Plus, ButtonEvent::Short, t += 100);
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    settle(ui, t);
+    const auto unasked = frame();
+    g_stub.survey.start(kSurveyCtx, t);
+    g_stub.survey.abandon();                                        // everything planned is now "no answer"
+    settle(ui, t);
+    const auto silent = frame();
+    CHECK(silent != unasked);
+    g_stub.ext.mfr.valid = true; g_stub.ext.mfr.vid = 0x1234; g_stub.ext.mfr.pid = 0x5678;
+    std::strcpy(g_stub.ext.mfr.name, "Fake Charger");
+    g_stub.survey.start(kSurveyCtx, t);
+    g_stub.survey.set(pd::SvField::MfrInfo, pd::SvOutcome::Answered);
+    g_stub.survey.abandon();
+    settle(ui, t);
+    CHECK(frame() != silent);                                       // the manufacturer row shows its name
+}
+
 int main() {
+    test_survey_nothing_active_before_refresh();
+    test_survey_refresh_item_starts_it();
+    test_survey_status_line();
+    test_survey_details_page_toggle();
+    test_survey_details_rows_follow_the_survey();
     test_refresh_goes_through_the_rescan_module();
     test_the_rescan_comeback_lands_on_the_source_tab();
     test_live_request_repaints_only_its_rows();

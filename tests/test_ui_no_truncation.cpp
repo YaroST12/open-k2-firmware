@@ -119,6 +119,92 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     }
 }
 
+// A survey driven to its end with every action answered as `o` (the plan hands the actions out one by one).
+void finish_survey(const pd::SvCtx &c, pd::SvOutcome o) {
+    pd::Survey &s = g_stub.survey;
+    s.start(c, g_t);
+    uint32_t now = g_t;
+    for (int guard = 0; guard < 400 && s.running(); guard++) {
+        const pd::SvAct a = s.poll(now, true, true);
+        now += 10;
+        if (a == pd::SvAct::None) continue;
+        switch (a) {
+        case pd::SvAct::Caps: s.set(pd::SvField::Caps, o); break;
+        case pd::SvAct::Wire:
+            for (pd::SvField f : {pd::SvField::Identity, pd::SvField::Svids, pd::SvField::Modes, pd::SvField::CapsExt, pd::SvField::MfrInfo}) s.set(f, o);
+            break;
+        case pd::SvAct::Epr: s.set(pd::SvField::EprList, o); break;
+        case pd::SvAct::Cable: s.set(pd::SvField::Cable, o); break;
+        default: break;
+        }
+        s.finish(now);
+    }
+}
+
+// The worst-case data of every Details row: a 26-char manufacturer name, the longest extended caps, twelve SVIDs, modes and an
+// eleven-entry EPR list. The rows must fit whole (external text is copied up to the cells, lists keep whole entries).
+void fill_survey_answers() {
+    g_stub.ext = {};
+    g_stub.ext.mfr.valid = true; g_stub.ext.mfr.vid = 0xFFFF; g_stub.ext.mfr.pid = 0xFFFF;
+    std::strcpy(g_stub.ext.mfr.name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    g_stub.ext.caps_ext.valid = true; g_stub.ext.caps_ext.pdp_w = 240; g_stub.ext.caps_ext.epr_pdp_w = 240;
+    g_stub.vdm = {};
+    g_stub.vdm.num_svids = 12;
+    for (int i = 0; i < 12; i++) g_stub.vdm.svids[static_cast<std::size_t>(i)] = static_cast<uint16_t>(0xFF00 + i);
+    g_stub.vdm.modes_svid = 0xFF01; g_stub.vdm.num_modes = 6;
+    g_stub.epr_info_caps = {};
+    g_stub.epr_info_caps.valid = true; g_stub.epr_info_caps.num_pdos = 11; g_stub.epr_info_caps.epr = true;
+    const pd::Pdo e[4] = {{pd::PdoType::Fixed, 0x0002D12C, 28000, 28000, 5000, 140000}, {pd::PdoType::Fixed, 0x0003C12C, 36000, 36000, 5000, 180000},
+                          {pd::PdoType::Fixed, 0x0004B12C, 48000, 48000, 5000, 240000}, {pd::PdoType::Avs, 0xC0000000u, 15000, 48000, 5000, 240000}};
+    for (int i = 0; i < 11; i++) g_stub.epr_info_caps.pdos[static_cast<std::size_t>(i)] = e[i % 4];
+}
+
+// The survey on the Connection tabs: its progress, its summary, every blocked reason and the Details page, with the worst-case
+// answers, in this rotation. The pop-up is opened on each tab too (the Details / Main page item).
+void walk_survey(Ui &ui, int rot, const Scenario &sc) {
+    const pd::SvCtx live{.contract = true, .inline_sink = false, .charger_test = false, .xiaomi_chain = false, .pd20 = false, .epr_capable = true};
+    pd::SvCtx inl = live; inl.inline_sink = true;
+    pd::SvCtx ctest = live; ctest.charger_test = true;
+    pd::SvCtx xia = live; xia.xiaomi_chain = true;
+    pd::SvCtx pd20 = live; pd20.pd20 = true;
+    struct Variant { const char *name; pd::SvCtx ctx; pd::SvOutcome o; bool run_to_end; bool answers; };
+    const Variant variants[] = {
+        {"sv-running", live, pd::SvOutcome::Answered, false, false},
+        {"sv-got", live, pd::SvOutcome::Answered, true, true},
+        {"sv-refused", live, pd::SvOutcome::Refused, true, false},
+        {"sv-silent", live, pd::SvOutcome::Silent, true, false},
+        {"sv-inline", inl, pd::SvOutcome::Answered, true, false},
+        {"sv-ctest", ctest, pd::SvOutcome::Answered, true, false},
+        {"sv-xiaomi", xia, pd::SvOutcome::Answered, true, false},
+        {"sv-pd20", pd20, pd::SvOutcome::Answered, true, true},
+    };
+    char name[48];
+    for (const Variant &v : variants) {
+        g_stub.survey = pd::Survey();
+        g_stub.ext = {}; g_stub.vdm = {}; g_stub.epr_info_caps = {};
+        if (v.answers) fill_survey_answers();
+        if (v.run_to_end) finish_survey(v.ctx, v.o);
+        else g_stub.survey.start(v.ctx, g_t);
+        for (uint8_t tab = 0; tab < 3; ++tab) {
+            std::snprintf(name, sizeof name, "conn-%u %s", unsigned(tab), v.name);
+            if (!ui.goto_page(static_cast<uint8_t>(kConnTabAlias + tab), g_t)) continue;
+            draw_for_a_while(ui, name, rot, sc.name);
+            ui.on_button(Button::Ok, ButtonEvent::Short, g_t);           // the pop-up
+            draw_for_a_while(ui, name, rot, sc.name);
+            if (tab == 0) {                                              // Details is the second item of the Source pop-up
+                ui.on_button(Button::Plus, ButtonEvent::Short, g_t);
+                draw_for_a_while(ui, name, rot, sc.name);
+                ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
+                if (sc.pdos) CHECK_EQ(ui.connection_page().details_open(), true);   // the walk really reaches the Details page
+                std::snprintf(name, sizeof name, "conn-details %s", v.name);
+                draw_for_a_while(ui, name, rot, sc.name);
+            }
+        }
+    }
+    g_stub.survey = pd::Survey();
+    g_stub.ext = {}; g_stub.vdm = {}; g_stub.epr_info_caps = {};
+}
+
 // The charger-test wizard: Tests, Custom, every family Group, Cable, Review and its confirmation.
 void walk_wizard(Ui &ui, int rot, const Scenario &sc) {
     enter("wizard-tests", rot, sc.name);
@@ -169,6 +255,7 @@ void test_walk() {
             ui.set_rotation(static_cast<uint8_t>(rot), g_t);
             g_t += 200;
             walk_pages(ui, rot, sc);
+            walk_survey(ui, rot, sc);
             walk_wizard(ui, rot, sc);
         }
     }

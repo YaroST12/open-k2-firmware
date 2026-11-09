@@ -18,6 +18,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/pd/pd_survey.hpp"
 #include "k2/pd/pd_tabs.hpp"
 #include "k2/pd/ra_guard.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -105,21 +106,82 @@ int wrap(std::string_view text, std::size_t width, std::array<std::string_view, 
     return n;
 }
 
+// ---- survey (what Refresh reads, ui side) ------------------------------------------------------------
+// The survey fields a tab shows: the Source tab everything the wire answers, the Cable tab the cable, the Sink tab none (its side
+// is passive; Identify stays a confirmed action).
+constexpr bool tab_shows(Tab t, pd::SvField f) {
+    return t == Tab::Source ? f != pd::SvField::Cable : t == Tab::Cable ? f == pd::SvField::Cable : false;
+}
+
+// True while a field the tab shows has not been asked yet (the status bar then says how to ask).
+inline bool tab_unasked(Tab t, const pd::Survey &s) {
+    for (unsigned i = 0; i < pd::kSvFields; i++) {
+        const pd::SvField f = pd::SvField(i);
+        if (tab_shows(t, f) && s.entry(f).state == pd::SvState::NotAsked) return true;
+    }
+    return false;
+}
+
+// One word for a field that has no value: why the row is empty (<= 19 cells, the value column). Got has no word.
+constexpr const char *sv_word(const pd::SvEntry &e) {
+    switch (e.state) {
+    case pd::SvState::NotAsked: return "not asked";
+    case pd::SvState::Pending: return "asking...";
+    case pd::SvState::Got: return "";
+    case pd::SvState::NotSupported: return "not supported";
+    case pd::SvState::NoAnswer: return "no answer";
+    case pd::SvState::Blocked:
+        switch (e.why) {
+        case pd::SvWhy::Inline: return "inline: blocked";
+        case pd::SvWhy::ChargerTest: return "charger test";
+        case pd::SvWhy::XiaomiChain: return "Xiaomi chain";
+        case pd::SvWhy::Pd20: return "not in PD 2.0";
+        case pd::SvWhy::NoEpr: return "no EPR bit";
+        case pd::SvWhy::None: break;
+        }
+        return "blocked";
+    }
+    return "";
+}
+
+inline constexpr const char *kRefreshHint = "OK > Refresh to read all";   // one message, the same on every tab
+inline constexpr std::size_t kStatusCells = 27;                            // the footer line (static_asserted against it by the page)
+
+// "Read: 5 got, 2 unsupported": the footer holds 27 cells, "2 not supported" would make the line 28, so the short word. A
+// ", 1 no answer" follows only while it still fits.
+template <std::size_t N>
+void read_summary(const pd::Survey &s, StrBuf<N> &out) {
+    out.put("Read: ").put_u32(s.got()).put(" got");
+    if (s.refused()) out.put(", ").put_u32(s.refused()).put(" unsupported");
+    if (s.silent()) {
+        StrBuf<24> t;
+        t.put(", ").put_u32(s.silent()).put(" no answer");
+        if (out.view().size() + t.view().size() <= kStatusCells) out.put(t.view());
+    }
+}
+
 // ---- status bar -------------------------------------------------------------------------------------
 struct StatusIn {
     Tab tab = Tab::Source;
     Facts f;
     std::string_view op;        // what the last action says ("Reading cable...", "Live sink: OK again"), "" = none
     bool spoof_armed = false;   // a saved cable is armed for the next charger test or attach
+    const pd::Survey *sv = nullptr;   // the Refresh survey (nullptr: none, the old status only)
 };
 
 // The bottom bar: an action message wins; then the spoof note when a charger is already attached (the
-// identity is presented at the next attach); else the state of the shown tab and the topology word.
+// identity is presented at the next attach); then the survey (progress while it runs, the hint while a field of the open
+// tab was never asked, the summary after a run); else the state of the shown tab and the topology word.
 template <std::size_t N>
 void status_text(const StatusIn &s, StrBuf<N> &out) {
     out.clear();
     if (!s.op.empty()) { out.put(s.op); return; }
     if (s.spoof_armed && s.f.charger) { out.put("Armed, replug to apply"); return; }
+    if (s.sv) {
+        if (s.sv->running()) { out.put("Reading ").put_u32(s.sv->resolved()).put_char('/').put_u32(s.sv->planned()); return; }
+        if (!tab_empty(s.tab, s.f) && tab_unasked(s.tab, *s.sv)) { out.put(kRefreshHint); return; }
+        if (s.sv->ran() && s.tab != Tab::Sink && !tab_empty(s.tab, s.f)) { read_summary(*s.sv, out); return; }
+    }
     switch (s.tab) {
     case Tab::Source: out.put(s.f.charger ? "Charger" : "No charger"); break;
     case Tab::Cable:  out.put(s.f.cable ? "Cable read" : "No cable"); break;
@@ -130,16 +192,17 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
 }
 
 // ---- action pop-up ----------------------------------------------------------------------------------
-enum class Act : std::uint8_t { Refresh, ShareCaps, ReadCable, SaveCable, SpoofAs, SavedCables, ShareCable, Identify };
+enum class Act : std::uint8_t { Refresh, ShareCaps, ReadCable, SaveCable, SpoofAs, SavedCables, ShareCable, Identify, Details };
 struct Item {
     Act act = Act::Refresh;
     const char *label = "";
     bool enabled = true;
     const char *why = "";       // shown in the status bar when a greyed item is chosen
 };
-inline constexpr int kMaxItems = 5;
+inline constexpr int kMaxItems = 6;
 
 struct ActFacts {
+    bool more = false;          // the Source tab shows its second page (Details): the item goes back
     bool inline_sink = false;   // a live sink is inline: active tools that would reach it are refused
     bool attached = false;      // a charger or a device answers on a port
     bool caps_valid = false;    // Source_Capabilities received
@@ -153,17 +216,20 @@ constexpr int actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out
     switch (t) {
     case Tab::Source:
         out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
+        out[std::size_t(n++)] = {Act::Details, a.more ? "Main page" : "Details", a.attached, "No charger"};
         out[std::size_t(n++)] = {Act::ShareCaps, "Share (QR)", a.caps_valid, "No caps yet"};
         break;
-    case Tab::Cable:
+    case Tab::Cable:   // Refresh last: the cable's own items keep their place
         out[std::size_t(n++)] = {Act::ReadCable, "Read cable", true, ""};
         out[std::size_t(n++)] = {Act::SaveCable, "Save cable", a.cable_valid, "No cable read"};
         out[std::size_t(n++)] = {Act::SpoofAs, "Spoof as...", !a.inline_sink, kWhyLiveSink};
         out[std::size_t(n++)] = {Act::SavedCables, "Saved cables", true, ""};
         out[std::size_t(n++)] = {Act::ShareCable, "Share (QR)", a.cable_valid, "No cable read"};
+        out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
         break;
     case Tab::Sink:
         out[std::size_t(n++)] = {Act::Identify, "Identify", a.attached, "No device seen"};
+        out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
         break;
     }
     return n;

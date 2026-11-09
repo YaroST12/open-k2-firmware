@@ -641,6 +641,8 @@ public:
     int popup_count() const { return n_items_; }
     const conn::Item &popup_item(int i) const { return items_[static_cast<std::size_t>(i)]; }
     int popup_selected() const { return popup_sel_; }
+    bool details_open() const { return more_; }   // the Source tab's second page (what the Refresh survey read)
+    std::string_view status_line() const { return status_txt_.view(); }   // what the bottom bar says
     // A short note on the status line (what an action did, or what a reboot carried over).
     void say(const char *text, uint32_t now_ms, uint32_t ms = 4000) { set_op(text, now_ms, ms); }
 private:
@@ -663,7 +665,9 @@ private:
     conn::Facts facts_;
     bool popup_ = false;
     bool popup_drawn_ = false;
-    bool id_asked_ = false;                // Identify started from the pop-up: its progress shows in the status bar
+    bool more_ = false;                    // Details: the second page of the Source tab (reset by a tab change)
+    StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
+    bool id_asked_ = false;               // Identify started from the pop-up: its progress shows in the status bar
     int popup_sel_ = 0;
     std::array<conn::Item, conn::kMaxItems> items_{};
     int n_items_ = 0;
