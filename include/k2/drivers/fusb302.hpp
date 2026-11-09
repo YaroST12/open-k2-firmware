@@ -34,6 +34,12 @@ bool init();
 // Rd bits in every unattached state (init, detach, scans) until self_power_leave(); 0 = normal passive behaviour.
 // The pin is ONE line, never both (Rd/Rd is the Debug Accessory signature: a source turns its Rp off and stays off).
 void self_power_early(bootmode::Mode mode, bool warm);
+// A planned re-attach's comeback (k2/core/rd_intent.hpp): PC13 (Ra on CC1) high from the Rd's first moments, so the charger's first
+// look at the fresh attach finds the Ra. Only when the pin is CC2; ra_set(true) takes the Ra over, ra_set(false) drops it.
+void self_power_early_ra();
+// Give a comeback's Rd back for good, whatever made it (key mode or marker): pin, pin mark, early Ra and the chip's bits. Drop the
+// Ra mode (ra_set(false)) and the armed spoof first.
+void self_power_drop();
 // The pin is an inherited Rd (warm reset, no key mode), not a key mode's.
 bool rd_inherited();
 // Drop an inherited Rd for good: nothing resumes on it (no run, or the resume was cancelled).
@@ -319,6 +325,10 @@ struct VconnInfo {
 bool vconn_request();
 bool vconn_roundtrip();
 bool data_reset();        // lab: send Data_Reset (the VCONN source cycles VCONN; a DFP may re-read the cable)   // lab: take the VCONN role without driving it, then hand it back (the source turns VCONN on)
+// A controlled re-attach: Rd off (the Ra mode's PC13 stays), the caller times the gap, then Rd back with the contract forgotten, so the
+// source sees a detach and a fresh attach. A K2 on this source's VBUS may die in the gap (the comeback boot finishes the job).
+void rd_glitch_begin();
+void rd_glitch_end();
 void vconn_off();
 VconnInfo vconn_info();
 

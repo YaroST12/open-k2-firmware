@@ -163,6 +163,7 @@ constexpr std::array<std::uint16_t, kBootReadbacks> kReadbackAtMs = {50, 600, 30
 std::array<BootNote, kBootReadbacks> g_readbacks{};
 unsigned g_readback_n = 0;
 std::uint8_t g_initial_pin_rd = 0;   // the Rd bits self_power_early() wrote first
+bool g_ra_early = false;             // PC13 high from the boot's first moments (a planned re-attach's comeback); ra_set() takes over
 bool g_mark_read = false;            // the pin mark was consulted (plain boot after a warm reset)
 std::uint16_t g_mark_raw = 0;
 void boot_note(std::uint8_t kind, std::uint8_t val) {
@@ -210,7 +211,7 @@ void clear_irqs() {
 void cc_switches(bool vconn, std::uint8_t mask = 3) {
     pins::cc1_switch.write(mask & 1);
     pins::cc2_switch.write(mask & 2);
-    const bool pc13 = emkra::pc13_high(vconn, g_ra);
+    const bool pc13 = emkra::pc13_high(vconn, g_ra) || g_ra_early;
     pins::cc_vconn_gnd.write(pc13);
     boot_note(1, std::uint8_t((mask & 3) | (pc13 ? 4 : 0)));
 }
@@ -376,7 +377,9 @@ void configure_passive() {
     g_crc.reset();
     g_rd_gate.reset();
     g_contract_linger.reset();
-    for (const RegWrite& w : phy::passive_config(g_active_cc)) wr(w.reg, w.value);
+    // The profile's own SWITCHES0 entry (no Rd) is skipped: the line below writes the Rd the K2 owes the source, and a profile
+    // write in between dropped a pinned Rd for 1.3 ms (hardware 2026-11-09: a comeback boot, runs/selfpwr-drop/apple1).
+    for (const RegWrite& w : phy::passive_config(g_active_cc)) if (w.reg != kSwitches0) wr(w.reg, w.value);
     if (g_active_cc == 0) wr(kSwitches0, idle_rd());   // plain boot: 0, no Rd (unless a run start presents it)
     else apply_rd();
     clear_irqs();
@@ -930,6 +933,26 @@ void self_power_early(bootmode::Mode mode, bool warm) {
     wr(kSwitches0, g_pin_rd);   // a plain boot writes 0 as well: no Rd, the passive state
     g_cc_mask = bootmode::cc_mask(mode);
     cc_switches(false, g_cc_mask);
+}
+
+// A planned re-attach's comeback: PC13 (Ra on CC1) high from the same first moments as the Rd, so the charger's first look at the
+// fresh attach finds the Ra already there. Only on the CC2 pin (the Ra and an Rd would share CC1). ra_set(true) takes it over later.
+void self_power_early_ra() {
+    if (g_pin_rd != kPdwn2) return;
+    g_ra_early = true;
+    pins::cc_vconn_gnd.write(true);
+    boot_note(1, std::uint8_t((g_cc_mask & 3) | 4));
+}
+
+// Give a comeback's Rd back for good, whatever made it (a key mode, a marker): the pin and its mark, the early Ra and the chip's
+// bits. The caller drops the Ra mode (ra_set(false)) and the armed spoof first.
+void self_power_drop() {
+    g_rd_inherited = false;
+    set_boot_pin(0);
+    self_power_leave();
+    g_ra_early = false;
+    if (!g_ra) pins::cc_vconn_gnd.write(g_vconn_applied);
+    apply_rd();
 }
 
 bool rd_inherited() { return g_rd_inherited && g_pin_rd != 0; }
@@ -2143,6 +2166,12 @@ void set_force_line(std::uint8_t line) {
     K2LOG("[PD] CC scan forced line %u\n", unsigned(g_force_cc));
 }
 bool ra_set(bool on) {
+    if (!on && g_ra_early && !g_ra) {   // only the boot's early PC13: drop it
+        g_ra_early = false;
+        pins::cc_vconn_gnd.write(g_vconn_applied);
+        K2LOG("[EMKRA] early off\n");
+        return true;
+    }
     if (on == g_ra) return true;
     if (!on) {
         g_ra = false;
@@ -2170,6 +2199,7 @@ bool ra_set(bool on) {
     // that feeds it, so there the Ra goes on beside the Rd that stays (the source's re-look is the caller's business).
     if (g_active_cc != 0 && g_pin_rd == 0) detach_reset(0);
     g_ra = true;
+    g_ra_early = false;   // ra_set owns PC13 now
     g_force_cc = emkra::kLine;
     cc_switches(false, g_cc_mask);   // PC13 high now, ahead of Rd
     if (g_active_cc == 0) wr(kSwitches0, idle_rd());   // a run start that already presents Rd keeps it on CC2 alone
@@ -2276,6 +2306,24 @@ bool data_reset() {
     const bool ok = g_vconn.send_raw(14);
     K2LOG("[VCONN] Data_Reset %s\n", ok ? "queued" : "refused: TX slot busy");
     return ok;
+}
+
+// A controlled re-attach: drop the Rd (SWITCHES0 pull-downs off; the Ra mode's PC13 stays) for a gap the caller times, then put it
+// back: the source sees a detach and a fresh attach, now with the Ra present, and may read the cable it skipped. The caller
+// times the gap and watches VBUS (the lab op, the charger test's planned reboot). At the end the engine and the sink forget the
+// old contract, as on a detach. A K2 that lives on this source's VBUS may die in the gap: the comeback boot (k2/core/rd_intent.hpp)
+// finishes the job.
+void rd_glitch_begin() {
+    wr(kSwitches0, 0);
+    K2LOG("[PD] rd glitch: Rd off (ra=%d)\n", int(g_ra));
+}
+
+void rd_glitch_end() {
+    g_sink.detach();
+    g_engine.reset_source();
+    g_new_source = true;
+    apply_rd();
+    K2LOG("[PD] rd glitch: Rd back\n");
 }
 
 void vconn_off() { vconn_force_off(pd::VconnWhy::Abort); }

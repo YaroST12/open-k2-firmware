@@ -2653,6 +2653,76 @@ void test_passive_cold_boot_never_transmits_on_a_live_link() {
     power_cycle_forget_pin();
 }
 
+// A planned re-attach's comeback boot (k2/core/rd_intent.hpp): Rd on CC2 from the first write, PC13 (Ra) high from the same moment,
+// and nothing on the boot path writes a Rd-less SWITCHES0 (hardware, a comeback trace: init used to write 0x00 and the pin again
+// 1.3 ms later, a detach the charger can see). The chip's own SW_RES default (Rd on both) is the chip's, not a write.
+void test_comeback_boot_never_writes_a_rd_less_switches0_and_has_the_ra_first() {
+    reset_world();
+    g_mark = 0;
+    fusb302::self_power_early(bootmode::Mode::PlusRdCc2, false);
+    fusb302::self_power_early_ra();
+    CHECK_EQ(g_pin[0], true);                                // the Ra is on before init
+    CHECK_EQ(int(g_reg[0x02] & 3), 2);
+    const std::size_t from = g_log.size();                   // (the pin's own first drive, low, is the line-up of the CC switches)
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    settle_ms(200);
+    CHECK_EQ(g_pin[0], true);
+    CHECK_EQ(find_from("PC13=0", from), -1);                 // never low on the way
+    for (std::size_t i = from; i < g_log.size(); i++)
+        if (g_log[i].rfind("W 02=", 0) == 0) CHECK_EQ(int(std::stoul(g_log[i].substr(5), nullptr, 16) & 3u), 2);
+    CHECK_EQ(int(g_reg[0x02] & 3), 2);
+    CHECK_EQ(fusb302::self_powered(), true);
+    // The page's spoof takes the early Ra over; ra_set(false) with the Ra only early (nothing else asked for it) just drops it.
+    CHECK_EQ(fusb302::ra_set(true), true);
+    CHECK_EQ(g_pin[0], true);
+    CHECK_EQ(fusb302::ra_set(false), true);
+    CHECK_EQ(g_pin[0], false);
+    CHECK_EQ(int(g_reg[0x02] & 3), 2);                       // the Rd stays until the verdict says otherwise
+    self_hold_end();
+}
+
+// The comeback is released (no source caps in time): Ra and the pin go, Rd goes with them, nothing resumes.
+void test_comeback_release_gives_the_pin_and_the_early_ra_back() {
+    reset_world();
+    g_mark = 0;
+    fusb302::self_power_early(bootmode::Mode::PlusRdCc2, false);
+    fusb302::self_power_early_ra();
+    fusb302::init();
+    settle_ms(50);
+    CHECK_EQ(g_pin[0], true);
+    CHECK_EQ(fusb302::ra_set(false), true);                  // the early Ra alone can be dropped
+    CHECK_EQ(g_pin[0], false);
+    fusb302::self_power_early_ra();                          // (a second early Ra is harmless)
+    fusb302::self_power_drop();
+    CHECK_EQ(g_pin[0], false);
+    CHECK_EQ(fusb302::self_powered(), false);
+    CHECK_EQ(int(g_reg[0x02] & 3), 0);
+    power_cycle_forget_pin();
+}
+
+// The planned Rd glitch (lab op 8 and the charger test's planned reboot): the Rd goes for the gap with the Ra kept, comes back to
+// the pin, and the sink starts fresh.
+void test_rd_glitch_drops_the_rd_keeps_the_ra_and_restores_the_pin() {
+    reset_world();
+    g_mark = 0;
+    fusb302::self_power_early(bootmode::Mode::PlusRdCc2, false);
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    CHECK_EQ(fusb302::ra_set(true), true);
+    settle_ms(50);
+    g_log.clear();
+    fusb302::rd_glitch_begin();
+    CHECK_EQ(int(g_reg[0x02] & 3), 0);
+    CHECK_EQ(g_pin[0], true);                                // the Ra stays through the gap
+    fusb302::rd_glitch_end();
+    CHECK_EQ(int(g_reg[0x02] & 3), 2);
+    CHECK_EQ(g_pin[0], true);
+    CHECK_EQ(find_from("PC13=0"), -1);
+    fusb302::ra_set(false);
+    self_hold_end();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -2749,5 +2819,8 @@ int main() {
     test_the_k2_as_the_only_sink_still_answers_identity_and_soft_reset();
     test_a_new_attach_forgets_the_far_sink();
     test_passive_cold_boot_never_transmits_on_a_live_link();
+    test_comeback_boot_never_writes_a_rd_less_switches0_and_has_the_ra_first();
+    test_comeback_release_gives_the_pin_and_the_early_ra_back();
+    test_rd_glitch_drops_the_rd_keeps_the_ra_and_restores_the_pin();
     return test_report("test_fusb302_scan");
 }
