@@ -480,11 +480,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Side effect: the fix shrank `home::paint`'s frame by 80 B, moving the worst main-loop path onto the ChargerTest
     chain; ff6c833 adds the matching RESOLVE rule (ResultGrid's `result_row_fn` callback) to `tools/stack_depth.py`
     so the stack gate resolves it again.
-- **Planned re-attach counts as a resume** (2026-11-09): the card's "resumed" counter is not masked after the planned
-  reboot, so a clean 6 A run reads as resumed once.
+- **Planned re-attach counts as a resume** (2026-11-09, fixed in 49dacbb, hardware check pending): the card's "resumed"
+  counter was not masked after the planned reboot, so a clean 6 A run read as resumed once.
   - Fix: the planned re-attach writes its intent marker (`/rd.rec`, `src/core/rd_comeback.cpp`); the run journal's
-    resume path should read that the reboot was planned and not count it (keep a separate "planned re-attach" flag on
-    the card if it helps the reader).
+    resume path reads it (`rdcomeback::planned_reattach()` -> `Runner::restore()`'s last argument) and does not count
+    that resume (a separate `reattach_` counter; the card carries the planned re-attach as cable flags bit 7
+    `kCableReattach`, "re-attach" in the footer, `"reattach":1` in the JSON).
   - Validate: host test (journal resume after a planned re-attach: resumed stays 0, after an unplanned VBUS loss: 1);
     hardware: self-powered CUKTECH 6 A run (PLUS boot, built-in CUKTECH 6A identity) ends with a card showing no resume.
 - **Stale Rd marker** (2026-11-09, re-rated from "accepted for now": a bug when a real sink is behind the K2): a bare
