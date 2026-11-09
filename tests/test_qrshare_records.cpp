@@ -140,6 +140,18 @@ static std::vector<Fixture> fixtures() {
             f.push_back({x.name + "_lz", x.type, x.schema, z, true});
         }
     }
+    // The schema v2 records (the link form of the card and the cable, k2/ui/qrshare_link.hpp): the bit-packed re-encoding of
+    // the card above and of the 8-row cable, carried by version '2' links and by schema 2 frames.
+    {
+        for (const Fixture& x : std::vector<Fixture>(f)) {
+            if (x.name != "card" && x.name != "emk_rows") continue;
+            Bytes v2(r::kMaxEmarker);
+            const std::size_t n = r::pack_v2(x.type, x.rec, v2);
+            if (n == 0) continue;
+            v2.resize(n);
+            f.push_back({x.name + "_v2", x.type, r::kSchemaV2, v2});
+        }
+    }
     return f;
 }
 
@@ -341,6 +353,17 @@ static void test_firmware_parsers_read_the_records() {
             CHECK(count >= 2);
         } else if (x.name == "boot") {
             CHECK_EQ(std::string(x.rec.begin(), x.rec.end()).rfind("K2B1 fw=1.0 g=fcb3128-dirty p=1 ", 0), 0u);
+        } else if (x.name == "card_v2" || x.name == "emk_rows_v2") {
+            // the schema v2 record is the bit-packed form of the plain twin row
+            const std::string base = x.name.substr(0, x.name.size() - 3);
+            for (const Fixture& b : fixtures())
+                if (b.name == base) {
+                    Bytes v2(qs::records::kMaxEmarker);
+                    CHECK_EQ(qs::records::pack_v2(b.type, b.rec, v2), x.rec.size());
+                    v2.resize(x.rec.size());
+                    CHECK(v2 == x.rec);
+                    CHECK_EQ(x.rec[0], qs::records::kSchemaV2);
+                }
         }
     }
 }

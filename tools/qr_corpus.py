@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
-"""QR share payload measurement: the corpus of real records, the current link sizes, and the candidate
-encodings for more room in one QR code (measurement phase; no firmware code is changed here).
+"""QR share payload measurement and the schema v2 check: the corpus of real records, the current link sizes, the candidate
+encodings for more room in one QR code, and --v2-check, which runs the firmware's own v2 encoder (via the host build of
+tests/test_qrshare_link.cpp, dumped with K2_QRCORPUS_DUMP) over the same corpus and asserts that
+
+  - the C++ v2 bytes are byte-identical to this file's Python prototype (pack_card_v2 / pack_emk_v2) for every corpus record,
+  - every firmware v2 link decodes (tools/k2_qr.py decode_link) to the same JSON as the v1 record decoded the v1 way.
 
 The record bytes, the LZ4 blocks and the link texts all come from the firmware's own code, compiled into a
 host driver (tools/qr_corpus_driver.cpp, built on the fly): qrshare::link::encode, lz::compress, qrshare::pack
@@ -37,6 +41,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import k2_qr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -491,7 +498,7 @@ def parse_emk(rec: bytes) -> dict:
             o = 3 + 52 * i
             rows.append({"sop": q[o], "kind": q[o + 1], "nreq": q[o + 2], "nrep": q[o + 3],
                          "hdr_val": u32(q, o + 4), "hdr_mask": u32(q, o + 8),
-                         "req": [(u32(q, o + 12 + 8 * k), u32(q, o + 16 + 8 * k)) for k in range(q[o + 2])],
+                         "req": [(u32(q, o + 12 + 4 * k), u32(q, o + 20 + 4 * k)) for k in range(q[o + 2])],
                          "rep": [u32(q, o + 28 + 4 * k) for k in range(q[o + 3])]})
         d["quirks"] = {"flags": q[0], "unmatched": q[1], "rows": rows}
     else:
@@ -799,6 +806,70 @@ def geometry(cap: dict, head: int):
     return rows
 
 
+# --------------------------------------------------------------------------- the schema v2 check: firmware encoder vs this prototype
+
+def v2_check(work: Path, quiet: bool):
+    """Build the host test_qrshare_link, dump its corpus rows (name, type, v1 hex, firmware v2 hex, v2 link) and assert:
+    the firmware's v2 bytes equal pack_card_v2 / pack_emk_v2 here, byte for byte, and decode_link() of the firmware link
+    gives the same JSON as the v1 record decoded by the v1 decoders."""
+    host = work / "host-build"
+    binpath = host / "test_qrshare_link"
+    subprocess.run(["make", "-C", str(ROOT), "-j8", f"HOST_DIR={host}", str(binpath)], check=True,
+                   capture_output=True)
+    dump = work / "corpus-v2.tsv"
+    env = dict(os.environ, K2_QRCORPUS_DUMP=str(dump))
+    subprocess.run([str(binpath)], check=True, capture_output=True, cwd=str(ROOT), env=env)
+    rows = [ln.rstrip("\n").split("\t") for ln in open(dump) if not ln.startswith("#") and ln.strip()]
+    if not rows:
+        print("v2-check: no corpus rows dumped", file=sys.stderr)
+        return 1
+    bad = 0
+    for name, typ, v1hex, v2hex, link in rows:
+        typ = int(typ)
+        v1, fw = bytes.fromhex(v1hex), bytes.fromhex(v2hex)
+        v1_json = None
+        if typ == 4 and len(v1) == 202:
+            proto = pack_card_v2(parse_card(v1))
+            try:
+                v1_json = k2_qr.decode_card(v1)
+            except Exception:
+                pass   # a synthetic all-limits record the strict v1 decoder refuses: compare bytes only
+        elif typ == 2 and len(v1) >= 91:
+            proto = pack_emk_v2(parse_emk(v1))
+            v1_json = k2_qr.decode_emarker(v1)
+        else:
+            continue
+        if fw != proto:
+            bad += 1
+            print(f"v2-check MISMATCH (bytes) {name}: firmware {len(fw)} B vs prototype {len(proto)} B")
+            continue
+        if v1_json is None:
+            # byte-level round trip only: the v2 record expands back to the exact v1 record
+            expand = k2_qr.expand_card_v2 if typ == 4 else k2_qr.expand_emk_v2
+            if expand(fw) != v1:
+                bad += 1
+                print(f"v2-check MISMATCH (expand) {name}")
+                continue
+            if not quiet:
+                print(f"  {name:<14} v1 {len(v1):>3} B -> v2 {len(fw):>3} B, link {len(link):>3} chars — bytes identical, expands to v1")
+            continue
+        d = k2_qr.decode_link(link)
+        if d["version"] != 2 or bytes.fromhex(d["record_hex"]) != fw:
+            bad += 1
+            print(f"v2-check MISMATCH (link) {name}")
+            continue
+        if d["record"] != v1_json:
+            bad += 1
+            print(f"v2-check MISMATCH (json) {name}")
+            continue
+        head = len(k2_qr.LINK_BASE) + 3
+        if not quiet:
+            print(f"  {name:<14} v1 {len(v1):>3} B -> v2 {len(fw):>3} B, link {len(link):>3} chars "
+                  f"({100 * len(link) / 321:.1f}% of v11) — bytes identical, JSON equal")
+    print(f"v2-check: {len(rows)} corpus rows, {bad} mismatches")
+    return 1 if bad else 0
+
+
 # --------------------------------------------------------------------------- report
 
 def main():
@@ -807,6 +878,9 @@ def main():
                     help="card captures: files or directories (a directory is scanned for *.json / *.txt)")
     ap.add_argument("--markdown", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--v2-check", action="store_true",
+                    help="run the firmware v2 encoder over the corpus (host build of test_qrshare_link) and assert it is "
+                         "byte-identical to the prototype here and decodes to the v1 JSON")
     args = ap.parse_args()
 
     work = Path(tempfile.gettempdir()) / "k2-qr-corpus"
@@ -823,6 +897,9 @@ def main():
         if hexes:
             extra = work / "captures.hex"
             extra.write_text("\n".join(hexes) + "\n")
+
+    if args.v2_check:
+        return v2_check(work, args.quiet)
 
     header, records = run_driver(driver, extra)
     kbase = header["kBase"]
@@ -859,7 +936,8 @@ def main():
             assert c2 == b2, f"card v2 round-trip failed for {r['name']}"
             r["v2_card"] = len(v2)
             v2_rows.append((r["name"], len(r["raw"]), len(v2)))
-        elif r["type"] == 2 and len(r["raw"]) >= 91:
+        elif r["type"] == 2 and len(r["raw"]) >= 91 and r["raw"][0] != 2:
+            # (a raw record starting with the schema byte 2 is a v2 record from the regenerated qrlink.tsv, not a v1 one)
             e = parse_emk(r["raw"])
             v2 = pack_emk_v2(e)
             back = {k: v for k, v in unpack_emk_v2(v2).items() if k != "schema"}

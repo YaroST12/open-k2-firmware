@@ -33,7 +33,7 @@ FIX = load()
 class Golden(unittest.TestCase):
     def test_every_fixture_present(self):
         self.assertEqual(set(FIX), {"boot", "identity", "emk_plain", "emk_rows", "pdcaps_spr", "pdcaps_epr", "card",
-                                    "log", "emk_rows_lz", "card_lz"})
+                                    "log", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2"})
 
     def test_decode_joins_the_golden_record(self):
         for name, fx in FIX.items():
@@ -61,6 +61,91 @@ class Golden(unittest.TestCase):
                 res, code = q.decode_texts(fx["parts"])
                 self.assertEqual(code, 0)
                 self.assertNotIn("decode_error", res)
+
+
+class SchemaV2(unittest.TestCase):
+    """The schema 2 frames (the v2 rows of qrshare.tsv) carry the bit-packed record; the reader expands it to the v1 record
+    and decodes it exactly like the schema 1 frame of the same record."""
+
+    def test_v2_rows_are_schema_2(self):
+        self.assertEqual(FIX["card_v2"]["schema"], 2)
+        self.assertEqual(FIX["emk_rows_v2"]["schema"], 2)
+        self.assertEqual(FIX["card_v2"]["record"][0], 2)
+        self.assertEqual(FIX["emk_rows_v2"]["record"][0], 2)
+
+    def test_v2_frame_decodes_like_the_v1_frame(self):
+        for v2name, v1name in (("card_v2", "card"), ("emk_rows_v2", "emk_rows")):
+            with self.subTest(v2name):
+                a, code_a = q.decode_texts(FIX[v2name]["parts"])
+                b, code_b = q.decode_texts(FIX[v1name]["parts"])
+                self.assertEqual((code_a, code_b), (0, 0))
+                self.assertNotIn("decode_error", a)
+                self.assertTrue(a["v2_expanded"])
+                self.assertEqual(a["record"], b["record"])
+                self.assertEqual(a["record_hex"], b["record_hex"])
+
+    def test_v2_frame_expands_to_the_plain_record(self):
+        for v2name, v1name in (("card_v2", "card"), ("emk_rows_v2", "emk_rows")):
+            with self.subTest(v2name):
+                _, rec = q.assemble(FIX[v2name]["parts"])
+                self.assertEqual(rec, FIX[v2name]["record"])
+                expand = q.expand_card_v2 if FIX[v2name]["type"] == 4 else q.expand_emk_v2
+                self.assertEqual(expand(rec), FIX[v1name]["record"])
+
+    def test_v2_card_json_matches_the_v1_card(self):
+        a = q.decode_texts(FIX["card_v2"]["parts"])[0]["record"]
+        b = q.decode_texts(FIX["card"]["parts"])[0]["record"]
+        self.assertTrue(a.pop("_store_crc_ok"))
+        self.assertTrue(b.pop("_store_crc_ok"))
+        self.assertEqual(a, b)
+        self.assertEqual(a["name"], "Desk 65W")
+
+
+class Links(unittest.TestCase):
+    """decode_link: version '1' and '2' links of every kind, 't' too (the rows of tests/fixtures/qrlink.tsv)."""
+
+    def rows(self):
+        out = []
+        with open(os.path.join(HERE, "fixtures", "qrlink.tsv")) as f:
+            for ln in f:
+                if ln.startswith("#") or not ln.strip():
+                    continue
+                name, packed, rec, link, js = ln.rstrip("\n").split("\t")
+                out.append((name, link, js))
+        return out
+
+    def test_every_golden_link_decodes(self):
+        for name, link, js in self.rows():
+            with self.subTest(name):
+                d = q.decode_link(link)
+                self.assertIn(d["version"], (1, 2))
+                self.assertLessEqual(len(link), 321)
+                self.assertIn("record", d)
+
+    def test_v2_links_decode_to_the_v1_json(self):
+        rows = dict((n, (l, js)) for n, l, js in self.rows())
+        for v2, v1 in (("fh22", "fh22_plain"), ("fh22", "fh22_lz")):
+            with self.subTest((v2, v1)):
+                a = q.decode_link(rows[v2][0])["record"]
+                b = q.decode_link(rows[v1][0])["record"]
+                self.assertTrue(a.pop("_store_crc_ok"))
+                self.assertTrue(b.pop("_store_crc_ok"))
+                self.assertEqual(a, b)
+
+    def test_text_kind(self):
+        rows = dict((n, l) for n, l, _ in self.rows())
+        d = q.decode_link(rows["qrtest"])
+        self.assertEqual((d["version"], d["kind"], d["record_kind"]), (1, "t", "text"))
+        self.assertEqual(d["text"], "QR scan test v11 3px")
+
+    def test_bad_links(self):
+        for bad in ("https://yarost12.github.io/open-k2-firmware/r/#3c.AAAA",
+                    "https://yarost12.github.io/open-k2-firmware/r/#2p.AAAA",
+                    "https://yarost12.github.io/open-k2-firmware/r/#1x.AAAA",
+                    "https://example.com/#1c.AAAA"):
+            with self.subTest(bad):
+                with self.assertRaises(q.QrError):
+                    q.decode_link(bad)
 
 
 class Packed(unittest.TestCase):
