@@ -488,7 +488,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     `kCableReattach`, "re-attach" in the footer, `"reattach":1` in the JSON).
   - Validate: host test (journal resume after a planned re-attach: resumed stays 0, after an unplanned VBUS loss: 1);
     hardware: self-powered CUKTECH 6 A run (PLUS boot, built-in CUKTECH 6A identity) ends with a card showing no resume.
-- **Stale Rd marker** (2026-11-09, re-rated from "accepted for now": a bug when a real sink is behind the K2): a bare
+- **Stale Rd marker** (2026-11-09, re-rated from "accepted for now": a bug when a real sink is behind the K2; fixed in
+  6fe5019, hardware check pending): a bare
   unplug after a self-powered run leaves `/rd.rec`; the next plain boot read it and showed Rd. Measured on build
   b00178c (`runs/2026-11-09-rescan/bb1.txt`, matrix rows H6 / C4): Rd on CC2 from 30 ms, 12 K2 Requests over 3 s and a
   collision with the Pixel's own Request, not "0.5-1.5 s of Rd". The host-powered half is fixed on `k2/inline-passive`
@@ -497,6 +498,10 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Fix: add a `.noinit` SRAM canary written with the marker; a comeback boot trusts the flash marker only when the
     canary survived (a short VBUS loss keeps SRAM long enough? if not, bound the marker by a boot counter instead).
     Measure first whether SRAM survives the comeback's dark period on this board.
+    Done in 6fe5019: the canary (`rdintent::Canary` in a `.noinit` section, `link.ld`) is armed on every `/rd.rec` save
+    and a cold plain boot trusts the record only when it survived this reset and matches it (`boot_mode`'s `canary_ok`);
+    the decision table is host-tested both ways. Hardware must still measure whether .noinit SRAM survives the
+    comeback's ~165 ms dark on this board; if it does not, the bound falls back to a boot counter (open).
   - Validate: host tests of the decision table; hardware: (a) the CUKTECH 6 A planned re-attach still comes back with
     Rd from the first instruction, (b) unplug after a self-powered run, wait 10 s, plug into HID only: `k2_remote
     bootinfo` shows no Rd at any time (SWITCHES0 notes without PDWN bits).
