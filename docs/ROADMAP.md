@@ -460,14 +460,26 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     (1 or 3) where the host render reproduced it. Review 2026-11-09: portrait already rendered whole frames at the
     base, so a gap seen in portrait is a different cause and reopens this row. Follow-ups: a landscape pixel pass over
     the Tests step's Box3/Check squares; clamp the marker sub-fills to the clipped square (`kit.cpp` fill lambda).
-- **Home screen fonts stretched or squeezed in landscape** (2026-11-09, user report): on the Home page in a landscape
-  rotation the glyphs look stretched or squeezed compared with portrait.
-  - Fix: compare the glyph path in landscape and portrait (`set_rotation`, the LCD MADCTL / address window in
-    `src/drivers/lcd.cpp`, the font blit in the gfx layer, and Home's landscape layout in `src/ui/ui_home.cpp`). Suspects:
-    a width/height swap in the address window or the blit stride, or a landscape layout that scales a font (a non-integer
-    or non-square scale). Glyphs must render at the same pixel size in every rotation.
-  - Validate: a host test that renders the same string in rotation 0 and 1 and compares the glyph bitmaps (equal after
-    rotating by 90 degrees); hardware screenshots of Home in all four rotations, text the same size and shape.
+- **Home screen fonts stretched or squeezed in landscape** (2026-11-09, user report; fixed in 1ab56e3, hardware check
+  pending): on the Home page in a landscape rotation the glyphs looked stretched or squeezed compared with portrait.
+  Cause: in rotations 1/3 the ContentViewport maps the 224x240 logical content onto the 240x224 panel box with a
+  non-integer, non-square stretch (x 240/224, y 224/240); `home::paint` streamed the composed glyph rows through that
+  stretch, while `gfx_text` already escapes it (native_rect origin, native size, Pause). The LCD MADCTL / address window
+  in `src/drivers/lcd.cpp` is not at fault (no width/height swap).
+  - Fix (done in 1ab56e3, `src/ui/home_cell.cpp`): when the viewport is stretched, paint() splits — fills, sweep,
+    arrows and the warning keep the stretch; each Text item is re-streamed at its native pixel size (full glyph box
+    mapped once via `ContentViewport::native_rect`, clip offset added in native pixels so partial hero-digit repaints
+    stay on the same advance grid, streamed under `ContentViewport::Pause`, blended against the same text-less row).
+    Glyphs now render at the same pixel size in every rotation.
+  - Validate (host, done in 1ab56e3): `tests/test_ui_glyph_rotation.cpp` renders the same string ("20.04", hero font)
+    through the home-cell glyph path in all four rotations and compares the tight glyph bitmaps (equal in every
+    rotation, hence equal after rotating by 90 degrees), with `gfx_text` as a control, and compares the real Home
+    page's hero ink mask on the native-mapped box across rotations. Red on ff426f8 (home-cell bitmaps 165x33 vs 154x36
+    in rotations 1/3; hero mask 1837/6240 pixels off), green after. Hardware, pending: screenshots of Home in all
+    four rotations, text the same size and shape.
+  - Side effect: the fix shrank `home::paint`'s frame by 80 B, moving the worst main-loop path onto the ChargerTest
+    chain; ff6c833 adds the matching RESOLVE rule (ResultGrid's `result_row_fn` callback) to `tools/stack_depth.py`
+    so the stack gate resolves it again.
 - **Planned re-attach counts as a resume** (2026-11-09): the card's "resumed" counter is not masked after the planned
   reboot, so a clean 6 A run reads as resumed once.
   - Fix: the planned re-attach writes its intent marker (`/rd.rec`, `src/core/rd_comeback.cpp`); the run journal's
