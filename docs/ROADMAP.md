@@ -259,25 +259,33 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     during the unit detach, so the first list was already the split one. Next try: plug it after the first row passes.
   - `slow-rp-wake` partly seen: START held a steady Rd and the sleeping splitter (CC2 2990 mV open) answered 1680 ms
     later; a plain `pd-reread` attached in 179 ms (the port was awake). The Rd-seek path itself is not yet exercised.
-- **PPS collapses on the splitter when the RDO carries the EPR Mode Capable bit (`pps-epr-bit-collapse`, suspected)**
-  (2026-11-10, open, diagnosis needs one lab option; `runs/2026-11-10-splitter-pps/`, `runs/2026-11-10-op15-sniff/`).
-  Anker 2-way splitter behind the Baseus 140 W, list 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A, EPR 28 V 5 A.
+- **PPS collapses on the splitter at no load (`pps-off-at-no-load`, suspected)** (2026-11-10, open, needs one lab
+  option; `runs/2026-11-10-splitter-pps/`, `runs/2026-11-10-op15-sniff/`). Anker 2-way splitter behind the Baseus 140 W,
+  list 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A, EPR 28 V 5 A.
   - Evidence: the charger test (run 9, be3f589) passes every fixed row and EPR 28 V, and fails all five PPS rows "source
-    lost" (~1.8 V). On the wire: Request PDO 6 PPS 11 V 5 A -> Accept -> VBUS falls 4.81 -> 1.98 V in ~300 ms at 0 mA,
-    no PS_RDY, port restarts ~2.3 s later (`bb.txt`). Manual `pd request 6 --mv 7200 --ma 3000` and
-    `--mv 5500 --ma 2000` collapse the same way (`manual.txt`, `bb-manual.txt`). A OnePlus 15 on the same port (sniffed
-    inline) charges on PPS: 5.5 V 2 A, 7.5, 8.0, 8.2 V, then +40 mV steps up to 9.24 V 3.5 A, every step Accept + PS_RDY.
-    Its 5.5 V 2 A RDO and the K2's differ only in bit 22 (EPR Mode Capable): the K2 sets it for any source that
-    offers EPR (`plan_request`, `src/pd/pd_sink.cpp`, needed by the Baseus for EPR entry, 2026-11-04).
-  - Step 1 (diagnosis): a lab option `k2_remote.py pd request N --no-epr-bit` (firmware: a one-shot flag that clears
-    bit 22 in that RDO only). Hardware: the same splitter, `pd request 6 --mv 5500 --ma 2000 --confirm --no-epr-bit`:
-    holds at 5.5 V -> the bit is the trigger; collapses -> not the bit (next suspects: the OnePlus's VDM exchange
-    before its PPS Request, or a sink load).
-  - Step 2 (only if step 1 confirms): pattern handling in the charger test - a PPS/AVS row that gets Accept then a
-    VBUS collapse without PS_RDY is retried once without the EPR bit when the run is not in EPR mode; the result
-    records the quirk; fixed/EPR rows keep the bit. Catalogue entry in `docs/CHARGER_QUIRKS.md`.
-  - Validate: host tests (red first) for the RDO bit of the lab flag and the retry rule; hardware as above, then a
-    `ct_start.py --units pd` run whose PPS rows pass via the retry.
+    lost" (~1.8 V). On the wire: Request PDO 6 PPS -> Accept -> VBUS starts falling ~46 ms later, ~2 V within ~250 ms
+    at 0 mA, no PS_RDY, port restarts ~2.3 s later (`bb.txt`). A OnePlus 15 on the same port (sniffed inline) charges
+    on PPS: 5.5 V 2 A, 7.5, 8.0, 8.2 V, then +40 mV steps up to 9.24 V 3.5 A, every step Accept + PS_RDY.
+  - Ruled out on hardware with manual `pd request 6 --mv ... --ma ... --confirm` (all collapse the same way): PPS at
+    5.0 V 1 A (no voltage change), 7.2 V 3 A, 5.5 V 2 A (the OnePlus's exact first request); 5.5 V 2 A from a
+    throwaway build with bit 22 (EPR Mode Capable) cleared, so the RDO matched the OnePlus's bit for bit
+    (`bb-noepr.txt`); after a Discover_Identity ACK (Anker 0x291A, as the phone got); from a 5 V 3 A contract
+    (`identity-first.txt`, `pdo1-3a.txt`). Left: the phone draws current, the K2 draws 0 mA.
+  - Not testable today: every load on the K2's top port is a sink the inline guard sees (a 5-15 V PD device sends
+    Get_Source_Cap; an Xbox controller and a 390 mA USB light show sink-level CC), so `pd request` refuses "inline: a
+    live sink is attached" - correct behaviour. The PA8 lab load pulses only up to 200 ms and its guard refuses once
+    VBUS sags (`reason=vbus_low` at 3.38 V ~100 ms after the request).
+  - Step 1 (diagnosis): a lab-only `k2_remote.py pd request N ... --over-load` that lets the K2 request while a far
+    sink is attached, only when that sink has sent no PD message this attach (a passive load: Rd only, no Request,
+    no Get_Source_Cap); refused otherwise and never reachable from the UI or the charger test. Hardware: splitter ->
+    K2 -> the USB light (Rd on both CC, ~390 mA at 5 V), `pd-reread --pin 2 --no-run`, then
+    `pd request 6 --mv 5500 --ma 2000 --confirm --over-load`: holds -> no-load is the trigger; collapses -> look at
+    what else the phone does (its Request timing is ~1.5 s after PS_RDY, the K2's is longer).
+  - Step 2 (only if step 1 confirms): the charger test records a PPS row with the signature "Accept, VBUS falls at
+    ~0 mA, no PS_RDY" as a skip "needs load" (pattern `pps-off-at-no-load`), not a fail; catalogue entry in
+    `docs/CHARGER_QUIRKS.md` (behaviour, no VID:PID).
+  - Validate: host tests (red first) for the `--over-load` gate (refused after any far PD message, refused with no
+    far sink) and the signature rule; the hardware step above.
 - **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589): idle
   K2 on the splitter with nothing attached, VBUS 78 mV, "No source"; `pd-reread` without a pin answered "busy" and
   `pd attach 5000` did nothing; `pd-reread --pin 2 --no-run` woke it at once. 5926abb's slow-wake dwell only acts
