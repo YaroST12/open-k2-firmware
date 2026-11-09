@@ -332,9 +332,93 @@ void test_a_sink_downstream_scrubs_the_record() {
     CHECK_EQ(g.update({true, 2, true, false, kOff, true}) == Follower::Act::Hold, 1);
 }
 
+// The SRAM canary written with the marker (k2/core/rd_intent.hpp; the device keeps it in a .noinit section, link.ld): a canary
+// that survived this reset vouches for exactly one record, and a torn, garbage or cleared one vouches for nothing.
+void test_the_canary() {
+    Canary c{};                                   // power-on SRAM reads as nothing vouched
+    CHECK_EQ(canary_survived(c), false);
+    Canary garbage{kCanaryMagic, 0x12345678u, 0xDEADBEEFu};   // the magic alone is not a canary
+    CHECK_EQ(canary_survived(garbage), false);
+    Canary random{0xA5A5A5A5u, 0x0BAD0BADu, 0xFEEDFACEu};     // a random power-on pattern
+    CHECK_EQ(canary_survived(random), false);
+    arm_canary(c, kReattachB2);
+    CHECK_EQ(canary_survived(c), true);
+    CHECK_EQ(canary_matches(c, kReattachB2), true);
+    CHECK_EQ(canary_matches(c, kReattachS7), false);   // another record: not vouched for
+    CHECK_EQ(canary_matches(c, kSession2), false);
+    CHECK_EQ(canary_matches(c, kNone), false);
+    c.check ^= 1;                               // a torn write fails the check
+    CHECK_EQ(canary_survived(c), false);
+    CHECK_EQ(canary_matches(c, kReattachB2), false);
+    arm_canary(c, kSession2);
+    CHECK_EQ(canary_matches(c, kSession2), true);
+    arm_canary(c, kSession1);                   // re-arm moves the voucher to the new record
+    CHECK_EQ(canary_matches(c, kSession1), true);
+    CHECK_EQ(canary_matches(c, kSession2), false);
+    clear_canary(c);
+    CHECK_EQ(canary_survived(c), false);
+    CHECK_EQ(canary_matches(c, kSession1), false);
+}
+
+// The stale-record decision table, both ways. The canary argument is what the hardware measurement settles (does .noinit SRAM
+// survive the comeback's short dark on this board); the table itself is pure and is tested for both outcomes here.
+void test_a_cold_boot_trusts_the_record_only_with_a_live_canary() {
+    using bootmode::Mode;
+    constexpr Intent kRescan2{IntentKind::Rescan, 2, kOff};
+    // Canary survived (the comeback: the charger cut VBUS under the self-powered K2 for a short dark and re-applied it):
+    // the record still turns a cold plain boot into its sink mode.
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2, false, true)), int(Mode::PlusRdCc2));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kReattachB2, false, true)), int(Mode::PlusRdCc2));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession1, false, true)), int(Mode::OkRdCc1));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kRescan2, false, true)), int(Mode::PlusRdCc2));
+    // Canary gone (a bare unplug left the marker and the K2 sat dead until SRAM decayed, or a power-on's random pattern):
+    // the record is stale, a plain boot stays plain - no Rd for whatever is on the port now.
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2, false, false)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kReattachB2, false, false)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession1, false, false)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kRescan2, false, false)), int(Mode::Plain));
+    // The other gates are unchanged, whatever the canary says: a host-powered boot and a warm boot ignore the record.
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2, true, true)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2, true, false)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, true, kSession2, false, true)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, true, kSession2, false, false)), int(Mode::Plain));
+    // A key held decides, and no record is no comeback, either way.
+    CHECK_EQ(int(boot_mode(Mode::PlusRdCc2, false, kSession2, false, false)), int(Mode::PlusRdCc2));
+    CHECK_EQ(int(boot_mode(Mode::OkRdCc1, false, kReattachB2, false, false)), int(Mode::OkRdCc1));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kNone, false, true)), int(Mode::Plain));
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kNone, false, false)), int(Mode::Plain));
+    // Without the canary argument the decision is the survived way, so the older tests keep their meaning.
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, kSession2)), int(Mode::PlusRdCc2));
+}
+
+// The marker and its canary across a simulated power loss: save arms, a short dark keeps the voucher (the comeback trusts the
+// record), a long dark loses it (the record is stale and the boot stays plain), a scrub clears both.
+void test_the_canary_follows_the_volume_across_a_power_loss() {
+    using bootmode::Mode;
+    Vol v;
+    Canary c{};
+    CHECK_EQ(save(v.f, kSession2), true);
+    arm_canary(c, kSession2);
+    // Short dark (the comeback, SRAM alive): the record on the volume is vouched for.
+    CHECK_EQ(canary_matches(c, load(v.f)), true);
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, load(v.f), false, canary_matches(c, load(v.f)))), int(Mode::PlusRdCc2));
+    // Long dark (a bare unplug, then a wait): SRAM decayed, modelled by a garbage canary.
+    const Canary dead{0x11111111u, 0x22222222u, 0x33333333u};
+    CHECK_EQ(canary_matches(dead, load(v.f)), false);
+    CHECK_EQ(int(boot_mode(Mode::Plain, false, load(v.f), false, canary_matches(dead, load(v.f)))), int(Mode::Plain));
+    // The follower scrubs the record on the plain boot: the canary goes with it.
+    CHECK_EQ(save(v.f, kNone), true);
+    clear_canary(c);
+    CHECK_EQ(canary_survived(c), false);
+    CHECK_EQ(load(v.f) == kNone, 1);
+}
+
 int main() {
     test_a_host_powered_boot_ignores_the_record();
     test_a_sink_downstream_scrubs_the_record();
+    test_the_canary();
+    test_a_cold_boot_trusts_the_record_only_with_a_live_canary();
+    test_the_canary_follows_the_volume_across_a_power_loss();
     test_record_format();
     test_the_rescan_kind();
     test_damage_reads_as_none();
