@@ -521,10 +521,14 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   6 A hunt rows by its own rule when it rebuilds the steps on a resume: a third copy of the order the grid fix removed.
   - Fix: rebuild from the planner's step list (the same structure the grid uses since 98e2f39).
   - Validate: host test resuming a journal mid-PD with Mi 6A rows: resumed step order equals a fresh plan's order.
-- **A PPS row shows a probe after all its APDOs** (2026-11-09, residual of the grid fix): a PPS row holds the chips of
-  every APDO, so a Mi 6A probe the planner runs between APDO 1 and APDO 2 reads after the whole PPS row.
-  - Fix: one grid row per APDO (or a probe chip inside the PPS row at its place).
-  - Validate: host grid test with two APDOs and a probe between them: the grid order equals the executed order.
+- **A PPS row shows a probe after all its APDOs** (2026-11-09, residual of the grid fix, fixed in dfc5918, hardware check
+  pending): a PPS row held the chips of every APDO, so a Mi 6A probe the planner runs between APDO 1 and APDO 2 read after the
+  whole PPS row. Now one grid row per APDO (`Row::pos`), so the probe row stands between the APDO rows where it executes.
+  - Validate: host grid test with two APDOs and a probe between them: the grid order equals the executed order
+    (`tests/test_result_layout.cpp` `test_probe_between_two_apdos_stands_between_their_rows`, plus the per-APDO keys in the
+    `grid_follows` tests of `tests/test_charger_test.cpp`); `make gate`. Hardware: on a two-APDO PPS source with a Mi 6 A
+    probe between the APDOs (e.g. the CUKTECH 120 W), the Running/Results grid shows the "Mi 6A" row between the two "PPS"
+    rows, in execution order.
 
 ## Specified work (not started)
 
