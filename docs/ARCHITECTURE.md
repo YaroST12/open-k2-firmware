@@ -107,7 +107,7 @@ The part of such an old volume that lies in 0x080E0000..0x080E3000 is not provab
 disjoint and that the pre-existing device storage stays out of every writable range (`tests/test_flash_map.cpp`).
 File layout of the littlefs volume: section "Flash map" below.
 
-Read-only access to the pre-existing device storage: `tools/k2_flasher.py backup --full` (bootloader read) and the app
+Read-only access to the pre-existing device storage: `tools/k2_flasher.py backup` (bootloader read, full by default) and the app
 command FLASH_DUMP 0x34 (`tools/k2_remote.py flash-dump DIR`, 48 bytes per request); first-contact
 procedure in `README.md`, section "Recovery".
 

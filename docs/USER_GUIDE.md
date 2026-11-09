@@ -22,13 +22,17 @@ Open-K2 is a free replacement application for it. It is **passive by default**: 
 You need a Chrome or Edge browser and a USB cable.
 
 1. Open <https://yarost12.github.io/open-k2-firmware/>.
-2. Press **Back up the K2** first, and keep the downloaded `K2_RECOVERY_<version>.k2` file somewhere safe. It lets you put the K2 back the way it was.
-3. Press **Connect** and pick the K2 in the browser dialog.
-4. Press **Flash release vX.Y**. The page checks the image's SHA-256, writes the firmware, verifies it and restarts the K2.
+2. Press **Connect** and pick the K2 in the browser dialog.
+3. Leave **Back up this K2 first (full backup)** ticked. It is ticked every time the page loads.
+4. Press **Flash release vX.Y**. The page first makes a full backup and downloads it as `K2_BACKUP_<version>_<UTC time>.zip`, then checks the image's SHA-256, writes the firmware, verifies it and restarts the K2. Keep the ZIP somewhere safe: it lets you put the K2 back the way it was.
+
+If the K2 is running the app when you press Flash, the page sends it into the bootloader first; press **Connect** again when it reappears as `WITRN.K2`, then press Flash again. The backup runs at that point.
+
+If you untick the box, the page warns you: the flash erases the firmware that is on the K2 now, and without a backup it cannot be brought back.
 
 If the K2 is not recognised (it runs nothing useful, or USB is off), hold **MINUS** while plugging in the USB cable. That always puts it in the bootloader, ready to flash.
 
-Other ways: pick a `.k2` file with the page's file picker, or use the Python flasher: `python3 tools/k2_flasher.py flash open_k2.k2 --auto-dfu`. Details: [Backup, restore and recovery](#backup-restore-and-recovery).
+Other ways: pick a `.k2` file with the page's file picker, or use the Python flasher: `python3 tools/k2_flasher.py flash open_k2.k2 --auto-dfu` (it also makes the full backup first, into `runs/k2-backup-<UTC time>`; `--backup-dir <folder>` chooses the place, `--no-backup` skips it). Details: [Backup, restore and recovery](#backup-restore-and-recovery).
 
 ## Turn USB on (once)
 
@@ -531,16 +535,20 @@ The browser dashboard `tools/web/k2.html` (run `make web`, open http://localhost
 
 ## Backup, restore and recovery
 
-**Back up before your first flash.**
+**Every flash starts with a full backup.** The backup reads the whole 1 MB (0x08000000..0x08100000) twice and compares.
 
-- In the browser: <https://yarost12.github.io/open-k2-firmware/> > **Back up the K2**. The page reads the whole app range twice and compares. Downloads: `K2_RECOVERY_<version>.k2` (the file to keep), `flash.bin`, `bootloader.bin`, `app.bin`, `native_nvram.bin`, `manifest.json`. To restore, pick the recovery file as the firmware, or press **Restore this backup** right after the backup.
-- From Python: `python3 tools/k2_flasher.py backup --full <folder>`.
+- In the browser: <https://yarost12.github.io/open-k2-firmware/>. The box **Back up this K2 first (full backup)** is ticked on every page load; **Flash** then backs up, offers the ZIP and flashes in one click. **Back up the K2** makes a backup without flashing.
+- The download is one ZIP, `K2_BACKUP_<version>_<UTC time>.zip`, with six files: `K2_RECOVERY_<version>.k2` (the file to keep), `flash.bin`, `app.bin`, `bootloader.bin`, `native_nvram.bin`, `manifest.json`. They are also offered one by one under "Individual files".
+- To restore, pick the ZIP (or the `K2_RECOVERY_<version>.k2` in it) as the firmware file, or press **Restore this backup** right after the backup.
+- From Python: `python3 tools/k2_flasher.py backup <folder>` is full and writes the ZIP next to the folder. `--app-only` reads the application area only; `--full` is accepted and changes nothing. `python3 tools/k2_flasher.py flash FILE` makes the full backup first into `runs/k2-backup-<UTC time>` (`--backup-dir <folder>` to choose, `--no-backup` to skip). A failed backup stops the flash before anything is erased.
 
 What is saved and what is restored:
 
 - The **recovery image** holds the firmware and stops before the volume this firmware uses for its own data (starts at 0x080B3000). Restoring puts the firmware back and leaves that data alone.
 - The device's **native data area** (settings and e-marker records, 0x080E0000) is saved in `native_nvram.bin` but **never restored** by the page.
-- Tick "also try the native storage" to read above the normal range (read-only, best effort).
+- `manifest.json` has `backup_kind` (`full`, `app-only` or `partial`) and the SHA-256 of `native_nvram.bin`.
+- If the bootloader refuses reads above 0x080E3000, the backup is marked **partial**: everything it served was read twice and compared, and the page and the command line say that the device-storage part is missing. The flash still goes on, because the flashers never write above the application area.
+- The advanced option "application area only" (Python: `--app-only`) reads 0x08000000..0x080E3000 and says so in the result.
 
 **The K2 shows a WRONG APP or does not boot, or stays in the bootloader:**
 

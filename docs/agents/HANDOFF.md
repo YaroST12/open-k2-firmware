@@ -33,7 +33,7 @@ old signature. Before flashing anything onto a new unit:
 
 1. Put the K2 in DFU (hold MINUS while plugging in USB), then `python3 tools/k2_flasher.py probe` must report a
    confirmed K2.
-2. `python3 tools/k2_flasher.py backup --full <DIR outside the repo>`. Exit 0 = the whole 1 MB was read twice and
+2. `python3 tools/k2_flasher.py backup <DIR outside the repo>` (full by default; `flash` also backs up first unless `--no-backup`). Exit 0 = the whole 1 MB was read twice and
    compared. Exit 3 = the bootloader refused above some address (`manifest.json`: `last_readable_address`,
    `refused_at`): the dump is partial.
 3. If partial: `python3 tools/k2_flasher.py flash build/open_k2.k2` (this firmware never writes that area, so it

@@ -92,6 +92,8 @@ Manual stays fixed. Orientation choices last for the current boot.
    python3 tools/k2_remote.py dfu --confirm                         # only enter DFU, flash later
    make smoke                                                       # gate, flash, exercise the device, write build/smoke/<hash>/
    ```
+   Every `flash` first makes a full backup into `runs/k2-backup-<UTC time>` (`--backup-dir DIR` to choose,
+   `--no-backup` to skip; `make flash FLASH_ARGS=--no-backup` passes it on). `make smoke` flashes with `--no-backup`.
 
 The K2 is a shared device: do not run ad-hoc flash loops, and nothing that changes VBUS runs unattended.
 
@@ -139,7 +141,7 @@ Click **Connect** and pick the K2. On Linux the hidraw node needs the udev rule 
 
 `webhid-flasher/index.html` is a standalone firmware flasher over WebHID — no Python, no DFU button dance: pick a `.k2`/`.bin` file, press **Flash firmware**. If the app is running it is sent into the bootloader via `DFU_ENTER` first (press **Connect** again once the K2 re-enumerates as `WITRN.K2`); a K2 already in DFU (MINUS held while plugging in) is flashed directly. Same flow as `k2_flasher.py flash`: erase, write, read-back verify, commit marker, reboot. The page refuses any image whose erase span would reach the device-storage area (nothing above 0x080E0000 is ever erased or written); an image that reaches the littlefs volume (0x080B3000 and up) is flashed with a note, and the K2 formats a new volume at the next boot. A flash that stops half way leaves the commit marker clear, so the K2 stays in the bootloader and the next attempt starts over.
 
-**Backup and restore.** **Back up the K2** does what `k2_flasher.py backup` does (the K2 goes into the bootloader the same way as for a flash): it reads the whole app range twice and compares the passes, then offers downloads. `K2_RECOVERY_<version>.k2` is the file to keep: to restore, open the page later and pick it as the firmware file (or press **Restore this backup** right after the backup). `flash.bin`, `bootloader.bin`, `app.bin`, `native_nvram.bin` and `manifest.json` are for inspection. The recovery image stops before the littlefs volume (0x080B3000), so restoring puts the firmware back and leaves the volume untouched. The native data area (0x080E0000, settings and e-marker records) is saved in `native_nvram.bin` but is never restored by the page. With the "also try the native storage above 0x080E3000" box ticked the page also reads above the app range (read-only, best effort) and keeps whatever prefix the bootloader allows.
+**Backup and restore.** The backup is full by default: the whole 1 MB (0x08000000..0x08100000), read twice and compared. The box **Back up this K2 first (full backup)** is ticked every time the page loads; with it ticked, **Flash** (file or release) makes the backup first, downloads it, then flashes, in one click. Unticking it shows a warning: the flash erases the firmware that is on the K2 now, and without a backup it cannot be brought back. **Back up the K2** makes a backup without flashing (the K2 goes into the bootloader the same way as for a flash). The download is one ZIP, `K2_BACKUP_<version>_<UTC time>.zip`, with `K2_RECOVERY_<version>.k2` (the file to keep), `flash.bin`, `app.bin`, `bootloader.bin`, `native_nvram.bin` and `manifest.json`; the same files are also offered one by one under "Individual files". To restore, pick the ZIP (or the `.k2` inside it) as the firmware file, or press **Restore this backup** right after the backup. The recovery image stops before the littlefs volume (0x080B3000), so restoring puts the firmware back and leaves the volume untouched. The native data area (0x080E0000, settings and e-marker records) is saved in `native_nvram.bin` but is never restored by the page. `manifest.json` has `backup_kind` (`full`, `app-only` or `partial`) and the SHA-256 of `native_nvram.bin`. If the bootloader refuses reads above 0x080E3000 the backup is marked `partial` and the page says that the device-storage part is missing. The advanced option "application area only" reads 0x08000000..0x080E3000 and says so in the result. The Python flasher does the same: `k2_flasher.py backup <folder>` is full and writes the ZIP next to the folder (`--app-only` for the application area only; `--full` is accepted and changes nothing), and `k2_flasher.py flash` makes a full backup into `runs/k2-backup-<UTC time>` (or `--backup-dir`) first unless `--no-backup` is given.
 
 ```bash
 make webhid   # stages the page with tools/web/k2proto.js under build/webhid/ and serves it on http://localhost:8765/
@@ -177,7 +179,7 @@ erasable page there is an old raw store of ours, proven by its own signature), b
 can always be restored:
 
 1. Put the K2 in DFU (hold MINUS while plugging in USB), then `python3 tools/k2_flasher.py probe`.
-2. `python3 tools/k2_flasher.py backup --full /path/outside/the/repo/k2-dump`. It reads
+2. `python3 tools/k2_flasher.py backup /path/outside/the/repo/k2-dump` (full by default). It reads
    0x08000000..0x08100000 twice and compares. Exit 3 means the bootloader refused above some address; the
    readable part is saved and `manifest.json` names `last_readable_address`.
 3. Only if the dump is partial: `python3 tools/k2_flasher.py flash build/open_k2.k2` (safe: no wipe, no
