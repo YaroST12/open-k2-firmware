@@ -131,6 +131,36 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Hardware check: the same splitter setup, `python3 tools/ct_start.py --units pd --wait 540` (release any held PD
     contract first with `k2_remote pd release`, or START refuses with "PD hold: release it"). Expect 5/9/15 V pass and
     20 V "withdrawn by source".
+  - Review of `k2/reannounce-replan` (1ff23a4, 2026-11-09): not merged. Gate passes; no unsafe wire behaviour in the
+    branch itself. Required before merge (rebase onto `public` first):
+    1. Only rows of the running unit (`unit_of(s) == unit_`) may be withdrawn or counted as placeable; today a PPS change
+       during the Pd unit withdraws the PdLow rows for good (revival only looks at the running unit).
+    2. Count `rebalanced`, bump `revision_` and call `plan_changed()` only when a row was withdrawn, came back or moved
+       slot, never on a re-announce that changes nothing for the plan (cable discovery, Xiaomi post-auth 5 -> 6 A,
+       pre-auth short list must leave the count at 0).
+    3. Fix item 6 for PPS/AVS: a programmable row is still offered when the type matches, its target voltage is inside
+       the new range and its current fits the new limit.
+    4. **User decision 2026-11-09: a fixed offer whose current drops (15 V 3 A -> 15 V 1.5 A) keeps its row**: it runs
+       at the new, lower current word and the card notes the reduced current. Only a voltage that is no longer offered
+       is Withdrawn.
+    5. Tests in their own commit, shown failing first; a test where a revived row actually runs and passes; `==` for the
+       plan_changed count; a "between rows" case with a tick in Releasing/Baseline.
+    Nits: a row whose offer only moved slot is re-queued, not Withdrawn; `rebalanced` belongs in the journal (survives a
+    comeback) and the shared card; `report_card.hpp:75` says 44 values (43); commit body logdb id 409 not 401; subject
+    names a pre-rebase hash; `&steps_[index_]` when `index_ == count_`.
+- **The sink re-requests a held contract by position on a re-announce** (2026-11-09, review finding, not seen on the
+  wire yet). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requests `want_.pos`, and
+  `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
+  K2 holds 15 V at PDO 3 makes the sink ask 20 V by itself: a legal Request (advertised) but a voltage nobody chose,
+  with the cable limit unchecked. Also a Source_Capabilities that arrives in `Transition` while held, with no release
+  pending, gets no Request (the source then Hard Resets after tSenderResponse).
+  - Fix: on a re-announce while held, look the held level up by voltage (fixed) or range (programmable), not position:
+    found -> Request it at its new slot and current word; not found -> Request PDO 1 (5 V) and report the hold lost to
+    the owner (charger test: Withdrawn per the re-plan row above). In `Transition`, answer by the PD rule (the source
+    restarts negotiation: treat it as a fresh list).
+  - Validate: host tests in `tests/test_pd_sink*.cpp` (red first): 15 V held at PDO 3, re-announce 5/9/20 V -> Request
+    PDO 1, never 20 V; re-announce 5/15/20 V -> Request 15 V at slot 2; re-announce in Transition -> a Request within
+    tSenderResponse; `make gate`. Hardware: the splitter re-plan run above shows no unrequested level in the black box.
 - **Passive pick on the wrong CC line** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W). Fixed in d615f3e,
   partly verified: on hardware the Rd seek moved CC2 -> CC1 -> CC2 -> CC1 and ended cleanly with no source attached,
   and the re-read on the splitter got its 4 PDOs; the exact case (passive CC2 pick, Rp only on CC1) has not been caught
