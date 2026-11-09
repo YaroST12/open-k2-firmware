@@ -322,6 +322,39 @@ static void test_page() {
     CHECK_EQ(int(ui.menu()), int(Menu::QrTest));
 }
 
+// A full-panel code covers the button strip, so the page hides it (PageIf::hides_strip): a key press must not paint the strip's
+// pressed flash over the code, in any rotation, and the code is centred whatever the version (v18 sat in the top-left corner
+// once).
+static void test_strip_stays_hidden_and_code_centred() {
+    for (std::uint8_t rot = 0; rot < 4; rot++) {
+        Ui &ui = fresh_ui();
+        ui.set_rotation(rot, g_stub.ms);
+        ui.tick(1000);
+        ui.context().qrtest = {18, 2, 4};
+        CHECK(ui.push_menu(Menu::QrTest, 1100));
+        const QrTestPage &pg = ui.qrtest_page();
+        CHECK_EQ(pg.modules(), 89);
+        const qrview::Plan p = qrview::plan_in(qrview::Area{}, 89, 0, 2, 4, 2);
+        CHECK_EQ(p.box, 194);
+        CHECK_EQ(p.x0, 23); CHECK_EQ(p.y0, 23);                      // (240 - 194) / 2: centred, not top-left
+        static std::uint16_t before[240 * 240];
+        std::memcpy(before, g_panel, sizeof before);
+        std::uint32_t t = 1200;
+        for (Button b : {Button::Ok, Button::Plus, Button::Minus, Button::Back}) {
+            ui.set_pressed(b, true, t);
+            ui.set_pressed(b, false, t + 200);
+            t += 400;
+        }
+        ui.tick(t);
+        CHECK(std::memcmp(before, g_panel, sizeof before) == 0);     // not one pixel moved: no strip flash over the code
+        // The code's own margin is white on all four edges of the box: the whole panel outside the symbol is white.
+        CHECK_EQ(g_panel[0], 0xFFFF); CHECK_EQ(g_panel[239], 0xFFFF);
+        CHECK_EQ(g_panel[239 * 240], 0xFFFF); CHECK_EQ(g_panel[239 * 240 + 239], 0xFFFF);
+        ui.on_button(Button::Back, ButtonEvent::Short, t + 100);
+        CHECK_EQ(int(ui.menu()), int(Menu::Count));
+    }
+}
+
 int main() {
     test_capacity_table();
     test_fit_row();
@@ -330,5 +363,6 @@ int main() {
     test_build_link();
     test_encode_at_version();
     test_page();
+    test_strip_stays_hidden_and_code_centred();
     return test_report("test_ui_qrtest");
 }

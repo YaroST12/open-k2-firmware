@@ -173,6 +173,9 @@ public:
     virtual void leave() {}
     // The page was just pushed as a submenu (Ui::push_menu), before its first draw. Default: nothing.
     virtual void enter() {}
+    // The page draws over the whole panel, the button strip's edge included (a full-screen QR code): the Ui then leaves the
+    // strip unpainted, key-press flashes too, so nothing lands on the code. Default: the strip is shown.
+    virtual bool hides_strip() const { return false; }
 protected:
     ~PageIf() = default;
 };
@@ -968,6 +971,7 @@ public:
     PanelLabels labels() const override;
     void invalidate() override { painted_ = false; }
     void enter() override;
+    bool hides_strip() const override { return true; }    // the code covers the whole panel
 
     int version() const { return version_; }
     int px() const { return px_; }

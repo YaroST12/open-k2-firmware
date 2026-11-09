@@ -310,6 +310,7 @@ void Ui::draw_slot(unsigned slot) {
     const SlotLabel lab = current().labels().b[static_cast<int>(action)];
     const bool down = pressed_[static_cast<int>(b)];
     slot_sig_[slot] = slot_sig(slot);
+    if (current().hides_strip()) return;   // a full-panel page (the QR code) owns the strip's pixels
     const uint16_t bg = down ? kPanelHi : kPanelBg;
     const uint16_t fg = down ? kBg : lab.dim ? kDim : kText;
     const Rect &r = layout_.slot[slot];
