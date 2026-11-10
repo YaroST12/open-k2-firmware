@@ -1504,6 +1504,58 @@ static void test_home_stale() {
     g_stub.pm = {};
 }
 
+// Detail is a live instrument: with Home frozen on its LAST state (unplugged after a live reading), Detail still shows the
+// live metrics (no grey, no LAST pill) and follows the analog lines as they move. Only Home keeps the frozen snapshot.
+static void test_detail_is_live_while_home_holds_last() {
+    Ui &ui = fresh_ui();
+    g_stub.pm = {};
+    g_stub.pm_online = true;
+    g_stub.pm.vbus_mv = 20010; g_stub.pm.current_ma = 2990; g_stub.pm.power_mw = 59830;
+    g_stub.pm.flow = power::Flow::Forward;
+    adc::Reading a;
+    a.cc1_mv = 1620; a.cc2_mv = 20; a.dp_mv = 600; a.dm_mv = 580;
+    g_stub.adc = a;
+    ui.tick(80000);
+    ui.tick(80200);
+    g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0; g_stub.pm.flow = power::Flow::Idle;
+    a.cc1_mv = 2000; a.cc2_mv = 1100; a.dp_mv = 120; a.dm_mv = 90;      // the lines as they read once unplugged
+    g_stub.adc = a;
+    ui.tick(82000);
+    ui.tick(82200);
+    CHECK_EQ(ui.context().stale() ? 1 : 0, 1);                          // Home would be on LAST here
+    ui.goto_page(uint8_t(Page::Detail), 82300);
+    ui.tick(82400);
+    ui.tick(82600);
+    auto count = [&](int x0, int y0, int x1, int y1, uint16_t col) {
+        int n = 0;
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x++) n += g_panel[y * 240 + x] == col;
+        return n;
+    };
+    auto hash = [&](int x0, int y0, int x1, int y1) {
+        uint32_t h = 2166136261u;
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x++) h = (h ^ g_panel[y * 240 + x]) * 16777619u;
+        return h;
+    };
+    CHECK_EQ(count(0, 0, 224, 240, kStale), 0);                         // no frozen grey, no LAST pill
+    const uint32_t cc_before = hash(36, 96, 109, 121), dm_before = hash(148, 96, 221, 121);
+    a.cc1_mv = 3300; a.cc2_mv = 0; a.dp_mv = 600; a.dm_mv = 600;        // a charger's Rp appears: Detail follows at once
+    g_stub.adc = a;
+    ui.tick(83000);
+    ui.tick(83200);
+    CHECK_EQ(hash(36, 96, 109, 121) != cc_before ? 1 : 0, 1);           // CC1/CC2 cell moved
+    CHECK_EQ(hash(148, 96, 221, 121) != dm_before ? 1 : 0, 1);          // D+/D- cell moved
+    CHECK_EQ(count(0, 0, 224, 240, kStale), 0);
+    // Home keeps its snapshot: back on Home the LAST pill is still there.
+    ui.goto_page(uint8_t(Page::Home), 83300);
+    ui.tick(83400);
+    ui.tick(83600);
+    CHECK_EQ(count(150, 1, 222, 18, kStale) > 100 ? 1 : 0, 1);
+    g_stub.pm = {};
+    g_stub.adc.reset();
+}
+
 static void test_usb_link_toggles() {
     Ui &ui = fresh_ui();
     g_stub = StubState();
@@ -1579,6 +1631,7 @@ int main() {
     test_home_flow_arrow();
     test_home_animation();
     test_home_stale();
+    test_detail_is_live_while_home_holds_last();
     test_fc_pill_text();
     test_home_gauges_and_footer();
     test_cable_tab_save_and_list();
