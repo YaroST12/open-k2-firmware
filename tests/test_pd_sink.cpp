@@ -952,6 +952,41 @@ int main() {
         CHECK_EQ(int(r.sink.status().state) != int(SinkState::Ready) ? 1 : 0, 1);  // aborted (may be past it)
     }
     {
+        // Item F: a big no-load PPS down-step (20 V contract to PPS 5 V) drains at ~2 V/s and needs ~7 s to reach the 5.6 V
+        // ceiling. The descent window scales with the step, so the guard must not abort this honest fall.
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();   // 20 V
+        r.run(kSettleMs + 100);
+        CHECK_EQ(int(r.sink.trigger({6, 5000, 3000}, r.now)), int(Err::Ok));
+        r.pump(); r.accept_and_ready();
+        const std::size_t sent = r.sent.size();
+        for (int i = 0; i < 100; i++) {   // 200 mV per 100 ms from 19.8 V, bottoming out at the target
+            const int mv = 19800 - 200 * i;
+            r.sink.on_vbus(mv > 5000 ? mv : 5000, r.now); r.pump(); r.run(100);
+            if (r.sink.status().state == SinkState::Transition || r.sink.status().state == SinkState::Requesting) r.accept_and_ready();   // keep-alive
+        }
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().held), 1);
+        CHECK_EQ(r.sent.size() - sent <= 2 ? 1 : 0, 1);   // keep-alive re-requests only, no abort to 5 V
+    }
+    {
+        // The window is bounded: the same step falling at 0.4 V/s (36 s to the ceiling) still aborts, and so does a stall.
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        r.run(kSettleMs + 100);
+        r.sink.trigger({6, 5000, 3000}, r.now); r.pump(); r.accept_and_ready();
+        for (int i = 0; i < 400; i++) { r.sink.on_vbus(19800 - 40 * i, r.now); r.pump(); r.run(100); }
+        CHECK_EQ(int(r.sink.status().held), 0);
+    }
+    {
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        r.run(kSettleMs + 100);
+        r.sink.trigger({6, 5000, 3000}, r.now); r.pump(); r.accept_and_ready();
+        for (int i = 0; i < 100; i++) { r.sink.on_vbus(i < 10 ? 19800 - 200 * i : 17800, r.now); r.pump(); r.run(100); }
+        CHECK_EQ(int(r.sink.status().held), 0);   // fell for a second, then stalled at 17.8 V
+    }
+    {
         Rig r;  // abort that never settles above the cap: hard reset
         r.sink.trigger({3, 0, 0}, r.now); r.pump(); r.accept_and_ready();
         r.sink.on_vbus(40000, r.now); r.pump();

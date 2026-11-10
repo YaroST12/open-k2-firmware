@@ -138,7 +138,18 @@ inline constexpr std::uint32_t kSettleMs = 1500;        // after PS_RDY before t
 // Descent window: after a large step-down the unloaded source's bulk caps discharge slowly, so VBUS can
 // still be above target + 10 % when kSettleMs ends. While the samples keep falling (>= 50 mV progress
 // every kStallMs) the guard waits, for at most kDescentMs more; a rise > 150 mV or a stall aborts.
+// For a programmable (PPS/AVS) step-down the window grows with the step: kDescentPerVoltMs per volt dropped, capped at
+// kDescentMaxMs (an unloaded 20 V -> 5 V PPS step drains at ~2 V/s and needs ~7 s). kSettleMs + kDescentMaxMs stays under the
+// runner's 12 s row timeout. 2000 ms per volt = a fall of 0.5 V/s (the slowest measured, Baseus 35 W). See descent_window_ms().
 inline constexpr std::uint32_t kDescentMs = 3000;
+inline constexpr std::uint32_t kDescentPerVoltMs = 2000;
+inline constexpr std::uint32_t kDescentMaxMs = 10000;
+// The descent window for a step-down of `drop_mv` (0 or negative: the base window).
+constexpr std::uint32_t descent_window_ms(std::int32_t drop_mv, bool programmable) {
+    if (!programmable || drop_mv <= 0) return kDescentMs;
+    const std::uint32_t scaled = std::uint32_t(drop_mv) * kDescentPerVoltMs / 1000;
+    return scaled < kDescentMs ? kDescentMs : scaled > kDescentMaxMs ? kDescentMaxMs : scaled;
+}
 inline constexpr std::uint32_t kStallMs = 600;
 inline constexpr std::int32_t kFallStepMv = 50, kRiseMv = 150;
 // An unloaded programmable source cannot pull its output down by itself: the Baseus 35 W stops at 3.73 V after
@@ -359,6 +370,7 @@ private:
     Plan plan_;                 // the request in flight / the contract
     std::uint8_t rev_ = 2;
     std::uint32_t deadline_ = 0, next_keepalive_ = 0, ready_at_ = 0, retry_at_ = 0, abort_at_ = 0;
+    std::uint32_t descent_ms_ = kDescentMs;   // the hold guard's descent window for the contract set at ready_at_
     std::uint8_t wait_retries_ = 0, tx_retries_ = 0;
     bool retry_pending_ = false;
     bool epr_get_sent_ = false;

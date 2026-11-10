@@ -667,6 +667,7 @@ void Sink::release(std::uint32_t now) {
 }
 
 void Sink::after_ps_rdy(std::uint32_t now) {
+    const std::int32_t drop_mv = contract_ ? std::int32_t(st_.mv) - std::int32_t(plan_.mv) : 0;   // the step down, for the descent window
     contract_ = true;
     st_.pos = plan_.pos;
     st_.mv = plan_.mv;
@@ -683,7 +684,10 @@ void Sink::after_ps_rdy(std::uint32_t now) {
         discover_svids_pending_ = true;
         discover_svids_at_ = now + kProactiveDiscoverMs;
     }
-    if (fresh_) { ready_at_ = now; fresh_ = false; tracking_ = false; }
+    if (fresh_) {
+        ready_at_ = now; fresh_ = false; tracking_ = false;
+        descent_ms_ = descent_window_ms(drop_mv, plan_.type == PdoType::Pps || plan_.type == PdoType::Avs);
+    }
     next_keepalive_ = now + kPpsKeepAliveMs;
     if (st_.epr_mode) next_epr_ka_ = now + kEprKeepAliveMs;
     settle_release(now);   // a release that waited behind this Request goes out now (not for the abort's own PS_RDY)
@@ -967,7 +971,7 @@ void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
     const std::int32_t limit = plan_.type == PdoType::Pps || plan_.type == PdoType::Avs ?
         programmable_ceiling_mv(plan_.mv) : std::int32_t(plan_.mv) + std::int32_t(plan_.mv) / 10;
     if (now - ready_at_ < kSettleMs || mv <= limit) return;
-    const bool falling = !rising && now - ref_at_ <= kStallMs && now - ready_at_ < kSettleMs + kDescentMs;
+    const bool falling = !rising && now - ref_at_ <= kStallMs && now - ready_at_ < kSettleMs + descent_ms_;
     if (!falling) begin_abort(SinkResult::Aborted, now);
 }
 
