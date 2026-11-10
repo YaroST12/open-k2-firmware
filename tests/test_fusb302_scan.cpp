@@ -27,6 +27,7 @@ using namespace k2;
 namespace {
 
 std::vector<std::string> g_log;        // ordered: GPIO and chip register events
+std::vector<std::string> g_usb_fmt;    // the raw K2LOG format strings (usb::log_fmt), for fixed-text-in-format checks
 std::uint32_t g_ms = 1000;
 bool g_pin[3];                          // PC13, PC14, PC15
 std::uint8_t g_reg[256];
@@ -195,6 +196,7 @@ void log_fmt(const char* fmt, ...) {
     std::vsnprintf(b, sizeof b, fmt, ap);
     va_end(ap);
     g_usb.emplace_back(b);
+    g_usb_fmt.emplace_back(fmt);
 }
 }  // namespace usb
 
@@ -212,7 +214,7 @@ void write(std::uint16_t raw) { g_mark = raw; log("MARK " + hex(raw >> 8) + hex(
 namespace {
 
 void reset_world() {
-    g_log.clear(); g_usb.clear(); g_rx.clear(); g_txfifo.clear(); g_ia_script.clear(); g_auto_txsent = false;
+    g_log.clear(); g_usb.clear(); g_usb_fmt.clear(); g_rx.clear(); g_txfifo.clear(); g_ia_script.clear(); g_auto_txsent = false;
     for (auto& r : g_reg) r = 0;
     g_pin[0] = false; g_pin[1] = true; g_pin[2] = true;      // idle: PC13 low, PC14/PC15 high
     g_vconn_since = 0;
@@ -228,6 +230,12 @@ void reset_world() {
 
 bool usb_has(const char* needle) {
     for (const auto& s : g_usb) if (s.find(needle) != std::string::npos) return true;
+    return false;
+}
+
+// Row B item 6: a K2LOG format string carries its fixed text itself (a %s is cut at 12 bytes on the device).
+bool usb_fmt_has(const char* needle) {
+    for (const auto& s : g_usb_fmt) if (s == needle) return true;
     return false;
 }
 
@@ -1111,6 +1119,7 @@ AttachState reread_attach_to_ready(bool fresh_world = true) {
 void check_back_to_boot(const AttachState& boot) {
     CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Idle));   // no contract held
     CHECK_EQ(int(g_reg[0x03] & 0x04), 0);                    // Auto-CRC off again
+    CHECK_EQ(usb_fmt_has("[PD] Auto-CRC off (passive)\n"), true);   // row B item 6 (red): fixed text in the format, not a %s
     CHECK_EQ(int(g_reg[0x02] & 0x03), int(boot.sw0 & 0x03)); // Rd as at boot
     CHECK_EQ(int(g_reg[0x03] & ~0x03), int(boot.ctl3 & ~0x03));   // SPECREV / Auto-CRC / retries as at boot (the TX line select stays)
     CHECK_EQ(usb_has("[REREAD] attach released"), true);
@@ -3284,7 +3293,7 @@ static void end_alone_case() {
 
 void test_alone_phone_identify_starts_and_presents_rd_only() {
     attach_phone_alone_detached();
-    g_log.clear(); g_usb.clear();
+    g_log.clear(); g_usb.clear(); g_usb_fmt.clear();
     CHECK_EQ(fusb302::identify_start(false), true);      // alone: accepts even with no CC on the line
     CHECK_EQ(usb_has("waiting for a Ready contract"), true);   // Row A: the first VDM waits for the contract
     CHECK_EQ(find_from("W 02=03") >= 0, true);           // Rd on both lines (no CC known) - never Rp: the K2 must not become the phone's power source
@@ -3305,10 +3314,23 @@ void test_alone_phone_identify_starts_while_still_attached() {
     for (int i = 0; i < 15; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); }   // 300 ms: still attached
     CHECK_EQ(fusb302::active_cc() != 0, true);
     fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);
-    g_log.clear(); g_usb.clear();
+    g_log.clear(); g_usb.clear(); g_usb_fmt.clear();
     CHECK_EQ(fusb302::identify_start(false), true);      // alone with the line still attached (a stale CC): asks for the contract, then waits
     CHECK_EQ(usb_has("Request PDO 1"), true);
     CHECK_EQ(usb_has("TX type 15"), false);              // the first VDM still waits for Ready
+    end_alone_case();
+}
+
+// Row B item 6 (red): a plain attach (VBUS up, not alone) logs the bare started - the format has no %s suffix.
+void test_identify_started_log_format_when_not_alone() {
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x20;
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    fusb302::sink_vbus(5000); fusb302::poll();
+    g_log.clear(); g_usb.clear(); g_usb_fmt.clear();
+    CHECK_EQ(fusb302::identify_start(true), true);       // attached with VBUS up: not alone
+    CHECK_EQ(usb_fmt_has("[ID] Identify started\n"), true);
     end_alone_case();
 }
 
@@ -4048,6 +4070,7 @@ int main() {
     test_wake_vs_test_setting_off_leaves_a_run_start_rd_alone();
     test_alone_phone_identify_starts_and_presents_rd_only();
     test_alone_phone_identify_starts_while_still_attached();
+    test_identify_started_log_format_when_not_alone();
     test_charger_alone_identify_refused_as_today();
     test_alone_identify_waits_for_ready_before_the_first_vdm();
     test_alone_identify_timeout_refuses_and_releases_the_line();

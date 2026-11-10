@@ -201,6 +201,7 @@ struct StubState {
     uint32_t bin_base = 0;
     bool bin_older = false;
     std::string log_text;                  // usb::log_fmt() text (K2LOG on the host builds), capped; tests search it for log lines
+    std::string log_fmts;                  // the raw format strings K2LOG was called with, capped; tests assert fixed text lives in the format, not in a %s
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store

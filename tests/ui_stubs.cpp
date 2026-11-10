@@ -414,6 +414,8 @@ void log_fmt(const char* fmt, ...) {
     if (n <= 0) return;
     if (g_stub.log_text.size() > 64 * 1024) g_stub.log_text.clear();
     g_stub.log_text.append(buf, std::min<std::size_t>(static_cast<std::size_t>(n), sizeof buf - 1));
+    if (g_stub.log_fmts.size() > 64 * 1024) g_stub.log_fmts.clear();
+    g_stub.log_fmts.append(fmt); g_stub.log_fmts.push_back('\n');
 }
 std::size_t log_bin(std::span<std::uint8_t> out, std::uint32_t& base_ms, bool& older) {
     base_ms = g_stub.bin_base;

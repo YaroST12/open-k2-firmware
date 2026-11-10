@@ -355,9 +355,10 @@ static void test_qc_label() {
     CHECK_EQ(label(0x05C6, 99, steps), int(rc::QcLabel::Qc4Plus));
     CHECK_EQ(label(0x05C6, 100, steps), int(rc::QcLabel::Qc5));
     CHECK_EQ(label(0x05C6, 140, steps), int(rc::QcLabel::Qc5));
-    // Another VID (or none): never a QC label however strong; the PPS 3.3-21 V 3 A range reads as Samsung SFC 3.0 (capability only).
-    CHECK_EQ(label(0x2717, 140, steps), int(rc::QcLabel::Sfc3));
-    CHECK_EQ(label(0, 140, steps), int(rc::QcLabel::Sfc3));
+    // Another VID (or none): never a label however strong - no brand is claimed without evidence (a probe that read vid 0).
+    CHECK_EQ(label(0x2717, 140, steps), int(rc::QcLabel::None));
+    CHECK_EQ(label(0, 140, steps), int(rc::QcLabel::None));
+    CHECK_EQ(label(0x04E8, 140, steps), int(rc::QcLabel::Sfc3));   // Samsung's own VID: the SFC reading is evidence-backed
     const std::vector<ct::Step> no_pps = {step(A::Pd3Fixed, ct::Group::Pd, 1, 5000, V::Pass, 5020),
                                           step(A::Pd3Fixed, ct::Group::Pd, 2, 9000, V::Pass, 9010)};
     CHECK_EQ(label(0x05C6, 140, no_pps), int(rc::QcLabel::None));  // Qualcomm VID without a PPS APDO
@@ -528,20 +529,27 @@ static void test_scp_capability_note() {
 }
 static void test_samsung_sfc_labels() {
     char t[48];
-    auto label = [](unsigned lo, unsigned hi, unsigned ma, unsigned cable) { return int(rc::qc_label(pps_card(0, lo, hi, ma, cable))); };
-    CHECK_EQ(label(33, 110, 4050, 5000), int(rc::QcLabel::Sfc2));   // PPS 3.3-11 V 4.05 A behind a 5 A cable
-    CHECK_EQ(label(33, 110, 4050, 3000), int(rc::QcLabel::None));   // a 3 A cable cannot carry it
-    CHECK_EQ(label(33, 110, 3000, 5000), int(rc::QcLabel::None));   // below 4.05 A
-    CHECK_EQ(label(50, 110, 4050, 5000), int(rc::QcLabel::None));   // does not cover 3.3 V
-    CHECK_EQ(label(50, 150, 3000, 3000), int(rc::QcLabel::Sfc2));   // PPS to 15 V at 3 A needs no 5 A cable
-    CHECK_EQ(label(50, 150, 2950, 5000), int(rc::QcLabel::None));
-    CHECK_EQ(label(33, 210, 3000, 3000), int(rc::QcLabel::Sfc3));   // PPS to 20 V at 3 A
-    CHECK_EQ(label(33, 200, 3000, 0), int(rc::QcLabel::Sfc3));
-    CHECK_EQ(label(33, 210, 2950, 5000), int(rc::QcLabel::None));
-    CHECK_EQ(label(33, 210, 6250, 5000) != int(rc::QcLabel::Sfc2), 1);   // 3.0 outranks 2.0
+    auto label = [&](uint16_t vid, unsigned lo, unsigned hi, unsigned ma, unsigned cable) { return int(rc::qc_label(pps_card(vid, lo, hi, ma, cable))); };
+    auto label_samsung = [&](unsigned lo, unsigned hi, unsigned ma, unsigned cable) { return label(0x04E8, lo, hi, ma, cable); };
+    CHECK_EQ(label_samsung(33, 110, 4050, 5000), int(rc::QcLabel::Sfc2));   // PPS 3.3-11 V 4.05 A behind a 5 A cable
+    CHECK_EQ(label_samsung(33, 110, 4050, 3000), int(rc::QcLabel::None));   // a 3 A cable cannot carry it
+    CHECK_EQ(label_samsung(33, 110, 3000, 5000), int(rc::QcLabel::None));   // below 4.05 A
+    CHECK_EQ(label_samsung(50, 110, 4050, 5000), int(rc::QcLabel::None));   // does not cover 3.3 V
+    CHECK_EQ(label_samsung(50, 150, 3000, 3000), int(rc::QcLabel::Sfc2));   // PPS to 15 V at 3 A needs no 5 A cable
+    CHECK_EQ(label_samsung(50, 150, 2950, 5000), int(rc::QcLabel::None));
+    CHECK_EQ(label_samsung(33, 210, 3000, 3000), int(rc::QcLabel::Sfc3));   // PPS to 20 V at 3 A
+    CHECK_EQ(label_samsung(33, 200, 3000, 0), int(rc::QcLabel::Sfc3));
+    CHECK_EQ(label_samsung(33, 210, 2950, 5000), int(rc::QcLabel::None));
+    CHECK_EQ(label_samsung(33, 210, 6250, 5000) != int(rc::QcLabel::Sfc2), 1);   // 3.0 outranks 2.0
     CHECK_STR(rc::qc_label_name(rc::QcLabel::Sfc2), "Samsung SFC 2.0");
     CHECK_STR(rc::qc_label_name(rc::QcLabel::Sfc3), "Samsung SFC 3.0");
-    CHECK_EQ(rc::qc_label_text(pps_card(0, 33, 210, 3000, 3000), t, sizeof t) > 0, 1);
+    // Row B item 5 (red): the SFC labels are a Samsung claim - with any other VID, or none (a probe that read vid 0),
+    // the same capability earns no brand label.
+    CHECK_EQ(label(0, 33, 210, 3000, 3000), int(rc::QcLabel::None));
+    CHECK_EQ(label(0x2717, 33, 210, 3000, 3000), int(rc::QcLabel::None));
+    CHECK_EQ(label(0, 50, 150, 3000, 3000), int(rc::QcLabel::None));
+    CHECK_EQ(rc::qc_label_text(pps_card(0, 33, 210, 3000, 3000), t, sizeof t), 0);
+    CHECK_EQ(rc::qc_label_text(pps_card(0x04E8, 33, 210, 3000, 3000), t, sizeof t) > 0, 1);
     CHECK_STR(t, "Samsung SFC 3.0 (via PPS 3.3-21V 3A)");
     // A Qualcomm vendor ID keeps its own label.
     CHECK_EQ(int(rc::qc_label(pps_card(0x05C6, 33, 210, 3000, 3000))), int(rc::QcLabel::Qc4Plus));

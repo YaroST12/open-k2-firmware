@@ -942,8 +942,47 @@ static void test_sink_tab_offers_identify_when_a_device_is_alone() {
     CHECK_EQ(cp(ui).popup_item(1).enabled, true);
 }
 
+// Row B item 6 (red): the [UI] identify line keeps its fixed phrases in the format string. Today they ride a %s,
+// which the device binlog cuts at 12 bytes ("[UI] identify refused: inl", "(device alo").
+static void test_identify_log_keeps_fixed_text_in_the_format() {
+    {   // inline: refused with the whole reason in the format, no %s
+        Ui &ui = fresh_ui();
+        make_inline(ui, 20000);
+        g_stub.log_fmts.clear();
+        CHECK_EQ(ui.run_action(Action::Identify, 20100), false);
+        CHECK_EQ(g_stub.log_fmts.find("[UI] identify refused: inline (no TX; the Sink tab shows the sniffed identity)\n") != std::string::npos, true);
+    }
+    {   // a device alone on the K2: started, the alone note in the format
+        Ui &ui = fresh_ui();
+        g_stub.cc = 1; g_stub.pm_online = true; g_stub.pm.vbus_mv = 0;
+        g_stub.caps.valid = false; g_stub.caps_this_attach = false;
+        for (uint32_t t = 12000; t <= 13400; t += 100) {
+            set_cc(0, (t / 100) % 2 == 0 ? 3300 : 0);
+            ui.tick(t);
+        }
+        CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::DualRolePort));
+        g_stub.log_fmts.clear();
+        CHECK_EQ(ui.run_action(Action::Identify, 13500), true);
+        CHECK_EQ(g_stub.log_fmts.find("[UI] identify started (device alone on the K2)\n") != std::string::npos, true);
+    }
+    {   // a plain attach: started, no suffix - and a refusal with no inline note when the driver refuses
+        Ui &ui = fresh_ui();
+        g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000; g_stub.cc = 1;
+        g_stub.caps.valid = true; g_stub.caps_this_attach = true;
+        ui.tick(12000);
+        g_stub.log_fmts.clear();
+        CHECK_EQ(ui.run_action(Action::Identify, 12100), true);
+        CHECK_EQ(g_stub.log_fmts.find("[UI] identify started\n") != std::string::npos, true);
+        g_stub.identify_ok = false;
+        g_stub.log_fmts.clear();
+        CHECK_EQ(ui.run_action(Action::Identify, 12200), false);
+        CHECK_EQ(g_stub.log_fmts.find("[UI] identify refused\n") != std::string::npos, true);
+    }
+}
+
 int main() {
     test_sink_tab_offers_identify_when_a_device_is_alone();
+    test_identify_log_keeps_fixed_text_in_the_format();
     test_survey_nothing_active_before_refresh();
     test_survey_refresh_item_starts_it();
     test_survey_status_line();

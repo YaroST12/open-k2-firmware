@@ -1092,6 +1092,44 @@ static void test_sweep_log_line_has_no_literal_format_bug() {
     CHECK_EQ(g_stub.log_text.find("11 pts") != std::string::npos, true);
     CHECK_EQ(g_stub.log_text.find("peak=") != std::string::npos, true);     // the summary's fields ride as numbers
 }
+// Row B item 6 (red): the [TEST] state-change line keeps the state's full name in the format string - today the
+// state rides a %s, which the device binlog cuts at 12 bytes ("[TEST] Detach charg", "[TEST] Initializin").
+static void test_state_change_log_keeps_the_full_state_name_in_the_format() {
+    fixture(); Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    review(ui);
+    g_stub.log_fmts.clear();
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    for (uint32_t t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(int(ui.charger_test_results().state()), int(ct::State::Done));
+    CHECK_EQ(g_stub.log_fmts.find("[TEST] %s %s\n") == std::string::npos, true);        // red today
+    CHECK_EQ(g_stub.log_fmts.find("[TEST] Detach charger %s\n") != std::string::npos, true);   // red today
+    CHECK_EQ(g_stub.log_fmts.find("[TEST] Complete %s\n") != std::string::npos, true);         // red today
+}
+// Row B item 8 (red): the AVS sweep is a Status field too - bit 30 of the draft selection on the wire (bit 31 is
+// the PPS sweep; the CLI toggle is the tools branch).
+static void test_avs_sweep_is_a_selection_bit() {
+    fixture(); Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_selection() & (1u << 30), 0u);
+    ui.charger_test_set_avs_sweep(true);
+    CHECK_EQ(ui.charger_test_selection() & (1u << 30), 1u << 30);   // red today: bit 30 is never set
+    ui.charger_test_set_avs_sweep(false);
+    CHECK_EQ(ui.charger_test_selection() & (1u << 30), 0u);
+}
+// Row B item 10 (red): with an AVS-only source the AVS sweep is row 2 of the PD entries - today it is pinned at
+// row 3, beyond the list (row_count = 2 + 0 PPS + 1 AVS), so an AVS-only source cannot reach its own sweep.
+static void test_avs_sweep_row_follows_the_only_sweep_kind() {
+    fixture();
+    g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[1] = pd::decode_pdo(0xE0000000u | 300u);   // SPR AVS 9-20 V 3 A, no PPS APDO
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui); custom(ui); open_group(ui, kFamPd, 1300); ui.tick(1300);
+    CHECK_EQ(ui.charger_test_stage(), 1);
+    move(ui, 2, 1310); ui.tick(1310);
+    check_row_text(2, "AVS sweep", kText, kFocusT, 2, 150);        // red today: row 2 reads "PPS"
+    press(ui, Button::Ok, 1320); ui.tick(1320);                    // toggle the sweep row
+    CHECK_EQ(ui.charger_test_selection() & (1u << 30), 1u << 30);   // red today: row 2 toggles the PPS bit, not the AVS flag
+}
 static void test_results_counters_are_words() {
     for (unsigned kind = 0; kind < 3; ++kind) {
         fixture();
@@ -3751,6 +3789,9 @@ int main() {
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_sweep_log_line_has_no_literal_format_bug();
+    test_state_change_log_keeps_the_full_state_name_in_the_format();
+    test_avs_sweep_is_a_selection_bit();
+    test_avs_sweep_row_follows_the_only_sweep_kind();
     test_self_powered_review_note(); test_self_powered_run_is_on_the_card();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();
