@@ -71,6 +71,27 @@ struct Summary {
 };
 Summary summarize(std::span<const int16_t> err, unsigned lo_mv);
 
+// A recorded point sat outside the PPS band: VBUS below the setpoint by more than max(100 mV, 5 %). The band is
+// one-sided (above the setpoint is the ceiling's business, not the point's); the summary and the live line share it.
+bool out_of_band(unsigned set_mv, int measured_mv);
+
+// The sweep row in flight, as the Running view reads it (Runner::sweep_live): the planned point range, the setpoint of the
+// Request that is out, and the last recorded point. Not a record: the view keeps nothing of its own.
+struct Live {
+    bool active = false;        // a sweep row is the step under test
+    uint16_t lo_mv = 0, hi_mv = 0;   // the row's point range (setpoints, the planner's clamp applied)
+    uint16_t set_mv = 0;        // the setpoint whose Request is out
+    uint16_t n = 0;             // points recorded so far
+    int16_t last_err = 0;       // measured - setpoint of point n-1 (valid when n > 0)
+    unsigned last_set_mv() const { return n ? lo_mv + (n - 1u) * kStepMv : 0u; }
+    int last_measured_mv() const { return n ? int(last_set_mv()) + last_err : 0; }
+};
+
+// The per-point line of the Running view: "req 12.30V  got 12.15V  err-150mV" (volts to 10 mV, the error in whole mV with
+// its sign - an error, not a flow direction; clamped to +-9999). At most kPointTextMax - 1 chars. Returns the length.
+inline constexpr size_t kPointTextMax = 40;
+size_t format_point(unsigned set_mv, int measured_mv, std::span<char> out);
+
 // One finished (or in-flight) sweep row: which APDO, where its points sit in the record, and the summary so far.
 struct RowView {
     uint8_t pos = 0;        // PDO slot of the APDO

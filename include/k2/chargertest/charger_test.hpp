@@ -591,6 +591,8 @@ public:
     // The deep sweep (ROADMAP "PPS deep sweep"): the finished rows (one per APDO) and the whole point record
     // (one int16 error per point). The results strip, the card and the remote read it through this view.
     ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
+    // The sweep row under test, live: its point range, the setpoint in flight and the last recorded point (the Running view).
+    ctsweep::Live sweep_live() const { return {}; }
 private:
     void note_hunt_refusal(const Input&, bool timeout, uint16_t extra_flags = 0);
     void add(Step);

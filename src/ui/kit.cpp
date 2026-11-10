@@ -938,6 +938,10 @@ int draw_pass_band(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t va
     return np;
 }
 
+// ---- RangeGauge ----------------------------------------------------------------------------------------------------------
+RangeGeom range_geom(int16_t, int16_t, int32_t, int32_t, int32_t, int32_t, int32_t) { return {0, 0, 0, 0}; }   // red
+RangePos draw_range_gauge(const Surface &, int16_t, int16_t, int16_t, int32_t, int32_t, int32_t, int32_t, int32_t, RangePos) { return {}; }
+
 // ---- HeroReadout ---------------------------------------------------------------------------------------------------------
 void draw_hero(const Surface &s, Field &digits, const HeroSpec &h, std::string_view value, bool full) {
     const Font &f = *h.digits;

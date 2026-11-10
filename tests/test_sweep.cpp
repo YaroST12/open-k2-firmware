@@ -215,7 +215,48 @@ static void test_summary_of_nothing_and_format_mv() {
     CHECK_EQ(d.fold_from_mv, 5200u); CHECK_EQ(d.fold_mv, 4700u); CHECK_EQ(d.peak_mv, 5400u);
 }
 
+// The band a point is judged against: below the setpoint by more than max(100 mV, 5 %). One-sided: above is never out.
+static void test_out_of_band_is_one_sided_100mv_or_5_percent() {
+    CHECK_EQ(sw::out_of_band(3300, 3300), false);
+    CHECK_EQ(sw::out_of_band(3300, 3200), false);    // 100 mV floor: 3300 / 20 = 165 mV is the wider side
+    CHECK_EQ(sw::out_of_band(3300, 3135), false);    // exactly 165 mV below
+    CHECK_EQ(sw::out_of_band(3300, 3134), true);
+    CHECK_EQ(sw::out_of_band(12000, 11400), false);  // 5 % of 12 V = 600 mV
+    CHECK_EQ(sw::out_of_band(12000, 11399), true);
+    CHECK_EQ(sw::out_of_band(12000, 19420), false);  // above the setpoint: the ceiling's business, never the point's
+    CHECK_EQ(sw::out_of_band(1000, 900), false);     // set / 20 = 50 mV: the 100 mV floor wins
+    CHECK_EQ(sw::out_of_band(1000, 899), true);
+    // summarize flags the same points
+    std::vector<int16_t> ok{-150, -150}, bad{0, -700};   // setpoints 12000, 12100: 5 % is 600 / 605 mV
+    CHECK_EQ(sw::summarize(ok, 12000).out_of_band, false);
+    CHECK_EQ(sw::summarize(bad, 12000).out_of_band, true);
+}
+// The per-point line: requested, measured and the error (measured - setpoint) with its sign.
+static void test_format_point_reads_req_got_and_the_error() {
+    char b[sw::kPointTextMax];
+    auto text = [&](unsigned set, int got) { return std::string(b, sw::format_point(set, got, b)); };
+    CHECK_STR(text(12300, 12150).c_str(), "req 12.30V  got 12.15V  err-150mV");
+    CHECK_STR(text(3300, 3300).c_str(), "req 3.30V  got 3.30V  err+0mV");
+    CHECK_STR(text(5000, 5040).c_str(), "req 5.00V  got 5.04V  err+40mV");
+    CHECK_STR(text(21000, 19420).c_str(), "req 21.00V  got 19.42V  err-1580mV");
+    CHECK_STR(text(20000, 100).c_str(), "req 20.00V  got 0.10V  err-9999mV");   // a collapsed output: the error is clamped to 4 digits
+    CHECK_EQ(text(36000, 36000).size() < sw::kPointTextMax, true);
+    CHECK_EQ(text(36000, 36000).size() <= 34u, true);   // fits the 34-char cell
+    CHECK_STR(text(12000, -50).c_str(), "req 12.00V  got 0.00V  err-9999mV");   // a negative reading shows as 0
+}
+// The live view of a row: the last recorded point is derived from the range and the count.
+static void test_live_derives_the_last_point() {
+    sw::Live l;
+    CHECK_EQ(l.last_set_mv(), 0u); CHECK_EQ(l.last_measured_mv(), 0);
+    l.lo_mv = 5000; l.hi_mv = 11000; l.n = 4; l.last_err = -150;
+    CHECK_EQ(l.last_set_mv(), 5300u);
+    CHECK_EQ(l.last_measured_mv(), 5150);
+}
+
 int main() {
+    test_out_of_band_is_one_sided_100mv_or_5_percent();
+    test_format_point_reads_req_got_and_the_error();
+    test_live_derives_the_last_point();
     test_point_plan_covers_the_apdo_in_100mv_steps();
     test_point_current_is_1a_never_above_the_offer_or_cable();
     test_plan_total_counts_every_pps_apdo_within_the_budget();

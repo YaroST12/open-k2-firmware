@@ -220,7 +220,28 @@ static void test_the_longest_labels_fit_the_row() {
     CHECK_EQ(longest <= unsigned(kRoomCells), true);
 }
 
+// A deep-sweep row's badge names the range being swept, not its first level ("PPS 3.3-21V", "AVS 9-20V"); the rows around it
+// (a plan row of the same APDO) keep their wording.
+static void test_a_sweep_row_names_the_range_it_sweeps() {
+    ct::Step pps; pps.algorithm = A::Pps; pps.group = ct::Group::Pd; pps.pos = 2; pps.mv = 3300; pps.ma = 1000;
+    pps.pdo = 0xC0000000u | (210u << 17) | (33u << 8) | 100u;   // 3.3-21 V 5 A
+    pps.detail = ct::kDetailSweep;
+    CHECK_STR(sl::label(pps).c_str(), "PPS 3.3-21V");
+    ct::Step avs; avs.algorithm = A::SprAvs; avs.group = ct::Group::Pd; avs.pos = 3; avs.mv = 9000; avs.ma = 1000;
+    avs.pdo = 0xE004B145u; avs.avs = true; avs.detail = ct::kDetailSweep;   // PD 3.2 SPR AVS, 9-20 V
+    CHECK_STR(sl::label(avs).c_str(), "AVS 9-20V");
+    ct::Step epr; epr.algorithm = A::EprAvs; epr.group = ct::Group::Pd; epr.pos = 8; epr.mv = 15000; epr.ma = 1000;
+    epr.pdo = 0xD230968Cu; epr.avs = true; epr.detail = ct::kDetailSweep;
+    CHECK_STR(sl::label(epr).c_str(), "AVS 15-28V");
+    // the same APDO's plan row is not a sweep row: today's wording
+    pps.detail = 0; pps.mv = 5000;
+    CHECK_STR(sl::label(pps).c_str(), "PPS 5V 5A");
+    avs.detail = 0;
+    CHECK_STR(sl::label(avs).c_str(), "AVS 9V");
+}
+
 int main() {
+    test_a_sweep_row_names_the_range_it_sweeps();
     test_the_golden_labels();
     test_every_algorithm_has_a_label_without_the_internal_name();
     test_amps_only_when_the_step_has_a_current();

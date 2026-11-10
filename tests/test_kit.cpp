@@ -1067,6 +1067,73 @@ static void test_pass_band() {
     CHECK_EQ(kit::draw_pass_band(kSurf, 6, 100, 210, -5, 20000, 30000), 6);
 }
 
+// The sweep row's gauge: the swept range as two dotted lines (the APDO's min and max), a marker for the setpoint that moves along
+// it, the white needle for VBUS. Scale 0..30 V over x6..216 (7 px per volt), strip at y100.
+static void test_range_gauge() {
+    const auto g = kit::range_geom(6, 210, 20000, 12000, 3300, 21000, 30000);
+    CHECK_EQ(g.lo, 6 + 23);        // 3.3 V
+    CHECK_EQ(g.hi, 6 + 147);       // 21 V
+    CHECK_EQ(g.mark, 6 + 84);      // the 12 V setpoint, mid-range
+    CHECK_EQ(g.needle, 6 + 140);
+    // the marker's 6 px cap stays inside the strip at both ends of the scale
+    CHECK_EQ(kit::range_geom(6, 210, 0, 0, 0, 30000, 30000).mark, 6 + 2);
+    CHECK_EQ(kit::range_geom(6, 210, 0, 30000, 0, 30000, 30000).mark, 6 + 210 - 4);
+    CHECK_EQ(kit::range_geom(6, 210, 99000, 12000, 3300, 21000, 30000).needle, 6 + 208);   // the needle clamps like the pass band's
+    CHECK_EQ(kit::range_geom(6, 210, -5, 12000, 3300, 21000, 30000).needle, 6);
+
+    lcd::fill(kBase);
+    const auto pos = kit::draw_range_gauge(kSurf, 6, 100, 210, 20000, 12000, 3300, 21000, 30000);
+    CHECK_EQ(pos.mark, g.mark); CHECK_EQ(pos.needle, g.needle);
+    // dotted lines at the range's min and max: 2 px wide, 2 rows on / 2 off, 12 px tall
+    for (const int x : {int(g.lo), int(g.lo) + 1, int(g.hi) - 1, int(g.hi)}) {
+        CHECK_EQ(px(x, 100), kOk); CHECK_EQ(px(x, 101), kOk);
+        CHECK_EQ(px(x, 102), kBg); CHECK_EQ(px(x, 103), kBg);
+        CHECK_EQ(px(x, 104), kOk); CHECK_EQ(px(x, 105), kOk);
+        CHECK_EQ(px(x, 106), kRule); CHECK_EQ(px(x, 107), kRule);   // the gap rows show the track under the line
+        CHECK_EQ(px(x, 108), kOk); CHECK_EQ(px(x, 109), kOk);
+        CHECK_EQ(px(x, 110), kBg); CHECK_EQ(px(x, 111), kBg);
+    }
+    CHECK_EQ(px(g.lo - 1, 100), kBg);                    // nothing left of the min line but the plain track
+    CHECK_EQ(px(g.lo - 1, 105), kRule);
+    CHECK_EQ(px(g.hi + 1, 105), kRule);
+    CHECK_EQ(px(10, 105), kRule); CHECK_EQ(px(10, 101), kBg);
+    CHECK_EQ(px(210, 105), kRule);
+    // the range between the lines is tinted (8 px high), the strip is 12 px
+    CHECK_EQ(px(60, 103), kOkT); CHECK_EQ(px(60, 108), kOkT);
+    CHECK_EQ(px(60, 100), kBg); CHECK_EQ(px(60, 111), kBg);
+    // the setpoint marker: a 6 px cap on the strip's top and bottom edges, the tint between them
+    CHECK_EQ(px(g.mark, 100), kFocus); CHECK_EQ(px(g.mark - 2, 102), kFocus); CHECK_EQ(px(g.mark + 3, 100), kFocus);
+    CHECK_EQ(px(g.mark - 3, 100), kBg); CHECK_EQ(px(g.mark + 4, 100), kBg);
+    CHECK_EQ(px(g.mark, 111), kFocus); CHECK_EQ(px(g.mark, 109), kFocus);
+    CHECK_EQ(px(g.mark, 105), kOkT);
+    // the needle: 2 px, the full height, drawn over everything
+    CHECK_EQ(px(g.needle, 100), kText); CHECK_EQ(px(g.needle + 1, 111), kText); CHECK_EQ(px(g.needle, 105), kText);
+    CHECK_EQ(px(100, 99), kBase); CHECK_EQ(px(100, 112), kBase);   // nothing above or below the strip
+
+    // Moving the setpoint repaints only the old and the new marker columns (6 px each); the old one is gone.
+    const auto before = snap();
+    const auto next = kit::draw_range_gauge(kSurf, 6, 100, 210, 20000, 15000, 3300, 21000, 30000, pos);
+    CHECK_EQ(next.mark, 6 + 105); CHECK_EQ(next.needle, pos.needle);
+    CHECK_EQ(px(g.mark, 100), kBg); CHECK_EQ(px(g.mark, 111), kBg); CHECK_EQ(px(g.mark, 105), kOkT);
+    CHECK_EQ(px(next.mark, 100), kFocus); CHECK_EQ(px(next.mark, 111), kFocus);
+    int cols = 0;
+    for (int x = 0; x < 240; x++) {
+        bool any = false;
+        for (int y = 96; y < 116; y++) any = any || g_panel[y * 240 + x] != before[y * 240 + x];
+        cols += any;
+    }
+    CHECK_EQ(cols <= 12, 1);
+    // Moving the needle through the marker's place repaints the marker over the track, the needle on top.
+    const auto n2 = kit::draw_range_gauge(kSurf, 6, 100, 210, 15000, 15000, 3300, 21000, 30000, next);
+    CHECK_EQ(n2.needle, 6 + 105);
+    CHECK_EQ(px(n2.needle, 100), kText); CHECK_EQ(px(n2.needle - 2, 100), kFocus);   // the cap's edge beside the needle
+    CHECK_EQ(px(next.needle, 105), kOkT);                                             // the old needle column is the tinted range again
+    // An unchanged reading writes nothing.
+    const auto still = snap();
+    kit::draw_range_gauge(kSurf, 6, 100, 210, 15000, 15000, 3300, 21000, 30000, n2);
+    CHECK_EQ(changed_in(still, snap(), 0, 240), 0);
+}
+
 static void test_hero() {
     Field f;
     kit::HeroSpec h;
@@ -1139,6 +1206,7 @@ int main() {
     test_result_grid_sync_dots_while_rows_change_shape();
     test_result_grid_anchor_bottom();
     test_pass_band();
+    test_range_gauge();
     test_hero();
     test_tables();
     test_progress_rule();

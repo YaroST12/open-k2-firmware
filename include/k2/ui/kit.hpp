@@ -340,6 +340,18 @@ constexpr int16_t kPassBandMinW = 5;
 int draw_pass_band(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t value, int32_t target, int32_t full,
                    int prev_px = -1);
 
+// ---- RangeGauge ----------------------------------------------------------------------------------------------------------
+// The gauge of a programmable sweep row: the same 12 px strip and 0..`full` scale as the PassBandGauge, but the window is the
+// whole swept range [lo, hi] (two dotted 2 px lines, 2 on / 2 off, with the kOkT tint between them) and a small kFocus marker
+// (a 6 px cap on the strip's top and bottom edges) shows the setpoint `set`, moving along the range point by point. The 2 px
+// white needle shows `value`. range_geom is the pure geometry; draw_range_gauge paints. With `prev` (the last return) only the
+// old and new marker and needle columns repaint; a negative needle paints the whole strip.
+struct RangeGeom { int16_t lo, hi, mark, needle; };   // x of the left line, the right line, the marker centre, the needle (surface px)
+struct RangePos { int16_t mark = -1, needle = -1; };
+RangeGeom range_geom(int16_t x, int16_t w, int32_t value, int32_t set, int32_t lo, int32_t hi, int32_t full);
+RangePos draw_range_gauge(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t value, int32_t set, int32_t lo, int32_t hi,
+                          int32_t full, RangePos prev = {});
+
 // ---- HeroReadout ---------------------------------------------------------------------------------------------------------
 // 48 / 64 px digits right-aligned in a `chars`-wide Field box whose RIGHT edge is `x`, with the unit in S24 on the digits'
 // baseline 3 px behind it. `full` (first paint, a colour change, a repaint after an erase) re-initialises the field and draws

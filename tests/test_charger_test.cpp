@@ -3480,6 +3480,42 @@ static void test_pps_deep_sweep_stops_at_the_first_lost_source() {
     CHECK_EQ(dropped, true);
     CHECK_EQ(after, 0u);
 }
+// The Running view reads the sweep row in flight through Runner::sweep_live(): active only while a sweep row is the step under
+// test, the planned point range, the setpoint whose Request is out, and the last recorded point (measured - setpoint).
+static void test_sweep_live_follows_the_row_in_flight() {
+    Fake f;   // APDOs 5-11 V (pos 6) and 5-21 V (pos 7)
+    f.pd_offset_mv = -150;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    CHECK_EQ(r.sweep_live().active, false);   // nothing running yet
+    unsigned ticks = 0;
+    while (!r.sweep_live().active && ticks++ < 20000) f.tick(r, 100);   // the plan rows run before the sweep rows
+    const auto first = r.sweep_live();
+    CHECK_EQ(first.active, true);
+    CHECK_EQ(first.n, 0u);
+    CHECK_EQ(first.set_mv, first.lo_mv);      // the first Request is the row's first point
+    CHECK_EQ(first.hi_mv > first.lo_mv, true);
+    while (r.sweep_live().n < 5 && ticks++ < 40000) f.tick(r, 100);
+    const auto l = r.sweep_live();
+    CHECK_EQ(l.active, true);
+    CHECK_EQ(l.lo_mv, first.lo_mv); CHECK_EQ(l.hi_mv, first.hi_mv);
+    CHECK_EQ(l.n >= 5u, true);
+    CHECK_EQ(l.set_mv, l.lo_mv + l.n * ctsweep::kStepMv);   // the point in flight follows the recorded ones
+    CHECK_EQ(l.last_err, -150);                              // the fake tracks 150 mV low
+    CHECK_EQ(l.last_measured_mv(), int(l.last_set_mv()) - 150);
+    // the row's range is the APDO's, clamped like the planner did: the pos-6 APDO (5-11 V) is first, 5000..11000
+    CHECK_EQ(l.lo_mv == 5000u && l.hi_mv == 11000u, true);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(r.sweep_live().active, false);   // nothing is running any more
+}
+// ... and never for a run without a sweep row.
+static void test_sweep_live_is_idle_without_a_sweep_row() {
+    Fake f; ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+    for (unsigned i = 0; i < 300; ++i) { f.tick(r, 100); CHECK_EQ(r.sweep_live().active, false); }
+}
 // The sweep is opt-in: without Options::pps_sweep the plan holds no sweep row at all.
 static void test_pps_deep_sweep_is_opt_in() {
     Fake f; ct::Runner r(f);
@@ -6170,6 +6206,7 @@ int main() {
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
     test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
+    test_sweep_live_follows_the_row_in_flight(); test_sweep_live_is_idle_without_a_sweep_row();
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     test_pps_step_walk_waits_for_the_base_to_settle();

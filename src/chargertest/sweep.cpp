@@ -60,6 +60,9 @@ Summary summarize(std::span<const int16_t> err, unsigned lo_mv) {
     return s;
 }
 
+bool out_of_band(unsigned, int) { return false; }   // red: filled in with the live view
+size_t format_point(unsigned, int, std::span<char>) { return 0; }
+
 size_t format_mv(unsigned mv, std::span<char> out) {
     if (out.empty()) return 0;
     const unsigned r = (mv + 5) / 10 * 10;   // 10 mV resolution

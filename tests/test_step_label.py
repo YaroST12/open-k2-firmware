@@ -44,6 +44,18 @@ class StepLabelTest(unittest.TestCase):
         assert step_label.label({"protocol": "scp", "pos": 0, "target_mv": 10000, "request_ma": 2250}) == "SCP 10V 2.25A"
 
 
+    def test_a_sweep_row_names_the_range_it_sweeps(self):
+        # The deep-sweep row (detail 161) reads its APDO's whole range, like the firmware: 'PPS 3.3-21V', 'AVS 9-20V'.
+        pps = {"protocol": "pps", "pos": 2, "target_mv": 3300, "request_ma": 1000, "detail": 161,
+               "raw_pdo": 0xC0000000 | (210 << 17) | (33 << 8) | 100}
+        assert step_label.label(pps) == "PPS 3.3-21V"
+        avs = {"protocol": "spr-avs", "pos": 3, "target_mv": 9000, "request_ma": 1000, "detail": 161, "raw_pdo": 0xE004B145}
+        assert step_label.label(avs) == "AVS 9-20V"
+        epr = {"protocol": "epr-avs", "pos": 8, "target_mv": 15000, "request_ma": 1000, "detail": 161, "raw_pdo": 0xD230968C}
+        assert step_label.label(epr) == "AVS 15-28V"
+        assert step_label.label(dict(pps, detail=0, target_mv=5000)) == "PPS 5V 5A"   # a plan row of the same APDO: unchanged
+
+
     def test_hunt_rows_read_mi(self):
         row = {"protocol": "pd3x-fixed", "pos": 5, "target_mv": 20000, "request_ma": 6000, "raw_pdo": 0x6412C}
         assert step_label.is_hunt(row)
