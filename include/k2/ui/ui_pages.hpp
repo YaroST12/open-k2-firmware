@@ -575,12 +575,10 @@ private:
     struct Frame;   // everything one update decides before it draws (ui_home.cpp)
     void sample_values(Frame &f, uint32_t now_ms);
     void update_sweep(const Frame &f, uint32_t now_ms, int &step_col, int &step_n);
-    void paint_statics(const Frame &f);   // what depends on the mode only: rules, units, tags, field colours
+    void paint_statics();                 // after an invalidate / mode change: the two rules, the hero digit fields
     void paint_cell(int cell, const Frame &f, int step_col, int step_n, bool digits_changed, int16_t px0, int16_t px1);
-    void paint_band(const Frame &f);
-    void paint_info(const Frame &f);
-    void draw_rules();         // the three full-width rules
-    void draw_band_rules();    // the band's two hairlines (the Wh / Ah boxes touch them)
+    void paint_lower(const Frame &f);     // the W / Wh / Ah band and the info block: one compositor cell, six repaint zones
+    void draw_rules();                    // the two rules above the lower cell (the third is part of it)
     // Display filter: V, A and W digits change at most 4 times a second (one throttle, one consistent set).
     Throttle thr_{250};
     int32_t v_mv_ = 0, a_ma_ = 0, w_mw_ = 0;         // |values| as shown
@@ -588,9 +586,8 @@ private:
     home::ProtoInfo last_proto_{};                    // the protocol of the last live reading (Stale keeps it)
     uint8_t mode_ = 0xFF;                             // home::Mode last seen (not reset by invalidate); 0xFF = none yet
     bool statics_ok_ = false;                         // paint_statics() ran since the last invalidate / mode change
-    bool band_valid_ = false;                         // the band's fields hold what band_sig_ says
-    uint32_t band_sig_ = 0;
-    uint16_t usb_col_ = 0, tag_col_ = 0, val_col_ = 0;   // colours the info fields hold
+    bool lower_ok_ = false;                           // the lower cell holds what lower_sig_ says
+    uint32_t lower_sig_[6] = {};                      // per zone: W, Wh, Ah, info row 1, elapsed, info row 2
     trend::Window &window_ = ctx_.keep.home_window;   // remembered across page switches
     // The sweep survives invalidate() (a capture re-renders strips of one frame); it is reloaded from the
     // trend after a mode change, a window or scale change, or a long gap (page left, stalled loop).
@@ -603,8 +600,6 @@ private:
     home::DigitField hd_[2];                          // VBUS / IBUS hero digits
     uint32_t cell_sig_[2][4] = {};                    // per cell: base, head, arrow, bar signatures
     bool cell_valid_[2] = {false, false};
-    Field w_, wh_i_, wh_f_, ah_i_, ah_f_;             // band
-    Field usb_, el_, tag_, val_, role_;               // info block
 };
 
 // Detail page: every measured value as small text (D+/D-, CC1/CC2, contract, cable, protocol, R, temperature,

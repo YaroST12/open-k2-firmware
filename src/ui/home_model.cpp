@@ -147,6 +147,19 @@ void format_proto(const ProtoInfo &p, ProtoText &out) {
     }
 }
 
+void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out) {
+    out.tag.clear();
+    out.value.clear();
+    out.tag.put(data_lines ? "D+/D-" : "CC1/2");
+    for (int i = 0; i < 2; i++) {
+        const int32_t mv = i ? b_mv : a_mv;
+        if (mv < 0) out.value.put("-.--");
+        else out.value.put_fixed(mv, 2);
+        if (!i) out.value.put_char('/');
+    }
+    out.value.put_char('V');
+}
+
 namespace {
 
 bool max_text(Mode m, uint32_t milli, char unit, StrBuf<12> &out) {

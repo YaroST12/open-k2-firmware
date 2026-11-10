@@ -34,7 +34,22 @@ constexpr int16_t kPillX = 211, kPillY = 1, kPillBoxH = 17;
 constexpr int16_t kArrowX = 8, kArrowY = 101;
 constexpr int16_t kWarnX = 10, kWarnY = 74;
 constexpr int16_t kInfoRow1Top = 201, kInfoRow2Top = 223;
-constexpr int kUsbChars = 16, kElChars = 5, kTagChars = 5, kValChars = 17, kValCharsNoMeter = 21, kRoleChars = 3;
+constexpr int kUsbChars = 16, kElChars = 5, kWattChars = 4, kEnergyChars = 3;
+constexpr int16_t kElX = 180, kRoleX = 196;
+constexpr int16_t kRowTop[2] = {kInfoRow1Top, kInfoRow2Top};
+
+// Repaint zones of the lower cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
+// keeps its native pixel size while the landscape mapping squeezes the rows, so an old text can reach a few pixels
+// past the logical box of the new one, and the rect repainted for a change has to cover all of it.
+struct Zone { int16_t x0, y0, x1, y1; };
+constexpr Zone kZones[6] = {
+    {0, 144, 128, 197},     // W number and its unit
+    {118, 144, 223, 172},   // Wh
+    {118, 165, 223, 197},   // Ah
+    {0, 196, 186, 226},     // info row 1: tag and value
+    {176, 196, 223, 226},   // info row 1: elapsed time
+    {0, 220, 223, 239},     // info row 2: protocol, value, role
+};
 constexpr int kCatchUpSteps = 3;                      // late sweep steps taken in one update
 constexpr int kReloadLagSteps = 8;                   // a sweep this many steps behind is rebuilt from the trend
 
@@ -55,13 +70,7 @@ struct HomePage::Frame {
 
 void HomePage::draw_rules() {
     const Surface &c = ctx_.content;
-    for (const int16_t y : {hm::kRule1Y, hm::kRule2Y, hm::kRule3Y}) gfx_fill(c, 0, y, hm::kW, 2, kRule);
-}
-
-void HomePage::draw_band_rules() {
-    const Surface &c = ctx_.content;
-    gfx_fill(c, hm::kBandMidX, hm::kBandY0, 1, hm::kBandY1 - hm::kBandY0 + 1, kRule);
-    gfx_fill(c, hm::kBandMidX + 1, hm::kBandSplitY, hm::kW - hm::kBandMidX - 1, 1, kRule);
+    for (const int16_t y : {hm::kRule1Y, hm::kRule2Y}) gfx_fill(c, 0, y, hm::kW, 2, kRule);
 }
 
 void HomePage::draw_static() {
@@ -70,12 +79,11 @@ void HomePage::draw_static() {
 
 void HomePage::invalidate() {
     statics_ok_ = false;
-    band_valid_ = false;
+    lower_ok_ = false;
     cell_valid_[0] = cell_valid_[1] = false;
     thr_.reset();   // the digits repaint at once; mode_ and the sweep stay (a capture re-renders strips of one frame)
     hd_[0].invalidate();
     hd_[1].invalidate();
-    for (Field *f : {&w_, &wh_i_, &wh_f_, &ah_i_, &ah_f_, &usb_, &el_, &tag_, &val_, &role_}) f->invalidate();
 }
 
 PanelLabels HomePage::labels() const {
@@ -314,12 +322,34 @@ void HomePage::paint_cell(int ci, const Frame &f, int step_col, int step_n, bool
     }
 }
 
-// ---- band ------------------------------------------------------------------------------------
+// ---- lower cell: band and info block -----------------------------------------------------------
+// One compositor cell (y144..239): the third rule, the band's divider and split line, the W / Wh / Ah numbers and the two
+// info rows are items over the base colour, so a text repaint composes the structure under it again (the landscape
+// mapping makes a native glyph box taller than its logical row; a field that cleared its box would cut the rule below).
+// Every row of the info block carries data: row 1 is the USB link, or CC1/CC2 outside a live session, or D+/D- while the
+// link is still unknown; row 2 is the protocol and contract summary.
 
-void HomePage::paint_band(const Frame &f) {
+namespace {
+
+uint32_t sig_items(uint32_t h, std::span<const hm::Item> items) {
+    for (const hm::Item &i : items) {
+        h = mix_u32(h, static_cast<uint32_t>(i.x) | static_cast<uint32_t>(i.y) << 16);
+        h = mix_u32(h, i.color);
+        h = mix(h, i.text);
+    }
+    return h;
+}
+
+}  // namespace
+
+void HomePage::paint_lower(const Frame &f) {
+    const hm::Mode m = f.mode;
+    const bool live = m == hm::Mode::Live, stale = m == hm::Mode::Stale;
+
+    // ---- the texts
     char eb[2][12];
     hm::DecSplit wh{}, ah{};
-    if (f.mode == hm::Mode::NoMeter) {
+    if (m == hm::Mode::NoMeter) {
         wh = {"--", {}};
         ah = {"--", {}};
     } else {
@@ -328,53 +358,37 @@ void HomePage::paint_band(const Frame &f) {
         wh = hm::split_decimal({eb[0], static_cast<size_t>(nw)});
         ah = hm::split_decimal({eb[1], static_cast<size_t>(na)});
     }
-    uint32_t sig = mix_u32(mix_init(), static_cast<uint32_t>(f.mode));
-    sig = mix(sig, f.watt);
-    sig = mix(mix(sig, wh.int_part), wh.rest);
-    sig = mix(mix(sig, ah.int_part), ah.rest);
-    if (band_valid_ && sig == band_sig_) return;
-    band_valid_ = true;
-    band_sig_ = sig;
-    w_.draw(f.watt);
-    wh_i_.draw(wh.int_part);
-    wh_f_.draw(wh.rest);
-    ah_i_.draw(ah.int_part);
-    ah_f_.draw(ah.rest);
-    draw_band_rules();   // the Wh / Ah boxes overwrite the hairlines they touch
-}
 
-// ---- info block ------------------------------------------------------------------------------
-
-void HomePage::paint_info(const Frame &f) {
-    const hm::Mode m = f.mode;
-    const bool live = m == hm::Mode::Live, stale = m == hm::Mode::Stale;
-
-    // Row 1: the USB data link (live only) and the elapsed time of the measurement.
-    std::string_view utxt = "--";
-    uint16_t ucol = kFaint;
+    // Row 1: the USB data link while live; otherwise the measured lines (CC1/CC2 at rest, D+/D- while the link is unknown).
+    hm::LinesText lt;
+    std::string_view row1_tag = "USB", row1_val;
+    uint16_t row1_tag_col = (m == hm::Mode::Idle || m == hm::Mode::NoMeter) ? kFaint : kDim;
+    uint16_t row1_val_col = kDim;
     char ub[usblink::kUiMaxChars + 1];
     char fit[kFitBuf];
+    const int32_t dp = ctx_.analog ? ctx_.analog->dp_mv : -1, dm = ctx_.analog ? ctx_.analog->dm_mv : -1;
+    bool link_known = false;
     if (live) {
-        const int32_t dp = ctx_.analog ? ctx_.analog->dp_mv : -1, dm = ctx_.analog ? ctx_.analog->dm_mv : -1;
         const usblink::Link ul = fusb302::usb_link(dp, dm);
         const size_t len = usblink::format_ui(ul, ub);
         const std::string_view s{ub, len};
         if (!s.empty() && s != "Unkn" && s != "--") {
-            utxt = len > static_cast<size_t>(kUsbChars) ? fit_data(kSmall, s, kUsbChars * kSmall.adv, fit) : s;
-            ucol = ul.conf == usblink::Confidence::Negotiated ? kText
-                 : (ul.conf == usblink::Confidence::Advertised || ul.conf == usblink::Confidence::Hint) ? kDim : kFaint;
+            link_known = true;
+            row1_val = len > static_cast<size_t>(kUsbChars) ? fit_data(kSmall, s, kUsbChars * kSmall.adv, fit) : s;
+            row1_val_col = ul.conf == usblink::Confidence::Negotiated ? kText
+                         : (ul.conf == usblink::Confidence::Advertised || ul.conf == usblink::Confidence::Hint) ? kDim : kFaint;
         }
     }
-    if (ucol != usb_col_) {
-        usb_col_ = ucol;
-        usb_.set_colors(ucol, kBg);
-        usb_.invalidate();
+    if (!link_known) {
+        if (live) hm::format_lines(true, dp, dm, lt);
+        else hm::format_lines(false, ctx_.analog ? ctx_.analog->cc1_mv : -1, ctx_.analog ? ctx_.analog->cc2_mv : -1, lt);
+        row1_tag = lt.tag.view();
+        row1_val = lt.value.view();
+        row1_val_col = stale ? kStale : kDim;
     }
-    usb_.draw(utxt);
-    char eb[8];
-    const size_t el = live ? static_cast<size_t>(hm::fmt_elapsed(eb, ctx_.meter.elapsed_s(f.now)))
-                   : stale ? static_cast<size_t>(hm::fmt_elapsed(eb, ctx_.last.elapsed_s)) : 0;
-    el_.draw({eb, el});
+    char el[8];
+    const size_t eln = live ? static_cast<size_t>(hm::fmt_elapsed(el, ctx_.meter.elapsed_s(f.now)))
+                     : stale ? static_cast<size_t>(hm::fmt_elapsed(el, ctx_.last.elapsed_s)) : 0;
 
     // Row 2: protocol tag, value, role.
     hm::ProtoText pt;
@@ -383,65 +397,95 @@ void HomePage::paint_info(const Frame &f) {
     else hm::format_proto(f.proto, pt);
     const bool known = (live || stale) && f.proto.kind != hm::ProtoKind::None;
     const uint16_t tcol = known ? kDim : kFaint;
-    const uint16_t vcol0 = m == hm::Mode::NoMeter ? (starting ? kDim : kError)
-                        : stale ? kStale
-                        : (live && f.proto.kind != hm::ProtoKind::None && f.proto.kind != hm::ProtoKind::Detecting
-                           && f.proto.kind != hm::ProtoKind::Unknown) ? kText : kDim;
+    uint16_t vcol = m == hm::Mode::NoMeter ? (starting ? kDim : kError)
+                  : stale ? kStale
+                  : (live && f.proto.kind != hm::ProtoKind::None && f.proto.kind != hm::ProtoKind::Detecting
+                     && f.proto.kind != hm::ProtoKind::Unknown) ? kText : kDim;
     // Crossed CC through the K2 (pd::Link::cc_cross, VBUS dark): row 2 tells the user to flip a cable instead of "No source".
-    // The value field is 17 characters wide, hence the short texts.
+    // The value is 17 characters wide at most, hence the short texts.
     const raguard::CrossKind cross = (m == hm::Mode::Idle || m == hm::Mode::Stale) ? ctx_.ui->link().cc_cross() : raguard::CrossKind::None;
-    uint16_t vcol = vcol0;
     if (cross != raguard::CrossKind::None) {
         pt.value.clear();
         pt.value.put(cross == raguard::CrossKind::Crossed ? "CROSSED: flip one" : "Flip a cable?");
         vcol = cross == raguard::CrossKind::Crossed ? kError : kCaution;
     }
-    if (tcol != tag_col_) {
-        tag_col_ = tcol;
-        tag_.set_colors(tcol, kBg);
-        tag_.invalidate();
+    const std::string_view role = m == hm::Mode::NoMeter ? "" : fusb302::self_powered() ? "SNK" : "PAS";
+
+    // ---- the items: structure first, then the six zones in kZones order
+    hm::Item it[20];
+    int n = 0;
+    int zone_end[6];
+    auto add = [&](const hm::Item &item) {
+        if (item.kind == hm::ItemKind::Text && item.text.empty()) return;
+        it[n++] = item;
+    };
+    // A fixed-width field: right-aligned numbers start where their cell does, so a text never needs padding.
+    auto field = [&](const Font &font, int16_t x, int chars, bool right, int16_t top, std::string_view s, uint16_t col) {
+        const int pad = right && static_cast<int>(s.size()) < chars ? chars - static_cast<int>(s.size()) : 0;
+        add(hm::text(font, static_cast<int16_t>(x + pad * font.adv), top, s, col));
+    };
+    add(hm::fill(0, hm::kRule3Y, hm::kW, 2, kRule));
+    add(hm::fill(hm::kBandMidX, hm::kBandY0, 1, hm::kBandY1 - hm::kBandY0 + 1, kRule));
+    add(hm::fill(hm::kBandMidX + 1, hm::kBandSplitY, hm::kW - hm::kBandMidX - 1, 1, kRule));
+    int zone_start[6];
+    zone_start[0] = n;
+    add(hm::text(kMid, 103, 164, "W", tone(m, kWatt)));
+    field(kBig, 4, kWattChars, true, 153, f.watt, tone(m, kWatt));
+    zone_end[0] = n;
+    zone_start[1] = n;
+    add(hm::text(kSmall, 199, 152, "Wh", tone(m, kEnergy)));
+    field(kMid, 124, kEnergyChars, true, 145, wh.int_part, tone(m, kEnergy));
+    field(kMid, 160, kEnergyChars, false, 145, wh.rest, tone(m, kEnergy));
+    zone_end[1] = n;
+    zone_start[2] = n;
+    add(hm::text(kSmall, 199, 177, "Ah", tone(m, kCharge)));
+    field(kMid, 124, kEnergyChars, true, 170, ah.int_part, tone(m, kCharge));
+    field(kMid, 160, kEnergyChars, false, 170, ah.rest, tone(m, kCharge));
+    zone_end[2] = n;
+    zone_start[3] = n;
+    add(hm::text(kSmall, hm::kInfoTagX, kRowTop[0], row1_tag, row1_tag_col));
+    add(hm::text(kSmall, hm::kInfoValX, kRowTop[0], row1_val, row1_val_col));
+    zone_end[3] = n;
+    zone_start[4] = n;
+    field(kSmall, kElX, kElChars, true, kRowTop[0], {el, eln}, kDim);
+    zone_end[4] = n;
+    zone_start[5] = n;
+    add(hm::text(kSmall, hm::kInfoTagX, kRowTop[1], pt.tag.view(), tcol));
+    add(hm::text(kSmall, hm::kInfoValX, kRowTop[1], pt.value.view(), vcol));
+    add(hm::text(kSmall, kRoleX, kRowTop[1], role, kDim));
+    zone_end[5] = n;
+
+    hm::Cell cell;
+    cell.geom = {hm::kBandY0, 239, 0, 0};
+    cell.bg = kBg;
+    cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
+
+    uint32_t sig[6];
+    for (int z = 0; z < 6; z++)
+        sig[z] = sig_items(mix_u32(mix_init(), static_cast<uint32_t>(m)),
+                           cell.items.subspan(static_cast<size_t>(zone_start[z]), static_cast<size_t>(zone_end[z] - zone_start[z])));
+    if (!lower_ok_) {   // a new state: the whole cell
+        lower_ok_ = true;
+        for (int z = 0; z < 6; z++) lower_sig_[z] = sig[z];
+        hm::paint(cell, 0, hm::kBandY0, hm::kW - 1, 239);
+        return;
     }
-    if (vcol != val_col_) {
-        val_col_ = vcol;
-        val_.set_colors(vcol, kBg);
-        val_.invalidate();
+    for (int z = 0; z < 6; z++) {
+        if (sig[z] == lower_sig_[z]) continue;
+        lower_sig_[z] = sig[z];
+        hm::paint(cell, kZones[z].x0, kZones[z].y0, kZones[z].x1, kZones[z].y1);
     }
-    tag_.draw(pt.tag.view());
-    val_.draw(pt.value.view());
-    role_.draw(m == hm::Mode::NoMeter ? "" : fusb302::self_powered() ? "SNK" : "PAS");
 }
 
 // ---- statics ---------------------------------------------------------------------------------
 
 // Everything that depends on the mode only. Runs after an invalidate and on every mode change.
-void HomePage::paint_statics(const Frame &f) {
-    const Surface &c = ctx_.content;
-    const hm::Mode m = f.mode;
+void HomePage::paint_statics() {
     statics_ok_ = true;
-    band_valid_ = false;
-    gfx_fill(c, 0, hm::kRule3Y + 2, hm::kW, 240 - (hm::kRule3Y + 2), kBg);   // the info block: its fields change width with the mode
+    lower_ok_ = false;   // the next paint_lower() repaints the whole lower cell
     draw_rules();
-    draw_band_rules();
-    gfx_text(c, kMid, 103, 164, "W", tone(m, kWatt), kBg);
-    gfx_text(c, kSmall, 199, 152, "Wh", tone(m, kEnergy), kBg);
-    gfx_text(c, kSmall, 199, 177, "Ah", tone(m, kCharge), kBg);
-    gfx_text(c, kSmall, hm::kInfoTagX, kInfoRow1Top, "USB", (m == hm::Mode::Idle || m == hm::Mode::NoMeter) ? kFaint : kDim, kBg);
-
     hd_[0].init(kHero, kHeroX, kDigitTop[0], 5);
     hd_[1].init(kHero, kHeroX, kDigitTop[1], 5);
-    w_.init(c, kBig, 4, 153, 4, Align::Right, tone(m, kWatt), kBg);
-    wh_i_.init(c, kMid, 124, 145, 3, Align::Right, tone(m, kEnergy), kBg);
-    wh_f_.init(c, kMid, 160, 145, 3, Align::Left, tone(m, kEnergy), kBg);
-    ah_i_.init(c, kMid, 124, 170, 3, Align::Right, tone(m, kCharge), kBg);
-    ah_f_.init(c, kMid, 160, 170, 3, Align::Left, tone(m, kCharge), kBg);
-    usb_col_ = kFaint;
-    usb_.init(c, kSmall, hm::kInfoValX, kInfoRow1Top, kUsbChars, Align::Left, usb_col_, kBg);
-    el_.init(c, kSmall, 180, kInfoRow1Top, kElChars, Align::Right, kDim, kBg);
-    tag_col_ = kFaint;
-    tag_.init(c, kSmall, hm::kInfoTagX, kInfoRow2Top, kTagChars, Align::Left, tag_col_, kBg);
-    val_col_ = kDim;
-    val_.init(c, kSmall, hm::kInfoValX, kInfoRow2Top, m == hm::Mode::NoMeter ? kValCharsNoMeter : kValChars, Align::Left, val_col_, kBg);
-    role_.init(c, kSmall, 196, kInfoRow2Top, kRoleChars, Align::Left, kDim, kBg);
 }
 
 // ---- update ----------------------------------------------------------------------------------
@@ -460,7 +504,7 @@ void HomePage::update(uint32_t now_ms) {
         if (!keep_sweep) sweep_ok_ = false;
     }
     sample_values(f, now_ms);
-    if (!statics_ok_) paint_statics(f);
+    if (!statics_ok_) paint_statics();
     int step_col = -1;
     int step_n = 0;
     update_sweep(f, now_ms, step_col, step_n);
@@ -469,8 +513,7 @@ void HomePage::update(uint32_t now_ms) {
         const bool changed = hd_[i].set(f.hero[i], px0, px1);
         paint_cell(i, f, step_col, step_n, changed, px0, px1);
     }
-    paint_band(f);
-    paint_info(f);
+    paint_lower(f);
 }
 
 }  // namespace k2

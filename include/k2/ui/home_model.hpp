@@ -110,6 +110,15 @@ struct ProtoText {
 };
 void format_proto(const ProtoInfo &p, ProtoText &out);
 
+// The info block's first row when the USB link has nothing to say: the two analog pairs the page already measures,
+// so the bar is never empty. "CC1/2" with "1.62/0.07V" (outside a live session), or "D+/D-" with "0.60/0.58V" (live,
+// link still unknown). A negative reading (no ADC sample) shows "-.--".
+struct LinesText {
+    StrBuf<6> tag;
+    StrBuf<16> value;
+};
+void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out);
+
 // ---- cell state --------------------------------------------------------------------------------
 enum class Mode : uint8_t { NoMeter, Idle, Live, Stale };
 // The power meter has not answered YET: the first seconds of a boot, while the chip is still being found (a key-mode boot lives on a
