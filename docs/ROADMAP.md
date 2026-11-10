@@ -441,21 +441,19 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests: inline -> `identify_start` refuses even with confirm; the sniffed identity fills the Sink
     tab. Hardware: Anker IQ4 -> K2 -> OnePlus at 9 V, Identify shows the phone's VID/PID from sniff, black box shows no
     K2 TX, the phone stays at 9 V.
-- **Charger test: "Cable OFF" is unclear and the pick does not stick** (2026-11-10, operator report): the wizard's step 2
+- **Charger test: "Cable OFF" says nothing about what it does** (2026-11-10, operator report): the wizard's step 2
   reads "Cable" with the value "OFF", which says nothing about what it does (the e-marker identity the K2 presents to the
   charger, the same list as Tools -> Spoof), and the operator re-picks it before every run through a cable.
-  - Wording (operator decision): step title "Spoof cable"; the first row "Off (real cable)" (the charger reads the real
+  - Fix, wording only (operator decision): step title "Spoof cable"; the first row "Off (real cable)" (the charger reads the real
     cable, or a plain 3 A link); the built-ins and clones keep their names and ratings. Review row `Spoof  Off` /
     `Spoof  EPR 50V 5A`. The Refuse stage's "Start, cable OFF" becomes "Start, spoof off"; docs (USER_GUIDE,
     CHARGER_TEST_FLOW, UI_DESIGN) and `ct_start.py --cable` help use the same words.
-  - Remembered pick: the step is skipped when /cable.cfg holds a pick (Tests -> Review directly); Review's `Spoof` row
-    shows it and OK on that row opens the list to change it. A first run (no record) still shows the step.
-  - "Start, spoof off" on the Refuse stage applies to that run only and never overwrites the stored pick (today
-    `ctx_.cables.select({})`, src/ui/ui_charger_test.cpp ~2340, persists Off).
-  - `ct_start.py` without `--cable` keeps the stored pick (today it defaults to `off` and persists it over the
-    operator's choice); `--cable off` stays explicit.
-  - Validate: host tests for the skip, the Review row edit path, Refuse not persisting, ct_start default; hardware: pick
-    CUKTECH 6A, run, reboot, run again with no re-pick -> the Mi 6A rows arm.
+  - Validate: host tests on the step title, the first row, the Review row and the Refuse option text; hardware
+    screenshots of steps 2/3 and 3/3.
+  - Open, NOT decided by the operator (do not implement): skip the step when /cable.cfg holds a pick (Review's `Spoof`
+    row edits it); the Refuse stage's "Start, spoof off" overwrites the stored pick with Off
+    (src/ui/ui_charger_test.cpp ~2340) - make it per run?; `ct_start.py` without `--cable` stores Off over the
+    operator's pick - keep the stored pick instead?
 - **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, be71f10, `runs/2026-11-10-merge2-hw/`
   dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at
   "No charger". The K2 passes CC1->CC1 and CC2->CC2, and each cable's orientation picks which pin its CC wire lands on,
