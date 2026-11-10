@@ -32,6 +32,11 @@ struct Fake final : ct::Env {
     int low_mv_for_3v3 = 0;   // a source whose output lands here (not at the target) on a 3.3 V programmable step
     int pd_small_step_mv = -1;   // see request_pd: the output move of a +20 mV PPS request (-1 = follow the target)
     int last_pps_mv = 0, last_pd_vbus = 0;
+    // walk-trend script (ROADMAP "PPS step walk judged by total + trend"): the output moves of the successive +20 mV PPS
+    // requests of one walk, in mV (a repeat of the last entry past the end); empty = off (pd_small_step_mv rules).
+    // walk_step_i counts the +20 mV steps since the last non-step PPS request (the base level).
+    std::vector<int> walk_deltas;
+    unsigned walk_step_i = 0;
     // walk-settle script (ROADMAP "the PPS step walk fails a good source..."): a PPS request at walk_settle_mv arms the
     // output at walk_settle_from_mv, settling linearly to walk_settle_to_mv over walk_settle_ms (the UGREEN shape: the
     // 13.0 V base reads 13007 mV, then settles to 12990). While settling the output follows the script, not the target.
@@ -235,10 +240,14 @@ struct Fake final : ct::Env {
                 const uint32_t t = in.now - settle_t0;
                 if (t >= walk_settle_ms) { settle_on = false; in.vbus_mv = walk_settle_to_mv; }
                 else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
+            } else if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && !walk_deltas.empty()) {
+                in.vbus_mv = last_pd_vbus + walk_deltas[std::min<size_t>(walk_step_i, walk_deltas.size() - 1)];
+                ++walk_step_i;
             } else if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && pd_small_step_mv >= 0)
                 in.vbus_mv = last_pd_vbus + pd_small_step_mv;
             else
                 in.vbus_mv = low_mv_for_3v3 && c.mv == 3300 ? low_mv_for_3v3 : int(c.mv);
+            if (pps_req && !(last_pps_mv && int(c.mv) - last_pps_mv == 20)) walk_step_i = 0;   // a base level: the walk restarts
             if (pps_req) { last_pps_mv = int(c.mv); last_pd_vbus = in.vbus_mv; }
         }
         if (c.mv >= 5000) {   // the scripted output shape of the sweep tests
@@ -3734,6 +3743,54 @@ static void test_pps_step_walk_steady_wait_is_bounded_by_the_timeout() {
         if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
     CHECK_EQ(walk7, true);
 }
+// ROADMAP "PPS step walk judged by total + trend" (hardware 2026-11-10, runs/2026-11-10-pps13): a good PPS source's
+// output keeps creeping up 20-36 mV for ~2 s after each PS_RDY, so one 20 mV step reads anywhere from <= 0 to ~+36 mV
+// while the 5-step total is right (~95 mV). The walk is judged by the total and the upward trend of all six levels; only
+// a jump of 2 x kStepMv or more (coarse rounding) fails a single step.
+static unsigned walk_fail_rows(const ct::Runner& r, int detail) {   // step-resolution rows with this detail
+    unsigned n = 0;
+    for (const auto& s : r.steps())
+        if (s.reason == ct::Reason::StepResolution && int(s.verdict) == int(ct::Verdict::Fail) && s.detail == detail) ++n;
+    return n;
+}
+static void run_walk_script(Fake& f, ct::Runner& r) {
+    r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+}
+static void test_pps_step_walk_passes_a_drifting_source() {
+    // the re-run of the CUKTECH-class source: levels 13035, 13039, 13075, 13079, 13109, 13130 (moves +4 +36 +4 +30 +21,
+    // total 95); and a creeping read where one step reads below zero (+25 +36 -3 +30 +12, total 100)
+    const std::vector<std::vector<int>> seqs = {{4, 36, 4, 30, 21}, {25, 36, -3, 30, 12}};
+    for (const auto& seq : seqs) {
+        Fake f; f.walk_deltas = seq;
+        ct::Runner r(f); run_walk_script(f, r);
+        CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+        bool walk7 = false;
+        for (size_t i = 0; i + 5 < f.choices.size(); ++i)
+            if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
+        CHECK_EQ(walk7, true);   // all six Requests went out and the row passed
+    }
+}
+static void test_pps_step_walk_passes_a_slow_but_correct_source() {
+    Fake f; f.walk_deltas = {15, 25, 18, 22, 20};   // every step off by up to 5 mV, the total is exactly 100
+    ct::Runner r(f); run_walk_script(f, r);
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+}
+static void test_pps_step_walk_fails_a_flat_source_as_steps_ignored() {
+    Fake f; f.walk_deltas = {0, 0, 0, 0, 0};
+    ct::Runner r(f); run_walk_script(f, r);
+    CHECK_EQ(walk_fail_rows(r, 0) >= 1u, true);   // detail 0 = the mean move: "steps ignored"
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), walk_fail_rows(r, 0));
+    ct::Step s{}; s.reason = ct::Reason::StepResolution; s.detail = 0;
+    CHECK_STR(ct::explanation(s), "steps ignored");
+}
+static void test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump() {
+    Fake f; f.walk_deltas = {0, 0, 0, 0, 100};   // a 100 mV quantum: nothing, nothing, nothing, nothing, +100
+    ct::Runner r(f); run_walk_script(f, r);
+    CHECK_EQ(walk_fail_rows(r, 100) >= 1u, true);   // the jump fails the step, detail = the move (the total alone passes)
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), walk_fail_rows(r, 100));
+}
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
 static void run_to_pd_row(Fake& f, ct::Runner& r, size_t row) {
@@ -6212,5 +6269,7 @@ int main() {
     test_pps_step_walk_waits_for_the_base_to_settle();
     test_walk_steady_window();
     test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
+    test_pps_step_walk_passes_a_drifting_source(); test_pps_step_walk_passes_a_slow_but_correct_source();
+    test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
     return test_report("test_charger_test");
 }
