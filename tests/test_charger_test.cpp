@@ -4453,6 +4453,8 @@ static void test_preflight_pdo1_contract_at_wrong_voltage_refuses_wrong_voltage(
         char buf[32];
         CHECK_EQ(ct::refusal_footer_text(ct::Reason::WrongVoltage, 8470, buf), 27u);   // the B5 run's 8.47 V reads 8.5 V
         CHECK_STR(buf, "VBUS 8.5 V on a 5V contract");
+        CHECK_EQ(ct::refusal_footer_text(ct::Reason::WrongVoltage, 8960, buf), 27u);   // rounds up across the volt: 9.0 V, not 8.0 V
+        CHECK_STR(buf, "VBUS 9.0 V on a 5V contract");
     }
     {   // no contract at the same voltage: a source with no PD at 7.6 V is a plain unsafe VBUS
         Fake f2; f2.in.vbus_mv = 7600;

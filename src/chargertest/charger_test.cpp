@@ -67,7 +67,7 @@ size_t refusal_footer_text(Reason r, int vbus_mv, std::span<char> out) {
         // The 27-cell footer line: "VBUS 8.5 V on a 5V contract" (8470 mV reads 8.5 V). The log line carries the full
         // "(shared bus)" phrase, so screen and log name the same case.
         const int tenths = (vbus_mv + 50) / 100;
-        return fmt::format(out, "VBUS %d.%d V on a 5V contract", vbus_mv / 1000, tenths % 10);
+        return fmt::format(out, "VBUS %d.%d V on a 5V contract", tenths / 10, tenths % 10);
     }
     const char* w = refusal_words(r);
     size_t n = 0;
@@ -83,7 +83,7 @@ void Runner::note_preflight_refusal(Reason r, int vbus_mv) {
         // A live PDO 1 contract held outside vSafe5V (pattern shared-bus-split): name the measured level, so the
         // log and ct_start.py say why the run id stayed 0 - "VBUS 8.5 V on a 5 V contract (shared bus)".
         const int tenths = (vbus_mv + 50) / 100;   // 8470 mV reads 8.5 V
-        K2LOG("[TEST] preflight refused: VBUS %d.%d V on a 5 V contract (shared bus)\n", vbus_mv / 1000, tenths % 10);
+        K2LOG("[TEST] preflight refused: VBUS %d.%d V on a 5 V contract (shared bus)\n", tenths / 10, tenths % 10);
     } else {
         K2LOG("[TEST] preflight refused: %s (%d mV)\n", refusal_words(r), vbus_mv);
     }
