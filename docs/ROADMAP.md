@@ -271,8 +271,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     No shared-bus voltage on the CUKTECH (9.10/12.13/15.07 V with the phone charging), and PPS at no load passed
     through the splitter there and on the Baseus direct (run 4/5): `shared-bus-split` and the PPS collapse need the
     Baseus 140 W top port behind the splitter. The Baseus balances by cutting power to its ports 2-3 times.
-- **PPS collapses on the splitter at no load (`pps-off-at-no-load`, suspected)** (2026-11-10, open, needs one lab
-  option; `runs/2026-11-10-splitter-pps/`, `runs/2026-11-10-op15-sniff/`). Anker 2-way splitter behind the Baseus 140 W,
+- **PPS collapses on the splitter at no load (`pps-off-at-no-load`, suspected)** (2026-11-10, step 1 fixed in e38c42c
+  (`pd request --over-load`, lab-only, passive-far-sink gate), hardware check pending; `runs/2026-11-10-splitter-pps/`,
+  `runs/2026-11-10-op15-sniff/`). Anker 2-way splitter behind the Baseus 140 W,
   list 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A, EPR 28 V 5 A.
   - Evidence: the charger test (run 9, be3f589) passes every fixed row and EPR 28 V, and fails all five PPS rows "source
     lost" (~1.8 V). On the wire: Request PDO 6 PPS -> Accept -> VBUS starts falling ~46 ms later, ~2 V within ~250 ms
@@ -287,9 +288,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     Get_Source_Cap; an Xbox controller and a 390 mA USB light show sink-level CC), so `pd request` refuses "inline: a
     live sink is attached" - correct behaviour. The PA8 lab load pulses only up to 200 ms and its guard refuses once
     VBUS sags (`reason=vbus_low` at 3.38 V ~100 ms after the request).
-  - Step 1 (diagnosis): a lab-only `k2_remote.py pd request N ... --over-load` that lets the K2 request while a far
+  - Step 1 (diagnosis, implemented in e38c42c, host-tested, hardware check pending): a lab-only
+    `k2_remote.py pd request N ... --over-load` that lets the K2 request while a far
     sink is attached, only when that sink has sent no PD message this attach (a passive load: Rd only, no Request,
-    no Get_Source_Cap); refused otherwise and never reachable from the UI or the charger test. Hardware: splitter ->
+    no Get_Source_Cap); refused otherwise and never reachable from the UI or the charger test. The gate derives
+    from the existing foreign-evidence tracking (`pd::over_load_allowed` over `fusb302::over_load_facts()`: inline
+    latch / sink Rd on CC / foreign Request vs. a Request we did not send and the sink-role records the engine
+    filed). Hardware: splitter ->
     K2 -> the USB light (Rd on both CC, ~390 mA at 5 V), `pd-reread --pin 2 --no-run`, then
     `pd request 6 --mv 5500 --ma 2000 --confirm --over-load`: holds -> no-load is the trigger; collapses -> look at
     what else the phone does (its Request timing is ~1.5 s after PS_RDY, the K2's is longer).
