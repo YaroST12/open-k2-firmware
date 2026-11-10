@@ -105,20 +105,21 @@ void DetailPage::invalidate() {
 }
 
 void DetailPage::update(uint32_t now_ms) {
-    const bool stale = ctx_.stale();
-    title_badge(stale);
+    // Detail is a live instrument: it never shows Home's frozen LAST snapshot (ctx_.last), so an unplugged source reads
+    // 0.00 V and the lines keep moving. Only Home holds the last state.
+    title_badge(false);
     const bool online = ctx_.pm_online;
-    const power::Metrics &pm = stale ? ctx_.last.pm : ctx_.pm;
-    const std::optional<adc::Reading> &an = stale ? ctx_.last.analog : ctx_.analog;
+    const power::Metrics &pm = ctx_.pm;
+    const std::optional<adc::Reading> &an = ctx_.analog;
     const bool vbus = online && pm.vbus_mv >= 1000;
-    const bool live = vbus && !stale;
-    auto col = [&](uint16_t on) { return stale ? kStale : live ? on : kFaint; };
+    const bool live = vbus;
+    auto col = [&](uint16_t on) { return live ? on : kFaint; };
     auto put = [&](int slot, std::string_view s, uint16_t color) {
         f_[slot].set_colors(color, kBg);
         f_[slot].draw(s);
     };
 
-    if (online || stale) {
+    if (online) {
         StrBuf<12> v; v.put_fixed(pm.vbus_mv, 2).put(" V"); put(SV, v.view(), col(kVolt));
         StrBuf<12> a; a.put_abs_fixed(pm.current_ma, 2).put(" A"); put(SA, a.view(), col(kAmp));
         // The cell is 7 cells wide: "99.99 W" is the last two-decimal reading, from 100 W on one decimal ("180.0 W") fits.
@@ -171,8 +172,9 @@ void DetailPage::update(uint32_t now_ms) {
         } else {
             ccv.put("-.-/-.-"); dmv.put("-.-/-.-");
         }
-        put(SCC, ccv.view(), stale ? kStale : live && cc ? kVolt : kFaint);
-        put(SDm, dmv.view(), stale ? kStale : live ? kText : kFaint);
+        // The line levels are measured whether or not VBUS is up (a waiting charger shows its Rp with VBUS dark).
+        put(SCC, ccv.view(), !an ? kFaint : live && cc ? kVolt : kText);
+        put(SDm, dmv.view(), !an ? kFaint : kText);
     }
 
     {   // USB data link as the sniffed PD traffic describes it, and the alt mode beside it.
@@ -181,9 +183,9 @@ void DetailPage::update(uint32_t now_ms) {
         usblink::format_speed(ul, ub);
         const uint16_t cc2 = ul.conf == usblink::Confidence::Negotiated ? kOk
                            : ul.conf == usblink::Confidence::Advertised ? kCaution : kFaint;
-        put(SUsb, ub.data(), stale ? kStale : cc2);
+        put(SUsb, ub.data(), cc2);
         const usblink::AltState as = usblink::format_alt(ul, ab, false);
-        put(SAlt, ab.data(), stale ? kStale : as == usblink::AltState::Entered ? kOk
+        put(SAlt, ab.data(), as == usblink::AltState::Entered ? kOk
                              : as == usblink::AltState::Advertised ? kCaution : kFaint);
     }
 
@@ -191,20 +193,20 @@ void DetailPage::update(uint32_t now_ms) {
         char whb[16], ahb[16];
         fmt_energy_pair(whb, ahb, ctx_.meter.mwh(), ctx_.meter.mah(), 6);
         auto trim = [](const char *p) { while (*p == ' ') p++; return std::string_view(p); };
-        put(SWh, trim(whb), stale ? kStale : kEnergy);
-        put(SAh, trim(ahb), stale ? kStale : kCharge);
+        put(SWh, trim(whb), kEnergy);
+        put(SAh, trim(ahb), kCharge);
     }
 
     {
         StrBuf<8> el;
-        el.put_hms(stale ? ctx_.last.elapsed_s : ctx_.meter.elapsed_s(now_ms));
-        put(STime, el.view(), stale ? kStale : kText);
+        el.put_hms(ctx_.meter.elapsed_s(now_ms));
+        put(STime, el.view(), kText);
         StrBuf<8> tmp;
         temp_short_text(an, tmp);
         std::string_view ts = tmp.view();
         if (ts.substr(0, 3) == "MCU") ts.remove_prefix(3);
         if (ts.empty()) ts = "--";
-        put(STemp, ts, stale ? kStale : kText);
+        put(STemp, ts, kText);
     }
 
     {   // FastChg | R: the passive D+/D- verdict and the load resistance ("--" without a load).
@@ -213,14 +215,14 @@ void DetailPage::update(uint32_t now_ms) {
             ctx_.fc != fastcharge::Protocol::Pending)
             fp.put(fastcharge::short_name(ctx_.fc));
         if (fp.view().empty()) fp.put("--");
-        put(SFc, fp.view(), stale ? kStale : live ? kAmp : kFaint);
+        put(SFc, fp.view(), live ? kAmp : kFaint);
         if (live && pm.current_ma) {
             char r[16];
             fmt_ohms(r, pm.vbus_mv, pm.current_ma);
             StrBuf<10> rs; rs.put(r);
             put(SOhm, rs.view(), kOhm);
         } else {
-            put(SOhm, "-- R", stale ? kStale : kFaint);
+            put(SOhm, "-- R", kFaint);
         }
     }
 }

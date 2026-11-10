@@ -382,6 +382,8 @@ else advertised ones amber, `-` for none. Home keeps the combined `usblink::form
   - The pill reads `LAST m:ss`.
   - The A badge stays "A"; the last direction arrow is frozen in grey.
   - The sparkline freezes.
+  - Home alone freezes. The Detail page is a live instrument and never shows the LAST snapshot: unplugged it reads
+    0.00 V, 0.00 A and the live CC and D+/D- levels (a waiting charger's Rp shows with VBUS dark), with no LAST pill.
 - **Idle vs error.** Idle shows faint zeros (measured, and zero). Error shows dashes (nothing to measure
   with), with a red footer.
 
