@@ -200,5 +200,12 @@ int main() {
         CHECK_EQ(int(c.fresh()), 0);
         CHECK_EQ(int(c.id() != s2), 1);
     }
+    // Lab-only over-load gate (the remote's `pd request ... --over-load`): the K2 may request while a
+    // far sink is attached only while that sink stays a passive load - it showed its Rd and sent no
+    // PD message this attach. Refused with no far sink, refused after any far PD message.
+    CHECK_EQ(int(over_load_allowed({true, false})), 1);    // passive far sink: allowed
+    CHECK_EQ(int(over_load_allowed({false, false})), 0);   // no far sink: refused
+    CHECK_EQ(int(over_load_allowed({false, true})), 0);    // no far sink at all: refused
+    CHECK_EQ(int(over_load_allowed({true, true})), 0);     // the far sink spoke PD this attach: refused
     return test_report("test_pd_passive");
 }

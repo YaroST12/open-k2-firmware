@@ -841,6 +841,30 @@ class ActivePd(unittest.TestCase):
         self.assertEqual((r["pos"], r["mv"], r["ma"], r["hard_resets"]), (4, 20000, 3000, 1))
         self.assertIn("20 V", kr.render("pd", r))
 
+    def test_request_over_load_sets_flag_bit_1(self):
+        link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
+        # --over-load with --confirm: flags = 3
+        kr.cmd_pd(link, self.args(pd_cmd="request", pos=6, mv=5500, ma=2000, confirm=True, over_load=True))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_REQUEST,
+                                         bytes([6, 3]) + (5500).to_bytes(2, "little") + (2000).to_bytes(2, "little")))
+        # --over-load alone: flags = 2 (bit 1, no confirm)
+        kr.cmd_pd(link, self.args(pd_cmd="request", pos=6, mv=5500, ma=2000, over_load=True))
+        self.assertEqual(link.calls[1], (kr.CMD_PD_REQUEST,
+                                         bytes([6, 2]) + (5500).to_bytes(2, "little") + (2000).to_bytes(2, "little")))
+        # without --over-load the flag stays clear
+        kr.cmd_pd(link, self.args(pd_cmd="request", pos=6, mv=5500, ma=2000, confirm=True))
+        self.assertEqual(link.calls[2][1][1], 1)
+
+    def test_over_load_is_only_on_pd_request(self):
+        a = kr.build_parser().parse_args(["pd", "request", "6", "--mv", "5500", "--ma", "2000",
+                                          "--confirm", "--over-load"])
+        self.assertTrue(a.over_load)
+        self.assertTrue(a.confirm)
+        for other in (["pd", "release"], ["pd", "reset"], ["pd", "status"], ["fc", "trigger", "qc2", "--volts", "9"]):
+            with self.assertRaises(SystemExit):
+                kr.build_parser().parse_args(other + ["--over-load"])
+
+
     def test_source_hard_resets_is_appended_and_optional(self):
         self.assertEqual(kr.decode_pd_trigger(self.TRIG)["source_hard_resets"], 0)   # older firmware: 13 bytes
         r = kr.decode_pd_trigger(self.TRIG + bytes([2, 0, 0, 0]))

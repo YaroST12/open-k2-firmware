@@ -1178,6 +1178,11 @@ static void test_active_pd_commands() {
     CHECK_EQ(f.rq_pos, 4); CHECK_EQ(f.rq_mv, 0x4E20); CHECK_EQ(f.rq_ma, 0x0BB8); CHECK_EQ(f.rq_confirm, true);
     CHECK_EQ(run(f, request(0x41, 2, {2, 0, 0, 0, 0, 0}), r), 1);
     CHECK_EQ(f.rq_confirm, false);                       // flag bit 0 only
+    CHECK_EQ(f.rq_over_load, false);
+    CHECK_EQ(run(f, request(0x41, 6, {6, 3, 0x7C, 0x15, 0xD0, 0x07}), r), 1);
+    CHECK_EQ(f.rq_pos, 6); CHECK_EQ(f.rq_confirm, true); CHECK_EQ(f.rq_over_load, true);   // bits 0 + 1
+    CHECK_EQ(run(f, request(0x41, 7, {6, 2, 0x7C, 0x15, 0xD0, 0x07}), r), 1);
+    CHECK_EQ(f.rq_confirm, false); CHECK_EQ(f.rq_over_load, true);   // over-load alone: bit 1 only
     f.rq_result = {Status::NeedConfirm, 0};
     run(f, request(0x41, 3, {2, 0, 0, 0, 0, 0}), r);
     check_header(r, 0x41, 3, Status::NeedConfirm, 1);

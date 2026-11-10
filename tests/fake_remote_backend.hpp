@@ -127,9 +127,9 @@ struct Fake {
     RereadResult reread(uint8_t op, uint8_t mask) { calls++; rr_calls++; rr_op = op; rr_mask = mask; return rr_result; }
     uint8_t id_op = 0xFF; IdentifyResult id_result{};
     IdentifyResult identify_device(uint8_t op) { calls++; id_op = op; return id_result; }
-    uint8_t rq_pos = 0xFF; uint16_t rq_mv = 0, rq_ma = 0; bool rq_confirm = false; PdOpResult rq_result{};
-    PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm) {
-        calls++; rq_pos = pos; rq_mv = mv; rq_ma = ma; rq_confirm = confirm; return rq_result;
+    uint8_t rq_pos = 0xFF; uint16_t rq_mv = 0, rq_ma = 0; bool rq_confirm = false, rq_over_load = false; PdOpResult rq_result{};
+    PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load) {
+        calls++; rq_pos = pos; rq_mv = mv; rq_ma = ma; rq_confirm = confirm; rq_over_load = over_load; return rq_result;
     }
     int releases = 0, resets = 0;
     PdOpResult pd_release() { calls++; releases++; return {}; }
