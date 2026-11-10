@@ -685,8 +685,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   rows). Validate: host tests for the point plan and the summary; hardware: one full sweep on a working PPS source,
   no reboot, journal intact. FH22 evidence: `docs/CHARGER_QUIRKS.md`,
   `runs/2026-11-10-merge2-hw/fh22-sweep.tsv`.
-- **AVS deep sweep, its own entry next to the PPS sweep** (2026-11-10, user decision; built on the PPS sweep's engine).
-  Opt-in, never in a preset: every 100 mV (the AVS Request granularity) across the SPR AVS range (9-20 V) and, with
+- **AVS deep sweep, its own entry next to the PPS sweep** (2026-11-10, user decision; built on the PPS sweep's engine;
+  fixed in 9e10342, hardware check pending). Opt-in, never in a preset: every 100 mV (the AVS Request granularity) across the SPR AVS range (9-20 V) and, with
   EPR entered, the EPR AVS range (15 V up to the APDO top, capped at this K2's monitor ceiling - 36 V here, per-device;
   48 V is skipped as "above the K2's monitor"), current at or below the APDO's PDP-derived limit and never above 1 A
   for the sweep, Accept + PS_RDY + measured VBUS per point. EPR needs what the EPR rows already need (an EPR 50 V 5 A
