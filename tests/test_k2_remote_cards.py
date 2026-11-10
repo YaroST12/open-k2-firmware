@@ -133,7 +133,8 @@ class Cards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:   # the export JSON carries the field as well
             out = os.path.join(d, "x.json")
             run(["cards", "export", "--out", out], [bytes([0, 1, 1, 3, 0])] + chunks(rec))
-            self.assertEqual(json.load(open(out))[0]["ranges"][0]["err_mv"], [10, 20, 8, -12])
+            with open(out) as f:
+                self.assertEqual(json.load(f)[0]["ranges"][0]["err_mv"], [10, 20, 8, -12])
         r, _ = run(["cards", "show", "3"], chunks())   # a card without the v9 block says nothing
         self.assertNotIn("err_mv", r["card"]["ranges"][0])
         self.assertNotIn("err ", kr.render("cards", r))

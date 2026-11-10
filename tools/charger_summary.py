@@ -204,13 +204,23 @@ def summarize_card(c):
         out.append(f"- {', '.join(names)}: skipped" + (f", {why}" if why else ""))
     for r in c["ranges"]:
         rng = f"- {step_label.range_protocol(r['alg'])} {step_label.range_text(r['lo_mv'], r['hi_mv'], r.get('max_ma', 0))}: "
+        spread = _spread_text(r)   # v9 card: the setpoint error per passed level, e.g. ", err +10 / +20 / +8 / -12 mV"
         if r["fail_mv"]:
-            out.append(rng + f"✗ at {_v(r['fail_mv'])} V" + (f", reached {_v(r['max_mv'])} V" if r["max_mv"] else ""))
+            out.append(rng + f"✗ at {_v(r['fail_mv'])} V" + (f", reached {_v(r['max_mv'])} V" if r["max_mv"] else "") + spread)
         elif r["max_mv"] >= r["hi_mv"]:
-            out.append(rng + "✓ whole range")
+            out.append(rng + "✓ whole range" + spread)
         else:
-            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "no step measured"))
+            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "no step measured") + spread)
     return "\n".join(out)
+
+
+def _spread_text(r):
+    """The v9 spread block of a card range as ', err +10 / +20 / +8 / -12 mV' (ranges[i].err_mv in report_card.py /
+    k2proto.js; absent on older cards and when no level was measured)."""
+    errs = r.get("err_mv")
+    if not errs:
+        return ""
+    return ", err " + " / ".join(f"{e:+d}" for e in errs) + " mV"
 
 
 if __name__ == "__main__":
