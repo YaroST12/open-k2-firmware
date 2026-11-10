@@ -73,6 +73,7 @@ const OfferBook &sync_book(const pd::Link &link) {
 }  // namespace
 
 uint32_t g_match_live_calls = 0;
+uint32_t g_conn_body_passes = 0;
 
 MatchResult match_live(const pd::Link &link) {
     g_match_live_calls++;
@@ -778,6 +779,7 @@ void ConnectionPage::paint_empty() {
 void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
                                 bool redraw) {
     static_assert(kBodyRows == kMaxList, "one stored hash per visible row");
+    g_conn_body_passes++;
     const Surface &c = ctx_.content;
     const pd::Link &link = ctx_.ui->link();
     TabData d;

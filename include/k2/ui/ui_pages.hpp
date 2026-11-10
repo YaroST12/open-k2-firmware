@@ -625,6 +625,11 @@ MatchResult match_live(const pd::Link &link);
 // cheap pre-check skips the expensive path when nothing changed. Static storage, never read on device.
 extern uint32_t g_match_live_calls;
 
+// Counts ConnectionPage::paint_body() passes; host tests (tests/test_ui_conn_flicker.cpp) read it to prove
+// a steady link produces 0 body passes over 10 s (the "[CONN] body full=%d rows=%d" log on device).
+// Static storage, never read on device.
+extern uint32_t g_conn_body_passes;
+
 // Connection (Tools): the three parties on the two ports as tabs, Source / Cable / Sink, with a status bar
 // at the bottom and a small action pop-up on OK (ui_connection.hpp holds the pure model). Short +/- switch
 // tabs (or move in the pop-up), OK opens the pop-up, long OK shares, BACK closes the pop-up or leaves.
