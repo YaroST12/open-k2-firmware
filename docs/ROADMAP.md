@@ -722,6 +722,10 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   outside the sweep's tolerance). Other rows render as before. Validate: host tests (`test_ui_sweep_live`,
   `test_sweep`, `test_kit`, `test_step_label`), `make gate` (stack stage); on hardware a PPS sweep on the C1 shows the
   marker walking along the band, the line following the points, and no flicker in the grid below.
+  Follow-up (operator finding on hardware, fixed in 5e44447, hardware check pending): the grid's Sweep row listed one
+  badge per volt with a dot that never moved; it is now one range chip ("3.3-21V", current underneath) like the PPS
+  row above it, on the Running, Results and Steps views. Validate: `test_result_layout`, `test_ui_sweep_live`; on
+  hardware the Sweep row shows one chip that goes green, amber or red when the sweep closes.
 
 ## Not verified on hardware
 
