@@ -31,6 +31,7 @@ static void fixture() {
     g_stub.pm.current_ma = 1520;
     g_stub.pm.power_mw = 30456;
     g_stub.caps.valid = true; g_stub.caps.num_pdos = 7; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1;
+    g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;   // caps + a sink answer: the verdict is Present
     const pd::Pdo mix[7] = {
         {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000},     {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000},
         {pd::PdoType::Fixed, 0, 15000, 15000, 3000, 45000},   {pd::PdoType::Fixed, 0, 20000, 20000, 5000, 100000},

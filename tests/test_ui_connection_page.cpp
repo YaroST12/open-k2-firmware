@@ -293,6 +293,8 @@ static void test_each_tab_shows_its_own_side() {
     g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
     g_stub.caps.pdos[2] = {pd::PdoType::Pps, 0, 5000, 11000, 5000, 55000};
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;   // a Source_Capabilities arrived: the page is no longer waiting
+    g_stub.pd_seen_attach = true;                  // caps are PD messages (the driver sets this on any decode)
+    g_stub.ol_facts.far_pd_message = true;         // the phone answered the charger's own Discover Identity
     uint32_t t = 21000;
     ui.tick(t);
     set_id(g_stub.vdm, 0x2B01, 0x0000, "Unknown");
@@ -340,6 +342,8 @@ static void test_sink_tab_not_empty_when_a_sink_was_seen() {
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.accepted = true;
     g_stub.contract.pos = 1; g_stub.contract.mv = 9000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000;
     g_stub.contract.requests = 1;
+    g_stub.pd_seen_attach = true;                  // the sniffed Request is a decoded PD message
+    g_stub.ol_facts.far_pd_message = true;         // ... sent by the sink: it answered
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     g_stub.cc = 1; g_stub.pm.current_ma = 2000;     // attach with a load behind the K2: inline latches
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
@@ -352,8 +356,10 @@ static void test_sink_tab_not_empty_when_a_sink_was_seen() {
     g_stub.contract = {};
 }
 
-// A non-PD source (attached, but Source_Capabilities never arrive): "waiting for caps" ends after
-// pd::kWaitingCapsMs and the Source tab falls through to what is known instead of the single waiting row.
+// A non-PD source (attached, but Source_Capabilities never arrive): the "PD present" verdict stays Pending
+// for the settle window (the Source tab still shows "Waiting for caps..."), settles to None at attach+1.5 s
+// and the tab then says there is no PD (ROADMAP 2026-11-10, Row C); the caps wait itself still ends after
+// pd::kWaitingCapsMs.
 static void test_source_tab_leaves_waiting_after_timeout() {
     Ui &ui = fresh_ui();                    // detached: cc 0, VBUS 0
     g_stub.pm.vbus_mv = 5000;              // a plain 5 V port, no PD traffic at all
@@ -362,11 +368,49 @@ static void test_source_tab_leaves_waiting_after_timeout() {
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().attached()), 1);
     CHECK_EQ(int(ui.link().waiting()), 1);
-    const auto waiting_frame = show(ui, 0, t);        // Source tab: "Waiting for caps..."
-    for (int i = 0; i < 55; i++) ui.tick(t += 100);    // 5.5 s with no caps
+    ui.goto_page(kConnTabAlias, t += 100);
+    for (int i = 0; i < 8; i++) ui.tick(t += 100);     // t = 21200: still inside the 1.5 s settle window
+    CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::Pending));
+    const auto waiting_frame = frame();                // Source tab: "Waiting for caps..."
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);     // past attach+1500: the verdict settles
+    CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::None));
+    CHECK_EQ(int(ui.link().pd_none_why()), int(pd::PdNoneWhy::SourceNeverOffered));
+    const auto after = frame();
+    CHECK(after != waiting_frame);                     // the tab now says there is no PD
+    CHECK_EQ(int(ui.link().waiting()), 1);             // the caps wait itself is unchanged
+    for (int i = 0; i < 45; i++) ui.tick(t += 100);    // 5.5 s with no caps
     CHECK_EQ(int(ui.link().waiting()), 0);             // the timeout ended the wait
-    const auto after = show(ui, 0, t);
-    CHECK(after != waiting_frame);                     // the tab now shows what is known
+}
+
+// The no-PD body's geometry (ui_connection_page.cpp): rows from y 160, pitch 20, value at x 64.
+static int nopd_hairlines() {
+    int n = 0;
+    for (int y = 160; y < 222; y += 20) {
+        int rule = 0;
+        for (int x = 0; x < LCD_WIDTH; x++) rule += g_panel[y * LCD_WIDTH + x] == kRule;
+        if (rule >= LCD_WIDTH - 20) n++;
+    }
+    return n;
+}
+
+static bool nopd_row_value_is(int idx, const char *text, uint16_t colour = kText) {
+    constexpr int kValX = 64, kPitch = 20, kRowY0 = 160;
+    constexpr int W = 224 - kValX;
+    const int y = kRowY0 + idx * kPitch;
+    const int vy = y + kit::row_text_y(kPitch, 16);
+    uint16_t saved[W * (kPitch - 1)];
+    for (int dy = 1; dy < kPitch; dy++)
+        for (int x = 0; x < W; x++) saved[(dy - 1) * W + x] = g_panel[(y + dy) * LCD_WIDTH + kValX + x];
+    const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
+    gfx_fill(s, kValX, y + 1, W, kPitch - 1, kBg);
+    gfx_text(s, kSmall, kValX, vy, text, colour, kBg);
+    bool same = true;
+    for (int dy = 1; dy < kPitch && same; dy++)
+        for (int x = 0; x < W; x++)
+            if (g_panel[(y + dy) * LCD_WIDTH + kValX + x] != saved[(dy - 1) * W + x]) { same = false; break; }
+    for (int dy = 1; dy < kPitch; dy++)
+        for (int x = 0; x < W; x++) g_panel[(y + dy) * LCD_WIDTH + kValX + x] = saved[(dy - 1) * W + x];
+    return same;
 }
 
 // Count the full-width hairlines of the Connection list area: one per row top plus the closing rule when
@@ -382,9 +426,9 @@ static int body_hairlines() {
     return n;
 }
 
-// A source without PD still advertises its Rp on the active CC line: once the "waiting for caps"
-// window is over, the Source tab shows "PD none" plus a Type-C row whenever an Rp is there -- a
-// default-USB Rp (CC 0.41 V) included -- with the measured VBUS in the row (never a hardcoded 5 V).
+// A source without PD still advertises its Rp on the active CC line: once the no-PD verdict has settled
+// (ROADMAP 2026-11-10, Row C), the Source tab shows the no-PD message plus a Type-C row whenever an Rp is
+// there -- a default-USB Rp (CC 0.41 V) included -- with the measured VBUS in the row (never a hardcoded 5 V).
 static void test_source_tab_typec_advertisement() {
     Ui &ui = fresh_ui();
     g_stub.pm.vbus_mv = 5000;               // a plain 5 V port, no PD traffic at all
@@ -392,29 +436,27 @@ static void test_source_tab_typec_advertisement() {
     uint32_t t = 20000;
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().attached()), 1);
-    for (int i = 0; i < 55; i++) ui.tick(t += 100);    // 5.5 s with no caps: the wait is over
-    CHECK_EQ(int(ui.link().waiting()), 0);
+    for (int i = 0; i < 16; i++) ui.tick(t += 100);    // past the 1.5 s settle: the verdict is None
+    CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::None));
     set_cc(408, 1);                         // a default-USB Rp on the active line
     ui.tick(t += 100);
     show(ui, 0, t);
-    const int rows_typec = body_hairlines();            // ID, PD "none", Type-C, USB, ...
-    g_stub.pd_traffic = true;               // a PD-speaking source whose caps were missed: no Type-C row
-    ui.tick(t += 100);
-    show(ui, 0, t);
-    CHECK_EQ(body_hairlines(), rows_typec - 1);
-    g_stub.pd_traffic = false;
+    CHECK_EQ(nopd_hairlines(), 2);                      // the Type-C row + the closing rule
+    CHECK(nopd_row_value_is(0, "5V USB default"));
     // A 3 A Rp while VBUS sits at 20.2 V: the same row, now showing the measured voltage (and the
     // longest wording still fits the 19-cell column -- the trunc check at the end of main).
     set_cc(1678, 3300);
     g_stub.pm.vbus_mv = 20250;
     ui.tick(t += 100);
     show(ui, 0, t);
-    CHECK_EQ(body_hairlines(), rows_typec);
+    CHECK_EQ(nopd_hairlines(), 2);
+    CHECK(nopd_row_value_is(0, "20.2V 3A"));
     // Default-USB Rp at 20.2 V: the longest possible Type-C row ("20.2V USB default", 17 cells).
     set_cc(408, 1);
     ui.tick(t += 100);
     show(ui, 0, t);
-    CHECK_EQ(body_hairlines(), rows_typec);
+    CHECK_EQ(nopd_hairlines(), 2);
+    CHECK(nopd_row_value_is(0, "20.2V USB default"));
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);   // every Type-C row above fit the 19-cell column
 #endif
@@ -427,6 +469,7 @@ static void test_source_and_sink_tabs_say_in_use_when_possibly_inline() {
     Ui &ui = fresh_ui();
     g_stub.pm.vbus_mv = 5000;                          // 5 V alone is a standalone K2; the far Rd is what says "possibly inline"
     g_stub.cc = 1;
+    g_stub.pd_seen_attach = true;                      // a decoded PD message: the verdict is Present, the rows body stays
     uint32_t t = 20000;
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     for (int i = 0; i < 55; i++) ui.tick(t += 100);   // the waiting-for-caps window is over
@@ -447,26 +490,30 @@ static void test_source_and_sink_tabs_say_in_use_when_possibly_inline() {
     g_stub.pm.vbus_mv = 5000;
 }
 
-// The Legacy row of the Source tab lists D+/D- fast-charge protocols only: a PD-family verdict (Pd,
-// PdPe, PdMtk, PdLikely) never gets a row there, next to "PD none".
+// The Legacy row of the no-PD Source tab lists D+/D- fast-charge protocols only: a PD-family verdict
+// (Pd, PdPe, PdMtk, PdLikely) never gets a row there (ROADMAP 2026-11-10, Row C: the no-PD body keeps the
+// Type-C row and adds Legacy when D+/D- answered).
 static void test_source_tab_legacy_row_skips_pd_verdicts() {
     Ui &ui = fresh_ui();
     g_stub.pm.vbus_mv = 5000;
     g_stub.cc = 1;
     uint32_t t = 20000;
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
-    for (int i = 0; i < 55; i++) ui.tick(t += 100);    // past the waiting window
+    for (int i = 0; i < 16; i++) ui.tick(t += 100);    // past the settle: the verdict is None
+    CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::None));
     set_cc(1678, 3300);
     g_stub.fc = fastcharge::Protocol::Qc2_5V;           // a D+/D- protocol: the Legacy row appears
     ui.tick(t += 100);
     show(ui, 0, t);
-    const int rows_qc = body_hairlines();
+    const int rows_qc = nopd_hairlines();               // Type-C, Legacy + the closing rule
+    CHECK_EQ(rows_qc, 3);
+    CHECK(nopd_row_value_is(1, "QC2", kEnergy));                 // fc_pill_text for Qc2_5V
     for (fastcharge::Protocol p : {fastcharge::Protocol::Pd, fastcharge::Protocol::PdPe,
                                    fastcharge::Protocol::PdMtk, fastcharge::Protocol::PdLikely}) {
         g_stub.fc = p;                                  // a PD verdict: no Legacy row
         ui.tick(t += 100);
         show(ui, 0, t);
-        CHECK_EQ(body_hairlines(), rows_qc - 1);
+        CHECK_EQ(nopd_hairlines(), rows_qc - 1);
     }
     g_stub.fc = fastcharge::Protocol::Pending;
 }
@@ -521,6 +568,7 @@ static void test_data_row_only_when_it_adds_something() {
     Ui &ui = fresh_ui();
     g_stub.contract.valid = true; g_stub.contract.ready = true; g_stub.contract.pos = 1;
     g_stub.contract.mv = 5000; g_stub.contract.op_ma = g_stub.contract.max_ma = 3000; g_stub.contract.requests = 1;
+    g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;   // the Request is PD traffic, answered by the sink
     make_inline(ui, 30000);
     g_stub.pm_online = true;
     g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 1;
@@ -605,6 +653,8 @@ static void test_sink_tab_pwr_row_is_a_budget_without_pd() {
         g_stub.pm.vbus_mv = 5000;
         g_stub.cc = 1;                        // attach: CC back with VBUS up, no PD traffic at all
         g_stub.contract.valid = true;         // a sink was seen on CC: the Sink tab shows rows, not the empty state
+        g_stub.pd_seen_attach = true;         // the sniffed Request is a decoded PD message...
+        g_stub.ol_facts.far_pd_message = true;  // ... sent by the sink: the verdict is Present, the rows body stays
         uint32_t t = 20000;
         for (int i = 0; i < 3; i++) ui.tick(t += 100);
         CHECK_EQ(int(ui.link().attached()), 1);
@@ -621,6 +671,7 @@ static void test_sink_tab_pwr_row_is_a_budget_without_pd() {
         g_stub.pm.vbus_mv = 5000;
         g_stub.cc = 1;
         g_stub.contract.valid = true;
+        g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;
         uint32_t t = 20000;
         for (int i = 0; i < 3; i++) ui.tick(t += 100);
         CHECK_EQ(int(ui.link().attached()), 1);
@@ -702,6 +753,7 @@ static void test_live_request_repaints_only_its_rows() {
     Ui &ui = fresh_ui();
     make_inline(ui, 40000);
     g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;   // caps + a sink Request: the verdict is Present
     g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 3;
     g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
     g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
@@ -903,6 +955,7 @@ static void test_sink_id_row_marks_a_sniffed_identity() {
     Ui &ui = fresh_ui();
     make_inline(ui, 20000);
     g_stub.pm_online = true;
+    g_stub.pd_seen_attach = true; g_stub.ol_facts.far_pd_message = true;   // caps + the phone's VDM answer: Present
     g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 1;
     g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;

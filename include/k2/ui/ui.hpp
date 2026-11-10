@@ -287,6 +287,7 @@ private:
 
     uint32_t last_update_ms_ = 0;
     raguard::CrossKind cross_seen_ = raguard::CrossKind::None;   // the crossed-CC verdict last logged ([LINK] cc cross=...)
+    pd::PdVerdict pd_verdict_seen_ = pd::PdVerdict::Pending;     // the PD verdict last logged ([LINK] pd verdict=...)
     uint32_t cable_seq_seen_ = 0;   // fusb302::cable_seq() last folded into the link state
     pd::Link link_;
     uint32_t trig_until_ = 0;

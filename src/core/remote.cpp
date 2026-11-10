@@ -283,7 +283,8 @@ remote::StateInfo Remote::state() {
                    (link.inline_mode() ? remote::kLinkInline : 0) | (link.cable_stale() ? remote::kLinkCableStale : 0) |
                    (link.cable_scanned() ? remote::kLinkCableScanned : 0) |
                    (link.cc_cross() == raguard::CrossKind::Crossed ? remote::kLinkCrossed : 0) |
-                   (link.cc_cross() == raguard::CrossKind::Hint ? remote::kLinkFlipHint : 0);
+                   (link.cc_cross() == raguard::CrossKind::Hint ? remote::kLinkFlipHint : 0) |
+                   (link.pd_verdict() == pd::PdVerdict::None ? remote::kLinkNoPd : 0);   // the settled no-PD verdict (Row C)
     s.age_s = link.attached() ? 0 : link.detached_for_s(now);
     s.cable_age_s = link.cable_scanned() ? link.cable_age_s(now) : 0;
     s.reset_flags = sysreset::reset_flags() & 0xFC000000u;   // CTRLSTS reset-cause bits 26..31 only

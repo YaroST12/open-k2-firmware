@@ -105,12 +105,20 @@ static void test_link_verdict_matrix() {
     l.update(lin(1000, 5000, 1, 8));
     CHECK_EQ(l.caps_rx_this_attach(), 8u);
     CHECK_EQ(int(l.pd_verdict()), int(PdVerdict::Pending));
-    // After the settle with a decoded message: Present.
+    // After the settle with the sink having answered: Present.
     LinkInput a = lin(2000, 5000, 1, 9);
     a.any_pd_msg = true;
+    a.sink_answered = true;
     l.update(a);
     CHECK_EQ(int(l.pd_verdict()), int(PdVerdict::Present));
     CHECK_EQ(int(l.pd_none_why()), int(PdNoneWhy::None));
+    // A decoded message with fewer than kPdUnansweredCapsMin caps and no answer is still PD talking.
+    Link l2;
+    l2.update(lin(0, 5000, 1, 0));
+    LinkInput b = lin(2000, 5000, 1, 2);
+    b.any_pd_msg = true;
+    l2.update(b);
+    CHECK_EQ(int(l2.pd_verdict()), int(PdVerdict::Present));
 }
 
 static void test_link_verdict_none_after_reattach() {

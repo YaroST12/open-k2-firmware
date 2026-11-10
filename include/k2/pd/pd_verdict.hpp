@@ -46,9 +46,27 @@ struct PdVerdictOut {
     PdNoneWhy why = PdNoneWhy::None;
 };
 
-// RED-STUB (the fix commit fills in the rules the matrix in tests/test_pd_verdict.cpp drives):
-// always Pending for now.
-constexpr PdVerdictOut pd_verdict(const PdVerdictIn &) { return {}; }
+// The rules the matrix in tests/test_pd_verdict.cpp drives:
+//   - not attached, or inside the settle window: Pending (a normal negotiation never flashes a message);
+//   - the sink answered anything this attach (GoodCRC / Request / its caps / VDMs): Present;
+//   - Source_Capabilities repeated kPdUnansweredCapsMin times or more with no answer: None, the offers
+//     went unanswered (the sink stayed silent while the source re-sent);
+//   - any other PD message decoded this attach (a VDM, a control message, one or two caps): Present;
+//   - otherwise the source never offered PD (a plain Type-C Rp-only port): None / SourceNeverOffered.
+constexpr PdVerdictOut pd_verdict(const PdVerdictIn &in) {
+    PdVerdictOut out;
+    if (!in.attached || in.now_ms - in.attach_at_ms < kPdVerdictSettleMs) return out;   // Pending
+    if (in.sink_answered) { out.verdict = PdVerdict::Present; return out; }
+    if (in.caps_rx >= kPdUnansweredCapsMin) {
+        out.verdict = PdVerdict::None;
+        out.why = PdNoneWhy::SinkSilentSourceOffered;
+        return out;
+    }
+    if (in.any_msg) { out.verdict = PdVerdict::Present; return out; }
+    out.verdict = PdVerdict::None;
+    out.why = PdNoneWhy::SourceNeverOffered;
+    return out;
+}
 
 // Short token for the binlog (%s is cut at 12 bytes) and the remote: "pending" / "present" /
 // "none-offered" (sink silent, source offered) / "none-never" (source never offered).

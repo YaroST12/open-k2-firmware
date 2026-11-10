@@ -954,6 +954,11 @@ void Ui::tick(uint32_t now_ms) {
         K2LOG("[LINK] cc cross=%s cc1=%u cc2=%u\n", cross_seen_ == raguard::CrossKind::Crossed ? "crossed" : cross_seen_ == raguard::CrossKind::Hint ? "hint" : "none",
               unsigned(in.cc1_mv < 0 ? 0 : in.cc1_mv), unsigned(in.cc2_mv < 0 ? 0 : in.cc2_mv));
     }
+    if (link_.pd_verdict() != pd_verdict_seen_) {   // one log line per edge of the "PD present" verdict (Row C; %s is cut at 12 bytes)
+        pd_verdict_seen_ = link_.pd_verdict();
+        K2LOG("[LINK] pd verdict=%s caps=%u\n", pd::pd_verdict_token(link_.pd_verdict(), link_.pd_none_why()),
+              unsigned(link_.caps_rx_this_attach()));
+    }
     if (was_attached && !link_.attached()) fusb302::clear_source();   // one attach = one list
     if (link_.take_new_source()) fusb302::new_source();
     if (fusb302::cable_seq() != cable_seq_seen_) {   // the source's own SOP' exchange was decoded

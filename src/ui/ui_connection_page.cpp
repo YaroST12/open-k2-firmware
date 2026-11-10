@@ -13,6 +13,7 @@
 #include "k2/core/survey.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/drivers/fusb302.hpp"
+#include "k2/drivers/power_calc.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/pd_tabs.hpp"
 #include "k2/pd/pd_vdm.hpp"
@@ -348,6 +349,13 @@ constexpr int16_t kTabY = kit::kBodyY, kTabH = 18, kRowY0 = kTabY + kTabH, kRowP
 constexpr int kMaxList = 9;
 constexpr int kValCells = (224 - kValX - 4) / 8;   // 19 cells of S16 in the value column
 static_assert(kRowY0 + kMaxList * kRowPitch <= kFooterY, "the nine rows end at the footer");
+// The no-PD body (ROADMAP 2026-11-10, Row C): a message block under the tab strip (title + wrapped lines of
+// 26 cells, 8 px each), then the measured rows from kNoPdRowY0. The block ends where the rows start.
+constexpr int16_t kNoPdMsgY0 = 46, kNoPdMsgPitch = 16, kNoPdMsgLines = 6;
+constexpr int16_t kNoPdRowY0 = 160;
+constexpr int kNoPdMsgCells = (224 - 16) / 8;   // 26 cells of S16
+static_assert(kNoPdMsgY0 + 18 + (kNoPdMsgLines - 1) * kNoPdMsgPitch + 16 <= kNoPdRowY0, "the message block ends before the rows");
+static_assert(kNoPdRowY0 + 3 * kRowPitch <= kFooterY, "three measured rows end at the footer");
 static_assert(conn::kStatusCells <= static_cast<std::size_t>(kFooterCells), "the survey texts fit the footer line");
 
 // A value row. `cut` > 0 splits the value there: the head in `c`, the tail (the current) in kAmp; so a "20/28V 5A" line
@@ -781,6 +789,18 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.fc = ctx_.fc;
     d.in_use = link.inline_mode();
     d.vbus_mv = typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv);
+    // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" the tab replaces its
+    // placeholder rows with one short message and the rows that are actually measured. The Sink tab gates
+    // on any no-PD verdict (a device on the line that never talks PD); the Source tab only when the source
+    // never offered PD at all (an offered-but-unanswered source still shows its caps). The Cable tab and
+    // the Details page are untouched, and the empty states (NO DEVICE) are decided before this.
+    const bool no_pd = verdict_ == pd::PdVerdict::None && !more_ &&
+        (tab_ == conn::Tab::Sink ? (facts_.inline_sink || facts_.sink_seen)
+                                 : tab_ == conn::Tab::Source && none_why_ == pd::PdNoneWhy::SourceNeverOffered);
+    if (no_pd) {
+        paint_no_pd_body(r, redraw);
+        return;
+    }
     Rows R;
     switch (tab_) {
     case conn::Tab::Source: if (more_) details_rows(R); else source_rows(R, d); break;
@@ -834,6 +854,80 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     body_n_ = static_cast<uint8_t>(R.n);
     row_sig_ = sigs;
     K2LOG("[CONN] body full=%d rows=%d\n", full ? 1 : 0, painted);
+}
+
+// The no-PD body (ROADMAP 2026-11-10, Row C): the tab says in one short message that there is no PD, then
+// keeps only the rows that are actually measured - the Type-C advertisement (Rp level + VBUS), the draw on
+// the Sink tab, a legacy fast-charge answer on the Source tab. paint_body only calls this when the paint
+// signature moved, so a whole-body pass every call is within budget.
+[[gnu::noinline]] void ConnectionPage::paint_no_pd_body(const MatchResult &r, bool redraw) {
+    const Surface &c = ctx_.content;
+    const bool sink_tab = tab_ == conn::Tab::Sink;
+    const char *title = conn::no_pd_title(tab_);
+    std::string msg;
+    if (sink_tab) {
+        msg = conn::kNoPdSinkLine2;
+        msg += ' ';
+        msg += conn::no_pd_case(none_why_);
+    }
+    // The measured rows (at most three: the list closes at the footer). The Type-C row uses the match's Rp
+    // reading (the active CC line driven into the Rp window counts even before typec_ma()'s 3 s mark).
+    const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
+    Rows R;
+    {
+        StrBuf<28> &v = R.add("Type-C", kText);
+        typec_row_text(typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv), rp_ma, v);
+        if (v.view().empty()) v.put("unknown");
+    }
+    if (sink_tab) put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
+    else if (legacy_row_protocol(ctx_.fc) && ctx_.fc != fastcharge::Protocol::Pending) {
+        StrBuf<6> fcn;
+        fc_pill_text(ctx_.fc, fcn);
+        if (!fcn.view().empty()) R.add("Legacy", kEnergy).put(fcn.view());
+    }
+    const bool full = redraw || body_ != Body::NoPd || body_tab_ != tab_ || body_n_ != R.n;
+    if (full) {
+        gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);
+        paint_tab_indicator();
+    }
+    // The message block: the title, then the wrapped body (26 cells of S16 per line, at most 6 lines).
+    // Painted only when its text moved (a live draw must not repaint the message).
+    uint32_t mh = fnv(2166136261u, uint32_t(tab_) | uint32_t(none_why_) << 4);
+    for (const char *p = title; *p; p++) mh = fnv(mh, uint8_t(*p));
+    for (char ch : msg) mh = fnv(mh, uint8_t(ch));
+    if (full || mh != nopd_msg_sig_) {
+        gfx_fill(c, 0, kNoPdMsgY0, c.w, kNoPdRowY0 - kNoPdMsgY0, kBg);
+        gfx_text(c, kSmall, 8, kNoPdMsgY0, title, kText, kBg);
+        std::array<std::string_view, kNoPdMsgLines> lines;
+        const int n = conn::wrap(msg, static_cast<std::size_t>(kNoPdMsgCells), lines);
+        for (int i = 0; i < n; i++)
+            gfx_text(c, kSmall, 8, static_cast<int16_t>(kNoPdMsgY0 + 18 + i * kNoPdMsgPitch), lines[static_cast<std::size_t>(i)], kDim, kBg);
+        nopd_msg_sig_ = mh;
+    }
+    // The measured rows, same geometry as the list (hairline per row, the table closed by one); a row
+    // whose hash moved repaints alone, like the list body.
+    constexpr int16_t kKeyDy = kit::row_text_y(kRowPitch, 12), kValDy = kit::row_text_y(kRowPitch, 16);
+    char buf[kFitBuf];
+    std::array<uint32_t, kBodyRows> sigs{};
+    for (int i = 0; i < R.n; i++) {
+        const Rows::R &row = R.r[i];
+        uint32_t h = fnv(mh, uint32_t(row.c));
+        for (const char *k = row.key; *k; k++) h = fnv(h, uint8_t(*k));
+        for (char ch : row.v.view()) h = fnv(h, uint8_t(ch));
+        sigs[static_cast<std::size_t>(i)] = h;
+        if (!full && h == row_sig_[static_cast<std::size_t>(i)]) continue;
+        const int16_t y = static_cast<int16_t>(kNoPdRowY0 + i * kRowPitch);
+        if (!full) gfx_fill(c, 0, y, c.w, kRowPitch, kBg);
+        gfx_fill(c, 0, y, c.w, 1, kRule);
+        gfx_text(c, kLabelFont, kKeyX, static_cast<int16_t>(y + kKeyDy), row.key, kDim, kBg);
+        gfx_text(c, kSmall, kValX, static_cast<int16_t>(y + kValDy), fit_text(kSmall, row.v.view(), c.w - kValX - 4, buf), row.c, kBg);
+    }
+    if (full && R.n < 3) gfx_fill(c, 0, static_cast<int16_t>(kNoPdRowY0 + R.n * kRowPitch), c.w, 1, kRule);
+    body_ = Body::NoPd;
+    body_tab_ = tab_;
+    body_n_ = static_cast<uint8_t>(R.n);
+    row_sig_ = sigs;
+    K2LOG("[CONN] body nopd rows=%d\n", R.n);
 }
 
 void ConnectionPage::popup_row(void *self, int index, bool, kit::RowSpec &out) {
