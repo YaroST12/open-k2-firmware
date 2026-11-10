@@ -377,6 +377,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     the K2's own sink holds the contract (SinkStatus ready/held, pos and PDO known), derive_proto uses that contract:
     AVS pos -> "AVS 12.6V", PPS -> "PPS 9V", fixed -> "PD 9V 3A"; the sniffed contract only for a far sink. Host test on
     derive_proto with an own AVS / PPS / fixed contract.
+  - Row A rework (handoff 2026-11-10d, runs/2026-11-10-idalone-op15): fixed in 18be8bc, hardware check pending. The dual-role
+    toggle classifier moved into the link layer (DrpTrace in ra_guard.hpp: >= 2 rising and >= 2 falling edges in 2.5 s,
+    high >= 1200 mV / low <= 400 mV; a steady CC2 ~1.69 V bias or a steady Rp never reads DualRolePort); an alone-Identify
+    presents Rd and waits for a Ready contract of this attach settled >= 200 ms (plain-stamp ready_at, no ready_at|1 wrap)
+    with a bounded 4 s timeout before the first VDM; the line is handed back on every exit; the result stays on the Sink
+    tab / identify-device until NoSource or ChargerWaiting for >= 2 s. Host: test_pd_link DrpTrace cases,
+    test_fusb302_scan wait/timeout/release/stale-CC cases (red in 59af715, green in 18be8bc).
 - **Charger test: "Cable OFF" says nothing about what it does** (2026-11-10, operator report): fixed in 2030c3b, hardware check pending. The wizard's step 2
   read "Cable" with the value "OFF", which said nothing about what it does (the e-marker identity the K2 presents to the
   charger, the same list as Tools -> Spoof). Wording only, nothing else in the flow changed (the Cable step still shows
