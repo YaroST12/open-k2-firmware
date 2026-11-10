@@ -278,6 +278,8 @@ def main(argv=None):
     # START is confirmed: the run proceeds by itself, so the device lock is released here instead of being
     # held for the whole run. Each poll below takes it again, for that one exchange only, so other HID
     # tools (k2_remote state, pd_trace dump, ...) can use the K2 between the polls.
+    k2_lock.release()   # balance the transport's own acquire (LinuxHidTransport.__init__): lock depth 1 -> 0,
+                        # so the flock is really dropped here; the HID fd stays open and usable
     deadline = time.monotonic() + a.wait
     while time.monotonic() < deadline:
         with k2_lock.hold():

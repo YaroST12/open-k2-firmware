@@ -406,10 +406,17 @@ class LockReleaseAfterStart(unittest.TestCase):
         kinds = [e for e, _ in events]
         start, first_poll = kinds.index("start"), kinds.index("poll")
         between = events[start + 1:first_poll]
-        # the first thing after START is a full release (depth 0); the only later acquire before the
-        # first poll is the poll's own one-exchange hold
-        self.assertEqual(between[0], ("R", 0))
-        self.assertEqual([e for e, _ in between[1:]], ["A"] if len(between) > 1 else [])
+        # after START the lock is fully released (depth 0) before the first poll takes it again;
+        # only releases happen in between, then the poll's own one-exchange hold
+        self.assertIn(("R", 0), between)
+        rel = between.index(("R", 0))
+        self.assertTrue(all(e == "R" for e, _ in between[:rel + 1]))
+        self.assertEqual([e for e, _ in between[rel + 1:]], ["A"])
+        # every poll runs at depth 1 and leaves the lock released again
+        for i, (e, d) in enumerate(events):
+            if e == "poll":
+                self.assertEqual(d, 1)
+                self.assertEqual(events[i + 1], ("R", 0))
 
 
 if __name__ == "__main__":
