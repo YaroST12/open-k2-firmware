@@ -539,6 +539,144 @@ def cmd_match(link, a):
     return decode_match(link.call(CMD_PD_MATCH).payload)
 
 
+# --- the Connection page Sink tab, mirrored host-side (k2/pd/pd_tabs.hpp + ui_connection_page.cpp sink_rows) ---
+
+def _fmt_watts(w):
+    return "?" if w < 0 else f"{w}W"
+
+
+def _fmt_rate(mbps):
+    return "?" if mbps < 0 else f"{mbps // 1000}G" if mbps >= 1000 else f"{mbps}M"
+
+
+def _terms_limit(t):
+    """pdtabs::limit: the smallest known term and which party holds it below another known one."""
+    v = (t.get("source", -1), t.get("cable", -1), t.get("sink", -1))
+    known = [i for i, x in enumerate(v) if x >= 0]
+    if not known:
+        return -1, None
+    lo = min(known, key=lambda i: v[i])
+    who = None
+    if len(known) > 1 and any(v[i] > v[lo] for i in known):
+        who = ("source", "cable", "sink")[lo]
+    return v[lo], who
+
+
+def _power_line(t, cable_assumed):
+    """pdtabs::power_line: "18W of 100W", "60W by cable" ("?" when the cable is only assumed), "100W", "?"."""
+    value, who = _terms_limit(t)
+    if value < 0:
+        return "?"
+    s = _fmt_watts(value)
+    if who == "cable":
+        s += " by cable" + ("?" if cable_assumed else "")
+    elif who == "sink":
+        s += " of " + _fmt_watts(t["source"] if t.get("source", -1) >= 0 else t.get("cable", -1))
+    return s
+
+
+def _data_line(t, dp):
+    """pdtabs::data_line over the cable and sink terms only: "5G of 10G", "5G by cable", "10G cable", "480M"."""
+    d = {"cable": t.get("cable", -1), "sink": t.get("sink", -1)}
+    value, who = _terms_limit(d)
+    if value < 0:
+        return "?"
+    s = _fmt_rate(value)
+    if who == "cable":
+        s += " by cable"
+    elif who == "sink":
+        s += " of " + _fmt_rate(d["cable"])
+    elif d["sink"] < 0:
+        s += " cable"
+    return s + " +DP" if dp else s
+
+
+def _cable_mbps(bits, vid):
+    """pdtabs::cable_mbps: the e-marker's Cable VDO 1 speed bits; Thunderbolt cables from Gen2 up are 40G."""
+    if vid == 0x8087 and bits >= 2:
+        return 40000
+    return {1: 5000, 2: 10000, 3: 40000, 4: 80000}.get(bits, 480)
+
+
+def _raw_pdo_summary(raw):
+    """One sink-cap PDO word as the tab's Caps row words it (ui_connection_page.cpp put_sink_pdos)."""
+    kind = raw >> 30
+    if kind == 0:
+        return f"{(raw >> 10 & 0x3FF) * 50 / 1000:g}V {(raw & 0x3FF) * 10 / 1000:g}A"
+    if kind == 1:
+        return f"{(raw >> 10 & 0x3FF) * 50 / 1000:g}-{(raw >> 20 & 0x3FF) * 50 / 1000:g}V {(raw & 0x3FF) * 250 / 1000:g}W"
+    if kind == 2:
+        return f"{(raw >> 10 & 0x3FF) * 50 / 1000:g}-{(raw >> 20 & 0x3FF) * 50 / 1000:g}V {(raw & 0x3FF) * 10 / 1000:g}A"
+    sub = raw >> 28 & 3
+    if sub == 0:
+        return f"{(raw >> 8 & 0xFF) * 100 / 1000:g}-{(raw >> 17 & 0xFF) * 100 / 1000:g}V {(raw & 0x7F) * 50 / 1000:g}A"
+    if sub == 1:
+        return f"{(raw >> 8 & 0xFF) * 100 / 1000:g}-{(raw >> 17 & 0x1FF) * 100 / 1000:g}V {raw & 0xFF}W"
+    return f"AVS 0x{raw:08X}"
+
+
+def _request_row(m, pdos):
+    """ui_connection_page.cpp put_request: "PDO3 9V 3A", "PPS6 8.88V 2.05A", "BAT5 15V 45W"."""
+    pos, mv, ma = m["want_pos"], m["want_mv"], m["want_ma"]
+    p = pdos[pos - 1] if 0 < pos <= len(pdos) and pdos[pos - 1] else None
+    ty = p["type"] if p else "fixed"
+    head = {"pps": "PPS", "avs": "AVS", "battery": "BAT"}.get(ty, "PDO")
+    mw = mv * ma // 1000
+    tail = f"{mw // 1000}W" if ty == "battery" else f"{ma / 1000:g}A"
+    return {"pos": pos, "type": ty, "mv": mv, "ma": ma, "mw": mw, "text": f"{head}{pos} {mv / 1000:g}V {tail}"}
+
+
+def cmd_sink(link, a):
+    """Connection page Sink tab, field for field, from the same model the tab renders (sink_rows).
+    Composed from the existing read-only commands only; Identify is polled with op 0 (status, never starts)."""
+    st = decode_state(link.call(CMD_GET_STATE).payload)
+    pd = decode_pd_trigger(link.call(CMD_PD_TRIGGER_STATUS).payload)
+    m = decode_match(link.call(CMD_PD_MATCH).payload)
+    head, first = decode_pdo(link.call(CMD_GET_PDOS, bytes([0])).payload)
+    pdos = [first] if first else []
+    for i in range(1, head["num_pdos"]):
+        pdos.append(decode_pdo(link.call(CMD_GET_PDOS, bytes([i])).payload)[1])
+    ul = decode_usb_link(link.call(CMD_USB_LINK).payload)
+    em = decode_emarker(link.call(CMD_GET_EMARKER, bytes([0])).payload,
+                        link.call(CMD_GET_EMARKER, bytes([1])).payload,
+                        link.call(CMD_GET_EMARKER, bytes([2])).payload)
+    idp = decode_identify_progress(link.call(CMD_IDENTIFY_DEVICE, bytes([0])).payload)
+
+    not_exposed = ["sniffed sink identity (ID row)", "contract state line + RDO flags (State row)",
+                   "sink SVIDs (Proto row)", "Row C no-PD verdict (wait-kind classifier)"]
+    caps = [s for raw in idp["sink_pdos"] for s in [_raw_pdo_summary(raw)] if raw]
+    if not m["caps_seen"]:
+        not_exposed.append("typec_ma (Pwr budget row without a PD contract)")
+
+    # strip_rows: the Pwr / Data terms, worded by who holds the number down
+    pwr = None
+    if m["caps_seen"]:
+        t = {"source": m["src_max_w"], "cable": em["max_power_w"] if em["valid"] else 60,
+             "sink": m["want_mv"] * m["want_ma"] // 1000000 if m["request_seen"] else -1}
+        pwr = _power_line(t, not em["valid"])
+    dterms = {"cable": _cable_mbps(em["vdos"][4] & 7, em["vid"]) if em["valid"] and len(em["vdos"]) > 4 else -1,
+              "sink": ul["mbps"] if ul["family"] != "unknown" and ul["mbps"] > 0 else -1}
+    value, who = _terms_limit(dterms)
+    data = None
+    if m["caps_seen"] and value >= 0 and (who or ul["dp"] or (dterms["cable"] >= 0 and dterms["sink"] < 0)):
+        data = _data_line(dterms, ul["dp"])
+
+    return {"tab": "sink",
+            "k2_sink": pd["pin"] != 0,          # fusb302::self_powered() == pin_rd() != 0
+            "k2_sink_ok": pd["pin"] == 1,
+            "link": {k: st.get(k) for k in ("inline", "waiting", "crossed", "flip_hint", "vbus_mv",
+                                            "pd_valid", "spec_rev", "num_pdos", "direction")},
+            "identify": idp,
+            "id": {"sniffed": None, "asked": idp["state"]},
+            "request": _request_row(m, pdos) if m["request_seen"] else None,
+            "state_line": None, "flags": m["flags"], "verdict": m["verdict"],
+            "pwr": pwr, "data": data,
+            "usb": ul, "cable": em,
+            "caps": caps, "caps_src": "from Identify" if caps else "",
+            "proto": None, "no_pd_verdict": None,
+            "not_exposed": not_exposed}
+
+
 def decode_identify_progress(p):
     _need(p, 10, "identify status")
     n = p[5]
@@ -2416,6 +2554,31 @@ def _render(name, r):
             head += f", charger max {r['src_max_mv'] / 1000:g} V {r['src_max_w']} W"
         rows = " ".join(f"{i + 1}:{s}" for i, s in enumerate(r["rows"]))
         return head + ("\n" + rows if rows else "")
+    if name == "sink":
+        lines = ["sink tab (Connection):"]
+        if r["k2_sink"]:   # the K2 draws the power itself: ID + Sink + the link rows only
+            lines.append("  ID: K2")
+            lines.append("  Sink: K2 (sink mode OK)" if r["k2_sink_ok"] else "  Sink: K2 (sink mode PLUS)")
+        else:
+            lines.append(f"  ID: {r['id']['sniffed'] or 'unknown'} "
+                         f"(sniffed identity not exposed remotely; asked: {r['id']['asked']})")
+            lines.append("  Request: " + (r["request"]["text"] if r["request"] else "none seen"))
+            st = "  State: not exposed remotely"
+            if r["flags"]:
+                st += "; match flags: " + ", ".join(r["flags"])
+            lines.append(st)
+            lines.append("  Pwr: " + (r["pwr"] or "- (no PD contract; the Type-C budget row needs "
+                                     "typec_ma, not exposed remotely)"))
+            if r["data"]:
+                lines.append(f"  Data: {r['data']}")
+            caps = " ".join(r["caps"]) + (f" ({r['caps_src']})" if r["caps_src"] else "") if r["caps"] else "not seen"
+            lines.append("  Caps: " + caps)
+        lines.append("  USB: " + (r["usb"]["text"] or r["usb"]["family"]))
+        if r["usb"]["tbt"]:
+            lines.append(f"  Alt: {r['usb']['tbt']}")
+        elif r["usb"]["dp"]:
+            lines.append("  Alt: DP")
+        return "\n".join(lines)
     if name == "pd":
         if r.get("pd_cmd") == "handback":
             return f"handback {r['verdict']}"   # the phase-1 lab op's verdict: allowed, or why it was refused
@@ -2597,7 +2760,8 @@ def _render(name, r):
 
 
 COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cmd_pdos,
-            "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink, "action": cmd_action, "page": cmd_page,
+            "emarker": cmd_emarker, "identity": cmd_identity, "match": cmd_match, "usblink": cmd_usblink,
+            "sink": cmd_sink, "action": cmd_action, "page": cmd_page,
             "reboot": cmd_reboot, "dfu": cmd_dfu, "factory-wipe": cmd_factory_wipe, "flash-dump": cmd_flash_dump, "bootinfo": cmd_bootinfo, "fault": cmd_fault, "log": cmd_log, "watch": cmd_watch,
             "screenshot": cmd_screenshot, "debug": cmd_debug,
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
@@ -2676,6 +2840,7 @@ def build_parser():
     sub.add_parser("identity", help="source identity: VID/PID, SVIDs, Apple model")
     sub.add_parser("usblink", help="USB / Thunderbolt link seen in sniffed PD traffic (passive, see k2/pd/usb_link.hpp)")
     sub.add_parser("match", help="wants vs offers: the request against the charger caps (passive)")
+    sub.add_parser("sink", help="Connection page Sink tab, field for field (read-only; Identify status only, never starts a run)")
     sa = sub.add_parser("action", help="run a page action")
     sa.add_argument("name", choices=sorted(ACTIONS))
     sa.add_argument("--confirm", action="store_true",
