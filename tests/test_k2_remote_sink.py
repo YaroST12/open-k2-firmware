@@ -207,8 +207,8 @@ class SinkCommand(unittest.TestCase):
         # cable VDO bits 2 -> 10G, the device link is 5G -> "5G of 10G"
         r = run_sink(sink_link())
         self.assertEqual(r["data"], "5G of 10G")
-        r = run_sink(sink_link(usb=usb_link_payload(mbps=10000, dp=True, text="10G +DP")))
-        self.assertIsNone(r["data"])            # agrees with the cable, +DP only: not informative beyond USB row
+        r = run_sink(sink_link(usb=usb_link_payload(mbps=10000, dp=True, text="10G")))
+        self.assertEqual(r["data"], "10G +DP")  # +DP stays even when the rates agree
         r = run_sink(sink_link(emarker=emarker_payloads(vdos=(0, 0, 0, 0, 1))))   # cable 5G, device 5G
         self.assertIsNone(r["data"])            # plain rate repeats the USB row: dropped like the tab does
 
@@ -240,7 +240,7 @@ class SinkCommand(unittest.TestCase):
         self.assertIsNone(r["proto"])               # sink SVIDs
         self.assertIsNone(r["no_pd_verdict"])       # Row C verdict needs the wait-kind classifier
         joined = " ".join(r["not_exposed"])
-        for gap in ("identity", "state", "proto", "verdict"):
+        for gap in ("identity", "state", "SVIDs", "verdict"):
             self.assertIn(gap, joined)
         self.assertEqual(r["flags"], [])            # match flags are the exposed part of the row
         m = match_payload(flags=1 | 4)              # mismatch-bit | current-limited
