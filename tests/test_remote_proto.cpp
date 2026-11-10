@@ -1202,9 +1202,11 @@ static void test_active_pd_commands() {
     check_header(r, 0x42, 8, Status::BadLength, 0);
     CHECK_EQ(f.resets, 1);
     // PD_TRIGGER_STATUS
+    f.trig_pin = 2;   // an Rd pinned on CC2 (pd-reread --pin): the appended pin byte carries it
     run(f, request(0x43, 9, {}), r);
     check_header(r, 0x43, 9, Status::Ok, 13 + 4 + 1);   // [..., hard_resets u32], then appended source_hard_resets u32 and pin u8 (older clients read the first 13/17 bytes)
-    check_bytes(r, kRspHeader, {5, 1, 1, 0, 4, 0x20, 0x4E, 0xB8, 0x0B, 4, 3, 2, 1, 8, 7, 6, 5});
+    check_bytes(r, kRspHeader, {5, 1, 1, 0, 4, 0x20, 0x4E, 0xB8, 0x0B, 4, 3, 2, 1, 8, 7, 6, 5, 2});
+    f.trig_pin = 0;
     // USB_LINK
     run(f, request(0x46, 11, {}), r);
     check_header(r, 0x46, 11, Status::Ok, 9 + 19);

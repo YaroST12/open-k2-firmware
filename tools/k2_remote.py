@@ -474,11 +474,13 @@ def _name_of(table, i):
 def decode_pd_trigger(p):
     _need(p, 13, "pd trigger status")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
-    # source_hard_resets (u32, appended after hard_resets) is absent from older firmware: 0 then
+    # source_hard_resets (u32, appended after hard_resets) and pin (u8, appended after that) are absent
+    # from older firmware: 0 then
     return {"state": _name_of(SINK_STATES, p[0]), "result": _name_of(SINK_RESULTS, p[1]), "held": bool(p[2]),
             "epr": bool(p[3]), "pos": p[4], "mv": u16(5), "ma": u16(7),
             "hard_resets": int.from_bytes(p[9:13], "little"),
-            "source_hard_resets": int.from_bytes(p[13:17], "little") if len(p) >= 17 else 0}
+            "source_hard_resets": int.from_bytes(p[13:17], "little") if len(p) >= 17 else 0,
+            "pin": p[17] if len(p) >= 18 else 0}
 
 
 MATCH_VERDICTS = ["no-caps", "no-request", "outside-caps", "wants-higher-v", "current-limited",
@@ -2352,7 +2354,8 @@ def _render(name, r):
         return head + ("\n" + rows if rows else "")
     if name == "pd":
         return (f"trigger {r['state']} result={r['result']} held={r['held']} epr={r['epr']} "
-                f"pdo={r['pos']} {r['mv'] / 1000:g} V {r['ma'] / 1000:g} A hard_resets={r['hard_resets']} source_hard_resets={r['source_hard_resets']}")
+                f"pdo={r['pos']} {r['mv'] / 1000:g} V {r['ma'] / 1000:g} A hard_resets={r['hard_resets']} source_hard_resets={r['source_hard_resets']}"
+                + (f" Rd pin CC{r['pin']}" if r.get("pin") else ""))   # a leftover pinned Rd (pd-reread --pin)
     if name == "pd-reread":
         extra = " attaching" if r.get("attaching") else (" no contract" if r.get("attach_failed") else "")
         extra += " ra" if r.get("ra") else ""

@@ -177,13 +177,14 @@ static constexpr const char *kBarNames[] = {"Home", "Detail", "Charger", "Lines"
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
 void PageBase::title_bar() {
-    // Slim chrome bar: page name left plus the boot-role badge (SNK = an Rd is presented at boot,
-    // PAS = passive inline), 1 px hairline below (kBarH-1). The band repaint erases the right-side
-    // readout; the next title_badge call repaints it.
+    // Slim chrome bar: page name left plus the role badge, 1 px hairline below (kBarH-1). The badge
+    // names a held Rd pin ("Rd pin CC2", e.g. a leftover pd-reread --pin) instead of the bare boot-role
+    // SNK, so a pin still set is visible; no pin is the passive inline role (PAS). The band repaint
+    // erases the right-side readout; the next title_badge call repaints it.
     bar_valid_ = false;
     const char *name = is_menu() ? title_ : kBarNames[static_cast<int>(id_)];
-    draw_status_left(ctx_.content, is_menu() && has_icon_, icon_, name, 132,
-                     fusb302::self_powered() ? "SNK" : "PAS");
+    char badge[11];
+    draw_status_left(ctx_.content, is_menu() && has_icon_, icon_, name, 132, role_badge(fusb302::pin_rd(), badge));
 }
 
 // Right end of the top chrome bar: the compact fmt3(V) x fmt3(A) readout, swapped for the stale-grey

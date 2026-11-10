@@ -531,6 +531,7 @@ remote::PdTriggerSnapshot Remote::pd_trigger() {
     t.ma = s.ma;
     t.hard_resets = s.hard_resets;
     t.source_hard_resets = s.source_hard_resets;
+    t.pin = fusb302::pin_rd();   // a leftover Rd pin (pd-reread --pin) shows here until it clears
     return t;
 }
 

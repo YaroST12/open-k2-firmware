@@ -320,6 +320,19 @@ static void test_footer_fit() {
     CHECK_EQ(last > 190 && last < 214, 1);
 }
 
+static void test_role_badge() {
+    char buf[11];
+    CHECK_STR(std::string(role_badge(0, buf)).c_str(), "PAS");        // passive inline, no pin
+    CHECK_STR(std::string(role_badge(1, buf)).c_str(), "Rd pin CC1");
+    CHECK_STR(std::string(role_badge(2, buf)).c_str(), "Rd pin CC2");  // a leftover lab pin names its line
+    CHECK_STR(std::string(role_badge(3, buf)).c_str(), "PAS");         // never both lines: anything else is passive
+    clear(0x0004);
+    draw_status_left(kScr, false, Icon::Bolt, "Home", 132, role_badge(2, buf));   // the badge fits the bar
+    bool badge_ink = false;
+    for (int y = 0; y < kBarH - 1; y++) for (int x = 67; x < 132; x++) if (px(x, y) == kDim) badge_ink = true;
+    CHECK_EQ(badge_ink, 1);
+}
+
 static void test_status_bar() {
     CHECK_EQ(kBarH, 21);                       // 20 px chrome bar + the 1 px hairline below it
 
@@ -520,6 +533,7 @@ int main() {
     test_fit_text();
     test_fit_text_mid();
     test_footer_tones();
+    test_role_badge();
     test_status_bar();
     test_status_bar_flow();
     test_footer();

@@ -134,7 +134,13 @@ struct Fake {
     int releases = 0, resets = 0;
     PdOpResult pd_release() { calls++; releases++; return {}; }
     PdOpResult pd_hard_reset() { calls++; resets++; return {}; }
-    PdTriggerSnapshot pd_trigger() { calls++; return {5, 1, 1, 0, 4, 0x4E20, 0x0BB8, 0x01020304, 0x05060708}; }
+    uint8_t trig_pin = 0;   // what pd_trigger() reports as the pinned Rd line
+    PdTriggerSnapshot pd_trigger() {
+        calls++;
+        PdTriggerSnapshot t{5, 1, 1, 0, 4, 0x4E20, 0x0BB8, 0x01020304, 0x05060708};
+        t.pin = trig_pin;
+        return t;
+    }
     uint16_t attach_mv = 0, attach_ma = 0; int attaches = 0;
     PdTriggerSnapshot pd_attach(uint16_t target_mv, uint16_t target_ma) { calls++; attach_mv = target_mv; attach_ma = target_ma; attaches++; return pd_trigger(); }
     int fc_calls = 0; uint8_t fc_op = 0xFF, fc_proto = 0xFF; uint16_t fc_mv = 0xFFFF; uint8_t fc_flags = 0;

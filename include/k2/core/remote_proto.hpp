@@ -676,6 +676,7 @@ struct PdTriggerSnapshot {
     uint16_t mv = 0, ma = 0;
     uint32_t hard_resets = 0;          // Hard Resets the K2 sent
     uint32_t source_hard_resets = 0;   // Hard Resets the source sent (appended: clients that read 13 bytes ignore it)
+    uint8_t pin = 0;                   // fusb302::pin_rd(): 1 / 2 = an Rd is pinned on CC1 / CC2, 0 = none (appended: clients that read 17 bytes ignore it)
 };
 // PD_MATCH payload (ui_match.hpp verdict): [caps_seen, request_seen, sink_ok, flags, verdict, rows,
 // want_pos, want_mv u16, want_ma u16, need_ma u16, have_ma u16, src_max_mv u16, src_max_w u16 (watts),

@@ -96,6 +96,7 @@ constexpr std::uint32_t kCcRecheckMinMs = 500;
 std::uint8_t g_pin_rd = 0;  // self-powered mode: the Rd bits SWITCHES0 keeps while no partner is attached (0 = free)
 std::uint8_t g_boot_pin_rd = 0;   // the boot mode's Rd bits, restored after a run's detach (self_power_restore)
 bool g_rd_inherited = false;      // the pin was kept across a warm reset by the pin mark (charger-powered K2), not set by a key mode
+bool g_lab_pin = false;           // the pin is a lab pin (debug_pin, pd-reread --pin), not a boot / comeback pin: only it clears on the far end's detach
 bool g_pin_moved = false;         // the key mode's single Rd already moved to the other line this boot (self_power_move)
 // The boot pin and its mark change together: the mark (a backup register) is what tells the next boot after a warm reset that
 // this K2 hangs on its own Rd (charger-powered). Whoever changes g_boot_pin_rd goes through here.
@@ -975,6 +976,7 @@ void self_power_early(bootmode::Mode mode, bool warm) {
     g_pin_rd = bootmode::initial_rd(mode, warm, mark) & (kPdwn1 | kPdwn2);
     g_initial_pin_rd = g_pin_rd;
     g_pin_moved = false;
+    g_lab_pin = false;              // a boot's pin (key mode, mark, comeback) is never a lab pin; only debug_pin sets it, within one boot
     g_rd_inherited = mode == bootmode::Mode::Plain && g_pin_rd != 0;
     set_boot_pin(g_pin_rd);     // a run's detach takes the pin over and restores it afterwards; the mark follows it
     wr(kSwitches0, g_pin_rd);   // a plain boot writes 0 as well: no Rd, the passive state
@@ -1072,6 +1074,7 @@ std::uint8_t pin_rd() { return g_pin_rd; }
 bool debug_pin(std::uint8_t line) {
     if (line > 2 || inline_now()) return false;
     if (line == 0) {
+        g_lab_pin = false;
         g_rd_inherited = false;
         set_boot_pin(0);
         self_power_leave();
@@ -1082,6 +1085,7 @@ bool debug_pin(std::uint8_t line) {
     g_pin_moved = false;
     g_pin_rd = bit;
     g_rd_inherited = true;
+    g_lab_pin = true;   // a lab pin: unlike a boot / comeback pin, it clears when the far end detaches (detach_reset)
     set_boot_pin(bit);
     if (g_active_cc == 0) wr(kSwitches0, g_pin_rd);
     K2LOG("[PIN] Rd pinned on CC%u (mark written)\n", unsigned(line));
@@ -1823,6 +1827,16 @@ static void detach_reset(std::uint8_t status0) {
     // clears it with set_inline(false), so a detach never clears it nor writes the pin's Rd back under it (hardware 2026-11-09: that
     // write and the clear made a hub-powered K2 flap, Rd -> Request -> load -> inline -> VBUS collapse -> detach -> Rd again).
     rebase_far_sink();
+    // A lab pin (pd-reread --pin) ends with the far end's detach: the next attach must be passive, so the
+    // pin and its mark go now (a warm reset would otherwise re-inherit the lab pin). A boot / comeback pin
+    // is not a lab pin: it keeps its Rd and its mark (it is what powers the K2; the /rd.rec comeback is untouched).
+    if (g_detach.reason() == pd::DetachReason::Sink && g_lab_pin) {
+        g_lab_pin = false;
+        g_rd_inherited = false;
+        set_boot_pin(0);
+        g_pin_rd = 0;   // SWITCHES0 is written just below (downstream_now() or the now-empty pin)
+        K2LOG("[PIN] lab pin cleared (the far end detached)\n");
+    }
     wr(kSwitches0, downstream_now() ? std::uint8_t(0) : g_pin_rd);
     g_rd_op = false;
     g_cc_sink_mv = -1;

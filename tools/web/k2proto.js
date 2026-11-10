@@ -383,7 +383,7 @@ var K2Proto = (function () {
              max_mv: v.getUint16(11, true), max_ma: v.getUint16(13, true), max_mw: v.getUint32(15, true) } };
   }
 
-  // PD_TRIGGER_STATUS: [state, result, held, epr, pos, mv u16, ma u16, hard_resets u32] (13 bytes read here; a source_hard_resets u32 follows, not shown).
+  // PD_TRIGGER_STATUS: [state, result, held, epr, pos, mv u16, ma u16, hard_resets u32] (13 bytes read here; a source_hard_resets u32 and a pin u8 follow, not shown).
   function decodePdTrigger(p) {
     need(p, 13, "pd trigger status");
     var v = dv(p);

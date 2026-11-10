@@ -203,6 +203,24 @@ enum class StatusReadout : uint8_t { None, Live, Stale };
 void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_view title, int16_t right = 132,
                       std::string_view badge = {});
 
+// The top chrome bar's role badge (draw_status_left's `badge`): a held Rd pin names its line
+// ("Rd pin CC2"), so a leftover pin (pd-reread --pin) is visible on the status line; no pin is the
+// passive inline role ("PAS"). pin = fusb302::pin_rd(): 0, 1 = CC1, 2 = CC2 (never both).
+inline std::string_view role_badge(std::uint8_t pin, char (&buf)[11]) {
+    if (pin == 1 || pin == 2) {
+        constexpr std::string_view kTxt = "Rd pin CC";   // string_view: no NUL in the range
+        std::size_t i = 0;
+        for (char c : kTxt) buf[i++] = c;
+        buf[i++] = static_cast<char>('0' + pin);
+        buf[i] = '\0';
+        return {buf, i};
+    }
+    constexpr std::string_view kPas = "PAS";
+    for (std::size_t i = 0; i < kPas.size(); i++) buf[i] = kPas[i];
+    buf[kPas.size()] = '\0';
+    return kPas;
+}
+
 // Solid stale-grey pill right-aligned to x 222, 2 px side padding ("LAST", no counter).
 void draw_last_pill(const Surface &s, std::string_view text);
 
