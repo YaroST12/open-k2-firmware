@@ -192,6 +192,9 @@ bool wr(Reg r, std::uint8_t v) {
     const bool ok = i2c::write_reg(Bus::Fusb, kAddr, r, v);
     pdtrace::reg_write(r, v, ok);
     if (r == kSwitches0) {
+        // Any Rd of ours going on or off changes what the CC nets read, and the ADC levels reach sink_cc() a tick late: the
+        // open-level feed (pd::RdSeek::feed_open) stays blind until they have settled (idle-wake-2, bench 2026-11-10).
+        if (ok && ((v ^ g_sw0) & (kPdwn1 | kPdwn2)) != 0) g_rdseek.rd_changed(systick::millis());
         if (ok) g_sw0 = v;
         boot_note(0, v);
     }
@@ -584,14 +587,19 @@ void detect_cc_orientation() {
             samples[n++] = {mask, std::uint8_t(line), comp, std::uint8_t(status0 & 3)};
         }
     }
-    pd::CcChoice c = pd::choose_cc_forced(samples, g_force_cc != 0 ? g_force_cc : pin_line);
+    // An idle wake hold owns one line (our single Rd sits on it for the dwell): only that line may attach. The other line is
+    // measured with no Rd on it, where the board's CC2 bias net idles at ~1.7 V - the level of a 3 A Rp over a sink's Rd - and
+    // reads comparator-true with nothing behind it; taking it clears the hold and leaves the sleeping source unasked
+    // (bench 2026-11-10, runs/2026-11-10-merge2-hw/wake2). The Rp of the awake held line shows over our Rd and attaches here.
+    const std::uint8_t held = g_idle_wake.line();
+    pd::CcChoice c = pd::choose_cc_forced(samples, g_force_cc != 0 ? g_force_cc : pin_line != 0 ? pin_line : held);
     // Cross-check the comparator choice against the ADC net levels (Ui feeds sink_cc() every tick):
     // the live wire is the one net inside the Rd window, an open Rp (~3.3 V) must never win. A pinned
     // boot (g_pin_rd / pinned_live_line) and a forced debug line (g_force_cc) are explicit choices and
     // are not overridden. The ~2 Hz rescan after a detach (poll() -> detach_reset() -> this function)
     // lands here again with the fresh levels, so a VBUS collapse mid-negotiation cannot leave a wrong
     // line latched from a bad first sample.
-    if (!pinned && g_force_cc == 0) {
+    if (!pinned && g_force_cc == 0 && held == 0) {   // a hold's line is explicit too: the ADC window must not move it
         const std::uint8_t rd_line = pd::rd_window_line(g_cc1_mv, g_cc2_mv);
         if (rd_line != 0 && rd_line != c.line) {
             const pd::CcChoice alt = pd::choose_cc_forced(samples, rd_line);
@@ -1124,6 +1132,7 @@ bool init() {
     g_msg_id = 0;
     g_rd_op = false;
     g_rdseek.clear();      // a boot: no open reading is known yet (sink_cc notes them once the UI feeds levels)
+    g_rdseek.rd_changed(systick::millis());   // the chip came up with Rd on both lines (its power-on SWITCHES0): the nets settle first
     g_idle_wake.reset();
 
     // PC13..PC15 drive the CC analog switches and the VCONN path.
@@ -2067,9 +2076,18 @@ void poll() {
         const std::uint8_t was = g_idle_wake.line();
         const std::uint32_t was_since = g_idle_wake.since();
         const std::uint8_t held = g_idle_wake.update(systick::millis(), g_rdseek.open_mv(1), g_rdseek.open_mv(2));
+        // Two dwells on one line with no Rp: that pick is doubtful (a spike noted as the signature, a flipped cable). Rd comes
+        // off for kIdleReadMs, the stale open readings are dropped, and the next stable pair decides again - the same line is
+        // not re-armed for ever.
+        if (g_idle_wake.take_reread()) {
+            g_rdseek.invalidate_open();
+            wr(kSwitches0, idle_rd());
+            K2LOG("[FUSB302] Idle wake: no Rp on CC%u after %u dwells, Rd released for %u ms to re-read the open levels (now cc1=%d cc2=%d mV)\n",
+                  unsigned(was), unsigned(pd::kIdleUnansweredDwells), unsigned(pd::kIdleReadMs), int(g_cc1_mv), int(g_cc2_mv));
+        }
         // Each dwell is logged (the line alone changes rarely): the Rd reaches the chip now, not with the next scan, and the
         // SWITCHES0 readback and the live ADC levels show on the bench whether it did and what the held net did under it.
-        if (held != was || (held != 0 && g_idle_wake.since() != was_since)) {
+        else if (held != was || (held != 0 && g_idle_wake.since() != was_since)) {
             wr(kSwitches0, idle_rd());
             std::uint8_t back = 0;
             rd(kSwitches0, back);
@@ -2078,7 +2096,10 @@ void poll() {
                   int(g_cc2_mv), unsigned(back));
         }
     }
-    if (g_active_cc == 0 && poll_count % 25 == 0 && !g_rd_hold.held(systick::millis())) detect_cc_orientation();  // ~2 Hz at the 20 ms poll
+    // No scan inside the idle wake's Rd-release window either: Rd is off there, and the unrestricted scan would take the
+    // board's 1.7 V CC2 net as an attach (the window is only kIdleReadMs; the next scan after it is held to the picked line).
+    if (g_active_cc == 0 && poll_count % 25 == 0 && !g_rd_hold.held(systick::millis()) && !g_idle_wake.reading(systick::millis()))
+        detect_cc_orientation();  // ~2 Hz at the 20 ms poll
 
     // Detach rule: VBUS below 3.0 V for 1 s, or no Rp on the active line for 500 ms. BMC
     // bursts pull the line low for microseconds, which the 500 ms hold rides out.
@@ -2262,8 +2283,10 @@ void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     g_cc2_mv = cc2_mv;
     // pattern slow-rp-wake: keep the OPEN level per line from before our Rd went on - the Rd seek reads it back to tell
     // a sleeping source's standby pull-up (~3.0-3.3 V open, collapsing under our Rd) from a coupled net. Under our Rd the
-    // level is our own divider and says nothing, so nothing is noted while any Rd is presented.
-    if ((g_sw0 & (kPdwn1 | kPdwn2)) == 0) { g_rdseek.note_open(1, cc1_mv); g_rdseek.note_open(2, cc2_mv); }
+    // level is our own divider and says nothing, so nothing is noted while any Rd is presented. These levels also arrive
+    // one tick late: the feed ignores the first kOpenSettleMs after any Rd change (the old Rd's tail) and takes a level
+    // only when two samples agree (CC2's measurement-pulse spike is no standby signature).
+    g_rdseek.feed_open(systick::millis(), (g_sw0 & (kPdwn1 | kPdwn2)) != 0, cc1_mv, cc2_mv);
     cc_window_recheck();   // fresh levels while attached with no PD decoded yet: re-run the Rd-window cross-check
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
     auto dist = [](std::int32_t v) { const std::int32_t d = v - pd::kSinkBandCenterMv; return d < 0 ? -d : d; };

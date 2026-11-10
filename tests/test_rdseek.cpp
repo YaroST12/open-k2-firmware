@@ -226,6 +226,112 @@ void test_a_dark_attach_needs_the_setting_no_vbus_no_pd_and_the_dwell() {
     CHECK_EQ(w.dark_attach(5000, 4000, 0, false), false);                   // measured from the attach, not from boot
 }
 
+// ---- idle-wake-2 (bench 2026-11-10, runs/2026-11-10-merge2-hw/wake2): the open levels the wake decides from ----
+// The UI feeds the ADC levels one tick late. A level taken under our Rd, or in the first moments after the Rd went on or
+// came off, is the K2's own divider (or the old Rd's tail), never the line's open level; and a one-sample spike (CC2's
+// ~1 Hz 3.28 V pulse during a FUSB302 measurement) is no standby signature.
+void test_no_open_level_is_noted_while_our_rd_is_presented() {
+    pd::RdSeek s;
+    for (std::uint32_t t = 1000; t < 3000; t += 20) s.feed_open(t, true, 3300, 3300);   // Rd on a line: the feed is blind
+    CHECK_EQ(s.open_mv(1), -1);
+    CHECK_EQ(s.open_mv(2), -1);
+    CHECK_EQ(s.standby(1), false);
+}
+void test_an_open_level_is_noted_only_after_the_rd_release_has_settled() {
+    pd::RdSeek s;
+    s.note_open(1, 3050);                      // an earlier good reading
+    s.rd_changed(1000);                        // Rd went off here (detach_reset wrote SWITCHES0 = 0)
+    // the ticks right after the release still carry the tail of the old Rd: cc1 = 6 mV, cc2 = a spike
+    for (std::uint32_t t = 1000; t < 1000 + pd::kOpenSettleMs; t += 20) s.feed_open(t, false, 6, 3284);
+    CHECK_EQ(s.open_mv(1), 3050);              // not overwritten by the 6 mV tail
+    CHECK_EQ(s.open_mv(2), -1);                // and the spike was not taken as CC2's open level
+    // settled: two agreeing samples are the open level
+    std::uint32_t t = 1000 + pd::kOpenSettleMs;
+    s.feed_open(t, false, 3010, 1700);
+    s.feed_open(t + 20, false, 3020, 1707);
+    CHECK_EQ(s.open_mv(1), 3020);
+    CHECK_EQ(s.open_mv(2), 1707);
+    CHECK_EQ(s.standby(1), true);
+    CHECK_EQ(s.standby(2), false);
+}
+void test_a_rd_change_restarts_the_settle_and_a_one_tick_spike_is_not_taken() {
+    pd::RdSeek s;
+    s.rd_changed(500);
+    std::uint32_t t = 500 + pd::kOpenSettleMs;
+    s.feed_open(t, false, 1700, 1700);
+    s.feed_open(t + 20, false, 1710, 1710);
+    CHECK_EQ(s.open_mv(2), 1710);
+    s.feed_open(t + 40, false, 1700, 3284);    // the measurement-pulse spike on CC2 for one tick
+    s.feed_open(t + 60, false, 1705, 1712);
+    CHECK_EQ(s.open_mv(2), 1710);              // the spike never became the open level
+    s.feed_open(t + 80, false, 1705, 1711);
+    CHECK_EQ(s.open_mv(2), 1711);
+    s.rd_changed(t + 100);                     // an Rd on and off again: the settle starts over
+    s.feed_open(t + 100, false, 5, 5);
+    s.feed_open(t + 120, false, 5, 5);
+    CHECK_EQ(s.open_mv(1), 1705);              // the tail of the Rd is not an open level
+}
+void test_the_open_feed_pairs_samples_from_distinct_adc_refreshes() {
+    pd::RdSeek s;
+    s.rd_changed(0);
+    // the same ADC average offered twice inside one refresh (a UI tick faster than the 20 ms ADC) is one sample, not a pair
+    s.feed_open(pd::kOpenSettleMs, false, 3300, 3300);
+    s.feed_open(pd::kOpenSettleMs + 1, false, 3300, 3300);
+    CHECK_EQ(s.open_mv(1), -1);
+    s.feed_open(pd::kOpenSettleMs + pd::kOpenGapMs, false, 3290, 3290);
+    CHECK_EQ(s.open_mv(1), 3290);
+}
+void test_invalidate_open_forgets_the_readings_until_fresh_ones_arrive() {
+    pd::RdSeek s;
+    s.note_open(1, 3300);
+    s.note_open(2, 3050);
+    s.invalidate_open();
+    CHECK_EQ(s.open_mv(1), -1);
+    CHECK_EQ(s.standby(2), false);
+}
+
+// A hold that no Rp answers for kIdleUnansweredDwells dwells is on the wrong line (or the source never wakes): it releases
+// Rd for kIdleReadMs so the open levels are re-read, instead of re-arming the same line for ever.
+void test_an_unanswered_hold_releases_rd_to_re_read_the_open_levels() {
+    pd::IdleWake w;
+    w.set_enabled(true);
+    std::uint32_t t = 1000;
+    CHECK_EQ(int(w.update(t, 100, 3284)), 2);                       // the first pick (CC2, the spike)
+    for (std::uint32_t d = 0; d < pd::kSlowWakeDwellMs; d += 20) CHECK_EQ(int(w.update(t + d, 100, 3284)), 2);
+    t += pd::kSlowWakeDwellMs;
+    CHECK_EQ(int(w.update(t, 100, 3284)), 2);                       // dwell 1 over: steady re-arm, still one dwell unanswered
+    CHECK_EQ(w.take_reread(), false);
+    t += pd::kSlowWakeDwellMs;
+    CHECK_EQ(int(w.update(t, 100, 3284)), 0);                       // dwell 2 over: Rd off for the re-read
+    CHECK_EQ(w.take_reread(), true);                                // the caller wipes the stale open levels once
+    CHECK_EQ(w.take_reread(), false);
+    CHECK_EQ(int(w.line()), 0);
+    CHECK_EQ(w.reading(t + 1), true);
+    // inside the window nothing is held, whatever the (stale) levels say
+    for (std::uint32_t d = 20; d < pd::kIdleReadMs; d += 20) CHECK_EQ(int(w.update(t + d, 100, 3284)), 0);
+    CHECK_EQ(w.reading(t + pd::kIdleReadMs - 1), true);
+    // the window is over: decide from the fresh readings, the other line now reads the signature
+    CHECK_EQ(w.reading(t + pd::kIdleReadMs), false);
+    CHECK_EQ(int(w.update(t + pd::kIdleReadMs, 3040, 1707)), 1);
+    CHECK_EQ(int(w.line()), 1);
+}
+void test_an_answered_or_reset_hold_does_not_count_as_unanswered() {
+    pd::IdleWake w;
+    w.set_enabled(true);
+    std::uint32_t t = 1000;
+    w.update(t, 3300, 100);
+    t += pd::kSlowWakeDwellMs;
+    w.update(t, 3300, 100);                                         // one unanswered dwell
+    w.reset();                                                      // a detach: the story starts over
+    t += 20;
+    CHECK_EQ(int(w.update(t, 3300, 100)), 1);
+    t += pd::kSlowWakeDwellMs;
+    CHECK_EQ(int(w.update(t, 3300, 100)), 1);                       // one dwell again, not two
+    CHECK_EQ(w.take_reread(), false);
+    w.on_attach(1);                                                 // an attach took the line: that dwell was answered
+    CHECK_EQ(w.take_reread(), false);
+}
+
 }  // namespace
 
 int main() {
@@ -246,5 +352,12 @@ int main() {
     test_a_disabled_idle_wake_holds_nothing();
     test_reset_without_keep_wipes_the_open_readings();
     test_a_dark_attach_needs_the_setting_no_vbus_no_pd_and_the_dwell();
+    test_no_open_level_is_noted_while_our_rd_is_presented();
+    test_an_open_level_is_noted_only_after_the_rd_release_has_settled();
+    test_a_rd_change_restarts_the_settle_and_a_one_tick_spike_is_not_taken();
+    test_the_open_feed_pairs_samples_from_distinct_adc_refreshes();
+    test_invalidate_open_forgets_the_readings_until_fresh_ones_arrive();
+    test_an_unanswered_hold_releases_rd_to_re_read_the_open_levels();
+    test_an_answered_or_reset_hold_does_not_count_as_unanswered();
     return test_report("test_rdseek");
 }

@@ -3445,6 +3445,152 @@ void test_rig_with_vbus_up_is_not_a_dark_attach() {
     rig_end();
 }
 
+// ---- idle-wake-2: the splitter replay (bench 2026-11-10, runs/2026-11-10-merge2-hw/wake2) ----
+// IQ4 -> 2-way splitter (other output empty, port asleep) -> K2 top plug. The sleeping port reads its standby level (3040 mV)
+// open on one line and collapses under our Rd until ~1.1 s of one steady Rd wake it; the board's CC2 net idles at ~1.7 V with
+// nothing on it (the PLUS-key bias net: a 3 A Rp over a sink's Rd reads the same) and spikes to 3.28 V for a tick once a
+// second. The ADC levels reach sink_cc() one tick late, so the tick after an Rd change still shows the old Rd's state.
+struct Sp {
+    unsigned line = 1;               // the line the splitter sits on (1 / 2)
+    unsigned wake_ms = 1100;         // steady Rd on that line this long wakes it (Rp shows over the Rd)
+    unsigned prev_rd = 0;            // SWITCHES0 Rd bits as of the previous tick (the ADC lags one tick)
+    std::uint32_t rd_since = 0;
+};
+Sp g_sp;
+// Lines as the chip's comparator sees them: g_lvl_rd (under our Rd) / g_lvl_nord (open). The ADC feed derives from the same.
+void sp_levels() {
+    g_rd_model = true;
+    g_lvl_nord[0] = g_lvl_nord[1] = g_lvl_rd[0] = g_lvl_rd[1] = 0;
+    g_lvl_nord[1] = 1700;                                    // the CC2 bias net (when the splitter is not on it)
+    g_lvl_nord[g_sp.line - 1] = 3040;                        // the sleeping port's standby level, open
+}
+std::int32_t sp_adc(unsigned i, std::uint32_t now) {         // the lagged ADC level of line index i
+    if ((g_sp.prev_rd & (1u << i)) != 0) return g_lvl_rd[i] == 0 ? (i == 0 ? 6 : 3) : g_lvl_rd[i];
+    if (i == 1 && g_sp.line != 2 && now % 1000 < 20) return 3284;   // CC2's ~1 Hz measurement-pulse spike
+    return g_lvl_nord[i];
+}
+void sp_world(unsigned line, bool wake_on, unsigned wake_ms = 1100) {
+    power_cycle_forget_pin();
+    fusb302::set_force_line(0);
+    reset_world();
+    g_sp = Sp{};
+    g_sp.line = line;
+    g_sp.wake_ms = wake_ms;
+    sp_levels();
+    g_reg[0x40] = 0x23;                                      // COMP + BC_LVL 3 whenever the measured line is above the threshold
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    g_auto_txsent = true;
+    fusb302::set_idle_wake(wake_on);
+    // the UI feeds levels long before the first scan on a running K2: settle + a stable pair, no poll in between
+    for (unsigned t = 0; t < 300; t += 20) { g_ms += 20; fusb302::sink_vbus(78); fusb302::sink_cc(sp_adc(0, g_ms), sp_adc(1, g_ms)); }
+}
+unsigned sp_run(unsigned ms) {                               // returns the union of the Rd bits SWITCHES0 showed after any tick
+    unsigned seen = 0;
+    for (unsigned t = 0; t < ms; t += 20) {
+        g_ms += 20;
+        fusb302::sink_vbus(78);
+        fusb302::sink_cc(sp_adc(0, g_ms), sp_adc(1, g_ms));
+        fusb302::poll();
+        fusb302::service();
+        const unsigned rd = sw0_rd();
+        seen |= rd;
+        const unsigned bit = 1u << (g_sp.line - 1);
+        if (rd & bit) {                                      // the awake line shows its Rp over a steady Rd
+            if (g_sp.rd_since == 0) g_sp.rd_since = g_ms;
+            if (g_ms - g_sp.rd_since >= g_sp.wake_ms) g_lvl_rd[g_sp.line - 1] = 1600;
+        } else {
+            g_sp.rd_since = 0;
+            g_lvl_rd[g_sp.line - 1] = 0;
+        }
+        g_sp.prev_rd = rd;
+    }
+    return seen;
+}
+bool rd_ever_written_on(unsigned bit) {                      // any SWITCHES0 write that put an Rd on that line
+    for (const auto& s : g_log)
+        if (s.rfind("W 02=", 0) == 0 && (std::stoul(s.substr(5), nullptr, 16) & bit) != 0) return true;
+    return false;
+}
+// The boot's first scan runs before the open levels are known and may attach the bias line (dark, VBUS never comes); the wake
+// releases that after kDarkAttachMs and takes the line. Run to the first hold on `line`, then start the logs clean: what the
+// test asserts is the behaviour DURING the hold.
+void sp_until_hold(unsigned line) {
+    const std::string needle = "Idle wake: Rd on CC" + std::to_string(line);
+    for (unsigned t = 0; t < 8000 && !usb_has(needle.c_str()); t += 20) sp_run(20);
+    CHECK_EQ(usb_has(needle.c_str()), true);
+    g_usb.clear();
+    g_log.clear();
+}
+void sp_end() {
+    g_reg[0x40] = 0x00;
+    g_rd_model = false;
+    g_lvl_rd[0] = g_lvl_rd[1] = g_lvl_nord[0] = g_lvl_nord[1] = 0;
+    fusb302::set_idle_wake(false);
+    for (int i = 0; i < 100; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::sink_cc(0, 0); fusb302::poll(); fusb302::service(); }
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+// Fix 1: the scan during the hold must not take the bias line (CC2, 1.7 V open, comparator-true) while the hold has our Rd on CC1;
+// the hold stays steady until the splitter's Rp shows on CC1, and the scan then attaches on the held line.
+void test_wake2_the_scan_during_the_hold_never_attaches_the_bias_line() {
+    sp_world(1, true);
+    sp_until_hold(1);
+    const unsigned seen = sp_run(4000);
+    CHECK_EQ(usb_has("Active CC detected: CC2"), false);     // the false passive attach on the 1.7 V net
+    CHECK_EQ(usb_has("Active CC detected: CC1"), true);      // the splitter woke after ~1.1 s of one steady Rd: its line is taken
+    CHECK_EQ(seen & 2u, 0u);                                 // Rd never on CC2 ...
+    CHECK_EQ(rd_ever_written_on(2u), false);                 // ... not even for a moment inside a scan
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    sp_end();
+}
+// Fix 2: the tick after the Rd came off still carries the old Rd's state (cc1 = 6 mV under our Rd, cc2 = a measurement spike):
+// those levels are no open levels, and the wake must not pick the spiked line from them.
+void test_wake2_levels_fed_right_after_an_rd_release_are_not_open_levels() {
+    sp_world(1, true, 1000000);                              // the splitter never wakes: the hold only dwells
+    sp_until_hold(1);
+    sp_run(600);
+    CHECK_EQ(sw0_rd(), 1u);                                  // Rd on CC1, the splitter's line
+    fusb302::set_idle_wake(false);                           // the Rd goes off now (SWITCHES0 = 0) ...
+    CHECK_EQ(sw0_rd(), 0u);
+    for (int i = 0; i < 3; i++) { g_ms += 20; fusb302::sink_vbus(78); fusb302::sink_cc(6, 3284); fusb302::poll(); }   // ... and the late feed shows the old state
+    fusb302::set_idle_wake(true);
+    g_sp.prev_rd = 0;
+    const unsigned seen = sp_run(400);
+    CHECK_EQ(usb_has("Idle wake: Rd on CC2"), false);        // the spike is not CC2's standby signature
+    CHECK_EQ(seen & 2u, 0u);
+    CHECK_EQ(sw0_rd(), 1u);                                  // back on the line that really read the signature
+    sp_end();
+}
+// Fix 2 (no Rd under our own divider): while the hold has our Rd on CC1, nothing it reads there changes the open levels,
+// so a long hold never walks the decision away from the line that read the signature before the Rd went on.
+void test_wake2_the_open_level_of_the_held_line_is_not_overwritten_under_our_rd() {
+    sp_world(1, true, 1000000);
+    sp_until_hold(1);
+    sp_run(5000);                                            // two dwells of CC1 reading 6 mV under our own Rd
+    CHECK_EQ(usb_has("Idle wake: Rd on CC2"), false);
+    sp_end();
+}
+// Fix 3: the splitter moved to the other line while the hold sat on the old one (a flipped cable): after two dwells with no Rp the
+// hold releases Rd, re-reads the open levels and goes to the line that now reads the signature - never re-arming the same line.
+void test_wake2_an_unanswered_hold_re_reads_and_follows_the_signature_to_the_other_line() {
+    sp_world(2, true, 1000000);                              // the splitter sits on CC2 and does not wake
+    sp_until_hold(2);
+    sp_run(1000);
+    CHECK_EQ(sw0_rd(), 2u);                                  // the hold is on CC2
+    g_sp.line = 1;                                           // the cable is flipped: the standby level is on CC1 now ...
+    g_sp.wake_ms = 1100;
+    sp_levels();                                             // ... and CC2 is the bias net
+    const unsigned seen = sp_run(8000);
+    CHECK_EQ(usb_has("re-read the open levels"), true);      // the Rd came off for the read window
+    CHECK_EQ(usb_has("Idle wake: Rd on CC1"), true);         // and the hold moved to the line that reads the signature
+    CHECK_EQ((seen & 1u) != 0u, true);
+    CHECK_EQ(usb_has("Active CC detected: CC1"), true);      // where the splitter then woke
+    CHECK_EQ(usb_has("Active CC detected: CC2"), false);     // the bias net was never taken, not even in the read window
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    sp_end();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3567,6 +3713,10 @@ int main() {
     test_rig_with_vbus_up_is_not_a_dark_attach();
     test_rig_dark_attach_does_not_block_the_idle_wake_turned_on_afterwards();
     test_rig_with_the_setting_on_releases_the_dark_attach_and_keeps_one_rd();
+    test_wake2_the_scan_during_the_hold_never_attaches_the_bias_line();   // idle-wake-2 replay: each case ends with a detach and the setting off
+    test_wake2_levels_fed_right_after_an_rd_release_are_not_open_levels();
+    test_wake2_the_open_level_of_the_held_line_is_not_overwritten_under_our_rd();
+    test_wake2_an_unanswered_hold_re_reads_and_follows_the_signature_to_the_other_line();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_get_source_caps_refused_even_confirmed();
