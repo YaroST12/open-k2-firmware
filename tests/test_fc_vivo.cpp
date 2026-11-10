@@ -207,6 +207,31 @@ static void overvoltage() {
     CHECK(c.resets >= 1 && c.volts.back() == 5000);   // asked for 5 V on the way out
 }
 
+// A QC-only source following the D+/D- levels the K2 holds for the UART claim, with no frame ever heard: the bus is dropped all the
+// same, but the finding is "not supported", not an overvoltage (the AFC / FCP / SCP rule). Once the charger has spoken it is a
+// real overvoltage (test above).
+static void overvoltage_of_a_silent_source_is_unsupported() {
+    FakeVivo c;
+    c.answers = false;
+    c.notice_on_open = false;
+    Engine e(c);
+    CHECK(e.start(Proto::Vivo, 9000, true) == Fail::None);
+    c.run(e, 100);
+    c.vbus = c.vbus_pending = 12500;
+    c.run(e, 100);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::Unsupported);
+    CHECK(c.resets >= 1 && c.closed);
+    // the same source, but its notice was heard first: a real overvoltage
+    FakeVivo d;
+    d.answers = false;
+    Engine f(d);
+    CHECK(f.start(Proto::Vivo, 9000, true) == Fail::None);
+    d.run(f, 100);
+    d.vbus = d.vbus_pending = 12500;
+    d.run(f, 100);
+    CHECK(f.state() == State::Failed && f.fail() == Fail::Overvoltage);
+}
+
 static void source_lost() {
     FakeVivo c;
     c.drop_after_ramp = true;
@@ -225,6 +250,7 @@ int main() {
     own_echo_is_not_a_charger();
     notice_restarts_sequence();
     overvoltage();
+    overvoltage_of_a_silent_source_is_unsupported();
     source_lost();
     std::printf("test_fc_vivo: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

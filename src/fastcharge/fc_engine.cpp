@@ -810,7 +810,7 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     state_ = State::Negotiating;
     band_ms_ = lost_ms_ = 0;
     sends_ = ok_sends_ = 0;
-    acked_ = false;
+    acked_ = vheard_ = false;
     // Re-detection right after a session: the lines stay at 0 V until the 500 ms hold since that release is over (pattern
     // qc-redetect-after-reset). Every protocol waits for it, not only the HVDCP ones: fctrig::start cancels the reset's own hold,
     // so a first move made inside it (the AFC settle, the VOOC wake, the UFCS / vivo UART claim) ran against a charger still
@@ -955,7 +955,9 @@ void Engine::poll() {
     if (vbus > env_.ceiling_mv()) return abort(Fail::Overvoltage);   // the monitor's own limit: an overvoltage whoever answered
     // Past the target's guard band. Before the charger has answered AFC / FCP / SCP itself this is a QC-only source following the
     // D+/D- levels: the bus is dropped all the same, but the finding is "not supported", not an overvoltage.
-    if (over_guard(guard_mv(), vbus) && !unmoved) return abort(unacked_handshake() ? Fail::Unsupported : Fail::Overvoltage);
+    // VIVO is the same case while no frame of the charger has been heard (vheard_); its NoResponse stays as it is, that is a result of its own.
+    if (over_guard(guard_mv(), vbus) && !unmoved)
+        return abort(unacked_handshake() || (proto_ == Proto::Vivo && !vheard_) ? Fail::Unsupported : Fail::Overvoltage);
     if (phase_ == Phase::Qc3Loop && state_ == State::Negotiating && now - band_ms_ >= kQc3TransitionMs)
         return abort(Fail::NoBand);
     // Open-loop bound (inferred): once the pulse size is known, the pulses sent explain a highest level; above it
