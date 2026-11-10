@@ -1054,6 +1054,21 @@ static void test_preflight_refusal_is_logged() {
         CHECK_EQ(g_stub.log_text.find("preflight refused") == std::string::npos, true);
     }
 }
+// (B5, pattern shared-bus-split; the B5 run runs/2026-11-10-splitter-wrongv read VBUS 8.47 V under a PDO 1 contract):
+// with the sink holding a contract at PDO 1 and VBUS outside vSafe5V, the START's preflight refuses WrongVoltage -
+// the footer names the measured level and the log line says "VBUS 8.5 V on a 5 V contract (shared bus)", which
+// ct_start.py prints when the run id stays 0.
+static void test_preflight_wrong_voltage_under_pdo1_contract_is_logged() {
+    fixture(); g_stub.pm.vbus_mv = 8470;
+    g_stub.sink.state = pd::SinkState::Ready; g_stub.sink.pos = 1; g_stub.sink.mv = 5000;   // PS_RDY at PDO 1
+    Ui ui; open(ui); review(ui);
+    g_stub.log_text.clear();
+    start_press(ui, 1300);   // VBUS is up (>= kStartVbusMv): no Rd wait, refused on the first OK
+    CHECK_EQ(ui.charger_test_busy(), false);
+    CHECK_EQ(footer_says("VBUS 8.5 V on a 5V contract", kCaution), true);   // red today: "VBUS not safe 5V"
+    CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: VBUS 8.5 V on a 5 V contract (shared bus)") != std::string::npos, true);   // red today
+    no_operations();
+}
 static void test_results_counters_are_words() {
     for (unsigned kind = 0; kind < 3; ++kind) {
         fixture();
@@ -3613,6 +3628,7 @@ int main() {
     test_review_start_is_only_row();
     test_vsafe5_review();
     test_preflight_refusal_is_logged();
+    test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
     test_self_powered_review_note(); test_self_powered_run_is_on_the_card();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();

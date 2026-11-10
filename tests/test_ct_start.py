@@ -182,6 +182,14 @@ class PreflightRefusalPrint(unittest.TestCase):
                          "START did not start a run (run id still 5)")
         self.assertEqual(ct_start.start_failure_text(5, []), "START did not start a run (run id still 5)")
 
+    def test_the_wrong_voltage_phrase_line_is_printed_verbatim(self):
+        # the WrongVoltage preflight refusal (a live PDO 1 contract held outside vSafe5V, pattern shared-bus-split)
+        # reads "VBUS 8.5 V on a 5 V contract (shared bus)" in the log; ct_start prints that line as the reason
+        frames = [b"[TEST] preflight refused: VBUS 8.5 V on a 5 V contract (shared bus)\n"]
+        text = ct_start.start_failure_text(0, frames)
+        self.assertIn("run id still 0", text)
+        self.assertIn("VBUS 8.5 V on a 5 V contract (shared bus)", text)
+
 
 class RunId(unittest.TestCase):
     def test_retries_while_the_k2_is_busy_in_start(self):

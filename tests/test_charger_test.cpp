@@ -8,6 +8,7 @@
 #include "k2/core/rd_intent.hpp"
 #include "k2/pd/transcap_reason.hpp"
 #include "ramdisk.hpp"
+#include "ui_stubs.h"
 #include "k2/core/remote_proto.hpp"
 #include <algorithm>
 #include <string>
@@ -4334,6 +4335,33 @@ static void test_pd_attach_rp_drop_restarts_the_wait_once() {
     CHECK_EQ(count_reason_all(r, kWrongVoltage), 0u);
     CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Pass) > 0, true);   // the unit ran
 }
+// (B5, pattern shared-bus-split; the streamB2 replay values of runs/2026-11-09-splitter/streamB2 - PS_RDY at PDO 1
+// with VBUS held at 7600 - and the B5 run runs/2026-11-10-splitter-wrongv, VBUS 8470): with a live PDO 1 contract and
+// VBUS outside vSafe5V, START's preflight refuses WrongVoltage, and the refusal's log line names the measured level
+// ("VBUS 8.5 V on a 5 V contract (shared bus)") - not Release with a bare mV. Without the contract (a source holding
+// 7.6 V with no PD) it stays Release, and a safe 5 V under the contract runs.
+static void test_preflight_pdo1_contract_at_wrong_voltage_refuses_wrong_voltage() {
+    Fake f;
+    f.in.vbus_mv = 7600;   // streamB2 replay: the PDO 1 contract is granted, VBUS stays at 7.6 V
+    f.in.pd.state = pd::SinkState::Ready; f.in.pd.pos = 1; f.in.pd.mv = 5000;
+    const auto pv = ct::Runner::preview(f.caps, kPd, f.in);
+    CHECK_EQ(pv.refusal, ct::Reason::WrongVoltage);   // red today: Release
+    g_stub.log_text.clear();
+    ct::log_preflight_refusal(ct::Reason::WrongVoltage, 7600);
+    CHECK_EQ(g_stub.log_text.find("VBUS 7.6 V on a 5 V contract (shared bus)") != std::string::npos, true);   // red today
+    g_stub.log_text.clear();
+    ct::log_preflight_refusal(ct::Reason::WrongVoltage, 8470);   // the B5 run's reading: 8.47 V reads 8.5 V
+    CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: VBUS 8.5 V on a 5 V contract (shared bus)") != std::string::npos, true);   // red today
+    {   // no contract at the same voltage: a source with no PD at 7.6 V is a plain unsafe VBUS
+        Fake f2; f2.in.vbus_mv = 7600;
+        CHECK_EQ(ct::Runner::preview(f2.caps, kPd, f2.in).refusal, ct::Reason::Release);
+    }
+    {   // a safe 5 V under the PDO 1 contract: nothing to refuse
+        Fake f3; f3.in.vbus_mv = 5000;
+        f3.in.pd.state = pd::SinkState::Ready; f3.in.pd.pos = 1; f3.in.pd.mv = 5000;
+        CHECK_EQ(ct::Runner::preview(f3.caps, kPd, f3.in).refusal, ct::Reason::None);
+    }
+}
 // The PD plan comes from the list the first attach hears, not from START's.
 static void test_pd_plan_comes_from_the_first_attach() {
     Fake f; ct::Runner r(f);
@@ -5712,6 +5740,7 @@ int main() {
     test_pd_attach_5v_contract_then_rp_cut_before_timeout_fails_wrong_voltage();
     test_pd_attach_without_any_caps_stays_no_reattach();
     test_pd_attach_rp_drop_restarts_the_wait_once();
+    test_preflight_pdo1_contract_at_wrong_voltage_refuses_wrong_voltage();
     test_cancel_during_a_unit_restores_the_pd_policy();
     test_resume_reboot_in_request(); test_resume_after_planned_reattach_is_not_counted(); test_pd_replan_rewrites_the_journal(); test_resume_in_a_vendor_unit_goes_on_in_the_default_order(); test_resume_in_the_pd_unit_runs_the_legacy_units_after_it(); test_resume_refusals_and_abandon();
     test_reboot_budget_skips_the_unit_on_the_third_loss(); test_reboot_budget_covers_the_ufcs_unit(); test_legacy_preset_plans_no_pd_rows();
