@@ -262,6 +262,7 @@ private:
     bool qc3_learned_ = false;
     qc::Settle qc3_settle_;                      // is VBUS stable since the last batch?
     int qc3_nomove_ = 0;                         // pulses commanded in a row without VBUS moving (QC3+ "no response")
+    int qc3_dead_ = 0;                           // settled up batches in a row that left VBUS in the 12 V band unmoved (a Class A top)
     std::uint32_t qc3_sent_ms_ = 0;
     std::uint32_t reset_ms_ = 0;                 // when the last session released the lines (both at 0 V)
     bool reset_seen_ = false;

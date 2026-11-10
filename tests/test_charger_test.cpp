@@ -1933,6 +1933,33 @@ static void test_svooc_detected_is_a_pass() {
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
     CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::Detected));
 }
+// pattern vooc-family-same-wake (VOOC unit heard no frame at all): the SVOOC and SVOOC65 units open with the identical wake train, so
+// a charger that gave the VOOC unit not one frame gives them none either. Their rows are skipped without a session of their own.
+// A VOOC unit that DID hear frames (NoResponse) says nothing about the others: they still run.
+static void test_vooc_with_no_frames_skips_the_svooc_units() {
+    for (const auto why : {fc::Fail::NeedsLoad, fc::Fail::NoResponse}) {
+        Fake f; f.caps = {};
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65)}, f.in, true);
+        run_until(f, r, [&] { return f.fc_requests >= 1; });
+        CHECK_EQ(int(f.protocols[0]), int(fc::Proto::Vooc));
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = why; f.in.fc_tries = 3; f.in.vbus_mv = 5000;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        bool svooc_asked = false;
+        for (const auto p : f.protocols) svooc_asked |= p == fc::Proto::SuperVooc || p == fc::Proto::SuperVooc65;
+        unsigned vooc_rows = 0, svooc_rows = 0;
+        for (const auto& s : r.steps()) {
+            if (s.group == ct::Group::Vooc) { ++vooc_rows; CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(int(s.detail), int(why)); }
+            if (s.group != ct::Group::SuperVooc && s.group != ct::Group::SuperVooc65) continue;
+            ++svooc_rows;
+            if (why == fc::Fail::NeedsLoad) {
+                CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Request); CHECK_EQ(int(s.detail), int(why));
+            } else CHECK_EQ(s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::Request, false);
+        }
+        CHECK_EQ(vooc_rows > 0 && svooc_rows > 0, true);
+        CHECK_EQ(svooc_asked, why != fc::Fail::NeedsLoad);
+    }
+}
 // Baseus 35 W: after a PPS 3.3 V request the unloaded output stops at 3.73 V (13 % over). The step is the source's
 // best, so it passes; a source stuck at 4.5 V does not.
 static void test_pps_min_step_accepts_unloaded_floor() {
@@ -2306,6 +2333,37 @@ static void test_class_b_pass_on_a_class_b_charger_stays_a_pass() {
         bool asked20 = false;
         for (const int mv : f.fc_mvs) asked20 |= mv == 20000;
         CHECK_EQ(asked20, true);
+    }
+}
+// A Class A charger answers the 20 V request and stays at 12 V: the row ends as the same neutral skip after ~3 s (not the 12 s QC3 /
+// 15 s QC2 timeout). A VBUS that leaves the 12 V band at any point (a slow Class B charger) keeps the full timeout.
+static size_t row_at_20v(const ct::Runner& r) {
+    for (size_t n = 0; n < r.steps().size(); ++n) if (r.steps()[n].mv == 20000) return n;
+    return SIZE_MAX;
+}
+static void test_class_b_row_on_a_charger_stuck_at_12v_ends_early() {
+    for (const auto a : {A::Qc2ClassB, A::Qc3ClassB}) {
+        Fake f; f.caps = {}; f.fc_max_mv = 12000;
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(a)}, f.in, true);
+        const size_t k = row_at_20v(r);
+        CHECK_EQ(run_until(f, r, [&] { return r.steps()[k].verdict == ct::Verdict::Running; }, 60000), true);
+        const uint32_t t0 = f.in.now;
+        CHECK_EQ(run_until(f, r, [&] { return r.steps()[k].verdict != ct::Verdict::Running; }, 60000), true);
+        CHECK_EQ(f.in.now - t0 <= 4000, true);
+        CHECK_EQ(r.steps()[k].verdict, ct::Verdict::Skip); CHECK_EQ(r.steps()[k].reason, ct::Reason::ClassAOnly);
+    }
+    for (const auto a : {A::Qc2ClassB, A::Qc3ClassB}) {
+        Fake f; f.caps = {}; f.fc_max_mv = 12000;
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(a)}, f.in, true);
+        const size_t k = row_at_20v(r);
+        CHECK_EQ(run_until(f, r, [&] { return r.steps()[k].verdict == ct::Verdict::Running; }, 60000), true);
+        const uint32_t t0 = f.in.now;
+        f.tick(r, 1500); f.in.vbus_mv = 14000;   // it moved: this is no Class A top
+        CHECK_EQ(run_until(f, r, [&] { return r.steps()[k].verdict != ct::Verdict::Running; }, 60000), true);
+        CHECK_EQ(f.in.now - t0 >= 11000, true);
+        CHECK_EQ(r.steps()[k].verdict, ct::Verdict::Skip); CHECK_EQ(r.steps()[k].reason, ct::Reason::ClassAOnly);
     }
 }
 // The K2's own ceiling stays in front of the 20 V request: a run whose cap is below 20 V skips the row (OverCap) and never asks.
@@ -6302,14 +6360,14 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_pps_min_step_accepts_unloaded_floor();
+    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_with_no_frames_skips_the_svooc_units(); test_pps_min_step_accepts_unloaded_floor();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();
     test_capped_pps_top_is_recorded_and_the_chain_goes_on(); test_an_uncapped_pps_run_has_no_capped_step(); test_a_pps_stuck_at_5v_is_a_timeout_not_capped();
     test_read_revision();
     test_selection(); test_selected_skip_without_operations(); test_wire_classes_and_feature_evidence();
-    test_qc_class_b_is_in_the_default_selection(); test_class_b_on_a_class_a_charger_is_a_neutral_skip(); test_class_b_pass_on_a_class_b_charger_stays_a_pass(); test_qc2_class_b_miss_on_a_qc3_class_b_charger_is_a_fail(); test_qc2_class_b_after_a_failed_qc2_handshake_is_not_class_a_only(); test_class_b_keeps_the_voltage_ceiling_in_front(); test_qc_class_b_rows_are_planned_per_algorithm(); test_qc_rows_after_the_first_are_retargets_in_one_session(); test_a_failed_qc2_retarget_leaves_the_class_b_row_to_run(); test_full_legacy_ranges_and_guards(); test_scp_rows_ignore_the_cable_current(); test_scp_row_aborts_when_a_load_draws_current(); test_scp_rows_follow_the_reported_capabilities(); test_scp_replan_is_announced_once(); test_ufcs_levels_follow_the_reported_modes(); test_ufcs_steps_carry_their_mode(); test_epr_physical_guard_and_spoof_separation(); test_epr_rows_respect_the_36v_ceiling(); test_epr_levels_follow_the_monitor_ceiling(); test_epr_entry_before_rows(); test_epr_info_names_the_levels_without_an_epr_cable(); test_epr_info_refused_or_silent_changes_nothing(); test_epr_info_levels_survive_a_refused_entry(); test_epr_info_padding_word_is_no_offer(); test_epr_info_with_no_epr_pdos_is_named_withheld(); test_epr_info_is_not_asked_when_entry_works(); test_rows_survive_the_exit_to_the_spr_list();
+    test_qc_class_b_is_in_the_default_selection(); test_class_b_on_a_class_a_charger_is_a_neutral_skip(); test_class_b_pass_on_a_class_b_charger_stays_a_pass(); test_class_b_row_on_a_charger_stuck_at_12v_ends_early(); test_qc2_class_b_miss_on_a_qc3_class_b_charger_is_a_fail(); test_qc2_class_b_after_a_failed_qc2_handshake_is_not_class_a_only(); test_class_b_keeps_the_voltage_ceiling_in_front(); test_qc_class_b_rows_are_planned_per_algorithm(); test_qc_rows_after_the_first_are_retargets_in_one_session(); test_a_failed_qc2_retarget_leaves_the_class_b_row_to_run(); test_full_legacy_ranges_and_guards(); test_scp_rows_ignore_the_cable_current(); test_scp_row_aborts_when_a_load_draws_current(); test_scp_rows_follow_the_reported_capabilities(); test_scp_replan_is_announced_once(); test_ufcs_levels_follow_the_reported_modes(); test_ufcs_steps_carry_their_mode(); test_epr_physical_guard_and_spoof_separation(); test_epr_rows_respect_the_36v_ceiling(); test_epr_levels_follow_the_monitor_ceiling(); test_epr_entry_before_rows(); test_epr_info_names_the_levels_without_an_epr_cable(); test_epr_info_refused_or_silent_changes_nothing(); test_epr_info_levels_survive_a_refused_entry(); test_epr_info_padding_word_is_no_offer(); test_epr_info_with_no_epr_pdos_is_named_withheld(); test_epr_info_is_not_asked_when_entry_works(); test_rows_survive_the_exit_to_the_spr_list();
     test_spr_pps_21v_on_standard_cable();
     test_standard_cable_measured_tolerance();
     test_observed_30v_cable();

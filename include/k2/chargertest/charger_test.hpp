@@ -474,6 +474,10 @@ inline constexpr unsigned kBandGrossPct = 15;
 // the run measured (the converter's ceiling already seen on a fixed row).
 inline constexpr uint32_t kPlateauMs = 3000;
 inline constexpr int kCappedFloorMv = 5500;
+// A QC Class B 20 V row (15 s QC2 / 12 s QC3 timeout) whose VBUS has stayed inside the 12 V band for kClassAStuckMs since the row
+// started is a Class A top: nothing is on its way to 20 V. The row ends as the timeout would end it, without the rest of the wait.
+inline constexpr uint32_t kClassAStuckMs = 3000;
+inline constexpr int kClassAStuckLoMv = 11400, kClassAStuckHiMv = 12600;
 class VbusMean {
 public:
     void clear() { q8_ = -1; }
@@ -693,6 +697,8 @@ private:
     void track_plateau(const Input&, bool ready, uint32_t gap);
     uint16_t plat_mv_ = 0;     // the level a Requesting programmable row's samples have stayed within 1 % of (0 = none yet)
     uint32_t plat_ms_ = 0;     // since when
+    // The lowest / highest VBUS a Requesting QC Class B 20 V row has seen (kClassAStuck*); reset by request().
+    uint16_t peak_lo_mv_ = 0xFFFF, peak_hi_mv_ = 0;
     // The step-walk row in flight (is_step_walk): walk_mv_ = the target of the Request out now (s.mv at the first one,
     // +kStepMv per granted step), walk_n_ = levels granted after the base, walk_prev_mv_ = VBUS at the previous granted level.
     uint16_t walk_mv_ = 0;

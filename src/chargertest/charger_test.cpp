@@ -1350,6 +1350,7 @@ void Runner::request(Input in) {
     if (is_sweep(s)) sweep_begin(s, in);   // the sweep starts at the APDO's first point
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0;
+    peak_lo_mv_ = 0xFFFF; peak_hi_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
     state_ = State::Requesting;
     if (s.group == Group::Pd) {
@@ -2459,11 +2460,16 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         // AFC / FCP / SCP the charger never answered (pattern qc-only-unacked-rise): the protocol is not spoken, so none of its
         // other levels can prove anything and none of them needs an engine session of its own.
         // A UFCS source that never answered the opening exchange is the same case (no response to its listen window).
-        if (((group == Group::Afc || group == Group::Fcp || group == Group::Scp) && in.fc_fail == fc::Fail::Unsupported) ||
-            (group == Group::Ufcs && in.fc_fail == fc::Fail::NoResponse))
+        const bool never_answered = ((group == Group::Afc || group == Group::Fcp || group == Group::Scp) && in.fc_fail == fc::Fail::Unsupported) ||
+            (group == Group::Ufcs && in.fc_fail == fc::Fail::NoResponse);
+        // pattern vooc-family-same-wake: a VOOC unit that heard no frame at all (the engine's NeedsLoad after every wake train) leaves
+        // nothing for the SVOOC and SVOOC65 units to try, their wake train is the same: both skip, with the VOOC row's reason.
+        const bool no_wake_frames = group == Group::Vooc && in.fc_fail == fc::Fail::NeedsLoad;
+        if (never_answered || no_wake_frames)
             for (size_t n = 0; n < count_; ++n) {
                 auto& o = steps_[n];
-                if (o.group != group || o.verdict != Verdict::Pending) continue;
+                if (o.verdict != Verdict::Pending) continue;
+                if (!(never_answered && o.group == group) && !(no_wake_frames && (o.group == Group::SuperVooc || o.group == Group::SuperVooc65))) continue;
                 o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = static_cast<uint8_t>(in.fc_fail); env_.record(o);
             }
         return;
@@ -2490,8 +2496,14 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             }
         } else stable_ = false;
         track_plateau(in, ready, gap);
+        if (is_class_b_peak(s) && in.vbus_mv >= 0) {
+            peak_lo_mv_ = std::min<uint16_t>(peak_lo_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
+            peak_hi_mv_ = std::max<uint16_t>(peak_hi_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
+        }
         const uint32_t timeout = s.group == Group::Qc2 ? fc::kQc2TransitionMs + 3000 : 12000;
-        if (state_ == State::Requesting && in.now - phase_ms_ >= timeout) {
+        const bool stuck_at_12v = is_class_b_peak(s) && in.now - phase_ms_ >= kClassAStuckMs &&
+                                  peak_lo_mv_ >= kClassAStuckLoMv && peak_hi_mv_ <= kClassAStuckHiMv;
+        if (state_ == State::Requesting && (in.now - phase_ms_ >= timeout || stuck_at_12v)) {
             if (is_class_b_peak(s) && s.algorithm == Algorithm::Qc2ClassB && qc3_class_b_peak_passed({steps_.data(), count_}))
                 finish(in, Verdict::Fail, Reason::Qc3Only20V);   // VBUS never reached 20 V, but QC3 Class B got there
             else if (class_a_only(s, {steps_.data(), count_}))

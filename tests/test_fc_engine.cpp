@@ -243,6 +243,34 @@ static void qc3_class_a_cannot_reach_20v() {
     CHECK(c.resets > 0);
 }
 
+// A Class A charger asked for 20 V climbs to its 12 V top and then ignores every pulse: two batches with zero movement while
+// VBUS sits in the 12 V band end the session as NoBand, not the 12 s band timeout (the verdict and its reason are the same).
+static void qc3_class_a_dead_batches_end_the_20v_ramp_early() {
+    FakeCharger c;
+    Engine e(c);
+    CHECK(e.start(Proto::Qc3, 20000, true) == Fail::None);
+    std::uint32_t at_12v = 0, failed_at = 0;
+    for (int i = 0; i < 20000 && !failed_at; i++) {
+        c.run(e, 1);
+        if (!at_12v && c.vbus_mv() >= 11400) at_12v = c.now;
+        if (e.state() == State::Failed) failed_at = c.now;
+    }
+    CHECK(failed_at != 0);
+    CHECK(e.fail() == Fail::NoBand);
+    CHECK(at_12v != 0 && failed_at - at_12v <= 3500);   // the 12 s timeout would end it ~12 s after the start
+    CHECK(c.resets > 0);
+}
+// The rule is for the 12 V band only: a Class B charger asked for 20 V is never cut off, however long the ramp takes.
+static void qc3_class_b_slow_ramp_is_not_cut_off() {
+    FakeCharger c;
+    c.qc3_max_mv = 20000; c.qc3_delay_ms = 400; c.slew_mv_per_s = 2500;
+    Engine e(c);
+    CHECK(e.start(Proto::Qc3, 20000, true) == Fail::None);
+    c.run(e, 14000);
+    CHECK(e.state() == State::Active);
+    CHECK(c.vbus_mv() >= 19700);
+}
+
 // A QC3+ charger that does not behave like the idealised one: the closed loop must follow the measured VBUS,
 // never overshoot the target by more than a few steps, and still arrive.
 static int run_qc3p(int step, int delay_ms, int slew, int target, int& worst, Fail& fail, bool& active, int& end_mv) {
@@ -1214,6 +1242,8 @@ int main() {
     qc2_retarget();
     qc3_class_b();
     qc3_class_a_cannot_reach_20v();
+    qc3_class_a_dead_batches_end_the_20v_ramp_early();
+    qc3_class_b_slow_ramp_is_not_cut_off();
     qc3_walk();
     qc3_clamped_to_ceiling();
     qc3plus_walk();

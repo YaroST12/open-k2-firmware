@@ -26,6 +26,9 @@ constexpr int kQc3PlusBatchPulses = 50;
 constexpr int kQc3CoarseMinPulses = 5;   // up pulses a batch needs before its per-pulse step can call the charger QC3-like
 constexpr int kQc3MoveMv = 15, kQc3ProbePulses = 10;   // movement worth counting; size of the step-learning batch  // 50 x 90 us = 4.5 ms
 constexpr int kMinQc3Mv = 3600;
+// A Class A charger asked for more than its 12 V top (QC3 Class B ramp): it climbs to 12 V and then ignores every pulse. Two settled up
+// batches that left VBUS in the 12 V band unmoved end the session as NoBand (what the 12 s band timeout ends it as, ~10 s sooner).
+constexpr int kQc3ClassAMaxMv = 12000, kQc3ClassABandMv = 11400, kQc3DeadBatches = 2;
 constexpr std::uint32_t kVoocRxTimeoutUs = 15000;  // one listen slice per poll: long, a frame that falls between slices is lost
 constexpr std::uint32_t kVoocRampMs = 10000;       // accepted but still 5 V after this long: no voltage
 constexpr int kVoocRaisedMv = 6000;                // VBUS above this after the accept: the adapter ramped
@@ -849,7 +852,7 @@ Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
     const std::uint32_t now = env_.now_ms();
     prev_mv_ = guard_mv();
     entry_mv_ = std::max(0, env_.vbus_mv());
-    qc3_nomove_ = 0;
+    qc3_nomove_ = qc3_dead_ = 0;
     change_ms_ = now;
     target_mv_ = target_mv;
     state_ = State::Negotiating;
@@ -1012,7 +1015,7 @@ void Engine::poll() {
         qc3_seen_mv_ = qc3_base_mv_ = env_.vbus_mv();
         qc3_cmd_n_ = 0;
         qc3_learned_ = false;
-        qc3_nomove_ = 0;
+        qc3_nomove_ = qc3_dead_ = 0;
         qc3_settle_.reset();
         qc3_step_mv_ = qc::step_mv(proto_ == Proto::Qc3 ? qc::Mode::Qc3 : qc::Mode::Qc3Plus);
         return go(Phase::Qc3Loop, kQc3BaselineMs);
@@ -1187,6 +1190,8 @@ void Engine::poll() {
                 qc3_nomove_ = adv < 2 * kQc3MoveMv ? qc3_nomove_ + n : 0;
                 if (m == qc::Mode::Qc3Plus && qc3_nomove_ >= kQc3NoResponsePulses && vbus - entry_mv_ < 150)
                     return abort(Fail::NoResponse);
+                qc3_dead_ = qc3_cmd_n_ > 0 && adv < 2 * kQc3MoveMv && vbus >= kQc3ClassABandMv ? qc3_dead_ + 1 : 0;
+                if (target_mv_ > kQc3ClassAMaxMv && qc3_dead_ >= kQc3DeadBatches) return abort(Fail::NoBand);
                 qc3_base_mv_ = vbus;
                 qc3_seen_mv_ = vbus;
                 qc3_cmd_n_ = 0;
