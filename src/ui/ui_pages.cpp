@@ -1966,8 +1966,9 @@ void SettingsPage::draw_static() {
 // opens a page) and, on the focused row, one dim line saying what the value means. Everything is read live from the
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
-    static constexpr const char *kTitles[kRows] = {"USB Link", "Autorotate", "Rotate buttons", "Screenshot", "Smoothing"};
-    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave};
+    static constexpr const char *kTitles[kRows] = {"USB Link", "Autorotate", "Rotate buttons", "Screenshot", "Smoothing",
+                                                   "Wake sleeping port"};
+    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     const auto *self = static_cast<const SettingsPage *>(ctx);
@@ -2001,10 +2002,17 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = on ? "Remote and web capture" : "No capture";
         break;
     }
-    default: {
+    case 4: {
         const auto p = static_cast<unsigned>(power::smoothing_preset());
         out.tail = kPresets[p < smoothing::kPresetCount ? p : 0];
         out.note = kPresetNotes[p < smoothing::kPresetCount ? p : 0];
+        break;
+    }
+    default: {   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
+        const bool on = fusb302::idle_wake();
+        out.tail = on ? "ON" : "OFF";
+        out.tail_color = on ? kOk : kDim;
+        out.note = on ? "Idle Rd on a sleeping port" : "Idle stays passive";
         break;
     }
     }
@@ -2020,7 +2028,7 @@ void SettingsPage::update(uint32_t) {
 
 bool SettingsPage::on_event(Event e) {
     if (e.press == Press::Short && (e.button == Button::Plus || e.button == Button::Minus)) {
-        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, 4);
+        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, kRows - 1);
         update(ctx_.now);
         return true;
     }
@@ -2030,6 +2038,12 @@ bool SettingsPage::on_event(Event e) {
             p.smoothing = smoothing::preset_from_index((static_cast<unsigned>(power::smoothing_preset()) + 1) % smoothing::kPresetCount);
             uiprefs::set(p);
             power::set_smoothing(p.smoothing);
+            update(ctx_.now);
+        } else if (sel_ == 5) {   // remembered in the same record, applied at once (off drops a running hold)
+            uiprefs::Prefs p = uiprefs::stored();
+            p.idle_wake = !fusb302::idle_wake();
+            uiprefs::set(p);
+            fusb302::set_idle_wake(p.idle_wake);
             update(ctx_.now);
         } else if (sel_ == 2) {
             ctx_.ui->set_rotate_buttons(!ctx_.ui->rotate_buttons());

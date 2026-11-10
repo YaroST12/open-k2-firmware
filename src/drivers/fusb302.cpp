@@ -487,7 +487,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     g_active_cc = std::uint8_t(c.line);
     g_idle_wake.on_attach(c.line);   // an attach during an idle Rd hold: the no-Rp detach stays off inside the dwell window
     if (!seek_move) {
-        g_rdseek.reset();
+        g_rdseek.reset(g_idle_wake.enabled());   // setting off: the open readings go with the attach, as before the idle wake
         g_seek_passive = !pinned && (rd_both & (kPdwn1 | kPdwn2)) == 0;   // no Rd on any line while the scan read: the pick is unverified
     }
     if (pinned || seek_move) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
@@ -1871,7 +1871,7 @@ static void detach_reset(std::uint8_t status0) {
     g_bc_max = 0;
     g_cc_mask = 3;  // the next scan tries every routing again
     g_vbus_mv = -1;
-    g_rdseek.reset();   // the next attach decides again whether its line was picked without Rd (the open readings stay: reset() keeps them)
+    g_rdseek.reset(g_idle_wake.enabled());   // the next attach decides again whether its line was picked without Rd (the open readings stay only while the idle wake needs them)
     g_idle_wake.reset();   // back to idle: the wake re-decides from the fresh open readings
     g_seek_passive = false;
     g_detach.reset();
@@ -2370,6 +2370,14 @@ void set_force_line(std::uint8_t line) {
     g_force_cc = line <= 2 ? line : 0;
     K2LOG("[PD] CC scan forced line %u\n", unsigned(g_force_cc));
 }
+void set_idle_wake(bool on) {
+    const bool holding = g_idle_wake.line() != 0;
+    if (on == g_idle_wake.enabled()) return;
+    g_idle_wake.set_enabled(on);
+    if (!on && holding && g_active_cc == 0) wr(kSwitches0, idle_rd());   // the hold ends now, not at the next scan
+    K2LOG("[FUSB302] Wake sleeping port %s\n", on ? "ON" : "OFF");
+}
+bool idle_wake() { return g_idle_wake.enabled(); }
 bool ra_set(bool on) {
     if (!on && g_ra_early && !g_ra) {   // only the boot's early PC13: drop it
         g_ra_early = false;

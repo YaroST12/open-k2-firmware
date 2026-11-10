@@ -230,6 +230,7 @@ void dfu_now() {
         const k2::uiprefs::Prefs prefs = k2::uiprefs::stored();   // imports the old raw preferences page (usbcfg did the same above) ...
         k2::uiprefs::screenshot_enabled = prefs.screenshot;
         k2::power::set_smoothing(prefs.smoothing);
+        k2::fusb302::set_idle_wake(prefs.idle_wake);   // Settings > Wake sleeping port: default off, no Rd at idle
         g_ui.restore_orientation(prefs.rotation_manual, prefs.rotation, prefs.rotate_buttons);   // before g_ui.init draws the first frame
     }
     k2::fs::wipe_legacy();                  // ... then the pre-littlefs raw pages are erased, once (marker /.legacy)

@@ -283,6 +283,13 @@ bool xiaomi_chain_active();
 // With another line already taken (and no contract) the run forgets it first. It stays for every later attach scan (a
 // charger test START as well) until reread_abort() or set_force_line(0) or a reboot: RAM only.
 void set_force_line(std::uint8_t line);
+// Settings > Wake sleeping port (pattern slow-rp-wake, idle path): when on, the plain passive idle holds the K2's own Rd,
+// one line at a time, on a line that read the standby signature open, to ask a sleeping source (the open readings come
+// from sink_cc). Default off: with it off the idle K2 presents no Rd (connection invariants I1 / H2) and the Rd seek
+// forgets its open readings on every attach, exactly as before the feature. Switching off drops a running hold at once.
+// Remembered by uiprefs and applied from main() at boot; set_idle_wake survives init().
+void set_idle_wake(bool on);
+bool idle_wake();
 // Top-plug e-marker spoof (k2/pd/emk_ra.hpp): PC13 high = an Ra on CC1, Rd on CC2 alone, attach scan forced to CC2, the
 // chip's VCONN switches never closed. PC13 goes high at once, before any Rd. Refused (false) with a sink inline, a
 // contract or tool running, a boot-pinned Rd on CC1 or the VCONN experiment on; a partner already seen without a contract

@@ -32,11 +32,16 @@ inline constexpr std::int32_t kStandbyOpenMv = 2800;       // the open standby r
 
 class RdSeek {
 public:
-    // A fresh attach picked by a scan (or a detach): the whole budget again - but the open readings STAY: they were
-    // taken while no Rd of ours was on any line and are the only standby-signature evidence a later Rd presentation
-    // has (the sleeping-port row, 2026-11-10: reset() used to wipe them on attach, so an idle K2 never held a steady
-    // Rd long enough to wake a sleeping source).
-    void reset() { silent_ = false; since_ = 0; moves_ = 0; }
+    // A fresh attach picked by a scan (or a detach): the whole budget again. With `keep_open` the open readings STAY:
+    // they were taken while no Rd of ours was on any line and are the only standby-signature evidence a later Rd
+    // presentation has (the sleeping-port row, 2026-11-10: reset() used to wipe them on attach, so an idle K2 never held
+    // a steady Rd long enough to wake a sleeping source). The driver passes the Wake sleeping port setting: off, the
+    // readings are wiped exactly as before that feature (the seek's slow-dwell evidence then lives only until the next
+    // attach, as it always did).
+    void reset(bool keep_open = true) {
+        silent_ = false; since_ = 0; moves_ = 0;
+        if (!keep_open) open_mv_[0] = open_mv_[1] = -1;
+    }
     void clear() { *this = RdSeek{}; }   // a boot: nothing is known about any line yet
     // The open (no Rd of ours on any line) ADC reading of a line, noted by the scan while no Rd is presented and kept for
     // when our Rd sits on a line: "high open, collapses under Rd" is the standby signature of a sleeping source.
@@ -85,15 +90,20 @@ private:
 // by line every dwell - never Rd on both lines (the Debug Accessory signature). The caller gates this to the plain
 // passive idle: never with a sink downstream, a boot pin, a run start, an active operation, a forced line or a live
 // VBUS - nobody else owns the idle Rd.
+// It is an opt-in (Settings > Wake sleeping port, default off): an idle Rd breaks the passive-idle invariants (a plain
+// boot and a waiting charger present no Rd), so disabled it picks no line, whatever the open readings say.
 class IdleWake {
 public:
-    void reset() { holding_ = false; line_ = 0; attached_ = 0; last_ = 0; since_ = 0; }
+    void reset() { holding_ = false; line_ = 0; attached_ = 0; last_ = 0; since_ = 0; }   // the setting itself stays
+    void set_enabled(bool on) { enabled_ = on; if (!on) reset(); }
+    bool enabled() const { return enabled_; }
     // One call per idle poll. `open1`/`open2`: the open (no-Rd) readings kept by the scan (RdSeek::open_mv, noted
     // while no Rd is presented, so they stay put while the hold has our Rd on). Returns the line to hold Rd on
     // (1/2), or 0 when no line reads the signature. A dwell that ran out re-arms in the same call, so the Rd is
     // held steadily (the sleeping source must see one steady Rd, not a blinking one).
     std::uint8_t update(std::uint32_t now, std::int32_t open1, std::int32_t open2) {
         attached_ = 0;   // an idle poll means no attach is holding the window open any more
+        if (!enabled_) return 0;
         if (holding_ && now - since_ >= kSlowWakeDwellMs) { holding_ = false; line_ = 0; }   // the dwell ran out: release, re-decide now
         if (!holding_) {
             const bool s1 = open1 >= kStandbyOpenMv, s2 = open2 >= kStandbyOpenMv;
@@ -116,6 +126,7 @@ public:
     }
     std::uint8_t line() const { return holding_ ? line_ : 0; }
 private:
+    bool enabled_ = false;       // Settings > Wake sleeping port
     bool holding_ = false;
     std::uint8_t line_ = 0;      // the held line
     std::uint8_t attached_ = 0;  // the line an attach took over during the hold (the detach hold-off window)

@@ -929,10 +929,10 @@ public:
     bool on_event(Event e) override;
     PanelLabels labels() const override;
     void invalidate() override { ctx_.rows.invalidate(); foot_.invalidate(); }
-    ListState list_state() const { return {5, 5, 0}; }
+    ListState list_state() const { return {kRows, kRows, 0}; }
     int selected() const { return sel_; }
 private:
-    static constexpr int kRows = 5;
+    static constexpr int kRows = 6;   // 26 px rows: six fit under the title bar with the footer (the list view shows seven)
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
     int &sel_ = ctx_.keep.settings_sel;   // remembered across page switches
     Elem foot_;

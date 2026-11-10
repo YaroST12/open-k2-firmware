@@ -108,7 +108,8 @@ void test_a_standby_on_the_other_line_moves_there_first() {
 // at a time (pd::IdleWake), so the ~2 Hz scan attaches on it once its Rp comes (1072 ms after the Rd, measured).
 void test_the_idle_wake_holds_rd_on_a_standby_signature_line() {
     pd::IdleWake w;
-    CHECK_EQ(int(w.update(1000, 0, 3050)), 2);                      // CC2 read the standby pull-up open: Rd on CC2
+    w.set_enabled(true);
+    CHECK_EQ(int(w.update(1000, 0, 3050)), 2);                    // CC2 read the standby pull-up open: Rd on CC2
     CHECK_EQ(int(w.update(1020, 0, 3050)), 2);                      // held through the dwell
     CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs - 1, 0, 3050)), 2);
     CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs, 0, 3050)), 2);  // the dwell ran out: re-armed at once, still one line
@@ -118,6 +119,7 @@ void test_the_idle_wake_holds_rd_on_a_standby_signature_line() {
 // No standby signature (a coupled net reads less, nothing attached reads low/unknown): no Rd is held at all.
 void test_the_idle_wake_holds_nothing_without_the_signature() {
     pd::IdleWake w;
+    w.set_enabled(true);
     CHECK_EQ(int(w.update(0, -1, -1)), 0);       // unknown levels
     CHECK_EQ(int(w.update(20, 1200, 0)), 0);     // a coupled net (the PLUS key on CC2) reads below kStandbyOpenMv
     CHECK_EQ(int(w.update(40, 2799, 0)), 0);     // just below the signature
@@ -127,6 +129,7 @@ void test_the_idle_wake_holds_nothing_without_the_signature() {
 // Both lines read the signature: the hold alternates line by line every dwell, never both (Debug Accessory).
 void test_the_idle_wake_alternates_when_both_lines_read_the_signature() {
     pd::IdleWake w;
+    w.set_enabled(true);
     std::uint32_t t = 1000;
     CHECK_EQ(int(w.update(t, 3100, 3000)), 1);                          // the higher open reading first
     t += pd::kSlowWakeDwellMs;
@@ -138,6 +141,7 @@ void test_the_idle_wake_alternates_when_both_lines_read_the_signature() {
 // The signature gone (the readings refreshed while no Rd of ours was on, e.g. the port is empty now): the hold ends.
 void test_the_idle_wake_releases_when_no_line_reads_the_signature_any_more() {
     pd::IdleWake w;
+    w.set_enabled(true);
     CHECK_EQ(int(w.update(1000, 0, 3050)), 2);
     CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs, 0, 0)), 0);      // after the dwell: no signature, no Rd
     CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs + 20, 0, 0)), 0);
@@ -147,6 +151,7 @@ void test_the_idle_wake_releases_when_no_line_reads_the_signature_any_more() {
 // as the seek's holding_slow: the sleeping source may still be waking when the scan picks its line.
 void test_an_attach_during_the_hold_keeps_the_no_rp_detach_off_inside_the_dwell() {
     pd::IdleWake w;
+    w.set_enabled(true);
     const std::uint32_t t0 = 1000;
     CHECK_EQ(int(w.update(t0, 0, 3050)), 2);
     w.on_attach(2);                                                      // the scan attached on the held line
