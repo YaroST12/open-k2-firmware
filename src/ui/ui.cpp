@@ -385,25 +385,47 @@ void Ui::sync_panel() {
         if (slot_sig(i) != slot_sig_[i]) draw_slot(i);
 }
 
-void Ui::set_pressed(Button b, bool down, uint32_t now_ms) {
-    const int k = static_cast<int>(b);
-    const bool was_down = down_[k];
-    down_[k] = down;
+void Ui::update_lit(int k, bool was_held, uint32_t now_ms) {
+    const bool is_held = held(k);
     bool lit = pressed_[k];
-    if (down && !was_down) { lit = true; lit_since_[k] = now_ms; suppress_rotated_press_[k] = false; }
-    else if (!down && lit && now_ms - lit_since_[k] >= kPressFlashMs) lit = false;
+    if (is_held && !was_held) { lit = true; lit_since_[k] = now_ms; }
+    else if (!is_held && lit && now_ms - lit_since_[k] >= kPressFlashMs) lit = false;
     if (lit == pressed_[k]) return;
     pressed_[k] = lit;
     for (unsigned i = 0; i < 4; i++)
-        if (slot_button(orient_, i) == b) draw_slot(i);
+        if (static_cast<int>(slot_button(orient_, i)) == k) draw_slot(i);
+}
+
+void Ui::set_pressed(Button b, bool down, uint32_t now_ms) {
+    const int k = static_cast<int>(b);
+    const bool was_held = held(k);
+    if (down && !down_[k]) suppress_rotated_press_[k] = false;
+    down_[k] = down;
+    update_lit(k, was_held, now_ms);
+}
+
+void Ui::set_remote_pressed(Button logical, bool down, uint32_t now_ms) {
+    const int l = static_cast<int>(logical);
+    if (down) {
+        if (remote_key_[l] != 0xFF) return;   // already held
+        // Back and OK never move; plus / minus light the key that shows their action.
+        remote_key_[l] = static_cast<uint8_t>(oriented_button(logical, orient_.rotation, rotate_buttons_));
+    } else if (remote_key_[l] == 0xFF) {
+        return;
+    }
+    const int k = remote_key_[l];
+    const bool was_held = held(k);
+    remote_down_[k] = down;
+    if (!down) remote_key_[l] = 0xFF;
+    update_lit(k, was_held, now_ms);
 }
 
 // Reboot HoldCard (design 6.5, screens.md home_reboot_hold): shown from 1 s of BACK held, counts down to
 // the 5 s reboot, and a release before that removes it and repaints the page. Pixels in content coordinates.
 void Ui::update_hold_card(uint32_t now_ms) {
-    const bool held = down_[static_cast<int>(Button::Back)];
+    const bool back_held = held(static_cast<int>(Button::Back));
     const uint32_t ms = now_ms - lit_since_[static_cast<int>(Button::Back)];
-    if (!held || ms < kHoldCardMs) {
+    if (!back_held || ms < kHoldCardMs) {
         if (hold_shown_) {   // cancelled: the erase pass replays the card while hold_shown_ is still set
             const uint32_t t0 = now_us();
             erase_outgoing(now_ms, current());
@@ -467,7 +489,17 @@ UiAction Ui::on_button(Button b, ButtonEvent ev, uint32_t now_ms) {
     if (suppress_rotated_press_[static_cast<int>(b)]) return UiAction::None;
     Event mapped = *event;
     mapped.button = oriented_button(b, orient_.rotation, rotate_buttons_);
-    const UiAction action = dispatch_button(mapped, now_ms);
+    return finish_button(dispatch_button(mapped, now_ms), now_ms);
+}
+
+UiAction Ui::on_remote_button(Button logical, ButtonEvent ev, uint32_t now_ms) {
+    const auto event = to_event(logical, ev);
+    if (!event) return UiAction::None;
+    // Logical key: no orientation mapping, no rotation chord (a remote has no physical key pair to hold).
+    return finish_button(dispatch_button(*event, now_ms), now_ms);
+}
+
+UiAction Ui::finish_button(UiAction action, uint32_t now_ms) {
     if (requested_rotation_ < 4) {
         const uint8_t target = requested_rotation_;
         requested_rotation_ = 0xFF;
@@ -814,7 +846,7 @@ void Ui::tick(uint32_t now_ms) {
     if (!down_[static_cast<int>(Button::Minus)] && !down_[static_cast<int>(Button::Plus)]) rotation_chord_ = false;
     ctx_.now = now_ms;
     for (int k = 0; k < 4; k++)   // end a press flash that outlived its press
-        if (pressed_[k] && !down_[k]) set_pressed(static_cast<Button>(k), false, now_ms);
+        if (pressed_[k] && !held(k)) update_lit(k, true, now_ms);
     const auto pm = power::read_display();
     ctx_.pm_online = pm.has_value();
     ctx_.pm = pm.value_or(power::Metrics{});

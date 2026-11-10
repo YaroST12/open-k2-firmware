@@ -897,6 +897,8 @@ var K2Proto = (function () {
     try { await fn(); return true; } catch (e) { if (isUnknownCmd(e)) return false; throw e; }
   };
 
+  // A remote press is a logical key (plus = next/down, minus = previous/up), never remapped by the device's
+  // rotation or Rotate buttons setting.
   K2Remote.prototype.button = async function (nameOrIndex, ms) {
     ms = ms || SHORT_PRESS_MS;
     var b = typeof nameOrIndex === "number" ? nameOrIndex : BUTTONS[nameOrIndex];

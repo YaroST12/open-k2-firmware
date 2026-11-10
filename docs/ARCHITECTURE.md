@@ -73,7 +73,7 @@ checked against the code or hardware when this was written.
 | Period | Work |
 | :--- | :--- |
 | every pass | `usb::poll()` (TinyUSB task, `net::poll`, log flush), `shell_hw::poll`, `msc::poll` (Drive modes), `http_server::service` (Net, K2_NET=1 builds), `Remote::poll()` (runs queued requests; returns Reboot / Screenshot / Dfu / Fault for `main` to carry out), `fctrig::poll` |
-| 1 ms | `fusb302::service`, sample the four buttons through `ButtonDetector` (physical OR a remote-injected virtual press), `Ui::on_button` |
+| 1 ms | `fusb302::service`, sample the four buttons through two `ButtonDetector` sets: the physical pins -> `Ui::on_button` (rotation mapping, +/- chord), and the remote-injected `VirtualButton` levels -> `Ui::on_remote_button` (logical keys: never remapped by the rotation or Rotate buttons, no chord) |
 | 20 ms (`kLoopMs`) | `fusb302::poll`, `power::poll`, `dpsniff::poll`, `pdtrace::vbus_sample`, `adc::poll`, accelerometer (bounded; `kPollMs` 100, retry 1 s), `fastcharge::poll`, `boottrace::flush_log`, `session::poll`, `bbpersist::poll`, `Ui::tick` |
 | 2000 ms (`kHeartbeatMs`) | `[SYS] Heartbeat` (with `stack_free`, `msp_free`), `[USB]`, `[NET]` / `[HTTP]` (Net), `[PWR]`, `[ADC]`, `[FC]`; `[FC] idle` repeats every 5th heartbeat |
 

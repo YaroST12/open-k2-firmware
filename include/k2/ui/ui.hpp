@@ -81,6 +81,14 @@ public:
     void tick(uint32_t now_ms);
     // Debounced button event (physical or injected): the global handler first, then the page.
     UiAction on_button(Button b, ButtonEvent ev, uint32_t now_ms);
+    // The same for a remote press (Remote::press, WebHID, the scripts): `logical` is the key with its
+    // default-orientation meaning (plus = next/down, minus = previous/up), never remapped by the rotation or
+    // the Rotate buttons setting, and it takes no part in the +/- rotation gesture.
+    UiAction on_remote_button(Button logical, ButtonEvent ev, uint32_t now_ms);
+    // Strip highlight and held state (the BACK reboot card) for a remote key. Plus / minus light the slot of
+    // the physical key that carries that action in the current rotation; a remote key never counts as
+    // physically down, so it cannot be one half of the rotation chord.
+    void set_remote_pressed(Button logical, bool down, uint32_t now_ms);
     // Runs a page action directly, whichever page is showing; only the fields of the current
     // page are redrawn. Blocks for the e-marker scan, like the OK button does.
     // Returns false when the action was refused: inline (a live sink is attached) the e-marker
@@ -246,6 +254,11 @@ private:
     unsigned depth_ = 0;
     bool pressed_[4] = {};          // lit, indexed by Button
     bool down_[4] = {};             // physically down
+    bool remote_down_[4] = {};      // a remote +/- is held, indexed by the physical key it lights
+    uint8_t remote_key_[4] = {0xFF, 0xFF, 0xFF, 0xFF};   // by logical button: the physical key lit at press
+    void update_lit(int k, bool was_held, uint32_t now_ms);
+    bool held(int k) const { return down_[k] || remote_down_[k]; }
+    UiAction finish_button(UiAction action, uint32_t now_ms);
     uint32_t lit_since_[4] = {};
     bool hold_shown_ = false;       // the reboot HoldCard is on screen
     int hold_px_ = -1;              // progress fill drawn so far

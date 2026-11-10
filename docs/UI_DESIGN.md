@@ -68,6 +68,13 @@ physical +/- chord remains unchanged. A directional press held across a mapping 
 until released to avoid an unintended action; a mapping change also clears pending trigger and
 charger-test confirmations.
 
+**Remote keys are logical.** A press injected over the remote protocol (`k2_remote.py press`, the
+WebHID and HTTP dashboard, `ui_walk.py`, the QA scripts) always has its default-orientation meaning:
+plus = next / down, minus = previous / up, OK, BACK, short and long. The rotation and the Rotate
+buttons setting never remap it, and a remote plus + minus is two separate keys, never the rotation
+chord (the gesture needs the physical keys). While a remote +/- is held, the strip lights the physical
+key that carries that action in the current rotation. Physical keys keep the rules above.
+
 **Settings > Smoothing** (fifth row, below Screenshot) calms the readouts and graphs with a One Euro
 filter (docs/ARCHITECTURE.md, "Display smoothing"). OK cycles Off, Low, Medium (default), High; the
 hint under the title names the active one (`OFF: raw readings`, `LOW: light calming`, `MEDIUM:

@@ -69,6 +69,7 @@ k2::Ui g_ui;
 k2::Remote g_remote{g_ui};
 k2::bootscreen::Controller g_bootscreen;  // the boot-info QR screen of a key-mode boot (drawn from the loop, below)
 ButtonDetector g_det[4];                  // indexed by Button: Back, Minus, Ok, Plus
+ButtonDetector g_vdet[4];                 // the remote's keys (logical, separate from the physical pins)
 bool g_boot_key_swallow = false;          // the key that chose a key-mode boot is still down: its events are not the user's
 Button g_boot_key = Button::Plus;         // that key (PLUS for the CC2 mode, OK for the CC1 mode)
 k2::accelerometer::Driver g_accelerometer;
@@ -401,12 +402,20 @@ extern "C" int main(void) {
             k2::fusb302::service();
             for (int i = 0; i < 4; i++) {
                 const Button b = static_cast<Button>(i);
-                // An injected press is a virtual pin level, OR-ed in before the debouncer.
-                const bool down = raw_down(b) || g_remote.button_down(b, now);
+                // A remote press is a logical key with its own debouncer: it never mixes into the physical pin level,
+                // so the UI does not remap it by the rotation and it cannot join the +/- rotation gesture.
+                const bool vdown = g_remote.button_down(b, now);
+                const ButtonEvent vev = g_vdet[i].update(vdown, now);
+                const bool down = raw_down(b);
                 const ButtonEvent ev = g_det[i].update(down, now);
                 if (g_bootscreen.showing()) {   // the QR screen takes no input but the early close
-                    if (b == Button::Back && ev == ButtonEvent::Short) end_boot_screen(now);
+                    if (b == Button::Back && (ev == ButtonEvent::Short || vev == ButtonEvent::Short)) end_boot_screen(now);
                     continue;
+                }
+                g_ui.set_remote_pressed(b, g_vdet[i].pressed(), now);
+                if (vev != ButtonEvent::None) {
+                    press_count++;
+                    if (g_ui.on_remote_button(b, vev, now) == k2::UiAction::Reboot) reboot_now();
                 }
                 // The key that chose the boot mode is still down (its Long / Hold would reach the UI, Hold is the reboot gesture):
                 // its events are the boot's, not the user's, until it is up. Other keys work at once.

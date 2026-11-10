@@ -482,7 +482,7 @@ Radio rows: **Auto** (follows gravity), then **Manual** 0, 90, 180, 270 degrees.
 
 ### Other settings
 
-- **Rotate buttons**: ON makes the buttons follow the display orientation; OFF keeps the physical key meaning ("Follow the display" vs "Physical keys"). Remembered.
+- **Rotate buttons**: ON makes the buttons follow the display orientation; OFF keeps the physical key meaning ("Follow the display" vs "Physical keys"). Remembered. Remote presses (`k2_remote.py press`, the dashboard, scripts) are not affected: plus is always next / down and minus previous / up, whatever the rotation or this setting, and the remote cannot trigger the rotation gesture.
 - **Screenshot**: ON allows remote and browser screen capture. Remembered. Turn it off if you do not want the screen readable over USB.
 - **Smoothing**: Off ("Raw readings"), Low ("Light calming"), Medium ("Balanced"), High ("Steady, slower"). OK cycles. Applied at once, remembered. It filters the display readings only, not the recorded data.
 - **Wake sleeping port**: OFF by default, and then the idle K2 presents no Rd and stays passive. ON lets an idle K2 hold its own Rd on one line at a time (2 s each) when that line reads like a sleeping source (about 3.0 to 3.3 V open, for example a splitter port with nothing plugged in), so the source can wake and the PD list appears without any pin. With it ON every waiting charger also sees the K2 as a sink for a moment, so turn it off again when you do not need it. It never acts during a charger test or a cable/source tool, and turning it off lets go of the line at once. Remembered.

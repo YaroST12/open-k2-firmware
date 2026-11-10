@@ -709,7 +709,97 @@ static void test_fc_stages_in_four_rotations() {
     }
 }
 
+// A remote press is a logical key: plus = next/down, minus = previous/up, whatever the rotation and the
+// Rotate buttons setting. A physical key keeps the rotated mapping, and the remote can never make the
+// rotation gesture.
+static void test_remote_keys_are_logical() {
+    g_stub = {};
+    Ui ui;
+    ui.init(0);
+    ui.tick(1000);
+    ui.set_rotate_buttons(true);
+    ui.set_rotation(2, 1100);
+    CHECK_EQ(ui.rotation(), 2);
+
+    // The Tools cursor persists, so each key goes to a fresh UI at rotation 2 with Rotate buttons on and the
+    // menu it opens is compared. Remote plus moves down (FC trigger -> PD trigger), as in the default orientation.
+    auto pick = [](bool remote, Button key) {
+        g_stub = {};
+        Ui u;
+        u.init(0);
+        u.tick(1000);
+        u.set_rotate_buttons(true);
+        u.set_rotation(2, 1100);
+        u.goto_page(static_cast<uint8_t>(Page::Tools), 1200);
+        if (remote) { u.on_remote_button(key, ButtonEvent::Short, 1300); u.on_remote_button(Button::Ok, ButtonEvent::Short, 1400); }
+        else        { u.on_button(key, ButtonEvent::Short, 1300);        u.on_button(Button::Ok, ButtonEvent::Short, 1400); }
+        return u.menu();
+    };
+    CHECK_EQ(pick(true, Button::Plus) == Menu::PdTrigger, true);    // remote plus = down
+    CHECK_EQ(pick(false, Button::Minus) == Menu::PdTrigger, true);  // physical minus at rotation 2 = down
+    CHECK_EQ(pick(false, Button::Plus) == Menu::PdTrigger, false);  // physical plus at rotation 2 = up
+    CHECK_EQ(pick(true, Button::Minus) == pick(false, Button::Plus), true);   // remote minus = up, like that key
+
+    // Long remote plus pages forward (Lines -> Tools) at rotation 2, where a physical long plus pages back.
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 3000);
+    ui.on_remote_button(Button::Plus, ButtonEvent::Long, 3100);
+    CHECK_EQ(ui.page(), Page::Tools);
+    ui.on_remote_button(Button::Minus, ButtonEvent::Long, 3200);
+    CHECK_EQ(ui.page(), Page::Lines);
+    ui.on_button(Button::Plus, ButtonEvent::Long, 3300);
+    CHECK_EQ(ui.page(), Page::ChargerTest);
+
+    // Remote plus and minus together (overlapping long presses) are two logical keys, never the rotation gesture.
+    ui.goto_page(static_cast<uint8_t>(Page::Lines), 4000);
+    ui.set_remote_pressed(Button::Plus, true, 4000);
+    ui.set_remote_pressed(Button::Minus, true, 4000);
+    ui.on_remote_button(Button::Minus, ButtonEvent::Long, 4500);
+    ui.on_remote_button(Button::Plus, ButtonEvent::Long, 4500);
+    ui.set_remote_pressed(Button::Plus, false, 4600);
+    ui.set_remote_pressed(Button::Minus, false, 4600);
+    ui.tick(4700);
+    CHECK_EQ(ui.rotation(), 2);
+    CHECK_EQ(ui.rotation_locked(), false);
+    ui.tick(5000);
+    CHECK_EQ(ui.lit(Button::Plus), false);
+    CHECK_EQ(ui.lit(Button::Minus), false);
+
+    // A remote key held while a physical one is pressed does not join it into a chord.
+    ui.set_pressed(Button::Minus, true, 5100);
+    ui.set_remote_pressed(Button::Plus, true, 5100);
+    ui.on_button(Button::Minus, ButtonEvent::Long, 5600);
+    CHECK_EQ(ui.rotation_locked(), false);
+    ui.set_remote_pressed(Button::Plus, false, 5700);
+    ui.set_pressed(Button::Minus, false, 5700);
+
+    // The key that lights on the strip is the one that carries the action: remote plus at rotation 2 with
+    // Rotate buttons lights the physical minus slot.
+    ui.set_remote_pressed(Button::Plus, true, 6000);
+    CHECK_EQ(ui.lit(Button::Minus), true);
+    CHECK_EQ(ui.lit(Button::Plus), false);
+    ui.set_rotation(0, 6050);                 // the rotation changes under a held remote key
+    ui.set_remote_pressed(Button::Plus, false, 6100);
+    ui.tick(6300);
+    CHECK_EQ(ui.lit(Button::Minus), false);
+    CHECK_EQ(ui.lit(Button::Plus), false);
+
+    // Back and OK are the same key either way, and Back still counts as held for the reboot card.
+    ui.set_remote_pressed(Button::Back, true, 7000);
+    CHECK_EQ(ui.lit(Button::Back), true);
+    ui.set_remote_pressed(Button::Back, false, 7010);
+    ui.tick(7300);
+    CHECK_EQ(ui.lit(Button::Back), false);
+
+    // Rotation 0 with the setting on or off: logical equals physical.
+    ui.set_rotation(0, 8000);
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), 8100);
+    ui.on_remote_button(Button::Plus, ButtonEvent::Short, 8200);
+    ui.on_remote_button(Button::Ok, ButtonEvent::Short, 8300);
+    CHECK_EQ(ui.menu(), Menu::PdTrigger);
+}
+
 int main() {
+    test_remote_keys_are_logical();
     test_native_menu_fonts();
     test_static_flow_indicator();
     test_viewport();

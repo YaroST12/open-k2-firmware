@@ -2557,7 +2557,7 @@ def build_parser():
     p.add_argument("--timeout", type=float, default=1.0, help="response timeout in seconds")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("ping", help="firmware version, git hash, uptime")
-    sp = sub.add_parser("press", help="inject a button press")
+    sp = sub.add_parser("press", help="inject a button press (a logical key: plus = next/down, minus = previous/up, whatever the rotation)")
     sp.add_argument("button", choices=sorted(BUTTONS))
     g = sp.add_mutually_exclusive_group()
     g.add_argument("--long", action="store_true", help=f"hold {LONG_PRESS_MS} ms")
