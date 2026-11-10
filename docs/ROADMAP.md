@@ -323,7 +323,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     removed (wait for it), Rd dropped, one Hard Reset - only when the decision allows it (contract owned + inline, no far
     Request seen, first hand-back this attach); otherwise it refuses with the reason. Logs each step and, 60 s later,
     one `[LINK] handback result` line: the far sink's highest Request voltage seen (or "no Request: Type-C current").
-    `pd reset --inline --confirm` stays the raw single reset.
+    `pd reset --inline --confirm` stays the raw single reset. Fixed in c347bb3, hardware check pending: Cmd::PdHandback
+    0x49 with the pure decision `pd::handback_verdict` (verdict on the wire and in the log, logdb 460-466), the ordered
+    sequence in k2/core/handback (record gone before the reset is queued, 10 s record-wait timeout aborts without a
+    reset, one reset via `fusb302::sink_hard_reset(lab_inline=true)`, one result line 60 s later); host-tested
+    (truth table, step order, dispatch, driver-level reset-on-the-chip, CLI). Step 0 hardware check (hand back once,
+    watch the phone 60 s) still owed to the k2-hw pass.
   - Phase 2, tester UI (after phase 1 is verified on hardware): when the decision fires on its own, a notice "Hand
     control back to the charger?" with a countdown; OK = hand back now, Back = keep as is (the far sink stays on Type-C
     current, the notice offers "Replug the phone for fast charge"). Timeout = hand back (operator decision
