@@ -346,8 +346,8 @@ test("charger-test sweep row: flags bit 5, the detail byte is the recorded point
 
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
-  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x40],
-                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 47]]) {   // 47 = one past the last reason (46 = StepResolution)
+  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x20],
+                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 47]]) {   // 47 = one past the last reason (46 = StepResolution); [22, 0x20] = draft bit 29, below the sweep flags
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }

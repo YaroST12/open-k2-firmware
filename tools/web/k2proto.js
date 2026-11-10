@@ -186,11 +186,12 @@ var K2Proto = (function () {
       runMask = v.getUint32(15, true);
       var draft = v.getUint32(19, true), stage = p[23] >> 2, f = p[25];
       var ppsSweep = draft >= 0x80000000;   // draft bit 31: the PPS deep sweep is on (an Options flag, not a test)
-      draft = draft & 0x7FFFFFFF;
+      var avsSweep = !!(draft & 0x40000000);   // draft bit 30: the AVS deep sweep is on
+      draft = draft & 0x3FFFFFFF;
       wire = p[23] & 3;
       if ((runMask | draft) & ~TEST_ALL || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
         throw new FrameError("invalid charger-test selection or evidence");
-      out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep,
+      out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep, avs_sweep: avsSweep,
                         run: TEST_ALGORITHMS.filter(function (_, i) { return runMask & (1 << i); }),
                         configured: TEST_ALGORITHMS.filter(function (_, i) { return draft & (1 << i); }) };
       out.stage = TEST_STAGES[stage];
@@ -211,7 +212,7 @@ var K2Proto = (function () {
       var at = header + i * 16, code = p[at], pos = p[at + 1], flags = p[at + 2],
           verdict = p[at + 9], why = p[at + 10], detail = p[at + 11], raw = v.getUint32(at + 12, true);
       if (code >= (modern ? TEST_ALGORITHMS.length : 10) || pos > 11 || verdict >= TEST_RESULTS.length ||
-          why >= reasons || flags & ~31 || (verdict === 4 && why === 0))
+          why >= reasons || flags & ~63 || (verdict === 4 && why === 0))   // bits 0-4 + bit 5: a deep-sweep row
         throw new FrameError("invalid charger-test row");
       var group = modern ? TEST_ALGORITHM_GROUPS[code] : code, protocol = TEST_GROUPS[group];
       if (modern) {
@@ -232,9 +233,12 @@ var K2Proto = (function () {
       var row = { index: start + i, group: TEST_GROUPS[group], protocol: protocol, pos: pos,
                   target_mv: v.getUint16(at + 3, true), request_ma: v.getUint16(at + 5, true),
                   measured_mv: v.getUint16(at + 7, true), result: TEST_RESULTS[verdict], reason: TEST_REASONS[why],
-                  detail: detail, detail_reason: group === 0 && EPR_DETAILS[detail] ? EPR_DETAILS[detail] :
+                  detail: detail, detail_reason: flags & 32 && group === 0 ? "deep sweep (" + detail + " points)" :
+                    group === 0 && EPR_DETAILS[detail] ? EPR_DETAILS[detail] :
+                    group === 0 && detail === 161 ? "deep sweep" :   // older firmware: kDetailSweep marker, no flag bit
                     detail ? (names[detailCode] || "unknown (" + detail + ")") : "none",
-                  raw_pdo: raw, continuous: !!(flags & 1), avs: !!(flags & 2), attempts: (flags >> 2) & 7 };
+                  raw_pdo: raw, continuous: !!(flags & 1), avs: !!(flags & 2), sweep: !!(flags & 32),
+                  attempts: (flags >> 2) & 7 };
       if (modern) {
         row.algorithm = TEST_ALGORITHMS[code];
         row.explanation = code >= 16 && code <= 18 ? "No independent PD3." + (code - 16) + " test" :
