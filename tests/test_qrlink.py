@@ -24,7 +24,8 @@ DECODED = os.path.join(HERE, "fixtures", "qrlink_decoded.json")
 # the card's z) an LZ4 block of it
 KINDS = {"c": "card", "z": "card", "e": "emarker", "E": "emarker", "p": "pdcaps", "P": "pdcaps", "i": "identity",
          "I": "identity", "b": "boot", "B": "boot", "t": "text"}
-QR_V11_BYTES = 321   # byte-mode capacity of a version 11 code at level L (a format-8 card link is 322 characters: one code at version 12)
+QR_V11_BYTES = 321   # byte-mode capacity of a version 11 code at level L
+QR_V12_BYTES = 370   # version 12 (65 modules): a format-9 card link is 344 characters, one code at version 12
 
 
 def load(name="qrlink.tsv"):
@@ -78,7 +79,7 @@ class QrLink(unittest.TestCase):
         for name, g in golden.items():
             with self.subTest(name):
                 self.assertTrue(g["link"].startswith(BASE))
-                self.assertLessEqual(len(g["link"]), QR_V11_BYTES + 1)   # QR version 11, 61 modules (a format-8 card link is 322 characters: one code at version 12, 65 modules)
+                self.assertLessEqual(len(g["link"]), QR_V12_BYTES)   # a format-9 card link is 344 characters: one code at version 12, 65 modules
                 letter, rec, d = read_link(g["link"])
                 self.assertEqual(letter.isupper() or letter == "z", g["packed"])
                 self.assertEqual(KINDS[letter], d["record_kind"])
@@ -134,8 +135,8 @@ class QrLink(unittest.TestCase):
     def test_worst_card_link_fits_one_code(self):
         golden = load()
         longest = max(len(g["link"]) for g in golden.values())
-        self.assertEqual(longest, 322)   # the pinned version '1' plain row: the 204 byte record is 272 characters after the 50 character head
-        self.assertLessEqual(longest, QR_V11_BYTES + 1)
+        self.assertEqual(longest, 344)   # the pinned version '1' plain row: the 220 byte record is 294 characters after the 50 character head
+        self.assertLessEqual(longest, QR_V12_BYTES)
         # the links the Share view now shows (version '2' card rows) stay well under the cap: at most 85 % of the 321 characters
         v2_cards = [len(g["link"]) for n, g in golden.items()
                     if q.decode_link(g["link"])["version"] == 2 and q.decode_link(g["link"])["record_kind"] == "card"]

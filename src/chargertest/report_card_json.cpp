@@ -54,6 +54,20 @@ std::size_t render_json(const Card& c, std::span<char> out) {
               ct::name(ct::Algorithm(r.alg)), unsigned(r.lo_dv) * 100u, unsigned(r.hi_dv) * 100u, unsigned(r.max_dv) * 100u,
               unsigned(r.fail_dv) * 100u);
         if (r.ma) t.put(",\"max_ma\":%u", unsigned(r.ma));
+        if (c.format >= 9) {   // v9: the setpoint error in mV per passed level, low to high (key only when there is one)
+            bool any = false;
+            for (unsigned k = 0; k < kSpreadLevels; ++k) any |= c.spread[i][k] != kSpreadNone;
+            if (any) {
+                t.put(",\"err_mv\":[");
+                bool first_err = true;
+                for (unsigned k = 0; k < kSpreadLevels; ++k) {
+                    if (c.spread[i][k] == kSpreadNone) continue;
+                    t.put("%s%d", first_err ? "" : ",", int(c.spread[i][k]));
+                    first_err = false;
+                }
+                t.put("]");
+            }
+        }
         t.put("}");
     }
     t.put("]");

@@ -199,7 +199,7 @@ TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not i
                 "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
                 "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
                 "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load"]
+                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"]
 TEST_MAX_STEPS = 112  # Runner's bounded storage: pd::kMaxPdos * 6 + 46
 # fastcharge::Protocol in enum order (include/k2/fastcharge/fastcharge_classify.hpp)
 FC_NAMES = ["...", "NO INPUT", "NO QUICK", "DCP 5V", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V",
@@ -704,6 +704,7 @@ def decode_charger_test(p):
                 EPR_DETAILS.get(detail, "EPR: entry refused") if why == 27 else
                 "EPR: no PD contract" if why == 28 else
                 EPR_DETAILS.get(detail, TEST_REASONS[why]) if why == 38 else
+                f"step resolution {detail}mV" if why == 46 and detail else "steps ignored" if why == 46 else
                 "SCP 5A modes need an observed 5A cable" if why == 22 and code == 10 else TEST_REASONS[why])
         rows.append(row)
     out["steps"] = rows

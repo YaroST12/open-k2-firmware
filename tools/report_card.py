@@ -10,12 +10,14 @@ The name tables mirror src/chargertest/charger_test.cpp; tests/test_report_card_
 import json
 import sys
 
-PAYLOAD = 198   # v8: 196 (v7: 190 (v6: 178 (v5: 162 (v4: 144 + 18 for 3 EPR entries) + 16 for the cable block) + 12 for the UFCS modes) + 6 repeat block) + 2 v8 bytes
+PAYLOAD = 198   # v8 size, kept for the QR expand path; v9 cards are 214
+PAYLOAD_V9 = 214   # v9: + the 16-byte spread block at V9_AT
 PAYLOAD_V7 = 196
 PAYLOAD_V6 = 190
 UFCS_AT = 178   # v6: 4 modes of u24 (lo_dv 8 bits, hi_dv 9 bits, current in 50 mA units 7 bits); hi_dv 0 = unused slot
 REPEAT_AT = 190   # v7: times u8, last_boots u16, last_uptime_s u24 (a v6 payload has its CRC here: read only when b[33] >= 7)
 V8_AT = 196     # v8: rebalanced u8 + spare (a v7 payload ends at 196: its CRC sits here and is not read)
+V9_AT = 198     # v9: 4 ranges x 4 levels of int8 mV setpoint error, -128 = none (a v8 payload ends at 198: its CRC is not read)
 MAX_UFCS = 4
 ALGORITHMS = ["PD2.0 fixed", "PD3.x fixed", "PD3.1+ EPR", "PD3.2+ SPR AVS", "PPS (PD3.x)",
               "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC 5V handshake", "SVOOC 5V handshake",
@@ -27,7 +29,7 @@ REASONS = ["", "disabled", "not advertised", "over voltage cap", "not implemente
            "request failed", "timeout", "voltage outside band", "hard reset", "source lost",
            "cancelled", "5V release failed", "offers changed", "PD active: use QC port",
            "revision cannot be forced", "select at least one test", "physical cable limit", "unsupported PDO layout",
-           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load"]
+           "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"]
 STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
           "UNSAFE: unplug source", "Detach charger", "Initializing..."]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
@@ -52,7 +54,7 @@ EPR_DETAILS = {136: "EPR: entry refused", 137: "EPR: source rejects cable", 138:
                153: "EPR offered; entry: unable now", 154: "EPR offered; entry: 5V PDO lacks EPR bit",
                155: "not unlocked (no OEM chain)", 156: "not unlocked (chain unfinished)", 157: "not unlocked (3 A cable)",
                158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)"}
-FORMAT = 8   # payload byte 33: 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT
+FORMAT = 9   # payload byte 33: 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT
              # 2 = byte 54 pdp_w and byte 55 flags (bit0 name_auto),
              # 3 = range lo bits 9..15 = APDO max current (50 mA), flags bits 1..7 = highest fixed PDO current (50 mA),
              # 4 = per-EPR-level verdicts (3 entries of 6 bytes: u16 dv + 4-byte group packing),
@@ -124,8 +126,8 @@ def qc_label(vid, pdp_w, ranges, cable_ma=0):
 def decode(b):
     """Payload bytes -> card dict (key order and omissions as in the C++ renderer)."""
     b = bytes(b)
-    if len(b) not in (144, 162, 178, PAYLOAD_V6, PAYLOAD_V7, PAYLOAD):   # accept v3 (144), v4 (162), v5 (178), v6 (190), v7 (196) and v8 (198) payloads
-        raise BadCard(f"card payload is {len(b)} bytes, expected 144, 162, 178, {PAYLOAD_V6}, {PAYLOAD_V7} or {PAYLOAD}")
+    if len(b) not in (144, 162, 178, PAYLOAD_V6, PAYLOAD_V7, PAYLOAD, PAYLOAD_V9):   # accept v3 (144), v4 (162), v5 (178), v6 (190), v7 (196), v8 (198) and v9 (214) payloads
+        raise BadCard(f"card payload is {len(b)} bytes, expected 144, 162, 178, {PAYLOAD_V6}, {PAYLOAD_V7}, {PAYLOAD} or {PAYLOAD_V9}")
     if b[33] > FORMAT:
         raise BadCard("card format is newer than this decoder")
     if b[28] >= len(HANDOVER) or b[29] >= len(STATES) or b[30] >= len(REASONS) or b[31] > MAX_RANGES:
@@ -168,6 +170,15 @@ def decode(b):
              "max_mv": _u(b, q + 6, 2) * 100, "fail_mv": _u(b, q + 8, 2) * 100}
         if b[33] >= 3 and lo >> 9:
             r["max_ma"] = (lo >> 9) * 50
+        if b[33] >= 9 and len(b) >= PAYLOAD_V9:   # v9: the setpoint error in mV per passed level, low to high
+            errs = []
+            for k in range(4):
+                e = b[V9_AT + 4 * i + k]
+                if e == 0x80:
+                    continue
+                errs.append(e - 256 if e > 127 else e)
+            if errs:
+                r["err_mv"] = errs
         ranges.append(r)
     # V4: per-EPR-level verdicts
     epr_levels = {}

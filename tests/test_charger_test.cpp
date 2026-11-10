@@ -514,13 +514,14 @@ static void test_plan_and_run() {
             CHECK_EQ(s.mv >= 5000 && s.mv <= (s.pos == 6 ? 11000 : 21000), true);
         }
     }
-    CHECK_EQ(fixed, 5); CHECK_EQ(pps, 14); CHECK_EQ(skips, 3); CHECK_EQ(r.steps().size(), 63);   // 40 legacy rows (Class B included) and the vendor rows, the PD rows + 2 hunt rows (11V6 on the first APDO, 20V6 on the 5-21 V one) + 2 full-current rows (11V 3.2A, 20V 3.2A)
+    CHECK_EQ(fixed, 5); CHECK_EQ(pps, 16); CHECK_EQ(skips, 3); CHECK_EQ(r.steps().size(), 65);   // 40 legacy rows (Class B included) and the vendor rows, the PD rows + 2 hunt rows (11V6 on the first APDO, 20V6 on the 5-21 V one) + 2 full-current rows (11V 3.2A, 20V 3.2A) + 2 step-walk rows (one per APDO)
     f.tick(r, 200000);
     CHECK_EQ(r.state(), ct::State::Done);
     read_only(r, f);
     // Every 5 V row of a legacy unit asks the engine (the attach's own 5 V proves nothing): QC3 / QC3+ ramps retarget four times each.
     // 17 = 19 - the 2 hunt rows: this source advertises its APDOs at 3.2 A, so no 6 A Request goes out (decision 2026-11-07).
-    CHECK_EQ(f.pd_requests, 17); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 22);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V
+    // + 12 for the two step-walk rows (six Requests each: the mid level, then +20 mV x 5): 29.
+    CHECK_EQ(f.pd_requests, 29); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 22);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V
     // Seven vendor units share ONE PD-silent attach (a session boundary only where the session mode changes), then the Pd unit
     // (detach, Pd attach), then the standard protocols (QC2, QC3, QC3+, UFCS) in a second PD-silent attach; the run ends detached
     // and re-attaches in Pd.
@@ -757,6 +758,7 @@ static void test_pps_full_current_row_follows_the_apdos_rows_and_hunt() {
         int last = -1, hunt = -1, full = -1, top = -1;
         for (size_t i = 0; i < st.size(); ++i) {
             if (st[i].algorithm != A::Pps || st[i].pos != pos) continue;
+            if (st[i].detail == ct::kDetailStepWalk) continue;   // the step-walk row is last but neither hunt nor full-current
             last = int(i);
             if (st[i].hunt) hunt = int(i); else if (st[i].ma > 1000) full = int(i); else top = int(i);
         }
@@ -795,8 +797,8 @@ static void test_pps_full_current_rows_never_overflow_the_plan() {
     for (unsigned i = 7; i < 11; ++i) many.caps.pdos[i] = pd::decode_pdo(0xD0000000 | (480u << 17) | (150u << 8) | 140);
     ct::Runner mr(many); const auto preview = ct::Runner::preview(many.caps, {}, many.in);
     mr.start(many.caps, {}, many.in, true);
-    CHECK_EQ(mr.steps().size(), preview.total); CHECK_EQ(mr.steps().size(), 107);   // 5 below kMaxSteps
-    CHECK_EQ(mr.steps().size() < ct::kMaxSteps, true);
+    CHECK_EQ(mr.steps().size(), preview.total); CHECK_EQ(mr.steps().size(), ct::kMaxSteps);   // 113 planned: the last step-walk row is the one kMaxSteps drops (walk rows are emitted last per APDO)
+    CHECK_EQ(mr.steps().size() <= ct::kMaxSteps, true);
     size_t full = 0;
     for (const auto& s : mr.steps()) full += s.algorithm == A::Pps && !s.hunt && s.ma > 1000 && s.verdict != ct::Verdict::Skip;
     CHECK_EQ(full, 6);
@@ -1843,7 +1845,7 @@ static void test_pps_min_step_accepts_unloaded_floor() {
         Fake f; f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (33u << 8) | 60);
         ct::Runner r(f);
         r.start(f.caps, {.selected = ct::bit(A::Pps)}, f.in, true);
-        for (int n = 0; n < 400; ++n) {
+        for (int n = 0; n < 700; ++n) {
             f.tick(r, 100);
             if (f.in.pd.mv == 3300 && f.in.pd.held) f.in.vbus_mv = stuck_mv;
         }
@@ -3327,7 +3329,7 @@ static void test_low_edge_that_regulates_at_5v_is_a_floored_fail() {
         CHECK_EQ(s.measured_mv, 5000);   // the floor the source held
     }
     CHECK_EQ(seen, true);
-    CHECK_STR(ct::name(ct::Reason::Floored), "output floored");
+    CHECK_STR(ct::name(ct::Reason::Floored), "floored above target");
     // the levels above the floor still ran (no chain skip)
     CHECK_EQ(count_reason_all(r, ct::Reason::Floored), 1u);
 }
@@ -3355,7 +3357,7 @@ static void test_pps_step_walk_passes_on_20mv_steps() {
     unsigned pass8000 = 0;
     for (const auto& s : r.steps())
         if (s.algorithm == A::Pps && s.pos == 6 && s.mv == 8000 && s.verdict == ct::Verdict::Pass) ++pass8000;
-    CHECK_EQ(pass8000, 2u);   // the mid level row and the step-walk row both passed
+    CHECK_EQ(pass8000, 3u);   // the two mid level rows (the 7.14 <-> 11 V jump) and the step-walk row all passed
 }
 static void test_pps_step_walk_fails_when_steps_round_to_100mv() {
     Fake f; f.pd_small_step_mv = 100;   // every +20 mV request moves the output by 100 mV
@@ -3590,14 +3592,17 @@ static void test_no_request_into_an_invalid_list_after_a_recovered_cut() {
     CHECK_EQ(no_caps, 0u);
 }
 static void test_every_reason_has_a_name() {
-    for (unsigned v = 1; v <= unsigned(ct::Reason::NeedsLoad); ++v) {   // 0 = None, shown as nothing
+    for (unsigned v = 1; v <= unsigned(ct::Reason::StepResolution); ++v) {   // 0 = None, shown as nothing
         const char* n = ct::name(static_cast<ct::Reason>(v));
         CHECK_EQ(n != nullptr && n[0] != 0, true);
     }
     CHECK_STR(ct::name(ct::Reason::Withdrawn), "withdrawn by source");
     CHECK_STR(ct::name(ct::Reason::WrongVoltage), "wrong voltage on 5V contract");
     CHECK_STR(ct::name(ct::Reason::NeedsLoad), "needs load");
+    CHECK_STR(ct::name(ct::Reason::Floored), "floored above target");
+    CHECK_STR(ct::name(ct::Reason::StepResolution), "step resolution");
     CHECK_EQ(unsigned(ct::Reason::NeedsLoad), 44u);
+    CHECK_EQ(unsigned(ct::Reason::StepResolution), 46u);
 }
 static unsigned count_reason(const ct::Runner& r, ct::Group g, ct::Reason why) {
     unsigned n = 0;
@@ -3611,6 +3616,8 @@ static void test_every_failure_kind_has_a_capture_reason() {
     CHECK_EQ(int(ct::capture_reason(R::NoReattach)), int(T::Other));   // the C135 3.3 V row: kept nothing before
     CHECK_EQ(int(ct::capture_reason(R::WrongVoltage)), int(T::Other));   // the 5 V contract held at the wrong voltage: the PS_RDY is the evidence
     CHECK_EQ(int(ct::capture_reason(R::NeedsLoad)), int(T::None));       // a skip, not a failure: no capture
+    CHECK_EQ(int(ct::capture_reason(R::Floored)), int(T::Voltage));      // the low edge held above its target
+    CHECK_EQ(int(ct::capture_reason(R::StepResolution)), int(T::Voltage));   // a +20 mV step not followed
     CHECK_EQ(int(ct::capture_reason(R::Timeout)), int(T::Timeout));
     CHECK_EQ(int(ct::capture_reason(R::HardReset)), int(T::HardReset));
     CHECK_EQ(int(ct::capture_reason(R::Request)), int(T::NoPsRdy));

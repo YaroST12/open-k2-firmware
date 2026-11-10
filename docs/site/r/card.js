@@ -25,15 +25,18 @@
 // Loaded by the page as a script (window.K2Card) and by Node as a module (module.exports).
 var K2Card = (function () {
   var LINK_VERSION = "1";
-  var PAYLOAD = 198;      // card format 8; formats 3, 4, 5, 6 and 7 are 144, 162, 178, 190 and 196 bytes
+  var PAYLOAD = 214;      // card format 9; formats 3, 4, 5, 6, 7 and 8 are 144, 162, 178, 190, 196 and 198 bytes
+  var V8_PAYLOAD = 198;   // format 8 payload; format 9 adds the 16-byte spread block after it
   var V7_PAYLOAD = 196;   // format 7 ends with the repeat block; format 8 adds the re-balance count after it
   var V6_PAYLOAD = 190;   // format 6 ends with the UFCS modes; format 7 adds the repeat block after them
   var V5_PAYLOAD = 178;   // format 5 ends with the cable block; format 6 adds the UFCS modes after it
   var REPEAT_AT = 190;    // format 7: times u8, last_boots u16, last_uptime_s u24 (a format 6 payload has its CRC here)
   var V8_AT = 196;        // format 8: rebalanced u8 + spare (a format 7 payload ends here: its CRC is not read)
+  var V9_AT = 198;        // format 9: 4 ranges x 4 levels of int8 mV setpoint error, 0x80 = none (a format 8 payload ends here)
+  var V9_PAYLOAD = 214;   // format 9 payload; format 8 is PAYLOAD (198)
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 8;         // the newest card format this file reads
+  var FORMAT = 9;         // the newest card format this file reads
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -51,7 +54,7 @@ var K2Card = (function () {
     "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
     "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
     "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load"];
+    "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"];
   var CAPPED = "capped below target";
   var STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
     "UNSAFE: unplug source", "Detach charger", "Initializing..."];
@@ -194,12 +197,13 @@ var K2Card = (function () {
   var CABLE_KIND_V2 = {0: 0, 1: 1, 2: 2, 3: 4, 4: 255};    // the 3-bit cable kind code -> the v1 kind byte
   var SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F;            // the standard SVDM header mask, when a v2 row omits it
 
-  // A schema v2 card record -> the 204-byte version "1" record (format 8), so decodeRecord() reads it as before.
+  // A schema v2 card record -> the 220-byte version "1" record (format 9), so decodeRecord() reads it as before.
   function expandCardV2(b) {
     var r = new BitReader(b);
     if (r.get(8) !== 2) throw CardError("bad-record", "This is not a version 2 card record.");
     var rec = new Uint8Array(4 + PAYLOAD + 2);
     rec[0] = RECORD_MAGIC; rec[1] = 1; rec[2] = PAYLOAD; rec[3] = 0;
+    for (var si = 0; si < 16; si++) rec[4 + 198 + si] = 0x80;   // v9 spread slots default to "no level there"
     var p = 4;   // the payload starts at record offset 4; put16/put32 take absolute record offsets
     function put16(o, v) { rec[o] = v & 0xFF; rec[o + 1] = (v >> 8) & 0xFF; }
     function put32(o, v) { put16(o, v & 0xFFFF); put16(o + 2, (v >> 16) & 0xFFFF); }
@@ -231,7 +235,7 @@ var K2Card = (function () {
     var nRanges = r.get(3);
     rec[p + 31] = nRanges;
     rec[p + 32] = r.get(8);                               // ev_flags
-    rec[p + 33] = FORMAT;                                 // v2 only encodes format-7 cards
+    rec[p + 33] = FORMAT;                                 // v2 always expands to the current format
     var nl = r.get(5);
     if (nl > 20) throw CardError("bad-record", "The version 2 card record has a name that does not fit.");
     for (var i = 0; i < nl; i++) rec[p + 34 + i] = r.get(7);
@@ -282,8 +286,11 @@ var K2Card = (function () {
     }
     var rebalanced = (b.length * 8 - r.pos > 16) ? r.varint() : 0;   // v8 (absent in records packed before it)
     rec[p + 196] = rebalanced & 0xFF;
-    rec[202] = r.get(8);                                  // the v1 record's CRC-16, carried so the integrity check is unchanged
-    rec[203] = r.get(8);
+    if (b.length * 8 - r.pos > 16 && r.get(1)) {          // v9: the spread presence bit + 16 int8 bytes (absent before it)
+      for (var si = 0; si < 16; si++) rec[p + 198 + si] = r.get(8);
+    }
+    rec[4 + PAYLOAD] = r.get(8);                          // the v1 record's CRC-16, carried so the integrity check is unchanged
+    rec[4 + PAYLOAD + 1] = r.get(8);
     return rec;
   }
 
@@ -581,6 +588,15 @@ var K2Card = (function () {
       var r = {alg: ALGORITHMS[b[q]], lo_mv: (lo & 0x1FF) * 100, hi_mv: u(b, q + 4, 2) * 100,
         max_mv: u(b, q + 6, 2) * 100, fail_mv: u(b, q + 8, 2) * 100};
       if (fmt >= 3 && (lo >> 9)) r.max_ma = (lo >> 9) * 50;
+      if (fmt >= 9 && b.length >= V9_PAYLOAD) {   // v9: the setpoint error per passed level, low to high
+        var errs = [];
+        for (var k = 0; k < 4; k++) {
+          var e = b[V9_AT + 4 * i + k];
+          if (e === 0x80) continue;
+          errs.push(e > 127 ? e - 256 : e);
+        }
+        if (errs.length) r.err_mv = errs;
+      }
       ranges.push(r);
     }
     var eprLevels = {};
@@ -614,7 +630,7 @@ var K2Card = (function () {
       card.last_boots = u(b, REPEAT_AT + 1, 2);
       card.last_uptime_s = u(b, REPEAT_AT + 3, 3);
     }
-    if (fmt >= 8 && b.length >= PAYLOAD && b[V8_AT]) card.rebalanced = b[V8_AT];   // v8: the source re-balanced mid-run this often
+    if (fmt >= 8 && b.length >= V8_PAYLOAD && b[V8_AT]) card.rebalanced = b[V8_AT];   // v8: the source re-balanced mid-run this often
     card.fw = hex8(u(b, 20, 4));
     card.state = STATES[b[29]];
     card.reason = REASONS[b[30]];

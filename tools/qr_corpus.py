@@ -78,7 +78,7 @@ REASONS = ["", "disabled", "not advertised", "over voltage cap", "not implemente
            "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
            "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
            "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-           "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load"]
+           "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"]
 STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped",
           "UNSAFE: unplug source", "Detach charger", "Initializing..."]
 HANDOVER = ["not tried", "fell back", "stayed PD", "fault", "reboot", "in PD contract"]
@@ -156,8 +156,8 @@ def group_pack(q):
 
 
 def parse_card(rec: bytes) -> dict:
-    """The card record (204 B with v8, 202 B with v7) as a dict, per include/k2/chargertest/report_card.hpp."""
-    assert len(rec) in (202, 204) and rec[0] == 0xA6, "not a card record"
+    """The card record (218 B with v9, 204 B with v8, 202 B with v7) as a dict, per include/k2/chargertest/report_card.hpp."""
+    assert len(rec) in (202, 204, 218) and rec[0] == 0xA6, "not a card record"
     p = rec[4:4 + (len(rec) - 6)]
     name = p[34:54].split(b"\0")[0]
     d = {
@@ -172,7 +172,7 @@ def parse_card(rec: bytes) -> dict:
         "groups": [group_pack(p[56 + 4 * g:56 + 4 * g + 4]) for g in range(12)],
         "ranges": [], "epr": [], "cable": None, "ufcs": [], "times": p[190],
         "last_boots": u16(p, 191), "last_uptime_s": p[193] | (p[194] << 8) | (p[195] << 16),
-        "rebalanced": p[196] if len(rec) == 204 and p[33] >= 8 else 0,
+        "rebalanced": p[196] if len(rec) >= 204 and p[33] >= 8 else 0,
         "crc16": u16(rec, len(rec) - 2),
     }
     for i in range(4):
@@ -180,6 +180,11 @@ def parse_card(rec: bytes) -> dict:
         lo = u16(q, 2)
         d["ranges"].append({"alg": q[0], "pos": q[1], "lo_dv": lo & 0x1FF, "ma50": lo >> 9,
                             "hi_dv": u16(q, 4), "max_dv": u16(q, 6), "fail_dv": u16(q, 8)})
+    if p[33] >= 9 and len(rec) == 218:   # v9: the setpoint error per level of each APDO (block at 198, int8 mV, 0x80 = none)
+        for i in range(4):
+            errs = [e - 256 if e > 127 else e for e in p[198 + 4 * i:198 + 4 * i + 4] if e != 0x80]
+            if errs:
+                d["ranges"][i]["err_mv"] = errs
     for i in range(3):
         q = p[144 + 6 * i:144 + 6 * i + 6]
         g = group_pack(bytes([q[2], q[3], q[4], q[5]]))
@@ -279,13 +284,16 @@ def card_payload_from_json(j: dict) -> bytes:
     put16(191, j.get("last_boots", 0))
     up = j.get("last_uptime_s", 0) & 0xFFFFFF
     p[193] = up & 0xFF; p[194] = (up >> 8) & 0xFF; p[195] = (up >> 16) & 0xFF
-    p[33] = 8   # v8: the re-balance count (captures predate it: 0)
+    p[33] = 9   # v9: the spread block (captures predate it: all "no level")
     p[196] = j.get("rebalanced", 0) & 0xFF
-    rec = bytearray(204)
-    rec[0] = 0xA6; rec[1] = 1; rec[2] = 198
-    rec[4:202] = p
-    rec[202] = crc16_ccitt(bytes(rec[:202])) & 0xFF
-    rec[203] = (crc16_ccitt(bytes(rec[:202])) >> 8) & 0xFF
+    for i, rg in enumerate(j.get("ranges", [])[:4]):   # v9: the per-level setpoint errors at 198
+        for k, e in enumerate(rg.get("err_mv", [])[:4]):
+            p[198 + 4 * i + k] = e & 0xFF
+    rec = bytearray(220)
+    rec[0] = 0xA6; rec[1] = 1; rec[2] = 214
+    rec[4:218] = p
+    rec[218] = crc16_ccitt(bytes(rec[:218])) & 0xFF
+    rec[219] = (crc16_ccitt(bytes(rec[:218])) >> 8) & 0xFF
     return bytes(rec)
 
 
@@ -444,6 +452,15 @@ def pack_card_v2(c: dict) -> bytes:
     if c["times"] > 1:
         w.put(c["last_boots"], 16); w.put(c["last_uptime_s"], 24)
     w.varint(c.get("rebalanced", 0))   # v8: the source's mid-run re-balance count
+    spread = [[e for e in r.get("err_mv", [])] for r in c["ranges"][:4]]   # v9: the per-level setpoint errors
+    while len(spread) < 4:
+        spread.append([])
+    has = any(spread)
+    w.put(1 if has else 0, 1)          # v9: the spread presence bit (records packed before it end at the count)
+    if has:
+        for i in range(4):
+            for k in range(4):
+                w.put((spread[i][k] if k < len(spread[i]) else -128) & 0xFF, 8)
     w.put(c["crc16"], 16)             # the v1 record's CRC-16, kept: the integrity check is unchanged
     return w.bytes()
 
@@ -481,6 +498,12 @@ def unpack_card_v2(b: bytes) -> dict:
     c["last_boots"] = r.get(16) if c["times"] > 1 else 0
     c["last_uptime_s"] = r.get(24) if c["times"] > 1 else 0
     c["rebalanced"] = r.varint() if len(b) * 8 - r.pos > 16 else 0   # v8 (absent in records packed before it)
+    if len(b) * 8 - r.pos > 16 and r.get(1):   # v9: the spread presence bit + 16 int8 bytes (absent before it)
+        for i in range(4):
+            errs = [e - 256 if e > 127 else e for e in (r.get(8) for _ in range(4))]
+            errs = [e for e in errs if e != -128]
+            if i < len(c["ranges"]) and errs:
+                c["ranges"][i]["err_mv"] = errs
     c["crc16"] = r.get(16)
     return c
 

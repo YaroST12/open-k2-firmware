@@ -306,7 +306,7 @@ test("charger-test schema2: every EPR skip names its reason (mirrors ct::explana
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
   for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x80],
-                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 45]]) {   // 45 = one past the last reason (44 = NeedsLoad)
+                            [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 47]]) {   // 47 = one past the last reason (46 = StepResolution)
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);
   }
@@ -329,8 +329,8 @@ test("charger-test reason 44 is 'needs load': a PPS row skipped with the collaps
 test("charger-test reasons 45/46 (PPS coverage): floor and step resolution decode", () => {
   // ROADMAP "PPS coverage": 45 = Floored (a low edge the source cannot reach), 46 = StepResolution (a +20 mV PPS
   // step not followed; the detail byte is the measured move in mV)
-  assert.equal(P.REASONS[45], "floored above target");
-  assert.equal(P.REASONS[46], "step resolution");
+  assert.equal(P.TEST_REASONS[45], "floored above target");
+  assert.equal(P.TEST_REASONS[46], "step resolution");
   const row = new Uint8Array(TEST_ROWS[1]);
   row[3] = 3300 & 0xFF; row[4] = 3300 >> 8;         // target 3.3 V
   row[7] = 5000 & 0xFF; row[8] = 5000 >> 8;          // measured 5.0 V (the floor)

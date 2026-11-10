@@ -49,9 +49,9 @@ const char* name(Reason r) {
         "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered",
         "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
-        "withdrawn by source", "wrong voltage on 5V contract", "needs load"
+        "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"
     };
-    static_assert(std::size(names) == unsigned(Reason::NeedsLoad) + 1);
+    static_assert(std::size(names) == unsigned(Reason::StepResolution) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -163,6 +163,8 @@ const char* explanation(const Step& s) {
     if (epr_row && s.reason == Reason::NoOffer) return "EPR: not offered";
     if (s.reason == Reason::EprRefused) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : "EPR: entry refused";
     if (s.reason == Reason::Capped) return "output capped";   // the Detail value column is 16 cells; name() is the long form
+    if (s.reason == Reason::Floored) return "output floored";   // the reached floor is the row's measured_mv
+    if (s.reason == Reason::StepResolution) return s.detail ? "step resolution" : "steps ignored";
     if (s.reason == Reason::NoContract) return "EPR: no PD contract";
     if (s.reason == Reason::NotUnlocked) return epr_detail_name(s.detail) ? epr_detail_name(s.detail) : name(s.reason);
     if (s.reason == Reason::NoOffer && s.algorithm == Algorithm::SprAvs) return "SPR AVS not advertised";
@@ -732,6 +734,17 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
                     s.mv = static_cast<uint16_t>(hi); s.ma = static_cast<uint16_t>(advertised); s.hunt = false; s.continuous = false;
                     skip(Reason::CableLimit);
                 }
+                // Step-resolution row (ROADMAP "PPS coverage" item 2), emitted last of the APDO's rows so a plan that
+                // would overflow kMaxSteps drops it first: one row per PPS APDO, from the mid level, five +20 mV
+                // Requests (the runner walks them). Only above the 5 V contract and when the walk fits inside the
+                // offer: a low walk could cut the output, so it stays out of PdLow.
+                if (p.type == pd::PdoType::Pps && mid > 5000 && mid + kStepWalkCount * kStepMv <= hi) {
+                    Step w = s; w.mv = static_cast<uint16_t>(mid); w.ma = current(mid); w.continuous = false;
+                    w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
+                    w.reason = w.ma ? Reason::None : Reason::NoOffer;
+                    w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
+                    emit(w);
+                }
             }
         }
         if (!found) {
@@ -777,6 +790,7 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     const UnitList units = resolve(o);
     uint32_t seen = 0;
     auto count = [&](const Step& s) {
+        if (out.total >= kMaxSteps) return;   // the Runner's add() drops past kMaxSteps: the preview counts the same rows
         ++out.total;
         if (s.verdict == Verdict::Skip) ++out.skipped;
         else {
@@ -1190,8 +1204,9 @@ bool Runner::band_ok(const Step& s, const Input& in, uint32_t gap) {
     return in_band(s, band_.mean());
 }
 // pattern output-capped-below-advertised: follow the output of a programmable row whose contract is live (see kPlateauMs).
+// The steady level is tracked whatever it is: capped() reads it only above kCappedFloorMv, floored() only for a low row.
 void Runner::track_plateau(const Input& in, bool ready, uint32_t gap) {
-    if (!ready || gap > 250 || in.vbus_mv < kCappedFloorMv) { plat_mv_ = 0; return; }
+    if (!ready || gap > 250 || in.vbus_mv < 0) { plat_mv_ = 0; return; }
     if (!plat_mv_ || std::abs(in.vbus_mv - int(plat_mv_)) > std::max(100, int(plat_mv_) / 100)) {
         plat_mv_ = static_cast<uint16_t>(std::min(in.vbus_mv, 65535)); plat_ms_ = in.now;
     }
@@ -1207,6 +1222,18 @@ bool Runner::capped(const Step& s, const Input& in, bool ready) const {
         if (o.group == Group::Pd && o.verdict == Verdict::Pass && o.measured_mv < s.mv) top = std::max<int>(top, o.measured_mv);
     }
     return top >= kCappedFloorMv && std::abs(v - top) * 100 <= top;
+}
+// The mirror of capped(), for the low edge (PdLow): a low programmable row whose contract is live but whose output
+// sits steady ABOVE the band ceiling - the source cannot regulate below its floor (it advertises 3.3 V, holds 5 V).
+bool Runner::floored(const Step& s, const Input& in, bool ready) const {
+    if (!ready || !low_programmable(s) || s.hunt) return false;
+    const int v = in.vbus_mv;
+    if (v < 0 || v <= pd::programmable_ceiling_mv(int(s.mv))) return false;
+    return plat_mv_ && std::abs(v - int(plat_mv_)) <= std::max(100, int(plat_mv_) / 100) && in.now - plat_ms_ >= kPlateauMs;
+}
+// The Request a PD row sends now: the step-walk row asks its current walk level, every other row its own target.
+pd::Choice Runner::pd_choice(const Step& s) const {
+    return {s.pos, is_step_walk(s) ? walk_mv_ : s.mv, s.ma, s.hunt};
 }
 void Runner::request(Input in) {
     auto& s = steps_[index_];
@@ -1236,6 +1263,7 @@ void Runner::request(Input in) {
     if (jwait_ms_) { env_.journal_waited(in.now - jwait_ms_); jwait_ms_ = 0; }
     hot_ = false; busy_retry_at_ = 0; hunt_reject_until_ = 0;   // the next row: a list announced now is no answer to the old hunt row
     s.verdict = Verdict::Running;
+    if (is_step_walk(s)) { walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; }   // the walk starts at the row's own level
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
@@ -1247,7 +1275,7 @@ void Runner::request(Input in) {
         // The park rides the Busy-retry path below (busy_retry_at_); the row's own timeout bounds the wait, and the
         // restart is not a try (tries is set only in finish(), from source failures).
         if (!list_settled(in.now)) { busy_retry_at_ = list_ms_ + kListSettleMs; return; }
-        const auto err = env_.request_pd({s.pos, s.mv, s.ma, s.hunt});
+        const auto err = env_.request_pd(pd_choice(s));
         // Busy = identify/probe/prep still running (CUKTECH C1: the first 5 V row raced the probe, flaky fail):
         // retry within the row's normal timeout instead of failing instantly.
         if (err == pd::Err::Busy) { busy_retry_at_ = in.now + 200; return; }
@@ -1385,6 +1413,31 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
         }
         release(in, false);
     }
+}
+// One granted level of the step-walk row (is_step_walk): the base level only records VBUS; every later level checks
+// the measured move against kStepMv +- kStepTolMv (the meter's resolution, not the pass band), then asks for the next
+// +kStepMv through the sink's single Request gate, or passes after kStepWalkCount moves. A move that misses - rounded
+// to a coarser quantum, or none at all - fails "step resolution N mV" with detail = the observed move in mV.
+void Runner::walk_step(Input in, const Step& eff) {
+    (void)eff;
+    auto& s = steps_[index_];
+    if (walk_n_ == 0) {
+        walk_prev_mv_ = in.vbus_mv;   // the base level is granted and in band
+    } else {
+        const int move = in.vbus_mv - walk_prev_mv_;
+        if (std::abs(move - int(kStepMv)) > int(kStepTolMv)) {
+            finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(move, 0, 255)));
+            return;
+        }
+        walk_prev_mv_ = in.vbus_mv;
+    }
+    if (walk_n_ >= kStepWalkCount) { finish(in, Verdict::Pass, Reason::None); return; }
+    ++walk_n_;
+    walk_mv_ = uint16_t(walk_mv_ + kStepMv);
+    stable_ = false;
+    const auto err = env_.request_pd({s.pos, walk_mv_, s.ma, false});
+    if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
+    else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
 }
 // The first pending row in execution order (the unit order, then the plan order inside a unit).
 size_t Runner::pick() const {
@@ -1908,7 +1961,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             } else if (list_settled(in.now) && in.pd.state != pd::SinkState::Requesting &&
                        in.pd.state != pd::SinkState::Transition) {
                 flight_restart_ = false;
-                const auto err = env_.request_pd({fs.pos, fs.mv, fs.ma, fs.hunt});
+                const auto err = env_.request_pd(pd_choice(fs));
                 if (err == pd::Err::Busy) { flight_restart_ = true; busy_retry_at_ = in.now + 200; }
                 else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
             }
@@ -2194,8 +2247,11 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         return;
     }
     const bool ready = s.group == Group::Pd ?
-        in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos && in.pd.mv == s.mv :
+        in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos && in.pd.mv == (is_step_walk(s) ? walk_mv_ : s.mv) :
         in.fc_state == fc::State::Active;
+    // The step-walk row is judged at the level of the Request out now, not at the row's base target.
+    Step eff = s;
+    if (is_step_walk(s)) eff.mv = walk_mv_;
     // SVOOC adapter that clocked and answered SVOOC frames but stops before the cable check: detected and "handshake ok" (cable check accepted, no ramp) are passes.
     if (s.group != Group::Pd && in.fc_state == fc::State::Failed && (in.fc_fail == fc::Fail::Detected || in.fc_fail == fc::Fail::NoVoltage)) {
         finish(in, Verdict::Pass, Reason::None, static_cast<uint8_t>(in.fc_fail));
@@ -2234,20 +2290,23 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             }
         return;
     }
-    const bool banded = band_ok(s, in, gap);
+    const bool banded = band_ok(eff, in, gap);
     if (state_ == State::Requesting) {
         if (busy_retry_at_ && in.now >= busy_retry_at_) {
             if (!list_settled(in.now)) busy_retry_at_ = list_ms_ + kListSettleMs;   // a list arrived inside the window: restart it
             else {
                 busy_retry_at_ = 0;
-                const auto err = env_.request_pd({s.pos, s.mv, s.ma, s.hunt});
+                const auto err = env_.request_pd(pd_choice(s));
                 if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
                 else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
             }
         }
         if (ready && banded) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
-            if (in.now - stable_ms_ >= 500) { state_ = State::Holding; phase_ms_ = stable_ms_; }
+            if (in.now - stable_ms_ >= 500) {
+                if (is_step_walk(s)) { walk_step(in, eff); return; }   // the walk advances or finishes instead of holding
+                state_ = State::Holding; phase_ms_ = stable_ms_;
+            }
         } else stable_ = false;
         track_plateau(in, ready, gap);
         const uint32_t timeout = s.group == Group::Qc2 ? fc::kQc2TransitionMs + 3000 : 12000;
@@ -2259,7 +2318,8 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             else {
                 if (s.hunt) note_hunt_refusal(in, true);
                 if (const uint8_t why = s.hunt ? not_unlocked_detail(in) : uint8_t(0)) finish(in, Verdict::Skip, Reason::NotUnlocked, why);
-                else finish(in, Verdict::Fail, capped(s, in, ready) ? Reason::Capped : Reason::Timeout);
+                else finish(in, Verdict::Fail, capped(eff, in, ready) ? Reason::Capped :
+                                  floored(eff, in, ready) ? Reason::Floored : Reason::Timeout);
             }
         }
     } else {

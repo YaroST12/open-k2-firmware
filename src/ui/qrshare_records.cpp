@@ -191,6 +191,16 @@ static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std
               24);                                     // last_uptime_s
     }
     w.varint(p[33] >= 8 ? p[rc::off::kV8] : 0);   // v8: the source's mid-run re-balance count (0 on a v7 record)
+    // v9: the per-level setpoint-error spread, behind a presence bit so records packed before it end at the count
+    bool has_spread = false;
+    for (unsigned i = 0; i < rc::kMaxRanges && !has_spread; ++i)
+        for (unsigned k = 0; k < rc::kSpreadLevels; ++k)
+            has_spread |= p[rc::off::kV9 + rc::kSpreadLevels * i + k] != 0x80;
+    w.put(has_spread ? 1 : 0, 1);
+    if (has_spread)
+        for (unsigned i = 0; i < rc::kMaxRanges; ++i)
+            for (unsigned k = 0; k < rc::kSpreadLevels; ++k)
+                w.put(p[rc::off::kV9 + rc::kSpreadLevels * i + k], 8);   // int8 mV, 0x80 = no level there
     w.put(crc16, 16);                           // the v1 record's CRC-16: the integrity check is unchanged
     return w.finish();
 }

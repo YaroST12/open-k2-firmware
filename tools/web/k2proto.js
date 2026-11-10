@@ -86,7 +86,7 @@ var K2Proto = (function () {
                       "timeout", "voltage outside band", "hard reset", "source lost", "cancelled", "5V release failed",
                       "offers changed", "PD active: use QC port", "revision cannot be forced", "select at least one test",
                       "physical cable limit", "unsupported PDO layout",
-                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load"];
+                      "charger stayed in PD", "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"];
   var TEST_ALL = (1 << TEST_ALGORITHMS.length) - 1;
   var LATENCY = ["n/a", "<10 ns (~1 m)", "10-20 ns (~2 m)", "20-30 ns (~3 m)", "30-40 ns (~4 m)",
                  "40-50 ns (~5 m)", "50-60 ns (~6 m)", "60-70 ns (~7 m)", ">70 ns"];
@@ -245,6 +245,7 @@ var K2Proto = (function () {
           why === 27 ? (EPR_DETAILS[detail] || "EPR: entry refused") :
           why === 28 ? "EPR: no PD contract" :
           why === 38 ? (EPR_DETAILS[detail] || TEST_REASONS[why]) :
+          why === 46 ? (detail ? "step resolution " + detail + "mV" : "steps ignored") :
           why === 22 && code === 10 ? "SCP 5A modes need an observed 5A cable" : TEST_REASONS[why];
       }
       out.steps.push(row);

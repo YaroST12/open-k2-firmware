@@ -444,13 +444,15 @@ CABLE_KIND_DEC = {0: 0, 1: 1, 2: 2, 3: 4, 4: 0xFF}
 
 
 def expand_card_v2(b: bytes) -> bytes:
-    """A schema v2 card record -> the 204-byte v1 record (format 8), so decode_card() reads it as before.
-    A v2 record packed before the rebalanced varint existed ends at the CRC: the varint is then absent and reads 0."""
+    """A schema v2 card record -> the 220-byte v1 record (format 9), so decode_card() reads it as before.
+    A v2 record packed before the rebalanced varint existed ends at the CRC: the varint is then absent and reads 0;
+    likewise the v9 spread presence bit."""
     r = BitR(b)
     if r.get(8) != 2:
         raise QrError("not a schema v2 record")
-    rec = bytearray(204)
-    rec[0], rec[1], rec[2], rec[3] = 0xA6, 1, 198, 0
+    rec = bytearray(220)
+    rec[0], rec[1], rec[2], rec[3] = 0xA6, 1, 214, 0
+    rec[4 + 198:4 + 214] = b"\x80" * 16   # v9 spread slots default to "no level there"
     p = 4   # the payload starts at record offset 4; the put16/put32 below take absolute record offsets
 
     def put16(o, v):
@@ -484,7 +486,7 @@ def expand_card_v2(b: bytes) -> bytes:
     n_ranges = r.get(3)
     rec[p + 31] = n_ranges
     rec[p + 32] = r.get(8)          # ev_flags
-    rec[p + 33] = 8                 # format 8 (v2 always expands to the current format; the v8 byte below)
+    rec[p + 33] = 9                 # format 9 (v2 always expands to the current format; the v8 byte below)
     nl = r.get(5)
     rec[p + 34:p + 34 + nl] = bytes(r.get(7) for _ in range(nl))
     rec[p + 54] = r.get(8)                                   # pdp_w
@@ -537,8 +539,12 @@ def expand_card_v2(b: bytes) -> bytes:
         rec[p + 193], rec[p + 194], rec[p + 195] = up & 0xFF, (up >> 8) & 0xFF, (up >> 16) & 0xFF
     rebalanced = r.varint() if len(b) * 8 - r.pos > 16 else 0   # v8 (absent in records packed before it)
     rec[p + 196] = rebalanced & 0xFF
-    rec[202] = r.get(8)      # the v1 record's CRC-16, carried so the integrity check is unchanged
-    rec[203] = r.get(8)
+    if len(b) * 8 - r.pos > 16:   # v9: the spread presence bit + 16 int8 bytes (absent in records packed before it)
+        if r.get(1):
+            for i in range(16):
+                rec[p + 198 + i] = r.get(8)
+    rec[218] = r.get(8)      # the v1 record's CRC-16, carried so the integrity check is unchanged
+    rec[219] = r.get(8)
     return bytes(rec)
 
 

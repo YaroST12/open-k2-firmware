@@ -39,6 +39,8 @@
 //      u16 last_boots and u24 last_uptime_s (the session boot counter and uptime of the newest of those runs; read only when times > 1,
 //      zero otherwise; saturate at 65535 and 2^24 - 1). boots / uptime_s above stay those of the run that was stored first. Older
 //      formats decode as times = 1 (their bytes at 190.. are a CRC and padding, never read).
+//  198 spread (format v9 only): 4 ranges x 4 levels of int8 mV - the setpoint error (measured - target) of each passed level of an
+//      APDO, sorted low to high, -128 = no level there. Older formats decode with no spread.
 //
 // A re-run that gives the same results is counted, not stored (same_results, fold_repeat; the store applies them): the card keeps its
 // rows, runs goes up (the charger was tested again), times goes up and last_* name the newest run. Two runs are "the same" when
@@ -71,11 +73,13 @@ namespace ct = k2::charger_test;
 
 inline constexpr unsigned kGroups = unsigned(ct::Group::Count);
 inline constexpr unsigned kMaxRanges = 4;
+inline constexpr unsigned kSpreadLevels = 4;   // v9: the setpoint errors kept per APDO (the plan has at most 4 distinct levels)
+inline constexpr int8_t kSpreadNone = -128;     // an empty spread slot
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::NeedsLoad) + 1;   // 45 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::StepResolution) + 1;   // 47 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
-inline constexpr uint8_t kFormat = 8;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count
+inline constexpr uint8_t kFormat = 9;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread
 inline constexpr unsigned kMaxUfcs = 4;
 
 // Card verdict of one protocol group: None = the group was not part of the run.
@@ -148,6 +152,13 @@ struct UfcsRange {
     bool operator==(const UfcsRange&) const = default;
 };
 
+// A fresh card's spread: every slot kSpreadNone (the "no level there" mark), so hand-built cards encode like built ones.
+constexpr std::array<std::array<int8_t, kSpreadLevels>, kMaxRanges> spread_none() {
+    std::array<std::array<int8_t, kSpreadLevels>, kMaxRanges> a{};
+    for (auto& x : a) x.fill(kSpreadNone);
+    return a;
+}
+
 // Readable cause of a failed or skipped group: the engine's own code when the step stored one (pd::Err for PD steps
 // stored as 128 + err, pd::SinkResult below that, fc::Fail for the fast-charge groups), else the step's reason.
 inline bool group_handshake_ok(const GroupResult& r) { return r.verdict == GV::Pass && r.detail == uint8_t(fc::Fail::NoVoltage); }
@@ -175,6 +186,9 @@ struct Card {
     uint8_t n_ranges = 0;
     uint16_t pd_ma = 0;      // highest current of any fixed PDO, mA in 50 mA steps (0 = unknown, older card)
     std::array<Range, kMaxRanges> range{};
+    // V9: the setpoint error in mV (measured - target, saturated to +-127) of each passed level of the range, sorted low to
+    // high; kSpreadNone in the slots past the levels the run reached. Indexed like `range`.
+    std::array<std::array<int8_t, kSpreadLevels>, kMaxRanges> spread = spread_none();
     std::array<EprLevel, kEprLevels> epr{};   // per-EPR-level verdicts (v4 only; older cards decode to all GV::None)
     std::array<UfcsRange, kMaxUfcs> ufcs{};   // the charger's UFCS modes, planner order, unused slots last (v6 only; see ufcs_modes())
     Cable cable{};             // the cable of the run (v5 only; older cards decode to an empty cable)
@@ -202,7 +216,7 @@ struct Card {
     }
     bool operator==(const Card& o) const {
         return id == o.id && num_pdos == o.num_pdos && spec_rev == o.spec_rev && ev_flags == o.ev_flags && group == o.group &&
-               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && rebalanced == o.rebalanced && src_flags == o.src_flags && format == o.format &&
+               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && spread == o.spread && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && rebalanced == o.rebalanced && src_flags == o.src_flags && format == o.format &&
                handover == o.handover && handover_ds == o.handover_ds &&
                state == o.state && reason == o.reason && fw == o.fw && boots == o.boots && uptime_s == o.uptime_s &&
                card_no == o.card_no && runs == o.runs && times == o.times && last_boots == o.last_boots && last_uptime_s == o.last_uptime_s && std::memcmp(name, o.name, sizeof name) == 0 && name_auto == o.name_auto;
@@ -689,12 +703,15 @@ inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evide
     std::array<GroupResult, kGroups> first_fail{}, first_skip{};
     std::array<bool, kGroups> proven{};           // a pass with real evidence (a voltage reached) outranks detected
     std::array<uint8_t, kGroups> pass_detail{};   // fc::Fail::Detected: a pass that only proved the adapter answered
+    for (auto& a : c.spread) a.fill(kSpreadNone);   // v9: the empty spread slots read "none"
     for (const auto& s : steps) {
         const unsigned g = unsigned(s.group);
         if (g >= kGroups) continue;
         const bool range_step = (ct::kPpsAlgorithms & ct::bit(s.algorithm)) != 0;
-        // The failing target belongs to a fixed step; a range step reports its own fail_dv.
-        const GroupResult why{GV::None, 0, s.detail, uint8_t(s.reason), range_step ? uint16_t(0) : uint16_t(detail::dv_round(s.mv) * 100u)};
+        // The failing target belongs to a fixed step; a range step reports its own fail_dv. A step-walk row's detail is the
+        // observed mV count, which the card's 6-bit detail field would misread as a sink result: the card keeps the reason only.
+        const uint8_t det = s.reason == ct::Reason::StepResolution ? uint8_t(0) : s.detail;
+        const GroupResult why{GV::None, 0, det, uint8_t(s.reason), range_step ? uint16_t(0) : uint16_t(detail::dv_round(s.mv) * 100u)};
         if (s.verdict == ct::Verdict::Pass) {
             ++passes[g];
             if (s.detail != uint8_t(fc::Fail::Detected) && s.detail != uint8_t(fc::Fail::NoVoltage)) proven[g] = true;
@@ -780,6 +797,31 @@ inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evide
             }
         }
     }
+    // V9: the setpoint error per level of each APDO (ROADMAP "PPS coverage" item 3): the passed range steps, deduped by
+    // target and sorted low to high, at most kSpreadLevels of them (the plan's five targets hold at most four distinct
+    // levels), so a converter that drifts at the ends shows on the card.
+    {
+        std::array<std::array<std::pair<uint16_t, int>, kSpreadLevels>, kMaxRanges> lvl{};
+        std::array<uint8_t, kMaxRanges> n_lvl{};
+        for (const auto& s : steps) {
+            if (!(s.continuous && s.pdo && (ct::kPpsAlgorithms & ct::bit(s.algorithm)))) continue;
+            if (s.verdict != ct::Verdict::Pass) continue;
+            int ri = -1;
+            for (unsigned i = 0; i < c.n_ranges; ++i)
+                if (c.range[i].alg == uint8_t(s.algorithm) && c.range[i].pos == s.pos) { ri = int(i); break; }
+            if (ri < 0) continue;
+            auto& a = lvl[ri];
+            unsigned n = n_lvl[ri];
+            if (n >= kSpreadLevels) continue;   // the plan's five targets hold at most four distinct levels
+            unsigned at = n;
+            while (at > 0 && a[at - 1].first > s.mv) { a[at] = a[at - 1]; --at; }   // insert sorted by target
+            if (at < n && a[at].first == s.mv) continue;                            // the same level twice: one entry
+            a[at] = {s.mv, int(s.measured_mv) - int(s.mv)}; ++n_lvl[ri];
+        }
+        for (unsigned i = 0; i < kMaxRanges; ++i)
+            for (unsigned k = 0; k < kSpreadLevels; ++k)
+                c.spread[i][k] = k < n_lvl[i] ? int8_t(std::clamp(lvl[i][k].second, -127, 127)) : kSpreadNone;
+    }
     for (unsigned g = 0; g < kGroups; ++g) {
         GroupResult& r = c.group[g];
         r.verdict = fails[g] ? GV::Fail : no_response[g] ? GV::Skip : passes[g] ? GV::Pass : skips[g] ? GV::Skip : GV::None;
@@ -807,8 +849,9 @@ inline constexpr unsigned kCable = kEpr + 6 * kEprLevels;                // 162:
 inline constexpr unsigned kUfcs = kCable + 16;                           // 178: v6 UFCS modes, kMaxUfcs x 3 bytes
 inline constexpr unsigned kRepeat = kUfcs + 3 * kMaxUfcs;                // 190: v7 repeat block, 6 bytes
 inline constexpr unsigned kV8 = kRepeat + 6;                             // 196: v8 block, 2 bytes (rebalanced u8 + spare)
+inline constexpr unsigned kV9 = kV8 + 2;                               // 198: v9 spread block, kMaxRanges * kSpreadLevels bytes
 }  // namespace off
-inline constexpr unsigned kPayload = off::kV8 + 2;                       // 198 (196 + 2 for the v8 block; v7 cards are 196)
+inline constexpr unsigned kPayload = off::kV9 + kMaxRanges * kSpreadLevels;   // 214 (v8 cards are 198: their CRC/padding sits in the spread bytes and is not read)
 inline constexpr uint8_t kFlagNameAuto = 1;
 inline constexpr unsigned kRecordOverhead = 6, kMaxRecord = kRecordOverhead + kPayload;
 static_assert(kPayload % 2 == 0 && kPayload <= 250);
@@ -880,17 +923,23 @@ inline size_t encode_card(std::span<uint8_t> out, const Card& c) {
         uint8_t* q = p + off::kV8;
         q[0] = c.rebalanced; q[1] = 0;
     }
+    // V9: the per-level setpoint-error spread, int8 mV per level, kSpreadNone in the empty slots
+    for (unsigned i = 0; i < kMaxRanges; ++i)
+        for (unsigned k = 0; k < kSpreadLevels; ++k)
+            p[off::kV9 + kSpreadLevels * i + k] = uint8_t(c.spread[i][k]);
     put16(b + 4 + kPayload, bbstore::crc16(0xFFFF, {b, 4 + kPayload}));
     return kMaxRecord;
 }
 
 // Parses a payload (the bytes after the 4 byte record header). False on a wrong length or an out of range field.
-// A v7 payload (196 bytes, kPayload - 2) is accepted too: its v8 bytes are the CRC/padding and read as 0.
+// Any even payload from 144 (v3) to kPayload (v9) is accepted; a v7/v8 payload's trailing bytes are the CRC/padding of
+// the shorter record and are not read.
 inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
     using namespace detail;
-    if (payload.size() != kPayload && payload.size() != kPayload - 2) return false;
+    if (payload.size() < 144 || payload.size() > kPayload || payload.size() % 2) return false;
     const uint8_t* p = payload.data();
     Card d;
+    for (auto& a : d.spread) a.fill(kSpreadNone);
     d.id.fp = get32(p); d.id.vid = get16(p + 4); d.id.pid = get16(p + 6);
     d.card_no = get16(p + 8); d.runs = get16(p + 10);
     d.boots = get32(p + 12); d.uptime_s = get32(p + 16); d.fw = get32(p + 20);
@@ -957,7 +1006,12 @@ inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
         d.last_uptime_s = q[3] | uint32_t(q[4]) << 8 | uint32_t(q[5]) << 16;
     }
     // V8: the re-balance count; a v7 payload has no such byte (its CRC/padding sits there and is not read)
-    if (p[33] >= 8 && payload.size() == kPayload) d.rebalanced = p[off::kV8];
+    if (p[33] >= 8 && payload.size() >= off::kV8 + 1) d.rebalanced = p[off::kV8];
+    // V9: the per-level setpoint-error spread; older payloads end before it (their CRC/padding is not read)
+    if (p[33] >= 9 && payload.size() >= kPayload)
+        for (unsigned i = 0; i < kMaxRanges; ++i)
+            for (unsigned k = 0; k < kSpreadLevels; ++k)
+                d.spread[i][k] = int8_t(p[off::kV9 + kSpreadLevels * i + k]);
     c = d;
     return true;
 }

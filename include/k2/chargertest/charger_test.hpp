@@ -17,7 +17,7 @@ enum class Algorithm : uint8_t {
 };
 static_assert(unsigned(Algorithm::Count) < 32);
 inline constexpr uint32_t kAllAlgorithms = (1u << unsigned(Algorithm::Count)) - 1;
-inline constexpr size_t kMaxSteps = pd::kMaxPdos * 6 + 46;   // 40 + the six default Class B rows (Qc2ClassB 1, Qc3ClassB 5)
+inline constexpr size_t kMaxSteps = pd::kMaxPdos * 6 + 46;   // 40 + the six default Class B rows (Qc2ClassB 1, Qc3ClassB 5); the journal's one-block section assert caps this
 // The current a PD plan row requests: 1 A (clamped to the offer and the cable). The one exception is the full-current PPS row, the
 // last row of each PPS APDO: top voltage at the APDO's whole current, so it is the only non-hunt row above this. The 6 A hunt
 // rows request 6 A. Host tools tell a hunt from a full row by that gap (tools/step_label.py HUNT_MA = 5000, the cable ceiling).
@@ -50,10 +50,24 @@ enum class Reason : uint8_t {
                          // "withdrawn by source", the unit goes on against the new list (a PDO that comes back later revives the row)
     WrongVoltage,         // pattern shared-bus-split: the attach's 5 V contract (PS_RDY at PDO 1, seen at any poll of the wait) was granted
                          // but the source holds another voltage on VBUS (outside vSafe5V): a fail, measured_mv = the highest VBUS seen during the wait
-    NeedsLoad             // pattern pps-off-at-no-load (suspected): a source that turns a PPS output off when the port draws ~0 mA. A programmable
+    NeedsLoad,            // pattern pps-off-at-no-load (suspected): a source that turns a PPS output off when the port draws ~0 mA. A programmable
                          // row it Accepted (no PS_RDY) and then dropped with VBUS collapsed at under kNeedsLoadMaxMa: a skip, not a failure
                          // (measured_mv = the collapsed VBUS); the levels after it still run (no chain skip)
+    Floored,             // a low programmable row (PdLow) whose output stopped at a steady floor ABOVE the target: the source advertises 3.3 V
+                         // but regulates at 5 V. A fail, measured_mv = the floor (the mirror of Capped's ceiling logic)
+    StepResolution       // a PPS step-walk row whose +20 mV step the source did not follow (rounded to a coarser quantum or ignored):
+                         // a fail, detail = the measured move in mV (0 = no move)
 };
+// Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
+// engine code and the EPR skip codes so the card and the tools never mistake it for one.
+inline constexpr uint8_t kDetailStepWalk = 160;
+// ROADMAP "PPS coverage" item 2: one step-walk row per PPS APDO, from the mid level, kStepWalkCount Requests of +kStepMv
+// each. Every step needs Accept + PS_RDY and a measured VBUS move of kStepMv +- kStepTolMv. The tolerance is the meter's,
+// not the pass band's: the INA226's VBUS LSB is 2.5 uV, aligned to 0.32 mV counts (align_vbus) and reported as whole mV, so
+// each reading quantizes by 1 mV and a move of two readings carries at most 1 mV; the level's own band (max(100, mv/20))
+// would accept a 100 mV rounding, so it is not used here.
+inline constexpr unsigned kStepMv = 20, kStepWalkCount = 5;
+inline constexpr int kStepTolMv = 2;
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
 // A unit (protocol) may take the K2 down this many times inside one run: losses 1 .. kRebootBudget-1 resume the same row, the
@@ -169,6 +183,11 @@ struct Step {
     uint32_t pdo = 0;
 };
 static_assert(sizeof(Step) == 20, "Step must stay free of padding holes: kMaxSteps copies live in the Runner");
+// True while `s` is the step-walk row of its APDO and still in flight (the planner marks it with kDetailStepWalk).
+constexpr bool is_step_walk(const Step& s) {
+    return s.group == Group::Pd && s.algorithm == Algorithm::Pps && s.detail == kDetailStepWalk &&
+           (s.verdict == Verdict::Pending || s.verdict == Verdict::Running);
+}
 // The UFCS mode a step samples, kept in `Step::pdo` (no UFCS row has a PDO): the planner writes it once the charger's
 // Output_Capabilities are read, and the Results chip (the mode's top current), the Detail page (the whole mode) and the journal
 // read it. Four fields in 32 bits, saturating: voltages in 100 mV (9 bits, up to 51.1 V), currents in 50 mA (7 bits, up to 6.35 A).
@@ -590,11 +609,19 @@ private:
     // x_svid_ / x_authed_ = the sink's chain state at the last poll before any pending Hard Reset (the sink clears it on the reset).
     bool preauth_tail(const Input&, bool& waiting);
     bool band_ok(const Step&, const Input&, uint32_t gap);   // the band check of a Requesting / Holding row (window mean for a fixed PD row)
+    pd::Choice pd_choice(const Step&) const;   // the Request a PD row sends now (the step-walk row walks walk_mv_)
     VbusMean band_;
     bool capped(const Step&, const Input&, bool ready) const;   // a programmable row's timeout is a ceiling (see kPlateauMs)
+    bool floored(const Step&, const Input&, bool ready) const;  // ... or a floor: a low row whose output sits steady above the band ceiling
     void track_plateau(const Input&, bool ready, uint32_t gap);
     uint16_t plat_mv_ = 0;     // the level a Requesting programmable row's samples have stayed within 1 % of (0 = none yet)
     uint32_t plat_ms_ = 0;     // since when
+    // The step-walk row in flight (is_step_walk): walk_mv_ = the target of the Request out now (s.mv at the first one,
+    // +kStepMv per granted step), walk_n_ = levels granted after the base, walk_prev_mv_ = VBUS at the previous granted level.
+    uint16_t walk_mv_ = 0;
+    uint8_t walk_n_ = 0;
+    int walk_prev_mv_ = -1;
+    void walk_step(Input, const Step& eff);   // one granted level of the walk: check its move, ask for the next or finish
     bool xiaomi_seen_ = false, xiaomi_reset_ = false, x_svid_ = false, x_authed_ = false; uint32_t tail_at_ = 0, hr_count_ = 0;
     std::array<HuntEvidence, kHuntSlots> hunt_{};   // refused hunt rows; n_hunt_ in use (a full table overwrites the last slot)
     uint8_t n_hunt_ = 0;

@@ -38,7 +38,7 @@ function recordOf(payload) {   // 0xA6, type 1, length, 0, payload, CRC-16 littl
   return r;
 }
 
-const payloadOf = (name) => K2Card.splitLink(golden[name].link).record.slice(4, 4 + 196);   // the format 7 payload, from a version '1' or '2' link
+const payloadOf = (name) => { const rec = K2Card.splitLink(golden[name].link).record; return rec.slice(4, 4 + rec[2]); };   // the payload (its length byte says which format), from a version '1' or '2' link
 
 // tests/fixtures/qrlink_v5.tsv is frozen: the links of the cards made before the UFCS modes (184 byte records, format 5).
 const v5 = Object.fromEntries(readFileSync(new URL("./fixtures/qrlink_v5.tsv", import.meta.url), "utf8")
@@ -260,7 +260,7 @@ test("bad fragments say what is wrong", () => {
   flipped[20] ^= 1;
   assert.equal(code(BASE + "1c." + toB64url(flipped)), "bad-crc");
   const newer = payloadOf("fh22");
-  newer[33] = 9;
+  newer[33] = 10;   // one past format 9
   assert.equal(code(BASE + "1c." + toB64url(recordOf(newer))), "newer-card");
 });
 

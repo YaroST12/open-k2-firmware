@@ -218,6 +218,9 @@ Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
         } else if (y.verdict == ct::Verdict::Fail && y.reason == ct::Reason::Capped) {
             r.capped = true;
             r.hi_mv = std::max(r.hi_mv, y.measured_mv);   // the ceiling the source held
+        } else if (y.verdict == ct::Verdict::Fail && y.reason == ct::Reason::Floored) {
+            r.floored = true;
+            r.floor_mv = std::max(r.floor_mv, y.measured_mv);   // the floor the source held
         }
     }
     r.tone = roll_up(t);
@@ -262,7 +265,9 @@ Reach reach(std::span<const ct::Step> s, A a, int pos) {
 
 step_label::Text reach_footer(const Reach& r) {
     step_label::Text t;
-    if (r.capped) {
+    if (r.floored) {
+        put_word(t, "floor at "); put_level(t, r.floor_mv); put_word(t, "V");
+    } else if (r.capped) {
         put_word(t, "caps "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
     } else if (r.tone == Tone::Pending) {
         put_word(t, "not finished");
