@@ -123,11 +123,17 @@ our firmware does.
   raw mV on the Lines page (`src/ui/ui_pages.cpp:61-62, 1369`).
 - Edge sniffer for proprietary D+/D- protocols: `src/fastcharge/dpsniff.cpp` (EXTI on PA7/PB2, cycle-stamped
   edge ring, `include/k2/fastcharge/edges.hpp`), feeding `fc_engine`.
-- BC1.2 + proprietary D+/D- protocols (QC2/QC3/QC3+, AFC, FCP, SCP, VOOC/SVOOC, UFCS) are *actively
+- Proprietary D+/D- protocols (QC2/QC3/QC3+, AFC, FCP, SCP, VOOC/SVOOC, UFCS) are *actively
   probed* by the charger-test runner, not passively detected: `src/fastcharge/fc_engine.cpp` (`Proto` enum
   :43-52, `Fail::Detected` :85), pin driving `include/k2/drivers/dpdm.hpp:75-132` (`set_dp/set_dm`,
   `play`, VOOC `rx_command`/`tx_reply`, `discharge`/`start_reset`). Passive D+/D- observation is
   limited to voltage levels and edge timing.
+- BC1.2 is read, not probed: a dedicated charger (D+ shorted to D-) shows as an equal, steady pair of
+  levels. There is no SDP / CDP probe (no charging-downstream-port negotiation is attempted). The K2's own
+  idle drives both lines to about 0.6 V, so an equal steady pair in the 0.5 .. 0.79 V window proves
+  nothing; the one active step is `fastcharge`'s DCP check (D+ pulled to 0 V once per attach, only when
+  the K2 is alone on a 5 V source, D- read back), see `dcp_check_allowed()` in
+  `include/k2/fastcharge/fastcharge_classify.hpp`.
 
 ### 1.6 Where results surface
 

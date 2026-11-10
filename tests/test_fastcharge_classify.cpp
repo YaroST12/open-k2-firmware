@@ -79,7 +79,7 @@ static void test_five_volt_band() {
     CHECK_EQ(run(1200, 1200, 5000), Protocol::Sam20);
     CHECK_EQ(run(3300, 3300, 5000), Protocol::Dcp5V);    // BC1.2 DCP: D+ shorted to D-
     CHECK_EQ(run(3300, 3200, 5000), Protocol::Dcp5V);
-    CHECK_EQ(run(600, 600, 5000), Protocol::Dcp5V);      // shorted at 0.6 V, within 0.2 V and >= 0.4 V
+    CHECK_EQ(run(600, 600, 5000), Protocol::NoQuick);    // the K2's own 0.6 V bias on both lines proves nothing passively
     CHECK_EQ(run(0, 0, 5000), Protocol::NoQuick);        // nothing on the data lines
     CHECK_EQ(run(1500, 600, 5000), Protocol::NoQuick);    // mid-rail D+ against 0.6 V D-: not shorted, not a known divider
     CHECK_EQ(run(2000, 0, 5000), Protocol::NoQuick);
@@ -248,7 +248,8 @@ static void test_dcp_needs_stability() {
     // A steady short sits still: D+ = D- = 0.59 V for the whole window -> DCP stands.
     Ring steady;
     for (int i = 0; i < 50; i++) steady.push(590, 590);
-    CHECK_EQ(classify(steady, 590, 590, 5000), Protocol::Dcp5V);
+    // ... unless it is the K2's own idle bias (both lines driven to ~0.6 V): see test_bias_pair_is_not_a_dcp.
+    CHECK_EQ(classify(steady, 590, 590, 5000), Protocol::NoQuick);
     // D+ alternating 0.59 / 2.03 V against a steady 0.59 V D-: traffic, not a short,
     // whichever level the latest sample happens to hold.
     Ring traffic;
@@ -272,7 +273,7 @@ static void test_dcp_needs_stability() {
     // The steady shorts of the 5 V band test above keep their verdict.
     CHECK_EQ(run(3300, 3300, 5000), Protocol::Dcp5V);
     CHECK_EQ(run(3300, 3200, 5000), Protocol::Dcp5V);
-    CHECK_EQ(run(600, 600, 5000), Protocol::Dcp5V);
+    CHECK_EQ(run(600, 600, 5000), Protocol::NoQuick);
     // A default-USB data host on CC (Rp attached, no PD contract): the pair is data even when
     // the levels are equal or unrecognisable - never a dedicated charger.
     CHECK_EQ(classify(steady, 590, 590, 5000, false, false, true), Protocol::UsbData);
@@ -346,7 +347,10 @@ static void test_handshake_pattern() {
     CHECK_EQ(handshake_pattern(pulse, 3300, 0), true);          // pulse train
     Ring dcp;
     for (int i = 0; i < 50; i++) dcp.push(590, 590);
-    CHECK_EQ(handshake_pattern(dcp, 590, 590), true);           // BC1.2 short
+    CHECK_EQ(handshake_pattern(dcp, 590, 590), false);          // the K2's own bias on both lines: not a handshake
+    Ring dcp_hi;
+    for (int i = 0; i < 50; i++) dcp_hi.push(3300, 3300);
+    CHECK_EQ(handshake_pattern(dcp_hi, 3300, 3300), true);      // a short at a level the bias cannot make
     Ring sam;
     for (int i = 0; i < 50; i++) sam.push(1200, 1200);
     CHECK_EQ(handshake_pattern(sam, 1200, 1200), true);         // Samsung 2A divider
@@ -356,6 +360,134 @@ static void test_handshake_pattern() {
     for (int i = 0; i < 50; i++) mtk.push(0, 0);
     CHECK_EQ(classify(mtk, 0, 0, 9000, false, false, true, false), Protocol::PdMtk);
     CHECK_EQ(classify(mtk, 0, 0, 9000, false, false, true, true), Protocol::Pd);
+}
+
+// The passive idle drives BOTH lines to the 0.6 V level (dpdm kPassiveIdle), so an undriven pair reads
+// 0.59..0.70 V equal and steady (hardware: 653/653 mV at boot with nothing attached; 592/591 mV for 89 s
+// behind a phone and an SSD, no charger in the chain, which read "DCP 5V"). That reading is our own
+// bias: it proves no short. Bias window: 0.5 .. 0.79 V (decivolt buckets 5..7) on both lines.
+static void test_bias_pair_is_not_a_dcp() {
+    CHECK_EQ(run(653, 653, 5000), Protocol::NoQuick);
+    CHECK_EQ(run(592, 591, 5000), Protocol::NoQuick);
+    CHECK_EQ(run(500, 500, 5000), Protocol::NoQuick);    // window edges
+    CHECK_EQ(run(799, 799, 5000), Protocol::NoQuick);
+    CHECK_EQ(run(700, 600, 5000), Protocol::NoQuick);
+    // Equal steady pairs outside the window keep today's verdict.
+    CHECK_EQ(run(800, 800, 5000), Protocol::Dcp5V);
+    CHECK_EQ(run(450, 450, 5000), Protocol::Dcp5V);
+    CHECK_EQ(run(2000, 2000, 5000), Protocol::Dcp5V);    // Apple 0.5 A divider: still unclassified here (no enum value)
+    CHECK_EQ(run(3300, 3300, 5000), Protocol::Dcp5V);
+    // A data host on CC still reads USB DATA, never NO QUICK.
+    Ring bias;
+    for (int i = 0; i < 50; i++) bias.push(653, 653);
+    CHECK_EQ(classify(bias, 653, 653, 5000, false, false, true), Protocol::UsbData);
+}
+
+// 1b: the bias pair is not a handshake, and a ring read before it is full is never a handshake (clear()
+// resets the counters only, so the arrays still hold the previous attach).
+static void test_handshake_latch_and_stale_ring() {
+    Ring afc;
+    for (int i = 0; i < 50; i++) afc.push(600, 0);
+    CHECK_EQ(handshake_pattern(afc, 600, 0), true);
+    afc.clear();
+    afc.push(1500, 1500);                                     // the arrays still hold the old 0.6 V / 0 V window
+    CHECK_EQ(handshake_pattern(afc, 1500, 1500), false);
+    CHECK_EQ(update_handshake_latch(false, afc, 1500, 1500), false);
+    // Latch only moves up, only from a full window.
+    Ring bias;
+    for (int i = 0; i < 50; i++) bias.push(650, 650);
+    CHECK_EQ(update_handshake_latch(false, bias, 650, 650), false);
+    Ring qc2;                                                 // a real QC2 session: D+ 0.6 V, D- 0 V
+    for (int i = 0; i < 50; i++) qc2.push(600, 0);
+    CHECK_EQ(update_handshake_latch(false, qc2, 600, 0), true);
+    Ring fcp;                                                 // FCP/AFC: one line at 0.6 V, the other not
+    for (int i = 0; i < 50; i++) fcp.push(0, 600);
+    CHECK_EQ(update_handshake_latch(false, fcp, 0, 600), true);
+    CHECK_EQ(update_handshake_latch(true, bias, 650, 650), true);   // once latched it stays
+    // A fixed contract behind an idle pair: with CC attached, no decoded PD and no handshake the
+    // verdict is PD at 9 V and 12 V - not PD MTK / QC2.0 12V.
+    bool latched = false;
+    for (int s = 0; s < 3; s++) {                             // three windows of the bias pair
+        latched = update_handshake_latch(latched, bias, 650, 650);
+    }
+    CHECK_EQ(latched, false);
+    CHECK_EQ(classify(bias, 650, 650, 9000, false, false, true, !latched), Protocol::Pd);
+    CHECK_EQ(classify(bias, 650, 650, 12000, false, false, true, !latched), Protocol::Pd);
+    // The previous attach's stale samples do not latch the new one on its first sample.
+    Ring r;
+    for (int i = 0; i < 50; i++) r.push(3300, 600);
+    r.clear();
+    r.push(650, 650);
+    CHECK_EQ(update_handshake_latch(false, r, 650, 650), false);
+    // ... and a part-filled ring never claims a silent PD contract either (Pending until full).
+    CHECK_EQ(classify(r, 650, 650, 9000, false, false, true, true), Protocol::Pending);
+    // A real handshake still keeps the legacy reading and blocks the silent-PD rule.
+    CHECK_EQ(classify(qc2, 600, 0, 9000, false, false, true, !update_handshake_latch(false, qc2, 600, 0)), Protocol::AfcFcp);
+}
+
+// 1c: the active DCP check. D+ is pulled to 0 V while D- keeps the bias; a BC1.2 short drags D- down
+// with it, an open pair leaves D- on the bias.
+static void test_active_dcp_check() {
+    // Decision: D- at least 150 mV below its own idle reading = shorted.
+    CHECK_EQ(dcp_check_result(592, 80), DcpCheck::Shorted);      // a short to a strong 0 V
+    CHECK_EQ(dcp_check_result(653, 330), DcpCheck::Shorted);     // a symmetric divider: about half the bias
+    CHECK_EQ(dcp_check_result(592, 442), DcpCheck::Shorted);     // exactly the margin
+    CHECK_EQ(dcp_check_result(592, 443), DcpCheck::Open);
+    CHECK_EQ(dcp_check_result(592, 585), DcpCheck::Open);        // D- stays on the bias
+    CHECK_EQ(dcp_check_result(592, 700), DcpCheck::Open);        // moved up: still no short
+    // An idle reading outside the bias window is not the K2's own drive: no verdict from this check.
+    CHECK_EQ(dcp_check_result(0, 0), DcpCheck::Invalid);
+    CHECK_EQ(dcp_check_result(2000, 100), DcpCheck::Invalid);
+    CHECK_EQ(dcp_check_result(499, 100), DcpCheck::Invalid);
+    CHECK_EQ(dcp_check_result(800, 100), DcpCheck::Invalid);
+
+    // The proven short reads DCP 5V at the bias pair, an open pair stays NO QUICK.
+    Ring bias;
+    for (int i = 0; i < 50; i++) bias.push(592, 591);
+    CHECK_EQ(classify(bias, 592, 591, 5000), Protocol::NoQuick);
+    CHECK_EQ(classify(bias, 592, 591, 5000, false, false, false, true, true), Protocol::Dcp5V);
+    // The proof never overrides a data host, a PD contract, or a pair that is not steady.
+    CHECK_EQ(classify(bias, 592, 591, 5000, false, false, true, true, true), Protocol::UsbData);
+    CHECK_EQ(classify(bias, 592, 591, 5000, true, false, false, true, true), Protocol::Pd);
+    Ring moving;
+    for (int i = 0; i < 50; i++) moving.push((i & 1) ? 2030 : 590, 590);
+    CHECK_EQ(classify(moving, 590, 590, 5000, false, false, false, true, true), Protocol::UsbData);
+    // bias_pair: full window, equal and steady, inside 0.5 .. 0.79 V.
+    CHECK_EQ(bias_pair(bias), true);
+    Ring part;
+    part.push(592, 591);
+    CHECK_EQ(bias_pair(part), false);
+    Ring shorted_hi;
+    for (int i = 0; i < 50; i++) shorted_hi.push(3300, 3300);
+    CHECK_EQ(bias_pair(shorted_hi), false);
+    Ring qc2;
+    for (int i = 0; i < 50; i++) qc2.push(600, 0);
+    CHECK_EQ(bias_pair(qc2), false);
+
+    // Gate: every condition must hold, and a failed attach does not retry within the same attach.
+    DcpCheckGate g;
+    g.vbus_mv = 5000; g.not_inline = true; g.engine_idle = true; g.lines_free = true;
+    CHECK_EQ(dcp_check_allowed(g, bias), true);
+    DcpCheckGate x = g; x.vbus_mv = 3900;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    x = g; x.vbus_mv = 9000;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);                 // only the 5 V band
+    x = g; x.not_inline = false;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    x = g; x.pd_seen = true;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    x = g; x.pd_likely = true;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    x = g; x.cc_source_no_pd = true;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    x = g; x.engine_idle = false;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    x = g; x.lines_free = false;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    x = g; x.done_this_attach = true;
+    CHECK_EQ(dcp_check_allowed(x, bias), false);
+    CHECK_EQ(dcp_check_allowed(g, part), false);                 // ring not full
+    CHECK_EQ(dcp_check_allowed(g, qc2), false);                  // not the bias pair
 }
 
 int main() {
@@ -373,5 +505,8 @@ int main() {
     test_dcp_needs_stability();
     test_silent_pd_contract_above_vsafe5_reads_pd();
     test_handshake_pattern();
+    test_bias_pair_is_not_a_dcp();
+    test_handshake_latch_and_stale_ring();
+    test_active_dcp_check();
     return test_report("test_fastcharge_classify");
 }

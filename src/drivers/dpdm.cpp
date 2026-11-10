@@ -266,6 +266,18 @@ void discharge() {
     set_dm(Drive::V0);
 }
 
+void dcp_probe_begin() {
+    set_dp(Drive::V0);          // D+ to 0 V; D- stays on its idle 0.6 V
+}
+
+bool dcp_probe_end() {
+    const Levels l = read();
+    // Only undo our own state: a session that took the lines meanwhile has rewritten them already.
+    if (l.pa7 || l.pb0 || !l.sw1 || l.sw2) return false;
+    set_dp(Drive::V0p6);
+    return true;
+}
+
 void start_reset() {
     discharge();
     g_resetting = true;

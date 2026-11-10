@@ -60,14 +60,47 @@ enum class Protocol : std::uint8_t {
 // here: the CC2 bias net reads ~1.69 V with nothing attached, and only the FUSB302's own Rp
 // detection counts as "CC attached".
 // A DCP (D+ shorted to D-) is only concluded from a level that sits still over the whole window:
-// a live data link averages equal too, but its levels move with bus activity.
+// a live data link averages equal too, but its levels move with bus activity. An equal steady pair
+// inside the bias window (0.5 .. 0.79 V on both lines) is the K2's own idle drive (both lines driven to
+// 0.6 V) and proves no short, so passively it reads NO QUICK; `dcp_proof` (the active check below
+// found D- following a pulled-low D+) turns that same pair into DCP 5V.
 Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active = false, bool pd_likely = false,
-                  bool cc_source_no_pd = false, bool cc_attach_quiet = true);
+                  bool cc_source_no_pd = false, bool cc_attach_quiet = true, bool dcp_proof = false);
+
+// The window holds the K2's own bias: full, both lines equal and steady at 0.5 .. 0.79 V.
+bool bias_pair(const Ring& ring);
+
+// Active DCP check: with D- left on the bias, D+ is driven to 0 V for one poll interval and D- is read.
+// A BC1.2 short drags D- down with it; an open pair leaves it on the bias. The pins are the K2's
+// own symmetric 0.6 V divider, there is no strong / weak asymmetry between the lines, so the decision is
+// relative to D-'s own idle reading: shorted when D- fell by at least kDcpDropMv. Invalid when the idle
+// reading is not the bias (the pair already moved), which gives no verdict. Unverified on hardware.
+inline constexpr int kDcpDropMv = 150;
+enum class DcpCheck : std::uint8_t { Invalid, Open, Shorted };
+DcpCheck dcp_check_result(int idle_dm_mv, int probed_dm_mv);
+
+// Everything that must hold before the check may drive the lines. The caller fills it from the other
+// drivers (link, fctrig, dpdm); the rule is pure.
+struct DcpCheckGate {
+    int vbus_mv = 0;
+    bool not_inline = false;        // k2::link::inline_now() is None: nothing is plugged in behind the K2
+    bool pd_seen = false;           // a PD contract or traffic (probe.pd_active)
+    bool pd_likely = false;         // CC attached, VBUS above 5.5 V, load flowing, no caps seen
+    bool cc_source_no_pd = false;   // CC shows an attached source with no PD: a default-USB data host
+    bool engine_idle = false;       // no fctrig trigger, scan, UFCS probe or reset hold
+    bool lines_free = false;        // the four switch pins read back as the idle state, no sniffer armed
+    bool done_this_attach = false;  // the check ran once already for this attach
+};
+bool dcp_check_allowed(const DcpCheckGate& g, const Ring& ring);
 
 // True when the window shows a charger handshake on the data pair: a pulsing or high bucket on either
 // line, a steady 0.6 V rail below the USB data-idle window (FCP/AFC), a BC1.2 short, or the Samsung
 // divider levels. Idle lines (0 V, the ~0.8 V data pull-up, a steady ~2 V) are not a handshake.
 bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv);
+
+// The "handshake seen this attach" latch: stays set once set, and is only fed from a full window
+// that is not the K2's own bias pair.
+bool update_handshake_latch(bool latched, const Ring& ring, int dp_mv, int dm_mv);
 
 // Display string of a verdict (including "NO INPUT" and "..."); "?" if unknown.
 const char* name(Protocol p);

@@ -2,7 +2,9 @@
 // Copyright (C) 2026 Yaraslau Furman
 // D+/D- switch network driver. Four GPIOs steer the USB-A port's data lines between the
 // charger-protocol front end and the ADC sense inputs. The passive idle state
-// leaves the lines as plain sense inputs: PA7=1, PB0=0, PB1=1, PB2=0.
+// is PA7=1, PB0=0, PB1=1, PB2=0: it DRIVES both lines to a 0.6 V level through the switch network
+// (hardware: 653/653 mV at boot, 592/591 mV behind a phone), which the ADC senses. Only the Hi-Z
+// drive releases a line to a plain analog input.
 // The driver owns these pins; other code reads the state through read(), never the GPIO.
 #pragma once
 #include <cstdint>
@@ -120,6 +122,13 @@ EdgeCount count_dp_edges(std::uint32_t window_us);
 
 // Both lines to 0 V right now; any HVDCP / AFC / FCP / SCP charger falls back to 5 V.
 void discharge();
+
+// Pin sequence of the active DCP check (fastcharge_classify.hpp, dcp_check_result): D+ is driven to 0 V
+// with D- left on its idle 0.6 V. Both calls return at once; the caller waits between them and reads D-
+// with the ADC. dcp_probe_end() restores the passive idle only when the pins still hold the probe state
+// (returns false when something else rewrote them meanwhile, and then leaves them alone).
+void dcp_probe_begin();
+bool dcp_probe_end();
 
 // Full reset: discharge both lines at once, hold 0 V for 500 ms, then restore the passive
 // idle state. Non-blocking: the hold ends in poll(). Safe to call repeatedly (restarts the hold).

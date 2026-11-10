@@ -33,6 +33,10 @@ std::optional<Reading> read();
 // scan is not running (not ready, pins released, ring not yet filled once).
 bool latest_cc(std::uint16_t& cc1_raw, std::uint16_t& cc2_raw);
 
+// D+ / D- in millivolts from the newest four complete sweeps only (~0.5 ms of history), not the 13 ms
+// average of read(): a line the K2 just drove shows up here within one sweep. Same availability as latest_cc.
+bool latest_dpdm(std::int32_t& dp_mv, std::int32_t& dm_mv);
+
 // Hand PA2/PA3 (CC1/CC2) to another driver (k2::uart2): the scan stops, read() returns nullopt, the
 // one-shot modes refuse, and both pins are left as floating inputs. reclaim_dpdm_pins() makes them
 // analog again and restarts the scan. The ADC never converts them while another driver owns them.

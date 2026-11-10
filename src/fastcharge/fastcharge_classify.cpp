@@ -22,25 +22,44 @@ constexpr int kBand20VMax = 21500;
 constexpr bool high(int b) { return b == 2 || b == 3 || b == 5; }     // 2.4 .. 3.3 V
 constexpr bool pulsing(int b) { return b == 4 || b == 7; }
 
-// A BC1.2 short ties D+ to D- at one level that sits still: every sample pair of the whole window
-// within 0.2 V of each other, at least 0.4 V high, and the combined level steady within 0.2 V.
-// A live data link can average equal (SE0 idle, high-speed signalling) but its levels move with
-// bus activity, so one equal-level sample never proves a short.
-bool dcp_shorted(const Ring& ring) {
+// The K2's own passive idle drives BOTH lines to the 0.6 V level (dpdm kPassiveIdle), so a pair that is
+// undriven by anything else reads equal and steady at about that level (hardware: 653/653 mV at boot
+// with nothing attached, 592/591 mV for 89 s behind a phone and an SSD). Bias window in decivolt
+// buckets: 0.5 .. 0.79 V (5..7) on both lines - the 0.59..0.70 V measured plus a little margin.
+constexpr int kBiasMinDv = 5;
+constexpr int kBiasMaxDv = 7;
+
+// A steady pair: every sample pair of the whole window within 0.2 V of each other, at least 0.4 V
+// high, and the combined level steady within 0.2 V. A live data link can average equal (SE0 idle,
+// high-speed signalling) but its levels move with bus activity, so one equal-level sample never
+// proves a short. `bias` is set when that steady level sits inside the bias window.
+struct SteadyPair {
+    bool steady = false;
+    bool bias = false;
+};
+SteadyPair steady_pair(const Ring& ring) {
     int lo = 255, hi = 0;
     for (std::size_t i = 0; i < kRingSize; i++) {
         const int d = ring.dp[i], m = ring.dm[i];
         const int diff = d > m ? d - m : m - d;
-        if (diff > 2) return false;
+        if (diff > 2) return {};
         if (d < lo) lo = d;
         if (m < lo) lo = m;
         if (d > hi) hi = d;
         if (m > hi) hi = m;
     }
-    return lo >= 4 && hi - lo <= 2;
+    if (lo < 4 || hi - lo > 2) return {};
+    return {true, lo >= kBiasMinDv && hi <= kBiasMaxDv};
 }
 
-Protocol band_5v(const Ring& ring, int bdp, int bdm, int dp_mv, int dm_mv, bool cc_source_no_pd) {
+// BC1.2 short: a steady equal pair. Inside the bias window that reading is our own drive, so passively
+// it proves nothing; only the active check (D+ pulled low, D- followed) turns it into a short.
+bool dcp_shorted(const Ring& ring, bool active_proof) {
+    const SteadyPair p = steady_pair(ring);
+    return p.steady && (!p.bias || active_proof);
+}
+
+Protocol band_5v(const Ring& ring, int bdp, int bdm, int dp_mv, int dm_mv, bool cc_source_no_pd, bool dcp_proof) {
     if (bdp == 1 && high(bdm)) return Protocol::Qc3;
     if (bdp == 1 && bdm == 0) return Protocol::AfcFcp;     // passive: QC2.0 5 V needs an active trigger
     if (bdp == 1 && bdm == 4) return Protocol::Scp;
@@ -55,7 +74,7 @@ Protocol band_5v(const Ring& ring, int bdp, int bdm, int dp_mv, int dm_mv, bool 
     if (cc_source_no_pd) return Protocol::UsbData;
     // Only a short that stayed put over the whole window is a dedicated charger; activity on the
     // pair (pulse train or mix) is a data link, and anything else is simply no handshake.
-    if (dcp_shorted(ring)) return Protocol::Dcp5V;
+    if (dcp_shorted(ring, dcp_proof)) return Protocol::Dcp5V;
     if (pulsing(bdp) || pulsing(bdm)) return Protocol::UsbData;
     return Protocol::NoQuick;
 }
@@ -123,7 +142,7 @@ int bucket(std::span<const std::uint8_t, kRingSize> samples) {
 }
 
 Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active, bool pd_likely,
-                  bool cc_source_no_pd, bool cc_attach_quiet) {
+                  bool cc_source_no_pd, bool cc_attach_quiet, bool dcp_proof) {
     if (vbus_mv < kVbusPresentMv) return Protocol::NoInput;
     if (pd_active) return Protocol::Pd;
     if (pd_likely) return Protocol::PdLikely;
@@ -132,15 +151,17 @@ Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_a
     // VBUS above vSafe5V and no D+/D- handshake seen this attach = a PD contract the K2 did not decode.
     // A settled fixed contract sends no frame for many seconds, so no Request is decoded and
     // pd_active() stays false; the phone's idle data pair must not be read as a legacy mode.
+    // Only a full window can say "no handshake": a part-filled ring is Pending (the arrays still hold
+    // the previous attach until they are overwritten).
+    if (!ring.full()) return Protocol::Pending;
     if (cc_source_no_pd && cc_attach_quiet && vbus_mv > kBand5VMax && !handshake_pattern(ring, dp_mv, dm_mv))
         return Protocol::Pd;   // kBand5VMax = 5500 = above vSafe5V
-    if (!ring.full()) return Protocol::Pending;
     const int bdp = bucket(ring.dp);
     const int bdm = bucket(ring.dm);
     // A full-speed device idles with its D+ pull-up read through the divider at about 0.7..1.0 V and
     // D- near 0. The charger-driven 0.6 V of FCP/AFC reads below that window.
     if (bdp == 1 && bdm == 0 && dp_mv >= kDataIdleMinMv && dp_mv <= kDataIdleMaxMv) return Protocol::UsbData;
-    if (vbus_mv < kBand5VMax) return band_5v(ring, bdp, bdm, dp_mv, dm_mv, cc_source_no_pd);
+    if (vbus_mv < kBand5VMax) return band_5v(ring, bdp, bdm, dp_mv, dm_mv, cc_source_no_pd, dcp_proof);
     if (vbus_mv < kBand7VMax) return band_low_voltage(bdp, bdm);
     if (vbus_mv <= kBand9VMax) return band_9v(bdp, bdm);
     if (vbus_mv >= kBand12VMin && vbus_mv <= kBand12VMax) return band_12v(bdp, bdm);
@@ -216,14 +237,40 @@ unsigned idle_mismatch(bool pa7, bool pb0, bool pb1, bool pb2) {
 // below the USB data-idle window (FCP/AFC and a BC1.2 short hold the lines there; a data device's
 // pull-up reads 0.7..1.0 V), or the Samsung divider levels. Idle lines - 0 V, the data pull-up, a
 // steady ~2 V rail (the "MTK-like" levels of a phone on a PD contract, which the 9 V band reads as
-// PD MTK, not as a handshake) - are not a handshake.
+// PD MTK, not as a handshake), and the K2's own equal 0.6 V bias on both lines - are not a handshake.
+// Only a full window counts. One line at 0.6 V with the other not (QC2 D+ 0.6 / D- 0, FCP, AFC) stays one.
 bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv) {
+    // A part-filled ring still holds the previous attach's samples (clear() resets the counters only).
+    if (!ring.full()) return false;
+    // The K2's own 0.6 V bias on both lines is what an idle pair reads; it is not a charger's handshake.
+    if (const SteadyPair p = steady_pair(ring); p.bias) return false;
     const int bdp = bucket(ring.dp), bdm = bucket(ring.dm);
     if (pulsing(bdp) || pulsing(bdm) || high(bdp) || high(bdm)) return true;
     if (bdp == 1 && dp_mv < kDataIdleMinMv) return true;
     if (bdm == 1 && dm_mv < kDataIdleMinMv) return true;
     if (dp_mv >= 1100 && dp_mv <= 1300 && dm_mv >= 1100 && dm_mv <= 1300) return true;   // Samsung 2A divider
     return false;
+}
+
+bool update_handshake_latch(bool latched, const Ring& ring, int dp_mv, int dm_mv) {
+    return latched || (ring.full() && handshake_pattern(ring, dp_mv, dm_mv));
+}
+
+bool bias_pair(const Ring& ring) {
+    return ring.full() && steady_pair(ring).bias;
+}
+
+DcpCheck dcp_check_result(int idle_dm_mv, int probed_dm_mv) {
+    if (idle_dm_mv < kBiasMinDv * 100 || idle_dm_mv >= (kBiasMaxDv + 1) * 100) return DcpCheck::Invalid;
+    return probed_dm_mv <= idle_dm_mv - kDcpDropMv ? DcpCheck::Shorted : DcpCheck::Open;
+}
+
+bool dcp_check_allowed(const DcpCheckGate& g, const Ring& ring) {
+    if (g.done_this_attach) return false;
+    if (g.vbus_mv < kVbusPresentMv || g.vbus_mv >= kBand5VMax) return false;   // the 5 V band only
+    if (!g.not_inline || g.pd_seen || g.pd_likely || g.cc_source_no_pd) return false;
+    if (!g.engine_idle || !g.lines_free) return false;
+    return bias_pair(ring);
 }
 
 }  // namespace k2::fastcharge

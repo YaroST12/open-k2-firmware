@@ -182,6 +182,27 @@ bool latest_cc(std::uint16_t& cc1_raw, std::uint16_t& cc2_raw) {
     return true;
 }
 
+bool latest_dpdm(std::int32_t& dp_mv, std::int32_t& dm_mv) {
+    if (!g_ready || g_released || systick::millis() - g_start_ms < 15) return false;
+    const std::uint32_t left = dma1().ch[0].DTCNT;
+    if (left == 0 || left > kScanSweeps * kSlots) return false;
+    const std::uint32_t written = kScanSweeps * kSlots - left;
+    const std::uint32_t newest = (written / kSlots + kScanSweeps - 1) % kScanSweeps;
+    asm volatile("" ::: "memory");
+    constexpr std::uint32_t kAvg = 4;                       // the newest four sweeps, ~0.5 ms of history
+    std::uint32_t dp = 0, dm = 0, vref = 0;
+    for (std::uint32_t k = 0; k < kAvg; k++) {
+        const std::uint32_t s = (newest + kScanSweeps - k) % kScanSweeps;
+        dp += g_dma[s * kSlots + Dp];
+        dm += g_dma[s * kSlots + Dm];
+        vref += g_dma[s * kSlots + Vref];
+    }
+    const auto vr = static_cast<std::uint16_t>(vref / kAvg);
+    dp_mv = to_mv(static_cast<std::uint16_t>(dp / kAvg), vr);
+    dm_mv = to_mv(static_cast<std::uint16_t>(dm / kAvg), vr);
+    return true;
+}
+
 bool sweep_all(RawAll& out) {
     if (!g_ready || g_released) return false;
     stop();
