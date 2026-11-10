@@ -8,7 +8,7 @@ a heartbeat down the CDC shell as framed records (include/k2/core/dbg_stream.hpp
 device lock, so this runs next to ct_start.py and k2_remote.py (they use the HID link).
 
   k2_stream.py record --out runs/NAME [--kinds all|log,trace,power=50,run] [--old] [--seconds N]
-                      [--until-run-end] [--port /dev/ttyACM0] [--echo run,log,gap | --quiet]
+                      [--until-run-end] [--port /dev/serial/by-id/usb-...-ifNN] [--echo run,log,gap | --quiet]
   k2_stream.py view runs/NAME [--kind run,log] [--grep REGEX] [--from MS] [--to MS] [--wall] [--summary]
 
 `record` writes one folder: one jsonl per kind (trace, log, power, run, beat, gaps, boot), trace.raw
@@ -36,6 +36,18 @@ K_HELLO, K_TEXT, K_LOG, K_POWER, K_RUN, K_GAP, K_BEAT = 4, 5, 6, 7, 8, 9, 10
 TRACE_KINDS = (1, 2, 3)
 UNREAD = 0xFFFF
 JSONL = ("boot", "trace", "log", "power", "run", "beat", "gaps")   # file stems; timeline order of equal times
+
+FALLBACK_PORT = "/dev/ttyACM0"   # when no by-id entry exists (non-Linux hosts)
+BY_ID_GLOB = "usb-WITRN_Open-K2_Logger_*-if*"   # the logger's product string; the CDC shell's control interface
+
+
+def default_port(by_id_dir="/dev/serial/by-id"):
+    """The K2 debug shell's stable /dev/serial/by-id path (the product string is "Open-K2 Logger", so the
+    CDC interface is usb-WITRN_Open-K2_Logger_<serial>-ifNN regardless of enumeration order), falling back
+    to /dev/ttyACM0 when the host has no by-id entries."""
+    import glob
+    hits = sorted(glob.glob(os.path.join(by_id_dir, BY_ID_GLOB)))
+    return hits[0] if hits else FALLBACK_PORT
 
 
 # ---- enum names from the firmware headers (the stream carries numbers) ---------------------------
@@ -534,7 +546,9 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("record", help="stream everything from the CDC shell into a session folder")
     r.add_argument("--out", required=True, help="session folder, e.g. runs/ct-2026-11-07")
-    r.add_argument("--port", default="/dev/ttyACM0", help="the K2 debug shell (default /dev/ttyACM0)")
+    r.add_argument("--port", default=None,
+                   help="the K2 debug shell (default: the /dev/serial/by-id entry of the Open-K2 Logger's CDC "
+                        "interface, else " + FALLBACK_PORT + ")")
     r.add_argument("--kinds", default="all", help="all, or a list of log,trace,power[=Hz],run (default all, power at 20 Hz)")
     r.add_argument("--old", action="store_true", help="also send what the rings already hold (history first)")
     r.add_argument("--seconds", type=float, default=None, help="stop after N seconds (default: until Ctrl-C)")
@@ -553,6 +567,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "view":
         return cmd_view(a)
+    if a.port is None:
+        a.port = default_port()
     try:
         sess, ok, summary = record(a)
     except OSError as e:
