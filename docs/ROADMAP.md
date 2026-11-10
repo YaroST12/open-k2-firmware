@@ -403,6 +403,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     same link is likely the same misread; check.
   - Validate: host test on `derive_proto` with a contract and no caps -> no current, measured voltage; with a periodic
     Request -> PPS tag. Hardware: repeat the P4-handback replug, footer reads "PPS 9V" or "PD 9V".
+  - Hardware be71f10 (Anker IQ4 -> K2 -> Pixel, fixed 9 V, K2 rebooted mid-contract, `runs/2026-11-10-merge2-hw/
+    pps-footer*.png`, `pps-sniff`): footer "CC 9V", no current, no "max" label - correct. Still open: `fc: PD MTK`.
+    A settled fixed contract is silent (no PD frame in 14 s), so no Request is ever decoded and pd_active() stays
+    false; the D+/D- classifier reads the phone's lines as MTK. Rule: CC attached, VBUS above vSafe5V (> 5.5 V) and
+    no D+/D- handshake seen this attach = "PD (not decoded)", never a legacy mode. The "PPS 9V" label is still
+    unverified on hardware: needs a PPS sink (OnePlus 15 on the CUKTECH; it takes only PDO1 5 V on the Anker IQ4,
+    with or without the K2).
 - **Sink Identify inline drops the phone from 9 V to 5 V** (2026-11-10, operator report, cause captured, 05b1703,
   Anker IQ4 100 W -> K2 -> OnePlus 15 on PPS PDO 6 at ~9 V 2.3 A, `runs/2026-11-10-connection/identify/bb.txt`).
   **Fixed in 6df54fa, hardware check pending** (fix items (1) and (3) done: inline Identify / Get_Source_Cap /
