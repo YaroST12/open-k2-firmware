@@ -294,8 +294,10 @@ inline bool scp_note(const Card& c, char* out, size_t cap) {
 //   Moto TurboPower: a Motorola (0x22B8) or Lenovo (0x17EF) vendor ID plus a PPS APDO advertising more than 5 A (20 V 6.25 A).
 //   Samsung SFC 3.0: a PPS APDO reaching 20 V at 3 A or more.
 //   Samsung SFC 2.0: PPS to 15 V at 3 A or more, or PPS covering 3.3-11 V at 4.05 A or more behind a 5 A cable.
-// Samsung's modes carry no vendor ID, so they rest on the capability alone; a Qualcomm ID keeps the QC label.
+// The SFC labels are a brand claim, so they need the brand's own VID: a probe that read vid 0 (or another vendor's)
+// gets no Samsung label, however SFC-shaped the capability is. A Qualcomm ID keeps the QC label.
 enum class QcLabel : uint8_t { None, Qc4Plus, Qc5, MotoTurbo, Sfc2, Sfc3 };
+inline constexpr uint16_t kSamsungVid = 0x04E8;
 inline constexpr uint16_t kQualcommVid = 0x05C6;
 inline constexpr uint16_t kMotorolaVid = 0x22B8;
 inline constexpr uint16_t kLenovoVid = 0x17EF;
@@ -318,6 +320,7 @@ inline QcLabel qc_label(const Card& c) {
     if (!pps) return QcLabel::None;
     if (c.id.vid == kQualcommVid) return c.id.pdp_w >= kQc5MinWatts || epr ? QcLabel::Qc5 : QcLabel::Qc4Plus;
     if ((c.id.vid == kMotorolaVid || c.id.vid == kLenovoVid) && over5) return QcLabel::MotoTurbo;
+    if (c.id.vid != kSamsungVid) return QcLabel::None;   // no brand claim without the brand's VID
     if (sfc3) return QcLabel::Sfc3;
     if (sfc2_15 || (sfc2_11 && c.cable.max_ma >= 5000)) return QcLabel::Sfc2;
     return QcLabel::None;
@@ -554,7 +557,7 @@ inline void set_name(Card& c, std::string_view n) {
 constexpr const char* brand(uint16_t vid) {
     switch (vid) {
         case 0x05AC: return "Apple";
-        case 0x04E8: return "Samsung";
+        case kSamsungVid: return "Samsung";
         case 0x18D1: return "Google";
         case 0x2717: return "Xiaomi";
         case 0x12D1: return "Huawei";
