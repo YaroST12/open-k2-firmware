@@ -4,6 +4,8 @@
 // Expected bytes are written out literally from the layout in remote_proto.hpp.
 #include "test_util.h"
 #include "k2/core/remote_proto.hpp"
+#include "k2/core/remote.hpp"
+#include "k2/pd/pd_sink.hpp"
 #include "k2/chargertest/report_card_remote.hpp"
 #include <initializer_list>
 #include <array>
@@ -1169,6 +1171,24 @@ static void test_stream_frame() {
     CHECK_EQ(r[5], 58);
 }
 
+// Ui::IdResult -> wire: the inline refusal gets its own answer (BadArg + pd::Err::Inline, like the
+// PD ops), a running charger test stays Busy. ROADMAP row "Inline Identify refusal answers busy".
+static void test_identify_refusal_wire_mapping() {
+    using R = k2::Ui::IdResult;
+    const auto w_start = k2::identify_refusal_wire(R::Started);
+    CHECK_EQ(int(w_start.status), int(Status::Ok));
+    CHECK_EQ(w_start.err, 0);
+    const auto w_busy = k2::identify_refusal_wire(R::Refused);
+    CHECK_EQ(int(w_busy.status), int(Status::Busy));   // a running charger test stays "busy"
+    CHECK_EQ(w_busy.err, 0);
+    const auto w_nodev = k2::identify_refusal_wire(R::NoDevice);
+    CHECK_EQ(int(w_nodev.status), int(Status::BadArg));
+    CHECK_EQ(w_nodev.err, 0);
+    const auto w_inline = k2::identify_refusal_wire(R::Inline);
+    CHECK_EQ(int(w_inline.status), int(Status::BadArg));
+    CHECK_EQ(w_inline.err, static_cast<uint8_t>(k2::pd::Err::Inline));
+}
+
 static void test_active_pd_commands() {
     Fake f; Frame r;
     // PD_REQUEST: [pos, flags, mv u16, ma u16] -> [err]
@@ -1242,11 +1262,17 @@ static void test_active_pd_commands() {
     check_bytes(r, kRspHeader, {2, 6, 0x0B, 0, 0, 1, 0x00, 0x00, 0x20, 0x31, 0x2C, 0x91, 0x01, 0x00});
     f.id_result.status = Status::NeedConfirm;
     run(f, request(0x40, 11, {1}), r);
-    check_header(r, 0x40, 11, Status::NeedConfirm, 0);
-    run(f, request(0x40, 12, {3}), r);
-    check_header(r, 0x40, 12, Status::BadArg, 0);
-    run(f, request(0x40, 13, {}), r);
-    check_header(r, 0x40, 13, Status::BadLength, 0);
+    check_header(r, 0x40, 11, Status::NeedConfirm, 1);   // a refusal carries one err byte (0 = none)
+    check_bytes(r, kRspHeader, {0});
+    // an inline refusal: BadArg + pd::Err::Inline in the payload, like the PD ops' inline refusals
+    f.id_result.status = Status::BadArg; f.id_result.err = static_cast<uint8_t>(k2::pd::Err::Inline);
+    run(f, request(0x40, 12, {1}), r);
+    check_header(r, 0x40, 12, Status::BadArg, 1);
+    check_bytes(r, kRspHeader, {static_cast<uint8_t>(k2::pd::Err::Inline)});
+    run(f, request(0x40, 13, {3}), r);
+    check_header(r, 0x40, 13, Status::BadArg, 0);   // op > 2 is refused before the backend: no payload
+    run(f, request(0x40, 14, {}), r);
+    check_header(r, 0x40, 14, Status::BadLength, 0);
     // PD_REREAD: [op (0 status, 1 start + mask, 2 abort), mask] -> state step mask ok skipped pdos_before pdos_last caps_rx flags
     f.rr_result.info = {2, 5, 15, 8, 3, 6, 7, 1, 1};
     run(f, request(0x47, 20, {1, 15}), r);
@@ -1674,6 +1700,7 @@ int main() {
     test_charger_cable();
     test_charger_units();
     test_charger_test_wire();
+    test_identify_refusal_wire_mapping();
     test_active_pd_commands();
     test_store();
     test_cable_r();

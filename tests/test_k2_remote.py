@@ -906,6 +906,18 @@ class ActivePd(unittest.TestCase):
         e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_REQUEST, bytes([5]))
         self.assertIn("inline", str(e))
 
+    def test_identify_inline_refusal_names_inline(self):
+        # an inline Identify refusal is BadArg + pd::Err::Inline on the wire: the tool must say
+        # "refused: inline ...", not "busy" (ROADMAP row "Inline Identify refusal answers busy")
+        e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_IDENTIFY_DEVICE, bytes([kr.PD_ERR_INLINE]))
+        self.assertIn("refused: inline - the Sink tab shows the sniffed identity", str(e))
+
+    def test_identify_busy_stays_busy(self):
+        # a running charger test still answers Busy with no payload: plain "busy", no inline text
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_IDENTIFY_DEVICE)
+        self.assertIn("busy", str(e))
+        self.assertNotIn("refused: inline", str(e))
+
     def test_reset_release_status(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="reset"))
