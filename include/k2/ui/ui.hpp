@@ -179,8 +179,12 @@ public:
     bool charger_test_busy() const { return charger_test_.busy(); }
     const charger_test::Runner& charger_test_results() const { return charger_test_.results(); }
     // The draft selection on the wire (Cmd::ChargerTest schema 2): the algorithm mask, with bit 31 = the PPS deep
-    // sweep on (an Options flag, not an algorithm bit; bit 31 was always 0 before, so old clients read the mask alone).
-    uint32_t charger_test_selection() const { return charger_test_.selection_mask() | (charger_test_.sweep_on() ? 1u << 31 : 0); }
+    // sweep on and bit 30 = the AVS deep sweep on (Options flags, not algorithm bits; both were always 0 before,
+    // so old clients read the mask alone).
+    uint32_t charger_test_selection() const {
+        return charger_test_.selection_mask() | (charger_test_.sweep_on() ? 1u << 31 : 0) |
+               (charger_test_.avs_sweep_on() ? 1u << 30 : 0);
+    }
     void charger_test_set_sweep(bool on) { charger_test_.set_sweep(on); }
     void charger_test_set_avs_sweep(bool on) { charger_test_.set_avs_sweep(on); }
     uint8_t charger_test_cursor() const { return static_cast<uint8_t>(charger_test_.cursor()); }
