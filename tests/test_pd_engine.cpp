@@ -382,6 +382,32 @@ static void test_source_revision_provenance() {
     CHECK_EQ(e.ext.revision.valid, false);  // EPR does not invent an exact RMDO revision
 }
 
+/* A far sink's control messages on SOP (header bit 8 clear: its GoodCRC, its Get_Source_Cap, its
+   Soft_Reset) are PD traffic from it: the engine records them in sink_ctl_seen, which the passive-load
+   gate (pd::over_load_allowed over fusb302::over_load_facts()) feeds on. Source-role control messages
+   (bit 8 set) are not the sink's. Cleared with the attach / detach like the other sink-role records. */
+static void test_sink_control_messages_are_recorded() {
+    Engine e;
+    CHECK_EQ(e.sink_ctl_seen, false);
+    feed_ctl(e, 0x01, true);                   // the source's GoodCRC: not the sink's
+    feed_ctl(e, 0x03, true);                   // Accept from the source
+    feed_ctl(e, 0x06, true);                   // PS_RDY from the source
+    CHECK_EQ(e.sink_ctl_seen, false);
+    feed_ctl(e, 0x01);                         // the sink's GoodCRC (bit 8 clear)
+    CHECK_EQ(e.sink_ctl_seen, true);
+    Engine e2;
+    feed_ctl(e2, 0x07);                        // the sink's Get_Source_Cap
+    CHECK_EQ(e2.sink_ctl_seen, true);
+    e2.reset_sink();                           // a new attach: the previous partner's records go
+    CHECK_EQ(e2.sink_ctl_seen, false);
+    feed_ctl(e2, 0x07);
+    CHECK_EQ(e2.sink_ctl_seen, true);
+    e2.reset_source();                         // a detach / hard reset: same
+    CHECK_EQ(e2.sink_ctl_seen, false);
+    feed_ctl(e2, 0x0D);                        // the sink's Soft_Reset counts too
+    CHECK_EQ(e2.sink_ctl_seen, true);
+}
+
 int main() {
     test_source_revision_provenance();
     test_avs_decode();
@@ -400,5 +426,6 @@ int main() {
     test_pr_swap_swaps_side_records();
     test_pr_swap_keeps_each_side_and_new_sink_answer();
     test_pr_swap_rejected_or_incomplete_keeps_records();
+    test_sink_control_messages_are_recorded();
     return test_report("test_pd_engine");
 }

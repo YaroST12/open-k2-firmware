@@ -207,5 +207,12 @@ int main() {
     CHECK_EQ(int(over_load_allowed({false, false})), 0);   // no far sink: refused
     CHECK_EQ(int(over_load_allowed({false, true})), 0);    // no far sink at all: refused
     CHECK_EQ(int(over_load_allowed({true, true})), 0);     // the far sink spoke PD this attach: refused
+    // The same refused row, spelled per evidence kind behind far_pd_message - the row's passive
+    // definition is "Rd only, no Request, no Get_Source_Cap", and every kind of far PD message maps
+    // to {far_sink=true, far_pd_message=true}:
+    CHECK_EQ(int(over_load_allowed({true, true})), 0);     // .. a foreign Request (far_sink_seen)
+    CHECK_EQ(int(over_load_allowed({true, true})), 0);     // .. the sink's Sink_Capabilities (engine.sink)
+    CHECK_EQ(int(over_load_allowed({true, true})), 0);     // .. the sink's VDMs (engine.sink_vdm)
+    CHECK_EQ(int(over_load_allowed({true, true})), 0);     // .. the sink's control message: Get_Source_Cap / GoodCRC (engine.sink_ctl_seen)
     return test_report("test_pd_passive");
 }

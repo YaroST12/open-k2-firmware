@@ -72,6 +72,11 @@ class Engine {
 public:
     Contract contract;
     SinkCapsSeen sink;
+    // RED (k2/pps-overload review): declared only, nothing records it yet. Any control message seen on
+    // SOP from a sink (header bit 8 clear: its GoodCRC, its Get_Source_Cap, ...) is PD traffic from a far
+    // sink, so the passive-load gate (pd::over_load_allowed over fusb302::over_load_facts()) can refuse
+    // it. Cleared with the attach / detach like the other sink-role records (reset_sink / reset_source).
+    bool sink_ctl_seen = false;
     SourceCaps caps;
     // The list an SPR-mode EPR_Get_Source_Cap returned (informational, no EPR entry): decoded here while `epr_info_only`
     // is set (the glue sets it while the sink's own query is pending), so the live `caps` never claims EPR.

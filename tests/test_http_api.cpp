@@ -200,6 +200,12 @@ static void test_frame_bridge() {
     CHECK_EQ(r.r.status, 403); CHECK_EQ(f.calls, 0);
     r = run(f, ("POST /api/frame?hex=" + pd + "&confirm=1 HTTP/1.1" X).c_str());
     CHECK_EQ(r.r.status, 200); CHECK_EQ(f.rq_mv, 9000); CHECK_EQ(f.rq_confirm, 1);
+    // The lab-only over-load flag (payload flags bit 1) never crosses the network: /api/frame strips it
+    // before dispatch, so a network PdRequest reaches the backend with over_load=false even with bit 1 set.
+    const std::string pd_ol = frame_hex({0xA5, 0x4B, 0x41, 0x02, 0x06, 2, 3, 0x28, 0x23, 0xD0, 0x07});   // flags = confirm | over-load
+    r = run(f, ("POST /api/frame?hex=" + pd_ol + "&confirm=1 HTTP/1.1" X).c_str());
+    CHECK_EQ(r.r.status, 200); CHECK_EQ(f.rq_mv, 9000); CHECK_EQ(f.rq_confirm, 1);
+    CHECK_EQ(f.rq_over_load, false);           // RED before the fix: bit 1 reached the backend
     // fc trigger and scan frames need confirm=1 too; status does not
     f.calls = 0;
     r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, 0x32, 1, 5, 3, 1, 0x88, 0x13, 1}) + " HTTP/1.1" X).c_str());

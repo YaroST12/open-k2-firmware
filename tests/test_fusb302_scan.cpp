@@ -3114,6 +3114,48 @@ void test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res() {
     }
 }
 
+// The over-load gate's far-PD-message half (k2/pps-overload review, finding 1): a far sink's control
+// message on SOP (power-role bit clear - its Get_Source_Cap, its GoodCRC) is a PD message from it, so
+// over_load_facts().far_pd_message must be true and pd::over_load_allowed() must refuse. The source's
+// own control messages (bit 8 set) are not the sink's, and a new attach forgets the old sink's messages.
+void test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate() {
+    passive_attach();
+    settle_ms(100);
+    fusb302::sink_vbus(5000);
+    fusb302::sink_cc(1676, 3303);              // a sink's Rd on CC1, none of ours on any line
+    fusb302::poll();
+    pd::OverLoadFacts f = fusb302::over_load_facts();
+    CHECK_EQ(f.far_sink, true);
+    CHECK_EQ(f.far_pd_message, false);         // nothing from the sink yet: a passive load
+    CHECK_EQ(int(pd::over_load_allowed(f)), 1);
+    push_frame(0xE0, hdr(7, 0, false), {});    // the far sink's Get_Source_Cap (control, power-role clear)
+    service_ms(10);
+    f = fusb302::over_load_facts();
+    CHECK_EQ(f.far_sink, true);
+    CHECK_EQ(f.far_pd_message, true);          // RED before the fix: control messages were recorded nowhere
+    CHECK_EQ(int(pd::over_load_allowed(f)), 0);
+    push_frame(0xE0, hdr(1, 0, false), {});    // its GoodCRC counts too
+    service_ms(10);
+    CHECK_EQ(fusb302::over_load_facts().far_pd_message, true);
+    g_reg[0x40] = 0x00;                        // the source leaves: a detach
+    settle_ms(2000);
+    g_reg[0x40] = 0x20;                        // a charger is back: a new attach
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected"), true);
+    fusb302::sink_vbus(5000);
+    fusb302::sink_cc(1676, 3303);
+    fusb302::poll();
+    push_frame(0xE0, hdr(1, 0, true), {});     // the source's GoodCRC (power-role bit set)
+    push_frame(0xE0, hdr(3, 0, true, 1), {});  // the source's Accept
+    service_ms(10);
+    f = fusb302::over_load_facts();
+    CHECK_EQ(f.far_sink, true);
+    CHECK_EQ(f.far_pd_message, false);         // a new attach forgot the old sink's messages
+    CHECK_EQ(int(pd::over_load_allowed(f)), 1);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3226,5 +3268,6 @@ int main() {
     test_the_far_sink_belongs_to_one_attach_for_the_rd_policy();
     test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink();
     test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res();   // last: ends with a detach / Rd off
+    test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate();   // last: ends with a detach / reset
     return test_report("test_fusb302_scan");
 }
