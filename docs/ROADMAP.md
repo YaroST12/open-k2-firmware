@@ -434,6 +434,30 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests: inline -> `identify_start` refuses even with confirm; the sniffed identity fills the Sink
     tab. Hardware: Anker IQ4 -> K2 -> OnePlus at 9 V, Identify shows the phone's VID/PID from sniff, black box shows no
     K2 TX, the phone stays at 9 V.
+- **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, be71f10, `runs/2026-11-10-merge2-hw/`
+  dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at
+  "No charger". The K2 passes CC1->CC1 and CC2->CC2, and each cable's orientation picks which pin its CC wire lands on,
+  so the charger's CC and the phone's CC can end up on different pins and never meet. Evidence: Anker alone = steady
+  3.30 V Rp on CC2; Anker + Pixel = CC2 steady 500 mV (the Anker's Rp loaded only by the Pixel cable's e-marker Ra,
+  not a sink, so the Anker never enables VBUS) while CC1 cycled 0 / 1.2 / 1.8 / 3.3 V (the Pixel toggling alone).
+  Flipping the Pixel's cable at the K2 fixed it at once; it had worked three times before by orientation luck. Not a
+  K2 bug (any straight CC pass-through has it), but the K2 is the one thing that can see both pins.
+  - Detect, passively (no Rd, no Rp, no TX), with VBUS dark (< vSafe0V) for >= 1 s, from the per-tick ADC levels the
+    waiting classifier already samples (raguard::RpTrace, pd::Link):
+    1. Rp-vs-Ra on one line (Rp loaded only by a cable's Ra: steady 0.2-0.8 V, below the sink band) AND a dual-role
+       toggle (RpTrace DualRolePort) on the other line = crossed (the case above).
+    2. Steady charger Rp on one line AND a dual-role toggle on the other line = crossed (non-e-marked cable).
+    3. Rp-vs-Ra on one line and nothing on the other = a cable with no device or a plain sink on the other pin:
+       a plain sink's Rd is invisible without a pull-up, so this one says "no device seen; if one is plugged in,
+       flip a cable" (a hint, not a verdict).
+    Never when inline, a contract exists, the K2 holds Rd/Ra, or Wake sleeping port holds its line.
+  - Show: Source tab / bottom bar "CC CROSSED - flip one cable" (case 1/2), "Flip a cable?" hint (case 3); Home
+    footer the same; `state` gets a link flag (kLinkCrossed) and k2_remote prints it. Log one [LINK] line per edge.
+  - Optional later, lab-gated: confirm case 3 with a < 5 ms FUSB302 pull-up measure on the silent pin (below
+    tCCDebounce, so no sink attaches); only if the passive cases prove too weak on hardware.
+  - Validation: host tests with recorded traces (this rig's levels; a non-e-marked cable; a charger alone must NOT
+    read crossed; a DRP phone alone must NOT read crossed); hardware: Anker -> K2 -> Pixel both orientations of each
+    cable (4 combos), the crossed ones show the message within 2 s, the working ones never do.
 - **A dual-role phone alone reads as "CHARGER WAITING"** (2026-11-10, connection matrix H13, 05b1703,
   `runs/2026-11-10-connection/H13/`, fixed in 9189def, hardware check pending): OnePlus 15 alone on the bottom port,
   HID-powered K2: behaviour correct (no Rd, no TX, VBUS max 1 mV over 60 s), but the Source tab said "CHARGER WAITING /
