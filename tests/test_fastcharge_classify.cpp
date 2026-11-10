@@ -324,6 +324,40 @@ static void test_silent_pd_contract_above_vsafe5_reads_pd() {
     CHECK_EQ(classify(svooc, 3300, 0, 9000, false, false, true), Protocol::Svooc);
 }
 
+// What counts as a D+/D- handshake for the "no handshake seen this attach" part of the rule.
+static void test_handshake_pattern() {
+    Ring idle0;
+    for (int i = 0; i < 50; i++) idle0.push(0, 0);
+    CHECK_EQ(handshake_pattern(idle0, 0, 0), false);            // silent lines (the "MTK-like" case)
+    Ring px;
+    for (int i = 0; i < 50; i++) px.push(820, 1);
+    CHECK_EQ(handshake_pattern(px, 820, 1), false);             // USB data idle: pull-up inside the window
+    Ring mid;
+    for (int i = 0; i < 50; i++) mid.push(2000, 2000);
+    CHECK_EQ(handshake_pattern(mid, 2000, 2000), false);        // steady ~2 V rail: not a handshake
+    Ring afc;
+    for (int i = 0; i < 50; i++) afc.push(600, 0);
+    CHECK_EQ(handshake_pattern(afc, 600, 0), true);             // steady 0.6 V rail below the data window
+    Ring qc;
+    for (int i = 0; i < 50; i++) qc.push(3300, 600);
+    CHECK_EQ(handshake_pattern(qc, 3300, 600), true);           // high D+
+    Ring pulse;
+    for (int i = 0; i < 50; i++) pulse.push((i & 1) ? 3300 : 0, 0);
+    CHECK_EQ(handshake_pattern(pulse, 3300, 0), true);          // pulse train
+    Ring dcp;
+    for (int i = 0; i < 50; i++) dcp.push(590, 590);
+    CHECK_EQ(handshake_pattern(dcp, 590, 590), true);           // BC1.2 short
+    Ring sam;
+    for (int i = 0; i < 50; i++) sam.push(1200, 1200);
+    CHECK_EQ(handshake_pattern(sam, 1200, 1200), true);         // Samsung 2A divider
+    // A handshake earlier in the attach still blocks the rule even once the window went idle again
+    // (the caller latches it): cc_attach_quiet=false.
+    Ring mtk;
+    for (int i = 0; i < 50; i++) mtk.push(0, 0);
+    CHECK_EQ(classify(mtk, 0, 0, 9000, false, false, true, false), Protocol::PdMtk);
+    CHECK_EQ(classify(mtk, 0, 0, 9000, false, false, true, true), Protocol::Pd);
+}
+
 int main() {
     test_ring();
     test_bucket();
@@ -338,5 +372,6 @@ int main() {
     test_pd_likely();
     test_dcp_needs_stability();
     test_silent_pd_contract_above_vsafe5_reads_pd();
+    test_handshake_pattern();
     return test_report("test_fastcharge_classify");
 }

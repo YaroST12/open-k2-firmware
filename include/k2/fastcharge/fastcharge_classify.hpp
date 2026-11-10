@@ -53,10 +53,21 @@ enum class Protocol : std::uint8_t {
 // the verdict is "PD?" instead of a data-pair guess.
 // `cc_source_no_pd`: CC shows an attached source (Rp) but no Source_Capabilities were decoded, i.e. a
 // default-USB data host. Its D+/D- pair carries data, so the 5 V band says USB data, never a short.
+// `cc_attach_quiet`: no D+/D- handshake seen this attach (latched by the caller over the window below);
+// together with `cc_source_no_pd` and VBUS above vSafe5V it means a PD contract the K2 did not decode
+// (a settled fixed contract sends no frame for many seconds): the verdict is "PD", never a legacy
+// mode (ROADMAP 2026-11-10, `fc: PD MTK`). The passive CC ADC levels are deliberately not an input
+// here: the CC2 bias net reads ~1.69 V with nothing attached, and only the FUSB302's own Rp
+// detection counts as "CC attached".
 // A DCP (D+ shorted to D-) is only concluded from a level that sits still over the whole window:
 // a live data link averages equal too, but its levels move with bus activity.
 Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active = false, bool pd_likely = false,
-                  bool cc_source_no_pd = false);
+                  bool cc_source_no_pd = false, bool cc_attach_quiet = true);
+
+// True when the window shows a charger handshake on the data pair: a pulsing or high bucket on either
+// line, a steady 0.6 V rail below the USB data-idle window (FCP/AFC), a BC1.2 short, or the Samsung
+// divider levels. Idle lines (0 V, the ~0.8 V data pull-up, a steady ~2 V) are not a handshake.
+bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv);
 
 // Display string of a verdict (including "NO INPUT" and "..."); "?" if unknown.
 const char* name(Protocol p);

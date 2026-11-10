@@ -123,10 +123,17 @@ int bucket(std::span<const std::uint8_t, kRingSize> samples) {
 }
 
 Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active, bool pd_likely,
-                  bool cc_source_no_pd) {
+                  bool cc_source_no_pd, bool cc_attach_quiet) {
     if (vbus_mv < kVbusPresentMv) return Protocol::NoInput;
     if (pd_active) return Protocol::Pd;
     if (pd_likely) return Protocol::PdLikely;
+    // ROADMAP 2026-11-10 (`fc: PD MTK` on a settled fixed contract): CC attached (a source's Rp, per the
+    // FUSB302 - never the passive CC ADC levels, the CC2 bias net reads ~1.69 V with nothing on it),
+    // VBUS above vSafe5V and no D+/D- handshake seen this attach = a PD contract the K2 did not decode.
+    // A settled fixed contract sends no frame for many seconds, so no Request is decoded and
+    // pd_active() stays false; the phone's idle data pair must not be read as a legacy mode.
+    if (cc_source_no_pd && cc_attach_quiet && vbus_mv > kBand5VMax && !handshake_pattern(ring, dp_mv, dm_mv))
+        return Protocol::Pd;   // kBand5VMax = 5500 = above vSafe5V
     if (!ring.full()) return Protocol::Pending;
     const int bdp = bucket(ring.dp);
     const int bdm = bucket(ring.dm);
@@ -203,6 +210,20 @@ const char* short_name(Protocol p) {
 
 unsigned idle_mismatch(bool pa7, bool pb0, bool pb1, bool pb2) {
     return (pa7 ? 0u : 1u) | (pb0 ? 2u : 0u) | (pb1 ? 0u : 4u) | (pb2 ? 8u : 0u);
+}
+
+// A charger handshake on the data pair: a pulsing or high bucket on either line, a steady 0.6 V rail
+// below the USB data-idle window (FCP/AFC and a BC1.2 short hold the lines there; a data device's
+// pull-up reads 0.7..1.0 V), or the Samsung divider levels. Idle lines - 0 V, the data pull-up, a
+// steady ~2 V rail (the "MTK-like" levels of a phone on a PD contract, which the 9 V band reads as
+// PD MTK, not as a handshake) - are not a handshake.
+bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv) {
+    const int bdp = bucket(ring.dp), bdm = bucket(ring.dm);
+    if (pulsing(bdp) || pulsing(bdm) || high(bdp) || high(bdm)) return true;
+    if (bdp == 1 && dp_mv < kDataIdleMinMv) return true;
+    if (bdm == 1 && dm_mv < kDataIdleMinMv) return true;
+    if (dp_mv >= 1100 && dp_mv <= 1300 && dm_mv >= 1100 && dm_mv <= 1300) return true;   // Samsung 2A divider
+    return false;
 }
 
 }  // namespace k2::fastcharge
