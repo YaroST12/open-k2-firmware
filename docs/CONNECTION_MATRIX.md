@@ -255,7 +255,7 @@ exception in section 5).
 | I11 | A comeback marker is bounded: judged at 500 / 1500 ms, released when no caps | C1, C2, C5 | C4, H6 (a marker that survives a host-powered boot) |
 | I12 | A dumb Rd-only top plug gets no SOP' from a charger; only the spoof's Ra on CC1 draws a cable look | H4, H3 | `K2_PORTS_SPEC.md` "Present Ra: no firmware path" (disproven, section 5) |
 
-The one documented exception to I1 and H2 is the opt-in setting Settings > Wake sleeping port (default off, remembered in `/prefs.cfg`): only with it on does a plain idle K2 hold its Rd, one line at a time, on a line that reads the standby signature open (`pd::IdleWake`); with it off I1 / H2 hold as written.
+The one documented exception to I1 and H2 is the opt-in setting Settings > Wake sleeping port (default off, remembered in `/prefs.cfg`): only with it on does a plain idle K2 hold its Rd, one line at a time, on a line that reads the standby signature open (`pd::IdleWake`); with it off I1 / H2 hold as written. With it on, a passive attach that stays dark (VBUS below 3 V, no PD message) for 3 s is released so the hold can run (`IdleWake::dark_attach`).
 
 ## 5. Exceptions
 

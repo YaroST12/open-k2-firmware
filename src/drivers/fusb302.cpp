@@ -2036,6 +2036,12 @@ ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Resul
     return ccprobe::Refusal::None;
 }
 
+// Nobody else owns the Rd of an idle / dark port: no boot pin, run start, active operation, debug Ra or forced line, and no
+// sink downstream. The two idle-wake gates in poll() (the hold itself, the dark-attach release) share it.
+static bool idle_owner_free() {
+    return g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now();
+}
+
 void poll() {
     static std::uint32_t poll_count;
     poll_count++;
@@ -2056,13 +2062,20 @@ void poll() {
     // standby signature open (pd::IdleWake) for kSlowWakeDwellMs at a time, so a sleeping source (the splitter's port,
     // VBUS 78 mV, "No source") is asked without any pin and its Rp - 1072 ms after the Rd, measured - lands on the next
     // scan. Only when nothing else owns the idle Rd: plain passive idle, no sink downstream, VBUS dark, no debug hold.
-    if (g_active_cc == 0 && g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now() &&
-        !g_rd_hold.held(systick::millis()) && g_vbus_mv < 3000) {
+    if (g_active_cc == 0 && idle_owner_free() && !g_rd_hold.held(systick::millis()) && g_vbus_mv < pd::kDarkVbusMv) {
         const std::uint8_t was = g_idle_wake.line();
+        const std::uint32_t was_since = g_idle_wake.since();
         const std::uint8_t held = g_idle_wake.update(systick::millis(), g_rdseek.open_mv(1), g_rdseek.open_mv(2));
-        if (held != was)
-            K2LOG("[FUSB302] Idle wake: Rd on CC%u for %u ms (open cc1=%d cc2=%d mV)\n", unsigned(held),
-                  unsigned(pd::kSlowWakeDwellMs), int(g_rdseek.open_mv(1)), int(g_rdseek.open_mv(2)));
+        // Each dwell is logged (the line alone changes rarely): the Rd reaches the chip now, not with the next scan, and the
+        // SWITCHES0 readback and the live ADC levels show on the bench whether it did and what the held net did under it.
+        if (held != was || (held != 0 && g_idle_wake.since() != was_since)) {
+            wr(kSwitches0, idle_rd());
+            std::uint8_t back = 0;
+            rd(kSwitches0, back);
+            K2LOG("[FUSB302] Idle wake: Rd on CC%u for %u ms (open cc1=%d cc2=%d mV, now cc1=%d cc2=%d mV, sw0=0x%02X)\n",
+                  unsigned(held), unsigned(pd::kSlowWakeDwellMs), int(g_rdseek.open_mv(1)), int(g_rdseek.open_mv(2)), int(g_cc1_mv),
+                  int(g_cc2_mv), unsigned(back));
+        }
     }
     if (g_active_cc == 0 && poll_count % 25 == 0 && !g_rd_hold.held(systick::millis())) detect_cc_orientation();  // ~2 Hz at the 20 ms poll
 
@@ -2084,7 +2097,13 @@ void poll() {
         // The idle wake's window is the same: an attach that landed during an idle Rd hold on a standby-signature line,
         // and only until its Rp is seen (on_rp_seen ends it, like the seek's rp_seen).
         if (got && (status0 & kComp) != 0) g_idle_wake.on_rp_seen();
-        if (got && g_rdseek.update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
+        // A dark attach (no VBUS, no PD for kDarkAttachMs) with the setting on is the sleeping port itself: the passive scan
+        // latched its Rp but only an Rd of ours wakes it, and an attach keeps the idle path (the hold) off for good. Release it.
+        if (idle_owner_free() && g_idle_wake.dark_attach(systick::millis(), g_attach_ms, g_vbus_mv, g_pd_traffic)) {
+            K2LOG("[FUSB302] Detach: dark attach (VBUS %d mV, no PD for %u ms): the idle wake takes the line (cc=%d mV)\n",
+                  int(g_vbus_mv), unsigned(systick::millis() - g_attach_ms), int(g_cc_sink_mv));
+            detach_reset(status0);
+        } else if (got && g_rdseek.update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
         else if (got && g_detach.update(systick::millis(), g_vbus_mv,
                                         (status0 & kComp) != 0 || g_rdseek.holding_slow(systick::millis(), g_active_cc) ||
                                             g_idle_wake.holding_slow(systick::millis(), g_active_cc, g_rdseek.open_mv(g_active_cc)),

@@ -212,6 +212,20 @@ void test_reset_without_keep_wipes_the_open_readings() {
     CHECK_EQ(s.open_mv(1), 3300);
 }
 
+// A dark attach: no VBUS (< 3 V) and no PD message for kDarkAttachMs, setting on. Anything else is not dark.
+void test_a_dark_attach_needs_the_setting_no_vbus_no_pd_and_the_dwell() {
+    pd::IdleWake w;
+    CHECK_EQ(w.dark_attach(10000, 0, 0, false), false);                     // setting off: never
+    w.set_enabled(true);
+    CHECK_EQ(w.dark_attach(10000, 0, 0, false), true);
+    CHECK_EQ(w.dark_attach(10000, 0, -1, false), true);                     // no reading yet counts as dark
+    CHECK_EQ(w.dark_attach(pd::kDarkAttachMs - 1, 0, 0, false), false);     // not yet
+    CHECK_EQ(w.dark_attach(pd::kDarkAttachMs, 0, 0, false), true);
+    CHECK_EQ(w.dark_attach(10000, 0, pd::kDarkVbusMv, false), false);       // a live VBUS (legacy 5 V) is not dark
+    CHECK_EQ(w.dark_attach(10000, 0, 0, true), false);                      // a decoded PD message is not dark
+    CHECK_EQ(w.dark_attach(5000, 4000, 0, false), false);                   // measured from the attach, not from boot
+}
+
 }  // namespace
 
 int main() {
@@ -231,5 +245,6 @@ int main() {
     test_reset_keeps_the_open_readings();
     test_a_disabled_idle_wake_holds_nothing();
     test_reset_without_keep_wipes_the_open_readings();
+    test_a_dark_attach_needs_the_setting_no_vbus_no_pd_and_the_dwell();
     return test_report("test_rdseek");
 }

@@ -436,6 +436,8 @@
   "433": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d (%s)\n",
   "434": "[FUSB302] Idle wake: Rd on CC%u for %u ms (open cc1=%d cc2=%d mV)\n",
   "435": "[FUSB302] Wake sleeping port %s\n",
-  "436": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d (%s)\n"
+  "436": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d (%s)\n",
+  "437": "[FUSB302] Idle wake: Rd on CC%u for %u ms (open cc1=%d cc2=%d mV, now cc1=%d cc2=%d mV, sw0=0x%02X)\n",
+  "438": "[FUSB302] Detach: dark attach (VBUS %d mV, no PD for %u ms): the idle wake takes the line (cc=%d mV)\n"
  }
 }

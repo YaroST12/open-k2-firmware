@@ -28,7 +28,9 @@ inline constexpr std::uint8_t kRdSeekMoves = 3;        // A -> B -> A -> B; then
 // kSlowWakeDwellMs before the seek moves off it; a line without the signature keeps kRdSeekDwellMs (the wrong-line case
 // of d615f3e), and if only the OTHER line had the signature the seek goes there first (moves at once).
 inline constexpr std::uint32_t kSlowWakeDwellMs = 2000;   // the measured wake was 1072 ms
-inline constexpr std::int32_t kStandbyOpenMv = 2800;       // the open standby reading is ~3.0-3.3 V; a coupled net reads less
+inline constexpr std::uint32_t kDarkAttachMs = 3000;       // an attach with no VBUS and no PD this long is a dark port (IdleWake::dark_attach)
+inline constexpr std::int32_t kDarkVbusMv = 3000;          // VBUS below this is dark (the detach rule's 3 V)
+inline constexpr std::int32_t kStandbyOpenMv = 2800;      // the open standby reading is ~3.0-3.3 V; a coupled net reads less
 
 class RdSeek {
 public:
@@ -125,6 +127,16 @@ public:
         return attached_ != 0 && attached_ == line && open_mv_line >= kStandbyOpenMv && now - since_ < kSlowWakeDwellMs;
     }
     std::uint8_t line() const { return holding_ ? line_ : 0; }
+    // When the current hold started (a re-arm after the dwell moves it): the caller logs each dwell, not only a line change.
+    std::uint32_t since() const { return since_; }
+    // A dark attach: the passive scan latched a line (the sleeping port's Rp shows on it) but VBUS never came (< 3 V) and no
+    // PD message was decoded for kDarkAttachMs. Nothing detaches that on its own (the comparator keeps seeing the Rp, and the
+    // VBUS rule needs VBUS to have been up first), and an attach holds the idle path off, so with the setting on the wake
+    // would never run again (bench rig 2026-11-10). It is the sleeping-port case itself: release the attach, hold Rd.
+    // Disabled: never (the attach stays as it always did).
+    bool dark_attach(std::uint32_t now, std::uint32_t attach_ms, std::int32_t vbus_mv, bool pd_traffic) const {
+        return enabled_ && !pd_traffic && vbus_mv < kDarkVbusMv && now - attach_ms >= kDarkAttachMs;
+    }
 private:
     bool enabled_ = false;       // Settings > Wake sleeping port
     bool holding_ = false;

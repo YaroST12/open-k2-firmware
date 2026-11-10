@@ -331,6 +331,16 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   `tests/test_uiprefs.cpp`, the Settings row in `tests/test_ui_rotation.cpp`). Hardware check pending: setting on,
   idle K2 into the sleeping splitter port (PD list without any pin), then a waiting charger and a DRP phone with the
   setting on (expected: the K2 becomes their sink for one dwell; this is the documented exception), and off again.
+  Bench rig 2026-11-10 (Anker IQ4 -> splitter -> K2 top plug, be71f10): the setting never presented a visible Rd. Root
+  cause found in code (`k2/idle-wake-hw`): the passive scan attaches on the dark port's Rp (chip CC2 BC_LVL 3, VBUS 0,
+  no PD) and nothing detaches that attach (`DetachTracker` needs VBUS seen >= 3 V first, the comparator keeps reading
+  the Rp), while the hold is gated on `g_active_cc == 0`: after any toggle off -> on, or any scan attach, the wake
+  never ran again. Fix: with the setting on, an attach with VBUS < 3 V and no PD message for `kDarkAttachMs` (3 s) is
+  released ("Detach: dark attach", `IdleWake::dark_attach`, same owner gate as the hold) so the hold takes the line;
+  setting off is untouched. The hold now also writes SWITCHES0 at once (it used to reach the chip only with the next
+  scan) and logs every dwell with the SWITCHES0 readback and the live ADC levels, because the hold line was printed only
+  on change (the bench capture started after it). ADC cc1/cc2 vs chip CC1/CC2: no swap found (the bench scan reads
+  CC2 BC_LVL 3 and the ADC cc2 rises to 1.63 V at the same moment); hardware check pending.
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
   START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
