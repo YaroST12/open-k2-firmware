@@ -273,7 +273,7 @@ Patterns so far (names used below):
 - Its GoodCRC for our Get_Source_Cap_Extended arrives ~118-121 ms after TX_START, so the TX result window had to be understood as ambiguous (not "no answer").
 - SPR AVS rows pass consistently (2026-11-04, 5c548f7, bottom port, two back-to-back `--units pd` runs, 7 PDOs both times so the AVS APDO was listed): 19 pass / 0 fail / 2 skip each run, AVS 14.5 / 20 / 20→14.5 / 14.5→11.7 / 11.7→9 V all pass in both runs, no Hard Reset, no reboot. Skips are EPR fixed + EPR AVS (not offered by this 65 W unit).
 - Spec-validated 2026-11-04 against USB PD R3.2 V1.2 (Table 6.15, Table 4.3, Table 6.22, Table 6.61 byte 17, §7.9.2, §7.31.3): APDO 0xE004B145 is the spec's own 65 W example; SPR AVS has a fixed 9-20 V range and the APDO carries only the two current fields (a PDP byte exists only in EPR AVS, Table 6.16); the SKEDB-gated re-announce is a permitted capability-change Source_Capabilities and re-planning from the latest caps is required; settled AVS accuracy is ±5 % + 0.5 V, so our pass band (target + max(10 %, 600 mV)) is wider than spec, never stricter.
-- 2026-11-10 (aebb430 / d6c90e7, top plug, HID-powered, no spoof, `runs/2026-11-10-merge2-hw/ugreen-*`): 7 PDOs incl.
+- 2026-11-10 (aebb430 / d6c90e7, top plug, HID-powered, no spoof, `runs/2026-11-10-merge2-hw/ugreen-*`; the list read that day: fixed 5/9/15/20 V 3 A - no 12 V - PPS 5-11 V and 5-21 V 3 A, AVS raw 0xE004B12C, i.e. a different list from the 2026-11-04 one with AVS 0xE004B145: the source varies its list between sessions): 7 PDOs incl.
   SPR AVS 9-20 V 3 A, PPS 5-11 V 3 A and PPS 5-21 V 3 A.
   - `--units pd` 22 pass / 1 fail / 2 skip (fixed 20 V 20.06 V, PPS 5-21 V reaches 21 V, AVS 20 V 20.07 V); the fail was
     a K2 step-walk false fail (base read before it settled). With Wake ON after the wake-vs-test fix (72c2e28):
@@ -589,8 +589,9 @@ Patterns so far (names used below):
 - `pps-off-at-no-load` (suspected, 2026-11-10, `runs/2026-11-10-splitter-pps/bb.txt`, charger test run 9): the splitter list 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A, EPR 28 V 5 A. Every fixed row and EPR 28 V passed, all five PPS rows failed "source lost" (~1.8 V). On the wire: Request PDO 6 (PPS) -> Accept -> VBUS falls from ~46 ms after the Accept, ~2 V within ~250 ms at 0 mA, no PS_RDY, port restart ~2.3 s later; manual requests (5.0 V 1 A, 5.5 V 2 A, 7.2 V 3 A, EPR bit cleared, after Discover_Identity, from a 5 V 3 A contract) collapse the same way, while a phone that draws current holds PPS 5.5-9.24 V on the same port. Handled as the pattern-table row: `Reason::NeedsLoad`, a skip. Not proven yet: whether current flowing is the trigger (Step 1 of the ROADMAP row). Host-tested, hardware check pending
 - 2026-11-10 hardware (`runs/2026-11-10-merge2-hw/wake3`), behind a CUKTECH C3 and an Anker Prime 100W:
   - `slow-rp-wake` signature confirmed: sleeping port = standby Rp ~3.04 V on CC (awake and waiting: 3.29-3.30 V), VBUS 0;
-    under a sink Rd the standby level collapses to ~0 V; a steady Rd of ~1.1-1.7 s wakes it. The K2's idle wake got the
-    Rp 3.86 s after its first Rd, then 6 PDOs.
+    under a sink Rd the standby level collapses to ~0 V; a steady Rd wakes it: ~1.1-1.7 s behind the Baseus 140 W and
+    the CUKTECH C3 (2026-11-09/10), **~3.9 s behind the Anker Prime 100W** (wake3 log: both 2 s idle-wake dwells on the
+    same line, CC1 at 35913 and 37915 ms, Rp answered at 39773 ms, then 6 PDOs). The wake time depends on the feed.
   - With a device on the other output the port stays awake (3.30 V): a plain re-read gets PD at once; a few seconds
     later it re-announced 5 -> 4 PDOs (`budget-reannounce-mid-run`, shared-budget re-split).
   - No shared-bus voltage and no PPS collapse behind these two chargers: `shared-bus-split` and `pps-off-at-no-load` were
