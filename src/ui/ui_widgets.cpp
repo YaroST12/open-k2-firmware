@@ -72,6 +72,10 @@ void draw_band(const Surface &s, int x, int y, int h, Paint paint) {
         {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y),
          static_cast<int16_t>(width), static_cast<int16_t>(h)});
     ContentViewport::Pause unscaled_band;
+    {   // a band wholly outside the capture strip has nothing to compose
+        uint16_t by = static_cast<uint16_t>(band.y), bh = static_cast<uint16_t>(band.h);
+        if (band.h <= 0 || !lcd::clip_to_band(by, bh)) return;
+    }
     BandRow row{{}, x, band.w, y};
     lcd::stream_begin(static_cast<uint16_t>(band.x), static_cast<uint16_t>(band.y),
                       static_cast<uint16_t>(band.x + band.w - 1), static_cast<uint16_t>(band.y + band.h - 1));

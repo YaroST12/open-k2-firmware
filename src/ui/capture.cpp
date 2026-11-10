@@ -27,16 +27,21 @@ bool g_busy = false;                            // a capture owns g_strip
 void sink_begin(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) { g_sink.window(x0, y0, x1, y1); }
 void sink_pixels(const uint16_t *px, uint32_t n) { g_sink.push(px, n); }
 void sink_fill(uint16_t c, uint32_t n) { g_sink.fill(c, n); }
-const lcd::Sink kSink = {sink_begin, sink_pixels, sink_fill};
+void sink_band(uint16_t *first, uint16_t *last) {   // drawing outside these rows is discarded: the primitives skip it
+    *first = static_cast<uint16_t>(g_sink.first_row());
+    *last = static_cast<uint16_t>(g_sink.last_row());
+}
+const lcd::Sink kSink = {sink_begin, sink_pixels, sink_fill, sink_band};
 
 static_assert(remote::ScreenInfo{}.strip_rows == kStripRows && remote::ScreenInfo{}.num_strips == kStrips,
               "ScreenInfo defaults must match the capture geometry");
 
-// Queues one stream frame once the IN queue has room; false after the timeout.
+// Queues one stream frame once the IN queue has room; false after the timeout. The wait serves the idle hook as well as
+// USB (lcd::pump), so PD, UFCS and the transition capture keep their ~1 ms service while the host drains the endpoint.
 bool send_frame(uint8_t seq, uint8_t strip, uint8_t flags, const uint8_t *data, size_t len) {
     const uint32_t t0 = systick::millis();
     while (usb::tx_free() < kMinFree) {
-        usb::poll();
+        lcd::pump();
         if (systick::millis() - t0 > kSendTimeoutMs) return false;
     }
     std::array<uint8_t, remote::kFrameSize> frame;
@@ -57,6 +62,7 @@ bool capture_begin(Ui &ui) {
 }
 
 const uint16_t *capture_strip(Ui &ui, int strip, uint32_t now_ms) {
+    lcd::pump();   // the idle hook (PD, UFCS, transcap) runs between strips: the render itself never reaches a stream_service
     g_sink.attach(g_strip, kScreenW, strip * kStripRows, kStripRows);
     lcd::set_sink(&kSink);
     ui.render_for_capture(now_ms);
@@ -78,6 +84,7 @@ bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms) {
     uint8_t chunk[remote::kShotChunk];
 
     for (int strip = 0; strip < kStrips && ok; strip++) {
+        lcd::pump();   // between strips: the sink render never reaches a stream_service, so serve PD and USB here
         g_sink.attach(g_strip, kScreenW, strip * kStripRows, kStripRows);
         lcd::set_sink(&kSink);
         ui.render_for_capture(now_ms);

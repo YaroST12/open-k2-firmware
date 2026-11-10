@@ -338,6 +338,11 @@ void set_rotation(std::uint8_t rotation) {
 
 void set_sink(const Sink* sink) { g_sink = sink; }
 const Sink* get_sink() { return g_sink; }
+bool sink_band(std::uint16_t& first, std::uint16_t& last) {
+    if (!g_sink || !g_sink->band) return false;
+    g_sink->band(&first, &last);
+    return true;
+}
 void set_idle_hook(void (*hook)()) { g_idle_hook = hook; }
 
 void pump() { serve(); }
@@ -426,6 +431,7 @@ void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t 
     if (x >= kWidth || y >= kHeight || w == 0 || h == 0) return;
     if (x + w > kWidth) w = kWidth - x;
     if (y + h > kHeight) h = kHeight - y;
+    if (!clip_to_band(y, h)) return;   // a strip capture keeps 4 rows: the rest of the rectangle is O(1)
     stream_begin(x, y, x + w - 1, y + h - 1);
     stream_fill(color, std::uint32_t{w} * h);
     stream_end();

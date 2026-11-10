@@ -43,9 +43,30 @@ struct Sink {
     void (*begin)(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1);
     void (*pixels)(const std::uint16_t* px, std::uint32_t count);
     void (*fill)(std::uint16_t color, std::uint32_t count);
+    // Optional: the screen rows first..last (inclusive) the sink keeps; it discards every pixel outside them. A sink with
+    // a band lets the drawing code skip work that would be thrown away (a strip capture re-renders the screen 60 times).
+    // nullptr: the sink keeps every row, nothing may be skipped.
+    void (*band)(std::uint16_t* first, std::uint16_t* last) = nullptr;
 };
 void set_sink(const Sink* sink);
 const Sink* get_sink();
+
+// The band of the active sink; false when there is none (no sink, or a sink without a band hook).
+bool sink_band(std::uint16_t& first, std::uint16_t& last);
+
+// Clips the rows y..y+h-1 to the active sink's band. False: nothing of them lands in the band, draw nothing.
+// True: y and h now cover only rows the sink keeps (unchanged when there is no band).
+inline bool clip_to_band(std::uint16_t& y, std::uint16_t& h) {
+    std::uint16_t first = 0, last = 0;
+    if (!sink_band(first, last)) return true;
+    const unsigned bottom = static_cast<unsigned>(y) + h - 1;   // h >= 1
+    if (bottom < first || y > last) return false;
+    const unsigned top = y < first ? first : y;
+    const unsigned end = bottom > last ? last : bottom;
+    y = static_cast<std::uint16_t>(top);
+    h = static_cast<std::uint16_t>(end - top + 1);
+    return true;
+}
 
 // Erase mode: every pixel streamed to the panel becomes kBg (black), whatever the caller drew.
 // Replaying a page's draw_static()+update() in erase mode wipes exactly that page's ink, so a

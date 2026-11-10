@@ -208,12 +208,57 @@ static void test_menu(Ui &ui, Menu m, const char *name) {
     test_screen(ui, name, 5200);
 }
 
+// The pre-clipping capture path, kept as the oracle for the fast one: one full render of the screen into a 240-row
+// buffer through a plain per-pixel sink with NO band hook, so every primitive draws everything (every text row is
+// rendered, every fill runs its full window) and the sink discards what falls off the screen. The wire format's
+// pixels must equal it exactly.
+namespace oracle {
+static uint16_t g_img[240 * 240];
+static uint32_t g_x0, g_x1, g_y0, g_y1, g_cx, g_cy;
+static void put(uint16_t v) {
+    if (g_cx < 240 && g_cy < 240) g_img[g_cy * 240 + g_cx] = v;
+    if (++g_cx > g_x1) { g_cx = g_x0; if (++g_cy > g_y1) g_cy = g_y0; }
+}
+static void begin(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) { g_x0 = g_cx = x0; g_y0 = g_cy = y0; g_x1 = x1; g_y1 = y1; }
+static void pixels(const uint16_t *px, uint32_t n) { for (uint32_t i = 0; i < n; i++) put(px[i]); }
+static void fill(uint16_t c, uint32_t n) { for (uint32_t i = 0; i < n; i++) put(c); }
+static const lcd::Sink kSink = {begin, pixels, fill};   // no band: the primitives may not skip anything
+}  // namespace oracle
+
+// One capture session (one sample of the live counters: the Diag page shows them, and capture_screen's own log line
+// moves them) that renders the screen both ways: the unclipped oracle first, then the strips the firmware uses.
+// Needs a page that is already drawn; it resyncs the panel at the end, so call it last in a scene.
+static void check_against_oracle(Ui &ui, const char *name, uint32_t now_ms) {
+    std::fill(std::begin(oracle::g_img), std::end(oracle::g_img), uint16_t{0xDEAD});
+    CHECK_EQ(capture_begin(ui), true);
+    oracle::begin(0, 0, 239, 0);
+    lcd::set_sink(&oracle::kSink);
+    ui.render_for_capture(now_ms);
+    lcd::set_sink(nullptr);
+    std::vector<uint16_t> fast(240 * 240, 0xDEAD);
+    for (int strip = 0; strip < kCaptureStrips; strip++) {
+        const uint16_t *px = capture_strip(ui, strip, now_ms);
+        std::copy(px, px + kCaptureStripPixels, fast.begin() + strip * kCaptureStripPixels);
+    }
+    capture_end(ui, now_ms);
+    int diff = 0, first = -1;
+    for (int i = 0; i < 240 * 240; i++)
+        if (fast[i] != oracle::g_img[i]) { diff++; if (first < 0) first = i; }
+    if (diff) printf("%s: %d pixels differ from the unclipped render (first x=%d y=%d: capture %04x unclipped %04x)\n", name, diff,
+                     first % 240, first / 240, fast[first], oracle::g_img[first]);
+    CHECK_EQ(diff, 0);
+}
+
 // Captures whatever is showing (page or submenu) and compares the stream with the LCD.
 static void test_screen(Ui &ui, const char *name, uint32_t now_ms) {
     ui.tick(now_ms);                                 // fills the dynamic fields from the stubs
     std::vector<uint16_t> direct(g_panel, g_panel + 240 * 240);
     g_stub.reports.clear();
+    g_sink_work = {};
     capture_screen(ui, 7, now_ms);   // same instant: the flow-rail phase is time based, so it must not step
+    const SinkWork work = g_sink_work;
+    printf("%s: capture asked the sink for %u windows, %u pixel calls (%llu px), %u fills (%llu px)\n", name, work.begins,
+           work.pixel_calls, work.pixels, work.fill_calls, work.fill_pixels);
     if (const char *d = std::getenv("K2_DUMP")) {
         char rp[96]; snprintf(rp, sizeof rp, "%s/k2_%s.raw", d, name);
         if (FILE *f = fopen(rp, "wb")) {
@@ -245,6 +290,7 @@ static void test_screen(Ui &ui, const char *name, uint32_t now_ms) {
     char p[64];
     snprintf(p, sizeof p, "host-build/k2_%s_direct.ppm", name); dump_ppm(p, direct.data());
     snprintf(p, sizeof p, "host-build/k2_%s_shot.ppm", name);   dump_ppm(p, s.px.data());
+    check_against_oracle(ui, name, now_ms);   // last: its capture_end resyncs the panel to the next sample
 }
 
 static void fill_seven() {

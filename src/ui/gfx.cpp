@@ -58,6 +58,10 @@ void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string
     rows = native.h;
     if (px <= 0 || rows <= 0) return;
     ContentViewport::Pause unscaled_glyphs;
+    {   // a strip capture keeps 4 rows and re-renders the whole screen per strip: text wholly outside them costs nothing
+        uint16_t band_y = static_cast<uint16_t>(native.y), band_h = static_cast<uint16_t>(rows);
+        if (!lcd::clip_to_band(band_y, band_h)) return;
+    }
 
     uint16_t lut[16];
     make_blend_lut(fg, bg, lut);
@@ -85,6 +89,10 @@ void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, std::st
     if (f.height > kMaxLineH || x < 0 || y < 0 || x + f.height > s.w || y + tw > s.h) {
         K2_TRUNC_NOTE(trunc::Kind::Clip, text, s.h - y);   // nothing is drawn at all
         return;
+    }
+    {   // as in gfx_text: wholly outside the capture strip, nothing to render
+        uint16_t band_y = static_cast<uint16_t>(s.y + y), band_h = static_cast<uint16_t>(tw);
+        if (!lcd::clip_to_band(band_y, band_h)) return;
     }
     uint16_t lut[16];
     make_blend_lut(fg, bg, lut);

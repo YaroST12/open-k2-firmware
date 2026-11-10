@@ -12,6 +12,7 @@ unsigned g_lcd_pixels;
 unsigned g_lcd_pumps;
 uint16_t g_pump_panel[LCD_WIDTH * LCD_HEIGHT];
 bool g_pump_snap_armed;
+SinkWork g_sink_work;
 
 namespace {
 const k2::lcd::Sink* g_sink;
@@ -28,16 +29,26 @@ namespace k2::lcd {
 
 void set_sink(const Sink* sink) { g_sink = sink; }
 const Sink* get_sink() { return g_sink; }
+bool sink_band(std::uint16_t& first, std::uint16_t& last) {
+    if (!g_sink || !g_sink->band) return false;
+    g_sink->band(&first, &last);
+    return true;
+}
 
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     g_lcd_windows++;
-    if (g_sink) { g_sink->begin(x0, y0, x1, y1); return; }
+    if (g_sink) { g_sink_work.begins++; g_sink->begin(x0, y0, x1, y1); return; }
     ensure_panel();
     g_panel_sink.window(x0, y0, x1, y1);
 }
 
 void stream_pixels(std::span<const std::uint16_t> px) {
-    if (g_sink) { g_sink->pixels(px.data(), static_cast<std::uint32_t>(px.size())); return; }
+    if (g_sink) {
+        g_sink_work.pixel_calls++;
+        g_sink_work.pixels += px.size();
+        g_sink->pixels(px.data(), static_cast<std::uint32_t>(px.size()));
+        return;
+    }
     g_lcd_pixels += static_cast<unsigned>(px.size());
     if (g_erase) {
         static const std::uint16_t black[64] = {};
@@ -49,7 +60,12 @@ void stream_pixels(std::span<const std::uint16_t> px) {
 }
 
 void stream_fill(std::uint16_t color, std::uint32_t count) {
-    if (g_sink) { g_sink->fill(color, count); return; }
+    if (g_sink) {
+        g_sink_work.fill_calls++;
+        g_sink_work.fill_pixels += count;
+        g_sink->fill(color, count);
+        return;
+    }
     g_lcd_pixels += count;
     if (g_erase) color = 0;
     g_panel_sink.fill(color, count);
@@ -59,6 +75,7 @@ void stream_end() {}
 
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color) {
     if (!w || !h) return;
+    if (!clip_to_band(y, h)) return;
     stream_begin(x, y, static_cast<std::uint16_t>(x + w - 1), static_cast<std::uint16_t>(y + h - 1));
     stream_fill(color, static_cast<std::uint32_t>(w) * h);
     stream_end();

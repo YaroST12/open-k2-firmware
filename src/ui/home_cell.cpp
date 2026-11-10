@@ -214,6 +214,12 @@ void paint(const Cell &c, int x0, int y0, int x1, int y1) {
     if (y0 < c.geom.top) y0 = c.geom.top;
     if (y1 > c.geom.bottom) y1 = c.geom.bottom;
     if (x0 > x1 || y0 > y1) return;
+    if (!ContentViewport::stretched()) {   // a capture strip keeps 4 rows: compose only the rows it keeps
+        uint16_t by = static_cast<uint16_t>(y0), bh = static_cast<uint16_t>(y1 - y0 + 1);
+        if (!lcd::clip_to_band(by, bh)) return;
+        y0 = by;
+        y1 = by + bh - 1;
+    }
     uint16_t row[kRowChunk];
     if (!ContentViewport::stretched()) {
         lcd::stream_begin(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1), static_cast<uint16_t>(y1));
