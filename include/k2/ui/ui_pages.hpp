@@ -206,9 +206,6 @@ protected:
     uint32_t bar_sig_ = 0;
 };
 
-// A charger-test reason as the screen words it (the shared charger_test::name() where it fits a footer, shorter where not).
-const char* reason_text(charger_test::Reason r);
-
 class ChargerTestPage;
 
 // The charger test, resident half: the runner, the options, the wizard stage and cursor, the journal, the Ra guard, the
