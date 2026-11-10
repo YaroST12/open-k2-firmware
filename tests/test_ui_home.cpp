@@ -374,6 +374,45 @@ static void test_idle_home() {
     CHECK_EQ(ink_logical(ui, 10, 134, 205, 7, kRule), 0);               // no limit bar
 }
 
+// Idle with the rig's CC levels (a charger on one cable, a phone toggling on the other, crossed): row 2 says so in the error
+// colour instead of "No source"; the case-3 hint is amber; a charger alone or a phone alone keeps "No source".
+static void feed_cc(Ui &ui, int frames, int (*cc1)(int), int (*cc2)(int)) {
+    for (int k = 0; k < frames; k++) {
+        adc::Reading r;
+        r.cc1_mv = uint16_t(cc1(k)); r.cc2_mv = uint16_t(cc2(k));
+        g_stub.adc = r;
+        run(ui, 1);
+    }
+}
+static int cc_pixel(int k) { static const int c[6] = {3300, 0, 1800, 3300, 1200, 0}; return c[k % 6]; }
+static int cc_loaded(int k) { return 480 + (k % 4) * 20; }
+static int cc_zero(int) { return 0; }
+static int cc_rp(int) { return 3290; }
+static void test_idle_home_says_crossed() {
+    Ui &ui = home_ui();
+    unplug();
+    feed_cc(ui, 25, cc_pixel, cc_loaded);
+    dump("v7", "idle-crossed");
+    CHECK_TRUE(ink_logical(ui, 52, 223, 170, 16, kError) > 8);          // "CROSSED: flip one"
+    CHECK_EQ(ink_logical(ui, 52, 223, 120, 16, kDim), 0);               // not "No source"
+    Ui &hint = home_ui();
+    unplug();
+    feed_cc(hint, 25, cc_zero, cc_loaded);
+    dump("v7", "idle-flip-hint");
+    CHECK_TRUE(ink_logical(hint, 52, 223, 170, 16, kCaution) > 8);      // "Flip a cable?"
+    Ui &charger = home_ui();
+    unplug();
+    feed_cc(charger, 25, cc_zero, cc_rp);
+    CHECK_EQ(ink_logical(charger, 52, 223, 170, 16, kError), 0);
+    CHECK_EQ(ink_logical(charger, 52, 223, 170, 16, kCaution), 0);
+    Ui &phone = home_ui();
+    unplug();
+    feed_cc(phone, 25, cc_pixel, cc_zero);
+    CHECK_EQ(ink_logical(phone, 52, 223, 170, 16, kError), 0);
+    CHECK_EQ(ink_logical(phone, 52, 223, 170, 16, kCaution), 0);
+    g_stub.adc.reset();
+}
+
 // Unplugged after a live reading: everything grey, the LAST pill counts the age.
 static void test_stale_home() {
     Ui &ui = home_ui();
@@ -539,6 +578,7 @@ int main() {
     test_window_cycle();
     test_max_text_never_comes_from_live_vbus();
     test_idle_home();
+    test_idle_home_says_crossed();
     test_stale_home();
     test_alarms();
     test_nometer_home();

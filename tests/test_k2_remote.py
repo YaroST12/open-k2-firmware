@@ -183,6 +183,17 @@ class Decoders(unittest.TestCase):
         self.assertEqual((s["age_s"], s["cable_age_s"]), (83, 7))
         self.assertIn("LAST, 1m 23s ago", kr.render("state", s))
 
+    def test_state_crossed_cc_flags(self):
+        base = bytes(40)
+        s = kr.decode_state(base + bytes([0]) + bytes(8))
+        self.assertFalse(s["crossed"] or s["flip_hint"])
+        s = kr.decode_state(base + bytes([32]) + bytes(8))        # kLinkCrossed
+        self.assertTrue(s["crossed"])
+        self.assertFalse(s["flip_hint"])
+        s = kr.decode_state(base + bytes([64]) + bytes(8))        # kLinkFlipHint
+        self.assertTrue(s["flip_hint"])
+        self.assertFalse(s["crossed"])
+
     def test_state_reset_cause(self):
         base = bytes(40) + bytes([0]) + bytes(8)            # 49 B: everything up to the link block
         self.assertNotIn("reset_cause", kr.decode_state(base))   # older firmware: field absent

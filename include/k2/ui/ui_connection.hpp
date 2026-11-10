@@ -18,6 +18,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/pd/cc_crossed.hpp"
 #include "k2/pd/pd_survey.hpp"
 #include "k2/pd/pd_tabs.hpp"
 #include "k2/pd/ra_guard.hpp"
@@ -41,6 +42,7 @@ struct Facts {
     bool cable = false;         // e-marker data is held (read by VCONN or sniffed from the charger's own query)
     Topology topo = Topology::Unknown;
     raguard::WaitKind wait = raguard::WaitKind::Unknown;   // the one waiting classifier (pd::Link::wait_kind, the Rp trace)
+    raguard::CrossKind cross = raguard::CrossKind::None;   // crossed CC through the K2 (pd::Link::cc_cross)
 };
 
 // The tab to open on: Sink when a device is inline or was seen on CC, else Source when a charger is seen,

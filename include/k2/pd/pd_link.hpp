@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "k2/pd/cc_crossed.hpp"
 #include "k2/pd/ra_guard.hpp"
 
 namespace k2::pd {
@@ -62,6 +63,8 @@ struct LinkInput {
     // are the far port's own advertisement (the same gate the connection page's topology uses).
     std::int32_t cc1_mv = -1, cc2_mv = -1;
     bool passive = false;
+    // The K2 itself holds a line (the Wake sleeping port's Rd hold): the levels are then no longer the far ports' own.
+    bool line_held = false;
 };
 
 // Allowance for the K2's own supply current while it runs on the measured VBUS (no USB host enumerated).
@@ -107,6 +110,7 @@ public:
     // The Source tab, the bottom bar and the remote state field read this same value.
     raguard::WaitKind wait_kind() const { return wait_trace_.classify(last_now_, vbus_known_ && vbus_mv_ >= raguard::kVbusAttachedMv); }
     bool charger_waiting() const { return wait_kind() == raguard::WaitKind::ChargerWaiting; }
+    raguard::CrossKind cc_cross() const { return raguard::CrossKind::None; }   // RED STUB
     // Latched by a load, a foreign Request or a foreign VBUS rise; held across a short detach (kInlineHoldMs) and left only on proof
     // (kInlineQuietMs of quiet while attached, or a detach that outlasts the hold).
     bool inline_mode() const { return inline_; }

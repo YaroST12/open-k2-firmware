@@ -501,6 +501,83 @@ static void test_wait_kind_no_rp_and_not_passive() {
     CHECK_EQ(l.charger_waiting(), 0);
 }
 
+// ---- crossed CC through the K2 (raguard::CrossTrace through the Link input) --------------------------
+// Anker IQ4 -> cable -> K2 -> cable -> Pixel, VBUS dark: CC2 a steady ~0.5 V (Rp loaded by the cable's Ra), CC1 cycles
+// 0 / 1.2 / 1.8 / 3.3 V (the phone's dual-role toggle). A charger alone or a phone alone must never read crossed.
+using k2::raguard::CrossKind;
+
+static std::int32_t rig_pixel(std::uint32_t t) {
+    static const std::int32_t cyc[8] = {3300, 3300, 3300, 0, 0, 1200, 1800, 1800};
+    return cyc[(t / 20) % 8];
+}
+static std::int32_t rig_loaded(std::uint32_t t) { return 480 + std::int32_t((t / 20) % 5) * 20; }
+
+template <class F1, class F2>
+static CrossKind cross_run(Link& l, std::uint32_t t0, std::uint32_t t1, F1 f1, F2 f2, bool passive = true, bool held = false,
+                           std::int32_t vbus = 0) {
+    for (std::uint32_t t = t0; t <= t1; t += 20) {
+        LinkInput in = win(t, f1(t), f2(t), passive, vbus);
+        in.line_held = held;
+        l.update(in);
+    }
+    return l.cc_cross();
+}
+
+static void test_cc_cross_rig_reads_crossed_after_a_second() {
+    Link l;
+    CHECK_EQ(int(cross_run(l, 0, 800, rig_pixel, rig_loaded)), int(CrossKind::None));      // under a second of observation
+    CHECK_EQ(int(cross_run(l, 820, 1400, rig_pixel, rig_loaded)), int(CrossKind::Crossed));
+    CHECK_EQ(int(cross_run(l, 1420, 3000, rig_pixel, rig_loaded)), int(CrossKind::Crossed));   // and it holds
+}
+
+static void test_cc_cross_negatives_charger_alone_and_phone_alone() {
+    const auto zero = [](std::uint32_t) { return 0; };
+    const auto steady_rp = [](std::uint32_t) { return 3290; };
+    const auto drp = [](std::uint32_t t) -> std::int32_t { return (t / 100) % 2 == 0 ? 3300 : 0; };
+    Link charger;
+    CHECK_EQ(int(cross_run(charger, 0, 3000, zero, steady_rp)), int(CrossKind::None));
+    Link phone;
+    CHECK_EQ(int(cross_run(phone, 0, 3000, zero, drp)), int(CrossKind::None));
+    Link nothing;
+    CHECK_EQ(int(cross_run(nothing, 0, 3000, zero, [](std::uint32_t) { return 1707; })), int(CrossKind::None));
+}
+
+static void test_cc_cross_case_3_is_a_hint() {
+    Link l;
+    CHECK_EQ(int(cross_run(l, 0, 1400, [](std::uint32_t) { return 0; }, rig_loaded)), int(CrossKind::Hint));
+}
+
+// Never while: the K2 holds a line (Rd / Ra / the Wake sleeping port), a sink is inline, a contract exists, VBUS is up.
+static void test_cc_cross_gates() {
+    Link held;
+    CHECK_EQ(int(cross_run(held, 0, 3000, rig_pixel, rig_loaded, true, true)), int(CrossKind::None));   // the Wake hold
+    Link active;
+    CHECK_EQ(int(cross_run(active, 0, 3000, rig_pixel, rig_loaded, false)), int(CrossKind::None));      // not passive
+    Link live;
+    CHECK_EQ(int(cross_run(live, 0, 3000, rig_pixel, rig_loaded, true, false, 5000)), int(CrossKind::None));   // VBUS up
+    Link l;
+    CHECK_EQ(int(cross_run(l, 0, 1400, rig_pixel, rig_loaded)), int(CrossKind::Crossed));
+    CHECK_EQ(int(cross_run(l, 1420, 1500, rig_pixel, rig_loaded, true, true)), int(CrossKind::None));   // a gate drops it at once
+    CHECK_EQ(int(cross_run(l, 1520, 2300, rig_pixel, rig_loaded)), int(CrossKind::None));               // and the second starts over
+    CHECK_EQ(int(cross_run(l, 2320, 3000, rig_pixel, rig_loaded)), int(CrossKind::Crossed));
+    // A contract of the K2's own, or a latched inline sink.
+    Link own;
+    for (std::uint32_t t = 0; t <= 3000; t += 20) {
+        LinkInput in = win(t, rig_pixel(t), rig_loaded(t), true);
+        in.own_contract = true;
+        own.update(in);
+    }
+    CHECK_EQ(int(own.cc_cross()), int(CrossKind::None));
+    Link inl;
+    for (std::uint32_t t = 0; t <= 3000; t += 20) {
+        LinkInput in = win(t, rig_pixel(t), rig_loaded(t), true);
+        in.current_known = true; in.current_ma = 500;   // a load: the inline latch
+        inl.update(in);
+    }
+    CHECK_EQ(inl.inline_mode(), 1);
+    CHECK_EQ(int(inl.cc_cross()), int(CrossKind::None));
+}
+
 int main() {
     test_boot_attached_and_stable();
     test_vbus_detach_debounce();
@@ -533,5 +610,9 @@ int main() {
     test_wait_kind_steady_rp_is_charger_waiting();
     test_wait_kind_toggling_rp_is_dual_role();
     test_wait_kind_no_rp_and_not_passive();
+    test_cc_cross_rig_reads_crossed_after_a_second();
+    test_cc_cross_negatives_charger_alone_and_phone_alone();
+    test_cc_cross_case_3_is_a_hint();
+    test_cc_cross_gates();
     return test_report("test_pd_link");
 }

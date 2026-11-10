@@ -123,6 +123,40 @@ static void test_empty_states_when_possibly_inline() {
         for (int o = 0; o < 4; o++) CHECK_EQ(std::strstr(n(static_cast<Tab>(t), static_cast<Topology>(o)).hint, "bottom") == nullptr, 1);
 }
 
+// Crossed CC through the K2 (Facts::cross, pd::Link::cc_cross): the Source tab and the bar tell the user to flip a cable;
+// the hint (Rp-vs-Ra on one line, nothing on the other) only asks. It wins over the waiting words, which would misread the
+// phone's toggle as "dual-role port" or the loaded Rp as "charger waiting".
+static void test_crossed_cc_reads_on_the_tab_and_the_bar() {
+    using raguard::CrossKind;
+    Facts f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::DualRolePort);
+    f.cross = CrossKind::Crossed;
+    CHECK_STR(empty_state(Tab::Source, f).title, "CC CROSSED");
+    CHECK_EQ(std::string_view(empty_state(Tab::Source, f).hint).find("cable") != std::string_view::npos, 1);
+    StrBuf<40> s;
+    StatusIn in;
+    in.tab = Tab::Source; in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "CC CROSSED - flip one cable");
+    CHECK_EQ(s.view().size() <= kStatusCells, 1);
+    f.cross = CrossKind::Hint;
+    f.wait = raguard::WaitKind::ChargerWaiting;
+    CHECK_STR(empty_state(Tab::Source, f).title, "FLIP A CABLE?");
+    in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "Flip a cable?");
+    // None: the other words are untouched.
+    f.cross = CrossKind::None;
+    CHECK_STR(empty_state(Tab::Source, f).title, "CHARGER WAITING");
+    in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, via cable");
+    // The Cable and Sink tabs keep their own words.
+    f.cross = CrossKind::Crossed;
+    CHECK_STR(empty_state(Tab::Sink, f).title, "NO DEVICE");
+    // A charger that is attached wins over any stale verdict.
+    f = facts(false, true, false);
+    f.cross = CrossKind::Crossed;
+    in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger");
+}
+
 static void test_wrap() {
     std::array<std::string_view, 3> l{};
     CHECK_EQ(wrap("short", 27, l), 1);
@@ -484,6 +518,7 @@ int main() {
     test_source_tab_reads_the_waiting_classifier();
     test_bar_reads_the_waiting_classifier();
     test_the_three_readers_agree();
+    test_crossed_cc_reads_on_the_tab_and_the_bar();
     test_wrap();
     test_status_text();
     test_status_survey();
