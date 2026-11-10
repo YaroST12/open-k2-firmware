@@ -418,13 +418,15 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     tab. Hardware: Anker IQ4 -> K2 -> OnePlus at 9 V, Identify shows the phone's VID/PID from sniff, black box shows no
     K2 TX, the phone stays at 9 V.
 - **A dual-role phone alone reads as "CHARGER WAITING"** (2026-11-10, connection matrix H13, 05b1703,
-  `runs/2026-11-10-connection/H13/`): OnePlus 15 alone on the bottom port, HID-powered K2: behaviour correct (no Rd, no
-  TX, VBUS max 1 mV over 60 s), but the Source tab said "CHARGER WAITING / start a charger test" while the bar said
-  "No charger, via cable". The phone toggles Rp/open about every 100 ms looking for a partner (STATUS0 BC_LVL 3 <-> 0 in
-  the trace); a charger's Rp is steady.
-  - Fix: the waiting classifier takes Rp duty and period into account: Rp present only part of the time with
-    50-100 ms toggles = "Dual-role port (phone?)", not a charger; START on it explains that the phone will source 5 V
-    (H14). Steady Rp for >= 300 ms stays "charger waiting".
+  `runs/2026-11-10-connection/H13/`, fixed in 9189def, hardware check pending): OnePlus 15 alone on the bottom port,
+  HID-powered K2: behaviour correct (no Rd, no TX, VBUS max 1 mV over 60 s), but the Source tab said "CHARGER WAITING /
+  start a charger test" while the bar said "No charger, via cable". The phone toggles Rp/open about every 100 ms
+  looking for a partner (STATUS0 BC_LVL 3 <-> 0 in the trace); a charger's Rp is steady.
+  - Fix: the waiting classifier takes Rp duty and period into account (raguard::RpTrace over the per-tick CC samples,
+    fed by pd::Link): Rp present only part of the time with 50-100 ms toggles (>= 3 edges in 400 ms) =
+    "DUAL-ROLE PORT", not a charger; steady Rp for >= 300 ms stays "charger waiting". One classifier, one result:
+    the Source tab, the bottom bar and `state.waiting` (kLinkWaiting) all read pd::Link::wait_kind(). START on a
+    dual-role port explains that the phone will source 5 V (H14).
   - Also: three readers of "waiting" disagree. On a real waiting charger (sleeping splitter port behind a CUKTECH, CC2
     2.99 V, `runs/2026-11-10-splitter-cuk/wake/pd.png`; Baseus 140 W direct on the top plug, CC1/CC2 3.20 V) the Source
     tab says "CHARGER WAITING", the bottom bar says "No charger, via cable" and `k2_remote state` says `waiting: False`.
