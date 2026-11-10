@@ -272,7 +272,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     through the splitter there and on the Baseus direct (run 4/5): `shared-bus-split` and the PPS collapse need the
     Baseus 140 W top port behind the splitter. The Baseus balances by cutting power to its ports 2-3 times.
 - **PPS collapses on the splitter at no load (`pps-off-at-no-load`, suspected)** (2026-11-10, step 1 fixed in e38c42c
-  (`pd request --over-load`, lab-only, passive-far-sink gate), hardware check pending; `runs/2026-11-10-splitter-pps/`,
+  (`pd request --over-load`, lab-only, passive-far-sink gate), k2-review fixes in 2a010ae (far-sink control messages
+  count as a far PD message, /api/frame strips the over-load flag, the far-sink CC reading cleared on attach/detach),
+  hardware check pending; `runs/2026-11-10-splitter-pps/`,
   `runs/2026-11-10-op15-sniff/`). Anker 2-way splitter behind the Baseus 140 W,
   list 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A, EPR 28 V 5 A.
   - Evidence: the charger test (run 9, be3f589) passes every fixed row and EPR 28 V, and fails all five PPS rows "source
