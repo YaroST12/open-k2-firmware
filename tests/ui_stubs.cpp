@@ -90,6 +90,8 @@ bool ra_active() { return g_stub.ra_on; }
 emkra::Refuse ra_refusal() { return g_stub.inl ? emkra::Refuse::Inline : g_stub.ra_refuse ? emkra::Refuse::Contract : emkra::Refuse::None; }
 void ra_run_own() { if (g_stub.ra_on) g_stub.ra_owned++; }   // a run takes the Ra mode over (it survives the unit detaches)
 void set_force_line(std::uint8_t line) { g_stub.force_line = line; }
+void set_idle_wake(bool on) { g_stub.idle_wake = on; }
+bool idle_wake() { return g_stub.idle_wake; }
 void rd_glitch_begin() {
     if (g_stub.ra_ons_at_glitch < 0) { g_stub.ra_ons_at_glitch = g_stub.ra_ons; g_stub.ra_on_at_glitch = g_stub.ra_on; }
     g_stub.glitch_begins++;

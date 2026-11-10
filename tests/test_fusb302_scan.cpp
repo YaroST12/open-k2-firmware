@@ -3301,6 +3301,68 @@ void test_inline_vdm_probe_refused() {
 
 void test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();
 void test_request_period_is_tracked_and_reset_with_the_attach();
+// ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
+// A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
+// idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
+// hold its one Rd on that line for the dwell.
+void idle_wake_world() {
+    power_cycle_forget_pin();
+    fusb302::set_force_line(0);
+    reset_world();
+    g_line_mv = 0;                                           // nothing the passive scan could attach to
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    g_auto_txsent = true;
+}
+// Idle for `ms` with the standby level on CC2; returns the union of the Rd bits SWITCHES0 showed after any tick.
+unsigned idle_rd_union(unsigned ms) {
+    unsigned seen = 0;
+    for (unsigned t = 0; t < ms; t += 20) {
+        g_ms += 20; fusb302::sink_vbus(78); fusb302::sink_cc(0, 3300); fusb302::poll(); fusb302::service();
+        seen |= sw0_rd();
+    }
+    return seen;
+}
+void test_idle_wake_off_by_default_never_presents_rd_on_a_standby_line() {
+    idle_wake_world();
+    CHECK_EQ(fusb302::idle_wake(), false);
+    CHECK_EQ(idle_rd_union(6000), 0u);                       // I1 / H2: no Rd on either line, for as long as it idles
+    CHECK_EQ(find_from("Idle wake"), -1);
+    CHECK_EQ(sw0_rd(), 0u);
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+void test_idle_wake_on_holds_one_rd_on_the_standby_line_and_off_releases_it() {
+    idle_wake_world();
+    fusb302::set_idle_wake(true);
+    CHECK_EQ(fusb302::idle_wake(), true);
+    const unsigned seen = idle_rd_union(500);
+    CHECK_EQ(seen, 2u);                                      // Rd on CC2 only, never a pair
+    for (int i = 0; i < 90; i++) {                           // a steady hold: the Rd is not blinking inside the dwell
+        g_ms += 20; fusb302::sink_vbus(78); fusb302::sink_cc(0, 3300); fusb302::poll(); fusb302::service();
+        CHECK_EQ(sw0_rd(), 2u);
+    }
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    CHECK_EQ(usb_has("Idle wake: Rd on CC2"), true);
+    fusb302::set_idle_wake(false);                           // off again: the hold ends at once, no reboot needed
+    CHECK_EQ(sw0_rd(), 0u);
+    CHECK_EQ(idle_rd_union(3000), 0u);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+void test_idle_wake_off_after_on_leaves_nothing_behind() {
+    idle_wake_world();
+    fusb302::set_idle_wake(true);
+    idle_rd_union(400);
+    fusb302::set_idle_wake(false);
+    idle_rd_union(3000);
+    CHECK_EQ(sw0_rd(), 0u);
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3424,6 +3486,9 @@ int main() {
     test_inline_vdm_probe_refused();
     test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();   // last: ends with a detach
     test_request_period_is_tracked_and_reset_with_the_attach();                           // last: ends with a detach
+    test_idle_wake_off_by_default_never_presents_rd_on_a_standby_line();   // last: each one ends with the setting off, a detach / Rd off
+    test_idle_wake_on_holds_one_rd_on_the_standby_line_and_off_releases_it();
+    test_idle_wake_off_after_on_leaves_nothing_behind();
     return test_report("test_fusb302_scan");
 }
 

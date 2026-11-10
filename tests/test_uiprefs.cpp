@@ -133,6 +133,27 @@ void test_orientation_byte() {
     CHECK_EQ(loaded.rotation_manual, 1); CHECK_EQ(loaded.rotation, 2); CHECK_EQ(loaded.rotate_buttons, 1);
 }
 
+// Settings > Wake sleeping port: bit4 of the orientation byte, 0 = off (the default, and what every older file holds).
+void test_idle_wake_bit() {
+    using uiprefs::Prefs;
+    CHECK_EQ(Prefs{}.idle_wake, 0);
+    const std::array<std::uint8_t, 8> plain{'K', '2', 'U', 'P', 1, 0xFE, 0, 0};
+    CHECK_EQ(uiprefs::decode(plain).idle_wake, 0);
+    CHECK_EQ(uiprefs::encode(Prefs{.qc_after_pd = true, .idle_wake = false}) == plain, 1);   // off adds nothing to the file
+    const std::array<std::uint8_t, 8> on{'K', '2', 'U', 'P', 1, 0xFE, 0, 0x10};
+    CHECK_EQ(uiprefs::encode(Prefs{.qc_after_pd = true, .idle_wake = true}) == on, 1);
+    CHECK_EQ(uiprefs::decode(on).idle_wake, 1);
+    // the other byte-7 settings ride along, in both directions
+    const Prefs in{.rotation_manual = true, .rotation = 3, .rotate_buttons = true, .idle_wake = true};
+    const Prefs back = uiprefs::decode(uiprefs::encode(in));
+    CHECK_EQ(back.idle_wake, 1); CHECK_EQ(back.rotation, 3); CHECK_EQ(back.rotation_manual, 1); CHECK_EQ(back.rotate_buttons, 1);
+    CHECK_EQ(uiprefs::decode(uiprefs::encode(Prefs{.rotate_buttons = true})).idle_wake, 0);
+    // survives the file system
+    Vol v;
+    CHECK_EQ(uiprefs::save(v.f, Prefs{.idle_wake = true}) == true, 1);
+    CHECK_EQ(uiprefs::load(v.f).idle_wake, 1);
+}
+
 void test_legacy_page_is_outside_the_volume() {
     CHECK_EQ(flash::store_sector_allowed(uiprefs::kLegacyAddr), 0);   // no static grant: erasable only with our signature on it
     CHECK_EQ(flash::legacy_candidate(uiprefs::kLegacyAddr), 1);
@@ -148,6 +169,7 @@ int main() {
     test_screenshot_switch();
     test_smoothing_preset();
     test_orientation_byte();
+    test_idle_wake_bit();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

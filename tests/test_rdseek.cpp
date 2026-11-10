@@ -177,6 +177,36 @@ void test_reset_keeps_the_open_readings() {
     CHECK_EQ(s.open_mv(2), 900);
 }
 
+// The setting: off (the default) the idle wake never picks a line, whatever the open readings say, so the idle Rd stays
+// what it was before the feature; and RdSeek::reset(false) wipes the open readings exactly like the old reset().
+void test_a_disabled_idle_wake_holds_nothing() {
+    pd::IdleWake w;
+    CHECK_EQ(w.enabled(), false);                          // default off
+    CHECK_EQ(int(w.update(1000, 3300, 3300)), 0);
+    CHECK_EQ(int(w.line()), 0);
+    w.set_enabled(true);
+    CHECK_EQ(w.enabled(), true);
+    CHECK_EQ(int(w.update(1020, 3300, 100)), 1);
+    w.set_enabled(false);                                  // switched off mid-hold: the Rd goes at once
+    CHECK_EQ(int(w.line()), 0);
+    CHECK_EQ(int(w.update(1040, 3300, 100)), 0);
+    w.on_attach(1);
+    CHECK_EQ(w.holding_slow(1050, 1, 3300), false);
+}
+void test_reset_without_keep_wipes_the_open_readings() {
+    pd::RdSeek s;
+    s.note_open(1, 3300);
+    s.note_open(2, 3050);
+    s.reset(false);                                        // the setting is off: the behaviour before the idle wake
+    CHECK_EQ(s.standby(1), false);
+    CHECK_EQ(s.standby(2), false);
+    CHECK_EQ(s.open_mv(1), -1);
+    CHECK_EQ(s.open_mv(2), -1);
+    s.note_open(1, 3300);
+    s.reset(true);
+    CHECK_EQ(s.open_mv(1), 3300);
+}
+
 }  // namespace
 
 int main() {
@@ -194,5 +224,7 @@ int main() {
     test_the_idle_wake_releases_when_no_line_reads_the_signature_any_more();
     test_an_attach_during_the_hold_keeps_the_no_rp_detach_off_inside_the_dwell();
     test_reset_keeps_the_open_readings();
+    test_a_disabled_idle_wake_holds_nothing();
+    test_reset_without_keep_wipes_the_open_readings();
     return test_report("test_rdseek");
 }

@@ -303,7 +303,7 @@ static void test_settings_rotation_modes() {
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 6100);
     ui.on_button(Button::Plus, ButtonEvent::Long, 6200);
     CHECK_EQ(ui.page() == Page::Settings, true);
-    CHECK_EQ(ui.list_state().count, 5);
+    CHECK_EQ(ui.list_state().count, 6);
     {   // Smoothing row: Medium by default, OK cycles High -> Off -> Low -> Medium, stores each and applies it at once
         g_stub.prefs = {true, false}; g_stub.prefs_sets = 0; g_stub.smoothing_applied = smoothing::Preset::Medium;
         for (int i = 0; i < 4; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 6205 + i);
@@ -317,10 +317,28 @@ static void test_settings_rotation_modes() {
             CHECK_EQ(g_stub.prefs.screenshot, false);
         }
         CHECK_EQ(g_stub.prefs_sets, 4);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 6230);   // the list ends at the Smoothing row
-        ui.on_button(Button::Ok, ButtonEvent::Short, 6231);
-        CHECK_EQ(g_stub.smoothing_applied == smoothing::Preset::High, true);
-        for (int i = 0; i < 4; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, 6240 + i);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 6230);   // the Wake sleeping port row follows (the list ends there)
+        for (int i = 0; i < 4; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, 6240 + i);   // back to the top
+        g_stub.prefs = {};
+    }
+    {   // Wake sleeping port row (the last): Off by default, OK toggles it, stores it with the other flags, applies it now
+        g_stub.prefs = {true, false}; g_stub.prefs_sets = 0; g_stub.idle_wake = false;
+        for (int i = 0; i < 5; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 6250 + i);
+        CHECK_EQ(g_stub.idle_wake, false);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 6260);
+        CHECK_EQ(g_stub.idle_wake, true);
+        CHECK_EQ(g_stub.prefs.idle_wake, true);
+        CHECK_EQ(g_stub.prefs.qc_after_pd, true); CHECK_EQ(g_stub.prefs.screenshot, false);
+        CHECK_EQ(g_stub.prefs_sets, 1);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 6261);
+        CHECK_EQ(g_stub.idle_wake, false); CHECK_EQ(g_stub.prefs.idle_wake, false);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 6262);   // the list ends here: still the same row
+        ui.on_button(Button::Ok, ButtonEvent::Short, 6263);
+        CHECK_EQ(g_stub.idle_wake, true);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 6264);
+        CHECK_EQ(g_stub.idle_wake, false);
+        CHECK_EQ(g_stub.prefs_sets, 4);
+        for (int i = 0; i < 5; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, 6270 + i);
         g_stub.prefs = {};
     }
     {   // Screenshot row: default on, OK toggles it and stores it, the stored prefs keep the other flag
