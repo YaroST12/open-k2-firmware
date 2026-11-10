@@ -495,6 +495,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     the remote/web stage names use the same words.
   - Validate: host tests on the step title, the first row, the Review row, the Refuse text and its two options, and
     that "Start, skip spoof" leaves the stored pick unchanged; hardware screenshots of step 2, Review and Refuse.
+- **Inline Identify refusal answers "busy"** (2026-11-10, be71f10, CUKTECH C1 -> K2 -> Pixel inline): since 6df54fa an
+  inline K2 refuses Identify (correct, no TX, VBUS held 9.076 V), but `k2_remote.py identify-device [--confirm]` prints
+  "command 64 failed: busy": `Ui::IdResult::Refused` maps to `remote::Status::Busy` (src/core/remote.cpp
+  identify_device). Give the inline refusal its own result (`IdResult::Inline` -> the pd::Err::Inline status the other
+  inline refusals use) so the tool says "refused: inline - the Sink tab shows the sniffed identity"; a running charger
+  test stays "busy". Host tests on the mapping and the k2_remote text.
 - **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, fixed in 7d1ae17, hardware check pending, connection matrix H22, be71f10, `runs/2026-11-10-merge2-hw/`
   dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at
   "No charger". The K2 passes CC1->CC1 and CC2->CC2, and each cable's orientation picks which pin its CC wire lands on,
