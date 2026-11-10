@@ -355,7 +355,10 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     stays false; the D+/D- classifier now applies the rule below - CC attached, VBUS above vSafe5V (> 5.5 V) and
     no D+/D- handshake seen this attach = "PD (not decoded)", never a legacy mode (host tests in
     tests/test_fastcharge_classify.cpp; the passive CC2 bias-net level ~1.69 V is deliberately not an input).
-    Hardware check pending. The "PPS 9V" label is still
+    Hardware check pending. The own-contract footer rule (row's last bullet) is fixed in 9106849 (red tests in
+    94164a6), hardware check pending: when the K2's own sink holds the contract (SinkStatus ready/held, pos and
+    PDO known), derive_proto uses that contract - AVS pos -> "AVS 12.6V", PPS -> "PPS 9V", fixed -> "PD 9V 3A"; the
+    sniffed contract only for a far sink. The "PPS 9V" label is still
     unverified on hardware: needs a PPS sink (OnePlus 15 on the CUKTECH; it takes only PDO1 5 V on the Anker IQ4,
     with or without the K2).
 - ~~**Sink Identify inline drops the phone from 9 V to 5 V**~~ completed: 6df54fa; inline Identify refused with and without --confirm, VBUS held 9.076 V, Sink tab "sniff 18D1:4EE1" (Pixel, be71f10). Identify of a phone alone (fix item 2) is batch 3 (k2/identify-alone).
