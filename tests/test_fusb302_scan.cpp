@@ -3478,6 +3478,9 @@ int main() {
     test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate();   // last: ends with a detach / reset
     test_lab_pin_clears_when_the_far_end_detaches();            // last: each one ends with a detach / Rd off
     test_a_boot_pin_survives_the_far_end_detaching();
+    test_idle_wake_off_by_default_never_presents_rd_on_a_standby_line();   // before the inline / sniff group: those leave a far-sink Request on record that only a detach rebases; each one ends with the setting off, a detach / Rd off
+    test_idle_wake_on_holds_one_rd_on_the_standby_line_and_off_releases_it();
+    test_idle_wake_off_after_on_leaves_nothing_behind();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_get_source_caps_refused_even_confirmed();
@@ -3486,9 +3489,6 @@ int main() {
     test_inline_vdm_probe_refused();
     test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();   // last: ends with a detach
     test_request_period_is_tracked_and_reset_with_the_attach();                           // last: ends with a detach
-    test_idle_wake_off_by_default_never_presents_rd_on_a_standby_line();   // last: each one ends with the setting off, a detach / Rd off
-    test_idle_wake_on_holds_one_rd_on_the_standby_line_and_off_releases_it();
-    test_idle_wake_off_after_on_leaves_nothing_behind();
     return test_report("test_fusb302_scan");
 }
 
