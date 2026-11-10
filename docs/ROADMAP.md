@@ -322,6 +322,14 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
   START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
+  - Merge pass 2026-11-10: `k2/sleeping-port-rd` (f11ea84, `pd::IdleWake`) is **held, not merged**. It puts Rd on any
+    idle line that reads >= 2800 mV open, which is also every ordinary waiting charger (Rp 3.2-3.3 V) and a dual-role
+    phone's toggling Rp (H13). That breaks invariant I1 / row H2 in `docs/CONNECTION_MATRIX.md` (a plain boot presents
+    no Rd until START or a re-read), makes the K2 the sink of record before anything is plugged behind it (the P4
+    hand-back problem) and would have a DRP phone power the K2. The explicit paths already wake the splitter on
+    hardware (START and a plain `pd-reread` held Rd 1648 ms on one line, 2026-11-10). Remaining fix, smaller: START's
+    VBUS wait covers the ~1.1-1.7 s wake (the first-START miss above) and the idle UI says "source asleep: START or
+    Refresh wakes it" on the standby signature. Decision for the user if the idle wake is still wanted.
 - **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note, fixed in b60c702 + ce6bbdb + df8e004,
   hardware check pending): with `pd-reread --pin 2`
   still set, splitter -> K2 -> OnePlus 15: the K2 sent two Requests (one collided with the phone's) before the far
