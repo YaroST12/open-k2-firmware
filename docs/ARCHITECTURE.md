@@ -122,7 +122,7 @@ RAM is 96 KB at 0x20000000 (`link.ld`); never touch SRAM above it. Layout, low t
 | `OVERLAY` `.mode_net` / `.mode_drive` / `.mode_sniff` / `.mode_trans` | one shared region at the same address, sized to the largest tenant. Default build (`K2_NET=0`): 16 KB, the D+/D- edge buffer (`.mode_sniff`) is the largest, the transition recorder is 15.9 KB, the drive image about 8 KB. `K2_NET=1` build: about 24 KB, lwIP + NCM + DHCP + HTTP (`.mode_net`) is the largest, which is the ~8 KB the default build gets back |
 | `.bss` | everything else (about 55 KB in the build inspected, 859f858) |
 | `.stack_guard` | 128 B no-access MPU region (`_sguard`..`_eguard`, 128-aligned) right above `.bss` (`end`/`_end` symbols for newlib's `_sbrk`) |
-| PSP stack | `_eguard`..`_psp_top`, about 6.8 KB: thread mode (main loop, UI, drivers), grows down from `_psp_top` |
+| PSP stack | `_eguard`..`_psp_top`, the remainder above `.bss` (20160 B at b1f99de7; `make gate` prints the current figure): thread mode (main loop, UI, drivers), grows down from `_psp_top` |
 | `.msp_stack` | `_psp_top`..`_estack` = 0x20018000, 1344 B: exceptions (ISRs) and the `[FAULT]` handler; MSP starts at `_estack` |
 
 The numbers come from `arm-none-eabi-objdump -h build/open_k2.elf` on one build and drift with every
@@ -185,6 +185,13 @@ into silent `.bss` corruption. Four layers:
   dispatch, littlefs / TinyUSB / lwIP callbacks through `RESOLVE` rules, with a per-class nesting limit
   (`LIMITS`); add a rule when a new callback table appears. Rule: no big arrays on the stack; transient
   buffers use the main-loop scratch arena (`include/k2/core/scratch.hpp`, one owner tag at a time).
+  Three habits keep the deep paths shallow (worst main-loop depth 5192 B at b1f99de7, 4524 B after the trim):
+  a TinyUSB callback never renders (the LCD waits and `systick::delay_ms` run `usb::service()` nested under a
+  paint, so the MSC READ10 callback only stashes the request, `k2::msc::io()` serves it from the top of the main
+  loop and completes it with `tud_msc_async_io_done`); a row of pixels is rendered and streamed in 80 px windows
+  (`render_row_span`, `gfx_text`, `home::paint`), never through a full-width buffer; and a function that holds a
+  big local is `noinline` when its callee chain is deep (`report_card::build_into`, `Store::read_entry`), so the
+  local's slot is not kept in the outer frame while the callees run.
 
 ### 2.5 Invariants checked after every build
 
