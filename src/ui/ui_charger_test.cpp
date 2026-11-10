@@ -816,7 +816,20 @@ void ChargerTestSession::poll(uint32_t now) {
         }
     }
     if (runner_.state() != before) {
-        K2LOG("[TEST] %s %s\n", ct::name(runner_.state()), ct::name(runner_.reason()));
+        // The state's full name is fixed text: it belongs in the format string, not in a %s (the binlog cuts %s at 12 bytes).
+        const char* reason_name = ct::name(runner_.reason());
+        switch (runner_.state()) {
+        case ct::State::Idle:       K2LOG("[TEST] Setup %s\n", reason_name); break;
+        case ct::State::Baseline:   K2LOG("[TEST] Verify 5V %s\n", reason_name); break;
+        case ct::State::Requesting: K2LOG("[TEST] Negotiating %s\n", reason_name); break;
+        case ct::State::Holding:    K2LOG("[TEST] Hold %s\n", reason_name); break;
+        case ct::State::Releasing:  K2LOG("[TEST] Return to 5V %s\n", reason_name); break;
+        case ct::State::Done:       K2LOG("[TEST] Complete %s\n", reason_name); break;
+        case ct::State::Stopped:    K2LOG("[TEST] Stopped %s\n", reason_name); break;
+        case ct::State::Unsafe:     K2LOG("[TEST] UNSAFE: unplug source %s\n", reason_name); break;
+        case ct::State::Detach:     K2LOG("[TEST] Detach charger %s\n", reason_name); break;
+        case ct::State::Attach:     K2LOG("[TEST] Initializing... %s\n", reason_name); break;
+        }
         if (runner_.state() == ct::State::Done) save_card();
         if (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped) {
             emit_end(now);

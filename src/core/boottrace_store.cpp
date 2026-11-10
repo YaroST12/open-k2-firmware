@@ -133,9 +133,11 @@ void poll() {
 
 void flush_log() {
     for (int n = 0; n < 2 && g_printed < g_taken; n++, g_printed++) {
-        char line[80];
-        format_sample(line, sizeof line, g_samples[g_printed], std::uint32_t(g_printed) * kPeriodMs);
-        K2LOG("[BOOT] %s\n", line);
+        const Sample& s = g_samples[g_printed];
+        // The sample rides as numbers: fixed phrases stay in the format string, a %s is cut at 12 bytes.
+        K2LOG("[BOOT] t=%ums vbus=%u aux=%u plus=%u cc1=%u cc2=%u\n",
+              static_cast<unsigned>(std::uint32_t(g_printed) * kPeriodMs), unsigned(s.vbus_mv), unsigned(s.aux_mv),
+              unsigned(s.plus), unsigned(s.cc1_mv), unsigned(s.cc2_mv));
     }
     if (g_moved_to != 0 && !g_move_logged) {
         g_move_logged = true;
@@ -165,9 +167,10 @@ void report_previous() {
     for (std::size_t j = 0; j < n; j++) {
         const std::size_t i = n - 1 - j;                              // oldest first
         const std::uint32_t idx = std::uint32_t(g_prev->count) - 1 - i;
-        char line[80];
-        format_sample(line, sizeof line, unpack(g_prev->at(i)), idx * kPeriodMs);
-        K2LOG("[SESS] %s\n", line);
+        const Sample s = unpack(g_prev->at(i));
+        K2LOG("[SESS] t=%ums vbus=%u aux=%u plus=%u cc1=%u cc2=%u\n",
+              static_cast<unsigned>(idx * kPeriodMs), unsigned(s.vbus_mv), unsigned(s.aux_mv),
+              unsigned(s.plus), unsigned(s.cc1_mv), unsigned(s.cc2_mv));
     }
 }
 
