@@ -404,20 +404,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   is granted; a source that overshoots and settles makes the first move read ~0 or negative. Fix: the walk's base (and
   each step) waits until VBUS is steady (e.g. 3 samples within 3 mV, bounded by a timeout) before it records the level;
   the sum rule stays. Host test with this shape (base 13007 settling to 12990, then +20 mV steps) must pass.
-<<<<<<< HEAD
-- **Wake sleeping port ON breaks the charger test's planned re-attach** (confirmed 2026-11-10: Wake ON + reboot -> 0 / 20 again;
-  log `runs/2026-11-10-merge2-hw/wake-ct`: 58 ms after "[TEST] unit detach: Rd off" the dark-attach release fires and
-  the hold puts Rd back on CC2, every unit; with k2-dev) (2026-11-10, aebb430, UGREEN on the
-  top plug, `runs/2026-11-10-merge2-hw/ugreen-pd.txt`, `ugreen-pd2.txt`): with Wake left ON (and after lab re-reads),
-  two PD runs ended 0 pass / 20-25 fail, every row "no PD after re-attach", VBUS 5.10 V for the whole run and CC2 at
-  1.62 V (an Rd held) even at idle and after Wake was switched off; a K2 reboot with Wake OFF made the next run pass
-  22 / 1. Two things changed at once (Wake off + reboot clearing the re-read's leftovers), so the cause is not proven.
-  Suspect: the idle wake's gate (`idle_owner_free()`: no pin, no run start, no op, no Ra) sees the run's planned
-  re-attach gap as idle and re-presents Rd, so the source never sees the detach. Confirm: Wake ON, reboot, PD run on a
-  plain charger. Fix if confirmed: the wake never acts while a charger test is active (Runner busy), whatever its
-  phase; also a Wake OFF must release any Rd the wake left (it did not here).
-=======
-- ~~**Wake sleeping port ON breaks the charger test's unit re-attach**~~ fixed (k2/wake-vs-test, hardware check pending;
+- **Wake sleeping port ON breaks the charger test's unit re-attach** (fixed in 1b0c62f, hardware check pending;
   2026-11-10, UGREEN on the top plug, fw 14f9d24, `runs/2026-11-10-merge2-hw/wake-ct`, `ugreen-pd.txt`): with Wake ON every
   PD row failed "no PD after re-attach" (0 pass / 20 fail, VBUS 5.10 V all run; Wake OFF 22 pass / 1 fail). Root cause:
   `unit_detach()` drops the run's Rd (so `g_rd_start` is false and `idle_owner_free()` is true) but keeps the attach and
@@ -432,7 +419,6 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   levels are not reliably separable from the standby ~3.0-3.3 V. Open: a tool that is mid-run when the setting goes off
   keeps a wake-made attach until its own cleanup; the boot scan before the open levels are known can still attach a dark
   CC2 (released by the dark-attach rule after 3 s, as before).
->>>>>>> b44a91a (fix(fusb302): idle wake never acts during a charger-test run)
 - **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, fixed in 7d1ae17, hardware check pending, connection matrix H22, be71f10, `runs/2026-11-10-merge2-hw/`
   dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at
   "No charger". The K2 passes CC1->CC1 and CC2->CC2, and each cable's orientation picks which pin its CC wire lands on,
