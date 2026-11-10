@@ -776,8 +776,11 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     "step resolution 15mV" - the +-2 mV per-step band was the meter's LSB, but the source's own ripple at no load
     moves one reading by several mV. Changed in 91a9839: each step must move up and stay below 40 mV, the five must
     sum to 100 +- 20 mV (detail = mean move). Re-run: both walks pass (8000 -> 8109 mV, 12500 -> 12590 mV), PD
-    19 pass / 0 fail / 5 skip. Items 1 (floor, `PdLow` unit, not run) and 3 (spread on the v9 card, not read back)
-    still need their hardware check: `ct_start.py --units pd,pd-low` then `k2_remote.py cards` on the new card.
+    19 pass / 0 fail / 5 skip. Item 3 verified the same day (`--units pd,pd-low`, card 55, fw be71f10,
+    `runs/2026-11-10-merge2-hw/cards.json`): `err_mv` 5-11 V APDO +10 / +20 / +8 / -12 mV, 5-20 V APDO
+    +6 / +3 / -9 / -49 mV. Gap: `k2_remote.py cards show` prints only "whole range", not the spread - print the four
+    errors there too. Item 1 (floor) still unverified: the CUKTECH C1's APDOs start at 5 V, so `pd-low` planned
+    no low-edge row; it needs a 3.3 V APDO (Anker IQ4 3.3-11 V, Baseus).
 - **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
   above). Opt-in, never in the default preset: every 100 mV across each PPS APDO (and SPR AVS range), 1 A, Accept +
   PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint strip on the results tab and the card
