@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import ct_start
+import logdb
 
 
 class Preflight(unittest.TestCase):
@@ -150,6 +151,36 @@ class StartRun(unittest.TestCase):
         r, _ = ct_start.start_run(None, 5, press=press, run_id=k2.run_id, stage=k2.stage_of, back=k2.back,
                                   sleep=lambda s: None), 0
         self.assertEqual(r, ct_start.STARTED)
+
+
+class PreflightRefusalPrint(unittest.TestCase):
+    """The START preflight's refusal must reach ct_start's output: the K2 logs it as one [TEST] line and the log text
+    rides the same HID IN endpoint as the responses (tapped while the polls run), so a run id that stays 0 is printed
+    together with the reason from that line."""
+
+    def test_the_refusal_reason_is_printed_with_the_run_id(self):
+        frames = [b"[TEST] preflight refused: VBUS not safe 5V (7700 mV)\n" + b"\x00" * 20]
+        text = ct_start.start_failure_text(5, frames)
+        self.assertIn("run id still 5", text)
+        self.assertIn("VBUS not safe 5V (7700 mV)", text)
+
+    def test_packed_log_frames_decode_to_the_reason(self):
+        fmt = "[TEST] preflight refused: %s (%d mV)\n"
+        ids = [k for k, v in logdb.load().items() if v == fmt]
+        if not ids:
+            self.skipTest("the preflight-refusal format is not in tools/logdb.json yet")
+        # the wire form of that line (msg#<id> args; a %s arg is %XX-escaped, a %d arg decimal), as the K2 sends it
+        frames = [(f"msg#{ids[0]} VBUS%20not%20safe%205V 7700\n").encode()]
+        self.assertIn("VBUS not safe 5V (7700 mV)", ct_start.start_failure_text(5, frames))
+
+    def test_response_frames_are_ignored(self):
+        frames = [b"\xA6\x4B\x01\x01\x00" + b"\x00" * 59, b"[TEST] preflight refused: no source (0 mV)\n"]
+        self.assertIn("no source (0 mV)", ct_start.start_failure_text(7, frames))
+
+    def test_without_a_refusal_line_the_message_stays(self):
+        self.assertEqual(ct_start.start_failure_text(5, [b"[TEST] start selected=1 units=2 -> none\n"]),
+                         "START did not start a run (run id still 5)")
+        self.assertEqual(ct_start.start_failure_text(5, []), "START did not start a run (run id still 5)")
 
 
 class RunId(unittest.TestCase):

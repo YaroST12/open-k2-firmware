@@ -18,6 +18,8 @@
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
 #include <algorithm>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
@@ -385,7 +387,17 @@ StatsSnapshot stats_snapshot() { return {stats.resets, stats.isrs, stats.log_sen
 bool configured() { return true; }
 void poll() { g_stub.polls++; }
 void log(std::string_view) {}
-void log_fmt(const char*, ...) {}
+void log_fmt(const char* fmt, ...) {
+    // K2LOG on the host formats the text directly: keep it, so tests can assert on log lines (capped, they look at the tail).
+    char buf[256];
+    std::va_list ap;
+    va_start(ap, fmt);
+    const int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if (g_stub.log_text.size() > 64 * 1024) g_stub.log_text.clear();
+    g_stub.log_text.append(buf, std::min<std::size_t>(static_cast<std::size_t>(n), sizeof buf - 1));
+}
 std::size_t log_bin(std::span<std::uint8_t> out, std::uint32_t& base_ms, bool& older) {
     base_ms = g_stub.bin_base;
     older = g_stub.bin_older;

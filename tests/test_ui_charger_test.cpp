@@ -1031,6 +1031,29 @@ static void test_vsafe5_review() {
         no_operations();
     }
 }
+// The START preflight's refusal is a footer message on screen only; the log must carry it too (one [TEST] line with the
+// reason in the on-screen words and the VBUS reading), so a remote START (tools/ct_start.py) can print why the run id
+// stayed 0 - a source already elevated under the PDO 1 contract (7.7 V on the splitter's other port) refuses the START.
+static void test_preflight_refusal_is_logged() {
+    {
+        fixture(); g_stub.pm.vbus_mv = 7700;   // above vSafe5V, and up (>= kStartVbusMv): no Rd wait, refused on the first OK
+        Ui ui; open(ui); review(ui);
+        g_stub.log_text.clear();
+        start_press(ui, 1300);
+        CHECK_EQ(ui.charger_test_busy(), false);
+        CHECK_EQ(footer_says("VBUS not safe 5V", kCaution), true);
+        CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: VBUS not safe 5V (7700 mV)") != std::string::npos, true);
+        no_operations();
+    }
+    {
+        fixture(); g_stub.pm.vbus_mv = 5000;   // a safe 5 V source: the START goes on, no refusal is logged
+        Ui ui; open(ui); review(ui);
+        g_stub.log_text.clear();
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        CHECK_EQ(ui.charger_test_busy(), true);
+        CHECK_EQ(g_stub.log_text.find("preflight refused") == std::string::npos, true);
+    }
+}
 static void test_results_counters_are_words() {
     for (unsigned kind = 0; kind < 3; ++kind) {
         fixture();
@@ -3589,6 +3612,7 @@ int main() {
     test_results_best_line_names_the_best_modes();
     test_review_start_is_only_row();
     test_vsafe5_review();
+    test_preflight_refusal_is_logged();
     test_self_powered_review_note(); test_self_powered_run_is_on_the_card();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();

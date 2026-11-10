@@ -192,6 +192,7 @@ struct StubState {
     std::vector<uint8_t> bin_log;          // usb::log_bin(): the K2LOG entries the stub ring holds (whole entries, oldest first)
     uint32_t bin_base = 0;
     bool bin_older = false;
+    std::string log_text;                  // usb::log_fmt() text (K2LOG on the host builds), capped; tests search it for log lines
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store
