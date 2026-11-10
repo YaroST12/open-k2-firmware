@@ -841,6 +841,8 @@ int main() {
         for (int mv = 5000; mv > 4000; mv -= 200) { r.sink.on_vbus(mv, r.now); r.pump(); r.run(100); }
         CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));   // still falling toward the target
         r.sink.on_vbus(3800, r.now); r.pump();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));   // one sample in the band is no step (review item B)
+        for (std::uint32_t t = 0; t < kDownSettleMs + 100; t += 50) { r.sink.on_vbus(3800, r.now); r.pump(); r.run(50); }
         CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
         CHECK_EQ(int(r.sink.status().result), int(SinkResult::Ok));
         CHECK_EQ(int(r.sink.status().pos), 6);
@@ -853,6 +855,31 @@ int main() {
         r.ctl(kCtlPsRdy);                                                   // a late PS_RDY changes nothing
         CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
         CHECK_EQ(int(r.sink.status().result), int(SinkResult::Ok));
+    }
+    {
+        // Item B: the shortcut needs VBUS steady inside the band [target - margin, ceiling] for kDownSettleMs. A single sample, a
+        // sample below the floor (a glitch, an output that went dark), a fall through the band and a bounce out of it all keep the
+        // sink waiting for PS_RDY.
+        Rig r;
+        r.caps.pdos[5] = decode_pdo(0xC0000000 | (110u << 17) | (33u << 8) | 60u);
+        r.sink.trigger({1, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        r.run(kSettleMs + 100);
+        CHECK_EQ(int(r.sink.trigger({6, 3300, 3000}, r.now)), int(Err::Ok));
+        r.pump(); r.ctl(kCtlAccept);
+        const std::size_t sent = r.sent.size();
+        for (int mv : {2000, 0, 1000}) { r.sink.on_vbus(mv, r.now); r.pump(); r.run(100); }   // below the floor: no step
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        for (int mv : {3800, 3600, 3400, 3200, 3000}) { r.sink.on_vbus(mv, r.now); r.pump(); r.run(100); }   // still falling through the band
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        for (std::uint32_t t = 0; t < kDownSettleMs - 100; t += 50) { r.sink.on_vbus(3500, r.now); r.pump(); r.run(50); }
+        r.sink.on_vbus(5000, r.now); r.pump(); r.run(50);                                       // out of the band: the dwell restarts
+        for (std::uint32_t t = 0; t < kDownSettleMs - 100; t += 50) { r.sink.on_vbus(3500, r.now); r.pump(); r.run(50); }
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        CHECK_EQ(r.sent.size(), sent);
+        for (std::uint32_t t = 0; t < 300; t += 50) { r.sink.on_vbus(3500, r.now); r.pump(); r.run(50); }   // steady long enough
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_EQ(int(r.sink.status().result), int(SinkResult::Ok));
+        CHECK_EQ(int(r.sink.status().hard_resets), 0);
     }
     {
         // The same step with VBUS stuck above the target never gets the benefit: the 4 s window ends in a Hard Reset.

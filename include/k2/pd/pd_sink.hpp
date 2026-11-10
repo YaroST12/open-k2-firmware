@@ -148,6 +148,14 @@ inline constexpr std::int32_t kUnloadedFloorMv = 600;
 constexpr std::int32_t programmable_ceiling_mv(std::int32_t target_mv) {
     return target_mv + (target_mv / 10 > kUnloadedFloorMv ? target_mv / 10 : kUnloadedFloorMv);
 }
+// Pattern no-psrdy-on-downstep: an unloaded programmable source that Accepts a lower voltage and never sends PS_RDY has made the step
+// when VBUS sits STEADY in [target - margin, programmable_ceiling_mv(target)] for kDownSettleMs (the same margin below the target as
+// above it). One sample is not a step: a glitch, an output that went dark and a fall through the band do not count; a sample that
+// moves more than kRiseMv from the band's first one restarts the dwell.
+inline constexpr std::uint32_t kDownSettleMs = 300;
+constexpr std::int32_t programmable_floor_mv(std::int32_t target_mv) {
+    return target_mv - (target_mv / 10 > kUnloadedFloorMv ? target_mv / 10 : kUnloadedFloorMv);
+}
 inline constexpr std::uint8_t kMaxTxRetries = 2;
 
 // Release verification (pattern budget-reannounce-mid-run): the PS_RDY of a 5 V release is not proof that VBUS came down (an
@@ -378,6 +386,9 @@ private:
     std::int32_t ref_mv_ = 0;    // lowest VBUS sample of the current descent
     std::uint32_t ref_at_ = 0;   // when ref_mv_ last improved by kFallStepMv
     bool tracking_ = false;
+    std::int32_t down_ref_mv_ = 0;   // the down-step band dwell: the first in-band sample, and when the dwell began
+    std::uint32_t down_at_ = 0;
+    bool down_set_ = false;
     bool fresh_ = false;         // a new target: the settle timer restarts at PS_RDY
     bool epr_caps_seen_ = false;
     std::uint32_t next_epr_ka_ = 0, get_cap_at_ = 0, retx_at_ = 0;
