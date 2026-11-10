@@ -357,6 +357,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     unverified on hardware: needs a PPS sink (OnePlus 15 on the CUKTECH; it takes only PDO1 5 V on the Anker IQ4,
     with or without the K2).
 - ~~**Sink Identify inline drops the phone from 9 V to 5 V**~~ completed: 6df54fa; inline Identify refused with and without --confirm, VBUS held 9.076 V, Sink tab "sniff 18D1:4EE1" (Pixel, be71f10). Identify of a phone alone (fix item 2) is batch 3 (k2/identify-alone).
+  - Also wrong when the K2 itself is the sink (2026-11-10, d6c90e7, UGREEN Nexode Air 65 W, `pd request 7` = SPR AVS
+    9-20 V during the AVS sweep, `runs/2026-11-10-merge2-hw/avs-footer.png`): the footer reads "PD 13V" (earlier
+    "PD 10-11V") for an AVS contract at 12.6 V. The footer takes the sniffed contract (fusb302::contract(), Requests
+    heard on the wire); the K2 never hears its own TX, so it falls back to the capless "PD <measured>" text. Fix: when
+    the K2's own sink holds the contract (SinkStatus ready/held, pos and PDO known), derive_proto uses that contract:
+    AVS pos -> "AVS 12.6V", PPS -> "PPS 9V", fixed -> "PD 9V 3A"; the sniffed contract only for a far sink. Host test on
+    derive_proto with an own AVS / PPS / fixed contract.
 - **Charger test: "Cable OFF" says nothing about what it does** (2026-11-10, operator report): the wizard's step 2
   reads "Cable" with the value "OFF", which says nothing about what it does (the e-marker identity the K2 presents to the
   charger, the same list as Tools -> Spoof). Operator decision, wording only, nothing else in the flow changes (the
