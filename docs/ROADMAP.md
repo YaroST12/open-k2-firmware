@@ -387,6 +387,10 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     Request -> PPS tag. Hardware: repeat the P4-handback replug, footer reads "PPS 9V" or "PD 9V".
 - **Sink Identify inline drops the phone from 9 V to 5 V** (2026-11-10, operator report, cause captured, 05b1703,
   Anker IQ4 100 W -> K2 -> OnePlus 15 on PPS PDO 6 at ~9 V 2.3 A, `runs/2026-11-10-connection/identify/bb.txt`).
+  **Fixed in 6df54fa, hardware check pending** (fix items (1) and (3) done: inline Identify / Get_Source_Cap /
+  cable read over SOP' / VDM probe all refuse inline with no confirm, the UI confirm paths are removed, and the
+  Sink tab shows the sniffed identity marked "sniff"; item (2), active Identify of a phone alone on the K2, is a
+  later batch).
   The confirmed inline Identify (`Action::Identify` -> `fusb302::identify_start(true)`, `include/k2/pd/pd_identify.hpp`)
   transmits with the K2's own sink header (**power role Sink, data role UFP**, MessageID from 0), i.e. it speaks as a
   second copy of the phone on a wire where the phone and the charger already have a contract.
