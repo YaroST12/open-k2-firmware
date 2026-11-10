@@ -346,6 +346,11 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   Source_Capabilities came before the trace started (`num_pdos: 0`); the phone's Requests (PPS, every ~500 ms) were
   decoded with no PDO list, as a fixed RDO: no voltage (0 V) and the PPS bits read as max current (5.82 A, also on the
   IBUS "max" label). `src/ui/home_proto.cpp` `derive_proto` takes the `ctr.valid && pd_link` branch into `from_pd`.
+  Seen again in H6 (Anker IQ4 100 W -> K2 -> OnePlus 15, plain HID boot, `runs/2026-11-10-connection/H6/`): "PD
+  0V5.62A" at 9.09 V 2.45 A, and here the black box **did** sniff the Source_Capabilities (89508 ms) while
+  `state` still says `num_pdos: 0`. So missing the caps at boot is not the whole cause: sniffed caps on an inline
+  link are not stored where the decoder looks. Fix both: store the sniffed caps while inline, and never decode a
+  Request without them.
   - Fix: a contract decoded without its Source_Capabilities has an unknown PDO type: show the measured level and no
     current ("PD 9V", tag only), never a value decoded from a guessed RDO layout. A Request repeated every <=10 s with
     no caps is the PPS keep-alive pattern: label it "PPS 9V" from the measured VBUS. `fc: PD MTK` in `state` for the
