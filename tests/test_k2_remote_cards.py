@@ -110,6 +110,34 @@ class Cards(unittest.TestCase):
         with self.assertRaises(kr.CardsFailed):
             run(["cards", "show", "3"], chunks(bytes(bad)))
 
+    def test_a_v9_card_shows_the_setpoint_spread_on_its_range_lines(self):
+        # v9 (the merged PPS-coverage work): format byte 33 = 9, a 214-byte payload, and a 16-byte spread block at
+        # offset 198 - 4 ranges x 4 int8 mV setpoint errors, 0x80 = "no level there" (report_card.py V9_AT; the same
+        # field the web decoder reads as r.err_mv in tools/web/k2proto.js). cards show prints the errors on the range
+        # lines, not only "whole range".
+        def v9(spread):
+            rec = bytearray(PAYLOAD)
+            rec[33] = 9
+            rec.extend(b"\0" * (214 - len(rec)))
+            rec[198:214] = bytes(spread)
+            return bytes(rec)
+        spread = [10, 20, 8, 244] + [5, 207, 0x80, 0x80] + [0x80] * 8   # range 0: +10/+20/+8/-12 mV; range 1: +5/-49 mV
+        rec = v9(spread)
+        self.assertEqual(len(rec), 214)
+        r, _ = run(["cards", "show", "3"], chunks(rec))
+        self.assertEqual(r["card"]["ranges"][0]["err_mv"], [10, 20, 8, -12])   # decoded from the v9 block
+        self.assertEqual(r["card"]["ranges"][1]["err_mv"], [5, -49])
+        text = kr.render("cards", r)
+        self.assertIn("- PPS 3.3-11V: ✓ whole range, err +10 / +20 / +8 / -12 mV", text)
+        self.assertIn("- PPS 3.3-21V: ✗ at 15 V, reached 13 V, err +5 / -49 mV", text)
+        with tempfile.TemporaryDirectory() as d:   # the export JSON carries the field as well
+            out = os.path.join(d, "x.json")
+            run(["cards", "export", "--out", out], [bytes([0, 1, 1, 3, 0])] + chunks(rec))
+            self.assertEqual(json.load(open(out))[0]["ranges"][0]["err_mv"], [10, 20, 8, -12])
+        r, _ = run(["cards", "show", "3"], chunks())   # a card without the v9 block says nothing
+        self.assertNotIn("err_mv", r["card"]["ranges"][0])
+        self.assertNotIn("err ", kr.render("cards", r))
+
     def test_v8_card_reads_and_shows_the_rebalanced_count(self):
         # Format v8 (b193e56): a 198-byte payload, the re-balance count at offset 196 (+ a spare), same
         # layout as tools/report_card.py (PAYLOAD 198, V8_AT 196).
