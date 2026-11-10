@@ -222,6 +222,19 @@ Patterns so far (names used below):
   every step followed; the offset grows with the level, -94 mV at 9.2 V to -150 mV at 19.9 V (a ~0.75 % gain error of
   the converter; the K2 read the CUKTECH C1's PPS within +20 / -49 mV the same day). Peak 19.75 V at 19.9 V; the
   range top, 20.0 V, gives 19.66 V - the same fold onto the fixed-20 V level as the PPS range, still inside +-5 %.
+- Verification run, same day (`runs/2026-11-10-merge2-hw/fh22-verify-*.tsv`, `fh22-verify-trace`; every level waited
+  for the sink's `ready`, then 6 s to settle): the fold is the brick, not the K2.
+  1. Every request is accepted and confirmed: 20.5 V and 21 V get Accept ~12 ms and PS_RDY ~18 ms after it, the
+     contract reads `pdo=6 21 V`, and VBUS settles at 19.42 V. No Reject, no fallback by the K2.
+  2. Settled levels: PPS 19.90 V -> 19.82 V, **19.95 V -> 19.86 V (the peak)**, 20.0 V / 21.0 V -> 19.42 V; fixed 20 V
+     (PDO 5) -> 19.42 V. The earlier sweep's larger offsets (-150 mV) were partly unsettled readings (0.9 s wait).
+  3. PS_RDY comes long before the output arrives: at a 15 -> 19 V step the sink was `ready` with VBUS at 14.3 V,
+     still climbing for over a second (slow slew, early PS_RDY).
+  4. The meter is not the cause: the same K2 read the CUKTECH C1's fixed 20 V at 19.93 V and the Anker IQ4's at
+     19.77 V the same day, and the 2026-11-07 run (bottom port, another cable) read this brick's fixed 20 V at 19.41 V.
+  Verdict: the converter cannot exceed ~19.86 V; any request of 20 V or more (fixed 20 V, PPS 20-21 V, AVS 20 V) lands
+  on a 19.42 V setpoint, while the PDO list advertises PPS to 21 V. Fixed 20 V and AVS 20 V still pass (inside +-5 %);
+  the PPS 21 V rows fail, correctly.
 - Legacy: QC2 5/9/12 V and QC3 5→12→5 V pass; QC3+ 5 V pass then "no QC3+ response"; QC3 Class B 20 V skipped (Class A only). FCP, SCP, AFC end Unsupported (no ack, no rise) and skip their other rows as designed. VOOC/SVOOC need load; VIVO no response.
 - UFCS: the first runs (`run1-ufcs.log`) showed every row "no response". Cause found with the wire diagnostics: the K2's USART2 clock was wrong (baud doubled, fixed in fa966dc), then the engine mistook the source's Soft_Reset code (4) for Accept. The charger is a standard UFCS source (T/TAF 083-2024, `docs/FASTCHARGE_PROTOCOLS.md` section 4): after the handshake it answers Ping `AA 20 08 00 63` with ACK `AA 40 08 01 DF`, Get_Output_Capabilities `AA 22 08 06 D6` with ACK `AA 42 08 01 9C` and then Output_Capabilities (receiver address 2, message 0); our ACK `AA 20 08 01 4A`; Request `AA 24 09 02 08 ...` gets ACK `AA 44 08 01 59` and Accept `AA 42 08 03 CE`.
 - UFCS output modes (decoded from the Output_Capabilities payload `18 02 26 01 54 01 2C 64 | 28 04 4C 02 26 01 90 64`): mode 1 3.40-5.50 V 1.00-3.00 A, mode 2 5.50-11.00 V 1.00-4.00 A, steps 50 mA and 10 mV. No level above 11 V is offered, so the charger test's 12 V UFCS row (levels 5/9/12/5 V) ends with the "no band" failure (level not offered) by design; 9 V is mode 2 at 2 A (cable unknown, worst case of the standard's cable table).
