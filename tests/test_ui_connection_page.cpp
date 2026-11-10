@@ -918,7 +918,32 @@ static void test_sink_id_row_marks_a_sniffed_identity() {
     g_stub.sink_vdm = {};
 }
 
+// A device ALONE on the K2 (a dual-role phone: Rp toggling on CC2, VBUS dark, no source caps) is offered the
+// active Identify on the Sink tab (ROADMAP "Sink Identify inline drops the phone", fix item (2)). Red first:
+// the item was enabled only when a charger or a sink was attached.
+static void test_sink_tab_offers_identify_when_a_device_is_alone() {
+    Ui &ui = fresh_ui();
+    g_stub.cc = 1;                        // the scan attached on the phone's Rp
+    g_stub.pm.vbus_mv = 0;                 // dark: the phone sources nothing while the K2 is passive
+    g_stub.caps.valid = false; g_stub.caps_this_attach = false;
+    for (uint32_t t = 12000; t <= 13400; t += 100) {   // the dual-role toggle: Rp on CC2 every other 100 ms
+        set_cc(0, (t / 100) % 2 == 0 ? 3300 : 0);
+        ui.tick(t);
+    }
+    CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::DualRolePort));
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+    ui.goto_page(kConnTabAlias, 13500);
+    ui.tick(13550);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 13600);   // Cable
+    ui.on_button(Button::Plus, ButtonEvent::Short, 13650);   // Sink tab
+    ui.on_button(Button::Ok, ButtonEvent::Short, 13700);
+    CHECK_EQ(cp(ui).popup_count(), 2);                       // Identify, Refresh
+    CHECK_EQ(cp(ui).popup_item(0).enabled, true);            // Identify offered: a device is alone on the K2
+    CHECK_EQ(cp(ui).popup_item(1).enabled, true);
+}
+
 int main() {
+    test_sink_tab_offers_identify_when_a_device_is_alone();
     test_survey_nothing_active_before_refresh();
     test_survey_refresh_item_starts_it();
     test_survey_status_line();

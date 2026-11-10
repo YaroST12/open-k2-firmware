@@ -160,6 +160,17 @@ private:
     void set_attached(bool on, std::uint32_t at_ms);
 };
 
+// Active Identify of a device ALONE on the K2 (ROADMAP "Sink Identify inline drops the phone from 9 V to 5 V",
+// fix item (2)): the link state decides, never a confirm. alone = not inline, VBUS dark, no source caps this
+// attach, and the waiting classifier reads a dual-role port (an Rp that toggles every ~100 ms - a phone alone).
+// A steady-Rp charger alone is ChargerWaiting there, so Identify stays NoDevice/refused as before. Inline is
+// refused outright (batch 2, unchanged). VBUS unknown (-1 / monitor offline) cannot claim "dark".
+constexpr bool identify_alone(bool inline_mode, bool vbus_known, std::int32_t vbus_mv, bool caps_this_attach,
+                              raguard::WaitKind wait_kind) {
+    return !inline_mode && vbus_known && vbus_mv >= 0 && vbus_mv < kVSafe0Mv && !caps_this_attach &&
+           wait_kind == raguard::WaitKind::DualRolePort;
+}
+
 // "5s", "1m 23s", "1h 02m", "99h+".
 void format_ago(std::uint32_t seconds, char* out, std::size_t n);
 

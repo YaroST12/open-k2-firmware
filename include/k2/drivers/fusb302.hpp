@@ -14,6 +14,7 @@
 #include "k2/pd/pd_emarker_plan.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
+#include "k2/pd/ra_guard.hpp"
 #include "k2/pd/pd_probe.hpp"
 #include "k2/pd/pd_reread.hpp"
 #include "k2/pd/pd_passive.hpp"
@@ -108,6 +109,13 @@ std::uint32_t pd_quiet_ms();
 // Inline does not change the chip: it is passive (Auto-CRC off) except during an active operation.
 void set_inline(bool on);
 bool inline_mode();
+// The caller (Ui, through pd::Link) feeds the link's waiting verdict in, next to set_inline(): the Rp-trace
+// classification of the passive CC lines. DualRolePort = a dual-role device (a phone) alone on the port,
+// toggling Rp/Rd every ~100 ms. The driver needs it for the alone-Identify decision (pd::identify_alone).
+void set_wait_kind(raguard::WaitKind kind);
+raguard::WaitKind wait_kind();
+// True when Source_Capabilities arrived in the current attach session (a source announced itself this attach).
+bool caps_this_attach();
 // A sink sits behind the K2: the inline latch, or another sink's Request on the wire in this attach (the fast proof, before the
 // Link has a tick to latch). While true the K2 presents no Rd, sends no Request and no reply for the device behind it, and
 // opens no CC line. The far-sink half ends with the attach; the latch is the Link's to clear.

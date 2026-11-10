@@ -73,6 +73,8 @@ struct StubState {
     int epr_info_asks = 0; bool epr_info_forced = false; k2::pd::Err epr_info_err = k2::pd::Err::Ok;
     bool far_cc = false;                  // fusb302::sink_cc_far
     bool link_inline = false, inl = false, scan_confirmed = false, self_powered = false;
+    k2::raguard::WaitKind wait_kind = k2::raguard::WaitKind::Unknown;   // fusb302::wait_kind / set_wait_kind
+    bool caps_this_attach = false;        // fusb302::caps_this_attach()
     uint8_t pin = 0;                         // fusb302::pin_rd() override (0 = derive from self_powered: CC2)
     bool bus_powered = false, supply_decided = true;   // power_source: no host and VBUS at boot / the host window is over
     bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;

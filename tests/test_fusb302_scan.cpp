@@ -3262,14 +3262,14 @@ void test_inline_hard_reset_only_with_the_lab_flag() {
 // line (no CC), so identify_start refuses today.
 
 // A phone alone on CC1: its Rp toggles, VBUS stays dark while the K2 is passive, so the VBUS-low detach
-// (1 s) takes the line; the link verdict for the toggling Rp is DualRolePort.
+// (a high reading, then dark for > 1 s) takes the line; the link verdict for the toggling Rp is DualRolePort.
 static void attach_phone_alone_detached() {
     reset_world();
     fusb302::init();
     g_reg[0x40] = 0x20;                                  // an Rp on CC1 (the phone's toggle, steady in this fake)
     for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
     CHECK_EQ(fusb302::active_cc() != 0, true);
-    fusb302::sink_vbus(0);
+    fusb302::sink_vbus(5000); fusb302::poll();           // one reading above 3 V, so a low one counts as a detach
     for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }   // dark > 1 s: detach
     CHECK_EQ(fusb302::active_cc(), 0);
     fusb302::sink_vbus(0);                               // the monitor still reads dark after the detach
@@ -3291,7 +3291,8 @@ void test_alone_phone_identify_starts_and_presents_rd_only() {
     for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }   // the scan re-attaches on the Rp
     CHECK_EQ(fusb302::active_cc() != 0, true);
     for (int i = 0; i < 30; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
-    CHECK_EQ(find_from("FIFO") >= 0, true);              // the sequencer transmits once attached (Auto-CRC while it runs)
+    CHECK_EQ(find_from("W 06=01") >= 0, true);           // the sequencer transmits once attached (TX_START went out)
+    CHECK_EQ(usb_has("TX type 15"), true);               // ... Discover Identity first
     end_alone_case();
 }
 

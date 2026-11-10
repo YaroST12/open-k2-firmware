@@ -69,6 +69,9 @@ bool cable_thunderbolt() { return g_stub.cable_tb; }
 void rescan() { g_stub.rescans++; }
 void set_inline(bool on) { g_stub.inl = on; }
 bool inline_mode() { return g_stub.inl; }
+void set_wait_kind(k2::raguard::WaitKind kind) { g_stub.wait_kind = kind; }
+k2::raguard::WaitKind wait_kind() { return g_stub.wait_kind; }
+bool caps_this_attach() { return g_stub.caps_this_attach; }
 bool sink_cc_far() { return g_stub.far_cc; }
 void new_source() { g_stub.new_sources++; }
 void clear_source() { g_stub.clear_sources++; g_stub.caps.num_pdos = 0; }

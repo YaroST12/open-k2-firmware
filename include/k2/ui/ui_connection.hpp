@@ -229,6 +229,7 @@ struct ActFacts {
     bool more = false;          // the Source tab shows its second page (Details): the item goes back
     bool inline_sink = false;   // a live sink is inline: active tools that would reach it are refused
     bool attached = false;      // a charger or a device answers on a port
+    bool alone = false;         // a device is alone on the K2 (dual-role port, VBUS dark, no caps): active Identify is offered
     bool caps_valid = false;    // Source_Capabilities received
     bool cable_valid = false;   // e-marker data held
 };
@@ -252,7 +253,7 @@ constexpr int actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out
         out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
         break;
     case Tab::Sink:
-        out[std::size_t(n++)] = {Act::Identify, "Identify", a.attached, "No device seen"};
+        out[std::size_t(n++)] = {Act::Identify, "Identify", a.attached || a.alone, "No device seen"};
         out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
         break;
     }

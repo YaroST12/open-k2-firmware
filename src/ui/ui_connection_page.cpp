@@ -228,8 +228,12 @@ void ConnectionPage::share_cable(uint32_t now_ms) {
 
 void ConnectionPage::build_items() {
     conn::ActFacts a;
-    a.inline_sink = ctx_.ui->link().inline_mode() || ctx_.inline_mode;
+    const pd::Link &link = ctx_.ui->link();
+    a.inline_sink = link.inline_mode() || ctx_.inline_mode;
     a.attached = facts_.charger || facts_.inline_sink;
+    // A device alone on the K2 (a dual-role phone): offer the active Identify there too (the driver presents Rd)
+    a.alone = pd::identify_alone(a.inline_sink, ctx_.pm_online, ctx_.pm_online ? ctx_.vbus_fast_mv : -1,
+                                 fusb302::caps_this_attach(), link.wait_kind());
     a.caps_valid = pd::active_caps().valid;
     a.cable_valid = fusb302::emarker().valid;
     a.more = more_;

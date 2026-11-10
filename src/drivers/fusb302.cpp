@@ -31,6 +31,7 @@
 #include "k2/pd/pd_ccscan.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
+#include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_probe.hpp"
 #include "k2/pd/pd_reread.hpp"
 #include "k2/pd/pd_passive.hpp"
@@ -115,6 +116,8 @@ bool g_rd_start = false;    // a run start presents Rd (no sink inline): the lin
 bool g_run_owner = false;   // a charger-test run owns the line in every phase, the Rd-off gaps included (set_run_owner)
 bool g_wake_attach = false; // the current attach was made by the idle wake's Rd and nobody has taken that Rd over since (setting off ends it)
 bool g_inline = false;      // a real sink is attached: active operations refuse or need a confirm
+raguard::WaitKind g_wait_kind = raguard::WaitKind::Unknown;   // the link's waiting verdict (Ui feeds it): DualRolePort = a phone alone on the port
+bool g_ident_owns_rd = false;   // the alone-Identify presented Rd (rd_for_run) and gives it back when it ends
 pd::AutoCrcGate g_crc;      // Auto-CRC only while an active operation runs (the armed spoof counts)
 pd::AutoCrcGate g_rd_gate;  // Rd on the active line only while a sink operation runs (the armed spoof does not count)
 pd::ContractLinger g_contract_linger;   // a contract nobody holds times out after kSinkIdleLingerMs
@@ -1253,6 +1256,12 @@ void set_inline(bool on) {
 bool inline_mode() { return inline_now(); }
 bool sink_downstream() { return downstream_now(); }
 
+// The link's waiting verdict, fed by the UI (pd::Link::wait_kind over the passive CC levels), stored for the
+// alone-Identify decision. Default Unknown: without the feed the driver never claims a device is alone.
+void set_wait_kind(raguard::WaitKind kind) { g_wait_kind = kind; }
+raguard::WaitKind wait_kind() { return g_wait_kind; }
+bool caps_this_attach() { return g_session.fresh(); }
+
 namespace {
 bool set_rd_for_run(bool on, bool keep_scan) {
     if (on && g_inline) return false;   // the sink's Rd must stay alone on the line
@@ -1272,7 +1281,7 @@ bool set_rd_for_run(bool on, bool keep_scan) {
 // unit_detach(): Rd off (the source sees a detach and drops its output), the 5 V default, the sink and source state forgotten,
 // the PD-silent mode off. The scanned cable is kept (the same cable stays plugged in).
 void unit_detach() {
-    g_reread_owns_rd = false;
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     g_reread.abort();
     g_prep.abort();
@@ -1294,7 +1303,7 @@ void unit_detach() {
 // unit_attach(legacy): Rd on as a fresh attach. Legacy = PD-silent: the source's caps are heard (and recorded) but never answered
 // with GoodCRC or a Request, so a charger with a legacy mode gives PD up; otherwise the START path (automatic PDO 1 request).
 void unit_attach(bool legacy) {
-    g_reread_owns_rd = false;
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     g_legacy_only = legacy;
     self_power_restore();        // back to the boot-mode pin before presenting Rd for the unit
@@ -1314,7 +1323,7 @@ void unit_attach(bool legacy) {
 // unit_hold(legacy): the unit boundary of a self-powered run. The pinned Rd is never touched (no detach for the charger to
 // answer with a VBUS cut, no second Rd line), CC stays closed. The rest is what unit_detach + unit_attach reset, without the wire.
 void unit_hold(bool legacy) {
-    g_reread_owns_rd = false;
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     g_reread.abort();
     g_prep.abort();
@@ -1329,7 +1338,7 @@ void unit_hold(bool legacy) {
     usb::log(legacy ? "[PD] Unit hold: PD-silent, Rd kept\n" : "[PD] Unit hold: Soft_Reset, Rd kept\n");
 }
 bool rd_for_run(bool on) {   // a run start takes the Rd and the contract over from a re-read
-    g_reread_owns_rd = false;
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     if (g_ra) {   // the Ra mode goes with the run: owned from the START, released when the run is over
         g_ra_run = on;
@@ -1337,7 +1346,7 @@ bool rd_for_run(bool on) {   // a run start takes the Rd and the contract over f
     }
     return set_rd_for_run(on, false);
 }
-void rd_for_run_pause() { g_reread_owns_rd = false; g_reread_made_contract = false; set_rd_for_run(false, true); }
+void rd_for_run_pause() { g_reread_owns_rd = false; g_ident_owns_rd = false; g_reread_made_contract = false; set_rd_for_run(false, true); }
 bool rd_for_run_on() { return g_rd_start; }
 std::uint8_t idle_wake_line() { return g_idle_wake.line(); }
 
@@ -1636,7 +1645,7 @@ void reread_housekeeping(std::uint32_t now) {
         }
         K2LOG("[REREAD] attach released: contract %d, Rd %d\n", int(g_reread_made_contract), int(g_reread_owns_rd));
         if (g_reread_owns_rd) set_rd_for_run(false, false);
-        g_reread_owns_rd = false;
+        g_reread_owns_rd = false; g_ident_owns_rd = false;
         g_reread_made_contract = false;
         g_sink.detach();
     }
@@ -2224,6 +2233,15 @@ void service() {
     if (g_active_cc != 0) active_tick();
     else if (g_reread.running()) g_reread.tick(systick::millis(), false, reread_link());   // an attach whose source has not shown yet: its wait still ends
     reread_housekeeping(systick::millis());
+    // The alone-Identify's own Rd (it presented Rd because the dark VBUS had detached the line): give it back
+    // once the sequencer is over, so the phone sees a detach and stops sourcing VBUS into the K2.
+    if (g_ident_owns_rd && !g_ident.running()) {
+        g_ident_owns_rd = false;
+        if (g_rd_start) {
+            set_rd_for_run(false, false);
+            K2LOG("[ID] alone attach released: Rd off\n");
+        }
+    }
     trace_sink();
 }
 
@@ -2350,16 +2368,36 @@ bool identify_start(bool confirmed) {
     // Inline Identify is refused even when confirmed: the K2's own sink header on a live wire makes it
     // a second copy of the phone, both partners answer, the GoodCRCs collide and one side resets the
     // link (2026-11-10, the phone dropped to 5 V). What the wire already showed fills the Sink tab.
-    if (g_active_cc == 0 || inline_now()) {
-        K2LOG("[ID] Identify refused (no CC / inline: an inline K2 never transmits)\n");
+    if (inline_now()) {
+        K2LOG("[ID] Identify refused (inline: an inline K2 never transmits)\n");
         return false;
     }
     (void)confirmed;
+    // A device ALONE on the K2 (a dual-role phone: its Rp/Rd toggles on CC, VBUS dark, no source caps this
+    // attach, the link's waiting verdict DualRolePort) is identified actively, as its sink partner, with no
+    // charger to disturb. The link state decides, not a confirm. When the dark VBUS has already detached the
+    // line (no CC), present Rd first - exactly like a run start - so the phone settles as a SOURCE and drives
+    // 5 V; only Rd is ever presented, never Rp, so the K2 cannot become the phone's power source. While Identify
+    // runs, the existing Rd gate keeps Rd on the active line and Auto-CRC on; when it ends, the Rd we
+    // presented is given back (the phone then sees a detach and stops sourcing).
+    const bool alone = pd::identify_alone(false, g_vbus_mv >= 0, g_vbus_mv, g_session.fresh(), g_wait_kind);
+    if (g_active_cc == 0) {
+        if (!alone) {
+            K2LOG("[ID] Identify refused (no CC: nothing to ask)\n");
+            return false;
+        }
+        if (!set_rd_for_run(true, false)) {
+            K2LOG("[ID] Identify refused (Rd refused: a sink is inline)\n");
+            return false;
+        }
+        g_ident_owns_rd = true;
+        K2LOG("[ID] device alone on the K2 (dual-role port, VBUS dark, no caps this attach): Rd presented, Identify as its sink partner\n");
+    }
     const pd::SinkState ss = g_sink.status().state;
     if (ss != pd::SinkState::Idle && ss != pd::SinkState::Ready && ss != pd::SinkState::Failed) return false;
     g_ident_session = g_session.id();
     g_ident.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, systick::millis());
-    K2LOG("[ID] Identify started\n");
+    K2LOG("[ID] Identify started%s\n", alone ? " (device alone on the K2)" : "");
     return true;
 }
 bool probe_start() {
@@ -2497,7 +2535,7 @@ void ra_run_own() { if (g_ra) g_ra_run = true; }
 // owner and stays: refused there, and inline (a real sink's Rd must not be touched).
 bool cc_detach() {
     if (inline_now() || g_pin_rd != 0) return false;
-    g_reread_owns_rd = false;
+    g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
     g_reread.abort();
     g_force_cc = 0;

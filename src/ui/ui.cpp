@@ -707,14 +707,20 @@ Ui::IdResult Ui::identify(uint32_t now_ms) {
     // Inline the driver refuses below (identify_start never transmits inline); what the wire already
     // showed - the phone's Discover Identity ACK, Sink_Capabilities, Requests - fills the Sink tab,
     // marked as sniffed.
-    ctx_.id_no_device = ctx_.no_device();
+    // A device ALONE on the K2 (a dual-role phone; VBUS dark, no source caps this attach, wait_kind
+    // DualRolePort) is identified actively: the link state decides, not the ADC precheck below - mid-toggle
+    // both CC lines can read low for a moment, which is not "no device". The driver presents Rd for it.
+    const bool alone = pd::identify_alone(link_.inline_mode() || ctx_.inline_mode, ctx_.pm_online,
+                                          ctx_.pm_online ? ctx_.vbus_fast_mv : -1, fusb302::caps_this_attach(),
+                                          link_.wait_kind());
+    ctx_.id_no_device = !alone && ctx_.no_device();
     if (ctx_.id_no_device) {   // nothing on CC and no VBUS: transmitting would only burn the retries
         K2LOG("[UI] identify refused: no device (no Rp on CC, VBUS low)\n");
         refresh_action_views(now_ms);
         return IdResult::NoDevice;
     }
     const bool ok = fusb302::identify_start();
-    K2LOG("[UI] identify %s\n", ok ? "started" : "refused");
+    K2LOG("[UI] identify %s%s\n", ok ? "started" : "refused", alone ? " (device alone on the K2)" : "");
     refresh_action_views(now_ms);
     return ok ? IdResult::Started : IdResult::Refused;
 }
@@ -946,6 +952,7 @@ void Ui::tick(uint32_t now_ms) {
         K2LOG("[UI] e-marker listen window over: nothing heard, replug the charger end\n");
     }
     fusb302::set_inline(link_.inline_mode());
+    fusb302::set_wait_kind(link_.wait_kind());   // the alone-Identify decision reads this (pd::identify_alone)
     if (ctx_.analog) fusb302::sink_cc(ctx_.analog->cc1_mv, ctx_.analog->cc2_mv);
     link::set_inline_mode(link_.inline_mode());
     ctx_.inline_mode = link_.inline_mode();
