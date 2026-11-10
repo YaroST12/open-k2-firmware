@@ -304,6 +304,8 @@ static int wizard_text_y(int row, int open = -1, int y0 = kit::kBodyY) {
     return row_top(row, open, y0) + kit::row_text_y(kit::kRowH, kSmall.height);
 }
 constexpr int kSavedRoom = kit::kTailX - 40 - 8 - kit::kTextX;   // a saved clone's name: the room before the dim "saved" tail
+constexpr int kNoTailRoom = 224 - ListView::kBarW - kit::kTextX;   // a row with no rating column and no tail: up to the scroll lane
+constexpr int kNextPillRoom = kit::kTailX - pill_width(text_cells("NEXT")) - kit::kTailGap - kit::kTextX;   // room beside a NEXT pill
 static void check_text_at(const Font& font, int y, std::string_view text, uint16_t color, uint16_t bg, int x0 = kit::kTextX) {
     std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> actual;
     std::copy_n(g_panel, actual.size(), actual.begin());
@@ -395,14 +397,14 @@ static void test_selection_and_focus_rendering() {
     check_radio(1, true, 1, kFocusT); check_radio(0, false, 1);
     press(ui, Button::Back, 1450); top(ui, 1450); move(ui, kFamDone, 1450); press(ui, Button::Ok, 1500); ui.tick(1500);
     CHECK_EQ(ui.charger_test_stage(), 2);
-    check_row_text(kOffRow, "OFF", kText, kFocusT, kOffRow, kit::kCol2X - 4 - kit::kTextX);   // the default choice: its radio is on
+    check_row_text(kOffRow, "Off (real cable)", kText, kFocusT, kOffRow, kNoTailRoom);   // the default choice: its radio is on
     check_radio(kOffRow, true, kOffRow, kFocusT);
     move(ui, kSavedRow, 1800); press(ui, Button::Ok, 1800);   // pick the first saved clone: selects and advances to Review
     CHECK_EQ(ui.charger_test_stage(), 4);
     press(ui, Button::Back, 1850); ui.tick(1900);             // the cursor comes back on the cable in force: clone 1
     CHECK_EQ(ui.charger_test_cursor(), kSavedRow);
     check_row_text(kSavedRow, "Host identity 1", kText, kFocusT, kSavedRow, kSavedRoom); check_radio(kSavedRow, true, kSavedRow, kFocusT);
-    check_row_text(kOffRow, "OFF", kText, kBg, kSavedRow, kit::kCol2X - 4 - kit::kTextX); check_radio(kOffRow, false, kSavedRow);
+    check_row_text(kOffRow, "Off (real cable)", kText, kBg, kSavedRow, kNoTailRoom); check_radio(kOffRow, false, kSavedRow);
     no_operations();   // picking arms nothing: no spoof, no scan, no save
 }
 
@@ -707,7 +709,7 @@ static void test_back_chain() {
     CHECK_EQ(ui.charger_test_stage(), 2);
     no_operations();
 }
-// The top bar counts three steps: "1/3 Tests" (also over Custom and its Group pages), "2/3 Cable", "3/3 Review". The progress
+// The top bar counts three steps: "1/3 Tests" (also over Custom and its Group pages), "2/3 Spoof cable", "3/3 Review". The progress
 // rule under it (3 segments, pitch 75) lights the segments up to the step.
 static void check_header(std::string_view title, int step) {
     check_text_at(kLabelFont, kBarTextY, title, kText, kBar, 4);
@@ -724,7 +726,7 @@ static void test_three_step_header() {
     check_header("1/3 Entries", 1);   // a family's page is still step 1
     press(ui, Button::Back, 1330); top(ui, 1330); move(ui, kFamDone, 1330); press(ui, Button::Ok, 1330); ui.tick(1340);
     CHECK_EQ(ui.charger_test_stage(), 2);
-    check_header("2/3 Cable", 2);
+    check_header("2/3 Spoof cable", 2);
     press(ui, Button::Ok, 1350); ui.tick(1360);
     CHECK_EQ(ui.charger_test_stage(), 4);
     check_header("3/3 Review", 3);
@@ -734,6 +736,7 @@ static void test_three_step_header() {
 static void check_review_spoof(std::string_view text, uint16_t color) {
     char buf[kFitBuf];
     const int y = kit::kBodyY + 2 * kit::kRowH + kit::row_text_y(kit::kRowH, kSmall.height);
+    check_text_at(kSmall, y, "Spoof", kDim, kBg, 6);   // the key of the identity row
     check_text_at(kSmall, y, fit_data(kSmall, text, 18 * kSmall.adv, buf), color, kBg, 72);
 }
 // The face name of a built-in chip ("CUKTECH 6A" -> "CUKTECH"): the rating is the dim second column of its row.
@@ -762,7 +765,7 @@ static void test_armed_marker_is_shared_with_tools_spoof() {
     ui.push_menu(Menu::Spoof, 1300);
     ui.tick(1310);
     constexpr int kSpoofY = SpoofPage::kListY;
-    check_row_text(0, "OFF", kText, kFocusT, -1, kit::kCol2X - kit::kTextX, kSpoofY);   // the default selection, the cursor row
+    check_row_text(0, "Off (real cable)", kText, kFocusT, -1, kNoTailRoom, kSpoofY);   // the default selection, the cursor row
     press(ui, Button::Plus, 1320); press(ui, Button::Plus, 1330);               // the second built-in chip
     press(ui, Button::Ok, 1340);                                                // Spoof arms at once
     CHECK_EQ(g_stub.spoof_on, true);
@@ -822,7 +825,7 @@ static void test_busy_refusal_names_the_cause_and_the_way_out() {
 }
 // A spoof armed on Tools -> Spoof is the user's while the run presents it: however the run ends, the identity stays armed.
 // A run that starts with "Off" disarms it at START (the pick takes over; Off arms nothing), however the run ends, and
-// Review says plain "OFF". A run's own identity is gone at its end, Review shows it as chosen but no longer armed.
+// Review says plain "Off". A run's own identity is gone at its end, Review shows it as chosen but no longer armed.
 static void arm_tools_spoof(Ui& ui) {
     ui.push_menu(Menu::Spoof, 1300); ui.tick(1310);
     press(ui, Button::Plus, 1320); press(ui, Button::Plus, 1330);
@@ -838,7 +841,7 @@ static void test_tools_spoof_survives_a_runs_end() {
         fixture(); Ui ui; open(ui);
         arm_tools_spoof(ui);                       // Tools -> Spoof arms AND selects the identity
         if (presents) { review(ui, 1500); ui.tick(1510); check_review_spoof(label, kText); }
-        else { cable(ui, 1500); pick_row(ui, kOffRow, 1500); top(ui, 1500); press(ui, Button::Ok, 1500); ui.tick(1510); check_review_spoof("OFF", kText); }
+        else { cable(ui, 1500); pick_row(ui, kOffRow, 1500); top(ui, 1500); press(ui, Button::Ok, 1500); ui.tick(1510); check_review_spoof("Off", kText); }
         start_press(ui, 1600); confirm_press(ui, 1700);
         CHECK_EQ(ui.charger_test_busy(), true);
         CHECK_EQ(g_stub.ra_on, presents);          // the Ra mode belongs to the run; Off never turns it on
@@ -1781,7 +1784,7 @@ static void test_cable_list_rows_and_default() {
     ui.tick(1600);
     CHECK_EQ(ui.list_state().count, kSavedRow + 2);      // Off, three built-ins, two saved clones
     CHECK_EQ(ui.charger_test_cursor(), 0);               // the cursor sits on the pick in force
-    check_row_text(0, "OFF", kText, kFocusT, 0, kit::kCol2X - 4 - kit::kTextX); check_radio(0, true, 0, kFocusT);
+    check_row_text(0, "Off (real cable)", kText, kFocusT, 0, kNoTailRoom); check_radio(0, true, 0, kFocusT);
     static constexpr const char* kShort[] = {"EPR", "CUKTECH", "OnePlus"};
     for (unsigned r = 0; r < ctcable::kDialogBuiltins; ++r)
         check_row_text(kBuiltinRow + int(r), kShort[r], kText, kBg, 0, kit::kCol2X - 4 - kit::kTextX);
@@ -2060,7 +2063,7 @@ static void test_cable_dialog_scrolls_with_many_clones() {
     Ui ui; open(ui); cable(ui);
     CHECK_EQ(ui.list_state().count, 14); CHECK_EQ(ui.list_state().visible, 7); CHECK_EQ(ui.list_state().offset, 0);
     ui.tick(1350);
-    check_row_text(0, "OFF", kText, kFocusT, 0, kit::kCol2X - 4 - kit::kTextX);   // the cursor starts on the pick in force (Off), its note open
+    check_row_text(0, "Off (real cable)", kText, kFocusT, 0, kNoTailRoom);   // the cursor starts on the pick in force (Off), its note open
     check_row_text(3, "OnePlus", kText, kBg, 0, kit::kCol2X - 4 - kit::kTextX);
     move(ui, 7, 1400);                                   // the cursor leaves the first page: it scrolls by one row at a time
     CHECK_EQ(ui.charger_test_cursor(), 7); CHECK_EQ(ui.list_state().offset, 1);
@@ -2304,7 +2307,7 @@ static void test_cable_step_next_curr_and_start_takes_over() {
         CHECK_EQ(ui.charger_test_set_cable(kOff), true);   // pick Off while the boot identity answers
         ui.tick(1300);
         CHECK_EQ(ui.charger_test_cursor(), kOffRow);
-        check_row_text(kOffRow, "OFF", kOk, kFocusT, kOffRow, kit::kCol2X - 4 - kit::kTextX);
+        check_row_text(kOffRow, "Off (real cable)", kOk, kFocusT, kOffRow, kNextPillRoom);
         check_row_pill(kOffRow, "NEXT", kOk, kOkT, kOffRow);
         check_row_pill(kBuiltinRow, "CURR", kCaution, kDimT, kOffRow);
         press(ui, Button::Ok, 1400);                    // OK on the Off row: selects and advances to Review
@@ -3192,36 +3195,39 @@ static void test_ra_guard_refuses_a_cable() {
         Ui ui; open(ui); review(ui);
         pick_builtin(ui);
         CHECK_EQ(ui.charger_test_stage(), kRefuseStage); CHECK_EQ(ui.charger_test_cursor(), 0);
-        CHECK_EQ(ui.list_state().count, 3);              // Start anyway, Start with the cable OFF, Cancel
+        CHECK_EQ(ui.list_state().count, 2);              // Start anyway, Start, skip spoof
         nothing_armed();
         CHECK_EQ(ui.charger_test_busy(), false);
         CHECK_EQ(ui.charger_test_cable_info().run == kOff, true);
         ui.tick(1500);
         check_row_text(0, "Start anyway", kCaution, kFocusT, -1, 150, kRefuseY);
-        check_row_text(1, "Start, cable OFF", kText, kBg, -1, 150, kRefuseY);
-        check_row_text(2, "Cancel", kText, kBg, -1, 150, kRefuseY);
+        check_row_text(1, "Start, skip spoof", kText, kBg, -1, 150, kRefuseY);
         if (lines.first == 3300 && lines.second == 0) dump_screen("ra_guard_refuse");   // K2_DUMP: the screen for the design review
         move(ui, 5, 1600);                               // the cursor stops on the last answer
-        CHECK_EQ(ui.charger_test_cursor(), 2);
-        press(ui, Button::Minus, 1700);
         CHECK_EQ(ui.charger_test_cursor(), 1);
-        press(ui, Button::Ok, 1800);                     // OK on "Start, cable OFF": the plain START, no spoof, no Ra
+        const unsigned pref_sets = g_stub.cable_pref_sets;
+        press(ui, Button::Ok, 1800);                     // OK on "Start, skip spoof": the plain START, no spoof, no Ra
         CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0);
         CHECK_EQ(g_stub.rd_run, true);
+        CHECK_EQ(ui.charger_test_stage(), kWaitStage);
         CHECK_EQ(ui.charger_test_cable_info().run == kOff, true);
-        CHECK_EQ(ui.charger_test_cable_info().choice == kOff, true);   // the next dialog opens on OFF, not on the refused cable
+        CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);   // the stored pick is untouched, not OFF
+        CHECK_EQ(g_stub.cable_pref_sets, pref_sets);                     // /cable.cfg was not rewritten
     }
-    { // BACK and the Cancel row leave the dialog's START untouched
+    { // BACK leaves the refusal (there is no Cancel row any more); "Start, skip spoof" starts without the identity
         rd_fixture(); set_cc(3300, 0);
         Ui ui; open(ui); review(ui);
         pick_builtin(ui);
         CHECK_EQ(ui.charger_test_stage(), kRefuseStage);
         press(ui, Button::Back, 1600);
         CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
+        CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
         pick_builtin(ui, 1700);
-        move(ui, 2, 1800); CHECK_EQ(ui.charger_test_cursor(), 2);
+        move(ui, 2, 1800); CHECK_EQ(ui.charger_test_cursor(), 1);   // the cursor stops on the last answer
         press(ui, Button::Ok, 1900);
-        CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
+        CHECK_EQ(ui.charger_test_stage(), kWaitStage); nothing_armed();
+        CHECK_EQ(ui.charger_test_cable_info().run == kOff, true);
+        CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
     }
     { // nothing on either line: no charger waiting, same refusal
         rd_fixture(); set_cc(0, 0);
@@ -3245,8 +3251,39 @@ static void test_ra_guard_refuses_a_cable() {
         CHECK_EQ(ui.charger_test_stage(), kWaitStage);
     }
 }
+// The Refuse stage's wording: the alert band says "Cable connected", the two lines below say the spoof won't reach
+// the charger, and the two options are "Start anyway" and "Start, skip spoof" (BACK returns to Review, there is no
+// Cancel row). "Start, skip spoof" runs without the identity but leaves the stored pick (/cable.cfg) alone.
+static void test_refuse_stage_wording_and_skip_spoof_keeps_the_pick() {
+    rd_fixture(); set_cc(3300, 0);
+    Ui ui; open(ui); review(ui);
+    pick_builtin(ui);
+    CHECK_EQ(ui.charger_test_stage(), kRefuseStage); CHECK_EQ(ui.charger_test_cursor(), 0);
+    ui.tick(1500);
+    check_text_at(kMid, 22 + (kit::kAlertH - kMid.height) / 2, "Cable connected", kBg, kCaution, 36);   // the alert band's word
+    check_text_at(kSmall, 64, "the spoof won't reach", kText, kBg, 6);   // the two explanation lines
+    check_text_at(kSmall, 84, "the charger.", kText, kBg, 6);
+    CHECK_EQ(ui.list_state().count, 2);
+    check_row_text(0, "Start anyway", kCaution, kFocusT, -1, 150, kRefuseY);
+    check_row_text(1, "Start, skip spoof", kText, kBg, -1, 150, kRefuseY);
+    CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
+    const unsigned pref_sets = g_stub.cable_pref_sets;
+    press(ui, Button::Ok, 1800);                     // "Start, skip spoof": this run without the identity
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+    CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0); CHECK_EQ(g_stub.rd_run, true);
+    CHECK_EQ(ui.charger_test_cable_info().run == kOff, true);      // the run carries no identity
+    CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);   // the stored pick is unchanged
+    CHECK_EQ(g_stub.cable_pref_sets, pref_sets);                   // /cable.cfg was not rewritten
+    CHECK_EQ(g_stub.cable_pref == kBuiltin, true);
+    // BACK on a fresh refusal returns to Review, nothing armed, the pick intact
+    pick_builtin(ui, 2000);
+    CHECK_EQ(ui.charger_test_stage(), kRefuseStage);
+    press(ui, Button::Back, 2100);
+    CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
+    CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
+}
 // The guard belongs to the second OK: the first one opens the confirmation and refuses nothing a cable could cause; the refusal
-// (still before anything is armed) comes with the second, and "Start, cable OFF" then goes on to the Rd and the wait.
+// (still before anything is armed) comes with the second, and "Start, skip spoof" then goes on to the Rd and the wait.
 static void test_ra_guard_speaks_on_the_second_ok() {
     rd_fixture(); set_cc(3300, 0);
     Ui ui; open(ui); review_with(ui, kBuiltinRow);
@@ -3254,8 +3291,10 @@ static void test_ra_guard_speaks_on_the_second_ok() {
     CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
     confirm_press_nowait(ui, 1600);
     CHECK_EQ(ui.charger_test_stage(), kRefuseStage); nothing_armed();
-    move(ui, 1, 1650); press(ui, Button::Ok, 1700);      // Start, cable OFF: no confirmation again, Rd and the wait
+    move(ui, 1, 1650); press(ui, Button::Ok, 1700);      // Start, skip spoof: no confirmation again, Rd and the wait
     CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+    CHECK_EQ(ui.charger_test_cable_info().run == kOff, true);
+    CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);   // the stored pick stays
     CHECK_EQ(g_stub.rd_run, true); CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0);
     finish_wait(ui, 1700);                               // the charger comes up on the Rd: the run starts by itself
     CHECK_EQ(ui.charger_test_stage(), kRunningStage); CHECK_EQ(ui.charger_test_busy(), true);
@@ -3373,6 +3412,7 @@ static void test_self_supplied_start() {
         CHECK_EQ(ui.charger_test_stage(), kRefuseStage);
         ui.tick(1500);
         check_row_text(0, "Start anyway", kCaution, kFocusT, -1, 150, kRefuseY);
+        check_row_text(1, "Start, skip spoof", kText, kBg, -1, 150, kRefuseY);
         CHECK_EQ(footer_says("Direct plug is the sure way", kCaution), true);
         CHECK_EQ(ui.charger_test_run_guard(), 0);
         press(ui, Button::Ok, 1600);   // Start anyway: the identity runs and the run records that the reading was overruled
@@ -3486,7 +3526,7 @@ static void test_planned_reattach() {
     static const Case cases[] = {
         {"source without the 0x2717 pattern", [] { g_stub.sink.xiaomi_svid = false; }, true},
         {"not self-powered (HID or bus power)", [] { g_stub.self_powered = false; g_stub.bus_powered = true; }, true},
-        {"cable OFF", [] {}, false},
+        {"spoof off", [] {}, false},
     };
     for (const auto& c : cases) {
         planned_fixture(); c.set();
@@ -3612,6 +3652,7 @@ int main() {
     test_results_and_cursor_outlive_the_page();
     test_resume_goes_on_while_another_page_shows();
     test_ra_guard_refuses_a_cable();
+    test_refuse_stage_wording_and_skip_spoof_keeps_the_pick();
     test_ra_guard_speaks_on_the_second_ok();
     test_ra_guard_lets_a_direct_charger_through();
     test_self_supplied_start();

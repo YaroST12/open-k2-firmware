@@ -193,7 +193,7 @@ static void paint_review_after(const Surface& s) {
     wizard_header(s, 5, 6, "Review");
     const struct { const char* k; const char* v; } kv[5] = {
         {"Tests", "33 run, 5 skip"}, {"Peak", "12.0 V, ~111 s"}, {"Cap", "36V wire 20V"},
-        {"Header", "PD3.x / RDMO -"}, {"Spoof", "OFF"}};
+        {"Header", "PD3.x / RDMO -"}, {"Spoof", "Off"}};
     for (int i = 0; i < 5; ++i) {
         txt(s, kSmall, 6, 50 + i * 22, kv[i].k, kDim, kBg);
         txt(s, kSmall, 84, 50 + i * 22, kv[i].v, kText, kBg);

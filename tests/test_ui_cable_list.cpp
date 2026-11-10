@@ -105,8 +105,8 @@ static void test_row_text_and_names() {
     add_clone(3, "Anker-USB2-60W");
     CableIdentityList l;
     l.sync();
-    CHECK_STR(text(l, 0).c_str(), "OFF");
-    CHECK_STR(std::string(l.row(0).rating).c_str(), "no identity");
+    CHECK_STR(text(l, 0).c_str(), "Off (real cable)");
+    CHECK_EQ(l.row(0).rating.empty(), true);   // the long name takes the whole row: no rating column
     CHECK_STR(text(l, 1).c_str(), "EPR");
     CHECK_STR(std::string(l.row(1).rating).c_str(), "50V 5A");
     CHECK_STR(text(l, 2).c_str(), "CUKTECH");
