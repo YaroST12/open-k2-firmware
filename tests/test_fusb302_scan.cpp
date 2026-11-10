@@ -3363,6 +3363,88 @@ void test_idle_wake_off_after_on_leaves_nothing_behind() {
     power_cycle_forget_pin();
 }
 
+// ---- the 2026-11-10 bench rig: IQ4 -> 2-way splitter -> K2 top plug, VBUS dark ----
+// The chip's scan reads the splitter's Rp (BC_LVL 3) on CC2 and the standby level (above the 2.6 V VCONN filter) on CC1; the ADC
+// agrees with the standby net (cc1 3039 mV, cc2 ~2 mV). The passive scan attaches on CC2 with VBUS never coming up and no PD
+// message: nothing detaches that (the comparator keeps seeing the line), and an attach used to hold the idle wake off for good.
+void rig_world(bool wake_on) {
+    power_cycle_forget_pin();
+    fusb302::set_force_line(0);
+    reset_world();
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    g_auto_txsent = true;
+    g_line_mv_cc[0] = 3300;                                  // CC1: the standby level, rejected by the scan's VCONN filter
+    g_line_mv_cc[1] = 1600;                                  // CC2: an Rp the comparator sees
+    g_reg[0x40] = 0x23;                                      // COMP + BC_LVL 3 whenever the measured line is above the MDAC threshold
+    fusb302::set_idle_wake(wake_on);
+}
+// `ms` of the rig with `vbus` mV; returns the union of the Rd bits SWITCHES0 showed after any tick.
+unsigned rig_run(unsigned ms, std::int32_t vbus = 0) {
+    unsigned seen = 0;
+    for (unsigned t = 0; t < ms; t += 20) {
+        g_ms += 20; fusb302::sink_vbus(vbus); fusb302::sink_cc(3039, 2); fusb302::poll(); fusb302::service();
+        seen |= sw0_rd();
+    }
+    return seen;
+}
+void rig_end() {                                             // the source goes away: detach, setting off, clean statics
+    g_reg[0x40] = 0x00;
+    g_line_mv_cc[0] = g_line_mv_cc[1] = -1;
+    g_line_mv = 0;
+    fusb302::set_idle_wake(false);
+    for (int i = 0; i < 100; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::sink_cc(0, 0); fusb302::poll(); fusb302::service(); }
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+// The rig's own sequence: the setting was off, the passive scan attached on CC2 (dark), then the setting went on.
+void test_rig_dark_attach_does_not_block_the_idle_wake_turned_on_afterwards() {
+    rig_world(false);
+    CHECK_EQ(rig_run(2000), 0u);
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);      // the dark passive attach, as on the bench
+    CHECK_EQ(rig_run(5000), 0u);                             // setting off: it stays attached, no Rd, exactly as before
+    CHECK_EQ(usb_has("Detach"), false);
+    fusb302::set_idle_wake(true);
+    const unsigned seen = rig_run(8000);
+    CHECK_EQ(seen != 0u, true);                              // the dark attach is released and the hold presents an Rd ...
+    CHECK_EQ((seen & 3u) == 3u, false);                      // ... on one line at a time
+    CHECK_EQ(usb_has("dark attach"), true);
+    CHECK_EQ(usb_has("Idle wake: Rd on CC1"), true);         // the line whose open reading is the standby level
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    rig_end();
+}
+// The same rig with the setting on from the start: the first scan attaches on CC2 while the hold is already on CC1.
+void test_rig_with_the_setting_on_releases_the_dark_attach_and_keeps_one_rd() {
+    rig_world(true);
+    const unsigned seen = rig_run(10000);
+    CHECK_EQ(usb_has("Idle wake: Rd on CC1"), true);
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    CHECK_EQ(usb_has("dark attach"), true);
+    CHECK_EQ(seen, 1u);                                      // Rd on CC1 only, never both
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    rig_end();
+}
+// Setting off is untouched: the dark attach stays for as long as the comparator sees the line, with no Rd and no detach.
+void test_rig_with_the_setting_off_keeps_the_dark_attach_as_before() {
+    rig_world(false);
+    CHECK_EQ(rig_run(12000), 0u);
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    CHECK_EQ(usb_has("dark attach"), false);
+    CHECK_EQ(usb_has("Detach"), false);
+    CHECK_EQ(usb_has("Idle wake"), false);
+    CHECK_EQ(sw0_rd(), 0u);
+    rig_end();
+}
+// A live VBUS is not dark: a source that is up but PD-silent (a legacy 5 V port) is never released by the wake.
+void test_rig_with_vbus_up_is_not_a_dark_attach() {
+    rig_world(true);
+    rig_run(10000, 5000);
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    CHECK_EQ(usb_has("dark attach"), false);
+    CHECK_EQ(usb_has("Detach"), false);
+    rig_end();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3481,6 +3563,10 @@ int main() {
     test_idle_wake_off_by_default_never_presents_rd_on_a_standby_line();   // before the inline / sniff group: those leave a far-sink Request on record that only a detach rebases; each one ends with the setting off, a detach / Rd off
     test_idle_wake_on_holds_one_rd_on_the_standby_line_and_off_releases_it();
     test_idle_wake_off_after_on_leaves_nothing_behind();
+    test_rig_with_the_setting_off_keeps_the_dark_attach_as_before();   // each rig case ends with a detach and the setting off
+    test_rig_with_vbus_up_is_not_a_dark_attach();
+    test_rig_dark_attach_does_not_block_the_idle_wake_turned_on_afterwards();
+    test_rig_with_the_setting_on_releases_the_dark_attach_and_keeps_one_rd();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_get_source_caps_refused_even_confirmed();
