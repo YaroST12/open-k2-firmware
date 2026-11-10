@@ -54,14 +54,36 @@ Summary summarize(std::span<const int16_t> err, unsigned lo_mv) {
     // steady and recorded; the summary says so, the strip colours it.
     for (size_t i = 0; i < err.size(); ++i) {
         const unsigned set = lo_mv + unsigned(i) * kStepMv;
-        const int measured = int(err[i]) + int(set);
-        if (measured < int(set) - int(std::max(100u, set / 20))) { s.out_of_band = true; break; }
+        if (out_of_band(set, int(err[i]) + int(set))) { s.out_of_band = true; break; }
     }
     return s;
 }
 
-bool out_of_band(unsigned, int) { return false; }   // red: filled in with the live view
-size_t format_point(unsigned, int, std::span<char>) { return 0; }
+bool out_of_band(unsigned set_mv, int measured_mv) {
+    return measured_mv < int(set_mv) - int(std::max(100u, set_mv / 20));
+}
+
+size_t format_point(unsigned set_mv, int measured_mv, std::span<char> out) {
+    if (out.empty()) return 0;
+    const unsigned got = measured_mv > 0 ? unsigned(measured_mv) : 0u;
+    const int err = std::clamp(int(got) - int(set_mv), -9999, 9999);
+    size_t n = 0;
+    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto num = [&](unsigned v, unsigned min_digits) {
+        char t[10]; unsigned k = 0;
+        do { t[k++] = char('0' + v % 10); v /= 10; } while ((v || k < min_digits) && k < sizeof t);
+        while (k) { const char c = t[--k]; put({&c, 1}); }
+    };
+    auto volts = [&](unsigned mv) {   // 10 mV resolution, always two decimals: 12.30
+        const unsigned r = (mv + 5) / 10;
+        num(r / 100, 1); put("."); num(r % 100, 2); put("V");
+    };
+    put("req "); volts(set_mv);
+    put("  got "); volts(got);
+    put("  err"); put(err < 0 ? "-" : "+"); num(unsigned(err < 0 ? -err : err), 1); put("mV");
+    if (n < out.size()) out[n] = 0;
+    return n;
+}
 
 size_t format_mv(unsigned mv, std::span<char> out) {
     if (out.empty()) return 0;

@@ -3,6 +3,7 @@
 #include "k2/ui/kit.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_viewport.hpp"
+#include <algorithm>
 
 namespace k2::kit {
 
@@ -939,8 +940,57 @@ int draw_pass_band(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t va
 }
 
 // ---- RangeGauge ----------------------------------------------------------------------------------------------------------
-RangeGeom range_geom(int16_t, int16_t, int32_t, int32_t, int32_t, int32_t, int32_t) { return {0, 0, 0, 0}; }   // red
-RangePos draw_range_gauge(const Surface &, int16_t, int16_t, int16_t, int32_t, int32_t, int32_t, int32_t, int32_t, RangePos) { return {}; }
+RangeGeom range_geom(int16_t x, int16_t w, int32_t value, int32_t set, int32_t lo, int32_t hi, int32_t full) {
+    if (full <= 0) full = 1;
+    auto at = [&](int32_t v) { return static_cast<int16_t>(x + (static_cast<int64_t>(w) * std::max<int32_t>(v, 0)) / full); };
+    RangeGeom g;
+    g.lo = std::clamp<int16_t>(at(lo), x, static_cast<int16_t>(x + w - 2));
+    g.hi = std::clamp<int16_t>(at(hi), static_cast<int16_t>(g.lo + 1), static_cast<int16_t>(x + w - 1));
+    g.mark = std::clamp<int16_t>(at(set), static_cast<int16_t>(x + 2), static_cast<int16_t>(x + w - 4));   // the 6 px cap stays on the strip
+    g.needle = std::clamp<int16_t>(at(value), x, static_cast<int16_t>(x + w - 2));
+    return g;
+}
+
+namespace {
+// Paints columns [c0, c1) of the range strip: ground and track, the dotted end lines, the tint between them, the setpoint
+// marker's caps, then the needle over everything. Every part clips to the columns, so any column interval repaints whole.
+void range_cols(const Surface &s, int16_t x, int16_t y, int16_t w, const RangeGeom &g, int16_t c0, int16_t c1) {
+    if (c0 < x) c0 = x;
+    if (c1 > x + w) c1 = static_cast<int16_t>(x + w);
+    if (c1 <= c0) return;
+    // fill(a, b, row, rows, colour): columns [a, b) clipped to [c0, c1)
+    auto fill = [&](int a, int b, int row, int rows, uint16_t col) {
+        a = std::max<int>(a, c0); b = std::min<int>(b, c1);
+        if (b > a) gfx_fill(s, static_cast<int16_t>(a), static_cast<int16_t>(y + row), static_cast<int16_t>(b - a), static_cast<int16_t>(rows), col);
+    };
+    fill(c0, c1, 0, kPassBandH, kBg);
+    fill(c0, c1, 4, 4, kRule);
+    fill(g.lo + 2, g.hi - 1, 2, 8, kOkT);                  // the tint between the lines (rows 2..9, over the track too)
+    for (const int a : {int(g.lo), int(g.hi) - 1})         // the lines: 2 px wide, 2 rows on / 2 off (rows 0,1 4,5 8,9)
+        for (const int r : {0, 4, 8}) fill(a, a + 2, r, 2, kOk);
+    fill(g.mark - 2, g.mark + 4, 0, 3, kFocus);            // the marker: a cap on the top and bottom edges
+    fill(g.mark - 2, g.mark + 4, 9, 3, kFocus);
+    fill(g.needle, g.needle + 2, 0, kPassBandH, kText);
+}
+}  // namespace
+
+RangePos draw_range_gauge(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t value, int32_t set, int32_t lo, int32_t hi,
+                          int32_t full, RangePos prev) {
+    const RangeGeom g = range_geom(x, w, value, set, lo, hi, full);
+    if (prev.needle < 0 || prev.mark < 0) {
+        range_cols(s, x, y, w, g, x, static_cast<int16_t>(x + w));
+    } else {
+        if (prev.mark != g.mark) {   // the old marker's columns and the new one's (the tint or track shows again where it was)
+            range_cols(s, x, y, w, g, static_cast<int16_t>(prev.mark - 2), static_cast<int16_t>(prev.mark + 4));
+            range_cols(s, x, y, w, g, static_cast<int16_t>(g.mark - 2), static_cast<int16_t>(g.mark + 4));
+        }
+        if (prev.needle != g.needle) {
+            range_cols(s, x, y, w, g, prev.needle, static_cast<int16_t>(prev.needle + 2));
+            range_cols(s, x, y, w, g, g.needle, static_cast<int16_t>(g.needle + 2));
+        }
+    }
+    return {g.mark, g.needle};
+}
 
 // ---- HeroReadout ---------------------------------------------------------------------------------------------------------
 void draw_hero(const Surface &s, Field &digits, const HeroSpec &h, std::string_view value, bool full) {

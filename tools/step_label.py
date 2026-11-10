@@ -106,13 +106,10 @@ def params(s, prev=None, amps=True):
 
 def label(s, prev=None):
     """protocol + ' ' + params ('PPS 20V 5A'), the bare protocol when there are no params. A deep-sweep row names the
-    APDO's whole range, not its first point: 'PPS sweep 5-21V'."""
+    APDO's whole range, not its first point: 'PPS 3.3-21V', 'AVS 9-20V'."""
     if is_sweep(s):
-        raw = s.get("raw_pdo", 0)
-        if raw >> 30 == 3 and (raw >> 28) & 3 == 0:   # a PPS APDO: min V at bits 8-15, max V at 17-24, 100 mV units
-            lo, hi = ((raw >> 8) & 0xFF) * 100, ((raw >> 17) & 0xFF) * 100
-            return f"PPS sweep {milli(lo)}-{milli(hi)}V"
-        return "PPS sweep"
+        span = pdo_range(s.get("raw_pdo", 0)).split(" ")[0]   # '3.3-21V' (the current stays out of the badge)
+        return protocol(s) + (" " + span if span else "")
     p = params(s, prev)
     return protocol(s) + (" " + p if p else "")
 

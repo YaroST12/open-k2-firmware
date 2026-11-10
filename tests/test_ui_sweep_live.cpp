@@ -52,9 +52,15 @@ void fixture(bool avs, int ceiling_mv) {
     g_stub.pm_online = true; g_stub.pm.vbus_mv = 5000;
     g_stub.fc_answers = true;
     g_stub.vbus_ceiling_mv = ceiling_mv;
-    g_stub.caps.valid = true; g_stub.caps.num_pdos = 2; g_stub.caps.active_cc = 1; g_stub.caps.spec_rev = 2;
-    g_stub.caps.pdos[0] = pd::decode_pdo((100u << 10) | 300);
-    g_stub.caps.pdos[1] = pd::decode_pdo(avs ? 0xE004B145u : (0xC0000000u | (210u << 17) | (33u << 8) | 100u));
+    g_stub.caps.valid = true; g_stub.caps.num_pdos = avs ? 7 : 2; g_stub.caps.active_cc = 1; g_stub.caps.spec_rev = 2;
+    if (avs) {   // a SPR AVS APDO is only offered behind the fixed levels, at position 7; a PPS beside it keeps the AVS sweep's line at row 3
+        for (unsigned n = 0; n < 5; ++n) g_stub.caps.pdos[n] = pd::decode_pdo(((5000 + 4000 * n) / 50 << 10) | 325);
+        g_stub.caps.pdos[5] = pd::decode_pdo(0xC0000000u | (210u << 17) | (33u << 8) | 100u);
+        g_stub.caps.pdos[6] = pd::decode_pdo(0xE004B145u);
+    } else {
+        g_stub.caps.pdos[0] = pd::decode_pdo((100u << 10) | 300);
+        g_stub.caps.pdos[1] = pd::decode_pdo(0xC0000000u | (210u << 17) | (33u << 8) | 100u);
+    }
     g_stub.caps.raw_header = 0x1181;
 }
 
@@ -82,6 +88,8 @@ bool run_to_point(Ui& ui, uint32_t& t, unsigned points) {
         ui.tick(t);
         if (ui.charger_test_stage() == kRunningStage && ui.charger_test_results().sweep_live().n >= points) return true;
     }
+    std::fprintf(stderr, "run_to_point(%u) gave up: t=%u stage=%d busy=%d n=%u idx=%zu/%zu\n", points, t, ui.charger_test_stage(), int(ui.charger_test_busy()),
+                 ui.charger_test_results().sweep_live().n, ui.charger_test_results().index(), ui.charger_test_results().steps().size());
     return false;
 }
 
@@ -116,11 +124,11 @@ std::vector<int> columns_of(uint16_t color, int y = kStripY) {
     return v;
 }
 
-// The gauge scale the page uses: one per run, 10 % above the highest target (a sweep row counts its APDO's top, not its first
-// point), rounded up to a whole volt, at least 6 V.
+// The gauge scale the page uses: one per run, 10 % above the highest target (the sweep row in flight adds the top of its swept
+// range), rounded up to a whole volt, at least 6 V.
 int32_t full_scale(const ct::Runner& r) {
-    int32_t topmv = 0;
-    for (const auto& s : r.steps()) topmv = std::max<int32_t>(topmv, ct::is_sweep(s) ? int32_t(pd::decode_pdo(s.pdo).max_mv) : s.mv);
+    int32_t topmv = r.sweep_live().hi_mv;
+    for (const auto& s : r.steps()) topmv = std::max<int32_t>(topmv, s.mv);
     return std::max<int32_t>((topmv * 110 / 100 + 999) / 1000 * 1000, 6000);
 }
 
@@ -152,10 +160,13 @@ void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_b
         CHECK_EQ(ok[0], int(geom.lo)); CHECK_EQ(ok[1], int(geom.lo) + 1);
         CHECK_EQ(ok[2], int(geom.hi) - 1); CHECK_EQ(ok[3], int(geom.hi));
     }
-    const auto marker = columns_of(kFocus);
-    CHECK_EQ(marker.size(), 6u);
-    if (!marker.empty()) CHECK_EQ(marker.front(), int(geom.mark) - 2);
-    CHECK_EQ(columns_of(kText).size() >= 2u, true);   // the needle
+    // the marker is 6 columns wide (mark-2 .. mark+3); the 2 px needle is drawn over it where the two meet (the reading follows the setpoint)
+    const auto needle = columns_of(kText);
+    CHECK_EQ(needle.size(), 2u);
+    std::vector<int> want;
+    for (int x = int(geom.mark) - 2; x <= int(geom.mark) + 3; ++x)
+        if (std::find(needle.begin(), needle.end(), x) == needle.end()) want.push_back(x);
+    CHECK_EQ(columns_of(kFocus) == want, true);
     // 3. the per-point line: the last recorded point's request, reading and error
     char b[ctsweep::kPointTextMax];
     const std::string line(b, ctsweep::format_point(live.last_set_mv(), live.last_measured_mv(), b));
@@ -180,7 +191,7 @@ int main() {
         CHECK_EQ(run_to_point(ui, t, 90), true);
         t += 600; ui.tick(t);
         const auto late = columns_of(kFocus);
-        CHECK_EQ(early.size(), 6u); CHECK_EQ(late.size(), 6u);
+        CHECK_EQ(early.size() >= 4u && early.size() <= 6u, true); CHECK_EQ(late.size() >= 4u && late.size() <= 6u, true);   // 6 less the needle's overlap
         if (!early.empty() && !late.empty()) CHECK_EQ(late.front() > early.front() + 20, true);
         dump_panel("sweep_pps_rot0_late");
     }
@@ -207,7 +218,12 @@ int main() {
         CHECK_EQ(columns_of(kFocus).size(), 0u);   // no marker
         const auto ok = columns_of(kOk, kStripY + 4);   // the pass band's window (rows 4..7 of the strip): one solid run of columns
         CHECK_EQ(ok.empty(), false);
-        if (!ok.empty()) CHECK_EQ(int(ok.back() - ok.front() + 1), int(ok.size()));
+        if (!ok.empty()) {   // one solid run, the 2 px needle (kText, over the window) aside
+            const auto needle = columns_of(kText, kStripY + 4);
+            int inside = 0;
+            for (int x : needle) inside += x > ok.front() && x < ok.back();
+            CHECK_EQ(int(ok.back() - ok.front() + 1), int(ok.size()) + inside);
+        }
     }
     // Both ranges, both orientations, rendered for the contact sheet (the truncation gate runs on every scene through test_report).
     for (const bool avs : {false, true})

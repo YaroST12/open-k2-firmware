@@ -448,6 +448,8 @@ public:
     static constexpr int kFlightRowPx = 224 * 42 + kit::kStrikeRowMaxPx + kit::kDotRowMaxPx;
     static constexpr int kHeroPx = 5000;         // the 4-digit 48 px readout (4 x 24 x 48) plus its unit
     static constexpr int kNeedlePx = 200;        // the old and the new needle column and the window edge they cross
+    static constexpr int kRangePx = 36 * 12;     // a sweep row's gauge move: the old and new marker (6 columns each) and needle (2 each)
+    static constexpr int kPointChars = 34;       // a sweep row's per-point line ("req 12.30V  got 12.15V  err-150mV"), 6 px a cell
     static constexpr uint32_t kHeroMs = 250;     // the hero and the needle repaint at most this often in flight (~4 Hz)
     static constexpr uint32_t kFollowResumeMs = 5000;   // a manual scroll of the grid holds this long, or until the step changes
 private:
@@ -550,6 +552,7 @@ private:
     char cell_txt_[kit::kResultMaxCells][2][12] = {};   // the verdict grid's cells: volts and current text
     char cell_lbl_[10] = {};               // ... and the unit label of the row
     int needle_px_ = -1;                   // the gauge's needle column, -1 = the strip is not drawn
+    int mark_px_ = -1;                     // a sweep row's gauge: the setpoint marker's column, -1 = not drawn (needle_px_ is its needle)
     uint32_t foot_sig_ = 0;                // Running: the footer (tone + text) last painted; 0 = not drawn
     uint16_t hero_color_ = 0;
     bool laid_ = false;                   // the stage's static part is on screen

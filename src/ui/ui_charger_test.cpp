@@ -1956,9 +1956,10 @@ void ChargerTestPage::build_running_grid() {
 // The Running gauge's full scale: one scale for the whole run, so the pass band slides with each target (5 V near the left,
 // 20 V near the right) and the needle shows the travel between steps. 10 % above the highest target in the plan, rounded up
 // to a whole volt, at least 6 V. A per-target scale (target x 1.5) put every band at the same 2/3 point and never moved.
-// Derived from the plan each call: no state, a few dozen compares.
-static int32_t gauge_full_mv(std::span<const ct::Step> steps) {
-    int32_t top = 0;
+// Derived from the plan each call: no state, a few dozen compares. A sweep row in flight also counts the top of its range
+// (`sweep_hi_mv`, 0 otherwise), so the dotted band always fits; every other row keeps the plan's scale.
+static int32_t gauge_full_mv(std::span<const ct::Step> steps, int32_t sweep_hi_mv = 0) {
+    int32_t top = sweep_hi_mv;
     for (const auto &s : steps) top = std::max<int32_t>(top, s.mv);
     const int32_t full = (top * 110 / 100 + 999) / 1000 * 1000;
     return std::max<int32_t>(full, 6000);
@@ -1983,12 +1984,31 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     const int32_t vbus = ctx_.pm_online ? ctx_.pm.vbus_mv : -1;
     const int32_t target = st ? st->mv : 0;
-    // 1. the gauge strip, once per target (a new step): the whole strip, the needle drawn at the live reading
-    if (static_cast<uint32_t>(target) + 1u != cell_sig_[5] && bg.admit(target > 0 ? 210 * kit::kPassBandH : c.w * kit::kPassBandH)) {
-        cell_sig_[5] = static_cast<uint32_t>(target) + 1u;
-        needle_px_ = -1;
-        if (target > 0) needle_px_ = kit::draw_pass_band(c, 6, 98, 210, std::max<int32_t>(vbus, 0), target, gauge_full_mv(steps), -1);
-        else gfx_fill(c, 0, 98, c.w, kit::kPassBandH, kBg);
+    // A deep-sweep row (one per APDO) has no single target: its strip shows the swept range as a dotted band, the setpoint as a
+    // marker that moves point by point, and the needle; its text line reads the last point. Every other row keeps the pass band.
+    const ctsweep::Live live = runner_.sweep_live();
+    const bool sweeping = live.active;
+    const int32_t full = gauge_full_mv(steps, sweeping ? live.hi_mv : 0);
+    const int32_t vbus_g = std::max<int32_t>(vbus, 0);
+    // 1. the gauge strip, once per target (a new step, or the sweep range): the whole strip, the needle drawn at the live reading
+    const uint32_t strip_sig = sweeping ? (mix_u32(mix_u32(0x5eedu, live.lo_mv), live.hi_mv) | 1u) : static_cast<uint32_t>(target) + 1u;
+    if (strip_sig != cell_sig_[5] && bg.admit(target > 0 ? 210 * kit::kPassBandH : c.w * kit::kPassBandH)) {
+        cell_sig_[5] = strip_sig;
+        needle_px_ = mark_px_ = -1;
+        if (sweeping) {
+            const kit::RangePos p = kit::draw_range_gauge(c, 6, 98, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full);
+            needle_px_ = p.needle; mark_px_ = p.mark;
+        } else if (target > 0) {
+            needle_px_ = kit::draw_pass_band(c, 6, 98, 210, vbus_g, target, full, -1);
+        } else {
+            gfx_fill(c, 0, 98, c.w, kit::kPassBandH, kBg);
+        }
+    }
+    // 1a. a sweep row's marker follows the setpoint: the next point's Request is out, so the marker moves on without waiting for the hero
+    if (sweeping && needle_px_ >= 0 && mark_px_ >= 0 &&
+        kit::range_geom(6, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full).mark != mark_px_ && bg.admit(kRangePx)) {
+        const kit::RangePos p = kit::draw_range_gauge(c, 6, 98, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
+        needle_px_ = p.needle; mark_px_ = p.mark;
     }
     // 1b. the step dot, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the dot from
     // the cell that was under test to the one that is (kRunDotPx, never gated). The rows themselves scroll and repaint at item 6.
@@ -2004,7 +2024,12 @@ void ChargerTestPage::paint_running(uint32_t now) {
         hero_ms_ = now;
         paint_hero(hero_color_ != kVolt, 196, 54, 4, vbus, kVolt);
         hero_color_ = kVolt;
-        if (target > 0 && needle_px_ >= 0) needle_px_ = kit::draw_pass_band(c, 6, 98, 210, std::max<int32_t>(vbus, 0), target, gauge_full_mv(steps), needle_px_);
+        if (sweeping && needle_px_ >= 0 && mark_px_ >= 0) {
+            const kit::RangePos p = kit::draw_range_gauge(c, 6, 98, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
+            needle_px_ = p.needle; mark_px_ = p.mark;
+        } else if (target > 0 && needle_px_ >= 0) {
+            needle_px_ = kit::draw_pass_band(c, 6, 98, 210, vbus_g, target, full, needle_px_);
+        }
     }
     // 3. elapsed m:ss at the right edge (one text per second)
     {
@@ -2028,9 +2053,33 @@ void ChargerTestPage::paint_running(uint32_t now) {
         StrBuf<32> nm;
         if (st) nm.put(step_label::label(*st, at > 0 ? &steps[at - 1] : nullptr).view());
         put_line(c, kSmall, 6, 68, nm.view(), kText, 11, cell_sig_[3], false, true, &bg);
-        StrBuf<16> tg;
-        if (st && st->mv) { tg.put("target "); put_volts_trim(tg, st->mv); tg.put_char('V'); }
-        put_line(c, kLabelFont, 6, 88, tg.view(), kDim, 16, cell_sig_[4], false, false, &bg);
+        if (sweeping) {
+            // a deep-sweep row: the last recorded point ("req 12.30V  got 12.15V  err-150mV"), caution outside the sweep's tolerance.
+            // The line sits at y86 (rows 86..97) so its cell stays clear of the strip; the target line is repainted after the sweep.
+            StrBuf<ctsweep::kPointTextMax> pt;
+            uint16_t col = kDim;
+            if (live.n > 0) {
+                const unsigned set = live.last_set_mv();
+                const int got = live.last_measured_mv();
+                char buf[ctsweep::kPointTextMax];
+                const size_t len = ctsweep::format_point(set, got, buf);
+                pt.put(std::string_view(buf, len));
+                if (ctsweep::out_of_band(set, got)) col = kCaution;
+            } else {
+                pt.put("no point yet");
+            }
+            put_line(c, kLabelFont, 6, 86, pt.view(), col, kPointChars, cell_sig_[6], false, false, &bg);
+            cell_sig_[4] = 0;
+        } else if (cell_sig_[6] && bg.admit(c.w * 12)) {
+            gfx_fill(c, 0, 86, c.w, 12, kBg);   // the sweep line's rows, before the target line paints over rows 88..99
+            cell_sig_[6] = 0;
+            cell_sig_[4] = 0;
+        }
+        if (!sweeping && !cell_sig_[6]) {
+            StrBuf<16> tg;
+            if (st && st->mv) { tg.put("target "); put_volts_trim(tg, st->mv); tg.put_char('V'); }
+            put_line(c, kLabelFont, 6, 88, tg.view(), kDim, 16, cell_sig_[4], false, false, &bg);
+        }
     }
     // 5. the footer (the unit and its step), one cached band
     {
@@ -2499,6 +2548,7 @@ void ChargerTestPage::invalidate() {
     std::fill(std::begin(cell_sig_), std::end(cell_sig_), 0u);
     laid_ = false;
     needle_px_ = -1;
+    mark_px_ = -1;
     hero_ms_ = 0;
     grid_key_ = 0;
     foot_sig_ = 0;

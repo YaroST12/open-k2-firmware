@@ -592,7 +592,14 @@ public:
     // (one int16 error per point). The results strip, the card and the remote read it through this view.
     ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
     // The sweep row under test, live: its point range, the setpoint in flight and the last recorded point (the Running view).
-    ctsweep::Live sweep_live() const { return {}; }
+    ctsweep::Live sweep_live() const {
+        ctsweep::Live l;
+        if (index_ >= count_ || steps_[index_].verdict != Verdict::Running || !is_sweep(steps_[index_]) || sweep_hi_ < sweep_lo_) return l;
+        l.active = true;
+        l.lo_mv = sweep_lo_; l.hi_mv = sweep_hi_; l.set_mv = sweep_mv_; l.n = sweep_n_;
+        if (sweep_n_ && sweep_first_ + sweep_n_ <= ctsweep::kMaxPoints) l.last_err = sweep_err_[sweep_first_ + sweep_n_ - 1u];
+        return l;
+    }
 private:
     void note_hunt_refusal(const Input&, bool timeout, uint16_t extra_flags = 0);
     void add(Step);
