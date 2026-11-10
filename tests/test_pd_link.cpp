@@ -501,6 +501,47 @@ static void test_wait_kind_no_rp_and_not_passive() {
     CHECK_EQ(l.charger_waiting(), 0);
 }
 
+// ---- the slow dual-role toggle under kRpMinMv (ROADMAP row A, handoff 2026-11-10d) ----
+// A dual-role phone's Rp can be a current source that opens to only ~1.7 V on CC - under kRpMinMv, so the Rp
+// presence trace reads NoSource - and toggles slowly (high ~550 ms, low ~400 ms, period ~1 s). Only a level
+// that FALLS AND RISES again is a dual-role port. A steady level never is: the CC2 bias net's ~1.69 V with
+// nothing attached must not read DualRolePort, and a steady 3.3 V Rp stays ChargerWaiting.
+static void test_wait_kind_slow_low_toggle_is_dual_role() {
+    Link l;
+    for (std::uint32_t t = 0; t <= 4000; t += 20) {
+        const std::uint32_t ph = t % 950;   // OnePlus-shaped: 1.7 V high ~550 ms, ~0.25 V low ~400 ms
+        l.update(win(t, 0, ph < 550 ? 1700 : 250, true));
+    }
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::DualRolePort));
+    CHECK_EQ(l.charger_waiting(), 0);
+    // VBUS up voids the verdict as before
+    l.update(win(4020, 0, 1700, true, 5000));
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::Unknown));
+}
+
+static void test_wait_kind_steady_bias_never_dual_role() {
+    Link l;
+    for (std::uint32_t t = 0; t <= 4000; t += 20) l.update(win(t, 0, 1690, true));   // CC2 bias net, nothing attached
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::NoSource));
+    // one PLUS-coupled sag (a fall and a rise, once) is not a toggle either
+    Link p;
+    for (std::uint32_t t = 0; t <= 4000; t += 20) p.update(win(t, 0, (t > 2000 && t < 2200) ? 300 : 1690, true));
+    CHECK_EQ(int(p.wait_kind()), int(WaitKind::NoSource));
+    // not passive: the trace was dropped, no verdict
+    Link h;
+    for (std::uint32_t t = 0; t <= 4000; t += 20) {
+        const std::uint32_t ph = t % 950;
+        h.update(win(t, 0, ph < 550 ? 1700 : 250, false));
+    }
+    CHECK_EQ(int(h.wait_kind()), int(WaitKind::Unknown));
+}
+
+static void test_wait_kind_steady_rp_never_dual_role() {
+    Link l;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) l.update(win(t, 3300, 3300, true));   // a charger's steady Rp
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::ChargerWaiting));
+}
+
 // ---- identify_alone(): the link-state predicate for an active Identify of a device ALONE on the K2 ----
 // ROADMAP "Sink Identify inline drops the phone from 9 V to 5 V", fix item (2) (k2/identify-alone): alone =
 // not inline, VBUS dark, no source caps this attach, and the waiting classifier reads a dual-role port (an Rp
@@ -649,6 +690,9 @@ int main() {
     test_wait_kind_steady_rp_is_charger_waiting();
     test_wait_kind_toggling_rp_is_dual_role();
     test_wait_kind_no_rp_and_not_passive();
+    test_wait_kind_slow_low_toggle_is_dual_role();
+    test_wait_kind_steady_bias_never_dual_role();
+    test_wait_kind_steady_rp_never_dual_role();
     test_identify_alone_predicate();
     test_identify_alone_follows_the_link_verdict();
     test_cc_cross_rig_reads_crossed_after_a_second();

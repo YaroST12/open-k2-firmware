@@ -3322,6 +3322,98 @@ void test_charger_alone_identify_refused_as_today() {
     end_alone_case();
 }
 
+// ---- Row A (handoff 2026-11-10d): an alone-Identify waits for a Ready contract of this attach ----
+// The phone sources only after our Rd: the first VDM goes out only on a Ready contract of this attach, settled
+// >= 200 ms (Pixel: Discover Identity 1 ms after Rd went RETRYFAIL). Bounded ~4 s timeout with a clear refusal.
+// The line is handed back on EVERY exit, and the result stays current after the release until the port is
+// really gone (the toggle stops -> NoSource for > ~2 s). Red first: today the sequencer starts at once.
+
+void test_alone_identify_waits_for_ready_before_the_first_vdm() {
+    attach_phone_alone_detached();
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);
+    CHECK_EQ(find_from("W 02=03") >= 0, true);           // Rd on both lines, never an Rp
+    for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);           // the scan re-attaches on the phone's Rp
+    settle_ms(1500);                                      // no contract yet: no VDM (RED: today it transmits at once)
+    CHECK_EQ(usb_has("TX type 15"), false);
+    CHECK_EQ(usb_has("waiting"), true);
+    // the phone's Source_Capabilities, the run-start Request for PDO 1, Accept, PS_RDY: Ready
+    g_txfifo.clear();
+    send_caps_5v_9v(0);
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(request_on_the_wire(), true);
+    push_frame(0xE0, ctl_msg(3, 1), {});   // Accept
+    push_frame(0xE0, ctl_msg(6, 2), {});   // PS_RDY
+    for (int i = 0; i < 30; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    settle_ms(150);                        // under the 200 ms settle: still no VDM
+    CHECK_EQ(usb_has("TX type 15"), false);
+    settle_ms(100);                        // settled: the sequencer starts (RED: nothing waits today)
+    CHECK_EQ(usb_has("TX type 15"), true);
+    CHECK_EQ(usb_has("Ready contract after"), true);
+    end_alone_case();
+}
+
+void test_alone_identify_timeout_refuses_and_releases_the_line() {
+    attach_phone_alone_detached();
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);
+    for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    settle_ms(4100);                                     // no contract ever arrives
+    CHECK_EQ(usb_has("no Ready contract"), true);        // RED: no bounded timeout today
+    CHECK_EQ(usb_has("TX type 15"), false);              // never transmitted
+    CHECK_EQ(usb_has("line released"), true);            // RED: the line goes back on the timeout exit too
+    CHECK_EQ(fusb302::identify_current(), false);        // nothing ran: no result to keep
+    end_alone_case();
+}
+
+void test_alone_identify_end_releases_the_line_and_the_result_survives() {
+    attach_phone_alone_detached();
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);
+    for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    g_txfifo.clear();
+    send_caps_5v_9v(0);
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    push_frame(0xE0, ctl_msg(3, 1), {});
+    push_frame(0xE0, ctl_msg(6, 2), {});
+    for (int i = 0; i < 30; i++) { g_ms += 1; fusb302::service(); }
+    settle_ms(300);                                      // Ready settled: the sequencer started
+    CHECK_EQ(usb_has("Ready contract after"), true);
+    CHECK_EQ(usb_has("TX type 15"), true);
+    fusb302::identify_abort();                           // every exit hands the line back
+    settle_ms(100);
+    CHECK_EQ(usb_has("[ID] result:"), true);             // RED: no final result log today
+    CHECK_EQ(usb_has("line released"), true);            // RED: the release is not logged / not done on this path
+    fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);   // the phone is still on the port, toggling
+    settle_ms(1000);
+    CHECK_EQ(fusb302::identify_current(), true);         // RED today: the release's new session hides the result
+    fusb302::set_wait_kind(raguard::WaitKind::NoSource);      // unplugged: the toggle stopped
+    settle_ms(2100);                                     // > ~2 s
+    CHECK_EQ(fusb302::identify_current(), false);        // the result goes with the phone
+    end_alone_case();
+}
+
+void test_alone_identify_on_a_stale_cc_requests_pdo1_and_waits() {
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x20;
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    fusb302::sink_vbus(0);
+    for (int i = 0; i < 15; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); }   // 300 ms: still attached
+    fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);       // alone with the line still attached (a stale CC)
+    CHECK_EQ(usb_has("Request PDO 1"), true);             // RED: asks for the contract like the re-read's attach
+    CHECK_EQ(usb_has("TX type 15"), false);               // ... but the first VDM still waits for Ready
+    settle_ms(4100);
+    CHECK_EQ(usb_has("no Ready contract"), true);         // RED: bounded timeout
+    CHECK_EQ(usb_has("line released"), true);
+    end_alone_case();
+}
+
 // The phase-1 lab hand-back's driver steps (`k2_remote.py pd handback --confirm`, k2::handback): with the link
 // latched inline, dropping the Rd and then the one lab Hard Reset must reach the chip - the reset on the wire
 // (CONTROL3 SEND_HARD_RESET) and SWITCHES0 without any pull-down bit (a sink behind the K2 has its own Rd on the
@@ -3892,6 +3984,10 @@ int main() {
     test_alone_phone_identify_starts_and_presents_rd_only();
     test_alone_phone_identify_starts_while_still_attached();
     test_charger_alone_identify_refused_as_today();
+    test_alone_identify_waits_for_ready_before_the_first_vdm();
+    test_alone_identify_timeout_refuses_and_releases_the_line();
+    test_alone_identify_end_releases_the_line_and_the_result_survives();
+    test_alone_identify_on_a_stale_cc_requests_pdo1_and_waits();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_handback_drops_rd_and_the_reset_reaches_the_chip();
