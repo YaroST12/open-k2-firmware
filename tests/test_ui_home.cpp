@@ -262,6 +262,21 @@ static void test_live_home() {
     CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);             // protocol row
 }
 
+// A held Rd pin shows the caution badge "Rd pin CC2" in the VBUS cell's upper right (the Home status badge);
+// it goes away when the pin clears (e.g. on the far end's detach).
+static void test_home_shows_the_rd_pin_badge() {
+    Ui &ui = home_ui();
+    live_pd(false, 20010, 1520);
+    run(ui, 40);
+    CHECK_EQ(ink_logical(ui, 131, 1, 91, 17, kCaution), 0);          // no pin: no badge
+    g_stub.pin = 2;                                                   // a leftover pin on CC2
+    run(ui, 4);
+    CHECK_TRUE(ink_logical(ui, 131, 1, 91, 17, kCaution) > 40);      // the "Rd pin CC2" pill
+    g_stub.pin = 0;
+    run(ui, 4);
+    CHECK_EQ(ink_logical(ui, 131, 1, 91, 17, kCaution), 0);           // cleared: the badge is gone
+}
+
 // A PPS contract and a Quick Charge source (no PD caps, the D+/D- verdict only) fill the protocol row.
 static void test_protocol_states() {
     {
@@ -518,6 +533,7 @@ int main() {
     test_idle_note();
     test_render_states();
     test_live_home();
+    test_home_shows_the_rd_pin_badge();
     test_protocol_states();
     test_sweep();
     test_window_cycle();

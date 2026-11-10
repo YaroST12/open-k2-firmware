@@ -47,6 +47,7 @@ struct HomePage::Frame {
     hm::Mode mode = hm::Mode::Idle;
     hm::ProtoInfo proto{};
     hm::Alarm alarm = hm::Alarm::None;
+    uint8_t pin = 0;           // fusb302::pin_rd(): a held Rd pin shows as the "Rd pin CCx" badge
     uint32_t now = 0;
     char hero[2][8] = {};      // V and A, five characters
     char watt[8] = {};         // W, four characters
@@ -100,6 +101,7 @@ bool HomePage::on_event(Event e) {
 
 void HomePage::sample_values(Frame &f, uint32_t now_ms) {
     const bool live = f.mode == hm::Mode::Live, stale = f.mode == hm::Mode::Stale;
+    f.pin = fusb302::pin_rd();
     const power::Metrics &pm = stale ? ctx_.last.pm : ctx_.pm;
     if (live) {
         if (thr_.pass(now_ms)) {   // the display filter: V, A and W change at most 4 times a second, as one set
@@ -208,13 +210,14 @@ void HomePage::paint_cell(int ci, const Frame &f, int step_col, int step_n, bool
     if (!amp) {
         it[n++] = hm::text(kLabelFont, 10, 3, "VBUS", label);
         if (shown) it[n++] = hm::text(kLabelFont, 40, 3, trend::label(window_), kFaint);
-        const hm::Pill pill = hm::pill_of(m, f.alarm);
+        const hm::Pill pill = hm::pill_of(m, f.alarm, f.pin);
         const bool blink_a = ((f.now / 500u) & 1u) == 0;               // OVER blinks at 1 Hz
         uint16_t fillc = kStale, inkc = kBg;
         switch (pill) {
         case hm::Pill::Last:   ptxt.put("LAST ").put_age(ctx_.live.age_s(f.now)); break;
         case hm::Pill::NoVbus: ptxt.put("NO VBUS"); fillc = kSurface; inkc = kDim; break;
         case hm::Pill::Over:   ptxt.put("OVER"); fillc = blink_a ? kError : kCaution; inkc = blink_a ? kText : kBg; break;
+        case hm::Pill::Pin:    ptxt.put("Rd pin CC").put_char(static_cast<char>('0' + f.pin)); fillc = kCaution; inkc = kBg; break;
         case hm::Pill::None:   break;
         }
         if (pill != hm::Pill::None) {

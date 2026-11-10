@@ -121,9 +121,13 @@ enum class Mode : uint8_t { NoMeter, Idle, Live, Stale };
 inline constexpr uint32_t kMeterGraceMs = 6000;
 constexpr bool meter_starting(bool pm_online, uint32_t uptime_ms) { return !pm_online && uptime_ms < kMeterGraceMs; }
 // The one exception badge in the VBUS cell's upper right. Normal operation shows the dim "max NNV".
-enum class Pill : uint8_t { None, Last, NoVbus, Over };
-constexpr Pill pill_of(Mode m, Alarm a) {
-    return m == Mode::Stale ? Pill::Last : m == Mode::Idle ? Pill::NoVbus : (m == Mode::Live && a == Alarm::Over) ? Pill::Over : Pill::None;
+// A held Rd pin (pd-reread --pin, a boot pin) gets the badge too ("Rd pin CC2"): a pin still set must be
+// visible on the Home status line; only the OVER alarm keeps precedence over it.
+enum class Pill : uint8_t { None, Last, NoVbus, Over, Pin };
+constexpr Pill pill_of(Mode m, Alarm a, std::uint8_t pin = 0) {
+    if (m == Mode::Live && a == Alarm::Over) return Pill::Over;
+    if (pin == 1 || pin == 2) return Pill::Pin;
+    return m == Mode::Stale ? Pill::Last : m == Mode::Idle ? Pill::NoVbus : Pill::None;
 }
 // "max 20V" for the VBUS cell and "max 5A" for the IBUS cell, from the contract or protocol maximum,
 // never from the live reading. Returns false (and leaves `out` empty) when the source's maximum is

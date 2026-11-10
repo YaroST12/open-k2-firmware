@@ -176,6 +176,13 @@ static void test_exception_badge() {
     CHECK_EQ(static_cast<int>(pill_of(Mode::Stale, Alarm::Over)), static_cast<int>(Pill::Last));
     CHECK_EQ(static_cast<int>(pill_of(Mode::Idle, Alarm::None)), static_cast<int>(Pill::NoVbus));
     CHECK_EQ(static_cast<int>(pill_of(Mode::NoMeter, Alarm::None)), static_cast<int>(Pill::None));
+    // a held Rd pin gets the badge ("Rd pin CCx") on every mode except a live OVER alarm
+    CHECK_EQ(static_cast<int>(pill_of(Mode::Live, Alarm::None, 2)), static_cast<int>(Pill::Pin));
+    CHECK_EQ(static_cast<int>(pill_of(Mode::Idle, Alarm::None, 1)), static_cast<int>(Pill::Pin));
+    CHECK_EQ(static_cast<int>(pill_of(Mode::Stale, Alarm::None, 2)), static_cast<int>(Pill::Pin));
+    CHECK_EQ(static_cast<int>(pill_of(Mode::Live, Alarm::Over, 2)), static_cast<int>(Pill::Over));   // the alarm keeps precedence
+    CHECK_EQ(static_cast<int>(pill_of(Mode::Live, Alarm::None, 3)), static_cast<int>(Pill::None));    // never both lines
+    CHECK_EQ(static_cast<int>(pill_of(Mode::Live, Alarm::None, 0)), static_cast<int>(Pill::None));
 }
 
 // Regression: unplugged, the old info row printed "max 1.0V 3A" from the live VBUS reading.
