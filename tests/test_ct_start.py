@@ -251,6 +251,36 @@ class PreflightRefusalPrint(unittest.TestCase):
         self.assertIn("run id still 0", text)
         self.assertIn("VBUS 8.5 V on a 5 V contract (shared bus)", text)
 
+    def test_a_busy_preflight_line_names_the_holding_tool(self):
+        # a "tool busy" refusal names the tool that holds the line (the busy_reason footer text), not a bare "busy"
+        frames = [b"[TEST] preflight refused: tool busy: PD hold: release it (5100 mV)\n"]
+        text = ct_start.start_failure_text(5, frames)
+        self.assertIn("run id still 5", text)
+        self.assertIn("tool busy: PD hold: release it (5100 mV)", text)
+
+    def test_a_cable_arm_refusal_line_is_printed(self):
+        # the cable/Ra arming refusal (a hold or a live contract while the identity arms, e.g. a re-read's leftover)
+        # is logged as its own [TEST] line; a START that leaves the run id unchanged must print it, never stay
+        # silent (hardware 2026-11-10, 72c2e28: "START did not start a run" with NO reason printed)
+        frames = [b"[TEST] cable arm refused: Ra refused: contract live\n"]
+        text = ct_start.start_failure_text(5, frames)
+        self.assertIn("run id still 5", text)
+        self.assertIn("cable arm refused: Ra refused: contract live", text)
+
+    def test_packed_cable_arm_refusal_decodes_to_the_reason(self):
+        fmt = "[TEST] cable arm refused: %s\n"
+        ids = [k for k, v in logdb.load().items() if v == fmt]
+        if not ids:
+            self.skipTest("the cable-arm-refusal format is not in tools/logdb.json yet")
+        # the wire form of that line (msg#<id> args; a %s arg is %XX-escaped), as the K2 sends it
+        frames = [(f"msg#{ids[0]} Ra%20refused:%20contract%20live\n").encode()]
+        self.assertIn("cable arm refused: Ra refused: contract live", ct_start.start_failure_text(5, frames))
+
+    def test_a_start_rd_refusal_line_is_printed(self):
+        frames = [b"[TEST] START: Rd refused (sink inline)\n"]
+        text = ct_start.start_failure_text(3, frames)
+        self.assertIn("START: Rd refused (sink inline)", text)
+
 
 class RunId(unittest.TestCase):
     def test_retries_while_the_k2_is_busy_in_start(self):

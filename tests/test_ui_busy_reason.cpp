@@ -50,10 +50,33 @@ static void test_run_rd_hold_does_not_block() {
     CHECK_EQ(ui.busy_reason() == nullptr, true);
 }
 
+// A re-read that ended left its own PDO 1 hold on the sink (the driver's linger keeps the contract readable for
+// k2_remote pdos): START takes that over like the self-hold, so it does not refuse (hardware 2026-11-10, b14c1b9:
+// after a plain pd-reread, held=True and START was refused "tool busy (5100 mV)" - twice, also after --abort).
+static void test_reread_own_hold_does_not_block() {
+    fixture(); Ui ui;
+    g_stub.self_powered = false; g_stub.bus_powered = false;
+    g_stub.sink.held = true; g_stub.rd_run = false;
+    g_stub.reread_hold = true;
+    CHECK_EQ(ui.busy_reason() == nullptr, true);
+}
+
+// The same sink state once the re-read's flag is gone (a user trigger took the contract over): still refused, named
+// with the way out.
+static void test_trigger_hold_after_a_reread_blocks() {
+    fixture(); Ui ui;
+    g_stub.self_powered = false; g_stub.bus_powered = false;
+    g_stub.sink.held = true; g_stub.rd_run = false;
+    g_stub.reread_hold = false;
+    CHECK_STR(ui.busy_reason(), "PD hold: release it");
+}
+
 int main() {
     test_self_powered_hold_does_not_block();
     test_bus_powered_hold_does_not_block();
     test_hid_powered_trigger_hold_blocks();
     test_run_rd_hold_does_not_block();
+    test_reread_own_hold_does_not_block();
+    test_trigger_hold_after_a_reread_blocks();
     return test_report("test_ui_busy_reason");
 }

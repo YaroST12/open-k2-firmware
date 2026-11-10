@@ -430,6 +430,28 @@ void test_survey_budget_is_longer_than_the_lab_one() {
     CHECK_EQ(g.r.status().skipped_mask, kSurveyMask);
 }
 
+// A re-read's attach can end with its own PDO 1 5 V contract still on the wire (the driver's linger keeps it
+// readable for k2_remote pdos). That hold is the re-read's own, not a foreign tool's: a charger-test START (and the
+// spoof arming) take it over like the self-hold of a self-powered K2, instead of refusing "tool busy" / "Ra refused:
+// contract" (hardware 2026-11-10, b14c1b9: after a plain pd-reread held=True and START was refused "tool busy
+// (5100 mV)"; 72c2e28: after pd release the leftover Ready contract still refused the Ra arming, silently). Only the
+// exact leftover qualifies: Ready at PDO 1 at vSafe5V, not in EPR mode, still owned by the re-read (any other owner,
+// a trigger or a run, clears the flag) - so a user trigger's own hold keeps blocking.
+void test_reread_own_hold() {
+    SinkStatus s;
+    s.state = SinkState::Ready; s.pos = 1; s.mv = 5000; s.held = true;
+    CHECK_EQ(reread_own_hold(s, true), true);
+    s.held = false;                                        // after `pd release`: the contract stays Ready, held does not
+    CHECK_EQ(reread_own_hold(s, true), true);
+    s.mv = 5200; CHECK_EQ(reread_own_hold(s, true), false);   // above vSafe5V is not the PDO 1 leftover
+    s.mv = 5000; s.pos = 3; CHECK_EQ(reread_own_hold(s, true), false);   // a raised contract is not the leftover
+    s.pos = 1; s.mv = 9000; CHECK_EQ(reread_own_hold(s, true), false);
+    s.mv = 5000; s.epr_mode = true; CHECK_EQ(reread_own_hold(s, true), false);
+    s.epr_mode = false; s.state = SinkState::Requesting; CHECK_EQ(reread_own_hold(s, true), false);
+    s.state = SinkState::Idle; CHECK_EQ(reread_own_hold(s, true), false);
+    s.state = SinkState::Ready; CHECK_EQ(reread_own_hold(s, false), false);   // the flag is gone: a trigger's hold
+}
+
 }  // namespace
 
 int main() {
@@ -457,5 +479,6 @@ int main() {
     test_waits_for_idle_line_and_a_failed_tx_skips();
     test_foreign_traffic_and_abort();
     test_avs_detection_is_the_spr_pattern_only();
+    test_reread_own_hold();
     return test_report("test_pd_reread");
 }
