@@ -1531,21 +1531,25 @@ void Runner::walk_step(Input in, const Step& eff) {
     if (!walk_grant_ms_) walk_grant_ms_ = in.now;
     walk_steady_.add(in.now, in.vbus_mv);
     if (!walk_steady_.steady() && in.now - walk_grant_ms_ < kWalkSteadyTimeoutMs) return;   // still settling: wait at this level
-    walk_lv_[walk_n_] = in.vbus_mv;
+    // The level is the mean of the window, not the one sample that happens to close it: a source in burst mode swings every sample
+    // by tens of mV around a level it holds well, and one sample read a +-swing as a jump (review item D). A steady window's mean is
+    // within kWalkSteadyMv of every sample in it, so a clean source records what it recorded before.
+    const int level = walk_steady_.mean(in.vbus_mv);
+    walk_lv_[walk_n_] = level;
     if (walk_n_ == 0) {
-        walk_prev_mv_ = walk_base_mv_ = in.vbus_mv;   // the base level is granted, in band and steady
+        walk_prev_mv_ = walk_base_mv_ = level;   // the base level is granted, in band and steady
     } else {
         // Only a jump fails a single step: the output creeps for ~2 s after each PS_RDY, so one move reads from <= 0 to
         // ~+36 mV on a good source; the total and the trend below judge the rest.
-        const int move = in.vbus_mv - walk_prev_mv_;
+        const int move = level - walk_prev_mv_;
         if (move >= int(2 * kStepMv)) {
             finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(move, 0, 255)));
             return;
         }
-        walk_prev_mv_ = in.vbus_mv;
+        walk_prev_mv_ = level;
     }
     if (walk_n_ >= kStepWalkCount) {
-        const int total = in.vbus_mv - walk_base_mv_;
+        const int total = level - walk_base_mv_;
         // Least-squares slope per step over the kStepWalkCount + 1 levels, x = 0..n: slope = sum((2i - n) * y_i) / den with
         // den = n (n + 1) (n + 2) / 6 (35 for n = 5); kept in integers, compared against the band times den.
         constexpr int n = int(kStepWalkCount), den = n * (n + 1) * (n + 2) / 6;
@@ -1581,6 +1585,7 @@ void Runner::sweep_begin(const Step& s, Input in) {
     sweep_first_ = sweep_used_;
     sweep_n_ = 0;
     stable_ = false;
+    walk_steady_.clear();
 }
 // One granted sweep point (Accept + PS_RDY at sweep_mv_, VBUS steady): record measured - setpoint, then ask for the
 // next point through the sink's single Request gate. A steady OUT-OF-BAND point is recorded too, not a stop - the
@@ -1589,7 +1594,10 @@ void Runner::sweep_begin(const Step& s, Input in) {
 void Runner::sweep_point(Input in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
-    const int err = in.vbus_mv - int(sweep_mv_);
+    // The point's level is the mean of the last kWalkSteadyWindowMs of samples (fed by poll_impl), not the one sample that closes it
+    // (review item D: a source in burst mode swings every sample by tens of mV around a level it holds).
+    const int err = walk_steady_.mean(in.vbus_mv) - int(sweep_mv_);
+    walk_steady_.clear();
     if (sweep_first_ + sweep_n_ < ctsweep::kMaxPoints)
         sweep_err_[sweep_first_ + sweep_n_] = int16_t(std::clamp(err, -32767, 32767));
     ++sweep_n_;
@@ -2535,6 +2543,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         }
         // A sweep point is judged on PS_RDY alone: a steady out-of-band point is RECORDED and the sweep goes on
         // (only a lost source stops it, via the failure paths below), so its gate is ready, not ready && in band.
+        if (ready && is_sweep(s)) walk_steady_.add(in.now, in.vbus_mv);   // the sweep point's level is the mean of these (sweep_point)
         if (ready && (banded || is_sweep(s))) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
             if (in.now - stable_ms_ >= 500) {

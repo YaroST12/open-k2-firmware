@@ -517,6 +517,14 @@ public:
         return hi - lo <= kWalkSteadyMv;
     }
     unsigned count() const { return n_; }
+    // The level the window stands for: the mean of its samples (a ripple around a held level averages out, one sample reads the
+    // ripple). `fallback` (the latest sample) when the window is empty.
+    int mean(int fallback) const {
+        if (!n_) return fallback;
+        int64_t sum = 0;
+        for (unsigned i = 0; i < n_; ++i) sum += v_[i];
+        return int((sum + int64_t(n_) / 2) / int64_t(n_));
+    }
 private:
     static constexpr unsigned kCap = 20;   // 300 ms of samples at the 15 ms worst-case poll cadence
     std::array<uint32_t, kCap> t_{};

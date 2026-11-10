@@ -44,6 +44,7 @@ struct Fake final : ct::Env {
     unsigned walk_settle_ms = 0;
     uint32_t settle_t0 = 0; bool settle_on = false;
     int walk_ripple_mv = 0;      // alternating ripple added to VBUS every tick: never within the steady span
+    int noise_mv = 0; bool noise_flip = false;   // a symmetric +-noise_mv swing of every sample around the level (see tick)
     // pattern latch-off-low-pps: after a request at latch_mv the source stops regulating latch_delay_ms later, drains to 0 and
     // stays dead (no caps, no session, a release changes nothing) until the test calls revive().
     int latch_mv = 0; uint32_t latch_delay_ms = 0, latch_at = 0; bool latched = false;
@@ -516,7 +517,14 @@ struct Fake final : ct::Env {
                 else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
             }
             if (walk_ripple_mv && in.vbus_mv > 1000) in.vbus_mv += ((in.now / 100) % 2) ? walk_ripple_mv : -walk_ripple_mv;
+            // noise_mv: the SAMPLE swings +-noise_mv around the level (burst-mode ripple); the level itself is untouched. noise_flip
+            // flips the swing's phase with every PD request, so two levels read by one sample each sit on opposite sides.
+            const int before = in.vbus_mv;
+            int bump = 0;
+            if (noise_mv && before > 1000) bump = (((in.now / 100) % 2) != 0) != (noise_flip && (pd_requests & 1)) ? noise_mv : -noise_mv;
+            in.vbus_mv += bump;
             r.poll(in, caps);
+            if (bump && in.vbus_mv == before + bump) in.vbus_mv = before;
             min_vbus = std::min(min_vbus, in.vbus_mv);
         }
     }
@@ -3891,6 +3899,16 @@ static void test_walk_steady_window() {
     CHECK_EQ(w.steady(), false);
 }
 
+static void test_walk_steady_mean() {
+    ct::WalkSteady w;
+    CHECK_EQ(w.mean(777), 777);                        // empty: the fallback
+    w.add(1000, 13040); w.add(1100, 12960);
+    CHECK_EQ(w.mean(0), 13000);
+    w.add(1200, 13040); w.add(1300, 12960);
+    CHECK_EQ(w.mean(0), 13000);
+    w.add(1500, 13010);                                // 1000 and 1100 left the 300 ms window: 13040, 12960, 13010 remain
+    CHECK_EQ(w.mean(0), 13003);
+}
 // The steady wait is bounded: a source whose output never sits within the span (a +/- 5 mV ripple every tick)
 // still has each level recorded after kWalkSteadyTimeoutMs, and the walk completes and passes.
 static void test_pps_step_walk_steady_wait_is_bounded_by_the_timeout() {
@@ -3903,6 +3921,36 @@ static void test_pps_step_walk_steady_wait_is_bounded_by_the_timeout() {
     for (size_t i = 0; i + 5 < f.choices.size(); ++i)
         if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
     CHECK_EQ(walk7, true);
+}
+// Review item D: the walk recorded ONE sample per level and the sweep ONE sample per point. A source in burst mode swings every sample
+// by tens of mV around a level it holds well, so one sample read a ripple, not the level: the walk's first move read +100 mV (a jump,
+// "step resolution") and every sweep point carried the swing as its error. Both now record the mean of the samples of the last
+// kWalkSteadyWindowMs. noise_flip puts two neighbouring levels on opposite sides of the swing: one sample each read 100 mV apart.
+static void test_pps_step_walk_records_the_mean_of_a_noisy_level() {
+    Fake f; f.noise_mv = 40; f.noise_flip = true;
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+    bool walk7 = false;
+    for (size_t i = 0; i + 5 < f.choices.size(); ++i)
+        if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
+    CHECK_EQ(walk7, true);   // all six walk Requests went out
+}
+static void test_pps_deep_sweep_records_the_mean_of_a_noisy_point() {
+    Fake f; f.noise_mv = 40;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto v = r.sweep_view();
+    const auto* rw7 = v.find(uint8_t(A::Pps), 7);
+    CHECK_EQ(rw7 != nullptr, true);
+    if (!rw7) return;
+    CHECK_EQ(rw7->sum.points, 161u);
+    CHECK_EQ(int(rw7->sum.worst_err) >= -10 && int(rw7->sum.worst_err) <= 10, true);   // the level, not the +-40 mV swing
+    CHECK_EQ(int(rw7->sum.max_err) <= 10 && int(rw7->sum.min_err) >= -10, true);
 }
 // ROADMAP "PPS step walk judged by total + trend" (hardware 2026-11-10, runs/2026-11-10-pps13): a good PPS source's
 // output keeps creeping up 20-36 mV for ~2 s after each PS_RDY, so one 20 mV step reads anywhere from <= 0 to ~+36 mV
@@ -6495,6 +6543,7 @@ int main() {
     test_pps_step_walk_waits_for_the_base_to_settle();
     test_walk_steady_window();
     test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
+    test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();
     test_pps_step_walk_passes_a_drifting_source(); test_pps_step_walk_passes_a_slow_but_correct_source();
     test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
     return test_report("test_charger_test");
