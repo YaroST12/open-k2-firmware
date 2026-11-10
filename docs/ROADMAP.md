@@ -397,7 +397,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   is granted; a source that overshoots and settles makes the first move read ~0 or negative. Fix: the walk's base (and
   each step) waits until VBUS is steady (e.g. 3 samples within 3 mV, bounded by a timeout) before it records the level;
   the sum rule stays. Host test with this shape (base 13007 settling to 12990, then +20 mV steps) must pass.
-- **Suspected: Wake sleeping port ON breaks the charger test's planned re-attach** (2026-11-10, aebb430, UGREEN on the
+- **Wake sleeping port ON breaks the charger test's planned re-attach** (confirmed 2026-11-10: Wake ON + reboot -> 0 / 20 again;
+  log `runs/2026-11-10-merge2-hw/wake-ct`: 58 ms after "[TEST] unit detach: Rd off" the dark-attach release fires and
+  the hold puts Rd back on CC2, every unit; with k2-dev) (2026-11-10, aebb430, UGREEN on the
   top plug, `runs/2026-11-10-merge2-hw/ugreen-pd.txt`, `ugreen-pd2.txt`): with Wake left ON (and after lab re-reads),
   two PD runs ended 0 pass / 20-25 fail, every row "no PD after re-attach", VBUS 5.10 V for the whole run and CC2 at
   1.62 V (an Rd held) even at idle and after Wake was switched off; a K2 reboot with Wake OFF made the next run pass
