@@ -107,9 +107,12 @@ bool tests_stage(ChargerTestPage::Stage s) {
 }
 unsigned selected(uint32_t mask) { return std::popcount(mask); }
 // The footer line for a refused START. "tool busy" alone does not say which tool or what to do: Ui::busy_reason() does.
-const char* review_refusal(ct::Reason r, const char* busy) {
-    if (r == ct::Reason::Busy && busy) return busy;
-    return ct::refusal_words(r);
+// A wrong voltage under a live PDO 1 contract names the measured level (the log line carries the full phrase).
+void review_refusal(ct::Reason r, const char* busy, int vbus_mv, StrBuf<32>& out) {
+    if (r == ct::Reason::Busy && busy) { out.put(busy); return; }
+    char buf[32];
+    const size_t n = ct::refusal_footer_text(r, vbus_mv, buf);
+    out.put(std::string_view(buf, n));
 }
 unsigned entries(uint32_t mask) {
     return selected(mask & ~kFamilies[kFamPd]) + bool(mask & ct::kPdFixedAlgorithms) + bool(mask & ct::kPpsAlgorithms);
@@ -966,8 +969,7 @@ void ChargerTestSession::open_confirmation() {
     const bool later = (preview.refusal == ct::Reason::NoSource || preview.refusal == ct::Reason::Release) &&
                        pd::start_needs_rd(ctx_.inline_mode, ctx_.vbus_fast_mv);
     if (preview.refusal != ct::Reason::None && !later) {
-        ct::log_preflight_refusal(preview.refusal, in.vbus_mv);   // the footer shows it; the log carries it for a remote START
-        message(review_refusal(preview.refusal, ctx_.ui->busy_reason()));
+        start_failed(preview.refusal, ctx_.ui->busy_reason(), in.vbus_mv);   // the log line + footer + recorded reason
         return;
     }
     // The same rule begin_run applies to the identity the START arms: the footer says so when the K2 is going to blink off.
@@ -1009,13 +1011,21 @@ void ChargerTestSession::start_failed(const char* why) {
     if (stage_ != Stage::Review) set_stage(Stage::Review, kStartRow);   // from Waiting; set_stage clears the message, so it comes after
     message(why);
 }
+// A START the preflight refused: one [TEST] log line with the reason (a remote START, tools/ct_start.py, prints it
+// when the run id stays 0), the reason + measured VBUS recorded on the runner (the remote summary reads them), and
+// the footer words on screen.
+void ChargerTestSession::start_failed(ct::Reason r, const char* busy, int vbus_mv) {
+    runner_.note_preflight_refusal(r, vbus_mv);
+    StrBuf<32> t;
+    review_refusal(r, busy, vbus_mv, t);
+    start_failed(t.c_str());
+}
 // The preflight on the final reading (the wait changed it), then the run itself.
 void ChargerTestSession::launch() {
     const auto in = input(ctx_.now);
     const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
     if (preview.refusal != ct::Reason::None) {
-        ct::log_preflight_refusal(preview.refusal, in.vbus_mv);   // the wait ended in a refusal: the log says why
-        start_failed(review_refusal(preview.refusal, ctx_.ui->busy_reason()));
+        start_failed(preview.refusal, ctx_.ui->busy_reason(), in.vbus_mv);   // the wait ended in a refusal: the log says why
         return;
     }
     begin_run();
@@ -1051,10 +1061,7 @@ void ChargerTestSession::begin_run() {
         journal_active_ = true; journal_closed_ = false;
         set_stage(Stage::Running); follow_ = true;
     }
-    else {
-        ct::log_preflight_refusal(r, in.vbus_mv);   // the runner's own preflight refused the START
-        start_failed(review_refusal(r, ctx_.ui->busy_reason()));
-    }
+    else start_failed(r, ctx_.ui->busy_reason(), in.vbus_mv);   // the runner's own preflight refused the START
 }
 void ChargerTestSession::leave() { cancel(); }
 bool ChargerTestSession::set_units(std::span<const uint8_t> units) {
@@ -1364,7 +1371,8 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     case Stage::Review: {
         const auto in = input(ctx_.now);
         if (summary_.refusal != ct::Reason::None) {
-            f.put(review_refusal(summary_.refusal, ctx_.ui->busy_reason()));
+            review_refusal(summary_.refusal, ctx_.ui->busy_reason(),
+                           summary_.refusal_mv ? int(summary_.refusal_mv) : in.vbus_mv, f);
             return FooterTone::Caution;
         }
         if (!summary_.runnable) { f.put("Nothing to run: all skip"); return FooterTone::Caution; }

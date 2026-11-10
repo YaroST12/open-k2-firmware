@@ -272,6 +272,7 @@ private:
     [[gnu::noinline]] void press_start();            // after the identity is settled: Rd and the wait as the last stage, then launch()
     void launch();                 // the preflight on the final reading, then begin_run() (or start_failed)
     void start_failed(const char* why);              // passive again on Review, the reason on the footer
+    void start_failed(charger_test::Reason, const char* busy, int vbus_mv);   // refused START: log line + recorded reason + footer words
     bool confirm_live() const;     // the confirm window is open, unexpired and still describes this proposal
     [[gnu::noinline]] void begin_run();              // the run itself
     [[gnu::noinline]] bool apply_cable(ctcable::Choice);   // arm the identity and turn the Ra mode on; false = refused (message set)

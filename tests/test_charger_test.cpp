@@ -4345,16 +4345,24 @@ static void test_preflight_pdo1_contract_at_wrong_voltage_refuses_wrong_voltage(
     f.in.vbus_mv = 7600;   // streamB2 replay: the PDO 1 contract is granted, VBUS stays at 7.6 V
     f.in.pd.state = pd::SinkState::Ready; f.in.pd.pos = 1; f.in.pd.mv = 5000;
     const auto pv = ct::Runner::preview(f.caps, kPd, f.in);
-    CHECK_EQ(pv.refusal, ct::Reason::WrongVoltage);   // red today: Release
-    g_stub.log_text.clear();
-    ct::log_preflight_refusal(ct::Reason::WrongVoltage, 7600);
-    CHECK_EQ(g_stub.log_text.find("VBUS 7.6 V on a 5 V contract (shared bus)") != std::string::npos, true);   // red today
-    g_stub.log_text.clear();
-    ct::log_preflight_refusal(ct::Reason::WrongVoltage, 8470);   // the B5 run's reading: 8.47 V reads 8.5 V
-    CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: VBUS 8.5 V on a 5 V contract (shared bus)") != std::string::npos, true);   // red today
+    CHECK_EQ(pv.refusal, ct::Reason::WrongVoltage);
+    CHECK_EQ(pv.refusal_mv, 7600u);   // the measured level rides with the refusal (the card/summary records it)
+    {   // the recorded refusal: the remote summary reads reason(), the log line names the level
+        ct::Runner r(f);
+        g_stub.log_text.clear();
+        r.note_preflight_refusal(pv.refusal, 7600);
+        CHECK_EQ(r.reason(), ct::Reason::WrongVoltage);
+        CHECK_EQ(r.refusal_mv(), 7600u);
+        CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: VBUS 7.6 V on a 5 V contract (shared bus)") != std::string::npos, true);
+        char buf[32];
+        CHECK_EQ(ct::refusal_footer_text(ct::Reason::WrongVoltage, 8470, buf), 27u);   // the B5 run's 8.47 V reads 8.5 V
+        CHECK_STR(buf, "VBUS 8.5 V on a 5V contract");
+    }
     {   // no contract at the same voltage: a source with no PD at 7.6 V is a plain unsafe VBUS
         Fake f2; f2.in.vbus_mv = 7600;
-        CHECK_EQ(ct::Runner::preview(f2.caps, kPd, f2.in).refusal, ct::Reason::Release);
+        const auto pv2 = ct::Runner::preview(f2.caps, kPd, f2.in);
+        CHECK_EQ(pv2.refusal, ct::Reason::Release);
+        CHECK_EQ(pv2.refusal_mv, 7600u);
     }
     {   // a safe 5 V under the PDO 1 contract: nothing to refuse
         Fake f3; f3.in.vbus_mv = 5000;

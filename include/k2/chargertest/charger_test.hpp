@@ -74,9 +74,12 @@ const char* name(State);
 // (it never changes for a display budget); the reasons whose shared name does not fit the 26-27 cell footer lines say
 // it shorter. The START preflight's log line uses these same words, so the log and the footer never disagree.
 const char* refusal_words(Reason);
-// One [TEST] log line for a START-preflight refusal (the footer shows it on screen only): the reason in the on-screen
-// words plus the VBUS reading behind it, so a remote START (tools/ct_start.py) can print why the run id stayed 0.
-void log_preflight_refusal(Reason r, int vbus_mv);
+// The preflight refusal as the footer words it (the 27-cell footer line, so at most 27 chars): a WrongVoltage under a
+// live PDO 1 contract names the measured level, e.g. "VBUS 8.5 V on a 5V contract"; every other reason uses its
+// screen words. The log line carries the full "(shared bus)" phrase. Returns the length written to `out`.
+size_t refusal_footer_text(Reason r, int vbus_mv, std::span<char> out);
+// The sink holds a contract at PDO 1 (PS_RDY seen, contract position 1): the START's own 5 V Request was granted.
+inline bool pdo1_contract(const pd::SinkStatus& pd) { return pd.state == pd::SinkState::Ready && pd.pos == 1; }
 
 // A test unit is one attach of the charger from start to detach (docs/CHARGER_TEST_FLOW.md). The ids are the remote wire
 // numbering (Cmd::ChargerUnits): the first twelve equal the Group values, PdLow is the risky tail of the PD rows.
@@ -255,6 +258,7 @@ struct Summary {
     uint16_t max_mv = 0;
     uint32_t estimate_ms = 500;
     Reason refusal = Reason::None;
+    uint16_t refusal_mv = 0;   // the measured VBUS (mV) behind a Release / WrongVoltage refusal (0 = none)
 };
 const char* explanation(const Step&);
 // Step.detail of an EPR skip. The PD group's detail space is 128 + pd::Err (below 136) and pd::SinkResult (below 12); these sit
@@ -440,6 +444,12 @@ public:
     static Summary preview(const pd::SourceCaps&, Options, Input);
     Reason start(const pd::SourceCaps&, Options, Input, bool confirmed);
     void poll(Input, const pd::SourceCaps&);
+    // A START the preflight refused (no run began; the run id stays where it was): one [TEST] log line with the
+    // reason, and the reason + measured VBUS recorded here, so the remote summary (charger-test status) and the
+    // card's final-reason path read them. A WrongVoltage under a live PDO 1 contract names the level in the log:
+    // "VBUS 8.5 V on a 5 V contract (shared bus)". Only outside a run.
+    void note_preflight_refusal(Reason r, int vbus_mv);
+    uint16_t refusal_mv() const { return refusal_mv_; }   // the measured VBUS of the recorded preflight refusal
     // While held, a run that has just been start()ed stays in its Baseline: nothing is judged or requested, and the Baseline's
     // clocks restart at every poll (so its 500 ms of vSafe5V count from the release). The page holds a run while it writes the
     // journal's plan in pieces, so the first phase marker (the one write that must precede an above-5 V request) lands after the
@@ -592,6 +602,7 @@ private:
     size_t cut_index_ = SIZE_MAX;   // a low programmable row whose source went dark: Releasing decides replug-or-carry-on
     State state_ = State::Idle;
     Reason reason_ = Reason::None;
+    uint16_t refusal_mv_ = 0;   // the measured VBUS of the last preflight refusal (note_preflight_refusal)
     uint32_t release_ms_ = 0, phase_ms_ = 0, stable_ms_ = 0, last_ms_ = 0, session_ = 0, resets_ = 0;
     uint32_t run_id_ = 0, revision_ = 0;
     uint8_t resumed_ = 0;

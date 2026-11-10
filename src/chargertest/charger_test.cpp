@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/charger_test.hpp"
+#include "k2/core/fmt.hpp"
 #include "k2/core/log.hpp"
 #include "k2/fastcharge/accp.hpp"
 #include "k2/pd/pd_link.hpp"
@@ -61,8 +62,31 @@ const char* refusal_words(Reason r) {
     default: return name(r);
     }
 }
-void log_preflight_refusal(Reason r, int vbus_mv) {
-    K2LOG("[TEST] preflight refused: %s (%d mV)\n", refusal_words(r), vbus_mv);
+size_t refusal_footer_text(Reason r, int vbus_mv, std::span<char> out) {
+    if (r == Reason::WrongVoltage && vbus_mv >= 0 && out.size() > 1) {
+        // The 27-cell footer line: "VBUS 8.5 V on a 5V contract" (8470 mV reads 8.5 V). The log line carries the full
+        // "(shared bus)" phrase, so screen and log name the same case.
+        const int tenths = (vbus_mv + 50) / 100;
+        return fmt::format(out, "VBUS %d.%d V on a 5V contract", vbus_mv / 1000, tenths % 10);
+    }
+    const char* w = refusal_words(r);
+    size_t n = 0;
+    for (; w[n] && n + 1 < out.size(); ++n) out[n] = w[n];
+    if (n < out.size()) out[n] = '\0';
+    return n;
+}
+void Runner::note_preflight_refusal(Reason r, int vbus_mv) {
+    if (busy()) return;   // only a refusal outside a run is recorded (the run id stays where it was)
+    reason_ = r;
+    refusal_mv_ = vbus_mv >= 0 ? uint16_t(std::min(vbus_mv, 65535)) : 0;
+    if (r == Reason::WrongVoltage && vbus_mv >= 0) {
+        // A live PDO 1 contract held outside vSafe5V (pattern shared-bus-split): name the measured level, so the
+        // log and ct_start.py say why the run id stayed 0 - "VBUS 8.5 V on a 5 V contract (shared bus)".
+        const int tenths = (vbus_mv + 50) / 100;   // 8470 mV reads 8.5 V
+        K2LOG("[TEST] preflight refused: VBUS %d.%d V on a 5 V contract (shared bus)\n", vbus_mv / 1000, tenths % 10);
+    } else {
+        K2LOG("[TEST] preflight refused: %s (%d mV)\n", refusal_words(r), vbus_mv);
+    }
 }
 const char* name(State s) {
     static constexpr const char* names[] = {"Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing..."};
@@ -744,7 +768,12 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     in.epr_info = nullptr;   // a preview plans from the source list alone
     in.fc_caps = nullptr;
     out.refusal = refusal(o, in, false, true);
-    if (out.refusal == Reason::None && !safe5(in.vbus_mv)) out.refusal = Reason::Release;
+    if (out.refusal == Reason::None && !safe5(in.vbus_mv)) {
+        // VBUS outside vSafe5V: under a live PDO 1 contract (PS_RDY at position 1) that is the wrong-voltage case
+        // (pattern shared-bus-split) and is recorded with the measured level - not a plain unsafe VBUS.
+        out.refusal = pdo1_contract(in.pd) ? Reason::WrongVoltage : Reason::Release;
+        out.refusal_mv = uint16_t(std::clamp(in.vbus_mv, 0, 65535));
+    }
     const UnitList units = resolve(o);
     uint32_t seen = 0;
     auto count = [&](const Step& s) {
@@ -1109,6 +1138,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
         if (!run_id_) {
             if (reason_ != denied) ++revision_;
             reason_ = denied;
+            refusal_mv_ = uint16_t(std::clamp(in.vbus_mv, 0, 65535));
         }
         return denied;
     }
@@ -1144,7 +1174,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     xiaomi_seen_ = xiaomi_reset_ = x_svid_ = x_authed_ = false; tail_at_ = 0; hr_count_ = link_resets(in.pd);
     last_ms_ = phase_ms_ = in.now; stable_ = stopping_ = pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false; busy_retry_at_ = 0;
     list_tracking_ = false; flight_restart_ = false;   // the settle window is seeded by the first poll, not opened by START
-    reason_ = Reason::None;
+    reason_ = Reason::None; refusal_mv_ = 0;
     probe_ = (has_unit(o.units, Unit::Pd) || has_unit(o.units, Unit::PdLow)) ? Probe::Pending : Probe::Off;   // ask the charger who it is once, at the end of the first Pd unit
     state_ = State::Baseline;
     // An already elevated source is not safe to take over blindly.
