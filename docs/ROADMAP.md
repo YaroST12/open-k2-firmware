@@ -525,6 +525,24 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Side effect: the fix shrank `home::paint`'s frame by 80 B, moving the worst main-loop path onto the ChargerTest
     chain; ff6c833 adds the matching RESOLVE rule (ResultGrid's `result_row_fn` callback) to `tools/stack_depth.py`
     so the stack gate resolves it again.
+- **Home landscape: the third rule is cut and the info bars are empty** (2026-11-10, user report; branch
+  `k2/home-landscape-fill`, hardware check pending): in rotations 1/3 parts of the Home lower half were overwritten by
+  black fields; the info row 1 showed a dash in every state but a live session with a known USB link.
+  - Cause: the W / Wh / Ah band and the info rows were `Field`s (`gfx_text`/`Field::draw`, `src/ui/gfx.cpp`) that fill
+    their whole native glyph box with the background. In landscape the y squeeze (224/240) makes that box taller than
+    the logical row, so the box overran the third rule (y194) and the divider; `draw_band_rules()` redrew only the
+    divider and the split line. Red: 72 of 240 px of rule3 not `kRule` in rotations 1 and 3, in every state.
+  - Fix (`src/ui/ui_home.cpp`): the band and the info block are one `home::Cell` (y144..239) with the rule, divider and
+    split line as fill items and every text as an item, repainted per zone (W, Wh, Ah, row 1, elapsed, row 2) with a
+    signature each; text composes over the structure and the written region is clipped to the cell, so no repaint can
+    cut a frame line in any rotation. The ten `Field`s and their colour bookkeeping are gone (bss unchanged: the page
+    arena is sized by the largest page); text +340 B against the base.
+  - Fill: info row 1 shows `CC1/2 1.62/0.07V` outside a live session and `D+/D- 0.60/0.58V` while live with an unknown
+    USB link (`home::format_lines`, pure, tested); a known link still shows `USB <link>`. Row 2 stays the contract.
+  - Validate (host): `tests/test_ui_home_landscape.cpp` (frame whole in four rotations x five states, width changes
+    9.999 -> 10.00 V and 99.9 -> 100.0 W, badge/protocol text changes with incremental == `resync()`, row 1 carries
+    data); red on the base, green after. Renders in `runs/ui-homefill/{before,after}`. Hardware, pending: Home in all
+    four rotations, no black patch, CC1/2 or D+/D- on the first info row.
 - **Planned re-attach counts as a resume** (2026-11-09, fixed in 49dacbb, hardware check pending): the card's "resumed"
   counter was not masked after the planned reboot, so a clean 6 A run read as resumed once.
   - Fix: the planned re-attach writes its intent marker (`/rd.rec`, `src/core/rd_comeback.cpp`); the run journal's
