@@ -82,6 +82,7 @@ bool g_pd_seen_attach = false;       // the same, but only a new attach clears i
 // one. `g_seek_passive` marks such an attach; a move to the other line keeps it, a fresh attach (scan, window re-check) decides again.
 pd::RdSeek g_rdseek;
 bool g_seek_passive = false;
+pd::IdleWake g_idle_wake;   // the idle/no-source Rd hold on a standby-signature line (pattern slow-rp-wake, idle path)
 std::uint32_t g_ident_session = 0;   // attach session of the latest identify_start (its Sink_Caps belong to it)   // contract.requests at attach: later ones came from a sink on the far side
 std::uint32_t g_attach_ms = 0;   // millis() at the attach of the current partner
 std::uint8_t g_bc_max = 0;       // highest BC_LVL (Rp level) read since attach
@@ -421,11 +422,16 @@ void update_crc(bool crc_busy, bool rd_busy) {
 
 // Rd bits while no partner is attached: only the boot-mode pin (plain boot: none, the passive state). A run start
 // adds its own presentation (both lines while no CC is known), but never a second Rd next to a key mode's pin: Rd on both lines
-// is the Debug Accessory signature (pd::key_rd_lines).
+// is the Debug Accessory signature (pd::key_rd_lines). With no other owner, the idle wake may hold Rd on the one line
+// that read the standby signature open (pd::IdleWake, pattern slow-rp-wake idle path: a sleeping source is asked
+// without any pin); never a second line next to it.
 std::uint8_t idle_rd() {
     if (downstream_now()) return 0;   // a sink behind the K2 has its own Rd on the line: ours would be a second sink
     const std::uint8_t run = g_rd_start ? pd::key_rd_lines(emkra::run_rd_lines(g_ra, g_inline, 0), g_pin_rd, 0) : std::uint8_t(0);
-    return std::uint8_t(g_pin_rd | run) & (kPdwn1 | kPdwn2);
+    const std::uint8_t own = std::uint8_t(g_pin_rd | run) & (kPdwn1 | kPdwn2);
+    if (own != 0) return own;
+    const std::uint8_t hold = g_idle_wake.line();
+    return hold == 1 ? kPdwn1 : hold == 2 ? kPdwn2 : std::uint8_t(0);
 }
 
 // Inline for every gate: the link logic latched it (a real sink downstream).
@@ -479,6 +485,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     cc_switches(false, g_cc_mask);
     const int i = c.line - 1;
     g_active_cc = std::uint8_t(c.line);
+    g_idle_wake.on_attach(c.line);   // an attach during an idle Rd hold: the no-Rp detach stays off inside the dwell window
     if (!seek_move) {
         g_rdseek.reset();
         g_seek_passive = !pinned && (rd_both & (kPdwn1 | kPdwn2)) == 0;   // no Rd on any line while the scan read: the pick is unverified
@@ -1116,6 +1123,8 @@ bool init() {
     g_sink.bind_epr_info(&g_engine.epr_info);
     g_msg_id = 0;
     g_rd_op = false;
+    g_rdseek.clear();      // a boot: no open reading is known yet (sink_cc notes them once the UI feeds levels)
+    g_idle_wake.reset();
 
     // PC13..PC15 drive the CC analog switches and the VCONN path.
 #ifndef K2_HOST_PINS
@@ -1862,7 +1871,8 @@ static void detach_reset(std::uint8_t status0) {
     g_bc_max = 0;
     g_cc_mask = 3;  // the next scan tries every routing again
     g_vbus_mv = -1;
-    g_rdseek.reset();   // the next attach decides again whether its line was picked without Rd
+    g_rdseek.reset();   // the next attach decides again whether its line was picked without Rd (the open readings stay: reset() keeps them)
+    g_idle_wake.reset();   // back to idle: the wake re-decides from the fresh open readings
     g_seek_passive = false;
     g_detach.reset();
     g_sink.detach();
@@ -2042,6 +2052,18 @@ void poll() {
     }
     // The hold is over: Rd comes back whether or not the scan finds anything (unless a sink is inline).
     if (g_active_cc == 0 && !inline_now() && g_rd_hold.take_expiry(systick::millis())) wr(kSwitches0, idle_rd());
+    // pattern slow-rp-wake, idle path (2026-11-10): the idle/no-source path holds our Rd on the one line that read the
+    // standby signature open (pd::IdleWake) for kSlowWakeDwellMs at a time, so a sleeping source (the splitter's port,
+    // VBUS 78 mV, "No source") is asked without any pin and its Rp - 1072 ms after the Rd, measured - lands on the next
+    // scan. Only when nothing else owns the idle Rd: plain passive idle, no sink downstream, VBUS dark, no debug hold.
+    if (g_active_cc == 0 && g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now() &&
+        !g_rd_hold.held(systick::millis()) && g_vbus_mv < 3000) {
+        const std::uint8_t was = g_idle_wake.line();
+        const std::uint8_t held = g_idle_wake.update(systick::millis(), g_rdseek.open_mv(1), g_rdseek.open_mv(2));
+        if (held != was)
+            K2LOG("[FUSB302] Idle wake: Rd on CC%u for %u ms (open cc1=%d cc2=%d mV)\n", unsigned(held),
+                  unsigned(pd::kSlowWakeDwellMs), int(g_rdseek.open_mv(1)), int(g_rdseek.open_mv(2)));
+    }
     if (g_active_cc == 0 && poll_count % 25 == 0 && !g_rd_hold.held(systick::millis())) detect_cc_orientation();  // ~2 Hz at the 20 ms poll
 
     // Detach rule: VBUS below 3.0 V for 1 s, or no Rp on the active line for 500 ms. BMC
@@ -2059,9 +2081,14 @@ void poll() {
         // Our Rd on a line a Rd-less scan picked, and no Rp answers it: try the other line before the no-Rp rule gives up.
         // pattern slow-rp-wake: while the seek dwells on a standby-signature line (a sleeping source, its Rp measured
         // 1072 ms after the Rd), the 500 ms no-Rp detach must not fire inside that window - only the CC rule is held off.
+        // The idle wake's window is the same: an attach that landed during an idle Rd hold on a standby-signature line,
+        // and only until its Rp is seen (on_rp_seen ends it, like the seek's rp_seen).
+        if (got && (status0 & kComp) != 0) g_idle_wake.on_rp_seen();
         if (got && g_rdseek.update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
         else if (got && g_detach.update(systick::millis(), g_vbus_mv,
-                                        (status0 & kComp) != 0 || g_rdseek.holding_slow(systick::millis(), g_active_cc), sink_ok)) {
+                                        (status0 & kComp) != 0 || g_rdseek.holding_slow(systick::millis(), g_active_cc) ||
+                                            g_idle_wake.holding_slow(systick::millis(), g_active_cc, g_rdseek.open_mv(g_active_cc)),
+                                        sink_ok)) {
             K2LOG("[FUSB302] Detach: %s (cc=%d mV, inline=%d)\n", pd::detach_reason_name(g_detach.reason()),
                          int(g_cc_sink_mv), int(inline_now()));
             detach_reset(status0);

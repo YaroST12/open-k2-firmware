@@ -32,11 +32,16 @@ inline constexpr std::int32_t kStandbyOpenMv = 2800;       // the open standby r
 
 class RdSeek {
 public:
-    // A fresh attach picked by a scan (or a detach): the whole budget again.
-    void reset() { *this = RdSeek{}; }
+    // A fresh attach picked by a scan (or a detach): the whole budget again - but the open readings STAY: they were
+    // taken while no Rd of ours was on any line and are the only standby-signature evidence a later Rd presentation
+    // has (the sleeping-port row, 2026-11-10: reset() used to wipe them on attach, so an idle K2 never held a steady
+    // Rd long enough to wake a sleeping source).
+    void reset() { silent_ = false; since_ = 0; moves_ = 0; }
+    void clear() { *this = RdSeek{}; }   // a boot: nothing is known about any line yet
     // The open (no Rd of ours on any line) ADC reading of a line, noted by the scan while no Rd is presented and kept for
     // when our Rd sits on a line: "high open, collapses under Rd" is the standby signature of a sleeping source.
     void note_open(std::uint8_t line, std::int32_t mv) { if (line >= 1 && line <= 2) open_mv_[line - 1] = mv; }
+    std::int32_t open_mv(std::uint8_t line) const { return line >= 1 && line <= 2 ? open_mv_[line - 1] : -1; }
     bool standby(std::uint8_t line) const { return line >= 1 && line <= 2 && open_mv_[line - 1] >= kStandbyOpenMv; }
     // One call per poll while attached. `line`: the active CC line. `eligible`: the Rd on the active line is the K2's own,
     // put there by an active feature after the line was picked (never inline, never a key mode's pin, never the Ra mode,
@@ -68,6 +73,54 @@ private:
     std::uint32_t since_ = 0;
     std::uint8_t moves_ = 0;
     std::int32_t open_mv_[2] = {-1, -1};
+};
+
+// The idle wake (pattern slow-rp-wake, idle path, 2026-11-10): an idle K2 with no source detected and no Rd of its
+// own presents none, so a sleeping source - the splitter's port with nothing attached, one CC line reading the
+// standby signature open, VBUS 78 mV, "No source" - is never asked and never wakes; only a pinned re-read woke it
+// (be3f589). So the idle/no-source path treats a line that read the standby signature open (>= kStandbyOpenMv) as a
+// sleeping source and holds our Rd on that ONE line for kSlowWakeDwellMs at a time: a sleeping source's Rp measured
+// 1072 ms after the Rd, an awake source's Rp answers within tCCDebounce, and the ~2 Hz scan attaches on the line
+// once it does (the PD list on screen without any pin). When both lines read the signature the hold alternates line
+// by line every dwell - never Rd on both lines (the Debug Accessory signature). The caller gates this to the plain
+// passive idle: never with a sink downstream, a boot pin, a run start, an active operation, a forced line or a live
+// VBUS - nobody else owns the idle Rd.
+class IdleWake {
+public:
+    void reset() { holding_ = false; line_ = 0; attached_ = 0; last_ = 0; since_ = 0; }
+    // One call per idle poll. `open1`/`open2`: the open (no-Rd) readings kept by the scan (RdSeek::open_mv, noted
+    // while no Rd is presented, so they stay put while the hold has our Rd on). Returns the line to hold Rd on
+    // (1/2), or 0 when no line reads the signature. A dwell that ran out re-arms in the same call, so the Rd is
+    // held steadily (the sleeping source must see one steady Rd, not a blinking one).
+    std::uint8_t update(std::uint32_t now, std::int32_t open1, std::int32_t open2) {
+        attached_ = 0;   // an idle poll means no attach is holding the window open any more
+        if (holding_ && now - since_ >= kSlowWakeDwellMs) { holding_ = false; line_ = 0; }   // the dwell ran out: release, re-decide now
+        if (!holding_) {
+            const bool s1 = open1 >= kStandbyOpenMv, s2 = open2 >= kStandbyOpenMv;
+            std::uint8_t pick = 0;
+            if (s1 && s2) pick = last_ == 1 ? 2 : last_ == 2 ? 1 : (open1 >= open2 ? 1 : 2);
+            else if (s1) pick = 1;
+            else if (s2) pick = 2;
+            if (pick != 0) { holding_ = true; line_ = pick; last_ = pick; since_ = now; }
+        }
+        return line_;
+    }
+    // An attach took the line while the hold was on it: the 500 ms no-Rp detach must stay off for the rest of the
+    // dwell window, same as the seek's holding_slow (the sleeping source may still be waking when the scan picks
+    // its line - that is not a detach).
+    void on_attach(std::uint8_t line) { if (holding_) { attached_ = line; holding_ = false; line_ = 0; } }
+    // The Rp answered on the active line: the window is over, exactly like the seek's rp_seen clearing silent_.
+    void on_rp_seen() { attached_ = 0; }
+    bool holding_slow(std::uint32_t now, std::uint8_t line, std::int32_t open_mv_line) const {
+        return attached_ != 0 && attached_ == line && open_mv_line >= kStandbyOpenMv && now - since_ < kSlowWakeDwellMs;
+    }
+    std::uint8_t line() const { return holding_ ? line_ : 0; }
+private:
+    bool holding_ = false;
+    std::uint8_t line_ = 0;      // the held line
+    std::uint8_t attached_ = 0;  // the line an attach took over during the hold (the detach hold-off window)
+    std::uint8_t last_ = 0;      // the line held last (alternate when both lines read the signature)
+    std::uint32_t since_ = 0;    // when the current hold started
 };
 
 }  // namespace k2::pd

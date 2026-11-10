@@ -433,6 +433,7 @@
   "430": "[RMT] pd hard reset lab inline flags=0x%02X\n",
   "431": "[PD] Hard Reset refused (no CC / inline)\n",
   "432": "[UI] trigger hard reset%s: %s\n",
-  "433": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d (%s)\n"
+  "433": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d (%s)\n",
+  "434": "[FUSB302] Idle wake: Rd on CC%u for %u ms (open cc1=%d cc2=%d mV)\n"
  }
 }
