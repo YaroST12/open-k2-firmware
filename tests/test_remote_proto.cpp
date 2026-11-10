@@ -1392,6 +1392,40 @@ static void test_active_pd_commands() {
     run(f, request(0x47, 29, {}), r);
     check_header(r, 0x47, 29, Status::BadLength, 0);
     CHECK_EQ(f.rr_calls, 0);                     // the backend is never reached by a bad request
+    // APPLE_READ (0x4A), lab-only, chunked (one frame holds 58 B): [1] arms -> header; [0, part] reads
+    // back part 0 = [armed, why, reads, ok, nfields] or part 1..6 = [part] + one NUL-terminated field
+    f.ar_result.info = {1, 1, 16, 16, "Apple Inc.", "30W USB-C Power Adapter", "01030054", "1.0", "0x7003", "TESTSERIAL0000000"};
+    run(f, request(0x4A, 60, {1}), r);
+    check_header(r, 0x4A, 60, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {1, 1, 16, 16, 6});
+    CHECK_EQ(f.ar_op, 1);
+    run(f, request(0x4A, 61, {0, 0}), r);
+    check_header(r, 0x4A, 61, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {1, 1, 16, 16, 6});
+    CHECK_EQ(f.ar_op, 0);
+    run(f, request(0x4A, 62, {0, 2}), r);        // part 2 = the product
+    check_header(r, 0x4A, 62, Status::Ok, 1 + 23 + 1);
+    check_bytes(r, kRspHeader, {2, '3', '0', 'W', ' ', 'U', 'S', 'B'});
+    run(f, request(0x4A, 65, {0, 6}), r);        // part 6 = the serial (a made-up one in tests)
+    check_header(r, 0x4A, 65, Status::Ok, 1 + 17 + 1);
+    check_bytes(r, kRspHeader, {6, 'T', 'E', 'S', 'T', 'S', 'E', 'R'});
+    f.ar_result.status = Status::BadArg; f.ar_result.refusal = 2;   // refused, e.g. inline: the reason is the one-byte payload
+    run(f, request(0x4A, 63, {1}), r);
+    check_header(r, 0x4A, 63, Status::BadArg, 1);
+    check_bytes(r, kRspHeader, {2});
+    f.ar_result.status = Status::Ok; f.ar_result.refusal = 0;
+    f.ar_calls = 0;
+    run(f, request(0x4A, 64, {2}), r);           // op > 1 is refused before the backend
+    check_header(r, 0x4A, 64, Status::BadArg, 0);
+    run(f, request(0x4A, 66, {}), r);
+    check_header(r, 0x4A, 66, Status::BadLength, 0);
+    run(f, request(0x4A, 67, {0}), r);           // status needs its part
+    check_header(r, 0x4A, 67, Status::BadLength, 0);
+    run(f, request(0x4A, 68, {1, 0}), r);        // arm takes no part
+    check_header(r, 0x4A, 68, Status::BadLength, 0);
+    run(f, request(0x4A, 69, {0, 7}), r);        // only six fields
+    check_header(r, 0x4A, 69, Status::BadArg, 0);
+    CHECK_EQ(f.ar_calls, 0);
 }
 
 static void test_store() {

@@ -249,6 +249,16 @@ const pd::XiaomiTrace& xiaomi_trace();
 pd::Err epr_info_request(bool force = false);
 const pd::SourceCaps& epr_info_list();
 
+// Lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp), OFF BY DEFAULT: while unarmed the
+// Discover SVIDs ACK stays exactly [0x2717]. apple_read_start() arms it - our SVIDs ACK then lists
+// [0x2717, 0x05AC] and the sink re-requests the CURRENT contract (its one gate, never a different
+// voltage) so the source re-runs its 0x05AC discovery; the readout resets with the attach. Refused
+// inline, without a contract, to a source that is not our partner, or while busy (pd::apple_read_refusal).
+pd::Err apple_read_start();
+const pd::AppleInfo& apple_info();
+bool apple_armed();
+bool answers_sop();   // the sink answers SOP messages: the source is the K2's own partner
+
 // Ask the source for its capabilities now. Inline it refuses, confirmed or not (an inline K2 never
 // transmits). Sent by the driver outside the sink's gate: the lab shell only. The Connection page's
 // Refresh uses refresh_source_caps().

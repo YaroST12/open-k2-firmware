@@ -1209,6 +1209,65 @@ class ActivePd(unittest.TestCase):
         with self.assertRaises(SystemExit):
             kr.build_parser().parse_args(["pd-reread", "--ra", "maybe"])
 
+    APPLE_HEAD_RUN = bytes([1, 0, 0, 0, 6])     # armed, why=running
+    APPLE_HEAD_DONE = bytes([0, 1, 16, 16, 6])   # done, 16 reads, 16 ok
+    APPLE_FIELDS = [b"Apple Inc.", b"30W USB-C Power Adapter", b"01030054", b"1.0", b"0x7003", b"TESTSERIAL0000000"]
+
+    def _apple_link(self, head):
+        link = self.Link({})
+        def call(cmd, payload=b""):
+            link.calls.append((cmd, bytes(payload)))
+            if payload[:1] == b"\x01":
+                return kr.Response(cmd, 0, 0, head)   # arm replies the header
+            part = payload[1] if len(payload) > 1 else 0
+            if part == 0:
+                return kr.Response(cmd, 0, 0, head)
+            return kr.Response(cmd, 0, 0, bytes([part]) + self.APPLE_FIELDS[part - 1] + b"\x00")
+        link.call = call
+        return link
+
+    def test_apple_read_decodes_header_fields_and_renders(self):
+        link = self._apple_link(self.APPLE_HEAD_DONE)
+        out = kr.cmd_apple_read(link, self.args(wait=1), sleep=lambda s: None, clock=lambda: 100.0)
+        self.assertEqual(link.calls[0], (kr.CMD_APPLE_READ, bytes([1])))          # arm first
+        self.assertEqual(link.calls[1], (kr.CMD_APPLE_READ, bytes([0, 0])))        # then the header
+        self.assertEqual((out["why"], out["reads"], out["ok"]), ("done", 16, 16))
+        self.assertEqual(out["maker"], "Apple Inc.")
+        self.assertEqual(out["product"], "30W USB-C Power Adapter")
+        self.assertEqual(out["serial"], "TESTSERIAL0000000")                      # a made-up serial in tests only
+        text = kr.render("apple-read", out)
+        self.assertIn("done reads=16 ok=16", text)
+        self.assertIn("product: 30W USB-C Power Adapter", text)
+        d = kr.decode_apple_read_head(self.APPLE_HEAD_DONE)
+        self.assertEqual((d["armed"], d["why"], d["nfields"]), (False, "done", 6))
+        with self.assertRaises(kr.FrameError):
+            kr.decode_apple_read_head(self.APPLE_HEAD_DONE[:4])
+        with self.assertRaises(kr.FrameError):
+            kr.decode_apple_read_field(bytes([3, b"x"[0], 0]), 2)   # wrong part
+        self.assertEqual(kr.build_parser().parse_args(["apple-read"]).wait, kr.APPLE_POLL_S)
+
+    def test_apple_read_polls_while_running_then_reads_the_fields(self):
+        heads = [self.APPLE_HEAD_RUN, self.APPLE_HEAD_RUN, self.APPLE_HEAD_DONE]
+        link = self._apple_link(self.APPLE_HEAD_DONE)
+        def call(cmd, payload=b""):
+            link.calls.append((cmd, bytes(payload)))
+            if payload[:1] == b"\x01":
+                return kr.Response(cmd, 0, 0, heads[0])
+            if payload == bytes([0, 0]) and len(heads) > 1:
+                return kr.Response(cmd, 0, 0, heads.pop(0))
+            if payload == bytes([0, 0]):
+                return kr.Response(cmd, 0, 0, self.APPLE_HEAD_DONE)
+            part = payload[1]
+            return kr.Response(cmd, 0, 0, bytes([part]) + self.APPLE_FIELDS[part - 1] + b"\x00")
+        link.call = call
+        ticks = iter([100.0, 100.1, 100.2, 100.3, 100.4, 100.5, 100.6, 100.7, 100.8, 100.9])
+        out = kr.cmd_apple_read(link, self.args(wait=8), sleep=lambda s: None, clock=lambda: next(ticks))
+        self.assertEqual(out["why"], "done")
+        self.assertGreaterEqual(len([c for c in link.calls if c[1] == bytes([0, 0])]), 2)   # polled while running
+        with self.assertRaises(kr.RemoteError) as cm:
+            raise kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_APPLE_READ, bytes([1]))
+        self.assertIn("inline", str(cm.exception))
+
 
 class PageMap(unittest.TestCase):
     """The remote's page names and indices follow the firmware enums in include/k2/ui/ui_types.hpp."""

@@ -56,6 +56,7 @@ CMD_PD_REREAD = 0x47  # [op, mask] source-cap re-read (PD mode): 0 status, 1 sta
 CMD_PD_RELEASE = 0x44       # back to 5 V
 CMD_PD_ATTACH = 0x48       # [target_mv u16] [target_ma u16] -> trigger snapshot; default 9000 mV
 CMD_PD_HANDBACK = 0x49     # optional [flags]: bit0 confirm -> [HandbackVerdict]; phase-1 lab hand-back
+CMD_APPLE_READ = 0x4A      # lab-only Apple charger readout (SVID 0x05AC): [1] arm + re-request the current contract, [0, part] header (part 0) or one field (1..6)
 CMD_DFU_ENTER = 0x30      # clear the app marker and reset into the bootloader
 CMD_DEBUG_FAULT = 0x31    # debug: provoke a CPU fault to exercise the [FAULT] handler
 FAULT_MAGIC = b"BOOM"
@@ -248,6 +249,8 @@ class RemoteError(RuntimeError):
             text = f"command {cmd} failed: refused: inline - the Sink tab shows the sniffed identity"
         if cmd == CMD_PD_HANDBACK and payload and payload[0] < len(HANDBACK_VERDICTS):
             text += f" ({HANDBACK_VERDICTS[payload[0]]})"
+        if cmd == CMD_APPLE_READ and payload and payload[0] < len(APPLE_REFUSALS):
+            text += f" ({APPLE_REFUSALS[payload[0]]})"   # the arm refusal reason (pd::AppleRefusal)
         if cmd == CMD_QRTEST and status == STATUS_BAD_ARG and payload:
             text += f" ({payload.decode('ascii', errors='replace')})"   # the show op's reason (range / box fit)
         super().__init__(text)
@@ -737,6 +740,49 @@ def cmd_pd_reread(link, a, sleep=time.sleep, clock=time.monotonic):
     return out
 
 
+# ---- lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp) ----
+APPLE_WHYS = ["running", "done", "nak", "timeout", "range", "cap", "nomode"]
+APPLE_REFUSALS = ["none", "inline", "no contract", "not partner", "busy"]
+APPLE_FIELDS = ["maker", "product", "fw", "hw", "field90", "serial"]
+APPLE_POLL_S = 8.0   # the source drives its 0x05AC discovery ~1.4 s after the re-request; a run is at most 16 reads x ~20 ms
+
+
+def decode_apple_read_head(p):
+    """APPLE_READ part 0: armed, why, reads, ok, nfields (see encode_apple_read)."""
+    _need(p, 5, "apple-read")
+    return {"armed": bool(p[0]), "why": _name_of(dict(enumerate(APPLE_WHYS)), p[1]),
+            "reads": p[2], "ok": p[3], "nfields": p[4]}
+
+
+def decode_apple_read_field(p, part):
+    """APPLE_READ part 1..6: [part] + one NUL-terminated field."""
+    _need(p, 2, "apple-read")
+    if p[0] != part:
+        raise FrameError(f"apple-read field part {p[0]} != asked {part}")
+    return _cstr(p[1:])
+
+
+def _apple_read_all(link):
+    """The whole readout: the header plus every field chunk."""
+    head = decode_apple_read_head(link.call(CMD_APPLE_READ, bytes([0, 0])).payload)
+    out = {k: head[k] for k in ("armed", "why", "reads", "ok")}
+    for part in range(1, head["nfields"] + 1):
+        out[APPLE_FIELDS[part - 1]] = decode_apple_read_field(link.call(CMD_APPLE_READ, bytes([0, part])).payload, part)
+    return out
+
+
+def cmd_apple_read(link, a, sleep=time.sleep, clock=time.monotonic):
+    """Lab-only, off by default: arm the Apple charger readout - our SVIDs ACK adds 0x05AC and the sink
+    re-requests the CURRENT contract (never a different voltage), so the source re-runs its 0x05AC
+    discovery - then poll until the run ends and read the fields back."""
+    head = decode_apple_read_head(link.call(CMD_APPLE_READ, bytes([1])).payload)
+    deadline = clock() + getattr(a, "wait", APPLE_POLL_S)
+    while head["armed"] and head["why"] == "running" and clock() < deadline:
+        sleep(0.2)
+        head = decode_apple_read_head(link.call(CMD_APPLE_READ, bytes([0, 0])).payload)
+    return _apple_read_all(link)
+
+
 def _reread_mask(text):
     try:
         v = int(text, 0)
@@ -1105,7 +1151,13 @@ def cmd_press(link, a, sleep=time.sleep):
 
 
 def cmd_state(link, a):
-    return decode_state(link.call(CMD_GET_STATE).payload)
+    out = decode_state(link.call(CMD_GET_STATE).payload)
+    if getattr(a, "json", False):
+        try:   # older firmware has no APPLE_READ: the fields stay absent
+            out["source"] = {"apple": _apple_read_all(link)}
+        except (RemoteError, FrameError):
+            pass
+    return out
 
 
 def _link_fields(link, keys):
@@ -2597,6 +2649,12 @@ def _render(name, r):
         return (f"reread {r['state']}{extra} mask=0x{r['mask']:02X} answered={','.join(r['answered']) or '-'} "
                 f"skipped={','.join(r['skipped']) or '-'} pdos {r['pdos_before']} -> {r['pdos_last']} "
                 f"caps_rx={r['caps_rx']} avs={'yes' if r['avs'] else 'no'}")
+    if name == "apple-read":
+        if not r.get("armed") and not r.get("reads"):
+            return "apple-read: not armed (this command arms it; off by default)"
+        lines = [f"apple-read {r['why']} reads={r['reads']} ok={r['ok']}"]
+        lines += [f"  {k}: {r[k]}" for k in APPLE_FIELDS if r.get(k)]
+        return "\n".join(lines)
     if name == "identify-device":
         p, i = r["identify"], r["identity"]
         lines = [f"identify {p['state']} answered={','.join(p['answered']) or '-'} "
@@ -2771,7 +2829,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "reboot": cmd_reboot, "dfu": cmd_dfu, "factory-wipe": cmd_factory_wipe, "flash-dump": cmd_flash_dump, "bootinfo": cmd_bootinfo, "fault": cmd_fault, "log": cmd_log, "watch": cmd_watch,
             "screenshot": cmd_screenshot, "debug": cmd_debug,
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
-            "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread,
+            "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards}
@@ -2881,6 +2939,10 @@ def build_parser():
     si = sub.add_parser("identify-device", help="ask the attached device for its identity (idle CC only)")
     si.add_argument("--confirm", action="store_true", help="allow it while a live sink is attached")
     si.add_argument("--wait", type=float, default=ID_POLL_S, help="seconds to wait for the sequence")
+    sa = sub.add_parser("apple-read", help="lab-only: read an Apple charger's register file (SVID 0x05AC). Arms the readout "
+                                           "(our SVIDs ACK adds 0x05AC), re-requests the CURRENT contract and reads the result. "
+                                           "Refused inline, without a contract, to a source that is not our partner, or while a run owns the link")
+    sa.add_argument("--wait", type=float, default=APPLE_POLL_S, help="seconds to wait for the readout run")
     sr = sub.add_parser("pd-reread", help="source-cap re-read in PD mode: Get_Source_Cap_Extended, Discover Identity, SVIDs, Get_Source_Cap (see k2/pd/pd_reread.hpp)")
     sr.add_argument("--mask", type=_reread_mask, default=None, help="steps: 1 caps-ext, 2 identity, 4 svids, 8 get-cap, 16 second get-cap (default 15)")
     sr.add_argument("--wait", type=float, default=REREAD_POLL_S, help="seconds to wait for the run, attach phase included")

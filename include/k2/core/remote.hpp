@@ -91,6 +91,7 @@ public:
     remote::RippleInfo ripple_info() const { return ripple_info_; }
     remote::IdentifyResult identify_device(uint8_t op);   // 0 status, 1 start, 2 start + confirm
     remote::RereadResult reread(uint8_t op, uint8_t mask);   // source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, 4 force the scan line, 5 Ra mode
+    remote::AppleReadResult apple_read(uint8_t op);   // lab-only Apple charger readout (SVID 0x05AC): 0 status, 1 arm + re-request the current contract
     // `over_load` is the lab-only bypass (k2_remote `pd request --over-load`); the UI never sets it.
     remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);
     remote::PdOpResult pd_release();

@@ -461,6 +461,45 @@ remote::RereadResult Remote::reread(uint8_t op, uint8_t mask) {
     return r;
 }
 
+remote::AppleReadResult Remote::apple_read(uint8_t op) {
+    // Lab-only, off by default (k2/pd/apple_readout.hpp): op 1 arms the readout - our SVIDs ACK adds
+    // 0x05AC and the sink re-requests the current contract, so the source re-runs its 0x05AC
+    // discovery. The gate is the one in pd::apple_read_refusal; the sink double-checks the hard ones.
+    remote::AppleReadResult r;
+    if (op == 1) {
+        const pd::AppleFacts facts{ui_.charger_test_busy(), ui_.link().inline_mode(),
+                                   fusb302::trigger_refusal() != pd::TriggerRefusal::None,
+                                   fusb302::sink_status().held, fusb302::answers_sop()};
+        pd::AppleRefusal ref = pd::apple_read_refusal(facts);
+        if (ref == pd::AppleRefusal::None) {
+            K2LOG("[RMT] apple-read start\n");
+            const pd::Err e = fusb302::apple_read_start();
+            if (e != pd::Err::Ok)
+                ref = e == pd::Err::Inline ? pd::AppleRefusal::Inline
+                    : e == pd::Err::NoCaps ? pd::AppleRefusal::NoContract : pd::AppleRefusal::Busy;
+        }
+        if (ref != pd::AppleRefusal::None) {
+            K2LOG("[RMT] apple-read refused why=%s\n", pd::apple_refusal_name(ref));
+            r.status = ref == pd::AppleRefusal::Busy ? remote::Status::Busy : remote::Status::BadArg;
+            r.refusal = static_cast<uint8_t>(ref);
+            return r;
+        }
+    }
+    const pd::AppleInfo &a = fusb302::apple_info();
+    r.info.armed = fusb302::apple_armed() ? 1 : 0;
+    r.info.why = static_cast<uint8_t>(a.why);
+    r.info.reads = a.reads;
+    r.info.ok = a.ok;
+    // The field arrays are always NUL-terminated (arm zeroes them, the engine writes < 24 chars).
+    r.info.maker = a.maker.data();
+    r.info.product = a.product.data();
+    r.info.fw = a.fw.data();
+    r.info.hw = a.hw.data();
+    r.info.field90 = a.field90.data();
+    r.info.serial = a.serial.data();
+    return r;
+}
+
 static remote::PdOpResult pd_result(pd::Err e) {
     remote::PdOpResult r;
     r.err = static_cast<uint8_t>(e);

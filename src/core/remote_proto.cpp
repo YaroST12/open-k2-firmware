@@ -432,4 +432,24 @@ size_t encode_reread(std::span<uint8_t> out, const RereadInfo &i) {
     return w.size();
 }
 
+// Chunked (one frame holds kMaxRspPayload = 58 B, the six fields do not fit together): part 0 is the
+// header [armed, why, reads, ok, nfields=6]; part k in 1..6 is [part] + one NUL-terminated field, in
+// the order maker, product, fw, hw, 0x90-field, serial.
+size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t part) {
+    Writer w(out);
+    if (part == 0) {
+        w.u8(i.armed); w.u8(i.why); w.u8(i.reads); w.u8(i.ok);
+        w.u8(6);
+        return w.size();
+    }
+    static constexpr std::string_view AppleReadInfo::*kFields[6] = {
+        &AppleReadInfo::maker, &AppleReadInfo::product, &AppleReadInfo::fw,
+        &AppleReadInfo::hw, &AppleReadInfo::field90, &AppleReadInfo::serial,
+    };
+    w.u8(part);
+    w.text(i.*kFields[part - 1]);
+    w.u8(0);
+    return w.size();
+}
+
 }  // namespace k2::remote

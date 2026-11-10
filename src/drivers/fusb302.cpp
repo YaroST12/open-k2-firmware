@@ -2438,6 +2438,10 @@ const pd::SinkStatus& sink_status() { return g_sink.status(); }
 const pd::XiaomiTrace& xiaomi_trace() { return g_sink.xiaomi_trace(); }
 pd::Err epr_info_request(bool force) { return g_sink.request_epr_info(systick::millis(), force); }
 const pd::SourceCaps& epr_info_list() { return g_engine.epr_info; }
+pd::Err apple_read_start() { return g_sink.arm_apple_read(systick::millis()); }
+const pd::AppleInfo& apple_info() { return g_sink.apple_info(); }
+bool apple_armed() { return g_sink.apple_armed(); }
+bool answers_sop() { return g_sink.answers_sop(); }
 
 // Refresh on a live contract: the sink's own Get_Source_Cap (its single message gate decides Busy). The engine owners that talk on
 // the line themselves (identify, probe, re-read, trigger prepare) and the PD-silent / inline / detached states refuse.

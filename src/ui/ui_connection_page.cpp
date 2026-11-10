@@ -528,6 +528,15 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     }
     link_rows(R, d);
     proto_row(R, fusb302::vdm());
+    // Lab-only Apple readout (armed by `k2_remote apple-read`): the product and fw/hw of this attach.
+    // The readout resets on detach, so the rows disappear with it.
+    const pd::AppleInfo &ap = fusb302::apple_info();
+    if (ap.valid) {
+        R.add("Apple", kEnergy).put(ap.product[0] ? std::string_view(ap.product.data()) : std::string_view(ap.maker.data()));
+        StrBuf<28> &fw = R.add("fw/hw", kText);
+        fw.put("fw ").put(std::string_view(ap.fw.data()));
+        if (ap.hw[0]) fw.put(" hw ").put(std::string_view(ap.hw.data()));
+    }
 }
 
 [[gnu::noinline]] void cable_rows(Rows &R, const TabData &) {
@@ -1063,6 +1072,13 @@ void ConnectionPage::update(uint32_t now_ms) {
     for (int i = 0; i < vdm.num_svids; i++) c = fnv(c, vdm.svids[i]);
     for (int i = 0; i < vdm.num_modes; i++) c = fnv(c, vdm.modes[i]);
     c = fnv(c, uint32_t(vdm.cuktech) | uint32_t(vdm.xiaomi) << 1 | uint32_t(vdm.xiaomi_cmd) << 2);
+    {   // the lab-only Apple readout's rows (the serial is never displayed nor hashed)
+        const pd::AppleInfo &ap = fusb302::apple_info();
+        c = fnv(c, uint32_t(ap.valid) | uint32_t(ap.why) << 1 | uint32_t(ap.reads) << 9 | uint32_t(ap.ok) << 17);
+        for (char ch : ap.product) c = fnv(c, uint32_t(uint8_t(ch)));
+        for (char ch : ap.fw) c = fnv(c, uint32_t(uint8_t(ch)));
+        for (char ch : ap.hw) c = fnv(c, uint32_t(uint8_t(ch)));
+    }
     c = fnv(c, uint32_t(snk.identity.valid) | uint32_t(snk.identity.vid) << 8 | uint32_t(snk.identity.pid) << 16);
     c = fnv(c, snk.identity.id_header);
     c = fnv(c, uint32_t(snk.num_svids));

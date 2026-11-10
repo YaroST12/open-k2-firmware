@@ -336,6 +336,7 @@ enum class Cmd : uint8_t {
     PdReread = 0x47,        // [op, mask] source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, ..., 8 Rd glitch of mask x 10 ms -> RereadInfo (see above)
     PdAttach = 0x48,        // [target_mv u16] [target_ma u16] -> PdTriggerSnapshot; default 9000 mV, clamped to 36000 mV
     PdHandback = 0x49,      // optional [flags]: bit0 confirm (kPdFlagConfirm) -> [HandbackVerdict]; phase-1 lab hand-back (see k2/core/handback.hpp)
+    AppleRead = 0x4A,       // lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp): [op] 0 status, 1 arm + re-request the current contract -> AppleReadInfo; a refusal carries its pd::AppleRefusal as the one-byte payload
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
     Fc = 0x32,          // active fast-charge trigger, see the layout above
     Store = 0x60,       // flash store: list / save e-marker / save log, see kStore* below
@@ -365,7 +366,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::Ripple, Cmd::DfuEnter, Cmd::FactoryWipe, Cmd::FlashDump, Cmd::DebugFault, Cmd::Fc, Cmd::DebugLink, Cmd::DebugPdMsg, Cmd::DebugCcMatrix, Cmd::DebugVconn,
     Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe,
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
-    Cmd::PdAttach, Cmd::PdHandback,
+    Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
 };
@@ -731,6 +732,15 @@ struct RereadInfo {
 };
 struct RereadResult { Status status = Status::Ok; RereadInfo info{}; };
 
+// Lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp). why/reads/ok mirror
+// pd::AppleInfo; the six strings are NUL-terminated on the wire (the serial is a result field only -
+// it never goes into a binlog %s).
+struct AppleReadInfo {
+    uint8_t armed = 0, why = 0, reads = 0, ok = 0;
+    std::string_view maker{}, product{}, fw{}, hw{}, field90{}, serial{};
+};
+struct AppleReadResult { Status status = Status::Ok; uint8_t refusal = 0; AppleReadInfo info{}; };   // refusal: pd::AppleRefusal as the one-byte payload
+
 struct ScreenInfo { uint16_t width = 240, height = 240; uint8_t strip_rows = 4; uint8_t num_strips = 60; };
 
 // Writes one stream frame of a screenshot into `out` (zero padded).
@@ -756,6 +766,7 @@ size_t encode_match(std::span<uint8_t> out, const MatchSnapshot &s);
 size_t encode_usb_link(std::span<uint8_t> out, const UsbLinkSnapshot &s);
 size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &p);
 size_t encode_reread(std::span<uint8_t> out, const RereadInfo &i);
+size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t part);   // part 0 header, 1..6 one field each
 size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a);
 size_t encode_vconn(std::span<uint8_t> out, const VconnSnapshot &v);
 size_t encode_epr_info(std::span<uint8_t> out, const EprInfoSnapshot &s);
@@ -838,6 +849,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ripple_info() } -> std::same_as<RippleInfo>;
     { b.identify_device(u8) } -> std::same_as<IdentifyResult>;
     { b.reread(u8, u8) } -> std::same_as<RereadResult>;   // op (0 status, 1 start, 2 abort), step mask
+    { b.apple_read(u8) } -> std::same_as<AppleReadResult>;   // lab-only: op 0 status, 1 arm + re-request the current contract
     { b.pd_request(u8, u16, u16, on, on) } -> std::same_as<PdOpResult>;   // pos, mv, ma, confirm, over_load (lab only)
     { b.pd_release() } -> std::same_as<PdOpResult>;
     { b.pd_hard_reset(u8) } -> std::same_as<PdOpResult>;   // flags byte: kPdFlagConfirm | kPdFlagResetInline (0 for the shell/UI paths)
@@ -1157,6 +1169,22 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         const RereadResult res = backend.reread(p[0], has_arg ? p[1] : uint8_t{0});
         if (res.status != Status::Ok) return reply(res.status);
         return reply_n(encode_reread(buf, res.info));
+    }
+    case Cmd::AppleRead: {
+        // Lab-only Apple charger readout: [op, part] - op 1 arms (replies the header); op 0 reads back
+        // part 0 (the header) or part 1..6 (one field each). The backend gates the refusals.
+        if (p.empty() || p.size() > 2) return reply(Status::BadLength);
+        if (p[0] > 1) return reply(Status::BadArg);
+        if (p[0] == 1 && p.size() != 1) return reply(Status::BadLength);
+        if (p[0] == 0 && p.size() != 2) return reply(Status::BadLength);
+        const uint8_t part = p[0] == 0 ? p[1] : uint8_t{0};
+        if (part > 6) return reply(Status::BadArg);
+        const AppleReadResult res = backend.apple_read(p[0]);
+        if (res.status != Status::Ok) {
+            buf[0] = res.refusal;   // the refusal reason (pd::AppleRefusal) as the one-byte payload
+            return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
+        }
+        return reply_n(encode_apple_read(buf, res.info, part));
     }
     case Cmd::PdRequest: {
         if (p.size() != 6) return reply(Status::BadLength);
