@@ -216,6 +216,9 @@ static void test_summary_text() {
     puts(t.c_str());
     CHECK_EQ(t.find("Card ") == 0, true);
     CHECK_EQ(t.find("pass") != std::string::npos, true);
+    // Pin (Row B item 4): the counts line names its unit - "of N groups", not steps or rows.
+    const std::string counts_line = "1 pass, 2 fail, 1 skip of " + std::to_string(rc::kGroups) + " groups";
+    CHECK_EQ(t.find(counts_line) != std::string::npos, true);
     CHECK_EQ(t.find("Identity ") != std::string::npos, true);
     // A range reads as its own verdict: whole range passed, or where it stopped.
     CHECK_EQ(t.find("- PPS 3.3-11V: \xE2\x9C\x93 whole range\n") != std::string::npos, true);

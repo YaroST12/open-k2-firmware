@@ -1548,6 +1548,24 @@ static void test_sweep_row_wire_carries_points() {
     CHECK_EQ(r[32], 61);                                 // detail byte: the 61 recorded points, not 161
 }
 
+// Review finding (red): a sweep row that never ran (skipped/withdrawn, no RowView) must not ship the in-RAM marker
+// 161 in its detail byte - the wire would read "161 points" for a zero-point sweep. Detail must be 0.
+static void test_sweep_row_that_never_ran_carries_zero_points() {
+    namespace ct = k2::charger_test;
+    Fake f; Frame r;
+    std::array<ct::Step, 1> steps{};
+    steps[0] = {.group = ct::Group::Pd, .algorithm = ct::Algorithm::Pps, .pos = 6, .mv = 5000,
+                .verdict = ct::Verdict::Skip, .reason = ct::Reason::NoOffer, .detail = ct::kDetailSweep, .pdo = 0xC0DC3240};
+    f.test_results = {0x01020304, 0x05060708, 3, 0, 1, steps};
+    // no sweep view set: the row never ran, nothing was recorded
+    CHECK_EQ(run(f, request(0x0B, 30, {}), r), 1);
+    check_header(r, 0x0B, 30, Status::Ok, 15);
+    CHECK_EQ(run(f, request(0x0B, 31, {0, 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
+    check_header(r, 0x0B, 31, Status::Ok, 31);          // header 15 + one 16-byte row
+    CHECK_EQ(r[23], 0x20);                               // still marked a sweep row
+    CHECK_EQ(r[32], 0);                                  // red today: 161 leaks; must be 0 recorded points
+}
+
 static void test_charger_units() {
     namespace ct = k2::charger_test;
     Fake f; Frame r;
@@ -1762,7 +1780,7 @@ int main() {
     test_charger_cable();
     test_charger_units();
     test_charger_avs_sweep();
-    test_charger_test_wire(); test_sweep_row_wire_carries_points();
+    test_charger_test_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();
     test_identify_refusal_wire_mapping();
     test_active_pd_commands();
     test_store();
