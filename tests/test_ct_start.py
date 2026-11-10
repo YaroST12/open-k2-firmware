@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
 """ct_start preflight, no device."""
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -33,6 +35,63 @@ class Preflight(unittest.TestCase):
 
     def test_legacy_only_proceeds(self):
         self.assertIsNone(self.run_pf([{"vbus_mv": 5000, "pd_valid": False}, {"vbus_mv": 5000, "pd_valid": False}]))
+
+
+class VbusWait(unittest.TestCase):
+    """The VBUS wait before START presents Rd: a sleeping source (pattern slow-rp-wake) answers 1.1-1.7 s after
+    a steady Rd - the idle Wake sleeping port hold or an already-awake port brings VBUS up by itself. The wait
+    must cover that (+ margin), and when it gives up with VBUS still dark its note names why (a standby-signature
+    open CC line = the source looks asleep)."""
+    def run_pf(self, states):
+        it = iter(states)
+        calls = []
+        def state(link, a):
+            calls.append(1)
+            return next(it)
+        err = io.StringIO()
+        with patch.object(ct_start.kr, "cmd_state", state), \
+             patch.object(ct_start.kr, "cmd_action", lambda l, a: None), \
+             contextlib.redirect_stderr(err):
+            r = ct_start.preflight(None, sleep=lambda s: None)
+        return r, len(calls), err.getvalue()
+
+    @staticmethod
+    def dark(cc1=3000, cc2=40, vbus=0):
+        return {"vbus_mv": vbus, "pd_valid": False, "inline": False, "cc1_mv": cc1, "cc2_mv": cc2}
+
+    def test_a_source_that_answers_after_1_6s_is_waited_for(self):
+        up = {"vbus_mv": 5000, "pd_valid": True, "inline": False, "cc1_mv": 200, "cc2_mv": 40}
+        r, calls, _ = self.run_pf([self.dark(), self.dark(), self.dark(), up])   # up after ~1.5-2.0 s of 0.5 s polls
+        self.assertIsNone(r)                      # the START proceeds on the fresh, up reading
+        self.assertGreaterEqual(calls, 4)         # the wait covered the 1.1-1.7 s wake, not one poll
+
+    def test_the_wait_gives_up_naming_the_asleep_source(self):
+        r, calls, err = self.run_pf([self.dark(cc1=3000) for _ in range(12)])
+        self.assertIsNone(r)                      # START will still present Rd and wait again
+        self.assertGreaterEqual(calls, 10)        # the whole wait ran
+        self.assertIn("asleep", err)              # the give-up line names why
+        self.assertIn("3.00 V", err)              # the open CC reading
+        self.assertIn("START", err)
+
+    def test_a_waiting_charger_at_3_3v_is_not_called_asleep(self):
+        _, _, err = self.run_pf([self.dark(cc1=3300) for _ in range(12)])
+        self.assertNotIn("asleep", err)           # an open Rp reads the 3.3 V rail: outside the window
+
+    def test_the_cc2_bias_net_is_not_called_asleep(self):
+        _, _, err = self.run_pf([self.dark(cc1=40, cc2=1690) for _ in range(12)])
+        self.assertNotIn("asleep", err)           # the CC2 bias net (1.69 V) is below the window
+
+
+class StartRunWake(unittest.TestCase):
+    def test_a_start_against_a_source_that_answers_after_1_6s_runs(self):
+        # the K2's own Rd wait covers the wake (4 polls of 0.5 s = 2.0 s > 1.7 s): the run starts, no extra press
+        k2 = FakeK2(wait_polls=4)
+        slept = []
+        r = ct_start.start_run(None, 5, press=k2.press, run_id=k2.run_id, stage=k2.stage_of, back=k2.back,
+                               sleep=slept.append)
+        self.assertEqual(r, ct_start.STARTED)
+        self.assertEqual(k2.presses, 2)
+        self.assertEqual(k2.presses_in_wait, 0)
 
 
 class FakeK2:

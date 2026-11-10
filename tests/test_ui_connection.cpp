@@ -157,6 +157,48 @@ static void test_crossed_cc_reads_on_the_tab_and_the_bar() {
     status_text(in, s); CHECK_STR(s.c_str(), "Charger");
 }
 
+// The idle "Source asleep" hint (pattern slow-rp-wake): an open CC line in the standby-signature window
+// (>= 2.8 V, < 3.15 V, steady) with VBUS dark and Wake sleeping port off - the Source tab and the bottom bar
+// say so. A 3.3 V open line is a waiting charger's Rp, not the signature; the CC2 bias net (1.69 V) is below
+// the window; Wake sleeping port on means the idle Rd hold is already waking it.
+static void test_source_asleep_hint_on_the_tab_and_the_bar() {
+    Facts f = facts(false, false, false);   // idle, no charger, no sink
+    f.open_cc_mv = 2995; f.vbus_mv = 60; f.wake_port_off = true;
+    CHECK_EQ(source_asleep(f), 1);
+    CHECK_STR(empty_state(Tab::Source, f).title, "SOURCE ASLEEP");
+    CHECK_STR(empty_state(Tab::Source, f).hint, "Source asleep: START or Refresh wakes it.");
+    StrBuf<40> s;
+    StatusIn in;
+    in.tab = Tab::Source; in.f = f;
+    status_text(in, s);
+    CHECK_STR(s.c_str(), "Source asleep: START wakes");
+    CHECK_EQ(s.view().size() <= kStatusCells, 1);   // the bar is 27 cells
+    // A waiting charger's open Rp reads the 3.3 V rail: outside the window, the waiting words stay.
+    f.open_cc_mv = 3300; f.wait = raguard::WaitKind::ChargerWaiting;
+    CHECK_EQ(source_asleep(f), 0);
+    CHECK_STR(empty_state(Tab::Source, f).title, "CHARGER WAITING");
+    in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting");
+    // The CC2 bias net (1.69 V) is below the window: plain "NO CHARGER".
+    f.open_cc_mv = 1690; f.wait = raguard::WaitKind::Unknown;
+    CHECK_EQ(source_asleep(f), 0);
+    CHECK_STR(empty_state(Tab::Source, f).title, "NO CHARGER");
+    // Wake sleeping port on: the idle hold is already on it, no hint. VBUS up: not dark, no hint. Charger seen: no hint.
+    f.open_cc_mv = 2995; f.wake_port_off = false;
+    CHECK_EQ(source_asleep(f), 0);
+    f.wake_port_off = true; f.vbus_mv = 5000;
+    CHECK_EQ(source_asleep(f), 0);
+    f.vbus_mv = 60; f.charger = true;
+    CHECK_EQ(source_asleep(f), 0);
+    f.charger = false; f.inline_sink = true;
+    CHECK_EQ(source_asleep(f), 0);
+    // The Cable and Sink tabs never say it.
+    f = facts(false, false, false);
+    f.open_cc_mv = 2995; f.vbus_mv = 60;
+    CHECK_STR(empty_state(Tab::Cable, f).title, "NO CABLE READ");
+    CHECK_STR(empty_state(Tab::Sink, f).title, "NO DEVICE");
+}
+
 static void test_wrap() {
     std::array<std::string_view, 3> l{};
     CHECK_EQ(wrap("short", 27, l), 1);
@@ -519,6 +561,7 @@ int main() {
     test_bar_reads_the_waiting_classifier();
     test_the_three_readers_agree();
     test_crossed_cc_reads_on_the_tab_and_the_bar();
+    test_source_asleep_hint_on_the_tab_and_the_bar();
     test_wrap();
     test_status_text();
     test_status_survey();

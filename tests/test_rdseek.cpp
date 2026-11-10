@@ -116,6 +116,18 @@ void test_the_idle_wake_holds_rd_on_a_standby_signature_line() {
     CHECK_EQ(int(w.line()), 2);
     CHECK_EQ(w.line() == 1 || w.line() == 2, true);                  // never both lines
 }
+// The standby-signature WINDOW (the idle "Source asleep" hint decides from it): [kStandbyOpenMv, kStandbyOpenHiMv).
+// At/above the top a real open Rp or VCONN reads the 3.3 V rail; below the bottom the CC2 bias net (1.69 V) or an Ra.
+void test_the_standby_signature_window() {
+    CHECK_EQ(pd::standby_signature(-1), 0);        // unknown
+    CHECK_EQ(pd::standby_signature(1690), 0);     // the CC2 bias net
+    CHECK_EQ(pd::standby_signature(2799), 0);
+    CHECK_EQ(pd::standby_signature(2800), 1);      // the bottom boundary
+    CHECK_EQ(pd::standby_signature(2995), 1);      // the measured sleeping-splitter open reading
+    CHECK_EQ(pd::standby_signature(3149), 1);
+    CHECK_EQ(pd::standby_signature(3150), 0);      // the top boundary: an open Rp / VCONN rail
+    CHECK_EQ(pd::standby_signature(3300), 0);      // a waiting charger's open Rp
+}
 // No standby signature (a coupled net reads less, nothing attached reads low/unknown): no Rd is held at all.
 void test_the_idle_wake_holds_nothing_without_the_signature() {
     pd::IdleWake w;
@@ -345,6 +357,7 @@ int main() {
     test_a_standby_on_the_other_line_moves_there_first();
     test_the_idle_wake_holds_rd_on_a_standby_signature_line();
     test_the_idle_wake_holds_nothing_without_the_signature();
+    test_the_standby_signature_window();
     test_the_idle_wake_alternates_when_both_lines_read_the_signature();
     test_the_idle_wake_releases_when_no_line_reads_the_signature_any_more();
     test_an_attach_during_the_hold_keeps_the_no_rp_detach_off_inside_the_dwell();

@@ -31,6 +31,12 @@ inline constexpr std::uint32_t kSlowWakeDwellMs = 2000;   // the measured wake w
 inline constexpr std::uint32_t kDarkAttachMs = 3000;       // an attach with no VBUS and no PD this long is a dark port (IdleWake::dark_attach)
 inline constexpr std::int32_t kDarkVbusMv = 3000;          // VBUS below this is dark (the detach rule's 3 V)
 inline constexpr std::int32_t kStandbyOpenMv = 2800;      // the open standby reading is ~3.0-3.3 V; a coupled net reads less
+inline constexpr std::int32_t kStandbyOpenHiMv = 3150;   // at/above this an open Rp or VCONN reads the 3.3 V rail, not a standby pull-up
+// The standby-signature WINDOW of an open (no-Rd-of-ours) reading: [kStandbyOpenMv, kStandbyOpenHiMv). Below the
+// bottom a coupled net (the CC2 bias net reads 1.69 V) or an Ra; at/above the top a real open Rp / VCONN. The idle
+// "Source asleep" hint (ui_connection) decides from this window; the seek's own standby() keeps its open-ended
+// bound, the one it was hardware-verified with.
+constexpr bool standby_signature(std::int32_t open_mv) { return open_mv >= kStandbyOpenMv && open_mv < kStandbyOpenHiMv; }
 // idle-wake-2 (bench 2026-11-10, runs/2026-11-10-merge2-hw/wake2): the open levels the idle wake decides from. The UI feeds
 // the ADC levels one tick late (a ~15 ms average, refreshed every ~20 ms), so the first samples after our Rd went on or came
 // off carry the old Rd's tail (cc1 = 6 mV under the old Rd, noted as "open"), and CC2 spikes to 3.28 V for a tick during a

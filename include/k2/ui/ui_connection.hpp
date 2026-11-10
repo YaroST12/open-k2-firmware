@@ -19,6 +19,7 @@
 #include <string_view>
 
 #include "k2/pd/cc_crossed.hpp"
+#include "k2/pd/pd_rdseek.hpp"
 #include "k2/pd/pd_survey.hpp"
 #include "k2/pd/pd_tabs.hpp"
 #include "k2/pd/ra_guard.hpp"
@@ -43,7 +44,25 @@ struct Facts {
     Topology topo = Topology::Unknown;
     raguard::WaitKind wait = raguard::WaitKind::Unknown;   // the one waiting classifier (pd::Link::wait_kind, the Rp trace)
     raguard::CrossKind cross = raguard::CrossKind::None;   // crossed CC through the K2 (pd::Link::cc_cross)
+    // The idle "source asleep" evidence (pattern slow-rp-wake): the open (no-Rd) reading of the line that reads the
+    // standby signature (fusb302::open_cc_mv, -1 = none), VBUS now (-1 = no monitor) and the Wake sleeping port
+    // setting. The page fills them from the passive readers; nothing here drives CC.
+    std::int32_t open_cc_mv = -1;
+    std::int32_t vbus_mv = -1;
+    bool wake_port_off = true;
 };
+
+// The idle "source asleep" verdict: an open CC line reading the standby signature (pd::standby_signature: >= 2.8 V
+// and < 3.15 V, steady - RdSeek notes only a settled pair) with VBUS dark, no charger and no sink inline, and the
+// Wake sleeping port off (no idle Rd hold is running). The sleeping source is there but answers only to an Rd:
+// START or Refresh wakes it.
+constexpr bool source_asleep(const Facts &f) {
+    return !f.charger && !f.inline_sink && f.vbus_mv >= 0 && f.vbus_mv < raguard::kVbusAttachedMv &&
+           pd::standby_signature(f.open_cc_mv) && f.wake_port_off;
+}
+inline constexpr const char *kAsleepTitle = "SOURCE ASLEEP";
+inline constexpr const char *kAsleepHint = "Source asleep: START or Refresh wakes it.";
+inline constexpr const char *kAsleepBar = "Source asleep: START wakes";   // 26 cells of the 27-cell bar
 
 // The tab to open on: Sink when a device is inline or was seen on CC, else Source when a charger is seen,
 // else Cable when a cable is present, else Source (empty).
