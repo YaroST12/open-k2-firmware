@@ -268,15 +268,14 @@ void ChargerTestSession::record(const ct::Step& s) {
     K2LOG("[TEST] %s PDO%u target=%umV request=%umA measured=%umV %s %s\n",
         ct::name(s.algorithm), unsigned(s.pos), unsigned(s.mv), unsigned(s.ma), unsigned(s.measured_mv),
         ct::name(s.verdict), detail_name(s));
-    // A deep-sweep row closes with its summary: the points, the peak and a fold-back ("peak 19.75 V at 19.9 V, folds
-    // back to 19.42 V from 20.0 V"); a mid-sweep loss keeps the points recorded so far.
+    // A deep-sweep row closes with its summary as numbers: the points, the peak and a fold-back (the summary text
+    // would ride a %s, which the binlog cuts at 12 bytes - the numbers are the log, the prose is the strip footer).
     if (ct::is_sweep(s))
-        if (const auto* rw = runner_.sweep_view().find(uint8_t(s.algorithm), s.pos)) {
-            char sum[64] = {};
-            const size_t n = ctsweep::format_summary(rw->sum, sum);
-            K2LOG("[SWEEP] PDO%u %u..%umV %u pts %s %s: %.*s\n", unsigned(s.pos), unsigned(rw->lo_mv), unsigned(rw->hi_mv),
-                  unsigned(rw->n), ct::name(s.verdict), ct::name(s.reason), int(n), sum);
-        }
+        if (const auto* rw = runner_.sweep_view().find(uint8_t(s.algorithm), s.pos))
+            K2LOG("[SWEEP] PDO%u %u..%umV %u pts %s %s peak=%umV at=%umV fold=%umV from=%umV\n",
+                  unsigned(s.pos), unsigned(rw->lo_mv), unsigned(rw->hi_mv), unsigned(rw->n),
+                  ct::name(s.verdict), ct::name(s.reason),
+                  unsigned(rw->sum.peak_mv), unsigned(rw->sum.peak_at_mv), unsigned(rw->sum.fold_mv), unsigned(rw->sum.fold_from_mv));
     // What held the loop while the row was in flight: the longest main-loop iteration (1 ms when healthy) and the longest
     // gap between two UI ticks (20 ms when healthy), in ms since the row began. A big number names a blocking path.
     K2LOG("[CT] gap row=%u loop=%ums ui=%ums\n", unsigned(idx), unsigned(gap::loop.peak()), unsigned(gap::ui.peak()));

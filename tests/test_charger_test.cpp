@@ -3611,12 +3611,13 @@ static void test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling() {
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(epr_seen, true);           // EPR was entered and held through the sweep (EPR_KeepAlive runs there)
     unsigned sweep_rows = 0;
+    const ct::Step* sweep_step = nullptr;
     for (const auto& s : r.steps())
         if (ct::is_sweep(s)) {
             ++sweep_rows;
             CHECK_EQ(s.algorithm == A::EprAvs && s.pos == 10, true);
-            CHECK_EQ(s.mv, 15000u);     // the first setpoint of the EPR AVS range
             CHECK_EQ(s.ma <= 1000, true);
+            sweep_step = &s;
         }
     CHECK_EQ(sweep_rows, 1u);
     const auto* rw = r.sweep_view().find(uint8_t(A::EprAvs), 10);
@@ -3625,6 +3626,12 @@ static void test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling() {
         CHECK_EQ(rw->n, 211u);                                  // 15.0..36.0 V every 100 mV, capped at the ceiling
         CHECK_EQ(rw->lo_mv, 15000u); CHECK_EQ(rw->hi_mv, 36000u);
         CHECK_EQ(rw->sum.points, 211u);
+        // Row B item 3: the sweep row reports the sweep - target is the peak's setpoint, measured is the peak.
+        CHECK_EQ(sweep_step != nullptr, true);
+        if (sweep_step) {
+            CHECK_EQ(sweep_step->mv, rw->sum.peak_at_mv);
+            CHECK_EQ(sweep_step->measured_mv, rw->sum.peak_mv);
+        }
     }
     unsigned stepped = 0;
     for (const auto& c : f.choices) {

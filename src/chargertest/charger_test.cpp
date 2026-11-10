@@ -1443,6 +1443,13 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     if ((v == Verdict::Pass || r == Reason::Timeout || r == Reason::Voltage) && averages_band(s))
         if (const int mean = band_.mean(); mean >= 0) measured = mean;
     s.measured_mv = static_cast<uint16_t>(std::clamp(measured, 0, 65535));
+    // A deep-sweep row reports the sweep, not the last sample: target = the setpoint of the peak, measured = the
+    // peak itself (the row's range label still comes from the APDO; points and fold-back stay in the summary).
+    if (sweep_row)
+        if (const auto* rw = sweep_view().find(uint8_t(s.algorithm), s.pos); rw && rw->sum.points) {
+            s.mv = rw->sum.peak_at_mv;
+            s.measured_mv = rw->sum.peak_mv;
+        }
     env_.record(s);
     if (v == Verdict::Pass) replan_fc(in);
     // pattern qc3-20v-without-qc2-20v: QC3 Class B just reached 20 V, so an earlier "Class A only" QC2 Class B 20 V row was a real miss.
