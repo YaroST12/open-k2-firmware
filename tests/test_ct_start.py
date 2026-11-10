@@ -355,6 +355,16 @@ class LockReleaseAfterStart(unittest.TestCase):
                 events.append(("call", depth))
                 return ct_start.kr.Response(cmd, 1, 0, b"")
 
+        class FakeTransport:
+            # mirrors the real LinuxHidTransport: __init__ takes the device lock itself and only
+            # close() releases it, so a release that never reaches depth 0 is visible in the events
+            def __init__(self, path=None, wait_sec=0.0):
+                acquire()
+
+            def close(self):
+                release()
+
+
         class FakeWalk:
             def __init__(self, link):
                 self.log = []
@@ -380,7 +390,7 @@ class LockReleaseAfterStart(unittest.TestCase):
         with patch.object(ct_start.k2_lock, "acquire", acquire), \
              patch.object(ct_start.k2_lock, "release", release), \
              patch.object(ct_start.kr, "RemoteLink", FakeLink), \
-             patch.object(ct_start.kr, "LinuxHidTransport", lambda path: object()), \
+             patch.object(ct_start.kr, "LinuxHidTransport", FakeTransport), \
              patch.object(ct_start, "Walk", FakeWalk), \
              patch.object(ct_start, "preflight", lambda link: None), \
              patch.object(ct_start, "run_id_of", lambda link: 5), \
