@@ -23,6 +23,16 @@ constexpr std::uint32_t build_vdm_header(std::uint16_t svid, bool structured, st
     return (std::uint32_t(svid) << 16) | (structured ? (1u << 15) : 0) | (std::uint32_t(cmd_type) << 6) | cmd;
 }
 
+// A Vendor_Defined SOP message out of the readout engine's words (one tx slot, like everything else).
+static TxMsg vdm_txmsg(const AppleVdm& v, std::uint8_t rev) {
+    TxMsg m;
+    m.header = make_header(kMsgVendorDefined, v.n, rev);
+    m.len = std::uint8_t(v.n * 4);
+    for (unsigned i = 0; i < v.n; i++)
+        for (int b = 0; b < 4; b++) m.data[4 * i + b] = std::uint8_t(v.w[i] >> (8 * b));
+    return m;
+}
+
 // PDO1 (the 5 V fixed supply) of a PD 3.x source carries "EPR Mode Capable" in bit 23 (reserved in PD 2.0).
 bool source_offers_epr(const SourceCaps& c) {
     return c.valid && c.spec_rev == 2 && c.num_pdos && c.pdos[0].type == PdoType::Fixed && (c.pdos[0].raw & (1u << 23));
@@ -300,6 +310,7 @@ void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     xiaomi_opener_sent_ = false;
     discover_svids_pending_ = false;
     xm_ = {};
+    ap_.reset();   // the lab-only Apple readout belongs to the attach that just ended
     fail(r, to);
 }
 
@@ -332,6 +343,7 @@ void Sink::on_hard_reset_rx(std::uint32_t) {
     xiaomi_opener_sent_ = false;
     discover_svids_pending_ = false;
     xm_ = {};
+    ap_.reset();
     resume_ = resume_ || owned;   // a second Hard Reset right behind the first finds the sink already idle: keep the flag
     get_cap_sent_ = false;
     refresh_pending_ = false;
@@ -365,6 +377,7 @@ void Sink::detach() {
     xiaomi_opener_sent_ = false;
     discover_svids_pending_ = false;
     xm_ = {};
+    ap_.reset();
     fail(SinkResult::None, SinkState::Idle);
 }
 
@@ -387,6 +400,7 @@ void Sink::soft_reset(std::uint32_t now) {
     discover_svids_pending_ = false;
     sr_wait_ = true;
     sr_at_ = now + 400;
+    ap_.reset();
     fail(SinkResult::SoftReset, SinkState::Idle);
 }
 
@@ -491,8 +505,22 @@ Err Sink::request_source_caps(std::uint32_t now) {
     return Err::Ok;
 }
 
-// STUB for the red test commit: the arm gate / Get_Source_Cap trigger lands with the engine (k2/apple-readout fix commit).
-Err Sink::arm_apple_read(std::uint32_t) { return Err::Busy; }
+Err Sink::arm_apple_read(std::uint32_t now) {
+    // The remote gates this with apple_read_refusal() first; the sink double-checks the hard ones:
+    // never transmit inline / to a source that is not our partner, and never without a contract.
+    if (!answers_sop_) return Err::Inline;
+    if (!contract_) return Err::NoCaps;
+    if (st_.state != SinkState::Ready || tx_pending_ || retx_pending_ || xiaomi_chain_active(now)) return Err::Busy;
+    ap_.arm(now);
+    // Arming triggers a re-request of the CURRENT contract (Get_Source_Cap): the source re-announces
+    // its caps and runs its 0x05AC discovery ~1.4 s later. Never a different voltage.
+    const Err e = request_source_caps(now);
+    if (e != Err::Ok) {
+        ap_.reset();
+        return e;
+    }
+    return Err::Ok;
+}
 
 Err Sink::trigger(Choice c, std::uint32_t now) {
     if (!caps_) return Err::NoCaps;
@@ -968,6 +996,14 @@ void Sink::tick(std::uint32_t now) {
         queue(m);
         return;
     }
+    // Lab-only Apple readout: its paced reads / retries go through the same single tx gate as everything else.
+    if (ap_.armed()) {
+        const AppleVdm tx = ap_.tick(now);
+        if (tx.n && !tx_pending_) {
+            queue(vdm_txmsg(tx, rev_));
+            return;
+        }
+    }
     auto due = [now](std::uint32_t t) { return std::int32_t(now - t) >= 0; };
     if (sr_wait_ && !tx_pending_ && due(sr_at_)) {   // the source is silent after our Soft_Reset: ask for its caps once
         sr_wait_ = false;
@@ -1092,7 +1128,9 @@ void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> payload, s
     // before it says anything with 0x2717, and for a foreign source it is one ignored message.
     if (svid == 0xFF00 && structured && cmd_type == 0 && cmd == 2) {
         if (contract_ && !xiaomi_opener_sent_) { xiaomi_opener_pending_ = true; xiaomi_opener_at_ = now + kXiaomiOpenerMs; }
-        constexpr std::array<std::uint32_t, 2> vdos = {build_vdm_header(0xFF00, true, 1, 2), 0x27170000u};
+        // Unarmed the SVIDs ACK stays exactly [0x2717] (the Xiaomi chain is untouched); armed by the
+        // lab-only apple-read op it lists [0x2717, 0x05AC] packed in one word.
+        const std::array<std::uint32_t, 2> vdos = {build_vdm_header(0xFF00, true, 1, 2), ap_.svid_ack_word()};
         send_xiaomi_vdm_reply(0, std::span<const std::uint32_t>(vdos), now);
         return;
     }
@@ -1113,6 +1151,25 @@ void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> payload, s
                 if (contract_ && !xiaomi_opener_sent_) { xiaomi_opener_pending_ = true; xiaomi_opener_at_ = now + kXiaomiOpenerMs; }
             }
         }
+        return;
+    }
+
+    // Lab-only Apple readout (SVID 0x05AC), armed by the remote `apple-read` op only: while armed the
+    // source's 0x05AC discovery and read answers are routed to the engine (apple_readout.cpp owns the
+    // state machine), its replies go out through the same single tx gate. Unarmed 0x05AC VDMs fall
+    // through and are ignored, exactly like any other foreign SVID.
+    if (svid == kAppleSvid && ap_.armed()) {
+        AppleVdm rx;
+        const unsigned n = num_do < rx.w.size() ? num_do : unsigned(rx.w.size());
+        unsigned got = 0;
+        for (unsigned i = 0; i < n && i * 4 + 3 < payload.size(); i++) {
+            rx.w[i] = std::uint32_t(payload[i * 4]) | (std::uint32_t(payload[i * 4 + 1]) << 8) |
+                      (std::uint32_t(payload[i * 4 + 2]) << 16) | (std::uint32_t(payload[i * 4 + 3]) << 24);
+            got++;
+        }
+        rx.n = std::uint8_t(got);
+        const AppleVdm tx = ap_.on_vdm(rx, now);
+        if (tx.n && !tx_pending_) queue(vdm_txmsg(tx, rev_));
         return;
     }
 

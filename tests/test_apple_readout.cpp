@@ -249,11 +249,14 @@ int main() {
         CHECK_EQ(got.size(), want.size());
         if (got.size() == want.size())
             for (std::size_t k = 0; k < want.size(); k++) CHECK_EQ(got[k], want[k]);
-        // pacing: one read per ~20 ms (the first read of a run may go at once)
-        for (std::size_t k = 1; k < f.sent_at.size(); k++) {
-            const bool both_reads = f.sent[k].n == 3 && f.sent[k - 1].n == 3 &&
-                                    f.sent[k].w[0] == kAppleAttention && f.sent[k - 1].w[0] == kAppleAttention;
-            if (both_reads) CHECK(std::int32_t(f.sent_at[k] - f.sent_at[k - 1]) >= 20);
+        // pacing: one read per ~20 ms (the first read of a run may go at once); the 05ACnn12 acks
+        // interleave in `sent`, so collect the read timestamps only
+        {
+            std::vector<std::uint32_t> read_at;
+            for (std::size_t k = 0; k < f.sent.size(); k++)
+                if (f.sent[k].n == 3 && f.sent[k].w[0] == kAppleAttention) read_at.push_back(f.sent_at[k]);
+            for (std::size_t k = 1; k < read_at.size(); k++)
+                CHECK(std::int32_t(read_at[k] - read_at[k - 1]) >= 20);
         }
     }
 
@@ -273,7 +276,7 @@ int main() {
     // ---- a silent read: 50 ms timeout, one retry, then the run stops ----
     {
         Fake f;
-        f.discover_and_run(400);    // let the directory finish, then go silent on a string read
+        f.discover_and_run(250);    // the directory is done, a string read is in flight; then go silent
         if (f.eng.info().why == AppleWhy::Running) {
             f.silent_reads = 100;   // every later read is unanswered
             f.run(500);
@@ -333,8 +336,9 @@ int main() {
     // ---- the 16-read cap bounds a run ----
     {
         Fake f;
-        // make every field 24 B so each string takes 2 reads: 9 dir + 6*2 = 21 > 16
+        // make every field 24 B with no NUL in the string area, so each takes 2 reads: 9 dir + 6*2 = 21 > 16
         for (std::uint32_t a = 0x08; a <= 0x24; a += 4) { f.reg[a + 2] = 0x18; }
+        for (std::uint32_t a = 0x30; a < 0xD8; a++) f.reg[a] = 'A';
         f.discover_and_run(3000);
         const AppleInfo& i = f.eng.info();
         CHECK(i.valid);
@@ -354,6 +358,7 @@ int main() {
         CHECK(!r2.sink.apple_info().valid);
         // arm the first sink: the op also triggers the re-request (Get_Source_Cap goes out)
         CHECK_EQ(r.sink.arm_apple_read(r.now), Err::Ok);
+        r.pump();   // the queued Get_Source_Cap leaves through take_tx, which only pump() drives
         bool got_get_cap = false;
         for (const TxMsg& m : r.sent) if ((m.header & 0x1F) == kCtlGetSourceCap) got_get_cap = true;
         CHECK(got_get_cap);
