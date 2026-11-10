@@ -350,10 +350,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host test on `derive_proto` with a contract and no caps -> no current, measured voltage; with a periodic
     Request -> PPS tag. Hardware: repeat the P4-handback replug, footer reads "PPS 9V" or "PD 9V".
   - Hardware be71f10 (Anker IQ4 -> K2 -> Pixel, fixed 9 V, K2 rebooted mid-contract, `runs/2026-11-10-merge2-hw/
-    pps-footer*.png`, `pps-sniff`): footer "CC 9V", no current, no "max" label - correct. Still open: `fc: PD MTK`.
-    A settled fixed contract is silent (no PD frame in 14 s), so no Request is ever decoded and pd_active() stays
-    false; the D+/D- classifier reads the phone's lines as MTK. Rule: CC attached, VBUS above vSafe5V (> 5.5 V) and
-    no D+/D- handshake seen this attach = "PD (not decoded)", never a legacy mode. The "PPS 9V" label is still
+    pps-footer*.png`, `pps-sniff`): footer "CC 9V", no current, no "max" label - correct. `fc: PD MTK` fixed in
+    138eebf: a settled fixed contract is silent (no PD frame in 14 s), so no Request is ever decoded and pd_active()
+    stays false; the D+/D- classifier now applies the rule below - CC attached, VBUS above vSafe5V (> 5.5 V) and
+    no D+/D- handshake seen this attach = "PD (not decoded)", never a legacy mode (host tests in
+    tests/test_fastcharge_classify.cpp; the passive CC2 bias-net level ~1.69 V is deliberately not an input).
+    Hardware check pending. The "PPS 9V" label is still
     unverified on hardware: needs a PPS sink (OnePlus 15 on the CUKTECH; it takes only PDO1 5 V on the Anker IQ4,
     with or without the K2).
 - ~~**Sink Identify inline drops the phone from 9 V to 5 V**~~ completed: 6df54fa; inline Identify refused with and without --confirm, VBUS held 9.076 V, Sink tab "sniff 18D1:4EE1" (Pixel, be71f10). Identify of a phone alone (fix item 2) is batch 3 (k2/identify-alone).
