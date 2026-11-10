@@ -312,7 +312,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests (red first) for the `--over-load` gate (refused after any far PD message, refused with no
     far sink) and the signature rule; the hardware step above.
 - **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589, fixed in
-  f0d79fb as an opt-in setting, **Settings > Wake sleeping port, default off**; hardware check pending): idle
+  f0d79fb as an opt-in setting, **Settings > Wake sleeping port, default off**; hardware verified 14f9d24, see the
+  note at the end of this row): idle
   K2 on the splitter with nothing attached, VBUS 78 mV, "No source"; `pd-reread` without a pin answered "busy" and
   `pd attach 5000` did nothing; `pd-reread --pin 2 --no-run` woke it at once. 5926abb's slow-wake dwell only acts
   inside the Rd seek after a passive pick, and the open standby reading is wiped by `RdSeek::reset()` on attach, so an
@@ -376,6 +377,13 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     hardware (START and a plain `pd-reread` held Rd 1648 ms on one line, 2026-11-10). Remaining fix, smaller: START's
     VBUS wait covers the ~1.1-1.7 s wake (the first-START miss above) and the idle UI says "source asleep: START or
     Refresh wakes it" on the standby signature. Decision for the user if the idle wake is still wanted.
+  - Hardware 2026-11-10 (14f9d24, Anker IQ4 -> Anker 2-way splitter, other output empty -> C-C cable -> K2, HID-powered,
+    `runs/2026-11-10-merge2-hw/wake3`): asleep = CC1 3.04 V, VBUS 0, K2 passively attached on the CC2 bias net (1.69 V).
+    Wake ON -> the dark attach is released, Rd held on CC1 (sw0=0x01, the standby Rp collapses to 0 V under it) for two
+    steady dwells; the splitter's Rp answered 3.86 s after the Rd, the scan attached CC1, 6 PDOs, VBUS 5.08 V. Two
+    earlier hardware rounds failed (48adfa1 and before: the passive scan took the line during the hold after 0.28 s,
+    then stale ADC samples picked the wrong line; fixed in c3f46d1 / e0a4ada). Still open: the boot scan can attach
+    the CC2 bias net first, so the wake starts up to ~3 s late (dark-attach release).
 - **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note, fixed in b60c702 + ce6bbdb + df8e004,
   hardware check pending): with `pd-reread --pin 2`
   still set, splitter -> K2 -> OnePlus 15: the K2 sent two Requests (one collided with the phone's) before the far
