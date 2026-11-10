@@ -635,6 +635,11 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   Tests list shows it as its own line with a point count. Stops at the first lost source (pattern handling as the
   other PPS rows). Validate: host tests for the point plan and the summary; hardware: one full sweep on a working
   PPS source, no reboot, journal intact.
+  The sweep must not stop at the first out-of-band point when VBUS is still steady: record it and go on, then report
+  the highest delivered level and a fold-back (VBUS falling while the request rises). Baseus FH22, 2026-11-10: PPS
+  tracks at -150 mV up to 19.75 V (request 19.9 V), then every request >= 20.0 V folds back to 19.42 V
+  (`docs/CHARGER_QUIRKS.md`, `runs/2026-11-10-merge2-hw/fh22-sweep.tsv`); the summary should read "peak 19.75 V at
+  19.9 V, folds back to 19.42 V from 20.0 V".
 - **AVS deep sweep, its own entry next to the PPS sweep** (2026-11-10, user decision; built on the PPS sweep's engine).
   Opt-in, never in a preset: every 100 mV (the AVS Request granularity) across the SPR AVS range (9-20 V) and, with
   EPR entered, the EPR AVS range (15 V up to the APDO top, capped at this K2's monitor ceiling - 36 V here, per-device;
