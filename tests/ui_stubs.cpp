@@ -92,6 +92,8 @@ void ra_run_own() { if (g_stub.ra_on) g_stub.ra_owned++; }   // a run takes the 
 void set_force_line(std::uint8_t line) { g_stub.force_line = line; }
 void set_idle_wake(bool on) { g_stub.idle_wake = on; }
 bool idle_wake() { return g_stub.idle_wake; }
+void set_run_owner(bool on) { g_stub.run_owner = on; }
+bool run_owner() { return g_stub.run_owner; }
 void rd_glitch_begin() {
     if (g_stub.ra_ons_at_glitch < 0) { g_stub.ra_ons_at_glitch = g_stub.ra_ons; g_stub.ra_on_at_glitch = g_stub.ra_on; }
     g_stub.glitch_begins++;

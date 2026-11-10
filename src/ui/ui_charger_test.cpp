@@ -522,6 +522,7 @@ void ChargerTestSession::resume_run(uint32_t now) {
     resume_rd_ = resume_hold_ = false;   // the Rd (if we presented it) belongs to the run now; release_run() ends it with the run
     wait_ = pd::VbusWait();
     capture_identity();
+    fusb302::set_run_owner(true);
     charger_journal::hw::resumed(runner_.resumed());
     g_ev_row = kNoRow;
     runev::emit(runev::Code::Resume, now, ev8(runner_.index()));
@@ -659,6 +660,7 @@ bool ChargerTestSession::start_begin() {
     if (!present_rd(ctx_.now)) return false;
     // The wait is a stage of its own, carried by poll(): the main loop keeps running (the PD engine's service() every
     // millisecond, the UI tick every 20 ms) and BACK cancels. A blocking loop here froze the UI for up to 21 s.
+    fusb302::set_run_owner(true);
     set_stage(Stage::Waiting);
     return true;
 }
@@ -742,6 +744,10 @@ void ChargerTestSession::wait_abort() {
     set_stage(Stage::Review, kStartRow);
 }
 void ChargerTestSession::poll(uint32_t now) {
+    // The run owns the line in every phase, the unit cycle's Rd-off / VBUS-dark gaps included: the idle wake (a sleeping-port
+    // helper) must never read them as a sleeping port (bench 2026-11-10: every PD row "no PD after re-attach" with the setting on).
+    // Derived each tick, so no path out of a run can leave it set; release_run() clears it at once.
+    fusb302::set_run_owner(resume_pending_ || stage_ == Stage::Waiting || runner_.busy());
     if (resume_pending_) {
         gate_.update(now, input(now).vbus_mv);
         // An interrupted run goes on by itself once VBUS has been steady (no OK press in any power mode).
@@ -833,6 +839,7 @@ void ChargerTestSession::emit_end(uint32_t now) {
 void ChargerTestSession::release_run() {
     reattach_drop();   // a run that ends inside the planned re-attach gives the Rd back and the marker to the follower first
     rdcomeback::set_run_cable({});   // no run: the intent marker follows a session without an identity
+    fusb302::set_run_owner(false);   // the sleeping-port wake may act again
     fusb302::rd_for_run(false);
     drop_identity();
 }
@@ -1045,6 +1052,7 @@ void ChargerTestSession::begin_run() {
     options_.units = {};   // an explicit unit list serves one run; the next START uses the default order
     invalidate_confirmation();
     if (r == ct::Reason::None || runner_.state() == ct::State::Unsafe) {
+        fusb302::set_run_owner(true);   // from the START itself, not from the next tick
         g_ev_row = kNoRow;
         runev::emit(runev::Code::Start, ctx_.now, ev8(meta.units.n), ev8(runner_.steps().size()), 0);
         // The plan goes to flash in pieces, one file per tick on a quiet link (a synchronous begin held the main loop 1.5-2.2 s with

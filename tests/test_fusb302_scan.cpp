@@ -3485,11 +3485,11 @@ void sp_world(unsigned line, bool wake_on, unsigned wake_ms = 1100) {
     // the UI feeds levels long before the first scan on a running K2: settle + a stable pair, no poll in between
     for (unsigned t = 0; t < 300; t += 20) { g_ms += 20; fusb302::sink_vbus(78); fusb302::sink_cc(sp_adc(0, g_ms), sp_adc(1, g_ms)); }
 }
-unsigned sp_run(unsigned ms) {                               // returns the union of the Rd bits SWITCHES0 showed after any tick
+unsigned sp_run(unsigned ms, std::int32_t vbus = 78) {       // returns the union of the Rd bits SWITCHES0 showed after any tick
     unsigned seen = 0;
     for (unsigned t = 0; t < ms; t += 20) {
         g_ms += 20;
-        fusb302::sink_vbus(78);
+        fusb302::sink_vbus(vbus);
         fusb302::sink_cc(sp_adc(0, g_ms), sp_adc(1, g_ms));
         fusb302::poll();
         fusb302::service();
@@ -3527,6 +3527,8 @@ void sp_end() {
     g_rd_model = false;
     g_lvl_rd[0] = g_lvl_rd[1] = g_lvl_nord[0] = g_lvl_nord[1] = 0;
     fusb302::set_idle_wake(false);
+    fusb302::set_run_owner(false);
+    fusb302::rd_for_run(false);
     for (int i = 0; i < 100; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::sink_cc(0, 0); fusb302::poll(); fusb302::service(); }
     clean_up_rd_tests();
     power_cycle_forget_pin();
@@ -3588,6 +3590,87 @@ void test_wake2_an_unanswered_hold_re_reads_and_follows_the_signature_to_the_oth
     CHECK_EQ(usb_has("Active CC detected: CC1"), true);      // where the splitter then woke
     CHECK_EQ(usb_has("Active CC detected: CC2"), false);     // the bias net was never taken, not even in the read window
     CHECK_EQ(never_rd_on_both_lines(0), true);
+    sp_end();
+}
+
+// ---- wake-vs-test: the idle wake against a charger-test run (bench 2026-11-10, runs/2026-11-10-merge2-hw/wake-ct) ----
+// A normal charger direct on the plug (CC2): the wake's Rd made the attach, VBUS came up, caps were heard. Then a charger test
+// ran its unit cycle: unit_detach() drops the run's Rd but leaves the attach, the PD bookkeeping is cleared, VBUS goes dark -
+// and the wake read that as a dark port, released the attach and put its own Rd back, every unit, so no row ever saw PD.
+void wk_attach(unsigned line) {
+    sp_world(line, true, 600);
+    sp_until_hold(line);
+    const std::string up = "Active CC detected: CC" + std::to_string(line);
+    for (unsigned t = 0; t < 4000 && !usb_has(up.c_str()); t += 20) sp_run(20);
+    CHECK_EQ(usb_has(up.c_str()), true);                     // the wake's Rd made this attach
+    sp_run(200, 5100);                                       // the source answers: VBUS up
+    push_frame(0xE0, 0x1001 | (2u << 6), {0x0801912Cu});    // Source_Capabilities
+    sp_run(3600, 5100);                                      // ... and the attach is older than the dark limit
+    CHECK_EQ(fusb302::pd_traffic(), true);
+    g_usb.clear();
+    g_log.clear();
+}
+// Fix 1: with the run owning the line the wake never acts, in the unit gaps (Rd off, VBUS dark) for as long as they last.
+void test_wake_vs_test_the_run_owner_keeps_the_wake_off_through_the_unit_gaps() {
+    wk_attach(2);
+    fusb302::set_run_owner(true);
+    for (int unit = 0; unit < 3; unit++) {
+        fusb302::unit_detach();
+        g_log.clear();                                       // what the run's own detach wrote is not the wake's
+        const unsigned dark = sp_run(8000, 60);              // the source drops its output: VBUS ~60 mV, no Rd of ours on the line
+        CHECK_EQ(dark, 0u);
+        CHECK_EQ(usb_has("dark attach"), false);
+        CHECK_EQ(usb_has("Idle wake"), false);
+        CHECK_EQ(rd_ever_written_on(3u), false);             // no Rd write of the wake's, on either line
+        fusb302::unit_attach(false);                         // the run's own Rd for the next unit
+        sp_run(1000, 5100);
+        CHECK_EQ(usb_has("dark attach"), false);
+        CHECK_EQ(usb_has("Idle wake"), false);
+    }
+    sp_end();
+}
+// Fix 1 (idle): with the run owner set before anything attached, the hold itself never starts; released, the wake works again.
+void test_wake_vs_test_run_owner_blocks_the_hold_and_releases_it_at_the_end() {
+    sp_world(2, true);
+    fusb302::set_run_owner(true);
+    CHECK_EQ(sp_run(9000), 0u);                              // not one Rd bit: no hold, and a dark attach is not released
+    CHECK_EQ(usb_has("Idle wake"), false);
+    CHECK_EQ(usb_has("dark attach"), false);
+    fusb302::set_run_owner(false);                           // the run is over: the sleeping-port wake is back
+    sp_run(9000);
+    CHECK_EQ(usb_has("Idle wake: Rd on CC2"), true);
+    sp_end();
+}
+// Fix 3: no PD heard for N ms counts from the last PD or the unit's own reset, not from an attach long past: with no owner set
+// (a tool's unit_hold / unit_attach) a wake-made attach with caps heard is not dark the moment the unit clears its bookkeeping.
+void test_wake_vs_test_a_wake_made_attach_with_caps_is_not_dark_after_the_units_reset() {
+    wk_attach(2);
+    fusb302::unit_detach();
+    sp_run(2500, 60);                                        // VBUS dark, but the quiet time starts at the unit's reset
+    CHECK_EQ(usb_has("dark attach"), false);
+    sp_run(1500, 60);                                        // a port that stays dark and silent for 3 s is still released
+    CHECK_EQ(usb_has("dark attach"), true);
+    sp_end();
+}
+// Fix 2: Wake OFF releases the Rd the wake left on the line and drops its attach back to passive, at once (bench: CC2 stayed
+// 1.62 V and VBUS 5.10 V until a reboot).
+void test_wake_vs_test_turning_the_setting_off_drops_a_wake_made_attach() {
+    wk_attach(2);
+    CHECK_EQ(sw0_rd(), 2u);                                  // the attach kept the wake's Rd
+    fusb302::set_idle_wake(false);
+    CHECK_EQ(sw0_rd(), 0u);                                  // gone now, not at the next scan
+    CHECK_EQ(usb_has("Detach"), true);                       // the wake-made attach is released
+    CHECK_EQ(sp_run(3000), 0u);                              // and nothing puts an Rd back
+    sp_end();
+}
+// Fix 2 (negative): an Rd that is not the wake's stays when the setting goes off.
+void test_wake_vs_test_setting_off_leaves_a_run_start_rd_alone() {
+    sp_world(2, true);
+    CHECK_EQ(fusb302::rd_for_run(true), true);
+    sp_run(1500);
+    CHECK_EQ(sw0_rd() != 0u, true);
+    fusb302::set_idle_wake(false);
+    CHECK_EQ(sw0_rd() != 0u, true);
     sp_end();
 }
 
@@ -3717,6 +3800,11 @@ int main() {
     test_wake2_levels_fed_right_after_an_rd_release_are_not_open_levels();
     test_wake2_the_open_level_of_the_held_line_is_not_overwritten_under_our_rd();
     test_wake2_an_unanswered_hold_re_reads_and_follows_the_signature_to_the_other_line();
+    test_wake_vs_test_the_run_owner_keeps_the_wake_off_through_the_unit_gaps();   // wake-vs-test replay: each case ends with a detach
+    test_wake_vs_test_run_owner_blocks_the_hold_and_releases_it_at_the_end();
+    test_wake_vs_test_a_wake_made_attach_with_caps_is_not_dark_after_the_units_reset();
+    test_wake_vs_test_turning_the_setting_off_drops_a_wake_made_attach();
+    test_wake_vs_test_setting_off_leaves_a_run_start_rd_alone();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_get_source_caps_refused_even_confirmed();

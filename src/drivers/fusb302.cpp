@@ -112,6 +112,8 @@ pd::RdHold g_rd_hold;       // Rd off after a detach
 bool g_rd_op = false;     // an explicit active feature presents Rd on the active line (plain boot: otherwise never)
 bool g_start_requested = false;   // the run start already asked the source for PDO 1 (once per Rd presentation)
 bool g_rd_start = false;    // a run start presents Rd (no sink inline): the line with Rp, both while none is detected
+bool g_run_owner = false;   // a charger-test run owns the line in every phase, the Rd-off gaps included (set_run_owner)
+bool g_wake_attach = false; // the current attach was made by the idle wake's Rd and nobody has taken that Rd over since (setting off ends it)
 bool g_inline = false;      // a real sink is attached: active operations refuse or need a confirm
 pd::AutoCrcGate g_crc;      // Auto-CRC only while an active operation runs (the armed spoof counts)
 pd::AutoCrcGate g_rd_gate;  // Rd on the active line only while a sink operation runs (the armed spoof does not count)
@@ -464,6 +466,7 @@ bool sole_sink() { return !downstream_now(); }
 // SWITCHES0 for the active line: the Rd the policy allows (pd_ccmode.hpp) plus the measured line.
 void apply_rd() {
     if (g_active_cc == 0) { wr(kSwitches0, idle_rd()); return; }
+    g_wake_attach = false;   // the Rd policy writes SWITCHES0 now: the wake's Rd is no longer on the line
     const bool down = downstream_now();
     std::uint8_t lines = pd::rd_lines(g_pin_rd, g_rd_op, down, g_active_cc);
     if (g_rd_start) lines |= pd::key_rd_lines(emkra::run_rd_lines(g_ra, down, g_active_cc), g_pin_rd, g_active_cc);
@@ -488,6 +491,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     cc_switches(false, g_cc_mask);
     const int i = c.line - 1;
     g_active_cc = std::uint8_t(c.line);
+    const bool by_wake = g_idle_wake.line() != 0;   // the scan read this line under the wake's own Rd
     g_idle_wake.on_attach(c.line);   // an attach during an idle Rd hold: the no-Rp detach stays off inside the dwell window
     if (!seek_move) {
         g_rdseek.reset(g_idle_wake.enabled());   // setting off: the open readings go with the attach, as before the idle wake
@@ -495,6 +499,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     }
     if (pinned || seek_move) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
     else wr(kSwitches0, std::uint8_t(rd_both | (i == 0 ? kMeasCc1 : kMeasCc2)));
+    g_wake_attach = by_wake && !pinned && !seek_move;   // set after apply_rd() above, which would clear it
     delay_ms(2);
     std::uint8_t status0 = 0;
     rd(kStatus0, status0);
@@ -1134,6 +1139,8 @@ bool init() {
     g_rdseek.clear();      // a boot: no open reading is known yet (sink_cc notes them once the UI feeds levels)
     g_rdseek.rd_changed(systick::millis());   // the chip came up with Rd on both lines (its power-on SWITCHES0): the nets settle first
     g_idle_wake.reset();
+    g_run_owner = false;
+    g_wake_attach = false;
 
     // PC13..PC15 drive the CC analog switches and the VCONN path.
 #ifndef K2_HOST_PINS
@@ -1876,6 +1883,7 @@ static void detach_reset(std::uint8_t status0) {
     }
     wr(kSwitches0, downstream_now() ? std::uint8_t(0) : g_pin_rd);
     g_rd_op = false;
+    g_wake_attach = false;
     g_cc_sink_mv = -1;
     g_active_cc = 0;
     g_bc_max = 0;
@@ -2047,9 +2055,13 @@ ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Resul
 }
 
 // Nobody else owns the Rd of an idle / dark port: no boot pin, run start, active operation, debug Ra or forced line, and no
-// sink downstream. The two idle-wake gates in poll() (the hold itself, the dark-attach release) share it.
+// sink downstream. The two idle-wake gates in poll() (the hold itself, the dark-attach release) share it. A charger-test run
+// owns the line for its whole length (g_run_owner): its unit cycle drops its own Rd and the source's VBUS between units, and
+// that gap looked like a sleeping port to the wake (bench 2026-11-10: every PD row "no PD after re-attach"). A tool that holds
+// the link (identify, probe, re-read, trigger prep) owns it too: a dark moment inside its window is not a dark port.
 static bool idle_owner_free() {
-    return g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now();
+    return g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now() && !g_run_owner &&
+           !g_ident.running() && !g_probe.running() && !g_reread.running() && !g_prep.active();
 }
 
 void poll() {
@@ -2121,9 +2133,14 @@ void poll() {
         if (got && (status0 & kComp) != 0) g_idle_wake.on_rp_seen();
         // A dark attach (no VBUS, no PD for kDarkAttachMs) with the setting on is the sleeping port itself: the passive scan
         // latched its Rp but only an Rd of ours wakes it, and an attach keeps the idle path (the hold) off for good. Release it.
-        if (idle_owner_free() && g_idle_wake.dark_attach(systick::millis(), g_attach_ms, g_vbus_mv, g_pd_traffic)) {
+        // "No PD for N ms" counts from the attach or the last frame / unit reset, whichever is later: an attach long past whose
+        // PD bookkeeping a unit cycle cleared is not a dark port the instant VBUS drops.
+        const std::uint32_t now_ms = systick::millis();
+        const bool rx_after_attach = std::int32_t(g_last_rx_ms - g_attach_ms) > 0 && std::int32_t(now_ms - g_last_rx_ms) >= 0;
+        const std::uint32_t quiet_since = rx_after_attach ? g_last_rx_ms : g_attach_ms;
+        if (idle_owner_free() && g_idle_wake.dark_attach(systick::millis(), quiet_since, g_vbus_mv, g_pd_traffic)) {
             K2LOG("[FUSB302] Detach: dark attach (VBUS %d mV, no PD for %u ms): the idle wake takes the line (cc=%d mV)\n",
-                  int(g_vbus_mv), unsigned(systick::millis() - g_attach_ms), int(g_cc_sink_mv));
+                  int(g_vbus_mv), unsigned(systick::millis() - quiet_since), int(g_cc_sink_mv));
             detach_reset(status0);
         } else if (got && g_rdseek.update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
         else if (got && g_detach.update(systick::millis(), g_vbus_mv,
@@ -2417,10 +2434,19 @@ void set_idle_wake(bool on) {
     const bool holding = g_idle_wake.line() != 0;
     if (on == g_idle_wake.enabled()) return;
     g_idle_wake.set_enabled(on);
-    if (!on && holding && g_active_cc == 0) wr(kSwitches0, idle_rd());   // the hold ends now, not at the next scan
     K2LOG("[FUSB302] Wake sleeping port %s\n", on ? "ON" : "OFF");
+    if (on) return;
+    if (holding && g_active_cc == 0) wr(kSwitches0, idle_rd());   // the hold ends now, not at the next scan
+    // An attach the wake's own Rd made keeps that Rd (PDWN on the line) for as long as it lasts: off means passive, now, not
+    // after a reboot (bench 2026-11-10). Only while nobody else owns the Rd; their cleanup ends it otherwise.
+    else if (g_wake_attach && g_active_cc != 0 && idle_owner_free()) {
+        K2LOG("[FUSB302] Detach: the wake's attach on CC%u ends with the setting\n", unsigned(g_active_cc));
+        detach_reset(0);
+    }
 }
 bool idle_wake() { return g_idle_wake.enabled(); }
+void set_run_owner(bool on) { g_run_owner = on; }
+bool run_owner() { return g_run_owner; }
 bool ra_set(bool on) {
     if (!on && g_ra_early && !g_ra) {   // only the boot's early PC13: drop it
         g_ra_early = false;

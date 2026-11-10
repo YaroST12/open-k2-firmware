@@ -3552,7 +3552,63 @@ static void test_resume_goes_on_while_another_page_shows() {
     ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), now + 100);   // the page that opens finds the run in progress
     CHECK_EQ(ui.charger_test_busy(), true);
 }
+// wake-vs-test (bench 2026-11-10): the charger test owns the idle wake's line for the whole run - the Rd-off gaps of the unit
+// cycle included - and gives it back the moment the run ends, is left or is cancelled. The session sets the driver's run owner.
+static void test_the_run_owns_the_idle_wake_line_for_its_whole_run() {
+    { // a live charger: nothing owned in the review or the confirm window, owned on every tick of the run, released at its end
+        fixture(); g_stub.pm.vbus_mv = 5000;
+        Ui ui; open(ui); CHECK_EQ(ui.charger_test_set_units(kPdOnly), true); review(ui);
+        CHECK_EQ(g_stub.run_owner, false);
+        start_press(ui, 1300);
+        CHECK_EQ(g_stub.run_owner, false);                   // the confirm window touches nothing
+        confirm_press_nowait(ui, 1400);
+        CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+        CHECK_EQ(g_stub.run_owner, true);                    // from the START itself, before the first tick
+        unsigned busy_ticks = 0, not_owned = 0;
+        uint32_t now = 1500;
+        for (; now <= 60000 && ui.charger_test_busy(); now += 100) {
+            ui.tick(now);
+            if (ui.charger_test_busy()) { busy_ticks++; if (!g_stub.run_owner) not_owned++; }
+        }
+        CHECK_EQ(busy_ticks > 20, true);
+        CHECK_EQ(not_owned, 0u);                             // every busy phase, the unit detach and attach gaps included
+        ui.tick(now + 100);
+        CHECK_EQ(ui.charger_test_busy(), false);
+        CHECK_EQ(g_stub.run_owner, false);                   // the run is over: the sleeping-port wake is back
+    }
+    { // leaving the page mid-run cancels it: released
+        fixture(); g_stub.pm.vbus_mv = 5000;
+        Ui ui; open(ui); CHECK_EQ(ui.charger_test_set_units(kPdOnly), true); review(ui);
+        start_press(ui, 1300); confirm_press_nowait(ui, 1400);
+        ui.tick(1500);
+        CHECK_EQ(g_stub.run_owner, true);
+        ui.goto_page(static_cast<uint8_t>(Page::Home), 1600);
+        CHECK_EQ(g_stub.run_owner, false);
+    }
+    { // the START wait (Rd presented, VBUS not up yet, its Rd-off retries) is the run's too
+        fixture(); g_stub.pm.vbus_mv = 0; g_stub.vbus_on_rd = true;
+        Ui ui; open(ui); review(ui);
+        start_press(ui, 1300); confirm_press_nowait(ui, 1400);
+        CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+        ui.tick(1500);
+        CHECK_EQ(g_stub.run_owner, true);
+        ui.goto_page(static_cast<uint8_t>(Page::Home), 1600);
+        CHECK_EQ(g_stub.run_owner, false);
+    }
+    { // an interrupted run waiting to resume owns the line too (the boot's resume gate), and so does the resumed run
+        interrupted_run(true);
+        Ui ui; ui.init(0); ui.set_rotation(0, 0); ui.tick(1000);
+        CHECK_EQ(ui.charger_test_stage(), kResumeStage);
+        CHECK_EQ(g_stub.run_owner, true);
+        uint32_t now = 1100;
+        for (; now <= 2400 && ui.charger_test_stage() == kResumeStage; now += 100) ui.tick(now);
+        CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+        CHECK_EQ(g_stub.run_owner, true);
+    }
+}
+
 int main() {
+    test_the_run_owns_the_idle_wake_line_for_its_whole_run();
     test_results_and_cursor_outlive_the_page();
     test_resume_goes_on_while_another_page_shows();
     test_ra_guard_refuses_a_cable();

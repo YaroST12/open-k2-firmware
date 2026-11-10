@@ -293,6 +293,12 @@ void set_force_line(std::uint8_t line);
 // Remembered by uiprefs and applied from main() at boot; set_idle_wake survives init().
 void set_idle_wake(bool on);
 bool idle_wake();
+// A charger-test run owns the line for its whole length (START to Done / Stopped / cancel, the resume included), in every phase:
+// the unit detach and attach gaps, Waiting, Releasing. The idle wake (the hold and the dark-attach release) never acts while it
+// is set, so it cannot put its own Rd on the line the run just took off, nor release the run's attach. Set by the charger-test
+// session; the driver does not know the Runner. Cleared by init().
+void set_run_owner(bool on);
+bool run_owner();
 // Top-plug e-marker spoof (k2/pd/emk_ra.hpp): PC13 high = an Ra on CC1, Rd on CC2 alone, attach scan forced to CC2, the
 // chip's VCONN switches never closed. PC13 goes high at once, before any Rd. Refused (false) with a sink inline, a
 // contract or tool running, a boot-pinned Rd on CC1 or the VCONN experiment on; a partner already seen without a contract

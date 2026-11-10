@@ -93,7 +93,8 @@ struct StubState {
     int ra_ons_at_glitch = -1;               // ra_ons when the first gap opened: the Ra went on BEFORE the Rd edge
     bool ra_on_at_glitch = false;
     int force_line = 0;                      // fusb302::set_force_line()
-    bool idle_wake = false;                  // fusb302::set_idle_wake(): Settings > Wake sleeping port, applied now
+    bool run_owner = false;                  // fusb302::set_run_owner(): a charger-test run owns the line (the idle wake stays off)
+    bool idle_wake = false;                 // fusb302::set_idle_wake(): Settings > Wake sleeping port, applied now
     int unit_detaches = 0, unit_attaches = 0, unit_holds = 0; bool legacy_attach = false;   // charger test units
     bool pd_chatter = false;        // a Legacy attach whose charger never goes PD-quiet
     bool model_units = true; int32_t unit_vbus_mv = 5000;   // detach drops VBUS, attach restores it (and a 5 V contract)
