@@ -945,7 +945,9 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             const bool hold = !g_rd_start && pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only);
             const pd::SinkState st = g_sink.status().state;
             const bool sink_idle = st == pd::SinkState::Idle || (hold && st == pd::SinkState::Failed);
-            if (pd::acked_caps_need_request(g_caps_acked, downstream_now(), g_active_cc, g_legacy_only, sink_idle, g_prep.active(),
+            // After an alone-Identify handed the line back, a late caps message must not re-hold a contract (and the Rd).
+            if (!g_ident_alone_hold &&
+                pd::acked_caps_need_request(g_caps_acked, downstream_now(), g_active_cc, g_legacy_only, sink_idle, g_prep.active(),
                                             requested_now)) {
                 const pd::Err e = g_sink.trigger({1, 0, hold ? pd::kSelfHoldMa : std::uint16_t(0)}, now);
                 pdtrace::mark(pdtrace::kMarkAutoReq, std::uint16_t((hold ? 0x300 : 0x200) | unsigned(e)));
@@ -1267,6 +1269,10 @@ bool cc_open(std::uint32_t ms) {
 static void alone_handback() {
     g_ident_alone = false;
     g_ident_alone_hold = true;
+    // The 5 V contract the acked caps made (a held trigger contract) would keep the Rd gate on for good, and a plain
+    // release would still linger kSinkIdleLingerMs: forget it here, no TX - the Rd drop below is the detach the phone sees
+    // (Pixel alone, hardware 2026-11-10: "line released" but VBUS stayed 5.05 V with Rd on).
+    g_sink.detach();
     K2LOG("[ID] alone: line released\n");
 }
 

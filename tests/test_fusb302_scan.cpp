@@ -3409,6 +3409,10 @@ void test_alone_identify_end_releases_the_line_and_the_result_survives() {
     settle_ms(100);
     CHECK_EQ(usb_has("[ID] result:"), true);             // RED: no final result log today
     CHECK_EQ(usb_has("line released"), true);            // RED: the release is not logged / not done on this path
+    // Hardware 2026-11-10 (Pixel alone): the held contract kept the Rd gate on and VBUS at 5 V after the release.
+    CHECK_EQ(fusb302::sink_status().held, false);
+    settle_ms(400);                                      // past the 300 ms Rd/CRC linger, not the 30 s contract linger
+    CHECK_EQ(usb_has("Rd off (sink operation)"), true);
     fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);   // the phone is still on the port, toggling
     settle_ms(1000);
     CHECK_EQ(fusb302::identify_current(), true);         // RED today: the release's new session hides the result
@@ -3435,6 +3439,38 @@ void test_alone_identify_on_a_stale_cc_requests_pdo1_and_waits() {
     settle_ms(4100);
     CHECK_EQ(usb_has("no Ready contract"), true);         // RED: bounded timeout
     CHECK_EQ(usb_has("line released"), true);
+    end_alone_case();
+}
+
+// Hardware 2026-11-10 (Pixel alone, stale CC): the acked caps' PDO 1 contract (held on hardware; in this fake the 30 s
+// contract linger) kept the Rd gate on and VBUS at 5.05 V after "line released". The handback forgets that contract (no TX) and the Rd drops in the 300 ms
+// linger, not the 30 s contract linger.
+static void drive_to_ready();
+void test_alone_identify_on_a_stale_cc_drops_rd_after_the_release() {
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x20;
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    fusb302::sink_vbus(0);
+    for (int i = 0; i < 15; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);            // the stale CC: still attached, VBUS dark
+    fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);
+    g_log.clear(); g_usb.clear(); g_txfifo.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);
+    CHECK_EQ(usb_has("CC1 held"), true);
+    for (int i = 0; i < 20; i++) { g_ms += 1; fusb302::service(); }   // the Rd gate is on before the phone's caps (hw: ~500 ms)
+    drive_to_ready();
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    settle_ms(300);
+    CHECK_EQ(usb_has("Ready contract after"), true);
+    fusb302::identify_abort();
+    settle_ms(50);
+    CHECK_EQ(usb_has("line released"), true);
+    CHECK_EQ(fusb302::sink_status().held, false);        // RED: the hold outlived the release
+    g_usb.clear();
+    settle_ms(400);
+    CHECK_EQ(usb_has("Rd off (sink operation)"), true);  // RED: the Rd gate stayed on for good
+    CHECK_EQ(fusb302::identify_current(), true);         // the result survives the release
     end_alone_case();
 }
 
@@ -4079,6 +4115,7 @@ int main() {
     test_alone_identify_timeout_refuses_and_releases_the_line();
     test_alone_identify_end_releases_the_line_and_the_result_survives();
     test_alone_identify_on_a_stale_cc_requests_pdo1_and_waits();
+    test_alone_identify_on_a_stale_cc_drops_rd_after_the_release();
     test_alone_identify_wait_refuses_when_inline_latches();
     test_alone_identify_wait_refuses_on_detach();
     test_alone_identify_wait_starts_after_the_verdict_changes();
