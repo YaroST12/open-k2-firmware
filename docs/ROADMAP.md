@@ -349,6 +349,21 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   the Link attached with 900 mV VBUS spikes; a plain 0 V VBUS detaches the Link at 300 ms and releases the latch after
   `kInlineHoldMs`, so the exact bench cause of the 3-minute latch (spiking VBUS reads, or the latch surviving from
   the earlier charger run) is not proven; the rule covers both. Hardware check pending.
+  Retest 2026-11-10 (48adfa1, `runs/2026-11-10-merge2-hw/wake2`, `k2/idle-wake-2`): the hold now presented Rd but the
+  splitter still never woke. Root cause, three links: (1) the passive scan kept running during the hold and attached the
+  board's CC2 bias net (~1.7 V open, see CHARGER_QUIRKS "PLUS key is coupled to CC2"), which reads comparator-true and
+  inside the Rd window; the attach cleared the hold while a stale PDWN1 stayed in SWITCHES0; (2) `detach_reset` then wrote
+  SWITCHES0 = 0 and the ADC sample fed one UI tick later (cc1 = 6 mV under the old Rd, cc2 = a 3284 mV measurement spike)
+  was noted as the "open" level, so a level taken under our own Rd became the wake's evidence; (3) with `note_open` blind
+  under Rd, an unanswered hold re-armed the same line forever. Fixes: the sweep is restricted to the held line while the hold
+  owns the line and the scan is skipped in the re-read window (`detect_cc_orientation`, `poll()`); `RdSeek::feed_open` takes
+  a level only with no Rd presented, 150 ms after the last SWITCHES0 pull-down change, and confirmed by a second sample from
+  a distinct ADC refresh >= 20 ms later within 250 mV (`rd_changed` hooked in `wr()` and init); `IdleWake` counts
+  unanswered dwells per line and after two on one line releases Rd for 600 ms ("Idle wake: no Rp on CCn after N dwells")
+  so the open levels are re-read and the signature picks the line. The 1.69 V on CC2 is the board's own bias net, not our
+  measure; by level alone it equals a 3 A Rp over a sink's Rd (330 uA x 5.1 kOhm), so it is explained, not filtered. A boot
+  scan before any level is known can still attach it (dark attach, released after 3 s). Host-tested
+  (`tests/test_rdseek.cpp`, `tests/test_fusb302_scan.cpp` wake2 cases); hardware check pending.
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
   START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
