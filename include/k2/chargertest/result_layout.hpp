@@ -122,15 +122,18 @@ size_t summarize(std::span<const charger_test::Step>, std::span<SummaryLine> out
 // What a PPS / AVS range delivered, from its steps. The chip keeps the advertised range; this says how far the source got:
 // lo = the lowest level that passed, hi = the highest reached (a passed target, or the measured ceiling of a Capped step),
 // adv = the advertised maximum. `pos` = the PDO slot, or -1 for the row's most telling range: the first one that is not
-// all-pass, else the last. An algorithm with no range steps reads adv_mv 0 and Tone::Skip.
+// all-pass, else the last. An algorithm with no range steps reads adv_mv 0 and Tone::Skip. needs_load: some level was
+// skipped for Reason::NeedsLoad and none failed plainly (pattern pps-off-at-no-load).
 struct Reach {
     uint16_t lo_mv = 0, hi_mv = 0, adv_mv = 0;
     bool capped = false;
+    bool needs_load = false;
     Tone tone = Tone::Skip;
 };
 Reach reach(std::span<const charger_test::Step>, charger_test::Algorithm, int pos = -1);
 // The footer words after "<label>: " (at most 18 characters, so a 9-character label still fits 27): "caps 19.4V of 21V",
-// "reached 5-21V", "max 13V of 21V", "none reached", "not run". Levels at 0.1 V.
+// "reached 5-21V", "max 13V of 21V", "none reached", "not run", "needs load" (or "needs load >13V" after some levels passed:
+// the highest that did). Levels at 0.1 V.
 step_label::Text reach_footer(const Reach&);
 // The Detail page's "Reached" value (at most 16): "5-19.4V of 21V", "5-21V"; empty when nothing passed.
 step_label::Text reach_span(const Reach&);

@@ -208,10 +208,12 @@ void legacy_row(Builder& b, std::span<const ct::Step> s, A a) {
 Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
     Reach r;
     Tally t;
+    bool needs_load = false;
     for (const auto& y : s) {
         if (y.algorithm != a || y.pos != pos || y.hunt || !y.pdo || !y.mv) continue;
         count(t, y);
         if (!r.adv_mv) r.adv_mv = uint16_t(pd::decode_pdo(y.pdo).max_mv);
+        if (y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::NeedsLoad) needs_load = true;
         if (y.verdict == ct::Verdict::Pass) {
             if (!r.lo_mv || y.mv < r.lo_mv) r.lo_mv = y.mv;
             r.hi_mv = std::max(r.hi_mv, y.mv);
@@ -221,6 +223,7 @@ Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
         }
     }
     r.tone = roll_up(t);
+    r.needs_load = needs_load && !t.fail;   // a plain failure in the range is the headline, never hidden behind "needs load"
     return r;
 }
 // Levels at 0.1 V: 19419 -> "19.4", 21000 -> "21".
@@ -265,6 +268,10 @@ step_label::Text reach_footer(const Reach& r) {
         put_word(t, "caps "); put_level(t, r.hi_mv); put_word(t, "V of "); put_level(t, r.adv_mv); put_word(t, "V");
     } else if (r.tone == Tone::Pending) {
         put_word(t, "not finished");
+    } else if (r.needs_load && r.adv_mv && (r.tone == Tone::Skip || r.tone == Tone::Partial)) {
+        // pattern pps-off-at-no-load: the levels were skipped, not failed and not never-run; say why
+        put_word(t, "needs load");
+        if (r.lo_mv) { put_word(t, " >"); put_level(t, r.hi_mv); put_word(t, "V"); }   // the highest level that passed
     } else if (r.tone == Tone::Skip || !r.adv_mv) {
         put_word(t, "not run");
     } else if (!r.lo_mv) {

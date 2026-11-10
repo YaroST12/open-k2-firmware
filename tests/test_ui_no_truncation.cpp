@@ -486,10 +486,11 @@ void test_reach_words() {
             for (unsigned adv = 6000; adv <= 48000; adv += 1000)
                 for (unsigned hi = lo; hi <= adv; hi += 100)
                     for (const auto tone : kTones)
-                        for (const bool capped : {false, true}) {
+                        for (const bool capped : {false, true})
+                        for (const bool needs_load : {false, true}) {
                             result_layout::Reach r;
                             r.lo_mv = lo; r.hi_mv = static_cast<uint16_t>(hi); r.adv_mv = static_cast<uint16_t>(adv);
-                            r.capped = capped; r.tone = tone;
+                            r.capped = capped; r.tone = tone; r.needs_load = needs_load;
                             const auto foot = result_layout::reach_footer(r), span = result_layout::reach_span(r);
                             ++shapes;
                             if (label + 2 + foot.len > static_cast<size_t>(kFooterCells) || span.len > 16) {
