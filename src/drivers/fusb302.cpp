@@ -1260,9 +1260,32 @@ bool cc_open(std::uint32_t ms) {
     return true;
 }
 
+// Hand the line back after an alone-Identify (success, failure, timeout): the Rd drop follows in the same
+// pass (g_ident_owns_rd), so the phone sees the detach and stops sourcing VBUS into the K2. The result stays
+// current (identify_current) after the release until the port is really gone - see set_wait_kind.
+static void alone_handback() {
+    g_ident_alone = false;
+    g_ident_alone_hold = true;
+    K2LOG("[ID] alone: line released\n");
+}
+
+// The armed alone-Identify wait's premise broke (the inline latch closed, the line detached, the verdict is no
+// longer DualRolePort): refuse exactly like the timeout and hand the line back. Reuses the existing refusal
+// line - no new log format.
+static void ident_wait_refuse() {
+    if (!g_ident_wait) return;
+    g_ident_wait = false;
+    K2LOG("[ID] alone: no Ready contract within %u ms, Identify not sent (sink state %d)\n",
+          unsigned(systick::millis() - g_ident_wait_at), int(g_sink.status().state));
+    if (g_ident_alone) alone_handback();
+}
+
 void set_inline(bool on) {
     if (on == g_inline) return;
     g_inline = on;
+    // An armed alone-Identify wait is over: with a real sink behind the K2 the alone premise is gone - refuse
+    // and hand the line back now, not at the timeout.
+    if (on) ident_wait_refuse();
     // Inline the charger must see the sink's Rd alone: ours comes off (measure only)
     // and goes back when inline ends.
     apply_rd();   // inline: our Rd comes off (the sink's Rd alone), back when inline ends
@@ -1942,6 +1965,7 @@ static void detach_reset(std::uint8_t status0) {
     g_detach.reset();
     g_sink.detach();
     g_prep.abort();
+    ident_wait_refuse();   // an armed alone-Identify wait dies with the attach: refuse, hand the line back
     g_ident.abort(pd::IdWhy::Detached);
     g_probe.abort();
     g_reread.abort();
@@ -2203,15 +2227,6 @@ void poll() {
     service();
 }
 
-// Hand the line back after an alone-Identify (success, failure, timeout): the Rd drop follows in the same
-// pass (g_ident_owns_rd), so the phone sees the detach and stops sourcing VBUS into the K2. The result stays
-// current (identify_current) after the release until the port is really gone - see set_wait_kind.
-static void alone_handback() {
-    g_ident_alone = false;
-    g_ident_alone_hold = true;
-    K2LOG("[ID] alone: line released\n");
-}
-
 // Receive and answer: hard reset, FIFO drain, transmit engines. Cheap when idle (two register
 // reads), so the main loop runs it every millisecond to meet tSenderResponse (~30 ms).
 void service() {
@@ -2286,7 +2301,10 @@ void service() {
     // Identity 1 ms after Rd went RETRYFAIL). Bounded timeout, then a clear refusal and the line back.
     if (g_ident_wait) {
         const std::uint32_t now2 = systick::millis();
-        const bool ready = g_sink.status().state == pd::SinkState::Ready && g_session.fresh() && g_active_cc != 0;
+        // The premise is re-checked while waiting: not inline, the verdict still a dual-role port, and a Ready
+        // contract of this attach on a live line.
+        const bool ready = !inline_now() && g_wait_kind == raguard::WaitKind::DualRolePort
+                           && g_sink.status().state == pd::SinkState::Ready && g_session.fresh() && g_active_cc != 0;
         if (ready && g_ident_ready_at == 0) g_ident_ready_at = now2;   // a plain stamp: `now | 1` wraps the settle when now is even
         if (ready && now2 - g_ident_ready_at >= kIdentSettleMs) {
             g_ident_wait = false;
@@ -2297,10 +2315,7 @@ void service() {
             g_ident_was_running = true;
             K2LOG("[ID] alone: Ready contract after %u ms, Identify started\n", unsigned(g_ident_ready_at - g_ident_wait_at));
         } else if (now2 - g_ident_wait_at >= kIdentWaitTimeoutMs) {
-            g_ident_wait = false;
-            K2LOG("[ID] alone: no Ready contract within %u ms, Identify not sent (sink state %d)\n",
-                  unsigned(kIdentWaitTimeoutMs), int(g_sink.status().state));
-            if (g_ident_alone) alone_handback();
+            ident_wait_refuse();
         }
     }
     if (g_ident_was_running && !g_ident.running()) {
