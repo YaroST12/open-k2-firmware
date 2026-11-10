@@ -135,6 +135,9 @@ static void test_protocol_row() {
     t = fmt({.kind = ProtoKind::Avs, .lo_mv = 15000, .hi_mv = 28000, .mw = 140000});
     CHECK_STR(t.tag.c_str(), "AVS");
     CHECK_STR(t.value.c_str(), "15-28V 140W");
+    t = fmt({.kind = ProtoKind::Avs, .lo_mv = 12600, .hi_mv = 12600});   // an own contract's level: "AVS 12.6V"
+    CHECK_STR(t.tag.c_str(), "AVS");
+    CHECK_STR(t.value.c_str(), "12.6V");
     t = fmt({.kind = ProtoKind::Qc2, .mv = 9000});
     CHECK_STR(t.tag.c_str(), "QC2");
     CHECK_STR(t.value.c_str(), "9V");

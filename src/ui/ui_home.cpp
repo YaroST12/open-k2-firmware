@@ -116,6 +116,7 @@ void HomePage::sample_values(Frame &f, uint32_t now_ms) {
         ps.ctr = fusb302::contract();
         ps.pd_link = pd_link;
         ps.caps = pd_link ? &pd::active_caps() : nullptr;
+        ps.sink = &fusb302::sink_status();   // the K2's own sink: it never hears its own Requests
         ps.fc = ctx_.fc;
         ps.vbus_mv = pm.vbus_mv;
         ps.typec_ma = fusb302::typec_ma();

@@ -75,6 +75,26 @@ ProtoInfo fixed_info(ProtoKind k, uint32_t mv, uint32_t ma, uint32_t max_mv) {
 }  // namespace
 
 ProtoInfo derive_proto(const ProtoSource &s) {
+    // The K2's OWN sink holds the contract (SinkStatus ready/held, pos and PDO known via the caps):
+    // the footer uses that contract - the K2 never hears its own Requests on CC, so the sniffed
+    // `ctr` belongs to a far sink and is used only when ours holds none (or its PDO is unknown).
+    // Own AVS -> "AVS 12.6V", PPS -> "PPS 9V", fixed -> "PD 9V 3A" (ROADMAP "PD 0V5.82A" row).
+    if (s.sink && (s.sink->state == pd::SinkState::Ready || s.sink->held) && s.sink->pos >= 1 &&
+        s.caps && s.caps->valid && s.sink->pos <= s.caps->num_pdos) {
+        ProtoSource own = s;
+        own.ctr = {};
+        own.ctr.valid = true; own.ctr.ready = true;
+        own.ctr.pos = s.sink->pos;
+        own.ctr.mv = s.sink->mv;
+        own.ctr.op_ma = s.sink->ma; own.ctr.max_ma = s.sink->ma;
+        own.req_period_ms = 0;   // own Requests are never sniffed: no keep-alive guessing
+        ProtoInfo p = from_pd(own);
+        if (p.kind == ProtoKind::Pps || p.kind == ProtoKind::Avs) {
+            // the contract's own level, not the APDO's advertised range: "PPS 9V" / "AVS 12.6V"
+            p.lo_mv = p.mv; p.hi_mv = p.mv; p.ma = 0; p.mw = 0;
+        }
+        return p;
+    }
     if (s.ctr.valid && (s.pd_link || s.caps)) return from_pd(s);
     const uint32_t v = nominal_mv(s.vbus_mv);
     switch (s.fc) {

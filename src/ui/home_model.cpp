@@ -122,9 +122,12 @@ void format_proto(const ProtoInfo &p, ProtoText &out) {
     case ProtoKind::Pps: out.tag.put("PPS"); range(out.value, p); break;
     case ProtoKind::Avs:
         out.tag.put("AVS");
-        level(out.value, p.lo_mv, 0);
-        out.value.put_char('-');
-        level(out.value, p.hi_mv, 'V');
+        if (p.lo_mv == p.hi_mv) level(out.value, p.hi_mv, 'V');   // one level (an own contract): "AVS 12.6V"
+        else {
+            level(out.value, p.lo_mv, 0);
+            out.value.put_char('-');
+            level(out.value, p.hi_mv, 'V');
+        }
         if (p.mw) {
             out.value.put_char(' ');
             out.value.put_u32(p.mw / 1000).put_char('W');
