@@ -415,8 +415,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   so the charger's CC and the phone's CC can end up on different pins and never meet. Evidence: Anker alone = steady
   3.30 V Rp on CC2; Anker + Pixel = CC2 steady 500 mV (the Anker's Rp loaded only by the Pixel cable's e-marker Ra,
   not a sink, so the Anker never enables VBUS) while CC1 cycled 0 / 1.2 / 1.8 / 3.3 V (the Pixel toggling alone).
-  Flipping the Pixel's cable at the K2 fixed it at once; it had worked three times before by orientation luck. Not a
-  K2 bug (any straight CC pass-through has it), but the K2 is the one thing that can see both pins.
+  Flipping the Pixel's cable at the K2 fixed it at once; it had worked three times before by orientation luck.
+  NOT REPRODUCED (2026-11-10 afternoon, 72c2e28): IQ4 direct on the K2 plug + Pixel on its cable in the K2 receptacle,
+  and IQ4 -> cable -> K2 -> Pixel direct: both cable orientations charge at ~9.4 V (the Pixel attaches on CC1 or CC2;
+  the other line reads its cable's Ra, 0.5-0.6 V), the detector stays silent (correct). So the "CC lands on the other
+  pin" explanation is unproven: the morning failure may need another cable, the IQ4's other port or another port
+  state. Re-test with the morning's exact cable and port before trusting the cause; the detector is harmless meanwhile.
   - Detect, passively (no Rd, no Rp, no TX), with VBUS dark (< vSafe0V) for >= 1 s, from the per-tick ADC levels the
     waiting classifier already samples (raguard::RpTrace, pd::Link):
     1. Rp-vs-Ra on one line (Rp loaded only by a cable's Ra: steady 0.2-0.8 V, below the sink band) AND a dual-role
