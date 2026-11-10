@@ -423,13 +423,16 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   it (next step). The step-walk rows read "unknown (160)": the walk's Pending detail (kDetailStepWalk) printed as a
   sink result by k2_remote when the row never ran - print it as "not run".
 - **The PPS step walk fails a good source: its base level is read before the output settles** (2026-11-10, aebb430,
-  UGREEN Nexode Air 65 W, `runs/2026-11-10-merge2-hw/ugreen-pd3.txt`, `ugreen-walk.tsv`): the charger test's walk on
+  UGREEN Nexode Air 65 W, `runs/2026-11-10-merge2-hw/ugreen-pd3.txt`, `ugreen-walk.tsv`, fixed in 9cbd472, hardware
+  check pending): the charger test's walk on
   PPS 5-21 V failed "steps ignored" (22 pass / 1 fail). A manual walk with 2 s per step shows the source follows
   every +20 mV step on both APDOs (+17..+21 mV), except the first step after the jump to the 13.0 V base: base read
   13007 mV (still settling down), first step 13009 mV (+2). The walk takes the base sample as soon as the base level
   is granted; a source that overshoots and settles makes the first move read ~0 or negative. Fix: the walk's base (and
   each step) waits until VBUS is steady (e.g. 3 samples within 3 mV, bounded by a timeout) before it records the level;
-  the sum rule stays. Host test with this shape (base 13007 settling to 12990, then +20 mV steps) must pass.
+  the sum rule stays. Host test with this shape (base 13007 settling to 12990, then +20 mV steps) must pass. Done:
+  walk_step records a granted level only once VBUS is steady (WalkSteady: 3 samples within 3 mV inside a 300 ms
+  window, bounded by a 2 s timeout per level), sum rule unchanged; host test with the row's shape passes.
 - ~~**Wake sleeping port ON breaks the charger test's unit re-attach**~~ completed: 1b0c62f (run-owner flag in the wake gate, Wake OFF releases the wake's Rd); UGREEN with Wake ON 23 pass / 0 fail and Wake OFF dropped VBUS to 0 on hardware 72c2e28. Open: the boot scan can still latch a dark CC2 first (released after 3 s).
 - **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, fixed in 7d1ae17, hardware check pending, connection matrix H22, be71f10, `runs/2026-11-10-merge2-hw/`
   dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at
