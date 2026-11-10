@@ -494,6 +494,9 @@
   "497": "[APPLE] dir n=%d\n",
   "498": "[APPLE] serial len=%d\n",
   "499": "[LINK] pd verdict=%s caps=%u\n",
-  "500": "[CONN] body nopd rows=%d\n"
+  "500": "[CONN] body nopd rows=%d\n",
+  "501": "[WAKE] + pressed: CC1 %d mV CC2 %d mV VBUS %d mV\n",
+  "502": "[WAKE] + released after %d ms: CC1 %d mV CC2 %d mV VBUS %d mV\n",
+  "503": "[WAKE] t=%d ms key=%d CC1 %d mV CC2 %d mV VBUS %d mV\n"
  }
 }

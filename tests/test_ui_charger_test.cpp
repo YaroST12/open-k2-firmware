@@ -3709,7 +3709,122 @@ static void test_the_run_owns_the_idle_wake_line_for_its_whole_run() {
     }
 }
 
+// ---- Waiting: the + key wakes a new charger (hardware: it is wired to the CC pins), the firmware only watches ----
+// START with a charger that is not up: Rd presented, the Waiting stage, ticks to `t_end`.
+static void enter_waiting(Ui& ui, uint32_t t_end) {
+    review(ui);
+    start_press(ui, 1300); confirm_press_nowait(ui, 1350);
+    for (uint32_t t = 1370; t <= t_end; t += 20) { fusb302::service(); ui.tick(t); }
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+}
+static size_t count_of(const std::string& hay, const char* needle) {
+    size_t n = 0;
+    for (size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + 1)) ++n;
+    return n;
+}
+static void test_waiting_plus_minus_do_nothing() {
+    fixture(); g_stub.pm.vbus_mv = 0; set_cc(0, 0);
+    Ui ui; open(ui);
+    enter_waiting(ui, 1500);
+    const uint8_t cursor = ui.charger_test_cursor();
+    const uint8_t page = ui.page_index();
+    uint32_t t = 1520;
+    // Every press length of both keys: no paging (a long + was the global "next page", which cancelled the wait), no cursor.
+    for (Button b : {Button::Plus, Button::Minus})
+        for (ButtonEvent ev : {ButtonEvent::Short, ButtonEvent::Long, ButtonEvent::Hold}) {
+            ui.on_button(b, ev, t); t += 20;
+            fusb302::service(); ui.tick(t); t += 20;
+            CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+            CHECK_EQ(ui.page_index(), page);
+            CHECK_EQ(ui.charger_test_cursor(), cursor);
+            CHECK_EQ(g_stub.rd_run, true);   // the Rd is still presented: nothing cancelled the wait
+        }
+    // BACK still cancels: Review again, Rd released.
+    ui.on_button(Button::Back, ButtonEvent::Short, t);
+    CHECK_EQ(ui.charger_test_stage(), 4);
+    CHECK_EQ(g_stub.rd_run, false);
+    // A hold of + on another stage keeps its old meaning: long + pages on.
+    ui.on_button(Button::Plus, ButtonEvent::Long, t + 100);
+    CHECK_EQ(ui.page_index() != page, true);
+}
+static void test_waiting_footer_says_how_to_wake() {
+    struct Case { int cc1, cc2, vbus; const char* text; uint16_t color; };
+    static const Case cases[] = {
+        {0, 0, 0, "No charger. Hold + few secs", kCaution},
+        {1700, 0, 0, "No VBUS. Hold + few secs", kText},
+        {1700, 0, 800, "Standby. Wake the charger", kText},   // the existing higher-priority lines stay
+    };
+    for (const auto& c : cases) {
+        fixture(); g_stub.pm.vbus_mv = c.vbus; set_cc(c.cc1, c.cc2);
+        Ui ui; open(ui);
+        enter_waiting(ui, 1500);
+        ui.tick(1600);
+        CHECK_EQ(footer_says(c.text, c.color), true);
+    }
+}
+static void test_waiting_logs_the_plus_hold() {
+    fixture(); g_stub.pm.vbus_mv = 0; set_cc(0, 0);
+    Ui ui; open(ui);
+    enter_waiting(ui, 2000);
+    // Nothing pressed: not one line, however long the wait.
+    CHECK_EQ(g_stub.log_text.find("[WAKE]") == std::string::npos, true);
+    g_stub.log_text.clear(); g_stub.log_fmts.clear();
+    uint32_t t = 2020;
+    set_cc(0, 1650);   // the key pulls CC2 up while held: the log must carry that number
+    ui.set_pressed(Button::Plus, true, t);
+    ui.on_button(Button::Plus, ButtonEvent::Long, t + 500);
+    for (; t <= 4000; t += 20) { fusb302::service(); ui.tick(t); }
+    ui.set_pressed(Button::Plus, false, t);   // the detector fires nothing on the release of a long press
+    const uint32_t released_at = t;
+    set_cc(0, 0);
+    for (; t <= released_at + 3000; t += 20) { fusb302::service(); ui.tick(t); }
+    CHECK_EQ(ui.charger_test_stage(), kWaitStage);   // the 5 s wait is not over (attached: 10 s)
+    const std::string& log = g_stub.log_text;
+    CHECK_EQ(count_of(log, "[WAKE] + pressed: CC1 0 mV CC2 1650 mV VBUS 0 mV\n"), 1u);
+    CHECK_EQ(count_of(log, "[WAKE] + released after "), 1u);
+    // ~10 Hz: 2 s down + 2 s tail = ~40 sample lines, never the 20 ms tick rate (100 lines).
+    const size_t samples = count_of(log, "[WAKE] t=");
+    CHECK_EQ(samples >= 34 && samples <= 42, true);
+    CHECK_EQ(count_of(log, "key=1 CC1 0 mV CC2 1650 mV VBUS 0 mV") >= 17, true);   // while down
+    CHECK_EQ(count_of(log, "key=0 CC1 0 mV CC2 0 mV VBUS 0 mV") >= 17, true);      // the tail after the release
+    // The whole window ends 2 s after the release: the last second of the run is silent.
+    const size_t last = log.rfind("[WAKE]");
+    CHECK_EQ(last != std::string::npos, true);
+    CHECK_EQ(log.find("\n", last) != std::string::npos, true);
+    // The fixed phrases live in the format strings, the numbers are %d (the binlog cuts %s at 12 bytes).
+    CHECK_EQ(g_stub.log_fmts.find("[WAKE] + pressed: CC1 %d mV CC2 %d mV VBUS %d mV\n") != std::string::npos, true);
+    CHECK_EQ(g_stub.log_fmts.find("[WAKE] t=%d ms key=%d CC1 %d mV CC2 %d mV VBUS %d mV\n") != std::string::npos, true);
+    CHECK_EQ(g_stub.log_fmts.find("[WAKE] + released after %d ms: CC1 %d mV CC2 %d mV VBUS %d mV\n") != std::string::npos, true);
+}
+static void test_plus_hold_off_waiting_is_silent() {
+    fixture(); set_cc(0, 0);
+    Ui ui; open(ui); review(ui);
+    g_stub.log_text.clear();
+    ui.set_pressed(Button::Plus, true, 1400);
+    for (uint32_t t = 1420; t <= 3000; t += 20) ui.tick(t);
+    ui.set_pressed(Button::Plus, false, 3000);
+    CHECK_EQ(g_stub.log_text.find("[WAKE]") == std::string::npos, true);
+}
+static void test_waiting_cc_cells_show_raw_mv_while_plus_is_down() {
+    fixture(); g_stub.pm.vbus_mv = 0; set_cc(0, 1650);
+    Ui ui; open(ui);
+    enter_waiting(ui, 1500);
+    ui.tick(1600);
+    check_text_at(kSmall, 92, "Rp 3A", kText, kBg, 154);   // the Rp word while the key is up
+    ui.set_pressed(Button::Plus, true, 1700);
+    ui.tick(1800);
+    check_text_at(kSmall, 92, "1650mV", kText, kBg, 154);   // the raw level while it is down
+    ui.set_pressed(Button::Plus, false, 1900);
+    ui.tick(2000);
+    check_text_at(kSmall, 92, "Rp 3A", kText, kBg, 154);
+}
+
 int main() {
+    test_waiting_plus_minus_do_nothing();
+    test_waiting_footer_says_how_to_wake();
+    test_waiting_logs_the_plus_hold();
+    test_plus_hold_off_waiting_is_silent();
+    test_waiting_cc_cells_show_raw_mv_while_plus_is_down();
     test_the_run_owns_the_idle_wake_line_for_its_whole_run();
     test_results_and_cursor_outlive_the_page();
     test_resume_goes_on_while_another_page_shows();

@@ -527,7 +527,8 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
         else sync_panel();
         return m.global == Global::Reboot ? UiAction::Reboot : UiAction::None;
     }
-    const Dispatch d = dispatch(event, pg, static_cast<unsigned>(Page::Count), current());
+    const Dispatch d = dispatch(event, pg, static_cast<unsigned>(Page::Count), current(),
+                                page_ == Page::ChargerTest && charger_test_.holds_paging());
     switch (d.global) {
     case Global::PagePrev: set_page(static_cast<Page>(pg - 1), now_ms); break;
     case Global::PageNext: set_page(static_cast<Page>(pg + 1), now_ms); break;
@@ -899,6 +900,7 @@ void Ui::tick(uint32_t now_ms) {
         ctx_.cable.reset();
     }
     ctx_.analog = adc::read();
+    ctx_.plus_key = down_[static_cast<int>(Button::Plus)];   // the physical key (remote presses never set down_): the Waiting stage logs while it is held
     {   // remember the last live reading for the stale state (Home and the LAST pill)
         const bool live = ctx_.pm_online && ctx_.pm.vbus_mv >= 1000;
         ctx_.live.note(now_ms, live);

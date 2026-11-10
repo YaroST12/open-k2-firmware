@@ -9,9 +9,11 @@ using namespace k2;
 // A page stand-in: consumes exactly the events it is told to and records what it saw.
 struct FakePage {
     bool consume_short_ok = false, consume_short_plus = false;
+    bool swallow_plus_minus = false;   // the charger test's Waiting stage: + / - in any press length are the page's, not navigation
     int seen = 0;
     bool on_event(Event e) {
         seen++;
+        if (swallow_plus_minus && (e.button == Button::Plus || e.button == Button::Minus)) return true;
         if (e.press == Press::Short && e.button == Button::Ok) return consume_short_ok;
         if (e.press == Press::Short && e.button == Button::Plus) return consume_short_plus;
         return false;
@@ -100,7 +102,29 @@ static void test_modal() {
     CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::Reboot));
 }
 
+// A page that locks paging (the Waiting stage: the operator holds + to wake a charger): long + / - reach the page instead of
+// paging; the BACK hold still reboots, and an unlocked page pages as before.
+static void test_paging_lock() {
+    FakePage p;
+    p.swallow_plus_minus = true;
+    auto r = dispatch({Button::Plus, Press::Long}, 1, 4, p, true);
+    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Page));
+    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::None));
+    r = dispatch({Button::Minus, Press::Long}, 1, 4, p, true);
+    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Page));
+    r = dispatch({Button::Plus, Press::Hold}, 1, 4, p, true);
+    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Page));
+    CHECK_EQ(p.seen, 3);
+    r = dispatch({Button::Back, Press::Hold}, 1, 4, p, true);   // the reboot gesture is not paging
+    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::Reboot));
+    CHECK_EQ(p.seen, 3);
+    r = dispatch({Button::Plus, Press::Long}, 1, 4, p, false);   // unlocked: the global handler first, as ever
+    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::PageNext));
+    CHECK_EQ(p.seen, 3);
+}
+
 int main() {
+    test_paging_lock();
     test_modal();
     test_conversion();
     test_global_first();

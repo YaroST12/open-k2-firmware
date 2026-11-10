@@ -51,6 +51,7 @@
 #include "k2/pd/pd_identify.hpp"
 #include "k2/ui/ui_pdtrig.hpp"
 #include "k2/ui/ui_wizard.hpp"
+#include "k2/ui/wait_plus.hpp"
 #include "k2/ui/ui_cabler.hpp"
 #include "k2/chargertest/charger_test.hpp"
 
@@ -79,6 +80,7 @@ struct UiContext {
     bool em_quiet = false;          // the last listen window ended without a cable reply
     bool inline_mode = false;    // a live sink is attached: active operations are gated (refused, no confirm)
     std::optional<adc::Reading> analog;                          // averaged ADC sweep, once available
+    bool plus_key = false;       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
     fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
     bool trig_armed = false;     // trigger above 5 V: first OK given, waiting for the second
     uint32_t cap_mv = 5000;      // highest voltage a request may ask for (power monitor limits)
@@ -251,6 +253,8 @@ public:
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
     // The unit order of the next run (Cmd::ChargerUnits); empty = the default order. False for an unknown or repeated unit.
     bool set_units(std::span<const uint8_t> units);
+    // Waiting keeps long + / - for itself: the operator holds + there to wake a charger, so the global paging must not fire.
+    bool holds_paging() const { return stage_ == Stage::Waiting; }
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.
     // The Cable step's cursor follows it. Nothing is armed until a START.
     bool set_cable_choice(ctcable::Choice c);
@@ -389,6 +393,7 @@ private:
     pd::VbusWait wait_;              // Waiting: the VBUS / caps judgement
     uint32_t wait_t0_ = 0;               // when the press began the wait (the elapsed time on screen and in the log)
     uint32_t wait_slow_ = 0;             // the last attach scan (every pd::kStartWaitSlowMs)
+    waitplus::PlusWatch plus_watch_;     // paces the [WAKE] lines while + is held in Waiting (and 2 s after)
     uint32_t wait_pause_until_ = 0;      // the 1 s Rd-off between the two attempts ends here
     bool wait_retry_ = false, wait_paused_ = false;   // the second attempt is running / the Rd is off between the two
     raguard::PeakWindow guard_;          // CC peaks over the last ~0.8 s while Cable / Review is open (a PLUS press sags CC2)

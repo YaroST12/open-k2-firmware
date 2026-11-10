@@ -45,10 +45,14 @@ struct Dispatch { Route route; Global global; };
 
 // Global handler first; otherwise the page (anything with `bool on_event(Event)`) gets the event.
 // An event the page declines stays unhandled.
+// `paging_locked`: the page keeps long [+] / [-] for itself (the charger test's Waiting stage: the operator holds + to wake a
+// charger, and a long + must not page away and cancel the wait). Only the paging presses are held back; the BACK hold
+// (reboot) is never paging and stays global.
 template <class P>
-Dispatch dispatch(Event e, unsigned page, unsigned page_count, P &p) {
+Dispatch dispatch(Event e, unsigned page, unsigned page_count, P &p, bool paging_locked = false) {
     const Global g = global_action(e, page, page_count);
-    if (g != Global::None) return {Route::Global, g};
+    const bool paging = g == Global::PagePrev || g == Global::PageNext;
+    if (g != Global::None && !(paging && paging_locked)) return {Route::Global, g};
     if (p.on_event(e)) return {Route::Page, Global::None};
     return {Route::Unhandled, Global::None};
 }

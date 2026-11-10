@@ -356,6 +356,14 @@ START is two OK presses on Review, in this order (reordered 2026-11-06: the conf
 3. **The run starts by itself** when the wait ends (`launch`: the final preview on the fresh reading, then `begin_run`),
    with no further press. OK or Back in Waiting cancels it (Rd off, nothing started, back on Review). A wait that times
    out, or a final check that refuses, ends on Review with the reason on the footer and a passive K2.
+   **The + key in Waiting.** On this board the physical + key is wired to the CC pins: holding it for a few seconds wakes a
+   charger that sleeps with no sink on the line. Waiting therefore swallows + and - in every press length (no paging, so a
+   long + no longer cancels the wait; `dispatch()` takes a paging lock while the stage is Waiting; BACK, OK and the BACK hold
+   work as before), and with no VBUS the footer says how to wake it ("No charger. Hold + few secs" with nothing on either
+   CC, "No VBUS. Hold + few secs" with an Rp on a line). While the physical key is down, and for 2 s after, the session logs
+   `[WAKE] + pressed: CC1 .. CC2 .. VBUS ..`, then `[WAKE] t=<ms since press> key=<0|1> CC1 .. CC2 .. VBUS ..` every
+   ~100 ms, then `[WAKE] + released after <ms>` (mV, `%d` numbers only), so `k2_stream view --kind log` shows what the hold did
+   to the lines; the CC cells show the raw mV instead of the Rp word while it is held. Pure parts: `k2/ui/wait_plus.hpp`.
 
 The resume path never asks for a confirmation. There is no "Ask" chooser anywhere. Stage numbers 3 (Identity) and 11
 (Ask) are retired and never entered; they stay reserved so the remote `stage` values do not move (the Custom list is

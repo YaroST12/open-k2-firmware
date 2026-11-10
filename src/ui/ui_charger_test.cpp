@@ -770,6 +770,20 @@ void ChargerTestSession::poll(uint32_t now) {
         if (auto_resume_ && ct::resume_wanted(false, wait_over && gate_.ready(now) && power_source::decided())) resume_run(now);
         return;
     }
+    // The + key is wired to the CC pins and wakes a sleeping charger when held: while it is down in Waiting (and 2 s after) the
+    // lines it pulls go to the log, so the shell sees what the hold did (CC1 / CC2 / VBUS, ~10 Hz, fixed phrase + %d numbers).
+    {
+        using Act = waitplus::PlusWatch::Act;
+        const Act act = plus_watch_.step(now, stage_ == Stage::Waiting, ctx_.plus_key);
+        if (act != Act::None) {
+            const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
+            const int vbus = static_cast<int>(ctx_.vbus_fast_mv);
+            const int ms = static_cast<int>(plus_watch_.held_ms(now));
+            if (act == Act::Press) K2LOG("[WAKE] + pressed: CC1 %d mV CC2 %d mV VBUS %d mV\n", cc1, cc2, vbus);
+            else if (act == Act::Release) K2LOG("[WAKE] + released after %d ms: CC1 %d mV CC2 %d mV VBUS %d mV\n", ms, cc1, cc2, vbus);
+            else K2LOG("[WAKE] t=%d ms key=%d CC1 %d mV CC2 %d mV VBUS %d mV\n", ms, plus_watch_.down() ? 1 : 0, cc1, cc2, vbus);
+        }
+    }
     if (stage_ == Stage::Waiting) wait_step(now);
     // The confirm window ran out without the second START press: nothing was touched (no Rd, no identity), so only the window goes.
     if (confirming_ && static_cast<int32_t>(now - confirm_until_) >= 0) invalidate_confirmation();
@@ -1351,7 +1365,7 @@ const char *cc_word(int mv) {
     if (mv < 2200) return "Rp 3A";
     return "open";
 }
-bool cc_open(int mv) { return mv >= 0 && (mv < 200 || mv >= 2200); }
+using waitplus::cc_open;   // the same ladder cut as cc_word's "open" (and the footer's choice)
 // "12 pass" style parts of a counter line, appended only while the footer's 27 cells still hold them.
 template <typename Buf> void put_part(Buf &b, unsigned n, const char *word, bool &first) {
     if (!n) return;
@@ -1462,13 +1476,10 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
-        const int32_t vbus = ctx_.vbus_fast_mv;
-        if (wait_.state() == pd::VbusWait::State::Ready) { f.put("Charger up, starting"); return FooterTone::Ok; }
-        if (cc_open(cc1) && cc_open(cc2) && vbus < 500) { f.put("No charger on either CC"); return FooterTone::Caution; }
-        if (vbus >= 500 && vbus < 4500) { f.put("Standby. Wake the charger"); return FooterTone::Info; }
-        if (vbus >= 4500 && static_cast<int32_t>(ctx_.now - wait_t0_) >= 3000) { f.put("VBUS up, no PD caps yet"); return FooterTone::Info; }
-        f.put("Charger to the top port");
-        return FooterTone::Info;
+        const auto line = waitplus::footer(wait_.state() == pd::VbusWait::State::Ready, cc1, cc2, ctx_.vbus_fast_mv,
+                                           static_cast<uint32_t>(std::max<int32_t>(0, static_cast<int32_t>(ctx_.now - wait_t0_))));
+        f.put(line.text);
+        return line.tone == waitplus::Tone::Ok ? FooterTone::Ok : line.tone == waitplus::Tone::Caution ? FooterTone::Caution : FooterTone::Info;
     }
     case Stage::Running: {
         const auto &steps = runner_.steps();
@@ -1929,6 +1940,12 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     const int cc[2] = {cc1, cc2};
     for (int i = 0; i < 2; ++i) {
         const int mv = cc[i];
+        if (ctx_.plus_key && mv >= 0) {   // the + key is down: the raw level the hold pulls the line to (the word would hide a 1.2 V step)
+            StrBuf<12> raw;
+            raw.put_u32(static_cast<uint32_t>(mv)).put("mV");
+            put_line(c, kSmall, static_cast<int16_t>(i ? 154 : 42), 92, raw.view(), kText, 8, cell_sig_[i]);
+            continue;
+        }
         put_line(c, kSmall, static_cast<int16_t>(i ? 154 : 42), 92, cc_word(mv), mv < 0 || cc_open(mv) ? kFaint : kText, 8, cell_sig_[i]);
     }
     const bool dv = vbus >= pd::kStartVbusMv && ctx_.analog;
@@ -2359,6 +2376,10 @@ void ChargerTestPage::update(uint32_t now) {
 }
 
 bool ChargerTestPage::on_event(Event e) {
+    // Waiting: + and - do nothing in any press length. The + key is wired to the CC pins (holding it wakes a sleeping charger),
+    // so a press of it must never be navigation; the paging lock in dispatch() lets the long ones reach this far.
+    // BACK and OK (cancel) are untouched.
+    if (stage_ == Stage::Waiting && (e.button == Button::Plus || e.button == Button::Minus)) return true;
     const bool long_ok = e.press == Press::Long && e.button == Button::Ok;
     // Long OK on the Results / Detail is Share: the run's report card as QR (a card exists once the run is saved).
     if (long_ok && (stage_ == Stage::Results || stage_ == Stage::Detail) && !runner_.busy() && card_no_ != 0) {
