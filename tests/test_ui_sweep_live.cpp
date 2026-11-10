@@ -227,7 +227,7 @@ int main() {
     }
     // Both ranges, both orientations, rendered for the contact sheet (the truncation gate runs on every scene through test_report).
     for (const bool avs : {false, true})
-        for (const uint8_t rot : {uint8_t(0), uint8_t(1)}) {
+        for (const uint8_t rot : {uint8_t(0), uint8_t(1), uint8_t(2), uint8_t(3)}) {
             Ui ui; uint32_t t;
             start_sweep(ui, t, avs, rot, 36000);
             CHECK_EQ(run_to_point(ui, t, 40), true);

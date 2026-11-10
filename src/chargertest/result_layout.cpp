@@ -355,11 +355,13 @@ const char* display_name(A a) {
     }
 }
 
-// One token per volt bucket of the sweep row's range [lo, hi]: the bucket's base volt as the text, the tone of the
-// worst recorded |error| in it (<= 100 mV Pass, <= 300 mV Partial, else Fail; no point recorded yet: Pending, a skipped
-// row: Skip). The x axis is the setpoint (left to right), the colour is the error - a compact error-vs-setpoint strip.
+// The deep sweep's row: ONE range chip, in the style of the range row above it ("5-21V 3.2A": the swept range, the APDO's
+// current under it in the grid). The range is the sweep's own: the record's row view when the row ran (or runs), else the
+// APDO range capped at the monitor ceiling. The chip has no level (Token::mv 0), so the Running dot sits on it while the
+// sweep is in flight and the live band above shows where the sweep is; the per-point errors are the footer's and the log's.
+// Tone: Pending until the sweep closes (Running included: the dot needs it), Skip when skipped, Fail when the source was
+// lost, else by the worst recorded |error| (<= 100 mV Pass, <= 300 mV Partial, above Fail).
 void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos, unsigned cap_mv) {
-    // The row's planned range: the record's row view when the row ran (or runs), else the step's own APDO range.
     const ct::Step* step = nullptr;
     for (const auto& x : s) if (ct::is_sweep(x) && x.algorithm == a && x.pos == pos) { step = &x; break; }
     if (!step) return;
@@ -368,25 +370,24 @@ void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, 
     unsigned lo = pr.lo, hi = pr.hi;
     const ctsweep::RowView* rw = v.find(uint8_t(a), pos);
     if (rw) { lo = rw->lo_mv; hi = rw->hi_mv; }
-    if (hi < lo) return;
-    const bool skipped = step->verdict == ct::Verdict::Skip;
-    for (unsigned base = lo; base <= hi; base += 1000) {
-        int worst = -1;
+    if (hi < lo) { lo = p.min_mv; hi = p.max_mv; }   // nothing fits under the ceiling: the row still names the advertised range
+    Tone tn = Tone::Pending;
+    switch (step->verdict) {
+    case ct::Verdict::Skip: tn = Tone::Skip; break;
+    case ct::Verdict::Fail: tn = Tone::Fail; break;
+    case ct::Verdict::Pass: {
+        int worst = 0;
         if (rw)
-            for (unsigned i = 0; i < rw->n; ++i) {
-                const unsigned set = rw->lo_mv + i * ctsweep::kStepMv;
-                if (set < base || set >= base + 1000) continue;
-                const int e = std::abs(int(v.points[rw->first + i]));
-                if (e > worst) worst = e;
-            }
-        const Tone tn = skipped ? Tone::Skip : worst < 0 ? Tone::Pending : worst <= 100 ? Tone::Pass : worst <= 300 ? Tone::Partial : Tone::Fail;
-        Token* k = b.token(true, tn);
-        if (!k) return;
-        k->mv = uint16_t(base);
-        Out o{k->text, sizeof k->text};
-        o.num(base / 1000);
-        o.put("V");
+            for (unsigned i = 0; i < rw->n; ++i) worst = std::max(worst, std::abs(int(v.points[rw->first + i])));
+        tn = worst <= 100 ? Tone::Pass : worst <= 300 ? Tone::Partial : Tone::Fail;
+        break;
     }
+    default: break;
+    }
+    Token* k = b.token(true, tn);
+    if (!k) return;
+    put_text(*k, step_label::range(lo, hi, p.max_ma, p.max_mw).c_str());
+    if (tn == Tone::Skip) tag(b, *step);   // why nothing was swept ("cable", ">36V"), as the range row says it
 }
 
 void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {

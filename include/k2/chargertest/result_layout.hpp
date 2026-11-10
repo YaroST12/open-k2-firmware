@@ -53,7 +53,7 @@ struct Row {
     charger_test::Algorithm algorithm = charger_test::Algorithm::Count;   // Count: a collapsed row or a header
     bool header = false;            // section header row: no tokens, not openable
     bool probe = false;             // a Mi 6A probe row (algorithm Count): the 6 A hunt steps at `mv`
-    bool sweep = false;             // a deep-sweep row (one per APDO): the error-vs-setpoint strip, one token per volt bucket
+    bool sweep = false;             // a deep-sweep row (one per APDO): one range chip, the swept range ("5-21V 3.2A")
     uint8_t pos = 0;                // the PDO slot of a range or sweep row; 0: not one of those
     uint16_t mv = 0;                // the probed level of a probe row
     uint8_t first = 0, count = 0;   // tokens
@@ -109,8 +109,8 @@ const char* vendor_oem_name(uint16_t vid);
 // The rows come from the steps alone: they are the plan, in the order the runner executes them, so a row stands where the plan first
 // runs one of its steps. A row is a protocol's steps (a fixed PD row: one per algorithm; a PPS / AVS row: one per APDO, Row::pos),
 // or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the planner put them, or (a sweep row, Row::sweep) the
-// deep sweep of one APDO: a compact error-vs-setpoint strip, one token per volt bucket, coloured by the worst error in the
-// bucket (the points come from `sweep`, the runner's record). The Running grid, the Results page and the Steps page read the
+// deep sweep of one APDO: one range chip like the range row's, coloured by the sweep's result and the worst recorded error
+// (the points come from `sweep`, the runner's record). The Running grid, the Results page and the Steps page read the
 // same step list, so none keeps an order of its own.
 void build(Layout&, std::span<const charger_test::Step>, const OemNotes& = {}, const ctsweep::View& sweep = {});
 // Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a sweep row the sweep step of its
