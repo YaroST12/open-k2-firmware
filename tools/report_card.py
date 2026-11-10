@@ -99,6 +99,7 @@ def group_why(group, detail, reason):
 
 QUALCOMM_VID = 0x05C6
 QC5_MIN_WATTS = 100
+SAMSUNG_VID = 0x04E8   # the SFC labels are a brand claim: they need the brand's own VID (report_card.hpp kSamsungVid)
 
 
 MOTOROLA_VID, LENOVO_VID = 0x22B8, 0x17EF
@@ -106,9 +107,9 @@ MOTOROLA_VID, LENOVO_VID = 0x22B8, 0x17EF
 
 def qc_label(vid, pdp_w, ranges, cable_ma=0):
     """Passive OEM label, mirrors report_card::qc_label() (never a behaviour key). A Qualcomm VID with a PPS range is "QC4+";
-    100 W or more (or an EPR AVS range) makes it "QC5". Otherwise: "Moto TurboPower" (Motorola / Lenovo VID and a PPS APDO above
-    5 A), "Samsung SFC 3.0" (PPS to 20 V at 3 A) or "Samsung SFC 2.0" (PPS to 15 V at 3 A, or 3.3-11 V at 4.05 A behind a 5 A
-    cable); anything else has none."""
+    100 W or more (or an EPR AVS range) makes it "QC5". "Moto TurboPower" needs a Motorola / Lenovo VID and a PPS APDO above
+    5 A. The SFC labels are a brand claim, so they need the brand's own VID (SAMSUNG_VID): a probe that read vid 0 or another
+    vendor's VID gets no Samsung label, however SFC-shaped the capability is; anything else has none."""
     pps = [r for r in ranges if r["alg"] == "PPS (PD3.x)"]
     if not pps:
         return ""
@@ -117,6 +118,8 @@ def qc_label(vid, pdp_w, ranges, cable_ma=0):
     ma = lambda r: r.get("max_ma", 0)
     if vid in (MOTOROLA_VID, LENOVO_VID) and any(ma(r) > 5000 for r in pps):
         return "Moto TurboPower"
+    if vid != SAMSUNG_VID:
+        return ""   # no brand claim without the brand's VID
     if any(r["hi_mv"] >= 20000 and ma(r) >= 3000 for r in pps):
         return "Samsung SFC 3.0"
     if any(r["hi_mv"] >= 15000 and ma(r) >= 3000 for r in pps) or (

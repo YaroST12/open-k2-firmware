@@ -36,20 +36,22 @@ def test_qc_label_follows_the_firmware_rule():
 
 
 def test_moto_and_samsung_labels_follow_the_firmware_rule():
-    # Mirrors report_card::qc_label(): Moto TurboPower (Motorola / Lenovo VID + a PPS APDO above 5 A), Samsung SFC 3.0 (PPS to 20 V
-    # at 3 A) and SFC 2.0 (PPS to 15 V at 3 A, or 3.3-11 V at 4.05 A behind a 5 A cable); Qualcomm keeps its own label.
+    # Mirrors report_card::qc_label(): Moto TurboPower (Motorola / Lenovo VID + a PPS APDO above 5 A); the Samsung SFC 3.0 / 2.0
+    # labels are a brand claim and need the brand's own VID (0x04E8) - vid 0 or another vendor's VID gets none, however SFC-shaped
+    # the capability is; Qualcomm keeps its own label.
     def pps(lo, hi, ma):
         return [{"alg": "PPS (PD3.x)", "lo_mv": lo, "hi_mv": hi, "max_mv": hi, "fail_mv": 0, "max_ma": ma}]
     assert report_card.qc_label(0x22B8, 0, pps(5000, 20000, 6250)) == "Moto TurboPower"
     assert report_card.qc_label(0x17EF, 0, pps(5000, 20000, 6250)) == "Moto TurboPower"
     assert report_card.qc_label(0x22B8, 0, pps(5000, 20000, 2000)) == ""
-    assert report_card.qc_label(0x2717, 0, pps(5000, 20000, 6250)) == "Samsung SFC 3.0"   # not Moto: the capability reading
-    assert report_card.qc_label(0, 0, pps(3300, 21000, 3000)) == "Samsung SFC 3.0"
-    assert report_card.qc_label(0, 0, pps(3300, 21000, 2950)) == ""
-    assert report_card.qc_label(0, 0, pps(5000, 15000, 3000)) == "Samsung SFC 2.0"
-    assert report_card.qc_label(0, 0, pps(3300, 11000, 4050), cable_ma=5000) == "Samsung SFC 2.0"
-    assert report_card.qc_label(0, 0, pps(3300, 11000, 4050), cable_ma=3000) == ""
-    assert report_card.qc_label(0, 0, pps(5000, 11000, 4050), cable_ma=5000) == ""   # does not cover 3.3 V
+    assert report_card.qc_label(0x2717, 0, pps(5000, 20000, 6250)) == ""   # Xiaomi VID is not the brand's: no SFC label
+    assert report_card.qc_label(0x04E8, 0, pps(3300, 21000, 3000)) == "Samsung SFC 3.0"
+    assert report_card.qc_label(0, 0, pps(3300, 21000, 3000)) == ""        # vid 0: no brand claim
+    assert report_card.qc_label(0x04E8, 0, pps(3300, 21000, 2950)) == ""
+    assert report_card.qc_label(0x04E8, 0, pps(5000, 15000, 3000)) == "Samsung SFC 2.0"
+    assert report_card.qc_label(0x04E8, 0, pps(3300, 11000, 4050), cable_ma=5000) == "Samsung SFC 2.0"
+    assert report_card.qc_label(0x04E8, 0, pps(3300, 11000, 4050), cable_ma=3000) == ""
+    assert report_card.qc_label(0x04E8, 0, pps(5000, 11000, 4050), cable_ma=5000) == ""   # does not cover 3.3 V
     assert report_card.qc_label(0x05C6, 45, pps(3300, 21000, 3000)) == "QC4+"
     assert report_card.qc_label(0, 0, [{"alg": "PD", "lo_mv": 0, "hi_mv": 0}]) == ""
 
