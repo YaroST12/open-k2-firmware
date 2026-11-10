@@ -255,10 +255,21 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     plugged around the unit detach: the attach got the split list at a clean 5 V, 5 pass / 4 skip (EPR, SPR AVS, PPS,
     EPR AVS not offered), card correct. WrongVoltage itself stays covered by the streamB2 replay test only; the splitter
     did not repeat the 7.6 V attach.
-  - Still unverified on a1da8c3: a re-split **while a row runs** (restart rules 2-6) - in this run the OnePlus went in
-    during the unit detach, so the first list was already the split one. Next try: plug it after the first row passes.
-  - `slow-rp-wake` partly seen: START held a steady Rd and the sleeping splitter (CC2 2990 mV open) answered 1680 ms
-    later; a plain `pd-reread` attached in 179 ms (the port was awake). The Rd-seek path itself is not yet exercised.
+  - (B5, 05b1703, 2026-11-10, `runs/2026-11-10-splitter-wrongv/`) Same as B3: OnePlus charging on the other output,
+    START woke the port, PS_RDY at PDO 1 with VBUS 8.47 V, START went back to Review with no log line ("START did not
+    start a run"); the Baseus then cut the splitter (its load balancing), the second START refused "VBUS dropped to
+    1.05 V after the PD rescan". The inline latch also fired once at VBUS 0.97 V with no current and no far Request
+    while the port was dead (cleared later). So the live WrongVoltage path is unreachable from START: the preflight
+    owns this case. Fix (folds into the preflight-reason item): the preflight refusal says "VBUS 8.5 V on a 5 V
+    contract (shared bus)" in the log, on screen, and in `ct_start.py`, and the card records WrongVoltage with the
+    measured value when a START is refused for it.
+  - Verified on 05b1703 (2026-11-10, CUKTECH C3 -> splitter, `runs/2026-11-10-splitter-cuk/`): a re-split **while a
+    row runs** (OnePlus plugged after row 0): re-announce with 4 PDOs (PPS gone, 15 V 1 A), 7 PPS rows Withdrawn, a
+    Request 1.9 ms after the new caps, row 3 ran 15 V at 1000 mA and passed; no unrequested level. `slow-rp-wake`
+    Rd-seek: a plain `pd-reread` on the sleeping port (CC2 2995 mV) held Rd on CC2 alone and got caps after 1648 ms.
+    No shared-bus voltage on the CUKTECH (9.10/12.13/15.07 V with the phone charging), and PPS at no load passed
+    through the splitter there and on the Baseus direct (run 4/5): `shared-bus-split` and the PPS collapse need the
+    Baseus 140 W top port behind the splitter. The Baseus balances by cutting power to its ports 2-3 times.
 - **PPS collapses on the splitter at no load (`pps-off-at-no-load`, suspected)** (2026-11-10, open, needs one lab
   option; `runs/2026-11-10-splitter-pps/`, `runs/2026-11-10-op15-sniff/`). Anker 2-way splitter behind the Baseus 140 W,
   list 5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A, EPR 28 V 5 A.
