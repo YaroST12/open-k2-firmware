@@ -311,13 +311,17 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     too, so step 1 may narrow the rule.
   - Validate: host tests (red first) for the `--over-load` gate (refused after any far PD message, refused with no
     far sink) and the signature rule; the hardware step above.
-- **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589): idle
+- **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589, fixed in
+  f0d79fb, hardware check pending): idle
   K2 on the splitter with nothing attached, VBUS 78 mV, "No source"; `pd-reread` without a pin answered "busy" and
   `pd attach 5000` did nothing; `pd-reread --pin 2 --no-run` woke it at once. 5926abb's slow-wake dwell only acts
   inside the Rd seek after a passive pick, and the open standby reading is wiped by `RdSeek::reset()` on attach, so an
   idle K2 never holds a steady Rd long enough. Fix: the idle/no-source path treats a line with the standby signature
   (open ~3.0-3.3 V, `kStandbyOpenMv`) as a sleeping source and holds Rd on it for `kSlowWakeDwellMs`; keep the open
-  readings across `reset()`. Validate: host test on the decision; hardware: idle K2, plug into the sleeping splitter
+  readings across `reset()`. Done: `pd::IdleWake` holds the Rd on the one signature line at plain passive idle
+  (`idle_rd()` only when no other Rd owner exists), `RdSeek::reset()` keeps the open readings (`clear()` at boot),
+  and the 500 ms no-Rp detach is held off inside the dwell window (`IdleWake::holding_slow`, ended by `on_rp_seen`);
+  host-tested in `tests/test_rdseek.cpp`. Validate: host test on the decision; hardware: idle K2, plug into the sleeping splitter
   port, PD list on screen without any pin.
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
