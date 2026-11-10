@@ -3154,6 +3154,53 @@ void test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate
     CHECK_EQ(f.far_pd_message, false);         // a new attach forgot the old sink's messages
     CHECK_EQ(int(pd::over_load_allowed(f)), 1);
     clean_up_rd_tests();
+}
+
+// ---- The lab Rd pin (pd-reread --pin) and the far end's detach ----
+// The pin is a lab option and does what it says; the gap is that nothing showed it was still set, and it
+// outlived the far end. When the inline sink (the far end) detaches, the LAB pin clears with it, pin mark
+// included, so the next attach is passive. A boot / comeback pin is not a lab pin: it keeps its Rd (it is
+// what powers the K2) and must not fight the comeback marker.
+void test_lab_pin_clears_when_the_far_end_detaches() {
+    reset_world();
+    g_mark = 0;
+    fusb302::self_power_early(bootmode::Mode::Plain, false);   // HID-powered plain boot
+    fusb302::init();
+    CHECK_EQ(fusb302::debug_pin(1), true);                     // pd-reread --pin 1: the lab pin
+    CHECK_EQ(int(fusb302::pin_rd()), 1);
+    CHECK_EQ(int(g_mark), int(bootmode::pin_mark(0x01)));      // the pin mark, so a warm reset inherits it
+    g_reg[0x40] = 0x20;                                        // STATUS0.COMP: Rp on the measured line
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected"), true);
+    const int cc = int(fusb302::active_cc());
+    CHECK_EQ(cc == 1 || cc == 2, true);
+    auto sink_on_active = [&](int mv) { if (cc == 1) fusb302::sink_cc(mv, 100); else fusb302::sink_cc(100, mv); };
+    fusb302::set_inline(true);                                 // the far end (a real sink) is attached
+    for (int i = 0; i < 10; i++) { g_ms += 20; fusb302::sink_vbus(5000); sink_on_active(1500); fusb302::poll(); }
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::sink_vbus(5000); sink_on_active(3300); fusb302::poll(); }
+    CHECK_EQ(usb_has("the sink left"), true);                  // DetachReason::Sink: the far end detached
+    CHECK_EQ(int(fusb302::pin_rd()), 0);                       // the lab pin cleared with it
+    CHECK_EQ(int(g_mark), 0);                                  // and its mark, so no warm reset re-inherits it
+    CHECK_EQ(usb_has("lab pin cleared"), true);
+    fusb302::set_inline(false);
+    end_start_test();
+    power_cycle_forget_pin();
+}
+
+void test_a_boot_pin_survives_the_far_end_detaching() {
+    const unsigned pin = self_hold_boot(0);                    // PLUS boot: a boot pin on CC2, not a lab pin
+    CHECK_EQ(pin, 2u);
+    CHECK_EQ(int(fusb302::pin_rd()), 2);
+    const int cc = int(fusb302::active_cc());
+    auto sink_on_active = [&](int mv) { if (cc == 1) fusb302::sink_cc(mv, 100); else fusb302::sink_cc(100, mv); };
+    fusb302::set_inline(true);
+    for (int i = 0; i < 10; i++) { g_ms += 20; fusb302::sink_vbus(5000); sink_on_active(1500); fusb302::poll(); }
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::sink_vbus(5000); sink_on_active(3300); fusb302::poll(); }
+    CHECK_EQ(usb_has("the sink left"), true);
+    CHECK_EQ(int(fusb302::pin_rd()), 2);                       // a boot / comeback pin keeps its Rd
+    CHECK_EQ(int(g_mark), int(bootmode::pin_mark(0x02)));      // and its mark (the comeback marker is untouched)
+    fusb302::set_inline(false);
+    end_start_test();
     power_cycle_forget_pin();
 }
 
@@ -3270,5 +3317,7 @@ int main() {
     test_a_sink_band_level_without_rd_of_our_own_is_a_far_sink();
     test_pinned_boot_never_soft_resets_so_no_rd_pair_at_sw_res();   // last: ends with a detach / Rd off
     test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate();   // last: ends with a detach / reset
+    test_lab_pin_clears_when_the_far_end_detaches();            // last: each one ends with a detach / Rd off
+    test_a_boot_pin_survives_the_far_end_detaching();
     return test_report("test_fusb302_scan");
 }

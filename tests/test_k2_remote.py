@@ -872,6 +872,14 @@ class ActivePd(unittest.TestCase):
         self.assertEqual((r["hard_resets"], r["source_hard_resets"]), (1, 2))
         self.assertIn("source_hard_resets=2", kr.render("pd", r))
 
+    def test_pd_status_carries_the_rd_pin(self):
+        # 18 bytes: ..., source_hard_resets u32, then the appended pin byte (0/1/2 = Rd pinned on CC1/CC2)
+        r = kr.decode_pd_trigger(self.TRIG + bytes([2, 0, 0, 0]) + bytes([2]))
+        self.assertEqual((r["source_hard_resets"], r["pin"]), (2, 2))
+        self.assertIn("Rd pin CC2", kr.render("pd", r))
+        self.assertEqual(kr.decode_pd_trigger(self.TRIG)["pin"], 0)                # older firmware: no pin byte
+        self.assertNotIn("Rd pin", kr.render("pd", kr.decode_pd_trigger(self.TRIG)))
+
     def test_request_without_confirm_sends_flag_zero(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="request", pos=2, mv=0, ma=0, confirm=False))
