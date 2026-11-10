@@ -97,6 +97,83 @@ static void test_pps_one_coloured_chip_per_range() {
     CHECK_STR(chips(l, r2).c_str(), "5-21V 3.2A");
     CHECK_EQ(int(l.tokens[l.rows[r2].first].tone), int(rl::Tone::Pass));    // every step of the second PDO passed
 }
+// ---- A deep-sweep row is one range chip, like the range row above it (no per-volt badges, no marker of its own) --------------
+static ct::Step sweep_step(A a, uint8_t pos, uint32_t pdo, V v) {
+    ct::Step s = step(a, 0, v, pos, pdo);
+    s.detail = ct::kDetailSweep;
+    s.avs = a == A::SprAvs || a == A::EprAvs;
+    return s;
+}
+static const rl::Row* sweep_row_of(const rl::Layout& l, uint8_t pos) {
+    for (size_t i = 0; i < l.row_count; ++i) if (l.rows[i].sweep && l.rows[i].pos == pos) return &l.rows[i];
+    return nullptr;
+}
+static std::string sweep_chips(const rl::Layout& l, uint8_t pos) {
+    const rl::Row* r = sweep_row_of(l, pos);
+    return r ? chips(l, size_t(r - l.rows.data())) : "(no row)";
+}
+// The PPS sweep row: ONE chip with the swept range and the APDO's current ("5-21V 3.2A"), the same words as the range row of
+// that slot; the old strip showed one badge per volt (5V 6V 7V ...) whose marker never moved.
+static void test_a_pps_sweep_row_is_one_range_chip() {
+    auto s = baseus();
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pending));
+    rl::Layout l; rl::build(l, s);
+    const rl::Row* r = sweep_row_of(l, 7);
+    CHECK_EQ(r != nullptr, true);
+    if (!r) return;
+    CHECK_EQ(r->count, 1);                                                          // not one badge per volt
+    CHECK_STR(sweep_chips(l, 7).c_str(), "5-21V 3.2A");
+    CHECK_STR(sweep_chips(l, 7).c_str(), chips(l, row_of(l, "PPS") + 1).c_str());   // the range row of slot 7, word for word
+    const rl::Token& k = l.tokens[r->first];
+    CHECK_EQ(k.chip, true);
+    CHECK_EQ(k.mv, 0);                                                              // a range has no level: no per-level dot
+    CHECK_EQ(int(k.tone), int(rl::Tone::Pending));                                  // the step has not run: the Running dot sits here
+}
+// The monitor ceiling caps the swept range: "5-12V" on a 12 V monitor, still with the APDO's current.
+static void test_a_sweep_row_names_the_capped_range() {
+    auto s = baseus();
+    s.push_back(sweep_step(A::Pps, 7, 3248763456u, V::Pending));
+    rl::OemNotes oem; oem.monitor_mv = 12000;
+    rl::Layout l; rl::build(l, s, oem);
+    CHECK_STR(sweep_chips(l, 7).c_str(), "5-12V 3.2A");
+    CHECK_EQ(l.cuts, 0);
+}
+// The AVS sweep row is the same: one chip, the AVS range of its slot.
+static void test_an_avs_sweep_row_is_one_range_chip() {
+    std::vector<ct::Step> s;
+    s.push_back(step(A::Pd3Fixed, 5000, V::Pass, 1, 167874860u));
+    ct::Step range = step(A::SprAvs, 9000, V::Pass, 3, 0xE004B145u); range.avs = true;
+    s.push_back(range);
+    s.push_back(sweep_step(A::SprAvs, 3, 0xE004B145u, V::Pending));
+    rl::Layout l; rl::build(l, s);
+    const rl::Row* r = sweep_row_of(l, 3);
+    CHECK_EQ(r != nullptr, true);
+    if (!r) return;
+    CHECK_EQ(r->count, 1);
+    CHECK_STR(sweep_chips(l, 3).c_str(), chips(l, row_of(l, "SPR AVS")).c_str());   // the AVS range row of slot 3, word for word
+    CHECK_EQ(sweep_chips(l, 3).compare(0, 5, "9-20V"), 0);
+    CHECK_EQ(l.tokens[r->first].mv, 0);
+}
+// The chip's colour is the sweep's own result: pending until it ran, grey when skipped, red when the source was lost, and
+// green / amber / red by the worst error of the recorded points (<= 100 mV, <= 300 mV, above).
+static void test_a_sweep_chip_takes_its_tone_from_the_sweep() {
+    const auto tone_of = [](V v, std::vector<int16_t> pts) {
+        auto s = baseus();
+        s.push_back(sweep_step(A::Pps, 7, 3248763456u, v));
+        ctsweep::RowView rw; rw.pos = 7; rw.alg = uint8_t(A::Pps); rw.lo_mv = 5000; rw.hi_mv = 21000; rw.n = uint16_t(pts.size());
+        ctsweep::View view; view.rows = std::span<const ctsweep::RowView>(&rw, 1); view.points = pts;
+        rl::Layout l; rl::build(l, s, {}, view);
+        const rl::Row* r = sweep_row_of(l, 7);
+        return r ? int(l.tokens[r->first].tone) : -1;
+    };
+    CHECK_EQ(tone_of(V::Pending, {}), int(rl::Tone::Pending));
+    CHECK_EQ(tone_of(V::Running, {-20, 30}), int(rl::Tone::Pending));    // in flight: Pending keeps the Running dot on the chip
+    CHECK_EQ(tone_of(V::Skip, {}), int(rl::Tone::Skip));
+    CHECK_EQ(tone_of(V::Pass, {-20, 30, -90}), int(rl::Tone::Pass));
+    CHECK_EQ(tone_of(V::Pass, {-20, -250, 30}), int(rl::Tone::Partial));
+    CHECK_EQ(tone_of(V::Pass, {-20, 450, 30}), int(rl::Tone::Fail));
+    CHECK_EQ(tone_of(V::Fail, {-20, 30}), int(rl::Tone::Fail));          // a lost source, the points so far notwithstanding
+}
 // ---- The tone rules (one table for fixed, range and legacy chips) ------------------------------------------------------------
 //   a step still to run  -> Pending      nothing sampled (all skipped) -> Skip (grey, the tag says why)
 //   every sampled step passed -> Pass    some passed, or capped -> Partial     none passed -> Fail
@@ -970,6 +1047,10 @@ int main() {
     test_marks_give_each_verdict_its_own_shape();
     test_chip_width_includes_the_mark_cell();
     test_pps_one_coloured_chip_per_range();
+    test_a_pps_sweep_row_is_one_range_chip();
+    test_a_sweep_row_names_the_capped_range();
+    test_an_avs_sweep_row_is_one_range_chip();
+    test_a_sweep_chip_takes_its_tone_from_the_sweep();
     test_roll_up_is_one_table();
     test_a_capped_range_chip_is_amber_and_keeps_the_advertised_range();
     test_a_range_with_nothing_passed_stays_red_and_all_skipped_grey();
