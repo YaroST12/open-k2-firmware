@@ -463,7 +463,7 @@ void test_reason_words() {
     char buf[kFitBuf];
     trunc::context("reason words");
     for (unsigned r = 0; r <= static_cast<unsigned>(ct::Reason::NeedsLoad); ++r) {   // every reason word must fit the footer line
-        const char *text = reason_text(static_cast<ct::Reason>(r));
+        const char *text = ct::refusal_words(static_cast<ct::Reason>(r));
         CHECK_EQ(fits_px(kSmallAdvPx, text, kFooterTextPx), true);   // a footer, or a 26-cell wizard row
         if (!fits_px(kSmallAdvPx, text, kFooterTextPx)) std::printf("reason %u too long: \"%s\"\n", r, text);
         (void)buf;
