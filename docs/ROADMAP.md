@@ -385,7 +385,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     the remote/web stage names use the same words.
   - Validate: host tests on the step title, the first row, the Review row, the Refuse text and its two options, and
     that "Start, skip spoof" leaves the stored pick unchanged; hardware screenshots of step 2, Review and Refuse.
-- **Inline Identify refusal answers "busy"** (2026-11-10, be71f10, CUKTECH C1 -> K2 -> Pixel inline): since 6df54fa an
+- **Inline Identify refusal answers "busy"** (2026-11-10, be71f10, CUKTECH C1 -> K2 -> Pixel inline): fixed in 29aae2f
+  (red tests in 76d6a25), hardware check pending. Since 6df54fa an
   inline K2 refuses Identify (correct, no TX, VBUS held 9.076 V), but `k2_remote.py identify-device [--confirm]` prints
   "command 64 failed: busy": `Ui::IdResult::Refused` maps to `remote::Status::Busy` (src/core/remote.cpp
   identify_device). Give the inline refusal its own result (`IdResult::Inline` -> the pd::Err::Inline status the other
