@@ -67,12 +67,19 @@ inline constexpr uint8_t kDetailStepWalk = 160;
 // still tell the row apart; the verdict's result code rides in Reason alone, as for StepResolution.
 inline constexpr uint8_t kDetailSweep = 161;
 // ROADMAP "PPS coverage" item 2: one step-walk row per PPS APDO, from the mid level, kStepWalkCount Requests of +kStepMv
-// each. Every step needs Accept + PS_RDY and a measured VBUS move upward and below 2 x kStepMv (a source that rounds to a
-// 40/50/100 mV quantum, or ignores the step, shows a 0 or >= 40 mV move); the whole walk must then add up to
-// kStepWalkCount x kStepMv +- kStepWalkTolMv. One step alone is not judged tighter: the output's own ripple at no load
-// moves a single reading by several mV (CUKTECH C1, hardware 2026-11-10: one +20 mV step read 15 mV), the sum averages it.
+// each. Every step needs Accept + PS_RDY; the walk is judged by (1) a jump: a single measured move of 2 x kStepMv or more
+// fails at once (a source that rounds to a 40/50/100 mV quantum shows it), (2) the total: the last level minus the base
+// must be kStepWalkCount x kStepMv +- kStepWalkTolMv, and (3) the trend: the least-squares slope over all
+// kStepWalkCount + 1 recorded levels must lie in kStepWalkSlopeMinMv..kStepWalkSlopeMaxMv per step. A single step is NOT
+// judged for direction or size below the jump: the output creeps up 20-36 mV for ~2 s after each PS_RDY (hardware
+// 2026-11-10, 13.00 -> 13.10 V: one level held 13039..13075), so one +20 mV step reads anywhere from <= 0 to ~+36 mV
+// while the total is right (~95 mV); the old per-step "move <= 0" rule failed a good charger "steps ignored".
+// Slope band 10..30 mV/step = the ideal 20 +- 50 %: it passes the measured creep (about 20 mV/step) and a slow-but-
+// correct source (+15 +25 +18 +22 +20 reads 20.4), and fails a source that ignores the steps (slope 0) or follows only
+// about half of them; the band is wide enough that one noisy level cannot tip it.
 inline constexpr unsigned kStepMv = 20, kStepWalkCount = 5;
 inline constexpr int kStepWalkTolMv = 20;
+inline constexpr int kStepWalkSlopeMinMv = 10, kStepWalkSlopeMaxMv = 30;
 // walk-settle (ROADMAP "The PPS step walk fails a good source: its base level is read before the output settles"): a granted
 // walk level is recorded only once VBUS is steady - at least kWalkSteadySamples samples inside the last kWalkSteadyWindowMs
 // all within kWalkSteadyMv of each other (3 samples within 3 mV at the 100 ms host-test cadence; at the 20 ms UI tick the
@@ -691,11 +698,12 @@ private:
     uint8_t walk_n_ = 0;
     int walk_prev_mv_ = -1;
     int walk_base_mv_ = -1;   // VBUS at the walk's base level (the sum check)
+    std::array<int, kStepWalkCount + 1> walk_lv_{};   // VBUS recorded at each granted level, base first (the trend check)
     // walk-settle: before a granted level is recorded, VBUS must be steady (walk_steady_) or the wait timed out
     // (walk_grant_ms_ + kWalkSteadyTimeoutMs); both reset when the walk starts and when it advances to the next level.
     WalkSteady walk_steady_;
     uint32_t walk_grant_ms_ = 0;   // first walk_step call at the current granted level (0 = none yet)
-    void walk_step(Input, const Step& eff);   // one granted level of the walk: check its move, ask for the next or finish
+    void walk_step(Input, const Step& eff);   // one granted level of the walk: record it, ask for the next or judge the walk
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
     // sweep_rows_ holds one RowView per APDO, filled when the row closes (sweep_close in finish()).
     std::array<int16_t, ctsweep::kMaxPoints> sweep_err_{};

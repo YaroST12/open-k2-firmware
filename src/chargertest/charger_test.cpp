@@ -1473,11 +1473,12 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
         release(in, false);
     }
 }
-// One granted level of the step-walk row (is_step_walk): the base level only records VBUS; every later level checks
-// the measured move (upward, below 2 x kStepMv), then asks for the next +kStepMv through the sink's single Request gate;
-// after kStepWalkCount moves the sum must be kStepWalkCount x kStepMv +- kStepWalkTolMv. A move that misses - rounded to
-// a coarser quantum, or none at all - fails "step resolution N mV" with detail = the observed move in mV; a sum that
-// misses fails the same way with detail = the mean move.
+// One granted level of the step-walk row (is_step_walk): every level records VBUS; a later level's move of 2 x kStepMv or
+// more fails at once (rounded to a coarser quantum), otherwise the walk asks for the next +kStepMv through the sink's
+// single Request gate; after kStepWalkCount moves the total must be kStepWalkCount x kStepMv +- kStepWalkTolMv and the
+// slope over all levels inside kStepWalkSlopeMinMv..kStepWalkSlopeMaxMv. A jump fails "step resolution N mV" with detail
+// = the observed move in mV; a total or trend that misses fails the same way with detail = the mean move (0 = "steps
+// ignored"). A single move is not judged for direction: the output creeps after each PS_RDY.
 void Runner::walk_step(Input in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
@@ -1489,11 +1490,14 @@ void Runner::walk_step(Input in, const Step& eff) {
     if (!walk_grant_ms_) walk_grant_ms_ = in.now;
     walk_steady_.add(in.now, in.vbus_mv);
     if (!walk_steady_.steady() && in.now - walk_grant_ms_ < kWalkSteadyTimeoutMs) return;   // still settling: wait at this level
+    walk_lv_[walk_n_] = in.vbus_mv;
     if (walk_n_ == 0) {
         walk_prev_mv_ = walk_base_mv_ = in.vbus_mv;   // the base level is granted, in band and steady
     } else {
+        // Only a jump fails a single step: the output creeps for ~2 s after each PS_RDY, so one move reads from <= 0 to
+        // ~+36 mV on a good source; the total and the trend below judge the rest.
         const int move = in.vbus_mv - walk_prev_mv_;
-        if (move <= 0 || move >= int(2 * kStepMv)) {
+        if (move >= int(2 * kStepMv)) {
             finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(move, 0, 255)));
             return;
         }
@@ -1501,7 +1505,13 @@ void Runner::walk_step(Input in, const Step& eff) {
     }
     if (walk_n_ >= kStepWalkCount) {
         const int total = in.vbus_mv - walk_base_mv_;
-        if (std::abs(total - int(kStepWalkCount * kStepMv)) > kStepWalkTolMv)
+        // Least-squares slope per step over the kStepWalkCount + 1 levels, x = 0..n: slope = sum((2i - n) * y_i) / den with
+        // den = n (n + 1) (n + 2) / 6 (35 for n = 5); kept in integers, compared against the band times den.
+        constexpr int n = int(kStepWalkCount), den = n * (n + 1) * (n + 2) / 6;
+        int num = 0;
+        for (int i = 0; i <= n; ++i) num += (2 * i - n) * (walk_lv_[i] - walk_base_mv_);
+        const bool trend_ok = num >= kStepWalkSlopeMinMv * den && num <= kStepWalkSlopeMaxMv * den;
+        if (std::abs(total - int(kStepWalkCount * kStepMv)) > kStepWalkTolMv || !trend_ok)
             finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(total / int(kStepWalkCount), 0, 255)));
         else
             finish(in, Verdict::Pass, Reason::None);
