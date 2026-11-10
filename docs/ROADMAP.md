@@ -48,6 +48,22 @@ Every row below carries **Fix** (what to change, where) and **Validate** (what p
 and the hardware check). A row leaves this list when its fix is merged and the hardware check has passed; move it to
 "Verified on hardware" with the date and the evidence path.
 
+- **Connection page ("Who's attached"): a no-PD gate** (2026-11-10, handoff row 2b): tabs kept placeholder rows and
+  offered Identify to a device/source that never talks PD. Fixed in 823fb78, hardware check pending.
+  - Fix: one pure "PD present" verdict per attach (`include/k2/pd/pd_verdict.hpp`, carried by `pd::Link`, Pending
+    until attach+1.5 s; sink answered -> Present; Source_Caps repeated >=3 with no GoodCRC/Request -> None/offers
+    unanswered; any other decoded message -> Present; else None/source never offered). With verdict None the Sink
+    tab shows "No PD from this device" + why + the measured rows (Type-C, Draw), the Source tab "No PD from the
+    source" + Type-C + Legacy only when the source never offered, Identify is refused with the same words (the
+    alone path stays offered), and the remote state carries `kLinkNoPd`. The empty states (NO DEVICE) are
+    unchanged.
+  - Validate (host): `tests/test_pd_verdict.cpp` (verdict matrix + Link integration), `tests/test_ui_connection.cpp`
+    (copy fits, Identify gating), `tests/test_ui_connection_page.cpp` (no-PD Sink/Source bodies in 4 rotations,
+    pixel checks, greyed Identify, Present case unchanged), `tests/test_ui_no_truncation.cpp`; `make gate`.
+  - Validate (hardware): Pixel -> K2 -> SSD: the Sink tab shows "No PD from this device" and "offers went
+    unanswered", with the power level and the draw, and no placeholder rows. Laptop -> K2 -> SSD: the same.
+    A PD charger alone, then with a phone inline: the tabs are unchanged from today, with no "No PD" message.
+
 - ~~**An inline K2 hijacks the link**~~ completed: 026e516 (+5334c08, 122412f); plain boot passive and zero K2 TX inline on hardware (H6, P4, 2026-11-10).
 - **Connection -> Source -> Refresh kills a self-powered K2** (2026-11-09, user report): fixed in 667bca2 (+ 7f73ddf,
   8cdc8c3), hardware check pending.
