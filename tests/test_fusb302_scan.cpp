@@ -3255,6 +3255,72 @@ void test_inline_hard_reset_only_with_the_lab_flag() {
     end_inline_case();
 }
 
+// ---- an active Identify of a device ALONE on the K2 (ROADMAP "Sink Identify inline drops the phone",
+// fix item (2), k2/identify-alone) ----
+// alone = not inline, VBUS dark, no source caps this attach, and the link's waiting verdict (fed by the UI
+// with set_wait_kind) is a dual-role port. Red first: with the dark VBUS the passive detach has taken the
+// line (no CC), so identify_start refuses today.
+
+// A phone alone on CC1: its Rp toggles, VBUS stays dark while the K2 is passive, so the VBUS-low detach
+// (1 s) takes the line; the link verdict for the toggling Rp is DualRolePort.
+static void attach_phone_alone_detached() {
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x20;                                  // an Rp on CC1 (the phone's toggle, steady in this fake)
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    fusb302::sink_vbus(0);
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }   // dark > 1 s: detach
+    CHECK_EQ(fusb302::active_cc(), 0);
+    fusb302::sink_vbus(0);                               // the monitor still reads dark after the detach
+    fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);
+}
+
+static void end_alone_case() {
+    g_reg[0x40] = 0x00;
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    fusb302::set_wait_kind(raguard::WaitKind::Unknown);
+}
+
+void test_alone_phone_identify_starts_and_presents_rd_only() {
+    attach_phone_alone_detached();
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);      // alone: starts even with no CC on the line
+    CHECK_EQ(usb_has("Identify started"), true);
+    CHECK_EQ(find_from("W 02=03") >= 0, true);           // Rd on both lines (no CC known) - never Rp: the K2 must not become the phone's power source
+    for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }   // the scan re-attaches on the Rp
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    for (int i = 0; i < 30; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(find_from("FIFO") >= 0, true);              // the sequencer transmits once attached (Auto-CRC while it runs)
+    end_alone_case();
+}
+
+void test_alone_phone_identify_starts_while_still_attached() {
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x20;
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    fusb302::sink_vbus(0);
+    for (int i = 0; i < 15; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); }   // 300 ms: still attached
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);      // alone with the line still attached: starts directly
+    CHECK_EQ(usb_has("Identify started"), true);
+    end_alone_case();
+}
+
+void test_charger_alone_identify_refused_as_today() {
+    attach_phone_alone_detached();                       // a steady-Rp charger alone also detaches on dark VBUS
+    fusb302::set_wait_kind(raguard::WaitKind::ChargerWaiting);   // the link's verdict for a steady Rp
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), false);     // no CC and not alone: refused, as today
+    CHECK_EQ(usb_has("refused"), true);
+    check_no_tx();
+    end_alone_case();
+}
+
 void test_inline_identify_refused_even_confirmed() {
     attach_inline();
     CHECK_EQ(fusb302::identify_start(true), false);      // confirm must not override the inline refusal
@@ -3805,6 +3871,9 @@ int main() {
     test_wake_vs_test_a_wake_made_attach_with_caps_is_not_dark_after_the_units_reset();
     test_wake_vs_test_turning_the_setting_off_drops_a_wake_made_attach();
     test_wake_vs_test_setting_off_leaves_a_run_start_rd_alone();
+    test_alone_phone_identify_starts_and_presents_rd_only();
+    test_alone_phone_identify_starts_while_still_attached();
+    test_charger_alone_identify_refused_as_today();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_get_source_caps_refused_even_confirmed();

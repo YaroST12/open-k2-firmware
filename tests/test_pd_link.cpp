@@ -501,6 +501,45 @@ static void test_wait_kind_no_rp_and_not_passive() {
     CHECK_EQ(l.charger_waiting(), 0);
 }
 
+// ---- identify_alone(): the link-state predicate for an active Identify of a device ALONE on the K2 ----
+// ROADMAP "Sink Identify inline drops the phone from 9 V to 5 V", fix item (2) (k2/identify-alone): alone =
+// not inline, VBUS dark, no source caps this attach, and the waiting classifier reads a dual-role port (an Rp
+// that toggles every ~100 ms). A steady-Rp charger alone is ChargerWaiting there: Identify stays NoDevice /
+// refused as before. Red first: the predicate does not exist yet.
+static void test_identify_alone_predicate() {
+    // a phone alone on the K2: not inline, VBUS dark, no caps this attach, dual-role port
+    CHECK_EQ(int(identify_alone(false, true, 0, false, WaitKind::DualRolePort)), 1);
+    CHECK_EQ(int(identify_alone(false, true, 700, false, WaitKind::DualRolePort)), 1);   // still under vSafe0V
+    // inline: never (batch 2 refusal, unchanged)
+    CHECK_EQ(int(identify_alone(true, true, 0, false, WaitKind::DualRolePort)), 0);
+    // VBUS up (a charger powered the port, or the phone already sources 5 V after our Rd): not alone
+    CHECK_EQ(int(identify_alone(false, true, 5000, false, WaitKind::DualRolePort)), 0);
+    CHECK_EQ(int(identify_alone(false, true, 4750, true, WaitKind::DualRolePort)), 0);
+    // source caps this attach: a charger announced itself; not alone
+    CHECK_EQ(int(identify_alone(false, true, 0, true, WaitKind::DualRolePort)), 0);
+    // a charger alone (steady Rp): ChargerWaiting, not a dual-role port -> NoDevice/refused as today
+    CHECK_EQ(int(identify_alone(false, true, 0, false, WaitKind::ChargerWaiting)), 0);
+    // nothing / not enough history: no verdict, no Identify
+    CHECK_EQ(int(identify_alone(false, true, 0, false, WaitKind::NoSource)), 0);
+    CHECK_EQ(int(identify_alone(false, true, 0, false, WaitKind::Unknown)), 0);
+    // VBUS unknown (monitor offline): dark cannot be claimed
+    CHECK_EQ(int(identify_alone(false, false, -1, false, WaitKind::DualRolePort)), 0);
+}
+
+static void test_identify_alone_follows_the_link_verdict() {
+    // a toggling Rp through the Link input (the phone's dual-role toggle), VBUS dark, passive, no caps:
+    // the link's own verdict makes identify_alone true
+    Link l;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) l.update(win(t, 0, (t / 100) % 2 == 0 ? 3300 : 0, true));
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::DualRolePort));
+    CHECK_EQ(int(identify_alone(l.inline_mode(), true, 0, false, l.wait_kind())), 1);
+    // ... and a steady Rp (a charger waiting) makes it false
+    Link c;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) c.update(win(t, 0, 2990, true));
+    CHECK_EQ(int(c.wait_kind()), int(WaitKind::ChargerWaiting));
+    CHECK_EQ(int(identify_alone(c.inline_mode(), true, 0, false, c.wait_kind())), 0);
+}
+
 // ---- crossed CC through the K2 (raguard::CrossTrace through the Link input) --------------------------
 // Anker IQ4 -> cable -> K2 -> cable -> Pixel, VBUS dark: CC2 a steady ~0.5 V (Rp loaded by the cable's Ra), CC1 cycles
 // 0 / 1.2 / 1.8 / 3.3 V (the phone's dual-role toggle). A charger alone or a phone alone must never read crossed.
@@ -610,6 +649,8 @@ int main() {
     test_wait_kind_steady_rp_is_charger_waiting();
     test_wait_kind_toggling_rp_is_dual_role();
     test_wait_kind_no_rp_and_not_passive();
+    test_identify_alone_predicate();
+    test_identify_alone_follows_the_link_verdict();
     test_cc_cross_rig_reads_crossed_after_a_second();
     test_cc_cross_negatives_charger_alone_and_phone_alone();
     test_cc_cross_case_3_is_a_hint();
