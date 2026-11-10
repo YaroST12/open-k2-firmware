@@ -3469,6 +3469,114 @@ static void test_pps_deep_sweep_is_opt_in() {
     for (const auto& s : r.steps()) CHECK_EQ(ct::is_sweep(s), false);
     CHECK_EQ(r.sweep_view().rows.size(), 0u);
 }
+// ROADMAP "AVS deep sweep": opt-in via Options::avs_sweep, one kDetailSweep row per AVS APDO (algorithm SprAvs /
+// EprAvs), every 100 mV across the APDO (the AVS Request granularity) capped at the monitor ceiling, <= 1 A never
+// above the APDO's current or the cable. Same record, strip and summary as the PPS sweep.
+static void test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo() {
+    Fake f;
+    f.caps.num_pdos = 7;
+    for (unsigned n = 0; n < 5; ++n) f.caps.pdos[n] = pd::decode_pdo(((5000 + 4000 * n) / 50 << 10) | 325);
+    f.caps.pdos[6] = pd::decode_pdo(0xE004B145);   // SPR AVS 9-20 V (pos 7): 3.25 A above 15 V, 180 mA at/below
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::SprAvs)}; o.avs_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    unsigned sweep_rows = 0;
+    for (const auto& s : r.steps())
+        if (ct::is_sweep(s)) {
+            ++sweep_rows;
+            CHECK_EQ(s.algorithm == A::SprAvs && s.pos == 7, true);
+            CHECK_EQ(s.detail, ct::kDetailSweep);
+            CHECK_EQ(s.avs, true);
+            CHECK_EQ(s.mv, 9000u);                       // the row's mv is the first setpoint
+            CHECK_EQ(s.ma <= 1000, true);                // 1 A, never above the offer or the cable
+        }
+    CHECK_EQ(sweep_rows, 1u);   // one row for the AVS APDO - the points are not rows
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto v = r.sweep_view();
+    const auto* rw = v.find(uint8_t(A::SprAvs), 7);
+    CHECK_EQ(rw != nullptr, true);
+    if (rw) {
+        CHECK_EQ(rw->n, 111u); CHECK_EQ(rw->lo_mv, 9000u); CHECK_EQ(rw->hi_mv, 20000u);   // 9.0..20.0 V every 100 mV
+        CHECK_EQ(rw->sum.points, 111u);
+    }
+    // every point went through the sink's single gate at a 100 mV step, <= 1 A, never above the ceiling
+    unsigned stepped = 0;
+    for (const auto& c : f.choices) {
+        CHECK_EQ(c.mv <= 36000, true);
+        if (c.pos == 7 && c.mv >= 9000 && c.mv <= 20000 && (c.mv - 9000) % 100 == 0 && c.ma <= 1000) ++stepped;
+    }
+    CHECK_EQ(stepped, 111u);
+    // opt-in: without the flag no AVS sweep row at all (the Tests-list entry hides too: the plan counts 0 AVS points)
+    Fake f2;
+    f2.caps.num_pdos = 7;
+    for (unsigned n = 0; n < 5; ++n) f2.caps.pdos[n] = pd::decode_pdo(((5000 + 4000 * n) / 50 << 10) | 325);
+    f2.caps.pdos[6] = pd::decode_pdo(0xE004B145);
+    ct::Runner r2(f2);
+    ct::Options o2{.selected = ct::bit(A::SprAvs)};
+    CHECK_EQ(r2.start(f2.caps, o2, f2.in, true), ct::Reason::None);
+    for (const auto& s : r2.steps()) CHECK_EQ(ct::is_sweep(s), false);
+    CHECK_EQ(k2::ctsweep::plan_total(f2.caps, 36000, k2::ctsweep::Kind::Avs), 111u);   // the entry shows when AVS is offered
+}
+// The EPR AVS sweep: with EPR entered (the EPR identity present and the entry made), the EPR AVS APDO gets one sweep
+// row from 15 V to the APDO top capped at this K2's monitor ceiling (36 V here; 48 V reads "above the K2's monitor"),
+// and every point request stays at or below the ceiling. The sweep runs in EPR mode, so the sink's EPR_KeepAlive
+// (every 400 ms, test_pd_sink) holds the contract between points, like the PPS keep-alive does for the PPS sweep.
+static void test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling() {
+    Fake f;
+    f.caps.pdos[0] = pd::decode_pdo(f.caps.pdos[0].raw | (1u << 23));   // EPR-capable PDO 1
+    f.in.pd.state = pd::SinkState::Ready; f.in.pd.mv = 5000;
+    // the Fake's cable is already the EPR 50 V 5 A identity (cable_observed, 50000 mV, 5000 mA)
+    f.epr_caps = f.caps; f.epr_caps.epr = true; f.epr_caps.num_pdos = 10;
+    f.epr_caps.pdos[9] = pd::decode_pdo(0xD0000000 | (480u << 17) | (150u << 8) | 140);   // EPR AVS 15..48 V (pos 10)
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::EprAvs)}; o.avs_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    bool epr_seen = false;
+    for (unsigned n = 0; n < 2000 && r.state() != ct::State::Done; ++n) {
+        f.tick(r, 500);
+        epr_seen |= f.in.pd.epr_mode;   // the pos-0 entry put the sink in EPR mode for the sweep
+    }
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(epr_seen, true);           // EPR was entered and held through the sweep (EPR_KeepAlive runs there)
+    unsigned sweep_rows = 0;
+    for (const auto& s : r.steps())
+        if (ct::is_sweep(s)) {
+            ++sweep_rows;
+            CHECK_EQ(s.algorithm == A::EprAvs && s.pos == 10, true);
+            CHECK_EQ(s.mv, 15000u);     // the first setpoint of the EPR AVS range
+            CHECK_EQ(s.ma <= 1000, true);
+        }
+    CHECK_EQ(sweep_rows, 1u);
+    const auto* rw = r.sweep_view().find(uint8_t(A::EprAvs), 10);
+    CHECK_EQ(rw != nullptr, true);
+    if (rw) {
+        CHECK_EQ(rw->n, 211u);                                  // 15.0..36.0 V every 100 mV, capped at the ceiling
+        CHECK_EQ(rw->lo_mv, 15000u); CHECK_EQ(rw->hi_mv, 36000u);
+        CHECK_EQ(rw->sum.points, 211u);
+    }
+    unsigned stepped = 0;
+    for (const auto& c : f.choices) {
+        CHECK_EQ(c.mv <= 36000, true);   // never request above the monitor ceiling
+        if (c.pos == 10 && c.mv >= 15000 && c.mv <= 36000 && (c.mv - 15000) % 100 == 0 && c.ma <= 1000) ++stepped;
+    }
+    CHECK_EQ(stepped, 211u);
+    // without an EPR identity the EPR AVS APDO is skipped with the existing EPR reasons and no sweep row is planned
+    Fake g;
+    g.caps.pdos[0] = pd::decode_pdo(g.caps.pdos[0].raw | (1u << 23));
+    g.in.cable_observed = true; g.in.cable_mv = 20000; g.in.cable_ma = 3000;   // not a 50 V 5 A identity
+    g.in.pd.state = pd::SinkState::Ready; g.in.pd.mv = 5000;
+    g.info_list = g.caps; g.info_list.epr = true; g.info_list.num_pdos = 10;
+    g.info_list.pdos[9] = pd::decode_pdo(0xD0000000 | (480u << 17) | (150u << 8) | 140);
+    g.info_mode = 1;
+    ct::Runner rg(g);
+    ct::Options og{.selected = ct::bit(A::EprAvs)}; og.avs_sweep = true;
+    CHECK_EQ(rg.start(g.caps, og, g.in, true), ct::Reason::None);
+    g.tick(rg, 90000);
+    CHECK_EQ(rg.state(), ct::State::Done);
+    for (const auto& s : rg.steps()) CHECK_EQ(ct::is_sweep(s), false);   // no EPR cable: no EPR AVS sweep row
+    CHECK_EQ(g.pd_requests, 0);                                          // nothing was requested (informational list only)
+}
 static void test_pps_step_walk_fails_when_steps_round_to_100mv() {
     Fake f; f.pd_small_step_mv = 100;   // every +20 mV request moves the output by 100 mV
     ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
@@ -5994,6 +6102,7 @@ int main() {
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
     test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
+    test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     return test_report("test_charger_test");
 }

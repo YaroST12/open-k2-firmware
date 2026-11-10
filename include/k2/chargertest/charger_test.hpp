@@ -171,6 +171,8 @@ struct Options {
     // The PPS deep sweep (ROADMAP "PPS deep sweep"): opt-in, never in a preset (the presets carry `selected` only), so
     // this flag rides next to it (journal meta byte, remote draft flags) instead of an algorithm bit.
     bool pps_sweep = false;
+    // The AVS deep sweep (ROADMAP "AVS deep sweep"): same opt-in shape, its own flag next to the PPS one.
+    bool avs_sweep = false;
     bool contains(Algorithm a) const { return selected & bit(a); }
 };
 struct Step {

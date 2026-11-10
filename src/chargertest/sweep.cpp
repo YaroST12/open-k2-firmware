@@ -5,7 +5,8 @@
 
 namespace k2::ctsweep {
 
-unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv) {
+unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv, Kind kind) {
+    (void)kind;   // the AVS kind lands with the AVS sweep (ROADMAP row); until then Pps is the only kind counted
     if (!caps.valid) return 0;
     unsigned total = 0;
     const size_t n = std::min<size_t>(std::min<size_t>(caps.num_pdos, caps.pdos.size()), 7);   // SPR PPS slots are 1..7
