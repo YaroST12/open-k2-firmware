@@ -52,6 +52,7 @@ LIMITS = {
     "env": 2,        # the charger-test Runner's hardware / UI seams, fast-charge Engine's HwEnv
     "hook": 1,       # systick tick hook, boottrace poll, log tap
     "lfs": 1,        # littlefs block-device callbacks (they sit at the bottom: no recursion)
+    "flash": 1,      # the flash BlockDevice virtual behind the lfs callbacks
     "usb": 1,        # TinyUSB class drivers behind tud_task / invoke_class_control
     "drive": 1,      # FAT image providers
     "lwip": 1,       # lwIP callbacks
@@ -92,6 +93,11 @@ RESOLVE = [
     # in the page's paint methods too when anchor_bottom/draw_some are inlined into them.
     (r"k2::kit::ResultGrid::|k2::\w+Page::", r"k2::\w+Page::result_row_fn\(", ("row",)),
     (r"^lfs_", r"k2::fs::.*cb_(read|prog|erase|sync)", ("lfs",)),
+    # The charger-test session's poll pumps the journal (and saves the card when the run ends) into littlefs;
+    # GCC inlines the lfs commit path into poll's clone, so cfg->prog shows up under poll. cb_prog's own call is
+    # the flash BlockDevice's virtual.
+    (r"k2::ChargerTestSession::poll", r"k2::fs::.*cb_(read|prog|erase|sync)\(", ("lfs",)),
+    (r"k2::fs::.*cb_(read|prog|erase|sync)\(", r"k2::fs::BlockDevice::(read|prog|erase)\(", ("flash",)),
     (r"k2::systick::tick\(", r"k2::load::.*tick_hook", ("hook",)),
     (r"k2::systick::delay_ms\(", r"k2::boottrace\w*::.*poll", ("hook",)),
     (r"k2::usb::log\(", r"k2::shell_hw::.*tap", ("hook",)),
