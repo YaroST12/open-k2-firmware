@@ -3404,12 +3404,77 @@ void test_alone_identify_on_a_stale_cc_requests_pdo1_and_waits() {
     fusb302::sink_vbus(0);
     for (int i = 0; i < 15; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); }   // 300 ms: still attached
     fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);
-    g_log.clear(); g_usb.clear();
+    g_log.clear(); g_usb.clear(); g_txfifo.clear();
     CHECK_EQ(fusb302::identify_start(false), true);       // alone with the line still attached (a stale CC)
-    CHECK_EQ(usb_has("Request PDO 1"), true);             // RED: asks for the contract like the re-read's attach
+    CHECK_EQ(usb_has("Request PDO 1 err=1"), true);       // the ask is refused NoCaps (nothing bound this attach)...
+    CHECK_EQ(request_on_the_wire(), false);               // ...so no Request frame goes on the wire
     CHECK_EQ(usb_has("TX type 15"), false);               // ... but the first VDM still waits for Ready
     settle_ms(4100);
     CHECK_EQ(usb_has("no Ready contract"), true);         // RED: bounded timeout
+    CHECK_EQ(usb_has("line released"), true);
+    end_alone_case();
+}
+
+// Drive an armed alone-Identify wait to a Ready contract (caps, the run-start Request, Accept, PS_RDY).
+static void drive_to_ready() {
+    g_txfifo.clear();
+    send_caps_5v_9v(0);
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    push_frame(0xE0, ctl_msg(3, 1), {});   // Accept
+    push_frame(0xE0, ctl_msg(6, 2), {});   // PS_RDY
+    for (int i = 0; i < 30; i++) { g_ms += 1; fusb302::service(); }
+}
+
+// Review finding 1 (k2-review on k2/identify-dualrole): the deferred Identify start must re-check its premise
+// while waiting. RED: today the wait's ready-condition knows nothing of the inline latch or of the verdict, and
+// neither set_inline(true) nor the detach path clears an armed wait.
+void test_alone_identify_wait_refuses_when_inline_latches() {
+    attach_phone_alone_detached();
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);
+    for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    drive_to_ready();
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    fusb302::set_inline(true);                            // a real sink behind the K2: the alone premise is gone
+    settle_ms(400);                                       // past the 200 ms settle: still no VDM
+    CHECK_EQ(usb_has("TX type 15"), false);               // RED: today the sequencer starts on the settled Ready
+    CHECK_EQ(usb_has("no Ready contract"), true);         // RED: the armed wait is refused, not left running
+    CHECK_EQ(usb_has("line released"), true);             // RED: the line is handed back on this exit too
+    CHECK_EQ(fusb302::identify_current(), false);
+    fusb302::set_inline(false);
+    end_alone_case();
+}
+
+void test_alone_identify_wait_refuses_on_detach() {
+    attach_phone_alone_detached();
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);
+    for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    fusb302::sink_vbus(5000); fusb302::poll();           // one reading above 3 V, so a low one counts as a detach
+    for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }   // dark > 1 s: detach
+    CHECK_EQ(fusb302::active_cc(), 0);
+    settle_ms(100);
+    CHECK_EQ(usb_has("no Ready contract"), true);         // RED: today the wait stays armed through the detach
+    CHECK_EQ(usb_has("line released"), true);             // RED: the line goes back on this exit too
+    CHECK_EQ(usb_has("TX type 15"), false);
+    CHECK_EQ(fusb302::identify_current(), false);
+    end_alone_case();
+}
+
+void test_alone_identify_wait_never_starts_when_the_verdict_changes() {
+    attach_phone_alone_detached();
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(fusb302::identify_start(false), true);
+    for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    drive_to_ready();
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    fusb302::set_wait_kind(raguard::WaitKind::NoSource);   // the toggle stopped: no longer a dual-role port
+    settle_ms(400);                                       // past the settle with a Ready contract: still no VDM
+    CHECK_EQ(usb_has("TX type 15"), false);               // RED: today the ready-condition ignores the verdict
+    settle_ms(3900);                                      // the bounded timeout still refuses and hands back
+    CHECK_EQ(usb_has("no Ready contract"), true);
     CHECK_EQ(usb_has("line released"), true);
     end_alone_case();
 }
@@ -3988,6 +4053,9 @@ int main() {
     test_alone_identify_timeout_refuses_and_releases_the_line();
     test_alone_identify_end_releases_the_line_and_the_result_survives();
     test_alone_identify_on_a_stale_cc_requests_pdo1_and_waits();
+    test_alone_identify_wait_refuses_when_inline_latches();
+    test_alone_identify_wait_refuses_on_detach();
+    test_alone_identify_wait_never_starts_when_the_verdict_changes();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_handback_drops_rd_and_the_reset_reaches_the_chip();
