@@ -491,6 +491,9 @@ Err Sink::request_source_caps(std::uint32_t now) {
     return Err::Ok;
 }
 
+// STUB for the red test commit: the arm gate / Get_Source_Cap trigger lands with the engine (k2/apple-readout fix commit).
+Err Sink::arm_apple_read(std::uint32_t) { return Err::Busy; }
+
 Err Sink::trigger(Choice c, std::uint32_t now) {
     if (!caps_) return Err::NoCaps;
     switch (st_.state) {

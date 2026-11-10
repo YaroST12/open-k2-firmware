@@ -9,6 +9,12 @@
 
 static int g_checks, g_failures;
 
+#define CHECK(cond) do { \
+    g_checks++; \
+    if (!(cond)) { g_failures++; \
+        printf("FAIL %s:%d: %s is false\n", __FILE__, __LINE__, #cond); } \
+} while (0)
+
 #define CHECK_EQ(actual, expected) do { \
     long long a_ = (long long)(actual), e_ = (long long)(expected); \
     g_checks++; \

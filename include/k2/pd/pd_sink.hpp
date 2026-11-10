@@ -19,6 +19,7 @@
 
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_engine.hpp"
+#include "k2/pd/apple_readout.hpp"
 
 namespace k2::pd {
 
@@ -239,6 +240,13 @@ public:
     // Busy = not Ready, in EPR mode (an unsolicited Source_Capabilities there is a hard reset), or a Request / message / release /
     // Xiaomi chain is outstanding, or the last ask is still inside kGetCapAnswerMs; NoCaps = nothing bound.
     Err request_source_caps(std::uint32_t now);
+    // Lab-only Apple charger readout (SVID 0x05AC), off by default: while unarmed the Discover SVIDs ACK stays exactly
+    // [0x2717]. Arming adds 0x05AC to our SVIDs ACK and triggers a re-request of the current contract (request_source_caps),
+    // never a different voltage; the source then runs its 0x05AC discovery. Refused like the other lab ops: inline,
+    // without a contract, when the source is not our partner, or while busy (see apple_read_refusal). Ok = armed.
+    Err arm_apple_read(std::uint32_t now);
+    const AppleInfo& apple_info() const { return ap_.info(); }
+    bool apple_armed() const { return ap_.armed(); }
     void set_cap_mv(std::uint32_t mv) { cap_mv_ = mv < kVsafe5vMv ? kVsafe5vMv : mv; }
     std::uint32_t cap_mv() const { return cap_mv_; }
 
@@ -406,6 +414,9 @@ private:
     enum class Deferred : std::uint8_t { None, Request, EprEnter } deferred_ = Deferred::None;
     bool discover_svids_pending_ = false;  // proactive SVIDs REQ waiting for its pacing delay
     std::uint32_t discover_svids_at_ = 0;
+
+    // Lab-only Apple charger readout (0x05AC), off by default; reset with the rest of the attach state.
+    AppleReadout ap_;
 };
 
 // What this sink advertises: fixed 5 V 100 mA and PPS 3.3-11 V 3 A. No AVS, no EPR.

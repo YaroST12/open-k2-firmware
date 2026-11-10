@@ -322,7 +322,7 @@ HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DI
 TEST_CXX_LIB   = $(SRC_DIR)/ui/ui.cpp $(SRC_DIR)/ui/ui_pages.cpp $(SRC_DIR)/ui/ui_detail.cpp $(SRC_DIR)/ui/capture.cpp tests/ui_stubs.cpp $(SRC_DIR)/ui/gfx.cpp $(SRC_DIR)/ui/rle565.cpp tests/fake_lcd.cpp $(SRC_DIR)/core/remote_proto.cpp $(SRC_DIR)/core/fmt.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_link.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp $(SRC_DIR)/ui/ui_calc.cpp $(SRC_DIR)/drivers/buttons.cpp $(SRC_DIR)/ui/ui_layout.cpp $(SRC_DIR)/ui/ui_labels.cpp $(SRC_DIR)/ui/list_view.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/ui/ui_pdtrig.cpp $(SRC_DIR)/ui/ui_wizard.cpp $(SRC_DIR)/fastcharge/fc_engine.cpp $(SRC_DIR)/fastcharge/fc_scan.cpp $(SRC_DIR)/ui/text.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/pd/emk_quirk.cpp $(SRC_DIR)/pd/emk_respond.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/emname.cpp $(SRC_DIR)/pd/emjson.cpp $(SRC_DIR)/drivers/vfat.cpp $(SRC_DIR)/drivers/drive.cpp $(SRC_DIR)/ui/ui_widgets.cpp $(SRC_DIR)/ui/ui_icons.cpp $(SRC_DIR)/ui/ui_match.cpp $(SRC_DIR)/ui/ui_lines.cpp $(SRC_DIR)/ui/ui_tools.cpp $(SRC_DIR)/ui/ui_emarker.cpp $(SRC_DIR)/ui/ui_cabler.cpp $(SRC_DIR)/ui/ui_connection_page.cpp $(SRC_DIR)/ui/ui_blackbox.cpp $(SRC_DIR)/ui/ui_spoof.cpp $(SRC_DIR)/ui/ui_cards.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_view.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(wildcard $(SRC_DIR)/ui/fonts/*.cpp)
 TEST_CXX_SRCS  = $(wildcard tests/test_*.cpp)
 TEST_CXX_LIB  += tests/trunc_log.cpp $(SRC_DIR)/ui/orientation.cpp $(SRC_DIR)/core/shell.cpp $(SRC_DIR)/core/lab.cpp
-TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/pd_survey.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/pd_survey.cpp $(SRC_DIR)/pd/apple_readout.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_viewport.cpp $(SRC_DIR)/core/logfmt.cpp $(SRC_DIR)/core/scratch.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_orientation.cpp $(SRC_DIR)/ui/kit.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/home_model.cpp $(SRC_DIR)/ui/home_cell.cpp $(SRC_DIR)/ui/home_proto.cpp $(SRC_DIR)/ui/ui_home.cpp
@@ -346,7 +346,7 @@ $(OBJ_DIR)/lfs/$(QR_DIR)/%.o: $(QR_DIR)/%.c
 # littlefs is C: compiled with the host cc and linked into every test (a few unused functions are dropped).
 $(OBJ_DIR)/lfs/%.o: %.c include/k2/core/lfs_cfg.h
 	@$(call RUN,HOST_LFS_CMD)
-SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp
+SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/apple_readout.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp
 SCAN_OBJS      = $(patsubst %.cpp, $(OBJ_DIR)/scan/%.o, $(SCAN_TEST_LIB))
 
