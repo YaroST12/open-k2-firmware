@@ -320,14 +320,14 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
   START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
-- **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note, fixed in b60c702, hardware
-  check pending): with `pd-reread --pin 2`
+- **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note, fixed in b60c702 + ce6bbdb,
+  hardware check pending): with `pd-reread --pin 2`
   still set, splitter -> K2 -> OnePlus 15: the K2 sent two Requests (one collided with the phone's) before the far
   Request made it go passive (~2.3 s). The pin is a lab option and did what it says; the gap is that nothing shows it
   is still set. Fix: show the pin on the Home status line (e.g. "Rd pin CC2") and in `pd status`; clear it on
-  detach of the far end. Done: the rotation-page status bar badge reads "Rd pin CCx" (was the bare "SNK"),
-  `pd status` carries the appended pin byte, and a lab pin (only `pd-reread --pin`) clears with its mark on the far
-  end's detach; a boot / comeback pin keeps its Rd.
+  detach of the far end. Done: the Home status badge (the VBUS cell's pill) reads "Rd pin CCx", the rotation pages'
+  chrome-bar badge does too (was the bare "SNK"), `pd status` carries the appended pin byte, and a lab pin (only
+  `pd-reread --pin`) clears with its mark on the far end's detach; a boot / comeback pin keeps its Rd.
 - **`k2_remote.py cards` cannot read format v8 cards** (2026-11-10, fixed in 26f297f, hardware check pending):
   "card payload is 198 bytes, expected 144, 162,
   178, 190 or 196" after b193e56 made the shared card v8 (rebalanced count). Add the v8 size and field to the host
