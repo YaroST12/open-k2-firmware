@@ -40,6 +40,7 @@ struct Facts {
     bool charger = false;       // a source is attached or its capabilities were seen
     bool cable = false;         // e-marker data is held (read by VCONN or sniffed from the charger's own query)
     Topology topo = Topology::Unknown;
+    raguard::WaitKind wait = raguard::WaitKind::Unknown;   // the one waiting classifier (pd::Link::wait_kind, the Rp trace)
 };
 
 // The tab to open on: Sink when a device is inline or was seen on CC, else Source when a charger is seen,

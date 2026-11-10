@@ -92,6 +92,74 @@ private:
     std::size_t n_ = 0, head_ = 0;
 };
 
+// ---- the waiting classifier ------------------------------------------------------------------------
+// One classifier for "a source waits on the line for a sink", from the Rp presence over time (the ADC's CC
+// levels, sampled every UI tick; a line at/above kRpMinMv carries an Rp). A charger's Rp is steady; a dual-role
+// port (a phone alone on the port) toggles its Rp open about every 50-100 ms while it looks for a partner
+// (STATUS0 BC_LVL 3 <-> 0 in the trace, hardware 2026-11-10, connection matrix H13). The Source tab, the bottom
+// bar and the remote state field all read this one verdict (fed by pd::Link::wait_kind).
+enum class WaitKind : std::uint8_t {
+    Unknown = 0,       // no history yet, the K2 not passive, or VBUS already up: no verdict
+    NoSource,          // no Rp on either line over the recent window
+    ChargerWaiting,    // Rp steady for >= kSteadyMs: a charger waiting for a sink
+    DualRolePort,      // Rp present only part of the time, toggling: a dual-role port looking for a partner
+};
+
+class RpTrace {
+public:
+    static constexpr std::size_t kSamples = 48;      // ring of (time, rp) samples; at a 20 ms tick ~1 s of history
+    static constexpr std::uint32_t kWindowMs = 800;  // how far back classify() looks
+    static constexpr std::uint32_t kSteadyMs = 300;  // Rp steady this long = a charger waiting
+    static constexpr std::uint32_t kToggleMs = 400;  // edges inside this span count as toggling
+    static constexpr unsigned kToggleEdges = 3;      // this many edges in kToggleMs = a toggling port (an unplug is one edge)
+
+    void clear() { n_ = 0; head_ = 0; }
+    void add(std::uint32_t now_ms, bool rp_present) {
+        s_[head_] = {now_ms, rp_present};
+        head_ = (head_ + 1) % kSamples;
+        if (n_ < kSamples) ++n_;
+    }
+    std::size_t count() const { return n_; }
+
+    // now_ms = the reference time (the newest sample on the device); vbus_up = VBUS at/above kVbusAttachedMv
+    // (a source already feeds something: the lines are no longer an idle source's advertisement).
+    WaitKind classify(std::uint32_t now_ms, bool vbus_up) const {
+        if (vbus_up || n_ == 0) return WaitKind::Unknown;
+        // The window, oldest first (the ring is in time order: head_ is the oldest slot once full).
+        std::array<S, kSamples> w{};
+        std::size_t m = 0;
+        const std::size_t oldest = (head_ + kSamples - n_) % kSamples;
+        for (std::size_t i = 0; i < n_; ++i) {
+            const S& s = s_[(oldest + i) % kSamples];
+            if (s.t <= now_ms && s.t + kWindowMs > now_ms) w[m++] = s;
+        }
+        if (m == 0 || w[m - 1].t - w[0].t < kSteadyMs) return WaitKind::Unknown;   // not enough history yet
+        // Steady suffix: the oldest sample from which every sample still carries Rp.
+        std::size_t i0 = 0;
+        for (std::size_t i = m; i-- > 0;) if (!w[i].rp) { i0 = i + 1; break; }
+        if (i0 < m && w[m - 1].t - w[i0].t >= kSteadyMs) return WaitKind::ChargerWaiting;
+        // Toggling: part of the window carries Rp and the line flips often enough (an unplug is a single edge).
+        bool any_rp = false, all_rp = true;
+        unsigned edges = 0;
+        for (std::size_t i = 0; i < m; ++i) {
+            any_rp = any_rp || w[i].rp;
+            all_rp = all_rp && w[i].rp;
+            if (i > 0 && w[i].t + kToggleMs > now_ms && w[i].rp != w[i - 1].rp) ++edges;
+        }
+        if (any_rp && !all_rp && edges >= kToggleEdges) return WaitKind::DualRolePort;
+        // No Rp in the recent steady span: nothing waits.
+        bool rp_recent = false;
+        for (std::size_t i = 0; i < m; ++i) if (w[i].t + kSteadyMs > now_ms && w[i].rp) rp_recent = true;
+        if (!rp_recent) return WaitKind::NoSource;
+        return WaitKind::Unknown;   // Rp seen recently but neither steady nor toggling: no verdict yet
+    }
+
+private:
+    struct S { std::uint32_t t; bool rp; };
+    std::array<S, kSamples> s_{};
+    std::size_t n_ = 0, head_ = 0;
+};
+
 // The refusal the dialog shows, one row per line (no wrapping inside a row).
 inline constexpr std::array<const char*, 4> kRefusalLines = {
     "Spoof needs the charger",

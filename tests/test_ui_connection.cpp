@@ -11,9 +11,10 @@
 using namespace k2;
 using namespace k2::conn;
 
-static Facts facts(bool inl, bool charger, bool cable, Topology t = Topology::Unknown, bool seen = false) {
+static Facts facts(bool inl, bool charger, bool cable, Topology t = Topology::Unknown, bool seen = false,
+                   raguard::WaitKind w = raguard::WaitKind::Unknown) {
     Facts f;
-    f.inline_sink = inl; f.sink_seen = seen; f.charger = charger; f.cable = cable; f.topo = t;
+    f.inline_sink = inl; f.sink_seen = seen; f.charger = charger; f.cable = cable; f.topo = t; f.wait = w;
     return f;
 }
 
@@ -132,6 +133,48 @@ static void test_wrap() {
     CHECK_EQ(wrap("", 10, l), 0);
     std::array<std::string_view, 1> one{};
     CHECK_EQ(wrap("one two three", 3, one), 1);     // capped by the line count
+}
+
+// The Source tab reads the one waiting classifier (Facts::wait, the Rp trace): a steady Rp = a charger waiting
+// for a sink, a toggling Rp (a dual-role port, a phone alone) = not a charger. Today the tab keys on the topology
+// alone, so a phone alone reads "CHARGER WAITING" (connection matrix H13).
+static void test_source_tab_reads_the_waiting_classifier() {
+    CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting)).title,
+              "CHARGER WAITING");   // RED until the fix: the topology alone says "NO CHARGER"
+    CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting)).hint,
+              "Charger waits for a sink: start a charger test.");
+    const Empty ph = empty_state(Tab::Source, facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::DualRolePort));
+    CHECK_STR(ph.title, "DUAL-ROLE PORT");   // RED until the fix: a toggling phone still says "CHARGER WAITING"/"NO CHARGER"
+    CHECK_EQ(std::strlen(ph.title) <= 18, 1);
+    {   // the hint wraps into at most 4 lines of 27 cells
+        std::array<std::string_view, 4> ln{};
+        const int n = wrap(ph.hint, 27, ln);
+        CHECK_EQ(n >= 1 && n <= 4, 1);
+    }
+    CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::NoSource)).title,
+              "NO CHARGER");
+    CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::Unknown, false, raguard::WaitKind::Unknown)).title,
+              "NO CHARGER");
+}
+
+// The bottom bar reads the same classifier: on a real waiting charger it must not say "No charger" while the tab
+// says "CHARGER WAITING" (and k2_remote state.waiting must agree too).
+static void test_bar_reads_the_waiting_classifier() {
+    StrBuf<40> s;
+    StatusIn in;
+    in.tab = Tab::Source;
+    in.f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::ChargerWaiting);
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, via cable");   // RED until the fix: "No charger, via cable"
+    CHECK_EQ(s.view().size() <= kStatusCells, 1);
+    in.f = facts(false, false, false, Topology::DirectReceptacle, false, raguard::WaitKind::ChargerWaiting);
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, top plug");    // RED until the fix: "No charger, top plug"
+    in.f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::DualRolePort);
+    status_text(in, s); CHECK_STR(s.c_str(), "Dual-role port, via cable");    // RED until the fix
+    CHECK_EQ(s.view().size() <= kStatusCells, 1);
+    in.f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::NoSource);
+    status_text(in, s); CHECK_STR(s.c_str(), "No charger, via cable");
+    in.f = facts(false, true, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting);
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger");   // a charger already attached wins
 }
 
 static void test_status_text() {
@@ -375,6 +418,8 @@ int main() {
     test_topology_word();
     test_empty_states();
     test_empty_states_when_possibly_inline();
+    test_source_tab_reads_the_waiting_classifier();
+    test_bar_reads_the_waiting_classifier();
     test_wrap();
     test_status_text();
     test_status_survey();

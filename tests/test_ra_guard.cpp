@@ -74,6 +74,41 @@ int main() {
     for (const char* s : kRefusalLines) CHECK(s && std::string(s).size() <= 27);
     CHECK(std::string(kRefusalLines[0]).find("Spoof needs the charger") == 0);
 
+    // The waiting classifier over an Rp trace (samples every 20 ms, as the UI tick feeds it).
+    RpTrace tr;
+    CHECK(tr.classify(0, false) == WaitKind::Unknown);   // empty trace: no verdict
+    // A charger's Rp is steady: from kSteadyMs of history on, it is "charger waiting".
+    for (std::uint32_t t = 0; t <= 280; t += 20) tr.add(t, true);
+    CHECK(tr.classify(280, false) == WaitKind::Unknown);          // 280 ms of history: not yet
+    tr.add(300, true);
+    CHECK(tr.classify(300, false) == WaitKind::ChargerWaiting);   // steady for 300 ms
+    for (std::uint32_t t = 320; t <= 800; t += 20) tr.add(t, true);
+    CHECK(tr.classify(800, false) == WaitKind::ChargerWaiting);
+    CHECK(tr.classify(800, true) == WaitKind::Unknown);           // VBUS up: a source is already attached
+    // Nothing on the lines at all: no source.
+    RpTrace none;
+    for (std::uint32_t t = 0; t <= 800; t += 20) none.add(t, false);
+    CHECK(none.classify(800, false) == WaitKind::NoSource);
+    // A dual-role port toggles its Rp open about every 50-100 ms (a phone looking for a partner): not a charger.
+    RpTrace phone;
+    for (std::uint32_t t = 0; t <= 800; t += 20) phone.add(t, (t / 50) % 2 == 0);    // 50 ms on/off
+    CHECK(phone.classify(800, false) == WaitKind::DualRolePort);
+    RpTrace phone2;
+    for (std::uint32_t t = 0; t <= 800; t += 20) phone2.add(t, (t / 100) % 2 == 0);  // 100 ms on/off
+    CHECK(phone2.classify(800, false) == WaitKind::DualRolePort);
+    // An unplug is a single edge, not a toggle: after it, no Rp in the recent span = no source.
+    RpTrace unplugged;
+    for (std::uint32_t t = 0; t <= 800; t += 20) unplugged.add(t, t <= 400);
+    CHECK(unplugged.classify(800, false) == WaitKind::NoSource);
+    // A charger plugged in 200 ms ago: Rp seen recently but not steady yet = no verdict, not "no source".
+    RpTrace fresh;
+    for (std::uint32_t t = 600; t <= 800; t += 20) fresh.add(t, true);
+    CHECK(fresh.classify(800, false) == WaitKind::Unknown);
+    // The ring wraps: history older than the window is forgotten.
+    RpTrace wrap;
+    for (std::uint32_t t = 0; t < 2000; t += 20) wrap.add(t, t >= 1200);   // Rp only from t=1200 on
+    CHECK(wrap.classify(1999, false) == WaitKind::ChargerWaiting);         // 799 ms of steady Rp inside the window
+
     std::printf("%d checks, %d failed\n", g_n, g_bad);
     return g_bad != 0;
 }
