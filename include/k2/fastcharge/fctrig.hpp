@@ -80,6 +80,7 @@ struct Status {
     int target_mv;
     int tries;          // VOOC family wake trains sent so far, else 0
     int vbus_mv;        // live INA VBUS in every state (the engine value only if the monitor is offline)
+    int adapter_mv = 0; // SCP: the adapter's own voltage readback of this session (0 = not read yet, or not SCP)
 };
 Status status();
 // What the engine's SCP / UFCS sessions read from the charger (fc::Caps): the planner of the charger test sizes later rows from it.

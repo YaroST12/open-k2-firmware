@@ -481,7 +481,7 @@ Status status() {
     // Always the live INA reading: the engine only tracks VBUS while it runs, so an idle status would
     // otherwise show 0 mV next to a charging phone.
     const auto m = power::read();
-    return {g_engine.state(), g_engine.proto(), f, g_engine.target_mv(), g_engine.vooc_tries(), m ? m->vbus_mv : g_engine.reached_mv()};
+    return {g_engine.state(), g_engine.proto(), f, g_engine.target_mv(), g_engine.vooc_tries(), m ? m->vbus_mv : g_engine.reached_mv(), g_engine.adapter_mv()};
 }
 
 const fc::Caps& caps() { return g_engine.caps(); }

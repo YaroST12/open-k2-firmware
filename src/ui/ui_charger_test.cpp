@@ -185,6 +185,7 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     in.fc_caps = &fctrig::caps();
     const auto fs = fctrig::status();
     in.fc_state = fs.state; in.fc_fail = fs.fail; in.fc_tries = static_cast<uint8_t>(fs.tries);
+    in.fc_adapter_mv = fs.adapter_mv;
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
     return in;

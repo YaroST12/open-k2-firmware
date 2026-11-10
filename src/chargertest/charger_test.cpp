@@ -366,7 +366,16 @@ Reason refusal(Options o, Input in, bool busy, bool confirmed) {
         in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : cable_mv(in) < 5000 ? Reason::CableLimit :
         in.vbus_mv < 1000 ? Reason::NoSource : Reason::None;
 }
-bool in_band(const Step& s, int mv) {
+// A legacy row that asks a voltage of the charger (AFC, FCP, SCP, UFCS, vivo): pattern legacy-row-wide-band. A 5 V row is the vSafe5V
+// window (a 5 V charger idles at 5.1-5.2 V). Any other level is +-5 % of it, 150 mV at least. A level below the one the rail
+// starts from (`prev_mv`) gets the unloaded ceiling above instead (target + max(10 %, 600 mV), the programmable rule): an
+// unloaded output cannot sink down, it stops somewhere above the request.
+bool legacy_band(int level, int prev_mv, int mv) {
+    if (level == 5000) return safe5(mv);
+    const int tol = std::max(150, level / 20);
+    return mv >= level - tol && mv <= (level < prev_mv ? pd::programmable_ceiling_mv(level) : level + tol);
+}
+bool in_band(const Step& s, int mv, int prev_mv = 5000) {
     if (s.group == Group::Qc2 && s.mv == 5000) return safe5(mv);   // a 5 V charger reads 5.1 V: not a 2 % miss
     // An unloaded charger reads 2-3 % high (a bank: 9.20 V for 9 V, 5.16 V for 5 V); -2 % / +3 % around the level.
     if (s.group == Group::Qc2) return (mv - int(s.mv)) * 100 >= -int(s.mv) * 2 && (mv - int(s.mv)) * 100 <= int(s.mv) * 3;
@@ -381,7 +390,7 @@ bool in_band(const Step& s, int mv) {
     if (s.algorithm == Algorithm::Pps || s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs)
         return mv >= int(s.mv) - std::max(100, int(s.mv) / 20) && mv <= pd::programmable_ceiling_mv(int(s.mv));   // an unloaded source cannot sink down
     if (s.group == Group::Pd) return std::abs(mv - int(s.mv)) <= std::max(100, int(s.mv) / 20);
-    return mv * 100 >= int(s.mv) * 85 && mv * 100 <= int(s.mv) * 110;
+    return legacy_band(int(s.mv), prev_mv, mv);
 }
 // A fixed PD row above 5 V (SPR or EPR): its band is judged on the VbusMean average (pattern burst-mode-ripple-at-20v).
 // 5 V rows keep the per-sample vSafe5V window, PPS / AVS keep their own one-sided band, QC / legacy rows are untouched.
@@ -1250,8 +1259,23 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     if (!safe5(in.vbus_mv)) { unsafe(Reason::Release); return reason_; }
     return Reason::None;
 }
+// The level the rail starts the row from: a row in the live session of the one before it (a retarget) starts at the last passed row of
+// its group; any other row opens its own session, which begins at the 5 V default.
+static int rail_start_mv(std::span<const Step> steps, size_t index) {
+    if (index >= steps.size() || !steps[index].continuous) return 5000;
+    for (size_t n = index; n-- > 0;) {
+        if (steps[n].group != steps[index].group) break;
+        if (steps[n].verdict == Verdict::Pass) return int(steps[n].mv);
+    }
+    return 5000;
+}
 bool Runner::band_ok(const Step& s, const Input& in, uint32_t gap) {
-    if (!averages_band(s)) return in_band(s, in.vbus_mv);
+    if (!averages_band(s)) {
+        // The SCP 4.5 V row sits below the 5 V an unloaded output stays at, so VBUS alone cannot prove it: the adapter's own readback
+        // must agree with the request whenever the session has read it.
+        if (s.group == Group::Scp && s.mv == 4500 && in.fc_adapter_mv > 0 && std::abs(in.fc_adapter_mv - 4500) > 150) return false;
+        return in_band(s, in.vbus_mv, rail_start_mv({steps_.data(), count_}, index_));
+    }
     if (gap > 250) band_.clear();   // missing samples cannot be averaged across
     const int level = int(s.mv);
     if (in.vbus_mv < 0 || std::abs(in.vbus_mv - level) * 100 > level * int(kBandGrossPct)) { band_.clear(); return false; }

@@ -254,6 +254,7 @@ struct Input {
     fc::State fc_state = fc::State::Idle;
     fc::Fail fc_fail = fc::Fail::None;
     uint8_t fc_tries = 0;   // fctrig::Status::tries
+    int fc_adapter_mv = 0;  // fctrig::Status::adapter_mv: the SCP adapter's own voltage readback of this session (0 = not read / not SCP)
     bool probe_done = false;   // the source probe the runner asked for has finished (answered, refused or timed out)
     bool epr_proof = false;    // set by the Runner, not the caller: the source accepted EPR entry earlier in this run (cable proven)
     const pd::SourceCaps* epr_info = nullptr;   // the list the source answered to an SPR-mode EPR_Get_Source_Cap (valid + epr once answered)

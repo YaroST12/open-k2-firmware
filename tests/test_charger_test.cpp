@@ -86,6 +86,8 @@ struct Fake final : ct::Env {
     uint32_t redetect_gap_ms = 0, fc_released_at = 0; bool fc_released = false; int redetect_refused = 0;
     std::vector<int> fc_mvs;                          // the level each fc request asked for
     int fc_5v_mv = 0;                                 // a 5 V request lands here instead (a charger idling at 5.12 V); 0 = at 5 V
+    int fc_low_mv = 0;                                // a request below 5 V lands here (an unloaded output cannot sink down); 0 = at the request
+    int scp_adapter_mv = 0;                           // the SCP adapter's own voltage readback while its session is up (0 = not read)
     // EPR entry model: a pos 0 request enters EPR (or is refused) and swaps in the EPR source list.
     bool epr_refuse = false; std::uint8_t epr_refuse_code = 0; pd::SourceCaps epr_caps;
     // A release in EPR mode ends with EPR_Mode Exit: the source announces its SPR list again (Baseus 140W, 2026-11-04).
@@ -277,6 +279,8 @@ struct Fake final : ct::Env {
         if (contract_blocks_legacy && !handed && !retarget) { fc_blocked++; return fc::Fail::NoHandshake; }
         if (fussy && !retarget) { if (!fresh) { ++fussy_fails; return fc::Fail::NoHandshake; } fresh = false; }
         in.fc_state = fc::State::Active; in.vbus_mv = mv > 5000 ? mv + fc_offset_mv : fc_5v_mv ? fc_5v_mv : mv;
+        if (mv < 5000 && fc_low_mv) in.vbus_mv = fc_low_mv;
+        in.fc_adapter_mv = p == fc::Proto::Scp ? scp_adapter_mv : 0;
         if (fc_max_mv && mv > fc_max_mv) in.vbus_mv = fc_max_mv;   // a Class A charger answers the request and stays at its top level
         if (qc2_no_20v && p == fc::Proto::Qc2 && mv == 20000) in.vbus_mv = 5100;
         return fc::Fail::None;
@@ -1750,6 +1754,56 @@ static void test_qc3_rows_use_an_asymmetric_band() {
             CHECK_EQ(run_until(f, r, [&] { return r.steps()[row].verdict == ct::Verdict::Pass || r.steps()[row].verdict == ct::Verdict::Fail; }, 60000), true);
             CHECK_EQ(r.steps()[row].verdict == ct::Verdict::Pass, c.pass);
         }
+    }
+}
+// The AFC / FCP / UFCS / SCP rows above 5 V pass within 5 % of the level (150 mV at least), not 85..110 %: a 9 V row that settles
+// at 8.0 V or 9.8 V is a miss (docs/CHARGER_QUIRKS.md, pattern legacy-row-wide-band).
+static void test_legacy_rows_use_a_five_percent_band() {
+    struct Case { int offset; bool pass; };
+    for (auto a : {A::Afc, A::Fcp, A::Ufcs}) {
+        for (const Case c : {Case{430, true}, Case{-430, true}, Case{470, false}, Case{-470, false}, Case{-1000, false}, Case{800, false}}) {
+            Fake f; f.caps = {}; f.fc_offset_mv = c.offset;
+            ct::Runner r(f);
+            r.start(f.caps, {.selected = ct::bit(a)}, f.in, true);
+            size_t row = 0;
+            for (size_t n = 0; n < r.steps().size(); ++n) if (r.steps()[n].mv == 9000) { row = n; break; }
+            CHECK_EQ(r.steps()[row].mv, 9000);
+            CHECK_EQ(run_until(f, r, [&] { return r.steps()[row].verdict == ct::Verdict::Pass || r.steps()[row].verdict == ct::Verdict::Fail; }, 60000), true);
+            CHECK_EQ(r.steps()[row].verdict == ct::Verdict::Pass, c.pass);
+            if (!c.pass) CHECK_EQ(r.steps()[row].reason, ct::Reason::Timeout);   // never inside the band: the row times out
+        }
+    }
+}
+// A 5 V row of those groups keeps the vSafe5V window (a 5 V charger idles at 5.1-5.2 V) but no longer passes at 4.5 V.
+static void test_legacy_5v_row_uses_the_vsafe5_window() {
+    struct Case { int mv; bool pass; };
+    for (auto a : {A::Fcp, A::Scp, A::Ufcs}) {
+        for (const Case c : {Case{5195, true}, Case{4800, true}, Case{4600, false}, Case{5600, false}}) {
+            Fake f; f.caps = {}; f.fc_5v_mv = c.mv;
+            ct::Runner r(f);
+            r.start(f.caps, {.selected = ct::bit(a)}, f.in, true);
+            CHECK_EQ(r.steps()[0].mv, 5000);
+            CHECK_EQ(run_until(f, r, [&] { return r.steps()[0].verdict == ct::Verdict::Pass || r.steps()[0].verdict == ct::Verdict::Fail; }, 60000), true);
+            CHECK_EQ(r.steps()[0].verdict == ct::Verdict::Pass, c.pass);
+        }
+    }
+}
+// The SCP 4.5 V row sits below the 5 V the session starts from: an unloaded output cannot sink down, so the band is 5 % below and
+// the unloaded ceiling above (target + max(10 %, 600 mV), the programmable rule). Its proof is the adapter's own readback, which
+// must read the request within 150 mV whenever the protocol provides it.
+static void test_scp_4v5_row_judges_the_adapter_readback() {
+    struct Case { int vbus; int adapter; bool pass; };
+    for (const Case c : {Case{4500, 4500, true}, Case{5090, 4500, true}, Case{4290, 4480, true}, Case{5090, 0, true},
+                         Case{5150, 4500, false}, Case{4250, 4500, false}, Case{4500, 4700, false}, Case{5090, 5000, false}, Case{4500, 4349, false}}) {
+        Fake f; f.caps = {}; f.fc_low_mv = c.vbus; f.scp_adapter_mv = c.adapter;
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(A::Scp)}, f.in, true);
+        size_t row = SIZE_MAX;
+        for (size_t n = 0; n < r.steps().size(); ++n) if (r.steps()[n].mv == 4500) { row = n; break; }
+        CHECK_EQ(row != SIZE_MAX, true);
+        if (row == SIZE_MAX) continue;
+        CHECK_EQ(run_until(f, r, [&] { return r.steps()[row].verdict == ct::Verdict::Pass || r.steps()[row].verdict == ct::Verdict::Fail; }, 120000), true);
+        CHECK_EQ(r.steps()[row].verdict == ct::Verdict::Pass, c.pass);
     }
 }
 // QC3+ whose output never leaves 5 V: "no QC3+ response", a skip (not a fail) for the 9 V row and the rows chained after it.
@@ -6248,7 +6302,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_pps_min_step_accepts_unloaded_floor();
+    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_pps_min_step_accepts_unloaded_floor();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

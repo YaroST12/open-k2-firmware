@@ -798,6 +798,7 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     scp_ma_ = scp_ma;
     ufcs_ma_ = ufcs_ma;
     if (p == Proto::Scp) caps_.scp = {};   // validated against the previous session's limits; this session reads them again
+    adapter_mv_ = adapter_ma_ = 0;         // the readback of an earlier session says nothing about this one
     applied_mv_ = prev_mv_ = kConfirmAboveMv;   // until the data lines say otherwise, expect 5 V
     change_ms_ = now;
     reached_mv_ = 0;
