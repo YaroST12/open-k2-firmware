@@ -850,6 +850,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Connection page: Source, Cable and Sink tabs, Actions pop-up (Refresh, Share, Read cable, Save cable, Spoof as, Saved cables, Identify) | done | hardware pass of the page still open | `ui_connection_page`, `pdtabs`, `usblink` | |
 | Pixel replug after Identify | open | not verified | `pd_link`, `pd_identify` | |
 | Apple Discover Identity, 43-entry PID table | done | not verified | `pd_vdm` | PASSIVE |
+| Apple charger readout, lab-only `apple-read` op (armed SVID 0x05AC modes, directory + string reads; maker/product/fw/hw/0x90/serial on Source tab, in `k2_remote apple-read` and `--json state source.apple`; off by default, refused inline/no-contract/not-partner) | fixed in a2ac534, hardware check pending | not verified (host tests only, red first in e37bc33) | `pd_apple_readout`, `apple_read` | PASSIVE |
 | Rescan and CC choice | done | verified | `pd_rescan`, `pd_ccscan` | |
 | Link summary (USB4/TBT/DP from sniffed PD, the `USB` and `Alt` rows) | done | not verified | `usblink` | PASSIVE |
 | "AI..." charger recognition widget | done | not verified | `fastcharge_classify`, `ai_recog` | PASSIVE |
