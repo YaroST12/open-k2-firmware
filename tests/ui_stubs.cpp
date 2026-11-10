@@ -138,6 +138,7 @@ void unit_hold(bool legacy) {
     if (g_stub.model_units && !legacy) { g_stub.sink.state = k2::pd::SinkState::Ready; g_stub.sink.result = k2::pd::SinkResult::Ok; g_stub.sink.mv = 5000; g_stub.sink.pos = 1; }
 }
 bool rd_for_run_on() { return g_stub.rd_run; }
+bool reread_own_hold() { return g_stub.reread_hold; }
 std::uint8_t idle_wake_line() { return g_stub.idle_wake_hold; }
 std::int32_t open_cc_mv(std::uint8_t line) { return line >= 1 && line <= 2 ? g_stub.open_cc_mv[line - 1] : -1; }
 bool rp_on_line() { return false; }

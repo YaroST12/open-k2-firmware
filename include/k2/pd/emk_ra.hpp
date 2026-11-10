@@ -24,8 +24,10 @@ constexpr bool pc13_high(bool vconn_rail, bool ra) { return vconn_rail || ra; }
 struct Ctx {
     bool inline_sink = false;   // a real sink is attached downstream
     bool contract = false;      // a contract or negotiation is running
-    // The only contract is the K2's own self-hold (pd::self_hold_wanted: a pinned Rd that lives on the source it tests). It sits
-    // on the Rd line, the Ra goes on the other one and the Rd is never touched, so it does not refuse the mode.
+    // The only contract is the K2's own: the self-hold (pd::self_hold_wanted: a pinned Rd that lives on the source it
+    // tests), or a finished re-read's own leftover PDO 1 contract inside its linger (pd::reread_own_hold, take-over-able
+    // by a run). It sits on the Rd line, the Ra goes on the other one and the Rd is never touched, so it does not refuse
+    // the mode.
     bool self_hold = false;
     bool busy = false;          // identify / probe / re-read / prepare is running
     // The boot mode's pinned Rd bits (bit0 = CC1, bit1 = CC2; 0 = none). PLUS pins CC2 alone: the very line this mode

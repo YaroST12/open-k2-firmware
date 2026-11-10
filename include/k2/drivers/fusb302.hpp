@@ -289,6 +289,10 @@ const pd::ProbeStatus& probe_status();
 // and a Black Box mark.
 bool reread_start(std::uint8_t mask = pd::kRereadDefault);
 void reread_abort();
+// True while the only hold on the wire is the re-read's own leftover attach (pd::reread_own_hold: a finished re-read's
+// PDO 1 5 V contract inside its linger). A charger-test START and the spoof arming take it over like the self-hold
+// instead of refusing "tool busy" / "Ra refused: contract".
+bool reread_own_hold();
 // The survey's wire questions (k2/core/survey.hpp, pd::Survey): the same sequencer on a contract that is already there,
 // in the survey's order, 220 ms between messages, bounded by kSurveyWireMs. Never attaches (no Rd, no Request): false when
 // there is no Ready contract, a sink inline, the PD-silent mode, or anything else owns the wire. The answer is in

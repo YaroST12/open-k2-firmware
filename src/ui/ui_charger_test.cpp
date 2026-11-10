@@ -663,6 +663,9 @@ void ChargerTestSession::save_card() {
 bool ChargerTestSession::start_begin() {
     // A dialog identity (Ra mode on) takes the Rd path whatever VBUS shows: the Rd is what the run owns the Ra mode through.
     if (!ctx_.pm_online || fusb302::rd_for_run_on() || !(dialog_ra_ || pd::start_needs_rd(ctx_.inline_mode, ctx_.vbus_fast_mv))) {
+        // Rd already on: a finished re-read's attach is still lingering. The run takes the Rd and the contract over
+        // now (rd_for_run(true) clears the re-read's ownership), so its linger cannot release them mid-run.
+        if (fusb302::rd_for_run_on()) fusb302::rd_for_run(true);
         K2LOG("[TEST] START without Rd: pm=%d rd_on=%d inline=%d vbus=%d mV\n", int(ctx_.pm_online), int(fusb302::rd_for_run_on()),
               int(ctx_.inline_mode), int(ctx_.vbus_fast_mv));
         return false;
@@ -939,7 +942,11 @@ __attribute__((noinline)) bool ChargerTestSession::arm_cable(ctcable::Choice c, 
     if (c.kind == ctcable::Kind::Off) return true;
     c = ctcable::canonical(c);   // a journal written before id 3 was retired resumes as id 4 (the card kind records the canonical id)
     if (!in_run) {
-        if (const char* busy = ctx_.ui->busy_reason()) { message(busy); return false; }
+        if (const char* busy = ctx_.ui->busy_reason()) {
+            K2LOG("[TEST] cable arm refused: %s\n", busy);   // the footer alone was invisible to ct_start.py (2026-11-10, 72c2e28)
+            message(busy);
+            return false;
+        }
     }
     ctcable::Facts facts{};
     char name[emlib::kNameMax + 1] = {};
@@ -1034,7 +1041,7 @@ void ChargerTestSession::start_failed(const char* why) {
 // when the run id stays 0), the reason + measured VBUS recorded on the runner (the remote summary reads them), and
 // the footer words on screen.
 void ChargerTestSession::start_failed(ct::Reason r, const char* busy, int vbus_mv) {
-    runner_.note_preflight_refusal(r, vbus_mv);
+    runner_.note_preflight_refusal(r, vbus_mv, busy);   // the log line names the holding tool when busy
     StrBuf<32> t;
     review_refusal(r, busy, vbus_mv, t);
     start_failed(t.c_str());

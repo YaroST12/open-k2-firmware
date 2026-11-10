@@ -75,6 +75,17 @@ struct RereadStatus {
 // SPR AVS APDO: bits 31:30 = 11 (augmented), bits 29:28 = 10 (SPR AVS). Bits 29:28 = 01 is the EPR AVS APDO.
 constexpr bool is_spr_avs_pdo(std::uint32_t w) { return (w >> 28) == 0xE; }
 
+// A re-read's attach can end with its own PDO 1 5 V contract still on the wire (the driver's linger keeps it
+// readable for k2_remote pdos). That hold is the re-read's own, not a foreign tool's: a charger-test START (and the
+// spoof arming) take it over like the self-hold of a self-powered K2, instead of refusing "tool busy" / "Ra refused:
+// contract" (hardware 2026-11-10, b14c1b9: after a plain pd-reread held=True and START was refused "tool busy
+// (5100 mV)"; 72c2e28: after pd release the leftover Ready contract still refused the Ra arming, silently). Only the
+// exact leftover qualifies - Ready at PDO 1 at vSafe5V, not in EPR mode, still owned by the re-read (the flag any
+// other owner, a trigger or a run, clears) - so a user trigger's own hold keeps blocking.
+constexpr bool reread_own_hold(const SinkStatus& s, bool reread_made_contract) {
+    return reread_made_contract && s.state == SinkState::Ready && s.pos == 1 && s.mv <= kVsafe5vMv && !s.epr_mode;
+}
+
 class Reread {
 public:
     // rev = wire spec revision of the source (1 = PD 2.0: no extended messages); mask = kReread* steps;

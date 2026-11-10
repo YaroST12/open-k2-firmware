@@ -129,12 +129,15 @@ def drain_log(link, frames, seconds=1.0, clock=time.monotonic):
 
 
 def last_preflight_refusal(frames):
-    """The last '[TEST] preflight refused' line among the log frames (decoded from their msg# ids), or None.
+    """The last START-refusal log line among the log frames (decoded from their msg# ids), or None.
 
-    The START preflight logs its refusal as one [TEST] line with the reason in the on-screen words and the VBUS
-    reading; the run id then stays where it was, so this line is why."""
+    Every refusal the K2 logs while the START is refused counts, not only the preflight's: the
+    "[TEST] preflight refused: ..." line (with the holding tool named on a busy refusal), the
+    "[TEST] cable arm refused: ..." line (the identity arming refused, footer-only before 2026-11-10),
+    "[TEST] START: Rd refused ..." - a run id that stays 0 is always printed with one of them (B3)."""
     text = b"".join(f for f in frames if f and f[0] < 0x80).replace(b"\x00", b"").decode("ascii", "replace")
-    refused = [l for l in (logdb.decode_line(l) for l in text.splitlines()) if l.startswith("[TEST] preflight refused")]
+    refused = [l for l in (logdb.decode_line(l) for l in text.splitlines())
+               if l.startswith("[TEST] ") and "refused" in l]
     return refused[-1].rstrip("\n") if refused else None
 
 

@@ -2511,7 +2511,9 @@ bool ra_set(bool on) {
     emkra::Ctx c;
     c.inline_sink = inline_now();
     c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
-    c.self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only);   // the contract is our own 5 V hold
+    // The self-hold, or the re-read's own leftover PDO 1 contract inside its linger: both are the K2's own attach,
+    // take-over-able by a run / spoof, not a foreign contract.
+    c.self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only) || reread_own_hold();
     c.busy =g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
     c.pinned_rd = g_pin_rd;
     c.vconn = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;
@@ -2561,6 +2563,7 @@ void reread_abort() {
     if (g_reread_owns_rd || g_reread_made_contract) g_reread_release_at = systick::millis();   // housekeeping ends the attach on its next pass
 }
 const pd::RereadStatus& reread_status() { return g_reread.status(); }
+bool reread_own_hold() { return pd::reread_own_hold(g_sink.status(), g_reread_made_contract); }
 void set_sink_cap_ext_mode(pd::SinkCapExtMode m) {
     g_sink.set_sink_cap_ext_mode(m);
     K2LOG("[PD] Get_Sink_Cap_Extended answer mode %u\n", unsigned(m));
