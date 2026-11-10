@@ -438,7 +438,8 @@ void update_crc(bool crc_busy, bool rd_busy) {
     if (want == g_crc_on) return;
     g_crc_on = want;
     write_sw1();
-    K2LOG("[PD] Auto-CRC %s\n", want ? "on (active operation)" : "off (passive)");
+    if (want) K2LOG("[PD] Auto-CRC on (active operation)\n");
+    else K2LOG("[PD] Auto-CRC off (passive)\n");
 }
 
 // Rd bits while no partner is attached: only the boot-mode pin (plain boot: none, the passive state). A run start
