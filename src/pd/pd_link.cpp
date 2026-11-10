@@ -31,10 +31,13 @@ void Link::update(const LinkInput& in) {
     vbus_mv_ = in.vbus_mv;
     // The waiting classifier's trace: only while the K2 is passive do the lines show the far port's own Rp
     // (our Rd/Ra, an inline sink or a live VBUS make the question void: the trace is dropped, not accumulated).
-    if (in.passive && in.cc1_mv >= 0 && in.cc2_mv >= 0)
+    if (in.passive && in.cc1_mv >= 0 && in.cc2_mv >= 0) {
         wait_trace_.add(in.now_ms, in.cc1_mv >= raguard::kRpMinMv || in.cc2_mv >= raguard::kRpMinMv);
-    else
+        drp_trace_.add(in.now_ms, std::max(in.cc1_mv, in.cc2_mv));
+    } else {
         wait_trace_.clear();
+        drp_trace_.clear();
+    }
     // The crossed-CC trace: the same passive lines, and only while VBUS is dark, nothing of ours holds a line (the Wake hold),
     // no sink is inline and the K2 has no contract. Any gate dropping starts the observation over.
     if (in.passive && !in.line_held && !in.own_contract && !inline_ && in.vbus_known && in.vbus_mv < raguard::kVbusAttachedMv &&

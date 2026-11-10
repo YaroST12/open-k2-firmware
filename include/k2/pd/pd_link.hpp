@@ -108,7 +108,15 @@ public:
     // The one "charger waiting" verdict (the Rp trace over the CC lines, raguard::RpTrace): ChargerWaiting = a
     // charger's Rp steady for >= raguard::RpTrace::kSteadyMs with VBUS down, DualRolePort = an Rp that toggles.
     // The Source tab, the bottom bar and the remote state field read this same value.
-    raguard::WaitKind wait_kind() const { return wait_trace_.classify(last_now_, vbus_known_ && vbus_mv_ >= raguard::kVbusAttachedMv); }
+    raguard::WaitKind wait_kind() const {
+        const bool up = vbus_known_ && vbus_mv_ >= raguard::kVbusAttachedMv;
+        const raguard::WaitKind k = wait_trace_.classify(last_now_, up);
+        // A slow dual-role toggle under kRpMinMv (a phone's current-source Rp opens to ~1.7 V) reads NoSource
+        // on the Rp trace; the level trace sees it fall and rise again. A steady level never does (the CC2
+        // bias net's ~1.69 V included), so it cannot turn the verdict.
+        if (k == raguard::WaitKind::NoSource && drp_trace_.toggling(last_now_)) return raguard::WaitKind::DualRolePort;
+        return k;
+    }
     bool charger_waiting() const { return wait_kind() == raguard::WaitKind::ChargerWaiting; }
     // Crossed CC through the K2 (raguard::CrossTrace): a charger's Rp on one line and a phone's toggle on the other with
     // VBUS dark. Fed only while the K2 is passive (no Rd / Ra / Wake hold of ours, no sink inline, no contract) and VBUS is
@@ -152,6 +160,7 @@ private:
     // The waiting classifier's input: the Rp presence trace over the CC lines (fed only while passive), and the
     // last VBUS reading for its gate.
     raguard::RpTrace wait_trace_;
+    raguard::DrpTrace drp_trace_;        // the slow dual-role toggle on the raw levels (same gate; under kRpMinMv)
     raguard::CrossTrace cross_trace_;   // the crossed-CC detector's input (same gate, plus VBUS dark and no inline / contract)
     std::uint32_t last_now_ = 0;
     bool vbus_known_ = false;

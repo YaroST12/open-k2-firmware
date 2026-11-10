@@ -460,6 +460,12 @@
   "463": "[LINK] handback aborted: /rd.rec still present after %u ms, no reset sent\n",
   "464": "[LINK] handback result: far sink highest Request %u mV\n",
   "465": "[LINK] handback result: no Request: Type-C current\n",
-  "466": "[LINK] handback verdict=%s (busy=%d inline=%d contract=%d far_req=%d done=%d confirm=%d)\n"
+  "466": "[LINK] handback verdict=%s (busy=%d inline=%d contract=%d far_req=%d done=%d confirm=%d)\n",
+  "467": "[ID] alone: line released\n",
+  "468": "[ID] alone: Ready contract after %u ms, Identify started\n",
+  "469": "[ID] alone: no Ready contract within %u ms, Identify not sent (sink state %d)\n",
+  "470": "[ID] result: state %d ok 0x%02X skipped 0x%02X retries %u why %d\n",
+  "471": "[ID] alone: Rd presented, waiting for a Ready contract\n",
+  "472": "[ID] alone: CC%u held, Request PDO 1 err=%u\n"
  }
 }

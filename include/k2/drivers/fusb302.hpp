@@ -269,7 +269,8 @@ bool legacy_only_active();
 bool identify_start(bool confirmed = false);
 void identify_abort();
 const pd::IdStatus& identify_status();
-bool identify_current();   // the latest Identify ran in the current attach session (its answers are this partner's)
+bool identify_current();   // the latest Identify's answers are this partner's (after an alone-Identify's release too, until the port is really gone)
+const pd::Identity& identify_identity();   // the identity the latest Identify collected (kept for the release window)
 
 // Quick source probe for the charger report card (k2/pd/pd_probe.hpp): Discover Identity, Get_Manufacturer_Info and
 // Get_Source_Cap_Extended on SOP, one try each, over within ~1 s whatever the charger does. False when refused

@@ -160,6 +160,52 @@ private:
     std::size_t n_ = 0, head_ = 0;
 };
 
+// ---- the slow dual-role toggle detector -----------------------------------------------------------
+// A dual-role phone's Rp can be a current source that opens to only ~1.7 V on CC - under kRpMinMv, so the Rp
+// presence trace above never sees it - and it toggles slowly (high ~500-600 ms, low ~300-400 ms, period ~1 s).
+// Only a level that FALLS AND RISES again is a toggle: a steady level is never one, which also keeps the CC2
+// bias net (~1.69 V with nothing attached, PLUS-coupled) out of the verdict. Edges count only between a low
+// (< kLowMv) and a high (>= kHighMv) level (hysteresis: a mid-band level keeps the state), and the window
+// spans several ~1 s periods.
+class DrpTrace {
+public:
+    static constexpr std::size_t kMaxEdges = 12;      // edge ring; a ~1 s period gives <= ~5 edges in the window
+    static constexpr std::uint32_t kWindowMs = 2500;  // spans >= 2 periods of a ~1.3 s toggle
+    static constexpr std::int32_t kHighMv = 1200;     // a current-source Rp opens to ~1.7 V
+    static constexpr std::int32_t kLowMv = 400;       // below this the line is idle / Ra-level
+    static constexpr unsigned kMinRising = 2, kMinFalling = 2;   // it fell and rose again, twice
+
+    void clear() { n_ = 0; head_ = 0; have_ = false; high_ = false; was_high_ = false; }
+    void add(std::uint32_t now_ms, std::int32_t level_mv) {
+        if (level_mv >= kHighMv) high_ = true;
+        else if (level_mv < kLowMv) high_ = false;
+        if (have_ && high_ != was_high_) {
+            e_[head_] = {now_ms, high_};
+            head_ = (head_ + 1) % kMaxEdges;
+            if (n_ < kMaxEdges) ++n_;
+        }
+        was_high_ = high_;
+        have_ = true;
+    }
+    // A dual-role toggle inside the window. A steady level (the CC2 bias net's ~1.69 V included) produces
+    // no edges and is never a toggle; a single sag (a PLUS press) is one fall and one rise, not enough.
+    bool toggling(std::uint32_t now_ms) const {
+        unsigned rising = 0, falling = 0;
+        const std::size_t oldest = (head_ + kMaxEdges - n_) % kMaxEdges;
+        for (std::size_t i = 0; i < n_; ++i) {
+            const E& e = e_[(oldest + i) % kMaxEdges];
+            if (e.t <= now_ms && e.t + kWindowMs > now_ms) { if (e.rising) ++rising; else ++falling; }
+        }
+        return rising >= kMinRising && falling >= kMinFalling;
+    }
+
+private:
+    struct E { std::uint32_t t; bool rising; };   // rising = the level after the edge is high
+    std::array<E, kMaxEdges> e_{};
+    std::size_t n_ = 0, head_ = 0;
+    bool have_ = false, high_ = false, was_high_ = false;
+};
+
 // The refusal the dialog shows, one row per line (no wrapping inside a row).
 inline constexpr std::array<const char*, 4> kRefusalLines = {
     "Spoof needs the charger",

@@ -341,16 +341,19 @@ remote::IdentitySnapshot Remote::identity() {
     remote::IdentitySnapshot s;
     const pd::VdmInfo &v = fusb302::vdm();
     const pd::SourceCaps &c = pd::active_caps();
+    // After an alone-Identify's release the detach cleared the live VDM record: fall back to the identity
+    // the Identify collected, while it is still current (the phone still on the port).
+    const pd::Identity &id = v.identity.valid ? v.identity : (fusb302::identify_current() ? fusb302::identify_identity() : v.identity);
     s.flags = (c.epr ? remote::kIdFlagEpr : 0) | (c.epr_partial ? remote::kIdFlagEprPartial : 0) |
               (v.cuktech ? remote::kIdFlagCuktech : 0) | (v.xiaomi ? remote::kIdFlagXiaomi : 0);
-    s.valid = v.identity.valid;
-    s.vid = v.identity.vid;
-    s.pid = v.identity.pid;
-    s.bcd = v.identity.bcd;
+    s.valid = id.valid;
+    s.vid = id.vid;
+    s.pid = id.pid;
+    s.bcd = id.bcd;
     s.num_svids = v.num_svids > remote::kMaxIdSvids ? remote::kMaxIdSvids : v.num_svids;
     for (unsigned i = 0; i < s.num_svids; i++) s.svids[i] = v.svids[i];
-    s.vendor = sv(v.identity.vendor);
-    s.model = sv(v.identity.model);
+    s.vendor = sv(id.vendor);
+    s.model = sv(id.model);
     return s;
 }
 

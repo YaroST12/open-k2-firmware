@@ -118,6 +118,19 @@ bool g_wake_attach = false; // the current attach was made by the idle wake's Rd
 bool g_inline = false;      // a real sink is attached: active operations refuse or need a confirm
 raguard::WaitKind g_wait_kind = raguard::WaitKind::Unknown;   // the link's waiting verdict (Ui feeds it): DualRolePort = a phone alone on the port
 bool g_ident_owns_rd = false;   // the alone-Identify presented Rd (rd_for_run) and gives it back when it ends
+// An alone-Identify (a phone on the K2, Row A of handoff 2026-11-10d) starts its first VDM only on a Ready
+// contract of this attach, settled; it has a bounded timeout and hands the line back on every exit.
+bool g_ident_wait = false;          // waiting for that Ready contract (the first VDM has not gone out)
+bool g_ident_alone = false;         // this Identify attached to a device alone; the line goes back when it ends
+bool g_ident_was_running = false;   // the sequencer ran; log its result once when it ends
+bool g_ident_result_valid = false;  // the latest Identify's answers are this partner's (see identify_current)
+bool g_ident_alone_hold = false;    // the alone result stays current after the release until the port is really gone
+bool g_ident_gone_timing = false;
+std::uint32_t g_ident_wait_at = 0, g_ident_ready_at = 0, g_ident_gone_since = 0;
+pd::Identity g_ident_identity;      // the alone-Identify's collected identity, kept for the release window
+inline constexpr std::uint32_t kIdentWaitTimeoutMs = 4000;  // alone-Identify: no Ready contract within this -> refuse
+inline constexpr std::uint32_t kIdentSettleMs = 200;        // alone-Identify: Ready settled this long before the first VDM
+inline constexpr std::uint32_t kIdentGoneMs = 2000;         // the result survives the release until the toggle stops this long
 pd::AutoCrcGate g_crc;      // Auto-CRC only while an active operation runs (the armed spoof counts)
 pd::AutoCrcGate g_rd_gate;  // Rd on the active line only while a sink operation runs (the armed spoof does not count)
 pd::ContractLinger g_contract_linger;   // a contract nobody holds times out after kSinkIdleLingerMs
@@ -837,6 +850,11 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
         g_caps_count++;
         g_caps_acked = g_crc_on;
         g_session.caps_rx();
+        // Source_Capabilities from another attach: the Identify result was that partner's, not this one's.
+        if (g_ident_session != 0 && g_session.id() != g_ident_session) {
+            g_ident_result_valid = false;
+            g_ident_alone_hold = false;
+        }
     }
     if (sop == pd::Sop::Sop && !ext && num_do == 0 &&
         (msg_type == pd::kCtlAccept || msg_type == pd::kCtlReject || msg_type == pd::kCtlPsRdy ||
@@ -1257,9 +1275,27 @@ void set_inline(bool on) {
 bool inline_mode() { return inline_now(); }
 bool sink_downstream() { return downstream_now(); }
 
+// The Identify result stays visible after its release until the port is really gone: the toggle stops
+// (NoSource) or a steady-Rp device takes the line (ChargerWaiting) for kIdentGoneMs. Anything else
+// (DualRolePort still toggling, Unknown while we hold a line) keeps it. Called from set_wait_kind and from
+// service(): time passes even when the feed is not re-sent.
+static void ident_result_gate(std::uint32_t now) {
+    if (g_wait_kind == raguard::WaitKind::NoSource || g_wait_kind == raguard::WaitKind::ChargerWaiting) {
+        if (!g_ident_gone_timing) { g_ident_gone_timing = true; g_ident_gone_since = now; }
+        if (now - g_ident_gone_since >= kIdentGoneMs) {
+            g_ident_result_valid = false;
+            g_ident_alone_hold = false;
+            g_ident_gone_timing = false;
+        }
+    } else g_ident_gone_timing = false;
+}
+
 // The link's waiting verdict, fed by the UI (pd::Link::wait_kind over the passive CC levels), stored for the
 // alone-Identify decision. Default Unknown: without the feed the driver never claims a device is alone.
-void set_wait_kind(raguard::WaitKind kind) { g_wait_kind = kind; }
+void set_wait_kind(raguard::WaitKind kind) {
+    g_wait_kind = kind;
+    ident_result_gate(systick::millis());
+}
 raguard::WaitKind wait_kind() { return g_wait_kind; }
 bool caps_this_attach() { return g_session.fresh(); }
 
@@ -1772,7 +1808,7 @@ void active_tick() {
         const bool in_flight = ss0.state != pd::SinkState::Idle && ss0.state != pd::SinkState::Failed && !ready;
         pd::CrcDemand d{.sink_active = false,
                         .sink_held = ss0.held,
-                        .ident = g_ident.running() || g_probe.running() || g_reread.running(),
+                        .ident = g_ident.running() || g_ident_wait || g_probe.running() || g_reread.running(),
                         .getcap = g_getcap_armed || g_vconn.state() != pd::VconnState::Off,   // a VCONN swap needs our GoodCRC
                         .prep = g_prep.crc_wanted(),
                         .run_start = g_rd_start && !inline_now() && !g_legacy_only,   // legacy-only: no GoodCRC for the source's caps
@@ -2167,6 +2203,15 @@ void poll() {
     service();
 }
 
+// Hand the line back after an alone-Identify (success, failure, timeout): the Rd drop follows in the same
+// pass (g_ident_owns_rd), so the phone sees the detach and stops sourcing VBUS into the K2. The result stays
+// current (identify_current) after the release until the port is really gone - see set_wait_kind.
+static void alone_handback() {
+    g_ident_alone = false;
+    g_ident_alone_hold = true;
+    K2LOG("[ID] alone: line released\n");
+}
+
 // Receive and answer: hard reset, FIFO drain, transmit engines. Cheap when idle (two register
 // reads), so the main loop runs it every millisecond to meet tSenderResponse (~30 ms).
 void service() {
@@ -2235,9 +2280,40 @@ void service() {
     if (g_active_cc != 0) active_tick();
     else if (g_reread.running()) g_reread.tick(systick::millis(), false, reread_link());   // an attach whose source has not shown yet: its wait still ends
     reread_housekeeping(systick::millis());
+    ident_result_gate(systick::millis());
+    // An alone-Identify runs its first VDM only on a Ready contract of this attach, settled kIdentSettleMs:
+    // the phone sources only after our Rd, and a VDM sent earlier only burns its retries (Pixel: Discover
+    // Identity 1 ms after Rd went RETRYFAIL). Bounded timeout, then a clear refusal and the line back.
+    if (g_ident_wait) {
+        const std::uint32_t now2 = systick::millis();
+        const bool ready = g_sink.status().state == pd::SinkState::Ready && g_session.fresh() && g_active_cc != 0;
+        if (ready && g_ident_ready_at == 0) g_ident_ready_at = now2;   // a plain stamp: `now | 1` wraps the settle when now is even
+        if (ready && now2 - g_ident_ready_at >= kIdentSettleMs) {
+            g_ident_wait = false;
+            g_ident_session = g_session.id();
+            g_ident_result_valid = true;
+            g_ident_alone_hold = false;
+            g_ident.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, now2);
+            g_ident_was_running = true;
+            K2LOG("[ID] alone: Ready contract after %u ms, Identify started\n", unsigned(g_ident_ready_at - g_ident_wait_at));
+        } else if (now2 - g_ident_wait_at >= kIdentWaitTimeoutMs) {
+            g_ident_wait = false;
+            K2LOG("[ID] alone: no Ready contract within %u ms, Identify not sent (sink state %d)\n",
+                  unsigned(kIdentWaitTimeoutMs), int(g_sink.status().state));
+            if (g_ident_alone) alone_handback();
+        }
+    }
+    if (g_ident_was_running && !g_ident.running()) {
+        g_ident_was_running = false;
+        const pd::IdStatus& st = g_ident.status();
+        g_ident_identity = g_engine.vdm.identity.valid ? g_engine.vdm.identity : g_engine.sink_vdm.identity;
+        K2LOG("[ID] result: state %d ok 0x%02X skipped 0x%02X retries %u why %d\n", int(st.state), unsigned(st.ok_mask),
+              unsigned(st.skipped_mask), unsigned(st.retries), int(st.why));
+        if (g_ident_alone) alone_handback();
+    }
     // The alone-Identify's own Rd (it presented Rd because the dark VBUS had detached the line): give it back
-    // once the sequencer is over, so the phone sees a detach and stops sourcing VBUS into the K2.
-    if (g_ident_owns_rd && !g_ident.running()) {
+    // once the sequencer is over (or the wait gave up), so the phone sees a detach and stops sourcing VBUS into the K2.
+    if (g_ident_owns_rd && !g_ident.running() && !g_ident_wait) {
         g_ident_owns_rd = false;
         if (g_rd_start) {
             set_rd_for_run(false, false);
@@ -2397,13 +2473,34 @@ bool identify_start(bool confirmed) {
             return false;
         }
         g_ident_owns_rd = true;
-        K2LOG("[ID] device alone on the K2 (dual-role port, VBUS dark, no caps this attach): Rd presented, Identify as its sink partner\n");
+        K2LOG("[ID] alone: Rd presented, waiting for a Ready contract\n");
+    } else if (alone) {
+        // A stale active CC (the phone's VBUS went dark without a CC detach): ask for the contract the way
+        // the re-read's attach does; the first VDM still waits for Ready below.
+        const pd::Err e = sink_request({1, 0, 0}, false);
+        g_trigger_took_over = false;
+        K2LOG("[ID] alone: CC%u held, Request PDO 1 err=%u\n", unsigned(g_active_cc), unsigned(e));
+    }
+    if (alone) {
+        // The phone sources only after our Rd: hold the first VDM until a Ready contract of this attach,
+        // settled (see the wait in service()); bounded timeout there, line back on every exit. A new attempt
+        // supersedes the previous result (it belongs to the earlier attach).
+        g_ident_wait = true;
+        g_ident_alone = true;
+        g_ident_wait_at = systick::millis();
+        g_ident_ready_at = 0;
+        g_ident_result_valid = false;
+        g_ident_alone_hold = false;
+        return true;
     }
     const pd::SinkState ss = g_sink.status().state;
     if (ss != pd::SinkState::Idle && ss != pd::SinkState::Ready && ss != pd::SinkState::Failed) return false;
     g_ident_session = g_session.id();
+    g_ident_result_valid = true;
+    g_ident_alone_hold = false;
     g_ident.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, systick::millis());
-    K2LOG("[ID] Identify started%s\n", alone ? " (device alone on the K2)" : "");
+    g_ident_was_running = true;
+    K2LOG("[ID] Identify started\n");
     return true;
 }
 bool probe_start() {
@@ -2573,7 +2670,13 @@ void probe_abort() { g_probe.abort(); }
 const pd::ProbeStatus& probe_status() { return g_probe.status(); }
 void identify_abort() { g_ident.abort(pd::IdWhy::Stopped); }
 const pd::IdStatus& identify_status() { return g_ident.status(); }
-bool identify_current() { return g_ident_session != 0 && g_ident_session == g_session.id(); }
+bool identify_current() {
+    if (g_ident_session == 0 || !g_ident_result_valid) return false;
+    // After an alone-Identify's release the session has moved on (the phone's VBUS went dark): the result is
+    // still this partner's until the port is really gone (set_wait_kind) or another device's caps arrive.
+    return g_ident_session == g_session.id() || g_ident_alone_hold;
+}
+const pd::Identity& identify_identity() { return g_ident_identity; }
 
 void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> payload) {
     handle_frame(sop == 1 ? pd::Sop::SopP : sop == 2 ? pd::Sop::SopPP : pd::Sop::Sop, header, payload, false);

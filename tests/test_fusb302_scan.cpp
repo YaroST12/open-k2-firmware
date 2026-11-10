@@ -3285,14 +3285,13 @@ static void end_alone_case() {
 void test_alone_phone_identify_starts_and_presents_rd_only() {
     attach_phone_alone_detached();
     g_log.clear(); g_usb.clear();
-    CHECK_EQ(fusb302::identify_start(false), true);      // alone: starts even with no CC on the line
-    CHECK_EQ(usb_has("Identify started"), true);
+    CHECK_EQ(fusb302::identify_start(false), true);      // alone: accepts even with no CC on the line
+    CHECK_EQ(usb_has("waiting for a Ready contract"), true);   // Row A: the first VDM waits for the contract
     CHECK_EQ(find_from("W 02=03") >= 0, true);           // Rd on both lines (no CC known) - never Rp: the K2 must not become the phone's power source
     for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }   // the scan re-attaches on the Rp
     CHECK_EQ(fusb302::active_cc() != 0, true);
     for (int i = 0; i < 30; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
-    CHECK_EQ(find_from("W 06=01") >= 0, true);           // the sequencer transmits once attached (TX_START went out)
-    CHECK_EQ(usb_has("TX type 15"), true);               // ... Discover Identity first
+    CHECK_EQ(usb_has("TX type 15"), false);              // no contract yet: the sequencer holds (the full flow is in the wait test below)
     end_alone_case();
 }
 
@@ -3307,8 +3306,9 @@ void test_alone_phone_identify_starts_while_still_attached() {
     CHECK_EQ(fusb302::active_cc() != 0, true);
     fusb302::set_wait_kind(raguard::WaitKind::DualRolePort);
     g_log.clear(); g_usb.clear();
-    CHECK_EQ(fusb302::identify_start(false), true);      // alone with the line still attached: starts directly
-    CHECK_EQ(usb_has("Identify started"), true);
+    CHECK_EQ(fusb302::identify_start(false), true);      // alone with the line still attached (a stale CC): asks for the contract, then waits
+    CHECK_EQ(usb_has("Request PDO 1"), true);
+    CHECK_EQ(usb_has("TX type 15"), false);              // the first VDM still waits for Ready
     end_alone_case();
 }
 
@@ -3347,9 +3347,9 @@ void test_alone_identify_waits_for_ready_before_the_first_vdm() {
     push_frame(0xE0, ctl_msg(6, 2), {});   // PS_RDY
     for (int i = 0; i < 30; i++) { g_ms += 1; fusb302::service(); }
     CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
-    settle_ms(150);                        // under the 200 ms settle: still no VDM
+    settle_ms(100);                        // under the 200 ms settle: still no VDM
     CHECK_EQ(usb_has("TX type 15"), false);
-    settle_ms(100);                        // settled: the sequencer starts (RED: nothing waits today)
+    settle_ms(150);                        // settled: the sequencer starts (RED: nothing waits today)
     CHECK_EQ(usb_has("TX type 15"), true);
     CHECK_EQ(usb_has("Ready contract after"), true);
     end_alone_case();
