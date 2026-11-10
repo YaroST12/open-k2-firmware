@@ -108,8 +108,7 @@ CableIdentityList::Row CableIdentityList::row(int index, View v) const {
     Row r;
     const auto c = choice_at(index);
     if (c.kind == ctcable::Kind::Off) {
-        r.text.put("OFF");
-        r.rating = "no identity";
+        r.text.put("Off (real cable)");   // the whole row: no rating column, the note says what it means
         r.note = "Nothing answers for the cable";
     } else if (c.kind == ctcable::Kind::Builtin) {
         const Face& f = kFaces[ctcable::dialog_row(c.seq)];

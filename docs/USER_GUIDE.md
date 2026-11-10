@@ -77,7 +77,7 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
  |        |            |            |            Diag           system state
  |        |            |            |
  |        |            |            +-- (read-only bars: D+, D-, CC1, CC2)
- |        |            +-- Tests (presets, Custom) > Cable > Review > run > Results
+ |        |            +-- Tests (presets, Custom) > Spoof cable > Review > run > Results
  |        +-- 8x2 grid of readings
  +-- big V and A, power, energy, trend
 ```
@@ -208,7 +208,7 @@ A guided, no-load test of what a charger really negotiates: fixed PDOs, PPS and 
 
 Steps of the wizard:
 
-1. **Tests (step 1 of 3)**: pick what to run. OK picks a preset and moves to Cable; the footer shows "Picked: ...".
+1. **Tests (step 1 of 3)**: pick what to run. OK picks a preset and moves to Spoof cable; the footer shows "Picked: ...".
 
    | Preset | Units | What |
    | :--- | :--- | :--- |
@@ -221,12 +221,12 @@ Steps of the wizard:
 
    **Custom**: six families (Huawei/Honor, Samsung, OPPO/OnePlus/vivo, Xiaomi/Redmi, USB PD, QC/UFCS) with counts as ON, OFF or PART. Short OK toggles a family, long OK opens its group (inside, short OK sets one test, long OK toggles the whole group). The Xiaomi family cannot be toggled on its own because it rides on PD. The last row is Next.
 
-2. **Cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: a plain, no-identity option, built-ins (for example EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W) and your saved cables. OK picks one and goes to Review. The choice is remembered. It applies to the PD units only.
+2. **Spoof cable (2 of 3)**: the cable identity the K2 presents to the charger (it answers the charger's cable query). The list is the shared one: **Off (real cable)** (no identity), built-ins (for example EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W) and your saved cables. OK picks one and goes to Review. The choice is remembered. It applies to the PD units only.
 
-3. **Review (3 of 3)**: a START row and a summary (Tests, Peak, Cap, Header, Cable).
+3. **Review (3 of 3)**: a START row and a summary (Tests, Peak, Cap, Header, Spoof).
    - The first OK opens a confirmation window: "No load! OK twice within 5 s".
    - The second OK starts the test. BACK, a changed setting, or 5 s with no OK closes the window.
-   - If the cable lines look wrong (an Ra guard check), a choice appears: **Start anyway**, **Start with cable OFF**, **Cancel**.
+   - If a real cable is between the charger and the K2 (an Ra guard check), the screen says "Cable connected: the spoof won't reach the charger." and offers **Start anyway** or **Start, skip spoof** (this run without the identity; the remembered pick stays). BACK also returns to Review.
 
 4. **Waiting for charger**: a bar counts down while the K2 waits for a source. OK or BACK cancels.
 
@@ -331,7 +331,7 @@ If it refuses, a checklist shows why: **Charger seen**, **PD caps read**, **Othe
 
 Makes the K2 answer a charger's cable query (SOP') as if it were a chosen cable, so you can see how a charger reacts to, say, a 5 A or EPR cable without owning one. Facts and measurements: [`K2_PORTS_SPEC.md`](K2_PORTS_SPEC.md). Status: **verified** on the top port with a charger and no cable (a 5 A and an EPR 28 V contract were obtained with a spoofed identity).
 
-The page shows State (OFF or ARMED), "Asked / Replied" counts and the cable list: OFF ("no identity"), built-ins (EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W), then your saved cables (marked "saved"). OK = **Arm**, **Disarm** or **Off**. The armed row wears an amber ARMED pill. Footer: "Plug in charger only": arm first, then plug the charger so the identity is presented at attach. Refused while a live sink is inline. Do not use with a phone or laptop attached.
+The page shows State (OFF or ARMED), "Asked / Replied" counts and the cable list: "Off (real cable)", built-ins (EPR 50 V 5 A, CUKTECH 6A, OnePlus 100W), then your saved cables (marked "saved"). OK = **Arm**, **Disarm** or **Off**. The armed row wears an amber ARMED pill. Footer: "Plug in charger only": arm first, then plug the charger so the identity is presented at attach. Refused while a live sink is inline. Do not use with a phone or laptop attached.
 
 ### Cable R
 

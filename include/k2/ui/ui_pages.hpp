@@ -222,9 +222,9 @@ public:
     // ctx.cables). Picking only selects; nothing is armed until START.
     // Identity and Ask are retired (the identity list and the START dialog merged into Cable): they are never entered and
     // only keep their numbers, which the remote protocol, the web client and the tools use.
-    // Refuse = the "Cable on plug" WARNING (the stage keeps its wire number): the Ra guard read a cable on the plug, so a spoof
+    // Refuse = the "Cable connected" WARNING (the stage keeps its wire number): the Ra guard read a cable on the plug, so a spoof
     // may not reach the charger. Rows: 0 Start anyway (the identity runs armed, the guard's reading goes to the journal),
-    // 1 Start with the cable OFF, 2 Cancel.
+    // 1 Start, skip spoof (this run without the identity; the stored pick stays). BACK returns to Review.
     // Waiting = START's wait for the charger after the Rd went on (VBUS, then the caps): driven by poll(), never blocks;
     // BACK or OK cancels it.
     enum class Stage : uint8_t { Algorithms, Group, Cable, Identity, Review, Running, Results, Steps, Detail, Resume, Changes, Ask, Refuse, Waiting, Custom };
@@ -386,6 +386,7 @@ private:
     uint32_t guard_t_ = 0;               // when the last sample went into guard_
     raguard::Topology topology_ = raguard::Topology::Unknown;   // the guard's last reading (the Warning screen, the run's journal)
     bool guard_bypass_ = false;           // "Start anyway": the guard's reading is recorded, the spoof runs regardless
+    bool skip_spoof_run_ = false;         // "Start, skip spoof" on the Refuse stage: this run carries no identity, the stored pick stays
     // The planned re-attach (rdintent::plan_reattach): a self-powered START with a 6 A identity against a source that lists SVID
     // 0x2717 makes the K2 blink off once, so the charger reads the cable at a real attach. confirm_reattach_ = the confirmation on
     // screen announces it; reattach_plan_ = this run does it (begin_run); reattach_ 1 = the Rd is off for the gap, 2 = the Rd is
@@ -467,6 +468,7 @@ private:
     uint32_t& scroll_ms_ = s_.scroll_ms_;
     size_t& scroll_step_ = s_.scroll_step_;
     bool& guard_bypass_ = s_.guard_bypass_;
+    bool& skip_spoof_run_ = s_.skip_spoof_run_;
     bool& confirm_reattach_ = s_.confirm_reattach_;
     bool& auto_resume_ = s_.auto_resume_;
     bool& resume_hold_ = s_.resume_hold_;

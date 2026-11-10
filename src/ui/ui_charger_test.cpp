@@ -990,8 +990,10 @@ void ChargerTestSession::open_confirmation() {
 // the lines first and a refusal opens the Refuse stage; then the identity is armed — whatever was armed is disarmed
 // first and the pick takes over (Off arms nothing) — and the start goes on with the Rd and the wait.
 void ChargerTestSession::confirmed_start() {
-    const auto choice = ctx_.cables.selected();
-    const bool bypass = guard_bypass_;   // "Start anyway" on the Cable-on-plug warning: the identity runs, the reading is recorded
+    const bool skip_spoof = skip_spoof_run_;   // "Start, skip spoof" on the Refuse stage: this run without the identity
+    skip_spoof_run_ = false;                  // the stored pick stays; only this run carries no identity
+    const auto choice = skip_spoof ? ctcable::Choice{} : ctx_.cables.selected();
+    const bool bypass = guard_bypass_;   // "Start anyway" on the Cable-connected warning: the identity runs, the reading is recorded
     guard_bypass_ = false;
     run_guard_ = 0;
     if (choice.kind != ctcable::Kind::Off) {
@@ -1188,7 +1190,7 @@ int ChargerTestPage::row_count() const {
     case Stage::Detail: return 0;
     case Stage::Resume: return 3;
     case Stage::Identity: case Stage::Ask: return 0;   // retired, never entered
-    case Stage::Refuse: return 3;   // Start anyway, Start with the cable OFF, Cancel
+    case Stage::Refuse: return 2;   // Start anyway, Start, skip spoof
     case Stage::Waiting: return 1;
     }
     return 0;
@@ -1318,7 +1320,7 @@ void ChargerTestPage::bar() {
     case Stage::Algorithms: t.put("Tests"); step = 1; break;
     case Stage::Custom: t.put("Custom"); step = 1; break;
     case Stage::Group: t.put("Entries"); step = 1; break;
-    case Stage::Cable: case Stage::Identity: case Stage::Ask: t.put("Cable"); step = 2; break;
+    case Stage::Cable: case Stage::Identity: case Stage::Ask: t.put("Spoof cable"); step = 2; break;
     case Stage::Review: t.put("Review"); step = 3; break;
     case Stage::Results: t.put("Results"); break;
     case Stage::Changes: t.put("Changes"); break;
@@ -1521,7 +1523,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         if (focused) out.note = row_.note;
         break;
     case Stage::Refuse:
-        out.text = index == 0 ? "Start anyway" : index == 1 ? "Start, cable OFF" : "Cancel";
+        out.text = index == 0 ? "Start anyway" : "Start, skip spoof";
         if (index == 0) out.text_color = kCaution;
         break;
     case Stage::Resume:
@@ -1609,12 +1611,12 @@ void ChargerTestPage::paint_list() {
     ctx_.rows.draw(ctx_.now);
 }
 
-// The "Cable on plug" warning: the alert band, two lines of what it means, then the three choices.
+// The "Cable connected" warning: the alert band, two lines saying why, then the two choices.
 void ChargerTestPage::paint_warning() {
     if (!laid_) {
         const Surface &c = ctx_.content;
-        kit::draw_alert_band(c, 22, false, "Cable on plug");
-        gfx_text(c, kSmall, 6, 64, "The spoof may not reach", kText, kBg);
+        kit::draw_alert_band(c, 22, false, "Cable connected");
+        gfx_text(c, kSmall, 6, 64, "the spoof won't reach", kText, kBg);
         gfx_text(c, kSmall, 6, 84, "the charger.", kText, kBg);
     }
     paint_list();
@@ -1780,13 +1782,13 @@ void ChargerTestPage::paint_review() {
 
     StrBuf<48> cb;
     const auto sel = ctx_.cables.selected();
-    if (sel.kind == ctcable::Kind::Off) cb.put("OFF");   // plain: a START with Off disarms whatever is armed
+    if (sel.kind == ctcable::Kind::Off) cb.put("Off");   // plain: a START with Off disarms whatever is armed
     else {
         row_ = ctx_.cables.row(ctx_.cables.index_of(sel), CableIdentityList::View::CableStep);
         cb.put(row_.text.view());
         if (!row_.rating.empty()) cb.put_char(' ').put(row_.rating);
     }
-    kv(2, "Cable", cb.view(), kText);
+    kv(2, "Spoof", cb.view(), kText);
 
     StrBuf<48> hd;
     if (caps.valid) put_revision(hd, caps.spec_rev, in.reported);
@@ -2244,7 +2246,7 @@ bool ChargerTestPage::on_event(Event e) {
         if (runner_.busy()) { cancel(); update(ctx_.now); return true; }
         if (confirming_) { invalidate_confirmation(); update(ctx_.now); return true; }   // Back out of the confirm window: nothing was touched
         switch (stage_) {
-        case Stage::Refuse: set_stage(Stage::Review, kStartRow); break;   // Cancel: nothing was touched
+        case Stage::Refuse: set_stage(Stage::Review, kStartRow); break;   // Back returns to Review: nothing was touched
         case Stage::Waiting: wait_abort(); break;                          // Cancel: Rd back, nothing started
         case Stage::Algorithms: return back_event(e);
         case Stage::Group: set_stage(Stage::Custom, family_); break;
@@ -2344,13 +2346,11 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         if (selection_ == 0) {   // Start anyway: the identity runs armed, the guard's reading goes to the journal
             guard_bypass_ = true;
             confirmed_start();
-        } else if (selection_ == 1) {   // Start with the cable OFF (already confirmed)
-            ctx_.cables.select({});
+        } else {                 // Start, skip spoof: this run without the identity; the stored pick (/cable.cfg) is NOT changed
+            skip_spoof_run_ = true;
             invalidate_confirmation();
             set_stage(Stage::Review, kStartRow);
             confirmed_start();
-        } else {
-            set_stage(Stage::Review, kStartRow);   // Cancel
         }
         break;
     case Stage::Changes: set_stage(Stage::Results, static_cast<int>(line_n_)); break;
@@ -2393,7 +2393,7 @@ PanelLabels ChargerTestPage::labels() const {
         case Stage::Group: ok = "Set"; ok_long = "Grp"; break;
         case Stage::Cable: ok = "Pick"; break;
         case Stage::Review: ok = confirming_ ? "Confirm" : "Start"; break;
-        case Stage::Refuse: ok = selection_ >= 2 ? "Cancel" : "Start"; break;
+        case Stage::Refuse: ok = "Start"; break;
         case Stage::Waiting: ok = "Cancel"; break;
         case Stage::Results:
             ok = selection_ >= static_cast<int>(line_n_) ? "Diff" : "Steps";

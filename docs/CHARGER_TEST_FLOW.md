@@ -310,9 +310,9 @@ the pick that was made.
    short section headers (`Huawei`, `Samsung`, `OPPO`, `Xiaomi`, `USB PD`, `QC/UFCS`, plus `OEM / PD` for the
    vendor-label facts of a PD source; `Row.label` holds 8 characters); a section whose rows all fold into the `No reply` /
    `Skipped` summary rows drops its header. The on-device grid is units only (no header rows).
-2. **Cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
+2. **Spoof cable** (stage 2). The shared cable-identity list (below); OK on a row picks it and goes to Review.
 3. **Review** (stage 4). One START row, then the summary rows `Tests`, `Peak` (the caps PDO with the highest wattage),
-   `Cap`, `Header`, `Cable` (the short identity name plus its rating, plain `OFF` when the pick is Off — a START with
+   `Cap`, `Header`, `Spoof` (the short identity name plus its rating, plain `Off` when the pick is Off — a START with
    Off disarms whatever is armed) and one free row for status lines such as a self-powered charger. The first OK on
    START opens the confirm window, the second starts.
 
@@ -324,15 +324,15 @@ Steps and Changes lists are kit rows with a verdict marker, Detail is a fixed si
 a timeout bar.
 
 The cable identity is the one list shared with Tools -> Spoof (`CableIdentityList`, `include/k2/ui/ui_cable_list.hpp`, held in
-`UiContext::cables`): `OFF  no identity`, the three built-in chips (ids 1, 2, 4; id 3 is a retired alias of 4), then the saved clones, with the same names, the same
+`UiContext::cables`): `Off (real cable)` (no rating column; the note under the focused row says "Nothing answers for the cable"), the three built-in chips (ids 1, 2, 4; id 3 is a retired alias of 4), then the saved clones, with the same names, the same
 order, one selection and one armed marker. A row is a short name (`EPR`, `CUKTECH`, `OnePlus`) with its rating in a second
 column (`50V 5A`, `6A`, `100W`); a saved clone shows its library name in data colour with a dim "saved" tail, so it reads
-apart from the built-ins. The solid square marks the pick (there is no "USE" word). OK on a row of the Cable step selects it
+apart from the built-ins. The solid square marks the pick (there is no "USE" word). OK on a row of the Spoof cable step selects it
 and goes to Review; nothing is armed while browsing. The tail pill depends on the screen the row is built for
 (`CableIdentityList::fill_spec` builds the row for both): in Tools -> Spoof the identity answering right now wears the
 amber "ARMED" pill; on the Cable step the pick wears "NEXT" and the identity answering now "CURR" (dim amber) while they
 differ, and the shared row keeps "ARMED" when pick and armed are the same (with nothing armed the pick is the radio
-alone). Review shows the choice as the "Cable" row.
+alone). Review shows the choice as the "Spoof" row.
 The selection is remembered across power cycles (`/cable.cfg`, `include/k2/chargertest/cablepref.hpp`): it is written only when it
 changes, read at Ui init before the boot arming, so "pick a cable, then PLUS-boot" arms it on a self-powered boot (a
 saved clone that is gone, or a damaged record, reads as Off; a HID-powered boot restores it but does not arm).
@@ -347,7 +347,7 @@ START is two OK presses on Review, in this order (reordered 2026-11-06: the conf
    is inline and VBUS is below 4.5 V: the Rd is what brings the source up, so the final check is left to the end of
    the wait. Back, a changed proposal or 5 s without the second OK close the window; nothing needs undoing.
 2. **Second OK** (`confirmed_start`): the Ra guard (`guard_topology` / `raguard::spoof_allowed`; a cable or no charger
-   refuses with the Refuse stage, still before anything is armed: "Start, cable OFF" goes on without asking again, "Start anyway" arms the identity and records the reading, "Cancel"
+   refuses with the Refuse stage, still before anything is armed: "Start, skip spoof" goes on without asking again (this run without the identity; the stored pick stays), "Start anyway" arms the identity and records the reading, Back
    returns to Review), then the identity is armed — whatever was armed is disarmed first and the pick takes over (Off
    arms nothing, so a START with Off disarms a Tools -> Spoof arming too), then the
    **last stage**: the Rd is presented and the Waiting stage (13, "Waiting for charger") follows the VBUS and the source's
@@ -361,12 +361,12 @@ The resume path never asks for a confirmation. There is no "Ask" chooser anywher
 (Ask) are retired and never entered; they stay reserved so the remote `stage` values do not move (the Custom list is
 the new stage 14; remote and web clients show it as "custom"). Remote `charger-cable` (`ctcable::Choice`) sets the same
 choice; the resume path re-arms the journaled identity. `tools/ct_start.py` picks "All tests" on Tests (OK advances to
-Cable), presses OK on Cable (advances to Review), then OK on "review" (twice), never in "waiting", answers "refuse" with
+Spoof cable), presses OK on Spoof cable (advances to Review), then OK on "review" (twice), never in "waiting", answers "refuse" with
 Back, and treats Review after a "waiting" as the K2's refusal. `tools/ui_walk.py` expects a cursor of "whatever the
 device had" after a pick (`None`), since Back lands on the pick in force.
 
-The Refuse stage (12) explains the guard's refusal and offers `Start anyway`, `Start, cable OFF` and `Cancel`.
-It has one reason: the topology guard ("Cable on plug"). There used to be a second one, a late "Self-powered" warning for a
+The Refuse stage (12) explains the guard's refusal — the band reads "Cable connected" and the lines below "the spoof won't reach the charger." — and offers `Start anyway` and `Start, skip spoof` (BACK returns to Review; `Start, skip spoof` runs without the identity and leaves the stored pick in `/cable.cfg` unchanged).
+It has one reason: the topology guard (a cable on the plug). There used to be a second one, a late "Self-powered" warning for a
 START with an identity on a self-powered or bus-powered K2; it is gone. Such a K2 boots from the charger's VBUS, so the Ra
 can only follow the charger's attach, and a charger that reads the cable at attach (`cable-look-at-attach` in
 `CHARGER_QUIRKS.md`) has already decided without it, but the START now just goes on (nothing to answer). When it can pay, the
@@ -392,7 +392,7 @@ asks the page for it while detached, right before `attach(mode)` with `mode != L
 
 | Boundary | Ra / spoof |
 |---|---|
-| Legacy unit (QC2 ... VIVO), HID-powered | off: Ra released (`fusb302::ra_run_own()` hands the mode back), forced scan line freed, spoof disarmed; the attach runs with plain Rd, as in a Cable OFF run |
+| Legacy unit (QC2 ... VIVO), HID-powered | off: Ra released (`fusb302::ra_run_own()` hands the mode back), forced scan line freed, spoof disarmed; the attach runs with plain Rd, as in a run with the spoof skipped |
 | Pd or PdLow unit, HID-powered | on at its attach: Ra, then the spoof armed again (`arm_cable(.., in_run=true)`, the run's own busy state must not refuse it) |
 | `end_legacy` closing Pd attach | no call: the run is over |
 | Self-powered or bus-powered K2 | no call, ever: the pinned Rd cannot be opened between units, so the Ra armed at boot stays for the whole run |
@@ -402,7 +402,7 @@ the Baseus 70W run with the EPR identity for the whole run went from 27 pass to 
 the chosen identity (`run_cable_`) for the whole run; only the electrical state follows the unit.
 
 Limitation (decided, not a bug): a self-powered or bus-powered run keeps Ra for every unit, so D+/D- results on a source
-with `ra-disables-legacy` are not valid there. Run those units with the cable OFF, or from a HID-powered K2.
+with `ra-disables-legacy` are not valid there. Run those units with the spoof off, or from a HID-powered K2.
 
 ## Re-announced source list
 

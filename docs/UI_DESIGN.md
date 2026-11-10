@@ -466,18 +466,18 @@ Buttons: the BACK slot reads `Back/Del` in the list and `List/Del` on a card (lo
           long +  ─────────────────────────────────────►   (no wrap; the end -/+ label is dim)
   Home <-> Detail <-> Charger test <-> Lines <-> Tools <-> Settings (six dots)
   PD and Diag left the carousel: the PD view is the Who's attached page (Source tab), Diag is a Tools row.
-  Charger test: a three-step wizard, Tests (presets, `Custom...` opens the family checklists) -> Cable identity -> Review, then Run/Results. Each session of the run reads "Detach charger" while the K2 holds the source dark, then "Initializing..." while it waits for the source (PD-silent for the D+/D- units); the run follows the company families: the vendor modes share one PD-silent session first (Huawei FCP/SCP, Samsung AFC, OPPO/OnePlus/vivo VOOC...), the PD unit follows (its Mi 6A probes read under Xiaomi), then QC/UFCS in a second PD-silent session, and the low PPS/AVS rows last.
+  Charger test: a three-step wizard, Tests (presets, `Custom...` opens the family checklists) -> Spoof cable (the identity) -> Review, then Run/Results. Each session of the run reads "Detach charger" while the K2 holds the source dark, then "Initializing..." while it waits for the source (PD-silent for the D+/D- units); the run follows the company families: the vendor modes share one PD-silent session first (Huawei FCP/SCP, Samsung AFC, OPPO/OnePlus/vivo VOOC...), the PD unit follows (its Mi 6A probes read under Xiaomi), then QC/UFCS in a second PD-silent session, and the low PPS/AVS rows last.
   Entering Charger Test always starts at the Tests step (selection retained, confirmation cleared).
-  Wizard pages (Tests, Custom, Group, Cable, Review) are on the kit and share include/k2/ui/ui_setup_page.hpp for the side
+  Wizard pages (Tests, Custom, Group, Spoof cable, Review) are on the kit and share include/k2/ui/ui_setup_page.hpp for the side
   labels Up/Dn/OK and Back (Back on every step since the strip vocabulary, 6.10): the top bar reads the title with the
   three-step rule (`1/3` ... `3/3`), the footer states a fact (never the keys); Results, Running and the other stages carry
   no step count. The wizard advances on a pick and has no `Next` row (every remote `cursor` is a 0-based row). The Tests
   step rows are four presets (`All tests`, `PD only`, `Legacy only`, `Vendor modes`), `Custom...` and, after a run,
   `Last results` (six rows); the solid square marks the preset matching the mask, else `Custom...`; OK on a preset selects it
-  and opens Cable. `Custom...` opens the family list (rows 0..5 are the families in run order: Huawei / Honor, Samsung,
+  and opens Spoof cable. `Custom...` opens the family list (rows 0..5 are the families in run order: Huawei / Honor, Samsung,
   OPPO / OnePlus / vivo, Xiaomi / Redmi (mirrors USB PD, not toggleable), USB PD, QC / UFCS (Class B 20 V included)); a
   short OK toggles the family, a long OK opens its Group page (a short OK there toggles a row).
-  Back retreats one level (Group -> Custom -> Tests, Cable -> Tests on the preset in force, Review -> Cable on the identity
+  Back retreats one level (Group -> Custom -> Tests, Spoof cable -> Tests on the preset in force, Review -> Spoof cable on the identity
   in force).
   The preset rows carry a one-line note: `PD only` reads "PD fixed, PPS, Mi 6A (Xiaomi)", `Legacy only` reads
   "D+/D-: vendor modes + QC/UFCS" (the Mi 6A hunt rows belong to the PD set; every D+/D- family belongs to the legacy
@@ -488,8 +488,8 @@ Buttons: the BACK slot reads `Back/Del` in the list and `List/Del` on a card (lo
   `PD3.1 rev`. Amps appear only when the step has a meaningful one, never invented; the PDO position is not in the row
   text (it stays on the detail page). A Running/Steps row is the label (`data=true` text, shortened to fit), the measured
   voltage as the tail and the verdict marker. Gallery: `docs/ui_review_2026-11-06/labels/`.
-  The Cable step and Tools -> Spoof are the same list (`CableIdentityList`): one set of rows (Off, built-in chips, saved
-  clones), one selection, one armed marker. A row is a short name with its rating in a second column; the solid square marks
+  The Spoof cable step and Tools -> Spoof are the same list (`CableIdentityList`): one set of rows (`Off (real cable)` — no rating
+  column, its note says what it means —, built-in chips, saved clones), one selection, one armed marker. A row is a short name with its rating in a second column; the solid square marks
   the pick, the amber `ARMED` pill the identity answering right now (the only tail pill), and a saved clone carries its
   library name in data colour with a dim `saved` tail. Captures: docs/ui_review_2026-11-06/wizard3/ (older rows).
   Results, step list and changes scroll like every other list: [+]/[-] move the

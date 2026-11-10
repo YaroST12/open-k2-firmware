@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
 """Start a full charger-test run from the UI and wait for it: preflight (VBUS >= 4.5 V or no sink inline: START presents Rd; PD caps rescanned),
-Algorithms -> restore all selected -> Next (Cable) -> Next (Review, START on top) -> OK (opens the confirmation window,
+Algorithms -> restore all selected -> Next (Spoof cable) -> Next (Review, START on top) -> OK (opens the confirmation window,
 nothing is touched) -> OK (confirms: Ra guard, identity, then Rd as the last stage) -> the "waiting" stage (the K2 stays
 responsive) -> the run starts by itself, then the run id must go up. The presses follow the stage, they are never
 blind: OK in "waiting" would cancel the START. When the Ra guard refuses the chosen identity ("refuse": the plug
@@ -17,7 +17,7 @@ a run with 0 PDOs is invalid.
 
 --units sends the unit list (names and order) with `charger-units` before START: only those test units run, in that
 order, each one detach -> attach -> rows -> detach. Without it the full default order runs: vendor modes (FCP, SCP, AFC, VOOC...), PD, then QC/UFCS.
---cable picks the Cable step's identity (`charger-cable`): off (the default: no spoof, no Ra), builtin
+--cable picks the Spoof cable step's identity (`charger-cable`): off (the default: no spoof, no Ra), builtin
 (the built-in EPR 50 V / 5 A cable), builtin:<id|name> (1 epr-50v, 2 cuktech-6a, 4 oneplus; 3 is the retired oneplus-mag, read as 4: the list's
 captured-cable rows) or saved:<library id>. Any identity arms that spoof and runs in Ra mode (PC13 high,
 Rd on CC2 alone) until the run ends. The device remembers the last choice, so it is sent before every START.

@@ -138,7 +138,7 @@ struct Cable {
 inline constexpr uint8_t kSrcOppoSvid = 1;
 inline constexpr uint8_t kCableObserved = 1, kCableSpoofed = 2, kCableSelfPowered = 4, kCableKindReal = 0xFF;
 // The Ra guard's reading when the run's identity was started (bits 3..5 hold raguard::Topology + 1, 0 = not judged, as
-// every card before this field) and bit 6: the user started anyway against a refusing reading ("Cable on plug" warning).
+// every card before this field) and bit 6: the user started anyway against a refusing reading (the "Cable connected" warning).
 inline constexpr uint8_t kCableGuardShift = 3, kCableGuardMask = 7 << kCableGuardShift, kCableGuardBypassed = 0x40;
 // Bit 7: the run went through the planned re-attach (the K2 blinked off once so the charger reads the cable at a real
 // attach). Its reboot is not counted in Card::resumed.

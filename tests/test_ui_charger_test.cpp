@@ -858,7 +858,7 @@ static void test_tools_spoof_survives_a_runs_end() {
         ui.goto_page(static_cast<uint8_t>(Page::ChargerTest), now + 200);
         review(ui, now + 300); ui.tick(now + 400);
         if (presents) check_review_spoof(label, kText);
-        else check_review_spoof("OFF", kText);
+        else check_review_spoof("Off", kText);
     }
     { // a suspended run abandoned on the Resume page leaves the presented spoof alone too
         fixture(); g_stub.self_powered = true;
@@ -2312,7 +2312,7 @@ static void test_cable_step_next_curr_and_start_takes_over() {
         check_row_pill(kBuiltinRow, "CURR", kCaution, kDimT, kOffRow);
         press(ui, Button::Ok, 1400);                    // OK on the Off row: selects and advances to Review
         CHECK_EQ(ui.charger_test_stage(), 4);
-        ui.tick(1410); check_review_spoof("OFF", kText);
+        ui.tick(1410); check_review_spoof("Off", kText);
         start_press(ui, 1500); confirm_press(ui, 1600); // START with Off disarms the boot-armed identity
         CHECK_EQ(g_stub.spoof_on, false); CHECK_EQ(g_stub.spoof_disarms, 1); CHECK_EQ(g_stub.spoof_arms, 1);
         CHECK_EQ(ui.charger_test_busy(), true);
@@ -3225,7 +3225,8 @@ static void test_ra_guard_refuses_a_cable() {
         pick_builtin(ui, 1700);
         move(ui, 2, 1800); CHECK_EQ(ui.charger_test_cursor(), 1);   // the cursor stops on the last answer
         press(ui, Button::Ok, 1900);
-        CHECK_EQ(ui.charger_test_stage(), kWaitStage); nothing_armed();
+        CHECK_EQ(ui.charger_test_stage(), kWaitStage);
+        CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0); CHECK_EQ(g_stub.rd_run, true);
         CHECK_EQ(ui.charger_test_cable_info().run == kOff, true);
         CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
     }
@@ -3268,6 +3269,7 @@ static void test_refuse_stage_wording_and_skip_spoof_keeps_the_pick() {
     check_row_text(1, "Start, skip spoof", kText, kBg, -1, 150, kRefuseY);
     CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
     const unsigned pref_sets = g_stub.cable_pref_sets;
+    move(ui, 1, 1700);                               // the cursor on "Start, skip spoof"
     press(ui, Button::Ok, 1800);                     // "Start, skip spoof": this run without the identity
     CHECK_EQ(ui.charger_test_stage(), kWaitStage);
     CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0); CHECK_EQ(g_stub.rd_run, true);
@@ -3276,11 +3278,13 @@ static void test_refuse_stage_wording_and_skip_spoof_keeps_the_pick() {
     CHECK_EQ(g_stub.cable_pref_sets, pref_sets);                   // /cable.cfg was not rewritten
     CHECK_EQ(g_stub.cable_pref == kBuiltin, true);
     // BACK on a fresh refusal returns to Review, nothing armed, the pick intact
-    pick_builtin(ui, 2000);
-    CHECK_EQ(ui.charger_test_stage(), kRefuseStage);
-    press(ui, Button::Back, 2100);
-    CHECK_EQ(ui.charger_test_stage(), 4); nothing_armed();
-    CHECK_EQ(ui.charger_test_cable_info().choice == kBuiltin, true);
+    rd_fixture(); set_cc(3300, 0);
+    Ui ui2; open(ui2); review(ui2);
+    pick_builtin(ui2, 2000);
+    CHECK_EQ(ui2.charger_test_stage(), kRefuseStage);
+    press(ui2, Button::Back, 2100);
+    CHECK_EQ(ui2.charger_test_stage(), 4); nothing_armed();
+    CHECK_EQ(ui2.charger_test_cable_info().choice == kBuiltin, true);
 }
 // The guard belongs to the second OK: the first one opens the confirmation and refuses nothing a cable could cause; the refusal
 // (still before anything is armed) comes with the second, and "Start, skip spoof" then goes on to the Rd and the wait.
@@ -3366,7 +3370,7 @@ static void test_ra_guard_lets_a_direct_charger_through() {
 // A K2 that runs on the measured port (PLUS boot: pinned Rd; or bus-powered) is attached to the charger before it can show a
 // cable, and a charger that reads the e-marker does so at its attach (docs/CHARGER_QUIRKS.md `cable-look-at-attach`). There is no
 // warning for that any more: START with an identity goes straight on, with the identity armed and no Refuse stage. Only the
-// topology-based "Cable on plug" refusal keeps its own screen. The planned re-attach (below) is a footer note, not a stage.
+// topology-based "Cable connected" refusal keeps its own screen. The planned re-attach (below) is a footer note, not a stage.
 static void self_supplied_start(Ui& ui, bool plus) {
     fixture(); g_stub.pm.vbus_mv = 0; g_stub.vbus_on_rd = true;
     if (plus) g_stub.self_powered = true; else g_stub.bus_powered = true;
@@ -3382,7 +3386,7 @@ static void test_self_supplied_start() {
             CHECK_EQ(g_stub.spoof_arms, 1); CHECK_EQ(g_stub.ra_ons, 1);
             CHECK_EQ(ui.charger_test_run_guard() != 0 && (ui.charger_test_run_guard() & 0x80) == 0, true);   // a reading, no "started anyway" bit
         }
-        { // Start with the cable OFF: no identity, no Ra, the Rd and the wait as for any plain START
+        { // the spoof skipped (Off pick): no identity, no Ra, the Rd and the wait as for any plain START
             Ui ui; self_supplied_start(ui, plus); open(ui); review(ui);
             start_press(ui, 1300); confirm_press_nowait(ui, 1400);
             CHECK_EQ(g_stub.spoof_arms, 0); CHECK_EQ(g_stub.ra_ons, 0);

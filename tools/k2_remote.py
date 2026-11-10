@@ -184,7 +184,7 @@ TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", 
                "changes", "ask", "refuse", "waiting", "custom"]   # "algorithms" = the Tests step (presets), "custom" = its
                                              # per-family sub-list (still step 1/3, the "group" pages hang off it);
                                              # "identity"/"ask" are retired numbers (kept reserved on the wire);
-                                             # "refuse" = the Ra guard said no (a cable is on the plug): run with OFF or cancel;
+                                             # "refuse" = the Ra guard said no (a cable is on the plug): start anyway, or skip the spoof for this run;
                                              # "waiting" = START presented Rd and waits for the charger (OK or BACK cancels it)
 TEST_ALL = (1 << len(TEST_ALGORITHMS)) - 1
 TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing..."]

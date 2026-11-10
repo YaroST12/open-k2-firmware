@@ -6,12 +6,12 @@ expected (stage, cursor) read back from `charger-test status`, so scripted navig
 
     python3 tools/ui_walk.py [--rounds 8]
 
-Walks Tests -> Custom -> Group -> back -> back -> Cable -> Review (and back) and reports each press
+Walks Tests -> Custom -> Group -> back -> back -> Spoof cable -> Review (and back) and reports each press
 as ok / DROPPED (screen state unchanged) / WRONG (changed, but not as expected). It never presses OK
 on the Review START row, and it never starts a test. Restores the "All tests" preset first.
 
-The wizard advances on a pick: OK on a preset row (Tests) goes to Cable, OK on an identity row (Cable) goes to
-Review. There is no Next row and every cursor is a 0-based row. Back from Cable lands on the preset in force,
+The wizard advances on a pick: OK on a preset row (Tests) goes to Spoof cable, OK on an identity row (Spoof cable)
+goes to Review. There is no Next row and every cursor is a 0-based row. Back from Spoof cable lands on the preset in force,
 back from Review on the identity in force: those cursors are "whatever the device had" (None below).
 """
 import argparse
@@ -91,7 +91,7 @@ class Walk:
                     "cable": ("algorithms", None),         # the cursor is on the preset in force
                     "identity": ("cable", None), "review": ("cable", None),   # on the identity in force
                     "ask": ("review", NEXT_ROW),   # retired stage: never entered
-                    "refuse": ("review", NEXT_ROW),   # the Ra guard's refusal: BACK is Cancel
+                    "refuse": ("review", NEXT_ROW),   # the Ra guard's refusal ("Cable connected"): BACK returns to Review
                     "waiting": ("review", NEXT_ROW)}[stage]   # START's wait for the charger: BACK cancels it, Rd released
             if back[1] is None:
                 kr.cmd_press(self.link, Namespace(button="back", ms=0, long=False))
