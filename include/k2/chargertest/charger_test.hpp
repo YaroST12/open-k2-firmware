@@ -70,6 +70,13 @@ const char* name(Group);
 const char* name(Verdict);
 const char* name(Reason);
 const char* name(State);
+// A refusal as the screen words it: name() is the vocabulary the card export, the web tools and the report cards share
+// (it never changes for a display budget); the reasons whose shared name does not fit the 26-27 cell footer lines say
+// it shorter. The START preflight's log line uses these same words, so the log and the footer never disagree.
+const char* refusal_words(Reason);
+// One [TEST] log line for a START-preflight refusal (the footer shows it on screen only): the reason in the on-screen
+// words plus the VBUS reading behind it, so a remote START (tools/ct_start.py) can print why the run id stayed 0.
+void log_preflight_refusal(Reason r, int vbus_mv);
 
 // A test unit is one attach of the charger from start to detach (docs/CHARGER_TEST_FLOW.md). The ids are the remote wire
 // numbering (Cmd::ChargerUnits): the first twelve equal the Group values, PdLow is the risky tail of the PD rows.

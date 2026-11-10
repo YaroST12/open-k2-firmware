@@ -423,6 +423,7 @@
   "420": "[RDI] record %s pin=%u ignored: the SRAM canary did not survive this boot (a stale record)\n",
   "421": "[RMT] pd request pos=%d mv=%d ma=%d confirm=%d over_load=%d\n",
   "422": "[PD] trigger over-load: far sink attached, no far PD message this attach (lab only)\n",
-  "423": "[PIN] lab pin cleared (the far end detached)\n"
+  "423": "[PIN] lab pin cleared (the far end detached)\n",
+  "424": "[TEST] preflight refused: %s (%d mV)\n"
  }
 }

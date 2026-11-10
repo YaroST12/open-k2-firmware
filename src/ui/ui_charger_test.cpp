@@ -36,16 +36,8 @@
 #include <cstring>
 
 namespace k2 {
-// A reason as the screen words it. charger_test::name() is the vocabulary the card export, the web tools and the report cards
-// share (it never changes for a display budget); the reasons whose shared name does not fit the 26-27 cell lines say it shorter.
-const char* reason_text(charger_test::Reason r) {
-    switch (r) {
-    case charger_test::Reason::Release: return "VBUS not safe 5V";
-    case charger_test::Reason::ShutOff: return "Source shut off: replug";
-    case charger_test::Reason::WrongVoltage: return "wrong V on 5V contract";
-    default: return charger_test::name(r);
-    }
-}
+// A reason as the screen words it: charger_test::refusal_words() owns the words (the shared name, shortened where the
+// 26-27 cell lines need it); the log line of a START preflight refusal says the same words.
 namespace {
 namespace ct = charger_test;
 using A = ct::Algorithm;
@@ -117,7 +109,7 @@ unsigned selected(uint32_t mask) { return std::popcount(mask); }
 // The footer line for a refused START. "tool busy" alone does not say which tool or what to do: Ui::busy_reason() does.
 const char* review_refusal(ct::Reason r, const char* busy) {
     if (r == ct::Reason::Busy && busy) return busy;
-    return reason_text(r);
+    return ct::refusal_words(r);
 }
 unsigned entries(uint32_t mask) {
     return selected(mask & ~kFamilies[kFamPd]) + bool(mask & ct::kPdFixedAlgorithms) + bool(mask & ct::kPpsAlgorithms);
@@ -522,7 +514,7 @@ void ChargerTestSession::resume_run(uint32_t now) {
     if (!gate_.ready(now)) { message("Waiting for stable 5V"); return; }
     if (!reapply_cable()) { auto_resume_ = false; return; }   // the reason is on the footer; the OK press decides from here
     const auto r = runner_.resume(input(now), true);    K2LOG("[TEST] resume -> %s\n", ct::name(r));
-    if (r != ct::Reason::None) { auto_resume_ = false; message(reason_text(r)); return; }
+    if (r != ct::Reason::None) { auto_resume_ = false; message(ct::refusal_words(r)); return; }
     resume_pending_ = false; auto_resume_ = false;
     resume_rd_ = resume_hold_ = false;   // the Rd (if we presented it) belongs to the run now; release_run() ends it with the run
     wait_ = pd::VbusWait();
@@ -973,7 +965,11 @@ void ChargerTestSession::open_confirmation() {
     const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
     const bool later = (preview.refusal == ct::Reason::NoSource || preview.refusal == ct::Reason::Release) &&
                        pd::start_needs_rd(ctx_.inline_mode, ctx_.vbus_fast_mv);
-    if (preview.refusal != ct::Reason::None && !later) { message(review_refusal(preview.refusal, ctx_.ui->busy_reason())); return; }
+    if (preview.refusal != ct::Reason::None && !later) {
+        ct::log_preflight_refusal(preview.refusal, in.vbus_mv);   // the footer shows it; the log carries it for a remote START
+        message(review_refusal(preview.refusal, ctx_.ui->busy_reason()));
+        return;
+    }
     // The same rule begin_run applies to the identity the START arms: the footer says so when the K2 is going to blink off.
     const auto sel = ctx_.cables.selected();
     ctcable::Facts fx;
@@ -1015,8 +1011,13 @@ void ChargerTestSession::start_failed(const char* why) {
 }
 // The preflight on the final reading (the wait changed it), then the run itself.
 void ChargerTestSession::launch() {
-    const auto preview = ct::Runner::preview(fusb302::caps(), options_, input(ctx_.now));
-    if (preview.refusal != ct::Reason::None) { start_failed(review_refusal(preview.refusal, ctx_.ui->busy_reason())); return; }
+    const auto in = input(ctx_.now);
+    const auto preview = ct::Runner::preview(fusb302::caps(), options_, in);
+    if (preview.refusal != ct::Reason::None) {
+        ct::log_preflight_refusal(preview.refusal, in.vbus_mv);   // the wait ended in a refusal: the log says why
+        start_failed(review_refusal(preview.refusal, ctx_.ui->busy_reason()));
+        return;
+    }
     begin_run();
 }
 void ChargerTestSession::begin_run() {
@@ -1050,7 +1051,10 @@ void ChargerTestSession::begin_run() {
         journal_active_ = true; journal_closed_ = false;
         set_stage(Stage::Running); follow_ = true;
     }
-    else start_failed(review_refusal(r, ctx_.ui->busy_reason()));
+    else {
+        ct::log_preflight_refusal(r, in.vbus_mv);   // the runner's own preflight refused the START
+        start_failed(review_refusal(r, ctx_.ui->busy_reason()));
+    }
 }
 void ChargerTestSession::leave() { cancel(); }
 bool ChargerTestSession::set_units(std::span<const uint8_t> units) {
@@ -1384,7 +1388,7 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     case Stage::Running: {
         const auto &steps = runner_.steps();
         if (runner_.state() == ct::State::Unsafe) { f.put("Unplug; verify measured 5V"); return FooterTone::Error; }
-        if (runner_.reason() != ct::Reason::None) { f.put(reason_text(runner_.reason())); return FooterTone::Caution; }
+        if (runner_.reason() != ct::Reason::None) { f.put(ct::refusal_words(runner_.reason())); return FooterTone::Caution; }
         if (steps.empty()) { f.put("Starting"); return FooterTone::Info; }
         unsigned i, n;
         const char *unit;
@@ -1510,7 +1514,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             row_text_.put("Run ").put_u32(runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip).put_char('/').put_u32(c.total).put(" done");
             out.text = row_text_.view();
         } else if (index == 1) {
-            out.text = reason_text(runner_.reason());
+            out.text = ct::refusal_words(runner_.reason());
             out.text_color = kCaution;
             out.data = true;
         } else {

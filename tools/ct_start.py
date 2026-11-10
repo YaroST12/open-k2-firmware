@@ -6,7 +6,9 @@ Algorithms -> restore all selected -> Next (Cable) -> Next (Review, START on top
 nothing is touched) -> OK (confirms: Ra guard, identity, then Rd as the last stage) -> the "waiting" stage (the K2 stays
 responsive) -> the run starts by itself, then the run id must go up. The presses follow the stage, they are never
 blind: OK in "waiting" would cancel the START. When the Ra guard refuses the chosen identity ("refuse": the plug
-carries a cable, not a charger) the refusal is cancelled and the exit code is 6. A summary is never printed for a run
+carries a cable, not a charger) the refusal is cancelled and the exit code is 6. When the run id stays 0 the START
+preflight refused: its reason (the K2's "[TEST] preflight refused" log line, read from the USB log on the same HID
+link) is printed with the run id, exit code 5. A summary is never printed for a run
 that did not start. Then polls `charger-test status`
 until the run ends (done, stopped, unsafe...) and prints `charger-test summary`. Run `k2_remote.py action pd-rescan` first:
 a run with 0 PDOs is invalid.
@@ -30,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import charger_summary
 import k2_lock
 import k2_remote as kr
+import logdb
 from ui_walk import NEXT_ROW, Walk
 
 MIN_VBUS_MV = 4500
@@ -91,6 +94,35 @@ def stage_of(link):
         return kr.cmd_charger_test(link, Namespace(test_cmd="status"))["stage"]
     except kr.RemoteTimeout:
         return None
+
+
+def drain_log(link, frames, seconds=1.0, clock=time.monotonic):
+    """Read the K2's USB log text into `frames` for `seconds`: the log lines ride the same HID IN endpoint as the
+    responses (ASCII frames; a response's first byte has the high bit set), so every read collects them."""
+    deadline = clock() + seconds
+    while clock() < deadline:
+        raw = link.transport.read(200)
+        if raw:
+            frames.append(raw)
+
+
+def last_preflight_refusal(frames):
+    """The last '[TEST] preflight refused' line among the log frames (decoded from their msg# ids), or None.
+
+    The START preflight logs its refusal as one [TEST] line with the reason in the on-screen words and the VBUS
+    reading; the run id then stays where it was, so this line is why."""
+    text = b"".join(f for f in frames if f and f[0] < 0x80).replace(b"\x00", b"").decode("ascii", "replace")
+    refused = [l for l in (logdb.decode_line(l) for l in text.splitlines()) if l.startswith("[TEST] preflight refused")]
+    return refused[-1].rstrip("\n") if refused else None
+
+
+def start_failure_text(before, frames):
+    """The stderr line for a START that left the run id unchanged: with the preflight's refusal reason from the log
+    when the log carries one, the plain message otherwise."""
+    reason = last_preflight_refusal(frames)
+    if reason:
+        return f"START did not start a run (run id still {before}): {reason}"
+    return f"START did not start a run (run id still {before})"
 
 
 def start_run(link, before, press=press_ok, run_id=None, stage=None, back=press_back, sleep=time.sleep,
@@ -195,12 +227,18 @@ def main(argv=None):
         if before is None:
             print("the K2 does not answer charger-test status", file=sys.stderr)
             return 1
-        started = start_run(link, before)
+        log_frames = []
+        link.tap = log_frames.append   # the log text frames read during the polls (the preflight refusal among them)
+        try:
+            started = start_run(link, before)
+        finally:
+            link.tap = None
         if started == REFUSED:
             print(f"refusing to start: {REFUSAL_TEXT} (use --cable off, or put the charger on the top plug)", file=sys.stderr)
             return 6
         if started != STARTED:
-            print(f"START did not start a run (run id still {before})", file=sys.stderr)
+            drain_log(link, log_frames)   # the refusal line may still be queued on the K2
+            print(start_failure_text(before, log_frames), file=sys.stderr)
             return 5
         deadline = time.monotonic() + a.wait
         while time.monotonic() < deadline:

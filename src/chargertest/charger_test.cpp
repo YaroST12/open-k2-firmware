@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/charger_test.hpp"
+#include "k2/core/log.hpp"
 #include "k2/fastcharge/accp.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/fastcharge/qc.hpp"
@@ -51,6 +52,17 @@ const char* name(Reason r) {
     };
     static_assert(std::size(names) == unsigned(Reason::NeedsLoad) + 1);
     return names[static_cast<unsigned>(r)];
+}
+const char* refusal_words(Reason r) {
+    switch (r) {
+    case Reason::Release: return "VBUS not safe 5V";
+    case Reason::ShutOff: return "Source shut off: replug";
+    case Reason::WrongVoltage: return "wrong V on 5V contract";
+    default: return name(r);
+    }
+}
+void log_preflight_refusal(Reason r, int vbus_mv) {
+    K2LOG("[TEST] preflight refused: %s (%d mV)\n", refusal_words(r), vbus_mv);
 }
 const char* name(State s) {
     static constexpr const char* names[] = {"Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing..."};
