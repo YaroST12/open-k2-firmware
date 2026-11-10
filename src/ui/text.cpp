@@ -58,14 +58,15 @@ int text_width(const Font &f, std::string_view s) {
     return n * f.adv;
 }
 
-int render_row(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
-               uint16_t *out, int max_px) {
-    int width = text_width(f, s);
-    int n = width < max_px ? width : max_px;
+int render_row_span(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
+                    uint16_t *out, int x0, int count) {
+    const int width = text_width(f, s);
+    const int x1 = x0 + count < width ? x0 + count : width;   // one past the last column served
+    const int n = x1 > x0 ? x1 - x0 : 0;
     for (int x = 0; x < n; x++) out[x] = lut[0];
 
     int pen = 0;
-    for (size_t i = 0; i < s.size() && pen < n;) {
+    for (size_t i = 0; i < s.size() && pen < x1;) {
         const Glyph *g = find_glyph(f, next_codepoint(s, i));
         if (g) {
             // The ink box starts (ascent - top) rows below the top of the line box.
@@ -73,15 +74,20 @@ int render_row(const Font &f, std::string_view s, int row, const uint16_t (&lut)
             if (gy >= 0 && gy < g->h) {
                 for (int gx = 0; gx < g->w; gx++) {
                     int x = pen + g->left + gx;
-                    if (x < 0 || x >= n) continue;
+                    if (x < x0 || x >= x1) continue;
                     const uint8_t l = level(f, *g, gx, gy);
-                    if (l) out[x] = lut[l];   // glyph ink lies inside its cell: no overlap to merge
+                    if (l) out[x - x0] = lut[l];   // glyph ink lies inside its cell: no overlap to merge
                 }
             }
         }
         pen += f.adv;
     }
     return n;
+}
+
+int render_row(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
+               uint16_t *out, int max_px) {
+    return render_row_span(f, s, row, lut, out, 0, max_px);
 }
 
 int render_column(const Font &f, std::string_view s, int col, const uint16_t (&lut)[16], uint16_t *out) {

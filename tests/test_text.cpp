@@ -5,6 +5,8 @@
 #include "k2/ui/text.hpp"
 #include "k2/ui/font_aa.hpp"
 #include "k2/ui/blend.hpp"
+#include <string>
+#include <vector>
 
 using namespace k2;
 
@@ -302,7 +304,53 @@ static void test_one_bpp_still_decodes() {
     CHECK_EQ(row[1], 0xFFFF);  CHECK_EQ(row[2], 0x0000);  CHECK_EQ(row[3], 0xFFFF);
 }
 
+// The callers that stream a wide row in chunks (gfx_text, the Home cell) take it as render_row_span windows:
+// the windows laid side by side must equal the whole row, for every glyph of every font, whatever the chunk.
+static void append_utf8(std::string &out, uint32_t cp) {
+    if (cp < 0x80) { out += static_cast<char>(cp); return; }
+    if (cp < 0x800) { out += static_cast<char>(0xC0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3F)); return; }
+    out += static_cast<char>(0xE0 | (cp >> 12));
+    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    out += static_cast<char>(0x80 | (cp & 0x3F));
+}
+
+static void test_row_span_matches_row() {
+    uint16_t lut[16];
+    make_blend_lut(0xFFFF, 0x1234, lut);
+    const Font *fonts[] = {&font_12, &font_16, &font_24, &font_48, &font_64};
+    for (const Font *f : fonts) {
+        std::string s;
+        for (size_t i = 0; i < f->count; i++) append_utf8(s, f->codepoints[i]);
+        const int width = text_width(*f, s);
+        std::vector<uint16_t> whole(static_cast<size_t>(width) + 8), chunked(whole.size());
+        for (int chunk : {80, 7, 33, 1}) {
+            for (int r = 0; r < f->height; r += (chunk == 1 ? 5 : 1)) {
+                const int n = render_row(*f, s, r, lut, whole.data(), width);
+                CHECK_EQ(n, width);
+                int got = 0;
+                for (int x = 0; x < width; x += chunk) {
+                    const int c = chunk < width - x ? chunk : width - x;
+                    got += render_row_span(*f, s, r, lut, chunked.data() + x, x, c);
+                }
+                CHECK_EQ(got, width);
+                bool same = true;
+                for (int x = 0; x < width; x++) same = same && whole[x] == chunked[x];
+                CHECK_COND(same);
+            }
+        }
+    }
+    // A window that ends before the text does, and one that starts inside a glyph, still match the whole row.
+    uint16_t a[240], b[240];
+    const int n = render_row(font_16, "Wide text 123", 5, lut, a, 240);
+    const int m = render_row_span(font_16, "Wide text 123", 5, lut, b, 20, 40);
+    CHECK_EQ(m, 40);
+    bool same = n >= 60;
+    for (int x = 0; x < 40; x++) same = same && a[20 + x] == b[x];
+    CHECK_COND(same);
+}
+
 int main() {
+    test_row_span_matches_row();
     test_missing_glyph_count();
     test_rot_source_corners();
     test_rotated_matches_bitmap();

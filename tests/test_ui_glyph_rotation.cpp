@@ -22,6 +22,8 @@
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/home_cell.hpp"
 #include "k2/ui/home_model.hpp"
+#include "k2/ui/blend.hpp"
+#include "k2/ui/text.hpp"
 #include "k2/pd/pd_source.hpp"
 #include <array>
 #include <cstdio>
@@ -228,7 +230,68 @@ static void test_source_inverts_mapped_rect() {
     }
 }
 
+// home::paint streams a row in windows of a few dozen pixels. A full-width paint (several windows per row, fills and
+// glyphs crossing the window edges) and the same cell painted as narrow strips (one window per row, edges elsewhere)
+// must leave identical panels, 1:1 and stretched alike.
+static void test_paint_windows_are_invisible() {
+    const int16_t top = home::kVoltCell.top;
+    const home::Item items[4] = {
+        home::fill(3, static_cast<int16_t>(top + 2), 217, 6, 0x1234),
+        home::text(font_24, 60, static_cast<int16_t>(top + 12), "Window edge 123", kText),
+        home::text(font_16, 5, static_cast<int16_t>(top + 44), "A long line of text across the cell", 0x07E0),
+        home::text(font_12, 150, static_cast<int16_t>(top + 70), "tail text here", 0xF800),
+    };
+    for (uint8_t r = 0; r < 4; ++r) {
+        home::Cell c;
+        c.geom = home::kVoltCell;
+        c.bg = kBg;
+        c.sweep = false;
+        c.items = items;
+        const Layout l = layout_for(r);
+        std::fill(std::begin(g_panel), std::end(g_panel), kBg);
+        {
+            ContentViewport viewport(l.content);
+            home::paint(c, 0, top, home::kW - 1, home::kVoltCell.bottom);
+        }
+        const std::vector<uint16_t> whole(std::begin(g_panel), std::end(g_panel));
+        std::fill(std::begin(g_panel), std::end(g_panel), kBg);
+        {
+            ContentViewport viewport(l.content);
+            for (int x = 0; x < home::kW; x += 37)
+                home::paint(c, x, top, x + 36 < home::kW - 1 ? x + 36 : home::kW - 1, home::kVoltCell.bottom);
+        }
+        int differ = 0, inked = 0;
+        for (size_t i = 0; i < whole.size(); i++) {
+            differ += whole[i] != g_panel[i];
+            inked += whole[i] != kBg;
+        }
+        if (differ) std::printf("  rotation %d: %d pixels differ between the full paint and the strips\n", r, differ);
+        CHECK_EQ(differ, 0);
+        CHECK_EQ(inked > 2000, true);
+    }
+}
+
+// gfx_text streams a row in windows too: a line several windows wide equals the rows render_row gives whole.
+static void test_gfx_text_wide_line() {
+    const std::string_view s = "A line of three windows..";   // 25 chars of font_16: 200 px
+    const int w = text_width(font_16, s);
+    CHECK_EQ(w > 160, true);
+    std::fill(std::begin(g_panel), std::end(g_panel), kBg);
+    gfx_text(Surface{0, 0, 240, 240}, font_16, 10, 20, s, kText, kBg);
+    uint16_t lut[16];
+    make_blend_lut(kText, kBg, lut);
+    uint16_t row[240];
+    int differ = 0;
+    for (int r = 0; r < font_16.height; r++) {
+        CHECK_EQ(render_row(font_16, s, r, lut, row, 240), w);
+        for (int x = 0; x < w; x++) differ += g_panel[(20 + r) * LCD_WIDTH + 10 + x] != row[x];
+    }
+    CHECK_EQ(differ, 0);
+}
+
 int main() {
+    test_gfx_text_wide_line();
+    test_paint_windows_are_invisible();
     test_same_string_glyph_bitmaps();
     test_home_page_hero_glyphs();
     test_source_inverts_mapped_rect();

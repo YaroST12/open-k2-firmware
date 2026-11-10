@@ -118,6 +118,8 @@ struct TextBox {
     Rect r;
 };
 constexpr size_t kMaxTextBoxes = 16;
+// Panel pixels composed and streamed at a time (160 B of stack instead of a 480 B full row).
+constexpr int kRowChunk = 80;
 
 // A landscape rotation maps the 224x240 logical content onto a 240x224 panel box with a non-integer,
 // non-square stretch, while a glyph keeps its native pixel size. The rectangle is therefore composed per
@@ -127,7 +129,7 @@ constexpr size_t kMaxTextBoxes = 16;
 // to panel columns in place (source_x, right to left), and the glyph boxes covering the row are overlaid in
 // item order. Every panel pixel then depends on its own state only, so a repaint strip equals the same
 // pixels of a full-frame paint, and nothing is erased that a glyph does not cover again.
-// `row` holds at least 240 pixels.
+// `row` holds kRowChunk pixels.
 void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *row) {
     const Rect pr = ContentViewport::mapped_rect({static_cast<int16_t>(x0), static_cast<int16_t>(y0),
                                                   static_cast<int16_t>(x1 - x0 + 1), static_cast<int16_t>(y1 - y0 + 1)});
@@ -168,24 +170,35 @@ void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *ro
     lcd::stream_begin(static_cast<uint16_t>(rx0), static_cast<uint16_t>(ry0), static_cast<uint16_t>(rx1), static_cast<uint16_t>(ry1));
     for (int py = ry0; py <= ry1; py++) {
         const int ly = ContentViewport::source_y(py);
-        if (ly < 0) {                     // no logical row owns it (cannot happen inside the cell's mapped rows)
-            for (int i = 0; i < w; i++) row[i] = c.bg;
-        } else {
-            compose_row_impl(c, ly, lx0, lx1, row, false);
-            for (int i = w - 1; i >= 0; i--) {
-                const int lx = ContentViewport::source_x(rx0 + i);
-                row[i] = row[(lx < lx0 || lx > lx1 ? lx0 : lx) - lx0];
+        // The row goes out in windows of at most kRowChunk panel pixels (consecutive stream_pixels calls continue
+        // the open window); every pixel depends on its own column only, so the windows equal one full-width pass.
+        for (int cx0 = rx0; cx0 <= rx1;) {
+            int cx1 = cx0 + kRowChunk - 1 < rx1 ? cx0 + kRowChunk - 1 : rx1;
+            const int clo = ContentViewport::source_x(cx0);
+            // The logical columns behind the window must fit the buffer too (a down-scaling viewport would not).
+            while (cx1 > cx0 && ContentViewport::source_x(cx1) - clo + 1 > kRowChunk) cx1--;
+            const int chi = ContentViewport::source_x(cx1);
+            const int cw = cx1 - cx0 + 1;
+            if (ly < 0 || clo < 0 || chi < clo) {   // no logical row/column owns it (cannot happen inside the cell's mapped area)
+                for (int i = 0; i < cw; i++) row[i] = c.bg;
+            } else {
+                compose_row_impl(c, ly, clo, chi, row, false);
+                for (int i = cw - 1; i >= 0; i--) {
+                    const int lx = ContentViewport::source_x(cx0 + i);
+                    row[i] = row[(lx < clo || lx > chi ? clo : lx) - clo];
+                }
             }
+            for (size_t b = 0; b < nb; b++) {
+                const Rect &r = boxes[b].r;
+                if (py < r.y || py >= r.y + r.h || r.x > cx1 || r.x + r.w - 1 < cx0) continue;
+                Item glyphs = *boxes[b].it;
+                glyphs.x = r.x;
+                glyphs.y = r.y;
+                put_text_row(glyphs, py, cx0, r.x + r.w - 1 < cx1 ? r.x + r.w - 1 : cx1, row);
+            }
+            lcd::stream_pixels({row, static_cast<size_t>(cw)});
+            cx0 = cx1 + 1;
         }
-        for (size_t b = 0; b < nb; b++) {
-            const Rect &r = boxes[b].r;
-            if (py < r.y || py >= r.y + r.h || r.x > rx1 || r.x + r.w - 1 < rx0) continue;
-            Item glyphs = *boxes[b].it;
-            glyphs.x = r.x;
-            glyphs.y = r.y;
-            put_text_row(glyphs, py, rx0, r.x + r.w - 1 < rx1 ? r.x + r.w - 1 : rx1, row);
-        }
-        lcd::stream_pixels({row, static_cast<size_t>(w)});
     }
     lcd::stream_end();
 }
@@ -201,12 +214,15 @@ void paint(const Cell &c, int x0, int y0, int x1, int y1) {
     if (y0 < c.geom.top) y0 = c.geom.top;
     if (y1 > c.geom.bottom) y1 = c.geom.bottom;
     if (x0 > x1 || y0 > y1) return;
-    uint16_t row[240];
+    uint16_t row[kRowChunk];
     if (!ContentViewport::stretched()) {
         lcd::stream_begin(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1), static_cast<uint16_t>(y1));
         for (int y = y0; y <= y1; y++) {
-            compose_row(c, y, x0, x1, row);
-            lcd::stream_pixels({row, static_cast<size_t>(x1 - x0 + 1)});
+            for (int x = x0; x <= x1; x += kRowChunk) {
+                const int cx1 = x + kRowChunk - 1 < x1 ? x + kRowChunk - 1 : x1;
+                compose_row(c, y, x, cx1, row);
+                lcd::stream_pixels({row, static_cast<size_t>(cx1 - x + 1)});
+            }
         }
         lcd::stream_end();
         return;

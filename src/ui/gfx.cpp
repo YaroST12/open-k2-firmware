@@ -61,13 +61,19 @@ void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string
 
     uint16_t lut[16];
     make_blend_lut(fg, bg, lut);
-    uint16_t line[kScreenW];
+    // A row is rendered and streamed in windows of kChunk pixels: consecutive stream_pixels calls continue the
+    // open window, so a full-width row buffer (480 B of every paint's stack) is not needed.
+    constexpr int kChunk = 80;
+    uint16_t line[kChunk];
 
     lcd::stream_begin(static_cast<uint16_t>(native.x), static_cast<uint16_t>(native.y),
                      static_cast<uint16_t>(native.x + px - 1), static_cast<uint16_t>(native.y + rows - 1));
     for (int r = 0; r < rows; r++) {
-        int n = render_row(f, text, r, lut, line, px);
-        lcd::stream_pixels({line, static_cast<std::size_t>(n)});
+        for (int x0 = 0; x0 < px; x0 += kChunk) {
+            const int n = render_row_span(f, text, r, lut, line, x0, kChunk < px - x0 ? kChunk : px - x0);
+            if (n <= 0) break;
+            lcd::stream_pixels({line, static_cast<std::size_t>(n)});
+        }
     }
     lcd::stream_end();
 }

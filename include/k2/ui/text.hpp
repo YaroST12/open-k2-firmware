@@ -33,6 +33,11 @@ int text_width(const Font &f, std::string_view s);
 int render_row(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
                uint16_t *out, int max_px);
 
+// The window [x0, x0 + count) of that row, written to out[0..]: a caller with a short buffer streams a wide
+// row as consecutive windows. Clipped at the text width; returns the pixels written. render_row is x0 = 0.
+int render_row_span(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
+                    uint16_t *out, int x0, int count);
+
 // ---- Text rotated by 90 degrees, streamed transposed -----------------------------------------
 // A rotated line occupies a window line_h wide and text_w tall (screen pixels). The window is
 // streamed row by row (sy = 0..text_w-1), each row holding line_h pixels (sx = 0..line_h-1).
