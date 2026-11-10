@@ -48,31 +48,7 @@ Every row below carries **Fix** (what to change, where) and **Validate** (what p
 and the hardware check). A row leaves this list when its fix is merged and the hardware check has passed; move it to
 "Verified on hardware" with the date and the evidence path.
 
-- **An inline K2 hijacks the link** (2026-11-09, user report, build b00178c): fixed in 026e516 (+ 5334c08, 122412f),
-  hardware check pending. The report: hub or charger -> K2 -> USB 2 C-C cable ->
-  Pixel, HID-powered plain boot, no PLUS. The K2 put Rd on CC2 from the first instruction, Requested 12 times in 3 s
-  while the Pixel Requested too, answered the Pixel's VDMs as the device, flapped inline yes/no, and Refresh (which opens
-  CC ~150 ms) rebooted the hub-powered K2. Dock -> K2 -> laptop (same day): no PD traffic after a clean boot, yet the page
-  said "PD none" / "NO DEVICE" at 20 V. Matrix rows H6, H7, C3, C4 (`docs/CONNECTION_MATRIX.md`, exceptions X1 to X3).
-  - Diagnosis (code reading plus host tests, hardware pending): a stale `/rd.rec` was read on a host-powered boot and
-    converted to a key mode (`src/core/rd_comeback.cpp`); `pd::Link` is UI-tick fed, was blind during the slow init and
-    a detach cleared its latch, so the Rd -> self-hold Request -> VBUS returns under load -> inline -> Rd off -> VBUS
-    collapses loop ran; the Request and the VDM answers were gated on the latch only; Refresh's `CycleBridged` opens CC.
-  - Fix: (1) a boot with a host or a 5 V aux rail ignores the marker (`rd_intent.hpp`, `rd_comeback.cpp`); (2) `pd::Link`
-    latches inline on a load, a foreign Request, a VBUS rise, or foreign evidence held 1.5 s (VBUS above 5.5 V or a sink-band
-    CC level with no Rd of ours, no contract of our own), clears only after a quiet window of proof, and survives a VBUS gap
-    (`src/pd/pd_link.cpp`); (3) the driver mirrors it and also gates on `sink_downstream()` / `sink_cc_far()`: no Rd, no
-    Request, no SOP answers (`src/drivers/fusb302.cpp`); (4) Refresh and the survey are passive and Blocked(inline)
-    while inline or possibly inline (`src/core/rescan.cpp`, `src/core/survey.cpp`); (5) empty states say "in use", never
-    "no device", and name no port (`include/k2/ui/ui_connection.hpp`).
-  - Validate: host tests (`tests/test_pd_link.cpp`, `test_fusb302_scan.cpp`, `test_rd_intent.cpp`, `test_ui_connection*.cpp`),
-    `make gate`; hardware, one device tool at a time, no active PD with a laptop inline: **H6** charger -> K2 -> Pixel,
-    HID, plain boot: `bootinfo` shows `pin=0`, Black Box shows no K2 Request and no SOP TX, LINK `inline=yes`, UI "Live sink";
-    **H7** hub 5 V 0.9 A -> K2 -> Pixel: same, no VDM answers, inline never flaps, hub keeps VBUS; **C4** plant a stale
-    `/rd.rec` (self-powered run, bare unplug), plug into HID only: no Rd at any time; **C3** Connection -> Source ->
-    Refresh with a sink behind: no CC open, K2 does not reboot, survey shows Blocked(inline); dock -> K2 -> laptop: with no
-    PD traffic the Source / Sink / Cable tabs say "in use", never "NO DEVICE", and the K2 transmits nothing.
-
+- ~~**An inline K2 hijacks the link**~~ completed: 026e516 (+5334c08, 122412f); plain boot passive and zero K2 TX inline on hardware (H6, P4, 2026-11-10).
 - **Connection -> Source -> Refresh kills a self-powered K2** (2026-11-09, user report): fixed in 667bca2 (+ 7f73ddf,
   8cdc8c3), hardware check pending.
   - Evidence: PLUS-boot K2 powered only by the charger on the bottom port; Actions -> Refresh ran `fusb302::rescan()`,
@@ -311,92 +287,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     too, so step 1 may narrow the rule.
   - Validate: host tests (red first) for the `--over-load` gate (refused after any far PD message, refused with no
     far sink) and the signature rule; the hardware step above.
-- **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589, fixed in
-  f0d79fb as an opt-in setting, **Settings > Wake sleeping port, default off**; hardware verified 14f9d24, see the
-  note at the end of this row): idle
-  K2 on the splitter with nothing attached, VBUS 78 mV, "No source"; `pd-reread` without a pin answered "busy" and
-  `pd attach 5000` did nothing; `pd-reread --pin 2 --no-run` woke it at once. 5926abb's slow-wake dwell only acts
-  inside the Rd seek after a passive pick, and the open standby reading is wiped by `RdSeek::reset()` on attach, so an
-  idle K2 never holds a steady Rd long enough. Fix: the idle/no-source path treats a line with the standby signature
-  (open ~3.0-3.3 V, `kStandbyOpenMv`) as a sleeping source and holds Rd on it for `kSlowWakeDwellMs`; keep the open
-  readings across `reset()`. Done: `pd::IdleWake` holds the Rd on the one signature line at plain passive idle
-  (`idle_rd()` only when no other Rd owner exists), `RdSeek::reset()` keeps the open readings (`clear()` at boot),
-  and the 500 ms no-Rp detach is held off inside the dwell window (`IdleWake::holding_slow`, ended by `on_rp_seen`);
-  host-tested in `tests/test_rdseek.cpp`. Validate: host test on the decision; hardware: idle K2, plug into the sleeping splitter
-  port, PD list on screen without any pin.
-  Opt-in (the idle wake breaks I1 / H2 for every waiting charger, see the merge-pass note below): the hold only runs with
-  the remembered setting **Settings > Wake sleeping port** (last Settings row, OFF by default; bit4 of byte 7 of the
-  `/prefs.cfg` record, `pd::IdleWake::set_enabled`, `fusb302::set_idle_wake`, applied from main() at boot). With it
-  off the idle K2 presents no Rd and `RdSeek::reset(false)` wipes the open readings on attach, exactly as on `public`
-  (host-tested: `tests/test_fusb302_scan.cpp` off / on / off-again on a 3.3 V open CC2, `tests/test_rdseek.cpp`,
-  `tests/test_uiprefs.cpp`, the Settings row in `tests/test_ui_rotation.cpp`). Hardware check pending: setting on,
-  idle K2 into the sleeping splitter port (PD list without any pin), then a waiting charger and a DRP phone with the
-  setting on (expected: the K2 becomes their sink for one dwell; this is the documented exception), and off again.
-  Bench rig 2026-11-10 (Anker IQ4 -> splitter -> K2 top plug, be71f10): the setting never presented a visible Rd. Root
-  cause found in code (`k2/idle-wake-hw`): the passive scan attaches on the dark port's Rp (chip CC2 BC_LVL 3, VBUS 0,
-  no PD) and nothing detaches that attach (`DetachTracker` needs VBUS seen >= 3 V first, the comparator keeps reading
-  the Rp), while the hold is gated on `g_active_cc == 0`: after any toggle off -> on, or any scan attach, the wake
-  never ran again. Fix: with the setting on, an attach with VBUS < 3 V and no PD message for `kDarkAttachMs` (3 s) is
-  released ("Detach: dark attach", `IdleWake::dark_attach`, same owner gate as the hold) so the hold takes the line;
-  setting off is untouched. The hold now also writes SWITCHES0 at once (it used to reach the chip only with the next
-  scan) and logs every dwell with the SWITCHES0 readback and the live ADC levels, because the hold line was printed only
-  on change (the bench capture started after it). ADC cc1/cc2 vs chip CC1/CC2: no swap found (the bench scan reads
-  CC2 BC_LVL 3 and the ADC cc2 rises to 1.63 V at the same moment); hardware check pending.
-  Pixel ALONE on the K2 (same firmware): the stale dark attach also kept `pd::Link` inline for minutes, and a latched
-  inline blocks `idle_owner_free()` (`downstream_now()`), so it would block the release too. Fix in the Link
-  (`kDarkSinkMs`, 3 s): a sink's Rd on CC (`far_sink_cc`) counts as foreign-sink evidence only while VBUS has been at
-  vSafe5V within that window (or since the attach); a dual-role phone toggling its Rp through the Rd level with no VBUS
-  neither latches nor holds the latch (`test_a_dark_phone_alone_never_holds_the_inline_latch`). The host model keeps
-  the Link attached with 900 mV VBUS spikes; a plain 0 V VBUS detaches the Link at 300 ms and releases the latch after
-  `kInlineHoldMs`, so the exact bench cause of the 3-minute latch (spiking VBUS reads, or the latch surviving from
-  the earlier charger run) is not proven; the rule covers both. Hardware check pending.
-  Retest 2026-11-10 (48adfa1, `runs/2026-11-10-merge2-hw/wake2`, `k2/idle-wake-2`): the hold now presented Rd but the
-  splitter still never woke. Root cause, three links: (1) the passive scan kept running during the hold and attached the
-  board's CC2 bias net (~1.7 V open, see CHARGER_QUIRKS "PLUS key is coupled to CC2"), which reads comparator-true and
-  inside the Rd window; the attach cleared the hold while a stale PDWN1 stayed in SWITCHES0; (2) `detach_reset` then wrote
-  SWITCHES0 = 0 and the ADC sample fed one UI tick later (cc1 = 6 mV under the old Rd, cc2 = a 3284 mV measurement spike)
-  was noted as the "open" level, so a level taken under our own Rd became the wake's evidence; (3) with `note_open` blind
-  under Rd, an unanswered hold re-armed the same line forever. Fixes: the sweep is restricted to the held line while the hold
-  owns the line and the scan is skipped in the re-read window (`detect_cc_orientation`, `poll()`); `RdSeek::feed_open` takes
-  a level only with no Rd presented, 150 ms after the last SWITCHES0 pull-down change, and confirmed by a second sample from
-  a distinct ADC refresh >= 20 ms later within 250 mV (`rd_changed` hooked in `wr()` and init); `IdleWake` counts
-  unanswered dwells per line and after two on one line releases Rd for 600 ms ("Idle wake: no Rp on CCn after N dwells")
-  so the open levels are re-read and the signature picks the line. The 1.69 V on CC2 is the board's own bias net, not our
-  measure; by level alone it equals a 3 A Rp over a sink's Rd (330 uA x 5.1 kOhm), so it is explained, not filtered. A boot
-  scan before any level is known can still attach it (dark attach, released after 3 s). Host-tested
-  (`tests/test_rdseek.cpp`, `tests/test_fusb302_scan.cpp` wake2 cases); hardware check pending.
-  Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
-  splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
-  START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
-  - Merge pass 2026-11-10: `k2/sleeping-port-rd` (f11ea84, `pd::IdleWake`) was **held, not merged** as an always-on
-    behaviour; it now ships only as the opt-in setting above (default off, I1 / H2 unchanged with it off). With it on it puts Rd on any
-    idle line that reads >= 2800 mV open, which is also every ordinary waiting charger (Rp 3.2-3.3 V) and a dual-role
-    phone's toggling Rp (H13). That breaks invariant I1 / row H2 in `docs/CONNECTION_MATRIX.md` (a plain boot presents
-    no Rd until START or a re-read), makes the K2 the sink of record before anything is plugged behind it (the P4
-    hand-back problem) and would have a DRP phone power the K2. The explicit paths already wake the splitter on
-    hardware (START and a plain `pd-reread` held Rd 1648 ms on one line, 2026-11-10). Remaining fix, smaller: START's
-    VBUS wait covers the ~1.1-1.7 s wake (the first-START miss above) and the idle UI says "source asleep: START or
-    Refresh wakes it" on the standby signature. Decision for the user if the idle wake is still wanted.
-  - Hardware 2026-11-10 (14f9d24, Anker IQ4 -> Anker 2-way splitter, other output empty -> C-C cable -> K2, HID-powered,
-    `runs/2026-11-10-merge2-hw/wake3`): asleep = CC1 3.04 V, VBUS 0, K2 passively attached on the CC2 bias net (1.69 V).
-    Wake ON -> the dark attach is released, Rd held on CC1 (sw0=0x01, the standby Rp collapses to 0 V under it) for two
-    steady dwells; the splitter's Rp answered 3.86 s after the Rd, the scan attached CC1, 6 PDOs, VBUS 5.08 V. Two
-    earlier hardware rounds failed (48adfa1 and before: the passive scan took the line during the hold after 0.28 s,
-    then stale ADC samples picked the wrong line; fixed in c3f46d1 / e0a4ada). Still open: the boot scan can attach
-    the CC2 bias net first, so the wake starts up to ~3 s late (dark-attach release).
-- **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note, fixed in b60c702 + ce6bbdb + df8e004,
-  hardware check pending): with `pd-reread --pin 2`
-  still set, splitter -> K2 -> OnePlus 15: the K2 sent two Requests (one collided with the phone's) before the far
-  Request made it go passive (~2.3 s). The pin is a lab option and did what it says; the gap is that nothing shows it
-  is still set. Fix: show the pin on the Home status line (e.g. "Rd pin CC2") and in `pd status`; clear it on
-  detach of the far end. Done: the Home status badge (the VBUS cell's pill) reads "Rd pin CCx", the rotation pages'
-  chrome-bar badge does too (was the bare "SNK"), `pd status` carries the appended pin byte, and a lab pin (only
-  `pd-reread --pin`) clears with its mark on the far end's detach; a boot / comeback pin keeps its Rd.
-- **`k2_remote.py cards` cannot read format v8 cards** (2026-11-10, fixed in 26f297f, hardware check pending):
-  "card payload is 198 bytes, expected 144, 162,
-  178, 190 or 196" after b193e56 made the shared card v8 (rebalanced count). Add the v8 size and field to the host
-  decoder (`tools/k2_remote.py`, same layout as `tools/report_card.py`), with a test. Done: the card read length is
-  derived from `report_card.PAYLOAD` (198, v8) and `cards list` / `cards show` render the rebalanced count.
+- ~~**The splitter's sleeping port still needs the Rd pin outside a charger-test START**~~ completed: opt-in Settings > Wake sleeping port (f0d79fb, c3f46d1), woke the sleeping splitter port on hardware 14f9d24 (IQ4 -> splitter, Rp answered 3.86 s after the Rd, 6 PDOs). Still open: the boot scan can latch the CC2 bias net first (wake ~3 s late); START's VBUS wait vs the 1.1-1.7 s wake and the "Source asleep" idle hint are batch 3 (k2/start-wake-wait).
+- ~~**A leftover Rd pin makes an inline K2 Request at attach**~~ completed: b60c702 + ce6bbdb + df8e004; Home "Rd pin CC2" badge and `pd status` pin verified on c700284.
+- ~~**`k2_remote.py cards` cannot read format v8 cards**~~ completed: 26f297f; `cards list` / `cards export` read the v9 cards on hardware 2026-11-10.
 - **An inline latch leaves the far sink on Type-C current: hand the contract back with a Hard Reset** (2026-11-10,
   connection matrix P4, 05b1703, `runs/2026-11-10-connection/P4/`): PLUS-boot K2 on a Baseus 140 W, self-hold PDO 1
   Ready at 1291 ms; OnePlus 15 plugged on the bottom port at ~19.0 s; the inline latch fired ~300 ms after IBUS passed
@@ -451,37 +344,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     no D+/D- handshake seen this attach = "PD (not decoded)", never a legacy mode. The "PPS 9V" label is still
     unverified on hardware: needs a PPS sink (OnePlus 15 on the CUKTECH; it takes only PDO1 5 V on the Anker IQ4,
     with or without the K2).
-- **Sink Identify inline drops the phone from 9 V to 5 V** (2026-11-10, operator report, cause captured, 05b1703,
-  Anker IQ4 100 W -> K2 -> OnePlus 15 on PPS PDO 6 at ~9 V 2.3 A, `runs/2026-11-10-connection/identify/bb.txt`).
-  **Fixed in 6df54fa, hardware check pending** (fix items (1) and (3) done: inline Identify / Get_Source_Cap /
-  cable read over SOP' / VDM probe all refuse inline with no confirm, the UI confirm paths are removed, and the
-  Sink tab shows the sniffed identity marked "sniff"; item (2), active Identify of a phone alone on the K2, is a
-  later batch).
-  The confirmed inline Identify (`Action::Identify` -> `fusb302::identify_start(true)`, `include/k2/pd/pd_identify.hpp`)
-  transmits with the K2's own sink header (**power role Sink, data role UFP**, MessageID from 0), i.e. it speaks as a
-  second copy of the phone on a wire where the phone and the charger already have a contract.
-  - Run 1 (239160 ms): Discover_Identity REQ -> **both** partners answer: the phone ACKs (VID 0x05C6 PID 0x209E) and
-    the charger answers Not_Supported. Discover_SVIDs and Get_Sink_Cap each went out twice (RETRYFAIL, no GoodCRC:
-    two receivers' GoodCRCs collide). The phone answered Get_Sink_Cap with Sink_Capabilities (5/9/12 V 3 A, PPS
-    5-11 V 5 A); the charger, in its Ready state, got an unsolicited Sink_Capabilities from its sink and sent
-    **Soft_Reset 9.4 ms later**, then Source_Capabilities, then a **Hard Reset** 2 ms after that (the ordered set
-    carries no header: sender not identifiable from the trace).
-  - Run 2 (263018 ms): one Discover_Identity REQ alone is enough: the phone's ACK went out three times (nobody
-    GoodCRCs it), the charger answered Not_Supported twice, **Hard Reset 24.6 ms after the K2's TX**.
-  - After each Hard Reset: VBUS 0 for ~0.85 s, the charger re-sends the same 6 PDOs, and the phone Requests **PDO 1,
-    5 V 3 A**, and stays there (still 5.05 V 2.47 A minutes later). It went to PPS 9 V after a full unplug/replug
-    earlier in the evening, so a Hard Reset does not bring this phone back to its fast contract.
-  - Cause in one line: an inline K2 has no PD role of its own; any message it sends is a second sink talking out of
-    sequence, so both partners answer, their GoodCRCs and MessageIDs collide, and one side resets the link.
-  - Fix: (1) inline Identify never transmits: it shows what the charger's own Discover Identity and the phone's
-    messages already revealed (sniffed: the phone's Discover Identity ACK, Sink_Capabilities and Requests are on the
-    wire in normal operation), with "from sniff" on the result; the confirm path is removed, not just warned.
-    (2) A phone alone on the K2 (H13/H14: the K2 shows Rd, the phone sources 5 V) is identified actively, as the
-    phone's sink partner, with no charger to disturb: offer that path when no source is attached.
-    (3) The same rule for every inline TX (Get_Source_Cap, Read cable over SOP, VDM probes): refused inline, no confirm.
-  - Validate: host tests: inline -> `identify_start` refuses even with confirm; the sniffed identity fills the Sink
-    tab. Hardware: Anker IQ4 -> K2 -> OnePlus at 9 V, Identify shows the phone's VID/PID from sniff, black box shows no
-    K2 TX, the phone stays at 9 V.
+- ~~**Sink Identify inline drops the phone from 9 V to 5 V**~~ completed: 6df54fa; inline Identify refused with and without --confirm, VBUS held 9.076 V, Sink tab "sniff 18D1:4EE1" (Pixel, be71f10). Identify of a phone alone (fix item 2) is batch 3 (k2/identify-alone).
 - **Charger test: "Cable OFF" says nothing about what it does** (2026-11-10, operator report): the wizard's step 2
   reads "Cable" with the value "OFF", which says nothing about what it does (the e-marker identity the K2 presents to the
   charger, the same list as Tools -> Spoof). Operator decision, wording only, nothing else in the flow changes (the
@@ -529,22 +392,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     VBUS < 1 V for >= 1 s, steady Rp threshold 2.4 V; gated off while a line is held (`LinkInput.line_held`: Wake
     sleeping port or a boot pin). Home Idle row reads "CROSSED: flip one" (17-char field). Open: a DRP phone alone
     through an e-marked cable must not read crossed (needs a charger's pull-up for the 0.2-0.8 V line) - check it.
-- **A dual-role phone alone reads as "CHARGER WAITING"** (2026-11-10, connection matrix H13, 05b1703,
-  `runs/2026-11-10-connection/H13/`, fixed in 9189def, hardware check pending): OnePlus 15 alone on the bottom port,
-  HID-powered K2: behaviour correct (no Rd, no TX, VBUS max 1 mV over 60 s), but the Source tab said "CHARGER WAITING /
-  start a charger test" while the bar said "No charger, via cable". The phone toggles Rp/open about every 100 ms
-  looking for a partner (STATUS0 BC_LVL 3 <-> 0 in the trace); a charger's Rp is steady.
-  - Fix: the waiting classifier takes Rp duty and period into account (raguard::RpTrace over the per-tick CC samples,
-    fed by pd::Link): Rp present only part of the time with 50-100 ms toggles (>= 3 edges in 400 ms) =
-    "DUAL-ROLE PORT", not a charger; steady Rp for >= 300 ms stays "charger waiting". One classifier, one result:
-    the Source tab, the bottom bar and `state.waiting` (kLinkWaiting) all read pd::Link::wait_kind(). START on a
-    dual-role port explains that the phone will source 5 V (H14).
-  - Also: three readers of "waiting" disagree. On a real waiting charger (sleeping splitter port behind a CUKTECH, CC2
-    2.99 V, `runs/2026-11-10-splitter-cuk/wake/pd.png`; Baseus 140 W direct on the top plug, CC1/CC2 3.20 V) the Source
-    tab says "CHARGER WAITING", the bottom bar says "No charger, via cable" and `k2_remote state` says `waiting: False`.
-    One classifier, one result: the tab, the bar and the `state` field read the same value.
-  - Validate: host test on the classifier with a toggling and a steady trace; hardware: repeat H13, then the Baseus
-    alone (still "CHARGER WAITING", bar and `state` agree).
+- ~~**A dual-role phone alone reads as "CHARGER WAITING"**~~ completed: 9189def; Source tab + bar read "Dual-role port" (Pixel alone) and "Charger waiting" (CUKTECH, splitter) on hardware 2026-11-10.
 - **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in 1d45a76, hardware check
   pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
@@ -558,26 +406,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests in `tests/test_pd_sink*.cpp` (red first): 15 V held at PDO 3, re-announce 5/9/20 V -> Request
     PDO 1, never 20 V; re-announce 5/15/20 V -> Request 15 V at slot 2; re-announce in Transition -> a Request within
     tSenderResponse; `make gate`. Hardware: the splitter re-plan run above shows no unrequested level in the black box.
-- **Rd seek leaves before a slow source wakes (`slow-rp-wake`)** (2026-11-09, fixed in 5926abb, hardware check pending, Anker 2-way splitter behind a Baseus 140 W,
-  dock on its other output, HID-powered K2 on 85b9ff0; `runs/2026-11-09-splitter/`). A re-read on a plain boot got
-  nothing: the Rd seek put Rd on CC1, CC2, CC1 for ~200 ms each (`kRdSeekDwellMs`, `include/k2/pd/pd_rdseek.hpp`),
-  every attach read BC_LVL=0, "no Source_Capabilities came back". With the Rd pinned on CC2 (`pd-reread --pin 2
-  --no-run`) the splitter's 3 A Rp appeared **1072 ms** after the Rd, VBUS 5.1 V 28 ms later, Source_Capabilities at
-  +1243 ms (5/9/12/15 V 3 A, 20 V 5 A, PPS 3.3-11 V 5 A; `bb-pin2b.txt`). A phone on the same port also wakes it late.
-  - Signature (behaviour, no VID:PID): with no Rd of ours a CC line reads ~3.0-3.3 V (the source's standby sink-detect
-    pull-up, high impedance), and under our Rd it falls below 200 mV (BC_LVL=0). A real Rp never does that: even the
-    default-USB Rp holds ~0.4 V against 5.1 kOhm. So "high open, collapses under Rd" = a source that is there but asleep.
-  - Fix: the scan keeps the open-level reading per line from before our Rd went on. When the Rd seek's line read the
-    standby signature, stay on that line for `kSlowWakeDwellMs` (~2000 ms; measured 1072 ms) before moving, and if the
-    other line had it, go there first. Lines without the signature keep the 200 ms dwell (the wrong-line case of
-    d615f3e). The 500 ms no-Rp detach on the active line must not fire inside that window. Name the pattern
-    `slow-rp-wake` in `docs/CHARGER_QUIRKS.md` (signature, the 1072 ms figure, handling). Apply the same dwell to the
-    charger-test START attach and the rescan bridge, which use the same seek. Never Rd on both lines (Debug Accessory).
-  - Tests (red first): `tests/test_rdseek.cpp`: standby signature on CC2, Rp after 1100 ms -> no move, attach on CC2;
-    no signature -> unchanged 200 ms moves; standby on CC1 while the pick was CC2 -> CC1 first. `make gate`.
-  - Validate: same setup (splitter port idle, dock on the other output), plain boot, `k2_remote pd-reread` with no pin:
-    Source_Capabilities within ~1.5 s, no line move after the Rd lands on the standby line; then `ct_start.py --units pd`
-    attaches without `--pin`.
+- ~~**Rd seek leaves before a slow source wakes (`slow-rp-wake`)**~~ completed: 5926abb; START and a plain `pd-reread` hold Rd on one line and wake the splitter (CUKTECH C3 and IQ4, 2026-11-10).
 - **Passive pick on the wrong CC line** (2026-11-09, Anker 2-way splitter behind a Baseus 140 W). Fixed in d615f3e,
   partly verified: on hardware the Rd seek moved CC2 -> CC1 -> CC2 -> CC1 and ended cleanly with no source attached,
   and the re-read on the splitter got its 4 PDOs; the exact case (passive CC2 pick, Rp only on CC1) has not been caught
@@ -664,18 +493,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     disliked? the legacy unit's D+/D- release?).
   - Validate: the capture names the trigger; then a fix that keeps VBUS up, or a CHARGER_QUIRKS pattern if it is the
     source's behaviour, and a self-powered Apple run that finishes with no comeback boot in `bootinfo`.
-- **Flaky host tests** (2026-11-09, fixed in 1feba0e, hardware check pending): `tests/test_k2proto.mjs` "screenshot: chunked strips with log noise" and the C++
-  `test_dbg_stream` (fails when its worst pass is over 5 ms on a loaded machine) failed once each in `make gate` and
-  passed on re-runs.
-  - Fix: applied -- remove wall-clock limits from functional tests (count work, not time): the scripted link rigs run
-    with their watchdogs disabled (`timeoutMs`/`streamTimeoutMs` 0, a Link option since this fix) and the per-pass
-    cost CHECKs run only under `K2_TEST_TIMING=1`, outside `make gate`. `tools/flaky_repro.sh` (eef3f6a) reproduces
-    the red state on demand; after the fix it is 10/10 green under a 128-hog load.
-  - Validate: done -- `make gate` passed 10/10 in a row with all host tests re-run each round; runs 1-6 ran while a
-    parallel `make -j32` build (`BUILD_DIR=build-load`) ran in the same worktree.
-- **Wrong comment** in `tools/k2_qr.py`: "a space can end a part" is false (the last base45 character of a part is at
-  most index 32; a space is 36).
-  - Fix: correct the comment. Validate: `make gate`. Fixed in 8f4acaf, hardware check pending.
+- ~~**Flaky host tests**~~ completed: 1feba0e; `make gate` green on every merge since.
+- ~~**Wrong comment**~~ completed: 8f4acaf (k2_qr.py base45 comment).
 - **Charger-test journal keeps its own row order** (2026-11-09, fixed in 5a0220f, hardware check pending): `charger_journal.hpp`
   `detail::plan_order` placed the 6 A hunt rows by its own rule when it rebuilt the steps on a resume: a third copy of the
   order the grid fix removed. The header (format 3) now carries the plan's order, written from the planner's step list
@@ -683,14 +502,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Fix: rebuild from the planner's step list (the same structure the grid uses since 98e2f39).
   - Validate: host test resuming a journal mid-PD with Mi 6A rows: resumed step order equals a fresh plan's order
     (`test_a_resume_mid_pd_keeps_the_planners_step_order`, green since 5a0220f).
-- **A PPS row shows a probe after all its APDOs** (2026-11-09, residual of the grid fix, fixed in dfc5918, hardware check
-  pending): a PPS row held the chips of every APDO, so a Mi 6A probe the planner runs between APDO 1 and APDO 2 read after the
-  whole PPS row. Now one grid row per APDO (`Row::pos`), so the probe row stands between the APDO rows where it executes.
-  - Validate: host grid test with two APDOs and a probe between them: the grid order equals the executed order
-    (`tests/test_result_layout.cpp` `test_probe_between_two_apdos_stands_between_their_rows`, plus the per-APDO keys in the
-    `grid_follows` tests of `tests/test_charger_test.cpp`); `make gate`. Hardware: on a two-APDO PPS source with a Mi 6 A
-    probe between the APDOs (e.g. the CUKTECH 120 W), the Running/Results grid shows the "Mi 6A" row between the two "PPS"
-    rows, in execution order.
+- ~~**A PPS row shows a probe after all its APDOs**~~ completed: dfc5918; one result row per APDO with the Mi 6A probe between them on hardware c700284 (CUKTECH C1).
 
 ## Specified work (not started)
 
@@ -803,43 +615,25 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   - Validate: host tests for the stats (red before green), `make gate`; on hardware the TOPADRE 20 V reads a p-p within
     20 % of the INA's swing, HID-only reads "< floor", and a charger-test card shows a ripple figure per fixed PDO.
 
-- **PPS coverage: floor, 20 mV steps, accuracy spread** (2026-11-10, user decision; start after `k2/pps-needs-load`
-  is merged - both touch the PPS rows in `src/chargertest/charger_test.cpp`; **fixed in f733009 (items 1-3),
-  hardware check pending**). Today a PPS APDO gets 7.14 V, 11 V,
-  the 7.14 <-> 11 V jumps, 7.14 -> 5.22 V and the full-current top row; the low edge (< 5 V) lives in the separate
-  `PdLow` unit (patterns `latch-off-low-pps`, `cut-and-recover-low-pps`). All new rows stay polite: inside the APDO,
-  at or below its current, 1 A like the other plan rows.
-  1. Floor (done in f733009): the `PdLow` low-edge row must report the measured floor, not only pass/fail - a source that advertises
-     3.3 V but regulates at 5 V is a fail "floor at 5.0 V" with measured_mv = the reached level (reuse `Capped`'s
-     ceiling logic mirrored for a floor). Keep it in `PdLow` (it can cut the output); the results tab names the floor.
-  2. Step resolution (done in f733009): one row per PPS APDO, from a mid level (e.g. 7.0 V), five Requests of +20 mV each: every step
-     needs Accept + PS_RDY and a measured VBUS move of 20 mV +- the meter's resolution (state the tolerance from the
-     INA226 LSB and the existing band rules); a source that rounds to 100 mV or ignores small steps fails "step
-     resolution N mV". A phone's PPS loop walks in 20-40 mV steps (OnePlus 15 capture, `runs/2026-11-10-op15-sniff/`).
-  3. Accuracy spread (done in f733009, card format v9): three or four levels across the APDO (low, mid, high, spaced by the range) record the setpoint
-     error in mV per level on the card (not only pass/fail), so a converter that drifts at the ends shows. Card
-     format bump if a field is needed; every host decoder (`k2_remote.py`, `k2proto.js`, `qr_corpus.py`,
-     `report_card.py`, `card.js`) in the same change.
-  - Validate: host tests (red first) for each new row's verdict, including the failing shapes (floor at 5 V, steps
-    of 100 mV, steps ignored); hardware: a source with a working PPS (CUKTECH 10 or FH22 brick) passes all three,
-    the splitter shows "needs load" (pattern `pps-off-at-no-load`).
-  - Hardware 2026-11-10 (CUKTECH C1, `--units pd`, `runs/2026-11-10-merge2-hw/`): item 2 first failed both walks
-    "step resolution 15mV" - the +-2 mV per-step band was the meter's LSB, but the source's own ripple at no load
-    moves one reading by several mV. Changed in 91a9839: each step must move up and stay below 40 mV, the five must
-    sum to 100 +- 20 mV (detail = mean move). Re-run: both walks pass (8000 -> 8109 mV, 12500 -> 12590 mV), PD
-    19 pass / 0 fail / 5 skip. Item 3 verified the same day (`--units pd,pd-low`, card 55, fw be71f10,
-    `runs/2026-11-10-merge2-hw/cards.json`): `err_mv` 5-11 V APDO +10 / +20 / +8 / -12 mV, 5-20 V APDO
-    +6 / +3 / -9 / -49 mV. Gap: `k2_remote.py cards show` prints only "whole range", not the spread - print the four
-    errors there too. Item 1 (floor) verified, pass shape (48adfa1, Anker IQ4 3.3-11 V 3 A, HID-powered K2,
-    `runs/2026-11-10-merge2-hw/iq4-pdlow.txt`): 3300 mV -> 3285 mV pass; the same run's step walk 7140 -> 7245 mV
-    pass, 12 pass / 0 fail / 3 skip. The fail shape ("floor at 5.0 V") still needs a source that floors.
+- ~~**PPS coverage: floor, 20 mV steps, accuracy spread**~~ completed: f733009 + 91a9839; step walk (CUKTECH C1, IQ4), spread (card 55: +10..-49 mV) and floor (IQ4 3.3 V -> 3285 mV) verified 2026-11-10. Open: the floor's fail shape needs a source that floors; `cards show` spread print is batch 3 (k2/cards-show-spread).
 - **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
-  above). Opt-in, never in the default preset: every 100 mV across each PPS APDO (and SPR AVS range), 1 A, Accept +
+  above). Opt-in, never in the default preset: every 100 mV across each PPS APDO, 1 A (AVS: the row below), Accept +
   PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint strip on the results tab and the card
   (min / max / worst error and where). Long by design (about 77 points for 3.3-11 V, about 180 for 3.3-21 V), so the
   Tests list shows it as its own line with a point count. Stops at the first lost source (pattern handling as the
   other PPS rows). Validate: host tests for the point plan and the summary; hardware: one full sweep on a working
   PPS source, no reboot, journal intact.
+- **AVS deep sweep, its own entry next to the PPS sweep** (2026-11-10, user decision; built on the PPS sweep's engine).
+  Opt-in, never in a preset: every 100 mV (the AVS Request granularity) across the SPR AVS range (9-20 V) and, with
+  EPR entered, the EPR AVS range (15 V up to the APDO top, capped at this K2's monitor ceiling - 36 V here, per-device;
+  48 V is skipped as "above the K2's monitor"), current at or below the APDO's PDP-derived limit and never above 1 A
+  for the sweep, Accept + PS_RDY + measured VBUS per point. EPR needs what the EPR rows already need (an EPR 50 V 5 A
+  identity: the spoof or a real EPR cable, and EPR mode entry; refused otherwise with the existing EPR skip reasons).
+  Same results strip and card summary as the PPS sweep (min / max / worst error and where), same stop-at-first-loss,
+  journal resume and keep-alive rules (EPR mode needs its EPR_KeepAlive). Tests list line "AVS sweep" with the point
+  count (about 111 points SPR, about 211 EPR to 36 V). Validate: host tests for the plan (SPR only, SPR + EPR capped at
+  the ceiling, no AVS offered = the entry is hidden), the summary and the keep-alive; hardware: a full SPR AVS sweep on
+  an AVS source (Baseus 140 W EPR) and an EPR AVS sweep to 28 V with the EPR spoof.
 
 ## Not verified on hardware
 
