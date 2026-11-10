@@ -26,6 +26,7 @@
 #include <cstdint>
 
 #include "k2/pd/cc_crossed.hpp"
+#include "k2/pd/pd_verdict.hpp"
 #include "k2/pd/ra_guard.hpp"
 
 namespace k2::pd {
@@ -65,6 +66,10 @@ struct LinkInput {
     bool passive = false;
     // The K2 itself holds a line (the Wake sleeping port's Rd hold): the levels are then no longer the far ports' own.
     bool line_held = false;
+    // PD-talk inputs for the one verdict per attach (pd_verdict.hpp): any PD message decoded this attach, and
+    // whether the sink side answered anything (a GoodCRC / Request / caps / VDM from the far side).
+    bool any_pd_msg = false;
+    bool sink_answered = false;
 };
 
 // Allowance for the K2's own supply current while it runs on the measured VBUS (no USB host enumerated).
@@ -131,6 +136,14 @@ public:
     // the first new Source_Capabilities arrive.
     bool take_new_source();
 
+    // The one "PD present" verdict per attach (ROADMAP 2026-11-10, Row C; pd_verdict.hpp). Pending until
+    // kPdVerdictSettleMs after the attach; the Connection page gates its tabs on it, the remote state
+    // exposes it (kLinkNoPd), the binlog logs the edge once.
+    std::uint32_t attach_at() const { return attach_at_; }
+    std::uint32_t caps_rx_this_attach() const { return last_rx_ - rx_attach_; }
+    PdVerdict pd_verdict() const { return verdict_; }
+    PdNoneWhy pd_none_why() const { return none_why_; }
+
     void emarker_scanned(std::uint32_t now_ms);
     bool cable_scanned() const { return scanned_; }
     bool cable_stale() const { return scanned_ && cable_dirty_; }
@@ -155,6 +168,9 @@ private:
     std::uint32_t low_since_ = 0, gone_since_ = 0;
     std::uint32_t detach_at_ = 0, attach_at_ = 0;
     std::uint32_t rx_at_detach_ = 0, last_rx_ = 0;
+    std::uint32_t rx_attach_ = 0;   // Source_Capabilities counter at the attach edge
+    PdVerdict verdict_ = PdVerdict::Pending;
+    PdNoneWhy none_why_ = PdNoneWhy::None;
     bool scanned_ = false, cable_dirty_ = false;
     std::uint32_t scan_at_ = 0;
     // The waiting classifier's input: the Rp presence trace over the CC lines (fed only while passive), and the

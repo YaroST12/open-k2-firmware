@@ -980,6 +980,139 @@ static void test_identify_log_keeps_fixed_text_in_the_format() {
     }
 }
 
+// ---- ROADMAP 2026-11-10, Row C: the no-PD gate on the Connection page --------------------------------------
+
+static void dump_panel(const char *name) {
+    if (const char *dir = std::getenv("K2_DUMP")) {
+        char path[256];
+        std::snprintf(path, sizeof path, "%s/%s.panel", dir, name);
+        if (FILE *f = std::fopen(path, "wb")) { std::fwrite(g_panel, 2, LCD_WIDTH * LCD_HEIGHT, f); std::fclose(f); }
+    }
+}
+
+// Ink pixels in a band (rotation 0: logical == physical).
+static int ink_in(int y0, int y1) {
+    int n = 0;
+    for (int y = y0; y < y1; y++)
+        for (int x = 0; x < 224; x++) {
+            const uint16_t p = g_panel[y * LCD_WIDTH + x];
+            if (p != kBg && p != kRule) n++;
+        }
+    return n;
+}
+
+static int rule_span(int y) {
+    int n = 0;
+    for (int x = 0; x < LCD_WIDTH; x++) n += g_panel[y * LCD_WIDTH + x] == kRule;
+    return n;
+}
+
+// Pixel -> K2 -> SSD with the source's PD offers unanswered: attach with a small load behind the K2, the
+// caps counter climbs past the attach edge (repeated Source_Capabilities), the sink never answers
+// (far_pd_message false). After the settle window the verdict is None / SinkSilentSourceOffered and the
+// Sink tab shows the no-PD body: one message band, then measured rows from y 160 (not the placeholder list
+// from y 42), and the pop-up's Identify is greyed with the tab's own words.
+static void test_sink_tab_no_pd_offered_unanswered() {
+    Ui &ui = fresh_ui();
+    g_stub.cc = 1;
+    g_stub.pm.vbus_mv = 5030;
+    g_stub.pm.current_ma = 70;
+    g_stub.far_cc = true;
+    g_stub.caps.valid = true;
+    g_stub.caps.rx_count = 100;
+    g_stub.pd_seen_attach = true;          // the caps themselves are PD messages
+    uint32_t t = 20000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);         // attach + the inline latch (the load)
+    CHECK_EQ(int(ui.link().attached()), 1);
+    CHECK_EQ(int(ui.link().inline_mode()), 1);
+    for (int i = 0; i < 4; i++) { g_stub.caps.rx_count++; ui.tick(t += 100); }   // 4 caps this attach, no answer
+    CHECK(ui.link().caps_rx_this_attach() >= 3);
+    for (int i = 0; i < 14; i++) ui.tick(t += 100);        // past attach + 1500 ms: the settle
+    CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::None));
+    CHECK_EQ(int(ui.link().pd_none_why()), int(pd::PdNoneWhy::SinkSilentSourceOffered));
+    ui.goto_page(kConnTabAlias + 2, t += 100);             // Sink tab
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
+    CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
+    CHECK_EQ(int(cp(ui).pd_none_why()), int(pd::PdNoneWhy::SinkSilentSourceOffered));
+    dump_panel("k2_nopd_sink_offered");
+    // The no-PD body (rotation 0): ink in the message band, the row list starts at y 160 with its hairline.
+    CHECK(ink_in(46, 152) > 100);
+    CHECK(rule_span(160) >= LCD_WIDTH - 20);
+    CHECK(ink_in(161, 200) > 50);
+    CHECK(ink_in(42, 46) == 0);                            // no placeholder row at the old kRowY0
+    // The pop-up: Identify greyed with the same words the tab shows.
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(cp(ui).popup_open(), true);
+    CHECK_EQ(cp(ui).popup_count(), 2);
+    CHECK_EQ(cp(ui).popup_item(0).enabled, false);
+    CHECK_STR(cp(ui).popup_item(0).why, "No PD from this device");
+    CHECK_EQ(cp(ui).popup_item(1).enabled, true);          // Refresh stays
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
+    CHECK_EQ(cp(ui).popup_open(), false);
+}
+
+// A plain Type-C source (Rp only, never offered PD) with a load behind the K2: after the settle the verdict
+// is None / SourceNeverOffered and the Source tab shows the no-PD body in every rotation (the copy wraps at
+// 26 cells; test_ui_no_truncation / the trunc log fail on any cut).
+static void test_source_tab_no_pd_never_offered_all_rotations() {
+    Ui &ui = fresh_ui();
+    g_stub.cc = 1;
+    g_stub.pm.vbus_mv = 5030;
+    g_stub.pm.current_ma = 70;
+    g_stub.far_cc = true;
+    g_stub.pd_seen_attach = false;         // nothing decoded this attach
+    g_stub.caps.valid = false;
+    g_stub.typec_ma_val = 1500;            // the source's advertised Rp: default USB
+    uint32_t t = 30000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().attached()), 1);
+    for (int i = 0; i < 16; i++) ui.tick(t += 100);        // past the settle
+    CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::None));
+    CHECK_EQ(int(ui.link().pd_none_why()), int(pd::PdNoneWhy::SourceNeverOffered));
+    for (int r = 0; r < 4; r++) {
+        ui.set_rotation(r, t += 100);
+        ui.goto_page(kConnTabAlias, t += 100);             // Source tab
+        for (int i = 0; i < 12; i++) ui.tick(t += 100);
+        CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
+        CHECK_EQ(int(cp(ui).pd_none_why()), int(pd::PdNoneWhy::SourceNeverOffered));
+        char name[64];
+        std::snprintf(name, sizeof name, "k2_nopd_source_never_rot%d", r);
+        dump_panel(name);
+        if (r == 0) {
+            CHECK(ink_in(46, 152) > 100);
+            CHECK(rule_span(160) >= LCD_WIDTH - 20);
+            CHECK(ink_in(161, 200) > 50);
+        }
+    }
+    ui.set_rotation(0, t += 100);
+}
+
+// The same inline setup but the sink answered (a GoodCRC / Request this attach): the verdict is Present, the
+// Sink tab keeps its rows and the pop-up's Identify stays offered - the no-PD gate does not touch a PD link.
+static void test_pd_present_keeps_identify_offered() {
+    Ui &ui = fresh_ui();
+    g_stub.cc = 1;
+    g_stub.pm.vbus_mv = 5030;
+    g_stub.pm.current_ma = 70;
+    g_stub.far_cc = true;
+    g_stub.caps.valid = true;
+    g_stub.caps.rx_count = 50;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;                 // the sink answered this attach
+    uint32_t t = 40000;
+    for (int i = 0; i < 20; i++) ui.tick(t += 100);
+    CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::Present));
+    ui.goto_page(kConnTabAlias + 2, t += 100);
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::Present));
+    dump_panel("k2_pd_present_sink");
+    ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
+    CHECK_EQ(cp(ui).popup_open(), true);
+    CHECK_EQ(cp(ui).popup_item(0).enabled, true);          // Identify stays offered
+    ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
+}
+
 int main() {
     test_sink_tab_offers_identify_when_a_device_is_alone();
     test_identify_log_keeps_fixed_text_in_the_format();
@@ -1013,5 +1146,8 @@ int main() {
     test_spoof_enabled_when_nothing_is_inline();
     test_tools_spoof_shortcut_opens_the_cable_tab_list();
     test_sink_id_row_marks_a_sniffed_identity();
+    test_sink_tab_no_pd_offered_unanswered();
+    test_source_tab_no_pd_never_offered_all_rotations();
+    test_pd_present_keeps_identify_offered();
     return test_report("test_ui_connection_page");
 }

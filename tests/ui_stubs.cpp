@@ -78,9 +78,10 @@ void clear_source() { g_stub.clear_sources++; g_stub.caps.num_pdos = 0; }
 bool cc_detach() { g_stub.cc_detaches++; return true; }
 const pd::Contract& contract() { return g_stub.contract; }
 std::uint32_t request_period_ms() { return g_stub.req_period_ms; }
-std::uint32_t typec_ma() { return 0; }
+std::uint32_t typec_ma() { return g_stub.typec_ma_val; }
 bool pd_traffic() { return g_stub.pd_traffic; }
 bool pd_seen_attach() { return g_stub.pd_seen_attach; }
+pd::OverLoadFacts over_load_facts() { return g_stub.ol_facts; }
 void legacy_only(bool) {}
 bool ra_set(bool on) {
     if (on == g_stub.ra_on) return true;

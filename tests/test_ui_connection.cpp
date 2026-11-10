@@ -11,6 +11,7 @@
 
 using namespace k2;
 using namespace k2::conn;
+#define CHECK(c) CHECK_EQ(int(!!(c)), 1)
 
 static Facts facts(bool inl, bool charger, bool cable, Topology t = Topology::Unknown, bool seen = false,
                    raguard::WaitKind w = raguard::WaitKind::Unknown) {
@@ -517,6 +518,63 @@ static void test_actions() {
     }
 }
 
+// ROADMAP 2026-11-10, Row C: the no-PD gate. The copy fits the kit (the message block wraps at 26 cells
+// into at most 6 lines; the title fits the 28-cell small line; the refusal fits the 24-cell pop-up "why"),
+// and Identify is refused with the same words when the settled verdict is no-PD - except the alone path
+// (a dual-role phone alone is PD-capable).
+static void test_no_pd_gate() {
+    // Copy fits: the titles at 8 px/char in 224 px (28 cells), the body at 26 cells x 6 lines.
+    CHECK_EQ(std::strlen(kNoPdSinkTitle) <= 28, 1);
+    CHECK_EQ(std::strlen(kNoPdSourceTitle) <= 28, 1);
+    CHECK_EQ(std::strlen(kWhyNoPd) <= 24, 1);
+    CHECK_STR(no_pd_title(Tab::Sink), kNoPdSinkTitle);
+    CHECK_STR(no_pd_title(Tab::Source), kNoPdSourceTitle);
+    CHECK_STR(no_pd_case(pd::PdNoneWhy::SinkSilentSourceOffered), kNoPdCaseOffered);
+    CHECK_STR(no_pd_case(pd::PdNoneWhy::SourceNeverOffered), kNoPdCaseNever);
+    {   // the whole Sink message (line2 + the case) wraps into at most 6 lines of 26 cells, nothing lost
+        std::array<std::string_view, 6> ln;
+        std::string all = std::string(kNoPdSinkLine2) + " " + kNoPdCaseOffered;
+        const int n = wrap(all, 26, ln);
+        CHECK(n >= 1 && n <= 6);
+        std::string joined;
+        for (int i = 0; i < n; i++) joined += std::string(ln[std::size_t(i)]) + " ";
+        CHECK(joined.find("identified") != std::string::npos);   // the wrap lost nothing
+        CHECK(joined.find("unanswered") != std::string::npos);
+        all = std::string(kNoPdSinkLine2) + " " + kNoPdCaseNever;
+        CHECK(wrap(all, 26, ln) <= 6);
+    }
+    // The gate: Identify refused with the tab's own words when the verdict is no-PD and a device is on the line.
+    std::array<Item, kMaxItems> it{};
+    ActFacts a;
+    a.attached = true;
+    a.pd_none = true;
+    actions(Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled, false);
+    CHECK_STR(it[0].why, kWhyNoPd);
+    CHECK_STR(it[0].why, "No PD from this device");
+    // The alone path stays offered (a dual-role phone alone is PD-capable).
+    a.alone = true;
+    actions(Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled, true);
+    // No device at all: the old word.
+    a.alone = false; a.attached = false;
+    actions(Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled, false);
+    CHECK_STR(it[0].why, "No device seen");
+    // Verdict present: unchanged behaviour.
+    a.attached = true; a.pd_none = false;
+    actions(Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled, true);
+    // The other tabs do not read the flag.
+    a.pd_none = true;
+    const int ns = actions(Tab::Source, a, it);
+    CHECK_EQ(ns, 3);
+    CHECK_EQ(it[1].enabled, true);
+    const int nc = actions(Tab::Cable, a, it);
+    CHECK_EQ(nc, 6);
+    CHECK_EQ(it[0].enabled, true);
+}
+
 static void test_protocol() {
     CHECK_STR(protocol_name(0x2717), "Xiaomi PD");
     CHECK_STR(protocol_name(0x22D9), "OPPO PD");
@@ -567,6 +625,7 @@ int main() {
     test_status_survey();
     test_survey_words();
     test_actions();
+    test_no_pd_gate();
     test_protocol();
     test_id_value();
     return test_report("test_ui_connection");

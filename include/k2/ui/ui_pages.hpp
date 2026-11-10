@@ -651,6 +651,10 @@ public:
     int popup_selected() const { return popup_sel_; }
     bool details_open() const { return more_; }   // the Source tab's second page (what the Refresh survey read)
     std::string_view status_line() const { return status_txt_.view(); }   // what the bottom bar says
+    // The one "PD present" verdict of this attach (ROADMAP 2026-11-10, Row C): cached in sense(), read by
+    // build_items/paint_body and by the host tests.
+    pd::PdVerdict pd_verdict() const { return verdict_; }
+    pd::PdNoneWhy pd_none_why() const { return none_why_; }
     // A short note on the status line (what an action did, or what a reboot carried over).
     void say(const char *text, uint32_t now_ms, uint32_t ms = 4000) { set_op(text, now_ms, ms); }
 private:
@@ -671,6 +675,8 @@ private:
     void close_popup();
     conn::Tab tab_ = conn::Tab::Source;
     conn::Facts facts_;
+    pd::PdVerdict verdict_ = pd::PdVerdict::Pending;
+    pd::PdNoneWhy none_why_ = pd::PdNoneWhy::None;
     bool popup_ = false;
     bool popup_drawn_ = false;
     bool more_ = false;                    // Details: the second page of the Source tab (reset by a tab change)

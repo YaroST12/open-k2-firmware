@@ -929,6 +929,10 @@ void Ui::tick(uint32_t now_ms) {
     in.cc = fusb302::active_cc();
     in.caps_rx = fusb302::rx_count();
     in.requests = fusb302::contract().requests;
+    // The PD verdict's inputs (ROADMAP 2026-11-10, Row C): any PD message decoded this attach, and whether the
+    // sink side answered anything (a GoodCRC / Request / caps / VDM from the far side this attach).
+    in.any_pd_msg = fusb302::pd_seen_attach();
+    in.sink_answered = fusb302::over_load_facts().far_pd_message;
     in.far_sink_cc = fusb302::sink_cc_far();   // a sink's Rd on CC with none of ours: "possibly inline" even when the link is silent
     in.self_supply_ma = usb::configured() ? 0 : pd::kSelfSupplyAllowanceMa;   // no USB host: the K2 may run on this VBUS
     // The waiting classifier's input: the passive CC levels and the same passive gate the connection page uses.

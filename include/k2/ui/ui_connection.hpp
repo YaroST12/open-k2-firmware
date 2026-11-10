@@ -22,6 +22,7 @@
 #include "k2/pd/pd_rdseek.hpp"
 #include "k2/pd/pd_survey.hpp"
 #include "k2/pd/pd_tabs.hpp"
+#include "k2/pd/pd_verdict.hpp"
 #include "k2/pd/ra_guard.hpp"
 #include "k2/ui/ui_calc.hpp"
 
@@ -256,9 +257,12 @@ struct ActFacts {
     bool alone = false;         // a device is alone on the K2 (dual-role port, VBUS dark, no caps): active Identify is offered
     bool caps_valid = false;    // Source_Capabilities received
     bool cable_valid = false;   // e-marker data held
+    bool pd_none = false;       // the settled verdict is "no PD this attach": a no-PD device cannot be identified
 };
 
 inline constexpr const char *kWhyLiveSink = "Live sink: unplug load";
+// The no-PD gate's own refusal word (fits the 24-cell pop-up "why"): the same sentence the tab shows.
+inline constexpr const char *kWhyNoPd = "No PD from this device";
 
 constexpr int actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out) {
     int n = 0;
@@ -276,12 +280,34 @@ constexpr int actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out
         out[std::size_t(n++)] = {Act::ShareCable, "Share (QR)", a.cable_valid, "No cable read"};
         out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
         break;
-    case Tab::Sink:
-        out[std::size_t(n++)] = {Act::Identify, "Identify", a.attached || a.alone, "No device seen"};
+    case Tab::Sink: {
+        // No PD this attach: a device that never talks PD cannot be identified - refuse with the same
+        // words the tab shows. The alone path (a dual-role phone alone) is PD-capable and stays offered.
+        const bool seen = a.attached || a.alone;
+        const bool id_ok = seen && !(a.pd_none && !a.alone);
+        out[std::size_t(n++)] = {Act::Identify, "Identify", id_ok, !id_ok && seen ? kWhyNoPd : "No device seen"};
         out[std::size_t(n++)] = {Act::Refresh, "Refresh", true, ""};
         break;
     }
+    }
     return n;
+}
+
+// ---- the no-PD body (ROADMAP 2026-11-10, Row C) --------------------------------------------------------
+// With the settled verdict "no PD" the tab drops its placeholder rows and says so in one short message,
+// then keeps only the 2-3 rows that are actually measured. The words fit the 240x240 kit (wrapped at 26
+// cells, no truncation in any rotation - tests/test_ui_connection.cpp checks the wrap).
+inline constexpr const char *kNoPdSinkTitle = "No PD from this device";   // 22 cells
+inline constexpr const char *kNoPdSourceTitle = "No PD from the source";  // 21 cells
+inline constexpr const char *kNoPdSinkLine2 =
+    "It takes USB power without talking PD, so it can't be identified.";    // 65 chars, wraps at 26 cells
+// Why the sink stayed silent (the two cases the verdict distinguishes).
+inline constexpr const char *kNoPdCaseOffered = "The source's PD offers went unanswered.";  // 39 chars
+inline constexpr const char *kNoPdCaseNever = "The source never offered PD.";             // 28 chars
+
+constexpr const char *no_pd_title(Tab t) { return t == Tab::Source ? kNoPdSourceTitle : kNoPdSinkTitle; }
+constexpr const char *no_pd_case(pd::PdNoneWhy w) {
+    return w == pd::PdNoneWhy::SinkSilentSourceOffered ? kNoPdCaseOffered : kNoPdCaseNever;
 }
 
 // ---- protocol line ----------------------------------------------------------------------------------

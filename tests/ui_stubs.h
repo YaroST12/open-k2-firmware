@@ -141,6 +141,8 @@ struct StubState {
     bool identify_ok = true;
     bool pd_traffic = false;      // fusb302::pd_traffic(): a PD message was seen this attach
     bool pd_seen_attach = false;  // fusb302::pd_seen_attach(): the same, cleared only by a new attach
+    k2::pd::OverLoadFacts ol_facts{};   // fusb302::over_load_facts(): .far_pd_message = the sink answered this attach
+    std::uint32_t typec_ma_val = 0;     // fusb302::typec_ma(): the source's advertised Rp current
     bool ident_current = false;   // identify_current(): the stored Identify answers belong to this attach
     int fc_stops = 0, fc_scans = 0;
     int fc_starts = 0, fc_inline_ok = 0;   // fctrig::start calls, and those carrying the override

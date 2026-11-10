@@ -237,6 +237,9 @@ void ConnectionPage::build_items() {
     a.caps_valid = pd::active_caps().valid;
     a.cable_valid = fusb302::emarker().valid;
     a.more = more_;
+    // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" a device on the line
+    // cannot be identified. The alone path (a dual-role phone) is PD-capable and stays offered.
+    a.pd_none = verdict_ == pd::PdVerdict::None && (facts_.inline_sink || facts_.sink_seen) && !a.alone;
     n_items_= conn::actions(tab_, a, items_);
     if (popup_sel_ >= n_items_) popup_sel_ = n_items_ - 1;
     if (popup_sel_ < 0) popup_sel_ = 0;
@@ -327,6 +330,9 @@ void ConnectionPage::sense(uint32_t now_ms) {
     facts_.open_cc_mv = pd::standby_signature(o1) ? o1 : pd::standby_signature(o2) ? o2 : -1;
     facts_.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
     facts_.wake_port_off = !fusb302::idle_wake();
+    // The one "PD present" verdict of this attach, cached for build_items / paint_body / the tests.
+    verdict_ = link.pd_verdict();
+    none_why_ = link.pd_none_why();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -925,6 +931,7 @@ void ConnectionPage::update(uint32_t now_ms) {
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
               | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | uint32_t(ctx_.fc) << 16
               | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
+    c = fnv(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
     c = fnv(c, fusb302::session());
     c = fnv(c, uint32_t(live_caps.valid) | uint32_t(live_caps.num_pdos) << 8 | uint32_t(live_caps.epr) << 16
               | uint32_t(live_caps.spec_rev) << 17 | uint32_t(live_caps.epr_partial) << 19);
@@ -996,6 +1003,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     const std::span<const uint32_t> sink = wl.pdos;
 
     uint32_t h = 2166136261u;
+    h = fnv(h, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD body switches on the verdict edge
     h = fnv(h, uint32_t(tab_) | uint32_t(link.cable_stale()) << 8 | uint32_t(link.waiting()) << 9 | uint32_t(caps->epr) << 10 | uint32_t(caps->spec_rev) << 11 | uint32_t(r.verdict) << 16 | uint32_t(r.flags) << 24);
     h = fnv(h, r.typec_ma | uint32_t(fusb302::pd_traffic()) << 16 | uint32_t(link.inline_mode()) << 17);
     h = fnv(h, uint32_t(r.typec_rp));

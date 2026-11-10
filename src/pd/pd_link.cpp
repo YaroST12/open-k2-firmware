@@ -20,6 +20,9 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         new_source_ = true;
         vbus_was_low_ = false;
         attach_at_ = at_ms;
+        rx_attach_ = last_rx_;
+        verdict_ = PdVerdict::Pending;
+        none_why_ = PdNoneWhy::None;
         quiet_since_ = at_ms;   // a held inline state is judged from this attach on, not from the load before the gap
     }
 }
@@ -91,6 +94,14 @@ void Link::update(const LinkInput& in) {
     if (waiting_ && in.caps_rx != rx_at_detach_) waiting_ = false;   // new Source_Capabilities arrived
     else if (waiting_ && in.now_ms - attach_at_ > kWaitingCapsMs) waiting_ = false;   // a non-PD source
 
+    // The one PD verdict per attach, computed on every tick so it settles at kPdVerdictSettleMs sharp.
+    {
+        const PdVerdictOut v = ::k2::pd::pd_verdict({in.now_ms, attach_at_, attached_, in.any_pd_msg,
+                                                     last_rx_ - rx_attach_, in.sink_answered});
+        verdict_ = v.verdict;
+        none_why_ = v.why;
+    }
+
     if (attached_) {
         const std::int32_t mag = power::abs_sat(in.current_ma);
         const bool loaded = in.current_known && mag > kInlineCurrentMa + (in.self_supply_ma > 0 ? in.self_supply_ma : 0);
@@ -141,6 +152,8 @@ void Link::force_attached(std::uint32_t now_ms) {
     if (!attached_) set_attached(true, now_ms);
     waiting_ = false;
     new_source_ = false;
+    verdict_ = PdVerdict::Present;   // a forced attach shows live PD data by definition
+    none_why_ = PdNoneWhy::None;
 }
 
 void Link::force_detached(std::uint32_t now_ms) {
