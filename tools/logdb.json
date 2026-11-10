@@ -466,6 +466,25 @@
   "469": "[ID] alone: no Ready contract within %u ms, Identify not sent (sink state %d)\n",
   "470": "[ID] result: state %d ok 0x%02X skipped 0x%02X retries %u why %d\n",
   "471": "[ID] alone: Rd presented, waiting for a Ready contract\n",
-  "472": "[ID] alone: CC%u held, Request PDO 1 err=%u\n"
+  "472": "[ID] alone: CC%u held, Request PDO 1 err=%u\n",
+  "473": "[BOOT] t=%ums vbus=%u aux=%u plus=%u cc1=%u cc2=%u\n",
+  "474": "[SESS] t=%ums vbus=%u aux=%u plus=%u cc1=%u cc2=%u\n",
+  "475": "[PD] Auto-CRC on (active operation)\n",
+  "476": "[PD] Auto-CRC off (passive)\n",
+  "477": "[UI] identify started (device alone on the K2)\n",
+  "478": "[UI] identify started\n",
+  "479": "[UI] identify refused: inline (no TX; the Sink tab shows the sniffed identity)\n",
+  "480": "[UI] identify refused\n",
+  "481": "[SWEEP] PDO%u %u..%umV %u pts %s %s peak=%umV at=%umV fold=%umV from=%umV\n",
+  "482": "[TEST] Setup %s\n",
+  "483": "[TEST] Verify 5V %s\n",
+  "484": "[TEST] Negotiating %s\n",
+  "485": "[TEST] Hold %s\n",
+  "486": "[TEST] Return to 5V %s\n",
+  "487": "[TEST] Complete %s\n",
+  "488": "[TEST] Stopped %s\n",
+  "489": "[TEST] UNSAFE: unplug source %s\n",
+  "490": "[TEST] Detach charger %s\n",
+  "491": "[TEST] Initializing... %s\n"
  }
 }
