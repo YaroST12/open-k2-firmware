@@ -275,26 +275,30 @@ def main(argv=None):
             drain_log(link, log_frames)   # the refusal line may still be queued on the K2
             print(start_failure_text(before, log_frames), file=sys.stderr)
             return 5
-        deadline = time.monotonic() + a.wait
-        while time.monotonic() < deadline:
+    # START is confirmed: the run proceeds by itself, so the device lock is released here instead of being
+    # held for the whole run. Each poll below takes it again, for that one exchange only, so other HID
+    # tools (k2_remote state, pd_trace dump, ...) can use the K2 between the polls.
+    deadline = time.monotonic() + a.wait
+    while time.monotonic() < deadline:
+        with k2_lock.hold():
             try:
                 st = kr.cmd_charger_test(link, Namespace(test_cmd="status"))
             except kr.RemoteTimeout:    # the K2 is busy bit-banging a handshake: ask again
-                time.sleep(1)
-                continue
-            if st["state"] in TERMINAL:
-                break
-            time.sleep(2)
-        else:
-            print("timeout waiting for done", file=sys.stderr)
-            return 2
+                st = None
+        if st is not None and st["state"] in TERMINAL:
+            break
+        time.sleep(1 if st is None else 2)
+    else:
+        print("timeout waiting for done", file=sys.stderr)
+        return 2
+    with k2_lock.hold():
         r = kr.cmd_charger_test(link, Namespace(test_cmd="summary", out=None))
         r.pop("_summary", None)
         r["cable_identity"] = kr.charger_cable(link)
-        print(charger_summary.summarize(r))
-        if st["state"] != "done":
-            print(f"run ended in state {st['state']}", file=sys.stderr)
-            return 3
+    print(charger_summary.summarize(r))
+    if st["state"] != "done":
+        print(f"run ended in state {st['state']}", file=sys.stderr)
+        return 3
     return 0
 
 
