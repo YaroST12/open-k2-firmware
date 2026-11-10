@@ -676,17 +676,15 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 
 - ~~**PPS coverage: floor, 20 mV steps, accuracy spread**~~ completed: f733009 + 91a9839; step walk (CUKTECH C1, IQ4), spread (card 55: +10..-49 mV) and floor (IQ4 3.3 V -> 3285 mV) verified 2026-11-10. Open: the floor's fail shape needs a source that floors; `cards show` spread print fixed in 45f170e, hardware check pending.
 - **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
-  above). Opt-in, never in the default preset: every 100 mV across each PPS APDO, 1 A (AVS: the row below), Accept +
-  PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint strip on the results tab and the card
-  (min / max / worst error and where). Long by design (about 77 points for 3.3-11 V, about 180 for 3.3-21 V), so the
-  Tests list shows it as its own line with a point count. Stops at the first lost source (pattern handling as the
-  other PPS rows). Validate: host tests for the point plan and the summary; hardware: one full sweep on a working
-  PPS source, no reboot, journal intact.
-  The sweep must not stop at the first out-of-band point when VBUS is still steady: record it and go on, then report
-  the highest delivered level and a fold-back (VBUS falling while the request rises). Baseus FH22, 2026-11-10: PPS
-  tracks at -150 mV up to 19.75 V (request 19.9 V), then every request >= 20.0 V folds back to 19.42 V
-  (`docs/CHARGER_QUIRKS.md`, `runs/2026-11-10-merge2-hw/fh22-sweep.tsv`); the summary should read "peak 19.75 V at
-  19.9 V, folds back to 19.42 V from 20.0 V".
+  above; fixed in 64c0ba5, hardware check pending). Opt-in, never in the default preset: every 100 mV across each PPS
+  APDO, 1 A (AVS: the row below), Accept + PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint
+  strip on the results tab and the card (min / max / worst error and where, plus the peak delivered level and a
+  fold-back: a steady out-of-band point is recorded, not a stop - "peak 19.75 V at 19.9 V, folds back to 19.42 V
+  from 20.0 V" on the FH22). Long by design (about 77 points for 3.3-11 V, about 180 for 3.3-21 V), so the Tests
+  list shows it as its own line with a point count. Stops at the first lost source (pattern handling as the other PPS
+  rows). Validate: host tests for the point plan and the summary; hardware: one full sweep on a working PPS source,
+  no reboot, journal intact. FH22 evidence: `docs/CHARGER_QUIRKS.md`,
+  `runs/2026-11-10-merge2-hw/fh22-sweep.tsv`.
 - **AVS deep sweep, its own entry next to the PPS sweep** (2026-11-10, user decision; built on the PPS sweep's engine).
   Opt-in, never in a preset: every 100 mV (the AVS Request granularity) across the SPR AVS range (9-20 V) and, with
   EPR entered, the EPR AVS range (15 V up to the APDO top, capped at this K2's monitor ceiling - 36 V here, per-device;
