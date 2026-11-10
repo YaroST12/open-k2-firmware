@@ -357,6 +357,25 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     same link is likely the same misread; check.
   - Validate: host test on `derive_proto` with a contract and no caps -> no current, measured voltage; with a periodic
     Request -> PPS tag. Hardware: repeat the P4-handback replug, footer reads "PPS 9V" or "PD 9V".
+- **Sink Identify inline drops the phone from 9 V to 5 V** (2026-11-10, operator report, 05b1703, Anker IQ4 100 W ->
+  K2 -> OnePlus 15 at 9 V): the confirmed inline Identify (`Action::Identify` -> `fusb302::identify_start(true)`,
+  `include/k2/pd/pd_identify.hpp`) sends Discover Identity / SVIDs / Modes / Get_Sink_Cap / Get_Status / Get_Revision
+  to the phone as src/dfp, in the middle of the charger's own contract. Cause not captured yet; the likely mechanism:
+  the K2's MessageIDs and the phone's answers land inside the charger <-> phone sequence (duplicate or unexpected
+  IDs, unsolicited Sink_Capabilities / VDM answers at the charger), one side sends Soft_Reset or Hard Reset, and the
+  phone restarts at 5 V. Inline TX can never be made invisible to the real source: the source's MessageID counter
+  does not know about the K2's messages.
+  - Step 1: capture it. Black box (`pd_trace.py dump`) around one inline Identify: which message gets no GoodCRC, who
+    sends Soft_Reset / Hard_Reset, and whether the phone climbs back to 9 V on its own and when.
+  - Fix, in this order: (1) inline Identify is passive by default: it shows what the charger's own Discover Identity
+    and the phone's Requests already revealed (sniffed), and says "ask the phone: interrupts its charging" before any
+    TX; (2) when the user confirms, finish with the inline hand-back Hard Reset (row above) so the phone renegotiates
+    its full contract at once instead of sitting at 5 V; (3) a phone alone on the K2 (H13/H14: the K2 shows Rd, the
+    phone sources 5 V) can be identified as a UFP with no charger to disturb: offer that path when no source is
+    attached.
+  - Validate: host tests on the inline Identify gate (sniffed-only result without confirm; confirmed run queues the
+    hand-back at its end); hardware: Anker IQ4 -> K2 -> OnePlus at 9 V, confirmed Identify, the phone is back at
+    9 V within ~2 s of the end (black box shows the Hard Reset and the phone's own Request).
 - **A dual-role phone alone reads as "CHARGER WAITING"** (2026-11-10, connection matrix H13, 05b1703,
   `runs/2026-11-10-connection/H13/`): OnePlus 15 alone on the bottom port, HID-powered K2: behaviour correct (no Rd, no
   TX, VBUS max 1 mV over 60 s), but the Source tab said "CHARGER WAITING / start a charger test" while the bar said
