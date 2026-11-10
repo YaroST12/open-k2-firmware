@@ -579,9 +579,11 @@ Reply route(const RequestLine& rl, B& b, std::span<char> out) {
         if (!frame) return error(out, 400, "hex=<128 hex digits>");
         const auto pr = remote::parse_request(*frame);
         if (!pr.header_valid) return error(out, 400, "not a request frame");
-        // Screenshot streams over the HID endpoint, the rest cannot be undone from a browser tab.
+        // Screenshot streams over the HID endpoint, the rest cannot be undone from a browser tab. The
+        // hand-back is lab-only (k2_remote over HID, like the over-load flag): a network frame never runs it.
         switch (static_cast<Cmd>(pr.cmd)) {
             case Cmd::Screenshot: case Cmd::DfuEnter: case Cmd::FactoryWipe: case Cmd::DebugFault: case Cmd::Reboot:
+            case Cmd::PdHandback:
                 return error(out, 403, "command not available over the network");
             case Cmd::PdRequest: case Cmd::PdReset: case Cmd::PdRelease:
                 if (!confirmed(rl)) return error(out, 403, "confirm required: add confirm=1");

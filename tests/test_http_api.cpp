@@ -213,7 +213,7 @@ static void test_frame_bridge() {
     r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, 0x32, 1, 1, 0}) + " HTTP/1.1" X).c_str());
     CHECK_EQ(r.r.status, 200);
     // commands that cannot work or must not run over the network
-    for (uint8_t cmd : {0x0A, 0x30, 0x31, 0x08, 0x33}) {   // screenshot, DFU, fault, reboot, factory wipe
+    for (uint8_t cmd : {0x0A, 0x30, 0x31, 0x08, 0x33, 0x49}) {   // screenshot, DFU, fault, reboot, factory wipe, lab hand-back
         f.calls = 0;
         r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, cmd, 1, 0}) + "&confirm=1 HTTP/1.1" X).c_str());
         CHECK_EQ(r.r.status, 403); CHECK_EQ(f.calls, 0); CHECK_EQ(f.shots, 0);
