@@ -72,10 +72,11 @@ class Engine {
 public:
     Contract contract;
     SinkCapsSeen sink;
-    // RED (k2/pps-overload review): declared only, nothing records it yet. Any control message seen on
-    // SOP from a sink (header bit 8 clear: its GoodCRC, its Get_Source_Cap, ...) is PD traffic from a far
-    // sink, so the passive-load gate (pd::over_load_allowed over fusb302::over_load_facts()) can refuse
-    // it. Cleared with the attach / detach like the other sink-role records (reset_sink / reset_source).
+    // Any control message seen on SOP from a sink (header bit 8 clear: its GoodCRC, its Get_Source_Cap,
+    // its Soft_Reset, ...): PD traffic from a far sink behind the K2, so it is no passive load
+    // (pd::over_load_allowed over fusb302::over_load_facts() feeds on this). One flag, not a per-message
+    // counter; cleared with the attach / detach like the other sink-role records (reset_sink /
+    // reset_source).
     bool sink_ctl_seen = false;
     SourceCaps caps;
     // The list an SPR-mode EPR_Get_Source_Cap returned (informational, no EPR entry): decoded here while `epr_info_only`
@@ -104,7 +105,7 @@ public:
     void reset() { std::construct_at(this); }   // in place: `*this = Engine{}` builds a ~1.2 KB temporary on the stack
     // New charger: drop its caps, identity, extended data and contract; the counters keep running.
     void reset_source();
-    void reset_sink() { sink = {}; }
+    void reset_sink() { sink = {}; sink_ctl_seen = false; }
     void reset_cable() { cable = {}; cable_vdm = {}; apple = {}; }
     bool cable_thunderbolt() const;  // the cable advertised SVID 0x8087
 
@@ -113,7 +114,7 @@ private:
     void on_cable_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload);
     void on_ext_message(std::uint8_t type, std::span<const std::uint8_t> payload);
     void on_epr_caps_chunk(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint8_t cc);
-    void on_sop_control(std::uint8_t type);
+    void on_sop_control(std::uint8_t type, bool from_sink);
 
     std::array<std::uint8_t, kMaxPdos * 4> epr_buf_{};
     std::uint16_t epr_total_ = 0;  // data_size of the message in progress, 0 = none

@@ -575,7 +575,7 @@ Reply route(const RequestLine& rl, B& b, std::span<char> out) {
     if (path == "/api/frame") {
         if (!post) return error(out, 405, "POST only");
         const auto hex = query_get(rl.query, "hex");
-        const auto frame = hex ? parse_hex_frame(*hex) : std::nullopt;
+        auto frame = hex ? parse_hex_frame(*hex) : std::nullopt;
         if (!frame) return error(out, 400, "hex=<128 hex digits>");
         const auto pr = remote::parse_request(*frame);
         if (!pr.header_valid) return error(out, 400, "not a request frame");
@@ -585,6 +585,10 @@ Reply route(const RequestLine& rl, B& b, std::span<char> out) {
                 return error(out, 403, "command not available over the network");
             case Cmd::PdRequest: case Cmd::PdReset: case Cmd::PdRelease:
                 if (!confirmed(rl)) return error(out, 403, "confirm required: add confirm=1");
+                // The over-load flag is lab-only (k2_remote over HID): a network frame never carries it,
+                // so strip payload bit 1 before the shared dispatcher sees the frame.
+                if (static_cast<Cmd>(pr.cmd) == Cmd::PdRequest && pr.payload.size() >= 2)
+                    (*frame)[remote::kReqHeader + 1] &= static_cast<std::uint8_t>(~remote::kPdFlagOverLoad);
                 break;
             case Cmd::Fc:
                 if (!pr.payload.empty() && (pr.payload[0] == remote::kFcScan || pr.payload[0] == remote::kFcTrigger || pr.payload[0] == remote::kFcReset) && !confirmed(rl))

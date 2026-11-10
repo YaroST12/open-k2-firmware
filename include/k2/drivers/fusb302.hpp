@@ -198,8 +198,9 @@ pd::Err sink_request(const pd::Choice& c, bool confirmed = false, bool over_load
 pd::TriggerRefusal trigger_refusal();
 // Lab-only over-load facts, derived from the existing foreign-evidence tracking (no second tracker):
 // far_sink = the inline latch, a sink Rd read while inline, a sink Rd on CC with none of ours, or a
-// foreign Request; far_pd_message = a Request we did not send this attach, or the sink-role records
-// the engine already filed (Sink_Capabilities, VDMs) - all cleared with the attach.
+// foreign Request; far_pd_message = a Request we did not send this attach, any sink-role control
+// message (GoodCRC, Get_Source_Cap), or the sink-role records the engine already filed
+// (Sink_Capabilities, VDMs) - all cleared with the attach.
 pd::OverLoadFacts over_load_facts();
 // Any PD message (any SOP: caps, Request, PS_RDY, VDM, GoodCRC) seen since this attach.
 bool pd_traffic();

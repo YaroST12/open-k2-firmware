@@ -3139,6 +3139,7 @@ void test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate
     CHECK_EQ(fusb302::over_load_facts().far_pd_message, true);
     g_reg[0x40] = 0x00;                        // the source leaves: a detach
     settle_ms(2000);
+    CHECK_EQ(fusb302::sink_cc_far(), false);   // the far-sink CC reading is not stale-true after the detach
     g_reg[0x40] = 0x20;                        // a charger is back: a new attach
     for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
     CHECK_EQ(usb_has("Active CC detected"), true);

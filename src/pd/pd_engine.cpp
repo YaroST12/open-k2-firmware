@@ -60,7 +60,7 @@ void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint
     } else if (!ext && type == kMsgVendorDefined) {
         parse_vdm((header >> 8) & 1 ? vdm : sink_vdm, payload);  // bit 8 on SOP: the sender's power role
     } else if (!ext && ((header >> 12) & 7) == 0) {  // a control message on SOP
-        on_sop_control(type);
+        on_sop_control(type, ((header >> 8) & 1) == 0);  // bit 8 clear: the sender is a sink
     } else if (type == kDataRevision && ((header >> 12) & 7) == 1 &&
                (header & (1u << 8)) && payload.size() >= 4) {
         parse_revision(payload.first(4), this->ext.revision);
@@ -70,7 +70,10 @@ void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint
 // Control messages on SOP. Besides the Request answer tracking, a PR_Swap (type 0x0A, sent by either
 // partner) is followed to its completion: Accept + PS_RDY exchange the power roles, so the per-side
 // VDM records swap with them. Reject / Wait cancel it, a PS_RDY without Accept does not complete it.
-void Engine::on_sop_control(std::uint8_t type) {
+// Any control message from a sink (power-role bit clear: its GoodCRC, Get_Source_Cap, Soft_Reset) is
+// PD traffic from a far sink behind the K2 and sets sink_ctl_seen (the passive-load gate feeds on it).
+void Engine::on_sop_control(std::uint8_t type, bool from_sink) {
+    if (from_sink) sink_ctl_seen = true;
     if (type == 0x0A) {  // PR_Swap
         pr_swap_pending_ = true;
         pr_swap_accepted_ = false;
@@ -109,6 +112,7 @@ void Engine::reset_source() {
     epr_total_ = 0;
     epr_mask_ = 0;
     pr_swap_pending_ = pr_swap_accepted_ = false;
+    sink_ctl_seen = false;   // the sink-role control messages belong to the partner that is gone
 }
 
 // A Request (type 2, or EPR_Request type 9 with the RDO first) from a sink: power role bit 8 clear.

@@ -434,6 +434,7 @@ bool far_sink_seen() { return g_engine.contract.requests != g_requests_base; }
 bool g_down_prev = false;       // downstream_now() at the last downstream_edge()
 void rebase_far_sink() {        // a new attach or a detach: no other sink's Request is on record any more
     g_requests_base = g_engine.contract.requests;
+    g_far_sink = false;         // the raw CC reading belongs to the attach that measured it too
     g_down_prev = g_inline;     // the far-sink part is now false; a still-latched inline is no new edge
 }
 
@@ -486,7 +487,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     rebase_far_sink();
     g_pd_traffic = false;
     g_pd_seen_attach = false;
-    g_engine.sink = {};   // the sniffed Sink_Capabilities belong to the previous partner
+    g_engine.reset_sink();   // the sniffed Sink_Capabilities and control messages belong to the previous partner
     g_bc_max = std::uint8_t(status0 & 3);
     g_vbus_mv = -1;  // a stale reading of the previous partner must not count
     write_sw1();
@@ -2119,12 +2120,13 @@ pd::TriggerRefusal trigger_refusal() {
 // Lab-only over-load facts, one derivation from the existing foreign-evidence state: the far-sink
 // half is what downstream_now() and the raw CC reading already track (the inline latch, a sink Rd
 // read while inline, a sink Rd on CC with none of the K2's, a foreign Request); the far-PD-message
-// half is what the engine already attributes to a sink (a Request we did not send, its
-// Sink_Capabilities, its VDMs). All of it belongs to one attach (rebase_far_sink / apply_cc_choice).
+// half is what the engine already attributes to a sink (a Request we did not send, any of its
+// control messages - GoodCRC, Get_Source_Cap - its Sink_Capabilities, its VDMs). All of it belongs
+// to one attach (rebase_far_sink / apply_cc_choice / reset_sink / reset_source).
 pd::OverLoadFacts over_load_facts() {
     const bool far_req = far_sink_seen();
     return {inline_now() || g_detach.sink_was_seen() || g_far_sink || far_req,
-            far_req || g_engine.sink.valid || g_engine.sink_vdm.num_svids != 0};
+            far_req || g_engine.sink_ctl_seen || g_engine.sink.valid || g_engine.sink_vdm.num_svids != 0};
 }
 
 pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {

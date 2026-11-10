@@ -129,7 +129,8 @@ constexpr const char* trigger_refusal_name(TriggerRefusal r) {
 // fusb302's far-sink records); the gate adds no second tracker.
 struct OverLoadFacts {
     bool far_sink;        // a sink sits behind the K2 this attach (inline latch, sink Rd on CC, or a foreign Request)
-    bool far_pd_message;  // that sink sent a PD message this attach (a Request we did not send, its Sink_Capabilities / VDMs)
+    bool far_pd_message;  // that sink sent a PD message this attach (a Request we did not send, any of its control
+                          // messages - GoodCRC, Get_Source_Cap -, its Sink_Capabilities / VDMs)
 };
 // Allowed only with a far sink attached and silent on PD this attach; refused with no far sink
 // and refused after any far PD message.
