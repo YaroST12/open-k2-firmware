@@ -443,17 +443,17 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     K2 TX, the phone stays at 9 V.
 - **Charger test: "Cable OFF" says nothing about what it does** (2026-11-10, operator report): the wizard's step 2
   reads "Cable" with the value "OFF", which says nothing about what it does (the e-marker identity the K2 presents to the
-  charger, the same list as Tools -> Spoof), and the operator re-picks it before every run through a cable.
-  - Fix, wording only (operator decision): step title "Spoof cable"; the first row "Off (real cable)" (the charger reads the real
-    cable, or a plain 3 A link); the built-ins and clones keep their names and ratings. Review row `Spoof  Off` /
-    `Spoof  EPR 50V 5A`. The Refuse stage's "Start, cable OFF" becomes "Start, spoof off"; docs (USER_GUIDE,
-    CHARGER_TEST_FLOW, UI_DESIGN) and `ct_start.py --cable` help use the same words.
-  - Validate: host tests on the step title, the first row, the Review row and the Refuse option text; hardware
-    screenshots of steps 2/3 and 3/3.
-  - Open, NOT decided by the operator (do not implement): skip the step when /cable.cfg holds a pick (Review's `Spoof`
-    row edits it); the Refuse stage's "Start, spoof off" overwrites the stored pick with Off
-    (src/ui/ui_charger_test.cpp ~2340) - make it per run?; `ct_start.py` without `--cable` stores Off over the
-    operator's pick - keep the stored pick instead?
+  charger, the same list as Tools -> Spoof). Operator decision, wording only, nothing else in the flow changes (the
+  Cable step stays as it is, remembered pick or not):
+  - Step 2 title "Spoof cable"; its first row "Off (real cable)"; the built-ins and clones keep their names and ratings.
+    Review row `Spoof  Off` / `Spoof  EPR 50V 5A`.
+  - The guard's Refuse stage ("Cable on plug": a real cable between the charger and the K2) says why: "Cable connected:
+    the spoof won't reach the charger." Two options: `Start anyway` and `Start, skip spoof` (this run without the
+    identity; the remembered pick stays). `Cancel` goes: Back already returns to Review.
+  - Docs (USER_GUIDE, CHARGER_TEST_FLOW "Wizard steps" and the Refuse stage, UI_DESIGN), `ct_start.py --cable` help and
+    the remote/web stage names use the same words.
+  - Validate: host tests on the step title, the first row, the Review row, the Refuse text and its two options, and
+    that "Start, skip spoof" leaves the stored pick unchanged; hardware screenshots of step 2, Review and Refuse.
 - **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, be71f10, `runs/2026-11-10-merge2-hw/`
   dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at
   "No charger". The K2 passes CC1->CC1 and CC2->CC2, and each cable's orientation picks which pin its CC wire lands on,
