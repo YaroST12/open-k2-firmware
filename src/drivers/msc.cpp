@@ -13,6 +13,7 @@
 #include "k2/pd/emlib.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/mode_ram.hpp"
+#include "k2/drivers/msc_async.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
@@ -34,6 +35,10 @@ std::uint32_t g_gen = 0, g_card_gen = 0;
 // whole session in Drive mode and never touched in the others (the region is zeroed at boot, like .bss).
 K2_MODE_RAM_DRIVE std::array<std::uint16_t, drive::kMaxCards> g_cards;
 unsigned g_caps = 0;   // bit per black box slot that holds a capture
+// The READ10 request TinyUSB is waiting for. The endpoint buffer is a whole number of sectors, so the stack
+// hands over whole sectors at offset 0 and each is rendered straight into that buffer (no bounce buffer).
+static_assert(CFG_TUD_MSC_EP_BUFSIZE % vfat::kSectorSize == 0, "partial-sector reads would need a bounce buffer");
+AsyncRead<vfat::kSectorSize> g_read;
 
 unsigned cap_mask() {
     unsigned m = 0;
@@ -139,6 +144,27 @@ void poll() {
     K2LOG("[MSC] volume rebuilt after store change\n");
 }
 
+bool io() {
+    const auto t = g_read.take();
+    if (!t) return false;
+    // Unmounted or reset since the callback: TinyUSB dropped the transfer (its pending flag is cleared), so
+    // there is nothing to complete and the endpoint buffer may already belong to the next command.
+    if (!usb::configured()) {
+        g_read.drop();
+        return false;
+    }
+    int32_t done = TUD_MSC_RET_ERROR;
+    if (g_drive && g_drive->ok()) {
+        for (uint32_t at = 0; at < t->req.size; at += vfat::kSectorSize)
+            g_drive->read(t->req.lba + (t->req.offset + at) / vfat::kSectorSize,
+                          std::span<uint8_t, vfat::kSectorSize>(t->req.buf + at, vfat::kSectorSize));
+        done = static_cast<int32_t>(t->req.size);
+    }
+    // A bus reset, unmount or new command while rendering (a nested tud_task) retired this request.
+    if (!g_read.valid(*t)) return false;
+    return tud_msc_async_io_done(done, false);
+}
+
 }  // namespace k2::msc
 
 // ---- TinyUSB callbacks (C linkage) -----------------------------------------------------------
@@ -150,9 +176,13 @@ void tud_msc_inquiry_cb(uint8_t, uint8_t vendor_id[8], uint8_t product_id[16], u
     std::memcpy(product_rev, "1.0 ", 4);
 }
 
-bool tud_msc_test_unit_ready_cb(uint8_t) { return k2::msc::g_drive && k2::msc::g_drive->ok(); }
+bool tud_msc_test_unit_ready_cb(uint8_t) {
+    k2::msc::g_read.drop();   // a new command: no read can still be pending (see tud_mount_cb)
+    return k2::msc::g_drive && k2::msc::g_drive->ok();
+}
 
 void tud_msc_capacity_cb(uint8_t, uint32_t* block_count, uint16_t* block_size) {
+    k2::msc::g_read.drop();
     *block_count = k2::msc::g_drive ? k2::msc::g_drive->sectors() : 0;
     *block_size = k2::vfat::kSectorSize;
 }
@@ -161,25 +191,28 @@ bool tud_msc_start_stop_cb(uint8_t, uint8_t, bool, bool) { return true; }   // n
 
 bool tud_msc_is_writable_cb(uint8_t) { return false; }
 
+// Runs inside tud_task(), which the LCD waits and delays also call: it renders nothing. The request is stashed
+// and k2::msc::io() (main loop) reads the sectors and completes it (TUD_MSC_RET_ASYNC). "Not ready" (0) is no
+// substitute: TinyUSB would re-queue the event and tud_task would spin on it.
 int32_t tud_msc_read10_cb(uint8_t, uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
-    using k2::vfat::kSectorSize;
-    auto* out = static_cast<uint8_t*>(buffer);
-    if (!k2::msc::g_drive) return -1;
-    // The endpoint buffer is a whole number of sectors, so the stack hands over whole sectors at offset 0: each
-    // is read straight into the buffer (a 512-byte bounce buffer here sat on the stack of every USB service).
-    static_assert(CFG_TUD_MSC_EP_BUFSIZE % kSectorSize == 0, "partial-sector reads would need a bounce buffer");
-    if (offset % kSectorSize != 0 || bufsize % kSectorSize != 0) return -1;
-    for (uint32_t done = 0; done < bufsize; done += kSectorSize)
-        k2::msc::g_drive->read(lba + (offset + done) / kSectorSize, std::span<uint8_t, kSectorSize>(out + done, kSectorSize));
-    return static_cast<int32_t>(bufsize);
+    if (!k2::msc::g_drive) return TUD_MSC_RET_ERROR;
+    if (!k2::msc::g_read.submit(lba, offset, static_cast<uint8_t*>(buffer), bufsize)) return TUD_MSC_RET_ERROR;
+    return TUD_MSC_RET_ASYNC;
 }
 
+// The host starts a new command only once the previous one finished or was reset away, so a stashed read
+// that is still around belongs to a transfer that no longer exists.
+void tud_mount_cb(void) { k2::msc::g_read.drop(); }
+void tud_umount_cb(void) { k2::msc::g_read.drop(); }
+
 int32_t tud_msc_write10_cb(uint8_t lun, uint32_t, uint32_t, uint8_t*, uint32_t) {
+    k2::msc::g_read.drop();
     tud_msc_set_sense(lun, SCSI_SENSE_DATA_PROTECT, 0x27, 0x00);   // write protected
     return -1;
 }
 
 int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const[16], void*, uint16_t) {
+    k2::msc::g_read.drop();
     tud_msc_set_sense(lun, SCSI_SENSE_ILLEGAL_REQUEST, 0x20, 0x00);   // invalid command operation code
     return -1;
 }

@@ -380,6 +380,7 @@ extern "C" int main(void) {
     for (;;) {
         k2::gap::loop.note(k2::systick::millis());   // the longest iteration of a charger-test row ([CT] gap)
         k2::usb::poll();
+        if (k2::usbcfg::current.drive && k2::msc::io()) k2::usb::poll();   // READ10 renders here, never under a paint
         k2::shell_hw::poll();
         if (k2::usbcfg::current.drive) k2::msc::poll();
 #if K2_NET
