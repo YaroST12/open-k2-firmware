@@ -194,6 +194,16 @@ class Decoders(unittest.TestCase):
         self.assertTrue(s["flip_hint"])
         self.assertFalse(s["crossed"])
 
+    def test_state_no_pd_flag(self):
+        base = bytes(40)
+        s = kr.decode_state(base + bytes([0]) + bytes(8))
+        self.assertFalse(s["no_pd"])
+        s = kr.decode_state(base + bytes([128]) + bytes(8))       # kLinkNoPd: settled "no PD this attach"
+        self.assertTrue(s["no_pd"])
+        self.assertFalse(s["crossed"] or s["flip_hint"] or s["inline"])
+        s = kr.decode_state(base + bytes([32 | 64]) + bytes(8))   # the neighbours do not leak into bit 7
+        self.assertFalse(s["no_pd"])
+
     def test_state_reset_cause(self):
         base = bytes(40) + bytes([0]) + bytes(8)            # 49 B: everything up to the link block
         self.assertNotIn("reset_cause", kr.decode_state(base))   # older firmware: field absent

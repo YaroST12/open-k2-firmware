@@ -409,7 +409,8 @@ def decode_state(p):
                    "age_s": int.from_bytes(p[41:45], "little"),
                    "cable_scanned": bool(lf & 16), "cable_stale": bool(lf & 8),
                    "cable_age_s": int.from_bytes(p[45:49], "little"),
-                   "crossed": bool(lf & 32), "flip_hint": bool(lf & 64)})   # kLinkCrossed / kLinkFlipHint: flip one cable
+                   "crossed": bool(lf & 32), "flip_hint": bool(lf & 64),   # kLinkCrossed / kLinkFlipHint: flip one cable
+                   "no_pd": bool(lf & 128)})   # kLinkNoPd: the settled "no PD this attach" verdict (Row C)
     if len(p) >= 53:                              # why this boot happened (CTRLSTS flags, cleared after capture)
         flags = int.from_bytes(p[49:53], "little")
         st.update({"reset_flags": flags, "reset_cause": reset_cause_name(flags)})
@@ -668,7 +669,7 @@ def cmd_sink(link, a):
     return {"tab": "sink",
             "k2_sink": pd["pin"] != 0,          # fusb302::self_powered() == pin_rd() != 0
             "k2_sink_ok": pd["pin"] == 1,
-            "link": {k: st.get(k) for k in ("inline", "waiting", "crossed", "flip_hint", "vbus_mv",
+            "link": {k: st.get(k) for k in ("inline", "waiting", "crossed", "flip_hint", "no_pd", "vbus_mv",
                                             "pd_valid", "spec_rev", "num_pdos", "direction")},
             "identify": idp,
             "id": {"sniffed": None, "asked": idp["state"]},
@@ -677,7 +678,7 @@ def cmd_sink(link, a):
             "pwr": pwr, "data": data,
             "usb": ul, "cable": em,
             "caps": caps, "caps_src": "from Identify" if caps else "",
-            "proto": None, "no_pd_verdict": None,
+            "proto": None, "no_pd_verdict": "none" if st.get("no_pd") else None,   # only the settled None is on the wire
             "not_exposed": not_exposed}
 
 

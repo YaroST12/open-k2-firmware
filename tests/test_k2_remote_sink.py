@@ -232,6 +232,15 @@ class SinkCommand(unittest.TestCase):
         self.assertFalse(r["k2_sink_ok"])
         self.assertIn("K2 (sink mode PLUS)", kr.render("sink", r))
 
+    def test_no_pd_verdict_from_link_flag(self):
+        # kLinkNoPd (link flag bit 7): the settled "no PD this attach" verdict is the one value on the wire
+        r = run_sink(sink_link(state=state_payload(pd_valid=False, link_flags=4 | 128, num_pdos=0)))
+        self.assertTrue(r["link"]["no_pd"])
+        self.assertEqual(r["no_pd_verdict"], "none")
+        r = run_sink(sink_link())
+        self.assertFalse(r["link"]["no_pd"])
+        self.assertIsNone(r["no_pd_verdict"])
+
     def test_gaps_are_named_not_faked(self):
         r = run_sink(sink_link())
         # fields the Sink tab renders from the firmware model that no remote command exposes today
