@@ -188,6 +188,26 @@ static void test_reach_says_what_the_source_delivered() {
     CHECK_STR(text_of(rl::reach(s, A::Pps), true).c_str(), "not run");
     CHECK_EQ(rl::reach(s, A::Qc2).adv_mv, 0);   // an algorithm with no steps: empty
 }
+// pattern pps-off-at-no-load: a range whose levels ended "needs load" never reads "not run" (that word is for a range nothing ran
+// on): the Results footer says why. Some levels passed first: the footer keeps the highest one that did.
+static void test_reach_footer_says_needs_load_not_not_run() {
+    const uint32_t pdo = 3248763456u;   // PPS 5-21V, slot 7
+    for (const A a : {A::Pps, A::SprAvs, A::EprAvs}) {
+        std::vector<ct::Step> all{step(a, 13000, V::Skip, 7, pdo, ct::Reason::NeedsLoad), step(a, 21000, V::Skip, 7, pdo, ct::Reason::NeedsLoad)};
+        auto r = rl::reach(all, a);
+        CHECK_EQ(int(r.tone), int(rl::Tone::Skip));
+        CHECK_STR(text_of(r, true).c_str(), "needs load");
+        // never run (a plain skip) still reads "not run"
+        for (auto& x : all) x.reason = ct::Reason::NoOffer;
+        CHECK_STR(text_of(rl::reach(all, a), true).c_str(), "not run");
+    }
+    std::vector<ct::Step> mixed{step(A::Pps, 5000, V::Pass, 7, pdo), step(A::Pps, 13000, V::Skip, 7, pdo, ct::Reason::NeedsLoad),
+                                step(A::Pps, 21000, V::Skip, 7, pdo, ct::Reason::NeedsLoad)};
+    const auto m = rl::reach(mixed, A::Pps);
+    CHECK_EQ(int(m.tone), int(rl::Tone::Partial));
+    CHECK_STR(text_of(m, true).c_str(), "needs load >5V");   // the levels above the highest one that passed need a load
+    CHECK_EQ(9 + rl::reach_footer(m).len <= 27, true);
+}
 // A row with two ranges reports the one that is not clean (the first), so the footer never hides a cap behind a green sibling.
 static void test_row_reach_picks_the_range_that_is_not_clean() {
     auto s = baseus();                                    // PPS slot 6 has a fail, slot 7 is clean
@@ -894,6 +914,7 @@ int main() {
     test_a_range_with_nothing_passed_stays_red_and_all_skipped_grey();
     test_a_legacy_chip_with_a_pass_and_a_fail_is_amber();
     test_reach_says_what_the_source_delivered();
+    test_reach_footer_says_needs_load_not_not_run();
     test_row_reach_picks_the_range_that_is_not_clean();
     test_reach_words_fit_the_footer_next_to_a_label();
     test_a_range_not_offered_reads_none();
