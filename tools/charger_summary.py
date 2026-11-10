@@ -10,6 +10,7 @@ tools/report_card.py) in the same style, for `k2_remote.py cards show`.
 import json
 import sys
 
+import report_card
 import step_label
 
 PROTO_NAMES = {"pd2-fixed": "PD2 fixed", "pd3x-fixed": "PD fixed", "epr-fixed": "EPR fixed", "spr-avs": "SPR AVS",
@@ -205,12 +206,14 @@ def summarize_card(c):
     for r in c["ranges"]:
         rng = f"- {step_label.range_protocol(r['alg'])} {step_label.range_text(r['lo_mv'], r['hi_mv'], r.get('max_ma', 0))}: "
         spread = _spread_text(r)   # v9 card: the setpoint error per passed level, e.g. ", err +10 / +20 / +8 / -12 mV"
+        # v10 card: the deep-sweep summary of the APDO, same words as the results page ("sweep peak 21.0 V at 21.0 V, ...").
+        sweep = f", sweep {report_card.sweep_text(r['sweep'])}" if r.get("sweep") else ""
         if r["fail_mv"]:
-            out.append(rng + f"✗ at {_v(r['fail_mv'])} V" + (f", reached {_v(r['max_mv'])} V" if r["max_mv"] else "") + spread)
+            out.append(rng + f"✗ at {_v(r['fail_mv'])} V" + (f", reached {_v(r['max_mv'])} V" if r["max_mv"] else "") + spread + sweep)
         elif r["max_mv"] >= r["hi_mv"]:
-            out.append(rng + "✓ whole range" + spread)
+            out.append(rng + "✓ whole range" + spread + sweep)
         else:
-            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "no step measured") + spread)
+            out.append(rng + (f"reached {_v(r['max_mv'])} V" if r["max_mv"] else "no step measured") + spread + sweep)
     return "\n".join(out)
 
 
