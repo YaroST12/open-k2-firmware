@@ -3369,6 +3369,7 @@ void test_alone_identify_waits_for_ready_before_the_first_vdm() {
     push_frame(0xE0, ctl_msg(6, 2), {});   // PS_RDY
     for (int i = 0; i < 30; i++) { g_ms += 1; fusb302::service(); }
     CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    fusb302::set_wait_kind(raguard::WaitKind::Unknown);   // the phone sources VBUS now: no longer "dual-role" (hw)
     settle_ms(100);                        // under the 200 ms settle: still no VDM
     CHECK_EQ(usb_has("TX type 15"), false);
     settle_ms(150);                        // settled: the sequencer starts (RED: nothing waits today)
@@ -3485,19 +3486,21 @@ void test_alone_identify_wait_refuses_on_detach() {
     end_alone_case();
 }
 
-void test_alone_identify_wait_never_starts_when_the_verdict_changes() {
+// Hardware (OP15 alone, v1.0-364): the wait verdict leaves DualRolePort once the phone sources VBUS, i.e. exactly
+// when the contract goes Ready, so a wait gated on the verdict always timed out. The verdict is checked once at
+// identify_start; an unplug while waiting is the detach path (test_alone_identify_wait_refuses_on_detach).
+void test_alone_identify_wait_starts_after_the_verdict_changes() {
     attach_phone_alone_detached();
     g_log.clear(); g_usb.clear();
     CHECK_EQ(fusb302::identify_start(false), true);
     for (int i = 0; i < 60 && fusb302::active_cc() == 0; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     drive_to_ready();
     CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
-    fusb302::set_wait_kind(raguard::WaitKind::NoSource);   // the toggle stopped: no longer a dual-role port
-    settle_ms(400);                                       // past the settle with a Ready contract: still no VDM
-    CHECK_EQ(usb_has("TX type 15"), false);               // RED: today the ready-condition ignores the verdict
-    settle_ms(3900);                                      // the bounded timeout still refuses and hands back
-    CHECK_EQ(usb_has("no Ready contract"), true);
-    CHECK_EQ(usb_has("line released"), true);
+    fusb302::set_wait_kind(raguard::WaitKind::NoSource);  // VBUS up: the Rp trace no longer reads as toggling
+    settle_ms(400);                                       // past the settle with a Ready contract: the VDM goes
+    CHECK_EQ(usb_has("TX type 15"), true);
+    CHECK_EQ(usb_has("Ready contract after"), true);
+    CHECK_EQ(usb_has("no Ready contract"), false);
     end_alone_case();
 }
 
@@ -4078,7 +4081,7 @@ int main() {
     test_alone_identify_on_a_stale_cc_requests_pdo1_and_waits();
     test_alone_identify_wait_refuses_when_inline_latches();
     test_alone_identify_wait_refuses_on_detach();
-    test_alone_identify_wait_never_starts_when_the_verdict_changes();
+    test_alone_identify_wait_starts_after_the_verdict_changes();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_handback_drops_rd_and_the_reset_reaches_the_chip();

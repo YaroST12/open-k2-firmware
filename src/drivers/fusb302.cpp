@@ -2302,9 +2302,10 @@ void service() {
     // Identity 1 ms after Rd went RETRYFAIL). Bounded timeout, then a clear refusal and the line back.
     if (g_ident_wait) {
         const std::uint32_t now2 = systick::millis();
-        // The premise is re-checked while waiting: not inline, the verdict still a dual-role port, and a Ready
-        // contract of this attach on a live line.
-        const bool ready = !inline_now() && g_wait_kind == raguard::WaitKind::DualRolePort
+        // The premise is re-checked while waiting: not inline, and a Ready contract of this attach on a live line.
+        // Not the wait verdict: identify_start checked DualRolePort, and the verdict leaves DualRolePort as soon as
+        // the phone sources VBUS, which is exactly when the contract goes Ready (hw: OP15 timed out on a Ready line).
+        const bool ready = !inline_now()
                            && g_sink.status().state == pd::SinkState::Ready && g_session.fresh() && g_active_cc != 0;
         if (ready && g_ident_ready_at == 0) g_ident_ready_at = now2;   // a plain stamp: `now | 1` wraps the settle when now is even
         if (ready && now2 - g_ident_ready_at >= kIdentSettleMs) {
