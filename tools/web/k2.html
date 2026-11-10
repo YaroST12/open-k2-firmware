@@ -545,10 +545,12 @@ var K2Proto = (function () {
     if (modern) {
       runMask = v.getUint32(15, true);
       var draft = v.getUint32(19, true), stage = p[23] >> 2, f = p[25];
+      var ppsSweep = draft >= 0x80000000;   // draft bit 31: the PPS deep sweep is on (an Options flag, not a test)
+      draft = draft & 0x7FFFFFFF;
       wire = p[23] & 3;
       if ((runMask | draft) & ~TEST_ALL || stage >= TEST_STAGES.length || (p[39] & 15) > 11)
         throw new FrameError("invalid charger-test selection or evidence");
-      out.selection = { run_mask: runMask, configured_mask: draft,
+      out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep,
                         run: TEST_ALGORITHMS.filter(function (_, i) { return runMask & (1 << i); }),
                         configured: TEST_ALGORITHMS.filter(function (_, i) { return draft & (1 << i); }) };
       out.stage = TEST_STAGES[stage];

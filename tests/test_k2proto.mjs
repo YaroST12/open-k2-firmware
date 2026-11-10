@@ -303,9 +303,20 @@ test("charger-test schema2: every EPR skip names its reason (mirrors ct::explana
   }
 });
 
+test("charger-test schema2: draft bit 31 is the PPS deep sweep flag, not a test", () => {
+  const h = new Uint8Array(TEST_HEADER2);
+  const plain = P.decodeChargerTest(h).selection;
+  h[22] |= 0x80;   // remote_proto.hpp: draft_selected bit 31 = the PPS deep sweep on
+  const sel = P.decodeChargerTest(h).selection;
+  assert.equal(sel.pps_sweep, true);
+  assert.equal(plain.pps_sweep, false);
+  assert.equal(sel.configured_mask, plain.configured_mask);
+  assert.deepEqual(sel.configured, plain.configured);
+});
+
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
-  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x80],
+  for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x40],
                             [40, 20], [41, 12], [42, 0x80], [49, 5], [50, 47]]) {   // 47 = one past the last reason (46 = StepResolution)
     const bad = new Uint8Array(good); bad[at] = value;
     assert.throws(() => P.decodeChargerTest(bad), P.FrameError, "offset " + at);

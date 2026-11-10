@@ -180,6 +180,21 @@ class ChargerTest(unittest.TestCase):
         self.assertIn("RMDO 3.2 self-report", kr.render("charger-test", r))
         self.assertIn("not power or revision conformance", kr.render("charger-test", r))
 
+    def test_schema2_draft_bit31_is_the_pps_sweep_flag(self):
+        # remote_proto.hpp: draft_selected bit 31 = the PPS deep sweep on (an Options flag, not a test);
+        # with the sweep on, status must still decode (hardware 7a1a5ed: "invalid charger-test selection")
+        h = bytearray(HEADER2)
+        draft = struct.unpack_from("<I", h, 19)[0]
+        struct.pack_into("<I", h, 19, draft | (1 << 31))
+        r = kr.decode_charger_test(bytes(h))
+        self.assertTrue(r["selection"]["pps_sweep"])
+        self.assertEqual(r["selection"]["configured_mask"], draft)
+        self.assertEqual(r["selection"]["configured"], ["pps", "pd3.2-revision"])
+        self.assertFalse(kr.decode_charger_test(HEADER2)["selection"]["pps_sweep"])
+        struct.pack_into("<I", h, 19, draft | (1 << 30))   # an unknown bit below the flag still fails
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(bytes(h))
+
     def test_schema2_skip_variants_never_become_pass(self):
         meta = bytearray(HEADER2); meta[11] = meta[12] = 5; meta[9] = 5
         selected = [16, 17, 18, 14, 15]
@@ -310,7 +325,7 @@ class ChargerTest(unittest.TestCase):
     def test_schema2_shape_and_origin_races_leave_output_untouched(self):
         row = bytes([6]) + ROW0[1:]
         good = page(HEADER2, 0, [row])
-        for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x80),
+        for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x40),
                               (40, 20), (41, 12), (42, 0x80), (49, 5), (50, len(kr.TEST_REASONS))):
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):

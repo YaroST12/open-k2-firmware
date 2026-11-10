@@ -194,6 +194,7 @@ TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", 
                                              # "refuse" = the Ra guard said no (a cable is on the plug): start anyway, or skip the spoof for this run;
                                              # "waiting" = START presented Rd and waits for the charger (OK or BACK cancels it)
 TEST_ALL = (1 << len(TEST_ALGORITHMS)) - 1
+TEST_SWEEP_BIT = 1 << 31   # draft_selected bit 31 = the PPS deep sweep on (remote_proto.hpp)
 TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing..."]
 TEST_RESULTS = ["pending", "running", "pass", "fail", "skip"]
 # charger_test::Unit in enum order (include/k2/chargertest/charger_test.hpp): Pd, the legacy protocols, then the low PPS/AVS rows
@@ -644,9 +645,11 @@ def decode_charger_test(p):
         run_mask, draft_mask = struct.unpack_from("<II", p, 15)
         stage, wire, flags = (p[23] >> 2) & 15, p[23] & 3, p[25]
         out["resumed"] = p[23] >> 6   # times this run was resumed after a reboot (saturates at 3)
+        sweep = bool(draft_mask & TEST_SWEEP_BIT)   # draft bit 31: the PPS deep sweep is on (an Options flag, not a test)
+        draft_mask &= ~TEST_SWEEP_BIT
         if (run_mask | draft_mask) & ~TEST_ALL or stage >= len(TEST_STAGES) or p[39] & 15 > 11:
             raise FrameError("invalid charger-test selection or evidence")
-        out["selection"] = {"run_mask": run_mask, "configured_mask": draft_mask,
+        out["selection"] = {"run_mask": run_mask, "configured_mask": draft_mask, "pps_sweep": sweep,
                             "run": [a for i, a in enumerate(TEST_ALGORITHMS) if run_mask & (1 << i)],
                             "configured": [a for i, a in enumerate(TEST_ALGORITHMS) if draft_mask & (1 << i)]}
         out["stage"] = TEST_STAGES[stage]
