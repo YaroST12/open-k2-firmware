@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+#include "k2/chargertest/sweep.hpp"
+#include <string_view>
+
+namespace k2::ctsweep {
+
+unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv) {
+    if (!caps.valid) return 0;
+    unsigned total = 0;
+    const size_t n = std::min<size_t>(std::min<size_t>(caps.num_pdos, caps.pdos.size()), 7);   // SPR PPS slots are 1..7
+    for (size_t i = 0; i < n; ++i) {
+        const auto& p = caps.pdos[i];
+        if (!p.raw || p.type != pd::PdoType::Pps || !p.min_mv) continue;
+        const unsigned c = point_count(point_range(p.min_mv, p.max_mv, cap_mv));
+        if (total >= kMaxPoints) break;
+        total += std::min(c, kMaxPoints - total);
+    }
+    return total;
+}
+
+Summary summarize(std::span<const int16_t> err, unsigned lo_mv) {
+    (void)lo_mv;
+    Summary s;
+    s.points = uint16_t(err.size());
+    if (err.empty()) return s;
+    int worst_abs = -1;
+    for (size_t i = 0; i < err.size(); ++i) {
+        const int e = int(err[i]);
+        if (i == 0 || e < s.min_err) s.min_err = int16_t(e);
+        if (i == 0 || e > s.max_err) s.max_err = int16_t(e);
+        if (std::abs(e) > worst_abs) { worst_abs = std::abs(e); s.worst_err = int16_t(e); }
+    }
+    return s;
+}
+
+size_t format_mv(unsigned mv, std::span<char> out) {
+    if (out.empty()) return 0;
+    const unsigned r = (mv + 5) / 10 * 10;   // 10 mV resolution
+    unsigned whole = r / 1000, frac = (r / 10) % 100;
+    size_t n = 0;
+    auto put = [&](char c) { if (n + 1 < out.size()) out[n++] = c; };
+    auto num = [&](unsigned v) {
+        char t[8]; unsigned k = 0;
+        do { t[k++] = char('0' + v % 10); v /= 10; } while (v && k < 8);
+        while (k) put(t[--k]);
+    };
+    num(whole);
+    put('.');
+    const char d2 = char('0' + frac % 10), d1 = char('0' + frac / 10);
+    if (frac % 10) { put(d1); put(d2); }   // two decimals: 19.75
+    else { put(d1); }                        // one decimal kept: 19.9, 20.0
+    if (n < out.size()) out[n] = 0;
+    return n;
+}
+
+size_t format_summary(const Summary& s, std::span<char> out) {
+    if (out.empty()) return 0;
+    size_t n = 0;
+    auto put = [&](std::string_view t) { for (char c : t) if (n + 1 < out.size()) out[n++] = c; };
+    auto mv = [&](unsigned v) { char b[12]; const size_t k = format_mv(v, {b, sizeof b}); put({b, k}); };
+    if (!s.points) { put("no points"); }
+    else {
+        put("peak "); mv(s.peak_mv); put(" V at "); mv(s.peak_at_mv); put(" V");
+        if (s.fold_mv) { put(", folds back to "); mv(s.fold_mv); put(" V from "); mv(s.fold_from_mv); put(" V"); }
+    }
+    if (n < out.size()) out[n] = 0;
+    return n;
+}
+
+}  // namespace k2::ctsweep

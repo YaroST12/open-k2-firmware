@@ -327,6 +327,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_viewport.cpp $(SRC_DIR)/core/logfmt.cpp $(SRC_
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_orientation.cpp $(SRC_DIR)/ui/kit.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/home_model.cpp $(SRC_DIR)/ui/home_cell.cpp $(SRC_DIR)/ui/home_proto.cpp $(SRC_DIR)/ui/ui_home.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/chargertest/report_card_json.cpp $(SRC_DIR)/chargertest/result_layout.cpp $(SRC_DIR)/chargertest/step_label.cpp $(SRC_DIR)/core/fs.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/chargertest/sweep.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/chargertest/charger_test.cpp $(SRC_DIR)/ui/ui_charger_test.cpp $(SRC_DIR)/ui/ui_cable_list.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/qr.cpp $(SRC_DIR)/ui/qrview.cpp $(SRC_DIR)/core/bootinfo.cpp $(SRC_DIR)/ui/bootscreen.cpp $(SRC_DIR)/ui/qrshare.cpp $(SRC_DIR)/ui/qrshare_records.cpp $(SRC_DIR)/ui/qrshare_link.cpp $(SRC_DIR)/ui/ui_share.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
