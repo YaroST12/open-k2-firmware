@@ -349,8 +349,12 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Fix: the waiting classifier takes Rp duty and period into account: Rp present only part of the time with
     50-100 ms toggles = "Dual-role port (phone?)", not a charger; START on it explains that the phone will source 5 V
     (H14). Steady Rp for >= 300 ms stays "charger waiting".
+  - Also: three readers of "waiting" disagree. On a real waiting charger (sleeping splitter port behind a CUKTECH, CC2
+    2.99 V, `runs/2026-11-10-splitter-cuk/wake/pd.png`; Baseus 140 W direct on the top plug, CC1/CC2 3.20 V) the Source
+    tab says "CHARGER WAITING", the bottom bar says "No charger, via cable" and `k2_remote state` says `waiting: False`.
+    One classifier, one result: the tab, the bar and the `state` field read the same value.
   - Validate: host test on the classifier with a toggling and a steady trace; hardware: repeat H13, then the Baseus
-    alone (still "CHARGER WAITING").
+    alone (still "CHARGER WAITING", bar and `state` agree).
 - **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in 1d45a76, hardware check
   pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
