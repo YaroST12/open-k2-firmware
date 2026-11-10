@@ -309,6 +309,48 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 - **`k2_remote.py cards` cannot read format v8 cards** (2026-11-10): "card payload is 198 bytes, expected 144, 162,
   178, 190 or 196" after b193e56 made the shared card v8 (rebalanced count). Add the v8 size and field to the host
   decoder (`tools/k2_remote.py`, same layout as `tools/report_card.py`), with a test.
+- **An inline latch leaves the far sink on Type-C current: hand the contract back with a Hard Reset** (2026-11-10,
+  connection matrix P4, 05b1703, `runs/2026-11-10-connection/P4/`): PLUS-boot K2 on a Baseus 140 W, self-hold PDO 1
+  Ready at 1291 ms; OnePlus 15 plugged on the bottom port at ~19.0 s; the inline latch fired ~300 ms after IBUS passed
+  50 mA and dropped Rd in the same write (`SWITCHES0 <= 0x08`, `LINK inline=yes`), then no TX for 40 s. Correct, but
+  the Baseus keeps its contract with the K2 and never re-sends Source_Capabilities, so the phone sat at 5 V ~2 A with no
+  PD contract of its own. Pulling the top plug for ~1 s (the stand-in for a Hard Reset, `runs/2026-11-10-connection/
+  P4-handback/`) proved the recovery: the K2 came back on a plain boot with `pin=0,0,0,0`, no marker (the follower had
+  removed `/rd.rec` on the inline latch), no K2 TX, and the phone negotiated PPS itself (Requests every ~500 ms, 8.97 V
+  3.37 A, 30 W).
+  - Fix: when the inline latch fires while the K2 owns an explicit contract (self-hold, a request, a charger-test row),
+    (1) wait until the comeback record is removed from the volume, (2) drop Rd, (3) send one Hard Reset (TX needs no
+    Rd). A self-powered K2 dies in the VBUS gap and returns as a passive plain boot; a host-powered K2 rides through and
+    stays passive. Never if the K2 holds no contract (nothing to hand back) or the far end already has its own (a far
+    Request seen). One hand-back per attach. Order is the whole point: a reset before the record is gone brings the K2
+    back with Rd from the first write and it fights the phone (X1 in `docs/CONNECTION_MATRIX.md`).
+  - Lab: `k2_remote.py pd reset --inline --confirm` sends the same Hard Reset while inline (today `pd reset` refuses
+    "inline: a live sink is attached" with no override), for the hardware check and for diagnosing the far sink's
+    renegotiation. Same lab gating as `--over-load`: refused during a charger test, logged as a lab op.
+  - Validate: host tests (red first) on the decision: contract owned + inline -> record removed before the reset is
+    queued; no contract / far Request seen / second latch -> no reset. Hardware: repeat P4 HID-less, the black box of the
+    comeback shows the phone's own Request above 5 V and no K2 TX; repeat with HID, the K2 stays up and passive.
+- **Home footer shows "PD 0V5.82A" for a sniffed PPS contract when the K2 missed the caps** (2026-11-10,
+  `runs/2026-11-10-connection/P4-handback/home.png`, 05b1703): the K2 booted ~1 s after VBUS returned, so the Baseus's
+  Source_Capabilities came before the trace started (`num_pdos: 0`); the phone's Requests (PPS, every ~500 ms) were
+  decoded with no PDO list, as a fixed RDO: no voltage (0 V) and the PPS bits read as max current (5.82 A, also on the
+  IBUS "max" label). `src/ui/home_proto.cpp` `derive_proto` takes the `ctr.valid && pd_link` branch into `from_pd`.
+  - Fix: a contract decoded without its Source_Capabilities has an unknown PDO type: show the measured level and no
+    current ("PD 9V", tag only), never a value decoded from a guessed RDO layout. A Request repeated every <=10 s with
+    no caps is the PPS keep-alive pattern: label it "PPS 9V" from the measured VBUS. `fc: PD MTK` in `state` for the
+    same link is likely the same misread; check.
+  - Validate: host test on `derive_proto` with a contract and no caps -> no current, measured voltage; with a periodic
+    Request -> PPS tag. Hardware: repeat the P4-handback replug, footer reads "PPS 9V" or "PD 9V".
+- **A dual-role phone alone reads as "CHARGER WAITING"** (2026-11-10, connection matrix H13, 05b1703,
+  `runs/2026-11-10-connection/H13/`): OnePlus 15 alone on the bottom port, HID-powered K2: behaviour correct (no Rd, no
+  TX, VBUS max 1 mV over 60 s), but the Source tab said "CHARGER WAITING / start a charger test" while the bar said
+  "No charger, via cable". The phone toggles Rp/open about every 100 ms looking for a partner (STATUS0 BC_LVL 3 <-> 0 in
+  the trace); a charger's Rp is steady.
+  - Fix: the waiting classifier takes Rp duty and period into account: Rp present only part of the time with
+    50-100 ms toggles = "Dual-role port (phone?)", not a charger; START on it explains that the phone will source 5 V
+    (H14). Steady Rp for >= 300 ms stays "charger waiting".
+  - Validate: host test on the classifier with a toggling and a steady trace; hardware: repeat H13, then the Baseus
+    alone (still "CHARGER WAITING").
 - **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in 1d45a76, hardware check
   pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the
