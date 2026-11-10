@@ -3322,6 +3322,23 @@ void test_charger_alone_identify_refused_as_today() {
     end_alone_case();
 }
 
+// The phase-1 lab hand-back's driver steps (`k2_remote.py pd handback --confirm`, k2::handback): with the link
+// latched inline, dropping the Rd and then the one lab Hard Reset must reach the chip - the reset on the wire
+// (CONTROL3 SEND_HARD_RESET) and SWITCHES0 without any pull-down bit (a sink behind the K2 has its own Rd on the
+// line; ours would be a second sink).
+void test_inline_handback_drops_rd_and_the_reset_reaches_the_chip() {
+    attach_inline();
+    fusb302::rd_for_run(false);                          // the hand-back's step (2): drop the Rd
+    CHECK_EQ(fusb302::sink_hard_reset(true), true);      // step (3): the one Hard Reset, lab-inline driver path
+    for (int i = 0; i < 10 && !hard_reset_written(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(hard_reset_written(), true);                // the reset reached the chip, not only a fake backend
+    bool rd_on_sw0 = false;
+    for (const std::string& s : g_log)
+        if (s.rfind("W 01=", 0) == 0 && (std::stoul(s.substr(5), nullptr, 16) & 0x03u) != 0) rd_on_sw0 = true;
+    CHECK_EQ(rd_on_sw0, false);                          // no PDWN bit in any SWITCHES0 write while inline
+    end_inline_case();
+}
+
 void test_inline_identify_refused_even_confirmed() {
     attach_inline();
     CHECK_EQ(fusb302::identify_start(true), false);      // confirm must not override the inline refusal
@@ -3877,6 +3894,7 @@ int main() {
     test_charger_alone_identify_refused_as_today();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
     test_inline_hard_reset_only_with_the_lab_flag();
+    test_inline_handback_drops_rd_and_the_reset_reaches_the_chip();
     test_inline_get_source_caps_refused_even_confirmed();
     test_inline_vconn_scan_refused_even_confirmed();
     test_inline_cable_session_refused_even_confirmed();

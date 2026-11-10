@@ -964,6 +964,40 @@ class ActivePd(unittest.TestCase):
         e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_RESET, bytes([5]))
         self.assertIn("inline: a live sink is attached", str(e))
 
+    def test_handback_confirm_sends_flags_1(self):
+        # phase-1 lab op: bit0 confirm only; the reply's payload byte is the verdict
+        link = self.Link({kr.CMD_PD_HANDBACK: bytes([0])})
+        r = kr.cmd_pd(link, self.args(pd_cmd="handback", confirm=True))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_HANDBACK, bytes([1])))
+        self.assertEqual(r["verdict"], "allowed")
+
+    def test_handback_without_confirm_sends_empty_payload(self):
+        link = self.Link({kr.CMD_PD_HANDBACK: bytes([2])})   # verdict 2 = confirm needed
+        r = kr.cmd_pd(link, self.args(pd_cmd="handback", confirm=False))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_HANDBACK, b""))
+        self.assertEqual(r["verdict"], "confirm needed")
+
+    def test_handback_refusal_verdict_is_named(self):
+        link = self.Link({kr.CMD_PD_HANDBACK: bytes([4])})   # verdict 4 = no contract owned
+        r = kr.cmd_pd(link, self.args(pd_cmd="handback", confirm=True))
+        self.assertEqual(r["verdict"], "no contract owned")
+
+    def test_handback_parser_has_only_confirm(self):
+        p = kr.build_parser()
+        a = p.parse_args(["pd", "handback"])
+        self.assertEqual((a.pd_cmd, a.confirm), ("handback", False))
+        a = p.parse_args(["pd", "handback", "--confirm"])
+        self.assertEqual(a.confirm, True)
+        # the hand-back is lab-only: no --inline-style extra flags, and the other pd subcommands have no handback flag
+        self.assertFalse(hasattr(p.parse_args(["pd", "reset"]), "confirm_only_marker"))
+        for other in (["pd", "request", "1"], ["pd", "reset"], ["pd", "release"], ["pd", "status"]):
+            with self.assertRaises(SystemExit):
+                kr.build_parser().parse_args(other + ["--handback"])
+
+    def test_handback_error_names_the_verdict(self):
+        e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_HANDBACK, bytes([4]))
+        self.assertIn("no contract owned", str(e))
+
     def test_attach_default_9000mv(self):
         link = self.Link({kr.CMD_PD_ATTACH: self.TRIG})
         r = kr.cmd_pd(link, self.args(pd_cmd="attach"))

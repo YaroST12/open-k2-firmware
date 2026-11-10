@@ -1236,6 +1236,24 @@ static void test_active_pd_commands() {
     run(f, request(0x44, 13, {0}), r);                       // PD_RELEASE still takes no payload
     check_header(r, 0x44, 13, Status::BadLength, 0);
     CHECK_EQ(f.releases, 1);
+    // PD_HANDBACK (0x49, phase-1 lab op): optional [flags] with bit0 confirm only; the reply carries the verdict byte
+    run(f, request(0x49, 14, {}), r);
+    check_header(r, 0x49, 14, Status::Ok, 1);
+    CHECK_EQ(f.hb_calls, 1); CHECK_EQ(f.hb_flags, 0);         // empty payload: flags 0, as an older client sends
+    check_bytes(r, kRspHeader, {0});                          // verdict Allowed = 0
+    run(f, request(0x49, 15, {1}), r);                         // --confirm -> flags 0x01
+    check_header(r, 0x49, 15, Status::Ok, 1);
+    CHECK_EQ(f.hb_calls, 2); CHECK_EQ(f.hb_flags, 1);
+    f.hb_result = {Status::Ok, 4};                             // a refusal verdict rides the payload too
+    run(f, request(0x49, 16, {1}), r);
+    check_header(r, 0x49, 16, Status::Ok, 1);
+    check_bytes(r, kRspHeader, {4});
+    run(f, request(0x49, 17, {2}), r);                         // unknown flag bits refused
+    check_header(r, 0x49, 17, Status::BadArg, 0);
+    CHECK_EQ(f.hb_calls, 3);
+    run(f, request(0x49, 18, {1, 0}), r);                      // two bytes refused
+    check_header(r, 0x49, 18, Status::BadLength, 0);
+    CHECK_EQ(f.hb_calls, 3);
     // PD_TRIGGER_STATUS
     f.trig_pin = 2;   // an Rd pinned on CC2 (pd-reread --pin): the appended pin byte carries it
     run(f, request(0x43, 9, {}), r);
