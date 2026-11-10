@@ -539,6 +539,11 @@ static void fcp_9v() {
     CHECK(e.set_target(12000, true) == Fail::None);
     c.run(e, 600);
     CHECK(e.state() == State::Active && c.vbus_mv() == 12000);
+    // The retarget of a live session does not read the caps register again (the charger-test FCP 9 / 12 V rows rely on it).
+    int caps_reads = 0;
+    for (const auto r : c.reads) caps_reads += r == accp::kRegFcpCaps;
+    CHECK(caps_reads == 1);
+    CHECK((c.writes.back() == W{0x2B, 1}));
 }
 
 // Real Huawei FCP charger (no-name 30 W, HW 2026-11-03): it answers 0x21/0x2C/0x2B but refuses the 0x2D

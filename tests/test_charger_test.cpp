@@ -562,7 +562,7 @@ static void test_plan_and_run() {
     // Every 5 V row of a legacy unit asks the engine (the attach's own 5 V proves nothing): QC3 / QC3+ ramps retarget four times each.
     // 17 = 19 - the 2 hunt rows: this source advertises its APDOs at 3.2 A, so no 6 A Request goes out (decision 2026-11-07).
     // + 12 for the two step-walk rows (six Requests each: the mid level, then +20 mV x 5): 29.
-    CHECK_EQ(f.pd_requests, 29); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 22);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V
+    CHECK_EQ(f.pd_requests, 29); CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // + the six Class B rows (QC2B 20 V, the QC3B ramp); retargets: QC2 9/12/20 V, QC3 x4, QC3B x5 (all five go on in the QC3 session), QC3+ x4, UFCS 9/11/5/12/20 V, AFC 12 V, FCP 9/12 V
     // Seven vendor units share ONE PD-silent attach (a session boundary only where the session mode changes), then the Pd unit
     // (detach, Pd attach), then the standard protocols (QC2, QC3, QC3+, UFCS) in a second PD-silent attach; the run ends detached
     // and re-attaches in Pd.
@@ -2356,7 +2356,7 @@ static void test_full_legacy_ranges_and_guards() {
     CHECK_EQ(qc20 || qc320, false);   // QC2/QC3 never plan a 20 V row
     f.tick(r, 500000);
     CHECK_EQ(r.state(), ct::State::Done); CHECK_EQ(f.pd_requests, 0); CHECK_EQ(f.rescans, 0);
-    CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 22);   // the QC 5 V rows are requested too; 40 = 34 + the six Class B rows; retargets as in the full plan: QC2 3, QC3 4 + QC3B 5, QC3+ 4, UFCS 5, AFC 1
+    CHECK_EQ(f.fc_requests, 41); CHECK_EQ(f.retargets, 24);   // the QC 5 V rows are requested too; 40 = 34 + the six Class B rows; retargets as in the full plan: QC2 3, QC3 4 + QC3B 5, QC3+ 4, UFCS 5, AFC 1, FCP 2
     for (const auto p : f.protocols) CHECK_EQ(p < fc::Proto::Count, true);
 
     for (unsigned mode = 0; mode < 3; ++mode) {
@@ -3209,6 +3209,19 @@ static void test_fc_release_is_issued_once_per_row() {
     f.tick(r, 60000);
     CHECK_EQ(r.state(), ct::State::Done);
     CHECK_EQ(f.fc_releases, 1);   // one session for 5/9/12 V (9 V and 12 V are retargets), released once at the unit's end
+}
+static void test_fcp_rows_after_the_first_are_retargets_in_one_session() {
+    // The FCP 9 V and 12 V rows ride the session the 5 V row opened (as AFC / QC2 do): a retarget does not repeat the
+    // caps read or the attach, and the unit releases once at its end.
+    Fake f; f.caps = {}; ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, {.selected = ct::bit(A::Fcp)}, f.in, true), ct::Reason::None);
+    f.tick(r, 60000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(f.fc_requests, 3);
+    CHECK_EQ(f.retarget_log.size(), 3u);
+    CHECK_EQ(f.retarget_log[0], false); CHECK_EQ(f.retarget_log[1], true); CHECK_EQ(f.retarget_log[2], true);
+    CHECK_EQ(f.fc_mvs[0], 5000); CHECK_EQ(f.fc_mvs[1], 9000); CHECK_EQ(f.fc_mvs[2], 12000);
+    CHECK_EQ(f.fc_releases, 1);
 }
 static void test_5v_row_needs_the_handshake() {
     // 5 V is what every source gives: a source that refuses the handshake passes no row, the 5 V one included. The 5 V row opens
@@ -6202,7 +6215,7 @@ int main() {
     test_self_powered_cancel_in_a_legacy_hold_restores_pd();
     test_baseline_epr_entry_cut_by_a_source_hard_reset_is_retried(); test_epr_entry_waits_after_a_rejected_row();
     test_epr_row_cut_by_a_source_hard_reset_passes_on_retry();
-    test_fc_release_is_issued_once_per_row(); test_5v_row_needs_the_handshake(); test_source_drop_recovers_on_a_non_pd_source(); test_a_lost_row_ends_the_session_so_the_next_row_handshakes_again(); test_session_blip_with_vbus_up_is_not_source_lost(); test_source_gone_stops_the_run(); test_pd_row_survives_one_source_hard_reset(); test_pd_row_gives_up_after_a_second_source_hard_reset();
+    test_fc_release_is_issued_once_per_row(); test_fcp_rows_after_the_first_are_retargets_in_one_session(); test_5v_row_needs_the_handshake(); test_source_drop_recovers_on_a_non_pd_source(); test_a_lost_row_ends_the_session_so_the_next_row_handshakes_again(); test_session_blip_with_vbus_up_is_not_source_lost(); test_source_gone_stops_the_run(); test_pd_row_survives_one_source_hard_reset(); test_pd_row_gives_up_after_a_second_source_hard_reset();
     test_dark_source_that_returns_is_not_a_change(); test_apdo_current_grow_is_not_offers_changed(); test_dark_source_that_never_returns_is_source_lost(); test_pd_row_cut_twice_by_hard_resets_fails_and_the_run_goes_on(); test_ordinary_pd_row_answered_by_a_source_hard_reset_is_retried_once(); test_ordinary_pd_row_cut_by_a_second_source_hard_reset_fails_with_the_reason(); test_pps_low_step_landing_below_the_band_fails_only_that_row();
     test_low_programmable_rows_are_planned_last(); test_latch_off_at_the_low_step_ends_done_with_a_reason(); test_latch_off_that_returns_is_not_shut_off(); test_cut_that_recovers_on_its_own_is_recorded_as_such(); test_no_request_into_an_invalid_list_after_a_recovered_cut(); test_every_reason_has_a_name(); test_every_failure_kind_has_a_capture_reason();
     test_skip_while_held_releases_before_done(); test_release_retried_until_sink_lets_go();

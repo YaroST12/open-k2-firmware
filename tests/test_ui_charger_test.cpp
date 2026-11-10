@@ -1195,10 +1195,14 @@ static void test_results_cells_are_flat_fills() {
     six_pdo_fixture(); Ui ui; uint32_t t;
     finished_results(ui, t);
     unsigned fill = 0, gaps = 0;
+    int last_fill = 0;
     for (int x = kit::kResultLabelW + 1; x < 224; ++x) {
         const uint16_t p = g_panel[73 * LCD_WIDTH + x];   // the cell's top line: no glyph reaches it
-        if (p == kOkT || p == kError) ++fill; else if (p == kBg) ++gaps;   // a pass fill or a fail fill
+        if (p == kOkT || p == kError) { ++fill; last_fill = x; }   // a pass fill or a fail fill
     }
+    // The first unit's 9 V / 12 V rows fail on this stub (VBUS stays 5 V) and the row behind a failed retarget is skipped, which
+    // paints no fill: count the gap columns up to the last filled cell only.
+    for (int x = kit::kResultLabelW + 1; x < last_fill; ++x) gaps += g_panel[73 * LCD_WIDTH + x] == kBg;
     CHECK_EQ(fill > 100, true);
     CHECK_EQ(gaps >= 1 && gaps < 12, true);
     CHECK_EQ(g_panel[73 * LCD_WIDTH + 223] == kBg || g_panel[73 * LCD_WIDTH + 223] == kOkT, true);

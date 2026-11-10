@@ -520,7 +520,10 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
             // after our own reset, before the charger had redone its D+/D- detection, and got no AFC answer (Baseus 140W,
             // 2026-11-07; the Xiaomi bank's 12 V row the same way). The engine sends the 12 V byte in the live session.
             case Group::Afc: level(9000); level(12000, true); break;
-            case Group::Fcp: level(5000); level(9000); level(12000); break;
+            // FCP: the 5 V row opens the session (caps read, voltage write), 9 V and 12 V are retargets in it. A fresh session per
+            // row restarted the D+/D- reset hold between rows, the same pattern as afc-redetect-after-reset; the engine's
+            // set_target rewrites the voltage register in the live session without reading the caps again.
+            case Group::Fcp: level(5000); level(9000, true); level(12000, true); break;
             // One UFCS session for the whole unit: each level is a new Request in it (8.2.4.2). A fresh session per row made the
             // Baseus FH22 charger cut VBUS on the Exit and the next row's handshake ran into the dark source (2026-11-07).
             // 11 V is the top of the common 5.5-11 V UFCS mode (the Baseus FH22 charger: 11 V 4 A = its 44 W). 12 V last: a level
