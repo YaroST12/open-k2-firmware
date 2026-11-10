@@ -139,6 +139,7 @@ def page_name(i):
 # include/k2/pd/pd_sink.hpp / pd_identify.hpp enums, in order
 PD_ERRS = ["ok", "no source caps", "bad PDO position", "over the voltage cap", "voltage outside the PDO range",
            "inline: a live sink is attached", "busy (identify running)"]
+PD_ERR_INLINE = PD_ERRS.index("inline: a live sink is attached")   # pd::Err::Inline, carried by refusals' payload byte 0
 SINK_STATES = ["idle", "epr-entering", "epr-wait-caps", "requesting", "transition", "ready", "aborting", "failed"]
 SINK_RESULTS = ["none", "ok", "rejected", "wait-exhausted", "timeout", "tx-failed", "hard-reset", "soft-reset",
                 "aborted", "over-cap", "epr-failed", "bad-choice"]
@@ -233,6 +234,10 @@ class RemoteError(RuntimeError):
             text += " (sw0 with a pull-up bit, a VCONN bit with PC13 high or with PDWN on the same line; ms 10..5000; pc 0..7)"
         if cmd in (CMD_PD_REQUEST, CMD_PD_RESET, CMD_PD_RELEASE) and payload and payload[0] < len(PD_ERRS) and payload[0]:
             text += f" ({PD_ERRS[payload[0]]})"
+        if cmd == CMD_IDENTIFY_DEVICE and payload and payload[0] == PD_ERR_INLINE:
+            # the inline Identify refusal (BadArg + pd::Err::Inline), not "busy": a live sink is
+            # attached, the K2 transmits nothing, the Sink tab shows the sniffed identity
+            text = f"command {cmd} failed: refused: inline - the Sink tab shows the sniffed identity"
         if cmd == CMD_QRTEST and status == STATUS_BAD_ARG and payload:
             text += f" ({payload.decode('ascii', errors='replace')})"   # the show op's reason (range / box fit)
         super().__init__(text)

@@ -707,7 +707,7 @@ struct IdentifyProgress {
     std::array<uint32_t, kMaxSinkPdos> sink_pdos{};
     uint32_t revision = 0;
 };
-struct IdentifyResult { Status status = Status::Ok; IdentifyProgress progress{}; };
+struct IdentifyResult { Status status = Status::Ok; uint8_t err = 0; IdentifyProgress progress{}; };   // err: pd::Err of a refusal, sent as the one-byte payload
 constexpr uint8_t kRereadMaxMask = 31;   // five steps (pd::kRereadMaskAll)
 constexpr uint8_t kSinkCapExtMaxMode = 2;   // pd::SinkCapExtMode: 0 Silent, 1 Skedb, 2 NotSupported
 struct RereadInfo {
@@ -1104,7 +1104,10 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p.size() != 1) return reply(Status::BadLength);
         if (p[0] > 2) return reply(Status::BadArg);
         const IdentifyResult res = backend.identify_device(p[0]);
-        if (res.status != Status::Ok) return reply(res.status);
+        if (res.status != Status::Ok) {
+            buf[0] = res.err;   // a refusal carries its pd::Err (inline) as the one-byte payload
+            return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
+        }
         return reply_n(encode_identify_progress(buf, res.progress));
     }
     case Cmd::PdReread: {

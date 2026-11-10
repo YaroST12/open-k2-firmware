@@ -109,8 +109,9 @@ public:
     void trigger_release(uint32_t now_ms);       // back to 5 V
     bool trigger_hard_reset(uint32_t now_ms, bool lab_inline = false);   // false = the driver refused it
     // Identify the port partner. Inline it is refused (an inline K2 never transmits); the sniffed
-    // identity shows on the Sink tab instead.
-    enum class IdResult : uint8_t { Started, Refused, NoDevice };
+    // identity shows on the Sink tab instead. Inline is its own result, so the remote answers
+    // pd::Err::Inline (not "busy") for it; Refused stays "a charger test is running".
+    enum class IdResult : uint8_t { Started, Refused, NoDevice, Inline };
     IdResult identify(uint32_t now_ms);
     // Remote `debug detach` / `debug attach`: hold the link state until the next Rescan.
     void debug_link(bool attached, uint32_t now_ms);

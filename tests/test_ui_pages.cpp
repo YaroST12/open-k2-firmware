@@ -1224,11 +1224,12 @@ static void test_pd_trigger_refusals() {
     ui.on_button(Button::Back, ButtonEvent::Short, 61200);
     CHECK_EQ(ui.menu_depth(), 0);
     // Identify inline: refused even with a confirm - an inline K2 never transmits; the sniffed
-    // identity fills the Sink tab instead.
+    // identity fills the Sink tab instead. The refusal is its own result now (the remote maps it
+    // to pd::Err::Inline, not "busy").
     g_stub.identifies = 0;
-    CHECK_EQ(int(ui.identify(61300)), int(Ui::IdResult::Refused));
+    CHECK_EQ(int(ui.identify(61300)), int(Ui::IdResult::Inline));
     CHECK_EQ(g_stub.identifies, 0);
-    CHECK_EQ(int(ui.identify(61400)), int(Ui::IdResult::Refused));
+    CHECK_EQ(int(ui.identify(61400)), int(Ui::IdResult::Inline));
     CHECK_EQ(g_stub.identifies, 0);
     g_stub.pm = {};
     ui.debug_link(false, 69000);                          // detach clears the inline flag

@@ -351,10 +351,12 @@ remote::IdentifyResult Remote::identify_device(uint8_t op) {
     remote::IdentifyResult r;
     if (op != 0) {
         K2LOG("[RMT] identify-device op=%d\n", static_cast<int>(op));
-        switch (ui_.identify(systick::millis())) {
-        case Ui::IdResult::Started: break;
-        case Ui::IdResult::Refused: r.status = remote::Status::Busy; return r;
-        case Ui::IdResult::NoDevice: r.status = remote::Status::BadArg; return r;
+        const Ui::IdResult ir = ui_.identify(systick::millis());
+        if (ir != Ui::IdResult::Started) {
+            const IdRefusalWire w = identify_refusal_wire(ir);   // inline -> pd::Err::Inline, a running test stays Busy
+            r.status = w.status;
+            r.err = w.err;
+            return r;
         }
     }
     const pd::IdStatus &s = fusb302::identify_status();

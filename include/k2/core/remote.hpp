@@ -15,6 +15,19 @@ namespace k2 {
 
 enum class RemoteEvent : uint8_t { None, Reboot, Screenshot, Dfu, Fault };
 
+// Ui::IdResult on the wire for Cmd::IdentifyDevice: the frame header carries the Status, the
+// payload one byte with the pd::Err of a refusal (like the PD ops), so the host tool can name it.
+// The inline refusal answers pd::Err::Inline; a running charger test stays Status::Busy.
+struct IdRefusalWire { remote::Status status = remote::Status::Ok; uint8_t err = 0; };
+constexpr IdRefusalWire identify_refusal_wire(Ui::IdResult r) {
+    switch (r) {
+    case Ui::IdResult::Refused:  return {remote::Status::Busy, 0};    // a charger test is running
+    case Ui::IdResult::Inline:   return {remote::Status::BadArg, static_cast<uint8_t>(pd::Err::Inline)};
+    case Ui::IdResult::NoDevice: return {remote::Status::BadArg, 0};
+    default:                     return {remote::Status::Ok, 0};      // Started: not a refusal
+    }
+}
+
 class Remote {
 public:
     explicit Remote(Ui &ui);   // also registers this object as the target of usb::on_remote_report()

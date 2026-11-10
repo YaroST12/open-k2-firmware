@@ -720,9 +720,14 @@ Ui::IdResult Ui::identify(uint32_t now_ms) {
         return IdResult::NoDevice;
     }
     const bool ok = fusb302::identify_start();
-    K2LOG("[UI] identify %s%s\n", ok ? "started" : "refused", alone ? " (device alone on the K2)" : "");
+    // An inline K2 never transmits, not even confirmed: the wire's own sniffed identity
+    // (Discover Identity ACK, Sink_Capabilities, Requests) is what the Sink tab shows.
+    const bool inline_refusal = !ok && fusb302::inline_mode();
+    K2LOG("[UI] identify %s%s\n",
+          ok ? "started" : inline_refusal ? "refused: inline (no TX; the Sink tab shows the sniffed identity)" : "refused",
+          alone ? " (device alone on the K2)" : "");
     refresh_action_views(now_ms);
-    return ok ? IdResult::Started : IdResult::Refused;
+    return ok ? IdResult::Started : inline_refusal ? IdResult::Inline : IdResult::Refused;
 }
 
 void Ui::debug_fake_pdos(uint8_t n, uint32_t now_ms) {
