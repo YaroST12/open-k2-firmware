@@ -864,12 +864,8 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     const Surface &c = ctx_.content;
     const bool sink_tab = tab_ == conn::Tab::Sink;
     const char *title = conn::no_pd_title(tab_);
-    std::string msg;
-    if (sink_tab) {
-        msg = conn::kNoPdSinkLine2;
-        msg += ' ';
-        msg += conn::no_pd_case(none_why_);
-    }
+    StrBuf<112> msg;   // kNoPdSinkLine2 (65) + ' ' + kNoPdCaseOffered (39) + NUL fits; no heap
+    if (sink_tab) msg.put(conn::kNoPdSinkLine2).put_char(' ').put(conn::no_pd_case(none_why_));
     // The measured rows (at most three: the list closes at the footer). The Type-C row uses the match's Rp
     // reading (the active CC line driven into the Rp window counts even before typec_ma()'s 3 s mark).
     const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
@@ -894,12 +890,12 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     // Painted only when its text moved (a live draw must not repaint the message).
     uint32_t mh = fnv(2166136261u, uint32_t(tab_) | uint32_t(none_why_) << 4);
     for (const char *p = title; *p; p++) mh = fnv(mh, uint8_t(*p));
-    for (char ch : msg) mh = fnv(mh, uint8_t(ch));
+    for (char ch : msg.view()) mh = fnv(mh, uint8_t(ch));
     if (full || mh != nopd_msg_sig_) {
         gfx_fill(c, 0, kNoPdMsgY0, c.w, kNoPdRowY0 - kNoPdMsgY0, kBg);
         gfx_text(c, kSmall, 8, kNoPdMsgY0, title, kText, kBg);
         std::array<std::string_view, kNoPdMsgLines> lines;
-        const int n = conn::wrap(msg, static_cast<std::size_t>(kNoPdMsgCells), lines);
+        const int n = conn::wrap(msg.view(), static_cast<std::size_t>(kNoPdMsgCells), lines);
         for (int i = 0; i < n; i++)
             gfx_text(c, kSmall, 8, static_cast<int16_t>(kNoPdMsgY0 + 18 + i * kNoPdMsgPitch), lines[static_cast<std::size_t>(i)], kDim, kBg);
         nopd_msg_sig_ = mh;
