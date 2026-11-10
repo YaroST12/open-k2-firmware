@@ -146,6 +146,9 @@ bool rd_for_run_on();
 // The Wake sleeping port's idle Rd hold: the line (1 CC1, 2 CC2) the K2 presents an Rd on while it waits for a source that sleeps,
 // 0 = none. The CC levels on that line are then loaded by our Rd, not the far port's own (the crossed-CC detector stands down).
 std::uint8_t idle_wake_line();
+// The open (no-Rd-of-ours) ADC reading a line last had when it was settled (RdSeek::open_mv, kept while no Rd is presented),
+// -1 = none. The idle "Source asleep" hint reads it: high open = the standby signature of a sleeping source.
+std::int32_t open_cc_mv(std::uint8_t line);
 // Rd off for a moment while the run start goes on (a silent charger gets a clean detach, then rd_for_run(true)
 // again). Unlike rd_for_run(false) it keeps the cable scanned before the start: the same cable stays plugged in.
 void rd_for_run_pause();

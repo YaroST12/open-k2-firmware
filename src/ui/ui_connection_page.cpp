@@ -320,6 +320,13 @@ void ConnectionPage::sense(uint32_t now_ms) {
     // frames, so the K2's own trigger requests never set these): the sink stays seen after a power-role
     // swap and after the inline latch expires.
     facts_.sink_seen = fusb302::contract().valid || fusb302::sink_caps().valid;
+    // The idle "source asleep" evidence: the settled open reading of the line that reads the standby signature
+    // (the CC2 bias net at 1.69 V and a waiting charger's 3.3 V open Rp are outside the window), VBUS now, and
+    // the Wake sleeping port setting (off = no idle Rd hold is running).
+    const std::int32_t o1 = fusb302::open_cc_mv(1), o2 = fusb302::open_cc_mv(2);
+    facts_.open_cc_mv = pd::standby_signature(o1) ? o1 : pd::standby_signature(o2) ? o2 : -1;
+    facts_.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
+    facts_.wake_port_off = !fusb302::idle_wake();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -960,7 +967,9 @@ void ConnectionPage::update(uint32_t now_ms) {
     const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && fusb302::self_powered());
     if (empty) {
         uint32_t h = fnv(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
-                                     | uint32_t(facts_.wait) << 10);
+                                     | uint32_t(facts_.wait) << 10 | uint32_t(facts_.open_cc_mv) << 12
+                                     | uint32_t(facts_.wake_port_off) << 24
+                                     | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
         if (sig_valid_ && h == sig_) return;
         sig_ = h;
         sig_valid_ = true;

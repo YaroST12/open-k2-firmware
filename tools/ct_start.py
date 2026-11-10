@@ -37,6 +37,13 @@ from ui_walk import NEXT_ROW, Walk
 
 MIN_VBUS_MV = 4500
 START_WAIT_S = 45.0     # the K2's own wait is <= ~21 s (VBUS 5-10 s, caps 2 s, one Rd re-present), plus the presses
+VBUS_WAIT_S = 5.0       # the wait for VBUS to come up on a dark port before START presents Rd: a sleeping source
+                        # answers 1.1-1.7 s after a steady Rd (pattern slow-rp-wake) - the idle Wake sleeping port
+                        # hold or an already-awake port - so the wait covers that plus margin
+# The standby-signature window of an open CC reading, the same bounds as pd::kStandbyOpenMv / kStandbyOpenHiMv
+# (include/k2/pd/pd_rdseek.hpp): at/above the top an open Rp / VCONN reads the 3.3 V rail, below the bottom the
+# CC2 bias net (1.69 V) or an Ra.
+CC_STANDBY_LO_MV, CC_STANDBY_HI_MV = 2800, 3150
 MAX_PRESSES = 3         # open the confirmation, confirm; one more is slack for a press lost on the way
 STARTED, REFUSED, FAILED = "started", "refused", "failed"
 # The same text as raguard::kRefusalText in include/k2/pd/ra_guard.hpp (the dialog's wrapped lines say it too).
@@ -53,10 +60,25 @@ def preflight(link, sleep=time.sleep):
     """None when a run may start, else the refusal text. A PD charger whose caps were not read is rescanned once."""
     st = kr.cmd_state(link, None)
     if st["vbus_mv"] < MIN_VBUS_MV and not st.get("inline", False):
-        # A charger alone on the bottom port gets no VBUS without Rd, and plain boot presents none: START presents
-        # it itself (no sink inline), waits up to ~5 s for VBUS and runs the firmware's own preflight.
-        print(f"note: VBUS is {st['vbus_mv'] / 1000:.2f} V: START will present Rd and wait for VBUS", file=sys.stderr)
-        return None
+        # A charger alone on the bottom port gets no VBUS without Rd, and plain boot presents none. A sleeping
+        # source (pattern slow-rp-wake) answers 1.1-1.7 s after a steady Rd, so wait for VBUS to come up on its
+        # own first (the idle Wake sleeping port hold may already have the Rd out); only then does START present
+        # Rd and wait again.
+        waited = 0.0
+        while st["vbus_mv"] < MIN_VBUS_MV and waited < VBUS_WAIT_S:
+            sleep(0.5)
+            waited += 0.5
+            st = kr.cmd_state(link, None)
+        if st["vbus_mv"] < MIN_VBUS_MV:
+            # The give-up line names why: a standby-signature open CC line with VBUS dark reads as a sleeping source.
+            cc = max(st.get("cc1_mv", -1), st.get("cc2_mv", -1))
+            if CC_STANDBY_LO_MV <= cc < CC_STANDBY_HI_MV:
+                print(f"note: VBUS is {st['vbus_mv'] / 1000:.2f} V after {waited:.1f} s and CC reads {cc / 1000:.2f} V open: "
+                      f"the source looks asleep; START will present Rd and wait for VBUS", file=sys.stderr)
+            else:
+                print(f"note: VBUS is {st['vbus_mv'] / 1000:.2f} V: START will present Rd and wait for VBUS", file=sys.stderr)
+            return None
+        # VBUS came up while waiting: the normal checks below run on the fresh reading.
     if st["vbus_mv"] < MIN_VBUS_MV:
         return f"VBUS is {st['vbus_mv'] / 1000:.2f} V (< {MIN_VBUS_MV / 1000:.1f} V): no charger attached or it is not powering"
     if not st["pd_valid"]:

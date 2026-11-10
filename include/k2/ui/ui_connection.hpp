@@ -97,6 +97,10 @@ constexpr Empty empty_state(Tab t, const Facts &f) {
         // partner. It outranks the waiting words, which would read the loaded Rp as a charger and the toggle as a phone.
         if (f.cross == raguard::CrossKind::Crossed) return {"CC CROSSED", "Flip one of the two cables (the CC wires meet no partner)."};
         if (f.cross == raguard::CrossKind::Hint) return {"FLIP A CABLE?", "A charger waits, nothing answers: try flipping a cable."};
+        // A sleeping source (pattern slow-rp-wake): an open line in the standby-signature window with VBUS dark
+        // and no idle Rd hold. It outranks the waiting words: the standby pull-up also reads as an Rp to the
+        // trace, but it never answers - only an Rd (START or Refresh) wakes it.
+        if (source_asleep(f)) return {kAsleepTitle, kAsleepHint};
         // The one waiting classifier (f.wait, the Rp trace): a steady Rp = a charger waiting for a sink; a toggling
         // Rp = a dual-role port (a phone alone) looking for a partner, not a charger.
         if (f.wait == raguard::WaitKind::ChargerWaiting) return {"CHARGER WAITING", "Charger waits for a sink: start a charger test."};
@@ -222,6 +226,7 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
         // bar (27 cells), so no topology word follows them.
         if (!s.f.charger && !s.f.inline_sink && s.f.cross == raguard::CrossKind::Crossed) { out.put("CC CROSSED - flip one cable"); return; }
         if (!s.f.charger && !s.f.inline_sink && s.f.cross == raguard::CrossKind::Hint) { out.put("Flip a cable?"); return; }
+        if (source_asleep(s.f)) { out.put(kAsleepBar); return; }   // same verdict as the tab, bar-length words
         if (s.f.charger) out.put("Charger");
         else if (s.f.wait == raguard::WaitKind::ChargerWaiting) out.put("Charger waiting");
         else if (s.f.wait == raguard::WaitKind::DualRolePort) out.put("Dual-role port");

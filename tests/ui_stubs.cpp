@@ -139,6 +139,7 @@ void unit_hold(bool legacy) {
 }
 bool rd_for_run_on() { return g_stub.rd_run; }
 std::uint8_t idle_wake_line() { return g_stub.idle_wake_hold; }
+std::int32_t open_cc_mv(std::uint8_t line) { return line >= 1 && line <= 2 ? g_stub.open_cc_mv[line - 1] : -1; }
 bool rp_on_line() { return false; }
 void attach_scan() {}
 void service() {

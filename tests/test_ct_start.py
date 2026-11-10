@@ -24,7 +24,9 @@ class Preflight(unittest.TestCase):
         self.assertIn("4.30 V", self.run_pf([{"vbus_mv": 4300, "pd_valid": True, "inline": True}]))
 
     def test_low_vbus_without_sink_lets_start_present_rd(self):
-        self.assertIsNone(self.run_pf([{"vbus_mv": 0, "pd_valid": False}]))
+        # dark the whole wait: START still presents Rd (the note says so); the wait ran VBUS_WAIT_S worth of polls
+        states = [{"vbus_mv": 0, "pd_valid": False, "inline": False}] * 12
+        self.assertIsNone(self.run_pf(states))
 
     def test_good_source_passes(self):
         self.assertIsNone(self.run_pf([{"vbus_mv": 5000, "pd_valid": True}]))

@@ -79,6 +79,7 @@ struct StubState {
     bool bus_powered = false, supply_decided = true;   // power_source: no host and VBUS at boot / the host window is over
     bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;
     std::uint8_t idle_wake_hold = 0;         // fusb302::idle_wake_line(): the Wake sleeping port's Rd hold
+    std::int32_t open_cc_mv[2] = {-1, -1};   // fusb302::open_cc_mv(): the settled open readings of CC1 / CC2
     int rd_run_changes = 0;
     int rd_pauses = 0;       // rd_for_run_pause(): Rd off that keeps the scanned cable
     bool ra_on = false, ra_refuse = false;   // fusb302::ra_set(): the Ra mode, and a forced refusal
