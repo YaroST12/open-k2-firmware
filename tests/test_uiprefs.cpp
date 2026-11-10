@@ -97,6 +97,42 @@ void test_smoothing_preset() {
     CHECK_EQ(uiprefs::load(v.f).smoothing == Preset::Low, 1);
 }
 
+void test_orientation_byte() {
+    using uiprefs::Prefs;
+    // Defaults add nothing: byte 7 stays 0 (auto rotation, buttons not rotated), the file older firmware wrote.
+    const std::array<std::uint8_t, 8> plain{'K', '2', 'U', 'P', 1, 0xFE, 0, 0};
+    CHECK_EQ(Prefs{}.rotation_manual, 0);
+    CHECK_EQ(Prefs{}.rotation, 0);
+    CHECK_EQ(Prefs{}.rotate_buttons, 0);
+    CHECK_EQ(uiprefs::encode(Prefs{.qc_after_pd = true}) == plain, 1);
+    const Prefs old = uiprefs::decode(plain);   // an old record (byte 7 = 0) reads as today's defaults
+    CHECK_EQ(old.rotation_manual, 0); CHECK_EQ(old.rotation, 0); CHECK_EQ(old.rotate_buttons, 0);
+    // byte 7: bit0..1 manual rotation, bit2 manual (0 = auto), bit3 rotate buttons; flags and smoothing stay put
+    const std::array<std::uint8_t, 8> m270{'K', '2', 'U', 'P', 1, 0xFE, 0, 0x07};
+    CHECK_EQ(uiprefs::encode(Prefs{.qc_after_pd = true, .rotation_manual = true, .rotation = 3}) == m270, 1);
+    const std::array<std::uint8_t, 8> btn{'K', '2', 'U', 'P', 1, 0xFE, 0, 0x08};
+    CHECK_EQ(uiprefs::encode(Prefs{.qc_after_pd = true, .rotate_buttons = true}) == btn, 1);
+    // the rotation value alone (auto mode) is stored but means nothing until manual is set
+    const std::array<std::uint8_t, 8> auto2{'K', '2', 'U', 'P', 1, 0xFE, 0, 0x02};
+    CHECK_EQ(uiprefs::encode(Prefs{.qc_after_pd = true, .rotation = 2}) == auto2, 1);
+    for (unsigned rot = 0; rot < 4; rot++) for (bool manual : {false, true}) for (bool buttons : {false, true}) {
+        const Prefs in{.qc_after_pd = true, .screenshot = false, .smoothing = smoothing::Preset::High,
+                       .rotation_manual = manual, .rotation = static_cast<std::uint8_t>(rot), .rotate_buttons = buttons};
+        const Prefs back = uiprefs::decode(uiprefs::encode(in));
+        CHECK_EQ(back.rotation_manual, manual); CHECK_EQ(back.rotation, rot); CHECK_EQ(back.rotate_buttons, buttons);
+        CHECK_EQ(back.qc_after_pd, 1); CHECK_EQ(back.screenshot, 0); CHECK_EQ(back.smoothing == smoothing::Preset::High, 1);
+    }
+    // the unused high bits of byte 7 are ignored, not a reason to drop the record
+    std::array<std::uint8_t, 8> odd = btn; odd[7] |= 0xF0;
+    CHECK_EQ(uiprefs::decode(odd).rotate_buttons, 1);
+    CHECK_EQ(uiprefs::decode(odd).qc_after_pd, 1);
+    // survives the file system
+    Vol v;
+    CHECK_EQ(uiprefs::save(v.f, Prefs{.rotation_manual = true, .rotation = 2, .rotate_buttons = true}) == true, 1);
+    const Prefs loaded = uiprefs::load(v.f);
+    CHECK_EQ(loaded.rotation_manual, 1); CHECK_EQ(loaded.rotation, 2); CHECK_EQ(loaded.rotate_buttons, 1);
+}
+
 void test_legacy_page_is_outside_the_volume() {
     CHECK_EQ(flash::store_sector_allowed(uiprefs::kLegacyAddr), 0);   // no static grant: erasable only with our signature on it
     CHECK_EQ(flash::legacy_candidate(uiprefs::kLegacyAddr), 1);
@@ -111,6 +147,7 @@ int main() {
     test_damage_falls_back();
     test_screenshot_switch();
     test_smoothing_preset();
+    test_orientation_byte();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

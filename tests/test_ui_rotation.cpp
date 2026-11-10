@@ -390,6 +390,90 @@ static void test_settings_rotation_modes() {
     CHECK_EQ(ui.menu_depth(), 0);
 }
 
+// Orientation settings are remembered: Settings > Rotate buttons, Settings > Autorotate and the +/- hold
+// gesture write the uiprefs record (the other stored fields ride along), and a boot applies it before the first draw.
+static void test_rotation_prefs_persist() {
+    {   // Rotate buttons row: OK toggles it and stores it
+        g_stub = {};
+        g_stub.prefs = {true, false};   // Try QC on, Screenshot off: must survive the write
+        Ui ui;
+        ui.init(0);
+        ui.goto_page(static_cast<uint8_t>(Page::Settings), 1000);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 1100);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 1200);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 1300);
+        CHECK_EQ(ui.rotate_buttons(), true);
+        CHECK_EQ(g_stub.prefs_sets, 1);
+        CHECK_EQ(g_stub.prefs.rotate_buttons, true);
+        CHECK_EQ(g_stub.prefs.qc_after_pd, true); CHECK_EQ(g_stub.prefs.screenshot, false);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 1400);
+        CHECK_EQ(ui.rotate_buttons(), false);
+        CHECK_EQ(g_stub.prefs_sets, 2);
+        CHECK_EQ(g_stub.prefs.rotate_buttons, false);
+    }
+    {   // Autorotate page: Manual 90 deg is stored as manual + rotation 1, Auto clears manual
+        g_stub = {};
+        g_stub.prefs = {true, false};
+        Ui ui;
+        ui.init(0);
+        ui.goto_page(static_cast<uint8_t>(Page::Settings), 1000);
+        CHECK_EQ(ui.push_menu(Menu::Autorotate, 1100), true);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 1200);   // Manual 0 deg
+        ui.on_button(Button::Plus, ButtonEvent::Short, 1300);   // Manual 90 deg
+        ui.on_button(Button::Ok, ButtonEvent::Short, 1400);
+        CHECK_EQ(ui.rotation(), 1); CHECK_EQ(ui.rotation_locked(), true);
+        CHECK_EQ(g_stub.prefs_sets, 1);
+        CHECK_EQ(g_stub.prefs.rotation_manual, true); CHECK_EQ(g_stub.prefs.rotation, 1);
+        CHECK_EQ(g_stub.prefs.qc_after_pd, true); CHECK_EQ(g_stub.prefs.screenshot, false);
+        ui.on_button(Button::Minus, ButtonEvent::Short, 1500);
+        ui.on_button(Button::Minus, ButtonEvent::Short, 1600);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 1700);     // Auto
+        CHECK_EQ(ui.rotation_locked(), false);
+        CHECK_EQ(g_stub.prefs_sets, 2);
+        CHECK_EQ(g_stub.prefs.rotation_manual, false);
+    }
+    {   // the +/- hold gesture stores the lock and each quarter-turn, and the return to Auto
+        g_stub = {};
+        Ui ui;
+        ui.init(0);
+        chord(ui, 1000);
+        CHECK_EQ(g_stub.prefs.rotation_manual, true); CHECK_EQ(g_stub.prefs.rotation, 0);
+        chord(ui, 3000);
+        CHECK_EQ(g_stub.prefs.rotation_manual, true); CHECK_EQ(g_stub.prefs.rotation, 1);
+        chord(ui, 4000); chord(ui, 5000);
+        CHECK_EQ(g_stub.prefs.rotation, 3);
+        chord(ui, 6000);
+        CHECK_EQ(ui.rotation_locked(), false);
+        CHECK_EQ(g_stub.prefs.rotation_manual, false);
+        CHECK_EQ(g_stub.prefs_sets, 5);
+    }
+    {   // boot: a stored manual 180 deg + rotated buttons is in force before the first draw, and nothing is rewritten
+        g_stub = {};
+        Ui ui;
+        ui.restore_orientation(true, 2, true);
+        ui.init(0);
+        CHECK_EQ(ui.rotation(), 2); CHECK_EQ(ui.rotation_locked(), true); CHECK_EQ(ui.rotate_buttons(), true);
+        CHECK_EQ(g_stub.prefs_sets, 0);
+        for (uint32_t t = 2000; t <= 2400; t += 50) ui.feed_gravity(orientation::Gravity{0, 1000, 0}, t);
+        CHECK_EQ(ui.rotation(), 2);   // locked: gravity does not move it
+        ui.tick(5000);
+        std::array<uint16_t, 240 * 240> booted;   // what the restored boot drew ...
+        std::copy(std::begin(g_panel), std::end(g_panel), booted.begin());
+        Ui reference;                             // ... is what a plain boot rotated to 180 deg draws
+        reference.init(0);
+        reference.set_rotation(2, 100);
+        reference.tick(5000);
+        CHECK_EQ(std::equal(booted.begin(), booted.end(), std::begin(g_panel)), true);
+    }
+    {   // boot with the defaults (an old record): automatic, buttons as printed, rotation 0
+        g_stub = {};
+        Ui ui;
+        ui.restore_orientation(false, 0, false);
+        ui.init(0);
+        CHECK_EQ(ui.rotation(), 0); CHECK_EQ(ui.rotation_locked(), false); CHECK_EQ(ui.rotate_buttons(), false);
+    }
+}
+
 static void check_physical_slot_label(Ui &ui, uint8_t rotation, unsigned slot, Button action) {
     const auto orient = orientation_for(rotation);
     const auto layout = compute_layout(orient.edge, kSlotCenters, kSlotLens, kPanelThickness);
@@ -616,6 +700,7 @@ int main() {
     test_physical_dash();
     test_physical_chevron_mask();
     test_settings_rotation_modes();
+    test_rotation_prefs_persist();
     test_optional_rotated_buttons();
     test_rotated_fc_draft();
     test_fc_stages_in_four_rotations();
