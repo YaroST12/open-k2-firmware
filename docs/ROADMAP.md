@@ -320,14 +320,19 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
   START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
-- **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note): with `pd-reread --pin 2`
+- **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note, fixed in b60c702, hardware
+  check pending): with `pd-reread --pin 2`
   still set, splitter -> K2 -> OnePlus 15: the K2 sent two Requests (one collided with the phone's) before the far
   Request made it go passive (~2.3 s). The pin is a lab option and did what it says; the gap is that nothing shows it
   is still set. Fix: show the pin on the Home status line (e.g. "Rd pin CC2") and in `pd status`; clear it on
-  detach of the far end.
-- **`k2_remote.py cards` cannot read format v8 cards** (2026-11-10): "card payload is 198 bytes, expected 144, 162,
+  detach of the far end. Done: the rotation-page status bar badge reads "Rd pin CCx" (was the bare "SNK"),
+  `pd status` carries the appended pin byte, and a lab pin (only `pd-reread --pin`) clears with its mark on the far
+  end's detach; a boot / comeback pin keeps its Rd.
+- **`k2_remote.py cards` cannot read format v8 cards** (2026-11-10, fixed in 26f297f, hardware check pending):
+  "card payload is 198 bytes, expected 144, 162,
   178, 190 or 196" after b193e56 made the shared card v8 (rebalanced count). Add the v8 size and field to the host
-  decoder (`tools/k2_remote.py`, same layout as `tools/report_card.py`), with a test.
+  decoder (`tools/k2_remote.py`, same layout as `tools/report_card.py`), with a test. Done: the card read length is
+  derived from `report_card.PAYLOAD` (198, v8) and `cards list` / `cards show` render the rebalanced count.
 - **An inline latch leaves the far sink on Type-C current: hand the contract back with a Hard Reset** (2026-11-10,
   connection matrix P4, 05b1703, `runs/2026-11-10-connection/P4/`): PLUS-boot K2 on a Baseus 140 W, self-hold PDO 1
   Ready at 1291 ms; OnePlus 15 plugged on the bottom port at ~19.0 s; the inline latch fired ~300 ms after IBUS passed
