@@ -715,6 +715,13 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   Same peak / fold-back reporting as the PPS sweep. Host-side reference (2026-11-10, Baseus FH22, AVS 9-20 V 5 A only
   with a 5 A identity, `runs/2026-11-10-merge2-hw/fh22-avs-sweep.tsv`): all 111 steps follow, offset -94 mV at 9.2 V
   growing to -150 mV at 19.9 V (~0.75 % low), peak 19.75 V, 20.0 V gives 19.66 V (fold onto its fixed-20 V level).
+- **Sweep live view: the Running view of a deep sweep shows the swept range** (2026-11-10, operator finding on 7a1a5ed,
+  CUKTECH C1 PPS sweep; fixed in 4e04668, hardware check pending). The badge names the range ("PPS 3.3-21V",
+  "AVS 9-20V"), the gauge shows the range as dotted lines with a setpoint marker that moves point by point (plus the
+  needle), and one line reads the last point ("req 12.30V  got 12.15V  err-150mV", caution colour when the point is
+  outside the sweep's tolerance). Other rows render as before. Validate: host tests (`test_ui_sweep_live`,
+  `test_sweep`, `test_kit`, `test_step_label`), `make gate` (stack stage); on hardware a PPS sweep on the C1 shows the
+  marker walking along the band, the line following the points, and no flicker in the grid below.
 
 ## Not verified on hardware
 
