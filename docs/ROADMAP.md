@@ -44,6 +44,17 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Connection page ("Who's attached") flickers on a steady link** (2026-11-10, user report; handoff row 2c): the tab
+  refreshed its info without anything new appearing. Fixed in bd9dd91b, hardware check pending.
+  - Fix: rows have fixed slots -- a row-count change clears only the vacated slots and moves the closing hairline
+    instead of wiping the whole body (the wipe is reserved for page entry, tab change, pop-up close). The volatile
+    inputs (fast-charge verdict, D+/D-/CC ADC levels behind the usb-link family and the Rp reading, the Type-C
+    row's VBUS) are debounced with a 1 s hold before they reach a row or a paint signature. Host: 0 body passes,
+    0 body pixels and 0 match_live calls over 10 s per tab with a flapping fc/usb-link/ADC (tests/test_ui_conn_flicker.cpp,
+    red first in b74ceb54); a 5->4->5 row-count change paints only the changed slots and ends pixel-identical to a
+    forced resync.
+  - Validate (host): tests/test_ui_conn_flicker.cpp. Hardware: the stream log shows 0 `[CONN] body` passes over 30 s
+    on each tab with a phone inline on a live contract; replug: at most 1 full pass.
 Every row below carries **Fix** (what to change, where) and **Validate** (what proves it: host tests, `make gate`,
 and the hardware check). A row leaves this list when its fix is merged and the hardware check has passed; move it to
 "Verified on hardware" with the date and the evidence path.
