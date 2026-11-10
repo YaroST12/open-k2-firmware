@@ -155,7 +155,7 @@ void HomePage::update_sweep(const Frame &f, uint32_t now_ms, int &step_col, int 
     const uint32_t step = hm::step_ms(static_cast<int>(window_));
     if (sweep_ok_ && (sig != sweep_scale_ || (f.mode == hm::Mode::Live && now_ms - sweep_t_ >= kReloadLagSteps * step)))
         sweep_ok_ = false;
-    constexpr int kLoad = hm::kCols - hm::kGapCols;
+    constexpr int kLoad = hm::kCols;
     const int span[2] = {hm::kVoltCell.span(), hm::kAmpCell.span()};
     const uint32_t scale[2] = {sv, sa};
     const trend::Qty qty[2] = {trend::Qty::V, trend::Qty::A};

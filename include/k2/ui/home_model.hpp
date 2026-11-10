@@ -16,7 +16,6 @@ namespace k2::home {
 constexpr int16_t kW = 224;                 // logical content width
 constexpr int kCols = 110;                  // sweep columns, 2 px each: x 4..223
 constexpr int16_t kColX0 = 4;
-constexpr int kGapCols = 4;                 // blank columns ahead of the sweep cursor
 
 // A measurement cell: the full cell rows (status edge, inversion), the sweep rows inside it.
 struct CellGeom {
@@ -68,8 +67,6 @@ constexpr int sweep_rows(uint32_t v10, uint32_t scale10, int span) {
     const uint32_t v = v10 > scale10 ? scale10 : v10;
     return static_cast<int>((static_cast<uint64_t>(v) * static_cast<uint32_t>(span) * 2 + scale10) / (2ull * scale10)) + 1;
 }
-// Column 0..109 is blank (cursor column included) while it is within the gap ahead of the cursor.
-constexpr bool in_gap(int col, int cursor) { return ((col - cursor + kCols) % kCols) < kGapCols; }
 constexpr int col_of_x(int x) { return (x - kColX0) / 2; }              // valid for x in 4..223
 constexpr int16_t x_of_col(int col) { return static_cast<int16_t>(kColX0 + col * 2); }
 // Milliseconds between sweep steps per window (a window spans kCols steps): 10 s -> 91 ms, 60 s -> 545 ms,

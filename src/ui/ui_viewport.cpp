@@ -26,6 +26,26 @@ Rect ContentViewport::native_rect(Rect source, int cell_offset) {
 
 bool ContentViewport::stretched() { return active && lcd::get_sink() != active->previous_; }
 
+namespace {
+// The logical index c in 0..logical-1 with mapped(c) <= q < mapped(c + 1), or -1. The first guess is off by at most one.
+int owner(int q, int extent, int logical) {
+    const int guess = q * logical / extent;
+    for (int c = guess - 1; c <= guess + 2; ++c)
+        if (c >= 0 && c < logical && mapped(c, extent, logical) <= q && q < mapped(c + 1, extent, logical)) return c;
+    return -1;
+}
+}  // namespace
+
+int ContentViewport::source_x(int panel_x) {
+    if (!active) return panel_x;
+    return owner(panel_x - active->destination_.x, active->destination_.w, kLogicalW);
+}
+
+int ContentViewport::source_y(int panel_y) {
+    if (!active) return panel_y;
+    return owner(panel_y - active->destination_.y, active->destination_.h, kLogicalH);
+}
+
 Rect ContentViewport::mapped_rect(Rect source) {
     if (!active || lcd::get_sink() == active->previous_) return source;
     const Rect &d = active->destination_;

@@ -46,7 +46,7 @@ decision changes), then `docs/UI_DESIGN.md` for the hardware facts.
   at y `kBarH-1`.
 - Home v7 "A - Dual hero" (no title bar, no footer): VBUS cell y0..69 and IBUS cell y72..141, each with a
   4 px status edge, a 64 px hero font (`kHero`, digits only, x39) over a faint trend sweep (110 columns x 2 px,
-  4 column gap, cursor line; window 10s / 60s / 10m on OK short), the flow arrow (22 px box at x8,y101), the
+  thin cursor line, no erase gap; window 10s / 60s / 10m on OK short), the flow arrow (22 px box at x8,y101), the
   limit bar (x10..214, y136..138) and the near / over alarms (triangle, `NN% OF 5A`, inverted `OVER 5A LIMIT`).
   Band y144..193: W (font 48) | Wh over Ah. Info block y196..239: USB link + elapsed, protocol tag + value + role.
   Code: `src/ui/ui_home.cpp` (page), `home_model` (pure model), `home_cell` (compositor), `home_proto` (protocol

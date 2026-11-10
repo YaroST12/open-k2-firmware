@@ -94,7 +94,7 @@ uint16_t bg_at(const Cell &c, int x, int y) {
     if (!c.sweep || !c.sw || y < c.geom.t0 || y > c.geom.t1 || x < kColX0) return c.bg;
     const int col = col_of_x(x);
     if (col >= kCols) return c.bg;
-    if (in_gap(col, c.sw->cursor)) return (col == c.sw->cursor && x == x_of_col(col)) ? c.cursor_line : c.bg;
+    if (col == c.sw->cursor && x == x_of_col(col)) return c.cursor_line;   // the thin cursor line; the old trace stays beside it
     const int r = c.sw->rows[col];
     if (r == 0) return c.bg;
     const int k = c.geom.t1 - y + 1;     // 1 at the bottom sweep row
@@ -102,14 +102,92 @@ uint16_t bg_at(const Cell &c, int x, int y) {
 }
 
 namespace {
-// with_text=false leaves the Text items out: the stretched-rotation pass that owns the cell area
-// paints the background under a glyph, and the glyph itself is painted natively in a second pass.
+// with_text=false leaves the Text items out: the stretched-rotation compositor stretches the rest of the
+// row to panel pixels first and lays the glyphs over it at their native size.
 void compose_row_impl(const Cell &c, int y, int x0, int x1, uint16_t *out, bool with_text) {
     for (int x = x0; x <= x1; x++) out[x - x0] = bg_at(c, x, y);
     for (const Item &it : c.items) {
         if (!with_text && it.kind == ItemKind::Text) continue;
         put_item_row(it, y, x0, x1, out);
     }
+}
+
+// One text item's glyph box in panel pixels (native size, origin mapped like gfx_text).
+struct TextBox {
+    const Item *it;
+    Rect r;
+};
+constexpr size_t kMaxTextBoxes = 16;
+
+// A landscape rotation maps the 224x240 logical content onto a 240x224 panel box with a non-integer,
+// non-square stretch, while a glyph keeps its native pixel size. The rectangle is therefore composed per
+// PANEL row and written once. The written region is the stretched rectangle plus the native boxes of the
+// glyphs inside it (a glyph is taller than its stretched box, so a changed digit also owns the rows below it),
+// clipped to the cell. Per panel row the logical row that owns it (source_y) is composed without text, widened
+// to panel columns in place (source_x, right to left), and the glyph boxes covering the row are overlaid in
+// item order. Every panel pixel then depends on its own state only, so a repaint strip equals the same
+// pixels of a full-frame paint, and nothing is erased that a glyph does not cover again.
+// `row` holds at least 240 pixels.
+void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *row) {
+    const Rect pr = ContentViewport::mapped_rect({static_cast<int16_t>(x0), static_cast<int16_t>(y0),
+                                                  static_cast<int16_t>(x1 - x0 + 1), static_cast<int16_t>(y1 - y0 + 1)});
+    const Rect cp = ContentViewport::mapped_rect({0, c.geom.top, kW, static_cast<int16_t>(c.geom.bottom - c.geom.top + 1)});
+    if (pr.w <= 0 || pr.h <= 0 || cp.w <= 0 || cp.h <= 0) return;
+    int rx0 = pr.x, ry0 = pr.y, rx1 = pr.x + pr.w - 1, ry1 = pr.y + pr.h - 1;
+    TextBox boxes[kMaxTextBoxes];
+    size_t nb = 0;
+    for (const Item &it : c.items) {
+        if (it.kind != ItemKind::Text || !it.font || nb == kMaxTextBoxes) continue;
+        const Font &f = *it.font;
+        const int tw = text_width(f, it.text);
+        const Rect full = ContentViewport::native_rect({it.x, it.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)});
+        if (full.w <= 0 || full.h <= 0) continue;
+        boxes[nb++] = {&it, full};
+        // The part of this glyph box inside the logical rect lands at native size from the mapped box origin.
+        const int ix0 = it.x > x0 ? it.x : x0, ix1 = it.x + tw - 1 < x1 ? it.x + tw - 1 : x1;
+        const int iy0 = it.y > y0 ? it.y : y0, iy1 = it.y + f.height - 1 < y1 ? it.y + f.height - 1 : y1;
+        if (ix0 > ix1 || iy0 > iy1) continue;
+        const int nx = full.x + (ix0 - it.x), ny = full.y + (iy0 - it.y);
+        const int nx1 = nx + (ix1 - ix0) < full.x + full.w - 1 ? nx + (ix1 - ix0) : full.x + full.w - 1;
+        const int ny1 = ny + (iy1 - iy0) < full.y + full.h - 1 ? ny + (iy1 - iy0) : full.y + full.h - 1;
+        if (nx > nx1 || ny > ny1) continue;
+        if (nx < rx0) rx0 = nx;
+        if (ny < ry0) ry0 = ny;
+        if (nx1 > rx1) rx1 = nx1;
+        if (ny1 > ry1) ry1 = ny1;
+    }
+    if (rx0 < cp.x) rx0 = cp.x;
+    if (ry0 < cp.y) ry0 = cp.y;
+    if (rx1 > cp.x + cp.w - 1) rx1 = cp.x + cp.w - 1;
+    if (ry1 > cp.y + cp.h - 1) ry1 = cp.y + cp.h - 1;
+    const int w = rx1 - rx0 + 1;
+    if (w <= 0 || w > 240 || ry0 > ry1) return;
+    const int lx0 = ContentViewport::source_x(rx0), lx1 = ContentViewport::source_x(rx1);
+    if (lx0 < 0 || lx1 < lx0) return;
+    ContentViewport::Pause unscaled;     // the writes below are panel pixels
+    lcd::stream_begin(static_cast<uint16_t>(rx0), static_cast<uint16_t>(ry0), static_cast<uint16_t>(rx1), static_cast<uint16_t>(ry1));
+    for (int py = ry0; py <= ry1; py++) {
+        const int ly = ContentViewport::source_y(py);
+        if (ly < 0) {                     // no logical row owns it (cannot happen inside the cell's mapped rows)
+            for (int i = 0; i < w; i++) row[i] = c.bg;
+        } else {
+            compose_row_impl(c, ly, lx0, lx1, row, false);
+            for (int i = w - 1; i >= 0; i--) {
+                const int lx = ContentViewport::source_x(rx0 + i);
+                row[i] = row[(lx < lx0 || lx > lx1 ? lx0 : lx) - lx0];
+            }
+        }
+        for (size_t b = 0; b < nb; b++) {
+            const Rect &r = boxes[b].r;
+            if (py < r.y || py >= r.y + r.h || r.x > rx1 || r.x + r.w - 1 < rx0) continue;
+            Item glyphs = *boxes[b].it;
+            glyphs.x = r.x;
+            glyphs.y = r.y;
+            put_text_row(glyphs, py, rx0, r.x + r.w - 1 < rx1 ? r.x + r.w - 1 : rx1, row);
+        }
+        lcd::stream_pixels({row, static_cast<size_t>(w)});
+    }
+    lcd::stream_end();
 }
 }  // namespace
 
@@ -123,7 +201,7 @@ void paint(const Cell &c, int x0, int y0, int x1, int y1) {
     if (y0 < c.geom.top) y0 = c.geom.top;
     if (y1 > c.geom.bottom) y1 = c.geom.bottom;
     if (x0 > x1 || y0 > y1) return;
-    uint16_t row[kW];
+    uint16_t row[240];
     if (!ContentViewport::stretched()) {
         lcd::stream_begin(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1), static_cast<uint16_t>(y1));
         for (int y = y0; y <= y1; y++) {
@@ -133,47 +211,7 @@ void paint(const Cell &c, int x0, int y0, int x1, int y1) {
         lcd::stream_end();
         return;
     }
-    // A landscape rotation maps the 224x240 logical content onto a 240x224 panel box with a
-    // non-integer, non-square stretch. Fills, the sweep, arrows and the warning own that stretch
-    // (they cover the whole cell), but a glyph must keep its native pixel size in every rotation,
-    // so the text items go in a second pass: the box origin is mapped like gfx_text and the size
-    // never scales (ContentViewport::native_rect + Pause), blended against the same text-less row.
-    lcd::stream_begin(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1), static_cast<uint16_t>(y1));
-    for (int y = y0; y <= y1; y++) {
-        compose_row_impl(c, y, x0, x1, row, false);
-        lcd::stream_pixels({row, static_cast<size_t>(x1 - x0 + 1)});
-    }
-    lcd::stream_end();
-    for (const Item &it : c.items) {
-        if (it.kind != ItemKind::Text || !it.font) continue;
-        const Font &f = *it.font;
-        const int tw = text_width(f, it.text);
-        const int ix0 = it.x > x0 ? it.x : x0;                          // clip the glyph box to the paint rect
-        const int ix1 = it.x + tw - 1 < x1 ? it.x + tw - 1 : x1;
-        const int iy0 = it.y > y0 ? it.y : y0;
-        const int iy1 = it.y + f.height - 1 < y1 ? it.y + f.height - 1 : y1;
-        if (ix0 > ix1 || iy0 > iy1) continue;
-        // Map the FULL glyph box once, then add the clip offset in native pixels: a partial repaint
-        // (e.g. the changed hero digits) must land on the same native advance grid as a full draw.
-        const Rect full = ContentViewport::native_rect(
-            {it.x, it.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)});
-        if (full.w <= 0 || full.h <= 0) continue;
-        int nx = full.x + (ix0 - it.x), ny = full.y + (iy0 - it.y);
-        int nw = ix1 - ix0 + 1, nh = iy1 - iy0 + 1;
-        if (nx + nw > full.x + full.w) nw = full.x + full.w - nx;
-        if (ny + nh > full.y + full.h) nh = full.y + full.h - ny;
-        if (nw <= 0 || nh <= 0) continue;
-        Cell text_only = c;                                             // bg + this item: the same blend as compose_row
-        text_only.items = std::span<const Item>(&it, 1);
-        ContentViewport::Pause unscaled;
-        lcd::stream_begin(static_cast<uint16_t>(nx), static_cast<uint16_t>(ny),
-                          static_cast<uint16_t>(nx + nw - 1), static_cast<uint16_t>(ny + nh - 1));
-        for (int ry = iy0; ry < iy0 + nh; ry++) {
-            compose_row(text_only, ry, ix0, ix0 + nw - 1, row);
-            lcd::stream_pixels({row, static_cast<size_t>(nw)});
-        }
-        lcd::stream_end();
-    }
+    paint_stretched(c, x0, y0, x1, y1, row);
 }
 
 }  // namespace k2::home

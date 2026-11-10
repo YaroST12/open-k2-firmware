@@ -316,6 +316,58 @@ static void test_sweep() {
     CHECK_TRUE(ink_logical(ui, 4, 2, 220, 66, kRule) > 0);              // the cursor line
 }
 
+// Every repaint strip of the moving sweep must leave the panel exactly as a full-frame render of the same state would.
+// The reference is Ui::resync() at the same instant (every cell repainted whole, no sweep step: the frame is a replay);
+// the incremental panel is put back afterwards and carried from frame to frame, so a strip that erases a pixel nobody
+// draws again, or draws text twice, shows up as a mismatch on that frame.
+// Rotations 1 and 3 are the stretched landscape ones (glyphs go through the native second pass).
+// With `dump_as` set (and K2_DUMP), both panels are written as k2_home2_<dump_as>_{inc,full}.panel.
+static int sweep_mismatches(Ui &ui, const char *dump_as, int *first_x, int *first_y) {
+    static uint16_t inc[240 * 240];
+    for (int i = 0; i < 240 * 240; i++) inc[i] = g_panel[i];
+    ui.resync(g_t);
+    int bad = 0;
+    for (int y = 0; y < 240; y++)
+        for (int x = 0; x < 240; x++) {
+            if (g_panel[y * 240 + x] == inc[y * 240 + x]) continue;
+            if (bad++ == 0) { *first_x = x; *first_y = y; }
+        }
+    if (dump_as) {
+        char state[48];
+        std::snprintf(state, sizeof state, "%s_full", dump_as);
+        dump("sweep", state);
+        for (int i = 0; i < 240 * 240; i++) g_panel[i] = inc[i];
+        std::snprintf(state, sizeof state, "%s_inc", dump_as);
+        dump("sweep", state);
+    }
+    for (int i = 0; i < 240 * 240; i++) g_panel[i] = inc[i];   // carry the incremental panel on
+    return bad;
+}
+
+static void test_sweep_strips_match_full_render() {
+    for (uint8_t rot = 0; rot < 4; rot++) {
+        Ui &ui = home_ui(rot);
+        live_pd(false, 20010, 1520);
+        run(ui, 6);
+        int bad_frames = 0, first_x = -1, first_y = -1, first_frame = -1;
+        for (int f = 0; f < 130; f++) {    // a full wrap of the 110 columns and then some
+            // The level changes every 25 frames (the trace gets steps); the digits and the band follow the display filter
+            // with a lag the full render does not have, so the frames right after a change are not compared.
+            const int block = f / 25;
+            live_pd(false, 18000 + (block % 3) * 1500, 700 + (block % 4) * 700);
+            run(ui, 1);
+            if (f % 25 < 12) continue;
+            char name[16];
+            std::snprintf(name, sizeof name, "rot%d", int(rot));
+            int x = 0, y = 0;
+            if (sweep_mismatches(ui, f == 70 ? name : nullptr, &x, &y) > 0 && bad_frames++ == 0) { first_x = x; first_y = y; first_frame = f; }
+        }
+        if (bad_frames) std::printf("sweep strips differ from the full render: rotation %d, %d of 130 frames (first: frame %d at panel %d,%d)\n",
+                                    int(rot), bad_frames, first_frame, first_x, first_y);
+        CHECK_EQ(bad_frames, 0);
+    }
+}
+
 // OK short cycles the window label; the label sits only in the VBUS cell.
 static void test_window_cycle() {
     Ui &ui = home_ui();
@@ -575,6 +627,7 @@ int main() {
     test_home_shows_the_rd_pin_badge();
     test_protocol_states();
     test_sweep();
+    test_sweep_strips_match_full_render();
     test_window_cycle();
     test_max_text_never_comes_from_live_vbus();
     test_idle_home();

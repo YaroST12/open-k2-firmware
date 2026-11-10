@@ -84,27 +84,29 @@ static void test_sweep_cursor_and_load() {
     uint8_t many[kCols];
     for (auto &m : many) m = 1;
     s.load(many);
-    CHECK_EQ(s.cursor, kCols - kGapCols);             // the gap stays free
+    CHECK_EQ(s.cursor, 0);                            // all columns loaded: the cursor wraps to the oldest
+    CHECK_EQ(s.rows[kCols - 1], 1);
+    s.load(std::span<const uint8_t>(many, kCols - 1));
+    CHECK_EQ(s.cursor, kCols - 1);                    // no column is held back ahead of the cursor
 }
 
 static void test_strip_wraps() {
     Strip a = strip_of(10);
     CHECK_EQ(a.n, 1);
     CHECK_EQ(a.r[0].x0, 24);
-    CHECK_EQ(a.r[0].x1, 24 + 4 * 2 + 1);              // columns 10..14
-    Strip b = strip_of(kCols - 2);                    // columns 108, 109, then 0, 1, 2
+    CHECK_EQ(a.r[0].x1, x_of_col(11) + 1);            // column 10 (the level) and 11 (the new cursor line)
+    Strip b = strip_of(kCols - 1);                    // column 109, then the cursor line wraps to column 0
     CHECK_EQ(b.n, 2);
-    CHECK_EQ(b.r[0].x0, x_of_col(108));
+    CHECK_EQ(b.r[0].x0, x_of_col(109));
     CHECK_EQ(b.r[0].x1, 223);
     CHECK_EQ(b.r[1].x0, 4);
-    CHECK_EQ(b.r[1].x1, x_of_col(2) + 1);
-    CHECK_EQ(strip_of(kCols - 4).n, 2);               // 106..109 then column 0: the first to wrap
-    CHECK_EQ(strip_of(kCols - 5).n, 1);               // 105..109 still fits
-    Strip c = strip_of(10, 3);                        // three steps in a row: columns 10..16
+    CHECK_EQ(b.r[1].x1, x_of_col(0) + 1);
+    CHECK_EQ(strip_of(kCols - 2).n, 1);               // 108 and 109 still fit...
+    CHECK_EQ(strip_of(kCols - 2, 2).n, 2);            // ...the cursor line of two steps wraps to column 0
+    Strip c = strip_of(10, 3);                        // three steps in a row: columns 10..13
     CHECK_EQ(c.n, 1);
     CHECK_EQ(c.r[0].x0, x_of_col(10));
-    CHECK_EQ(c.r[0].x1, x_of_col(16) + 1);
-    CHECK_EQ(strip_of(kCols - 5, 2).n, 2);            // 105..109 plus column 0 after two steps
+    CHECK_EQ(c.r[0].x1, x_of_col(13) + 1);
 }
 
 static Cell sweep_cell(Sweep &sw) {
@@ -123,7 +125,8 @@ static void test_bg_at_sweep_columns() {
     Sweep sw;
     sw.cursor = 20;
     sw.rows[10] = 5;
-    sw.rows[21] = 9;                                  // inside the gap: stays blank
+    sw.rows[20] = 6;                                  // the old trace under the cursor column
+    sw.rows[21] = 9;                                  // ahead of the cursor: kept, not blanked
     sw.rows[30] = 3;
     const Cell c = sweep_cell(sw);
     const int x = x_of_col(10);
@@ -135,18 +138,18 @@ static void test_bg_at_sweep_columns() {
     CHECK_EQ(bg_at(c, 3, 69), kBgC);                  // left of the first column
     CHECK_EQ(bg_at(c, x_of_col(9), 69), kBgC);        // no sample
     CHECK_EQ(bg_at(c, x_of_col(20), 40), kCur);       // left pixel of the cursor column
-    CHECK_EQ(bg_at(c, x_of_col(20) + 1, 40), kBgC);
+    CHECK_EQ(bg_at(c, x_of_col(20) + 1, 40), kBgC);   // the right pixel keeps the old trace: rows[20] = 6, k = 30
+    CHECK_EQ(bg_at(c, x_of_col(20) + 1, 69), kTint);
     CHECK_EQ(bg_at(c, x_of_col(20), 1), kBgC);        // the cursor line stays inside the sweep rows
-    CHECK_EQ(bg_at(c, x_of_col(21), 69), kBgC);       // gap columns are blank
-    CHECK_EQ(bg_at(c, x_of_col(23), 69), kBgC);
-    CHECK_EQ(bg_at(c, x_of_col(30), 69), kTint);      // after the gap the data is back
-    // Wrap: cursor at 108 keeps columns 109, 0, 1 blank.
-    sw.cursor = 108;
+    CHECK_EQ(bg_at(c, x_of_col(21), 69), kTint);      // no blank gap ahead of the cursor: the old trace stays
+    CHECK_EQ(bg_at(c, x_of_col(21), 61), kLine);
+    CHECK_EQ(bg_at(c, x_of_col(23), 69), kBgC);       // (no sample there)
+    CHECK_EQ(bg_at(c, x_of_col(30), 69), kTint);
+    // Wrap: the cursor at 109 draws its line in the last column, column 0 keeps its trace.
+    sw.cursor = 109;
     sw.rows[0] = 9;
-    CHECK_EQ(bg_at(c, x_of_col(0), 69), kBgC);
-    CHECK_EQ(bg_at(c, x_of_col(1), 69), kBgC);
-    sw.rows[2] = 4;
-    CHECK_EQ(bg_at(c, x_of_col(2), 69), kTint);       // first column after the wrapped gap
+    CHECK_EQ(bg_at(c, x_of_col(0), 69), kTint);
+    CHECK_EQ(bg_at(c, x_of_col(109), 40), kCur);
     // An inverted cell draws no sweep at all.
     Cell inv = c;
     inv.sweep = false;

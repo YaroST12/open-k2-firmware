@@ -22,6 +22,11 @@ public:
     // True while fills and glyphs go through a stretch: a glyph keeps its native size, so it no longer fills the box that
     // the page measured for it, and a caller that leaves such a box open to save bus time must paint it instead.
     static bool stretched();
+    // The inverse of mapped_rect() for one panel column / row: the logical 224x240 column / row whose stretched box
+    // contains it, or -1 when no logical row owns it. Identity without a viewport. Independent of Pause, so a painter can
+    // compose a stretched rectangle pixel by pixel in panel space (home_cell paint()).
+    static int source_x(int panel_x);
+    static int source_y(int panel_y);
 
     class Pause {
     public:

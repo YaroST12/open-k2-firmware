@@ -43,13 +43,7 @@ static void test_sweep_maths() {
     CHECK_EQ(sweep_rows(575, 575, kAmpCell.span()), 60);
 }
 
-static void test_sweep_cursor_gap() {
-    CHECK_EQ(in_gap(10, 10), 1);                      // the cursor column itself is blank
-    CHECK_EQ(in_gap(13, 10), 1);
-    CHECK_EQ(in_gap(14, 10), 0);
-    CHECK_EQ(in_gap(9, 10), 0);
-    CHECK_EQ(in_gap(1, 108), 1);                      // wraps: 108 109 0 1
-    CHECK_EQ(in_gap(2, 108), 0);
+static void test_sweep_columns() {
     CHECK_EQ(x_of_col(0), 4);
     CHECK_EQ(x_of_col(109), 222);
     CHECK_EQ(col_of_x(223), 109);
@@ -230,7 +224,7 @@ int main() {
     test_alarm_thresholds();
     test_limit_bar();
     test_sweep_maths();
-    test_sweep_cursor_gap();
+    test_sweep_columns();
     test_hero_numbers();
     test_watts_and_energy();
     test_elapsed();

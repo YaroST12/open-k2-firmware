@@ -195,8 +195,42 @@ static void test_home_page_hero_glyphs() {
 
 }  // namespace
 
+// source_x / source_y are the inverse of mapped_rect: the panel pixels of every non-empty mapped logical column / row
+// map back to it, and every pixel of the content box has exactly one owner (the single-write compositor relies on it).
+static void test_source_inverts_mapped_rect() {
+    for (uint8_t rot = 0; rot < 4; rot++) {
+        const Layout l = layout_for(rot);
+        ContentViewport viewport(l.content);
+        const bool stretch = ContentViewport::stretched();
+        int owned_x = 0, owned_y = 0, bad = 0;
+        for (int x = 0; x < 224; x++) {
+            const Rect r = ContentViewport::mapped_rect({int16_t(x), 0, 1, 1});
+            for (int px = r.x; stretch && px < r.x + r.w; px++) {
+                owned_x++;
+                if (ContentViewport::source_x(px) != x) bad++;
+            }
+        }
+        for (int y = 0; y < 240; y++) {
+            const Rect r = ContentViewport::mapped_rect({0, int16_t(y), 1, 1});
+            for (int py = r.y; stretch && py < r.y + r.h; py++) {
+                owned_y++;
+                if (ContentViewport::source_y(py) != y) bad++;
+            }
+        }
+        CHECK_EQ(bad, 0);
+        if (stretch) {
+            CHECK_EQ(owned_x, l.content.w);               // the mapped columns tile the content box exactly
+            CHECK_EQ(owned_y, l.content.h);
+        } else {
+            CHECK_EQ(ContentViewport::source_x(37), 37);  // no viewport work: identity
+            CHECK_EQ(ContentViewport::source_y(41), 41);
+        }
+    }
+}
+
 int main() {
     test_same_string_glyph_bitmaps();
     test_home_page_hero_glyphs();
+    test_source_inverts_mapped_rect();
     return test_report("test_ui_glyph_rotation");
 }
