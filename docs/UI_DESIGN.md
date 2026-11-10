@@ -54,13 +54,13 @@ orientation. Missing hardware is harmless: the upright layout and manual gesture
 Hold physical **+ and - together** for 0.5 s: lock the current orientation. Release both, then repeat
 to step through the other three quarter-turns; the fifth chord returns to AUTO at the latest stable
 gravity orientation. Each chord shows a five-second mode notice and logs `[ROT]`.
-The Home footer contains no +/- rotation help. Lock is session-only; the chord never pages or triggers anything.
+The Home footer contains no +/- rotation help. The chord never pages or triggers anything; its result is remembered across boots like Settings > Autorotate.
 
 **Settings > Autorotate** offers Auto and Manual 0/90/180/270 deg. Short +/- selects a row;
 OK applies it immediately, and green `ACTIVE` marks the active mode. Manual ignores gravity; switching
-back to Auto uses the latest stable posture even if it was tracked while locked. Choices last for
-this boot only. The hidden +/- chord remains a shortcut to the same mode, not a separate policy.
-The separate **Settings > Rotate buttons** toggle defaults to OFF each boot. When ON, directional
+back to Auto uses the latest stable posture even if it was tracked while locked. Choices are kept
+across boots (stored in `/prefs.cfg`, applied before the first frame). The hidden +/- chord remains a shortcut to the same mode, not a separate policy.
+The separate **Settings > Rotate buttons** toggle defaults to OFF and is remembered across boots. When ON, directional
 keys follow the displayed strip: at rotations 2 and 3, physical +/- swap their logical actions,
 including short and long presses; at rotations 0 and 1 they retain their original actions. BACK
 and OK never change. The strip labels and press highlights stay beside their physical keys; the

@@ -230,6 +230,7 @@ void dfu_now() {
         const k2::uiprefs::Prefs prefs = k2::uiprefs::stored();   // imports the old raw preferences page (usbcfg did the same above) ...
         k2::uiprefs::screenshot_enabled = prefs.screenshot;
         k2::power::set_smoothing(prefs.smoothing);
+        g_ui.restore_orientation(prefs.rotation_manual, prefs.rotation, prefs.rotate_buttons);   // before g_ui.init draws the first frame
     }
     k2::fs::wipe_legacy();                  // ... then the pre-littlefs raw pages are erased, once (marker /.legacy)
     k2::systick::delay_ms(20);   // let the DMA ring fill before the raw one-shot sweep

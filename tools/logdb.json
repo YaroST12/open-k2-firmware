@@ -432,6 +432,7 @@
   "429": "[RMT] pd reset refused: charger test running\n",
   "430": "[RMT] pd hard reset lab inline flags=0x%02X\n",
   "431": "[PD] Hard Reset refused (no CC / inline)\n",
-  "432": "[UI] trigger hard reset%s: %s\n"
+  "432": "[UI] trigger hard reset%s: %s\n",
+  "433": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d (%s)\n"
  }
 }

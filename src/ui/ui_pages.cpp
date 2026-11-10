@@ -2015,8 +2015,7 @@ void SettingsPage::update(uint32_t) {
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now);
     draw_footer_cached(ctx_.content, FooterTone::Info,
-                       sel_ == 2 ? "This boot only" : sel_ == 3 || sel_ == 4 ? "Remembered across boots"
-                       : "Opens a settings page", foot_);
+                       sel_ >= 2 ? "Remembered across boots" : "Opens a settings page", foot_);
 }
 
 bool SettingsPage::on_event(Event e) {
@@ -2081,7 +2080,7 @@ void AutorotatePage::update(uint32_t) {
     title_badge(false);
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now);
-    draw_footer_cached(ctx_.content, FooterTone::Info, "Applies now. This boot only", foot_);
+    draw_footer_cached(ctx_.content, FooterTone::Info, "Applies now. Remembered", foot_);
 }
 
 bool AutorotatePage::on_event(Event e) {

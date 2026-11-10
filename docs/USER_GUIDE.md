@@ -54,7 +54,7 @@ USB is **off** after a fresh flash. Without it the K2 still works as a meter, bu
 - The strip on the right edge of the screen **always shows what each button does right now**. Read it instead of memorising.
 - Long MINUS / long PLUS page between the six top-level pages. There is no wrap-around: long MINUS does nothing on Home, long PLUS does nothing on Settings.
 - Inside a tool (a "submenu") paging is off; BACK leaves the tool and the page it came from is still there.
-- Hold MINUS and PLUS together to rotate the screen through the four orientations (this boot only).
+- Hold MINUS and PLUS together to rotate the screen through the four orientations (remembered across boots).
 
 ## Navigation map
 
@@ -158,7 +158,7 @@ Every press has three kinds: **short** (acts on release), **long** (fires at 0.5
 - **Top-level pages** (Home, Detail, Charger test, Lines, Tools, Settings): long PLUS goes to the next page, long MINUS to the previous. Short BACK goes Home (on Home it does nothing).
 - **Inside a tool or settings submenu**: paging is off. Short BACK first lets the page handle it (for example, step back from a detail view), otherwise it leaves the submenu.
 - **BACK hold (5 s)** works everywhere and reboots the K2. A counting card ("Reboot in N") appears; release before it reaches zero to cancel. A half-second long BACK does nothing.
-- **MINUS and PLUS held together** cycle the screen orientation (this boot only).
+- **MINUS and PLUS held together** cycle the screen orientation (remembered across boots).
 - **Label strip**: the narrow column on the right shows the current action of each button. Navigation pages show Back, "-/Prev" and "+/Next". Lists show Up and Dn. Greyed or missing labels mean the button does nothing there.
 
 Colours follow one scheme everywhere: green = good or ready, amber = caution or pending, red = fault or failed, grey = not applicable.
@@ -282,12 +282,12 @@ Spoof is a shortcut: it opens Who's attached on the Cable tab and then the Spoof
 | Row | Value | Kept |
 | :--- | :--- | :--- |
 | USB Link | opens a submenu | across boots |
-| Autorotate | Auto / Locked, opens a submenu | this boot only |
-| Rotate buttons | ON / OFF | this boot only |
+| Autorotate | Auto / Locked, opens a submenu | across boots |
+| Rotate buttons | ON / OFF | across boots |
 | Screenshot | ON / OFF | across boots |
 | Smoothing | Off / Low / Medium / High | across boots |
 
-+/- selects. OK opens, toggles or cycles (the label on the OK button says which). The footer says "Opens a settings page", "This boot only" or "Remembered across boots".
++/- selects. OK opens, toggles or cycles (the label on the OK button says which). The footer says "Opens a settings page" or "Remembered across boots".
 
 ---
 

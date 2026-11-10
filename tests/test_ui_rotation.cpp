@@ -461,6 +461,7 @@ static void test_rotation_prefs_persist() {
         std::copy(std::begin(g_panel), std::end(g_panel), booted.begin());
         Ui reference;                             // ... is what a plain boot rotated to 180 deg draws
         reference.init(0);
+        reference.set_rotate_buttons(true);       // the strip labels follow the setting too
         reference.set_rotation(2, 100);
         reference.tick(5000);
         CHECK_EQ(std::equal(booted.begin(), booted.end(), std::begin(g_panel)), true);

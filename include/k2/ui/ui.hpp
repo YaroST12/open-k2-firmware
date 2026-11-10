@@ -68,7 +68,12 @@ public:
     bool rotate_buttons() const { return rotate_buttons_; }
     void set_rotate_buttons(bool enabled);
     // Applied after event rendering so a changed viewport never mixes orientations in one draw.
+    // set_rotate_buttons, configure_rotation and the +/- hold gesture store the result in the uiprefs record.
     void configure_rotation(bool automatic, uint8_t rotation);
+    // Boot only, before init(): puts the remembered orientation settings in force so the first frame is already
+    // drawn that way (manual = locked at `rotation`; automatic leaves the default until gravity says otherwise).
+    // Writes nothing.
+    void restore_orientation(bool manual, uint8_t rotation, bool rotate_buttons);
     // No sensor is guessed: a future verified driver supplies screen-axis gravity in mg.
     void feed_gravity(std::optional<orientation::Gravity> gravity, uint32_t now_ms);
     // Called every main-loop pass (~20 ms): samples power, integrates energy, and every
@@ -231,6 +236,7 @@ private:
     uint32_t rotation_notice_until_ = 0;
     bool rotation_notice_drawn_ = false;
     void rotation_gesture(uint32_t now_ms);
+    void store_orientation(uint8_t rotation);   // writes the orientation fields into /prefs.cfg when they changed
     void draw_rotation_notice(uint32_t now_ms);
     Layout layout_{};
     Surface panel_{};

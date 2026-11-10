@@ -17,6 +17,7 @@
 #include "k2/drivers/usb.hpp"
 #include "k2/drivers/buttons.hpp"
 #include "k2/ui/ui_calc.hpp"
+#include "k2/ui/uiprefs.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/ui_widgets.hpp"
 #include "k2/ui/ui_viewport.hpp"
@@ -139,6 +140,26 @@ void Ui::set_rotate_buttons(bool enabled) {
     }
     rotate_buttons_ = enabled;
     sync_panel();
+    store_orientation(orient_.rotation);
+}
+
+void Ui::restore_orientation(bool manual, uint8_t rotation, bool rotate_buttons) {
+    rotate_buttons_ = rotate_buttons;
+    rotation_lock_ = manual;
+    if (!manual) return;
+    rotation &= 3;
+    orient_ = orientation_for(rotation);   // init() sets the panel, layout and first frame from these
+    ctx_.rotation = rotation;
+}
+
+// Keeps the other stored fields; a write only when something changed (the gesture and the pages may repeat a value).
+void Ui::store_orientation(uint8_t rotation) {
+    uiprefs::Prefs p = uiprefs::stored();
+    const uiprefs::Prefs before = p;
+    p.rotation_manual = rotation_lock_;
+    p.rotation = rotation_lock_ ? static_cast<uint8_t>(rotation & 3) : 0;   // the value means nothing in auto: keep the file canonical
+    p.rotate_buttons = rotate_buttons_;
+    if (p != before) uiprefs::set(p);
 }
 
 void Ui::feed_gravity(std::optional<orientation::Gravity> gravity, uint32_t now_ms) {
@@ -153,6 +174,7 @@ void Ui::configure_rotation(bool automatic, uint8_t rotation) {
     rotation_notice_drawn_ = false;
     requested_rotation_ = automatic ? gravity_.rotation() : static_cast<uint8_t>(rotation & 3);
     K2LOG("[ROT] settings=%s degrees=%u\n", automatic ? "auto" : "manual", unsigned(requested_rotation_) * 90);
+    store_orientation(requested_rotation_);
 }
 
 void Ui::rotation_gesture(uint32_t now_ms) {
@@ -169,6 +191,7 @@ void Ui::rotation_gesture(uint32_t now_ms) {
     rotation_notice_drawn_ = false;
     draw_rotation_notice(now_ms);
     K2LOG("[ROT] %s %u; hold +/- together to cycle\n", rotation_lock_ ? "LOCK" : "AUTO", unsigned(rotation()));
+    store_orientation(rotation());   // the chord is the same setting as Settings > Autorotate: remembered the same way
 }
 
 void Ui::draw_rotation_notice(uint32_t now_ms) {
