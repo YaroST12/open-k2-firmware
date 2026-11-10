@@ -155,9 +155,33 @@ def group_pack(q):
             "max_dv": v & 0x1FF, "fail_dv": (v >> 9) & 0x1FF}
 
 
+def sweep_block(sw) -> bytes:
+    """A range's sweep dict (mV fields, as report_card.py decodes) -> the 9-byte v10 record block (3 x int8 mV, then
+    5 x 9-bit 100 mV fields in 6 bytes)."""
+    def dv(mv): return min(mv // 100, 511)
+    v = dv(sw.get("worst_at_mv", 0)) | (dv(sw.get("peak_mv", 0)) << 9) | (dv(sw.get("peak_at_mv", 0)) << 18) | \
+        (dv(sw.get("fold_mv", 0)) << 27) | (dv(sw.get("fold_from_mv", 0)) << 36)
+    return bytes([sw.get("min_mv", 0) & 0xFF, sw.get("max_mv", 0) & 0xFF, sw.get("worst_mv", 0) & 0xFF]) + \
+        v.to_bytes(6, "little")
+
+
+def sweep_unblock(q: bytes):
+    """The 9-byte v10 record block -> the sweep dict (None when the block is all zero)."""
+    v = int.from_bytes(q[3:9], "little")
+    if not (v >> 9 & 0x1FF):
+        return None
+    sw = {"min_mv": q[0] - 256 if q[0] > 127 else q[0], "max_mv": q[1] - 256 if q[1] > 127 else q[1],
+          "worst_mv": q[2] - 256 if q[2] > 127 else q[2], "worst_at_mv": (v & 0x1FF) * 100,
+          "peak_mv": (v >> 9 & 0x1FF) * 100, "peak_at_mv": (v >> 18 & 0x1FF) * 100}
+    if v >> 27 & 0x1FF:
+        sw["fold_mv"] = (v >> 27 & 0x1FF) * 100
+        sw["fold_from_mv"] = (v >> 36 & 0x1FF) * 100
+    return sw
+
+
 def parse_card(rec: bytes) -> dict:
-    """The card record (218 B with v9, 204 B with v8, 202 B with v7) as a dict, per include/k2/chargertest/report_card.hpp."""
-    assert len(rec) in (202, 204, 218) and rec[0] == 0xA6, "not a card record"
+    """The card record (256 B with v10, 218 B with v9, 204 B with v8, 202 B with v7) as a dict, per include/k2/chargertest/report_card.hpp."""
+    assert len(rec) in (202, 204, 218, 256) and rec[0] == 0xA6, "not a card record"
     p = rec[4:4 + (len(rec) - 6)]
     name = p[34:54].split(b"\0")[0]
     d = {
@@ -180,11 +204,16 @@ def parse_card(rec: bytes) -> dict:
         lo = u16(q, 2)
         d["ranges"].append({"alg": q[0], "pos": q[1], "lo_dv": lo & 0x1FF, "ma50": lo >> 9,
                             "hi_dv": u16(q, 4), "max_dv": u16(q, 6), "fail_dv": u16(q, 8)})
-    if p[33] >= 9 and len(rec) == 218:   # v9: the setpoint error per level of each APDO (block at 198, int8 mV, 0x80 = none)
+    if p[33] >= 9 and len(rec) >= 218:   # v9: the setpoint error per level of each APDO (block at 198, int8 mV, 0x80 = none)
         for i in range(4):
             errs = [e - 256 if e > 127 else e for e in p[198 + 4 * i:198 + 4 * i + 4] if e != 0x80]
             if errs:
                 d["ranges"][i]["err_mv"] = errs
+    if p[33] >= 10 and len(rec) == 256:   # v10: the deep-sweep summary per range (block at 214, 9 bytes each)
+        for i in range(4):
+            sw = sweep_unblock(p[214 + 9 * i:214 + 9 * i + 9])
+            if sw:
+                d["ranges"][i]["sweep"] = sw
     for i in range(3):
         q = p[144 + 6 * i:144 + 6 * i + 6]
         g = group_pack(bytes([q[2], q[3], q[4], q[5]]))
@@ -284,16 +313,18 @@ def card_payload_from_json(j: dict) -> bytes:
     put16(191, j.get("last_boots", 0))
     up = j.get("last_uptime_s", 0) & 0xFFFFFF
     p[193] = up & 0xFF; p[194] = (up >> 8) & 0xFF; p[195] = (up >> 16) & 0xFF
-    p[33] = 9   # v9: the spread block (captures predate it: all "no level")
+    p[33] = 10   # v10: the sweep block (captures predate it: all zero); v9 spread block below
     p[196] = j.get("rebalanced", 0) & 0xFF
     for i, rg in enumerate(j.get("ranges", [])[:4]):   # v9: the per-level setpoint errors at 198
         for k, e in enumerate(rg.get("err_mv", [])[:4]):
             p[198 + 4 * i + k] = e & 0xFF
-    rec = bytearray(220)
-    rec[0] = 0xA6; rec[1] = 1; rec[2] = 214
-    rec[4:218] = p
-    rec[218] = crc16_ccitt(bytes(rec[:218])) & 0xFF
-    rec[219] = (crc16_ccitt(bytes(rec[:218])) >> 8) & 0xFF
+        if rg.get("sweep"):   # v10: the deep-sweep summary at 214
+            p[214 + 9 * i:214 + 9 * i + 9] = sweep_block(rg["sweep"])
+    rec = bytearray(256)
+    rec[0] = 0xA6; rec[1] = 1; rec[2] = 250
+    rec[4:254] = p
+    rec[254] = crc16_ccitt(bytes(rec[:254])) & 0xFF
+    rec[255] = (crc16_ccitt(bytes(rec[:254])) >> 8) & 0xFF
     return bytes(rec)
 
 
@@ -461,6 +492,15 @@ def pack_card_v2(c: dict) -> bytes:
         for i in range(4):
             for k in range(4):
                 w.put((spread[i][k] if k < len(spread[i]) else -128) & 0xFF, 8)
+    sweeps = [r.get("sweep") for r in c["ranges"][:4]]   # v10: the deep-sweep summary per range
+    while len(sweeps) < 4:
+        sweeps.append(None)
+    has_sw = any(sweeps)
+    w.put(1 if has_sw else 0, 1)       # v10: the sweep presence bit (records packed before it end here)
+    if has_sw:
+        for i in range(4):
+            for byte in sweep_block(sweeps[i] or {}):
+                w.put(byte, 8)
     w.put(c["crc16"], 16)             # the v1 record's CRC-16, kept: the integrity check is unchanged
     return w.bytes()
 
@@ -504,6 +544,11 @@ def unpack_card_v2(b: bytes) -> dict:
             errs = [e for e in errs if e != -128]
             if i < len(c["ranges"]) and errs:
                 c["ranges"][i]["err_mv"] = errs
+    if len(b) * 8 - r.pos > 16 and r.get(1):   # v10: the sweep presence bit (+ 4 x 9 bytes when set; absent before it)
+        for i in range(4):
+            sw = sweep_unblock(bytes(r.get(8) for _ in range(9)))
+            if i < len(c["ranges"]) and sw:
+                c["ranges"][i]["sweep"] = sw
     c["crc16"] = r.get(16)
     return c
 

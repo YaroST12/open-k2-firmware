@@ -217,14 +217,14 @@ static void test_worst_case_fits_version_21() {
     CHECK_EQ(lk::encode(qs::Type::Emarker, pattern(lk::kMaxRecord + 1, 1), false, big), 0u);   // refused, not a v22 code
 }
 
-// The worst report card as the store keeps it: format 9, the full 218 byte record, plain and incompressible, 344 characters of
-// the 929 of one version 21 code. Its v2 form is 83 B for a real card and at most 187 B with every field at its limit (300
+// The worst report card as the store keeps it: format 10, the full 256 byte record, plain and incompressible, 392 characters
+// of the 929 of one version 21 code. Its v2 form is 83 B for a real card and at most 241 B with every field at its limit (322
 // characters), still one code.
 static void test_worst_card_fits_one_code() {
     static_assert(rc::kMaxRecord <= lk::kMaxRecord, "the worst card record fits one code");
     static_assert(qs::records::kMaxCardV2 <= lk::kMaxRecord, "the worst v2 card record fits one code");
-    CHECK_EQ(rc::kMaxRecord, 220u);
-    CHECK_EQ(lk::b64_len(rc::kMaxRecord), 294u);
+    CHECK_EQ(rc::kMaxRecord, 256u);
+    CHECK_EQ(lk::b64_len(rc::kMaxRecord), 342u);
     CHECK(lk::fits(qs::Type::Card, rc::kMaxRecord));
     rc::Card c = cardfx::fh22_full();
     c.n_ranges = rc::kMaxRanges;
@@ -241,12 +241,12 @@ static void test_worst_card_fits_one_code() {
     const Bytes rec = card_record(c);
     CHECK_EQ(rec.size(), rc::kMaxRecord);
     const std::string t = link_of(qs::Type::Card, rec, false, true);
-    CHECK_EQ(t.size(), 344u);
+    CHECK_EQ(t.size(), 392u);
     CHECK(t.size() <= lk::kMaxText);
-    // ... and its v2 form: 204 B worst case, 322 characters, still a version 11 code
+    // ... and its v2 form: 241 B worst case, 322 characters, still a version 11 code
     Bytes v2(qs::records::kMaxEmarker);
     const std::size_t vn = qs::records::pack_v2(qs::Type::Card, rec, v2);
-    CHECK(vn <= qs::records::kMaxCardV2);   // the bit-count bound (205 B) reserves the varint's 2-byte worst case; the packed worst card is 204 B
+    CHECK(vn <= qs::records::kMaxCardV2);   // the bit-count bound (241 B) covers the sweep block too; the packed worst card is 204 B
     CHECK_EQ(vn, 204u);
     v2.resize(vn);
     char out[lk::kMaxText + 1];
@@ -664,11 +664,12 @@ static void test_golden() {
                 CHECK(rec == gs[i].raw);
             }
         }
-        // And it is one QR symbol of version 11 or less (a card link grew to 322 characters with v8: version 12 is allowed there).
-        static qr::Workspace w;
-        const int n = qr::encode_text(t.c_str(), w, qr::kMaxVersion);
-        CHECK(n >= 21 && n <= (gs[i].type == qs::Type::Card ? 65 : 61));
-        const qrdec::Result q = qrdec::decode(n, [&](int x, int y) { return qr::dark(w, x, y); });
+        // And it is one QR symbol the link encoder allows (a card link grew to 392 characters with v10: version 13;
+        // lk::kMaxVersion is the cap, the share view reads it, qrview.hpp).
+        static std::vector<std::uint8_t> code(qr::buf_len_for(lk::kMaxVersion)), temp(qr::buf_len_for(lk::kMaxVersion));
+        const int n = qr::encode_version(t, code.data(), temp.data(), qr::buf_len_for(lk::kMaxVersion), lk::kMaxVersion);
+        CHECK(n >= 21 && n <= lk::kMaxVersion * 4 + 17);
+        const qrdec::Result q = qrdec::decode(n, [&](int x, int y) { return qr::dark_code(code.data(), x, y); });
         CHECK(q.ok);
         CHECK(q.text == t);
     }

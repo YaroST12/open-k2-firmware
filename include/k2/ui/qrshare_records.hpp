@@ -108,7 +108,8 @@ consteval std::size_t card_v2_worst_bits() {
     b += 16 + 16 + 24 + 16;                                 // times varint, last_boots, last_uptime_s, crc16
     b += 16;                                                // the v8 rebalanced varint (worst case 2 bytes)
     b += 1 + report_card::kMaxRanges * report_card::kSpreadLevels * 8;   // v9: the spread presence bit + 16 int8 bytes
-    return b;                                               // 1635 bits
+    b += 1 + report_card::kMaxRanges * report_card::kSweepBytes * 8;     // v10: the sweep presence bit + 4 x 9 bytes
+    return b;                                               // 1924 bits
 }
 consteval std::size_t emk_v2_worst_bits() {
     std::size_t b = 8 + 5 + 24 * 7 + 8;                     // schema, name, flags
@@ -117,8 +118,8 @@ consteval std::size_t emk_v2_worst_bits() {
     b += emk_quirk::kMaxRows * (2 + 2 + 2 + 3 + 1 + 32 + 32 + 2 * 64 + 6 * 32);   // rows, full mask
     return b;                                               // 3665 bits
 }
-inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 205 B
+inline constexpr std::size_t kMaxCardV2 = (card_v2_worst_bits() + 7) / 8;   // 241 B
 inline constexpr std::size_t kMaxEmkV2 = (emk_v2_worst_bits() + 7) / 8;     // 459 B
-static_assert(kMaxCardV2 == 205 && kMaxEmkV2 == 459);
+static_assert(kMaxCardV2 == 241 && kMaxEmkV2 == 459);
 
 }  // namespace k2::qrshare::records

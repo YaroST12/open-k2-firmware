@@ -68,6 +68,14 @@ std::size_t render_json(const Card& c, std::span<char> out) {
                 t.put("]");
             }
         }
+        if (c.format >= 10 && c.sweep[i].peak_dv) {   // v10: the deep sweep of this APDO (key only when it ran)
+            const auto& w = c.sweep[i];
+            t.put(",\"sweep\":{\"min_mv\":%d,\"max_mv\":%d,\"worst_mv\":%d,\"worst_at_mv\":%u,\"peak_mv\":%u,\"peak_at_mv\":%u",
+                  int(w.min_err), int(w.max_err), int(w.worst_err), unsigned(w.worst_dv) * 100u,
+                  unsigned(w.peak_dv) * 100u, unsigned(w.peak_at_dv) * 100u);
+            if (w.fold_dv) t.put(",\"fold_mv\":%u,\"fold_from_mv\":%u", unsigned(w.fold_dv) * 100u, unsigned(w.fold_from_dv) * 100u);
+            t.put("}");
+        }
         t.put("}");
     }
     t.put("]");

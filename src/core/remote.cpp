@@ -210,6 +210,13 @@ remote::Status Remote::charger_units(std::span<const uint8_t> units) {
     return ui_.charger_test_set_units(units) ? remote::Status::Ok : remote::Status::BadArg;
 }
 
+remote::Status Remote::charger_sweep(bool on) {
+    if (ui_.charger_test_busy()) return remote::Status::Busy;
+    K2LOG("[TEST] deep sweep %s\n", on ? "on" : "off");
+    ui_.charger_test_set_sweep(on);
+    return remote::Status::Ok;
+}
+
 remote::ChargerCableReply Remote::charger_cable(const ctcable::Choice* set) {
     remote::ChargerCableReply r;
     if (set) {

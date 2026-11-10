@@ -12,6 +12,7 @@ APDO: top voltage at the APDO's whole current, clamped to the cable, so 5 A at m
 
 PLAN_ROW_MA = 1000   # a plan row requests at most this, except the full-current PPS row (include/k2/chargertest/charger_test.hpp kPlanRowMa)
 HUNT_MA = 5000       # above it the row is a hunt (Mi) probe: the cable ceiling, the most a plan row can ask
+SWEEP_DETAIL = 161   # Step.detail of a deep-sweep row (kDetailSweep): one row per APDO, the points live in the sweep record
 _PD_FAMILY = ("pd2-fixed", "pd3x-fixed", "pps")
 _REVISIONS = {"pd3.0-revision": "PD3.0 rev", "pd3.1-revision": "PD3.1 rev", "pd3.2-revision": "PD3.2 rev"}
 # Legacy and vendor modes: the group word. The wire says "vooc-5v-handshake" for the VOOC family; the 5 V is the row's target.
@@ -29,6 +30,11 @@ def milli(v):
 
 def is_hunt(s):
     return s["protocol"] in _PD_FAMILY and s.get("request_ma", 0) > HUNT_MA
+
+
+def is_sweep(s):
+    """The deep-sweep row: a PD programmable row whose detail is kDetailSweep (the marker survives the verdict)."""
+    return s["protocol"] in _PROGRAMMABLE and s.get("detail") == SWEEP_DETAIL
 
 
 def is_full_current(s):
@@ -99,7 +105,14 @@ def params(s, prev=None, amps=True):
 
 
 def label(s, prev=None):
-    """protocol + ' ' + params ('PPS 20V 5A'), the bare protocol when there are no params."""
+    """protocol + ' ' + params ('PPS 20V 5A'), the bare protocol when there are no params. A deep-sweep row names the
+    APDO's whole range, not its first point: 'PPS sweep 5-21V'."""
+    if is_sweep(s):
+        raw = s.get("raw_pdo", 0)
+        if raw >> 30 == 3 and (raw >> 28) & 3 == 0:   # a PPS APDO: min V at bits 8-15, max V at 17-24, 100 mV units
+            lo, hi = ((raw >> 8) & 0xFF) * 100, ((raw >> 17) & 0xFF) * 100
+            return f"PPS sweep {milli(lo)}-{milli(hi)}V"
+        return "PPS sweep"
     p = params(s, prev)
     return protocol(s) + (" " + p if p else "")
 

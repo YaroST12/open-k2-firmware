@@ -41,6 +41,10 @@
 //      formats decode as times = 1 (their bytes at 190.. are a CRC and padding, never read).
 //  198 spread (format v9 only): 4 ranges x 4 levels of int8 mV - the setpoint error (measured - target) of each passed level of an
 //      APDO, sorted low to high, -128 = no level there. Older formats decode with no spread.
+//  214 sweep (format v10 only): 4 ranges x 9 bytes - the deep sweep of that APDO (ROADMAP "PPS deep sweep"): int8 min / max /
+//      worst error (mV, measured - setpoint) in bytes 0..2, then 45 bits in bytes 3..8: worst_dv | peak_dv<<9 | peak_at_dv<<18 |
+//      fold_dv<<27 | fold_from_dv<<36, all in 100 mV units (0 = none; an all-zero block = no sweep on the range). Older
+//      formats decode with no sweep.
 //
 // A re-run that gives the same results is counted, not stored (same_results, fold_repeat; the store applies them): the card keeps its
 // rows, runs goes up (the charger was tested again), times goes up and last_* name the newest run. Two runs are "the same" when
@@ -79,7 +83,7 @@ inline constexpr unsigned kNameMax = 20;
 inline constexpr unsigned kReasonCount = unsigned(ct::Reason::StepResolution) + 1;   // 47 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
-inline constexpr uint8_t kFormat = 9;   // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread
+inline constexpr uint8_t kFormat = 10;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range
 inline constexpr unsigned kMaxUfcs = 4;
 
 // Card verdict of one protocol group: None = the group was not part of the run.
@@ -189,6 +193,14 @@ struct Card {
     // V9: the setpoint error in mV (measured - target, saturated to +-127) of each passed level of the range, sorted low to
     // high; kSpreadNone in the slots past the levels the run reached. Indexed like `range`.
     std::array<std::array<int8_t, kSpreadLevels>, kMaxRanges> spread = spread_none();
+    // V10: the deep sweep of each range (the PPS deep sweep): the error summary over the recorded points and the peak /
+    // fold-back levels, in 100 mV units (0 = none). All zero = no sweep on that range (older formats decode to that).
+    struct SweepSum {
+        int8_t min_err = 0, max_err = 0, worst_err = 0;   // mV, measured - setpoint
+        uint16_t worst_dv = 0, peak_dv = 0, peak_at_dv = 0, fold_dv = 0, fold_from_dv = 0;   // 100 mV, 0 = none
+        bool operator==(const SweepSum&) const = default;
+    };
+    std::array<SweepSum, kMaxRanges> sweep{};
     std::array<EprLevel, kEprLevels> epr{};   // per-EPR-level verdicts (v4 only; older cards decode to all GV::None)
     std::array<UfcsRange, kMaxUfcs> ufcs{};   // the charger's UFCS modes, planner order, unused slots last (v6 only; see ufcs_modes())
     Cable cable{};             // the cable of the run (v5 only; older cards decode to an empty cable)
@@ -216,7 +228,7 @@ struct Card {
     }
     bool operator==(const Card& o) const {
         return id == o.id && num_pdos == o.num_pdos && spec_rev == o.spec_rev && ev_flags == o.ev_flags && group == o.group &&
-               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && spread == o.spread && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && rebalanced == o.rebalanced && src_flags == o.src_flags && format == o.format &&
+               n_ranges == o.n_ranges && pd_ma == o.pd_ma && range == o.range && spread == o.spread && sweep == o.sweep && epr == o.epr && ufcs == o.ufcs && cable == o.cable && resumed == o.resumed && rebalanced == o.rebalanced && src_flags == o.src_flags && format == o.format &&
                handover == o.handover && handover_ds == o.handover_ds &&
                state == o.state && reason == o.reason && fw == o.fw && boots == o.boots && uptime_s == o.uptime_s &&
                card_no == o.card_no && runs == o.runs && times == o.times && last_boots == o.last_boots && last_uptime_s == o.last_uptime_s && std::memcmp(name, o.name, sizeof name) == 0 && name_auto == o.name_auto;
@@ -692,7 +704,8 @@ inline void migrate_to_current(Card& c) { if (c.format < kFormat) c.format = kFo
 // Fills `c` with the card of a finished run. The out-param form is for the one stack-gated caller
 // (ChargerTestSession::save_card): returning a Card by value puts a second Card on that frame.
 inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
-                       ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0) {
+                       ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0,
+                       ctsweep::View sweep = {}) {
     c.id = id; c.num_pdos = ev.num_pdos; c.spec_rev = ev.wire_rev; c.ev_flags = ev.flags; c.cable = cable; c.resumed = resumed;
     c.rebalanced = ev.rebalanced;   // v8: the source's mid-run re-balance count goes on the shared card
     c.src_flags = uint8_t(((ev.seen & ct::SeenOppoSvid) ? kSrcOppoSvid : 0) | (std::min<unsigned>(ev.scp_ma / 50u, 127u) << 1));
@@ -822,6 +835,18 @@ inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evide
             for (unsigned k = 0; k < kSpreadLevels; ++k)
                 c.spread[i][k] = k < n_lvl[i] ? int8_t(std::clamp(lvl[i][k].second, -127, 127)) : kSpreadNone;
     }
+    // V10: the deep-sweep summary of each range, from the runner's sweep record (matched by algorithm + PDO slot)
+    for (unsigned i = 0; i < c.n_ranges && i < kMaxRanges; ++i) {
+        const auto* rw = sweep.find(c.range[i].alg, c.range[i].pos);
+        if (!rw) continue;
+        const auto& sm = rw->sum;
+        auto& w = c.sweep[i];
+        w = {int8_t(std::clamp(int(sm.min_err), -127, 127)), int8_t(std::clamp(int(sm.max_err), -127, 127)),
+             int8_t(std::clamp(int(sm.worst_err), -127, 127)),
+             uint16_t(std::min<unsigned>(sm.worst_mv / 100u, 511u)), uint16_t(std::min<unsigned>(sm.peak_mv / 100u, 511u)),
+             uint16_t(std::min<unsigned>(sm.peak_at_mv / 100u, 511u)), uint16_t(std::min<unsigned>(sm.fold_mv / 100u, 511u)),
+             uint16_t(std::min<unsigned>(sm.fold_from_mv / 100u, 511u))};
+    }
     for (unsigned g = 0; g < kGroups; ++g) {
         GroupResult& r = c.group[g];
         r.verdict = fails[g] ? GV::Fail : no_response[g] ? GV::Skip : passes[g] ? GV::Pass : skips[g] ? GV::Skip : GV::None;
@@ -832,9 +857,9 @@ inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evide
 }
 
 inline Card build(std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
-                  ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0) {
+                  ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0, ctsweep::View sweep = {}) {
     Card c;
-    build_into(c, steps, ev, h, id, cx, state, reason, cable, resumed);
+    build_into(c, steps, ev, h, id, cx, state, reason, cable, resumed, sweep);
     return c;
 }
 
@@ -850,8 +875,10 @@ inline constexpr unsigned kUfcs = kCable + 16;                           // 178:
 inline constexpr unsigned kRepeat = kUfcs + 3 * kMaxUfcs;                // 190: v7 repeat block, 6 bytes
 inline constexpr unsigned kV8 = kRepeat + 6;                             // 196: v8 block, 2 bytes (rebalanced u8 + spare)
 inline constexpr unsigned kV9 = kV8 + 2;                               // 198: v9 spread block, kMaxRanges * kSpreadLevels bytes
+inline constexpr unsigned kV10 = kV9 + kMaxRanges * kSpreadLevels;    // 214: v10 deep-sweep summary, kMaxRanges * 9 bytes
 }  // namespace off
-inline constexpr unsigned kPayload = off::kV9 + kMaxRanges * kSpreadLevels;   // 214 (v8 cards are 198: their CRC/padding sits in the spread bytes and is not read)
+inline constexpr unsigned kSweepBytes = 9;   // v10 per range: int8 min/max/worst error, then 5 x 9-bit 100 mV fields in 6 bytes
+inline constexpr unsigned kPayload = off::kV10 + kMaxRanges * kSweepBytes;   // 250 (v9 cards are 214: their CRC/padding sits in the sweep bytes and is not read)
 inline constexpr uint8_t kFlagNameAuto = 1;
 inline constexpr unsigned kRecordOverhead = 6, kMaxRecord = kRecordOverhead + kPayload;
 static_assert(kPayload % 2 == 0 && kPayload <= 250);
@@ -927,12 +954,22 @@ inline size_t encode_card(std::span<uint8_t> out, const Card& c) {
     for (unsigned i = 0; i < kMaxRanges; ++i)
         for (unsigned k = 0; k < kSpreadLevels; ++k)
             p[off::kV9 + kSpreadLevels * i + k] = uint8_t(c.spread[i][k]);
+    // V10: the deep-sweep summary per range: int8 min/max/worst error, then the five 100 mV fields packed in 6 bytes
+    for (unsigned i = 0; i < kMaxRanges; ++i) {
+        uint8_t* q = p + off::kV10 + kSweepBytes * i;
+        const auto& w = c.sweep[i];
+        q[0] = uint8_t(w.min_err); q[1] = uint8_t(w.max_err); q[2] = uint8_t(w.worst_err);
+        const uint64_t v = uint64_t(std::min<unsigned>(w.worst_dv, 511u)) | uint64_t(std::min<unsigned>(w.peak_dv, 511u)) << 9 |
+                           uint64_t(std::min<unsigned>(w.peak_at_dv, 511u)) << 18 | uint64_t(std::min<unsigned>(w.fold_dv, 511u)) << 27 |
+                           uint64_t(std::min<unsigned>(w.fold_from_dv, 511u)) << 36;
+        for (unsigned k = 0; k < 6; ++k) q[3 + k] = uint8_t(v >> (8 * k));
+    }
     put16(b + 4 + kPayload, bbstore::crc16(0xFFFF, {b, 4 + kPayload}));
     return kMaxRecord;
 }
 
 // Parses a payload (the bytes after the 4 byte record header). False on a wrong length or an out of range field.
-// Any even payload from 144 (v3) to kPayload (v9) is accepted; a v7/v8 payload's trailing bytes are the CRC/padding of
+// Any even payload from 144 (v3) to kPayload (v10) is accepted; an older payload's trailing bytes are the CRC/padding of
 // the shorter record and are not read.
 inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
     using namespace detail;
@@ -1008,10 +1045,20 @@ inline bool decode_card(std::span<const uint8_t> payload, Card& c) {
     // V8: the re-balance count; a v7 payload has no such byte (its CRC/padding sits there and is not read)
     if (p[33] >= 8 && payload.size() >= off::kV8 + 1) d.rebalanced = p[off::kV8];
     // V9: the per-level setpoint-error spread; older payloads end before it (their CRC/padding is not read)
-    if (p[33] >= 9 && payload.size() >= kPayload)
+    if (p[33] >= 9 && payload.size() >= off::kV9 + kMaxRanges * kSpreadLevels)
         for (unsigned i = 0; i < kMaxRanges; ++i)
             for (unsigned k = 0; k < kSpreadLevels; ++k)
                 d.spread[i][k] = int8_t(p[off::kV9 + kSpreadLevels * i + k]);
+    // V10: the deep-sweep summary per range; v9 payloads end before it (their CRC/padding is not read)
+    if (p[33] >= 10 && payload.size() >= kPayload)
+        for (unsigned i = 0; i < kMaxRanges; ++i) {
+            const uint8_t* q = p + off::kV10 + kSweepBytes * i;
+            uint64_t v = 0;
+            for (unsigned k = 0; k < 6; ++k) v |= uint64_t(q[3 + k]) << (8 * k);
+            d.sweep[i] = {int8_t(q[0]), int8_t(q[1]), int8_t(q[2]),
+                          uint16_t(v & 0x1FFu), uint16_t(v >> 9 & 0x1FFu), uint16_t(v >> 18 & 0x1FFu),
+                          uint16_t(v >> 27 & 0x1FFu), uint16_t(v >> 36 & 0x1FFu)};
+        }
     c = d;
     return true;
 }

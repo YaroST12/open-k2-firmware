@@ -196,6 +196,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--wait", type=float, default=300)
     ap.add_argument("--path")
+    ap.add_argument("--sweep", action="store_true",
+                    help="also run the PPS deep sweep (opt-in: every 100 mV across each PPS APDO, 1 A; never in a preset)")
     ap.add_argument("--units", default="",
                     help="run only these test units, in this order, e.g. qc2,qc3 or pd,qc2 (names: " + ", ".join(kr.TEST_UNITS) +
                          "); default = the full order: vendor modes, PD, QC/UFCS")
@@ -232,6 +234,9 @@ def main(argv=None):
             print("\n".join(w.log))
             print("could not reach Review START", file=sys.stderr)
             return 1
+        if a.sweep:
+            kr.charger_sweep(link, True)
+            print("deep sweep: on (every 100 mV per PPS APDO, 1 A)", file=sys.stderr)
         if units:
             try:    # the list serves the next START only; the firmware refuses it while a run is active
                 kr.charger_units(link, units)

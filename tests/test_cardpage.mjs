@@ -260,7 +260,7 @@ test("bad fragments say what is wrong", () => {
   flipped[20] ^= 1;
   assert.equal(code(BASE + "1c." + toB64url(flipped)), "bad-crc");
   const newer = payloadOf("fh22");
-  newer[33] = 10;   // one past format 9
+  newer[33] = 11;   // one past format 10
   assert.equal(code(BASE + "1c." + toB64url(recordOf(newer))), "newer-card");
 });
 

@@ -10,14 +10,16 @@ The name tables mirror src/chargertest/charger_test.cpp; tests/test_report_card_
 import json
 import sys
 
-PAYLOAD = 198   # v8 size, kept for the QR expand path; v9 cards are 214
+PAYLOAD = 198   # v8 size, kept for the QR expand path; v9 cards are 214, v10 250
 PAYLOAD_V9 = 214   # v9: + the 16-byte spread block at V9_AT
+PAYLOAD_V10 = 250   # v10: + the 36-byte deep-sweep summary at V10_AT
 PAYLOAD_V7 = 196
 PAYLOAD_V6 = 190
 UFCS_AT = 178   # v6: 4 modes of u24 (lo_dv 8 bits, hi_dv 9 bits, current in 50 mA units 7 bits); hi_dv 0 = unused slot
 REPEAT_AT = 190   # v7: times u8, last_boots u16, last_uptime_s u24 (a v6 payload has its CRC here: read only when b[33] >= 7)
 V8_AT = 196     # v8: rebalanced u8 + spare (a v7 payload ends at 196: its CRC sits here and is not read)
 V9_AT = 198     # v9: 4 ranges x 4 levels of int8 mV setpoint error, -128 = none (a v8 payload ends at 198: its CRC is not read)
+V10_AT = 214    # v10: 4 ranges x 9 bytes deep-sweep summary (int8 min/max/worst mV, then 5 x 9-bit 100 mV fields in 6 bytes)
 MAX_UFCS = 4
 ALGORITHMS = ["PD2.0 fixed", "PD3.x fixed", "PD3.1+ EPR", "PD3.2+ SPR AVS", "PPS (PD3.x)",
               "QC2", "QC3", "QC3+", "AFC", "FCP", "SCP", "VOOC 5V handshake", "SVOOC 5V handshake",
@@ -54,7 +56,7 @@ EPR_DETAILS = {136: "EPR: entry refused", 137: "EPR: source rejects cable", 138:
                153: "EPR offered; entry: unable now", 154: "EPR offered; entry: 5V PDO lacks EPR bit",
                155: "not unlocked (no OEM chain)", 156: "not unlocked (chain unfinished)", 157: "not unlocked (3 A cable)",
                158: "not unlocked (vendor not accepted)", 159: "not unlocked (source reset)"}
-FORMAT = 9   # payload byte 33: 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT
+FORMAT = 10   # payload byte 33: 0 = first cards (u16 mV max, plain detail), 1 = 9+9 bit 100 mV voltages, 6 bit detail, ... 7 = repeat counter, 8 = + the re-balance count at V8_AT, 9 = + the spread block at V9_AT, 10 = + the deep-sweep summary at V10_AT
              # 2 = byte 54 pdp_w and byte 55 flags (bit0 name_auto),
              # 3 = range lo bits 9..15 = APDO max current (50 mA), flags bits 1..7 = highest fixed PDO current (50 mA),
              # 4 = per-EPR-level verdicts (3 entries of 6 bytes: u16 dv + 4-byte group packing),
@@ -126,8 +128,8 @@ def qc_label(vid, pdp_w, ranges, cable_ma=0):
 def decode(b):
     """Payload bytes -> card dict (key order and omissions as in the C++ renderer)."""
     b = bytes(b)
-    if len(b) not in (144, 162, 178, PAYLOAD_V6, PAYLOAD_V7, PAYLOAD, PAYLOAD_V9):   # accept v3 (144), v4 (162), v5 (178), v6 (190), v7 (196), v8 (198) and v9 (214) payloads
-        raise BadCard(f"card payload is {len(b)} bytes, expected 144, 162, 178, {PAYLOAD_V6}, {PAYLOAD_V7}, {PAYLOAD} or {PAYLOAD_V9}")
+    if len(b) not in (144, 162, 178, PAYLOAD_V6, PAYLOAD_V7, PAYLOAD, PAYLOAD_V9, PAYLOAD_V10):   # accept v3..v10 payloads
+        raise BadCard(f"card payload is {len(b)} bytes, expected 144, 162, 178, {PAYLOAD_V6}, {PAYLOAD_V7}, {PAYLOAD}, {PAYLOAD_V9} or {PAYLOAD_V10}")
     if b[33] > FORMAT:
         raise BadCard("card format is newer than this decoder")
     if b[28] >= len(HANDOVER) or b[29] >= len(STATES) or b[30] >= len(REASONS) or b[31] > MAX_RANGES:
@@ -179,6 +181,20 @@ def decode(b):
                 errs.append(e - 256 if e > 127 else e)
             if errs:
                 r["err_mv"] = errs
+        if b[33] >= 10 and len(b) >= PAYLOAD_V10:   # v10: the deep sweep of this APDO (all-zero block = none)
+            q = V10_AT + 9 * i
+            v = int.from_bytes(b[q + 3:q + 9], "little")
+            peak_dv = v >> 9 & 0x1FF
+            if peak_dv:
+                sw = {"min_mv": b[q] - 256 if b[q] > 127 else b[q],
+                      "max_mv": b[q + 1] - 256 if b[q + 1] > 127 else b[q + 1],
+                      "worst_mv": b[q + 2] - 256 if b[q + 2] > 127 else b[q + 2],
+                      "worst_at_mv": (v & 0x1FF) * 100, "peak_mv": peak_dv * 100, "peak_at_mv": (v >> 18 & 0x1FF) * 100}
+                fold_dv, fold_from_dv = v >> 27 & 0x1FF, v >> 36 & 0x1FF
+                if fold_dv:
+                    sw["fold_mv"] = fold_dv * 100
+                    sw["fold_from_mv"] = fold_from_dv * 100
+                r["sweep"] = sw
         ranges.append(r)
     # V4: per-EPR-level verdicts
     epr_levels = {}
@@ -261,6 +277,26 @@ def decode(b):
 def dumps(card):
     """The same compact text the firmware renders (no spaces after , and :)."""
     return json.dumps(card, separators=(",", ":"), ensure_ascii=False)
+
+
+def _mv2(mv):
+    """One mV value at 10 mV resolution with one or two decimals: 19748 -> '19.75', 19900 -> '19.9', 20000 -> '20.0'."""
+    r = (mv + 5) // 10 * 10
+    frac = (r // 10) % 100
+    if frac % 10:
+        return f"{r // 1000}.{frac // 10}{frac % 10}"
+    return f"{r // 1000}.{frac // 10}"
+
+
+def sweep_text(sw):
+    """A range's sweep dict -> the summary line: 'peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V'
+    (the FH22 shape); 'peak 21.0 V at 21.0 V' without a fold-back. Mirrors ctsweep::format_summary."""
+    if not sw or not sw.get("peak_mv"):
+        return "no points"
+    t = f"peak {_mv2(sw['peak_mv'])} V at {_mv2(sw['peak_at_mv'])} V"
+    if sw.get("fold_mv"):
+        t += f", folds back to {_mv2(sw['fold_mv'])} V from {_mv2(sw['fold_from_mv'])} V"
+    return t
 
 
 if __name__ == "__main__":

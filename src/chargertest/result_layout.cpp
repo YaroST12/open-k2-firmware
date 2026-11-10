@@ -153,10 +153,10 @@ void fixed_row(Builder& b, std::span<const ct::Step> s, A a) {
 // sample them. The chip text stays the advertised range: reach() says how far the source got.
 void range_row(Builder& b, std::span<const ct::Step> s, A a, uint8_t pos) {
     for (const auto& x : s) {
-        if (x.algorithm != a || !x.pdo || x.hunt || x.pos != pos) continue;
+        if (x.algorithm != a || !x.pdo || x.hunt || ct::is_sweep(x) || x.pos != pos) continue;
         Tally t;
         for (const auto& y : s)
-            if (y.algorithm == a && y.pos == pos && !y.hunt) count(t, y);   // a 6 A probe is a row of its own (probe_row)
+            if (y.algorithm == a && y.pos == pos && !y.hunt && !ct::is_sweep(y)) count(t, y);   // probes and sweep rows are rows of their own
         const Tone tn = roll_up(t);
         Token* k = b.token(true, tn);
         if (!k) return;
@@ -208,7 +208,7 @@ Reach reach_of(std::span<const ct::Step> s, A a, uint8_t pos) {
     Tally t;
     bool needs_load = false;
     for (const auto& y : s) {
-        if (y.algorithm != a || y.pos != pos || y.hunt || !y.pdo || !y.mv) continue;
+        if (y.algorithm != a || y.pos != pos || y.hunt || ct::is_sweep(y) || !y.pdo || !y.mv) continue;
         count(t, y);
         if (!r.adv_mv) r.adv_mv = uint16_t(pd::decode_pdo(y.pdo).max_mv);
         if (y.verdict == ct::Verdict::Skip && y.reason == ct::Reason::NeedsLoad) needs_load = true;
@@ -255,7 +255,7 @@ Reach reach(std::span<const ct::Step> s, A a, int pos) {
     Reach last;
     uint32_t seen = 0;   // PDO slots already looked at (slots are small: at most 15)
     for (const auto& x : s) {
-        if (x.algorithm != a || x.hunt || !x.pdo || x.pos >= 32 || (seen >> x.pos & 1)) continue;
+        if (x.algorithm != a || x.hunt || ct::is_sweep(x) || !x.pdo || x.pos >= 32 || (seen >> x.pos & 1)) continue;
         seen |= 1u << x.pos;
         last = reach_of(s, a, x.pos);
         if (last.tone != Tone::Pass) return last;   // the first range that is not clean tells the story
@@ -355,7 +355,41 @@ const char* display_name(A a) {
     }
 }
 
-void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
+// One token per volt bucket of the sweep row's range [lo, hi]: the bucket's base volt as the text, the tone of the
+// worst recorded |error| in it (<= 100 mV Pass, <= 300 mV Partial, else Fail; no point recorded yet: Pending, a skipped
+// row: Skip). The x axis is the setpoint (left to right), the colour is the error - a compact error-vs-setpoint strip.
+void sweep_row(Builder& b, std::span<const ct::Step> s, const ctsweep::View& v, A a, uint8_t pos, unsigned cap_mv) {
+    // The row's planned range: the record's row view when the row ran (or runs), else the step's own APDO range.
+    const ct::Step* step = nullptr;
+    for (const auto& x : s) if (ct::is_sweep(x) && x.algorithm == a && x.pos == pos) { step = &x; break; }
+    if (!step) return;
+    const auto p = pd::decode_pdo(step->pdo);
+    const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap_mv);
+    unsigned lo = pr.lo, hi = pr.hi;
+    const ctsweep::RowView* rw = v.find(uint8_t(a), pos);
+    if (rw) { lo = rw->lo_mv; hi = rw->hi_mv; }
+    if (hi < lo) return;
+    const bool skipped = step->verdict == ct::Verdict::Skip;
+    for (unsigned base = lo; base <= hi; base += 1000) {
+        int worst = -1;
+        if (rw)
+            for (unsigned i = 0; i < rw->n; ++i) {
+                const unsigned set = rw->lo_mv + i * ctsweep::kStepMv;
+                if (set < base || set >= base + 1000) continue;
+                const int e = std::abs(int(v.points[rw->first + i]));
+                if (e > worst) worst = e;
+            }
+        const Tone tn = skipped ? Tone::Skip : worst < 0 ? Tone::Pending : worst <= 100 ? Tone::Pass : worst <= 300 ? Tone::Partial : Tone::Fail;
+        Token* k = b.token(true, tn);
+        if (!k) return;
+        k->mv = uint16_t(base);
+        Out o{k->text, sizeof k->text};
+        o.num(base / 1000);
+        o.put("V");
+    }
+}
+
+void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem, const ctsweep::View& sweep) {
     // Reset in place: `l = {}` builds a whole Layout on the stack first (about 2 KB, over the frame limit).
     for (Token& k : l.tokens) k = {};
     for (Row& r : l.rows) r = {};
@@ -367,18 +401,20 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
     // rows; a range algorithm groups per APDO slot, so a probe the planner runs between two APDOs lands between their
     // rows), or the 6 A probes of one level (every hunt step at that voltage): a probe is a row of its own, wherever the
     // planner put it (between the PPS rows, or after the fixed ones), and it moves with the plan when a re-plan regrows the rows.
-    // Key::mv carries the probed level of a probe key, the PDO slot of a range key, else 0.
-    struct Key { A a; bool probe; uint16_t mv; };
+    // Key::mv carries the probed level of a probe key, the PDO slot of a range or sweep key, else 0; sweep marks a
+    // deep-sweep key (one strip row per APDO, next to the APDO's range row).
+    struct Key { A a; bool probe; bool sweep; uint16_t mv; };
     Key keys[unsigned(A::Count) + 2 * pd::kMaxPdos + 4];   // worst case: every algorithm, both lists' PDO slots, the hunt levels
     size_t key_n = 0;
     bool absent[unsigned(A::Count)] = {}, skipped[unsigned(A::Count)] = {}, range_none[unsigned(A::Count)] = {};
     bool any_probe = false;
     for (const auto& s : steps) {
         if (is_revision(s.algorithm)) continue;
-        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt,
+        const Key k{s.hunt ? A::Count : s.algorithm, s.hunt, ct::is_sweep(s),
                     s.hunt ? s.mv : uint16_t(is_range(s.algorithm) ? s.pos : 0)};
         bool seen = false;
-        for (size_t i = 0; i < key_n && !seen; ++i) seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].mv == k.mv;
+        for (size_t i = 0; i < key_n && !seen; ++i)
+            seen = keys[i].a == k.a && keys[i].probe == k.probe && keys[i].sweep == k.sweep && keys[i].mv == k.mv;
         if (seen || key_n == std::size(keys)) continue;
         keys[key_n++] = k;
         any_probe |= k.probe;
@@ -419,6 +455,12 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
     auto rows_for = [&](Run run) {
         for (const Key& key : run) {
             if (key.probe) { probe_row(key.mv); continue; }
+            if (key.sweep) {   // the deep sweep's strip row, right after its APDO's range row (the plan emits it there)
+                b.begin("Sweep", Tone::Dim, key.a);
+                if (b.row) { b.row->sweep = true; b.row->pos = uint8_t(key.mv); }
+                sweep_row(b, steps, sweep, key.a, uint8_t(key.mv), oem.monitor_mv);
+                continue;
+            }
             const A a = key.a;
             const bool legacy = ct::group(a) != ct::Group::Pd;
             if (is_absent(steps, a)) {
@@ -537,7 +579,8 @@ void build(Layout& l, std::span<const ct::Step> steps, const OemNotes& oem) {
 bool row_has(const Row& r, const ct::Step& s) {
     if (r.header) return false;
     if (r.probe) return s.hunt && s.mv == r.mv;
-    if (s.hunt || r.algorithm != s.algorithm) return false;
+    if (r.sweep) return ct::is_sweep(s) && s.pos == r.pos;   // the strip row owns its APDO's sweep step
+    if (s.hunt || ct::is_sweep(s) || r.algorithm != s.algorithm) return false;
     return !is_range(r.algorithm) || s.pos == r.pos;   // one row per APDO: a range row owns only its slot's steps
 }
 
@@ -574,7 +617,7 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
     Best best[unsigned(Fam::Count)];
     for (const auto& x : steps) {
         const Fam f = family_of(x);
-        if (f == Fam::Count || x.verdict != ct::Verdict::Pass || is_revision(x.algorithm)) continue;
+        if (f == Fam::Count || x.verdict != ct::Verdict::Pass || is_revision(x.algorithm) || ct::is_sweep(x)) continue;
         if (x.algorithm == A::Qc3Plus && is_no_qc3plus(steps, A::Qc3Plus)) continue;   // the 5 V baseline of a charger without QC3+
         const bool pd = f == Fam::Pd;
         const unsigned ma = pd || x.hunt ? rank_ma(x) : 0;

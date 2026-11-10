@@ -442,6 +442,8 @@
   "439": "[LINK] cc cross=%s cc1=%u cc2=%u\n",
   "440": "[FUSB302] Idle wake: no Rp on CC%u after %u dwells, Rd released for %u ms to re-read the open levels (now cc1=%d cc2=%d mV)\n",
   "441": "[FUSB302] Detach: the wake's attach on CC%u ends with the setting\n",
+  "448": "[SWEEP] PDO%u %u..%umV %u pts %s %s: %.*s\n",
+  "449": "[TEST] deep sweep %s\n",
   "451": "[ID] alone attach released: Rd off\n",
   "452": "[ID] Identify refused (inline: an inline K2 never transmits)\n",
   "453": "[ID] Identify refused (no CC: nothing to ask)\n",

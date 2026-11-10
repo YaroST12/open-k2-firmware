@@ -11,7 +11,7 @@ var K2Proto = (function () {
   var DFU_MAGIC = [0x44, 0x46, 0x55, 0x21];   // "DFU!", u32 0x21554644 little endian (kDfuMagic)
   var FACTORY_WIPE_MAGIC = [0x57, 0x49, 0x50, 0x45];   // "WIPE", u32 0x45504957 little endian (kFactoryWipeMagic)
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
-              REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
+              REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
               GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, EM_LIB: 0x61, CARDS: 0x62, BLACK_BOX: 0x70, TRANS_CAP: 0x71,
               IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
@@ -715,11 +715,12 @@ var K2Proto = (function () {
     emOk((await this.link.call(CMD.EM_LIB, b)).payload, "emarker rename");
     return this.emGet(seq);
   };
-  // Charger report cards (command 0x62), read-only here; rename and delete live in k2_remote.py cards. A card is
-  // 162 bytes (v4) read as four 48 byte chunks (include/k2/chargertest/report_card.hpp, tools/report_card.py decodes all of it).
+  // Charger report cards (command 0x62), read-only here; rename and delete live in k2_remote.py cards. A card's
+  // payload grew with the formats (162 bytes in v4, 214 in v9, 250 in v10) and is read as 48 byte chunks
+  // (include/k2/chargertest/report_card.hpp; tools/report_card.py and docs/site/r/card.js decode all of it).
   var CARD_STATES = ["Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Attach charger"];
   var CARD_ERRS = ["ok", "invalid", "not found", "flash error", "full", "a charger test is running"];
-  var CARD_CHUNKS = 4;   // v4: 162 bytes / 48 = 3.375 -> 4 chunks
+  var CARD_CHUNKS = 6;   // v10: 250 bytes / 48 = 5.2 -> 6 chunks (the summary below only reads the header, older firmwares send fewer)
   function cardsOk(p, what) {
     need(p, 1, what);
     if (p[0]) {
@@ -732,7 +733,7 @@ var K2Proto = (function () {
   function u32(p, i) { return (p[i] | (p[i + 1] << 8) | (p[i + 2] << 16) | (p[i + 3] << 24)) >>> 0; }
   // The header and the verdict counts of one card payload (what the dashboard lists).
   function decodeCardSummary(b) {
-    if (b.length !== 144 && b.length !== 162 || b[29] >= CARD_STATES.length) throw new FrameError("card payload is not a valid report card: length=" + b.length);
+    if (b.length < 144 || b.length > 250 || b[29] >= CARD_STATES.length) throw new FrameError("card payload is not a valid report card: length=" + b.length);
     var n = 34; while (n < 56 && b[n]) n++;
     var cnt = { pass: 0, fail: 0, skip: 0 };
     for (var g = 0; g < 12; g++) { var v = b[56 + 4 * g] >> 6; if (v === 1) cnt.pass++; else if (v === 2) cnt.fail++; else if (v === 3) cnt.skip++; }

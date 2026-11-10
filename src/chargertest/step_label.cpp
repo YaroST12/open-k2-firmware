@@ -108,6 +108,15 @@ Text params(const ct::Step& s, const ct::Step* prev) {
 }
 
 Text label(const ct::Step& s, const ct::Step* prev) {
+    if (ct::is_sweep(s)) {   // the deep-sweep row names the APDO's whole range, not its first point ("PPS sweep 5-21V")
+        Text t;
+        Out o{t};
+        o.put("PPS sweep ");
+        const pd::Pdo p = pd::decode_pdo(s.pdo);
+        const Text r = range(p.min_mv, p.max_mv, 0);
+        o.put(r.c_str());
+        return t;
+    }
     Text t = protocol(s);
     const Text p = params(s, prev);
     Out o{t};

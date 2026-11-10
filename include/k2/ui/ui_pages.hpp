@@ -240,6 +240,10 @@ public:
     bool busy() const { return runner_.busy(); }
     const charger_test::Runner& results() const { return runner_; }
     uint32_t selection_mask() const { return options_.selected; }
+    // The PPS deep sweep's point count for the source in hand (the Tests-list line's count); 0 = no PPS APDO: the line is hidden.
+    unsigned sweep_points() const;
+    bool sweep_on() const { return options_.pps_sweep; }
+    void set_sweep(bool on) { options_.pps_sweep = on; }
     // The unit order of the next run (Cmd::ChargerUnits); empty = the default order. False for an unknown or repeated unit.
     bool set_units(std::span<const uint8_t> units);
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.
@@ -491,6 +495,7 @@ private:
     resumetext::In resume_words(uint32_t now) const { return s_.resume_words(now); }
     void abandon_run() { s_.abandon_run(); }
     charger_test::Algorithm algorithm_at(int row) const { return s_.algorithm_at(row); }
+    unsigned sweep_points() const { return s_.sweep_points(); }
     int step_index(int row) const { return s_.step_index(row); }
     void share_card();
     void ok_event();

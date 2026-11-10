@@ -201,6 +201,16 @@ static std::size_t pack_card_v2(std::span<const std::uint8_t> rec, std::span<std
         for (unsigned i = 0; i < rc::kMaxRanges; ++i)
             for (unsigned k = 0; k < rc::kSpreadLevels; ++k)
                 w.put(p[rc::off::kV9 + rc::kSpreadLevels * i + k], 8);   // int8 mV, 0x80 = no level there
+    // v10: the deep-sweep summary per range, behind a presence bit so records packed before it end at the spread
+    bool has_sweep = false;
+    for (unsigned i = 0; i < rc::kMaxRanges && !has_sweep; ++i)
+        for (unsigned k = 0; k < rc::kSweepBytes; ++k)
+            has_sweep |= p[rc::off::kV10 + rc::kSweepBytes * i + k] != 0;
+    w.put(has_sweep ? 1 : 0, 1);
+    if (has_sweep)
+        for (unsigned i = 0; i < rc::kMaxRanges; ++i)
+            for (unsigned k = 0; k < rc::kSweepBytes; ++k)
+                w.put(p[rc::off::kV10 + rc::kSweepBytes * i + k], 8);
     w.put(crc16, 16);                           // the v1 record's CRC-16: the integrity check is unchanged
     return w.finish();
 }

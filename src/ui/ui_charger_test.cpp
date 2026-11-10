@@ -268,6 +268,15 @@ void ChargerTestSession::record(const ct::Step& s) {
     K2LOG("[TEST] %s PDO%u target=%umV request=%umA measured=%umV %s %s\n",
         ct::name(s.algorithm), unsigned(s.pos), unsigned(s.mv), unsigned(s.ma), unsigned(s.measured_mv),
         ct::name(s.verdict), detail_name(s));
+    // A deep-sweep row closes with its summary: the points, the peak and a fold-back ("peak 19.75 V at 19.9 V, folds
+    // back to 19.42 V from 20.0 V"); a mid-sweep loss keeps the points recorded so far.
+    if (ct::is_sweep(s))
+        if (const auto* rw = runner_.sweep_view().find(uint8_t(s.algorithm), s.pos)) {
+            char sum[64] = {};
+            const size_t n = ctsweep::format_summary(rw->sum, sum);
+            K2LOG("[SWEEP] PDO%u %u..%umV %u pts %s %s: %.*s\n", unsigned(s.pos), unsigned(rw->lo_mv), unsigned(rw->hi_mv),
+                  unsigned(rw->n), ct::name(s.verdict), ct::name(s.reason), int(n), sum);
+        }
     // What held the loop while the row was in flight: the longest main-loop iteration (1 ms when healthy) and the longest
     // gap between two UI ticks (20 ms when healthy), in ms since the row began. A big number names a blocking path.
     K2LOG("[CT] gap row=%u loop=%ums ui=%ums\n", unsigned(idx), unsigned(gap::loop.peak()), unsigned(gap::ui.peak()));
@@ -631,7 +640,8 @@ void ChargerTestSession::save_card() {
     // (format, times) come back through the default constructor.
     card_ = report_card::Card{};
     report_card::build_into(card_, runner_.steps(), runner_.evidence(), runner_.handover(), card_id_,
-                            report_card::hw::context(), runner_.state(), runner_.reason(), cable, runner_.resumed());
+                            report_card::hw::context(), runner_.state(), runner_.reason(), cable, runner_.resumed(),
+                            runner_.sweep_view());
     report_card::set_auto_name(card_, mfr_);   // "<Brand> <PDP>W"; hw::put keeps a name the user gave
     save_card_store();
 }
@@ -1047,6 +1057,7 @@ void ChargerTestSession::begin_run() {
     K2LOG("[TEST] start selected=%u units=%u -> %s\n", unsigned(options_.selected), unsigned(options_.units.n), ct::name(r));
     charger_journal::RunMeta meta;
     meta.units = options_.units;
+    meta.pps_sweep = options_.pps_sweep;   // a resumed run re-plans the sweep rows from the journaled options
     meta.unattended = self_supplied();   // the K2 runs on the measured port (pinned Rd or bus-powered): the run never detaches
     self_run_ = meta.unattended;
     meta.cable_kind = static_cast<uint8_t>(run_cable_.kind); meta.cable_seq = run_cable_.seq;
@@ -1117,7 +1128,8 @@ void ChargerTestPage::on_cable_changed() { update(ctx_.now); }
 void ChargerTestPage::build_results() {
     // Passive labels from the identity and the advertised APDOs (the same facts as the card), shown in
     // the OEM-over-PD section: the QC4+/QC5 label, a VID-driven vendor name, the Mi Turbo auth state.
-    const auto card = report_card::build(runner_.steps(), runner_.evidence(), runner_.handover(), card_id_, {}, runner_.state(), runner_.reason());
+    const auto card = report_card::build(runner_.steps(), runner_.evidence(), runner_.handover(), card_id_, {}, runner_.state(),
+                                         runner_.reason(), {}, 0, runner_.sweep_view());
     result_layout::OemNotes oem;
     oem.headers = false;   // the grid is units only: no separator rows between the sections
     oem.vendor = result_layout::vendor_oem_name(card_id_.vid);
@@ -1133,7 +1145,8 @@ void ChargerTestPage::build_results() {
         oem.qc_label = report_card::qc_label_name(label);
         oem.qc_why = justification;   // build() copies the words into tokens inside this scope
     }
-    result_layout::build(layout_, runner_.steps(), oem);
+    oem.monitor_mv = ctx_.cap_mv;
+    result_layout::build(layout_, runner_.steps(), oem, runner_.sweep_view());
     // build() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
     if (layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);
     line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
@@ -1159,7 +1172,7 @@ void ChargerTestSession::message(const char* s) {
 // The algorithm a Group row stands for (rows are 0-based: the family's own entries, nothing else).
 A ChargerTestSession::algorithm_at(int row) const {
     if (row < 0) return A::Count;
-    if (family_ == kFamPd) return row == 0 ? A::Pd3Fixed : row == 1 ? A::Pps : A::Count;
+    if (family_ == kFamPd) return row == 0 ? A::Pd3Fixed : row == 1 ? A::Pps : A::Count;   // row 2 is the deep sweep, no algorithm
     for (unsigned n = 0; n < unsigned(A::Count); ++n) {
         const auto a = static_cast<A>(n);
         if (!(kFamilies[family_] & ct::bit(a))) continue;
@@ -1176,11 +1189,23 @@ int ChargerTestSession::step_index(int row) const {
     }
     return -1;
 }
+// The deep sweep's own line in the PD family's Entries list (row 2), shown only when the source offers a PPS APDO.
+constexpr int kSweepRow = 2;
+bool sweep_row_shown(int family, int row, unsigned points) { return family == kFamPd && row == kSweepRow && points > 0; }
+
+unsigned ChargerTestSession::sweep_points() const {
+    return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv);
+}
+
 int ChargerTestPage::row_count() const {
     switch (stage_) {
     case Stage::Algorithms: return kViewRow + (runner_.run_id() ? 1 : 0);
     case Stage::Custom: return kFamilyCount + 1;   // the families, then "Done"
-    case Stage::Group: return family_ == kFamPd ? 2 : static_cast<int>(selected(kFamilies[family_]));
+    case Stage::Group: {
+        if (family_ != kFamPd) return static_cast<int>(selected(kFamilies[family_]));
+        const unsigned pts = s_.sweep_points();
+        return 2 + (pts ? 1 : 0);
+    }
     case Stage::Cable: return ctx_.cables.count();
     case Stage::Review: return 1;
     case Stage::Running: return static_cast<int>(runner_.steps().size());
@@ -1225,14 +1250,16 @@ constexpr const char *kNoteCustom = "Choose families one by one", *kNoteLast = "
                      *kNotePdFixed = "Fixed offers: SPR + EPR", *kNotePps = "PPS + SPR/EPR AVS offers",
                      *kNoteClassB = "20 V; Class A shows a skip", *kNoteUfcs = "UART 5/9/12V; needs UFCS source",
                      *kNoteVivo = "UART 5/9/11V, unproven", *kNoteHs = "5V handshake, not power",
-                     *kNoteEntry = "One entry of this family";
+                     *kNoteEntry = "One entry of this family", *kNoteSweep = "Every 100mV, 1A; opt-in";
 constexpr const char *kNotes[] = {kNoteCustom, kNoteLast, kNoteFamily, kNoteXiaomi, kNotePdFixed, kNotePps, kNoteClassB,
-                                  kNoteUfcs, kNoteVivo, kNoteHs, kNoteEntry};
+                                  kNoteUfcs, kNoteVivo, kNoteHs, kNoteEntry, kNoteSweep};
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a note is wider than the row note");
 
-// The Group page's mask for row `row` of family `fam` (the PD family has two rows: fixed offers and the PPS / AVS offers).
+// The Group page's mask for row `row` of family `fam` (the PD family has two algorithm rows - fixed offers, the PPS /
+// AVS offers - and, when the source offers a PPS APDO, a third: the deep sweep, which is an Options flag, not an
+// algorithm bit, so its mask is 0 and it is toggled by its own row).
 uint32_t group_mask(int fam, int row, A a) {
-    if (fam == kFamPd) return row == 0 ? ct::kPdFixedAlgorithms : ct::kPpsAlgorithms;
+    if (fam == kFamPd) return row == 0 ? ct::kPdFixedAlgorithms : row == 1 ? ct::kPpsAlgorithms : 0;
     return ct::bit(a);
 }
 const char *group_note(int fam, int row, A a) {
@@ -1362,6 +1389,7 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         unsigned on = 0;
         const int n = row_count();
         for (int i = 0; i < n; ++i) {
+            if (sweep_row_shown(family_, i, s_.sweep_points())) { on += options_.pps_sweep; continue; }
             const uint32_t m = group_mask(family_, i, algorithm_at(i));
             on += (options_.selected & m) == m;
         }
@@ -1419,6 +1447,21 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         const auto &row = layout_.rows[lines_[selection_].row];
         f.put(row.label).put(": ");
         if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
+        if (row.sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
+            f.put(row.label).put(": ");
+            if (const auto* rw = runner_.sweep_view().find(uint8_t(row.algorithm), row.pos); rw && rw->sum.points) {
+                char v[12] = {};
+                f.put("peak ");
+                f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
+                f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_at_mv, v))).put_char('V');
+                if (rw->sum.fold_mv) {
+                    f.put(" folds ");
+                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.fold_mv, v))).put("V@");
+                    f.put(std::string_view(v, ctsweep::format_mv(rw->sum.fold_from_mv, v))).put_char('V');
+                }
+            } else f.put("not run");
+            return FooterTone::Info;
+        }
         if (!row.probe && (ct::kPpsAlgorithms & ct::bit(row.algorithm))) {   // a range says how far the source got, not a count
             const auto rc = result_layout::reach(runner_.steps(), row.algorithm, row.pos);   // one row per APDO: its own reach
             f.put(result_layout::reach_footer(rc).c_str());
@@ -1512,6 +1555,14 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         const A a = algorithm_at(index);
         const uint32_t m = group_mask(family_, index, a);
         out.marker = kit::Marker::Check;
+        if (sweep_row_shown(family_, index, s_.sweep_points())) {   // the deep sweep's own line, with its point count
+            out.state = options_.pps_sweep;
+            out.text = "PPS sweep";
+            row_tail_.put_u32(s_.sweep_points()).put(" pts");
+            out.tail = row_tail_.view();
+            if (focused) out.note = kNoteSweep;
+            break;
+        }
         out.state = (options_.selected & m) == m;
         out.text = family_ == kFamPd ? (index == 0 ? "PD fixed" : "PPS") : ct::name(a);
         if (focused) out.note = group_note(family_, index, a);
@@ -1879,7 +1930,8 @@ void ChargerTestPage::build_running_grid() {
     result_layout::OemNotes oem;
     oem.headers = false;   // the rows are the plan's steps, in the order the runner walks them
     oem.fold = false;  // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
-    result_layout::build(layout_, runner_.steps(), oem);
+    oem.monitor_mv = ctx_.cap_mv;
+    result_layout::build(layout_, runner_.steps(), oem, runner_.sweep_view());
     line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
 }
 
@@ -2325,7 +2377,10 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         }
         break;
     case Stage::Group:
-        if (const A a = algorithm_at(selection_); a != A::Count) {
+        if (sweep_row_shown(family_, selection_, s_.sweep_points())) {   // the deep sweep's own line: an Options flag, not an algorithm bit
+            options_.pps_sweep = !options_.pps_sweep;
+            invalidate_confirmation();
+        } else if (const A a = algorithm_at(selection_); a != A::Count) {
             const uint32_t mask = group_mask(family_, selection_, a);
             options_.selected ^= (options_.selected & mask) == mask ? mask : mask & ~options_.selected;
             invalidate_confirmation();

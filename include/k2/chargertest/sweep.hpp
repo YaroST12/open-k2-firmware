@@ -48,6 +48,12 @@ constexpr unsigned point_ma(const pd::Pdo& p, unsigned mv, unsigned cable_ma) {
 // budget, APDOs in list order (the planner emits them in the same order). cap_mv = the effective ceiling already
 // clamped by the caller to the monitor ceiling and the cable's voltage limit (cable_limit_mv).
 unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv);
+// The count with the caller's monitor ceiling and cable voltage limit applied (a 20 V cable class permits the 21 V
+// PPS ceiling, as cable_limit_mv does for Pps): what the Tests-list line and the planner both use.
+inline unsigned plan_total_capped(const pd::SourceCaps& caps, unsigned monitor_cap_mv, unsigned cable_mv) {
+    const unsigned cl = cable_mv == 20000 ? 21000 : cable_mv;   // SPR PPS permits a 21 V request on a 20 V cable
+    return plan_total(caps, std::min(monitor_cap_mv, cl));
+}
 
 // The summary of one APDO's recorded points. err[i] = measured - setpoint of point i (setpoint = lo_mv + i*kStepMv),
 // so the measured level of point i is err[i] + lo_mv + i*kStepMv.
@@ -68,8 +74,10 @@ struct RowView {
     uint8_t pos = 0;        // PDO slot of the APDO
     uint8_t alg = 0;        // ct::Algorithm (Pps today, Avs when the AVS sweep lands)
     uint16_t lo_mv = 0;     // setpoint of point 0
+    uint16_t hi_mv = 0;     // last setpoint of the row's planned range (the strip spans lo..hi)
     uint16_t first = 0;     // index of point 0 in the point array
     uint16_t n = 0;         // points recorded
+    Summary sum{};          // over the n recorded points (filled when the row closes; live while it runs)
 };
 // The view the results tab and the card read: the finished rows plus the whole point array (errors, mV).
 struct View {

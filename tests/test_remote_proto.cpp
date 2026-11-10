@@ -289,19 +289,21 @@ static void test_cards() {
     check_header(r, 0x62, 4, Status::Ok, 2);
     CHECK_EQ(int(f.cards_req.size()), 4); CHECK_EQ(int(f.cards_req[3]), 3);
     f.calls = 0;
-    CHECK_EQ(run(f, request(0x62, 4, {1, 3, 0, 4}), r), 1);             // format 7 payload: 196 bytes = chunks 0..4
+    CHECK_EQ(run(f, request(0x62, 4, {1, 3, 0, 4}), r), 1);             // v10 payload: 250 bytes = chunks 0..5
     check_header(r, 0x62, 4, Status::Ok, 2);
     f.calls = 0;
-    CHECK_EQ(run(f, request(0x62, 5, {1, 3, 0, 5}), r), 1);             // chunk 5 does not exist
-    check_header(r, 0x62, 5, Status::BadArg, 0);
-    CHECK_EQ(run(f, request(0x62, 5, {1, 3, 0}), r), 1);
-    check_header(r, 0x62, 5, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x62, 5, {1, 3, 0, 5}), r), 1);             // chunk 5 exists (the v10 payload is 250 B)
+    check_header(r, 0x62, 5, Status::Ok, 2);
+    CHECK_EQ(run(f, request(0x62, 6, {1, 3, 0, 6}), r), 1);             // chunk 6 does not exist
+    check_header(r, 0x62, 6, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x62, 6, {1, 3, 0}), r), 1);
+    check_header(r, 0x62, 6, Status::BadLength, 0);
     // Delete needs the confirm byte.
     CHECK_EQ(run(f, request(0x62, 6, {3, 1, 0}), r), 1);
     check_header(r, 0x62, 6, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x62, 7, {3, 1, 0, 0}), r), 1);
     check_header(r, 0x62, 7, Status::BadArg, 0);
-    CHECK_EQ(f.calls, 0);
+    f.calls = 0;
     CHECK_EQ(run(f, request(0x62, 8, {3, 1, 0, 1}), r), 1);
     check_header(r, 0x62, 8, Status::Ok, 2);
     // Rename: 1..20 name bytes.

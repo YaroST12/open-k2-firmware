@@ -458,6 +458,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
     const bool pd_unit = unit == Unit::Pd || unit == Unit::PdLow;
     size_t n_low = 0; uint8_t low_pos = 0;
     bool hunt_11v = false, hunt_20v = false;   // one 6 A probe per target voltage, not per PDO
+    unsigned sweep_budget = o.pps_sweep ? ctsweep::kMaxPoints : 0;   // the deep sweep's point record, shared by the APDOs
     // Does a PPS APDO that this plan runs cover `mv`? (The 6 A hunt then belongs to that APDO, not to a fixed PDO.)
     auto pps_covers = [&](unsigned mv) {
         if (!o.contains(Algorithm::Pps) || caps.spec_rev != 2) return false;
@@ -745,6 +746,26 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
                     w.detail = kDetailStepWalk;   // the runner's marker while the row is in flight
                     emit(w);
                 }
+                // Deep sweep (ROADMAP "PPS deep sweep", opt-in via Options::pps_sweep): ONE row per APDO, emitted last
+                // of the APDO's rows (a plan that would overflow kMaxSteps drops it first). The points (every 100 mV
+                // across the APDO, capped at `cap`, 1 A never above the offer or the cable) live in the runner's sweep
+                // record, not here, so the row count stays one per APDO. The row's mv is the first setpoint, so a sweep
+                // that starts below 5 V is a PdLow row like any other low programmable row.
+                if (p.type == pd::PdoType::Pps && o.pps_sweep && sweep_budget) {
+                    const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
+                    const unsigned n = ctsweep::point_count(pr);
+                    if (!n) { s.detail = kDetailSweep; skip(limit_reason(p.max_mv, in, algorithm)); }
+                    else {
+                        Step w = s; w.mv = static_cast<uint16_t>(pr.lo);
+                        w.ma = static_cast<uint16_t>(ctsweep::point_ma(p, pr.lo, cable_ma(in)));
+                        w.continuous = false;
+                        w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
+                        w.reason = w.ma ? Reason::None : Reason::NoOffer;
+                        w.detail = kDetailSweep;   // the runner's marker; it survives finish(), so the results strip finds the row
+                        emit(w);
+                        sweep_budget -= std::min(n, sweep_budget);
+                    }
+                }
             }
         }
         if (!found) {
@@ -796,6 +817,11 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
         else {
             ++out.runnable; out.max_mv = std::max(out.max_mv, s.mv);
             out.estimate_ms += kHoldMs + 1000;
+            if (is_sweep(s)) {   // a sweep row is long by design: ~0.7 s per 100 mV point
+                const auto p = pd::decode_pdo(s.pdo);
+                const unsigned cap = std::min<unsigned>(in.cap_mv, cable_limit_mv(in, s.algorithm));
+                out.estimate_ms += ctsweep::point_count(ctsweep::point_range(p.min_mv, p.max_mv, cap)) * 700;
+            }
             const unsigned u = static_cast<unsigned>(unit_of(s));
             if (!(seen & (1u << u))) { seen |= 1u << u; out.estimate_ms += 4000; }   // one detach + attach per unit
         }
@@ -855,6 +881,7 @@ void Runner::build(const pd::SourceCaps& caps, Options o, Input in) {
     in.fc_caps = nullptr;   // nothing is known of this charger's SCP / UFCS limits until a row of the unit ran (replan_fc)
     fc_replanned_ = 0;
     count_ = index_ = 0;
+    sweep_used_ = 0; n_sweep_rows_ = 0; sweep_n_ = 0; sweep_mv_ = sweep_lo_ = sweep_hi_ = 0;   // a fresh plan re-sweeps from scratch
     plan_units(caps, o, in, o.units, [this](Step s) { add(s); }, !caps.valid);
 }
 void Runner::caps_evidence(const pd::SourceCaps& caps) {
@@ -1231,9 +1258,10 @@ bool Runner::floored(const Step& s, const Input& in, bool ready) const {
     if (v < 0 || v <= pd::programmable_ceiling_mv(int(s.mv))) return false;
     return plat_mv_ && std::abs(v - int(plat_mv_)) <= std::max(100, int(plat_mv_) / 100) && in.now - plat_ms_ >= kPlateauMs;
 }
-// The Request a PD row sends now: the step-walk row asks its current walk level, every other row its own target.
+// The Request a PD row sends now: the step-walk row asks its current walk level, the sweep row its current point,
+// every other row its own target.
 pd::Choice Runner::pd_choice(const Step& s) const {
-    return {s.pos, is_step_walk(s) ? walk_mv_ : s.mv, s.ma, s.hunt};
+    return {s.pos, is_step_walk(s) ? walk_mv_ : is_sweep(s) ? sweep_mv_ : s.mv, s.ma, s.hunt};
 }
 void Runner::request(Input in) {
     auto& s = steps_[index_];
@@ -1264,6 +1292,7 @@ void Runner::request(Input in) {
     hot_ = false; busy_retry_at_ = 0; hunt_reject_until_ = 0;   // the next row: a list announced now is no answer to the old hunt row
     s.verdict = Verdict::Running;
     if (is_step_walk(s)) { walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; walk_base_mv_ = -1; }   // the walk starts at the row's own level
+    if (is_sweep(s)) sweep_begin(s, in);   // the sweep starts at the APDO's first point
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
@@ -1362,7 +1391,9 @@ void Runner::reissue_release() {
 }
 void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     auto& s = steps_[index_];
+    const bool sweep_row = is_sweep(s);   // read before detail is overwritten: the marker survives on sweep rows
     s.verdict = v; s.reason = r; s.detail = detail;
+    if (sweep_row) { s.detail = kDetailSweep; sweep_close(s); }
     s.tries = s.group >= Group::Vooc && s.group <= Group::SuperVooc65 ? in.fc_tries : 0;
     if (s.group == Group::Pd) {
         // Attempts after a retry, the first one included. The first EPR row also carries the retries of the baseline entry
@@ -1446,6 +1477,58 @@ void Runner::walk_step(Input in, const Step& eff) {
     const auto err = env_.request_pd({s.pos, walk_mv_, s.ma, false});
     if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
     else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
+}
+// The deep-sweep row starts (request()): the point range comes from the row's own PDO word, clamped like the planner
+// did (monitor ceiling and cable voltage limit), and the row's slice of the point record is reset. A resumed row
+// re-sweeps from its first point: a power loss mid-sweep ends cleanly that way (the journal re-runs the row).
+void Runner::sweep_begin(const Step& s, Input in) {
+    const auto p = pd::decode_pdo(s.pdo);
+    const unsigned cap = std::min<unsigned>(in.cap_mv, cable_limit_mv(in, s.algorithm));
+    const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
+    sweep_lo_ = uint16_t(pr.lo);
+    sweep_hi_ = uint16_t(pr.hi);
+    sweep_mv_ = uint16_t(pr.lo);
+    sweep_first_ = sweep_used_;
+    sweep_n_ = 0;
+    stable_ = false;
+}
+// One granted sweep point (Accept + PS_RDY at sweep_mv_, VBUS steady): record measured - setpoint, then ask for the
+// next point through the sink's single Request gate. A steady OUT-OF-BAND point is recorded too, not a stop - the
+// sweep stops only on a lost source (the row's failure paths in poll_impl: no PS_RDY, Reject, Hard Reset, VBUS drop,
+// withdrawn). The sink's own PPS keep-alive (kPpsKeepAliveMs, 5 s < 10 s) re-requests a held level between points.
+void Runner::sweep_point(Input in, const Step& eff) {
+    (void)eff;
+    auto& s = steps_[index_];
+    const int err = in.vbus_mv - int(sweep_mv_);
+    if (sweep_first_ + sweep_n_ < ctsweep::kMaxPoints)
+        sweep_err_[sweep_first_ + sweep_n_] = int16_t(std::clamp(err, -32767, 32767));
+    ++sweep_n_;
+    if (sweep_mv_ + ctsweep::kStepMv > sweep_hi_) {   // the last point of the APDO: the row is done
+        finish(in, Verdict::Pass, Reason::None);
+        return;
+    }
+    sweep_mv_ = uint16_t(sweep_mv_ + ctsweep::kStepMv);
+    const auto p = pd::decode_pdo(s.pdo);
+    const auto ma = ctsweep::point_ma(p, sweep_mv_, cable_ma(in));
+    stable_ = false;
+    phase_ms_ = in.now;
+    const auto err2 = env_.request_pd({s.pos, sweep_mv_, uint16_t(ma), false});
+    if (err2 == pd::Err::Busy) busy_retry_at_ = in.now + 200;
+    else if (err2 != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err2));
+}
+// The sweep row closed (finish()): summarize its points into the row table (keyed by algorithm + PDO slot), so the
+// results strip and the card read one summary per APDO. Points past the kMaxPoints budget were never recorded.
+void Runner::sweep_close(const Step& s) {
+    const unsigned n = std::min<unsigned>(sweep_n_, ctsweep::kMaxPoints - std::min<unsigned>(sweep_first_, ctsweep::kMaxPoints));
+    const auto sum = ctsweep::summarize({sweep_err_.data() + std::min<unsigned>(sweep_first_, ctsweep::kMaxPoints), n}, sweep_lo_);
+    sweep_used_ = std::max(sweep_used_, uint16_t(std::min<unsigned>(sweep_first_ + n, ctsweep::kMaxPoints)));
+    for (auto& r : std::span(sweep_rows_.data(), n_sweep_rows_))
+        if (r.alg == uint8_t(s.algorithm) && r.pos == s.pos) { r.n = uint16_t(n); r.lo_mv = sweep_lo_; r.hi_mv = sweep_hi_; r.sum = sum; return; }
+    if (n_sweep_rows_ < sweep_rows_.size()) {
+        auto& r = sweep_rows_[n_sweep_rows_++];
+        r.pos = s.pos; r.alg = uint8_t(s.algorithm); r.lo_mv = sweep_lo_; r.hi_mv = sweep_hi_;
+        r.first = sweep_first_; r.n = uint16_t(n); r.sum = sum;
+    }
 }
 // The first pending row in execution order (the unit order, then the plan order inside a unit).
 size_t Runner::pick() const {
@@ -1554,6 +1637,7 @@ bool Runner::needs_load(const Input& in) const {
 // is what a Hard Reset interrupts: pattern epr-entry-hard-reset) gets kEprEntryRetries retries, each after a longer steady 5 V
 // (kEprSettleMs + kEprSettleStepMs per earlier retry); every other row gets one.
 bool Runner::can_retry(const Step& s) const {
+    if (is_sweep(s)) return false;   // a sweep stops at the first lost source; re-running all its points would double the run
     const unsigned limit = s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs ? kEprEntryRetries : 1;
     return (pd_retry_ == index_ ? retries_ : 0u) < limit;
 }
@@ -1758,6 +1842,8 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     std::copy_n(steps.begin(), count_, steps_.begin());
     evidence_ = e; run_id_ = run_id; ++revision_; resumed_ = resumed; reattach_planned_ = planned_reattach; loaded_ = true; plan_frozen_ = true;
     opts_ = o; opts_.units = resolve(o); n_order_ = opts_.units.n; order_ = opts_.units.u;
+    // A resumed run re-sweeps a pending sweep row from its first point: the record starts empty, the journaled row is the plan.
+    sweep_used_ = 0; n_sweep_rows_ = 0; sweep_n_ = 0; sweep_mv_ = sweep_lo_ = sweep_hi_ = 0;
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false; n_hunt_ = 0; hunt_seq_ = 0;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = late_pd_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
@@ -2255,11 +2341,13 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         return;
     }
     const bool ready = s.group == Group::Pd ?
-        in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos && in.pd.mv == (is_step_walk(s) ? walk_mv_ : s.mv) :
+        in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos &&
+        in.pd.mv == (is_step_walk(s) ? walk_mv_ : is_sweep(s) ? sweep_mv_ : s.mv) :
         in.fc_state == fc::State::Active;
-    // The step-walk row is judged at the level of the Request out now, not at the row's base target.
+    // The step-walk row is judged at the level of the Request out now, not at the row's base target; so is the sweep row at its point.
     Step eff = s;
     if (is_step_walk(s)) eff.mv = walk_mv_;
+    if (is_sweep(s)) eff.mv = sweep_mv_;
     // SVOOC adapter that clocked and answered SVOOC frames but stops before the cable check: detected and "handshake ok" (cable check accepted, no ramp) are passes.
     if (s.group != Group::Pd && in.fc_state == fc::State::Failed && (in.fc_fail == fc::Fail::Detected || in.fc_fail == fc::Fail::NoVoltage)) {
         finish(in, Verdict::Pass, Reason::None, static_cast<uint8_t>(in.fc_fail));
@@ -2309,10 +2397,13 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
                 else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));
             }
         }
-        if (ready && banded) {
+        // A sweep point is judged on PS_RDY alone: a steady out-of-band point is RECORDED and the sweep goes on
+        // (only a lost source stops it, via the failure paths below), so its gate is ready, not ready && in band.
+        if (ready && (banded || is_sweep(s))) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
             if (in.now - stable_ms_ >= 500) {
                 if (is_step_walk(s)) { walk_step(in, eff); return; }   // the walk advances or finishes instead of holding
+                if (is_sweep(s)) { sweep_point(in, eff); return; }   // the sweep records the point and asks the next one
                 state_ = State::Holding; phase_ms_ = stable_ms_;
             }
         } else stable_ = false;

@@ -57,6 +57,11 @@ struct Fake final : ct::Env {
     // pattern output-capped-below-advertised (Baseus FH22, 2026-11-08): a PD source accepts every request of its list (PS_RDY, the
     // contract is live) but the converter stops at this level (0 = no cap).
     int pd_max_mv = 0;
+    // A scripted PD output shape for the sweep tests (0 = follow the request): pd_offset_mv lands the output this far
+    // from it above 5 V; at/above pd_fold_from_mv the output folds back to pd_fold_to_mv (steady - the FH22 shape);
+    // pd_drop_at_mv hard-resets the source on the request at that level (a lost source mid-sweep).
+    int pd_offset_mv = 0;
+    unsigned pd_fold_from_mv = 0, pd_fold_to_mv = 0, pd_drop_at_mv = 0;
     // pattern pps-off-at-no-load (splitter run, 2026-11-10): the source takes a Request at a level of collapse_on's PDO type, then
     // drops its output while the port draws collapse_ma: VBUS 3.5 V, 1.8 V, then the port tears the session down (one new session,
     // VBUS stays at 1.8 V until the port restarts by itself 2.5 s after the Request). collapse_after_ready: the Request is answered with PS_RDY first (the contract is
@@ -197,6 +202,11 @@ struct Fake final : ct::Env {
             in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.mv = 5000;
             return pd::Err::Ok;
         }
+        if (pd_drop_at_mv && unsigned(c.mv) == pd_drop_at_mv) {
+            ++in.session; low_until = in.now + 2500; in.vbus_mv = 0;
+            in.pd.state = pd::SinkState::Idle; in.pd.held = false; in.pd.mv = 5000;
+            return pd::Err::Ok;
+        }
         if (collapse_on != pd::PdoType::Unknown && c.pos <= caps.num_pdos && caps.pdos[c.pos - 1].type == collapse_on) {
             if (c.mv > 5000) collapse_t0 = in.now + (collapse_after_ready ? 200 : 0);
             if (c.mv > 5000 && !collapse_after_ready) {   // Accept, no PS_RDY: the sink waits in Transition
@@ -218,6 +228,10 @@ struct Fake final : ct::Env {
             else
                 in.vbus_mv = low_mv_for_3v3 && c.mv == 3300 ? low_mv_for_3v3 : int(c.mv);
             if (pps_req) { last_pps_mv = int(c.mv); last_pd_vbus = in.vbus_mv; }
+        }
+        if (c.mv >= 5000) {   // the scripted output shape of the sweep tests
+            if (pd_fold_from_mv && unsigned(c.mv) >= pd_fold_from_mv) in.vbus_mv = int(pd_fold_to_mv);
+            else if (pd_offset_mv) in.vbus_mv = int(c.mv) + pd_offset_mv;
         }
         if (pd_max_mv && int(c.mv) > pd_max_mv) in.vbus_mv = pd_max_mv;
         return pd::Err::Ok;
@@ -3359,6 +3373,102 @@ static void test_pps_step_walk_passes_on_20mv_steps() {
         if (s.algorithm == A::Pps && s.pos == 6 && s.mv == 8000 && s.verdict == ct::Verdict::Pass) ++pass8000;
     CHECK_EQ(pass8000, 3u);   // the two mid level rows (the 7.14 <-> 11 V jump) and the step-walk row all passed
 }
+// ROADMAP "PPS deep sweep": opt-in (Options::pps_sweep), one row per APDO marked kDetailSweep, every 100 mV a Request
+// through the gate at <= 1 A; a steady out-of-band point is RECORDED, not a stop - the FH22 shape (tracks -150 mV to
+// 19.75 V at the 19.9 V request, then folds back to 19.42 V from 20.0 V) is recorded to the top and the summary names
+// the peak and the fold-back.
+static void test_pps_deep_sweep_records_every_point_and_the_fold_back() {
+    Fake f;   // APDOs 5-11 V (pos 6) and 5-21 V (pos 7)
+    f.pd_offset_mv = -150;                                // tracks -150 mV
+    f.pd_fold_from_mv = 20000; f.pd_fold_to_mv = 19420;   // >= 20.0 V folds back, steady (FH22)
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    unsigned sweep_rows = 0;
+    for (const auto& s : r.steps())
+        if (ct::is_sweep(s)) {
+            ++sweep_rows;
+            CHECK_EQ(s.detail, ct::kDetailSweep);
+            CHECK_EQ(s.ma <= 1000, true);   // 1 A, never above the APDO current (5 A here) or the cable (5 A)
+        }
+    CHECK_EQ(sweep_rows, 2u);   // one row per APDO - the points are not rows
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    // both sweep rows passed and kept their marker after finish()
+    unsigned passed = 0;
+    for (const auto& s : r.steps())
+        if (ct::is_sweep(s)) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(s.detail, ct::kDetailSweep); ++passed; }
+    CHECK_EQ(passed, 2u);
+    // the record: 61 + 161 points, every one a Request at a 100 mV step of its APDO
+    const auto v = r.sweep_view();
+    CHECK_EQ(v.rows.size(), 2u);
+    CHECK_EQ(v.points.size(), 222u);
+    const auto* rw6 = v.find(uint8_t(A::Pps), 6);
+    const auto* rw7 = v.find(uint8_t(A::Pps), 7);
+    CHECK_EQ(rw6 && rw7, true);
+    CHECK_EQ(rw6->n, 61u); CHECK_EQ(rw7->n, 161u);
+    // every sweep point went through request_pd: the pos-7 requests step 5000..21000 by 100 mV
+    {
+        unsigned stepped = 0;
+        for (const auto& c : f.choices)
+            if (c.pos == 7 && c.mv >= 5000 && c.mv <= 21000 && (c.mv - 5000) % 100 == 0 && c.ma <= 1000) ++stepped;
+        CHECK_EQ(stepped >= 161u, true);   // the sweep's points (sample rows ask other levels or more current)
+    }
+    // the pos-7 summary reads the FH22 shape: peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V - recorded, not a stop
+    CHECK_EQ(rw7->sum.points, 161u);
+    CHECK_EQ(rw7->sum.peak_mv, 19750u); CHECK_EQ(rw7->sum.peak_at_mv, 19900u);
+    CHECK_EQ(rw7->sum.fold_from_mv, 20000u); CHECK_EQ(rw7->sum.fold_mv, 19420u);
+    char buf[64];
+    const size_t n = ctsweep::format_summary(rw7->sum, buf);
+    CHECK_STR(std::string(buf, n).c_str(), "peak 19.75 V at 19.9 V, folds back to 19.42 V from 20.0 V");
+    // the pos-6 sweep (5-11 V) tracks clean: peak at the top
+    CHECK_EQ(rw6->sum.peak_mv, 10850u); CHECK_EQ(rw6->sum.peak_at_mv, 11000u);
+    CHECK_EQ(rw6->sum.fold_mv, 0u);
+}
+// The sweep stops at the first LOST source (a Hard Reset mid-sweep): the row fails there, the points recorded so far
+// stay in the record, and the run goes on to its end.
+static void test_pps_deep_sweep_stops_at_the_first_lost_source() {
+    Fake f;
+    f.pd_drop_at_mv = 12000;   // the source hard-resets on the 12.0 V point of the pos-7 sweep
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    const auto v = r.sweep_view();
+    const auto* rw7 = v.find(uint8_t(A::Pps), 7);
+    CHECK_EQ(rw7 != nullptr, true);
+    if (rw7) {
+        CHECK_EQ(rw7->n, 70u);                       // 5.0 .. 11.9 V recorded; the 12.0 V point lost the source
+        CHECK_EQ(rw7->sum.points, 70u);
+        CHECK_EQ(rw7->sum.peak_mv, 11900u);
+    }
+    for (const auto& s : r.steps())
+        if (ct::is_sweep(s) && s.pos == 7) {
+            CHECK_EQ(s.verdict, ct::Verdict::Fail);
+            CHECK_EQ(s.reason == ct::Reason::Lost || s.reason == ct::Reason::HardReset, true);   // a lost source stops the sweep
+            CHECK_EQ(s.detail, ct::kDetailSweep);   // the marker survives the failure
+        }
+    // the pos-6 sweep ran to its top before that
+    const auto* rw6 = v.find(uint8_t(A::Pps), 6);
+    CHECK_EQ(rw6 && rw6->n == 61u, true);
+    // no pos-7 request above the lost point went out after the sweep row ended
+    unsigned after = 0;
+    bool dropped = false;
+    for (const auto& c : f.choices) {
+        if (c.pos == 7 && c.mv == 12000 && c.ma <= 1000) dropped = true;
+        if (dropped && c.pos == 7 && c.mv > 12000 && c.ma <= 1000) ++after;
+    }
+    CHECK_EQ(dropped, true);
+    CHECK_EQ(after, 0u);
+}
+// The sweep is opt-in: without Options::pps_sweep the plan holds no sweep row at all.
+static void test_pps_deep_sweep_is_opt_in() {
+    Fake f; ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+    for (const auto& s : r.steps()) CHECK_EQ(ct::is_sweep(s), false);
+    CHECK_EQ(r.sweep_view().rows.size(), 0u);
+}
 static void test_pps_step_walk_fails_when_steps_round_to_100mv() {
     Fake f; f.pd_small_step_mv = 100;   // every +20 mV request moves the output by 100 mV
     ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
@@ -5883,6 +5993,7 @@ int main() {
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
+    test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     return test_report("test_charger_test");
 }

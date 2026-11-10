@@ -119,7 +119,7 @@ class Links(unittest.TestCase):
             with self.subTest(name):
                 d = q.decode_link(link)
                 self.assertIn(d["version"], (1, 2))
-                self.assertLessEqual(len(link), 344)   # a format-9 card link is 344 characters: still one code (version 12)
+                self.assertLessEqual(len(link), 392)   # a format-10 plain card link is 392 characters: still one code (version 13)
                 self.assertIn("record", d)
 
     def test_v2_links_decode_to_the_v1_json(self):

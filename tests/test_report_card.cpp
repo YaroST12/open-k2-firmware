@@ -113,6 +113,51 @@ static void test_two_pps_ranges_and_fixed_max() {
 
 // ROADMAP "PPS coverage" item 3: the card records the setpoint error in mV per level of each APDO (v9 spread block,
 // low to high, up to four levels), so a converter that drifts at the ends shows. Older payloads decode with no spread.
+// V10: a deep-sweep row's summary lands on the card's matching range (min / max / worst error and where, the peak and
+// the fold-back), round-trips, and a range without a sweep decodes as none. The FH22 shape: tracks -150 mV to
+// 19.75 V at the 19.9 V request, then folds back to 19.42 V from 20.0 V.
+static void test_v10_sweep_summary_round_trips_with_the_fh22_fold_back() {
+    constexpr uint32_t kP1 = (3u << 30) | (210u << 17) | (50u << 8) | 100;   // 5-21 V 5 A, slot 7
+    // the sweep row (marked kDetailSweep) plus one sample row so the range entry exists
+    std::vector<ct::Step> steps = {
+        step(A::Pps, ct::Group::Pd, 7, 13000, V::Pass, 13000, ct::Reason::None, kP1, true),
+        step(A::Pps, ct::Group::Pd, 7, 5000, V::Pass, 5000, ct::Reason::None, kP1, false, false, ct::kDetailSweep),
+    };
+    // the runner's record: 161 points, -150 mV to 19.9 V then the fold-back tail (the fh22-sweep shape)
+    std::vector<int16_t> err;
+    const unsigned tail[] = {19664, 19503, 19423, 19422, 19421, 19421, 19420, 19419, 19420, 19420, 19421};
+    unsigned ti = 0;
+    for (unsigned set = 5000; set <= 21000; set += 100)
+        err.push_back(int16_t((set <= 19900 ? int(set) - 150 : int(tail[ti++])) - int(set)));
+    ctsweep::RowView rw{};
+    rw.pos = 7; rw.alg = uint8_t(A::Pps); rw.lo_mv = 5000; rw.hi_mv = 21000; rw.first = 0; rw.n = uint16_t(err.size());
+    rw.sum = ctsweep::summarize(err, 5000);
+    const ctsweep::View view{{&rw, 1}, {err.data(), err.size()}};
+    const rc::Card c = rc::build(steps, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None, {}, 0, view);
+    CHECK_EQ(c.n_ranges, 1);
+    CHECK_EQ(c.sweep[0].min_err, -127);   // -1579 saturates to the int8 field
+    CHECK_EQ(c.sweep[0].max_err, -127);   // -150 clamps to the int8 field too
+    CHECK_EQ(c.sweep[0].worst_err, -127);
+    CHECK_EQ(c.sweep[0].worst_dv, 210u);          // the worst point sat at 21.0 V
+    CHECK_EQ(c.sweep[0].peak_dv, 197u);           // peak 19.75 V delivered (100 mV card units: 19.7)
+    CHECK_EQ(c.sweep[0].peak_at_dv, 199u);        // at the 19.9 V request
+    CHECK_EQ(c.sweep[0].fold_dv, 194u);           // folds back to 19.42 V (19419 rounds to 19420)
+    CHECK_EQ(c.sweep[0].fold_from_dv, 200u);      // from 20.0 V
+    CHECK_EQ(c.sweep[1].peak_dv, 0u);             // no sweep on the other ranges
+    uint8_t rec[rc::kMaxRecord]; rc::Card d;
+    rc::encode_card(rec, c);
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d == c, 1);
+    CHECK_EQ(d.sweep[0].peak_dv, 197u); CHECK_EQ(d.sweep[0].fold_from_dv, 200u);
+    // a v9-length payload (format byte 9) decodes with no sweep block
+    rec[4 + 33] = 9;
+    CHECK_EQ(rc::decode_card({rec + 4, 214}, d), 1);
+    CHECK_EQ(d.format, 9u);
+    CHECK_EQ(d.sweep[0].peak_dv, 0u);
+    // and a card built without a sweep view carries none
+    const rc::Card plain = rc::build(steps, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None);
+    CHECK_EQ(plain.sweep[0].peak_dv, 0u);
+}
 static void test_v9_spread_records_setpoint_error_per_level() {
     constexpr uint32_t kP1 = (3u << 30) | (110u << 17) | (50u << 8) | 100;   // 5-11 V 5 A
     const std::vector<ct::Step> steps = {
@@ -129,17 +174,18 @@ static void test_v9_spread_records_setpoint_error_per_level() {
     CHECK_EQ(c.spread[1][0], -128);   // unused slots read "none"
     uint8_t rec[rc::kMaxRecord]; rc::Card d;
     rc::encode_card(rec, c);
-    CHECK_EQ(rec[2], rc::kPayload);                       // the payload grew for the spread block
-    CHECK_EQ(rc::kPayload, 214);
-    CHECK_EQ(rec[4 + 33], 9);                             // format v9
+    CHECK_EQ(rec[2], rc::kPayload);                       // the payload grew for the sweep block
+    CHECK_EQ(rc::kPayload, 250);
+    CHECK_EQ(rec[4 + 33], 10);                            // format v10
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
     CHECK_EQ(d.spread[0][0], 88); CHECK_EQ(d.spread[0][3], -24);
-    // a v8-length payload of the same record decodes too (its spread bytes are the CRC/padding, not read)
+    // a v8-length payload of the same record decodes too (its trailing bytes are the CRC/padding, not read)
     rec[4 + 33] = 8;
     CHECK_EQ(rc::decode_card({rec + 4, 198}, d), 1);
     CHECK_EQ(d.format, 8);
     CHECK_EQ(d.spread[0][0], -128);
+    CHECK_EQ(d.sweep[0].peak_dv, 0u);   // ... and no sweep
     CHECK_EQ(d.range[0].fail_dv, 90);
 }
 // A step-walk row's verdict reason survives the card's 6-bit reason field; its detail (the observed mV) is dropped
@@ -543,7 +589,7 @@ static void test_group_codec_edges() {
     CHECK_EQ(rec[4 + 33], rc::kFormat);                            // record format 5: cable block
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
-    CHECK_EQ(rc::kPayload + rc::kRecordOverhead, 220u);   // v9: 214 + 6 = 220
+    CHECK_EQ(rc::kPayload + rc::kRecordOverhead, 256u);   // v9: 214 + 6 = 220
 }
 
 // V5: the cable block round-trips, and a v4 payload (format byte 4, zero-padded to kPayload) decodes with an
@@ -752,7 +798,7 @@ static void test_v8_rebalanced_roundtrip() {
     CHECK_EQ(d.rebalanced, 2u);
     CHECK_EQ(d == c, 1);
     // an older card (format byte below 8) decodes with the count at 0
-    buf[4 + 33] = rc::kFormat - 2;
+    buf[4 + 33] = rc::kFormat - 3;   // below 8: the count byte is not read
     CHECK_EQ(rc::decode_card({buf.data() + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d.rebalanced, 0u);
 }
@@ -973,19 +1019,20 @@ static ct::Step ufcs_step(unsigned mv, int lo_mv, int hi_mv, int ma) {
 }
 static void test_v6_ufcs_modes() {
     static_assert(rc::kMaxUfcs == 4);
-    CHECK_EQ(rc::kFormat, 9u);
+    CHECK_EQ(rc::kFormat, 10u);
     CHECK_EQ(unsigned(rc::off::kUfcs), 178u);
     CHECK_EQ(unsigned(rc::off::kRepeat), 190u);
     CHECK_EQ(unsigned(rc::off::kV9), 198u);
-    CHECK_EQ(rc::kPayload, 214u);
-    CHECK_EQ(rc::kMaxRecord, 220u);
+    CHECK_EQ(unsigned(rc::off::kV10), 214u);
+    CHECK_EQ(rc::kPayload, 250u);
+    CHECK_EQ(rc::kMaxRecord, 256u);
     std::vector<ct::Step> steps = {
         ufcs_step(5000, 3400, 5500, 3000),
         ufcs_step(5000, 5000, 11000, 3000), ufcs_step(11000, 5000, 11000, 3000),      // the same mode again: one entry
         ufcs_step(20000, 5000, 20000, 5000),
     };
     rc::Card c = rc::build(steps, evidence(), {}, rc::Identity{.fp = 0x30000001u}, {}, ct::State::Done, ct::Reason::None);
-    CHECK_EQ(c.format, 9u);
+    CHECK_EQ(c.format, 10u);
     CHECK_EQ(rc::ufcs_modes(c), 3u);
     CHECK_EQ(c.ufcs[0].lo_dv, 34u); CHECK_EQ(c.ufcs[0].hi_dv, 55u); CHECK_EQ(c.ufcs[0].ma, 3000u);
     CHECK_EQ(c.ufcs[1].lo_dv, 50u); CHECK_EQ(c.ufcs[1].hi_dv, 110u); CHECK_EQ(c.ufcs[1].ma, 3000u);
@@ -993,10 +1040,10 @@ static void test_v6_ufcs_modes() {
     CHECK_EQ(c.ufcs[3].hi_dv, 0u);
     uint8_t rec[rc::kMaxRecord]; rc::Card d;
     CHECK_EQ(rc::encode_card(rec, c), size_t(rc::kMaxRecord));
-    CHECK_EQ(rec[4 + 33], 9u);
+    CHECK_EQ(rec[4 + 33], 10u);
     CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
     CHECK_EQ(d == c, 1);
-    CHECK_EQ(d.format, 9u);
+    CHECK_EQ(d.format, 10u);
     // u24 per mode, little endian: bits 0..7 lo, 8..16 hi, 17..23 current.
     const uint32_t m2 = rec[4 + 178 + 6] | uint32_t(rec[4 + 178 + 7]) << 8 | uint32_t(rec[4 + 178 + 8]) << 16;
     CHECK_EQ(m2, 50u | 200u << 8 | 100u << 17);
@@ -1032,7 +1079,7 @@ static void test_v5_payload_has_no_ufcs_modes() {
     CHECK_EQ(rc::ufcs_modes(d), 0u);
     CHECK_EQ(d.group[0].max_mv, 20000u);
     rc::migrate_to_current(d);
-    CHECK_EQ(d.format, 9u);
+    CHECK_EQ(d.format, 10u);
     CHECK_EQ(rc::ufcs_modes(d), 0u);
 }
 
@@ -1071,7 +1118,7 @@ static void test_v7_repeat_block() {
     CHECK_EQ(d.times, 1u); CHECK_EQ(d.last_boots, 0u); CHECK_EQ(d.last_uptime_s, 0u);
     CHECK_EQ(d.group[0].max_mv, 20000u);
     rc::migrate_to_current(d);
-    CHECK_EQ(d.format, 9u);
+    CHECK_EQ(d.format, 10u);
     CHECK_EQ(d.times, 1u);
 }
 
@@ -1151,6 +1198,7 @@ int main() {
     test_build_groups_and_ranges();
     test_two_pps_ranges_and_fixed_max();
     test_v9_spread_records_setpoint_error_per_level();
+    test_v10_sweep_summary_round_trips_with_the_fh22_fold_back();
     test_step_resolution_reason_survives_the_card();
     test_group_keeps_max_pass_and_first_fail();
     test_capped_range_keeps_its_ceiling_and_reason();

@@ -26,6 +26,8 @@ struct Fake {
     ChargerTestSnapshot charger_test_results() { calls++; return test_results; }
     std::vector<uint8_t> units_set; Status units_status = Status::Ok;   // what charger_units() was given, and its answer
     Status charger_units(std::span<const uint8_t> u) { calls++; units_set.assign(u.begin(), u.end()); return units_status; }
+    bool sweep_set = false; int sweep_sets = 0; Status sweep_status = Status::Ok;
+    Status charger_sweep(bool on) { calls++; sweep_set = on; ++sweep_sets; return sweep_status; }
     k2::ctcable::Choice cable_set{}; int cable_sets = 0; Status cable_status = Status::Ok;   // what charger_cable() was given, and its answer
     k2::ctcable::Info cable_info{};
     ChargerCableReply charger_cable(const k2::ctcable::Choice* set) {

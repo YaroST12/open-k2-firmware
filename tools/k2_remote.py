@@ -34,6 +34,7 @@ CMD_CHARGER_TEST = 0x0B  # read-only RAM suite metadata / paged results
 CMD_CHARGER_UNITS = 0x0C  # [n, unit...] the test units of the next run, in order (n = 0: default order)
 CMD_CHARGER_CABLE = 0x0D  # [kind, seq(2)] the cable identity of the next START (no payload reads it back)
 CMD_CHARGER_HUNT = 0x0E   # [slot] read-only: the evidence of one refused 6 A hunt row
+CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset)
 CMD_GET_IDENTITY = 0x24  # source identity: VID/PID/bcd, SVIDs, vendor, Apple model
 CMD_DEBUG_LINK = 0x25     # debug: 1 hold the link attached, 0 detached (until the next rescan)
 CMD_DEBUG_PD_MSG = 0x23   # debug: feed one PD message (sop, header, data objects) to the parser
@@ -684,6 +685,8 @@ def decode_charger_test(p):
         detail_reason = "none"
         if detail in EPR_DETAILS and group == 0:
             detail_reason = EPR_DETAILS[detail]
+        elif detail == 161 and group == 0:   # kDetailSweep: the deep-sweep row (its points are in the sweep record, not the row)
+            detail_reason = "deep sweep"
         elif detail and why == 46:   # StepResolution: the detail is the measured move in mV, not a code
             detail_reason = f"{detail} mV move"
         elif detail:
@@ -811,6 +814,13 @@ HUNT_ANSWERS = ["none", "accept", "reject", "wait"]
 HUNT_PDO_TYPES = ["unknown", "fixed", "battery", "variable", "pps", "avs"]
 HUNT_SLOTS = 4
 HUNT_SLOT_BYTES = 29
+
+
+def charger_sweep(link, on):
+    """Turn the PPS deep sweep of the next charger-test run on or off (opt-in; never in a preset)."""
+    p = link.call(CMD_CHARGER_SWEEP, bytes([1 if on else 0])).payload
+    _need(p, 1, "charger sweep")
+    return bool(p[0])
 
 
 def charger_hunt(link, slot):
@@ -1124,11 +1134,11 @@ def render_unmatched(r):
 
 CARD_ERRS = ["Ok", "Invalid", "NotFound", "Flash", "Full", "Busy"]
 CARD_CHUNK = 48
-# The newest payload the card store sends is the v8 one, 198 bytes (report_card.py owns the layout:
-# 196 in v7, 190 in v6, ...; offset 196 is the re-balanced count + a spare). Deriving the chunk count from
-# it keeps this reader from ever lagging the format again; the short last chunk still ends the read, so an
-# older firmware's fewer chunks work too.
-CARD_CHUNKS = (report_card.PAYLOAD + CARD_CHUNK - 1) // CARD_CHUNK   # 5: v8 198 B and v7 196 B (v6 190 B was 4)
+# The newest payload the card store sends is the v10 one, 250 bytes (report_card.py owns the layout:
+# 214 in v9, 198 in v8, ...; offset 214 is the deep-sweep summary). Deriving the chunk count from it keeps
+# this reader from ever lagging the format again; the short last chunk still ends the read, so an older
+# firmware's fewer chunks work too.
+CARD_CHUNKS = (report_card.PAYLOAD_V10 + CARD_CHUNK - 1) // CARD_CHUNK   # 6: v10 250 B (v9 214 B was 5, v8 198 B was 5)
 
 
 class CardsFailed(Exception):

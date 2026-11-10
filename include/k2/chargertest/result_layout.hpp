@@ -19,6 +19,7 @@
 #include <span>
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/step_label.hpp"
+#include "k2/chargertest/sweep.hpp"
 
 namespace k2::result_layout {
 
@@ -52,7 +53,8 @@ struct Row {
     charger_test::Algorithm algorithm = charger_test::Algorithm::Count;   // Count: a collapsed row or a header
     bool header = false;            // section header row: no tokens, not openable
     bool probe = false;             // a Mi 6A probe row (algorithm Count): the 6 A hunt steps at `mv`
-    uint8_t pos = 0;                // the PDO slot of a range row (one row per APDO, Row::mv is 0 there); 0: not a range row
+    bool sweep = false;             // a deep-sweep row (one per APDO): the error-vs-setpoint strip, one token per volt bucket
+    uint8_t pos = 0;                // the PDO slot of a range or sweep row; 0: not one of those
     uint16_t mv = 0;                // the probed level of a probe row
     uint8_t first = 0, count = 0;   // tokens
 };
@@ -96,6 +98,7 @@ struct OemNotes {
     // The Running grid keeps such a unit's row where the plan put it (fold = false): a row that jumps to the end when its unit
     // fails would take the finished rows from above the running one and shuffle the window mid-run.
     bool fold = true;
+    unsigned monitor_mv = 36000;   // the K2's monitor ceiling, for planning a pending sweep row's strip range
     bool oppo_svid = false;   // the source listed OPPO's SVID: a passive "OPPO SVID 0x22D9 (discovery only)" row, nothing sent
     const char* scp_cap = nullptr;   // what the adapter's SCP readout reported, the words after "SCP cap " of report_card::scp_note ("20V 6A")
     unsigned rebalanced = 0;   // how often the source re-announced its list mid-run (budget-reannounce-mid-run): a passive "SOURCE rebalanced Nx" row
@@ -105,11 +108,13 @@ const char* vendor_oem_name(uint16_t vid);
 
 // The rows come from the steps alone: they are the plan, in the order the runner executes them, so a row stands where the plan first
 // runs one of its steps. A row is a protocol's steps (a fixed PD row: one per algorithm; a PPS / AVS row: one per APDO, Row::pos),
-// or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the planner put them. The Running grid, the Results page
-// and the Steps page read the same step list, so none keeps an order of its own.
-void build(Layout&, std::span<const charger_test::Step>, const OemNotes& = {});
-// Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a range row (one per APDO) owns
-// its slot's steps only; any other protocol row the protocol's other steps.
+// or (a probe row, Row::probe) the 6 A hunt steps at one level, wherever the planner put them, or (a sweep row, Row::sweep) the
+// deep sweep of one APDO: a compact error-vs-setpoint strip, one token per volt bucket, coloured by the worst error in the
+// bucket (the points come from `sweep`, the runner's record). The Running grid, the Results page and the Steps page read the
+// same step list, so none keeps an order of its own.
+void build(Layout&, std::span<const charger_test::Step>, const OemNotes& = {}, const ctsweep::View& sweep = {});
+// Does step `s` belong to layout row `r`? A probe row owns the hunt steps at its level; a sweep row the sweep step of its
+// APDO; a range row (one per APDO) owns its slot's other steps; any other protocol row the protocol's other steps.
 bool row_has(const Row& r, const charger_test::Step& s);
 // Appends a fact row of plain words after the protocol rows (a collapsed row: its OK opens the whole step list).
 // Dropped when the layout is full.

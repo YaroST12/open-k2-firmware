@@ -66,7 +66,8 @@
 //                                    rows are omitted. Selection and source evidence are unavailable.
 //                                    Opt-in schema 2: req 2 (metadata), or 2 start run_id revision.
 //                                    rsp the same first 15 bytes, schema=2, then run_selected(4),
-//                                    draft_selected(4), wire_rev[1:0]/draft_stage[5:2](1),
+//                                    draft_selected(4; bit 31 = the PPS deep sweep on, an Options flag,
+//                                    not an algorithm bit - it was always 0 before), wire_rev[1:0]/draft_stage[5:2](1),
 //                                    RMDO spec nibbles(1), EvidenceFlag(1), monitor_mv(2),
 //                                    physical_cable_mv(2) ma(2), RMDO version nibbles(1),
 //                                    source_session(4), raw_source_header(2), observed_pdos(1).
@@ -346,6 +347,9 @@ enum class Cmd : uint8_t {
                          // Busy while a run is active, BadArg for an unknown unit or a duplicate. Reset to default by every START.
     ChargerCable = 0x0D, // [kind, seq(2)] the cable identity of the next START (k2/chargertest/ct_cable.hpp); no payload reads it back.
     ChargerHunt = 0x0E,  // [slot] read-only: the evidence of one refused 6 A hunt row (charger_test::HuntEvidence), see kHuntSlotBytes.
+    ChargerSweep = 0x0F, // [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset; an Options flag, not an
+                         // algorithm bit - bit 31 of the draft selection in CHARGER_TEST schema 2). No payload reads it back.
+                         // Busy while a run is active.
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -356,7 +360,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
     Cmd::PdAttach,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
-    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::BootInfo,
+    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::BootInfo,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -409,7 +413,7 @@ constexpr uint8_t kStoreFlagSingle = 1, kStoreFlagForeign = 2, kStoreFlagLog = 4
 // CARDS op codes (first payload byte of Cmd::Cards); the layouts are in k2/chargertest/report_card_remote.hpp, which
 // src/core/remote.cpp checks against these. Delete needs the trailing 1; rename takes a 1..20 byte name.
 inline constexpr uint8_t kCardsList = 0, kCardsGet = 1, kCardsRename = 2, kCardsDelete = 3;
-inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 5;   // 196 bytes / 48 = 4.08 -> 5 chunks (report_card::remote::kChunks, static_asserted in remote.cpp)
+inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 48 = 5.2 -> 6 chunks (v10 payload; report_card::remote::kChunks, static_asserted in remote.cpp)
 
 // EMLIB op codes (first payload byte of Cmd::EmLib), the saved-cable library of k2/pd/emlib.hpp. Every
 // response starts with err (k2::emlib::Err: 0 Ok, 1 Full, 2 Invalid, 3 NotFound, 4 Flash, 5 Exists;
@@ -785,6 +789,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ping() } -> std::same_as<PingInfo>;
     { b.charger_test_results() } -> std::same_as<ChargerTestSnapshot>;
     { b.charger_units(std::span<const uint8_t>{}) } -> std::same_as<Status>;   // unit order of the next run (empty = default)
+    { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (opt-in)
     { b.charger_cable(static_cast<const ctcable::Choice *>(nullptr)) } -> std::same_as<ChargerCableReply>;   // null = read only
     { b.charger_hunt(u8) } -> std::same_as<ChargerHuntReply>;   // evidence of refused hunt row `u8`
     { b.press(u8, u16) } -> std::same_as<Status>;
@@ -920,6 +925,13 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         const auto r = backend.charger_hunt(p[0]);
         if (r.status != Status::Ok) return reply(r.status);
         return reply_n(encode_charger_hunt(buf, r, p[0] < r.count));
+    }
+    case Cmd::ChargerSweep: {
+        if (p.size() != 1 || p[0] > 1) return reply(Status::BadLength);
+        const Status st = backend.charger_sweep(p[0] != 0);
+        if (st != Status::Ok) return reply(st);
+        buf[0] = p[0];
+        return reply_n(1);
     }
     case Cmd::Button: {
         if (p.size() != 3) return reply(Status::BadLength);

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <span>
+#include "k2/chargertest/sweep.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/pd/pd_ccmode.hpp"
 #include "k2/pd/pd_sink.hpp"
@@ -61,6 +62,10 @@ enum class Reason : uint8_t {
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
 inline constexpr uint8_t kDetailStepWalk = 160;
+// Step.detail of a deep-sweep row (ROADMAP "PPS deep sweep"; the AVS sweep reuses the marker on its AVS algorithms).
+// Unlike the walk's marker it SURVIVES finish() (finish keeps it), so a finished run's results strip and the card can
+// still tell the row apart; the verdict's result code rides in Reason alone, as for StepResolution.
+inline constexpr uint8_t kDetailSweep = 161;
 // ROADMAP "PPS coverage" item 2: one step-walk row per PPS APDO, from the mid level, kStepWalkCount Requests of +kStepMv
 // each. Every step needs Accept + PS_RDY and a measured VBUS move upward and below 2 x kStepMv (a source that rounds to a
 // 40/50/100 mV quantum, or ignores the step, shows a 0 or >= 40 mV move); the whole walk must then add up to
@@ -163,6 +168,9 @@ struct HandoverInfo { HandoverOutcome outcome = HandoverOutcome::NotTried; uint3
 struct Options {
     uint32_t selected = kDefaultAlgorithms;
     UnitList units{};   // explicit unit list (remote command / ct_start.py --units); empty = the default order
+    // The PPS deep sweep (ROADMAP "PPS deep sweep"): opt-in, never in a preset (the presets carry `selected` only), so
+    // this flag rides next to it (journal meta byte, remote draft flags) instead of an algorithm bit.
+    bool pps_sweep = false;
     bool contains(Algorithm a) const { return selected & bit(a); }
 };
 struct Step {
@@ -187,6 +195,10 @@ static_assert(sizeof(Step) == 20, "Step must stay free of padding holes: kMaxSte
 constexpr bool is_step_walk(const Step& s) {
     return s.group == Group::Pd && s.algorithm == Algorithm::Pps && s.detail == kDetailStepWalk &&
            (s.verdict == Verdict::Pending || s.verdict == Verdict::Running);
+}
+// True when `s` is a deep-sweep row (one per APDO; the points live in the Runner's sweep record, not as rows).
+constexpr bool is_sweep(const Step& s) {
+    return s.group == Group::Pd && (kPpsAlgorithms & bit(s.algorithm)) && s.detail == kDetailSweep;
 }
 // The UFCS mode a step samples, kept in `Step::pdo` (no UFCS row has a PDO): the planner writes it once the charger's
 // Output_Capabilities are read, and the Results chip (the mode's top current), the Detail page (the whole mode) and the journal
@@ -531,6 +543,9 @@ public:
     // The refusal evidence of this run's hunt rows (a few rows at most), in the order they were refused.
     std::span<const HuntEvidence> hunt_evidence() const { return {hunt_.data(), n_hunt_}; }
     const HuntEvidence* hunt_evidence_for(size_t step) const;
+    // The deep sweep (ROADMAP "PPS deep sweep"): the finished rows (one per APDO) and the whole point record
+    // (one int16 error per point). The results strip, the card and the remote read it through this view.
+    ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
 private:
     void note_hunt_refusal(const Input&, bool timeout, uint16_t extra_flags = 0);
     void add(Step);
@@ -623,6 +638,17 @@ private:
     int walk_prev_mv_ = -1;
     int walk_base_mv_ = -1;   // VBUS at the walk's base level (the sum check)
     void walk_step(Input, const Step& eff);   // one granted level of the walk: check its move, ask for the next or finish
+    // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
+    // sweep_rows_ holds one RowView per APDO, filled when the row closes (sweep_close in finish()).
+    std::array<int16_t, ctsweep::kMaxPoints> sweep_err_{};
+    std::array<ctsweep::RowView, ctsweep::kMaxRows> sweep_rows_{};
+    uint8_t n_sweep_rows_ = 0;
+    uint16_t sweep_used_ = 0;                 // points recorded so far, all sweep rows together
+    uint16_t sweep_first_ = 0, sweep_n_ = 0;   // the row in flight: first slot in sweep_err_, points so far
+    uint16_t sweep_mv_ = 0, sweep_lo_ = 0, sweep_hi_ = 0;   // the point whose Request is out / the row's point range
+    void sweep_begin(const Step&, Input);   // request(): the point range from the row's PDO word, the row's record reset
+    void sweep_point(Input, const Step&);   // one granted point: record it, ask the next or finish the row
+    void sweep_close(const Step&);          // finish(): summarize the row's points into sweep_rows_
     bool xiaomi_seen_ = false, xiaomi_reset_ = false, x_svid_ = false, x_authed_ = false; uint32_t tail_at_ = 0, hr_count_ = 0;
     std::array<HuntEvidence, kHuntSlots> hunt_{};   // refused hunt rows; n_hunt_ in use (a full table overwrites the last slot)
     uint8_t n_hunt_ = 0;

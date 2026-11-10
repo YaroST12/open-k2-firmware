@@ -20,16 +20,38 @@ unsigned plan_total(const pd::SourceCaps& caps, unsigned cap_mv) {
 }
 
 Summary summarize(std::span<const int16_t> err, unsigned lo_mv) {
-    (void)lo_mv;
     Summary s;
     s.points = uint16_t(err.size());
     if (err.empty()) return s;
     int worst_abs = -1;
+    int prev_measured = -1;
+    unsigned fold_at = 0;   // index of the first falling point
     for (size_t i = 0; i < err.size(); ++i) {
+        const unsigned set = lo_mv + unsigned(i) * kStepMv;
+        const int measured = int(err[i]) + int(set);
         const int e = int(err[i]);
         if (i == 0 || e < s.min_err) s.min_err = int16_t(e);
         if (i == 0 || e > s.max_err) s.max_err = int16_t(e);
-        if (std::abs(e) > worst_abs) { worst_abs = std::abs(e); s.worst_err = int16_t(e); }
+        if (std::abs(e) > worst_abs) { worst_abs = std::abs(e); s.worst_err = int16_t(e); s.worst_mv = uint16_t(set); }
+        if (i == 0 || measured > s.peak_mv) { s.peak_mv = uint16_t(measured); s.peak_at_mv = uint16_t(set); }
+        if (i > 0 && prev_measured >= 0 && measured < prev_measured && !fold_at) fold_at = unsigned(i);
+        prev_measured = measured;
+    }
+    if (fold_at) {
+        s.fold_from_mv = uint16_t(lo_mv + fold_at * kStepMv);
+        int low = 0;
+        for (size_t i = fold_at; i < err.size(); ++i) {
+            const int measured = int(err[i]) + int(lo_mv + i * kStepMv);
+            if (i == fold_at || measured < low) low = measured;
+        }
+        s.fold_mv = uint16_t(std::max(low, 0));
+    }
+    // A point outside the row's band (the PPS band is one-sided: within 5 % / 100 mV below, the ceiling above) was
+    // steady and recorded; the summary says so, the strip colours it.
+    for (size_t i = 0; i < err.size(); ++i) {
+        const unsigned set = lo_mv + unsigned(i) * kStepMv;
+        const int measured = int(err[i]) + int(set);
+        if (measured < int(set) - int(std::max(100u, set / 20))) { s.out_of_band = true; break; }
     }
     return s;
 }

@@ -25,7 +25,7 @@
 // Loaded by the page as a script (window.K2Card) and by Node as a module (module.exports).
 var K2Card = (function () {
   var LINK_VERSION = "1";
-  var PAYLOAD = 214;      // card format 9; formats 3, 4, 5, 6, 7 and 8 are 144, 162, 178, 190, 196 and 198 bytes
+  var PAYLOAD = 250;      // card format 10; formats 3..9 are 144, 162, 178, 190, 196, 198, 214 bytes
   var V8_PAYLOAD = 198;   // format 8 payload; format 9 adds the 16-byte spread block after it
   var V7_PAYLOAD = 196;   // format 7 ends with the repeat block; format 8 adds the re-balance count after it
   var V6_PAYLOAD = 190;   // format 6 ends with the UFCS modes; format 7 adds the repeat block after them
@@ -33,10 +33,12 @@ var K2Card = (function () {
   var REPEAT_AT = 190;    // format 7: times u8, last_boots u16, last_uptime_s u24 (a format 6 payload has its CRC here)
   var V8_AT = 196;        // format 8: rebalanced u8 + spare (a format 7 payload ends here: its CRC is not read)
   var V9_AT = 198;        // format 9: 4 ranges x 4 levels of int8 mV setpoint error, 0x80 = none (a format 8 payload ends here)
-  var V9_PAYLOAD = 214;   // format 9 payload; format 8 is PAYLOAD (198)
+  var V9_PAYLOAD = 214;   // format 9 payload; format 8 is 198
+  var V10_AT = 214;       // format 10: 4 ranges x 9 bytes deep-sweep summary (int8 min/max/worst mV, then 5 x 9-bit 100 mV fields in 6 bytes)
+  var V10_PAYLOAD = 250;  // format 10 payload
   var UFCS_AT = 178;      // format 6: 4 modes of u24 (lo 100 mV 8 bits, hi 100 mV 9 bits, current in 50 mA 7 bits); hi 0 = unused
   var MAX_UFCS = 4;
-  var FORMAT = 9;         // the newest card format this file reads
+  var FORMAT = 10;        // the newest card format this file reads
   var MAX_RANGES = 4;
   var RECORD_MAGIC = 0xA6;
   var MAX_UNPACKED = 4096;
@@ -197,7 +199,7 @@ var K2Card = (function () {
   var CABLE_KIND_V2 = {0: 0, 1: 1, 2: 2, 3: 4, 4: 255};    // the 3-bit cable kind code -> the v1 kind byte
   var SVDM_MASK = 0xFFFF8000 | (3 << 6) | 0x1F;            // the standard SVDM header mask, when a v2 row omits it
 
-  // A schema v2 card record -> the 220-byte version "1" record (format 9), so decodeRecord() reads it as before.
+  // A schema v2 card record -> the 256-byte version "1" record (format 10), so decodeRecord() reads it as before.
   function expandCardV2(b) {
     var r = new BitReader(b);
     if (r.get(8) !== 2) throw CardError("bad-record", "This is not a version 2 card record.");
@@ -288,6 +290,9 @@ var K2Card = (function () {
     rec[p + 196] = rebalanced & 0xFF;
     if (b.length * 8 - r.pos > 16 && r.get(1)) {          // v9: the spread presence bit + 16 int8 bytes (absent before it)
       for (var si = 0; si < 16; si++) rec[p + 198 + si] = r.get(8);
+    }
+    if (b.length * 8 - r.pos > 16 && r.get(1)) {          // v10: the sweep presence bit + 4 x 9 bytes (absent before it)
+      for (var si = 0; si < 36; si++) rec[p + 214 + si] = r.get(8);
     }
     rec[4 + PAYLOAD] = r.get(8);                          // the v1 record's CRC-16, carried so the integrity check is unchanged
     rec[4 + PAYLOAD + 1] = r.get(8);
@@ -597,6 +602,18 @@ var K2Card = (function () {
         }
         if (errs.length) r.err_mv = errs;
       }
+      if (fmt >= 10 && b.length >= V10_PAYLOAD) {   // v10: the deep sweep of this APDO (all-zero block = none)
+        var q10 = V10_AT + 9 * i;
+        var v10 = 0;
+        for (var k = 0; k < 6; k++) v10 |= b[q10 + 3 + k] << (8 * k);
+        if ((v10 >> 9 & 0x1FF) !== 0) {   // peak_dv: the block is present
+          var sw = {min_mv: b[q10] > 127 ? b[q10] - 256 : b[q10], max_mv: b[q10 + 1] > 127 ? b[q10 + 1] - 256 : b[q10 + 1],
+            worst_mv: b[q10 + 2] > 127 ? b[q10 + 2] - 256 : b[q10 + 2],
+            worst_at_mv: (v10 & 0x1FF) * 100, peak_mv: (v10 >> 9 & 0x1FF) * 100, peak_at_mv: (v10 >> 18 & 0x1FF) * 100};
+          if (v10 >> 27 & 0x1FF) { sw.fold_mv = (v10 >> 27 & 0x1FF) * 100; sw.fold_from_mv = (v10 >> 36 & 0x1FF) * 100; }
+          r.sweep = sw;
+        }
+      }
       ranges.push(r);
     }
     var eprLevels = {};
@@ -777,10 +794,20 @@ var K2Card = (function () {
     return name === "PD" ? "fail" : "skip";
   }
 
+  function sweepText(sw) {   // mirrors tools/report_card.py sweep_text / ctsweep::format_summary
+    if (!sw || !sw.peak_mv) return "no points";
+    var t = "sweep peak " + volts(sw.peak_mv) + " at " + volts(sw.peak_at_mv);
+    if (sw.fold_mv) t += ", folds back to " + volts(sw.fold_mv) + " from " + volts(sw.fold_from_mv);
+    return t;
+  }
+
   function rangeBadge(r, capped) {
     var tone = rangeVerdict(r, capped), name = rangeName(r.alg), label, status;
     var amp = r.max_ma ? " " + amps(r.max_ma) : "";
-    if (tone === "pass") {
+    if (r.sweep) status = sweepText(r.sweep);   // the deep sweep's summary overrides the range status
+    if (r.sweep) {
+      label = name + " sweep " + span(r.lo_mv, r.hi_mv);
+    } else if (tone === "pass") {
       label = name + " " + span(r.lo_mv, r.hi_mv);
       status = (r.max_mv < r.hi_mv ? "up to " + volts(r.max_mv) : "whole range") + (amp ? ", up to" + amp : "");
     } else if (tone === "partial" && r.fail_mv) {

@@ -4,7 +4,7 @@
 // (k2/core/fs.hpp). Pure logic over k2::fs::Fs, host-tested by tests/test_report_card_store.cpp on a RAM disk
 // that can lose power at any operation.
 //
-// File /cards/<fingerprint, 8 hex digits>.card, kFileSize = 228 bytes with v9 (older cards are 212 bytes for v8, 210 for v7, 204 for v6,
+// File /cards/<fingerprint, 8 hex digits>.card, kFileSize = 264 bytes with v10 (older cards are 228 bytes for v9, 212 for v8, 210 for v7, 204 for v6,
 // 192 for v5, 176 for v4 and 158 for v3; all are read, zero-padded, and rewritten as v8 by the next save). Small file, so it
 // lives inside the directory metadata and costs about 212 bytes of flash:
 //     +0   "K2C1"   magic and format version
