@@ -272,6 +272,11 @@ class Decoders(unittest.TestCase):
         self.assertEqual(d["fs_ms"], 42)
         # The old 9-byte reply stays readable and carries no paint keys.
         self.assertNotIn("paint_px", kr.decode_lcd(bytes(9)))
+        # The divider byte comes last; a 21-byte reply (before the lab switch) carries no spi_div.
+        self.assertNotIn("spi_div", d)
+        self.assertEqual(kr.decode_lcd(full + bytes([4]))["spi_div"], 4)
+        self.assertEqual(kr.decode_lcd(full + bytes([8]))["spi_div"], 8)
+        self.assertIn("spi_div=4", kr.render("debug", {"lcd": kr.decode_lcd(full + bytes([4]))}))
         self.assertIn("paint_px=987654", kr.render("debug", {"lcd": d}))
 
     def test_debug_cc_probe(self):

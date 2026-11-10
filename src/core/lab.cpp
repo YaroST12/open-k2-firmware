@@ -3,6 +3,7 @@
 // Protocol lab grammar, see k2/core/lab.hpp. One table row per command: family, verb, id, the positional
 // kinds and the rule that decides whether the command needs `confirm`.
 #include "k2/core/lab.hpp"
+#include "k2/drivers/lcd_timing.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
 
 namespace k2::lab {
@@ -71,6 +72,8 @@ constexpr Entry kTable[] = {
     {"pd", "hardreset", "pd.hardreset", Id::PdHardReset, "", Raise::Never},
     {"pd", "softreset", "pd.softreset", Id::PdSoftReset, "", Raise::Never},
     {"pd", "raw", "pd.raw", Id::PdRaw, "x", Raise::Always},
+    {"lcd", "show", "lcd.show", Id::LcdShow, "", Raise::Never},
+    {"lcd", "spi", "lcd.spi", Id::LcdSpi, "n", Raise::Never},   // LCD SPI clock divider 4 or 8: RAM only, never touches VBUS
 };
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(Id::Count));
 
@@ -259,6 +262,11 @@ const char* parse(const std::string_view* t, std::size_t n, Cmd& out) {
     case Id::PdGet:
         out.word = words[0];
         break;
+    case Id::LcdSpi: {
+        lcd::SpiDiv d;
+        if (!lcd::lab_spi_div(out.a[0], d)) return "divider is 4 (30 MHz) or 8 (15 MHz, the default)";
+        break;
+    }
     case Id::UfcsSet: {   // a[0] = value, a[1] = ufcs::Field index; the range is the field's own
         ufcs::Field f;
         if (!ufcs::find_field(words[0], f)) return "unknown tuner field (ufcs show lists them)";

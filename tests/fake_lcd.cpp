@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Host stand-in for src/drivers/lcd.cpp: the same sink diversion, with a 240x240 "panel" RAM behind it.
 #include "fake_lcd.h"
+#include "k2/drivers/lcd_timing.hpp"
 #include "k2/ui/pixel_sink.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -93,5 +94,13 @@ void pump() {
 void set_erase(bool erase) { g_erase = erase; }
 bool get_erase() { return g_erase; }
 DmaInfo dma_info() { return {}; }
+static unsigned g_spi_div = 8;
+unsigned spi_div() { return g_spi_div; }
+bool set_spi_div(unsigned divider) {
+    SpiDiv d;
+    if (!lab_spi_div(divider, d)) return false;
+    g_spi_div = divider;
+    return true;
+}
 
 }  // namespace k2::lcd

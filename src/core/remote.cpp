@@ -853,6 +853,7 @@ remote::LcdSnapshot Remote::debug_lcd() {
     s.paint_px = t.px;
     s.paint_ms = t.paint_ms;
     s.fs_ms = t.fs_ms;
+    s.spi_div = static_cast<uint8_t>(lcd::spi_div());
     K2LOG("[RMT] debug lcd flags=%u transfers=%u stalls=%u\n", s.flags, unsigned(s.transfers), unsigned(s.stalls));
     return s;
 }

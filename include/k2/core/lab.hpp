@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Protocol lab command grammar (pure, host-tested): the data-driven table behind the shell's
-// accp / qc2 / qc3 / qc3+ / afc / fcp / scp / vooc / ufcs / vivo / dpdm / vbus / pd / cc families.
+// accp / qc2 / qc3 / qc3+ / afc / fcp / scp / vooc / ufcs / vivo / dpdm / vbus / pd / cc / lcd families.
 // parse() turns the tokens of one line into a Cmd; firmware glue (src/core/shell_hw.cpp) runs it.
 //
 // Grammar:  <family> <verb> [positional...] [--option value] [--flag] [confirm]
@@ -29,6 +29,7 @@ enum class Id : std::uint8_t {
     VivoRaw, VivoRequest,
     Dpdm, CcRp, CcRd, Vbus,
     PdCaps, PdRequest, PdPps, PdAvs, PdEpr, PdVdm, PdGet, PdReread, PdHardReset, PdSoftReset, PdRaw,
+    LcdShow, LcdSpi,
     Count
 };
 

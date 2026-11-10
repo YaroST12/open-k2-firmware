@@ -26,8 +26,8 @@ void fill(std::uint16_t color);
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color);
 
 // Streamed write into the window (x0,y0)-(x1,y1) inclusive. usb::service() and the idle hook run
-// every ~2048 pixels (polled path) or about every millisecond of wire time (DMA path) so that a
-// long fill cannot starve the USB stack or PD. Runs of 32+ pixels go out by DMA (SPI3 TX):
+// every ~2.2 ms of wire time on the polled path (2048 px at /8, 4096 px at /4) and every ~0.5 ms during a DMA wait
+// (468 px at /8, 937 px at /4: lcd_timing.hpp), so that a long fill cannot starve the USB stack or PD. Runs of 32+ pixels go out by DMA (SPI3 TX):
 // stream_fill returns with its last piece still on the wire, and the next lcd call (the next
 // stream_*, stream_end, a command) waits for it; stream_pixels returns with its buffer consumed.
 // -DK2_LCD_DMA=0 builds the polled-only driver.
@@ -84,6 +84,13 @@ struct DmaInfo {
     std::uint32_t transfers = 0, stalls = 0;
 };
 DmaInfo dma_info();
+
+// SPI3 clock divider (lab switch): /8 = 15 MHz at every boot, /4 = 30 MHz after `lcd spi 4`. RAM only, never persisted.
+// set_spi_div() waits for the wire to go idle, reprograms SPI3 (SPE off while BR changes) and returns true; it returns
+// false and changes nothing for anything but 4 and 8, or while a pixel stream is open. The caller forces a full redraw
+// afterwards (a clock the board cannot carry shows as garbage on the panel). The stream service intervals follow it.
+bool set_spi_div(unsigned divider);
+unsigned spi_div();
 
 // Called every few hundred streamed pixels (with usb::service) so time-critical work, such as
 // answering PD messages, keeps running while a page draws. nullptr disables it.

@@ -16,6 +16,9 @@
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/core/fmt.hpp"
 #include "k2/drivers/fusb302.hpp"
+#include "k2/drivers/lcd.hpp"
+#include "k2/drivers/lcd_timing.hpp"
+#include "k2/core/paint_meter.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/fastcharge/qc.hpp"
 #include "k2/fastcharge/ufcs.hpp"
@@ -651,10 +654,38 @@ const char* lab_pd(const lab::Cmd& c) {
     return ok ? nullptr : "refused (no CC, or inline: an inline K2 never transmits)";
 }
 
+// LCD SPI clock lab switch: `lcd show` reads the divider and the paint totals, `lcd spi <4|8>` sets it (RAM only, /8 at
+// every boot) and repaints the whole screen. It never touches VBUS or the lines, so it needs no lab_guard: it also works
+// during a charger test, where a lighter wire time is what is being measured.
+const char* lab_lcd(const lab::Cmd& c) {
+    if (c.id == lab::Id::LcdSpi) {
+        if (!lcd::set_spi_div(c.a[0])) return "divider not changed (4 or 8 only, and not while a screenshot or stream is open)";
+        g_ui->repaint(systick::millis());
+    }
+    const unsigned div = lcd::spi_div();
+    const lcd::SpiDiv sd = div == 4 ? lcd::SpiDiv::Div4 : lcd::SpiDiv::Div8;
+    const lcd::DmaInfo d = lcd::dma_info();
+    const paint::Reading t = paint::meter.total();
+    Line l(c, lab::name(c.id));
+    l.u("div", div);
+    l.u("mhz", lcd::kApb1Hz / 1'000'000u / div);
+    l.u("service_px", lcd::service_pixels(sd));
+    l.u("dma_service_px", lcd::dma_service_px(sd));
+    l.s("dma", !d.enabled ? "disabled" : d.ok ? "ok" : "stalled");
+    l.u("transfers", d.transfers);
+    l.u("stalls", d.stalls);
+    l.u("paint_px", t.px);
+    l.u("paint_ms", t.paint_ms);
+    l.u("fs_ms", t.fs_ms);
+    l.send();
+    return nullptr;
+}
+
 const char* lab_run(const lab::Cmd& c) {
     using I = lab::Id;
     if (const char* why = check_opts(c)) return why;
     switch (c.id) {
+    case I::LcdShow: case I::LcdSpi: return lab_lcd(c);
     case I::AccpPing: case I::AccpRead: case I::AccpWrite: case I::AccpDump: return lab_accp(c);
     case I::Qc3Up: case I::Qc3Down: case I::Qc3pUp: case I::Qc3pDown: return lab_qc_pulse(c);
     case I::Qc2: case I::Qc3Set: case I::Qc3pSet: case I::Afc: case I::Fcp: case I::Scp: case I::VoocWake:

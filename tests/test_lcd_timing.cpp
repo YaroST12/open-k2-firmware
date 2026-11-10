@@ -60,7 +60,36 @@ static void test_dma_threshold() {
     CHECK_EQ(use_dma(57600), true);
 }
 
+static void test_service_intervals() {
+    // The service interval is a wire-time budget, so it scales with the divider: the same ~2.2 ms (polled path) and
+    // ~0.5 ms (DMA wait) between usb::service() rounds at /8 and /4.
+    CHECK_EQ(service_pixels(SpiDiv::Div8), 2048u);
+    CHECK_EQ(service_pixels(SpiDiv::Div4), 4096u);
+    CHECK_EQ(wire_us(service_pixels(SpiDiv::Div8), SpiDiv::Div8), wire_us(service_pixels(SpiDiv::Div4), SpiDiv::Div4));
+    CHECK_EQ(dma_service_px(SpiDiv::Div8), 468u);
+    CHECK_EQ(dma_service_px(SpiDiv::Div4), 937u);
+    CHECK_EQ(dma_service_px(SpiDiv::Div2), 1875u);
+    for (SpiDiv d : {SpiDiv::Div8, SpiDiv::Div4}) {
+        const std::uint32_t us = wire_us(dma_service_px(d), d);
+        CHECK_EQ(us >= 490 && us <= 500, true);
+    }
+}
+
+static void test_lab_divider() {   // the runtime switch offers 4 and 8 only
+    SpiDiv d = SpiDiv::Div8;
+    CHECK_EQ(lab_spi_div(4, d), true);
+    CHECK_EQ(d, SpiDiv::Div4);
+    CHECK_EQ(lab_spi_div(8, d), true);
+    CHECK_EQ(d, SpiDiv::Div8);
+    CHECK_EQ(lab_spi_div(2, d), false);   // 60 MHz is not offered
+    CHECK_EQ(lab_spi_div(0, d), false);
+    CHECK_EQ(lab_spi_div(16, d), false);
+    CHECK_EQ(d, SpiDiv::Div8);            // a refusal leaves the value alone
+}
+
 int main() {
+    test_service_intervals();
+    test_lab_divider();
     test_wire_time();
     test_divider_field();
     test_dma_chunks();

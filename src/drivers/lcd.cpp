@@ -30,13 +30,17 @@ enum class Cmd : std::uint8_t {
 
 constexpr std::uint8_t kMadctl[4] = {0x00, 0x60, 0xC0, 0xA0};
 constexpr std::uint16_t kRamOffset = 80;  // 240x240 window inside the 240x320 controller RAM
-constexpr std::uint32_t kServicePixels = 2048;  // ~4 KB = ~4.4 ms at 7.5 MHz between usb::service()
-
-// SPI3 clock divider: DIV8 (7.5 MHz) ships; DIV4 (15 MHz) and DIV2 (30 MHz) are only for a
-// hardware signal-integrity check on a specific board.
-constexpr SpiDiv kLcdSpiDiv = SpiDiv::Div8;
+// SPI3 clock divider off APB1 (120 MHz): DIV8 (15 MHz) is the boot value and ships; DIV4 (30 MHz) is a lab switch
+// (set_spi_div, not persisted). Both service intervals below are wire-time budgets, so they follow the divider
+// (lcd_timing.hpp: service_pixels = ~2.2 ms of pixels pushed by hand, dma_service_px = ~0.5 ms during a DMA wait).
+constexpr SpiDiv kBootSpiDiv = SpiDiv::Div8;
 constexpr std::uint16_t ctrl1_for(SpiDiv div) { return (Spi::CTRL1_LCD & ~Spi::CTRL1_BR_MASK) | br_field(div); }
-constexpr std::uint16_t kLcdCtrl1 = ctrl1_for(kLcdSpiDiv);
+SpiDiv g_div = kBootSpiDiv;
+std::uint16_t g_ctrl1 = ctrl1_for(kBootSpiDiv);
+std::uint32_t g_service_px = service_pixels(kBootSpiDiv);
+std::uint32_t g_dma_service_px = dma_service_px(kBootSpiDiv);
+bool g_stream_open;   // a pixel stream owns CS: the divider must not change
+static_assert(service_pixels(SpiDiv::Div8) == 2048 && dma_service_px(SpiDiv::Div8) == 468, "boot intervals unchanged");
 static_assert(br_field(SpiDiv::Div2) == Spi::CTRL1_BR_DIV2 && br_field(SpiDiv::Div4) == Spi::CTRL1_BR_DIV4 &&
               br_field(SpiDiv::Div8) == Spi::CTRL1_BR_DIV8, "divider table matches the register bits");
 static_assert(ctrl1_for(SpiDiv::Div2) == 0xC347, "CTRL1 /2 encoding");
@@ -52,11 +56,8 @@ static_assert((ctrl1_for(SpiDiv::Div8) | Spi::CTRL1_DSIZE) == 0xCB57, "CTRL1 16-
 #define K2_LCD_DMA 1
 #endif
 constexpr bool kLcdDma = K2_LCD_DMA != 0;
-// While a transfer runs the CPU serves usb::service() and the idle hook about once per
-// millisecond of wire time at any divider (60000 px/ms-of-APB1 / (16 * divider)).
-constexpr std::uint32_t kDmaServicePx = 3750 / static_cast<unsigned>(kLcdSpiDiv);
 // A transfer whose count does not move for this long (SPI3 stuck, wrong request mapping) is
-// abandoned: the remainder goes out polled and DMA stays off. One pixel takes 2.1 us at DIV8.
+// abandoned: the remainder goes out polled and DMA stays off. One pixel takes 1.07 us at DIV8.
 constexpr std::uint32_t kDmaStallMs = 3;
 
 // DMA2 channel 2 carries the SPI3 TX request (inferred from the STM32F1-style layout, fixed
@@ -114,8 +115,8 @@ void spi_wait_idle() {
 void spi_frame_16bit(bool on) {
     Spi& spi = spi3();
     spi_wait_idle();
-    spi.CTRL1 = kLcdCtrl1 & ~Spi::CTRL1_SPIEN;  // SPE=0 while DSIZE changes
-    spi.CTRL1 = on ? (kLcdCtrl1 | Spi::CTRL1_DSIZE) : kLcdCtrl1;
+    spi.CTRL1 = g_ctrl1 & ~Spi::CTRL1_SPIEN;  // SPE=0 while DSIZE changes
+    spi.CTRL1 = on ? (g_ctrl1 | Spi::CTRL1_DSIZE) : g_ctrl1;
 }
 
 void dma_wait();  // below: finishes an in-flight pixel transfer, serving PD/USB meanwhile
@@ -175,7 +176,7 @@ void (*g_idle_hook)() = nullptr;  // set_idle_hook(): time-critical work during 
 
 void stream_service(std::uint32_t count) {
     g_stream_px += count;
-    if (g_stream_px >= kServicePixels) {
+    if (g_stream_px >= g_service_px) {
         g_stream_px = 0;
         usb::service();
         if (g_idle_hook) g_idle_hook();
@@ -240,7 +241,7 @@ void dma_wait() {
     while (left) {
         if (left != last) { last = left; moved_ms = systick::millis(); }
         else if (systick::millis() - moved_ms >= kDmaStallMs) { stalled = true; break; }
-        if (total - left - served >= kDmaServicePx) {
+        if (total - left - served >= g_dma_service_px) {
             served = total - left;
             g_stream_px = 0;
             serve();
@@ -302,7 +303,7 @@ void init() {
     p::lcd_dc.set();
     p::lcd_reset.set();
 
-    spi3().CTRL1 = kLcdCtrl1;
+    spi3().CTRL1 = g_ctrl1;
 
     p::lcd_reset.clear();           // hardware reset pulse
     systick::delay_ms(15);
@@ -349,6 +350,23 @@ void pump() { serve(); }
 
 DmaInfo dma_info() { return {kLcdDma, kLcdDma && g_dma_ok, g_dma_done, g_dma_stalls}; }
 
+unsigned spi_div() { return static_cast<unsigned>(g_div); }
+
+bool set_spi_div(unsigned divider) {
+    SpiDiv d;
+    if (!lab_spi_div(divider, d) || g_stream_open || g_sink) return false;
+    dma_wait();         // an in-flight fill still owns the wire
+    spi_wait_idle();
+    g_div = d;
+    g_ctrl1 = ctrl1_for(d);
+    g_service_px = service_pixels(d);
+    g_dma_service_px = dma_service_px(d);
+    spi3().CTRL1 = g_ctrl1 & ~Spi::CTRL1_SPIEN;   // BR only changes with SPE clear
+    spi3().CTRL1 = g_ctrl1;
+    K2LOG("[LCD] SPI3 divider /%u (CTRL1=%04x)\n", divider, unsigned(g_ctrl1));
+    return true;
+}
+
 bool g_erase = false;
 void set_erase(bool erase) { g_erase = erase; }
 bool get_erase() { return g_erase; }
@@ -384,6 +402,7 @@ void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uin
     set_window(x0, y0, x1, y1);  // leaves CS low, DC high: the pixel stream continues the frame
     spi_frame_16bit(true);  // 16-bit pixel frames from here until stream_end()
     g_stream_px = 0;
+    g_stream_open = true;
 }
 
 void stream_pixels(std::span<const std::uint16_t> px) {
@@ -425,6 +444,7 @@ void stream_end() {
     spi_wait_idle();     // BF clear: the last frame has left the shift register before CS rises
     p::lcd_cs.set();
     spi_frame_16bit(false);  // back to 8-bit frames for commands
+    g_stream_open = false;
 }
 
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color) {

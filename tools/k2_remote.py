@@ -2291,7 +2291,8 @@ def decode_epr_info(p):
 
 def decode_lcd(p):
     """DebugLcd reply: [flags (bit0 DMA built in, bit1 DMA trusted), transfers u32, stalls u32], then (newer firmware)
-    paint totals since boot: [pixels sent to the panel u32, ms inside lcd stream calls u32, ms inside fs flash writes u32]."""
+    paint totals since boot: [pixels sent to the panel u32, ms inside lcd stream calls u32, ms inside fs flash writes u32],
+    then the LCD SPI3 clock divider u8 (8 at every boot, 4 after the lab switch `lcd spi 4`)."""
     _need(p, 9, "lcd")
     state = "disabled" if not p[0] & 1 else ("ok" if p[0] & 2 else "stalled")
     r = {"dma": state, "transfers": int.from_bytes(p[1:5], "little"), "stalls": int.from_bytes(p[5:9], "little")}
@@ -2299,6 +2300,8 @@ def decode_lcd(p):
         r["paint_px"] = int.from_bytes(p[9:13], "little")
         r["paint_ms"] = int.from_bytes(p[13:17], "little")
         r["fs_ms"] = int.from_bytes(p[17:21], "little")
+    if len(p) >= 22:
+        r["spi_div"] = p[21]
     return r
 
 

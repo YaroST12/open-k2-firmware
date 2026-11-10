@@ -582,11 +582,13 @@ struct EprInfoSnapshot {
 };
 // LCD DMA state (DebugLcd): flags bit0 build option on, bit1 DMA still trusted (no stalled transfer). Behind it the paint
 // totals since boot (k2/core/paint_meter.hpp): pixels sent to the panel, ms inside the lcd stream calls (wire wait and the
-// service rounds served inside them included), ms inside the file-system flash writes.
+// service rounds served inside them included), ms inside the file-system flash writes; last the SPI3 clock divider
+// (8 at every boot, 4 after the lab switch `lcd spi 4`).
 struct LcdSnapshot {
     uint8_t flags = 0;
     uint32_t transfers = 0, stalls = 0;
     uint32_t paint_px = 0, paint_ms = 0, fs_ms = 0;
+    uint8_t spi_div = 8;
 };
 struct RippleInfo {
     uint32_t period_ns = 0;
