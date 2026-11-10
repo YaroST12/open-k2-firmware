@@ -139,6 +139,10 @@ struct Fake {
     uint8_t reset_flags = 0xFF;
     PdOpResult pd_release() { calls++; releases++; return {}; }
     PdOpResult pd_hard_reset(uint8_t flags = 0) { calls++; resets++; reset_flags = flags; return {}; }
+    int hb_calls = 0;
+    uint8_t hb_flags = 0xFF;
+    HandbackResult hb_result{};
+    HandbackResult pd_handback(uint8_t flags = 0) { calls++; hb_calls++; hb_flags = flags; return hb_result; }
     uint8_t trig_pin = 0;   // what pd_trigger() reports as the pinned Rd line
     PdTriggerSnapshot pd_trigger() {
         calls++;

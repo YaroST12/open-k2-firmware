@@ -25,9 +25,11 @@
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/boottrace_store.hpp"
+#include "k2/core/handback.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
+#include "k2/pd/pd_passive.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
@@ -500,6 +502,25 @@ remote::PdOpResult Remote::pd_hard_reset(uint8_t flags) {
     // The driver has its own inline guard: only the verdict's lab override lifts it (both flags, checked above).
     if (!ui_.trigger_hard_reset(systick::millis(), flag_inline && flag_confirm)) return pd_result(pd::Err::Inline);
     return {};
+}
+
+remote::HandbackResult Remote::pd_handback(uint8_t flags) {
+    // Phase-1 lab hand-back (ROADMAP 2026-11-10 "An inline latch leaves the far sink on Type-C current", phase 1
+    // lab only): the whole Fix sequence - wait for /rd.rec to be gone, drop the Rd, one Hard Reset - is armed in
+    // k2::handback only when the decision allows it; otherwise the refusal reason goes on the wire (the verdict
+    // byte) and in the log. `pd reset --inline --confirm` stays the raw single reset.
+    const bool confirm = (flags & remote::kPdFlagConfirm) != 0;
+    const pd::SinkStatus& sk = fusb302::sink_status();
+    const pd::HandbackFacts facts{ui_.charger_test_busy(), ui_.link().inline_mode(),
+                                  sk.state == pd::SinkState::Ready || sk.held,   // an explicit contract the K2 owns
+                                  fusb302::far_sink_seen(), handback::done()};
+    const pd::HandbackVerdict v = pd::handback_verdict(facts, confirm);
+    K2LOG("[LINK] handback verdict=%s (busy=%d inline=%d contract=%d far_req=%d done=%d confirm=%d)\n",
+          pd::handback_verdict_name(v), int(facts.charger_test_busy), int(facts.inline_mode), int(facts.contract_owned),
+          int(facts.far_request_seen), int(facts.handback_done), int(confirm));
+    if (v != pd::HandbackVerdict::Allowed) return {remote::Status::Ok, uint8_t(v)};   // the verdict is the refusal reason
+    handback::arm(systick::millis());   // the sequence runs from the main loop (the follower needs it to scrub /rd.rec)
+    return {remote::Status::Ok, uint8_t(v)};
 }
 
 remote::PdTriggerSnapshot Remote::pd_attach(uint16_t target_mv, uint16_t target_ma) {

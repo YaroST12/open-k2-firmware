@@ -221,6 +221,9 @@ pd::TriggerRefusal trigger_refusal();
 pd::OverLoadFacts over_load_facts();
 // Any PD message (any SOP: caps, Request, PS_RDY, VDM, GoodCRC) seen since this attach.
 bool pd_traffic();
+// A sink other than the K2 sent a Request in this attach (power-role bit clear; the K2 never hears its own TX).
+// The hand-back decision (pd::HandbackFacts::far_request_seen) and the over-load facts use this one tracker.
+bool far_sink_seen();
 // Latched like pd_traffic() but cleared only by a new attach: a unit's hold / start-up resets pd_traffic(), this one keeps
 // "this source spoke PD since we attached". The charger test uses it to tell "PD gave up before START" from "never PD".
 bool pd_seen_attach();

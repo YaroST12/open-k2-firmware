@@ -55,6 +55,7 @@ CMD_USB_LINK = 0x46  # USB / Thunderbolt link from sniffed PD
 CMD_PD_REREAD = 0x47  # [op, mask] source-cap re-read (PD mode): 0 status, 1 start + mask, 2 abort, 5 Ra mode on/off
 CMD_PD_RELEASE = 0x44       # back to 5 V
 CMD_PD_ATTACH = 0x48       # [target_mv u16] [target_ma u16] -> trigger snapshot; default 9000 mV
+CMD_PD_HANDBACK = 0x49     # optional [flags]: bit0 confirm -> [HandbackVerdict]; phase-1 lab hand-back
 CMD_DFU_ENTER = 0x30      # clear the app marker and reset into the bootloader
 CMD_DEBUG_FAULT = 0x31    # debug: provoke a CPU fault to exercise the [FAULT] handler
 FAULT_MAGIC = b"BOOM"
@@ -142,6 +143,9 @@ def page_name(i):
 PD_ERRS = ["ok", "no source caps", "bad PDO position", "over the voltage cap", "voltage outside the PDO range",
            "inline: a live sink is attached", "busy (identify running)"]
 PD_ERR_INLINE = PD_ERRS.index("inline: a live sink is attached")   # pd::Err::Inline, carried by refusals' payload byte 0
+# pd::HandbackVerdict in order: the reply payload byte of CMD_PD_HANDBACK (allowed or the refusal reason)
+HANDBACK_VERDICTS = ["allowed", "charger test running", "confirm needed", "not inline", "no contract owned",
+                     "far sink Request seen this attach", "already handed back this attach"]
 SINK_STATES = ["idle", "epr-entering", "epr-wait-caps", "requesting", "transition", "ready", "aborting", "failed"]
 SINK_RESULTS = ["none", "ok", "rejected", "wait-exhausted", "timeout", "tx-failed", "hard-reset", "soft-reset",
                 "aborted", "over-cap", "epr-failed", "bad-choice"]
@@ -240,6 +244,8 @@ class RemoteError(RuntimeError):
             # the inline Identify refusal (BadArg + pd::Err::Inline), not "busy": a live sink is
             # attached, the K2 transmits nothing, the Sink tab shows the sniffed identity
             text = f"command {cmd} failed: refused: inline - the Sink tab shows the sniffed identity"
+        if cmd == CMD_PD_HANDBACK and payload and payload[0] < len(HANDBACK_VERDICTS):
+            text += f" ({HANDBACK_VERDICTS[payload[0]]})"
         if cmd == CMD_QRTEST and status == STATUS_BAD_ARG and payload:
             text += f" ({payload.decode('ascii', errors='replace')})"   # the show op's reason (range / box fit)
         super().__init__(text)
@@ -1880,6 +1886,15 @@ def cmd_pd(link, a):
         # payload, so an older firmware still accepts the plain reset.
         flags = (1 if getattr(a, "confirm", False) else 0) | (2 if getattr(a, "inline", False) else 0)
         link.call(CMD_PD_RESET, bytes([flags]) if flags else b"")
+    elif sub == "handback":
+        # Phase-1 lab op (ROADMAP "An inline latch leaves the far sink on Type-C current"): the whole Fix
+        # sequence - wait for /rd.rec to be gone, drop the Rd, ONE Hard Reset - runs on the K2 only when the
+        # decision allows it (contract owned + inline, no far Request this attach, first hand-back this attach);
+        # otherwise the reply's verdict byte says why. Refused during a charger test; needs --confirm.
+        # `pd reset --inline --confirm` stays the raw single reset.
+        flags = 1 if getattr(a, "confirm", False) else 0
+        rsp = link.call(CMD_PD_HANDBACK, bytes([flags]) if flags else b"")
+        return {"pd_cmd": sub, "verdict": HANDBACK_VERDICTS[rsp.payload[0]] if rsp.payload else "?"}
     elif sub == "release":
         link.call(CMD_PD_RELEASE)
     elif sub == "attach":
@@ -2385,6 +2400,8 @@ def _render(name, r):
         rows = " ".join(f"{i + 1}:{s}" for i, s in enumerate(r["rows"]))
         return head + ("\n" + rows if rows else "")
     if name == "pd":
+        if r.get("pd_cmd") == "handback":
+            return f"handback {r['verdict']}"   # the phase-1 lab op's verdict: allowed, or why it was refused
         return (f"trigger {r['state']} result={r['result']} held={r['held']} epr={r['epr']} "
                 f"pdo={r['pos']} {r['mv'] / 1000:g} V {r['ma'] / 1000:g} A hard_resets={r['hard_resets']} source_hard_resets={r['source_hard_resets']}"
                 + (f" Rd pin CC{r['pin']}" if r.get("pin") else ""))   # a leftover pinned Rd (pd-reread --pin)
@@ -2659,6 +2676,11 @@ def build_parser():
                     help="lab only: send one Hard Reset even while a live sink is attached inline (needs --confirm); "
                          "refused while a charger test runs and logged as a lab op on the K2. Never reachable from the "
                          "UI, the shell or the charger test")
+    sh = spds.add_parser("handback", help="lab only (phase 1): hand the contract back - wait for /rd.rec to be gone, "
+                                          "drop the Rd, send ONE Hard Reset; only when the K2 owns a contract while "
+                                          "inline and the far sink sent no Request this attach; refused during a "
+                                          "charger test. Never reachable from the UI, the shell or the charger test")
+    sh.add_argument("--confirm", action="store_true", help="confirm the lab op (required)")
     spds.add_parser("release", help="back to 5 V (Request PDO 1)")
     sa = spds.add_parser("attach", help="attach as PD sink and request target voltage (default 9000 mV)")
     sa.add_argument("mv", type=int, nargs="?", default=9000, help="target voltage in mV (default 9000)")

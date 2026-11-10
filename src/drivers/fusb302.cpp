@@ -447,8 +447,9 @@ bool inline_now() { return g_inline; }
 
 // A sink other than the K2 asked the source for power in this attach (a Request with the power-role bit clear: the K2 never
 // hears its own TX). The wire shows it a UI tick before the Link latches inline, and it also covers a K2 plugged in after
-// the contract was made. Cleared with the attach and with the detach (g_requests_base).
-bool far_sink_seen() { return g_engine.contract.requests != g_requests_base; }
+// the contract was made. Cleared with the attach and with the detach (g_requests_base). Public (fusb302.hpp): the
+// hand-back decision and the over-load facts read this one tracker.
+// (defined at namespace scope below, next to trigger_refusal)
 bool g_down_prev = false;       // downstream_now() at the last downstream_edge()
 void rebase_far_sink() {        // a new attach or a detach: no other sink's Request is on record any more
     g_requests_base = g_engine.contract.requests;
@@ -2247,6 +2248,10 @@ void service() {
 }
 
 // ---- active PD API ----
+
+// A sink other than the K2 asked the source for power in this attach (a Request with the power-role bit clear: the
+// K2 never hears its own TX). Cleared with the attach and with the detach (g_requests_base).
+bool far_sink_seen() { return g_engine.contract.requests != g_requests_base; }
 
 pd::TriggerRefusal trigger_refusal() {
     if (g_active_cc == 0) return inline_now() ? pd::TriggerRefusal::Inline : pd::TriggerRefusal::None;

@@ -331,6 +331,7 @@ enum class Cmd : uint8_t {
     UsbLink = 0x46,         // USB / Thunderbolt link classified from sniffed PD -> UsbLinkSnapshot (see encode_usb_link)
     PdReread = 0x47,        // [op, mask] source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, ..., 8 Rd glitch of mask x 10 ms -> RereadInfo (see above)
     PdAttach = 0x48,        // [target_mv u16] [target_ma u16] -> PdTriggerSnapshot; default 9000 mV, clamped to 36000 mV
+    PdHandback = 0x49,      // optional [flags]: bit0 confirm (kPdFlagConfirm) -> [HandbackVerdict]; phase-1 lab hand-back (see k2/core/handback.hpp)
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
     Fc = 0x32,          // active fast-charge trigger, see the layout above
     Store = 0x60,       // flash store: list / save e-marker / save log, see kStore* below
@@ -360,7 +361,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::Ripple, Cmd::DfuEnter, Cmd::FactoryWipe, Cmd::FlashDump, Cmd::DebugFault, Cmd::Fc, Cmd::DebugLink, Cmd::DebugPdMsg, Cmd::DebugCcMatrix, Cmd::DebugVconn,
     Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe,
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
-    Cmd::PdAttach,
+    Cmd::PdAttach, Cmd::PdHandback,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
 };
@@ -680,6 +681,8 @@ struct IdentitySnapshot {
 
 // Result of a trigger operation: the status the dispatcher answers with and the pd::Err value.
 struct PdOpResult { Status status = Status::Ok; uint8_t err = 0; };
+// Result of the phase-1 lab hand-back: the verdict (pd::HandbackVerdict) rides the reply payload, allowed or refused.
+struct HandbackResult { Status status = Status::Ok; uint8_t verdict = 0; };
 struct PdTriggerSnapshot {
     uint8_t state = 0, result = 0, held = 0, epr = 0, pos = 0;
     uint16_t mv = 0, ma = 0;
@@ -831,6 +834,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.pd_request(u8, u16, u16, on, on) } -> std::same_as<PdOpResult>;   // pos, mv, ma, confirm, over_load (lab only)
     { b.pd_release() } -> std::same_as<PdOpResult>;
     { b.pd_hard_reset(u8) } -> std::same_as<PdOpResult>;   // flags byte: kPdFlagConfirm | kPdFlagResetInline (0 for the shell/UI paths)
+    { b.pd_handback(u8) } -> std::same_as<HandbackResult>;  // flags byte: kPdFlagConfirm only; the verdict is the reply payload
     { b.pd_attach(u16, u16) } -> std::same_as<PdTriggerSnapshot>;
     { b.pd_trigger() } -> std::same_as<PdTriggerSnapshot>;
     { b.match_info() } -> std::same_as<MatchSnapshot>;
@@ -1175,6 +1179,17 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         const uint16_t target_mv = detail::rd16(&p[0]);
         const uint16_t target_ma = p.size() >= 4 ? detail::rd16(&p[2]) : 0;
         return reply_n(encode_pd_trigger(buf, backend.pd_attach(target_mv, target_ma)));
+    }
+    case Cmd::PdHandback: {
+        // pd handback [--confirm]: phase-1 lab op, the whole Fix sequence (record gone -> Rd dropped -> one Hard
+        // Reset). Optional flags byte, bit0 confirm only; the reply payload is the HandbackVerdict (allowed or the
+        // refusal reason, also logged on the K2).
+        if (p.size() > 1) return reply(Status::BadLength);
+        const uint8_t flags = p.empty() ? uint8_t{0} : p[0];
+        if (flags & ~uint8_t(kPdFlagConfirm)) return reply(Status::BadArg);
+        const HandbackResult res = backend.pd_handback(flags);
+        buf[0] = res.verdict;
+        return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
     }
     case Cmd::PdTriggerStatus:
         if (!p.empty()) return reply(Status::BadLength);

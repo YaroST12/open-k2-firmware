@@ -30,6 +30,7 @@
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/core/bootmode.hpp"
+#include "k2/core/handback.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
@@ -314,6 +315,7 @@ void end_boot_screen(uint32_t now) {
     k2::boottrace::flush_log();             // queued [BOOT] trace lines of the first seconds
     k2::session::poll();                    // PD session record into the backup registers on change
     k2::rdcomeback::poll();                 // the Rd intent marker (/rd.rec) in step with the session, written on a quiet link
+    k2::handback::poll(now);                // the phase-1 lab hand-back sequence, if the remote armed one
     k2::rescan::poll();                     // a Refresh's Get_Source_Cap: the answer, or the CC cycle when the source stays silent
     k2::survey::poll(g_ui.charger_test_busy());   // the rest of the Refresh's survey, one message at a time (nothing runs before a Refresh)
     if (g_rescan_landing_due && !k2::rdcomeback::pending()) {   // a Refresh's CC cycle took the K2 down: back on Connection -> Source

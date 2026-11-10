@@ -156,6 +156,44 @@ constexpr LabResetVerdict lab_reset_verdict(const LabResetFacts& f, bool flag_in
     return LabResetVerdict::Allowed;
 }
 
+// The phase-1 lab hand-back (`k2_remote.py pd handback --confirm`, ROADMAP 2026-11-10 "An inline latch leaves the
+// far sink on Type-C current", phase 1 lab only): hand the contract back with ONE Hard Reset - allowed only when the
+// K2 owns an explicit contract (self-hold, a request) while a sink is latched inline, the far sink sent no Request
+// of its own this attach, and no hand-back was done this attach yet. Same lab gating shape as --over-load /
+// `pd reset --inline`: refused while a charger test runs (the run owns the link) and it needs --confirm. Never
+// reachable from the UI, the shell or the charger test: only the remote `pd handback` subparser carries the flag.
+enum class HandbackVerdict : std::uint8_t {
+    Allowed, RefusedBusy, NeedConfirm, RefusedNotInline, RefusedNoContract, RefusedFarRequest, RefusedAgain
+};
+struct HandbackFacts {
+    bool charger_test_busy;   // a charger-test run owns the link: lab ops are refused during it
+    bool inline_mode;         // pd::Link latched a real sink behind the K2
+    bool contract_owned;      // the K2 holds an explicit contract (self-hold or a request: sink Ready / held)
+    bool far_request_seen;    // a foreign Request this attach (fusb302::far_sink_seen())
+    bool handback_done;       // a hand-back was already done this attach
+};
+constexpr HandbackVerdict handback_verdict(const HandbackFacts& f, bool flag_confirm) {
+    if (f.charger_test_busy) return HandbackVerdict::RefusedBusy;
+    if (!flag_confirm) return HandbackVerdict::NeedConfirm;
+    if (!f.inline_mode) return HandbackVerdict::RefusedNotInline;
+    if (!f.contract_owned) return HandbackVerdict::RefusedNoContract;   // nothing to hand back
+    if (f.far_request_seen) return HandbackVerdict::RefusedFarRequest;   // the far end already has its own contract
+    if (f.handback_done) return HandbackVerdict::RefusedAgain;           // one hand-back per attach
+    return HandbackVerdict::Allowed;
+}
+constexpr const char* handback_verdict_name(HandbackVerdict v) {
+    switch (v) {
+    case HandbackVerdict::Allowed: return "allowed";
+    case HandbackVerdict::RefusedBusy: return "charger test running";
+    case HandbackVerdict::NeedConfirm: return "confirm needed";
+    case HandbackVerdict::RefusedNotInline: return "not inline";
+    case HandbackVerdict::RefusedNoContract: return "no contract owned";
+    case HandbackVerdict::RefusedFarRequest: return "far sink Request seen this attach";
+    case HandbackVerdict::RefusedAgain: return "already handed back this attach";
+    }
+    return "?";
+}
+
 // Type-C current advertised by the source's Rp, from the FUSB302 BC_LVL (STATUS0 bits 1:0):
 // 1 = default USB (500 mA), 2 = 1.5 A, 3 = 3 A. With a Rd on the line the level reads from the
 // Rp/Rd divider, so callers keep the highest level seen since attach.
