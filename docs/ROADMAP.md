@@ -417,7 +417,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   not a sink, so the Anker never enables VBUS) while CC1 cycled 0 / 1.2 / 1.8 / 3.3 V (the Pixel toggling alone).
   Flipping the Pixel's cable at the K2 fixed it at once; it had worked three times before by orientation luck.
   NOT REPRODUCED (2026-11-10 afternoon, 72c2e28): IQ4 direct on the K2 plug + Pixel on its cable in the K2 receptacle,
-  and IQ4 -> cable -> K2 -> Pixel direct: both cable orientations charge at ~9.4 V (the Pixel attaches on CC1 or CC2;
+  IQ4 -> cable -> K2 -> Pixel direct, and IQ4 -> Anker splitter -> K2 plug + Pixel on its cable (19.7 V): every
+  cable orientation charges (~9.4 V / 19.7 V) (the Pixel attaches on CC1 or CC2;
   the other line reads its cable's Ra, 0.5-0.6 V), the detector stays silent (correct). So the "CC lands on the other
   pin" explanation is unproven: the morning failure may need another cable, the IQ4's other port or another port
   state. Re-test with the morning's exact cable and port before trusting the cause; the detector is harmless meanwhile.
