@@ -326,8 +326,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     `pd reset --inline --confirm` stays the raw single reset.
   - Phase 2, tester UI (after phase 1 is verified on hardware): when the decision fires on its own, a notice "Hand
     control back to the charger?" with a countdown; OK = hand back now, Back = keep as is (the far sink stays on Type-C
-    current, the notice offers "Replug the phone for fast charge"). Timeout = keep as is (no reset without a press:
-    a Hard Reset cuts the far sink's power for ~1.5 s). One notice per attach; never during a charger-test run.
+    current, the notice offers "Replug the phone for fast charge"). Timeout = hand back (operator decision
+    2026-11-10: the devices get control back unless the user presses Back; the reset cuts the far sink's power for
+    ~1.5 s, so the countdown is visible on screen). One notice per attach; never during a charger-test run.
   - Validate: host tests (red first) on the decision: contract owned + inline -> record removed before the reset is
     queued; no contract / far Request seen / second latch -> no reset. Hardware: repeat P4 HID-less, the black box of the
     comeback shows the phone's own Request above 5 V and no K2 TX; repeat with HID, the K2 stays up and passive.
