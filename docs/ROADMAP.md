@@ -696,18 +696,19 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     20 % of the INA's swing, HID-only reads "< floor", and a charger-test card shows a ripple figure per fixed PDO.
 
 - **PPS coverage: floor, 20 mV steps, accuracy spread** (2026-11-10, user decision; start after `k2/pps-needs-load`
-  is merged - both touch the PPS rows in `src/chargertest/charger_test.cpp`). Today a PPS APDO gets 7.14 V, 11 V,
+  is merged - both touch the PPS rows in `src/chargertest/charger_test.cpp`; **fixed in f733009 (items 1-3),
+  hardware check pending**). Today a PPS APDO gets 7.14 V, 11 V,
   the 7.14 <-> 11 V jumps, 7.14 -> 5.22 V and the full-current top row; the low edge (< 5 V) lives in the separate
   `PdLow` unit (patterns `latch-off-low-pps`, `cut-and-recover-low-pps`). All new rows stay polite: inside the APDO,
   at or below its current, 1 A like the other plan rows.
-  1. Floor: the `PdLow` low-edge row must report the measured floor, not only pass/fail - a source that advertises
+  1. Floor (done in f733009): the `PdLow` low-edge row must report the measured floor, not only pass/fail - a source that advertises
      3.3 V but regulates at 5 V is a fail "floor at 5.0 V" with measured_mv = the reached level (reuse `Capped`'s
      ceiling logic mirrored for a floor). Keep it in `PdLow` (it can cut the output); the results tab names the floor.
-  2. Step resolution: one row per PPS APDO, from a mid level (e.g. 7.0 V), five Requests of +20 mV each: every step
+  2. Step resolution (done in f733009): one row per PPS APDO, from a mid level (e.g. 7.0 V), five Requests of +20 mV each: every step
      needs Accept + PS_RDY and a measured VBUS move of 20 mV +- the meter's resolution (state the tolerance from the
      INA226 LSB and the existing band rules); a source that rounds to 100 mV or ignores small steps fails "step
      resolution N mV". A phone's PPS loop walks in 20-40 mV steps (OnePlus 15 capture, `runs/2026-11-10-op15-sniff/`).
-  3. Accuracy spread: three or four levels across the APDO (low, mid, high, spaced by the range) record the setpoint
+  3. Accuracy spread (done in f733009, card format v9): three or four levels across the APDO (low, mid, high, spaced by the range) record the setpoint
      error in mV per level on the card (not only pass/fail), so a converter that drifts at the ends shows. Card
      format bump if a field is needed; every host decoder (`k2_remote.py`, `k2proto.js`, `qr_corpus.py`,
      `report_card.py`, `card.js`) in the same change.
