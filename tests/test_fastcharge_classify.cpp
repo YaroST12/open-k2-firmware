@@ -286,6 +286,44 @@ static void test_dcp_needs_stability() {
     CHECK_EQ(classify(steady, 590, 590, 8900, false, true, true), Protocol::PdLikely);
 }
 
+// ROADMAP 2026-11-10, still-open hardware note of the "PD 0V5.82A" row: a settled fixed PD contract is
+// silent on CC (no frame for 14 s), so no Request is decoded and pd_active() stays false, and the
+// D+/D- classifier used to read the phone's idle lines as "PD MTK". Rule: CC attached (a source's Rp
+// on a CC line), VBUS above vSafe5V (> 5.5 V) and no D+/D- handshake seen = "PD (not decoded)" -
+// never a legacy mode. The footer keeps "CC 9V" (measured level, no current) from the 27255b3 fix.
+static void test_silent_pd_contract_above_vsafe5_reads_pd() {
+    // MTK-like levels (both lines near 0 V) at 9 V, CC attached, no PD decoded: PD, not PD MTK.
+    Ring mtk;
+    for (int i = 0; i < 50; i++) mtk.push(0, 0);
+    CHECK_EQ(classify(mtk, 0, 0, 9000, false, false, true), Protocol::Pd);
+    // The phone's data-idle levels (D+ pull-up ~0.8 V, D- ~0) at 8.9 V, CC attached, no caps, no load.
+    Ring px;
+    for (int i = 0; i < 50; i++) px.push(820, 1);
+    CHECK_EQ(classify(px, 820, 1, 8898, false, false, true), Protocol::Pd);
+    // Every band above vSafe5V: never PdMtk / PdPe / a QC level.
+    CHECK_EQ(classify(mtk, 0, 0, 6000, false, false, true), Protocol::Pd);
+    CHECK_EQ(classify(mtk, 0, 0, 12000, false, false, true), Protocol::Pd);
+    CHECK_EQ(classify(mtk, 0, 0, 20000, false, false, true), Protocol::Pd);
+    // Band edge: only above 5.5 V (vSafe5V max itself is still the old reading).
+    CHECK_EQ(classify(mtk, 0, 0, 5500, false, false, true), Protocol::PdPe);
+    CHECK_EQ(classify(mtk, 0, 0, 5501, false, false, true), Protocol::Pd);
+    // At 5 V the rule does not apply (a default-USB host on CC is data there).
+    CHECK_EQ(classify(mtk, 0, 0, 5000, false, false, true), Protocol::UsbData);
+    // A decoded contract or a likely one still wins.
+    CHECK_EQ(classify(mtk, 0, 0, 9000, true, false, true), Protocol::Pd);
+    CHECK_EQ(classify(px, 820, 1, 8898, false, true, true), Protocol::PdLikely);
+    // No CC attached: the same silent levels read as before, and a real handshake at 9 V reads legacy.
+    CHECK_EQ(classify(mtk, 0, 0, 9000, false, false, false), Protocol::PdMtk);
+    Ring qc;
+    for (int i = 0; i < 50; i++) qc.push(3300, 600);
+    CHECK_EQ(classify(qc, 3300, 600, 9000, false, false, false), Protocol::Qc2_9V);
+    // With CC attached but a handshake in the window, the legacy reading stands.
+    CHECK_EQ(classify(qc, 3300, 600, 9000, false, false, true), Protocol::Qc2_9V);
+    Ring svooc;
+    for (int i = 0; i < 50; i++) svooc.push(3300, (i & 1) ? 3300 : 0);
+    CHECK_EQ(classify(svooc, 3300, 0, 9000, false, false, true), Protocol::Svooc);
+}
+
 int main() {
     test_ring();
     test_bucket();
@@ -299,5 +337,6 @@ int main() {
     test_pd_and_usb_data();
     test_pd_likely();
     test_dcp_needs_stability();
+    test_silent_pd_contract_above_vsafe5_reads_pd();
     return test_report("test_fastcharge_classify");
 }
