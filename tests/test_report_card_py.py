@@ -89,7 +89,7 @@ def test_qc_label_needs_the_samsung_vid():
 def test_v9_spread_decodes_per_level():
     # ROADMAP "PPS coverage" item 3: format 9 adds the setpoint error in mV per level of each APDO (block at 198:
     # 4 ranges x 4 levels, int8, -128 = none). A v8-length payload of the same card decodes with no spread.
-    assert report_card.PAYLOAD == 198 and report_card.FORMAT == 9   # v9 adds the spread block; PAYLOAD stays the v8 size
+    assert report_card.PAYLOAD == 198 and report_card.FORMAT == 10  # v9 added the spread block at 198; v10 is the current format
     rec = bytearray(214)
     rec[31] = 1                                   # one range
     rec[33] = 9                                   # format v9
