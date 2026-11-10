@@ -376,6 +376,19 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   identify_device). Give the inline refusal its own result (`IdResult::Inline` -> the pd::Err::Inline status the other
   inline refusals use) so the tool says "refused: inline - the Sink tab shows the sniffed identity"; a running charger
   test stays "busy". Host tests on the mapping and the k2_remote text.
+- **A `pd-reread` leaves the contract held: START refuses "tool busy"** (2026-11-10, b14c1b9, UGREEN Nexode Air 65 W
+  on the top plug, `runs/2026-11-10-merge2-hw/ugreen-pd.txt`): after a plain `k2_remote.py pd-reread` (reread done,
+  7 PDOs) `pd status` reads `held=True pdo=1 5 V`, and `ct_start.py` START is refused "[TEST] preflight refused: tool
+  busy (5100 mV)" - twice, also after `pd-reread --abort` (the run had already ended, so abort had nothing to release).
+  Only `pd release` cleared `held`. Fix: a re-read that ends leaves no held contract behind (or START treats a re-read's
+  own leftover PDO 1 hold as its to take over, like the self-hold); the refusal says which tool holds it ("re-read
+  holds 5 V: pd release"). Host test: re-read done -> START allowed.
+- **After that release the whole PD run failed "no PD after re-attach" at 5.10 V** (2026-11-10, same rig, right after
+  re-read -> abort -> `pd release` -> `pd-reread --pin 0 --no-run`): 0 pass / 25 fail, VBUS 5.10 V the whole run, every
+  row "no PD after re-attach" - the source never saw the K2's planned re-attach (VBUS never dropped). Not yet known
+  whether the lab sequence left the K2 in a bad state or the charger does not re-announce: a clean replug run decides
+  it (next step). The step-walk rows read "unknown (160)": the walk's Pending detail (kDetailStepWalk) printed as a
+  sink result by k2_remote when the row never ran - print it as "not run".
 - **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, fixed in 7d1ae17, hardware check pending, connection matrix H22, be71f10, `runs/2026-11-10-merge2-hw/`
   dead-chain, attach-noreact.png): Anker IQ4 -> C-C cable -> K2 -> C-C cable -> Pixel, VBUS never came up, the K2 sat at
   "No charger". The K2 passes CC1->CC1 and CC2->CC2, and each cable's orientation picks which pin its CC wire lands on,
@@ -650,7 +663,10 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   journal resume and keep-alive rules (EPR mode needs its EPR_KeepAlive). Tests list line "AVS sweep" with the point
   count (about 111 points SPR, about 211 EPR to 36 V). Validate: host tests for the plan (SPR only, SPR + EPR capped at
   the ceiling, no AVS offered = the entry is hidden), the summary and the keep-alive; hardware: a full SPR AVS sweep on
-  an AVS source (Baseus 140 W EPR) and an EPR AVS sweep to 28 V with the EPR spoof.
+  an AVS source (Baseus FH22, UGREEN Nexode Air 65 W) and an EPR AVS sweep to 28 V with the EPR spoof (Baseus 140 W).
+  Same peak / fold-back reporting as the PPS sweep. Host-side reference (2026-11-10, Baseus FH22, AVS 9-20 V 5 A only
+  with a 5 A identity, `runs/2026-11-10-merge2-hw/fh22-avs-sweep.tsv`): all 111 steps follow, offset -94 mV at 9.2 V
+  growing to -150 mV at 19.9 V (~0.75 % low), peak 19.75 V, 20.0 V gives 19.66 V (fold onto its fixed-20 V level).
 
 ## Not verified on hardware
 
