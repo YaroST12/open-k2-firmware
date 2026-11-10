@@ -119,6 +119,7 @@ void HomePage::sample_values(Frame &f, uint32_t now_ms) {
         ps.fc = ctx_.fc;
         ps.vbus_mv = pm.vbus_mv;
         ps.typec_ma = fusb302::typec_ma();
+        ps.req_period_ms = fusb302::request_period_ms();
         f.proto = hm::derive_proto(ps);
         last_proto_ = f.proto;
         f.alarm = hm::alarm_of(static_cast<uint32_t>(a_ma_), f.proto.ma);

@@ -73,6 +73,9 @@ bool g_hr_latched = false;
 std::uint8_t g_cc_mask = 3; // CC analog switches closed outside VCONN scans: bit0 = PC14, bit1 = PC15
 pd::DetachTracker g_detach;
 std::uint32_t g_requests_base = 0;
+std::uint32_t g_req_seen = 0;       // contract.requests at the last Request handled
+std::uint32_t g_req_last_ms = 0;    // when that Request was decoded (0 = none this attach)
+std::uint32_t g_req_period_ms = 0;  // period of the last two Requests (0 = fewer than two)
 bool g_pd_traffic = false;           // any PD message (any SOP) seen since attach
 bool g_pd_seen_attach = false;       // the same, but only a new attach clears it (a unit hold / start-up does not)
 // The Rd seek (k2/pd/pd_rdseek.hpp): the line was picked by a scan that had no Rd on any line, so our later Rd on it may be on the wrong
@@ -436,6 +439,9 @@ bool g_down_prev = false;       // downstream_now() at the last downstream_edge(
 void rebase_far_sink() {        // a new attach or a detach: no other sink's Request is on record any more
     g_requests_base = g_engine.contract.requests;
     g_far_sink = false;         // the raw CC reading belongs to the attach that measured it too
+    g_req_seen = g_engine.contract.requests;
+    g_req_last_ms = 0;
+    g_req_period_ms = 0;
     g_down_prev = g_inline;     // the far-sink part is now false; a still-latched inline is no new edge
 }
 
@@ -824,6 +830,15 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
     const pd::EprInfo info_before = g_sink.status().epr_info;
     g_engine.epr_info_only = info_before == pd::EprInfo::Pending;   // the answer to our SPR-mode query is not the live list
     g_engine.on_message(sop, header, payload, g_active_cc);
+    {   // the Request period feeds the PPS keep-alive label on the home footer (no caps on record)
+        const std::uint32_t req = g_engine.contract.requests;
+        if (req != g_req_seen) {
+            const std::uint32_t now = systick::millis();
+            if (g_req_last_ms) g_req_period_ms = now - g_req_last_ms;
+            g_req_last_ms = now;
+            g_req_seen = req;
+        }
+    }
     if (wire && !g_sop_prime_hook && g_engine.cable_acks != cable_acks) {
         g_physical_cable = pd::cable_limits(g_engine.cable);
         g_physical_session = g_session.id();
@@ -2424,6 +2439,10 @@ std::uint32_t rx_count() { return g_engine.caps.rx_count; }
 std::uint8_t device_id() { return g_device_id; }
 std::uint8_t active_cc() { return g_active_cc; }
 const pd::Contract& contract() { return g_engine.contract; }
+// Period of the last two sink Requests decoded this attach, in ms (0 = fewer than two, or a fresh
+// attach). A Request repeated every <= 10 s with no Source_Capabilities on record is the PPS
+// keep-alive pattern (home footer label).
+std::uint32_t request_period_ms() { return g_req_period_ms; }
 const pd::SinkCapsSeen& sink_caps() { return g_engine.sink; }
 
 void set_sop_prime_hook(SopPrimeHook hook) {

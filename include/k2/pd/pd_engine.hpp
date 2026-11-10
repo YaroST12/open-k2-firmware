@@ -111,6 +111,9 @@ public:
 
 private:
     void on_request(std::uint16_t header, std::span<const std::uint8_t> payload);
+    // Decode the RDO on record against the caps as they stand. Without a PDO at that position the
+    // layout is a guess (a PPS voltage reads as a max current), so the values stay unknown (0).
+    void apply_rdo(std::uint32_t rdo, unsigned pos);
     void on_cable_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload);
     void on_ext_message(std::uint8_t type, std::span<const std::uint8_t> payload);
     void on_epr_caps_chunk(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint8_t cc);

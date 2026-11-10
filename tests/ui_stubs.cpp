@@ -74,6 +74,7 @@ void new_source() { g_stub.new_sources++; }
 void clear_source() { g_stub.clear_sources++; g_stub.caps.num_pdos = 0; }
 bool cc_detach() { g_stub.cc_detaches++; return true; }
 const pd::Contract& contract() { return g_stub.contract; }
+std::uint32_t request_period_ms() { return g_stub.req_period_ms; }
 std::uint32_t typec_ma() { return 0; }
 bool pd_traffic() { return g_stub.pd_traffic; }
 bool pd_seen_attach() { return g_stub.pd_seen_attach; }

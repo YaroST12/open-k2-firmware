@@ -46,6 +46,9 @@ void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint
         decode_source_caps(caps, header, payload, cc);
         epr_total_ = 0;  // a plain Source_Capabilities supersedes any EPR message
         epr_mask_ = 0;
+        // Caps sniffed after the Request (a boot mid-contract, a re-announce while inline): the
+        // contract on record is re-decoded against the list that just arrived.
+        if (contract.valid && contract.rdo) apply_rdo(contract.rdo, contract.pos);
     } else if (ext && type == kExtEprSourceCaps) {
         on_epr_caps_chunk(header, payload, cc);
     } else if (ext) {
@@ -128,12 +131,24 @@ void Engine::on_request(std::uint16_t header, std::span<const std::uint8_t> payl
     contract.pos = std::uint8_t(pos);
     contract.rdo = rdo;
     contract.requests++;
-    const Pdo* p = pos <= caps.pdos.size() && caps.valid ? &caps.pdos[pos - 1] : nullptr;
+    apply_rdo(rdo, pos);
+}
+
+void Engine::apply_rdo(std::uint32_t rdo, unsigned pos) {
+    const Pdo* p = (caps.valid && pos >= 1 && pos <= caps.num_pdos) ? &caps.pdos[pos - 1] : nullptr;
     const Rdo d = decode_rdo(rdo, p);
-    contract.mv = d.mv;
-    contract.op_ma = d.op_ma;
-    contract.max_ma = d.max_ma;
-    contract.flags = d.flags;
+    contract.flags = d.flags;   // the flag bits are layout-independent, always kept
+    if (p) {
+        contract.mv = d.mv;
+        contract.op_ma = d.op_ma;
+        contract.max_ma = d.max_ma;
+    } else {
+        // No PDO at that position: the fixed/PPS layout is a guess (a PPS voltage would read as a
+        // max current). Unknown stays 0 until caps arrive (then apply_rdo runs again).
+        contract.mv = 0;
+        contract.op_ma = 0;
+        contract.max_ma = 0;
+    }
 }
 
 bool Engine::cable_thunderbolt() const {
@@ -231,6 +246,8 @@ void Engine::on_epr_caps_chunk(std::uint16_t header, std::span<const std::uint8_
     dst.active_cc = cc;
     dst.spec_rev = (header >> 6) & 3;
     dst.raw_header = header;
+    // The live list grew: a contract decoded while the chunks were still arriving is re-decoded.
+    if (!epr_info_only && contract.valid && contract.rdo) apply_rdo(contract.rdo, contract.pos);
 }
 
 }  // namespace k2::pd

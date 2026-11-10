@@ -16,16 +16,32 @@ uint32_t nominal_mv(int32_t vbus_mv) {
 ProtoInfo from_pd(const ProtoSource &s) {
     ProtoInfo p;
     p.kind = ProtoKind::PdFixed;
+    const pd::SourceCaps *c = s.caps;
+    const bool have_caps = c && c->valid && c->num_pdos > 0;
+    uint32_t top = 0;
+    if (have_caps)
+        for (int i = 0; i < c->num_pdos && i < static_cast<int>(pd::kMaxPdos); i++)
+            top = c->pdos[i].max_mv > top ? c->pdos[i].max_mv : top;
+    if (top) p.max_mv = top;
+    // No PDO at the Request's position (caps missed at boot, sniffed later, or the position beyond
+    // the list): the RDO layout is a guess - a PPS voltage would read as a max current ("PD
+    // 0V5.82A"). Show the measured level and no current, never a guessed value. A Request repeated
+    // every <= kPpsKeepaliveMs with no caps is the PPS keep-alive: label it PPS with the level.
+    if (!have_caps || s.ctr.pos < 1 || s.ctr.pos > c->num_pdos) {
+        const uint32_t v = nominal_mv(s.vbus_mv);
+        p.mv = v;
+        p.ma = 0;
+        if (!have_caps) p.max_mv = 0;
+        if (!have_caps && s.req_period_ms != 0 && s.req_period_ms <= kPpsKeepaliveMs) {
+            p.kind = ProtoKind::Pps;
+            p.lo_mv = v;
+            p.hi_mv = v;
+        }
+        return p;
+    }
     p.mv = s.ctr.mv;
     p.ma = s.ctr.max_ma;
-    p.max_mv = s.ctr.mv;
-    const pd::SourceCaps *c = s.caps;
-    if (!c || !c->valid || c->num_pdos == 0) return p;
-    uint32_t top = 0;
-    for (int i = 0; i < c->num_pdos && i < static_cast<int>(pd::kMaxPdos); i++)
-        top = c->pdos[i].max_mv > top ? c->pdos[i].max_mv : top;
-    if (top) p.max_mv = top;
-    if (s.ctr.pos < 1 || s.ctr.pos > c->num_pdos) return p;
+    if (!p.max_mv) p.max_mv = s.ctr.mv;
     const pd::Pdo &o = c->pdos[s.ctr.pos - 1];
     switch (o.type) {
     case pd::PdoType::Pps:

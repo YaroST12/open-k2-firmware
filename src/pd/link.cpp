@@ -16,13 +16,16 @@ void set_inline_mode(bool on) { g_sticky_inline = on; }
 
 bool pd_active() {
     const auto& c = fusb302::caps();
-    return c.valid && c.active_cc != 0;
+    // A decoded Request counts too: the K2 may have booted mid-contract and missed the caps, but a
+    // sink's Request on CC is PD traffic - the D+/D- classifier must not read it as a legacy mode
+    // ("PD MTK" at 9 V on an inline link, ROADMAP 2026-11-10).
+    return (c.valid && c.active_cc != 0) || fusb302::contract().valid;
 }
 
 Probe probe_now() {
     Probe p;
     const auto& c = fusb302::caps();
-    p.pd_active = c.valid && c.active_cc != 0;
+    p.pd_active = (c.valid && c.active_cc != 0) || fusb302::contract().valid;
     p.cc_active = c.active_cc != 0;
     p.sticky_inline = g_sticky_inline;
     p.self_supply_ma = usb::configured() ? 0 : pd::kSelfSupplyAllowanceMa;   // no USB host: the K2 may run on this VBUS

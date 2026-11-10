@@ -13,6 +13,11 @@
 
 namespace k2::home {
 
+// A sink Request repeated at least this often with no Source_Capabilities on record is the PPS
+// keep-alive pattern (a phone holding its PPS contract re-requests every ~0.5-1 s): label it PPS
+// from the measured VBUS instead of a guessed fixed RDO.
+inline constexpr uint32_t kPpsKeepaliveMs = 10000;
+
 struct ProtoSource {
     pd::Contract ctr{};                 // the sink's latest Request (valid = a PD contract exists)
     const pd::SourceCaps *caps = nullptr;   // the source's capabilities when seen
@@ -20,6 +25,7 @@ struct ProtoSource {
     fastcharge::Protocol fc = fastcharge::Protocol::Pending;
     int32_t vbus_mv = 0;                // live VBUS, only rounded to a nominal level for protocols that carry none
     uint32_t typec_ma = 0;              // the Rp current of a source that sent no PD caps (0 = undecided)
+    uint32_t req_period_ms = 0;         // period of the last sink Request (0 = fewer than two), the PPS keep-alive
 };
 
 ProtoInfo derive_proto(const ProtoSource &s);

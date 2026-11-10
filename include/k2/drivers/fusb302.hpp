@@ -330,6 +330,7 @@ usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv);
 const pd::ExtInfo& ext();   // latest extended messages from the source (Manufacturer_Info, Source_Cap_Extended, ...)
 const pd::SinkCapsSeen& sink_caps();  // the sink's own Sink_Capabilities, only when the source asked for them
 const pd::Contract& contract();  // passively decoded Request / PS_RDY      // identity / SVIDs / modes the source sent on SOP
+std::uint32_t request_period_ms();  // period of the last two sink Requests this attach (0 = fewer than two)
 // A source that sent no PD caps within 1 s of attach: its Rp current in mA (0 while undecided, or PD).
 std::uint32_t typec_ma();
 bool cable_thunderbolt();      // the cable advertised SVID 0x8087 (Thunderbolt)

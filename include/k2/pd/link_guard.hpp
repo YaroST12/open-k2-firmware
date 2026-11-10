@@ -32,7 +32,7 @@ struct Probe {
     int vbus_mv = 0;
     bool current_known = false;
     int current_ma = 0;           // signed; only the magnitude counts
-    bool pd_active = false;       // FUSB302: CC attached and Source_Capabilities decoded
+    bool pd_active = false;       // FUSB302: CC attached and PD decoded (Source_Capabilities, or a Request when the caps were missed)
     bool cc_active = false;       // FUSB302: a CC line is attached (caps may be missed)
     bool sticky_inline = false;   // pd::Link::inline_mode(), published by the UI
     int self_supply_ma = 0;       // the K2's own draw through the shunt when it runs on this VBUS (no USB host), pd::LinkInput

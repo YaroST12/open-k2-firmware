@@ -66,6 +66,7 @@ struct StubState {
     k2::usblink::Link ul{};               // what fusb302::usb_link() returns (the USB / Data rows of the Connection page)
     uint8_t cc = 1;
     k2::pd::Contract contract{};
+    std::uint32_t req_period_ms = 0;      // what fusb302::request_period_ms() returns
     k2::pd::SinkCapsSeen sink_seen{};
     k2::pd::XiaomiTrace xm{};             // the sink's Request / Xiaomi chain record (fusb302::xiaomi_trace)
     k2::pd::SourceCaps epr_info_caps{};   // the list an informational EPR_Get_Source_Cap returned

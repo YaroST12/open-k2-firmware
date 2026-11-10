@@ -91,8 +91,17 @@ void fixed(StrBuf<20> &s, const ProtoInfo &p) {
     level(s, p.mv, 'V');
     if (p.ma) level(s, p.ma, 'A');
 }
-// "3.3-21V", "3.3-21V 5A": a range, then one space and the current when known.
+// "3.3-21V", "3.3-21V 5A": a range, then one space and the current when known. Equal bounds are one
+// level ("9V"): a PPS keep-alive labelled from the measured VBUS has no range without caps.
 void range(StrBuf<20> &s, const ProtoInfo &p) {
+    if (p.lo_mv == p.hi_mv) {
+        level(s, p.hi_mv, 'V');
+        if (p.ma) {
+            s.put_char(' ');
+            level(s, p.ma, 'A');
+        }
+        return;
+    }
     level(s, p.lo_mv, 0);
     s.put_char('-');
     level(s, p.hi_mv, 'V');
