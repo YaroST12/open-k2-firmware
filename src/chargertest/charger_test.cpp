@@ -1316,7 +1316,10 @@ void Runner::request(Input in) {
     if (jwait_ms_) { env_.journal_waited(in.now - jwait_ms_); jwait_ms_ = 0; }
     hot_ = false; busy_retry_at_ = 0; hunt_reject_until_ = 0;   // the next row: a list announced now is no answer to the old hunt row
     s.verdict = Verdict::Running;
-    if (is_step_walk(s)) { walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; walk_base_mv_ = -1; }   // the walk starts at the row's own level
+    if (is_step_walk(s)) {   // the walk starts at the row's own level; each granted level gets a fresh steady wait
+        walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; walk_base_mv_ = -1;
+        walk_steady_.clear(); walk_grant_ms_ = 0;
+    }
     if (is_sweep(s)) sweep_begin(s, in);   // the sweep starts at the APDO's first point
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0;
@@ -1478,8 +1481,16 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
 void Runner::walk_step(Input in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
+    // walk-settle (ROADMAP "The PPS step walk fails a good source..."): the granted level is recorded only once VBUS is
+    // steady (kWalkSteadySamples samples inside kWalkSteadyWindowMs within kWalkSteadyMv), or kWalkSteadyTimeoutMs after
+    // the level was first seen granted, whichever comes first - the wait is bounded. A source that overshoots and settles
+    // (the UGREEN 13.0 V base read 13007 mV settling to 12990) must not be recorded mid-settle: the first move would then
+    // read ~0 or negative and a good source fails "steps ignored".
+    if (!walk_grant_ms_) walk_grant_ms_ = in.now;
+    walk_steady_.add(in.now, in.vbus_mv);
+    if (!walk_steady_.steady() && in.now - walk_grant_ms_ < kWalkSteadyTimeoutMs) return;   // still settling: wait at this level
     if (walk_n_ == 0) {
-        walk_prev_mv_ = walk_base_mv_ = in.vbus_mv;   // the base level is granted and in band
+        walk_prev_mv_ = walk_base_mv_ = in.vbus_mv;   // the base level is granted, in band and steady
     } else {
         const int move = in.vbus_mv - walk_prev_mv_;
         if (move <= 0 || move >= int(2 * kStepMv)) {
@@ -1499,6 +1510,8 @@ void Runner::walk_step(Input in, const Step& eff) {
     ++walk_n_;
     walk_mv_ = uint16_t(walk_mv_ + kStepMv);
     stable_ = false;
+    walk_steady_.clear(); walk_grant_ms_ = 0;   // the next granted level waits for its own steady VBUS
+    phase_ms_ = in.now;   // each granted level gets its own Requesting timeout (the steady wait is bounded per level)
     const auto err = env_.request_pd({s.pos, walk_mv_, s.ma, false});
     if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
     else if (err != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err));

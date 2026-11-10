@@ -502,7 +502,7 @@ struct Fake final : ct::Env {
                 if (t >= walk_settle_ms) { settle_on = false; in.vbus_mv = walk_settle_to_mv; }
                 else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
             }
-            if (walk_ripple_mv) in.vbus_mv += ((in.now / 100) % 2) ? walk_ripple_mv : -walk_ripple_mv;
+            if (walk_ripple_mv && in.vbus_mv > 1000) in.vbus_mv += ((in.now / 100) % 2) ? walk_ripple_mv : -walk_ripple_mv;
             r.poll(in, caps);
             min_vbus = std::min(min_vbus, in.vbus_mv);
         }
@@ -3665,7 +3665,38 @@ static void test_pps_step_walk_waits_for_the_base_to_settle() {
     for (size_t i = 0; i + 5 < f.choices.size(); ++i)
         if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
     CHECK_EQ(walk7, true);   // the six walk Requests went out (base, then +20 mV x 5)
-    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);   // RED: a base read mid-settle fails the first step
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);   // the base was recorded after it settled
+}
+
+// walk-settle, pure: WalkSteady needs kWalkSteadySamples samples inside the window, all within kWalkSteadyMv.
+static void test_walk_steady_window() {
+    ct::WalkSteady w;
+    CHECK_EQ(w.steady(), false);
+    w.add(1000, 13007); CHECK_EQ(w.steady(), false);
+    w.add(1100, 13004); CHECK_EQ(w.steady(), false);   // only 2 samples
+    w.add(1200, 13001); CHECK_EQ(w.steady(), false);   // span 6 mV > 3: still settling
+    w.add(1300, 12990); w.add(1400, 12990);
+    CHECK_EQ(w.steady(), false);                       // the window still holds the 13001 sample: span 11 mV
+    w.add(1600, 12990);                                // the 1200 sample is now older than the window
+    CHECK_EQ(w.steady(), true);                        // 12990 x3 inside 300 ms
+    w.add(1700, 13004);                                // a ripple back up: span 14 mV
+    CHECK_EQ(w.steady(), false);
+    w.clear();
+    CHECK_EQ(w.steady(), false);
+}
+
+// The steady wait is bounded: a source whose output never sits within the span (a +/- 5 mV ripple every tick)
+// still has each level recorded after kWalkSteadyTimeoutMs, and the walk completes and passes.
+static void test_pps_step_walk_steady_wait_is_bounded_by_the_timeout() {
+    Fake f; f.walk_ripple_mv = 5;
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+    bool walk7 = false;
+    for (size_t i = 0; i + 5 < f.choices.size(); ++i)
+        if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
+    CHECK_EQ(walk7, true);
 }
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
@@ -6142,5 +6173,7 @@ int main() {
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     test_pps_step_walk_waits_for_the_base_to_settle();
+    test_walk_steady_window();
+    test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
     return test_report("test_charger_test");
 }

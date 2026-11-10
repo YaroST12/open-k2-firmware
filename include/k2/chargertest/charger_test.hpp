@@ -73,6 +73,15 @@ inline constexpr uint8_t kDetailSweep = 161;
 // moves a single reading by several mV (CUKTECH C1, hardware 2026-11-10: one +20 mV step read 15 mV), the sum averages it.
 inline constexpr unsigned kStepMv = 20, kStepWalkCount = 5;
 inline constexpr int kStepWalkTolMv = 20;
+// walk-settle (ROADMAP "The PPS step walk fails a good source: its base level is read before the output settles"): a granted
+// walk level is recorded only once VBUS is steady - at least kWalkSteadySamples samples inside the last kWalkSteadyWindowMs
+// all within kWalkSteadyMv of each other (3 samples within 3 mV at the 100 ms host-test cadence; at the 20 ms UI tick the
+// window holds ~15) - or kWalkSteadyTimeoutMs passed since the level was first seen granted, whichever comes first, so the
+// wait is bounded. The walk's sum rule is unchanged.
+inline constexpr unsigned kWalkSteadySamples = 3;
+inline constexpr int kWalkSteadyMv = 3;
+inline constexpr uint32_t kWalkSteadyWindowMs = 300;
+inline constexpr uint32_t kWalkSteadyTimeoutMs = 2000;
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
 // A unit (protocol) may take the K2 down this many times inside one run: losses 1 .. kRebootBudget-1 resume the same row, the
@@ -471,6 +480,38 @@ private:
     int32_t q8_ = -1;   // mV in 1/256 mV
 };
 
+// walk-settle: the VBUS samples of one granted walk level, kept for the last kWalkSteadyWindowMs. steady() = at least
+// kWalkSteadySamples of them all within kWalkSteadyMv (max - min) - the output has stopped moving. Pure logic over
+// (time, mV) pairs, host-tested directly.
+class WalkSteady {
+public:
+    void clear() { n_ = 0; }
+    void add(uint32_t now_ms, int mv) {
+        if (n_ < kCap) {
+            t_[n_] = now_ms; v_[n_] = mv; ++n_;
+        } else {   // full: shift left, append (polls are >= 15 ms apart, so the window holds at most kCap samples)
+            for (unsigned i = 1; i < kCap; ++i) { t_[i - 1] = t_[i]; v_[i - 1] = v_[i]; }
+            t_[kCap - 1] = now_ms; v_[kCap - 1] = mv;
+        }
+        while (n_ > 0 && now_ms - t_[0] > kWalkSteadyWindowMs) {   // drop samples older than the window
+            for (unsigned i = 1; i < n_; ++i) { t_[i - 1] = t_[i]; v_[i - 1] = v_[i]; }
+            --n_;
+        }
+    }
+    bool steady() const {
+        if (n_ < kWalkSteadySamples) return false;
+        int lo = v_[0], hi = v_[0];
+        for (unsigned i = 1; i < n_; ++i) { if (v_[i] < lo) lo = v_[i]; if (v_[i] > hi) hi = v_[i]; }
+        return hi - lo <= kWalkSteadyMv;
+    }
+    unsigned count() const { return n_; }
+private:
+    static constexpr unsigned kCap = 20;   // 300 ms of samples at the 15 ms worst-case poll cadence
+    std::array<uint32_t, kCap> t_{};
+    std::array<int, kCap> v_{};
+    unsigned n_ = 0;
+};
+
 class Runner {
 public:
     explicit Runner(Env& env) : env_(env) {}
@@ -641,6 +682,10 @@ private:
     uint8_t walk_n_ = 0;
     int walk_prev_mv_ = -1;
     int walk_base_mv_ = -1;   // VBUS at the walk's base level (the sum check)
+    // walk-settle: before a granted level is recorded, VBUS must be steady (walk_steady_) or the wait timed out
+    // (walk_grant_ms_ + kWalkSteadyTimeoutMs); both reset when the walk starts and when it advances to the next level.
+    WalkSteady walk_steady_;
+    uint32_t walk_grant_ms_ = 0;   // first walk_step call at the current granted level (0 = none yet)
     void walk_step(Input, const Step& eff);   // one granted level of the walk: check its move, ask for the next or finish
     // The deep-sweep row in flight (is_sweep). The record: one int16 error (measured - setpoint) per point, no heap;
     // sweep_rows_ holds one RowView per APDO, filled when the row closes (sweep_close in finish()).
