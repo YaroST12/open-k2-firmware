@@ -52,7 +52,7 @@ def test_card_summary():
     fix = Path(__file__).parent / "fixtures" / "report_card_sample.hex"
     text = charger_summary.summarize_card(report_card.decode(bytes.fromhex(fix.read_text().strip())))
     assert "Card 3 · Desk 65W · 5 PDOs · 2 runs · " in text.splitlines()[0]
-    assert "1 pass, 2 fail, 1 skip · Complete" in text
+    assert "1 pass, 2 fail, 1 skip of 4 groups · Complete" in text
     assert "Handover: fell back after 1.5 s" in text
     assert "- PD: ✓ up to 20 V" in text
     assert "- QC2: skipped, not advertised" in text
@@ -268,3 +268,16 @@ class CardSweepSummary(unittest.TestCase):
         ]
         text = charger_summary.summarize_card(card)
         self.assertIn("- PPS 3.3-21V: ✗ at 15 V, reached 13 V, sweep peak 13.0 V at 13.0 V", text)
+
+
+class CardVerdictLineIsLabelled(unittest.TestCase):
+    """Row B item 4 host side: a card's header counts group verdicts, the run summary counts steps -
+    the card line says "of N groups" (mirrors report_card_json.cpp render_summary), so the two agree."""
+
+    def test_verdict_line_says_of_groups(self):
+        card = _card({"PD": {"verdict": "pass", "max_mv": 20000},
+                      "QC2": {"verdict": "fail", "max_mv": 9000, "fail_mv": 12000, "reason": "request failed"},
+                      "QC3": {"verdict": "skip", "reason": "not advertised"},
+                      "AFC": {"verdict": "skip", "reason": "not advertised"}})
+        text = charger_summary.summarize_card(card)
+        self.assertIn("1 pass, 1 fail, 2 skip of 4 groups · Complete", text)

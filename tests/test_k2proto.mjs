@@ -314,6 +314,36 @@ test("charger-test schema2: draft bit 31 is the PPS deep sweep flag, not a test"
   assert.deepEqual(sel.configured, plain.configured);
 });
 
+test("charger-test schema2: draft bit 30 is the AVS deep sweep flag, not a test", () => {
+  const h = new Uint8Array(TEST_HEADER2);
+  const plain = P.decodeChargerTest(h).selection;
+  h[22] |= 0x40;   // remote_proto.hpp: draft_selected bit 30 = the AVS deep sweep on
+  const sel = P.decodeChargerTest(h).selection;
+  assert.equal(sel.avs_sweep, true);
+  assert.equal(plain.avs_sweep, false);
+  assert.equal(sel.configured_mask, plain.configured_mask);
+  assert.deepEqual(sel.configured, plain.configured);
+});
+
+test("charger-test sweep row: flags bit 5, the detail byte is the recorded point count", () => {
+  // remote_proto.hpp: a deep-sweep row sets flags bit 5; its detail byte is then the point count, not the
+  // in-RAM kDetailSweep marker 161. 61 points must read as 61.
+  const sweepRow = u8(4, 6, 0x20, 0x88, 0x13, 0x88, 0x13, 0xC2, 0x51, 2, 0, 61, 0x40, 0x32, 0xDC, 0xC0);
+  const step = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [sweepRow])).steps[0];
+  assert.equal(step.sweep, true);
+  assert.equal(step.detail, 61);
+  assert.equal(step.detail_reason, "deep sweep (61 points)");
+  const allFlags = u8(4, 6, 0x3F, 0x88, 0x13, 0x88, 0x13, 0xC2, 0x51, 2, 0, 61, 0x40, 0x32, 0xDC, 0xC0);
+  assert.equal(P.decodeChargerTest(testPage(TEST_HEADER2, 0, [allFlags])).steps[0].sweep, true);
+  const bit6 = u8(4, 6, 0x40, 0x88, 0x13, 0x88, 0x13, 0xC2, 0x51, 2, 0, 61, 0x40, 0x32, 0xDC, 0xC0);
+  assert.throws(() => P.decodeChargerTest(testPage(TEST_HEADER2, 0, [bit6])), /invalid charger-test row/);
+  // older firmware: no bit 5, the kDetailSweep marker 161 in the detail byte
+  const oldRow = u8(0, 6, 0x00, 0x88, 0x13, 0x88, 0x13, 0xC2, 0x51, 2, 0, 161, 0x40, 0x32, 0xDC, 0xC0);
+  const legacy = P.decodeChargerTest(testPage(TEST_HEADER, 0, [oldRow])).steps[0];
+  assert.equal(legacy.sweep, false);
+  assert.equal(legacy.detail_reason, "deep sweep");
+});
+
 test("charger-test schema2 rejects malformed shapes, unknown masks and unselected rows", () => {
   const good = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]);
   for (const [at, value] of [[0, 3], [11, 107], [23, 0x42], [39, 12], [18, 0x80], [22, 0x40],

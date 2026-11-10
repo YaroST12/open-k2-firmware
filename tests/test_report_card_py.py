@@ -72,6 +72,18 @@ def test_format_2_carries_pdp_and_auto_name_flag():
     assert "pdp_w" not in report_card.decode(bytes(old)) and "name_auto" not in report_card.decode(bytes(old))
 
 
+def test_qc_label_needs_the_samsung_vid():
+    # Row B item 5: the SFC labels are a brand claim, so they need the brand's own VID (report_card.hpp
+    # kSamsungVid); a probe that read vid 0, or another vendor's VID, gets no Samsung label. A Qualcomm
+    # VID keeps the QC label.
+    pps = [{"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 21000, "max_ma": 3000}]
+    assert report_card.qc_label(0x04E8, 100, pps) == "Samsung SFC 3.0"
+    assert report_card.qc_label(0, 100, pps) == ""            # vid 0: no brand claim
+    assert report_card.qc_label(0x2717, 65, pps) == ""        # another vendor's VID: still no Samsung label
+    assert report_card.qc_label(0x05C6, 65, pps) == "QC4+"    # Qualcomm keeps the QC label
+    assert report_card.qc_label(0x05C6, 100, pps) == "QC5"
+
+
 def test_v9_spread_decodes_per_level():
     # ROADMAP "PPS coverage" item 3: format 9 adds the setpoint error in mV per level of each APDO (block at 198:
     # 4 ranges x 4 levels, int8, -128 = none). A v8-length payload of the same card decodes with no spread.

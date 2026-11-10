@@ -75,6 +75,27 @@ def normalise(card):
     return card
 
 
+class QcLabelRule(unittest.TestCase):
+    """Row B item 5: no Samsung SFC label without the brand's own VID (report_card.hpp kSamsungVid),
+    in the goldens and in tools/report_card.py's own label."""
+
+    def test_goldens_carry_no_sfc_label_without_the_samsung_vid(self):
+        for name, g in load().items():
+            if g["json"] is None:
+                continue
+            qc = g["json"].get("qc", "")
+            if "SFC" in qc:
+                self.assertEqual(g["json"].get("vid"), 0x04E8, name)
+
+    def test_report_card_qc_label_needs_the_samsung_vid(self):
+        import report_card
+        pps = [{"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 21000, "max_ma": 3000}]
+        self.assertEqual(report_card.qc_label(0x04E8, 100, pps), "Samsung SFC 3.0")
+        self.assertEqual(report_card.qc_label(0, 100, pps), "")
+        self.assertEqual(report_card.qc_label(0x2717, 65, pps), "")
+        self.assertEqual(report_card.qc_label(0x05C6, 65, pps), "QC4+")
+
+
 class QrLink(unittest.TestCase):
     def test_goldens(self):
         golden = load()

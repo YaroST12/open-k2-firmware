@@ -22,13 +22,13 @@ ROW2 = bytes([4, 0, 0, 0xE0, 0x2E, 0, 0, 0, 0, 3, 11, 7, 0, 0, 0, 0])
 EXPECTED_ROWS = [
     {"index": 0, "group": "qc3", "protocol": "qc3", "pos": 0, "target_mv": 20000, "request_ma": 0,
      "measured_mv": 19800, "result": "pass", "reason": "none", "detail": 0, "detail_reason": "none",
-     "raw_pdo": 0, "continuous": True, "avs": False},
+     "raw_pdo": 0, "continuous": True, "avs": False, "sweep": False},
     {"index": 1, "group": "pd", "protocol": "pd-pps", "pos": 6, "target_mv": 9000, "request_ma": 1000,
      "measured_mv": 0, "result": "running", "reason": "none", "detail": 0, "detail_reason": "none",
-     "raw_pdo": 0xC0DC3240, "continuous": True, "avs": False},
+     "raw_pdo": 0xC0DC3240, "continuous": True, "avs": False, "sweep": False},
     {"index": 2, "group": "afc", "protocol": "afc", "pos": 0, "target_mv": 12000, "request_ma": 0,
      "measured_mv": 0, "result": "fail", "reason": "request failed", "detail": 7, "detail_reason": "no response",
-     "raw_pdo": 0, "continuous": False, "avs": False},
+     "raw_pdo": 0, "continuous": False, "avs": False, "sweep": False},
 ]
 
 
@@ -191,9 +191,42 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual(r["selection"]["configured_mask"], draft)
         self.assertEqual(r["selection"]["configured"], ["pps", "pd3.2-revision"])
         self.assertFalse(kr.decode_charger_test(HEADER2)["selection"]["pps_sweep"])
-        struct.pack_into("<I", h, 19, draft | (1 << 30))   # an unknown bit below the flag still fails
+        struct.pack_into("<I", h, 19, draft | (1 << 29))   # an unknown bit below the flags still fails
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(bytes(h))
+
+    def test_schema2_draft_bit30_is_the_avs_sweep_flag(self):
+        # remote_proto.hpp: draft_selected bit 30 = the AVS deep sweep on (an Options flag, like bit 31)
+        h = bytearray(HEADER2)
+        draft = struct.unpack_from("<I", h, 19)[0]
+        struct.pack_into("<I", h, 19, draft | (1 << 30) | (1 << 31))
+        r = kr.decode_charger_test(bytes(h))
+        self.assertTrue(r["selection"]["avs_sweep"])
+        self.assertTrue(r["selection"]["pps_sweep"])
+        self.assertEqual(r["selection"]["configured_mask"], draft)
+        self.assertEqual(r["selection"]["configured"], ["pps", "pd3.2-revision"])
+        self.assertFalse(kr.decode_charger_test(HEADER2)["selection"]["avs_sweep"])
+
+    def test_sweep_row_wire_bit5_detail_is_the_point_count(self):
+        # remote_proto.hpp: a deep-sweep row sets flags bit 5 and carries the recorded point count in the
+        # detail byte (the in-RAM kDetailSweep marker 161 was the old wording); 61 points must read as 61.
+        row = struct.pack("<BBBHHHBBBI", 4, 6, 0x20, 5000, 5000, 20978, 2, 0, 61, 0xC0DC3240)
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertTrue(step["sweep"])
+        self.assertEqual(step["detail"], 61)
+        self.assertEqual(step["detail_reason"], "deep sweep (61 points)")
+        # the full flag byte is legal: bits 0-4 plus the sweep bit
+        row = struct.pack("<BBBHHHBBBI", 4, 6, 0x3F, 5000, 5000, 20978, 2, 0, 61, 0xC0DC3240)
+        self.assertTrue(kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]["sweep"])
+        # bit 6 and up are still rejected
+        row = struct.pack("<BBBHHHBBBI", 4, 6, 0x40, 5000, 5000, 20978, 2, 0, 61, 0xC0DC3240)
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(page(HEADER2, 0, [row]))
+        # older firmware: no bit 5, the kDetailSweep marker in the detail byte
+        row = struct.pack("<BBBHHHBBBI", 0, 6, 0, 5000, 5000, 20978, 2, 0, 161, 0xC0DC3240)
+        step = kr.decode_charger_test(page(HEADER, 0, [row]))["steps"][0]
+        self.assertFalse(step["sweep"])
+        self.assertEqual(step["detail_reason"], "deep sweep")
 
     def test_schema2_skip_variants_never_become_pass(self):
         meta = bytearray(HEADER2); meta[11] = meta[12] = 5; meta[9] = 5
