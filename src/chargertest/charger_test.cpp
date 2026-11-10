@@ -458,7 +458,7 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
     const bool pd_unit = unit == Unit::Pd || unit == Unit::PdLow;
     size_t n_low = 0; uint8_t low_pos = 0;
     bool hunt_11v = false, hunt_20v = false;   // one 6 A probe per target voltage, not per PDO
-    unsigned sweep_budget = o.pps_sweep ? ctsweep::kMaxPoints : 0;   // the deep sweep's point record, shared by the APDOs
+    unsigned sweep_budget = (o.pps_sweep || o.avs_sweep) ? ctsweep::kMaxPoints : 0;   // the deep sweeps' point record, shared by the APDOs
     // Does a PPS APDO that this plan runs cover `mv`? (The 6 A hunt then belongs to that APDO, not to a fixed PDO.)
     auto pps_covers = [&](unsigned mv) {
         if (!o.contains(Algorithm::Pps) || caps.spec_rev != 2) return false;
@@ -765,6 +765,27 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
                         emit(w);
                         sweep_budget -= std::min(n, sweep_budget);
                     }
+                }
+            }
+            // AVS deep sweep (ROADMAP "AVS deep sweep", opt-in via Options::avs_sweep): ONE row per AVS APDO, emitted
+            // last of its rows like the PPS sweep above. The points are every 100 mV (the AVS Request granularity)
+            // across the APDO, capped at `cap` (the monitor ceiling and the cable's voltage limit - an APDO top above
+            // the ceiling reads "above the K2's monitor"), at 1 A never above the APDO's PDP-derived current or the
+            // cable. EPR AVS APDOs (pos >= 8) reach here only with an EPR identity: the epr_cable check above skipped
+            // the whole APDO with the existing EPR skip reasons otherwise.
+            if (s.avs && o.avs_sweep && sweep_budget) {
+                const auto pr = ctsweep::point_range(p.min_mv, p.max_mv, cap);
+                const unsigned n = ctsweep::point_count(pr);
+                if (!n) { s.detail = kDetailSweep; skip(limit_reason(p.max_mv, in, algorithm)); }
+                else {
+                    Step w = s; w.mv = static_cast<uint16_t>(pr.lo);
+                    w.ma = static_cast<uint16_t>(ctsweep::point_ma(p, pr.lo, cable_ma(in)));
+                    w.continuous = false;
+                    w.verdict = w.ma ? Verdict::Pending : Verdict::Skip;
+                    w.reason = w.ma ? Reason::None : Reason::NoOffer;
+                    w.detail = kDetailSweep;
+                    emit(w);
+                    sweep_budget -= std::min(n, sweep_budget);
                 }
             }
         }

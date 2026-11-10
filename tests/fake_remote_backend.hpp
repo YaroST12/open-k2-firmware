@@ -28,6 +28,8 @@ struct Fake {
     Status charger_units(std::span<const uint8_t> u) { calls++; units_set.assign(u.begin(), u.end()); return units_status; }
     bool sweep_set = false; int sweep_sets = 0; Status sweep_status = Status::Ok;
     Status charger_sweep(bool on) { calls++; sweep_set = on; ++sweep_sets; return sweep_status; }
+    bool avs_sweep_set = false; int avs_sweep_sets = 0; Status avs_sweep_status = Status::Ok;
+    Status charger_avs_sweep(bool on) { calls++; avs_sweep_set = on; ++avs_sweep_sets; return avs_sweep_status; }
     k2::ctcable::Choice cable_set{}; int cable_sets = 0; Status cable_status = Status::Ok;   // what charger_cable() was given, and its answer
     k2::ctcable::Info cable_info{};
     ChargerCableReply charger_cable(const k2::ctcable::Choice* set) {

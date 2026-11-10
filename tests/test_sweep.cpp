@@ -141,9 +141,10 @@ static void test_avs_plan_spr_plus_epr_capped_at_the_ceiling() {
     caps.pdos[9] = epr_avs_apdo(15000, 48000, 140);                    // EPR AVS 15..48 V, PDP 140 W (slot 10)
     CHECK_EQ(sw::plan_total(caps, 36000, sw::Kind::Avs), 111u + 211u);   // the EPR part caps at the 36 V monitor: 15.0..36.0 V
     CHECK_EQ(sw::plan_total(caps, 48000, sw::Kind::Avs), 111u + 331u);   // a 48 V monitor sweeps to the APDO top
-    // an EPR AVS APDO wholly above the ceiling contributes nothing ("above the K2's monitor")
-    pd::SourceCaps hi = caps; hi.pdos[9] = epr_avs_apdo(40000, 48000, 140);
-    CHECK_EQ(sw::plan_total(hi, 36000, sw::Kind::Avs), 111u);
+    // an EPR AVS APDO whose range starts above the cap contributes nothing (a 20 V cable, an APDO from 25 V)
+    pd::SourceCaps hi = caps; hi.pdos[9] = epr_avs_apdo(25000, 48000, 140);
+    CHECK_EQ(sw::plan_total(hi, 36000, sw::Kind::Avs), 111u + 111u);   // 25..36 V at the monitor ceiling
+    CHECK_EQ(sw::plan_total(hi, 20000, sw::Kind::Avs), 111u);            // under a 20 V cap the EPR part is empty
     // the EPR slots are not swept from an SPR list
     pd::SourceCaps spr = caps; spr.epr = false; spr.num_pdos = 7;
     CHECK_EQ(sw::plan_total(spr, 36000, sw::Kind::Avs), 111u);

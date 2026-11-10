@@ -182,6 +182,7 @@ public:
     // sweep on (an Options flag, not an algorithm bit; bit 31 was always 0 before, so old clients read the mask alone).
     uint32_t charger_test_selection() const { return charger_test_.selection_mask() | (charger_test_.sweep_on() ? 1u << 31 : 0); }
     void charger_test_set_sweep(bool on) { charger_test_.set_sweep(on); }
+    void charger_test_set_avs_sweep(bool on) { charger_test_.set_avs_sweep(on); }
     uint8_t charger_test_cursor() const { return static_cast<uint8_t>(charger_test_.cursor()); }
     uint8_t charger_test_stage() const { return static_cast<uint8_t>(charger_test_.stage()); }
     bool charger_test_set_units(std::span<const uint8_t> units) { return charger_test_.set_units(units); }

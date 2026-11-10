@@ -1531,6 +1531,23 @@ static void test_charger_units() {
     CHECK_EQ(run(f, request(0x0C, 8, {1, 1}), r), 1); check_header(r, 0x0C, 8, Status::Busy, 0);
 }
 
+// Cmd::ChargerAvsSweep (0x54): [on(1)] toggles the AVS deep sweep of the next run, rsp [on(1)]; Busy while a run is active.
+static void test_charger_avs_sweep() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x54, 1, {1}), r), 1);
+    check_header(r, 0x54, 1, Status::Ok, 1); check_bytes(r, kRspHeader, {1});
+    CHECK_EQ(f.avs_sweep_set, true); CHECK_EQ(f.avs_sweep_sets, 1);
+    CHECK_EQ(run(f, request(0x54, 2, {0}), r), 1);
+    check_header(r, 0x54, 2, Status::Ok, 1); check_bytes(r, kRspHeader, {0});
+    CHECK_EQ(f.avs_sweep_set, false); CHECK_EQ(f.avs_sweep_sets, 2);
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x54, 3, {}), r), 1); check_header(r, 0x54, 3, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x54, 4, {2}), r), 1); check_header(r, 0x54, 4, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls);
+    f.avs_sweep_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x54, 5, {1}), r), 1); check_header(r, 0x54, 5, Status::Busy, 0);
+}
+
 static void test_charger_cable() {
     namespace cc = k2::ctcable;
     Fake f; Frame r;
@@ -1701,6 +1718,7 @@ int main() {
     test_charger_hunt();
     test_charger_cable();
     test_charger_units();
+    test_charger_avs_sweep();
     test_charger_test_wire();
     test_identify_refusal_wire_mapping();
     test_active_pd_commands();

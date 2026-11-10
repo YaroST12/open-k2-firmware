@@ -242,8 +242,13 @@ public:
     uint32_t selection_mask() const { return options_.selected; }
     // The PPS deep sweep's point count for the source in hand (the Tests-list line's count); 0 = no PPS APDO: the line is hidden.
     unsigned sweep_points() const;
+    // The AVS deep sweep's point count (SPR AVS, plus EPR AVS when the EPR list is in hand, capped at the monitor
+    // ceiling); 0 = no AVS APDO offered: the line is hidden.
+    unsigned avs_sweep_points() const;
     bool sweep_on() const { return options_.pps_sweep; }
     void set_sweep(bool on) { options_.pps_sweep = on; }
+    bool avs_sweep_on() const { return options_.avs_sweep; }
+    void set_avs_sweep(bool on) { options_.avs_sweep = on; }
     // The unit order of the next run (Cmd::ChargerUnits); empty = the default order. False for an unknown or repeated unit.
     bool set_units(std::span<const uint8_t> units);
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.

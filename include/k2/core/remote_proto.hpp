@@ -350,6 +350,8 @@ enum class Cmd : uint8_t {
     ChargerSweep = 0x0F, // [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset; an Options flag, not an
                          // algorithm bit - bit 31 of the draft selection in CHARGER_TEST schema 2). No payload reads it back.
                          // Busy while a run is active.
+    ChargerAvsSweep = 0x54, // [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset; an Options flag
+                         // next to the PPS sweep's, journaled in the meta record). rsp [on(1)]. Busy while a run is active.
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -360,7 +362,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
     Cmd::PdAttach,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
-    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::BootInfo,
+    Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -790,6 +792,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.charger_test_results() } -> std::same_as<ChargerTestSnapshot>;
     { b.charger_units(std::span<const uint8_t>{}) } -> std::same_as<Status>;   // unit order of the next run (empty = default)
     { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (opt-in)
+    { b.charger_avs_sweep(true) } -> std::same_as<Status>;   // the AVS deep sweep of the next run (opt-in)
     { b.charger_cable(static_cast<const ctcable::Choice *>(nullptr)) } -> std::same_as<ChargerCableReply>;   // null = read only
     { b.charger_hunt(u8) } -> std::same_as<ChargerHuntReply>;   // evidence of refused hunt row `u8`
     { b.press(u8, u16) } -> std::same_as<Status>;
@@ -929,6 +932,13 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     case Cmd::ChargerSweep: {
         if (p.size() != 1 || p[0] > 1) return reply(Status::BadLength);
         const Status st = backend.charger_sweep(p[0] != 0);
+        if (st != Status::Ok) return reply(st);
+        buf[0] = p[0];
+        return reply_n(1);
+    }
+    case Cmd::ChargerAvsSweep: {
+        if (p.size() != 1 || p[0] > 1) return reply(Status::BadLength);
+        const Status st = backend.charger_avs_sweep(p[0] != 0);
         if (st != Status::Ok) return reply(st);
         buf[0] = p[0];
         return reply_n(1);

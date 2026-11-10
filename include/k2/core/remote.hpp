@@ -49,6 +49,7 @@ public:
     remote::ChargerTestSnapshot charger_test_results() const;
     remote::Status charger_units(std::span<const uint8_t> units);   // unit order of the next charger run (empty = default)
     remote::Status charger_sweep(bool on);   // the PPS deep sweep of the next charger run (opt-in)
+    remote::Status charger_avs_sweep(bool on);   // the AVS deep sweep of the next charger run (opt-in)
     remote::ChargerCableReply charger_cable(const ctcable::Choice* set);   // cable identity of the START dialog (null = read)
     remote::ChargerHuntReply charger_hunt(uint8_t slot) const;   // evidence of a refused 6 A hunt row (read-only)
     remote::Status press(uint8_t button, uint16_t ms);

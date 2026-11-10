@@ -136,7 +136,8 @@ inline std::uint32_t layout_sig(Section sec, std::span<const charger_test::Step>
 struct RunMeta {
     charger_test::UnitList units{};
     bool unattended = false;
-    bool pps_sweep = false;   // the deep sweep was on (meta byte p[1] bit 1; older journals read 0 = off)
+    bool pps_sweep = false;   // the PPS deep sweep was on (meta byte p[1] bit 1; older journals read 0 = off)
+    bool avs_sweep = false;   // the AVS deep sweep was on (meta byte p[1] bit 2; older journals read 0 = off)
     std::uint8_t cable_kind = 0;
     std::uint16_t cable_seq = 0;
     // What the Ra guard read when an identity was started: 0 = not judged (no identity, or a journal written before this
@@ -252,7 +253,7 @@ inline std::size_t encode_resume(std::span<std::uint8_t> out, std::uint8_t count
 inline std::size_t encode_meta(std::span<std::uint8_t> out, const RunMeta& m) {
     std::uint8_t* p = out.data() + 4;
     std::memset(p, 0, kMetaPayload);
-    p[0] = m.units.n; p[1] = (m.unattended ? 1 : 0) | (m.pps_sweep ? 2 : 0);   // bit 1 was reserved 0 before: old journals read "no sweep"
+    p[0] = m.units.n; p[1] = (m.unattended ? 1 : 0) | (m.pps_sweep ? 2 : 0) | (m.avs_sweep ? 4 : 0);   // bits 1..2 were reserved 0 before: old journals read "no sweep"
     for (std::size_t n = 0; n < m.units.n && n < m.units.u.size(); ++n) p[2 + n] = std::uint8_t(m.units.u[n]);
     p[18] = m.cable_kind; p[19] = m.guard; detail::put16(p + 20, m.cable_seq);
     return finish_record(out, Type::Meta, kMetaPayload);
@@ -275,9 +276,10 @@ inline void apply(Replay& r, Type t, std::span<const std::uint8_t> p) {
         if (!r.found || p.size() != kMetaPayload || p[0] > charger_test::kMaxUnits) return;
         RunMeta m;
         for (std::size_t n = 0; n < p[0]; ++n) if (!m.units.add(Unit(p[2 + n]))) return;
-        m.unattended = p[1] & 1; m.pps_sweep = (p[1] >> 1) & 1;
+        m.unattended = p[1] & 1; m.pps_sweep = (p[1] >> 1) & 1; m.avs_sweep = (p[1] >> 2) & 1;
         m.cable_kind = p[18]; m.guard = p[19]; m.cable_seq = detail::get16(p.data() + 20);
         r.meta = m; r.has_meta = true; r.options.units = m.units; r.options.pps_sweep = m.pps_sweep;
+        r.options.avs_sweep = m.avs_sweep;
         break;
     }
     case Type::Attempt:

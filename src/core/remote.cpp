@@ -217,6 +217,13 @@ remote::Status Remote::charger_sweep(bool on) {
     return remote::Status::Ok;
 }
 
+remote::Status Remote::charger_avs_sweep(bool on) {
+    if (ui_.charger_test_busy()) return remote::Status::Busy;
+    K2LOG("[TEST] avs deep sweep %s\n", on ? "on" : "off");
+    ui_.charger_test_set_avs_sweep(on);
+    return remote::Status::Ok;
+}
+
 remote::ChargerCableReply Remote::charger_cable(const ctcable::Choice* set) {
     remote::ChargerCableReply r;
     if (set) {

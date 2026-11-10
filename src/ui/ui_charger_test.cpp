@@ -1058,6 +1058,7 @@ void ChargerTestSession::begin_run() {
     charger_journal::RunMeta meta;
     meta.units = options_.units;
     meta.pps_sweep = options_.pps_sweep;   // a resumed run re-plans the sweep rows from the journaled options
+    meta.avs_sweep = options_.avs_sweep;
     meta.unattended = self_supplied();   // the K2 runs on the measured port (pinned Rd or bus-powered): the run never detaches
     self_run_ = meta.unattended;
     meta.cable_kind = static_cast<uint8_t>(run_cable_.kind); meta.cable_seq = run_cable_.seq;
@@ -1172,7 +1173,7 @@ void ChargerTestSession::message(const char* s) {
 // The algorithm a Group row stands for (rows are 0-based: the family's own entries, nothing else).
 A ChargerTestSession::algorithm_at(int row) const {
     if (row < 0) return A::Count;
-    if (family_ == kFamPd) return row == 0 ? A::Pd3Fixed : row == 1 ? A::Pps : A::Count;   // row 2 is the deep sweep, no algorithm
+    if (family_ == kFamPd) return row == 0 ? A::Pd3Fixed : row == 1 ? A::Pps : A::Count;   // rows 2/3 are the deep sweeps, no algorithm
     for (unsigned n = 0; n < unsigned(A::Count); ++n) {
         const auto a = static_cast<A>(n);
         if (!(kFamilies[family_] & ct::bit(a))) continue;
@@ -1189,12 +1190,18 @@ int ChargerTestSession::step_index(int row) const {
     }
     return -1;
 }
-// The deep sweep's own line in the PD family's Entries list (row 2), shown only when the source offers a PPS APDO.
-constexpr int kSweepRow = 2;
-bool sweep_row_shown(int family, int row, unsigned points) { return family == kFamPd && row == kSweepRow && points > 0; }
+// The deep sweeps' own lines in the PD family's Entries list (rows 2 and 3), shown only when the source offers the
+// kind's APDOs (PPS row 2, AVS row 3).
+constexpr int kSweepRow = 2, kAvsSweepRow = 3;
+bool sweep_row_shown(int family, int row, unsigned pps_points, unsigned avs_points) {
+    return family == kFamPd && ((row == kSweepRow && pps_points > 0) || (row == kAvsSweepRow && avs_points > 0));
+}
 
 unsigned ChargerTestSession::sweep_points() const {
     return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv);
+}
+unsigned ChargerTestSession::avs_sweep_points() const {
+    return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv, ctsweep::Kind::Avs);
 }
 
 int ChargerTestPage::row_count() const {
@@ -1203,8 +1210,8 @@ int ChargerTestPage::row_count() const {
     case Stage::Custom: return kFamilyCount + 1;   // the families, then "Done"
     case Stage::Group: {
         if (family_ != kFamPd) return static_cast<int>(selected(kFamilies[family_]));
-        const unsigned pts = s_.sweep_points();
-        return 2 + (pts ? 1 : 0);
+        const unsigned pps_pts = s_.sweep_points(), avs_pts = s_.avs_sweep_points();
+        return 2 + (pps_pts ? 1 : 0) + (avs_pts ? 1 : 0);
     }
     case Stage::Cable: return ctx_.cables.count();
     case Stage::Review: return 1;
@@ -1256,8 +1263,8 @@ constexpr const char *kNotes[] = {kNoteCustom, kNoteLast, kNoteFamily, kNoteXiao
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a note is wider than the row note");
 
 // The Group page's mask for row `row` of family `fam` (the PD family has two algorithm rows - fixed offers, the PPS /
-// AVS offers - and, when the source offers a PPS APDO, a third: the deep sweep, which is an Options flag, not an
-// algorithm bit, so its mask is 0 and it is toggled by its own row).
+// AVS offers - and, when the source offers PPS / AVS APDOs, two more: the deep sweeps, which are Options flags, not
+// algorithm bits, so their mask is 0 and they are toggled by their own rows).
 uint32_t group_mask(int fam, int row, A a) {
     if (fam == kFamPd) return row == 0 ? ct::kPdFixedAlgorithms : row == 1 ? ct::kPpsAlgorithms : 0;
     return ct::bit(a);
@@ -1389,7 +1396,10 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         unsigned on = 0;
         const int n = row_count();
         for (int i = 0; i < n; ++i) {
-            if (sweep_row_shown(family_, i, s_.sweep_points())) { on += options_.pps_sweep; continue; }
+            if (sweep_row_shown(family_, i, s_.sweep_points(), s_.avs_sweep_points())) {
+                on += i == kAvsSweepRow ? options_.avs_sweep : options_.pps_sweep;
+                continue;
+            }
             const uint32_t m = group_mask(family_, i, algorithm_at(i));
             on += (options_.selected & m) == m;
         }
@@ -1555,10 +1565,11 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         const A a = algorithm_at(index);
         const uint32_t m = group_mask(family_, index, a);
         out.marker = kit::Marker::Check;
-        if (sweep_row_shown(family_, index, s_.sweep_points())) {   // the deep sweep's own line, with its point count
-            out.state = options_.pps_sweep;
-            out.text = "PPS sweep";
-            row_tail_.put_u32(s_.sweep_points()).put(" pts");
+        if (sweep_row_shown(family_, index, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line, with its point count
+            const bool avs = index == kAvsSweepRow;
+            out.state = avs ? options_.avs_sweep : options_.pps_sweep;
+            out.text = avs ? "AVS sweep" : "PPS sweep";
+            row_tail_.put_u32(avs ? s_.avs_sweep_points() : s_.sweep_points()).put(" pts");
             out.tail = row_tail_.view();
             if (focused) out.note = kNoteSweep;
             break;
@@ -2377,8 +2388,9 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         }
         break;
     case Stage::Group:
-        if (sweep_row_shown(family_, selection_, s_.sweep_points())) {   // the deep sweep's own line: an Options flag, not an algorithm bit
-            options_.pps_sweep = !options_.pps_sweep;
+        if (sweep_row_shown(family_, selection_, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line: an Options flag, not an algorithm bit
+            if (selection_ == kAvsSweepRow) options_.avs_sweep = !options_.avs_sweep;
+            else options_.pps_sweep = !options_.pps_sweep;
             invalidate_confirmation();
         } else if (const A a = algorithm_at(selection_); a != A::Count) {
             const uint32_t mask = group_mask(family_, selection_, a);

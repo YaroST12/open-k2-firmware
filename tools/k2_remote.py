@@ -35,6 +35,7 @@ CMD_CHARGER_UNITS = 0x0C  # [n, unit...] the test units of the next run, in orde
 CMD_CHARGER_CABLE = 0x0D  # [kind, seq(2)] the cable identity of the next START (no payload reads it back)
 CMD_CHARGER_HUNT = 0x0E   # [slot] read-only: the evidence of one refused 6 A hunt row
 CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset)
+CMD_CHARGER_AVS_SWEEP = 0x54  # [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset)
 CMD_GET_IDENTITY = 0x24  # source identity: VID/PID/bcd, SVIDs, vendor, Apple model
 CMD_DEBUG_LINK = 0x25     # debug: 1 hold the link attached, 0 detached (until the next rescan)
 CMD_DEBUG_PD_MSG = 0x23   # debug: feed one PD message (sop, header, data objects) to the parser
@@ -820,6 +821,13 @@ def charger_sweep(link, on):
     """Turn the PPS deep sweep of the next charger-test run on or off (opt-in; never in a preset)."""
     p = link.call(CMD_CHARGER_SWEEP, bytes([1 if on else 0])).payload
     _need(p, 1, "charger sweep")
+    return bool(p[0])
+
+
+def charger_avs_sweep(link, on):
+    """Turn the AVS deep sweep of the next charger-test run on or off (opt-in; never in a preset)."""
+    p = link.call(CMD_CHARGER_AVS_SWEEP, bytes([1 if on else 0])).payload
+    _need(p, 1, "charger avs sweep")
     return bool(p[0])
 
 
