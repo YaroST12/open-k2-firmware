@@ -30,6 +30,8 @@ struct Fake final : ct::Env {
     // AFTER the output is back at 5 V. late_session_ms = that delay after the end of the drop (0 = no second session).
     uint32_t late_session_ms = 0, late_session_at = 0;
     int low_mv_for_3v3 = 0;   // a source whose output lands here (not at the target) on a 3.3 V programmable step
+    int pd_small_step_mv = -1;   // see request_pd: the output move of a +20 mV PPS request (-1 = follow the target)
+    int last_pps_mv = 0, last_pd_vbus = 0;
     // pattern latch-off-low-pps: after a request at latch_mv the source stops regulating latch_delay_ms later, drains to 0 and
     // stays dead (no caps, no session, a release changes nothing) until the test calls revive().
     int latch_mv = 0; uint32_t latch_delay_ms = 0, latch_at = 0; bool latched = false;
@@ -207,7 +209,16 @@ struct Fake final : ct::Env {
         if (c.pos >= 8 && !in.pd.epr_mode && epr_caps.valid) { spr_caps = caps; caps = epr_caps; }   // the sink enters EPR first
         in.pd.held = true; in.pd.epr_mode = in.pd.epr_mode || c.pos >= 8;
         if (latch_mv && int(c.mv) == latch_mv) latch_at = in.now + latch_delay_ms + 1;
-        in.pd.pos = c.pos; in.pd.mv = c.mv; in.vbus_mv = low_mv_for_3v3 && c.mv == 3300 ? low_mv_for_3v3 : int(c.mv);
+        in.pd.pos = c.pos; in.pd.mv = c.mv;
+        {   // the output level of a PD request; pd_small_step_mv scripts a PPS request exactly +20 mV above the
+            // previous one (the step-walk row's steps): the output moves by that many mV instead of 20 (-1 = follow)
+            const bool pps_req = c.pos >= 1 && c.pos <= caps.num_pdos && caps.pdos[c.pos - 1].type == pd::PdoType::Pps;
+            if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && pd_small_step_mv >= 0)
+                in.vbus_mv = last_pd_vbus + pd_small_step_mv;
+            else
+                in.vbus_mv = low_mv_for_3v3 && c.mv == 3300 ? low_mv_for_3v3 : int(c.mv);
+            if (pps_req) { last_pps_mv = int(c.mv); last_pd_vbus = in.vbus_mv; }
+        }
         if (pd_max_mv && int(c.mv) > pd_max_mv) in.vbus_mv = pd_max_mv;
         return pd::Err::Ok;
     }
@@ -3299,6 +3310,84 @@ static void test_pps_collapse_after_ps_rdy_stays_lost() {
     CHECK_EQ(c.n >= 2u, true); CHECK_EQ(c.lost, c.n); CHECK_EQ(c.needs_load, 0u);   // the source did deliver the level: PS_RDY was the proof
     CHECK_EQ(count_reason_all(r, ct::Reason::NeedsLoad), 0u);
 }
+// ROADMAP "PPS coverage" item 1: a source that advertises 3.3 V but regulates at 5 V is a fail "floor at 5.0 V" with
+// measured_mv = the reached level (the PdLow low-edge row reports its floor, not only pass/fail).
+static void test_low_edge_that_regulates_at_5v_is_a_floored_fail() {
+    Fake f; f.caps.pdos[5] = pd::decode_pdo(0xc0000000u | (110u << 17) | (33u << 8) | 100);   // PPS 3.3-11 V 5 A
+    f.low_mv_for_3v3 = 5000;   // the 3.3 V request is granted (PS_RDY) but the output stays at 5 V
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    bool seen = false;
+    for (const auto& s : r.steps()) {
+        if (s.algorithm != A::Pps || s.mv != 3300) continue;
+        seen = true;
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
+        CHECK_EQ(int(s.reason), int(ct::Reason::Floored));
+        CHECK_EQ(s.measured_mv, 5000);   // the floor the source held
+    }
+    CHECK_EQ(seen, true);
+    CHECK_STR(ct::name(ct::Reason::Floored), "output floored");
+    // the levels above the floor still ran (no chain skip)
+    CHECK_EQ(count_reason_all(r, ct::Reason::Floored), 1u);
+}
+// ROADMAP "PPS coverage" item 2: the step-resolution walk - one row per PPS APDO, from the mid level, five +20 mV
+// Requests. A source that follows them passes; one that rounds to 100 mV or ignores the steps fails
+// "step resolution N mV" (detail = the measured move).
+static bool walk_requests_at(const Fake& f, size_t i, unsigned pos, unsigned base_mv) {
+    if (i + 5 >= f.choices.size()) return false;
+    for (unsigned k = 0; k < 6; ++k)
+        if (f.choices[i + k].pos != pos || int(f.choices[i + k].mv) != int(base_mv + 20 * k)) return false;
+    return true;
+}
+static void test_pps_step_walk_passes_on_20mv_steps() {
+    Fake f;   // default APDOs 5-11 V (pos 6, mid 8000) and 5-21 V (pos 7, mid 13000)
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    bool walk6 = false, walk7 = false;
+    for (size_t i = 0; i + 5 < f.choices.size(); ++i) {
+        if (walk_requests_at(f, i, 6, 8000)) walk6 = true;
+        if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
+    }
+    CHECK_EQ(walk6, true); CHECK_EQ(walk7, true);   // six Requests each: the mid level, then +20 mV x 5
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+    unsigned pass8000 = 0;
+    for (const auto& s : r.steps())
+        if (s.algorithm == A::Pps && s.pos == 6 && s.mv == 8000 && s.verdict == ct::Verdict::Pass) ++pass8000;
+    CHECK_EQ(pass8000, 2u);   // the mid level row and the step-walk row both passed
+}
+static void test_pps_step_walk_fails_when_steps_round_to_100mv() {
+    Fake f; f.pd_small_step_mv = 100;   // every +20 mV request moves the output by 100 mV
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution) >= 1u, true);
+    bool checked = false;
+    for (const auto& s : r.steps()) {
+        if (s.reason != ct::Reason::StepResolution) continue;
+        checked = true;
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
+        CHECK_EQ(s.detail, 100);   // "step resolution 100 mV"
+    }
+    CHECK_EQ(checked, true);
+    CHECK_STR(ct::name(ct::Reason::StepResolution), "step resolution");
+}
+static void test_pps_step_walk_fails_when_steps_are_ignored() {
+    Fake f; f.pd_small_step_mv = 0;   // the +20 mV requests move the output not at all
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution) >= 1u, true);
+    bool checked = false;
+    for (const auto& s : r.steps()) {
+        if (s.reason != ct::Reason::StepResolution) continue;
+        checked = true;
+        CHECK_EQ(int(s.verdict), int(ct::Verdict::Fail));
+        CHECK_EQ(s.detail, 0);   // "steps ignored"
+    }
+    CHECK_EQ(checked, true);
+}
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
 static void run_to_pd_row(Fake& f, ct::Runner& r, size_t row) {
@@ -5761,5 +5850,7 @@ int main() {
     test_running_grid_follows_a_plan_that_is_rebuilt_during_the_run();
     test_pps_accepted_then_dropped_at_no_load_is_needs_load(); test_pps_collapse_with_current_drawn_stays_lost();
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
+    test_low_edge_that_regulates_at_5v_is_a_floored_fail();
+    test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
     return test_report("test_charger_test");
 }

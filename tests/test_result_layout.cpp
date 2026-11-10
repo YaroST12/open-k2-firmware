@@ -213,6 +213,21 @@ static void test_reach_footer_says_needs_load_not_not_run() {
     CHECK_STR(text_of(m, true).c_str(), "needs load >5V");   // the levels above the highest one that passed need a load
     CHECK_EQ(9 + rl::reach_footer(m).len <= 27, true);
 }
+// ROADMAP "PPS coverage" item 1: a low edge the source cannot reach (it advertises 3.3 V, regulates at 5 V) is a
+// Floored fail, and the Results footer names the floor ("floor at 5V"), like "caps 19.4V" names a ceiling.
+static void test_reach_footer_names_the_floor() {
+    const uint32_t pdo = 3248763456u;   // PPS 3.3-21V, slot 7
+    std::vector<ct::Step> all{step(A::Pps, 3300, V::Fail, 7, pdo, ct::Reason::Floored), step(A::Pps, 13000, V::Pass, 7, pdo)};
+    all[0].measured_mv = 5000;   // the level the source held instead of the 3.3 V target
+    const auto r = rl::reach(all, A::Pps);
+    CHECK_EQ(r.floored, true);
+    CHECK_EQ(r.floor_mv, 5000);
+    CHECK_STR(text_of(r, true).c_str(), "floor at 5V");
+    CHECK_EQ(9 + rl::reach_footer(r).len <= 27, true);
+    rl::Reach manual; manual.adv_mv = 11000; manual.floored = true; manual.floor_mv = 5000; manual.tone = rl::Tone::Fail;
+    CHECK_STR(rl::reach_footer(manual).c_str(), "floor at 5V");
+    CHECK_EQ(9 + rl::reach_footer(manual).len <= 27, true);
+}
 // A row with two ranges reports the one that is not clean (the first), so the footer never hides a cap behind a green sibling.
 static void test_row_reach_picks_the_range_that_is_not_clean() {
     auto s = baseus();                                    // PPS slot 6 has a fail, slot 7 is clean
@@ -961,6 +976,7 @@ int main() {
     test_a_legacy_chip_with_a_pass_and_a_fail_is_amber();
     test_reach_says_what_the_source_delivered();
     test_reach_footer_says_needs_load_not_not_run();
+    test_reach_footer_names_the_floor();
     test_row_reach_picks_the_range_that_is_not_clean();
     test_reach_words_fit_the_footer_next_to_a_label();
     test_a_range_not_offered_reads_none();

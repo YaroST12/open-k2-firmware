@@ -326,6 +326,24 @@ test("charger-test reason 44 is 'needs load': a PPS row skipped with the collaps
   assert.equal(step.explanation, "needs load"); assert.equal(step.measured_mv, 1800);
 });
 
+test("charger-test reasons 45/46 (PPS coverage): floor and step resolution decode", () => {
+  // ROADMAP "PPS coverage": 45 = Floored (a low edge the source cannot reach), 46 = StepResolution (a +20 mV PPS
+  // step not followed; the detail byte is the measured move in mV)
+  assert.equal(P.REASONS[45], "floored above target");
+  assert.equal(P.REASONS[46], "step resolution");
+  const row = new Uint8Array(TEST_ROWS[1]);
+  row[3] = 3300 & 0xFF; row[4] = 3300 >> 8;         // target 3.3 V
+  row[7] = 5000 & 0xFF; row[8] = 5000 >> 8;          // measured 5.0 V (the floor)
+  row[9] = 3; row[10] = 45;                          // fail, why 45
+  let step = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [row])).steps[0];
+  assert.equal(step.result, "fail"); assert.equal(step.reason, "floored above target");
+  assert.equal(step.explanation, "floored above target"); assert.equal(step.measured_mv, 5000);
+  row[10] = 46; row[11] = 100;                       // why 46, detail 100 mV
+  step = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [row])).steps[0];
+  assert.equal(step.reason, "step resolution"); assert.equal(step.explanation, "step resolution 100mV");
+  assert.equal(step.detail, 100);
+});
+
 test("charger-test evidence, draft and final metadata races abort rather than mix snapshots", async () => {
   for (const at of [15, 19, 23, 24, 25, 26, 28, 30, 32, 33, 37, 39]) {
     const bad = testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]); bad[at] ^= 1;

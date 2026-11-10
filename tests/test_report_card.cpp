@@ -111,6 +111,54 @@ static void test_two_pps_ranges_and_fixed_max() {
     CHECK_EQ(d == c, 1);                                   // the APDO position survives the codec
 }
 
+// ROADMAP "PPS coverage" item 3: the card records the setpoint error in mV per level of each APDO (v9 spread block,
+// low to high, up to four levels), so a converter that drifts at the ends shows. Older payloads decode with no spread.
+static void test_v9_spread_records_setpoint_error_per_level() {
+    constexpr uint32_t kP1 = (3u << 30) | (110u << 17) | (50u << 8) | 100;   // 5-11 V 5 A
+    const std::vector<ct::Step> steps = {
+        step(A::Pps, ct::Group::Pd, 6, 5000, V::Pass, 5088, ct::Reason::None, kP1, true),    // +88 mV
+        step(A::Pps, ct::Group::Pd, 6, 6500, V::Pass, 6530, ct::Reason::None, kP1, true),    // +30 mV
+        step(A::Pps, ct::Group::Pd, 6, 8000, V::Pass, 7983, ct::Reason::None, kP1, true),    // -17 mV
+        step(A::Pps, ct::Group::Pd, 6, 11000, V::Pass, 10976, ct::Reason::None, kP1, true),  // -24 mV
+        step(A::Pps, ct::Group::Pd, 6, 9000, V::Fail, 9000, ct::Reason::Voltage, kP1, true), // a failed level is fail_dv, not spread
+    };
+    const rc::Card c = rc::build(steps, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None);
+    CHECK_EQ(c.n_ranges, 1);
+    CHECK_EQ(c.range[0].fail_dv, 90);
+    CHECK_EQ(c.spread[0][0], 88); CHECK_EQ(c.spread[0][1], 30); CHECK_EQ(c.spread[0][2], -17); CHECK_EQ(c.spread[0][3], -24);
+    CHECK_EQ(c.spread[1][0], -128);   // unused slots read "none"
+    uint8_t rec[rc::kMaxRecord]; rc::Card d;
+    rc::encode_card(rec, c);
+    CHECK_EQ(rec[2], rc::kPayload);                       // the payload grew for the spread block
+    CHECK_EQ(rc::kPayload, 214);
+    CHECK_EQ(rec[4 + 33], 9);                             // format v9
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d == c, 1);
+    CHECK_EQ(d.spread[0][0], 88); CHECK_EQ(d.spread[0][3], -24);
+    // a v8-length payload of the same record decodes too (its spread bytes are the CRC/padding, not read)
+    rec[4 + 33] = 8;
+    CHECK_EQ(rc::decode_card({rec + 4, 198}, d), 1);
+    CHECK_EQ(d.format, 8);
+    CHECK_EQ(d.spread[0][0], -128);
+    CHECK_EQ(d.range[0].fail_dv, 90);
+}
+// A step-walk row's verdict reason survives the card's 6-bit reason field; its detail (the observed mV) is dropped
+// there on purpose (the 6-bit detail field would misread it as a sink result) - the reason name says what happened.
+static void test_step_resolution_reason_survives_the_card() {
+    constexpr uint32_t kP1 = (3u << 30) | (110u << 17) | (50u << 8) | 100;
+    const std::vector<ct::Step> steps = {
+        step(A::Pps, ct::Group::Pd, 6, 8000, V::Fail, 8100, ct::Reason::StepResolution, kP1, false, false, 100),
+    };
+    const rc::Card c = rc::build(steps, evidence(), {}, {}, {}, ct::State::Done, ct::Reason::None);
+    CHECK_EQ(c.group[unsigned(ct::Group::Pd)].reason, int(ct::Reason::StepResolution));
+    CHECK_EQ(int(c.group[unsigned(ct::Group::Pd)].verdict), int(rc::GV::Fail));
+    uint8_t rec[rc::kMaxRecord]; rc::Card d;
+    rc::encode_card(rec, c);
+    CHECK_EQ(rc::decode_card({rec + 4, rc::kPayload}, d), 1);
+    CHECK_EQ(d.group[unsigned(ct::Group::Pd)].reason, int(ct::Reason::StepResolution));
+    CHECK_EQ(d == c, 1);
+}
+
 // Baseus FH22 100 W (hardware 2026-11-08): the PPS 5-21 V APDO stops at 19.4 V. The Capped step has a reason of its own, the
 // range keeps the ceiling as the highest level reached, and both survive the card codec (the reason fits the 6-bit field).
 static void test_capped_range_keeps_its_ceiling_and_reason() {
@@ -1101,6 +1149,8 @@ int main() {
     test_fingerprint();
     test_build_groups_and_ranges();
     test_two_pps_ranges_and_fixed_max();
+    test_v9_spread_records_setpoint_error_per_level();
+    test_step_resolution_reason_survives_the_card();
     test_group_keeps_max_pass_and_first_fail();
     test_capped_range_keeps_its_ceiling_and_reason();
     test_group_detail_for_detected_and_handshake_ok();

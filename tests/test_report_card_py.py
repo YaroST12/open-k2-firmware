@@ -72,6 +72,28 @@ def test_format_2_carries_pdp_and_auto_name_flag():
     assert "pdp_w" not in report_card.decode(bytes(old)) and "name_auto" not in report_card.decode(bytes(old))
 
 
+def test_v9_spread_decodes_per_level():
+    # ROADMAP "PPS coverage" item 3: format 9 adds the setpoint error in mV per level of each APDO (block at 198:
+    # 4 ranges x 4 levels, int8, -128 = none). A v8-length payload of the same card decodes with no spread.
+    assert report_card.PAYLOAD == 198 and report_card.FORMAT == 9   # v9 adds the spread block; PAYLOAD stays the v8 size
+    rec = bytearray(214)
+    rec[31] = 1                                   # one range
+    rec[33] = 9                                   # format v9
+    q = 104                                       # range 0: PPS (alg 4), pos 6, 5-11 V
+    rec[q] = 4; rec[q + 1] = 6
+    rec[q + 2:q + 4] = (50 | (100 << 9)).to_bytes(2, "little")
+    rec[q + 4:q + 6] = (110).to_bytes(2, "little")
+    rec[q + 6:q + 8] = (110).to_bytes(2, "little")
+    for k, e in enumerate((88, 30, -17, -24)):   # the spread block at 198: errors low to high
+        rec[198 + k] = e & 0xFF
+    c = report_card.decode(bytes(rec))
+    assert c["ranges"][0]["err_mv"] == [88, 30, -17, -24]
+    assert len(report_card.REASONS) == 47 and report_card.REASONS[45:] == ["floored above target", "step resolution"]
+    rec[33] = 8                                   # the same bytes as a v8 payload (198): no spread is read
+    c8 = report_card.decode(bytes(rec[:198]))
+    assert "err_mv" not in c8["ranges"][0]
+    assert report_card.PAYLOAD_V9 == 214
+
 def test_brand_table_matches_the_firmware():
     hdr = (ROOT / "include" / "k2" / "chargertest" / "report_card.hpp").read_text()
     fw = {int(v, 16): n for v, n in re.findall(r'case 0x([0-9A-F]{4}): return "([^"]+)"', hdr)}

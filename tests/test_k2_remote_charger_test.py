@@ -254,7 +254,24 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("skip", "needs load"))
         self.assertEqual(step["explanation"], "needs load")
         self.assertEqual(step["measured_mv"], 1800)
-        bad = bytearray(row); bad[10] = 45   # one past the last reason
+        bad = bytearray(row); bad[10] = 47   # one past the last reason
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
+
+    def test_reasons_45_46_decode(self):
+        # ROADMAP "PPS coverage": 45 = a low edge the source cannot reach (fail, measured = the floor),
+        # 46 = a PPS step-walk whose +20 mV step was not followed (fail, detail = the measured move in mV)
+        self.assertEqual(kr.TEST_REASONS[45], "floored above target")
+        self.assertEqual(kr.TEST_REASONS[46], "step resolution")
+        row = struct.pack("<BBBHHHBBBI", 4, 6, 0, 3300, 1000, 5000, 3, 45, 0, 0)   # a PPS 3.3 V row, fail, why 45, measured 5 V
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"]), ("fail", "floored above target"))
+        self.assertEqual(step["measured_mv"], 5000)
+        row = struct.pack("<BBBHHHBBBI", 4, 6, 0, 8000, 1000, 8100, 3, 46, 100, 0)   # the step walk, fail, why 46, detail 100 mV
+        step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
+        self.assertEqual((step["result"], step["reason"], step["detail"]), ("fail", "step resolution", 100))
+        self.assertEqual(step["explanation"], "step resolution 100mV")
+        bad = bytearray(row); bad[10] = 47   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
