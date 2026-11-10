@@ -195,6 +195,7 @@ TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", 
                                              # "waiting" = START presented Rd and waits for the charger (OK or BACK cancels it)
 TEST_ALL = (1 << len(TEST_ALGORITHMS)) - 1
 TEST_SWEEP_BIT = 1 << 31   # draft_selected bit 31 = the PPS deep sweep on (remote_proto.hpp)
+TEST_AVS_SWEEP_BIT = 1 << 30   # draft_selected bit 30 = the AVS deep sweep on (remote_proto.hpp)
 TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing..."]
 TEST_RESULTS = ["pending", "running", "pass", "fail", "skip"]
 # charger_test::Unit in enum order (include/k2/chargertest/charger_test.hpp): Pd, the legacy protocols, then the low PPS/AVS rows
@@ -784,10 +785,12 @@ def decode_charger_test(p):
         stage, wire, flags = (p[23] >> 2) & 15, p[23] & 3, p[25]
         out["resumed"] = p[23] >> 6   # times this run was resumed after a reboot (saturates at 3)
         sweep = bool(draft_mask & TEST_SWEEP_BIT)   # draft bit 31: the PPS deep sweep is on (an Options flag, not a test)
-        draft_mask &= ~TEST_SWEEP_BIT
+        avs_sweep = bool(draft_mask & TEST_AVS_SWEEP_BIT)   # draft bit 30: the AVS deep sweep is on
+        draft_mask &= ~(TEST_SWEEP_BIT | TEST_AVS_SWEEP_BIT)
         if (run_mask | draft_mask) & ~TEST_ALL or stage >= len(TEST_STAGES) or p[39] & 15 > 11:
             raise FrameError("invalid charger-test selection or evidence")
         out["selection"] = {"run_mask": run_mask, "configured_mask": draft_mask, "pps_sweep": sweep,
+                            "avs_sweep": avs_sweep,
                             "run": [a for i, a in enumerate(TEST_ALGORITHMS) if run_mask & (1 << i)],
                             "configured": [a for i, a in enumerate(TEST_ALGORITHMS) if draft_mask & (1 << i)]}
         out["stage"] = TEST_STAGES[stage]
@@ -809,7 +812,7 @@ def decode_charger_test(p):
     for i in range(n):
         code, pos, flags, mv, ma, measured, result, why, detail, pdo = struct.unpack_from("<BBBHHHBBBI", p, header + 16 * i)
         if (code >= (len(TEST_ALGORITHMS) if modern else 10) or pos > 11 or result >= len(TEST_RESULTS) or
-                why >= reasons or flags & ~0x1F or (result == 4 and why == 0)):
+                why >= reasons or flags & ~0x3F or (result == 4 and why == 0)):   # bits 0-4 + bit 5: a deep-sweep row
             raise FrameError("invalid charger-test row")
         group = TEST_ALGORITHM_GROUPS[code] if modern else code
         protocol = TEST_GROUPS[group]
@@ -831,9 +834,12 @@ def decode_charger_test(p):
             kind = pdo >> 30
             protocol = "pd-fixed" if kind == 0 else ("pd-avs" if flags & 2 else "pd-pps") if kind == 3 else "pd-other"
         detail_reason = "none"
-        if detail in EPR_DETAILS and group == 0:
+        if flags & 0x20 and group == 0:
+            # a deep-sweep row: the detail byte is the recorded point count, not a code (remote_proto.hpp)
+            detail_reason = f"deep sweep ({detail} points)"
+        elif detail in EPR_DETAILS and group == 0:
             detail_reason = EPR_DETAILS[detail]
-        elif detail == 161 and group == 0:   # kDetailSweep: the deep-sweep row (its points are in the sweep record, not the row)
+        elif detail == 161 and group == 0:   # older firmware: kDetailSweep marker, no flag bit, points not on the wire
             detail_reason = "deep sweep"
         elif detail and why == 46:   # StepResolution: the detail is the measured move in mV, not a code
             detail_reason = f"{detail} mV move"
@@ -851,7 +857,7 @@ def decode_charger_test(p):
                "target_mv": mv, "request_ma": ma, "measured_mv": measured,
                "result": TEST_RESULTS[result], "reason": TEST_REASONS[why],
                "detail": detail, "detail_reason": detail_reason, "raw_pdo": pdo,
-               "continuous": bool(flags & 1), "avs": bool(flags & 2)}
+               "continuous": bool(flags & 1), "avs": bool(flags & 2), "sweep": bool(flags & 0x20)}
         if (flags >> 2) & 7:
             row["attempts"] = (flags >> 2) & 7
         if modern:

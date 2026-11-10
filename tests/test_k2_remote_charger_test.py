@@ -372,8 +372,8 @@ class ChargerTest(unittest.TestCase):
     def test_schema2_shape_and_origin_races_leave_output_untouched(self):
         row = bytes([6]) + ROW0[1:]
         good = page(HEADER2, 0, [row])
-        for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x40),
-                              (40, 20), (41, 12), (42, 0x80), (49, 5), (50, len(kr.TEST_REASONS))):
+        for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x20),
+                              (40, 20), (41, 12), (42, 0x80), (49, 5), (50, len(kr.TEST_REASONS))):   # (22, 0x20) = draft bit 29: below the sweep flags, still illegal
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(bad)
