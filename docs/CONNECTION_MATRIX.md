@@ -117,6 +117,7 @@ Evidence and witness lines are in section 3 by id.
 | H19 | PDsrc | none | `usb3` / `usb2` | lanes not visible on CC | no change in CC behaviour; e-marker speed field only | U |
 | H20 | any | via | `spoof`, a refusing state (inline, live contract that is not the self-hold, Busy, CC1 pin, VCONN) | Ra refused | footers "Live sink: unplug load", "Ra refused: contract live"; no Ra | VH |
 | H21 | PDsrc (Baseus 140 W) | none | `spoof` on the bottom receptacle | the spoof is only proven on the top plug | Ra on CC1, Rd on CC2, the charger reads the cable at attach | U |
+| H22 | PDsrc (Anker IQ4) | sink (Pixel), VBUS dark | `via` / `via`, CC wires on different pins (crossed) | crossed CC through the K2: charger Rp loaded only by a cable's Ra on one line (steady 0.2-0.8 V) and a dual-role toggle on the other, or a steady Rp and a toggle; nothing on the other line gives a hint | passive (no Rd, no TX); VBUS < 1 V for >= 1 s; Source tab and bar "CC CROSSED - flip one cable" (hint: "Flip a cable?"), `state` crossed / flip_hint, one `[LINK] cc cross=` line per edge; never inline, with a contract, with a K2 Rd/Ra, or with the Wake sleeping port holding a line; a charger alone or a dual-role phone alone does not read crossed | U |
 
 ### 2.2 VBUS-powered plain boot
 

@@ -133,6 +133,7 @@ void unit_hold(bool legacy) {
     if (g_stub.model_units && !legacy) { g_stub.sink.state = k2::pd::SinkState::Ready; g_stub.sink.result = k2::pd::SinkResult::Ok; g_stub.sink.mv = 5000; g_stub.sink.pos = 1; }
 }
 bool rd_for_run_on() { return g_stub.rd_run; }
+std::uint8_t idle_wake_line() { return g_stub.idle_wake_hold; }
 bool rp_on_line() { return false; }
 void attach_scan() {}
 void service() {

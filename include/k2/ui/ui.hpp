@@ -264,6 +264,7 @@ private:
     StackArena<PageIf, kPageArenaBytes, kPageArenaDepth> pages_;
 
     uint32_t last_update_ms_ = 0;
+    raguard::CrossKind cross_seen_ = raguard::CrossKind::None;   // the crossed-CC verdict last logged ([LINK] cc cross=...)
     uint32_t cable_seq_seen_ = 0;   // fusb302::cable_seq() last folded into the link state
     pd::Link link_;
     uint32_t trig_until_ = 0;

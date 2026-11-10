@@ -885,6 +885,7 @@ void Ui::tick(uint32_t now_ms) {
     in.cc1_mv = ctx_.analog ? ctx_.analog->cc1_mv : -1;
     in.cc2_mv = ctx_.analog ? ctx_.analog->cc2_mv : -1;
     in.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !link_.inline_mode();
+    in.line_held = fusb302::idle_wake_line() != 0 || fusb302::pin_rd() != 0;   // a hold of ours (Wake sleeping port, boot-pinned Rd): not the far ports' own levels
     {   // VBUS this K2 drives itself: the PD trigger (held or mid-negotiation) or a fast-charge trigger
         const pd::SinkStatus &sk = fusb302::sink_status();
         const bool pd_busy = sk.held || (sk.state != pd::SinkState::Idle && sk.state != pd::SinkState::Failed);
@@ -894,6 +895,11 @@ void Ui::tick(uint32_t now_ms) {
     if (pd::is_fake()) link_.force_attached(now_ms);   // fake PDOs count as attached
     const bool was_attached = link_.attached();
     link_.update(in);
+    if (link_.cc_cross() != cross_seen_) {   // one log line per edge of the crossed-CC verdict (Source tab, bar, Home and the remote state read it)
+        cross_seen_ = link_.cc_cross();
+        K2LOG("[LINK] cc cross=%s cc1=%u cc2=%u\n", cross_seen_ == raguard::CrossKind::Crossed ? "crossed" : cross_seen_ == raguard::CrossKind::Hint ? "hint" : "none",
+              unsigned(in.cc1_mv < 0 ? 0 : in.cc1_mv), unsigned(in.cc2_mv < 0 ? 0 : in.cc2_mv));
+    }
     if (was_attached && !link_.attached()) fusb302::clear_source();   // one attach = one list
     if (link_.take_new_source()) fusb302::new_source();
     if (fusb302::cable_seq() != cable_seq_seen_) {   // the source's own SOP' exchange was decoded

@@ -1323,6 +1323,7 @@ bool rd_for_run(bool on) {   // a run start takes the Rd and the contract over f
 }
 void rd_for_run_pause() { g_reread_owns_rd = false; g_reread_made_contract = false; set_rd_for_run(false, true); }
 bool rd_for_run_on() { return g_rd_start; }
+std::uint8_t idle_wake_line() { return g_idle_wake.line(); }
 
 std::uint32_t cable_seq() { return g_engine.cable_acks; }
 std::uint32_t session() { return g_session.id(); }

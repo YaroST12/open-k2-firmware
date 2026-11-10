@@ -390,7 +390,8 @@ def decode_state(p):
         st.update({"stale": bool(lf & 1), "waiting": bool(lf & 2), "inline": bool(lf & 4),
                    "age_s": int.from_bytes(p[41:45], "little"),
                    "cable_scanned": bool(lf & 16), "cable_stale": bool(lf & 8),
-                   "cable_age_s": int.from_bytes(p[45:49], "little")})
+                   "cable_age_s": int.from_bytes(p[45:49], "little"),
+                   "crossed": bool(lf & 32), "flip_hint": bool(lf & 64)})   # kLinkCrossed / kLinkFlipHint: flip one cable
     if len(p) >= 53:                              # why this boot happened (CTRLSTS flags, cleared after capture)
         flags = int.from_bytes(p[49:53], "little")
         st.update({"reset_flags": flags, "reset_cause": reset_cause_name(flags)})

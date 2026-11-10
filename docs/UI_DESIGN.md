@@ -600,6 +600,14 @@ One page for "what is plugged in": Tools -> Who's attached (menu page 16). Pure 
   | Sink | NO DEVICE: plug a device into the bottom port | NO DEVICE: plug a device into the bottom port | NO DEVICE: charger is on the bottom port, no device side in this setup |
   | Cable | NO CABLE READ: plug a cable into the bottom port, then Read cable | NO CABLE: charger is plugged straight in | CABLE NOT READ: OK -> Read cable (unplug the charger first) |
 
+  **Crossed CC.** With the K2 passive and VBUS dark for >= 1 s, `pd::Link::cc_cross()` can override the Source row
+  above: `CC CROSSED` (hint "Flip one of the two cables (the CC wires meet no partner).") when a steady line (Rp, or
+  Rp loaded by a cable's Ra) sits next to a toggling one, and `FLIP A CABLE?` (hint "A charger waits, nothing answers:
+  try flipping a cable.") when only the loaded line is seen. The bottom bar reads `CC CROSSED - flip one cable` or
+  `Flip a cable?`, and the Home Idle/Stale info row 2 value reads `CROSSED: flip one` (error colour) or
+  `Flip a cable?` (caution colour); the value field is 17 characters wide. A charger or an inline sink wins over
+  the verdict.
+
   The bottom status bar adds the topology word ("top plug" for a direct receptacle, "via cable" for a single-CC
   cable). The hint is text only: it reads the ADC the page already samples and never starts an active CC
   operation (host-tested per combination in `tests/test_ui_connection_page.cpp`, counters of Ra, Rd, scan,

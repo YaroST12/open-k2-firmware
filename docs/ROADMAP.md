@@ -512,6 +512,23 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     One classifier, one result: the tab, the bar and the `state` field read the same value.
   - Validate: host test on the classifier with a toggling and a steady trace; hardware: repeat H13, then the Baseus
     alone (still "CHARGER WAITING", bar and `state` agree).
+- **Crossed CC through the K2: tell the user to flip a cable** (2026-11-10, be71f10, dead-chain Anker IQ4 -> cable -> K2 ->
+  cable -> Pixel; implemented on `k2/cc-crossed`, hardware check pending, connection matrix H22). The K2 passes
+  CC1->CC1 and CC2->CC2, so two cables can land the charger's CC and the phone's CC on different pins and VBUS never
+  comes up. Passive (no Rd, no Rp, no TX), VBUS < 1 V for >= 1 s, per-line statistics over a 1.6 s window
+  (`raguard::CrossTrace`, `include/k2/pd/cc_crossed.hpp`, fed by `pd::Link` from the per-tick ADC levels):
+  1. a steady 0.2-0.8 V line (Rp loaded only by a cable's Ra) and a toggling other line = Crossed;
+  2. a steady charger Rp (>= 2.4 V) and a toggling other line = Crossed;
+  3. a steady 0.2-0.8 V line and a quiet other line = Hint ("Flip a cable?": a plain sink's Rd is invisible without a
+     pull-up, so no verdict).
+  Never while inline, with an own contract, with the K2 holding Rd/Ra (`rd_for_run_on`, `ra_active`, self-powered), or
+  while the Wake sleeping port / a boot-pinned Rd holds a line (`LinkInput.line_held`). Shown on the Source tab and the
+  bottom bar ("CC CROSSED - flip one cable" / "Flip a cable?"), the Home Idle row ("CROSSED: flip one" / "Flip a
+  cable?"), `state` (`kLinkCrossed`, `kLinkFlipHint`, printed as `crossed` / `flip_hint`) and one `[LINK] cc cross=`
+  line per edge. The active pull-up probe stays out. Host tests: `tests/test_cc_crossed.cpp` (the rig's levels, a
+  non-e-marked cable, charger alone and dual-role phone alone must NOT read crossed), `test_pd_link.cpp`,
+  `test_ui_connection.cpp`, `test_ui_home.cpp`. Hardware: Anker -> K2 -> Pixel in the four cable orientations; the
+  crossed ones show the message within about 2 s, the working ones never do.
 - **The sink re-requests a held contract by position on a re-announce** (2026-11-09, fixed in 1d45a76, hardware check
   pending). `src/pd/pd_sink.cpp` (Source_Capabilities while held, ~:717-725) re-requested `want_.pos`, and
   `plan_request` (~:128-139) ignores the held voltage for a fixed PDO. A source that re-announces 5/9/20 V while the

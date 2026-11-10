@@ -538,13 +538,15 @@ struct StateInfo {
     int16_t mcu_temp_deci_c = 0;   // internal die sensor, valid when adc_flags bit3
     uint8_t fc = 0;           // fastcharge::Protocol
     uint8_t adc_flags = 0;    // bit0 reading valid, bit1 NTC valid, bit2 NTC calibrated, bit3 MCU temp valid
-    uint8_t link_flags = 0;   // kLink* bits: charger data stale / waiting (kLinkWaiting = re-attached, no caps yet, OR a charger waiting for a sink per the Rp-trace classifier), inline, cable stale / scanned
+    uint8_t link_flags = 0;   // kLink* bits: charger data stale / waiting (kLinkWaiting = re-attached, no caps yet, OR a charger waiting for a sink per the Rp-trace classifier), inline, cable stale / scanned, crossed CC / flip hint
     uint32_t age_s = 0;       // seconds since the charger was unplugged (0 while live)
     uint32_t cable_age_s = 0; // seconds since the e-marker scan
     uint32_t reset_flags = 0; // CRM CTRLSTS reset flags of this boot (bits 26..31: PIN POR SW IWDG WWDG LPWR)
 };
 constexpr uint8_t kLinkStale = 1 << 0, kLinkWaiting = 1 << 1, kLinkInline = 1 << 2,
-                  kLinkCableStale = 1 << 3, kLinkCableScanned = 1 << 4;
+                  kLinkCableStale = 1 << 3, kLinkCableScanned = 1 << 4,
+                  kLinkCrossed = 1 << 5,    // crossed CC through the K2 (pd::Link::cc_cross == Crossed): flip one cable
+                  kLinkFlipHint = 1 << 6;   // Rp-vs-Ra on one line, nothing on the other (cc_cross == Hint): "Flip a cable?"
 struct AdcRawSnapshot {
     uint8_t ok = 0;
     std::array<uint16_t, kAdcRawAll> all{};      // channels 0..7, 16, 17

@@ -382,10 +382,19 @@ void HomePage::paint_info(const Frame &f) {
     else hm::format_proto(f.proto, pt);
     const bool known = (live || stale) && f.proto.kind != hm::ProtoKind::None;
     const uint16_t tcol = known ? kDim : kFaint;
-    const uint16_t vcol = m == hm::Mode::NoMeter ? (starting ? kDim : kError)
+    const uint16_t vcol0 = m == hm::Mode::NoMeter ? (starting ? kDim : kError)
                         : stale ? kStale
                         : (live && f.proto.kind != hm::ProtoKind::None && f.proto.kind != hm::ProtoKind::Detecting
                            && f.proto.kind != hm::ProtoKind::Unknown) ? kText : kDim;
+    // Crossed CC through the K2 (pd::Link::cc_cross, VBUS dark): row 2 tells the user to flip a cable instead of "No source".
+    // The value field is 17 characters wide, hence the short texts.
+    const raguard::CrossKind cross = (m == hm::Mode::Idle || m == hm::Mode::Stale) ? ctx_.ui->link().cc_cross() : raguard::CrossKind::None;
+    uint16_t vcol = vcol0;
+    if (cross != raguard::CrossKind::None) {
+        pt.value.clear();
+        pt.value.put(cross == raguard::CrossKind::Crossed ? "CROSSED: flip one" : "Flip a cable?");
+        vcol = cross == raguard::CrossKind::Crossed ? kError : kCaution;
+    }
     if (tcol != tag_col_) {
         tag_col_ = tcol;
         tag_.set_colors(tcol, kBg);

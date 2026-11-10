@@ -135,6 +135,9 @@ void debug_cc_matrix(uint8_t v, uint16_t modes);
 using VbusFn = std::int32_t (*)();
 ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Result &out);
 bool rd_for_run_on();
+// The Wake sleeping port's idle Rd hold: the line (1 CC1, 2 CC2) the K2 presents an Rd on while it waits for a source that sleeps,
+// 0 = none. The CC levels on that line are then loaded by our Rd, not the far port's own (the crossed-CC detector stands down).
+std::uint8_t idle_wake_line();
 // Rd off for a moment while the run start goes on (a silent charger gets a clean detach, then rd_for_run(true)
 // again). Unlike rd_for_run(false) it keeps the cable scanned before the start: the same cable stays plugged in.
 void rd_for_run_pause();

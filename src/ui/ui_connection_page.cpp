@@ -308,6 +308,7 @@ void ConnectionPage::sense(uint32_t now_ms) {
     r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx_.inline_mode && !link.inline_mode();
     facts_.topo = raguard::classify(r);
     facts_.wait = link.wait_kind();   // the one waiting classifier: the tab, the bar and the remote state read this
+    facts_.cross = link.cc_cross();   // crossed CC through the K2: the same single verdict for the tab, the bar, Home and the remote
     facts_.charger = link.attached();
     facts_.cable = fusb302::emarker().valid;
     facts_.inline_sink = link.inline_mode();

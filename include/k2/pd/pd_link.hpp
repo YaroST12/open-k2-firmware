@@ -110,7 +110,11 @@ public:
     // The Source tab, the bottom bar and the remote state field read this same value.
     raguard::WaitKind wait_kind() const { return wait_trace_.classify(last_now_, vbus_known_ && vbus_mv_ >= raguard::kVbusAttachedMv); }
     bool charger_waiting() const { return wait_kind() == raguard::WaitKind::ChargerWaiting; }
-    raguard::CrossKind cc_cross() const { return raguard::CrossKind::None; }   // RED STUB
+    // Crossed CC through the K2 (raguard::CrossTrace): a charger's Rp on one line and a phone's toggle on the other with
+    // VBUS dark. Fed only while the K2 is passive (no Rd / Ra / Wake hold of ours, no sink inline, no contract) and VBUS is
+    // below raguard::kVbusAttachedMv; a verdict needs raguard::CrossTrace::kObserveMs of those lines. The Source tab, the bar,
+    // Home and the remote state field read this one value.
+    raguard::CrossKind cc_cross() const { return cross_trace_.classify(last_now_); }
     // Latched by a load, a foreign Request or a foreign VBUS rise; held across a short detach (kInlineHoldMs) and left only on proof
     // (kInlineQuietMs of quiet while attached, or a detach that outlasts the hold).
     bool inline_mode() const { return inline_; }
@@ -148,6 +152,7 @@ private:
     // The waiting classifier's input: the Rp presence trace over the CC lines (fed only while passive), and the
     // last VBUS reading for its gate.
     raguard::RpTrace wait_trace_;
+    raguard::CrossTrace cross_trace_;   // the crossed-CC detector's input (same gate, plus VBUS dark and no inline / contract)
     std::uint32_t last_now_ = 0;
     bool vbus_known_ = false;
     std::int32_t vbus_mv_ = 0;

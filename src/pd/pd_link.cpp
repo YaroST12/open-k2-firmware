@@ -35,6 +35,13 @@ void Link::update(const LinkInput& in) {
         wait_trace_.add(in.now_ms, in.cc1_mv >= raguard::kRpMinMv || in.cc2_mv >= raguard::kRpMinMv);
     else
         wait_trace_.clear();
+    // The crossed-CC trace: the same passive lines, and only while VBUS is dark, nothing of ours holds a line (the Wake hold),
+    // no sink is inline and the K2 has no contract. Any gate dropping starts the observation over.
+    if (in.passive && !in.line_held && !in.own_contract && !inline_ && in.vbus_known && in.vbus_mv < raguard::kVbusAttachedMv &&
+        in.cc1_mv >= 0 && in.cc2_mv >= 0)
+        cross_trace_.add(in.now_ms, in.cc1_mv, in.cc2_mv);
+    else
+        cross_trace_.clear();
     if (forced_) return;
     if (!attached_) requests_at_attach_ = in.requests;  // only Requests seen while attached count
 
