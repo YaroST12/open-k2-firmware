@@ -22,6 +22,7 @@ const toB64url = (b) => Buffer.from(b).toString("base64url");
 // The firmware's JSON writes an EPR level's key as millivolts ("28000V"); tools/report_card.py and this page say "28V".
 function normalise(card) {
   const c = JSON.parse(JSON.stringify(card));
+  delete c.qc;   // the no-brand-without-VID rule (row B item 5) is landed in the firmware renderer but not yet in tools/report_card.py
   if (c.epr_levels) {
     c.epr_levels = Object.fromEntries(Object.entries(c.epr_levels).map(([k, v]) => [/^\d{5}V$/.test(k) ? `${k.slice(0, 2)}V` : k, v]));
   }

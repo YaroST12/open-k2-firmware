@@ -61,10 +61,12 @@ def decoded_kinds(golden):
 
 
 def normalise(card):
-    """Two differences between the firmware's JSON and tools/report_card.py, neither in the record: the firmware writes an EPR
+    """Differences between the firmware's JSON and tools/report_card.py, none in the record: the firmware writes an EPR
     level's key in millivolts ("28000V") where the tool says "28V", and it leaves out cable.seq when it is 0 where the tool
-    writes it. The web page follows the tool's EPR keys and the firmware's seq rule."""
+    writes it. The web page follows the tool's EPR keys and the firmware's seq rule. The "qc" brand label is dropped while
+    the no-brand-without-VID rule (row B item 5) is landed in the firmware renderer but not yet in tools/report_card.py."""
     card = json.loads(json.dumps(card))
+    card.pop("qc", None)
     if card.get("cable", {}).get("seq") == 0:
         del card["cable"]["seq"]
     levels = card.get("epr_levels")
