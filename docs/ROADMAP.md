@@ -801,8 +801,9 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
     19 pass / 0 fail / 5 skip. Item 3 verified the same day (`--units pd,pd-low`, card 55, fw be71f10,
     `runs/2026-11-10-merge2-hw/cards.json`): `err_mv` 5-11 V APDO +10 / +20 / +8 / -12 mV, 5-20 V APDO
     +6 / +3 / -9 / -49 mV. Gap: `k2_remote.py cards show` prints only "whole range", not the spread - print the four
-    errors there too. Item 1 (floor) still unverified: the CUKTECH C1's APDOs start at 5 V, so `pd-low` planned
-    no low-edge row; it needs a 3.3 V APDO (Anker IQ4 3.3-11 V, Baseus).
+    errors there too. Item 1 (floor) verified, pass shape (48adfa1, Anker IQ4 3.3-11 V 3 A, HID-powered K2,
+    `runs/2026-11-10-merge2-hw/iq4-pdlow.txt`): 3300 mV -> 3285 mV pass; the same run's step walk 7140 -> 7245 mV
+    pass, 12 pass / 0 fail / 3 skip. The fail shape ("floor at 5.0 V") still needs a source that floors.
 - **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
   above). Opt-in, never in the default preset: every 100 mV across each PPS APDO (and SPR AVS range), 1 A, Accept +
   PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint strip on the results tab and the card
