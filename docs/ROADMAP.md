@@ -390,6 +390,10 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   Only `pd release` cleared `held`. Fix: a re-read that ends leaves no held contract behind (or START treats a re-read's
   own leftover PDO 1 hold as its to take over, like the self-hold); the refusal says which tool holds it ("re-read
   holds 5 V: pd release"). Host test: re-read done -> START allowed.
+  Again on 72c2e28 (CUKTECH C1, top plug): after `pd-reread` + `pd release` (`pd status`: ready, held=False, pdo=1)
+  `ct_start.py --cable builtin:cuktech-6a` ended "START did not start a run" with NO reason printed; a K2 reboot cleared
+  it and the run passed 21 / 0 / 3. So a re-read's leftover contract blocks START even when `held` reads False, and the
+  refusal can be silent - every START refusal must print its reason (B3 rule).
 - **After that release the whole PD run failed "no PD after re-attach" at 5.10 V** (2026-11-10, same rig, right after
   re-read -> abort -> `pd release` -> `pd-reread --pin 0 --no-run`): 0 pass / 25 fail, VBUS 5.10 V the whole run, every
   row "no PD after re-attach" - the source never saw the K2's planned re-attach (VBUS never dropped). Not yet known
