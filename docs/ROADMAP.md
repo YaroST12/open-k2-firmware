@@ -298,6 +298,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   (open ~3.0-3.3 V, `kStandbyOpenMv`) as a sleeping source and holds Rd on it for `kSlowWakeDwellMs`; keep the open
   readings across `reset()`. Validate: host test on the decision; hardware: idle K2, plug into the sleeping splitter
   port, PD list on screen without any pin.
+  Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
+  splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
+  START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
 - **A leftover Rd pin makes an inline K2 Request at attach** (2026-11-10, operator note): with `pd-reread --pin 2`
   still set, splitter -> K2 -> OnePlus 15: the K2 sent two Requests (one collided with the phone's) before the far
   Request made it go passive (~2.3 s). The pin is a lab option and did what it says; the gap is that nothing shows it
