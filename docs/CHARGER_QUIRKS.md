@@ -279,6 +279,13 @@ Patterns so far (names used below):
 - Its GoodCRC for our Get_Source_Cap_Extended arrives ~118-121 ms after TX_START, so the TX result window had to be understood as ambiguous (not "no answer").
 - SPR AVS rows pass consistently (2026-11-04, 5c548f7, bottom port, two back-to-back `--units pd` runs, 7 PDOs both times so the AVS APDO was listed): 19 pass / 0 fail / 2 skip each run, AVS 14.5 / 20 / 20→14.5 / 14.5→11.7 / 11.7→9 V all pass in both runs, no Hard Reset, no reboot. Skips are EPR fixed + EPR AVS (not offered by this 65 W unit).
 - Spec-validated 2026-11-04 against USB PD R3.2 V1.2 (Table 6.15, Table 4.3, Table 6.22, Table 6.61 byte 17, §7.9.2, §7.31.3): APDO 0xE004B145 is the spec's own 65 W example; SPR AVS has a fixed 9-20 V range and the APDO carries only the two current fields (a PDP byte exists only in EPR AVS, Table 6.16); the SKEDB-gated re-announce is a permitted capability-change Source_Capabilities and re-planning from the latest caps is required; settled AVS accuracy is ±5 % + 0.5 V, so our pass band (target + max(10 %, 600 mV)) is wider than spec, never stricter.
+- 2026-11-10 (aebb430 / d6c90e7, top plug, HID-powered, no spoof, `runs/2026-11-10-merge2-hw/ugreen-*`): `--units pd`
+  22 pass / 1 fail / 2 skip (fixed 20 V 20.06 V, PPS 5-21 V reaches 21 V, AVS 20 V 20.07 V); the one fail was the K2's
+  step-walk false fail (base read before it settled; manual 20 mV walks on both PPS APDOs follow every step, +17..+21 mV).
+  AVS sweep 9.0-20.0 V in 100 mV steps (`pd request 7`, each step waited for the sink's `ready`): all 111 points
+  Accept + PS_RDY, VBUS within -47..+66 mV of the target and still slewing upward ~+17 mV per 0.3 s at the 0.6-1.2 s
+  readings (a slow but monotonic slew, no step skipped), 20.0 V -> 20.07 V. A clean AVS source: the reference against
+  the Baseus FH22's fold at 19.42 V.
 
 ### Anker Prime 100W (USB-C)
 - `placeholder-vid`: identity FFFF:FFFF.
