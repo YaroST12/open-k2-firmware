@@ -700,11 +700,15 @@ def decode_charger_test(p):
         elif detail and why == 46:   # StepResolution: the detail is the measured move in mV, not a code
             detail_reason = f"{detail} mV move"
         elif detail:
-            names, detail_code = (PD_ERRS, detail - 128) if group == 0 and detail >= 128 else (
-                SINK_RESULTS if group == 0 else FC_FAILS, detail)
-            detail_reason = names[detail_code] if detail_code < len(names) else f"unknown ({detail})"
-            if (flags >> 2) & 7 > 1:
-                detail_reason += f" ({(flags >> 2) & 7} tries)"
+            if result == 0:
+                # A pending step-walk row has not run: its detail byte is no sink ReqAnswer, print "not run".
+                detail_reason = "not run"
+            else:
+                names, detail_code = (PD_ERRS, detail - 128) if group == 0 and detail >= 128 else (
+                    SINK_RESULTS if group == 0 else FC_FAILS, detail)
+                detail_reason = names[detail_code] if detail_code < len(names) else f"unknown ({detail})"
+                if (flags >> 2) & 7 > 1:
+                    detail_reason += f" ({(flags >> 2) & 7} tries)"
         row = {"index": start + i, "group": TEST_GROUPS[group], "protocol": protocol, "pos": pos,
                "target_mv": mv, "request_ma": ma, "measured_mv": measured,
                "result": TEST_RESULTS[result], "reason": TEST_REASONS[why],
