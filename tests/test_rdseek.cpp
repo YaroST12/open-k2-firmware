@@ -99,6 +99,84 @@ void test_a_standby_on_the_other_line_moves_there_first() {
     CHECK_EQ(int(s.moves()), 1);   // still no second move before kSlowWakeDwellMs
 }
 
+// ---- pattern slow-rp-wake, idle path (2026-11-10), red first ----
+
+// The idle/no-source path: an idle K2 with no source detected and no Rd of its own presents none, so a sleeping
+// source (the splitter's port: one CC line reading the standby signature open, VBUS 78 mV, "No source") is never
+// asked and never wakes - only a pinned `pd-reread --pin 2 --no-run` woke it (be3f589). The fix: a line with the
+// standby signature open is treated as a sleeping source and our Rd is held on that ONE line for kSlowWakeDwellMs
+// at a time (pd::IdleWake), so the ~2 Hz scan attaches on it once its Rp comes (1072 ms after the Rd, measured).
+void test_the_idle_wake_holds_rd_on_a_standby_signature_line() {
+    pd::IdleWake w;
+    CHECK_EQ(int(w.update(1000, 0, 3050)), 2);                      // CC2 read the standby pull-up open: Rd on CC2
+    CHECK_EQ(int(w.update(1020, 0, 3050)), 2);                      // held through the dwell
+    CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs - 1, 0, 3050)), 2);
+    CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs, 0, 3050)), 2);  // the dwell ran out: re-armed at once, still one line
+    CHECK_EQ(int(w.line()), 2);
+    CHECK_EQ(w.line() == 1 || w.line() == 2, true);                  // never both lines
+}
+// No standby signature (a coupled net reads less, nothing attached reads low/unknown): no Rd is held at all.
+void test_the_idle_wake_holds_nothing_without_the_signature() {
+    pd::IdleWake w;
+    CHECK_EQ(int(w.update(0, -1, -1)), 0);       // unknown levels
+    CHECK_EQ(int(w.update(20, 1200, 0)), 0);     // a coupled net (the PLUS key on CC2) reads below kStandbyOpenMv
+    CHECK_EQ(int(w.update(40, 2799, 0)), 0);     // just below the signature
+    CHECK_EQ(int(w.update(60, 2800, 0)), 1);     // the signature boundary: Rd on CC1
+    CHECK_EQ(int(w.line()), 1);
+}
+// Both lines read the signature: the hold alternates line by line every dwell, never both (Debug Accessory).
+void test_the_idle_wake_alternates_when_both_lines_read_the_signature() {
+    pd::IdleWake w;
+    std::uint32_t t = 1000;
+    CHECK_EQ(int(w.update(t, 3100, 3000)), 1);                          // the higher open reading first
+    t += pd::kSlowWakeDwellMs;
+    CHECK_EQ(int(w.update(t, 3100, 3000)), 2);                          // the other line on the next dwell
+    t += pd::kSlowWakeDwellMs;
+    CHECK_EQ(int(w.update(t, 3100, 3000)), 1);                          // and back
+    CHECK_EQ(int(w.line()), 1);
+}
+// The signature gone (the readings refreshed while no Rd of ours was on, e.g. the port is empty now): the hold ends.
+void test_the_idle_wake_releases_when_no_line_reads_the_signature_any_more() {
+    pd::IdleWake w;
+    CHECK_EQ(int(w.update(1000, 0, 3050)), 2);
+    CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs, 0, 0)), 0);      // after the dwell: no signature, no Rd
+    CHECK_EQ(int(w.update(1000 + pd::kSlowWakeDwellMs + 20, 0, 0)), 0);
+    CHECK_EQ(int(w.line()), 0);
+}
+// An attach that lands while the hold is on keeps the 500 ms no-Rp detach off for the rest of the dwell window, same
+// as the seek's holding_slow: the sleeping source may still be waking when the scan picks its line.
+void test_an_attach_during_the_hold_keeps_the_no_rp_detach_off_inside_the_dwell() {
+    pd::IdleWake w;
+    const std::uint32_t t0 = 1000;
+    CHECK_EQ(int(w.update(t0, 0, 3050)), 2);
+    w.on_attach(2);                                                      // the scan attached on the held line
+    CHECK_EQ(w.holding_slow(t0 + 100, 2, 3050), true);
+    CHECK_EQ(w.holding_slow(t0 + pd::kSlowWakeDwellMs - 1, 2, 3050), true);
+    CHECK_EQ(w.holding_slow(t0 + pd::kSlowWakeDwellMs, 2, 3050), false);  // the window is over
+    CHECK_EQ(w.holding_slow(t0 + 100, 1, 0), false);                      // the other line is not in the window
+    CHECK_EQ(w.holding_slow(t0 + 100, 2, 1200), false);                   // and not without the signature on it
+    w.reset();
+    CHECK_EQ(w.holding_slow(t0 + 100, 2, 3050), false);
+}
+// RdSeek::reset() keeps the open readings: they are the standby evidence a later Rd presentation reads back, and the
+// row's bug was that reset() on attach wiped them, so an idle K2 never held a steady Rd long enough.
+void test_reset_keeps_the_open_readings() {
+    pd::RdSeek s;
+    s.note_open(1, 3300);
+    s.note_open(2, 3050);
+    s.update(1000, 2, true, false);   // some seek state
+    s.reset();
+    CHECK_EQ(int(s.moves()), 0);
+    CHECK_EQ(s.standby(1), true);
+    CHECK_EQ(s.standby(2), true);
+    CHECK_EQ(s.open_mv(1), 3300);
+    CHECK_EQ(s.open_mv(2), 3050);
+    CHECK_EQ(s.open_mv(0), -1);
+    s.note_open(2, 900);              // a fresh open reading replaces the old one
+    CHECK_EQ(s.standby(2), false);
+    CHECK_EQ(s.open_mv(2), 900);
+}
+
 }  // namespace
 
 int main() {
@@ -110,5 +188,11 @@ int main() {
     test_a_standby_signature_line_gets_the_slow_dwell_and_no_move_before_the_rp();
     test_a_line_without_the_signature_keeps_the_200ms_moves();
     test_a_standby_on_the_other_line_moves_there_first();
+    test_the_idle_wake_holds_rd_on_a_standby_signature_line();
+    test_the_idle_wake_holds_nothing_without_the_signature();
+    test_the_idle_wake_alternates_when_both_lines_read_the_signature();
+    test_the_idle_wake_releases_when_no_line_reads_the_signature_any_more();
+    test_an_attach_during_the_hold_keeps_the_no_rp_detach_off_inside_the_dwell();
+    test_reset_keeps_the_open_readings();
     return test_report("test_rdseek");
 }
