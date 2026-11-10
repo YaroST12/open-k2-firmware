@@ -2037,6 +2037,22 @@ static void test_capped_pps_top_is_recorded_and_the_chain_goes_on() {
     CHECK_EQ(ran_after >= 1, true);   // levels after the capped one still ran (and passed)
     CHECK_EQ(skipped, 0);
 }
+// Review item E: a capped row used to wait out the whole 12 s row timeout although the plateau it is named for was proven after
+// kCappedPlateauMs. The verdict now comes when the output has stood on the plateau that long, not at the timeout.
+static void test_a_capped_row_does_not_wait_the_full_timeout() {
+    Fake f; f.pd_max_mv = 19400; ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Pps)}, f.in, true);
+    uint32_t asked_at = 0, capped_at = 0; size_t seen = 0;
+    for (unsigned n = 0; n < 12000 && r.state() != ct::State::Done && !capped_at; ++n) {
+        f.tick(r, 100);
+        for (; seen < f.choices.size(); ++seen) if (!asked_at && f.choices[seen].mv > 19400) asked_at = f.in.now;
+        for (const auto& s : r.steps()) if (s.reason == ct::Reason::Capped && !capped_at) capped_at = f.in.now;
+    }
+    CHECK_EQ(asked_at != 0, true);
+    CHECK_EQ(capped_at != 0, true);
+    CHECK_EQ(capped_at - asked_at < 8000u, true);   // not the 12 s timeout
+    CHECK_EQ(capped_at - asked_at >= ct::kCappedPlateauMs, true);   // but only after the plateau was proven
+}
 static void test_an_uncapped_pps_run_has_no_capped_step() {
     Fake f; ct::Runner r(f);
     run_pps_only(f, r);
@@ -6543,7 +6559,7 @@ int main() {
     test_pps_step_walk_waits_for_the_base_to_settle();
     test_walk_steady_window();
     test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
-    test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();
+    test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_a_capped_row_does_not_wait_the_full_timeout(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();
     test_pps_step_walk_passes_a_drifting_source(); test_pps_step_walk_passes_a_slow_but_correct_source();
     test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
     return test_report("test_charger_test");

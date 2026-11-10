@@ -2557,6 +2557,12 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             peak_lo_mv_ = std::min<uint16_t>(peak_lo_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
             peak_hi_mv_ = std::max<uint16_t>(peak_hi_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
         }
+        // A plateau held for kCappedPlateauMs is the whole proof of a Capped row: the verdict does not wait for the row timeout.
+        if (state_ == State::Requesting && ready && !banded && !is_sweep(s) && plat_mv_ && in.now - plat_ms_ >= kCappedPlateauMs &&
+            capped(eff, in, ready)) {
+            finish(in, Verdict::Fail, Reason::Capped);
+            return;
+        }
         const uint32_t timeout = s.group == Group::Qc2 ? fc::kQc2TransitionMs + 3000 : 12000;
         const bool stuck_at_12v = is_class_b_peak(s) && in.now - phase_ms_ >= kClassAStuckMs &&
                                   peak_lo_mv_ >= kClassAStuckLoMv && peak_hi_mv_ <= kClassAStuckHiMv;

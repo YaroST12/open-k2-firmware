@@ -473,6 +473,10 @@ inline constexpr unsigned kBandGrossPct = 15;
 // within 1 % (at least 100 mV) of one level for kPlateauMs; or the level matches within 1 % the highest level a passed PD row of
 // the run measured (the converter's ceiling already seen on a fixed row).
 inline constexpr uint32_t kPlateauMs = 3000;
+// A row that stands on such a plateau (above kCappedFloorMv, below the band, contract live) for this long is Capped at once; before
+// it waited out the 12 s row timeout for the same verdict. Longer than kPlateauMs so a source that pauses on a ledge and then goes on
+// rising (a slow ramp) still gets its time; the timeout path keeps the kPlateauMs rule.
+inline constexpr uint32_t kCappedPlateauMs = 5000;
 inline constexpr int kCappedFloorMv = 5500;
 // A QC Class B 20 V row (15 s QC2 / 12 s QC3 timeout) whose VBUS has stayed inside the 12 V band for kClassAStuckMs since the row
 // started is a Class A top: nothing is on its way to 20 V. The row ends as the timeout would end it, without the rest of the wait.
