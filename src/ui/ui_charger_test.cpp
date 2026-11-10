@@ -8,6 +8,7 @@
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/paint_meter.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rescan_bridge.hpp"
 #include "k2/drivers/adc.hpp"
@@ -278,7 +279,11 @@ void ChargerTestSession::record(const ct::Step& s) {
                   unsigned(rw->sum.peak_mv), unsigned(rw->sum.peak_at_mv), unsigned(rw->sum.fold_mv), unsigned(rw->sum.fold_from_mv));
     // What held the loop while the row was in flight: the longest main-loop iteration (1 ms when healthy) and the longest
     // gap between two UI ticks (20 ms when healthy), in ms since the row began. A big number names a blocking path.
-    K2LOG("[CT] gap row=%u loop=%ums ui=%ums\n", unsigned(idx), unsigned(gap::loop.peak()), unsigned(gap::ui.peak()));
+    // Same window: what painting cost the row (ms inside the lcd stream calls, wire wait included; pixels sent to the panel)
+    // and what the file-system flash writes cost (ms inside page program / sector erase).
+    const paint::Reading pw = paint::meter.window();
+    K2LOG("[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums\n", unsigned(idx), unsigned(gap::loop.peak()),
+          unsigned(gap::ui.peak()), unsigned(pw.paint_ms), unsigned(pw.px), unsigned(pw.fs_ms));
 }
 // pattern budget-reannounce-mid-run: the source re-announced its list mid-run and the PD rows were re-planned per row (the row in
 // flight finished or was withdrawn, the still-offered rows follow the new list, the dropped ones read "withdrawn by source").
@@ -803,7 +808,7 @@ void ChargerTestSession::poll(uint32_t now) {
     if (const auto idx = runner_.index(); idx < runner_.steps().size() && idx != g_ev_row && runner_.steps()[idx].verdict == ct::Verdict::Running) {
         const auto& s = runner_.steps()[idx];
         g_ev_row = static_cast<uint16_t>(idx);
-        gap::loop.begin_window(); gap::ui.begin_window();   // the row's own longest gaps (read by record())
+        gap::loop.begin_window(); gap::ui.begin_window(); paint::meter.begin_window();   // the row's own longest gaps and paint cost (read by record())
         runev::emit(runev::Code::RowStart, now, ev8(idx), static_cast<uint16_t>(s.group), static_cast<uint16_t>(s.algorithm), s.pos);
     }
     if (runner_.suspended()) {

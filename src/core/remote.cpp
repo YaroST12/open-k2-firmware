@@ -9,6 +9,7 @@
 #include <span>
 #include <string_view>
 #include "k2/core/log.hpp"
+#include "k2/core/paint_meter.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/cable_r.hpp"
 #include "k2/fastcharge/dpsniff.hpp"
@@ -848,6 +849,10 @@ remote::LcdSnapshot Remote::debug_lcd() {
     s.flags = static_cast<uint8_t>((d.enabled ? 1 : 0) | (d.ok ? 2 : 0));
     s.transfers = d.transfers;
     s.stalls = d.stalls;
+    const paint::Reading t = paint::meter.total();
+    s.paint_px = t.px;
+    s.paint_ms = t.paint_ms;
+    s.fs_ms = t.fs_ms;
     K2LOG("[RMT] debug lcd flags=%u transfers=%u stalls=%u\n", s.flags, unsigned(s.transfers), unsigned(s.stalls));
     return s;
 }

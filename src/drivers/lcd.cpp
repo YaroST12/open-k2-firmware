@@ -6,6 +6,7 @@
 #include "k2/drivers/lcd.hpp"
 #include "k2/drivers/lcd_timing.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/paint_meter.hpp"
 
 #include <cstddef>
 
@@ -347,8 +348,34 @@ bool g_erase = false;
 void set_erase(bool erase) { g_erase = erase; }
 bool get_erase() { return g_erase; }
 
+namespace {
+
+// Paint cost (k2/core/paint_meter.hpp): the core cycles spent inside one outermost stream call, wire waits and the
+// service rounds served inside them included. stream_pixels calls stream_fill in erase mode, so only the outermost
+// call of a nest is timed and counted. Sink (screenshot) calls return before the timer is made: they never touch the panel.
+int g_paint_depth = 0;
+class PaintTimer {
+public:
+    explicit PaintTimer(std::uint32_t px) : outer_(g_paint_depth++ == 0), t0_(outer_ ? systick::ticks() : 0) {
+        if (outer_) paint::meter.add_px(px);
+    }
+    ~PaintTimer() {
+        g_paint_depth--;
+        if (outer_) paint::meter.add_lcd(systick::ticks() - t0_);
+    }
+    PaintTimer(const PaintTimer&) = delete;
+    PaintTimer& operator=(const PaintTimer&) = delete;
+
+private:
+    bool outer_;
+    std::uint32_t t0_;
+};
+
+}  // namespace
+
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     if (g_sink) return g_sink->begin(x0, y0, x1, y1);
+    const PaintTimer timer(0);
     set_window(x0, y0, x1, y1);  // leaves CS low, DC high: the pixel stream continues the frame
     spi_frame_16bit(true);  // 16-bit pixel frames from here until stream_end()
     g_stream_px = 0;
@@ -356,6 +383,7 @@ void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uin
 
 void stream_pixels(std::span<const std::uint16_t> px) {
     if (g_sink) return g_sink->pixels(px.data(), px.size());
+    const PaintTimer timer(static_cast<std::uint32_t>(px.size()));
     if (g_erase) return stream_fill(0, static_cast<std::uint32_t>(px.size()));
     if (kLcdDma && g_dma_ok && use_dma(static_cast<std::uint32_t>(px.size()))) {
         dma_send(px.data(), static_cast<std::uint32_t>(px.size()));   // services inside its waits
@@ -368,6 +396,7 @@ void stream_pixels(std::span<const std::uint16_t> px) {
 
 void stream_fill(std::uint16_t color, std::uint32_t count) {
     if (g_sink) return g_sink->fill(color, count);
+    const PaintTimer timer(count);
     if (g_erase) color = 0;
     if (kLcdDma && g_dma_ok && use_dma(count)) {
         dma_wait();                 // the source word is shared: the previous fill must be done
@@ -386,7 +415,8 @@ void stream_fill(std::uint16_t color, std::uint32_t count) {
 
 void stream_end() {
     if (g_sink) return;  // the panel CS was never asserted
-    dma_wait();          // the last fill piece may still be running
+    const PaintTimer timer(0);
+    dma_wait();         // the last fill piece may still be running
     spi_wait_idle();     // BF clear: the last frame has left the shift register before CS rises
     p::lcd_cs.set();
     spi_frame_16bit(false);  // back to 8-bit frames for commands

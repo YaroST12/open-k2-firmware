@@ -2290,10 +2290,16 @@ def decode_epr_info(p):
 
 
 def decode_lcd(p):
-    """DebugLcd reply: [flags (bit0 DMA built in, bit1 DMA trusted), transfers u32, stalls u32]."""
+    """DebugLcd reply: [flags (bit0 DMA built in, bit1 DMA trusted), transfers u32, stalls u32], then (newer firmware)
+    paint totals since boot: [pixels sent to the panel u32, ms inside lcd stream calls u32, ms inside fs flash writes u32]."""
     _need(p, 9, "lcd")
     state = "disabled" if not p[0] & 1 else ("ok" if p[0] & 2 else "stalled")
-    return {"dma": state, "transfers": int.from_bytes(p[1:5], "little"), "stalls": int.from_bytes(p[5:9], "little")}
+    r = {"dma": state, "transfers": int.from_bytes(p[1:5], "little"), "stalls": int.from_bytes(p[5:9], "little")}
+    if len(p) >= 21:
+        r["paint_px"] = int.from_bytes(p[9:13], "little")
+        r["paint_ms"] = int.from_bytes(p[13:17], "little")
+        r["fs_ms"] = int.from_bytes(p[17:21], "little")
+    return r
 
 
 def cmd_reboot(link, a):

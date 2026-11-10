@@ -248,6 +248,7 @@ size_t encode_epr_info(std::span<uint8_t> out, const EprInfoSnapshot &s) {
 size_t encode_lcd(std::span<uint8_t> out, const LcdSnapshot &s) {
     Writer w(out);
     w.u8(s.flags); w.u32(s.transfers); w.u32(s.stalls);
+    w.u32(s.paint_px); w.u32(s.paint_ms); w.u32(s.fs_ms);
     return w.size();
 }
 

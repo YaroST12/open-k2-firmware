@@ -2,11 +2,13 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Block device of the file system on the real flash (see include/k2/drivers/fs_flash.hpp).
 #include "k2/core/log.hpp"
+#include "k2/core/paint_meter.hpp"
 #include "k2/drivers/fs_flash.hpp"
 
 #include <cstring>
 
 #include "k2/drivers/flash.hpp"
+#include "k2/drivers/systick.hpp"
 #include "k2/core/legacy_wipe.hpp"
 #include "k2/drivers/usb.hpp"
 
@@ -30,11 +32,17 @@ public:
     }
     int prog(std::uint32_t block, std::uint32_t off, const void* buf, std::uint32_t n) override {
         if (block >= kFlashBlocks || off + n > kBlockSize) return kIoFail;
-        return status_to_io(flash::store_program(addr(block) + off, {static_cast<const std::uint8_t*>(buf), n}));
+        const std::uint32_t t0 = systick::ticks();
+        const int rc = status_to_io(flash::store_program(addr(block) + off, {static_cast<const std::uint8_t*>(buf), n}));
+        paint::meter.add_fs(systick::ticks() - t0);   // time inside the flash write (the main loop waits for it)
+        return rc;
     }
     int erase(std::uint32_t block) override {
         if (block >= kFlashBlocks) return kIoFail;
-        return status_to_io(flash::store_erase(addr(block)));
+        const std::uint32_t t0 = systick::ticks();
+        const int rc = status_to_io(flash::store_erase(addr(block)));
+        paint::meter.add_fs(systick::ticks() - t0);
+        return rc;
     }
 
 private:

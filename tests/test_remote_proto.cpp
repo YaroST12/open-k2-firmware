@@ -1085,9 +1085,12 @@ static void test_debug_epr_info() {
 static void test_debug_lcd() {
     Fake f; Frame r;
     f.lcd_snap.flags = 3; f.lcd_snap.transfers = 0x01020304; f.lcd_snap.stalls = 7;
+    // The paint totals since boot ride behind the DMA state: pixels sent to the panel, ms inside the stream calls, ms inside fs flash writes.
+    f.lcd_snap.paint_px = 0x0A0B0C0D; f.lcd_snap.paint_ms = 1500; f.lcd_snap.fs_ms = 42;
     CHECK_EQ(run(f, request(0x29, 1, {}), r), 1);
-    check_header(r, 0x29, 1, Status::Ok, 9);
-    check_bytes(r, kRspHeader, {3, 0x04, 0x03, 0x02, 0x01, 7, 0, 0, 0});
+    check_header(r, 0x29, 1, Status::Ok, 21);
+    check_bytes(r, kRspHeader, {3, 0x04, 0x03, 0x02, 0x01, 7, 0, 0, 0,
+                                0x0D, 0x0C, 0x0B, 0x0A, 0xDC, 0x05, 0, 0, 42, 0, 0, 0});
     CHECK_EQ(run(f, request(0x29, 2, {1}), r), 1);
     check_header(r, 0x29, 2, Status::BadLength, 0);
 }

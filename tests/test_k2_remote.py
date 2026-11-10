@@ -262,6 +262,17 @@ class Decoders(unittest.TestCase):
         self.assertEqual(r["lcd"], {"dma": "ok", "transfers": 1234, "stalls": 0})
         self.assertEqual(kr.decode_lcd(bytes([1]) + bytes(8))["dma"], "stalled")
         self.assertEqual(kr.decode_lcd(bytes(9))["dma"], "disabled")
+        # A newer firmware appends the paint totals since boot: pixels, ms inside lcd stream calls, ms inside fs flash writes.
+        full = bytes([3]) + (1234).to_bytes(4, "little") + (0).to_bytes(4, "little") \
+            + (987654).to_bytes(4, "little") + (1500).to_bytes(4, "little") + (42).to_bytes(4, "little")
+        d = kr.decode_lcd(full)
+        self.assertEqual(d["dma"], "ok")
+        self.assertEqual(d["paint_px"], 987654)
+        self.assertEqual(d["paint_ms"], 1500)
+        self.assertEqual(d["fs_ms"], 42)
+        # The old 9-byte reply stays readable and carries no paint keys.
+        self.assertNotIn("paint_px", kr.decode_lcd(bytes(9)))
+        self.assertIn("paint_px=987654", kr.render("debug", {"lcd": d}))
 
     def test_debug_cc_probe(self):
         sent = []

@@ -580,10 +580,13 @@ struct EprInfoSnapshot {
     uint8_t ok = 0, err = 0, state = 0, num_pdos = 0;
     std::array<uint32_t, kEprInfoPdos> pdos{};
 };
-// LCD DMA state (DebugLcd): flags bit0 build option on, bit1 DMA still trusted (no stalled transfer).
+// LCD DMA state (DebugLcd): flags bit0 build option on, bit1 DMA still trusted (no stalled transfer). Behind it the paint
+// totals since boot (k2/core/paint_meter.hpp): pixels sent to the panel, ms inside the lcd stream calls (wire wait and the
+// service rounds served inside them included), ms inside the file-system flash writes.
 struct LcdSnapshot {
     uint8_t flags = 0;
     uint32_t transfers = 0, stalls = 0;
+    uint32_t paint_px = 0, paint_ms = 0, fs_ms = 0;
 };
 struct RippleInfo {
     uint32_t period_ns = 0;
