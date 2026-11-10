@@ -1932,6 +1932,8 @@ def page_index(text):
     """Page to show, by name or index: a rotation page, `connection`/`diag`, or a Connection tab
     (`source` `cable` `sink`; the old names `pd` `emarker` `identify` map to the tabs). ValueError otherwise."""
     t = str(text).strip().lower()
+    if t.startswith("connection") and len(t) > len("connection"):
+        t = t[len("connection"):].strip()   # the long form "connection sink" = the Connection tab "sink"
     if t in PAGES[:ROTATION_PAGES]:
         return PAGES.index(t)
     if t in CONN_ALIASES:
