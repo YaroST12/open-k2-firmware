@@ -119,7 +119,7 @@ AppleVdm AppleReadout::on_vdm(const AppleVdm& rx, std::uint32_t now) {
         tx.n = 1;
         return tx;
     }
-    if (state_ == State::Reading && awaiting_ && h == apple_read_obj(cur_nn_) && rx.n >= 2 && rx.w[1] == cur_addr_) {
+    if (state_ == State::Reading && awaiting_ && h == apple_read_obj(cur_nn_) && rx.n >= 2u + cur_nn_ && rx.w[1] == cur_addr_) {
         on_answer(rx, now);
         AppleVdm tx;   // the 05ACnn12 ack of the answer, as sniffed
         tx.w[0] = apple_read_ack(cur_nn_);

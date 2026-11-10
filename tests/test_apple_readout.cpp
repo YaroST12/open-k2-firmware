@@ -214,10 +214,10 @@ int main() {
         AppleReadout e;
         CHECK_EQ(e.svid_ack_word(), 0x27170000u);
         e.arm(1000);
-        CHECK(e.armed());
+        CHECK_COND(e.armed());
         CHECK_EQ(e.svid_ack_word(), 0x271705ACu);
         e.reset();
-        CHECK(!e.armed());
+        CHECK_COND(!e.armed());
         CHECK_EQ(e.svid_ack_word(), 0x27170000u);
     }
 
@@ -226,7 +226,7 @@ int main() {
         Fake f;
         f.discover_and_run(2500);
         const AppleInfo& i = f.eng.info();
-        CHECK(i.valid);
+        CHECK_COND(i.valid);
         CHECK_EQ(i.why, AppleWhy::Done);
         CHECK_EQ(i.reads, 16);   // 9 directory + serial 1 + maker 1 + product 2 + 0x90 1 + fw 1 + hw 1
         CHECK_EQ(i.ok, 16);
@@ -238,10 +238,10 @@ int main() {
         CHECK_STR(i.serial.data(), "TESTSERIAL0000000");
         // discovery replies
         const AppleVdm* dm = f.reply_to(kAppleDiscoverModesAck);
-        CHECK(dm && dm->n == 2 && dm->w[1] == kAppleModesVdo);
-        CHECK(f.reply_to(kAppleEnterModeAck) != nullptr);
+        CHECK_COND(dm && dm->n == 2 && dm->w[1] == kAppleModesVdo);
+        CHECK_COND(f.reply_to(kAppleEnterModeAck) != nullptr);
         const AppleVdm* hs = f.reply_to(kAppleHandshakeAck);
-        CHECK(hs && hs->n == 1);
+        CHECK_COND(hs && hs->n == 1);
         // read order: the directory 0x04..0x24, then the strings
         const std::vector<std::uint32_t> want = {0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24,
                                                  0x30, 0x50, 0x70, 0x84, 0x90, 0xB0, 0xC0};
@@ -256,7 +256,7 @@ int main() {
             for (std::size_t k = 0; k < f.sent.size(); k++)
                 if (f.sent[k].n == 3 && f.sent[k].w[0] == kAppleAttention) read_at.push_back(f.sent_at[k]);
             for (std::size_t k = 1; k < read_at.size(); k++)
-                CHECK(std::int32_t(read_at[k] - read_at[k - 1]) >= 20);
+                CHECK_COND(std::int32_t(read_at[k] - read_at[k - 1]) >= 20);
         }
     }
 
@@ -266,7 +266,7 @@ int main() {
         f.nak_dir_at = 4;   // the directory read of addr 0x14 is NAKed
         f.discover_and_run(1500);
         const AppleInfo& i = f.eng.info();
-        CHECK(i.valid);
+        CHECK_COND(i.valid);
         CHECK_EQ(i.why, AppleWhy::Nak);
         CHECK_EQ(i.ok, 4);          // 0x04..0x10 answered
         CHECK_EQ(i.reads, 5);       // the NAKed one counted as a read, not ok
@@ -282,12 +282,12 @@ int main() {
             f.run(500);
         }
         const AppleInfo& i = f.eng.info();
-        CHECK(i.valid);
+        CHECK_COND(i.valid);
         CHECK_EQ(i.why, AppleWhy::Timeout);
-        CHECK(i.ok > 0 && i.ok < i.reads);
+        CHECK_COND(i.ok > 0 && i.ok < i.reads);
         // the read was retried once: 2 requests for the same addr at the end
         const auto addrs = f.read_addrs();
-        CHECK(addrs.size() >= 2 && addrs[addrs.size() - 1] == addrs[addrs.size() - 2]);
+        CHECK_COND(addrs.size() >= 2 && addrs[addrs.size() - 1] == addrs[addrs.size() - 2]);
     }
 
     // ---- a directory entry pointing out of range stops the run before reading it ----
@@ -297,10 +297,10 @@ int main() {
         f.reg[0x0C] = 0xF0; f.reg[0x0D] = 0x00; f.reg[0x0E] = 0x18; f.reg[0x0F] = 0x02;
         f.discover_and_run(1500);
         const AppleInfo& i = f.eng.info();
-        CHECK(i.valid);
+        CHECK_COND(i.valid);
         CHECK_EQ(i.why, AppleWhy::Range);
         CHECK_EQ(i.ok, 2);   // 0x04 and 0x08 answered; 0x0C (the bad entry) parsed, then stopped
-        for (std::uint32_t a : f.read_addrs()) CHECK(a != 0xF0);   // the bad address was never read
+        for (std::uint32_t a : f.read_addrs()) CHECK_COND(a != 0xF0);   // the bad address was never read
     }
 
     // ---- a 24-byte name with no NUL: split over two reads (5 + 1 words) ----
@@ -319,7 +319,7 @@ int main() {
             if (t.n == 3 && t.w[0] == kAppleAttention && t.w[2] == 0x70) { seen70 = true; CHECK_EQ(std::uint8_t(t.w[1] >> 8), 5); }
             if (t.n == 3 && t.w[0] == kAppleAttention && t.w[2] == 0x84) { seen84 = true; CHECK_EQ(std::uint8_t(t.w[1] >> 8), 1); }
         }
-        CHECK(seen70 && seen84);
+        CHECK_COND(seen70 && seen84);
     }
 
     // ---- no discovery from the source: the arm wait runs out with NoMode ----
@@ -328,7 +328,7 @@ int main() {
         f.eng.arm(f.now);
         f.run(4000);   // the charger never sends Discover Modes / Enter_Mode
         const AppleInfo& i = f.eng.info();
-        CHECK(i.valid);
+        CHECK_COND(i.valid);
         CHECK_EQ(i.why, AppleWhy::NoMode);
         CHECK_EQ(i.reads, 0);
     }
@@ -341,7 +341,7 @@ int main() {
         for (std::uint32_t a = 0x30; a < 0xD8; a++) f.reg[a] = 'A';
         f.discover_and_run(3000);
         const AppleInfo& i = f.eng.info();
-        CHECK(i.valid);
+        CHECK_COND(i.valid);
         CHECK_EQ(i.why, AppleWhy::Cap);
         CHECK_EQ(i.reads, 16);
     }
@@ -354,14 +354,14 @@ int main() {
         CHECK_EQ(r.last_svid_word(), 0x27170000u);   // unarmed: exactly [0x2717]
         // arm without a fresh contract is fine here, but arm on a sink with NO contract is refused:
         Rig r2;
-        CHECK(r2.sink.arm_apple_read(r2.now) != Err::Ok);
-        CHECK(!r2.sink.apple_info().valid);
+        CHECK_COND(r2.sink.arm_apple_read(r2.now) != Err::Ok);
+        CHECK_COND(!r2.sink.apple_info().valid);
         // arm the first sink: the op also triggers the re-request (Get_Source_Cap goes out)
         CHECK_EQ(r.sink.arm_apple_read(r.now), Err::Ok);
         r.pump();   // the queued Get_Source_Cap leaves through take_tx, which only pump() drives
         bool got_get_cap = false;
         for (const TxMsg& m : r.sent) if ((m.header & 0x1F) == kCtlGetSourceCap) got_get_cap = true;
-        CHECK(got_get_cap);
+        CHECK_COND(got_get_cap);
         r.vdm({0xFF008002});
         CHECK_EQ(r.last_svid_word(), 0x271705ACu);   // armed: [0x2717, 0x05AC]
         // the source drives discovery: Discover Modes 0x05AC -> ACK with 00000002
@@ -373,10 +373,10 @@ int main() {
             if ((m.header & 0x1F) == kMsgVendorDefined && m.len >= 8 && vdm_word(m, 0) == kAppleDiscoverModesAck &&
                 vdm_word(m, 1) == kAppleModesVdo)
                 dm_ack = true;
-        CHECK(dm_ack);
+        CHECK_COND(dm_ack);
         // detach clears the readout and the SVIDs ACK goes back to [0x2717]
         r.sink.detach();
-        CHECK(!r.sink.apple_info().valid);
+        CHECK_COND(!r.sink.apple_info().valid);
         r.vdm({0xFF008002});
         CHECK_EQ(r.last_svid_word(), 0x27170000u);
     }

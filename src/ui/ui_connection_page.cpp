@@ -892,7 +892,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     Rows R;
     {
         StrBuf<28> &v = R.add("Type-C", kText);
-        typec_row_text(typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv), rp_ma, v);
+        typec_row_text(vbus_, rp_ma, v);   // the debounced VBUS (Row D), like the list body
         if (v.view().empty()) v.put("unknown");
     }
     if (sink_tab) put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));

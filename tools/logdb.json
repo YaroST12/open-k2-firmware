@@ -485,6 +485,15 @@
   "488": "[TEST] Stopped %s\n",
   "489": "[TEST] UNSAFE: unplug source %s\n",
   "490": "[TEST] Detach charger %s\n",
-  "491": "[TEST] Initializing... %s\n"
+  "491": "[TEST] Initializing... %s\n",
+  "492": "[RMT] apple-read start\n",
+  "493": "[RMT] apple-read refused why=%s\n",
+  "494": "[APPLE] armed\n",
+  "495": "[APPLE] modes entered\n",
+  "496": "[APPLE] done reads=%d ok=%d why=%s\n",
+  "497": "[APPLE] dir n=%d\n",
+  "498": "[APPLE] serial len=%d\n",
+  "499": "[LINK] pd verdict=%s caps=%u\n",
+  "500": "[CONN] body nopd rows=%d\n"
  }
 }

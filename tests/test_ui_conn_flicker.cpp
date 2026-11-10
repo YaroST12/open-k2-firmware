@@ -176,6 +176,7 @@ static void test_row_count_change_paints_slots_only() {
     g_stub.pm.vbus_mv = 5000;
     g_stub.pm_online = true;
     g_stub.cc = 1;
+    g_stub.pd_seen_attach = true;   // PD spoke this attach: the Row C verdict is Present, the list body is drawn
     uint32_t t = 20000;
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().attached()), 1);
