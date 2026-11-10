@@ -32,6 +32,13 @@ struct Fake final : ct::Env {
     int low_mv_for_3v3 = 0;   // a source whose output lands here (not at the target) on a 3.3 V programmable step
     int pd_small_step_mv = -1;   // see request_pd: the output move of a +20 mV PPS request (-1 = follow the target)
     int last_pps_mv = 0, last_pd_vbus = 0;
+    // walk-settle script (ROADMAP "the PPS step walk fails a good source..."): a PPS request at walk_settle_mv arms the
+    // output at walk_settle_from_mv, settling linearly to walk_settle_to_mv over walk_settle_ms (the UGREEN shape: the
+    // 13.0 V base reads 13007 mV, then settles to 12990). While settling the output follows the script, not the target.
+    int walk_settle_mv = -1, walk_settle_from_mv = 0, walk_settle_to_mv = 0;
+    unsigned walk_settle_ms = 0;
+    uint32_t settle_t0 = 0; bool settle_on = false;
+    int walk_ripple_mv = 0;      // alternating ripple added to VBUS every tick: never within the steady span
     // pattern latch-off-low-pps: after a request at latch_mv the source stops regulating latch_delay_ms later, drains to 0 and
     // stays dead (no caps, no session, a release changes nothing) until the test calls revive().
     int latch_mv = 0; uint32_t latch_delay_ms = 0, latch_at = 0; bool latched = false;
@@ -223,7 +230,12 @@ struct Fake final : ct::Env {
         {   // the output level of a PD request; pd_small_step_mv scripts a PPS request exactly +20 mV above the
             // previous one (the step-walk row's steps): the output moves by that many mV instead of 20 (-1 = follow)
             const bool pps_req = c.pos >= 1 && c.pos <= caps.num_pdos && caps.pdos[c.pos - 1].type == pd::PdoType::Pps;
-            if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && pd_small_step_mv >= 0)
+            if (pps_req && walk_settle_mv >= 0 && int(c.mv) == walk_settle_mv) { settle_on = true; settle_t0 = in.now; }
+            if (settle_on) {
+                const uint32_t t = in.now - settle_t0;
+                if (t >= walk_settle_ms) { settle_on = false; in.vbus_mv = walk_settle_to_mv; }
+                else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
+            } else if (pps_req && last_pps_mv && int(c.mv) - last_pps_mv == 20 && pd_small_step_mv >= 0)
                 in.vbus_mv = last_pd_vbus + pd_small_step_mv;
             else
                 in.vbus_mv = low_mv_for_3v3 && c.mv == 3300 ? low_mv_for_3v3 : int(c.mv);
@@ -485,6 +497,12 @@ struct Fake final : ct::Env {
                 if (info_mode == 1) info_shown = info_list;
             }
             in.epr_info = &info_shown;
+            if (settle_on) {   // the scripted settle keeps moving VBUS between polls
+                const uint32_t t = in.now - settle_t0;
+                if (t >= walk_settle_ms) { settle_on = false; in.vbus_mv = walk_settle_to_mv; }
+                else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
+            }
+            if (walk_ripple_mv) in.vbus_mv += ((in.now / 100) % 2) ? walk_ripple_mv : -walk_ripple_mv;
             r.poll(in, caps);
             min_vbus = std::min(min_vbus, in.vbus_mv);
         }
@@ -3631,6 +3649,24 @@ static void test_pps_step_walk_fails_when_steps_are_ignored() {
     }
     CHECK_EQ(checked, true);
 }
+
+// ROADMAP "The PPS step walk fails a good source: its base level is read before the output settles" (UGREEN Nexode
+// Air 65 W, 2026-11-10): the base request at 13000 mV overshoots to 13007 mV and settles to 12990 over 900 ms; the
+// +20 mV steps after it are followed. The walk must record the base only once VBUS is steady, or the first move
+// reads ~0 or negative and a good source fails "steps ignored". Host shape from the row: base 13007 settling to
+// 12990, then +20 mV steps.
+static void test_pps_step_walk_waits_for_the_base_to_settle() {
+    Fake f;
+    f.walk_settle_mv = 13000; f.walk_settle_from_mv = 13007; f.walk_settle_to_mv = 12990; f.walk_settle_ms = 900;
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    bool walk7 = false;
+    for (size_t i = 0; i + 5 < f.choices.size(); ++i)
+        if (walk_requests_at(f, i, 7, 13000)) walk7 = true;
+    CHECK_EQ(walk7, true);   // the six walk Requests went out (base, then +20 mV x 5)
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);   // RED: a base read mid-settle fails the first step
+}
 // A PD source that goes dark mid-row (its output collapsed or we Hard Reset it): VBUS 0, the offer list gone, no
 // session. Lenovo C135, hardware 2026-11-03: VBUS drained 20 V -> 0 in 9 s, then every later row said "offers changed".
 static void run_to_pd_row(Fake& f, ct::Runner& r, size_t row) {
@@ -6105,5 +6141,6 @@ int main() {
     test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
+    test_pps_step_walk_waits_for_the_base_to_settle();
     return test_report("test_charger_test");
 }
