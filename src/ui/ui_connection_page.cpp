@@ -307,6 +307,7 @@ void ConnectionPage::sense(uint32_t now_ms) {
     r.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
     r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx_.inline_mode && !link.inline_mode();
     facts_.topo = raguard::classify(r);
+    facts_.wait = link.wait_kind();   // the one waiting classifier: the tab, the bar and the remote state read this
     facts_.charger = link.attached();
     facts_.cable = fusb302::emarker().valid;
     facts_.inline_sink = link.inline_mode();
@@ -911,7 +912,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = fnv(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
               | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | uint32_t(ctx_.fc) << 16
-              | uint32_t(facts_.topo) << 24 | uint32_t(fusb302::self_powered()) << 28);
+              | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
     c = fnv(c, fusb302::session());
     c = fnv(c, uint32_t(live_caps.valid) | uint32_t(live_caps.num_pdos) << 8 | uint32_t(live_caps.epr) << 16
               | uint32_t(live_caps.spec_rev) << 17 | uint32_t(live_caps.epr_partial) << 19);
@@ -953,7 +954,8 @@ void ConnectionPage::update(uint32_t now_ms) {
 
     const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && fusb302::self_powered());
     if (empty) {
-        uint32_t h = fnv(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9);
+        uint32_t h = fnv(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
+                                     | uint32_t(facts_.wait) << 10);
         if (sig_valid_ && h == sig_) return;
         sig_ = h;
         sig_valid_ = true;

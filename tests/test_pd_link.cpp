@@ -8,6 +8,7 @@
 #include "test_util.h"
 
 using namespace k2::pd;
+using k2::raguard::WaitKind;
 
 static LinkInput in(std::uint32_t t, std::int32_t vbus, std::uint8_t cc = 1, std::uint32_t rx = 1) {
     return {t, true, vbus, cc, rx};
@@ -436,6 +437,40 @@ static void test_format_ago() {
     format_ago(400000, b, sizeof b); CHECK_STR(b, "99h+");
 }
 
+// The waiting classifier through the Link input: the Rp trace is fed only while passive, and VBUS up voids it.
+static LinkInput win(std::uint32_t t, std::int32_t cc1, std::int32_t cc2, bool passive, std::int32_t vbus = 0) {
+    LinkInput in = LinkInput{};
+    in.now_ms = t; in.vbus_known = true; in.vbus_mv = vbus; in.cc = 0; in.caps_rx = 0;
+    in.cc1_mv = cc1; in.cc2_mv = cc2; in.passive = passive;
+    return in;
+}
+
+static void test_wait_kind_steady_rp_is_charger_waiting() {
+    Link l;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) l.update(win(t, 0, 2990, true));   // Rp on CC2 only, steady
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::ChargerWaiting));
+    CHECK_EQ(l.charger_waiting(), 1);
+    l.update(win(1020, 0, 2990, true, 5000));   // VBUS up: a source is already attached, no verdict
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::Unknown));
+    CHECK_EQ(l.charger_waiting(), 0);
+}
+
+static void test_wait_kind_toggling_rp_is_dual_role() {
+    Link l;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) l.update(win(t, 0, (t / 100) % 2 == 0 ? 3300 : 0, true));   // toggles every 100 ms
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::DualRolePort));
+    CHECK_EQ(l.charger_waiting(), 0);
+}
+
+static void test_wait_kind_no_rp_and_not_passive() {
+    Link l;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) l.update(win(t, 0, 1707, true));   // idle CC2 only
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::NoSource));
+    for (std::uint32_t t = 1020; t <= 2000; t += 20) l.update(win(t, 3300, 3300, false));   // the K2 holds the lines (pinned boot)
+    CHECK_EQ(int(l.wait_kind()), int(WaitKind::Unknown));   // not passive: the trace was dropped
+    CHECK_EQ(l.charger_waiting(), 0);
+}
+
 int main() {
     test_boot_attached_and_stable();
     test_vbus_detach_debounce();
@@ -464,5 +499,8 @@ int main() {
     test_five_volts_alone_is_a_standalone_k2();
     test_force();
     test_format_ago();
+    test_wait_kind_steady_rp_is_charger_waiting();
+    test_wait_kind_toggling_rp_is_dual_role();
+    test_wait_kind_no_rp_and_not_passive();
     return test_report("test_pd_link");
 }

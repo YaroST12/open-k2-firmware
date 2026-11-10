@@ -26,6 +26,15 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
 
 void Link::update(const LinkInput& in) {
     last_rx_ = in.caps_rx;
+    last_now_ = in.now_ms;
+    vbus_known_ = in.vbus_known;
+    vbus_mv_ = in.vbus_mv;
+    // The waiting classifier's trace: only while the K2 is passive do the lines show the far port's own Rp
+    // (our Rd/Ra, an inline sink or a live VBUS make the question void: the trace is dropped, not accumulated).
+    if (in.passive && in.cc1_mv >= 0 && in.cc2_mv >= 0)
+        wait_trace_.add(in.now_ms, in.cc1_mv >= raguard::kRpMinMv || in.cc2_mv >= raguard::kRpMinMv);
+    else
+        wait_trace_.clear();
     if (forced_) return;
     if (!attached_) requests_at_attach_ = in.requests;  // only Requests seen while attached count
 

@@ -537,7 +537,7 @@ struct StateInfo {
     int16_t mcu_temp_deci_c = 0;   // internal die sensor, valid when adc_flags bit3
     uint8_t fc = 0;           // fastcharge::Protocol
     uint8_t adc_flags = 0;    // bit0 reading valid, bit1 NTC valid, bit2 NTC calibrated, bit3 MCU temp valid
-    uint8_t link_flags = 0;   // kLink* bits: charger data stale / waiting, inline, cable stale / scanned
+    uint8_t link_flags = 0;   // kLink* bits: charger data stale / waiting (kLinkWaiting = re-attached, no caps yet, OR a charger waiting for a sink per the Rp-trace classifier), inline, cable stale / scanned
     uint32_t age_s = 0;       // seconds since the charger was unplugged (0 while live)
     uint32_t cable_age_s = 0; // seconds since the e-marker scan
     uint32_t reset_flags = 0; // CRM CTRLSTS reset flags of this boot (bits 26..31: PIN POR SW IWDG WWDG LPWR)

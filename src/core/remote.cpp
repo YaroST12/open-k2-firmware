@@ -263,7 +263,7 @@ remote::StateInfo Remote::state() {
     s.fc = static_cast<uint8_t>(fastcharge::read());
     const pd::Link &link = ui_.link();
     const uint32_t now = systick::millis();
-    s.link_flags = (link.charger_stale() ? remote::kLinkStale : 0) | (link.waiting() ? remote::kLinkWaiting : 0) |
+    s.link_flags = (link.charger_stale() ? remote::kLinkStale : 0) | (link.waiting() || link.charger_waiting() ? remote::kLinkWaiting : 0) |
                    (link.inline_mode() ? remote::kLinkInline : 0) | (link.cable_stale() ? remote::kLinkCableStale : 0) |
                    (link.cable_scanned() ? remote::kLinkCableScanned : 0);
     s.age_s = link.attached() ? 0 : link.detached_for_s(now);

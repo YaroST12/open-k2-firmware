@@ -857,6 +857,10 @@ void Ui::tick(uint32_t now_ms) {
     in.requests = fusb302::contract().requests;
     in.far_sink_cc = fusb302::sink_cc_far();   // a sink's Rd on CC with none of ours: "possibly inline" even when the link is silent
     in.self_supply_ma = usb::configured() ? 0 : pd::kSelfSupplyAllowanceMa;   // no USB host: the K2 may run on this VBUS
+    // The waiting classifier's input: the passive CC levels and the same passive gate the connection page uses.
+    in.cc1_mv = ctx_.analog ? ctx_.analog->cc1_mv : -1;
+    in.cc2_mv = ctx_.analog ? ctx_.analog->cc2_mv : -1;
+    in.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !link_.inline_mode();
     {   // VBUS this K2 drives itself: the PD trigger (held or mid-negotiation) or a fast-charge trigger
         const pd::SinkStatus &sk = fusb302::sink_status();
         const bool pd_busy = sk.held || (sk.state != pd::SinkState::Idle && sk.state != pd::SinkState::Failed);

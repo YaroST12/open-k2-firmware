@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include "test_util.h"
+#include "k2/pd/pd_link.hpp"
 #include "k2/ui/ui_connection.hpp"
 
 using namespace k2;
@@ -58,8 +59,10 @@ static void test_empty_states() {
         std::array<std::string_view, 4> ln{};
         CHECK_EQ(wrap(e(Tab::Source, Topology::NoSource).hint, 26, ln), 1);
     }
-    CHECK_STR(e(Tab::Source, Topology::DirectReceptacle).title, "CHARGER WAITING");   // Rp seen, VBUS down: not "nothing"
-    CHECK_STR(e(Tab::Source, Topology::CableSingleCc).title, "CHARGER WAITING");
+    // The topology word alone no longer says "waiting": the classifier (Facts::wait) decides, see
+    // test_source_tab_reads_the_waiting_classifier - with no verdict yet (Unknown) the tab says NO CHARGER.
+    CHECK_STR(e(Tab::Source, Topology::DirectReceptacle).title, "NO CHARGER");
+    CHECK_STR(e(Tab::Source, Topology::CableSingleCc).title, "NO CHARGER");
     // Sink
     CHECK_STR(e(Tab::Sink, Topology::DirectReceptacle).title, "NO DEVICE");
     // The two ports share one CC network and one rail (docs/K2_PORTS_SPEC.md): no copy names a port as "the" device port.
@@ -175,6 +178,66 @@ static void test_bar_reads_the_waiting_classifier() {
     status_text(in, s); CHECK_STR(s.c_str(), "No charger, via cable");
     in.f = facts(false, true, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting);
     status_text(in, s); CHECK_STR(s.c_str(), "Charger");   // a charger already attached wins
+}
+
+// One classifier, one result: the Source tab, the bottom bar and the remote state field (kLinkWaiting, fed from
+// link.charger_waiting()) all read pd::Link::wait_kind(). A steady Rp trace (a charger waiting behind a cable) and
+// a toggling one (a phone alone) through the real Link input.
+static void test_the_three_readers_agree() {
+    auto feed = [](pd::Link& l, std::uint32_t t, std::int32_t cc1, std::int32_t cc2) {
+        pd::LinkInput in;
+        in.now_ms = t; in.vbus_known = true; in.vbus_mv = 0; in.cc = 0; in.caps_rx = 0;
+        in.cc1_mv = cc1; in.cc2_mv = cc2; in.passive = true;
+        l.update(in);
+    };
+    pd::Link charger;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) feed(charger, t, 0, 2990);   // Rp on CC2 only, steady (a sleeping port behind a cable)
+    CHECK_EQ(int(charger.wait_kind()), int(raguard::WaitKind::ChargerWaiting));
+    CHECK_EQ(charger.charger_waiting(), true);   // what remote.cpp puts in kLinkWaiting -> state.waiting
+    Facts f = facts(false, false, false, Topology::CableSingleCc, false, charger.wait_kind());
+    CHECK_STR(empty_state(Tab::Source, f).title, "CHARGER WAITING");
+    StrBuf<40> s;
+    StatusIn in;
+    in.tab = Tab::Source; in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, via cable");
+
+    pd::Link phone;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) feed(phone, t, 0, (t / 100) % 2 == 0 ? 3300 : 0);   // Rp toggling every 100 ms
+    CHECK_EQ(int(phone.wait_kind()), int(raguard::WaitKind::DualRolePort));
+    CHECK_EQ(phone.charger_waiting(), false);   // state.waiting stays False: not a charger
+    f = facts(false, false, false, Topology::CableSingleCc, false, phone.wait_kind());
+    CHECK_STR(empty_state(Tab::Source, f).title, "DUAL-ROLE PORT");
+    in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "Dual-role port, via cable");
+
+    pd::Link none;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) feed(none, t, 0, 1707);   // idle CC2 only
+    CHECK_EQ(int(none.wait_kind()), int(raguard::WaitKind::NoSource));
+    CHECK_EQ(none.charger_waiting(), false);
+    f = facts(false, false, false, Topology::NoSource, false, none.wait_kind());
+    CHECK_STR(empty_state(Tab::Source, f).title, "NO CHARGER");
+    in.f = f;
+    status_text(in, s); CHECK_STR(s.c_str(), "No charger");
+
+    // Not passive (the K2 holds the lines itself, e.g. a pinned boot): the classifier is void, the trace dropped.
+    pd::Link active;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) {
+        pd::LinkInput in2;
+        in2.now_ms = t; in2.vbus_known = true; in2.vbus_mv = 0; in2.cc = 0; in2.caps_rx = 0;
+        in2.cc1_mv = 0; in2.cc2_mv = 3300; in2.passive = false;
+        active.update(in2);
+    }
+    CHECK_EQ(int(active.wait_kind()), int(raguard::WaitKind::Unknown));
+    CHECK_EQ(active.charger_waiting(), false);
+    // VBUS up (a source already feeding something): also void.
+    pd::Link live;
+    for (std::uint32_t t = 0; t <= 1000; t += 20) {
+        pd::LinkInput in2;
+        in2.now_ms = t; in2.vbus_known = true; in2.vbus_mv = 5000; in2.cc = 1; in2.caps_rx = 1;
+        in2.cc1_mv = 3300; in2.cc2_mv = 3300; in2.passive = true;
+        live.update(in2);
+    }
+    CHECK_EQ(int(live.wait_kind()), int(raguard::WaitKind::Unknown));
 }
 
 static void test_status_text() {
@@ -420,6 +483,7 @@ int main() {
     test_empty_states_when_possibly_inline();
     test_source_tab_reads_the_waiting_classifier();
     test_bar_reads_the_waiting_classifier();
+    test_the_three_readers_agree();
     test_wrap();
     test_status_text();
     test_status_survey();

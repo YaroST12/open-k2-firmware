@@ -72,8 +72,10 @@ constexpr Empty empty_state(Tab t, const Facts &f) {
     switch (t) {
     case Tab::Source:
         if (f.inline_sink) return {"LINE IN USE", "VBUS is live, no source PD seen: a device may be in use."};
-        // Rp on a line with VBUS down: a charger that waits for a sink (the K2 is passive until a test starts).
-        if (direct || via_cable) return {"CHARGER WAITING", "Charger waits for a sink: start a charger test."};
+        // The one waiting classifier (f.wait, the Rp trace): a steady Rp = a charger waiting for a sink; a toggling
+        // Rp = a dual-role port (a phone alone) looking for a partner, not a charger.
+        if (f.wait == raguard::WaitKind::ChargerWaiting) return {"CHARGER WAITING", "Charger waits for a sink: start a charger test."};
+        if (f.wait == raguard::WaitKind::DualRolePort) return {"DUAL-ROLE PORT", "A phone? It toggles Rp looking for a partner; START makes it source 5 V."};
         return {"NO CHARGER", "Use either port"};   // one line: the footer already states "No charger"
     case Tab::Sink:
         if (f.inline_sink) return {"DEVICE IN USE", "Something is on the line behind the K2: nothing is asked of it."};
@@ -190,7 +192,13 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
         if (s.sv->ran() && s.tab != Tab::Sink && !tab_empty(s.tab, s.f)) { read_summary(*s.sv, out); return; }
     }
     switch (s.tab) {
-    case Tab::Source: out.put(s.f.charger ? "Charger" : "No charger"); break;
+    case Tab::Source:
+        // The same waiting classifier as the tab (f.wait): the bar never disagrees with it.
+        if (s.f.charger) out.put("Charger");
+        else if (s.f.wait == raguard::WaitKind::ChargerWaiting) out.put("Charger waiting");
+        else if (s.f.wait == raguard::WaitKind::DualRolePort) out.put("Dual-role port");
+        else out.put("No charger");
+        break;
     case Tab::Cable:  out.put(s.f.cable ? "Cable read" : "No cable"); break;
     case Tab::Sink:   out.put(s.f.inline_sink ? "Device inline" : s.f.sink_seen ? "Sink seen on CC" : "No device"); break;
     }

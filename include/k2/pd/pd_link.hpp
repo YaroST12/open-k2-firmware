@@ -25,6 +25,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "k2/pd/ra_guard.hpp"
+
 namespace k2::pd {
 
 inline constexpr std::int32_t kVSafe0Mv = 800;
@@ -55,6 +57,11 @@ struct LinkInput {
     // A sink's Rd (about 1.5 V) on a CC line while the K2 presents none itself: something is plugged into the other end and
     // announces itself as a sink. The driver decides it (fusb302::sink_cc_far()); false when unknown.
     bool far_sink_cc = false;
+    // The passive CC levels for the waiting classifier (raguard::RpTrace): a line at/above raguard::kRpMinMv carries
+    // an Rp. -1 = no ADC reading. `passive` = the K2 holds nothing on the lines and no sink is inline, so the lines
+    // are the far port's own advertisement (the same gate the connection page's topology uses).
+    std::int32_t cc1_mv = -1, cc2_mv = -1;
+    bool passive = false;
 };
 
 // Allowance for the K2's own supply current while it runs on the measured VBUS (no USB host enumerated).
@@ -90,6 +97,11 @@ public:
     bool attached() const { return attached_; }
     bool waiting() const { return waiting_; }  // attached after a detach, no new caps yet
     bool charger_stale() const { return !attached_ || waiting_; }
+    // The one "charger waiting" verdict (the Rp trace over the CC lines, raguard::RpTrace): ChargerWaiting = a
+    // charger's Rp steady for >= raguard::RpTrace::kSteadyMs with VBUS down, DualRolePort = an Rp that toggles.
+    // The Source tab, the bottom bar and the remote state field read this same value.
+    raguard::WaitKind wait_kind() const { return wait_trace_.classify(last_now_, vbus_known_ && vbus_mv_ >= raguard::kVbusAttachedMv); }
+    bool charger_waiting() const { return wait_kind() == raguard::WaitKind::ChargerWaiting; }
     // Latched by a load, a foreign Request or a foreign VBUS rise; held across a short detach (kInlineHoldMs) and left only on proof
     // (kInlineQuietMs of quiet while attached, or a detach that outlasts the hold).
     bool inline_mode() const { return inline_; }
@@ -123,6 +135,12 @@ private:
     std::uint32_t rx_at_detach_ = 0, last_rx_ = 0;
     bool scanned_ = false, cable_dirty_ = false;
     std::uint32_t scan_at_ = 0;
+    // The waiting classifier's input: the Rp presence trace over the CC lines (fed only while passive), and the
+    // last VBUS reading for its gate.
+    raguard::RpTrace wait_trace_;
+    std::uint32_t last_now_ = 0;
+    bool vbus_known_ = false;
+    std::int32_t vbus_mv_ = 0;
 
     void set_attached(bool on, std::uint32_t at_ms);
 };
