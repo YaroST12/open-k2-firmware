@@ -686,7 +686,7 @@ Files on the volume (compact binary records, each starts with a magic that carri
 | :--- | :--- | :--- |
 | `/usb.cfg` | `usbcfg` | "K2US" + the USB link setting |
 | `/cable.cfg` | `cablepref` | "K2CB" + kind (0 Off, 1 Builtin, 2 Saved) + seq (u16 LE) + check byte (kind ^ seq lo ^ seq hi ^ 0xA5); written only when the shared cable selection changes; damaged or naming a gone clone reads as Off |
-| `/prefs.cfg` | `uiprefs` | "K2UP" + flags (Try QC after PD, Screenshot) + complement + smoothing byte (0 = Medium default, else 1 + preset index) + orientation byte (bit0..1 manual rotation, bit2 manual, bit3 rotate buttons; 0 = automatic, keys as printed) |
+| `/prefs.cfg` | `uiprefs` | "K2UP" + flags (Try QC after PD, Screenshot) + complement + smoothing byte (0 = Medium default, else 1 + preset index) + orientation byte (bit0..1 manual rotation, bit2 manual, bit3 rotate buttons, bit4 Wake sleeping port; 0 = automatic, keys as printed, no idle Rd) |
 | `/emk/NNNN.emk` | `emlib` | one saved cable, 98 B ("K2E1", number, version, 24-char name, 66-byte e-marker record); lowest free number is reused; up to 140 |
 | `/log.txt` | `storage` | the log snapshot (newest 3 KB of the log ring), RAM mirror for the drive |
 | `/cards/<fp>.card` | `report_card_store` | one charger report card, 210 B for format 7 ("K2C1", stamp, 202-byte record; older files of 158 to 204 B still load and are rewritten as format 7; a repeat of the stored result is folded into it, see `docs/CHARGER_TEST_FLOW.md` "Repeated runs"), `<fp>` = 8 hex digits of the fingerprint; 64 cards at most, the lowest stamp is dropped for a new charger |

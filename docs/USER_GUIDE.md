@@ -63,7 +63,7 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
  |        |            |            |        |          |
  |        |            |            |        |          +-- USB Link (HID, Drive)
  |        |            |            |        |              Autorotate (Auto, Manual 0/90/180/270)
- |        |            |            |        |              Rotate buttons, Screenshot, Smoothing
+ |        |            |            |        |              Rotate buttons, Screenshot, Smoothing, Wake sleeping port
  |        |            |            |        |
  |        |            |            |        +-- FC trigger     QC / AFC / FCP / SCP / VOOC, scan
  |        |            |            |            PD trigger     pick a PDO or PPS/AVS voltage
@@ -142,7 +142,7 @@ For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**)
 - [Top-level pages](#top-level-pages): [Home](#home), [Detail](#detail), [Charger test](#charger-test), [Lines](#lines), [Tools](#tools), [Settings](#settings)
 - [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Diag](#diag)
 - [Share (QR)](#share-qr)
-- [Settings](#settings-reference): [USB Link](#usb-link), [Autorotate](#autorotate), [Rotate buttons, Screenshot, Smoothing](#other-settings)
+- [Settings](#settings-reference): [USB Link](#usb-link), [Autorotate](#autorotate), [Rotate buttons, Screenshot, Smoothing, Wake sleeping port](#other-settings)
 - [USB link modes](#usb-link-modes) and [USB drive contents](#usb-drive-contents)
 - [Remote control and dashboards](#remote-control-and-dashboards)
 - [Backup, restore and recovery](#backup-restore-and-recovery)
@@ -286,6 +286,7 @@ Spoof is a shortcut: it opens Who's attached on the Cable tab and then the Spoof
 | Rotate buttons | ON / OFF | across boots |
 | Screenshot | ON / OFF | across boots |
 | Smoothing | Off / Low / Medium / High | across boots |
+| Wake sleeping port | ON / OFF (default OFF) | across boots |
 
 +/- selects. OK opens, toggles or cycles (the label on the OK button says which). The footer says "Opens a settings page" or "Remembered across boots".
 
@@ -477,13 +478,14 @@ A network row exists only in `K2_NET=1` builds, which are not released. Stored i
 
 ![Autorotate](guide/img/autorotate.png)
 
-Radio rows: **Auto** (follows gravity), then **Manual** 0, 90, 180, 270 degrees. OK applies at once. Footer: "Applies now. This boot only".
+Radio rows: **Auto** (follows gravity), then **Manual** 0, 90, 180, 270 degrees. OK applies at once. Footer: "Applies now. Remembered".
 
 ### Other settings
 
-- **Rotate buttons**: ON makes the buttons follow the display orientation; OFF keeps the physical key meaning ("Follow the display" vs "Physical keys"). This boot only.
+- **Rotate buttons**: ON makes the buttons follow the display orientation; OFF keeps the physical key meaning ("Follow the display" vs "Physical keys"). Remembered.
 - **Screenshot**: ON allows remote and browser screen capture. Remembered. Turn it off if you do not want the screen readable over USB.
 - **Smoothing**: Off ("Raw readings"), Low ("Light calming"), Medium ("Balanced"), High ("Steady, slower"). OK cycles. Applied at once, remembered. It filters the display readings only, not the recorded data.
+- **Wake sleeping port**: OFF by default, and then the idle K2 presents no Rd and stays passive. ON lets an idle K2 hold its own Rd on one line at a time (2 s each) when that line reads like a sleeping source (about 3.0 to 3.3 V open, for example a splitter port with nothing plugged in), so the source can wake and the PD list appears without any pin. With it ON every waiting charger also sees the K2 as a sink for a moment, so turn it off again when you do not need it. Remembered.
 
 ---
 
@@ -567,7 +569,7 @@ The bootloader area (0x08000000 to 0x080037FF) is never written by this firmware
 | Item | Where | Notes |
 | :--- | :--- | :--- |
 | USB link choice | flash, `/usb.cfg` | off by default, applies after replug |
-| Screenshot on/off, Smoothing | flash, `/prefs.cfg` | remembered |
+| Screenshot on/off, Smoothing, Rotate buttons, Autorotate, Wake sleeping port | flash, `/prefs.cfg` | remembered |
 | Cable identity for the charger test | flash, `/cable.cfg` | remembered |
 | Saved cables (up to 140) | flash | also shown on the drive as JSON |
 | Report cards (up to 64) | flash | also on the drive as `CARDS.JSON` |

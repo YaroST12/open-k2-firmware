@@ -312,7 +312,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Validate: host tests (red first) for the `--over-load` gate (refused after any far PD message, refused with no
     far sink) and the signature rule; the hardware step above.
 - **The splitter's sleeping port still needs the Rd pin outside a charger-test START** (2026-11-10, be3f589, fixed in
-  f0d79fb, hardware check pending): idle
+  f0d79fb as an opt-in setting, **Settings > Wake sleeping port, default off**; hardware check pending): idle
   K2 on the splitter with nothing attached, VBUS 78 mV, "No source"; `pd-reread` without a pin answered "busy" and
   `pd attach 5000` did nothing; `pd-reread --pin 2 --no-run` woke it at once. 5926abb's slow-wake dwell only acts
   inside the Rd seek after a passive pick, and the open standby reading is wiped by `RdSeek::reset()` on attach, so an
@@ -323,10 +323,19 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   and the 500 ms no-Rp detach is held off inside the dwell window (`IdleWake::holding_slow`, ended by `on_rp_seen`);
   host-tested in `tests/test_rdseek.cpp`. Validate: host test on the decision; hardware: idle K2, plug into the sleeping splitter
   port, PD list on screen without any pin.
+  Opt-in (the idle wake breaks I1 / H2 for every waiting charger, see the merge-pass note below): the hold only runs with
+  the remembered setting **Settings > Wake sleeping port** (last Settings row, OFF by default; bit4 of byte 7 of the
+  `/prefs.cfg` record, `pd::IdleWake::set_enabled`, `fusb302::set_idle_wake`, applied from main() at boot). With it
+  off the idle K2 presents no Rd and `RdSeek::reset(false)` wipes the open readings on attach, exactly as on `public`
+  (host-tested: `tests/test_fusb302_scan.cpp` off / on / off-again on a 3.3 V open CC2, `tests/test_rdseek.cpp`,
+  `tests/test_uiprefs.cpp`, the Settings row in `tests/test_ui_rotation.cpp`). Hardware check pending: setting on,
+  idle K2 into the sleeping splitter port (PD list without any pin), then a waiting charger and a DRP phone with the
+  setting on (expected: the K2 becomes their sink for one dwell; this is the documented exception), and off again.
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
   START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.
-  - Merge pass 2026-11-10: `k2/sleeping-port-rd` (f11ea84, `pd::IdleWake`) is **held, not merged**. It puts Rd on any
+  - Merge pass 2026-11-10: `k2/sleeping-port-rd` (f11ea84, `pd::IdleWake`) was **held, not merged** as an always-on
+    behaviour; it now ships only as the opt-in setting above (default off, I1 / H2 unchanged with it off). With it on it puts Rd on any
     idle line that reads >= 2800 mV open, which is also every ordinary waiting charger (Rp 3.2-3.3 V) and a dual-role
     phone's toggling Rp (H13). That breaks invariant I1 / row H2 in `docs/CONNECTION_MATRIX.md` (a plain boot presents
     no Rd until START or a re-read), makes the K2 the sink of record before anything is plugged behind it (the P4

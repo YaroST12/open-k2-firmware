@@ -261,7 +261,7 @@ Rules:
 | Diag | `diag` | kit KvTable of nine rows at a 22 px pitch (26 px would not fit above the footer; the one pitch deviation), S12 keys, S16 values, a verdict marker per group (USB / PD / SYS); the footer gives the worst state; reached from Tools |
 | Lines | `lines` | D+/D-/CC1/CC2 tags + 0..3.3 V bars with 0.4 V and 2.0 V ticks; the decoded result in pills, then Rp and MCU as a kit KvTable; footer via the shared cache |
 | Tools | `tools_ready` / `tools_caution` / `tools_blocked` | RowList, 26 px rows (7 visible plus a thumb), icon marker per tool, a chevron when ready, otherwise the readiness tag as value; the footer gives the reason |
-| Settings | (host render `mock_settings`) | RowList, 26 px rows: icon marker, title, the current value as right-aligned tail; USB Link and Autorotate open their pages (chevron); Rotate buttons toggles directional remapping for this boot; Screenshot toggles remote capture; Smoothing cycles Off / Low / Medium / High; footer says whether the value is kept across boots |
+| Settings | (host render `mock_settings`) | RowList, 26 px rows: icon marker, title, the current value as right-aligned tail; USB Link and Autorotate open their pages (chevron); Rotate buttons toggles directional remapping (remembered); Screenshot toggles remote capture; Smoothing cycles Off / Low / Medium / High; Wake sleeping port (last row, six rows in all, no scroll) toggles the idle Rd hold that asks a sleeping source, OFF by default; footer says whether the value is kept across boots |
 | Autorotate | `mock_autorotate` | RowList with radio markers: Auto plus four Manual angles (0/90/180/270 deg); the selected row opens to show its note; OK applies; the solid square (hollow when not picked; the kit's pick-one marker has no circle) marks the current choice |
 | E-marker | (live scan) | the cable scan and its result (rating, speed, VID:PID) are rows of the Who's attached Cable tab (Actions: Read cable); progress and refusals show in the page footer; no Tools row and no separate page. Saved cables below |
 | Identify | (footer status) | Actions pop-up of the Who's attached Sink tab; its progress and result are footer text on that page and the ID rows fill in; no Tools row and no separate page |
@@ -532,8 +532,8 @@ Buttons: the BACK slot reads `Back/Del` in the list and `List/Del` on a card (lo
          shows the title, one QR code and "part i/n"; a record over one frame is several parts that cycle by
          themselves (about 1.5 s); long [+] / [-] page and stop the cycling, OK holds / resumes it, BACK returns.
          The screen repaints only when the part changes. Format and tools: docs/QR_SHARE.md.
-  Settings: short -/+ selects; OK opens USB Link or Autorotate, toggles Rotate buttons and
-            Screenshot, cycles Smoothing (Off / Low / Medium / High).
+  Settings: short -/+ selects; OK opens USB Link or Autorotate, toggles Rotate buttons,
+            Screenshot and Wake sleeping port, cycles Smoothing (Off / Low / Medium / High).
             BACK returns to Settings (selection kept).
   Short BACK on a rotation page → Home, except an active test stops first.
   FC: short +/- picks a protocol; OK edits, then reviews. Review OK applies (twice above 5V).
