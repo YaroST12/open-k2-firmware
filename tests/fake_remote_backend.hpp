@@ -132,8 +132,9 @@ struct Fake {
         calls++; rq_pos = pos; rq_mv = mv; rq_ma = ma; rq_confirm = confirm; rq_over_load = over_load; return rq_result;
     }
     int releases = 0, resets = 0;
+    uint8_t reset_flags = 0xFF;
     PdOpResult pd_release() { calls++; releases++; return {}; }
-    PdOpResult pd_hard_reset() { calls++; resets++; return {}; }
+    PdOpResult pd_hard_reset(uint8_t flags = 0) { calls++; resets++; reset_flags = flags; return {}; }
     uint8_t trig_pin = 0;   // what pd_trigger() reports as the pinned Rd line
     PdTriggerSnapshot pd_trigger() {
         calls++;

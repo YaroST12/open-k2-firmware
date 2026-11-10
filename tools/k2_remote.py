@@ -46,7 +46,7 @@ CMD_DEBUG_PDOS = 0x20    # debug: load N synthetic PDOs into the PD state (0 = c
 CMD_ADC_RAW = 0x21        # raw ADC dump (10 channels + the 7 scan slots)
 CMD_IDENTIFY_DEVICE = 0x40  # [op] 0 status, 1 start, 2 start + confirm
 CMD_PD_REQUEST = 0x41       # [pos, flags (bit0 confirm, bit1 over-load lab-only), mv u16, ma u16] -> [pd::Err]
-CMD_PD_RESET = 0x42         # hard reset
+CMD_PD_RESET = 0x42         # optional [flags]: bit0 confirm, bit1 inline lab-only -> [pd::Err]
 CMD_PD_TRIGGER_STATUS = 0x43
 CMD_PD_MATCH = 0x45  # passive wants-vs-offers verdict
 CMD_USB_LINK = 0x46  # USB / Thunderbolt link from sniffed PD
@@ -1840,14 +1840,19 @@ def cmd_action(link, a):
 
 def cmd_pd(link, a):
     """Active PD. `pd request` above 5 V needs --confirm; inline the K2 refuses all of them
-    (--over-load lifts the refusal only while the far sink is a passive load, lab only)."""
+    (--over-load lifts the refusal only while the far sink is a passive load, lab only;
+    the other exception is the lab-only `pd reset --inline --confirm`)."""
     sub = a.pd_cmd
     if sub == "request":
         mv, ma = getattr(a, "mv", 0) or 0, getattr(a, "ma", 0) or 0
         flags = (1 if getattr(a, "confirm", False) else 0) | (2 if getattr(a, "over_load", False) else 0)
         link.call(CMD_PD_REQUEST, bytes([a.pos, flags]) + mv.to_bytes(2, "little") + ma.to_bytes(2, "little"))
     elif sub == "reset":
-        link.call(CMD_PD_RESET)
+        # flags byte: bit0 confirm, bit1 inline (lab-only Hard Reset while a live sink is attached; the
+        # firmware refuses it unless both are set, and while a charger test runs). No flags -> the old empty
+        # payload, so an older firmware still accepts the plain reset.
+        flags = (1 if getattr(a, "confirm", False) else 0) | (2 if getattr(a, "inline", False) else 0)
+        link.call(CMD_PD_RESET, bytes([flags]) if flags else b"")
     elif sub == "release":
         link.call(CMD_PD_RELEASE)
     elif sub == "attach":
@@ -2621,7 +2626,12 @@ def build_parser():
                     help="lab only: let the K2 request while a far sink is attached, but only when that sink sent no PD "
                          "message this attach (a passive load: Rd only, no Request, no Get_Source_Cap); refused otherwise. "
                          "Never reachable from the UI or the charger test")
-    spds.add_parser("reset", help="PD hard reset (the supply returns at 5 V)")
+    sr = spds.add_parser("reset", help="PD hard reset (the supply returns at 5 V; refused while a live sink is attached)")
+    sr.add_argument("--confirm", action="store_true", help="with --inline: confirm the lab-only Hard Reset while inline")
+    sr.add_argument("--inline", action="store_true",
+                    help="lab only: send one Hard Reset even while a live sink is attached inline (needs --confirm); "
+                         "refused while a charger test runs and logged as a lab op on the K2. Never reachable from the "
+                         "UI, the shell or the charger test")
     spds.add_parser("release", help="back to 5 V (Request PDO 1)")
     sa = spds.add_parser("attach", help="attach as PD sink and request target voltage (default 9000 mV)")
     sa.add_argument("mv", type=int, nargs="?", default=9000, help="target voltage in mV (default 9000)")

@@ -79,7 +79,7 @@ public:
     // `over_load` is the lab-only bypass (k2_remote `pd request --over-load`); the UI never sets it.
     remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);
     remote::PdOpResult pd_release();
-    remote::PdOpResult pd_hard_reset();
+    remote::PdOpResult pd_hard_reset(uint8_t flags = 0);   // flags: kPdFlagConfirm | kPdFlagResetInline (lab-only inline reset, remote `pd reset` only)
     remote::PdTriggerSnapshot pd_attach(uint16_t target_mv, uint16_t target_ma);
     remote::PdTriggerSnapshot pd_trigger();
     remote::MatchSnapshot match_info();

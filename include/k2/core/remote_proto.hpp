@@ -323,7 +323,7 @@ enum class Cmd : uint8_t {
     // confirm flag (Status::NeedConfirm without it). Ids 0x31/0x32 belong to DebugFault/Fc.
     IdentifyDevice = 0x40,  // [op] 0 status, 1 start, 2 start (same as 1; the inline refusal has no confirm) -> IdentifySnapshot
     PdRequest = 0x41,       // [pos, flags (bit0 confirm, bit1 over-load lab-only), mv u16, ma u16] -> [pd::Err]
-    PdReset = 0x42,         // hard reset (the supply comes back at 5 V)
+    PdReset = 0x42,         // optional [flags]: bit0 confirm, bit1 inline lab-only (kPdFlagResetInline, needs bit0; refused while a charger test runs) -> [pd::Err]
     PdTriggerStatus = 0x43, // -> PdTriggerSnapshot
     PdRelease = 0x44,       // back to 5 V (Request PDO 1)
     PdMatch = 0x45,         // passive wants-vs-offers verdict -> MatchSnapshot (see encode_match)
@@ -371,6 +371,7 @@ constexpr uint8_t kPdFlagConfirm = 1 << 0;
 // Lab-only (k2_remote `pd request --over-load`, never the UI / WebHID / charger test): lift the inline
 // refusal while the far sink is a passive load - no PD message from it this attach (pd::over_load_allowed).
 constexpr uint8_t kPdFlagOverLoad = 1 << 1;
+constexpr uint8_t kPdFlagResetInline = 1 << 1;   // Cmd::PdReset only: lab-only Hard Reset while a live sink is attached inline (needs kPdFlagConfirm too; see pd::lab_reset_verdict)
 
 constexpr uint32_t kFaultMagic = 0x4D4F4F42;  // "BOOM" little endian
 constexpr uint32_t kDfuMagic = 0x21554644;   // "DFU!" little endian: the DFU_ENTER confirmation
@@ -819,7 +820,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.reread(u8, u8) } -> std::same_as<RereadResult>;   // op (0 status, 1 start, 2 abort), step mask
     { b.pd_request(u8, u16, u16, on, on) } -> std::same_as<PdOpResult>;   // pos, mv, ma, confirm, over_load (lab only)
     { b.pd_release() } -> std::same_as<PdOpResult>;
-    { b.pd_hard_reset() } -> std::same_as<PdOpResult>;
+    { b.pd_hard_reset(u8) } -> std::same_as<PdOpResult>;   // flags byte: kPdFlagConfirm | kPdFlagResetInline (0 for the shell/UI paths)
     { b.pd_attach(u16, u16) } -> std::same_as<PdTriggerSnapshot>;
     { b.pd_trigger() } -> std::same_as<PdTriggerSnapshot>;
     { b.match_info() } -> std::same_as<MatchSnapshot>;
@@ -1126,10 +1127,17 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         buf[0] = res.err;
         return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
     }
-    case Cmd::PdReset:
+    case Cmd::PdReset: {
+        if (p.size() > 1) return reply(Status::BadLength);
+        const uint8_t flags = p.empty() ? uint8_t{0} : p[0];
+        if (flags & ~uint8_t(kPdFlagConfirm | kPdFlagResetInline)) return reply(Status::BadArg);
+        const PdOpResult res = backend.pd_hard_reset(flags);
+        buf[0] = res.err;
+        return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
+    }
     case Cmd::PdRelease: {
         if (!p.empty()) return reply(Status::BadLength);
-        const PdOpResult res = static_cast<Cmd>(r.cmd) == Cmd::PdReset ? backend.pd_hard_reset() : backend.pd_release();
+        const PdOpResult res = backend.pd_release();
         buf[0] = res.err;
         return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
     }

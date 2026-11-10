@@ -136,6 +136,26 @@ struct OverLoadFacts {
 // and refused after any far PD message.
 constexpr bool over_load_allowed(const OverLoadFacts& f) { return f.far_sink && !f.far_pd_message; }
 
+// The lab-only inline Hard Reset (`k2_remote.py pd reset --inline --confirm`, ROADMAP 2026-11-10, connection
+// matrix P4): a Hard Reset while a live sink is attached cuts that sink's supply, so it is refused inline by
+// default; the lab override sends exactly ONE in that state, to watch the far sink renegotiate (P4: the phone
+// then negotiated PPS itself). Same lab gating shape as --over-load: refused while a charger test runs (a run
+// owns the link), and it needs BOTH flags - `--inline` alone is a NeedConfirm, `--confirm` alone is no override.
+// Never reachable from the UI, the shell or the charger test: only the remote `pd reset` subparser carries the
+// flags (payload flag byte on Cmd::PdReset, kPdFlagResetInline).
+enum class LabResetVerdict : std::uint8_t { Allowed, RefusedBusy, NeedConfirm, RefusedInline };
+struct LabResetFacts {
+    bool charger_test_busy;   // a charger-test run owns the link: lab ops are refused during it
+    bool inline_mode;         // pd::Link latched a real sink behind the K2
+    bool trigger_refusal;     // can_trigger() != None (a sink Rd or a foreign Request on the wire)
+};
+constexpr LabResetVerdict lab_reset_verdict(const LabResetFacts& f, bool flag_inline, bool flag_confirm) {
+    if (f.charger_test_busy) return LabResetVerdict::RefusedBusy;                 // the run owns the link, flags or not
+    if (flag_inline && !flag_confirm) return LabResetVerdict::NeedConfirm;        // the lab op needs both flags
+    if ((f.inline_mode || f.trigger_refusal) && !(flag_inline && flag_confirm)) return LabResetVerdict::RefusedInline;  // as today
+    return LabResetVerdict::Allowed;
+}
+
 // Type-C current advertised by the source's Rp, from the FUSB302 BC_LVL (STATUS0 bits 1:0):
 // 1 = default USB (500 mA), 2 = 1.5 A, 3 = 3 A. With a Rd on the line the level reads from the
 // Rp/Rd divider, so callers keep the highest level seen since attach.

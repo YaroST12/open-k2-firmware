@@ -458,9 +458,27 @@ remote::PdOpResult Remote::pd_release() {
     return {};
 }
 
-remote::PdOpResult Remote::pd_hard_reset() {
-    if (ui_.link().inline_mode() || fusb302::trigger_refusal() != pd::TriggerRefusal::None) return pd_result(pd::Err::Inline);   // never reset a live sink's supply
-    K2LOG("[RMT] pd hard reset\n");
+remote::PdOpResult Remote::pd_hard_reset(uint8_t flags) {
+    // Lab-only inline Hard Reset (`pd reset --inline --confirm`, ROADMAP 2026-11-10 connection-matrix P4): by
+    // default a reset is refused while a live sink is attached (it would cut that sink's supply); the lab flags
+    // lift exactly that refusal, gated by pd::lab_reset_verdict - refused while a charger test runs, and both
+    // flags are required. The shell / UI paths call this with flags 0 and keep today's behaviour.
+    const pd::LabResetFacts facts{ui_.charger_test_busy(), ui_.link().inline_mode(),
+                                  fusb302::trigger_refusal() != pd::TriggerRefusal::None};
+    const bool flag_inline = (flags & remote::kPdFlagResetInline) != 0;
+    const bool flag_confirm = (flags & remote::kPdFlagConfirm) != 0;
+    switch (pd::lab_reset_verdict(facts, flag_inline, flag_confirm)) {
+        case pd::LabResetVerdict::RefusedBusy:
+            K2LOG("[RMT] pd reset refused: charger test running\n");
+            return {remote::Status::Busy, 0};
+        case pd::LabResetVerdict::NeedConfirm:
+            return {remote::Status::NeedConfirm, 0};
+        case pd::LabResetVerdict::RefusedInline:
+            return pd_result(pd::Err::Inline);   // never reset a live sink's supply
+        case pd::LabResetVerdict::Allowed: break;
+    }
+    if (flag_inline) K2LOG("[RMT] pd hard reset lab inline flags=0x%02X\n", static_cast<unsigned>(flags));   // the lab op, logged
+    else K2LOG("[RMT] pd hard reset\n");
     ui_.trigger_hard_reset(systick::millis());
     return {};
 }

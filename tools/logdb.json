@@ -428,6 +428,8 @@
   "425": "[EMARK] Refused: inline with a live sink; the VCONN/SOP' scan never runs inline\n",
   "426": "[PD] Get_Source_Cap refused (no CC / inline: an inline K2 never transmits)\n",
   "427": "[ID] Identify refused (no CC / inline: an inline K2 never transmits)\n",
-  "428": "[TEST] preflight refused: VBUS %d.%d V on a 5 V contract (shared bus)\n"
+  "428": "[TEST] preflight refused: VBUS %d.%d V on a 5 V contract (shared bus)\n",
+  "429": "[RMT] pd reset refused: charger test running\n",
+  "430": "[RMT] pd hard reset lab inline flags=0x%02X\n"
  }
 }
