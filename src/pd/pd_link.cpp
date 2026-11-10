@@ -93,7 +93,12 @@ void Link::update(const LinkInput& in) {
         if (in.own_contract) { own_seen_ = true; own_ever_ = true; own_last_ms_ = in.now_ms; }
         const bool own_recent = in.own_contract || (own_seen_ && in.now_ms - own_last_ms_ <= kOwnHoldMs);
         // The lines alone: a PD-level VBUS nobody on this side asked for, or a sink's Rd on CC (see kInlineForeignMs).
-        const bool foreign_now = !own_recent && ((in.vbus_known && in.vbus_mv > kInlineVbusMv && !own_ever_) || in.far_sink_cc);
+        // A sink's Rd is evidence of a contract only while a source feeds the link: with VBUS never at vSafe5V for
+        // kDarkSinkMs (since the attach or the last time it was) the "sink" is a dual-role port toggling its Rp (a phone alone).
+        if (in.vbus_known && in.vbus_mv >= kVSafe5MinMv) vbus_up_ms_ = in.now_ms;
+        const std::uint32_t up_since = vbus_up_ms_ > attach_at_ ? vbus_up_ms_ : attach_at_;
+        const bool dark_far = in.vbus_known && in.now_ms - up_since >= kDarkSinkMs;
+        const bool foreign_now = !own_recent && ((in.vbus_known && in.vbus_mv > kInlineVbusMv && !own_ever_) || (in.far_sink_cc && !dark_far));
         bool foreign = false;
         if (foreign_now) {
             if (!foreign_timing_) { foreign_timing_ = true; foreign_since_ = in.now_ms; }

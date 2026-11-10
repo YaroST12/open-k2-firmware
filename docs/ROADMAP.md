@@ -341,6 +341,14 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   scan) and logs every dwell with the SWITCHES0 readback and the live ADC levels, because the hold line was printed only
   on change (the bench capture started after it). ADC cc1/cc2 vs chip CC1/CC2: no swap found (the bench scan reads
   CC2 BC_LVL 3 and the ADC cc2 rises to 1.63 V at the same moment); hardware check pending.
+  Pixel ALONE on the K2 (same firmware): the stale dark attach also kept `pd::Link` inline for minutes, and a latched
+  inline blocks `idle_owner_free()` (`downstream_now()`), so it would block the release too. Fix in the Link
+  (`kDarkSinkMs`, 3 s): a sink's Rd on CC (`far_sink_cc`) counts as foreign-sink evidence only while VBUS has been at
+  vSafe5V within that window (or since the attach); a dual-role phone toggling its Rp through the Rd level with no VBUS
+  neither latches nor holds the latch (`test_a_dark_phone_alone_never_holds_the_inline_latch`). The host model keeps
+  the Link attached with 900 mV VBUS spikes; a plain 0 V VBUS detaches the Link at 300 ms and releases the latch after
+  `kInlineHoldMs`, so the exact bench cause of the 3-minute latch (spiking VBUS reads, or the latch surviving from
+  the earlier charger run) is not proven; the rule covers both. Hardware check pending.
   Also seen twice on 2026-11-10 (a5bd83f, 05b1703): the first `ct_start.py` START within ~10 s of a boot on this
   splitter ends "START did not start a run" (VBUS 0 / 2.75 V, "START will present Rd and wait for VBUS"); the second
   START, with the port awake, runs. Check START's VBUS wait against the ~1.1-1.7 s wake and log the reason it gave up.

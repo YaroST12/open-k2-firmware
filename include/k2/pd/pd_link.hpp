@@ -85,6 +85,11 @@ inline constexpr std::uint32_t kInlineForeignMs = 1500;
 // The reset hold of the data lines is 500 ms; a real sink behind the K2 still latches by its current or its Request.
 inline constexpr std::uint32_t kOwnHoldMs = 2000;
 
+// A sink's Rd on CC (LinkInput::far_sink_cc) with VBUS never at vSafe5V for this long is not a sink in a contract: a dual-role
+// phone alone on the port toggles its Rp through that level (bench 2026-11-10, Pixel alone: inline held for minutes, which
+// blocked the idle wake). Longer than the foreign-evidence timer, so a charger that is still ramping up keeps its evidence.
+inline constexpr std::uint32_t kDarkSinkMs = 3000;
+
 class Link {
 public:
     void update(const LinkInput& in);
@@ -129,6 +134,7 @@ private:
     std::uint32_t foreign_since_ = 0;
     std::uint32_t own_last_ms_ = 0;
     bool vbus_low_ = false, cc_gone_ = false;
+    std::uint32_t vbus_up_ms_ = 0;   // the last sample at/above vSafe5V (see kDarkSinkMs)
     bool low_timing_ = false, gone_timing_ = false;
     std::uint32_t low_since_ = 0, gone_since_ = 0;
     std::uint32_t detach_at_ = 0, attach_at_ = 0;
