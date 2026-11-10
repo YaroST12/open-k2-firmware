@@ -94,7 +94,7 @@ public:
     TriggerOutcome trigger(const pd::Choice &c, uint32_t now_ms, bool confirm, bool over_load = false);
     TriggerOutcome device_trigger(const pd::Choice &c, uint32_t now_ms);   // OK twice
     void trigger_release(uint32_t now_ms);       // back to 5 V
-    void trigger_hard_reset(uint32_t now_ms);
+    bool trigger_hard_reset(uint32_t now_ms, bool lab_inline = false);   // false = the driver refused it
     // Identify the port partner. Inline it is refused (an inline K2 never transmits); the sniffed
     // identity shows on the Sink tab instead.
     enum class IdResult : uint8_t { Started, Refused, NoDevice };

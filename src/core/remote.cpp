@@ -479,7 +479,8 @@ remote::PdOpResult Remote::pd_hard_reset(uint8_t flags) {
     }
     if (flag_inline) K2LOG("[RMT] pd hard reset lab inline flags=0x%02X\n", static_cast<unsigned>(flags));   // the lab op, logged
     else K2LOG("[RMT] pd hard reset\n");
-    ui_.trigger_hard_reset(systick::millis());
+    // The driver has its own inline guard: only the verdict's lab override lifts it (both flags, checked above).
+    if (!ui_.trigger_hard_reset(systick::millis(), flag_inline && flag_confirm)) return pd_result(pd::Err::Inline);
     return {};
 }
 

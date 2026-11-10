@@ -430,6 +430,8 @@
   "427": "[ID] Identify refused (no CC / inline: an inline K2 never transmits)\n",
   "428": "[TEST] preflight refused: VBUS %d.%d V on a 5 V contract (shared bus)\n",
   "429": "[RMT] pd reset refused: charger test running\n",
-  "430": "[RMT] pd hard reset lab inline flags=0x%02X\n"
+  "430": "[RMT] pd hard reset lab inline flags=0x%02X\n",
+  "431": "[PD] Hard Reset refused (no CC / inline)\n",
+  "432": "[UI] trigger hard reset%s: %s\n"
  }
 }

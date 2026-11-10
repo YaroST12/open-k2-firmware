@@ -162,7 +162,7 @@ void sink_release() {
         g_stub.sink.pos = 1; g_stub.sink.mv = 5000; g_stub.sink.held = false;
     }
 }
-void sink_hard_reset() { g_stub.hard_resets++; }
+bool sink_hard_reset(bool) { g_stub.hard_resets++; return true; }
 void sink_set_cap(std::uint32_t mv) { g_stub.sink_cap = mv; }
 void sink_vbus(std::int32_t mv) { g_stub.sink_vbus = mv; }
 const pd::SinkStatus& sink_status() { return g_stub.sink; }

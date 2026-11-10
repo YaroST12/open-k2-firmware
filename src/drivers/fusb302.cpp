@@ -2200,10 +2200,14 @@ void sink_release() {
     g_prep.abort();
     g_sink.release(systick::millis());
 }
-void sink_hard_reset() {
-    if (inline_now() || g_active_cc == 0) return;
+bool sink_hard_reset(bool lab_inline) {
+    if ((inline_now() && !lab_inline) || g_active_cc == 0) {
+        K2LOG("[PD] Hard Reset refused (no CC / inline)\n");
+        return false;
+    }
     g_hr_tool_armed = true;   // the explicit tool is an active feature: its one Hard Reset may go out even from idle
     g_sink.hard_reset(systick::millis());
+    return true;
 }
 void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {

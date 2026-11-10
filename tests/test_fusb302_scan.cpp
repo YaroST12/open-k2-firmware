@@ -3241,6 +3241,20 @@ void check_no_tx() {
     CHECK_EQ(find_from("W 06=01"), -1);                  // ... and TX_START never went out
 }
 
+// The lab-only `pd reset --inline --confirm` (remote, pd::lab_reset_verdict): its one Hard Reset reaches the wire while inline;
+// the plain tool stays refused inline. Hardware 2026-11-10 (CUKTECH -> K2 -> Pixel): the remote said ok, VBUS never moved -
+// the driver dropped the lab reset at its own inline guard.
+void test_inline_hard_reset_only_with_the_lab_flag() {
+    attach_inline();
+    CHECK_EQ(fusb302::sink_hard_reset(), false);         // the plain tool: refused inline, nothing on the wire
+    for (int i = 0; i < 10; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(hard_reset_written(), false);
+    CHECK_EQ(fusb302::sink_hard_reset(true), true);      // the lab override: exactly this one goes out
+    for (int i = 0; i < 10 && !hard_reset_written(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(hard_reset_written(), true);
+    end_inline_case();
+}
+
 void test_inline_identify_refused_even_confirmed() {
     attach_inline();
     CHECK_EQ(fusb302::identify_start(true), false);      // confirm must not override the inline refusal
@@ -3403,6 +3417,7 @@ int main() {
     test_lab_pin_clears_when_the_far_end_detaches();            // last: each one ends with a detach / Rd off
     test_a_boot_pin_survives_the_far_end_detaching();
     test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
+    test_inline_hard_reset_only_with_the_lab_flag();
     test_inline_get_source_caps_refused_even_confirmed();
     test_inline_vconn_scan_refused_even_confirmed();
     test_inline_cable_session_refused_even_confirmed();

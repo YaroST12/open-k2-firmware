@@ -633,13 +633,14 @@ void Ui::stop_fc(uint32_t now_ms) {
     fc_release_.start(now_ms);
 }
 
-void Ui::trigger_hard_reset(uint32_t now_ms) {
+bool Ui::trigger_hard_reset(uint32_t now_ms, bool lab_inline) {
     ContentViewport viewport(layout_.content);
     cancel_charger_test();
-    fusb302::sink_hard_reset();
+    const bool ok = fusb302::sink_hard_reset(lab_inline);
     ctx_.trig_armed = false;
-    K2LOG("[UI] trigger hard reset\n");
+    K2LOG("[UI] trigger hard reset%s: %s\n", lab_inline ? " (lab inline)" : "", ok ? "sent" : "refused");
     current().update(now_ms);
+    return ok;
 }
 
 Ui::IdResult Ui::identify(uint32_t now_ms) {

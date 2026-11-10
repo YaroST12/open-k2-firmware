@@ -213,7 +213,9 @@ bool pd_seen_attach();
 // Back to 5 V (Request PDO 1; hard reset if the source refuses). The 5 V contract stays up for kSinkIdleLingerMs,
 // then the sink drops Rd (a held trigger never times out: only this call or a detach ends it).
 void sink_release();
-void sink_hard_reset();  // user-requested hard reset
+// User-requested hard reset; false = refused (no CC, or inline). `lab_inline` = the remote's lab-only
+// `pd reset --inline --confirm` (gated by pd::lab_reset_verdict): its one Hard Reset goes out even inline.
+bool sink_hard_reset(bool lab_inline = false);
 void sink_set_cap(std::uint32_t mv);  // highest voltage a request may ask for (from the power monitor)
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv);  // measured CC voltages; inline, no sink Rd near 1.5 V = sink left. Also stored as the latest net levels (g_cc1_mv/g_cc2_mv) for the attach scan's Rd-window cross-check and its re-run on fresh levels while a line is attached with no PD decoded yet; -1 = unknown
 // A sink's Rd level (the sink band, about 1.5 V) on a CC line while the K2 pulls none down itself, from the latest sink_cc() levels:
