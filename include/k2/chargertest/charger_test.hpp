@@ -695,6 +695,7 @@ private:
     bool capped(const Step&, const Input&, bool ready) const;   // a programmable row's timeout is a ceiling (see kPlateauMs)
     bool floored(const Step&, const Input&, bool ready) const;  // ... or a floor: a low row whose output sits steady above the band ceiling
     void track_plateau(const Input&, bool ready, uint32_t gap);
+    int from_mv_ = 0;          // VBUS when the Requesting row's level was asked (0 = unknown): a programmable row going up gets the tight band
     uint16_t plat_mv_ = 0;     // the level a Requesting programmable row's samples have stayed within 1 % of (0 = none yet)
     uint32_t plat_ms_ = 0;     // since when
     // The lowest / highest VBUS a Requesting QC Class B 20 V row has seen (kClassAStuck*); reset by request().

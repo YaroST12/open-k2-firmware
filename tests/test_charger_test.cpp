@@ -1980,6 +1980,28 @@ static void test_pps_min_step_accepts_unloaded_floor() {
         CHECK_EQ(seen, true);
     }
 }
+// The wide unloaded ceiling (+10 %, min 600 mV) belongs to a DOWN-step: an unloaded source cannot sink its output down. An UP-step has no
+// such excuse, the source drives the output up itself, so it is judged on the tight +-5 % / 100 mV band: a source that lands 8 % above
+// the level it was asked to rise to is out of regulation and must not pass.
+static void test_pps_up_step_uses_the_tight_band() {
+    for (int over_pct : {3, 8}) {
+        Fake f; f.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (33u << 8) | 60);
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(A::Pps)}, f.in, true);
+        bool saw_up = false;
+        for (int n = 0; n < 900; ++n) {
+            f.tick(r, 100);
+            if (f.in.pd.held && f.in.pd.mv > 5000) { f.in.vbus_mv = int(f.in.pd.mv) + int(f.in.pd.mv) * over_pct / 100; saw_up = true; }
+        }
+        CHECK_EQ(saw_up, true);
+        for (const auto& st : r.steps())
+            if (st.mv > 5000) {   // the first up-step row
+                CHECK_EQ(st.verdict, over_pct == 3 ? ct::Verdict::Pass : ct::Verdict::Fail);
+                if (over_pct == 8) CHECK_EQ(st.reason, ct::Reason::Timeout);
+                break;
+            }
+    }
+}
 // pattern output-capped-below-advertised (Baseus FH22 100 W, 2026-11-08): the PPS 5-21 V APDO is accepted at every level but the
 // converter stops at 19.4 V. The top steps are Capped (a ceiling, not a silent timeout), the chain goes on to the lower levels, and
 // the lower levels pass. Without the cap the same list passes every row.
@@ -6425,7 +6447,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_with_no_frames_skips_the_svooc_units(); test_pps_min_step_accepts_unloaded_floor();
+    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_with_no_frames_skips_the_svooc_units(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

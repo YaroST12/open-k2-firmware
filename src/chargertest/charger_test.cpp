@@ -375,7 +375,10 @@ bool legacy_band(int level, int prev_mv, int mv) {
     const int tol = std::max(150, level / 20);
     return mv >= level - tol && mv <= (level < prev_mv ? pd::programmable_ceiling_mv(level) : level + tol);
 }
-bool in_band(const Step& s, int mv, int prev_mv = 5000) {
+// from_mv: VBUS when the level was asked (0 = unknown). A programmable row asked to go DOWN (from above its level) keeps the wide unloaded
+// ceiling, an unloaded source cannot sink; a row asked to go UP (or to stay) is judged on the same +-5 % / 100 mV as a fixed level.
+// prev_mv: the level a legacy row's rail starts from (legacy_band above); the two hints are independent.
+bool in_band(const Step& s, int mv, int from_mv = 0, int prev_mv = 5000) {
     if (s.group == Group::Qc2 && s.mv == 5000) return safe5(mv);   // a 5 V charger reads 5.1 V: not a 2 % miss
     // An unloaded charger reads 2-3 % high (a bank: 9.20 V for 9 V, 5.16 V for 5 V); -2 % / +3 % around the level.
     if (s.group == Group::Qc2) return (mv - int(s.mv)) * 100 >= -int(s.mv) * 2 && (mv - int(s.mv)) * 100 <= int(s.mv) * 3;
@@ -387,8 +390,11 @@ bool in_band(const Step& s, int mv, int prev_mv = 5000) {
         return mv >= 4250 && mv <= 12100;
     if (s.mv == 5000 && (s.algorithm == Algorithm::Pd2Fixed || s.algorithm == Algorithm::Pd3Fixed))
         return safe5(mv);
-    if (s.algorithm == Algorithm::Pps || s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs)
-        return mv >= int(s.mv) - std::max(100, int(s.mv) / 20) && mv <= pd::programmable_ceiling_mv(int(s.mv));   // an unloaded source cannot sink down
+    if (s.algorithm == Algorithm::Pps || s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs) {
+        const int margin = std::max(100, int(s.mv) / 20);
+        const bool down = from_mv > int(s.mv);   // an unloaded source cannot sink down: only a down-step gets the wide ceiling
+        return mv >= int(s.mv) - margin && mv <= (down || from_mv <= 0 ? pd::programmable_ceiling_mv(int(s.mv)) : int(s.mv) + margin);
+    }
     if (s.group == Group::Pd) return std::abs(mv - int(s.mv)) <= std::max(100, int(s.mv) / 20);
     return legacy_band(int(s.mv), prev_mv, mv);
 }
@@ -1274,7 +1280,7 @@ bool Runner::band_ok(const Step& s, const Input& in, uint32_t gap) {
         // The SCP 4.5 V row sits below the 5 V an unloaded output stays at, so VBUS alone cannot prove it: the adapter's own readback
         // must agree with the request whenever the session has read it.
         if (s.group == Group::Scp && s.mv == 4500 && in.fc_adapter_mv > 0 && std::abs(in.fc_adapter_mv - 4500) > 150) return false;
-        return in_band(s, in.vbus_mv, rail_start_mv({steps_.data(), count_}, index_));
+        return in_band(s, in.vbus_mv, from_mv_, rail_start_mv({steps_.data(), count_}, index_));
     }
     if (gap > 250) band_.clear();   // missing samples cannot be averaged across
     const int level = int(s.mv);
@@ -1349,7 +1355,7 @@ void Runner::request(Input in) {
     }
     if (is_sweep(s)) sweep_begin(s, in);   // the sweep starts at the APDO's first point
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
-    phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0;
+    phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0; from_mv_ = std::max(in.vbus_mv, 0);
     peak_lo_mv_ = 0xFFFF; peak_hi_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
     state_ = State::Requesting;
@@ -1556,6 +1562,7 @@ void Runner::walk_step(Input in, const Step& eff) {
     walk_mv_ = uint16_t(walk_mv_ + kStepMv);
     stable_ = false;
     walk_steady_.clear(); walk_grant_ms_ = 0;   // the next granted level waits for its own steady VBUS
+    from_mv_ = std::max(in.vbus_mv, 0);         // a level up from where VBUS stands now
     phase_ms_ = in.now;   // each granted level gets its own Requesting timeout (the steady wait is bounded per level)
     const auto err = env_.request_pd({s.pos, walk_mv_, s.ma, false});
     if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
@@ -1595,6 +1602,7 @@ void Runner::sweep_point(Input in, const Step& eff) {
     const auto ma = ctsweep::point_ma(p, sweep_mv_, cable_ma(in));
     stable_ = false;
     phase_ms_ = in.now;
+    from_mv_ = std::max(in.vbus_mv, 0);
     const auto err2 = env_.request_pd({s.pos, sweep_mv_, uint16_t(ma), false});
     if (err2 == pd::Err::Busy) busy_retry_at_ = in.now + 200;
     else if (err2 != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err2));
