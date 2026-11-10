@@ -1263,7 +1263,7 @@ void Runner::request(Input in) {
     if (jwait_ms_) { env_.journal_waited(in.now - jwait_ms_); jwait_ms_ = 0; }
     hot_ = false; busy_retry_at_ = 0; hunt_reject_until_ = 0;   // the next row: a list announced now is no answer to the old hunt row
     s.verdict = Verdict::Running;
-    if (is_step_walk(s)) { walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; }   // the walk starts at the row's own level
+    if (is_step_walk(s)) { walk_mv_ = s.mv; walk_n_ = 0; walk_prev_mv_ = -1; walk_base_mv_ = -1; }   // the walk starts at the row's own level
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
@@ -1415,23 +1415,31 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     }
 }
 // One granted level of the step-walk row (is_step_walk): the base level only records VBUS; every later level checks
-// the measured move against kStepMv +- kStepTolMv (the meter's resolution, not the pass band), then asks for the next
-// +kStepMv through the sink's single Request gate, or passes after kStepWalkCount moves. A move that misses - rounded
-// to a coarser quantum, or none at all - fails "step resolution N mV" with detail = the observed move in mV.
+// the measured move (upward, below 2 x kStepMv), then asks for the next +kStepMv through the sink's single Request gate;
+// after kStepWalkCount moves the sum must be kStepWalkCount x kStepMv +- kStepWalkTolMv. A move that misses - rounded to
+// a coarser quantum, or none at all - fails "step resolution N mV" with detail = the observed move in mV; a sum that
+// misses fails the same way with detail = the mean move.
 void Runner::walk_step(Input in, const Step& eff) {
     (void)eff;
     auto& s = steps_[index_];
     if (walk_n_ == 0) {
-        walk_prev_mv_ = in.vbus_mv;   // the base level is granted and in band
+        walk_prev_mv_ = walk_base_mv_ = in.vbus_mv;   // the base level is granted and in band
     } else {
         const int move = in.vbus_mv - walk_prev_mv_;
-        if (std::abs(move - int(kStepMv)) > int(kStepTolMv)) {
+        if (move <= 0 || move >= int(2 * kStepMv)) {
             finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(move, 0, 255)));
             return;
         }
         walk_prev_mv_ = in.vbus_mv;
     }
-    if (walk_n_ >= kStepWalkCount) { finish(in, Verdict::Pass, Reason::None); return; }
+    if (walk_n_ >= kStepWalkCount) {
+        const int total = in.vbus_mv - walk_base_mv_;
+        if (std::abs(total - int(kStepWalkCount * kStepMv)) > kStepWalkTolMv)
+            finish(in, Verdict::Fail, Reason::StepResolution, uint8_t(std::clamp(total / int(kStepWalkCount), 0, 255)));
+        else
+            finish(in, Verdict::Pass, Reason::None);
+        return;
+    }
     ++walk_n_;
     walk_mv_ = uint16_t(walk_mv_ + kStepMv);
     stable_ = false;

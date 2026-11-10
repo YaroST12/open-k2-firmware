@@ -678,6 +678,8 @@ def decode_charger_test(p):
         detail_reason = "none"
         if detail in EPR_DETAILS and group == 0:
             detail_reason = EPR_DETAILS[detail]
+        elif detail and why == 46:   # StepResolution: the detail is the measured move in mV, not a code
+            detail_reason = f"{detail} mV move"
         elif detail:
             names, detail_code = (PD_ERRS, detail - 128) if group == 0 and detail >= 128 else (
                 SINK_RESULTS if group == 0 else FC_FAILS, detail)

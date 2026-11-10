@@ -3375,6 +3375,28 @@ static void test_pps_step_walk_fails_when_steps_round_to_100mv() {
     CHECK_EQ(checked, true);
     CHECK_STR(ct::name(ct::Reason::StepResolution), "step resolution");
 }
+static void test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum() {
+    {   // 16 mV a step: inside one step's band, the sum 80 mV is the edge of 100 +- 20 -> pass
+        Fake f; f.pd_small_step_mv = 16;
+        ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+        f.tick(r, 400000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+    }
+    {   // 15 mV a step every time: no single step is wrong, but the walk adds up to 75 mV -> fail, detail = the mean
+        Fake f; f.pd_small_step_mv = 15;
+        ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+        f.tick(r, 400000);
+        CHECK_EQ(r.state(), ct::State::Done);
+        bool checked = false;
+        for (const auto& s : r.steps()) {
+            if (s.reason != ct::Reason::StepResolution) continue;
+            checked = true;
+            CHECK_EQ(s.detail, 15);
+        }
+        CHECK_EQ(checked, true);
+    }
+}
 static void test_pps_step_walk_fails_when_steps_are_ignored() {
     Fake f; f.pd_small_step_mv = 0;   // the +20 mV requests move the output not at all
     ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
@@ -5861,5 +5883,6 @@ int main() {
     test_fixed_row_collapse_stays_lost(); test_pps_collapse_after_ps_rdy_stays_lost();
     test_low_edge_that_regulates_at_5v_is_a_floored_fail();
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
+    test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     return test_report("test_charger_test");
 }

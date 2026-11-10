@@ -62,12 +62,12 @@ enum class Reason : uint8_t {
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
 inline constexpr uint8_t kDetailStepWalk = 160;
 // ROADMAP "PPS coverage" item 2: one step-walk row per PPS APDO, from the mid level, kStepWalkCount Requests of +kStepMv
-// each. Every step needs Accept + PS_RDY and a measured VBUS move of kStepMv +- kStepTolMv. The tolerance is the meter's,
-// not the pass band's: the INA226's VBUS LSB is 2.5 uV, aligned to 0.32 mV counts (align_vbus) and reported as whole mV, so
-// each reading quantizes by 1 mV and a move of two readings carries at most 1 mV; the level's own band (max(100, mv/20))
-// would accept a 100 mV rounding, so it is not used here.
+// each. Every step needs Accept + PS_RDY and a measured VBUS move upward and below 2 x kStepMv (a source that rounds to a
+// 40/50/100 mV quantum, or ignores the step, shows a 0 or >= 40 mV move); the whole walk must then add up to
+// kStepWalkCount x kStepMv +- kStepWalkTolMv. One step alone is not judged tighter: the output's own ripple at no load
+// moves a single reading by several mV (CUKTECH C1, hardware 2026-11-10: one +20 mV step read 15 mV), the sum averages it.
 inline constexpr unsigned kStepMv = 20, kStepWalkCount = 5;
-inline constexpr int kStepTolMv = 2;
+inline constexpr int kStepWalkTolMv = 20;
 // A run that was resumed this many times is not offered again (a step that dies before it can leave a marker would loop forever).
 inline constexpr unsigned kMaxResumes = 16;
 // A unit (protocol) may take the K2 down this many times inside one run: losses 1 .. kRebootBudget-1 resume the same row, the
@@ -621,6 +621,7 @@ private:
     uint16_t walk_mv_ = 0;
     uint8_t walk_n_ = 0;
     int walk_prev_mv_ = -1;
+    int walk_base_mv_ = -1;   // VBUS at the walk's base level (the sum check)
     void walk_step(Input, const Step& eff);   // one granted level of the walk: check its move, ask for the next or finish
     bool xiaomi_seen_ = false, xiaomi_reset_ = false, x_svid_ = false, x_authed_ = false; uint32_t tail_at_ = 0, hr_count_ = 0;
     std::array<HuntEvidence, kHuntSlots> hunt_{};   // refused hunt rows; n_hunt_ in use (a full table overwrites the last slot)
