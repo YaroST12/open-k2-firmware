@@ -251,8 +251,10 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     voltage; OnePlus unplugged: the unit runs.
   - Hardware on be3f589 (2026-11-10, `runs/2026-11-09-splitter/`): (B3) OnePlus on PPS before START: START's own
     preflight refuses with "VBUS not safe 5V" on screen (VBUS 7.7 V under the PDO 1 contract), so the new attach-wait
-    path is not reachable that way; the refusal reason is on screen only (no `[TEST]` log line, `ct_start.py` prints
-    just "run id still 0" - small follow-up: log the preflight reason and have `ct_start.py` print it). (B4) OnePlus
+    path is not reachable that way; the refusal reason was on screen only (no `[TEST]` log line, `ct_start.py` printed
+    just "run id still 0"). Fixed in f074898, hardware check pending: the refusal is now one
+    `[TEST] preflight refused: <reason> (<VBUS> mV)` log line (src/chargertest, logdb id 419) and `ct_start.py`
+    prints it when the run id stays 0. (B4) OnePlus
     plugged around the unit detach: the attach got the split list at a clean 5 V, 5 pass / 4 skip (EPR, SPR AVS, PPS,
     EPR AVS not offered), card correct. WrongVoltage itself stays covered by the streamB2 replay test only; the splitter
     did not repeat the 7.6 V attach.
