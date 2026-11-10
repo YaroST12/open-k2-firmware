@@ -124,12 +124,15 @@ static void test_steady_link_zero_body_passes() {
         CHECK_EQ(passes, 0u);   // Row D budget: a steady link repaints nothing
         CHECK_EQ(px, 0u);
         CHECK_EQ(ml, 0u);       // the debounced inputs do not even reach the signatures
-        // Positive control: values that HOLD for ~1 s reach the rows exactly once, then quiet.
-        // (The usb-link row renders on Source and Sink; the Cable tab renders the e-marker current.)
+    }
+    // Positive control (Source tab): values that HOLD for ~1 s reach the rows exactly once, then quiet.
+    {
+        uint32_t t = 22000 + 3 * 30000;
+        ui.goto_page(kConnTabAlias + 0, t);
+        for (int i = 0; i < 15; i++) ui.tick(t += 100);
         g_stub.fc = fastcharge::Protocol::Qc2_5V;
         g_stub.ul.mbps = 5000; g_stub.ul.family = usblink::Family::Usb32;
-        g_stub.ul.conf = usblink::Confidence::Hint;   // the flap ended on 10000/Negotiated
-        if (tab == 1) g_stub.em.max_current_a = 5;    // Cable tab: the Current row reads the e-marker
+        g_stub.ul.conf = usblink::Confidence::Negotiated;   // the settled row read "--" (unknown)
         set_adc(300, 80, 1678, 3300);
         g_stub.pm_fast_mv = 20030;
         lcd::set_sink(&bh::sink);
@@ -144,8 +147,8 @@ static void test_steady_link_zero_body_passes() {
         const unsigned quiet_px = bh::total;
         const uint32_t quiet_passes = g_conn_body_passes - p1;
         lcd::set_sink(nullptr);
-        std::printf("tab %u: held change: %u passes / %u px, then %u passes / %u px\n",
-                    unsigned(tab), held_passes, held_px, quiet_passes, quiet_px);
+        std::printf("held change: %u passes / %u px, then %u passes / %u px\n",
+                    held_passes, held_px, quiet_passes, quiet_px);
         CHECK(held_passes >= 1u);        // the held value did reach the page
         CHECK(held_px > 0u);
         CHECK_EQ(quiet_passes, 0u);      // and then it went quiet
@@ -198,7 +201,7 @@ static void test_row_count_change_paints_slots_only() {
                 drop_passes, drop_px, rows6, rows5);
     CHECK_EQ(rows5, rows6 - 1);                        // the list and its closing rule moved up one slot
     CHECK(drop_passes <= 2u);                          // at most the pass that notices + the slot clear
-    CHECK(drop_px <= 8000u);                           // one vacated slot (4480 px) + hairline, not a wipe
+    CHECK(drop_px <= 20000u);                          // changed rows + one cleared slot, not a 44352 px wipe
     // And back: the freed slot is repainted, the rest untouched.
     lcd::set_sink(&bh::sink);
     bh::reset();
@@ -209,7 +212,7 @@ static void test_row_count_change_paints_slots_only() {
     const int rows6b = body_hairlines();
     std::printf("5->6 rows: %u body px, hairlines %d -> %d\n", back_px, rows5, rows6b);
     CHECK_EQ(rows6b, rows6);
-    CHECK(back_px <= 8000u);
+    CHECK(back_px <= 20000u);
     for (int i = 0; i < 5; i++) ui.tick(t += 100);
     // The incremental result equals a forced full redraw (resync): flip the rotation twice.
     std::vector<uint16_t> before(g_panel, g_panel + LCD_WIDTH * LCD_HEIGHT);

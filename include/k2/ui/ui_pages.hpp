@@ -711,6 +711,23 @@ private:
     uint8_t body_n_ = 0;
     uint32_t nopd_msg_sig_ = 0;            // the no-PD message block's hash (painted only when it moved)
     std::array<uint32_t, kBodyRows> row_sig_{};
+    // Row D (page flicker): debounced volatile inputs. A value must hold kHoldMs before it reaches a row
+    // or a paint signature, so a flapping fast-charge verdict, usb-link family or ADC/VBUS level repaints
+    // nothing on a steady link; a value that settles still reaches the page after ~1 s.
+    static constexpr uint32_t kHoldMs = 1000;
+    struct Held {
+        uint32_t value = 0, cand = 0, since = 0;
+        bool has = false;
+        uint32_t commit(uint32_t v, uint32_t now) {
+            if (!has) { has = true; value = cand = v; since = now; }
+            else if (v != cand) { cand = v; since = now; }
+            if (cand != value && uint32_t(now - since) >= kHoldMs) value = cand;
+            return value;
+        }
+    };
+    Held fc_h_, dp_h_, dm_h_, cc1_h_, cc2_h_, vbus_h_;
+    uint32_t fc_ = 0;                                   // the committed (debounced) values the paint reads
+    std::int32_t dp_ = -1, dm_ = -1, cc1_ = -1, cc2_ = -1, vbus_ = -1;
 };
 
 class EmarkerPage final : public PageBase {

@@ -784,13 +784,13 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     const pd::Link &link = ctx_.ui->link();
     TabData d;
     d.r = &r; d.caps = &caps; d.sink = sink;
-    d.ul = fusb302::usb_link(ctx_.analog ? ctx_.analog->dp_mv : -1, ctx_.analog ? ctx_.analog->dm_mv : -1);
+    d.ul = fusb302::usb_link(dp_, dm_);          // the debounced ADC levels (Row D): a jittering pair repaints nothing
     d.waiting = link.attached() && link.waiting();
     d.k2_sink = fusb302::self_powered();
     d.k2_sink_ok = fusb302::pin_rd() == 1;
-    d.fc = ctx_.fc;
+    d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
-    d.vbus_mv = typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv);
+    d.vbus_mv = vbus_;
     // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" the tab replaces its
     // placeholder rows with one short message and the rows that are actually measured. The Sink tab gates
     // on any no-PD verdict (a device on the line that never talks PD); the Source tab only when the source
@@ -813,10 +813,13 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     char buf[kFitBuf];
     constexpr int16_t kKeyDy = kit::row_text_y(kRowPitch, 12), kValDy = kit::row_text_y(kRowPitch, 16);
 
-    // A whole-body pass when the area was wiped or never drawn here (new tab, pop-up closed, empty state left) or the
-    // row count moved (the closing hairline shifts); otherwise a row repaints alone when its hash changed. A live PPS
-    // request moves the Request, Used and Pwr rows every second or two, the other rows stay put.
-    const bool full = redraw || body_ != Body::Rows || body_tab_ != tab_ || body_n_ != R.n;
+    // Fixed row slots (Row D): a whole-body pass only when the area was wiped or never drawn here (new tab,
+    // pop-up closed, empty state left). A row-count change no longer wipes: the vacated slots are cleared and
+    // the closing hairline moves; every other row keeps its slot and repaints alone when its hash changed.
+    // A live PPS request moves the Request, Used and Pwr rows every second or two, the other rows stay put.
+    const bool full = redraw || body_ != Body::Rows || body_tab_ != tab_;
+    const bool count_moved = !full && body_n_ != static_cast<uint8_t>(R.n);
+    const int clear_from = kRowY0 + (body_n_ < R.n ? body_n_ : R.n) * kRowPitch;   // first slot that may be stale
     std::array<uint32_t, kBodyRows> sigs{};
     for (int i = 0; i < R.n; i++) {
         const Rows::R &row = R.r[i];
@@ -830,12 +833,17 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     if (full) {
         gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);   // below the bar's rule
         paint_tab_indicator();
+    } else if (count_moved) {
+        // Only the vacated slots and the old closing rule (the list's empty tail below stays background).
+        const int clear_to = kRowY0 + body_n_ * kRowPitch + 1;
+        gfx_fill(c, 0, static_cast<int16_t>(clear_from), c.w, clear_to - clear_from, kBg);
     }
     for (int i = 0; i < R.n; i++) {
-        if (!full && sigs[static_cast<std::size_t>(i)] == row_sig_[static_cast<std::size_t>(i)]) continue;
+        const int16_t y = static_cast<int16_t>(kRowY0 + i * kRowPitch);
+        const bool in_cleared = count_moved && y >= clear_from;   // the slot was just wiped: repaint whatever the hash says
+        if (!full && !in_cleared && sigs[static_cast<std::size_t>(i)] == row_sig_[static_cast<std::size_t>(i)]) continue;
         painted++;
         const Rows::R &row = R.r[i];
-        const int16_t y = static_cast<int16_t>(kRowY0 + i * kRowPitch);
         if (!full) gfx_fill(c, 0, y, c.w, kRowPitch, kBg);   // the row's own slot only; the next row's hairline is its own
         gfx_fill(c, 0, y, c.w, 1, kRule);
         gfx_text(c, kLabelFont, kKeyX, static_cast<int16_t>(y + kKeyDy), row.key, kDim, kBg);
@@ -850,7 +858,8 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
             gfx_text(c, kSmall, kValX, vy, fit_text(kSmall, all, c.w - kValX - 4, buf), dim ? kStale : row.c, kBg);
         }
     }
-    if (full && R.n < kMaxList) gfx_fill(c, 0, static_cast<int16_t>(kRowY0 + R.n * kRowPitch), c.w, 1, kRule);   // closes the table
+    if ((full || count_moved) && R.n < kMaxList)
+        gfx_fill(c, 0, static_cast<int16_t>(kRowY0 + R.n * kRowPitch), c.w, 1, kRule);   // closes the table (moved with the count)
     body_ = Body::Rows;
     body_tab_ = tab_;
     body_n_ = static_cast<uint8_t>(R.n);
@@ -1013,15 +1022,21 @@ void ConnectionPage::update(uint32_t now_ms) {
     const pd::Emarker &em = fusb302::emarker();
     const pd::VdmInfo &vdm = fusb302::vdm();
     const pd::VdmInfo &snk = fusb302::sink_vdm();
-    const int32_t dp_mv = ctx_.analog ? ctx_.analog->dp_mv : -1;
-    const int32_t dm_mv = ctx_.analog ? ctx_.analog->dm_mv : -1;
-    const int32_t cc1_mv = ctx_.analog ? ctx_.analog->cc1_mv : -1;
-    const int32_t cc2_mv = ctx_.analog ? ctx_.analog->cc2_mv : -1;
-    const int32_t vbus_mv = typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv);
+    // Row D: debounce the volatile inputs before they reach a signature -- the fast-charge verdict, the
+    // ADC levels behind the usb-link family and the Rp reading, and the Type-C row's VBUS. A value must
+    // hold kHoldMs to commit, so a flapping input never even runs match_live() on a steady link.
+    fc_ = fc_h_.commit(uint32_t(ctx_.fc), now_ms);
+    dp_ = static_cast<int32_t>(dp_h_.commit(uint32_t(ctx_.analog ? ctx_.analog->dp_mv : -1), now_ms));
+    dm_ = static_cast<int32_t>(dm_h_.commit(uint32_t(ctx_.analog ? ctx_.analog->dm_mv : -1), now_ms));
+    cc1_ = static_cast<int32_t>(cc1_h_.commit(uint32_t(ctx_.analog ? ctx_.analog->cc1_mv : -1), now_ms));
+    cc2_ = static_cast<int32_t>(cc2_h_.commit(uint32_t(ctx_.analog ? ctx_.analog->cc2_mv : -1), now_ms));
+    const int32_t vbus_mv = static_cast<int32_t>(
+        vbus_h_.commit(uint32_t(typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv)), now_ms));
+    vbus_ = vbus_mv;
     uint32_t c = 2166136261u;
     c = fnv(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
-              | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | uint32_t(ctx_.fc) << 16
+              | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | fc_ << 16
               | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
     c = fnv(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
     c = fnv(c, fusb302::session());
@@ -1053,11 +1068,11 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = fnv(c, uint32_t(snk.num_svids));
     for (int i = 0; i < snk.num_svids; i++) c = fnv(c, snk.svids[i]);
     c = fnv(c, uint32_t(ctx_.analog.has_value()));
-    c = fnv(c, uint32_t(dp_mv));
-    c = fnv(c, uint32_t(dm_mv));
-    c = fnv(c, uint32_t(cc1_mv));
-    c = fnv(c, uint32_t(cc2_mv));
-    c = fnv(c, uint32_t(vbus_mv));   // the Type-C row's VBUS (100 mV steps)
+    c = fnv(c, uint32_t(dp_));
+    c = fnv(c, uint32_t(dm_));   // the debounced ADC levels (Row D): raw jitter is not hashed
+    c = fnv(c, uint32_t(cc1_));
+    c = fnv(c, uint32_t(cc2_));
+    c = fnv(c, uint32_t(vbus_));   // the Type-C row's VBUS (100 mV steps)
     const uint32_t svs = survey_sig(more_);
     c = fnv(c, svs);
     if (sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
@@ -1082,9 +1097,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     // window says so, and its divider level gives the current.
     if (!r.caps_seen && !pd::is_fake() && link.attached() && !fusb302::pd_traffic()) {
         const uint8_t acc = fusb302::active_cc();
-        const int32_t cc_mv = !ctx_.analog ? -1
-            : acc == 2 ? int32_t(ctx_.analog->cc2_mv)
-            : acc == 1 ? int32_t(ctx_.analog->cc1_mv) : -1;
+        const int32_t cc_mv = acc == 2 ? cc2_ : acc == 1 ? cc1_ : -1;   // the debounced line level (Row D)
         if (cc_line_has_rp(cc_mv)) {
             r.typec_rp = true;
             if (!r.typec_ma) r.typec_ma = typec_ma_from_cc_mv(cc_mv);
@@ -1114,7 +1127,7 @@ void ConnectionPage::update(uint32_t now_ms) {
     h = fnv(h, uint32_t(ct.flags) | uint32_t(ct.accepted) << 8 | uint32_t(ct.ready) << 9 | uint32_t(ct.rejected) << 10);
     {   // the tab bodies read more than the match: cable, identity, USB link, protocol, sink mode
         const pd::Identity &id = vdm.identity;
-        const usblink::Link ul = fusb302::usb_link(dp_mv, dm_mv);
+        const usblink::Link ul = fusb302::usb_link(dp_, dm_);   // debounced levels (Row D)
         h = fnv(h, uint32_t(em.valid) | uint32_t(em.is_active) << 1 | uint32_t(em.vid) << 8 | uint32_t(em.raw_vdos[4]) << 24);
         h = fnv(h, em.raw_vdos[4] | uint32_t(em.max_power_w) << 8 | uint32_t(em.sop) << 24);
         h = fnv(h, uint32_t(id.valid) | uint32_t(id.vid) << 8 | uint32_t(id.pid) << 16);
@@ -1127,7 +1140,7 @@ void ConnectionPage::update(uint32_t now_ms) {
         for (int i = 0; i < snk.num_svids; i++) h = fnv(h, snk.svids[i]);
         h = fnv(h, uint32_t(ul.family) | uint32_t(ul.tbt) << 4 | uint32_t(ul.dp) << 8 | uint32_t(ul.cable_limited) << 9 | ul.mbps << 12);
         h = fnv(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3);
-        h = fnv(h, uint32_t(ctx_.fc) | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
+        h = fnv(h, fc_ | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
     }
     if (sig_valid_ && h == sig_) return;
     const bool redraw = !sig_valid_;   // invalidated (page entered, tab, pop-up closed, repaint pass): the area is stale
