@@ -110,6 +110,24 @@ class Cards(unittest.TestCase):
         with self.assertRaises(kr.CardsFailed):
             run(["cards", "show", "3"], chunks(bytes(bad)))
 
+    def test_v8_card_reads_and_shows_the_rebalanced_count(self):
+        # Format v8 (b193e56): a 198-byte payload, the re-balance count at offset 196 (+ a spare), same
+        # layout as tools/report_card.py (PAYLOAD 198, V8_AT 196).
+        rec = bytearray(PAYLOAD)
+        rec[33] = 8
+        rec.extend(b"\0" * (196 - len(rec)))
+        rec.extend(b"\x02\x00")                        # rebalanced = 2, spare
+        rec = bytes(rec)
+        self.assertEqual(len(rec), 198)
+        r, l = run(["cards", "list"], [bytes([0, 1, 1, 3, 0])] + chunks(rec))
+        self.assertEqual(len(l.sent), 1 + 5)           # five 48-byte chunks carry the 198-byte v8 payload
+        self.assertEqual(r["list"][0]["rebalanced"], 2)
+        self.assertIn("rebalanced x2", kr.render("cards", r))            # the list line names the v8 field
+        r, _ = run(["cards", "show", "3"], chunks(rec))
+        self.assertIn("source rebalanced x2", kr.render("cards", r))     # the card text names it too
+        r, _ = run(["cards", "list"], [bytes([0, 1, 1, 3, 0])] + chunks())
+        self.assertNotIn("rebalanced", kr.render("cards", r))            # a card without the count says nothing
+
 
 if __name__ == "__main__":
     unittest.main()
