@@ -386,11 +386,11 @@ One screen for the three parties on the two ports: **Source** (charger), **Cable
 | Cable | Spoof as... | Opens the Spoof page for a saved cable (refused with a live sink) |
 | Cable | Saved cables | Opens the library |
 | Cable | Share (QR) | QR code of the cable record |
-| Sink | Identify | Asks the attached device for identity, SVIDs, modes, sink caps |
+| Sink | Identify | Asks the attached device for identity, SVIDs, modes, sink caps (refused with a live sink inline: the sniffed identity is shown instead, marked "sniff") |
 
 A greyed item tells you why when chosen: "No caps yet", "No cable read", "Live sink: unplug load", "No device seen".
 
-**Read cable** and **Identify** are active: they drive CC and VCONN. Run **Read cable** with the cable alone in the bottom port and no charger or device, and never with a phone or laptop attached. **Identify** only works on an idle CC. Status: both **verified** (cable read and save; Identify on a Pixel).
+**Read cable** and **Identify** are active: they drive CC and VCONN. Run **Read cable** with the cable alone in the bottom port and no charger or device, and never with a phone or laptop attached. **Identify** only works on an idle CC. With a device inline (charger -> K2 -> phone) both are refused - an inline K2 never transmits, so it would be a second device talking on the live wire; the Sink tab then shows what the phone already told the charger on its own, marked "sniff". Status: both **verified** (cable read and save; Identify on a Pixel).
 
 ### Saved cables
 

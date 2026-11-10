@@ -113,7 +113,6 @@ void ConnectionPage::leave() {
     op_ = StrBuf<24>();
     op_until_ = 0;
     id_asked_ = false;
-    ctx_.inline_armed = false;   // a half-given confirm does not outlive the page
     ctx_.em_listen_until = 0;    // nor does a listen window or its "heard nothing" verdict
     ctx_.em_quiet = false;
 }
@@ -143,7 +142,6 @@ void ConnectionPage::close_popup() {
     popup_ = false;
     popup_drawn_ = false;
     sig_valid_ = false;
-    ctx_.inline_armed = false;   // BACK on the pop-up also cancels a half-given inline confirm
 }
 
 PanelLabels ConnectionPage::labels() const {
@@ -242,7 +240,6 @@ void ConnectionPage::build_items() {
 
 void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     if (!it.enabled) return;   // the status bar names the reason while the greyed item is selected
-    bool keep_open = false;
     switch (it.act) {
     case conn::Act::Refresh:
         if (ctx_.ui->run_action(Action::PdRescan, now_ms)) set_op("Rescanning...", now_ms, 1500);
@@ -256,8 +253,9 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
         share_caps(now_ms);
         return;
     case conn::Act::ReadCable:
-        if (!ctx_.ui->run_action(Action::EmarkerScan, now_ms) && !ctx_.inline_armed) set_op("Test running", now_ms);
-        keep_open = ctx_.inline_armed;   // a live sink: the first OK only armed the confirm, the second reads
+        // Inline the Vconn read is refused by the driver (an inline K2 never transmits); the sniff
+        // method stays available and touches nothing.
+        ctx_.ui->run_action(Action::EmarkerScan, now_ms);
         break;
     case conn::Act::SaveCable: {
         const emlib::Result r = storage::lib_save_current();
@@ -280,14 +278,14 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
         share_cable(now_ms);
         return;
     case conn::Act::Identify: {
+        // Inline this is refused outright (no confirm): the driver never transmits inline.
         const bool started = ctx_.ui->run_action(Action::Identify, now_ms);
         id_asked_ = started;
-        if (!started && !ctx_.inline_armed) set_op(ctx_.id_no_device ? "No device to ask" : "Identify refused", now_ms);
-        keep_open = ctx_.inline_armed;
+        if (!started) set_op(ctx_.id_no_device ? "No device to ask" : "Identify refused", now_ms);
         break;
     }
     }
-    if (!keep_open) close_popup();
+    close_popup();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -607,8 +605,11 @@ void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink) {
         link_rows(R, d);
         return;
     }
-    if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
-    else R.add("ID").put("unknown");   // until the sink answers a Discover Identity (the charger's, or Identify's)
+    // The ID row: sniffed when no Identify of this session collected it (inline never asks).
+    if (id.valid) {
+        StrBuf<28> &v = R.add("ID");
+        conn::id_value(v, kValCells, fusb302::identify_current(), id.vid, id.pid, id.vendor);
+    } else R.add("ID").put("unknown");   // until the sink answers a Discover Identity (the charger's own, sniffed)
     if (r.request_seen) {
         put_request(R.add("Request", kAmp), r, *d.caps);
         StrBuf<28> &st = R.add("State", kDim);
@@ -847,9 +848,6 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
     const pd::IdStatus &ids = fusb302::identify_status();
     if (popup_ && popup_sel_ < n_items_ && !items_[static_cast<std::size_t>(popup_sel_)].enabled) {
         txt.put(items_[static_cast<std::size_t>(popup_sel_)].why);
-        tone = FooterTone::Caution;
-    } else if (ctx_.inline_armed) {
-        txt.put("Live sink! OK again");
         tone = FooterTone::Caution;
     } else if (ctx_.em_scanning) {
         txt.put("Reading cable...");

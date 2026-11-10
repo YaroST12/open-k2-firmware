@@ -1226,9 +1226,9 @@ static void test_pd_trigger_refusals() {
     // Identify inline: refused even with a confirm - an inline K2 never transmits; the sniffed
     // identity fills the Sink tab instead.
     g_stub.identifies = 0;
-    CHECK_EQ(int(ui.identify(61300, false)), int(Ui::IdResult::Refused));
+    CHECK_EQ(int(ui.identify(61300)), int(Ui::IdResult::Refused));
     CHECK_EQ(g_stub.identifies, 0);
-    CHECK_EQ(int(ui.identify(61400, true)), int(Ui::IdResult::Refused));
+    CHECK_EQ(int(ui.identify(61400)), int(Ui::IdResult::Refused));
     CHECK_EQ(g_stub.identifies, 0);
     g_stub.pm = {};
     ui.debug_link(false, 69000);                          // detach clears the inline flag

@@ -349,9 +349,8 @@ remote::IdentifyResult Remote::identify_device(uint8_t op) {
     remote::IdentifyResult r;
     if (op != 0) {
         K2LOG("[RMT] identify-device op=%d\n", static_cast<int>(op));
-        switch (ui_.identify(systick::millis(), op == 2)) {
+        switch (ui_.identify(systick::millis())) {
         case Ui::IdResult::Started: break;
-        case Ui::IdResult::NeedConfirm: r.status = remote::Status::NeedConfirm; return r;
         case Ui::IdResult::Refused: r.status = remote::Status::Busy; return r;
         case Ui::IdResult::NoDevice: r.status = remote::Status::BadArg; return r;
         }

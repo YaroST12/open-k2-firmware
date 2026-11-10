@@ -1418,10 +1418,13 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
         K2LOG("[EMARK] Refused: the Ra mode is on (the chip's VCONN switch would fight the Ra on CC1)\n");
         return false;
     }
-    if (inline_now() && !confirmed) {
-        K2LOG("[EMARK] Refused: inline with a live sink; VCONN and SOP' may interrupt charging\n");
+    // An inline K2 never transmits, not even with a confirm: the VCONN scan's SOP' Discover Identity
+    // on a live wire is a second party talking out of sequence (2026-11-10, Hard Reset hand-back).
+    if (inline_now()) {
+        K2LOG("[EMARK] Refused: inline with a live sink; the VCONN/SOP' scan never runs inline\n");
         return false;
     }
+    (void)confirmed;
     const bool tx_was_allowed = g_tx_allowed;
     g_tx_allowed = true;   // the VCONN scan is an active feature: its SOP' Discover Identity goes on the wire
     g_engine.reset_cable();
@@ -2224,7 +2227,13 @@ std::uint32_t caps_count() { return g_caps_count; }
 bool legacy_only_active() { return g_legacy_only; }
 
 bool get_source_caps(bool confirmed) {
-    if (g_active_cc == 0 || (inline_now() && !confirmed)) return false;
+    // Inline the Get_Source_Cap is refused even when confirmed: an inline K2 has no PD role of its own
+    // and any message it sends is a second sink talking out of sequence (2026-11-10).
+    if (g_active_cc == 0 || inline_now()) {
+        K2LOG("[PD] Get_Source_Cap refused (no CC / inline: an inline K2 never transmits)\n");
+        return false;
+    }
+    (void)confirmed;
     g_getcap_armed = true;
     g_getcap_at = systick::millis();
     g_getcap_force = true;  // an explicit request is sent even when caps are already known
@@ -2232,10 +2241,14 @@ bool get_source_caps(bool confirmed) {
 }
 
 bool identify_start(bool confirmed) {
-    if (g_active_cc == 0 || (inline_now() && !confirmed)) {
-        K2LOG("[ID] Identify refused (no CC / inline without confirm)\n");
+    // Inline Identify is refused even when confirmed: the K2's own sink header on a live wire makes it
+    // a second copy of the phone, both partners answer, the GoodCRCs collide and one side resets the
+    // link (2026-11-10, the phone dropped to 5 V). What the wire already showed fills the Sink tab.
+    if (g_active_cc == 0 || inline_now()) {
+        K2LOG("[ID] Identify refused (no CC / inline: an inline K2 never transmits)\n");
         return false;
     }
+    (void)confirmed;
     const pd::SinkState ss = g_sink.status().state;
     if (ss != pd::SinkState::Idle && ss != pd::SinkState::Ready && ss != pd::SinkState::Failed) return false;
     g_ident_session = g_session.id();

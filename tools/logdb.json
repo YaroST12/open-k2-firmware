@@ -424,6 +424,9 @@
   "421": "[RMT] pd request pos=%d mv=%d ma=%d confirm=%d over_load=%d\n",
   "422": "[PD] trigger over-load: far sink attached, no far PD message this attach (lab only)\n",
   "423": "[PIN] lab pin cleared (the far end detached)\n",
-  "424": "[TEST] preflight refused: %s (%d mV)\n"
+  "424": "[TEST] preflight refused: %s (%d mV)\n",
+  "425": "[EMARK] Refused: inline with a live sink; the VCONN/SOP' scan never runs inline\n",
+  "426": "[PD] Get_Source_Cap refused (no CC / inline: an inline K2 never transmits)\n",
+  "427": "[ID] Identify refused (no CC / inline: an inline K2 never transmits)\n"
  }
 }

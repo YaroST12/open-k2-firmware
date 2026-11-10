@@ -114,7 +114,7 @@ int wrap(std::string_view text, std::size_t width, std::array<std::string_view, 
 
 // ---- survey (what Refresh reads, ui side) ------------------------------------------------------------
 // The survey fields a tab shows: the Source tab everything the wire answers, the Cable tab the cable, the Sink tab none (its side
-// is passive; Identify stays a confirmed action).
+// is passive; Identify is refused inline and shows the sniffed identity instead).
 constexpr bool tab_shows(Tab t, pd::SvField f) {
     return t == Tab::Source ? f != pd::SvField::Cable : t == Tab::Cable ? f == pd::SvField::Cable : false;
 }
@@ -274,6 +274,23 @@ bool protocol_text(std::span<const std::uint16_t> svids, StrBuf<N> &out) {
         out.put(nm);
     }
     return !out.view().empty();
+}
+
+// The ID row's value on the Sink tab: "VID:PID" always; the vendor name only when this session's
+// Identify collected the answer (`asked`), and a "sniff " prefix when the identity was only heard
+// on the wire - an inline K2 never asks, so the phone's answer to the charger's own Discover
+// Identity is shown as sniffed. `val_cells` is the value column's width; the mark and the name are
+// kept whole or left out, never cut.
+template <std::size_t N>
+void id_value(StrBuf<N> &out, int val_cells, bool asked, std::uint16_t vid, std::uint16_t pid, const char *vendor) {
+    out.clear();
+    if (!asked && out.view().size() + 6 + 9 <= static_cast<std::size_t>(val_cells)) out.put("sniff ");
+    out.put_hex(vid, 4).put_char(':').put_hex(pid, 4);
+    if (asked && vendor && vendor[0] &&
+        out.view().size() + 1 + std::string_view(vendor).size() <= static_cast<std::size_t>(val_cells)) {
+        out.put_char(' ');
+        out.put(vendor);
+    }
 }
 
 }  // namespace k2::conn

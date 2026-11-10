@@ -484,6 +484,9 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
 
 bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
     ContentViewport viewport(layout_.content);
+    // The confirm flag no longer overrides any refusal: inline, every active TX (Identify, the VCONN
+    // cable read) is refused outright - an inline K2 has no PD role of its own (2026-11-10).
+    (void)confirm;
     if (ports_busy() && a != Action::FcReset) {
         K2LOG("[TEST] action refused: charger test owns ports\n");
         return false;
@@ -507,30 +510,18 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         break;
     case Action::EmarkerScan: {
         // The method follows the link: nothing supplies VBUS = inject VCONN and ask the cable; a source
-        // present = listen only (it is the VCONN source and asks the cable at attach). Only the active
-        // one can disturb a live sink, so only it needs the inline confirm.
+        // present = listen only (it is the VCONN source and asks the cable at attach). The active Vconn
+        // method is refused inline by the driver - there is no confirm for it any more.
         const pd::EmarkerMode mode = pd::emarker_mode(link_.attached(), ctx_.pm_online, ctx_.vbus_fast_mv);
         K2LOG("[EMK] mode=%s attached=%d inline=%d stale=%d pm_online=%d vbus=%dmV cable_seq=%u seen=%u\n",
                     mode == pd::EmarkerMode::Sniff ? "sniff" : "vconn", int(link_.attached()), int(link_.inline_mode()),
                     int(link_.cable_stale()), int(ctx_.pm_online), int(ctx_.vbus_fast_mv),
                     unsigned(fusb302::cable_seq()), unsigned(cable_seq_seen_));
-        if (mode == pd::EmarkerMode::Vconn && link_.inline_mode() && !confirm) {
-            const bool armed = ctx_.inline_armed && confirm_action_ == a && now_ms < confirm_until_;
-            if (!armed) {
-                ctx_.inline_armed = true;
-                confirm_action_ = a;
-                confirm_until_ = now_ms + kConfirmWindowMs;
-                K2LOG("[UI] e-marker scan inline: charging may be interrupted, confirm to continue\n");
-                refresh_action_views(now_ms);
-                return false;
-            }
-        }
-        ctx_.inline_armed = false;
         ctx_.em_scanning = true;
         ctx_.em_listen_until = 0;
         ctx_.em_quiet = false;
         refresh_action_views(now_ms);
-        bool found = fusb302::read_emarker(link_.inline_mode(), mode);
+        bool found = fusb302::read_emarker(false, mode);
         // A sniff only reports what the engine still holds. After a cable swap that is the OLD cable's
         // data: it is not a scan, so it must not clear the stale flag (a new cable_seq does, in tick()).
         if (found && mode == pd::EmarkerMode::Sniff && link_.cable_stale() && fusb302::cable_seq() == cable_seq_seen_) {
@@ -538,7 +529,10 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
             found = false;
         }
         ctx_.em_scanning = false;
-        if (found || mode == pd::EmarkerMode::Vconn) {   // a listen that heard nothing is not a scan
+        if (mode == pd::EmarkerMode::Vconn && link_.inline_mode()) {
+            // refused by the driver (an inline K2 never transmits): no scan ran, so no scan mark
+            // and no listen window either
+        } else if (found || mode == pd::EmarkerMode::Vconn) {   // a listen that heard nothing is not a scan
             ctx_.em_scanned = true;
             link_.emarker_scanned(now_ms);
             cable_seq_seen_ = fusb302::cable_seq();
@@ -550,20 +544,10 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         break;
     }
     case Action::Identify:
-        if (link_.inline_mode() && !confirm) {
-            const bool armed = ctx_.inline_armed && confirm_action_ == a && now_ms < confirm_until_;
-            if (!armed) {
-                ctx_.inline_armed = true;
-                confirm_action_ = a;
-                confirm_until_ = now_ms + kConfirmWindowMs;
-                K2LOG("[UI] identify inline: it talks to a live sink, confirm to continue\n");
-                refresh_action_views(now_ms);
-                return false;
-            }
-        }
-        ctx_.inline_armed = false;
+        // Inline there is no confirm: an inline K2 never transmits (a second sink on a live wire
+        // resets the link, 2026-11-10). The driver refuses; the Sink tab shows the sniffed identity.
         {
-            const IdResult r = identify(now_ms, true);
+            const IdResult r = identify(now_ms);
             refresh_action_views(now_ms);
             return r == IdResult::Started;
         }
@@ -658,20 +642,22 @@ void Ui::trigger_hard_reset(uint32_t now_ms) {
     current().update(now_ms);
 }
 
-Ui::IdResult Ui::identify(uint32_t now_ms, bool confirm) {
+Ui::IdResult Ui::identify(uint32_t now_ms) {
     ContentViewport viewport(layout_.content);
     if (ports_busy()) {
         K2LOG("[TEST] Identify refused: test running\n");
         return IdResult::Refused;
     }
-    if (link_.inline_mode() && !confirm) return IdResult::NeedConfirm;
+    // Inline the driver refuses below (identify_start never transmits inline); what the wire already
+    // showed - the phone's Discover Identity ACK, Sink_Capabilities, Requests - fills the Sink tab,
+    // marked as sniffed.
     ctx_.id_no_device = ctx_.no_device();
     if (ctx_.id_no_device) {   // nothing on CC and no VBUS: transmitting would only burn the retries
         K2LOG("[UI] identify refused: no device (no Rp on CC, VBUS low)\n");
         refresh_action_views(now_ms);
         return IdResult::NoDevice;
     }
-    const bool ok = fusb302::identify_start(confirm);
+    const bool ok = fusb302::identify_start();
     K2LOG("[UI] identify %s\n", ok ? "started" : "refused");
     refresh_action_views(now_ms);
     return ok ? IdResult::Started : IdResult::Refused;
@@ -898,7 +884,6 @@ void Ui::tick(uint32_t now_ms) {
     link::set_inline_mode(link_.inline_mode());
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
-    if (ctx_.inline_armed && now_ms >= confirm_until_) ctx_.inline_armed = false;
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
     update_hold_card(now_ms);

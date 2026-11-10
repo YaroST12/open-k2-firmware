@@ -77,8 +77,7 @@ struct UiContext {
     bool em_scanning = false;
     uint32_t em_listen_until = 0;   // passive listen window after a sniff that heard nothing (0 = none)
     bool em_quiet = false;          // the last listen window ended without a cable reply
-    bool inline_mode = false;    // a live sink is attached: active operations are gated
-    bool inline_armed = false;   // first OK given, waiting for the second
+    bool inline_mode = false;    // a live sink is attached: active operations are gated (refused, no confirm)
     std::optional<adc::Reading> analog;                          // averaged ADC sweep, once available
     fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
     bool trig_armed = false;     // trigger above 5 V: first OK given, waiting for the second

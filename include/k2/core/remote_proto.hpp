@@ -321,7 +321,7 @@ enum class Cmd : uint8_t {
     BootInfo = 0x35,    // how this boot decided its mode: K2B1 text and first-seconds samples, see above
     // Active PD (wave 2C). Every one of them is refused inline; a request above 5 V needs the
     // confirm flag (Status::NeedConfirm without it). Ids 0x31/0x32 belong to DebugFault/Fc.
-    IdentifyDevice = 0x40,  // [op] 0 status, 1 start, 2 start + confirm (inline) -> IdentifySnapshot
+    IdentifyDevice = 0x40,  // [op] 0 status, 1 start, 2 start (same as 1; the inline refusal has no confirm) -> IdentifySnapshot
     PdRequest = 0x41,       // [pos, flags (bit0 confirm, bit1 over-load lab-only), mv u16, ma u16] -> [pd::Err]
     PdReset = 0x42,         // hard reset (the supply comes back at 5 V)
     PdTriggerStatus = 0x43, // -> PdTriggerSnapshot

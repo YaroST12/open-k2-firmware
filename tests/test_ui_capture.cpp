@@ -981,7 +981,7 @@ int main() {
         ui.debug_link(false, 14770);
         ui.tick(14800);
         ui.tick(14805);
-        CHECK_EQ(int(ui.identify(14810, false)), int(Ui::IdResult::NoDevice));
+        CHECK_EQ(int(ui.identify(14810)), int(Ui::IdResult::NoDevice));
         CHECK_EQ(g_stub.identifies, 0);                              // nothing was transmitted
         ui.tick(14815);
         ui.on_button(Button::Ok, ButtonEvent::Short, 14817);     // pop-up: Identify is greyed, the status bar names why

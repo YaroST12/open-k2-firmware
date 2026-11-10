@@ -648,7 +648,7 @@ const char* lab_pd(const lab::Cmd& c) {
     l.t("started", ok && e == pd::Err::Ok);
     l.s("err", pd::err_name(e));
     l.send();
-    return ok ? nullptr : "refused (no CC, or inline without confirm)";
+    return ok ? nullptr : "refused (no CC, or inline: an inline K2 never transmits)";
 }
 
 const char* lab_run(const lab::Cmd& c) {

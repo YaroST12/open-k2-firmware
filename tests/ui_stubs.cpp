@@ -168,11 +168,17 @@ const pd::SinkStatus& sink_status() { return g_stub.sink; }
 const pd::XiaomiTrace& xiaomi_trace() { return g_stub.xm; }
 pd::Err epr_info_request(bool force) { g_stub.epr_info_asks++; g_stub.epr_info_forced = force; return g_stub.epr_info_err; }
 const pd::SourceCaps& epr_info_list() { return g_stub.epr_info_caps; }
-bool get_source_caps(bool confirmed) { g_stub.getcaps++; g_stub.last_confirmed = confirmed; return true; }
+bool get_source_caps(bool confirmed) {
+    if (g_stub.inl) return false;   // the real driver refuses inline, confirmed or not
+    g_stub.getcaps++; g_stub.last_confirmed = confirmed; return true;
+}
 pd::Err refresh_source_caps() { g_stub.refresh_asks++; return g_stub.refresh_err; }
 std::uint32_t caps_count() { return g_stub.caps.rx_count; }
 bool legacy_only_active() { return g_stub.legacy_active; }
-bool identify_start(bool confirmed) { g_stub.identifies++; g_stub.last_confirmed = confirmed; return g_stub.identify_ok; }
+bool identify_start(bool confirmed) {
+    if (g_stub.inl) return false;   // the real driver refuses inline even with a confirm
+    g_stub.identifies++; g_stub.last_confirmed = confirmed; return g_stub.identify_ok;
+}
 void identify_abort() {}
 bool probe_start() { g_stub.probes++; return g_stub.probe_ok; }
 void probe_abort() {}

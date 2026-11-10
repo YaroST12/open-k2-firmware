@@ -95,9 +95,10 @@ public:
     TriggerOutcome device_trigger(const pd::Choice &c, uint32_t now_ms);   // OK twice
     void trigger_release(uint32_t now_ms);       // back to 5 V
     void trigger_hard_reset(uint32_t now_ms);
-    // Identify the port partner. Inline it needs `confirm` (remote) or the device's second OK.
-    enum class IdResult : uint8_t { Started, NeedConfirm, Refused, NoDevice };
-    IdResult identify(uint32_t now_ms, bool confirm);
+    // Identify the port partner. Inline it is refused (an inline K2 never transmits); the sniffed
+    // identity shows on the Sink tab instead.
+    enum class IdResult : uint8_t { Started, Refused, NoDevice };
+    IdResult identify(uint32_t now_ms);
     // Remote `debug detach` / `debug attach`: hold the link state until the next Rescan.
     void debug_link(bool attached, uint32_t now_ms);
     void debug_fake_pdos(uint8_t n, uint32_t now_ms);   // n PDOs injected; 0 clears them, the forced link and the live list
@@ -259,8 +260,6 @@ private:
     uint32_t last_update_ms_ = 0;
     uint32_t cable_seq_seen_ = 0;   // fusb302::cable_seq() last folded into the link state
     pd::Link link_;
-    uint32_t confirm_until_ = 0;
-    Action confirm_action_ = Action::PdRescan;
     uint32_t trig_until_ = 0;
     pd::Choice trig_choice_{};
 

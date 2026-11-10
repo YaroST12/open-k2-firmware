@@ -101,8 +101,10 @@ bool cc_open(std::uint32_t ms);
 void legacy_only(bool on);
 std::uint32_t pd_quiet_ms();
 
-// The caller (Ui, through pd::Link) tells the driver a real sink is attached. While inline the
-// active tools (trigger, Identify, Get_Source_Cap, the VCONN e-marker scan) refuse unless confirmed.
+// The caller (Ui, through pd::Link) tells the driver a real sink is attached. While inline every
+// active tool (trigger, Identify, Get_Source_Cap, the VCONN e-marker scan, the VDM probe) refuses -
+// a confirm does not override that: an inline K2 has no PD role of its own and any message it sends
+// is a second sink talking out of sequence on a live wire (2026-11-10).
 // Inline does not change the chip: it is passive (Auto-CRC off) except during an active operation.
 void set_inline(bool on);
 bool inline_mode();
@@ -157,7 +159,8 @@ void clear_source();
 
 // Read the cable's e-marker; the result is in emarker(). `mode` comes from pd::emarker_mode():
 //  Vconn (nothing supplies VBUS): inject VCONN and send SOP' Discover Identity, trying both
-//        orientations. Blocks ~0.1 to 0.5 s. Inline it refuses (false, logged) unless `confirmed`.
+//        orientations. Blocks ~0.1 to 0.5 s. Inline it refuses (false, logged), with or without
+//        `confirmed` - an inline K2 never transmits.
 //  Sniff (a source is attached): touch nothing on CC, only report what the source's own SOP'
 //        Discover Identity exchange already gave us (poll() decodes it whenever it is heard).
 // True if the cable data is valid.
@@ -227,8 +230,9 @@ const pd::XiaomiTrace& xiaomi_trace();
 pd::Err epr_info_request(bool force = false);
 const pd::SourceCaps& epr_info_list();
 
-// Ask the source for its capabilities now. Inline it needs `confirmed`. Sent by the driver outside the sink's gate: the lab
-// shell only. The Connection page's Refresh uses refresh_source_caps().
+// Ask the source for its capabilities now. Inline it refuses, confirmed or not (an inline K2 never
+// transmits). Sent by the driver outside the sink's gate: the lab shell only. The Connection page's
+// Refresh uses refresh_source_caps().
 bool get_source_caps(bool confirmed = false);
 
 // The Connection page's Refresh on a live contract (core/rescan.cpp): the sink's own Get_Source_Cap through its one message gate
@@ -241,7 +245,8 @@ std::uint32_t caps_count();
 bool legacy_only_active();
 
 // Identify the port partner (SOP Discover Identity / SVIDs / Modes, Get_Sink_Cap, Get_Status,
-// Get_Revision), only on an idle CC line. False when refused: no CC, or inline without `confirmed`.
+// Get_Revision), only on an idle CC line. False when refused: no CC, or inline (even when
+// `confirmed`: an inline K2 never transmits; the sniffed identity shows on the Sink tab instead).
 bool identify_start(bool confirmed = false);
 void identify_abort();
 const pd::IdStatus& identify_status();

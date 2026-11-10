@@ -307,7 +307,7 @@ static void test_actions() {
     actions(Tab::Cable, a, it);
     CHECK_EQ(it[2].enabled, false);
     CHECK_STR(it[2].why, "Live sink: unplug load");
-    CHECK_EQ(it[0].enabled, true);                                           // Read cable stays (it has its own inline confirm)
+    CHECK_EQ(it[0].enabled, true);                                           // Read cable stays (inline the driver refuses it, no confirm)
     CHECK_EQ(it[5].enabled, true);                                           // Refresh stays: the survey blocks its own fields
     a.cable_valid = false;
     actions(Tab::Cable, a, it);
@@ -351,6 +351,24 @@ static void test_protocol() {
     CHECK_EQ(std::string(s.c_str()).find("0x") == std::string::npos, true);
 }
 
+// The Sink tab's ID row: a sniffed identity is marked "sniff VID:PID" (an inline K2 never asks),
+// an asked one shows the vendor name when it fits the value column whole.
+static void test_id_value() {
+    StrBuf<28> s;
+    conn::id_value(s, 19, false, 0x05C6, 0x209E, "OnePlus");
+    CHECK_STR(s.c_str(), "sniff 05C6:209E");                                  // the vendor is dropped for the mark
+    conn::id_value(s, 19, true, 0x05AC, 0x1A2B, "Apple");
+    CHECK_STR(s.c_str(), "05AC:1A2B Apple");
+    conn::id_value(s, 19, true, 0x05AC, 0x1A2B, nullptr);
+    CHECK_STR(s.c_str(), "05AC:1A2B");
+    conn::id_value(s, 19, true, 0x18D1, 0x4EE1, "VeryLongVendorName");        // kept whole or left out
+    CHECK_STR(s.c_str(), "18D1:4EE1");
+    conn::id_value(s, 19, false, 0x05C6, 0x209E, nullptr);
+    CHECK_STR(s.c_str(), "sniff 05C6:209E");
+    conn::id_value(s, 14, false, 0x05C6, 0x209E, nullptr);                     // a narrow column: no room for the mark
+    CHECK_STR(s.c_str(), "05C6:209E");
+}
+
 int main() {
     test_default_tab();
     test_tab_empty();
@@ -363,5 +381,6 @@ int main() {
     test_survey_words();
     test_actions();
     test_protocol();
+    test_id_value();
     return test_report("test_ui_connection");
 }
