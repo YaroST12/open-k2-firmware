@@ -398,16 +398,24 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   inline refusals use) so the tool says "refused: inline - the Sink tab shows the sniffed identity"; a running charger
   test stays "busy". Host tests on the mapping and the k2_remote text.
 - **A `pd-reread` leaves the contract held: START refuses "tool busy"** (2026-11-10, b14c1b9, UGREEN Nexode Air 65 W
-  on the top plug, `runs/2026-11-10-merge2-hw/ugreen-pd.txt`): after a plain `k2_remote.py pd-reread` (reread done,
+  on the top plug, `runs/2026-11-10-merge2-hw/ugreen-pd.txt`; fixed in 3b3fb2c, hardware check pending): after a plain
+  `k2_remote.py pd-reread` (reread done,
   7 PDOs) `pd status` reads `held=True pdo=1 5 V`, and `ct_start.py` START is refused "[TEST] preflight refused: tool
   busy (5100 mV)" - twice, also after `pd-reread --abort` (the run had already ended, so abort had nothing to release).
   Only `pd release` cleared `held`. Fix: a re-read that ends leaves no held contract behind (or START treats a re-read's
   own leftover PDO 1 hold as its to take over, like the self-hold); the refusal says which tool holds it ("re-read
   holds 5 V: pd release"). Host test: re-read done -> START allowed.
+  Done in 3b3fb2c: a finished re-read's own leftover PDO 1 5 V hold (its linger, `pd::reread_own_hold`) is taken over
+  like the self-hold - `Ui::busy_reason()` lets START through and the Ra arming treats it as self_hold, so both the
+  preflight and `ct_start.py --cable ...` proceed; a user trigger's hold still blocks. Every START refusal now prints
+  its reason: the busy preflight line names the holding tool, the cable-arm refusal is logged, and ct_start.py prints
+  any `[TEST] ... refused` log line with the run id.
   Again on 72c2e28 (CUKTECH C1, top plug): after `pd-reread` + `pd release` (`pd status`: ready, held=False, pdo=1)
   `ct_start.py --cable builtin:cuktech-6a` ended "START did not start a run" with NO reason printed; a K2 reboot cleared
   it and the run passed 21 / 0 / 3. So a re-read's leftover contract blocks START even when `held` reads False, and the
   refusal can be silent - every START refusal must print its reason (B3 rule).
+  Done in 3b3fb2c: the leftover Ready contract no longer refuses the Ra arming (emkra self_hold), and the arm refusal
+  is logged ("[TEST] cable arm refused: %s") and printed by ct_start.py.
 - **After that release the whole PD run failed "no PD after re-attach" at 5.10 V** (2026-11-10, same rig, right after
   re-read -> abort -> `pd release` -> `pd-reread --pin 0 --no-run`): 0 pass / 25 fail, VBUS 5.10 V the whole run, every
   row "no PD after re-attach" - the source never saw the K2's planned re-attach (VBUS never dropped). Not yet known
