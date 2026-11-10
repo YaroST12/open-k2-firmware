@@ -407,6 +407,36 @@ static void test_a_sink_on_the_far_cc_is_possibly_inline() {
     CHECK_EQ(l.inline_mode(), 0);                          // proof: 10 s without it
 }
 
+// A phone ALONE on the port (dual-role, no charger, VBUS dark): its toggling Rp reads as a sink's Rd part of the time and the
+// raw VBUS sample spikes now and then, so the Link never sees 300 ms of continuous dark and stays attached (coordinator,
+// 2026-11-10: "inline: True" for minutes with active_cc 2 and no VBUS). A sink's Rd with no VBUS ever up is no contract: it must
+// neither latch the inline state nor hold a latched one (it blocked the idle wake's dark-attach release, which needs the K2
+// not to be inline).
+static LinkInput pixel_alone(std::uint32_t t) {
+    LinkInput i = inl(t, (t / 20) % 10 == 0 ? 900 : 0, 0, 0, false);   // a spike every 200 ms: no 300 ms of continuous dark
+    i.cc = 2;                                                           // the stale passive attach
+    i.far_sink_cc = true;                                               // the Rd-like level (steady in this model: the worst case)
+    return i;
+}
+
+static void test_a_dark_phone_alone_never_holds_the_inline_latch() {
+    Link l;
+    for (std::uint32_t t = 0; t < 60000; t += 20) l.update(pixel_alone(t));
+    CHECK_EQ(l.attached(), 1);        // the premise: the spikes keep the Link attached
+    CHECK_EQ(l.inline_mode(), 0);     // a sink's Rd with no VBUS in sight is not a contract
+
+    Link k;                           // a latch from the charger it was plugged into earlier, then the charger leaves
+    for (std::uint32_t t = 0; t < 4000; t += 20) {
+        LinkInput i = inl(t, 5000, 0, 0, false);
+        i.cc = 2;
+        i.far_sink_cc = true;
+        k.update(i);
+    }
+    CHECK_EQ(k.inline_mode(), 1);     // VBUS up and a sink's Rd: the latch is right while the contract lives
+    for (std::uint32_t t = 4000; t < 4000 + 3000 + kInlineQuietMs + 1000; t += 20) k.update(pixel_alone(t));
+    CHECK_EQ(k.inline_mode(), 0);     // the charger is gone: the dark evidence stops holding it
+}
+
 // 5 V alone (a hub or a plain charger, nobody behind the K2) never latches.
 static void test_five_volts_alone_is_a_standalone_k2() {
     Link l;
@@ -496,6 +526,7 @@ int main() {
     test_a_boot_into_a_live_contract_is_possibly_inline_and_stays();
     test_a_voltage_the_k2_set_itself_is_never_foreign();
     test_a_sink_on_the_far_cc_is_possibly_inline();
+    test_a_dark_phone_alone_never_holds_the_inline_latch();
     test_five_volts_alone_is_a_standalone_k2();
     test_force();
     test_format_ago();
