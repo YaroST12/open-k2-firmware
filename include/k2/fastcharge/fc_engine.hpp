@@ -152,6 +152,7 @@ public:
 private:
     enum class Phase : std::uint8_t {
         Off,
+        RedetectHold,                                             // lines at 0 V until the charger's 500 ms re-detection hold is over
         HsDischarge, HsFloatDp, HsBias, HsSample, HsWaitDrop,     // HVDCP handshake
         Qc2Settle,
         Qc3Enter, Qc3Loop,
@@ -172,6 +173,7 @@ private:
         std::uint8_t reg, val;
         std::uint16_t wait_ms;
     };
+    void begin_protocol();   // the AFC / VOOC / UFCS / vivo openings, after the re-detection hold
     void build_script();
     void run_script();
     void keep_alive();

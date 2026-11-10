@@ -1136,6 +1136,38 @@ static void qc_redetect_waits_the_500ms_hold() {
     CHECK(f.start(Proto::Qc2, 9000, true) == Fail::None);
     d.run(f, 120);
     CHECK(d.dp != Drive::V0);
+
+    // The same hold stands before the opening of AFC, VOOC, UFCS and vivo: their first move (the D+ 0.6 V settle, the wake train,
+    // the UART claim) waits for it, the lines stay at 0 V meanwhile; a start after a long rest opens at once.
+    struct Probe : FakeCharger {
+        int ufcs_opens = 0, vivo_opens = 0;
+        bool ufcs_open() override { ++ufcs_opens; return false; }
+        bool vivo_open() override { ++vivo_opens; return false; }
+    };
+    for (const Proto p : {Proto::Afc, Proto::Vooc, Proto::Ufcs, Proto::Vivo}) {
+        for (const bool rested : {false, true}) {
+            Probe g;
+            Engine h(g);
+            CHECK(h.start(Proto::Qc3, 9000, true) == Fail::None);
+            g.run(h, 6000);
+            h.stop();
+            g.run(h, rested ? 3000 : 120);
+            const auto opened = [&] {
+                return !g.sent.empty() || g.wakes > 0 || g.ufcs_opens > 0 || g.vivo_opens > 0 || g.dp == Drive::V0p6;
+            };
+            CHECK(h.start(p, p == Proto::Afc ? 9000 : 5000, true) == Fail::None);
+            const std::uint32_t u0 = g.now;
+            bool early = false;
+            while (g.now - u0 < 300) { g.run(h, 1); early |= opened(); }   // 420 ms after the reset
+            if (rested) {
+                CHECK(early);
+            } else {
+                CHECK(!early && g.dp == Drive::V0 && g.dm == Drive::V0 && h.state() == State::Negotiating);
+                g.run(h, 250);                                              // past the 500 ms hold
+                CHECK(opened());
+            }
+        }
+    }
 }
 
 // The windows in which the main loop must not be held by a redraw: the ones the engine times itself from poll() (the HVDCP

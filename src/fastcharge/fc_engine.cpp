@@ -758,6 +758,35 @@ void Engine::vooc_wake() {
     band_ms_ = env_.now_ms();
 }
 
+// The first move of a protocol that has no HVDCP handshake; start() calls it at once or when RedetectHold ends.
+void Engine::begin_protocol() {
+    const Proto p = proto_;
+    if (p == Proto::Afc) {          // no HVDCP handshake: D+ at 0.6 V, D- idle low, then the ping
+        env_.set_dp(Drive::V0p6);
+        env_.set_dm(Drive::V0);
+        go(Phase::AfcSettle, kAfcSettleMs);
+    } else if (p == Proto::Ufcs) {  // the handshake and the UART claim happen in ufcs_open()
+        caps_.ufcs_n = ux_n_ = 0;
+        ufcs_clear();
+        utries_ = 0;
+        go(Phase::UfcsOpen, 0);
+    } else if (p == Proto::Vivo) {  // no D+/D- handshake: vivo_open() claims the UART with the lines high-Z
+        ux_n_ = 0;
+        go(Phase::VivoOpen, 0);
+    } else {                        // VOOC / SVOOC
+        vooc_ = vooc::Responder(p == Proto::Vooc ? vooc::Mode::Vooc
+                                : p == Proto::SuperVooc ? vooc::Mode::SuperVooc5A : vooc::Mode::SuperVooc65A);
+        vooc_cmds_ = vooc_frames_ = vooc_svooc_ = 0;
+        vooc_ident_ = false;
+        vooc_accepted_ = false;
+        applied_mv_ = kVoocGuardMv;   // the adapter may ramp on its own: the guard is 12 V, not the 5 V request
+        vooc_tries_ = 0;
+        vooc_wake();
+        go(Phase::VoocListen, 0);
+        band_ms_ = env_.now_ms();
+    }
+}
+
 Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma, int ufcs_ma) {
     if (state_ == State::Negotiating || state_ == State::Active) return Fail::Busy;
     const Fail f = validate(p, target_mv, confirmed);
@@ -778,42 +807,25 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     band_ms_ = lost_ms_ = 0;
     sends_ = ok_sends_ = 0;
     acked_ = false;
-    if (p == Proto::Afc) {          // no HVDCP handshake: D+ at 0.6 V, D- idle low, then the ping
-        env_.set_dp(Drive::V0p6);
-        env_.set_dm(Drive::V0);
-        go(Phase::AfcSettle, kAfcSettleMs);
-        return Fail::None;
-    }
-    if (p == Proto::Vooc || p == Proto::SuperVooc || p == Proto::SuperVooc65) {
-        vooc_ = vooc::Responder(p == Proto::Vooc ? vooc::Mode::Vooc
-                                : p == Proto::SuperVooc ? vooc::Mode::SuperVooc5A : vooc::Mode::SuperVooc65A);
-        vooc_cmds_ = vooc_frames_ = vooc_svooc_ = 0;
-        vooc_ident_ = false;
-        vooc_accepted_ = false;
-        applied_mv_ = kVoocGuardMv;   // the adapter may ramp on its own: the guard is 12 V, not the 5 V request
-        vooc_tries_ = 0;
-        vooc_wake();
-        go(Phase::VoocListen, 0);
-        band_ms_ = now;
-        return Fail::None;
-    }
-    if (p == Proto::Ufcs) {         // the handshake and the UART claim happen in ufcs_open()
-        caps_.ufcs_n = ux_n_ = 0;
-        ufcs_clear();
-        utries_ = 0;
-        go(Phase::UfcsOpen, 0);
-        return Fail::None;
-    }
-    if (p == Proto::Vivo) {         // no D+/D- handshake: vivo_open() claims the UART with the lines high-Z
-        ux_n_ = 0;
-        go(Phase::VivoOpen, 0);
+    // Re-detection right after a session: the lines stay at 0 V until the 500 ms hold since that release is over (pattern
+    // qc-redetect-after-reset). Every protocol waits for it, not only the HVDCP ones: fctrig::start cancels the reset's own hold,
+    // so a first move made inside it (the AFC settle, the VOOC wake, the UFCS / vivo UART claim) ran against a charger still
+    // re-detecting. The openings that need no D+/D- handshake are deferred to RedetectHold's end.
+    const std::uint32_t since = reset_seen_ ? now - reset_ms_ : kRedetectHoldMs;
+    const std::uint32_t hold = since < kRedetectHoldMs ? kRedetectHoldMs - since : 0;
+    if (p == Proto::Afc || p == Proto::Vooc || p == Proto::SuperVooc || p == Proto::SuperVooc65 || p == Proto::Ufcs ||
+        p == Proto::Vivo) {
+        if (hold > 0) {
+            env_.set_dp(Drive::V0);
+            env_.set_dm(Drive::V0);
+            go(Phase::RedetectHold, hold);
+            return Fail::None;
+        }
+        begin_protocol();
         return Fail::None;
     }
     env_.set_dp(Drive::V0);
     env_.set_dm(Drive::V0);
-    // Re-detection right after a session: the lines stay at 0 V until the 500 ms hold since that release is over.
-    const std::uint32_t since = reset_seen_ ? env_.now_ms() - reset_ms_ : kRedetectHoldMs;
-    const std::uint32_t hold = since < kRedetectHoldMs ? kRedetectHoldMs - since : 0;
     if (p == Proto::Scp) {
         go(Phase::HsbReset, std::max<std::uint32_t>(qc::kHsbResetMs, hold));
         return Fail::None;
@@ -825,7 +837,7 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
 Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
     if (state_ != State::Negotiating && state_ != State::Active) return Fail::Unsupported;
     if (phase_ == Phase::VoocListen) return Fail::Unsupported;   // the VOOC output never leaves 5 V
-    if (phase_ == Phase::HsDischarge || phase_ == Phase::HsFloatDp || phase_ == Phase::HsBias ||
+    if (phase_ == Phase::RedetectHold || phase_ == Phase::HsDischarge || phase_ == Phase::HsFloatDp || phase_ == Phase::HsBias ||
         phase_ == Phase::HsSample || phase_ == Phase::HsWaitDrop || phase_ == Phase::UfcsOpen ||
         phase_ == Phase::UfcsPing || phase_ == Phase::UfcsCaps || phase_ == Phase::UfcsRequest ||
         phase_ == Phase::UfcsPower || phase_ == Phase::VivoOpen || phase_ == Phase::VivoSeq) {
@@ -948,6 +960,9 @@ void Engine::poll() {
         return abort(Fail::Overvoltage);
 
     switch (phase_) {
+    case Phase::RedetectHold:
+        if (now < due_ms_) return;
+        return begin_protocol();
     case Phase::HsDischarge:
         if (now < due_ms_) return;
         env_.set_dp(Drive::HiZ);
