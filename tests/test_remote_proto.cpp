@@ -1523,6 +1523,31 @@ static void test_charger_test_wire() {
     CHECK_EQ(f.fc_calls + f.releases + f.resets + f.store_calls + f.reboots + f.shots, 0);
 }
 
+// QA 2026-11-10 row B item 2 (red): a deep-sweep row goes over the wire with the sweep flag set (row flags bit 5)
+// and its detail byte carrying the recorded point count - the in-RAM marker kDetailSweep (161) stays on the step,
+// but the host must read the 61 points the sweep logged, not the marker 161.
+static void test_sweep_row_wire_carries_points() {
+    namespace ct = k2::charger_test;
+    Fake f; Frame r;
+    std::array<ct::Step, 1> steps{};
+    steps[0] = {.group = ct::Group::Pd, .algorithm = ct::Algorithm::Pps, .pos = 6, .mv = 5000, .ma = 1000,
+                .verdict = ct::Verdict::Pass, .detail = ct::kDetailSweep, .pdo = 0xC0DC3240};
+    std::array<k2::ctsweep::RowView, 1> rows{};
+    rows[0] = {.pos = 6, .alg = uint8_t(ct::Algorithm::Pps), .lo_mv = 5000, .hi_mv = 11000, .first = 0, .n = 61};
+    rows[0].sum.points = 61; rows[0].sum.peak_mv = 10850; rows[0].sum.peak_at_mv = 11000;
+    const k2::ctsweep::View view{rows, {}};
+    f.test_results = {0x01020304, 0x05060708, 3, 0, 1, steps};
+    f.test_results.sweep = &view;
+    CHECK_EQ(run(f, request(0x0B, 30, {}), r), 1);
+    check_header(r, 0x0B, 30, Status::Ok, 15);
+    CHECK_EQ(run(f, request(0x0B, 31, {0, 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
+    check_header(r, 0x0B, 31, Status::Ok, 31);          // header 15 + one 16-byte row
+    CHECK_EQ(r[21], uint8_t(ct::Algorithm::Pps));        // row byte 0: algorithm
+    CHECK_EQ(r[22], 6);                                  // byte 1: PDO slot
+    CHECK_EQ(r[23], 0x20);                               // byte 2: flags bit 5 = a deep-sweep row
+    CHECK_EQ(r[32], 61);                                 // detail byte: the 61 recorded points, not 161
+}
+
 static void test_charger_units() {
     namespace ct = k2::charger_test;
     Fake f; Frame r;
@@ -1737,7 +1762,7 @@ int main() {
     test_charger_cable();
     test_charger_units();
     test_charger_avs_sweep();
-    test_charger_test_wire();
+    test_charger_test_wire(); test_sweep_row_wire_carries_points();
     test_identify_refusal_wire_mapping();
     test_active_pd_commands();
     test_store();

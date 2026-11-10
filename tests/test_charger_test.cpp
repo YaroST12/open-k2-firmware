@@ -3451,6 +3451,13 @@ static void test_pps_deep_sweep_records_every_point_and_the_fold_back() {
     // the pos-6 sweep (5-11 V) tracks clean: peak at the top
     CHECK_EQ(rw6->sum.peak_mv, 10850u); CHECK_EQ(rw6->sum.peak_at_mv, 11000u);
     CHECK_EQ(rw6->sum.fold_mv, 0u);
+    // QA 2026-11-10 row B item 3 (red): a finished sweep row's target is the setpoint its peak came at and its
+    // measured level is that peak - the old row read "target 5000 mV, measured 20978 mV" for a 5-21 V sweep.
+    for (const auto& s : r.steps())
+        if (ct::is_sweep(s) && s.pos == 7) {
+            CHECK_EQ(s.mv, 19900u);           // peak_at_mv, not the range's first point (5000)
+            CHECK_EQ(s.measured_mv, 19750u);  // peak_mv, not the last (folded-back) point
+        }
 }
 // The sweep stops at the first LOST source (a Hard Reset mid-sweep): the row fails there, the points recorded so far
 // stay in the record, and the run goes on to its end.

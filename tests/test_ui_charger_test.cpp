@@ -1072,6 +1072,26 @@ static void test_preflight_wrong_voltage_under_pdo1_contract_is_logged() {
     CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: VBUS 8.5 V on a 5 V contract (shared bus)") != std::string::npos, true);   // red today
     no_operations();
 }
+// QA 2026-11-10 row B item 1 (red): the [SWEEP] summary line keeps its fixed words in the format string - today the
+// line ends with a literal ": .*s", because neither binlog's signature nor the host's renderer knows %.*s.
+static void test_sweep_log_line_has_no_literal_format_bug() {
+    fixture();
+    g_stub.caps.num_pdos = 2;
+    g_stub.caps.pdos[1] = pd::decode_pdo(0xc0000000 | (60u << 17) | (50u << 8) | 20);   // PPS 5-6 V 1 A: an 11-point sweep
+    g_stub.vbus_ceiling_mv = 36000;
+    Ui ui; open(ui);
+    CHECK_EQ(ui.charger_test_set_units(kPdOnly), true);
+    ui.charger_test_set_sweep(true);
+    review(ui);
+    g_stub.log_text.clear();
+    start_press(ui, 1300); press(ui, Button::Ok, 1400);
+    for (uint32_t t = 1500; t <= 900000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+    CHECK_EQ(int(ui.charger_test_results().state()), int(ct::State::Done));
+    CHECK_EQ(g_stub.log_text.find("[SWEEP]") != std::string::npos, true);
+    CHECK_EQ(g_stub.log_text.find(".*s") == std::string::npos, true);       // no literal ": .*s" tail (red today)
+    CHECK_EQ(g_stub.log_text.find("11 pts") != std::string::npos, true);
+    CHECK_EQ(g_stub.log_text.find("peak=") != std::string::npos, true);     // the summary's fields ride as numbers
+}
 static void test_results_counters_are_words() {
     for (unsigned kind = 0; kind < 3; ++kind) {
         fixture();
@@ -3730,6 +3750,7 @@ int main() {
     test_vsafe5_review();
     test_preflight_refusal_is_logged();
     test_preflight_wrong_voltage_under_pdo1_contract_is_logged();
+    test_sweep_log_line_has_no_literal_format_bug();
     test_self_powered_review_note(); test_self_powered_run_is_on_the_card();
     test_pps_wire_headroom_note();
     test_first_menu_and_pd_bundles();
