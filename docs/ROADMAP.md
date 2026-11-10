@@ -364,10 +364,10 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     the K2's own sink holds the contract (SinkStatus ready/held, pos and PDO known), derive_proto uses that contract:
     AVS pos -> "AVS 12.6V", PPS -> "PPS 9V", fixed -> "PD 9V 3A"; the sniffed contract only for a far sink. Host test on
     derive_proto with an own AVS / PPS / fixed contract.
-- **Charger test: "Cable OFF" says nothing about what it does** (2026-11-10, operator report): the wizard's step 2
-  reads "Cable" with the value "OFF", which says nothing about what it does (the e-marker identity the K2 presents to the
-  charger, the same list as Tools -> Spoof). Operator decision, wording only, nothing else in the flow changes (the
-  Cable step stays as it is, remembered pick or not):
+- **Charger test: "Cable OFF" says nothing about what it does** (2026-11-10, operator report): fixed in 2030c3b, hardware check pending. The wizard's step 2
+  read "Cable" with the value "OFF", which said nothing about what it does (the e-marker identity the K2 presents to the
+  charger, the same list as Tools -> Spoof). Wording only, nothing else in the flow changed (the Cable step still shows
+  every time, remembered pick or not):
   - Step 2 title "Spoof cable"; its first row "Off (real cable)"; the built-ins and clones keep their names and ratings.
     Review row `Spoof  Off` / `Spoof  EPR 50V 5A`.
   - The guard's Refuse stage ("Cable on plug": a real cable between the charger and the K2) says why: "Cable connected:
