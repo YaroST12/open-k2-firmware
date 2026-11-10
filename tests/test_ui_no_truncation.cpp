@@ -397,7 +397,7 @@ void test_card_screens() {
         ui.set_rotation(0, g_t);
         for (const uint16_t vid : {0, 0x05C6, 0x22B8, 0x17EF})
             for (const uint8_t pdp : {uint8_t(0), uint8_t(100)})
-                for (const std::pair<uint16_t, uint16_t> span : {std::pair<uint16_t, uint16_t>{33, 210}, {50, 200}, {33, 110}})
+                for (const auto& span : {std::pair<uint16_t, uint16_t>{33, 210}, {50, 200}, {33, 110}})
                     for (const uint16_t ma : {uint16_t(3000), uint16_t(5250), uint16_t(6250)}) {
                         rc::Card d = cardfx::fh22_full();
                         d.id.fp = 0x55555555; d.name[0] = 0; d.id.vid = vid; d.id.pdp_w = pdp;

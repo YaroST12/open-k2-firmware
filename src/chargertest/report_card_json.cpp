@@ -148,7 +148,9 @@ std::size_t render_summary(const Card& c, std::span<char> out) {
     t.put(" %04X:%04X", unsigned(c.id.vid), unsigned(c.id.pid));
     if (c.id.pdp_w) t.put(" \xC2\xB7 %u W", unsigned(c.id.pdp_w));
     t.put(" \xC2\xB7 fw %08x\n", unsigned(c.fw));
-    t.put("%u pass, %u fail, %u skip \xC2\xB7 %s", unsigned(n.pass), unsigned(n.fail), unsigned(n.skip), ct::name(c.state));
+    // counts() counts group verdicts, not steps: say so, or the header reads "1 pass" next to a run summary's "25 pass".
+    t.put("%u pass, %u fail, %u skip of %u groups \xC2\xB7 %s", unsigned(n.pass), unsigned(n.fail), unsigned(n.skip),
+          unsigned(kGroups), ct::name(c.state));
     if (c.reason != ct::Reason::None) t.put(" (%s)", ct::name(c.reason));
     t.put("\nIdentity %08X \xC2\xB7 boot %u \xC2\xB7 uptime %u s", unsigned(c.id.fp), unsigned(c.boots), unsigned(c.uptime_s));
     if (c.times > 1)
