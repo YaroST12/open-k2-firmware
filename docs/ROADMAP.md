@@ -370,7 +370,8 @@ and the hardware check). A row leaves this list when its fix is merged and the h
     queued; no contract / far Request seen / second latch -> no reset. Hardware: repeat P4 HID-less, the black box of the
     comeback shows the phone's own Request above 5 V and no K2 TX; repeat with HID, the K2 stays up and passive.
 - **Home footer shows "PD 0V5.82A" for a sniffed PPS contract when the K2 missed the caps** (2026-11-10,
-  `runs/2026-11-10-connection/P4-handback/home.png`, 05b1703): the K2 booted ~1 s after VBUS returned, so the Baseus's
+  `runs/2026-11-10-connection/P4-handback/home.png`, 05b1703): fixed in 27255b3 (red tests in 39ca0e4), hardware check
+  pending. The K2 booted ~1 s after VBUS returned, so the Baseus's
   Source_Capabilities came before the trace started (`num_pdos: 0`); the phone's Requests (PPS, every ~500 ms) were
   decoded with no PDO list, as a fixed RDO: no voltage (0 V) and the PPS bits read as max current (5.82 A, also on the
   IBUS "max" label). `src/ui/home_proto.cpp` `derive_proto` takes the `ctr.valid && pd_link` branch into `from_pd`.
