@@ -673,7 +673,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   - Validate: host tests for the stats (red before green), `make gate`; on hardware the TOPADRE 20 V reads a p-p within
     20 % of the INA's swing, HID-only reads "< floor", and a charger-test card shows a ripple figure per fixed PDO.
 
-- ~~**PPS coverage: floor, 20 mV steps, accuracy spread**~~ completed: f733009 + 91a9839; step walk (CUKTECH C1, IQ4), spread (card 55: +10..-49 mV) and floor (IQ4 3.3 V -> 3285 mV) verified 2026-11-10. Open: the floor's fail shape needs a source that floors; `cards show` spread print is batch 3 (k2/cards-show-spread).
+- ~~**PPS coverage: floor, 20 mV steps, accuracy spread**~~ completed: f733009 + 91a9839; step walk (CUKTECH C1, IQ4), spread (card 55: +10..-49 mV) and floor (IQ4 3.3 V -> 3285 mV) verified 2026-11-10. Open: the floor's fail shape needs a source that floors; `cards show` spread print fixed in 45f170e, hardware check pending.
 - **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
   above). Opt-in, never in the default preset: every 100 mV across each PPS APDO, 1 A (AVS: the row below), Accept +
   PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint strip on the results tab and the card
