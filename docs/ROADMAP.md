@@ -366,6 +366,10 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Lab: `k2_remote.py pd reset --inline --confirm` sends the same Hard Reset while inline (today `pd reset` refuses
     "inline: a live sink is attached" with no override), for the hardware check and for diagnosing the far sink's
     renegotiation. Same lab gating as `--over-load`: refused during a charger test, logged as a lab op.
+    Lab part done in 988bc65 (`pd reset --inline --confirm`, flag byte on CMD_PD_RESET, `pd::lab_reset_verdict` gate:
+    refused while a charger test runs, both flags required, logged `[RMT] pd hard reset lab inline flags=0x%02X`,
+    logdb 420; host-tested `tests/test_pd_passive.cpp`, `tests/test_remote_proto.cpp`, `tests/test_k2_remote.py`),
+    hardware check pending. The automatic hand-back Fix above is still open (Step 0 first).
   - Validate: host tests (red first) on the decision: contract owned + inline -> record removed before the reset is
     queued; no contract / far Request seen / second latch -> no reset. Hardware: repeat P4 HID-less, the black box of the
     comeback shows the phone's own Request above 5 V and no K2 TX; repeat with HID, the K2 stays up and passive.
