@@ -1240,6 +1240,54 @@ class PageMap(unittest.TestCase):
             with self.assertRaises(ValueError):
                 kr.page_index(bad)
 
+    def test_page_accepts_the_connection_tab_form(self):
+        # "connection sink" is the long form of the Connection tab name "sink"; the short form keeps working.
+        self.assertEqual(kr.page_index("connection source"), kr.CONN_ALIAS_BASE)
+        self.assertEqual(kr.page_index("connection cable"), kr.CONN_ALIAS_BASE + 1)
+        self.assertEqual(kr.page_index("connection sink"), kr.CONN_ALIAS_BASE + 2)
+        self.assertEqual(kr.page_index("Connection  Sink"), kr.CONN_ALIAS_BASE + 2)
+        self.assertEqual(kr.page_index("connection"), kr.PAGES.index("connection"))
+        self.assertEqual(kr.page_index("sink"), kr.CONN_ALIAS_BASE + 2)
+        with self.assertRaises(ValueError):
+            kr.page_index("connection bogus")
+
+
+class ChargerSweepCli(unittest.TestCase):
+    """`charger-sweep on|off` and `charger-avs-sweep on|off`: turn the PPS / AVS deep sweep of the NEXT charger
+    run on or off (the firmware commands 0x0F / 0x54, opt-in, never in a preset)."""
+
+    class Link:
+        def __init__(self, replies):
+            self.replies, self.sent = list(replies), []
+
+        def call(self, cmd, payload=b""):
+            self.sent.append((cmd, bytes(payload)))
+            return kr.Response(cmd, len(self.sent), 0, self.replies.pop(0))
+
+    def invoke(self, argv, replies):
+        link = self.Link(replies)
+        a = kr.build_parser().parse_args(argv)
+        return kr.COMMANDS[a.command](link, a), link
+
+    def test_avs_sweep_on_sends_0x54_with_one(self):
+        r, link = self.invoke(["charger-avs-sweep", "on"], [bytes([1])])
+        self.assertEqual(link.sent, [(kr.CMD_CHARGER_AVS_SWEEP, b"\x01")])
+        self.assertEqual(r, {"avs_sweep": True})
+
+    def test_avs_sweep_off_sends_zero(self):
+        r, link = self.invoke(["charger-avs-sweep", "off"], [bytes([0])])
+        self.assertEqual(link.sent, [(kr.CMD_CHARGER_AVS_SWEEP, b"\x00")])
+        self.assertEqual(r, {"avs_sweep": False})
+
+    def test_pps_sweep_on_sends_0x0f_with_one(self):
+        r, link = self.invoke(["charger-sweep", "on"], [bytes([1])])
+        self.assertEqual(link.sent, [(kr.CMD_CHARGER_SWEEP, b"\x01")])
+        self.assertEqual(r, {"pps_sweep": True})
+
+    def test_bad_state_is_rejected_by_the_parser(self):
+        with self.assertRaises(SystemExit):
+            kr.build_parser().parse_args(["charger-avs-sweep", "maybe"])
+
 
 class Scripts(unittest.TestCase):
     """Back-to-back presses and long actions (hardware check items 3 and 4)."""

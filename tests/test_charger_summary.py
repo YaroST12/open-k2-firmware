@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Yaraslau Furman
 import json
 import sys
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -239,3 +240,31 @@ def test_card_summary_reads_a_qc3plus_skip_as_no_qc3plus():
                                                  "QC3+": {"verdict": "skip", "reason": "no QC3+ response", "why": "no QC3+"}}))
     assert "- QC3+: no QC3+" in text
     assert "skipped" not in text
+
+
+class CardSweepSummary(unittest.TestCase):
+    """`cards show` must print a v10 card's deep-sweep summary on the range line (ranges[i].sweep, decoded by
+    tools/report_card.py), in the same words the results page uses ("sweep peak ... at ..., folds back to ...")."""
+
+    def test_a_range_with_a_sweep_block_prints_the_sweep_summary(self):
+        card = _card({})
+        card["ranges"] = [
+            {"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 21000, "max_mv": 21000, "fail_mv": 0,
+             "sweep": {"min_mv": -40, "max_mv": 25, "worst_mv": -40, "worst_at_mv": 20000,
+                       "peak_mv": 21000, "peak_at_mv": 21000, "fold_mv": 19420, "fold_from_mv": 20000}},
+            {"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 11000, "max_mv": 11000, "fail_mv": 0},
+        ]
+        text = charger_summary.summarize_card(card)
+        self.assertIn("- PPS 3.3-21V: ✓ whole range, sweep peak 21.0 V at 21.0 V, folds back to 19.42 V from 20.0 V", text)
+        self.assertIn("- PPS 3.3-11V: ✓ whole range", text)
+        self.assertNotIn("sweep", text.splitlines()[-1])   # a range without a sweep block stays clean
+
+    def test_a_failing_range_carries_the_sweep_after_its_verdict(self):
+        card = _card({})
+        card["ranges"] = [
+            {"alg": "PPS (PD3.x)", "lo_mv": 3300, "hi_mv": 21000, "max_mv": 13000, "fail_mv": 15000,
+             "sweep": {"min_mv": 0, "max_mv": 10, "worst_mv": -30, "worst_at_mv": 9000,
+                       "peak_mv": 13000, "peak_at_mv": 13000}},
+        ]
+        text = charger_summary.summarize_card(card)
+        self.assertIn("- PPS 3.3-21V: ✗ at 15 V, reached 13 V, sweep peak 13.0 V at 13.0 V", text)

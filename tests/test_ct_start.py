@@ -329,5 +329,78 @@ class CableOption(unittest.TestCase):
         self.assertEqual(ct_start.kr.parse_cable("Clone:65535"), (2, 65535))
 
 
+class LockReleaseAfterStart(unittest.TestCase):
+    """ct_start must not hold the device lock for the whole run: once START is confirmed the lock is released
+    and only re-taken around each poll, so other HID tools can use the K2 between the polls."""
+
+    def test_lock_is_released_once_start_is_confirmed(self):
+        events = []          # ("A"|"R"|"start"|"poll"|"call", lock depth after the event)
+        depth = 0
+
+        def acquire(wait_s=None, report=None):
+            nonlocal depth
+            depth += 1
+            events.append(("A", depth))
+
+        def release():
+            nonlocal depth
+            depth -= 1
+            events.append(("R", depth))
+
+        class FakeLink:
+            def __init__(self, *a):
+                self.tap = None
+
+            def call(self, cmd, payload=b""):
+                events.append(("call", depth))
+                return ct_start.kr.Response(cmd, 1, 0, b"")
+
+        class FakeWalk:
+            def __init__(self, link):
+                self.log = []
+
+            def where(self):
+                return ("home", 0)
+
+            def to_algorithms(self):
+                return True
+
+            def pick_all(self):
+                return True
+
+            def press(self, *a):
+                return True
+
+        def fake_ct(link, a):
+            events.append(("poll", depth))
+            if a.test_cmd == "status":
+                return {"state": "done", "run_id": 6}
+            return {"state": "done", "run_id": 6, "steps": []}
+
+        with patch.object(ct_start.k2_lock, "acquire", acquire), \
+             patch.object(ct_start.k2_lock, "release", release), \
+             patch.object(ct_start.kr, "RemoteLink", FakeLink), \
+             patch.object(ct_start.kr, "LinuxHidTransport", lambda path: object()), \
+             patch.object(ct_start, "Walk", FakeWalk), \
+             patch.object(ct_start, "preflight", lambda link: None), \
+             patch.object(ct_start, "run_id_of", lambda link: 5), \
+             patch.object(ct_start, "start_run",
+                          lambda *a, **k: events.append(("start", depth)) or ct_start.STARTED), \
+             patch.object(ct_start.kr, "cmd_charger_test", fake_ct), \
+             patch.object(ct_start.kr, "charger_cable", lambda link, choice=None: {"run": "off"}), \
+             patch.object(ct_start.charger_summary, "summarize", lambda r: "SUMMARY"), \
+             contextlib.redirect_stderr(io.StringIO()):
+            rc = ct_start.main(["--wait", "5"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(depth, 0)                          # every acquire was released
+        kinds = [e for e, _ in events]
+        start, first_poll = kinds.index("start"), kinds.index("poll")
+        between = events[start + 1:first_poll]
+        # the first thing after START is a full release (depth 0); the only later acquire before the
+        # first poll is the poll's own one-exchange hold
+        self.assertEqual(between[0], ("R", 0))
+        self.assertEqual([e for e, _ in between[1:]], ["A"] if len(between) > 1 else [])
+
+
 if __name__ == "__main__":
     unittest.main()

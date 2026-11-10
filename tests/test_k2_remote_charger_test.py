@@ -233,6 +233,20 @@ class ChargerTest(unittest.TestCase):
                 with self.subTest(wire=wire, code=code, ran=result), self.assertRaises(kr.FrameError):
                     kr.decode_charger_test(page(meta_with(wire), 0, [row(code, result)]))
 
+    def test_a_pending_row_is_not_decoded_as_a_sink_answer(self):
+        # A Pending step-walk row's detail byte is not a sink ReqAnswer: it must print "not run", not "ok".
+        def meta():
+            m = bytearray(HEADER2); m[23] = (m[23] & ~3) | 2; m[9] = 6   # wire PD3, state stopped
+            return m
+        def row(result, detail):
+            return struct.pack("<BBBHHHBBBI", 4, 0, 0, 9000, 0, 0, result, 0, detail, 0)   # pps, group pd
+        d = kr.decode_charger_test(page(meta(), 0, [row(0, 1)]))   # pending, detail 1
+        self.assertEqual(d["steps"][0]["result"], "pending")
+        self.assertEqual(d["steps"][0]["detail_reason"], "not run")
+        d = kr.decode_charger_test(page(meta(), 0, [row(2, 1)]))   # a row that ran: detail 1 = the sink's "ok"
+        self.assertEqual(d["steps"][0]["result"], "pass")
+        self.assertEqual(d["steps"][0]["detail_reason"], "ok")
+
     def test_reason_42_withdrawn_by_source_decodes(self):
         # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
         # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.

@@ -417,6 +417,28 @@ class TestRecordOverAPty(unittest.TestCase):
         os.close(master)
 
 
+class TestDefaultPort(unittest.TestCase):
+    """The record port defaults to the logger's stable /dev/serial/by-id name (the K2's product string is
+    "Open-K2 Logger"), not to /dev/ttyACM0, whose number depends on enumeration order."""
+
+    def test_the_by_id_entry_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "usb-WITRN_Open-K2_Logger_0001-if02"
+            p.touch()
+            self.assertEqual(ks.default_port(d), str(p))
+
+    def test_falls_back_to_ttyacm0_without_a_by_id_entry(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(ks.default_port(d), ks.FALLBACK_PORT)
+            self.assertEqual(ks.FALLBACK_PORT, "/dev/ttyACM0")
+
+    def test_only_the_loggers_cdc_interfaces_match(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "usb-WITRN_Open-K2_Logger_0001-if02").touch()
+            (Path(d) / "usb-SomeOther_Device_0001-if00").touch()
+            self.assertEqual(ks.default_port(d), str(Path(d) / "usb-WITRN_Open-K2_Logger_0001-if02"))
+
+
 class TestEnumParse(unittest.TestCase):
     def test_parse_enum_handles_comments_and_values(self):
         src = "enum class Foo : uint8_t { A, B = 3, /* x */ C, // tail\n D };"
