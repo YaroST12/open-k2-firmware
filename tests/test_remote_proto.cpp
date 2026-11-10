@@ -1192,15 +1192,28 @@ static void test_active_pd_commands() {
     check_bytes(r, kRspHeader, {3});
     run(f, request(0x41, 5, {1, 0}), r);                 // short payload
     check_header(r, 0x41, 5, Status::BadLength, 0);
-    // PD_RESET / PD_RELEASE take no payload
+    // PD_RESET takes an optional flag byte (bit0 confirm, bit1 inline lab-only, kPdFlagResetInline); PD_RELEASE takes none
     run(f, request(0x42, 6, {}), r);
     check_header(r, 0x42, 6, Status::Ok, 1);
+    CHECK_EQ(f.resets, 1); CHECK_EQ(f.reset_flags, 0);        // empty payload: flags 0, as an older client sends
     run(f, request(0x44, 7, {}), r);
     check_header(r, 0x44, 7, Status::Ok, 1);
-    CHECK_EQ(f.resets, 1); CHECK_EQ(f.releases, 1);
-    run(f, request(0x42, 8, {1}), r);
-    check_header(r, 0x42, 8, Status::BadLength, 0);
-    CHECK_EQ(f.resets, 1);
+    CHECK_EQ(f.releases, 1);
+    run(f, request(0x42, 8, {3}), r);                        // --inline --confirm -> flags 0x03, one reset
+    check_header(r, 0x42, 8, Status::Ok, 1);
+    CHECK_EQ(f.resets, 2); CHECK_EQ(f.reset_flags, 3);
+    run(f, request(0x42, 10, {2}), r);                       // --inline alone -> flags 0x02 reaches the backend
+    check_header(r, 0x42, 10, Status::Ok, 1);
+    CHECK_EQ(f.resets, 3); CHECK_EQ(f.reset_flags, 2);
+    run(f, request(0x42, 11, {0xFC}), r);                    // unknown bits refused
+    check_header(r, 0x42, 11, Status::BadArg, 0);
+    CHECK_EQ(f.resets, 3);
+    run(f, request(0x42, 12, {1, 0}), r);                    // two bytes refused
+    check_header(r, 0x42, 12, Status::BadLength, 0);
+    CHECK_EQ(f.resets, 3);
+    run(f, request(0x44, 13, {0}), r);                       // PD_RELEASE still takes no payload
+    check_header(r, 0x44, 13, Status::BadLength, 0);
+    CHECK_EQ(f.releases, 1);
     // PD_TRIGGER_STATUS
     f.trig_pin = 2;   // an Rd pinned on CC2 (pd-reread --pin): the appended pin byte carries it
     run(f, request(0x43, 9, {}), r);

@@ -904,6 +904,43 @@ class ActivePd(unittest.TestCase):
                          [kr.CMD_PD_RESET, kr.CMD_PD_TRIGGER_STATUS, kr.CMD_PD_RELEASE, kr.CMD_PD_TRIGGER_STATUS,
                           kr.CMD_PD_TRIGGER_STATUS])
 
+    def test_reset_without_flags_sends_empty_payload(self):
+        # as today: no flags -> the old empty payload, an older firmware accepts it too
+        link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
+        kr.cmd_pd(link, self.args(pd_cmd="reset"))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_RESET, b""))
+
+    def test_reset_inline_confirm_sends_flags_3(self):
+        # lab-only inline Hard Reset: bit0 confirm | bit1 inline (kPdFlagResetInline) = 0x03
+        link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
+        kr.cmd_pd(link, self.args(pd_cmd="reset", inline=True, confirm=True))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_RESET, bytes([3])))
+
+    def test_reset_inline_alone_sends_flags_2(self):
+        # --inline without --confirm still reaches the firmware (it answers NeedConfirm), the tool does not gate it
+        link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
+        kr.cmd_pd(link, self.args(pd_cmd="reset", inline=True, confirm=False))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_RESET, bytes([2])))
+
+    def test_reset_confirm_alone_sends_flags_1(self):
+        link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
+        kr.cmd_pd(link, self.args(pd_cmd="reset", inline=False, confirm=True))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_RESET, bytes([1])))
+
+    def test_reset_parser_has_inline_and_confirm(self):
+        p = kr.build_parser()
+        a = p.parse_args(["pd", "reset"])
+        self.assertEqual((a.pd_cmd, a.inline, a.confirm), ("reset", False, False))
+        a = p.parse_args(["pd", "reset", "--inline", "--confirm"])
+        self.assertEqual((a.inline, a.confirm), (True, True))
+        # the flags exist only on the reset subparser, never on request/release/attach
+        self.assertFalse(hasattr(p.parse_args(["pd", "request", "1"]), "inline"))
+        self.assertFalse(hasattr(p.parse_args(["pd", "release"]), "inline"))
+
+    def test_reset_inline_error_names_the_pd_err(self):
+        e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_RESET, bytes([5]))
+        self.assertIn("inline: a live sink is attached", str(e))
+
     def test_attach_default_9000mv(self):
         link = self.Link({kr.CMD_PD_ATTACH: self.TRIG})
         r = kr.cmd_pd(link, self.args(pd_cmd="attach"))
