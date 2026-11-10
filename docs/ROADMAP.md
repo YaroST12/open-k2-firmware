@@ -772,6 +772,12 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   - Validate: host tests (red first) for each new row's verdict, including the failing shapes (floor at 5 V, steps
     of 100 mV, steps ignored); hardware: a source with a working PPS (CUKTECH 10 or FH22 brick) passes all three,
     the splitter shows "needs load" (pattern `pps-off-at-no-load`).
+  - Hardware 2026-11-10 (CUKTECH C1, `--units pd`, `runs/2026-11-10-merge2-hw/`): item 2 first failed both walks
+    "step resolution 15mV" - the +-2 mV per-step band was the meter's LSB, but the source's own ripple at no load
+    moves one reading by several mV. Changed in 91a9839: each step must move up and stay below 40 mV, the five must
+    sum to 100 +- 20 mV (detail = mean move). Re-run: both walks pass (8000 -> 8109 mV, 12500 -> 12590 mV), PD
+    19 pass / 0 fail / 5 skip. Items 1 (floor, `PdLow` unit, not run) and 3 (spread on the v9 card, not read back)
+    still need their hardware check: `ct_start.py --units pd,pd-low` then `k2_remote.py cards` on the new card.
 - **PPS deep sweep, a separate entry in the charger-test Tests list** (2026-11-10, user decision; after the coverage row
   above). Opt-in, never in the default preset: every 100 mV across each PPS APDO (and SPR AVS range), 1 A, Accept +
   PS_RDY + measured VBUS per point, results as a compact error-vs-setpoint strip on the results tab and the card
