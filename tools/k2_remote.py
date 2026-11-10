@@ -844,6 +844,14 @@ def charger_avs_sweep(link, on):
     return bool(p[0])
 
 
+def cmd_charger_sweep(link, a):
+    return {"pps_sweep": charger_sweep(link, a.state == "on")}
+
+
+def cmd_charger_avs_sweep(link, a):
+    return {"avs_sweep": charger_avs_sweep(link, a.state == "on")}
+
+
 def charger_hunt(link, slot):
     """The evidence of refused hunt row `slot` (the firmware's side table, in the order the rows were refused). Reply: run_id, count of
     refused rows held, then the slot's snapshot when slot < count (else only the header: "slot" is None)."""
@@ -2596,7 +2604,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread,
             "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
-            "charger-cable": cmd_charger_cable, "cards": cmd_cards}
+            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards}
 
 
 def build_parser():
@@ -2624,6 +2632,10 @@ def build_parser():
     cc = sub.add_parser("charger-cable", help="cable identity the charger-test START dialog opens on (no argument: read it back)")
     cc.add_argument("cable", nargs="?", help="off | builtin | builtin:<id 1, 2, 4 | epr-50v | cuktech-6a | oneplus> | "
                     "saved:<library id>; Ra mode + spoof for the run unless off")
+    for name, what in (("charger-sweep", "PPS"), ("charger-avs-sweep", "AVS")):
+        cs = sub.add_parser(name, help=f"turn the {what} deep sweep of the NEXT charger run on or off "
+                            "(opt-in: every 100 mV across each APDO, 1 A; never in a preset)")
+        cs.add_argument("state", choices=["on", "off"])
     sub.add_parser("pdos", help="decoded source capabilities")
     se = sub.add_parser("emarker", help="cable e-marker data; list/save/delete/rename/spoof manage saved cables")
     es = se.add_subparsers(dest="em_cmd")
