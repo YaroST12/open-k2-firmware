@@ -187,7 +187,8 @@ def summarize_card(c):
            f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip · {c['state']}"
            + (f" ({c['reason']})" if c["reason"] else ""),
            f"Identity {c['fp']} · boot {c['boots']} · uptime {c['uptime_s']} s"
-           + (f" · same result x{c['times']}, last boot {c['last_boots']} uptime {c['last_uptime_s']} s" if c.get("times", 1) > 1 else "")]
+           + (f" · same result x{c['times']}, last boot {c['last_boots']} uptime {c['last_uptime_s']} s" if c.get("times", 1) > 1 else "")
+           + (f" · source rebalanced x{c['rebalanced']}" if c.get("rebalanced") else "")]   # v8 card field (report_card_json.cpp puts the same suffix here)
     if c["handover"] != "not tried":
         out.append(f"Handover: {c['handover']} after {c['handover_ms'] / 1000:g} s")
     out.append("")
