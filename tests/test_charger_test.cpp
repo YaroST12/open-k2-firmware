@@ -170,7 +170,7 @@ struct Fake final : ct::Env {
         // The charger kept its power: it is back at its 5 V default with its list; the K2 has no contract and a new attach.
         if (in.pd.epr_mode && spr_caps.valid) caps = spr_caps;
         if (!caps.valid && saved.valid) caps = saved;
-        caps.valid = true; rd_on = true; back_done = true; handed = false; low_until = 0; dip_until = 0; reset_at = 0; latched = false;
+        caps.valid = true; caps.active_cc = 1; rd_on = true; back_done = true; handed = false; low_until = 0; dip_until = 0; reset_at = 0; latched = false;
         in.vbus_mv = 5000; in.pd.held = in.pd.epr_mode = false; in.pd.mv = 5000; in.pd.pos = 1; in.pd.state = pd::SinkState::Ready;
         in.pd.result = pd::SinkResult::Ok; in.fc_state = fc::State::Idle; in.pd_quiet_ms = 0; ++in.session;
     }
@@ -5293,15 +5293,16 @@ static void test_resume_cancel_key() {
 // uninterrupted one step by step, plus the resumed counter.
 static void expect_same_steps(const ct::Runner& ref, const ct::Runner& got, size_t cut) {
     CHECK_EQ(got.steps().size(), ref.steps().size());
-    if (got.steps().size() != ref.steps().size()) return;
+    if (got.steps().size() != ref.steps().size()) { std::printf("  cut %zu: %zu steps, expected %zu\n", cut, got.steps().size(), ref.steps().size()); return; }
     unsigned bad = 0;
     for (size_t i = 0; i < ref.steps().size(); ++i) {
         const auto& a = ref.steps()[i]; const auto& b = got.steps()[i];
         const bool same = a.algorithm == b.algorithm && a.group == b.group && a.pos == b.pos && a.mv == b.mv && a.ma == b.ma &&
                           a.verdict == b.verdict && a.reason == b.reason && a.measured_mv == b.measured_mv && a.continuous == b.continuous;
         if (!same && bad++ < 3)
-            std::printf("  cut %zu step %zu: %s/%u %s(%s) -> %s(%s)\n", cut, i, ct::name(a.algorithm), a.mv, ct::name(a.verdict),
-                        ct::name(a.reason), ct::name(b.verdict), ct::name(b.reason));
+            std::printf("  cut %zu step %zu: %s/%u %s(%s) -> %s(%s) [pos %u/%u ma %u/%u meas %u/%u]\n", cut, i, ct::name(a.algorithm), a.mv, ct::name(a.verdict),
+                        ct::name(a.reason), ct::name(b.verdict), ct::name(b.reason), unsigned(a.pos), unsigned(b.pos), unsigned(a.ma),
+                        unsigned(b.ma), unsigned(a.measured_mv), unsigned(b.measured_mv));
     }
     CHECK_EQ(bad, 0u);
 }
@@ -5478,6 +5479,69 @@ static void test_baseline_epr_entry_cut_by_a_source_hard_reset_is_retried() {
         }
         for (const auto& s : r.steps()) CHECK_EQ(s.reason == ct::Reason::CapsChanged, false);
     }
+}
+// Resume after a reboot (review item A): the resumed run's rows equal the uninterrupted run's. The power goes before each Env call
+// in turn, the K2 reboots into the journal and resumes. `make` builds the charger; every run starts from a fresh one.
+template <class Make>
+static unsigned power_loss_sweep(Make make, const ct::Options& o) {
+    Fake rf = make(); ct::Runner ref(rf);
+    CHECK_EQ(int(ref.start(rf.caps, o, rf.in, true)), int(ct::Reason::None));
+    rf.tick(ref, 400000);
+    CHECK_EQ(int(ref.state()), int(ct::State::Done));
+    const size_t total = rf.events;
+    unsigned resumed_runs = 0;
+    for (size_t k = 0; k < total; ++k) {
+        k2test::RamDisk fl(96); JStore js(fl); cj::Journal& j = js.j;
+        Fake f = make(); ct::Runner r(f);
+        f.jr = &j; f.rn = &r; f.cut_event = k;
+        if (r.start(f.caps, o, f.in, true) != ct::Reason::None) { CHECK_EQ(0, 1); continue; }
+        if (f.dead) continue;
+        j.begin(r.run_id(), o, r.evidence(), r.steps());
+        j.meta({.units = o.units});                    // the UI journals the unit order too: a resumed run keeps it
+        f.jopts = o;
+        for (int n = 0; n < 4000 && !f.dead && r.state() != ct::State::Done; ++n) f.tick(r, 100);
+        CHECK_EQ(f.dead, true);
+        f.k2_rebooted();
+        ct::Runner r2(f); f.rn = &r2;
+        cj::Replay rep; j.replay(rep);
+        if (rep.found && !rep.unfinished) continue;
+        CHECK_EQ(rep.found && rep.unfinished, true);
+        if (!rep.found) continue;
+        j.adopt(rep); f.jopts = rep.options;
+        r2.restore(rep.options, rep.evidence, rep.run_id, {rep.steps.data(), rep.count}, rep.phase, rep.phase_index, rep.resumed,
+                   rep.attempt_index, rep.attempts);
+        if (!r2.resumable()) continue;
+        CHECK_EQ(int(r2.resume(f.in, true)), int(ct::Reason::None));
+        for (int n = 0; n < 4000 && r2.state() != ct::State::Done && r2.state() != ct::State::Stopped; ++n) f.tick(r2, 100);
+        CHECK_EQ(int(r2.state()), int(ct::State::Done));
+        expect_same_steps(ref, r2, k);
+        ++resumed_runs;
+    }
+    return resumed_runs;
+}
+// Item A1: the EPR proof (the source accepted EPR entry over a cable nobody read) is not in the journal as such. A resumed run
+// whose EPR rows were still pending asked the cable gate again with no proof and skipped them "cable not 50V 5A".
+static void test_resume_keeps_the_epr_proof_of_an_unread_cable() {
+    const auto make = [] { Fake f = epr_run_fake(); f.in.cable_observed = false; f.in.cable_mv = 20000; f.in.cable_ma = 3000; return f; };
+    const unsigned n = power_loss_sweep(make, {.selected = ct::bit(A::Epr) | ct::bit(A::EprAvs)});
+    CHECK_EQ(n > 10u, true);
+}
+// Item A2: a run started with no list heard plans one placeholder row per PD unit; the real rows come with the first list
+// (replan_pd). A reboot in a unit ahead of the PD unit restored the placeholders as the final plan: the PD unit ran one 5 V row.
+static void test_resume_replans_the_late_pd_rows() {
+    const auto make = [] { Fake f; f.saved = f.caps; f.caps.valid = false; return f; };
+    const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Pd3Fixed) | ct::bit(A::Pps), {ct::Unit::Qc2, ct::Unit::Pd});
+    const unsigned n = power_loss_sweep(make, o);
+    CHECK_EQ(n > 10u, true);
+}
+// Item A2 with the PD unit first and EPR wanted: the resume lands in the live 5 V contract; the rows and the EPR entry follow.
+static void test_resume_replans_the_late_pd_rows_with_epr() {
+    const auto make = [] {
+        Fake f = epr_run_fake(); f.saved = f.caps; f.caps.valid = false; f.in.pd.state = pd::SinkState::Idle; return f;
+    };
+    const auto o = with_units(ct::bit(A::Pd3Fixed) | ct::bit(A::Epr), {ct::Unit::Pd});
+    const unsigned n = power_loss_sweep(make, o);
+    CHECK_EQ(n > 10u, true);
 }
 // A Reject (a refused 6 A hunt row) leaves the source settling: an EPR entry right after it waits kRejectSettleMs.
 // The hunt rows only go out against a list that advertises 6 A (decision 2026-11-07), so the 20 V fixed PDO here (the row that sits
@@ -6326,6 +6390,7 @@ int main() {
     test_self_powered_soft_reset_without_caps_fails_the_unit(); test_self_powered_blocked_legacy_unit_never_detaches();
     test_self_powered_cancel_in_a_legacy_hold_restores_pd();
     test_baseline_epr_entry_cut_by_a_source_hard_reset_is_retried(); test_epr_entry_waits_after_a_rejected_row();
+    test_resume_keeps_the_epr_proof_of_an_unread_cable(); test_resume_replans_the_late_pd_rows(); test_resume_replans_the_late_pd_rows_with_epr();
     test_epr_row_cut_by_a_source_hard_reset_passes_on_retry();
     test_fc_release_is_issued_once_per_row(); test_fcp_rows_after_the_first_are_retargets_in_one_session(); test_5v_row_needs_the_handshake(); test_source_drop_recovers_on_a_non_pd_source(); test_a_lost_row_ends_the_session_so_the_next_row_handshakes_again(); test_session_blip_with_vbus_up_is_not_source_lost(); test_source_gone_stops_the_run(); test_pd_row_survives_one_source_hard_reset(); test_pd_row_gives_up_after_a_second_source_hard_reset();
     test_dark_source_that_returns_is_not_a_change(); test_apdo_current_grow_is_not_offers_changed(); test_dark_source_that_never_returns_is_source_lost(); test_pd_row_cut_twice_by_hard_resets_fails_and_the_run_goes_on(); test_ordinary_pd_row_answered_by_a_source_hard_reset_is_retried_once(); test_ordinary_pd_row_cut_by_a_second_source_hard_reset_fails_with_the_reason(); test_pps_low_step_landing_below_the_band_fails_only_that_row();

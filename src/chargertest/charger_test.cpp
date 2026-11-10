@@ -1928,10 +1928,38 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     // A resumed run re-sweeps a pending sweep row from its first point: the record starts empty, the journaled row is the plan.
     sweep_used_ = 0; n_sweep_rows_ = 0; sweep_n_ = 0; sweep_mv_ = sweep_lo_ = sweep_hi_ = 0;
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd; epr_stage_ = 0; info_ = 0; info_rows_ = false; n_hunt_ = 0; hunt_seq_ = 0;
-    attached_ = detached_ = ending_ = silent_ = legacy_active_ = late_pd_ = dark_ = false; pd_skips_recorded_ = true;
+    attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
     selfpwr_ = suspended_ = adopt_ = false;
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
+    // The EPR proof (the source accepted EPR entry: it checked the cable itself) is not journaled as such, but its trace is: the EPR
+    // list was heard (EprTable), or EPR rows were planned (a plan only holds them for a 50 V / 5 A cable). A cable the K2 reads live
+    // after the reboot still wins (epr_proven needs !cable_observed). Without the latch the pending EPR rows skipped "cable limit".
+    epr_proof_ = (e.flags & EprTable) != 0;
+    for (const auto& s : std::span<const Step>(steps_.data(), count_))
+        if ((s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) && s.verdict != Verdict::Skip) epr_proof_ = true;
+    // A run started with no list heard planned one placeholder row per PD unit (evidence: no PDOs). Those rows are not a final plan:
+    // the first list heard after the resume replans them, and the EPR entry is decided with it, as in an uninterrupted run.
+    late_pd_ = false;
+    if (e.num_pdos == 0 && (has_unit(opts_.units, Unit::Pd) || has_unit(opts_.units, Unit::PdLow)))
+        for (const auto& s : std::span<const Step>(steps_.data(), count_))
+            if (s.verdict == Verdict::Pending && mode(unit_of(s)) == Mode::Pd) late_pd_ = true;
+    // The power can also go after that first plan and before the EPR entry: PDO 1 carries the EPR bit, no PD row has run, and the EPR
+    // rows are still the SPR list's placeholders (skipped without an entry answer). The entry was not decided yet: it is decided again.
+    bool entry_open = false;
+    if ((e.flags & EprCapable) && !(e.flags & EprTable) && !late_pd_) {
+        bool pd_ran = false, placeholders = false;
+        for (const auto& s : std::span<const Step>(steps_.data(), count_)) {
+            if (mode(unit_of(s)) != Mode::Pd) continue;
+            if (s.verdict != Verdict::Pending && s.verdict != Verdict::Skip) pd_ran = true;
+            if ((s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs) && s.verdict == Verdict::Skip &&
+                (s.reason == Reason::NoOffer || s.reason == Reason::CableLimit) && s.detail < kDetailEprOfferedRefused)
+                placeholders = true;
+        }
+        entry_open = placeholders && !pd_ran && has_unit(opts_.units, Unit::Pd);
+    }
+    if ((late_pd_ || entry_open) && (opts_.selected & (bit(Algorithm::Epr) | bit(Algorithm::EprAvs)))) epr_stage_ = 3;
+    plan_frozen_ = !late_pd_ && !(entry_open && epr_stage_ == 3);   // placeholders are no plan: the list (and the EPR list after the entry) replans them, as at START
     reason_ = Reason::Lost;
     if (phase != Phase::None && phase_index < count_ && steps_[phase_index].verdict == Verdict::Pending) {
         // The loss is not the charger's verdict: it is charged to the step's unit (the count survives in the journal). Under the
@@ -2085,6 +2113,18 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     // list to come back restarts when VBUS does. Lenovo C135, 2026-11-03: the output drained 20 V -> 0 in 9 s after a Hard Reset.
     const bool dark = in.vbus_mv >= 0 && in.vbus_mv < 1000;
     if (caps.valid || dark) caps_gone_ms_ = in.now; else if (!caps_gone_ms_) caps_gone_ms_ = in.now;
+    // A resumed run whose PD rows were still placeholders (no list at START) and that lands in its live Pd attach: the first settled
+    // list plans them (an uninterrupted run does this in the attach), and the EPR entry is decided with it. The same goes for a
+    // resumed run whose EPR entry was still undecided (restore() set stage 3). A resumed Legacy unit first goes through the usual
+    // detach and attach, where poll_attach does the same.
+    if ((late_pd_ || (epr_stage_ == 3 && unit_ == Unit::Pd)) && attached_ && mode_ == Mode::Pd && state_ == State::Baseline &&
+        ((caps.valid && list_settled(in.now)) || (!caps.valid && !dark && in.now - caps_gone_ms_ >= kCapsReturnMs))) {
+        if (late_pd_) replan_pd(caps, in, true);
+        if (epr_stage_ == 3 && unit_ == Unit::Pd) {
+            epr_stage_ = !caps.epr && epr_capable_caps(caps) && caps.active_cc ? (epr_cable_unfit(in) ? 4 : 1) : 0;
+            info_ = 0; info_rows_ = false;
+        }
+    }
     // pattern reject-then-reduced-list: the list announced after the hunt row's own Reject (the row is still asking, or being released)
     // is the source's answer to the probe: the rows follow it, the ones it dropped are skipped as not offered.
     const bool hunt_rejected = hunt_own_reject(in);
