@@ -49,7 +49,7 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 "Verified on hardware" with the date and the evidence path.
 
 - **Connection page ("Who's attached"): a no-PD gate** (2026-11-10, handoff row 2b): tabs kept placeholder rows and
-  offered Identify to a device/source that never talks PD. Fixed in 823fb78, hardware check pending.
+  offered Identify to a device/source that never talks PD. Fixed in bb0f93d, hardware check pending.
   - Fix: one pure "PD present" verdict per attach (`include/k2/pd/pd_verdict.hpp`, carried by `pd::Link`, Pending
     until attach+1.5 s; sink answered -> Present; Source_Caps repeated >=3 with no GoodCRC/Request -> None/offers
     unanswered; any other decoded message -> Present; else None/source never offered). With verdict None the Sink
