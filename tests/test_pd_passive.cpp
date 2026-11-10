@@ -136,15 +136,16 @@ int main() {
     // that sink's supply; the lab override sends exactly one in that state, to diagnose the far sink's
     // renegotiation. Same lab gating as --over-load: refused while a charger test runs, and it needs BOTH
     // flags (--inline alone is a NeedConfirm, not an override; --confirm alone changes nothing inline).
+    // LabResetFacts field order: {charger_test_busy, inline_mode, trigger_refusal}.
     CHECK_EQ(int(lab_reset_verdict({false, false, false}, false, false)), int(LabResetVerdict::Allowed));   // plain reset as today
-    CHECK_EQ(int(lab_reset_verdict({false, true, false}, false, false)), int(LabResetVerdict::RefusedInline)); // refusal, no flags: as today
-    CHECK_EQ(int(lab_reset_verdict({true, false, false}, false, false)), int(LabResetVerdict::RefusedInline)); // inline, no flags: as today
-    CHECK_EQ(int(lab_reset_verdict({true, false, false}, false, true)), int(LabResetVerdict::RefusedInline));  // confirm alone is no override
-    CHECK_EQ(int(lab_reset_verdict({true, false, false}, true, false)), int(LabResetVerdict::NeedConfirm));    // --inline without --confirm
-    CHECK_EQ(int(lab_reset_verdict({true, false, false}, true, true)), int(LabResetVerdict::Allowed));         // --inline --confirm while inline: one Hard Reset
+    CHECK_EQ(int(lab_reset_verdict({false, false, true}, false, false)), int(LabResetVerdict::RefusedInline)); // refusal, no flags: as today
+    CHECK_EQ(int(lab_reset_verdict({false, true, false}, false, false)), int(LabResetVerdict::RefusedInline)); // inline, no flags: as today
+    CHECK_EQ(int(lab_reset_verdict({false, true, false}, false, true)), int(LabResetVerdict::RefusedInline));  // confirm alone is no override
+    CHECK_EQ(int(lab_reset_verdict({false, true, false}, true, false)), int(LabResetVerdict::NeedConfirm));    // --inline without --confirm
+    CHECK_EQ(int(lab_reset_verdict({false, true, false}, true, true)), int(LabResetVerdict::Allowed));         // --inline --confirm while inline: one Hard Reset
     CHECK_EQ(int(lab_reset_verdict({false, false, false}, true, true)), int(LabResetVerdict::Allowed));        // off-inline the flags are harmless
-    CHECK_EQ(int(lab_reset_verdict({false, false, true}, false, false)), int(LabResetVerdict::RefusedBusy));    // a charger test runs: refused
-    CHECK_EQ(int(lab_reset_verdict({true, false, true}, true, true)), int(LabResetVerdict::RefusedBusy));        // busy wins over the lab flags
+    CHECK_EQ(int(lab_reset_verdict({true, false, false}, false, false)), int(LabResetVerdict::RefusedBusy));    // a charger test runs: refused
+    CHECK_EQ(int(lab_reset_verdict({true, true, true}, true, true)), int(LabResetVerdict::RefusedBusy));        // busy wins over the lab flags
     {   // reasons
         DetachTracker t;
         t.update(0, 5000, true);
