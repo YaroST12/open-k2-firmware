@@ -226,6 +226,61 @@ static void test_pd_labels_need_decoded_pd() {
     CHECK_EQ(p.ma, 0);
 }
 
+static pd::SinkStatus own_sink(pd::SinkState st, bool held, uint8_t pos, uint16_t mv, uint16_t ma) {
+    pd::SinkStatus s;
+    s.state = st; s.held = held; s.pos = pos; s.mv = mv; s.ma = ma;
+    return s;
+}
+
+// ROADMAP "PD 0V5.82A" row, last bullet: when the K2's OWN sink holds the contract (SinkStatus
+// ready/held, pos and PDO known), derive_proto uses that contract for the footer - the K2 never
+// hears its own Requests, so the sniffed ctr is a far sink's. Own AVS -> "AVS 12.6V", PPS ->
+// "PPS 9V", fixed -> "PD 9V 3A".
+static void test_own_sink_contract_is_used_for_the_footer() {
+    const pd::SourceCaps c = caps_epr();
+    // Own fixed 9 V 3 A contract (pos 2) while a far sink's sniffed PPS Request sits in ctr.
+    pd::SinkStatus own = own_sink(pd::SinkState::Ready, false, 2, 9000, 3000);
+    ProtoSource s = pd_source(c, 5, 9000);   // sniffed: PPS at pos 5
+    s.sink = &own;
+    ProtoInfo p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::PdFixed));
+    CHECK_EQ(p.mv, 9000);
+    CHECK_EQ(p.ma, 3000);                     // "PD 9V 3A"
+    // Own PPS contract at 9 V (pos 5): "PPS 9V" - the contract's level, not the APDO range.
+    own = own_sink(pd::SinkState::Ready, false, 5, 9000, 5000);
+    s = pd_source(c, 2, 9000);                // sniffed: fixed 9 V
+    s.sink = &own;
+    p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::Pps));
+    CHECK_EQ(p.mv, 9000);
+    CHECK_EQ(p.lo_mv, 9000);
+    CHECK_EQ(p.hi_mv, 9000);                  // "PPS 9V"
+    // Own AVS contract at 12.6 V (pos 7, held - a trigger's keep-alive runs): "AVS 12.6V", not "PD 13V".
+    own = own_sink(pd::SinkState::Requesting, true, 7, 12600, 5000);
+    s = pd_source(c, 2, 9000);
+    s.sink = &own;
+    s.vbus_mv = 12600;
+    p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::Avs));
+    CHECK_EQ(p.mv, 12600);
+    CHECK_EQ(p.lo_mv, 12600);
+    CHECK_EQ(p.hi_mv, 12600);                 // "AVS 12.6V"
+    // Own sink holds but the PDO at its position is unknown (caps missed / pos beyond the list):
+    // the sniffed contract (far sink) is used, as before.
+    ProtoSource t = pd_source(c, 5, 9000);
+    pd::SinkStatus own2 = own_sink(pd::SinkState::Ready, false, 9, 9000, 3000);   // pos 9 > num_pdos 8
+    t.sink = &own2;
+    p = derive_proto(t);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::Pps));   // the sniffed PPS at pos 5
+    CHECK_EQ(p.lo_mv, 3300);
+    CHECK_EQ(p.hi_mv, 21000);
+    // Own sink idle (no contract of ours): the sniffed contract is used, as before.
+    pd::SinkStatus idle = own_sink(pd::SinkState::Idle, false, 2, 9000, 3000);
+    t.sink = &idle;
+    p = derive_proto(t);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::Pps));
+}
+
 int main() {
     test_pd_fixed();
     test_pd_epr();
@@ -237,5 +292,6 @@ int main() {
     test_type_c_and_dcp();
     test_pending_unknown_and_none();
     test_pd_labels_need_decoded_pd();
+    test_own_sink_contract_is_used_for_the_footer();
     return test_report("test_home_proto");
 }

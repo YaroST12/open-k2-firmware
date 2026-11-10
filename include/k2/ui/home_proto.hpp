@@ -9,6 +9,7 @@
 #include "k2/fastcharge/fastcharge_classify.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_engine.hpp"
+#include "k2/pd/pd_sink.hpp"
 #include "k2/ui/home_model.hpp"
 
 namespace k2::home {
@@ -22,6 +23,7 @@ struct ProtoSource {
     pd::Contract ctr{};                 // the sink's latest Request (valid = a PD contract exists)
     const pd::SourceCaps *caps = nullptr;   // the source's capabilities when seen
     bool pd_link = false;               // CC attached and not waiting: the contract belongs to this source
+    const pd::SinkStatus *sink = nullptr;   // the K2's OWN sink (fusb302::sink_status()); the K2 never hears its own Requests
     fastcharge::Protocol fc = fastcharge::Protocol::Pending;
     int32_t vbus_mv = 0;                // live VBUS, only rounded to a nominal level for protocols that carry none
     uint32_t typec_ma = 0;              // the Rp current of a source that sent no PD caps (0 = undecided)
