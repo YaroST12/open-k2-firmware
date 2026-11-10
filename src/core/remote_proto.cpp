@@ -143,11 +143,18 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
         if (written++ == n) break;
         w.u8(modern ? static_cast<uint8_t>(step.algorithm) : static_cast<uint8_t>(step.group));
         w.u8(step.pos);
-        w.u8((step.continuous ? 1 : 0) | (step.avs ? 2 : 0) | (std::min<unsigned>(step.tries, 7) << 2));
+        // A deep-sweep row sets flags bit 5 and carries the recorded point count in the detail byte: the in-RAM
+        // kDetailSweep marker (161) says "this is a sweep" but not how many points the sweep logged.
+        const bool sweep_row = charger_test::is_sweep(step);
+        uint8_t detail = step.detail;
+        if (sweep_row)
+            if (const auto* rw = s.sweep.find(static_cast<uint8_t>(step.algorithm), step.pos))
+                detail = static_cast<uint8_t>(std::min<unsigned>(rw->n, 255));
+        w.u8((step.continuous ? 1 : 0) | (step.avs ? 2 : 0) | (std::min<unsigned>(step.tries, 7) << 2) | (sweep_row ? 0x20 : 0));
         w.u16(step.mv); w.u16(step.ma); w.u16(step.measured_mv);
         w.u8(static_cast<uint8_t>(step.verdict));
         w.u8(modern ? static_cast<uint8_t>(step.reason) : legacy_reason(step.reason, &step, &s.evidence));
-        w.u8(step.detail); w.u32(step.pdo);
+        w.u8(detail); w.u32(step.pdo);
     }
     return w.size();
 }

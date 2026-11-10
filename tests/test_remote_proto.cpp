@@ -1537,12 +1537,12 @@ static void test_sweep_row_wire_carries_points() {
     rows[0].sum.points = 61; rows[0].sum.peak_mv = 10850; rows[0].sum.peak_at_mv = 11000;
     const k2::ctsweep::View view{rows, {}};
     f.test_results = {0x01020304, 0x05060708, 3, 0, 1, steps};
-    f.test_results.sweep = &view;
+    f.test_results.sweep = view;
     CHECK_EQ(run(f, request(0x0B, 30, {}), r), 1);
     check_header(r, 0x0B, 30, Status::Ok, 15);
     CHECK_EQ(run(f, request(0x0B, 31, {0, 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
     check_header(r, 0x0B, 31, Status::Ok, 31);          // header 15 + one 16-byte row
-    CHECK_EQ(r[21], uint8_t(ct::Algorithm::Pps));        // row byte 0: algorithm
+    CHECK_EQ(r[21], uint8_t(ct::Group::Pd));             // row byte 0: group (schema 1)
     CHECK_EQ(r[22], 6);                                  // byte 1: PDO slot
     CHECK_EQ(r[23], 0x20);                               // byte 2: flags bit 5 = a deep-sweep row
     CHECK_EQ(r[32], 61);                                 // detail byte: the 61 recorded points, not 161

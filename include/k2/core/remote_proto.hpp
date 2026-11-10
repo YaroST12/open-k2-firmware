@@ -57,7 +57,10 @@
 //                                    total(1) current(1) start(1) n(1), then n<=2 rows:
 //                                    group(1) pos(1) flags(1) target_mv(2) request_ma(2)
 //                                    measured_mv(2) verdict(1) reason(1) detail(1) raw_pdo(4).
-//                                    Enums match k2/chargertest/charger_test.hpp; flags bit0 continuous, bit1 AVS.
+//                                    Enums match k2/chargertest/charger_test.hpp; flags bit0 continuous, bit1 AVS,
+//                                    bit5 a deep-sweep row (its detail byte is then the recorded point count, not
+//                                    the in-RAM kDetailSweep marker; the row's target_mv/measured_mv are the peak's
+//                                    setpoint and the peak).
 //                                    Metadata has start=n=0. current==total means no current step.
 //                                    start<=total; start==total is an empty end page. BadArg otherwise;
 //                                    mismatched run/revision is Busy (retry metadata, no partial export).
@@ -66,8 +69,9 @@
 //                                    rows are omitted. Selection and source evidence are unavailable.
 //                                    Opt-in schema 2: req 2 (metadata), or 2 start run_id revision.
 //                                    rsp the same first 15 bytes, schema=2, then run_selected(4),
-//                                    draft_selected(4; bit 31 = the PPS deep sweep on, an Options flag,
-//                                    not an algorithm bit - it was always 0 before), wire_rev[1:0]/draft_stage[5:2](1),
+//                                    draft_selected(4; bit 31 = the PPS deep sweep on, bit 30 = the AVS deep sweep
+//                                    on - Options flags, not algorithm bits - they were always 0 before),
+//                                    wire_rev[1:0]/draft_stage[5:2](1),
 //                                    RMDO spec nibbles(1), EvidenceFlag(1), monitor_mv(2),
 //                                    physical_cable_mv(2) ma(2), RMDO version nibbles(1),
 //                                    source_session(4), raw_source_header(2), observed_pdos(1).
@@ -523,11 +527,13 @@ struct ChargerTestSnapshot {
     uint8_t stage = 0;
     uint8_t cursor = 0;    // setup list cursor, saturates at 15 (wire: high nibble of the PDO-count byte)
     uint8_t resumed = 0;   // times this run was resumed after a reboot (the wire saturates at 3)
+    ctsweep::View sweep{}; // the finished sweep rows; a sweep row's wire detail byte is its recorded point count
 };
 inline ChargerTestSnapshot charger_test_snapshot(const charger_test::Runner& r,
                                                  uint32_t configured = charger_test::kAllAlgorithms, uint8_t stage = 0, uint8_t cursor = 0) {
     return {r.run_id(), r.revision(), static_cast<uint8_t>(r.state()),
-            static_cast<uint8_t>(r.reason()), static_cast<uint8_t>(r.index()), r.steps(), r.evidence(), configured, stage, cursor, r.resumed()};
+            static_cast<uint8_t>(r.reason()), static_cast<uint8_t>(r.index()), r.steps(), r.evidence(), configured, stage, cursor,
+            r.resumed(), r.sweep_view()};
 }
 constexpr uint8_t kChargerTestSchema = 1;
 constexpr size_t kChargerTestHeader = 15, kChargerTestRow = 16, kChargerTestPage = 2;
