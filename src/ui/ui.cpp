@@ -595,7 +595,7 @@ static bool same_choice(const pd::Choice &a, const pd::Choice &b) {
     return a.pos == b.pos && a.mv == b.mv && a.ma == b.ma;
 }
 
-Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confirm) {
+Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confirm, bool over_load) {
     ContentViewport viewport(layout_.content);
     if (ports_busy()) {
         K2LOG("[TEST] PD request refused: test running\n");
@@ -603,7 +603,7 @@ Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confir
     }
     if (pd::is_fake()) return {pd::Err::NoCaps, false};
     if (fusb302::trigger_refusal() != pd::TriggerRefusal::None) {   // before any confirm prompt: no TX ever
-        const pd::Err e = fusb302::sink_request(c, confirm);     // logs [PD] trigger refused: inline (reason)
+        const pd::Err e = fusb302::sink_request(c, confirm, over_load);     // logs [PD] trigger refused: inline (reason) / over-load allowed
         ctx_.trig_armed = false;
         return {e, false};
     }
@@ -611,7 +611,7 @@ Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confir
         K2LOG("[UI] trigger PDO%u needs confirm\n", c.pos);
         return {pd::Err::Ok, true};
     }
-    const pd::Err e = fusb302::sink_request(c, confirm);
+    const pd::Err e = fusb302::sink_request(c, confirm, over_load);
     K2LOG("[UI] trigger PDO%u %umV %umA -> %s\n", c.pos, c.mv, c.ma, pd::err_name(e));
     ctx_.trig_armed = false;
     current().update(now_ms);

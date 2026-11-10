@@ -843,17 +843,18 @@ class ActivePd(unittest.TestCase):
 
     def test_request_over_load_sets_flag_bit_1(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
+        # each `pd request` call is a CMD_PD_REQUEST followed by a CMD_PD_TRIGGER_STATUS read
         # --over-load with --confirm: flags = 3
         kr.cmd_pd(link, self.args(pd_cmd="request", pos=6, mv=5500, ma=2000, confirm=True, over_load=True))
         self.assertEqual(link.calls[0], (kr.CMD_PD_REQUEST,
                                          bytes([6, 3]) + (5500).to_bytes(2, "little") + (2000).to_bytes(2, "little")))
         # --over-load alone: flags = 2 (bit 1, no confirm)
         kr.cmd_pd(link, self.args(pd_cmd="request", pos=6, mv=5500, ma=2000, over_load=True))
-        self.assertEqual(link.calls[1], (kr.CMD_PD_REQUEST,
+        self.assertEqual(link.calls[2], (kr.CMD_PD_REQUEST,
                                          bytes([6, 2]) + (5500).to_bytes(2, "little") + (2000).to_bytes(2, "little")))
         # without --over-load the flag stays clear
         kr.cmd_pd(link, self.args(pd_cmd="request", pos=6, mv=5500, ma=2000, confirm=True))
-        self.assertEqual(link.calls[2][1][1], 1)
+        self.assertEqual(link.calls[4][1], bytes([6, 1]) + (5500).to_bytes(2, "little") + (2000).to_bytes(2, "little"))
 
     def test_over_load_is_only_on_pd_request(self):
         a = kr.build_parser().parse_args(["pd", "request", "6", "--mv", "5500", "--ma", "2000",

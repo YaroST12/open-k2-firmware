@@ -445,10 +445,10 @@ static remote::PdOpResult pd_result(pd::Err e) {
     return r;
 }
 
-remote::PdOpResult Remote::pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm) {
-    K2LOG("[RMT] pd request pos=%d mv=%d ma=%d confirm=%d\n", static_cast<int>(pos), static_cast<int>(mv),
-                 static_cast<int>(ma), confirm ? 1 : 0);
-    const Ui::TriggerOutcome o = ui_.trigger({pos, mv, ma}, systick::millis(), confirm);
+remote::PdOpResult Remote::pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load) {
+    K2LOG("[RMT] pd request pos=%d mv=%d ma=%d confirm=%d over_load=%d\n", static_cast<int>(pos), static_cast<int>(mv),
+                 static_cast<int>(ma), confirm ? 1 : 0, over_load ? 1 : 0);
+    const Ui::TriggerOutcome o = ui_.trigger({pos, mv, ma}, systick::millis(), confirm, over_load);
     if (o.need_confirm) return {remote::Status::NeedConfirm, 0};
     return pd_result(o.err);
 }

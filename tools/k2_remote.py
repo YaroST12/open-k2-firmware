@@ -45,7 +45,7 @@ CMD_DEBUG_CC_PROBE = 0x2A   # debug: [sw0, pc, ms u16 (, modes u16)] hold a SWIT
 CMD_DEBUG_PDOS = 0x20    # debug: load N synthetic PDOs into the PD state (0 = clear)
 CMD_ADC_RAW = 0x21        # raw ADC dump (10 channels + the 7 scan slots)
 CMD_IDENTIFY_DEVICE = 0x40  # [op] 0 status, 1 start, 2 start + confirm
-CMD_PD_REQUEST = 0x41       # [pos, flags (bit0 confirm), mv u16, ma u16] -> [pd::Err]
+CMD_PD_REQUEST = 0x41       # [pos, flags (bit0 confirm, bit1 over-load lab-only), mv u16, ma u16] -> [pd::Err]
 CMD_PD_RESET = 0x42         # hard reset
 CMD_PD_TRIGGER_STATUS = 0x43
 CMD_PD_MATCH = 0x45  # passive wants-vs-offers verdict
@@ -1833,11 +1833,12 @@ def cmd_action(link, a):
 
 
 def cmd_pd(link, a):
-    """Active PD. `pd request` above 5 V needs --confirm; inline the K2 refuses all of them."""
+    """Active PD. `pd request` above 5 V needs --confirm; inline the K2 refuses all of them
+    (--over-load lifts the refusal only while the far sink is a passive load, lab only)."""
     sub = a.pd_cmd
     if sub == "request":
         mv, ma = getattr(a, "mv", 0) or 0, getattr(a, "ma", 0) or 0
-        flags = 1 if getattr(a, "confirm", False) else 0
+        flags = (1 if getattr(a, "confirm", False) else 0) | (2 if getattr(a, "over_load", False) else 0)
         link.call(CMD_PD_REQUEST, bytes([a.pos, flags]) + mv.to_bytes(2, "little") + ma.to_bytes(2, "little"))
     elif sub == "reset":
         link.call(CMD_PD_RESET)
@@ -2603,11 +2604,15 @@ def build_parser():
                     help="allow it while a live sink is attached (may interrupt charging)")
     spd = sub.add_parser("pd", help="active PD: request a contract, reset, release, status")
     spds = spd.add_subparsers(dest="pd_cmd", required=True)
-    sq = spds.add_parser("request", help="request PDO n (above 5 V needs --confirm; refused inline)")
+    sq = spds.add_parser("request", help="request PDO n (above 5 V needs --confirm; refused inline unless --over-load)")
     sq.add_argument("pos", type=int, choices=range(0, 12), metavar="N", help="1-based PDO position (0 = read the EPR list)")
     sq.add_argument("--mv", type=int, default=0, help="PPS / AVS voltage in mV")
     sq.add_argument("--ma", type=int, default=0, help="current in mA")
     sq.add_argument("--confirm", action="store_true", help="allow a voltage above 5 V")
+    sq.add_argument("--over-load", action="store_true",
+                    help="lab only: let the K2 request while a far sink is attached, but only when that sink sent no PD "
+                         "message this attach (a passive load: Rd only, no Request, no Get_Source_Cap); refused otherwise. "
+                         "Never reachable from the UI or the charger test")
     spds.add_parser("reset", help="PD hard reset (the supply returns at 5 V)")
     spds.add_parser("release", help="back to 5 V (Request PDO 1)")
     sa = spds.add_parser("attach", help="attach as PD sink and request target voltage (default 9000 mV)")

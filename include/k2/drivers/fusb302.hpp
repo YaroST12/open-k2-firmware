@@ -191,9 +191,16 @@ void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> 
 
 // Request a contract. Refused while inline (Err::Inline) even when confirmed: a live sink is attached
 // and the K2 must not renegotiate its supply. The caller enforces "above 5 V needs a confirm".
-pd::Err sink_request(const pd::Choice& c, bool confirmed = false);
+// `over_load` is the lab-only bypass (remote `pd request --over-load`, never the UI or the charger
+// test): it lifts the inline refusal only while the far sink is a passive load (over_load_facts()).
+pd::Err sink_request(const pd::Choice& c, bool confirmed = false, bool over_load = false);
 // The one trigger gate (wizard, remote and sink_request all use it): None = a Request may go out.
 pd::TriggerRefusal trigger_refusal();
+// Lab-only over-load facts, derived from the existing foreign-evidence tracking (no second tracker):
+// far_sink = the inline latch, a sink Rd read while inline, a sink Rd on CC with none of ours, or a
+// foreign Request; far_pd_message = a Request we did not send this attach, or the sink-role records
+// the engine already filed (Sink_Capabilities, VDMs) - all cleared with the attach.
+pd::OverLoadFacts over_load_facts();
 // Any PD message (any SOP: caps, Request, PS_RDY, VDM, GoodCRC) seen since this attach.
 bool pd_traffic();
 // Latched like pd_traffic() but cleared only by a new attach: a unit's hold / start-up resets pd_traffic(), this one keeps

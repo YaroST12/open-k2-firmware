@@ -322,7 +322,7 @@ enum class Cmd : uint8_t {
     // Active PD (wave 2C). Every one of them is refused inline; a request above 5 V needs the
     // confirm flag (Status::NeedConfirm without it). Ids 0x31/0x32 belong to DebugFault/Fc.
     IdentifyDevice = 0x40,  // [op] 0 status, 1 start, 2 start + confirm (inline) -> IdentifySnapshot
-    PdRequest = 0x41,       // [pos, flags (bit0 confirm), mv u16, ma u16] -> [pd::Err]
+    PdRequest = 0x41,       // [pos, flags (bit0 confirm, bit1 over-load lab-only), mv u16, ma u16] -> [pd::Err]
     PdReset = 0x42,         // hard reset (the supply comes back at 5 V)
     PdTriggerStatus = 0x43, // -> PdTriggerSnapshot
     PdRelease = 0x44,       // back to 5 V (Request PDO 1)
@@ -368,6 +368,9 @@ constexpr bool cmd_ids_unique() {
 static_assert(cmd_ids_unique(), "two remote commands share one request id");
 
 constexpr uint8_t kPdFlagConfirm = 1 << 0;
+// Lab-only (k2_remote `pd request --over-load`, never the UI / WebHID / charger test): lift the inline
+// refusal while the far sink is a passive load - no PD message from it this attach (pd::over_load_allowed).
+constexpr uint8_t kPdFlagOverLoad = 1 << 1;
 
 constexpr uint32_t kFaultMagic = 0x4D4F4F42;  // "BOOM" little endian
 constexpr uint32_t kDfuMagic = 0x21554644;   // "DFU!" little endian: the DFU_ENTER confirmation
@@ -813,7 +816,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ripple_info() } -> std::same_as<RippleInfo>;
     { b.identify_device(u8) } -> std::same_as<IdentifyResult>;
     { b.reread(u8, u8) } -> std::same_as<RereadResult>;   // op (0 status, 1 start, 2 abort), step mask
-    { b.pd_request(u8, u16, u16, on) } -> std::same_as<PdOpResult>;
+    { b.pd_request(u8, u16, u16, on, on) } -> std::same_as<PdOpResult>;   // pos, mv, ma, confirm, over_load (lab only)
     { b.pd_release() } -> std::same_as<PdOpResult>;
     { b.pd_hard_reset() } -> std::same_as<PdOpResult>;
     { b.pd_attach(u16, u16) } -> std::same_as<PdTriggerSnapshot>;
@@ -1117,7 +1120,8 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
     }
     case Cmd::PdRequest: {
         if (p.size() != 6) return reply(Status::BadLength);
-        const PdOpResult res = backend.pd_request(p[0], detail::rd16(&p[2]), detail::rd16(&p[4]), (p[1] & kPdFlagConfirm) != 0);
+        const PdOpResult res = backend.pd_request(p[0], detail::rd16(&p[2]), detail::rd16(&p[4]),
+                                                   (p[1] & kPdFlagConfirm) != 0, (p[1] & kPdFlagOverLoad) != 0);
         buf[0] = res.err;
         return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
     }

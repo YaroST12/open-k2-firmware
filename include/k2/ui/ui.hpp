@@ -90,7 +90,8 @@ public:
     // or, on the device, a second OK within kConfirmWindowMs (device_trigger). The hard cap is
     // the power monitor's limit, enforced again inside the driver.
     struct TriggerOutcome { pd::Err err; bool need_confirm; };
-    TriggerOutcome trigger(const pd::Choice &c, uint32_t now_ms, bool confirm);
+    // `over_load` is the lab-only remote bypass (pd request --over-load); the UI paths never pass it.
+    TriggerOutcome trigger(const pd::Choice &c, uint32_t now_ms, bool confirm, bool over_load = false);
     TriggerOutcome device_trigger(const pd::Choice &c, uint32_t now_ms);   // OK twice
     void trigger_release(uint32_t now_ms);       // back to 5 V
     void trigger_hard_reset(uint32_t now_ms);

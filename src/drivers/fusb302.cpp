@@ -2116,13 +2116,30 @@ pd::TriggerRefusal trigger_refusal() {
     return pd::can_trigger({inline_now(), g_detach.sink_was_seen(), far_sink_seen()});
 }
 
-pd::Err sink_request(const pd::Choice& c, bool confirmed) {
+// Lab-only over-load facts, one derivation from the existing foreign-evidence state: the far-sink
+// half is what downstream_now() and the raw CC reading already track (the inline latch, a sink Rd
+// read while inline, a sink Rd on CC with none of the K2's, a foreign Request); the far-PD-message
+// half is what the engine already attributes to a sink (a Request we did not send, its
+// Sink_Capabilities, its VDMs). All of it belongs to one attach (rebase_far_sink / apply_cc_choice).
+pd::OverLoadFacts over_load_facts() {
+    const bool far_req = far_sink_seen();
+    return {inline_now() || g_detach.sink_was_seen() || g_far_sink || far_req,
+            far_req || g_engine.sink.valid || g_engine.sink_vdm.num_svids != 0};
+}
+
+pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
     if (g_legacy_only) return pd::Err::Busy;
     (void)confirmed;  // the UI / remote layer owns the "above 5 V needs confirm" rule
     g_reread_made_contract = false;   // a trigger takes the contract over from a re-read (reread_start sets the flag after its own)
     if (const pd::TriggerRefusal r = trigger_refusal(); r != pd::TriggerRefusal::None) {
-        K2LOG("[PD] trigger refused: inline (%s)\n", pd::trigger_refusal_name(r));
-        return pd::Err::Inline;
+        // Lab-only bypass (`k2_remote pd request ... --over-load`): allowed only while the far sink is a
+        // passive load (Rd only, no PD message this attach). Refused otherwise, and the UI / charger
+        // test never pass over_load.
+        if (!over_load || !pd::over_load_allowed(over_load_facts())) {
+            K2LOG("[PD] trigger refused: inline (%s)\n", pd::trigger_refusal_name(r));
+            return pd::Err::Inline;
+        }
+        K2LOG("[PD] trigger over-load: far sink attached, no far PD message this attach (lab only)\n");
     }
     if (g_active_cc == 0) return pd::Err::NoCaps;
     if (g_ident.running() || g_probe.running() || g_prep.active()) return pd::Err::Busy;

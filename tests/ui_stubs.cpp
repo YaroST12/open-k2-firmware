@@ -138,10 +138,11 @@ std::uint32_t pd_quiet_ms() { return g_stub.pd_chatter && g_stub.legacy_attach ?
 pd::TriggerRefusal trigger_refusal() { return pd::TriggerRefusal::None; }
 const pd::SinkCapsSeen& sink_caps() { return g_stub.sink_seen; }
 void feed(uint8_t, uint16_t, std::span<const uint8_t>) {}
-pd::Err sink_request(const pd::Choice& c, bool confirmed) {
+pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
     g_stub.requests++;
     g_stub.last_choice = c;
     g_stub.last_confirmed = confirmed;
+    g_stub.last_over_load = over_load;
     if (g_stub.vbus_ceiling_mv > 0 && g_stub.request_err == pd::Err::Ok && c.pos >= 1 && c.pos <= g_stub.caps.num_pdos) {
         const std::int32_t want = c.mv ? c.mv : g_stub.caps.pdos[c.pos - 1].max_mv;
         g_stub.pm.vbus_mv = g_stub.pm_fast_mv = std::min(want, g_stub.vbus_ceiling_mv);

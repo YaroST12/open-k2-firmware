@@ -125,7 +125,7 @@ struct StubState {
     int probes = 0; bool probe_ok = true;   // probe_start() calls and its answer
     k2::pd::Err request_err = k2::pd::Err::Ok;
     k2::pd::Choice last_choice{};
-    bool last_confirmed = false;
+    bool last_confirmed = false, last_over_load = false;
     int requests = 0, releases = 0, hard_resets = 0, getcaps = 0, identifies = 0;
     uint32_t sink_cap = 0;
     int32_t sink_vbus = 0;

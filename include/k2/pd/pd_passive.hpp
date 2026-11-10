@@ -122,6 +122,19 @@ constexpr const char* trigger_refusal_name(TriggerRefusal r) {
     return "none";
 }
 
+// Lab-only over-load gate for the remote's `pd request ... --over-load` (never the UI, never the
+// charger test): let the K2 send its Request while a sink sits behind it, but only while that sink
+// stays a passive load - it showed its Rd and sent no PD message this attach. The facts come from
+// the one existing foreign-evidence tracking (pd::Link's inline latch, the sink Rd read on CC,
+// fusb302's far-sink records); the gate adds no second tracker.
+struct OverLoadFacts {
+    bool far_sink;        // a sink sits behind the K2 this attach (inline latch, sink Rd on CC, or a foreign Request)
+    bool far_pd_message;  // that sink sent a PD message this attach (a Request we did not send, its Sink_Capabilities / VDMs)
+};
+// Allowed only with a far sink attached and silent on PD this attach; refused with no far sink
+// and refused after any far PD message.
+constexpr bool over_load_allowed(const OverLoadFacts& f) { return f.far_sink && !f.far_pd_message; }
+
 // Type-C current advertised by the source's Rp, from the FUSB302 BC_LVL (STATUS0 bits 1:0):
 // 1 = default USB (500 mA), 2 = 1.5 A, 3 = 3 A. With a Rd on the line the level reads from the
 // Rp/Rd divider, so callers keep the highest level seen since attach.

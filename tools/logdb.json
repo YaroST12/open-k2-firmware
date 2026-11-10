@@ -420,6 +420,8 @@
   "417": "[PD] Sink downstream (inline=%d far request=%d): Rd off, no Request, no VDM answers\n",
   "418": "[TEST] re-plan: %u rows follow, %u withdrawn, %u back\n",
   "419": "[TEST] planned re-attach boot: the resume is not counted as a power loss\n",
-  "420": "[RDI] record %s pin=%u ignored: the SRAM canary did not survive this boot (a stale record)\n"
+  "420": "[RDI] record %s pin=%u ignored: the SRAM canary did not survive this boot (a stale record)\n",
+  "421": "[RMT] pd request pos=%d mv=%d ma=%d confirm=%d over_load=%d\n",
+  "422": "[PD] trigger over-load: far sink attached, no far PD message this attach (lab only)\n"
  }
 }
