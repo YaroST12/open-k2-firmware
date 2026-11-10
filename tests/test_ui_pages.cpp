@@ -1223,12 +1223,13 @@ static void test_pd_trigger_refusals() {
     CHECK_STR(label(ui, Button::Ok), "");
     ui.on_button(Button::Back, ButtonEvent::Short, 61200);
     CHECK_EQ(ui.menu_depth(), 0);
-    // Identify inline: needs a confirm.
+    // Identify inline: refused even with a confirm - an inline K2 never transmits; the sniffed
+    // identity fills the Sink tab instead.
     g_stub.identifies = 0;
-    CHECK_EQ(int(ui.identify(61300, false)), int(Ui::IdResult::NeedConfirm));
+    CHECK_EQ(int(ui.identify(61300, false)), int(Ui::IdResult::Refused));
     CHECK_EQ(g_stub.identifies, 0);
-    CHECK_EQ(int(ui.identify(61400, true)), int(Ui::IdResult::Started));
-    CHECK_EQ(g_stub.last_confirmed, true);
+    CHECK_EQ(int(ui.identify(61400, true)), int(Ui::IdResult::Refused));
+    CHECK_EQ(g_stub.identifies, 0);
     g_stub.pm = {};
     ui.debug_link(false, 69000);                          // detach clears the inline flag
     // No source caps: nothing to list, nothing to send.

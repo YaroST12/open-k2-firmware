@@ -3204,6 +3204,87 @@ void test_a_boot_pin_survives_the_far_end_detaching() {
     power_cycle_forget_pin();
 }
 
+// ---- inline TX refusals: an inline K2 never transmits, confirmed or not ----
+// 2026-11-10 (ROADMAP "Sink Identify inline drops the phone"): a confirmed inline Identify spoke as a
+// second sink on a wire whose partners already had a contract; both answered, GoodCRC/MessageIDs
+// collided and one side Hard Reset the link, dropping the phone to 5 V. Every active path (Identify,
+// Get_Source_Cap, the VCONN cable read over SOP', the VDM probe) must refuse inline even with
+// confirm=true, and nothing may reach the TX FIFO. These cases go last: they end with a detach.
+
+// A clean attach on CC1 with the inline latch set, and nothing logged yet.
+void attach_inline() {
+    fusb302::set_inline(false);
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x00;                                  // nothing on the line: detach whatever the last case left
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    fusb302::set_inline(false);
+    reset_world();
+    fusb302::init();
+    g_reg[0x40] = 0x20;                                  // a source's Rp on CC1
+    for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    fusb302::set_inline(true);
+    g_log.clear(); g_usb.clear();
+}
+
+void end_inline_case() {
+    g_reg[0x40] = 0x00;                                  // the line goes quiet: the 500 ms rule detaches
+    for (int i = 0; i < 40; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    fusb302::set_inline(false);
+}
+
+// No frame on the wire after 600 ms of polling: neither a TX-FIFO write nor TX_START.
+void check_no_tx() {
+    for (int i = 0; i < 30; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(find_from("FIFO"), -1);                     // no frame was ever queued
+    CHECK_EQ(find_from("W 06=01"), -1);                  // ... and TX_START never went out
+}
+
+void test_inline_identify_refused_even_confirmed() {
+    attach_inline();
+    CHECK_EQ(fusb302::identify_start(true), false);      // confirm must not override the inline refusal
+    CHECK_EQ(usb_has("refused"), true);
+    check_no_tx();
+    end_inline_case();
+}
+
+void test_inline_get_source_caps_refused_even_confirmed() {
+    attach_inline();
+    CHECK_EQ(fusb302::get_source_caps(true), false);
+    check_no_tx();
+    CHECK_EQ(usb_has("sending Get_Source_Cap"), false);
+    end_inline_case();
+}
+
+void test_inline_vconn_scan_refused_even_confirmed() {
+    attach_inline();
+    g_cable.cc = 1;
+    CHECK_EQ(fusb302::read_emarker(true, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(g_cable.tx_seen, 0);
+    CHECK_EQ(find_from("PC13=1"), -1);                   // VCONN never went on
+    CHECK_EQ(usb_has("Refused"), true);
+    end_inline_case();
+}
+
+void test_inline_cable_session_refused_even_confirmed() {
+    attach_inline();
+    SessionProbe s;
+    g_cable.vendor = true;
+    CHECK_EQ(fusb302::cable_session(true, &session_body, &s), false);   // the cable read over SOP' is refused too
+    CHECK_EQ(s.calls, 0);
+    CHECK_EQ(g_cable.tx_seen, 0);
+    CHECK_EQ(find_from("PC13=1"), -1);
+    end_inline_case();
+}
+
+void test_inline_vdm_probe_refused() {
+    attach_inline();
+    CHECK_EQ(fusb302::probe_start(), false);             // the VDM probe sequencer: already refused inline, locked in
+    check_no_tx();
+    end_inline_case();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3319,5 +3400,10 @@ int main() {
     test_a_far_sinks_control_message_is_a_far_pd_message_for_the_over_load_gate();   // last: ends with a detach / reset
     test_lab_pin_clears_when_the_far_end_detaches();            // last: each one ends with a detach / Rd off
     test_a_boot_pin_survives_the_far_end_detaching();
+    test_inline_identify_refused_even_confirmed();          // last: each inline case ends with a detach
+    test_inline_get_source_caps_refused_even_confirmed();
+    test_inline_vconn_scan_refused_even_confirmed();
+    test_inline_cable_session_refused_even_confirmed();
+    test_inline_vdm_probe_refused();
     return test_report("test_fusb302_scan");
 }

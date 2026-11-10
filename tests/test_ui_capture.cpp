@@ -939,7 +939,10 @@ int main() {
         for (uint32_t t = 13950; t <= 14350; t += 100) ui.tick(t);
         CHECK_EQ(ui.link().inline_mode(), 1);
         ui.on_button(Button::Ok, ButtonEvent::Short, 14355);   // pop-up: Identify
-        ui.on_button(Button::Ok, ButtonEvent::Short, 14357);   // inline: the first press only arms the confirm
+        ui.on_button(Button::Ok, ButtonEvent::Short, 14357);   // inline: refused, there is no confirm any more
+        g_stub.identifies = 0;
+        ui.on_button(Button::Ok, ButtonEvent::Short, 14358);   // a confirm press changes nothing either
+        CHECK_EQ(g_stub.identifies, 0);                         // nothing was ever transmitted
         test_screen(ui, "conn_sink_refused", 14360);
         ui.on_button(Button::Back, ButtonEvent::Short, 14365);
         g_stub.pm = saved;

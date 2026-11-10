@@ -895,6 +895,29 @@ static void test_survey_details_rows_follow_the_survey() {
     CHECK(frame() != silent);                                       // the manufacturer row shows its name
 }
 
+// The Sink tab's ID row marks an identity that was only heard on the wire: an inline K2 never asks
+// (its Identify is refused), so the phone's answer to the charger's own Discover Identity is shown
+// as sniffed. Only the ID row may differ between the two renders: no sniffed sink caps and no
+// Sink_Cap step, so the wants list is empty either way.
+static void test_sink_id_row_marks_a_sniffed_identity() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 20000);
+    g_stub.pm_online = true;
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2; g_stub.caps.active_cc = 1; g_stub.caps.num_pdos = 1;
+    g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
+    g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    uint32_t t = 21000;
+    ui.tick(t);
+    set_id(g_stub.sink_vdm, 0x05C6, 0x209E, "OnePlus");
+    g_stub.ident_current = false;                       // nothing was asked this attach: sniffed
+    const auto sniffed = show(ui, 2, t);
+    g_stub.ident_current = true;                        // a same-session Identify collected it
+    g_stub.ident.ok_mask = 0;                           // no Sink_Cap step: the wants list stays empty
+    const auto asked = show(ui, 2, t);
+    CHECK(sniffed != asked);                            // the ID row differs once the mark is in
+    g_stub.sink_vdm = {};
+}
+
 int main() {
     test_survey_nothing_active_before_refresh();
     test_survey_refresh_item_starts_it();
@@ -925,5 +948,6 @@ int main() {
     test_spoof_greyed_while_a_device_is_inline();
     test_spoof_enabled_when_nothing_is_inline();
     test_tools_spoof_shortcut_opens_the_cable_tab_list();
+    test_sink_id_row_marks_a_sniffed_identity();
     return test_report("test_ui_connection_page");
 }
