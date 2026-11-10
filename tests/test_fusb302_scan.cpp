@@ -3285,6 +3285,8 @@ void test_inline_vdm_probe_refused() {
     end_inline_case();
 }
 
+void test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();
+void test_request_period_is_tracked_and_reset_with_the_attach();
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -3405,5 +3407,50 @@ int main() {
     test_inline_vconn_scan_refused_even_confirmed();
     test_inline_cable_session_refused_even_confirmed();
     test_inline_vdm_probe_refused();
+    test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();   // last: ends with a detach
+    test_request_period_is_tracked_and_reset_with_the_attach();                           // last: ends with a detach
     return test_report("test_fusb302_scan");
+}
+
+// ROADMAP "PD 0V5.82A" row: Source_Capabilities sniffed on an inline link are stored where the home
+// model and state.num_pdos read them, and a Request decoded without its caps is never guessed (no
+// voltage, no current - on hardware the PPS bits read as a 5.82 A "max current").
+void test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed() {
+    passive_attach();
+    settle_ms(100);
+    fusb302::set_inline(true);
+    push_frame(0xE0, hdr(2, 1, false), {0x1001912Cu});                     // the phone's Request, no caps yet
+    service_ms(10);
+    CHECK_EQ(fusb302::contract().valid, true);
+    CHECK_EQ(fusb302::contract().mv, 0);                                   // unknown: never a guessed layout
+    CHECK_EQ(fusb302::contract().max_ma, 0);
+    push_frame(0xE0, hdr(1, 2, true), {0x0001912Cu, 0x0002914Bu});         // Source_Capabilities sniffed inline
+    service_ms(10);
+    CHECK_EQ(fusb302::caps().valid, true);                                 // stored where state.num_pdos reads it
+    CHECK_EQ(fusb302::caps().num_pdos, 2);
+    push_frame(0xE0, hdr(2, 1, false), {0x1001912Cu});                     // the next Request decodes with the caps
+    service_ms(10);
+    CHECK_EQ(fusb302::contract().mv, 5000);
+    CHECK_EQ(fusb302::contract().max_ma, 3000);
+    fusb302::set_inline(false);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+
+// The Request period feeds the PPS keep-alive label on the home footer (<= 10 s with no caps).
+void test_request_period_is_tracked_and_reset_with_the_attach() {
+    passive_attach();
+    settle_ms(100);
+    push_frame(0xE0, hdr(2, 1, false), {0x1001912Cu});
+    service_ms(1);
+    CHECK_EQ(fusb302::request_period_ms(), 0);                             // one Request: no period yet
+    g_ms += 500;
+    push_frame(0xE0, hdr(2, 1, false), {0x1001912Cu});
+    service_ms(1);
+    CHECK_EQ(fusb302::request_period_ms() >= 500 && fusb302::request_period_ms() <= 520, true);
+    g_reg[0x40] = 0x00;                                                    // the source leaves: detach
+    settle_ms(2000);
+    CHECK_EQ(fusb302::request_period_ms(), 0);                             // a new attach starts over
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
 }

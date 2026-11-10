@@ -135,6 +135,9 @@ static void test_protocol_row() {
     t = fmt({.kind = ProtoKind::Pps, .lo_mv = 3300, .hi_mv = 21000, .ma = 5000});
     CHECK_STR(t.tag.c_str(), "PPS");
     CHECK_STR(t.value.c_str(), "3.3-21V 5A");
+    t = fmt({.kind = ProtoKind::Pps, .lo_mv = 9000, .hi_mv = 9000});   // a keep-alive with no caps: one level, "PPS 9V"
+    CHECK_STR(t.tag.c_str(), "PPS");
+    CHECK_STR(t.value.c_str(), "9V");
     t = fmt({.kind = ProtoKind::Avs, .lo_mv = 15000, .hi_mv = 28000, .mw = 140000});
     CHECK_STR(t.tag.c_str(), "AVS");
     CHECK_STR(t.value.c_str(), "15-28V 140W");

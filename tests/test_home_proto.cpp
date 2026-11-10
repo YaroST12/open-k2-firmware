@@ -76,15 +76,62 @@ static void test_pd_avs() {
     CHECK_EQ(p.ma, 5000);                 // 140 W at 20 V is 7 A: capped at the 5 A of a standard cable
 }
 
-static void test_pd_without_caps_uses_the_request() {
+// ROADMAP "PD 0V5.82A" row: a contract decoded without its Source_Capabilities has an unknown PDO
+// type. Never decode the RDO with a guessed layout (a PPS voltage reads as a max current): show the
+// measured level and no current - "PD 9V", tag only - and no "max" either without caps.
+static void test_pd_contract_without_caps_shows_the_measured_level_and_no_current() {
     ProtoSource s;
     s.pd_link = true;
     s.ctr.valid = true; s.ctr.ready = true; s.ctr.pos = 2; s.ctr.mv = 9000; s.ctr.max_ma = 3000;
-    const ProtoInfo p = derive_proto(s);
+    s.vbus_mv = 9090;
+    ProtoInfo p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::PdFixed));
+    CHECK_EQ(p.mv, 9000);                 // the measured level, not ctr.mv (0 on the wire)
+    CHECK_EQ(p.ma, 0);                    // no current: the RDO layout is a guess without caps
+    CHECK_EQ(p.max_mv, 0);                // the source's maximum is unknown too
+    // The caps pointer set but invalid (the K2 booted mid-contract, pd_link is up): same rule.
+    const pd::SourceCaps empty{};
+    s.caps = &empty;
+    p = derive_proto(s);
     CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::PdFixed));
     CHECK_EQ(p.mv, 9000);
-    CHECK_EQ(p.ma, 3000);
-    CHECK_EQ(p.max_mv, 9000);
+    CHECK_EQ(p.ma, 0);
+    CHECK_EQ(p.max_mv, 0);
+    // Caps valid but the Request's position is beyond them: the PDO type is still unknown, the
+    // source's top voltage is known and stays.
+    const pd::SourceCaps c = caps_epr();
+    s.caps = &c;
+    s.ctr.pos = 9;
+    p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::PdFixed));
+    CHECK_EQ(p.mv, 9000);
+    CHECK_EQ(p.ma, 0);
+    CHECK_EQ(p.max_mv, 28000);
+}
+
+// A Request repeated every <= 10 s with no caps is the PPS keep-alive pattern: label it PPS with the
+// measured VBUS ("PPS 9V"). A longer gap, or a single Request (no period known), stays "PD 9V".
+static void test_periodic_request_without_caps_is_a_pps_keepalive() {
+    ProtoSource s;
+    s.pd_link = true;
+    s.ctr.valid = true; s.ctr.ready = true; s.ctr.pos = 5;
+    s.vbus_mv = 9090;
+    s.req_period_ms = 500;
+    ProtoInfo p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::Pps));
+    CHECK_EQ(p.mv, 9000);
+    CHECK_EQ(p.lo_mv, 9000);
+    CHECK_EQ(p.hi_mv, 9000);
+    CHECK_EQ(p.ma, 0);
+    CHECK_EQ(p.max_mv, 0);
+    s.req_period_ms = 10000;              // exactly 10 s: still the keep-alive
+    CHECK_EQ(static_cast<int>(derive_proto(s).kind), static_cast<int>(ProtoKind::Pps));
+    s.req_period_ms = 10001;              // slower: not the keep-alive pattern
+    p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::PdFixed));
+    CHECK_EQ(p.ma, 0);
+    s.req_period_ms = 0;                  // one Request only: no period known
+    CHECK_EQ(static_cast<int>(derive_proto(s).kind), static_cast<int>(ProtoKind::PdFixed));
 }
 
 static void test_non_pd_protocols() {
@@ -184,7 +231,8 @@ int main() {
     test_pd_epr();
     test_pd_pps();
     test_pd_avs();
-    test_pd_without_caps_uses_the_request();
+    test_pd_contract_without_caps_shows_the_measured_level_and_no_current();
+    test_periodic_request_without_caps_is_a_pps_keepalive();
     test_non_pd_protocols();
     test_type_c_and_dcp();
     test_pending_unknown_and_none();

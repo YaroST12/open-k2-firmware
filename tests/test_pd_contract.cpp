@@ -66,7 +66,37 @@ static void test_request_without_caps() {
     CHECK_EQ(e.contract.valid, 1);
     CHECK_EQ(e.contract.pos, 4);
     CHECK_EQ(e.contract.mv, 0);        // unknown without the caps
+    CHECK_EQ(e.contract.op_ma, 0);     // never decoded from a guessed RDO layout (a PPS voltage
+    CHECK_EQ(e.contract.max_ma, 0);    //  would read as a max current here: "PD 0V5.82A")
+}
+
+// A position the caps do not list is as unknown as no caps at all: the PDO at that slot is not ours
+// to guess (pdos[] beyond num_pdos are unused slots).
+static void test_request_position_beyond_the_caps_is_not_guessed() {
+    Engine e;
+    load_caps(e);   // 5 PDOs
+    send(e, sink_request, (9u << 28) | (300u << 10) | 300, 1);
+    CHECK_EQ(e.contract.valid, 1);
+    CHECK_EQ(e.contract.pos, 9);
+    CHECK_EQ(e.contract.mv, 0);
+    CHECK_EQ(e.contract.op_ma, 0);
+    CHECK_EQ(e.contract.max_ma, 0);
+}
+
+// Caps sniffed after the Request (the K2 booted mid-contract, the source re-announces while inline):
+// the contract on record is re-decoded against the caps that arrived.
+static void test_caps_arriving_after_the_request_redecode_it() {
+    Engine e;
+    send(e, sink_request, (4u << 28) | (300u << 10) | 300, 1);
+    CHECK_EQ(e.contract.mv, 0);
+    CHECK_EQ(e.contract.max_ma, 0);
+    load_caps(e);
+    CHECK_EQ(e.contract.valid, 1);     // the Request is still the contract
+    CHECK_EQ(e.contract.requests, 1);
+    CHECK_EQ(e.contract.pos, 4);
+    CHECK_EQ(e.contract.mv, 20000);    // now from the PDO the caps list at that position
     CHECK_EQ(e.contract.op_ma, 3000);
+    CHECK_EQ(e.contract.max_ma, 3000);
 }
 
 static void test_source_message_is_not_a_request() {
@@ -140,6 +170,8 @@ int main() {
     test_fixed_request();
     test_pps_request_and_new_request_clears_ready();
     test_request_without_caps();
+    test_request_position_beyond_the_caps_is_not_guessed();
+    test_caps_arriving_after_the_request_redecode_it();
     test_source_message_is_not_a_request();
     test_reset_source_keeps_counters();
     test_rdo_flags_and_accept();
