@@ -636,6 +636,7 @@ std::uint32_t generation() { return g_card_gen; }
 bool find(std::uint32_t fp, Card& c) { return g_cf->store.find(fp, c); }
 bool get(std::uint16_t no, Card& c) { return g_cf->store.get(no, c); }
 Err put(Card& c) { const Err e = g_cf->store.put(c); if (e == Err::Ok) ++g_card_gen; return e; }
+Err put(Card& c, Card& prev, bool& had) { const Err e = g_cf->store.put(c, prev, had); if (e == Err::Ok) ++g_card_gen; return e; }
 Err rename(std::uint16_t no, std::string_view n) { const Err e = g_cf->store.rename(no, n); if (e == Err::Ok) ++g_card_gen; return e; }
 Err remove(std::uint16_t no) { const Err e = g_cf->store.remove(no); if (e == Err::Ok) ++g_card_gen; return e; }
 Context context() { return {.fw = 0x0FF2C610, .boots = 4, .uptime_s = g_stub.ms / 1000}; }

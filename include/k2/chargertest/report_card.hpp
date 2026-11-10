@@ -705,8 +705,10 @@ constexpr uint16_t apdo_ma(ct::Algorithm alg, uint32_t raw, unsigned hi_dv) {
 inline void migrate_to_current(Card& c) { if (c.format < kFormat) c.format = kFormat; }
 
 // Fills `c` with the card of a finished run. The out-param form is for the one stack-gated caller
-// (ChargerTestSession::save_card): returning a Card by value puts a second Card on that frame.
-inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
+// (ChargerTestSession::save_card): returning a Card by value puts a second Card on that frame. Never inlined: its
+// per-group tally arrays are dead once it returns, but inlined they would keep their slots in save_card's frame
+// all through the store write below it (tools/stack_depth.py).
+[[gnu::noinline]] inline void build_into(Card& c, std::span<const ct::Step> steps, const ct::Evidence& ev, ct::HandoverInfo h, Identity id, Context cx,
                        ct::State state, ct::Reason reason, const Cable& cable = {}, uint8_t resumed = 0,
                        ctsweep::View sweep = {}) {
     c.id = id; c.num_pdos = ev.num_pdos; c.spec_rev = ev.wire_rev; c.ev_flags = ev.flags; c.cable = cable; c.resumed = resumed;

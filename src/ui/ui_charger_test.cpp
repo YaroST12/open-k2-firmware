@@ -645,12 +645,13 @@ void ChargerTestSession::save_card() {
     save_card_store();
 }
 // save_card's tail, on its own frame: it holds the charger's previous Card (292 B) that save_card used to keep
-// beside the new one — with both on save_card's stack the frame was stack-gated (tools/stack_depth.py). The order
-// is unchanged: prev is read before the write (after put the file holds the new card), the delta is taken after it.
+// beside the new one — with both on save_card's stack the frame was stack-gated (tools/stack_depth.py). The one
+// previous Card is filled by the store's own read before the write (after put the file holds the new card) and
+// handed back, so the store keeps none of its own; the delta is taken after the write.
 [[gnu::noinline]] void ChargerTestSession::save_card_store() {
     report_card::Card prev;
-    const bool had = report_card::hw::find(card_.id.fp, prev);
-    const auto err = report_card::hw::put(card_);
+    bool had = false;
+    const auto err = report_card::hw::put(card_, prev, had);
     if (err != report_card::Err::Ok) { K2LOG("[CARD] save failed %d\n", int(err)); return; }
     card_no_ = card_.card_no;
     std::memcpy(card_name_, card_.name, std::min(sizeof card_name_ - 1, sizeof card_.name)); card_name_[sizeof card_name_ - 1] = 0;

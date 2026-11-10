@@ -22,10 +22,15 @@ std::size_t numbers(std::span<std::uint16_t> out) { return g_store.numbers(out);
 std::uint32_t generation() { return g_gen; }
 bool find(std::uint32_t fp, Card& c) { return g_store.find(fp, c); }
 bool get(std::uint16_t card_no, Card& c) { return g_store.get(card_no, c); }
-[[gnu::noinline]] Err put(Card& c) {   // not inlined into save_card: Store::put holds a Card of its own, and that frame is stack-gated
-    const Err e = g_store.put(c);
+[[gnu::noinline]] Err put(Card& c, Card& prev, bool& had) {   // the caller owns the previous Card: no second one on this stack
+    const Err e = g_store.put(c, prev, had);
     K2LOG("[CARD] save #%u fp=%08x runs=%u times=%u -> %d\n", unsigned(c.card_no), unsigned(c.id.fp), unsigned(c.runs), unsigned(c.times), int(e));
     return written(e);
+}
+Err put(Card& c) {
+    Card prev;
+    bool had = false;
+    return put(c, prev, had);
 }
 Err rename(std::uint16_t card_no, std::string_view name) { return written(g_store.rename(card_no, name)); }
 Err remove(std::uint16_t card_no) { return written(g_store.remove(card_no)); }

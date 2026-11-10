@@ -77,10 +77,17 @@ public:
     // Saves a finished run: keeps the number, user name and run count of an earlier card of the same
     // charger (see inherit()). c comes back with card_no/runs/name filled in.
     Err put(Card& c) {
-        if (c.id.fp == 0) return Err::Invalid;
-        ensure();
         Card prev;
         bool had = false;
+        return put(c, prev, had);
+    }
+    // The same save with the caller's buffer for the card it replaces: prev holds the stored card of the same
+    // charger when `had` comes back true (read before the write, never modified by it), so a caller that wants
+    // that card for a delta does not read it a second time or keep a second Card on the stack beside this frame.
+    Err put(Card& c, Card& prev, bool& had) {
+        had = false;
+        if (c.id.fp == 0) return Err::Invalid;
+        ensure();
         for (unsigned i = 0; i < n_ && !had; ++i) if (idx_[i].fp == c.id.fp) had = load(c.id.fp, prev);
         c.times = 1; c.last_boots = 0; c.last_uptime_s = 0;      // a new run is one run, never a repeat of itself
         std::uint32_t top_stamp = 0;
