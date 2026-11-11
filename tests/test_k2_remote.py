@@ -1235,6 +1235,22 @@ class ActivePd(unittest.TestCase):
             kr.cmd_pd_reread(link, self.args(mask=None, wait=1, rd_glitch=ms), sleep=lambda s: None)
             self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([8, step]))])
 
+    def test_reread_line_no_run_only_sets_the_line(self):
+        # `--line N --no-run` (and `--line 0 --no-run`, which clears the forced line) must send op 4 and nothing else: it
+        # used to fall through and start a run (op 1) although --no-run was given (hardware 2026-11-11).
+        class L(self.Link):
+            def call(s, cmd, payload=b""):
+                s.calls.append((cmd, bytes(payload)))
+                return kr.Response(cmd, 0, 0, self.REREAD_DONE)
+        for line in (0, 1, 2):
+            link = L({})
+            out = kr.cmd_pd_reread(link, self.args(mask=None, wait=1, line=line, no_run=True), sleep=lambda s: None)
+            self.assertEqual(link.calls, [(kr.CMD_PD_REREAD, bytes([4, line]))])
+            self.assertEqual(out["state"], "done")
+        link = L({})   # without --no-run the run goes on after the line is set, as documented
+        kr.cmd_pd_reread(link, self.args(mask=None, wait=1, line=0), sleep=lambda s: None)
+        self.assertEqual([c[1][:1] for c in link.calls[:2]], [bytes([4]), bytes([1])])
+
     def test_reread_decodes_the_attach_flags(self):
         a = kr.decode_reread(bytes([1, 0, 15, 0, 0, 0, 0, 0, 2]))   # waiting for the contract
         self.assertEqual((a["state"], a["attaching"], a["attach_failed"], a["avs"]), ("running", True, False, False))

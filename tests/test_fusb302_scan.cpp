@@ -1144,6 +1144,65 @@ void test_reread_end_drops_the_contract_and_rd_after_the_linger() {
     end_start_test();
 }
 
+// `pd-reread --abort` must give the Rd and the contract back from every step (k2/hwfix-1111; hardware 2026-11-11 said it
+// did not always). Three places an abort can land: the attach still waiting for a source that never shows, the attach with
+// its Request on the wire and no Accept yet, and a finished run inside its linger (the contract stays readable for 30 s,
+// an abort must end it at once).
+unsigned sw0_rd();                // defined with the Rd-lifetime helpers below
+void settle_ms(unsigned ms);
+void test_reread_abort_while_waiting_for_a_source_releases_rd() {
+    reset_world();
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    for (int i = 0; i < 20; i++) { g_ms += 20; fusb302::poll(); }
+    const AttachState boot{g_reg[0x02], g_reg[0x03]};
+    CHECK_EQ(fusb302::reread_start(1), true);                // no CC yet: Rd goes up, the run waits for a source
+    CHECK_EQ(sw0_rd() != 0, true);
+    for (int i = 0; i < 50; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }   // 1 s: still waiting, nobody answered
+    CHECK_EQ(int(fusb302::reread_status().state), int(pd::RereadState::Running));
+    fusb302::reread_abort();
+    settle_ms(4000);
+    CHECK_EQ(int(fusb302::reread_status().state), int(pd::RereadState::Aborted));
+    CHECK_EQ(sw0_rd(), boot.sw0 & 3u);                       // Rd back as at boot
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
+    end_start_test();
+}
+
+void test_reread_abort_with_the_request_in_flight_releases_rd() {
+    reset_world();
+    fusb302::init();
+    fusb302::set_proactive_discover(false);
+    for (int i = 0; i < 20; i++) { g_ms += 20; fusb302::poll(); }
+    const AttachState boot{g_reg[0x02], g_reg[0x03]};
+    CHECK_EQ(fusb302::reread_start(1), true);
+    g_reg[0x40] = 0x20;                                      // the charger's Rp answers
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected"), true);
+    g_txfifo.clear();
+    send_caps_5v3a();
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(request_on_the_wire(), true);                   // the Request is out; the source has not accepted yet
+    CHECK_EQ(int(fusb302::sink_status().state) != int(pd::SinkState::Ready), true);
+    fusb302::reread_abort();
+    settle_ms(8000);                                         // the unanswered Request runs out, then the attach is released
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Idle));
+    CHECK_EQ(sw0_rd(), boot.sw0 & 3u);
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
+    end_start_test();
+}
+
+void test_reread_abort_inside_the_linger_releases_at_once() {
+    const AttachState boot = reread_attach_to_ready();
+    for (int i = 0; i < 400 && fusb302::reread_status().state == pd::RereadState::Running; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::reread_status().state) != int(pd::RereadState::Running), true);
+    for (int i = 0; i < 25; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }   // 0.5 s into the 30 s linger
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    fusb302::reread_abort();
+    settle_ms(4000);                                         // far inside the linger
+    check_back_to_boot(boot);
+    end_start_test();
+}
+
 // A user trigger that took the sink over during the linger keeps its contract: the re-read never releases it.
 void test_reread_release_leaves_a_held_contract_alone() {
     (void)reread_attach_to_ready();
@@ -4210,6 +4269,9 @@ int main() {
     test_legacy_only_is_pd_silent();
     test_reread_abort_drops_the_contract_and_rd();
     test_reread_end_drops_the_contract_and_rd_after_the_linger();
+    test_reread_abort_while_waiting_for_a_source_releases_rd();
+    test_reread_abort_with_the_request_in_flight_releases_rd();
+    test_reread_abort_inside_the_linger_releases_at_once();
     test_reread_release_leaves_a_held_contract_alone();
     test_reread_step_survives_a_tx_timeout_when_the_answer_arrives();
     test_ra_mode_holds_pc13_high_with_rd_on_cc2_only();

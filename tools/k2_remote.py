@@ -918,7 +918,9 @@ def cmd_pd_reread(link, a, sleep=time.sleep, clock=time.monotonic):
             return out
     line = getattr(a, "line", None)
     if line is not None:   # debug: the attach scan may take only this CC line (the passive scan can take a cable's Ra net);
-        link.call(CMD_PD_REREAD, bytes([4, line]))   # it stays for later attaches (charger test START) until --line 0 / --abort
+        out = decode_reread(link.call(CMD_PD_REREAD, bytes([4, line])).payload)   # it stays for later attaches (charger test START) until --line 0 / --abort
+        if getattr(a, "no_run", False):
+            return out
     out = decode_reread(link.call(CMD_PD_REREAD, bytes([1, mask])).payload)
     deadline = clock() + getattr(a, "wait", REREAD_POLL_S)
     while out["state"] == "running" and clock() < deadline:
@@ -3291,7 +3293,7 @@ def build_parser():
                          "powered cable and may probe the cable (SOP' Discover Identity, answered by an armed e-marker spoof). "
                          "Held until detach, --abort, --ra off or a reboot; refused inline with a sink, with a contract or "
                          "while another run is active. Stays on for a charger test START too")
-    sr.add_argument("--no-run", action="store_true", help="with --ra on or --pin: only set the mode, start no run")
+    sr.add_argument("--no-run", action="store_true", help="with --ra on, --pin or --line: only set the mode, start no run")
     sr.add_argument("--pin", type=int, choices=(0, 1, 2), default=None,
                     help="lab: pin the Rd on CC1 or CC2 (0 = release) the way a key-mode boot does, mark included, so a HID-powered "
                          "K2 acts like a charger-powered one and a warm reset (reboot) inherits the pin; refused inline. Use with --no-run")
