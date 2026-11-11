@@ -173,7 +173,9 @@ file head (`LPR`, version, length u16, CRC-16/CCITT-FALSE u16). Raw readings onl
 | e-marker | `valid` u8, `num_vdos` u8, 6 x VDO u32, `seq` u16, `read_mode` u8 |
 | CC | `refusal` u8, `switches0` u8 as found, CC switch pins u8, `flags` u8 (bit0 restored, bit1 VBUS abort, bit2 disturbed), `n` u8, 5 x (`cfg` u8: 0x80 as found, 1 Rd CC1 only, 2 Rd CC2 only, 0 none; CC1 u16 and CC2 u16 in 12-bit ADC counts; BC_LVL u8: bits 1:0 CC1, 3:2 CC2, bit4 valid; VBUS mV u16) |
 
-LZ4 does not pay on it (the readings barely repeat), so the share view cycles two parts. `tools/k2_qr.py decode` prints every
+Unpacked it is two parts. The share view packs it like any record when LZ4 saves a quarter: a run with skipped steps and empty
+rows does (the host fixture of `tests/test_ui_loop_probe.cpp` packs 399 to 203 B, one part), a run of varied readings may not.
+The LZ4 flag in the type byte tells the decoder either way. `tools/k2_qr.py decode` prints every
 field with its unit in the key name (`tools/loop_probe_rec.py`, the same decoder `k2_remote.py loop-probe` uses on the file).
 
 ## Measured capacity per part
@@ -215,7 +217,8 @@ geometry"): a version 12 frame is a 219 px box at 3 px per module, centred.
   then encodes with the generator's poll hook set to `lcd::pump` (USB and the idle hook are served once per mask candidate,
   eight times), wipes and draws the code.
 - **Long OK = Share** (`docs/UI_DESIGN.md`) on: a saved cable (Who's attached, Actions, Saved cables), the Who's attached Source tab, a report
-  card (Tools, Report cards, detail), the charger test Results page (the card of that run) and the Diag page (the log).
+  card (Tools, Report cards, detail), the charger test Results page (the card of that run), the Diag page (the log) and the
+  Loop probe page (Tools, Loop probe: the last result; a finished run opens the share view by itself).
   A record that LZ4 shrinks by 25 % or more goes out packed (the flag above); the share view packs in place in the scratch arena.
 - Left out: built-in chips and the identity record have no opener (the LOG head carries the git string and uptime; no text
   headroom left for a second chooser; the identity and boot-info links and page views exist and are tested, so an opener is
