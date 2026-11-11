@@ -8,7 +8,8 @@
 // runs out of blocks. One file = at most 2044 bytes = one flash page of data, so the Black Box costs at
 // most kMaxEntries pages (64 KB) of the volume. A save also keeps the volume's free blocks at or above the
 // reserve (kJournalReserveBlocks, for the charger journal): it evicts its own oldest captures to get there, and
-// returns Err::Full, writing nothing, when none is left to give back. File layout:
+// returns Err::Full, writing nothing, when none is left to give back; that refusal comes before the compression and reads
+// the free figure Fs caches, so a volume full of other data costs no LZ pass and no volume walk per capture. File layout:
 //   0  "K2B1"          magic and format version
 //   4  u16 packed_len  compressed bytes
 //   6  u16 raw_len     bytes after decompression
@@ -128,6 +129,9 @@ public:
     // Compresses `raw` (through `scratch`, at least lz::bound(raw.size()) bytes) and stores it as the newest.
     Err append(const Meta& m, std::span<const std::uint8_t> raw, std::span<std::uint8_t> scratch) {
         if (raw.empty() || scratch.size() < lz::bound(raw.size())) return Err::TooBig;
+        // No room above the reserve and no capture of ours to give back: Full before the compression. Cheap on purpose (the
+        // free figure is Fs's cached one, plus one listing of /bb): a volume full of other data refuses every capture.
+        if (free_blocks() < reserve_ + kWriteBlocks && count() == 0) return Err::Full;
         const std::size_t packed = lz::compress(raw, scratch);
         if (packed == 0 || packed > kMaxPacked) return Err::TooBig;
         std::memcpy(rd_.data(), kMagic.data(), 4);

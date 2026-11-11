@@ -198,6 +198,49 @@ int main() {
     {   // the default reserve is the journal's room
         CHECK_EQ(bbstore::kJournalReserveBlocks, 20u);
     }
+    {   // Full is cheap: on a volume the cards filled (hardware 2026-11-11: 61 cards, 5 free blocks, no capture of its own) the
+        // ring refused every capture after compressing it and walking the whole volume, 41 ms with the loop stopped, twice per
+        // VBUS cut. Now it refuses before the compression (the scratch buffer is never written) and, with nothing written in
+        // between, without a second walk (Fs caches used_blocks).
+        k2test::RamDisk disk{90};
+        fs::Fs vol{disk, 90};
+        bool fm = false;
+        vol.mount_or_format(fm);
+        Ring r(vol);
+        r.mount();
+        CHECK_EQ(vol.mkdir("/cards") == fs::Err::Ok, 1);
+        std::vector<std::uint8_t> card(264, 0xC4);
+        char name[32];
+        for (unsigned n = 0; n < 64; n++) {                               // a volume of 264-byte cards, one data block each
+            if (vol.block_count() - vol.used_blocks() <= 6) break;
+            std::snprintf(name, sizeof name, "/cards/%08x.card", 0x1000 + n);
+            CHECK_EQ(vol.write_file(name, card) == fs::Err::Ok, 1);
+        }
+        std::vector<std::uint8_t> blob(2000, 0x5A);
+        for (int n = 0; n < 40 && vol.block_count() - vol.used_blocks() > 6; n++) {
+            std::snprintf(name, sizeof name, "/x%d", n);
+            CHECK_EQ(vol.write_file(name, blob) == fs::Err::Ok, 1);
+        }
+        CHECK_EQ(vol.block_count() - vol.used_blocks() <= 6, 1);
+        CHECK_EQ(vol.write_file("/log.txt", blob) == fs::Err::Ok, 1);   // another store wrote last: the next figure is stale
+        disk.reset_counters();
+        vol.used_blocks();
+        const auto walk = disk.read_bytes;                                // what one walk of this volume reads
+        CHECK_EQ(vol.write_file("/log.txt", blob) == fs::Err::Ok, 1);
+        g_scratch.fill(0xEE);
+        disk.reset_counters();
+        CHECK_EQ(int(add(r, 1)), int(bbstore::Err::Full));
+        bool untouched = true;
+        for (auto b : g_scratch) untouched = untouched && b == 0xEE;
+        CHECK_EQ(untouched, 1);                                           // refused before lz::compress
+        CHECK_EQ(disk.progs + disk.erases, 0u);
+        disk.reset_counters();
+        CHECK_EQ(int(add(r, 2)), int(bbstore::Err::Full));                // the second capture of the same cut
+        if (disk.read_bytes * 4 >= walk) std::printf("  refusal read %llu bytes, a walk %llu\n", (unsigned long long)disk.read_bytes, (unsigned long long)walk);
+        CHECK_EQ(disk.read_bytes * 4 < walk, 1);                          // no walk: a fraction of one
+        for (auto b : g_scratch) untouched = untouched && b == 0xEE;
+        CHECK_EQ(untouched, 1);
+    }
     {   // too big: random data of a full capture does not fit one block; nothing is written
         Vol f;
         Ring r(f.fs);

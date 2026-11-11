@@ -270,5 +270,37 @@ int main() {
         CHECK_EQ(p.status().held, 0);
         CHECK_EQ(p.status().entries, 2);                              // the Contract capture is saved now (if still in a slot)
     }
+    {   // a refused capture (no room above the reserve, nothing of ours to evict) is refused once: later polls neither retry it
+        // nor touch the volume, and the next capture costs one refusal again (hardware 2026-11-11: two refusals per VBUS cut)
+        k2test::RamDisk disk{90};
+        fs::Fs vol{disk, 90};
+        bool fm = false;
+        vol.mount_or_format(fm);
+        std::vector<std::uint8_t> blob(2000, 0x5A);
+        char name[16];
+        for (int n = 0; n < 90 && vol.block_count() - vol.used_blocks() > 6; n++) {
+            std::snprintf(name, sizeof name, "/x%d", n);
+            CHECK_EQ(vol.write_file(name, blob) == fs::Err::Ok, 1);
+        }
+        bbpersist::Persister p(vol);
+        pdtrace::init();
+        pdtrace::clear_captures();
+        p.init();
+        capture(800000, 0x5555);
+        g_stub.ms = 800000 + 600 + kQuiet + 10;
+        p.poll();
+        CHECK_EQ(p.status().skipped, 1u);
+        CHECK_EQ(p.status().saves, 0u);
+        CHECK_EQ(p.status().entries, 0);
+        disk.reset_counters();
+        for (int k = 0; k < 50; k++) { g_stub.ms += 20; p.poll(); }
+        CHECK_EQ(p.status().skipped, 1u);                             // not retried
+        CHECK_EQ(disk.read_bytes + disk.progs + disk.erases, 0u);     // and the polls never touched the volume
+        capture(900000, 0x6666);
+        g_stub.ms = 900000 + 600 + kQuiet + 10;
+        p.poll();
+        CHECK_EQ(p.status().skipped, 2u);
+        CHECK_EQ(disk.progs + disk.erases, 0u);
+    }
     return test_report("test_bbpersist");
 }

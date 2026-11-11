@@ -84,6 +84,7 @@ Fs::Fs(BlockDevice& dev, std::uint32_t block_count) : dev_(dev), blocks_(block_c
 
 Err Fs::mount() {
     if (mounted_) return Err::Ok;
+    changed();
     const Err e = map(lfs_mount(&lfs_, &cfg_));
     mounted_ = e == Err::Ok;
     return e;
@@ -91,6 +92,7 @@ Err Fs::mount() {
 
 Err Fs::format() {
     unmount();
+    changed();
     return map(lfs_format(&lfs_, &cfg_));
 }
 
@@ -105,10 +107,12 @@ Err Fs::mount_or_format(bool& formatted) {
 void Fs::unmount() {
     if (mounted_) lfs_unmount(&lfs_);
     mounted_ = false;
+    changed();
 }
 
 Err Fs::open(lfs_file_t& f, const char* path, int flags) {
     if (!mounted_) return Err::NotReady;
+    if (flags & LFS_O_WRONLY) changed();          // every write path opens for writing first
     return map(lfs_file_opencfg(&lfs_, &f, path, flags, &fcfg_));
 }
 
@@ -202,11 +206,20 @@ Err Fs::append_file(const char* path, std::span<const std::uint8_t> data) {
     return r != Err::Ok ? r : map(c);
 }
 
-Err Fs::remove(const char* path) { return mounted_ ? map(lfs_remove(&lfs_, path)) : Err::NotReady; }
-Err Fs::rename(const char* from, const char* to) { return mounted_ ? map(lfs_rename(&lfs_, from, to)) : Err::NotReady; }
+Err Fs::remove(const char* path) {
+    if (!mounted_) return Err::NotReady;
+    changed();
+    return map(lfs_remove(&lfs_, path));
+}
+Err Fs::rename(const char* from, const char* to) {
+    if (!mounted_) return Err::NotReady;
+    changed();
+    return map(lfs_rename(&lfs_, from, to));
+}
 
 Err Fs::mkdir(const char* path) {
     if (!mounted_) return Err::NotReady;
+    changed();
     const Err e = map(lfs_mkdir(&lfs_, path));
     return e == Err::Exists ? Err::Ok : e;
 }
@@ -270,14 +283,19 @@ Err Fs::clean_tmp(const char* dir) {
         }
         lfs_dir_close(&lfs_, &d);
         if (!found) return Err::Ok;
+        changed();
         if (Err e = map(lfs_remove(&lfs_, victim)); e != Err::Ok) return e;
     }
 }
 
 std::uint32_t Fs::used_blocks() {
     if (!mounted_) return 0;
+    if (used_known_) return used_;
     const lfs_ssize_t n = lfs_fs_size(&lfs_);
-    return n < 0 ? 0 : std::uint32_t(n);
+    if (n < 0) return 0;                          // a failed walk is not cached
+    used_ = std::uint32_t(n);
+    used_known_ = true;
+    return used_;
 }
 
 }  // namespace k2::fs

@@ -20,6 +20,7 @@ public:
 
     int read(std::uint32_t b, std::uint32_t off, void* buf, std::uint32_t n) override {
         if (b >= blocks_ || off + n > k2::fs::kBlockSize) return k2::fs::kIoFail;
+        read_bytes += n;
         std::memcpy(buf, &mem_[std::size_t(b) * k2::fs::kBlockSize + off], n);
         return 0;
     }
@@ -53,7 +54,7 @@ public:
     bool dead() const { return dead_; }
     // Operations since the last call (programs + erases): how many cut points a sweep must cover.
     int ops_done() const { return int(progs + erases); }
-    void reset_counters() { progs = erases = halfwords = 0; }
+    void reset_counters() { progs = erases = halfwords = read_bytes = 0; }
     // What the operations since the last reset hold the main loop for on the device, in ms: about 0.2 ms per programmed
     // half-word (interrupts off per half-word, the loop starved for the whole call) and about 35 ms per sector erase
     // (measured 2026-11-08 on the K2: a 57-row begin of 7.5k half-words and 9 erases took 1.47 to 2.18 s).
@@ -62,6 +63,7 @@ public:
     std::uint32_t blocks() const { return blocks_; }
 
     std::uint64_t progs = 0, erases = 0, halfwords = 0;
+    std::uint64_t read_bytes = 0;   // bytes littlefs read: the cost proxy of a volume walk (used_blocks reads every metadata block)
 
 private:
     std::vector<std::uint8_t> mem_;

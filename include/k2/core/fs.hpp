@@ -87,7 +87,9 @@ public:
     Err clean_tmp(const char* dir);
 
     std::uint32_t block_count() const { return blocks_; }
-    std::uint32_t used_blocks();                 // walks the whole tree: not for hot paths
+    // Blocks in use. The first call after a change walks the whole tree (every metadata block, tens of ms on a full volume);
+    // later calls answer from memory until a write, append, remove, rename, mkdir, format or remount through this object.
+    std::uint32_t used_blocks();
 
     lfs_t& raw() { return lfs_; }
 
@@ -95,10 +97,13 @@ private:
     using Visit = bool (*)(void*, const Info&);
     Err list_raw(const char* dir, Visit v, void* ctx);
     Err open(lfs_file_t& f, const char* path, int flags);
+    void changed() { used_known_ = false; }      // every mutating call: the cached used_blocks() figure is stale
 
     BlockDevice& dev_;
     std::uint32_t blocks_;
     bool mounted_ = false;
+    bool used_known_ = false;
+    std::uint32_t used_ = 0;
     lfs_t lfs_{};
     lfs_config cfg_{};
     lfs_file_config fcfg_{};
