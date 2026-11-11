@@ -98,6 +98,7 @@ void Analyzer::begin(bool by_attach) {
     wait_psrdy_ = lost_pend_ = low_ = unplug_ = plow_ = over_on_ = false;   // win_ is a property of the input stream
     hi_ma_ = 0;
     prev_imax_ = 0;
+    blk_ms_ = blk_over_ms_ = blk_over_mas_ = 0;
     mj_frac_ = mv_frac_ = cmj_frac_ = 0;
     src_pdos_ = {};
     last_pwr_ms_ = now_ms_;
@@ -153,7 +154,36 @@ void Analyzer::hold_to(std::uint32_t ms) {
         acc(s.cmj, cmj_frac_, mw * dt);
         if (s.c_ma && ma * 1000 >= std::uint32_t(s.c_ma) * kPinPermille) s.pin_ms += dt;
         if (s.c_ma && ma > over_limit_ma(s.c_ma)) s.over_ms += dt;
+        sustain(dt, ma);
+    } else {
+        blk_ms_ = blk_over_ms_ = blk_over_mas_ = 0;   // a block covers one settled contract only
     }
+}
+
+static std::uint32_t sat_add(std::uint32_t a, std::uint64_t b) {
+    const std::uint64_t s = std::uint64_t(a) + b;
+    return s > 0xFFFFFFFFu ? 0xFFFFFFFFu : std::uint32_t(s);
+}
+
+// Settled contract time in blocks of kSustainMs: a block above over_limit_ma(c_ma) for kSustainPct of it counts.
+void Analyzer::sustain(std::uint32_t dt, std::uint32_t ma) {
+    Session& s = cur_;
+    if (!s.c_ma) return;
+    blk_ms_ = sat_add(blk_ms_, dt);
+    if (ma > over_limit_ma(s.c_ma)) {
+        blk_over_ms_ = sat_add(blk_over_ms_, dt);
+        blk_over_mas_ = sat_add(blk_over_mas_, std::uint64_t(ma) * dt);
+    }
+    if (blk_ms_ < kSustainMs) return;
+    if (std::uint64_t(blk_over_ms_) * 100 >= std::uint64_t(blk_ms_) * kSustainPct) {
+        if (s.sus_ms == 0) s.sus_first_ms = v_ms_ - blk_ms_;
+        s.sus_ms = sat_add(s.sus_ms, blk_ms_);
+        s.sus_over_ms = sat_add(s.sus_over_ms, blk_over_ms_);
+        s.sus_mas = sat_add(s.sus_mas, blk_over_mas_ / 1000);
+        s.sus_c_ma = s.c_ma;
+        s.sus_off_ma = s.c_pdo_ma;
+    }
+    blk_ms_ = blk_over_ms_ = blk_over_mas_ = 0;
 }
 
 // The contract is settled: PS_RDY plus kSettleMs, and no new Request, power role swap or PS_RDY wait in flight.
@@ -169,12 +199,17 @@ static void band_of(std::uint16_t c_mv, std::uint32_t& lo, std::uint32_t& hi) {
     hi = c_mv + band;
 }
 
+// A capture that starts mid-session (a stream run started late, a boot onto a live bus): VBUS already up, before any
+// CC or PD record, opens the session (its contract unseen). After the first session only CC and PD do.
+bool Analyzer::first_vbus_opens(std::uint16_t mv) const { return mv > kUpMv && !have_last_ && finished_ == 0 && !cc_any_; }
+
 // A ring VBUS record. It is emitted on large changes, so it stays the fast witness of VBUS loss and of the unplug; the
 // draw and band evidence come from it only while the session has no power windows.
 void Analyzer::sample(std::uint16_t mv, std::int16_t ma) {
     if (!win_) { pre_mv_ = mv; pre_ma_ = ma; pre_have_ = true; }
     Session& s = cur_;
     if (s.open && s.ended && mv < kLostMv) unplug_ = true;
+    if (!s.open && first_vbus_opens(mv)) begin(false);
     if (!s.open || !s.attached) return;
     if (mv > kUpMv && s.up_mv == 0) s.up_mv = mv;
     if (settled() && s.c_mv && mv < kLostMv && !lost_pend_) {
@@ -207,6 +242,7 @@ void Analyzer::power_window(std::uint32_t ts_us, const Window& w) {
     Session& s = cur_;
     if (s.open && s.ended && w.vmin < kLostMv) unplug_ = true;
     win_ = true;
+    if (!s.open && first_vbus_opens(w.vmin)) begin(false);
     if (!s.open || !s.attached) return;
     if (w.mv > kUpMv && s.up_mv == 0) s.up_mv = w.mv;
     if (settled() && s.c_mv && w.vmin < kLostMv && !lost_pend_) {
@@ -214,19 +250,22 @@ void Analyzer::power_window(std::uint32_t ts_us, const Window& w) {
         lost_pend_ms_ = now_ms_;
         lost_pend_ma_ = s.have_v ? i_ma_ : 0;
     }
-    hold_to(now_ms_);   // the previous window's mean held up to now
-    s.have_v = true;
+    // the window ends now and its mean stands for the time since the previous one
     v_mv_ = w.mv;
     i_ma_ = w.ma;
+    hold_to(now_ms_);
+    s.have_v = true;
     v_ms_ = now_ms_;
     observe(w);
     // An input cut-out: the draw goes from a real level to nothing inside the window (or from the previous one) while
-    // VBUS stays in band. The source kept its voltage, so the device disconnected its input.
-    if (settled() && s.c_mv) {
+    // VBUS stays up (in band, on a contract seen). The source kept its voltage, so the device disconnected its input.
+    // A contract made before the capture still has VBUS to judge by, only no band.
+    const bool unseen = !s.contract_seen && !s.contract && pend_ == kPendNone;
+    if ((settled() && s.c_mv) || unseen) {
         if (s.win_n < 0xFFFF) s.win_n++;
-        std::uint32_t lo, hi;
-        band_of(s.c_mv, lo, hi);
-        const bool v_up = w.vmin >= kLostMv && (s.pps || w.vmin >= lo);
+        std::uint32_t lo = kLostMv, hi;
+        if (!unseen && !s.pps) band_of(s.c_mv, lo, hi);
+        const bool v_up = w.vmin >= kLostMv && w.vmin >= lo;
         if (v_up && w.imin < std::int16_t(kDrawMa) &&
             (w.imax >= std::int16_t(kDropFromMa) || prev_imax_ >= std::int16_t(kDropFromMa))) {
             if (s.cut_n == 0) s.cut_ms = now_ms_;
@@ -368,6 +407,10 @@ void Analyzer::feed_record(std::uint8_t type, std::uint32_t ts_us, std::span<con
     switch (Type(type)) {
     case Type::Cc:
         if (p.size() < 1) return;
+        cc_any_ = true;
+        // a session VBUS opened (the capture started mid-session) with no PD in it yet and too short to judge: the
+        // tail of a session before the capture, dropped at its first CC event
+        if (s.open && !s.cc_seen && s.msgs == 0 && now_ms_ - s.start_ms < kDrawSettleMs) cur_ = Session();
         if (p[0] == 1) {   // attach
             if (s.open && s.ended && !unplug_) {   // a CC bounce with VBUS kept: the same session goes on
                 s.ended = false;
@@ -809,8 +852,18 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
                 std::int32_t((s.over_fault & 3) | ds(s.burst_min_ms) << 2 | ds(s.burst_max_ms) << 12 |
                              std::uint32_t(s.over_fault >> 2 & 1) << 22));
         }
-        else if (s.c_ma && s.cobs_ms >= kDrawSettleMs &&
-                 std::uint64_t(s.pin_ms) * 100 >= std::uint64_t(s.cobs_ms) * kPinSharePct)
+        // kSustainMs blocks mostly above the contract: a Fail when the level is above the offer too, or with VBUS
+        // falling / a reset. a: the mean while above, c: offer | share % << 16, d: the blocks' time (ms)
+        if (s.sus_ms && s.sus_over_ms) {
+            const std::uint32_t lvl = std::uint32_t(std::uint64_t(s.sus_mas) * 1000 / s.sus_over_ms);
+            const std::uint32_t share = std::uint32_t(std::uint64_t(s.sus_over_ms) * 100 / s.sus_ms);
+            const bool far = s.sus_off_ma && lvl > over_limit_ma(s.sus_off_ma);
+            add(r, far || (s.over_fault & 3) ? Sev::Fail : Sev::Warn, Group::Power, Code::OverSustained,
+                at(s.sus_first_ms), std::int32_t(lvl), s.sus_c_ma, std::int32_t(s.sus_off_ma | share << 16),
+                std::int32_t(s.sus_ms));
+        }
+        if (!over && !s.sus_ms && s.c_ma && s.cobs_ms >= kDrawSettleMs &&
+            std::uint64_t(s.pin_ms) * 100 >= std::uint64_t(s.cobs_ms) * kPinSharePct)
             add(r, Sev::Warn, Group::Power, Code::Pinned, at(s.contract_ms), s.c_ma, std::int32_t(s.pin_ms * 100 / s.cobs_ms),
                 std::int32_t(s.cobs_ms));
         const std::int32_t mw = s.cobs_ms ? std::int32_t(std::uint64_t(s.cmj) * 1000 / s.cobs_ms) : 0;
@@ -911,7 +964,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     }
     r.link = unstable ? 2 : degraded ? 1 : 0;
     bool over = false;
-    for (unsigned i = 0; i < r.n; i++) over = over || r.f[i].code == Code::OverDraw;
+    for (unsigned i = 0; i < r.n; i++) over = over || r.f[i].code == Code::OverDraw || r.f[i].code == Code::OverSustained;
     r.power = r.no_pd ? kPowerNoPd
               : s.active ? kPowerActive
               : short_power ? kPowerShort
@@ -1020,6 +1073,9 @@ void title(const Report& r, const Finding& f, Out& o) {
         o.amps(f.a); o.s(" on a "); o.amps(f.b); o.s(" contract");
         break;
     case Code::InputCuts: o.cap(r.snk_noun); o.s("'s input cuts out repeatedly"); break;
+    case Code::OverSustained:   // "Laptop stays over its contract, at 3.89 A on 3.25 A" (the level while over)
+        o.cap(r.snk_noun); o.s(" stays over its contract, at "); o.amps(f.a); o.s(" on "); o.amps(f.b);
+        break;
     case Code::Pinned: o.s("Draw pinned at the "); o.amps(f.a); o.s(" contract limit"); break;
     case Code::Draw:
         if (f.a) { o.s("Contract "); o.volts(f.a); o.c(' '); o.amps(f.b); o.s(", draws "); o.watts(f.c); }
@@ -1152,6 +1208,13 @@ void note(const Report& r, const Finding& f, Out& o) {
         // "0 mA in 552 of 9345 windows from 0:47; VBUS stayed up: the device let go"
         o.s("0 mA in "); o.u(std::uint32_t(f.a)); o.s(" of "); o.u(std::uint32_t(f.b));
         o.s(" windows from "); o.clock(f.t_ms); o.s("; VBUS stayed up: the device let go");
+        break;
+    case Code::OverSustained:
+        // "83 % of 20 s above 3.46 A from 16:05; offer 3.5 A" (worst case, 72 chars:
+        // "100 % of 59 min 59 s above 3.46 A from 1:16:05; offer 3.5 A")
+        o.u(std::uint32_t(f.c) >> 16); o.s(" % of "); o.dur(std::uint32_t(f.d)); o.s(" above ");
+        o.amps(std::int32_t(over_limit_ma(std::uint32_t(f.b)))); o.s(" from "); o.clock(f.t_ms);
+        if (f.c & 0xFFFF) { o.s("; offer "); o.amps(f.c & 0xFFFF); }
         break;
     case Code::VbusHigh: o.s("at "); o.clock(f.t_ms); break;
     case Code::VbusLost:
@@ -1304,6 +1367,7 @@ const char* code_name(Code c) {
     case Code::VbusHigh: return "vbus_high";
     case Code::VbusLost: return "vbus_lost";
     case Code::InputCuts: return "input_cuts";
+    case Code::OverSustained: return "over_sustained";
     case Code::NoGoodCrc: return "no_goodcrc";
     case Code::Retries: return "retries";
     case Code::TxFail: return "tx_fail";

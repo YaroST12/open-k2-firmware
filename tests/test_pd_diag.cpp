@@ -3,6 +3,7 @@
 // Black Box diagnosis (k2/pd/diag.hpp): one test per rule, on synthetic records, plus the captured fixtures.
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -226,14 +227,22 @@ void test_case1_no_twin() {
 
 // ---- captured fixtures: every session in a file, finished ones and the open one last (as bbdiag prints them) ----
 
-std::vector<Run> sessions(const char* path, const TwinHint* twin = nullptr, const char* power = nullptr) {
-    const auto b = load(path);
-    CHECK_COND(b.size() > 100);
+// Captures from stream runs back to back on one K2 uptime (the same clock) are walked as one: their traces and
+// power windows are concatenated in order.
+std::vector<Run> sessions_cat(std::initializer_list<const char*> paths, const TwinHint* twin,
+                              std::initializer_list<const char*> powers) {
+    std::vector<std::uint8_t> b;
+    for (const char* path : paths) {
+        const auto part = load(path);
+        CHECK_COND(part.size() > 100);
+        b.insert(b.end(), part.begin(), part.end());
+    }
     std::vector<bbdiag::TimedWindow> wins;
-    if (power) {
+    for (const char* power : powers) {
         const auto pb = load(power);
         CHECK_COND(pb.size() >= bbdiag::kWindowRecord);
-        wins = bbdiag::parse_windows(pb);
+        const auto w = bbdiag::parse_windows(pb);
+        wins.insert(wins.end(), w.begin(), w.end());
     }
     std::vector<Run> out;
     static Analyzer a;
@@ -249,6 +258,11 @@ std::vector<Run> sessions(const char* path, const TwinHint* twin = nullptr, cons
         out.back().render();
     }
     return out;
+}
+
+std::vector<Run> sessions(const char* path, const TwinHint* twin = nullptr, const char* power = nullptr) {
+    if (power) return sessions_cat({path}, twin, {power});
+    return sessions_cat({path}, twin, {});
 }
 
 // The Anker splitter: the rear leg (laptop on a contract made before the K2 attached), then the left port, where the
@@ -633,6 +647,91 @@ void test_fixture_novoo_overdraw() {
     EXPECT_CODE(r, Code::VdmLoop, Sev::Info);
     CHECK_COND(r.has_line("Discover_SVIDs asked 2x"));
     EXPECT_NO(r, Code::SoftReset);               // the Soft_Reset was to the cable plug (SOP')
+}
+
+// The CPU ramp (2..32 threads, 30 s each, 1026-1329 s) on its own: the stream run started mid-session, so the only
+// PD in it is a caps re-send at 1426 s. VBUS was up from the first record: that opens the session, contract unseen.
+// At 8+ threads the Legion cuts its input to 0 in nearly every window: that needs no contract to prove.
+void test_fixture_ramp_alone() {
+    auto ss = sessions("tests/fixtures/bbdiag/ramp_70w.raw", nullptr, "tests/fixtures/bbdiag/ramp_70w.power");
+    CHECK_EQ(ss.size(), 1u);
+    if (ss.empty()) return;
+    Run& r = ss[0];
+    r.dump("ramp 70 W, alone");
+    CHECK_COND(r.r.start_us / 1000000 < 1010);   // from the capture's start, not from the caps at 1426 s
+    EXPECT_CODE(r, Code::InputCuts, Sev::Warn);
+    CHECK_COND(r.has_line("VBUS stayed up: the device let go"));
+    EXPECT_NO(r, Code::VbusLost);
+}
+
+// The same ramp right after the NOVOO run (one K2 uptime, 2 s apart): the contract is known, 20 V 3.25 A on the
+// 20 V 3.5 A offer. At 4 threads the Legion is above 3.46 A for 77 % of the 30 s step (3.89 A while above), its
+// input cutting to 0 in between: sustained over the contract, though no single burst spans the step.
+void test_fixture_novoo_then_ramp() {
+    auto ss = sessions_cat({"tests/fixtures/bbdiag/novoo_legion_overdraw.raw", "tests/fixtures/bbdiag/ramp_70w.raw"},
+                           nullptr,
+                           {"tests/fixtures/bbdiag/novoo_legion_overdraw.power", "tests/fixtures/bbdiag/ramp_70w.power"});
+    CHECK_EQ(ss.size(), 1u);
+    if (ss.empty()) return;
+    Run& r = ss[0];
+    r.dump("novoo then ramp 70 W");
+    EXPECT_CODE(r, Code::OverDraw, Sev::Fail);
+    CHECK_COND(r.has_line("draws far above its contract"));
+    // sustained: 10 s blocks mostly above 3.46 A (the 4-thread step), at a level above the offer's 3.5 A too
+    const Finding* m = r.find(Code::OverSustained);
+    CHECK_COND(m != nullptr);
+    if (m) {
+        CHECK_COND(m->sev == Sev::Fail);
+        CHECK_COND(m->d >= 20000);                       // time in such blocks
+        CHECK_COND(m->a >= 3725);                        // the mean while above: past the offer's limit
+        CHECK_COND((std::uint32_t(m->c) >> 16) >= 50);   // the share above
+        CHECK_EQ(m->b, 3250);
+    }
+    CHECK_COND(r.has_line("Device stays over its contract, at 3.89 A on 3.25 A"));
+    CHECK_COND(r.has_line("% of 20 s above 3.46 A from 16:05; offer 3.5 A"));
+    EXPECT_CODE(r, Code::InputCuts, Sev::Warn);
+    EXPECT_NO(r, Code::VbusLost);
+}
+
+// Short bursts in blocks that are mostly inside the contract: no OverSustained. Above it for most of 20 s, with
+// cut-outs in between (they pull a plain mean under the limit): yes, at the level while above.
+void test_over_sustained_blocks() {
+    {
+        Trace t;
+        t.cc(true);
+        t.contract(kRgCaps, rdo(3, 3250, 3250));
+        t.vbus(20000, 3000);
+        for (int i = 0; i < 6; i++) {   // 3 A with 0.5 s at 5 A every 5 s: mean 3.2 A
+            t.wins_for(4500, 20000, 3000, 19900, 20100, 2900, 3100);
+            t.wins_for(500, 19800, 5000, 19700, 20000, 4900, 5100);
+        }
+        Run run;
+        run.go(t);
+        run.dump("over sustained: bursts only");
+        EXPECT_NO(run, Code::OverSustained);
+        EXPECT_CODE(run, Code::OverDraw, Sev::Fail);   // the bursts themselves, above the offer
+    }
+    {
+        Trace t;
+        t.cc(true);
+        t.contract(kRgCaps, rdo(3, 3250, 3250));
+        t.vbus(20000, 3000);
+        t.wins_for(10000, 20000, 3000, 19900, 20100, 2900, 3100);
+        for (int i = 0; i < 30; i++) {   // 3.6 A (over 3.46 A, under the offer's 3.725 A) for 0.8 s, then a 0.2 s cut
+            t.wins_for(800, 19900, 3600, 19800, 20000, 3500, 3700);
+            t.wins_for(200, 20000, 0, 19900, 20100, 0, 3600);
+        }
+        t.wins_for(10000, 20000, 3000, 19900, 20100, 2900, 3100);
+        Run run;
+        run.go(t);
+        run.dump("over sustained: with cut-outs");
+        EXPECT_CODE(run, Code::OverSustained, Sev::Warn);
+        CHECK_COND(run.has_line("Host stays over its contract, at 3.6 A on 3.25 A"));
+        CHECK_COND(run.has_line("78 % of 30 s above 3.46 A from 0:10; offer 3.5 A"));
+        const Finding* m = run.find(Code::OverSustained);
+        CHECK_COND(m && m->d >= 20000 && (std::uint32_t(m->c) >> 16) >= 70);
+        EXPECT_CODE(run, Code::InputCuts, Sev::Warn);
+    }
 }
 
 void test_over_draw_fail_when_vbus_drops() {
@@ -1203,8 +1302,8 @@ void test_lines_fit_and_codes_named() {
 void test_ram_budget() {
     std::printf("sizeof Analyzer=%zu Session=%zu Report=%zu\n", sizeof(Analyzer), sizeof(Session), sizeof(Report));
     // two Sessions (the running one and the last finished one) are most of it; the window input added 8 B + state
-    CHECK_COND(sizeof(Session) <= 304);
-    CHECK_COND(sizeof(Analyzer) <= 748);
+    CHECK_COND(sizeof(Session) <= 324);
+    CHECK_COND(sizeof(Analyzer) <= 800);
 }
 
 }  // namespace
@@ -1235,6 +1334,9 @@ int main() {
     test_windows_band_five_percent();
     test_fixture_novoo_overdraw_ring_only();
     test_fixture_novoo_overdraw();
+    test_fixture_ramp_alone();
+    test_fixture_novoo_then_ramp();
+    test_over_sustained_blocks();
     test_over_draw_fail_when_vbus_drops();
     test_over_draw_fail_when_source_resets();
     test_five_volt_only();

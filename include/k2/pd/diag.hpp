@@ -46,7 +46,7 @@ enum class Code : std::uint8_t {
     // contract instability
     HardReset, SoftReset, Reattach, Rejected, WaitLoop, ManyRequests, NoAccept, LateAccept, NoPsRdy, LatePsRdy, CapsUnanswered,
     // power quality
-    VbusLow, VbusHigh, VbusLost, InputCuts,
+    VbusLow, VbusHigh, VbusLost, InputCuts, OverSustained,
     // link quality
     NoGoodCrc, Retries, TxFail, RxBad,
     // roles and modes
@@ -84,6 +84,12 @@ inline constexpr unsigned kOverSharePct = 20;           // over the limit at lea
 inline constexpr std::uint32_t kOverMinMs = 2000;       // ... and at least this long in total; or
 inline constexpr std::uint32_t kOverBurstMs = 500;      // a burst: over the limit at least this long without a break ...
 inline constexpr std::uint32_t kOverGapMs = 300;        // ... longer than this (one low sample does not end it)
+// Sustained draw over the contract: settled contract time in blocks of kSustainMs; a block counts when the draw is
+// above over_limit_ma() for kSustainPct of it. Input cut-outs (0 mA samples) inside a block break bursts and pull a
+// plain mean down, so the share is the measure; the level is the mean while above. Short bursts in a block that is
+// mostly inside the contract do not count here (OverDraw covers them).
+inline constexpr std::uint32_t kSustainMs = 10000;
+inline constexpr unsigned kSustainPct = 50;
 constexpr std::uint32_t over_limit_ma(std::uint32_t contract_ma) { return contract_ma * kOverPermille / 1000 + kOverOffsetMa; }
 
 // One tracked VDM request (SVID << 8 | command) with its count and the last answer.
@@ -126,6 +132,9 @@ struct Session {
     std::uint32_t lost_ms = 0;
     std::uint32_t drop_ms = 0;
     std::uint32_t cut_ms = 0;              // the first input cut-out (draw to 0 with VBUS up, from power windows)
+    std::uint32_t sus_first_ms = 0;        // the first kSustainMs block mostly over the contract
+    std::uint32_t sus_ms = 0, sus_over_ms = 0;   // the time in such blocks, and the time above the limit in them
+    std::uint32_t sus_mas = 0;             // mA x s above the limit in them (the mean while above: sus_mas / sus_over_ms)
 
     // ---- 16 bit ----
     std::uint16_t msgs = 0;                // PD messages (not GoodCRC) on SOP
@@ -143,6 +152,7 @@ struct Session {
     std::uint16_t over_off_ma = 0;         // the contracted PDO's offered current at the over-draw peak
     std::uint16_t c_pdo_ma = 0;            // the contracted PDO's offered current (its max)
     std::uint16_t win_n = 0, cut_n = 0;    // power windows on a settled contract; cut-outs among them
+    std::uint16_t sus_c_ma = 0, sus_off_ma = 0;   // the contract current and the offer's in the last such block
     std::uint16_t burst_min_ms = 0, burst_max_ms = 0;   // the over-draw bursts' shortest and longest
     std::uint16_t peak_ma = 0;
     std::uint16_t low_mv = 0, low_c = 0, low_ma = 0, high_mv = 0, high_c = 0;   // the worst band breaches
@@ -281,6 +291,8 @@ private:
     void message(bool rx, std::uint8_t token, std::uint16_t hdr, std::span<const std::uint8_t> objs, std::uint32_t crc);
     void contract_from_rdo();
     void close_burst();
+    bool first_vbus_opens(std::uint16_t mv) const;   // VBUS up on a trace that started mid-session
+    void sustain(std::uint32_t dt, std::uint32_t ma);   // the kSustainMs blocks against the contract
 
     // Live tracking: not part of the evidence, so not kept with the last session. Grouped by width (no padding).
     struct Frame {
@@ -294,6 +306,8 @@ private:
     std::uint32_t plow_ms_ = 0;            // a VBUS reading under the band, waiting kUnplugMs for a detach (plow_)
     std::uint32_t lost_pend_ms_ = 0, last_pwr_ms_ = 0;
     std::uint32_t over_on_ms_ = 0, over_last_ms_ = 0;   // the open over-draw burst: first and last sample above
+    std::uint32_t blk_ms_ = 0, blk_over_ms_ = 0, blk_over_mas_ = 0;   // the open kSustainMs block: settled time, the
+                                                                       // time above the limit, mA x ms above it
     std::uint32_t last_us_ = 0, now_ms_ = 0, frac_us_ = 0;
     std::uint16_t v_mv_ = 0;
     std::int16_t i_ma_ = 0;
@@ -314,6 +328,7 @@ private:
     bool plow_ = false;
     bool over_on_ = false;
     bool win_ = false;                     // this session has power windows
+    bool cc_any_ = false;                  // a CC record was seen (else the trace started mid-session)
     bool have_last_ = false, have_clock_ = false, pre_have_ = false;
 };
 
