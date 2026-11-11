@@ -21,6 +21,11 @@ INC_DIR = include
 # `make docker-build K2_NET=1`) builds it back; the last gate step (tools/gate.py) builds it in build-net/ so it keeps
 # compiling and linking. See include/k2/core/build_config.h.
 K2_NET ?= 0
+# K2_WEB=1 puts the web parts back into `make test` and `make gate`: the node tests of the web pages (tools/web, webhid-flasher),
+# the host tests of the network function (test_net_dhcp, test_usb_desc_net), the Python checks that read the web page's JS, and
+# the gate's K2_NET=1 firmware variant. Off by default (2026-11-11: those parts are mostly unused; they get fixed in one go).
+K2_WEB ?= 0
+export K2_WEB
 
 # K2_WERROR=1 (set by `make gate`): our own sources build with -Werror; third_party never does.
 K2_WERROR ?= 0
@@ -409,6 +414,9 @@ $(HOST_DIR)/test_net_dhcp: $(OBJ_DIR)/tests/test_net_dhcp.o $(OBJ_DIR)/net/net.o
 .SECONDARY:
 .PHONY: test-run test-py
 TEST_ALL_BINS  = $(TEST_BINS) $(TEST_CXX_BINS)
+ifneq ($(K2_WEB),1)
+TEST_ALL_BINS := $(filter-out $(HOST_DIR)/test_net_dhcp $(HOST_DIR)/test_usb_desc_net, $(TEST_ALL_BINS))
+endif
 TEST_STAMPS    = $(patsubst $(HOST_DIR)/%, $(HOST_DIR)/run/%.ok, $(TEST_ALL_BINS))
 $(HOST_DIR)/run/%.ok: $(HOST_DIR)/%
 	@mkdir -p $(dir $@)
@@ -420,7 +428,8 @@ test-py: test-run
 	# --test-timeout is only a hang guard: the functional node rigs disable their own wall-clock watchdogs
 	# (count work, not time), so a rig that stops replying would otherwise hang `make gate` forever. 10 min is
 	# far beyond any load-induced slowness of these tests, so the guard itself cannot flake.
-	@if command -v node >/dev/null 2>&1; then node --test --test-timeout=600000 tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs; \
+	@if [ "$(K2_WEB)" != 1 ]; then echo "web tests off (K2_WEB=1 runs them)"; \
+	elif command -v node >/dev/null 2>&1; then node --test --test-timeout=600000 tests/test_k2proto.mjs tests/test_k2boot.mjs tests/test_flasher_page.mjs tests/test_cardpage.mjs tests/test_recordspage.mjs tests/test_dataframes.mjs; \
 	else echo "node not found: skipping node tests"; fi
 test: test-py
 

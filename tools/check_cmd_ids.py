@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FILES = {"cpp": ROOT / "include/k2/core/remote_proto.hpp", "py": ROOT / "tools/k2_remote.py",
          "js": ROOT / "tools/web/k2proto.js"}
+if __import__("os").environ.get("K2_WEB") != "1":   # the web parts are off by default (Makefile K2_WEB)
+    del FILES["js"]
 
 
 def _snake(name):

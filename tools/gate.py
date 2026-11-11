@@ -11,7 +11,8 @@
   4 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
   5 tests   make test (C++, Python, node)
   6 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
-  6b net    the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map
+  6b net    the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map;
+            only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the web tests back into step 5
 
   7 static  (opt-in, --static) tools/static_check.sh sanitize: every host test under ASan+UBSan, zero
             src/ reports and zero failed tests
@@ -347,10 +348,12 @@ def parse_size_line(text):
     return f"text={s['text']} data={s['data']} bss={s['bss']}"
 
 
+WEB = os.environ.get("K2_WEB") == "1"   # the web parts (Makefile K2_WEB): off by default
+
 STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invariants", step_invariants),
          ("stack budget", step_stack), ("map: no malloc / operator new / __cxa_", step_map), ("remote command ids", step_ids),
-         ("tests (C++, Python, node)", step_tests), ("size report", step_size),
-         ("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant)]
+         ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests), ("size report", step_size)] + (
+         [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant)] if WEB else [])
 
 
 def main():

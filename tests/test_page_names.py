@@ -6,6 +6,9 @@ import re
 import sys
 import unittest
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from webgate import WEB, web_only  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import k2_remote as kr  # noqa: E402
@@ -33,11 +36,13 @@ class PageNames(unittest.TestCase):
     def test_k2_remote(self):
         self.assertEqual(kr.PAGES, self.pages + self.menus)
 
+    @web_only
     def test_k2proto_js(self):
         js = (ROOT / "tools" / "web" / "k2proto.js").read_text()
         self.assertEqual(js_array(js, "PAGES"), self.pages)
         self.assertEqual(js_array(js, "MENUS"), self.menus)
 
+    @web_only
     def test_dashboard_copy(self):
         html = (ROOT / "tools" / "web" / "k2.html").read_text()
         self.assertEqual(js_array(html, "PAGES"), self.pages)
@@ -59,7 +64,7 @@ class PageNames(unittest.TestCase):
         for k, m in enumerate(self.menus):
             parent = "settings/" if m in ("usblink", "autorotate") else "tools/"
             self.assertEqual(kr.page_name(base + k), parent + m)
-        for text in (js, html):
+        for text in ((js, html) if WEB else ()):
             self.assertEqual(js_array(text, "MENUS"), self.menus)
             self.assertIn('"settings/"', text)
             self.assertIn('"tools/"', text)

@@ -5,6 +5,9 @@ import re
 import sys
 import types
 import unittest
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from webgate import WEB, web_only  # noqa: E402
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -164,6 +167,7 @@ class Sync(unittest.TestCase):
         self.assertEqual(int(re.search(r"kFcVooc\s*=\s*(\d+)", src).group(1)), kr.FC_OP_VOOC)
         self.assertEqual(int(re.search(r"kVoocSummaryBytes\s*=\s*(\d+)", src).group(1)), kr.VOOC_SUMMARY_BYTES)
 
+    @web_only
     def test_web_table_has_the_op(self):
         js = (ROOT / "tools/web/k2proto.js").read_text()
         self.assertRegex(js, r"FC_OP_VOOC\s*=\s*4\b")

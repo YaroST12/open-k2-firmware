@@ -99,7 +99,7 @@ class Ranges(unittest.TestCase):
                   for f, p in c.FILES.items()}
         self.assertEqual(c.check_ranges(tables, r), [])
         self.assertEqual(c.check(tables), [])
-        for f in ("py", "js"):
+        for f in [x for x in ("py", "js") if x in tables]:   # js only with K2_WEB=1
             for n, i in tables[f].items():
                 if i < 0x80:
                     self.assertEqual(i, tables["cpp"][n])

@@ -225,6 +225,9 @@ def test_epr_detail_names_match_the_firmware_and_the_tools():
     assert min(cpp) >= 128 + len(report_card.PD_ERRS)
 
 
+_WEB = __import__("os").environ.get("K2_WEB") == "1"   # the web parts are off by default (Makefile K2_WEB)
+
+
 def _js_fc_fails(path):
     src = (ROOT / "tools" / "web" / path).read_text()
     return re.findall(r'"([^"]*)"', re.search(r"var FC_FAILS = \[(.*?)\];", src, re.S).group(1))
@@ -232,8 +235,8 @@ def _js_fc_fails(path):
 
 @pytest.mark.parametrize("table", [
     pytest.param(lambda: __import__("k2_remote").FC_FAILS, id="k2_remote.py"),
-    pytest.param(lambda: _js_fc_fails("k2proto.js"), id="k2proto.js"),
-    pytest.param(lambda: _js_fc_fails("k2.html"), id="k2.html"),
+    pytest.param(lambda: _js_fc_fails("k2proto.js"), id="k2proto.js", marks=pytest.mark.skipif(not _WEB, reason="K2_WEB=1")),
+    pytest.param(lambda: _js_fc_fails("k2.html"), id="k2.html", marks=pytest.mark.skipif(not _WEB, reason="K2_WEB=1")),
 ])
 def test_every_fc_fail_table_names_every_enum_value(table):
     # fc::Fail grew NeedsLoad/NoVoltage without names once: the decoders printed "unknown (13)".

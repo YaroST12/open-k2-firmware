@@ -479,7 +479,7 @@ Reuse these before writing a new one. Headers under `include/k2/<group>/` unless
 | :--- | :--- |
 | `make docker-build` | Firmware in the `open-k2-builder` image (the host has no ARM toolchain); output `build/open_k2.elf` / `.k2` |
 | `make test` | Host unit tests: C++ (`tests/test_*.cpp`, native g++, run in parallel), Python (`tests/test_*.py`) and node (`tests/test_k2proto.mjs`) |
-| `make gate` | `tools/gate.py`: build with -Werror, bootloader invariants, stack budget, map check, command-id uniqueness, all tests, size report against `tools/size_baseline.txt`. Text growth over 5 % is a warning: explain it in the commit body |
+| `make gate` | `tools/gate.py`: build with -Werror, bootloader invariants, stack budget, map check, command-id uniqueness, all tests, size report against `tools/size_baseline.txt`. Text growth over 5 % is a warning: explain it in the commit body Web parts off by default: `make K2_WEB=1 gate` adds the node tests (tools/web, the WebHID flasher), the net host tests, the JS id table and the `K2_NET=1` variant build |
 | `python3 tools/gate.py --static` | The gate plus `tools/static_check.sh sanitize`: every host test under ASan + UBSan, zero `src/` reports |
 | `python3 tools/gate.py --update-baseline` | Rewrite `tools/size_baseline.txt` from the current build (do it deliberately, in its own commit) |
 | `make stack-report` | Worst-case stack depth per entry point (2.4) |

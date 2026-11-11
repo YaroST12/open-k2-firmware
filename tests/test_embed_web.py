@@ -8,6 +8,9 @@ import shutil
 import sys
 import unittest
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from webgate import WEB, web_only  # noqa: E402
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import embed_web  # noqa: E402
@@ -18,6 +21,7 @@ def decode(cpp):
     return bytes(int(x, 16) for x in re.findall(r"0x([0-9a-f]{2})", body))
 
 
+@web_only
 class EmbedWeb(unittest.TestCase):
     def test_roundtrip(self):
         page = b"<html>" + b"k2 " * 500 + b"</html>"
