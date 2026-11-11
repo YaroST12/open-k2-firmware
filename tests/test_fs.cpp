@@ -335,6 +335,21 @@ void test_used_blocks_walks_once_until_a_write() {
     CHECK_EQ(f.used_blocks(), 2u);                                  // a fresh volume: the superblock pair only
 }
 
+// fs::kInlineMax is the largest file littlefs keeps inside its directory's metadata pair: a file of that size takes no data
+// block, one byte more takes a whole 2 KB block. Small records (cards, twins, settings) are sized against this limit.
+void test_inline_limit() {
+    static_assert(fs::kInlineMax == 256);
+    RamDisk d(kBlocks);
+    fs::Fs f(d, kBlocks);
+    bool formatted = false;
+    CHECK_EQ(f.mount_or_format(formatted) == fs::Err::Ok, 1);
+    const std::uint32_t u0 = f.used_blocks();
+    CHECK_EQ(f.write_file("/in", sv(std::string(fs::kInlineMax, 'i'))) == fs::Err::Ok, 1);
+    CHECK_EQ(f.used_blocks(), u0);
+    CHECK_EQ(f.write_file("/out", sv(std::string(fs::kInlineMax + 1, 'o'))) == fs::Err::Ok, 1);
+    CHECK_EQ(f.used_blocks(), u0 + 1);
+}
+
 }  // namespace
 
 int main() {
@@ -351,5 +366,6 @@ int main() {
     test_write_chunks_round_trip();
     test_write_chunks_power_cut_sweep();
     test_used_blocks_walks_once_until_a_write();
+    test_inline_limit();
     return test_report("test_fs");
 }

@@ -76,6 +76,7 @@ Fs::Fs(BlockDevice& dev, std::uint32_t block_count) : dev_(dev), blocks_(block_c
     cfg_.block_cycles = 500;       // wear levelling: relocate a metadata pair after 500 erases
     cfg_.cache_size = kCache;
     cfg_.lookahead_size = kLookahead;
+    cfg_.inline_max = kInlineMax;
     cfg_.read_buffer = rcache_;
     cfg_.prog_buffer = pcache_;
     cfg_.lookahead_buffer = look_;

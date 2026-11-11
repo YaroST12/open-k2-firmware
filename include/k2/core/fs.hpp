@@ -24,8 +24,14 @@ extern "C" {
 namespace k2::fs {
 
 inline constexpr std::uint32_t kBlockSize = 2048;   // one flash page
-inline constexpr std::uint32_t kCache = 256;        // read, program and file cache; also the inline file limit
+inline constexpr std::uint32_t kCache = 256;        // read, program and file cache
 inline constexpr std::uint32_t kLookahead = 16;     // allocator bitmap: 128 blocks
+// Inline file limit: a file of at most kInlineMax bytes lives inside its directory's metadata pair and takes no data block;
+// one byte more costs a whole kBlockSize block. littlefs caps it at the cache size and at an eighth of a block; the Fs
+// config sets it to this value. Small records stay at or below it (docs/ARCHITECTURE.md "Volume budget"). Inline is not
+// free: a metadata pair is two blocks and splits once its live data passes about half a block, so N inline files of S
+// bytes cost about 4*N*S bytes of blocks.
+inline constexpr std::uint32_t kInlineMax = kCache < kBlockSize / 8 ? kCache : kBlockSize / 8;
 inline constexpr std::size_t kPathMax = 48;
 
 enum class Err : std::uint8_t { Ok, NotFound, NoSpace, Corrupt, Io, Invalid, TooBig, Exists, NotReady };
