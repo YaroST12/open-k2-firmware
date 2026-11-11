@@ -67,6 +67,11 @@ Record sample() {
 
 }  // namespace
 
+bool backup_alive() {
+    reg::crm().APB1EN |= kApb1enPwr | kApb1enBpr;
+    return decode(load()).has_value();
+}
+
 void init() {
     reg::crm().APB1EN |= kApb1enPwr | kApb1enBpr;
     *reinterpret_cast<volatile std::uint32_t*>(kPwr) |= kPwrDbp;

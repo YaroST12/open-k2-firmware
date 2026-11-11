@@ -18,6 +18,12 @@ void init();
 // changed, at most every kMinGapMs.
 void poll();
 
+// The backup domain kept the previous boot's record through this reset (a valid record in DR22..DR37 now). Every boot writes
+// one (init), so this is true after a warm reset or a short VBUS dark and false after a real power loss. Measured 2026-11-11
+// (runs/2026-11-11-iq4-bridge): a 1 s dark kept it while .noinit SRAM lost all 32 probe words. Side-effect free apart from the
+// BPR clock enable; callable before init() (the Rd intent marker asks it before the Rd is decided).
+bool backup_alive();
+
 // The record found at boot, if it was valid.
 const std::optional<Record>& previous();
 

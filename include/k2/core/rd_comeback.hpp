@@ -66,11 +66,12 @@ bool rescan_landing();
 // after the fact on a K2 that had no USB while it happened.
 //   looked      begin() read the marker (a cold plain boot); false on a warm reset or a key-mode boot
 //   kind, pin   the record on the volume (None = no record)
-//   canary      the .noinit canary vouched for exactly that record (false when there was none)
+//   canary      the backup registers kept the last boot's session record through this reset (session::backup_alive), so the
+//               record is a comeback's, not a stale leftover (false when there was no record)
 //   host        a USB host powers this boot (the aux rail; only sampled when a record exists)
 //   sram_words  how many of kProbeWords words of a fixed .noinit SRAM pattern survived the reset: kProbeWords on a warm
 //               reset, about 0 after a dark long enough for SRAM to decay (and after a flash: the DFU entry zeroes SRAM).
-//               It measures, on every boot, whether the canary CAN survive the dark this boot came back from.
+//               Kept as a measurement: SRAM did not survive a 1 s dark (2026-11-11), so it cannot be the voucher.
 inline constexpr std::uint8_t kProbeWords = 32;
 struct BootLook {
     bool looked = false;

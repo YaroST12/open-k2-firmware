@@ -16,9 +16,10 @@
 //
 // Bounds on a stale record (the K2 cannot clear it when a charger is simply unplugged: it dies with the marker in place):
 //   * only a cold plain boot reads it (reads_marker): a warm reset is the pin mark's business;
-//   * the SRAM canary armed with it (arm_canary, kept by rd_comeback in a .noinit section): a cold plain boot trusts the
-//     record only when the canary survived this reset and matches it (boot_mode's canary_ok). A marker left by a run the
-//     K2 did not come back from (a bare unplug: the K2 sat dead and SRAM decayed) is stale;
+//   * the backup domain (rd_comeback asks session::backup_alive): a cold plain boot trusts the record only when the session
+//     record the last boot wrote in the backup registers survived this reset (boot_mode's canary_ok). A marker left by a run
+//     the K2 did not come back from (a bare unplug and a wait: the backup registers lost power) is stale. A .noinit SRAM
+//     canary did this until 1.0.0-524; SRAM never survives a dark on this board (0 of 32 words after 1 s, 2026-11-11);
 //   * the comeback is judged in the first 1.5 s (judge): capabilities seen = vouched; no Rp on any line after kNoRpMs, or no
 //     capabilities after kGiveUpMs = released (Rd, Ra, spoof dropped, the record removed). One boot at most carries a stale one;
 //   * a vouched Reattach is consumed by the boot that served it: the follower rewrites it as the Session that boot now is, as
@@ -92,49 +93,10 @@ constexpr bool reads_marker(bootmode::Mode keys, bool warm) { return keys == boo
 inline constexpr int kHostAuxMv = 3500;
 constexpr bool host_powered(int aux_mv) { return aux_mv >= kHostAuxMv; }
 
-// The SRAM canary, armed with the marker's record on every save (rd_comeback.cpp keeps the one instance in a .noinit section:
-// link.ld places it before _sbss, so Reset_Handler's zero loop does not touch it). A cold boot cannot tell the marker's comeback
-// (the charger cut VBUS under a self-powered K2 for a short dark, about 165 ms measured, and re-applied it) from a stale leftover
-// (a bare unplug: the K2 sat dead for seconds before the next boot). SRAM can, while it survives the dark: a cold plain boot
-// trusts the record only when the canary survived this reset AND vouches for exactly the record on the volume. Whether .noinit
-// SRAM survives the comeback's dark on this board is a hardware measurement (docs/ROADMAP.md "Stale Rd marker"); the decision
-// table is host-tested both ways, and if SRAM does not survive even the short dark, the marker is bounded by a boot counter
-// instead (the same roadmap row).
-struct Canary {
-    std::uint32_t magic;
-    std::uint32_t payload;   // the record's bytes 4..9 (kind, pin, cable kind, seq lo, seq hi, check), folded
-    std::uint32_t check;
-};
-inline constexpr std::uint32_t kCanaryMagic = 0x4B325244;   // "K2RD"
-constexpr std::uint32_t canary_payload(const Intent& in) {
-    const auto r = encode(in);
-    std::uint32_t p = 0;
-    for (std::size_t i = 4; i < kSize; i++) p = p * 31u + r[i];
-    return p;
-}
-constexpr std::uint32_t canary_check(std::uint32_t payload) { return payload * 2654435761u ^ kCanaryMagic ^ 0x9E3779B9u; }
-// Arm with the record the marker now holds. magic goes last: a torn write leaves the canary not survived (fail-safe).
-constexpr void arm_canary(Canary& c, const Intent& in) {
-    c.payload = canary_payload(in);
-    c.check = canary_check(c.payload);
-    c.magic = kCanaryMagic;
-}
-// Clear with the marker's removal. magic goes first: a torn clear is still not survived.
-constexpr void clear_canary(Canary& c) {
-    c.magic = 0;
-    c.check = 0;
-    c.payload = 0;
-}
-constexpr bool canary_survived(const Canary& c) { return c.magic == kCanaryMagic && c.check == canary_check(c.payload); }
-// The canary vouches only for the exact record on the volume (kind, pin, cable and all).
-constexpr bool canary_matches(const Canary& c, const Intent& in) {
-    return canary_survived(c) && c.payload == canary_payload(in);
-}
-
 // The boot mode the Rd decision runs on: a key held decides; otherwise a cold boot with a record is the sink mode of the record's
 // pin (so the driver's key-mode path, which keeps the pin from the first write and never calls it inherited, serves it). A record
-// is trusted only when the canary armed with it survived this reset (canary_ok, read by rd_comeback from .noinit SRAM): a host
-// never comes back from a charger, and neither does a boot after a dark too long for SRAM.
+// is trusted only when the backup registers survived this reset (canary_ok, session::backup_alive in rd_comeback): a host never
+// comes back from a charger, and neither does a boot after a dark too long for the backup domain.
 constexpr bootmode::Mode boot_mode(bootmode::Mode keys, bool warm, const Intent& in, bool host = false, bool canary_ok = true) {
     if (!reads_marker(keys, warm) || in.kind == IntentKind::None || host || !canary_ok) return keys;
     return in.pin == 1 ? bootmode::Mode::OkRdCc1 : in.pin == 2 ? bootmode::Mode::PlusRdCc2 : keys;

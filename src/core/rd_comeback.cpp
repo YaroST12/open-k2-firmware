@@ -3,6 +3,7 @@
 // The Rd comeback on the real hardware, see k2/core/rd_comeback.hpp.
 #include "k2/core/rd_comeback.hpp"
 
+#include "k2/chargertest/session_store.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/rescan_bridge.hpp"
 #include "k2/core/storage.hpp"
@@ -20,16 +21,9 @@
 namespace k2::rdcomeback {
 namespace {
 
-using rdintent::Canary;
 using rdintent::Intent;
 using rdintent::IntentKind;
 
-// The SRAM canary armed with the marker on every save (rdintent::arm_canary; the decision table in rd_intent.hpp). .noinit:
-// link.ld places it before _sbss, so Reset_Handler's zero loop does not touch it - it survives warm resets and whatever dark
-// period (VBUS loss) SRAM itself survives. Whether it survives the comeback's short dark (~165 ms) on this board is the
-// hardware measurement of ROADMAP "Stale Rd marker"; sysreset::wipe_and_reset (the DFU entry) zeroes all of SRAM, so a
-// reflashed K2 never carries one.
-__attribute__((section(".noinit"), used)) Canary g_canary;
 
 // The SRAM retention probe (BootLook::sram_words): a fixed pattern in .noinit, counted and rewritten at the top of every begin().
 __attribute__((section(".noinit"), used)) std::uint32_t g_probe[kProbeWords];
@@ -45,15 +39,8 @@ std::uint8_t probe_take() {
     return n;
 }
 
-// One owner for every write of /rd.rec: the record and its canary go together. A save that lands on the volume arms the canary
-// with the same record (save() also returns true when the volume already holds it, so the canary is re-armed then too);
-// None removes the record and clears the canary.
-bool save_marker(const Intent& in) {
-    if (!rdintent::save(fs::instance(), in)) return false;
-    if (in.kind == IntentKind::None) rdintent::clear_canary(g_canary);
-    else rdintent::arm_canary(g_canary, in);
-    return true;
-}
+// One owner for every write of /rd.rec.
+bool save_marker(const Intent& in) { return rdintent::save(fs::instance(), in); }
 
 constexpr std::uint32_t kQuietMs = 300;      // PD link quiet before a flash write (as the black box persister)
 constexpr std::uint32_t kRpLookEveryMs = 50; // the Rp comparator look is a few I2C transactions: not on every pass
@@ -117,12 +104,14 @@ bootmode::Mode begin(bootmode::Mode keys, bool warm) {
     g_look.looked = true;
     g_look.kind = in.kind;
     g_look.pin = in.pin;
-    // The canary says whether this cold boot is the marker's comeback or a stale leftover: it survived this reset's dark period
-    // and vouches for exactly this record. A bare unplug leaves the marker but not the canary (the K2 sat dead and SRAM decayed),
-    // so that next plain boot stays passive - no Rd for whatever is on the port now (hardware 2026-11-09, build b00178c).
-    const bool canary = in.kind != IntentKind::None && rdintent::canary_matches(g_canary, in);
+    // The backup domain says whether this cold boot is the marker's comeback or a stale leftover: the session record the last boot
+    // wrote survived this reset's dark (a charger's VBUS cut under a self-powered K2: a short dark). A bare unplug and a wait leave
+    // the marker but not the backup registers, so that next plain boot stays passive - no Rd for whatever is on the port now
+    // (hardware 2026-11-09, build b00178c). Until 1.0.0-524 the voucher was a .noinit SRAM canary, which never survives a dark on
+    // this board (0 of 32 probe words after 1 s, runs/2026-11-11-iq4-bridge): every comeback booted plain and stayed dead.
+    const bool canary = in.kind != IntentKind::None && session::backup_alive();
     if (in.kind != IntentKind::None && !canary)
-        K2LOG("[RDI] record %s pin=%u ignored: the SRAM canary did not survive this boot (a stale record)\n", kind_name(in.kind),
+        K2LOG("[RDI] record %s pin=%u ignored: the backup registers did not survive this boot (a stale record)\n", kind_name(in.kind),
               static_cast<unsigned>(in.pin));
     const bool host = in.kind != IntentKind::None && host_powered_now();
     g_look.canary = canary;
