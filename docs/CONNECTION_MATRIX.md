@@ -23,7 +23,7 @@ at 3.3 V.
 Ports. The **top plug** is a captive male Type-C connector and the **bottom port** is a Type-C receptacle. They
 share one CC network and one VBUS rail, so a source or a sink behaves the same on either; the matrix collapses a
 row to one port unless the evidence differs, and says so. The **left port** is the USB-C receptacle that carries
-HID (a C-to-A cable to a host); it is not a CC port and is only a power and log input.
+HID (a C-to-C or C-to-A cable to a host; the 2026-10-31 "C-to-C does not enumerate" reading was a fluke, 2026-11-11); it is not a CC port and is only a power and log input.
 
 ### 1.1 K2 power
 
@@ -285,7 +285,7 @@ Related older claims and where they stand:
 
 Each `unverified` row as a concrete procedure. Common: one device tool at a time (`/tmp/k2-device.lock`), never
 `k2_remote fault`, no load, no active PD with the laptop inline, HID off by default (enable it in Tools -> USB link,
-replug, left port needs the C-to-A cable). Save captures under `runs/<date>-connection/<id>/`.
+replug; C-to-C or C-to-A on the left port). Save captures under `runs/<date>-connection/<id>/`.
 
 | Row | Hardware | Ports and power | Commands | Witness lines that confirm |
 |---|---|---|---|---|
