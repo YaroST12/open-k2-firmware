@@ -12,6 +12,7 @@
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/gap_meter.hpp"
+#include "k2/core/loop_stats.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/attach_pick.hpp"
@@ -979,6 +980,32 @@ remote::LcdSnapshot Remote::debug_lcd() {
     s.spi_div = static_cast<uint8_t>(lcd::spi_div());
     s.blocked_ms = static_cast<uint16_t>(std::min<uint32_t>(gap::blocked.run_peak(systick::millis()), 0xFFFFu));
     K2LOG("[RMT] debug lcd flags=%u transfers=%u stalls=%u\n", s.flags, unsigned(s.transfers), unsigned(s.stalls));
+    return s;
+}
+
+// The read happens inside a remote poll, between two passes: the pass that runs it is still open, so its own length lands in
+// the counters at its end (after a reset too, the reset keeps the gap references).
+remote::LoopSnapshot Remote::debug_loop(uint8_t page, bool reset) {
+    static_assert(remote::kLoopBuckets == loopstat::kBuckets);
+    loopstat::Stats& st = loopstat::stats;
+    const uint32_t now = systick::millis();
+    remote::LoopSnapshot s;
+    s.elapsed_ms = now - st.since_ms;
+    auto sat = [](uint32_t v) { return static_cast<uint16_t>(std::min<uint32_t>(v, 0xFFFFu)); };
+    s.loop_max_ms = sat(st.loop.max_ms);
+    s.svc_max_ms = sat(st.service.max_ms);
+    for (size_t i = 0; i < loopstat::kBuckets; i++) {
+        s.loop_hist[i] = sat(st.loop.hist[i]);
+        s.svc_hist[i] = sat(st.service.hist[i]);
+    }
+    const loopstat::Pass p = st.pages.get(page);
+    s.page = page;
+    s.page_us = p.us;
+    s.page_px = p.px;
+    s.worst_page = st.pages.worst_page;
+    s.worst_us = st.pages.worst.us;
+    s.worst_px = st.pages.worst.px;
+    if (reset) st.reset(now);
     return s;
 }
 

@@ -302,6 +302,44 @@ class Decoders(unittest.TestCase):
         self.assertEqual(kr.decode_lcd(full + bytes([8, 0, 0]))["blocked_ms"], 0)
         self.assertIn("blocked_ms=3100", kr.render("debug", {"lcd": r}))
 
+    def test_debug_loop(self):
+        # DebugLcd op 1 [1, page, flags]: elapsed u32, pass gap max u16 + 8 buckets, PD service gap max u16 + 8 buckets,
+        # the asked page's longest pass (page u8, us u32, px u32), the longest pass on any page.
+        def u16s(v):
+            return b"".join(x.to_bytes(2, "little") for x in v)
+        reply = (60000).to_bytes(4, "little") + u16s([151]) + u16s([5000, 9, 8, 7, 6, 5, 0, 40]) \
+            + u16s([30]) + u16s([5000, 9, 8, 300, 6, 5, 0, 0]) \
+            + bytes([1]) + (47000).to_bytes(4, "little") + (87024).to_bytes(4, "little") \
+            + bytes([0]) + (214500).to_bytes(4, "little") + (115200).to_bytes(4, "little")
+        self.assertEqual(len(reply), 58)
+        sent = []
+
+        class Link:
+            timeout_s = 1.0
+
+            def call(self, cmd, payload=b""):
+                sent.append((cmd, payload))
+                return kr.parse_response(rsp(cmd, 1, 0, reply))
+
+        a = kr.build_parser().parse_args(["debug", "loop", "--page", "1", "--reset"])
+        r = kr.COMMANDS["debug"](Link(), a)
+        self.assertEqual(sent[-1], (kr.CMD_DEBUG_LCD, bytes([1, 1, 1])))
+        d = r["loop"]
+        self.assertEqual(d["elapsed_ms"], 60000)
+        self.assertEqual(d["loop_max_ms"], 151)
+        self.assertEqual(d["loop_hist"], {"<=1": 5000, "<=2": 9, "<=5": 8, "<=10": 7, "<=20": 6, "<=50": 5, "<=100": 0, ">100": 40})
+        self.assertEqual(d["svc_max_ms"], 30)
+        self.assertEqual(d["svc_hist"]["<=10"], 300)
+        self.assertEqual((d["page"], d["page_ms"], d["page_px"]), (1, 47.0, 87024))
+        self.assertEqual((d["worst_page"], d["worst_ms"], d["worst_px"]), (0, 214.5, 115200))
+        self.assertEqual(d["over_20ms"], 45)   # passes longer than one slow-task period
+        a = kr.build_parser().parse_args(["debug", "loop"])
+        kr.COMMANDS["debug"](Link(), a)
+        self.assertEqual(sent[-1][1], bytes([1, 0, 0]))   # page 0 (Home), no reset
+        self.assertIn("loop_max_ms=151", kr.render("debug", r))
+        with self.assertRaises(Exception):
+            kr.decode_loop(reply[:57])
+
     def test_debug_cc_probe(self):
         sent = []
         # snapshot: flags=restored, n=2, sw0=0x03, sw1=0x00, pc=7, modes=0x333

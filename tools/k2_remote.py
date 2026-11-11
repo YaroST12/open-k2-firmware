@@ -3087,6 +3087,9 @@ def cmd_debug(link, a):
         return {"epr_info": decode_epr_info(link.call(CMD_DEBUG_EPR_INFO, bytes([op])).payload)}
     if a.debug_cmd == "lcd":
         return {"lcd": decode_lcd(link.call(CMD_DEBUG_LCD).payload)}
+    if a.debug_cmd == "loop":
+        payload = bytes([1, a.page, 1 if a.reset else 0])
+        return {"loop": decode_loop(link.call(CMD_DEBUG_LCD, payload).payload)}
     if a.debug_cmd == "cc-probe":
         payload = bytes([a.sw0, a.pc]) + a.ms.to_bytes(2, "little") + (a.modes.to_bytes(2, "little") if a.modes is not None else b"")
         saved, link.timeout_s = link.timeout_s, max(link.timeout_s, a.ms / 1000.0 + 2.0)   # the K2 blocks for the hold
@@ -3183,6 +3186,29 @@ def decode_lcd(p):
     if len(p) >= 24:
         r["blocked_ms"] = int.from_bytes(p[22:24], "little")
     return r
+
+
+LOOP_BUCKETS = ["<=1", "<=2", "<=5", "<=10", "<=20", "<=50", "<=100", ">100"]   # ms, k2/core/loop_stats.hpp kEdgesMs
+
+
+def decode_loop(p):
+    """DebugLcd op 1 reply (58 bytes): elapsed ms u32; the gap between main-loop passes as max u16 + 8 bucket counts u16;
+    the gap between 1 ms PD services (the pass or the LCD idle hook) the same way; the asked page's longest pass (page u8,
+    us u32, px u32); the longest pass on any page (page u8, us u32, px u32). Counts saturate at 65535."""
+    _need(p, 58, "loop")
+
+    def u16(o):
+        return int.from_bytes(p[o:o + 2], "little")
+
+    def u32(o):
+        return int.from_bytes(p[o:o + 4], "little")
+    loop = [u16(6 + 2 * i) for i in range(8)]
+    svc = [u16(24 + 2 * i) for i in range(8)]
+    return {"elapsed_ms": u32(0), "loop_max_ms": u16(4), "loop_hist": dict(zip(LOOP_BUCKETS, loop)),
+            "svc_max_ms": u16(22), "svc_hist": dict(zip(LOOP_BUCKETS, svc)),
+            "page": p[40], "page_ms": u32(41) / 1000.0, "page_px": u32(45),
+            "worst_page": p[49], "worst_ms": u32(50) / 1000.0, "worst_px": u32(54),
+            "over_20ms": sum(loop[5:])}
 
 
 def cmd_reboot(link, a):
@@ -3761,6 +3787,8 @@ def _render(name, r):
             return "epr-info " + " ".join(f"{k}={v}" for k, v in r["epr_info"].items())
         if "lcd" in r:
             return "lcd dma " + " ".join(f"{k}={v}" for k, v in r["lcd"].items())
+        if "loop" in r:
+            return "loop " + " ".join(f"{k}={v}" for k, v in r["loop"].items())
         n = r["fake_pdos"]
         return f"fake PDOs: {n}" if n else "fake PDOs: off (live source caps)"
     if name == "screenshot":
@@ -4067,6 +4095,11 @@ def build_parser():
                                           "force = ask any source; needs an active sink, never starts an EPR contract)")
     sde.add_argument("op", choices=["status", "ask", "force"])
     sds.add_parser("lcd", help="debug: LCD DMA state (ok / stalled / disabled) and transfer count")
+    sdl = sds.add_parser("loop", help="debug: main-loop stall counters (pass gap and PD service gap histograms, the longest "
+                                      "pass per page); read-only apart from --reset, which zeroes them after the read")
+    sdl.add_argument("--page", type=int, default=0, choices=range(256), metavar="N",
+                     help="page index whose longest pass to report (Ui::page_index: 0 Home .. 5 Settings, 6+ menus)")
+    sdl.add_argument("--reset", action="store_true", help="zero the counters after this read")
     sub.add_parser("adc-raw", help="raw ADC counts of every channel")
     sr = sub.add_parser("ripple", help="sample PA1 at high rate and plot the ripple")
     sr.add_argument("--code", type=int, choices=range(8), metavar="N",

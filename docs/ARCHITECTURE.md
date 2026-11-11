@@ -93,6 +93,11 @@ Long blocking work (LCD streaming, `systick::delay_ms`, the e-marker scan, scree
 longest time between two `usb::poll()` calls; about 3 ms is the healthy baseline. Never block the loop
 for long; add a state machine with a `poll()` instead.
 
+The loop keeps stall counters (`include/k2/core/loop_stats.hpp`): the gap between passes, the gap between 1 ms PD
+services (the 1 ms block and the LCD idle hook), and the longest pass per page with the pixels it sent. Read them with
+`k2_remote.py debug loop [--page N] [--reset]` or `tools/loop_survey.py`. What paints cost the loop today and the
+rework plan are in `docs/ARCH_REWORK.md`.
+
 ISRs (vector table in `src/drivers/startup.cpp`): SysTick (`systick::tick` and hooks), USB LP and HP
 (only feed TinyUSB's event queue), EXTI12 (FUSB302 INT_N), EXTI2 / EXTI9_5 (D- PB2 / D+ PA7 edges for
 `dpsniff`). Every other handler is a weak default.

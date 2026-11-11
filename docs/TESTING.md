@@ -39,6 +39,11 @@ K2_WORLD_ONLY=hr-session:bpr-lost K2_WORLD_LOG=1 ./host-build/test_world_replay 
   - `caps=`, and `verdict=` / `verdict_caps=` from the `[LINK]` line.
 - `K2_WORLD_PX_CPU_US=<us>` overrides the calibrated rendering cost, to see how much margin an episode has.
 - `K2_WORLD_SCENARIOS=<dir>` reads scenarios from another directory.
+- Each run line is followed by a `gaps` line from the firmware's own stall counters (`k2::loopstat`): the pass gap and
+  PD service gap histograms over the episode window. The report ends with a table per scenario, episode and page
+  against the ceilings (20 ms pass, 10 ms PD service). Today the table is report-only; `K2_GAP_GATE=1` makes it fail.
+  `./host-build/test_paint_survey` times every UI call per page and state (`runs/paint-survey/report.txt`) under the
+  same variable. Both are described in `docs/ARCH_REWORK.md`.
 
 ### Making a scenario (one command)
 

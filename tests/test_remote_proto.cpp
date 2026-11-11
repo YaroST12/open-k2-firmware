@@ -1578,6 +1578,42 @@ static void test_debug_lcd() {
     check_header(r, 0x29, 2, Status::BadLength, 0);
 }
 
+// DebugLcd op 1 [1, page, flags]: the main-loop stall counters (k2/core/loop_stats.hpp) instead of the DMA state. 58 bytes:
+// elapsed_ms u32, the pass gap max u16 + 8 buckets u16, the PD service gap max u16 + 8 buckets u16, the asked page's longest pass
+// (page u8, us u32, px u32), then the longest pass on any page (page u8, us u32, px u32). flags bit0 resets the counters after the
+// read; other bits and other ops are BadArg.
+static void test_debug_loop() {
+    Fake f; Frame r;
+    f.loop_snap.elapsed_ms = 0x00010203;
+    f.loop_snap.loop_max_ms = 151;
+    for (unsigned i = 0; i < 8; i++) f.loop_snap.loop_hist[i] = uint16_t(0x100 + i);
+    f.loop_snap.svc_max_ms = 30;
+    for (unsigned i = 0; i < 8; i++) f.loop_snap.svc_hist[i] = uint16_t(i);
+    f.loop_snap.page = 1; f.loop_snap.page_us = 47000; f.loop_snap.page_px = 87024;
+    f.loop_snap.worst_page = 0; f.loop_snap.worst_us = 214500; f.loop_snap.worst_px = 115200;
+    CHECK_EQ(run(f, request(0x29, 5, {1, 1, 0}), r), 1);
+    check_header(r, 0x29, 5, Status::Ok, 58);
+    CHECK_EQ(f.loop_page, 1u);
+    CHECK_EQ(f.loop_reset, false);
+    check_bytes(r, kRspHeader, {0x03, 0x02, 0x01, 0x00, 151, 0, 0x00, 0x01, 0x01, 0x01});   // elapsed, loop max, bucket 0, 1
+    check_bytes(r, kRspHeader + 20, {0x07, 0x01, 30, 0, 0, 0, 1, 0});                       // bucket 7, svc max, svc 0, 1
+    // The asked page: 1, 47000 us, 87024 px; the worst: Home, 214500 us, 115200 px.
+    check_bytes(r, kRspHeader + 40, {1, 0x98, 0xB7, 0, 0, 0xF0, 0x53, 0x01, 0,
+                                     0, 0xE4, 0x45, 0x03, 0, 0x00, 0xC2, 0x01, 0});
+    CHECK_EQ(run(f, request(0x29, 6, {1, 20, 1}), r), 1);   // the read that resets
+    check_header(r, 0x29, 6, Status::Ok, 58);
+    CHECK_EQ(f.loop_page, 20u);
+    CHECK_EQ(f.loop_reset, true);
+    const unsigned calls = f.calls;
+    CHECK_EQ(run(f, request(0x29, 7, {2, 0, 0}), r), 1);   // no other op
+    check_header(r, 0x29, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x29, 8, {1, 0, 2}), r), 1);   // no other flag
+    check_header(r, 0x29, 8, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x29, 9, {1, 0}), r), 1);
+    check_header(r, 0x29, 9, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls);   // nothing refused reached the backend
+}
+
 static void test_debug_cc_probe() {
     Fake f; Frame r;
     // The experiment: sw0 0x28 (VCONN_CC2 + MEAS_CC2), PC13 low (pc 0), 500 ms, modes kept: a 4 byte payload.
@@ -2632,6 +2668,7 @@ int main() {
     test_debug_link();
     test_debug_epr_info();
     test_debug_lcd();
+    test_debug_loop();
     test_debug_cc_probe();
     test_emarker_probe();
     test_debug_pd_msg();

@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +29,7 @@
 #include "world_sim.h"
 #include "k2/core/boot_pd.hpp"
 #include "k2/core/bootmode.hpp"
+#include "k2/core/loop_stats.hpp"
 #include "k2/core/main_loop.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rd_intent.hpp"
@@ -140,6 +142,7 @@ struct Result {
     std::string verdict;
     int caps = 0;            // Source_Capabilities the driver decoded in the window
     int verdict_caps = -1;   // the [LINK] verdict's caps= (the link layer's count for its attach)
+    k2::loopstat::Stats gaps;   // the firmware's own loop and PD-service gap counters over the episode window
 };
 
 const char* find_after(const std::string& s, const char* key) {
@@ -153,8 +156,13 @@ Result run(const Job& j) {
     world::start(*j.sc, ep.t0 - kSettleMs - j.phase * kPhaseStepMs, t);
     boot(j.page);
     Result r;
+    bool window_open = false;
     while (world::world_ms() < ep.t1) {
         const double a = world::fw_ms(), aw = world::world_ms();
+        if (!window_open && aw >= ep.t0) {   // the gap counters cover the episode window only, not the boot
+            k2::loopstat::stats.reset(k2::systick::millis());
+            window_open = true;
+        }
         k2::mainloop::pass();
         world::spend_us(t.pass_us);
         const double d = world::fw_ms() - a;
@@ -162,6 +170,7 @@ Result run(const Job& j) {
         if (aw >= ep.t0 && d > 10) r.long_passes.push_back({aw, d});
         world::wfi();
     }
+    r.gaps = k2::loopstat::stats;
     const auto& frames = j.sc->frames;
     for (const world::FrameFate& f : world::fates()) {
         const world::Frame& fr = frames[f.index];
@@ -205,6 +214,76 @@ std::string line_of(const Job& j, const Result& r) {
                   r.verdict_caps >= 0 && r.verdict_caps < r.caps && r.verdict_caps == 0 ? "  (verdict undercounts the caps)" : "",
                   r.pass ? "" : "  -- ", r.why.c_str());
     return b;
+}
+
+// ---- loop gap survey (docs/ARCH_REWORK.md) ----
+// Every run's episode window as the firmware's own counters saw it (include/k2/core/loop_stats.hpp): the gap between two
+// main-loop passes and between two 1 ms PD services (the pass or the LCD idle hook). The child writes one "  gaps" line, the
+// parent sums them per scenario and page. Ceilings: a pass gap of one slow-task period (main_loop.cpp kLoopMs: power, PD poll and
+// button debounce all assume it) and a PD service gap of 10 ms (a third of tSenderResponse, the Request deadline after
+// Source_Capabilities). Today's firmware is over both on long repaints, so the table only reports; K2_GAP_GATE=1 fails on it.
+constexpr unsigned kLoopCeilingMs = 20, kSvcCeilingMs = 10;
+constexpr const char* kGapsTag = "  gaps loop=";
+
+std::string hist_text(const k2::loopstat::Gaps& g) {
+    std::string s;
+    for (std::size_t i = 0; i < g.hist.size(); i++) s += (i ? "," : "") + std::to_string(g.hist[i]);
+    return s;
+}
+
+std::string gaps_line(const Result& r) {
+    return kGapsTag + hist_text(r.gaps.loop) + " max=" + std::to_string(r.gaps.loop.max_ms) + " svc=" + hist_text(r.gaps.service) +
+           " max=" + std::to_string(r.gaps.service.max_ms) + "\n";
+}
+
+struct GapAgg {
+    std::string key;
+    unsigned runs = 0;
+    std::array<unsigned long, k2::loopstat::kBuckets> loop{}, svc{};
+    unsigned loop_max = 0, svc_max = 0;
+};
+
+// Parses a child's "  gaps" line into the scenario/page aggregate; false when the text has none (a crash, a reboot case).
+bool add_gaps(const std::string& text, GapAgg& a) {
+    const auto p = text.find(kGapsTag);
+    if (p == std::string::npos) return false;
+    unsigned long l[8], s[8];
+    unsigned lm = 0, sm = 0;
+    static_assert(k2::loopstat::kBuckets == 8, "the gaps line carries 8 buckets");
+    if (std::sscanf(text.c_str() + p, "  gaps loop=%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu max=%u svc=%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu max=%u", &l[0],
+                    &l[1], &l[2], &l[3], &l[4], &l[5], &l[6], &l[7], &lm, &s[0], &s[1], &s[2], &s[3], &s[4], &s[5], &s[6], &s[7],
+                    &sm) != 18)
+        return false;
+    for (std::size_t i = 0; i < 8; i++) { a.loop[i] += l[i]; a.svc[i] += s[i]; }
+    a.loop_max = std::max(a.loop_max, lm);
+    a.svc_max = std::max(a.svc_max, sm);
+    a.runs++;
+    return true;
+}
+
+std::string gap_table(const std::vector<GapAgg>& aggs, bool gate, unsigned& over) {
+    std::string out;
+    char b[400];
+    std::snprintf(b, sizeof b,
+                  "loop gaps over each episode window, summed over the phases (buckets <=1 <=2 <=5 <=10 <=20 <=50 <=100 >100 ms); "
+                  "ceiling: pass gap %u ms, PD service gap %u ms%s\n%-36s %4s  %-44s %6s  %-44s %6s\n",
+                  kLoopCeilingMs, kSvcCeilingMs, gate ? " (K2_GAP_GATE: enforced)" : " (report only, K2_GAP_GATE=1 enforces)",
+                  "scenario/episode/page", "runs", "pass gap histogram", "max", "PD service gap histogram", "max");
+    out += b;
+    auto hist = [](const auto& h) {
+        std::string s;
+        for (std::size_t i = 0; i < h.size(); i++) s += (i ? " " : "") + std::to_string(h[i]);
+        return s;
+    };
+    over = 0;
+    for (const GapAgg& a : aggs) {
+        const bool o = a.loop_max > kLoopCeilingMs || a.svc_max > kSvcCeilingMs;
+        if (o) over++;
+        std::snprintf(b, sizeof b, "%-36s %4u  %-44s %6u  %-44s %6u%s\n", a.key.c_str(), a.runs, hist(a.loop).c_str(), a.loop_max,
+                      hist(a.svc).c_str(), a.svc_max, o ? "  OVER" : "");
+        out += b;
+    }
+    return out;
 }
 
 // ---- reboot bridging ----
@@ -404,7 +483,7 @@ RebootOut run_reboot(const RebootCase& c) {
     if (j.rc) reboot_child(j);
     const Result r = run(j);
     std::ofstream o(j.out);
-    o << line_of(j, r) << "\n";
+    o << line_of(j, r) << "\n" << gaps_line(r);
     if (std::getenv("K2_WORLD_LOG")) {
         for (const auto& [at, ms] : r.long_passes) {
             char b[96];
@@ -517,11 +596,20 @@ int main() {
                   t.fusb_byte_us, t.ina_byte_us, t.delay_us_factor, t.px_us, t.px_cpu_us, t.lcd_call_us, t.lcd_window_us, t.pass_us);
     rep << hdr;
     int fails = 0;
+    std::vector<GapAgg> aggs;
     for (std::size_t i = 0; i < jobs.size(); i++) {
         std::ifstream in(jobs[i].out);
         std::stringstream body;
         body << in.rdbuf();
         std::string text = body.str();
+        if (!jobs[i].rc) {
+            const std::string key = jobs[i].sc->name + "/" + jobs[i].ep->name + "/" + kPageName[jobs[i].page];
+            if (aggs.empty() || aggs.back().key != key) {
+                aggs.emplace_back();
+                aggs.back().key = key;
+            }
+            add_gaps(text, aggs.back());
+        }
         if (text.empty())
             text = (jobs[i].rc ? jobs[i].rc->name + " " + jobs[i].rc->variant : jobs[i].sc->name + " " + jobs[i].ep->name) +
                    " crashed, status " + std::to_string(status[i]) + "\n";
@@ -534,6 +622,14 @@ int main() {
         } else if (only_env) std::printf("%s", text.c_str());
         std::remove(jobs[i].out.c_str());
     }
-    std::printf("world replay: %zu runs, %d failed (runs/world-replay/report.txt)\n", jobs.size(), fails);
+    const bool gate = std::getenv("K2_GAP_GATE") != nullptr;
+    unsigned over = 0;
+    const std::string table = gap_table(aggs, gate, over);
+    rep << table;
+    std::fputs(table.c_str(), stdout);
+    g_checks++;
+    if (gate && over) g_failures++;
+    std::printf("world replay: %zu runs, %d failed (runs/world-replay/report.txt); %u of %zu scenario pages over the gap ceiling\n",
+                jobs.size(), fails, over, aggs.size());
     return test_report("test_world_replay");
 }
