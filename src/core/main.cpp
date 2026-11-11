@@ -66,6 +66,13 @@ extern "C" std::uint32_t k2_stack_free_bytes();
 extern "C" std::uint32_t k2_msp_free_bytes();
 constexpr uint32_t kIdleLogEvery = 5;       // every 10 s
 
+// VBUS for the cable read's Ra probe (fusb302::set_vbus_source): a direct monitor read, because the main loop that feeds
+// vbus_fast_mv() is held while a cable read runs. -1 while the monitor is offline (the probe then refuses).
+std::int32_t cable_probe_vbus_mv() {
+    const auto m = k2::power::sample_now();
+    return m ? m->vbus_mv : -1;
+}
+
 k2::Ui g_ui;
 k2::Remote g_remote{g_ui};
 k2::bootscreen::Controller g_bootscreen;  // the boot-info QR screen of a key-mode boot (drawn from the loop, below)
@@ -233,6 +240,7 @@ void dfu_now() {
         k2::uiprefs::screenshot_enabled = prefs.screenshot;
         k2::power::set_smoothing(prefs.smoothing);
         k2::fusb302::set_idle_wake(prefs.idle_wake);   // Settings > Wake sleeping port: default off, no Rd at idle
+        k2::fusb302::set_vbus_source(&cable_probe_vbus_mv);   // the Ra probe at the end of a silent alone cable read
         g_ui.restore_orientation(prefs.rotation_manual, prefs.rotation, prefs.rotate_buttons);   // before g_ui.init draws the first frame
     }
     k2::fs::wipe_legacy();                  // ... then the pre-littlefs raw pages are erased, once (marker /.legacy)

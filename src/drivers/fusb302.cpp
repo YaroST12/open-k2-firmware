@@ -158,7 +158,9 @@ pd::CableLimits g_scanned_cable;   // the VCONN scan before a run start (no sour
 bool g_scanned_valid = false;
 emk_variant::Answered g_answered;   // orientation and attempt-table row of the last VCONN scan that found the cable
 emk_attached::ReadInfo g_read_info; // mode (alone / attached) and acknowledged variants of the last VCONN scan of this attach
-pd::Sink g_sink;     // transmit-side state machines are pure too; this file only sends their messages
+raclass::PullDown g_pull_down = raclass::PullDown::NotProbed;   // the Ra probe's verdict on the last alone scan that found nothing
+VbusFn g_vbus_source = nullptr;     // the power monitor, for the Ra probe's VBUS guard (set_vbus_source)
+pd::Sink g_sink;    // transmit-side state machines are pure too; this file only sends their messages
 pd::Identify g_ident;
 bool g_probe_logged = true;
 pd::Probe g_probe;   // report-card source probe: never retries, ends within kProbeTotalMs
@@ -1219,6 +1221,7 @@ bool init() {
     g_physical_cable = {};
     g_physical_session = 0;
     g_read_info = {};
+    g_pull_down = raclass::PullDown::NotProbed;
     g_sink.bind(&g_engine.caps);
     g_sink.bind_epr_info(&g_engine.epr_info);
     g_msg_id = 0;
@@ -1609,6 +1612,7 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     g_tx_allowed = true;   // the VCONN scan is an active feature: its SOP' Discover Identity goes on the wire
     g_engine.reset_cable();
     g_answered = {};
+    g_pull_down = raclass::PullDown::NotProbed;
     g_scanned_valid = false;
     struct Pre { std::uint8_t power = kPwrAll, sw0 = 0, sw1 = 0; } pre;
     // Snapshot; if a read fails, fall back to what the driver itself would have set.
@@ -1692,6 +1696,17 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
 
     if (!found) {
         K2LOG("[EMARK] No E-Marker detected / Standard 3A cable\n");
+        // A cable alone that gave no identity: is the chip's pull-down there? Everything is restored at this point, and the
+        // probe refuses by itself whenever a source, a contract, an Rd or VBUS is present. Never with a source attached.
+        if (!plan.attached) {
+            raprobe::Result res;
+            const raprobe::Refusal why = ra_probe(raprobe::Args{}, g_vbus_source, res);
+            g_pull_down = raclass::classify(res);
+            if (why != raprobe::Refusal::None)
+                K2LOG("[EMK] pull-down probe: refused reason=%u verdict=%s\n", unsigned(why), raclass::name(g_pull_down));
+            else
+                K2LOG("[EMK] pull-down probe: verdict=%s n=%u flags=%u\n", raclass::name(g_pull_down), unsigned(res.n), unsigned(res.flags));
+        }
         return false;
     }
     log_found_cable();
@@ -2077,6 +2092,7 @@ static void detach_reset(std::uint8_t status0) {
     g_engine.reset_cable();  // the next sniff must not report the old cable as heard
     g_answered = {};
     g_read_info = {};
+    g_pull_down = raclass::PullDown::NotProbed;
     g_engine.reset_sink();
     g_engine.reset_source();  // the offers go with the partner: nothing of charger A may serve charger B
     g_new_source = true;
@@ -2972,6 +2988,8 @@ const pd::SourceCaps& caps() { return g_engine.caps; }
 const pd::Emarker& emarker() { return g_engine.cable; }
 emk_variant::Answered cable_answered() { return g_engine.cable.valid ? g_answered : emk_variant::Answered{}; }
 emk_attached::ReadInfo last_cable_read() { return g_read_info; }
+raclass::PullDown pull_down() { return g_pull_down; }
+void set_vbus_source(VbusFn vbus_mv) { g_vbus_source = vbus_mv; }
 const pd::VdmInfo& vdm() { return g_engine.vdm; }
 const pd::VdmInfo& sink_vdm() { return g_engine.sink_vdm; }
 usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv) {

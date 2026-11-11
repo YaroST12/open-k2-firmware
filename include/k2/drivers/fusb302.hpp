@@ -9,6 +9,7 @@
 #include "k2/core/bootmode.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/ra_probe.hpp"
+#include "k2/pd/ra_class.hpp"
 #include "k2/pd/emk_attached.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_ra.hpp"
@@ -413,6 +414,14 @@ emk_variant::Answered cable_answered();
 // different facts: readers of "cable not read" use this to tell them apart; acked_no_answer(false) = a powered chip
 // that acknowledged but never answered.
 emk_attached::ReadInfo last_cable_read();
+// What the chip's pull-down says about a cable that gave no identity (k2/pd/ra_class.hpp): an alone scan that ends with no
+// answer runs the Ra probe once and files its verdict here. NotProbed = the last read found the cable, was run with a source
+// attached, the probe was refused (VBUS, an Rd, a source level on CC, no VBUS source registered) or nothing was read since the
+// attach. "Chip present but silent" (cc1 / cc2) differs from "no chip" (none): readers of "cable not read" use this.
+raclass::PullDown pull_down();
+// The monitor reading the Ra probe's VBUS guard uses (mV, -1 = unknown; the main code passes the power monitor). Unset: the
+// probe refuses with "VBUS unknown", so a cable read ends "not probed".
+void set_vbus_source(VbusFn vbus_mv);
 // Current-attach physical wire evidence only; injected frames and spoofing cannot raise this.
 const pd::CableLimits& physical_cable();
 const pd::Revision& source_revision();  // passively received source RMDO, never Identify's sink answer

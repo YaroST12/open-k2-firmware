@@ -4964,6 +4964,103 @@ void test_ra_probe_reports_a_restore_that_did_not_land() {
     rp_cleanup();
 }
 
+// ---- the pull-down verdict attached to a cable read (fusb302::pull_down): an alone scan that finds no identity runs the probe once ----
+// A silent cable on the passive world: both orientations get no answer, then the probe senses the chip's Ra.
+void silent_cable_world(int pulldown) {
+    rp_world();
+    g_cable = Cable{};
+    g_cable.answers_pd3 = false;
+    g_cable.answers_pd2 = false;
+    g_adc.pulldown = pulldown;
+    fusb302::set_vbus_source(rp_vbus);
+}
+void rp_scan_cleanup() {
+    fusb302::set_vbus_source(nullptr);
+    g_cable = Cable{};
+    rp_cleanup();
+}
+int silent_scan() { fusb302::read_emarker(false, pd::EmarkerMode::Vconn); return int(fusb302::pull_down()); }
+
+void test_silent_cable_alone_reports_where_the_chips_pull_down_is() {
+    silent_cable_world(2);
+    const unsigned sw0 = g_reg[0x02], sw1 = g_reg[0x03];
+    const bool p0 = g_pin[0], p1 = g_pin[1], p2 = g_pin[2];
+    CHECK_EQ(int(fusb302::pull_down()), int(raclass::PullDown::NotProbed));   // nothing read yet
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(int(fusb302::pull_down()), int(raclass::PullDown::Cc2));
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Alone));
+    CHECK_EQ(usb_has("pull-down probe: verdict=cc2"), true);
+    // Everything is back after scan and probe together.
+    CHECK_EQ(unsigned(g_reg[0x02]), sw0);
+    CHECK_EQ(unsigned(g_reg[0x03]), sw1);
+    CHECK_EQ(g_pin[0], p0);
+    CHECK_EQ(g_pin[1], p1);
+    CHECK_EQ(g_pin[2], p2);
+    CHECK_EQ(sw0_rd(), 0u);
+    rp_scan_cleanup();
+    silent_cable_world(1);
+    CHECK_EQ(silent_scan(), int(raclass::PullDown::Cc1));
+    rp_scan_cleanup();
+}
+
+void test_a_chipless_cable_and_an_empty_port_get_none_and_a_held_key_is_unclear() {
+    silent_cable_world(0);
+    CHECK_EQ(silent_scan(), int(raclass::PullDown::None));
+    CHECK_EQ(usb_has("pull-down probe: verdict=none"), true);
+    rp_scan_cleanup();
+    silent_cable_world(0);
+    g_adc.bias2 = 1673;                                          // the chipless cable's measured idle level
+    CHECK_EQ(silent_scan(), int(raclass::PullDown::None));
+    rp_scan_cleanup();
+    silent_cable_world(0);
+    g_adc.plus_held = true;                                      // the PLUS key's clamp: a collapse with almost no droop
+    CHECK_EQ(silent_scan(), int(raclass::PullDown::Unclear));
+    rp_scan_cleanup();
+}
+
+void test_the_verdict_is_not_probed_when_it_cannot_or_need_not_be_taken() {
+    // A cable that answers is not probed, even with a pull-down present.
+    silent_cable_world(2);
+    g_cable.answers_pd3 = true;
+    g_cable.cc = 1;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(int(fusb302::pull_down()), int(raclass::PullDown::NotProbed));
+    // The next silent read replaces it, and the read after that (a found cable) clears it again.
+    g_cable.answers_pd3 = false;
+    CHECK_EQ(silent_scan(), int(raclass::PullDown::Cc2));
+    g_cable.answers_pd3 = true;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(int(fusb302::pull_down()), int(raclass::PullDown::NotProbed));
+    rp_scan_cleanup();
+    // No VBUS source registered: the probe refuses (VBUS unknown) and the verdict stays "not probed".
+    silent_cable_world(2);
+    fusb302::set_vbus_source(nullptr);
+    CHECK_EQ(silent_scan(), int(raclass::PullDown::NotProbed));
+    rp_scan_cleanup();
+    // VBUS present on the monitor: refused.
+    silent_cable_world(2);
+    g_rp_vbus_mv = 5000;
+    CHECK_EQ(silent_scan(), int(raclass::PullDown::NotProbed));
+    CHECK_EQ(usb_has("pull-down probe: refused"), true);
+    rp_scan_cleanup();
+    // A source attached: the scan keeps Rd and the probe never runs (nothing may drive the live line).
+    attached_source_on_cc1();
+    fusb302::set_vbus_source(rp_vbus);
+    g_cable.answers_pd3 = false;
+    g_cable.answers_pd2 = false;
+    g_cable.only_pd3_svdm1 = false;
+    g_adc.on = true;
+    g_adc.pulldown = 2;
+    g_rp_vbus_mv = 5000;
+    const std::size_t from = g_log.size();
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Attached));
+    CHECK_EQ(int(fusb302::pull_down()), int(raclass::PullDown::NotProbed));
+    for (unsigned v : sw0_writes(from)) CHECK_EQ(v & 0x01u, 0x01u);   // Rd up in every write
+    rp_scan_cleanup();
+    clean_up_rd_tests();
+}
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -5156,6 +5253,9 @@ int main() {
     test_ra_probe_never_puts_vconn_on_a_line_a_source_sits_on();
     test_ra_probe_a_charger_appearing_mid_probe_switches_vconn_off_at_once();
     test_ra_probe_reports_a_restore_that_did_not_land();
+    test_silent_cable_alone_reports_where_the_chips_pull_down_is();
+    test_a_chipless_cable_and_an_empty_port_get_none_and_a_held_key_is_unclear();
+    test_the_verdict_is_not_probed_when_it_cannot_or_need_not_be_taken();    // last: ends with an attached source
     return test_report("test_fusb302_scan");
 }
 
