@@ -18,6 +18,7 @@
 //            older entries were left out), base_ms u32 LE (uptime of the entry before the first one), now_ms u32 LE (uptime when
 //            the record was made), then whole K2LOG entries to the end (k2/core/binlog.hpp). The host picks the id -> format map of
 //            that git version (tools/logdb.json) and prints t=+<ms> lines.
+//   LoopProbe schema 1: the loop probe record itself (k2/loopprobe/loop_probe.hpp encode(), 399 bytes); no builder here.
 //
 // Schema 2 (the link form of the two big kinds, k2/ui/qrshare_link.hpp): a bit-packed re-encoding of the card and the e-marker
 // records, LSB-first, varint = 7 value bits + 1 continuation bit. It drops what the v1 layout repeats or reserves (the record

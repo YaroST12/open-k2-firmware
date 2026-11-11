@@ -14,6 +14,7 @@ from unittest import mock
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import k2_qr as q  # noqa: E402
+import loop_probe_rec as lp  # noqa: E402
 
 
 def load():
@@ -33,7 +34,7 @@ FIX = load()
 class Golden(unittest.TestCase):
     def test_every_fixture_present(self):
         self.assertEqual(set(FIX), {"boot", "identity", "emk_plain", "emk_rows", "pdcaps_spr", "pdcaps_epr", "card",
-                                    "log", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2"})
+                                    "log", "loop", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2"})
 
     def test_decode_joins_the_golden_record(self):
         for name, fx in FIX.items():
@@ -236,6 +237,61 @@ class Fields(unittest.TestCase):
         r = self.rec("card")
         self.assertTrue(r["_store_crc_ok"])
         self.assertEqual(r["name"], "Desk 65W")
+
+    def test_loop_probe(self):
+        # the values tests/test_qrshare_records.cpp loop_record() put in, read back by the independent Python reader
+        self.assertEqual(len(FIX["loop"]["parts"]), 2)
+        r = self.rec("loop")
+        self.assertEqual((r["fw"], r["start_ms"], r["in_progress"]), ("1.0.0-515-67ce114d", 61234, False))
+        self.assertEqual(r["steps"]["drop"], {"status": "done", "why": "", "t_ms": 640, "dur_ms": 2810})
+        self.assertEqual(r["steps"]["emarker"]["why"], "none sniffed")
+        self.assertEqual(r["baseline"]["samples"], 16)
+        self.assertEqual(r["baseline"]["vbus_mv"], {"avg_mv": 5061, "min_mv": 5048, "max_mv": 5072})
+        self.assertEqual(r["baseline"]["ibus_ma"]["avg_ma"], -212)
+        self.assertEqual(r["baseline"]["hid_start"]["frame"], 0x2A5)
+        self.assertEqual((r["baseline"]["link"]["active_cc"], r["baseline"]["link"]["guard"]), ("CC1", "data_device"))
+        self.assertEqual(r["baseline"]["bc_lvl"]["cc1"], 2)
+        self.assertEqual(len(r["drop"]), 8)
+        self.assertEqual(r["drop"][3]["load"], "backlight on + CPU busy")
+        self.assertEqual((r["drop"][3]["vbus_avg_mv"], r["drop"][3]["ibus_avg_ma"], r["drop"][3]["aux_mv"]), (5057, -228, 5007))
+        self.assertEqual([(x["drive_dp"], x["drive_dm"]) for x in r["dpdm"]["rows"]],
+                         [("HiZ", "HiZ"), ("0V", "0V"), ("0.6V", "0V"), ("3.3V", "0V"), ("0V", "0.6V"), ("0V", "3.3V")])
+        self.assertEqual(r["dpdm"]["rows"][3]["bus_dp_mv"], 3290)
+        self.assertTrue(r["dpdm"]["rows"][3]["hid"]["rx_dp"])
+        self.assertEqual(r["dpdm"]["pull_method"], "core 1.5k pull-up")
+        self.assertEqual(r["dpdm"]["pull"][1], {"pullup_on": True, "bus_dp_mv": 3270, "bus_dm_mv": 4,
+                                                "hid": {"core_running": False, "configured": False, "rx_dp": True,
+                                                        "rx_dm": False, "pin_dp": False, "pin_dm": False}})
+        self.assertFalse(r["emarker"]["valid"])
+        self.assertEqual([x["rd"] for x in r["cc"]["rows"]], ["as found", "CC1", "CC2", "none", "as found"])
+        self.assertEqual((r["cc"]["rows"][2]["cc2_raw"], r["cc"]["rows"][2]["vbus_mv"]), (1990, 5060))
+        self.assertTrue(r["cc"]["restored"])
+        self.assertEqual(r["cc"]["switches0_found"], "0x04")
+
+
+class LoopProbeFile(unittest.TestCase):
+    """The flash file `k2_remote.py loop-probe` reads: "LPR" + version, length, CRC-16, then the QR record's bytes."""
+
+    @staticmethod
+    def file_of(rec):
+        return b"LPR\x01" + len(rec).to_bytes(2, "little") + lp.crc16(rec).to_bytes(2, "little") + rec
+
+    def test_file_decodes_like_the_record(self):
+        rec = FIX["loop"]["record"]
+        self.assertEqual(lp.decode_file(self.file_of(rec)), lp.decode_record(rec))
+
+    def test_bad_files(self):
+        rec = FIX["loop"]["record"]
+        good = self.file_of(rec)
+        for bad in (b"", b"XYZ\x01" + good[4:], good[:3] + b"\x02" + good[4:], good[:-1],
+                    good[:-1] + bytes([good[-1] ^ 1])):
+            with self.subTest(bad[:8]):
+                with self.assertRaises(lp.BadRecord):
+                    lp.decode_file(bad)
+        with self.assertRaises(lp.BadRecord):
+            lp.decode_record(rec[:-1])
+        with self.assertRaises(lp.BadRecord):
+            lp.decode_record(b"\x02" + rec[1:])
 
 
 DB = {2: "[ADC] raw sweep failed\n", 5: "[BBSTORE] entries=%d used=%u free=%u\n", 6: "[BOOT] %s\n", 8: "[BOOT] trace done: %d samples\n"}
