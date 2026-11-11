@@ -529,6 +529,7 @@
   "532": "[TWIN] predict #%u kind=%u %u mV %u mA want=%u mW lim=%u obs=%u\n",
   "533": "[TWIN] live start n=%u -> %s\n",
   "534": "[TWIN] learn identify -> %u vid=%04x pdos=%u modes=%u\n",
-  "535": "[TWIN] learn sniff -> %u vid=%04x pdos=%u obs=%u\n"
+  "535": "[TWIN] learn sniff -> %u vid=%04x pdos=%u obs=%u\n",
+  "536": "[VOOC] session %u end: stalled on 0x%02X, %u silent replies\n"
  }
 }
