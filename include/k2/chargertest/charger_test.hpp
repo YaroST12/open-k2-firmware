@@ -682,6 +682,8 @@ private:
     void skip_unit(Reason);
     void skip_legacy_units(Reason);   // every Legacy unit's pending rows (the PD-only answer: no later PD-silent attach)
     bool legacy_row_ran() const;      // a Legacy row of the run has a protocol verdict (Pass/Fail)
+    bool unit_row_ran() const;        // a row of the running unit has a protocol verdict (Pass/Fail)
+    bool legacy_row_cut() const;      // a Legacy row of the run failed as Lost: a row of ours already cost the source its output
     void begin_attach(Input);
     void end_run(Input);
     void unsafe(Reason);
@@ -779,7 +781,9 @@ private:
     // pattern usb-a-cuts-on-low-dpdm (see kSagAdoptMs): sag_cut_ = a legacy row failed as Lost and its recovery is running;
     // sag_open_ = that recovery ended at sag_ms_ and a new attach session within kSagAdoptMs is adopted.
     // gone_ = Unsafe is timing the unplug (VBUS under 1 V since stable_ms_, see kUnsafeGoneMs); fits the padding before sag_ms_.
-    bool sag_cut_ = false, sag_open_ = false, gone_ = false; uint32_t sag_ms_ = 0;
+    // own_cut_ = the window above was opened by the running unit's Baseline finding VBUS under vSafe5V before any row of the unit ran
+    // (the source cut its own output); cleared at every unit start. VBUS then dark past the window ends that unit, not the run.
+    bool sag_cut_ = false, sag_open_ = false, gone_ = false, own_cut_ = false; uint32_t sag_ms_ = 0;
     bool recover_ = false, hot_ = false, stable_ = false, stopping_ = false, pd_owned_ = false, fc_owned_ = false;
     // Sink Hard Resets sent when the release started: a later one is the sink's own last resort for a release that did not
     // bring VBUS down (pattern budget-reannounce-mid-run), a recovery and not a lost source.

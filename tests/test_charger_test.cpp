@@ -5188,6 +5188,62 @@ static void test_silent_baseline_sag_that_never_returns_is_still_unsafe() {
         CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Pass), 0u);
     }
 }
+// Runs a Qc2 -> Qc3 -> Pd order until the second legacy unit's Baseline: a legacy row of the run (Qc2's) has a verdict, none of the
+// Qc3 unit's own has run.
+static bool run_to_second_legacy_baseline(Fake& f, ct::Runner& r) {
+    const auto o = with_units(ct::bit(A::Qc2) | ct::bit(A::Qc3) | ct::bit(A::Pd3Fixed), {ct::Unit::Qc2, ct::Unit::Qc3, ct::Unit::Pd});
+    if (r.start(f.caps, o, f.in, true) != ct::Reason::None) return false;
+    return run_until(f, r, [&] { return f.handed && r.state() == ct::State::Baseline && r.unit() == ct::Unit::Qc3; }, 120000) &&
+           count_unit_verdict(r, ct::Unit::Qc2, ct::Verdict::Pass) > 0;
+}
+// OnePlus 120 W SUPERVOOC brick on USB-C, 2026-11-11 (runs/2026-11-11-integ-hw/oneplus-usbc): the vendor units ran in the PD-silent
+// attach; at the next unit's Baseline the source took its Rp and its output away (VBUS 4.08 V, then bleeding down, no current, the
+// session changed). That is the source's own cut, not an elevated source. The Baseline only ever waited that out before the first
+// legacy row of the RUN: the earlier units' rows switched the wait off ("UNSAFE: unplug source / 5V release failed", every later unit
+// skipped). The window belongs to the unit: this unit has run nothing, so the cut ends the unit as a lost source and the next unit
+// gets its own attach.
+static void test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe() {
+    Fake f; ct::Runner r(f);
+    CHECK_EQ(run_to_second_legacy_baseline(f, r), true);
+    f.tick(r, 300);
+    CHECK_EQ(int(r.state()), int(ct::State::Baseline));
+    f.in.pd_quiet_ms = 1000000;   // the session reading stays unchanged, as on hardware (the Rp is not seen as a new attach)
+    bool unsafe = false; uint32_t cut_t = 0;
+    for (unsigned n = 0; n < 6000 && r.state() != ct::State::Done && r.state() != ct::State::Stopped; ++n) {
+        if (r.unit() == ct::Unit::Qc3 && r.state() != ct::State::Detach) {   // 4.08 V, bleeding to 0.6 V over ~6 s
+            cut_t += 100;
+            f.in.vbus_mv = std::max(600, 4080 - int(cut_t) * 58 / 100);
+        }
+        f.tick(r, 100);
+        unsafe = unsafe || r.state() == ct::State::Unsafe;
+    }
+    CHECK_EQ(unsafe, false);
+    CHECK_EQ(int(r.state()), int(ct::State::Done));
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Qc3, ct::Verdict::Skip, ct::Reason::Lost, false) > 0, true);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Qc3, ct::Verdict::Skip, ct::Reason::Release, false), 0u);
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Qc2, ct::Verdict::Pass) > 0, true);   // what ran before stays
+    CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Pass) > 0, true);    // the next unit got its own attach
+}
+// What stays: a later unit's Baseline that finds VBUS ABOVE vSafe5V is an elevated source (Unsafe at once), and VBUS that sits under
+// vSafe5V for good (a decay that stops at 3 V) still ends the run Unsafe -> Stopped after the window, as for the first unit.
+static void test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe() {
+    for (const int mv : {3000, 7000}) {
+        Fake f; ct::Runner r(f);
+        CHECK_EQ(run_to_second_legacy_baseline(f, r), true);
+        f.in.vbus_mv = mv;
+        f.tick(r, 300);
+        CHECK_EQ(r.state() == ct::State::Unsafe, mv == 7000);
+        bool was_unsafe = false;
+        for (uint32_t t = 0; t < ct::kRecoverMs + 1000; t += 100) { f.tick(r, 100); was_unsafe = was_unsafe || r.state() == ct::State::Unsafe; }
+        CHECK_EQ(was_unsafe, true);
+        if (mv == 7000) CHECK_EQ(int(r.state()), int(ct::State::Unsafe));
+        else {
+            f.tick(r, ct::kUnsafeGoneMs + 500);
+            CHECK_EQ(int(r.state()), int(ct::State::Stopped));
+        }
+        CHECK_EQ(count_unit_verdict(r, ct::Unit::Pd, ct::Verdict::Pass), 0u);
+    }
+}
 // A Pd unit whose attach never brings VBUS or the source list back fails its rows with NoReattach; the run still ends. A
 // source that is back with its list but has not yet granted the 5 V contract is not a failure: the rows go on.
 static void test_pd_attach_without_vbus_or_caps_is_no_reattach() {
@@ -6760,6 +6816,7 @@ int main() {
     test_default_unit_order_is_vendor_modes_then_pd_then_legacy(); test_default_order_runs_vendor_modes_before_pd_before_legacy(); test_pd_between_vendor_and_legacy_units(); test_pd_replan_in_the_middle_keeps_the_rows_in_order(); test_consecutive_legacy_units_share_one_attach(); test_legacy_session_that_sees_pd_traffic_is_renewed(); test_silent_ufcs_source_reports_no_response_not_pd_active(); test_legacy_waits_between_units();
     test_legacy_attach_that_never_falls_back_is_blocked_by_pd(); test_legacy_retry_that_falls_back_runs_the_unit(); test_legacy_attach_waits_out_hard_reset_cycles();
     test_silent_attach_source_that_revives_pd_does_not_go_unsafe(); test_silent_baseline_sag_that_never_returns_is_still_unsafe(); test_silent_sink_output_off_skips_legacy_units_and_runs_pd();
+    test_later_unit_output_cut_in_its_baseline_is_a_lost_unit_not_unsafe(); test_later_unit_elevated_or_stuck_baseline_still_ends_unsafe();
     test_unsafe_clears_when_vbus_is_gone_for_the_debounce();
     test_failed_release_at_low_vbus_is_a_lost_source_not_unsafe();
     test_unsafe_clears_when_vbus_stays_under_vsafe5();

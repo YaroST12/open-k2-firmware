@@ -1758,6 +1758,16 @@ bool Runner::legacy_row_ran() const {
         if ((steps_[n].verdict == Verdict::Pass || steps_[n].verdict == Verdict::Fail) && mode(unit_of(steps_[n])) == Mode::Legacy) return true;
     return false;
 }
+bool Runner::unit_row_ran() const {
+    for (size_t n = 0; n < count_; ++n)
+        if ((steps_[n].verdict == Verdict::Pass || steps_[n].verdict == Verdict::Fail) && unit_of(steps_[n]) == unit_) return true;
+    return false;
+}
+bool Runner::legacy_row_cut() const {
+    for (size_t n = 0; n < count_; ++n)
+        if (steps_[n].verdict == Verdict::Fail && steps_[n].reason == Reason::Lost && mode(unit_of(steps_[n])) == Mode::Legacy) return true;
+    return false;
+}
 // pattern pps-off-at-no-load (suspected): the per-poll latch of a PD row. Accepted = the sink waits in Transition (Accept seen, no
 // PS_RDY yet) in this attach session; PS_RDY = Ready on this row's PDO; the current is the highest the port drew since the Request.
 // The latches follow the level the Request out asks (level_mv): a step-walk level or a sweep point is its own Accept / PS_RDY exchange
@@ -1862,14 +1872,14 @@ void Runner::begin_unit(Unit u, Input in) {
     unit_ = u; mode_ = mode(u);
     attached_ = silent_ = ending_ = false; attach_try_ = 0; pd_retry_ = cut_index_ = SIZE_MAX;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
-    pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = false;   // a detach/attach boundary: the window does not cross it
+    pd_owned_ = fc_owned_ = recover_ = hot_ = sag_cut_ = sag_open_ = own_cut_ = false;   // a detach/attach boundary: the window does not cross it
     unit_ms_ = in.now; pre_ms_ = 0;
     if (mode_ == Mode::Legacy) env_.phase(Phase::Handover, index_);   // journal marker BEFORE the detach: a reboot from here is a skipped handover
     if (detached_) begin_attach(in); else begin_detach(in);
 }
 // The next Legacy unit inside the same PD-silent attach: no detach, a gap for the D+/D- cleanup, then its first handshake.
 void Runner::continue_legacy(Unit u, Input in) {
-    unit_ = u;
+    unit_ = u; own_cut_ = false;
     pd_owned_ = fc_owned_ = recover_ = hot_ = false; pd_retry_ = cut_index_ = SIZE_MAX;
     unit_ms_ = in.now;
     pre_ms_ = u == Unit::Afc ? kAfcPreMs : 0;
@@ -2367,12 +2377,14 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     // drops VBUS under vSafe5V (or to 0 V) before the first Baseline has run a row, and its caps follow. The sink has driven nothing
     // that could cost it the output (the attach holds no contract), so the sag is the source's: the Baseline waits for it in the same
     // adopt window as a legacy row's sag tail, bounded by kRecoverMs from the Baseline's start. Past that, VBUS still down is
-    // "5V release failed" / Lost as before; VBUS above vSafe5V never waits. Only before the first legacy row has run: after one, a
-    // sag may be the row's own and its recovery owns the window (sag_open_ above).
+    // "5V release failed" / Lost as before; VBUS above vSafe5V never waits. Only before a row of THIS unit has run (after one, a sag
+    // may be the row's own and its recovery owns the window, sag_open_ above) and while no legacy row of the run has cost the source
+    // its output (then a dark Baseline is that row's tail, Lost as before). Unit-scoped, not run-scoped: a source that cuts its own
+    // output while a later unit's Baseline waits (OnePlus 120 W brick, 2026-11-11: VBUS 4.08 V ~600 ms into the QC2 unit's Baseline,
+    // after the vendor units' rows had run and passed in the same attach) has not been driven by this unit either.
     if (baseline && mode_ == Mode::Legacy && !sag_open_ && in.vbus_mv >= 0 && in.vbus_mv < 5500 && !safe5(in.vbus_mv) &&
         in.now - phase_ms_ < kRecoverMs) {
-        // a legacy row that ran (Pass/Fail): the sag may be its own, its recovery owns the window
-        if (!legacy_row_ran()) { sag_open_ = true; sag_ms_ = in.now; }
+        if (!unit_row_ran() && !legacy_row_cut()) { sag_open_ = own_cut_ = true; sag_ms_ = in.now; }
     }
     // The JT-P18 USB-A's reset sag dips the fast VBUS reading under 1 V for an instant (0.65 V) while the 2 s samples stay at
     // 3.8-4.9 V: inside the window a dip waits too, and only VBUS still down when the window closes is a loss.
@@ -2400,10 +2412,11 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         // stays silent on PD, and only comes back on a PD attach. VBUS dark in a PD-silent Baseline, past the adopt window above and
         // before any legacy row has run, is that answer, not a lost or unsafe source (a source that had answered a row and then
         // loses VBUS stays Lost / recovers). Every legacy unit of the run is skipped (a later PD-silent attach would do the same),
-        // the sink detaches and the next unit is the normal PD attach.
+        // the sink detaches and the next unit is the normal PD attach. When earlier units already ran legacy rows in this attach the
+        // source is not PD-only: the dark output ends THIS unit as Lost (the units after it get their own attach).
         if (fault == Reason::Lost && baseline && mode_ == Mode::Legacy && !selfpwr_ && in.vbus_mv >= 0 && in.vbus_mv < 1000 &&
-            !legacy_row_ran()) {
-            skip_legacy_units(Reason::PdOnly);
+            !unit_row_ran() && (own_cut_ || !legacy_row_ran())) {
+            if (legacy_row_ran()) skip_unit(Reason::Lost); else skip_legacy_units(Reason::PdOnly);
             stable_ = false; ending_ = true; begin_detach(in);
             return;
         }
