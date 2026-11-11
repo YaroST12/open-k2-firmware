@@ -688,7 +688,9 @@ void ChargerTestSession::capture_identity() {
     const auto r = pd::probe_result({}, fusb302::vdm(), fusb302::ext(), caps);
     card_id_.vid = r.vid; card_id_.pid = r.pid; card_id_.pdp_w = r.pdp_w;
 }
-void ChargerTestSession::save_card() {
+// Out of line: the card under construction is a large local, and LTO inlining it into poll() (it did once the main loop moved
+// to its own unit) put poll()'s frame over the 1 KB budget.
+[[gnu::noinline]] void ChargerTestSession::save_card() {
     card_no_ = 0; delta_n_ = 0;
     if (runner_.state() != ct::State::Done) return;
     if (card_id_.fp == 0) card_id_.fp = report_card::legacy_fingerprint(runner_.steps());   // no PD caps: identify by the legacy answers
