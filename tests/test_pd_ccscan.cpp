@@ -136,7 +136,15 @@ int main() {
     CHECK_EQ(int(rd_window_override(1678, 3307, 2)), 1);   // attached CC2, the levels name CC1
     CHECK_EQ(int(rd_window_override(3307, 1678, 1)), 2);   // flipped plug
     CHECK_EQ(int(rd_window_override(1678, 3307, 1)), 0);   // already on the named line
-    CHECK_EQ(int(rd_window_override(408, 1, 2)), 0);       // ambiguous levels name nothing
+    // The attached line itself reads low (no Rp on it) and the other net is in the window: that net (h-side-inline capture).
+    CHECK_EQ(int(rd_window_override(1678, 0, 2)), 1);
+    CHECK_EQ(int(rd_window_override(0, 1678, 1)), 2);
+    CHECK_EQ(int(rd_window_override(408, 1, 2)), 1);
+    CHECK_EQ(int(rd_window_override(408, 1, 1)), 0);       // already on the live net: the low one is the other line
+    CHECK_EQ(int(rd_window_override(1, 1, 2)), 0);         // both low: nothing names a line
+    CHECK_EQ(int(rd_window_override(1678, -1, 2)), 1);     // own level unknown: the plain rule (other unknown, not low)
+    CHECK_EQ(int(rd_window_override(2500, 0, 2)), 0);      // the other net above the window (open Rp): no move
+    CHECK_EQ(int(rd_window_line(1678, 0)), 0);             // the scan's own choice keeps the stricter rule
     CHECK_EQ(int(rd_window_override(3300, 3300, 2)), 0);   // both open
     CHECK_EQ(int(rd_window_override(-1, -1, 2)), 0);       // unknown levels (the cold-boot scan saw these)
     CHECK_EQ(int(rd_window_override(1678, 3307, 0)), 0);   // nothing attached

@@ -708,7 +708,11 @@ void attach_cc2_unknown_levels() {
     g_reg[0x40] = 0x23;                               // COMP + BC_LVL=3
     fusb302::init();
     for (int i = 0; i < 60 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
-    g_ms = 100000;   // the driver's re-check rate-limit timestamp survives this reset_world (g_ms restarts at 1000): jump past it
+    // the driver's re-check rate-limit timestamp survives this reset_world (g_ms restarts at 1000): jump past it, further each
+    // time, so a later case is never inside the window an earlier one left behind
+    static std::uint32_t jump = 100000;
+    g_ms = jump;
+    jump += 20000;
     CHECK_EQ(usb_has("Active CC detected: CC2"), true);
     CHECK_EQ(int(fusb302::active_cc()), 2);
     CHECK_EQ(usb_has("CC override"), false);          // unknown levels: the scan could not cross-check
@@ -744,7 +748,8 @@ void test_rd_window_recheck_moves_a_wrongly_latched_line_on_fresh_levels() {
     detach_and_forget_levels();
 }
 
-// Negative: ambiguous levels (408, 1) name no line, and a forced debug line is an explicit choice.
+// Negative: levels (408, 1) on an attached CC2 name CC1 now (the attached line reads low), but the comparator sees no Rp
+// on CC1 here (g_line_mv_cc[0] 100 mV), so nothing moves; a forced debug line is an explicit choice.
 void test_rd_window_recheck_ignores_ambiguous_levels_and_a_forced_line() {
     attach_cc2_unknown_levels();
     for (int i = 0; i < 60; i++) { g_ms += 20; fusb302::sink_cc(408, 1); fusb302::poll(); fusb302::service(); }
@@ -771,6 +776,53 @@ void test_rd_window_recheck_never_runs_after_pd_traffic() {
     CHECK_EQ(int(fusb302::active_cc()), 2);
     CHECK_EQ(int(g_reg[0x02] & 0x0C), 0x08);          // still measuring CC2
     CHECK_EQ(usb_has("CC override"), false);
+    detach_and_forget_levels();
+}
+
+// The late attach (runs/2026-11-11-integ-hw/twin/h-side-inline, NOVOO -> K2 -> Legion side port): attached on CC2, which
+// reads 0 mV (the inline sink's second Rd grounds it), while CC1 reads 1678 mV (Rp over the sink's Rd). The plain Rd-window
+// rule calls a low other net ambiguous, so the K2 sat on CC2 for 630 ms until the no-Rp detach. The override now moves a
+// line that itself reads low to the live net next to it, the comparator confirming.
+void test_rd_window_recheck_moves_a_low_attached_line_to_the_live_net() {
+    attach_cc2_unknown_levels();
+    g_line_mv_cc[0] = 1600; g_line_mv_cc[1] = 0;      // the comparator: Rp on CC1, nothing on CC2
+    for (int i = 0; i < 5; i++) { g_ms += 20; fusb302::sink_cc(1678, 0); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(int(fusb302::active_cc()), 1);
+    CHECK_EQ(usb_has("[FUSB302] CC override"), true);
+    CHECK_EQ(usb_has("Detach"), false);               // moved before the 500 ms no-Rp rule
+    detach_and_forget_levels();
+}
+
+// The second half of the late attach: after a no-Rp detach the scan used to wait for the 25-poll tick (up to 500 ms; 350 ms
+// in the capture, past Source_Caps / Request / Accept). Now the line is scanned on the next poll at least kScanKickMinMs
+// after the last scan. The levels are unknown here, so only the detach + scan path can find the other line.
+void test_a_no_rp_detach_rescans_on_the_next_poll() {
+    attach_cc2_unknown_levels();
+    g_line_mv_cc[0] = 1600; g_line_mv_cc[1] = 0;      // the partner's Rp moved to CC1; no ADC levels to name it
+    int polls = 0;
+    for (; polls < 60 && !usb_has("Detach"); polls++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(usb_has("Detach: no Rp on the active line"), true);
+    g_usb.clear();
+    int after = 0;
+    for (; after < 30 && !usb_has("Active CC detected"); after++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(usb_has("Active CC detected: CC1"), true);
+    CHECK_EQ(after <= 4, true);                       // 60 ms min gap + the 20 ms poll: never the old 500 ms tick
+    detach_and_forget_levels();
+}
+
+// A VBUS-low detach leaves the Rp where it was: the period restarts, so the same line is not latched again on the next poll.
+void test_a_vbus_low_detach_keeps_the_plain_scan_period() {
+    attach_cc2_unknown_levels();
+    fusb302::sink_vbus(5000); fusb302::poll();
+    for (int i = 0; i < 70 && !usb_has("Detach"); i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(usb_has("Detach: VBUS low"), true);
+    CHECK_EQ(int(fusb302::active_cc()), 0);
+    g_usb.clear();
+    int after = 0;
+    for (; after < 40 && !usb_has("Active CC detected"); after++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(after >= 20, true);                      // ~kScanPeriodMs (25 polls), not the next poll
+    CHECK_EQ(usb_has("Active CC detected"), true);    // the steady Rp is latched again on the period
+    fusb302::sink_vbus(-1);
     detach_and_forget_levels();
 }
 
@@ -5104,6 +5156,9 @@ int main() {
     test_rd_window_recheck_moves_a_wrongly_latched_line_on_fresh_levels();
     test_rd_window_recheck_ignores_ambiguous_levels_and_a_forced_line();
     test_rd_window_recheck_never_runs_after_pd_traffic();
+    test_rd_window_recheck_moves_a_low_attached_line_to_the_live_net();
+    test_a_no_rp_detach_rescans_on_the_next_poll();
+    test_a_vbus_low_detach_keeps_the_plain_scan_period();
     test_vconn_level_line_is_not_an_active_cc_and_detach_never_soft_resets();
     test_rescan_is_only_the_cc_switch_cycle();
     test_service_drains_the_fifo_past_the_four_packet_pass();

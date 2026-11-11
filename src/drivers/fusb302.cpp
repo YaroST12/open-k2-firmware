@@ -30,6 +30,7 @@
 #include "k2/pd/emk_ra.hpp"
 #include "k2/pd/emk_variant.hpp"
 #include "k2/pd/pd_ccscan.hpp"
+#include "k2/pd/pd_scanpace.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
 #include "k2/pd/pd_link.hpp"
@@ -79,6 +80,7 @@ std::uint32_t g_requests_base = 0;
 std::uint32_t g_req_seen = 0;       // contract.requests at the last Request handled
 std::uint32_t g_req_last_ms = 0;    // when that Request was decoded (0 = none this attach)
 std::uint32_t g_req_period_ms = 0;  // period of the last two Requests (0 = fewer than two)
+pd::ScanPace g_scan_pace;           // when the unattached CC scan runs (pd_scanpace.hpp)
 bool g_pd_traffic = false;           // any PD message (any SOP) seen since attach
 bool g_pd_seen_attach = false;       // the same, but only a new attach clears it (a unit hold / start-up does not)
 // The Rd seek (k2/pd/pd_rdseek.hpp): the line was picked by a scan that had no Rd on any line, so our later Rd on it may be on the wrong
@@ -654,7 +656,7 @@ void detect_cc_orientation() {
     // Cross-check the comparator choice against the ADC net levels (Ui feeds sink_cc() every tick):
     // the live wire is the one net inside the Rd window, an open Rp (~3.3 V) must never win. A pinned
     // boot (g_pin_rd / pinned_live_line) and a forced debug line (g_force_cc) are explicit choices and
-    // are not overridden. The ~2 Hz rescan after a detach (poll() -> detach_reset() -> this function)
+    // are not overridden. The rescan right after a detach (pd::ScanPace) (poll() -> detach_reset() -> this function)
     // lands here again with the fresh levels, so a VBUS collapse mid-negotiation cannot leave a wrong
     // line latched from a bad first sample.
     if (!pinned && g_force_cc == 0 && held == 0) {   // a hold's line is explicit too: the ADC window must not move it
@@ -2042,6 +2044,9 @@ void clear_source() {
 // again (configure_passive() rewrites it in full) and a fresh start for every protocol engine.
 static void detach_reset(std::uint8_t status0) {
     pdtrace::cc(pdtrace::CcEvent::Detach, g_active_cc, status0);
+    // No scan ran while attached: the period restarts here, so the next scan is kScanPeriodMs away (the old 25-poll cadence
+    // gave 0..500 ms by chance). Only the no-Rp detach in poll() kicks it sooner, after this.
+    g_scan_pace.scanned(systick::millis());
     if (g_ra && !emkra::survives_detach(g_ra_run)) {
         g_ra = false;
         K2LOG("[EMKRA] off (detach)\n");
@@ -2368,8 +2373,6 @@ static bool idle_owner_free() {
 }
 
 void poll() {
-    static std::uint32_t poll_count;
-    poll_count++;
     static bool notes_logged = false;
     boot_readback_service();
     if (!notes_logged && g_readback_n == kBootReadbacks) {   // the 3 s readback closes the record
@@ -2413,12 +2416,18 @@ void poll() {
     }
     // No scan inside the idle wake's Rd-release window either: Rd is off there, and the unrestricted scan would take the
     // board's 1.7 V CC2 net as an attach (the window is only kIdleReadMs; the next scan after it is held to the picked line).
-    if (g_active_cc == 0 && poll_count % 25 == 0 && !g_rd_hold.held(systick::millis()) && !g_idle_wake.reading(systick::millis()))
-        detect_cc_orientation();  // ~2 Hz at the 20 ms poll
+    // Paced by pd::ScanPace: every kScanPeriodMs, or soon after a detach, a VBUS rise or a new Rd-window line (a source's
+    // offers follow its Rp within a few hundred ms; the plain 2 Hz scan missed them, pd_scanpace.hpp).
+    if (g_active_cc == 0 && g_scan_pace.due(systick::millis()) && !g_rd_hold.held(systick::millis()) &&
+        !g_idle_wake.reading(systick::millis())) {
+        detect_cc_orientation();
+        g_scan_pace.scanned(systick::millis());
+    }
 
     // Detach rule: VBUS below 3.0 V for 1 s, or no Rp on the active line for 500 ms. BMC
     // bursts pull the line low for microseconds, which the 500 ms hold rides out.
     if (g_active_cc != 0) {
+        g_scan_pace.attached();   // only edges seen while unattached may hurry the scan (a no-Rp detach below kicks anew)
         std::uint8_t status0 = 0;
         static std::uint8_t last_status0 = 0xFF;
         const bool got = rd(kStatus0, status0);
@@ -2456,7 +2465,12 @@ void poll() {
                                         sink_ok)) {
             K2LOG("[FUSB302] Detach: %s (cc=%d mV, inline=%d)\n", pd::detach_reason_name(g_detach.reason()),
                          int(g_cc_sink_mv), int(inline_now()));
+            // No Rp on the line: it may have been the wrong one, or the partner is already back. Scan on the next poll, not up
+            // to 500 ms later (pd_scanpace.hpp). A VBUS-low or dark detach leaves the Rp where it was: rescanning at once would
+            // only latch it again sooner, so those keep the plain cadence.
+            const bool no_rp = g_detach.reason() == pd::DetachReason::Cc;   // read first: detach_reset() clears the reason
             detach_reset(status0);
+            if (no_rp) g_scan_pace.kick();
         }
     }
 
@@ -2673,6 +2687,7 @@ void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     // only when two samples agree (CC2's measurement-pulse spike is no standby signature).
     g_rdseek.feed_open(systick::millis(), (g_sw0 & (kPdwn1 | kPdwn2)) != 0, cc1_mv, cc2_mv);
     cc_window_recheck();   // fresh levels while attached with no PD decoded yet: re-run the Rd-window cross-check
+    g_scan_pace.feed_window_line(pd::rd_window_line(cc1_mv, cc2_mv));   // a new live net kicks the unattached scan
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
     auto dist = [](std::int32_t v) { const std::int32_t d = v - pd::kSinkBandCenterMv; return d < 0 ? -d : d; };
     g_cc_sink_mv = dist(cc1_mv) <= dist(cc2_mv) ? cc1_mv : cc2_mv;
@@ -2683,6 +2698,7 @@ void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
 bool sink_cc_far() { return g_far_sink; }
 void sink_vbus(std::int32_t mv) {
     g_vbus_mv = mv;
+    g_scan_pace.feed_vbus(mv);   // VBUS rising through 3.5 V kicks the unattached scan
     g_sink.on_vbus(mv, systick::millis());
 }
 const pd::SinkStatus& sink_status() { return g_sink.status(); }

@@ -95,7 +95,7 @@ BootNote boot_note_at(unsigned i);
 // Reads SWITCHES0 back when the next readback is due; cheap when not (the boot sampler and poll() call it).
 void boot_readback_service();
 
-// Call every ~20 ms: re-detect the CC line (~2 Hz) while none is found, then drain up to 4
+// Call every ~20 ms: re-detect the CC line (2 Hz, sooner after a detach, a VBUS rise or a new live net: pd::ScanPace) while none is found, then drain up to 4
 // received packets and decode Source_Capabilities.
 void poll();
 
@@ -141,7 +141,7 @@ bool rd_for_run(bool on);
 // True when an awake source's Rp is on the wire right now: the active line is known, or a quick comparator look at
 // CC1 and CC2 (210 mV, measure switch and threshold restored) sees a driven line. Passive, never touches VCONN or TX.
 bool rp_on_line();
-// Run the CC scan now when nothing is attached (poll() does it at 2 Hz). The START wait loop never returns to the
+// Run the CC scan now when nothing is attached (poll() paces it with pd::ScanPace). The START wait loop never returns to the
 // main loop, so it calls this every pass: the attach, and with it the Request for PDO 1, comes right after the charger's Rp.
 void attach_scan();
 // Debug only: set the CC switch matrix directly. v bit0 = PC13 (VCONN power), bit1 = PC14, bit2 = PC15

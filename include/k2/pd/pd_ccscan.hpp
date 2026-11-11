@@ -98,9 +98,20 @@ constexpr std::uint8_t rd_window_line(std::int32_t cc1_mv, std::int32_t cc2_mv) 
 // The Rd-window re-check target: the line the ADC levels name when it differs from the currently
 // attached `active` line, else 0 (no override). The attach scan runs before the UI has fed any levels
 // (cold boot), so when fresh levels arrive later the cross-check has to re-run outside the scan.
+// One more case names a line here, not in the scan: the ATTACHED line itself reads low (known, below the window: no Rp on
+// it at all) while the other net sits inside the window. rd_window_line() calls a low other net ambiguous (Ra / short) for
+// the scan's first choice; for a line already attached and showing nothing, the live net next to it is the better line.
+// Inline it is the normal look of a wrong latch: the sink's second Rd grounds the unused net through the K2 (hardware
+// 2026-11-11, NOVOO -> K2 -> Legion side port: attached CC2 at 0 mV, CC1 1678 mV for 630 ms until the no-Rp detach,
+// runs/2026-11-11-integ-hw/twin/h-side-inline). The caller still confirms the new line with the comparator.
 constexpr std::uint8_t rd_window_override(std::int32_t cc1_mv, std::int32_t cc2_mv, std::uint8_t active) {
-    const std::uint8_t l = rd_window_line(cc1_mv, cc2_mv);
-    return (l != 0 && active != 0 && l != active) ? l : 0;
+    if (active == 0) return 0;
+    std::uint8_t l = rd_window_line(cc1_mv, cc2_mv);
+    if (l == 0) {
+        const std::int32_t own = active == 1 ? cc1_mv : cc2_mv, other = active == 1 ? cc2_mv : cc1_mv;
+        if (own >= 0 && own < kRdWindowLoMv && other >= kRdWindowLoMv && other <= kRdWindowHiMv) l = active == 1 ? 2 : 1;
+    }
+    return (l != 0 && l != active) ? l : 0;
 }
 
 // Debug option (pd-reread --line N): only line `forced` (1/2) may be chosen; 0 = the normal choice. Isolated samples of

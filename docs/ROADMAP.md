@@ -47,30 +47,30 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
   needless stop (`runs/2026-11-11-novoo-alone/after-515.txt`, local; `lease::safe_5v`, `tests/test_lease.cpp`).
 - Abort after a twin run (2026-11-11, 1.0.0-511, NOVOO RG100 alone): `pd-reread --abort` after a twin run released the
   lab attach; the earlier "abort ignored" report did not reproduce once the attach-owner fix 4fd3c9ac was in.
+- The driver's own PDO 1 answers no longer count as a user hold (2026-11-11, 04fe4644 on 1.0.0-518, NOVOO RG100
+  alone): after a twin run `pd status` reads `held=True(auto)`; `pd attach` 9000 reads `held=True` with no `(auto)`;
+  a charger-test START right after the auto hold ran PD + QC2 in 60 s (64 s with no hold before it) with no
+  "release check not answering" fallback (`runs/2026-11-11-auto-hold/`, local; `Sink::answer_5v`, `pd::user_hold`,
+  `pd::auto_own_hold`, `tests/test_charger_test.cpp` `test_an_auto_hold_counts_as_released`). Why `held` itself stays
+  set: the sink answers a re-announce in Requesting / Transition only while held (tSenderResponse Hard Reset otherwise).
 
 ## Current bugs
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
-- **The driver's own PDO 1 answers mark the contract held** (2026-11-11, found while fixing the lease; fixed on
-  `k2/auto-hold`, hardware check pending). `fusb302.cpp` answers caps on its own (`run start: request PDO 1`, `acked caps:
-  request PDO 1` with the self-power hold, `auto re-request after hard reset`), and each set `SinkStatus.held` like a user
-  trigger: after a twin run (`runs/2026-11-11-novoo-alone/b4-twin/`), a re-read or a Hard Reset a 5 V contract nobody owned
-  read `held=True`. Effects: the lease did not settle (13e6a618), START on a K2 neither self- nor bus-powered was refused
-  "PD hold: release it", and every charger-test release that landed on such an answer waited out its 8 s window.
-  - Not the fix: clearing `held` there. The sink answers a re-announce during Requesting / Transition only while held;
-    without it tSenderResponse expires into a Hard Reset (CUKTECH C1, 2026-11-04).
-  - Fix: `Sink::answer_5v` marks `SinkStatus.auto_hold` beside `held`, any trigger clears it; `pd::user_hold` (busy reason,
-    `stop` report, charger-test release and unsafe exit) and `pd::auto_own_hold` (Ra arming take-over) read it; byte 20 of
-    PD_TRIGGER_STATUS, `held=True(auto)` in `k2_remote pd status`. Host: `test_pd_sink` (mark set, cleared by a trigger,
-    by a Reject), `test_charger_test` `test_an_auto_hold_counts_as_released` (red first: the run took the 8 s per release),
-    `test_remote_proto`, `test_k2_remote`.
-  - Validate (hardware): K2 alone on the NOVOO: twin run, then `pd status` reads `held=True(auto)` and the lease settles;
-    `pd attach` 9000 reads `held=True` with no `(auto)`; a charger test runs with no 8 s release stalls.
 - **The K2 attaches late and misses the source's offers** (2026-11-11, three times: Anker, the flipped hub on the
   Legion left port, NOVOO -> K2 -> Legion side port): VBUS was up 294 ms before the K2 registered the attach, so the
   first message it caught was PS_RDY or VCONN_Swap. Not seen when the K2 was attached before the charger. Test case:
   `runs/2026-11-11-integ-hw/twin/h-side-inline/` (local).
+  - Cause (from the capture): two things. (1) The K2 sat attached on the wrong line, CC2 at 0 mV, while CC1 read 1678 mV
+    (Rp over the laptop's Rd); the Rd-window re-check did not move it because a low reading on the other net counts as
+    ambiguous, so it waited 630 ms for the no-Rp detach. (2) The unattached scan ran only on every 25th poll (2 Hz): after
+    the detach it came 350 ms later, past Source_Caps / Request / Accept, and the first frame decoded was PS_RDY.
+  - Fix on `k2/late-attach` (host-tested, hardware check pending): `pd::ScanPace` (`pd_scanpace.hpp`) keeps the 500 ms
+    cadence and runs the scan on the next poll (at least 60 ms after the last one) after a no-Rp detach, a VBUS rise through
+    3.5 V or a new Rd-window line; `pd::rd_window_override` moves an attached line that itself reads low (no Rp) to the
+    other net in the window (the comparator still confirms it). Host: `tests/test_scan_pace.cpp`, `test_pd_ccscan`,
+    `test_fusb302_scan` (the low-line move, the next-poll rescan, the VBUS-low detach keeping the 500 ms period; red first).
   - Validate (hardware): NOVOO -> K2 -> Legion side port, about 10 plug cycles at each end with the recorder on; every
     attach decodes the Source_Capabilities.
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
@@ -676,6 +676,25 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 - ~~**A PPS row shows a probe after all its APDOs**~~ completed: dfc5918; one result row per APDO with the Mi 6A probe between them on hardware c700284 (CUKTECH C1).
 
 ## Specified work (not started)
+
+- **Ripple viewer, on the K2 and on the web page** (user decision 2026-11-11: both views, fast and slow time scales).
+  - Fast scales: the PA1 capture (AC-coupled, 512 samples, sample-time codes 0..7 = 1072..60 kS/s, a 0.48..8.6 ms
+    window); a time/div selector maps to the codes; auto V/div; p-p, RMS and the dominant frequency from the `k2::ripple`
+    stats module (step 2 of "Ripple: calibrate PA1" below).
+  - Slow scales (10 ms..10 s): INA226 VBUS in the transition capture's fast mode (`power::fast_begin`, a value every
+    ~280 us, the current reading is stale meanwhile), decimated to the screen. Does not need the INA226 sampling plan.
+  - Needs first: the PA1 calibration (step 1 below, TOPADRE 65 W at 20 V) so the fast scales read mV.
+  - UI: a Tools page (k2-micro-gui: lab first, the user picks the design); the web Ripple card gains time/div and stats.
+  - Shell: the capture and stats reachable over `k2_remote --json` (shell-first rule).
+- **Battery efficiency recorder** (user decision 2026-11-11: one Tools page, three modes Charge / Discharge / Round trip;
+  both wirings selectable).
+  - Counts per phase: Wh and mAh in, Wh and mAh out, time; Round trip shows efficiency = out / in.
+  - Wiring "same port": the bank stays on one side, power flows forward while it charges and backward while it
+    discharges; needs a reverse energy counter (`EnergyMeter` clamps negative power to 0 today).
+  - Wiring "moved between ports": every phase flows forward; the selected phase says which counter takes it; Round
+    trip asks the user to move the bank between the phases.
+  - Open (user): how a phase ends (manual stop, or current under a threshold for N s), whether the V/A curve is saved,
+    the save format (card-style record, shell readout).
 
 Features the user asked for on 2026-11-09, specified for a later implementer. Partial work of a stopped agent is on
 local branch `k2/power-levels-wip` (f8226a4: clock/systick/crm/fusb302/power_monitor edits, unfinished, not built);
