@@ -1824,5 +1824,181 @@ class StopCommand(unittest.TestCase):
         self.assertIn("VBUS n/a", kr.render("stop", kr.decode_stop(bytes([0]) + (-1).to_bytes(4, "little", signed=True) + bytes([0]))))
 
 
+class LeaseCommand(unittest.TestCase):
+    """The host dead-man lease (0x4C): `[0]` status, `[1, seconds u16 LE]` set; the reply is
+    [armed, left_s u16 LE, length_s u16 LE, ended]. `--lease N` / `--hold` ride on the commands that can arm it."""
+
+    ARMED = bytes([1]) + (17).to_bytes(2, "little") + (30).to_bytes(2, "little") + bytes([0])
+    IDLE = bytes([0, 0, 0]) + (30).to_bytes(2, "little") + bytes([1])   # ended: expired
+
+    class Link:
+        """Replays a list of lease replies (the last one repeats); other commands answer empty or from `replies`."""
+        def __init__(self, lease_replies, replies=None, on_status=None):
+            self.lease_replies, self.replies, self.calls, self.on_status = list(lease_replies), replies or {}, [], on_status
+
+        def call(self, cmd, payload=b""):
+            self.calls.append((cmd, bytes(payload)))
+            if cmd == kr.CMD_LEASE:
+                if payload[:1] == b"\x00" and self.on_status:
+                    self.on_status()
+                r = self.lease_replies[0] if len(self.lease_replies) == 1 else self.lease_replies.pop(0)
+                if isinstance(r, Exception):
+                    raise r
+                return kr.Response(cmd, 0, 0, r)
+            r = self.replies.get(cmd, ActivePd.TRIG if cmd == kr.CMD_PD_ATTACH else b"")   # attach answers a trigger snapshot
+            return kr.Response(cmd, 0, 0, r)
+
+    def test_id(self):
+        self.assertEqual(kr.CMD_LEASE, 0x4C)
+
+    def test_decode(self):
+        r = kr.decode_lease(self.ARMED)
+        self.assertEqual(r, {"armed": True, "left_s": 17, "length_s": 30, "ended": "none"})
+        r = kr.decode_lease(self.IDLE)
+        self.assertEqual((r["armed"], r["left_s"], r["ended"]), (False, 0, "expired"))
+        self.assertEqual([kr.decode_lease(bytes([0, 0, 0, 30, 0, e]))["ended"] for e in range(2, 6)],
+                         ["host gone", "released", "settled", "test running"])
+        with self.assertRaises(Exception):
+            kr.decode_lease(self.ARMED[:5])
+
+    def test_lease_command_reads_and_sets(self):
+        link = self.Link([self.ARMED])
+        p = kr.build_parser()
+        self.assertEqual(kr.cmd_lease(link, p.parse_args(["lease"]))["left_s"], 17)
+        self.assertEqual(link.calls[-1], (kr.CMD_LEASE, b"\x00"))
+        kr.cmd_lease(link, p.parse_args(["lease", "45"]))
+        self.assertEqual(link.calls[-1], (kr.CMD_LEASE, bytes([1, 45, 0])))
+        kr.cmd_lease(link, p.parse_args(["lease", "600"]))
+        self.assertEqual(link.calls[-1], (kr.CMD_LEASE, bytes([1, 0x58, 0x02])))
+        kr.cmd_lease(link, p.parse_args(["lease", "0"]))                # 0 = the firmware default
+        self.assertEqual(link.calls[-1], (kr.CMD_LEASE, bytes([1, 0, 0])))
+        self.assertIs(kr.COMMANDS["lease"], kr.cmd_lease)
+
+    def test_seconds_above_600_never_leave_the_tool(self):
+        p = kr.build_parser()
+        for argv in (["lease", "601"], ["lease", "-1"], ["pd", "attach", "9000", "--confirm", "--lease", "601"],
+                     ["fc", "scan", "--confirm", "--lease", "9999"]):
+            with self.assertRaises(SystemExit):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    p.parse_args(argv)
+
+    def test_the_arming_commands_take_lease_and_hold(self):
+        p = kr.build_parser()
+        for argv in (["pd", "request", "2", "--confirm"], ["pd", "attach", "9000", "--confirm"],
+                     ["fc", "scan", "--confirm"], ["fc", "trigger", "qc3", "--volts", "9", "--confirm"],
+                     ["action", "fc-scan", "--confirm"]):
+            a = p.parse_args(argv)
+            self.assertIsNone(a.lease, argv)
+            self.assertFalse(a.hold, argv)
+            a = p.parse_args(argv + ["--lease", "12", "--hold"])
+            self.assertEqual(a.lease, 12, argv)
+            self.assertTrue(a.hold, argv)
+        for argv in (["pd", "release"], ["pd", "status"], ["fc", "status"], ["fc", "reset"], ["stop"], ["ping"]):
+            self.assertFalse(hasattr(p.parse_args(argv), "hold"), argv)
+
+    def run_cmd(self, argv, link, **kw):
+        a = kr.build_parser().parse_args(argv)
+        out = []
+        r = kr.run_command(link, a, out=out.append, **kw)
+        return a, r, out
+
+    def test_lease_is_set_before_the_command_and_read_after(self):
+        link = self.Link([bytes(6), self.ARMED], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG})
+        a, r, out = self.run_cmd(["pd", "attach", "9000", "--confirm", "--lease", "7"], link)
+        self.assertEqual([c for c, _ in link.calls],
+                         [kr.CMD_LEASE, kr.CMD_PD_ATTACH, kr.CMD_LEASE])
+        self.assertEqual(link.calls[0][1], bytes([1, 7, 0]))             # the set, 7 s
+        self.assertEqual(link.calls[2][1], b"\x00")                       # then the status read
+        self.assertEqual(r["lease"]["armed"], True)
+        self.assertEqual(r["lease"]["length_s"], 30)
+        self.assertEqual(len(out), 1)                                    # exactly one line, and it says what the K2 will do
+        self.assertIn("lease armed", out[0])
+        self.assertIn("30 s", out[0])
+        self.assertIn("stop", out[0])
+
+    def test_no_lease_option_sends_no_set_and_still_reports(self):
+        link = self.Link([self.ARMED], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG})
+        a, r, out = self.run_cmd(["pd", "attach", "9000", "--confirm"], link)
+        self.assertEqual([c for c, _ in link.calls], [kr.CMD_PD_ATTACH, kr.CMD_LEASE])
+        self.assertEqual(len(out), 1)
+
+    def test_a_command_that_did_not_arm_prints_nothing(self):
+        link = self.Link([self.IDLE], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG})
+        a, r, out = self.run_cmd(["pd", "attach", "5000"], link)
+        self.assertEqual(out, [])
+        self.assertNotIn("lease", r)
+
+    def test_non_arming_commands_never_touch_the_lease(self):
+        link = self.Link([self.ARMED], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG, kr.CMD_PING: bytes(20)})
+        a, r, out = self.run_cmd(["pd", "status"], link)
+        self.assertEqual([c for c, _ in link.calls], [kr.CMD_PD_TRIGGER_STATUS])
+
+    def test_an_older_firmware_without_the_lease_command_still_works(self):
+        link = self.Link([kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_LEASE)], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG})
+        a, r, out = self.run_cmd(["pd", "attach", "9000", "--confirm"], link)
+        self.assertEqual(out, [])
+        self.assertEqual(r["state"], "ready")
+        # but an explicit --lease on such a firmware is an error the user must see
+        with self.assertRaises(kr.RemoteError):
+            self.run_cmd(["pd", "attach", "9000", "--confirm", "--lease", "10"], link)
+
+    def test_hold_pings_until_ctrl_c_then_stops(self):
+        stop = bytes([0x04]) + (5000).to_bytes(4, "little") + bytes([0])
+        link = self.Link([self.ARMED], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG, kr.CMD_STOP: stop})
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            if len(sleeps) == 4:
+                raise KeyboardInterrupt
+
+        a, r, out = self.run_cmd(["pd", "attach", "9000", "--confirm", "--hold"], link, sleep=sleep)
+        self.assertEqual(sleeps, [10.0] * 4)                             # length 30 s: a third of it, at most 10 s
+        pings = [c for c, p in link.calls if c == kr.CMD_LEASE]
+        self.assertEqual(len(pings), 1 + 3)                              # the arm read, then one ping per completed sleep
+        self.assertEqual(link.calls[-1], (kr.CMD_STOP, b""))             # Ctrl-C sends exactly one stop, last
+        self.assertEqual(sum(1 for c, _ in link.calls if c == kr.CMD_STOP), 1)
+        self.assertTrue(any("holding" in line for line in out))
+        self.assertTrue(any("stop:" in line for line in out))
+
+    def test_hold_interval_follows_a_short_lease(self):
+        short = bytes([1]) + (6).to_bytes(2, "little") + (6).to_bytes(2, "little") + bytes([0])
+        link = self.Link([short], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG, kr.CMD_STOP: bytes(6)})
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            raise KeyboardInterrupt
+
+        self.run_cmd(["pd", "attach", "9000", "--confirm", "--lease", "6", "--hold"], link, sleep=sleep)
+        self.assertEqual(sleeps, [2.0])
+        tiny = bytes([1]) + (2).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes([0])
+        link = self.Link([tiny], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG, kr.CMD_STOP: bytes(6)})
+        sleeps.clear()
+        self.run_cmd(["pd", "attach", "9000", "--confirm", "--lease", "2", "--hold"], link, sleep=sleep)
+        self.assertEqual(sleeps, [1.0])                                  # never faster than once a second
+
+    def test_hold_ends_without_a_stop_when_the_lease_ended_by_itself(self):
+        # the lease ended because a charger test took the ports: a stop now would cancel that test
+        ended = bytes([0, 0, 0]) + (30).to_bytes(2, "little") + bytes([5])
+        link = self.Link([self.ARMED, ended], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG})
+        a, r, out = self.run_cmd(["pd", "attach", "9000", "--confirm", "--hold"], link, sleep=lambda s: None)
+        self.assertNotIn(kr.CMD_STOP, [c for c, _ in link.calls])
+        self.assertTrue(any("lease ended: test running" in line for line in out))
+
+    def test_hold_on_a_command_that_armed_nothing_says_so(self):
+        link = self.Link([self.IDLE], {kr.CMD_PD_TRIGGER_STATUS: ActivePd.TRIG})
+        a, r, out = self.run_cmd(["pd", "attach", "5000", "--hold"], link, sleep=lambda s: self.fail("must not wait"))
+        self.assertTrue(any("nothing to hold" in line for line in out))
+        self.assertNotIn(kr.CMD_STOP, [c for c, _ in link.calls])
+
+    def test_render(self):
+        self.assertIn("armed", kr.render("lease", kr.decode_lease(self.ARMED)))
+        self.assertIn("17 s left of 30 s", kr.render("lease", kr.decode_lease(self.ARMED)))
+        idle = kr.render("lease", kr.decode_lease(self.IDLE))
+        self.assertIn("not armed", idle)
+        self.assertIn("expired", idle)
+
+
 if __name__ == "__main__":
     unittest.main()

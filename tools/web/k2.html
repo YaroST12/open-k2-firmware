@@ -106,6 +106,7 @@ details > *:not(summary) { margin-top: 8px; }
   <button id="connect" class="primary">Connect</button>
   <span id="status" class="pill">not connected</span>
   <span id="fw" class="pill mono" hidden></span>
+  <span id="lease" class="pill mono warn" hidden title="The K2 stops (back to 5 V) when this page goes quiet for the lease length or the USB link drops. While this page is open and polling it keeps the lease alive."></span>
   <span class="spacer"></span>
   <label for="poll" class="note">Poll</label>
   <select id="poll"><option value="250">250 ms</option><option value="500" selected>500 ms</option><option value="1000">1 s</option><option value="2000">2 s</option></select>
@@ -374,7 +375,7 @@ var K2Proto = (function () {
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
               GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, EM_LIB: 0x61, CARDS: 0x62, BLACK_BOX: 0x70, TRANS_CAP: 0x71,
-              IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B,
+              IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
   var STATUS_NAMES = ["ok", "unknown command", "bad length", "bad argument", "busy", "needs confirmation"];
@@ -1314,6 +1315,25 @@ var K2Proto = (function () {
   }
   // One call back to 5 V and idle: cancels a charger test, stops FC, releases PD, disarms a spoof. No confirm.
   K2Remote.prototype.stop = async function () { return decodeStop((await this.link.call(CMD.STOP)).payload); };
+  // LEASE (the host dead-man lease): [armed, left_s u16 LE, length_s u16 LE, ended]. Any request refreshes a running lease,
+  // so the page's own poll loop keeps it alive; this call is the readout and the length setter. No confirm (it can only
+  // shorten or lengthen the wait before a stop).
+  var LEASE_MAX_S = 600;
+  var LEASE_ENDED = ["none", "expired", "host gone", "released", "settled", "test running"];
+  function decodeLease(p) {
+    need(p, 6, "lease");
+    return { armed: !!p[0], left_s: p[1] | (p[2] << 8), length_s: p[3] | (p[4] << 8),
+             ended: p[5] < LEASE_ENDED.length ? LEASE_ENDED[p[5]] : String(p[5]) };
+  }
+  // seconds undefined = status; 0 = the default length (30 s); above 600 is refused here (the K2 answers BAD_ARG too).
+  K2Remote.prototype.lease = async function (seconds) {
+    var payload = [0];
+    if (seconds !== undefined) {
+      if (!(seconds >= 0 && seconds <= LEASE_MAX_S)) throw new RangeError("lease seconds must be 0.." + LEASE_MAX_S);
+      payload = [1, seconds & 255, (seconds >> 8) & 255];
+    }
+    return decodeLease((await this.link.call(CMD.LEASE, payload)).payload);
+  };
   // Default target 5 V. Above 5 V the K2 answers NEED_CONFIRM unless o.confirm is set (the caller asked the user,
   // like pdRequest); it refuses outright (BAD_ARG + inline, BUSY) while a sink is attached inline or a run owns the ports.
   K2Remote.prototype.pdAttach = async function (target_mv, target_ma, o) {
@@ -1729,7 +1749,7 @@ var K2Proto = (function () {
     directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
-    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
+    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,
     ADC_CHANNELS: ADC_CHANNELS, ADC_SCAN: ADC_SCAN, RIPPLE_SAMPLES: RIPPLE_SAMPLES, RIPPLE_FULL_SCALE: RIPPLE_FULL_SCALE,
@@ -1752,7 +1772,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
             stats: { usb: null, rst: null, fault: null }, rippleBusy: false, ripple: null };
   var MAX_MIN = 60;                                  // history kept, minutes
   // Slower data is refreshed at these intervals (ms) from the poll loop; state itself runs at the poll select.
-  var EVERY = { pdos: 5000, emarker: 10000, adc: 3000, ping: 5000, ident: 5000, fc: 3000, trig: 4000, cabler: 1000, bb: 5000, ct: 4000 };
+  var EVERY = { pdos: 5000, emarker: 10000, adc: 3000, ping: 5000, lease: 1000, ident: 5000, fc: 3000, trig: 4000, cabler: 1000, bb: 5000, ct: 4000 };
   var RIPPLE_CYCLES = ["1.5", "7.5", "13.5", "28.5", "41.5", "55.5", "71.5", "239.5"];
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -2136,6 +2156,23 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
       var f = $("fw"); f.hidden = false; f.textContent = "fw " + p.version + " (" + p.git + ")";
       if (S.st) put("dv-chip", S.st.chip + (S.st.pm_online ? "" : " (offline)"));
     }, true);
+  }
+  // The dead-man lease: armed by a host command that can leave VBUS above 5 V; every request (this page's own poll, at most
+  // 2 s apart) refreshes it. The pill shows the time left while armed and says so when the K2 stopped by itself.
+  var LEASE_END_TEXT = { expired: "lease expired: the K2 stopped", "host gone": "link lost: the K2 stopped" };
+  var leaseSeenArmed = false;
+  function showLease(l) {
+    var el = $("lease");
+    if (l.armed) { leaseSeenArmed = true; el.hidden = false; el.textContent = "lease " + l.left_s + " s / " + l.length_s + " s"; return; }
+    if (leaseSeenArmed && LEASE_END_TEXT[l.ended]) {
+      el.hidden = false; el.textContent = LEASE_END_TEXT[l.ended];
+      logAppend("[web] " + LEASE_END_TEXT[l.ended], true);
+    } else if (!/stopped$/.test(el.textContent)) el.hidden = true;   // the "K2 stopped" note stays until the next arm
+    leaseSeenArmed = false;
+  }
+  function refreshLease() {
+    S.due.lease = Date.now();
+    return guarded("lease", async function () { showLease(await S.k2.lease()); }, true);
   }
   $("log-on").onchange = function () {
     var on = $("log-on").checked;
@@ -2601,7 +2638,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
   }
   function resetView() {
     S.samples = []; S.st = null; S.ping = null; S.vdd = null; S.pdoKey = ""; S.pdoDirty = true; S.emDirty = true; S.lastCableAge = null;
-    S.lastEnergy = null; S.emScanAt = 0; S.due = {}; S.stats = { usb: null, rst: null, fault: null }; S.ripple = null;
+    S.lastEnergy = null; S.emScanAt = 0; S.due = {}; leaseSeenArmed = false; $("lease").hidden = true; S.stats = { usb: null, rst: null, fault: null }; S.ripple = null;
     S.chargerTest = null; $("ct-results").textContent = "No run read yet.";
     $("ct-kv").textContent = $("ct-evidence").textContent = "";
     $("pdos").className = "empty"; $("pdos").textContent = "Not connected."; $("emarker").className = "empty"; $("emarker").textContent = "Not connected.";
@@ -2628,7 +2665,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
       [S.pdoDirty || isDue("pdos", EVERY.pdos), function () { S.due.pdos = Date.now(); return refreshPdos(); }],
       [S.emDirty || isDue("emarker", EVERY.emarker), refreshEmarker],
       [isDue("adc", EVERY.adc), refreshAdc],
-      [isDue("ping", EVERY.ping), refreshPing]
+      [isDue("ping", EVERY.ping), refreshPing],
+      [isDue("lease", EVERY.lease), refreshLease]
     ];
     PROBES.forEach(function (p) { if (p.on) steps.push([isDue(p.key, p.every), p.refresh]); });
     for (var i = 0; i < steps.length && S.gen === gen; i++) if (steps[i][0]) await steps[i][1]();

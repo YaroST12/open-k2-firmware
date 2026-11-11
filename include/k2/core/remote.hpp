@@ -100,6 +100,10 @@ public:
     remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);
     remote::PdOpResult pd_release();
     remote::StopInfo stop();   // cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof (k2/core/stop.hpp)
+    // The host dead-man lease (k2/core/lease.hpp): the dispatcher arms / refreshes it, poll() ticks it and runs stop() on expiry or an unplug.
+    void lease_touch();
+    void lease_arm();
+    remote::LeaseInfo lease(uint8_t op, uint16_t secs);   // op 0 status, op 1 set the length (seconds, 0 = default)
     remote::PdOpResult pd_hard_reset(uint8_t flags = 0);   // flags: kPdFlagConfirm | kPdFlagResetInline (lab-only inline reset, remote `pd reset` only)
     remote::HandbackResult pd_handback(uint8_t flags = 0); // flags: kPdFlagConfirm only; phase-1 lab hand-back (remote `pd handback` only), verdict in the result
     remote::PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm);   // pd::attach_verdict: 5 V default, above 5 V needs confirm, inline / busy refused
@@ -154,6 +158,8 @@ private:
     remote::RippleInfo ripple_info_{};
     void stream_ripple(uint8_t seq);
     uint8_t shot_seq_ = 0;
+    lease::Lease lease_;
+    void lease_tick();
 };
 
 }  // namespace k2

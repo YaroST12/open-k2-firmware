@@ -273,6 +273,12 @@ size_t encode_stop(std::span<uint8_t> out, const StopInfo &s) {
     return w.size();
 }
 
+size_t encode_lease(std::span<uint8_t> out, const LeaseInfo &l) {
+    Writer w(out);
+    w.u8(l.armed ? 1 : 0); w.u16(l.left_s); w.u16(l.length_s); w.u8(static_cast<uint8_t>(l.ended));
+    return w.size();
+}
+
 size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a) {
     Writer w(out);
     w.u8(a.ok);

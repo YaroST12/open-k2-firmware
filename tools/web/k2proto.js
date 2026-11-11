@@ -13,7 +13,7 @@ var K2Proto = (function () {
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
               GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, EM_LIB: 0x61, CARDS: 0x62, BLACK_BOX: 0x70, TRANS_CAP: 0x71,
-              IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B,
+              IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B, LEASE: 0x4C,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
   var STATUS_NAMES = ["ok", "unknown command", "bad length", "bad argument", "busy", "needs confirmation"];
@@ -953,6 +953,25 @@ var K2Proto = (function () {
   }
   // One call back to 5 V and idle: cancels a charger test, stops FC, releases PD, disarms a spoof. No confirm.
   K2Remote.prototype.stop = async function () { return decodeStop((await this.link.call(CMD.STOP)).payload); };
+  // LEASE (the host dead-man lease): [armed, left_s u16 LE, length_s u16 LE, ended]. Any request refreshes a running lease,
+  // so the page's own poll loop keeps it alive; this call is the readout and the length setter. No confirm (it can only
+  // shorten or lengthen the wait before a stop).
+  var LEASE_MAX_S = 600;
+  var LEASE_ENDED = ["none", "expired", "host gone", "released", "settled", "test running"];
+  function decodeLease(p) {
+    need(p, 6, "lease");
+    return { armed: !!p[0], left_s: p[1] | (p[2] << 8), length_s: p[3] | (p[4] << 8),
+             ended: p[5] < LEASE_ENDED.length ? LEASE_ENDED[p[5]] : String(p[5]) };
+  }
+  // seconds undefined = status; 0 = the default length (30 s); above 600 is refused here (the K2 answers BAD_ARG too).
+  K2Remote.prototype.lease = async function (seconds) {
+    var payload = [0];
+    if (seconds !== undefined) {
+      if (!(seconds >= 0 && seconds <= LEASE_MAX_S)) throw new RangeError("lease seconds must be 0.." + LEASE_MAX_S);
+      payload = [1, seconds & 255, (seconds >> 8) & 255];
+    }
+    return decodeLease((await this.link.call(CMD.LEASE, payload)).payload);
+  };
   // Default target 5 V. Above 5 V the K2 answers NEED_CONFIRM unless o.confirm is set (the caller asked the user,
   // like pdRequest); it refuses outright (BAD_ARG + inline, BUSY) while a sink is attached inline or a run owns the ports.
   K2Remote.prototype.pdAttach = async function (target_mv, target_ma, o) {
@@ -1368,7 +1387,7 @@ var K2Proto = (function () {
     directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
-    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
+    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeLease: decodeLease, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,
     ADC_CHANNELS: ADC_CHANNELS, ADC_SCAN: ADC_SCAN, RIPPLE_SAMPLES: RIPPLE_SAMPLES, RIPPLE_FULL_SCALE: RIPPLE_FULL_SCALE,

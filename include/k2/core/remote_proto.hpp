@@ -304,6 +304,7 @@
 #include <span>
 #include <string_view>
 #include "k2/core/bootinfo.hpp"
+#include "k2/core/lease.hpp"
 #include "k2/core/stop.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/chargertest/charger_test.hpp"
@@ -363,6 +364,7 @@ enum class Cmd : uint8_t {
     PdHandback = 0x49,      // optional [flags]: bit0 confirm (kPdFlagConfirm) -> [HandbackVerdict]; phase-1 lab hand-back (see k2/core/handback.hpp)
     AppleRead = 0x4A,       // lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp): [op] 0 status, 1 arm + re-request the current contract -> AppleReadInfo; a refusal carries its pd::AppleRefusal as the one-byte payload
     Stop = 0x4B,            // no payload, no confirm (the safe direction): cancel a charger test, stop FC with the measured 5 V release, release PD, disarm a spoof -> [active mask (k2/core/stop.hpp), vbus_mv i32 LE, fc_release_busy]
+    Lease = 0x4C,           // [0] status, or [1, seconds u16 LE] set the length (0 = default 30 s, max 600) -> [armed, left_s u16 LE, length_s u16 LE, ended] (k2/core/lease.hpp)
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
     Fc = 0x32,          // active fast-charge trigger, see the layout above
     Store = 0x60,       // flash store: list / save e-marker / save log, see kStore* below (the saves: Busy while a run or an FC release owns the link)
@@ -392,7 +394,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::Ripple, Cmd::DfuEnter, Cmd::FactoryWipe, Cmd::FlashDump, Cmd::DebugFault, Cmd::Fc, Cmd::DebugLink, Cmd::DebugPdMsg, Cmd::DebugCcMatrix, Cmd::DebugVconn,
     Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe,
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
-    Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop,
+    Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
 };
@@ -872,6 +874,8 @@ struct AppleReadResult { Status status = Status::Ok; uint8_t refusal = 0; AppleR
 // STOP reply: what was active before (stop::kTest | kFc | kPd | kSpoof), the latest VBUS sample after the actions, and
 // whether the measured FC release window is still open (the VBUS then may not have settled yet).
 using StopInfo = k2::stop::Report;
+// LEASE reply: the host dead-man lease (k2/core/lease.hpp): armed, seconds left (rounded up), the length, why the last one ended.
+using LeaseInfo = k2::lease::Info;
 
 struct ScreenInfo { uint16_t width = 240, height = 240; uint8_t strip_rows = 4; uint8_t num_strips = 60; };
 
@@ -900,6 +904,7 @@ size_t encode_identify_progress(std::span<uint8_t> out, const IdentifyProgress &
 size_t encode_reread(std::span<uint8_t> out, const RereadInfo &i);
 size_t encode_apple_read(std::span<uint8_t> out, const AppleReadInfo &i, uint8_t part);   // part 0 header, 1..6 one field each
 size_t encode_stop(std::span<uint8_t> out, const StopInfo &s);   // 6 bytes: active, vbus_mv i32 LE, fc_release_busy
+size_t encode_lease(std::span<uint8_t> out, const LeaseInfo &l);   // 6 bytes: armed, left_s u16 LE, length_s u16 LE, ended
 size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a);
 size_t encode_vconn(std::span<uint8_t> out, const VconnSnapshot &v);
 size_t encode_epr_info(std::span<uint8_t> out, const EprInfoSnapshot &s);
@@ -990,6 +995,9 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.pd_request(u8, u16, u16, on, on) } -> std::same_as<PdOpResult>;   // pos, mv, ma, confirm, over_load (lab only)
     { b.pd_release() } -> std::same_as<PdOpResult>;
     { b.stop() } -> std::same_as<StopInfo>;   // the one-call stop (k2/core/stop.hpp)
+    { b.lease_touch() } -> std::same_as<void>;   // any valid request from the host refreshes a running lease
+    { b.lease_arm() } -> std::same_as<void>;   // an accepted command that can hold the output above 5 V arms it
+    { b.lease(u8, u16) } -> std::same_as<LeaseInfo>;   // op 0 status, op 1 set the length (seconds); returns the state
     { b.pd_hard_reset(u8) } -> std::same_as<PdOpResult>;   // flags byte: kPdFlagConfirm | kPdFlagResetInline (0 for the shell/UI paths)
     { b.pd_handback(u8) } -> std::same_as<HandbackResult>;  // flags byte: kPdFlagConfirm only; the verdict is the reply payload
     { b.pd_attach(u16, u16, on) } -> std::same_as<PdAttachResult>;   // mv, ma, confirm: refusal = status + err, no snapshot
@@ -1030,8 +1038,9 @@ template <Backend B>
 bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t, kFrameSize> out) {
     const ParseResult r = parse_request(raw);
     if (!r.header_valid) return false;
+    backend.lease_touch();   // any request from a live host (malformed ones too) keeps its lease; it arms nothing
 
-    auto reply = [&](Status st, std::span<const uint8_t> payload = {}) {
+    auto reply =[&](Status st, std::span<const uint8_t> payload = {}) {
         build_response(out, r.cmd, r.seq, st, payload);
         return true;
     };
@@ -1146,6 +1155,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (action_needs_confirm(p[0]) && !confirm) return reply(Status::NeedConfirm);
         const Status st = backend.action(p[0], confirm);
         if (st != Status::Ok) return reply(st);
+        if (p[0] == kActionFcScan) backend.lease_arm();   // the scan raises VBUS under host control (accepted, so confirmed)
         buf[0] = p[0];
         return reply_n(1);
     }
@@ -1336,6 +1346,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p.size() != 6) return reply(Status::BadLength);
         const PdOpResult res = backend.pd_request(p[0], detail::rd16(&p[2]), detail::rd16(&p[4]),
                                                    (p[1] & kPdFlagConfirm) != 0, (p[1] & kPdFlagOverLoad) != 0);
+        if (res.status == Status::Ok && (p[0] != 1 || detail::rd16(&p[2]) > kFcSafeMv)) backend.lease_arm();   // above 5 V
         buf[0] = res.err;
         return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
     }
@@ -1358,6 +1369,15 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (!p.empty()) return reply(Status::BadLength);
         return reply_n(encode_stop(buf, backend.stop()));
     }
+    case Cmd::Lease: {
+        // [0] status, [1, seconds u16 LE] set the length. Reads and sets never arm; the arming commands do (above).
+        if (p.empty()) return reply(Status::BadLength);
+        if (p[0] > 1) return reply(Status::BadArg);
+        if (p.size() != (p[0] == 0 ? 1u : 3u)) return reply(Status::BadLength);
+        const uint16_t secs = p[0] == 1 ? detail::rd16(&p[1]) : uint16_t{0};
+        if (secs > k2::lease::kMaxSeconds) return reply(Status::BadArg);
+        return reply_n(encode_lease(buf, backend.lease(p[0], secs)));
+    }
     case Cmd::PdAttach: {
         // pd attach [target_mv [target_ma [flags]]]: attach as PD sink, request the target voltage, hold the contract.
         // Payload: target_mv (u16), optionally target_ma (u16), optionally flags (bit0 = confirm, the PD_REQUEST bit).
@@ -1373,6 +1393,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             buf[0] = res.err;
             return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
         }
+        if (target_mv > kFcSafeMv) backend.lease_arm();   // an accepted attach above 5 V
         return reply_n(encode_pd_trigger(buf, res.snapshot));
     }
     case Cmd::PdHandback: {
@@ -1426,6 +1447,8 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             const Status st = backend.fc_cmd(p[0], trig ? p[1] : 0, trig ? detail::rd16(&p[2]) : 0,
                                              p[0] == kFcScan ? p[1] : trig ? p[4] : 0);
             if (st != Status::Ok) return reply(st);
+            // a scan, or a trigger above 5 V, leaves the output under host control
+            if (p[0] == kFcScan || (trig && detail::rd16(&p[2]) > kFcSafeMv)) backend.lease_arm();
         }
         return reply_n(encode_fc(buf, backend.fc_info()));
     }

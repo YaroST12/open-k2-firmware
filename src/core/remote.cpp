@@ -148,6 +148,7 @@ void Remote::enqueue(const uint8_t *data, uint16_t len) {
 }
 
 RemoteEvent Remote::poll() {
+    lease_tick();
     if (dropped_ != dropped_reported_) {
         dropped_reported_ = dropped_;
         K2LOG("[RMT] request queue overflow, dropped=%d\n", static_cast<int>(dropped_));
@@ -594,8 +595,41 @@ remote::PdOpResult Remote::pd_request(uint8_t pos, uint16_t mv, uint16_t ma, boo
 
 remote::PdOpResult Remote::pd_release() {
     K2LOG("[RMT] pd release\n");
+    lease_.clear();   // the host let go of the output itself
     ui_.trigger_release(systick::millis());
     return {};
+}
+
+// The host dead-man lease (k2/core/lease.hpp). The dispatcher arms it for the host commands that can hold the output above
+// 5 V and refreshes it on every request; poll() ticks it once per main-loop pass and runs the same stop path on expiry or
+// an unplug. A charger test is never stopped by it: the lease ends when a test takes the ports.
+void Remote::lease_touch() { lease_.touch(systick::millis()); }
+
+void Remote::lease_arm() {
+    const uint32_t now = systick::millis();
+    lease_.arm(now);
+    K2LOG("[RMT] lease armed %d\n", static_cast<int>(lease_.info(now).length_s));
+}
+
+remote::LeaseInfo Remote::lease(uint8_t op, uint16_t secs) {
+    const uint32_t now = systick::millis();
+    if (op == 1) lease_.set_length(now, secs);
+    return lease_.info(now);
+}
+
+void Remote::lease_tick() {
+    const uint32_t now = systick::millis();
+    const auto vbus = power::vbus_fast_mv();
+    const pd::SinkStatus &sk = fusb302::sink_status();
+    // Nothing holds or negotiates above 5 V (an idle sink, no FC) and VBUS reads 5 V: the lease may settle on its own.
+    const bool safe_5v = sk.state == pd::SinkState::Idle && !sk.held &&
+                         fctrig::status().state == fc::State::Idle && !fctrig::scan_running() &&
+                         vbus && *vbus >= 4500 && *vbus <= 5500;
+    switch (lease_.tick(now, usb::configured(), safe_5v, ui_.charger_test_busy())) {
+    case lease::Event::None: break;
+    case lease::Event::Expired: K2LOG("[RMT] lease expired: stop\n"); stop(); break;
+    case lease::Event::HostGone: K2LOG("[RMT] host gone: stop\n"); stop(); break;
+    }
 }
 
 // The one-call stop (k2/core/stop.hpp): the HID `stop` command, the lease expiry and the CDC shell `stop` all land here.
@@ -613,6 +647,7 @@ remote::StopInfo Remote::stop() {
         int32_t vbus_mv() { return power::vbus_fast_mv().value_or(-1); }
         bool fc_release_busy() { return r.ui_.fc_release().busy(); }
     } env{*this};
+    lease_.clear();   // a stop by the host (or the shell) ends the lease; an expiry has already ended it with its own reason
     const remote::StopInfo info = k2::stop::stop_all(env);
     K2LOG("[RMT] stop active=%d vbus=%d fc_rel=%d\n", static_cast<int>(info.active), static_cast<int>(info.vbus_mv),
           info.fc_release_busy ? 1 : 0);
@@ -642,6 +677,7 @@ remote::PdOpResult Remote::pd_hard_reset(uint8_t flags) {
     else K2LOG("[RMT] pd hard reset\n");
     // The driver has its own inline guard: only the verdict's lab override lifts it (both flags, checked above).
     if (!ui_.trigger_hard_reset(systick::millis(), flag_inline && flag_confirm)) return pd_result(pd::Err::Inline);
+    lease_.clear();   // a Hard Reset returns the source to 5 V
     return {};
 }
 
@@ -1005,7 +1041,7 @@ remote::Status Remote::fc_cmd(uint8_t op, uint8_t proto, uint16_t mv, uint8_t fl
     fctrig::Fail f = fctrig::Fail::None;
     switch (op) {
     case remote::kFcStatus: return remote::Status::Ok;
-    case remote::kFcReset: ui_.stop_fc(systick::millis()); return remote::Status::Ok;
+    case remote::kFcReset: lease_.clear(); ui_.stop_fc(systick::millis()); return remote::Status::Ok;
     case remote::kFcScan: f = fctrig::scan_start(confirm, allow_inline); break;
     case remote::kFcTrigger:
         if (proto >= remote::kFcProtoCount) return remote::Status::BadArg;

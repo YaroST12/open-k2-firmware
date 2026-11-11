@@ -932,6 +932,37 @@ test("stop: the HTTP transport sends it without confirm=1 (the way back to 5 V i
   assert.ok(!/confirm/.test(calls[0].url));
 });
 
+test("lease: 6 bytes decode to armed, seconds left, length and why the last one ended", () => {
+  assert.equal(P.CMD.LEASE, 0x4C);
+  const r = P.decodeLease(u8(1, 0x1D, 0x00, 0x1E, 0x00, 0));
+  assert.deepEqual(r, { armed: true, left_s: 29, length_s: 30, ended: "none" });
+  const e = P.decodeLease(u8(0, 0, 0, 0x58, 0x02, 1));
+  assert.deepEqual(e, { armed: false, left_s: 0, length_s: 600, ended: "expired" });
+  assert.equal(P.decodeLease(u8(0, 0, 0, 30, 0, 5)).ended, "test running");
+  assert.equal(P.decodeLease(u8(0, 0, 0, 30, 0, 9)).ended, "9");   // a newer firmware's reason is shown, not hidden
+  assert.throws(() => P.decodeLease(u8(0, 0, 0, 0, 0)), P.FrameError);
+});
+
+test("lease: status is [0], set is [1, seconds u16 LE], neither needs confirm over HTTP", async () => {
+  const seen = [];
+  const { calls, link } = httpRig((url) => {
+    const f = frameOf(url); seen.push([...f.slice(5, 5 + f[4])]);
+    return jsonRes({ rsp: toHex(rsp(f[2], f[3], 0, [1, 20, 0, 30, 0, 0])) });
+  });
+  const k2 = new P.K2Remote(link);
+  const s = await k2.lease();
+  assert.equal(s.left_s, 20);
+  const set = await k2.lease(60);
+  assert.equal(set.length_s, 30);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((c) => !/confirm/.test(c.url)));
+  assert.deepEqual(seen[0], [0]);
+  assert.deepEqual(seen[1], [1, 60, 0]);
+  assert.equal(calls.length, 2);
+  await assert.rejects(() => k2.lease(601), RangeError);
+  assert.equal(calls.length, 2);   // refused before it reached the wire
+});
+
 test("adc raw over the link: no payload, command 0x21", async () => {
   const { link, sent } = rig((f) => [rsp(f[2], f[3], 0, ADC_PAYLOAD)]);
   const r = await new P.K2Remote(link).adcRaw();

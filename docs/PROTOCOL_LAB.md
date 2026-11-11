@@ -17,6 +17,11 @@ Status: built and host-tested, NOT yet verified on hardware.
   a sink attached or without a power monitor.
 - Lab commands (not `fc trigger`) abort at 12 V VBUS and drop the lines; the INA ceiling applies as for `dp`/`dm`.
 - A session drop (port closed, USB lost) sends `fc reset` and releases D+/D- to HiZ.
+- The shell (and so `tools/proto_lab.py`) never arms the HID dead-man lease: only a HID/HTTP command accepted by the
+  dispatcher does (`pd request` / `pd attach` / `fc trigger` above 5 V, `fc scan`; see docs/ARCHITECTURE.md, LEASE 0x4C).
+  A lab session that also holds a voltage armed through `k2_remote.py` must keep talking over HID (`--hold`) or the K2
+  stops after the lease (30 s by default); closing the shell port releases only what the shell started and neither
+  stops the lease nor a charger test.
 - Commands run in the main loop: long ones (dump, `--watch`, `--hold-ms`) block the UI meanwhile.
 - Numbers are decimal or `0x` hex. Voltages are mV (max 36000), currents mA.
 

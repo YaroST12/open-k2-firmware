@@ -30,6 +30,15 @@ Shorthand: `R` = `python3 tools/k2_remote.py`, `T` = `python3 tools/pd_trace.py`
    to 5 V and disarms a spoof, in that order, and prints what was active, VBUS and whether the FC release is still
    running (`fc release running` means VBUS is not settled yet: ask again). The CDC shell has the same `stop` line.
    Use it as the first thing after any aborted run or tool crash.
+   **The dead-man lease backs this up.** A HID command that can leave the output above 5 V (`pd request` / `pd attach`
+   above 5 V, `fc trigger` above 5 V, `fc scan`) arms a 30 s lease on the K2 (`--lease N` changes it, 0..600 s). Every
+   later request from the host refreshes it; when the host goes quiet for the lease length the K2 runs the `stop` path
+   by itself (`[RMT] lease expired: stop`), and unplugging the HID cable with the output up stops at once
+   (`[RMT] host gone: stop`). A tool that holds a voltage for longer than the lease must keep talking: `k2_remote.py
+   ... --hold` pings until Ctrl-C and then sends `stop`. A charger test is not host-owned voltage and is never stopped
+   by the lease; the lease clears itself after 5 s of a verified idle 5 V. `k2_remote.py lease` prints the state
+   (`--json lease`: `armed`, `left_s`, `length_s`, `ended`). The CDC shell never arms a lease: its own session end
+   (closing the port) only resets what the shell started.
 4. **Triggers are refused with a device inline.** PD trigger shows `LOAD: Load attached: unplug it`
    (the tool is blocked); staged on-device FC refuses with `Load/PD active: refused`, with no bypass.
    Identify retains its explicit second-OK override. Remote FC retains explicit `--allow-inline`, which needs

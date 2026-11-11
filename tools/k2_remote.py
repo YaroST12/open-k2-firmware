@@ -58,6 +58,7 @@ CMD_PD_ATTACH = 0x48       # [target_mv u16] [target_ma u16] [flags: bit0 confir
 CMD_PD_HANDBACK = 0x49     # optional [flags]: bit0 confirm -> [HandbackVerdict]; phase-1 lab hand-back
 CMD_APPLE_READ = 0x4A      # lab-only Apple charger readout (SVID 0x05AC): [1] arm + re-request the current contract, [0, part] header (part 0) or one field (1..6)
 CMD_STOP = 0x4B            # no payload, no confirm: cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof -> [active mask, vbus_mv i32, fc_release_busy]
+CMD_LEASE = 0x4C           # host dead-man lease: [0] status, [1, seconds u16] set the length (0 = default 30 s, max 600) -> [armed, left_s u16, length_s u16, ended]
 CMD_DFU_ENTER = 0x30      # clear the app marker and reset into the bootloader
 CMD_DEBUG_FAULT = 0x31    # debug: provoke a CPU fault to exercise the [FAULT] handler
 FAULT_MAGIC = b"BOOM"
@@ -508,6 +509,96 @@ def decode_stop(p):
 def cmd_stop(link, a):
     """Undo everything a host left holding the output: one call, no confirm (every step moves toward 5 V / idle)."""
     return decode_stop(link.call(CMD_STOP).payload)
+
+
+# The host dead-man lease (k2/core/lease.hpp). A command that can leave the output above 5 V under host control (pd request /
+# attach above 5 V, fc trigger above 5 V, fc scan) arms it; every later request refreshes it; when the host goes quiet for the
+# lease (default 30 s) or the USB link drops, the K2 runs the `stop` path itself. `--lease N` sets the length for that command
+# (on the wire: a separate lease-set request [1, N u16 LE] sent just before the command, applied only if the command arms
+# within 5 s; N = 0 means the firmware default); `--hold` keeps this tool pinging until Ctrl-C, then sends `stop`.
+LEASE_MAX_S = 600
+LEASE_ENDED = ("none", "expired", "host gone", "released", "settled", "test running")
+
+
+def decode_lease(p):
+    """LEASE reply: [armed, left_s u16 LE, length_s u16 LE, ended]."""
+    _need(p, 6, "lease")
+    return {"armed": bool(p[0]), "left_s": int.from_bytes(p[1:3], "little"), "length_s": int.from_bytes(p[3:5], "little"),
+            "ended": LEASE_ENDED[p[5]] if p[5] < len(LEASE_ENDED) else str(p[5])}
+
+
+def _lease_secs(text):
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text!r}") from None
+    if not 0 <= n <= LEASE_MAX_S:
+        raise argparse.ArgumentTypeError(f"{n} is outside 0..{LEASE_MAX_S} (0 = the firmware default, 30 s)")
+    return n
+
+
+def cmd_lease(link, a):
+    """Read the lease (no argument) or set its length in seconds (0 = the default)."""
+    secs = getattr(a, "seconds", None)
+    payload = b"\x00" if secs is None else bytes([1]) + secs.to_bytes(2, "little")
+    return decode_lease(link.call(CMD_LEASE, payload).payload)
+
+
+def lease_line(info):
+    return (f"lease armed: {info['length_s']} s ({info['left_s']} s left); the K2 stops the output (same as `stop`) if no "
+            f"request reaches it for that long or the USB link drops. Refresh: any command, or `k2_remote lease`; "
+            f"end: `stop`, `pd release`, or --hold with Ctrl-C")
+
+
+def _lease_status(link):
+    """The lease after an arming command; None on a firmware without the lease command (it answers an error)."""
+    try:
+        return decode_lease(link.call(CMD_LEASE, b"\x00").payload)
+    except RemoteError:
+        return None
+
+
+def hold_lease(link, info, sleep=time.sleep, out=print):
+    """--hold: ping (a lease status read) until Ctrl-C, then `stop`. Returns the stop result, or None when the lease
+    ended by itself (a stop then could cancel a charger test that took the ports)."""
+    if info is None or not info["armed"]:
+        out("nothing to hold: the command did not arm a lease (it left the output at 5 V or was refused)")
+        return None
+    interval = max(1.0, min(10.0, info["length_s"] / 3))
+    out(f"holding the lease: a request every {interval:g} s; Ctrl-C sends stop")
+    try:
+        while True:
+            sleep(interval)
+            st = decode_lease(link.call(CMD_LEASE, b"\x00").payload)
+            if not st["armed"]:
+                out(f"lease ended: {st['ended']}; no stop sent")
+                return None
+    except KeyboardInterrupt:
+        pass
+    r = cmd_stop(link, None)
+    out(render("stop", r))
+    return r
+
+
+def run_command(link, a, sleep=time.sleep, out=print, show=None):
+    """Runs one parsed command. The commands that can arm the lease (they carry --lease / --hold) get the length set
+    first, and the lease read back after: one `out` line, and a "lease" key in the result, when it armed. `show` prints
+    the result before the lease line and the hold; `out` carries the human lines (stderr with --json)."""
+    arming = hasattr(a, "hold")
+    secs = getattr(a, "lease", None)
+    if arming and secs is not None:
+        link.call(CMD_LEASE, bytes([1]) + secs.to_bytes(2, "little"))
+    result = COMMANDS[a.command](link, a)
+    info = _lease_status(link) if arming else None
+    if info is not None and info["armed"] and isinstance(result, dict):
+        result = {**result, "lease": info}
+    if show is not None and result is not None:
+        show(result)
+    if info is not None and info["armed"]:
+        out(lease_line(info))
+    if arming and a.hold:
+        hold_lease(link, info, sleep, out)
+    return result
 
 
 def decode_adc_raw(p):
@@ -2861,6 +2952,10 @@ def _render(name, r):
         what = "stopped: " + ", ".join(r["active"]) if r["active"] else "nothing was active"
         vbus = f"VBUS {r['vbus_mv'] / 1000:.2f} V" if r["vbus_mv"] >= 0 else "VBUS n/a"
         return f"stop: {what}; {vbus}" + (" (fc release running: VBUS not settled yet)" if r["fc_release_busy"] else "")
+    if name == "lease":
+        if r["armed"]:
+            return f"lease armed: {r['left_s']} s left of {r['length_s']} s"
+        return f"lease not armed (next one {r['length_s']} s; the last ended: {r['ended']})"
     if name == "apple-read":
         if not r.get("armed") and not r.get("reads"):
             return "apple-read: not armed (this command arms it; off by default)"
@@ -3042,9 +3137,19 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "screenshot": cmd_screenshot, "debug": cmd_debug,
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
-            "stop": cmd_stop, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
+            "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards}
+
+
+def _add_lease_args(parser):
+    """--lease / --hold on a command that can leave the output above 5 V under host control (see the lease notes)."""
+    parser.add_argument("--lease", type=_lease_secs, default=None, metavar="SECONDS",
+                        help=f"dead-man lease length for this command, 0..{LEASE_MAX_S} (0 or omitted = the firmware default, 30 s). "
+                             "If the K2 hears nothing from this host for that long, or the USB link drops, it runs `stop` itself. "
+                             "On the wire: a separate lease-set request [1, SECONDS u16] sent just before the command")
+    parser.add_argument("--hold", action="store_true",
+                        help="after the command keep sending a request every few seconds to hold the lease, until Ctrl-C, then send `stop`")
 
 
 def build_parser():
@@ -3123,6 +3228,7 @@ def build_parser():
     sa.add_argument("--confirm", action="store_true",
                     help="required for " + ", ".join(ACTIONS_NEED_CONFIRM) + " (the QC scan raises the output above 5 V and drives D+/D-); "
                          "refused with need-confirm without it. No other action takes it")
+    _add_lease_args(sa)   # only fc-scan arms the lease
     spd = sub.add_parser("pd", help="active PD: request a contract, reset, release, status")
     spds = spd.add_subparsers(dest="pd_cmd", required=True)
     sq = spds.add_parser("request", help="request PDO n (above 5 V needs --confirm; refused inline unless --over-load)")
@@ -3135,6 +3241,7 @@ def build_parser():
                          "message this attach (a passive load: Rd only, no Request, no Get_Source_Cap); refused otherwise. "
                          "Above 5 V it needs --confirm too (both flags). "
                          "Never reachable from the UI or the charger test")
+    _add_lease_args(sq)
     sr = spds.add_parser("reset", help="PD hard reset (the supply returns at 5 V; refused while a live sink is attached)")
     sr.add_argument("--confirm", action="store_true", help="with --inline: confirm the lab-only Hard Reset while inline")
     sr.add_argument("--inline", action="store_true",
@@ -3152,6 +3259,7 @@ def build_parser():
     sa.add_argument("mv", type=int, nargs="?", default=5000, help="target voltage in mV (default 5000)")
     sa.add_argument("ma", type=int, nargs="?", default=0, help="target current in mA (default 0 = PDO max)")
     sa.add_argument("--confirm", action="store_true", help="allow a voltage above 5 V (the same flag as `pd request`)")
+    _add_lease_args(sa)
     spds.add_parser("status", help="trigger engine state")
     si = sub.add_parser("identify-device", help="ask the attached device for its identity (idle CC only)")
     si.add_argument("--confirm", action="store_true",
@@ -3161,6 +3269,11 @@ def build_parser():
     sub.add_parser("stop", help="undo everything a host left holding the output, in one call and with no confirm: cancel a charger "
                                 "test, stop a fast-charge trigger (measured 5 V release), release the PD contract to 5 V, disarm a "
                                 "spoof. Prints what was active and VBUS (the same path as the shell `stop` line)")
+    sl = sub.add_parser("lease", help="host dead-man lease: read it (no argument) or set its length in seconds (0 = default 30 s, max "
+                                       f"{LEASE_MAX_S}). Armed by pd request / attach above 5 V, fc trigger above 5 V and fc scan; "
+                                       "any request refreshes it; on expiry or a USB unplug the K2 runs `stop` itself. --json: "
+                                       "{armed, left_s, length_s, ended}")
+    sl.add_argument("seconds", type=_lease_secs, nargs="?", default=None, help="set the length (0 = default); omit to read")
     sa = sub.add_parser("apple-read", help="lab-only: read an Apple charger's register file (SVID 0x05AC). Arms the readout "
                                            "(our SVIDs ACK adds 0x05AC), re-requests the CURRENT contract and reads the result. "
                                            "Refused inline, without a contract, to a source that is not our partner, or while a run owns the link")
@@ -3200,12 +3313,14 @@ def build_parser():
     sfc = sfs.add_parser("scan", help="auto-detect the charger (steps up to 9 V)")
     sfc.add_argument("--confirm", action="store_true", help="required: the scan raises VBUS")
     sfc.add_argument("--allow-inline", action="store_true", help="override the PD-contract / load guard (with --confirm)")
+    _add_lease_args(sfc)
     sft =sfs.add_parser("trigger", help="request one protocol at one voltage")
     sft.add_argument("proto", choices=FC_PROTOS)
     sft.add_argument("--volts", type=float, required=True)
     sft.add_argument("--confirm", action="store_true", help="required above 5 V, and with --allow-inline at any voltage")
     sft.add_argument("--allow-inline", action="store_true",
                      help="override the PD-contract / load guard (needs --confirm at any voltage)")
+    _add_lease_args(sft)
     sst = sub.add_parser("store", help="flash store behind the USB drive (writes only when asked)")
     sss = sst.add_subparsers(dest="store_cmd", required=True)
     sss.add_parser("list", help="records in the store")
@@ -3356,9 +3471,12 @@ def _main(a):
         return 2
     link = RemoteLink(transport, a.timeout)
     try:
-        result = COMMANDS[a.command](link, a)
-        if result is not None:
+        def show(result):
             print(json.dumps(result) if a.json else render(a.command, result))
+
+        # human lines (lease armed, holding) go to stderr with --json so stdout stays one JSON document
+        out = (lambda text: print(text, file=sys.stderr)) if a.json else print
+        run_command(link, a, out=out, show=show)
         return 0
     except KeyboardInterrupt:
         return 0

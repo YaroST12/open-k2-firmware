@@ -147,6 +147,11 @@ struct Fake {
     }
     int stops = 0; StopInfo stop_result{};
     StopInfo stop() { calls++; stops++; return stop_result; }
+    // The dead-man lease (k2/core/lease.hpp): touches and arms are counted apart from `calls` (they are not backend work).
+    int lease_touches = 0, lease_arms = 0, lease_calls = 0; uint8_t lease_op = 0xFF; uint16_t lease_secs = 0xFFFF; LeaseInfo lease_result{};
+    void lease_touch() { lease_touches++; }
+    void lease_arm() { lease_arms++; }
+    LeaseInfo lease(uint8_t op, uint16_t secs) { calls++; lease_calls++; lease_op = op; lease_secs = secs; return lease_result; }
     int releases = 0, resets = 0;
     uint8_t reset_flags = 0xFF;
     PdOpResult pd_release() { calls++; releases++; return {}; }

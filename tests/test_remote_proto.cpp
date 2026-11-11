@@ -2121,7 +2121,120 @@ static void test_stop_wire() {
     check_bytes(r, kRspHeader, {0, 0xFF, 0xFF, 0xFF, 0xFF, 0});
 }
 
+static void test_lease_wire() {
+    Fake f;
+    Frame r;
+    f.lease_result = {true, 17, 30, k2::lease::End::Expired};
+    CHECK_EQ(run(f, request(0x4C, 1, {0}), r), 1);                      // status
+    check_header(r, 0x4C, 1, Status::Ok, 6);
+    check_bytes(r, kRspHeader, {1, 17, 0, 30, 0, 1});                   // armed, left_s u16, length_s u16, ended
+    CHECK_EQ(f.lease_op, 0);
+    f.lease_result = {false, 0, 600, k2::lease::End::None};
+    run(f, request(0x4C, 2, {1, 0x58, 0x02}), r);                       // set 600 s (the maximum)
+    check_header(r, 0x4C, 2, Status::Ok, 6);
+    check_bytes(r, kRspHeader, {0, 0, 0, 0x58, 0x02, 0});
+    CHECK_EQ(f.lease_op, 1);
+    CHECK_EQ(f.lease_secs, 600);
+    run(f, request(0x4C, 3, {1, 0, 0}), r);                             // 0 = the firmware default, passed through
+    check_header(r, 0x4C, 3, Status::Ok, 6);
+    CHECK_EQ(f.lease_secs, 0);
+    CHECK_EQ(f.lease_calls, 3);
+    // refusals never reach the backend
+    run(f, request(0x4C, 4, {1, 0x59, 0x02}), r);                       // 601 s
+    check_header(r, 0x4C, 4, Status::BadArg, 0);
+    run(f, request(0x4C, 5, {}), r);
+    check_header(r, 0x4C, 5, Status::BadLength, 0);
+    run(f, request(0x4C, 6, {1}), r);
+    check_header(r, 0x4C, 6, Status::BadLength, 0);
+    run(f, request(0x4C, 7, {0, 5}), r);
+    check_header(r, 0x4C, 7, Status::BadLength, 0);
+    run(f, request(0x4C, 8, {2}), r);
+    check_header(r, 0x4C, 8, Status::BadArg, 0);
+    CHECK_EQ(f.lease_calls, 3);
+}
+
+static void test_every_valid_request_refreshes_the_lease() {
+    Fake f;
+    Frame r;
+    run(f, request(0x01, 1, {}), r);                                    // ping
+    CHECK_EQ(f.lease_touches, 1);
+    run(f, request(0x03, 2, {}), r);                                    // state
+    run(f, request(0x4B, 3, {}), r);                                    // stop
+    run(f, request(0x4C, 4, {0}), r);                                   // lease status
+    run(f, request(0x7E, 5, {}), r);                                    // an unknown command from a live host still counts
+    run(f, request(0x44, 6, {1}), r);                                   // a malformed one too (BadLength)
+    CHECK_EQ(f.lease_touches, 6);
+    std::vector<uint8_t> bad = request(0x01, 7, {});
+    bad[0] ^= 0xFF;                                                     // not our magic: not a request, no refresh
+    CHECK_EQ(run(f, bad, r), 0);
+    CHECK_EQ(f.lease_touches, 6);
+    CHECK_EQ(f.lease_arms, 0);
+}
+
+static void test_arming_commands_arm_only_when_accepted_above_5v() {
+    Fake f;
+    Frame r;
+    // pd request: position 1 is vSafe5V and arms nothing; any other position, or a voltage above 5 V, arms
+    run(f, request(0x41, 1, {1, 1, 0, 0, 0, 0}), r);
+    CHECK_EQ(f.lease_arms, 0);
+    run(f, request(0x41, 2, {2, 1, 0, 0, 0, 0}), r);                    // pos 2, confirm
+    CHECK_EQ(f.lease_arms, 1);
+    run(f, request(0x41, 3, {1, 1, 0x28, 0x23, 0, 0}), r);              // pos 1 but 9000 mV (a PPS-style target), confirm
+    CHECK_EQ(f.lease_arms, 2);
+    f.rq_result = {Status::BadArg, 3};                                  // refused: nothing is held, nothing armed
+    run(f, request(0x41, 4, {2, 1, 0, 0, 0, 0}), r);
+    CHECK_EQ(f.lease_arms, 2);
+    f.rq_result = {Status::NeedConfirm, 0};
+    run(f, request(0x41, 5, {2, 0, 0, 0, 0, 0}), r);
+    CHECK_EQ(f.lease_arms, 2);
+    f.rq_result = {};
+
+    // pd attach: the default target is 5 V (no arm); above 5 V arms when accepted
+    run(f, request(0x48, 6, {0x88, 0x13}), r);                          // 5000 mV
+    CHECK_EQ(f.lease_arms, 2);
+    run(f, request(0x48, 7, {0x28, 0x23, 0, 0, 1}), r);                 // 9000 mV, confirm
+    CHECK_EQ(f.lease_arms, 3);
+    f.attach_verdict = {Status::Busy, 5};
+    run(f, request(0x48, 8, {0x28, 0x23, 0, 0, 1}), r);                 // ports busy: refused
+    CHECK_EQ(f.lease_arms, 3);
+    f.attach_verdict = {};
+
+    // fc: a trigger above 5 V and any scan arm; status, reset and a 5 V trigger do not
+    run(f, request(0x32, 9, {3, 1, 0x28, 0x23, 1}), r);                 // trigger qc3 at 9000 mV, confirm
+    CHECK_EQ(f.lease_arms, 4);
+    run(f, request(0x32, 10, {3, 1, 0x88, 0x13, 0}), r);                // 5000 mV
+    run(f, request(0x32, 11, {0}), r);                                  // status
+    run(f, request(0x32, 12, {1}), r);                                  // reset
+    CHECK_EQ(f.lease_arms, 4);
+    run(f, request(0x32, 13, {2, 1}), r);                               // scan, confirm
+    CHECK_EQ(f.lease_arms, 5);
+    f.fc_status = Status::Busy;
+    run(f, request(0x32, 14, {2, 1}), r);                               // a scan the backend refused
+    run(f, request(0x32, 15, {3, 1, 0x28, 0x23, 1}), r);
+    CHECK_EQ(f.lease_arms, 5);
+    f.fc_status = Status::Ok;
+    run(f, request(0x32, 16, {3, 1, 0x28, 0x23, 0}), r);                // above 5 V without confirm: the dispatcher refuses
+    CHECK_EQ(f.lease_arms, 5);
+
+    // action: only the fc scan, with confirm
+    run(f, request(0x06, 17, {4, 1}), r);
+    CHECK_EQ(f.lease_arms, 6);
+    run(f, request(0x06, 18, {4}), r);                                  // no confirm byte: NeedConfirm
+    run(f, request(0x06, 19, {1}), r);                                  // pd-rescan
+    CHECK_EQ(f.lease_arms, 6);
+
+    // nothing else arms
+    run(f, request(0x01, 20, {}), r);
+    run(f, request(0x4B, 21, {}), r);
+    run(f, request(0x44, 22, {}), r);
+    run(f, request(0x42, 23, {}), r);
+    CHECK_EQ(f.lease_arms, 6);
+}
+
 int main() {
+    test_lease_wire();
+    test_every_valid_request_refreshes_the_lease();
+    test_arming_commands_arm_only_when_accepted_above_5v();
     test_stop_wire();
     test_charger_hunt();
     test_charger_cable();
