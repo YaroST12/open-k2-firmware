@@ -102,6 +102,11 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   2026-11-11 on 1.0.0-524: through the first cable the port held 5.12 V with no load and answered nothing (QC2/QC3 "no
   handshake": D- stayed at D+ 0.65 V, FCP rejected), likely a port or cable state, since another cable restored the
   usual no-load cycling. With that cable no run could start (next bug). `runs/2026-11-11-cuktech-qc/`.
+  **Not a K2 regression:** bus-powered (HID off) the same port passed QC2 5/9.10/12.13 V, QC3 5→11.72→5 V, FCP 9.10 V,
+  UFCS 5/8/11/5 V on 1.0.0-524 (run 1, `results_bus.json`), as on 2026-11-07. The IQ4 changed, or a state on its side.
+  Found on the way: the K2's 0.6 V / 0.6 V passive D+/D- idle enters HVDCP and is the QC2 12 V code; a D- dip then
+  raises VBUS to 12 V unrequested (reproduced with `dm 0` for 200 ms: 5.1 → 11.75 V; after the run it sat at 12.13 V
+  ~40 s). Fix on k2/idle-dpdm. Possibly the cause of the IQ4 FCP hold above.
 - **The charger test cannot start on a USB-A port that cuts its output with no load** (2026-11-11, CUKTECH 120W USB-A,
   HID-powered K2, 1.0.0-524): preflight refuses "load attached" at 0 mA. Every attach starts "possibly inline"
   (`pd_link.cpp`), which clears only after `kInlineQuietMs` (10 s) attached and quiet. The port cuts VBUS every ~6.5 s
