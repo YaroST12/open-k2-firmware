@@ -150,6 +150,32 @@ emlib::Err lib_rename(std::uint16_t seq, std::string_view name) {
     return e;
 }
 
+unsigned twin_list(std::span<std::uint8_t> out) { return twin::Library(fs::instance()).list(out); }
+
+bool twin_get(std::uint8_t seq, twin::Twin& out) { return twin::Library(fs::instance()).get(seq, out); }
+
+twin::Result twin_save(const twin::Twin& in) {
+    const twin::Result r = twin::Library(fs::instance()).save(in);
+    K2LOG("[STORE] twin-save -> %s #%u%s\n", twin::err_name(r.err), static_cast<unsigned>(r.seq),
+          r.unchanged ? " (unchanged)" : r.existed ? " (updated)" : "");
+    if (r.err == twin::Err::Ok && !r.unchanged) g_gen++;
+    return r;
+}
+
+twin::Err twin_remove(std::uint8_t seq) {
+    const twin::Err e = twin::Library(fs::instance()).remove(seq);
+    K2LOG("[STORE] twin-remove #%u -> %s\n", static_cast<unsigned>(seq), twin::err_name(e));
+    if (e == twin::Err::Ok) g_gen++;
+    return e;
+}
+
+twin::Err twin_rename(std::uint8_t seq, std::string_view name) {
+    const twin::Err e = twin::Library(fs::instance()).rename(seq, name);
+    K2LOG("[STORE] twin-rename #%u -> %s\n", static_cast<unsigned>(seq), twin::err_name(e));
+    if (e == twin::Err::Ok) g_gen++;
+    return e;
+}
+
 std::uint8_t bank() { return flash::store_bank(); }
 std::uint32_t generation() { return g_gen; }
 

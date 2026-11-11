@@ -248,6 +248,20 @@ void Ui::set_page(Page p, uint32_t now_ms) {
 // self-hold of a self-powered or bus-powered K2 (its own plain 5 V contract): that hold is the K2's supply, so releasing it
 // would cut the K2's power and it never blocks. Neither is a finished re-read's own leftover PDO 1 contract inside its
 // linger (fusb302::reread_own_hold): START takes that over like the self-hold (hardware 2026-11-10, b14c1b9).
+bool Ui::twin_live_busy() const { return twin_hw::live_running(); }
+
+twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
+    twin_hw::LiveCtx c;
+    c.now = now_ms;
+    c.vbus_fast_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
+    c.cap_mv = ctx_.cap_mv;
+    c.busy = charger_test_busy() || fc_release_.busy();
+    c.inline_link = link_.inline_mode() || ctx_.inline_mode;
+    return c;
+}
+
+void Ui::cancel_twin() { twin_hw::live_cancel(); }
+
 // What keeps an identity (or a START) out, said as a footer line (at most 24 characters) that names the cause and the way out;
 // nullptr = nothing does. An identity armed in Tools -> Spoof is not one of them either: START disarms whatever is armed and
 // the pick takes over ("Off" arms nothing).
@@ -255,6 +269,7 @@ BusyWhy Ui::busy_why() const {
     const auto& sink = fusb302::sink_status();
     const auto fs = fctrig::status();
     if (charger_test_busy()) return BusyWhy::TestRunning;
+    if (twin_live_busy()) return BusyWhy::TwinRun;
     if (fc_release_.busy()) return BusyWhy::FcRelease;
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return BusyWhy::QcTrigger;
     if (sink.held && !fusb302::rd_for_run_on() && !fusb302::reread_own_hold() && !fusb302::self_powered() && !power_source::bus_powered())
@@ -277,6 +292,7 @@ const char *Ui::busy_reason() const {
     case BusyWhy::PdRequest: return "PD request: wait";
     case BusyWhy::EmScan: return "E-marker scan: wait";
     case BusyWhy::Identify: return "Identify: wait";
+    case BusyWhy::TwinRun: return "Twin proof: stop it";
     case BusyWhy::None: break;
     }
     return nullptr;
@@ -817,6 +833,7 @@ Ui::TriggerOutcome Ui::device_trigger(const pd::Choice &c, uint32_t now_ms) {
 void Ui::trigger_release(uint32_t now_ms) {
     ContentViewport viewport(layout_.content);
     cancel_charger_test();
+    cancel_twin();
     fusb302::sink_release();
     ctx_.trig_armed = false;
     K2LOG("[UI] trigger release to 5V\n");
@@ -831,6 +848,7 @@ void Ui::stop_fc(uint32_t now_ms) {
 bool Ui::trigger_hard_reset(uint32_t now_ms, bool lab_inline) {
     ContentViewport viewport(layout_.content);
     cancel_charger_test();
+    cancel_twin();
     const bool ok = fusb302::sink_hard_reset(lab_inline);
     ctx_.trig_armed = false;
     K2LOG("[UI] trigger hard reset%s: %s\n", lab_inline ? " (lab inline)" : "", ok ? "sent" : "refused");
@@ -1121,6 +1139,7 @@ void Ui::tick(uint32_t now_ms) {
     link::set_inline_mode(link_.inline_mode());
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
+    twin_hw::live_poll(twin_ctx(now_ms));
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
     update_hold_card(now_ms);

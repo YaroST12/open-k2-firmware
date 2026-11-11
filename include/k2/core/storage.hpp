@@ -13,6 +13,7 @@
 #include "k2/pd/emlib.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/pd/store.hpp"
+#include "k2/twin/library.hpp"
 
 namespace k2::storage {
 
@@ -39,6 +40,12 @@ bool lib_get(std::uint16_t seq, emlib::Entry& out);
 bool lib_get(std::uint16_t seq, emlib::Entry& out, emk_quirk::Quirks& quirks);   // + the quirk table (empty when none)
 emlib::Err lib_remove(std::uint16_t seq);
 emlib::Err lib_rename(std::uint16_t seq, std::string_view name);   // appends a new version of the entry
+// The device twin library (k2/twin/library.hpp): up to twin::kCapacity devices, numbered 1..kCapacity.
+unsigned twin_list(std::span<std::uint8_t> out);    // numbers in ascending order
+bool twin_get(std::uint8_t seq, twin::Twin& out);
+twin::Result twin_save(const twin::Twin& in);
+twin::Err twin_remove(std::uint8_t seq);
+twin::Err twin_rename(std::uint8_t seq, std::string_view name);
 
 std::uint8_t bank();              // flash register set used by the last store write (2, 1, 0 = none yet)
 

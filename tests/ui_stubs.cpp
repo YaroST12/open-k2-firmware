@@ -17,6 +17,7 @@
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
+#include "k2/twin/twin_hw.hpp"
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -306,6 +307,12 @@ emlib::Err lib_remove(std::uint16_t seq) {
 emlib::Err lib_rename(std::uint16_t, std::string_view) { return emlib::Err::Ok; }
 uint32_t generation() { return static_cast<uint32_t>(g_stub.lib_saves + g_stub.lib_removes); }
 }  // namespace storage
+
+namespace twin_hw {
+bool live_running() { return false; }
+void live_poll(const LiveCtx&) {}
+void live_cancel() {}
+}  // namespace twin_hw
 
 namespace emk_spoof {
 Err arm(const emrec::Record& rec, const emk_quirk::Quirks& quirks) {

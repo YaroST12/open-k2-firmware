@@ -21,6 +21,7 @@
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/page_arena.hpp"
+#include "k2/twin/twin_hw.hpp"
 
 #include "k2/pd/pd_link.hpp"
 #include "k2/drivers/power_monitor.hpp"
@@ -227,7 +228,13 @@ public:
         uint8_t flags = 0;               // kSession*
     };
     [[gnu::noinline]] Session session();
-    bool ports_busy() const { return charger_test_busy() || fc_release_.busy(); }
+    // A Device twin live proof (twin_hw::live_running) owns the ports like a charger test does.
+    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy(); }
+    bool twin_live_busy() const;
+    // What the twin live runner needs from the UI: the clock, the monitor ceiling, the latest VBUS and who else owns the ports
+    // (the twin run itself is not "else"). The remote's `twin run` and the Device twins page start a run with it.
+    twin_hw::LiveCtx twin_ctx(uint32_t now_ms) const;
+    void cancel_twin();                  // BACK, the remote `stop`: ends a live proof, 5 V asked
     BusyWhy busy_why() const;          // why an identity / START is refused right now, BusyWhy::None = free
     const char *busy_reason() const;   // the footer text of busy_why(), nullptr = free
     bool spoof_busy() const { return busy_reason() != nullptr; }
