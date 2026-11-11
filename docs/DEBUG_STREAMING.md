@@ -62,6 +62,14 @@ and `stream off` (`stream off` prints `stream stats ...`).
 | 8 | Run | K2 ms, event code, a, b, c, d (`include/k2/chargertest/run_events.hpp`) |
 | 9 | Gap | source (2 log, 3 run), count, bytes: what the ring overwrote before it was sent |
 | 10 | Beat | K2 ms, stack free, MSP free, page, flags, USB log drops, nine u32 counters (sent and lost per kind, stalls) |
+| 11 | Boot | boot id (u16, the session boot counter), reset flags (u32, CRM CTRLSTS bits 26..31: PIN POR SW IWDG WWDG LPWR); once, right after Hello. A v1 host skips the kind (its parser resyncs past unknown kinds) |
+
+Boot boundaries: the K2 clock restarts at 0 on every boot, so a recording that spans a reboot (a supervisor that restarts
+`stream on` after the replug) would run backwards. The reader marks a boundary when a second Hello's clock is behind the
+last row, or when the Boot frame names a different boot id: it prints `BOOT BOUNDARY`, shifts the new boot's rows to follow
+the last row of the old one, tags every row with `boot_index`, and keeps the device-counter verdict per boot
+(`meta.json`: `boots`, `boot_id`, `reset_flags`; summary lines `boot 1 (#12): complete` ...). Firmware without a Boot
+frame still gets the clock-based boundary, with no id or cause. A `stream off` / `stream on` on the same boot is not a boundary.
 
 How each kind is made:
 

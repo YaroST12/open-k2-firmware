@@ -129,7 +129,13 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   mismatch below. Also seen:
   `k2_remote state` said `USB DATA` while Home said `SVOOC` (the shell must say what the screen says).
 - **The recorder stream has no boot id or reset cause** (2026-11-11): two boots in one recording look like one (the
-  "Power reads 0" scare). Validate: one K2 replug (or `reboot`) inside a recording shows two boot ids and the reset flags.
+  "Power reads 0" scare). Fixed on `k2/small-fixes`, hardware check pending: a new Boot frame (kind 11: session boot
+  counter, CRM reset flags) follows the Hello; `tools/k2_stream.py` prints `BOOT BOUNDARY`, keeps the clock rising,
+  tags rows with `boot_index` and judges the device counters per boot. Host: `tests/test_dbg_stream.cpp`,
+  `tests/test_k2_stream.py` (`TestBootBoundary`). Validate: one K2 replug (or `reboot`) inside a recording shows two boot
+  ids and the reset flags (`k2_stream.py view DIR --kind boot`: `boot #N reset=POR PIN` then `BOOT BOUNDARY`).
+  Open: `k2_stream.py record` itself ends when the CDC port vanishes at the replug; the boundary logic runs in whatever
+  reader keeps feeding one `Session` across the reboot (a reopening recorder is a follow-up).
 - **Twin limiter text with no claimed power** (2026-11-11, twin-observed review): with no claimed source power,
   predict calls a 60 W hub "limited by the cable". The predict rework on `k2/twin-observed` changes this path;
   re-check after its merge.

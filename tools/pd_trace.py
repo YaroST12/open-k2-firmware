@@ -742,7 +742,7 @@ SYNC = 0xA6
 K_START, K_DATA, K_LOST = 1, 2, 3
 # 4..10 (Hello, Text, Log, Power, Run, Gap, Beat) belong to the multiplexed stream (include/k2/core/dbg_stream.hpp,
 # tools/k2_stream.py); `trace stream` sends Hello/Text/Beat next to the trace frames, this reader skips them.
-K_KINDS = range(1, 11)
+K_KINDS = range(1, 12)   # 11 = Boot (boot id and reset cause)
 MAX_FRAME_PAYLOAD = 91
 
 

@@ -12,6 +12,9 @@
 //
 // Kinds (all multi-byte fields little endian; Start/Data/Lost are trace_stream.hpp's, unchanged):
 //   Hello(4)  ver(1) mask(1) power_hz(2) ms(4) flags(1: bit0 history from the oldest) hash(ascii, up to 24)
+//   Boot(11)  boot_id(2) reset_flags(4)                                   right after Hello, once per stream start: the session
+//             boot counter (it counts the K2's boots, so two boots in one recording differ) and the CRM reset-cause
+//             flags of this boot (bits 26..31: PIN POR SW IWDG WWDG LPWR). Added after v1 hosts shipped: they skip it
 //   Text(5)   ms(4) tag(1: 1 boot info line) chunk(up to 56)             the boot header after Hello
 //   Log(6)    base_ms(4) seq(4) whole BinLog entries; base_ms is the time of the entry before the first one, seq the entry
 //             number of the first; each entry is `len dt id args` as k2/core/binlog.hpp lays it out (tools/logdb.py decodes it)
@@ -75,6 +78,11 @@ struct BeatInfo {
     std::uint32_t usb_dropped = 0;
 };
 
+struct BootInfo {
+    std::uint16_t boots = 0;           // the session boot counter: this boot's id
+    std::uint32_t reset_flags = 0;     // CRM CTRLSTS reset-cause bits of this boot
+};
+
 // What the firmware knows and the pure code does not: the clock, the readings, the boot header.
 struct Probe {
     virtual std::uint32_t now_ms() = 0;
@@ -83,6 +91,7 @@ struct Probe {
     virtual std::size_t boot_len() = 0;                           // the held boot header (0 when none)
     virtual void boot_read(std::size_t off, std::span<std::uint8_t> out) = 0;
     virtual std::string_view hash() = 0;
+    virtual void boot(BootInfo& b) = 0;                           // boot id and reset cause, for the Boot frame
 
 protected:
     ~Probe() = default;
@@ -160,7 +169,8 @@ public:
         if (!hello_ && can()) {
             hello_ = emit(hello(f, now, pr));
         }
-        if (!hello_) return n;
+        if (hello_ && !boot_sent_ && can()) boot_sent_ = emit(boot_frame(f, pr));
+        if (!hello_ || !boot_sent_) return n;
         for (const std::size_t total = pr.boot_len(); text_off_ < total && can();) {
             const std::size_t k = total - text_off_ < kTextChunk ? total - text_off_ : kTextChunk;
             trace_stream::put32(f.data() + 3, now);
@@ -241,6 +251,14 @@ private:
     }
     bool send_due(std::uint32_t now) const {
         return win_.n && (dirty_ || !sent_any_ || now - last_power_ms_ >= kKeepaliveMs);
+    }
+
+    std::size_t boot_frame(std::array<std::uint8_t, kFrameMax>& f, Probe& pr) const {
+        BootInfo b;
+        pr.boot(b);
+        trace_stream::put16(f.data() + 3, b.boots);
+        trace_stream::put32(f.data() + 5, b.reset_flags);
+        return trace_stream::seal_frame(f, Kind::Boot, 6);
     }
 
     std::size_t hello(std::array<std::uint8_t, kFrameMax>& f, std::uint32_t now, Probe& pr) const {
@@ -367,7 +385,7 @@ private:
     std::size_t text_off_ = 0;
     std::uint16_t hz_ = kPowerHzDefault;
     std::uint8_t mask_ = 0;
-    bool running_ = false, history_ = false, hello_ = false, sent_any_ = false, dirty_ = false, log_first_ = false;
+    bool running_ = false, history_ = false, hello_ = false, boot_sent_ = false, sent_any_ = false, dirty_ = false, log_first_ = false;
 };
 
 }  // namespace k2::dbg

@@ -58,7 +58,7 @@ std::uint32_t u32(const Bytes& b, std::size_t at) {
 }
 std::uint16_t u16(const Bytes& b, std::size_t at) { return std::uint16_t(b[at] | b[at + 1] << 8); }
 
-enum : std::uint8_t { Start = 1, Data = 2, Lost = 3, Hello = 4, Text = 5, Log = 6, Power = 7, Run = 8, Gap = 9, Beat = 10 };
+enum : std::uint8_t { Start = 1, Data = 2, Lost = 3, Hello = 4, Text = 5, Log = 6, Power = 7, Run = 8, Gap = 9, Beat = 10, Boot = 11 };
 
 struct Fake final : dbg::Probe {
     std::uint32_t now = 1000;
@@ -74,6 +74,8 @@ struct Fake final : dbg::Probe {
         for (std::size_t i = 0; i < out.size(); i++) out[i] = std::uint8_t(text[off + i]);
     }
     std::string_view hash() override { return "abc1234-dirty"; }
+    dbg::BootInfo bi{12, 0x0C000000u};
+    void boot(dbg::BootInfo& b) override { b = bi; }
 };
 
 using TraceRing = pdtrace::Ring<600>;
@@ -139,8 +141,9 @@ void test_hello_then_boot_text_then_beat() {
     CHECK_EQ(u32(fr[0].pl, 4), 1001u);                                   // the K2 clock at the first pass
     CHECK_EQ(fr[0].pl[8], 0u);
     CHECK_STR(std::string(fr[0].pl.begin() + 9, fr[0].pl.end()).c_str(), "abc1234-dirty");
+    CHECK_EQ(fr[1].kind, Boot);                                          // the boot id and the reset cause follow the Hello
     std::string text;
-    std::size_t i = 1;
+    std::size_t i = 2;
     for (; i < fr.size() && fr[i].kind == Text; i++) {
         CHECK_EQ(fr[i].pl[4], 1u);                                       // tag: boot info
         text.append(fr[i].pl.begin() + 5, fr[i].pl.end());
@@ -149,7 +152,7 @@ void test_hello_then_boot_text_then_beat() {
     CHECK_EQ(i >= 3u, true);                                             // more than one chunk
     bool beat = false;
     for (; i < fr.size(); i++) {
-        CHECK_EQ(fr[i].kind == Hello || fr[i].kind == Text, false);      // nothing but data kinds after the header
+        CHECK_EQ(fr[i].kind == Hello || fr[i].kind == Boot || fr[i].kind == Text, false);   // nothing but data kinds after the header
         if (fr[i].kind == Beat) {
             beat = true;
             CHECK_EQ(fr[i].pl.size(), 50u);
@@ -162,6 +165,21 @@ void test_hello_then_boot_text_then_beat() {
     CHECK_EQ(beat, true);
 }
 
+void test_boot_frame_carries_the_boot_id_and_reset_flags() {
+    Rig r;
+    r.fake.bi = {0x1234, 0x14000000u};
+    r.start(dbg::kAll, 20);
+    r.drain();
+    const auto b = r.of(Boot);
+    CHECK_EQ(b.size(), 1u);                                              // once per stream start, not per beat
+    CHECK_EQ(b[0].pl.size(), 6u);
+    CHECK_EQ(u16(b[0].pl, 0), 0x1234u);                                  // boot id: the session boot counter
+    CHECK_EQ(u32(b[0].pl, 2), 0x14000000u);                              // CRM CTRLSTS reset flags of this boot
+    const auto fr = r.frames();
+    CHECK_EQ(fr[0].kind, Hello);
+    CHECK_EQ(fr[1].kind, Boot);
+}
+
 void test_header_goes_out_before_everything_even_in_a_tiny_fifo() {
     Rig r;
     r.rq.push({5, runev::Code::Stage, 1, 0, 0, 0});
@@ -169,7 +187,8 @@ void test_header_goes_out_before_everything_even_in_a_tiny_fifo() {
     for (int i = 0; i < 40; i++) r.pass(dbg::kFrameMax);                 // room for exactly one worst-case frame per pass
     const auto fr = r.frames();
     CHECK_EQ(fr[0].kind, Hello);
-    std::size_t k = 1;
+    CHECK_EQ(fr[1].kind, Boot);
+    std::size_t k = 2;
     while (k < fr.size() && fr[k].kind == Text) k++;
     for (std::size_t j = k; j < fr.size(); j++) CHECK_EQ(fr[j].kind == Text, false);
     CHECK_EQ(r.of(Run).size(), 1u);
@@ -635,6 +654,7 @@ void test_frames_all_pass_their_crc_and_fit_the_budget() {
 
 int main() {
     test_hello_then_boot_text_then_beat();
+    test_boot_frame_carries_the_boot_id_and_reset_flags();
     test_header_goes_out_before_everything_even_in_a_tiny_fifo();
     test_mask_selects_kinds();
     test_run_event_round_trip_and_gap();
