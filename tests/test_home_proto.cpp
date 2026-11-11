@@ -328,7 +328,28 @@ static void test_inline_vooc_session_shows_measured_level_and_current() {
     CHECK_STR(t.value.c_str(), "9V");
 }
 
+// The shell and the remote print fastcharge::report_label(); Home paints derive_proto(). With a live VOOC session both
+// must name SVOOC, and with no VBUS both must say nothing is live (the 2026-11-11 mismatch: state said USB DATA, Home
+// said SVOOC). One rule, vooc_session_live(), is the source of both.
+static void test_shell_label_and_home_row_agree_on_a_live_session() {
+    for (int i = 0; i <= static_cast<int>(Protocol::PdLikely); i++) {
+        const Protocol p = static_cast<Protocol>(i);
+        for (const bool live : {false, true}) {
+            ProtoSource s;
+            s.fc = p; s.vbus_mv = 9000; s.vooc_live = live;
+            const bool home_svooc = derive_proto(s).kind == ProtoKind::Svooc && live;
+            const bool label_svooc = fastcharge::report_label(p, live) == Protocol::Svooc && live;
+            CHECK_EQ(home_svooc, label_svooc);
+            CHECK_EQ(fastcharge::vooc_session_live(p, live), home_svooc);
+        }
+    }
+    ProtoSource none;
+    none.fc = Protocol::NoInput; none.vooc_live = true;
+    CHECK_EQ(static_cast<int>(derive_proto(none).kind), static_cast<int>(ProtoKind::None));
+}
+
 int main() {
+    test_shell_label_and_home_row_agree_on_a_live_session();
     test_inline_vooc_session_shows_measured_level_and_current();
     test_pd_fixed();
     test_pd_epr();

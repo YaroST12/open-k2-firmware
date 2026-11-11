@@ -556,7 +556,133 @@ static void test_report_label_follows_a_live_vooc_session() {
     CHECK_EQ(int(report_label(Protocol::NoInput, true)), int(Protocol::NoInput));   // no VBUS: nothing is live
 }
 
+// Hardware 2026-11-11 (1.0.0-564, CUKTECH USB-A port, runs/idle_check.txt): after `dm 0` then `dm hiz` the pair read
+// 420 / 387 mV, equal and steady for ~3 s, and the verdict was AFC FCP. The 0.3 V bucket edge put D+ in "0.6 V" and D- in
+// "0 V", which the FCP/AFC rule reads as a handshake. FCP and AFC drive D+ and D- to different levels, so a pair that
+// is equal within the steady-pair tolerance (0.2 V, every sample, the whole window) is never a handshake.
+static void test_equal_low_pair_is_not_afc_fcp() {
+    Ring eq;
+    for (int i = 0; i < 50; i++) eq.push(420, 387);
+    CHECK_EQ(int(classify(eq, 420, 387, 5116)), int(Protocol::NoQuick));
+    CHECK_EQ(int(classify(eq, 420, 387, 9000)), int(Protocol::PdMtk));     // 9 V and 12 V bands share the rule
+    CHECK_EQ(int(classify(eq, 420, 387, 12000)), int(Protocol::PdMtk));
+    // ... and no handshake latches on it, so a silent contract's idle pair is not read as one either.
+    CHECK_EQ(handshake_pattern(eq, 420, 387), false);
+    CHECK_EQ(update_handshake_latch(false, eq, 420, 387), false);
+    // An equal pair across the bucket edge both ways, and a quiet equal pair a hair above 0 V.
+    Ring eq2;
+    for (int i = 0; i < 50; i++) eq2.push(387, 420);
+    CHECK_EQ(int(classify(eq2, 387, 420, 5116)), int(Protocol::NoQuick));
+    Ring eq3;
+    for (int i = 0; i < 50; i++) eq3.push(310, 290);
+    CHECK_EQ(int(classify(eq3, 310, 290, 5000)), int(Protocol::NoQuick));
+    // Still equal and quiet, so the active check may run on it and its proof still names a DCP (item 4: unchanged).
+    CHECK_EQ(quiet_pair(eq), true);
+    CHECK_EQ(int(classify(eq, 420, 387, 5116, false, false, false, true, true)), int(Protocol::Dcp5V));
+    // The bias window keeps its verdict: equal steady 0.6 V reads NO QUICK until the active proof.
+    CHECK_EQ(int(run(600, 600, 5000)), int(Protocol::NoQuick));
+    // The real handshakes stay: D+ on the 0.6 V rail with D- at 0 V (more than 0.2 V apart), at 5, 9 and 12 V.
+    CHECK_EQ(int(run(600, 0, 5000)), int(Protocol::AfcFcp));
+    CHECK_EQ(int(run(600, 200, 5000)), int(Protocol::AfcFcp));
+    CHECK_EQ(int(run(600, 0, 9000)), int(Protocol::AfcFcp));
+    CHECK_EQ(int(run(600, 0, 12000)), int(Protocol::AfcFcp));
+    Ring fcp;
+    for (int i = 0; i < 50; i++) fcp.push(600, 0);
+    CHECK_EQ(handshake_pattern(fcp, 600, 0), true);
+    // A data host on CC still owns an equal low pair.
+    CHECK_EQ(int(classify(eq, 420, 387, 5116, false, false, true)), int(Protocol::UsbData));
+}
+
+// A sagging or cut output (the CUKTECH port cuts VBUS every ~6.5 s with no load): the lines follow the supply down and
+// the window mixes two levels, which the classifier read as USB DATA between APPLE 2.4A and NO INPUT. While VBUS is below
+// vSafe5V min (4.75 V) and for one window after it, the data pair says nothing; SagGuard holds the last verdict.
+static Protocol sag_step(SagGuard& g, Ring& r, int dp_mv, int dm_mv, int vbus_mv, bool cc_source_no_pd = false) {
+    r.push(dp_mv, dm_mv);
+    if (vbus_mv < 4000) r.clear();
+    return g.apply(classify(r, dp_mv, dm_mv, vbus_mv, false, false, cc_source_no_pd), vbus_mv);
+}
+
+static void test_sag_holds_the_last_verdict() {
+    SagGuard g;
+    Ring r;
+    Protocol v = Protocol::Pending;
+    for (int i = 0; i < 60; i++) v = sag_step(g, r, 2735, 2535, 5095);
+    CHECK_EQ(int(v), int(Protocol::Apple24));
+    // The supply sags (hardware: 4388 / 2041 / 2034): the window turns into a mix of 2.7 V and 2.0 V.
+    bool raw_flapped = false;
+    for (int i = 0; i < 20; i++) {
+        Ring peek = r;
+        peek.push(2041, 2034);
+        raw_flapped |= classify(peek, 2041, 2034, 4388) == Protocol::UsbData;
+        v = sag_step(g, r, 2041, 2034, 4388);
+        CHECK_EQ(int(v), int(Protocol::Apple24));
+    }
+    CHECK_EQ(raw_flapped, true);   // the raw classifier did read the mix as USB DATA
+    // The tail rule of an A-to-C cable's Rp says USB DATA for the sagged divider level too.
+    Ring tail;
+    for (int i = 0; i < 50; i++) tail.push(2041, 2034);
+    CHECK_EQ(int(classify(tail, 2041, 2034, 4388, false, false, true)), int(Protocol::UsbData));
+    SagGuard g2;
+    g2.apply(Protocol::Apple24, 5095);
+    CHECK_EQ(int(g2.apply(Protocol::UsbData, 4388)), int(Protocol::Apple24));
+    // VBUS returns: the window still holds sag samples, so the hold lasts one window after it.
+    for (int i = 0; i < 20; i++) {
+        v = sag_step(g, r, 2699, 2682, 4820);
+        CHECK_EQ(int(v), int(Protocol::Apple24));
+    }
+    for (int i = 0; i < 60; i++) v = sag_step(g, r, 2699, 2682, 5100);
+    CHECK_EQ(int(v), int(Protocol::Apple24));
+    // A cut: NO INPUT (never held), and the next attach starts clean.
+    CHECK_EQ(int(g.apply(Protocol::NoInput, 0)), int(Protocol::NoInput));
+    CHECK_EQ(int(g.apply(Protocol::Pending, 5000)), int(Protocol::Pending));
+}
+
+static void test_sag_does_not_invent_a_verdict() {
+    // Nothing real to hold (first sighting is already a sag): a data-pair guess becomes "not decided yet", not USB DATA.
+    SagGuard g;
+    CHECK_EQ(int(g.apply(Protocol::UsbData, 4388)), int(Protocol::Pending));
+    // After a cut the held verdict is NO INPUT: a sagging refill stays undecided until the supply is back and the
+    // window refilled.
+    CHECK_EQ(int(g.apply(Protocol::NoInput, 0)), int(Protocol::NoInput));
+    CHECK_EQ(int(g.apply(Protocol::UsbData, 4300)), int(Protocol::Pending));
+    for (int i = 0; i < int(kRingSize); i++) CHECK_EQ(int(g.apply(Protocol::UsbData, 5000)), int(Protocol::Pending));
+    CHECK_EQ(int(g.apply(Protocol::UsbData, 5000)), int(Protocol::UsbData));
+    // PD and NO INPUT are never held back by a sag.
+    CHECK_EQ(int(g.apply(Protocol::Pd, 4300)), int(Protocol::Pd));
+    CHECK_EQ(int(g.apply(Protocol::PdLikely, 4300)), int(Protocol::PdLikely));
+    CHECK_EQ(int(g.apply(Protocol::NoInput, 3000)), int(Protocol::NoInput));
+}
+
+static void test_sag_guard_leaves_real_data_and_weak_sources_alone() {
+    // A real data device behind the K2, VBUS good: the pulsing pair reads USB DATA and so does a CC data host.
+    SagGuard g;
+    Ring r;
+    Protocol v = Protocol::Pending;
+    for (int i = 0; i < 60; i++) v = sag_step(g, r, (i & 1) ? 3300 : 0, 0, 5000);
+    CHECK_EQ(int(v), int(Protocol::UsbData));
+    Ring r2;
+    SagGuard g2;
+    for (int i = 0; i < 60; i++) v = sag_step(g2, r2, 1500, 600, 5000, true);
+    CHECK_EQ(int(v), int(Protocol::UsbData));
+    // A source that simply sits below 4.75 V (weak, loaded) is judged again after the hold bound.
+    SagGuard g3;
+    g3.apply(Protocol::NoQuick, 5000);
+    for (unsigned i = 0; i < kSagHoldPolls; i++) CHECK_EQ(int(g3.apply(Protocol::UsbData, 4500)), int(Protocol::NoQuick));
+    CHECK_EQ(int(g3.apply(Protocol::UsbData, 4500)), int(Protocol::UsbData));
+    // The exact edge: 4.75 V is not a sag, 4.749 V is.
+    SagGuard g4;
+    g4.apply(Protocol::NoQuick, 5000);
+    CHECK_EQ(int(g4.apply(Protocol::UsbData, 4750)), int(Protocol::UsbData));
+    SagGuard g5;
+    g5.apply(Protocol::NoQuick, 5000);
+    CHECK_EQ(int(g5.apply(Protocol::UsbData, 4749)), int(Protocol::NoQuick));
+}
+
 int main() {
+    test_equal_low_pair_is_not_afc_fcp();
+    test_sag_holds_the_last_verdict();
+    test_sag_does_not_invent_a_verdict();
+    test_sag_guard_leaves_real_data_and_weak_sources_alone();
     test_report_label_follows_a_live_vooc_session();
     test_ring();
     test_bucket();

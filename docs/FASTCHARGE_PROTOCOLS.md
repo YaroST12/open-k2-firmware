@@ -248,6 +248,19 @@ proves the decoder header reaches no pin, register or driver.
   levels (PD still wins), and the window starts fresh when the monitor lets go.
 - The monitor is on by default (a RAM switch, not saved). Not yet run on hardware.
 
+### Passive classifier rules that guard against a false handshake (2026-11-11, `src/fastcharge/fastcharge_classify.cpp`)
+
+- FCP / AFC need D+ and D- on different levels (D+ on the 0.6 V rail, D- at 0 V). A pair that is equal within 0.2 V on
+  every sample of the window with a combined level steady within 0.2 V is one level on both lines and is never AFC FCP,
+  at 5, 9 or 12 V, even when the 0.3 V bucket edge puts one line in the "0.6 V" bucket and the other in "0 V" (hardware:
+  420 / 387 mV after a `dm 0`, `dm hiz` read AFC FCP for 2 s). Such a pair at or below 0.79 V latches no handshake either
+  and reads NO QUICK; the active DCP check may still run on it.
+- `SagGuard` holds the last data-pair verdict while VBUS is below vSafe5V min (4.75 V) and for one window after it (the
+  ring still holds sag samples), because the lines follow a sagging or cut supply (hardware: APPLE 2.4A, then USB DATA at
+  4.0-4.8 V with equal ~2 V lines, then NO INPUT). With nothing to hold it says Pending, never USB DATA. NO INPUT, PD and
+  PD? pass through; the hold ends after about 5 s of a steady weak source. A real data device behind the K2 still reads
+  USB DATA with a good supply.
+
 ## 4. UFCS
 
 Wire: USART2 on PA2 (TX, wired to D-) and PA3 (RX, wired to D+). There is no pin swap; the pins are fixed in

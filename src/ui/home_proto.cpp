@@ -75,7 +75,7 @@ ProtoInfo fixed_info(ProtoKind k, uint32_t mv, uint32_t ma, uint32_t max_mv) {
 }  // namespace
 
 ProtoInfo derive_proto(const ProtoSource &s) {
-    if (s.vooc_live) {
+    if (fastcharge::vooc_session_live(s.fc, s.vooc_live)) {   // the rule fastcharge::report_label (remote, shell) uses
         // A live, proven VOOC exchange on D+/D- wins over any PD contract: a phone holds a 5 V contract on CC and runs
         // SuperVOOC on the data lines at the same time, and the lines carry what really charges it. The charger
         // announces no level we can read, so the row shows the measured VBUS and |IBUS| at 0.1 resolution. No rating:

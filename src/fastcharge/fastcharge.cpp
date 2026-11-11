@@ -19,6 +19,7 @@ Protocol g_verdict = Protocol::Pending;
 // Any D+/D- handshake pattern seen since the current source attached (the ring is cleared when VBUS
 // drops below presence, so the ring's lifetime is the attach). Fed to classify() as cc_attach_quiet.
 bool g_handshake_seen = false;
+SagGuard g_sag;   // holds the last verdict through an output sag or cut (see SagGuard)
 
 // Active DCP check (see dcp_check_result): once per attach, only for a quiet pair. The check plays the three
 // dpdm::kDcpProbe steps one per poll (about 60 ms in all): Clear, Ref (D- read on the next poll as the reference),
@@ -110,6 +111,7 @@ unsigned init() {
     g_ring.clear();
     g_verdict = Protocol::Pending;
     g_handshake_seen = false;
+    g_sag.reset();
     dcp_reset();
     return bad;
 }
@@ -120,6 +122,7 @@ void poll() {
     const int vbus = pwr ? pwr->vbus_mv : 0;
     if (!line) {
         dcp_reset();   // the ADC lost the lines (another driver owns them): never leave a probe level behind
+        g_sag.reset();
         g_verdict = vbus < 4000 ? Protocol::NoInput : Protocol::Pending;
         monitor();
         return;
@@ -147,8 +150,11 @@ void poll() {
             dcp_begin(g_ring, vbus, probe, cc_source_no_pd);
         }
     }
-    g_verdict = classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),
-                         cc_source_no_pd, !g_handshake_seen, g_dcp_proof, floating);
+    // A sagging or cut output drags the lines with it: the guard holds the last verdict until the supply and the window
+    // are good again (hardware 2026-11-11: APPLE 2.4A -> USB DATA -> NO INPUT on a port that cuts VBUS every ~6.5 s).
+    g_verdict = g_sag.apply(classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),
+                                     cc_source_no_pd, !g_handshake_seen, g_dcp_proof, floating),
+                            vbus);
     monitor();
 }
 
