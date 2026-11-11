@@ -65,6 +65,20 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Reboot bridging dead since the SRAM canary** (2026-11-11, IQ4 self-powered charger test, card 65): after a VBUS cut
+  the K2 came back plain with no Rd, the charger saw no sink and the K2 stayed dark (found with Rp on CC2, VBUS 0).
+  Cause: the `.noinit` SRAM canary of 71bd2345 (ROADMAP "Stale Rd marker") never survives a dark on this board. The
+  retention probe of 29ba54a0 (`bootinfo` `sr=`) read 0 of 32 words after a 1 s PC-cable dark; the backup registers
+  kept the session record (`bp=`). So every comeback judged `/rd.rec` stale. The HID-cable loop hid this, because it
+  powers the K2 through the dark.
+  - Fix (7c035f66): the voucher is `session::backup_alive()`, the checksummed session record in DR22..DR37 that every
+    boot writes. A short dark keeps it; a real power loss zeroes it. The SRAM canary is gone; `ri=` in `bootinfo` shows
+    the decision (kind, pin, voucher, host) for every cold boot.
+  - Validate: a self-powered IQ4 charger test (PLUS boot, no HID loop, no PC) that cuts VBUS comes back by itself and
+    finishes; afterwards `bootinfo` on a comeback boot reads `ri=s2yn` (or `a2yn`). Still to measure: how long the
+    backup registers last in a dark (1 s kept, a minutes-long unplug lost them). A charger whose dark exceeds that limit
+    still breaks the bridge.
+
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
   1.0.0-520-77a384e8, no `USB DATA` while VBUS >= 8 V, `runs/2026-11-11-late-attach/cycles-520/`); the open part is the
