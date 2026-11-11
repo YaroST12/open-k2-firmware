@@ -10,6 +10,7 @@ constexpr std::size_t kMaxTokens = 12;
 
 constexpr std::string_view kHelp =
     "state                       V/A, D+/D-, CC, fast-charge, PD\r\n"
+    "diag                        Black Box diagnosis of the PD session (read-only)\r\n"
     "log on|off                  stream the chip log here\r\n"
     "dp|dm hiz|0|0.6|3.3         raw D+/D- drive (0.6 and 3.3 need confirm)\r\n"
     "cc open <ms>                open the CC lines (1..1000 ms)\r\n"
@@ -306,6 +307,11 @@ void Shell::execute(std::string_view line) {
     if (same(c, "trace")) return cmd_trace(b_, k);
     if (same(c, "stream")) return cmd_stream(b_, k);
     if (same(c, "twin")) return cmd_twin(b_, k);
+    if (same(c, "diag")) {
+        if (k.n != 1) return err(b_, "usage: diag");
+        if (const char* why = b_.diag()) err(b_, why);
+        return;
+    }
     err(b_, "unknown command (help)");
 }
 
