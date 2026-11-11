@@ -509,16 +509,16 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
             // after the previous row's reset of D+/D- and got no handshake, right after the same charger passed the row before it
             // (QC2 12 V after 9 V, the QC3 Class B 5 V after the QC3 unit). So one HVDCP handshake per unit: the first QC2 row (5 V)
             // and the first QC3 row open the session, every later level is a retarget in it (QC2: the D+/D- levels, QC3: pulses), and
-            // the opt-in Class B rows of the unit go on in the same session when their Class A rows are in the plan. A Class B row
+            // the Class B rows of the unit (default-selected, own algorithms) go on in the same session when their Class A rows are in the plan. A Class B row
             // selected alone opens its own. The engine takes 20 V in a session that started as QC2 / QC3 (qc2_levels, clamp_qc3_mv).
-            if (algorithm == Algorithm::Qc2ClassB) { level(20000, o.contains(Algorithm::Qc2)); continue; }   // opt-in Class B (20 V) fixed level
-            if (algorithm == Algorithm::Qc3ClassB) {   // opt-in Class B ramp 5/12/20/12/5
+            if (algorithm == Algorithm::Qc2ClassB) { level(20000, o.contains(Algorithm::Qc2)); continue; }   // Class B (20 V) fixed level
+            if (algorithm == Algorithm::Qc3ClassB) {   // Class B ramp 5/12/20/12/5
                 const unsigned targets[] = {5000, 12000, 20000, 12000, 5000};
                 for (unsigned n = 0; n < 5; ++n) level(targets[n], n != 0 || o.contains(Algorithm::Qc3));
                 continue;
             }
             switch (s.group) {
-            case Group::Qc2: level(5000); level(9000, true); level(12000, true); break;   // Class B 20 V: opt-in Qc2ClassB
+            case Group::Qc2: level(5000); level(9000, true); level(12000, true); break;   // Class B 20 V: the Qc2ClassB algorithm
             case Group::Qc3:
             case Group::Qc3Plus: {
                 const unsigned targets[] = {5000, 9000, 12000u, 9000, 5000};   // QC3 spec range 3.6-12 V

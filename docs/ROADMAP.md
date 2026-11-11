@@ -858,7 +858,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | SPR AVS 9-20 V requests | partial (request fields exist, no UI) | not verified | `pd_sink` | HV |
 | Apple battery level and model, charger serial | planned | n/a | `pd_vdm` | PASSIVE |
 | Xiaomi Mi Turbo auth replies | partial: observation only | n/a | `pd_vdm` | HV |
-| UFCS 7-DO handshake and frames | handshake, Ping, Get_Output_Capabilities and Request/Accept hardware-verified on a Baseus FH22 charger (2026-11-07); Power_Ready wait, keep-alive and reset ladder rewritten to the standard, host-tested, not yet run on a source | n/a | `ufcs` | HV |
+| UFCS 7-DO handshake and frames | handshake, Ping, Get_Output_Capabilities and Request/Accept hardware-verified on a Baseus FH22 charger (2026-11-07), with Power_Ready, keep-alive and the 5/9/11 V levels; a 20 V 3 A contract on a CUKTECH 10 charger; not yet seen on a source: Refuse, NCK, the source's own Ping | n/a | `ufcs` | HV |
 
 ## Cables
 

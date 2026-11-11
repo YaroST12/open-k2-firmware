@@ -26,10 +26,13 @@ to finish before deciding again:
 - After any QC session both lines are held at 0 V for 500 ms before the next detection starts. The Black Box
   records one `qc3-batch` mark per batch (VBUS and signed pulse count).
 
-QC2.0 is 5/9/12 V and QC3.0 is 3.6-12 V. The charger-test plan therefore has no 20 V rows for QC2 or QC3 (they
-fail on every charger and are noise). QC3 ramps 5 -> 9 -> 12 -> 9 -> 5 V. Class B (20 V) sources are covered by
-two opt-in algorithms, off by default: "QC2 Class B" (one 20 V row) and "QC3 Class B" (ramp 5 -> 12 -> 20 -> 12
--> 5 V).
+QC2.0 is 5/9/12 V and QC3.0 is 3.6-12 V. The Class A algorithms therefore have no 20 V rows (they fail on every
+charger and are noise). QC3 ramps 5 -> 9 -> 12 -> 9 -> 5 V. Class B (20 V) sources are covered by two separate
+algorithms, "QC2 Class B" (one 20 V row) and "QC3 Class B" (ramp 5 -> 12 -> 20 -> 12 -> 5 V). They are part of
+the default selection (`kDefaultAlgorithms`); on a Class A charger they read as a neutral skip (`ClassAOnly`), and a
+Class B row that finds the output stuck at 12 V ends early as the same skip (QC2: 3 s after the request with VBUS
+inside 11.4-12.6 V the whole time; QC3: two settle batches that moved less than two pulses' worth while at 11.4 V or
+more) instead of waiting out the 15 s / 12 s timers.
 
 | Protocol | Class A | Class B | Step |
 |---|---|---|---|
@@ -39,7 +42,7 @@ two opt-in algorithms, off by default: "QC2 Class B" (one 20 V row) and "QC3 Cla
 
 Hardware example (2026-11-03): a no-name 30 W USB-A charger (card "NoName 30W USB-A", non-PD) is a real Class B
 source. QC2 5/9/12/20 V all pass (20.16 V measured) and QC3 20 V plus the down-steps pass with the two Class B
-algorithms enabled. It is the reference for keeping Class B as an opt-in.
+algorithms enabled. It is the reference for what a real Class B source looks like.
 
 ## 2. SCP capability readout (2026-11-08)
 
@@ -209,8 +212,7 @@ current when that is higher, never above its maximum), within the monitor ceilin
 reach above the ceiling (the 30 V band of a 100 W source) are asked up to the ceiling only. Before the first row
 ran, and for a source that sent no usable modes, the fixed levels 5 / 9 / 11 V and back to 5 V apply.
 
-**Open points.** Not yet seen on a source: a Power_Ready from the Baseus FH22 (its log ends at the Accept), a
-Refuse, an NCK, the source's own Ping, Get_Sink_Info and Get_Device_Info. Engine rule (TOPADRE 65 W, 2026-11-08,
+**Open points.** Not yet seen on a source: a Refuse, an NCK, the source's own Ping, Get_Sink_Info and Get_Device_Info. Engine rule (TOPADRE 65 W, 2026-11-08,
 Soft_Reset between our Accept and its Power_Ready): a Soft_Reset from the source in any live phase (Request, Power
 wait, Keep) is ACKed, numbering restarts at 0 and the opening runs again (opener, Get_Output_Capabilities, the
 Request for the current target); a second Soft_Reset before the next Power_Ready ends the attempt (`SourceLost`

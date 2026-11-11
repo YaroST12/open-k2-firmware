@@ -119,7 +119,7 @@ void log_errors(bool force) {
 
 // UFCS physical handshake: both lines to 0 V for 50 ms, then D-
 // is toggled 3.3 V 2 ms / 0 V 8 ms twice while D+ (PA7, digital) must follow it, then D- is released
-// and D+ must go high within 15 ms. Not yet confirmed on a UFCS source.
+// and D+ must go high within 15 ms. Hardware-verified on UFCS sources (Baseus FH22, CUKTECH 10).
 //
 // Pass/fail is the level test only. Each D+ edge is also timed from the D- edge that should
 // cause it and logged with its class: a BC1.2 DCP shorts D+ to D-, so it "answers" every edge within
