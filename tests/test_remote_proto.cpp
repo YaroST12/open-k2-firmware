@@ -240,6 +240,26 @@ static void test_state_diag_part() {
     CHECK_EQ(kDiagLen, 26);
 }
 
+static void test_state_keys_part() {
+    Fake f; Frame r;
+    auto set = [&](int i, std::string_view s, std::string_view l) {
+        std::copy(s.begin(), s.end(), f.ky.k[i].shrt); std::copy(l.begin(), l.end(), f.ky.k[i].lng);
+    };
+    set(0, "Back", ""); set(1, "-", "Prev"); set(2, "Rescan", "Charger"); set(3, "+", "Next");
+    f.ky.flags = 0x12;                                          // [-] dim, strip covered
+    CHECK_EQ(run(f, request(0x03, 60, {3}), r), 1);
+    check_header(r, 0x03, 60, Status::Ok, kKeysLen);
+    check_bytes(r, kRspHeader, {0x12,                           // bit i = button i dim, bit 4 strip hidden
+                                'B', 'a', 'c', 'k', 0, 0, 0,   0, 0, 0, 0, 0, 0, 0,
+                                '-', 0, 0, 0, 0, 0, 0,         'P', 'r', 'e', 'v', 0, 0, 0,
+                                'R', 'e', 's', 'c', 'a', 'n', 0, 'C', 'h', 'a', 'r', 'g', 'e', 'r',
+                                '+', 0, 0, 0, 0, 0, 0,         'N', 'e', 'x', 't', 0, 0, 0});
+    CHECK_EQ(kKeysLen, 57);
+    CHECK_EQ(kKeysLen <= kMaxRspPayload, 1);
+    CHECK_EQ(run(f, request(0x03, 61, {4}), r), 1);
+    check_header(r, 0x03, 61, Status::BadArg, 0);
+}
+
 static void test_adc_raw() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x21, 4, {}), r), 1);
@@ -2054,6 +2074,7 @@ int main() {
     test_state();
     test_state_session_part();
     test_state_diag_part();
+    test_state_keys_part();
     test_adc_raw();
     test_ripple();
     test_fc();

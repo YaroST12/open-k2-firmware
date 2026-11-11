@@ -176,6 +176,8 @@ public:
     const std::optional<cable_r::Kelvin> &kelvin() const { return ctx_.kelvin; }
     // What the four buttons do on the current page (Button order).
     PanelLabels labels() { return current().labels(); }
+    // True when the current page covers the strip (the QR code): its four labels are not drawn (GET_STATE part 3).
+    bool strip_hidden() { return current().hides_strip(); }
     bool charger_test_busy() const { return charger_test_.busy(); }
     const charger_test::Runner& charger_test_results() const { return charger_test_.results(); }
     // The draft selection on the wire (Cmd::ChargerTest schema 2): the algorithm mask, with bit 31 = the PPS deep

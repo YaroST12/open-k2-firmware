@@ -6,6 +6,7 @@
 #include "test_util.h"
 #include "ui_stubs.h"
 #include "k2/ui/ui.hpp"
+#include "k2/core/remote_keys.hpp"
 #include <memory>
 #include <string.h>
 
@@ -184,7 +185,57 @@ static void test_home_window_and_flags() {
     CHECK_EQ(int(ui.session().flags & kSessionEmQuiet), int(kSessionEmQuiet));
 }
 
+// GET_STATE part 3: the strip as the wire carries it. Every page and menu must fit the 7 character words (no cut), keep
+// Back first, and the encoded block must fit the 58 byte reply; the dim and covered flags must follow the page.
+static void check_keys(Ui &ui, const char *what) {
+    const PanelLabels p = ui.labels();
+    const remote::KeysInfo k = remote::keys_from_labels(p, ui.strip_hidden());
+    for (int i = 0; i < 4; i++) {
+        if (strlen(p.b[i].shrt) > remote::kKeyChars || strlen(p.b[i].lng) > remote::kKeyChars)
+            printf("keys cut: %s button %d \"%s\" / \"%s\"\n", what, i, p.b[i].shrt, p.b[i].lng);
+        CHECK_STR(k.k[i].shrt, p.b[i].shrt);          // not truncated on any page
+        CHECK_STR(k.k[i].lng, p.b[i].lng);
+        CHECK_EQ(int((k.flags >> i) & 1), p.b[i].dim ? 1 : 0);
+    }
+    CHECK_EQ(int((k.flags >> 4) & 1), ui.strip_hidden() ? 1 : 0);
+    CHECK_COND(k.k[0].shrt[0] != 0);                  // BACK always says something
+    uint8_t buf[remote::kMaxRspPayload];
+    CHECK_EQ(int(remote::encode_keys(buf, k)), int(remote::kKeysLen));
+}
+
+static void test_keys_every_page_and_menu() {
+    Ui &ui = fresh_ui();
+    for (uint8_t pg = 0; pg < static_cast<uint8_t>(Page::Count); pg++) {
+        ui.goto_page(pg, g_stub.ms += 1000);
+        check_keys(ui, "page");
+    }
+    for (int m = 0; m < static_cast<int>(Menu::Count); m++) {
+        ui.goto_page(static_cast<uint8_t>(Page::Tools), g_stub.ms += 1000);
+        ui.push_menu(static_cast<Menu>(m), g_stub.ms += 100);
+        check_keys(ui, "menu");
+        ui.pop_menu(g_stub.ms += 100);
+    }
+}
+
+static void test_keys_follow_the_page() {
+    Ui &ui = fresh_ui();
+    ui.goto_page(0, g_stub.ms += 1000);
+    remote::KeysInfo k = remote::keys_from_labels(ui.labels(), ui.strip_hidden());
+    CHECK_STR(k.k[0].shrt, "Back");
+    CHECK_STR(k.k[1].shrt, "-");
+    CHECK_STR(k.k[1].lng, "Prev");
+    CHECK_EQ(int(k.flags & 2), 2);                    // the first page has nothing before it: [-] dim
+    CHECK_EQ(int(k.flags & 0x10), 0);                 // the strip is drawn
+    CHECK_STR(k.k[3].shrt, "+");
+    CHECK_EQ(int(k.flags & 8), 0);
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_stub.ms += 1000);
+    ui.push_menu(Menu::Share, g_stub.ms += 100);      // the QR code covers the strip
+    CHECK_EQ(int(remote::keys_from_labels(ui.labels(), ui.strip_hidden()).flags & 0x10), 0x10);
+}
+
 int main() {
+    test_keys_every_page_and_menu();
+    test_keys_follow_the_page();
     test_busy_code_is_the_reason();
     test_energy_and_elapsed();
     test_proto_fields();

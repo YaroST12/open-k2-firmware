@@ -58,6 +58,8 @@ struct Fake {
     SessionInfo session() { calls++; return sess; }
     DiagInfo dg{};
     DiagInfo diag() { calls++; return dg; }
+    KeysInfo ky{};
+    KeysInfo keys() { calls++; return ky; }
     PdoSnapshot pdos() { calls++; return snap; }
     EmarkerSnapshot emarker() { calls++; return em; }
     IdentitySnapshot id{};

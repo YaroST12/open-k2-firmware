@@ -473,6 +473,24 @@ def decode_diag(p):
             "log_dropped": u32(17), "poll_gap_max_ms": u32(21), "usb_configured": bool(p[25])}
 
 
+KEYS_LEN = 57
+KEYS_BUTTONS = ("back", "minus", "ok", "plus")
+KEY_CHARS = 7
+
+
+def decode_keys(p):
+    """GET_STATE [3]: what the four buttons do on the page on screen (src/core/remote_proto.cpp encode_keys). Per button the
+    short- and long-press word (ASCII, NUL padded, empty = nothing) and `dim` (shown but unavailable). `hidden` = the
+    page covers the strip (the QR code), so none of the four is drawn. The words are the page's labels, not the drawn
+    text: a narrow slot drops the long word."""
+    _need(p, KEYS_LEN, "state keys")
+    word = lambda o: bytes(p[o:o + KEY_CHARS]).split(b"\0", 1)[0].decode("ascii", "replace")
+    out = {name: {"short": word(1 + 14 * i), "long": word(8 + 14 * i), "dim": bool(p[0] >> i & 1)}
+           for i, name in enumerate(KEYS_BUTTONS)}
+    out["hidden"] = bool(p[0] >> 4 & 1)
+    return out
+
+
 def decode_adc_raw(p):
     _need(p, 35, "adc-raw")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
@@ -1271,6 +1289,9 @@ def cmd_state(link, a):
         diag = _state_part(link, 2, decode_diag)
         if diag is not None:
             out["diag"] = diag
+        keys = _state_part(link, 3, decode_keys)
+        if keys is not None:
+            out["keys"] = keys
     return out
 
 

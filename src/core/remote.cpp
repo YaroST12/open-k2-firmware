@@ -3,6 +3,7 @@
 // Remote-control adapter: runs protocol commands (remote_proto.hpp) against the real UI,
 // FUSB302 and power monitor. Everything here runs in the main loop; the USB callback only queues.
 #include "k2/core/remote.hpp"
+#include "k2/core/remote_keys.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include <algorithm>
 #include <array>
@@ -358,6 +359,11 @@ remote::DiagInfo Remote::diag() {
     d.poll_gap_max_ms = u.poll_gap_max;
     d.usb_configured = usb::configured() ? 1 : 0;
     return d;
+}
+
+// The strip as the page on screen sets it (Ui::labels(), what draw_slot reads), cut to the wire's 7 character words.
+remote::KeysInfo Remote::keys() {
+    return remote::keys_from_labels(ui_.labels(), ui_.strip_hidden());
 }
 
 remote::PdoSnapshot Remote::pdos() {

@@ -211,6 +211,16 @@ size_t encode_diag(std::span<uint8_t> out, const DiagInfo &s) {
     return w.size();
 }
 
+size_t encode_keys(std::span<uint8_t> out, const KeysInfo &s) {
+    Writer w(out);
+    w.u8(s.flags);
+    for (const KeyInfo &k : s.k) {
+        w.pad_text(std::string_view(k.shrt), kKeyChars);
+        w.pad_text(std::string_view(k.lng), kKeyChars);
+    }
+    return w.size();
+}
+
 size_t encode_pdo(std::span<uint8_t> out, const PdoSnapshot &s, uint8_t index) {
     Writer w(out);
     w.u8(s.valid); w.u8(s.spec_rev); w.u8(s.num_pdos); w.u8(index);

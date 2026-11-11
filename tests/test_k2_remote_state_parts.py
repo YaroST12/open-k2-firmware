@@ -32,6 +32,14 @@ DIAG = bytes([0x91, 0x04, 0x03, 0x02, 0x01, 5, 0, 0, 0, 0x0D, 0x0C, 0x0B, 0x0A, 
               17, 0, 0, 0, 1])
 
 
+# Part 3 (57 bytes): the same literal as test_state_keys_part in tests/test_remote_proto.cpp.
+KEYS = bytes([0x12,
+              66, 97, 99, 107, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0,
+              45, 0, 0, 0, 0, 0, 0,       80, 114, 101, 118, 0, 0, 0,
+              82, 101, 115, 99, 97, 110, 0, 67, 104, 97, 114, 103, 101, 114,
+              43, 0, 0, 0, 0, 0, 0,       78, 101, 120, 116, 0, 0, 0])
+
+
 def frame_ok(payload):
     return kr.Response(kr.CMD_GET_STATE, 1, 0, payload)
 
@@ -116,7 +124,41 @@ class DiagDecode(unittest.TestCase):
             kr.decode_diag(DIAG[:25])
 
 
+class KeysDecode(unittest.TestCase):
+    def test_fields(self):
+        k = kr.decode_keys(KEYS)
+        self.assertEqual(k, {"back": {"short": "Back", "long": "", "dim": False},
+                             "minus": {"short": "-", "long": "Prev", "dim": True},
+                             "ok": {"short": "Rescan", "long": "Charger", "dim": False},
+                             "plus": {"short": "+", "long": "Next", "dim": False},
+                             "hidden": True})
+
+    def test_a_full_width_word_has_no_terminator(self):
+        p = bytearray(KEYS)
+        p[1:8] = b"Charger"                                    # all 7 bytes used, no NUL
+        self.assertEqual(kr.decode_keys(bytes(p))["back"]["short"], "Charger")
+
+    def test_truncated_payload_is_rejected(self):
+        with self.assertRaises(kr.FrameError):
+            kr.decode_keys(KEYS[:56])
+
+
 class StateJson(unittest.TestCase):
+    def test_json_state_carries_the_keys_block(self):
+        out, link = state_json({0: BASE, 1: SESSION, 2: DIAG, 3: KEYS})
+        self.assertEqual(out["keys"]["ok"]["long"], "Charger")
+        self.assertEqual(out["diag"]["fusb_id"], 0x91)        # the earlier parts are still merged in
+        self.assertIn((kr.CMD_GET_STATE, b"\x03"), link.sent)
+
+    def test_firmware_without_part_3_has_no_keys(self):
+        out, _ = state_json({0: BASE, 1: SESSION, 2: DIAG})
+        self.assertNotIn("keys", out)
+        self.assertIn("diag", out)
+
+    def test_old_firmware_refusing_part_3_by_length(self):
+        out, _ = state_json({0: BASE, 1: SESSION, 2: DIAG, 3: kr.STATUS_BAD_LENGTH})
+        self.assertNotIn("keys", out)
+
     def test_json_state_carries_the_diag_block(self):
         out, link = state_json({0: BASE, 1: SESSION, 2: DIAG})
         self.assertEqual(out["diag"]["fusb_id"], 0x91)

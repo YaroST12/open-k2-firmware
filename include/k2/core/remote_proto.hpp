@@ -46,6 +46,8 @@
 //                                    5 identify: no device); enums: ui_types.hpp, home_model.hpp
 //                                    part 2, 26 bytes: fusb_id(1) pd_rx(4) usb_resets(4) usb_isrs(4)
 //                                    log_sent(4) log_dropped(4) poll_gap_max_ms(4) usb_configured(1)
+//                                    part 3, 57 bytes: flags(1: bit i button i dim, bit4 strip covered), then
+//                                    Back Minus Ok Plus x (short(7) long(7)), NUL padded ASCII
 //   0x04 GET_PDOS    req [index(1)]   rsp valid spec_rev num_pdos index (4 x u8) and, when
 //                                    index < num_pdos: type(1) raw(4) min_mv(2) max_mv(2)
 //                                    max_ma(2) max_mw(4)
@@ -658,6 +660,16 @@ struct DiagInfo {
     uint8_t usb_configured = 0;
 };
 size_t encode_diag(std::span<uint8_t> out, const DiagInfo&);
+// GET_STATE part 3 (keys): what the four buttons do on the page on screen (Ui::labels(), Button order Back Minus Ok Plus).
+// Per button a short-press and a long-press word, NUL padded, at most kKeyChars (7) characters: the strip's own widest
+// words are 7 ("Charger"), a longer one is cut. The words are the semantic labels, not the drawn text (the slot
+// width drops the long word on a narrow slot; the host can tell from the strip geometry). flags: bit i = button i is dim,
+// bit 4 = the page covers the strip (the QR code), so none of the four is drawn.
+constexpr size_t kKeyChars = 7;
+constexpr size_t kKeysLen = 1 + 4 * 2 * kKeyChars;   // 57, inside the 58 byte reply
+struct KeyInfo { char shrt[kKeyChars + 1]{}; char lng[kKeyChars + 1]{}; };
+struct KeysInfo { uint8_t flags = 0; KeyInfo k[4]; };
+size_t encode_keys(std::span<uint8_t> out, const KeysInfo&);
 struct AdcRawSnapshot {
     uint8_t ok = 0;
     std::array<uint16_t, kAdcRawAll> all{};      // channels 0..7, 16, 17
@@ -929,6 +941,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.state() } -> std::same_as<StateInfo>;
     { b.session() } -> std::same_as<SessionInfo>;   // 0x03 req [1]: the session chrome (a read, never moves anything)
     { b.diag() } -> std::same_as<DiagInfo>;         // 0x03 req [2]: the Diag page counters (a read)
+    { b.keys() } -> std::same_as<KeysInfo>;         // 0x03 req [3]: the strip labels (a read)
     { b.pdos() } -> std::same_as<PdoSnapshot>;
     { b.emarker() } -> std::same_as<EmarkerSnapshot>;
     { b.identity() } -> std::same_as<IdentitySnapshot>;
@@ -1093,6 +1106,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p.empty() || p[0] == 0) return reply_n(encode_state(buf, backend.state()));
         if (p[0] == 1) return reply_n(encode_session(buf, backend.session()));
         if (p[0] == 2) return reply_n(encode_diag(buf, backend.diag()));
+        if (p[0] == 3) return reply_n(encode_keys(buf, backend.keys()));
         return reply(Status::BadArg);
     case Cmd::GetPdos: {
         if (p.size() > 1) return reply(Status::BadLength);

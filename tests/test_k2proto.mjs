@@ -708,6 +708,25 @@ test("decodeDiag reads the Diag page counters and K2Remote.stateDiag asks for pa
   assert.equal(await new P.K2Remote(b.link).stateDiag(), null);
 });
 
+// GET_STATE [3]: the same 57-byte vector as test_state_keys_part in tests/test_remote_proto.cpp.
+const KEYS_PAYLOAD = [0x12,
+  66, 97, 99, 107, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0,
+  45, 0, 0, 0, 0, 0, 0,       80, 114, 101, 118, 0, 0, 0,
+  82, 101, 115, 99, 97, 110, 0, 67, 104, 97, 114, 103, 101, 114,
+  43, 0, 0, 0, 0, 0, 0,       78, 101, 120, 116, 0, 0, 0];
+
+test("decodeKeys reads the strip words and K2Remote.stateKeys asks for part 3", async () => {
+  assert.deepEqual(P.decodeKeys(Uint8Array.from(KEYS_PAYLOAD)),
+    { back: { short: "Back", long: "", dim: false }, minus: { short: "-", long: "Prev", dim: true },
+      ok: { short: "Rescan", long: "Charger", dim: false }, plus: { short: "+", long: "Next", dim: false }, hidden: true });
+  assert.throws(() => P.decodeKeys(Uint8Array.from(KEYS_PAYLOAD.slice(0, 56))), P.FrameError);
+  const a = rig((f) => [rsp(3, f[3], 0, KEYS_PAYLOAD)]);
+  assert.equal((await new P.K2Remote(a.link).stateKeys()).ok.long, "Charger");
+  assert.deepEqual([...a.sent[0].slice(0, 6)], [0xA5, 0x4B, 3, 1, 1, 3]);
+  const b = rig((f) => [rsp(3, f[3], P.STATUS.BAD_ARG)]);
+  assert.equal(await new P.K2Remote(b.link).stateKeys(), null);
+});
+
 test("request ids are unique and match the firmware table", () => {
   const ids = Object.values(P.CMD);
   assert.equal(new Set(ids).size, ids.length);

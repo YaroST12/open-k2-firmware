@@ -354,6 +354,22 @@ var K2Proto = (function () {
              usb_configured: !!p[25] };
   }
 
+  // GET_STATE [3], 57 bytes (encode_keys): what the four buttons do on the page on screen. Per button the short- and long-press
+  // word (ASCII, NUL padded, '' = nothing) and dim; hidden = the page covers the strip. The page's labels, not the drawn text.
+  var KEYS_BUTTONS = ["back", "minus", "ok", "plus"];
+  function decodeKeys(p) {
+    need(p, 57, "state keys");
+    function word(o) {
+      var s = "", i;
+      for (i = o; i < o + 7 && p[i] !== 0; i++) s += String.fromCharCode(p[i]);
+      return s;
+    }
+    var out = {}, i;
+    for (i = 0; i < 4; i++) out[KEYS_BUTTONS[i]] = { short: word(1 + 14 * i), long: word(8 + 14 * i), dim: !!((p[0] >> i) & 1) };
+    out.hidden = !!((p[0] >> 4) & 1);
+    return out;
+  }
+
   function decodeAdcRaw(p) {
     need(p, 35, "adc raw");
     var v = dv(p), channels = {}, scan = {}, i;
@@ -728,6 +744,7 @@ var K2Proto = (function () {
   };
   K2Remote.prototype.stateSession = function () { return this.statePart(1, decodeSession); };
   K2Remote.prototype.stateDiag = function () { return this.statePart(2, decodeDiag); };
+  K2Remote.prototype.stateKeys = function () { return this.statePart(3, decodeKeys); };
 
   K2Remote.prototype.pdos = async function () {
     var r = decodePdo((await this.link.call(CMD.GET_PDOS, [0])).payload);
@@ -1337,7 +1354,7 @@ var K2Proto = (function () {
     FrameError: FrameError, RemoteError: RemoteError, RemoteTimeout: RemoteTimeout, BootloaderDetected: BootloaderDetected,
     packRequest: packRequest, parseResponse: parseResponse, isResponse: isResponse,
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
-    directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodePdo: decodePdo,
+    directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
