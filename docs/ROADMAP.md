@@ -138,6 +138,15 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 - **Twin limiter text with no claimed power** (2026-11-11, twin-observed review): with no claimed source power,
   predict calls a 60 W hub "limited by the cable". The predict rework on `k2/twin-observed` changes this path;
   re-check after its merge.
+- **The Black Box saves nothing once the cards fill the volume, and each refusal stalls the loop 41 ms** (2026-11-11,
+  1.0.0-570-44e8dcb9, found by `tools/loop_survey.py`: an ~83 ms PD service gap on every page, 0 px painted, twice per
+  VBUS cut of the CUKTECH USB-A auto-off port). 61 report cards (cap 64) leave 5 of 90 blocks free; the Black Box keeps
+  the 20-block charger-journal reserve, so every capture is refused `Full` (`[BB] saves=0 skipped=N ... last=41ms
+  entries=0 free=10240`). `bbstore::append` compresses the capture and walks the volume (`free_blocks()`) before it
+  refuses: 41 ms with the loop stopped, two captures (VBUS dip + detach) per cut. Fix: (1) refuse before compressing
+  when the reserve cannot be met and there is no own capture to drop (cache the free count); (2) a block budget so the
+  64-card cap cannot starve the Black Box (decision pending with the user). Validate: loop_survey on the auto-off port
+  shows no 41 ms pass; a Black Box capture saves with 61+ cards. Evidence `runs/loop-survey/` (integ worktree).
 - **PD Stress does not release Rd at its end** (open since before 2026-11-11): the run ends with the K2's Rd still on CC.
 - **A refused e-marker read kept the last read's mode and acks** (2026-11-11, fixed in 472c40f9, host-tested;
   `tests/test_fusb302_scan.cpp` `test_refused_read_clears_the_last_read`). Validate (hardware): with a sink inline or
