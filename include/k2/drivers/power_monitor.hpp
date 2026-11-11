@@ -64,7 +64,7 @@ std::optional<std::int32_t> vbus_fast_mv();
 void restart_average();
 
 // One direct register read: no software average, no deadband (the INA226's own 16-sample
-// average still applies, so a fresh value arrives about every 35 ms). For short-pulse probes.
+// average still applies, so a fresh value arrives about every 4.5 ms: 16 x 2 x 140 us). For short-pulse probes.
 std::optional<Metrics> sample_now();
 
 // Fast VBUS sampling for the transition capture (k2/pd/transcap.hpp).

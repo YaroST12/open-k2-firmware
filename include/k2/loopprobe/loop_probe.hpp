@@ -39,7 +39,7 @@ inline constexpr std::int32_t kVbusPresentMv = 4000;   // the Drop step needs VB
 inline constexpr std::int32_t kCcMinVbusMv = 4500;     // the CC step needs 5 V on VBUS
 
 inline constexpr std::uint8_t kBaseSamples = 16;
-inline constexpr std::uint32_t kSampleGapMs = 40;      // the INA226 averages over ~35 ms: one fresh value per sample
+inline constexpr std::uint32_t kSampleGapMs = 40;      // the INA226 gives a fresh value every ~4.5 ms; 40 ms is a margin, kept
 inline constexpr std::uint32_t kDropSettleMs = 300;
 inline constexpr std::uint8_t kDropSamples = 6;
 inline constexpr std::uint32_t kSpinMs = 40;           // a busy level spins this long before each sample
