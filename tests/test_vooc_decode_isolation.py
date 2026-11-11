@@ -39,6 +39,12 @@ class DecoderIsolation(unittest.TestCase):
     def test_header_includes_and_calls_nothing_that_drives(self):
         self.assertEqual(violations(HEADER.read_text()), [])
 
+    def test_edge_guard_is_pure(self):
+        # The ISR's edge-storm guard only counts cycle stamps; dpsniff masks the lines on its verdict.
+        text = (ROOT / "include/k2/fastcharge/edge_guard.hpp").read_text()
+        self.assertEqual(sorted(includes(text) - {"array", "cstdint"}), [])
+        self.assertEqual(sorted(set(m.group(1) for m in FORBIDDEN.finditer(code(text)))), [])
+
     def test_the_check_catches_a_driver(self):
         bad = '#include "k2/drivers/dpdm.hpp"\nvoid f() { k2::dpdm::set_dp(k2::dpdm::Drive::V0); }\n'
         self.assertEqual(violations(bad), ["k2/drivers/dpdm.hpp", "dpdm", "set_dp"])

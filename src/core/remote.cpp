@@ -1127,7 +1127,7 @@ remote::VoocSnapshot Remote::vooc_monitor(uint8_t set) {
     if (set <= 1) dpsniff::monitor_enable(set == 1);
     const dpsniff::MonitorInfo m = dpsniff::monitor_info();
     remote::VoocSnapshot v;
-    v.enabled = m.enabled; v.running = m.running; v.s = m.s;
+    v.enabled = m.enabled; v.running = m.running; v.s = m.s; v.guard = m.guard;
     return v;
 }
 // --- end vooc-monitor ---

@@ -13,8 +13,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 import k2_remote as kr
 
 
-def summary(flags=0x0F, ncmds=10):
-    """The firmware's page 0 (include/k2/core/remote_proto.hpp, FC op 4)."""
+def summary(flags=0x0F, ncmds=10, guard=(0, 0, 0, 0)):
+    """The firmware's page 0 (include/k2/core/remote_proto.hpp, FC op 4); guard = storms, edges, ms, retry_ms."""
     b = bytearray()
     b += bytes([flags])
     b += (2).to_bytes(2, "little") + (1).to_bytes(2, "little") + (3).to_bytes(2, "little")
@@ -24,6 +24,9 @@ def summary(flags=0x0F, ncmds=10):
         b += v.to_bytes(2, "little")
     b += (43980).to_bytes(4, "little") + (46230).to_bytes(4, "little") + (16).to_bytes(2, "little")
     b += bytes([ncmds]) + (5).to_bytes(2, "little")
+    storms, edges, ms, retry = guard
+    b += storms.to_bytes(2, "little") + edges.to_bytes(2, "little") + ms.to_bytes(2, "little")
+    b += retry.to_bytes(4, "little")
     return bytes(b)
 
 
@@ -59,6 +62,22 @@ class Decode(unittest.TestCase):
         self.assertEqual(s["r82"], {"last": "0x052", "min": "0x04C", "max": "0x07F", "n": 18})
         self.assertEqual(s["p82_us"], {"last": 43980, "mean": 46230, "n": 16})
         self.assertEqual((s["ncmds"], s["other"]), (10, 5))
+        self.assertEqual(s["guard"], {"paused": False, "storms": 0, "last_edges": 0, "last_ms": 0, "retry_ms": 0})
+
+    def test_guard_paused(self):
+        s = kr.decode_vooc_summary(summary(flags=0x13, guard=(3, 33, 1, 4321)))
+        self.assertEqual(s["guard"], {"paused": True, "storms": 3, "last_edges": 33, "last_ms": 1, "retry_ms": 4321})
+        text = kr.render_vooc(dict(s, cmds=[]))
+        self.assertIn("paused: data traffic", text)
+        self.assertIn("storms 3 (last 33 edges in 1 ms)", text)
+        self.assertIn("retry in 4.3 s", text)
+        quiet = kr.render_vooc(dict(kr.decode_vooc_summary(summary(guard=(2, 4097, 342, 0))), cmds=[]))
+        self.assertNotIn("paused", quiet)
+        self.assertIn("storms 2 (last 4097 edges in 342 ms)", quiet)
+        self.assertNotIn("storms", kr.render_vooc(dict(kr.decode_vooc_summary(summary()), cmds=[])))
+
+    def test_sniff_end_storm(self):
+        self.assertEqual(kr.SNIFF_END[6], "storm")
 
     def test_no_reply_is_none(self):
         b = bytearray(summary(flags=0x03))

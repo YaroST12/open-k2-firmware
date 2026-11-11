@@ -490,6 +490,33 @@ static void test_active_dcp_check() {
     CHECK_EQ(dcp_check_allowed(g, qc2), false);                  // not the bias pair
 }
 
+// While the inline VOOC monitor owns D+/D- (floating inputs, no 0.6 V bias, dpsniff::monitoring()), the levels are
+// the data device's and the charger's own, not a handshake the K2 can read: every window reads USB DATA (the monitor
+// only runs with a data device inline), whatever level it holds. PD and "no input" still win.
+static void test_floating_lines_are_not_a_protocol() {
+    struct Level { int dp, dm; };
+    const Level levels[] = {{600, 600}, {600, 0}, {3300, 600}, {600, 3300}, {3300, 3300}, {2700, 2000},
+                            {2000, 2700}, {1200, 1200}, {0, 0}, {800, 0}, {2000, 2000}};
+    for (const int vbus : {5000, 9000, 12000, 20000}) {
+        for (const Level l : levels) {
+            Ring r;
+            for (int i = 0; i < 50; i++) r.push(l.dp, l.dm);
+            CHECK_EQ(int(classify(r, l.dp, l.dm, vbus, false, false, false, true, false, true)), int(Protocol::UsbData));
+            CHECK_EQ(int(classify(r, l.dp, l.dm, vbus, false, false, true, true, true, true)), int(Protocol::UsbData));
+            CHECK_EQ(int(classify(r, l.dp, l.dm, vbus, true, false, false, true, false, true)), int(Protocol::Pd));
+            CHECK_EQ(int(classify(r, l.dp, l.dm, vbus, false, true, false, true, false, true)), int(Protocol::PdLikely));
+        }
+    }
+    Ring part;
+    part.push(3300, 600);
+    CHECK_EQ(int(classify(part, 3300, 600, 9000, false, false, false, true, false, true)), int(Protocol::UsbData));
+    CHECK_EQ(int(classify(part, 3300, 600, 1000, false, false, false, true, false, true)), int(Protocol::NoInput));
+    // Not floating: the same 9 V QC2 levels read as a protocol (the flag is what changes the verdict).
+    Ring qc;
+    for (int i = 0; i < 50; i++) qc.push(3300, 600);
+    CHECK_EQ(int(classify(qc, 3300, 600, 9000) != Protocol::UsbData), 1);
+}
+
 int main() {
     test_ring();
     test_bucket();
@@ -508,5 +535,6 @@ int main() {
     test_bias_pair_is_not_a_dcp();
     test_handshake_latch_and_stale_ring();
     test_active_dcp_check();
+    test_floating_lines_are_not_a_protocol();
     return test_report("test_fastcharge_classify");
 }

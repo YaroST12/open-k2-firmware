@@ -118,10 +118,15 @@ void poll() {
     // CC attached with no decoded Source_Capabilities is a default-USB data host (Rp on CC):
     // its D+/D- pair carries data, so the classifier must not read a charger handshake into it.
     const bool cc_source_no_pd = probe.cc_active && !probe.pd_active;
+    // The inline VOOC monitor floats the lines (no 0.6 V bias): their levels are no handshake, so they neither fill the
+    // window nor set the latch, and the window starts fresh when the monitor lets go.
+    const bool floating = dpsniff::monitoring();
     if (vbus < 4000) {   // a new source starts a fresh window
         g_ring.clear();
         g_handshake_seen = false;
         dcp_reset();
+    } else if (floating) {
+        g_ring.clear();
     } else {
         bool skip = false;                    // the probe's own samples are not the source's lines
         if (g_dcp_probing) { dcp_finish(); skip = true; }
@@ -133,7 +138,7 @@ void poll() {
         }
     }
     g_verdict = classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),
-                         cc_source_no_pd, !g_handshake_seen, g_dcp_proof);
+                         cc_source_no_pd, !g_handshake_seen, g_dcp_proof, floating);
     monitor(probe.pd_active);
 }
 

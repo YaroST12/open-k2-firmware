@@ -37,8 +37,17 @@ volatile bool g_live;     // the ISR records only while set
 // interrupts masked. g_mon_ev collects the decoder's events between two monitor_poll() calls.
 vooc::Decoder g_dec;
 volatile bool g_mon;
+volatile bool g_mon_paused;   // data-traffic back-off: the ISR does not feed the decoder
 volatile unsigned g_mon_ev;
 bool g_mon_enabled = true;
+
+// Edge-storm guard (k2/fastcharge/edge_guard.hpp), shared by every user of the ISR. The ISR masks its lines and sets
+// g_storm on a trip; the main loop (storm_service) ends a sniff session, pauses the monitor and logs.
+edges::StormGuard g_guard;
+volatile bool g_storm;
+edges::Backoff g_back;
+std::uint16_t g_storms;       // since boot, monitor and sniff
+edges::Storm g_last_storm;
 
 constexpr std::uint32_t kLines = (1u << 7) | (1u << 2);   // EXTI7 = PA7 (D+), EXTI2 = PB2 (D-)
 
@@ -46,10 +55,17 @@ constexpr std::uint32_t kLines = (1u << 7) | (1u << 2);   // EXTI7 = PA7 (D+), E
 
 void isr_body() {
     const std::uint32_t c = dpdm::cycles();
-    reg::exti().PR = kLines;
+    auto& ex = reg::exti();
+    ex.PR = kLines;
+    if (g_guard.hit(c)) {   // data traffic: our lines off now, the main loop does the rest
+        ex.IMR &= ~kLines;
+        ex.PR = kLines;
+        g_storm = true;
+        return;
+    }
     if (!g_live && !g_mon) return;
     const std::uint32_t w = edges::pack(c, pins::dp_dm_sw2.read(), pins::sw_pa7.read());
-    if (g_mon) g_mon_ev = g_mon_ev | g_dec.push(w);
+    if (g_mon && !g_mon_paused) g_mon_ev = g_mon_ev | g_dec.push(w);
     if (!g_live) return;
     if (g_stream) g_ring.push(w);
     else g_rec.push(w);
@@ -63,6 +79,9 @@ void exti_on() {
     af.EXTICR[1] = (af.EXTICR[1] & ~(0xFu << 12)) | (0u << 12);   // line 7: port A
     af.EXTICR[0] = (af.EXTICR[0] & ~(0xFu << 8)) | (1u << 8);     // line 2: port B
     auto& ex = reg::exti();
+    Critical cs;   // the ISR masks IMR on a storm
+    g_guard.reset(dpdm::cycles());
+    g_storm = false;
     ex.RTSR |= kLines;
     ex.FTSR |= kLines;
     ex.PR = kLines;
@@ -73,9 +92,12 @@ void exti_off() {
     if (g_mon) return;   // the inline monitor still listens
     reg::nvic().ICER[0] = (1u << 8) | (1u << 23);
     auto& ex = reg::exti();
+    Critical cs;
     ex.IMR &= ~kLines;
     ex.PR = kLines;
 }
+
+void storm_service(std::uint32_t now_ms);
 
 void finish(edges::End why) {
     g_live = false;
@@ -209,6 +231,7 @@ void cancel() {
 }
 
 void poll(std::uint32_t now_ms, std::int32_t vbus_mv) {
+    storm_service(now_ms);
     if (!g_sess.armed() || g_stream) return;
     const std::size_t n = g_rec.size();
     const edges::End e = g_sess.poll(now_ms, n, g_rec.full(), vbus_mv);
@@ -257,12 +280,61 @@ void monitor_log(unsigned ev, const vooc::Summary& s) {
               unsigned(s.wakes), unsigned(s.partials), unsigned(s.edges));
 }
 
+// The ISR tripped the guard: end a sniff session, pause the monitor, one log line each. Then the monitor's back-off:
+// when the pause is over, unmask the lines for a probe. Without a storm, close the guard's expired windows.
+void storm_service(std::uint32_t now_ms) {
+    edges::Storm st;
+    {
+        Critical cs;
+        if (g_storm) {
+            g_storm = false;
+            st = g_guard.last();   // the guard stays tripped (and the lines masked) until exti_on() or a probe
+        } else {
+            g_guard.tick(dpdm::cycles());
+        }
+    }
+    if (st.edges != 0) {
+        if (g_storms < 0xFFFF) ++g_storms;
+        g_last_storm = st;
+        const unsigned n = st.edges, ms = st.ms();
+        if (g_live && !g_synth) {
+            K2LOG("[SNIFF] stopped: data traffic (%u edges in %u ms)\n", n, ms);
+            g_sess.cancel();
+            finish(edges::End::Storm);
+        }
+        if (g_mon) {
+            unsigned ev;
+            vooc::Summary s;
+            {
+                Critical cs;
+                g_mon_paused = true;
+                ev = g_mon_ev | g_dec.end(dpdm::cycles());
+                g_mon_ev = 0;
+                s = g_dec.summary();
+            }
+            monitor_log(ev, s);
+            const unsigned wait = g_back.trip(now_ms);
+            K2LOG("[VOOC] monitor paused: data traffic (%u edges in %u ms), retry in %u ms\n", n, ms, wait);
+        }
+    }
+    if (g_mon && g_back.poll(now_ms)) {   // the pause is over: the lines listen again for a probe
+        auto& ex = reg::exti();
+        Critical cs;
+        g_mon_paused = false;
+        g_guard.reset(dpdm::cycles());
+        ex.PR = kLines;
+        ex.IMR |= kLines;
+    }
+}
+
 void monitor_start() {
     {
         Critical cs;
         g_dec.reset();
         g_mon_ev = 0;
+        g_mon_paused = false;
     }
+    g_back.reset();
     dpdm::set_dp(dpdm::Drive::Sniff);   // floating inputs: nothing is driven, no pull
     dpdm::set_dm(dpdm::Drive::Sniff);
     g_mon = true;
@@ -276,10 +348,12 @@ void monitor_stop(bool lines_free) {
     {
         Critical cs;
         g_mon = false;
+        g_mon_paused = false;
         ev = g_mon_ev | g_dec.end(dpdm::cycles());   // closes the open session
         g_mon_ev = 0;
         s = g_dec.summary();
     }
+    g_back.reset();   // a new device starts from the 1 s step
     monitor_log(ev, s);
     const bool sniffing = g_sess.armed() || g_stream;
     if (!sniffing) exti_off();
@@ -297,6 +371,7 @@ void monitor_stop(bool lines_free) {
 void monitor_poll(bool wanted, bool lines_free) {
     if (wanted && !g_mon) monitor_start();
     else if (!wanted && g_mon) monitor_stop(lines_free);
+    storm_service(systick::millis());
     if (!g_mon) return;
     unsigned ev;
     vooc::Summary s;
@@ -316,6 +391,12 @@ bool monitor_enabled() { return g_mon_enabled; }
 MonitorInfo monitor_info() {
     MonitorInfo m;
     m.enabled = g_mon_enabled;
+    m.guard.paused = g_mon && g_back.paused();
+    m.guard.storms = g_storms;
+    m.guard.edges = std::uint16_t(g_last_storm.edges > 0xFFFF ? 0xFFFF : g_last_storm.edges);
+    const std::uint32_t ms = g_last_storm.edges ? g_last_storm.ms() : 0;
+    m.guard.ms = std::uint16_t(ms > 0xFFFF ? 0xFFFF : ms);
+    m.guard.retry_ms = g_back.retry_in(systick::millis());
     Critical cs;
     m.running = g_mon;
     m.s = g_dec.summary();
@@ -324,7 +405,7 @@ MonitorInfo monitor_info() {
 
 vooc::Live monitor_live() {
     Critical cs;
-    return vooc::live_of(g_mon, g_dec.summary());
+    return vooc::live_of(g_mon && !g_mon_paused, g_dec.summary());
 }
 
 }  // namespace k2::dpsniff

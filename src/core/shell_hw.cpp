@@ -850,6 +850,11 @@ struct Hw final : shell::Backend {
                         unsigned(s.pairs), unsigned(s.r82_last), unsigned(s.r82_min), unsigned(s.r82_max),
                         unsigned(s.r82_n), unsigned(s.p82_last_us), unsigned(s.p82_mean_us()), unsigned(s.p82_n));
         put({b, n});
+        // The edge-storm guard: paused = data traffic on D+/D-, the lines stay floating until the probe.
+        n = fmt::format(std::span<char>(b, sizeof b), "vooc guard %s storms=%u last=%u/%ums retry_ms=%u\r\n",
+                        m.guard.paused ? "paused" : "ok", unsigned(m.guard.storms), unsigned(m.guard.edges),
+                        unsigned(m.guard.ms), unsigned(m.guard.retry_ms));
+        put({b, n});
         for (std::size_t i = 0; i < s.ncmds && i < s.cmds.size(); i++) {
             n = fmt::format(std::span<char>(b, sizeof b), "vooc cmd 0x%02X n=%u last=0x%03X\r\n", unsigned(s.cmds[i].cmd),
                             unsigned(s.cmds[i].count), unsigned(s.cmds[i].last));

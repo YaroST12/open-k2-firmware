@@ -217,6 +217,22 @@ proves the decoder header reaches no pin, register or driver.
   `fc vooc [on|off]`, `[VOOC] session N start` / `end` log lines, the Home protocol row `SVOOC 9.0V3.6A` (the measured
   VBUS and IBUS, not a rating, so no limit bar) and a raw `VOOC 0x82 0x06B raw` row on the Connection page (no-PD Sink
   body). Reply words are printed as hex with no unit: their meaning is a guess.
+- Edge-storm guard (`include/k2/fastcharge/edge_guard.hpp`, `tests/test_edge_guard.cpp`). Inline is exactly where a
+  USB 2.0 data link runs through the K2, and a full-speed link toggles D+/D- faster than the ISR can return. The ISR
+  counts interrupts in two tumbling windows in O(1) (two subtractions, two compares, no division) and masks its own two
+  EXTI lines the moment either is exceeded:
+  - 1 ms, more than 32 interrupts. The capture peaks at 9 in any 1 ms (the wake burst): 3.5x margin. Worst case
+    before the mask: 65 interrupts (32 in the running window plus 33 in the next).
+  - 2^28 cycles (1,118 ms), more than 4,096 interrupts. The capture peaks at 1,340 in any 1 s: 3x margin. This window
+    catches lighter traffic that stays under 32 per ms (frame-start packets every 1 ms).
+  The main loop then pauses the monitor (`[VOOC] monitor paused: data traffic (N edges in M ms), retry in W ms`). The
+  lines stay floating and nothing is decoded. After 1 s, then 5 s, then every 30 s it unmasks the lines for a 2 s probe.
+  A quiet probe runs the monitor again, and 60 s without a storm resets the steps to 1 s. The Black Box `sniff arm` /
+  `sniff stream` share the ISR and are guarded too: a storm ends them with end reason `storm` (6) and
+  `[SNIFF] stopped: data traffic`. Readout: flags bit 4 `paused`, then storms, the last storm's interrupts and ms, and
+  the wait left (`fc vooc`, shell `vooc guard ...`).
+- While the monitor owns the lines (floating, no 0.6 V bias), the D+/D- classifier reads `USB DATA` whatever the
+  levels (PD still wins), and the window starts fresh when the monitor lets go.
 - The monitor is on by default (a RAM switch, not saved). Not yet run on hardware.
 
 ## 4. UFCS

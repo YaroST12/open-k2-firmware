@@ -120,7 +120,8 @@ inline std::size_t frame(std::span<const std::uint8_t> payload, std::span<std::u
     return payload.size() + 3;
 }
 
-enum class End : std::uint8_t { None = 0, Full, Idle, Detach, Timeout, Cancel };
+// Storm = the EXTI edge-storm guard tripped (k2/fastcharge/edge_guard.hpp: data traffic on D+/D-).
+enum class End : std::uint8_t { None = 0, Full, Idle, Detach, Timeout, Cancel, Storm };
 
 // Arm -> wait for the first edge -> record -> end. Polled from the main loop with the edge count.
 class Session {

@@ -1966,7 +1966,7 @@ def decode_fc(p):
 # FC op 4: the inline VOOC monitor (passive, never drives D+/D-). Page 0 is the summary, pages 1 / 2 the command
 # rows (8 each). Reply words are raw 10-bit values printed in hex; the command names in docs/FASTCHARGE_PROTOCOLS.md
 # are guesses, and no reply word is turned into volts or amps here.
-VOOC_SUMMARY_BYTES = 44
+VOOC_SUMMARY_BYTES = 54
 VOOC_ROWS_PER_PAGE = 8
 VOOC_NO_REPLY = 0xFFFF
 
@@ -1986,7 +1986,10 @@ def decode_vooc_summary(p):
             "hs_pairs": p[19], "ident": f"0x{p[20]:02X}", "ident_reply": _vooc_word(u16(21)),
             "r82": {"last": _vooc_word(u16(23)), "min": _vooc_word(u16(25)), "max": _vooc_word(u16(27)), "n": u16(29)},
             "p82_us": {"last": u32(31), "mean": u32(35), "n": u16(39)},
-            "ncmds": p[41], "other": u16(42)}
+            "ncmds": p[41], "other": u16(42),
+            # the D+/D- edge-storm guard: paused = data traffic on the lines, the monitor waits retry_ms for a probe
+            "guard": {"paused": bool(f & 16), "storms": u16(44), "last_edges": u16(46), "last_ms": u16(48),
+                      "retry_ms": u32(50)}}
 
 
 def decode_vooc_rows(p):
@@ -2027,6 +2030,11 @@ def render_vooc(v):
         lines.append(f"  {c['cmd']}  x{c['count']:<4} last {c['last'] or '-'}")
     if v["other"]:
         lines.append(f"  other commands: {v['other']} pairs (table full)")
+    g = v.get("guard", {})
+    if g.get("paused"):
+        lines.append(f"  paused: data traffic on D+/D-, retry in {g['retry_ms'] / 1000:.1f} s")
+    if g.get("storms"):
+        lines.append(f"  storms {g['storms']} (last {g['last_edges']} edges in {g['last_ms']} ms)")
     return "\n".join(lines)
 # --- end vooc-monitor ---
 
@@ -2268,7 +2276,8 @@ def decode_lab(p):
             "temp_before_c": sg(12) / 10, "temp_after_c": sg(14) / 10, "pin_high_pct": p[16]}
 
 
-SNIFF_END = {0: "none", 1: "full", 2: "idle", 3: "detach", 4: "timeout", 5: "cancel"}
+SNIFF_END = {0: "none", 1: "full", 2: "idle", 3: "detach", 4: "timeout", 5: "cancel",
+             6: "storm"}   # vooc-monitor: the edge-storm guard ended it (data traffic on D+/D-)
 
 
 def cmd_lab(link, a):

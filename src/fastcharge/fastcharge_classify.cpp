@@ -142,10 +142,11 @@ int bucket(std::span<const std::uint8_t, kRingSize> samples) {
 }
 
 Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active, bool pd_likely,
-                  bool cc_source_no_pd, bool cc_attach_quiet, bool dcp_proof) {
+                  bool cc_source_no_pd, bool cc_attach_quiet, bool dcp_proof, bool lines_floating) {
     if (vbus_mv < kVbusPresentMv) return Protocol::NoInput;
     if (pd_active) return Protocol::Pd;
     if (pd_likely) return Protocol::PdLikely;
+    if (lines_floating) return Protocol::UsbData;   // the VOOC monitor's floating lines: no level is a handshake
     // ROADMAP 2026-11-10 (`fc: PD MTK` on a settled fixed contract): CC attached (a source's Rp, per the
     // FUSB302 - never the passive CC ADC levels, the CC2 bias net reads ~1.69 V with nothing on it),
     // VBUS above vSafe5V and no D+/D- handshake seen this attach = a PD contract the K2 did not decode.

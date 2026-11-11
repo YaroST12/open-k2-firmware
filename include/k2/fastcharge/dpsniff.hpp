@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/fastcharge/edge_guard.hpp"
 #include "k2/fastcharge/edges.hpp"
 #include "k2/fastcharge/vooc_decode.hpp"
 
@@ -69,6 +70,13 @@ std::size_t read_record(std::size_t from, std::span<std::uint8_t> out, std::size
 // Black Box arm has them. A Black Box arm or stream running at the same time feeds the decoder too.
 // fastcharge::poll() calls monitor_poll() every ~20 ms; `wanted` from vooc::monitor_wanted, `lines_free` = no engine,
 // scan, probe or reset hold owns the pins. Logs one `[VOOC] session N start` / `end` line per session.
+//
+// Edge-storm guard (k2/fastcharge/edge_guard.hpp), for every user of the ISR: a USB data link through the K2 toggles
+// the lines at MHz rates. When the ISR counts more than 32 interrupts in 1 ms (or 4,096 in 1.1 s) it masks its two
+// EXTI lines at once. The main loop then ends a Black Box arm or stream (End::Storm, `[SNIFF] stopped: data traffic`)
+// and pauses the monitor (`[VOOC] monitor paused: data traffic`): the lines stay floating, nothing is decoded, and the
+// lines are unmasked again for a probe after 1 s, 5 s, then every 30 s. monitoring() stays true while paused (the
+// monitor still owns the floating lines).
 void monitor_poll(bool wanted, bool lines_free);
 bool monitoring();
 void monitor_enable(bool on);     // the operator's switch (RAM only, on at boot)
@@ -76,6 +84,7 @@ bool monitor_enabled();
 struct MonitorInfo {
     bool enabled = false, running = false;
     vooc::Summary s{};
+    edges::GuardInfo guard{};
 };
 MonitorInfo monitor_info();       // a copy taken with interrupts masked
 vooc::Live monitor_live();        // the screen's view (vooc::live_of), interrupts masked for a few reads

@@ -64,8 +64,11 @@ enum class Protocol : std::uint8_t {
 // inside the bias window (0.5 .. 0.79 V on both lines) is the K2's own idle drive (both lines driven to
 // 0.6 V) and proves no short, so passively it reads NO QUICK; `dcp_proof` (the active check below
 // found D- following a pulled-low D+) turns that same pair into DCP 5V.
+// `lines_floating`: the inline VOOC monitor owns D+/D- (dpsniff::monitoring(): floating inputs, no 0.6 V bias, a data
+// device inline). The levels are then the device's and the charger's, not a handshake: USB DATA (PD still wins).
 Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active = false, bool pd_likely = false,
-                  bool cc_source_no_pd = false, bool cc_attach_quiet = true, bool dcp_proof = false);
+                  bool cc_source_no_pd = false, bool cc_attach_quiet = true, bool dcp_proof = false,
+                  bool lines_floating = false);
 
 // The window holds the K2's own bias: full, both lines equal and steady at 0.5 .. 0.79 V.
 bool bias_pair(const Ring& ring);

@@ -387,13 +387,15 @@ size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page) 
     Writer w(out);
     const vooc::Summary &s = v.s;
     if (page == 0) {
-        w.u8(static_cast<uint8_t>((v.enabled ? 1 : 0) | (v.running ? 2 : 0) | (s.active ? 4 : 0) | (s.handshake ? 8 : 0)));
+        w.u8(static_cast<uint8_t>((v.enabled ? 1 : 0) | (v.running ? 2 : 0) | (s.active ? 4 : 0) | (s.handshake ? 8 : 0) |
+                                  (v.guard.paused ? 16 : 0)));
         w.u16(s.sessions); w.u16(s.wakes); w.u16(s.partials);
         w.u32(s.edges); w.u32(s.frames); w.u32(s.pairs);
         w.u8(s.hs_pairs); w.u8(s.ident); w.u16(s.ident_reply);
         w.u16(s.r82_last); w.u16(s.r82_min); w.u16(s.r82_max); w.u16(s.r82_n);
         w.u32(s.p82_last_us); w.u32(s.p82_mean_us()); w.u16(s.p82_n);
         w.u8(s.ncmds); w.u16(s.other);
+        w.u16(v.guard.storms); w.u16(v.guard.edges); w.u16(v.guard.ms); w.u32(v.guard.retry_ms);
         return w.size();
     }
     const size_t from = (page - 1u) * kVoocRowsPerPage;
