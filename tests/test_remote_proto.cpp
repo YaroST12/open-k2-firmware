@@ -2096,7 +2096,33 @@ static void test_qrtest() {
     check_header(r, 0x53, 14, Status::BadLength, 0);
 }
 
+// STOP (0x4B): no payload, no confirm (the safe direction); one backend call; reply = [active mask, vbus_mv i32 LE,
+// fc_release_busy].
+static void test_stop_wire() {
+    Fake f;
+    Frame r;
+    f.stop_result = {0x0B, 9123, true};   // test + fc + spoof were active; 9123 mV; the FC release is still open
+    CHECK_EQ(run(f, request(0x4B, 1, {}), r), 1);
+    check_header(r, 0x4B, 1, Status::Ok, 6);
+    check_bytes(r, kRspHeader, {0x0B, 0xA3, 0x23, 0x00, 0x00, 1});
+    CHECK_EQ(f.stops, 1);
+    f.stop_result = {0, 5004, false};
+    run(f, request(0x4B, 2, {}), r);
+    check_header(r, 0x4B, 2, Status::Ok, 6);
+    check_bytes(r, kRspHeader, {0, 0x8C, 0x13, 0, 0, 0});
+    CHECK_EQ(f.stops, 2);
+    // a payload is refused and never reaches the backend
+    run(f, request(0x4B, 3, {1}), r);
+    check_header(r, 0x4B, 3, Status::BadLength, 0);
+    CHECK_EQ(f.stops, 2);
+    // a negative reading (the monitor not ready) is sent as a signed value
+    f.stop_result = {0, -1, false};
+    run(f, request(0x4B, 4, {}), r);
+    check_bytes(r, kRspHeader, {0, 0xFF, 0xFF, 0xFF, 0xFF, 0});
+}
+
 int main() {
+    test_stop_wire();
     test_charger_hunt();
     test_charger_cable();
     test_charger_units();

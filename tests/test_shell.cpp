@@ -30,6 +30,7 @@ struct Fake : shell::Backend {
         return fail;
     }
     const char* fc_reset() override { calls += "fcreset;"; return fail; }
+    const char* stop() override { calls += "stop;"; return fail; }
     const char* lab(const lab::Cmd& c) override {
         calls += std::string("lab:") + std::string(lab::name(c.id)) + ":" + std::to_string(c.na ? c.a[0] : 0) + (c.o.confirm ? "c" : "") + ";";
         return fail;
@@ -110,6 +111,14 @@ int main() {
     CHECK_STR((run(f, "sniff synth 0")).c_str(), "");
     CHECK_STR((run(f, "sniff")).c_str(), "");
     CHECK_STR((run(f, "fc reset")).c_str(), "fcreset;");
+    // stop: the same one-call path as the HID `stop` command; no arguments, no confirm
+    CHECK_STR((run(f, "stop")).c_str(), "stop;");
+    CHECK_EQ(said(f, "ok"), true);
+    CHECK_STR((run(f, "STOP")).c_str(), "stop;");
+    CHECK_STR((run(f, "stop now")).c_str(), "");
+    CHECK_EQ(said(f, "usage: stop"), true);
+    CHECK_STR((run(f, "help")).c_str(), "");
+    CHECK_EQ(said(f, "stop "), true);
     // PD black box stream: from now, from the oldest record, stop; nothing else is accepted
     CHECK_STR((run(f, "trace stream")).c_str(), "trace1;");
     CHECK_STR((run(f, "TRACE Stream all")).c_str(), "trace2;");

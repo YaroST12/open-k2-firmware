@@ -17,6 +17,7 @@ constexpr std::string_view kHelp =
     "pd reset | pd rescan        PD hard reset / CC rescan\r\n"
     "fc trigger <proto> <mV> [confirm]   qc2 qc3 qc3+ afc fcp scp vooc svooc svooc65 ufcs vivo\r\n"
     "fc reset                    back to 5 V, passive idle\r\n"
+    "stop                        cancel test, stop FC, release PD to 5 V, disarm spoof (no confirm)\r\n"
     "sniff stream | sniff stop  passive D+/D- edge stream (binary frames, tools/sniff_stream.py)\r\n"
     "trace stream [all] | trace stop   PD black box records as binary frames (tools/pd_trace.py stream)\r\n"
     "stream on [log|trace|power[=Hz]|run|all] [old] | stream off   everything, one binary stream (tools/k2_stream.py)\r\n"
@@ -196,6 +197,10 @@ void Shell::execute(std::string_view line) {
     const std::string_view c = k.t[0];
     if (same(c, "help")) return b_.write(kHelp);
     if (same(c, "state")) return b_.state();
+    if (same(c, "stop")) {
+        if (k.n != 1) return err(b_, "usage: stop");
+        return done(b_, b_.stop());
+    }
     if (same(c, "log")) {
         if (k.n == 2 && same(k.t[1], "on")) { b_.log_stream(true); return b_.write("ok\r\n"); }
         if (k.n == 2 && same(k.t[1], "off")) { b_.log_stream(false); return b_.write("ok\r\n"); }

@@ -99,6 +99,7 @@ public:
     // `over_load` is the lab-only bypass (k2_remote `pd request --over-load`); the UI never sets it.
     remote::PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load = false);
     remote::PdOpResult pd_release();
+    remote::StopInfo stop();   // cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof (k2/core/stop.hpp)
     remote::PdOpResult pd_hard_reset(uint8_t flags = 0);   // flags: kPdFlagConfirm | kPdFlagResetInline (lab-only inline reset, remote `pd reset` only)
     remote::HandbackResult pd_handback(uint8_t flags = 0); // flags: kPdFlagConfirm only; phase-1 lab hand-back (remote `pd handback` only), verdict in the result
     remote::PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm);   // pd::attach_verdict: 5 V default, above 5 V needs confirm, inline / busy refused

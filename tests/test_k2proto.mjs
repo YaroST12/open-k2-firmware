@@ -908,6 +908,30 @@ test("adc raw: 35 bytes decode to channels and scan slots", () => {
   assert.throws(() => P.decodeAdcRaw(u8(...ADC_PAYLOAD.slice(0, 34))), P.FrameError);
 });
 
+test("stop: 6 bytes decode to what was active, VBUS and the FC release flag", () => {
+  assert.equal(P.CMD.STOP, 0x4B);
+  const r = P.decodeStop(u8(0x0B, 0xA3, 0x23, 0x00, 0x00, 1));
+  assert.deepEqual(r.active, ["test", "fc", "spoof"]);
+  assert.equal(r.active_mask, 0x0B);
+  assert.equal(r.vbus_mv, 9123);
+  assert.equal(r.fc_release_busy, true);
+  const idle = P.decodeStop(u8(0, 0x8C, 0x13, 0, 0, 0));
+  assert.deepEqual(idle.active, []);
+  assert.equal(idle.vbus_mv, 5004);
+  assert.equal(idle.fc_release_busy, false);
+  assert.equal(P.decodeStop(u8(0, 0xFF, 0xFF, 0xFF, 0xFF, 0)).vbus_mv, -1);   // monitor not ready
+  assert.throws(() => P.decodeStop(u8(0, 0, 0, 0, 0)), P.FrameError);
+});
+
+test("stop: the HTTP transport sends it without confirm=1 (the way back to 5 V is never gated)", async () => {
+  const { calls, link } = httpRig((url) => { const f = frameOf(url); return jsonRes({ rsp: toHex(rsp(f[2], f[3], 0, [0, 0x8C, 0x13, 0, 0, 0])) }); });
+  const k2 = new P.K2Remote(link);
+  const r = await k2.stop();
+  assert.equal(r.vbus_mv, 5004);
+  assert.equal(calls.length, 1);
+  assert.ok(!/confirm/.test(calls[0].url));
+});
+
 test("adc raw over the link: no payload, command 0x21", async () => {
   const { link, sent } = rig((f) => [rsp(f[2], f[3], 0, ADC_PAYLOAD)]);
   const r = await new P.K2Remote(link).adcRaw();

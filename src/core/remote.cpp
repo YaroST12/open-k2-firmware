@@ -598,6 +598,27 @@ remote::PdOpResult Remote::pd_release() {
     return {};
 }
 
+// The one-call stop (k2/core/stop.hpp): the HID `stop` command, the lease expiry and the CDC shell `stop` all land here.
+remote::StopInfo Remote::stop() {
+    struct RealEnv {
+        Remote &r;
+        bool test_active() { return r.ui_.charger_test_busy(); }
+        bool fc_active() { return fctrig::status().state != fc::State::Idle || fctrig::scan_running(); }
+        bool pd_held() { return fusb302::sink_status().held; }
+        bool spoof_active() { return emk_spoof::active(); }
+        void cancel_test() { r.ui_.cancel_charger_test(); }
+        void stop_fc() { r.ui_.stop_fc(systick::millis()); }
+        void release_pd() { r.ui_.trigger_release(systick::millis()); }
+        void disarm_spoof() { emk_spoof::disarm(); r.spoof_seq_ = 0; }
+        int32_t vbus_mv() { return power::vbus_fast_mv().value_or(-1); }
+        bool fc_release_busy() { return r.ui_.fc_release().busy(); }
+    } env{*this};
+    const remote::StopInfo info = k2::stop::stop_all(env);
+    K2LOG("[RMT] stop active=%d vbus=%d fc_rel=%d\n", static_cast<int>(info.active), static_cast<int>(info.vbus_mv),
+          info.fc_release_busy ? 1 : 0);
+    return info;
+}
+
 remote::PdOpResult Remote::pd_hard_reset(uint8_t flags) {
     // Lab-only inline Hard Reset (`pd reset --inline --confirm`, ROADMAP 2026-11-10 connection-matrix P4): by
     // default a reset is refused while a live sink is attached (it would cut that sink's supply); the lab flags

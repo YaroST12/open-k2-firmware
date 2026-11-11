@@ -57,6 +57,7 @@ CMD_PD_RELEASE = 0x44       # back to 5 V
 CMD_PD_ATTACH = 0x48       # [target_mv u16] [target_ma u16] [flags: bit0 confirm] -> trigger snapshot; default 5000 mV, above that needs the flag; refused inline / busy = status + [pd::Err]
 CMD_PD_HANDBACK = 0x49     # optional [flags]: bit0 confirm -> [HandbackVerdict]; phase-1 lab hand-back
 CMD_APPLE_READ = 0x4A      # lab-only Apple charger readout (SVID 0x05AC): [1] arm + re-request the current contract, [0, part] header (part 0) or one field (1..6)
+CMD_STOP = 0x4B            # no payload, no confirm: cancel a charger test, stop FC (measured 5 V release), release PD, disarm a spoof -> [active mask, vbus_mv i32, fc_release_busy]
 CMD_DFU_ENTER = 0x30      # clear the app marker and reset into the bootloader
 CMD_DEBUG_FAULT = 0x31    # debug: provoke a CPU fault to exercise the [FAULT] handler
 FAULT_MAGIC = b"BOOM"
@@ -493,6 +494,20 @@ def decode_keys(p):
            for i, name in enumerate(KEYS_BUTTONS)}
     out["hidden"] = bool(p[0] >> 4 & 1)
     return out
+
+STOP_ACTIVE = ((1, "test"), (2, "fc"), (4, "pd"), (8, "spoof"))   # k2/core/stop.hpp: what the stop found active
+
+
+def decode_stop(p):
+    """STOP reply: [active mask, vbus_mv i32 LE (-1 = monitor not ready), fc_release_busy]."""
+    _need(p, 6, "stop")
+    return {"active": [name for bit, name in STOP_ACTIVE if p[0] & bit], "active_mask": p[0],
+            "vbus_mv": int.from_bytes(p[1:5], "little", signed=True), "fc_release_busy": bool(p[5])}
+
+
+def cmd_stop(link, a):
+    """Undo everything a host left holding the output: one call, no confirm (every step moves toward 5 V / idle)."""
+    return decode_stop(link.call(CMD_STOP).payload)
 
 
 def decode_adc_raw(p):
@@ -2842,6 +2857,10 @@ def _render(name, r):
         return (f"reread {r['state']}{extra} mask=0x{r['mask']:02X} answered={','.join(r['answered']) or '-'} "
                 f"skipped={','.join(r['skipped']) or '-'} pdos {r['pdos_before']} -> {r['pdos_last']} "
                 f"caps_rx={r['caps_rx']} avs={'yes' if r['avs'] else 'no'}")
+    if name == "stop":
+        what = "stopped: " + ", ".join(r["active"]) if r["active"] else "nothing was active"
+        vbus = f"VBUS {r['vbus_mv'] / 1000:.2f} V" if r["vbus_mv"] >= 0 else "VBUS n/a"
+        return f"stop: {what}; {vbus}" + (" (fc release running: VBUS not settled yet)" if r["fc_release_busy"] else "")
     if name == "apple-read":
         if not r.get("armed") and not r.get("reads"):
             return "apple-read: not armed (this command arms it; off by default)"
@@ -3023,7 +3042,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "screenshot": cmd_screenshot, "debug": cmd_debug,
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
-            "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
+            "stop": cmd_stop, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards}
 
@@ -3139,6 +3158,9 @@ def build_parser():
                     help="no effect (kept so old scripts still parse): inline, with a live sink attached, the K2 refuses "
                          "Identify outright and the Sink tab shows the sniffed identity")
     si.add_argument("--wait", type=float, default=ID_POLL_S, help="seconds to wait for the sequence")
+    sub.add_parser("stop", help="undo everything a host left holding the output, in one call and with no confirm: cancel a charger "
+                                "test, stop a fast-charge trigger (measured 5 V release), release the PD contract to 5 V, disarm a "
+                                "spoof. Prints what was active and VBUS (the same path as the shell `stop` line)")
     sa = sub.add_parser("apple-read", help="lab-only: read an Apple charger's register file (SVID 0x05AC). Arms the readout "
                                            "(our SVIDs ACK adds 0x05AC), re-requests the CURRENT contract and reads the result. "
                                            "Refused inline, without a contract, to a source that is not our partner, or while a run owns the link")

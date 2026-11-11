@@ -232,6 +232,13 @@ static void test_frame_bridge() {
     f.calls = 0;
     r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, 0x06, 0x05, 0x01, 1}) + " HTTP/1.1" X).c_str());
     CHECK_EQ(r.r.status, 200); CHECK_EQ(f.last_action, 1);
+    // STOP (0x4B) only moves toward 5 V / idle: the raw bridge passes it without confirm=1 (a tab that lost its host must be able
+    // to stop; pinned here because every other output-changing family is gated above)
+    f.calls = 0; f.stops = 0;
+    f.stop_result = {0x02, 5012, true};
+    r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, 0x4B, 0x09, 0x00}) + " HTTP/1.1" X).c_str());
+    CHECK_EQ(r.r.status, 200); CHECK_EQ(f.stops, 1);
+    CHECK_EQ(has(r, "\"rsp\":\"a64b4b09"), 1);
     // commands that cannot work or must not run over the network
     for (uint8_t cmd : {0x0A, 0x30, 0x31, 0x08, 0x33, 0x49}) {   // screenshot, DFU, fault, reboot, factory wipe, lab hand-back
         f.calls = 0;

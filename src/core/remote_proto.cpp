@@ -267,6 +267,12 @@ size_t build_ripple_frame(std::span<uint8_t, kFrameSize> out, uint8_t seq, uint1
     return kRspHeader + 2 + 2 * n;
 }
 
+size_t encode_stop(std::span<uint8_t> out, const StopInfo &s) {
+    Writer w(out);
+    w.u8(s.active); w.i32(s.vbus_mv); w.u8(s.fc_release_busy ? 1 : 0);
+    return w.size();
+}
+
 size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a) {
     Writer w(out);
     w.u8(a.ok);

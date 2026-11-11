@@ -13,7 +13,7 @@ var K2Proto = (function () {
   var CMD = { PING: 1, BUTTON: 2, GET_STATE: 3, GET_PDOS: 4, GET_EMARKER: 5, ACTION: 6, SET_PAGE: 7,
               REBOOT: 8, LOG: 9, SCREENSHOT: 10, CHARGER_TEST: 0x0B, CHARGER_SWEEP: 0x0F, DEBUG_PDOS: 0x20, ADC_RAW: 0x21, RIPPLE: 0x22, DEBUG_PD_MSG: 0x23,
               GET_IDENTITY: 0x24, DEBUG_LINK: 0x25, DEBUG_CC_PROBE: 0x2A, DFU_ENTER: 0x30, DEBUG_FAULT: 0x31, FC: 0x32, FACTORY_WIPE: 0x33, BOOT_INFO: 0x35, CABLE_R: 0x50, LAB: 0x51, UFCS: 0x52, QRTEST: 0x53, CHARGER_AVS_SWEEP: 0x54, EM_LIB: 0x61, CARDS: 0x62, BLACK_BOX: 0x70, TRANS_CAP: 0x71,
-              IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A,
+              IDENTIFY_DEVICE: 0x40, PD_REQUEST: 0x41, PD_RESET: 0x42, PD_TRIGGER_STATUS: 0x43, PD_RELEASE: 0x44, PD_MATCH: 0x45, PD_ATTACH: 0x48, PD_HANDBACK: 0x49, APPLE_READ: 0x4A, STOP: 0x4B,
               SCREEN_DATA: 0x8A, RIPPLE_DATA: 0x8B };
   var STATUS = { OK: 0, UNKNOWN_CMD: 1, BAD_LENGTH: 2, BAD_ARG: 3, BUSY: 4, NEED_CONFIRM: 5 };
   var STATUS_NAMES = ["ok", "unknown command", "bad length", "bad argument", "busy", "needs confirmation"];
@@ -944,6 +944,15 @@ var K2Proto = (function () {
   };
   K2Remote.prototype.pdReset = async function () { await this.link.call(CMD.PD_RESET); return this.pdStatus(); };
   K2Remote.prototype.pdRelease = async function () { await this.link.call(CMD.PD_RELEASE); return this.pdStatus(); };
+  // STOP: [active mask (1 test, 2 fc, 4 pd, 8 spoof), vbus_mv i32 LE (-1 = monitor not ready), fc_release_busy].
+  var STOP_ACTIVE = [[1, "test"], [2, "fc"], [4, "pd"], [8, "spoof"]];
+  function decodeStop(p) {
+    need(p, 6, "stop");
+    return { active: STOP_ACTIVE.filter(function (a) { return p[0] & a[0]; }).map(function (a) { return a[1]; }),
+             active_mask: p[0], vbus_mv: dv(p).getInt32(1, true), fc_release_busy: !!p[5] };
+  }
+  // One call back to 5 V and idle: cancels a charger test, stops FC, releases PD, disarms a spoof. No confirm.
+  K2Remote.prototype.stop = async function () { return decodeStop((await this.link.call(CMD.STOP)).payload); };
   // Default target 5 V. Above 5 V the K2 answers NEED_CONFIRM unless o.confirm is set (the caller asked the user,
   // like pdRequest); it refuses outright (BAD_ARG + inline, BUSY) while a sink is attached inline or a run owns the ports.
   K2Remote.prototype.pdAttach = async function (target_mv, target_ma, o) {
@@ -1359,7 +1368,7 @@ var K2Proto = (function () {
     directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodeKeys: decodeKeys, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
-    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
+    decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeStop: decodeStop, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,
     formatAgo: formatAgo, formatUptime: formatUptime, isUnknownCmd: isUnknownCmd, FC_PROTOS: FC_PROTOS, FC_LEVELS: FC_LEVELS, FC_NAMES: FC_NAMES,
     ADC_CHANNELS: ADC_CHANNELS, ADC_SCAN: ADC_SCAN, RIPPLE_SAMPLES: RIPPLE_SAMPLES, RIPPLE_FULL_SCALE: RIPPLE_FULL_SCALE,

@@ -145,6 +145,8 @@ struct Fake {
     PdOpResult pd_request(uint8_t pos, uint16_t mv, uint16_t ma, bool confirm, bool over_load) {
         calls++; rq_pos = pos; rq_mv = mv; rq_ma = ma; rq_confirm = confirm; rq_over_load = over_load; return rq_result;
     }
+    int stops = 0; StopInfo stop_result{};
+    StopInfo stop() { calls++; stops++; return stop_result; }
     int releases = 0, resets = 0;
     uint8_t reset_flags = 0xFF;
     PdOpResult pd_release() { calls++; releases++; return {}; }

@@ -785,6 +785,21 @@ struct Hw final : shell::Backend {
         return nullptr;
     }
 
+    // The same one-call path as the HID `stop` command (Remote::stop); on top of it the raw D+/D- levels this shell drove go
+    // back to Hi-Z, since they are shell state the remote does not know about.
+    const char* stop() override {
+        const remote::StopInfo s = g_remote->stop();
+        g_fc_started = false;
+        const bool raw = g_raw_dp || g_raw_dm;
+        if (raw) raw_to_hiz();
+        char b[96];
+        const std::size_t n = fmt::format(std::span<char>(b, sizeof b), "stop active=%u vbus=%d fc_release_busy=%u raw=%u\r\n",
+                                          static_cast<unsigned>(s.active), static_cast<int>(s.vbus_mv),
+                                          s.fc_release_busy ? 1u : 0u, raw ? 1u : 0u);
+        put({b, n});
+        return nullptr;
+    }
+
     // Read-only on the rings and the CDC port: no arming rules, nothing it could disturb.
     const char* stream(unsigned mask, unsigned hz, bool history) override {
         if (mask == 0) {

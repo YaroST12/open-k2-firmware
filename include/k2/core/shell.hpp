@@ -36,6 +36,8 @@ struct Backend {
     virtual const char* pd_rescan() = 0;
     virtual const char* fc_trigger(fc::Proto p, int mv, bool confirm) = 0;
     virtual const char* fc_reset() = 0;
+    // The one-call stop (k2/core/stop.hpp), the same path as the HID `stop` command and the lease expiry; prints its own report line.
+    virtual const char* stop() = 0;
     // Passive D+/D- edge stream (k2/fastcharge/dpsniff.hpp): 0 stop, 1 stream, 2 synthetic source at `rate` edges/s (no pins).
     virtual const char* sniff(int mode, std::uint32_t rate) = 0;
     // PD black box stream (k2/core/trace_stream.hpp): 0 stop, 1 stream from now, 2 stream from the oldest ring record.

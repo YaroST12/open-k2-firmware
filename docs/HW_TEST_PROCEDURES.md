@@ -25,7 +25,11 @@ Shorthand: `R` = `python3 tools/k2_remote.py`, `T` = `python3 tools/pd_trace.py`
    this K2 by any other route. The 36 V / 48 V EPR steps (T04) are therefore **not testable on this unit**.
 3. **Release to 5 V after each step.** Never leave the output above 5 V between tests:
    `R pd release` for PD, `R fc reset` for D+/D- protocols, or unplug the charger. Check with `R state`
-   that `vbus_mv` is about 5000 before touching the cabling.
+   that `vbus_mv` is about 5000 before touching the cabling. **`R stop` is the one-call version** (it needs no
+   `--confirm`): it cancels a charger test, stops any Fast Charge trigger with the measured 5 V release, releases PD
+   to 5 V and disarms a spoof, in that order, and prints what was active, VBUS and whether the FC release is still
+   running (`fc release running` means VBUS is not settled yet: ask again). The CDC shell has the same `stop` line.
+   Use it as the first thing after any aborted run or tool crash.
 4. **Triggers are refused with a device inline.** PD trigger shows `LOAD: Load attached: unplug it`
    (the tool is blocked); staged on-device FC refuses with `Load/PD active: refused`, with no bypass.
    Identify retains its explicit second-OK override. Remote FC retains explicit `--allow-inline`, which needs

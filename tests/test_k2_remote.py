@@ -1780,5 +1780,49 @@ class Match(unittest.TestCase):
         self.assertIn("charger max 15 V 100 W", kr.render("match", r))
 
 
+class StopCommand(unittest.TestCase):
+    """`stop` (0x4B): no payload, no confirm; the reply is [active mask, vbus_mv i32 LE, fc_release_busy]."""
+
+    PAYLOAD = bytes([0x0B]) + (9123).to_bytes(4, "little", signed=True) + bytes([1])
+
+    def test_id(self):
+        self.assertEqual(kr.CMD_STOP, 0x4B)
+
+    def test_decode(self):
+        r = kr.decode_stop(self.PAYLOAD)
+        self.assertEqual(r["active"], ["test", "fc", "spoof"])
+        self.assertEqual(r["active_mask"], 0x0B)
+        self.assertEqual(r["vbus_mv"], 9123)
+        self.assertIs(r["fc_release_busy"], True)
+        idle = kr.decode_stop(bytes([0]) + (-1).to_bytes(4, "little", signed=True) + bytes([0]))
+        self.assertEqual(idle["active"], [])
+        self.assertEqual(idle["vbus_mv"], -1)
+        with self.assertRaises(Exception):
+            kr.decode_stop(self.PAYLOAD[:5])
+
+    def test_command_sends_no_payload_and_needs_no_confirm(self):
+        link = ActivePd.Link({kr.CMD_STOP: self.PAYLOAD})
+        r = kr.cmd_stop(link, None)
+        self.assertEqual(link.calls, [(kr.CMD_STOP, b"")])
+        self.assertEqual(r["vbus_mv"], 9123)
+        p = kr.build_parser()
+        a = p.parse_args(["stop"])
+        self.assertEqual(a.command, "stop")
+        self.assertFalse(hasattr(a, "confirm"))
+        self.assertIs(kr.COMMANDS["stop"], kr.cmd_stop)
+
+    def test_render(self):
+        text = kr.render("stop", kr.decode_stop(self.PAYLOAD))
+        self.assertIn("stopped: test, fc, spoof", text)
+        self.assertIn("9.12 V", text)
+        self.assertIn("fc release running", text)
+        idle = kr.render("stop", kr.decode_stop(bytes([0]) + (5004).to_bytes(4, "little") + bytes([0])))
+        self.assertIn("nothing was active", idle)
+        self.assertIn("5.00 V", idle)
+        self.assertNotIn("fc release", idle)
+        # the monitor not ready: no number is invented
+        self.assertIn("VBUS n/a", kr.render("stop", kr.decode_stop(bytes([0]) + (-1).to_bytes(4, "little", signed=True) + bytes([0]))))
+
+
 if __name__ == "__main__":
     unittest.main()
