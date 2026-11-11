@@ -212,6 +212,7 @@ struct StubState {
     k2::transcap::Meta tc_meta{};
     std::vector<std::vector<uint8_t>> reports;
     void (*on_report)() = nullptr;
+    void (*on_log)(const char* line) = nullptr;   // every formatted K2LOG line, uncapped (the world-replay test keeps them timed)
     std::vector<uint8_t> bin_log;          // usb::log_bin(): the K2LOG entries the stub ring holds (whole entries, oldest first)
     uint32_t bin_base = 0;
     bool bin_older = false;
