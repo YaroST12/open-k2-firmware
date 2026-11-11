@@ -91,7 +91,9 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   (`fc-holds-after-bus-reset`). Seen once; the self-powered full run went on from FCP to SCP 5 V.
 - **QC2 / QC3 fail on the IQ4 above 5 V** (2026-11-11 self-powered full run: QC2 9 V `voltage not reached`, QC3
   `timeout`), although QC2 12.1 V and QC3 11.8 V passed on 2026-11-04 (5c548f7). A state left by the vendor units or a
-  regression; next: `--units qc2,qc3` alone on a fresh attach.
+  regression. `--units qc2,qc3` alone (PC-powered, run 4, `runs/2026-11-11-iq4-scp/ct_qc.txt`) fails the same way: QC2 9 V
+  at 5.10 V, QC3 / QC3B timeout at 5.10 V, so not a leftover state. Next: the same units on another charger that passed QC
+  before, to split a firmware regression from an IQ4 change.
 
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
