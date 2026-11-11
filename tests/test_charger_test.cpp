@@ -6792,6 +6792,20 @@ static void test_a_list_restored_before_the_unit_ends_runs_the_withdrawn_rows() 
     CHECK_EQ(r.evidence().rebalanced >= 2u, true);
 }
 
+// A "load attached" refusal names what latched the inline state (pd::Link::inline_cause()), so a refusal at 0 mA tells a held
+// load from a far Rd or a sink's Request without a Black Box dump (ROADMAP: the USB-A auto-off port refused at 0 mA).
+static void test_an_inline_refusal_names_what_latched_it() {
+    Fake f;
+    ct::Runner r(f);
+    g_stub.log_text.clear();
+    r.note_preflight_refusal(ct::Reason::Inline, 5100, "far rd");
+    CHECK_EQ(r.reason(), ct::Reason::Inline);
+    CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: load attached, latched by far rd (5100 mV)") != std::string::npos, true);
+    g_stub.log_text.clear();
+    r.note_preflight_refusal(ct::Reason::Inline, 5100);   // no cause known: the plain line
+    CHECK_EQ(g_stub.log_text.find("[TEST] preflight refused: load attached (5100 mV)") != std::string::npos, true);
+}
+
 int main() {
     test_an_above_5v_request_waits_for_the_journal_without_blocking();
     test_reannounce_before_the_first_row_replans(); test_reannounce_during_the_first_row_follows_the_new_slots();
@@ -6911,5 +6925,6 @@ int main() {
     test_ps_rdy_late_is_noted_and_never_judged(); test_ps_rdy_inferred_is_noted_and_never_judged();
     test_ps_rdy_out_of_band_is_noted_and_never_judged(); test_ps_rdy_timing_is_noted_per_walk_level();
     test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
+    test_an_inline_refusal_names_what_latched_it();
     return test_report("test_charger_test");
 }

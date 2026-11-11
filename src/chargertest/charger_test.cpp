@@ -76,7 +76,7 @@ size_t refusal_footer_text(Reason r, int vbus_mv, std::span<char> out) {
     if (n < out.size()) out[n] = '\0';
     return n;
 }
-void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* busy_text) {
+void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* detail) {
     if (busy()) return;   // only a refusal outside a run is recorded (the run id stays where it was)
     reason_ = r;
     refusal_mv_ = vbus_mv >= 0 ? uint16_t(std::min(vbus_mv, 65535)) : 0;
@@ -85,10 +85,13 @@ void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* busy_text
         // log and ct_start.py say why the run id stayed 0 - "VBUS 8.5 V on a 5 V contract (shared bus)".
         const int tenths = (vbus_mv + 50) / 100;   // 8470 mV reads 8.5 V
         K2LOG("[TEST] preflight refused: VBUS %d.%d V on a 5 V contract (shared bus)\n", tenths / 10, tenths % 10);
-    } else if (r == Reason::Busy && busy_text && busy_text[0]) {
+    } else if (r == Reason::Busy && detail && detail[0]) {
         // "tool busy" alone does not say which tool holds the line: the UI's busy_reason text does ("PD hold:
         // release it", "Test running: stop it", ...), so the refusal line names it for ct_start.py.
-        K2LOG("[TEST] preflight refused: tool busy: %s (%d mV)\n", busy_text, vbus_mv);
+        K2LOG("[TEST] preflight refused: tool busy: %s (%d mV)\n", detail, vbus_mv);
+    } else if (r == Reason::Inline && detail && detail[0]) {
+        // "load attached" at 0 mA says nothing: the latch's cause does (pd::inline_cause_name: load, sink request, far rd...).
+        K2LOG("[TEST] preflight refused: load attached, latched by %s (%d mV)\n", detail, vbus_mv);
     } else {
         K2LOG("[TEST] preflight refused: %s (%d mV)\n", refusal_words(r), vbus_mv);
     }
