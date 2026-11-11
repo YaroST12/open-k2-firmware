@@ -590,7 +590,7 @@ remote::StopInfo Remote::stop() {
         Remote &r;
         bool test_active() { return r.ui_.run_busy() || r.ui_.twin_live_busy(); }   // a twin live proof and a PD Stress run are tests here
         bool fc_active() { return fctrig::status().state != fc::State::Idle || fctrig::scan_running(); }
-        bool pd_held() { return fusb302::sink_status().held; }
+        bool pd_held() { return pd::user_hold(fusb302::sink_status()); }   // the driver's own 5 V answer is nobody's trigger
         bool spoof_active() { return emk_spoof::active(); }
         void cancel_test() { r.ui_.cancel_runs(); }
         void stop_fc() { r.ui_.stop_fc(systick::millis()); }
@@ -723,6 +723,7 @@ remote::PdTriggerSnapshot Remote::pd_trigger() {
     t.state = static_cast<uint8_t>(s.state);
     t.result = static_cast<uint8_t>(s.result);
     t.held = s.held;
+    t.auto_hold = s.auto_hold;
     t.epr = s.epr_mode;
     t.pos = s.pos;
     t.mv = s.mv;

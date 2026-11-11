@@ -53,6 +53,7 @@ struct Fake final : ct::Env {
     // and the source list stays invalid for caps_after_ms more (the sink must not ask for a PDO before it is announced again).
     uint32_t recover_after_ms = 0, caps_after_ms = 0, latched_at = 0, caps_back_at = 0;
     bool release_ok = true, request_ok = true;
+    bool release_auto_hold = false;   // the 5 V lands as the driver's own PDO 1 answer (held + auto_hold), as after a Hard Reset's re-request
     std::vector<ct::Step> records;
     std::vector<pd::Choice> choices;
     std::vector<int> fc_mas;   // the current each fc request carried
@@ -312,6 +313,7 @@ struct Fake final : ct::Env {
         in.vbus_mv = 5000;
         if (pd && in.pd.epr_mode && spr_caps.valid) caps = spr_caps;
         if (pd) { in.pd.held = in.pd.epr_mode = false; in.pd.state = pd::SinkState::Ready; in.pd.mv = 5000; }
+        if (pd && release_auto_hold) { in.pd.held = in.pd.auto_hold = true; in.pd.pos = 1; }
         else in.fc_state = fc::State::Idle;
     }
     // Journal hooks: what the UI Env does, so a test can cut the run anywhere and reboot into the journal.
@@ -616,6 +618,24 @@ static void test_plan_and_run() {
     CHECK_EQ(std::string(f.seq.begin(), f.seq.end()) == "DLDPDLDP", true);
     CHECK_EQ(f.in.vbus_mv, 5000);
     for (const auto& s : r.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Skip, true);
+}
+// The driver's own PDO 1 answer is no hold (hardware 2026-11-11): a release that lands on it is a release. Before the mark,
+// a held=True 5 V contract nobody owned kept every row's release window open until its timeout.
+static void test_an_auto_hold_counts_as_released() {
+    // Unfixed, every PD release waited out its 8 s window ("release check not answering"), then carried on: same verdicts, a
+    // much longer run. So the proof is the run time, against the same run with a plain release.
+    auto run_ms = [](bool auto_hold) {
+        Fake f; ct::Runner r(f);
+        f.release_auto_hold = auto_hold;
+        CHECK_EQ(r.start(f.caps, {}, f.in, true), ct::Reason::None);
+        const uint32_t t0 = f.in.now;
+        for (unsigned n = 0; n < 2000 && r.state() != ct::State::Done; n++) f.tick(r, 100);
+        CHECK_EQ(r.state(), ct::State::Done);
+        for (const auto& s : r.steps()) CHECK_EQ(s.verdict == ct::Verdict::Pass || s.verdict == ct::Verdict::Skip, true);
+        return f.in.now - t0;
+    };
+    const uint32_t plain = run_ms(false), with_auto = run_ms(true);
+    CHECK_EQ(with_auto <= plain + 1000, true);
 }
 // The Runner never drains the journal: an above-5 V request that would start a contract waits in the Baseline (the contract at 5 V,
 // polled again) until the journal has written the plan, and the wait is reported once when the request goes.
@@ -6797,7 +6817,7 @@ int main() {
     test_hunt_evidence_names_each_refusal_cause(); test_hunt_evidence_records_what_the_sink_saw();
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
-    test_plan_and_run(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
+    test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
     test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();

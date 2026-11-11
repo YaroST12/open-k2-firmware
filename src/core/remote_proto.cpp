@@ -504,6 +504,7 @@ size_t encode_pd_trigger(std::span<uint8_t> out, const PdTriggerSnapshot &s) {
     w.u16(s.mv); w.u16(s.ma); w.u32(s.hard_resets); w.u32(s.source_hard_resets);
     w.u8(s.pin);   // appended: older clients read the first 17 bytes
     w.u8(s.trial_line); w.u8(s.trial_moves);   // appended after pin (the direct-plug line fallback): older clients read the first 18 bytes
+    w.u8(s.auto_hold);   // appended: older clients read the first 20 bytes
     return w.size();
 }
 

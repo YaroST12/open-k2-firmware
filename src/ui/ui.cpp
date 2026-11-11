@@ -282,7 +282,7 @@ BusyWhy Ui::busy_why() const {
     if (pdstress_.active()) return BusyWhy::PdStress;   // PD Stress: running or resuming
     if (fc_release_.busy()) return BusyWhy::FcRelease;
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return BusyWhy::QcTrigger;
-    if (sink.held && !fusb302::rd_for_run_on() && !fusb302::reread_own_hold() && !fusb302::self_powered() && !power_source::bus_powered())
+    if (pd::user_hold(sink) && !fusb302::rd_for_run_on() && !fusb302::reread_own_hold() && !fusb302::self_powered() && !power_source::bus_powered())
         return BusyWhy::PdHold;
     if (sink.epr_mode) return BusyWhy::Epr;
     if (sink.state != pd::SinkState::Idle && sink.state != pd::SinkState::Ready && sink.state != pd::SinkState::Failed)

@@ -1104,6 +1104,18 @@ class ActivePd(unittest.TestCase):
         self.assertEqual((old["trial_line"], old["trial_moves"]), (0, 0))
         self.assertNotIn("line_moves", kr.render("pd", old))
 
+    def test_pd_status_marks_the_drivers_own_hold(self):
+        # 21 bytes: ..., trial_moves u8, then auto_hold u8 (the hold is the K2's own PDO 1 answer, not a trigger)
+        base = bytearray(self.TRIG + bytes([2, 0, 0, 0]) + bytes([0]) + bytes([0, 0]))
+        base[2] = 1                                         # held
+        r = kr.decode_pd_trigger(bytes(base) + bytes([1]))
+        self.assertEqual((r["held"], r["auto_hold"]), (True, True))
+        self.assertIn("held=True(auto)", kr.render("pd", r))
+        user = kr.decode_pd_trigger(bytes(base) + bytes([0]))
+        self.assertFalse(user["auto_hold"])
+        self.assertIn("held=True ", kr.render("pd", user))
+        self.assertFalse(kr.decode_pd_trigger(bytes(base))["auto_hold"])   # firmware before the mark: 20 bytes
+
     def test_request_without_confirm_sends_flag_zero(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="request", pos=2, mv=0, ma=0, confirm=False))

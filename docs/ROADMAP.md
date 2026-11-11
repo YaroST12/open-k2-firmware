@@ -52,24 +52,21 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
-- **The driver's own PDO 1 answers mark the contract held** (2026-11-11, found while fixing the lease; open, design
-  pending). `fusb302.cpp` answers caps on its own through `Sink::trigger()`, which sets `SinkStatus.held` like a user
-  trigger: `run start: request PDO 1` (a run's Rd attach), `acked caps: request PDO 1` (any caps the chip acked, the
-  self-power hold included) and `auto re-request after hard reset`. So a 5 V contract nobody owns reads `held=True`:
-  after a twin run (its release, the re-attach, then `run start: request PDO 1`, `runs/2026-11-11-novoo-alone/b4-twin/`),
-  after a re-read (the 2026-11-10 "tool busy" START refusal, worked around by `pd::reread_own_hold`) and after a hard reset.
-  Effects: the lease did not settle (fixed separately, 13e6a618), `pd status` shows a hold the user never made, a
-  charger-test START on a K2 that is neither self- nor bus-powered is refused "PD hold: release it", and the legacy
-  "unsafe" exit of the charger test (`charger_test.cpp`, `!in.pd.held`) waits for a hold nobody will release.
-  - Not the fix: clearing `held` on these Requests. The sink answers a re-announce during Requesting / Transition only
-    while held (`pd_sink.cpp`, the re-announce branch); without it the source's tSenderResponse expires into a Hard
-    Reset (CUKTECH C1, 2026-11-04). The charger test's 5 V steps also read `held` (plateau, renewal).
-  - Fix (proposed): an ownership mark next to `held`, e.g. `SinkStatus.auto_hold`, set by the driver's own PDO 1
-    answers and cleared by any `sink_request`; `pd::reread_own_hold`, the PdHold busy reason, the charger-test exit
-    and `pd status` read "held by the driver at 5 V" as not held. Host tests: each auto path sets the mark, a user
-    trigger clears it, START is allowed on an auto hold and refused on a user hold.
-  - Validate (hardware): K2 alone on the NOVOO: twin run, then `pd status` reads the auto hold, a charger-test START is
-    allowed, the lease settles; a `pd attach` 9000 hold still blocks START.
+- **The driver's own PDO 1 answers mark the contract held** (2026-11-11, found while fixing the lease; fixed on
+  `k2/auto-hold`, hardware check pending). `fusb302.cpp` answers caps on its own (`run start: request PDO 1`, `acked caps:
+  request PDO 1` with the self-power hold, `auto re-request after hard reset`), and each set `SinkStatus.held` like a user
+  trigger: after a twin run (`runs/2026-11-11-novoo-alone/b4-twin/`), a re-read or a Hard Reset a 5 V contract nobody owned
+  read `held=True`. Effects: the lease did not settle (13e6a618), START on a K2 neither self- nor bus-powered was refused
+  "PD hold: release it", and every charger-test release that landed on such an answer waited out its 8 s window.
+  - Not the fix: clearing `held` there. The sink answers a re-announce during Requesting / Transition only while held;
+    without it tSenderResponse expires into a Hard Reset (CUKTECH C1, 2026-11-04).
+  - Fix: `Sink::answer_5v` marks `SinkStatus.auto_hold` beside `held`, any trigger clears it; `pd::user_hold` (busy reason,
+    `stop` report, charger-test release and unsafe exit) and `pd::auto_own_hold` (Ra arming take-over) read it; byte 20 of
+    PD_TRIGGER_STATUS, `held=True(auto)` in `k2_remote pd status`. Host: `test_pd_sink` (mark set, cleared by a trigger,
+    by a Reject), `test_charger_test` `test_an_auto_hold_counts_as_released` (red first: the run took the 8 s per release),
+    `test_remote_proto`, `test_k2_remote`.
+  - Validate (hardware): K2 alone on the NOVOO: twin run, then `pd status` reads `held=True(auto)` and the lease settles;
+    `pd attach` 9000 reads `held=True` with no `(auto)`; a charger test runs with no 8 s release stalls.
 - **The K2 attaches late and misses the source's offers** (2026-11-11, three times: Anker, the flipped hub on the
   Legion left port, NOVOO -> K2 -> Legion side port): VBUS was up 294 ms before the K2 registered the attach, so the
   first message it caught was PS_RDY or VCONN_Swap. Not seen when the K2 was attached before the charger. Test case:

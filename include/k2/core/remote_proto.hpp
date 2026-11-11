@@ -937,6 +937,7 @@ struct PdTriggerSnapshot {
     uint8_t pin = 0;                   // fusb302::pin_rd(): 1 / 2 = an Rd is pinned on CC1 / CC2, 0 = none (appended: clients that read 17 bytes ignore it)
     uint8_t trial_line = 0;            // fusb302::line_trial(): the line (1 / 2) our single Rd is trying while the direct-plug schedule is live, else 0 (appended: clients that read 18 bytes ignore it)
     uint8_t trial_moves = 0;           // how often the direct-plug fallback moved the Rd this attach (appended after trial_line)
+    uint8_t auto_hold = 0;             // SinkStatus::auto_hold: the hold is the driver's own PDO 1 answer (appended after trial_moves)
 };
 // Result of PD_ATTACH: Ok carries the trigger snapshot; any other status is a refusal (err = pd::Err) and the
 // snapshot is not sent. `raised` (not on the wire): the attach actually started or holds a contract above 5 V (a request

@@ -1305,7 +1305,10 @@ test("match decodes the verdict, flags and row states", () => {
 
 test("pd trigger status decodes 13 bytes", () => {
   const t = P.decodePdTrigger(u8(5, 1, 1, 0, 4, 0x20, 0x4E, 0xB8, 0x0B, 1, 0, 0, 0));
-  assert.deepEqual(t, { state: "ready", result: "ok", held: true, epr: false, pos: 4, mv: 20000, ma: 3000, hard_resets: 1 });
+  assert.deepEqual(t, { state: "ready", result: "ok", held: true, epr: false, pos: 4, mv: 20000, ma: 3000, hard_resets: 1, auto_hold: false });
+  // byte 20 (21-byte frame): the hold is the K2's own PDO 1 answer
+  const a = P.decodePdTrigger(u8(5, 1, 1, 0, 1, 0x88, 0x13, 0xB8, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1));
+  assert.equal(a.held, true); assert.equal(a.auto_hold, true);
   assert.throws(() => P.decodePdTrigger(u8(1, 2)), P.FrameError);
 });
 

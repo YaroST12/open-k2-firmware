@@ -265,6 +265,7 @@ bool Sink::take_tx(TxMsg& out) {
 void Sink::fail(SinkResult r, SinkState to) {
     st_.result = r;
     st_.held = false;
+    st_.auto_hold = false;
     st_.state = to;
     retry_pending_ = false;
     retx_pending_ = false;
@@ -553,6 +554,7 @@ Err Sink::trigger(Choice c, std::uint32_t now) {
     }
     want_ = c;
     st_.held = true;
+    st_.auto_hold = false;   // somebody asked: no longer the driver's own answer (answer_5v sets it after this)
     st_.result = SinkResult::None;
     wait_retries_ = 0;
     verify_ = false;            // a new wish ends the check of the last release
@@ -567,6 +569,12 @@ Err Sink::trigger(Choice c, std::uint32_t now) {
     st_.state = SinkState::Requesting;
     send_request(now, true);
     return Err::Ok;
+}
+
+Err Sink::answer_5v(Choice c, std::uint32_t now) {
+    const Err e = trigger(c, now);
+    if (e == Err::Ok) st_.auto_hold = true;
+    return e;
 }
 
 void Sink::proceed_after_epr_caps(std::uint32_t now) {

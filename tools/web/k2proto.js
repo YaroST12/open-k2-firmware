@@ -507,7 +507,8 @@ var K2Proto = (function () {
     need(p, 13, "pd trigger status");
     var v = dv(p);
     return { state: name(SINK_STATES, p[0]), result: name(SINK_RESULTS, p[1]), held: !!p[2], epr: !!p[3], pos: p[4],
-             mv: v.getUint16(5, true), ma: v.getUint16(7, true), hard_resets: v.getUint32(9, true) };
+             mv: v.getUint16(5, true), ma: v.getUint16(7, true), hard_resets: v.getUint32(9, true),
+             auto_hold: p.length > 20 ? !!p[20] : false };   // byte 20: the hold is the K2's own PDO 1 answer
   }
 
   // PD_MATCH: [caps_seen, request_seen, sink_ok, flags, verdict, rows, want_pos, want_mv u16, want_ma u16,

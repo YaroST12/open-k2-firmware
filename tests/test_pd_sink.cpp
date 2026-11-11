@@ -1780,5 +1780,42 @@ int main() {
         CHECK_EQ(int(r.sink.status().held), 1); CHECK_EQ(int(r.sink.status().mv), 15000);
     }
 
+    // ---- the driver's own PDO 1 answer is marked (auto_hold); any trigger clears the mark (hardware 2026-11-11) ----
+    {
+        Rig r;
+        CHECK_EQ(r.sink.answer_5v({1, 0, 0}, r.now), Err::Ok);
+        r.pump();
+        CHECK_COND(r.sink.status().held);              // held stays: the re-announce answer in Requesting needs it
+        CHECK_COND(r.sink.status().auto_hold);
+        CHECK_COND(!user_hold(r.sink.status()));
+        CHECK_COND(!auto_own_hold(r.sink.status()));   // not settled yet
+        r.accept_and_ready();
+        CHECK_COND(r.sink.status().state == SinkState::Ready);
+        CHECK_COND(auto_own_hold(r.sink.status()));
+        CHECK_COND(!user_hold(r.sink.status()));
+        CHECK_EQ(r.sink.trigger({2, 0, 0}, r.now), Err::Ok);   // a user trigger owns it now
+        r.pump();
+        CHECK_COND(!r.sink.status().auto_hold);
+        CHECK_COND(user_hold(r.sink.status()));
+        r.accept_and_ready();
+        CHECK_COND(!auto_own_hold(r.sink.status()));
+        CHECK_EQ(r.sink.trigger({1, 0, 0}, r.now), Err::Ok);   // a user 5 V trigger is a user hold too
+        r.pump(); r.accept_and_ready();
+        CHECK_COND(user_hold(r.sink.status()));
+        CHECK_COND(!auto_own_hold(r.sink.status()));
+    }
+    {   // a refused answer leaves the mark alone; a failed attempt clears held and the mark
+        Rig r;
+        CHECK_EQ(r.sink.trigger({2, 0, 0}, r.now), Err::Ok);
+        r.pump();
+        CHECK_COND(r.sink.answer_5v({1, 0, 0}, r.now) == Err::Busy);   // the user's Request is in flight
+        CHECK_COND(!r.sink.status().auto_hold);
+        Rig q;
+        CHECK_EQ(q.sink.answer_5v({1, 0, 0}, q.now), Err::Ok);
+        q.pump();
+        q.ctl(kCtlReject);
+        CHECK_COND(!q.sink.status().held);
+        CHECK_COND(!q.sink.status().auto_hold);
+    }
     return test_report("test_pd_sink");
 }

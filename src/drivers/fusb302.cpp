@@ -972,7 +972,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
         if (sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap && g_sink.take_resume() && !downstream_now() && g_active_cc != 0 &&
             !g_legacy_only) {
             // After a source hard reset the contract is gone: ask for PDO 1 (5 V) again on our own.
-            const pd::Err e = g_sink.trigger({1, 0, 0}, now);
+            const pd::Err e = g_sink.answer_5v({1, 0, 0}, now);
             requested_now = true;
             K2LOG("[PD] auto re-request after hard reset: err=%u\n", unsigned(e));
         }
@@ -982,7 +982,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             const std::uint8_t why = pd::start_request_blockers(inline_now(), g_active_cc, g_sink.status().state == pd::SinkState::Idle, g_start_requested, g_legacy_only);
             if (why == 0) {
                 g_start_requested = true;
-                const pd::Err e = g_sink.trigger({1, 0, 0}, now);
+                const pd::Err e = g_sink.answer_5v({1, 0, 0}, now);
                 requested_now = true;
                 pdtrace::mark(pdtrace::kMarkAutoReq, std::uint16_t(e));   // the black box has no K2LOG: it shows the decision
                 K2LOG("[PD] run start: request PDO 1 err=%u (auto-crc %s)\n", unsigned(e), g_crc_on ? "on" : "OFF");
@@ -1005,7 +1005,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             if (!g_ident_alone_hold &&
                 pd::acked_caps_need_request(g_caps_acked, downstream_now(), g_active_cc, g_legacy_only, sink_idle, g_prep.active(),
                                             requested_now)) {
-                const pd::Err e = g_sink.trigger({1, 0, hold ? pd::kSelfHoldMa : std::uint16_t(0)}, now);
+                const pd::Err e = g_sink.answer_5v({1, 0, hold ? pd::kSelfHoldMa : std::uint16_t(0)}, now);
                 pdtrace::mark(pdtrace::kMarkAutoReq, std::uint16_t((hold ? 0x300 : 0x200) | unsigned(e)));
                 K2LOG("[PD] acked caps: request PDO 1 err=%u\n", unsigned(e));
                 if (hold) K2LOG("[PD] self-power hold: 5 V contract asked at %u mA\n", unsigned(pd::kSelfHoldMa));
@@ -2890,9 +2890,10 @@ bool ra_set(bool on) {
     emkra::Ctx c;
     c.inline_sink = inline_now();
     c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
-    // The self-hold, or the re-read's own leftover PDO 1 contract inside its linger: both are the K2's own attach,
-    // take-over-able by a run / spoof, not a foreign contract.
-    c.self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only) || reread_own_hold();
+    // The self-hold, the re-read's own leftover PDO 1 contract inside its linger, or the driver's own settled PDO 1 answer: all
+    // the K2's own attach, take-over-able by a run / spoof, not a foreign contract.
+    c.self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only) || reread_own_hold() ||
+                  pd::auto_own_hold(g_sink.status());
     c.busy =g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
     c.pinned_rd = g_pin_rd;
     c.vconn = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;

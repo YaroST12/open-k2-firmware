@@ -211,6 +211,11 @@ struct SinkStatus {
     EprInfo epr_info = EprInfo::None;
     SinkResult result = SinkResult::None;
     bool held = false;        // a trigger is active (keep-alive running)
+    // The hold is the driver's own PDO 1 answer (Sink::answer_5v: the run-start Request, acked caps, the re-request after a Hard
+    // Reset), not a level somebody asked for. `held` stays set for those too: the sink answers a re-announce in Requesting /
+    // Transition only while held (else tSenderResponse expires into a Hard Reset), so the mark lives beside it. Any trigger()
+    // clears it; meaningful only while held. Readers that ask "does a user own this contract" use pd::user_hold().
+    bool auto_hold = false;
     // A release's PS_RDY is in: the sink is checking that VBUS really came down to vSafe5V (and re-asks, then Hard Resets, when it
     // does not). The charger test keeps its release window open while this is set. Never set without a live VBUS feed.
     bool verifying = false;
@@ -238,6 +243,14 @@ struct SinkStatus {
     bool xiaomi_authed = false;  // the SVID 0x2717 auth chain completed this session
     bool oppo_svid = false;      // the source listed SVID 0x22D9 (OPPO) in its Discover SVIDs ACK this session: a note only, no VDM is sent
 };
+
+// A hold somebody asked for (a trigger, `pd attach`, a run's step): held, and not the driver's own PDO 1 answer.
+constexpr bool user_hold(const SinkStatus& s) { return s.held && !s.auto_hold; }
+// The driver's own PDO 1 answer, settled at vSafe5V: the K2's own contract, take-over-able by a run or a spoof like the
+// self-hold and pd::reread_own_hold (hardware 2026-11-11: after a twin run `run start: request PDO 1` left held=True).
+constexpr bool auto_own_hold(const SinkStatus& s) {
+    return s.held && s.auto_hold && s.state == SinkState::Ready && s.pos == 1 && s.mv <= kVsafe5vMv && !s.epr_mode;
+}
 
 // What the sink saw of the Xiaomi (SVID 0x2717) chain and what its last Request met, kept for the charger test's "hunt evidence"
 // (docs/CHARGER_TEST_FLOW.md): a refused 6 A request is explained from it, not guessed. Times are the sink's `now` stamps; 0 =
@@ -295,6 +308,8 @@ public:
 
     // Start a trigger. Err::Ok = queued; anything else = nothing was sent.
     Err trigger(Choice c, std::uint32_t now);
+    // trigger() for the driver's own 5 V answer to caps (PDO 1): the same Request, with SinkStatus::auto_hold set when accepted.
+    Err answer_5v(Choice c, std::uint32_t now);
     // Back to 5 V: Request for PDO 1 (EPR_Request in EPR mode); hard reset when impossible.
     void release(std::uint32_t now);
     void hard_reset(std::uint32_t now);  // user asked: send a hard reset and drop everything (always, whatever the next call says)

@@ -1690,16 +1690,16 @@ static void test_identify_refusal_wire_mapping() {
 static void test_pd_attach_wire() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x48, 1, {0x88, 0x13}), r), 1);                       // 5000 mV
-    check_header(r, 0x48, 1, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
+    check_header(r, 0x48, 1, Status::Ok, 21);   // the pd status payload: 18 + trial_line, trial_moves, auto_hold
     CHECK_EQ(f.attach_mv, 5000); CHECK_EQ(f.attach_ma, 0); CHECK_EQ(f.attach_confirm, false); CHECK_EQ(f.attaches, 1);
     run(f, request(0x48, 2, {0x28, 0x23, 0xB8, 0x0B}), r);                        // 9000 mV, 3000 mA, no flags byte
-    check_header(r, 0x48, 2, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
+    check_header(r, 0x48, 2, Status::Ok, 21);   // the pd status payload: 18 + trial_line, trial_moves, auto_hold
     CHECK_EQ(f.attach_mv, 9000); CHECK_EQ(f.attach_ma, 3000); CHECK_EQ(f.attach_confirm, false);
     run(f, request(0x48, 3, {0x28, 0x23, 0xB8, 0x0B, 1}), r);                     // + flags 1: confirm
-    check_header(r, 0x48, 3, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
+    check_header(r, 0x48, 3, Status::Ok, 21);   // the pd status payload: 18 + trial_line, trial_moves, auto_hold
     CHECK_EQ(f.attach_mv, 9000); CHECK_EQ(f.attach_confirm, true); CHECK_EQ(f.attaches, 3);
     run(f, request(0x48, 4, {0x28, 0x23, 0, 0, 0}), r);                           // flags 0: no confirm
-    check_header(r, 0x48, 4, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
+    check_header(r, 0x48, 4, Status::Ok, 21);   // the pd status payload: 18 + trial_line, trial_moves, auto_hold
     CHECK_EQ(f.attach_confirm, false); CHECK_EQ(f.attaches, 4);
     run(f, request(0x48, 5, {0x28, 0x23, 0, 0, 2}), r);                           // unknown flag bits (bit1 is over-load: not for attach)
     check_header(r, 0x48, 5, Status::BadArg, 0);
@@ -1791,11 +1791,11 @@ static void test_active_pd_commands() {
     CHECK_EQ(f.hb_calls, 3);
     // PD_TRIGGER_STATUS
     f.trig_pin = 2;   // an Rd pinned on CC2 (pd-reread --pin): the appended pin byte carries it
-    f.trig_line = 2; f.trig_moves = 1;   // the direct-plug schedule is live on CC2 after one move: the two bytes appended after pin
+    f.trig_line = 2; f.trig_moves = 1; f.trig_auto = 1;   // auto_hold: the driver's own PDO 1 answer; the direct-plug schedule is live on CC2 after one move: the two bytes appended after pin
     run(f, request(0x43, 9, {}), r);
-    check_header(r, 0x43, 9, Status::Ok, 13 + 4 + 1 + 2);   // [..., hard_resets u32], then appended source_hard_resets u32, pin u8, trial_line u8, trial_moves u8 (older clients read the first 13/17/18 bytes)
-    check_bytes(r, kRspHeader, {5, 1, 1, 0, 4, 0x20, 0x4E, 0xB8, 0x0B, 4, 3, 2, 1, 8, 7, 6, 5, 2, 2, 1});
-    f.trig_pin = 0; f.trig_line = 0; f.trig_moves = 0;
+    check_header(r, 0x43, 9, Status::Ok, 13 + 4 + 1 + 2 + 1);   // [..., hard_resets u32], then appended source_hard_resets u32, pin u8, trial_line u8, trial_moves u8, auto_hold u8 (older clients read the first 13/17/18/20 bytes)
+    check_bytes(r, kRspHeader, {5, 1, 1, 0, 4, 0x20, 0x4E, 0xB8, 0x0B, 4, 3, 2, 1, 8, 7, 6, 5, 2, 2, 1, 1});
+    f.trig_pin = 0; f.trig_line = 0; f.trig_moves = 0; f.trig_auto = 0;
     // USB_LINK
     run(f, request(0x46, 11, {}), r);
     check_header(r, 0x46, 11, Status::Ok, 9 + 19);

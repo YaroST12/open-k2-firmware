@@ -2182,7 +2182,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             return;
         }
         gone_ = false;
-        if (safe5(in.vbus_mv) && !in.inline_load && !in.pd.held && !in.pd.epr_mode &&
+        if (safe5(in.vbus_mv) && !in.inline_load && !pd::user_hold(in.pd) && !in.pd.epr_mode &&
             (in.pd.state == pd::SinkState::Idle || in.pd.state == pd::SinkState::Failed ||
              (in.pd.state == pd::SinkState::Ready && in.pd.mv == 5000)) && in.fc_state == fc::State::Idle) {
             if (!stable_ || gap > 250) { stable_ = true; stable_ms_ = in.now; }
@@ -2318,7 +2318,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             // pattern preauth-list-after-reset: the list is cut short, the rest of it follows (preauth_tail).
             if (pd_next && tail_wait) wait_caps = true;
         }
-        const bool released = (!pd_owned_ || (!in.pd.held && !in.pd.epr_mode &&
+        const bool released = (!pd_owned_ || (!pd::user_hold(in.pd) && !in.pd.epr_mode &&   // the driver's own 5 V answer is no hold
                               (in.pd.state == pd::SinkState::Idle ||
                                (in.pd.state == pd::SinkState::Ready && in.pd.mv == 5000) ||
                                in.pd.state == pd::SinkState::Failed))) &&
