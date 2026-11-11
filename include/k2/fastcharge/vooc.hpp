@@ -4,29 +4,52 @@
 // pulses (25-40 us, 0.46 / 0.54 ms apart) per frame; D- carries one bit per pulse, latched just before the
 // next D+ fall (the last bit 300 us after the last pulse). An adapter command is 8 bits + a trailing 0;
 // the phone answers about 9 ms later with a 9 bit word in the clock of the next frame, driving each D- bit
-// about 50 us after the D+ rise of its pulse. The reply words come from the real OnePlus 15 session
-// (tests/fixtures/oneplus15_svooc_init.edges, the accepted attempt at 61.57 s), replayed per command.
+// about 50 us after the D+ rise of its pulse (tests/fixtures/oneplus15_svooc_init.edges, op15_svooc_entry.edges).
+// The charger-test engine only listens: it ends the session on the first ident and answers nothing (operator rule
+// 2026-11-11). tx_reply serves the lab `vooc answer` op alone.
 #pragma once
-#include <array>
 #include <cstdint>
-#include <optional>
 
 namespace k2::vooc {
 
 inline constexpr int kFrameBits = 9;
-inline constexpr std::uint16_t kCableOk = 0x04D;   // reply to the 3rd 0x88 that makes the adapter ramp (0x00D rejects)
-inline constexpr std::uint32_t kFrameGapUs = 700;      // D+ high this long (> the 0.54 ms in-frame gap): the next fall starts a frame
+inline constexpr std::uint32_t kFrameGapUs = 700;      // D+ steady this long (> the 0.54 ms in-frame gap): the next edge starts a frame
 inline constexpr std::uint32_t kLastBitDelayUs = 300;  // last command bit: this long after the last pulse rises
 inline constexpr std::uint32_t kReplyDelayUs = 50;     // phone drives D- this long after the D+ rise
 inline constexpr std::uint32_t kReplyWaitUs = 12000;   // the reply slot starts about 9 ms after the command
-
-enum class Mode : std::uint8_t { Vooc, SuperVooc5A, SuperVooc65A };
+inline constexpr int kAllOnes = 0x1FF;                 // D- floating high under the clock: nobody drives it
 
 constexpr std::uint8_t frame_cmd(std::uint16_t frame) { return static_cast<std::uint8_t>(frame >> 1); }   // bit 0 is the trailing 0
 
+// A frame the engine counts as heard: one came, and it is not all ones (the no-phone run of 2026-11-11 read 0x1FF in the
+// reply slot after a missed ident; an all-ones word carries no adapter bit).
+constexpr bool heard(int frame) { return frame >= 0 && frame != kAllOnes; }
+
+// The VOOC-family identification commands: 0xA8 (captured, shared by VOOC / SVOOC / SVOOC65; reverse-engineered) and
+// 0xAC / 0xA6 (VOOC; inferred, never captured). One ident proves the family, not the variant.
+constexpr bool is_ident(std::uint8_t cmd) { return cmd == 0xA8 || cmd == 0xAC || cmd == 0xA6; }
+
+// Frame start over D+ samples: an edge after D+ held one level for at least `gap` (in the caller's time unit) since
+// listening began. A fall after a long high is pulse 1 of a frame in the idle protocol; a rise after a long low is pulse 1
+// of the first ident after the wake (cap1 2026-11-11: D+ stays low 539 ms after the phone's burst, then the adapter raises
+// D- and D+ 5 us apart). In-frame levels last 25-40 us low and 0.46 / 0.54 ms high, so they never start a frame.
+struct FrameStart {
+    std::uint32_t since = 0;
+    bool level = false, have = false;
+    bool feed(std::uint32_t t, bool clk, std::uint32_t gap = kFrameGapUs) {
+        if (have && clk == level) return false;
+        const bool start = have && t - since >= gap;
+        have = true;
+        level = clk;
+        since = t;
+        return start;
+    }
+};
+
 // Hardware seam of the slave: the firmware implements it over D+ (PA7 or PB0) and D- (PB2 / PB1 drive),
 // the host tests over a fake adapter clock.
-//   wait_frame(t)  D+ has been high for kFrameGapUs, then falls: true on that fall, false after t us
+//   wait_frame(t)  a FrameStart edge (a fall after D+ high, or a rise after D+ low, for kFrameGapUs): true on it,
+//                  false after t us
 //   wait_fall(t) / wait_rise(t)   next D+ edge, false after t us; wait_fall also latches dm_before_fall()
 //   dm_before_fall()  D- level sampled the last time before the fall wait_fall returned on
 //   dm()  D- now; delay_us(n); drive_dm(level) takes D- (phone side); release_dm() lets go of it
@@ -61,58 +84,5 @@ bool tx_reply(Hw& hw, std::uint16_t word) {
     hw.release_dm();
     return ok;
 }
-
-class Responder {
-public:
-    explicit Responder(Mode m) : mode_(m) {}
-    void reset() { seen_ = {}; }
-    Mode mode() const { return mode_; }
-
-    // Reply word for an adapter command, or nullopt when the phone stays silent. The n-th occurrence of a
-    // command gets the n-th word of its list (the last one repeats): the real phone's data words change.
-    std::optional<std::uint16_t> reply(std::uint8_t cmd) {
-        if (mode_ == Mode::Vooc) {
-            if (cmd == 0xA8 || cmd == 0xAC || cmd == 0xA6) return std::uint16_t{0x00D};
-            return std::nullopt;
-        }
-        const Entry* e = find(cmd);
-        if (!e) return std::nullopt;
-        int& n = seen_[cmd & 0x3F];
-        const std::uint16_t w = e->words[n < e->count ? n : e->count - 1];
-        if (n < 255) ++n;
-        return w;
-    }
-    // A command only an SVOOC adapter sends (the ident 0xA8 is shared with VOOC, 0xAC / 0xA6 belong to VOOC alone).
-    static constexpr bool svooc_only(std::uint8_t cmd) {
-        for (const auto& e : kTable) if (e.cmd == cmd) return cmd != 0xA8;
-        return false;
-    }
-    // True when the word is the accepting answer of the cable check.
-    static constexpr bool accepts(std::uint8_t cmd, std::uint16_t word) { return cmd == 0x88 && word == kCableOk; }
-
-private:
-    struct Entry { std::uint8_t cmd, count; std::uint16_t words[4]; };
-    static constexpr std::array<Entry, 13> kTable{{
-        {0xA8, 1, {0x00D}},
-        {0x98, 4, {0x073, 0x023, 0x010, 0x010}},
-        {0x9E, 1, {0x010}},
-        {0x80, 1, {0x010}},
-        {0x94, 1, {0x010}},
-        {0x8A, 3, {0x028, 0x048, 0x052}},
-        {0x8E, 1, {0x010}},
-        {0x9A, 1, {0x030}},
-        {0x82, 3, {0x074, 0x00B, 0x035}},   // then the steady-state poll value
-        {0x84, 2, {0x071, 0x031}},
-        {0x86, 2, {0x06B, 0x03A}},
-        {0x88, 3, {0x05D, 0x042, kCableOk}},
-        {0x8C, 2, {0x046, 0x066}},
-    }};
-    static const Entry* find(std::uint8_t cmd) {
-        for (const auto& e : kTable) if (e.cmd == cmd) return &e;
-        return nullptr;
-    }
-    Mode mode_;
-    std::array<int, 64> seen_{};
-};
 
 }  // namespace k2::vooc

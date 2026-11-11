@@ -2005,31 +2005,61 @@ static void test_svooc_detected_is_a_pass() {
     CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
     CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::Detected));
 }
-// pattern vooc-family-same-wake (VOOC unit heard no frame at all): the SVOOC and SVOOC65 units open with the identical wake train, so
-// a charger that gave the VOOC unit not one frame gives them none either. Their rows are skipped without a session of their own.
-// A VOOC unit that DID hear frames (NoResponse) says nothing about the others: they still run.
-static void test_vooc_with_no_frames_skips_the_svooc_units() {
-    for (const auto why : {fc::Fail::NeedsLoad, fc::Fail::NoResponse}) {
+// pattern vooc-family-same-wake: the VOOC, SVOOC and SVOOC65 units open with the same wake and end on the same ident (the K2
+// answers nothing, so nothing after the ident can tell the variants apart). One session decides all three rows: a detected
+// family passes all three as "detected", a session that heard nothing (needs load) or no ident (no response) skips the other
+// two with the first row's reason. The rows keep their names; only the first unit of the family runs an engine session.
+static void test_vooc_family_shares_one_session() {
+    for (const auto why : {fc::Fail::NeedsLoad, fc::Fail::NoResponse, fc::Fail::Detected}) {
         Fake f; f.caps = {};
         ct::Runner r(f);
         r.start(f.caps, {.selected = ct::bit(A::Vooc) | ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65)}, f.in, true);
         run_until(f, r, [&] { return f.fc_requests >= 1; });
         CHECK_EQ(int(f.protocols[0]), int(fc::Proto::Vooc));
-        f.in.fc_state = fc::State::Failed; f.in.fc_fail = why; f.in.fc_tries = 3; f.in.vbus_mv = 5000;
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = why; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
-        bool svooc_asked = false;
-        for (const auto p : f.protocols) svooc_asked |= p == fc::Proto::SuperVooc || p == fc::Proto::SuperVooc65;
+        CHECK_EQ(f.fc_requests, 1);
+        const bool pass = why == fc::Fail::Detected;
         unsigned vooc_rows = 0, svooc_rows = 0;
         for (const auto& s : r.steps()) {
-            if (s.group == ct::Group::Vooc) { ++vooc_rows; CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(int(s.detail), int(why)); }
+            if (s.group == ct::Group::Vooc) {
+                ++vooc_rows;
+                CHECK_EQ(s.verdict, pass ? ct::Verdict::Pass : ct::Verdict::Fail); CHECK_EQ(int(s.detail), int(why));
+            }
             if (s.group != ct::Group::SuperVooc && s.group != ct::Group::SuperVooc65) continue;
             ++svooc_rows;
-            if (why == fc::Fail::NeedsLoad) {
-                CHECK_EQ(s.verdict, ct::Verdict::Skip); CHECK_EQ(s.reason, ct::Reason::Request); CHECK_EQ(int(s.detail), int(why));
-            } else CHECK_EQ(s.verdict == ct::Verdict::Skip && s.reason == ct::Reason::Request, false);
+            CHECK_EQ(s.verdict, pass ? ct::Verdict::Pass : ct::Verdict::Skip);
+            CHECK_EQ(s.reason, pass ? ct::Reason::None : ct::Reason::Request);
+            CHECK_EQ(int(s.detail), int(why));
+            CHECK_EQ(int(s.tries), 1);
         }
-        CHECK_EQ(vooc_rows > 0 && svooc_rows > 0, true);
-        CHECK_EQ(svooc_asked, why != fc::Fail::NeedsLoad);
+        CHECK_EQ(vooc_rows == 1 && svooc_rows == 2, true);
+    }
+    // Without the VOOC unit the first family unit that runs decides for the other.
+    Fake f; f.caps = {};
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::SuperVooc) | ct::bit(A::SuperVooc65)}, f.in, true);
+    run_until(f, r, [&] { return f.fc_requests >= 1; });
+    f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 2; f.in.vbus_mv = 5000;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(f.fc_requests, 1);
+    for (const auto& s : r.steps()) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(int(s.detail), int(fc::Fail::Detected)); }
+}
+// A VIVO charger that never answered its first row (no frame in the entry window) speaks nothing the other levels could
+// prove: they are skipped with that reason and get no session, as AFC / FCP / SCP / UFCS do.
+static void test_vivo_no_response_skips_the_other_vivo_rows() {
+    Fake f; f.caps = {};
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Vivo)}, f.in, true);
+    run_until(f, r, [&] { return f.fc_requests >= 1; });
+    f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::NoResponse; f.in.vbus_mv = 5000;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(f.fc_requests, 1);
+    CHECK_EQ(r.steps().size(), 4);
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);
+    for (size_t i = 1; i < r.steps().size(); ++i) {
+        CHECK_EQ(r.steps()[i].verdict, ct::Verdict::Skip); CHECK_EQ(r.steps()[i].reason, ct::Reason::Request);
+        CHECK_EQ(int(r.steps()[i].detail), int(fc::Fail::NoResponse));
     }
 }
 // Baseus 35 W: after a PPS 3.3 V request the unloaded output stops at 3.73 V (13 % over). The step is the source's
@@ -6692,7 +6722,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_with_no_frames_skips_the_svooc_units(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

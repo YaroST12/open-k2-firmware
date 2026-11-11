@@ -29,15 +29,12 @@ constexpr int kMinQc3Mv = 3600;
 // A Class A charger asked for more than its 12 V top (QC3 Class B ramp): it climbs to 12 V and then ignores every pulse. Two settled up
 // batches that left VBUS in the 12 V band unmoved end the session as NoBand (what the 12 s band timeout ends it as, ~10 s sooner).
 constexpr int kQc3ClassAMaxMv = 12000, kQc3ClassABandMv = 11400, kQc3DeadBatches = 2;
+constexpr bool vooc_family(Proto p) { return p == Proto::Vooc || p == Proto::SuperVooc || p == Proto::SuperVooc65; }
 constexpr std::uint32_t kVoocRxTimeoutUs = 15000;  // one listen slice per poll: long, a frame that falls between slices is lost
-constexpr std::uint32_t kVoocRampMs = 10000;       // accepted but still 5 V after this long: no voltage
-constexpr int kVoocRaisedMv = 6000;                // VBUS above this after the accept: the adapter ramped
-constexpr int kVoocGuardMv = 11000;                // abort above 110 % of this (12.1 V); the monitor ceiling still wins
-constexpr std::uint32_t kVoocSilenceMs = 3000;     // no valid command for this long: give up
-constexpr std::uint32_t kVoocWakeListenMs = 1500;  // no clock this long after a wake train: rest and try again
-constexpr std::uint32_t kVoocRestMs = 3000;        // lines idle between wake trains
-constexpr int kVoocTries = 3;                      // wake trains before the adapter is called silent ("needs load")
-constexpr int kVoocActiveCmds = 3;                 // commands answered before the link counts as up
+constexpr int kVoocGuardMv = 5000;                 // abort above 110 % of this (5.5 V): the K2 never asks a VOOC adapter for more
+constexpr std::uint32_t kVoocWakeListenMs = 1500;  // no ident this long after a wake (it came 0.54 s after one): rest and try again
+constexpr std::uint32_t kVoocRestMs = 3000;        // lines idle between wakes
+constexpr int kVoocTries = 3;                      // wakes before the adapter is called silent ("needs load")
 constexpr std::uint32_t kUfcsSilenceMs = 500;      // a running session that hears nothing at all for this long is lost
 constexpr int kUfcsTries = 3;                      // asks per phase (Get_Output_Capabilities, Request) before "no response"
 // The opener's retransmit interval, the listen window before "no response" and the opener code are the
@@ -743,19 +740,28 @@ void Engine::vivo_poll(std::uint32_t now) {
     }
 }
 
-// VOOC wake train: with D- floating, 13 x (D+ 0 V 506 us, 3.3 V 510 us, 0 V 1010 us, 3.3 V 1510 us),
-// then 0 V / 3.3 V / 0 V for 500 us each. The adapter answers it with its own D+ clock.
+// VOOC wake, D- released (HiZ) so the adapter's D+/D- short carries it, then D+ / D- listen (inputs only). Odd tries play
+// the phone's burst of the 2026-11-11 capture (reverse-engineered): D+ 40 x (3.3 V 300 us, 0 V 300 us), 24 ms, ending low;
+// the adapter clocked its first ident 539 ms after it. Even tries play the 13-period train of the 2026-11-02 work: 13 x
+// (0 V 506 us, 3.3 V 510 us, 0 V 1010 us, 3.3 V 1510 us), then 0 V / 3.3 V / 0 V for 500 us each; the no-phone run of
+// 2026-11-11 read a frame 0.54 s after every one of those too. D- is never driven.
 void Engine::vooc_wake() {
     ++vooc_tries_;
     env_.set_dm(Drive::HiZ);
-    std::array<Step, 13 * 4 + 3> w{};
-    std::size_t n = 0;
-    for (int i = 0; i < 13; ++i) {
-        w[n++] = {Drive::V0, Drive::HiZ, 506}; w[n++] = {Drive::V3p3, Drive::HiZ, 510};
-        w[n++] = {Drive::V0, Drive::HiZ, 1010}; w[n++] = {Drive::V3p3, Drive::HiZ, 1510};
+    if (vooc_tries_ % 2 == 1) {
+        std::array<Step, kVoocBurstSteps> w{};
+        for (std::size_t i = 0; i < w.size(); ++i) w[i] = {i % 2 == 0 ? Drive::V3p3 : Drive::V0, Drive::HiZ, 300};
+        env_.play(w);
+    } else {
+        std::array<Step, kVoocTrainSteps> w{};
+        std::size_t n = 0;
+        for (int i = 0; i < 13; ++i) {
+            w[n++] = {Drive::V0, Drive::HiZ, 506}; w[n++] = {Drive::V3p3, Drive::HiZ, 510};
+            w[n++] = {Drive::V0, Drive::HiZ, 1010}; w[n++] = {Drive::V3p3, Drive::HiZ, 1510};
+        }
+        w[n++] = {Drive::V0, Drive::HiZ, 500}; w[n++] = {Drive::V3p3, Drive::HiZ, 500}; w[n++] = {Drive::V0, Drive::HiZ, 500};
+        env_.play(w);
     }
-    w[n++] = {Drive::V0, Drive::HiZ, 500}; w[n++] = {Drive::V3p3, Drive::HiZ, 500}; w[n++] = {Drive::V0, Drive::HiZ, 500};
-    env_.play(w);
     env_.set_dp(Drive::Listen);
     env_.set_dm(Drive::Sniff);
     go(Phase::VoocListen, 0);
@@ -777,13 +783,9 @@ void Engine::begin_protocol() {
     } else if (p == Proto::Vivo) {  // no D+/D- handshake: vivo_open() claims the UART with the lines high-Z
         ux_n_ = 0;
         go(Phase::VivoOpen, 0);
-    } else {                        // VOOC / SVOOC
-        vooc_ = vooc::Responder(p == Proto::Vooc ? vooc::Mode::Vooc
-                                : p == Proto::SuperVooc ? vooc::Mode::SuperVooc5A : vooc::Mode::SuperVooc65A);
-        vooc_cmds_ = vooc_frames_ = vooc_svooc_ = 0;
-        vooc_ident_ = false;
-        vooc_accepted_ = false;
-        applied_mv_ = kVoocGuardMv;   // the adapter may ramp on its own: the guard is 12 V, not the 5 V request
+    } else {                        // VOOC / SVOOC / SVOOC65: one detection, the same for all three
+        vooc_frames_ = 0;
+        applied_mv_ = prev_mv_ = kVoocGuardMv;   // VBUS above 5.5 V at any point ends the session
         vooc_tries_ = 0;
         vooc_wake();
         go(Phase::VoocListen, 0);
@@ -796,7 +798,8 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     const Fail f = validate(p, target_mv, confirmed);
     if (f != Fail::None) return f;
     if (allow_inline && !confirmed) return Fail::NeedConfirm;   // the override drives D+/D- with a sink possibly attached: both flags
-    if (!allow_inline && env_.inline_reason() != link::Reason::None) return Fail::Inline;
+    // VOOC detection never runs inline, override or not: the wake and the listen would sit on a phone's own VOOC lines.
+    if ((!allow_inline || vooc_family(p)) && env_.inline_reason() != link::Reason::None) return Fail::Inline;
     const std::uint32_t now = env_.now_ms();
     proto_ = p;
     target_mv_ = target_mv;
@@ -843,7 +846,7 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
 
 Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
     if (state_ != State::Negotiating && state_ != State::Active) return Fail::Unsupported;
-    if (phase_ == Phase::VoocListen) return Fail::Unsupported;   // the VOOC output never leaves 5 V
+    if (vooc_family(proto_)) return Fail::Unsupported;   // detection only: the VOOC output never leaves 5 V
     if (phase_ == Phase::RedetectHold || phase_ == Phase::HsDischarge || phase_ == Phase::HsFloatDp || phase_ == Phase::HsBias ||
         phase_ == Phase::HsSample || phase_ == Phase::HsWaitDrop || phase_ == Phase::UfcsOpen ||
         phase_ == Phase::UfcsPing || phase_ == Phase::UfcsCaps || phase_ == Phase::UfcsRequest ||
@@ -1031,6 +1034,7 @@ void Engine::poll_step() {
     // the charger moved on its own, which the 110 % guard alone would let through.
     if (phase_ == Phase::Qc3Loop && qc3_learned_ && vbus > qc::open_loop_limit_mv(entry_mv_, target_mv_, qc3_step_mv_))
         return abort(Fail::Overvoltage);
+    if (vooc_family(proto_) && env_.inline_reason() != link::Reason::None) return abort(Fail::Inline);
 
     switch (phase_) {
     case Phase::RedetectHold:
@@ -1091,40 +1095,18 @@ void Engine::poll_step() {
         if (state_ == State::Failed) return;
         break;
     case Phase::VoocListen: {
+        // Listen only. The first ident ends the session in this poll (abort releases both lines: 0 V for 500 ms, then
+        // passive idle); every other frame is counted and left unanswered. Nothing here drives D-.
         const int f = env_.vooc_rx(kVoocRxTimeoutUs);
-        if (f >= 0) {
+        if (vooc::heard(f)) {
             ++vooc_frames_;
-            const std::uint8_t cmd = vooc::frame_cmd(static_cast<std::uint16_t>(f));
-            const auto r = vooc_.reply(cmd);
-            if (r && env_.vooc_tx(*r)) {
-                band_ms_ = now;
-                ++vooc_cmds_;
-                if (cmd == 0xA8) vooc_ident_ = true;
-                else if (vooc_.mode() != vooc::Mode::Vooc && vooc::Responder::svooc_only(cmd)) ++vooc_svooc_;
-                if (vooc_.mode() == vooc::Mode::Vooc) {
-                    state_ = State::Active;                       // 4 A VOOC: the ident answer is the handshake
-                } else if (!vooc_accepted_ && vooc::Responder::accepts(cmd, *r)) {
-                    vooc_accepted_ = true;
-                    vooc_accept_ms_ = now;
-                }
-            }
+            if (vooc::is_ident(vooc::frame_cmd(static_cast<std::uint16_t>(f)))) return abort(Fail::Detected);
         }
-        if (vooc_accepted_ && vooc_.mode() != vooc::Mode::Vooc) {
-            if (state_ != State::Active && vbus >= kVoocRaisedMv) state_ = State::Active;
-            else if (state_ != State::Active && now - vooc_accept_ms_ >= kVoocRampMs) return abort(Fail::NoVoltage);
-        }
-        if (vooc_cmds_ == 0 && now - band_ms_ >= kVoocWakeListenMs) {
+        if (now - band_ms_ >= kVoocWakeListenMs) {
             if (vooc_tries_ >= kVoocTries) return abort(vooc_frames_ > 0 ? Fail::NoResponse : Fail::NeedsLoad);
-            env_.set_dp(Drive::HiZ);        // rest: both lines idle, then another wake train
+            env_.set_dp(Drive::HiZ);        // rest: both lines idle, then another wake
             env_.set_dm(Drive::HiZ);
             return go(Phase::VoocRest, kVoocRestMs);
-        }
-        if (now - band_ms_ >= kVoocSilenceMs) {
-            // Silent after it talked: the source is lost only when VBUS went with it; at 5 V it just stopped answering.
-            if (state_ == State::Active) return abort(vbus < link::kVbusPresentMv ? Fail::SourceLost : Fail::NoResponse);
-            if (vooc_accepted_) return abort(Fail::NoVoltage);
-            if (vooc_ident_ && vooc_svooc_ > 0) return abort(Fail::Detected);   // decoded ident + an SVOOC-only command
-            return abort(vooc_frames_ > 0 ? Fail::NoResponse : Fail::NeedsLoad);
         }
         return;
     }

@@ -1513,6 +1513,22 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
             s.measured_mv = rw->sum.peak_mv;
         }
     env_.record(s);
+    // pattern vooc-family-same-wake: VOOC, SVOOC and SVOOC65 open with the same wake and the K2 stops at the shared ident
+    // (it answers nothing), so the first family session that ended on the ident ("detected"), on nothing heard ("needs
+    // load") or on frames without an ident ("no response") decides the family's other rows: a pass for "detected", a skip
+    // with that reason otherwise. They keep their names and run no session of their own.
+    const auto family = [](Group g) { return g >= Group::Vooc && g <= Group::SuperVooc65; };
+    const auto why = static_cast<fc::Fail>(detail);
+    if (family(s.group) && (r == Reason::Request || (v == Verdict::Pass && r == Reason::None)) &&
+        (why == fc::Fail::Detected || why == fc::Fail::NeedsLoad || why == fc::Fail::NoResponse))
+        for (size_t n = 0; n < count_; ++n) {
+            auto& o = steps_[n];
+            if (o.verdict != Verdict::Pending || !family(o.group) || o.group == s.group) continue;
+            o.verdict = v == Verdict::Pass ? Verdict::Pass : Verdict::Skip;
+            o.reason = v == Verdict::Pass ? Reason::None : Reason::Request;
+            o.detail = detail; o.tries = s.tries; o.measured_mv = s.measured_mv;
+            env_.record(o);
+        }
     if (v == Verdict::Pass) replan_fc(in);
     // pattern qc3-20v-without-qc2-20v: QC3 Class B just reached 20 V, so an earlier "Class A only" QC2 Class B 20 V row was a real miss.
     if (v == Verdict::Pass && s.algorithm == Algorithm::Qc3ClassB && s.mv == 20000)
@@ -2563,17 +2579,15 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         finish(in, Verdict::Fail, Reason::Request, group == Group::Pd ? static_cast<uint8_t>(in.pd.result) : static_cast<uint8_t>(in.fc_fail));
         // AFC / FCP / SCP the charger never answered (pattern qc-only-unacked-rise): the protocol is not spoken, so none of its
         // other levels can prove anything and none of them needs an engine session of its own.
-        // A UFCS source that never answered the opening exchange is the same case (no response to its listen window).
+        // A UFCS source that never answered the opening exchange is the same case (no response to its listen window), and so is a
+        // VIVO charger that sent no frame in its entry window (the engine's NoResponse; a heard charger ends otherwise).
+        // The VOOC family shares its first session's result in finish().
         const bool never_answered = ((group == Group::Afc || group == Group::Fcp || group == Group::Scp) && in.fc_fail == fc::Fail::Unsupported) ||
-            (group == Group::Ufcs && in.fc_fail == fc::Fail::NoResponse);
-        // pattern vooc-family-same-wake: a VOOC unit that heard no frame at all (the engine's NeedsLoad after every wake train) leaves
-        // nothing for the SVOOC and SVOOC65 units to try, their wake train is the same: both skip, with the VOOC row's reason.
-        const bool no_wake_frames = group == Group::Vooc && in.fc_fail == fc::Fail::NeedsLoad;
-        if (never_answered || no_wake_frames)
+            ((group == Group::Ufcs || group == Group::Vivo) && in.fc_fail == fc::Fail::NoResponse);
+        if (never_answered)
             for (size_t n = 0; n < count_; ++n) {
                 auto& o = steps_[n];
-                if (o.verdict != Verdict::Pending) continue;
-                if (!(never_answered && o.group == group) && !(no_wake_frames && (o.group == Group::SuperVooc || o.group == Group::SuperVooc65))) continue;
+                if (o.verdict != Verdict::Pending || o.group != group) continue;
                 o.verdict = Verdict::Skip; o.reason = Reason::Request; o.detail = static_cast<uint8_t>(in.fc_fail); env_.record(o);
             }
         return;

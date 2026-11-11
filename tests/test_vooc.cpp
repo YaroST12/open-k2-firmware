@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// OPPO VOOC / SuperVOOC phone-side slave, pure: the reply table and the bit-level slave driven by a
-// fake adapter clock that follows the framing measured on the OnePlus 15 + SUPERVOOC 120 W capture.
+// OPPO VOOC / SuperVOOC phone-side slave, pure: the frame-start detector, the ident test and the bit-level slave driven
+// by a fake adapter clock that follows the framing measured on the OnePlus 15 + SUPERVOOC 120 W captures.
 #include <vector>
 
 #include "k2/fastcharge/vooc.hpp"
 #include "test_util.h"
 
 using namespace k2;
-using vooc::Mode;
 
 #define CHECK(c) CHECK_EQ(!!(c), 1)
 
@@ -52,7 +51,7 @@ struct FakeAdapter {
                 const auto& b = cmd_bits[pulses[i].frame];
                 // inside a command frame the bit of pulse k appears 28 us after its fall and stays through the gap
                 if (b.empty()) return 0;
-                if (t - pulses[i].fall > 3000) return 0;     // well after the frame: back to the idle level
+                if (t - pulses[i].rise > 3000) return 0;     // well after the frame: back to the idle level
                 return b[pulses[i].k];
             }
         }
@@ -65,8 +64,17 @@ struct FakeAdapter {
     }
     // --- vooc::Hw
     bool wait_frame(std::uint32_t timeout) {
-        for (std::size_t i = 0; i < pulses.size(); ++i)
-            if (pulses[i].k == 0 && pulses[i].fall >= now) return goto_fall(i, timeout);
+        for (std::size_t i = 0; i < pulses.size(); ++i) {
+            if (pulses[i].k != 0) continue;
+            if (pulses[i].fall >= now) return goto_fall(i, timeout);
+            // D+ held low since long before the frame (the first ident after the wake burst): it starts at the rise
+            if (pulses[i].rise >= now && now - pulses[i].fall >= vooc::kFrameGapUs) {
+                if (pulses[i].rise - now > timeout) { now += timeout; return false; }
+                now = pulses[i].rise;
+                cur = static_cast<int>(i);
+                return true;
+            }
+        }
         now += timeout;
         return false;
     }
@@ -106,8 +114,9 @@ struct FakeAdapter {
     }
 };
 
+// The bit-level slave against the captured session: every command decodes, and a reply word driven by tx_reply (the lab
+// `vooc answer` op; the engine itself answers nothing) is the word the adapter latches.
 static void test_golden_replay_through_the_slave() {
-    vooc::Responder r(Mode::SuperVooc5A);
     FakeAdapter a;
     std::int64_t t = 1000;
     int n = 0;
@@ -117,16 +126,59 @@ static void test_golden_replay_through_the_slave() {
         a.now = t - 500;                // the slave starts listening during the idle gap
         const int f = vooc::rx_command(a, 5000);
         CHECK_EQ(f, g.cmd << 1);
-        const auto w = r.reply(vooc::frame_cmd(static_cast<std::uint16_t>(f)));
-        CHECK(w.has_value());
-        CHECK(vooc::tx_reply(a, *w));
+        CHECK(vooc::tx_reply(a, g.reply));
         CHECK_EQ(a.latch_reply(2 * n + 1), g.reply);
-        CHECK_EQ(*w, g.reply);
         a.drive.push_back({a.now, -1});
         t += 30000; ++n;
     }
-    CHECK_EQ(vooc::Responder::accepts(0x88, 0x04D), true);
-    CHECK_EQ(vooc::Responder::accepts(0x88, 0x00D), false);
+}
+
+// cap1 (2026-11-11): after the phone's wake burst D+ stays low for 539 ms, and the adapter's first ident starts by raising
+// D- then D+: pulse 1 is only a rise. The old frame start (D+ high 0.7 ms, then a fall) missed it and caught the reply slot.
+static void test_rx_frame_starting_with_d_plus_held_low() {
+    FakeAdapter a;
+    a.add_frame(600000, 0xA8);
+    a.pulses[0].fall = 61000;           // D+ low since the end of the burst
+    a.now = 100000;                     // listening during the low
+    CHECK_EQ(vooc::rx_command(a, 600000), 0xA8 << 1);
+}
+
+// The frame-start detector the firmware runs over D+ samples: either edge after D+ held one level for kFrameGapUs.
+static void test_frame_start_detector() {
+    using vooc::FrameStart;
+    {   // idle high, then pulse 1 falls
+        FrameStart s;
+        CHECK(!s.feed(0, true)); CHECK(!s.feed(699, true)); CHECK(s.feed(800, false));
+    }
+    {   // held low for 539 ms, then pulse 1 rises
+        FrameStart s;
+        CHECK(!s.feed(0, false)); CHECK(!s.feed(539000, false)); CHECK(s.feed(539460, true));
+    }
+    {   // inside a frame: 30 us lows, 460 / 540 us highs: never a start
+        FrameStart s;
+        bool any = s.feed(0, false);
+        std::uint32_t t = 0;
+        for (int k = 0; k < 9; ++k) {
+            any |= s.feed(t += 30, true);
+            any |= s.feed(t += (k % 2 ? 540 : 460), false);
+        }
+        CHECK(!any);
+    }
+    {   // a level seen for less than the gap since listening began does not count, whatever came before
+        FrameStart s;
+        CHECK(!s.feed(0, false)); CHECK(!s.feed(500, true));
+    }
+}
+
+// What the engine counts: an all-ones frame is D- floating high under an adapter clock nobody answers, i.e. nothing heard;
+// the idents are 0xA8 (shared by VOOC / SVOOC / SVOOC65) and 0xAC / 0xA6 (VOOC).
+static void test_heard_and_ident() {
+    CHECK(!vooc::heard(-1));
+    CHECK(!vooc::heard(0x1FF));
+    CHECK(vooc::heard(0xA8 << 1));
+    CHECK(vooc::heard(0x000));
+    CHECK(vooc::is_ident(0xA8) && vooc::is_ident(0xAC) && vooc::is_ident(0xA6));
+    CHECK(!vooc::is_ident(0x98) && !vooc::is_ident(0xFF) && !vooc::is_ident(0x82));
 }
 
 static void test_rx_samples_before_the_next_fall() {
@@ -170,29 +222,6 @@ static void test_no_reply_slot_releases_d_minus() {
     CHECK_EQ(a.drive.back().second, -1);
 }
 
-static void test_table_per_command_and_accept_rule() {
-    vooc::Responder r(Mode::SuperVooc65A);
-    CHECK_EQ(r.reply(0x88).value(), 0x05D);
-    CHECK_EQ(r.reply(0x88).value(), 0x042);
-    CHECK_EQ(r.reply(0x88).value(), 0x04D);   // the third cable check is the accepted one
-    CHECK_EQ(r.reply(0x88).value(), 0x04D);
-    CHECK_EQ(r.reply(0x82).value(), 0x074);
-    CHECK_EQ(r.reply(0x82).value(), 0x00B);
-    CHECK_EQ(r.reply(0x82).value(), 0x035);
-    CHECK_EQ(r.reply(0x82).value(), 0x035);   // steady-state poll
-    CHECK(!r.reply(0xAC).has_value());
-    CHECK(!r.reply(0x00).has_value());
-    r.reset();
-    CHECK_EQ(r.reply(0x88).value(), 0x05D);
-}
-
-static void test_vooc_4a_ident_only() {
-    vooc::Responder r(Mode::Vooc);
-    CHECK_EQ(r.reply(0xA8).value(), 0x00D);
-    CHECK_EQ(r.reply(0xAC).value(), 0x00D);
-    CHECK(!r.reply(0x98).has_value());
-}
-
 int main() {
     test_golden_replay_through_the_slave();
     test_rx_samples_before_the_next_fall();
@@ -200,7 +229,8 @@ int main() {
     test_reply_bits_follow_the_rise_by_50us();
     test_clock_stopping_mid_reply_releases_d_minus();
     test_no_reply_slot_releases_d_minus();
-    test_table_per_command_and_accept_rule();
-    test_vooc_4a_ident_only();
+    test_rx_frame_starting_with_d_plus_held_low();
+    test_frame_start_detector();
+    test_heard_and_ident();
     return test_report("test_vooc");
 }

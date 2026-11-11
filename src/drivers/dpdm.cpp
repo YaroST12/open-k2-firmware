@@ -167,20 +167,15 @@ inline bool clk() { return g_clk_pb0 ? p::sw_pb0.read() : p::sw_pa7.read(); }
 // The vooc::Hw seam over the real pins. Every wait is bounded by the DWT cycle counter.
 struct SlaveHw {
     bool last_dm = false;
+    // vooc::FrameStart over the clock pin: a fall after a long high, or a rise after a long low (the first ident after
+    // the wake starts with D+ held low). Only cycle differences are compared, so the counter wrap does not matter.
     bool wait_frame(std::uint32_t timeout_us) {
         const std::uint32_t t0 = cyc(), limit = timeout_us * kCyclesPerUs, quiet = vooc::kFrameGapUs * kCyclesPerUs;
-        std::uint32_t high_since = 0;
-        bool high = false, armed = false;
+        vooc::FrameStart s;
         for (;;) {
             const std::uint32_t t = cyc();
             if (t - t0 >= limit) return false;
-            if (clk()) {
-                if (!high) { high = true; high_since = t; }
-                else if (t - high_since >= quiet) armed = true;
-            } else {
-                if (armed) return true;
-                high = armed = false;
-            }
+            if (s.feed(t - t0, clk(), quiet)) return true;
         }
     }
     bool wait_fall(std::uint32_t timeout_us) {

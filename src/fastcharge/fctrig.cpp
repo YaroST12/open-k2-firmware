@@ -268,11 +268,6 @@ struct HwEnv final : fc::Env {
         }
         return f;
     }
-    bool vooc_tx(std::uint16_t word) override {
-        const bool ok = dpdm::tx_reply(word);
-        K2LOG("[VOOC] reply 0x%03X %s\n", static_cast<unsigned>(word), ok ? "sent" : "no clock");
-        return ok;
-    }
     bool ufcs_open() override {
         ufcs::Handshake hs;
         return ufcs_session_open(hs);

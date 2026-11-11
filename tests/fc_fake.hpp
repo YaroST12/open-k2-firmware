@@ -139,8 +139,10 @@ struct FakeCharger : k2::fc::Env {
         apply_levels();
         qc_only_rise();
     }
+    std::vector<Drive> dm_log;   // every set_dm, in order
     void set_dm(Drive d) override {
         set_calls++;
+        dm_log.push_back(d);
         dm = d;
         if (d == Drive::V0 && dp == Drive::V0) { open = false; continuous = false; vbus_pending = rest_mv; apply_at = now + 100; }
         apply_levels();
@@ -154,9 +156,13 @@ struct FakeCharger : k2::fc::Env {
     void log_qc3_coarse(int step) override { ++coarse_logged; coarse_step = step; }
     void log_afc(int n, std::uint8_t tx, int rx, int vbus_mv) override { afc_log.push_back({n, tx, rx, vbus_mv}); }
     std::size_t played_steps = 0; std::uint32_t played_us = 0;
-    int wakes = 0, vooc_wake_needed = 1;   // the adapter clocks only from the Nth VOOC wake train on
+    int wakes = 0, vooc_wake_needed = 1;   // the adapter clocks only from the Nth VOOC wake (train or burst) on
+    std::vector<std::vector<k2::fc::Step>> vooc_wakes;   // every VOOC wake list played, in order
     void play(std::span<const k2::fc::Step> steps) override {
-        if (steps.size() == 55) ++wakes;
+        if (steps.size() == k2::fc::kVoocTrainSteps || steps.size() == k2::fc::kVoocBurstSteps) {
+            ++wakes;
+            vooc_wakes.emplace_back(steps.begin(), steps.end());
+        }
         for (const auto& s : steps) {
             ++played_steps; played_us += s.us;
             if (continuous && open && !stuck_at_12v) {
@@ -224,19 +230,17 @@ struct FakeCharger : k2::fc::Env {
     }
     bool reset_busy() override { return now < reset_until; }   // the 500 ms hold of dpdm::start_reset
 
-    // VOOC: the charger sends the queued command frames one per vooc_rx call; replies are recorded.
+    // VOOC: the charger sends the queued command frames one per vooc_rx call (vooc_raw: whole 9-bit frames, first).
     std::vector<std::uint8_t> vooc_cmds;
-    std::size_t vooc_i = 0;
-    std::vector<std::uint16_t> vooc_replies;
+    std::vector<int> vooc_raw;
+    std::size_t vooc_i = 0, vooc_raw_i = 0;
+    std::uint32_t vooc_last_rx_ms = 0;   // fake clock of the last frame handed out
     int vooc_rx(std::uint32_t) override {
-        if (wakes < vooc_wake_needed || vooc_i >= vooc_cmds.size()) return -1;
+        if (wakes < vooc_wake_needed) return -1;
+        if (vooc_raw_i < vooc_raw.size()) { vooc_last_rx_ms = now; return vooc_raw[vooc_raw_i++]; }
+        if (vooc_i >= vooc_cmds.size()) return -1;
+        vooc_last_rx_ms = now;
         return vooc_cmds[vooc_i++] << 1;   // adapter frame: 8 command bits + a trailing 0
-    }
-    int vooc_raise_mv = 0;          // the adapter ramps to this once it hears the accepting 0x04D word
-    bool vooc_tx(std::uint16_t word) override {
-        vooc_replies.push_back(word);
-        if (word == 0x04D && vooc_raise_mv) { vbus_pending = vooc_raise_mv; apply_at = now + 100; }
-        return true;
     }
 
     // Advance the clock one millisecond at a time, polling the engine after each.

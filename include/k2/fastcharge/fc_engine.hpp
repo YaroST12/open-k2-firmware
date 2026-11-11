@@ -35,10 +35,15 @@ enum class Fail : std::uint8_t {
     None, NeedConfirm, OverLimit, NoMonitor, Busy, Unsupported,
     NoHandshake, NoResponse, NoBand, Overvoltage, SourceLost, Aborted,
     Inline,     // a PD contract or a load is attached behind the K2 and nothing overrode the guard
-    NeedsLoad,  // VOOC: no clock after the wake train; the adapter wakes on a PA8 PWM load burst, which we do not drive
-    NoVoltage,  // SVOOC: the adapter accepted the cable check (0x04D) but VBUS stayed at 5 V: handshake ok, no voltage
-    Detected,   // SVOOC: the adapter clocked and answered the ident plus an SVOOC-only command; not a failure, the row passes as "detected"
+    NeedsLoad,  // VOOC: no frame heard after any wake (an all-ones frame counts as none)
+    NoVoltage,  // SVOOC "handshake ok": no longer produced (the K2 answers no VOOC command); kept for stored results
+    Detected,   // SCP: every identifying read answered; VOOC family: the adapter clocked its ident and nothing was answered.
+                // Not a failure: the row passes as "detected"
 };
+
+// VOOC wake lists (the fake chargers count wakes by these lengths): the phone's burst of the 2026-11-11 capture, D+ 40 x
+// (3.3 V 300 us, 0 V 300 us); and the 13-period train of the 2026-11-02 work.
+inline constexpr std::size_t kVoocBurstSteps = 80, kVoocTrainSteps = 13 * 4 + 3;
 
 const char* name(Proto p);
 const char* name(State s);
@@ -70,9 +75,8 @@ struct Env {
     virtual void log_qc3_coarse(int /*step_mv*/) {}   // a QC3+ session whose pulses move VBUS by QC3-sized steps (ends as no response)
     virtual void log_write(std::uint8_t /*reg*/, std::uint8_t /*value*/, bool /*acked*/) {}   // each register write and whether it was ACKed
     // VOOC: one adapter command frame (9 bits: 8 command bits + a trailing 0, D+ clocked) or -1 when none
-    // arrived within the timeout; and the 9 bit reply word sent back in the clock of the next frame.
+    // arrived within the timeout. There is no transmit: the engine answers nothing (operator rule 2026-11-11).
     virtual int vooc_rx(std::uint32_t /*timeout_us*/) { return -1; }
-    virtual bool vooc_tx(std::uint16_t /*frame*/) { return false; }
     // UFCS over USART2: ufcs_open() runs the D+/D- handshake and claims the UART (false when the
     // handshake got no answer); ufcs_send() writes one frame; ufcs_recv() moves the bytes received so
     // far into the buffer without blocking; ufcs_close() releases the UART. reset_bus() also closes it.
@@ -160,7 +164,7 @@ public:
     }
     Proto proto() const { return proto_; }
     Fail fail() const { return fail_; }
-    int vooc_tries() const { return vooc_tries_; }   // VOOC/SVOOC wake trains sent (1..3); 0 for other protocols
+    int vooc_tries() const { return vooc_tries_; }   // VOOC/SVOOC wakes sent (1..3); 0 for other protocols
     int target_mv() const { return target_mv_; }
     int reached_mv() const { return reached_mv_; }   // VBUS at the last poll while running
     int adapter_mv() const { return adapter_mv_; }   // SCP: voltage the adapter reports (0 = unknown)
@@ -244,10 +248,7 @@ private:
     bool unacked_handshake() const { return !acked_ && (proto_ == Proto::Afc || proto_ == Proto::Fcp || proto_ == Proto::Scp); }
     int scp_ma_ = accp::kScpInitMa;
     int ufcs_ma_ = 0;   // UFCS Request current, 0 = ufcs::kNoCableMa
-    int keep_i_ = 0, vooc_cmds_ = 0, vooc_tries_ = 0, vooc_frames_ = 0, vooc_svooc_ = 0;
-    bool vooc_ident_ = false;                    // 0xA8 was answered
-    bool vooc_accepted_ = false;                 // the adapter heard 0x04D to its cable check
-    std::uint32_t vooc_accept_ms_ = 0;
+    int keep_i_ = 0, vooc_tries_ = 0, vooc_frames_ = 0;   // VOOC: wakes sent, frames heard (not all ones)
     std::array<std::uint8_t, ufcs::kFrameMax> ux_{};          // UFCS receive accumulator
     std::uint8_t ux_n_ = 0, ux_drop_ = 0;        // bytes held / bytes to drop (both below ufcs::kFrameMax)
     Caps caps_{};                                // what the adapter / source said about itself (see caps())
@@ -279,7 +280,6 @@ private:
     bool uecho_ = false, uheard_ = false;        // UFCS: our own last frame came back verbatim / a frame addressed to the sink arrived
     std::uint32_t ulast_rx_ = 0;
     void vooc_wake();
-    vooc::Responder vooc_{vooc::Mode::Vooc};
     std::array<std::uint8_t, 4> keep_raw_{};
     int target_mv_ = 0, applied_mv_ = 5000, prev_mv_ = 5000, entry_mv_ = 0, reached_mv_ = 0, dm0_mv_ = 0, qc3_pending_mv_ = 0, qc3_seen_mv_ = 0, qc3_step_mv_ = 0, qc3_base_mv_ = 0, qc3_cmd_n_ = 0;
     bool qc3_learned_ = false;

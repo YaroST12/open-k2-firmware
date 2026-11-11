@@ -983,38 +983,130 @@ static void scp_clamped_to_ceiling() {
     CHECK(e.target_mv() == 8000);
 }
 
-static const std::vector<std::uint8_t> kInit = {0xA8, 0x98, 0x98, 0x9E, 0x80, 0x94, 0x98, 0x8A, 0x98, 0x8E, 0x9A, 0x82, 0x82,
-                                                0x84, 0x84, 0x86, 0x86, 0x88, 0x88, 0x8A, 0x8A, 0x8C, 0x8C, 0x88};
-
-static void vooc_listen() {
-    FakeCharger c;
-    Engine e(c);
-    CHECK(e.start(Proto::Vooc, 9000, false) == Fail::None);   // the request is forced to 5 V
-    CHECK(e.target_mv() == 5000);
-    CHECK(c.dp == Drive::Listen);
-    // the wake-up runs before the listen: 13 x 3536 us + 3 x 500 us on D+
-    CHECK(c.played_steps == 55 && c.played_us == 13 * 3536 + 1500);
-    c.vooc_cmds = {0xA8, 0xAC, 0xA6, 0x98};
-    c.run(e, 50);
-    CHECK(e.state() == State::Active);   // 4 A VOOC: the ident answer is the whole handshake
-    CHECK(c.vooc_replies.size() == 3);   // 0x98 is not in the VOOC table
-    CHECK(c.vooc_replies[0] == 0x00D);
-    CHECK(c.vbus_mv() == 5000 && c.resets == 0);
-    c.run(e, 4000);   // the charger goes quiet with VBUS still at 5 V: it stopped talking, the source is not lost
-    CHECK(e.state() == State::Failed && e.fail() == Fail::NoResponse);
-    CHECK(c.resets == 1);
+// D- is never driven by a VOOC session: only released (HiZ during the wake, Sniff while listening). The end-of-session
+// reset goes through reset_bus(), not set_dm.
+static bool dm_never_driven(const FakeCharger& c) {
+    for (const auto d : c.dm_log) if (d != Drive::HiZ && d != Drive::Sniff) return false;
+    return true;
 }
 
-static void vooc_quiet_with_vbus_gone_is_source_lost() {
+// Detection: the first ident the adapter clocks ends the session as "detected" in the same poll, with nothing answered
+// (operator rule 2026-11-11: no reply that could make a SuperVOOC adapter switch to its high-current output). One ident
+// covers the family, so the three protocols behave the same.
+static void vooc_ident_is_detected_and_nothing_is_answered() {
+    for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
+        for (std::uint8_t ident : {0xA8, 0xAC, 0xA6}) {
+            FakeCharger c;
+            Engine e(c);
+            CHECK(e.start(p, 9000, false) == Fail::None);   // the request is forced to 5 V
+            CHECK(e.target_mv() == 5000);
+            CHECK(c.dp == Drive::Listen && c.dm == Drive::Sniff);
+            c.vooc_cmds = {ident, 0x98, 0x98, 0x82};
+            while (c.vooc_i == 0 && c.now < 20000) c.run(e, 1);
+            // the poll that decoded the ident already ended the session and released the lines
+            CHECK(e.state() == State::Failed && e.fail() == Fail::Detected);
+            CHECK(c.resets == 1);
+            CHECK(c.now == c.vooc_last_rx_ms);
+            c.run(e, 5000);
+            CHECK(c.vooc_i == 1);                 // nothing after the ident was even read
+            CHECK(dm_never_driven(c));
+            CHECK(c.vbus_mv() == 5000);
+        }
+    }
+}
+
+// The wake: try 1 is the phone's burst from the 2026-11-11 capture (D+ 40 x 300 us high / 300 us low, D- released so the
+// adapter's D+/D- short carries it, ending low), try 2 the 13-period train of the 2026-11-02 work, try 3 the burst again.
+static void vooc_wake_forms_alternate() {
     FakeCharger c;
     Engine e(c);
     CHECK(e.start(Proto::Vooc, 5000, false) == Fail::None);
-    c.vooc_cmds = {0xA8, 0xAC};
-    c.run(e, 50);
-    CHECK(e.state() == State::Active);
-    c.vbus = c.vbus_pending = 0;
-    c.run(e, 4000);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::SourceLost);
+    c.run(e, 30000);
+    CHECK(c.vooc_wakes.size() == 3);
+    if (c.vooc_wakes.size() != 3) return;
+    const auto& burst = c.vooc_wakes[0];
+    CHECK(burst.size() == kVoocBurstSteps);
+    std::uint32_t us = 0;
+    for (std::size_t i = 0; i < burst.size(); ++i) {
+        CHECK(burst[i].dm == Drive::HiZ && burst[i].us == 300);
+        CHECK(burst[i].dp == (i % 2 == 0 ? Drive::V3p3 : Drive::V0));
+        us += burst[i].us;
+    }
+    CHECK(us == 24000 && burst.back().dp == Drive::V0);
+    const auto& train = c.vooc_wakes[1];
+    CHECK(train.size() == kVoocTrainSteps);
+    std::uint32_t tus = 0;
+    for (const auto& s : train) { tus += s.us; CHECK(s.dm == Drive::HiZ); }
+    CHECK(tus == 13 * 3536 + 1500);
+    CHECK(c.vooc_wakes[2].size() == kVoocBurstSteps);
+    CHECK(dm_never_driven(c));
+}
+
+// An all-ones frame (D- floating high under a clock nobody answers, the no-phone run of 2026-11-11) is nothing heard:
+// the session ends as "needs load" like a charger that never clocks.
+static void vooc_all_ones_frame_is_nothing_heard() {
+    FakeCharger c;
+    Engine e(c);
+    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
+    c.vooc_raw = {0x1FF, 0x1FF, 0x1FF, 0x1FF};
+    c.run(e, 30000);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
+    CHECK(c.vooc_raw_i == 4 && c.wakes == 3);
+}
+
+// Frames that are not an ident (the adapter is mid-session, or noise) are heard but never answered: "no response".
+static void vooc_other_commands_are_never_answered() {
+    FakeCharger c;
+    Engine e(c);
+    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
+    c.vooc_cmds = {0x55, 0x12, 0x98, 0x82, 0x88, 0x88, 0x88};
+    c.run(e, 30000);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::NoResponse);
+    CHECK(dm_never_driven(c) && c.resets == 1 && c.vbus_mv() == 5000);
+}
+
+// VBUS above 5.5 V at any point (listening, resting between wakes) aborts and releases; 5.5 V itself does not.
+static void vooc_vbus_above_5v5_aborts() {
+    for (std::uint32_t at : {100u, 2500u}) {   // VoocListen, VoocRest
+        FakeCharger c;
+        Engine e(c);
+        CHECK(e.start(Proto::SuperVooc65, 5000, false) == Fail::None);
+        c.vbus = c.vbus_pending = 5500;
+        c.run(e, at);
+        CHECK(e.state() == State::Negotiating);
+        c.vbus = c.vbus_pending = 5600;
+        c.run(e, 1);
+        CHECK(e.state() == State::Failed && e.fail() == Fail::Overvoltage && c.resets == 1);
+    }
+}
+
+// Nothing of this runs inline (a phone or a PD contract behind the K2): refused even with the override, and a session that
+// sees one appear ends at once.
+static void vooc_never_inline() {
+    using k2::link::Reason;
+    for (auto p : {Proto::Vooc, Proto::SuperVooc, Proto::SuperVooc65}) {
+        FakeCharger c;
+        Engine e(c);
+        c.inline_now = Reason::PdContract;
+        CHECK(e.start(p, 5000, true, true) == Fail::Inline);
+        CHECK(c.set_calls == 0 && c.wakes == 0);
+        c.inline_now = Reason::None;
+        CHECK(e.start(p, 5000, false) == Fail::None);
+        c.run(e, 50);
+        c.inline_now = Reason::DataDevice;
+        c.run(e, 1);
+        CHECK(e.state() == State::Failed && e.fail() == Fail::Inline && c.resets == 1);
+    }
+}
+
+// stop() mid-listen releases the lines and goes idle.
+static void vooc_stop_releases() {
+    FakeCharger c;
+    Engine e(c);
+    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
+    c.run(e, 200);
+    e.stop();
+    CHECK(e.state() == State::Idle && c.resets == 1);
 }
 
 // The adapter's clock is intermittent: a missed wake is retried after a rest, up to three tries.
@@ -1027,7 +1119,7 @@ static void vooc_wake_retries_until_the_adapter_clocks() {
     CHECK(e.vooc_tries() == 1);
     c.run(e, 5000);
     CHECK(c.wakes == 2 && e.vooc_tries() == 2);
-    CHECK(e.state() == State::Active);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::Detected);
 }
 
 static void vooc_wake_gives_up_after_three_tries() {
@@ -1052,115 +1144,12 @@ static void vooc_silent_charger() {
     CHECK(c.resets == 1);
 }
 
-// The phone side of the OnePlus 15 session: after the accepted 0x88 the adapter ramps and the row passes.
-static void svooc_accepted_and_ramps() {
-    FakeCharger c;
-    Engine e(c);
-    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
-    c.vooc_cmds = kInit;
-    c.vooc_raise_mv = 9000;
-    c.run(e, 400);
-    CHECK(c.vooc_replies.size() == kInit.size());
-    CHECK(c.vooc_replies.back() == 0x04D);
-    CHECK(e.state() == State::Active && e.reached_mv() == 9000);
-    CHECK(c.resets == 0);
-}
-
-// An adapter that accepts but never leaves 5 V: "handshake ok, no voltage".
-static void svooc_accepted_no_voltage() {
-    FakeCharger c;
-    Engine e(c);
-    CHECK(e.start(Proto::SuperVooc65, 5000, false) == Fail::None);
-    c.vooc_cmds = kInit;
-    c.vooc_cmds.insert(c.vooc_cmds.end(), 20000, 0x82);   // the adapter keeps polling the current limit
-    c.run(e, 5000);
-    CHECK(e.state() == State::Negotiating);   // still waiting for the ramp
-    c.run(e, 8000);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::NoVoltage && c.resets == 1);
-}
-
-// The adapter clocked and answered the ident plus SVOOC-only commands but the handshake stops before the accepted
-// cable check (the K2 has no load): the row is "detected", a pass-with-detail verdict.
-static void svooc_detected_without_cable_check() {
-    for (auto p : {Proto::SuperVooc, Proto::SuperVooc65}) {
-        FakeCharger c;
-        Engine e(c);
-        CHECK(e.start(p, 5000, false) == Fail::None);
-        c.vooc_cmds = {0xA8, 0x98, 0x98};
-        c.run(e, 4000);
-        CHECK(e.state() == State::Failed && e.fail() == Fail::Detected);
-    }
-}
-
-// Not enough evidence for "detected": the ident alone, a command that is also VOOC's, or SVOOC commands without the
-// ident are all "no response"; 4 A VOOC answers can never be detected.
-static void svooc_detected_needs_ident_and_svooc_command() {
-    const std::vector<std::vector<std::uint8_t>> seqs = {{0xA8, 0xA8}, {0x98, 0x98, 0x82}};
-    for (const auto& cmds : seqs) {
-        FakeCharger c;
-        Engine e(c);
-        CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
-        c.vooc_cmds = cmds;
-        c.run(e, 4000);
-        CHECK(e.state() == State::Failed && e.fail() == Fail::NoResponse);
-    }
-    FakeCharger c;
-    Engine e(c);
-    CHECK(e.start(Proto::Vooc, 5000, false) == Fail::None);
-    c.vooc_cmds = {0xA8, 0xAC};
-    c.run(e, 4000);
-    CHECK(e.fail() == Fail::NoResponse);
-}
-
-// Clocks with frames the phone side does not know: "no response", not "needs load".
-static void svooc_garbage_frames_no_response() {
-    FakeCharger c;
-    Engine e(c);
-    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
-    c.vooc_cmds = {0x55, 0x12, 0x7F, 0x55};
-    c.run(e, 30000);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::NoResponse);
-}
-
 static void svooc_silent_needs_load() {
     FakeCharger c;
     Engine e(c);
     CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
     c.run(e, 30000);
     CHECK(e.state() == State::Failed && e.fail() == Fail::NeedsLoad);
-}
-
-// Bounded: an adapter that ramps past 12 V is released at once, and the power-monitor ceiling still wins.
-static void svooc_over_12v_aborts() {
-    FakeCharger c;
-    Engine e(c);
-    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
-    c.vooc_cmds = kInit;
-    c.vooc_raise_mv = 14000;
-    c.run(e, 400);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::Overvoltage && c.resets == 1);
-}
-
-static void svooc_ceiling_abort() {
-    FakeCharger c;
-    c.ceiling = 8000;
-    Engine e(c);
-    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
-    c.vooc_cmds = kInit;
-    c.vooc_raise_mv = 9000;
-    c.run(e, 400);
-    CHECK(e.state() == State::Failed && e.fail() == Fail::Overvoltage && c.resets == 1);
-}
-
-static void svooc_stop_returns_to_5v() {
-    FakeCharger c;
-    Engine e(c);
-    CHECK(e.start(Proto::SuperVooc, 5000, false) == Fail::None);
-    c.vooc_cmds = kInit;
-    c.vooc_raise_mv = 9000;
-    c.run(e, 400);
-    e.stop();
-    CHECK(e.state() == State::Idle && c.resets == 1);
 }
 
 static void vooc_overvoltage_aborts() {
@@ -1455,20 +1444,17 @@ int main() {
     unacked_rise_above_the_ceiling_is_still_overvoltage();
     acked_overshoot_is_still_overvoltage();
     scp_clamped_to_ceiling();
-    vooc_listen();
+    vooc_ident_is_detected_and_nothing_is_answered();
+    vooc_wake_forms_alternate();
+    vooc_all_ones_frame_is_nothing_heard();
+    vooc_other_commands_are_never_answered();
+    vooc_vbus_above_5v5_aborts();
+    vooc_never_inline();
+    vooc_stop_releases();
     vooc_silent_charger();
-    vooc_quiet_with_vbus_gone_is_source_lost();
     vooc_wake_retries_until_the_adapter_clocks();
     vooc_wake_gives_up_after_three_tries();
-    svooc_accepted_and_ramps();
-    svooc_accepted_no_voltage();
-    svooc_detected_without_cable_check();
-    svooc_detected_needs_ident_and_svooc_command();
-    svooc_garbage_frames_no_response();
     svooc_silent_needs_load();
-    svooc_over_12v_aborts();
-    svooc_ceiling_abort();
-    svooc_stop_returns_to_5v();
     vooc_overvoltage_aborts();
     std::printf("test_fc_engine: %d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
