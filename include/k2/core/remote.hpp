@@ -91,6 +91,7 @@ public:
     remote::VconnSnapshot debug_vconn(uint8_t op);   // 0 status, 1 send VCONN_Swap, 2 VCONN off
     remote::EprInfoSnapshot debug_epr_info(uint8_t op);   // 0 status, 1 ask (gated on the EPR bit), 2 ask regardless
     remote::LcdSnapshot debug_lcd();
+    remote::LoopSnapshot debug_loop(uint8_t page, bool reset);   // the main-loop stall counters (k2/core/loop_stats.hpp)
     remote::AdcRawSnapshot adc_raw();
     remote::Status ripple(uint8_t sample_code);   // captures now; poll() streams the samples
     remote::RippleInfo ripple_info() const { return ripple_info_; }

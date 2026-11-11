@@ -121,6 +121,8 @@ struct Fake {
     }
     LcdSnapshot lcd_snap{};
     LcdSnapshot debug_lcd() { calls++; return lcd_snap; }
+    LoopSnapshot loop_snap{}; unsigned loop_page = 255; bool loop_reset = false;
+    LoopSnapshot debug_loop(uint8_t page, bool reset) { calls++; loop_page = page; loop_reset = reset; return loop_snap; }
     Status debug_fake_pdos(uint8_t n) { calls++; fake_n = n; return fake_status; }
     uint8_t msg_sop = 255; uint16_t msg_header = 0; std::array<uint8_t, 28> msg_body{}; size_t msg_len = 0;
     Status msg_status = Status::Ok;

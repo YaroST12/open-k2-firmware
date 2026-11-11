@@ -311,6 +311,18 @@ size_t encode_lcd(std::span<uint8_t> out, const LcdSnapshot &s) {
     return w.size();
 }
 
+size_t encode_loop(std::span<uint8_t> out, const LoopSnapshot &s) {
+    Writer w(out);
+    w.u32(s.elapsed_ms);
+    w.u16(s.loop_max_ms);
+    for (uint16_t v : s.loop_hist) w.u16(v);
+    w.u16(s.svc_max_ms);
+    for (uint16_t v : s.svc_hist) w.u16(v);
+    w.u8(s.page); w.u32(s.page_us); w.u32(s.page_px);
+    w.u8(s.worst_page); w.u32(s.worst_us); w.u32(s.worst_px);
+    return w.size();
+}
+
 size_t encode_cc_probe(std::span<uint8_t> out, const ccprobe::Result &r) {
     Writer w(out);
     const size_t n = std::min<size_t>(r.n, r.s.size());

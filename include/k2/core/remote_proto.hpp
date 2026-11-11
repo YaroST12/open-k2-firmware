@@ -381,7 +381,7 @@ enum class Cmd : uint8_t {
     DebugCcMatrix = 0x26, // debug: set the CC switch matrix PC13/14/15 (bit0 PC13, bit1 PC14, bit2 PC15)
     DebugVconn = 0x27,    // debug: [op] 0 status, 1 send VCONN_Swap (K2 takes the VCONN role), 2 VCONN off -> VconnSnapshot
     DebugEprInfo = 0x28,  // debug: [op] 0 status, 1 ask EPR_Get_Source_Cap (gated on the EPR bit), 2 ask regardless -> EprInfoSnapshot
-    DebugLcd = 0x29,      // debug: LCD DMA state, no payload -> LcdSnapshot
+    DebugLcd = 0x29,      // debug: LCD DMA state, no payload -> LcdSnapshot; [1, page, flags] -> LoopSnapshot (main-loop stalls)
     DebugCcProbe = 0x2A,  // debug: [sw0, pc, ms u16 (, modes u16)] hold a SWITCHES0 value on a waiting charger, sample CC -> see encode_cc_probe
     GetIdentity = 0x24, // source identity: VID/PID/bcd, SVIDs, vendor and Apple model
     DfuEnter = 0x30,    // needs kDfuMagic as payload
@@ -789,6 +789,23 @@ struct LcdSnapshot {
     uint8_t spi_div = 8;
     uint16_t blocked_ms = 0;
 };
+// Main-loop stall counters (DebugLcd op 1, k2/core/loop_stats.hpp) since boot or the last reset: elapsed ms, the gap between
+// main-loop passes and between 1 ms PD services as max + 8 buckets (<=1 2 5 10 20 50 100 >100 ms, counts saturate at 65535),
+// the asked page's longest pass with the pixels it sent, and the longest pass on any page. 58 bytes, the whole reply payload.
+inline constexpr size_t kLoopBuckets = 8;
+struct LoopSnapshot {
+    uint32_t elapsed_ms = 0;
+    uint16_t loop_max_ms = 0;
+    std::array<uint16_t, kLoopBuckets> loop_hist{};
+    uint16_t svc_max_ms = 0;
+    std::array<uint16_t, kLoopBuckets> svc_hist{};
+    uint8_t page = 0;
+    uint32_t page_us = 0, page_px = 0;
+    uint8_t worst_page = 0;
+    uint32_t worst_us = 0, worst_px = 0;
+};
+inline constexpr size_t kLoopSnapshotBytes = 4 + 2 * (2 + 2 * kLoopBuckets) + 2 * 9;
+static_assert(kLoopSnapshotBytes <= kMaxRspPayload);
 struct RippleInfo {
     uint32_t period_ns = 0;
     uint16_t count = 0, min = 0, max = 0, mean = 0;
@@ -1025,6 +1042,7 @@ size_t encode_adc_raw(std::span<uint8_t> out, const AdcRawSnapshot &a);
 size_t encode_vconn(std::span<uint8_t> out, const VconnSnapshot &v);
 size_t encode_epr_info(std::span<uint8_t> out, const EprInfoSnapshot &s);
 size_t encode_lcd(std::span<uint8_t> out, const LcdSnapshot &s);
+size_t encode_loop(std::span<uint8_t> out, const LoopSnapshot &s);   // kLoopSnapshotBytes, the layout of LoopSnapshot
 // DebugCcProbe reply: flags(1) n(1) sw0(1) sw1(1) pc(1) modes(2) of the snapshot that was restored, then n samples of
 // t_us(4) cc1_raw(2) cc2_raw(2) vbus_mv(2) st0_cc1(1) st0_cc2(1). At most 7 + 4 * 12 = 55 bytes.
 size_t encode_cc_probe(std::span<uint8_t> out, const ccprobe::Result &r);
@@ -1104,6 +1122,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.debug_vconn(u8) } -> std::same_as<VconnSnapshot>;
     { b.debug_epr_info(u8) } -> std::same_as<EprInfoSnapshot>;
     { b.debug_lcd() } -> std::same_as<LcdSnapshot>;
+    { b.debug_loop(u8, on) } -> std::same_as<LoopSnapshot>;   // page whose longest pass to report, reset after the read
     { b.debug_cc_probe(std::declval<const ccprobe::Args &>(), std::declval<ccprobe::Result &>()) } -> std::same_as<Status>;
     { b.ra_probe(std::declval<const raprobe::Args &>(), std::declval<raprobe::Result &>()) } -> std::same_as<Status>;
     { b.debug_link(on) } -> std::same_as<Status>;
@@ -1404,9 +1423,11 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p.size() != 1) return reply(Status::BadLength);
         if (p[0] > 2) return reply(Status::BadArg);
         return reply_n(encode_epr_info(buf, backend.debug_epr_info(p[0])));
-    case Cmd::DebugLcd:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_lcd(buf, backend.debug_lcd()));
+    case Cmd::DebugLcd:   // no payload: the DMA state; [1, page, flags bit0 reset after the read]: the main-loop stall counters
+        if (p.empty()) return reply_n(encode_lcd(buf, backend.debug_lcd()));
+        if (p.size() != 3) return reply(Status::BadLength);
+        if (p[0] != 1 || (p[2] & ~1u)) return reply(Status::BadArg);
+        return reply_n(encode_loop(buf, backend.debug_loop(p[1], (p[2] & 1) != 0)));
     case Cmd::DebugCcProbe: {
         // [sw0, pc, ms u16] or [sw0, pc, ms u16, modes u16]; the rules (ranges, VCONN only with PC13 low) are k2/pd/cc_probe.hpp.
         if (p.size() != 4 && p.size() != 6) return reply(Status::BadLength);
