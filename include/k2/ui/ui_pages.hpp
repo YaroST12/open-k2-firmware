@@ -355,9 +355,14 @@ private:
     uint32_t jr_wait_ms_ = 0;               // when the pending records began to wait for a quiet link (0 = nothing waiting)
     // The run's journal is armed (its whole plan written, header last) in pieces too, one write per tick on a quiet link, while the
     // Runner is held in its first Baseline: arm_ 1 = rows and header, 2 = the run's meta record (one more write), 3 = the planned
-    // re-attach's marker and Rd gap (one more write), 0 = done.
+    // re-attach's marker and Rd gap (one more write), 4 = the source's own claim is awaited before the blink is decided (no flash
+    // write, bounded by kClaimWaitMs), 0 = done.
     uint8_t arm_ = 0;
     uint32_t arm_t0_ = 0;
+    bool reattach_ask_ = false;             // the run's static conditions hold: the source's claim decides the blink (arm_ 4)
+    bool claim_asked_ = false;              // the claim wait started its probe (Get_Source_Cap_Extended and the rest of the quick probe)
+    void claim_step(uint32_t now);
+    void decide_reattach();
     charger_journal::RunMeta arm_meta_{};
     void journal_pump(uint32_t now);        // one file at most per call; there is no drain
     void arm_step(uint32_t now);
@@ -401,9 +406,10 @@ private:
     raguard::Topology topology_ = raguard::Topology::Unknown;   // the guard's last reading (the Warning screen, the run's journal)
     bool guard_bypass_ = false;           // "Start anyway": the guard's reading is recorded, the spoof runs regardless
     bool skip_spoof_run_ = false;         // "Start, skip spoof" on the Refuse stage: this run carries no identity, the stored pick stays
-    // The planned re-attach (rdintent::plan_reattach): a self-powered START with a 6 A identity against a source that lists SVID
-    // 0x2717 makes the K2 blink off once, so the charger reads the cable at a real attach. confirm_reattach_ = the confirmation on
-    // screen announces it; reattach_plan_ = this run does it (begin_run); reattach_ 1 = the Rd is off for the gap, 2 = the Rd is
+    // The planned re-attach (rdintent::plan_reattach): a self-powered START with a 6 A identity against a source whose offer the
+    // cable holds down (rdintent::offer_held_by_cable: below its own claim, nothing above 3 A) makes the K2 blink off once, so the
+    // charger reads the cable at a real attach. confirm_reattach_ = the confirmation on screen announces it (only when the
+    // source's claim is already in hand); reattach_plan_ = this run does it (decided in the arm, claim_step); reattach_ 1 = the Rd is off for the gap, 2 = the Rd is
     // back and the charger's new contract is awaited (the Runner stays held in its Baseline until then or until the K2 died).
     bool confirm_reattach_ = false;
     bool reattach_plan_ = false;

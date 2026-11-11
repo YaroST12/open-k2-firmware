@@ -32,6 +32,7 @@
 #include "k2/chargertest/ct_cable.hpp"
 #include "k2/core/bootmode.hpp"
 #include "k2/core/fs.hpp"
+#include "k2/pd/pd.hpp"
 
 namespace k2::rdintent {
 
@@ -156,14 +157,68 @@ constexpr Verdict judge(const Watch& w) {
     return Verdict::Wait;
 }
 
+// Is the source's offer held down by the cable it read? Behaviour, never identity: a charger that claims more power than it
+// offers, while no level exceeds 3 A (the plain 3 A cable ceiling), has priced the cable in; it reads the cable again at a real
+// attach (docs/CHARGER_QUIRKS.md `cable-look-at-attach`) and a spoofed 5 A identity then lifts the offer. A charger that is just a
+// smaller charger (a 30 W brick offering 30 W of 30 W) has nothing to lift.
+//
+// The claim is the Source_Caps_Ext PDP in whole watts (0 = not asked or not answered). The best offer is the largest whole-watt
+// product over the list: fixed V x I, a PPS or AVS range at its top voltage and current. The margin keeps a rounded label from
+// firing it: a 65 W charger whose best level is 60 W is not held down, a 120 W charger offering 60 W, and a 100 W one offering
+// 63 W, are.
+inline constexpr std::uint32_t kClaimMarginW = 10;
+inline constexpr std::uint16_t kCableCeilingMa = 3000;
+
+constexpr std::uint32_t pdo_power_w(const pd::Pdo& p) {
+    return static_cast<std::uint32_t>(static_cast<std::uint64_t>(p.max_mv) * p.max_ma / 1000000u);
+}
+// The best whole-watt power any listed PDO offers (0 for no list).
+constexpr std::uint32_t best_power_w(const pd::SourceCaps& caps) {
+    std::uint32_t best = 0;
+    for (std::size_t i = 0; i < caps.pdos.size() && i < caps.num_pdos; ++i) {
+        const pd::Pdo& p = caps.pdos[i];
+        if (p.type == pd::PdoType::Unknown) continue;
+        const std::uint32_t w = pdo_power_w(p);
+        if (w > best) best = w;
+    }
+    return best;
+}
+// True when any listed PDO offers more than the 3 A cable ceiling (the source's own limit is higher: nothing is held down).
+constexpr bool offers_above_ceiling(const pd::SourceCaps& caps) {
+    for (std::size_t i = 0; i < caps.pdos.size() && i < caps.num_pdos; ++i)
+        if (caps.pdos[i].type != pd::PdoType::Unknown && caps.pdos[i].max_ma > kCableCeilingMa) return true;
+    return false;
+}
+// With the source's own claim in hand: nothing above 3 A, and the claim at least kClaimMarginW above the best offer.
+constexpr bool cable_limited(const pd::SourceCaps& caps, std::uint32_t claim_w) {
+    if (!caps.valid || caps.num_pdos == 0 || claim_w == 0) return false;
+    const std::uint32_t best = best_power_w(caps);
+    return !offers_above_ceiling(caps) && best != 0 && claim_w >= best + kClaimMarginW;
+}
+// Without a claim (the source never answered Get_Source_Cap_Extended): the offer's own shape. The top fixed level is 20 V at
+// exactly 3.00 A and nothing offers more than 3 A, the signature of a charger of 60 W or more held at the cable ceiling.
+constexpr bool cable_limited_no_claim(const pd::SourceCaps& caps) {
+    if (!caps.valid || caps.num_pdos == 0 || offers_above_ceiling(caps)) return false;
+    const pd::Pdo* top = nullptr;
+    for (std::size_t i = 0; i < caps.pdos.size() && i < caps.num_pdos; ++i) {
+        const pd::Pdo& p = caps.pdos[i];
+        if (p.type == pd::PdoType::Fixed && (top == nullptr || p.max_mv > top->max_mv)) top = &p;
+    }
+    return top != nullptr && top->max_mv == 20000 && top->max_ma == kCableCeilingMa;
+}
+// The planning rule: a known claim decides alone, the fallback only speaks when no claim is in hand.
+constexpr bool offer_held_by_cable(const pd::SourceCaps& caps, std::uint32_t claim_w) {
+    return claim_w != 0 ? cable_limited(caps, claim_w) : cable_limited_no_claim(caps);
+}
+
 // The charger test's planned re-attach (the K2 blinks off once so the charger reads the cable at a real attach) is worth its
 // blink only when ALL of these hold, and never otherwise (an Apple-like charger never looks at the cable; a bus-powered K2 loses
 // nothing and needs no blink): a spoof cable that claims 5 A (the 6 A rows), the Ra side of the plug (the Rd on CC2, so the Ra
-// can sit on CC1), a K2 living on the charger's VBUS, and a source that shows the Xiaomi pattern (lists SVID 0x2717).
+// can sit on CC1), a K2 living on the charger's VBUS, and a source whose offer the cable holds down (offer_held_by_cable).
 constexpr bool plan_reattach(ctcable::Choice cable, const ctcable::Facts& facts, std::uint8_t pin, bool self_powered,
-                             bool xiaomi_source) {
+                             bool offer_held) {
     if (cable.kind == ctcable::Kind::Off || !ctcable::valid(cable)) return false;
-    return facts.max_ma >= 5000 && pin == 2 && self_powered && xiaomi_source;
+    return facts.max_ma >= 5000 && pin == 2 && self_powered && offer_held;
 }
 
 // The marker kind that says the reboot this boot came back from was the charger test's planned re-attach: a run resumed on

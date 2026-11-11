@@ -81,6 +81,8 @@ static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confir
 // look follows the fresh attach) and how long the charger's new contract is awaited before the run goes on regardless.
 constexpr uint32_t kReattachGapMs = 30;
 constexpr uint32_t kReattachWaitMs = 5000;
+// How long the arm waits for the source's own claim (the probe's own bound is 1 s) before the offer's shape decides alone.
+constexpr uint32_t kClaimWaitMs = 1000;
 constexpr uint32_t kPresetMasks[kPresets] = {
     ct::kDefaultAlgorithms, ct::kDefaultAlgorithms & kFamilies[kFamPd],
     ct::kDefaultAlgorithms & ~kFamilies[kFamPd],
@@ -228,11 +230,23 @@ void ChargerTestSession::hold(ct::Mode m) {
 }
 // The runner asks the charger who it is once, at 5 V in the live contract (fusb302 probe, one try per question,
 // over in under a second). The answers are copied into the card identity before anything can wipe the caps.
+// The source's own power claim in whole watts: the Source_Caps_Ext PDP of this attach, 0 when it was never asked or never answered
+// (the probe's fallback PDP, the largest PDO, is no claim).
+static uint32_t source_claim_w() {
+    const auto& e = fusb302::ext().caps_ext;
+    return e.valid ? e.pdp_w : 0u;
+}
 bool ChargerTestSession::probe_identity(bool on) {
     if (on) return fusb302::probe_start();
     fusb302::probe_abort();
     const auto st = fusb302::probe_status();
     const auto r = pd::probe_result(st, fusb302::vdm(), fusb302::ext(), fusb302::caps());
+    // After a 5 A identity was read the offer should have grown to the claim: when it did not, the run's evidence says so.
+    if (run_cable_.kind != ctcable::Kind::Off && run_facts_.max_ma >= 5000 && source_claim_w() != 0) {
+        const uint32_t best = rdintent::best_power_w(fusb302::caps());
+        if (best != 0 && source_claim_w() >= best + rdintent::kClaimMarginW)
+            K2LOG("[CT] offer still below the claim after the cable read: %u W of %u W\n", unsigned(best), unsigned(source_claim_w()));
+    }
     if (card_id_.fp != 0) {
         card_id_.vid = r.vid; card_id_.pid = r.pid; card_id_.pdp_w = r.pdp_w;
         std::memcpy(mfr_, r.mfr, sizeof mfr_);
@@ -338,6 +352,7 @@ void ChargerTestSession::journal_pump(uint32_t now) {
 void ChargerTestSession::arm_step(uint32_t now) {
     namespace cj = charger_journal;
     if (!arm_) return;
+    if (arm_ == 4) { claim_step(now); return; }   // no flash write: the wait is the probe's own, it does not wait for a quiet link
     if (pdtrace::since_activity_ms() < kJrQuietMs && now - arm_t0_ < kArmWaitMs) return;
     if (arm_ == 1) {
         cj::hw::pump(runner_.run_id(), options_, runner_.evidence(), runner_.steps());
@@ -347,13 +362,41 @@ void ChargerTestSession::arm_step(uint32_t now) {
     if (arm_ == 2) {
         cj::hw::meta(arm_meta_);
         K2LOG("[TEST] journal armed in %u ms\n", unsigned(now - arm_t0_));
-        if (reattach_plan_) { arm_ = 3; return; }   // the marker and the gap are the next quiet tick's: one flash write per tick
+        if (reattach_ask_) { arm_ = 4; arm_t0_ = now; claim_asked_ = false; return; }   // the claim decides whether the K2 blinks
+        if (reattach_plan_) { arm_ = 3; return; }   // decided at START: the marker and the gap are the next quiet tick's, one flash write per tick
         arm_ = 0;
         runner_.hold(false);
         return;
     }
     arm_ = 0;
     reattach_begin(now);
+}
+// The blink is decided here, from the source's own claim. The Runner is held in its Baseline, so the quick probe (Source_Caps_Ext and
+// the rest) is ours to ask: it answers in under a second or the wait ends (kClaimWaitMs) and the offer's own shape decides
+// (rdintent::cable_limited_no_claim). A claim already in hand from this attach (a re-read) is used as it is.
+void ChargerTestSession::claim_step(uint32_t now) {
+    const bool have = source_claim_w() != 0;
+    const bool timed_out = now - arm_t0_ >= kClaimWaitMs;
+    if (!have && !timed_out) {
+        if (!claim_asked_) claim_asked_ = fusb302::probe_start();   // refused while the sink is busy: asked again next tick
+        if (!claim_asked_ || fusb302::probe_status().state == pd::ProbeState::Running) return;
+    }
+    if (claim_asked_) fusb302::probe_abort();
+    claim_asked_ = false;
+    decide_reattach();
+    if (reattach_plan_) { arm_ = 3; return; }   // the marker and the gap are the next quiet tick's: one flash write per tick
+    arm_ = 0;
+    runner_.hold(false);
+}
+// The blink's verdict: the static conditions held at START (reattach_ask_), the source's offer decides now.
+void ChargerTestSession::decide_reattach() {
+    const uint32_t claim = source_claim_w();
+    const bool held = rdintent::offer_held_by_cable(fusb302::caps(), claim);
+    reattach_ask_ = false;
+    reattach_plan_ = held && rdintent::plan_reattach(run_cable_, run_facts_, fusb302::pin_rd(), fusb302::self_powered(), true);
+    K2LOG("[CT] re-attach decision: claim %u W, best offer %u W, nothing above 3 A=%u -> %s\n", unsigned(claim),
+          unsigned(rdintent::best_power_w(fusb302::caps())), unsigned(!rdintent::offers_above_ceiling(fusb302::caps())),
+          reattach_plan_ ? "blink" : "no blink");
 }
 // The planned re-attach (the K2 lives on the charger's VBUS and the charger skipped the cable at its attach): the run is journaled,
 // the identity armed. The intent marker goes to the volume first, then the Rd drops for kReattachGapMs with the Ra kept. The
@@ -398,7 +441,7 @@ void ChargerTestSession::reattach_drop() {
 // nothing to close either.
 void ChargerTestSession::arm_abort() {
     charger_journal::hw::cancel();
-    arm_ = 0; journal_active_ = false; reattach_plan_ = false;
+    arm_ = 0; journal_active_ = false; reattach_plan_ = false; reattach_ask_ = false; claim_asked_ = false;
     runner_.hold(false);
     K2LOG("[TEST] journal arm abandoned: the run ended before its plan was written\n");
 }
@@ -408,7 +451,10 @@ void ChargerTestSession::arm_abort() {
 void ChargerTestSession::closing(ct::Reason r) {
     if (!journal_active_ || journal_closed_) return;
     if (arm_ == 1) { arm_abort(); return; }
-    if (arm_ >= 2) { arm_ = 0; reattach_plan_ = false; runner_.hold(false); }   // the header is in; the meta record of a run that ends here is not worth a write
+    if (arm_ >= 2) {
+        if (arm_ == 4 && claim_asked_) fusb302::probe_abort();
+        arm_ = 0; reattach_plan_ = false; reattach_ask_ = false; claim_asked_ = false; runner_.hold(false);
+    }   // the header is in; the meta record of a run that ends here is not worth a write
     // Nothing is drained: the section files still to be written are moot for a run that is over (Finish closes it, a closed
     // run is never resumed, and no write here may take more than its own one file).
     charger_journal::hw::cancel();
@@ -1032,8 +1078,11 @@ void ChargerTestSession::open_confirmation() {
     // The same rule begin_run applies to the identity the START arms: the footer says so when the K2 is going to blink off.
     const auto sel = ctx_.cables.selected();
     ctcable::Facts fx;
-    confirm_reattach_ = selected_facts(sel, fx) &&
-        rdintent::plan_reattach(sel, fx, fusb302::pin_rd(), fusb302::self_powered(), in.pd.xiaomi_svid);
+    // The footer promises the blink only when the facts are in hand: the source's claim (Source_Caps_Ext) was read in this attach.
+    // The preview touches nothing, so a claim it does not have is not asked for here; the run asks it in its arm (claim_step).
+    confirm_reattach_ = selected_facts(sel, fx) && source_claim_w() != 0 &&
+        rdintent::plan_reattach(sel, fx, fusb302::pin_rd(), fusb302::self_powered(),
+                                rdintent::cable_limited(fusb302::caps(), source_claim_w()));
     confirming_ = true; confirm_until_ = ctx_.now + Ui::kConfirmWindowMs; confirm_proposal_ = proposal(in);
 }
 // The second press: an identity needs the charger directly on the plug (include/k2/pd/ra_guard.hpp), so the guard judges
@@ -1091,7 +1140,7 @@ void ChargerTestSession::launch() {
 }
 void ChargerTestSession::begin_run() {
     const auto in = input(ctx_.now);
-    journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ = 0;
+    journal_active_ = false; capture_kept_ = false; reattach_plan_ = false; reattach_ask_ = false; reattach_ = 0;
     capture_identity();
     const auto r = runner_.start(fusb302::caps(), options_, in, true);
     K2LOG("[TEST] start selected=%u units=%u -> %s\n", unsigned(options_.selected), unsigned(options_.units.n), ct::name(r));
@@ -1115,8 +1164,12 @@ void ChargerTestSession::begin_run() {
         // The identity rides in the intent marker for the whole run (a charger Hard Reset or a lost VBUS brings the K2 back as the
         // same sink, k2/core/rd_comeback.hpp). The planned re-attach comes after the journal is armed, before any row.
         rdcomeback::set_run_cable(run_cable_);
-        reattach_plan_ = r == ct::Reason::None &&
-            rdintent::plan_reattach(run_cable_, run_facts_, fusb302::pin_rd(), fusb302::self_powered(), in.pd.xiaomi_svid);
+        // Whether the blink pays depends on the source's own claim: in hand from this attach, it decides now; otherwise the arm asks
+        // the source once the journal is on flash (claim_step).
+        reattach_ask_ = r == ct::Reason::None &&
+            rdintent::plan_reattach(run_cable_, run_facts_, fusb302::pin_rd(), fusb302::self_powered(), true);
+        claim_asked_ = false;
+        if (reattach_ask_ && source_claim_w() != 0) decide_reattach();
         arm_meta_ = meta; arm_ = 1; arm_t0_ = ctx_.now; jr_wait_ms_ = 0;
         charger_journal::hw::arm_start();
         runner_.hold(true);

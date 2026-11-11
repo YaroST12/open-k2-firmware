@@ -3495,11 +3495,28 @@ static void test_self_supplied_start() {
     }
 }
 // ---- the planned re-attach (rdintent::plan_reattach, src/ui/ui_charger_test.cpp reattach_*) -------------------------------------
-// A self-powered K2 on the CC2-pinned Rd, a source that lists SVID 0x2717 and a cable that claims 5 A: the run is journaled, the
-// intent marker written, then the Rd drops for a moment with the Ra kept, so the charger reads the cable at a real attach. The
-// K2 normally dies in the dark and the comeback boot (rd_comeback.cpp) finishes the story; here it survives and the run goes on.
+// A self-powered K2 on the CC2-pinned Rd, a source whose offer the cable holds down (3 A levels, a claim far above them) and a cable
+// that claims 5 A: the run is journaled, the intent marker written, then the Rd drops for a moment with the Ra kept, so the
+// charger reads the cable at a real attach. The K2 normally dies in the dark and the comeback boot (rd_comeback.cpp) finishes the
+// story; here it survives and the run goes on.
+// The source's offer is a list of raw PDO words (the lab captures, decoded), its claim the Source_Caps_Ext PDP (0 = never answered).
+static void set_offer(std::initializer_list<uint32_t> raws, unsigned claim_w) {
+    g_stub.caps.num_pdos = 0;
+    for (const uint32_t r : raws) g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(r);
+    g_stub.ext.caps_ext = {};
+    if (claim_w) { g_stub.ext.caps_ext.valid = true; g_stub.ext.caps_ext.pdp_w = uint8_t(claim_w); }
+}
+// A 120 W charger held at 3 A by the cable it read: 5/9/12/15/20 V at 3 A and two 3 A PPS ranges (60 W best), claim 120 W.
+static void cable_limited_offer(unsigned claim_w = 120) {
+    set_offer({167874860u, 184620u, 246060u, 307500u, 409900u, 3369873980u, 3381670460u}, claim_w);
+}
+// A 30 W brick: 12 V 2.5 A, 15 V 2 A, 20 V 1.5 A and a 33 W PPS, claim 30 W.
+static void small_charger_offer(unsigned claim_w = 30) {
+    set_offer({184652076u, 184620u, 246010u, 307400u, 409750u, 3369869628u}, claim_w);
+}
 static void planned_fixture() {
-    fixture(); g_stub.self_powered = true; g_stub.sink.xiaomi_svid = true; g_stub.sink.state = pd::SinkState::Ready;
+    fixture(); g_stub.self_powered = true; g_stub.sink.state = pd::SinkState::Ready;
+    cable_limited_offer();
     set_cc(3300, 600);
 }
 // Ticks in 20 ms steps from `t` (the PD engine's service() each pass) until `stop()` holds, at most `max` ticks.
@@ -3590,7 +3607,9 @@ static void test_planned_reattach() {
     // Not applicable: no blink, no marker, the plain footer, and the run starts as it always did.
     struct Case { const char* what; void (*set)(); bool cable_on; };
     static const Case cases[] = {
-        {"source without the 0x2717 pattern", [] { g_stub.sink.xiaomi_svid = false; }, true},
+        {"a 30 W charger offering its whole claim", [] { small_charger_offer(); }, true},
+        {"the offer is the source's own limit (20 V 5 A, claim 120 W)", [] { set_offer({167874860u, 184620u, 410100u}, 120); }, true},
+        {"the claim is 65 W over a 60 W offer", [] { cable_limited_offer(65); }, true},
         {"not self-powered (HID or bus power)", [] { g_stub.self_powered = false; g_stub.bus_powered = true; }, true},
         {"spoof off", [] {}, false},
     };
@@ -3607,6 +3626,57 @@ static void test_planned_reattach() {
         CHECK_EQ(g_stub.rdc_begins, 0); CHECK_EQ(g_stub.glitch_begins, 0); CHECK_EQ(g_stub.glitch_ends, 0); CHECK_EQ(g_stub.rdc_ends, 0);
         if (c.what[0] == 'c') CHECK_EQ(g_stub.rdc_run_cable.kind == ctcable::Kind::Off, true);
         (void)c.what;
+    }
+    { // no claim in hand at START: the footer promises nothing, the arm asks the source, and a source that never answers is judged by
+      // the shape of its offer (top level 20 V at exactly 3 A, nothing above)
+        planned_fixture(); cable_limited_offer(0);
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); ui.tick(1450);
+        CHECK_EQ(ui.charger_test_confirm_reattach(), false);
+        CHECK_EQ(footer_says("Press again to start", kCaution), true);
+        confirm_press_nowait(ui, 1500);
+        tick_until(ui, 1500, [] { return g_stub.glitch_begins > 0; });
+        CHECK_EQ(g_stub.probes >= 1, true);                 // the claim was asked for before the decision
+        CHECK_EQ(ui.charger_test_reattach_planned(), true); CHECK_EQ(g_stub.glitch_begins, 1);
+    }
+    { // the same without a claim, and the offer is a 30 W brick's: no blink
+        planned_fixture(); small_charger_offer(0);
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+        tick_until(ui, 1500, [] { return false; }, 300);
+        CHECK_EQ(g_stub.probes >= 1, true);
+        CHECK_EQ(ui.charger_test_reattach_planned(), false); CHECK_EQ(g_stub.glitch_begins, 0); CHECK_EQ(g_stub.rdc_begins, 0);
+        CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+    }
+    { // the claim arrives from the probe the arm started: it decides alone (a 30 W claim over a 3 A shape: no blink)
+        planned_fixture(); cable_limited_offer(0);
+        g_stub.probe.state = pd::ProbeState::Running;
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+        uint32_t t = tick_until(ui, 1500, [] { return g_stub.probes > 0; });   // the arm asked
+        CHECK_EQ(g_stub.probes >= 1, true);
+        t = tick_until(ui, t, [] { return false; }, 25);   // 500 ms: the probe is still running, the decision waits
+        CHECK_EQ(ui.charger_test_reattach_planned(), false); CHECK_EQ(g_stub.glitch_begins, 0);
+        g_stub.ext.caps_ext.valid = true; g_stub.ext.caps_ext.pdp_w = 60;   // the source claims 60 W: the 60 W offer is all of it
+        g_stub.probe.state = pd::ProbeState::Done;
+        tick_until(ui, t, [] { return false; }, 100);
+        CHECK_EQ(ui.charger_test_reattach_planned(), false); CHECK_EQ(g_stub.glitch_begins, 0); CHECK_EQ(g_stub.rdc_begins, 0);
+        CHECK_EQ(ui.charger_test_stage(), kRunningStage);
+    }
+    { // a probe that never ends: the decision comes after the claim wait (1 s) from the offer's shape, the run is not held for more
+        planned_fixture(); cable_limited_offer(0);
+        g_stub.probe.state = pd::ProbeState::Running;
+        Ui ui; open(ui); review(ui);
+        press(ui, Button::Back, 1300); pick_row(ui, kBuiltinRow, 1300);
+        start_press(ui, 1400); confirm_press_nowait(ui, 1500);
+        uint32_t t = tick_until(ui, 1500, [] { return g_stub.probes > 0; });
+        t = tick_until(ui, t, [] { return false; }, 25);
+        CHECK_EQ(g_stub.glitch_begins, 0);
+        tick_until(ui, t, [] { return g_stub.glitch_begins > 0; }, 200);
+        CHECK_EQ(g_stub.glitch_begins, 1);
     }
     { // an HID-powered START presents the Ra before the Rd (apply_cable arms the identity, then the Rd goes on), and never blinks
         rd_fixture(); set_cc(3300, 3300);

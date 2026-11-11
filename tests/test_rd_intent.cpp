@@ -5,6 +5,7 @@
 // source shows), the session follower (writes on a state change only) and the store over a RAM disk.
 #include <array>
 #include <cstdint>
+#include <initializer_list>
 
 #include "k2/core/bootmode.hpp"
 #include "k2/core/fs.hpp"
@@ -123,17 +124,87 @@ void test_the_comeback_judge() {
 void test_the_planned_reattach_gate() {
     constexpr Choice kSaved5A{Kind::Saved, 9};
     const ctcable::Facts a5{0x2717, 0x3202, 50000, 5000}, a3{0x04b4, 1, 20000, 3000};
-    // Every condition holds: a 6 A spoof cable, the Ra side (CC2 pin), self-powered, the source shows the Xiaomi chain.
+    // Every condition holds: a 6 A spoof cable, the Ra side (CC2 pin), self-powered, the source's offer is held down by the cable.
     CHECK_EQ(plan_reattach(kB2, a5, 2, true, true), true);
     CHECK_EQ(plan_reattach(kSaved5A, a5, 2, true, true), true);
     // The blink must pay off: each missing condition cancels it (an Apple-like source, a plain PLUS boot, no cable, a 3 A cable, ...).
-    CHECK_EQ(plan_reattach(kB2, a5, 2, true, false), false);     // the source does not list SVID 0x2717
+    CHECK_EQ(plan_reattach(kB2, a5, 2, true, false), false);     // the offer is not below the source's own claim: nothing to unlock
     CHECK_EQ(plan_reattach(kB2, a5, 2, false, true), false);     // bus-powered: nothing dies, nothing to come back from
     CHECK_EQ(plan_reattach(kOff, a5, 2, true, true), false);     // no spoof identity chosen
     CHECK_EQ(plan_reattach(kB2, a3, 2, true, true), false);      // a 3 A cable: the 6 A rows are not asked for
     CHECK_EQ(plan_reattach(kB2, a5, 1, true, true), false);      // Rd on CC1: the Ra shares that line
     CHECK_EQ(plan_reattach(kB2, a5, 0, true, true), false);
     CHECK_EQ(plan_reattach(Choice{Kind::Builtin, 99}, a5, 2, true, true), false);   // an invalid choice
+}
+
+// The offers of three chargers, as the K2 read them (PDO raw words from the hardware captures of 2026-11-11, decoded here, no
+// hand-written fields). Source_Caps_Ext PDP of each: 120 W, 100 W, 30 W.
+pd::SourceCaps caps_of(std::initializer_list<std::uint32_t> raws) {
+    pd::SourceCaps c;
+    c.valid = true;
+    for (const std::uint32_t r : raws) c.pdos[c.num_pdos++] = pd::decode_pdo(r);
+    return c;
+}
+// CUKTECH C1 before the cable is read: 5/9/12/15/20 V at 3 A, PPS 11 V 3 A and 20 V 3 A (best 60 W).
+pd::SourceCaps cuktech_unlocked_by_nothing() {
+    return caps_of({167874860u, 184620u, 246060u, 307500u, 409900u, 3369873980u, 3381670460u});
+}
+// The same charger after the 6 A cable read: 20 V 5 A and the 6 A PPS (best 120 W).
+pd::SourceCaps cuktech_after_the_cable() {
+    return caps_of({167874860u, 184620u, 246060u, 307500u, 410100u, 3369874040u, 3381670520u});
+}
+// NOVOO RG100 behind a cable it reads as 3 A: 5/9/15/20 V at 3 A and PPS 5-21 V 3 A (best 60 W fixed, 63 W PPS).
+pd::SourceCaps novoo_cable_limited() { return caps_of({134320428u, 184620u, 307500u, 409900u, 3248763452u}); }
+// The same NOVOO once it read the 5 A identity: 20 V 5 A and PPS 21 V 5 A.
+pd::SourceCaps novoo_unlocked() { return caps_of({134320428u, 184620u, 307500u, 410100u, 3248763492u}); }
+// ASUS 30 W: 12 V 2.5 A, 15 V 2 A, 20 V 1.5 A (30 W each) and PPS 3.3-11 V 3 A (33 W): a plain 30 W charger.
+pd::SourceCaps asus_30w() { return caps_of({184652076u, 184620u, 246010u, 307400u, 409750u, 3369869628u}); }
+
+void test_the_offer_below_the_claim_is_a_cable_limit() {
+    CHECK_EQ(best_power_w(cuktech_unlocked_by_nothing()), 60u);
+    CHECK_EQ(best_power_w(novoo_cable_limited()), 63u);   // the PPS 21 V x 3 A beats the fixed 60 W
+    CHECK_EQ(best_power_w(asus_30w()), 33u);              // the PPS 11 V x 3 A beats the 30 W fixed levels
+    CHECK_EQ(best_power_w(cuktech_after_the_cable()), 120u);
+    CHECK_EQ(best_power_w(pd::SourceCaps{}), 0u);
+    // The evidence: 60 W of 120, and 63 W of 100, fire; 33 W of 30 does not.
+    CHECK_EQ(cable_limited(cuktech_unlocked_by_nothing(), 120), true);
+    CHECK_EQ(cable_limited(novoo_cable_limited(), 100), true);
+    CHECK_EQ(cable_limited(asus_30w(), 30), false);
+    // Once the cable is read the offer reaches the claim, and a source offering more than 3 A is never held down at 3 A.
+    CHECK_EQ(cable_limited(cuktech_after_the_cable(), 120), false);
+    CHECK_EQ(cable_limited(novoo_unlocked(), 100), false);
+    // The margin: the claim must be at least kClaimMarginW above the best offer.
+    CHECK_EQ(cable_limited(cuktech_unlocked_by_nothing(), 60 + kClaimMarginW), true);
+    CHECK_EQ(cable_limited(cuktech_unlocked_by_nothing(), 60 + kClaimMarginW - 1), false);   // a 65 W label over a 60 W offer
+    CHECK_EQ(cable_limited(cuktech_unlocked_by_nothing(), 60), false);
+    // No claim (0) and no offer are not a verdict: the claim function never fires on them (the no-claim fallback is its own rule).
+    CHECK_EQ(cable_limited(cuktech_unlocked_by_nothing(), 0), false);
+    CHECK_EQ(cable_limited(pd::SourceCaps{}, 120), false);
+    // One PDO above 3 A (a 3.25 A level, a PPS at 3.3 A) is the source's own limit, whatever the claim.
+    CHECK_EQ(cable_limited(caps_of({167874860u, 184620u, 410100u}), 200), false);   // 20 V 5 A
+    pd::SourceCaps odd = cuktech_unlocked_by_nothing();
+    odd.pdos[3].max_ma = 3250; odd.pdos[3].max_mw = 48750;
+    CHECK_EQ(cable_limited(odd, 120), false);
+}
+
+void test_the_no_claim_fallback() {
+    // Without a Source_Caps_Ext: the top fixed level is 20 V at exactly 3.00 A and nothing offers more than 3 A.
+    CHECK_EQ(cable_limited_no_claim(cuktech_unlocked_by_nothing()), true);
+    CHECK_EQ(cable_limited_no_claim(novoo_cable_limited()), true);
+    CHECK_EQ(cable_limited_no_claim(asus_30w()), false);               // 20 V at 1.5 A: a charger of its own size
+    CHECK_EQ(cable_limited_no_claim(cuktech_after_the_cable()), false);   // 20 V 5 A
+    CHECK_EQ(cable_limited_no_claim(pd::SourceCaps{}), false);
+    // A 15 V top level (a 45 W charger), a 28 V EPR level above the 20 V one, or a 3.25 A level: not this rule.
+    CHECK_EQ(cable_limited_no_claim(caps_of({167874860u, 184620u, 307500u})), false);
+    pd::SourceCaps epr = cuktech_unlocked_by_nothing();
+    epr.pdos[7].type = pd::PdoType::Fixed; epr.pdos[7].max_mv = 28000; epr.pdos[7].max_ma = 3000; epr.num_pdos = 8;
+    CHECK_EQ(cable_limited_no_claim(epr), false);
+    // The planning rule: a known claim decides alone, the fallback only speaks when no claim is in hand.
+    CHECK_EQ(offer_held_by_cable(cuktech_unlocked_by_nothing(), 120), true);
+    CHECK_EQ(offer_held_by_cable(asus_30w(), 30), false);
+    CHECK_EQ(offer_held_by_cable(cuktech_unlocked_by_nothing(), 0), true);    // no claim: the fallback
+    CHECK_EQ(offer_held_by_cable(asus_30w(), 0), false);
+    CHECK_EQ(offer_held_by_cable(cuktech_unlocked_by_nothing(), 60), false);  // a claim of 60 W: the offer is the whole claim, the fallback is not asked
 }
 
 // Only the Reattach kind marks a boot whose reboot was the planned re-attach: the run journal's resume on that boot is not
@@ -425,6 +496,8 @@ int main() {
     test_the_boot_mode_decision();
     test_the_comeback_judge();
     test_the_planned_reattach_gate();
+    test_the_offer_below_the_claim_is_a_cable_limit();
+    test_the_no_claim_fallback();
     test_only_the_reattach_kind_is_a_planned_reattach();
     test_the_follower();
     test_the_follower_carries_a_runs_cable();
