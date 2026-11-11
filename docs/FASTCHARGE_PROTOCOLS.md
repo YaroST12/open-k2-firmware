@@ -244,7 +244,7 @@ proves the decoder header reaches no pin, register or driver.
   `sniff stream` share the ISR and are guarded too: a storm ends them with end reason `storm` (6) and
   `[SNIFF] stopped: data traffic`. Readout: flags bit 4 `paused`, then storms, the last storm's interrupts and ms, and
   the wait left (`fc vooc`, shell `vooc guard ...`).
-- While the monitor owns the lines (floating, no 0.6 V bias), the D+/D- classifier reads `USB DATA` whatever the
+- While the monitor owns the lines (Sniff floating inputs), the D+/D- classifier reads `USB DATA` whatever the
   levels (PD still wins), and the window starts fresh when the monitor lets go.
 - The monitor is on by default (a RAM switch, not saved). Not yet run on hardware.
 
