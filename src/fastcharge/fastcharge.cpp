@@ -57,7 +57,7 @@ void dcp_finish() {
     const DcpCheck r = dcp_check_result(g_dcp_idle_dm_mv, dm);
     g_dcp_proof = r == DcpCheck::Shorted;
     K2LOG("[FC] dcp check dm_idle=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
-          g_dcp_idle_dm_mv, dm, dp, static_cast<int>(r));
+          static_cast<int>(g_dcp_idle_dm_mv), static_cast<int>(dm), static_cast<int>(dp), static_cast<int>(r));
 }
 
 // First step: when every gate holds, drive D+ to 0 V and let the next poll read D-.
