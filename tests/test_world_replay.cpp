@@ -33,6 +33,7 @@
 #include "k2/core/rd_intent.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/core/remote.hpp"
+#include "k2/chargertest/session_store.hpp"
 #include "k2/drivers/accelerometer.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -79,6 +80,17 @@ world::Timing timing() {
 void reboot_stub() {}
 void dfu_stub() {}
 
+// The marker decision this boot made (rdcomeback::boot_look) as a line in the world's log, for the cases to match on.
+void note_boot_look() {
+    const k2::rdcomeback::BootLook& b = k2::rdcomeback::boot_look();
+    using K = k2::rdintent::IntentKind;
+    const char* kind = b.kind == K::Session ? "session" : b.kind == K::Reattach ? "reattach" : b.kind == K::Rescan ? "rescan" : "none";
+    char s[160];
+    std::snprintf(s, sizeof s, "[TEST] boot_look looked=%d kind=%s pin=%u canary=%d host=%d sram_words=%u", b.looked ? 1 : 0, kind,
+                  unsigned(b.pin), b.canary ? 1 : 0, b.host ? 1 : 0, unsigned(b.sram_words));
+    world::note(s);
+}
+
 // main.cpp boot() as far as the PD link sees it, a cold boot: the boot keys (PLUS, in the reboot world), the PD half of the boot
 // through the same calls main.cpp makes (src/core/boot_pd.cpp: the Rd intent marker, the Rd decision, the comeback's early PD
 // service, the self-power bring-up), the power monitor, the volume, the UI, the hooks. The rest of the slow init (LCD, USB) takes
@@ -87,6 +99,7 @@ void boot(int page) {
     const std::uint8_t held = world::plus_held() ? k2::bootmode::kPlus : 0;
     const k2::bootmode::Mode keys = k2::bootmode::decide(held);
     const k2::bootpd::Early pd_boot = k2::bootpd::early(keys, false);
+    note_boot_look();       // right after the marker decision: a boot the rail does not outlive still tells what it decided
     k2::adc::init();        // boottrace::init: the ADC and the power monitor
     k2::power::init();
     {
@@ -95,6 +108,7 @@ void boot(int page) {
     }
     k2::systick::delay_ms(50);
     k2::bootpd::late(pd_boot);
+    k2::session::init();    // the backup registers' session record: what the previous life left, and this life's own
     k2::fastcharge::init();
     static k2::Ui ui;
     static k2::Remote remote{ui};
@@ -219,41 +233,65 @@ std::vector<std::uint8_t> h_side_caps() {
 
 // hr-session: a PLUS boot on a charger alone (the key's Rd makes the charger start VBUS), a self-powered session (contract, the
 // follower writes the Session marker), PLUS released at 1.5 s; at 6 s the charger sends a Hard Reset and cuts VBUS for ~0.8 s: the
-// K2 dies and boots again, cold, when VBUS comes back. Variants: SRAM kept or lost over the dark (.noinit: the marker's canary) x
-// the K2's HID port looped to its own receptacle or not (the loop's Rd holds the charger, its VBUS feeds the aux rail).
+// K2 dies and boots again, cold, when VBUS comes back. The marker's voucher is the backup registers' session record
+// (session::backup_alive); SRAM (.noinit) never survives a dark and decides nothing. Variants: the backup registers kept over the
+// dark (bpr_hold_ms longer than the ~0.7 s dark) or lost (hold 0: any dark clears them) x the K2's HID port looped to its own
+// receptacle or not (the loop's Rd holds the charger, its VBUS feeds the aux rail).
 std::vector<RebootCase> reboot_cases() {
     std::vector<RebootCase> v;
     for (int hid = 0; hid < 2; hid++)
         for (int kept = 1; kept >= 0; kept--) {
             RebootCase c;
             c.name = "hr-session";
-            c.variant = std::string(kept ? "sram-kept" : "sram-lost") + (hid ? "-hid-loop" : "");
+            c.variant = std::string(kept ? "bpr-kept" : "bpr-lost") + (hid ? "-hid-loop" : "");
             c.sc.name = c.name;
             c.sc.ch.caps = h_side_caps();
-            c.sc.pm.sram_kept = kept;
+            if (!kept) c.sc.pm.bpr_hold_ms = 0;
             c.sc.hid_loop = hid;
             c.sc.plus_until_ms = 1500;
             c.sc.end_ms = 10000;
             c.sc.events = {{6000, world::RebootEvent::HardReset}};
             c.lives = 2;
-            c.logs = {{1, "[PD] self-power bring-up: contract ready"}, {1, "[RDI] marker written: session pin=2"}};
+            // Life 1: a key-mode boot never reads the marker, and the backup domain is empty (power-on).
+            c.logs = {{1, "[PD] self-power bring-up: contract ready"}, {1, "[RDI] marker written: session pin=2"},
+                      {1, "[SESS] no previous session record"}, {1, "[TEST] boot_look looked=0 kind=none pin=0 canary=0 host=0"}};
+            c.absent = {{1, "[RDI] boot look"}};
             if (!hid && kept) {
                 c.alive = true;
                 c.contracts = 2;
                 c.logs.insert(c.logs.end(), {{2, "[RDI] comeback boot: session pin=2"}, {2, "[RDI] comeback vouched"},
-                                             {2, "[PD] self-power bring-up: contract ready"}});
-                c.note = "the comeback bridges the Hard Reset";
+                                             {2, "[PD] self-power bring-up: contract ready"}, {2, "[SESS] previous session #1"},
+                                             {2, "[RDI] boot look: record session pin=2 canary=1 host=0"},
+                                             {2, "[TEST] boot_look looked=1 kind=session pin=2 canary=1 host=0 sram_words=0"}});
+                c.absent.push_back({2, "did not survive"});
+                c.note = "the backup registers vouch: the comeback bridges the Hard Reset";
             } else if (!hid) {
                 c.alive = false;
                 c.contracts = 1;
-                c.logs.insert(c.logs.end(), {{2, "the SRAM canary did not survive"}, {2, "[WORLD] charger: no Rd"}});
-                c.note = "FINDING: no SRAM over the Hard Reset's dark = a stale record; the plain boot drops the Rd, the charger detaches";
+                // The rail is gone before this boot reaches session::init: no [SESS] line, the decision is logged by begin() itself.
+                c.logs.insert(c.logs.end(), {{2, "[RDI] record session pin=2 ignored: the backup registers did not survive this boot"},
+                                             {2, "[RDI] boot look: record session pin=2 canary=0 host=0"},
+                                             {2, "[TEST] boot_look looked=1 kind=session pin=2 canary=0 host=0 sram_words=0"},
+                                             {2, "[WORLD] charger: no Rd"}});
+                c.absent.push_back({2, "[RDI] comeback boot"});
+                c.note = "no backup registers over the Hard Reset's dark = a stale record; the plain boot drops the Rd, the charger detaches";
+            } else if (kept) {
+                c.alive = true;
+                c.contracts = 1;
+                c.logs.insert(c.logs.end(), {{2, "[RDI] record session pin=2 ignored: a USB host powers this boot"},
+                                             {2, "[RDI] boot look: record session pin=2 canary=1 host=1"},
+                                             {2, "[TEST] boot_look looked=1 kind=session pin=2 canary=1 host=1 sram_words=0"}});
+                c.absent.push_back({2, "[RDI] comeback boot"});
+                c.absent.push_back({2, "did not survive"});
+                c.note = "the loop's Rd holds the charger; its aux rail makes the record a host boot's: passive, alive, no new contract";
             } else {
                 c.alive = true;
                 c.contracts = 1;
-                c.logs.push_back({2, kept ? "a USB host powers this boot" : "the SRAM canary did not survive"});
-                c.absent = {{2, "[RDI] comeback boot"}};
-                c.note = "the loop's Rd holds the charger; its aux rail makes the record a host boot's: passive, alive, no contract";
+                c.logs.insert(c.logs.end(), {{2, "[RDI] record session pin=2 ignored: the backup registers did not survive this boot"},
+                                             {2, "[RDI] boot look: record session pin=2 canary=0 host=1"}, {2, "[SESS] no previous session record"},
+                                             {2, "[TEST] boot_look looked=1 kind=session pin=2 canary=0 host=1 sram_words=0"}});
+                c.absent.push_back({2, "[RDI] comeback boot"});
+                c.note = "stale record and a host-powered boot: passive either way, alive on the loop's Rd, no new contract";
             }
             v.push_back(std::move(c));
         }
@@ -284,7 +322,7 @@ RebootOut run_reboot(const RebootCase& c) {
     RebootOut o;
     auto fail = [&](const std::string& w) { o.pass = false; o.why += (o.why.empty() ? "" : "; ") + w; };
     world::reboot_start(c.sc, timing());
-    if (!world::noinit_found()) fail(".noinit not found in this executable: the canary cannot survive a dark");
+    if (!world::noinit_found()) fail(".noinit not found in this executable (or larger than the world's copy): the SRAM probe cannot be modelled");
     while (world::reboot_wait_boot()) {
         std::fflush(nullptr);
         const pid_t p = fork();

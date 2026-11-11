@@ -24,7 +24,9 @@
 
 #include "fake_lcd.h"
 #include "ui_stubs.h"
+#include "k2/chargertest/session_store.hpp"
 #include "k2/core/fs.hpp"
+#include "k2/core/log.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -47,6 +49,7 @@ constexpr double kSafe5vMv = 4750;   // vSafe5V (min): the charger's PD starts, 
 constexpr int kRdMv = 1680, kOpenMv = 3300;   // an Rp 3 A into one Rd / an Rp with no Rd on the line (trace2scenario OPEN_RP_MV)
 constexpr double kAdcFirstRingUs = 15000;     // adc::init() to the first full ring (src/core/rd_comeback.cpp host_powered_now)
 constexpr int kMaxLives = 20;
+constexpr std::size_t kNoinitMax = 1024;      // room for the executable's .noinit (the SRAM probe is 128 B); noinit_found() checks it fits
 
 enum : std::uint8_t {
     kDeviceId = 0x01, kSwitches0 = 0x02, kSwitches1 = 0x03, kMeasure = 0x04, kControl0 = 0x06, kControl1 = 0x07,
@@ -64,7 +67,7 @@ struct ChargerState {
 };
 
 // The world's state. In the reboot world it lives in shared memory: every firmware life and the run's process see the same
-// bytes, so what a power loss keeps (the flash, the .noinit bytes, a FUSB302 that stayed powered) and the world itself (clock,
+// bytes, so what a power loss keeps (the flash, the backup registers, a FUSB302 that stayed powered) and the world itself (clock,
 // charger, VBUS, log) carry over from one life to the next. In the replay it is a static of the one process. Plain data only.
 struct State {
     double t0 = 0, us = 0;   // world ms at firmware 0 (this life's power-on), firmware us
@@ -92,9 +95,14 @@ struct State {
     std::size_t next_event = 0;
     ChargerState ch;
     ChargerStats stats;
-    std::uint8_t noinit[64] = {};
-    std::uint32_t noinit_n = 0;
-    bool noinit_saved = false;
+    // What a power loss does to the rest of the K2: the backup domain (BPR) and SRAM. Each life is a fork of the pristine image, so
+    // both are carried here: the session record's 16 registers (DR22..DR37), the pin mark (DR21), and the .noinit bytes.
+    std::uint16_t bpr_session[k2::session::kWords] = {};
+    std::uint16_t pin_mark = 0;
+    std::uint8_t noinit[kNoinitMax] = {};
+    std::uint32_t noinit_n = 0;      // the executable's .noinit size (0: not located or too large for the copy)
+    bool died = false;               // a life ended in a brown-out (the next boot follows a dark, not a power-on)
+    double dark_from = 0;            // world ms of that brown-out
     std::uint32_t log_n = 0;
     std::uint8_t flash[kFlashBytes];
     char log[kLogBytes];
@@ -421,7 +429,8 @@ void apply_event(const RebootEvent& e) {
 
 [[noreturn]] void die() {
     if (S->noinit_n) std::memcpy(S->noinit, g_noinit.data(), S->noinit_n);
-    S->noinit_saved = true;
+    S->died = true;
+    S->dark_from = S->pt;
     wlog("[WORLD] brown-out: rail %.0f mV, life %d ends", S->rail, S->life);
     S->us = (S->pt - S->t0) * 1000.0;
     S->mcu = false;
@@ -632,8 +641,8 @@ public:
 WorldFlash g_flash;
 k2::fs::Fs g_fs(g_flash, k2::fs::kFlashBlocks);
 
-// The .noinit section of this executable (rd_comeback.cpp's SRAM canary): its address at run time from the section headers and
-// the load bias of the main program.
+// The .noinit section of this executable (rd_comeback.cpp's SRAM probe, a diagnostic): its address at run time from the section
+// headers and the load bias of the main program.
 std::span<std::uint8_t> find_noinit() {
     std::uintptr_t base = 0;
     dl_iterate_phdr([](dl_phdr_info* i, std::size_t, void* d) { *static_cast<std::uintptr_t*>(d) = i->dlpi_addr; return 1; }, &base);
@@ -735,12 +744,12 @@ void reboot_start(const RebootScenario& sc, const Timing& t) {
     S->chip_on = false;   // everything unpowered at world time 0
     S->cable_in = true;
     g_noinit = find_noinit();
-    S->noinit_n = std::uint32_t(std::min(g_noinit.size(), sizeof S->noinit));
+    S->noinit_n = g_noinit.size() <= sizeof S->noinit ? std::uint32_t(g_noinit.size()) : 0;
     common_start(t);
     g_stub.usb_configured = false;   // the HID port (looped or not) has no USB host on it
 }
 
-bool noinit_found() { return !g_noinit.empty() && g_noinit.size() <= sizeof S->noinit; }
+bool noinit_found() { return S->noinit_n != 0; }
 
 bool reboot_wait_boot() {
     const PowerModel& pm = g_rs->pm;
@@ -765,13 +774,35 @@ void life_begin() {
     S->life = ++S->lives;
     S->mcu = true;
     S->last_boot_ms = w;
-    const bool kept = g_rs->pm.sram_kept && S->noinit_saved;
-    if (S->noinit_n) {
-        if (kept) std::memcpy(g_noinit.data(), S->noinit, S->noinit_n);
-        else std::memset(g_noinit.data(), 0, S->noinit_n);
+    // What the dark did. The first life is a power-on: the backup registers read as zeros (an unpowered domain), SRAM as the image.
+    // After a brown-out: the backup registers survive a dark up to bpr_hold_ms, else they are zeros; SRAM is lost (power-on
+    // garbage, a fixed pattern here) unless the scenario's switch says it held.
+    const PowerModel& pm = g_rs->pm;
+    const double dark = S->died ? w - S->dark_from : 0;
+    const bool bpr_kept = S->died && dark <= pm.bpr_hold_ms;
+    const bool sram_kept = S->died && pm.sram_kept;
+    if (S->died && !bpr_kept) {
+        std::memset(S->bpr_session, 0, sizeof S->bpr_session);
+        S->pin_mark = 0;
     }
-    wlog("[WORLD] life %d: power-on reset at rail %.0f mV, VBUS %.0f mV, .noinit %s", S->life, S->rail, S->vbus,
-         S->noinit_saved ? (kept ? "kept" : "lost") : "power-on");
+    if (S->died && S->noinit_n) {
+        if (sram_kept) std::memcpy(g_noinit.data(), S->noinit, S->noinit_n);
+        else {
+            std::uint32_t x = 0x9E3779B9u;
+            for (std::uint32_t i = 0; i < S->noinit_n; i++) {
+                x ^= x << 13; x ^= x >> 17; x ^= x << 5;   // xorshift32: unlike the probe's pattern, so the count is not a coincidence
+                g_noinit[i] = std::uint8_t(x);
+            }
+        }
+    }
+    wlog("[WORLD] life %d: power-on reset at rail %.0f mV, VBUS %.0f mV, dark %.0f ms, backup registers %s, .noinit %s", S->life, S->rail,
+         S->vbus, dark, S->died ? (bpr_kept ? "kept" : "lost") : "power-on", S->died ? (sram_kept ? "kept" : "lost") : "power-on");
+}
+
+void note(const char* text) {
+    char b[256];
+    std::snprintf(b, sizeof b, "%s\n", text);
+    log_put(S->pt, S->life, b);
 }
 
 void life_end() {
@@ -932,9 +963,9 @@ bool host_pin(Port p, std::uint8_t n, HostPin op, unsigned) {
 }  // namespace reg
 
 namespace pinmark {
-namespace { std::uint16_t g_mark; }   // the backup domain: a power loss clears it (each life starts with 0)
-std::uint16_t read() { return g_mark; }
-void write(std::uint16_t raw) { g_mark = raw; }
+// DR21 in the world's backup domain (State::pin_mark): kept over a dark shorter than PowerModel::bpr_hold_ms, like the session record.
+std::uint16_t read() { return world::S->pin_mark; }
+void write(std::uint16_t raw) { world::S->pin_mark = raw; }
 }  // namespace pinmark
 
 namespace fs {   // the volume on the world's flash bytes (src/drivers/fs_flash.cpp without the log lines and the legacy wipe)
@@ -1002,7 +1033,29 @@ bool latest_dpdm(std::int32_t& dp, std::int32_t& dm) {
 // (docs/TESTING.md "World replay", sink and QC); the transition capture's poll is the delay_ms() wait hook and records nothing.
 namespace usb { void log_stats() {} }
 namespace shell_hw { void poll() {} }
-namespace session { void poll() {} }
+// The session record's backup registers (src/chargertest/session_store.cpp reaches BPR at 0x40006C00, which a host cannot): the
+// same init / voucher over State::bpr_session. Every boot writes a fresh record, so the record is the voucher of the next one. poll()
+// would only rewrite it as the PD state changes: the voucher needs no more than that valid record.
+namespace session {
+namespace {
+std::array<std::uint16_t, kWords> bpr_load() {
+    std::array<std::uint16_t, kWords> w;
+    std::copy(std::begin(world::S->bpr_session), std::end(world::S->bpr_session), w.begin());
+    return w;
+}
+}  // namespace
+bool backup_alive() { return decode(bpr_load()).has_value(); }
+void init() {
+    const auto prev = decode(bpr_load());
+    if (prev) K2LOG("[SESS] previous session #%u\n", static_cast<unsigned>(prev->boots));
+    else K2LOG("[SESS] no previous session record\n");
+    Record fresh;
+    fresh.boots = std::uint16_t((prev ? prev->boots : 0) + 1);
+    const auto w = encode(fresh);
+    std::copy(w.begin(), w.end(), world::S->bpr_session);
+}
+void poll() {}
+}  // namespace session
 namespace power_source { void poll(std::uint32_t) {} }
 namespace net { void log_stats() {} }
 namespace msc { void poll() {} bool io() { return false; } }

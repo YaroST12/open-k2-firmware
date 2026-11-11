@@ -26,7 +26,7 @@ It has two modes:
 ```
 make host-build/test_world_replay && ./host-build/test_world_replay        # also part of make test / make gate
 K2_WORLD_ONLY=late-attach-cycles:rise420.8:Home ./host-build/test_world_replay   # pick runs (scenario[:episode[:page[:phase]]])
-K2_WORLD_ONLY=hr-session:sram-lost K2_WORLD_LOG=1 ./host-build/test_world_replay # a reboot case with its firmware log
+K2_WORLD_ONLY=hr-session:bpr-lost K2_WORLD_LOG=1 ./host-build/test_world_replay # a reboot case with its firmware log
 ```
 
 - The report goes to `runs/world-replay/report.txt`. It has one line per run, plus the firmware log and the fate of
@@ -131,11 +131,23 @@ A recording alone cannot replay a sink, because the K2's own messages change wha
   from the same pristine image, as after a power-on reset.
 - **What survives** is kept in shared memory:
   - the flash volume (the `/rd.rec` marker and the stores);
-  - the `.noinit` section (the `rdintent::Canary`), only when the scenario says SRAM held;
+  - the backup registers (BPR): the session record in DR22..DR37 and the pin mark in DR21, while the dark is no
+    longer than `PowerModel::bpr_hold_ms`; a longer dark zeros them. A host cannot reach BPR at 0x40006C00, so the
+    world provides `session::init` / `backup_alive` over the same record (`session::encode` / `decode`) and
+    `pinmark::read` / `write` over its own copy;
   - the FUSB302 registers, while its supply held (power-on defaults after);
   - the world itself (clock, charger, VBUS, the log, tagged with the life number).
+- **What does not survive.** SRAM. `.noinit` holds only the 128 B diagnostic probe (`rdcomeback::kProbeWords`), and no
+  SRAM survives a VBUS dark on this board (0 of 32 words after 1 s). Each life after a dark gets a fixed garbage
+  pattern in `.noinit`, so `boot_look().sram_words` reads 0. `PowerModel::sram_kept = true` copies the bytes across
+  instead (a switch for what-if runs; no case sets it).
+- **The voucher.** The Rd marker (`/rd.rec`) is only a comeback's when `session::backup_alive()` is true: a valid
+  session record in the backup registers, which every boot rewrites. So a short dark (the Hard Reset's) keeps the
+  record and the marker is believed; a long one (an unplug and a wait) loses it and the marker is judged stale.
 - **Boot path.** Each life boots through `bootmode::decide`, `bootpd::early`, `adc` / `power` / `fs` init,
-  `bootpd::late`, `fastcharge::init`, the UI and `mainloop::begin`, in `main.cpp`'s order.
+  `bootpd::late`, `session::init`, `fastcharge::init`, the UI and `mainloop::begin`, in `main.cpp`'s order. Right after
+  `early()` the test writes the marker decision (`rdcomeback::boot_look()`) into the world's log as a
+  `[TEST] boot_look ...` line, so a boot the rail does not outlive still reports what it decided.
 
 Model parameters. All are inferred; the hardware row says where a number comes from.
 
@@ -146,7 +158,8 @@ Model parameters. All are inferred; the hardware row says where a number comes f
 | FUSB302 keeps its registers | ≥ 2000 mV | below: lost, power-on defaults on the way up |
 | reset to `boot()` | 1 ms | |
 | ADC first readings | 15 ms after the life's first `adc::init` | the first DMA ring |
-| SRAM (`.noinit`) across a dark | per variant | unmeasured on this board |
+| Backup registers across a dark | kept up to `bpr_hold_ms` = 5000 ms (the dark is counted from the brown-out to the next reset), zeros beyond; `hr-session` variants set 0 to lose them | hardware: kept over a 1 s dark, lost after a minutes-long unplug; the actual limit is unmeasured |
+| SRAM (`.noinit`) across a dark | lost (`sram_kept` switch, off) | hardware: 0 of 32 probe words after 1 s (`runs/2026-11-11-iq4-bridge`) |
 | Rd on the charger's line | the chip's PDWN bits (switch closed only while a life runs), the PLUS key on CC2 while held (~5.2 kΩ, CONNECTION_MATRIX), the HID port's Rd (loop variants) | |
 | charger tCCDebounce | 150 ms Rd → VBUS on | |
 | charger tPDDebounce | 15 ms without Rd → detach, VBUS off (counted from vSafe5V) | |
@@ -171,7 +184,8 @@ The scenario `hr-session`:
 
 - PLUS is held from power-up to 1.5 s, a key-mode boot with a self-powered session.
 - The charger sends a Hard Reset at 6 s, and the run ends at 10 s.
-- It runs in four variants: SRAM kept or lost, each with and without the HID loop.
+- The Hard Reset's dark is about 713 ms (brown-out to the next reset).
+- It runs in four variants: backup registers kept or lost over that dark, each with and without the HID loop.
 
 Each case asserts:
 
@@ -183,12 +197,20 @@ Each case asserts:
 
 | Variant | Outcome |
 | :--- | :--- |
-| `sram-kept` | life 2 is a comeback boot (`session pin=2`), contract again; Rd gap 9.2 ms of 15 |
-| `sram-lost` | the record is judged stale (canary gone), the plain boot drops Rd, the charger detaches after 15 ms, the K2 stays dark |
-| `sram-kept-hid-loop`, `sram-lost-hid-loop` | the aux rail makes life 2 a host-powered boot: passive, alive, no new contract |
+| `bpr-kept` | the record vouches (`canary=1`, `host=0`): life 2 is a comeback boot (`session pin=2`), contract again; Rd gap 9.2 ms of 15 |
+| `bpr-lost` | `[RDI] record ... ignored: the backup registers did not survive this boot`, `canary=0`: the plain boot drops Rd, the charger detaches after 15 ms, the K2 stays dark (the rail is gone before `session::init`, so no `[SESS]` line) |
+| `bpr-kept-hid-loop` | `canary=1`, `host=1`: the aux rail makes life 2 a host-powered boot: passive, alive on the loop's Rd, no new contract |
+| `bpr-lost-hid-loop` | `canary=0`, `host=1`, `[SESS] no previous session record`: stale record and a host boot, passive either way, alive, no new contract |
 
-The 9.2 ms margin in `sram-kept` depends on two inferred numbers: the 15 ms first ADC ring, and the gap counted
+Every case also asserts life 1: a key-mode boot never reads the marker (`looked=0`, no `[RDI] boot look` line) and the
+backup domain is empty (`[SESS] no previous session record`). In all four, `sram_words=0`: SRAM decides nothing.
+
+The 9.2 ms margin in `bpr-kept` depends on two inferred numbers: the 15 ms first ADC ring, and the gap counted
 from vSafe5V.
+
+Not modelled about the backup domain: its real retention limit between 1 s and minutes (so `bpr_hold_ms` = 5000 ms is a
+choice, not a measurement), and the session record's content after the first boot (`session::poll` rewrites it as the PD
+state changes; the world's record stays the boot's fresh one, which is all the voucher reads).
 
 Not covered yet:
 

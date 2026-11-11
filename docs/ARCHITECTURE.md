@@ -1153,6 +1153,10 @@ calibration, and how to add a scenario are in [TESTING.md](TESTING.md).
 
 Build: the world objects are compiled with `-DK2_HOST_PINS -DK2_WORLD_STUBS` and come first on the link line;
 `tests/ui_stubs.cpp` leaves out its clock, FUSB302, power, ADC and Rd-comeback stand-ins under `K2_WORLD_STUBS`.
+What a power loss keeps is modelled as the hardware keeps it: the flash volume and the backup registers (session record
+and pin mark, up to a hold time per scenario; the host world supplies `session::init` / `backup_alive` over the same
+record) survive a dark, SRAM does not (the `.noinit` probe reads back as garbage). The Rd marker's voucher
+(`session::backup_alive`) is thus decided by the firmware itself, see TESTING.md "Reboot world".
 The world must stay a model of hardware: any firmware logic the test needs is called, never copied. When a test needs a
 firmware sequence that only exists inline in `main.cpp`, move it behind a function both call (as `main_loop` and
 `boot_pd` were).

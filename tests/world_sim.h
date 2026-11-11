@@ -87,8 +87,10 @@ unsigned tx_starts();      // TX_START writes (an inline sniffer must never tran
 // The K2 lives on the charger's VBUS. Each firmware life is a fork of the test's run process: when the K2's rail falls below
 // the brown-out level the life ends (_exit), and the next one boots cold from the same pristine image, so every static starts
 // over as after a power-on reset. What a real power loss keeps is kept in shared memory: the flash volume (the /rd.rec marker,
-// the stores), the .noinit section (rdintent::Canary) when SRAM survived the dark, the FUSB302's registers while its own supply
-// held, and the world itself (clock, charger, VBUS, log). Every number is in the report and in docs/TESTING.md.
+// the stores), the backup registers (the session record DR22..DR37 that vouches for the marker, the DR21 pin mark) while the dark
+// is shorter than PowerModel::bpr_hold_ms, the FUSB302's registers while its own supply held, and the world itself (clock,
+// charger, VBUS, log). SRAM (.noinit, the diagnostic probe) is lost in every dark unless a scenario says otherwise. Every number
+// is in the report and in docs/TESTING.md.
 struct ChargerModel {               // a PD source on one CC line (its Rp), the e-marker look not modelled
     int line = 2;                   // the K2 line the charger's CC wire lands on
     std::vector<std::uint8_t> caps; // Source_Capabilities data objects, 4 bytes each
@@ -108,7 +110,10 @@ struct PowerModel {                 // the K2's supply (all inferred, see docs/T
     double mcu_bor_mv = 2700;       // the MCU runs at or above this rail level (cold boot on the way up)
     double fusb_por_mv = 2000;      // the FUSB302 keeps its registers at or above this rail level; below it they are lost
     double boot_ms = 1.0;           // reset to the first instruction of boot() (clock start-up)
-    bool sram_kept = true;          // .noinit survives a dark (rdintent::Canary; unmeasured on this board, ROADMAP "Stale Rd marker")
+    double bpr_hold_ms = 5000;      // the backup registers survive a dark (rail below mcu_bor_mv) up to this long, a longer one clears
+                                    // them. Measured: kept over a 1 s dark, lost after a minutes-long unplug; the limit is unmeasured.
+                                    // The default keeps them over the Hard Reset's ~0.7 s dark; 0 loses them in any dark.
+    bool sram_kept = false;         // .noinit survives a dark: never on this board (0 of 32 probe words after 1 s), a switch only
 };
 struct RebootEvent { double t; enum Kind { HardReset, Unplug, Replug } kind; };
 struct RebootScenario {
@@ -123,10 +128,11 @@ struct RebootScenario {
 };
 void reboot_start(const RebootScenario& sc, const Timing& t);   // the K2 unpowered at world time 0
 bool reboot_wait_boot();      // the run's process, K2 dead: run the world until the rail can boot it (false: the scenario ended)
-void life_begin();            // the life's process, before boot(): firmware clock 0, .noinit as the dark left it
+void life_begin();            // the life's process, before boot(): firmware clock 0, the backup registers and .noinit as the dark left them
 void life_end();              // the life reached the scenario's end alive (the caller then exits 0)
+void note(const char* text);  // a line in the world's log, in the firmware log's order, tagged with this life (a test's own observation)
 inline constexpr int kLifeDied = 3;   // a life's exit status when the rail fell below the brown-out level
-bool noinit_found();          // the .noinit section of this executable was located (the canary can survive a dark)
+bool noinit_found();          // the .noinit section of this executable was located and fits the world's copy (sram_kept can be modelled)
 bool plus_held();             // the PLUS key at this moment
 struct ChargerStats {
     int attaches = 0, detaches = 0, hard_resets = 0, contracts = 0, requests = 0, caps_sent = 0, caps_acked = 0;
