@@ -421,6 +421,46 @@ def decode_state(p):
     return st
 
 
+# GET_STATE part 1 (the session block): the enums follow include/k2/ui/ui_types.hpp, fc_proto.hpp, home.hpp and conn.hpp.
+SESSION_PROTO_KINDS = ["none", "pd-fixed", "pd-epr", "pps", "avs", "qc2", "qc3", "fcp", "scp", "ufcs", "svooc",
+                       "typec", "dcp", "unknown", "detecting"]
+SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify"]
+SESSION_TOPOLOGY = ["unknown", "no-source", "cable-single-cc", "direct-receptacle"]
+SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"]
+SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"]
+SESSION_TABS = ["source", "cable", "sink"]
+SESSION_HOME_WINDOWS = ["10s", "60s", "10m"]
+SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device"]
+SESSION_LEN = 31
+MENU_NAMES = PAGES[ROTATION_PAGES:]                       # Menu order: the stack holds Menu indices
+
+
+def decode_session(p):
+    """GET_STATE [1]: energy / protocol / busy / topology / navigation (src/core/remote_proto.cpp encode_session)."""
+    _need(p, SESSION_LEN, "state session")
+    u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
+    stack = []
+    for m in p[23:23 + min(p[22], 3)]:
+        stack.append(MENU_NAMES[m] if m < len(MENU_NAMES) else str(m))
+    sub = p[26]
+    ui = {"stack": stack, "tab": SESSION_TABS[sub & 3] if (sub & 3) < 3 else None,
+          "popup": bool(sub & 4), "details": bool(sub & 8),
+          "sel": None if p[27] == 0xFF else p[27], "count": p[28]}
+    # The tab only means something on Connection; everywhere else it is zero and would read as "source".
+    if not stack or stack[-1] != "connection":
+        ui["tab"] = None
+    return {"mah": int.from_bytes(p[0:4], "little", signed=True), "elapsed_s": int.from_bytes(p[4:8], "little"),
+            "proto": {"kind": _name(dict(enumerate(SESSION_PROTO_KINDS)), p[8]), "limit_ma": u16(9),
+                      "max_mv": u16(11)},
+            "typec_ma": u16(13), "busy": _name(dict(enumerate(SESSION_BUSY)), p[15]), "fc_release": bool(p[16]),
+            "topology": _name(dict(enumerate(SESSION_TOPOLOGY)), p[17]),
+            "wait_kind": _name(dict(enumerate(SESSION_WAIT_KIND)), p[18]),
+            "pd_none_why": _name(dict(enumerate(SESSION_PD_NONE_WHY)), p[19]),
+            "open_cc_mv": None if u16(20) == 0xFFFF else u16(20),
+            "ui": ui, "home_window": _name(dict(enumerate(SESSION_HOME_WINDOWS)), p[29]),
+            "flags": {name: bool(p[30] >> i & 1) for i, name in enumerate(SESSION_FLAGS)}}
+
+
 def decode_adc_raw(p):
     _need(p, 35, "adc-raw")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
@@ -1213,6 +1253,11 @@ def cmd_state(link, a):
             out["source"] = {"apple": _apple_read_all(link)}
         except (RemoteError, FrameError):
             pass
+        try:   # GET_STATE [1]: older firmware answers BadLength / BadArg to a payload, the fields stay absent
+            out.update(decode_session(link.call(CMD_GET_STATE, bytes([1])).payload))
+        except RemoteError as e:
+            if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+                raise
     return out
 
 

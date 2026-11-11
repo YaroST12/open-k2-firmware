@@ -191,6 +191,18 @@ size_t encode_state(std::span<uint8_t> out, const StateInfo &s) {
     return w.size();
 }
 
+size_t encode_session(std::span<uint8_t> out, const SessionInfo &s) {
+    Writer w(out);
+    w.i32(s.mah); w.u32(s.elapsed_s);
+    w.u8(s.proto_kind); w.u16(s.limit_ma); w.u16(s.max_mv); w.u16(s.typec_ma);
+    w.u8(s.busy); w.u8(s.fc_release); w.u8(s.topology); w.u8(s.wait_kind); w.u8(s.pd_none_why);
+    w.u16(s.open_cc_mv);
+    w.u8(s.depth);
+    for (const uint8_t m : s.stack) w.u8(m);
+    w.u8(s.sub); w.u8(s.sel); w.u8(s.count); w.u8(s.home_window); w.u8(s.flags);
+    return w.size();
+}
+
 size_t encode_pdo(std::span<uint8_t> out, const PdoSnapshot &s, uint8_t index) {
     Writer w(out);
     w.u8(s.valid); w.u8(s.spec_rev); w.u8(s.num_pdos); w.u8(index);

@@ -21,4 +21,18 @@ enum class Action : uint8_t { PdRescan = 1, EmarkerScan = 2, EnergyReset = 3,
                            FcScan = 4, FcReset = 5,   // FcScan / FcReset: the remote's fc scan / fc reset (the scan needs the confirm)
                            Identify = 6 };
 
+// What keeps an identity or a START out (Ui::busy_why); busy_reason() is its footer text. The values ride the remote's
+// session block (GET_STATE part 1) as they are.
+enum class BusyWhy : uint8_t { None, TestRunning, FcRelease, QcTrigger, PdHold, Epr, PdRequest, EmScan, Identify };
+
+// Ui::Session::flags (and the wire byte): one bit per transient chrome state the screens show.
+inline constexpr uint8_t kSessionHoldCard = 1 << 0;       // BACK held: the "Reboot in N" card
+inline constexpr uint8_t kSessionRotationNotice = 1 << 1; // the rotation notice strip
+inline constexpr uint8_t kSessionEmScanning = 1 << 2;     // an e-marker scan is running
+inline constexpr uint8_t kSessionEmListening = 1 << 3;    // the passive listen window after a scan is open
+inline constexpr uint8_t kSessionEmQuiet = 1 << 4;        // the last listen window heard no cable reply
+inline constexpr uint8_t kSessionIdNoDevice = 1 << 5;     // Identify was refused: nothing on CC
+// Ui::Session::sub: the Connection page's tab (bits 1:0, conn::Tab), its pop-up (bit 2) and its details page (bit 3).
+inline constexpr uint8_t kSubTabMask = 3, kSubPopup = 1 << 2, kSubDetails = 1 << 3;
+
 }  // namespace k2

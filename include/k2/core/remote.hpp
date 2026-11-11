@@ -55,6 +55,7 @@ public:
     remote::ChargerHuntReply charger_hunt(uint8_t slot) const;   // evidence of a refused 6 A hunt row (read-only)
     remote::Status press(uint8_t button, uint16_t ms);
     remote::StateInfo state();
+    [[gnu::noinline]] remote::SessionInfo session();   // GET_STATE part 1: Ui::session() on the wire (a read)
     remote::PdoSnapshot pdos();
     remote::EmarkerSnapshot emarker();
     remote::IdentitySnapshot identity();

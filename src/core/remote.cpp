@@ -330,6 +330,24 @@ remote::StateInfo Remote::state() {
     return s;
 }
 
+// Ui::session() field for field; the page-dependent derivations live in the Ui, next to the screens that show them.
+remote::SessionInfo Remote::session() {
+    const Ui::Session u = ui_.session();
+    remote::SessionInfo s;
+    s.mah = u.mah;
+    s.elapsed_s = u.elapsed_s;
+    s.proto_kind = u.proto_kind;
+    s.limit_ma = u.limit_ma; s.max_mv = u.max_mv; s.typec_ma = u.typec_ma;
+    s.busy = static_cast<uint8_t>(u.busy);
+    s.fc_release = u.fc_release;
+    s.topology = u.topology; s.wait_kind = u.wait_kind; s.pd_none_why = u.pd_none_why;
+    s.open_cc_mv = u.open_cc_mv;
+    s.depth = u.depth;
+    for (size_t i = 0; i < s.stack.size(); i++) s.stack[i] = u.stack[i];
+    s.sub = u.sub; s.sel = u.sel; s.count = u.count; s.home_window = u.home_window; s.flags = u.flags;
+    return s;
+}
+
 remote::PdoSnapshot Remote::pdos() {
     remote::PdoSnapshot snap;
     const pd::SourceCaps *caps = &pd::active_caps();

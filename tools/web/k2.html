@@ -675,6 +675,35 @@ var K2Proto = (function () {
     return st;
   }
 
+  // GET_STATE [1], 31 bytes (src/core/remote_proto.cpp encode_session): energy, protocol, busy, topology, navigation.
+  // The enums follow include/k2/ui/ui_types.hpp, home_model.hpp, ra_guard.hpp, pd_verdict.hpp; same names as tools/k2_remote.py.
+  var SESSION_LEN = 31;
+  var SESSION_PROTO_KINDS = ["none", "pd-fixed", "pd-epr", "pps", "avs", "qc2", "qc3", "fcp", "scp", "ufcs", "svooc",
+                             "typec", "dcp", "unknown", "detecting"];
+  var SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify"];
+  var SESSION_TOPOLOGY = ["unknown", "no-source", "cable-single-cc", "direct-receptacle"];
+  var SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"];
+  var SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"];
+  var SESSION_TABS = ["source", "cable", "sink"];
+  var SESSION_HOME_WINDOWS = ["10s", "60s", "10m"];
+  var SESSION_FLAGS = ["hold_card", "rotation_notice", "em_scanning", "em_listening", "em_quiet", "id_no_device"];
+  function decodeSession(p) {
+    need(p, SESSION_LEN, "state session");
+    var v = dv(p), stack = [], i, flags = {};
+    for (i = 0; i < Math.min(p[22], 3); i++) stack.push(name(MENUS, p[23 + i]));
+    var sub = p[26], onConn = stack.length > 0 && stack[stack.length - 1] === "connection";
+    for (i = 0; i < SESSION_FLAGS.length; i++) flags[SESSION_FLAGS[i]] = !!(p[30] >> i & 1);
+    var cc = v.getUint16(20, true);
+    return { mah: v.getInt32(0, true), elapsed_s: v.getUint32(4, true),
+             proto: { kind: name(SESSION_PROTO_KINDS, p[8]), limit_ma: v.getUint16(9, true), max_mv: v.getUint16(11, true) },
+             typec_ma: v.getUint16(13, true), busy: name(SESSION_BUSY, p[15]), fc_release: !!p[16],
+             topology: name(SESSION_TOPOLOGY, p[17]), wait_kind: name(SESSION_WAIT_KIND, p[18]),
+             pd_none_why: name(SESSION_PD_NONE_WHY, p[19]), open_cc_mv: cc === 0xFFFF ? null : cc,
+             ui: { stack: stack, tab: onConn && (sub & 3) < 3 ? SESSION_TABS[sub & 3] : null, popup: !!(sub & 4), details: !!(sub & 8),
+                   sel: p[27] === 0xFF ? null : p[27], count: p[28] },
+             home_window: name(SESSION_HOME_WINDOWS, p[29]), flags: flags };
+  }
+
   function decodeAdcRaw(p) {
     need(p, 35, "adc raw");
     var v = dv(p), channels = {}, scan = {}, i;
@@ -1039,6 +1068,15 @@ var K2Proto = (function () {
 
   K2Remote.prototype.ping = async function () { return decodePing((await this.link.call(CMD.PING)).payload); };
   K2Remote.prototype.state = async function () { return decodeState((await this.link.call(CMD.GET_STATE)).payload); };
+  // GET_STATE parts: firmware older than the shell-parity build answers BadLength / BadArg to a part byte, which reads as null.
+  K2Remote.prototype.statePart = async function (part, decode) {
+    try { return decode((await this.link.call(CMD.GET_STATE, [part])).payload); }
+    catch (e) {
+      if (e instanceof RemoteError && (e.status === STATUS.BAD_LENGTH || e.status === STATUS.BAD_ARG)) return null;
+      throw e;
+    }
+  };
+  K2Remote.prototype.stateSession = function () { return this.statePart(1, decodeSession); };
 
   K2Remote.prototype.pdos = async function () {
     var r = decodePdo((await this.link.call(CMD.GET_PDOS, [0])).payload);
@@ -1648,7 +1686,7 @@ var K2Proto = (function () {
     FrameError: FrameError, RemoteError: RemoteError, RemoteTimeout: RemoteTimeout, BootloaderDetected: BootloaderDetected,
     packRequest: packRequest, parseResponse: parseResponse, isResponse: isResponse,
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
-    directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodePdo: decodePdo,
+    directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,

@@ -54,6 +54,8 @@ struct Fake {
         s.reset_flags = (1u << 27) | (1u << 26);
         return s;
     }
+    SessionInfo sess{};
+    SessionInfo session() { calls++; return sess; }
     PdoSnapshot pdos() { calls++; return snap; }
     EmarkerSnapshot emarker() { calls++; return em; }
     IdentitySnapshot id{};

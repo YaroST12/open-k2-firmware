@@ -875,6 +875,7 @@ armed_is_pick, cable_armed, rmdo, message`).
 | Command | Reads | Not on the wire |
 |---|---|---|
 | `CHARGER_TEST` `req [3]` | the wizard stage, cursor, row count and footer words, the START confirmation clock, the Waiting and Running clocks, the Review preview and refusal, sweep point counts, resume and Ra-guard state | the row texts of the lists (their data is in the results / cable / units commands); pixels |
+| `GET_STATE` `req [1]` (`k2_remote --json state`, merged into the state object) | session energy (mAh) and elapsed time (frozen at unplug), the Home protocol line (kind, limit mA, max mV, Type-C mA), the busy reason, 5 V release, topology, wait kind, why PD is absent, the open-CC level, the menu stack, the Connection tab / popup / details, the list cursor (`sel` / `count`), the Home trend window, and the hold / rotation / e-marker / identify flags | the row texts and values of the pages themselves; a list cursor on pages that do not bind the shared row list (`sel` is null there) |
 
 ### Screenshots
 

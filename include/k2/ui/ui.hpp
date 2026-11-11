@@ -203,8 +203,31 @@ public:
     [[gnu::noinline]] conn::Facts passive_facts() const;
     // The protocol row of Home (kind, level, limit, highest voltage) for the live reading: home::live_proto.
     [[gnu::noinline]] home::ProtoInfo proto_now() const;
+    // The session chrome as data (GET_STATE part 1): what Home, Connection and the list pages derive and the panel shows,
+    // every field read from the same helper the screen uses (home::live_proto, conn::sense_passive, busy_why). A few bytes
+    // on the stack, no page needed; sel / count are 0xFF / 0 on a page with no list (the charger test has its own view).
+    struct Session {
+        int32_t mah = 0;
+        uint32_t elapsed_s = 0;          // the Home elapsed time: live meter, else the last live snapshot
+        uint8_t proto_kind = 0;          // home::ProtoKind of the live reading
+        uint16_t limit_ma = 0, max_mv = 0, typec_ma = 0;
+        BusyWhy busy = BusyWhy::None;
+        bool fc_release = false;         // the 5 V release monitor is waiting
+        uint8_t topology = 0;            // raguard::Topology
+        uint8_t wait_kind = 0;           // raguard::WaitKind
+        uint8_t pd_none_why = 0;         // pd::PdNoneWhy
+        uint16_t open_cc_mv = 0xFFFF;    // the open-CC standby reading, 0xFFFF = none
+        uint8_t depth = 0;
+        uint8_t stack[3] = {0xFF, 0xFF, 0xFF};   // Menu values, outermost first
+        uint8_t sub = 0;                 // kSubTabMask | kSubPopup | kSubDetails
+        uint8_t sel = 0xFF, count = 0;
+        uint8_t home_window = 0;         // trend::Window
+        uint8_t flags = 0;               // kSession*
+    };
+    [[gnu::noinline]] Session session();
     bool ports_busy() const { return charger_test_busy() || fc_release_.busy(); }
-    const char *busy_reason() const;   // why an identity / START is refused right now, nullptr = free
+    BusyWhy busy_why() const;          // why an identity / START is refused right now, BusyWhy::None = free
+    const char *busy_reason() const;   // the footer text of busy_why(), nullptr = free
     bool spoof_busy() const { return busy_reason() != nullptr; }
     const trig::Release &fc_release() const { return fc_release_; }
     void stop_fc(uint32_t now_ms);

@@ -197,6 +197,32 @@ static void test_state() {
                                 0x00, 0x00, 0x00, 0x0C});        // boot reset flags: POR | PIN (CTRLSTS bits 27, 26)
 }
 
+// GET_STATE parts: an empty request (or part 0) is the base reply above; part 1 is the session block, the chrome the
+// screens show as data. An old firmware answered BadLength to any payload, which the host tool reads as "no parts here".
+static void test_state_session_part() {
+    Fake f; Frame r;
+    f.sess.mah = 0x0102; f.sess.elapsed_s = 0x0304;
+    f.sess.proto_kind = 1; f.sess.limit_ma = 5000; f.sess.max_mv = 20000; f.sess.typec_ma = 3000;
+    f.sess.busy = 4; f.sess.fc_release = 1; f.sess.topology = 3; f.sess.wait_kind = 2; f.sess.pd_none_why = 1;
+    f.sess.open_cc_mv = 2900; f.sess.depth = 2; f.sess.stack = {10, 1, 0xFF};
+    f.sess.sub = 0x05; f.sess.sel = 3; f.sess.count = 7; f.sess.home_window = 2; f.sess.flags = 0x14;
+    CHECK_EQ(run(f, request(0x03, 40, {1}), r), 1);
+    check_header(r, 0x03, 40, Status::Ok, kSessionLen);
+    check_bytes(r, kRspHeader, {0x02, 0x01, 0, 0,           // 258 mAh
+                                0x04, 0x03, 0, 0,           // 772 s
+                                1, 0x88, 0x13, 0x20, 0x4E, 0xB8, 0x0B,   // proto kind, limit 5000 mA, max 20000 mV, Type-C 3000 mA
+                                4, 1, 3, 2, 1,              // busy, fc_release, topology, wait_kind, pd_none_why
+                                0x54, 0x0B,                 // open CC 2900 mV
+                                2, 10, 1, 0xFF,             // depth and the menu stack
+                                0x05, 3, 7, 2, 0x14});      // sub, sel, count, home window, flags
+    CHECK_EQ(run(f, request(0x03, 41, {0}), r), 1);          // part 0 = the base reply
+    check_header(r, 0x03, 41, Status::Ok, 53);
+    CHECK_EQ(run(f, request(0x03, 42, {9}), r), 1);          // an unknown part
+    check_header(r, 0x03, 42, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x03, 43, {1, 1}), r), 1);       // more than the part byte
+    check_header(r, 0x03, 43, Status::BadLength, 0);
+}
+
 static void test_adc_raw() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x21, 4, {}), r), 1);
@@ -2009,6 +2035,7 @@ int main() {
     test_ping_long_git_string();
     test_button();
     test_state();
+    test_state_session_part();
     test_adc_raw();
     test_ripple();
     test_fc();

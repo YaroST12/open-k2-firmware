@@ -650,6 +650,49 @@ test("K2Remote.state / ping / setPage / debugPdos / button / action / log reques
   assert.deepEqual([...sent[5].slice(0, 6)], [0xA5, 0x4B, 9, 6, 1, 0]);
 });
 
+// GET_STATE [1]: the same 31-byte vector as tests/test_remote_proto.cpp and tests/test_k2_remote_state_parts.py.
+const SESSION_PAYLOAD = [0x02, 0x01, 0, 0, 0x04, 0x03, 0, 0, 1, 0x88, 0x13, 0x20, 0x4E, 0xB8, 0x0B,
+                         4, 1, 3, 2, 1, 0x54, 0x0B, 1, 10, 0xFF, 0xFF, 0x05, 3, 7, 2, 0x14];
+
+test("decodeSession reads every field of GET_STATE part 1", () => {
+  const s = P.decodeSession(Uint8Array.from(SESSION_PAYLOAD));
+  assert.equal(s.mah, 258);
+  assert.equal(s.elapsed_s, 772);
+  assert.deepEqual(s.proto, { kind: "pd-fixed", limit_ma: 5000, max_mv: 20000 });
+  assert.equal(s.typec_ma, 3000);
+  assert.equal(s.busy, "pd-hold");
+  assert.equal(s.fc_release, true);
+  assert.equal(s.topology, "direct-receptacle");
+  assert.equal(s.wait_kind, "charger-waiting");
+  assert.equal(s.pd_none_why, "sink-silent-source-offered");
+  assert.equal(s.open_cc_mv, 2900);
+  assert.deepEqual(s.ui, { stack: ["connection"], tab: "cable", popup: true, details: false, sel: 3, count: 7 });
+  assert.equal(s.home_window, "10m");
+  assert.deepEqual(Object.keys(s.flags).filter((k) => s.flags[k]), ["em_scanning", "em_quiet"]);
+});
+
+test("decodeSession: sentinels are null, the tab is for Connection only, short payloads throw", () => {
+  const p = Uint8Array.from(SESSION_PAYLOAD);
+  p[20] = 0xFF; p[21] = 0xFF; p[27] = 0xFF; p[23] = 1;           // open CC unknown, no cursor, stack [emarker]
+  const s = P.decodeSession(p);
+  assert.equal(s.open_cc_mv, null);
+  assert.equal(s.ui.sel, null);
+  assert.equal(s.ui.tab, null);
+  assert.throws(() => P.decodeSession(Uint8Array.from(SESSION_PAYLOAD.slice(0, 30))), P.FrameError);
+});
+
+test("K2Remote.stateSession sends the part byte; old firmware reads as null", async () => {
+  const a = rig((f) => [rsp(3, f[3], 0, SESSION_PAYLOAD)]);
+  assert.equal((await new P.K2Remote(a.link).stateSession()).mah, 258);
+  assert.deepEqual([...a.sent[0].slice(0, 6)], [0xA5, 0x4B, 3, 1, 1, 1]);
+  for (const status of [P.STATUS.BAD_LENGTH, P.STATUS.BAD_ARG]) {
+    const b = rig((f) => [rsp(3, f[3], status)]);
+    assert.equal(await new P.K2Remote(b.link).stateSession(), null);
+  }
+  const c = rig((f) => [rsp(3, f[3], P.STATUS.BUSY)]);
+  await assert.rejects(new P.K2Remote(c.link).stateSession(), P.RemoteError);
+});
+
 test("request ids are unique and match the firmware table", () => {
   const ids = Object.values(P.CMD);
   assert.equal(new Set(ids).size, ids.length);

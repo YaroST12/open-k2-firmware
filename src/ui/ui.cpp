@@ -251,20 +251,90 @@ void Ui::set_page(Page p, uint32_t now_ms) {
 // What keeps an identity (or a START) out, said as a footer line (at most 24 characters) that names the cause and the way out;
 // nullptr = nothing does. An identity armed in Tools -> Spoof is not one of them either: START disarms whatever is armed and
 // the pick takes over ("Off" arms nothing).
-const char *Ui::busy_reason() const {
+BusyWhy Ui::busy_why() const {
     const auto& sink = fusb302::sink_status();
     const auto fs = fctrig::status();
-    if (charger_test_busy()) return "Test running: stop it";
-    if (fc_release_.busy()) return "5V release: wait";
-    if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return "QC trigger: stop it";
+    if (charger_test_busy()) return BusyWhy::TestRunning;
+    if (fc_release_.busy()) return BusyWhy::FcRelease;
+    if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return BusyWhy::QcTrigger;
     if (sink.held && !fusb302::rd_for_run_on() && !fusb302::reread_own_hold() && !fusb302::self_powered() && !power_source::bus_powered())
-        return "PD hold: release it";
-    if (sink.epr_mode) return "EPR contract: exit it";
+        return BusyWhy::PdHold;
+    if (sink.epr_mode) return BusyWhy::Epr;
     if (sink.state != pd::SinkState::Idle && sink.state != pd::SinkState::Ready && sink.state != pd::SinkState::Failed)
-        return "PD request: wait";
-    if (ctx_.em_scanning) return "E-marker scan: wait";
-    if (fusb302::identify_status().state == pd::IdState::Running) return "Identify: wait";
+        return BusyWhy::PdRequest;
+    if (ctx_.em_scanning) return BusyWhy::EmScan;
+    if (fusb302::identify_status().state == pd::IdState::Running) return BusyWhy::Identify;
+    return BusyWhy::None;
+}
+
+const char *Ui::busy_reason() const {
+    switch (busy_why()) {
+    case BusyWhy::TestRunning: return "Test running: stop it";
+    case BusyWhy::FcRelease: return "5V release: wait";
+    case BusyWhy::QcTrigger: return "QC trigger: stop it";
+    case BusyWhy::PdHold: return "PD hold: release it";
+    case BusyWhy::Epr: return "EPR contract: exit it";
+    case BusyWhy::PdRequest: return "PD request: wait";
+    case BusyWhy::EmScan: return "E-marker scan: wait";
+    case BusyWhy::Identify: return "Identify: wait";
+    case BusyWhy::None: break;
+    }
     return nullptr;
+}
+
+// The session block of the remote (GET_STATE part 1). Every value is read from the helper the screen reads it through, so
+// the host sees what the panel shows without a second copy of the logic. The list cursor is the shared RowList's, valid
+// only on the pages that bind it (and, for the pages that fall back to a non-list view, only while their list is up).
+Ui::Session Ui::session() {
+    const auto clamp16 = [](uint32_t v) { return static_cast<uint16_t>(v > 0xFFFFu ? 0xFFFFu : v); };
+    Session s;
+    s.mah = ctx_.meter.mah();
+    s.elapsed_s = ctx_.pm_online && ctx_.pm.vbus_mv >= 1000 ? ctx_.meter.elapsed_s(ctx_.now)
+                : ctx_.stale() ? ctx_.last.elapsed_s : 0;
+    const home::ProtoInfo p = proto_now();
+    s.proto_kind = static_cast<uint8_t>(p.kind);
+    s.limit_ma = clamp16(p.ma);
+    s.max_mv = clamp16(p.max_mv);
+    s.typec_ma = clamp16(fusb302::typec_ma());
+    s.busy = busy_why();
+    s.fc_release = fc_release_.busy();
+    const conn::Facts f = passive_facts();
+    s.topology = static_cast<uint8_t>(f.topo);
+    s.wait_kind = static_cast<uint8_t>(f.wait);
+    s.pd_none_why = static_cast<uint8_t>(link_.pd_none_why());
+    s.open_cc_mv = f.open_cc_mv < 0 ? 0xFFFF : static_cast<uint16_t>(f.open_cc_mv > 0xFFFE ? 0xFFFE : f.open_cc_mv);
+    s.depth = static_cast<uint8_t>(depth_);
+    for (unsigned i = 0; i < depth_; i++) s.stack[i] = static_cast<uint8_t>(stack_[i]);
+    bool rows = false;
+    if (depth_) {
+        switch (menu()) {
+        case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: rows = list_state().count > 0; break;
+        case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: rows = true; break;
+        case Menu::Connection: {
+            const ConnectionPage &cp = connection_page();
+            s.sub = static_cast<uint8_t>((static_cast<uint8_t>(cp.tab()) & kSubTabMask) | (cp.popup_open() ? kSubPopup : 0) |
+                                         (cp.details_open() ? kSubDetails : 0));
+            if (cp.popup_open()) {
+                s.sel = static_cast<uint8_t>(cp.popup_selected());
+                s.count = static_cast<uint8_t>(cp.popup_count());
+            }
+            break;
+        }
+        default: break;
+        }
+    } else {
+        rows = page_ == Page::Tools || page_ == Page::Settings;
+    }
+    if (rows) {
+        const int n = ctx_.rows.count(), c = ctx_.rows.selected();
+        s.count = static_cast<uint8_t>(n > 255 ? 255 : n < 0 ? 0 : n);
+        s.sel = static_cast<uint8_t>(c < 0 ? 0 : c > 254 ? 254 : c);
+    }
+    s.home_window = static_cast<uint8_t>(ctx_.keep.home_window);
+    s.flags = static_cast<uint8_t>((hold_shown_ ? kSessionHoldCard : 0) | (rotation_notice_until_ ? kSessionRotationNotice : 0) |
+                                   (ctx_.em_scanning ? kSessionEmScanning : 0) | (ctx_.em_listen_until ? kSessionEmListening : 0) |
+                                   (ctx_.em_quiet ? kSessionEmQuiet : 0) | (ctx_.id_no_device ? kSessionIdNoDevice : 0));
+    return s;
 }
 
 void Ui::redraw(uint32_t now_ms) {

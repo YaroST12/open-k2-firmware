@@ -33,7 +33,17 @@
 //                                    cc1_mv(2) cc2_mv(2) aux_mv(2) temp_deci_c(i16) fc(1) flags(1)
 //                                    fc = fastcharge::Protocol verdict; flags bit0 ADC reading
 //                                    valid, bit1 board NTC temperature valid, bit2 NTC calibrated,
-//                                    bit3 MCU temperature valid; then mcu_temp_deci_c(i16)
+//                                    bit3 MCU temperature valid; then mcu_temp_deci_c(i16), then the link
+//                                    block and the reset flags (53 bytes in all, see encode_state)
+//                         req [part(1)] part 0 = the reply above; any other payload: BadLength (more than
+//                                    one byte) or BadArg (unknown part), so a host can tell an old build
+//                                    part 1, 31 bytes: mah(i32) elapsed_s(u32) proto_kind(1) limit_ma(2)
+//                                    max_mv(2) typec_ma(2) busy(1) fc_release(1) topology(1) wait_kind(1)
+//                                    pd_none_why(1) open_cc_mv(2, 0xFFFF = unknown) depth(1) stack(3, Menu
+//                                    indices, 0xFF = none) sub(1: bits 1:0 Connection tab, bit2 popup, bit3
+//                                    details) sel(1, 0xFF = none) count(1) home_window(1) flags(1: bit0 hold
+//                                    card, 1 rotation notice, 2 e-marker scanning, 3 listening, 4 quiet,
+//                                    5 identify: no device); enums: ui_types.hpp, home_model.hpp
 //   0x04 GET_PDOS    req [index(1)]   rsp valid spec_rev num_pdos index (4 x u8) and, when
 //                                    index < num_pdos: type(1) raw(4) min_mv(2) max_mv(2)
 //                                    max_ma(2) max_mw(4)
@@ -622,6 +632,21 @@ constexpr uint8_t kLinkStale = 1 << 0, kLinkWaiting = 1 << 1, kLinkInline = 1 <<
                   kLinkCrossed = 1 << 5,    // crossed CC through the K2 (pd::Link::cc_cross == Crossed): flip one cable
                   kLinkFlipHint = 1 << 6,   // Rp-vs-Ra on one line, nothing on the other (cc_cross == Hint): "Flip a cable?"
                   kLinkNoPd = 1 << 7;       // the settled "PD present" verdict is None this attach (ROADMAP 2026-11-10, Row C)
+// GET_STATE part 1 (session): the chrome and the derived session facts the screens show (Ui::Session, field for field).
+// sel = 0xFF and count = 0 when the page has no list; open_cc_mv = 0xFFFF when there is no standby reading.
+constexpr size_t kSessionLen = 31;
+struct SessionInfo {
+    int32_t mah = 0;
+    uint32_t elapsed_s = 0;
+    uint8_t proto_kind = 0;
+    uint16_t limit_ma = 0, max_mv = 0, typec_ma = 0;
+    uint8_t busy = 0, fc_release = 0, topology = 0, wait_kind = 0, pd_none_why = 0;
+    uint16_t open_cc_mv = 0xFFFF;
+    uint8_t depth = 0;
+    std::array<uint8_t, 3> stack{0xFF, 0xFF, 0xFF};
+    uint8_t sub = 0, sel = 0xFF, count = 0, home_window = 0, flags = 0;
+};
+size_t encode_session(std::span<uint8_t> out, const SessionInfo&);
 struct AdcRawSnapshot {
     uint8_t ok = 0;
     std::array<uint16_t, kAdcRawAll> all{};      // channels 0..7, 16, 17
@@ -891,6 +916,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.charger_hunt(u8) } -> std::same_as<ChargerHuntReply>;   // evidence of refused hunt row `u8`
     { b.press(u8, u16) } -> std::same_as<Status>;
     { b.state() } -> std::same_as<StateInfo>;
+    { b.session() } -> std::same_as<SessionInfo>;   // 0x03 req [1]: the session chrome (a read, never moves anything)
     { b.pdos() } -> std::same_as<PdoSnapshot>;
     { b.emarker() } -> std::same_as<EmarkerSnapshot>;
     { b.identity() } -> std::same_as<IdentitySnapshot>;
@@ -1051,8 +1077,10 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return reply_n(3);
     }
     case Cmd::GetState:
-        if (!p.empty()) return reply(Status::BadLength);
-        return reply_n(encode_state(buf, backend.state()));
+        if (p.size() > 1) return reply(Status::BadLength);
+        if (p.empty() || p[0] == 0) return reply_n(encode_state(buf, backend.state()));
+        if (p[0] == 1) return reply_n(encode_session(buf, backend.session()));
+        return reply(Status::BadArg);
     case Cmd::GetPdos: {
         if (p.size() > 1) return reply(Status::BadLength);
         const uint8_t index = p.empty() ? 0 : p[0];
