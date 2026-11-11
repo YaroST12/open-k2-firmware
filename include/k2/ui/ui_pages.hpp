@@ -72,6 +72,9 @@ struct UiContext {
     // True while the Ui paints a whole page onto a screen it knows is kBg everywhere (after the full clear or the erase pass:
     // Ui::paint_incoming, render_for_capture). A page's first paint may then skip a body wipe, since the pixels are already
     // kBg. Never true in the erase replay, a resync or a refresh: those paint over live ink.
+    // False while an OPAQUE page paints (Ui::page_opaque / menu_opaque): the switch skipped the erase pass, the old page's ink
+    // is still there, and the page must write every pixel of the content itself, the gaps between its cells included
+    // (kit::fill_except / kv_ground lay the ground in the same pass, so no pixel is streamed twice).
     bool blank = false;
     std::int32_t vbus_fast_mv = 0;   // VBUS without the 2.5 s average: every judgement of a VBUS transition reads this, pm is display
     EnergyMeter meter;
@@ -831,6 +834,7 @@ public:
     void invalidate() override;
     ListState list_state() const { return ListState{}; }   // fixed layout: nothing scrolls
 private:
+    void lay_ground();
     void paint_bar(int i, int32_t mv, bool have);
     void paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms);
     Field v_[4];

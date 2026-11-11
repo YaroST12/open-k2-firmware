@@ -227,11 +227,19 @@ private:
     PageIf *build_base(Page p);   // builds the rotation page on an empty arena
     PageIf *build_menu(Menu m);   // builds a menu above the pages that are alive; nullptr when it does not fit
     void set_page(Page p, uint32_t now_ms);
-    // A page / menu switch is two passes around the arena change: erase_outgoing() wipes the page that was on screen by
-    // replaying its own paint in lcd erase mode (only its ink is rewritten, not the whole screen), while it is still alive;
-    // paint_incoming() then draws the current page from scratch, over a fresh arena. `t0` starts the [UI] timing.
+    // A page / menu switch clears the screen, then paints the incoming page from scratch over a fresh arena. How it clears:
+    //  - the incoming page is OPAQUE (its kOpaque is true: its full paint writes every content pixel by itself): not at all,
+    //    the one pass is the paint, with ctx_.blank false;
+    //  - otherwise clear_for_incoming() replays the outgoing page's own paint in lcd erase mode (erase_outgoing(): only its
+    //    ink is rewritten) when that costs less than one plain fill of the content (full_px_ is what its last full paint
+    //    sent), else fills the content with kBg; both leave ctx_.blank true.
+    // The outgoing page must still be alive for the replay; paint_incoming() runs after the arena change. `t0` starts the
+    // [UI] timing.
+    static bool page_opaque(Page p);
+    static bool menu_opaque(Menu m);
+    bool clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opaque);   // returns ctx_.blank for the paint
     void erase_outgoing(uint32_t now_ms, PageIf &outgoing);
-    void paint_incoming(uint32_t now_ms, uint32_t t0);
+    void paint_incoming(uint32_t now_ms, uint32_t t0, bool blank);
     // Full repaint of the current page after a real lcd::fill (init, rotation change), where the screen is already blank.
     void redraw(uint32_t now_ms);
     void draw_panel();
@@ -295,6 +303,7 @@ private:
 
     // Timing for the [UI] log: static draw time and the slowest update after a page change.
     uint32_t full_us_ = 0, field_max_us_ = 0, page_since_ms_ = 0;
+    uint32_t full_px_ = 0;   // pixels the current page's last full paint sent: what replaying it to erase it would cost
     bool timing_pending_ = false;
 };
 

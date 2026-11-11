@@ -50,8 +50,8 @@ struct Box {
     int16_t x, y, w, h;
 };
 // Paints `r` in `color` except where `holes` go (clipped to `r`, may touch; at most 6 are used). Whatever is drawn afterwards owns
-// its hole, so no pixel is streamed twice: the panel bus is the cost of a redraw. On a stretched page a glyph no longer covers
-// its hole (it keeps its native size), so there the whole of `r` is filled and the glyphs paint over it.
+// its hole, so no pixel is streamed twice: the panel bus is the cost of a redraw. On a scaled page (ContentViewport::scaled())
+// a glyph no longer covers its hole (it keeps its native size), so there the whole of `r` is filled and the glyphs paint over it.
 void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color);
 
 // A text line of a ground: its origin, font, text and ink (the bg is the ground's).
@@ -200,6 +200,10 @@ void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, i
 // `chars` (optional, n entries) narrows each cell to its own worst-case width; a right-aligned cell keeps the layout's right
 // edge (value_x + value_chars * advance), so a repaint never reaches a long key to its left.
 void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars = nullptr);
+// The ground of the n rows (under each row's hairline) around the key, the value cell (same `chars` as kv_cells) and, for a row
+// whose bit is set in `marks`, the verdict marker at kMarkX: every pixel the static part and the cells leave, laid once. A page
+// calls it before kv_static when it opens over a live screen, so it covers its rows with no erase pass.
+void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, int n, const uint8_t *chars = nullptr, uint32_t marks = 0);
 // One static key/value row at y (no cache): the key at label_x, the value clipped to the box, then the hairline.
 // `ours`: the value is firmware text (fit_text: a cut fails the host gate); default false = it may be a name or a vendor string
 // (fit_data: cut by design, only counted).

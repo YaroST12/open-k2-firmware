@@ -607,6 +607,7 @@ const char *const kDgLabel[DiagPage::kRows] = {"Link", "RST/ISR", "TX/drop", "FU
 void DiagPage::draw_static() {
     title_bar();
     const Surface &c = ctx_.content;
+    if (!ctx_.blank) kit::kv_ground(c, kDgLayout, kDgLabel, kRows, kDgValueChars, 1u << 0 | 1u << 3 | 1u << 6);   // the marker rows
     kit::kv_static(c, kDgLayout, kDgLabel, kRows);
     kit::kv_cells(c, kDgLayout, val_, kRows, kDgValueChars);
     marks_ = 0xFF;
@@ -725,9 +726,37 @@ ToneStyle tone_style(Tone t) {
 }
 }  // namespace
 
+// The ground of the page around what its cells and bars paint (the pills paint over their box: their corners are rounded, so
+// the box stays ground). Run when the page opens over a live screen, so it covers every content pixel with no erase pass.
+void LinesPage::lay_ground() {
+    const Surface &c = ctx_.content;
+    for (int i = 0; i < 4; i++) {
+        const int16_t y = kLnRowY(i);
+        kit::Box h[6];
+        int n = 0;
+        h[n++] = {static_cast<int16_t>(kLnBarX - 4 * kSmall.adv), static_cast<int16_t>(y + 5), static_cast<int16_t>(4 * kSmall.adv), kSmall.height};
+        h[n++] = {kLnBarX, static_cast<int16_t>(y + 7), kLinesBarW, kLnBarH};
+        for (int32_t t : {kLinesTickLowMv, kLinesTickHighMv}) {   // a tick is 18 px tall: its ends stick out of the bar
+            const int16_t tx = static_cast<int16_t>(kLnBarX + lines_tick_px(t));
+            h[n++] = {tx, static_cast<int16_t>(y + 4), 1, 3};
+            h[n++] = {tx, static_cast<int16_t>(y + 19), 1, 3};
+        }
+        kit::fill_except(c, {0, static_cast<int16_t>(y + 1), c.w, kLnRowPitch - 1}, h, n, kBg);
+    }
+    const kit::Box tags[2] = {
+        {static_cast<int16_t>(kLnBarX + lines_tick_px(kLinesTickLowMv) - 6), 130, static_cast<int16_t>(text_width(kLabelFont, "0.4")), kLabelFont.height},
+        {static_cast<int16_t>(kLnBarX + lines_tick_px(kLinesTickHighMv) - 6), 130, static_cast<int16_t>(text_width(kLabelFont, "2.0")), kLabelFont.height}};
+    kit::fill_except(c, {0, static_cast<int16_t>(kLnRowY(4) + 1), c.w, static_cast<int16_t>(kVerdictY - kLnRowY(4) - 1)}, tags, 2, kBg);
+    static const char *const kKeys[2] = {"Rp", "MCU"};
+    kit::kv_ground(c, kLnKv, kKeys, 2);
+    const int16_t below = static_cast<int16_t>(kit::kv_row_y(kLnKv, 2) + 1);
+    gfx_fill(c, 0, below, c.w, static_cast<int16_t>(kit::kListBottom - below), kBg);   // the verdict pills row paints itself
+}
+
 void LinesPage::draw_static() {
     title_bar();
     const Surface &c = ctx_.content;
+    if (!ctx_.blank) lay_ground();
     for (int i = 0; i <= 4; i++) gfx_fill(c, 0, kLnRowY(i), c.w, 1, kRule);
     for (int i = 0; i < 4; i++) {
         draw_pill(c, 6, static_cast<int16_t>(kLnRowY(i) + 5), kLnTag[i], kLnColor[i], 0, true);

@@ -22,6 +22,10 @@ public:
     // True while fills and glyphs go through a stretch: a glyph keeps its native size, so it no longer fills the box that
     // the page measured for it, and a caller that leaves such a box open to save bus time must paint it instead.
     static bool stretched();
+    // True while the map changes the size of what a page draws (the landscape rotations: 224 x 240 into 240 x 224). A move
+    // alone (rotation 2 shifts the content right past the strip) keeps every glyph as large as its box, so ground that leaves
+    // a hole for a glyph stays correct there; only `scaled()` has to fill the holes.
+    static bool scaled();
     // The inverse of mapped_rect() for one panel column / row: the logical 224x240 column / row whose stretched box
     // contains it, or -1 when no logical row owns it. Identity without a viewport. Independent of Pause, so a painter can
     // compose a stretched rectangle pixel by pixel in panel space (home_cell paint()).

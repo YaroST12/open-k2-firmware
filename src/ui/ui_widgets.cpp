@@ -278,9 +278,9 @@ int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uin
               bool solid) {
     const int w = pill_width(static_cast<int>(text.size()));
     const uint16_t fill = solid ? color : tint;
-    // The pill's ground goes round the text's box, which the glyphs paint themselves: every pixel is streamed once (a stretched
+    // The pill's ground goes round the text's box, which the glyphs paint themselves: every pixel is streamed once (a scaled
     // page keeps the whole fill, there a glyph box does not match the logical hole).
-    if (ContentViewport::stretched())
+    if (ContentViewport::scaled())
         fill_round(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill);
     else
         fill_round_hole(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 1),

@@ -61,39 +61,63 @@ constexpr Pos kPos[SCount] = {
 };
 static_assert(SCount <= 16, "DetailPage::kFields (8 rows x 2 columns)");
 
+struct Lab { int16_t x, y; const char *t; uint16_t col; };
+const Lab kLabs[] = {
+    {kLabL, row_top(0) + kTextY, "V", kDim},
+    {kLabL, row_top(1) + kTextY, "A", kDim},
+    {kLabL, row_top(2) + kTextY, "W", kDim},
+    {kLabL, row_top(4) + kTextY, "USB", kDim},
+    {kLabL, row_top(5) + kTextY, "Wh", kDim},
+    {kLabL, row_top(6) + kTextY, "Time", kDim},
+    {kLabL, row_top(7) + kTextY, "FastChg", kDim},
+    {kLabR, row_top(0) + kTextY, "PDO", kDim},       // the negotiated contract (label short: cell width)
+    {kLabR, row_top(1) + kTextY, "Cable", kDim},
+    {kLabR, row_top(2) + kTextY, "MaxW", kDim},
+    {kLabR, row_top(4) + kTextY, "Alt", kDim},
+    {kLabR, row_top(5) + kTextY, "Ah", kDim},
+    {kLabR, row_top(6) + kTextY, "Temp", kDim},
+    {kLabR, row_top(7) + kTextY, "R", kDim},
+    // LINES row: the tags keep their line colours (blue D-, orange D+), the values one field each.
+    {kLabL, row_top(3) + kLine1Y, "CC1", kDim},
+    {kLabL, row_top(3) + kLine2Y, "CC2", kDim},
+    {kLabR, row_top(3) + kLine1Y, "D+", kDPlus},
+    {kLabR, row_top(3) + kLine2Y, "D-", kDMinus},
+    {kLabR + 14, row_top(3) + kLine1Y, "/", kDim},
+    {kLabR + 14, row_top(3) + kLine2Y, "/", kDim},
+};
+
+// The ground of every cell around its label and value boxes, and the band under the grid: each pixel the paint leaves is laid
+// once, so Detail covers the whole content when it opens over a live page (no erase pass). A cell's hole is its text box.
+void lay_ground(const Surface &c) {
+    constexpr int kMaxCellHoles = 6;   // fill_except's limit: the LINES row's right cell has five
+    for (int r = 0; r < kRows; r++) {
+        for (int col = 0; col < 2; col++) {
+            kit::Box holes[kMaxCellHoles];
+            int n = 0;
+            for (const Lab &l : kLabs)
+                if ((l.y - kGridY0) / kRowPitch == r && (l.x >= kMidX) == (col == 1) && n < kMaxCellHoles)
+                    holes[n++] = {l.x, l.y, static_cast<int16_t>(text_width(kLabelFont, l.t)), kLabelFont.height};
+            for (int i = 0; i < SCount; i++)
+                if ((kPos[i].y - kGridY0) / kRowPitch == r && (i & 1) == col && n < kMaxCellHoles)
+                    holes[n++] = {kPos[i].x, kPos[i].y, static_cast<int16_t>(kPos[i].chars * kSmall.adv), kSmall.height};
+            const int16_t x0 = col ? kMidX + 1 : 0, x1 = col ? c.w : kMidX;
+            kit::fill_except(c, {x0, static_cast<int16_t>(row_top(r) + 1), static_cast<int16_t>(x1 - x0), kRowPitch - 1}, holes, n, kBg);
+        }
+    }
+    const int16_t below = static_cast<int16_t>(row_top(kRows) + 1);
+    gfx_fill(c, 0, below, c.w, static_cast<int16_t>(c.h - below), kBg);
+}
+
 }  // namespace
 
 void DetailPage::draw_static() {
     const Surface &c = ctx_.content;
     title_bar();
+    if (!ctx_.blank) lay_ground(c);   // a blank screen is kBg already
     // Hairline grid: one 1 px kRule line at every row boundary (the theme's only divider; sections read from the labels).
     for (int i = 0; i <= kRows; i++) gfx_fill(c, 0, row_top(i), c.w, 1, kRule);
     gfx_fill(c, kMidX, kGridY0, 1, static_cast<int16_t>(kRows * kRowPitch), kRule);
-    struct Lab { int16_t x, y; const char *t; uint16_t col; };
-    const Lab labs[] = {
-        {kLabL, row_top(0) + kTextY, "V", kDim},
-        {kLabL, row_top(1) + kTextY, "A", kDim},
-        {kLabL, row_top(2) + kTextY, "W", kDim},
-        {kLabL, row_top(5) + kTextY, "Wh", kDim},
-        {kLabL, row_top(6) + kTextY, "Time", kDim},
-        {kLabL, row_top(7) + kTextY, "FastChg", kDim},
-        {kLabR, row_top(0) + kTextY, "PDO", kDim},       // the negotiated contract (label short: cell width)
-        {kLabR, row_top(1) + kTextY, "Cable", kDim},
-        {kLabR, row_top(2) + kTextY, "MaxW", kDim},
-        {kLabR, row_top(4) + kTextY, "Alt", kDim},
-        {kLabR, row_top(5) + kTextY, "Ah", kDim},
-        {kLabR, row_top(6) + kTextY, "Temp", kDim},
-        {kLabR, row_top(7) + kTextY, "R", kDim},
-    };
-    for (const Lab &l : labs) gfx_text(c, kLabelFont, l.x, l.y, l.t, l.col, kBg);
-    gfx_text(c, kLabelFont, kLabL, row_top(4) + kTextY, "USB", kDim, kBg);
-    // LINES row: the tags keep their line colours (blue D-, orange D+), the values one field each.
-    gfx_text(c, kLabelFont, kLabL, row_top(3) + kLine1Y, "CC1", kDim, kBg);
-    gfx_text(c, kLabelFont, kLabL, row_top(3) + kLine2Y, "CC2", kDim, kBg);
-    gfx_text(c, kLabelFont, kLabR, row_top(3) + kLine1Y, "D+", kDPlus, kBg);
-    gfx_text(c, kLabelFont, kLabR, row_top(3) + kLine2Y, "D-", kDMinus, kBg);
-    gfx_text(c, kLabelFont, kLabR + 14, row_top(3) + kLine1Y, "/", kDim, kBg);
-    gfx_text(c, kLabelFont, kLabR + 14, row_top(3) + kLine2Y, "/", kDim, kBg);
+    for (const Lab &l : kLabs) gfx_text(c, kLabelFont, l.x, l.y, l.t, l.col, kBg);
     for (int i = 0; i < SCount; i++)
         f_[i].init(c, kSmall, kPos[i].x, kPos[i].y, kPos[i].chars, Align::Right, kText, kBg);
     invalidate();

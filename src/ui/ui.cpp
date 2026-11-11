@@ -3,6 +3,7 @@
 #include "k2/ui/ui.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/paint_meter.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/fastcharge/fctrig.hpp"
@@ -207,6 +208,23 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
     rotation_notice_drawn_ = true;
 }
 
+// Opaque pages: the full paint (draw_static + update with ctx_.blank false) writes every content pixel, panel strip aside
+// (draw_panel owns it). A page that is not listed is erased before it paints. The pixel-exact walk of every switch in
+// tests/test_ui_capture.cpp proves each entry: it compares the switch against a clean paint, in all four rotations.
+bool Ui::page_opaque(Page p) {
+    switch (p) {
+    case Page::Home: case Page::Detail: case Page::Lines: case Page::Tools: case Page::Settings: return true;
+    default: return false;   // ChargerTest: the stage decides what its paint covers
+    }
+}
+
+bool Ui::menu_opaque(Menu m) {
+    switch (m) {
+    case Menu::UsbLink: case Menu::Diag: return true;
+    default: return false;   // the rest wipe their body on a live screen (no gain over the erase), or paint by mode, or hold data
+    }
+}
+
 void Ui::set_page(Page p, uint32_t now_ms) {
     // Every way out of a page or submenu lands here (paging, BACK, the remote): a trigger never survives.
     const uint32_t t0 = now_us();
@@ -219,11 +237,11 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     const bool changed = p != page_;
     if (changed) pages_.at(0)->leave();
     page_ = p;
-    erase_outgoing(now_ms, *outgoing);     // the outgoing pages are still alive for their erase replay
+    const bool blank = clear_for_incoming(now_ms, *outgoing, page_opaque(p));   // the outgoing pages are still alive for a replay
     pages_.pop_to(changed ? 0 : 1);        // the menus go; so does the rotation page unless it is the one asked for
     if (changed) build_base(p);
     if (p == Page::ChargerTest) pages_.at(0)->enter();
-    paint_incoming(now_ms, t0);
+    paint_incoming(now_ms, t0, blank);
 }
 
 // The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool, and neither is the
@@ -251,7 +269,7 @@ const char *Ui::busy_reason() const {
 
 void Ui::redraw(uint32_t now_ms) {
     rotation_notice_drawn_ = false;
-    paint_incoming(now_ms, now_us());
+    paint_incoming(now_ms, now_us(), true);   // the callers have just filled the screen
 }
 
 void Ui::erase_outgoing(uint32_t now_ms, PageIf &outgoing) {
@@ -271,17 +289,44 @@ void Ui::erase_outgoing(uint32_t now_ms, PageIf &outgoing) {
     lcd::set_erase(false);
 }
 
-void Ui::paint_incoming(uint32_t now_ms, uint32_t t0) {
+// Clears what the incoming page must not find under it; false = nothing was cleared and the page paints over live ink.
+bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opaque) {
+    constexpr uint32_t kContentPx = 224u * 240u;
+    if (!incoming_opaque) {
+        if (full_px_ < kContentPx) {
+            erase_outgoing(now_ms, outgoing);   // a replay writes what the outgoing paint wrote: cheaper than a plain fill
+        } else {
+            ContentViewport viewport(layout_.content);
+            gfx_fill(ctx_.content, 0, 0, ctx_.content.w, ctx_.content.h, kBg);
+        }
+    }
+    // Whatever the card and the notice drew is gone now (wiped, or painted over by the opaque page): redraw them on demand.
+    rotation_notice_drawn_ = false;
+    hold_shown_ = false;
+    hold_px_ = hold_left_ = -1;
+    return !incoming_opaque;
+}
+
+void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
     ContentViewport viewport(layout_.content);
+    const std::uint64_t px0 = paint::meter.px_count();
     current().invalidate();   // the erase pass erased everything the field caches remember; a built page has drawn nothing
     current().sample();
-    ctx_.blank = true;        // every caller cleared the screen or ran the erase pass first: kBg under the whole content
+    ctx_.blank = blank;       // true: the screen is kBg under the whole content (a fill or the erase pass ran); false: opaque page
+    // No page paints the rows between its top bar's hairline and the body (kBarH..kBodyY; the wizard rule also leaves a gap
+    // pixel between its segments) nor the two rows between a list's bottom and the footer: an opaque page lays that ground
+    // first (5 rows, 1,120 px), the page's own paint goes over it. Home has neither bar nor footer.
+    if (!blank && !(depth_ == 0 && page_ == Page::Home)) {
+        gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, static_cast<int16_t>(kit::kBodyY - kBarH), kBg);
+        gfx_fill(ctx_.content, 0, kit::kListBottom, ctx_.content.w, static_cast<int16_t>(kFooterY - kit::kListBottom), kBg);
+    }
     current().draw_static();
     draw_panel();
     current().update(now_ms);
     ctx_.blank = false;
     draw_release_notice();
     draw_rotation_notice(now_ms);
+    full_px_ = static_cast<uint32_t>(paint::meter.px_count() - px0);
     last_update_ms_ = now_ms;
     full_us_ = now_us() - t0;
     field_max_us_ = 0;
@@ -301,8 +346,8 @@ bool Ui::push_menu(Menu m, uint32_t now_ms) {
     if (!page) return false;               // the arena is full (the static_asserts in ui.hpp keep this unreachable)
     stack_[depth_++] = m;
     page->enter();
-    erase_outgoing(now_ms, *outgoing);
-    paint_incoming(now_ms, t0);
+    const bool blank = clear_for_incoming(now_ms, *outgoing, menu_opaque(m));
+    paint_incoming(now_ms, t0, blank);
     return true;
 }
 
@@ -323,9 +368,10 @@ bool Ui::pop_menu(uint32_t now_ms) {
     PageIf *const outgoing = pages_.at(depth_);   // the top menu
     --depth_;
     outgoing->leave();
-    erase_outgoing(now_ms, *outgoing);
+    const bool incoming_opaque = depth_ > 0 ? menu_opaque(stack_[depth_ - 1]) : page_opaque(page_);   // the page below
+    const bool blank = clear_for_incoming(now_ms, *outgoing, incoming_opaque);
     pages_.pop();                                  // the page below is the one that was kept
-    paint_incoming(now_ms, t0);
+    paint_incoming(now_ms, t0, blank);
     return true;
 }
 
@@ -443,12 +489,11 @@ void Ui::update_hold_card(uint32_t now_ms) {
     const bool back_held = held(static_cast<int>(Button::Back));
     const uint32_t ms = now_ms - lit_since_[static_cast<int>(Button::Back)];
     if (!back_held || ms < kHoldCardMs) {
-        if (hold_shown_) {   // cancelled: the erase pass replays the card while hold_shown_ is still set
+        if (hold_shown_) {   // cancelled: wipe the card (an opaque page just paints over it) and repaint the page
             const uint32_t t0 = now_us();
-            erase_outgoing(now_ms, current());
-            paint_incoming(now_ms, t0);
-            hold_shown_ = false;
-            hold_px_ = hold_left_ = -1;
+            const bool opaque = depth_ > 0 ? menu_opaque(menu()) : page_opaque(page_);
+            const bool blank = clear_for_incoming(now_ms, current(), opaque);   // the replay sees hold_shown_ still set
+            paint_incoming(now_ms, t0, blank);
         }
         return;
     }

@@ -46,16 +46,14 @@ static void test_page_switch_budgets() {
     ui.init(1000);
     ui.set_rotation(0, 1000);
     ui.tick(1100);
-    // One full screen (content 224x240 + panel 240x16) is 57600 px; a page switch must stay well
-    // under two screens even for the densest page (the old clear+repaint wrote 87k..199k).
-    // Connection (entered here on the Source tab) wipes and repaints its whole body: up to eight rows of text over
-    // a full-body fill, plus the erase replay of the page it replaces, so it sits above the two-screen line.
+    // One full screen (content 224x240 + panel 240x16) is 57600 px. A switch into an opaque page (Detail, Diag, Lines, Tools,
+    // Settings: Ui::page_opaque) paints once with no erase pass, so it costs about one screen; a page that is not opaque
+    // (Charger, Connection) still pays the erase replay of the page it replaces, Home's included (its two measurement cells,
+    // band and info block make that replay dear). Connection (entered here on the Source tab) wipes and repaints its whole
+    // body: up to eight rows of text over a full-body fill. tests/test_ui_overdraw.cpp prices every pair.
     struct { uint8_t page; unsigned budget; const char *name; } cases[] = {
-        // Every switch starts from Home, whose erase replay now composes the two measurement cells, the
-        // band and the info block (about 9 000 px more than the old Home): budgets carry that.
-        {1, 84000, "Detail"}, {2, 111500, "Charger"}, {kPdPage, 142500, "Connection"}, {kDiagPage, 86000, "Diag"},
-        // Settings rows are 39 px (two text lines); five of them fill the content area.
-        {3, 89000, "Lines"}, {4, 111500, "Tools"}, {5, 111000, "Settings"},
+        {1, 59500, "Detail"}, {2, 111000, "Charger"}, {kPdPage, 142000, "Connection"}, {kDiagPage, 58800, "Diag"},
+        {3, 60000, "Lines"}, {4, 58800, "Tools"}, {5, 58200, "Settings"},
     };
     for (auto &c : cases) {
         g_lcd_pixels = 0;

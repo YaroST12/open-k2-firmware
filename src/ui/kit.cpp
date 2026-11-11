@@ -32,7 +32,7 @@ constexpr int kMaxHoles = 6;
 
 // The comment in kit.hpp. Holes are clipped to `r` and may touch; the bands between their edges are filled left to right.
 void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color) {
-    if (ContentViewport::stretched()) n = 0;   // a stretched page: a glyph no longer covers its hole, so the glyph paints over a full fill
+    if (ContentViewport::scaled()) n = 0;   // a scaled page: a glyph no longer covers its hole, so the glyph paints over a full fill
     Box h[kMaxHoles];
     int16_t ys[2 * kMaxHoles + 2];
     int m = 0, k = 0;
@@ -446,6 +446,22 @@ void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const ui
         const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
         const int16_t x = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * f.adv) : l.value_x;
         cells[i].init(s, f, x, static_cast<int16_t>(kv_row_y(l, i) + row_text_y(l.pitch, f.height)), w, l.align, kText, kBg);
+    }
+}
+
+void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, int n, const uint8_t *chars, uint32_t marks) {
+    const Font &kf = font_or_small(l.label_font), &vf = font_or_small(l.value_font);
+    for (int i = 0; i < n; i++) {
+        const int16_t y = kv_row_y(l, i);
+        const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
+        const int16_t vx = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * vf.adv) : l.value_x;
+        Box holes[3];
+        int h = 0;
+        if (marks >> i & 1u)
+            holes[h++] = {kMarkX, static_cast<int16_t>(y + 1 + (l.pitch - 1 - kMarkSize) / 2), kMarkSize, kMarkSize};
+        holes[h++] = {l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), static_cast<int16_t>(text_width(kf, labels[i])), kf.height};
+        holes[h++] = {vx, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)), static_cast<int16_t>(w * vf.adv), vf.height};
+        fill_except(s, {0, static_cast<int16_t>(y + 1), s.w, static_cast<int16_t>(l.pitch - 1)}, holes, h, kBg);
     }
 }
 

@@ -29,6 +29,8 @@ public:
 
     // Running totals since boot.
     Reading total() const { return read(cur_); }
+    // Pixels sent since boot, not saturated: a difference of two reads is exact (the UI prices an erase replay with it).
+    std::uint64_t px_count() const { return cur_.px; }
     // Everything counted since begin_window().
     void begin_window() { base_ = cur_; }
     Reading window() const { return read({cur_.px - base_.px, cur_.lcd - base_.lcd, cur_.fs - base_.fs}); }

@@ -13,9 +13,11 @@
 #include "k2/ui/ui.hpp"
 #include "ui_nav.h"
 #include "ui_stubs.h"
+#include "ui_walk.h"
 #include "k2/pd/pd_source.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 using namespace k2;
 
@@ -42,27 +44,29 @@ void fixture() {
 
 // full_max: the budget for one full paint after a clear, px sent. A ratchet: it only goes down (each phase of the overdraw work
 // tightens it to what the page now costs); a page that gets dearer fails here.
-struct Dest { const char *name; uint8_t index; unsigned full_max; };
-// The walk: the six rotation pages, then the Tools / Settings submenus that open without a record or parameters.
-constexpr Dest kDests[] = {
-    {"Home", 0, 57700}, {"Detail", 1, 29500}, {"Charger", 2, 57100}, {"Lines", 3, 34400}, {"Tools", 4, 57200}, {"Settings", 5, 56600},
-    {"Connection", kPdPage, 52800}, {"Diag", kDiagPage, 31700},
-    {"Trigger", kMenuPageBase + static_cast<uint8_t>(Menu::Trigger), 57400},
-    {"PdTrigger", kMenuPageBase + static_cast<uint8_t>(Menu::PdTrigger), 57000},
-    {"CableR", kMenuPageBase + static_cast<uint8_t>(Menu::CableR), 19900},
-    {"BlackBox", kMenuPageBase + static_cast<uint8_t>(Menu::BlackBox), 43800},
-    {"Spoof", kMenuPageBase + static_cast<uint8_t>(Menu::Spoof), 47700},
-    {"UsbLink", kMenuPageBase + static_cast<uint8_t>(Menu::UsbLink), 56600},
-    {"Cards", kMenuPageBase + static_cast<uint8_t>(Menu::Cards), 57700},
-};
-// The worst page switch, as a multiple of the screen (ratchet, see full_max).
-constexpr double kSwitchMaxX = 6.00;
-constexpr unsigned kN = sizeof kDests / sizeof kDests[0];
+// The walk is tests/ui_walk.h (shared with test_ui_capture); the budgets sit in the same order.
+constexpr unsigned kN = kWalkN;
+constexpr unsigned kFullMax[kN] = {57700, 29500, 57100, 34400, 57200, 56600, 52800, 31700, 57400, 57000, 19900, 43800, 47700, 56600, 57700};
+constexpr const WalkDest *kDests = kWalkDests;
+// The worst page switch, as a multiple of the screen (ratchet, see full_max). A menu reached from a menu is two switches
+// (goto_page pops to the base page, then pushes), which is what the worst cell is.
+constexpr double kSwitchMaxX = 3.50;
+// A switch into an opaque page paints once, with no erase pass: the page's own paint plus the ground it lays under it
+// (measured 1.00 to 1.03x the screen; the brief's bound is 1.15x).
+constexpr double kOpaqueMaxX = 1.05;
+// The landscape rotations (1, 3) scale 224 x 240 into 240 x 224: a glyph keeps its native size there, so no ground can leave a
+// hole for it and every fill goes whole under the glyphs (ContentViewport::scaled()). Their bounds are looser, but an opaque
+// switch is still the cheaper one (hardware-free host walk: Home -> Detail 1.34x opaque against 1.44x with the erase pass,
+// Detail -> Home 1.00x against 2.26x).
+constexpr double kScaledFullSlack = 1.25;
+constexpr double kScaledSwitchMaxX = 3.85;
+constexpr double kScaledOpaqueMaxX = 1.36;
 
 struct Row { unsigned sent, unique; };
 
 Row g_full[kN];
 Row g_sw[kN][kN];   // [from][to]
+int g_diff[kN][kN]; // pixels that differ from a clean paint of the destination
 
 uint32_t g_now = 1000;
 void settle(Ui &ui) { for (int i = 0; i < 4; ++i) { g_now += 120; ui.tick(g_now); } }
@@ -134,14 +138,33 @@ void walk() {
             lcd_meter_reset();
             ui.goto_page(kDests[b].index, g_now += 10);
             g_sw[a][b] = meter();
+            // Pixel-exact: the switch must leave what a clean paint of B leaves (same instant, same data).
+            const std::vector<uint16_t> got(g_panel, g_panel + size_t(LCD_WIDTH) * LCD_HEIGHT);
+            ui.repaint(g_now);
+            int diff = 0, first = -1;
+            for (size_t i = 0; i < got.size(); ++i)
+                if (got[i] != g_panel[i]) { ++diff; if (first < 0) first = int(i); }
+            if (diff && std::getenv("K2_OVERDRAW_EXACT"))
+                std::printf("  DIFF %s -> %s: %d px, first x=%d y=%d got %04x clean %04x\n", kDests[a].name, kDests[b].name, diff,
+                            first % LCD_WIDTH, first / LCD_WIDTH, got[first], g_panel[first]);
+            if (diff && std::getenv("K2_OVERDRAW_EXACT") && std::atoi(std::getenv("K2_OVERDRAW_EXACT")) > 1) {
+                // The rows that differ, as runs: "y0..y1 x0..x1 n px" (x range over the run).
+                int y0 = -1, mnx = 999, mxx = -1, n = 0;
+                for (int y = 0; y <= LCD_HEIGHT; ++y) {
+                    int rn = 0, rmn = 999, rmx = -1;
+                    if (y < LCD_HEIGHT)
+                        for (int x = 0; x < LCD_WIDTH; ++x)
+                            if (got[size_t(y) * LCD_WIDTH + x] != g_panel[size_t(y) * LCD_WIDTH + x]) { ++rn; if (x < rmn) rmn = x; rmx = x; }
+                    if (rn && y0 < 0) { y0 = y; mnx = 999; mxx = -1; n = 0; }
+                    if (rn) { n += rn; if (rmn < mnx) mnx = rmn; if (rmx > mxx) mxx = rmx; }
+                    if (!rn && y0 >= 0) { std::printf("    rows %3d..%3d x %3d..%3d  %d px\n", y0, y - 1, mnx, mxx, n); y0 = -1; }
+                }
+            }
+            g_diff[a][b] = diff;
         }
 }
 
-}  // namespace
-
-int main() {
-    if (const char *r = std::getenv("K2_OVERDRAW_ROT")) g_rotation = static_cast<uint8_t>(std::atoi(r));
-    walk();
+void print_tables(double worst) {
     std::printf("Full paint after a clear (px sent / unique px touched / ratios):\n");
     std::printf("  %-11s %8s %8s %7s %9s %9s\n", "page", "sent", "unique", "s/u", "s/53760", "s/57600");
     for (unsigned i = 0; i < kN; ++i)
@@ -151,14 +174,11 @@ int main() {
     std::printf("  %-11s", "");
     for (unsigned b = 0; b < kN; ++b) std::printf(" %6.6s", kDests[b].name);
     std::printf("\n");
-    double worst = 0;
     for (unsigned a = 0; a < kN; ++a) {
         std::printf("  %-11s", kDests[a].name);
         for (unsigned b = 0; b < kN; ++b) {
             if (a == b) { std::printf(" %6s", "-"); continue; }
-            const double x = double(g_sw[a][b].sent) / kScreenPx;
-            if (x > worst) worst = x;
-            std::printf(" %6.2f", x);
+            std::printf(" %6.2f", double(g_sw[a][b].sent) / kScreenPx);
         }
         std::printf("\n");
     }
@@ -172,12 +192,49 @@ int main() {
         }
         std::printf("\n");
     }
+}
+
+void check_rotation(uint8_t rotation, bool print) {
+    g_rotation = rotation;
+    std::printf("-- rotation %u\n", unsigned(rotation));
+    walk();
+    double worst = 0;
+    for (unsigned a = 0; a < kN; ++a)
+        for (unsigned b = 0; b < kN; ++b)
+            if (a != b) worst = std::max(worst, double(g_sw[a][b].sent) / kScreenPx);
+    if (print) print_tables(worst);
+    const bool scaled = rotation & 1;
+    const double opaque_max = scaled ? kScaledOpaqueMaxX : kOpaqueMaxX;
     for (unsigned i = 0; i < kN; ++i) {
         CHECK_EQ(g_full[i].unique > 0, true);
-        if (g_full[i].sent > kDests[i].full_max)
-            std::printf("  OVER BUDGET %s: %u px sent, budget %u\n", kDests[i].name, g_full[i].sent, kDests[i].full_max);
-        CHECK_EQ(g_full[i].sent <= kDests[i].full_max, true);
+        const unsigned budget = scaled ? static_cast<unsigned>(kFullMax[i] * kScaledFullSlack) : kFullMax[i];
+        if (g_full[i].sent > budget)
+            std::printf("  OVER BUDGET %s: %u px sent, budget %u\n", kDests[i].name, g_full[i].sent, budget);
+        CHECK_EQ(g_full[i].sent <= budget, true);
     }
-    CHECK_EQ(worst <= kSwitchMaxX, true);
+    CHECK_EQ(worst <= (scaled ? kScaledSwitchMaxX : kSwitchMaxX), true);
+    // Every switch leaves what a clean paint leaves; a switch into an opaque page paints once.
+    for (unsigned a = 0; a < kN; ++a)
+        for (unsigned b = 0; b < kN; ++b) {
+            if (a == b) continue;
+            if (g_diff[a][b]) std::printf("  NOT EXACT %s -> %s: %d px differ from a clean paint\n", kDests[a].name, kDests[b].name, g_diff[a][b]);
+            CHECK_EQ(g_diff[a][b], 0);
+            if (kDests[b].opaque && walk_one_switch(a, b)) {
+                const double x = double(g_sw[a][b].sent) / kScreenPx;
+                if (x > opaque_max) std::printf("  OPAQUE TOO DEAR %s -> %s: %.2fx the screen\n", kDests[a].name, kDests[b].name, x);
+                CHECK_EQ(x <= opaque_max, true);
+            }
+        }
+}
+
+}  // namespace
+
+// K2_OVERDRAW_ROT=n walks one rotation and prints the tables; without it all four rotations are checked.
+int main() {
+    if (const char *r = std::getenv("K2_OVERDRAW_ROT")) {
+        check_rotation(static_cast<uint8_t>(std::atoi(r)), true);
+    } else {
+        for (uint8_t r = 0; r < 4; ++r) check_rotation(r, r == 0);
+    }
     return test_report("test_ui_overdraw");
 }

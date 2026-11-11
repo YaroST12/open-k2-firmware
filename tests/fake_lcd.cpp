@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Host stand-in for src/drivers/lcd.cpp: the same sink diversion, with a 240x240 "panel" RAM behind it.
 #include "fake_lcd.h"
+#include "k2/core/paint_meter.hpp"
 #include "k2/drivers/lcd_timing.hpp"
 #include "k2/ui/pixel_sink.hpp"
 #include <algorithm>
@@ -44,6 +45,7 @@ bool g_trace_on = std::getenv("K2_OVERDRAW_TRACE") != nullptr;
 void meter_write(std::uint32_t count) {
     if (g_clearing) return;
     g_meter_sent += count;
+    k2::paint::meter.add_px(count);   // the same running total the firmware keeps (Ui reads it to price an erase replay)
     TraceCount *tc = g_trace_on ? &g_trace[g_stack] : nullptr;
     if (tc) tc->sent += count;
     for (; count; --count) {

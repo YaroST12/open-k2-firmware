@@ -8,6 +8,7 @@
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "ui_nav.h"
+#include "ui_walk.h"
 #include "k2/ui/capture.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/drivers/usb.hpp"
@@ -699,6 +700,111 @@ static void test_emarker_menu_scenes() {
     CHECK_EQ(g_stub.lib_saves + g_stub.lib_removes + g_stub.spoof_arms, 0);
     g_stub = old;
 }
+
+// Every page switch leaves what a clean paint of the destination leaves, pixel for pixel: the erase pass of a page that is not
+// opaque, and the single paint of one that is (Ui::page_opaque / menu_opaque, table in ui_walk.h). All ordered pairs of the
+// walk pages, in the four rotations and three data states (live, idle, no power monitor), then the overlays that sit on the
+// outgoing screen: the BACK-hold card, the rotation notice (expired by the time of the switch) and the 5 V release notice.
+namespace {
+uint32_t g_walk_t = 100000;
+
+void walk_settle(Ui &ui) { for (int i = 0; i < 4; ++i) ui.tick(g_walk_t += 120); }
+
+// Goes to destination `b` and returns how many pixels differ from a repaint of it at the same instant.
+int walk_switch_diff(Ui &ui, unsigned b) {
+    ui.goto_page(kWalkDests[b].index, g_walk_t += 10);
+    const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
+    ui.repaint(g_walk_t);
+    int diff = 0;
+    for (size_t i = 0; i < got.size(); ++i) diff += got[i] != g_panel[i];
+    return diff;
+}
+
+void walk_open(Ui &ui, unsigned a) {
+    ui.goto_page(0, g_walk_t += 10);
+    ui.goto_page(kWalkDests[a].index, g_walk_t += 10);
+    walk_settle(ui);
+}
+
+void test_switch_exact() {
+    const auto old = g_stub;
+    auto holder = std::make_unique<Ui>();
+    Ui &ui = *holder;
+    fill_seven();
+    enum { Live, Idle, Offline, kStates };
+    int bad = 0;
+    for (int state = 0; state < kStates; ++state) {
+        g_stub.pm_online = state != Offline;
+        g_stub.pm.vbus_mv = 20030;
+        g_stub.pm.current_ma = state == Live ? 1520 : 0;
+        g_stub.pm.power_mw = state == Live ? 30456 : 0;
+        g_stub.pm.flow = state == Live ? k2::power::Flow::Forward : k2::power::Flow::Idle;
+        ui.init(g_walk_t);
+        for (uint8_t r = 0; r < 4; ++r) {
+            ui.set_rotation(r, g_walk_t += 10);
+            walk_settle(ui);
+            for (unsigned a = 0; a < kWalkN; ++a)
+                for (unsigned b = 0; b < kWalkN; ++b) {
+                    if (a == b) continue;
+                    walk_open(ui, a);
+                    if (const int d = walk_switch_diff(ui, b)) {
+                        std::printf("  switch %s -> %s differs from a clean paint: state %d rotation %u, %d px\n",
+                                    kWalkDests[a].name, kWalkDests[b].name, state, unsigned(r), d);
+                        ++bad;
+                    }
+                }
+        }
+    }
+    CHECK_EQ(bad, 0);
+
+    // Overlays on the outgoing screen, from a page of each kind, to every destination.
+    g_stub.pm_online = true; g_stub.pm.vbus_mv = 20030; g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456;
+    g_stub.pm.flow = k2::power::Flow::Forward;
+    int bad_overlay = 0;
+    const unsigned from[] = {0, 1, 2, 4, 12};   // Home, Detail, Charger, Tools, Spoof
+    for (uint8_t r = 0; r < 4; r += 3) {
+        ui.set_rotation(r, g_walk_t += 10);
+        for (unsigned a : from)
+            for (unsigned b = 0; b < kWalkN; ++b) {
+                if (a == b) continue;
+                for (int overlay = 0; overlay < 3; ++overlay) {
+                    if (overlay == 2 && kWalkDests[b].index >= 6) continue;   // a menu refuses to open while the release runs
+                    walk_open(ui, a);
+                    const char *what = "hold card";
+                    if (overlay == 0) {                                    // BACK held: "Reboot in N"
+                        ui.set_pressed(Button::Back, true, g_walk_t += 10);
+                        ui.tick(g_walk_t += 100);
+                        ui.tick(g_walk_t += 2000);
+                        if (!ui.hold_card_visible()) { std::printf("  no hold card on %s\n", kWalkDests[a].name); ++bad_overlay; }
+                    } else if (overlay == 1) {                             // the rotation notice, expired when the switch comes
+                        what = "rotation notice";
+                        ui.set_pressed(Button::Minus, true, g_walk_t += 10);   // hold + and - together
+                        ui.set_pressed(Button::Plus, true, g_walk_t += 10);
+                        ui.on_button(Button::Plus, ButtonEvent::Long, g_walk_t += 10);
+                        ui.set_pressed(Button::Minus, false, g_walk_t += 10);
+                        ui.set_pressed(Button::Plus, false, g_walk_t += 10);
+                        g_walk_t += 5000;
+                    } else {                                               // the 5 V release monitor
+                        what = "release notice";
+                        ui.stop_fc(g_walk_t += 10);
+                    }
+                    const int d = walk_switch_diff(ui, b);
+                    if (d) {
+                        std::printf("  %s survives %s -> %s: rotation %u, %d px\n", what, kWalkDests[a].name, kWalkDests[b].name, unsigned(r), d);
+                        ++bad_overlay;
+                    }
+                    if (overlay == 0) { ui.set_pressed(Button::Back, false, g_walk_t += 10); ui.tick(g_walk_t += 100); }
+                    if (overlay == 1) { ui.configure_rotation(true, r); ui.set_rotation(r, g_walk_t += 10); }   // the gesture locked it
+                    if (overlay == 2) for (int n = 0; n < 40; ++n) { g_stub.pm.vbus_mv = 5000; ui.tick(g_walk_t += 100); }
+                    g_stub.pm.vbus_mv = 20030;
+                }
+            }
+    }
+    CHECK_EQ(bad_overlay, 0);
+    ui.set_rotation(0, g_walk_t += 10);
+    g_stub = old;
+}
+}  // namespace
 
 int main() {
     setup_stubs();
@@ -1476,5 +1582,6 @@ int main() {
     }
     ui.goto_page(0, 9900);
     CHECK_EQ(k2::g_missing_glyphs, 0u);
+    test_switch_exact();
     return test_report("test_ui_capture");
 }

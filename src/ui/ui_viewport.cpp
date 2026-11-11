@@ -26,6 +26,10 @@ Rect ContentViewport::native_rect(Rect source, int cell_offset) {
 
 bool ContentViewport::stretched() { return active && lcd::get_sink() != active->previous_; }
 
+bool ContentViewport::scaled() {
+    return stretched() && (active->destination_.w != kLogicalW || active->destination_.h != kLogicalH);
+}
+
 namespace {
 // The logical index c in 0..logical-1 with mapped(c) <= q < mapped(c + 1), or -1. The first guess is off by at most one.
 int owner(int q, int extent, int logical) {
