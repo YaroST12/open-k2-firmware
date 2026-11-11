@@ -44,6 +44,8 @@
 //                                    details) sel(1, 0xFF = none) count(1) home_window(1) flags(1: bit0 hold
 //                                    card, 1 rotation notice, 2 e-marker scanning, 3 listening, 4 quiet,
 //                                    5 identify: no device); enums: ui_types.hpp, home_model.hpp
+//                                    part 2, 26 bytes: fusb_id(1) pd_rx(4) usb_resets(4) usb_isrs(4)
+//                                    log_sent(4) log_dropped(4) poll_gap_max_ms(4) usb_configured(1)
 //   0x04 GET_PDOS    req [index(1)]   rsp valid spec_rev num_pdos index (4 x u8) and, when
 //                                    index < num_pdos: type(1) raw(4) min_mv(2) max_mv(2)
 //                                    max_ma(2) max_mw(4)
@@ -647,6 +649,15 @@ struct SessionInfo {
     uint8_t sub = 0, sel = 0xFF, count = 0, home_window = 0, flags = 0;
 };
 size_t encode_session(std::span<uint8_t> out, const SessionInfo&);
+// GET_STATE part 2 (diag): the counters the Diag page prints. poll_gap_max_ms is the longest main-loop gap since the last
+// [USB] heartbeat line (the driver zeroes it there), exactly what the page shows.
+constexpr size_t kDiagLen = 26;
+struct DiagInfo {
+    uint8_t fusb_id = 0;
+    uint32_t pd_rx = 0, usb_resets = 0, usb_isrs = 0, log_sent = 0, log_dropped = 0, poll_gap_max_ms = 0;
+    uint8_t usb_configured = 0;
+};
+size_t encode_diag(std::span<uint8_t> out, const DiagInfo&);
 struct AdcRawSnapshot {
     uint8_t ok = 0;
     std::array<uint16_t, kAdcRawAll> all{};      // channels 0..7, 16, 17
@@ -917,6 +928,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.press(u8, u16) } -> std::same_as<Status>;
     { b.state() } -> std::same_as<StateInfo>;
     { b.session() } -> std::same_as<SessionInfo>;   // 0x03 req [1]: the session chrome (a read, never moves anything)
+    { b.diag() } -> std::same_as<DiagInfo>;         // 0x03 req [2]: the Diag page counters (a read)
     { b.pdos() } -> std::same_as<PdoSnapshot>;
     { b.emarker() } -> std::same_as<EmarkerSnapshot>;
     { b.identity() } -> std::same_as<IdentitySnapshot>;
@@ -1080,6 +1092,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p.size() > 1) return reply(Status::BadLength);
         if (p.empty() || p[0] == 0) return reply_n(encode_state(buf, backend.state()));
         if (p[0] == 1) return reply_n(encode_session(buf, backend.session()));
+        if (p[0] == 2) return reply_n(encode_diag(buf, backend.diag()));
         return reply(Status::BadArg);
     case Cmd::GetPdos: {
         if (p.size() > 1) return reply(Status::BadLength);

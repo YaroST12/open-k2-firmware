@@ -348,6 +348,18 @@ remote::SessionInfo Remote::session() {
     return s;
 }
 
+// The Diag page rows as numbers: the same driver reads DiagPage::sample() and update() make (usb::stats_snapshot, fusb302).
+remote::DiagInfo Remote::diag() {
+    const usb::StatsSnapshot u = usb::stats_snapshot();
+    remote::DiagInfo d;
+    d.fusb_id = fusb302::device_id();
+    d.pd_rx = fusb302::rx_count();
+    d.usb_resets = u.resets; d.usb_isrs = u.isrs; d.log_sent = u.log_sent; d.log_dropped = u.log_dropped;
+    d.poll_gap_max_ms = u.poll_gap_max;
+    d.usb_configured = usb::configured() ? 1 : 0;
+    return d;
+}
+
 remote::PdoSnapshot Remote::pdos() {
     remote::PdoSnapshot snap;
     const pd::SourceCaps *caps = &pd::active_caps();

@@ -203,6 +203,14 @@ size_t encode_session(std::span<uint8_t> out, const SessionInfo &s) {
     return w.size();
 }
 
+size_t encode_diag(std::span<uint8_t> out, const DiagInfo &s) {
+    Writer w(out);
+    w.u8(s.fusb_id); w.u32(s.pd_rx);
+    w.u32(s.usb_resets); w.u32(s.usb_isrs); w.u32(s.log_sent); w.u32(s.log_dropped); w.u32(s.poll_gap_max_ms);
+    w.u8(s.usb_configured);
+    return w.size();
+}
+
 size_t encode_pdo(std::span<uint8_t> out, const PdoSnapshot &s, uint8_t index) {
     Writer w(out);
     w.u8(s.valid); w.u8(s.spec_rev); w.u8(s.num_pdos); w.u8(index);

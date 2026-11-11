@@ -223,6 +223,23 @@ static void test_state_session_part() {
     check_header(r, 0x03, 43, Status::BadLength, 0);
 }
 
+static void test_state_diag_part() {
+    Fake f; Frame r;
+    f.dg.fusb_id = 0x91; f.dg.pd_rx = 0x01020304; f.dg.usb_resets = 5; f.dg.usb_isrs = 0x0A0B0C0D;
+    f.dg.log_sent = 300; f.dg.log_dropped = 2; f.dg.poll_gap_max_ms = 17; f.dg.usb_configured = 1;
+    CHECK_EQ(run(f, request(0x03, 50, {2}), r), 1);
+    check_header(r, 0x03, 50, Status::Ok, kDiagLen);
+    check_bytes(r, kRspHeader, {0x91,                          // FUSB302 device id
+                                0x04, 0x03, 0x02, 0x01,        // PD messages received
+                                5, 0, 0, 0,                    // USB resets
+                                0x0D, 0x0C, 0x0B, 0x0A,        // USB interrupts
+                                0x2C, 0x01, 0, 0,              // log reports sent (300)
+                                2, 0, 0, 0,                    // log reports dropped
+                                17, 0, 0, 0,                   // longest main-loop gap, ms
+                                1});                           // USB configured
+    CHECK_EQ(kDiagLen, 26);
+}
+
 static void test_adc_raw() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x21, 4, {}), r), 1);
@@ -2036,6 +2053,7 @@ int main() {
     test_button();
     test_state();
     test_state_session_part();
+    test_state_diag_part();
     test_adc_raw();
     test_ripple();
     test_fc();

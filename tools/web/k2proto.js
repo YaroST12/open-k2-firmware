@@ -344,6 +344,16 @@ var K2Proto = (function () {
              home_window: name(SESSION_HOME_WINDOWS, p[29]), flags: flags };
   }
 
+  // GET_STATE [2], 26 bytes (encode_diag): the Diag page counters. poll_gap_max_ms is the longest main-loop gap since the last
+  // [USB] heartbeat line, as the page shows it.
+  function decodeDiag(p) {
+    need(p, 26, "state diag");
+    var v = dv(p);
+    return { fusb_id: p[0], pd_rx: v.getUint32(1, true), usb_resets: v.getUint32(5, true), usb_isrs: v.getUint32(9, true),
+             log_sent: v.getUint32(13, true), log_dropped: v.getUint32(17, true), poll_gap_max_ms: v.getUint32(21, true),
+             usb_configured: !!p[25] };
+  }
+
   function decodeAdcRaw(p) {
     need(p, 35, "adc raw");
     var v = dv(p), channels = {}, scan = {}, i;
@@ -717,6 +727,7 @@ var K2Proto = (function () {
     }
   };
   K2Remote.prototype.stateSession = function () { return this.statePart(1, decodeSession); };
+  K2Remote.prototype.stateDiag = function () { return this.statePart(2, decodeDiag); };
 
   K2Remote.prototype.pdos = async function () {
     var r = decodePdo((await this.link.call(CMD.GET_PDOS, [0])).payload);
@@ -1326,7 +1337,7 @@ var K2Proto = (function () {
     FrameError: FrameError, RemoteError: RemoteError, RemoteTimeout: RemoteTimeout, BootloaderDetected: BootloaderDetected,
     packRequest: packRequest, parseResponse: parseResponse, isResponse: isResponse,
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
-    directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodePdo: decodePdo,
+    directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodeSession: decodeSession, decodeDiag: decodeDiag, decodePdo: decodePdo,
     decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,

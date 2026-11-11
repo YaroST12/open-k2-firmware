@@ -461,6 +461,18 @@ def decode_session(p):
             "flags": {name: bool(p[30] >> i & 1) for i, name in enumerate(SESSION_FLAGS)}}
 
 
+DIAG_LEN = 26
+
+
+def decode_diag(p):
+    """GET_STATE [2]: the Diag page counters (src/core/remote_proto.cpp encode_diag). poll_gap_max_ms is the longest
+    main-loop gap since the last [USB] heartbeat line, as the page shows it."""
+    _need(p, DIAG_LEN, "state diag")
+    u32 = lambda o: int.from_bytes(p[o:o + 4], "little")
+    return {"fusb_id": p[0], "pd_rx": u32(1), "usb_resets": u32(5), "usb_isrs": u32(9), "log_sent": u32(13),
+            "log_dropped": u32(17), "poll_gap_max_ms": u32(21), "usb_configured": bool(p[25])}
+
+
 def decode_adc_raw(p):
     _need(p, 35, "adc-raw")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
@@ -1253,12 +1265,24 @@ def cmd_state(link, a):
             out["source"] = {"apple": _apple_read_all(link)}
         except (RemoteError, FrameError):
             pass
-        try:   # GET_STATE [1]: older firmware answers BadLength / BadArg to a payload, the fields stay absent
-            out.update(decode_session(link.call(CMD_GET_STATE, bytes([1])).payload))
-        except RemoteError as e:
-            if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
-                raise
+        session = _state_part(link, 1, decode_session)
+        if session is not None:
+            out.update(session)
+        diag = _state_part(link, 2, decode_diag)
+        if diag is not None:
+            out["diag"] = diag
     return out
+
+
+def _state_part(link, part, decode):
+    """One GET_STATE part, decoded. Older firmware answers BadLength / BadArg to a part byte: None, the fields stay absent.
+    Any other refusal and a malformed reply are real errors."""
+    try:
+        return decode(link.call(CMD_GET_STATE, bytes([part])).payload)
+    except RemoteError as e:
+        if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+            raise
+        return None
 
 
 def _link_fields(link, keys):

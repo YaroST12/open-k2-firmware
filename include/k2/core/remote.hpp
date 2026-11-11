@@ -56,6 +56,7 @@ public:
     remote::Status press(uint8_t button, uint16_t ms);
     remote::StateInfo state();
     [[gnu::noinline]] remote::SessionInfo session();   // GET_STATE part 1: Ui::session() on the wire (a read)
+    [[gnu::noinline]] remote::DiagInfo diag();   // GET_STATE part 2: the Diag page counters (a read)
     remote::PdoSnapshot pdos();
     remote::EmarkerSnapshot emarker();
     remote::IdentitySnapshot identity();

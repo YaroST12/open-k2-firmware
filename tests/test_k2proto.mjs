@@ -693,6 +693,21 @@ test("K2Remote.stateSession sends the part byte; old firmware reads as null", as
   await assert.rejects(new P.K2Remote(c.link).stateSession(), P.RemoteError);
 });
 
+// GET_STATE [2]: the same 26-byte vector as test_state_diag_part in tests/test_remote_proto.cpp.
+const DIAG_PAYLOAD = [0x91, 0x04, 0x03, 0x02, 0x01, 5, 0, 0, 0, 0x0D, 0x0C, 0x0B, 0x0A, 0x2C, 0x01, 0, 0, 2, 0, 0, 0, 17, 0, 0, 0, 1];
+
+test("decodeDiag reads the Diag page counters and K2Remote.stateDiag asks for part 2", async () => {
+  assert.deepEqual(P.decodeDiag(Uint8Array.from(DIAG_PAYLOAD)),
+    { fusb_id: 0x91, pd_rx: 0x01020304, usb_resets: 5, usb_isrs: 0x0A0B0C0D, log_sent: 300, log_dropped: 2,
+      poll_gap_max_ms: 17, usb_configured: true });
+  assert.throws(() => P.decodeDiag(Uint8Array.from(DIAG_PAYLOAD.slice(0, 25))), P.FrameError);
+  const a = rig((f) => [rsp(3, f[3], 0, DIAG_PAYLOAD)]);
+  assert.equal((await new P.K2Remote(a.link).stateDiag()).log_sent, 300);
+  assert.deepEqual([...a.sent[0].slice(0, 6)], [0xA5, 0x4B, 3, 1, 1, 2]);
+  const b = rig((f) => [rsp(3, f[3], P.STATUS.BAD_ARG)]);
+  assert.equal(await new P.K2Remote(b.link).stateDiag(), null);
+});
+
 test("request ids are unique and match the firmware table", () => {
   const ids = Object.values(P.CMD);
   assert.equal(new Set(ids).size, ids.length);

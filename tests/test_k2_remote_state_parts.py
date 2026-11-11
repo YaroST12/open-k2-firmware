@@ -27,6 +27,11 @@ SESSION = bytes([0x02, 0x01, 0, 0,                # 258 mAh
                  0x05, 3, 7, 2, 0x14])            # sub 5 = Cable tab + popup, sel 3, count 7, window 10m, flags 0x14
 
 
+# Part 2 (26 bytes): the same literal as test_state_diag_part in tests/test_remote_proto.cpp.
+DIAG = bytes([0x91, 0x04, 0x03, 0x02, 0x01, 5, 0, 0, 0, 0x0D, 0x0C, 0x0B, 0x0A, 0x2C, 0x01, 0, 0, 2, 0, 0, 0,
+              17, 0, 0, 0, 1])
+
+
 def frame_ok(payload):
     return kr.Response(kr.CMD_GET_STATE, 1, 0, payload)
 
@@ -100,7 +105,30 @@ class SessionDecode(unittest.TestCase):
             kr.decode_session(SESSION[:30])
 
 
+class DiagDecode(unittest.TestCase):
+    def test_fields(self):
+        d = kr.decode_diag(DIAG)
+        self.assertEqual(d, {"fusb_id": 0x91, "pd_rx": 0x01020304, "usb_resets": 5, "usb_isrs": 0x0A0B0C0D,
+                             "log_sent": 300, "log_dropped": 2, "poll_gap_max_ms": 17, "usb_configured": True})
+
+    def test_truncated_payload_is_rejected(self):
+        with self.assertRaises(kr.FrameError):
+            kr.decode_diag(DIAG[:25])
+
+
 class StateJson(unittest.TestCase):
+    def test_json_state_carries_the_diag_block(self):
+        out, link = state_json({0: BASE, 1: SESSION, 2: DIAG})
+        self.assertEqual(out["diag"]["fusb_id"], 0x91)
+        self.assertEqual(out["diag"]["log_dropped"], 2)
+        self.assertEqual(out["mah"], 258)                    # the session block is still merged in
+        self.assertIn((kr.CMD_GET_STATE, b"\x02"), link.sent)
+
+    def test_session_only_firmware_has_no_diag(self):
+        out, _ = state_json({0: BASE, 1: SESSION})
+        self.assertNotIn("diag", out)
+        self.assertEqual(out["mah"], 258)
+
     def test_json_state_carries_the_session(self):
         out, link = state_json({0: BASE, 1: SESSION})
         self.assertEqual(out["page"], 2)                     # the base block is still there
