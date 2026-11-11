@@ -341,8 +341,8 @@ source, file:line given), **[measured]** (a hardware number from the 2026-11-11 
   or Rd (`docs/CHARGER_QUIRKS.md`, "PLUS key is coupled to CC2", the 2026-11-10 bullet) [measured]. CC1 has no such net and idles at
   6-9 mV [measured]. A chipless C-to-C cable moves it only to 1.67-1.675 V [measured].
 - Holding PLUS pulls an unplugged CC2 hard low (~2 mV) [measured], which fakes the CC2 idle collapse a cable chip's pull-down also
-  causes. The classifier therefore also needs the VCONN sign: a ~5 kohm-class PLUS coupling barely loads a ~85 ohm source (~45 mV
-  droop), a ~1 kohm Ra loads it by ~225 mV [inferred].
+  causes. The classifier therefore also needs the VCONN sign: a ~5 kohm-class PLUS coupling barely loads the source (~45 mV), a cable's ~1 kohm
+  Ra pulls the driven line to ~2.64 V (225 mV on CC1, ~630 mV on CC2) [the PLUS load inferred, the cable loads measured].
 - The firmware leaves the level alone on purpose: by level it cannot be told from a 3 A Rp over a sink's Rd
   (`include/k2/pd/pd_ccscan.hpp:82-98`: the 0.2-2.0 V Rd window holds both) [code].
 
@@ -357,12 +357,22 @@ source, file:line given), **[measured]** (a hardware number from the 2026-11-11 
   no line at an Rp level, VBUS < 1 V) and does not look at `g_active_cc`. Reported, not changed.
 
 **What the VCONN source looks like from the pin**
-- An unloaded pin reads 2.867-2.872 V under VCONN (steady from 1.5 ms). The pin that carries a cable's pull-down reads 2.627 V at
-  1.5 ms and 2.641-2.646 V settled [measured, Baseus 100 W cable, one orientation].
-- With a source resistance Rs and an Ra of ~1 kohm: 2.87 V * 1000 / (1000 + Rs) = 2.645 V gives Rs ~ 85 ohm, a value a chip switch
-  plus a small series resistor can give. The 225 mV droop is therefore consistent with the cable's own Ra and need not be a property
-  of the board's CC2 net [inferred from one cable]. A VCONN reading on an empty port and on a chipless cable was never taken
-  (cc-probe refuses there), and neither was VCONN on the pin of a cable whose pull-down sits on CC1.
+- Measured 2026-11-11 (build 1.0.0-509, `emarker probe --json`, each cable alone in the bottom port; raw counts in
+  `tests/test_ra_class.cpp`), in mV at 10 and 100 ms:
+
+  | Line under VCONN | no pull-down (empty port, chipless cable) | cable pull-down on that line |
+  |---|---|---|
+  | CC1 | 2868-2871 | 2640-2644 (Baseus), 2644 rising to 2683 over 100 ms (CUKTECH) |
+  | CC2 | 3268-3283 | 2641-2643 (Baseus) |
+
+  So a bare CC1 and a bare CC2 read different levels (the CC2 net has its own bias network); a cable's Ra pulls either to ~2.64 V.
+  The idle levels: CC1 0-11 mV, CC2 1635-1712 mV, or 0 mV with a chip's pull-down on CC2.
+- The line that is not driven moves too: with VCONN on CC1 the undriven CC2 read 3278 (Baseus, chip on CC1), 0 (Baseus, chip on CC2),
+  3268-3283 (no chip) and 1255-1264 mV (CUKTECH, chip on CC1). That is a property of the cable's chip, not a level to judge by; the
+  classifier never reads the undriven line (`include/k2/pd/ra_class.hpp`).
+- With a source resistance Rs and an Ra of ~1 kohm: a CC1 that drops from 2.87 V to 2.645 V gives Rs ~ 85 ohm; a CC2 that drops from
+  3.27 V to 2.64 V gives ~ 240 ohm, so the two lines are not the same source behind one resistance [inferred]. The fitted thresholds
+  (CC1 2775 mV, CC2 2960 mV, idle CC2 collapse 400 mV) and their margins are in `ra_class.hpp`.
 
 ## Per-port capability table (identical for top and bottom)
 
