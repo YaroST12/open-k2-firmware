@@ -138,4 +138,16 @@ FsStore g_store;
 Env& env() { return g_env; }
 Store& store() { return g_store; }
 
+std::uint16_t file_len() {
+    std::size_t n = 0;
+    if (fs::instance().size_of(kFile, n) != fs::Err::Ok || n > kFileBytes) return 0;
+    return std::uint16_t(n);
+}
+
+std::size_t file_read(std::uint16_t off, std::span<std::uint8_t> out) {
+    std::size_t n = 0;
+    if (fs::instance().read_at(kFile, off, out, n) != fs::Err::Ok) return 0;
+    return n;
+}
+
 }  // namespace k2::loopprobe::hw

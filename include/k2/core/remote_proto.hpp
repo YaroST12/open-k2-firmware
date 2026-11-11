@@ -297,6 +297,12 @@
 //                                      BadArg for off > total.
 //                                    op 3 stop: the run ends at the next poll with the source released to 5 V; rsp the status block.
 //                                      Never refused for a busy port: it is the way out of a run.
+// ---- Loop probe (k2/loopprobe, docs/LOOP_PROBE.md) -------------------------------------------------------------------------------
+//   0x57 LOOP_PROBE  req off(2)        rsp off(2) total(2) n(1) data(n), n <= kLoopProbeChunk (48)
+//                                    Read-only: the HID-cable loop probe's last result as its flash file holds it (/lp/last.rec: "LPR",
+//                                    version, length u16, CRC-16 u16, then the 399-byte record of k2/loopprobe/loop_probe.hpp).
+//                                    total 0 = no result stored. BadArg for off > total. The probe itself starts on the K2 only
+//                                    (Tools, Loop probe): its HID port is in the loop, so there is no host to start it.
 // ---- end PD Stress --------------------------------------------------------------------------------------------------------------
 //   0x32 FC          req op(1) [args] [args]  rsp state proto fail scan_flags scan_step target_mv(2) vbus_mv(2)
 //                                    num_results(1) { proto outcome mv(2) } x num_results
@@ -427,6 +433,7 @@ enum class Cmd : uint8_t {
                          // next to the PPS sweep's, journaled in the meta record). rsp [on(1)]. Busy while a run is active.
     PdStress = 0x55,        // PD Stress: status / start / result (chunked) / stop, see the layout above (0x54 is the AVS sweep)
     EmarkerProbe = 0x56,    // optional [vconn_pc]: the silent-cable-chip probe, raw ADC samples only -> see encode_ra_probe (k2/pd/ra_probe.hpp); a refusal = Busy + [raprobe::Refusal], a bad argument = BadArg + [raprobe::ArgError]
+    LoopProbe = 0x57,       // off(2): the loop probe's stored result file, chunked, see the layout above
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -438,7 +445,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
-    Cmd::PdStress, Cmd::EmarkerProbe,
+    Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -591,6 +598,9 @@ constexpr size_t kPdStressChunk = 48, kPdStressStatusBytes = 19, kPdStressStartA
 constexpr uint8_t kPdStressFlagMask = kPdFlagConfirm;   // the start flags this protocol knows
 static_assert(5 + kPdStressChunk <= kMaxRspPayload);
 // ---- end PD Stress ----
+// LOOP_PROBE read reply: off(2) total(2) n(1) data(n).
+constexpr size_t kLoopProbeChunk = 48;
+static_assert(5 + kLoopProbeChunk <= kMaxRspPayload);
 // QRTEST op codes (first payload byte of Cmd::QrTest); the list reply header is off(2) total(2) n(1).
 constexpr uint8_t kQrTestList = 0, kQrTestShow = 1, kQrTestStop = 2;
 constexpr size_t kQrTestChunk = 48;
@@ -1142,6 +1152,8 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ufcs_op(u8) } -> std::same_as<Status>;                           // kUfcsReset / kUfcsProbe / kUfcsStop
     { b.ufcs_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // blob bytes from off, returns how many
     { b.pdstress_info() } -> std::same_as<PdStressInfo>;                  // PD Stress status block
+    { b.loopprobe_len() } -> std::same_as<uint16_t>;                      // bytes of the stored loop probe file, 0 = none
+    { b.loopprobe_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // file bytes from off, returns how many
     { b.pdstress_start(PdStressStart{}) } -> std::same_as<Status>;        // Busy when another tool owns the ports; other refusals are in info().start
     { b.pdstress_stop() } -> std::same_as<void>;                          // never refused
     { b.pdstress_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // result blob bytes from off, returns how many
@@ -1686,6 +1698,17 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             if (st != Status::Ok) return reply(st);
         }
         return reply_n(encode_ufcs(buf, backend.ufcs_info()));
+    }
+    case Cmd::LoopProbe: {
+        if (p.size() != 2) return reply(Status::BadLength);
+        const uint16_t off = detail::rd16(&p[0]);
+        const uint16_t total = backend.loopprobe_len();
+        if (off > total) return reply(Status::BadArg);
+        const size_t want = std::min<size_t>(kLoopProbeChunk, total - off);
+        const size_t n = want ? std::min(want, backend.loopprobe_read(off, std::span<uint8_t>(buf.data() + 5, want))) : 0;
+        buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
+        buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
+        return reply_n(5 + n);
     }
     // ---- PD Stress ----
     case Cmd::PdStress: {
