@@ -145,6 +145,8 @@ public:
     void clear() { for (std::size_t i = 0; i < kMaxSeqs; ++i) reset(rec(i)); }
     Rec rec(std::size_t seq) { return Rec(buf_.subspan(seq * kSeqWords, kSeqWords)); }
     CRec rec(std::size_t seq) const { return CRec(buf_.subspan(seq * kSeqWords, kSeqWords)); }
+    // The raw words of the whole run (the result blob streams them).
+    std::span<const std::int16_t> words() const { return buf_.first(kRecordWords); }
     // The run as one set of counters.
     Counts total(std::size_t n_seqs) const {
         Counts t;
