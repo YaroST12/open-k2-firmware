@@ -545,8 +545,9 @@ Err Sink::trigger(Choice c, std::uint32_t now) {
     }
     update_rev();
     const bool defer = c.pos == 0 || (c.pos >= 8 && !st_.epr_mode);  // EPR list needed first
+    if (defer && !st_.epr_mode && hv_lock_) return Err::OverCap;    // no EPR entry under the 5 V lock
     if (!defer) {
-        const Plan p = plan_request(*caps_, c, cap_mv_, st_.epr_mode);
+        const Plan p = plan_for(c, st_.epr_mode);
         if (p.err != Err::Ok) return p.err;
         plan_ = p;
     } else if (!caps_->valid) {
@@ -577,6 +578,23 @@ Err Sink::answer_5v(Choice c, std::uint32_t now) {
     return e;
 }
 
+Plan Sink::plan_for(Choice c, bool epr_mode) const {
+    Plan p = plan_request(*caps_, c, cap_mv_, epr_mode);
+    if (hv_lock_ && p.err == Err::Ok && above_hv_lock(p)) p.err = Err::OverCap;   // the 5 V lock is a 5 V cap
+    return p;
+}
+
+void Sink::set_hv_lock(bool on, std::uint32_t now) {
+    const bool edge = on && !hv_lock_;
+    hv_lock_ = on;
+    if (!edge) return;
+    // The lock edge: an EPR entry under way is dropped, a contract or a Request in flight above 5 V goes back to PDO 1 through
+    // release() (queued behind a Request already on the wire, as any release is).
+    const bool entering = st_.state == SinkState::EprEntering || st_.state == SinkState::EprWaitCaps;
+    const bool high = above_hv_lock(plan_) || (contract_ && st_.mv > 5500);
+    if (entering || (high && (contract_ || st_.state != SinkState::Idle))) release(now);
+}
+
 void Sink::proceed_after_epr_caps(std::uint32_t now) {
     if (want_.pos == 0) {  // only the list was wanted
         st_.result = SinkResult::Ok;
@@ -585,7 +603,7 @@ void Sink::proceed_after_epr_caps(std::uint32_t now) {
         next_epr_ka_ = now + kEprKeepAliveMs;
         return;
     }
-    const Plan p = plan_request(*caps_, want_, cap_mv_, true);
+    const Plan p = plan_for(want_, true);
     if (p.err != Err::Ok) {
         fail(p.err == Err::OverCap ? SinkResult::OverCap : SinkResult::BadChoice, SinkState::Ready);
         next_epr_ka_ = now + kEprKeepAliveMs;
@@ -802,7 +820,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
                 // starts the source's tSenderResponse. An unchanged list plans the same RDO: Accept + PS_RDY, no change.
                 Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
                 if (hc.pos) {
-                    const Plan p = plan_request(*caps_, hc, cap_mv_, st_.epr_mode);
+                    const Plan p = plan_for(hc, st_.epr_mode);   // refused under the 5 V lock too: the hold is lost, PDO 1
                     if (p.err != Err::Ok) { begin_abort(SinkResult::Aborted, now); return; }
                     plan_ = p;
                     st_.state = SinkState::Requesting;
@@ -816,7 +834,8 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
                 // the contract's own level looked up by voltage, else PDO 1.
                 Choice hc = lookup_held(*caps_, plan_.mv, plan_.ma, plan_.type);
                 if (!hc.pos) hc = {1, 0, kReleaseMaxMa};
-                const Plan p = plan_request(*caps_, hc, cap_mv_, st_.epr_mode);
+                Plan p = plan_for(hc, st_.epr_mode);
+                if (p.err != Err::Ok && hv_lock_) p = plan_for({1, 0, kReleaseMaxMa}, st_.epr_mode);   // the 5 V lock: PDO 1
                 if (p.err != Err::Ok) return;
                 plan_ = p;
                 st_.state = SinkState::Requesting;

@@ -82,6 +82,8 @@ std::uint32_t rdo_fixed(std::uint8_t pos, std::uint16_t op_ma, std::uint16_t max
 std::uint32_t rdo_pps(std::uint8_t pos, std::uint16_t mv, std::uint16_t ma, bool epr);
 std::uint32_t rdo_avs(std::uint8_t pos, std::uint16_t mv, std::uint16_t ma, bool epr = true);
 
+// No value may be added: the charger test's card stores 128 + Err below kDetailEprFail (136). The HID-cable loop 5 V lock
+// (set_hv_lock) refuses with OverCap: it is a 5 V cap; the layers above name the lock from k2::loopguard.
 enum class Err : std::uint8_t { Ok, NoCaps, BadPos, OverCap, BadVoltage, Inline, Busy, BadChoice };
 const char* err_name(Err e);
 
@@ -114,6 +116,12 @@ Plan plan_request(const SourceCaps& caps, Choice c, std::uint32_t cap_mv, bool e
 // a source re-announcing 5/9/20 V while the K2 holds 15 V at PDO 3 must not be asked 20 V). Returns pos 0 when the
 // list no longer offers the level: the caller then asks PDO 1 (5 V) and reports the hold lost.
 Choice lookup_held(const SourceCaps& caps, std::uint16_t mv, std::uint16_t ma, PdoType type);
+
+// Above what the 5 V lock allows: a fixed (battery, variable) level above vSafe5V's 5 V, a programmable (PPS / AVS) one above
+// vSafe5V's 5.5 V maximum.
+constexpr bool above_hv_lock(const Plan& p) {
+    return (p.type == PdoType::Pps || p.type == PdoType::Avs) ? p.mv > 5500 : p.mv > kVsafe5vMv;
+}
 
 // Voltage cap from the power monitor: the lower of the two limits; 5 V when either is unknown (0).
 std::uint32_t request_cap_mv(std::int32_t max_request_mv, std::int32_t max_vbus_mv);
@@ -305,6 +313,12 @@ public:
     bool apple_armed() const { return ap_.armed(); }
     void set_cap_mv(std::uint32_t mv) { cap_mv_ = mv < kVsafe5vMv ? kVsafe5vMv : mv; }
     std::uint32_t cap_mv() const { return cap_mv_; }
+    // HID-cable loop 5 V lock (k2/core/loop_guard.hpp). While on, every plan above 5 V (above_hv_lock) and every EPR entry is
+    // refused with Err::OverCap (trigger, answer_5v, the EPR list's follow-up, a re-announce's held level, which falls back to
+    // PDO 1). The rising edge also releases a contract or a Request in flight above 5 V and drops an EPR entry under way. Not
+    // the voltage cap: the cap's over-voltage abort (cap + 5 %) and the PPS clamp keep their own meaning.
+    void set_hv_lock(bool on, std::uint32_t now);
+    bool hv_lock() const { return hv_lock_; }
 
     // Start a trigger. Err::Ok = queued; anything else = nothing was sent.
     Err trigger(Choice c, std::uint32_t now);
@@ -403,6 +417,7 @@ private:
     void fail(SinkResult r, SinkState to);
     void do_hard_reset(SinkResult r, SinkState to, bool forced = false);
     void proceed_after_epr_caps(std::uint32_t now);
+    Plan plan_for(Choice c, bool epr_mode) const;   // plan_request with the 5 V lock applied
     void queue_epr_control(std::uint8_t kind);
     void begin_abort(SinkResult why, std::uint32_t now);
     void restart_abort(std::uint32_t now);                  // (re)send the Request for PDO 1 of the abort in progress
@@ -417,6 +432,7 @@ private:
     void send_xiaomi_vdm_reply(std::uint8_t cmd, std::span<const std::uint32_t> vdos, std::uint32_t now);
 
     bool never_hard_reset_ = false;
+    bool hv_lock_ = false;
     const SourceCaps* caps_ = nullptr;
     const SourceCaps* info_ = nullptr;      // informational EPR list target (never the live caps)
     std::uint32_t info_deadline_ = 0;
