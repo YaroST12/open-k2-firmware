@@ -126,6 +126,34 @@ static void test_topology_from_the_cc_lines() {
     }
 }
 
+// The remote session block reads the same classifier without the page: Ui::passive_facts() is the one
+// implementation the page paints from (conn::sense_passive), so with the page open and settled both agree on the
+// topology, the waiting classifier and the standby evidence, and the call works with no page on screen.
+static void test_passive_facts_are_the_pages_facts() {
+    struct Case { int cc1, cc2, vbus; };
+    const Case cases[] = {{3300, 3300, 0}, {3300, 0, 0}, {0, 3300, 0}, {0, 0, 0}, {3300, 3300, 5000}};
+    for (const Case &c : cases) {
+        Ui &ui = fresh_ui();
+        g_stub.pm.vbus_mv = c.vbus;
+        set_cc(c.cc1, c.cc2);
+        for (int i = 0; i < 12; i++) ui.tick(g_stub.ms += 100);   // the analog snapshot lands with no page open
+        const conn::Facts off = ui.passive_facts();               // no Connection page on screen
+        open_and_settle(ui, kConnTabAlias, 20000);
+        const conn::Facts on = cp(ui).facts();
+        CHECK_EQ(int(off.topo), int(on.topo));
+        CHECK_EQ(int(off.wait), int(on.wait));
+        CHECK_EQ(int(off.cross), int(on.cross));
+        CHECK_EQ(int(off.open_cc_mv), int(on.open_cc_mv));
+        CHECK_EQ(int(off.charger), int(on.charger));
+        CHECK_EQ(int(off.vbus_mv), int(on.vbus_mv));
+    }
+    Ui &ui = fresh_ui();
+    g_stub.pm.vbus_mv = 0;
+    set_cc(3300, 3300);
+    for (int i = 0; i < 12; i++) ui.tick(g_stub.ms += 100);
+    CHECK_EQ(int(ui.passive_facts().topo), int(raguard::Topology::DirectReceptacle));
+}
+
 static void test_topology_unknown_unless_passive_and_dead() {
     {   // VBUS up: the lines are not a waiting charger any more
         Ui &ui = fresh_ui();
@@ -1191,6 +1219,7 @@ int main() {
     test_non_displayed_inputs_do_not_run_match_live();
     test_default_tab_on_open();
     test_topology_from_the_cc_lines();
+    test_passive_facts_are_the_pages_facts();
     test_topology_unknown_unless_passive_and_dead();
     test_empty_states_are_passive();
     test_tab_switching();

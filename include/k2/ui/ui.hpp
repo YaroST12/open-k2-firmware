@@ -198,6 +198,9 @@ public:
     uint8_t charger_test_run_guard() const { return charger_test_.run_guard(); }    // the guard byte the run records
     // What the charger-test screens show as data (Cmd::ChargerTest req [3]); refreshes the Review preview, arms nothing.
     ChargerTestSession::View charger_test_view() { return charger_test_.view(); }
+    // The Connection page's facts (topology, waiting classifier, standby evidence) read with no page on screen:
+    // conn::sense_passive over a one-shot window of the latest CC levels, the same implementation the page uses.
+    [[gnu::noinline]] conn::Facts passive_facts() const;
     bool ports_busy() const { return charger_test_busy() || fc_release_.busy(); }
     const char *busy_reason() const;   // why an identity / START is refused right now, nullptr = free
     bool spoof_busy() const { return busy_reason() != nullptr; }

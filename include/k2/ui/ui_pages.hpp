@@ -679,6 +679,14 @@ extern uint32_t g_match_live_calls;
 // Static storage, never read on device.
 extern uint32_t g_conn_body_passes;
 
+// What the passive readers say right now: the one implementation behind conn::Facts. The Connection page paints
+// from it (its own peak window); the remote session block calls it through Ui::passive_facts() with a one-shot
+// window. The topology, the waiting classifier (pd::Link::wait_kind), the crossed-CC verdict and the standby
+// evidence (open_cc_mv) are never computed in two places. It reads only; nothing here drives CC.
+namespace conn {
+void sense_passive(Facts &f, const UiContext &ctx, const pd::Link &link, const raguard::PeakWindow &guard);
+}
+
 // Connection (Tools): the three parties on the two ports as tabs, Source / Cable / Sink, with a status bar
 // at the bottom and a small action pop-up on OK (ui_connection.hpp holds the pure model). Short +/- switch
 // tabs (or move in the pop-up), OK opens the pop-up, long OK shares, BACK closes the pop-up or leaves.

@@ -301,6 +301,43 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
 // Sensing: facts and the passive topology
 // ---------------------------------------------------------------------------------------
 
+void conn::sense_passive(Facts &f, const UiContext &ctx, const pd::Link &link, const raguard::PeakWindow &guard) {
+    // The same passive recipe the charger test's Ra guard uses: valid only while the K2 holds nothing on the
+    // lines and VBUS is down (a charger waiting for a sink). Anything else is Unknown. Nothing here drives CC.
+    raguard::Reading r;
+    r.cc1_mv = guard.cc1();
+    r.cc2_mv = guard.cc2();
+    r.vbus_mv = ctx.pm_online ? ctx.vbus_fast_mv : -1;
+    r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx.inline_mode && !link.inline_mode();
+    f.topo = raguard::classify(r);
+    f.wait = link.wait_kind();   // the one waiting classifier: the tab, the bar and the remote state read this
+    f.cross = link.cc_cross();   // crossed CC through the K2: the same single verdict for the tab, the bar, Home and the remote
+    f.charger = link.attached();
+    f.cable = fusb302::emarker().valid;
+    f.inline_sink = link.inline_mode();
+    // A decoded Request or Sink_Capabilities was received from a sink (the engine only sees received
+    // frames, so the K2's own trigger requests never set these): the sink stays seen after a power-role
+    // swap and after the inline latch expires.
+    f.sink_seen = fusb302::contract().valid || fusb302::sink_caps().valid;
+    // The idle "source asleep" evidence: the settled open reading of the line that reads the standby signature
+    // (the CC2 bias net at 1.69 V and a waiting charger's 3.3 V open Rp are outside the window), VBUS now, and
+    // the Wake sleeping port setting (off = no idle Rd hold is running).
+    const std::int32_t o1 = fusb302::open_cc_mv(1), o2 = fusb302::open_cc_mv(2);
+    f.open_cc_mv = pd::standby_signature(o1) ? o1 : pd::standby_signature(o2) ? o2 : -1;
+    f.vbus_mv = ctx.pm_online ? ctx.vbus_fast_mv : -1;
+    f.wake_port_off = !fusb302::idle_wake();
+}
+
+// No page on screen, so no peak window: one window holding the latest CC levels (the page's window holds up to 8).
+// The verdicts that read the lines can differ from the page's for one sag; everything else is identical.
+conn::Facts Ui::passive_facts() const {
+    raguard::PeakWindow one;
+    one.add(ctx_.analog ? ctx_.analog->cc1_mv : -1, ctx_.analog ? ctx_.analog->cc2_mv : -1);
+    conn::Facts f;
+    conn::sense_passive(f, ctx_, link_, one);
+    return f;
+}
+
 void ConnectionPage::sense(uint32_t now_ms) {
     const pd::Link &link = ctx_.ui->link();
     if (!guard_primed_ || uint32_t(now_ms - guard_t_) >= raguard::kSampleMs) {
@@ -308,30 +345,7 @@ void ConnectionPage::sense(uint32_t now_ms) {
         guard_t_ = now_ms;
         guard_primed_ = true;
     }
-    // The same passive recipe the charger test's Ra guard uses: valid only while the K2 holds nothing on the
-    // lines and VBUS is down (a charger waiting for a sink). Anything else is Unknown. Nothing here drives CC.
-    raguard::Reading r;
-    r.cc1_mv = guard_.cc1();
-    r.cc2_mv = guard_.cc2();
-    r.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
-    r.passive = !fusb302::rd_for_run_on() && !fusb302::ra_active() && !fusb302::self_powered() && !ctx_.inline_mode && !link.inline_mode();
-    facts_.topo = raguard::classify(r);
-    facts_.wait = link.wait_kind();   // the one waiting classifier: the tab, the bar and the remote state read this
-    facts_.cross = link.cc_cross();   // crossed CC through the K2: the same single verdict for the tab, the bar, Home and the remote
-    facts_.charger = link.attached();
-    facts_.cable = fusb302::emarker().valid;
-    facts_.inline_sink = link.inline_mode();
-    // A decoded Request or Sink_Capabilities was received from a sink (the engine only sees received
-    // frames, so the K2's own trigger requests never set these): the sink stays seen after a power-role
-    // swap and after the inline latch expires.
-    facts_.sink_seen = fusb302::contract().valid || fusb302::sink_caps().valid;
-    // The idle "source asleep" evidence: the settled open reading of the line that reads the standby signature
-    // (the CC2 bias net at 1.69 V and a waiting charger's 3.3 V open Rp are outside the window), VBUS now, and
-    // the Wake sleeping port setting (off = no idle Rd hold is running).
-    const std::int32_t o1 = fusb302::open_cc_mv(1), o2 = fusb302::open_cc_mv(2);
-    facts_.open_cc_mv = pd::standby_signature(o1) ? o1 : pd::standby_signature(o2) ? o2 : -1;
-    facts_.vbus_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
-    facts_.wake_port_off = !fusb302::idle_wake();
+    conn::sense_passive(facts_, ctx_, link, guard_);
     // The one "PD present" verdict of this attach, cached for build_items / paint_body / the tests.
     verdict_ = link.pd_verdict();
     none_why_ = link.pd_none_why();
