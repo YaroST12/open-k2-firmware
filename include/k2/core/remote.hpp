@@ -97,7 +97,7 @@ public:
     remote::PdOpResult pd_release();
     remote::PdOpResult pd_hard_reset(uint8_t flags = 0);   // flags: kPdFlagConfirm | kPdFlagResetInline (lab-only inline reset, remote `pd reset` only)
     remote::HandbackResult pd_handback(uint8_t flags = 0); // flags: kPdFlagConfirm only; phase-1 lab hand-back (remote `pd handback` only), verdict in the result
-    remote::PdTriggerSnapshot pd_attach(uint16_t target_mv, uint16_t target_ma);
+    remote::PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm);   // pd::attach_verdict: 5 V default, above 5 V needs confirm, inline / busy refused
     remote::PdTriggerSnapshot pd_trigger();
     remote::MatchSnapshot match_info();
     remote::UsbLinkSnapshot usb_link();

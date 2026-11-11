@@ -54,7 +54,7 @@ CMD_PD_MATCH = 0x45  # passive wants-vs-offers verdict
 CMD_USB_LINK = 0x46  # USB / Thunderbolt link from sniffed PD
 CMD_PD_REREAD = 0x47  # [op, mask] source-cap re-read (PD mode): 0 status, 1 start + mask, 2 abort, 5 Ra mode on/off
 CMD_PD_RELEASE = 0x44       # back to 5 V
-CMD_PD_ATTACH = 0x48       # [target_mv u16] [target_ma u16] -> trigger snapshot; default 9000 mV
+CMD_PD_ATTACH = 0x48       # [target_mv u16] [target_ma u16] [flags: bit0 confirm] -> trigger snapshot; default 5000 mV, above that needs the flag; refused inline / busy = status + [pd::Err]
 CMD_PD_HANDBACK = 0x49     # optional [flags]: bit0 confirm -> [HandbackVerdict]; phase-1 lab hand-back
 CMD_APPLE_READ = 0x4A      # lab-only Apple charger readout (SVID 0x05AC): [1] arm + re-request the current contract, [0, part] header (part 0) or one field (1..6)
 CMD_DFU_ENTER = 0x30      # clear the app marker and reset into the bootloader
@@ -243,7 +243,7 @@ class RemoteError(RuntimeError):
             text += " (the K2 is not passive: a charger test, a contract, Rd, VBUS at 1 V or more; the [CCPROBE] log line names the reason)"
         if cmd == CMD_DEBUG_CC_PROBE and status == STATUS_BAD_ARG:
             text += " (sw0 with a pull-up bit, a VCONN bit with PC13 high or with PDWN on the same line; ms 10..5000; pc 0..7)"
-        if cmd in (CMD_PD_REQUEST, CMD_PD_RESET, CMD_PD_RELEASE) and payload and payload[0] < len(PD_ERRS) and payload[0]:
+        if cmd in (CMD_PD_REQUEST, CMD_PD_RESET, CMD_PD_RELEASE, CMD_PD_ATTACH) and payload and payload[0] < len(PD_ERRS) and payload[0]:
             text += f" ({PD_ERRS[payload[0]]})"
         if cmd == CMD_IDENTIFY_DEVICE and payload and payload[0] == PD_ERR_INLINE:
             # the inline Identify refusal (BadArg + pd::Err::Inline), not "busy": a live sink is
@@ -2116,14 +2116,19 @@ def cmd_pd(link, a):
     elif sub == "release":
         link.call(CMD_PD_RELEASE)
     elif sub == "attach":
-        mv = getattr(a, "mv", 9000)
+        # Default 5 V. Above 5 V the firmware needs the confirm flag (bit0 of the optional third field, the
+        # PD_REQUEST bit), and it refuses outright while a sink is attached inline or a run owns the ports.
+        mv = getattr(a, "mv", 5000)
         ma = getattr(a, "ma", 0)
+        confirm = getattr(a, "confirm", False)
         # Clamp to 36000 mV for safety
         if mv > 36000:
             mv = 36000
         payload = mv.to_bytes(2, "little")
-        if ma > 0:
+        if ma > 0 or confirm:
             payload += ma.to_bytes(2, "little")
+        if confirm:
+            payload += bytes([1])
         st = decode_pd_trigger(link.call(CMD_PD_ATTACH, payload).payload)
         return {"pd_cmd": sub, "target_mv": mv, "target_ma": ma, **st}
     st = decode_pd_trigger(link.call(CMD_PD_TRIGGER_STATUS).payload)
@@ -2955,9 +2960,11 @@ def build_parser():
                                           "charger test. Never reachable from the UI, the shell or the charger test")
     sh.add_argument("--confirm", action="store_true", help="confirm the lab op (required)")
     spds.add_parser("release", help="back to 5 V (Request PDO 1)")
-    sa = spds.add_parser("attach", help="attach as PD sink and request target voltage (default 9000 mV)")
-    sa.add_argument("mv", type=int, nargs="?", default=9000, help="target voltage in mV (default 9000)")
+    sa = spds.add_parser("attach", help="attach as PD sink and request the target voltage (default 5000 mV; above 5 V needs "
+                                         "--confirm; refused inline and during a charger test, with no Rd and nothing sent)")
+    sa.add_argument("mv", type=int, nargs="?", default=5000, help="target voltage in mV (default 5000)")
     sa.add_argument("ma", type=int, nargs="?", default=0, help="target current in mA (default 0 = PDO max)")
+    sa.add_argument("--confirm", action="store_true", help="allow a voltage above 5 V (the same flag as `pd request`)")
     spds.add_parser("status", help="trigger engine state")
     si = sub.add_parser("identify-device", help="ask the attached device for its identity (idle CC only)")
     si.add_argument("--confirm", action="store_true", help="allow it while a live sink is attached")

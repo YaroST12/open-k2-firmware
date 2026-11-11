@@ -569,57 +569,67 @@ remote::HandbackResult Remote::pd_handback(uint8_t flags) {
     return {remote::Status::Ok, uint8_t(v)};
 }
 
-remote::PdTriggerSnapshot Remote::pd_attach(uint16_t target_mv, uint16_t target_ma) {
-    // Refuse if ports are busy (charger test running, FC release active)
-    if (ui_.ports_busy()) {
-        K2LOG("[RMT] pd attach refused: ports busy (charger test or FC release)\n");
-        return pd_trigger();
+remote::PdAttachResult Remote::pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm) {
+    // The verdict runs before anything touches the link: a refused attach puts no Rd on CC and sends nothing.
+    // No target = 5 V; above 5 V needs the confirm flag exactly like `pd request`; inline (a sink behind the K2,
+    // a sink Rd or a foreign Request on the wire) and busy (a charger test or an FC release owns the ports) are
+    // outright refusals, never a re-attach under a live link.
+    target_mv = pd::attach_target_mv(target_mv);
+    const pd::AttachFacts facts{ui_.ports_busy(), ui_.link().inline_mode() || fusb302::inline_mode(),
+                                fusb302::trigger_refusal() != pd::TriggerRefusal::None};
+    const pd::AttachVerdict v = pd::attach_verdict(facts, target_mv, confirm);
+    if (v != pd::AttachVerdict::Allowed) {
+        K2LOG("[RMT] pd attach refused: %s (target_mv=%d busy=%d inline=%d trigger=%d confirm=%d)\n",
+              v == pd::AttachVerdict::RefusedBusy ? "ports busy" : v == pd::AttachVerdict::RefusedInline ? "inline"
+              : "confirm needed", static_cast<int>(target_mv), int(facts.ports_busy), int(facts.inline_mode),
+              int(facts.trigger_refusal), int(confirm));
+        if (v == pd::AttachVerdict::NeedConfirm) return {remote::Status::NeedConfirm, 0, {}};
+        const remote::PdOpResult r = pd_result(v == pd::AttachVerdict::RefusedBusy ? pd::Err::Busy : pd::Err::Inline);
+        return {r.status, r.err, {}};
     }
-    
+
     // Get the monitor ceiling
     const std::int32_t cap_mv = power::max_vbus_mv();
     // Clamp target to the monitor ceiling, never request above 36000 mV
-    if (target_mv == 0) target_mv = 9000;  // default
     if (target_mv > 36000) target_mv = 36000;  // hard clamp to 36 V for safety
     if (cap_mv > 0 && target_mv > static_cast<uint16_t>(cap_mv)) target_mv = static_cast<uint16_t>(cap_mv);
-    
+
     K2LOG("[RMT] pd attach target_mv=%d target_ma=%d\n", static_cast<int>(target_mv), static_cast<int>(target_ma));
-    
-    // Use the same attach path as charger-test: ensure we're in PD mode (not legacy)
-    // If we're in legacy mode (PD-silent), we need to switch to PD mode
-    // Check by trying to see if we can trigger; if g_legacy_only is set, sink_request will return Busy
+
     const pd::SourceCaps& caps = pd::active_caps();
-    
-    // If no caps or no active CC, we may need to attach first
-    // Check if we need to present Rd (no active CC) or if we're in legacy mode
-    const bool no_cc = fusb302::active_cc() == 0;
-    const bool is_busy = fusb302::trigger_refusal() != pd::TriggerRefusal::None || fusb302::inline_mode();
-    
-    // If no active CC or we're inline/busy, try to attach
-    if (no_cc || is_busy) {
-        // Present Rd in PD mode - this will start the attach process
+
+    // No active CC: present the single Rd (PD mode) and wait for the source caps. The verdict above guarantees
+    // nothing is inline, so this is the plain sink attach.
+    if (fusb302::active_cc() == 0) {
         fusb302::unit_attach(false);
         K2LOG("[RMT] pd attach: presented Rd, waiting for caps\n");
-        return pd_trigger();
+        return {remote::Status::Ok, 0, pd_trigger()};
     }
-    
+
     // Select the best PDO for the target voltage
     pd::Choice c = select_pdo_for_voltage(caps, target_mv, target_ma);
-    
+
     if (c.pos == 0) {
         // No suitable PDO found, return current status
         K2LOG("[RMT] pd attach: no suitable PDO for %d mV\n", static_cast<int>(target_mv));
-        return pd_trigger();
+        return {remote::Status::Ok, 0, pd_trigger()};
     }
-    
+
+    // The PDO choice may sit above the target (nearest fixed offer): the confirm rule applies to what is requested.
+    const uint16_t chosen_mv = c.mv != 0 ? c.mv : caps.pdos[c.pos - 1].max_mv;
+    if (chosen_mv > pd::kAttachDefaultMv && !confirm) {
+        K2LOG("[RMT] pd attach refused: confirm needed (chosen pos=%d %d mV)\n", static_cast<int>(c.pos), static_cast<int>(chosen_mv));
+        return {remote::Status::NeedConfirm, 0, {}};
+    }
+
     // Request the selected PDO
-    const pd::Err e = fusb302::sink_request(c, true);  // confirmed = true for attach
+    const pd::Err e = fusb302::sink_request(c, confirm);
     if (e != pd::Err::Ok) {
         K2LOG("[RMT] pd attach: sink_request err=%s\n", pd::err_name(e));
     }
-    
+
     // Return the current trigger status
-    return pd_trigger();
+    return {remote::Status::Ok, 0, pd_trigger()};
 }
 
 remote::PdTriggerSnapshot Remote::pd_trigger() {

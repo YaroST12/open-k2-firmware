@@ -1221,6 +1221,48 @@ static void test_identify_refusal_wire_mapping() {
     CHECK_EQ(w_inline.err, static_cast<uint8_t>(k2::pd::Err::Inline));
 }
 
+// PD_ATTACH (0x48): [mv u16] | [mv u16, ma u16] | [mv u16, ma u16, flags]; flags bit0 = confirm (the PD_REQUEST bit), nothing
+// else. A target above 5 V is refused by the backend without it (NeedConfirm); the refusals ride the reply like PD_REQUEST's:
+// status + one err byte (BadArg + Inline for an inline link, Busy for a run that owns the ports), no snapshot.
+static void test_pd_attach_wire() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x48, 1, {0x88, 0x13}), r), 1);                       // 5000 mV
+    check_header(r, 0x48, 1, Status::Ok, 18);
+    CHECK_EQ(f.attach_mv, 5000); CHECK_EQ(f.attach_ma, 0); CHECK_EQ(f.attach_confirm, false); CHECK_EQ(f.attaches, 1);
+    run(f, request(0x48, 2, {0x28, 0x23, 0xB8, 0x0B}), r);                        // 9000 mV, 3000 mA, no flags byte
+    check_header(r, 0x48, 2, Status::Ok, 18);
+    CHECK_EQ(f.attach_mv, 9000); CHECK_EQ(f.attach_ma, 3000); CHECK_EQ(f.attach_confirm, false);
+    run(f, request(0x48, 3, {0x28, 0x23, 0xB8, 0x0B, 1}), r);                     // + flags 1: confirm
+    check_header(r, 0x48, 3, Status::Ok, 18);
+    CHECK_EQ(f.attach_mv, 9000); CHECK_EQ(f.attach_confirm, true); CHECK_EQ(f.attaches, 3);
+    run(f, request(0x48, 4, {0x28, 0x23, 0, 0, 0}), r);                           // flags 0: no confirm
+    check_header(r, 0x48, 4, Status::Ok, 18);
+    CHECK_EQ(f.attach_confirm, false); CHECK_EQ(f.attaches, 4);
+    run(f, request(0x48, 5, {0x28, 0x23, 0, 0, 2}), r);                           // unknown flag bits (bit1 is over-load: not for attach)
+    check_header(r, 0x48, 5, Status::BadArg, 0);
+    run(f, request(0x48, 6, {0x28, 0x23, 0, 0, 0x80}), r);
+    check_header(r, 0x48, 6, Status::BadArg, 0);
+    CHECK_EQ(f.attaches, 4);                                                      // refused before the backend
+    // only 2, 4 or 5 bytes
+    run(f, request(0x48, 7, {}), r);                         check_header(r, 0x48, 7, Status::BadLength, 0);
+    run(f, request(0x48, 7, {0}), r);                        check_header(r, 0x48, 7, Status::BadLength, 0);
+    run(f, request(0x48, 7, {0, 0, 0}), r);                  check_header(r, 0x48, 7, Status::BadLength, 0);
+    run(f, request(0x48, 7, {0, 0, 0, 0, 0, 0}), r);         check_header(r, 0x48, 7, Status::BadLength, 0);
+    CHECK_EQ(f.attaches, 4);
+    f.attach_verdict = {Status::BadArg, 5};                                       // inline: the status the other inline refusals use
+    run(f, request(0x48, 8, {0x88, 0x13}), r);
+    check_header(r, 0x48, 8, Status::BadArg, 1);
+    check_bytes(r, kRspHeader, {5});
+    f.attach_verdict = {Status::Busy, 6};                                         // a charger test / FC release owns the ports
+    run(f, request(0x48, 9, {0x88, 0x13}), r);
+    check_header(r, 0x48, 9, Status::Busy, 1);
+    check_bytes(r, kRspHeader, {6});
+    f.attach_verdict = {Status::NeedConfirm, 0};                                  // above 5 V without the flag
+    run(f, request(0x48, 10, {0x28, 0x23}), r);
+    check_header(r, 0x48, 10, Status::NeedConfirm, 1);
+    check_bytes(r, kRspHeader, {0});
+}
+
 static void test_active_pd_commands() {
     Fake f; Frame r;
     // PD_REQUEST: [pos, flags, mv u16, ma u16] -> [err]
@@ -1848,6 +1890,7 @@ int main() {
     test_charger_avs_sweep();
     test_charger_test_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();
     test_identify_refusal_wire_mapping();
+    test_pd_attach_wire();
     test_active_pd_commands();
     test_store();
     test_cable_r();

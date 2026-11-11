@@ -585,7 +585,7 @@ Reply route(const RequestLine& rl, B& b, std::span<char> out) {
             case Cmd::Screenshot: case Cmd::DfuEnter: case Cmd::FactoryWipe: case Cmd::DebugFault: case Cmd::Reboot:
             case Cmd::PdHandback:
                 return error(out, 403, "command not available over the network");
-            case Cmd::PdRequest: case Cmd::PdReset: case Cmd::PdRelease:
+            case Cmd::PdRequest: case Cmd::PdReset: case Cmd::PdRelease: case Cmd::PdAttach:
                 if (!confirmed(rl)) return error(out, 403, "confirm required: add confirm=1");
                 // The over-load flag is lab-only (k2_remote over HID): a network frame never carries it,
                 // so strip payload bit 1 before the shared dispatcher sees the frame.

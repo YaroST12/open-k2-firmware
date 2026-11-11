@@ -206,6 +206,14 @@ static void test_frame_bridge() {
     r = run(f, ("POST /api/frame?hex=" + pd_ol + "&confirm=1 HTTP/1.1" X).c_str());
     CHECK_EQ(r.r.status, 200); CHECK_EQ(f.rq_mv, 9000); CHECK_EQ(f.rq_confirm, 1);
     CHECK_EQ(f.rq_over_load, false);           // RED before the fix: bit 1 reached the backend
+    // pd attach takes the Rd and asks the source for a contract: same family as PdRequest, so the raw bridge
+    // needs confirm=1 for it too (the payload confirm flag is the dispatcher's, the parameter is the deliberate-call gate)
+    const std::string att = frame_hex({0xA5, 0x4B, 0x48, 0x03, 0x05, 0x28, 0x23, 0, 0, 1});   // 9000 mV, flags = confirm
+    f.calls = 0; f.attaches = 0;
+    r = run(f, ("POST /api/frame?hex=" + att + " HTTP/1.1" X).c_str());
+    CHECK_EQ(r.r.status, 403); CHECK_EQ(f.calls, 0); CHECK_EQ(f.attaches, 0);
+    r = run(f, ("POST /api/frame?hex=" + att + "&confirm=1 HTTP/1.1" X).c_str());
+    CHECK_EQ(r.r.status, 200); CHECK_EQ(f.attaches, 1); CHECK_EQ(f.attach_mv, 9000); CHECK_EQ(f.attach_confirm, true);
     // fc trigger and scan frames need confirm=1 too; status does not
     f.calls = 0;
     r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, 0x32, 1, 5, 3, 1, 0x88, 0x13, 1}) + " HTTP/1.1" X).c_str());

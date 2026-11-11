@@ -105,7 +105,7 @@ var K2Proto = (function () {
     this.name = "RemoteError"; this.status = status; this.cmd = cmd; this.payload = payload || new Uint8Array(0);
     this.message = "command " + cmd + " failed: " + (STATUS_NAMES[status] || status);
     if (cmd === CMD.CHARGER_TEST && status === STATUS.BUSY) this.message += " (RAM results changed; retry results)";
-    if ((cmd === 0x41 || cmd === 0x42 || cmd === 0x44) && this.payload.length && this.payload[0] > 0 && this.payload[0] < PD_ERRS.length)
+    if ((cmd === 0x41 || cmd === 0x42 || cmd === 0x44 || cmd === 0x48) && this.payload.length && this.payload[0] > 0 && this.payload[0] < PD_ERRS.length)
       this.message += " (" + PD_ERRS[this.payload[0]] + ")";
     this.stack = new Error(this.message).stack;
   }
@@ -851,12 +851,16 @@ var K2Proto = (function () {
   };
   K2Remote.prototype.pdReset = async function () { await this.link.call(CMD.PD_RESET); return this.pdStatus(); };
   K2Remote.prototype.pdRelease = async function () { await this.link.call(CMD.PD_RELEASE); return this.pdStatus(); };
-  K2Remote.prototype.pdAttach = async function (target_mv, target_ma) {
-    target_mv = target_mv || 9000;
+  // Default target 5 V. Above 5 V the K2 answers NEED_CONFIRM unless o.confirm is set (the caller asked the user,
+  // like pdRequest); it refuses outright (BAD_ARG + inline, BUSY) while a sink is attached inline or a run owns the ports.
+  K2Remote.prototype.pdAttach = async function (target_mv, target_ma, o) {
+    target_mv = target_mv || 5000;
     target_ma = target_ma || 0;
+    var confirm = !!(o && o.confirm);
     if (target_mv > 36000) target_mv = 36000;
     var payload = [target_mv & 255, target_mv >> 8];
-    if (target_ma > 0) payload = payload.concat([target_ma & 255, target_ma >> 8]);
+    if (target_ma > 0 || confirm) payload = payload.concat([target_ma & 255, target_ma >> 8]);
+    if (confirm) payload.push(1);
     return decodePdTrigger((await this.link.call(CMD.PD_ATTACH, payload)).payload);
   };
   K2Remote.prototype.match = async function () { return decodeMatch((await this.link.call(CMD.PD_MATCH)).payload); };
@@ -1186,7 +1190,7 @@ var K2Proto = (function () {
 
   function frameNeedsConfirm(f) {
     var cmd = f[2];
-    if (cmd === CMD.PD_REQUEST || cmd === CMD.PD_RESET || cmd === CMD.PD_RELEASE) return true;
+    if (cmd === CMD.PD_REQUEST || cmd === CMD.PD_RESET || cmd === CMD.PD_RELEASE || cmd === CMD.PD_ATTACH) return true;
     return cmd === CMD.FC && f[4] > 0 && FC_VBUS_OPS.indexOf(f[5]) >= 0;
   }
 

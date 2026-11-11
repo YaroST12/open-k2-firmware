@@ -1038,11 +1038,12 @@ class ActivePd(unittest.TestCase):
         e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_HANDBACK, bytes([4]))
         self.assertIn("no contract owned", str(e))
 
-    def test_attach_default_9000mv(self):
+    def test_attach_default_5000mv(self):
+        # no target = 5 V; nothing above 5 V without --confirm
         link = self.Link({kr.CMD_PD_ATTACH: self.TRIG})
         r = kr.cmd_pd(link, self.args(pd_cmd="attach"))
-        self.assertEqual(link.calls[0], (kr.CMD_PD_ATTACH, bytes([40, 35])))
-        self.assertEqual(r["target_mv"], 9000)
+        self.assertEqual(link.calls[0], (kr.CMD_PD_ATTACH, bytes([136, 19])))
+        self.assertEqual(r["target_mv"], 5000)
         self.assertEqual(r["target_ma"], 0)
         self.assertEqual(r["state"], "ready")
 
@@ -1052,6 +1053,28 @@ class ActivePd(unittest.TestCase):
         self.assertEqual(link.calls[0], (kr.CMD_PD_ATTACH, bytes([224, 46, 208, 7])))
         self.assertEqual(r["target_mv"], 12000)
         self.assertEqual(r["target_ma"], 2000)
+
+    def test_attach_confirm_sends_the_flag_byte(self):
+        # [mv, ma, flags]: bit0 confirm (the PD_REQUEST bit); ma rides along as 0 when only the flag is set
+        link = self.Link({kr.CMD_PD_ATTACH: self.TRIG})
+        kr.cmd_pd(link, self.args(pd_cmd="attach", mv=9000, confirm=True))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_ATTACH, bytes([40, 35, 0, 0, 1])))
+        link = self.Link({kr.CMD_PD_ATTACH: self.TRIG})
+        kr.cmd_pd(link, self.args(pd_cmd="attach", mv=9000, ma=3000, confirm=True))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_ATTACH, bytes([40, 35, 184, 11, 1])))
+
+    def test_attach_without_confirm_sends_no_flag_byte(self):
+        link = self.Link({kr.CMD_PD_ATTACH: self.TRIG})
+        kr.cmd_pd(link, self.args(pd_cmd="attach", mv=9000, confirm=False))
+        self.assertEqual(link.calls[0], (kr.CMD_PD_ATTACH, bytes([40, 35])))
+
+    def test_attach_refusals_name_the_reason(self):
+        e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_ATTACH, bytes([5]))
+        self.assertIn("inline: a live sink is attached", str(e))     # inline: no Rd, no TX
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_PD_ATTACH, bytes([6]))
+        self.assertIn("busy", str(e))
+        e = kr.RemoteError(kr.STATUS_NEED_CONFIRM, kr.CMD_PD_ATTACH, bytes([0]))
+        self.assertIn("needs --confirm", str(e))
 
     def test_attach_clamps_to_36000mv(self):
         link = self.Link({kr.CMD_PD_ATTACH: self.TRIG})
@@ -1074,11 +1097,11 @@ class ActivePd(unittest.TestCase):
         self.assertTrue(a.confirm)
         self.assertEqual(kr.ACTIONS["identify"], 6)
         a = kr.build_parser().parse_args(["pd", "attach"])
-        self.assertEqual((a.pd_cmd, a.mv, a.ma), ("attach", 9000, 0))
-        a = kr.build_parser().parse_args(["pd", "attach", "12000"])
-        self.assertEqual((a.pd_cmd, a.mv, a.ma), ("attach", 12000, 0))
+        self.assertEqual((a.pd_cmd, a.mv, a.ma, a.confirm), ("attach", 5000, 0, False))
+        a = kr.build_parser().parse_args(["pd", "attach", "12000", "--confirm"])
+        self.assertEqual((a.pd_cmd, a.mv, a.ma, a.confirm), ("attach", 12000, 0, True))
         a = kr.build_parser().parse_args(["pd", "attach", "15000", "2000"])
-        self.assertEqual((a.pd_cmd, a.mv, a.ma), ("attach", 15000, 2000))
+        self.assertEqual((a.pd_cmd, a.mv, a.ma, a.confirm), ("attach", 15000, 2000, False))
 
     IDENT_RUN = bytes([1, 1, 0, 0, 0, 0, 0, 0, 0, 0])
     IDENT_DONE = bytes([2, 6, 0x0B, 0x24, 1, 1, 0x00, 0x00, 0x20, 0x31, 0x2C, 0x91, 0x01, 0x00])

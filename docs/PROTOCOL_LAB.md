@@ -11,7 +11,8 @@ Status: built and host-tested, NOT yet verified on hardware.
 
 - Anything that can raise VBUS needs a trailing `confirm` or `--confirm`. Without it the shell answers
   `err: this can raise VBUS: ...` and does nothing. The HID remote follows the same rule: `k2_remote action fc-scan`
-  (the QC scan) is answered `need-confirm` unless `--confirm` rides along; the other actions never raise VBUS.
+  (the QC scan) is answered `need-confirm` unless `--confirm` rides along; the other actions never raise VBUS. `k2_remote pd attach [mv [ma]]` follows it too: no target means 5 V, a target above
+  5 V needs `--confirm` (the `pd request` flag), and inline or during a charger test it is refused with no Rd and nothing sent.
 - Refused while a charger-test run, the sniff or a scan is active. Line-driving commands also refuse with
   a sink attached or without a power monitor.
 - Lab commands (not `fc trigger`) abort at 12 V VBUS and drop the lines; the INA ceiling applies as for `dp`/`dm`.

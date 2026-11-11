@@ -1108,6 +1108,26 @@ test("pdRequest sends the 6-byte payload and reads the trigger status", async ()
   assert.equal(t.mv, 20000);
 });
 
+test("pdAttach defaults to 5 V and sends the confirm flag only when asked", async () => {
+  const sent = [];
+  const link = { call: async (cmd, payload) => { sent.push([cmd, Array.from(payload || [])]);
+    return { payload: u8(5, 1, 1, 0, 4, 0x88, 0x13, 0xB8, 0x0B, 0, 0, 0, 0) }; } };
+  const k = new P.K2Remote(link);
+  await k.pdAttach();                                         // no target = 5000 mV, no flag byte
+  assert.deepEqual(sent[0], [P.CMD.PD_ATTACH, [0x88, 0x13]]);
+  await k.pdAttach(9000, 0);                                  // above 5 V, not confirmed: the K2 answers NEED_CONFIRM
+  assert.deepEqual(sent[1], [P.CMD.PD_ATTACH, [0x28, 0x23]]);
+  await k.pdAttach(9000, 3000, { confirm: true });            // [mv, ma, flags]
+  assert.deepEqual(sent[2], [P.CMD.PD_ATTACH, [0x28, 0x23, 0xB8, 0x0B, 1]]);
+  await k.pdAttach(9000, 0, { confirm: true });               // ma rides along as 0
+  assert.deepEqual(sent[3], [P.CMD.PD_ATTACH, [0x28, 0x23, 0, 0, 1]]);
+});
+
+test("RemoteError names the pd::Err byte of PD_ATTACH", () => {
+  assert.match(new P.RemoteError(P.STATUS.BAD_ARG, P.CMD.PD_ATTACH, u8(5)).message, /inline/);
+  assert.match(new P.RemoteError(P.STATUS.BUSY, P.CMD.PD_ATTACH, u8(6)).message, /busy/);
+});
+
 // ---- PD black box ---------------------------------------------------------------------------
 
 const bbRec = (type, ts, ...pl) => [6 + pl.length, type, ts & 255, (ts >> 8) & 255, (ts >> 16) & 255, (ts >>> 24) & 255, ...pl];
@@ -1311,7 +1331,8 @@ test("http: VBUS-changing commands carry confirm=1, status reads do not", async 
   await link.call(P.CMD.FC, [3, 0, 0x88, 0x13, 1]);
   await link.call(P.CMD.FC, [1]);
   await link.call(P.CMD.PING);
-  assert.deepEqual(calls.map((c) => /&confirm=1$/.test(c.url)), [true, true, true, false, true, true, true, false]);
+  await link.call(P.CMD.PD_ATTACH, [0x88, 0x13]);   // takes the Rd and asks for a contract: same gate as PD_REQUEST
+  assert.deepEqual(calls.map((c) => /&confirm=1$/.test(c.url)), [true, true, true, false, true, true, true, false, true]);
   assert.ok(k2);
 });
 

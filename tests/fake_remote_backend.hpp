@@ -155,8 +155,11 @@ struct Fake {
         t.trial_moves = trig_moves;
         return t;
     }
-    uint16_t attach_mv = 0, attach_ma = 0; int attaches = 0;
-    PdTriggerSnapshot pd_attach(uint16_t target_mv, uint16_t target_ma) { calls++; attach_mv = target_mv; attach_ma = target_ma; attaches++; return pd_trigger(); }
+    uint16_t attach_mv = 0, attach_ma = 0; bool attach_confirm = false; int attaches = 0; PdOpResult attach_verdict{};   // a non-Ok verdict is a refusal: status + err byte, no snapshot
+    PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm) {
+        calls++; attach_mv = target_mv; attach_ma = target_ma; attach_confirm = confirm; attaches++;
+        return {attach_verdict.status, attach_verdict.err, pd_trigger()};
+    }
     int fc_calls = 0; uint8_t fc_op = 0xFF, fc_proto = 0xFF; uint16_t fc_mv = 0xFFFF; uint8_t fc_flags = 0;
     Status fc_status = Status::Ok;
     Status fc_cmd(uint8_t op, uint8_t proto, uint16_t mv, uint8_t flags) {

@@ -146,6 +146,24 @@ int main() {
     CHECK_EQ(int(lab_reset_verdict({false, false, false}, true, true)), int(LabResetVerdict::Allowed));        // off-inline the flags are harmless
     CHECK_EQ(int(lab_reset_verdict({true, false, false}, false, false)), int(LabResetVerdict::RefusedBusy));    // a charger test runs: refused
     CHECK_EQ(int(lab_reset_verdict({true, true, true}, true, true)), int(LabResetVerdict::RefusedBusy));        // busy wins over the lab flags
+    // `pd attach` (remote): the K2 presents Rd and requests a contract. Inline between a source and a sink it has no PD
+    // role (no Rd, no TX), a busy link is refused and never re-attached under, and a target above 5 V needs the
+    // confirm flag exactly like `pd request`. AttachFacts order: {ports_busy, inline_mode, trigger_refusal}.
+    CHECK_EQ(int(kAttachDefaultMv), 5000);                                                                      // no target = 5 V
+    CHECK_EQ(int(attach_target_mv(0)), 5000);
+    CHECK_EQ(int(attach_target_mv(9000)), 9000);
+    CHECK_EQ(int(attach_verdict({false, false, false}, 5000, false)), int(AttachVerdict::Allowed));            // 5 V needs no confirm
+    CHECK_EQ(int(attach_verdict({false, false, false}, 0, false)), int(AttachVerdict::Allowed));               // default target
+    CHECK_EQ(int(attach_verdict({false, false, false}, 4000, false)), int(AttachVerdict::Allowed));            // below 5 V: no confirm
+    CHECK_EQ(int(attach_verdict({false, false, false}, 5001, false)), int(AttachVerdict::NeedConfirm));        // one mV above
+    CHECK_EQ(int(attach_verdict({false, false, false}, 9000, false)), int(AttachVerdict::NeedConfirm));
+    CHECK_EQ(int(attach_verdict({false, false, false}, 9000, true)), int(AttachVerdict::Allowed));             // confirmed
+    CHECK_EQ(int(attach_verdict({false, true, false}, 5000, false)), int(AttachVerdict::RefusedInline));       // inline: even 5 V
+    CHECK_EQ(int(attach_verdict({false, true, false}, 5000, true)), int(AttachVerdict::RefusedInline));        // confirm lifts nothing
+    CHECK_EQ(int(attach_verdict({false, true, false}, 9000, false)), int(AttachVerdict::RefusedInline));       // refusal before the confirm question
+    CHECK_EQ(int(attach_verdict({false, false, true}, 5000, true)), int(AttachVerdict::RefusedInline));        // a trigger refusal is a busy link
+    CHECK_EQ(int(attach_verdict({true, false, false}, 5000, true)), int(AttachVerdict::RefusedBusy));          // a run / FC release owns the ports
+    CHECK_EQ(int(attach_verdict({true, true, true}, 9000, true)), int(AttachVerdict::RefusedBusy));            // busy wins
     {   // reasons
         DetachTracker t;
         t.update(0, 5000, true);

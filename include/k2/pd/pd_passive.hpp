@@ -156,6 +156,27 @@ constexpr LabResetVerdict lab_reset_verdict(const LabResetFacts& f, bool flag_in
     return LabResetVerdict::Allowed;
 }
 
+// `pd attach` (remote only): takes the single Rd and asks the source for a contract. It follows the same two
+// rules as every other way of putting voltage on the output: nothing above 5 V without the confirm flag (the
+// wire flag `pd request` already uses), and no Rd / no TX while a sink sits behind the K2. A refused attach
+// does nothing at all - no Rd, no TX, and no re-attach under a live link.
+constexpr std::uint16_t kAttachDefaultMv = 5000;        // no target given: the safe 5 V contract
+constexpr std::uint16_t attach_target_mv(std::uint16_t requested_mv) {
+    return requested_mv == 0 ? kAttachDefaultMv : requested_mv;
+}
+enum class AttachVerdict : std::uint8_t { Allowed, RefusedBusy, RefusedInline, NeedConfirm };
+struct AttachFacts {
+    bool ports_busy;          // a charger-test run or an FC release owns the ports
+    bool inline_mode;         // pd::Link latched a real sink behind the K2
+    bool trigger_refusal;     // can_trigger() != None (a sink Rd or a foreign Request on the wire)
+};
+constexpr AttachVerdict attach_verdict(const AttachFacts& f, std::uint16_t target_mv, bool flag_confirm) {
+    if (f.ports_busy) return AttachVerdict::RefusedBusy;                                   // the run owns the link
+    if (f.inline_mode || f.trigger_refusal) return AttachVerdict::RefusedInline;           // no Rd, no TX, flag or not
+    if (attach_target_mv(target_mv) > kAttachDefaultMv && !flag_confirm) return AttachVerdict::NeedConfirm;
+    return AttachVerdict::Allowed;
+}
+
 // The phase-1 lab hand-back (`k2_remote.py pd handback --confirm`, ROADMAP 2026-11-10 "An inline latch leaves the
 // far sink on Type-C current", phase 1 lab only): hand the contract back with ONE Hard Reset - allowed only when the
 // K2 owns an explicit contract (self-hold, a request) while a sink is latched inline, the far sink sent no Request

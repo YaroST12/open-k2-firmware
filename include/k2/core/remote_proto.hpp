@@ -337,7 +337,7 @@ enum class Cmd : uint8_t {
     PdMatch = 0x45,         // passive wants-vs-offers verdict -> MatchSnapshot (see encode_match)
     UsbLink = 0x46,         // USB / Thunderbolt link classified from sniffed PD -> UsbLinkSnapshot (see encode_usb_link)
     PdReread = 0x47,        // [op, mask] source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, ..., 8 Rd glitch of mask x 10 ms -> RereadInfo (see above)
-    PdAttach = 0x48,        // [target_mv u16] [target_ma u16] -> PdTriggerSnapshot; default 9000 mV, clamped to 36000 mV
+    PdAttach = 0x48,        // [target_mv u16] [target_ma u16] [flags] -> PdTriggerSnapshot; mv 0 = 5000 mV, clamped to 36000 mV; flags bit0 = confirm (needed above 5000 mV); refused inline / busy = status + err byte
     PdHandback = 0x49,      // optional [flags]: bit0 confirm (kPdFlagConfirm) -> [HandbackVerdict]; phase-1 lab hand-back (see k2/core/handback.hpp)
     AppleRead = 0x4A,       // lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp): [op] 0 status, 1 arm + re-request the current contract -> AppleReadInfo; a refusal carries its pd::AppleRefusal as the one-byte payload
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
@@ -717,6 +717,9 @@ struct PdTriggerSnapshot {
     uint8_t trial_line = 0;            // fusb302::line_trial(): the line (1 / 2) our single Rd is trying while the direct-plug schedule is live, else 0 (appended: clients that read 18 bytes ignore it)
     uint8_t trial_moves = 0;           // how often the direct-plug fallback moved the Rd this attach (appended after trial_line)
 };
+// Result of PD_ATTACH: Ok carries the trigger snapshot; any other status is a refusal (err = pd::Err) and the
+// snapshot is not sent.
+struct PdAttachResult { Status status = Status::Ok; uint8_t err = 0; PdTriggerSnapshot snapshot{}; };
 // PD_MATCH payload (ui_match.hpp verdict): [caps_seen, request_seen, sink_ok, flags, verdict, rows,
 // want_pos, want_mv u16, want_ma u16, need_ma u16, have_ma u16, src_max_mv u16, src_max_w u16 (watts),
 // row state per PDO (rows bytes)]. Row states: 0 unknown, 1 selected, 2 selected low, 3 ok, 4 low, 5 no,
@@ -873,7 +876,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.pd_release() } -> std::same_as<PdOpResult>;
     { b.pd_hard_reset(u8) } -> std::same_as<PdOpResult>;   // flags byte: kPdFlagConfirm | kPdFlagResetInline (0 for the shell/UI paths)
     { b.pd_handback(u8) } -> std::same_as<HandbackResult>;  // flags byte: kPdFlagConfirm only; the verdict is the reply payload
-    { b.pd_attach(u16, u16) } -> std::same_as<PdTriggerSnapshot>;
+    { b.pd_attach(u16, u16, on) } -> std::same_as<PdAttachResult>;   // mv, ma, confirm: refusal = status + err, no snapshot
     { b.pd_trigger() } -> std::same_as<PdTriggerSnapshot>;
     { b.match_info() } -> std::same_as<MatchSnapshot>;
     { b.usb_link() } -> std::same_as<UsbLinkSnapshot>;
@@ -1229,12 +1232,21 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
     }
     case Cmd::PdAttach: {
-        // pd attach [target_mv [target_ma]]: attach as PD sink, request target voltage, hold contract
-        // Payload: target_mv (u16), optionally target_ma (u16). Default target_mv = 9000, default target_ma = 0.
-        if (p.size() != 2 && p.size() != 4) return reply(Status::BadLength);
+        // pd attach [target_mv [target_ma [flags]]]: attach as PD sink, request the target voltage, hold the contract.
+        // Payload: target_mv (u16), optionally target_ma (u16), optionally flags (bit0 = confirm, the PD_REQUEST bit).
+        // The backend decides (pd::attach_verdict): a refusal answers status + one err byte like PD_REQUEST, with no
+        // snapshot; only an accepted attach replies the PdTriggerSnapshot.
+        if (p.size() != 2 && p.size() != 4 && p.size() != 5) return reply(Status::BadLength);
+        const uint8_t flags = p.size() == 5 ? p[4] : uint8_t{0};
+        if (flags & ~uint8_t(kPdFlagConfirm)) return reply(Status::BadArg);
         const uint16_t target_mv = detail::rd16(&p[0]);
         const uint16_t target_ma = p.size() >= 4 ? detail::rd16(&p[2]) : 0;
-        return reply_n(encode_pd_trigger(buf, backend.pd_attach(target_mv, target_ma)));
+        const PdAttachResult res = backend.pd_attach(target_mv, target_ma, (flags & kPdFlagConfirm) != 0);
+        if (res.status != Status::Ok) {
+            buf[0] = res.err;
+            return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
+        }
+        return reply_n(encode_pd_trigger(buf, res.snapshot));
     }
     case Cmd::PdHandback: {
         // pd handback [--confirm]: phase-1 lab op, the whole Fix sequence (record gone -> Rd dropped -> one Hard
