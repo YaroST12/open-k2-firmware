@@ -82,11 +82,16 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 
 - **SCP 10 V takes the K2 down on the Anker IQ4** (2026-11-11, self-powered full charger test on 1.0.0-524-7c035f66):
   SCP 5 V passed (`detected`); the SCP 10 V 2.25 A step took the K2 down three times, so the reboot budget skipped the
-  rest of SCP (`rebooted 3x`) and the run finished (`resumed 2`). Probably the IQ4 cutting VBUS on the high-voltage SCP
-  request; unproven, since the ring dies with the K2 when it is self-powered. Parked by the user. Next look: SCP alone
-  with the PC cable also on the HID port, so the K2 stays up and the Black Box keeps the VBUS cut. Same run, open too:
-  QC2 9 V `voltage not reached` and QC3 above 5 V `timeout`, with no IQ4 QC baseline yet
-  (`runs/2026-11-11-iq4-bridge/after-test/`, local).
+  rest of SCP (`rebooted 3x`) and the run finished (`resumed 2`). Cause, seen with the K2 on PC power (`--units scp`,
+  `runs/2026-11-11-iq4-scp/`): the IQ4 does not follow SCP 10 V (row timeout at 5.0 V), then cuts VBUS to 0 for ~70 ms
+  and restarts PD (CHARGER_QUIRKS `output-reset-after-unanswered-scp`). The charger's behaviour, handled by the budget;
+  parked by the user.
+- **FCP 12 V not released on the IQ4** (2026-11-11, PC-powered `--units fcp,scp`): the D+/D- reset left VBUS at 12.1 V,
+  the run stopped Unsafe "5V release failed" after 8 s; a PD Soft_Reset then gave 5 V in ~150 ms
+  (`fc-holds-after-bus-reset`). Seen once; the self-powered full run went on from FCP to SCP 5 V.
+- **QC2 / QC3 fail on the IQ4 above 5 V** (2026-11-11 self-powered full run: QC2 9 V `voltage not reached`, QC3
+  `timeout`), although QC2 12.1 V and QC3 11.8 V passed on 2026-11-04 (5c548f7). A state left by the vendor units or a
+  regression; next: `--units qc2,qc3` alone on a fresh attach.
 
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
