@@ -125,21 +125,29 @@ constexpr Protocol report_label(Protocol verdict, bool vooc_live) {
 
 // Output sag guard. A source whose VBUS sags or is cut (a port that switches off with no load) drags the data lines down
 // with it: the window mixes two levels, or the Type-C data-host tail reads a divider level as data, so the classifier
-// flaps to USB DATA between a real verdict and NO INPUT. Below vSafe5V min (4.75 V), and for one window after VBUS
-// returns (the ring still holds sag samples), the data pair is no basis for a judgment: the guard keeps the last verdict
+// flaps to USB DATA between a real verdict and NO INPUT. Below vSafe5V min (4.75 V) or while the pair moves together
+// (equal_pair_moving: the lines can collapse before VBUS has fallen), and for one window after that
+// (the ring still holds sag samples), the data pair is no basis for a judgment: the guard keeps the last verdict
 // that was reached with a good supply, or says Pending when there is none. NO INPUT, PD and PD? come from CC / VBUS /
 // the FUSB302 and pass through. A source that simply sits below 4.75 V (weak, loaded) is judged again after
-// kSagHoldPolls polls (about 5 s at the 20 ms poll). Real data behind the K2 reads USB DATA with a good supply as before.
+// kSagHoldPolls polls. Real data behind the K2 reads USB DATA with a good supply as before.
 inline constexpr int kVsafe5MinMv = 4750;
-inline constexpr unsigned kSagHoldPolls = 250;
+inline constexpr unsigned kSagHoldPolls = 400;   // about 8 s at the 20 ms poll: the observed cut sags for ~4 s
 struct SagGuard {
     Protocol held = Protocol::Pending;   // last verdict reached outside a sag
     unsigned sag_polls = 0;              // consecutive polls of the current sag, saturating at kSagHoldPolls + 1
     unsigned refill = 0;                 // polls still owed for the window to refill after the supply returned
 
-    Protocol apply(Protocol fresh, int vbus_mv);
+    Protocol apply(Protocol fresh, int vbus_mv, bool lines_moving = false);
     void reset() { *this = SagGuard{}; }
 };
+
+// True when the window holds a D+/D- pair that moves TOGETHER: nearly every sample has the two lines within 0.2 V of each
+// other (at most 3 stray samples with the lines apart), the level stays at 0.4 V or more, and it changes by more than
+// 0.2 V over the window (or a stray sample shows) in a few steps (at most 8 jumps, not a sample-by-sample toggle). Real
+// data signalling moves the lines apart (J/K states) or idles at SE0 / the pull-up level; an equal pair that steps is a
+// divider following a collapsing supply, and classify() reads it as NO QUICK, never USB DATA. Needs a full window.
+bool equal_pair_moving(const Ring& ring);
 
 // Display string of a verdict (including "NO INPUT" and "..."); "?" if unknown.
 const char* name(Protocol p);

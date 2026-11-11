@@ -258,8 +258,17 @@ proves the decoder header reaches no pin, register or driver.
 - `SagGuard` holds the last data-pair verdict while VBUS is below vSafe5V min (4.75 V) and for one window after it (the
   ring still holds sag samples), because the lines follow a sagging or cut supply (hardware: APPLE 2.4A, then USB DATA at
   4.0-4.8 V with equal ~2 V lines, then NO INPUT). With nothing to hold it says Pending, never USB DATA. NO INPUT, PD and
-  PD? pass through; the hold ends after about 5 s of a steady weak source. A real data device behind the K2 still reads
-  USB DATA with a good supply.
+  PD? pass through; the hold ends after `kSagHoldPolls` (400, about 8 s) of a steady weak source. A real data device
+  behind the K2 still reads USB DATA with a good supply.
+- The lines can collapse BEFORE VBUS falls (hardware 1.0.0-594, A-to-C cable into a USB-A port: 5005 mV with the pair at
+  1.95 / 1.95 V). `equal_pair_moving()` marks a window whose pair moves together (every sample within 0.2 V, at most 3
+  stray samples, level at 0.4 V or more, a change over 0.2 V in at most 8 jumps): `classify()` reads it as NO QUICK, never
+  USB DATA, and the guard treats it like a low supply (starts the hold and keeps it through the refill). Real data moves
+  the lines apart (J/K) or idles at SE0 / the pull-up level, so it does not match.
+- An A-to-C cable carries the Rp in its plug for ANY USB-A charger port, so `cc_source_no_pd` alone is not proof of a
+  data host: a steady equal pair outside the bias window (0.4 V or more, not 0.5 .. 0.79 V) goes on to the passive DCP
+  rule (`DCP 5V`) instead of `USB DATA`. The bias window stays USB DATA behind a CC data host (it is ambiguous), and every
+  non-equal pair (J/K traffic, pull-up levels, mixed levels) still reads USB DATA.
 
 ## 4. UFCS
 

@@ -164,9 +164,23 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 - **Fast-charge verdict flaps during an output sag or cut** (2026-11-11, same port): `APPLE 2.4A` -> `USB DATA` (equal
   ~2 V lines while VBUS is 4.0 .. 4.8 V) -> `NO INPUT` on every ~6.5 s VBUS cut. **Fixed on `k2/fc-equal-pair`, hardware
   check pending:** `SagGuard` holds the last verdict while VBUS is below 4.75 V and for one ring refill after
-  (bounded to 250 polls); `NO INPUT` still passes at once. Validate: through three VBUS cuts the label goes `APPLE 2.4A`
+  (bounded to 400 polls); `NO INPUT` still passes at once. Validate: through three VBUS cuts the label goes `APPLE 2.4A`
   -> `NO INPUT` with no `USB DATA` in between (`k2_remote state` polled every 100 ms); a real USB data device inline
   still reads `USB DATA`.
+  **Hardware 1.0.0-594-cd569683 (A-to-C cable, so `cc_source_no_pd` is true; `runs/2026-11-11-integ594-hw/state60.txt`):
+  not enough.** At each cut the lines collapsed to an equal ~1.9-2.2 V pair while VBUS was still ~5.0 V (5005 / 1950 /
+  1954), the VBUS < 4.75 V trigger came too late, and the hold then kept the wrong `USB DATA` (22 of 60 samples; the
+  steady state 5116 / 2699 / 2682 reads `APPLE 2.4A`; no `AFC FCP`). Cause: the mixed 2.7 / 1.95 V window (bucket 7,
+  "pulsing") hit the CC data-host tail, and an A-to-C cable's Rp is in the plug of any USB-A charger port, so
+  `cc_source_no_pd` is no proof of a data host. **Fixed on `k2/fc-equal-pair`, hardware check pending:**
+  (1) `equal_pair_moving()` (a pair that moves together: every sample within 0.2 V, <= 3 stray samples, level >= 0.4 V,
+  > 0.2 V change in <= 8 jumps) reads NO QUICK in `classify()` and starts the `SagGuard` hold even at 5.0 V; (2) a steady
+  equal pair outside the bias window with `cc_source_no_pd` goes to the passive DCP rule (`DCP 5V`) instead of `USB DATA`;
+  (3) `kSagHoldPolls` 250 -> 400 (the observed cut sags about 4 s). Host test: the recorded cut replayed poll by poll
+  (`test_cut_replay_never_reads_usb_data_on_an_a_to_c_cable`) never leaves `APPLE 2.4A`; J/K traffic, SE0 and the 0.85 V
+  pull-up still read `USB DATA` (`test_equal_pair_is_not_a_data_host_but_real_data_is`). Validate: repeat the 60-sample
+  poll on the same port and cable: 0 `USB DATA` samples, `APPLE 2.4A` -> `NO INPUT` at each cut; then a PC port with a
+  device behind the K2 (J/K traffic or the 0.7-1.0 V pull-up) still reads `USB DATA`.
 - **The recorder stream has no boot id or reset cause** (2026-11-11): two boots in one recording look like one (the
   "Power reads 0" scare). Fixed on `k2/small-fixes`, hardware check pending: a new Boot frame (kind 11: session boot
   counter, CRM reset flags) follows the Hello; `tools/k2_stream.py` prints `BOOT BOUNDARY`, keeps the clock rising,

@@ -154,7 +154,7 @@ void poll() {
     // are good again (hardware 2026-11-11: APPLE 2.4A -> USB DATA -> NO INPUT on a port that cuts VBUS every ~6.5 s).
     g_verdict = g_sag.apply(classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),
                                      cc_source_no_pd, !g_handshake_seen, g_dcp_proof, floating),
-                            vbus);
+                            vbus, equal_pair_moving(g_ring));
     monitor();
 }
 
