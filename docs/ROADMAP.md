@@ -149,8 +149,11 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 - **A refused e-marker read kept the last read's mode and acks** (2026-11-11, fixed in 472c40f9, host-tested;
   `tests/test_fusb302_scan.cpp` `test_refused_read_clears_the_last_read`). Validate (hardware): with a sink inline or
   Ra mode on, `k2_remote emarker --json` after a refused read shows `read_mode` none and 0 acks.
-- **Docs: `docs/CHARGER_QUIRKS.md` still calls the Baseus cable of the FH22 / CUKTECH notes a "plain cable"** (2026-11-11):
-  that cable later answered as chipped (5 A normal); reword those notes.
+- **Docs: `docs/CHARGER_QUIRKS.md` called the Baseus cable of the FH22 / CUKTECH notes a "plain cable"** (2026-11-11;
+  reworded on `k2/small-fixes`, docs only): that cable later answered as chipped (5 A normal). The FH22 section and the
+  CUKTECH `5a-without-emarker` note now name it as the Baseus 100 W cable whose chip stays silent when read alone
+  (pattern `cable-chip-silent-alone`). The A-to-C "plain cable" of the CUKTECH sag-fix verification (981c831) is another
+  cable and was left. Nothing to validate on hardware.
 
 - **Connection page ("Who's attached") flickers on a steady link** (2026-11-10, user report; handoff row 2c): the tab
   refreshed its info without anything new appearing. Fixed in bd9dd91b, hardware check pending.
