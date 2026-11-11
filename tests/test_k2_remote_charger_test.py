@@ -352,13 +352,13 @@ class ChargerTest(unittest.TestCase):
     def test_reason_42_withdrawn_by_source_decodes(self):
         # Hardware-run item 8 (2026-11-09, runs/2026-11-09-splitter): the re-plan row's new Reason::Withdrawn (#42)
         # must decode, not raise FrameError("invalid charger-test row") - ct_start.py crashed at the summary with it.
-        self.assertEqual(len(kr.TEST_REASONS), 47)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46)
+        self.assertEqual(len(kr.TEST_REASONS), 48)   # 43 reasons + WrongVoltage (#43) + NeedsLoad (#44) + Floored (#45) + StepResolution (#46) + Loop (#47)
         self.assertEqual(kr.TEST_REASONS[42], "withdrawn by source")
         row = struct.pack("<BBBHHHBBBI", 2, 4, 0, 20000, 0, 0, 4, 42, 0, 0)   # a pd3-fixed 20 V row, skip, why 42
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"]), ("skip", "withdrawn by source"))
         self.assertEqual(step["explanation"], "withdrawn by source")
-        bad = bytearray(row); bad[10] = 47   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 48   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -372,7 +372,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("fail", "wrong voltage on 5V contract"))
         self.assertEqual(step["explanation"], "wrong voltage on 5V contract")
         self.assertEqual(step["measured_mv"], 7600)
-        bad = bytearray(row); bad[10] = 47   # the why byte, one past the last reason, still fails the row check
+        bad = bytearray(row); bad[10] = 48   # the why byte, one past the last reason, still fails the row check
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -385,7 +385,7 @@ class ChargerTest(unittest.TestCase):
         self.assertEqual((step["result"], step["reason"]), ("skip", "needs load"))
         self.assertEqual(step["explanation"], "needs load")
         self.assertEqual(step["measured_mv"], 1800)
-        bad = bytearray(row); bad[10] = 47   # one past the last reason
+        bad = bytearray(row); bad[10] = 48   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 
@@ -402,7 +402,7 @@ class ChargerTest(unittest.TestCase):
         step = kr.decode_charger_test(page(HEADER2, 0, [row]))["steps"][0]
         self.assertEqual((step["result"], step["reason"], step["detail"]), ("fail", "step resolution", 100))
         self.assertEqual(step["explanation"], "step resolution 100mV")
-        bad = bytearray(row); bad[10] = 47   # one past the last reason
+        bad = bytearray(row); bad[10] = 48   # one past the last reason
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(page(HEADER2, 0, [bytes(bad)]))
 

@@ -80,7 +80,7 @@ inline constexpr unsigned kMaxRanges = 4;
 inline constexpr unsigned kSpreadLevels = 4;   // v9: the setpoint errors kept per APDO (the plan has at most 4 distinct levels)
 inline constexpr int8_t kSpreadNone = -128;     // an empty spread slot
 inline constexpr unsigned kNameMax = 20;
-inline constexpr unsigned kReasonCount = unsigned(ct::Reason::StepResolution) + 1;   // 47 values fit the card's 6-bit reason field
+inline constexpr unsigned kReasonCount = unsigned(ct::Reason::Loop) + 1;   // 48 values fit the card's 6-bit reason field
 static_assert(kReasonCount <= 64, "the card stores a reason in 6 bits");
 inline constexpr uint8_t kMagic = 0xA6, kTypeCard = 1, kTypeDelete = 2;
 inline constexpr uint8_t kFormat = 10;  // payload byte 33: v4 adds per-EPR-level verdicts, v5 the cable block (Card carries it), v6 the UFCS modes, v7 the repeat counter, v8 the source's mid-run re-balance count, v9 the per-level setpoint-error spread, v10 the deep-sweep summary per range

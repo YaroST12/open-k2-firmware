@@ -49,9 +49,10 @@ const char* name(Reason r) {
         "no contract", "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered",
         "blocked by PD", "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START",
         "Class A only (12 V max)", "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target",
-        "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"
+        "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution",
+        "HID-cable loop: 5V lock"
     };
-    static_assert(std::size(names) == unsigned(Reason::StepResolution) + 1);
+    static_assert(std::size(names) == unsigned(Reason::Loop) + 1);
     return names[static_cast<unsigned>(r)];
 }
 const char* refusal_words(Reason r) {
@@ -364,7 +365,7 @@ Reason limit_reason(unsigned mv, Input in, Algorithm algorithm) {
 }
 Reason refusal(Options o, Input in, bool busy, bool confirmed) {
     return busy || in.busy ? Reason::Busy : !(o.selected & kAllAlgorithms) ? Reason::EmptySelection :
-        !confirmed ? Reason::NeedConfirm : in.fake ? Reason::Fake : in.inline_load ? Reason::Inline :
+        in.loop_lock ? Reason::Loop : !confirmed ? Reason::NeedConfirm : in.fake ? Reason::Fake : in.inline_load ? Reason::Inline :
         in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : cable_mv(in) < 5000 ? Reason::CableLimit :
         in.vbus_mv < 1000 ? Reason::NoSource : Reason::None;
 }
@@ -2192,8 +2193,8 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     }
     if (state_ == State::Detach || state_ == State::Attach) {
         // The detach and the attach are the plan: VBUS dips and the attach session changes are not a loss here.
-        const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.inline_load ? Reason::Inline :
-            in.fake ? Reason::Fake : Reason::None;
+        const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
+            in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
         if (fault != Reason::None) { reason_ = fault; skip_pending(fault); end_legacy(); state_ = State::Done; return; }
         if (state_ == State::Detach) poll_detach(in); else poll_attach(in, caps, gap);
         return;
@@ -2294,7 +2295,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
             if (!recover_) { recover_ = true; phase_ms_ = in.now; }
             session_ = in.session; stable_ = false;
         } else if (recover_) session_ = in.session;
-        const Reason changed = dropped && pd_owned_ ? Reason::Lost :
+        const Reason changed = dropped && pd_owned_ ? Reason::Lost : in.loop_lock ? Reason::Loop :
             in.inline_load ? Reason::Inline : in.fake ? Reason::Fake :
             in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : Reason::None;
         if (changed != Reason::None) { stopping_ = true; reason_ = changed; skip_pending(changed); }
@@ -2396,7 +2397,8 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         if (safe5(in.vbus_mv)) session_ = in.session;
         else { stable_ = false; return; }
     }
-    const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.inline_load ? Reason::Inline :
+    const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
+        in.inline_load ? Reason::Inline :
         !baseline && in.ibus_ma > kLoadAbortMa ? Reason::Inline :   // the suite draws no current: a load aborts
         in.session != session_ || in.vbus_mv < 1000 ? Reason::Lost : in.fake ? Reason::Fake :
         in.vbus_mv > int(pd::overcap_abort_mv(in.cap_mv)) ? Reason::OverCap :   // ceiling + 5 %; requests stay capped at the nominal
