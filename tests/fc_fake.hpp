@@ -59,6 +59,10 @@ struct FakeCharger : k2::fc::Env {
     std::uint32_t slew_t = 0;
     // counters
     std::vector<std::uint8_t> sent;   // bytes passed to xfer
+    std::vector<std::uint32_t> xfer_times;   // fake clock at every xfer call (one wire exchange each)
+    int afc_fail_first = 0;           // the first N xfer calls get no slave ping, whatever afc_ok says
+    struct AfcLine { int n; int tx; int rx; int vbus; };
+    std::vector<AfcLine> afc_log;     // what log_afc() was handed, in order
     int resets = 0, set_calls = 0, pulses_up = 0, pulses_down = 0;
     bool resetting = false;
     std::uint32_t reset_until = 0;
@@ -148,6 +152,7 @@ struct FakeCharger : k2::fc::Env {
     int coarse_logged = 0;   // log_qc3_coarse calls, with the measured step of the last one
     int coarse_step = 0;
     void log_qc3_coarse(int step) override { ++coarse_logged; coarse_step = step; }
+    void log_afc(int n, std::uint8_t tx, int rx, int vbus_mv) override { afc_log.push_back({n, tx, rx, vbus_mv}); }
     std::size_t played_steps = 0; std::uint32_t played_us = 0;
     int wakes = 0, vooc_wake_needed = 1;   // the adapter clocks only from the Nth VOOC wake train on
     void play(std::span<const k2::fc::Step> steps) override {
@@ -197,8 +202,10 @@ struct FakeCharger : k2::fc::Env {
     std::vector<std::pair<std::uint8_t, std::uint8_t>> writes;
     bool xfer(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx) override {
         for (auto b : tx) sent.push_back(b);
+        xfer_times.push_back(now);
         now += 5;   // the exchange takes a few ms on the wire
         if (accp_charger) return accp_xfer(tx, rx);
+        if (int(xfer_times.size()) <= afc_fail_first) return false;
         if (!afc_ok || dp != Drive::V0p6 || tx.size() != 1) return false;
         if (tx[0] == 0x46) { vbus_pending = 9000; apply_at = now + 100; }
         else if (tx[0] == 0x79) { vbus_pending = 12000; apply_at = now + 100; }

@@ -48,6 +48,7 @@ constexpr int kUfcsTries = 3;                      // asks per phase (Get_Output
 constexpr std::uint32_t kVivoStepMs = 50, kVivoTickMs = 100, kVivoEntryMs = 2000, kVivoSilenceMs = 2000;
 constexpr int kVivoRampMv = 100, kVivoReleaseSends = 3, kVivoMaxNotices = 4;
 constexpr std::uint32_t kAfcSettleMs = 500;   // D+ held at 0.6 V before the first ping
+constexpr std::uint32_t kAfcRetryLowMs = 100; // D- low before the one retry of an unanswered first exchange
 }  // namespace
 
 const char* name(Proto p) {
@@ -809,7 +810,8 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     fail_ = Fail::None;
     state_ = State::Negotiating;
     band_ms_ = lost_ms_ = 0;
-    sends_ = ok_sends_ = 0;
+    sends_ = ok_sends_ = afc_n_ = 0;
+    afc_retried_ = false;
     acked_ = vheard_ = false;
     // Re-detection right after a session: the lines stay at 0 V until the 500 ms hold since that release is over (pattern
     // qc-redetect-after-reset). Every protocol waits for it, not only the HVDCP ones: fctrig::start cancels the reset's own hold,
@@ -859,7 +861,7 @@ Fail Engine::set_target(int target_mv, bool confirmed, int ufcs_ma) {
     band_ms_ = now;
     lost_ms_ = 0;
     if (proto_ == Proto::Qc2) apply_target_levels();
-    else if (proto_ == Proto::Afc) { sends_ = ok_sends_ = 0; go(Phase::AfcSend, 0); }
+    else if (proto_ == Proto::Afc) { sends_ = ok_sends_ = 0; afc_retried_ = false; go(Phase::AfcSend, 0); }
     else if (proto_ == Proto::Fcp || proto_ == Proto::Scp) { applied_mv_ = target_mv; build_script(); begin_script(); }
     else if (proto_ == Proto::Ufcs) {
         ufcs::Pick pk;
@@ -1117,12 +1119,24 @@ void Engine::poll() {
         if (now < due_ms_) return;
         const std::uint8_t byte = *afc::afc_byte(target_mv_);
         std::uint8_t rx[1] = {0};
-        if (sends_ == 0) {
+        if (sends_ == 0 && !afc_retried_) {
             prev_mv_ = std::max(prev_mv_, applied_mv_);
             applied_mv_ = target_mv_;
             change_ms_ = now;
         }
-        if (env_.xfer({&byte, 1}, rx)) { ok_sends_++; acked_ = true; }
+        const bool ok = env_.xfer_once({&byte, 1}, rx);
+        env_.log_afc(++afc_n_, byte, ok ? int(rx[0]) : -1, env_.vbus_mv());
+        if (ok) {
+            ok_sends_++;
+            acked_ = true;
+        } else if (ok_sends_ == 0) {
+            // No slave ping to the first exchange: one retry once D- has sat low for a while, then the source is not answering
+            // (a QC front end follows the ping level on its own, see docs/CHARGER_QUIRKS.md qc-follows-ping-level).
+            if (afc_retried_) return abort(Fail::NoResponse);
+            afc_retried_ = true;
+            due_ms_ = env_.now_ms() + kAfcRetryLowMs;
+            return;
+        }
         if (++sends_ < afc::kSends) {
             due_ms_ = env_.now_ms() + afc::kSendGapMs;
             return;

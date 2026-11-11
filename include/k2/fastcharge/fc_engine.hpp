@@ -59,6 +59,12 @@ struct Env {
     // One ACCP/AFC wire exchange: ping, tx bytes, ping, rx bytes (rx may be empty). False when the
     // charger did not answer the ping or the reply failed its checks.
     virtual bool xfer(std::span<const std::uint8_t>, std::span<std::uint8_t>) { return false; }
+    // The same exchange tried exactly once (the hardware xfer() repeats it up to three times back to back). AFC uses this one: a
+    // missed slave ping is retried by the engine after the lines have sat low, not in a tight loop.
+    virtual bool xfer_once(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx) { return xfer(tx, rx); }
+    // One line per AFC exchange: n counts the session's exchanges from 1, tx is the command byte, rx the byte heard (-1 when the
+    // exchange failed), vbus_mv the VBUS sample right after it.
+    virtual void log_afc(int /*n*/, std::uint8_t /*tx*/, int /*rx*/, int /*vbus_mv*/) {}
     virtual void log_reg(std::uint8_t /*reg*/, std::uint8_t /*value*/) {}   // informational register reads
     virtual void log_qc3(int /*vbus_mv*/, int /*pending_mv*/, int /*step_mv*/, int /*n*/) {}   // one line per QC3 pulse batch
     virtual void log_qc3_coarse(int /*step_mv*/) {}   // a QC3+ session whose pulses move VBUS by QC3-sized steps (ends as no response)
@@ -213,6 +219,8 @@ private:
     Phase phase_ = Phase::Off;
     std::array<Action, 24> script_{};
     std::size_t script_n_ = 0, script_i_ = 0;
+    int afc_n_ = 0;               // AFC exchanges of this session (the log's n)
+    bool afc_retried_ = false;    // the one retry of an unanswered first AFC exchange was used
     int sends_ = 0, ok_sends_ = 0, wake_i_ = 0, keep_fail_ = 0, adapter_mv_ = 0, adapter_ma_ = 0;
     // AFC / FCP / SCP: the charger answered the protocol itself (a CRC-valid ACCP frame or an AFC byte exchange). Until it has,
     // a failure of the session says "this charger does not speak it" (see abort()), whatever VBUS did: QC-only banks move VBUS

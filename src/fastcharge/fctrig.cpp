@@ -232,6 +232,15 @@ struct HwEnv final : fc::Env {
         }
         return false;
     }
+    // AFC: one attempt; on a miss D- goes low and the engine waits before its one retry.
+    bool xfer_once(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx) override {
+        if (exchange_once(tx, rx)) return true;
+        dpdm::set_dm(fc::Drive::V0);
+        return false;
+    }
+    void log_afc(int n, std::uint8_t tx, int rx, int vbus_mv) override {
+        K2LOG("[AFC] n=%d tx=0x%02X rx=%d vbus=%d\n", n, static_cast<unsigned>(tx), rx, vbus_mv);
+    }
     void log_reg(std::uint8_t reg, std::uint8_t value) override {
         K2LOG("[FC] reg 0x%02X = 0x%02X\n", reg, value);
     }

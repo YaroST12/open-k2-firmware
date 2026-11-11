@@ -542,6 +542,43 @@ static void afc_no_answer_fails() {
     CHECK(c.resets >= 1);
 }
 
+// Pattern qc-follows-ping-level: a source that never answers the first AFC exchange gets one retry after the lines sat low for at
+// least 100 ms, then the session ends; it does not run three sends on top of three wire attempts each.
+static void afc_ends_on_the_first_unanswered_exchange() {
+    FakeCharger c;
+    c.afc_ok = false;
+    Engine e(c);
+    CHECK(e.start(Proto::Afc, 9000, true) == Fail::None);
+    c.run(e, 1500);
+    CHECK(e.state() == State::Failed && e.fail() == Fail::Unsupported);
+    CHECK(c.xfer_times.size() == 2);
+    CHECK(c.xfer_times.size() == 2 && c.xfer_times[1] - c.xfer_times[0] >= 100);
+    CHECK(c.afc_log.size() == 2);
+    for (const auto& l : c.afc_log) CHECK(l.tx == 0x46 && l.rx < 0);   // nothing heard: no reply byte
+    CHECK(c.resets >= 1);
+}
+
+// One lost exchange is not the end: the retry that gets a slave ping starts the normal three sends, and every exchange is logged
+// with the byte sent, the byte heard and VBUS.
+static void afc_retry_after_a_missed_ping_goes_on() {
+    FakeCharger c;
+    c.afc_fail_first = 1;
+    Engine e(c);
+    CHECK(e.start(Proto::Afc, 9000, true) == Fail::None);
+    c.run(e, 2000);
+    CHECK(e.state() == State::Active && c.vbus_mv() == 9000);
+    CHECK(c.xfer_times.size() == 4);   // the miss, then the three sends
+    CHECK(c.afc_log.size() == 4);
+    CHECK(c.afc_log.size() == 4 && c.afc_log[0].rx < 0 && c.afc_log[1].rx == 0 && c.afc_log[1].tx == 0x46);
+    CHECK(c.afc_log.size() == 4 && c.afc_log[0].vbus > 0 && c.afc_log[3].n == 4);   // n counts the exchanges of the session from 1
+    // an answered first exchange is followed by three plain sends, no retry
+    FakeCharger d;
+    Engine f(d);
+    CHECK(f.start(Proto::Afc, 12000, true) == Fail::None);
+    d.run(f, 2000);
+    CHECK(f.state() == State::Active && d.xfer_times.size() == 3 && d.afc_log.size() == 3);
+}
+
 static FakeCharger* fcp_charger(FakeCharger& c) {
     c.accp_charger = true;
     c.regs[accp::kRegFcpCaps] = 1;
@@ -1264,6 +1301,8 @@ int main() {
     qc3_deadband_never_swallows_a_suite_miss();
     afc_9v_and_12v();
     afc_no_answer_fails();
+    afc_ends_on_the_first_unanswered_exchange();
+    afc_retry_after_a_missed_ping_goes_on();
     fcp_9v();
     fcp_without_caps_fails();
     fcp_current_register_refused_still_switches();
