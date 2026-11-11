@@ -226,11 +226,51 @@ static void test_boot_check() {
     CHECK_EQ(back->flags & kFlagInProgress, 0);
     CHECK_EQ(int(status(*back, Step::Cc)), int(Status::Interrupted));
     CHECK_EQ(int(why(*back, Step::Cc)), int(Why::Rebooted));
+    Record want = r;                                            // nothing else in the record changed
+    want.flags &= std::uint8_t(~kFlagInProgress);
+    want.at(Step::Cc).status = std::uint8_t(Status::Interrupted);
+    want.at(Step::Cc).why = std::uint8_t(Why::Rebooted);
+    std::array<std::uint8_t, kRecordBytes> a{}, b{};
+    CHECK_EQ(encode(*back, a), kRecordBytes);
+    CHECK_EQ(encode(want, b), kRecordBytes);
+    CHECK_COND(a == b);
     CHECK_COND(!boot_check(s).has_value());                    // closed: nothing more to do
 
     s.data[kFileHeader + 10] ^= 0xFF;                          // a damaged file is no record
     CHECK_COND(!load(s).has_value());
     CHECK_COND(!boot_check(s).has_value());
+}
+
+// The page's path to the stored result: the record bytes land at the front of a caller buffer (the share buffer), and the
+// step table is read straight from them, so no Record sits on the stack.
+static void test_load_record_bytes() {
+    MemStore s;
+    std::array<std::uint8_t, 510> buf{};
+    CHECK_EQ(load_record_bytes(s, buf), 0u);                   // nothing stored
+    const Record r = sample_record();
+    CHECK_COND(save(s, r));
+    CHECK_EQ(load_record_bytes(s, std::span<std::uint8_t>(buf.data(), kFileBytes)), 0u);   // read needs one spare byte
+    CHECK_EQ(load_record_bytes(s, buf), kRecordBytes);
+    std::array<std::uint8_t, kRecordBytes> want{};
+    CHECK_EQ(encode(r, want), kRecordBytes);
+    CHECK_COND(std::equal(want.begin(), want.end(), buf.begin()));
+
+    std::array<Record::StepRec, kSteps> st{};
+    CHECK_COND(read_steps(std::span<const std::uint8_t>(buf.data(), kRecordBytes), st));
+    for (std::size_t i = 0; i < kSteps; i++) {
+        CHECK_EQ(st[i].status, r.step[i].status);
+        CHECK_EQ(st[i].why, r.step[i].why);
+        CHECK_EQ(st[i].t_ms, r.step[i].t_ms);
+        CHECK_EQ(st[i].dur_ms, r.step[i].dur_ms);
+    }
+    CHECK_COND(!read_steps(std::span<const std::uint8_t>(buf.data(), kRecordBytes - 1), st));
+
+    s.data[kFileHeader + 40] ^= 1;                              // CRC mismatch
+    CHECK_EQ(load_record_bytes(s, buf), 0u);
+    s.data[kFileHeader + 40] ^= 1;
+    CHECK_EQ(load_record_bytes(s, buf), kRecordBytes);
+    s.data[3] = kVersion + 1;                                   // another file version
+    CHECK_EQ(load_record_bytes(s, buf), 0u);
 }
 
 static void test_start_refusals() {
@@ -467,6 +507,53 @@ static void test_aux_rise_ends_the_run() {
     CHECK_COND(f.drives.empty());
 }
 
+// The CC step shows itself for kCcWarnMs before the hold: the screen says VBUS may drop while nothing has changed yet, and a
+// cancel inside that window touches no line and leaves no in-progress record behind.
+static void test_cc_warns_first() {
+    Fake f;
+    Runner r(f);
+    r.start(0, "x");
+    while (r.running() && r.step() != Step::Cc) { f.now += 20; r.poll(f.now); }
+    CHECK_COND(r.running());
+    const std::uint32_t warn_at = f.now;
+    CHECK_EQ(f.cc_calls, 1);                                   // only the baseline's as-found look
+    CHECK_EQ(f.saved_flags.size(), 0u);                        // the in-progress record is written at the hold, not before
+    while (f.now + 20 < warn_at + kCcWarnMs) { f.now += 20; r.poll(f.now); }
+    CHECK_COND(r.running());
+    CHECK_EQ(f.cc_calls, 1);
+    f.now = warn_at + kCcWarnMs;
+    r.poll(f.now);
+    CHECK_COND(!r.running());
+    CHECK_EQ(f.cc_calls, 2);
+    CHECK_EQ(int(status(r.record(), Step::Cc)), int(Status::Done));
+    CHECK_EQ(r.record().at(Step::Cc).t_ms, warn_at + kCcWarnMs);   // the step's time is the hold's, not the warning's
+    CHECK_EQ(f.saved_flags.size(), 2u);
+
+    Fake g;                                                    // cancel while the warning shows
+    Runner q(g);
+    q.start(0, "x");
+    while (q.running() && q.step() != Step::Cc) { g.now += 20; q.poll(g.now); }
+    g.now += 100;
+    q.poll(g.now);
+    q.cancel(g.now);
+    CHECK_COND(!q.running());
+    CHECK_EQ(g.cc_calls, 1);
+    CHECK_EQ(int(status(q.record(), Step::Cc)), int(Status::Aborted));
+    CHECK_EQ(int(why(q.record(), Step::Cc)), int(Why::Cancelled));
+    CHECK_EQ(g.saved_flags.size(), 1u);
+    CHECK_EQ(g.saved_flags[0], 0);
+
+    Fake h;                                                    // VBUS rose while the warning showed: no hold, the run ends
+    Runner p(h);
+    p.start(0, "x");
+    while (p.running() && p.step() != Step::Cc) { h.now += 20; p.poll(h.now); }
+    h.vbus = 9000;
+    run(p, h);
+    CHECK_EQ(h.cc_calls, 1);
+    CHECK_EQ(int(status(p.record(), Step::Cc)), int(Status::Aborted));
+    CHECK_EQ(int(why(p.record(), Step::Cc)), int(Why::VbusHigh));
+}
+
 static void test_names() {
     CHECK_STR(step_name(Step::DpDm), "D+/D-");
     CHECK_STR(step_name(Step::Cc), "CC");
@@ -505,6 +592,7 @@ int main() {
     test_codec_round_trip();
     test_file();
     test_boot_check();
+    test_load_record_bytes();
     test_start_refusals();
     test_full_run();
     test_vbus_rise_ends_the_run();
@@ -515,6 +603,7 @@ int main() {
     test_no_emarker();
     test_cancel_restores();
     test_aux_rise_ends_the_run();
+    test_cc_warns_first();
     test_names();
     return test_report("test_loop_probe");
 }

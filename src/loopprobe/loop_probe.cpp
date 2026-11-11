@@ -151,14 +151,22 @@ std::optional<Record> decode(std::span<const std::uint8_t> in) {
     return r;
 }
 
-std::size_t encode_file(const Record& r, std::span<std::uint8_t> out) {
-    if (out.size() < kFileBytes) return 0;
-    const std::size_t n = encode(r, out.subspan(kFileHeader));
+namespace {
+constexpr std::size_t kStepsAt = 2 + kFwLen + 4;   // the step table in the record: after version, flags, fw, start_ms
+
+// The file head around `n` record bytes already at out[kFileHeader..]: "LPR", version, length, CRC.
+std::size_t seal(std::span<std::uint8_t> out, std::size_t n) {
     const std::uint16_t crc = bbstore::crc16(0xFFFF, out.subspan(kFileHeader, n));
     out[0] = 'L'; out[1] = 'P'; out[2] = 'R'; out[3] = kVersion;
     out[4] = std::uint8_t(n); out[5] = std::uint8_t(n >> 8);
     out[6] = std::uint8_t(crc); out[7] = std::uint8_t(crc >> 8);
     return kFileHeader + n;
+}
+}  // namespace
+
+std::size_t encode_file(const Record& r, std::span<std::uint8_t> out) {
+    if (out.size() < kFileBytes) return 0;
+    return seal(out, encode(r, out.subspan(kFileHeader)));
 }
 
 std::optional<Record> decode_file(std::span<const std::uint8_t> in) {
@@ -185,14 +193,39 @@ std::optional<Record> load(Store& s) {
     return decode_file(std::span<const std::uint8_t>(f.data(), n));
 }
 
+std::size_t load_record_bytes(Store& s, std::span<std::uint8_t> buf) {
+    std::size_t n = 0;
+    if (buf.size() < kFileBytes + 1 || !s.read(buf, n) || n != kFileBytes) return 0;
+    if (buf[0] != 'L' || buf[1] != 'P' || buf[2] != 'R' || buf[3] != kVersion) return 0;
+    if (std::size_t(buf[4] | buf[5] << 8) != kRecordBytes) return 0;
+    const auto rec = buf.subspan(kFileHeader, kRecordBytes);
+    if (bbstore::crc16(0xFFFF, rec) != std::uint16_t(buf[6] | buf[7] << 8) || rec[0] != kVersion) return 0;
+    std::memmove(buf.data(), rec.data(), kRecordBytes);
+    return kRecordBytes;
+}
+
+bool read_steps(std::span<const std::uint8_t> rec, std::array<Record::StepRec, kSteps>& out) {
+    if (rec.size() < kRecordBytes || rec[0] != kVersion) return false;
+    for (std::size_t i = 0; i < kSteps; i++) {
+        const std::uint8_t* p = rec.data() + kStepsAt + 8 * i;
+        out[i].status = p[0];
+        out[i].why = p[1];
+        out[i].t_ms = std::uint32_t(p[2]) | std::uint32_t(p[3]) << 8 | std::uint32_t(p[4]) << 16 | std::uint32_t(p[5]) << 24;
+        out[i].dur_ms = std::uint16_t(p[6] | p[7] << 8);
+    }
+    return true;
+}
+
+// Patched in place on the file bytes: one buffer on the stack (Ui::init runs it), no Record and no second file buffer.
 std::optional<Step> boot_check(Store& s) {
-    auto r = load(s);
-    if (!r || !(r->flags & kFlagInProgress)) return std::nullopt;
-    r->flags &= std::uint8_t(~kFlagInProgress);
-    Record::StepRec& cc = r->at(Step::Cc);
-    cc.status = std::uint8_t(Status::Interrupted);
-    cc.why = std::uint8_t(Why::Rebooted);
-    save(s, *r);
+    std::array<std::uint8_t, kFileBytes + 1> f{};
+    if (load_record_bytes(s, f) != kRecordBytes || !(f[1] & kFlagInProgress)) return std::nullopt;
+    f[1] = std::uint8_t(f[1] & ~kFlagInProgress);
+    std::uint8_t* cc = f.data() + kStepsAt + 8 * std::size_t(Step::Cc);
+    cc[0] = std::uint8_t(Status::Interrupted);
+    cc[1] = std::uint8_t(Why::Rebooted);
+    std::memmove(f.data() + kFileHeader, f.data(), kRecordBytes);
+    s.write(std::span<const std::uint8_t>(f.data(), seal(f, kRecordBytes)));
     return Step::Cc;
 }
 
@@ -329,8 +362,16 @@ void Runner::start_emarker(std::uint32_t now) {
     next_after(Step::Emarker, now);
 }
 
+// The CC step is announced first: it is the step under way for kCcWarnMs (the page shows "CC step: VBUS may drop") and only
+// then holds the lines, so the warning is on screen before anything can cut VBUS. A cancel in that window touches nothing.
 void Runner::start_cc(std::uint32_t now) {
     begin(Step::Cc, now);
+    phase_ = Phase::CcWarn;
+    t_ = now;
+}
+
+void Runner::hold_cc(std::uint32_t now) {
+    begin(Step::Cc, now);                    // the step's time is the hold's
     phase_ = Phase::Cc;
     const std::int32_t v = env_.vbus_fast_mv();
     Status st = Status::Done;
@@ -358,6 +399,10 @@ void Runner::poll(std::uint32_t now) {
     switch (phase_) {
     case Phase::Idle:
     case Phase::Cc:
+        return;
+
+    case Phase::CcWarn:
+        if (now - t_ >= kCcWarnMs) hold_cc(now);
         return;
 
     case Phase::Baseline: {

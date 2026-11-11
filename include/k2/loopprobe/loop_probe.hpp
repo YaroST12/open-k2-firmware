@@ -14,8 +14,9 @@
 //             kHoldMs), the HID side's line state read at the end of each hold; then the HID D+ pull-up off and on with
 //             the bus lines released, bus-side D+/D- read back.
 //   Emarker   the sniffed cable identity as the driver holds it (raw VDOs); the VCONN read is never started here.
-//   Cc        the K2's own Rd per kCcPlan, held kCcHoldMs per state, both CC lines and BC_LVL sampled. A record marked
-//             "in progress" is saved first, so a reboot in this step is reported by boot_check().
+//   Cc        announced for kCcWarnMs first (the screen warns, nothing changes yet), then the K2's own Rd per kCcPlan, held
+//             kCcHoldUs per state, both CC lines and BC_LVL sampled. A record marked "in progress" is saved right before
+//             the hold, so a reboot in this step is reported by boot_check().
 // Every pure part is host-tested (tests/test_loop_probe.cpp); the K2 binding is k2/loopprobe/loop_probe_hw.hpp.
 #pragma once
 
@@ -46,6 +47,7 @@ inline constexpr std::uint32_t kDischargeMs = 100;     // 0 V on both lines befo
 inline constexpr std::uint32_t kHoldMs = 100;          // one D+/D- state: far below the 1 s an HVDCP handshake needs
 inline constexpr std::uint32_t kPullSettleMs = 50;
 inline constexpr std::uint16_t kCcHoldUs = 3000;       // one Rd state: below a source's CC debounce
+inline constexpr std::uint32_t kCcWarnMs = 1500;       // the CC step is on screen this long before its hold starts
 
 enum class Step : std::uint8_t { Baseline, Drop, DpDm, Emarker, Cc };
 inline constexpr std::size_t kSteps = 5;
@@ -261,6 +263,12 @@ protected:
 bool save(Store& s, const Record& r);
 // The last result on flash, nullopt when there is none or it does not decode.
 std::optional<Record> load(Store& s);
+// The same file without a Record on the stack: the record bytes (kRecordBytes) at the front of `buf`, which must hold the
+// file plus one byte (kFileBytes + 1, the share buffer does). 0 when there is none, it is too big, or its header or CRC fails.
+std::size_t load_record_bytes(Store& s, std::span<std::uint8_t> buf);
+// The step table of an encoded record (status, why, t_ms, dur_ms per step), read from its fixed offset. False for a short
+// record or another version.
+bool read_steps(std::span<const std::uint8_t> rec, std::array<Record::StepRec, kSteps>& out);
 // At boot: a record still marked in progress means the K2 restarted inside the CC step. It is closed (the CC step
 // Interrupted / Rebooted, the in-progress flag cleared) and saved. Returns the step that was interrupted, nullopt when
 // there was nothing to close.
@@ -304,7 +312,7 @@ public:
     const Record& record() const { return rec_; }
 
 private:
-    enum class Phase : std::uint8_t { Idle, Baseline, DropSettle, DropSample, DpDischarge, DpHold, PullSettle, Cc };
+    enum class Phase : std::uint8_t { Idle, Baseline, DropSettle, DropSample, DpDischarge, DpHold, PullSettle, CcWarn, Cc };
 
     void begin(Step s, std::uint32_t now);
     void end(Step s, Status st, Why why, std::uint32_t now);
@@ -317,7 +325,8 @@ private:
     void start_drop(std::uint32_t now);
     void start_dp(std::uint32_t now);
     void start_emarker(std::uint32_t now);
-    void start_cc(std::uint32_t now);
+    void start_cc(std::uint32_t now);        // announces the step (kCcWarnMs)
+    void hold_cc(std::uint32_t now);         // then the hold itself
     void finish(std::uint32_t now);
 
     Env& env_;
