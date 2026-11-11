@@ -305,6 +305,65 @@ Unknowns only a schematic or a probe on the board can close: series resistor in 
 side of PC14/PC15 the ADC taps, the analog switch's rating, the PLUS coupling resistance, whether PC13
 selects a 5 V source or ground.
 
+## The CC front end: what the code states and what the numbers imply (2026-11-11)
+
+Written before the silent-cable-chip probe (`include/k2/pd/ra_probe.hpp`). Each line is tagged **[code]** (stated by the
+source, file:line given), **[measured]** (a hardware number from the 2026-11-11 cable runs, bottom port, no charger) or **[inferred]**.
+
+**Pins and switches**
+- PC13 `cc_vconn_gnd`, PC14 `cc1_switch`, PC15 `cc2_switch` are push-pull outputs (`include/k2/drivers/pins.hpp:28-30`). PC14/PC15 high =
+  the analog switch to the FUSB302's CC1/CC2 pin closed [code]. `cc_switches()` writes all three (`src/drivers/fusb302.cpp:258`);
+  PC13 follows `emkra::pc13_high(vconn, g_ra)` (`include/k2/pd/emk_ra.hpp`) [code].
+- PC13 high is a ~1 kohm Ra to ground on the CC1 net (a waiting charger's CC1 fell to ~322 mV, 2026-11-06; `emk_ra.hpp:4-8`), not a VCONN
+  supply switch [measured]. The "rail that is off" wording in `include/k2/pd/cc_probe.hpp:10-11` is contradicted by the 2026-11-11
+  runs: 2.87 V appeared on a bare CC1 with PC13 **low** and only the chip's VCONN_CC1 bit (0x10) set, so the chip's own VCONN
+  switch reaches the pin whatever PC13 does [measured].
+- The alone e-marker scan drives PC13 **high** (`include/k2/pd/emk_attached.hpp:43-52`, `p.pc13` stays true when alone), so CC1 also
+  carries that ~1 kohm Ra during the scan: in orientation B (VCONN on CC1) it is a second load beside the cable's, in orientation A
+  (BMC on CC1) the cable's reply is loaded by it [inferred]. The silent-chip probe runs with PC13 low, the condition of every
+  number below. Whether the scan answers more cables with PC13 low is untested.
+- Which side of PC14/PC15 the ADC taps is still not established (C3 above). The VCONN numbers below were taken with
+  `cc-probe --pc 0` (PC13, PC14 and PC15 all low) and still reached the net the ADC reads and the cable on it, so the VCONN path and the
+  ADC tap are not behind the PC14/PC15 switches the way the C3 text assumes [measured]; why is open. The probe takes the PC14/PC15
+  levels of its VCONN phases from one named constant so a run can repeat the measurement with both closed (`--pc`).
+
+**The ADC**
+- ADC1 channel 4 = PA4 = CC1, channel 5 = PA5 = CC2 (`include/k2/drivers/adc_calc.hpp:23`), 12 bit, 239.5-cycle sample time
+  (`src/drivers/adc.cpp:104`), no divider: millivolts = raw * 3300 / 4096 (`src/drivers/fusb302.cpp:1819-1824`). The range ends at
+  3.3 V: an open Rp reads 3294 mV [code, measured]. The comment at `fusb302.cpp:1819` expects a 5 V VCONN to read "at the rail";
+  it reads 2.87 V instead [measured], so the VCONN pin is not the 5 V board rail straight [inferred].
+- `adc::latest_cc()` returns the newest finished sweep of the DMA ring, available 15 ms after the ADC started
+  (`src/drivers/adc.cpp:173`): a sample 2 ms after a switch change can be the sweep that finished before the change. The
+  probe's 2 ms sample is therefore a transient and the 10 and 100 ms ones are the settled values [code].
+
+**Where the CC2 idle level (1.67-1.71 V) comes from**
+- The PLUS key (PA13) is hard-wired to the CC2 net. The ~1.7 V on an unplugged CC2 is that net's own bias, not the K2's measure, pull-up
+  or Rd (`docs/CHARGER_QUIRKS.md`, "PLUS key is coupled to CC2", the 2026-11-10 bullet) [measured]. CC1 has no such net and idles at
+  6-9 mV [measured]. A chipless C-to-C cable moves it only to 1.67-1.675 V [measured].
+- Holding PLUS pulls an unplugged CC2 hard low (~2 mV) [measured], which fakes the CC2 idle collapse a cable chip's pull-down also
+  causes. The classifier therefore also needs the VCONN sign: a ~5 kohm-class PLUS coupling barely loads a ~85 ohm source (~45 mV
+  droop), a ~1 kohm Ra loads it by ~225 mV [inferred].
+- The firmware leaves the level alone on purpose: by level it cannot be told from a 3 A Rp over a sink's Rd
+  (`include/k2/pd/pd_ccscan.hpp:82-98`: the 0.2-2.0 V Rd window holds both) [code].
+
+**Is `active_cc = 2` on an empty port a defect?**
+- No: it is the known "dark attach". `detect_cc_orientation()` (`src/drivers/fusb302.cpp:604`) compares each line with the 210 mV MDAC
+  threshold; the CC2 bias is above it and below the 2.6 V VCONN level the scan excludes (`:633-641`), so CC2 is chosen (`:651`) and
+  `apply_cc_choice` latches it [code]. With VBUS dark the idle wake releases it after `kDarkAttachMs` = 3 s
+  (`pd_rdseek.hpp:31`, `:247`) [code].
+- It is not a small safe fix. Filtering the level would also drop a real 3 A Rp over a sink's Rd (the same level), and the "waiting
+  charger" logic and the idle wake read the same latch. `cc-probe` refuses on it only because `Refusal::Attached` is
+  `g_active_cc != 0` (`include/k2/pd/cc_probe.hpp:82`). The silent-chip probe has its own guards (no contract, no inline sink, no Rd,
+  no line at an Rp level, VBUS < 1 V) and does not look at `g_active_cc`. Reported, not changed.
+
+**What the VCONN source looks like from the pin**
+- An unloaded pin reads 2.867-2.872 V under VCONN (steady from 1.5 ms). The pin that carries a cable's pull-down reads 2.627 V at
+  1.5 ms and 2.641-2.646 V settled [measured, Baseus 100 W cable, one orientation].
+- With a source resistance Rs and an Ra of ~1 kohm: 2.87 V * 1000 / (1000 + Rs) = 2.645 V gives Rs ~ 85 ohm, a value a chip switch
+  plus a small series resistor can give. The 225 mV droop is therefore consistent with the cable's own Ra and need not be a property
+  of the board's CC2 net [inferred from one cable]. A VCONN reading on an empty port and on a chipless cable was never taken
+  (cc-probe refuses there), and neither was VCONN on the pin of a cable whose pull-down sits on CC1.
+
 ## Per-port capability table (identical for top and bottom)
 
 | Capability | Top port | Bottom port | Notes |

@@ -7,8 +7,9 @@
 // SWITCHES0 bit layout (the same names as k2/pd/pd_phy.hpp, inferred from the chip's register map):
 //   bit0 PDWN1 (Rd on CC1), bit1 PDWN2, bit2 MEAS_CC1, bit3 MEAS_CC2, bit4 VCONN_CC1, bit5 VCONN_CC2,
 //   bit6 PU_EN1, bit7 PU_EN2 (the chip's own Rp pull-ups, which the K2 never drives).
-// The K2 never sources VCONN from this knob: a VCONN switch may only close while PC13 (the VCONN rail control) is
-// low, so the switch lands on a rail that is off. What it does to the CC line then is the measurement.
+// The knob only closes a VCONN switch while PC13 is low. PC13 high is an Ra on the CC1 net, not a rail switch
+// (k2/pd/emk_ra.hpp), and the 2026-11-11 runs showed ~2.87 V on a bare CC1 with PC13 low, so the chip's VCONN switch
+// does source the pin. What it does to the CC line is the measurement (docs/K2_PORTS_SPEC.md, "The CC front end").
 #pragma once
 #include <array>
 #include <cstddef>
