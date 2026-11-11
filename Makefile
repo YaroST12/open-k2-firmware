@@ -339,6 +339,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/chargertest/charger_test.cpp $(SRC_DIR)/ui/ui_charge
 TEST_CXX_LIB  += $(SRC_DIR)/ui/qr.cpp $(SRC_DIR)/ui/qrview.cpp $(SRC_DIR)/core/bootinfo.cpp $(SRC_DIR)/ui/bootscreen.cpp $(SRC_DIR)/ui/qrshare.cpp $(SRC_DIR)/ui/qrshare_records.cpp $(SRC_DIR)/ui/qrshare_link.cpp $(SRC_DIR)/ui/ui_share.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_twin.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/loop_probe.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP
