@@ -1272,16 +1272,16 @@ static void test_identify_refusal_wire_mapping() {
 static void test_pd_attach_wire() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x48, 1, {0x88, 0x13}), r), 1);                       // 5000 mV
-    check_header(r, 0x48, 1, Status::Ok, 18);
+    check_header(r, 0x48, 1, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
     CHECK_EQ(f.attach_mv, 5000); CHECK_EQ(f.attach_ma, 0); CHECK_EQ(f.attach_confirm, false); CHECK_EQ(f.attaches, 1);
     run(f, request(0x48, 2, {0x28, 0x23, 0xB8, 0x0B}), r);                        // 9000 mV, 3000 mA, no flags byte
-    check_header(r, 0x48, 2, Status::Ok, 18);
+    check_header(r, 0x48, 2, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
     CHECK_EQ(f.attach_mv, 9000); CHECK_EQ(f.attach_ma, 3000); CHECK_EQ(f.attach_confirm, false);
     run(f, request(0x48, 3, {0x28, 0x23, 0xB8, 0x0B, 1}), r);                     // + flags 1: confirm
-    check_header(r, 0x48, 3, Status::Ok, 18);
+    check_header(r, 0x48, 3, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
     CHECK_EQ(f.attach_mv, 9000); CHECK_EQ(f.attach_confirm, true); CHECK_EQ(f.attaches, 3);
     run(f, request(0x48, 4, {0x28, 0x23, 0, 0, 0}), r);                           // flags 0: no confirm
-    check_header(r, 0x48, 4, Status::Ok, 18);
+    check_header(r, 0x48, 4, Status::Ok, 20);   // the pd status payload: 18 + trial_line, trial_moves
     CHECK_EQ(f.attach_confirm, false); CHECK_EQ(f.attaches, 4);
     run(f, request(0x48, 5, {0x28, 0x23, 0, 0, 2}), r);                           // unknown flag bits (bit1 is over-load: not for attach)
     check_header(r, 0x48, 5, Status::BadArg, 0);
