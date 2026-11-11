@@ -6,13 +6,17 @@
 // gap. Per state the survey prints the calls, the worst call (ms and px), how many calls passed the ceiling, and the longest
 // stretch inside one call with no LCD idle-hook round (the PD service cadence during a paint).
 //
-// Ceiling: kCeilingMs (one slow-task period, kLoopMs in main_loop.cpp). A call over it is marked OVER. That is the state of
-// the firmware today, so the survey only reports it; K2_GAP_GATE=1 turns every OVER into a failure (the later gate).
+// Ceilings:
+// - kCeilingMs per call (one slow-task period, kLoopMs in main_loop.cpp). A call over it is marked OVER. That is the state
+//   of the firmware today, so the survey only reports it; K2_GAP_GATE=1 turns every OVER into a failure (the later gate).
+// - kSvcCeilingMs for the PD service gap (a third of tSenderResponse). Enforced always (ARCH_REWORK E1: the idle hook runs
+//   on elapsed time), so a state over it fails `make test` and is marked SVC.
 // The report goes to runs/paint-survey/report.txt too.
 #include "fake_lcd.h"
 #include "test_util.h"
 #include "ui_nav.h"
 #include "ui_stubs.h"
+#include "k2/drivers/lcd_timing.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/ui/ui.hpp"
 
@@ -28,6 +32,7 @@ using namespace k2;
 namespace {
 
 constexpr double kCeilingMs = 20.0;
+constexpr double kSvcCeilingMs = 10.0;   // tests/test_world_replay.cpp kSvcCeilingMs
 constexpr double kPxCpuUs = 1.65;   // tests/test_world_replay.cpp kPxCpuUs (calibrated on the 421.4 s Home repaint)
 
 double g_us = 0;            // the survey's virtual clock: only LCD work moves it
@@ -40,7 +45,7 @@ void hook() {
     g_hook_last = g_us;
 }
 
-const LcdTiming kTiming = {spend, now_us, 1.0667, 2.0, 8.0, kPxCpuUs, 468, 2048};
+const LcdTiming kTiming = {spend, now_us, 1.0667, 2.0, 8.0, kPxCpuUs};
 
 struct Call {
     unsigned px = 0;
@@ -197,27 +202,33 @@ int main() {
     mkdir("runs", 0755);
     mkdir("runs/paint-survey", 0755);
     FILE* rep = std::fopen("runs/paint-survey/report.txt", "w");
-    char line[256];
+    char line[400];
     std::snprintf(line, sizeof line,
-                  "paint survey: LCD model wire %.4f us/px + cpu %.2f us/px, idle hook every 468 px (DMA) / 2048 px (polled); "
-                  "ceiling %.0f ms per call%s\n%-11s %-17s %6s %5s %9s %7s %-15s %8s\n",
-                  kTiming.px_us, kTiming.px_cpu_us, kCeilingMs, gate ? " (K2_GAP_GATE: enforced)" : " (report only)", "page",
-                  "state", "calls", "over", "worst_ms", "px", "worst call", "svc_gap");
+                  "paint survey: LCD model wire %.4f us/px + cpu %.2f us/px, idle hook every %u us of elapsed time; "
+                  "ceiling %.0f ms per call%s, PD service gap %.0f ms (enforced)\n%-11s %-17s %6s %5s %9s %7s %-15s %8s\n",
+                  kTiming.px_us, kTiming.px_cpu_us, unsigned(lcd::kServiceUs), kCeilingMs,
+                  gate ? " (K2_GAP_GATE: enforced)" : " (report only)", kSvcCeilingMs, "page", "state", "calls", "over",
+                  "worst_ms", "px", "worst call", "svc_gap");
     std::fputs(line, stdout);
     if (rep) std::fputs(line, rep);
-    unsigned over_rows = 0;
+    unsigned over_rows = 0, svc_rows = 0;
     for (const Row& r : g_rows) {
-        std::snprintf(line, sizeof line, "%-11s %-17s %6u %5u %9.1f %7u %-15s %8.1f%s\n", r.page.c_str(), r.state.c_str(), r.calls,
-                      r.over, r.worst.ms, r.worst.px, r.worst_what.c_str(), r.svc_worst_ms, r.over ? "  OVER" : "");
+        const bool svc_over = r.svc_worst_ms > kSvcCeilingMs;
+        std::snprintf(line, sizeof line, "%-11s %-17s %6u %5u %9.1f %7u %-15s %8.1f%s%s\n", r.page.c_str(), r.state.c_str(), r.calls,
+                      r.over, r.worst.ms, r.worst.px, r.worst_what.c_str(), r.svc_worst_ms, r.over ? "  OVER" : "",
+                      svc_over ? "  SVC" : "");
         std::fputs(line, stdout);
         if (rep) std::fputs(line, rep);
         if (r.over) over_rows++;
+        if (svc_over) svc_rows++;
         g_checks++;
         if (gate && r.over) g_failures++;
         CHECK_COND(r.calls > 0);
+        CHECK_COND(!svc_over);   // the PD service gap during a paint (ARCH_REWORK E1)
     }
-    std::snprintf(line, sizeof line, "paint survey: %zu states, %u over the %.0f ms ceiling%s\n", g_rows.size(), over_rows, kCeilingMs,
-                  gate || !over_rows ? "" : " (K2_GAP_GATE=1 makes them fail)");
+    std::snprintf(line, sizeof line, "paint survey: %zu states, %u over the %.0f ms ceiling%s, %u over the %.0f ms PD service ceiling\n",
+                  g_rows.size(), over_rows, kCeilingMs, gate || !over_rows ? "" : " (K2_GAP_GATE=1 makes them fail)", svc_rows,
+                  kSvcCeilingMs);
     std::fputs(line, stdout);
     if (rep) { std::fputs(line, rep); std::fclose(rep); }
     return test_report("test_paint_survey");

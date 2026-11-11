@@ -29,12 +29,44 @@ constexpr std::uint32_t wire_us(std::uint32_t px, SpiDiv div) {
                                       (std::uint64_t{kApb1Hz}));
 }
 
-// Service interval, in pixels, between two usb::service() / idle-hook rounds while a stream is pushed by hand: a wire-time
-// budget (about 2.2 ms), so the pixel count scales with the divider. 2048 px at the shipped /8.
-constexpr std::uint32_t service_pixels(SpiDiv div) { return 2048u * 8u / static_cast<unsigned>(div); }
+// The service cadence of a paint (docs/ARCH_REWORK.md E1): one usb::service() + idle-hook round once kServiceUs has passed
+// since the last round ended. lcd.cpp checks after every stream call's pixels (each polled run, each 256-px fill piece, the
+// end of a DMA wait) and while it spins in a DMA wait. Elapsed time, not pixels: a paint of many short windows (text fields)
+// is served like one long fill, whatever the divider. The longest stretch without a round is kServiceUs plus the round
+// itself plus the work between two checks (one stream call and the rendering of its run, well under 1 ms).
+inline constexpr std::uint32_t kServiceUs = 1000;
 
-// The same while a DMA transfer runs and the CPU only waits: about 0.5 ms of wire time (468 px at /8).
-constexpr std::uint32_t dma_service_px(SpiDiv div) { return 3750u / static_cast<unsigned>(div); }
+// The pacer behind that rule, over any free-running unsigned clock (core cycles on the device, microseconds on the host);
+// the interval is in the clock's units. Differences are unsigned, so the clock may wrap; after a silence longer than its
+// period (~17.9 s of cycles at 240 MHz) the first round can come up to one interval late. A round stays open from start()
+// or force() to finish(): no nested round starts meanwhile, so neither the idle hook nor anything it calls ever runs the
+// hook again.
+class ServicePacer {
+public:
+    explicit constexpr ServicePacer(std::uint32_t interval) : interval_(interval) {}
+    // True when a round is due and none is open; the round is then open.
+    constexpr bool start(std::uint32_t now) {
+        if (open_ || now - last_ < interval_) return false;
+        open_ = true;
+        return true;
+    }
+    // A round on demand (lcd::pump), still never nested.
+    constexpr bool force() {
+        if (open_) return false;
+        open_ = true;
+        return true;
+    }
+    // The round ended at `now`: the next one is due an interval later.
+    constexpr void finish(std::uint32_t now) {
+        open_ = false;
+        last_ = now;
+    }
+
+private:
+    std::uint32_t interval_;
+    std::uint32_t last_ = 0;
+    bool open_ = false;
+};
 
 // The runtime lab switch (`lcd spi <n>`) offers /8 (shipped) and /4 only; /2 stays a compile-time experiment.
 constexpr bool lab_spi_div(unsigned value, SpiDiv& out) {

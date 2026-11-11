@@ -221,7 +221,11 @@ std::string line_of(const Job& j, const Result& r) {
 // main-loop passes and between two 1 ms PD services (the pass or the LCD idle hook). The child writes one "  gaps" line, the
 // parent sums them per scenario and page. Ceilings: a pass gap of one slow-task period (main_loop.cpp kLoopMs: power, PD poll and
 // button debounce all assume it) and a PD service gap of 10 ms (a third of tSenderResponse, the Request deadline after
-// Source_Capabilities). Today's firmware is over both on long repaints, so the table only reports; K2_GAP_GATE=1 fails on it.
+// Source_Capabilities). Both still go over, so the table only reports (SVC marks a page over the service ceiling) and
+// K2_GAP_GATE=1 fails on it. The pass gap is over on long repaints. Since E1 (the idle hook on elapsed time) a paint no longer
+// holds the PD service: what is left over 10 ms is the blocking CC scan (detect_cc_orientation, 13 ms per unattached scan
+// and 24 ms for the one that finds the source in this model), plan step 6. The paint-only service gap is gated by
+// tests/test_paint_survey.cpp.
 constexpr unsigned kLoopCeilingMs = 20, kSvcCeilingMs = 10;
 constexpr const char* kGapsTag = "  gaps loop=";
 
@@ -261,7 +265,8 @@ bool add_gaps(const std::string& text, GapAgg& a) {
     return true;
 }
 
-std::string gap_table(const std::vector<GapAgg>& aggs, bool gate, unsigned& over) {
+// `over` counts the scenario pages over either ceiling, `svc_over` those over the PD service ceiling.
+std::string gap_table(const std::vector<GapAgg>& aggs, bool gate, unsigned& over, unsigned& svc_over) {
     std::string out;
     char b[400];
     std::snprintf(b, sizeof b,
@@ -275,12 +280,14 @@ std::string gap_table(const std::vector<GapAgg>& aggs, bool gate, unsigned& over
         for (std::size_t i = 0; i < h.size(); i++) s += (i ? " " : "") + std::to_string(h[i]);
         return s;
     };
-    over = 0;
+    over = svc_over = 0;
     for (const GapAgg& a : aggs) {
-        const bool o = a.loop_max > kLoopCeilingMs || a.svc_max > kSvcCeilingMs;
+        const bool s = a.svc_max > kSvcCeilingMs;
+        const bool o = a.loop_max > kLoopCeilingMs || s;
         if (o) over++;
-        std::snprintf(b, sizeof b, "%-36s %4u  %-44s %6u  %-44s %6u%s\n", a.key.c_str(), a.runs, hist(a.loop).c_str(), a.loop_max,
-                      hist(a.svc).c_str(), a.svc_max, o ? "  OVER" : "");
+        if (s) svc_over++;
+        std::snprintf(b, sizeof b, "%-36s %4u  %-44s %6u  %-44s %6u%s%s\n", a.key.c_str(), a.runs, hist(a.loop).c_str(), a.loop_max,
+                      hist(a.svc).c_str(), a.svc_max, o ? "  OVER" : "", s ? " SVC" : "");
         out += b;
     }
     return out;
@@ -623,13 +630,14 @@ int main() {
         std::remove(jobs[i].out.c_str());
     }
     const bool gate = std::getenv("K2_GAP_GATE") != nullptr;
-    unsigned over = 0;
-    const std::string table = gap_table(aggs, gate, over);
+    unsigned over = 0, svc_over = 0;
+    const std::string table = gap_table(aggs, gate, over, svc_over);
     rep << table;
     std::fputs(table.c_str(), stdout);
     g_checks++;
     if (gate && over) g_failures++;
-    std::printf("world replay: %zu runs, %d failed (runs/world-replay/report.txt); %u of %zu scenario pages over the gap ceiling\n",
-                jobs.size(), fails, over, aggs.size());
+    std::printf("world replay: %zu runs, %d failed (runs/world-replay/report.txt); %u of %zu scenario pages over the gap ceiling, "
+                "%u over the PD service ceiling\n",
+                jobs.size(), fails, over, aggs.size(), svc_over);
     return test_report("test_world_replay");
 }

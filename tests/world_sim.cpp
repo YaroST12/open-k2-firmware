@@ -682,7 +682,7 @@ void common_start(const Timing& t) {
     for (const auto& p : {k2::pins::key_plus, k2::pins::key_minus, k2::pins::key_ok, k2::pins::key_back})
         g_pins[{unsigned(p.port), p.n}] = true;   // released (active low)
     g_stub.on_log = on_log;
-    g_lcd = {lcd_spend, lcd_now, t.px_us, t.lcd_call_us, t.lcd_window_us, t.px_cpu_us, 468, 2048};
+    g_lcd = {lcd_spend, lcd_now, t.px_us, t.lcd_call_us, t.lcd_window_us, t.px_cpu_us};
     g_lcd_timing = &g_lcd;
 }
 
