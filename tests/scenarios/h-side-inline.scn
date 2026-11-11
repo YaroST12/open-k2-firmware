@@ -211,4 +211,4 @@ frame 2539536.840 1 e0b007e429783b rec SOP:Not_Supported
 frame 2539539.187 1 e041068ec9d841 rec SOP:GoodCRC
 # episode <name> <t0> <t1> line <n> rise <t>; expect <episode> <checks> (edit by hand)
 episode rise2538.6 2537810.4 2541566.5 line 1 rise 2538610.4  # first recorded frame PS_RDY template_offset 2087930.1
-expect rise2538.6 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise2538.6 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1

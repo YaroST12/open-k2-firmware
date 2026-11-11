@@ -152,6 +152,27 @@ static void test_link_forced_attach_is_present() {
     CHECK_EQ(int(l.pd_verdict()), int(PdVerdict::Present));
 }
 
+// The attach count must not depend on when the UI samples the link: Source_Capabilities that the driver decoded before the
+// first tick that saw VBUS (a paint held the tick, or the VBUS sample lagged the CC attach) belong to this attach.
+static void test_link_caps_before_the_attach_tick_count() {
+    Link l;
+    l.update(lin(0, 5000, 1, 3));
+    l.update(lin(1000, 0, 0, 3));
+    l.update(lin(1401, 0, 0, 3));   // detached, 3 caps from the old attach
+    CHECK_EQ(l.attached(), 0);
+    l.update(lin(1600, 165, 2, 4));   // the new source's first caps while the sampled VBUS still reads low
+    CHECK_EQ(l.attached(), 0);
+    l.update(lin(2000, 5445, 2, 5));   // the first tick that sees VBUS; a second caps came during the held tick
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.caps_rx_this_attach(), 2u);
+    LinkInput u = lin(3501, 5000, 2, 5);
+    u.any_pd_msg = true;
+    u.sink_answered = true;
+    l.update(u);
+    CHECK_EQ(int(l.pd_verdict()), int(PdVerdict::Present));
+    CHECK_EQ(l.caps_rx_this_attach(), 2u);
+}
+
 int main() {
     test_not_attached_is_pending();
     test_no_verdict_before_the_settle_window();
@@ -163,5 +184,6 @@ int main() {
     test_link_verdict_matrix();
     test_link_verdict_none_after_reattach();
     test_link_forced_attach_is_present();
+    test_link_caps_before_the_attach_tick_count();
     return test_report("test_pd_verdict");
 }

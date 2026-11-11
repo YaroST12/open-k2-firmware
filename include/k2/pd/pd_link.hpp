@@ -168,7 +168,7 @@ private:
     std::uint32_t low_since_ = 0, gone_since_ = 0;
     std::uint32_t detach_at_ = 0, attach_at_ = 0;
     std::uint32_t rx_at_detach_ = 0, last_rx_ = 0;
-    std::uint32_t rx_attach_ = 0;   // Source_Capabilities counter at the attach edge
+    std::uint32_t rx_attach_ = 0;   // the attach's count baseline: the counter at the last detach (caps since then are this attach's)
     PdVerdict verdict_ = PdVerdict::Pending;
     PdNoneWhy none_why_ = PdNoneWhy::None;
     bool scanned_ = false, cable_dirty_ = false;
