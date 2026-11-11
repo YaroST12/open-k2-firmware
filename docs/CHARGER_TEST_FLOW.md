@@ -28,7 +28,9 @@ SVOOC65, UFCS, VIVO, EPR, ...). Every unit:
    - `Legacy`: Rd on, sink **PD-silent** (no GoodCRC, no Request, no re-request, no nudges). Caps may be heard and
      recorded but never acknowledged. Ready when PD traffic has been quiet for the settle time and VBUS is steady at
      5 V (the source gave up PD). USB-A port: no CC, ready once VBUS is steady at 5 V.
-3. **Runs its rows**, judging VBUS on the latest sample (never the 2.5 s display average), with a transition capture
+3. **Runs its rows**, judging VBUS on the latest sample (never the 2.5 s display average; a PD fixed row above 5 V is
+   judged on the 250 ms running mean `VbusMean` instead, pattern `burst-mode-ripple-at-20v`, and the step walk and deep
+   sweep record a window mean, see "PD row judging"), with a transition capture
    armed per row.
 4. **Ends with a release**, and with a detach (Rd off, wait for VBUS dark, bounded) at a session boundary: back to 5 V
    (PDO 1 / D+/D- released). Always runs, including after a failure.
@@ -423,9 +425,13 @@ a shared-port splitter re-splitting its budget mid-run drops one offer while the
 - No PD row has started and the plan is not frozen: the PD unit is planned again (`replan_pd`). Extra APDOs get rows and the
   rows carry the new currents (the summary shows PPS 5 A).
 - Otherwise: a Pending or Running row the new list still offers (`find_offer`: the same slot, or a slot of the same kind,
-  SPR 1-7 or EPR 8+, carrying the planned PDO or one that covers it: same type and voltage range, current equal or higher,
-  extra APDOs allowed) takes the new slot and PDO word. The row in flight is held to its own slot: if that still offers it,
-  it finishes; otherwise it ends as `Withdrawn` and is released to 5 V (the sink's single-Request gate serialises the release).
+  SPR 1-7 or EPR 8+, carrying the planned PDO or one that covers it, extra APDOs allowed) takes the new slot and PDO word.
+  What "covers" means depends on the row: a FIXED row is kept while its voltage is still offered, at ANY current (15 V 3 A
+  becoming 15 V 1.5 A keeps the row, which then runs at the lower current word and the card notes the reduction; only a
+  voltage that is gone withdraws it); a PPS / AVS row needs the same type, its target voltage inside the new range and a
+  limit of at least its own current. The row in flight is looked up the same way anywhere on its side of the SPR / EPR
+  boundary: an offer that only moved slot re-queues it (restarted at the new slot and current word, not a try), only an offer
+  that is gone ends it as `Withdrawn` and releases to 5 V (the sink's single-Request gate serialises the release).
 - A row the new list no longer offers is skipped with `Reason::Withdrawn` ("withdrawn by source") — not `CapsChanged` — and
   the unit goes on against the new list. A withdrawn PDO that comes back revives its rows (Pending again) while the unit has
   not ended. Each re-plan bumps `revision_`, calls `plan_changed()` once, logs `[TEST] re-plan: <n> rows follow, <m>
@@ -451,6 +457,44 @@ Limits: a list that places no PD row at all (pending or in flight), a `spec_rev`
 continues) — never a re-split while attached. The excluded cases (VBUS dark, the `preauth_tail` window, EPR entry/exit,
 the hunt-Reject answer) keep their own handling. The cause of the Baseus re-announce (the SOP' query itself, or the Ra) is
 not provable from the logs; the planner follows the list either way.
+
+## PD row judging (review pass 2026-11-11, host-tested, hardware check pending)
+
+How a PD row is judged and how long it waits. All of it is host-tested; none of it has run on hardware yet.
+
+- **Band.** A fixed PD row above 5 V is judged on the 250 ms running mean (`VbusMean`, `kBandTauMs`); one sample beyond 15 %
+  of the level fails at once. A programmable (PPS / SPR AVS / EPR AVS) row asked to RISE gets the same tight band as a fixed
+  level (+-5 %, at least 100 mV): the source drives the output up itself, so a landing 8 % high is out of regulation. Only a
+  DOWN-step keeps the wide unloaded ceiling (target + max(10 %, 600 mV)), because an unloaded source cannot sink its output.
+  `Runner::from_mv_` (VBUS when the level was asked) tells the two apart; an unknown start keeps the wide ceiling.
+- **No PS_RDY on a down-step.** A source that Accepts a lower PPS / AVS level and never sends PS_RDY (pattern
+  `no-psrdy-on-downstep`) is taken as ready only after VBUS stayed steady inside [target - max(10 %, 600 mV), ceiling]
+  (within `kRiseMv` of the first in-band sample) for `kDownSettleMs` (300 ms). One glitch sample, an output gone dark or a
+  fall through the band no longer counts. VBUS that never gets there still times out at 4 s.
+- **Hold guard descent window.** The sink's hold guard lets a falling VBUS finish its descent (stall rule: at least 50 mV of
+  progress per 600 ms; rise rule: more than 150 mV up aborts). The window after the settle time scales with a PPS / AVS
+  down-step: 2 s per volt of drop (a 0.5 V/s fall, the ~2 V/s drain of an unloaded source passes), at most 10 s, so a 20 V to
+  5 V step holds; fixed targets and small steps keep 3 s (`descent_window_ms`).
+- **Step walk and deep sweep record a mean.** Each walk level and sweep point is the mean of the VBUS samples of the last
+  `kWalkSteadyWindowMs` (`WalkSteady::mean`), not the one sample that closes the wait: a burst-mode swing of tens of mV no
+  longer reads as "step resolution" between neighbouring levels or as sweep error.
+- **A capped row ends on its plateau.** A PPS / AVS row whose output stands steady below the band with the contract live
+  (ready, not a sweep row, plateau held `kCappedPlateauMs` = 5 s, `capped()` true) ends `Capped` there instead of at the 12 s
+  row timeout; the timeout path keeps the old rule.
+- **PS_RDY timing is noted, never judged.** The sink stamps Accept and PS_RDY; per row the runner latches three flags in
+  `Evidence::timing`: bit 0 PS_RDY while VBUS was outside the row's band (`early-ps-rdy`), bit 1 PS_RDY inferred by the sink
+  (the no-PS_RDY down-step shortcut), bit 2 PS_RDY later than the spec maximum (550 ms SPR, 1020 ms EPR; the 1500 / 4000 ms
+  tolerances of the engine stay). `Evidence::ps_rdy_max` holds the worst Accept-to-PS_RDY time in 20 ms units. One log line
+  `[CT] ps_rdy row=<n> flags=<bits> ms=<ms>` per flagged row; the remote status carries both bytes in the schema-2 header
+  (`evidence.ps_rdy` in `k2_remote.py --json`, a "PS_RDY quirks" line in its text view). No verdict reads them, the report card
+  is unchanged, and a resume loses them (`Evidence` timing is not journaled). A card note would need the flags and the worst ms
+  in the card record plus a note slot.
+- **Resume.** The EPR proof and the late PD plan (a list first heard after START) are rebuilt from the journal on a resume, so
+  a run that reboots between the cable read and the EPR rows plans and runs as the uninterrupted one would.
+- **6 A hunt rows and the preview.** The hunt rows are planned for every source but only send a Request when the list in hand
+  advertises 6 A (`hunt_advertised`); otherwise the row is dropped at request time, or ends as a "not unlocked" skip when the
+  Xiaomi chain was seen. `Runner::preview` counts the same: an unadvertised hunt row is no row and no estimated time without the
+  chain, a skip with no time with it.
 
 ## Results grid
 

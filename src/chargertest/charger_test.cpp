@@ -683,8 +683,9 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
             }
             if (p.type == pd::PdoType::Fixed) {
                 if (!s.ma) skip(Reason::NoOffer); else emit(s);
-                // 6 A hunt: probe 20 V at 6 A (120 W) even when the fixed PDO advertises less - the row passes on the
-                // source's Accept + PS_RDY at 20 V, not on the granted current. Only when no PPS APDO of this plan
+                // 6 A hunt: plan a 20 V 6 A (120 W) row even when the fixed PDO advertises less (the request time check,
+                // hunt_advertised, drops it then: a fixed PDO only ever sends it when it really offers 6 A, so on the
+                // usual 3 / 5 A list this row is dropped and does not count in preview()). Only when no PPS APDO of this plan
                 // covers 20 V: the OEM 6 A modes (Xiaomi, CUKTECH) unlock on the APDO, a fixed PDO never offers 6 A and
                 // answers Reject, which is noise on the card (hardware 2026-11-06). The APDO planner owns that row then.
                 if (s.verdict != Verdict::Skip && p.max_mv == 20000 && !hunt_20v && !pps_covers(20000)) {
@@ -718,9 +719,10 @@ void plan_unit(Unit unit, const pd::SourceCaps& caps, Options o, Input in, AddRe
                 s.mv = p.max_mv; s.ma = current(s.mv); s.continuous = false;
                 skip(limit_reason(p.max_mv, in, algorithm));
             }
-            // 6 A hunt, every source: probe 11 V 6 A (66 W) and 20 V 6 A (120 W) PPS even when the APDO
-            // advertises 5 A (OEM unlocked modes, e.g. Xiaomi Mi Turbo after the SVID 0x2717 auth chain,
-            // Lenovo 7 A); a Reject is a clean "not granted" answer, the row passes on the reply voltage.
+            // 6 A hunt, every source: plan 11 V 6 A (66 W) and 20 V 6 A (120 W) PPS rows even when the APDO advertises
+            // 5 A (OEM unlocked modes, e.g. Xiaomi Mi Turbo after the SVID 0x2717 auth chain, Lenovo 7 A). Since 2026-11-07
+            // the row only sends its Request when the list in hand advertises 6 A (hunt_advertised); otherwise it is dropped
+            // at request time (no Xiaomi chain seen) or ends as a "not unlocked" skip, and preview() does not count it.
             if (p.type == pd::PdoType::Pps) {
                 const unsigned hi_cap = std::min<unsigned>(p.max_mv, cap);
                 for (unsigned mv : {11000u, 20000u}) {
@@ -855,8 +857,12 @@ Summary Runner::preview(const pd::SourceCaps& caps, Options o, Input in) {
     uint32_t seen = 0;
     auto count = [&](const Step& s) {
         if (out.total >= kMaxSteps) return;   // the Runner's add() drops past kMaxSteps: the preview counts the same rows
+        // A 6 A hunt row the list does not advertise never sends a Request (request time, see skip_unadvertised_hunt): with no
+        // Xiaomi chain seen it is dropped from the plan (no row, no time), with the chain seen it ends as a "not unlocked" skip.
+        const bool unadvertised_hunt = s.verdict != Verdict::Skip && s.group == Group::Pd && s.hunt && !hunt_advertised(s);
+        if (unadvertised_hunt && !in.pd.xiaomi_svid) return;
         ++out.total;
-        if (s.verdict == Verdict::Skip) ++out.skipped;
+        if (s.verdict == Verdict::Skip || unadvertised_hunt) ++out.skipped;
         else {
             ++out.runnable; out.max_mv = std::max(out.max_mv, s.mv);
             out.estimate_ms += kHoldMs + 1000;

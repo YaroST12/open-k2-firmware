@@ -686,6 +686,35 @@ static void test_hunt_runs_on_the_pps_apdo_that_covers_the_voltage() {
     }
     for (const auto& s : r.steps()) if (s.algorithm == A::Pd3Fixed) CHECK_EQ(s.ma != 6000, true);
 }
+// The preview (rows, runnable, estimate) counts what the run will do: a 6 A hunt row the list does not advertise is dropped at request
+// time on a source that never showed the Xiaomi chain, so it is no row and no estimated time; with the chain seen it ends as a
+// "not unlocked" skip (a row, but no time); a list that advertises 6 A keeps it runnable.
+static void test_preview_does_not_count_hunt_rows_the_run_drops() {
+    Fake f; f.caps = cuktech_caps(5000);
+    ct::Runner r(f);
+    CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+    const auto planned = r.steps().size(), hunts = hunt_rows(r).size();
+    CHECK_EQ(hunts, 2);
+    const auto pv = ct::Runner::preview(f.caps, kPd, f.in);
+    CHECK_EQ(pv.total, planned - hunts);   // the two dropped rows are not counted
+    {   // the same list with 6 A advertised: the hunt rows run
+        Fake g; g.caps = cuktech_caps(6000);
+        ct::Runner rg(g);
+        CHECK_EQ(rg.start(g.caps, kPd, g.in, true), ct::Reason::None);
+        const auto pvg = ct::Runner::preview(g.caps, kPd, g.in);
+        CHECK_EQ(pvg.total, rg.steps().size());
+        CHECK_EQ(pvg.runnable > pv.runnable, true);
+        CHECK_EQ(pvg.estimate_ms > pv.estimate_ms, true);
+    }
+    {   // the chain was seen: the unadvertised rows stay as skips, with no estimated time
+        Fake x; x.caps = cuktech_caps(5000); x.in.pd.xiaomi_svid = true;
+        const auto pvx = ct::Runner::preview(x.caps, kPd, x.in);
+        CHECK_EQ(pvx.total, planned);
+        CHECK_EQ(pvx.skipped, pv.skipped + hunts);
+        CHECK_EQ(pvx.runnable, pv.runnable);
+        CHECK_EQ(pvx.estimate_ms, pv.estimate_ms);
+    }
+}
 static void test_fixed_only_source_keeps_the_fixed_20v_hunt() {
     Fake f; f.caps = cuktech_caps(); f.caps.num_pdos = 5; f.caps.pdos[5] = f.caps.pdos[6] = {};
     ct::Runner r(f);
@@ -4206,9 +4235,9 @@ static void test_low_programmable_rows_are_planned_last() {
         CHECK_EQ(last_other < first, true);
         CHECK_EQ(st[first].continuous, false);   // starts from a released 5 V contract, not from the previous row
         for (size_t i = first + 1; i < st.size() && low_pps(st[i]); ++i) CHECK_EQ(st[i].continuous, true);
-        // the preview lists the same rows
+        // the preview lists the same rows, less the 6 A hunt rows this list does not advertise (the run drops them at request time)
         const auto pv = ct::Runner::preview(f.caps, o, f.in);
-        CHECK_EQ(pv.total, unsigned(st.size()));
+        CHECK_EQ(pv.total, unsigned(st.size() - hunt_rows(r).size()));
     }
 }
 static void test_latch_off_at_the_low_step_ends_done_with_a_reason() {
@@ -6537,7 +6566,8 @@ int main() {
     test_vivo_plan_runs_the_engine();
     test_pd_bundles();
     test_source_probe_costs_at_most_a_second(); test_source_probe_only_in_a_pd_contract_and_once(); test_source_probe_skipped_without_a_contract();
-    test_hunt_runs_on_the_pps_apdo_that_covers_the_voltage(); test_fixed_only_source_keeps_the_fixed_20v_hunt();
+    test_hunt_runs_on_the_pps_apdo_that_covers_the_voltage(); test_preview_does_not_count_hunt_rows_the_run_drops();
+    test_fixed_only_source_keeps_the_fixed_20v_hunt();
     test_fixed_20v_hunt_stays_when_no_apdo_reaches_20v(); test_fixed_20v_hunt_stays_when_the_pps_rows_are_not_selected();
     test_pps_full_current_row_with_a_5a_cable(); test_pps_full_current_row_clamps_to_an_unread_cable();
     test_pps_over_5a_apdo_with_a_5a_cable_is_a_cable_limit_skip(); test_pps_over_5a_apdo_with_an_unread_cable_is_a_cable_limit_skip();
