@@ -164,6 +164,14 @@ int main() {
     CHECK_EQ(int(attach_verdict({false, false, true}, 5000, true)), int(AttachVerdict::RefusedInline));        // a trigger refusal is a busy link
     CHECK_EQ(int(attach_verdict({true, false, false}, 5000, true)), int(AttachVerdict::RefusedBusy));          // a run / FC release owns the ports
     CHECK_EQ(int(attach_verdict({true, true, true}, 9000, true)), int(AttachVerdict::RefusedBusy));            // busy wins
+    // The attach step (hardware 2026-11-11, charger already waiting): the line is "active" (the passive boot watches the
+    // charger's Rp on CC) while no capability list was ever received. The step must present Rd then, not look for a PDO
+    // in an empty list ("no suitable PDO"). Only a valid list with PDOs in it goes to the PDO choice.
+    CHECK_EQ(int(attach_step(false, 0)), int(AttachStep::PresentRd));        // no list at all (line active or not)
+    CHECK_EQ(int(attach_step(true, 0)), int(AttachStep::PresentRd));         // a list flag with no PDOs is no list
+    CHECK_EQ(int(attach_step(false, 5)), int(AttachStep::PresentRd));        // stale PDOs behind an invalid list
+    CHECK_EQ(int(attach_step(true, 1)), int(AttachStep::SelectPdo));         // a real list: pick from it
+    CHECK_EQ(int(attach_step(true, 7)), int(AttachStep::SelectPdo));
     {   // reasons
         DetachTracker t;
         t.update(0, 5000, true);

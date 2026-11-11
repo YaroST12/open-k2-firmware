@@ -188,6 +188,15 @@ constexpr AttachVerdict attach_verdict(const AttachFacts& f, std::uint16_t targe
     return AttachVerdict::Allowed;
 }
 
+// What an allowed attach does first. The only question is whether a capability list exists: with none, the K2 has no
+// contract to pick from and must present Rd so the source sends one. It is NOT decided by the active-CC line: the
+// passive boot already watches a waiting charger's Rp (line active, list empty), and that case must present Rd too
+// (hardware 2026-11-11: "no suitable PDO" and no attach).
+enum class AttachStep : std::uint8_t { PresentRd, SelectPdo };
+constexpr AttachStep attach_step(bool caps_valid, std::uint8_t num_pdos) {
+    return caps_valid && num_pdos != 0 ? AttachStep::SelectPdo : AttachStep::PresentRd;
+}
+
 // The phase-1 lab hand-back (`k2_remote.py pd handback --confirm`, ROADMAP 2026-11-10 "An inline latch leaves the
 // far sink on Type-C current", phase 1 lab only): hand the contract back with ONE Hard Reset - allowed only when the
 // K2 owns an explicit contract (self-hold, a request) while a sink is latched inline, the far sink sent no Request

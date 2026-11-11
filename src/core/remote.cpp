@@ -729,9 +729,10 @@ remote::PdAttachResult Remote::pd_attach(uint16_t target_mv, uint16_t target_ma,
 
     const pd::SourceCaps& caps = pd::active_caps();
 
-    // No active CC: present the single Rd (PD mode) and wait for the source caps. The verdict above guarantees
+    // No valid capability list (whatever the active-CC line says: a charger that already waits shows its Rp there with
+    // no list yet): present the single Rd (PD mode) and wait for the source caps. The verdict above guarantees
     // nothing is inline, so this is the plain sink attach.
-    if (fusb302::active_cc() == 0) {
+    if (pd::attach_step(caps.valid, caps.num_pdos) == pd::AttachStep::PresentRd) {
         fusb302::unit_attach(false);
         K2LOG("[RMT] pd attach: presented Rd, waiting for caps\n");
         return {remote::Status::Ok, 0, pd_trigger()};
