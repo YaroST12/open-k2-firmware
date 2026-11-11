@@ -5,10 +5,11 @@
 // and the stop rules (tests/test_factory_wipe.cpp). The real environment is in src/core/remote.cpp
 // (remote command FACTORY_WIPE, tools/k2_remote.py factory-wipe).
 //
-// What is erased: every 2 KB sector of the littlefs volume (k2::flash kFsBase..kFsEnd, 90 sectors), plus the
-// sectors of the legacy raw-store range (kStoreBase..kStoreEnd, 56 candidates) that carry the signature of one
-// of our old stores (k2/core/legacy_proof.hpp). The device storage area (0x080E0000 up) is
-// never touched except for those proven pages: unknown content stays, byte for byte. The bootloader, the
+// What is erased: every 2 KB sector of the littlefs volume (k2::flash kFsBase..kFsEnd, 90 sectors; on a grown volume
+// also the run kFsRunBase..kFsRunEnd, 55 more), plus the sectors of the legacy raw-store range (kStoreBase..kStoreEnd,
+// 56 candidates, outside the run when grown) that carry the signature of one of our old stores
+// (k2/core/legacy_proof.hpp). The device storage area (0x080E0000 up) is never touched except for those pages: unknown
+// content stays, byte for byte, and the two kept pages (flash::kKeptPages) are never listed. The bootloader, the
 // 0x08003000 info page and the application are not in the list, and k2::flash refuses them anyway.
 //
 // Order: unmount the volume (nothing writes after the erase), pick the legacy sectors that are ours (before
@@ -31,6 +32,7 @@ inline constexpr std::uint32_t kFsSectors = (flash::kFsEnd - flash::kFsBase) / f
 inline constexpr std::uint32_t kLegacySectors = (flash::kStoreEnd - flash::kStoreBase) / flash::kSectorSize;   // 56 candidates
 inline constexpr std::uint32_t kMaxSectors = kFsSectors + kLegacySectors;                                   // 146
 static_assert(kMaxSectors <= 0xFFFF, "the counts travel as u16");
+static_assert(flash::kFsGrownBlocks <= kMaxSectors, "a grown volume fits the same bound");
 static_assert(kLegacySectors <= 64, "the proven legacy sectors fit one 64-bit mask");
 
 // Address of file system sector i (ascending); 0 past the end.
@@ -64,28 +66,34 @@ concept Env = requires(E& e, const E& ce, std::uint32_t addr) {
     e.clear_backup();                                           // this firmware's backup registers only
 };
 
+// `grown`: the volume has kFsGrownBlocks blocks (k2/core/fs_grow.hpp) and the flash guard has the run open. Its run
+// sectors are then volume sectors and are wiped with it; the legacy proof is not asked about them (a volume block may
+// start like an old store), and the only candidate left outside the run is the kept top page, which is never listed.
 template <Env E>
-Result run(E& e) {
+Result run(E& e, bool grown = false) {
     Result r;
     e.unmount();
+    const std::uint32_t n_volume = grown ? flash::kFsGrownBlocks : kFsSectors;
 
     // Legacy sectors that are ours, decided before anything is erased (bit i = kStoreBase + i sectors).
     std::uint64_t mine = 0;
     unsigned n_legacy = 0;
     auto rd = [&e](std::uint32_t a) -> std::uint16_t { return e.read16(a); };
     for (std::uint32_t i = 0; i < kLegacySectors; i++) {
-        if (legacy::ours(flash::kStoreBase + i * flash::kSectorSize, rd)) {
+        const std::uint32_t a = flash::kStoreBase + i * flash::kSectorSize;
+        if (flash::kept_page(a) || (grown && flash::fs_run_sector(a))) continue;
+        if (legacy::ours(a, rd)) {
             mine |= std::uint64_t{1} << i;
             n_legacy++;
         }
     }
-    r.sectors = static_cast<std::uint16_t>(kFsSectors + n_legacy);
+    r.sectors = static_cast<std::uint16_t>(n_volume + n_legacy);
 
-    // Visit order: the volume ascending, then the legacy sectors descending (the log's second sector is
-    // proven by its first, so it goes first).
+    // Visit order: the volume ascending (block order: the run after the first 90), then the legacy sectors descending
+    // (the log's second sector is proven by its first, so it goes first).
     auto at = [&](std::size_t k) -> std::uint32_t {
-        if (k < kFsSectors) return fs_sector_addr(k);
-        std::size_t left = k - kFsSectors;                       // 0 = the highest proven legacy sector
+        if (k < n_volume) return flash::fs_block_addr(static_cast<std::uint32_t>(k));
+        std::size_t left = k - n_volume;                         // 0 = the highest proven legacy sector
         for (std::uint32_t i = kLegacySectors; i-- > 0;) {
             if (!(mine >> i & 1)) continue;
             if (left-- == 0) return flash::kStoreBase + i * flash::kSectorSize;

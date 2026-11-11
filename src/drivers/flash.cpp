@@ -149,6 +149,7 @@ std::uint8_t ram_store_op(std::uint32_t op, std::uint32_t regs, std::uint32_t ad
 }
 
 std::uint8_t g_store_bank = 0;
+bool g_run_open = false;   // open_fs_run(): the run kFsRunBase..kFsRunEnd belongs to the volume for this boot
 
 Status hick_on() {
     auto& crm = reg::crm();
@@ -178,11 +179,14 @@ Tries tries_for(std::uint32_t addr) {
 }  // namespace
 
 std::uint8_t store_bank() { return g_store_bank; }
+void open_fs_run() { g_run_open = true; }
+bool fs_run_open() { return g_run_open; }
 
 Status store_erase(std::uint32_t addr) {
-    // A file system sector, or a legacy sector whose content proves it is one of our old stores; any other
-    // sector (the native pages included) is refused before a register is touched.
-    if (!erase_allowed(addr, peek)) return Status::Refused;
+    // A file system sector (a run sector once the run is open), or a legacy sector whose content proves it is one
+    // of our old stores; any other sector (the native pages and the kept pages included) is refused before a
+    // register is touched.
+    if (!erase_allowed(addr, peek, g_run_open)) return Status::Refused;
     if (const Status h = hick_on(); h != Status::Ok) return h;
     Status st = Status::VerifyFailed;
     const Tries t = tries_for(addr);
@@ -199,7 +203,7 @@ Status store_erase(std::uint32_t addr) {
 
 Status store_program(std::uint32_t addr, std::span<const std::uint8_t> data) {
     const std::uint32_t len = static_cast<std::uint32_t>((data.size() + 1) & ~std::size_t{1});
-    if (!store_allowed(addr, len)) return Status::Refused;
+    if (!store_allowed(addr, len, g_run_open)) return Status::Refused;
     if (const Status h = hick_on(); h != Status::Ok) return h;
     for (std::size_t i = 0; i < data.size(); i += 2) {
         const std::uint16_t v = static_cast<std::uint16_t>(data[i] | ((i + 1 < data.size() ? data[i + 1] : 0xFF) << 8));

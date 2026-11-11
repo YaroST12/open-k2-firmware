@@ -84,13 +84,16 @@ Status clear_marker(Hw& hw) {
 // A second, separate policy for the app-owned stores (the marker allow-list above is unchanged):
 //   file system  0x080B3000..0x080E0000  180 KB, 90 blocks of 2 KB: littlefs (k2/core/fs.hpp); erase and program
 //   native       0x080E0000..0x08100000  128 KB: the device storage that was on the K2 before this firmware (settings,
-//                e-marker records and other data). NEVER programmed. An erase is
-//                allowed only for a page proven to be one of OUR old raw stores (k2/core/legacy_proof.hpp: the page
-//                carries that store's signature) and only inside the legacy candidate range below.
+//                e-marker records and other data). NEVER programmed, except the grown volume's run once it is
+//                open (below). An erase is allowed only for a page proven to be one of OUR old raw stores
+//                (k2/core/legacy_proof.hpp: the page carries that store's signature) inside the legacy candidate
+//                range below, or for a run sector once the run is open.
 //   legacy       0x080E4000..0x08100000  the candidate range of those old stores (56 sectors)
+//   run          0x080E4000..0x080FF800  the grown volume's blocks 90..144 (55 sectors), closed until proven (below)
 // The native pages below 0x080E4000 (settings 0x080E0000, e-marker records 0x080E3000 and 0x080E3800) are
-// outside every erasable range. The bootloader, the 0x08003000 info page, the vector table and the application
-// stay unreachable too: anything not allowed is refused (Status::Refused) before a register is touched.
+// outside every erasable range, and the kept pages 0x080E3800 and 0x080FF800 are refused whatever they hold. The
+// bootloader, the 0x08003000 info page, the vector table and the application stay unreachable too: anything not
+// allowed is refused (Status::Refused) before a register is touched.
 inline constexpr std::uint32_t kFsBase = 0x080B3000, kFsEnd = 0x080E0000;
 inline constexpr std::uint32_t kNativeBase = 0x080E0000, kNativeEnd = 0x08100000;
 inline constexpr std::uint32_t kStoreBase = legacy::kBase;   // legacy candidate range, erasable only per proof
@@ -105,16 +108,69 @@ static_assert(kFsEnd == kNativeBase, "the file system ends exactly where the nat
 static_assert(kStoreBase >= kNativeBase + 0x4000, "the native settings and e-marker pages 0x080E0000..0x080E3FFF are never candidates");
 static_assert(kStoreEnd == kNativeEnd, "the legacy range ends at the end of the flash");
 
-// A half-word aligned span of `len` bytes (a multiple of 2) fully inside the file system range
-// (programming is allowed nowhere else).
-constexpr bool store_allowed(std::uint32_t addr, std::uint32_t len) {
-    if (addr % 2 != 0 || len % 2 != 0) return false;
-    if (addr < kFsBase || addr >= kFsEnd) return false;
-    return len <= kFsEnd - addr;
+// ---- The grown volume ------------------------------------------------------------------------
+//
+// The volume may grow from kFsBlocks to kFsGrownBlocks into the run 0x080E4000..0x080FF7FF (55 sectors, 110 KB) at
+// the top of the native area: blank on the units seen so far. Blocks 0..89 stay in kFsBase..kFsEnd; block 90 + i is
+// the run's sector i. The run is writable only after the firmware has OPENED it (open_fs_run() below): at boot,
+// when the volume's superblock already says kFsGrownBlocks, or when every page of the run read blank (or the grow
+// intent survived a power cut, k2/core/fs_grow.hpp). Until then every erase or program there is refused like the rest
+// of the native area. Two pages are kept forever, whatever they hold and whatever proof might claim them:
+//   0x080E3800  the old e-marker record page (native)
+//   0x080FF800  the top page, "5A 00 00 A5" at its start on this unit: unknown owner
+// and the original-data pages 0x080E0000..0x080E3FFF are never a block.
+inline constexpr std::uint32_t kFsBlocks = (kFsEnd - kFsBase) / kSectorSize;           // 90
+inline constexpr std::uint32_t kFsRunBase = 0x080E4000, kFsRunEnd = 0x080FF800;
+inline constexpr std::uint32_t kFsRunBlocks = (kFsRunEnd - kFsRunBase) / kSectorSize;  // 55
+inline constexpr std::uint32_t kFsGrownBlocks = kFsBlocks + kFsRunBlocks;              // 145
+inline constexpr std::array<std::uint32_t, 2> kKeptPages{0x080E3800, 0x080FF800};
+
+// Address of volume block i, 0 past the grown end.
+constexpr std::uint32_t fs_block_addr(std::uint32_t i) {
+    if (i < kFsBlocks) return kFsBase + i * kSectorSize;
+    if (i < kFsGrownBlocks) return kFsRunBase + (i - kFsBlocks) * kSectorSize;
+    return 0;
 }
-// A sector of the file system: erased and programmed freely (it is ours).
-constexpr bool fs_sector(std::uint32_t addr) {
-    return addr % kSectorSize == 0 && addr >= kFsBase && addr < kFsEnd;
+// True for any address inside one of the kept pages.
+constexpr bool kept_page(std::uint32_t addr) {
+    for (std::uint32_t p : kKeptPages)
+        if (addr >= p && addr < p + kSectorSize) return true;
+    return false;
+}
+
+constexpr bool fs_block_map_ok() {
+    for (std::uint32_t i = 0; i < kFsGrownBlocks; i++) {
+        const std::uint32_t a = fs_block_addr(i);
+        if (a == 0 || a % kSectorSize != 0 || kept_page(a)) return false;
+        if (a < kFsBase || a >= kNativeEnd) return false;                     // never the application or past the flash
+        if (a >= kNativeBase && a < kNativeBase + 0x4000) return false;       // never the original-data pages
+        if (i > 0 && a <= fs_block_addr(i - 1)) return false;                 // ascending, no block twice
+    }
+    return fs_block_addr(kFsGrownBlocks) == 0;
+}
+static_assert(kFsRunBase % kSectorSize == 0 && kFsRunEnd % kSectorSize == 0, "the run is sector aligned");
+static_assert(kFsBlocks == 90 && kFsRunBlocks == 55 && kFsGrownBlocks == 145);
+static_assert(kFsRunBase == kNativeBase + 0x4000, "the run starts right above the original-data pages");
+static_assert(kFsRunEnd == kKeptPages[1] && kKeptPages[1] + kSectorSize == kNativeEnd, "the run ends below the kept top page");
+static_assert(kKeptPages[0] < kFsRunBase && kKeptPages[0] >= kFsEnd, "the old e-marker record page is outside both ranges");
+static_assert(fs_block_map_ok(), "every block is a sector of its own, outside the kept and original-data pages");
+
+// A sector of the run (whether the run is open is the caller's business).
+constexpr bool fs_run_sector(std::uint32_t addr) {
+    return addr % kSectorSize == 0 && addr >= kFsRunBase && addr < kFsRunEnd;
+}
+
+// A half-word aligned span of `len` bytes (a multiple of 2) fully inside the file system range, or fully inside
+// the run when it is open (programming is allowed nowhere else).
+constexpr bool store_allowed(std::uint32_t addr, std::uint32_t len, bool run_open = false) {
+    if (addr % 2 != 0 || len % 2 != 0) return false;
+    if (addr >= kFsBase && addr < kFsEnd) return len <= kFsEnd - addr;
+    if (run_open && addr >= kFsRunBase && addr < kFsRunEnd) return len <= kFsRunEnd - addr;
+    return false;
+}
+// A sector of the file system: erased and programmed freely (it is ours). With the run open, a run sector too.
+constexpr bool fs_sector(std::uint32_t addr, bool run_open = false) {
+    return (addr % kSectorSize == 0 && addr >= kFsBase && addr < kFsEnd) || (run_open && fs_run_sector(addr));
 }
 // A sector of the legacy candidate range: erasable only when the content proves it is one of our old stores.
 constexpr bool legacy_candidate(std::uint32_t addr) {
@@ -129,17 +185,18 @@ concept StoreHwOps = HwOps<Hw> && requires(Hw& hw, std::uint32_t addr) {
     { hw.erase(addr) } -> std::same_as<Status>;
 };
 
-// The full erase decision: a file system sector, or a legacy candidate sector whose content proves it is ours.
-// `rd(addr)` reads a half-word.
+// The full erase decision: a file system sector (a run sector when the run is open), or a legacy candidate sector
+// whose content proves it is ours. Never a kept page. `rd(addr)` reads a half-word.
 template <class Rd>
-bool erase_allowed(std::uint32_t addr, Rd&& rd) {
-    return fs_sector(addr) || (legacy_candidate(addr) && legacy::ours(addr, rd));
+bool erase_allowed(std::uint32_t addr, Rd&& rd, bool run_open = false) {
+    if (kept_page(addr)) return false;
+    return fs_sector(addr, run_open) || (legacy_candidate(addr) && legacy::ours(addr, rd));
 }
 
 // Erases one allowed sector and checks that it reads back blank.
 template <StoreHwOps Hw>
-Status store_erase_guarded(Hw& hw, std::uint32_t addr) {
-    if (!erase_allowed(addr, [&hw](std::uint32_t a) -> std::uint16_t { return hw.read(a); })) return Status::Refused;
+Status store_erase_guarded(Hw& hw, std::uint32_t addr, bool run_open = false) {
+    if (!erase_allowed(addr, [&hw](std::uint32_t a) -> std::uint16_t { return hw.read(a); }, run_open)) return Status::Refused;
     const Status st = hw.erase(addr);
     if (st != Status::Ok) return st;
     for (std::uint32_t a = addr; a < addr + kSectorSize; a += 2)
@@ -151,9 +208,9 @@ Status store_erase_guarded(Hw& hw, std::uint32_t addr) {
 // that are 0xFFFF are skipped (the sector is erased already). Everything is read back at the end,
 // so a half-word that was not blank beforehand shows up as VerifyFailed.
 template <StoreHwOps Hw>
-Status store_program_guarded(Hw& hw, std::uint32_t addr, std::span<const std::uint8_t> data) {
+Status store_program_guarded(Hw& hw, std::uint32_t addr, std::span<const std::uint8_t> data, bool run_open = false) {
     const std::uint32_t len = static_cast<std::uint32_t>((data.size() + 1) & ~std::size_t{1});
-    if (!store_allowed(addr, len)) return Status::Refused;
+    if (!store_allowed(addr, len, run_open)) return Status::Refused;
     auto half = [&](std::size_t i) -> std::uint16_t {
         const std::uint16_t lo = data[i];
         const std::uint16_t hi = i + 1 < data.size() ? data[i + 1] : 0xFF;
@@ -184,6 +241,10 @@ bool marker_present();
 // uses its own register set.
 Status store_erase(std::uint32_t addr);
 Status store_program(std::uint32_t addr, std::span<const std::uint8_t> data);
+// Opens the run kFsRunBase..kFsRunEnd to store_erase/store_program for the rest of this boot. Only the volume's boot
+// sequence calls it, and only on proof (k2/core/fs_grow.hpp); there is no way to close it again short of a reset.
+void open_fs_run();
+bool fs_run_open();
 const std::uint8_t* store_view(std::uint32_t addr);       // memory-mapped read access
 std::uint8_t store_bank();                                // register set that worked: 2, 1, or 0 = unknown
 

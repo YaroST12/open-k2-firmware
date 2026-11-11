@@ -581,6 +581,11 @@
   "584": "[LPRB] cancelled step=%s\n",
   "585": "[FC] dcp check dm_ref=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
   "586": "[FC] idle dp=%s dm=%s mismatch=0x%X",
-  "587": "[TEST] preflight refused: load attached, latched by %s (%d mV)\n"
+  "587": "[TEST] preflight refused: load attached, latched by %s (%d mV)\n",
+  "588": "[FS] new volume of %u blocks from 0x%08X formatted; the old volume (if any) is gone",
+  "589": "[FS] grown %u -> %u blocks%s used=%u",
+  "590": "[FS] grow skipped: 0x%08X not blank",
+  "591": "[FS] grow skipped: legacy wipe pending",
+  "592": "[FS] grow failed: %s (stays at %u blocks, retried next boot)"
  }
 }

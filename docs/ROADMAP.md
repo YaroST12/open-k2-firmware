@@ -218,6 +218,19 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   files were invisible); `[BB] free=0`. Nothing deleted. Fix in progress on `k2/card-256`; no charger-test save on 606.
   `runs/2026-11-11-integ600-hw/cards-{before,after}.txt`. Evidence
   `runs/loop-survey/` (integ worktree).
+  **The space, part one: the volume grows from 90 to 145 blocks** (2026-11-12, `k2/fs-grow`, built and host-tested
+  only). After the legacy wipe, `fs::grow()` proves the 55 pages 0x080E4000..0x080FF800 blank, writes the intent
+  `/.grow`, opens that run in the flash guard and runs `lfs_fs_grow`; on any non-blank page it stays at 90 blocks. The
+  kept pages 0x080E3800 and 0x080FF800 are refused by every erase and program, the factory wipe included; a power cut
+  leaves 90 or 145 blocks, never a format (`tests/test_fs_grow.cpp`: 976 cut points). 64 cards + the 20-block journal
+  reserve + 32 Black Box captures fit 145 blocks; every store at its cap still does not (161 blocks before the reserve,
+  ARCHITECTURE "Volume budget"). Validate (hardware): (1) the first boot logs `[FS] grown 90 -> 145 blocks used=N`,
+  later boots `[FS] mounted blocks=145`, and no `[FS] new volume ... formatted`; on a unit with foreign data in the run
+  the boot logs `[FS] grow skipped: 0x080XXXXX not blank` instead and nothing in the run changes; (2) `[BB] free=` grows
+  by about 112 KB (55 blocks of 2 KB) against the same boot before the update; (3) `cards list` shows the same cards
+  as before; (4) the Black Box saves again (`[BB] saves=` counts up after a VBUS cut, `entries>0`); (5) a factory wipe
+  (0x33) leaves the kept pages untouched: `k2_flasher.py backup` before and after, the bytes of 0x080E3800 and
+  0x080FF800 match, and the volume comes back at 145 blocks.
 - **PD Stress did not release Rd at its end** (open since before 2026-11-11; fixed on `k2/small-fixes`, hardware check
   pending): the run ended with the K2's Rd still on CC, the one a pd-reread presented and the run took over. Every end of a
   run (done, cancelled, a stop that skips the 5 V release, the reboot budget spent) now ends in `PdStressSession::on_finish`

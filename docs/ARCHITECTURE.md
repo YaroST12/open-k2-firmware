@@ -111,17 +111,37 @@ ISRs (vector table in `src/drivers/startup.cpp`): SysTick (`systick::tick` and h
 | :--- | :--- | :--- |
 | 0x08000000..0x08003800 | 14 KB | bootloader (+ info page 0x08003000): never touched |
 | 0x08003800..0x080B3000 | 702 KB | application (`link.ld` `FLASH`): `.isr_vector` 0x08003800, `.meta_version` 0x08004000, `.meta_model` ("K200") 0x08004010, `.meta_commit` 0x08004400, `.text` from 0x08004404 |
-| 0x080B3000..0x080E0000 | 180 KB | littlefs volume, 90 blocks of 2 KB (`flash::kFsBase`..`kFsEnd`); the only range this firmware erases or programs |
-| 0x080E0000..0x08100000 | 128 KB | data that was on the unit before this firmware (settings 0x080E0000, e-marker records 0x080E3000 and 0x080E3800, other pages up to the end of flash): never erased, never programmed, only read. The one exception are old raw stores of earlier firmware (below), erased only when the page proves to be ours |
-| 0x080E4000..0x08100000 | up to 112 KB | legacy raw stores of earlier firmware (USB config 0x080E6000, UI prefs, cards, Black Box ring, journal, e-marker library): imported once, then each page is erased by `fs::wipe_legacy()` only if it carries one of our old store signatures (`include/k2/core/legacy_proof.hpp`); blank and unrecognised pages are left alone |
+| 0x080B3000..0x080E0000 | 180 KB | littlefs volume, blocks 0..89 of 2 KB (`flash::kFsBase`..`kFsEnd`); always erasable and programmable |
+| 0x080E0000..0x080E4000 | 16 KB | data that was on the unit before this firmware (settings 0x080E0000, e-marker records 0x080E3000, the kept record page 0x080E3800): never erased, never programmed, only read |
+| 0x080E3800 | 2 KB | kept page (`flash::kKeptPages[0]`): refused by every erase and program, whatever it holds |
+| 0x080E4000..0x080FF800 | 110 KB | the run (`flash::kFsRunBase`..`kFsRunEnd`, 55 pages): first the legacy raw stores of earlier firmware (USB config 0x080E6000, UI prefs, cards, Black Box ring, journal, e-marker library), imported once and erased by `fs::wipe_legacy()` page by page only if the page carries one of our old store signatures (`include/k2/core/legacy_proof.hpp`); then, once every page of the run reads blank, littlefs blocks 90..144 (`fs::grow()`, below). Writable for the volume only after that proof (`flash::open_fs_run()`) |
+| 0x080FF800..0x08100000 | 2 KB | kept top page, unknown owner (`flash::kKeptPages[1]`): refused by every erase and program, even with one of our old signatures on it |
 
-`k2::flash` refuses every erase/program outside these rules before a register is touched: a program is
-accepted only inside the volume, an erase only inside the volume or on a legacy page that
-`legacy::ours()` proves to be ours (magic and, for the journal, record CRCs; a blank page is never ours).
-The DFU marker word has its own allow-list. The factory-wipe command (0x33) follows the same rule. A
-volume of an older firmware (96 blocks, ending at 0x080E3000) fails the mount by block count and is
-reformatted at the new size with a log line (`[FS] new volume ... formatted`); there is no migration.
-The part of such an old volume that lies in 0x080E0000..0x080E3000 is not provably ours and stays.
+`k2::flash` refuses every erase/program outside these rules before a register is touched: the two kept
+pages are refused first, always; a program is accepted only inside the volume (blocks 0..89, plus the run
+once it is open), an erase only there or on a legacy page that `legacy::ours()` proves to be ours (magic
+and, for the journal, record CRCs; a blank page is never ours). The run flag is set only by the blank proof
+or by a mount that finds a 145-block superblock, and stays set until reset. The block map is
+`flash::fs_block_addr()` (constexpr, static_asserted): block i < 90 sits at `kFsBase + i * 2 KB`, block
+90 + j at `kFsRunBase + j * 2 KB`, so the volume jumps over the native pages 0x080E0000..0x080E4000.
+The DFU marker word has its own allow-list. The factory-wipe command (0x33) follows the same rule and
+covers the run's blocks when the volume is grown. A volume of an older firmware (96 blocks, ending at
+0x080E3000) fails the mount by block count and is reformatted with a log line (`[FS] new volume ...
+formatted`); there is no migration. The part of such an old volume that lies in 0x080E0000..0x080E3000
+is not provably ours and stays.
+
+Growing the volume (`include/k2/core/fs_grow.hpp`, called from `fs::grow()` after `fs::wipe_legacy()`
+at boot): the mount tries 90 blocks, then 145; any other count formats. A grow needs `/.legacy` (the
+legacy imports and the wipe are done, and the imports never run again), then the proof that every word of
+the 55 run pages reads 0xFFFFFFFF. It writes the intent file `/.grow` inside the 90 blocks, opens the run,
+runs `lfs_fs_grow` (one superblock commit) and removes `/.grow`. A power cut leaves either the 90-block
+superblock (the next boot finds `/.grow`, skips the blank proof over its own leftovers and grows again) or
+the 145-block one, never a format. Logs: `[FS] grown 90 -> 145 blocks used=N` (with "(resumed after a
+cut)" when `/.grow` was found), `[FS] grow skipped: 0x080XXXXX not blank` (the first page that is not
+blank; the volume stays at 90 blocks and the line repeats every boot), `[FS] grow skipped: legacy wipe
+pending`, `[FS] grow failed: <err> (stays at 90 blocks, retried next boot)`. A fresh format (no volume,
+or a foreign one) takes 145 blocks only when the run is proven blank, and then writes `/.legacy` at once;
+otherwise it takes 90 and the grow decides on the next boots.
 `include/k2/drivers/flash_map.hpp` lists every region and `static_assert`s that they are sector aligned, ordered,
 disjoint and that the pre-existing device storage stays out of every writable range (`tests/test_flash_map.cpp`).
 File layout of the littlefs volume: section "Flash map" below.
@@ -775,17 +795,18 @@ Because the layout is rebuilt after a save or erase (`storage::generation()` -> 
 
 ### Flash map
 
-All app-owned persistent data lives in one littlefs volume (v2.11.0, vendored in `third_party/littlefs`, options in `include/k2/core/lfs_cfg.h`: no malloc, no asserts, 256 B cache, 16 B lookahead, 2 KB blocks). `k2::fs` (`k2/core/fs.hpp`) is the thin wrapper (atomic whole-file write = tmp file + rename, append, list, read, remove, mkdir); `k2/drivers/fs_flash.hpp` binds it to the real flash and mounts it at boot (a mount failure formats the volume, logs `[FS] mounted (formatted)` and carries on). `k2::flash` guards every erase and program: the volume range is erasable and programmable; a legacy-range page (0x080E4000 up) is erasable only when `legacy::ours()` proves it carries one of our old store signatures, and is never programmed; everything else (bootloader, info page 0x08003000, application, the whole device-storage area 0x080E0000..0x08100000 apart from proven-ours legacy pages) is refused before a register is touched. The DFU marker allow-list is separate and unchanged.
+All app-owned persistent data lives in one littlefs volume (v2.11.0, vendored in `third_party/littlefs`, options in `include/k2/core/lfs_cfg.h`: no malloc, no asserts, 256 B cache, 16 B lookahead, 2 KB blocks). `k2::fs` (`k2/core/fs.hpp`) is the thin wrapper (atomic whole-file write = tmp file + rename, append, list, read, remove, mkdir); `k2/drivers/fs_flash.hpp` binds it to the real flash and mounts it at boot (a mount failure formats the volume, logs `[FS] mounted (formatted)` and carries on). `k2::flash` guards every erase and program: the volume's first 90 blocks are erasable and programmable; the run 0x080E4000..0x080FF800 joins them only once `fs::grow()` has proven it blank (or the mount found a grown volume); before that a legacy-range page is erasable only when `legacy::ours()` proves it carries one of our old store signatures, and is never programmed; the kept pages 0x080E3800 and 0x080FF800 and everything else (bootloader, info page 0x08003000, application, the native pages 0x080E0000..0x080E4000) are refused before a register is touched. The DFU marker allow-list is separate and unchanged.
 
 | Address | Size | Use |
 | :--- | :--- | :--- |
 | 0x08000000..0x08003800 | 14 KB | bootloader, info page 0x08003000 (never touched) |
 | 0x08003800..0x080B3000 | ~704 KB | application (vector table 0x08003800, meta 0x08004000, code from 0x08004404; the linker script ends it at 0x080B3000) |
-| 0x080B3000..0x080E0000 | 180 KB | littlefs volume: 90 blocks of 2 KB (`flash::kFsBase`..`kFsEnd`) |
+| 0x080B3000..0x080E0000 | 180 KB | littlefs volume: blocks 0..89 of 2 KB (`flash::kFsBase`..`kFsEnd`) |
 | 0x080E0000..0x080E3000 | 12 KB | native user settings and related pages (read-only, never erased or written) |
 | 0x080E3000 | 2 KB | native single copied-e-marker slot (read-only, never erased or written) |
-| 0x080E3800 | 2 KB | native 10-slot e-marker library (read-only; shown as `NATIVE/LIBRARY.BIN` and `LIBRARY.TXT` on the drive) |
-| 0x080E4000..0x08100000 | 112 KB | native assets, plus legacy raw stores of earlier firmware (`flash::kStoreBase`..`kStoreEnd`): read for the one-time import of the USB link and UI preference pages, then each page whose own old signature is proven is erased by `fs::wipe_legacy()` (marker `/.legacy`); nothing is ever programmed there |
+| 0x080E3800 | 2 KB | native 10-slot e-marker library, a kept page (read-only; shown as `NATIVE/LIBRARY.BIN` and `LIBRARY.TXT` on the drive) |
+| 0x080E4000..0x080FF800 | 110 KB | the run: legacy raw stores of earlier firmware (`flash::kStoreBase` up): read for the one-time import of the USB link and UI preference pages, then each page whose own old signature is proven is erased by `fs::wipe_legacy()` (marker `/.legacy`); once all 55 pages read blank, littlefs blocks 90..144 (`fs::grow()`, section 2.3) |
+| 0x080FF800..0x08100000 | 2 KB | kept top page, unknown owner: never erased or written |
 
 Files on the volume (compact binary records, each starts with a magic that carries the format version; the drive turns them into JSON/Markdown only when read):
 
@@ -800,11 +821,12 @@ Files on the volume (compact binary records, each starts with a magic that carri
 | `/jr/*.rec` | `charger_journal` | the running charger test: `h.rec` (header, written last), `sNNN.rec` (step results, replaced in place), `ph.rec` (phase), `rs.rec` (resume count), `mt.rec` (run meta: unit order, `unattended` flag = self-supplied run: key-mode boot or `power_source::bus_powered()`, cable identity kind and seq), `at.rec` (power losses of the unit the marker names; the record key is the unit number), `fin.rec`; each one CRC-framed record (0xA5, type, length, 0, payload, CRC-16), at most about 104 files of 36 B. Power-loss policy: a reboot always resumes, in every power mode, once VBUS has been steady 500 ms; BACK held at power-up drops the run. A unit may cost `kRebootBudget` (3) losses: losses 1 and 2 ask the same row again, the 3rd skips the unit's remaining rows ("rebooted 3x", `Reason::RebootLimit`) and the next unit runs; after 16 resumes a run is not offered again. The card carries the resume count (cable block byte 14, shown as "resumed N" in the card footer) |
 | `/bb/NNNNNNNN.bbe` | `bbstore` | one Black Box capture, "K2B1" header of 20 B + LZ4 body, at most 2044 B; 32 files, the oldest is evicted first (also on a full volume) |
 | `/rd.rec` | `rdintent` / `rdcomeback` | the persistent Rd intent marker (`k2/core/rd_intent.hpp`, pure record code; `k2/core/rd_comeback.hpp` is the boot glue): a session record (a self-powered or pinned run) or a planned re-attach record (written by `begin_reattach` before the charger test's one deliberate Rd glitch, read back and checked for pin 2). A boot that finds it keeps Rd from the first instruction and raises PC13 (Ra on CC1); the judge releases it after 500 ms with no Rp and gives up after 1500 ms |
-| `/.legacy` | `fs` | marker: the legacy raw pages were wiped |
+| `/.legacy` | `fs` | marker: the legacy raw pages were wiped; the legacy imports never run again and the volume may grow |
+| `/.grow` | `fsgrow` | intent: the run was proven blank and the grow to 145 blocks is under way; present only across a power cut in the grow |
 
 #### Volume budget
 
-What each store costs at its cap, in 2 KB blocks, measured by `tests/test_volume_budget.cpp` (every store filled alone on a large RAM disk; the test fails when a store grows past its row, so this table and the test move together). littlefs wear-levels dynamically over all 90 blocks.
+What each store costs at its cap, in 2 KB blocks, measured by `tests/test_volume_budget.cpp` (every store filled alone on a large RAM disk; the test fails when a store grows past its row, so this table and the test move together). littlefs wear-levels dynamically over all blocks of the volume, 90 or, once grown, 145.
 
 | Store | At its cap | Blocks |
 | :--- | :--- | ---: |
@@ -821,19 +843,26 @@ What each store costs at its cap, in 2 KB blocks, measured by `tests/test_volume
 | `/jr` | the largest plan (`kMaxSteps` rows over all five sections, every small record written) | 7, inside the reserve |
 | journal reserve | `bbstore::kJournalReserveBlocks`: the Black Box leaves this many free for the next charger test | 20 |
 | `/bb` | 32 captures of one block each | 34 |
-| **Sum** | 2 + 159 (typical emk) + 20 + 34 | **215 of 90** |
+| **Sum** | 2 + 159 (typical emk) + 20 + 34 | **215 of 90 (145 grown)** |
 
-The caps do not fit the volume. Filled in the device's order on 90 blocks, the stores run out at `/cards` with 1 block free and the Black Box saves 0 of 32 captures; the 64 cards alone leave 18 free, under the 20-block reserve, so the cards by themselves starve the Black Box (the device reached this state with 61 cards, 5 blocks free). Open: the card format or the caps have to change (decision pending); until then `bbstore::Ring::append` refuses a capture before it compresses it and `fs::Fs::used_blocks` answers from memory between writes, so a full volume costs no loop time.
+The caps do not fit the volume. Measured by the test on both sizes:
+
+| Picture | 90 blocks | 145 blocks (grown) |
+| :--- | :--- | :--- |
+| every store at its cap, device order | runs out at `/cards`, 1 free, Black Box 0 of 32 | runs out at `/cards`, 0 free, Black Box 0 of 32 |
+| 64 cards alone, then the Black Box | 18 free (under the 20-block reserve), Black Box 0 of 32 | 73 free, Black Box 32 of 32 |
+
+On 90 blocks the cards by themselves starve the Black Box (the device reached this state with 61 cards, 5 blocks free). The grown volume gives the 64 cards, the journal reserve and all 32 captures room; every store at its cap at once still does not fit (the stores alone want 2 + 159 = 161 blocks before the reserve and the Black Box). Open: the card format or the caps still have to change for that (decision pending); until then `bbstore::Ring::append` refuses a capture before it compresses it and `fs::Fs::used_blocks` answers from memory between writes, so a full volume costs no loop time.
 
 Rules for a new store or record:
 
 - A small record stays at or below `fs::kInlineMax` (256 B, `include/k2/core/fs.hpp`) and says so with a static_assert (the test holds the ones for twins, `.tci`, `/rd.rec` and the e-marker file). One byte over takes a whole 2 KB data block per file: the format-10 card file is 264 B, 8 B over.
 - Inline is cheaper than a block but not free. A littlefs metadata pair is two blocks and splits once its live data passes about half a block (1 KB), and splits never merge back; `write_file` also puts a `.tmp` beside the target. N inline files of S bytes cost about 4 x N x S bytes of blocks, more after churn (64 cards of 256 B: 40-46 blocks fresh, 54-74 after re-tests, measured on the RAM disk).
-- A new store adds a row here and a filler to `tests/test_volume_budget.cpp`, and the sum is compared against 90.
+- A new store adds a row here and a filler to `tests/test_volume_budget.cpp`, and the sum is compared against 90 and 145.
 
 RAM: littlefs state and its 256 B caches are static (`bss` +1.5 KB with the 2 KB Black Box read buffer), no heap. Stack: the deepest littlefs path (rename, orphaning commit, relocating commit, compact, traverse) uses about 0.9 KB, the largest caller frame (`emlib::Library::save`) about 0.7 KB.
 
-The legacy ranges are described in `include/k2/drivers/flash_map.hpp`, which static_asserts at compile time that the regions are sector aligned, in ascending order, disjoint, that the erasable ones lie inside the volume or the legacy range and that the native pages stay outside both (checked again by `tests/test_flash_map.cpp`).
+The legacy ranges are described in `include/k2/drivers/flash_map.hpp`, which static_asserts at compile time that the regions are sector aligned, in ascending order, disjoint, that the erasable ones lie inside the volume or the legacy range and that the native pages stay outside both, plus the run and the two kept pages next to that table and their tie to `flash::fs_block_addr()` (checked again by `tests/test_flash_map.cpp`).
 
 Black Box persistence (`k2/core/bbpersist.hpp`): a finished capture is written once, only when the link has been quiet for 300 ms (a program or erase stalls the main loop for up to a few tens of ms), and not at all after 10 minutes without PD traffic or VBUS change (`pdtrace::idle()`). At boot the newest three entries are reloaded into the RAM capture slots (shown as "saved" in the list); older ones stay in flash and count toward the used/free figure in the list footer. Nothing wipes the ring from the UI or remote.
 

@@ -43,6 +43,7 @@ static_assert(emlib::kFileSize <= fs::kInlineMax);
 static_assert(report_card::kFileSize == fs::kInlineMax + 8);
 
 constexpr std::uint32_t kBlocks = 90;      // fs_flash::kFlashBlocks
+constexpr std::uint32_t kGrownBlocks = 145;   // fs_flash::kGrownBlocks: grown into the blank run (k2/core/fs_grow.hpp)
 constexpr std::uint32_t kLarge = 512;      // one store alone, never out of room
 
 struct Vol {
@@ -227,35 +228,64 @@ void test_each_store_within_its_budget() {
                 bbstore::kJournalReserveBlocks, kBbBudget, 2 + sum + bbstore::kJournalReserveBlocks + kBbBudget, kBlocks);
 }
 
-// Every store at its cap on one 90-block volume, in the device's order: where the volume runs out, and how many captures
+struct Picture {
+    const Row* ran_out = nullptr;   // the first store that did not fit, nullptr = all fit
+    std::uint32_t free_before_bb = 0;
+    unsigned saved = 0;             // Black Box captures above the journal reserve
+};
+
+// Every store at its cap on one volume of `blocks`, in the device's order: where the volume runs out, and how many captures
 // the Black Box gets above the journal reserve.
-void test_all_stores_on_one_volume() {
-    Vol v(kBlocks);
-    const Row* ran_out = nullptr;
+Picture all_stores_on(std::uint32_t blocks) {
+    Vol v(blocks);
+    Picture p;
     for (const Row& r : kRows) {
-        if (!r.fill(v.fs)) { ran_out = &r; break; }
+        if (!r.fill(v.fs)) { p.ran_out = &r; break; }
     }
-    const std::uint32_t free_before_bb = v.free();
-    const unsigned saved = fill_bb(v.fs, bbstore::kJournalReserveBlocks);
-    std::printf("[budget] all stores at their cap on %u blocks: %s%s; %u free; the Black Box saved %u of %u captures\n", kBlocks,
-                ran_out ? "ran out at " : "all fit", ran_out ? ran_out->name : "", free_before_bb, saved, bbstore::kMaxEntries);
-    // Today's caps do not fit the volume (docs/ARCHITECTURE.md "Volume budget"). Pinned, so a change to any cap or format
-    // shows up here and the document follows it.
-    CHECK_EQ(ran_out != nullptr, 1);
-    CHECK_EQ(saved, 0u);
+    p.free_before_bb = v.free();
+    p.saved = fill_bb(v.fs, bbstore::kJournalReserveBlocks);
+    std::printf("[budget] all stores at their cap on %u blocks: %s%s; %u free; the Black Box saved %u of %u captures\n", blocks,
+                p.ran_out ? "ran out at " : "all fit", p.ran_out ? p.ran_out->name : "", p.free_before_bb, p.saved, bbstore::kMaxEntries);
+    return p;
 }
 
-// The cards alone, at their cap after re-tests, every other store empty: the Black Box still gets nothing, because 64 card
-// files leave fewer free blocks than the journal reserve. This is the state the device reached with 61 cards.
-void test_cards_alone_starve_the_black_box() {
-    Vol v(kBlocks);
+// The cards alone at their cap after re-tests, every other store empty, then the Black Box above the journal reserve.
+Picture cards_alone_on(std::uint32_t blocks) {
+    Vol v(blocks);
+    Picture p;
     CHECK_EQ(fill_cards(v.fs), 1);
-    const std::uint32_t free_before_bb = v.free();
-    const unsigned saved = fill_bb(v.fs, bbstore::kJournalReserveBlocks);
-    std::printf("[budget] 64 cards alone on %u blocks: %u free (reserve %u); the Black Box saved %u of %u captures\n", kBlocks,
-                free_before_bb, bbstore::kJournalReserveBlocks, saved, bbstore::kMaxEntries);
-    CHECK_EQ(free_before_bb < bbstore::kJournalReserveBlocks + 1, 1);
-    CHECK_EQ(saved, 0u);
+    p.free_before_bb = v.free();
+    p.saved = fill_bb(v.fs, bbstore::kJournalReserveBlocks);
+    std::printf("[budget] 64 cards alone on %u blocks: %u free (reserve %u); the Black Box saved %u of %u captures\n", blocks,
+                p.free_before_bb, bbstore::kJournalReserveBlocks, p.saved, bbstore::kMaxEntries);
+    return p;
+}
+
+// Today's caps do not fit the 90-block volume (docs/ARCHITECTURE.md "Volume budget"). Pinned, so a change to any cap or
+// format shows up here and the document follows it.
+void test_all_stores_on_one_volume() {
+    const Picture p = all_stores_on(kBlocks);
+    CHECK_EQ(p.ran_out != nullptr, 1);
+    CHECK_EQ(p.saved, 0u);
+}
+
+// 64 card files leave fewer free blocks than the journal reserve on 90 blocks: the Black Box gets nothing. This is the
+// state the device reached with 61 cards.
+void test_cards_alone_starve_the_black_box() {
+    const Picture p = cards_alone_on(kBlocks);
+    CHECK_EQ(p.free_before_bb < bbstore::kJournalReserveBlocks + 1, 1);
+    CHECK_EQ(p.saved, 0u);
+}
+
+// The grown volume (145 blocks, k2/core/fs_grow.hpp) at today's caps: every store in device order still does not fit (the
+// e-marker library and the cards alone ask for more than the 55 new blocks give), but 64 cards, the journal reserve and all
+// 32 Black Box captures do.
+void test_grown_volume_picture() {
+    const Picture all = all_stores_on(kGrownBlocks);
+    CHECK_EQ(all.ran_out != nullptr, 1);
+    const Picture cards = cards_alone_on(kGrownBlocks);
+    CHECK_EQ(cards.free_before_bb >= bbstore::kJournalReserveBlocks + kBbBudget, 1);
+    CHECK_EQ(cards.saved, bbstore::kMaxEntries);
 }
 
 }  // namespace
@@ -264,5 +294,6 @@ int main() {
     test_each_store_within_its_budget();
     test_all_stores_on_one_volume();
     test_cards_alone_starve_the_black_box();
+    test_grown_volume_picture();
     return test_report("test_volume_budget");
 }

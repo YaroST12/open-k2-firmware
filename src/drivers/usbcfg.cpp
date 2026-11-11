@@ -15,7 +15,7 @@ namespace k2::usbcfg {
 // One-time import of the pre-littlefs raw page: a valid record there becomes /usb.cfg, so the USB link
 // setting survives the move (without it USB would default to off and the remote would be unreachable).
 static void import_legacy(fs::Fs& f) {
-    if (f.exists(kPath)) return;
+    if (f.exists(kPath) || fs::legacy_done()) return;   // after the wipe the page may be a volume block (grown volume)
     std::array<std::uint8_t, 8> r{};
     std::memcpy(r.data(), flash::store_view(kLegacyAddr), r.size());
     if (std::memcmp(r.data(), kMagic.data(), kMagic.size()) != 0) return;

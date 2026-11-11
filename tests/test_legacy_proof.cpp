@@ -239,8 +239,28 @@ static void test_wipe_stops_at_the_first_failed_erase() {
     CHECK_EQ(f.erased.size(), 1u);
 }
 
+// The kept top page 0x080FF800 is never erased, not even when it carries our e-marker library signature: the wipe
+// passes over it (and still wipes the proven page below it) instead of stopping at the guard's refusal.
+static void test_wipe_passes_over_the_kept_top_page() {
+    Fake f;
+    f.put_magic(0x080FF800, "K2EL");
+    f.put_magic(0x080FF000, "K2EL");
+    struct Env {
+        Fake& f;
+        std::uint16_t read16(std::uint32_t a) const { return f.read(a); }
+        flash::Status erase(std::uint32_t a) { return flash::store_erase_guarded(f, a); }
+    } env{f};
+    CHECK_EQ(static_cast<int>(flash::store_erase_guarded(f, 0x080FF800)), static_cast<int>(flash::Status::Refused));
+    const legacy::WipeResult r = legacy::wipe(env);
+    CHECK_EQ(static_cast<int>(r.err), static_cast<int>(flash::Status::Ok));
+    CHECK_EQ(r.erased, 1u);
+    CHECK_EQ(f.blank(0x080FF000), 1);
+    CHECK_EQ(f.read(0x080FF800), 0x324B);
+}
+
 int main() {
     test_constants();
+    test_wipe_passes_over_the_kept_top_page();
     test_native_content_is_never_ours();
     test_each_store_is_recognised_by_its_magic();
     test_wrong_store_magic_in_a_page_is_not_ours();

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // One-time cleanup of the old raw-store pages (k2/core/legacy_proof.hpp): erases exactly the sectors that carry the
 // signature of one of this project's old stores and nothing else. Other content in the same address range is
-// left alone, byte for byte.
+// left alone, byte for byte, and the kept top page (flash::kKeptPages) is passed over even with a signature on it.
 //
 // Descending address order. The log snapshot's second sector is proven by the first one, so it must be erased
 // first: a power cut then leaves the first sector's header in place and the next run finishes the job.
@@ -30,7 +30,7 @@ WipeResult wipe(Env& env) {
     auto rd = [&env](std::uint32_t a) -> std::uint16_t { return env.read16(a); };
     for (std::uint32_t a = kEnd; a > kBase;) {
         a -= kSector;
-        if (!ours(a, rd)) continue;
+        if (flash::kept_page(a) || !ours(a, rd)) continue;   // the kept top page is never erased, whatever it holds
         const flash::Status st = env.erase(a);
         if (st != flash::Status::Ok) {
             r.err = st;

@@ -56,12 +56,16 @@ struct Info {
 
 class Fs {
 public:
-    Fs(BlockDevice& dev, std::uint32_t block_count);
+    // `block_count`: the size a plain format() gives. `grown_blocks` (0 = none): the one larger size the volume may grow
+    // to (grow()); the device must answer every block below it.
+    Fs(BlockDevice& dev, std::uint32_t block_count, std::uint32_t grown_blocks = 0);
     Fs(const Fs&) = delete;
     Fs& operator=(const Fs&) = delete;
 
+    // Mounts a volume whose superblock says block_count or grown_blocks; any other size is Err::Invalid (not mounted).
     Err mount();
-    Err format();
+    // Formats at `blocks` (0 = block_count; otherwise block_count or grown_blocks).
+    Err format(std::uint32_t blocks = 0);
     // Mounts; when that fails formats and mounts again. `formatted` tells which happened.
     Err mount_or_format(bool& formatted);
     void unmount();
@@ -92,7 +96,13 @@ public:
     // Removes every ".tmp" leftover of an interrupted write_file in dir.
     Err clean_tmp(const char* dir);
 
-    std::uint32_t block_count() const { return blocks_; }
+    // The mounted volume's size (block_count or grown_blocks); block_count while not mounted.
+    std::uint32_t block_count() const { return mounted_ ? std::uint32_t(lfs_.block_count) : blocks_; }
+    bool grown() const { return grown_ > blocks_ && block_count() == grown_; }
+    // Grows the mounted volume to grown_blocks (one superblock commit, atomic: a power cut leaves the old size or the
+    // new one). The caller proves first that the new blocks hold nothing that is not ours. A failed commit unmounts
+    // and remounts, so the in-memory size never runs ahead of the superblock.
+    Err grow();
     // Blocks in use. The first call after a change walks the whole tree (every metadata block, tens of ms on a full volume);
     // later calls answer from memory until a write, append, remove, rename, mkdir, format or remount through this object.
     std::uint32_t used_blocks();
@@ -107,6 +117,7 @@ private:
 
     BlockDevice& dev_;
     std::uint32_t blocks_;
+    std::uint32_t grown_;
     bool mounted_ = false;
     bool used_known_ = false;
     std::uint32_t used_ = 0;
