@@ -85,7 +85,7 @@ LCD idle hook live in `src/core/main_loop.cpp` (`k2::mainloop::Context`, `instal
 | :--- | :--- |
 | every pass | `usb::poll()` (TinyUSB task, `net::poll`, log flush), `shell_hw::poll`, `msc::poll` (Drive modes), `http_server::service` (Net, K2_NET=1 builds), `Remote::poll()` (runs queued requests; returns Reboot / Screenshot / Dfu / Fault for `main` to carry out), `fctrig::poll` |
 | 1 ms | `fusb302::service`, sample the four buttons through two `ButtonDetector` sets: the physical pins -> `Ui::on_button` (rotation mapping, +/- chord), and the remote-injected `VirtualButton` levels -> `Ui::on_remote_button` (logical keys: never remapped by the rotation or Rotate buttons, no chord) |
-| 20 ms (`kLoopMs`) | `fusb302::poll`, `power::poll`, `dpsniff::poll`, `pdtrace::vbus_sample`, `adc::poll`, accelerometer (bounded; `kPollMs` 100, retry 1 s), `fastcharge::poll`, `boottrace::flush_log`, `session::poll`, `bbpersist::poll`, `Ui::tick` |
+| 20 ms (`kLoopMs`) | `fusb302::poll`, `power::poll`, `dpsniff::poll`, `pdtrace::vbus_sample`, `adc::poll`, `loopguard::poll` (the HID-cable loop 5 V lock, one call, before `Ui::tick`), accelerometer (bounded; `kPollMs` 100, retry 1 s), `fastcharge::poll`, `boottrace::flush_log`, `session::poll`, `bbpersist::poll`, `Ui::tick` |
 | 2000 ms (`kHeartbeatMs`) | `[SYS] Heartbeat` (with `stack_free`, `msp_free`), `[USB]`, `[NET]` / `[HTTP]` (Net), `[PWR]`, `[ADC]`, `[FC]`; `[FC] idle` repeats every 5th heartbeat |
 
 Long blocking work (LCD streaming, `systick::delay_ms`, the e-marker scan, screenshot transfers) calls
@@ -656,6 +656,44 @@ Active operations exist for three things only:
 2. **Identify** (`pd_identify`): a sequencer that asks the partner for Discover Identity, SVIDs, modes and Get_Sink_Cap and records which steps answered.
 
 Everything else (`pd_engine`, `pd_ext`, `pd_vdm`) decodes what is seen. Message preambles matter: SOP (the partner) is used for the trigger and Identify, SOP' (the cable plug) for the e-marker. `pd_emarker_plan` picks the e-marker mode: Vconn (nothing attached or VBUS under 800 mV: the K2 powers the cable and sends SOP' Discover Identity) or Sniff (a source is attached: the K2 only listens for the identity it requests). Rescan policy and CC pin choice are in `pd_rescan` and `pd_ccscan`.
+
+## HID-cable loop guard (the 5 V lock)
+
+The hazard: the K2 on a charger, and a cable from its PD-bus port back into its own left (HID) port. The HID port is USB 2.0 and 5 V only, and its VBUS then follows the PD bus, so any contract or trigger above 5 V puts 9-36 V into it. The guard (`include/k2/core/loop_guard.hpp`, pure `Detector` and `Enforcer`, host test `tests/test_loop_guard.cpp`; the hardware half `src/core/loop_guard.cpp`) sees the loop from three signals the K2 already has, and while it holds the lock nothing may raise VBUS above 5 V. Not verified on hardware yet (ROADMAP).
+
+**Signals, sampled every 20 ms** (`loopguard::poll(now)`, one call in `slow_tasks` right after `adc::poll`, before `Ui::tick`, so the tools see the lock in the same pass): the aux rail (`adc::Snapshot::aux_mv`, PA0 behind the 11:1 divider: the HID port's VBUS), the PD-bus VBUS (`power::vbus_fast_mv()`), and `usb::host_active()` = started AND configured AND not suspended. TinyUSB has no VBUS sensing here, so after a PC is unplugged the device stays "mounted" but suspended; without the suspend term a PC swapped for the loop cable would never be suspected. A negative reading (no snapshot, no monitor) counts as absent, never as a loop.
+
+**Rules (`Detector`):**
+
+| Rule | Condition | Effect |
+|---|---|---|
+| Certain | aux > `kCertainMv` 5.8 V (no USB 2.0 host gives that: 5.25 V max plus divider tolerance) | locks on the first sample |
+| Suspected | aux >= `kAuxPresentMv` 4 V and VBUS >= `kVbusPresentMv` 4 V with no active host for `kSuspectMs` 3 s | `pending()` during the window (logged, shown, blocks nothing), then locks |
+| Clear | aux < `kAuxGoneMv` 3.5 V (`rdintent::kHostAuxMv`, the HID port is empty) for `kClearMs` 1 s, or an active host for 1 s with aux <= `kHostMaxMv` 5.5 V | unlocks; a host never clears a lock while aux is above what a host gives |
+
+Hysteresis: the suspicion starts at 4 V, the clear needs 3.5 V; the certain rule's 5.8 V sits above the host clear band's 5.5 V. `events()` counts the lock events (None -> locked) since boot. A raise inside the 3 s window puts the bus voltage on aux, which the certain rule catches on the next sample. Expected false positives, accepted because the lock only refuses raises: a dumb 5 V brick on the HID port, a PC while the K2's USB link is off (the default: the K2 never enumerates, a PC and a loop look alike) and a PC that suspends the K2. A PC on the HID port with the link on, and an empty HID port, never lock.
+
+**Choke points.** Every raise goes through one of these, and each refuses under the lock:
+
+| Path | Where | Under the lock |
+|---|---|---|
+| PD request builder (auto-sink, trigger, re-announce, EPR entry) | `pd::Sink::set_hv_lock` / `plan_for`, `src/pd/pd_sink.cpp` | any plan above 5 V is `Err::OverCap`; no EPR entry; a held re-announce falls back to PDO 1. The lock edge releases a contract or a Request in flight above 5 V to PDO 1 and drops an EPR entry |
+| PD driver request entry (lab `pd request`, Ui trigger) | `fusb302::request_inner`, `src/drivers/fusb302.cpp` | position > 1 refused with OverCap and a `[LOOP]` line; `sink_set_hv_lock` forwards the lock edges to the sink and aborts a prepare |
+| PD trigger page | `Ui::trigger`, `src/ui/ui.cpp` | above 5 V refused before the confirm prompt (OverCap) |
+| Legacy triggers and the legacy scanner | `fc::Env::hv_locked` (`fctrig.cpp` HwEnv), `fc_engine.cpp` validate / poll step, `fc_scan.cpp` start / poll | a target above `fc::kLockMv` 5 V is `Fail::OverLimit`; a running session with a target above 5 V or VBUS above 5.5 V aborts (0 V on D+/D-, which every legacy protocol answers with 5 V) |
+| Charger test | `ct::Input::loop_lock`, `src/chargertest/charger_test.cpp` | START (and resume) refused with `Reason::Loop`; a run in flight fails with `Reason::Loop` at the next fault check |
+| PD Stress | `Ui::tick` / `foreign_busy`, `src/ui/ui.cpp` | start refused (Busy, the lock text), a run cancelled (released to 5 V) |
+| Twin proof | `make_input`, `src/twin/twin_hw.cpp` | busy while locked: no start, a run cancelled |
+| Lab shell (D+/D- drive, raw levels) | `lab_guard`, `drive`, `src/core/shell_hw.cpp` | refused with the lock text; raw levels forced back to Hi-Z |
+| Remote | everything above | the remote reaches the K2 only through a USB host, which clears or prevents a lock; the gates above cover the 1 s clear window |
+
+Left alone, with the reason: the UFCS probe (5 V only by design), handback (the K2 raises nothing; the far side of a loop is the HID port's Rd, which never negotiates), `request_epr_info` (information only), the restart-abort and release paths (PDO 1 only), `pd-reread` (a 5 V contract), `lab_load` (current, not voltage), Data_Reset and the VCONN ops (no voltage), and the rd_comeback boot (below).
+
+**Enforcement (`Enforcer`).** On the lock edge: the 5 V order. Most of it is the lock itself (the sink's edge release, the legacy engine's abort, the charger test's Reason::Loop, PD Stress and twin cancelled); `act()` adds `fusb302::sink_release()` when VBUS is above `kSafeMv` 5.5 V. VBUS still above `kStuckMv` 6 V `kOrderMs` 600 ms later (the SPR source transition is 550 ms at most): `fusb302::sink_hard_reset`. Still above 6 V `kResetMs` 1 s after that (tSafe0V is 650 ms): `fusb302::cc_detach()` (refused with a boot-pinned Rd or inline; the refusal is logged and nothing more is tried). A VBUS that came back to 5.5 V or less and rises above 6 V again re-arms the sequence.
+
+**Visibility** (no new page or component): a Caution footer `HID-cable loop: 5V lock` on whatever page is up (not on the trigger menu, which owns its footer); the same text is PD Stress's busy reason, the shell's lab refusal and the charger test's `Reason::Loop` name (#47, the card's 6-bit reason field now holds 48 values). `GET_STATE` part 2 (diag) grows to 29 bytes: `loop` (bits 0-1 reason none / certain / suspected, bit 2 pending, bit 3 host active) and `loop_events` (u16); `k2_remote state --json` decodes it as `"loop": {"locked", "reason", "pending", "host", "events"}` and an older 26-byte reply has no key. `[LOOP]` log lines: lock, clear, suspect, suspect over, every enforcer step, a refused detach, a refused request, a refused trigger.
+
+**Boot and `rdintent::host_powered`.** `rdintent::host_powered(aux_mv)` reads "aux up early in boot" as a PC on the HID port, and a host-powered comeback stays passive (`rd_comeback` resumes no session). Through a loop the aux rail is the PD bus, so a comeback boot after a Hard Reset in a loop is judged host-powered and stays passive. That is the safe side, and the guard neither relies on it nor changes it: aux up at boot is no proof of a PC, which is why the guard's own clear needs an active (configured, awake) host, not just aux. A looped K2 that comes back passive is then locked by the guard within 3 s (suspected) or at the first raise (certain).
 
 ## Boot info
 

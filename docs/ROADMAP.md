@@ -701,11 +701,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 
 ## Specified work (not started)
 
-- **HID-cable loop: 5 V lock and the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from
-  its PD-bus port back into its own left (HID) port, so the HID port's VBUS follows the PD bus.
-  - Lock: once a loop is seen (aux rail above vSafe5V, or aux and VBUS both up with no USB host configured), every way of
-    raising VBUS refuses (auto-sink, charger test, PD trigger, PPS/AVS, legacy triggers, PD Stress, lab ops), and a
-    contract already above 5 V goes back to 5 V at once. Never run a looped K2 above 5 V on hardware.
+- **HID-cable loop: the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from its PD-bus
+  port back into its own left (HID) port, so the HID port's VBUS follows the PD bus. The 5 V lock half is built (see
+  "Not verified on hardware"); the probe is not started.
   - Probe: an on-device lab that, at 5 V, reads what the loop cable shows (VBUS and GND drop under a K2 current step,
     D+/D- continuity through the HID PHY's line state, the CC wire through the HID port's Rd, the e-marker) and shows
     the raw dump as a QR record for host decoding (`tools/k2_qr.py`), kept on flash for `k2_remote` later.
@@ -889,6 +887,15 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 - OPPO VOOC / SVOOC: no handshake seen yet (CHARGER_QUIRKS).
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
+- **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
+  aux > 5.8 V, suspected after 3 s of aux and VBUS >= 4 V with no configured, awake USB host; cleared by an empty HID
+  port or an active host for 1 s. Under the lock every raise refuses (PD sink and request entry, PD trigger, legacy
+  triggers and scanner, charger test `Reason::Loop`, PD Stress, twin, lab shell), a contract above 5 V goes to PDO 1,
+  then Hard Reset (600 ms above 6 V), then CC detach (1 s later). Validate at 5 V only, never request above 5 V while
+  looped: loop cable + charger -> `[LOOP] suspect` then `[LOOP] lock suspected`, the Caution footer "HID-cable loop: 5V
+  lock" after 3 s, charger test START refused (Loop), PD trigger above 5 V refused, legacy trigger refused; then a PC
+  on HID (USB link on) + charger -> no lock, `state --json` shows `loop.host` true and `loop.locked` false; logs read
+  from the Black Box / log after the PC is back.
 
 ## Core platform
 
