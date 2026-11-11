@@ -1536,8 +1536,10 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     case Stage::Refuse: f.put("Direct plug is the sure way"); return FooterTone::Caution;
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
+        const fusb302::LineTrial lt = fusb302::line_trial();   // the direct-plug fallback's own fact: the line our Rd is on while it is live
         const auto line = waitplus::footer(wait_.state() == pd::VbusWait::State::Ready, cc1, cc2, ctx_.vbus_fast_mv,
-                                           static_cast<uint32_t>(std::max<int32_t>(0, static_cast<int32_t>(ctx_.now - wait_t0_))));
+                                           static_cast<uint32_t>(std::max<int32_t>(0, static_cast<int32_t>(ctx_.now - wait_t0_))),
+                                           lt.live ? lt.line : uint8_t(0), lt.moves);
         f.put(line.text);
         return line.tone == waitplus::Tone::Ok ? FooterTone::Ok : line.tone == waitplus::Tone::Caution ? FooterTone::Caution : FooterTone::Info;
     }
@@ -1792,6 +1794,8 @@ namespace {
 using result_layout::Tone;
 constexpr const char *kChecks[3] = {"Rd presented", "VBUS up", "Source caps"};
 static_assert(all_fit(kChecks, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
+constexpr const char *kRdOn[2] = {"Rd on CC1", "Rd on CC2"};   // the checklist's first row once the Rd sits on a line
+static_assert(all_fit(kRdOn, kSmallAdvPx, 190), "a Waiting checklist item is wider than its row");
 // The Review table: five rows of 26 px from the body top, the key at x6 and the value from x72 (18 cells).
 constexpr kit::KvLayout kKv{kit::kBodyY, kit::kRowH, 6, nullptr, nullptr, 72, 18, Align::Left};
 // The Detail table: under the verdict band, the value column at x92 (16 cells).
@@ -2030,14 +2034,18 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     }
 
     const bool done[3] = {true, vbus >= pd::kStartVbusMv, caps.valid};
+    // The first row names the line the Rd sits on ("Rd on CC2") once one is picked; the signature carries it, so a move repaints
+    // the row and an idle tick writes nothing.
+    const uint8_t rd_line = fusb302::active_cc();
     for (int i = 0; i < 3; ++i) {
-        const uint32_t s = done[i] ? 2u : 1u;
+        const uint32_t s = (done[i] ? 2u : 1u) | (i == 0 ? uint32_t(rd_line & 3u) << 2 : 0u);
         if (s == cell_sig_[5 + i]) continue;
         cell_sig_[5 + i] = s;
         const int16_t y = static_cast<int16_t>(141 + i * 26);
         gfx_fill(c, 0, y, c.w, 25, kBg);
         kit::draw_verdict(c, 8, static_cast<int16_t>(y + 6), 14, 14, done[i] ? kit::Verdict::Pass : kit::Verdict::None, {}, kBg);
-        gfx_text(c, kSmall, 28, static_cast<int16_t>(y + 5), kChecks[i], done[i] ? kText : kDim, kBg);
+        gfx_text(c, kSmall, 28, static_cast<int16_t>(y + 5), i == 0 && (rd_line == 1 || rd_line == 2) ? kRdOn[rd_line - 1] : kChecks[i],
+                 done[i] ? kText : kDim, kBg);
         gfx_fill(c, 0, static_cast<int16_t>(y + 25), c.w, 1, kRule);
     }
 }

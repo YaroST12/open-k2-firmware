@@ -48,6 +48,29 @@ static void test_footer_tone_and_fit() {
     CHECK_COND(std::strlen(footer(true, 0, 0, 0, 0).text) <= kFooterCells);
 }
 
+// The direct-plug line fallback (fusb302::line_trial) names the line while the schedule is live; it outranks the hold-+ hint
+// for a charger that shows an Rp, and the "no charger" line keeps its place.
+static void test_footer_names_the_line_being_tried() {
+    CHECK_STR(footer(false, 1700, 1700, 0, 100, 1, 0).text, "CC1 picked. Waking charger");
+    CHECK_STR(footer(false, 1700, 1700, 0, 100, 2, 0).text, "CC2 picked. Waking charger");
+    CHECK_STR(footer(false, 1700, 1700, 0, 100, 2, 1).text, "Now on CC2. Waking charger");
+    CHECK_STR(footer(false, 1700, 1700, 0, 100, 1, 3).text, "Now on CC1. Waking charger");
+    CHECK_EQ(int(footer(false, 1700, 1700, 0, 100, 1, 0).tone), int(Tone::Info));
+    CHECK_EQ(int(footer(false, 1700, 1700, 0, 100, 2, 2).tone), int(Tone::Info));
+    // No line live (0): the schedule is over or never ran, the hold-+ hint returns.
+    CHECK_STR(footer(false, 1700, 1700, 0, 100, 0, 3).text, "No VBUS. Hold + few secs");
+    CHECK_STR(footer(false, 1700, 1700, 0, 100, 0, 0).text, "No VBUS. Hold + few secs");
+    // Nothing on either CC: the trial cannot be live, and "No charger" keeps its place even if told otherwise.
+    CHECK_STR(footer(false, 0, 0, 0, 100, 1, 0).text, "No charger. Hold + few secs");
+    // A charger that is up, or ready, is not a trial.
+    CHECK_STR(footer(false, 1700, 1700, 800, 100, 1, 0).text, "Standby. Wake the charger");
+    CHECK_STR(footer(true, 1700, 1700, 0, 100, 1, 0).text, "Charger up, starting");
+    // Every trial line fits the footer.
+    for (unsigned line : {1u, 2u})
+        for (unsigned mv : {0u, 1u, 2u, 3u})
+            CHECK_COND(std::strlen(footer(false, 1700, 1700, 0, 100, uint8_t(line), uint8_t(mv)).text) <= kFooterCells);
+}
+
 static void test_cc_open() {
     CHECK_COND(cc_open(0));
     CHECK_COND(cc_open(199));
@@ -110,6 +133,7 @@ static void test_watch_second_press_in_tail() {
 int main() {
     test_footer_priorities();
     test_footer_tone_and_fit();
+    test_footer_names_the_line_being_tried();
     test_cc_open();
     test_watch_window();
     test_watch_not_waiting();

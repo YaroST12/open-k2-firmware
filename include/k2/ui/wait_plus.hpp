@@ -24,10 +24,17 @@ constexpr bool cc_open(int mv) { return mv >= 0 && (mv < 200 || mv >= 2200); }
 // The footer of Waiting, highest priority first. `waited_ms` = time since START's wait began; a negative reading = unknown.
 // "Hold + few secs" only where no VBUS is up (the key helps nothing once the charger has woken); the lines for a charger
 // that is already up are the older ones.
-constexpr Line footer(bool ready, int cc1_mv, int cc2_mv, std::int32_t vbus_mv, std::uint32_t waited_ms) {
+// `trial_line` / `trial_moves`: fusb302::line_trial() (the direct-plug line fallback; line 0 = no schedule live). While it is
+// live, an Rp on a line and no VBUS read "CC<n> picked. Waking charger" (no move yet) or "Now on CC<n>. Waking charger" (after
+// a move): the schedule is the K2's own wake attempt, so it outranks the hold-+ hint, which returns when the schedule is over.
+// "No charger" (no Rp on either line) keeps its place: nothing to wake.
+constexpr Line footer(bool ready, int cc1_mv, int cc2_mv, std::int32_t vbus_mv, std::uint32_t waited_ms,
+                      std::uint8_t trial_line = 0, std::uint8_t trial_moves = 0) {
     if (ready) return {"Charger up, starting", Tone::Ok};
     if (vbus_mv < 500) {
         if (cc_open(cc1_mv) && cc_open(cc2_mv)) return {"No charger. Hold + few secs", Tone::Caution};
+        if (trial_line == 1) return trial_moves ? Line{"Now on CC1. Waking charger", Tone::Info} : Line{"CC1 picked. Waking charger", Tone::Info};
+        if (trial_line == 2) return trial_moves ? Line{"Now on CC2. Waking charger", Tone::Info} : Line{"CC2 picked. Waking charger", Tone::Info};
         return {"No VBUS. Hold + few secs", Tone::Info};   // an Rp is on a line (or the reading is unknown): asleep
     }
     if (vbus_mv < 4500) return {"Standby. Wake the charger", Tone::Info};

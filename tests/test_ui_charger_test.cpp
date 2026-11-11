@@ -3836,6 +3836,38 @@ static void test_waiting_footer_says_how_to_wake() {
         CHECK_EQ(footer_says(c.text, c.color), true);
     }
 }
+// The direct-plug line fallback shows on Waiting: the footer names the line the Rd is on (and, after a move, that it moved),
+// the checklist's first row names it too, and "Hold + few secs" returns once the schedule is over. Nothing repaints on an
+// idle tick (the footer is cached by its text, the checklist row by its signature).
+static void test_waiting_names_the_line_being_tried() {
+    fixture(); g_stub.pm.vbus_mv = 0; set_cc(1700, 1700);
+    Ui ui; open(ui);
+    enter_waiting(ui, 1500);
+    ui.tick(1600);
+    CHECK_EQ(footer_says("No VBUS. Hold + few secs", kText), true);   // no schedule yet: the older hint
+    g_stub.cc = 1; g_stub.trial_line = 1; g_stub.trial_moves = 0; g_stub.trial_live = true;
+    ui.tick(1700);
+    CHECK_EQ(footer_says("CC1 picked. Waking charger", kText), true);
+    check_text_at(kSmall, 146, "Rd on CC1", kText, kBg, 28);
+    dump_screen("wait_line_picked");   // K2_DUMP: the screen for the design review (runs/ui-wait-line)
+    g_stub.cc = 2; g_stub.trial_line = 2; g_stub.trial_moves = 1;   // one move made
+    ui.tick(1800);
+    CHECK_EQ(footer_says("Now on CC2. Waking charger", kText), true);
+    check_text_at(kSmall, 146, "Rd on CC2", kText, kBg, 28);
+    dump_screen("wait_line_moved");
+    g_stub.trial_line = 1; g_stub.trial_moves = 3; g_stub.cc = 1;   // the fourth dwell
+    ui.tick(1900);
+    CHECK_EQ(footer_says("Now on CC1. Waking charger", kText), true);
+    g_stub.trial_live = false; g_stub.trial_line = 0;   // the schedule ran out: the key hint takes the footer back
+    ui.tick(2000);
+    CHECK_EQ(footer_says("No VBUS. Hold + few secs", kText), true);
+    dump_screen("wait_line_exhausted");
+    // No Rp on either line: nothing to wake, whatever the schedule says.
+    set_cc(0, 0); g_stub.trial_line = 1; g_stub.trial_live = true;
+    ui.tick(2100);
+    CHECK_EQ(footer_says("No charger. Hold + few secs", kCaution), true);
+    dump_screen("wait_no_charger");
+}
 static void test_waiting_logs_the_plus_hold() {
     fixture(); g_stub.pm.vbus_mv = 0; set_cc(0, 0);
     Ui ui; open(ui);
@@ -3896,6 +3928,7 @@ static void test_waiting_cc_cells_show_raw_mv_while_plus_is_down() {
 int main() {
     test_waiting_plus_minus_do_nothing();
     test_waiting_footer_says_how_to_wake();
+    test_waiting_names_the_line_being_tried();
     test_waiting_logs_the_plus_hold();
     test_plus_hold_off_waiting_is_silent();
     test_waiting_cc_cells_show_raw_mv_while_plus_is_down();
