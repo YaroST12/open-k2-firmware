@@ -918,8 +918,18 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
         typec_row_text(vbus_, rp_ma, v);   // the debounced VBUS (Row D), like the list body
         if (v.view().empty()) v.put("unknown");
     }
-    if (sink_tab) put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
-    else if (legacy_row_protocol(ctx_.fc) && ctx_.fc != fastcharge::Protocol::Pending) {
+    if (sink_tab) {
+        put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
+        if (vooc_) {
+            // The inline VOOC monitor: the steady command and its last reply word, raw (what the word means is a
+            // guess, docs/FASTCHARGE_PROTOCOLS.md), so no unit; "-" before the first reply.
+            StrBuf<28> &v = R.add("VOOC", kDim);
+            v.put("0x82 ");
+            const uint32_t w = vooc_ & 0xFFFFu;
+            if (w == vooc::kNoReply) v.put("-");
+            else v.put("0x").put_hex(w, 3).put(" raw");
+        }
+    } else if (legacy_row_protocol(ctx_.fc) && ctx_.fc != fastcharge::Protocol::Pending) {
         StrBuf<6> fcn;
         fc_pill_text(ctx_.fc, fcn);
         if (!fcn.view().empty()) R.add("Legacy", kEnergy).put(fcn.view());
@@ -1065,7 +1075,10 @@ void ConnectionPage::update(uint32_t now_ms) {
     const int32_t vbus_mv = static_cast<int32_t>(
         vbus_h_.commit(uint32_t(typec_vbus_mv(ctx_.pm_online, ctx_.vbus_fast_mv)), now_ms));
     vbus_ = vbus_mv;
+    if (!ctx_.vooc.seen) vooc_ = 0;   // a session end clears the note at once
+    else if (!vooc_ || uint32_t(now_ms - vooc_at_) >= kVoocNoteMs) { vooc_ = 1u << 16 | ctx_.vooc.r82; vooc_at_ = now_ms; }
     uint32_t c = 2166136261u;
+    c = fnv(c, vooc_);
     c = fnv(c, uint32_t(link.attached()) | uint32_t(link.waiting()) << 1 | uint32_t(link.inline_mode()) << 2
               | uint32_t(pd::is_fake()) << 3 | uint32_t(fusb302::active_cc()) << 4
               | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | fc_ << 16
@@ -1180,6 +1193,7 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = fnv(h, uint32_t(ul.family) | uint32_t(ul.tbt) << 4 | uint32_t(ul.dp) << 8 | uint32_t(ul.cable_limited) << 9 | ul.mbps << 12);
         h = fnv(h, uint32_t(ul.dp_adv) | uint32_t(ul.tbt_adv) << 1 | uint32_t(ul.dp_2lane) << 2 | uint32_t(ul.dp_4lane) << 3);
         h = fnv(h, fc_ | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
+        h = fnv(h, vooc_);   // the Sink tab's raw VOOC note (sampled every kVoocNoteMs)
     }
     if (sig_valid_ && h == sig_) return;
     const bool redraw = !sig_valid_;   // invalidated (page entered, tab, pop-up closed, repaint pass): the area is stale

@@ -42,6 +42,8 @@ struct Backend {
     virtual const char* sniff(int mode, std::uint32_t rate) = 0;
     // PD black box stream (k2/core/trace_stream.hpp): 0 stop, 1 stream from now, 2 stream from the oldest ring record.
     virtual const char* trace(int mode) { (void)mode; return "trace not available"; }
+    // Inline VOOC monitor (k2/fastcharge/dpsniff.hpp, passive): 0 off, 1 on (RAM switch), 2 keep; prints the summary itself.
+    virtual const char* vooc_monitor(int mode) { (void)mode; return "vooc monitor not available"; }
     // Multiplexed live debug stream (k2/core/dbg_stream.hpp): `mask` 0 stops it, else the kinds to send as bits (1 log, 2 trace,
     // 4 power, 8 run); `power_hz` 0 = default; `history` starts from what the rings still hold instead of from now.
     virtual const char* stream(unsigned mask, unsigned power_hz, bool history) {

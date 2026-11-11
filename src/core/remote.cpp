@@ -1120,6 +1120,18 @@ remote::SniffInfo Remote::lab_sniff(uint8_t sub) {
     return out;
 }
 
+// --- vooc-monitor (k2/vooc-detect) ---
+// Inline VOOC monitor (k2/fastcharge/dpsniff.hpp): the switch is RAM only and only gates the passive listener; the
+// fast-charge poll starts / stops it, so a switch-off releases the lines on the next poll.
+remote::VoocSnapshot Remote::vooc_monitor(uint8_t set) {
+    if (set <= 1) dpsniff::monitor_enable(set == 1);
+    const dpsniff::MonitorInfo m = dpsniff::monitor_info();
+    remote::VoocSnapshot v;
+    v.enabled = m.enabled; v.running = m.running; v.s = m.s;
+    return v;
+}
+// --- end vooc-monitor ---
+
 // UFCS tuner and 5 V probe (k2/fastcharge/fctrig.hpp). The tuner is RAM only; the probe never raises VBUS and never
 // sends a Request. A refused probe start answers Ok with the reason in the status block's `start` byte.
 remote::UfcsInfo Remote::ufcs_info() {

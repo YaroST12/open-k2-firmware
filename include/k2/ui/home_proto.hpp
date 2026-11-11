@@ -28,6 +28,8 @@ struct ProtoSource {
     int32_t vbus_mv = 0;                // live VBUS, only rounded to a nominal level for protocols that carry none
     uint32_t typec_ma = 0;              // the Rp current of a source that sent no PD caps (0 = undecided)
     uint32_t req_period_ms = 0;         // period of the last sink Request (0 = fewer than two), the PPS keep-alive
+    bool vooc_live = false;             // the inline VOOC monitor sees a live session (vooc::Live::seen)
+    int32_t ibus_ma = 0;                // live IBUS (signed; only its magnitude is shown, for a VOOC session)
 };
 
 ProtoInfo derive_proto(const ProtoSource &s);

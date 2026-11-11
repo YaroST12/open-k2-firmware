@@ -4,6 +4,7 @@
 #include "k2/core/log.hpp"
 #include "k2/fastcharge/dpsniff.hpp"
 
+#include "k2/core/critical.hpp"
 #include "k2/drivers/dpdm.hpp"
 #include "k2/drivers/mode_ram.hpp"
 #include "k2/pd/pdtrace.hpp"
@@ -32,6 +33,13 @@ Status g_status;
 std::uint32_t g_arm_cycles, g_arm_us;
 volatile bool g_live;     // the ISR records only while set
 
+// Inline VOOC monitor: the decoder runs in the ISR (no edge buffer); the main loop ticks it and copies the summary with
+// interrupts masked. g_mon_ev collects the decoder's events between two monitor_poll() calls.
+vooc::Decoder g_dec;
+volatile bool g_mon;
+volatile unsigned g_mon_ev;
+bool g_mon_enabled = true;
+
 constexpr std::uint32_t kLines = (1u << 7) | (1u << 2);   // EXTI7 = PA7 (D+), EXTI2 = PB2 (D-)
 
 }  // namespace
@@ -39,8 +47,10 @@ constexpr std::uint32_t kLines = (1u << 7) | (1u << 2);   // EXTI7 = PA7 (D+), E
 void isr_body() {
     const std::uint32_t c = dpdm::cycles();
     reg::exti().PR = kLines;
-    if (!g_live) return;
+    if (!g_live && !g_mon) return;
     const std::uint32_t w = edges::pack(c, pins::dp_dm_sw2.read(), pins::sw_pa7.read());
+    if (g_mon) g_mon_ev = g_mon_ev | g_dec.push(w);
+    if (!g_live) return;
     if (g_stream) g_ring.push(w);
     else g_rec.push(w);
 }
@@ -60,6 +70,7 @@ void exti_on() {
     reg::nvic().ISER[0] = (1u << 8) | (1u << 23);
 }
 void exti_off() {
+    if (g_mon) return;   // the inline monitor still listens
     reg::nvic().ICER[0] = (1u << 8) | (1u << 23);
     auto& ex = reg::exti();
     ex.IMR &= ~kLines;
@@ -228,6 +239,92 @@ bool selftest() {
     }
     dpdm::set_dp(dpdm::Drive::Sniff);
     return true;
+}
+
+// ---- inline VOOC monitor ----
+
+namespace {
+
+void monitor_log(unsigned ev, const vooc::Summary& s) {
+    if (ev & vooc::kSessionEnd)
+        K2LOG("[VOOC] session %u end frames=%u pairs=%u hs=%u/%u ident=0x%02X/0x%03X cmds=%u+%u r82=0x%03X min=0x%03X "
+              "max=0x%03X n=%u p82_us=%u\n",
+              unsigned(s.sessions), unsigned(s.frames), unsigned(s.pairs), unsigned(s.handshake), unsigned(s.hs_pairs),
+              unsigned(s.ident), unsigned(s.ident_reply), unsigned(s.ncmds), unsigned(s.other), unsigned(s.r82_last),
+              unsigned(s.r82_min), unsigned(s.r82_max), unsigned(s.r82_n), unsigned(s.p82_mean_us()));
+    if (ev & vooc::kSessionStart)
+        K2LOG("[VOOC] session %u start (inline, passive) wakes=%u partials=%u edges=%u\n", unsigned(s.sessions),
+              unsigned(s.wakes), unsigned(s.partials), unsigned(s.edges));
+}
+
+void monitor_start() {
+    {
+        Critical cs;
+        g_dec.reset();
+        g_mon_ev = 0;
+    }
+    dpdm::set_dp(dpdm::Drive::Sniff);   // floating inputs: nothing is driven, no pull
+    dpdm::set_dm(dpdm::Drive::Sniff);
+    g_mon = true;
+    exti_on();
+    K2LOG("[VOOC] monitor on (inline: D+ PA7 / D- PB1, PB2 floating)\n");
+}
+
+void monitor_stop(bool lines_free) {
+    unsigned ev;
+    vooc::Summary s;
+    {
+        Critical cs;
+        g_mon = false;
+        ev = g_mon_ev | g_dec.end(dpdm::cycles());   // closes the open session
+        g_mon_ev = 0;
+        s = g_dec.summary();
+    }
+    monitor_log(ev, s);
+    const bool sniffing = g_sess.armed() || g_stream;
+    if (!sniffing) exti_off();
+    // Only undo our own state: an engine that took the lines meanwhile owns them; a Black Box arm keeps the Sniff state.
+    if (lines_free && !sniffing) {
+        dpdm::set_dp(dpdm::Drive::V0p6);
+        dpdm::set_dm(dpdm::Drive::V0p6);
+    }
+    K2LOG("[VOOC] monitor off sessions=%u frames=%u lines=%s\n", unsigned(s.sessions), unsigned(s.frames),
+          lines_free && !sniffing ? "idle" : "kept");
+}
+
+}  // namespace
+
+void monitor_poll(bool wanted, bool lines_free) {
+    if (wanted && !g_mon) monitor_start();
+    else if (!wanted && g_mon) monitor_stop(lines_free);
+    if (!g_mon) return;
+    unsigned ev;
+    vooc::Summary s;
+    {
+        Critical cs;
+        ev = g_mon_ev | g_dec.tick(dpdm::cycles());
+        g_mon_ev = 0;
+        if (ev) s = g_dec.summary();
+    }
+    if (ev) monitor_log(ev, s);
+}
+
+bool monitoring() { return g_mon; }
+void monitor_enable(bool on) { g_mon_enabled = on; }
+bool monitor_enabled() { return g_mon_enabled; }
+
+MonitorInfo monitor_info() {
+    MonitorInfo m;
+    m.enabled = g_mon_enabled;
+    Critical cs;
+    m.running = g_mon;
+    m.s = g_dec.summary();
+    return m;
+}
+
+vooc::Live monitor_live() {
+    Critical cs;
+    return vooc::live_of(g_mon, g_dec.summary());
 }
 
 }  // namespace k2::dpsniff

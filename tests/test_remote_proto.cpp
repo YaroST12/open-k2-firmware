@@ -986,6 +986,57 @@ static void test_flash_dump() {
     CHECK_EQ(f.dump_calls, 2);
 }
 
+// --- vooc-monitor (k2/vooc-detect) ---
+// FC op 4: the inline VOOC monitor, page 0 summary, pages 1 / 2 the command rows; an optional switch byte first.
+static void test_fc_vooc_monitor() {
+    Fake f; Frame r;
+    k2::vooc::Summary &s = f.vooc_snap.s;
+    f.vooc_snap.enabled = true; f.vooc_snap.running = true;
+    s.sessions = 2; s.wakes = 1; s.partials = 3; s.edges = 0x01020304; s.frames = 111; s.pairs = 55;
+    s.active = true; s.handshake = true; s.hs_pairs = 26; s.ident = 0xA8; s.ident_reply = 0x00D;
+    s.r82_last = 0x52; s.r82_min = 0x4C; s.r82_max = 0x7F; s.r82_n = 18;
+    s.p82_last_us = 43980; s.p82_sum_us = 16 * 46230; s.p82_n = 16; s.other = 5;
+    s.ncmds = 10;
+    for (unsigned i = 0; i < 10; i++) s.cmds[i] = {static_cast<uint8_t>(0x80 + 2 * i), static_cast<uint16_t>(i + 1), static_cast<uint16_t>(0x100 + i)};
+    // Page 0, no switch: 44 bytes in the documented order.
+    CHECK_EQ(run(f, request(0x32, 1, {4, 0}), r), 1);
+    check_header(r, 0x32, 1, Status::Ok, 44);
+    check_bytes(r, kRspHeader, {0x0F, 2, 0, 1, 0, 3, 0, 0x04, 0x03, 0x02, 0x01, 111, 0, 0, 0, 55, 0, 0, 0,
+                                26, 0xA8, 0x0D, 0x00, 0x52, 0, 0x4C, 0, 0x7F, 0, 18, 0,
+                                0xCC, 0xAB, 0, 0, 0x96, 0xB4, 0, 0, 16, 0, 10, 5, 0});
+    CHECK_EQ(f.vooc_set, 2);
+    // Page 1: rows 0-7; page 2: rows 8-9.
+    CHECK_EQ(run(f, request(0x32, 2, {4, 1}), r), 1);
+    check_header(r, 0x32, 2, Status::Ok, 1 + 5 * 8);
+    check_bytes(r, kRspHeader, {8, 0x80, 1, 0, 0x00, 0x01, 0x82, 2, 0, 0x01, 0x01});
+    CHECK_EQ(run(f, request(0x32, 3, {4, 2}), r), 1);
+    check_header(r, 0x32, 3, Status::Ok, 1 + 5 * 2);
+    check_bytes(r, kRspHeader, {2, 0x90, 9, 0, 0x08, 0x01, 0x92, 10, 0, 0x09, 0x01});
+    // The switch: off, then on; flags bit0 follows.
+    CHECK_EQ(run(f, request(0x32, 4, {4, 0, 0}), r), 1);
+    check_header(r, 0x32, 4, Status::Ok, 44);
+    CHECK_EQ(f.vooc_set, 0);
+    CHECK_EQ(r[kRspHeader] & 1, 0);
+    CHECK_EQ(run(f, request(0x32, 5, {4, 1, 1}), r), 1);
+    CHECK_EQ(f.vooc_set, 1);
+    // An empty table: page 2 answers n = 0.
+    s.ncmds = 0;
+    CHECK_EQ(run(f, request(0x32, 6, {4, 2}), r), 1);
+    check_header(r, 0x32, 6, Status::Ok, 1);
+    // Bad page, bad switch, bad lengths never reach the backend.
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x32, 7, {4, 3}), r), 1);
+    check_header(r, 0x32, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 8, {4, 0, 2}), r), 1);
+    check_header(r, 0x32, 8, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 9, {4}), r), 1);
+    check_header(r, 0x32, 9, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 10, {4, 0, 1, 0}), r), 1);
+    check_header(r, 0x32, 10, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls);
+}
+// --- end vooc-monitor ---
+
 // BOOT_INFO (0x35): part 0 = the K2B1 text in 48-byte chunks (rendered at offset 0 only), part 1 = 9-byte power samples, 5 per reply.
 // UFCS (0x52): status block, field get / set with range check, reset / probe / stop, blob read in chunks.
 static void test_ufcs() {
@@ -2345,6 +2396,7 @@ int main() {
     test_adc_raw();
     test_ripple();
     test_fc();
+    test_fc_vooc_monitor();   // vooc-monitor
     test_ripple_frame();
     test_pdos();
     test_emarker();

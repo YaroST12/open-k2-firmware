@@ -89,6 +89,7 @@ struct UiContext {
     std::optional<adc::Reading> analog;                          // averaged ADC sweep, once available
     bool plus_key = false;       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
     fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
+    vooc::Live vooc{};           // inline VOOC monitor: a proven session now + the last raw 0x82 reply (fastcharge::vooc_live)
     bool trig_armed = false;     // trigger above 5 V: first OK given, waiting for the second
     uint32_t cap_mv = 5000;      // highest voltage a request may ask for (power monitor limits)
     cable_r::Meter cable;                                        // passive two-point cable resistance
@@ -791,6 +792,10 @@ private:
     Held fc_h_, dp_h_, dm_h_, cc1_h_, cc2_h_, vbus_h_;
     uint32_t fc_ = 0;                                   // the committed (debounced) values the paint reads
     std::int32_t dp_ = -1, dm_ = -1, cc1_ = -1, cc2_ = -1, vbus_ = -1;
+    // The inline VOOC monitor's raw note (Sink tab, no PD): 0 = no live session, else 1 << 16 | the last 0x82 reply word,
+    // sampled at most every kVoocNoteMs (the reply moves every ~45 ms; digits change at most 4 times a second).
+    static constexpr uint32_t kVoocNoteMs = 250;
+    uint32_t vooc_ = 0, vooc_at_ = 0;
 };
 
 class EmarkerPage final : public PageBase {

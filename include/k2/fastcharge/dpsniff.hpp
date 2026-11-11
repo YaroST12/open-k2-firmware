@@ -17,6 +17,7 @@
 #include <span>
 
 #include "k2/fastcharge/edges.hpp"
+#include "k2/fastcharge/vooc_decode.hpp"
 
 // Live stream (shell `sniff stream`): the same passive arming, but every edge goes through a ring to the
 // CDC port as framed records (k2/fastcharge/edges.hpp) until stopped, so the 4096-edge buffer and the 2 KB slot do
@@ -60,5 +61,23 @@ bool selftest();
 // only what fits 2 KB). Writes one Edges record (k2/fastcharge/edges.hpp) starting at edge `from` into `out` and
 // returns its length, 0 when nothing is left or a session is running. `total` = edges kept.
 std::size_t read_record(std::size_t from, std::span<std::uint8_t> out, std::size_t& used, std::size_t& total);
+
+// Inline VOOC monitor (k2/fastcharge/vooc_decode.hpp). While a data device charges through the K2 and nothing else owns
+// D+/D- (vooc::monitor_wanted), the lines are the Sniff floating inputs and the EXTI ISR feeds every edge to the frame
+// decoder, which keeps the live summary; no edge buffer, no mode RAM. It never drives: arming only sets the Sniff state,
+// ending puts back the passive idle (0.6 V) when the lines are still free, and leaves them alone when an engine or a
+// Black Box arm has them. A Black Box arm or stream running at the same time feeds the decoder too.
+// fastcharge::poll() calls monitor_poll() every ~20 ms; `wanted` from vooc::monitor_wanted, `lines_free` = no engine,
+// scan, probe or reset hold owns the pins. Logs one `[VOOC] session N start` / `end` line per session.
+void monitor_poll(bool wanted, bool lines_free);
+bool monitoring();
+void monitor_enable(bool on);     // the operator's switch (RAM only, on at boot)
+bool monitor_enabled();
+struct MonitorInfo {
+    bool enabled = false, running = false;
+    vooc::Summary s{};
+};
+MonitorInfo monitor_info();       // a copy taken with interrupts masked
+vooc::Live monitor_live();        // the screen's view (vooc::live_of), interrupts masked for a few reads
 
 }  // namespace k2::dpsniff

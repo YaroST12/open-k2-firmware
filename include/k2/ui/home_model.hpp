@@ -102,6 +102,10 @@ struct ProtoInfo {
     uint32_t ma = 0;          // current rating (limit); 0 unknown
     uint32_t mw = 0;          // AVS power rating
     uint32_t max_mv = 0;      // the source's highest voltage ("max 20V")
+    // `mv` and `shown_ma` are live readings, not announced levels (an inline VOOC session): both print with one decimal
+    // ("SVOOC 9.0V3.6A"). `shown_ma` is never a rating, so it drives no limit bar, scale or alarm (that is `ma`).
+    bool measured = false;
+    uint32_t shown_ma = 0;
 };
 
 struct ProtoText {

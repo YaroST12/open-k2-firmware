@@ -119,6 +119,8 @@ home::ProtoInfo home::live_proto(const UiContext &ctx, const power::Metrics &pm)
     ps.vbus_mv = pm.vbus_mv;
     ps.typec_ma = fusb302::typec_ma();
     ps.req_period_ms = fusb302::request_period_ms();
+    ps.vooc_live = ctx.vooc.seen;
+    ps.ibus_ma = pm.current_ma;
     return derive_proto(ps);
 }
 

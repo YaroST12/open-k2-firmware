@@ -96,6 +96,17 @@ ProtoInfo derive_proto(const ProtoSource &s) {
         return p;
     }
     if (s.ctr.valid && (s.pd_link || s.caps)) return from_pd(s);
+    if (s.vooc_live) {
+        // The decoded VOOC exchange proves the protocol; the charger announces no level we can read, so the row shows
+        // the measured VBUS and |IBUS| at 0.1 resolution. No rating: ma stays 0 (no limit bar, no alarm).
+        ProtoInfo p;
+        p.kind = ProtoKind::Svooc;
+        p.measured = true;
+        p.mv = s.vbus_mv > 0 ? (static_cast<uint32_t>(s.vbus_mv) + 50) / 100 * 100 : 0;
+        const uint32_t a = static_cast<uint32_t>(s.ibus_ma < 0 ? -s.ibus_ma : s.ibus_ma);
+        p.shown_ma = (a + 50) / 100 * 100;
+        return p;
+    }
     const uint32_t v = nominal_mv(s.vbus_mv);
     switch (s.fc) {
     case Protocol::Pending: return {ProtoKind::Detecting};

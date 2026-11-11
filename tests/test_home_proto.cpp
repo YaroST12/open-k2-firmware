@@ -281,7 +281,47 @@ static void test_own_sink_contract_is_used_for_the_footer() {
     CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::Pps));
 }
 
+// The inline VOOC monitor saw a live session (vooc::Live::seen): the row names SVOOC with the MEASURED level and current
+// at 0.1 resolution ("SVOOC 9.0V3.6A"). The current is a reading, never a rating: no limit bar, no alarm (ma stays 0).
+// Whatever the D+/D- level classifier guessed (a data device's lines read as USB data) does not matter here.
+static void test_inline_vooc_session_shows_measured_level_and_current() {
+    ProtoSource s;
+    s.fc = Protocol::UsbData;
+    s.vbus_mv = 8962; s.ibus_ma = 3640;
+    s.vooc_live = true;
+    ProtoInfo p = derive_proto(s);
+    CHECK_EQ(static_cast<int>(p.kind), static_cast<int>(ProtoKind::Svooc));
+    CHECK_EQ(p.mv, 9000);
+    CHECK_EQ(p.shown_ma, 3600);
+    CHECK_EQ(p.ma, 0);
+    CHECK_EQ(p.max_mv, 0);
+    CHECK_EQ(p.measured, true);
+    ProtoText t;
+    format_proto(p, t);
+    CHECK_STR(t.tag.c_str(), "SVOOC");
+    CHECK_STR(t.value.c_str(), "9.0V3.6A");
+    s.vbus_mv = 10049; s.ibus_ma = -6460;     // the magnitude only: direction is never a sign
+    p = derive_proto(s);
+    format_proto(p, t);
+    CHECK_STR(t.value.c_str(), "10.0V6.5A");
+    s.ibus_ma = 0;
+    format_proto(derive_proto(s), t);
+    CHECK_STR(t.value.c_str(), "10.0V0.0A");   // a fixed place, not a missing current
+    // A PD contract wins (the monitor never runs with one, but the row must not trust a stale flag).
+    pd::SourceCaps c = caps_epr();
+    ProtoSource d = pd_source(c, 2, 9000);
+    d.vooc_live = true;
+    CHECK_EQ(static_cast<int>(derive_proto(d).kind), static_cast<int>(ProtoKind::PdFixed));
+    // No live session: the classifier's guess as before (a level, no current).
+    s.vooc_live = false; s.fc = Protocol::Svooc; s.vbus_mv = 8962;
+    p = derive_proto(s);
+    CHECK_EQ(p.measured, false);
+    format_proto(p, t);
+    CHECK_STR(t.value.c_str(), "9V");
+}
+
 int main() {
+    test_inline_vooc_session_shows_measured_level_and_current();
     test_pd_fixed();
     test_pd_epr();
     test_pd_pps();

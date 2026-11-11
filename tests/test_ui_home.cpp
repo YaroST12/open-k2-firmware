@@ -324,6 +324,22 @@ static void test_protocol_states() {
         CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // "QC2 9V"-style row
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no limit known: no alarm
     }
+    {   // inline VOOC monitor: a live session, no PD; the row is "SVOOC 9.0V3.6A" from the readings, and the measured
+        // current is no rating, so no limit bar and no alarm even at 6.5 A
+        Ui &ui = home_ui();
+        live_pd(false, 8962, 6460);
+        g_stub.caps = {}; g_stub.contract = {}; g_stub.em = {};
+        g_stub.fc = fastcharge::Protocol::UsbData;
+        g_stub.vooc.seen = true; g_stub.vooc.r82 = 0x6B;
+        run(ui, 40);
+        dump("v7", "svooc_inline");
+        CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::Svooc));
+        CHECK_EQ(int(ui.proto_now().ma), 0);
+        CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // protocol row
+        CHECK_EQ(ink_logical(ui, 10, 136, 205, 3, kAmp), 0);            // no limit bar
+        CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no alarm
+        g_stub.vooc = {};
+    }
 }
 
 // The sweep paints the faint trend line behind the digits once samples arrive and nothing while idle.

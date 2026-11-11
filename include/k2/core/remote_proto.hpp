@@ -285,6 +285,16 @@
 //                                    flags bit0 = confirm (needed by the scan and above 5000 mV, else
 //                                    BadArg), bit1 = override the PD-contract / load guard (never a
 //                                    confirmation); other bits BadArg. A guard refusal answers BadArg
+//                                    --- vooc-monitor (k2/vooc-detect) ---
+//                                    op 4 vooc, args page(1) [on(1)]: the inline VOOC monitor (passive, never drives;
+//                                      k2/fastcharge/vooc_decode.hpp), not the FC block. on = 0 / 1 switches it first
+//                                      (RAM only). page 0: flags(1: bit0 enabled, bit1 running, bit2 session active,
+//                                      bit3 handshake) sessions(2) wakes(2) partials(2) edges(4) frames(4) pairs(4)
+//                                      hs_pairs(1) ident(1) ident_reply(2) r82_last(2) r82_min(2) r82_max(2) r82_n(2)
+//                                      p82_last_us(4) p82_mean_us(4) p82_n(2) ncmds(1) other(2) = 44 bytes; reply words
+//                                      0xFFFF = none. page 1 / 2: n(1) { cmd(1) count(2) last(2) } x n, rows 0-7 / 8-15.
+//                                      Other pages or on > 1 BadArg, wrong length BadLength. Never Busy.
+//                                    --- end vooc-monitor ---
 //   0x21 ADC_RAW     req -            rsp ok(1) all(10 x u16) scan(7 x u16)
 //                                    all = one-shot raw counts of ADC channels 0..7, 16, 17;
 //                                    scan = the 100-sweep averages in slot order aux cc1 cc2 dp dm
@@ -312,6 +322,7 @@
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
+#include "k2/fastcharge/vooc_decode.hpp"
 #include "k2/ui/ui_qrtest.hpp"
 
 namespace k2::remote {
@@ -447,6 +458,18 @@ constexpr uint8_t kFcAllowInline = 2;         // flags bit1: override the PD-con
 constexpr uint8_t kFcFlagMask = kFcConfirm | kFcAllowInline;
 constexpr size_t kFcMaxResults = 7;
 static_assert(10 + 4 * kFcMaxResults <= kMaxRspPayload);
+// --- vooc-monitor (k2/vooc-detect): FC op 4, the inline VOOC monitor summary (layout above) ---
+constexpr uint8_t kFcVooc = 4;
+constexpr uint8_t kVoocPages = 3;             // 0 summary, 1 / 2 command rows
+constexpr size_t kVoocRowsPerPage = 8;
+constexpr size_t kVoocSummaryBytes = 44;
+static_assert(kVoocSummaryBytes <= kMaxRspPayload && 1 + 5 * kVoocRowsPerPage <= kMaxRspPayload);
+static_assert((kVoocPages - 1) * kVoocRowsPerPage >= vooc::kMaxCmds);
+struct VoocSnapshot {
+    bool enabled = false, running = false;
+    vooc::Summary s{};
+};
+// --- end vooc-monitor ---
 
 // Store op codes (first payload byte of Cmd::Store). The request is [op] for list / save-emarker /
 // save-log. Op 2 (erase of the native pages) is retired: it answers BadArg. save-emarker saves the
@@ -920,6 +943,7 @@ size_t encode_factory_wipe(std::span<uint8_t> out, const FactoryWipeInfo &i);
 size_t encode_cable_r(std::span<uint8_t> out, const CableRInfo &i);
 size_t encode_lab(std::span<uint8_t> out, const LabResult &r);
 size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r);
+size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);   // vooc-monitor: FC op 4, one page
 size_t encode_ufcs(std::span<uint8_t> out, const UfcsInfo &i);   // status block: state verdict class start blob_len(2) nfields
 // One tuner field: field(1) value(4) lo(4) hi(4) default(4); lo / hi / default come from ufcs::kFields.
 size_t encode_ufcs_field(std::span<uint8_t> out, uint8_t field, uint32_t value);
@@ -1008,6 +1032,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.usb_link() } -> std::same_as<UsbLinkSnapshot>;
     { b.fc_cmd(u8, u8, u16, u8) } -> std::same_as<Status>;   // op, proto, mV, flags (kFcConfirm | kFcAllowInline)
     { b.fc_info() } -> std::same_as<FcInfo>;
+    { b.vooc_monitor(u8) } -> std::same_as<VoocSnapshot>;   // vooc-monitor: 0 off, 1 on, 2 keep; then the summary
     { b.store_cmd(u8, u8) } -> std::same_as<StoreInfo>;   // op (list / save-emarker / save-log), slot unused
     { b.cable_r_reset() } -> std::same_as<void>;      // clears the passive reference
     { b.cable_r_mode(true) } -> std::same_as<void>;   // false = passive meter, true = Kelvin 8-wire
@@ -1422,6 +1447,13 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         // The confirmation rules are enforced here, before the backend: the scan and any request
         // above 5 V are refused without the confirm byte.
         if (p.empty()) return reply(Status::BadLength);
+        // --- vooc-monitor (k2/vooc-detect): passive readout, no confirm, no ports check ---
+        if (p[0] == kFcVooc) {
+            if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
+            if (p[1] >= kVoocPages || (p.size() == 3 && p[2] > 1)) return reply(Status::BadArg);
+            return reply_n(encode_vooc(buf, backend.vooc_monitor(p.size() == 3 ? p[2] : 2), p[1]));
+        }
+        // --- end vooc-monitor ---
         switch (p[0]) {
         case kFcStatus:
         case kFcReset:

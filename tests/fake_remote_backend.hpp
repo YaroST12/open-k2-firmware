@@ -213,6 +213,15 @@ struct Fake {
     }
     uint8_t sniff_sub = 0xFF;
     SniffInfo lab_sniff(uint8_t sub) { calls++; sniff_sub = sub; SniffInfo r; r.state = 2; r.reason = 3; r.flags = 2; r.edges = 0x0123; return r; }
+    // --- vooc-monitor (k2/vooc-detect) ---
+    int vooc_set = -1;                  // last switch argument (2 = keep)
+    VoocSnapshot vooc_snap{};
+    VoocSnapshot vooc_monitor(uint8_t set) {
+        calls++; vooc_set = set;
+        if (set <= 1) vooc_snap.enabled = set == 1;
+        return vooc_snap;
+    }
+    // --- end vooc-monitor ---
     // UFCS tuner / probe: a RAM field array standing in for the tuner, a canned blob for the read op
     std::uint32_t ufcs_vals[k2::ufcs::kFieldCount] = {};
     Status ufcs_busy = Status::Ok;      // what set / ops answer when forced

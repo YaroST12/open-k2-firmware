@@ -86,8 +86,18 @@ void level(StrBuf<20> &s, uint32_t milli, char unit) {
     s.put({t, static_cast<size_t>(n)});
     if (unit) s.put_char(unit);
 }
-// "20V", "20V5A": the voltage, then the current when the rating is known.
+// A live reading at 0.1 resolution, always one decimal: "9.0", "10.0".
+void tenths(StrBuf<20> &s, uint32_t milli, char unit) {
+    const uint32_t t = (milli + 50) / 100;
+    s.put_u32(t / 10).put_char('.').put_char(static_cast<char>('0' + t % 10)).put_char(unit);
+}
+// "20V", "20V5A": the voltage, then the current when the rating is known. A measured pair: "9.0V3.6A".
 void fixed(StrBuf<20> &s, const ProtoInfo &p) {
+    if (p.measured) {
+        tenths(s, p.mv, 'V');
+        tenths(s, p.shown_ma, 'A');
+        return;
+    }
     level(s, p.mv, 'V');
     if (p.ma) level(s, p.ma, 'A');
 }

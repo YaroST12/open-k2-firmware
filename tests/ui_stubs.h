@@ -128,6 +128,7 @@ struct StubState {
     k2::power::Chip power_chip = k2::power::Chip::Ina226;
     std::optional<k2::adc::Reading> adc;
     k2::fastcharge::Protocol fc = k2::fastcharge::Protocol::Pending;
+    k2::vooc::Live vooc{};             // fastcharge::vooc_live(): the inline VOOC monitor's live view
     int polls = 0;
     k2::pd::SinkStatus sink{};
     k2::pd::IdStatus ident{};

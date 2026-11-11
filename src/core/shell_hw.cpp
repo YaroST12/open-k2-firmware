@@ -831,6 +831,36 @@ struct Hw final : shell::Backend {
         const dpsniff::ArmResult r = mode == 1 ? dpsniff::arm_stream() : dpsniff::arm_synth(rate);
         return r == dpsniff::ArmResult::Ok ? nullptr : r == dpsniff::ArmResult::NoRam ? "no RAM (drive or net mode)" : "busy";
     }
+
+    // Inline VOOC monitor: the same RAM switch and summary as remote FC op 4. Raw reply words in hex, no units.
+    const char* vooc_monitor(int mode) override {
+        if (mode == 0 || mode == 1) dpsniff::monitor_enable(mode == 1);
+        const dpsniff::MonitorInfo m = dpsniff::monitor_info();
+        const vooc::Summary& s = m.s;
+        char b[120];
+        std::size_t n = fmt::format(std::span<char>(b, sizeof b),
+                                    "vooc %s %s sessions=%u active=%u wakes=%u partials=%u edges=%u frames=%u\r\n",
+                                    m.enabled ? "on" : "off", m.running ? "running" : "idle", unsigned(s.sessions),
+                                    unsigned(s.active), unsigned(s.wakes), unsigned(s.partials), unsigned(s.edges),
+                                    unsigned(s.frames));
+        put({b, n});
+        n = fmt::format(std::span<char>(b, sizeof b),
+                        "vooc hs=%u/%u ident=0x%02X/0x%03X pairs=%u r82=0x%03X min=0x%03X max=0x%03X n=%u p82_us=%u/%u n=%u\r\n",
+                        unsigned(s.handshake), unsigned(s.hs_pairs), unsigned(s.ident), unsigned(s.ident_reply),
+                        unsigned(s.pairs), unsigned(s.r82_last), unsigned(s.r82_min), unsigned(s.r82_max),
+                        unsigned(s.r82_n), unsigned(s.p82_last_us), unsigned(s.p82_mean_us()), unsigned(s.p82_n));
+        put({b, n});
+        for (std::size_t i = 0; i < s.ncmds && i < s.cmds.size(); i++) {
+            n = fmt::format(std::span<char>(b, sizeof b), "vooc cmd 0x%02X n=%u last=0x%03X\r\n", unsigned(s.cmds[i].cmd),
+                            unsigned(s.cmds[i].count), unsigned(s.cmds[i].last));
+            put({b, n});
+        }
+        if (s.other) {
+            n = fmt::format(std::span<char>(b, sizeof b), "vooc other=%u (table full)\r\n", unsigned(s.other));
+            put({b, n});
+        }
+        return nullptr;
+    }
 };
 
 Hw g_hw;

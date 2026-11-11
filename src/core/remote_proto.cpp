@@ -382,6 +382,32 @@ size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r) {
     return w.size();
 }
 
+// --- vooc-monitor (k2/vooc-detect): FC op 4 pages, layout in remote_proto.hpp ---
+size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page) {
+    Writer w(out);
+    const vooc::Summary &s = v.s;
+    if (page == 0) {
+        w.u8(static_cast<uint8_t>((v.enabled ? 1 : 0) | (v.running ? 2 : 0) | (s.active ? 4 : 0) | (s.handshake ? 8 : 0)));
+        w.u16(s.sessions); w.u16(s.wakes); w.u16(s.partials);
+        w.u32(s.edges); w.u32(s.frames); w.u32(s.pairs);
+        w.u8(s.hs_pairs); w.u8(s.ident); w.u16(s.ident_reply);
+        w.u16(s.r82_last); w.u16(s.r82_min); w.u16(s.r82_max); w.u16(s.r82_n);
+        w.u32(s.p82_last_us); w.u32(s.p82_mean_us()); w.u16(s.p82_n);
+        w.u8(s.ncmds); w.u16(s.other);
+        return w.size();
+    }
+    const size_t from = (page - 1u) * kVoocRowsPerPage;
+    const size_t have = std::min<size_t>(s.ncmds, s.cmds.size());
+    const size_t n = have > from ? std::min(kVoocRowsPerPage, have - from) : 0;
+    w.u8(static_cast<uint8_t>(n));
+    for (size_t i = 0; i < n; i++) {
+        const vooc::CmdStat &c = s.cmds[from + i];
+        w.u8(c.cmd); w.u16(c.count); w.u16(c.last);
+    }
+    return w.size();
+}
+// --- end vooc-monitor ---
+
 size_t encode_ripple(std::span<uint8_t> out, uint8_t code, const RippleInfo &r) {
     Writer w(out);
     w.u8(code); w.u32(r.period_ns);

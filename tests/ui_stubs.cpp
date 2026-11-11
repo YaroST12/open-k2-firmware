@@ -396,6 +396,7 @@ std::optional<Reading> read() { return g_stub.adc; }
 
 namespace fastcharge {
 Protocol read() { return g_stub.fc; }
+vooc::Live vooc_live() { return g_stub.vooc; }
 }  // namespace fastcharge
 
 namespace power_source {

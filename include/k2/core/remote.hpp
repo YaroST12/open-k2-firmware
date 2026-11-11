@@ -118,7 +118,10 @@ public:
     remote::CableRInfo cable_r_info();
     remote::LabResult lab_load(uint8_t duty, uint16_t ms);
     remote::SniffInfo lab_sniff(uint8_t sub);
-    remote::UfcsInfo ufcs_info();                          // UFCS tuner / 5 V probe (k2::fctrig)
+    // --- vooc-monitor (k2/vooc-detect) ---
+    remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
+    // --- end vooc-monitor ---
+    remote::UfcsInfo ufcs_info();                         // UFCS tuner / 5 V probe (k2::fctrig)
     uint32_t ufcs_get(uint8_t field);
     remote::Status ufcs_set(uint8_t field, uint32_t value);
     remote::Status ufcs_op(uint8_t op);                    // kUfcsReset / kUfcsProbe / kUfcsStop

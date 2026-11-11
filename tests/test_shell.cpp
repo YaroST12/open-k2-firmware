@@ -37,6 +37,7 @@ struct Fake : shell::Backend {
     }
     const char* sniff(int mode, std::uint32_t rate) override { calls += "sniff" + std::to_string(mode) + "," + std::to_string(rate) + ";"; return fail; }
     const char* trace(int mode) override { calls += "trace" + std::to_string(mode) + ";"; return fail; }
+    const char* vooc_monitor(int mode) override { calls += "vooc" + std::to_string(mode) + ";"; return fail; }
     const char* stream(unsigned mask, unsigned hz, bool history) override {
         calls += "stream" + std::to_string(mask) + "," + std::to_string(hz) + (history ? ",old" : "") + ";";
         return fail;
@@ -119,6 +120,15 @@ int main() {
     CHECK_EQ(said(f, "usage: stop"), true);
     CHECK_STR((run(f, "help")).c_str(), "");
     CHECK_EQ(said(f, "stop "), true);
+    // inline VOOC monitor readout: passive, no confirm; on / off is the RAM switch, 2 = read only
+    CHECK_STR((run(f, "fc vooc")).c_str(), "vooc2;");
+    CHECK_STR((run(f, "FC VOOC on")).c_str(), "vooc1;");
+    CHECK_STR((run(f, "fc vooc off")).c_str(), "vooc0;");
+    CHECK_STR((run(f, "fc vooc maybe")).c_str(), "");
+    CHECK_EQ(said(f, "usage: fc vooc"), true);
+    CHECK_STR((run(f, "fc vooc on now")).c_str(), "");
+    CHECK_EQ(run(f, "help").empty(), true);
+    CHECK_EQ(said(f, "fc vooc [on|off]"), true);
     // PD black box stream: from now, from the oldest record, stop; nothing else is accepted
     CHECK_STR((run(f, "trace stream")).c_str(), "trace1;");
     CHECK_STR((run(f, "TRACE Stream all")).c_str(), "trace2;");

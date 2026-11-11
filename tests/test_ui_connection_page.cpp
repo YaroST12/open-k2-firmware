@@ -1194,7 +1194,39 @@ static void test_pd_present_keeps_identify_offered() {
     ui.on_button(Button::Back, ButtonEvent::Short, t += 100);
 }
 
+// The inline VOOC monitor sees a live session behind the K2 (a phone that never talks PD): the Sink tab's no-PD body
+// gets a third measured row, the raw `VOOC 0x82 0x06B raw` note (y 200..219), and loses it when the session ends.
+static void test_sink_tab_no_pd_shows_the_raw_vooc_note() {
+    Ui &ui = fresh_ui();
+    g_stub.cc = 1;
+    g_stub.pm.vbus_mv = 5030;
+    g_stub.pm.current_ma = 70;
+    g_stub.far_cc = true;
+    g_stub.caps.valid = true;
+    g_stub.caps.rx_count = 100;
+    g_stub.pd_seen_attach = true;
+    uint32_t t = 50000;
+    for (int i = 0; i < 3; i++) ui.tick(t += 100);
+    for (int i = 0; i < 4; i++) { g_stub.caps.rx_count++; ui.tick(t += 100); }
+    for (int i = 0; i < 14; i++) ui.tick(t += 100);
+    ui.goto_page(kConnTabAlias + 2, t += 100);
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
+    CHECK(ink_in(201, 219) == 0);                          // two rows only: Type-C, Draw
+    g_stub.vooc.seen = true;
+    g_stub.vooc.r82 = 0x6B;
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    dump_panel("k2_nopd_sink_vooc");
+    CHECK(rule_span(200) >= LCD_WIDTH - 20);
+    CHECK(ink_in(201, 219) > 50);                          // the VOOC note
+    g_stub.vooc = {};
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    CHECK(ink_in(201, 219) == 0);
+    g_stub.vooc = {};
+}
+
 int main() {
+    test_sink_tab_no_pd_shows_the_raw_vooc_note();
     test_sink_tab_offers_identify_when_a_device_is_alone();
     test_identify_log_keeps_fixed_text_in_the_format();
     test_survey_nothing_active_before_refresh();

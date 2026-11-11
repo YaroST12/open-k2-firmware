@@ -7,11 +7,15 @@
 // follows (a BC1.2 short), through dpdm::dcp_probe_begin() / dcp_probe_end(); see dcp_check_allowed()
 // for every condition. init() only checks the four switch pins (PA7/PB0/PB1/PB2) are in the idle state.
 // The idle state itself drives both lines to a 0.6 V level (k2::dpdm), it does not leave them floating.
+// The one exception is the inline VOOC monitor (k2/fastcharge/dpsniff.hpp): while a data device charges through the
+// K2 with no PD contract and nothing else owns the lines, poll() lets dpsniff float them (Sniff inputs, never driven)
+// and decode the VOOC exchange; it puts the 0.6 V idle back when the device leaves.
 // The decision logic is in fastcharge_classify.hpp.
 #pragma once
 #include <optional>
 
 #include "k2/fastcharge/fastcharge_classify.hpp"
+#include "k2/fastcharge/vooc_decode.hpp"
 
 namespace k2::fastcharge {
 
@@ -29,5 +33,9 @@ void poll();
 
 // Current verdict. Protocol::Pending until the window is full; NoInput without VBUS.
 Protocol read();
+
+// The inline VOOC monitor's live view for the screen (vooc::live_of): a proven VOOC session now, and its last raw
+// 0x82 reply word.
+vooc::Live vooc_live();
 
 }  // namespace k2::fastcharge

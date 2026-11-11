@@ -72,6 +72,7 @@ var K2Proto = (function () {
             "needs load", "handshake ok", "detected"];
   var FC_OUTCOMES = ["-", "accepted", "rejected", "skipped"];
   var FC_OP = { status: 0, reset: 1, scan: 2, trigger: 3 };
+  var FC_OP_VOOC = 4;   // vooc-monitor: inline VOOC monitor pages (k2_remote.py fc vooc); no web reader yet, kept for the table
   var FC_CONFIRM = 1, FC_SAFE_MV = 5000;
   var TEST_GROUPS = ["pd", "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo"];
   var TEST_ALGORITHMS = ["pd2-fixed", "pd3x-fixed", "epr", "spr-avs", "pps", "qc2", "qc3", "qc3+", "afc",

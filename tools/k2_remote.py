@@ -185,6 +185,7 @@ FC_FAILS = ["none", "need confirm", "over limit", "no power monitor", "busy", "u
             "needs load", "handshake ok", "detected"]
 FC_OUTCOMES = ["-", "accepted", "rejected", "skipped"]
 FC_OP_STATUS, FC_OP_RESET, FC_OP_SCAN, FC_OP_TRIGGER = 0, 1, 2, 3
+FC_OP_VOOC = 4             # vooc-monitor: the passive inline VOOC monitor readout (see decode_vooc_summary)
 FC_CONFIRM, FC_ALLOW_INLINE = 1, 2   # request flags: confirm the voltage / override the load guard
 FC_SAFE_MV = 5000          # above this (and for the scan) a request needs --confirm
 TEST_GROUPS = ["pd", "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo"]
@@ -1961,7 +1962,78 @@ def decode_fc(p):
             "scan": {"running": bool(p[3] & 1), "done": bool(p[3] & 2), "step": p[4], "results": results}}
 
 
+# --- vooc-monitor (k2/vooc-detect) ---
+# FC op 4: the inline VOOC monitor (passive, never drives D+/D-). Page 0 is the summary, pages 1 / 2 the command
+# rows (8 each). Reply words are raw 10-bit values printed in hex; the command names in docs/FASTCHARGE_PROTOCOLS.md
+# are guesses, and no reply word is turned into volts or amps here.
+VOOC_SUMMARY_BYTES = 44
+VOOC_ROWS_PER_PAGE = 8
+VOOC_NO_REPLY = 0xFFFF
+
+
+def _vooc_word(v, width=3):
+    return None if v == VOOC_NO_REPLY else f"0x{v:0{width}X}"
+
+
+def decode_vooc_summary(p):
+    _need(p, VOOC_SUMMARY_BYTES, "vooc")
+    u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
+    u32 = lambda o: int.from_bytes(p[o:o + 4], "little")
+    f = p[0]
+    return {"enabled": bool(f & 1), "running": bool(f & 2), "session_active": bool(f & 4), "handshake": bool(f & 8),
+            "sessions": u16(1), "wakes": u16(3), "partials": u16(5),
+            "edges": u32(7), "frames": u32(11), "pairs": u32(15),
+            "hs_pairs": p[19], "ident": f"0x{p[20]:02X}", "ident_reply": _vooc_word(u16(21)),
+            "r82": {"last": _vooc_word(u16(23)), "min": _vooc_word(u16(25)), "max": _vooc_word(u16(27)), "n": u16(29)},
+            "p82_us": {"last": u32(31), "mean": u32(35), "n": u16(39)},
+            "ncmds": p[41], "other": u16(42)}
+
+
+def decode_vooc_rows(p):
+    _need(p, 1, "vooc rows")
+    n = p[0]
+    _need(p, 1 + 5 * n, "vooc rows")
+    u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
+    return [{"cmd": f"0x{p[1 + 5 * i]:02X}", "count": u16(2 + 5 * i), "last": _vooc_word(u16(4 + 5 * i))}
+            for i in range(n)]
+
+
+def cmd_fc_vooc(link, a):
+    head = bytes([FC_OP_VOOC, 0]) + (bytes([0]) if a.off else bytes([1]) if a.on else b"")
+    s = decode_vooc_summary(link.call(CMD_FC, head).payload)
+    cmds = []
+    for page in range(1, 3):
+        if len(cmds) >= s["ncmds"]:
+            break
+        cmds += decode_vooc_rows(link.call(CMD_FC, bytes([FC_OP_VOOC, page])).payload)
+    s["cmds"] = cmds
+    return {"vooc": s}
+
+
+def render_vooc(v):
+    state = ("on" if v["enabled"] else "off") + (", running" if v["running"] else ", idle")
+    lines = [f"vooc monitor {state} (passive inline; raw words, names are guesses)",
+             f"  sessions {v['sessions']}" + (" (one active)" if v["session_active"] else "")
+             + f", wakes {v['wakes']}, partials {v['partials']}, edges {v['edges']}, frames {v['frames']}",
+             f"  last session: handshake {'yes' if v['handshake'] else 'no'}"
+             + (f" (ident {v['ident']} reply {v['ident_reply']}, {v['hs_pairs']} pairs)" if v["handshake"] else "")
+             + f", pairs {v['pairs']}"]
+    r, p = v["r82"], v["p82_us"]
+    if r["n"]:
+        lines.append(f"  0x82 replies n={r['n']} last {r['last']} min {r['min']} max {r['max']}")
+    if p["n"]:
+        lines.append(f"  0x82 period last {p['last'] / 1000:.1f} ms, mean {p['mean'] / 1000:.1f} ms (n={p['n']})")
+    for c in v["cmds"]:
+        lines.append(f"  {c['cmd']}  x{c['count']:<4} last {c['last'] or '-'}")
+    if v["other"]:
+        lines.append(f"  other commands: {v['other']} pairs (table full)")
+    return "\n".join(lines)
+# --- end vooc-monitor ---
+
+
 def cmd_fc(link, a):
+    if a.fc_cmd == "vooc":   # vooc-monitor
+        return cmd_fc_vooc(link, a)
     if a.fc_cmd == "status":
         payload = bytes([FC_OP_STATUS])
     elif a.fc_cmd == "reset":
@@ -3082,6 +3154,8 @@ def _render(name, r):
                     "sees a real detach (not done inline or with a boot-pinned Rd)")
         return f"link held {r['link']}ed (a rescan releases it)"
     if name == "fc":
+        if "vooc" in r:   # vooc-monitor
+            return render_vooc(r["vooc"])
         s = r["scan"]
         lines = [f"fc {r['state']} {r['proto']} target {r['target_mv']} mV, VBUS {r['vbus_mv']} mV"
                  + (f" ({r['fail']})" if r["fail"] != "none" else "")]
@@ -3323,6 +3397,10 @@ def build_parser():
     sft.add_argument("--allow-inline", action="store_true",
                      help="override the PD-contract / load guard (needs --confirm at any voltage)")
     _add_lease_args(sft)
+    sfv = sfs.add_parser("vooc", help="inline VOOC monitor readout (passive, never drives; raw words)")   # vooc-monitor
+    sfvs = sfv.add_mutually_exclusive_group()
+    sfvs.add_argument("--on", action="store_true", help="enable the monitor (RAM only, on by default)")
+    sfvs.add_argument("--off", action="store_true", help="disable it; the lines go back to the passive idle")
     sst = sub.add_parser("store", help="flash store behind the USB drive (writes only when asked)")
     sss = sst.add_subparsers(dest="store_cmd", required=True)
     sss.add_parser("list", help="records in the store")

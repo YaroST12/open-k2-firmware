@@ -1055,6 +1055,7 @@ void Ui::tick(uint32_t now_ms) {
     if (ctx_.cable_mode == cable_r::Mode::Kelvin && ctx_.pm_online && ctx_.analog)
         ctx_.kelvin = cable_r::kelvin(ctx_.analog->cc1_mv, ctx_.analog->cc2_mv, ctx_.analog->dm_mv, ctx_.pm_avg.current_ma);
     ctx_.fc = fastcharge::read();
+    ctx_.vooc = fastcharge::vooc_live();
     {   // hard cap for requests and the measured VBUS for the engine's over-voltage abort
         const power::Chip chip = power::chip();
         ctx_.cap_mv = pd::request_cap_mv(power::max_request_mv(chip), power::max_vbus_mv(chip));

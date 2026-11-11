@@ -17,6 +17,7 @@ constexpr std::string_view kHelp =
     "pd reset | pd rescan        PD hard reset / CC rescan\r\n"
     "fc trigger <proto> <mV> [confirm]   qc2 qc3 qc3+ afc fcp scp vooc svooc svooc65 ufcs vivo\r\n"
     "fc reset                    back to 5 V, passive idle\r\n"
+    "fc vooc [on|off]            inline VOOC monitor summary (passive, raw words; on/off RAM only)\r\n"
     "stop                        cancel test, stop FC, release PD to 5 V, disarm spoof (no confirm)\r\n"
     "sniff stream | sniff stop  passive D+/D- edge stream (binary frames, tools/sniff_stream.py)\r\n"
     "trace stream [all] | trace stop   PD black box records as binary frames (tools/pd_trace.py stream)\r\n"
@@ -125,6 +126,12 @@ void cmd_pd(Backend& b, const Tokens& k) {
 
 void cmd_fc(Backend& b, const Tokens& k) {
     if (k.n == 2 && same(k.t[1], "reset")) return done(b, b.fc_reset());
+    if (k.n >= 2 && same(k.t[1], "vooc")) {
+        if (k.n == 2) return done(b, b.vooc_monitor(2));
+        if (k.n == 3 && same(k.t[2], "on")) return done(b, b.vooc_monitor(1));
+        if (k.n == 3 && same(k.t[2], "off")) return done(b, b.vooc_monitor(0));
+        return err(b, "usage: fc vooc [on|off]");
+    }
     if (k.n < 4 || !same(k.t[1], "trigger")) return err(b, "usage: fc trigger <proto> <mV> [confirm] | fc reset");
     std::size_t proto = kProtos.size();
     for (std::size_t i = 0; i < kProtos.size(); i++) if (same(k.t[2], kProtos[i])) proto = i;
