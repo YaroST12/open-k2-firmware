@@ -566,10 +566,17 @@ void Remote::lease_tick() {
     const uint32_t now = systick::millis();
     const auto vbus = power::vbus_fast_mv();
     const pd::SinkStatus &sk = fusb302::sink_status();
-    // Nothing holds or negotiates above 5 V (an idle sink, no FC) and VBUS reads 5 V: the lease may settle on its own.
-    const bool safe_5v = sk.state == pd::SinkState::Idle && !sk.held &&
-                         fctrig::status().state == fc::State::Idle && !fctrig::scan_running() &&
-                         vbus && *vbus >= 4500 && *vbus <= 5500;
+    // Nothing holds or negotiates above 5 V and VBUS reads 5 V: the lease may settle on its own (lease::safe_5v).
+    lease::SafeFacts f;
+    f.fc_idle = fctrig::status().state == fc::State::Idle && !fctrig::scan_running();
+    f.vbus_known = vbus.has_value();
+    f.vbus_mv = vbus ? *vbus : 0;
+    f.sink_idle = sk.state == pd::SinkState::Idle;
+    f.sink_ready = sk.state == pd::SinkState::Ready;
+    f.held = sk.held;
+    f.verifying = sk.verifying;
+    f.contract_mv = sk.mv;
+    const bool safe_5v = lease::safe_5v(f);
     switch (lease_.tick(now, usb::configured(), safe_5v, ui_.run_busy())) {   // a charger test or a PD Stress run
     case lease::Event::None: break;
     case lease::Event::Expired: K2LOG("[RMT] lease expired: stop\n"); stop(); break;

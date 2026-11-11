@@ -8,7 +8,8 @@
 // What clears the lease without a stop: the host's own stop / pd release / pd reset / fc reset (Remote calls clear()), a
 // charger test starting (a test is not host-owned voltage: it owns the ports itself, and a stop must never cancel it), and
 // a verified 5 V: nothing holds or negotiates above 5 V and VBUS reads 5 V for kSafeHoldMs without a break (an attach that
-// is still waiting for the source's capabilities does not count: tick() is told `safe_5v` only from an idle sink at 5 V, and
+// is still waiting for the source's capabilities does not count: tick() is told `safe_5v` (safe_5v() below) only from an idle
+// sink or a Ready contract at 5 V, and
 // the run restarts on any sample that is not).
 //
 // The wire (Cmd::Lease): `[0]` status, `[1, seconds u16]` set the length. The length applies to the NEXT arm and only
@@ -27,6 +28,29 @@ inline constexpr std::uint16_t kDefaultSeconds = 30;
 inline constexpr std::uint16_t kMaxSeconds = 600;
 inline constexpr std::uint32_t kPendingMs = 5000;    // a set-length applies to an arm at most this long afterwards
 inline constexpr std::uint32_t kSafeHoldMs = 5000;   // an unbroken run of verified 5 V before the lease clears itself
+
+// The facts behind tick()'s `safe_5v`, decided here so the host tests pin them. The output is settled at 5 V when no fast-charge
+// mode runs, VBUS reads 4.5..5.5 V, and the sink is either idle with no keep-alive, or Ready on a contract at 5.5 V or below
+// (held or not: a held 5 V contract is the state `pd attach` and a finished twin run leave behind; hardware 2026-11-11, NOVOO:
+// the lease stayed armed after a twin run ended on PDO 1 at 5.10 V, because only an idle, unheld sink counted). A sink still
+// negotiating (Requesting, Transition, EPR entry, Aborting) or verifying a release's PS_RDY is never settled.
+struct SafeFacts {
+    bool fc_idle = false;          // no fast-charge trigger or scan
+    bool vbus_known = false;       // the power monitor answered
+    std::int32_t vbus_mv = 0;
+    bool sink_idle = false;        // pd::SinkState::Idle
+    bool sink_ready = false;       // pd::SinkState::Ready
+    bool held = false;             // the keep-alive is running
+    bool verifying = false;        // a release's PS_RDY is being checked
+    std::uint16_t contract_mv = 0; // the Ready contract's voltage (SinkStatus::mv)
+};
+inline constexpr std::int32_t kSafeMinMv = 4500;
+inline constexpr std::int32_t kSafeMaxMv = 5500;
+constexpr bool safe_5v(const SafeFacts& f) {
+    if (!f.fc_idle || !f.vbus_known || f.vbus_mv < kSafeMinMv || f.vbus_mv > kSafeMaxMv || f.verifying) return false;
+    if (f.sink_idle) return !f.held;
+    return f.sink_ready && f.contract_mv != 0 && f.contract_mv <= kSafeMaxMv;
+}
 
 // Why the last lease ended (wire byte of the status reply).
 enum class End : std::uint8_t { None = 0, Expired = 1, HostGone = 2, Released = 3, Settled = 4, TestRunning = 5 };

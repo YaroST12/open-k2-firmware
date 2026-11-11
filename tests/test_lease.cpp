@@ -185,6 +185,34 @@ static void test_clock_wraps_around() {
     CHECK_EQ(tick(l, 0xFFFFFF00u + 30000u) == lease::Event::Expired, true);
 }
 
+void test_safe_5v_facts() {
+    lease::SafeFacts f;
+    f.fc_idle = true; f.vbus_known = true; f.vbus_mv = 5102;
+    f.sink_idle = true;
+    CHECK_EQ(lease::safe_5v(f), true);                       // idle, no keep-alive
+    f.held = true;
+    CHECK_EQ(lease::safe_5v(f), false);                      // idle but held: an attach waiting for caps
+    // Hardware 2026-11-11: after a twin run the sink is Ready on PDO 1 at 5 V with the keep-alive on.
+    f.sink_idle = false; f.sink_ready = true; f.contract_mv = 5000;
+    CHECK_EQ(lease::safe_5v(f), true);
+    f.held = false;
+    CHECK_EQ(lease::safe_5v(f), true);
+    f.contract_mv = 9000;
+    CHECK_EQ(lease::safe_5v(f), false);                      // a 9 V contract, whatever VBUS reads this instant
+    f.contract_mv = 0;
+    CHECK_EQ(lease::safe_5v(f), false);                      // Ready with no voltage known
+    f.contract_mv = 5000; f.verifying = true;
+    CHECK_EQ(lease::safe_5v(f), false);                      // a release's PS_RDY still being checked
+    f.verifying = false; f.sink_ready = false;
+    CHECK_EQ(lease::safe_5v(f), false);                      // Requesting / Transition: neither idle nor Ready
+    f.sink_ready = true; f.vbus_mv = 8990;
+    CHECK_EQ(lease::safe_5v(f), false);                      // VBUS out of the 5 V band
+    f.vbus_mv = 5102; f.fc_idle = false;
+    CHECK_EQ(lease::safe_5v(f), false);                      // a fast-charge mode runs
+    f.fc_idle = true; f.vbus_known = false;
+    CHECK_EQ(lease::safe_5v(f), false);                      // no power monitor reading
+}
+
 int main() {
     test_idle_lease_never_fires();
     test_arm_then_expire_after_the_default_lease();
@@ -201,5 +229,6 @@ int main() {
     test_a_new_arm_restarts_the_safe_run();
     test_charger_test_is_not_host_owned_voltage();
     test_clock_wraps_around();
+    test_safe_5v_facts();
     return test_report("test_lease");
 }
