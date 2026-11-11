@@ -958,6 +958,12 @@ class ActivePd(unittest.TestCase):
         self.assertIn("busy", str(e))
         self.assertNotIn("refused: inline", str(e))
 
+    def test_emlib_busy_refusal_names_the_owner(self):
+        # a library write during a charger test is Busy + kEmErrBusy: the message says what owns the link
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_EM_LIB, bytes([7]))
+        self.assertIn("busy", str(e))
+        self.assertIn("charger test", str(e))
+
     def test_reset_release_status(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="reset"))

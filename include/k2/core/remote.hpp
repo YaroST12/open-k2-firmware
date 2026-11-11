@@ -119,6 +119,7 @@ public:
     remote::Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet);
     bool qrtest_stop();
     size_t blackbox(uint8_t op, uint32_t arg, std::span<uint8_t> out);   // PD black box ring (k2::pdtrace)
+    bool ports_busy() { return ui_.ports_busy(); }   // a charger test or an FC release owns the link
     size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out);   // saved-cable library and spoof (k2::storage, k2::emk_spoof)
     size_t cards(std::span<const uint8_t> req, std::span<uint8_t> out);   // charger report cards (k2::report_card::hw)
     size_t transcap(std::span<const uint8_t> req, std::span<uint8_t> out);   // transition capture (k2::transcap)

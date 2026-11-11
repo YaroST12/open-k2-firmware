@@ -229,6 +229,8 @@ struct Fake {
         out[0] = 0xA5; out[1] = 0x78; out[2] = 0x56; out[3] = 0x34; out[4] = 0x12;
         return 5;
     }
+    bool ports_busy_value = false;   // a charger test or an FC release owns the link
+    bool ports_busy() { return ports_busy_value; }
     std::vector<uint8_t> em_req;
     size_t emlib(std::span<const uint8_t> req, std::span<uint8_t> out) {
         calls++; em_req.assign(req.begin(), req.end());

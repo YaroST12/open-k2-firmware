@@ -442,6 +442,8 @@ inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 4
 //   GET     req [1, seq u16]        rsp [err, seq u16, name(24, NUL padded), vid u16, pid u16]
 //   SAVE    req [2]                 rsp [err, seq u16, existed]   saves the cable last read (e-marker scan)
 //   DELETE  req [3, seq u16, 1]     rsp [err]                     the trailing 1 is the confirmation
+//   (SAVE, DELETE, RENAME and LEARN save are refused with status Busy + [kEmErrBusy] while a charger test or an FC
+//   release owns the link: the flash is shared with the test's own card save)
 //   RENAME  req [4, seq u16, name]  rsp [err, seq u16]            name 1..24 chars of [A-Za-z0-9 -_.]
 //   SPOOF   req [5, 0]              rsp [err, active, requests u16, replies u16, seq u16] (8 bytes)  status
 //           req [5, 1, seq u16]     arm that cable;  req [5, 2]   disarm (same response)
@@ -896,6 +898,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.qrtest_show(u8, u8, u8) } -> std::same_as<Status>;   // version, px, quiet: open the full-screen test QR page
     { b.qrtest_stop() } -> std::same_as<bool>;               // pop the test page when it is showing
     { b.blackbox(u8, std::uint32_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // op, arg, out; returns the payload size
+    { b.ports_busy() } -> std::same_as<bool>;   // a charger test or an FC release owns the link (Ui::ports_busy)
     { b.emlib(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // whole request payload (checked), out; returns the payload size
     { b.cards(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
     { b.transcap(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
@@ -1451,6 +1454,13 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             break;
         default:
             return reply(Status::BadArg);
+        }
+        // Library writes share the flash with the charger test's own card save: refused while a run or an FC
+        // release owns the link, before the backend sees them (reads, spoof and learn status stay open).
+        if ((p[0] == kEmSave || p[0] == kEmDelete || p[0] == kEmRename || (p[0] == kEmLearn && p[1] == kEmLearnSave)) &&
+            backend.ports_busy()) {
+            buf[0] = kEmErrBusy;
+            return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
         }
         return reply_n(backend.emlib(p, buf));
     }

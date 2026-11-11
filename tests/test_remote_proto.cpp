@@ -326,6 +326,51 @@ static void test_cards() {
     check_header(r, 0x62, 12, Status::BadArg, 0);
 }
 
+// The library writes (save, delete, rename, learn-save) share the flash with the charger test's own card
+// save, so they are refused with Busy + kEmErrBusy while a run or an FC release owns the link, before the
+// backend sees them. Reads, spoof and learn status stay available.
+static void test_emlib_writes_refused_while_busy() {
+    auto request = [](uint8_t cmd, uint8_t seq, const std::vector<uint8_t>& payload) {
+        std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, cmd, seq, static_cast<uint8_t>(payload.size())};
+        v.insert(v.end(), payload.begin(), payload.end());
+        v.resize(kFrameSize, 0);
+        return v;
+    };
+    Fake f; Frame r;
+    f.ports_busy_value = true;
+    const std::vector<std::vector<uint8_t>> writes = {
+        {2}, {3, 1, 0, 1}, {4, 1, 0, 'A'}, {6, 3},
+    };
+    uint8_t seq = 100;
+    for (const auto& w : writes) {
+        f.calls = 0;
+        CHECK_EQ(run(f, request(0x61, seq, w), r), 1);
+        check_header(r, 0x61, seq, Status::Busy, 1);
+        CHECK_EQ(int(r[kRspHeader]), int(k2::remote::kEmErrBusy));
+        CHECK_EQ(f.calls, 0);                                        // never reached the backend
+        seq++;
+    }
+    const std::vector<std::vector<uint8_t>> allowed = {
+        {0}, {1, 1, 0}, {5, 0}, {5, 2}, {6, 0}, {6, 2, 0}, {7, 255},
+    };
+    for (const auto& a : allowed) {
+        f.calls = 0;
+        CHECK_EQ(run(f, request(0x61, seq, a), r), 1);
+        check_header(r, 0x61, seq, Status::Ok, 3);
+        CHECK_EQ(f.calls, 1);
+        seq++;
+    }
+    // Not busy: the same writes go through.
+    f.ports_busy_value = false;
+    for (const auto& w : writes) {
+        f.calls = 0;
+        CHECK_EQ(run(f, request(0x61, seq, w), r), 1);
+        check_header(r, 0x61, seq, Status::Ok, 3);
+        CHECK_EQ(f.calls, 1);
+        seq++;
+    }
+}
+
 static void test_emlib() {
     Fake f; Frame r;
     // Each op reaches the backend with its whole payload; the response is the backend's bytes.
@@ -1896,6 +1941,7 @@ int main() {
     test_cable_r();
     test_lab();
     test_emlib();
+    test_emlib_writes_refused_while_busy();
     test_cards();
     test_blackbox();
     test_transcap();

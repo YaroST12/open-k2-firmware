@@ -709,7 +709,7 @@ The legacy ranges are described in `include/k2/drivers/flash_map.hpp`, which sta
 
 Black Box persistence (`k2/core/bbpersist.hpp`): a finished capture is written once, only when the link has been quiet for 300 ms (a program or erase stalls the main loop for up to a few tens of ms), and not at all after 10 minutes without PD traffic or VBUS change (`pdtrace::idle()`). At boot the newest three entries are reloaded into the RAM capture slots (shown as "saved" in the list); older ones stay in flash and count toward the used/free figure in the list footer. Nothing wipes the ring from the UI or remote.
 
-Wear: flash is written only by explicit remote commands (`store save-emarker | save-log`, `emarker save | delete | rename`; `store list` is read-only). The sector registers for 0x08080000 and above are the bank-2 set; `flash::store_bank()` reports which set worked (2, 1 or 0 = no write yet) and every write failure ends in an error code, not a hang. Programming runs from RAM with interrupts masked and bounded waits.
+Wear: flash is written only by explicit remote commands (`store save-emarker | save-log`, `emarker save | delete | rename`; `store list` is read-only). The EmLib writes (save, delete, rename, learn-save) are refused by the dispatcher with status Busy + `kEmErrBusy` while `Ui::ports_busy()` (a charger test or an FC release) holds the link, before the backend runs: the test saves its own card at the end and the flash is shared. The sector registers for 0x08080000 and above are the bank-2 set; `flash::store_bank()` reports which set worked (2, 1 or 0 = no write yet) and every write failure ends in an error code, not a hang. Programming runs from RAM with interrupts masked and bounded waits.
 
 ## Charger report cards
 

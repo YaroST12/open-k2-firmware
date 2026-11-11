@@ -44,7 +44,8 @@ Shorthand: `R` = `python3 tools/k2_remote.py`, `T` = `python3 tools/pd_trace.py`
    `fc trigger` above 20 V is refused (`over limit`).
 8. **Do not flash, replug the PC cable or change the USB link setting in the middle of a test.** Never run ad-hoc
    flash loops. Spoof, Self-power and anything touching flash (`emarker save/delete/rename`, `store save-log`)
-   write flash: do not power off during them.
+   write flash: do not power off during them. `emarker save/delete/rename` (and `emarker learn` save) are refused
+   with Busy while a charger test or an FC release owns the link; wait for the run to finish.
 
 ## 1. Setup
 
