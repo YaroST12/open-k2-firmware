@@ -169,6 +169,7 @@ Err Fs::write_file(const char* path, std::span<const std::uint8_t> data) {
         else if (std::size_t(w) != data.size()) r = Err::NoSpace;
     }
     const int c = lfs_file_close(&lfs_, &f);          // commits the file
+    changed();                                        // a used_blocks() asked while the file was open is stale now
     if (r == Err::Ok) r = map(c);
     if (r == Err::Ok) r = map(lfs_rename(&lfs_, tmp, path));
     if (r != Err::Ok) lfs_remove(&lfs_, tmp);
@@ -190,6 +191,7 @@ Err Fs::write_chunks(const char* path, std::size_t total, Fill fill, void* ctx) 
         else if (std::size_t(w) != n) r = Err::NoSpace;
     }
     const int c = lfs_file_close(&lfs_, &f);          // commits the file
+    changed();                                        // the fill may have asked used_blocks() mid-write
     if (r == Err::Ok) r = map(c);
     if (r == Err::Ok) r = map(lfs_rename(&lfs_, tmp, path));
     if (r != Err::Ok) lfs_remove(&lfs_, tmp);
@@ -204,6 +206,7 @@ Err Fs::append_file(const char* path, std::span<const std::uint8_t> data) {
     if (w < 0) r = map(w);
     else if (std::size_t(w) != data.size()) r = Err::NoSpace;
     const int c = lfs_file_close(&lfs_, &f);
+    changed();
     return r != Err::Ok ? r : map(c);
 }
 

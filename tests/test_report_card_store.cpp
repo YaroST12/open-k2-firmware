@@ -15,13 +15,14 @@ namespace rc = k2::report_card;
 
 // One littlefs volume on a RAM disk; reboot() remounts it with a fresh store (no RAM state survives).
 struct Vol {
-    k2test::RamDisk disk{96};
+    std::uint32_t blocks;
+    k2test::RamDisk disk;
     std::unique_ptr<fs::Fs> fs;
     std::unique_ptr<rc::Store> s;
-    Vol() { reboot(); }
+    explicit Vol(std::uint32_t n = 96) : blocks(n), disk(n) { reboot(); }
     void reboot() {
         s.reset();
-        fs = std::make_unique<fs::Fs>(disk, 96);
+        fs = std::make_unique<fs::Fs>(disk, blocks);
         bool formatted = false;
         fs->mount_or_format(formatted);
         s = std::make_unique<rc::Store>(*fs);
@@ -458,6 +459,134 @@ static void test_power_cut_everywhere() {
     }
 }
 
+static unsigned card_files(Vol& v) {
+    unsigned n = 0;
+    v.fs->list(rc::kDir, [&](const fs::Info& i) { if (!i.dir) ++n; return true; });
+    return n;
+}
+
+// More card files than kMaxCards (v8/v9 files that an older build could not see came back beside the cards saved
+// meanwhile: 69 files on a device). The newest 64 by stamp are listed whatever the name order: here the highest
+// fingerprints carry the highest stamps, so a scan that stops at 64 names keeps the oldest cards and loses the newest.
+// Reading never deletes anything.
+static constexpr unsigned kOver = rc::kMaxCards + 5;
+static void write_over_cap(Vol& v) {
+    for (unsigned i = 0; i < kOver; ++i) {
+        rc::Card c = card(0x10000000u + i, 1 + i % 3);
+        c.card_no = std::uint16_t(i + 1); c.runs = 1;
+        write_old_card(v, c, 250, 10, 100 + i);        // stamp grows with the name
+    }
+}
+static void test_over_cap_lists_the_newest_by_stamp() {
+    Vol v(200);
+    write_over_cap(v);
+    v.reboot();
+    v.disk.reset_counters();
+    const auto got = all(*v.s);
+    CHECK_EQ(got.size(), std::size_t(rc::kMaxCards));
+    if (!got.empty()) {
+        CHECK_EQ(got.front().id.fp, 0x10000000u + kOver - 1);          // the newest file is listed first
+        CHECK_EQ(got.back().id.fp, 0x10000000u + kOver - rc::kMaxCards); // the 5 oldest are not listed
+    }
+    rc::Card g;
+    CHECK_EQ(v.s->find(0x10000000u + kOver - 1, g), 1);
+    CHECK_EQ(v.s->find(0x10000000u, g), 0);
+    CHECK_EQ(v.disk.progs + v.disk.erases, 0u);                        // listing writes nothing
+    CHECK_EQ(card_files(v), kOver);
+}
+
+// A save of a new charger with more files than the cap: the eviction drops the lowest indexed stamp and every file the
+// index left out, so the volume converges to kMaxCards files.
+static void test_save_over_cap_ends_at_the_cap() {
+    Vol v(200);
+    write_over_cap(v);
+    v.reboot();
+    rc::Card n = card(0x7E57, 2);
+    CHECK_EQ(int(v.s->put(n)), int(rc::Err::Ok));
+    CHECK_EQ(card_files(v), rc::kMaxCards);
+    v.reboot();
+    const auto got = all(*v.s);
+    CHECK_EQ(got.size(), std::size_t(rc::kMaxCards));
+    if (!got.empty()) CHECK_EQ(got.front().id.fp, 0x7E57u);
+    rc::Card g;
+    CHECK_EQ(v.s->find(0x10000000u + kOver - 1, g), 1);                // the newest old card stays
+    CHECK_EQ(v.s->find(0x10000000u + kOver - rc::kMaxCards, g), 0);    // the lowest indexed stamp made room
+    // every listed number is unique and leads back to its own card
+    for (const auto& c : got) {
+        unsigned same = 0;
+        for (const auto& d : got) same += d.card_no == c.card_no;
+        CHECK_EQ(same, 1u);
+    }
+}
+
+// Two files with the same card number (ids were handed out again while older files were invisible). The newer card
+// keeps the number; the older one shows the next free number (one above the highest in use), from the index alone:
+// nothing is written until that card's own next save, which stores the new number.
+static void test_duplicate_numbers_newer_keeps_it() {
+    Vol v;
+    rc::Card a = card(0xA1, 1); a.card_no = 5; a.runs = 1; rc::set_name(a, "Older five");
+    rc::Card b = card(0xB2, 2); b.card_no = 5; b.runs = 1; rc::set_name(b, "Newer five");
+    rc::Card c = card(0xC3, 3); c.card_no = 7; c.runs = 1;
+    write_old_card(v, a, 250, 10, 10);
+    write_old_card(v, b, 250, 10, 20);
+    write_old_card(v, c, 250, 10, 15);
+    v.reboot();
+    v.disk.reset_counters();
+    rc::Card g;
+    CHECK_EQ(v.s->get(5, g), 1);
+    CHECK_EQ(g.id.fp, 0xB2u);
+    CHECK_EQ(v.s->get(8, g), 1);
+    CHECK_EQ(g.id.fp, 0xA1u);
+    CHECK_EQ(g.card_no, 8);                                  // the loaded card carries the number it is shown with
+    CHECK_STR(g.name, "Older five");
+    const auto got = all(*v.s);
+    CHECK_EQ(got.size(), 3u);
+    for (const auto& x : got) if (x.id.fp == 0xA1) CHECK_EQ(x.card_no, 8);
+    std::array<std::uint16_t, 4> nums{};
+    CHECK_EQ(v.s->numbers(nums), 3u);
+    CHECK_EQ(nums[0], 5); CHECK_EQ(nums[1], 7); CHECK_EQ(nums[2], 8);
+    CHECK_EQ(v.disk.progs + v.disk.erases, 0u);              // no write at indexing
+    v.reboot();                                              // stable across reboots before any save
+    CHECK_EQ(v.s->get(8, g), 1);
+    CHECK_EQ(g.id.fp, 0xA1u);
+    // A re-test of the older card stores its new number; it is now the newest, and keeps 8.
+    rc::Card r = card(0xA1, 4);
+    CHECK_EQ(int(v.s->put(r)), int(rc::Err::Ok));
+    CHECK_EQ(r.card_no, 8);
+    v.reboot();
+    CHECK_EQ(v.s->get(8, g), 1);
+    CHECK_EQ(g.id.fp, 0xA1u);
+    CHECK_EQ(g.runs, 2);
+    CHECK_EQ(v.s->get(5, g), 1);
+    CHECK_EQ(g.id.fp, 0xB2u);
+}
+
+// The case that made the duplicates on hardware: a v8 card file an older build could not read kept its number 5 while
+// the number went to a new v10 card. The invisible card's stamp can sit above the v10 card's (stamps were handed out
+// from the cards the build could see), so the stamp alone would move the number the user has seen away from the v10
+// card. A current-format file keeps its number over an older-format one; the stamp decides only between equals.
+static void test_duplicate_number_stays_with_the_current_format() {
+    Vol v;
+    rc::Card old8 = card(0xA1, 1); old8.card_no = 5; old8.runs = 1; rc::set_name(old8, "Invisible v8");
+    rc::Card cur = card(0xB2, 2); cur.card_no = 5; cur.runs = 1; rc::set_name(cur, "Current v10");
+    rc::Card c = card(0xC3, 3); c.card_no = 7; c.runs = 1;
+    write_old_card(v, old8, 198, 8, 30);                    // the higher stamp
+    write_old_card(v, cur, 250, 10, 20);
+    write_old_card(v, c, 250, 10, 15);
+    v.reboot();
+    v.disk.reset_counters();
+    rc::Card g;
+    CHECK_EQ(v.s->get(5, g), 1);
+    CHECK_EQ(g.id.fp, 0xB2u);
+    CHECK_EQ(v.s->get(8, g), 1);
+    CHECK_EQ(g.id.fp, 0xA1u);
+    CHECK_STR(g.name, "Invisible v8");
+    std::array<std::uint16_t, 4> nums{};
+    CHECK_EQ(v.s->numbers(nums), 3u);
+    CHECK_EQ(nums[0], 8); CHECK_EQ(nums[1], 5); CHECK_EQ(nums[2], 7);   // the list order stays by stamp
+    CHECK_EQ(v.disk.progs + v.disk.erases, 0u);
+}
+
 int main() {
     test_empty_and_first_put();
     test_retest_replaces_and_keeps_name();
@@ -477,5 +606,9 @@ int main() {
     test_v6_file_loads_unchanged_and_takes_a_repeat();
     test_power_cut_everywhere();
     test_every_older_file_size_loads();
+    test_over_cap_lists_the_newest_by_stamp();
+    test_save_over_cap_ends_at_the_cap();
+    test_duplicate_numbers_newer_keeps_it();
+    test_duplicate_number_stays_with_the_current_format();
     return test_report("test_report_card_store");
 }
