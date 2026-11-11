@@ -284,8 +284,8 @@ void Engine::keep_alive() {
     due_ms_ = env_.now_ms() + accp::kScpKeepAliveMs;
 }
 
-// Send the message built in utx_ and keep it until its ACK arrives (T/TAF 083-2024 8.2.3.2 and 8.3.1: every message
-// that is not an ACK / NCK is acknowledged; no ACK within tACKReceive means the same frame, same number, goes out again).
+// Send the message built in utx_ and keep it until its ACK arrives (reverse-engineered: every message
+// that is not an ACK / NCK is acknowledged; no ACK within the receive window means the same frame, same number, goes out again).
 void Engine::ufcs_track(std::size_t n, UKind kind, std::uint32_t now) {
     utx_n_ = static_cast<std::uint8_t>(n);
     utx_kind_ = kind;

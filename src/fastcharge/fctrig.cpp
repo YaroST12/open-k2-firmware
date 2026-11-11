@@ -145,8 +145,8 @@ bool ufcs_handshake(ufcs::Handshake& t) {
         dpdm::delay_us(ufcs::remaining_us(8'000, t.fall_us[i]));   // and its 8 ms low time
         if (dpdm::read().pa7) ok = false;
     }
-    // T/TAF 083-2024 7.3 (fig. 5): the sink starts watching D+ for high at the START of the 4th
-    // signal (D- low, tDet4 6..10 ms) and keeps watching for tDpDet (11..15 ms). A source may end the
+    // Handshake timing (reverse-engineered, confirmed on real sources): the sink starts watching D+ for high at the START
+    // of the 4th signal (D- low, 6..10 ms) and keeps watching for 11..15 ms. A source may end the
     // D+/D- short and pull D+ high while D- is still low: the CUKTECH 10 charger (C1) answered inside
     // the 8 ms and the old "D+ must still be low at the end" check failed it (fin=0, ok=0). D- held
     // low keeps a plain DCP short low, so this cannot pass a mirror.

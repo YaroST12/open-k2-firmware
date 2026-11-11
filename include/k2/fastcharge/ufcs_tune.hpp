@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// UFCS runtime tuner, pure. The defaults are the published standard (T/TAF 083-2024) as confirmed on a
+// UFCS runtime tuner, pure. The defaults are the standard behaviour (reverse-engineered) as confirmed on a
 // real source (Baseus FH22 charger): 8N1 at 115200, receiver address 1 (source), protocol version 1,
 // Ping first, CRC-8 poly 0x29 over everything after the sync byte. Every one of those stays a field so a
 // source that deviates can still be tried: header address / version / type bits, the opener and keep-alive

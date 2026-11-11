@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// UFCS trigger through fc::Engine against a fake UFCS source that behaves like a real one (T/TAF 083-2024):
+// UFCS trigger through fc::Engine against a fake UFCS source that behaves like a real one (reverse-engineered):
 // every message that is not an ACK / NCK is acknowledged with its own message number, the source numbers its
 // own messages, answers Get_Output_Capabilities with the Baseus FH22 charger's two output modes, answers a Request with
 // Accept and, after a delay, Power_Ready (the output moves then), and takes Exit_UFCS_Mode as "back to 5 V".
@@ -711,7 +711,7 @@ static void src_reset_session(FakeUfcs& c) {
 
 // TOPADRE 65 W (2026-11-08): Request ACKed, Accept heard, then the source sent Soft_Reset instead of Power_Ready. The
 // engine used to wait out the 600 ms Power_Ready timer and fail "voltage not reached". It starts over instead
-// (Ping, Get_Output_Capabilities, the same Request) and reaches the level (T/TAF 083-2024 8.2.3.5).
+// (Ping, Get_Output_Capabilities, the same Request) and reaches the level (reverse-engineered: a Soft_Reset restarts both counters).
 static void soft_reset_in_power_wait() {
     FakeUfcs c;
     c.power_ms = 300;

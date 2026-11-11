@@ -79,7 +79,7 @@ signalling", while the implementation and the same document's `:99` put it on D+
 TX (D-) / PA3 RX (D+), 115200 8N2, DMA1 ch6 (`include/k2/drivers/uart2.hpp:1-3,12`, `src/drivers/uart2.cpp:39,59-67`),
 physical handshake in `src/fastcharge/fctrig.cpp:72-93` (both lines 0 V 50 ms; D- 3.3 V 2 ms / 0 V 8 ms twice
 with D+ following; D- high, D+ must answer within 15 ms), `ufcs_open()` `:151-161` hands the lines to
-USART2. Public UFCS material (the CAICT "Universal Fast Charging Specification", T/TAF 083-2022)
+USART2. Public UFCS material (the "Universal Fast Charging Specification")
 describes a half-duplex UART on D+/D- for USB-A/USB-C 2.0 bricks, with the Type-C alternative
 reserved. The repo's hardware status: the handshake is "not yet confirmed on a UFCS source"
 (`fctrig.cpp:75`) and the CUKTECH UFCS unit cut the A-port power (`ufcs-cuts-a-port-power`). Verdict:

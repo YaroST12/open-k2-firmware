@@ -103,7 +103,7 @@ constexpr std::int32_t cable_mbps(std::uint8_t bits, std::uint16_t vid) {
 // ---- the two summary rows of the Sink tab, worded by who holds the number down ----
 // Both fit the 19-cell value column of the Connection page in every case (checked in tests/test_pd_tabs.cpp).
 // `warn` is set only when the CABLE is what holds the link below what the other parties could do: that is the one
-// abnormal reading (ISA-101); a sink that draws less than it is offered is the normal state and stays neutral.
+// abnormal reading (one abnormal state per view); a sink that draws less than it is offered is the normal state and stays neutral.
 struct Cat {   // a bounded append into a caller's buffer, NUL-terminated by end()
     std::span<char> out;
     std::size_t n = 0;
