@@ -13,6 +13,8 @@
 #include "k2/core/survey.hpp"
 #include "k2/pd/emk_variant.hpp"
 #include "k2/pd/emrec.hpp"
+#include "k2/pd/diag_live.hpp"
+#include "k2/pd/diag_screen.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/power_calc.hpp"
 #include "k2/pd/pd_source.hpp"
@@ -1055,8 +1057,17 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
         s.sv = &survey::state();
         const bool op = before(now_ms, op_until_);
         if (op) s.op = op_.view();
+        // The PD diagnosis verdict, only while its session is open: a finished one would contradict the tab's live state.
+        char dv[pd::diag::screen::kVerdictChars + 8];
+        const pd::diag::Report &dr = pd::diag::live::report();
+        const bool diag_on = pd::diag::live::state() == pd::diag::live::State::Open && !dr.empty && !dr.no_pd;
+        if (diag_on) {
+            pd::diag::screen::verdict(dr, dv);
+            s.diag = dv;
+        }
         conn::status_text(s, txt);
         if (!op && s.spoof_armed && facts_.charger) tone = FooterTone::Caution;
+        else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
     }
     status_txt_ = txt;
     draw_footer_cached(ctx_.content, tone, txt.view(), status_);

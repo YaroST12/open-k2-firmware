@@ -618,7 +618,7 @@ ProtoInfo live_proto(const UiContext &ctx, const power::Metrics &pm);
 
 // Home v7 "dual hero": the walk-by page, the whole 224 x 240 content (no title bar, no footer band). VBUS cell
 // y0..69, IBUS cell y72..141 (64 px digits over a faint patient-monitor trend sweep, status edge, exception pill /
-// limit alarm / limit bar), W / Wh / Ah band y144..193, info block y196..239 (USB link, protocol row). The pure
+// limit alarm / limit bar), W / Wh / Ah band y144..193, info block y196..239 (PD diagnosis, protocol row). The pure
 // parts are home_model / home_cell / home_proto; this class owns the state and decides what to repaint
 // (src/ui/ui_home.cpp). OK short = trend window, OK long = energy reset.
 class HomePage final : public PageBase {
@@ -905,7 +905,8 @@ public:
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
     static Menu tool_menu(int i) {
         constexpr Menu kMenus[kToolCount] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
-                                             Menu::Connection, Menu::BlackBox, Menu::Cards, Menu::Diag, Menu::Twin};
+                                             Menu::Connection, Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
+                                             Menu::Twin};
         return kMenus[i < 0 || i >= kToolCount ? 0 : i];
     }
     static const char *tool_name(int i);

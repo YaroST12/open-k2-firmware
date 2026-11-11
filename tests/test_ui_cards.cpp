@@ -282,17 +282,20 @@ static void test_page() {
 }
 
 static void test_tools_hub_lists_cards() {
-    CHECK_EQ(kToolCount, 9);
-    CHECK_STR(ToolsPage::tool_name(8), "Device twins");
-    CHECK_EQ(ToolsPage::tool_menu(8) == Menu::Twin, 1);
-    CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(std::strlen(tool_hint(8)) <= 24 && std::strlen(tool_hint(8)) > 0, 1);
-    CHECK_STR(ToolsPage::tool_name(6), "Report cards");
-    CHECK_EQ(ToolsPage::tool_menu(6) == Menu::Cards, 1);
-    CHECK_EQ(ToolsPage::tool_menu(2) == Menu::Spoof, 1);
-    CHECK_EQ(ToolsPage::tool_menu(7) == Menu::Diag, 1);
+    CHECK_EQ(kToolCount, 10);
+    CHECK_STR(ToolsPage::tool_name(9), "Device twins");
+    CHECK_EQ(ToolsPage::tool_menu(9) == Menu::Twin, 1);
+    CHECK_EQ(int(tool_readiness(9, SetupState{}, false).level), int(ToolLevel::Ready));
+    CHECK_EQ(std::strlen(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);
+    CHECK_STR(ToolsPage::tool_name(6), "PD diagnosis");
+    CHECK_EQ(ToolsPage::tool_menu(6) == Menu::Diagnosis, 1);
     CHECK_EQ(int(tool_readiness(6, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(std::strlen(tool_hint(6)) <= 24 && std::strlen(tool_hint(6)) > 0, 1);
+    CHECK_STR(ToolsPage::tool_name(7), "Report cards");
+    CHECK_EQ(ToolsPage::tool_menu(7) == Menu::Cards, 1);
+    CHECK_EQ(ToolsPage::tool_menu(2) == Menu::Spoof, 1);
+    CHECK_EQ(ToolsPage::tool_menu(8) == Menu::Diag, 1);
+    CHECK_EQ(int(tool_readiness(7, SetupState{}, false).level), int(ToolLevel::Ready));
+    CHECK_EQ(std::strlen(tool_hint(7)) <= 24 && std::strlen(tool_hint(7)) > 0, 1);
 }
 
 // K2_DUMP=dir: the FH22 card (#18, from the golden fixtures) as the user sees it, 1:1 at rotation 3 (buttons at the bottom), into

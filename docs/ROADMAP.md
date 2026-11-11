@@ -882,6 +882,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Trigger-frozen captures (contract change, hard reset, VBUS dip, detach) | done | verified | `pdtrace` |
 | Captures as /bb files (32, oldest evicted), LZ4, written when the link is quiet | done | verified | `bbstore`, `bbpersist`, `lz` |
 | Device viewer (Tools > Black Box) | done | verified | `ui_blackbox`, `pdtrace_view` |
+| Diagnosis: ranked Fail / Warn / Info findings per attach session, passive (`pd_trace.py diagnose`, Cmd 0x72, shell `diag`) | done | not verified | `diag`, `diag_live`, `diag_wire` |
+| Diagnosis on screen: Tools > PD diagnosis, Home row 1 `Diag <word>`, Who's attached Source footer | done | not verified | `diag_screen`, `ui_diagnosis`, `home_model` |
 | WebHID timeline viewer, MSC export of captures | planned | n/a | |
 
 ## Transition capture

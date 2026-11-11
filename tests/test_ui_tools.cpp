@@ -53,7 +53,7 @@ static void test_fc() {
     CHECK_STR(tool_readiness(0, st(true, true, true), true).tag, "LOAD");
 }
 
-// Connection, Black Box, Report cards and Diag never block: Connection's own actions carry the inline confirm.
+// Connection, Black Box, PD diagnosis, Report cards and Diag never block: Connection's own actions carry the inline confirm.
 static void test_always_ready_tools() {
     for (int t = 4; t < kToolCount; t++) {
         if (t == 3) continue;
@@ -70,7 +70,7 @@ static void test_cable_r() {
     CHECK_EQ(r.level == ToolLevel::Blocked, 1);
     CHECK_STR(r.tag, "NO PM");
     // Out-of-range tool numbers fall back to ready, not a crash.
-    CHECK_EQ(tool_readiness(9, st(false, false, false), true).level == ToolLevel::Ready, 1);
+    CHECK_EQ(tool_readiness(kToolCount, st(false, false, false), true).level == ToolLevel::Ready, 1);
 }
 
 static void test_spoof_tool() {
@@ -92,8 +92,10 @@ static void test_hurt_table() {
         ToolHurt::Nothing,   // 3 Cable R: measures under the user's own load
         ToolHurt::Nothing,   // 4 Connection: reads, its active actions confirm on their own
         ToolHurt::Nothing,   // 5 Black Box: passive recorder
-        ToolHurt::Nothing,   // 6 Report cards: read-only
-        ToolHurt::Nothing,   // 7 Diag: counters
+        ToolHurt::Nothing,   // 6 PD diagnosis: reads the Black Box records
+        ToolHurt::Nothing,   // 7 Report cards: read-only
+        ToolHurt::Nothing,   // 8 Diag: counters
+        ToolHurt::Nothing,   // 9 Device twins: the live proof refuses a live sink itself
     };
     for (int t = 0; t < kToolCount; t++) {
         CHECK_EQ(int(tool_hurt_by(t)), int(kExpect[t]));

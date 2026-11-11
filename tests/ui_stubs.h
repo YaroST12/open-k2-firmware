@@ -24,6 +24,7 @@
 #include "k2/core/rescan.hpp"
 #include "k2/pd/pd_survey.hpp"
 #include "k2/twin/twin_hw.hpp"
+#include "k2/pd/diag.hpp"
 #include <initializer_list>
 #include <utility>
 struct StubState {
@@ -234,6 +235,9 @@ struct StubState {
     std::vector<uint8_t> ps_file;
     bool ps_file_present = false, ps_write_fails = false;
     int ps_writes = 0, ps_removes = 0;
+    // The Black Box diagnosis (pd::diag::live): the report the screens read and what it is about (0 none, 1 open, 2 last).
+    k2::pd::diag::Report diag_report{};
+    uint8_t diag_state = 0;
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store

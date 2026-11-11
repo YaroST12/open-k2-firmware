@@ -67,6 +67,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Autorotate: return pages_.push<AutorotatePage>(ctx_);
     case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
     case Menu::Twin: return pages_.push<TwinPage>(ctx_);
+    case Menu::Diagnosis: return pages_.push<DiagnosisPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -83,6 +84,7 @@ ListState Ui::list_state() {
         case Menu::Cards: return top_as<CardsPage>().list_state();
         case Menu::Autorotate: return top_as<AutorotatePage>().list_state();
         case Menu::Twin: return top_as<TwinPage>().list_state();
+        case Menu::Diagnosis: return top_as<DiagnosisPage>().list_state();
         default: return ListState{};
         }
     }
@@ -335,7 +337,9 @@ Ui::Session Ui::session() {
     bool rows = false;
     if (depth_) {
         switch (menu()) {
-        case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: case Menu::Twin: rows = list_state().count > 0; break;
+        case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: case Menu::Twin: case Menu::Diagnosis:
+            rows = list_state().count > 0;
+            break;
         case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: rows = true; break;
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();

@@ -8,6 +8,7 @@
 // A truncation is fixed by rewording the copy (docs/UI_DESIGN.md section 6), not by hiding it here.
 #include "test_util.h"
 #include "card_fixtures.h"
+#include "diag_fixture.h"
 #include "fake_lcd.h"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "ui_stubs.h"
@@ -109,7 +110,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         draw_for_a_while(ui, kPageNames[p], rot, sc.name);
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
-                                             "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin"};
+                                             "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "diagnosis"};
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
@@ -127,6 +128,29 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         for (int i = 0; i < 6; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
         ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // Learn from last Identify
         draw_for_a_while(ui, "twin-learn", rot, sc.name);
+    }
+    // PD diagnosis: every row of the fixture reports has been the focused one (note line open), and Home row 1 with each.
+    {
+        static const char *const kDiagFixtures[] = {"tests/fixtures/bbdiag/hub_rear_60w.raw", "tests/fixtures/bbdiag/ramp_70w.raw",
+                                                    "tests/fixtures/bbdiag/stress_soft_resets.raw",
+                                                    "tests/fixtures/bbdiag/splitter_rear_left.raw"};
+        const k2::pd::diag::Report saved = g_stub.diag_report;
+        const uint8_t saved_state = g_stub.diag_state;
+        for (const char *path : kDiagFixtures) {
+            g_stub.diag_report = path == kDiagFixtures[0] ? diag_fixture::case1() : diag_fixture::report(path);
+            g_stub.diag_state = 1;
+            enter("diagnosis-rows", rot, sc.name);
+            ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+            if (ui.push_menu(Menu::Diagnosis, g_t)) {
+                draw_for_a_while(ui, "diagnosis-rows", rot, sc.name);
+                for (int i = 0; i < 24; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
+            }
+            enter("home-diag", rot, sc.name);
+            CHECK_EQ(ui.goto_page(static_cast<uint8_t>(Page::Home), g_t), true);
+            draw_for_a_while(ui, "home-diag", rot, sc.name);
+        }
+        g_stub.diag_report = saved;
+        g_stub.diag_state = saved_state;
     }
     static const char *const kTabNames[] = {"conn-source", "conn-cable", "conn-sink"};
     for (uint8_t tab = 0; tab < 3; ++tab) {

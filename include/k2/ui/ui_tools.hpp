@@ -17,9 +17,9 @@ struct Readiness {
     const char *reason = "Ready";    // footer sentence, at most 28 characters
 };
 
-constexpr int kToolCount = 9;        // FC trigger, PD trigger, Spoof, Cable R, Connection, Black Box, Report cards, Diag, Device twins (ToolsPage::tool_menu maps to Menu)
+constexpr int kToolCount = 10;       // FC trigger, PD trigger, Spoof, Cable R, Connection, Black Box, PD diagnosis, Report cards, Diag, Device twins (ToolsPage::tool_menu maps to Menu)
 constexpr int kToolSpoof = 2;        // the Spoof row opens Connection on the Cable tab's Spoof list, not a menu of its own
-constexpr int kToolRows = 9;         // one row per tool (the list scrolls: not all of them fit above the footer at once)
+constexpr int kToolRows = 10;        // one row per tool (the list scrolls: not all of them fit above the footer at once)
 
 // Port-neutral setup hint under the tool name (at most 24 characters; never says which port).
 const char *tool_hint(int tool);
