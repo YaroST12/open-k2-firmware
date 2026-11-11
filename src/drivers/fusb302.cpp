@@ -1620,18 +1620,26 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     K2LOG("[EMK] snapshot POWER=0x%02X SW0=0x%02X SW1=0x%02X inline=%d active_cc=%d cable_acks=%u\n",
                 pre.power, pre.sw0, pre.sw1, int(inline_now()), int(g_active_cc), unsigned(g_engine.cable_acks));
     // With a source attached the scan keeps the K2's Rd on the live line and tries only that line's orientation; a cable
-    // alone gets both orientations and no Rd (emk_attached.hpp). STATUS0 is read only where a source could be attached,
-    // so the cable-alone register sequence stays as it was.
+    // alone gets both orientations and no Rd (emk_attached.hpp). The inputs are the firmware's own truth: the power
+    // monitor's VBUS, the caps of this attach and the sink engine; STATUS0 VBUSOK and the passive contract flag are read
+    // and logged for diagnosis only (VBUSOK read 0 at 5.02 V on hardware). STATUS0 is read only where a source could be
+    // attached, so the cable-alone register sequence stays as it was.
     std::uint8_t st0 = 0;
     const bool rd_up = (g_active_cc == 1 || g_active_cc == 2) &&
                        (pre.sw0 & (g_active_cc == 1 ? pd::phy::kPdwn1 : pd::phy::kPdwn2)) != 0;
     if (rd_up && !rd(kStatus0, st0)) st0 = 0;
-    const emk_attached::Plan plan = emk_attached::plan(
-        emk_attached::attached(g_active_cc, pre.sw0, (st0 & ccprobe::kStatus0VbusOk) != 0, g_engine.contract.valid), g_active_cc);
+    emk_attached::Facts facts;
+    facts.active_cc = g_active_cc;
+    facts.sw0 = pre.sw0;
+    facts.vbus_mv = g_vbus_mv;
+    facts.caps_valid = g_engine.caps.valid;
+    facts.sink_busy = g_sink.status().state != pd::SinkState::Idle;
+    const emk_attached::Plan plan = emk_attached::plan(emk_attached::attached(facts), g_active_cc);
     g_read_info = {plan.attached ? emk_attached::Mode::Attached : emk_attached::Mode::Alone, 0};
     if (rd_up)
-        K2LOG("[EMK] scan mode %s: active_cc=%d vbus_ok=%d contract=%d\n", emk_attached::mode_text(g_read_info.mode).data(),
-              int(g_active_cc), int((st0 & ccprobe::kStatus0VbusOk) != 0), int(g_engine.contract.valid));
+        K2LOG("[EMK] scan mode %s: active_cc=%d vbus_mv=%d caps=%d sink=%d (diag vbus_ok=%d contract=%d)\n",
+              emk_attached::mode_text(g_read_info.mode).data(), int(g_active_cc), int(g_vbus_mv), int(g_engine.caps.valid),
+              int(g_sink.status().state), int((st0 & ccprobe::kStatus0VbusOk) != 0), int(g_engine.contract.valid));
     cc_switches(plan.pc13);
     g_cable_read = true;   // every flush below writes CONTROL1 with SOP' and SOP'' receive on
 

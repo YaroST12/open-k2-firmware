@@ -4510,11 +4510,14 @@ std::vector<unsigned> sw0_writes(std::size_t from) {
     return v;
 }
 
-// A source attached on CC1 with the K2's Rd, a 5 V contract up and VBUS above the comparator.
+// A source attached on CC1 with the K2's Rd and a Ready 5 V contract, as measured on hardware 2026-11-11 (NOVOO behind
+// the Baseus 100 W cable, after `pd attach`): SWITCHES0 0x05, the chip's STATUS0.VBUSOK reads 0 with 5.02 V on VBUS, the
+// power monitor reads 5023 mV, the caps are valid and the sink engine is Ready.
 void attached_source_on_cc1() {
     start_attach_to_ready();
     g_auto_txsent = false;
-    g_reg[0x40] = 0xA0;                                          // COMP + VBUSOK
+    g_reg[0x40] = 0x20;                                          // COMP only: VBUSOK stays 0
+    fusb302::sink_vbus(5023);                                    // the power monitor's reading (the UI feeds it every tick)
     g_cable.cc = 1;
     g_cable.only_pd3_svdm1 = true;                               // the second variant answers
 }
@@ -4537,7 +4540,6 @@ void test_attached_scan_keeps_rd_and_the_attach_and_tries_one_orientation() {
     CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Attached));
     // The attach survives: Rd up, no Hard Reset, the contract and the caps still valid, VBUS up all the way.
     CHECK_EQ(sw0_rd(), 1u);
-    CHECK_EQ(g_reg[0x40] & 0x80u, 0x80u);
     CHECK_EQ(usb_has("Hard Reset"), false);
     CHECK_EQ(usb_has("Hard reset"), false);
     settle_ms(100);
@@ -4554,10 +4556,11 @@ void test_attached_scan_on_cc2_never_puts_vconn_on_cc2() {
     reread_style_boot();
     fusb302::set_force_line(2);
     CHECK_EQ(fusb302::rd_for_run(true), true);
-    g_reg[0x40] = 0xA0;
+    g_reg[0x40] = 0x20;
     for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
     CHECK_EQ(usb_has("Active CC detected"), true);
     for (int i = 0; i < 5; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    fusb302::sink_vbus(5023);
     g_cable.cc = 2;
     g_cable.only_pd3_svdm1 = true;
     const std::size_t from = g_log.size();
@@ -4625,6 +4628,20 @@ void test_attached_scan_stops_on_a_hard_reset_from_the_source_and_latches_it() {
     g_reg[0x3E] = 0;
     for (int i = 0; i < 5; i++) { g_ms += 1; fusb302::service(); }
     CHECK_EQ(usb_has("Hard reset received from the source"), true);   // the latch reached service()
+    clean_up_rd_tests();
+}
+
+// The state the first inputs missed (hardware 2026-11-11): STATUS0 VBUSOK 0, the passive contract flag unset, VBUS 5023 mV on
+// the power monitor, caps valid, the sink Ready. The mode is Attached and the line names every input.
+void test_attached_is_selected_from_the_power_monitor_caps_and_sink_when_vbusok_reads_zero() {
+    attached_source_on_cc1();
+    CHECK_EQ(g_reg[0x40] & 0x80, 0);                             // the chip's comparator says no
+    CHECK_EQ(fusb302::caps().valid, true);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Attached));
+    CHECK_EQ(usb_has("[EMK] scan mode attached: active_cc=1 vbus_mv=5023 caps=1 sink="), true);
+    CHECK_EQ(usb_has("diag vbus_ok=0"), true);
     clean_up_rd_tests();
 }
 
@@ -4828,7 +4845,8 @@ int main() {
     test_attached_scan_with_a_cable_on_the_idle_orientation_finds_nothing_and_keeps_the_attach();
     test_attached_scan_logs_a_variant_that_was_acked_but_not_answered_and_tries_the_next();
     test_attached_scan_waits_the_full_window_for_an_acked_variant();
-    test_attached_scan_stops_on_a_hard_reset_from_the_source_and_latches_it();   // last: each one ends with a detach / Rd off
+    test_attached_scan_stops_on_a_hard_reset_from_the_source_and_latches_it();   // each one ends with a detach / Rd off
+    test_attached_is_selected_from_the_power_monitor_caps_and_sink_when_vbusok_reads_zero();   // last
     return test_report("test_fusb302_scan");
 }
 

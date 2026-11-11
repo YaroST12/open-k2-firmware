@@ -11,17 +11,29 @@
 #include <cstdint>
 #include <string_view>
 
+#include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_phy.hpp"
 
 namespace k2::emk_attached {
 
-// A source is attached when the K2 presents Rd on the line it talks on and either the chip's VBUS comparator sees
-// VBUS (vSafe5V and up) or a contract is up. `active_cc` is the line the driver locked (0 = none), `sw0` the
-// SWITCHES0 value before the scan.
-constexpr bool attached(std::uint8_t active_cc, std::uint8_t sw0, bool vbus_ok, bool contract) {
-    if (active_cc != 1 && active_cc != 2) return false;
-    const std::uint8_t pdwn = active_cc == 1 ? pd::phy::kPdwn1 : pd::phy::kPdwn2;
-    return (sw0 & pdwn) != 0 && (vbus_ok || contract);
+// What the driver knows before the scan. The chip's own VBUS comparator (STATUS0 VBUSOK) and the passive contract flag
+// are not inputs: on hardware (2026-11-11, 5.02 V on the line, a Ready 5 V contract) the first read 0 and the second
+// was never set, because the K2's own Request does not go through the passive decoder.
+struct Facts {
+    std::uint8_t active_cc = 0;     // the line the driver locked (0 = none)
+    std::uint8_t sw0 = 0;           // SWITCHES0 before the scan
+    std::int32_t vbus_mv = -1;      // the power monitor's latest VBUS (-1 = unknown), the firmware's one source of truth
+    bool caps_valid = false;        // valid Source_Capabilities of this attach
+    bool sink_busy = false;         // the sink engine is not idle
+};
+
+// A source is attached when the K2 presents Rd on the line it talks on and any one of: VBUS at vSafe5V or above on
+// the power monitor, valid source caps, or a sink engine that is not idle.
+constexpr bool attached(const Facts& f) {
+    if (f.active_cc != 1 && f.active_cc != 2) return false;
+    const std::uint8_t pdwn = f.active_cc == 1 ? pd::phy::kPdwn1 : pd::phy::kPdwn2;
+    if ((f.sw0 & pdwn) == 0) return false;
+    return f.vbus_mv >= pd::kVSafe5MinMv || f.caps_valid || f.sink_busy;
 }
 
 // One orientation of the scan: A (BMC on CC1, VCONN on CC2) or B (BMC on CC2, VCONN on CC1).

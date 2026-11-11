@@ -553,6 +553,7 @@
   "556": "[EMK] sw0=0x%02X attempt %d (PD %d.0, SVDM %d.0): SOP' %s after %d ms\n",
   "557": "[EMARK] Response on Orientation %s, %s\n",
   "558": "[EMK] sw0=0x%02X attempt %d (PD %d.0, SVDM %d.0): acked, no answer\n",
-  "559": "[EMK] scan mode %s: active_cc=%d vbus_ok=%d contract=%d\n"
+  "559": "[EMK] scan mode %s: active_cc=%d vbus_ok=%d contract=%d\n",
+  "560": "[EMK] scan mode %s: active_cc=%d vbus_mv=%d caps=%d sink=%d (diag vbus_ok=%d contract=%d)\n"
  }
 }

@@ -10,19 +10,39 @@ using namespace k2;
 namespace ea = k2::emk_attached;
 namespace phy = k2::pd::phy;
 
-static void test_attached_needs_a_live_line_and_rd_and_a_source() {
-    // Rd on the active line + VBUS comparator.
-    CHECK_EQ(ea::attached(1, phy::kPdwn1 | phy::kMeasCc1, true, false), true);
-    CHECK_EQ(ea::attached(2, phy::kPdwn2 | phy::kMeasCc2, true, false), true);
-    // Rd + a contract, VBUS comparator low (a source that is between two voltages).
-    CHECK_EQ(ea::attached(1, phy::kPdwn1, false, true), true);
+static ea::Facts facts(std::uint8_t active, std::uint8_t sw0, std::int32_t vbus_mv, bool caps, bool sink_busy) {
+    ea::Facts f;
+    f.active_cc = active;
+    f.sw0 = sw0;
+    f.vbus_mv = vbus_mv;
+    f.caps_valid = caps;
+    f.sink_busy = sink_busy;
+    return f;
+}
+
+static void test_the_hardware_state_selects_attached() {
+    // 2026-11-11, NOVOO behind the Baseus 100 W cable after `pd attach`: SW0 0x05 (PDWN1 + MEAS_CC1), the power monitor
+    // 5023 mV, caps valid, the sink Ready. (STATUS0 VBUSOK read 0 and the passive contract flag was 0: neither is an input.)
+    CHECK_EQ(ea::attached(facts(1, 0x05, 5023, true, true)), true);
+}
+
+static void test_attached_needs_rd_on_the_live_line_and_any_one_sign_of_a_source() {
+    const std::uint8_t rd1 = phy::kPdwn1 | phy::kMeasCc1, rd2 = phy::kPdwn2 | phy::kMeasCc2;
+    // Each sign alone is enough.
+    CHECK_EQ(ea::attached(facts(1, rd1, 5023, false, false)), true);    // the power monitor at vSafe5V
+    CHECK_EQ(ea::attached(facts(2, rd2, -1, true, false)), true);       // valid source caps of this attach
+    CHECK_EQ(ea::attached(facts(1, rd1, 0, false, true)), true);        // the sink engine is not idle
+    // The vSafe5V minimum is 4.75 V.
+    CHECK_EQ(ea::attached(facts(1, rd1, 4750, false, false)), true);
+    CHECK_EQ(ea::attached(facts(1, rd1, 4749, false, false)), false);
     // No active line: a cable alone.
-    CHECK_EQ(ea::attached(0, phy::kPdwn1, true, true), false);
+    CHECK_EQ(ea::attached(facts(0, rd1, 5023, true, true)), false);
     // Rd missing on the active line: nothing to keep.
-    CHECK_EQ(ea::attached(1, phy::kPdwn2, true, true), false);
-    CHECK_EQ(ea::attached(2, 0, true, true), false);
-    // Rd up, but neither VBUS nor a contract: a charger that waits is not feeding anything yet; the cable alone path.
-    CHECK_EQ(ea::attached(1, phy::kPdwn1, false, false), false);
+    CHECK_EQ(ea::attached(facts(1, phy::kPdwn2, 5023, true, true)), false);
+    CHECK_EQ(ea::attached(facts(2, 0, 5023, true, true)), false);
+    // Rd up but no sign of a source: a charger that waits is not feeding anything yet (power monitor unknown or dark).
+    CHECK_EQ(ea::attached(facts(1, rd1, -1, false, false)), false);
+    CHECK_EQ(ea::attached(facts(1, rd1, 0, false, false)), false);
 }
 
 static void test_alone_plan_is_the_two_orientations_as_before() {
@@ -86,7 +106,8 @@ static void test_read_record() {
 }
 
 int main() {
-    test_attached_needs_a_live_line_and_rd_and_a_source();
+    test_the_hardware_state_selects_attached();
+    test_attached_needs_rd_on_the_live_line_and_any_one_sign_of_a_source();
     test_alone_plan_is_the_two_orientations_as_before();
     test_attached_plan_is_one_orientation_with_rd_on_the_live_line();
     test_attached_plan_never_puts_vconn_on_the_live_line();
