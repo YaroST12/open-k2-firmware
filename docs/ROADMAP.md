@@ -80,6 +80,11 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **`[LINK]` verdict undercounts the caps during a long repaint** (2026-11-11, found by the host world replay on
+  k2/pd-replay, not on hardware): when the attach and the caps decode both land inside one long Home repaint, the verdict
+  reports `verdict_caps=0` while the driver decoded `caps=1`; the verdict itself is still `present`. Repro:
+  `K2_WORLD_ONLY=late-attach-cycles:rise420.8:Home ./host-build/test_world_replay` (and `h-side-inline:rise2538.6:Home`).
+  Part of the repaint rework.
 - **SCP 10 V takes the K2 down on the Anker IQ4** (2026-11-11, self-powered full charger test on 1.0.0-524-7c035f66):
   SCP 5 V passed (`detected`); the SCP 10 V 2.25 A step took the K2 down three times, so the reboot budget skipped the
   rest of SCP (`rebooted 3x`) and the run finished (`resumed 2`). Cause, seen with the K2 on PC power (`--units scp`,
