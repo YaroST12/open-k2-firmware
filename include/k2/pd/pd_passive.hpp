@@ -136,6 +136,17 @@ struct OverLoadFacts {
 // and refused after any far PD message.
 constexpr bool over_load_allowed(const OverLoadFacts& f) { return f.far_sink && !f.far_pd_message; }
 
+// The flag rule in front of that gate. Over-load puts a Request on a live sink's supply, so above 5 V it needs
+// BOTH flags (`--over-load --confirm`, like `pd reset --inline --confirm`). The confirm rule is judged BEFORE the
+// trigger refusal: the refused-attach branch used to return without ever looking at it, so an unconfirmed
+// `--over-load` above 5 V went straight to the far-sink gate and was sent.
+enum class OverLoadVerdict : std::uint8_t { NotRequested, NeedConfirm, Proceed };
+constexpr OverLoadVerdict over_load_verdict(bool flag_over_load, bool above_5v, bool flag_confirm) {
+    if (!flag_over_load) return OverLoadVerdict::NotRequested;
+    if (above_5v && !flag_confirm) return OverLoadVerdict::NeedConfirm;
+    return OverLoadVerdict::Proceed;
+}
+
 // The lab-only inline Hard Reset (`k2_remote.py pd reset --inline --confirm`, ROADMAP 2026-11-10, connection
 // matrix P4): a Hard Reset while a live sink is attached cuts that sink's supply, so it is refused inline by
 // default; the lab override sends exactly ONE in that state, to watch the far sink renegotiate (P4: the phone

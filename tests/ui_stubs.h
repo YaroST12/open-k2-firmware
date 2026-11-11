@@ -138,6 +138,7 @@ struct StubState {
     k2::pd::Choice last_choice{};
     bool last_confirmed = false, last_over_load = false;
     int requests = 0, releases = 0, hard_resets = 0, getcaps = 0, identifies = 0;
+    k2::pd::TriggerRefusal trig_refusal = k2::pd::TriggerRefusal::None;   // fusb302::trigger_refusal(): a sink sits behind the K2
     uint32_t sink_cap = 0;
     int32_t sink_vbus = 0;
     bool identify_ok = true;

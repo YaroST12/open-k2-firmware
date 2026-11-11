@@ -153,7 +153,7 @@ void service() {
 }
 // A Legacy attach that never falls back (pd_chatter): the charger keeps talking PD, so the unit ends as "blocked by PD".
 std::uint32_t pd_quiet_ms() { return g_stub.pd_chatter && g_stub.legacy_attach ? 0 : UINT32_MAX; }
-pd::TriggerRefusal trigger_refusal() { return pd::TriggerRefusal::None; }
+pd::TriggerRefusal trigger_refusal() { return g_stub.trig_refusal; }
 const pd::SinkCapsSeen& sink_caps() { return g_stub.sink_seen; }
 void feed(uint8_t, uint16_t, std::span<const uint8_t>) {}
 pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {

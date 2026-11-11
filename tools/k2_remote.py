@@ -3107,6 +3107,7 @@ def build_parser():
     sq.add_argument("--over-load", action="store_true",
                     help="lab only: let the K2 request while a far sink is attached, but only when that sink sent no PD "
                          "message this attach (a passive load: Rd only, no Request, no Get_Source_Cap); refused otherwise. "
+                         "Above 5 V it needs --confirm too (both flags). "
                          "Never reachable from the UI or the charger test")
     sr = spds.add_parser("reset", help="PD hard reset (the supply returns at 5 V; refused while a live sink is attached)")
     sr.add_argument("--confirm", action="store_true", help="with --inline: confirm the lab-only Hard Reset while inline")

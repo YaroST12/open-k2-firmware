@@ -247,5 +247,12 @@ int main() {
     CHECK_EQ(int(over_load_allowed({true, true})), 0);     // .. the sink's Sink_Capabilities (engine.sink)
     CHECK_EQ(int(over_load_allowed({true, true})), 0);     // .. the sink's VDMs (engine.sink_vdm)
     CHECK_EQ(int(over_load_allowed({true, true})), 0);     // .. the sink's control message: Get_Source_Cap / GoodCRC (engine.sink_ctl_seen)
+    // The flag verdict in front of that gate: over-load above 5 V needs BOTH flags, like `pd reset --inline --confirm`.
+    // The confirm rule is judged before the trigger refusal, so a refused attach cannot hide an unconfirmed over-load.
+    CHECK_EQ(int(over_load_verdict(false, true, false)), int(OverLoadVerdict::NotRequested));   // no --over-load: the normal path
+    CHECK_EQ(int(over_load_verdict(false, true, true)), int(OverLoadVerdict::NotRequested));    // --confirm alone is no override
+    CHECK_EQ(int(over_load_verdict(true, true, false)), int(OverLoadVerdict::NeedConfirm));     // above 5 V, --over-load alone
+    CHECK_EQ(int(over_load_verdict(true, true, true)), int(OverLoadVerdict::Proceed));          // both flags: the far-sink gate decides
+    CHECK_EQ(int(over_load_verdict(true, false, false)), int(OverLoadVerdict::Proceed));        // 5 V and below: no confirm rule
     return test_report("test_pd_passive");
 }

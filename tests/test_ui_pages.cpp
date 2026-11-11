@@ -1626,7 +1626,40 @@ static void test_usb_link_footer_icon_tone() {
     g_stub = StubState();
 }
 
+// `pd request ... --over-load` above 5 V needs --confirm too. The refused-attach branch used to send an
+// unconfirmed over-load straight to the far-sink gate (RED before the fix: requests == 1, no need_confirm).
+static void test_over_load_above_5v_needs_confirm() {
+    Ui &ui = fresh_ui();
+    g_stub = StubState();
+    fill_pdos(4);                                        // PDO 2 = 9 V, PDO 1 = 5 V
+    g_stub.trig_refusal = pd::TriggerRefusal::Inline;    // a sink sits behind the K2
+    g_stub.ol_facts = {true, false};                     // ... and it is a passive load: the far-sink gate would allow it
+    uint32_t t = 30000;
+    ui.tick(t += 100); ui.tick(t += 100);                // the live cap (36 V monitor ceiling) is read in the tick
+    // 9 V, over-load without confirm: need-confirm, nothing sent.
+    Ui::TriggerOutcome o = ui.trigger({2, 0, 0}, t += 100, false, true);
+    CHECK_EQ(o.need_confirm, true);
+    CHECK_EQ(g_stub.requests, 0);
+    // Both flags: handed on to the far-sink gate (over_load reaches the driver).
+    o = ui.trigger({2, 0, 0}, t += 100, true, true);
+    CHECK_EQ(o.need_confirm, false);
+    CHECK_EQ(g_stub.requests, 1);
+    CHECK_EQ(g_stub.last_over_load, true);
+    CHECK_EQ(g_stub.last_confirmed, true);
+    // 5 V over-load: no confirm rule (nothing above 5 V is asked).
+    o = ui.trigger({1, 0, 0}, t += 100, false, true);
+    CHECK_EQ(o.need_confirm, false);
+    CHECK_EQ(g_stub.requests, 2);
+    // No over-load and a refusal: unchanged, no prompt, the driver refuses (the UI never prompts in a refused state).
+    o = ui.trigger({2, 0, 0}, t += 100, false, false);
+    CHECK_EQ(o.need_confirm, false);
+    CHECK_EQ(g_stub.requests, 3);
+    CHECK_EQ(g_stub.last_over_load, false);
+    g_stub = StubState();
+}
+
 int main() {
+    test_over_load_above_5v_needs_confirm();
     test_usb_link_footer_icon_tone();
     test_usb_link_toggles();
     test_home_flow_arrow();

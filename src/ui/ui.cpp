@@ -775,12 +775,18 @@ Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confir
         return {pd::Err::Busy, false};
     }
     if (pd::is_fake()) return {pd::Err::NoCaps, false};
+    const bool above_5v = trigger_needs_confirm(pd::active_caps(), c, ctx_.cap_mv);
+    // Lab over-load: the confirm rule is judged first, so a refused-attach state cannot skip it (both flags needed).
+    if (pd::over_load_verdict(over_load, above_5v, confirm) == pd::OverLoadVerdict::NeedConfirm) {
+        K2LOG("[UI] trigger PDO%u over-load above 5V needs confirm\n", c.pos);
+        return {pd::Err::Ok, true};
+    }
     if (fusb302::trigger_refusal() != pd::TriggerRefusal::None) {   // before any confirm prompt: no TX ever
         const pd::Err e = fusb302::sink_request(c, confirm, over_load);     // logs [PD] trigger refused: inline (reason) / over-load allowed
         ctx_.trig_armed = false;
         return {e, false};
     }
-    if (trigger_needs_confirm(pd::active_caps(), c, ctx_.cap_mv) && !confirm) {
+    if (above_5v && !confirm) {
         K2LOG("[UI] trigger PDO%u needs confirm\n", c.pos);
         return {pd::Err::Ok, true};
     }
