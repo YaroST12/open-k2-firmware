@@ -228,7 +228,7 @@ Steps of the wizard:
    - The second OK starts the test. BACK, a changed setting, or 5 s with no OK closes the window.
    - If a real cable is between the charger and the K2 (an Ra guard check), the screen says "Cable connected: the spoof won't reach the charger." and offers **Start anyway** or **Start, skip spoof** (this run without the identity; the remembered pick stays). BACK also returns to Review.
 
-4. **Waiting for charger**: a bar counts down while the K2 waits for a source. OK or BACK cancels.
+4. **Waiting for charger**: a bar counts down while the K2 waits for a source. OK or BACK cancels. On a direct plug with no VBUS the K2 tries one CC line at a time (never both): the footer reads "CC1 picked. Waking charger", then "Now on CC2. Waking charger" after a move, and the checklist row says which line holds the Rd. If nothing wakes, the footer reads "No VBUS. Hold + few secs": hold PLUS for a few seconds, which wakes some chargers.
 
 5. **Running**: the hero readout shows the step in flight, VBUS against the target on a pass-band gauge, and a grid of verdicts per step. +/- scroll the grid, OK opens a step view. OK shows **Stop** while a step is busy. A BACK hold cancels. When it ends or stops, the K2 returns to 5 V and checks it.
 

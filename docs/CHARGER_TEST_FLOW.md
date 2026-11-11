@@ -362,7 +362,13 @@ START is two OK presses on Review, in this order (reordered 2026-11-06: the conf
    charger that sleeps with no sink on the line. Waiting therefore swallows + and - in every press length (no paging, so a
    long + no longer cancels the wait; `dispatch()` takes a paging lock while the stage is Waiting; BACK, OK and the BACK hold
    work as before), and with no VBUS the footer says how to wake it ("No charger. Hold + few secs" with nothing on either
-   CC, "No VBUS. Hold + few secs" with an Rp on a line). While the physical key is down, and for 2 s after, the session logs
+   CC, "No VBUS. Hold + few secs" with an Rp on a line). On a direct plug the K2 first wakes the charger itself: the single
+   Rd moves between the two lines on the `pd::LineFallback` schedule (1.5 s, 1.5 s, 5 s, 5 s, then it stays; pattern
+   `direct-plug-one-line-wake`), and while that schedule is live the footer names the line instead of the key hint ("CC1 picked.
+   Waking charger" before the first move, "Now on CC2. Waking charger" after one; Info tone); the checklist's first row reads
+   "Rd on CC<n>". The key hint returns when the schedule is over, and "No charger. Hold + few secs" keeps its place. A line
+   the operator pinned (key mode PLUS / OK, `pd-reread --line`, the Ra mode) is never moved. Shell: `pd status` carries
+   `trial_line` / `trial_moves`, the charger-test status the stage. While the physical key is down, and for 2 s after, the session logs
    `[WAKE] + pressed: CC1 .. CC2 .. VBUS ..`, then `[WAKE] t=<ms since press> key=<0|1> CC1 .. CC2 .. VBUS ..` every
    ~100 ms, then `[WAKE] + released after <ms>` (mV, `%d` numbers only), so `k2_stream view --kind log` shows what the hold did
    to the lines; the CC cells show the raw mV instead of the Rp word while it is held. Pure parts: `k2/ui/wait_plus.hpp`.
@@ -381,7 +387,14 @@ START with an identity on a self-powered or bus-powered K2; it is gone. Such a K
 can only follow the charger's attach, and a charger that reads the cable at attach (`cable-look-at-attach` in
 `CHARGER_QUIRKS.md`) has already decided without it, but the START now just goes on (nothing to answer). When it can pay, the
 run begins with a **planned re-attach**: a self-powered START (pinned Rd on CC2, no host) with a spoof cable that claims
-5 A or more, against a source that lists SVID 0x2717 (`rdintent::plan_reattach`). The confirmation footer then reads
+5 A or more, against a source whose offer is **cable-limited** (`rdintent::plan_reattach`; pattern `cable-limited-offer`, no SVID
+needed): its Source_Capabilities_Extended PDP (the claim) is at least `kClaimMarginW` = 10 W above the best power it offers
+and nothing it offers is above 3 A (`cable_limited`). A source that sent no Source_Caps_Ext falls back to its shape alone
+(`cable_limited_no_claim`: the top fixed level is 20 V at exactly 3.00 A, nothing above 3 A). The claim is only there after a
+probe or re-read, so the START preview promises the blink only when it is already held; otherwise the run's **arm step 4** asks
+for it (`probe_start`, the Runner is held, at most `kClaimWaitMs` = 1 s, retried while the sink is busy) and decides then, with
+the shape fallback when none arrives. A 30 W charger whose PPS offers 33 W is not cable-limited: no blink.
+The confirmation footer then reads
 "Press again, K2 blinks once"; no other message, no extra stage. After the journal's header and meta record (arm step 3) the
 page writes the intent marker (`rdcomeback::begin_reattach`, written and read back; if that fails the blink is skipped and the
 run goes on), drops the Rd for 30 ms with the Ra kept (`fusb302::rd_glitch_begin/end`) and holds the Runner in its Baseline
@@ -632,7 +645,7 @@ was there first; a Ra raised 160 ms after the Rd, 12 s into a live contract or a
 cable look, and the charger offers the 3 A caps of an unmarked cable. An automatic warm reboot (the pin is kept, so there
 is no fresh attach) and a guided replug holding PLUS (the same order) cannot change that, so neither is built. What does work
 is a real Rd edge with the Ra already on: the planned re-attach above (the K2 dies in the dark and the comeback boot answers
-the charger's fresh attach), which a self-powered START with a 5 A+ identity against a 0x2717 source does by itself. The Ra is
+the charger's fresh attach), which a self-powered START with a 5 A+ identity against a cable-limited offer (no SVID needed) does by itself. The Ra is
 still armed beside the self-hold contract (`emkra::Ctx::self_hold`, best effort: it serves a charger that reads the cable
 later) and the footer of a refused arming states the real reason (`emkra::refuse_footer`). Without the pattern (an
 Apple-like charger) there is no blink; a HID-powered K2 still presents the Ra before the Rd.
