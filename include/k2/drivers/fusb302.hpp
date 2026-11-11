@@ -103,6 +103,12 @@ void poll();
 // Request answers Source_Capabilities within tSenderResponse even while the UI draws.
 void service();
 
+// The unattached CC scan alone, for the LCD idle hook: during a long redraw (a Home repaint when VBUS appears is ~150 ms)
+// poll() does not run, and a source's offers ~130 ms after its VBUS went by unrouted (hardware 2026-11-11, 1 of 8 attaches,
+// runs/2026-11-11-late-attach). vbus_mv (>= 0, a direct reading) is fed to pd::ScanPace first; -1 = no reading. Does nothing
+// while a line is attached; otherwise the same gates as poll()'s scan (ScanPace due, no Rd hold, no idle-wake reading window).
+void scan_service(std::int32_t vbus_mv);
+
 // Standalone: open the CC lines for ~150 ms so the source re-sends its capabilities, then
 // re-detect. Inline (set_inline(true)): purely passive. No Rd change, no CC switch, no
 // transmit; it only arms "the next Source_Capabilities is a new source".

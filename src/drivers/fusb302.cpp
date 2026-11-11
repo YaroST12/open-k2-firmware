@@ -2372,6 +2372,17 @@ static bool idle_owner_free() {
            !g_ident.running() && !g_probe.running() && !g_reread.running() && !g_prep.active();
 }
 
+namespace {
+// The unattached scan, when pd::ScanPace says so; from poll() and, during long redraws, from scan_service().
+void scan_if_due() {
+    const std::uint32_t now = systick::millis();
+    if (g_active_cc == 0 && g_scan_pace.due(now) && !g_rd_hold.held(now) && !g_idle_wake.reading(now)) {
+        detect_cc_orientation();
+        g_scan_pace.scanned(systick::millis());
+    }
+}
+}  // namespace
+
 void poll() {
     static bool notes_logged = false;
     boot_readback_service();
@@ -2418,11 +2429,7 @@ void poll() {
     // board's 1.7 V CC2 net as an attach (the window is only kIdleReadMs; the next scan after it is held to the picked line).
     // Paced by pd::ScanPace: every kScanPeriodMs, or soon after a detach, a VBUS rise or a new Rd-window line (a source's
     // offers follow its Rp within a few hundred ms; the plain 2 Hz scan missed them, pd_scanpace.hpp).
-    if (g_active_cc == 0 && g_scan_pace.due(systick::millis()) && !g_rd_hold.held(systick::millis()) &&
-        !g_idle_wake.reading(systick::millis())) {
-        detect_cc_orientation();
-        g_scan_pace.scanned(systick::millis());
-    }
+    scan_if_due();
 
     // Detach rule: VBUS below 3.0 V for 1 s, or no Rp on the active line for 500 ms. BMC
     // bursts pull the line low for microseconds, which the 500 ms hold rides out.
@@ -2696,6 +2703,11 @@ void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     g_far_sink = (g_sw0 & (kPdwn1 | kPdwn2)) == 0 && g_cc_sink_mv >= 0 && pd::sink_present(g_cc_sink_mv);
 }
 bool sink_cc_far() { return g_far_sink; }
+void scan_service(std::int32_t vbus_mv) {
+    if (g_active_cc != 0) return;
+    if (vbus_mv >= 0) g_scan_pace.feed_vbus(vbus_mv);
+    scan_if_due();
+}
 void sink_vbus(std::int32_t mv) {
     g_vbus_mv = mv;
     g_scan_pace.feed_vbus(mv);   // VBUS rising through 3.5 V kicks the unattached scan

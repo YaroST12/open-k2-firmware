@@ -826,6 +826,27 @@ void test_a_vbus_low_detach_keeps_the_plain_scan_period() {
     detach_and_forget_levels();
 }
 
+// A long redraw stops poll(): the LCD idle hook's scan_service() alone must catch a VBUS rise and attach before the source's
+// offers (hardware 2026-11-11: a ~150 ms Home repaint as VBUS appeared, the first frame decoded was a PS_RDY).
+void test_scan_service_attaches_on_a_vbus_rise_without_poll() {
+    attach_cc2_unknown_levels();
+    fusb302::sink_vbus(5000); fusb302::poll();
+    for (int i = 0; i < 70 && !usb_has("Detach"); i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(usb_has("Detach: VBUS low"), true);
+    g_usb.clear();
+    fusb302::scan_service(0);                         // the redraw starts: VBUS still off, the period just restarted
+    g_ms += 10; fusb302::scan_service(0);
+    CHECK_EQ(usb_has("Active CC detected"), false);
+    int ms = 0;
+    for (; ms < 200 && !usb_has("Active CC detected"); ms += 10) { g_ms += 10; fusb302::scan_service(5100); }
+    CHECK_EQ(usb_has("Active CC detected: CC2"), true);
+    CHECK_EQ(ms <= 70, true);                         // kScanKickMinMs after the last scan, never the 500 ms period
+    fusb302::scan_service(5100);                      // attached: a no-op
+    CHECK_EQ(int(fusb302::active_cc()), 2);
+    fusb302::sink_vbus(-1);
+    detach_and_forget_levels();
+}
+
 void test_rescan_is_only_the_cc_switch_cycle() {
     attach_on_cc1();
     g_log.clear();
@@ -5159,6 +5180,7 @@ int main() {
     test_rd_window_recheck_moves_a_low_attached_line_to_the_live_net();
     test_a_no_rp_detach_rescans_on_the_next_poll();
     test_a_vbus_low_detach_keeps_the_plain_scan_period();
+    test_scan_service_attaches_on_a_vbus_rise_without_poll();
     test_vconn_level_line_is_not_an_active_cc_and_detach_never_soft_resets();
     test_rescan_is_only_the_cc_switch_cycle();
     test_service_drains_the_fifo_past_the_four_packet_pass();

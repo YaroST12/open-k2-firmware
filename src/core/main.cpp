@@ -266,6 +266,15 @@ void dfu_now() {
         static uint32_t last;
         const uint32_t t = k2::systick::millis();
         if (t != last) { last = t; k2::fusb302::service(); k2::fctrig::service_ufcs(); k2::fctrig::service_hs(); }
+        // Unattached, poll() does not run during a long redraw (a Home repaint as VBUS appears is ~150 ms): read VBUS here and
+        // let a rise kick the CC scan, or the source's offers ~130 ms after its VBUS go by unrouted (fusb302.hpp scan_service).
+        static uint32_t last_scan;
+        if (k2::fusb302::active_cc() == 0 && t - last_scan >= 10) {
+            last_scan = t;
+            int32_t mv = -1;
+            if (!k2::power::fast_vbus_mv(mv)) mv = -1;
+            k2::fusb302::scan_service(mv);
+        }
         k2::transcap::poll();   // keep the transition capture's 1 kHz timeline through a redraw
     });
     // USB connects LAST. TinyUSB answers control requests only from tud_task(), so the D+ pull-up
