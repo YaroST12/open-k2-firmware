@@ -31,6 +31,10 @@ constexpr int kBiasMaxDv = 7;
 // The released idle (dpdm kIdle) leaves an undriven pair floating, and a floating BC1.2 short reads equal and low.
 // A quiet pair is an equal steady pair at or below the bias window's top: the levels the active check may probe.
 constexpr int kQuietMaxDv = kBiasMaxDv;
+// equal_pair_moving tolerates this many samples with the lines apart (one line leaving a step before the other).
+constexpr int kTrackApartMax = 3;
+// ... and at most this many level jumps (> 0.2 V between consecutive samples): a step, ramp or dip, not a toggle.
+constexpr int kTrackJumpsMax = 8;
 
 // An equal pair: every sample pair of the whole window within 0.2 V of each other and the combined level steady
 // within 0.2 V. A live data link can average equal (SE0 idle, high-speed signalling) but its levels move with bus
@@ -84,8 +88,15 @@ Protocol band_5v(const Ring& ring, int bdp, int bdm, int dp_mv, int dm_mv, bool 
     if (high(bdp) && pulsing(bdm)) return Protocol::VoocWarp;
     if (bdp == 0 && high(bdm)) return Protocol::Usb11Low;
     if (dp_mv >= 1100 && dp_mv <= 1300 && dm_mv >= 1100 && dm_mv <= 1300) return Protocol::Sam20;
-    // Tail of the 5 V band: a data host on CC (default-USB Rp, no PD contract) owns the pair.
-    if (cc_source_no_pd) return Protocol::UsbData;
+    // An equal pair that steps together is a divider following the supply, never data (SteadyPair, equal_pair_moving).
+    if (equal_pair_moving(ring)) return Protocol::NoQuick;
+    // Tail of the 5 V band: a data host on CC (default-USB Rp, no PD contract) owns the pair. An A-to-C cable puts that
+    // Rp in the plug for any USB-A charger port, so a steady equal pair outside the bias window is no data and goes on to
+    // the DCP rule (hardware 2026-11-11: a charger port at 2.0 / 2.0 V read USB DATA). The bias window stays ambiguous.
+    if (cc_source_no_pd) {
+        const SteadyPair p = steady_pair(ring);
+        if (!(p.equal && p.steady && !p.bias)) return Protocol::UsbData;
+    }
     // Only a short that stayed put over the whole window is a dedicated charger; activity on the
     // pair (pulse train or mix) is a data link, and anything else is simply no handshake.
     if (dcp_shorted(ring, dcp_proof)) return Protocol::Dcp5V;
@@ -272,14 +283,35 @@ bool quiet_pair(const Ring& ring) {
     return ring.full() && steady_pair(ring).quiet;
 }
 
-Protocol SagGuard::apply(Protocol fresh, int vbus_mv) {
+bool equal_pair_moving(const Ring& ring) {
+    if (!ring.full()) return false;
+    int apart = 0, lo = 255, hi = 0, jumps = 0, prev = -1;
+    for (std::size_t k = 0; k < kRingSize; k++) {
+        const std::size_t i = (ring.next + k) % kRingSize;   // oldest first
+        const int d = ring.dp[i], m = ring.dm[i];
+        if ((d > m ? d - m : m - d) > 2) { apart++; continue; }   // lines apart in this sample
+        const int level = (d + m) / 2;
+        if (level < lo) lo = level;
+        if (level > hi) hi = level;
+        if (prev >= 0 && (level > prev ? level - prev : prev - level) > 2) jumps++;
+        prev = level;
+    }
+    // A step, a ramp or a dip-and-return has a few jumps; a level toggling sample by sample is signalling. The pair stays
+    // at 0.4 V or more (SE0 idle with a few packets is data). A stray sample with the lines apart (the two ADC reads fall
+    // on either side of a step) makes the window moving too, so the first sample of a fall is not read as data.
+    return apart <= kTrackApartMax && jumps <= kTrackJumpsMax && lo >= 4 && (hi - lo > 2 || apart > 0);
+}
+
+Protocol SagGuard::apply(Protocol fresh, int vbus_mv, bool lines_moving) {
     if (fresh == Protocol::NoInput) {   // a cut starts a new episode: the next attach refills the window from nothing
         held = fresh;
         sag_polls = 0;
         refill = static_cast<unsigned>(kRingSize);
         return fresh;
     }
-    const bool low = vbus_mv < kVsafe5MinMv;
+    // The lines can collapse while VBUS is still near 5 V (hardware 2026-11-11: 5005 mV with the pair at 1.95 / 1.95 V),
+    // so a pair that moves together starts the hold as well as the supply falling below vSafe5V min.
+    const bool low = vbus_mv < kVsafe5MinMv || lines_moving;
     if (low) {
         if (sag_polls <= kSagHoldPolls) sag_polls++;
         refill = static_cast<unsigned>(kRingSize);

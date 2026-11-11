@@ -617,11 +617,11 @@ static void test_sag_holds_the_last_verdict() {
         v = sag_step(g, r, 2041, 2034, 4388);
         CHECK_EQ(int(v), int(Protocol::Apple24));
     }
-    CHECK_EQ(raw_flapped, true);   // the raw classifier did read the mix as USB DATA
-    // The tail rule of an A-to-C cable's Rp says USB DATA for the sagged divider level too.
+    CHECK_EQ(raw_flapped, false);   // an equal pair that steps together is no longer read as USB DATA (NO QUICK, then held)
+    // An A-to-C cable's Rp is no proof of a data host: the sagged steady equal divider level is a DCP-like short.
     Ring tail;
     for (int i = 0; i < 50; i++) tail.push(2041, 2034);
-    CHECK_EQ(int(classify(tail, 2041, 2034, 4388, false, false, true)), int(Protocol::UsbData));
+    CHECK_EQ(int(classify(tail, 2041, 2034, 4388, false, false, true)), int(Protocol::Dcp5V));
     SagGuard g2;
     g2.apply(Protocol::Apple24, 5095);
     CHECK_EQ(int(g2.apply(Protocol::UsbData, 4388)), int(Protocol::Apple24));
@@ -678,7 +678,93 @@ static void test_sag_guard_leaves_real_data_and_weak_sources_alone() {
     CHECK_EQ(int(g5.apply(Protocol::UsbData, 4749)), int(Protocol::NoQuick));
 }
 
+// Hardware 2026-11-11 (1.0.0-594, A-to-C cable so cc_source_no_pd is true): at each cut the LINES drop to an equal
+// ~1.9-2.2 V pair while VBUS is still 5.0 V, then VBUS falls to 4.05 V with the lines back at 2.70 / 2.68 V, then VBUS
+// returns. The guard must not wait for VBUS < 4.75 V, and the hold must never keep USB DATA.
+struct SagRig {
+    SagGuard g;
+    Ring r;
+    Protocol step(int dp_mv, int dm_mv, int vbus_mv, bool cc_source_no_pd = true) {
+        r.push(dp_mv, dm_mv);
+        if (vbus_mv < 4000) r.clear();
+        const Protocol fresh = classify(r, dp_mv, dm_mv, vbus_mv, false, false, cc_source_no_pd);
+        return g.apply(fresh, vbus_mv, equal_pair_moving(r));
+    }
+};
+
+static void test_cut_replay_never_reads_usb_data_on_an_a_to_c_cable() {
+    SagRig s;
+    Protocol v = Protocol::Pending;
+    for (int i = 0; i < 80; i++) v = s.step(2699, 2682, 5116);
+    CHECK_EQ(int(v), int(Protocol::Apple24));
+    struct Row { int vbus, dp, dm; };
+    const Row rows[] = {{5005, 1950, 1954}, {4777, 1925, 1916}, {4573, 1983, 1991}, {4369, 2167, 2155},
+                        {4140, 1996, 2001}, {4048, 2699, 2681}, {4048, 2699, 2682}, {4048, 2699, 2682},
+                        {4048, 2699, 2682}, {4048, 2699, 2682}, {4048, 2699, 2682}, {4048, 2699, 2682},
+                        {4048, 2699, 2682}, {4048, 2699, 2682}, {4227, 2699, 2682}, {4430, 2699, 2682},
+                        {4659, 2699, 2682}, {4864, 2699, 2682}, {5069, 2699, 2682}, {5116, 2699, 2682}};
+    int usb_data = 0;
+    for (const Row& row : rows)
+        for (int k = 0; k < 10; k++) {   // 200 ms per recorded row, 20 ms per poll
+            v = s.step(row.dp, row.dm, row.vbus);
+            usb_data += v == Protocol::UsbData;
+            CHECK_EQ(int(v), int(Protocol::Apple24));
+        }
+    CHECK_EQ(usb_data, 0);
+    for (int i = 0; i < 80; i++) v = s.step(2699, 2682, 5116);
+    CHECK_EQ(int(v), int(Protocol::Apple24));
+    // One sample of the fall can have the lines a step apart (D+ moved before D-): a few such samples still move together.
+    SagRig o;
+    for (int i = 0; i < 80; i++) v = o.step(2699, 2682, 5116);
+    v = o.step(2300, 1950, 5116);
+    CHECK_EQ(int(v), int(Protocol::Apple24));
+    for (int i = 0; i < 10; i++) { v = o.step(1950, 1954, 5005); CHECK_EQ(int(v), int(Protocol::Apple24)); }
+    // The cut itself: NO INPUT at once.
+    CHECK_EQ(int(o.step(0, 0, 0)), int(Protocol::NoInput));
+}
+
+static void test_equal_pair_is_not_a_data_host_but_real_data_is() {
+    // A steady equal pair on an A-to-C cable's Rp is a divider, not data: DCP 5V. The bias window (0.5 .. 0.79 V) stays
+    // ambiguous behind a CC data host (USB DATA) and reads NO QUICK without a CC data host.
+    Ring r;
+    for (int i = 0; i < 50; i++) r.push(1950, 1954);
+    CHECK_EQ(int(classify(r, 1950, 1954, 5000, false, false, true)), int(Protocol::Dcp5V));
+    Ring b;
+    for (int i = 0; i < 50; i++) b.push(600, 600);
+    CHECK_EQ(int(classify(b, 600, 600, 5000, false, false, true)), int(Protocol::UsbData));
+    CHECK_EQ(int(classify(b, 600, 600, 5000)), int(Protocol::NoQuick));
+    // A level toggling sample by sample on both lines is signalling, not a step.
+    Ring t;
+    for (int i = 0; i < 50; i++) { const int v = (i & 1) ? 2030 : 590; t.push(v, v); }
+    CHECK_EQ(equal_pair_moving(t), false);
+    // An equal pair that steps together is no data either.
+    Ring m;
+    for (int i = 0; i < 30; i++) m.push(2699, 2682);
+    for (int i = 0; i < 20; i++) m.push(1950, 1954);
+    CHECK_EQ(equal_pair_moving(m), true);
+    CHECK_EQ(int(classify(m, 1950, 1954, 5005, false, false, true)), int(Protocol::NoQuick));
+    // Real data on a CC data host: the lines move apart (J/K), or sit at the pull-up level, or SE0 - still USB DATA.
+    Ring d;
+    for (int i = 0; i < 50; i++) d.push((i & 1) ? 3000 : 0, (i & 1) ? 0 : 3000);
+    CHECK_EQ(equal_pair_moving(d), false);
+    CHECK_EQ(int(classify(d, 3000, 0, 5000, false, false, true)), int(Protocol::UsbData));
+    Ring u;
+    for (int i = 0; i < 50; i++) u.push(850, 0);
+    CHECK_EQ(int(classify(u, 850, 0, 5000, false, false, true)), int(Protocol::UsbData));
+    Ring se0;
+    for (int i = 0; i < 50; i++) se0.push(0, 0);
+    CHECK_EQ(equal_pair_moving(se0), false);
+    CHECK_EQ(int(classify(se0, 0, 0, 5000, false, false, true)), int(Protocol::UsbData));
+    // Mostly-apart lines are data even if a few samples happen to be equal.
+    Ring mix;
+    for (int i = 0; i < 50; i++) mix.push((i % 5 == 0) ? 1000 : 3000, (i % 5 == 0) ? 1000 : 0);
+    CHECK_EQ(equal_pair_moving(mix), false);
+    CHECK_EQ(int(classify(mix, 3000, 0, 5000, false, false, true)), int(Protocol::UsbData));
+}
+
 int main() {
+    test_cut_replay_never_reads_usb_data_on_an_a_to_c_cable();
+    test_equal_pair_is_not_a_data_host_but_real_data_is();
     test_equal_low_pair_is_not_afc_fcp();
     test_sag_holds_the_last_verdict();
     test_sag_does_not_invent_a_verdict();
