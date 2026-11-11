@@ -506,6 +506,8 @@
   "509": "[CT] ps_rdy row=%u flags=%u ms=%u\n",
   "510": "[PD] Rd CC%u -> CC%u: no VBUS after %u ms on a direct plug (try %u)\n",
   "511": "[CT] offer still below the claim after the cable read: %u W of %u W\n",
-  "512": "[CT] re-attach decision: claim %u W, best offer %u W, nothing above 3 A=%u -> %s\n"
+  "512": "[CT] re-attach decision: claim %u W, best offer %u W, nothing above 3 A=%u -> %s\n",
+  "513": "[RMT] pd attach refused: %s (target_mv=%d busy=%d inline=%d trigger=%d confirm=%d)\n",
+  "514": "[RMT] pd attach refused: confirm needed (chosen pos=%d %d mV)\n"
  }
 }
