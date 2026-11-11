@@ -948,7 +948,7 @@ void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
     const bool active = st_.held || st_.state == SinkState::Requesting || st_.state == SinkState::Transition ||
                         st_.state == SinkState::Aborting;
     if (!active) return;
-    if (mv > std::int32_t(cap_mv_)) {
+    if (mv > std::int32_t(overcap_abort_mv(cap_mv_))) {   // the monitor ceiling + 5 %: a source's tolerance above its top level is no fault
         if (st_.state == SinkState::Aborting) {
             if (now - abort_at_ >= kAbortHardResetMs) do_hard_reset(SinkResult::OverCap, SinkState::Failed);
         } else {

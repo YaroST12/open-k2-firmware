@@ -9,7 +9,7 @@
 // Safety rules enforced here, not left to the caller:
 //  - a request above the voltage cap is refused (Err::OverCap), never clamped silently for a fixed PDO;
 //    PPS / AVS voltages are clamped to min(PDO max, cap);
-//  - a measured VBUS above the cap, or above the target + 10 % once the contract settled, drops
+//  - a measured VBUS above the cap + 5 % (overcap_abort_mv), or above the target + 10 % once the contract settled, drops
 //    the sink back to 5 V (Request for PDO 1); if that fails it sends a hard reset.
 #pragma once
 #include <array>
@@ -46,8 +46,13 @@ const char* epr_fail_name(std::uint8_t code);
 
 // The monitor ceiling (`cap_mv`, per device: INA226 36 V, INA228/237 48 V) bounds what the K2 measures. A level is allowed when its
 // nominal voltage is at or under the ceiling (36 V on a 36 V monitor runs; 48 V is skipped there and runs on a 48 V monitor). The
-// source's tolerance above the nominal is not budgeted: the runner's overvoltage abort (ceiling + margin) stays the guard.
+// source's tolerance above the nominal is not budgeted for what is REQUESTED; it is for the overvoltage abort, which sits 5 %
+// above the ceiling (overcap_abort_mv): a 36 V source that delivers 36.3 V is in tolerance, 37.9 V is a fault. One helper for both
+// guards, the runner's per-sample check and the sink's VBUS guard (Sink::on_vbus).
 inline constexpr bool fits_monitor(std::uint32_t mv, std::uint32_t cap_mv) { return mv <= cap_mv; }
+inline constexpr std::uint32_t overcap_abort_mv(std::uint32_t cap_mv) { return cap_mv + cap_mv / 20; }
+static_assert(overcap_abort_mv(36000) == 37800 && overcap_abort_mv(36000) < 40000, "the INA226 abort line stays under 40 V");
+static_assert(overcap_abort_mv(48000) == 50400, "INA228/237: 48 V + 5 %");
 
 // One message to transmit. `data` = the bytes after the header (data objects little endian; for
 // an extended message the 2-byte extended header first). The driver fills the MessageID.

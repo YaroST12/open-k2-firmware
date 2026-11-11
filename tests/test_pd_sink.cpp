@@ -789,7 +789,23 @@ int main() {
         r.ctl(kCtlAccept);
         r.sink.on_vbus(5000, r.now); r.sink.on_vbus(9000, r.now); r.pump();
         CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
-        r.sink.on_vbus(37000, r.now); r.pump();      // over the 36 V cap
+        r.sink.on_vbus(37900, r.now); r.pump();      // over the 36 V cap + 5 % (37.8 V)
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
+    }
+    // The overvoltage abort is the monitor ceiling + 5 % (overcap_abort_mv): a 36 V EPR source that sits at 36.3 V is in tolerance.
+    for (const std::uint32_t cap : {36000u, 48000u}) {
+        const std::int32_t limit = std::int32_t(overcap_abort_mv(cap));
+        CHECK_EQ(limit, cap == 36000u ? 37800 : 50400);
+        Rig r(cap);
+        r.sink.trigger({1, 0, 0}, r.now); r.pump(); r.accept_and_ready();
+        r.run(kSettleMs + 100);
+        r.sink.trigger({3, 0, 0}, r.now); r.pump();
+        r.ctl(kCtlAccept);
+        r.sink.on_vbus(std::int32_t(cap) + 300, r.now); r.pump();            // 300 mV over the nominal ceiling: tolerance
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        r.sink.on_vbus(limit, r.now); r.pump();                              // exactly at the abort line: still no abort
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Transition));
+        r.sink.on_vbus(limit + 100, r.now); r.pump();                        // 100 mV past it
         CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
     }
     {

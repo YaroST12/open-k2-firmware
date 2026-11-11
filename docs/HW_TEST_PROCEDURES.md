@@ -19,7 +19,9 @@ Shorthand: `R` = `python3 tools/k2_remote.py`, `T` = `python3 tools/pd_trace.py`
    laptop or battery on the other port. A dummy load, or the K2 alone, is the sink.
 2. **The INA226 caps the input at 36 V.** This K2 has an INA226 (`[PWR] chip=INA226`), which is rated
    36 V on VBUS. The firmware refuses to request more than the monitor can measure (`pd::request_cap_mv`:
-   36 V for INA226, 48 V for INA228/INA237, whose VBUS rating is 85 V). Do not feed a charger above 36 V into
+   36 V for INA226, 48 V for INA228/INA237, whose VBUS rating is 85 V); that nominal ceiling bounds what may be
+   REQUESTED, while the overvoltage abort sits 5 % above it (`pd::overcap_abort_mv`: 37.8 V on an INA226, 50.4 V on
+   an INA228/237), so a source that lands a few hundred mV over its top level is not a fault. Do not feed a charger above 36 V into
    this K2 by any other route. The 36 V / 48 V EPR steps (T04) are therefore **not testable on this unit**.
 3. **Release to 5 V after each step.** Never leave the output above 5 V between tests:
    `R pd release` for PD, `R fc reset` for D+/D- protocols, or unplug the charger. Check with `R state`
@@ -35,7 +37,7 @@ Shorthand: `R` = `python3 tools/k2_remote.py`, `T` = `python3 tools/pd_trace.py`
    link (HID, drive, network), not in the power path. Power flows bottom to top when the charger is on the bottom.
    The default charger position in this file is the **bottom port**, nothing on the top.
 7. **Voltage rules enforced by firmware** (what to expect when you push): requests above 5 V need confirmation
-   (`--confirm`, or OK twice); the PD sink guard (`Sink::on_vbus` in `src/pd/pd_sink.cpp`) aborts back to 5 V when measured VBUS stays above target + 10 % or above the 36 V ceiling. After a step-down it tolerates VBUS that is still falling (>= 50 mV per 600 ms, up to 3 s more) and aborts only on a rise > 150 mV, a stall or the window ending (the suite's own checks are separate);
+   (`--confirm`, or OK twice); the PD sink guard (`Sink::on_vbus` in `src/pd/pd_sink.cpp`) aborts back to 5 V when measured VBUS stays above target + 10 % or above the monitor ceiling + 5 % (37.8 V on the 36 V INA226). After a step-down it tolerates VBUS that is still falling (>= 50 mV per 600 ms, up to 3 s more) and aborts only on a rise > 150 mV, a stall or the window ending (the suite's own checks are separate);
    `fc trigger` above 20 V is refused (`over limit`).
 8. **Do not flash, replug the PC cable or change the USB link setting in the middle of a test.** Never run ad-hoc
    flash loops. Spoof, Self-power and anything touching flash (`emarker save/delete/rename`, `store save-log`)
@@ -267,7 +269,7 @@ Status notes: **verified** = seen on the K2 with real log lines or a screenshot 
   A request above the cap is refused by firmware (`result: over-cap` / error `over the voltage cap`): that is
   the **expected pass for 48 V on an INA226**, not a failure.
 - **Pass:** 28 V fixed reaches `ready`, EPR keep-alive holds for 30 s with no `hard-reset`; a 48 V request is
-  refused as `over-cap`. **Fail:** VBUS above 36 V at the INA, hard reset, EPR `failed` result.
+  refused as `over-cap`. **Fail:** VBUS above 37.8 V at the INA (the 36 V ceiling + 5 %; a 28 V or 36 V level that lands a few hundred mV high is a pass), hard reset, EPR `failed` result.
 - **Cleanup:** `R pd release` (the 5 V safety drop exits EPR), confirm 5 V.
 
 ### T04 Trigger refusal with a device inline

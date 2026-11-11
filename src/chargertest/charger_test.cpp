@@ -354,8 +354,10 @@ uint16_t cable_limit_mv(Input in, Algorithm algorithm) {
 }
 uint16_t measured_cable_limit_mv(Input in, Algorithm algorithm) {
     const auto limit = cable_limit_mv(in, algorithm);
-    // The 20 V SPR cable class permits the 5% VBUS tolerance on a 20 V target, and on the 21 V PPS ceiling (22.05 V).
-    return limit == 20000 ? 21000 : limit == 21000 ? 22050 : limit;
+    // The 20 V SPR cable class permits the 5% VBUS tolerance on a 20 V target, and on the 21 V PPS ceiling (22.05 V). The 50 V EPR
+    // class permits it on the 48 V level (50.4 V): without it the cable guard (50.0 V) would trip before the monitor's overvoltage
+    // abort (48 V ceiling + 5 % = 50.4 V) could be reached.
+    return limit == 20000 ? 21000 : limit == 21000 ? 22050 : limit == 50000 ? 50400 : limit;
 }
 Reason limit_reason(unsigned mv, Input in, Algorithm algorithm) {
     return !pd::fits_monitor(mv, in.cap_mv) ? Reason::OverCap : mv > cable_limit_mv(in, algorithm) ? Reason::CableLimit : Reason::None;
@@ -2357,7 +2359,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
     const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.inline_load ? Reason::Inline :
         !baseline && in.ibus_ma > kLoadAbortMa ? Reason::Inline :   // the suite draws no current: a load aborts
         in.session != session_ || in.vbus_mv < 1000 ? Reason::Lost : in.fake ? Reason::Fake :
-        in.vbus_mv > int(in.cap_mv) ? Reason::OverCap :
+        in.vbus_mv > int(pd::overcap_abort_mv(in.cap_mv)) ? Reason::OverCap :   // ceiling + 5 %; requests stay capped at the nominal
         in.vbus_mv > (baseline ? cable_mv(in) : measured_cable_limit_mv(in, steps_[index_].algorithm)) ? Reason::CableLimit :
         !baseline && ((steps_[index_].algorithm == Algorithm::Epr || steps_[index_].algorithm == Algorithm::EprAvs) && !epr_cable(in)) ? Reason::CableLimit :
         !baseline && steps_[index_].group != Group::Pd && steps_[index_].group != Group::Ufcs &&

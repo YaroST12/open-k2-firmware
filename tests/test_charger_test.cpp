@@ -2158,7 +2158,7 @@ static void test_fixed_band_keeps_the_per_sample_overvoltage_guards() {
         CHECK_EQ(r.steps()[row].measured_mv, 25000);
     }
     {   // the K2's own monitor ceiling: OverCap, per sample, ends the run
-        Fake f; f.in.cap_mv = 24000; ct::Runner r(f);
+        Fake f; f.in.cap_mv = 22000; ct::Runner r(f);   // abort line 23.1 V: the 25 V sample is over it
         const size_t row = drive_fixed_20v(f, r, ripple_then_spike);
         CHECK_EQ(r.steps()[row].verdict, ct::Verdict::Fail); CHECK_EQ(r.steps()[row].reason, ct::Reason::OverCap);
     }
@@ -2863,6 +2863,34 @@ static void test_epr_levels_follow_the_monitor_ceiling() {
         for (const auto& ch : f.choices) CHECK_EQ(ch.mv <= c.cap, true);
     }
 }
+// The OverCap abort is the monitor ceiling + 5 % (pd::overcap_abort_mv: INA226 37.8 V, INA228/237 50.4 V); what the run may REQUEST
+// stays the nominal ceiling. A source that sits a few hundred mV above its top level is in tolerance, not a fault.
+static void test_overcap_abort_is_the_monitor_ceiling_plus_5_percent() {
+    struct Case { unsigned cap, level, over_mv; bool abort; };
+    for (const Case c : {Case{36000, 36000, 36300, false}, Case{36000, 36000, 37700, false}, Case{36000, 36000, 37900, true},
+                         Case{48000, 48000, 50300, false}, Case{48000, 48000, 50500, true}}) {
+        CHECK_EQ(pd::overcap_abort_mv(c.cap), c.cap == 36000 ? 37800u : 50400u);
+        Fake f; f.in.cap_mv = c.cap; f.in.cable_mv = 50000; f.in.cable_ma = 5000; f.in.cable_observed = true;
+        f.caps.epr = true; f.caps.num_pdos = 10;
+        f.caps.pdos[7] = pd::decode_pdo((560u << 10) | 500);                   // EPR 28 V 5 A
+        f.caps.pdos[8] = pd::decode_pdo((720u << 10) | 500);                   // EPR 36 V 5 A
+        f.caps.pdos[9] = pd::decode_pdo((960u << 10) | 500);                   // EPR 48 V 5 A
+        f.pd_fold_from_mv = c.level; f.pd_fold_to_mv = c.over_mv;              // the top level delivers over_mv
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(A::Epr)}, f.in, true);
+        f.tick(r, 90000);
+        bool seen = false;
+        for (const auto& s : r.steps()) {
+            if (s.algorithm != A::Epr || s.mv != c.level) continue;
+            seen = true;
+            if (c.abort) { CHECK_EQ(s.verdict, ct::Verdict::Fail); CHECK_EQ(s.reason, ct::Reason::OverCap); }
+            else CHECK_EQ(s.verdict, ct::Verdict::Pass);
+        }
+        CHECK_EQ(seen, true);
+        for (const auto& ch : f.choices) CHECK_EQ(ch.mv <= c.cap, true);       // requests stay at the nominal ceiling
+        if (!c.abort) CHECK_EQ(r.state(), ct::State::Done);
+    }
+}
 static void test_epr_entry_before_rows() {
     for (unsigned mode = 0; mode < 8; ++mode) {
         Fake f;
@@ -3192,7 +3220,7 @@ static void test_standard_cable_measured_tolerance() {
     r.start(limited.caps, {.selected = ct::bit(A::Pd3Fixed)}, limited.in, true);
     for (unsigned n = 0; n < 200 && limited.pd_requests < 5; ++n) limited.tick(r, 100);
     CHECK_EQ(limited.pd_requests, 5);
-    limited.in.vbus_mv = 20001;
+    limited.in.vbus_mv = 21001;   // the monitor ceiling + 5 % (20 V cap: 21 V)
     limited.tick(r, 100);
     CHECK_EQ(r.steps()[4].verdict, ct::Verdict::Fail);
     CHECK_EQ(r.steps()[4].reason, ct::Reason::OverCap);
@@ -6600,7 +6628,7 @@ int main() {
     test_capped_pps_top_is_recorded_and_the_chain_goes_on(); test_an_uncapped_pps_run_has_no_capped_step(); test_a_pps_stuck_at_5v_is_a_timeout_not_capped();
     test_read_revision();
     test_selection(); test_selected_skip_without_operations(); test_wire_classes_and_feature_evidence();
-    test_qc_class_b_is_in_the_default_selection(); test_class_b_on_a_class_a_charger_is_a_neutral_skip(); test_class_b_pass_on_a_class_b_charger_stays_a_pass(); test_class_b_row_on_a_charger_stuck_at_12v_ends_early(); test_qc2_class_b_miss_on_a_qc3_class_b_charger_is_a_fail(); test_qc2_class_b_after_a_failed_qc2_handshake_is_not_class_a_only(); test_class_b_keeps_the_voltage_ceiling_in_front(); test_qc_class_b_rows_are_planned_per_algorithm(); test_qc_rows_after_the_first_are_retargets_in_one_session(); test_a_failed_qc2_retarget_leaves_the_class_b_row_to_run(); test_full_legacy_ranges_and_guards(); test_scp_rows_ignore_the_cable_current(); test_scp_row_aborts_when_a_load_draws_current(); test_scp_rows_follow_the_reported_capabilities(); test_scp_replan_is_announced_once(); test_ufcs_levels_follow_the_reported_modes(); test_ufcs_steps_carry_their_mode(); test_epr_physical_guard_and_spoof_separation(); test_epr_rows_respect_the_36v_ceiling(); test_epr_levels_follow_the_monitor_ceiling(); test_epr_entry_before_rows(); test_epr_info_names_the_levels_without_an_epr_cable(); test_epr_info_refused_or_silent_changes_nothing(); test_epr_info_levels_survive_a_refused_entry(); test_epr_info_padding_word_is_no_offer(); test_epr_info_with_no_epr_pdos_is_named_withheld(); test_epr_info_is_not_asked_when_entry_works(); test_rows_survive_the_exit_to_the_spr_list();
+    test_qc_class_b_is_in_the_default_selection(); test_class_b_on_a_class_a_charger_is_a_neutral_skip(); test_class_b_pass_on_a_class_b_charger_stays_a_pass(); test_class_b_row_on_a_charger_stuck_at_12v_ends_early(); test_qc2_class_b_miss_on_a_qc3_class_b_charger_is_a_fail(); test_qc2_class_b_after_a_failed_qc2_handshake_is_not_class_a_only(); test_class_b_keeps_the_voltage_ceiling_in_front(); test_qc_class_b_rows_are_planned_per_algorithm(); test_qc_rows_after_the_first_are_retargets_in_one_session(); test_a_failed_qc2_retarget_leaves_the_class_b_row_to_run(); test_full_legacy_ranges_and_guards(); test_scp_rows_ignore_the_cable_current(); test_scp_row_aborts_when_a_load_draws_current(); test_scp_rows_follow_the_reported_capabilities(); test_scp_replan_is_announced_once(); test_ufcs_levels_follow_the_reported_modes(); test_ufcs_steps_carry_their_mode(); test_epr_physical_guard_and_spoof_separation(); test_epr_rows_respect_the_36v_ceiling(); test_epr_levels_follow_the_monitor_ceiling(); test_epr_entry_before_rows(); test_epr_info_names_the_levels_without_an_epr_cable(); test_epr_info_refused_or_silent_changes_nothing(); test_epr_info_levels_survive_a_refused_entry(); test_epr_info_padding_word_is_no_offer(); test_epr_info_with_no_epr_pdos_is_named_withheld(); test_epr_info_is_not_asked_when_entry_works(); test_rows_survive_the_exit_to_the_spr_list(); test_overcap_abort_is_the_monitor_ceiling_plus_5_percent();
     test_spr_pps_21v_on_standard_cable();
     test_standard_cable_measured_tolerance();
     test_observed_30v_cable();

@@ -427,7 +427,8 @@ Reuse these before writing a new one. Headers under `include/k2/<group>/` unless
 **Hardware safety** (details: docs/HW_TEST_PROCEDURES.md, docs/PROTOCOL_LAB.md)
 
 * **VBUS ceiling:** the INA226 on this unit is rated 36 V. Requests are capped by `pd::request_cap_mv` /
-  `power::max_vbus_mv` (36 V INA226, 48 V INA228/237); never feed a charger above 36 V into this K2. The
+  `power::max_vbus_mv` (36 V INA226, 48 V INA228/237); the overvoltage abort (runner per-sample check and
+  `Sink::on_vbus`) sits at that ceiling + 5 % (`pd::overcap_abort_mv`: 37.8 V / 50.4 V); never feed a charger above 36 V into this K2. The
   36 V / 48 V EPR steps are not testable here. QC2 / QC3 / QC3+ are 12 V at most, so a QC 20 V failure is
   expected, not a finding.
 * **Phone attached:** never drive D+, D-, CC or PA8 with a phone (a live sink) attached. Every active

@@ -495,6 +495,11 @@ How a PD row is judged and how long it waits. All of it is host-tested; none of 
   advertises 6 A (`hunt_advertised`); otherwise the row is dropped at request time, or ends as a "not unlocked" skip when the
   Xiaomi chain was seen. `Runner::preview` counts the same: an unadvertised hunt row is no row and no estimated time without the
   chain, a skip with no time with it.
+- **Overvoltage abort = monitor ceiling + 5 %.** What the run may REQUEST stays the nominal monitor ceiling (`fits_monitor`,
+  `request_cap_mv`: 36 V INA226, 48 V INA228/237; a 48 V level on a 36 V monitor is still a skip). The abort that ends the run
+  with `OverCap` (the runner's per-sample check and `Sink::on_vbus`) sits at `pd::overcap_abort_mv` = ceiling + 5 %, 37.8 V on an
+  INA226 and 50.4 V on an INA228/237, so a source that lands 36.3 V on its 36 V level is in tolerance. The 50 V EPR cable class
+  tolerates the same 50.4 V (`measured_cable_limit_mv`), like the 20 V class tolerates 21 V.
 
 ## Results grid
 
