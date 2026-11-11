@@ -131,6 +131,12 @@ Both USB-C ports are **electrically identical** from firmware's point of view:
   a tie goes to CC1 by scan order (`include/k2/pd/pd_ccscan.hpp`, `detect_cc_orientation`) [code], and a reboot
   clears it. **Both CC pins of the top plug reach K2 nets**: an unattached charger's Rp shows on both,
   about 3.2 V each (Baseus 3208 mV, CUKTECH saturated at the 3.3 V ADC limit) [measured].
+- **The FUSB302B's VBUSOK comparator does not see the bottom receptacle's VBUS** [measured 2026-11-11, NOVOO RG100 on
+  the bottom receptacle, K2 sink contracts at 5.10 V and 19.96 V]: STATUS0 stayed 0x23 / 0x33 (COMP, BC_LVL) and the trace
+  logged no VBUSOK change, while the power monitor read the full voltage (`runs/2026-11-11-novoo-alone/b6-vbusok/`).
+  The chip's VBUS pin is not wired to this port's VBUS (top plug not checked). The power monitor is the only VBUS source
+  of truth; VBUSOK stays an extra "VBUS present" sign in the CC and Ra probes (`cc_probe.hpp` `vbus_abort`), where a
+  0 only removes one refusal reason, never adds one.
 - PC13 is the VCONN supply control; used with `SWITCHES0` VCONN_CC1/2 to read a cable e-marker on the
   line that is not the active one [code]. Its physical function is not proven.
 - **No firmware-controlled Ra path exists.** The FUSB302B can only pull down with Rd 5.1 kΩ (PDWN1/2); the

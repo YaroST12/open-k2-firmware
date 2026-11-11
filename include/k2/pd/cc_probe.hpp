@@ -22,7 +22,9 @@ namespace k2::ccprobe {
 constexpr std::uint16_t kMsMin = 10, kMsMax = 5000;   // hold time
 constexpr std::uint16_t kModesKeep = 0xFFFF;           // `modes`: leave the PC13/14/15 pin modes as they are
 constexpr std::int32_t kVbusLimitMv = 1000;            // the probe runs below it and aborts above it
-constexpr std::uint8_t kStatus0VbusOk = 1u << 7;       // STATUS0: VBUS above the chip's ~4 V comparator
+constexpr std::uint8_t kStatus0VbusOk = 1u << 7;       // STATUS0: VBUS above the chip's ~4 V comparator. Reads 0 on
+                                                        // this board even at 20 V on the bottom receptacle (its VBUS pin
+                                                        // does not see that port, docs/K2_PORTS_SPEC.md): an extra sign only
 constexpr std::uint8_t kSw0PullUps = 0xC0;             // PU_EN1 | PU_EN2
 constexpr std::uint8_t kSw0Measure = pd::phy::kMeasCc1 | pd::phy::kMeasCc2;
 constexpr std::uint8_t kSw0Vconn = pd::phy::kVconnCc1 | pd::phy::kVconnCc2;
