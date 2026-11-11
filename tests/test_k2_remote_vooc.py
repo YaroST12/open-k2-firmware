@@ -13,8 +13,9 @@ sys.path.insert(0, str(ROOT / "tools"))
 import k2_remote as kr
 
 
-def summary(flags=0x0F, ncmds=10, guard=(0, 0, 0, 0)):
-    """The firmware's page 0 (include/k2/core/remote_proto.hpp, FC op 4); guard = storms, edges, ms, retry_ms."""
+def summary(flags=0x0F, ncmds=10, guard=(0, 0, 0, 0), stall=(0, 0)):
+    """The firmware's page 0 (include/k2/core/remote_proto.hpp, FC op 4); guard = storms, edges, ms, retry_ms;
+    stall = the polled command and its silent count (flags bit5 is the caller's to set)."""
     b = bytearray()
     b += bytes([flags])
     b += (2).to_bytes(2, "little") + (1).to_bytes(2, "little") + (3).to_bytes(2, "little")
@@ -27,6 +28,7 @@ def summary(flags=0x0F, ncmds=10, guard=(0, 0, 0, 0)):
     storms, edges, ms, retry = guard
     b += storms.to_bytes(2, "little") + edges.to_bytes(2, "little") + ms.to_bytes(2, "little")
     b += retry.to_bytes(4, "little")
+    b += bytes([stall[0]]) + stall[1].to_bytes(2, "little")
     return bytes(b)
 
 
@@ -75,6 +77,22 @@ class Decode(unittest.TestCase):
         self.assertNotIn("paused", quiet)
         self.assertIn("storms 2 (last 4097 edges in 342 ms)", quiet)
         self.assertNotIn("storms", kr.render_vooc(dict(kr.decode_vooc_summary(summary()), cmds=[])))
+
+    def test_stalled_session_prints_the_raw_facts(self):
+        # The adapter repeats 0x88 and the phone's reply stays silent: the command and the count, no guessed cause.
+        s = kr.decode_vooc_summary(summary(flags=0x2F, stall=(0x88, 277)))
+        self.assertTrue(s["stalled"])
+        self.assertEqual(s["stall"], {"cmd": "0x88", "silent": 277})
+        text = kr.render_vooc(dict(s, cmds=[]))
+        self.assertIn("stalled on 0x88, 277 silent replies", text)
+        # A short run is only a fact in the JSON; the readout stays quiet and the flag stays clear.
+        short = kr.decode_vooc_summary(summary(flags=0x0F, stall=(0x88, 15)))
+        self.assertFalse(short["stalled"])
+        self.assertEqual(short["stall"], {"cmd": "0x88", "silent": 15})
+        self.assertNotIn("stalled", kr.render_vooc(dict(short, cmds=[])))
+        none = kr.decode_vooc_summary(summary())
+        self.assertEqual(none["stall"], {"cmd": None, "silent": 0})
+        self.assertNotIn("stalled", kr.render_vooc(dict(none, cmds=[])))
 
     def test_sniff_end_storm(self):
         self.assertEqual(kr.SNIFF_END[6], "storm")

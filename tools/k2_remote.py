@@ -2173,7 +2173,7 @@ def decode_fc(p):
 # FC op 4: the inline VOOC monitor (passive, never drives D+/D-). Page 0 is the summary, pages 1 / 2 the command
 # rows (8 each). Reply words are raw 10-bit values printed in hex; the command names in docs/FASTCHARGE_PROTOCOLS.md
 # are guesses, and no reply word is turned into volts or amps here.
-VOOC_SUMMARY_BYTES = 54
+VOOC_SUMMARY_BYTES = 57
 VOOC_ROWS_PER_PAGE = 8
 VOOC_NO_REPLY = 0xFFFF
 
@@ -2196,7 +2196,10 @@ def decode_vooc_summary(p):
             "ncmds": p[41], "other": u16(42),
             # the D+/D- edge-storm guard: paused = data traffic on the lines, the monitor waits retry_ms for a probe
             "guard": {"paused": bool(f & 16), "storms": u16(44), "last_edges": u16(46), "last_ms": u16(48),
-                      "retry_ms": u32(50)}}
+                      "retry_ms": u32(50)},
+            # the trailing run of one command the phone left unanswered; stalled = the firmware's threshold (flags bit5)
+            "stalled": bool(f & 32),
+            "stall": {"cmd": f"0x{p[54]:02X}" if u16(55) else None, "silent": u16(55)}}
 
 
 def decode_vooc_rows(p):
@@ -2235,6 +2238,9 @@ def render_vooc(v):
         lines.append(f"  0x82 period last {p['last'] / 1000:.1f} ms, mean {p['mean'] / 1000:.1f} ms (n={p['n']})")
     for c in v["cmds"]:
         lines.append(f"  {c['cmd']}  x{c['count']:<4} last {c['last'] or '-'}")
+    if v.get("stalled"):
+        st = v["stall"]
+        lines.append(f"  stalled on {st['cmd']}, {st['silent']} silent replies")
     if v["other"]:
         lines.append(f"  other commands: {v['other']} pairs (table full)")
     g = v.get("guard", {})

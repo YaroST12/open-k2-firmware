@@ -209,7 +209,7 @@ pause over 60 ms, the steady `0x82` period from gaps under 200 ms. A host test (
 proves the decoder header reaches no pin, register or driver.
 
 - Cost: ~1,030 edges/s through the ISR in steady state (bursts of ~6.7 k edges/s for ~24 ms in the wake). RAM: the
-  decoder is 220 B (its summary 148 B), no edge buffer.
+  decoder is 224 B (its summary 152 B), no edge buffer.
 - Summary: sessions, wake bursts, partial frames, edges, frames, pairs, handshake pairs, the ident and its reply,
   per-command counts with the last reply of each (16 commands, then `other`), and for `0x82` the last / min / max reply
   plus the last and mean period.
@@ -217,6 +217,14 @@ proves the decoder header reaches no pin, register or driver.
   `fc vooc [on|off]`, `[VOOC] session N start` / `end` log lines, the Home protocol row `SVOOC 9.0V3.6A` (the measured
   VBUS and IBUS, not a rating, so no limit bar) and a raw `VOOC 0x82 0x06B raw` row on the Connection page (Sink body,
   with or without a PD contract). Reply words are printed as hex with no unit: their meaning is a guess.
+- Stalled session (found on hardware 2026-11-11, OP15 at high battery): the phone keeps polling and the brick stops
+  answering one command, which the summary used to show only as a growing pair count. `Summary::stalled()` is true
+  when the trailing run of pairs is one command with a silent reply (`kNoReply` or the word 0x000) at least
+  `kStallPolls` (16) long; any answered pair clears it and a session start resets it. The first silent 0xA8 ident and the
+  two silent 0x94 pairs of the entry stay far below the threshold. Readout: FC op 4 page 0 is 57 bytes (flags bit 5, then
+  `stall_cmd(1) stall_n(2)`), `fc vooc` prints `stalled on 0x88, 277 silent replies` in the tool and the shell, and the
+  session-end `[VOOC]` log gains `session N end: stalled on 0x88, 277 silent replies`. Facts only: no cause is guessed.
+  Fixture: `tests/fixtures/op15_svooc_stalled.edges` holds a prefix of the real stall (93 of the 277 silent polls).
 - A PD contract does not stop the monitor (2026-11-11, a phone on the USB-C port holds a 5 V contract on CC and runs
   SuperVOOC on D+/D- at once). The gate is the far sink alone; a live proven session wins the Home protocol row over the
   PD contract text and the PD row returns when the session ends. The passive label (classifier) still says PD while no

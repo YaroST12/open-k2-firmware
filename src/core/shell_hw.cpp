@@ -985,6 +985,11 @@ struct Hw final : shell::Backend {
             n = fmt::format(std::span<char>(b, sizeof b), "vooc other=%u (table full)\r\n", unsigned(s.other));
             put({b, n});
         }
+        if (s.stalled()) {   // raw facts: the polled command and how many replies in a row stayed silent
+            n = fmt::format(std::span<char>(b, sizeof b), "vooc stalled on 0x%02X, %u silent replies\r\n",
+                            unsigned(s.stall_cmd), unsigned(s.stall_n));
+            put({b, n});
+        }
         return nullptr;
     }
 };

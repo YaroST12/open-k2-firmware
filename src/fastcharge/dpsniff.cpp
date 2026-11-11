@@ -269,12 +269,16 @@ bool selftest() {
 namespace {
 
 void monitor_log(unsigned ev, const vooc::Summary& s) {
-    if (ev & vooc::kSessionEnd)
+    if (ev & vooc::kSessionEnd) {
         K2LOG("[VOOC] session %u end frames=%u pairs=%u hs=%u/%u ident=0x%02X/0x%03X cmds=%u+%u r82=0x%03X min=0x%03X "
               "max=0x%03X n=%u p82_us=%u\n",
               unsigned(s.sessions), unsigned(s.frames), unsigned(s.pairs), unsigned(s.handshake), unsigned(s.hs_pairs),
               unsigned(s.ident), unsigned(s.ident_reply), unsigned(s.ncmds), unsigned(s.other), unsigned(s.r82_last),
               unsigned(s.r82_min), unsigned(s.r82_max), unsigned(s.r82_n), unsigned(s.p82_mean_us()));
+        if (s.stalled())   // raw facts: the polled command and the silent replies in a row, no guessed cause
+            K2LOG("[VOOC] session %u end: stalled on 0x%02X, %u silent replies\n", unsigned(s.sessions),
+                  unsigned(s.stall_cmd), unsigned(s.stall_n));
+    }
     if (ev & vooc::kSessionStart)
         K2LOG("[VOOC] session %u start (inline, passive) wakes=%u partials=%u edges=%u\n", unsigned(s.sessions),
               unsigned(s.wakes), unsigned(s.partials), unsigned(s.edges));

@@ -42,6 +42,10 @@ inline constexpr std::uint32_t kSteadyMaxMs = 200;      // tool STEADY_MAX_MS: l
 inline constexpr std::uint8_t kSteadyCmd = 0x82;
 inline constexpr std::size_t kMaxCmds = 16;             // distinct commands kept; cap1 shows 13
 inline constexpr std::uint16_t kNoReply = 0xFFFF;
+// Polls of one command in a row that the phone leaves without a reply (the 9-bit word 0x000, or no reply frame at all)
+// before the summary calls the session stalled. A single unanswered ident and the two 0x94 / 0x000 pairs of the entry
+// capture are far below it; the capture that stalled shows 277.
+inline constexpr std::uint16_t kStallPolls = 16;
 
 enum Event : unsigned { kSessionStart = 1, kSessionEnd = 2 };
 
@@ -71,7 +75,12 @@ struct Summary {
     std::uint8_t ncmds = 0;
     std::uint16_t other = 0;          // pairs of commands beyond the table
     std::array<CmdStat, kMaxCmds> cmds{};
+    // The trailing run of unanswered polls: `stall_n` pairs in a row of command `stall_cmd` whose reply was silent. A
+    // reply, or another command, ends the run (stall_n back to 0 or 1). Raw facts only; no cause is guessed.
+    std::uint8_t stall_cmd = 0;
+    std::uint16_t stall_n = 0;
     std::uint32_t p82_mean_us() const { return p82_n ? p82_sum_us / p82_n : 0; }
+    bool stalled() const { return stall_n >= kStallPolls; }
 };
 
 // The inline monitor may hold D+ / D- as floating inputs when the operator left it on, a far sink draws current through
@@ -206,6 +215,12 @@ private:
         pend_ = false;
         ++s_.pairs;
         count(cmd, reply);
+        if (reply == kNoReply || reply == 0) {          // silent: no reply frame, or the all-zero word
+            if (s_.stall_n && s_.stall_cmd == cmd) { if (s_.stall_n < 0xFFFF) ++s_.stall_n; }
+            else { s_.stall_cmd = cmd; s_.stall_n = 1; }
+        } else {
+            s_.stall_n = 0;
+        }
         const bool first = hs_ == Hs::First;
         if (first) hs_ = is_ident(cmd) ? Hs::Open : Hs::Done;
         if (hs_ == Hs::Open) {

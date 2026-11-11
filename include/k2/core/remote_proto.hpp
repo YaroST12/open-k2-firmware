@@ -289,12 +289,14 @@
 //                                    op 4 vooc, args page(1) [on(1)]: the inline VOOC monitor (passive, never drives;
 //                                      k2/fastcharge/vooc_decode.hpp), not the FC block. on = 0 / 1 switches it first
 //                                      (RAM only). page 0: flags(1: bit0 enabled, bit1 running, bit2 session active,
-//                                      bit3 handshake, bit4 paused: data traffic) sessions(2) wakes(2) partials(2)
-//                                      edges(4) frames(4) pairs(4) hs_pairs(1) ident(1) ident_reply(2) r82_last(2)
-//                                      r82_min(2) r82_max(2) r82_n(2) p82_last_us(4) p82_mean_us(4) p82_n(2) ncmds(1)
-//                                      other(2) storms(2) storm_edges(2) storm_ms(2) retry_ms(4) = 54 bytes; reply words
-//                                      0xFFFF = none; storms = edge-storm guard trips since boot (monitor and sniff),
-//                                      storm_edges / storm_ms = the last trip's window, retry_ms = the pause left.
+//                                      bit3 handshake, bit4 paused: data traffic, bit5 stalled) sessions(2) wakes(2)
+//                                      partials(2) edges(4) frames(4) pairs(4) hs_pairs(1) ident(1) ident_reply(2)
+//                                      r82_last(2) r82_min(2) r82_max(2) r82_n(2) p82_last_us(4) p82_mean_us(4) p82_n(2)
+//                                      ncmds(1) other(2) storms(2) storm_edges(2) storm_ms(2) retry_ms(4) stall_cmd(1)
+//                                      stall_n(2) = 57 bytes; reply words 0xFFFF = none; storms = edge-storm guard
+//                                      trips since boot (monitor and sniff), storm_edges / storm_ms = the last trip's
+//                                      window, retry_ms = the pause left; stall_cmd / stall_n = the trailing run of one
+//                                      command whose reply stayed silent (bit5 once stall_n reaches vooc::kStallPolls).
 //                                      page 1 / 2: n(1) { cmd(1) count(2) last(2) } x n, rows 0-7 / 8-15.
 //                                      Other pages or on > 1 BadArg, wrong length BadLength. Never Busy.
 //                                    --- end vooc-monitor ---
@@ -467,7 +469,7 @@ static_assert(10 + 4 * kFcMaxResults <= kMaxRspPayload);
 constexpr uint8_t kFcVooc = 4;
 constexpr uint8_t kVoocPages = 3;             // 0 summary, 1 / 2 command rows
 constexpr size_t kVoocRowsPerPage = 8;
-constexpr size_t kVoocSummaryBytes = 54;
+constexpr size_t kVoocSummaryBytes = 57;
 static_assert(kVoocSummaryBytes <= kMaxRspPayload && 1 + 5 * kVoocRowsPerPage <= kMaxRspPayload);
 static_assert((kVoocPages - 1) * kVoocRowsPerPage >= vooc::kMaxCmds);
 struct VoocSnapshot {

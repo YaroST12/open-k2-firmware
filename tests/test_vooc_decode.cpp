@@ -143,6 +143,53 @@ static void test_replug_capture_has_two_sessions() {
     CHECK_EQ(s.frames, 113u);
 }
 
+// A phone the adapter polls without an answer. cap2 (OP15 at a high battery level): after the handshake the adapter
+// repeats 0x88 about every 165 ms and the phone's reply word stays 0x000 (277 polls in the whole capture; the fixture
+// holds the first 93 of them and a cut frame). The summary says so in raw facts: the command and the silent count.
+static void test_stalled_session_is_flagged() {
+    Replay r;
+    r.run(load("tests/fixtures/op15_svooc_stalled.edges"));
+    CHECK_EQ(r.starts, 2);
+    CHECK_EQ(r.ends, 2);
+    if (r.ended.size() != 2) return;
+    const auto& a = r.ended[0];                         // the tail of the earlier steady session
+    CHECK(!a.stalled());
+    CHECK_EQ(int(a.stall_n), 0);
+    const auto& b = r.ended[1];
+    CHECK(b.handshake);                                 // it did open: the ident was answered
+    CHECK(b.stalled());
+    CHECK_EQ(int(b.stall_cmd), 0x88);
+    CHECK_EQ(int(b.stall_n), 93);                       // the fixture's silent 0x88 polls (the whole capture: 277)
+    CHECK_EQ(int(b.r82_n), 0);
+    // The flag is the summary's, so the live view keeps it while the session runs.
+    vooc::Decoder d;
+    bool live_stalled = false;
+    for (const std::uint32_t x : load("tests/fixtures/op15_svooc_stalled.edges")) {
+        d.push(x);
+        live_stalled |= d.summary().stalled();
+    }
+    CHECK(live_stalled);
+    // Healthy and short silences are no stall: the entry capture has a 0x94 that is answered 0x000 twice, the replug
+    // capture an unanswered first ident.
+    for (const char* f : {"tests/fixtures/op15_svooc_entry.edges", "tests/fixtures/op15_svooc_replug.edges"}) {
+        Replay h;
+        h.run(load(f));
+        for (const auto& s : h.ended) CHECK(!s.stalled());
+        CHECK(!h.d.summary().stalled());
+    }
+    CHECK(vooc::kStallPolls >= 8 && vooc::kStallPolls <= 40);
+}
+
+// The flag is the threshold on the count.
+static void test_stall_threshold() {
+    vooc::Summary s;
+    CHECK(!s.stalled());
+    s.stall_cmd = 0x88; s.stall_n = vooc::kStallPolls;
+    CHECK(s.stalled());
+    s.stall_n = std::uint16_t(vooc::kStallPolls - 1);
+    CHECK(!s.stalled());
+}
+
 // The same replay without the millisecond ticks (only the edges' own gaps close frames, pairs and sessions) except the
 // final silence: the ticks change nothing but the moment a session is closed.
 static void test_ticks_do_not_change_the_result() {
@@ -286,6 +333,8 @@ int main() {
     test_ram_budget();
     test_entry_capture_matches_the_tool();
     test_replug_capture_has_two_sessions();
+    test_stalled_session_is_flagged();
+    test_stall_threshold();
     test_ticks_do_not_change_the_result();
     test_session_ends_after_one_second_of_silence();
     test_long_silence_does_not_alias();

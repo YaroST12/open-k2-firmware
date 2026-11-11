@@ -1103,21 +1103,34 @@ static void test_fc_vooc_monitor() {
     s.p82_last_us = 43980; s.p82_sum_us = 16 * 46230; s.p82_n = 16; s.other = 5;
     s.ncmds = 10;
     for (unsigned i = 0; i < 10; i++) s.cmds[i] = {static_cast<uint8_t>(0x80 + 2 * i), static_cast<uint16_t>(i + 1), static_cast<uint16_t>(0x100 + i)};
-    // Page 0, no switch: 54 bytes in the documented order.
+    // Page 0, no switch: 57 bytes in the documented order.
     CHECK_EQ(run(f, request(0x32, 1, {4, 0}), r), 1);
-    check_header(r, 0x32, 1, Status::Ok, 54);
+    check_header(r, 0x32, 1, Status::Ok, 57);
     check_bytes(r, kRspHeader, {0x0F, 2, 0, 1, 0, 3, 0, 0x04, 0x03, 0x02, 0x01, 111, 0, 0, 0, 55, 0, 0, 0,
                                 26, 0xA8, 0x0D, 0x00, 0x52, 0, 0x4C, 0, 0x7F, 0, 18, 0,
                                 0xCC, 0xAB, 0, 0, 0x96, 0xB4, 0, 0, 16, 0, 10, 5, 0,
-                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                0, 0, 0});
     CHECK_EQ(f.vooc_set, 2);
     // The edge-storm guard: paused (flags bit4), storms, the last storm's interrupts and ms, the retry wait.
     f.vooc_snap.guard = {true, 3, 33, 1, 4321};
     CHECK_EQ(run(f, request(0x32, 11, {4, 0}), r), 1);
-    check_header(r, 0x32, 11, Status::Ok, 54);
+    check_header(r, 0x32, 11, Status::Ok, 57);
     CHECK_EQ(r[kRspHeader] & 0x10, 0x10);
     check_bytes(r, kRspHeader + 44, {3, 0, 33, 0, 1, 0, 0xE1, 0x10, 0, 0});
     f.vooc_snap.guard = {};
+    // A stalled session: the polled command and the silent count follow the guard block; flags bit5 = stalled
+    // (the firmware's threshold, k2::vooc::kStallPolls). Below it the bytes are the same and the bit stays clear.
+    s.stall_cmd = 0x88; s.stall_n = 277;
+    CHECK_EQ(run(f, request(0x32, 12, {4, 0}), r), 1);
+    check_header(r, 0x32, 12, Status::Ok, 57);
+    CHECK_EQ(r[kRspHeader] & 0x2F, 0x2F);
+    check_bytes(r, kRspHeader + 54, {0x88, 0x15, 0x01});
+    s.stall_n = 15;
+    CHECK_EQ(run(f, request(0x32, 13, {4, 0}), r), 1);
+    CHECK_EQ(r[kRspHeader] & 0x20, 0);
+    check_bytes(r, kRspHeader + 54, {0x88, 15, 0});
+    s.stall_cmd = 0; s.stall_n = 0;
     // Page 1: rows 0-7; page 2: rows 8-9.
     CHECK_EQ(run(f, request(0x32, 2, {4, 1}), r), 1);
     check_header(r, 0x32, 2, Status::Ok, 1 + 5 * 8);
@@ -1127,7 +1140,7 @@ static void test_fc_vooc_monitor() {
     check_bytes(r, kRspHeader, {2, 0x90, 9, 0, 0x08, 0x01, 0x92, 10, 0, 0x09, 0x01});
     // The switch: off, then on; flags bit0 follows.
     CHECK_EQ(run(f, request(0x32, 4, {4, 0, 0}), r), 1);
-    check_header(r, 0x32, 4, Status::Ok, 54);
+    check_header(r, 0x32, 4, Status::Ok, 57);
     CHECK_EQ(f.vooc_set, 0);
     CHECK_EQ(r[kRspHeader] & 1, 0);
     CHECK_EQ(run(f, request(0x32, 5, {4, 1, 1}), r), 1);
