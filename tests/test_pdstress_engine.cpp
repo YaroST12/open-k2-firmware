@@ -893,9 +893,25 @@ void boundary_hold_per_sequence() {
     CHECK_COND(r.sim.boundary_calls >= 3);
 }
 
+// The numbers the remote start op and the shell carry: 0 = the default, a mask is cut to the known sequences.
+void make_options_defaults_and_clamps() {
+    const Options d{};
+    const Options z = make_options(0, 0, 0, 0, 0);
+    CHECK_EQ(int(z.mask), int(d.mask)); CHECK_EQ(int(z.cycles_pct), int(d.cycles_pct)); CHECK_EQ(int(z.pace), 0);
+    CHECK_EQ(int(z.max_ms), int(d.max_ms)); CHECK_EQ(int(z.max_transitions), int(d.max_transitions));
+    const Options a = make_options(seq_bit(Seq::Ladder) | seq_bit(Seq::Epr), 50, 2, 120, 300);
+    CHECK_EQ(int(a.mask), int(seq_bit(Seq::Ladder) | seq_bit(Seq::Epr))); CHECK_EQ(int(a.cycles_pct), 50); CHECK_EQ(int(a.pace), 2);
+    CHECK_EQ(int(a.max_ms), 120000); CHECK_EQ(int(a.max_transitions), 300);
+    CHECK_EQ(int(make_options(0xF000, 0, 0, 0, 0).mask), int(d.mask));   // nothing known selected: the default
+    CHECK_EQ(int(make_options(0xFFFF, 0, 0, 0, 0).mask), int(kAllSeqMask));
+    CHECK_EQ(int(make_options(0, 70000, 9, 0, 70000).pace), 2);
+    CHECK_EQ(int(make_options(0, 70000, 9, 0, 70000).cycles_pct), 0xFFFF);
+}
+
 }  // namespace
 
 int main() {
+    make_options_defaults_and_clamps();
     boundary_hold_waits_for_the_env();
     boundary_hold_is_bounded();
     boundary_hold_per_sequence();

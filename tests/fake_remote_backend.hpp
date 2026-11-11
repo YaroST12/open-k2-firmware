@@ -238,6 +238,21 @@ struct Fake {
         for (; n < out.size() && off + n < ufcs_blob.size(); n++) out[n] = ufcs_blob[off + n];
         return n;
     }
+    // PD Stress (Cmd::PdStress): a canned status block and result blob; the start options and stops are recorded
+    PdStressInfo ps_info{};
+    std::vector<uint8_t> ps_blob;
+    std::vector<PdStressStart> ps_starts;
+    Status ps_start_status = Status::Ok;
+    int ps_stops = 0;
+    PdStressInfo pdstress_info() { calls++; PdStressInfo i = ps_info; i.blob_len = uint16_t(ps_blob.size()); return i; }
+    Status pdstress_start(const PdStressStart &s) { calls++; ps_starts.push_back(s); return ps_start_status; }
+    void pdstress_stop() { calls++; ps_stops++; }
+    size_t pdstress_read(uint16_t off, std::span<uint8_t> out) {
+        calls++;
+        size_t n = 0;
+        for (; n < out.size() && off + n < ps_blob.size(); n++) out[n] = ps_blob[off + n];
+        return n;
+    }
     // QrTest (Cmd::QrTest): the dispatcher validates and builds the list itself; the backend only opens/pops the page.
     Status qrtest_status = Status::Ok;
     std::array<uint8_t, 3> qrtest_shown{}; bool qrtest_show_called = false; bool qrtest_stopped = false;

@@ -278,6 +278,26 @@
 //                                      ports refuse it now (a charger test running).
 //                                    op 2 stop: rsp showing(1) = 1 when a test screen was on the stack and is popped now.
 //                                    Wrong length BadLength, unknown op BadArg.
+// ---- PD Stress (k2/pdstress, docs/PD_STRESS.md) ---------------------------------------------------------------------------------
+//   0x55 PD_STRESS   req op(1) [args]  rsp per op
+//                                    The PD renegotiation stress tool. Only advertised PDOs and APDO ranges, never more current than
+//                                    advertised, no load, requests capped at the monitor ceiling. Status block (19 bytes): state(1: 0 idle,
+//                                    1 waiting to resume after a reboot, 2 running, 3 finished) stop(1: pdstress::Stop) start(1: the
+//                                    StartResult of the last start op, 0 = started) seq_idx(1) seq_total(1) seq_cur(1: the Seq id running)
+//                                    reboots(1) transitions(2) elapsed_ms(4) score_cp(4: hundredths of a penalty point per 100
+//                                    transitions, 0 = ideal) blob_len(2).
+//                                    op 0 status: rsp the status block.
+//                                    op 1 start, args mask(2) cycles_pct(2) pace(1: 0 per sequence, 1 settled, 2 ready) max_s(2)
+//                                      max_trans(2) flags(1: bit0 confirm, required): 0 in a field = the default. rsp the status block.
+//                                      NeedConfirm without the flag, BadArg for a pace above 2 or an unknown flag bit, Busy when another
+//                                      tool owns the ports; any other refusal (no source list, inline, no monitor, ...) is Ok with the
+//                                      StartResult in `start`.
+//                                    op 2 read, args off(2): rsp off(2) total(2) n(1) data(n), n <= kPdStressChunk (48). The result blob
+//                                      (layout in k2/pdstress/result.hpp: header, per-event points, then the raw per-sequence record).
+//                                      BadArg for off > total.
+//                                    op 3 stop: the run ends at the next poll with the source released to 5 V; rsp the status block.
+//                                      Never refused for a busy port: it is the way out of a run.
+// ---- end PD Stress --------------------------------------------------------------------------------------------------------------
 //   0x32 FC          req op(1) [args] [args]  rsp state proto fail scan_flags scan_step target_mv(2) vbus_mv(2)
 //                                    num_results(1) { proto outcome mv(2) } x num_results
 //                                    op 0 status; op 1 reset (to 5 V, then passive idle);
@@ -404,6 +424,7 @@ enum class Cmd : uint8_t {
                          // Busy while a run is active.
     ChargerAvsSweep = 0x54, // [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset; an Options flag
                          // next to the PPS sweep's, journaled in the meta record). rsp [on(1)]. Busy while a run is active.
+    PdStress = 0x55,        // PD Stress: status / start / result (chunked) / stop, see the layout above (0x54 is the AVS sweep)
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -415,6 +436,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
+    Cmd::PdStress,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -559,6 +581,13 @@ constexpr uint8_t kUfcsStatus = 0, kUfcsGet = 1, kUfcsSet = 2, kUfcsReset = 3, k
 constexpr size_t kUfcsChunk = 48, kUfcsFieldBytes = 17;
 static_assert(5 + kUfcsChunk <= kMaxRspPayload);
 static_assert(kUfcsFieldBytes <= kMaxRspPayload);
+// ---- PD Stress ----
+// PD_STRESS op codes (first payload byte of Cmd::PdStress); the read reply header is off(2) total(2) n(1).
+constexpr uint8_t kPdStressStatus = 0, kPdStressStart = 1, kPdStressRead = 2, kPdStressStop = 3;
+constexpr size_t kPdStressChunk = 48, kPdStressStatusBytes = 19, kPdStressStartArgs = 11;   // start payload: op + 10 bytes of options
+constexpr uint8_t kPdStressFlagMask = kPdFlagConfirm;   // the start flags this protocol knows
+static_assert(5 + kPdStressChunk <= kMaxRspPayload);
+// ---- end PD Stress ----
 // QRTEST op codes (first payload byte of Cmd::QrTest); the list reply header is off(2) total(2) n(1).
 constexpr uint8_t kQrTestList = 0, kQrTestShow = 1, kQrTestStop = 2;
 constexpr size_t kQrTestChunk = 48;
@@ -802,6 +831,29 @@ struct UfcsInfo {
     uint8_t start = 0;                  // ufcs::ProbeStart of the last probe op (0 = started)
     uint16_t blob_len = 0;              // bytes the read op serves
 };
+// ---- PD Stress ----
+struct PdStressInfo {
+    uint8_t state = 0;                  // 0 idle (no result), 1 waiting to resume after a reboot, 2 running, 3 finished
+    uint8_t stop = 0;                   // pdstress::Stop (0 while running)
+    uint8_t start = 0;                  // pdstress::StartResult of the last start op (0 = started)
+    uint8_t seq_idx = 0, seq_total = 0; // position in the run order (0-based), sequences in the run
+    uint8_t seq_cur = 0;                // pdstress::Seq id of the sequence in progress
+    uint8_t reboots = 0;
+    uint16_t transitions = 0;
+    uint32_t elapsed_ms = 0;
+    uint32_t score_cp = 0;              // hundredths of a penalty point per 100 transitions
+    uint16_t blob_len = 0;              // bytes the read op serves
+};
+// The start op's options as sent; a 0 in a numeric field means the default.
+struct PdStressStart {
+    uint16_t mask = 0;
+    uint16_t cycles_pct = 0;
+    uint8_t pace = 0;
+    uint16_t max_s = 0;
+    uint16_t max_trans = 0;
+    uint8_t flags = 0;
+};
+// ---- end PD Stress ----
 struct LabResult {
     uint8_t status = 0;                 // remote::Status the backend reports (0 = Ok)
     uint8_t reason = 0, duty = 0;
@@ -971,6 +1023,7 @@ size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);
 size_t encode_ufcs(std::span<uint8_t> out, const UfcsInfo &i);   // status block: state verdict class start blob_len(2) nfields
 // One tuner field: field(1) value(4) lo(4) hi(4) default(4); lo / hi / default come from ufcs::kFields.
 size_t encode_ufcs_field(std::span<uint8_t> out, uint8_t field, uint32_t value);
+size_t encode_pdstress(std::span<uint8_t> out, const PdStressInfo &i);   // the 19-byte status block (PD Stress)
 size_t encode_ripple(std::span<uint8_t> out, uint8_t code, const RippleInfo &r);
 
 // Cmd::ChargerCable: the backend's status and the identity state after the (optional) set.
@@ -1068,6 +1121,10 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ufcs_set(u8, std::uint32_t{}) } -> std::same_as<Status>;         // field, value (range checked); Busy while a probe runs
     { b.ufcs_op(u8) } -> std::same_as<Status>;                           // kUfcsReset / kUfcsProbe / kUfcsStop
     { b.ufcs_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // blob bytes from off, returns how many
+    { b.pdstress_info() } -> std::same_as<PdStressInfo>;                  // PD Stress status block
+    { b.pdstress_start(PdStressStart{}) } -> std::same_as<Status>;        // Busy when another tool owns the ports; other refusals are in info().start
+    { b.pdstress_stop() } -> std::same_as<void>;                          // never refused
+    { b.pdstress_read(uint16_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // result blob bytes from off, returns how many
     { b.qrtest_show(u8, u8, u8) } -> std::same_as<Status>;   // version, px, quiet: open the full-screen test QR page
     { b.qrtest_stop() } -> std::same_as<bool>;               // pop the test page when it is showing
     { b.blackbox(u8, std::uint32_t{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // op, arg, out; returns the payload size
@@ -1592,6 +1649,48 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         }
         return reply_n(encode_ufcs(buf, backend.ufcs_info()));
     }
+    // ---- PD Stress ----
+    case Cmd::PdStress: {
+        if (p.empty()) return reply(Status::BadLength);
+        switch (p[0]) {
+        case kPdStressStatus:
+            if (p.size() != 1) return reply(Status::BadLength);
+            return reply_n(encode_pdstress(buf, backend.pdstress_info()));
+        case kPdStressStop:
+            if (p.size() != 1) return reply(Status::BadLength);
+            backend.pdstress_stop();
+            return reply_n(encode_pdstress(buf, backend.pdstress_info()));
+        case kPdStressStart: {
+            if (p.size() != kPdStressStartArgs) return reply(Status::BadLength);
+            PdStressStart s;
+            s.mask = detail::rd16(&p[1]);
+            s.cycles_pct = detail::rd16(&p[3]);
+            s.pace = p[5];
+            s.max_s = detail::rd16(&p[6]);
+            s.max_trans = detail::rd16(&p[8]);
+            s.flags = p[10];
+            if (s.pace > 2 || (s.flags & ~kPdStressFlagMask)) return reply(Status::BadArg);
+            if (!(s.flags & kPdFlagConfirm)) return reply(Status::NeedConfirm);
+            const Status st = backend.pdstress_start(s);
+            if (st != Status::Ok) return reply(st);
+            return reply_n(encode_pdstress(buf, backend.pdstress_info()));
+        }
+        case kPdStressRead: {
+            if (p.size() != 3) return reply(Status::BadLength);
+            const uint16_t off = detail::rd16(&p[1]);
+            const uint16_t total = backend.pdstress_info().blob_len;
+            if (off > total) return reply(Status::BadArg);
+            const size_t want = std::min<size_t>(kPdStressChunk, total - off);
+            const size_t n = std::min(want, backend.pdstress_read(off, std::span<uint8_t>(buf.data() + 5, want)));
+            buf[0] = uint8_t(off); buf[1] = uint8_t(off >> 8);
+            buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
+            return reply_n(5 + n);
+        }
+        default:
+            return reply(Status::BadArg);
+        }
+    }
+    // ---- end PD Stress ----
     case Cmd::QRTest: {
         if (p.empty()) return reply(Status::BadLength);
         switch (p[0]) {

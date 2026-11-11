@@ -143,6 +143,26 @@ int main() {
     CHECK_EQ(lab::is_family("lcd"), true);
     CHECK_STR(std::string(lab::name(lab::Id::LcdSpi)).c_str(), "lcd.spi");
     CHECK_STR(std::string(lab::name(lab::Id::LcdShow)).c_str(), "lcd.show");
+    // pdstress: start can raise VBUS (confirm), status / result / stop are read-only and never refused by the grammar
+    CHECK_EQ(ok("pdstress start"), false);                         // confirm missing
+    CHECK_EQ(P("pdstress start confirm", c) == nullptr && c.id == lab::Id::PdStressStart && c.na == 0 && c.o.mask == 0, true);
+    CHECK_EQ(P("pdstress start --mask 0x3F --cycles 50 --pace 1 --max-s 120 --max-trans 200 confirm", c) == nullptr &&
+              c.o.mask == 0x3F && c.o.cycles == 50 && c.o.pace == 1 && c.o.max_s == 120 && c.o.max_trans == 200, true);
+    CHECK_EQ(ok("pdstress start --pace 3 confirm"), false);
+    CHECK_EQ(ok("pdstress start --cycles 0 confirm"), false);      // 0 is spelled by leaving the option out
+    CHECK_EQ(ok("pdstress start --cycles 65536 confirm"), false);
+    CHECK_EQ(ok("pdstress start --mask 0x1000 confirm"), false);   // twelve sequences only
+    CHECK_EQ(ok("pdstress start --mask confirm"), false);
+    CHECK_EQ(ok("pdstress start 5 confirm"), false);               // no positionals
+    CHECK_EQ(P("pdstress status --json", c) == nullptr && c.id == lab::Id::PdStressStatus && c.o.json && !c.o.confirm, true);
+    CHECK_EQ(P("pdstress result", c) == nullptr && c.id == lab::Id::PdStressResult && c.na == 0, true);
+    CHECK_EQ(P("pdstress result 96", c) == nullptr && c.a[0] == 96 && c.na == 1, true);
+    CHECK_EQ(P("pdstress stop", c) == nullptr && c.id == lab::Id::PdStressStop && !c.o.confirm, true);
+    CHECK_EQ(ok("pdstress nope"), false);
+    CHECK_EQ(ok("pdstress"), false);
+    CHECK_EQ(lab::is_family("pdstress"), true);
+    CHECK_STR(std::string(lab::name(lab::Id::PdStressStart)).c_str(), "pdstress.start");
+    CHECK_STR(std::string(lab::name(lab::Id::PdStressStop)).c_str(), "pdstress.stop");
     // families and unknown verbs
     CHECK_EQ(lab::is_family("accp"), true);
     CHECK_EQ(lab::is_family("qc3+"), true);

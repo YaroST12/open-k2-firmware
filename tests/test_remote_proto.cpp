@@ -1243,6 +1243,67 @@ static void test_ufcs() {
     CHECK_EQ(k2::remote::encode_ufcs_field(std::span<uint8_t>(tmp), uint8_t(k2::ufcs::kFieldCount), 0), size_t(0));
 }
 
+// PD_STRESS (0x55): status block, start with the confirm flag and defaults, chunked result read, stop.
+static void test_pd_stress() {
+    Fake f; Frame r;
+    f.ps_info = {2, 0, 0, 3, 7, 4, 1, 0x0102, 0x0A0B0C0D, 0x00000FA0, 0};
+    f.ps_blob.resize(100);
+    for (size_t i = 0; i < f.ps_blob.size(); i++) f.ps_blob[i] = uint8_t(i + 1);
+    // status: state stop start seq_idx seq_total seq_cur reboots transitions(2) elapsed_ms(4) score_cp(4) blob_len(2)
+    CHECK_EQ(run(f, request(0x55, 1, {0}), r), 1);
+    check_header(r, 0x55, 1, Status::Ok, 19);
+    check_bytes(r, kRspHeader, {2, 0, 0, 3, 7, 4, 1, 0x02, 0x01, 0x0D, 0x0C, 0x0B, 0x0A, 0xA0, 0x0F, 0, 0, 100, 0});
+    CHECK_EQ(run(f, request(0x55, 2, {0, 0}), r), 1);
+    check_header(r, 0x55, 2, Status::BadLength, 0);
+    // start without the confirm flag is refused before the backend sees it
+    CHECK_EQ(run(f, request(0x55, 3, {1, 0xFF, 0x07, 100, 0, 0, 0x10, 0x0E, 0xB0, 0x04, 0}), r), 1);
+    check_header(r, 0x55, 3, Status::NeedConfirm, 0);
+    CHECK_EQ(f.ps_starts.size(), size_t(0));
+    // start with it: the options reach the backend in their wire order
+    CHECK_EQ(run(f, request(0x55, 4, {1, 0xFF, 0x07, 100, 0, 2, 0x10, 0x0E, 0xB0, 0x04, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x55, 4, Status::Ok, 19);
+    CHECK_EQ(f.ps_starts.size(), size_t(1));
+    CHECK_EQ(f.ps_starts[0].mask, 0x07FF); CHECK_EQ(f.ps_starts[0].cycles_pct, 100); CHECK_EQ(f.ps_starts[0].pace, 2);
+    CHECK_EQ(f.ps_starts[0].max_s, 0x0E10); CHECK_EQ(f.ps_starts[0].max_trans, 0x04B0); CHECK_EQ(f.ps_starts[0].flags, kPdFlagConfirm);
+    // a refusal by the session (ports busy) is Busy; any other refusal is Ok with the code in `start`
+    f.ps_start_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x55, 5, {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x55, 5, Status::Busy, 0);
+    f.ps_start_status = Status::Ok;
+    f.ps_info.start = 2;
+    CHECK_EQ(run(f, request(0x55, 6, {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x55, 6, Status::Ok, 19);
+    CHECK_EQ(r[kRspHeader + 2], 2);
+    // bad pace, bad flags, bad length
+    CHECK_EQ(run(f, request(0x55, 7, {1, 0, 0, 0, 0, 3, 0, 0, 0, 0, kPdFlagConfirm}), r), 1);
+    check_header(r, 0x55, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x55, 8, {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80 | kPdFlagConfirm}), r), 1);
+    check_header(r, 0x55, 8, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x55, 9, {1, 0, 0}), r), 1);
+    check_header(r, 0x55, 9, Status::BadLength, 0);
+    // stop reaches the backend even while the ports are busy (it is the way out of a run)
+    f.ports_busy_value = true;
+    CHECK_EQ(run(f, request(0x55, 10, {3}), r), 1);
+    check_header(r, 0x55, 10, Status::Ok, 19);
+    CHECK_EQ(f.ps_stops, 1);
+    f.ports_busy_value = false;
+    // read: chunk 0 = 48 bytes, the tail is 4, the end offset is empty, past it BadArg
+    CHECK_EQ(run(f, request(0x55, 11, {2, 0, 0}), r), 1);
+    check_header(r, 0x55, 11, Status::Ok, 5 + 48);
+    check_bytes(r, kRspHeader, {0, 0, 100, 0, 48, 1, 2});
+    CHECK_EQ(run(f, request(0x55, 12, {2, 96, 0}), r), 1);
+    check_header(r, 0x55, 12, Status::Ok, 5 + 4);
+    check_bytes(r, kRspHeader, {96, 0, 100, 0, 4, 97, 98, 99, 100});
+    CHECK_EQ(run(f, request(0x55, 13, {2, 100, 0}), r), 1);
+    check_header(r, 0x55, 13, Status::Ok, 5);
+    CHECK_EQ(run(f, request(0x55, 14, {2, 101, 0}), r), 1);
+    check_header(r, 0x55, 14, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x55, 15, {9}), r), 1);
+    check_header(r, 0x55, 15, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x55, 16, {}), r), 1);
+    check_header(r, 0x55, 16, Status::BadLength, 0);
+}
+
 static void test_boot_info() {
     Fake f; Frame r;
     f.boot_line.assign(100, 'x');
@@ -2534,6 +2595,7 @@ int main() {
     test_flash_dump();
     test_boot_info();
     test_ufcs();
+    test_pd_stress();
     test_qrtest();
     test_debug_fault();
     test_build_response_pads_and_cuts();

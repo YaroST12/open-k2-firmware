@@ -286,7 +286,38 @@ static void test_cancel_during_the_wait_drops_the_resume() {
     CHECK_EQ(g_stub.ps_file_present, false);
 }
 
+// The status block the remote op and the shell serve: idle, a refused start's code, running, finished with the score.
+static void test_the_status_block_follows_the_run() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    auto st = ui.pd_stress().status(g_now);
+    CHECK_EQ(int(st.state), int(PdStressSession::State::Idle));
+    CHECK_EQ(int(st.blob_len), 0);
+    g_stub.caps.num_pdos = 0; g_stub.caps.valid = false;
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::NoCaps));
+    CHECK_EQ(int(ui.pd_stress().status(g_now).start), int(ps::StartResult::NoCaps));
+    fixture();
+    boot(h);
+    Ui& u2 = *h;
+    CHECK_EQ(int(u2.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Ok));
+    CHECK_EQ(int(u2.pd_stress().status(g_now).start), int(ps::StartResult::Ok));
+    run(u2, 3000);
+    st = u2.pd_stress().status(g_now);
+    CHECK_EQ(int(st.state), int(PdStressSession::State::Running));
+    CHECK_EQ(int(st.seq_total) >= 1, 1);
+    CHECK_EQ(int(st.seq_cur), int(ps::Seq::Ladder));
+    CHECK_EQ(int(st.blob_len), int(ps::result::kTotalBytes));
+    run(u2, 120000);
+    st = u2.pd_stress().status(g_now);
+    CHECK_EQ(int(st.state), int(PdStressSession::State::Finished));
+    CHECK_EQ(int(st.stop), int(ps::Stop::Done));
+    CHECK_EQ(int(st.transitions) > 0, 1);
+    CHECK_EQ(st.score_cp, ps::score_cp(u2.pd_stress().engine()->total()));
+    CHECK_EQ(st.elapsed_ms, u2.pd_stress().elapsed_ms(g_now));
+}
+
 int main() {
+    test_the_status_block_follows_the_run();
     test_refuses_without_a_monitor();
     test_refuses_without_a_source_list();
     test_refuses_inline();

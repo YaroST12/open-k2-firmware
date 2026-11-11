@@ -30,6 +30,7 @@ enum class Id : std::uint8_t {
     Dpdm, CcRp, CcRd, Vbus,
     PdCaps, PdRequest, PdPps, PdAvs, PdEpr, PdVdm, PdGet, PdReread, PdHardReset, PdSoftReset, PdRaw,
     LcdShow, LcdSpi,
+    PdStressStart, PdStressStatus, PdStressResult, PdStressStop,
     Count
 };
 
@@ -37,6 +38,8 @@ enum class Id : std::uint8_t {
 struct Opts {
     std::uint32_t retries = 0, timeout_ms = 0, hs_ms = 0, hold_ms = 0, pulse_us = 0, gap_us = 0,
                   frame_gap_us = 0, watch_ms = 0, sop = 0;
+    // pdstress start only (0 = the tool's default): sequence mask, cycle scale in percent, pace, time cap in s, transition cap
+    std::uint32_t mask = 0, cycles = 0, pace = 0, max_s = 0, max_trans = 0;
     bool confirm = false, hold = false, release = false, json = false, raw_log = false;
 };
 

@@ -74,6 +74,11 @@ constexpr Entry kTable[] = {
     {"pd", "raw", "pd.raw", Id::PdRaw, "x", Raise::Always},
     {"lcd", "show", "lcd.show", Id::LcdShow, "", Raise::Never},
     {"lcd", "spi", "lcd.spi", Id::LcdSpi, "n", Raise::Never},   // LCD SPI clock divider 4 or 8: RAM only, never touches VBUS
+    // PD Stress (k2/pdstress): start renegotiates the charger's PDOs hard, so it needs confirm; the rest only reads or stops
+    {"pdstress", "start", "pdstress.start", Id::PdStressStart, "", Raise::Always},
+    {"pdstress", "status", "pdstress.status", Id::PdStressStatus, "", Raise::Never},
+    {"pdstress", "result", "pdstress.result", Id::PdStressResult, "o", Raise::Never},
+    {"pdstress", "stop", "pdstress.stop", Id::PdStressStop, "", Raise::Never},
 };
 static_assert(sizeof(kTable) / sizeof(kTable[0]) == static_cast<std::size_t>(Id::Count));
 
@@ -93,6 +98,11 @@ constexpr OptDef kOpts[] = {
     {"--frame-gap-us", &Opts::frame_gap_us, 1, 100000},
     {"--watch", &Opts::watch_ms, 10, 10000},   // blocks the main loop: keep it short
     {"--sop", &Opts::sop, 0, 2},
+    {"--mask", &Opts::mask, 1, 0xFFF},          // pdstress start: sequence bits P1..P12
+    {"--cycles", &Opts::cycles, 1, 0xFFFF},     // percent of each sequence's cycle count
+    {"--pace", &Opts::pace, 0, 2},
+    {"--max-s", &Opts::max_s, 1, 0xFFFF},
+    {"--max-trans", &Opts::max_trans, 1, 0xFFFF},
 };
 
 constexpr std::string_view kVdmWords[] = {"discover-identity", "svids", "modes"};

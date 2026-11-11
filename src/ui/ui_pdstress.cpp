@@ -116,6 +116,12 @@ void PdStressSession::on_finish(ps::Stop why) {
 // ---- start, cancel, restore ----------------------------------------------------------------------------------------------------------
 
 ps::StartResult PdStressSession::start(const ps::Options& o, std::uint32_t now_ms) {
+    const ps::StartResult r = start_run(o, now_ms);
+    last_start_ = static_cast<std::uint8_t>(r);
+    return r;
+}
+
+ps::StartResult PdStressSession::start_run(const ps::Options& o, std::uint32_t now_ms) {
     if (running()) return ps::StartResult::Running;
     if (restoring()) return ps::StartResult::Busy;
     if (!ctx_.pm_online) return ps::StartResult::NoMonitor;
@@ -239,6 +245,27 @@ std::uint32_t PdStressSession::elapsed_ms(std::uint32_t now_ms) const {
 }
 
 // ---- result --------------------------------------------------------------------------------------------------------------------------
+
+PdStressSession::Status PdStressSession::status(std::uint32_t now_ms) const {
+    Status s;
+    s.start = last_start_;
+    if (!engine_) {
+        s.state = restoring() ? State::Restoring : State::Idle;
+        return s;
+    }
+    const ps::Engine& e = *engine_;
+    s.state = restoring() ? State::Restoring : e.running() ? State::Running : State::Finished;
+    s.stop = static_cast<std::uint8_t>(e.stop());
+    s.seq_idx = e.seq_index();
+    s.seq_total = e.seq_total();
+    s.seq_cur = static_cast<std::uint8_t>(e.seq());
+    s.reboots = e.reboots();
+    s.transitions = static_cast<std::uint16_t>(std::min<std::uint32_t>(e.transitions(), 0xFFFF));
+    s.elapsed_ms = elapsed_ms(now_ms);
+    s.score_cp = ps::score_cp(e.total());
+    s.blob_len = static_cast<std::uint16_t>(ps::result::kTotalBytes);
+    return s;
+}
 
 ps::result::Info PdStressSession::info(std::uint32_t now_ms) const {
     ps::result::Info i;

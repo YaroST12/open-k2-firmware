@@ -126,6 +126,12 @@ public:
     remote::Status ufcs_set(uint8_t field, uint32_t value);
     remote::Status ufcs_op(uint8_t op);                    // kUfcsReset / kUfcsProbe / kUfcsStop
     size_t ufcs_read(uint16_t off, std::span<uint8_t> out);
+    // ---- PD Stress (Cmd::PdStress): thin glue over Ui::pd_stress() (k2/ui/pd_stress_session.hpp) ----
+    remote::PdStressInfo pdstress_info();
+    remote::Status pdstress_start(const remote::PdStressStart &s);   // Busy when another tool owns the ports; other refusals show in info().start
+    void pdstress_stop();                                            // never refused: ends a run or drops a pending resume
+    size_t pdstress_read(uint16_t off, std::span<uint8_t> out);
+    // ---- end PD Stress ----
     // Cmd::QrTest: the QR scan-test rig (k2/ui/ui_qrtest.hpp). Op 1 opens the full-screen test QR page
     // (Busy when the arena or the ports refuse it now); op 2 pops it when it is showing.
     remote::Status qrtest_show(uint8_t version, uint8_t px, uint8_t quiet);

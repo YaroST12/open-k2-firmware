@@ -1180,6 +1180,28 @@ size_t Remote::ufcs_read(uint16_t off, std::span<uint8_t> out) {
     return n;
 }
 
+// ---- PD Stress ----
+remote::PdStressInfo Remote::pdstress_info() {
+    const PdStressSession::Status s = ui_.pd_stress().status(systick::millis());
+    remote::PdStressInfo i;
+    i.state = static_cast<uint8_t>(s.state);   // Idle 0, Restoring 1, Running 2, Finished 3: the wire values
+    i.stop = s.stop; i.start = s.start;
+    i.seq_idx = s.seq_idx; i.seq_total = s.seq_total; i.seq_cur = s.seq_cur;
+    i.reboots = s.reboots; i.transitions = s.transitions; i.elapsed_ms = s.elapsed_ms; i.score_cp = s.score_cp; i.blob_len = s.blob_len;
+    return i;
+}
+
+remote::Status Remote::pdstress_start(const remote::PdStressStart &s) {
+    const pdstress::Options o = pdstress::make_options(s.mask, s.cycles_pct, s.pace, s.max_s, s.max_trans);
+    const pdstress::StartResult r = ui_.pd_stress().start(o, systick::millis());
+    return r == pdstress::StartResult::Busy ? remote::Status::Busy : remote::Status::Ok;
+}
+
+void Remote::pdstress_stop() { ui_.pd_stress().cancel(); }
+
+size_t Remote::pdstress_read(uint16_t off, std::span<uint8_t> out) { return ui_.pd_stress().result_read(off, out); }
+// ---- end PD Stress ----
+
 remote::Status Remote::qrtest_show(uint8_t version, uint8_t px, uint8_t quiet) {
     if (!qrtest::show(ui_, version, px, quiet, systick::millis())) {
         K2LOG("[QRTEST] show refused: v%u px%u q%u\n", unsigned(version), unsigned(px), unsigned(quiet));

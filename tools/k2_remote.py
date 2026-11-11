@@ -92,6 +92,19 @@ CMD_UFCS = 0x52           # UFCS frame/timing tuner (RAM only) and the 5 V hands
 CMD_QRTEST = 0x53         # QR scan-test rig (k2/ui/ui_qrtest.hpp): fit table / full-screen test QR / stop; draws only
 QRTEST_LIST, QRTEST_SHOW, QRTEST_STOP = 0, 1, 2
 QRTEST_CHUNK = 48
+# ---- PD Stress (docs/PD_STRESS.md): constants ----
+CMD_PD_STRESS = 0x55      # PD Stress: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_stress.py)
+PDS_STATUS, PDS_START, PDS_READ, PDS_STOP = 0, 1, 2, 3
+PDS_CHUNK = 48
+PDS_FLAG_CONFIRM = 1 << 0
+PDS_STATES = ["idle", "resuming", "running", "finished"]
+# Same order as k2::pdstress::StartResult / Stop (include/k2/pdstress/engine.hpp); tests/test_pd_stress.py checks the sync.
+PDS_STARTS = ["ok", "ports busy", "no PD source", "link inline", "no sequence applies", "no record buffer", "already running",
+              "no power monitor"]
+PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "second source hard reset", "second K2 hard reset",
+             "VBUS over the limit", "load on the output", "no recovery without a replug", "step stuck", "no PD contract",
+             "link inline", "too many K2 reboots"]
+# ---- end PD Stress constants ----
 UFCS_STATUS, UFCS_GET, UFCS_SET, UFCS_RESET, UFCS_PROBE, UFCS_STOP, UFCS_READ = range(7)
 UFCS_CHUNK = 48
 # Same order and ranges as k2::ufcs::kFields (include/k2/fastcharge/ufcs_tune.hpp); tests/test_k2_remote_ufcs.py checks the sync.
@@ -2477,6 +2490,77 @@ def cmd_ufcs(link, a):
     raise SystemExit("unknown ufcs command")
 
 
+# ---- PD Stress (docs/PD_STRESS.md): CMD_PD_STRESS 0x55 ----
+def decode_pdstress_status(p):
+    """19-byte status block: state stop start seq_idx seq_total seq_cur reboots (u8), transitions u16, elapsed_ms u32,
+    score_cp u32 (hundredths of a point per 100 transitions), blob_len u16."""
+    _need(p, 19, "pd-stress status")
+    u16 = lambda o: p[o] | p[o + 1] << 8
+    u32 = lambda o: u16(o) | u16(o + 2) << 16
+    return {"state": _name_of(PDS_STATES, p[0]), "stop": _name_of(PDS_STOPS, p[1]), "start": _name_of(PDS_STARTS, p[2]),
+            "seq_idx": p[3], "seq_total": p[4], "seq_cur": p[5], "reboots": p[6], "transitions": u16(7),
+            "elapsed_ms": u32(9), "score_cp": u32(13), "score": u32(13) / 100.0, "blob_len": u16(17)}
+
+
+def pdstress_status(link):
+    return decode_pdstress_status(link.call(CMD_PD_STRESS, bytes([PDS_STATUS])).payload)
+
+
+def pdstress_start(link, mask=0, cycles_pct=0, pace=0, max_s=0, max_trans=0, confirm=False):
+    """Start a run. 0 in a numeric field means the K2's default. PD Stress sends many renegotiations, so it needs `confirm`."""
+    if not confirm:
+        raise SystemExit("pd-stress start renegotiates the charger hard (inside the PD rules): add --confirm")
+    flags = PDS_FLAG_CONFIRM
+    args = (int(mask).to_bytes(2, "little") + int(cycles_pct).to_bytes(2, "little") + bytes([int(pace)]) +
+            int(max_s).to_bytes(2, "little") + int(max_trans).to_bytes(2, "little") + bytes([flags]))
+    return decode_pdstress_status(link.call(CMD_PD_STRESS, bytes([PDS_START]) + args).payload)
+
+
+def pdstress_stop(link):
+    return decode_pdstress_status(link.call(CMD_PD_STRESS, bytes([PDS_STOP])).payload)
+
+
+def pdstress_read_blob(link):
+    """The result blob, read in PDS_CHUNK pieces (layout: include/k2/pdstress/result.hpp)."""
+    out = bytearray()
+    total = None
+    while total is None or len(out) < total:
+        p = link.call(CMD_PD_STRESS, bytes([PDS_READ]) + len(out).to_bytes(2, "little")).payload
+        _need(p, 5, "pd-stress read")
+        total = p[2] | p[3] << 8
+        n = p[4]
+        _need(p, 5 + n, "pd-stress read")
+        if n == 0:
+            break
+        out += p[5:5 + n]
+    return bytes(out)
+
+
+def render_pdstress(r):
+    if "pdstress" in r:
+        s = r["pdstress"]
+        return (f"pd-stress {s['state']}" + (f", stop: {s['stop']}" if s["state"] == "finished" else "") +
+                f", start {s['start']}, sequence {s['seq_idx']}/{s['seq_total']} (id {s['seq_cur']}), reboots {s['reboots']}, "
+                f"{s['transitions']} transitions, {s['elapsed_ms'] / 1000:.1f} s, score {s['score']:.2f} (0 = ideal, per 100 transitions)")
+    import pdstress_blob
+    return pdstress_blob.render_text(r["pdstress_result"])
+
+
+def cmd_pd_stress(link, a):
+    c = a.pdstress_cmd
+    if c == "status":
+        return {"pdstress": pdstress_status(link)}
+    if c == "start":
+        return {"pdstress": pdstress_start(link, a.mask, a.cycles, a.pace, a.max_s, a.max_trans, a.confirm)}
+    if c == "stop":
+        return {"pdstress": pdstress_stop(link)}
+    if c == "result":
+        import pdstress_blob
+        return {"pdstress_result": pdstress_blob.decode_blob(pdstress_read_blob(link))}
+    raise SystemExit("unknown pd-stress command")
+# ---- end PD Stress ----
+
+
 LAB_REASONS = ["none", "timeout", "vbus_low", "vbus_high", "mcu_hot", "external", "done"]
 
 
@@ -3387,6 +3471,8 @@ def _render(name, r):
             lines.append(f"scan running, step {s['step'] + 1}")
         lines += [f"  {x['proto']} {x['outcome']}" + (f" {x['mv']} mV" if x["mv"] else "") for x in s["results"]]
         return "\n".join(lines)
+    if name == "pd-stress":    # PD Stress
+        return render_pdstress(r)
     if name == "ufcs":
         return render_ufcs(r)
     if name == "qrtest":
@@ -3438,7 +3524,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards,
             "twin": cmd_twin}
 
@@ -3766,6 +3852,21 @@ def build_parser():
     sus.add_parser("probe", help="start the probe (5 V only, refused inline or off 5 V); read it with `ufcs result`")
     sus.add_parser("stop", help="abort a running probe and release the lines")
     sus.add_parser("result", help="the last probe: handshake timings, UART errors, every TX frame and RX byte")
+    # ---- PD Stress (docs/PD_STRESS.md): parser ----
+    sps = sub.add_parser("pd-stress", help="PD Stress: renegotiation stress run on the attached charger (inside the PD rules, "
+                         "no load); score 0 = ideal. Start, watch, read the raw result, stop; tools/pd_stress.py records and rescored runs")
+    spss = sps.add_subparsers(dest="pdstress_cmd", required=True)
+    spst = spss.add_parser("start", help="start a run (needs --confirm)")
+    spst.add_argument("--confirm", action="store_true", help="required: the charger is renegotiated hard, nothing is on the output")
+    spst.add_argument("--mask", type=lambda s: int(s, 0), default=0, help="sequence bit mask (0 = the default set)")
+    spst.add_argument("--cycles", type=int, default=0, help="percent of every sequence's cycles (0 = 100)")
+    spst.add_argument("--pace", type=int, default=0, choices=(0, 1, 2), help="0 per sequence, 1 all Settled, 2 all Ready")
+    spst.add_argument("--max-s", type=int, default=0, help="run time cap in seconds (0 = default)")
+    spst.add_argument("--max-trans", type=int, default=0, help="transition cap (0 = default)")
+    spss.add_parser("status", help="state, sequence, transitions, score so far")
+    spss.add_parser("result", help="the raw result: per-sequence counters and distributions, per-event points, the score")
+    spss.add_parser("stop", help="stop the run (never refused)")
+    # ---- end PD Stress parser ----
     sc = sub.add_parser("cable-r", help="cable resistance: passive two-point meter or Kelvin 8-wire (never drives VBUS)")
     scs = sc.add_subparsers(dest="cable_cmd", required=True)
     scs.add_parser("status", help="idle reference, loaded point, result")

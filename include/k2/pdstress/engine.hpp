@@ -92,6 +92,19 @@ struct Options {
     std::uint16_t max_transitions = 1200;
 };
 
+// Options from the numbers the remote start op and the shell carry: 0 in a field = the default; a mask is cut to the known sequences
+// (an empty cut = the default mask); a time cap is in seconds; the pace is clamped to 0..2.
+constexpr Options make_options(std::uint32_t mask, std::uint32_t cycles_pct, std::uint32_t pace, std::uint32_t max_s, std::uint32_t max_trans) {
+    Options o;
+    const std::uint16_t m = static_cast<std::uint16_t>(mask & kAllSeqMask);
+    if (m != 0) o.mask = m;
+    if (cycles_pct != 0) o.cycles_pct = static_cast<std::uint16_t>(cycles_pct > 0xFFFF ? 0xFFFF : cycles_pct);
+    o.pace = static_cast<std::uint8_t>(pace > 2 ? 2 : pace);
+    if (max_s != 0) o.max_ms = max_s * 1000u;
+    if (max_trans != 0) o.max_transitions = static_cast<std::uint16_t>(max_trans > 0xFFFF ? 0xFFFF : max_trans);
+    return o;
+}
+
 // What a sequence's journal line carries across a reboot (journal.hpp).
 struct Resume {
     std::uint8_t next = 0;             // order index to continue at

@@ -70,6 +70,21 @@ public:
     // Elapsed run time: frozen when the run ended.
     std::uint32_t elapsed_ms(std::uint32_t now_ms) const;
 
+    // The status the remote op and the shell serve (one place, so both say the same).
+    enum class State : std::uint8_t { Idle, Restoring, Running, Finished };
+    struct Status {
+        State state = State::Idle;
+        std::uint8_t stop = 0;                 // pdstress::Stop
+        std::uint8_t start = 0;                // pdstress::StartResult of the last start() call
+        std::uint8_t seq_idx = 0, seq_total = 0, seq_cur = 0;
+        std::uint8_t reboots = 0;
+        std::uint16_t transitions = 0;
+        std::uint32_t elapsed_ms = 0;
+        std::uint32_t score_cp = 0;
+        std::uint16_t blob_len = 0;
+    };
+    Status status(std::uint32_t now_ms) const;
+
     // The line for the footer of the page that is up; nullptr when there is none (no run, restore not pending). Info tone.
     const char* footer() const { return foot_.c_str()[0] ? foot_.c_str() : nullptr; }
     // Why a charger test / identity / trigger must not start now (nullptr = free); the Ui folds it into busy_reason().
@@ -97,6 +112,7 @@ private:
     void on_note(const char* why) override;
     void on_finish(pdstress::Stop why) override;
 
+    pdstress::StartResult start_run(const pdstress::Options& o, std::uint32_t now_ms);
     void restore_step(std::uint32_t now_ms);
     void drop_restore(const char* why);
     bool self_supplied() const;
@@ -114,7 +130,8 @@ private:
     std::uint32_t restore_t0_ = 0;
     bool journal_on_ = false;            // this run writes a journal (self-supplied K2, the store worked)
     bool cancel_asked_ = false;
-    bool frozen_ = false;                // the run ended: elapsed_ms is fixed
+    std::uint8_t last_start_ = 0;        // pdstress::StartResult of the last start() call
+    bool frozen_ = false;               // the run ended: elapsed_ms is fixed
     std::uint32_t frozen_ms_ = 0;
     std::uint32_t last_now_ = 0;
     std::uint8_t footer_seq_ = 0xFF, footer_total_ = 0xFF, footer_kind_ = 0xFF;

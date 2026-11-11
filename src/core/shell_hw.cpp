@@ -212,6 +212,8 @@ const char* check_opts(const lab::Cmd& c) {
     if (o.sop) return "--sop: PD message injection is not implemented in this firmware";
     if (o.hs_ms || o.frame_gap_us) return "--hs-ms/--frame-gap-us are reserved (engine timing hooks not added)";
     if ((o.hold || o.release) && !(ok & kKeep)) return "--hold/--release are not used by this command";
+    if ((o.mask || o.cycles || o.pace || o.max_s || o.max_trans) && c.id != lab::Id::PdStressStart)
+        return "--mask/--cycles/--pace/--max-s/--max-trans are used by pdstress start only";
     return nullptr;
 }
 
@@ -686,10 +688,56 @@ const char* lab_lcd(const lab::Cmd& c) {
     return nullptr;
 }
 
+// PD Stress over the CDC shell: the same ops as the remote command 0x55 (one glue, Remote::pdstress_*). `stop` is never refused for a busy
+// link; `start` refuses by itself when another tool owns the ports (the status line then says why).
+const char* lab_pdstress(const lab::Cmd& c) {
+    using I = lab::Id;
+    if (c.id == I::PdStressStart) {
+        remote::PdStressStart s;
+        s.mask = static_cast<std::uint16_t>(c.o.mask);
+        s.cycles_pct = static_cast<std::uint16_t>(c.o.cycles);
+        s.pace = static_cast<std::uint8_t>(c.o.pace);
+        s.max_s = static_cast<std::uint16_t>(c.o.max_s);
+        s.max_trans = static_cast<std::uint16_t>(c.o.max_trans);
+        if (g_remote->pdstress_start(s) != remote::Status::Ok) return "busy (another tool owns the ports)";
+    } else if (c.id == I::PdStressStop) {
+        g_remote->pdstress_stop();
+    } else if (c.id == I::PdStressResult) {
+        std::uint8_t buf[32];
+        const std::uint32_t off = c.na ? c.a[0] : 0;
+        const remote::PdStressInfo i = g_remote->pdstress_info();
+        const std::size_t n = off < i.blob_len ? g_remote->pdstress_read(static_cast<std::uint16_t>(off), std::span<std::uint8_t>(buf)) : 0;
+        Line l(c, "pdstress.result");
+        l.u("off", off);
+        l.u("total", i.blob_len);
+        l.u("n", static_cast<std::uint32_t>(n));
+        l.hex("data", std::span<const std::uint8_t>(buf, n));
+        l.send();
+        return nullptr;
+    }
+    static constexpr const char* kStates[] = {"idle", "resuming", "running", "finished"};
+    const remote::PdStressInfo i = g_remote->pdstress_info();
+    Line l(c, lab::name(c.id));
+    l.s("state", i.state < 4 ? kStates[i.state] : "?");
+    l.u("stop", i.stop);
+    l.u("start", i.start);
+    l.u("seq", i.seq_idx);
+    l.u("of", i.seq_total);
+    l.u("id", i.seq_cur);
+    l.u("reboots", i.reboots);
+    l.u("transitions", i.transitions);
+    l.u("elapsed_ms", i.elapsed_ms);
+    l.u("score_cp", i.score_cp);
+    l.u("blob", i.blob_len);
+    l.send();
+    return nullptr;
+}
+
 const char* lab_run(const lab::Cmd& c) {
     using I = lab::Id;
     if (const char* why = check_opts(c)) return why;
     switch (c.id) {
+    case I::PdStressStart: case I::PdStressStatus: case I::PdStressResult: case I::PdStressStop: return lab_pdstress(c);
     case I::LcdShow: case I::LcdSpi: return lab_lcd(c);
     case I::AccpPing: case I::AccpRead: case I::AccpWrite: case I::AccpDump: return lab_accp(c);
     case I::Qc3Up: case I::Qc3Down: case I::Qc3pUp: case I::Qc3pDown: return lab_qc_pulse(c);
