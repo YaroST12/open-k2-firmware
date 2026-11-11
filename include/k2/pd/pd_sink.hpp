@@ -19,6 +19,7 @@
 
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_engine.hpp"
+#include "k2/pd/pd_txok.hpp"
 #include "k2/pd/apple_readout.hpp"
 
 namespace k2::pd {
@@ -130,7 +131,10 @@ enum class SinkResult : std::uint8_t {
 const char* state_name(SinkState s);
 const char* result_name(SinkResult r);
 
-inline constexpr std::uint32_t kAcceptMs = 300;       // Request -> Accept (spec tSenderResponse 30 ms, margin for the poll)
+// Request -> Accept: the K2's own give-up time, not a spec figure. The source owes the Accept within tSenderResponse, 27-50 ms in
+// R3.2 (pd_spec_timing.hpp); this is that plus the 20 ms poll and a wide margin for a slow source, so a late Accept is still
+// taken and only the PD Stress scorer judges it against the spec limit. The value is unchanged.
+inline constexpr std::uint32_t kAcceptMs = 300;
 inline constexpr std::uint32_t kPsRdyMs = 1500;       // Accept -> PS_RDY (spec tPSTransition max 1020 ms in EPR, table 7.1.8)
 inline constexpr std::uint32_t kPsRdyDownMs = 4000;   // Accept -> PS_RDY when the voltage steps down: a no-load source drains ~2 V/s
 inline constexpr std::uint32_t kWaitRetryMs = 100;    // after Wait (spec tSinkRequest)
@@ -198,7 +202,7 @@ inline constexpr std::uint32_t kXiaomiCapsWaitMs = 1000;     // after 0x2717020A
 enum class EprInfo : std::uint8_t { None, Pending, Got, Refused, Timeout };
 inline constexpr std::uint32_t kEprInfoMs = 1500;   // EPR_Get_Source_Cap -> the whole list (or a refusal)
 // request_source_caps(): how long the sink counts a Source_Capabilities as the answer to its Get_Source_Cap. A source answers within
-// tSenderResponse (30 ms at most); the Connection page's Refresh gives up at 150 ms (k2/core/rescan_bridge.hpp), this is a little more.
+// tSenderResponse (27-50 ms in R3.2); the Connection page's Refresh gives up at 150 ms (k2/core/rescan_bridge.hpp), this is a little more.
 inline constexpr std::uint32_t kGetCapAnswerMs = 200;
 
 struct SinkStatus {
@@ -300,6 +304,11 @@ public:
     // Get_Source_Cap after 400 ms. Never a Hard Reset: a missing GoodCRC or answer just leaves the sink Idle.
     void soft_reset(std::uint32_t now);
     void on_vbus(std::int32_t mv, std::uint32_t now);
+    // The source's Rp level on CC (FUSB302 BC_LVL: 3 = 3 A SinkTxOK, 2 = 1.5 A SinkTxNG), sampled by the driver every poll. In a PD 3
+    // contract a sink-initiated message (trigger, PPS / AVS keep-alive, Wait retry, Get_Source_Cap) waits while the source shows
+    // SinkTxNG, at most kTxOkWaitMs, and only for a source that has shown SinkTxOK since attach (pd_txok.hpp). No feed = no wait.
+    void on_rp(std::uint8_t level, std::uint32_t now) { txok_.feed(level, now); }
+    const TxOkGate& txok() const { return txok_; }
     void tick(std::uint32_t now);
 
     // Answer Get_Sink_Cap with Sink_Capabilities (spec PE_SNK_Give_Sink_Cap, two words). Off for the
@@ -455,8 +464,9 @@ private:
     std::uint32_t chain_start_ = 0;   // when the source listed 0x2717 (the bound counts from here)
     std::uint32_t chain_at_ = 0;      // the last 0x2717-session VDM exchange (either direction)
     XiaomiTrace xm_;                  // diagnostics only: nothing in the sink reads it back
-    // A sink-initiated message held back by the chain guard: the Request / EPR entry goes out when the chain ends.
+    // A sink-initiated message held back by the chain guard or by SinkTxNG: the Request / EPR entry goes out when both clear.
     enum class Deferred : std::uint8_t { None, Request, EprEnter } deferred_ = Deferred::None;
+    TxOkGate txok_;                        // SinkTxOK / SinkTxNG: fed by on_rp, asked before every sink-initiated message
     bool discover_svids_pending_ = false;  // proactive SVIDs REQ waiting for its pacing delay
     std::uint32_t discover_svids_at_ = 0;
 

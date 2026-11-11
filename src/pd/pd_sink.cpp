@@ -380,6 +380,7 @@ void Sink::detach() {
     discover_svids_pending_ = false;
     xm_ = {};
     ap_.reset();
+    txok_.reset();   // a new source: it has not shown SinkTxOK yet
     fail(SinkResult::None, SinkState::Idle);
 }
 
@@ -422,14 +423,18 @@ void Sink::note_xiaomi_svid(std::uint32_t now) {
 }
 
 void Sink::send_request(std::uint32_t now, bool may_defer) {
-    if (may_defer && xiaomi_chain_active(now)) {   // tick() sends it when the chain ends; the Accept timer starts then
+    // A sink-initiated Request waits for the Xiaomi chain to end and for the source's SinkTxOK (tick() sends it when both clear; the
+    // Accept timer starts then). Answers to the source's own messages and the release / abort paths call this without may_defer.
+    const bool chain = may_defer && xiaomi_chain_active(now);
+    if (chain || (may_defer && txok_.hold(rev_, now))) {
         deferred_ = Deferred::Request;
-        xm_.req_held = true;
+        if (chain) xm_.req_held = true;
         retry_pending_ = false;
         retx_pending_ = false;
         return;
     }
     deferred_ = Deferred::None;
+    txok_.sent();
     // Diagnostics only (the charger test's hunt evidence): what this Request is and whether the chain was still running.
     xm_.req_held = false; ++xm_.req_n; xm_.req_at = now; xm_.answer = ReqAnswer::None; xm_.answer_at = 0;
     xm_.req_pdo = plan_.pdo; xm_.req_rdo = plan_.rdo; xm_.req_mv = plan_.mv; xm_.req_ma = plan_.ma; xm_.req_pos = plan_.pos;
@@ -451,13 +456,14 @@ void Sink::send_request(std::uint32_t now, bool may_defer) {
 }
 
 void Sink::send_epr_enter(std::uint32_t now, bool may_defer) {
-    if (may_defer && xiaomi_chain_active(now)) {
+    if (may_defer && (xiaomi_chain_active(now) || txok_.hold(rev_, now))) {
         deferred_ = Deferred::EprEnter;
         st_.epr_fail = 0;
         st_.state = SinkState::EprEntering;
         return;
     }
     deferred_ = Deferred::None;
+    txok_.sent();
     TxMsg m;
     m.header = make_header(kDataEprMode, 1, rev_);
     m.len = 4;
@@ -498,6 +504,8 @@ Err Sink::request_source_caps(std::uint32_t now) {
     if (st_.state != SinkState::Ready || st_.epr_mode || !contract_ || tx_pending_ || retx_pending_ || release_pending_ || verify_ ||
         deferred_ != Deferred::None || sr_wait_ || get_cap_sent_ || st_.epr_info == EprInfo::Pending || xiaomi_chain_active(now))
         return Err::Busy;
+    if (txok_.hold(rev_, now)) return Err::Busy;   // a sink-initiated message: SinkTxNG (1.5 A) means the source asks us to wait
+    txok_.sent();
     TxMsg m;
     m.header = make_header(kCtlGetSourceCap, 0, rev_);
     queue(m);
@@ -1036,7 +1044,7 @@ void Sink::tick(std::uint32_t now) {
             xm_.req_held = false;
         } else {
             // The state timers (Accept, EPR enter) start when the message goes out: nothing below runs meanwhile.
-            if (!tx_pending_ && !xiaomi_chain_active(now)) {
+            if (!tx_pending_ && !xiaomi_chain_active(now) && !txok_.hold(rev_, now)) {
                 const Deferred d = deferred_;
                 deferred_ = Deferred::None;
                 if (d == Deferred::Request) send_request(now);
@@ -1058,7 +1066,8 @@ void Sink::tick(std::uint32_t now) {
             break;
         case SinkState::Requesting:
             if (retry_pending_) {
-                if (due(retry_at_) && !tx_pending_) { retry_pending_ = false; send_request(now); }
+                // A new sink-initiated Request: it waits for SinkTxOK and for the Xiaomi chain like a first one.
+                if (due(retry_at_) && !tx_pending_) { retry_pending_ = false; send_request(now, true); }
             } else if (!retx_pending_ && !tx_pending_ && due(deadline_)) {
                 do_hard_reset(SinkResult::Timeout, SinkState::Failed);
             }

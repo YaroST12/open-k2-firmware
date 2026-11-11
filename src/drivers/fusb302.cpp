@@ -2229,6 +2229,7 @@ void poll() {
         static std::uint8_t last_status0 = 0xFF;
         const bool got = rd(kStatus0, status0);
         if (got && (status0 & 3) > g_bc_max) g_bc_max = std::uint8_t(status0 & 3);
+        if (got) g_sink.on_rp(std::uint8_t(status0 & 3), systick::millis());   // SinkTxOK / SinkTxNG for the sink's own messages
         if (got && status0 != last_status0) { last_status0 = status0; pdtrace::status0(status0); }
         const bool sink_ok = !inline_now() || pd::sink_present(g_cc_sink_mv);
         // Only a known reading inside the sink band proves a sink is on the line; the sink-left timer
