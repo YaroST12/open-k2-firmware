@@ -38,6 +38,7 @@
 #include "k2/pd/pd_phy.hpp"
 #include "k2/pd/pd_rdseek.hpp"
 #include "k2/pd/pd_rescan.hpp"
+#include "k2/pd/pd_rxstamp.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/pd_survey.hpp"
 #include "k2/pd/pd_vconn.hpp"
@@ -89,6 +90,8 @@ std::uint32_t g_ident_session = 0;   // attach session of the latest identify_st
 std::uint32_t g_attach_ms = 0;   // millis() at the attach of the current partner
 std::uint8_t g_bc_max = 0;       // highest BC_LVL (Rp level) read since attach
 volatile bool g_irq = false;  // set by the EXTI12 ISR (INT_N fell), cleared by service()
+pd::RxStamp g_rxstamp;        // the same ISR's microsecond timestamp: the arrival time of the frame service() reads next
+std::uint32_t g_tx_start_us = 0;   // micros() right after the last transmit() wrote TX_START (the Request latency's start)
 std::int32_t g_vbus_mv = -1;  // last VBUS reading from sink_vbus(); -1 = unknown
 bool g_new_source = false;  // next Source_Capabilities on SOP starts a fresh source
 std::int32_t g_cc_sink_mv = -1;  // the CC voltage closest to the sink-Rd band (-1 unknown)
@@ -309,6 +312,7 @@ bool transmit(const pd::TxMsg& m) {
     if ((header & 0x1F) == pd::kCtlSoftReset && m.len == 0) pdtrace::reset(pdtrace::ResetKind::SoftTx);
     fifo_write_tx(header, {m.data.data(), m.len < m.data.size() ? m.len : m.data.size()}, {buf.data(), n});
     wr(kControl0, kTxStart);
+    g_tx_start_us = systick::micros();
     bool ok = false;
     pdtrace::TxResult res = pdtrace::TxResult::Timeout;
     std::uint8_t last_ia = 0;
@@ -1888,7 +1892,9 @@ void active_tick() {
     bool sent = false;
     if (g_sink.take_tx(m)) {
         if (m.hard_reset) g_hr_tool_armed = false;   // the tool's one Hard Reset went out (or was refused)
-        g_sink.on_tx_result(transmit(m), now);
+        const bool tx_ok = transmit(m);
+        g_sink.set_stamp_us(g_tx_start_us);
+        g_sink.on_tx_result(tx_ok, now);
         sent = true;
     } else if (g_vconn.take_tx(m, g_sink.rev())) {
         const bool ok = transmit(m);
@@ -1949,7 +1955,10 @@ void active_tick() {
     }
 }
 
-void on_int_n() { g_irq = true; }
+void on_int_n() {
+    g_rxstamp.edge(systick::micros());   // ISR-safe, one timestamp: all the ISR adds (the budget is checked in the gate's stack report)
+    g_irq = true;
+}
 
 void new_source() { g_new_source = true; }
 
@@ -2308,7 +2317,11 @@ void service() {
             if (!rd(kStatus1, status1) || (status1 & kRxEmpty)) break;
             g_rx_empty = false;
             g_last_rx_ms = systick::millis();
-            if (pkt == 0) pdtrace::poll_gap();
+            std::uint32_t edge_us = 0;
+            if (pkt == 0) {
+                if (g_rxstamp.take(systick::micros(), edge_us)) pdtrace::stamp_rx(edge_us);   // the INT_N edge, not this read
+                pdtrace::poll_gap();
+            }
 
             std::array<std::uint8_t, 3> pre;  // token, PD header
             if (!fifo_read(pre)) break;
@@ -2330,7 +2343,9 @@ void service() {
             // answered in time). Drop it; the next pass resets the engine and the FIFO.
             if (g_hr_latched) break;
 
+            g_sink.set_stamp_us(edge_us);   // consumed by the sink's on_message if this frame reaches it
             handle_frame(sop_from_token(pre[0]), header, {body.data(), num_do * 4});
+            g_sink.set_stamp_us(0);
         }
         if (!g_irq && g_rx_empty) break;
     }

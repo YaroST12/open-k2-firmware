@@ -39,9 +39,14 @@ bool emit(Type t, std::uint32_t ts, std::span<const std::uint8_t> p) {
     g_caps.feed(systick::millis(), {r.data(), n});
     return true;
 }
+std::uint32_t g_stamp_us, g_last_ts_us;   // the frame's INT_N edge (stamp_rx), the newest record's timestamp
+bool g_have_stamp;
 void push(Type t, std::span<const std::uint8_t> p) {
     if (!g_ring.frozen() && (t == Type::Rx || t == Type::Tx || t == Type::Vbus)) g_idle.touch(systick::millis());   // a collapsed frame is activity too
-    g_collapse.record(g_ring, t, systick::micros(), p, emit);
+    std::uint32_t ts = g_have_stamp && (t == Type::Rx || t == Type::RxBad || t == Type::Poll) ? g_stamp_us : systick::micros();
+    if (std::int32_t(ts - g_last_ts_us) < 0) ts = g_last_ts_us;   // the ring's time stays monotone (the host unwraps by comparing)
+    g_last_ts_us = ts;
+    g_collapse.record(g_ring, t, ts, p, emit);
 }
 // What Collapse holds back (a run of repeated frames, a Poll) goes into the ring before it is read, frozen or copied to a capture.
 void flush() { g_collapse.flush(emit); }
@@ -138,9 +143,11 @@ void rx(std::uint8_t token, std::uint16_t header, std::span<const std::uint8_t> 
     for (std::uint8_t v : objs_and_crc) if (n < b.size()) b[n++] = v;
     g_link.feed_message(true, {b.data(), n});
     rec_buf(Type::Rx, b.data(), n);
+    g_have_stamp = false;
     if (g_sink) g_sink(kEvRx, header, n >= 3 + 4 + 4 ? first_object({b.data() + 3, n - 3}) : 0);
 }
-void rx_bad(std::uint8_t token, std::uint8_t b1, std::uint8_t b2) { rec(Type::RxBad, {token, b1, b2}); }
+void rx_bad(std::uint8_t token, std::uint8_t b1, std::uint8_t b2) { rec(Type::RxBad, {token, b1, b2}); g_have_stamp = false; }
+void stamp_rx(std::uint32_t us) { g_stamp_us = us; g_have_stamp = true; }
 void tx(std::uint16_t header, std::span<const std::uint8_t> objs, std::uint8_t sop_token) {
     std::array<std::uint8_t, 3 + 7 * 4> b;   // header, up to 7 objects, trailing SOP token
     std::size_t n = 0;
@@ -196,6 +203,7 @@ void vbus_sample(std::int32_t mv, std::int32_t ma) {
     rec(Type::Vbus, {lo(unsigned(mv)), hi(unsigned(mv)), lo(unsigned(ma)), hi(unsigned(ma))});
 }
 void service_called() {
+    g_have_stamp = false;   // a stamp the last call did not spend (a frame that failed to read) is stale
     g_have_prev = g_entry_us != 0;
     g_prev_entry_us = g_entry_us;
     g_entry_us = systick::micros() | 1;   // never 0: 0 means "no call yet"

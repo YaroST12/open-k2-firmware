@@ -469,6 +469,10 @@ void irq(std::uint8_t a, std::uint8_t b, std::uint8_t i);
 void link(bool inline_mode, bool auto_sink);
 void sink(std::uint8_t state, std::uint8_t result, bool held, bool epr, std::uint8_t pos);
 void vbus_sample(std::int32_t mv, std::int32_t ma);   // gated by SampleGate
+// The INT_N edge time (systick::micros()) of the frame about to be recorded: the Poll, Rx and RxBad records that follow take it as
+// their timestamp instead of "now" (the FIFO is read up to a millisecond after the edge), until rx() / rx_bad() spends it. The ring's
+// time never goes backwards: a stamp older than the newest record is raised to it. See k2/pd/pd_rxstamp.hpp.
+void stamp_rx(std::uint32_t us);
 void poll_gap();                               // RX FIFO found non-empty: records the time since the previous service() entry
 void service_called();                         // call on entry of every service(): the gap reference
 void mark(std::uint8_t code, std::uint16_t a = 0, std::uint16_t b = 0);

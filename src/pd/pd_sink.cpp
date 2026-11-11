@@ -17,6 +17,7 @@ constexpr std::uint32_t kTxRetryMs = 50;
 constexpr std::uint16_t kReleaseMaxMa = 3000;
 
 std::uint32_t pos_bits(std::uint8_t pos) { return std::uint32_t(pos & 0xF) << 28; }
+void bump(std::uint16_t& n) { if (n != 0xFFFF) n++; }
 
 // Build a VDM header word: SVID, structured bit, command type (0 REQ .. 3 BUSY) and command.
 constexpr std::uint32_t build_vdm_header(std::uint16_t svid, bool structured, std::uint8_t cmd_type, std::uint8_t cmd) {
@@ -722,6 +723,8 @@ void Sink::request_chunk(std::uint16_t header, std::span<const std::uint8_t> pay
 }
 
 void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
+    const std::uint32_t edge_us = stamp_us_;   // this frame's RX edge, if the driver had one
+    stamp_us_ = 0;
     if (sop != Sop::Sop) return;
     const std::uint8_t type = header & 0x1F;
     const unsigned num_do = (header >> 12) & 7;
@@ -753,9 +756,11 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
     if (num_do > 0) {
         if (type == kDataSourceCap) {
             update_rev();
+            const bool asked_sr = sr_wait_;
             sr_wait_ = false;   // the caps after our Soft_Reset arrived
             if (xiaomi_authed_ && !xm_.reannounced) { xm_.reannounced = true; xm_.reannounce_at = now; }
             const bool solicited = get_cap_sent_;
+            if (contract_ && !solicited && !asked_sr) bump(st_.caps_unsolicited);   // a re-announce inside a contract nobody asked for
             get_cap_sent_ = false;
             refresh_pending_ = false;   // an answer to our Refresh (request_source_caps) ends its wait window
             if (st_.epr_mode && !solicited) {
@@ -834,6 +839,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             if (st_.state == SinkState::Requesting) {
                 xm_.answer = ReqAnswer::Accept; xm_.answer_at = now;
                 st_.accept_at = now; st_.ps_rdy_at = 0; st_.ps_rdy_inferred = false;
+                st_.accept_us = edge_us; st_.ps_rdy_us = 0;
                 st_.state = SinkState::Transition;
                 down_set_ = false;   // a new step: the band dwell starts empty
                 deadline_ = now + (plan_.mv && plan_.mv < st_.mv ? kPsRdyDownMs : kPsRdyMs);
@@ -845,6 +851,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
         case kCtlPsRdy:
             if (st_.state == SinkState::Transition) {
                 st_.ps_rdy_at = now;
+                st_.ps_rdy_us = edge_us;
                 after_ps_rdy(now);
             } else if (st_.state == SinkState::Aborting && accepted_) {
                 after_ps_rdy(now);  // plan_ holds PDO 1
@@ -865,6 +872,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             if (st_.epr_info == EprInfo::Pending && st_.state == SinkState::Ready) st_.epr_info = EprInfo::Refused;
             break;
         case kCtlReject:
+            bump(st_.rejects_rx);
             if (st_.epr_info == EprInfo::Pending && st_.state == SinkState::Ready) {
                 st_.epr_info = EprInfo::Refused;
             } else if (st_.state == SinkState::Requesting) {
@@ -875,6 +883,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             }
             break;
         case kCtlWait:
+            bump(st_.waits_rx);
             if (st_.state == SinkState::Requesting) {
                 xm_.answer = ReqAnswer::Wait; xm_.answer_at = now;
                 if (wait_retries_ >= kMaxWaitRetries) {
@@ -906,6 +915,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             break;
         }
         case kCtlSoftReset: {
+            bump(st_.soft_resets_rx);
             sink_cap_pending_ = false;
             sink_cap_ext_pending_ = false;
             swap_reply_ = 0;
@@ -933,10 +943,16 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
 }
 
 void Sink::on_tx_result(bool ok, std::uint32_t now) {
+    const std::uint32_t start_us = stamp_us_;   // TX_START of the message this result is for
+    stamp_us_ = 0;
     if (last_tx_.hard_reset) return;
-    if (ok) { tx_retries_ = 0; return; }
     const std::uint8_t type = last_tx_.header & 0x1F;
     const bool ext = (last_tx_.header >> 15) & 1;
+    if (ok) {
+        tx_retries_ = 0;
+        if (!ext && (type == kDataRequest || type == kDataEprRequest)) { st_.req_us = start_us; st_.accept_us = 0; st_.ps_rdy_us = 0; }
+        return;
+    }
     const bool critical = !ext && (type == kDataRequest || type == kDataEprRequest || type == kDataEprMode);
     if (!critical) return;  // keep-alives and chunk requests are simply sent again by their timers
     if (tx_retries_ < kMaxTxRetries) {

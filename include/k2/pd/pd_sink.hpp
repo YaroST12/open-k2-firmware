@@ -222,7 +222,15 @@ struct SinkStatus {
     // with VBUS outside the band from these (Evidence::timing); nothing here changes a verdict.
     std::uint32_t accept_at = 0, ps_rdy_at = 0;
     bool ps_rdy_inferred = false;
-    std::uint32_t hard_resets = 0;        // Hard Resets the K2 SENT (do_hard_reset on the wire): the K2-must-not-send checks and the UI read this
+    // The same events in microseconds (systick::micros(), wraps ~71 min; 0 = not known, a real stamp is stored with bit 0 set): the
+    // last Request's TX_START (req_us), the Accept's and PS_RDY's RX interrupt edges (accept_us, ps_rdy_us; see pd_rxstamp.hpp). A
+    // new Request clears the two answers. Diagnostics and scoring only, no decision reads them.
+    std::uint32_t req_us = 0, accept_us = 0, ps_rdy_us = 0;
+    // What the source did to us, saturating counts since boot (the PD Stress run takes differences): Wait / Reject / Soft_Reset received
+    // (a Wait or Reject counts whatever the state), and Source_Capabilities inside a contract that our own Get_Source_Cap / Soft_Reset
+    // did not ask for.
+    std::uint16_t waits_rx = 0, rejects_rx = 0, soft_resets_rx = 0, caps_unsolicited = 0;
+    std::uint32_t hard_resets = 0;       // Hard Resets the K2 SENT (do_hard_reset on the wire): the K2-must-not-send checks and the UI read this
     std::uint32_t source_hard_resets = 0;  // Hard Resets the SOURCE sent (on_hard_reset_rx); the charger test counts both as "the link was reset"
     std::uint8_t epr_fail = 0;  // Data field of the last EPR_Mode Enter_Failed (epr_fail_name); 0 after a new Enter
     bool xiaomi_svid = false;    // the source listed SVID 0x2717 this session (the auth chain is expected, ~0.7 s after the contract)
@@ -309,6 +317,9 @@ public:
     // SinkTxNG, at most kTxOkWaitMs, and only for a source that has shown SinkTxOK since attach (pd_txok.hpp). No feed = no wait.
     void on_rp(std::uint8_t level, std::uint32_t now) { txok_.feed(level, now); }
     const TxOkGate& txok() const { return txok_; }
+    // The driver hands over a microsecond stamp right before on_message (the frame's RX edge) and before on_tx_result (the TX_START of
+    // the message that result is for). One-shot: the next call to either takes it and clears it. 0 = no stamp.
+    void set_stamp_us(std::uint32_t us) { stamp_us_ = us ? (us | 1) : 0; }
     void tick(std::uint32_t now);
 
     // Answer Get_Sink_Cap with Sink_Capabilities (spec PE_SNK_Give_Sink_Cap, two words). Off for the
@@ -466,7 +477,8 @@ private:
     XiaomiTrace xm_;                  // diagnostics only: nothing in the sink reads it back
     // A sink-initiated message held back by the chain guard or by SinkTxNG: the Request / EPR entry goes out when both clear.
     enum class Deferred : std::uint8_t { None, Request, EprEnter } deferred_ = Deferred::None;
-    TxOkGate txok_;                        // SinkTxOK / SinkTxNG: fed by on_rp, asked before every sink-initiated message
+    std::uint32_t stamp_us_ = 0;           // set_stamp_us(), consumed by the next on_message / on_tx_result
+    TxOkGate txok_;                       // SinkTxOK / SinkTxNG: fed by on_rp, asked before every sink-initiated message
     bool discover_svids_pending_ = false;  // proactive SVIDs REQ waiting for its pacing delay
     std::uint32_t discover_svids_at_ = 0;
 
