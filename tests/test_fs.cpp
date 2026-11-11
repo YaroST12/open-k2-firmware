@@ -296,6 +296,60 @@ void test_write_chunks_power_cut_sweep() {
     }
 }
 
+// used_blocks() walks the whole volume once and then answers from memory until something writes: the Black Box asks it
+// before every capture and the journal before every run, and on a volume full of cards a walk stopped the loop for tens
+// of ms. Every mutating call (write, chunked write, append, remove, rename, mkdir, format, remount) forgets the figure.
+void test_used_blocks_walks_once_until_a_write() {
+    RamDisk d(kBlocks);
+    fs::Fs f(d, kBlocks);
+    bool formatted = false;
+    CHECK_EQ(f.mount_or_format(formatted) == fs::Err::Ok, 1);
+    const std::string big(3000, 'b');
+    for (int i = 0; i < 20; ++i) CHECK_EQ(f.write_file(("/f" + std::to_string(i)).c_str(), sv(big)) == fs::Err::Ok, 1);
+    d.reset_counters();
+    const std::uint32_t u0 = f.used_blocks();
+    CHECK_EQ(d.read_bytes > 0, 1);                       // the first call walks
+    d.reset_counters();
+    CHECK_EQ(f.used_blocks(), u0);
+    CHECK_EQ(d.read_bytes, 0u);                          // the second answers from memory
+    // Each kind of write makes the next call walk again, and the figure follows the volume.
+    auto walks_and_matches = [&](const char* what) {
+        d.reset_counters();
+        const std::uint32_t cached = f.used_blocks();
+        const bool walked = d.read_bytes > 0;
+        const auto truth = std::uint32_t(lfs_fs_size(&f.raw()));
+        if (!walked || cached != truth) std::printf("  used_blocks stale after %s: walked=%d %u vs %u\n", what, walked, cached, truth);
+        CHECK_EQ(walked, 1);
+        CHECK_EQ(cached, truth);
+    };
+    CHECK_EQ(f.write_file("/g", sv(big)) == fs::Err::Ok, 1);        walks_and_matches("write_file");
+    CHECK_EQ(f.append_file("/g", sv(big)) == fs::Err::Ok, 1);       walks_and_matches("append_file");
+    CHECK_EQ(f.write_chunks("/h", 3000, fill_pattern, nullptr) == fs::Err::Ok, 1); walks_and_matches("write_chunks");
+    CHECK_EQ(f.rename("/h", "/h2") == fs::Err::Ok, 1);             walks_and_matches("rename");
+    CHECK_EQ(f.remove("/g") == fs::Err::Ok, 1);                     walks_and_matches("remove");
+    CHECK_EQ(f.mkdir("/dd") == fs::Err::Ok, 1);                     walks_and_matches("mkdir");
+    f.unmount();
+    CHECK_EQ(f.mount() == fs::Err::Ok, 1);                          walks_and_matches("remount");
+    CHECK_EQ(f.format() == fs::Err::Ok, 1);
+    CHECK_EQ(f.mount() == fs::Err::Ok, 1);                          walks_and_matches("format");
+    CHECK_EQ(f.used_blocks(), 2u);                                  // a fresh volume: the superblock pair only
+}
+
+// fs::kInlineMax is the largest file littlefs keeps inside its directory's metadata pair: a file of that size takes no data
+// block, one byte more takes a whole 2 KB block. Small records (cards, twins, settings) are sized against this limit.
+void test_inline_limit() {
+    static_assert(fs::kInlineMax == 256);
+    RamDisk d(kBlocks);
+    fs::Fs f(d, kBlocks);
+    bool formatted = false;
+    CHECK_EQ(f.mount_or_format(formatted) == fs::Err::Ok, 1);
+    const std::uint32_t u0 = f.used_blocks();
+    CHECK_EQ(f.write_file("/in", sv(std::string(fs::kInlineMax, 'i'))) == fs::Err::Ok, 1);
+    CHECK_EQ(f.used_blocks(), u0);
+    CHECK_EQ(f.write_file("/out", sv(std::string(fs::kInlineMax + 1, 'o'))) == fs::Err::Ok, 1);
+    CHECK_EQ(f.used_blocks(), u0 + 1);
+}
+
 }  // namespace
 
 int main() {
@@ -311,5 +365,7 @@ int main() {
     test_wear_levelling_spreads_erases();
     test_write_chunks_round_trip();
     test_write_chunks_power_cut_sweep();
+    test_used_blocks_walks_once_until_a_write();
+    test_inline_limit();
     return test_report("test_fs");
 }

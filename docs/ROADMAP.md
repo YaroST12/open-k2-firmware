@@ -202,10 +202,16 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   VBUS cut of the CUKTECH USB-A auto-off port). 61 report cards (cap 64) leave 5 of 90 blocks free; the Black Box keeps
   the 20-block charger-journal reserve, so every capture is refused `Full` (`[BB] saves=0 skipped=N ... last=41ms
   entries=0 free=10240`). `bbstore::append` compresses the capture and walks the volume (`free_blocks()`) before it
-  refuses: 41 ms with the loop stopped, two captures (VBUS dip + detach) per cut. Fix: (1) refuse before compressing
-  when the reserve cannot be met and there is no own capture to drop (cache the free count); (2) a block budget so the
-  64-card cap cannot starve the Black Box (decision pending with the user). Validate: loop_survey on the auto-off port
-  shows no 41 ms pass; a Black Box capture saves with 61+ cards. Evidence `runs/loop-survey/` (integ worktree).
+  refuses: 41 ms with the loop stopped, two captures (VBUS dip + detach) per cut. (1) The stall: fixed on
+  `k2/card-256` (106f33d2), hardware check pending: `append` refuses before it compresses when the reserve cannot be met
+  and it has no capture of its own to drop, and `fs::Fs::used_blocks` is cached until the next write, so a refusal reads
+  no flash (`tests/test_bbstore.cpp`, `tests/test_bbpersist.cpp`: a refused capture is not retried by later polls).
+  Validate: loop_survey on the auto-off port shows no 41 ms pass and `[BB] ... last=` near 0 ms on a refusal. (2) The
+  space: open, decision pending. A 256 B inline card file does not solve it (64 inline cards still take 54-74 blocks
+  after re-tests, the metadata pairs split); the caps sum to 215 of 90 blocks (docs/ARCHITECTURE.md "Volume budget",
+  `tests/test_volume_budget.cpp`). Options: several cards per file, or lower caps. Also fixed there: v8/v9 card files
+  (212/228 B) were not listed (b4c391fc); `cards list` may show more cards after the update. Evidence
+  `runs/loop-survey/` (integ worktree).
 - **PD Stress did not release Rd at its end** (open since before 2026-11-11; fixed on `k2/small-fixes`, hardware check
   pending): the run ended with the K2's Rd still on CC, the one a pd-reread presented and the run took over. Every end of a
   run (done, cancelled, a stop that skips the 5 V release, the reboot budget spent) now ends in `PdStressSession::on_finish`

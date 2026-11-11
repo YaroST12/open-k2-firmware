@@ -5,11 +5,13 @@
 // that can lose power at any operation.
 //
 // File /cards/<fingerprint, 8 hex digits>.card, kFileSize = 264 bytes with v10 (older cards are 228 bytes for v9, 212 for v8, 210 for v7, 204 for v6,
-// 192 for v5, 176 for v4 and 158 for v3; all are read, zero-padded, and rewritten as v8 by the next save). Small file, so it
-// lives inside the directory metadata and costs about 212 bytes of flash:
+// 192 for v5, 176 for v4 and 158 for v3; all are read, zero-padded, and rewritten in the current format by the next save).
+// A v10 file is over the littlefs inline limit (fs::kInlineMax, 256 bytes), so it takes a 2 KB data block of its own plus
+// its share of the /cards metadata pairs: 64 cards after re-tests use about 70 of the 90 blocks (tests/test_volume_budget.cpp,
+// docs/ARCHITECTURE.md "Volume budget"). The v3..v9 files fit inline but still cost their directory pairs (about 4x their size).
 //     +0   "K2C1"   magic and format version
 //     +4   stamp    u32, a counter that grows with every save: newest card = highest stamp
-//     +8   record   the card as k2/chargertest/report_card.hpp frames it (4 byte header, kPayload=198 bytes, or the shorter payload of an older format, CRC16)
+//     +8   record   the card as k2/chargertest/report_card.hpp frames it (4 byte header, kPayload=250 bytes, or the shorter payload of an older format, CRC16)
 // A save replaces the file atomically (littlefs commit + rename), so a power cut leaves the old card or the
 // new one. A card keeps its number (id), run count and name through re-tests; a rename keeps its place in
 // the order. kMaxCards = 64 live cards; saving a new charger when full drops the one with the lowest stamp.
@@ -33,6 +35,8 @@ namespace k2::report_card {
 
 inline constexpr unsigned kMaxCards = 64;
 inline constexpr std::size_t kFileSize = 8 + kMaxRecord;
+inline constexpr std::size_t kFileSizeV9 = 228;  // v9 cards (payload 214) are 228 bytes
+inline constexpr std::size_t kFileSizeV8 = 212;  // v8 cards (payload 198) are 212 bytes
 inline constexpr std::size_t kFileSizeV7 = 210;  // v7 cards (payload 196) are 210 bytes
 inline constexpr std::size_t kFileSizeV6 = 204;  // v6 cards (payload 190) are 204 bytes
 inline constexpr std::size_t kFileSizeV5 = 192;  // v5 cards (payload 178) are 192 bytes
@@ -142,7 +146,7 @@ private:
     mutable std::array<Ent, kMaxCards> idx_{};
     mutable unsigned n_ = 0;
     mutable bool valid_ = false;
-    static constexpr bool known_size(std::size_t n) { return n == kFileSize || n == kFileSizeV7 || n == kFileSizeV6 || n == kFileSizeV5 || n == kFileSizeV4 || n == kFileSizeV3; }
+    static constexpr bool known_size(std::size_t n) { return n == kFileSize || n == kFileSizeV9 || n == kFileSizeV8 || n == kFileSizeV7 || n == kFileSizeV6 || n == kFileSizeV5 || n == kFileSizeV4 || n == kFileSizeV3; }
     static bool parse_name(const char* n, std::uint32_t& fp) {
         if (std::strlen(n) != 13 || std::memcmp(n + 8, ".card", 5) != 0) return false;
         std::uint32_t v = 0;
@@ -162,10 +166,10 @@ private:
         make_path(fp, path);
         std::size_t n = 0;
         if (fs_.read_file(path, b, n) != fs::Err::Ok) return false;
-        // Accept current (212 bytes), v7 (210), v6 (204), v5 (192), v4 (176) and old v3 (158) card files
+        // Accept every card file size ever written (known_size)
         if (!known_size(n)) return false;
         if (std::memcmp(b.data(), kFileMagic.data(), 4) != 0) return false;
-        // Zero-pad old v3..v6 cards to kFileSize; decode_card then migrates by the format byte (33)
+        // Zero-pad old v3..v9 cards to kFileSize; decode_card then migrates by the format byte (33)
         if (n != kFileSize) std::memset(b.data() + n, 0, kFileSize - n);
         return true;
     }
@@ -189,7 +193,7 @@ private:
         unsigned nf = 0;
         fs_.list(kDir, [&](const fs::Info& i) {
             std::uint32_t fp;
-            // Accept every card file size ever written (v3 158, v4 176, v5 192, v6 204, v7 210, current 212 bytes)
+            // Accept every card file size ever written (v3 158 ... v9 228, current 264 bytes; known_size)
             if (i.dir || !known_size(i.size) || !parse_name(i.name, fp)) return true;
             if (nf < fps.size()) fps[nf++] = fp;
             return nf < fps.size();

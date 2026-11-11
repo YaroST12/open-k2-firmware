@@ -795,14 +795,43 @@ Files on the volume (compact binary records, each starts with a magic that carri
 | `/cable.cfg` | `cablepref` | "K2CB" + kind (0 Off, 1 Builtin, 2 Saved) + seq (u16 LE) + check byte (kind ^ seq lo ^ seq hi ^ 0xA5); written only when the shared cable selection changes; damaged or naming a gone clone reads as Off |
 | `/prefs.cfg` | `uiprefs` | "K2UP" + flags (Try QC after PD, Screenshot) + complement + smoothing byte (0 = Medium default, else 1 + preset index) + orientation byte (bit0..1 manual rotation, bit2 manual, bit3 rotate buttons, bit4 Wake sleeping port; 0 = automatic, keys as printed, no idle Rd) |
 | `/emk/NNNN.emk` | `emlib` | one saved cable, 98 B ("K2E1", number, version, 24-char name, 66-byte e-marker record); lowest free number is reused; up to 140 |
-| `/log.txt` | `storage` | the log snapshot (newest 3 KB of the log ring), RAM mirror for the drive |
-| `/cards/<fp>.card` | `report_card_store` | one charger report card, 210 B for format 7 ("K2C1", stamp, 202-byte record; older files of 158 to 204 B still load and are rewritten as format 7; a repeat of the stored result is folded into it, see `docs/CHARGER_TEST_FLOW.md` "Repeated runs"), `<fp>` = 8 hex digits of the fingerprint; 64 cards at most, the lowest stamp is dropped for a new charger |
+| `/log.txt` | `storage` | the log snapshot (newest 512 B of the log ring, `kLogKeep`), RAM mirror for the drive |
+| `/cards/<fp>.card` | `report_card_store` | one charger report card, 264 B for format 10 ("K2C1", stamp, 256-byte record; older files of 158 to 228 B, formats 3 to 9, still load and are rewritten as format 10; a repeat of the stored result is folded into it, see `docs/CHARGER_TEST_FLOW.md` "Repeated runs"), `<fp>` = 8 hex digits of the fingerprint; 64 cards at most, the lowest stamp is dropped for a new charger |
 | `/jr/*.rec` | `charger_journal` | the running charger test: `h.rec` (header, written last), `sNNN.rec` (step results, replaced in place), `ph.rec` (phase), `rs.rec` (resume count), `mt.rec` (run meta: unit order, `unattended` flag = self-supplied run: key-mode boot or `power_source::bus_powered()`, cable identity kind and seq), `at.rec` (power losses of the unit the marker names; the record key is the unit number), `fin.rec`; each one CRC-framed record (0xA5, type, length, 0, payload, CRC-16), at most about 104 files of 36 B. Power-loss policy: a reboot always resumes, in every power mode, once VBUS has been steady 500 ms; BACK held at power-up drops the run. A unit may cost `kRebootBudget` (3) losses: losses 1 and 2 ask the same row again, the 3rd skips the unit's remaining rows ("rebooted 3x", `Reason::RebootLimit`) and the next unit runs; after 16 resumes a run is not offered again. The card carries the resume count (cable block byte 14, shown as "resumed N" in the card footer) |
 | `/bb/NNNNNNNN.bbe` | `bbstore` | one Black Box capture, "K2B1" header of 20 B + LZ4 body, at most 2044 B; 32 files, the oldest is evicted first (also on a full volume) |
 | `/rd.rec` | `rdintent` / `rdcomeback` | the persistent Rd intent marker (`k2/core/rd_intent.hpp`, pure record code; `k2/core/rd_comeback.hpp` is the boot glue): a session record (a self-powered or pinned run) or a planned re-attach record (written by `begin_reattach` before the charger test's one deliberate Rd glitch, read back and checked for pin 2). A boot that finds it keeps Rd from the first instruction and raises PC13 (Ra on CC1); the judge releases it after 500 ms with no Rp and gives up after 1500 ms |
 | `/.legacy` | `fs` | marker: the legacy raw pages were wiped |
 
-Flash cost: a card is a record of under 256 B (150 to 202 B over the format versions) in a 2 KB metadata block (littlefs stores files under 256 B inline in the directory), so 40 cards cost about 6.4 KB and 64 cards about 10 KB of the 180 KB volume. The 90-block volume holds the Black Box (up to 32 x 2 KB blocks) plus well over 100 cables, 64 cards and the journal with room to spare; littlefs wear-levels dynamically over all 90 blocks. RAM: littlefs state and its 256 B caches are static (`bss` +1.5 KB with the 2 KB Black Box read buffer), no heap. Stack: the deepest littlefs path (rename, orphaning commit, relocating commit, compact, traverse) uses about 0.9 KB, the largest caller frame (`emlib::Library::save`) about 0.7 KB.
+#### Volume budget
+
+What each store costs at its cap, in 2 KB blocks, measured by `tests/test_volume_budget.cpp` (every store filled alone on a large RAM disk; the test fails when a store grows past its row, so this table and the test move together). littlefs wear-levels dynamically over all 90 blocks.
+
+| Store | At its cap | Blocks |
+| :--- | :--- | ---: |
+| superblock | the root metadata pair | 2 |
+| settings | `/usb.cfg`, `/cable.cfg`, `/prefs.cfg` (8 B each), `/rd.rec` (10 B), `/.legacy` (1 B), inline in the root pair | 0 |
+| `/log.txt` | 512 B | 1 |
+| `/lp/last.rec` | the loop probe record (`loopprobe::kFileBytes`) | 3 |
+| `/ps/run.rec` | the PD Stress journal (`pdstress::journal::kMaxBytes`) | 3 |
+| `/twin` | 12 twins of 129 B | 4 |
+| `/tcap` | 4 transition captures + 1 in flight (a save writes before it prunes), .tcd taken as 6 KB, .tci 212 B | 24 |
+| `/emk` | 140 cables of 98 B (no quirk block) | 54 |
+| `/emk`, worst case | 140 cables of 517 B (every quirk block full) | 152 |
+| `/cards` | 64 cards of 264 B, after 100 re-tests | 70 |
+| `/jr` | the largest plan (`kMaxSteps` rows over all five sections, every small record written) | 7, inside the reserve |
+| journal reserve | `bbstore::kJournalReserveBlocks`: the Black Box leaves this many free for the next charger test | 20 |
+| `/bb` | 32 captures of one block each | 34 |
+| **Sum** | 2 + 159 (typical emk) + 20 + 34 | **215 of 90** |
+
+The caps do not fit the volume. Filled in the device's order on 90 blocks, the stores run out at `/cards` with 1 block free and the Black Box saves 0 of 32 captures; the 64 cards alone leave 18 free, under the 20-block reserve, so the cards by themselves starve the Black Box (the device reached this state with 61 cards, 5 blocks free). Open: the card format or the caps have to change (decision pending); until then `bbstore::Ring::append` refuses a capture before it compresses it and `fs::Fs::used_blocks` answers from memory between writes, so a full volume costs no loop time.
+
+Rules for a new store or record:
+
+- A small record stays at or below `fs::kInlineMax` (256 B, `include/k2/core/fs.hpp`) and says so with a static_assert (the test holds the ones for twins, `.tci`, `/rd.rec` and the e-marker file). One byte over takes a whole 2 KB data block per file: the format-10 card file is 264 B, 8 B over.
+- Inline is cheaper than a block but not free. A littlefs metadata pair is two blocks and splits once its live data passes about half a block (1 KB), and splits never merge back; `write_file` also puts a `.tmp` beside the target. N inline files of S bytes cost about 4 x N x S bytes of blocks, more after churn (64 cards of 256 B: 40-46 blocks fresh, 54-74 after re-tests, measured on the RAM disk).
+- A new store adds a row here and a filler to `tests/test_volume_budget.cpp`, and the sum is compared against 90.
+
+RAM: littlefs state and its 256 B caches are static (`bss` +1.5 KB with the 2 KB Black Box read buffer), no heap. Stack: the deepest littlefs path (rename, orphaning commit, relocating commit, compact, traverse) uses about 0.9 KB, the largest caller frame (`emlib::Library::save`) about 0.7 KB.
 
 The legacy ranges are described in `include/k2/drivers/flash_map.hpp`, which static_asserts at compile time that the regions are sector aligned, in ascending order, disjoint, that the erasable ones lie inside the volume or the legacy range and that the native pages stay outside both (checked again by `tests/test_flash_map.cpp`).
 

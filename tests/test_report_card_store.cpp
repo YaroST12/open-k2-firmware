@@ -370,6 +370,58 @@ static void test_v6_file_loads_unchanged_and_takes_a_repeat() {
     CHECK_EQ(back[12 + 190], 2u);
 }
 
+// A card file as an older firmware wrote it: "K2C1", the stamp, then the record framed with a `payload` byte payload
+// and format byte `format` (the CRC right after the payload).
+static void write_old_card(Vol& v, const rc::Card& c, unsigned payload, unsigned format, std::uint32_t stamp) {
+    std::array<std::uint8_t, rc::kMaxRecord> rec{};
+    rc::encode_card(rec, c);
+    std::vector<std::uint8_t> file(8 + 4 + payload + 2);
+    std::memcpy(file.data(), rc::kFileMagic.data(), 4);
+    rc::detail::put32(&file[4], stamp);
+    file[8] = rec[0]; file[9] = rec[1]; file[10] = std::uint8_t(payload); file[11] = 0;
+    std::memcpy(&file[12], &rec[4], payload);
+    file[12 + 33] = std::uint8_t(format);
+    rc::detail::put16(&file[12 + payload], k2::bbstore::crc16(0xFFFF, {&file[8], 4 + payload}));
+    char path[rc::Store::kPathLen];
+    rc::Store::make_path(c.id.fp, path);
+    CHECK_EQ(int(v.fs->mkdir(rc::kDir)), int(fs::Err::Ok));
+    CHECK_EQ(int(v.fs->write_file(path, file)), int(fs::Err::Ok));
+}
+
+// Every card file size a firmware ever wrote is listed and loads: v3 158, v4 176, v5 192, v6 204, v7 210, v8 212, v9 228 and
+// v10 264. The v8 and v9 sizes had dropped out of the accepted list when the next format came, so such cards stayed on
+// the volume, taking their blocks, but never showed up.
+static void test_every_older_file_size_loads() {
+    struct Old { unsigned payload, format, file; };
+    constexpr Old olds[] = {{144, 3, 158}, {162, 4, 176}, {178, 5, 192}, {190, 6, 204}, {196, 7, 210}, {198, 8, 212}, {214, 9, 228}, {250, 10, 264}};
+    Vol v;
+    std::uint32_t stamp = 1;
+    for (const Old& o : olds) {
+        rc::Card c = card(0xA000 + o.format, 2, 1, 15000);
+        c.card_no = std::uint16_t(o.format); c.runs = 2;
+        rc::set_name(c, "Old card");
+        write_old_card(v, c, o.payload, o.format, stamp++);
+        char path[rc::Store::kPathLen];
+        rc::Store::make_path(c.id.fp, path);
+        std::size_t n = 0;
+        CHECK_EQ(int(v.fs->size_of(path, n)), int(fs::Err::Ok));
+        CHECK_EQ(n, std::size_t(o.file));
+    }
+    v.reboot();
+    const auto got = all(*v.s);
+    CHECK_EQ(got.size(), std::size(olds));
+    for (const Old& o : olds) {
+        rc::Card g;
+        const bool found = v.s->find(0xA000 + o.format, g);
+        if (!found) std::printf("  format %u (%u B file) not listed\n", o.format, o.file);
+        CHECK_EQ(found, 1);
+        CHECK_EQ(g.card_no, o.format); CHECK_EQ(g.runs, 2); CHECK_STR(g.name, "Old card");
+        CHECK_EQ(g.group[0].max_mv, 15000u);
+    }
+    CHECK_EQ(got.front().id.fp, 0xA000u + 10);   // stamp order: the newest file first
+    CHECK_EQ(got.back().id.fp, 0xA000u + 3);
+}
+
 // Power cut at every program/erase of a save (new card, re-test, rename, delete): after a reboot the store
 // lists a consistent set, the old state or the new one, and keeps accepting saves.
 static void test_power_cut_everywhere() {
@@ -424,5 +476,6 @@ int main() {
     test_repeat_counters_saturate();
     test_v6_file_loads_unchanged_and_takes_a_repeat();
     test_power_cut_everywhere();
+    test_every_older_file_size_loads();
     return test_report("test_report_card_store");
 }
