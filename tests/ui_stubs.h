@@ -23,6 +23,9 @@
 #include "k2/core/rd_intent.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/pd/pd_survey.hpp"
+#include "k2/twin/twin_hw.hpp"
+#include <initializer_list>
+#include <utility>
 struct StubState {
     uint32_t ms = 1000;
     // The charger-test journal as the boot finds it (load() answers journal_load) and what the page wrote back.
@@ -210,6 +213,20 @@ struct StubState {
     bool bin_older = false;
     std::string log_text;                  // usb::log_fmt() text (K2LOG on the host builds), capped; tests search it for log lines
     std::string log_fmts;                  // the raw format strings K2LOG was called with, capped; tests assert fixed text lives in the format, not in a %s
+    // The device twin library (storage::twin_*, numbers 1..) and the live proof (twin_hw::live_*), simulated.
+    std::vector<std::pair<uint8_t, k2::twin::Twin>> twins;
+    unsigned twin_gen = 0;                 // bumped by a save / remove / rename, like storage::generation()
+    int twin_learns = 0;                   // learn_from_identify() calls
+    k2::twin_hw::Learned twin_learned{};   // what learn_from_identify answers; an Ok one also adds its twin to `twins`
+    k2::twin::live::Refusal twin_refusal = k2::twin::live::Refusal::None;   // forced answer of live_start (None = the real runner decides)
+    bool twin_reject = false;              // the simulated charger answers the next Request with Reject
+    int twin_starts = 0, twin_cancels = 0; // live_start() calls the runner accepted, live_cancel() calls
+    std::vector<uint8_t> twin_start_seqs;  // the numbers of the last live_start()
+    bool twin_start_confirmed = false;     // ... and its confirm flag
+    unsigned twin_stamp = 0;               // moves the prediction stamp (twin_hw::predict_stamp) like a new charger list would
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store
+// Adds a twin to the stub library (the sink PDO words are the device's own); returns its number.
+uint8_t stub_twin_add(const char *name, std::initializer_list<uint32_t> sink_pdos, uint16_t vid = 0, uint16_t pid = 0);
+void stub_twin_reset();    // empties the library and the simulated proof (a fresh g_stub does the library; this the runner)

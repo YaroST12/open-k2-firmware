@@ -282,7 +282,11 @@ static void test_page() {
 }
 
 static void test_tools_hub_lists_cards() {
-    CHECK_EQ(kToolCount, 8);
+    CHECK_EQ(kToolCount, 9);
+    CHECK_STR(ToolsPage::tool_name(8), "Device twins");
+    CHECK_EQ(ToolsPage::tool_menu(8) == Menu::Twin, 1);
+    CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));
+    CHECK_EQ(std::strlen(tool_hint(8)) <= 24 && std::strlen(tool_hint(8)) > 0, 1);
     CHECK_STR(ToolsPage::tool_name(6), "Report cards");
     CHECK_EQ(ToolsPage::tool_menu(6) == Menu::Cards, 1);
     CHECK_EQ(ToolsPage::tool_menu(2) == Menu::Spoof, 1);

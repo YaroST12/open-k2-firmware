@@ -31,6 +31,9 @@ struct LiveCtx {
 twin::Facts facts_now();
 // Prediction against the charger's list now (pd::active_caps()). False: no list, nothing predicted.
 bool predict(const twin::Twin& t, twin::Outcome& out);
+// Moves whenever a prediction could change: the charger's list or the facts (power claim, cable) behind it. The Device twins
+// page repredicts only when this or the library changes.
+std::uint32_t predict_stamp();
 // The `[TWIN] predict` log line, one per prediction shown to a user (the remote's and the shell's).
 void log_predict(std::uint8_t seq, const twin::Outcome& o);
 

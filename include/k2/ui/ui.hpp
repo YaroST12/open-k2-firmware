@@ -16,6 +16,7 @@
 #include "k2/ui/ui_blackbox.hpp"
 #include "k2/ui/ui_spoof.hpp"
 #include "k2/ui/ui_cards.hpp"
+#include "k2/ui/ui_twin.hpp"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
@@ -44,7 +45,8 @@ inline constexpr std::size_t kLargestBase = std::max({arena_bytes<HomePage>(), a
 inline constexpr std::size_t kLargestMenu = std::max({arena_bytes<TriggerPage>(), arena_bytes<EmarkerPage>(), arena_bytes<PdTriggerPage>(),
                                                       arena_bytes<CableRPage>(), arena_bytes<BlackBoxPage>(), arena_bytes<SpoofPage>(),
                                                       arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<CardsPage>(),
-                                                      arena_bytes<SharePage>(), arena_bytes<ConnectionPage>(), arena_bytes<DiagPage>()});
+                                                      arena_bytes<SharePage>(), arena_bytes<ConnectionPage>(), arena_bytes<DiagPage>(),
+                                                      arena_bytes<TwinPage>()});
 // Tools > Connection > Saved cables > Share, and the other three-menu chains (Connection > Spoof, Cards / Black box > Share).
 inline constexpr std::size_t kLongestChain =
     std::max({arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, SpoofPage>(),
@@ -139,6 +141,8 @@ public:
     const SharePage &share() const { return *find<SharePage>(Menu::Share); }
     // The open QR scan-test page (host tests); it exists only while Menu::QrTest is on the stack.
     const QrTestPage &qrtest_page() const { return *find<QrTestPage>(Menu::QrTest); }
+    // The open Device twins page (host tests); it exists only while Menu::Twin is on the stack. Not const: peek() builds a row.
+    TwinPage &twin_page() { return *find<TwinPage>(Menu::Twin); }
     // Top submenu; Menu::Count when none is open.
     Menu menu() const { return depth_ ? stack_[depth_ - 1] : Menu::Count; }
     // Page index for the remote: the rotation page, or kMenuPageBase + menu while one is open.

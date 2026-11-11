@@ -112,6 +112,42 @@ int main() {
     CHECK_EQ(ui.charger_test_stage(), kStageResults);
     render(ui, t, "ct_results");
 
+    // Device twins: the list against a CUKTECH C1 (fixed 5-20 V 3 A, PPS 3.3-11 V 3 A), then the confirm, a run and its result.
+    fixture();
+    stub_twin_reset();
+    g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;   // idle line: the run refuses a device inline
+    for (uint32_t i = 0; i < k2::pd::kInlineQuietMs / 100 + 20; ++i) { t += 100; ui.tick(t); }
+    g_stub.caps = {};
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2;
+    for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0003C12Cu, 0x0004B12Cu, 0x0006412Cu, 0xC8DC323Cu, 0xC990323Cu})
+        g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);
+    stub_twin_add("Pixel 9", {0x3601912C, 0x0002D12C, 0xC0DC323C});
+    stub_twin_add("Laptop", {0x3601912C});
+    stub_twin_add("OP15", {0x2601912C, 0x0002D12C, 0x0003C12C, 0xC0DC3264});
+    stub_twin_add("Galaxy S24 Ultra case", {0x2601912C, 0x0002D12C, 0xC0DC3264});
+    ui.goto_page(uint8_t(Page::Tools), t + 100);
+    ui.push_menu(Menu::Twin, t + 100); render(ui, t, "twin_list");
+    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
+    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
+    render(ui, t, "twin_cable");                                         // OP15 focused: limited by the cable
+    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;
+    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    render(ui, t, "twin_confirm");                                       // first OK: the row is armed
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    ui.tick(t); t += 150; ui.tick(t);
+    dump("twin_running");
+    for (int i = 0; i < 600 && twin_hw::live_running(); i++) { t += 25; ui.tick(t); }
+    render(ui, t, "twin_done");                                          // pass cell, the live text in the note, the tally
+    for (int i = 0; i < 5; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
+    render(ui, t, "twin_learn");                                         // the Learn row
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    render(ui, t, "twin_learn_refused");                                 // nothing identified: the footer says so
+    g_stub.caps = {};
+    stub_twin_reset();
+    ui.tick(t); t += 400; ui.tick(t);
+    render(ui, t, "twin_empty");
+
     printf("mockups dumped\n");
     return 0;
 }

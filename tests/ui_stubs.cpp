@@ -305,14 +305,163 @@ emlib::Err lib_remove(std::uint16_t seq) {
     return emlib::Err::NotFound;
 }
 emlib::Err lib_rename(std::uint16_t, std::string_view) { return emlib::Err::Ok; }
-uint32_t generation() { return static_cast<uint32_t>(g_stub.lib_saves + g_stub.lib_removes); }
+uint32_t generation() { return static_cast<uint32_t>(g_stub.lib_saves + g_stub.lib_removes + g_stub.twin_gen); }
+
+// The device twin library: g_stub.twins, numbered like the real one (numbers are kept when another twin goes).
+unsigned twin_list(std::span<std::uint8_t> out) {
+    unsigned n = 0;
+    for (const auto& p : g_stub.twins) if (n < out.size()) out[n++] = p.first;
+    return n;
+}
+bool twin_get(std::uint8_t seq, twin::Twin& out) {
+    for (const auto& p : g_stub.twins) if (p.first == seq) { out = p.second; return true; }
+    return false;
+}
+twin::Result twin_save(const twin::Twin& in) {
+    g_stub.twin_gen++;
+    const std::uint8_t seq = static_cast<std::uint8_t>(g_stub.twins.empty() ? 1 : g_stub.twins.back().first + 1);
+    g_stub.twins.emplace_back(seq, in);
+    twin::Result r;
+    r.seq = seq;
+    return r;
+}
+twin::Err twin_remove(std::uint8_t seq) {
+    for (std::size_t i = 0; i < g_stub.twins.size(); i++)
+        if (g_stub.twins[i].first == seq) { g_stub.twins.erase(g_stub.twins.begin() + static_cast<long>(i)); g_stub.twin_gen++; return twin::Err::Ok; }
+    return twin::Err::NotFound;
+}
+twin::Err twin_rename(std::uint8_t, std::string_view) { return twin::Err::Ok; }
 }  // namespace storage
 
+}  // namespace k2
+
+// The two twin test hooks are global, like stub_cards_reset.
+std::uint8_t stub_twin_add(const char *name, std::initializer_list<std::uint32_t> sink_pdos, std::uint16_t vid, std::uint16_t pid) {
+    k2::twin::Twin t;
+    for (std::size_t i = 0; name[i] && i < k2::twin::kNameMax; i++) t.name[i] = name[i];
+    for (std::uint32_t w : sink_pdos) if (t.num_pdos < t.pdos.size()) t.pdos[t.num_pdos++] = w;
+    t.vid = vid;
+    t.pid = pid;
+    const std::uint8_t seq = static_cast<std::uint8_t>(g_stub.twins.empty() ? 1 : g_stub.twins.back().first + 1);
+    g_stub.twins.emplace_back(seq, t);
+    g_stub.twin_gen++;
+    return seq;
+}
+
+namespace k2 {
 namespace twin_hw {
-bool live_running() { return false; }
-void live_poll(const LiveCtx&) {}
-void live_cancel() {}
+namespace {
+// The live proof, simulated: the REAL twin::live::Runner over a charger that answers with g_stub.caps (grants the Request, or
+// rejects it when g_stub.twin_reject), so the page sees genuine slots and phases. Events fire on the caller's clock.
+enum class Ev : std::uint8_t { None, Dark, Attach, Reply, Release };
+struct StubTwinEnv final : twin::live::Env {
+    twin::live::Runner run;
+    pd::SinkStatus sink;
+    int vbus = 5000;
+    std::uint32_t seq = 1, now = 0, ev_at = 0;
+    Ev ev = Ev::None;
+    pd::Choice last{};
+
+    StubTwinEnv() { sink.state = pd::SinkState::Ready; sink.pos = 1; }
+    bool load(std::uint8_t n, twin::Twin& out) override { return storage::twin_get(n, out); }
+    void impersonate(const twin::Twin*) override {}
+    void detach() override { sink.state = pd::SinkState::Idle; ev = Ev::Dark; ev_at = now + 100; }
+    void attach() override { ev = Ev::Attach; ev_at = now + 200; }
+    void hold() override { ev = Ev::Attach; ev_at = now + 200; }
+    pd::Err request(pd::Choice c) override {
+        last = c;
+        sink.state = pd::SinkState::Requesting;
+        sink.result = pd::SinkResult::None;
+        ev = Ev::Reply; ev_at = now + 100;
+        return pd::Err::Ok;
+    }
+    void release() override { sink.state = pd::SinkState::Transition; ev = Ev::Release; ev_at = now + 100; }
+    void record(std::uint8_t, const twin::live::Slot&) override {}
+
+    void fire(std::uint32_t t) {
+        now = t;
+        if (ev == Ev::None || now < ev_at) return;
+        const Ev e = ev;
+        ev = Ev::None;
+        switch (e) {
+        case Ev::Dark: vbus = 0; break;
+        case Ev::Attach: seq++; sink.state = pd::SinkState::Ready; sink.pos = 1; sink.result = pd::SinkResult::None; vbus = 5000; break;
+        case Ev::Reply:
+            sink.state = pd::SinkState::Ready;
+            if (g_stub.twin_reject) { sink.pos = 1; sink.result = pd::SinkResult::Rejected; break; }
+            sink.pos = last.pos;
+            vbus = last.mv != 0 ? int(last.mv) : int(g_stub.caps.pdos[last.pos - 1].max_mv);
+            break;
+        case Ev::Release: sink.state = pd::SinkState::Ready; sink.pos = 1; sink.result = pd::SinkResult::None; vbus = 5000; break;
+        case Ev::None: break;
+        }
+    }
+    twin::live::Input input(const LiveCtx& c) const {
+        twin::live::Input in;
+        in.now = c.now;
+        in.vbus_mv = vbus;
+        in.caps = &g_stub.caps;
+        in.caps_seq = seq;
+        in.sink = sink;
+        in.cap_mv = 36000;
+        in.busy = c.busy;
+        in.inline_link = c.inline_link;
+        return in;
+    }
+};
+StubTwinEnv g_sim;
+}  // namespace
+
+bool predict(const twin::Twin& t, twin::Outcome& out) {
+    if (!g_stub.caps.valid) return false;
+    out = twin::predict(t, g_stub.caps, twin::Facts{});
+    return true;
+}
+std::uint32_t predict_stamp() {
+    std::uint32_t h = g_stub.caps.valid ? 2166136261u : 0u;
+    for (std::size_t i = 0; g_stub.caps.valid && i < g_stub.caps.num_pdos; i++) h = (h ^ g_stub.caps.pdos[i].raw) * 16777619u;
+    return h + g_stub.twin_stamp;
+}
+twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx) {
+    if (g_stub.twin_refusal != twin::live::Refusal::None) return g_stub.twin_refusal;
+    g_sim.now = ctx.now;
+    const twin::live::Refusal r = g_sim.run.start(g_sim, seqs, g_sim.input(ctx), confirmed);
+    if (r == twin::live::Refusal::None) {
+        g_stub.twin_starts++;
+        g_stub.twin_start_seqs.assign(seqs.begin(), seqs.end());
+        g_stub.twin_start_confirmed = confirmed;
+    }
+    return r;
+}
+bool live_running() { return g_sim.run.running(); }
+void live_poll(const LiveCtx& ctx) {
+    if (!g_sim.run.running()) return;
+    g_sim.fire(ctx.now);
+    g_sim.run.poll(g_sim.input(ctx));
+}
+void live_cancel() {
+    if (!g_sim.run.running()) return;
+    g_stub.twin_cancels++;
+    g_sim.run.cancel();
+}
+const twin::live::Runner& live() { return g_sim.run; }
+Learned learn_from_identify(std::string_view name, bool save) {
+    g_stub.twin_learns++;
+    Learned r = g_stub.twin_learned;
+    if (r.how != Learn::Ok || !save) return r;
+    if (!name.empty()) { r.twin.name = {}; for (std::size_t i = 0; i < name.size() && i < twin::kNameMax; i++) r.twin.name[i] = name[i]; }
+    r.store = storage::twin_save(r.twin);
+    return r;
+}
 }  // namespace twin_hw
+}  // namespace k2
+
+void stub_twin_reset() {
+    k2::twin_hw::g_sim = k2::twin_hw::StubTwinEnv();
+    g_stub.twins.clear();
+}
+
+namespace k2 {
 
 namespace emk_spoof {
 Err arm(const emrec::Record& rec, const emk_quirk::Quirks& quirks) {

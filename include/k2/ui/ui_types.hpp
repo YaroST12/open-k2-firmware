@@ -9,8 +9,8 @@ namespace k2 {
 enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Tools, Settings, Count };
 // Submenus opened from Tools or Settings: modal, they have no place in the rotation. The remote
 // reports a showing submenu as page index kMenuPageBase + Menu. Connection (Source / Cable / Sink) and Diag
-// are Tools entries; Emarker is the saved-cables list opened from Connection's Cable tab.
-enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Count };
+// are Tools entries; Emarker is the saved-cables list opened from Connection's Cable tab; Twin is the Device twins list.
+enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, Count };
 inline constexpr uint8_t kMenuPageBase = static_cast<uint8_t>(Page::Count);
 // Remote-only page indices that open Connection on a tab (kConnTabAlias + Source / Cable / Sink): the old "pd",
 // "emarker" and "identify" page names land here. Ui::page_index() never reports them (Connection reports itself).

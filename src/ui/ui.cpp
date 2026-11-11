@@ -66,6 +66,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::UsbLink: return pages_.push<UsbLinkPage>(ctx_);
     case Menu::Autorotate: return pages_.push<AutorotatePage>(ctx_);
     case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
+    case Menu::Twin: return pages_.push<TwinPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -81,6 +82,7 @@ ListState Ui::list_state() {
         case Menu::BlackBox: return top_as<BlackBoxPage>().list_state();
         case Menu::Cards: return top_as<CardsPage>().list_state();
         case Menu::Autorotate: return top_as<AutorotatePage>().list_state();
+        case Menu::Twin: return top_as<TwinPage>().list_state();
         default: return ListState{};
         }
     }
@@ -244,10 +246,6 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     paint_incoming(now_ms, t0, blank);
 }
 
-// The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool, and neither is the
-// self-hold of a self-powered or bus-powered K2 (its own plain 5 V contract): that hold is the K2's supply, so releasing it
-// would cut the K2's power and it never blocks. Neither is a finished re-read's own leftover PDO 1 contract inside its
-// linger (fusb302::reread_own_hold): START takes that over like the self-hold (hardware 2026-11-10, b14c1b9).
 bool Ui::twin_live_busy() const { return twin_hw::live_running(); }
 
 twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
@@ -262,6 +260,10 @@ twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
 
 void Ui::cancel_twin() { twin_hw::live_cancel(); }
 
+// The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool, and neither is the
+// self-hold of a self-powered or bus-powered K2 (its own plain 5 V contract): that hold is the K2's supply, so releasing it
+// would cut the K2's power and it never blocks. Neither is a finished re-read's own leftover PDO 1 contract inside its
+// linger (fusb302::reread_own_hold): START takes that over like the self-hold (hardware 2026-11-10, b14c1b9).
 // What keeps an identity (or a START) out, said as a footer line (at most 24 characters) that names the cause and the way out;
 // nullptr = nothing does. An identity armed in Tools -> Spoof is not one of them either: START disarms whatever is armed and
 // the pick takes over ("Off" arms nothing).
@@ -324,7 +326,7 @@ Ui::Session Ui::session() {
     bool rows = false;
     if (depth_) {
         switch (menu()) {
-        case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: rows = list_state().count > 0; break;
+        case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: case Menu::Twin: rows = list_state().count > 0; break;
         case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: rows = true; break;
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();

@@ -56,7 +56,7 @@ class State(unittest.TestCase):
     def test_lines_page_name(self):
         self.assertEqual(kr.PAGES[3], "lines")
         self.assertEqual(kr.PAGES[:6], ["home", "detail", "chargertest", "lines", "tools", "settings"])
-        self.assertEqual(kr.PAGES[6:], ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest"])
+        self.assertEqual(kr.PAGES[6:], ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin"])
 
     def test_unknown_verdict(self):
         s = kr.decode_state(STATE_HEAD + STATE_TAIL[:-4] + bytes([99, 0, 0, 0]))

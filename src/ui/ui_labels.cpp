@@ -54,6 +54,8 @@ constexpr const char *kOkVerbs[] = {
     "Scan", "Listen", "Run", "Force", "Start", "Stop", "Send", "Rescan", "Clear", "Open", "Reset",
     "Next", "Select", "View", "Delete", "Arm", "Disarm", "Toggle", "Cycle", "Apply", "Refresh", "Ask",
     "Confirm", "Zoom",
+    // Device twins: OK on the last row stores the device just identified
+    "Learn",
     // Connection page: OK opens the tab's action pop-up
     "Actions",
     // Charger-flow setup pages (their wording is owned by the charger test)

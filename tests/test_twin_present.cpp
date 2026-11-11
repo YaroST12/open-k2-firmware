@@ -98,6 +98,41 @@ void test_verdict_line() {
     CHECK_STR(b.data(), "not run");
 }
 
+// The Device twins page's footer states a fact in at most 27 cells; the count of "full" twins excludes a shortfall and a
+// capability mismatch, and counts a device limit as full (the charger gave all it needs).
+void test_is_full() {
+    CHECK_EQ(present::is_full(pps(11000, 3000, 33, Limiter::None)), true);
+    CHECK_EQ(present::is_full(pps(11000, 3000, 33, Limiter::Device)), true);
+    CHECK_EQ(present::is_full(pps(5000, 3000, 33, Limiter::Charger)), false);
+    CHECK_EQ(present::is_full(pps(5000, 3000, 33, Limiter::Cable)), false);
+    Outcome mm = pps(5000, 3000, 15, Limiter::Device);
+    mm.mismatch = true;
+    CHECK_EQ(present::is_full(mm), false);
+    CHECK_EQ(present::is_full(Outcome{}), false);
+}
+
+void test_footer() {
+    std::array<char, 28> b{};
+    present::footer(0, 0, true, b);
+    CHECK_STR(b.data(), "No twin yet. Learn one");
+    present::footer(3, 0, false, b);
+    CHECK_STR(b.data(), "No charger: no predictions");
+    present::footer(5, 3, true, b);
+    CHECK_STR(b.data(), "3 of 5 full on charger");
+    present::footer(1, 1, true, b);
+    CHECK_STR(b.data(), "1 of 1 full on charger");
+    // The widest (12 of 12) and every other pair stay within the 27-cell footer.
+    int worst = 0;
+    for (unsigned n = 0; n <= 12; n++)
+        for (unsigned k = 0; k <= n; k++)
+            for (int caps = 0; caps < 2; caps++) {
+                const int len = present::footer(n, k, caps != 0, b);
+                if (len > worst) worst = len;
+                CHECK_EQ(int(std::string_view(b.data()).size()), len);
+            }
+    CHECK_EQ(worst <= 27, true);
+}
+
 }  // namespace
 
 int main() {
@@ -105,5 +140,7 @@ int main() {
     test_summary_fits();
     test_note();
     test_verdict_line();
+    test_is_full();
+    test_footer();
     return test_report("test_twin_present");
 }

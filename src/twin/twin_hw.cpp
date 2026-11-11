@@ -108,6 +108,21 @@ bool predict(const twin::Twin& t, twin::Outcome& out) {
     return true;
 }
 
+std::uint32_t predict_stamp() {
+    const pd::SourceCaps& caps = pd::active_caps();
+    std::uint32_t h = caps.valid ? 2166136261u : 0u;
+    const auto mix = [&h](std::uint32_t v) { h = (h ^ v) * 16777619u; };
+    if (caps.valid) {
+        mix(caps.num_pdos);
+        for (std::size_t i = 0; i < caps.num_pdos && i < caps.pdos.size(); ++i) mix(caps.pdos[i].raw);
+        const twin::Facts f = facts_now();
+        mix(f.claim_w);
+        mix(f.cable_ma);
+        mix(f.cable_mv);
+    }
+    return h;
+}
+
 void log_predict(std::uint8_t seq, const twin::Outcome& o) {
     K2LOG("[TWIN] predict #%u kind=%u %u mV %u mA want=%u mW lim=%u obs=%u\n", unsigned(seq), unsigned(o.kind), unsigned(o.mv),
           unsigned(o.ma), unsigned(o.want_mw), unsigned(o.limiter), unsigned(o.observed));

@@ -88,6 +88,31 @@ constexpr const char* note(Limiter l) {
     return "?";
 }
 
+// The device would get all it needs: a contract exists, no capability mismatch, and nothing the charger or the cable holds
+// back (a device that takes no more than it is given counts as full).
+constexpr bool is_full(const Outcome& o) {
+    return o.kind != Kind::None && !o.mismatch && (o.limiter == Limiter::None || o.limiter == Limiter::Device);
+}
+
+// The Device twins page footer (at most 27 cells): the one fact about this charger and the stored devices.
+//   "No twin yet. Learn one"      the library is empty
+//   "No charger: no predictions"  no Source_Capabilities to predict from
+//   "3 of 5 full on charger"      `full` of `twins` devices would get all they need
+inline int footer(unsigned twins, unsigned full, bool have_caps, std::span<char> out) {
+    detail::Out w(out);
+    if (twins == 0) {
+        w.str("No twin yet. Learn one");
+    } else if (!have_caps) {
+        w.str("No charger: no predictions");
+    } else {
+        w.num(full);
+        w.str(" of ");
+        w.num(twins);
+        w.str(" full on charger");
+    }
+    return w.len();
+}
+
 inline int proof(live::Verdict v, std::uint16_t measured_mv, const Outcome& o, std::span<char> out) {
     detail::Out w(out);
     if (v == live::Verdict::Granted) {

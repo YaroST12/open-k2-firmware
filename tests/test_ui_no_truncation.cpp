@@ -76,6 +76,12 @@ void apply(const Scenario &sc) {
         g_stub.em.max_current_a = 5; g_stub.em.max_voltage_v = 50; g_stub.em.max_power_w = 250;
         g_stub.em.epr_capable = true;
     }
+    // Device twins: names as long as the library takes (24 cells) next to short ones, one of every outcome kind.
+    stub_twin_reset();
+    stub_twin_add("ABCDEFGHIJKLMNOPQRSTUVWX", {0x3601912C, 0x0002D12C, 0xC0DC323C});
+    stub_twin_add("Laptop", {0x3601912C});
+    stub_twin_add("WWWWWWWWWWWWWWWWWWWWWWWW", {0x2601912C, 0x0002D12C, 0x0003C12C, 0xC0DC3264});
+    stub_twin_add("Camera", {0x0001912C});
 }
 
 // Every distinct screen of the firmware, as the remote's goto_page() names it.
@@ -101,12 +107,24 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         draw_for_a_while(ui, kPageNames[p], rot, sc.name);
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
-                                             "autorotate", "cards", "share", "connection", "diag"};
+                                             "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin"};
+    static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
         ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
         if (!ui.push_menu(static_cast<Menu>(m), g_t)) continue;   // a menu that refuses to open has nothing to draw
         draw_for_a_while(ui, kMenuNames[m], rot, sc.name);
+    }
+    // Device twins: every row has been the focused one (note line open), then the armed confirm and the Learn row's refusal.
+    enter("twin-rows", rot, sc.name);
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    if (ui.push_menu(Menu::Twin, g_t)) {
+        draw_for_a_while(ui, "twin-rows", rot, sc.name);
+        ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // arms the first row (or says why not)
+        draw_for_a_while(ui, "twin-armed", rot, sc.name);
+        for (int i = 0; i < 6; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
+        ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // Learn from last Identify
+        draw_for_a_while(ui, "twin-learn", rot, sc.name);
     }
     static const char *const kTabNames[] = {"conn-source", "conn-cable", "conn-sink"};
     for (uint8_t tab = 0; tab < 3; ++tab) {
