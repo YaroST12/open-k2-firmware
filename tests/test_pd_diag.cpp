@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Black Box diagnosis (k2/pd/diag.hpp): one test per rule, on synthetic records, plus the captured fixtures.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
@@ -9,6 +10,7 @@
 
 #include "../tools/bbdiag_walk.hpp"
 #include "k2/pd/diag.hpp"
+#include "k2/pd/diag_wire.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "test_util.h"
@@ -1306,6 +1308,69 @@ void test_ram_budget() {
     CHECK_COND(sizeof(Analyzer) <= 800);
 }
 
+// Cmd 0x72 on the wire: status, a line read back in chunks through `off`, a finding with its evidence and name.
+void test_wire_encode() {
+    const auto raw = load("tests/fixtures/bbdiag/hub_rear_60w.raw");
+    TwinHint twin{"Legion rear port", kLegionPdos, true, true};
+    Run run;
+    run.a.feed(raw);
+    run.r = evaluate(run.a.shown(), &twin, run.a.now_ms());
+    run.render();
+    std::uint8_t out[58];
+    // status
+    std::uint8_t st[] = {wire::kOpStatus};
+    CHECK_EQ(wire::encode(run.r, wire::kStateOpen, 3, st, out), wire::kStatusBytes);
+    CHECK_EQ(out[0], wire::kStateOpen);
+    CHECK_EQ(out[1], run.r.power);
+    CHECK_EQ(out[2], run.r.link);
+    std::uint8_t worst = std::uint8_t(Sev::Ok);
+    for (unsigned i = 0; i < run.r.n; i++) worst = std::min(worst, std::uint8_t(run.r.f[i].sev));
+    CHECK_EQ(out[3], worst);
+    CHECK_EQ(out[4], run.r.n);
+    CHECK_EQ(out[5], run.lines.size());
+    CHECK_EQ(out[6] | out[7] << 8, 3);
+    CHECK_EQ(std::uint32_t(out[12] | out[13] << 8 | out[14] << 16 | std::uint32_t(out[15]) << 24), run.r.dur_ms);
+    // every line read back in 53-byte chunks matches the rendered text
+    for (unsigned i = 0; i < run.lines.size(); i++) {
+        std::string got;
+        for (unsigned off = 0;;) {
+            std::uint8_t q[] = {wire::kOpLine, std::uint8_t(i), std::uint8_t(off)};
+            const std::size_t n = wire::encode(run.r, wire::kStateOpen, 3, q, out);
+            CHECK_COND(n >= wire::kLineHeader);
+            if (n < wire::kLineHeader) break;
+            CHECK_EQ(out[0], run.lines.size());
+            CHECK_EQ(out[4], run.lines[i].size());
+            got.append(reinterpret_cast<const char*>(out + wire::kLineHeader), n - wire::kLineHeader);
+            off += unsigned(n - wire::kLineHeader);
+            if (off >= out[4] || n == wire::kLineHeader) break;
+        }
+        CHECK_STR(got.c_str(), run.lines[i].c_str());
+    }
+    // an index past the end answers with the count and an empty line
+    std::uint8_t past[] = {wire::kOpLine, 200, 0};
+    CHECK_EQ(wire::encode(run.r, wire::kStateOpen, 3, past, out), wire::kLineHeader);
+    CHECK_EQ(out[4], 0);
+    // finding 0: the power-short lead with its code name
+    std::uint8_t fq[] = {wire::kOpFinding, 0};
+    const std::size_t fn = wire::encode(run.r, wire::kStateOpen, 3, fq, out);
+    CHECK_EQ(out[0], run.r.n);
+    CHECK_EQ(out[3], std::uint8_t(Code::PowerShort));
+    CHECK_EQ(std::uint32_t(out[8] | out[9] << 8 | out[10] << 16 | std::uint32_t(out[11]) << 24), std::uint32_t(run.r.f[0].a));
+    CHECK_STR(std::string(reinterpret_cast<const char*>(out + wire::kFindingHeader), fn - wire::kFindingHeader).c_str(),
+              code_name(Code::PowerShort));
+    // no session yet: no lines and no findings, whatever the report holds
+    CHECK_EQ(wire::encode(run.r, wire::kStateNone, 0, st, out), wire::kStatusBytes);
+    CHECK_EQ(out[4], 0);
+    CHECK_EQ(out[5], 0);
+    std::uint8_t l0[] = {wire::kOpLine, 0, 0};
+    CHECK_EQ(wire::encode(run.r, wire::kStateNone, 0, l0, out), wire::kLineHeader);
+    CHECK_EQ(out[0], 0);
+    // unknown op, too small a buffer
+    std::uint8_t bad[] = {7};
+    CHECK_EQ(wire::encode(run.r, wire::kStateOpen, 3, bad, out), 0u);
+    CHECK_EQ(wire::encode(run.r, wire::kStateOpen, 3, st, std::span<std::uint8_t>(out, 8)), 0u);
+}
+
 }  // namespace
 
 int main() {
@@ -1377,5 +1442,6 @@ int main() {
     test_boot_mark_finishes();
     test_lines_fit_and_codes_named();
     test_ram_budget();
+    test_wire_encode();
     return test_report("test_pd_diag");
 }

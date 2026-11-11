@@ -744,6 +744,31 @@ static void test_transcap() {
     CHECK_EQ(run(f, request(0x71, 8, {9}), r), 1);
     check_header(r, 0x71, 8, Status::BadArg, 0);
 }
+static void test_diagnose() {
+    Fake f; Frame r;
+    // status: the op byte only; line: op idx off; finding: op idx
+    CHECK_EQ(run(f, request(0x72, 1, {0}), r), 1);
+    check_header(r, 0x72, 1, Status::Ok, 2);
+    check_bytes(r, kRspHeader, {0xD1, 0});
+    CHECK_EQ(run(f, request(0x72, 2, {1, 3, 40}), r), 1);
+    check_header(r, 0x72, 2, Status::Ok, 2);
+    CHECK_EQ(f.diag_req.size(), 3u); CHECK_EQ(f.diag_req[1], 3); CHECK_EQ(f.diag_req[2], 40);
+    CHECK_EQ(run(f, request(0x72, 3, {2, 5}), r), 1);
+    check_header(r, 0x72, 3, Status::Ok, 2);
+    CHECK_EQ(f.diag_req.size(), 2u);
+    f.calls = 0;
+    CHECK_EQ(run(f, request(0x72, 4, {0, 1}), r), 1);
+    check_header(r, 0x72, 4, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x72, 5, {1, 3}), r), 1);
+    check_header(r, 0x72, 5, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x72, 6, {2}), r), 1);
+    check_header(r, 0x72, 6, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x72, 7, {}), r), 1);
+    check_header(r, 0x72, 7, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x72, 8, {3}), r), 1);
+    check_header(r, 0x72, 8, Status::BadArg, 0);
+    CHECK_EQ(f.calls, 0);
+}
 static void test_blackbox() {
     Fake f; Frame r;
     // Read: the cursor is a u32 (default 0); the backend's bytes come back as the payload.
@@ -2600,6 +2625,7 @@ int main() {
     test_twin_dispatch();
     test_blackbox();
     test_transcap();
+    test_diagnose();
     test_debug_fake_pdos();
     test_debug_link();
     test_debug_epr_info();
