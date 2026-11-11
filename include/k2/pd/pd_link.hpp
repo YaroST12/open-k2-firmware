@@ -20,7 +20,7 @@
 // (own_contract false, and not within kOwnHoldMs of the K2's own trigger), or the lines alone: VBUS above 5.5 V with no contract of
 // the K2's own in this attach, or a sink's Rd on CC with no Rd of the K2 (kInlineForeignMs). "Possibly inline" is the default
 // until proven standalone. It clears only on proof: kInlineQuietMs with no load, no Request and no such evidence while attached,
-// or a detach that outlasts kInlineHoldMs.
+// or a detach that outlasts kInlineHoldMs. A VBUS cut or a short detach pauses that window (vbus_cut()).
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -98,6 +98,35 @@ inline constexpr std::uint32_t kOwnHoldMs = 2000;
 // blocked the idle wake). Longer than the foreign-evidence timer, so a charger that is still ramping up keeps its evidence.
 inline constexpr std::uint32_t kDarkSinkMs = 3000;
 
+// A VBUS cut (pattern usb-a-no-load-auto-off: a USB-A port that switches its output off every ~6.5 s while nothing draws, and back
+// on by itself): VBUS below vSafe5V min although it was at or above it within kDarkSinkMs. A cut is neither proof that a sink left
+// nor evidence that one is there:
+//  - the inline quiet window pauses through it (and through any detach inside kInlineHoldMs) instead of starting over at the
+//    next attach, so the quiet gathered on both sides of a cut adds up; the cut's own time never counts as quiet;
+//  - a sink-band level on CC read during it is void: through an A-to-C cable the Rp is fed from VBUS and sweeps that band while
+//    the output collapses. A sink's Rd counts while VBUS is up (or, as before, while a fresh attach waits for VBUS to rise).
+// Current and Requests stay evidence everywhere. After a pause the latch clears no sooner than kInlineResumeMs of VBUS back:
+// a sink that returns with VBUS (a PD sink Requests within ~300 ms of the caps, a phone draws within ~1 s) shows itself first.
+inline constexpr std::uint32_t kInlineResumeMs = 2000;
+
+constexpr bool vbus_cut(bool vbus_known, std::int32_t vbus_mv, bool up_seen, std::uint32_t now_ms, std::uint32_t last_up_ms) {
+    return vbus_known && vbus_mv < kVSafe5MinMv && up_seen && now_ms - last_up_ms < kDarkSinkMs;
+}
+
+// What latched the inline state (Link::inline_cause()): the [TEST] preflight refusal names it.
+enum class InlineCause : std::uint8_t { None, Load, Request, Rise, Vbus, FarRd };
+constexpr const char* inline_cause_name(InlineCause c) {
+    switch (c) {
+        case InlineCause::None: return "none";
+        case InlineCause::Load: return "load";
+        case InlineCause::Request: return "sink request";
+        case InlineCause::Rise: return "vbus rise";
+        case InlineCause::Vbus: return "foreign vbus";
+        case InlineCause::FarRd: return "far rd";
+    }
+    return "?";
+}
+
 class Link {
 public:
     void update(const LinkInput& in);
@@ -129,8 +158,9 @@ public:
     // Home and the remote state field read this one value.
     raguard::CrossKind cc_cross() const { return cross_trace_.classify(last_now_); }
     // Latched by a load, a foreign Request or a foreign VBUS rise; held across a short detach (kInlineHoldMs) and left only on proof
-    // (kInlineQuietMs of quiet while attached, or a detach that outlasts the hold).
+    // (kInlineQuietMs of quiet while attached, paused through a VBUS cut or a short detach, or a detach that outlasts the hold).
     bool inline_mode() const { return inline_; }
+    InlineCause inline_cause() const { return inline_ ? cause_ : InlineCause::None; }
     std::uint32_t detached_for_s(std::uint32_t now_ms) const { return now_ms > detach_at_ ? (now_ms - detach_at_) / 1000 : 0; }
     // True once per attach edge: the caller drops the previous charger's decoded data when
     // the first new Source_Capabilities arrive.
@@ -155,7 +185,10 @@ private:
     bool forced_ = false;
     bool new_source_ = false;
     bool inline_ = false;
+    InlineCause cause_ = InlineCause::None;
     std::uint32_t requests_at_attach_ = 0, requests_seen_ = 0, quiet_since_ = 0;
+    std::uint32_t paused_at_ = 0;   // the last tick the quiet window was paused (a cut or a detach, see vbus_cut())
+    bool up_seen_ = false;          // vbus_up_ms_ holds a real sample
     bool vbus_was_low_ = false;
     bool own_seen_ = false;
     bool own_ever_ = false;   // the K2 had a contract of its own at any time since this attach: a high VBUS is then its doing

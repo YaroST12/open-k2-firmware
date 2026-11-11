@@ -1164,7 +1164,10 @@ void ChargerTestSession::start_failed(const char* why) {
 // when the run id stays 0), the reason + measured VBUS recorded on the runner (the remote summary reads them), and
 // the footer words on screen.
 void ChargerTestSession::start_failed(ct::Reason r, const char* busy, int vbus_mv) {
-    runner_.note_preflight_refusal(r, vbus_mv, busy);   // the log line names the holding tool when busy
+    // The log line names the holding tool when busy, and what latched the inline state on "load attached".
+    const pd::InlineCause cause = ctx_.ui->link().inline_cause();
+    const char* detail = r != ct::Reason::Inline ? busy : cause != pd::InlineCause::None ? pd::inline_cause_name(cause) : nullptr;
+    runner_.note_preflight_refusal(r, vbus_mv, detail);
     StrBuf<32> t;
     review_refusal(r, busy, vbus_mv, t);
     start_failed(t.c_str());

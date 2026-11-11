@@ -560,10 +560,10 @@ public:
     // A START the preflight refused (no run began; the run id stays where it was): one [TEST] log line with the
     // reason, and the reason + measured VBUS recorded here, so the remote summary (charger-test status) and the
     // card's final-reason path read them. A WrongVoltage under a live PDO 1 contract names the level in the log:
-    // "VBUS 8.5 V on a 5 V contract (shared bus)". A Busy refusal names the holding tool via `busy_text` (the UI's
-    // busy_reason footer text, e.g. "PD hold: release it"), so the log line says which tool holds the line.
-    // Only outside a run.
-    void note_preflight_refusal(Reason r, int vbus_mv, const char* busy_text = nullptr);
+    // "VBUS 8.5 V on a 5 V contract (shared bus)". A Busy refusal names the holding tool via `detail` (the UI's
+    // busy_reason footer text, e.g. "PD hold: release it"), so the log line says which tool holds the line; an Inline
+    // refusal names what latched the inline state (pd::inline_cause_name, e.g. "far rd"). Only outside a run.
+    void note_preflight_refusal(Reason r, int vbus_mv, const char* detail = nullptr);
     uint16_t refusal_mv() const { return refusal_mv_; }   // the measured VBUS of the recorded preflight refusal
     // While held, a run that has just been start()ed stays in its Baseline: nothing is judged or requested, and the Baseline's
     // clocks restart at every poll (so its 500 ms of vSafe5V count from the release). The page holds a run while it writes the

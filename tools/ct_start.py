@@ -85,6 +85,13 @@ def preflight(link, sleep=time.sleep):
         kr.cmd_action(link, Namespace(name="pd-rescan"))
         sleep(3)
         st = kr.cmd_state(link, None)
+        # A USB-A port with nothing drawing cuts VBUS every ~6.5 s and brings it back by itself (pattern
+        # usb-a-no-load-auto-off): one reading inside a cut is not a lost source. Wait for VBUS like the START does.
+        waited = 0.0
+        while st["vbus_mv"] < MIN_VBUS_MV and waited < VBUS_WAIT_S:
+            sleep(0.5)
+            waited += 0.5
+            st = kr.cmd_state(link, None)
         if st["vbus_mv"] < MIN_VBUS_MV:
             return f"VBUS dropped to {st['vbus_mv'] / 1000:.2f} V after the PD rescan"
         if not st["pd_valid"]:
