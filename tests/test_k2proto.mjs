@@ -1094,6 +1094,8 @@ test("RemoteError names the pd::Err byte of a PD command", () => {
   assert.match(e.message, /inline/);
   assert.equal(new P.RemoteError(P.STATUS.NEED_CONFIRM, P.CMD.PD_REQUEST, u8(0)).message.includes("confirmation"), true);
   assert.equal(P.ACTIONS.identify, 6);
+  assert.equal(P.ACTIONS["fc-scan"], 4);
+  assert.equal(P.ACTIONS["fc-reset"], 5);
 });
 
 test("pdRequest sends the 6-byte payload and reads the trigger status", async () => {

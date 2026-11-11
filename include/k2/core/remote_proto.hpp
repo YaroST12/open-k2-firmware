@@ -382,6 +382,15 @@ constexpr bool cmd_ids_unique() {
 }
 static_assert(cmd_ids_unique(), "two remote commands share one request id");
 
+// ACTION ids (k2::Action in ui_types.hpp: 1 PdRescan, 2 EmarkerScan, 3 EnergyReset, 4 FcScan, 5 FcReset, 6 Identify).
+// An action that can raise the output above 5 V or drive D+/D- needs the confirm byte on the remote path, the way the
+// screen needs Review + two released OK presses: today that is FcScan (the QC handshake walks the output up). The others
+// never raise VBUS: PdRescan is passive inline / a Get_Source_Cap / a CC cycle, EmarkerScan injects VCONN on CC (refused
+// inline), Identify is a PD message (refused inline), EnergyReset and FcReset only clear state or lower the output.
+// The dispatcher and Remote::action both ask this one function.
+constexpr uint8_t kActionFcScan = 4;
+constexpr bool action_needs_confirm(uint8_t id) { return id == kActionFcScan; }
+
 constexpr uint8_t kPdFlagConfirm = 1 << 0;
 // Lab-only (k2_remote `pd request --over-load`, never the UI / WebHID / charger test): lift the inline
 // refusal while the far sink is a passive load - no PD message from it this attach (pd::over_load_allowed).
@@ -1006,9 +1015,11 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return reply_n(encode_identity(buf, backend.identity()));
     }
     case Cmd::Action: {
-        // payload: action id, optional second byte 1 = confirm (inline: may interrupt charging)
+        // payload: action id, optional second byte 1 = confirm (inline: may interrupt charging; FcScan: raises VBUS)
         if (p.size() != 1 && p.size() != 2) return reply(Status::BadLength);
-        const Status st = backend.action(p[0], p.size() == 2 && p[1] != 0);
+        const bool confirm = p.size() == 2 && p[1] != 0;
+        if (action_needs_confirm(p[0]) && !confirm) return reply(Status::NeedConfirm);
+        const Status st = backend.action(p[0], confirm);
         if (st != Status::Ok) return reply(st);
         buf[0] = p[0];
         return reply_n(1);

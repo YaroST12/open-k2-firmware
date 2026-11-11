@@ -976,6 +976,29 @@ static void test_action_page_reboot_log() {
     check_header(r, 0x06, 5, Status::Ok, 1);
     CHECK_EQ(f.last_confirm, 1);
 
+    // Actions that can raise the output above 5 V or drive D+/D- need the confirm byte: FcScan (4) is the one. Without it
+    // the dispatcher answers NeedConfirm and the backend never sees the call (the screen asks for Review + two OK presses).
+    for (uint8_t id = 1; id <= 6; ++id) CHECK_EQ(k2::remote::action_needs_confirm(id), id == 4);
+    CHECK_EQ(k2::remote::action_needs_confirm(0), false);
+    CHECK_EQ(k2::remote::action_needs_confirm(7), false);
+    f.last_action = 0; f.last_confirm = false;
+    const int calls_before = f.calls;
+    CHECK_EQ(run(f, request(0x06, 20, {4}), r), 1);                 // FcScan, no confirm byte
+    check_header(r, 0x06, 20, Status::NeedConfirm, 0);
+    CHECK_EQ(f.calls, calls_before); CHECK_EQ(f.last_action, 0);
+    CHECK_EQ(run(f, request(0x06, 21, {4, 0}), r), 1);               // an explicit zero is no confirm either
+    check_header(r, 0x06, 21, Status::NeedConfirm, 0);
+    CHECK_EQ(f.last_action, 0);
+    CHECK_EQ(run(f, request(0x06, 22, {4, 1}), r), 1);               // with the confirm byte it reaches the backend
+    check_header(r, 0x06, 22, Status::Ok, 1);
+    CHECK_EQ(f.last_action, 4); CHECK_EQ(f.last_confirm, true);
+    f.last_action = 0;
+    for (const uint8_t id : {1, 2, 3, 5, 6}) {                       // the others run unconfirmed as before
+        CHECK_EQ(run(f, request(0x06, 30, {id}), r), 1);
+        check_header(r, 0x06, 30, Status::Ok, 1);
+        CHECK_EQ(f.last_action, id);
+    }
+
     CHECK_EQ(run(f, request(0x07, 3, {3}), r), 1);
     check_header(r, 0x07, 3, Status::Ok, 1);
     CHECK_EQ(f.last_page, 3);

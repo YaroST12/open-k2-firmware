@@ -108,10 +108,12 @@ SHOT_FORMAT_RLE565 = 1
 
 STATUS_OK, STATUS_UNKNOWN_CMD, STATUS_BAD_LENGTH, STATUS_BAD_ARG, STATUS_BUSY, STATUS_NEED_CONFIRM = 0, 1, 2, 3, 4, 5
 STATUS_NAMES = {0: "ok", 1: "unknown command", 2: "bad length", 3: "bad argument", 4: "busy",
-                5: "needs --confirm: a live sink is attached and this may interrupt charging"}
+                5: "needs --confirm: this raises the output above 5 V, drives D+/D-, or may interrupt a live sink"}
 
 BUTTONS = {"back": 0, "minus": 1, "ok": 2, "plus": 3}
-ACTIONS = {"pd-rescan": 1, "emarker": 2, "energy-reset": 3, "identify": 6}
+ACTIONS = {"pd-rescan": 1, "emarker": 2, "energy-reset": 3, "fc-scan": 4, "fc-reset": 5, "identify": 6}
+# Actions the firmware refuses without the confirm byte (remote::action_needs_confirm): they raise VBUS above 5 V.
+ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
@@ -2925,10 +2927,11 @@ def build_parser():
     sub.add_parser("usblink", help="USB / Thunderbolt link seen in sniffed PD traffic (passive, see k2/pd/usb_link.hpp)")
     sub.add_parser("match", help="wants vs offers: the request against the charger caps (passive)")
     sub.add_parser("sink", help="Connection page Sink tab, field for field (read-only; Identify status only, never starts a run)")
-    sa = sub.add_parser("action", help="run a page action")
+    sa = sub.add_parser("action", help="run a page action (fc-scan raises VBUS above 5 V and needs --confirm)")
     sa.add_argument("name", choices=sorted(ACTIONS))
     sa.add_argument("--confirm", action="store_true",
-                    help="allow it while a live sink is attached (may interrupt charging)")
+                    help="required for " + ", ".join(ACTIONS_NEED_CONFIRM) + " (the QC scan raises the output above 5 V and drives D+/D-); "
+                         "refused with need-confirm without it. No other action takes it")
     spd = sub.add_parser("pd", help="active PD: request a contract, reset, release, status")
     spds = spd.add_subparsers(dest="pd_cmd", required=True)
     sq = spds.add_parser("request", help="request PDO n (above 5 V needs --confirm; refused inline unless --over-load)")

@@ -19,7 +19,8 @@ var K2Proto = (function () {
   var STATUS_NAMES = ["ok", "unknown command", "bad length", "bad argument", "busy", "needs confirmation"];
   var SHOT_FLAG_LAST = 0x01, SHOT_FLAG_ABORT = 0x80, SHOT_FORMAT_RLE565 = 1;
   var BUTTONS = { back: 0, minus: 1, ok: 2, plus: 3 };
-  var ACTIONS = { "pd-rescan": 1, "emarker": 2, "energy-reset": 3, "identify": 6 };
+  // fc-scan raises the output above 5 V: the firmware refuses it (NEED_CONFIRM) unless action() is given confirm = true.
+  var ACTIONS = { "pd-rescan": 1, "emarker": 2, "energy-reset": 3, "fc-scan": 4, "fc-reset": 5, "identify": 6 };
   // include/k2/pd/pd_sink.hpp and include/k2/pd/pd_identify.hpp enums, in order
   var PD_ERRS = ["ok", "no source caps", "bad PDO position", "over the voltage cap", "voltage outside the PDO range",
                  "inline: a live sink is attached", "busy (identify running)"];
@@ -917,7 +918,7 @@ var K2Proto = (function () {
     return { button: nameOrIndex, ms: ms };
   };
 
-  // confirm=true sends [id, 1]: the PD rescan of an inline link refuses with NEED_CONFIRM until then.
+  // confirm=true sends [id, 1]: fc-scan (it raises VBUS above 5 V) refuses with NEED_CONFIRM until then.
   K2Remote.prototype.action = async function (nameOrIndex, confirm) {
     var a = typeof nameOrIndex === "number" ? nameOrIndex : ACTIONS[nameOrIndex];
     if (a === undefined) throw new RangeError("unknown action " + nameOrIndex);

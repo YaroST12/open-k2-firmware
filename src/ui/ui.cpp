@@ -541,9 +541,9 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
 
 bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
     ContentViewport viewport(layout_.content);
-    // The confirm flag no longer overrides any refusal: inline, every active TX (Identify, the VCONN
-    // cable read) is refused outright - an inline K2 has no PD role of its own (2026-11-10).
-    (void)confirm;
+    // The confirm flag overrides no refusal: inline, every active TX (Identify, the VCONN cable read) is refused
+    // outright - an inline K2 has no PD role of its own (2026-11-10). It is only the remote's "yes" for an action that
+    // can raise the output above 5 V (remote::action_needs_confirm: FcScan), handed on to the driver.
     if (ports_busy() && a != Action::FcReset) {
         K2LOG("[TEST] action refused: charger test owns ports\n");
         return false;
@@ -618,8 +618,9 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         K2LOG("[UI] energy meter reset\n");
         current().update(now_ms);
         break;
-    case Action::FcScan:     // the remote path checks --confirm before it gets here
-        fctrig::scan_start(true);
+    case Action::FcScan:     // only the remote reaches this: the dispatcher and Remote::action refuse it without the confirm byte,
+                             // and the driver asks again (a screen scan goes through the Review page, never here)
+        fctrig::scan_start(confirm);
         break;
     case Action::FcReset:
         stop_fc(now_ms);

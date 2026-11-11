@@ -363,6 +363,8 @@ remote::Status Remote::action(uint8_t id, bool confirm) {
     if (id < static_cast<uint8_t>(Action::PdRescan) || id > static_cast<uint8_t>(Action::Identify))
         return remote::Status::BadArg;
     K2LOG("[RMT] action=%d confirm=%d\n", static_cast<int>(id), confirm ? 1 : 0);
+    // The dispatcher already refuses this; the backend asks again so no other caller can start a VBUS-raising action unconfirmed.
+    if (remote::action_needs_confirm(id) && !confirm) return remote::Status::NeedConfirm;
     if (!ui_.run_action(static_cast<Action>(id), systick::millis(), confirm))
         return remote::Status::NeedConfirm;
     return remote::Status::Ok;

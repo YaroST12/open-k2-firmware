@@ -1436,6 +1436,36 @@ class Scripts(unittest.TestCase):
         self.assertEqual(link.timeout_s, 1.0)         # restored afterwards
         self.assertGreater(kr.ACTION_TIMEOUT_S, 5.0)
 
+    def test_action_confirm_is_live_for_fc_scan(self):
+        """fc-scan raises VBUS and drives D+/D-: the firmware wants the confirm byte, so --confirm must reach the wire."""
+        self.assertEqual(kr.ACTIONS["fc-scan"], 4)
+        self.assertEqual(kr.ACTIONS["fc-reset"], 5)
+        t = self.Scripted([])
+        link = kr.RemoteLink(t, timeout_s=1.0)
+        kr.cmd_action(link, self.Args(name="fc-scan"))
+        self.assertEqual(t.sent[-1][5:7], bytes([4, 0]))       # no --confirm: the K2 answers need-confirm
+        kr.cmd_action(link, self.Args(name="fc-scan", confirm=True))
+        self.assertEqual(t.sent[-1][5:7], bytes([4, 1]))
+
+    def test_action_need_confirm_is_a_clean_refusal(self):
+        t = self.Scripted([kr.STATUS_NEED_CONFIRM])
+        link = kr.RemoteLink(t, timeout_s=1.0)
+        with self.assertRaises(kr.RemoteError) as cm:
+            kr.cmd_action(link, self.Args(name="fc-scan"))
+        self.assertEqual(cm.exception.status, kr.STATUS_NEED_CONFIRM)
+        self.assertIn("--confirm", str(cm.exception))
+
+    def test_action_help_names_what_needs_confirm(self):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            kr.build_parser().parse_args(["action", "--help"])
+        text = " ".join(out.getvalue().split())
+        self.assertIn("fc-scan", text)
+        self.assertIn("5 V", text)
+        a = kr.build_parser().parse_args(["action", "fc-scan", "--confirm"])
+        self.assertTrue(a.confirm)
+
     def test_action_timeout_on_a_live_device_is_not_a_dfu_hint(self):
         msg = kr.timeout_message(alive=True)
         self.assertNotIn("DFU", msg)

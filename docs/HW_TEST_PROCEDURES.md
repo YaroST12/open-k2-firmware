@@ -37,7 +37,8 @@ Shorthand: `R` = `python3 tools/k2_remote.py`, `T` = `python3 tools/pd_trace.py`
    link (HID, drive, network), not in the power path. Power flows bottom to top when the charger is on the bottom.
    The default charger position in this file is the **bottom port**, nothing on the top.
 7. **Voltage rules enforced by firmware** (what to expect when you push): requests above 5 V need confirmation
-   (`--confirm`, or OK twice); the PD sink guard (`Sink::on_vbus` in `src/pd/pd_sink.cpp`) aborts back to 5 V when measured VBUS stays above target + 10 % or above the monitor ceiling + 5 % (37.8 V on the 36 V INA226). After a step-down it tolerates VBUS that is still falling (>= 50 mV per 600 ms, up to 3 s more) and aborts only on a rise > 150 mV, a stall or the window ending (the suite's own checks are separate);
+   (`--confirm`, or OK twice; this covers `R action fc-scan`, which walks the output up and is answered `need-confirm` without
+   `--confirm` - the raw ACTION frame's confirm byte is the same rule); the PD sink guard (`Sink::on_vbus` in `src/pd/pd_sink.cpp`) aborts back to 5 V when measured VBUS stays above target + 10 % or above the monitor ceiling + 5 % (37.8 V on the 36 V INA226). After a step-down it tolerates VBUS that is still falling (>= 50 mV per 600 ms, up to 3 s more) and aborts only on a rise > 150 mV, a stall or the window ending (the suite's own checks are separate);
    `fc trigger` above 20 V is refused (`over limit`).
 8. **Do not flash, replug the PC cable or change the USB link setting in the middle of a test.** Never run ad-hoc
    flash loops. Spoof, Self-power and anything touching flash (`emarker save/delete/rename`, `store save-log`)
