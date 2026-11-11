@@ -27,9 +27,10 @@ SESSION = bytes([0x02, 0x01, 0, 0,                # 258 mAh
                  0x05, 3, 7, 2, 0x14])            # sub 5 = Cable tab + popup, sel 3, count 7, window 10m, flags 0x14
 
 
-# Part 2 (26 bytes): the same literal as test_state_diag_part in tests/test_remote_proto.cpp.
+# Part 2 (29 bytes): the same literal as test_state_diag_part in tests/test_remote_proto.cpp. The last three bytes are the
+# HID-cable loop block (k2/core/loop_guard.hpp); a build before it answers the first 26.
 DIAG = bytes([0x91, 0x04, 0x03, 0x02, 0x01, 5, 0, 0, 0, 0x0D, 0x0C, 0x0B, 0x0A, 0x2C, 0x01, 0, 0, 2, 0, 0, 0,
-              17, 0, 0, 0, 1])
+              17, 0, 0, 0, 1, 0x09, 0x02, 0x01])
 
 
 # Part 3 (57 bytes): the same literal as test_state_keys_part in tests/test_remote_proto.cpp.
@@ -128,11 +129,27 @@ class DiagDecode(unittest.TestCase):
     def test_fields(self):
         d = kr.decode_diag(DIAG)
         self.assertEqual(d, {"fusb_id": 0x91, "pd_rx": 0x01020304, "usb_resets": 5, "usb_isrs": 0x0A0B0C0D,
-                             "log_sent": 300, "log_dropped": 2, "poll_gap_max_ms": 17, "usb_configured": True})
+                             "log_sent": 300, "log_dropped": 2, "poll_gap_max_ms": 17, "usb_configured": True,
+                             "loop": {"locked": True, "reason": "certain", "pending": False, "host": True, "events": 0x0102}})
+
+    def test_loop_block(self):
+        # The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): bits 1:0 the reason, bit 2 the suspicion window, bit 3 a USB host.
+        loop = lambda b: kr.decode_diag(DIAG[:26] + bytes([b, 3, 0]))["loop"]
+        self.assertEqual(loop(0x00), {"locked": False, "reason": "none", "pending": False, "host": False, "events": 3})
+        self.assertEqual(loop(0x04), {"locked": False, "reason": "none", "pending": True, "host": False, "events": 3})
+        self.assertEqual(loop(0x02), {"locked": True, "reason": "suspected", "pending": False, "host": False, "events": 3})
+        self.assertEqual(loop(0x03)["reason"], "reason 3")   # not defined: named, not guessed
+
+    def test_older_firmware_has_no_loop_block(self):
+        d = kr.decode_diag(DIAG[:26])
+        self.assertNotIn("loop", d)
+        self.assertTrue(d["usb_configured"])
 
     def test_truncated_payload_is_rejected(self):
         with self.assertRaises(kr.FrameError):
             kr.decode_diag(DIAG[:25])
+        with self.assertRaises(kr.FrameError):
+            kr.decode_diag(DIAG[:28])   # a cut loop block
 
 
 class KeysDecode(unittest.TestCase):

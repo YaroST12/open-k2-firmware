@@ -10,6 +10,7 @@
 #include <span>
 #include <string_view>
 #include "k2/core/log.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/drivers/adc.hpp"
@@ -294,6 +295,10 @@ remote::DiagInfo Remote::diag() {
     d.usb_resets = u.resets; d.usb_isrs = u.isrs; d.log_sent = u.log_sent; d.log_dropped = u.log_dropped;
     d.poll_gap_max_ms = u.poll_gap_max;
     d.usb_configured = usb::configured() ? 1 : 0;
+    static_assert(unsigned(loopguard::Reason::Certain) == remote::kLoopCertain && unsigned(loopguard::Reason::Suspected) == remote::kLoopSuspected);
+    d.loop = static_cast<uint8_t>(static_cast<unsigned>(loopguard::reason()) | (loopguard::pending() ? remote::kLoopPending : 0) |
+                                  (usb::host_active() ? remote::kLoopHost : 0));
+    d.loop_events = loopguard::events();
     return d;
 }
 
