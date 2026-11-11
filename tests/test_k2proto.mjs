@@ -1107,6 +1107,22 @@ test("emarker detail names the answered orientation and query combination, null 
   }
 });
 
+test("emarker detail reports the read mode: attached, alone, unknown on older firmware", () => {
+  const base = [1, 2, 3, 2, 3, 0, 60, 80, 4, 2];
+  let d = P.decodeEmarkerDetail(u8(...base, 2, 2, 1, 2, 2, 1));
+  assert.deepEqual([d.read_mode, d.attached, d.acks], ["attached", true, 1]);
+  d = P.decodeEmarkerDetail(u8(...base, 1, 2, 2, 1, 1, 0));
+  assert.deepEqual([d.read_mode, d.attached, d.acks], ["alone", false, 0]);
+  d = P.decodeEmarkerDetail(u8(...base, 0, 0, 0, 0, 2, 1));   // nothing answered, chip acknowledged, source attached
+  assert.deepEqual([d.orientation, d.attached, d.acks], [null, true, 1]);
+  for (const old of [u8(...base), u8(...base, 2, 2, 1, 2)]) {
+    d = P.decodeEmarkerDetail(old);
+    assert.deepEqual([d.attached, d.acks], [null, null]);
+  }
+  d = P.decodeEmarkerDetail(u8(...base, 0, 0, 0, 0, 0, 0));   // no read ran yet: not "alone"
+  assert.deepEqual([d.read_mode, d.attached], ["none", null]);
+});
+
 test("emarker over the link attaches the detail when part 2 answers", async () => {
   const part0 = [1, 1, 0xAC, 0x05, 0x34, 0x12, 0, 0, 0, 0, 2, 3, 5, 50, 240, 0, 1, ...Array.from("Apple\0USB4", (c) => c.charCodeAt(0))];
   const { link } = rig((f) => [rsp(5, f[3], 0, f[5] === 0 ? part0 : f[5] === 1 ? [4, 3, 2, 1] : [1, 2, 3, 2, 3, 0, 60, 80, 4, 2])]);
@@ -1491,6 +1507,21 @@ test("e-marker learn: the summary carries the answered combination when the firm
   r = await new P.K2Remote(link).emLearned();
   assert.deepEqual([r.summary.orientation, r.summary.header_rev, r.summary.svdm, r.summary.attempt], [null, null, null, null]);
   assert.equal(r.summary.pid, 0x6116);
+});
+
+test("e-marker learn: the summary carries the read mode and the acked-no-answer outcome", async () => {
+  const sum = [0, 1, 1, 4, 0, 0, 0, 2, 0, 0xD9, 0x22, 0x16, 0x61];
+  let { link } = rig((f) => [rsp(0x61, f[3], 0, [...sum, 2, 2, 1, 2, 2, 1])]);
+  let r = await new P.K2Remote(link).emLearned();
+  assert.deepEqual([r.summary.read_mode, r.summary.attached, r.summary.acks], ["attached", true, 1]);
+  ({ link } = rig((f) => [rsp(0x61, f[3], 0, [0, 4, ...sum.slice(2), 0, 0, 0, 0, 2, 1])]));
+  r = await new P.K2Remote(link).emLearned();
+  assert.equal(r.summary.outcome, "acked-no-answer");
+  for (const old of [sum, [...sum, 2, 2, 1, 2]]) {
+    ({ link } = rig((f) => [rsp(0x61, f[3], 0, old)]));
+    r = await new P.K2Remote(link).emLearned();
+    assert.deepEqual([r.summary.attached, r.summary.acks], [null, null]);
+  }
 });
 
 test("e-marker learn: a busy refusal and the unmatched log", async () => {

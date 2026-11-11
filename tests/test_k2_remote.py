@@ -442,6 +442,26 @@ class Decoders(unittest.TestCase):
         # Without part 2 at all nothing changes (no detail keys).
         self.assertNotIn("orientation", kr.decode_emarker(self.PART0, b""))
 
+    def test_emarker_read_mode_attached_and_alone(self):
+        # The 16-byte part 2: the answered tail, then [read mode (1 alone, 2 attached), query variants acknowledged].
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + bytes([2, 2, 1, 2, 2, 1]))
+        self.assertEqual((e["read_mode"], e["attached"], e["acks"]), ("attached", True, 1))
+        self.assertIn("read: source attached (Rd kept), 1 variant(s) acknowledged", kr.render("emarker", e))
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + bytes([1, 2, 2, 1, 1, 0]))
+        self.assertEqual((e["read_mode"], e["attached"], e["acks"]), ("alone", False, 0))
+        self.assertIn("read: cable alone", kr.render("emarker", e))
+        # Nothing answered, the chip acknowledged with the source attached: the silent-with-source fact.
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + bytes([0, 0, 0, 0, 2, 1]))
+        self.assertEqual((e["attached"], e["acks"]), (True, 1))
+        self.assertIn("acked, no answer", kr.render("emarker", e))
+
+    def test_emarker_read_mode_unknown_on_older_firmware(self):
+        for p2 in (self.P2_OLD, self.P2_OLD + bytes([2, 2, 1, 2]), self.P2_OLD + bytes([0, 0, 0, 0, 0, 0])):
+            e = kr.decode_emarker(self.PART0, b"", p2)
+            self.assertIn("attached", e)
+            self.assertIsNone(e["attached"])
+            self.assertNotIn("read:", kr.render("emarker", e))
+
 
 def rle_runs(px):
     """Reference encoder: runs only (valid RLE565)."""

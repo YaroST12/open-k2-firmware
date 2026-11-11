@@ -92,11 +92,16 @@ class EmLib(unittest.TestCase):
         self.assertIsNone(a.em_cmd)
 
 
-def summary(outcome=1, entries=2, rows=2, answered=None):
+def summary(outcome=1, entries=2, rows=2, answered=None, read=None):
     # [err, outcome, svids, probes, silent, flags, nlog, rows, policy, vid u16, pid u16] and, from the newer firmware,
-    # the answered tail [orientation, header rev, svdm, attempt]; None = the 13-byte form of an older firmware.
+    # the answered tail [orientation, header rev, svdm, attempt] and the read tail [mode (1 alone, 2 attached), acks];
+    # None = the 13-byte form of an older firmware (answered only: 17 bytes).
     s = bytes([0, outcome, 1, 4, 0, 0, entries, rows, 0]) + (0x22D9).to_bytes(2, "little") + (0x6116).to_bytes(2, "little")
-    return s if answered is None else s + bytes(answered)
+    if answered is not None:
+        s += bytes(answered)
+    if read is not None:
+        s += bytes(read)
+    return s
 
 
 def entry(i, step, req, rep, header=0x0F | (2 << 6) | (1 << 8)):
@@ -186,6 +191,25 @@ class Learn(unittest.TestCase):
         r, _ = run(["emarker", "learned"], [summary(entries=0, rows=0, answered=[0, 0, 0, 0])])
         self.assertIsNone(r["summary"]["orientation"])
         self.assertNotIn("answered:", kr.render("emarker", r))
+
+    def test_summary_names_the_read_mode_and_the_new_outcome(self):
+        r, _ = run(["emarker", "learned"], [summary(entries=0, rows=0, answered=[2, 2, 1, 2], read=[2, 1])])
+        s = r["summary"]
+        self.assertEqual((s["read_mode"], s["attached"], s["acks"]), ("attached", True, 1))
+        self.assertIn("read: source attached (Rd kept)", kr.render("emarker", r))
+        r, _ = run(["emarker", "learned"], [summary(entries=0, rows=0, answered=[1, 2, 2, 1], read=[1, 0])])
+        self.assertEqual((r["summary"]["read_mode"], r["summary"]["attached"]), ("alone", False))
+        self.assertIn("read: cable alone", kr.render("emarker", r))
+        # Outcome 4: the chip acknowledged the K2 but never answered.
+        r, _ = run(["emarker", "learned"], [summary(outcome=4, entries=0, rows=0, answered=[0, 0, 0, 0], read=[2, 1])])
+        self.assertEqual(r["summary"]["outcome"], "acked-no-answer")
+        self.assertIn("learn acked-no-answer", kr.render("emarker", r))
+        # The 17-byte (answered only) and 13-byte forms: the read facts are unknown, not alone.
+        for old in (summary(entries=0, rows=0, answered=[2, 2, 1, 2]), summary(entries=0, rows=0)):
+            r, _ = run(["emarker", "learned"], [old])
+            self.assertIsNone(r["summary"]["attached"])
+            self.assertIsNone(r["summary"]["acks"])
+            self.assertNotIn("read:", kr.render("emarker", r))
 
     def test_unmatched(self):
         totals = bytes([0, 5, 0, 2])

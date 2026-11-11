@@ -408,12 +408,21 @@ var K2Proto = (function () {
              svdm: { 1: "1.0", 2: "2.0" }[p[at + 2]] || null, attempt: p[at + 3] || null };
   }
 
+  // The read tail (2 bytes at `at`, absent on older firmware): [read mode (0 none, 1 cable alone, 2 source attached with
+  // the K2's Rd kept), query variants the chip acknowledged]. Mirrors decode_read in k2_remote.py: every field null when
+  // absent, `attached` null too when no read ran.
+  function decodeRead(p, at) {
+    if (p.length < at + 2) return { read_mode: null, attached: null, acks: null };
+    var m = p[at];
+    return { read_mode: ["none", "alone", "attached"][m] || String(m), attached: m === 1 || m === 2 ? m === 2 : null, acks: p[at + 1] };
+  }
+
   // GET_EMARKER part 2 (k2/pd-read): cable VDO detail. The firmware sends numbers, they are named here.
   function decodeEmarkerDetail(p) {
     need(p, 10, "emarker detail");
     var f = p[5];
-    var ans = decodeAnswered(p, 10);
-    return { orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, sop: ["none", "SOP'", "SOP''"][p[0]] || "none", pd_rev: { 1: "2.0", 2: "3.x" }[p[1]] || null,
+    var ans = decodeAnswered(p, 10), rd = decodeRead(p, 14);
+    return { read_mode: rd.read_mode, attached: rd.attached, acks: rd.acks, orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, sop: ["none", "SOP'", "SOP''"][p[0]] || "none", pd_rev: { 1: "2.0", 2: "3.x" }[p[1]] || null,
              vdo_version: p[2], latency_code: p[3], latency: LATENCY[p[3]] || "code " + p[3],
              termination: TERMINATION[p[4] & 3],
              type_c_plug: !!(f & 1), vconn_required: !!(f & 2), epr_cable: !!(f & 4), vdo2_valid: !!(f & 8),
@@ -878,14 +887,14 @@ var K2Proto = (function () {
   };
 
   // e-marker learn and the unmatched-request log (EM_LIB ops 6 and 7). Mirrors cmd_emlearn / cmd_emunmatched in k2_remote.py.
-  var LEARN_OUTCOMES = ["none", "learned", "no-identity", "aborted"];
+  var LEARN_OUTCOMES = ["none", "learned", "no-identity", "aborted", "acked-no-answer"];
   var LEARN_STEPS = ["identity", "svids", "modes", "seed", "sweep"];
   var LEARN_POLICIES = ["ignore", "nak", "not-supported"];
   function words(p, at, n) { var o = []; for (var i = 0; i < n; i++) o.push(u32(p, at + 4 * i)); return o; }
   function decodeLearnSummary(p) {
-    emOk(p, "emarker learn"); need(p, 13, "emarker learn");   // 17 bytes from the firmware with the answered tail
-    var ans = decodeAnswered(p, 13);
-    return { orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, outcome: LEARN_OUTCOMES[p[1]] || String(p[1]), svids: p[2], probes: p[3], silent: p[4], truncated: !!(p[5] & 1),
+    emOk(p, "emarker learn"); need(p, 13, "emarker learn");   // 17 bytes with the answered tail, 19 with the read tail
+    var ans = decodeAnswered(p, 13), rd = decodeRead(p, 17);
+    return { read_mode: rd.read_mode, attached: rd.attached, acks: rd.acks, orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, outcome: LEARN_OUTCOMES[p[1]] || String(p[1]), svids: p[2], probes: p[3], silent: p[4], truncated: !!(p[5] & 1),
              logFull: !!(p[5] & 2), entries: p[6], rows: p[7], unmatchedPolicy: LEARN_POLICIES[p[8]] || String(p[8]),
              vid: u16(p, 9), pid: u16(p, 11) };
   }
