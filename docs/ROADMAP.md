@@ -19,6 +19,21 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Verified on hardware
 
+- Reboot bridging works again (**was "Reboot bridging dead since the SRAM canary"**) (2026-11-11, IQ4 self-powered charger test, card 65): after a VBUS cut
+  the K2 came back plain with no Rd, the charger saw no sink and the K2 stayed dark (found with Rp on CC2, VBUS 0).
+  Cause: the `.noinit` SRAM canary of 71bd2345 (ROADMAP "Stale Rd marker") never survives a dark on this board. The
+  retention probe of 29ba54a0 (`bootinfo` `sr=`) read 0 of 32 words after a 1 s PC-cable dark; the backup registers
+  kept the session record (`bp=`). So every comeback judged `/rd.rec` stale. The HID-cable loop hid this, because it
+  powers the K2 through the dark.
+  - Fix (7c035f66): the voucher is `session::backup_alive()`, the checksummed session record in DR22..DR37 that every
+    boot writes. A short dark keeps it; a real power loss zeroes it. The SRAM canary is gone; `ri=` in `bootinfo` shows
+    the decision (kind, pin, voucher, host) for every cold boot.
+  - Validate: a self-powered IQ4 charger test (PLUS boot, no HID loop, no PC) that cuts VBUS comes back by itself and
+    finishes; afterwards `bootinfo` on a comeback boot reads `ri=s2yn` (or `a2yn`). Still to measure: how long the
+    backup registers last in a dark (1 s kept, a minutes-long unplug lost them). A charger whose dark exceeds that limit
+    still breaks the bridge.
+  - Verified: the user's IQ4 self-powered full charger test came back after every VBUS cut and finished (`resumed 2`,
+    `bootinfo` after it `ri=s2yn sr=0 bp=11:1`, 2026-11-11).
 - The K2 attaches in time for the source's offers (late-attach bug, 2026-11-11; NOVOO -> K2 -> Legion side port, which
   failed 3 of 3 before). Cause: an attach latched on a line reading low while the other net sat in the Rd window, the
   unattached scan at only 2 Hz, and the scan not running at all during a long redraw (a ~150 ms Home repaint as VBUS
@@ -65,19 +80,13 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
-- **Reboot bridging dead since the SRAM canary** (2026-11-11, IQ4 self-powered charger test, card 65): after a VBUS cut
-  the K2 came back plain with no Rd, the charger saw no sink and the K2 stayed dark (found with Rp on CC2, VBUS 0).
-  Cause: the `.noinit` SRAM canary of 71bd2345 (ROADMAP "Stale Rd marker") never survives a dark on this board. The
-  retention probe of 29ba54a0 (`bootinfo` `sr=`) read 0 of 32 words after a 1 s PC-cable dark; the backup registers
-  kept the session record (`bp=`). So every comeback judged `/rd.rec` stale. The HID-cable loop hid this, because it
-  powers the K2 through the dark.
-  - Fix (7c035f66): the voucher is `session::backup_alive()`, the checksummed session record in DR22..DR37 that every
-    boot writes. A short dark keeps it; a real power loss zeroes it. The SRAM canary is gone; `ri=` in `bootinfo` shows
-    the decision (kind, pin, voucher, host) for every cold boot.
-  - Validate: a self-powered IQ4 charger test (PLUS boot, no HID loop, no PC) that cuts VBUS comes back by itself and
-    finishes; afterwards `bootinfo` on a comeback boot reads `ri=s2yn` (or `a2yn`). Still to measure: how long the
-    backup registers last in a dark (1 s kept, a minutes-long unplug lost them). A charger whose dark exceeds that limit
-    still breaks the bridge.
+- **SCP 10 V takes the K2 down on the Anker IQ4** (2026-11-11, self-powered full charger test on 1.0.0-524-7c035f66):
+  SCP 5 V passed (`detected`); the SCP 10 V 2.25 A step took the K2 down three times, so the reboot budget skipped the
+  rest of SCP (`rebooted 3x`) and the run finished (`resumed 2`). Probably the IQ4 cutting VBUS on the high-voltage SCP
+  request; unproven, since the ring dies with the K2 when it is self-powered. Parked by the user. Next look: SCP alone
+  with the PC cable also on the HID port, so the K2 stays up and the Black Box keeps the VBUS cut. Same run, open too:
+  QC2 9 V `voltage not reached` and QC3 above 5 V `timeout`, with no IQ4 QC baseline yet
+  (`runs/2026-11-11-iq4-bridge/after-test/`, local).
 
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
@@ -685,6 +694,14 @@ and the hardware check). A row leaves this list when its fix is merged and the h
 
 ## Specified work (not started)
 
+- **HID-cable loop: 5 V lock and the loop probe** (user decision 2026-11-11). Topology: the K2 on a charger, a cable from
+  its PD-bus port back into its own left (HID) port, so the HID port's VBUS follows the PD bus.
+  - Lock: once a loop is seen (aux rail above vSafe5V, or aux and VBUS both up with no USB host configured), every way of
+    raising VBUS refuses (auto-sink, charger test, PD trigger, PPS/AVS, legacy triggers, PD Stress, lab ops), and a
+    contract already above 5 V goes back to 5 V at once. Never run a looped K2 above 5 V on hardware.
+  - Probe: an on-device lab that, at 5 V, reads what the loop cable shows (VBUS and GND drop under a K2 current step,
+    D+/D- continuity through the HID PHY's line state, the CC wire through the HID port's Rd, the e-marker) and shows
+    the raw dump as a QR record for host decoding (`tools/k2_qr.py`), kept on flash for `k2_remote` later.
 - **Ripple viewer, on the K2 and on the web page** (user decision 2026-11-11: both views, fast and slow time scales).
   - Fast scales: the PA1 capture (AC-coupled, 512 samples, sample-time codes 0..7 = 1072..60 kS/s, a 0.48..8.6 ms
     window); a time/div selector maps to the codes; auto V/div; p-p, RMS and the dominant frequency from the `k2::ripple`
