@@ -92,6 +92,7 @@ struct Choice {
     bool hunt = false;         // ma is an OEM-mode probe: send it as asked, above the advertised
                                // PDO/APDO limit (the RDO field width still masks it); pass is the
                                // source's Accept + PS_RDY at the target voltage, not the granted amps
+    bool mismatch = false;     // PD Stress probe: set the RDO's Capability Mismatch bit although the request is fully served
 };
 
 struct Plan {

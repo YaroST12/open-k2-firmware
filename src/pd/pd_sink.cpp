@@ -175,6 +175,7 @@ Plan plan_request(const SourceCaps& caps, Choice c, std::uint32_t cap_mv, bool e
             return p;
     }
     if (p.ma == 0 || p.mv == 0) { p.err = Err::BadChoice; return p; }  // never request 0 mA / 0 mV
+    if (c.mismatch) p.rdo |= 1u << 26;   // Capability Mismatch (kRdoFMismatch): a probe of how the source treats the bit
     p.err = Err::Ok;
     return p;
 }
