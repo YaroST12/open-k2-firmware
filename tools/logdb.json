@@ -564,6 +564,10 @@
   "567": "[RDI] boot look: record %s pin=%u canary=%d host=%d sram=%u/%u\n",
   "568": "[RDI] record %s pin=%u ignored: the backup registers did not survive this boot (a stale record)\n",
   "569": "[LOOP] write failed fs=%s ms=%u\n",
-  "570": "[LOOP] slow write ms=%u\n"
+  "570": "[LOOP] slow write ms=%u\n",
+  "571": "[LOOP] boot: closed the run interrupted in %s\n",
+  "572": "[LOOP] start result=%u\n",
+  "573": "[LOOP] end step=%s status=%u why=%s ms=%u\n",
+  "574": "[LOOP] cancelled step=%s\n"
  }
 }

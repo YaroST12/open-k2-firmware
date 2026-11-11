@@ -170,6 +170,33 @@ int main() {
     ui.tick(t); t += 400; ui.tick(t);
     render(ui, t, "twin_empty");
 
+    // Loop probe: idle (no stored result), the armed START, a step in flight, the CC step, the QR view it ends in, the
+    // table after BACK from it, and a refusal (VBUS above 5.5 V).
+    fixture();
+    g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;
+    ui.goto_page(uint8_t(Page::Tools), t + 100);
+    CHECK_EQ(ui.push_menu(Menu::LoopProbe, t + 100), true);
+    render(ui, t, "loop_idle");
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    render(ui, t, "loop_confirm");
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    CHECK_EQ(ui.loop_probe_busy(), true);
+    for (int i = 0; i < 6; i++) { t += 150; ui.tick(t); }
+    dump("loop_running");
+    for (int i = 0; i < 400 && ui.loop_probe_busy() && ui.loop_probe_page()->footer() != "CC step: VBUS may drop"; i++) { t += 25; ui.tick(t); }
+    ui.tick(t); t += 100; ui.tick(t);
+    dump("loop_cc");
+    for (int i = 0; i < 2000 && ui.loop_probe_busy(); i++) { t += 25; ui.tick(t); }
+    CHECK_EQ(ui.menu() == Menu::Share, true);
+    render(ui, t, "loop_share");
+    ui.on_button(Button::Back, ButtonEvent::Short, t); t += 100;
+    render(ui, t, "loop_done");
+    g_stub.lp_vbus_mv = 9000;
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    render(ui, t, "loop_refused");
+    g_stub.lp_vbus_mv = 5050;
+
     printf("mockups dumped\n");
     return 0;
 }

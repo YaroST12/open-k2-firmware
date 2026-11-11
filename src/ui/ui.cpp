@@ -17,6 +17,7 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/drivers/buttons.hpp"
+#include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/ui/kit.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -67,6 +68,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Autorotate: return pages_.push<AutorotatePage>(ctx_);
     case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
     case Menu::Twin: return pages_.push<TwinPage>(ctx_);
+    case Menu::LoopProbe: return pages_.push<LoopProbePage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -108,6 +110,10 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
     ctx_.cables.load();   // the remembered cable selection, before boot_restore's boot-time arming reads it
     if (charger_test_.boot_restore(cancel_resume)) set_page(Page::ChargerTest, now_ms);   // reboot-resume: "Resume run?" (or by itself)
     else pdstress_.boot_restore(cancel_resume, now_ms);   // a PD Stress journal resumes by itself once VBUS is steady
+    // A loop probe record still marked in progress: the K2 restarted inside its CC step. Close it (CC Interrupted / Rebooted);
+    // Tools -> Loop probe and `k2_remote loop-probe` report it. The probe itself never resumes.
+    if (const auto step = loopprobe::boot_check(loopprobe::hw::store()))
+        K2LOG("[LOOP] boot: closed the run interrupted in %s\n", loopprobe::step_name(*step));
     K2LOG("[ROT] Settings > Autorotate: auto or manual\n");
 }
 
@@ -254,7 +260,7 @@ twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
     c.now = now_ms;
     c.vbus_fast_mv = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
     c.cap_mv = ctx_.cap_mv;
-    c.busy = charger_test_busy() || fc_release_.busy();
+    c.busy = charger_test_busy() || fc_release_.busy() || loop_probe_busy();
     c.inline_link = link_.inline_mode() || ctx_.inline_mode;
     return c;
 }
@@ -265,6 +271,12 @@ void Ui::cancel_runs() {
     cancel_charger_test();
     cancel_twin();
     pdstress_.cancel();
+    if (LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe)) probe->cancel(ctx_.now);
+}
+
+bool Ui::loop_probe_busy() const {
+    const LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe);
+    return probe && probe->running();
 }
 
 // The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool, and neither is the
@@ -280,6 +292,7 @@ BusyWhy Ui::busy_why() const {
     if (charger_test_busy()) return BusyWhy::TestRunning;
     if (twin_live_busy()) return BusyWhy::TwinRun;
     if (pdstress_.active()) return BusyWhy::PdStress;   // PD Stress: running or resuming
+    if (loop_probe_busy()) return BusyWhy::LoopProbe;
     if (fc_release_.busy()) return BusyWhy::FcRelease;
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return BusyWhy::QcTrigger;
     if (pd::user_hold(sink) && !fusb302::rd_for_run_on() && !fusb302::reread_own_hold() && !fusb302::self_powered() && !power_source::bus_powered())
@@ -304,6 +317,7 @@ const char *Ui::busy_reason() const {
     case BusyWhy::Identify: return "Identify: wait";
     case BusyWhy::TwinRun: return "Twin proof: stop it";
     case BusyWhy::PdStress: return pdstress_.busy_reason();   // "PD Stress: stop it" / "PD Stress: resuming"
+    case BusyWhy::LoopProbe: return "Loop probe: stop it";
     case BusyWhy::None: break;
     }
     return nullptr;
@@ -369,6 +383,7 @@ Ui::Session Ui::session() {
 const char *Ui::foreign_busy() const {
     const auto fs = fctrig::status();
     if (charger_test_busy()) return "Test running: stop it";
+    if (loop_probe_busy()) return "Loop probe: stop it";
     if (fc_release_.busy()) return "5V release: wait";
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return "QC trigger: stop it";
     if (ctx_.em_scanning) return "E-marker scan: wait";
@@ -1054,6 +1069,7 @@ void Ui::tick(uint32_t now_ms) {
     ctx_.vbus_fast_mv = power::vbus_fast_mv().value_or(ctx_.pm.vbus_mv);
     const auto previous_release = fc_release_.state();
     if (TriggerPage *trigger = find<TriggerPage>(Menu::Trigger)) trigger->poll();   // no page, no session: leave() ended it
+    if (LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe)) probe->poll(now_ms);   // the same: leaving the page ends a run
     const auto fs = fctrig::status().state;
     const auto &sk = fusb302::sink_status();
     const bool released = fs == fc::State::Idle && !fctrig::scan_running() &&

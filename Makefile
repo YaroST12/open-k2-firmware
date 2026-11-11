@@ -340,6 +340,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/qr.cpp $(SRC_DIR)/ui/qrview.cpp $(SRC_DIR)/core/b
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_twin.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/loop_probe.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_loop_probe.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP

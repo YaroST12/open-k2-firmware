@@ -234,6 +234,12 @@ struct StubState {
     std::vector<uint8_t> ps_file;
     bool ps_file_present = false, ps_write_fails = false;
     int ps_writes = 0, ps_removes = 0;
+    // The loop probe: what its Env reads (loopprobe::hw::env()) and its result file (loopprobe::hw::store()), kept in RAM.
+    bool lp_pm_ok = true;
+    int32_t lp_vbus_mv = 5050, lp_aux_mv = 5010;
+    std::vector<uint8_t> lp_file;
+    bool lp_file_present = false;
+    int lp_writes = 0, lp_cc_holds = 0, lp_spins = 0;
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store

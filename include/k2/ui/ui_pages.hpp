@@ -905,7 +905,8 @@ public:
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
     static Menu tool_menu(int i) {
         constexpr Menu kMenus[kToolCount] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
-                                             Menu::Connection, Menu::BlackBox, Menu::Cards, Menu::Diag, Menu::Twin};
+                                             Menu::Connection, Menu::BlackBox, Menu::Cards, Menu::Diag, Menu::Twin,
+                                             Menu::LoopProbe};
         return kMenus[i < 0 || i >= kToolCount ? 0 : i];
     }
     static const char *tool_name(int i);

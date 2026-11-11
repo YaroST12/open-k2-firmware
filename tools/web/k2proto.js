@@ -42,7 +42,7 @@ var K2Proto = (function () {
   var ID_STEPS = ["identity", "svids", "modes", "sink-cap", "status", "revision", "done"];
   // Rotation pages 0..5; while a submenu is open GET_STATE.page is 6 + index into MENUS (include/k2/ui/ui_types.hpp).
   var PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings"];
-  var MENUS = ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin"];
+  var MENUS = ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe"];
   var SETTINGS_MENUS = ["usblink", "autorotate"];
   function pageName(i) {
     if (i < PAGES.length) return PAGES[i];
@@ -321,7 +321,7 @@ var K2Proto = (function () {
   var SESSION_LEN = 31;
   var SESSION_PROTO_KINDS = ["none", "pd-fixed", "pd-epr", "pps", "avs", "qc2", "qc3", "fcp", "scp", "ufcs", "svooc",
                              "typec", "dcp", "unknown", "detecting"];
-  var SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress"];
+  var SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress", "loop-probe"];
   var SESSION_TOPOLOGY = ["unknown", "no-source", "cable-single-cc", "direct-receptacle"];
   var SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"];
   var SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"];
