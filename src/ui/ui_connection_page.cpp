@@ -315,6 +315,7 @@ void conn::sense_passive(Facts &f, const UiContext &ctx, const pd::Link &link, c
     f.cross = link.cc_cross();   // crossed CC through the K2: the same single verdict for the tab, the bar, Home and the remote
     f.charger = link.attached();
     f.cable = fusb302::emarker().valid;
+    f.cable_fact = cablefact::classify(f.cable, fusb302::last_cable_read(), fusb302::pull_down());   // a silent chip is not "no e-marker"
     f.inline_sink = link.inline_mode();
     // A decoded Request or Sink_Capabilities was received from a sink (the engine only sees received
     // frames, so the K2's own trigger requests never set these): the sink stays seen after a power-role
@@ -1105,6 +1106,7 @@ void ConnectionPage::update(uint32_t now_ms) {
               | uint32_t(tab_) << 8 | uint32_t(link.cable_stale()) << 12 | fc_ << 16
               | uint32_t(facts_.topo) << 24 | uint32_t(facts_.wait) << 26 | uint32_t(fusb302::self_powered()) << 28);
     c = fnv(c, uint32_t(verdict_) | uint32_t(none_why_) << 4);   // the no-PD gate's verdict settles at attach+1.5 s
+    c = fnv(c, uint32_t(facts_.cable_fact));                     // the empty Cable tab's words: chip silent / no chip
     c = fnv(c, fusb302::session());
     c = fnv(c, uint32_t(live_caps.valid) | uint32_t(live_caps.num_pdos) << 8 | uint32_t(live_caps.epr) << 16
               | uint32_t(live_caps.spec_rev) << 17 | uint32_t(live_caps.epr_partial) << 19);
@@ -1157,6 +1159,7 @@ void ConnectionPage::update(uint32_t now_ms) {
                                      | uint32_t(facts_.wait) << 10 | uint32_t(facts_.open_cc_mv) << 12
                                      | uint32_t(facts_.wake_port_off) << 24
                                      | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
+        h = fnv(h, uint32_t(facts_.cable_fact));
         if (sig_valid_ && h == sig_) return;
         sig_ = h;
         sig_valid_ = true;

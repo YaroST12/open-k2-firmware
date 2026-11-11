@@ -18,6 +18,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/pd/cable_fact.hpp"
 #include "k2/pd/cc_crossed.hpp"
 #include "k2/pd/pd_rdseek.hpp"
 #include "k2/pd/pd_survey.hpp"
@@ -42,6 +43,9 @@ struct Facts {
     bool sink_seen = false;     // a sink's Request / Sink_Capabilities was decoded on CC (roles follow a power-role swap)
     bool charger = false;       // a source is attached or its capabilities were seen
     bool cable = false;         // e-marker data is held (read by VCONN or sniffed from the charger's own query)
+    // What the last read of a cable that gave no identity says (k2/pd/cable_fact.hpp): a chip is there but silent, no chip,
+    // or nothing can be said. Only the empty Cable tab reads it.
+    cablefact::Fact cable_fact = cablefact::Fact::NotRead;
     Topology topo = Topology::Unknown;
     raguard::WaitKind wait = raguard::WaitKind::Unknown;   // the one waiting classifier (pd::Link::wait_kind, the Rp trace)
     raguard::CrossKind cross = raguard::CrossKind::None;   // crossed CC through the K2 (pd::Link::cc_cross)
@@ -114,6 +118,12 @@ constexpr Empty empty_state(Tab t, const Facts &f) {
         return {"NO DEVICE", "Plug a device into either port."};
     case Tab::Cable:
         if (f.inline_sink) return {"CABLE NOT READ", "A device may be in use: OK -> Read cable asks first."};
+        // A silent chip is not "no e-marker": its pull-down is on the cable, it only did not answer alone (it answers once a
+        // source powers it). No pull-down at all means no chip. Both come from the Ra probe of an alone read (pull_down()).
+        if (f.cable_fact == cablefact::Fact::ChipSilent)
+            return {"CHIP, NO ANSWER", "A chip is there but did not answer alone. Try with the charger attached."};
+        if (f.cable_fact == cablefact::Fact::NoChip)
+            return {"NO CHIP FOUND", "Nothing on the cable pulls VCONN down: a plain cable with no e-marker."};
         if (direct) return {"NO CABLE", "Charger is plugged straight in (no cable)."};
         if (via_cable) return {"CABLE NOT READ", "OK -> Read cable (unplug the charger first)."};
         return {"NO CABLE READ", "Plug a cable into either port, then OK -> Read cable."};
@@ -233,7 +243,11 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
         else if (s.f.wait == raguard::WaitKind::DualRolePort) out.put("Dual-role port");
         else out.put("No charger");
         break;
-    case Tab::Cable:  out.put(s.f.cable ? "Cable read" : "No cable"); break;
+    case Tab::Cable:
+        out.put(s.f.cable ? "Cable read"
+                : s.f.cable_fact == cablefact::Fact::ChipSilent ? "Chip silent"
+                : s.f.cable_fact == cablefact::Fact::NoChip ? "No chip found" : "No cable");
+        break;
     case Tab::Sink:   out.put(s.f.inline_sink ? "Device inline" : s.f.sink_seen ? "Sink seen on CC" : "No device"); break;
     }
     const char *w = topology_word(s.f.topo);

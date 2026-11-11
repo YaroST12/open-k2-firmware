@@ -73,6 +73,27 @@ int main() {
     static const char* const tabs[] = {"pd_source", "pd_cable", "pd_sink"};
     for (int i = 0; i < 3; i++) { render(ui, t, tabs[i]); ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
 
+    // The Cable tab of a cable that gave no identity, alone: a chip's pull-down on a CC line ("chip silent") versus none
+    // ("no chip"), and the older / unprobed reading. Charger and contract are gone, as they are with the cable alone.
+    {
+        static StubState saved;
+        saved = g_stub;
+        g_stub = {};   // a bare K2: no charger, no contract, no meter (a fresh Ui: the main one latched "inline" from the contract above)
+        g_stub.cable_read = {emk_attached::Mode::Alone, 0};
+        static Ui bare;
+        bare.init(0);
+        bare.configure_rotation(false, 3);
+        uint32_t tb = 1000;
+        static const struct { raclass::PullDown p; const char* name; } kScenes[] = {
+            {raclass::PullDown::Cc2, "pd_cable_chip_silent"}, {raclass::PullDown::None, "pd_cable_no_chip"},
+            {raclass::PullDown::NotProbed, "pd_cable_not_probed"}};
+        for (const auto& s : kScenes) {
+            g_stub.pull_down = s.p;
+            bare.goto_page(static_cast<uint8_t>(kConnTabAlias + 1), tb + 100); render(bare, tb, s.name);
+        }
+        g_stub = saved;
+    }
+
     // Diag / Lines / Tools / Settings
     ui.goto_page(kDiagPage, t + 100); render(ui, t, "diag");
     ui.goto_page(uint8_t(Page::Lines), t + 100); render(ui, t, "lines");

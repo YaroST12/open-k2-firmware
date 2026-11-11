@@ -200,6 +200,57 @@ static void test_source_asleep_hint_on_the_tab_and_the_bar() {
     CHECK_STR(empty_state(Tab::Sink, f).title, "NO DEVICE");
 }
 
+// A cable that gave no identity, read alone: a chip's pull-down means a chip that is there but silent (not "no e-marker");
+// no pull-down means no chip; an unclear / unprobed read says what it said before.
+static void test_silent_cable_chip_words() {
+    using cablefact::Fact;
+    const auto cable_f = [](Fact x, Topology t = Topology::Unknown) {
+        Facts f = facts(false, false, false, t);
+        f.cable_fact = x;
+        return f;
+    };
+    const Empty silent = empty_state(Tab::Cable, cable_f(Fact::ChipSilent));
+    CHECK_STR(silent.title, "CHIP, NO ANSWER");
+    CHECK_EQ(std::string_view(silent.hint).find("charger attached") != std::string_view::npos, 1);
+    const Empty none = empty_state(Tab::Cable, cable_f(Fact::NoChip));
+    CHECK_STR(none.title, "NO CHIP FOUND");
+    CHECK_EQ(std::string_view(none.hint).find("e-marker") != std::string_view::npos, 1);
+    // NotRead (and Read, which the tab never shows as empty) keep the earlier words, topology included.
+    CHECK_STR(empty_state(Tab::Cable, cable_f(Fact::NotRead)).title, "NO CABLE READ");
+    CHECK_STR(empty_state(Tab::Cable, cable_f(Fact::NotRead, Topology::CableSingleCc)).title, "CABLE NOT READ");
+    // A device in use outranks it (the read asks first); the other tabs never say it.
+    Facts in = cable_f(Fact::ChipSilent);
+    in.inline_sink = true;
+    CHECK_STR(empty_state(Tab::Cable, in).title, "CABLE NOT READ");
+    CHECK_STR(empty_state(Tab::Source, cable_f(Fact::ChipSilent)).title, "NO CHARGER");
+    CHECK_STR(empty_state(Tab::Sink, cable_f(Fact::NoChip)).title, "NO DEVICE");
+    // Both hints wrap into the empty body's four lines of (224 - 16) / 8 = 26 cells (font 16), whole words, and the
+    // titles fit the 17-cell title font.
+    std::array<std::string_view, 4> l{};
+    for (const Empty *e : {&silent, &none}) {
+        const int n = wrap(e->hint, 26, l);
+        CHECK(n >= 1 && n <= 4);
+        std::size_t total = 0;
+        for (int i = 0; i < n; i++) total += l[std::size_t(i)].size();
+        CHECK(total + std::size_t(n - 1) >= std::string_view(e->hint).size());   // nothing cut off by the line cap
+        CHECK(std::string_view(e->title).size() <= 17);
+    }
+    // The status bar: the fact in place of "No cable", the topology word after it, always within the 27-cell bar.
+    StatusIn sin;
+    sin.tab = Tab::Cable;
+    StrBuf<40> s;
+    sin.f = cable_f(Fact::ChipSilent);
+    status_text(sin, s); CHECK_STR(s.c_str(), "Chip silent");
+    sin.f = cable_f(Fact::ChipSilent, Topology::CableSingleCc);
+    status_text(sin, s); CHECK_STR(s.c_str(), "Chip silent, via cable");
+    sin.f = cable_f(Fact::NoChip, Topology::DirectReceptacle);
+    status_text(sin, s); CHECK_STR(s.c_str(), "No chip found, top plug");
+    sin.f = cable_f(Fact::NotRead);
+    status_text(sin, s); CHECK_STR(s.c_str(), "No cable");
+    sin.f = cable_f(Fact::Read); sin.f.cable = true;
+    status_text(sin, s); CHECK_STR(s.c_str(), "Cable read");
+}
+
 static void test_wrap() {
     std::array<std::string_view, 3> l{};
     CHECK_EQ(wrap("short", 27, l), 1);
@@ -620,6 +671,7 @@ int main() {
     test_the_three_readers_agree();
     test_crossed_cc_reads_on_the_tab_and_the_bar();
     test_source_asleep_hint_on_the_tab_and_the_bar();
+    test_silent_cable_chip_words();
     test_wrap();
     test_status_text();
     test_status_survey();

@@ -13,6 +13,7 @@
 #include "k2/core/rescan_bridge.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/boot_ra.hpp"
+#include "k2/pd/cable_fact.hpp"
 #include "k2/chargertest/charger_journal_hw.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include "k2/pd/pd_ccmode.hpp"
@@ -770,8 +771,12 @@ bool ChargerTestSession::present_rd(uint32_t now) {
     else if (pd::start_scan_wanted(ctx_.vbus_fast_mv, rp)) {
         const bool found = fusb302::read_emarker(false, pd::EmarkerMode::Vconn);
         const auto& cable = fusb302::physical_cable();
+        // The log says what the cable turned out to be, not only whether it was read: a chip that stayed silent (pull-down
+        // seen, no answer) is not "no e-marker". Log only: the limits still treat an unread cable as unread (cable_observed).
         K2LOG("[TEST] START e-marker scan (VCONN, VBUS %d mV): %s, cable %s %u mV %u mA\n", int(ctx_.vbus_fast_mv),
-              found ? "found" : "no answer", cable.observed ? "read" : "not read", unsigned(cable.max_mv), unsigned(cable.max_ma));
+              found ? "found" : "no answer",
+              cablefact::name(cablefact::classify(cable.observed, fusb302::last_cable_read(), fusb302::pull_down())),
+              unsigned(cable.max_mv), unsigned(cable.max_ma));
     } else K2LOG("[TEST] START: no e-marker scan (VBUS %d mV, Rp on the wire %d), cable not read\n", int(ctx_.vbus_fast_mv), int(rp));
     if (!fusb302::rd_for_run(true)) { K2LOG("[TEST] START: Rd refused (sink inline)\n"); return false; }
     wait_ = pd::VbusWait();
