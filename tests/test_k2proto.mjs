@@ -1463,7 +1463,9 @@ test("http: VBUS-changing commands carry confirm=1, status reads do not", async 
   await link.call(P.CMD.FC, [1]);
   await link.call(P.CMD.PING);
   await link.call(P.CMD.PD_ATTACH, [0x88, 0x13]);   // takes the Rd and asks for a contract: same gate as PD_REQUEST
-  assert.deepEqual(calls.map((c) => /&confirm=1$/.test(c.url)), [true, true, true, false, true, true, true, false, true]);
+  await link.call(P.CMD.ACTION, [P.ACTIONS["fc-scan"], 1]);   // the scan walks VBUS up: the same gate
+  await link.call(P.CMD.ACTION, [P.ACTIONS["pd-rescan"]]);    // an action that never raises VBUS: no flag
+  assert.deepEqual(calls.map((c) => /&confirm=1$/.test(c.url)), [true, true, true, false, true, true, true, false, true, true, false]);
   assert.ok(k2);
 });
 

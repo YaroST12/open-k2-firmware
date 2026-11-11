@@ -1647,10 +1647,12 @@ var K2Proto = (function () {
   // another site cannot set it) and confirm=1 on the calls that change VBUS; the page's own dialogs and
   // K2Remote's checks already gate those, the flag only says the call was deliberate.
   var FC_VBUS_OPS = [1, 2, 3];                           // reset, scan, trigger (0 = status is a read)
+  var ACTION_VBUS_IDS = [ACTIONS["fc-scan"]];            // actions that raise the output (remote_proto.hpp action_needs_confirm)
 
   function frameNeedsConfirm(f) {
     var cmd = f[2];
     if (cmd === CMD.PD_REQUEST || cmd === CMD.PD_RESET || cmd === CMD.PD_RELEASE || cmd === CMD.PD_ATTACH) return true;
+    if (cmd === CMD.ACTION) return f[4] > 0 && ACTION_VBUS_IDS.indexOf(f[5]) >= 0;
     return cmd === CMD.FC && f[4] > 0 && FC_VBUS_OPS.indexOf(f[5]) >= 0;
   }
 

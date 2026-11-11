@@ -596,6 +596,10 @@ Reply route(const RequestLine& rl, B& b, std::span<char> out) {
                 if (!pr.payload.empty() && (pr.payload[0] == remote::kFcScan || pr.payload[0] == remote::kFcTrigger || pr.payload[0] == remote::kFcReset) && !confirmed(rl))
                     return error(out, 403, "confirm required: add confirm=1");
                 break;
+            case Cmd::Action:   // the actions that raise the output (FcScan) need the deliberate-call parameter too
+                if (!pr.payload.empty() && remote::action_needs_confirm(pr.payload[0]) && !confirmed(rl))
+                    return error(out, 403, "confirm required: add confirm=1");
+                break;
             default: break;
         }
         std::array<std::uint8_t, remote::kFrameSize> rsp{};

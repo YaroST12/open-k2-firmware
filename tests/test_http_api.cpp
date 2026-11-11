@@ -220,6 +220,18 @@ static void test_frame_bridge() {
     CHECK_EQ(r.r.status, 403); CHECK_EQ(f.fc_calls, 0);
     r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, 0x32, 1, 1, 0}) + " HTTP/1.1" X).c_str());
     CHECK_EQ(r.r.status, 200);
+    // ACTION FcScan walks the output up to 9 V: a raw frame needs confirm=1 for it as for fc scan (RED before the
+    // fix: the frame, payload confirm byte set, reached the backend with no deliberate-call parameter).
+    const std::string act_scan = frame_hex({0xA5, 0x4B, 0x06, 0x04, 0x02, 4, 1});
+    f.calls = 0; f.last_action = 0xFF;
+    r = run(f, ("POST /api/frame?hex=" + act_scan + " HTTP/1.1" X).c_str());
+    CHECK_EQ(r.r.status, 403); CHECK_EQ(f.calls, 0);
+    r = run(f, ("POST /api/frame?hex=" + act_scan + "&confirm=1 HTTP/1.1" X).c_str());
+    CHECK_EQ(r.r.status, 200); CHECK_EQ(f.last_action, 4);
+    // an action that never raises VBUS needs no confirm=1 (PdRescan)
+    f.calls = 0;
+    r = run(f, ("POST /api/frame?hex=" + frame_hex({0xA5, 0x4B, 0x06, 0x05, 0x01, 1}) + " HTTP/1.1" X).c_str());
+    CHECK_EQ(r.r.status, 200); CHECK_EQ(f.last_action, 1);
     // commands that cannot work or must not run over the network
     for (uint8_t cmd : {0x0A, 0x30, 0x31, 0x08, 0x33, 0x49}) {   // screenshot, DFU, fault, reboot, factory wipe, lab hand-back
         f.calls = 0;
