@@ -299,6 +299,7 @@ inline StartResult Engine::start(const Options& o, std::uint32_t now, const Resu
     establishing_ = s.state != pd::SinkState::Ready;
     epr_ = s.epr_mode;
     phase_ = Phase::Pace;
+    if (resume && resume->losses >= kMaxRunLosses) { finish(Stop::TooManyLosses, now, true); return StartResult::Ok; }
     if (resume && cur_ >= n_order_) { finish(Stop::Done, now, true); return StartResult::Ok; }
     if (!begin_seq(now)) finish(Stop::Done, now, true);
     return StartResult::Ok;

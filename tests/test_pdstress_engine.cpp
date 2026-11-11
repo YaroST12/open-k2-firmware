@@ -798,6 +798,31 @@ void resume_gives_up_a_sequence() {
     CHECK_COND(r.sim.starts[0] == Seq::Reannounce);
 }
 
+void resume_after_too_many_losses_ends_the_run() {
+    // The run's total reboot budget is spent: the engine reports it and sends nothing.
+    Rig r;
+    r.o.mask = seq_bit(Seq::Ladder) | seq_bit(Seq::Reannounce);
+    r.o.cycles_pct = 20;
+    Resume rs;
+    rs.next = 0;
+    rs.losses = kMaxRunLosses;
+    CHECK_EQ(int(r.start(&rs)), int(StartResult::Ok));
+    r.run(30000);   // the final release to 5 V is confirmed first
+    CHECK_COND(r.eng.finished());
+    CHECK_EQ(int(r.eng.stop()), int(Stop::TooManyLosses));
+    CHECK_EQ(r.sim.starts.size(), 0);
+    CHECK_EQ(r.eng.transitions(), 0);
+    // One reboot fewer still runs.
+    Rig q;
+    q.o = r.o;
+    Resume ok;
+    ok.losses = kMaxRunLosses - 1;
+    CHECK_EQ(int(q.start(&ok)), int(StartResult::Ok));
+    q.run(300000);
+    CHECK_COND(q.eng.finished());
+    CHECK_EQ(int(q.eng.stop()), int(Stop::Done));
+}
+
 void score_of_a_noisy_run() {
     // Rejects and hard resets give the run its score; the per-sequence record carries the raw counters.
     Rig r;
@@ -860,6 +885,7 @@ int main() {
     epr_without_entry_ends_the_sequence();
     resume_skips_finished_sequences();
     resume_gives_up_a_sequence();
+    resume_after_too_many_losses_ends_the_run();
     score_of_a_noisy_run();
     ready_pace_survives_a_busy_sink();
     return test_report("test_pdstress_engine");
