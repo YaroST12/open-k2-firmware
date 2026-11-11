@@ -517,7 +517,20 @@ static void test_floating_lines_are_not_a_protocol() {
     CHECK_EQ(int(classify(qc, 3300, 600, 9000) != Protocol::UsbData), 1);
 }
 
+// The label the remote and the shell print (what Home shows): a live proven VOOC session names the source SVOOC whatever
+// the passive classifier said (USB DATA while the lines float, PD under a contract); with no session the verdict stands.
+static void test_report_label_follows_a_live_vooc_session() {
+    for (const Protocol p : {Protocol::UsbData, Protocol::Pd, Protocol::PdLikely, Protocol::Pending, Protocol::NoQuick}) {
+        CHECK_EQ(int(report_label(p, true)), int(Protocol::Svooc));
+        CHECK_EQ(int(report_label(p, false)), int(p));
+    }
+    CHECK_STR(name(report_label(Protocol::UsbData, true)), "SVOOC");
+    CHECK_STR(name(report_label(Protocol::UsbData, false)), "USB DATA");
+    CHECK_EQ(int(report_label(Protocol::NoInput, true)), int(Protocol::NoInput));   // no VBUS: nothing is live
+}
+
 int main() {
+    test_report_label_follows_a_live_vooc_session();
     test_ring();
     test_bucket();
     test_five_volt_band();

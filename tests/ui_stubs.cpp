@@ -552,6 +552,7 @@ std::optional<Reading> read() { return g_stub.adc; }
 
 namespace fastcharge {
 Protocol read() { return g_stub.fc; }
+Protocol label() { return report_label(g_stub.fc, g_stub.vooc.seen); }
 vooc::Live vooc_live() { return g_stub.vooc; }
 }  // namespace fastcharge
 

@@ -105,6 +105,13 @@ bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv);
 // that is not the K2's own bias pair.
 bool update_handshake_latch(bool latched, const Ring& ring, int dp_mv, int dm_mv);
 
+// The verdict as the remote and the shell report it, so they say what Home says: a live, proven VOOC session names the
+// source SVOOC whatever the passive classifier read (USB DATA while the lines float, PD next to a contract). Without VBUS
+// nothing is live.
+constexpr Protocol report_label(Protocol verdict, bool vooc_live) {
+    return vooc_live && verdict != Protocol::NoInput ? Protocol::Svooc : verdict;
+}
+
 // Display string of a verdict (including "NO INPUT" and "..."); "?" if unknown.
 const char* name(Protocol p);
 

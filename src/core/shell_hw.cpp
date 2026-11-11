@@ -842,7 +842,7 @@ struct Hw final : shell::Backend {
         } else {
             add(" dp=n/a dm=n/a cc1=n/a cc2=n/a");
         }
-        add(" fc=%s", fastcharge::name(fastcharge::read()));
+        add(" fc=%s", fastcharge::name(fastcharge::label()));   // SVOOC while a proven session is live, like Home
         const fctrig::Status t = fctrig::status();
         add(" trig=%s", fc::name(t.state));
         const pd::SourceCaps& c = fusb302::caps();

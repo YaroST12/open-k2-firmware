@@ -363,7 +363,7 @@ constexpr uint32_t kStackLowBytes = 1024;
                          mcu < 0 ? "-" : "", (mcu < 0 ? -mcu : mcu) / 10, (mcu < 0 ? -mcu : mcu) % 10,
                          a->mcu.valid ? " uncal" : " INVALID",
                          int(a->vref_raw), int(a->vdd_mv));
-        K2LOG("[FC] %s\n", k2::fastcharge::name(k2::fastcharge::read()));
+        K2LOG("[FC] %s\n", k2::fastcharge::name(k2::fastcharge::label()));
     }
 }
 

@@ -143,6 +143,8 @@ void poll() {
 
 Protocol read() { return g_verdict; }
 
+Protocol label() { return report_label(g_verdict, dpsniff::monitor_live().seen); }
+
 vooc::Live vooc_live() { return dpsniff::monitor_live(); }
 
 }  // namespace k2::fastcharge

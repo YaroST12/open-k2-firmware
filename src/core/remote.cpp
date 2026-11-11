@@ -319,7 +319,7 @@ remote::StateInfo Remote::state() {
         s.mcu_temp_deci_c = static_cast<int16_t>(a->mcu.deci_c);
         s.adc_flags = 1u | (a->temp.valid ? 2u : 0u) | (a->temp.calibrated ? 4u : 0u) | (a->mcu.valid ? 8u : 0u);
     }
-    s.fc = static_cast<uint8_t>(fastcharge::read());
+    s.fc = static_cast<uint8_t>(fastcharge::label());   // SVOOC while a proven session is live, like Home
     const pd::Link &link = ui_.link();
     const uint32_t now = systick::millis();
     s.link_flags = (link.charger_stale() ? remote::kLinkStale : 0) | (link.waiting() || link.charger_waiting() ? remote::kLinkWaiting : 0) |

@@ -99,6 +99,16 @@ class SessionDecode(unittest.TestCase):
         p[22:26] = bytes([0, 0xFF, 0xFF, 0xFF])  # base page: empty stack
         self.assertEqual(kr.decode_session(bytes(p))["ui"]["stack"], [])
 
+    def test_fc_label_names_a_live_vooc_session(self):
+        # The firmware sends fastcharge::label(): Protocol::Svooc (18, fastcharge_classify.hpp) while a proven VOOC session
+        # is live, where the passive verdict alone says USB DATA (22) or PD (21). The remote prints what Home shows.
+        for raw, name in ((18, "SVOOC"), (22, "USB DATA"), (21, "PD")):
+            p = bytearray(BASE)
+            p[36] = raw
+            self.assertEqual(kr.decode_state(bytes(p))["fc"], name)
+        self.assertEqual(kr.FC_NAMES[18], "SVOOC")
+        self.assertEqual(kr.SESSION_PROTO_KINDS[10], "svooc")      # the session proto block says it too (Home's source)
+
     def test_every_enum_has_a_name(self):
         # The widest value the firmware sends for each enum (include/k2/ui/ui_types.hpp and friends).
         self.assertEqual(len(kr.SESSION_PROTO_KINDS), 15)
