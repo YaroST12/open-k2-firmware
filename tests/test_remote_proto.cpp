@@ -1646,7 +1646,7 @@ static void test_charger_test_wire() {
         CHECK_EQ(r[19], i); CHECK_EQ(r[20], 1);
         CHECK_EQ(r[48], static_cast<uint8_t>(steps[i].algorithm));
     }
-    for (auto p : {std::initializer_list<uint8_t>{0}, {1}, {3}, {3, 0, 4, 3, 2, 1, 8, 7, 6, 5},
+    for (auto p : {std::initializer_list<uint8_t>{0}, {1}, {4}, {3, 0, 4, 3, 2, 1, 8, 7, 6, 5},
                    {2, 4, 4, 3, 2, 1, 8, 7, 6, 5}}) {
         CHECK_EQ(run(f, request(0x0B, 18, p), r), 1);
         check_header(r, 0x0B, 18, Status::BadArg, 0);
@@ -1676,6 +1676,50 @@ static void test_charger_test_wire() {
     CHECK_EQ(r[57], static_cast<uint8_t>(ct::Verdict::Skip));
     CHECK_EQ(r[58], static_cast<uint8_t>(ct::Reason::RevisionUntestable));
     CHECK_EQ(f.fc_calls + f.releases + f.resets + f.store_calls + f.reboots + f.shots, 0);
+}
+
+// Shell parity batch 1 (red): the charger-test view, `0x0B req [3]`, one read-only reply of the wizard / run chrome the
+// screens show. The schema-2 reply is full (42 + 16 = 58), so this is a request form of its own; an old firmware answers
+// BadArg to it and the host tool reads that as "no view here".
+static void test_charger_test_view_wire() {
+    Fake f; Frame r;
+    f.view.stage = 4; f.view.cursor = 2; f.view.rows = 1;
+    f.view.flags = kCtViewOnScreen | kCtViewConfirming | kCtViewWaitRetry | kCtViewArmedIsPick | kCtViewRmdoValid;
+    f.view.confirm_left_ms = 0x0FA0; f.view.wait_elapsed_ms = 0x1234; f.view.wait_total_ms = 10000; f.view.run_elapsed_s = 0x0102;
+    f.view.card_no = 0x0304; f.view.delta_n = 5; f.view.delta_runs = 0x0607;
+    f.view.runnable = 9; f.view.skipped = 3; f.view.refusal = 7; f.view.refusal_mv = 0x2710;
+    f.view.pps_points = 0x0102; f.view.avs_points = 0x0304; f.view.topology = 2; f.view.run_guard = 1; f.view.rmdo = 0x32;
+    const std::string_view text = "Press again to start";
+    std::copy(text.begin(), text.end(), f.view.message.begin()); f.view.message_len = uint8_t(text.size());
+
+    CHECK_EQ(run(f, request(0x0B, 31, {3}), r), 1);
+    check_header(r, 0x0B, 31, Status::Ok, uint8_t(30 + text.size()));
+    check_bytes(r, 6, {4, 2, 1,                     // stage cursor rows
+                       0x03, 0x38,                  // flags: on_screen confirming wait_retry armed_is_pick rmdo_valid
+                       0xA0, 0x0F, 0x34, 0x12, 0x10, 0x27, 0x02, 0x01,   // confirm_left wait_elapsed wait_total run_elapsed
+                       0x04, 0x03, 5, 0x07, 0x06,   // card_no delta_n delta_runs
+                       9, 3, 7, 0x10, 0x27,         // runnable skipped refusal refusal_mv
+                       0x02, 0x01, 0x04, 0x03,      // pps_points avs_points
+                       2, 1, 0x32});                // topology run_guard rmdo
+    for (size_t i = 0; i < text.size(); ++i) CHECK_EQ(r[36 + i], uint8_t(text[i]));   // the footer words, no padding byte
+
+    // A full 27-cell footer fills the frame to 57 of 58 payload bytes; an empty message is the 30-byte block.
+    f.view.message.fill('x'); f.view.message_len = 27;
+    CHECK_EQ(run(f, request(0x0B, 32, {3}), r), 1);
+    check_header(r, 0x0B, 32, Status::Ok, 57);
+    f.view.message_len = 0;
+    CHECK_EQ(run(f, request(0x0B, 33, {3}), r), 1);
+    check_header(r, 0x0B, 33, Status::Ok, 30);
+    std::array<uint8_t, 20> small{};
+    CHECK_EQ(encode_charger_test_view(small, f.view), 0);   // never more than the buffer holds: nothing is half-written
+
+    // The other request forms of 0x0B keep their answers: the view form is a one-byte payload 3 and nothing else.
+    CHECK_EQ(run(f, request(0x0B, 34, {3, 0, 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
+    check_header(r, 0x0B, 34, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x0B, 35, {3, 0}), r), 1);
+    check_header(r, 0x0B, 35, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x0B, 36, {}), r), 1);
+    check_header(r, 0x0B, 36, Status::Ok, 15);
 }
 
 // QA 2026-11-10 row B item 2 (red): a deep-sweep row goes over the wire with the sweep flag set (row flags bit 5)
@@ -1935,7 +1979,7 @@ int main() {
     test_charger_cable();
     test_charger_units();
     test_charger_avs_sweep();
-    test_charger_test_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();
+    test_charger_test_wire(); test_charger_test_view_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();
     test_active_pd_commands();

@@ -1340,6 +1340,67 @@ unsigned ChargerTestSession::avs_sweep_points() const {
     return ctsweep::plan_total_capped(fusb302::caps(), ctx_.cap_mv, fusb302::physical_cable().max_mv, ctsweep::Kind::Avs);
 }
 
+uint32_t ChargerTestSession::wait_total_ms() {
+    return fusb302::caps().active_cc != 0 ? pd::kStartVbusAttachedWaitMs : pd::kStartVbusWaitMs;
+}
+
+void ChargerTestSession::update_summary(const ct::Input& in) {
+    if (stage_ <= Stage::Review || stage_ == Stage::Custom) summary_ = ct::Runner::preview(fusb302::caps(), options_, in);
+}
+
+// The session half of the remote view; the page adds rows and the footer's words below. Every field is a read of RAM that
+// the screens already keep, except the preview, which is refreshed here the same way the page tick does.
+ChargerTestSession::View ChargerTestSession::view() {
+    View v;
+    const uint32_t now = ctx_.now;
+    update_summary(input(now));
+    v.stage = static_cast<uint8_t>(stage_);
+    v.cursor = static_cast<uint8_t>(selection_ < 0 ? 0 : selection_ > 255 ? 255 : selection_);
+    v.confirming = confirming_ && static_cast<int32_t>(now - confirm_until_) < 0;
+    v.confirm_left_ms = v.confirming ? confirm_until_ - now : 0;
+    v.confirm_reattach = v.confirming && confirm_reattach_;
+    v.self_supplied = self_supplied();
+    v.resume_pending = resume_pending_;
+    v.auto_resume = auto_resume_;
+    v.gate_ready = gate_.ready(now);
+    v.resume_held = resume_hold_;
+    v.behind_cable = resume_refused_;
+    v.resume_rd = resume_rd_;
+    if (stage_ == Stage::Waiting) {
+        v.wait_elapsed_ms = now - wait_t0_;
+        v.wait_total_ms = wait_total_ms();
+        v.wait_paused = wait_paused_;
+        v.wait_retry = wait_retry_;
+    }
+    if (stage_ == Stage::Running) v.run_elapsed_s = (now - run_t0_) / 1000;
+    v.card_no = card_no_;
+    v.delta_n = static_cast<uint8_t>(delta_n_ > 255 ? 255 : delta_n_);
+    v.delta_runs = delta_runs_;
+    v.preview = summary_;
+    v.pps_points = sweep_points();
+    v.avs_points = avs_sweep_points();
+    v.armed_is_pick = ctx_.cables.armed() && ctx_.cables.armed_choice() == ctx_.cables.selected();
+    v.cable_armed = ctx_.cables.armed();
+    v.topology = static_cast<uint8_t>(topology_);
+    v.run_guard = run_guard_;
+    const pd::Revision& rev = fusb302::source_revision();
+    v.rmdo_valid = rev.valid;
+    v.rmdo = rev.valid ? static_cast<uint8_t>((rev.rev_major << 4) | (rev.rev_minor & 0x0F)) : uint8_t(0);
+    if (view_) view_->describe(v);
+    return v;
+}
+
+void ChargerTestPage::describe(ChargerTestSession::View& v) {
+    v.on_screen = true;
+    v.rows = static_cast<uint8_t>(std::min(row_count(), 255));
+    StrBuf<32> f;
+    footer_line(f);
+    const std::string_view t = f.view().substr(0, kFooterCells);
+    for (size_t i = 0; i < t.size(); ++i) v.message[i] = t[i];
+    v.message[t.size()] = 0;
+    v.message_len = static_cast<uint8_t>(t.size());
+}
+
 int ChargerTestPage::row_count() const {
     switch (stage_) {
     case Stage::Algorithms: return kViewRow + (runner_.run_id() ? 1 : 0);
@@ -2068,7 +2129,7 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     }
 
     // The give-up clock: a 2 px bar that drains over the wait (the whole wait of the first attempt; a retry reads empty).
-    const uint32_t total = caps.active_cc != 0 ? pd::kStartVbusAttachedWaitMs : pd::kStartVbusWaitMs;
+    const uint32_t total = ChargerTestSession::wait_total_ms();
     const uint32_t spent = now - wait_t0_;
     const uint32_t left = (wait_paused_ || spent >= total) ? 0 : total - spent;
     const int px = static_cast<int>(static_cast<uint64_t>(left) * static_cast<uint32_t>(c.w) / total);
@@ -2446,7 +2507,7 @@ void ChargerTestPage::paint_resume() {
 void ChargerTestPage::sync_proposal(uint32_t now) {
     const auto in = input(now);
     if (confirming_ && (static_cast<int32_t>(now - confirm_until_) >= 0 || proposal(in) != confirm_proposal_)) invalidate_confirmation();
-    if (stage_ <= Stage::Review || stage_ == Stage::Custom) summary_ = ct::Runner::preview(fusb302::caps(), options_, in);
+    s_.update_summary(in);
 }
 
 void ChargerTestPage::share_card() {

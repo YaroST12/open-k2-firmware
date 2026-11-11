@@ -208,6 +208,43 @@ remote::ChargerTestSnapshot Remote::charger_test_results() const {
                                                 ui_.charger_test_cursor());
 }
 
+static uint16_t sat16(uint32_t v) { return v > 0xFFFFu ? uint16_t(0xFFFF) : static_cast<uint16_t>(v); }
+
+remote::ChargerTestView Remote::charger_test_view() {
+    const auto v = ui_.charger_test_view();
+    remote::ChargerTestView o;
+    o.stage = v.stage; o.cursor = v.cursor; o.rows = v.rows;
+    const auto flag = [&o](bool on, uint16_t bit) { if (on) o.flags = static_cast<uint16_t>(o.flags | bit); };
+    flag(v.on_screen, remote::kCtViewOnScreen);
+    flag(v.confirming, remote::kCtViewConfirming);
+    flag(v.confirm_reattach, remote::kCtViewConfirmReattach);
+    flag(v.self_supplied, remote::kCtViewSelfSupplied);
+    flag(v.resume_pending, remote::kCtViewResumePending);
+    flag(v.auto_resume, remote::kCtViewAutoResume);
+    flag(v.gate_ready, remote::kCtViewGateReady);
+    flag(v.resume_held, remote::kCtViewResumeHeld);
+    flag(v.behind_cable, remote::kCtViewBehindCable);
+    flag(v.resume_rd, remote::kCtViewResumeRd);
+    flag(v.wait_paused, remote::kCtViewWaitPaused);
+    flag(v.wait_retry, remote::kCtViewWaitRetry);
+    flag(v.armed_is_pick, remote::kCtViewArmedIsPick);
+    flag(v.rmdo_valid, remote::kCtViewRmdoValid);
+    flag(v.cable_armed, remote::kCtViewCableArmed);
+    o.confirm_left_ms = sat16(v.confirm_left_ms);
+    o.wait_elapsed_ms = sat16(v.wait_elapsed_ms);
+    o.wait_total_ms = sat16(v.wait_total_ms);
+    o.run_elapsed_s = sat16(v.run_elapsed_s);
+    o.card_no = v.card_no; o.delta_n = v.delta_n; o.delta_runs = v.delta_runs;
+    o.runnable = v.preview.runnable; o.skipped = v.preview.skipped;
+    o.refusal = static_cast<uint8_t>(v.preview.refusal); o.refusal_mv = v.preview.refusal_mv;
+    o.pps_points = sat16(v.pps_points); o.avs_points = sat16(v.avs_points);
+    o.topology = v.topology; o.run_guard = v.run_guard; o.rmdo = v.rmdo;
+    const size_t n = v.message_len < o.message.size() ? v.message_len : o.message.size();
+    for (size_t i = 0; i < n; ++i) o.message[i] = v.message[i];
+    o.message_len = static_cast<uint8_t>(n);
+    return o;
+}
+
 remote::Status Remote::charger_units(std::span<const uint8_t> units) {
     if (ui_.charger_test_busy()) return remote::Status::Busy;
     K2LOG("[TEST] units set n=%u\n", unsigned(units.size()));

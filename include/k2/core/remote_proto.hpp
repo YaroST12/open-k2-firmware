@@ -82,6 +82,13 @@
 //                                    Evidence is retained at run start; draft selection/stage are live.
 //                                    Header 2 means PD3.x, not a minor revision. Source RMDO is a
 //                                    self-report; EPR/SPR AVS are feature evidence, not conformance.
+//                                    The view, req 3 (one byte; BadArg on firmware without it, BadLength when longer):
+//                                    rsp stage(1) cursor(1) rows(1) flags(2, kCtView*) confirm_left_ms(2) wait_elapsed_ms(2)
+//                                    wait_total_ms(2) run_elapsed_s(2) card_no(2) delta_n(1) delta_runs(2) runnable(1)
+//                                    skipped(1) refusal(1) refusal_mv(2) pps_points(2) avs_points(2) topology(1)
+//                                    run_guard(1) rmdo(1: major << 4 | minor), then the footer's words (0..27 chars, the
+//                                    text the footer paints). Read-only, from RAM; rows and message are 0 / empty while the
+//                                    page is not on screen. Timers saturate at 65535.
 //   0x0D CHARGER_CABLE req - (read) or kind(1) seq(2) (set).  rsp kind(1) seq(2) run_kind(1) run_seq(2) name(24)
 //                                    The cable identity of the "Cable identity" dialog (k2/chargertest/ct_cable.hpp): kind 0 = Off,
 //                                    1 = built-in cable (seq = its id 1, 2 or 4: EPR 50V 5A, CUKTECH 6A,
@@ -557,6 +564,45 @@ constexpr size_t kChargerTestHeader2 = 42, kChargerTestPage2 = 1;
 static_assert(kChargerTestHeader + kChargerTestRow * kChargerTestPage <= kMaxRspPayload);
 static_assert(kChargerTestHeader2 + kChargerTestRow * kChargerTestPage2 <= kMaxRspPayload);
 size_t charger_test_count(const ChargerTestSnapshot&, uint8_t schema);
+
+// The charger-test view (`0x0B req [3]`): the chrome of the wizard and the run screens that the schema-2 reply has no room for.
+// Plain data the firmware fills from the resident session and, while the page is on screen, from the page itself; the
+// words in `message` are the footer's, character for character. `rows` and `message` are page things: 0 and empty with no page
+// (kCtViewOnScreen clear). Timers saturate at 65535. The reply is kChargerTestViewFixed bytes plus message_len (<= 27).
+constexpr uint8_t kChargerTestViewReq = 3;
+constexpr size_t kChargerTestViewFixed = 30, kChargerTestViewMessage = 27;
+static_assert(kChargerTestViewFixed + kChargerTestViewMessage <= kMaxRspPayload);
+constexpr uint16_t kCtViewOnScreen = 1u << 0,       // the page is on screen (rows and message are live)
+                   kCtViewConfirming = 1u << 1,     // the START confirm window is open
+                   kCtViewConfirmReattach = 1u << 2,   // ... and it announces the planned re-attach
+                   kCtViewSelfSupplied = 1u << 3,   // the K2 runs on the measured port
+                   kCtViewResumePending = 1u << 4,  // a journaled run waits to resume
+                   kCtViewAutoResume = 1u << 5,     // ... and resumes by itself once VBUS is steady
+                   kCtViewGateReady = 1u << 6,      // the resume gate is open (VBUS held steady)
+                   kCtViewResumeHeld = 1u << 7,     // BACK or an unarmable identity: no Rd is presented until OK asks again
+                   kCtViewBehindCable = 1u << 8,    // the Ra guard says the charger sits behind a cable
+                   kCtViewResumeRd = 1u << 9,       // the resume presented the Rd and waits for the charger
+                   kCtViewWaitPaused = 1u << 10,    // Waiting: the Rd is off between the two attempts
+                   kCtViewWaitRetry = 1u << 11,     // Waiting: the second attempt is running
+                   kCtViewArmedIsPick = 1u << 12,   // the identity the Spoof tool armed is the one the Cable step has picked
+                   kCtViewRmdoValid = 1u << 13,     // `rmdo` holds the live source's Revision message
+                   kCtViewCableArmed = 1u << 14;    // some identity is armed (the ARMED / CURR pills exist)
+struct ChargerTestView {
+    uint8_t stage = 0, cursor = 0, rows = 0;
+    uint16_t flags = 0;
+    uint16_t confirm_left_ms = 0, wait_elapsed_ms = 0, wait_total_ms = 0, run_elapsed_s = 0;
+    uint16_t card_no = 0;
+    uint8_t delta_n = 0;
+    uint16_t delta_runs = 0;
+    uint8_t runnable = 0, skipped = 0, refusal = 0;   // the Review preview (Summary): units that run / skip, why START is refused
+    uint16_t refusal_mv = 0;
+    uint16_t pps_points = 0, avs_points = 0;          // the deep sweeps' point counts for the source in hand (0 = line hidden)
+    uint8_t topology = 0, run_guard = 0;              // raguard::Topology as the guard reads it now / the run's journal byte
+    uint8_t rmdo = 0;                                  // the live source's RMDO revision nibbles (major << 4 | minor), valid per flag
+    std::array<char, kChargerTestViewMessage> message{};
+    uint8_t message_len = 0;
+};
+size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView&);
 struct StateInfo {
     uint8_t page = 0, active_cc = 0, spec_rev = 0, num_pdos = 0, pd_valid = 0;
     uint8_t chip = 0, pm_online = 0, log_on = 0;
@@ -837,6 +883,7 @@ template <class B>
 concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ping() } -> std::same_as<PingInfo>;
     { b.charger_test_results() } -> std::same_as<ChargerTestSnapshot>;
+    { b.charger_test_view() } -> std::same_as<ChargerTestView>;   // 0x0B req [3]: the wizard / run chrome (a read, never moves anything)
     { b.charger_units(std::span<const uint8_t>{}) } -> std::same_as<Status>;   // unit order of the next run (empty = default)
     { b.charger_sweep(true) } -> std::same_as<Status>;   // the PPS deep sweep of the next run (opt-in)
     { b.charger_avs_sweep(true) } -> std::same_as<Status>;   // the AVS deep sweep of the next run (opt-in)
@@ -935,6 +982,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         return reply_n(encode_ping(buf, backend.ping()));
     case Cmd::ChargerTest: {
         if (!p.empty() && p.size() != 1 && p.size() != 9 && p.size() != 10) return reply(Status::BadLength);
+        if (p.size() == 1 && p[0] == kChargerTestViewReq) return reply_n(encode_charger_test_view(buf, backend.charger_test_view()));
         const bool modern = p.size() == 1 || p.size() == 10;
         if (modern && p[0] != kChargerTestSchema2) return reply(Status::BadArg);
         const uint8_t schema = modern ? kChargerTestSchema2 : kChargerTestSchema;

@@ -938,6 +938,42 @@ def decode_charger_test(p):
     return out
 
 
+CT_VIEW_FIXED, CT_VIEW_MESSAGE = 30, 27   # remote_proto.hpp kChargerTestViewFixed / kChargerTestViewMessage
+CT_TOPOLOGIES = ["unknown", "none", "cable", "direct"]   # raguard::Topology, the firmware's name() words
+
+
+def decode_charger_test_view(p):
+    """0x0B req [3]: the charger-test screens as data (the wizard stage, the confirmation and wait clocks, the Review preview,
+    the resume and guard state, the footer's words). Layout: remote_proto.cpp encode_charger_test_view."""
+    if not CT_VIEW_FIXED <= len(p) <= CT_VIEW_FIXED + CT_VIEW_MESSAGE:
+        raise FrameError("invalid charger-test view length")
+    stage, cursor, rows, flags, confirm, w_el, w_tot, run_s, card, delta_n, delta_runs = struct.unpack_from("<BBBHHHHHHBH", p, 0)
+    runnable, skipped, refusal, refusal_mv, pps, avs, topology, guard, rmdo = struct.unpack_from("<BBBHHHBBB", p, 18)
+    if stage >= len(TEST_STAGES) or refusal >= len(TEST_REASONS) or topology >= len(CT_TOPOLOGIES) or flags & 0x8000:
+        raise FrameError("invalid charger-test view")
+    try:
+        message = p[CT_VIEW_FIXED:].decode("ascii")
+    except UnicodeDecodeError:
+        raise FrameError("charger-test view message is not text") from None
+    if not message.isprintable():
+        raise FrameError("charger-test view message is not text")
+
+    def f(bit):
+        return bool(flags >> bit & 1)
+
+    return {"stage": TEST_STAGES[stage], "cursor": cursor, "rows": rows, "on_screen": f(0),
+            "confirming": f(1), "confirm_left_ms": confirm, "confirm_reattach": f(2),
+            "wait": {"elapsed_ms": w_el, "total_ms": w_tot, "retry": f(11), "paused": f(10)},
+            "run_elapsed_s": run_s, "card_no": card, "delta_n": delta_n, "delta_runs": delta_runs,
+            "preview": {"runnable": runnable, "skipped": skipped, "refusal": TEST_REASONS[refusal], "refusal_mv": refusal_mv},
+            "sweep_points": {"pps": pps, "avs": avs},
+            "guard": {"topology": CT_TOPOLOGIES[topology], "run_guard": guard},
+            "resume": {"pending": f(4), "auto": f(5), "gate_ready": f(6), "held": f(7), "behind_cable": f(8), "rd": f(9)},
+            "self_supplied": f(3), "armed_is_pick": f(12), "cable_armed": f(14),
+            "rmdo": f"{rmdo >> 4}.{rmdo & 15}" if f(13) else None,
+            "message": message}
+
+
 def parse_units(text):
     """'qc2,qc3,pd' -> [1, 2, 0] (charger_test::Unit values, in the order given); '' / 'default' = the firmware's default order."""
     names = [t.strip().lower() for t in text.split(",") if t.strip()]
@@ -1105,6 +1141,14 @@ def attach_hunt_evidence(link, run_id, rows):
 
 
 def cmd_charger_test(link, a):
+    if a.test_cmd == "view":   # the screens as data; firmware without the form answers BadArg / BadLength
+        try:
+            return decode_charger_test_view(link.call(CMD_CHARGER_TEST, bytes([3])).payload)
+        except RemoteError as e:
+            if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
+                raise
+            raise FrameError("this firmware has no charger-test view (older than the shell-parity build); "
+                             "use charger-test status or a screenshot") from None
     try:
         response = link.call(CMD_CHARGER_TEST, b"\x02")
     except RemoteError as e:
@@ -2601,8 +2645,24 @@ def _hunt_line(h):
 def _render(name, r):
     if name == "charger-test" and r.pop("_summary", False):
         return charger_summary.summarize(r)
+    if name == "charger-test" and "on_screen" in r:   # `charger-test view`
+        pv, w = r["preview"], r["wait"]
+        lines = [f"{r['stage']} (cursor {r['cursor']}/{r['rows']}{'' if r['on_screen'] else ', page not on screen'}): "
+                 f"{r['message'] or '-'}"]
+        if r["confirming"]:
+            lines.append(f"  START confirmation open, {r['confirm_left_ms']} ms left" + (" (announces the re-attach)" if r["confirm_reattach"] else ""))
+        if w["total_ms"]:
+            lines.append(f"  waiting {w['elapsed_ms'] / 1000:g} of {w['total_ms'] / 1000:g} s" +
+                         (", retry" if w["retry"] else "") + (", Rd off" if w["paused"] else ""))
+        if r["run_elapsed_s"]:
+            lines.append(f"  running {r['run_elapsed_s']} s")
+        lines.append(f"  preview: {pv['runnable']} run, {pv['skipped']} skip; START refused: {pv['refusal']}" +
+                     (f" at {pv['refusal_mv']} mV" if pv["refusal_mv"] else ""))
+        lines.append(f"  guard {r['guard']['topology']}; self-supplied {'yes' if r['self_supplied'] else 'no'}; "
+                     f"sweeps pps {r['sweep_points']['pps']} avs {r['sweep_points']['avs']}")
+        return "\n".join(lines)
     if name == "charger-test":
-        head = f"run {r['run_id']} rev {r['revision']}: {r['state']} ({r['reason']}); step {r['current']}/{r['total']}"
+        head =f"run {r['run_id']} rev {r['revision']}: {r['state']} ({r['reason']}); step {r['current']}/{r['total']}"
         notes = ["  PASS = negotiation / voltage hold, not power or revision conformance"]
         if r["selection"] is None:
             notes.append("  legacy schema: selection / source evidence unavailable; some entries omitted")
@@ -2889,6 +2949,7 @@ def build_parser():
     sts.add_parser("status", help="read run/state metadata only")
     strc = sts.add_parser("results", help="retrieve a consistent bounded result table")
     strc.add_argument("--out", help="write the complete evidence JSON to this host file")
+    sts.add_parser("view", help="what the charger-test screens show: stage, cursor, confirmation, wait / run clocks, preview, footer words")
     sms = sts.add_parser("summary", help="compact per-protocol summary of the RAM results")
     sms.add_argument("--out", help="also write the complete evidence JSON to this host file")
     cu = sub.add_parser("charger-units", help="set the test units (and their order) of the NEXT charger run; reset by every START")

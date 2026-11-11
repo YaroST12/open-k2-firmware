@@ -275,6 +275,29 @@ public:
     void invalidate_confirmation();
     void emit_end(uint32_t now);   // run event for a run that just ended (live debug stream)
     void bind_view(ChargerTestPage* v) { view_ = v; }   // the painted half registers itself while it exists
+    // What the screens show, as data (Cmd::ChargerTest req [3]): the wizard stage and cursor, the START confirmation and the
+    // Waiting / Running clocks, the Review preview, the resume and guard state, and the footer's words. The session half is
+    // read from RAM, the preview is refreshed here (not by the page tick, so it is live with no page on screen), and the page
+    // adds `rows` and `message` while it exists (on_screen). Reads only: nothing is armed, started or moved.
+    struct View {
+        uint8_t stage = 0, cursor = 0, rows = 0;
+        bool on_screen = false, confirming = false, confirm_reattach = false, self_supplied = false, resume_pending = false,
+             auto_resume = false, gate_ready = false, resume_held = false, behind_cable = false, resume_rd = false,
+             wait_paused = false, wait_retry = false, armed_is_pick = false, rmdo_valid = false, cable_armed = false;
+        uint32_t confirm_left_ms = 0, wait_elapsed_ms = 0, wait_total_ms = 0, run_elapsed_s = 0;
+        uint16_t card_no = 0, delta_runs = 0;
+        uint8_t delta_n = 0;
+        charger_test::Summary preview;
+        unsigned pps_points = 0, avs_points = 0;
+        uint8_t topology = 0, run_guard = 0, rmdo = 0;
+        char message[28] = {};    // the footer's words (kFooterCells = 27 at most), NUL terminated
+        uint8_t message_len = 0;
+    };
+    [[gnu::noinline]] View view();
+    // The give-up clock's whole length: the first attempt of a wait with a charger attached (Rp seen) is longer.
+    static uint32_t wait_total_ms();
+    // The Review preview over the live reading; the page tick and view() share it (stages up to Review, and Custom).
+    void update_summary(const charger_test::Input& in);
 private:
     friend class ChargerTestPage;
     // [[gnu::noinline]] on the big one-call-site helpers: -Os inlines each into update() / on_event() / poll(), whose
@@ -457,6 +480,7 @@ public:
     void on_confirmation_dropped();        // the confirm window ended: the footer and START cell show it again
     void on_cable_changed();               // the Cable choice moved from outside: repaint it
     ListState list_state() const;
+    void describe(ChargerTestSession::View& v);   // the page's half of the view: the list's row count and the footer's words
     // The paint budget of a Running update (every 100 ms) while a step is in flight (Runner::quiet()). Pixels are the measure:
     // the panel streams ~2.13 us per pixel plus ~15 us per window, and lcd.cpp services USB, FUSB302 and the UFCS handshake
     // every 2048 pixels (~4.4 ms) inside a stream. The items (gauge, hero + needle, clock, texts, progress, footer) share

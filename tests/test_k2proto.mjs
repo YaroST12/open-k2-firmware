@@ -294,6 +294,44 @@ test("charger-test schema2 pages, error detail keeps algorithm identity", async 
   }
 });
 
+// 0x0B req [3] (the charger-test view): the same bytes as tests/test_k2_remote_charger_test.py VIEW.
+const TEST_VIEW = [4, 2, 1, 0x03, 0x30, 0xDC, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 2, 0, 0, 0, 7, 0, 3, 0, 3, 0x84, 0x32,
+  ...[..."Press again to start"].map((c) => c.charCodeAt(0))];
+test("charger-test view decodes the screen as data", async () => {
+  const v = P.decodeChargerTestView(u8(...TEST_VIEW));
+  assert.deepEqual([v.stage, v.cursor, v.rows, v.on_screen, v.confirming, v.confirm_left_ms], ["review", 2, 1, true, true, 1500]);
+  assert.equal(v.message, "Press again to start");
+  assert.deepEqual(v.preview, { runnable: 9, skipped: 2, refusal: "none", refusal_mv: 0 });
+  assert.deepEqual(v.sweep_points, { pps: 7, avs: 3 });
+  assert.deepEqual(v.guard, { topology: "direct", run_guard: 0x84 });
+  assert.deepEqual(v.wait, { elapsed_ms: 0, total_ms: 0, retry: false, paused: false });
+  assert.equal(v.rmdo, "3.2"); assert.equal(v.armed_is_pick, true); assert.equal(v.cable_armed, false);
+  assert.deepEqual(v.resume, { pending: false, auto: false, gate_ready: false, held: false, behind_cable: false, rd: false });
+  const w = new Uint8Array(TEST_VIEW.slice(0, 30));
+  w[0] = 13; new DataView(w.buffer).setUint16(3, 0x0C09, true); new DataView(w.buffer).setUint16(7, 4200, true);
+  new DataView(w.buffer).setUint16(9, 15000, true); w[20] = 8; new DataView(w.buffer).setUint16(21, 8470, true);
+  const d = P.decodeChargerTestView(w);
+  assert.equal(d.stage, "waiting"); assert.deepEqual(d.wait, { elapsed_ms: 4200, total_ms: 15000, retry: true, paused: true });
+  assert.equal(d.preview.refusal, "load attached"); assert.equal(d.preview.refusal_mv, 8470); assert.equal(d.self_supplied, true);
+  assert.equal(d.message, "");
+  assert.throws(() => P.decodeChargerTestView(u8(...TEST_VIEW.slice(0, 29))), P.FrameError);
+  assert.throws(() => P.decodeChargerTestView(u8(...TEST_VIEW, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41)), P.FrameError);
+  const badStage = new Uint8Array(TEST_VIEW); badStage[0] = 99;
+  assert.throws(() => P.decodeChargerTestView(badStage), P.FrameError);
+  const { remote, sent } = chargerRig([TEST_VIEW]);
+  assert.equal((await remote.chargerTest("view")).stage, "review");
+  assert.deepEqual(sent, [[0x0B, [3]]]);
+});
+
+test("charger-test view on older firmware reports the missing form", async () => {
+  for (const status of [P.STATUS.BAD_ARG, P.STATUS.BAD_LENGTH]) {
+    const { remote } = chargerRig([new P.RemoteError(status, 0x0B)]);
+    await assert.rejects(() => remote.chargerTest("view"), (e) => e instanceof P.FrameError && /older than/.test(e.message));
+  }
+  const { remote } = chargerRig([new P.RemoteError(P.STATUS.BUSY, 0x0B)]);
+  await assert.rejects(() => remote.chargerTest("view"), (e) => e instanceof P.RemoteError);
+});
+
 test("charger-test unavailable revisions and protocols only SKIP with concrete reasons", async () => {
   const meta = new Uint8Array(TEST_HEADER2); meta[11] = meta[12] = 5; meta[9] = 5;
   const rows = [16, 17, 18, 14, 15].map((a) => u8(a, 0, 0, 0, 0, 0, 0, 0, 0, 4, a >= 16 ? 20 : 4, 0, 0, 0, 0, 0));

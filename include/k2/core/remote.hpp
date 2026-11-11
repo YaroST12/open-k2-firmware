@@ -47,6 +47,7 @@ public:
     // Backend interface for remote::handle_request (public so the dispatcher template can call it).
     remote::PingInfo ping();
     remote::ChargerTestSnapshot charger_test_results() const;
+    remote::ChargerTestView charger_test_view();   // the wizard / Waiting / Running screens as data (0x0B req [3])
     remote::Status charger_units(std::span<const uint8_t> units);   // unit order of the next charger run (empty = default)
     remote::Status charger_sweep(bool on);   // the PPS deep sweep of the next charger run (opt-in)
     remote::Status charger_avs_sweep(bool on);   // the AVS deep sweep of the next charger run (opt-in)

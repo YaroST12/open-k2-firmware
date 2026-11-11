@@ -671,5 +671,92 @@ class ChargerHunt(unittest.TestCase):
         return kr.build_parser().parse_args(["charger-test", *args])
 
 
+# 0x0B req [3] (ChargerTestView): the fixed 30 bytes from remote_proto.cpp encode_charger_test_view, then the footer's words.
+VIEW = bytes([4, 2, 1,               # stage review, cursor 2, rows 1
+              0x03, 0x30,            # flags: on_screen, confirming, armed_is_pick, rmdo_valid
+              0xDC, 0x05,            # confirm_left_ms 1500
+              0, 0, 0, 0, 0, 0,      # wait elapsed / total, run_elapsed_s
+              0, 0,                  # card_no
+              0, 0, 0,               # delta_n, delta_runs
+              9, 2, 0, 0, 0,         # preview runnable 9, skipped 2, refusal none, refusal_mv 0
+              7, 0, 3, 0,            # pps 7 points, avs 3 points
+              3, 0x84, 0x32]) + b"Press again to start"
+
+
+class ChargerTestViewTest(unittest.TestCase):
+    def args(self, *args):
+        return kr.build_parser().parse_args(["charger-test", *args])
+
+    def test_decode_review_with_the_confirmation_open(self):
+        v = kr.decode_charger_test_view(VIEW)
+        self.assertEqual((v["stage"], v["cursor"], v["rows"], v["on_screen"]), ("review", 2, 1, True))
+        self.assertTrue(v["confirming"])
+        self.assertEqual(v["confirm_left_ms"], 1500)
+        self.assertEqual(v["message"], "Press again to start")
+        self.assertEqual(v["preview"], {"runnable": 9, "skipped": 2, "refusal": "none", "refusal_mv": 0})
+        self.assertEqual(v["sweep_points"], {"pps": 7, "avs": 3})
+        self.assertEqual(v["guard"], {"topology": "direct", "run_guard": 0x84})
+        self.assertEqual(v["wait"], {"elapsed_ms": 0, "total_ms": 0, "retry": False, "paused": False})
+        self.assertTrue(v["armed_is_pick"])
+        self.assertFalse(v["cable_armed"])
+        self.assertEqual(v["rmdo"], "3.2")
+        self.assertEqual(v["resume"], {"pending": False, "auto": False, "gate_ready": False, "held": False,
+                                       "behind_cable": False, "rd": False})
+        self.assertEqual((v["card_no"], v["delta_n"], v["delta_runs"], v["run_elapsed_s"]), (0, 0, 0, 0))
+        self.assertFalse(v["confirm_reattach"])
+        self.assertFalse(v["self_supplied"])
+
+    def test_decode_the_wait_and_a_refusal(self):
+        b = bytearray(VIEW[:30])
+        b[0] = 13   # waiting
+        struct.pack_into("<H", b, 3, 0x0001 | 0x0400 | 0x0800 | 0x0008)   # on_screen, paused, retry, self_supplied
+        struct.pack_into("<HH", b, 7, 4200, 15000)
+        b[20] = 8   # refusal: load attached
+        struct.pack_into("<H", b, 21, 8470)
+        v = kr.decode_charger_test_view(bytes(b))
+        self.assertEqual(v["stage"], "waiting")
+        self.assertEqual(v["wait"], {"elapsed_ms": 4200, "total_ms": 15000, "retry": True, "paused": True})
+        self.assertEqual(v["preview"]["refusal"], "load attached")
+        self.assertEqual(v["preview"]["refusal_mv"], 8470)
+        self.assertTrue(v["self_supplied"])
+        self.assertEqual(v["message"], "")   # the empty footer: nothing painted, or nothing said
+
+    def test_no_page_means_no_rows_and_no_words(self):
+        b = bytearray(VIEW[:30]); b[2] = 0; struct.pack_into("<H", b, 3, 0)
+        v = kr.decode_charger_test_view(bytes(b))
+        self.assertFalse(v["on_screen"])
+        self.assertEqual((v["rows"], v["message"]), (0, ""))
+
+    def test_bad_shapes_are_frame_errors(self):
+        for bad in (VIEW[:29], VIEW + bytes(8)):   # a 27-character message is the most the footer can hold
+            with self.assertRaises(kr.FrameError):
+                kr.decode_charger_test_view(bad)
+        b = bytearray(VIEW); b[0] = 99   # a stage this tool does not know
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test_view(bytes(b))
+        b = bytearray(VIEW); b[-1] = 0xFF   # not text
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test_view(bytes(b))
+
+    def test_command_sends_the_view_request_and_nothing_else(self):
+        link = Link([VIEW])
+        r = kr.cmd_charger_test(link, self.args("view"))
+        self.assertEqual(link.sent, [(0x0B, b"\x03")])
+        self.assertEqual(r["stage"], "review")
+        self.assertIn("Press again to start", kr._render("charger-test", r))
+        self.assertIn("review", kr._render("charger-test", r))
+
+    def test_old_firmware_says_so(self):
+        # firmware without the view form answers BadArg: the host reports it instead of a bare status
+        for status in (kr.STATUS_BAD_ARG, kr.STATUS_BAD_LENGTH):
+            link = Link([kr.RemoteError(status, 0x0B)])
+            with self.assertRaises(kr.FrameError) as cm:
+                kr.cmd_charger_test(link, self.args("view"))
+            self.assertIn("older than", str(cm.exception))
+        link = Link([kr.RemoteError(kr.STATUS_BUSY, 0x0B)])
+        with self.assertRaises(kr.RemoteError):
+            kr.cmd_charger_test(link, self.args("view"))
+
+
 if __name__ == "__main__":
     unittest.main()

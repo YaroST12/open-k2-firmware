@@ -4091,7 +4091,75 @@ static void test_waiting_cc_cells_show_raw_mv_while_plus_is_down() {
     check_text_at(kSmall, 92, "Rp 3A", kText, kBg, 154);
 }
 
+// Shell parity batch 1 (red): the charger-test view is what the screen shows, read without a screenshot. The footer words
+// are the page's own (one implementation: footer_line), the preview is the Review summary, the timers are the ones the
+// Waiting and Running screens draw.
+static std::string view_text(const ChargerTestSession::View& v) { return std::string(v.message, v.message_len); }
+static void test_view_says_what_the_wizard_shows() {
+    { // the Tests step: stage 0, the rows of the list, the footer's words
+        fixture(); Ui ui; open(ui); ui.tick(1200);
+        const auto v = ui.charger_test_view();
+        CHECK_EQ(v.stage, 0); CHECK_EQ(v.cursor, 0); CHECK_EQ(v.on_screen, true); CHECK_EQ(v.rows >= 5, true);
+        CHECK_STR(view_text(v).c_str(), "Picked: All tests");
+        CHECK_EQ(footer_says("Picked: All tests", kText), true);   // the same words are on the panel
+        CHECK_EQ(v.confirming, false); CHECK_EQ(v.card_no, 0); CHECK_EQ(v.delta_n, 0);
+    }
+    { // Review: the preview counts, the footer, then the confirmation window with its timer
+        fixture(); Ui ui; open(ui); review(ui); ui.tick(1300);
+        auto v = ui.charger_test_view();
+        CHECK_EQ(v.stage, 4); CHECK_EQ(v.rows, 1);
+        CHECK_EQ(v.preview.runnable > 0, true); CHECK_EQ(v.preview.refusal, ct::Reason::None);
+        CHECK_EQ(v.confirming, false); CHECK_EQ(v.confirm_left_ms, 0u);
+        CHECK_STR(view_text(v).c_str(), "Runs without a load");
+        start_press(ui, 1300); ui.tick(1400);
+        v = ui.charger_test_view();
+        CHECK_EQ(v.confirming, true); CHECK_EQ(v.confirm_left_ms > 0 && v.confirm_left_ms <= Ui::kConfirmWindowMs, true);
+        CHECK_STR(view_text(v).c_str(), "Press again to start");
+        CHECK_EQ(footer_says("Press again to start", kCaution), true);
+    }
+    { // the preview is live with no page on screen: the refusal follows VBUS, the page-only fields read 0 / empty
+        fixture(); g_stub.sink.state = pd::SinkState::Ready; g_stub.sink.pos = 1; g_stub.sink.mv = 5000;
+        Ui ui; open(ui); review(ui); ui.tick(1300);
+        ui.goto_page(static_cast<uint8_t>(Page::Home), 1400);
+        g_stub.pm.vbus_mv = 8470; ui.tick(1500);
+        const auto v = ui.charger_test_view();
+        CHECK_EQ(v.on_screen, false); CHECK_EQ(v.rows, 0); CHECK_EQ(v.message_len, 0);
+        CHECK_EQ(v.stage, 4);   // the session keeps its stage while the page is away
+        CHECK_EQ(v.preview.refusal, ct::Reason::WrongVoltage); CHECK_EQ(v.preview.refusal_mv, 8470);
+    }
+}
+static void test_view_carries_the_wait_and_the_run() {
+    { // Waiting: the give-up clock's total (10 s with a charger attached) and the time spent, as paint_waiting counts them
+        fixture(); g_stub.pm.vbus_mv = 0;
+        Ui ui; open(ui); review(ui);
+        start_press(ui, 1300); confirm_press_nowait(ui, 1350);
+        for (uint32_t t = 1370; t <= 2370; t += 20) { fusb302::service(); ui.tick(t); }
+        const auto v = ui.charger_test_view();
+        CHECK_EQ(v.stage, kWaitStage);
+        CHECK_EQ(v.wait_total_ms, pd::kStartVbusAttachedWaitMs);
+        CHECK_EQ(v.wait_elapsed_ms >= 900 && v.wait_elapsed_ms <= 1100, true);
+        CHECK_EQ(v.wait_retry, false); CHECK_EQ(v.wait_paused, false); CHECK_EQ(v.confirming, false);
+        CHECK_EQ(v.message_len > 0, true);
+    }
+    { // Running: the m:ss clock in whole seconds, the footer's unit line; Results: the saved card's number
+        fixture(); g_stub.fc_answers = false; Ui ui; open(ui); only_vivo_review(ui);
+        start_press(ui, 1300); press(ui, Button::Ok, 1400);
+        uint32_t t = 1500;
+        for (; t <= 3500 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        auto v = ui.charger_test_view();
+        CHECK_EQ(v.stage, kRunningStage); CHECK_EQ(v.run_elapsed_s >= 1 && v.run_elapsed_s <= 3, true);
+        CHECK_EQ(v.rows > 0, true); CHECK_EQ(v.message_len > 0, true);
+        for (; t <= 600000 && ui.charger_test_busy(); t += 100) ui.tick(t);
+        ui.tick(t); ui.tick(t + 200);
+        v = ui.charger_test_view();
+        CHECK_EQ(v.stage, 6); CHECK_EQ(v.run_elapsed_s, 0); CHECK_EQ(v.rows > 0, true);
+        CHECK_EQ(v.card_no != 0, true);
+    }
+}
+
 int main() {
+    test_view_says_what_the_wizard_shows();
+    test_view_carries_the_wait_and_the_run();
     test_waiting_plus_minus_do_nothing();
     test_waiting_footer_says_how_to_wake();
     test_waiting_names_the_line_being_tried();

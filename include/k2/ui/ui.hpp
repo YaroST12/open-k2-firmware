@@ -196,6 +196,8 @@ public:
     uint8_t charger_test_reattach_state() const { return charger_test_.reattach_state(); }   // 0 none, 1 Rd off, 2 awaiting the contract
     bool charger_test_confirm_reattach() const { return charger_test_.confirm_reattach(); }   // the confirmation announces the blink
     uint8_t charger_test_run_guard() const { return charger_test_.run_guard(); }    // the guard byte the run records
+    // What the charger-test screens show as data (Cmd::ChargerTest req [3]); refreshes the Review preview, arms nothing.
+    ChargerTestSession::View charger_test_view() { return charger_test_.view(); }
     bool ports_busy() const { return charger_test_busy() || fc_release_.busy(); }
     const char *busy_reason() const;   // why an identity / START is refused right now, nullptr = free
     bool spoof_busy() const { return busy_reason() != nullptr; }

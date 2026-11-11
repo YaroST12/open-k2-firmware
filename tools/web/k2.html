@@ -622,6 +622,32 @@ var K2Proto = (function () {
     return out;
   }
 
+  // 0x0B req [3]: the charger-test screens as data (remote_proto.cpp encode_charger_test_view): 30 fixed bytes, then the
+  // footer's words (at most 27 characters).
+  var CT_TOPOLOGIES = ["unknown", "none", "cable", "direct"];
+  function decodeChargerTestView(p) {
+    if (p.length < 30 || p.length > 57) throw new FrameError("invalid charger-test view length");
+    var v = dv(p), flags = v.getUint16(3, true), refusal = p[20], topology = p[27];
+    if (p[0] >= TEST_STAGES.length || refusal >= TEST_REASONS.length || topology >= CT_TOPOLOGIES.length || (flags & 0x8000))
+      throw new FrameError("invalid charger-test view");
+    var message = "";
+    for (var i = 30; i < p.length; i++) {
+      if (p[i] < 0x20 || p[i] > 0x7E) throw new FrameError("charger-test view message is not text");
+      message += String.fromCharCode(p[i]);
+    }
+    function f(bit) { return !!((flags >> bit) & 1); }
+    return { stage: TEST_STAGES[p[0]], cursor: p[1], rows: p[2], on_screen: f(0),
+             confirming: f(1), confirm_left_ms: v.getUint16(5, true), confirm_reattach: f(2),
+             wait: { elapsed_ms: v.getUint16(7, true), total_ms: v.getUint16(9, true), retry: f(11), paused: f(10) },
+             run_elapsed_s: v.getUint16(11, true), card_no: v.getUint16(13, true), delta_n: p[15], delta_runs: v.getUint16(16, true),
+             preview: { runnable: p[18], skipped: p[19], refusal: TEST_REASONS[refusal], refusal_mv: v.getUint16(21, true) },
+             sweep_points: { pps: v.getUint16(23, true), avs: v.getUint16(25, true) },
+             guard: { topology: CT_TOPOLOGIES[topology], run_guard: p[28] },
+             resume: { pending: f(4), auto: f(5), gate_ready: f(6), held: f(7), behind_cable: f(8), rd: f(9) },
+             self_supplied: f(3), armed_is_pick: f(12), cable_armed: f(14),
+             rmdo: f(13) ? (p[29] >> 4) + "." + (p[29] & 15) : null, message: message };
+  }
+
   // 24 bytes: the power block. 38: + analog front end. 40: + MCU temperature. 49: + link flags and
   // ages (k2/pd-read). Older firmware sends the shorter forms, so every extension is optional.
   function decodeState(p) {
@@ -1510,7 +1536,14 @@ var K2Proto = (function () {
 
   K2Remote.prototype.chargerTest = async function (mode) {
     if (mode === undefined) mode = "status";
-    if (mode !== "status" && mode !== "results") throw new RangeError("charger-test supports status / results only");
+    if (mode !== "status" && mode !== "results" && mode !== "view") throw new RangeError("charger-test supports status / results / view only");
+    if (mode === "view") {   // the screens as data; firmware without the form answers BadArg / BadLength
+      try { return decodeChargerTestView((await this.link.call(CMD.CHARGER_TEST, [3])).payload); }
+      catch (e) {
+        if (!(e instanceof RemoteError) || (e.status !== STATUS.BAD_LENGTH && e.status !== STATUS.BAD_ARG)) throw e;
+        throw new FrameError("this firmware has no charger-test view (older than the shell-parity build)");
+      }
+    }
     var r;
     try { r = await this.link.call(CMD.CHARGER_TEST, [2]); }
     catch (e) {
@@ -1616,7 +1649,7 @@ var K2Proto = (function () {
     packRequest: packRequest, parseResponse: parseResponse, isResponse: isResponse,
     isBootloaderFrame: isBootloaderFrame, classify: classify, logText: logText,
     directionOf: directionOf, decodePing: decodePing, decodeState: decodeState, decodePdo: decodePdo,
-    decodeChargerTest: decodeChargerTest, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
+    decodeChargerTest: decodeChargerTest, decodeChargerTestView: decodeChargerTestView, TEST_ALGORITHMS: TEST_ALGORITHMS, TEST_REASONS: TEST_REASONS, TEST_STAGES: TEST_STAGES,
     decodeEmarker: decodeEmarker, decodeEmarkerDetail: decodeEmarkerDetail, decodeAdcRaw: decodeAdcRaw,
     decodeRippleInfo: decodeRippleInfo, decodeIdentity: decodeIdentity, decodePdTrigger: decodePdTrigger, decodeMatch: decodeMatch, decodeIdentifyProgress: decodeIdentifyProgress, PD_ERRS: PD_ERRS,
     decodeFc: decodeFc, decodeCableR: decodeCableR, parseLogStats: parseLogStats,

@@ -24,6 +24,8 @@ struct Fake {
     PingInfo ping() { calls++; return {0x01020304, "abc1234", "1.0"}; }
     ChargerTestSnapshot test_results{};
     ChargerTestSnapshot charger_test_results() { calls++; return test_results; }
+    ChargerTestView view{};
+    ChargerTestView charger_test_view() { calls++; return view; }
     std::vector<uint8_t> units_set; Status units_status = Status::Ok;   // what charger_units() was given, and its answer
     Status charger_units(std::span<const uint8_t> u) { calls++; units_set.assign(u.begin(), u.end()); return units_status; }
     bool sweep_set = false; int sweep_sets = 0; Status sweep_status = Status::Ok;

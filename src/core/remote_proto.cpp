@@ -164,6 +164,20 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
     return w.size();
 }
 
+size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView& v) {
+    const size_t len = std::min<size_t>(v.message_len, kChargerTestViewMessage);
+    if (out.size() < kChargerTestViewFixed + len) return 0;
+    Writer w(out);
+    w.u8(v.stage); w.u8(v.cursor); w.u8(v.rows); w.u16(v.flags);
+    w.u16(v.confirm_left_ms); w.u16(v.wait_elapsed_ms); w.u16(v.wait_total_ms); w.u16(v.run_elapsed_s);
+    w.u16(v.card_no); w.u8(v.delta_n); w.u16(v.delta_runs);
+    w.u8(v.runnable); w.u8(v.skipped); w.u8(v.refusal); w.u16(v.refusal_mv);
+    w.u16(v.pps_points); w.u16(v.avs_points);
+    w.u8(v.topology); w.u8(v.run_guard); w.u8(v.rmdo);
+    w.text(std::string_view(v.message.data(), len));
+    return w.size();
+}
+
 size_t encode_state(std::span<uint8_t> out, const StateInfo &s) {
     Writer w(out);
     w.u8(s.page); w.u8(s.active_cc); w.u8(s.spec_rev); w.u8(s.num_pdos);

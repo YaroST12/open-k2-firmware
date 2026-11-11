@@ -300,7 +300,7 @@ Spleen tables (`tools/font_overrides.py` holds its hand-drawn fill-ins).
  Done / Stopped / Unsafe
    |-- report_card::build(steps, evidence, ...) -> report_card::hw::put()  ->  /cards/<fp>.card
    |-- report_card::delta(previous card, new card)  -> "what changed" lines on the Results view
-   '-- remote: CHARGER_TEST 0x0B (read-only RAM view)  ->  k2_remote.py charger-test status|results
+   '-- remote: CHARGER_TEST 0x0B (read-only RAM view)  ->  k2_remote.py charger-test status|results|view
        USB drive: CARDS.JSON (generated from /cards on read)
 ```
 
@@ -854,6 +854,27 @@ checks final metadata, rejecting changes rather than exporting mixed evidence. I
 of 50 calls for all 95 rows, no automatic retry loop and no fallback to active commands.
 `--json` prints the same evidence object; `--out` writes host JSON only after successful retrieval.
 The JS command table is synchronized, but no dashboard control is added.
+
+**The screens as data (`req [3]`, the view).** A one-byte request `03` (read-only like the rest) answers with what the
+charger-test screens show, so a host does not need a screenshot: `stage u8, cursor u8, rows u8, flags u16, confirm_left_ms u16,
+wait_elapsed_ms u16, wait_total_ms u16, run_elapsed_s u16, card_no u16, delta_n u8, delta_runs u16, runnable u8, skipped u8,
+refusal u8, refusal_mv u16, pps_points u16, avs_points u16, topology u8, run_guard u8, rmdo u8`, then the footer's words
+(0 to 27 characters, exactly what the footer paints). Flag bits are `kCtView*` in `remote_proto.hpp`. The session half is read
+from RAM (`ChargerTestSession::view()`); the Review preview is refreshed there with the same `update_summary()` the page tick
+uses, so it is live with no page on screen; `rows` and `message` come from the page (`ChargerTestPage::describe()`) and are 0 /
+empty while it is not on screen (`on_screen` clear). The Waiting clock (`wait_total_ms`, from `wait_total_ms()`, also the
+paint's bar) and `run_elapsed_s` read 0 outside Waiting / Running. Timers saturate at 65535. An older firmware answers
+BadArg (BadLength for a longer request), which the host reports as "no charger-test view". `k2_remote.py charger-test view`
+(`--json` gives `stage, cursor, rows, on_screen, confirming, confirm_left_ms, confirm_reattach, wait{elapsed_ms, total_ms,
+retry, paused}, run_elapsed_s, card_no, delta_n, delta_runs, preview{runnable, skipped, refusal, refusal_mv},
+sweep_points{pps, avs}, guard{topology, run_guard}, resume{pending, auto, gate_ready, held, behind_cable, rd}, self_supplied,
+armed_is_pick, cable_armed, rmdo, message`).
+
+**What the host can read (shell parity).** One row per command that replaces a screenshot:
+
+| Command | Reads | Not on the wire |
+|---|---|---|
+| `CHARGER_TEST` `req [3]` | the wizard stage, cursor, row count and footer words, the START confirmation clock, the Waiting and Running clocks, the Review preview and refusal, sweep point counts, resume and Ra-guard state | the row texts of the lists (their data is in the results / cable / units commands); pixels |
 
 ### Screenshots
 
