@@ -894,7 +894,7 @@ remote::Status Remote::debug_cc_matrix(uint8_t v, uint16_t modes) {
     return remote::Status::Ok;
 }
 
-// VBUS for the CC probe: a direct power-monitor read (a fresh value about every 35 ms), because the main loop that
+// VBUS for the CC probe: a direct power-monitor read (a fresh value about every 4.5 ms), because the main loop that
 // feeds vbus_fast_mv() is blocked while the probe holds. -1 while the monitor is offline.
 static std::int32_t cc_probe_vbus_mv() {
     const auto m = power::sample_now();

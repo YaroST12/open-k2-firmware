@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// UFCS (T/TAF 083-2024, T/CCSA 393-2024) request arithmetic and wire frames, pure. Frame: sync 0xAA,
-// 16-bit header (8.2.2), message code, [length, payload], CRC-8 poly 0x29 over everything after the
-// sync. Section numbers in the comments are the standard's; the byte vectors in tests/test_ufcs_frame.cpp
+// UFCS request arithmetic and wire frames, pure (reverse-engineered). Frame: sync 0xAA,
+// 16-bit header, message code, [length, payload], CRC-8 poly 0x29 over everything after the
+// sync. The byte vectors in tests/test_ufcs_frame.cpp
 // come from a real source (Baseus FH22 charger). docs/FASTCHARGE_PROTOCOLS.md section 4 has the summary.
 #pragma once
 #include <array>

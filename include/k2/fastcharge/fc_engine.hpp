@@ -195,7 +195,7 @@ private:
         UfcsOpen, UfcsPing, UfcsCaps, UfcsRequest, UfcsPower, UfcsKeep,
         VivoOpen, VivoSeq, VivoRun,
     };
-    // UFCS message exchange (T/TAF 083-2024 8.2.3.2, 8.3): every message that is not an ACK / NCK waits for its ACK.
+    // UFCS message exchange (reverse-engineered): every message that is not an ACK / NCK waits for its ACK.
     enum class UKind : std::uint8_t { Main, Keep, Refuse, Soft };   // Main: Ping opener, Get_Output_Capabilities, Request
     enum class UPend : std::uint8_t { None, Ping, Caps, Request };       // a main message queued until tMsgTransDelay has passed
 

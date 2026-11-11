@@ -79,7 +79,7 @@ private:
 // a full ring drops that edge and counts an overrun (never blocks, never overwrites unsent edges).
 class StreamRing {
 public:
-    void init(std::uint32_t* buf, std::size_t cap) { buf_ = buf; cap_ = cap; head_ = tail_ = 0; over_ = 0; pushed_ = 0; }
+    void init(std::uint32_t* buf, std::size_t cap) { buf_ = buf; cap_ = cap; head_ = 0; tail_ = 0; over_ = 0; pushed_ = 0; }
     void push(std::uint32_t w) {   // producer: the EXTI ISR (or the synthetic source)
         if (head_ - tail_ >= cap_) { over_ = over_ + 1; return; }
         buf_[head_ % cap_] = w;

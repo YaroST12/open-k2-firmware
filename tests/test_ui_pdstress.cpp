@@ -338,6 +338,77 @@ static void test_cancel_during_the_wait_drops_the_resume() {
     CHECK_EQ(g_stub.ps_file_present, false);
 }
 
+// ---- Rd at the end of a run ---------------------------------------------------------------------------------------------------------
+
+// The Rd a pd-reread presented becomes the run's (reread_take_over), so the run hands it back when it ends: every way a run ends
+// leaves the line the way the charger test does (Rd off, the run-owner mark cleared). Hardware 2026-11-11: it stayed on.
+static void start_on_a_rereads_rd(Ui& ui) {
+    g_stub.rd_run = true;   // what the re-read left on the line
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Ok));
+    CHECK_EQ(g_stub.rd_run, true);
+}
+
+static void test_a_finished_run_gives_the_rd_back() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    start_on_a_rereads_rd(ui);
+    run(ui, 3000);
+    CHECK_EQ(g_stub.rd_run, true);   // kept for the whole run
+    run(ui, 120000);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::Done));
+    CHECK_EQ(g_stub.rd_run, false);
+    CHECK_EQ(g_stub.run_owner, false);
+}
+
+static void test_a_cancelled_run_gives_the_rd_back() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    start_on_a_rereads_rd(ui);
+    run(ui, 3000);
+    ui.pd_stress().cancel();
+    CHECK_EQ(g_stub.rd_run, true);   // not before the 5 V release is confirmed
+    run(ui, 6000);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::Cancelled));
+    CHECK_EQ(g_stub.rd_run, false);
+    CHECK_EQ(g_stub.run_owner, false);
+}
+
+// A stop that does not wait for the 5 V release (the supply never comes back after a dropout): the Rd still goes.
+static void test_a_run_that_gave_up_gives_the_rd_back() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    start_on_a_rereads_rd(ui);
+    run(ui, 3000);
+    set_vbus(0);
+    run(ui, 30000);
+    CHECK_EQ(ui.pd_stress().running(), false);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::NoRecovery));
+    CHECK_EQ(g_stub.rd_run, false);
+}
+
+// The reboot budget is spent: the resumed run ends at once (TooManyLosses) and hands the line back like any other end.
+static void test_a_run_stopped_by_the_reboot_budget_gives_the_rd_back() {
+    std::unique_ptr<Ui> h; interrupted_run(h);
+    {
+        ps::journal::Image im;
+        ps::journal::Journal j(ps::journal_hw::store());
+        CHECK_EQ(j.load(im), true);
+        im.resume.losses = ps::kMaxRunLosses;
+        CHECK_EQ(j.save(im), true);
+    }
+    g_stub.sink = {}; set_vbus(0);
+    boot(h);
+    Ui& ui = *h;
+    set_vbus(5000);
+    g_stub.rd_run = true;   // the Rd of the self-powered boot
+    g_stub.sink.state = pd::SinkState::Ready; g_stub.sink.result = pd::SinkResult::Ok; g_stub.sink.pos = 1; g_stub.sink.mv = 5000;
+    g_stub.sink.ps_rdy_inferred = true;
+    run(ui, 20000);
+    CHECK_EQ(ui.pd_stress().running(), false);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::TooManyLosses));
+    CHECK_EQ(g_stub.rd_run, false);
+}
+
 // The status block the remote op and the shell serve: idle, a refused start's code, running, finished with the score.
 static void test_the_status_block_follows_the_run() {
     fixture();
@@ -419,5 +490,9 @@ int main() {
     test_back_held_at_power_up_drops_the_journal();
     test_a_damaged_journal_is_ignored();
     test_cancel_during_the_wait_drops_the_resume();
+    test_a_finished_run_gives_the_rd_back();
+    test_a_cancelled_run_gives_the_rd_back();
+    test_a_run_that_gave_up_gives_the_rd_back();
+    test_a_run_stopped_by_the_reboot_budget_gives_the_rd_back();
     return test_report("ui_pdstress");
 }

@@ -11,6 +11,8 @@
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/chargertest/run_events.hpp"
 #include "k2/drivers/systick.hpp"
+#include "k2/drivers/sysreset.hpp"
+#include "k2/chargertest/session_store.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/core/remote.hpp"
 #include "k2/ui/ui.hpp"
@@ -62,6 +64,10 @@ struct HwProbe final : dbg::Probe {
         if (g_remote) g_remote->boot_text_read(static_cast<std::uint16_t>(off), out);
     }
     std::string_view hash() override { return kGitHash; }
+    void boot(dbg::BootInfo& b) override {
+        b.boots = session::boots();
+        b.reset_flags = sysreset::reset_flags();
+    }
 };
 
 }  // namespace

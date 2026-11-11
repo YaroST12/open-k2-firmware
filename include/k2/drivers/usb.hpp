@@ -27,7 +27,10 @@ struct Stats {
     volatile std::uint32_t isrs;          // USB interrupt entries
     volatile std::uint32_t log_sent;      // log reports handed to the HID IN endpoint
     volatile std::uint32_t log_dropped;   // log lines (or, last resort, frames) dropped by a full queue
-    volatile std::uint32_t poll_gap_max;  // longest ms between poll() calls since the last log_stats()
+    // Longest ms between poll() calls since the last log_stats() (one 2 s heartbeat window, zeroed there on purpose: the
+    // Diag row, GET_STATE part 2 and tools/loop_survey.py read it as "the recent worst gap", not a peak since boot,
+    // which the boot-time stalls would pin for good).
+    volatile std::uint32_t poll_gap_max;
 };
 extern Stats stats;
 

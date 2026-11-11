@@ -16,7 +16,7 @@ single 0x00 framing-error break the K2's own line release produces is marked "<<
 
 Default axes, most likely first (variants are ordered by the sum of the value ranks, so the likeliest mixes
 run first): version ([8:3]) 1,2,3,0; opener 0,6,1 (Ping, Get_Output_Capabilities, ACK); stop bits 1,2; crcsync 0,1
-(CRC over the sync byte no/yes). The standard (T/TAF 083-2024) is the first variant of every axis.
+(CRC over the sync byte no/yes). The behaviour real sources show is the first variant of every axis.
 --vary NAME=v1,v2,... replaces the axes (repeatable; the order given is the likelihood order). Field names are the
 `k2_remote.py ufcs show` names. Refuses to run unless the K2 is idle at 5 V; stops on a reboot (uptime goes
 backwards), on an inline / no-monitor refusal or on VBUS leaving the 5 V window. Uses /tmp/k2-device.lock.

@@ -74,7 +74,7 @@ void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint1
 // (ResultGrid::sync_dots) without repainting either cell;
 // partial: amber tint + amber ink, a 2 px amber bar along the bottom edge (a labelled cell) or a tilde (no label): some of the
 // steps passed or the source capped below the target. Amber because it is abnormal; the bar / tilde because colour alone never
-// carries a state (IEC 60073). Appended last: the values travel in RowSpec::state.
+// carries a state (redundant coding). Appended last: the values travel in RowSpec::state.
 enum class Verdict : uint8_t { Pending, Running, Pass, Fail, None, Skip, Stopped, Partial };
 constexpr int16_t kPartialBarH = 2;   // the bar of a labelled Partial cell
 constexpr int16_t kRunDotSize = 5;    // the Running cell's dot: a kRunDotSize x kRunDotSize square

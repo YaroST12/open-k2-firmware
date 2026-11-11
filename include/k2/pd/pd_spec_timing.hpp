@@ -49,6 +49,8 @@ constexpr std::uint32_t band_mv(std::uint32_t target_mv) { return target_mv * kV
 
 // Hard Reset recovery as seen from the sink: tPSHardReset (about 25-35 ms) + the source's 660 ms off time + tSrcRecover + tSrcTurnOn
 // up to a valid 5 V: about 1.96 s to a usable port, 2.2 s with the K2's own re-request (derived).
+// Reference values: nothing reads these two yet (the engines time their own recovery waits); kept as the documented budget a
+// recovery timeout is judged against, not removed, so a change in flight that wants one does not break.
 inline constexpr std::uint32_t kHardResetRecoveryMs = 1960;
 inline constexpr std::uint32_t kHardResetRecoveryMaxMs = 2200;
 

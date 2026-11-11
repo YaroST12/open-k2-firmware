@@ -33,9 +33,9 @@
 namespace k2::trace_stream {
 
 inline constexpr std::uint8_t kSync = 0xA6;
-// Start/Data/Lost belong to this streamer; Hello..Beat are the other kinds of the multiplexed debug stream, which sends
+// Start/Data/Lost belong to this streamer; Hello..Boot are the other kinds of the multiplexed debug stream, which sends
 // this streamer's frames unchanged next to them (k2/core/dbg_stream.hpp lays the payloads out).
-enum class Kind : std::uint8_t { Start = 1, Data = 2, Lost = 3, Hello = 4, Text = 5, Log = 6, Power = 7, Run = 8, Gap = 9, Beat = 10 };
+enum class Kind : std::uint8_t { Start = 1, Data = 2, Lost = 3, Hello = 4, Text = 5, Log = 6, Power = 7, Run = 8, Gap = 9, Beat = 10, Boot = 11 };
 
 inline constexpr std::size_t kChunk = 2 * pdtrace::kMaxRecord;   // ring bytes per Data frame: two largest records
 inline constexpr std::size_t kFrameMax = 3 + 4 + kChunk + 2;     // 91

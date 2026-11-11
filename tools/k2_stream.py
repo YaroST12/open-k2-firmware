@@ -32,7 +32,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pd_trace  # noqa: E402
 
-K_HELLO, K_TEXT, K_LOG, K_POWER, K_RUN, K_GAP, K_BEAT = 4, 5, 6, 7, 8, 9, 10
+K_HELLO, K_TEXT, K_LOG, K_POWER, K_RUN, K_GAP, K_BEAT, K_BOOT = 4, 5, 6, 7, 8, 9, 10, 11
+RESET_BITS = ((26, "PIN"), (27, "POR"), (28, "SW"), (29, "IWDG"), (30, "WWDG"), (31, "LPWR"))   # CRM CTRLSTS flags
 TRACE_KINDS = (1, 2, 3)
 UNREAD = 0xFFFF
 JSONL = ("boot", "trace", "log", "power", "run", "beat", "gaps")   # file stems; timeline order of equal times
@@ -100,6 +101,11 @@ class Names:
 
 
 # ---- decoding of the kinds ---------------------------------------------------------------------
+
+def reset_names(flags):
+    """The reset-cause flags of a Boot frame as 'POR PIN' ('-' when none is set)."""
+    return " ".join(n for b, n in RESET_BITS if flags >> b & 1) or "-"
+
 
 class Unwrap32:
     """A 32-bit millisecond counter as an ever-growing number (the K2 wraps after 49 days; a session may not)."""
@@ -187,17 +193,31 @@ class Session:
         self.hello, self.db, self.db_source, self.db_warning = None, {}, None, None
         self.wall0 = None          # wall time of K2 ms 0 as estimated from the Hello
         self.boot = bytearray()
-        self.counts = dict(log=0, run=0, power=0, beat=0, gap_log=0, gap_run=0, wire_log=0, bad_frames=0, run_end=0)
+        self.boot_id = self.reset_flags = None   # from the Boot frame (None on firmware that does not send one)
+        self.boot_index = 1                      # which boot of this recording the rows belong to
+        self.t_off = 0.0                         # K2 clocks restart at 0 on every boot; later boots are shifted to follow the last row
+        self.prior = []                          # (index, boot id, ok, summary lines) of the boots already closed
+        self.counts = self._fresh_counts()
         self.log_expect = None
         self.last_beat = None
         self.last_ms = 0.0
-        self.unwrap = {k: Unwrap32() for k in ("log", "power", "run", "beat", "hello", "text")}
+        self.unwrap = self._fresh_unwrap()
         self.closed_stats = None
         self.rows_written = 0
 
+    @staticmethod
+    def _fresh_counts():
+        return dict(log=0, run=0, power=0, beat=0, gap_log=0, gap_run=0, wire_log=0, bad_frames=0, run_end=0)
+
+    @staticmethod
+    def _fresh_unwrap():
+        return {k: Unwrap32() for k in ("log", "power", "run", "beat", "hello", "text")}
+
     # -- output
     def _row(self, kind, row):
-        row = dict(row, kind=kind)
+        row = dict(row, kind=kind, boot_index=self.boot_index)
+        if kind != "gap":              # gap rows reuse last_ms, which is already on the recording's clock
+            row["t_ms"] = row["t_ms"] + self.t_off
         row["wall"] = round(self.wall(), 3)
         self.last_ms = max(self.last_ms, row["t_ms"])
         self.rows_written += 1
@@ -249,9 +269,39 @@ class Session:
             self._gapframe(pl)
         elif kind == K_BEAT:
             self._beat(pl)
+        elif kind == K_BOOT:
+            self._boot(pl)
+
+    def _boundary(self, why):
+        """The K2 restarted inside this recording: close the boot's accounting, restart the clocks after the last row."""
+        if self.boot:
+            self._row("boot", {"t_ms": self.last_ms - self.t_off, "text": bytes(self.boot).decode("utf-8", "replace").rstrip("\r\n")})
+            self.boot = bytearray()
+        ok, lines = self.summary()
+        self.prior.append((self.boot_index, self.boot_id, ok, lines))
+        self.t_off = self.last_ms + 1.0
+        self.boot_index += 1
+        self.boot_id = self.reset_flags = None
+        self.counts = self._fresh_counts()
+        self.unwrap = self._fresh_unwrap()
+        self.log_expect = self.last_beat = None
+        self.tail, self.bad = b"", 0
+        self.trace = pd_trace.TraceStream(_TraceSink(self))
+        self._row("boot", {"t_ms": 0.0, "marker": "boot_boundary",
+                           "text": f"BOOT BOUNDARY: the K2 restarted ({why}); its clock restarts here, rows below belong to boot {self.boot_index} of this recording"})
+
+    def _boot(self, pl):
+        boots, flags = struct.unpack_from("<HI", pl)
+        if self.boot_id is not None and boots != self.boot_id:
+            self._boundary(f"boot id {self.boot_id} -> {boots}")   # a restart whose clock did not go back
+        self.boot_id, self.reset_flags = boots, flags
+        self._row("boot", {"t_ms": float(self.hello["ms"]) if self.hello else 0.0, "boot_id": boots, "reset_flags": flags,
+                           "text": f"boot #{boots} reset={reset_names(flags)} (CTRLSTS 0x{flags:08X})"})
 
     def _hello(self, pl):
         ver, mask, hz, ms, flags = struct.unpack_from("<BBHIB", pl)
+        if self.hello is not None and ms < self.last_ms - self.t_off:
+            self._boundary(f"its clock went back from {self.last_ms - self.t_off:.0f} ms to {ms} ms")
         fw = pl[9:].decode("ascii", "replace")
         self.hello = {"version": ver, "mask": mask, "power_hz": hz, "ms": ms, "history": bool(flags & 1), "firmware": fw}
         self.wall0 = self.wall() - ms / 1000.0
@@ -369,6 +419,13 @@ class Session:
         if st and st.get("power_folded"):
             lines.append(f"power: {st['power_folded']} samples folded into min/max windows, {st.get('power_same', 0)} unchanged skipped")
         lines.insert(0, f"counters from the {src}" if st else "no device counters (no stats line, no heartbeat)")
+        if self.prior:   # a restart inside the recording: each boot is judged against its own device counters
+            head = []
+            for idx, bid, pok, plines in self.prior:
+                head.append(f"boot {idx}" + (f" (#{bid})" if bid is not None else "") + f": {'complete' if pok else 'INCOMPLETE'}")
+                head += ["  " + x for x in plines]
+                ok = ok and pok
+            lines = head + [f"boot {self.boot_index}" + (f" (#{self.boot_id})" if self.boot_id is not None else "") + " (last):"] + ["  " + x for x in lines]
         return ok and st is not None, lines
 
     def write_meta(self):
@@ -377,7 +434,8 @@ class Session:
         ok, lines = self.summary()
         meta = {"hello": self.hello, "logdb": self.db_source, "logdb_warning": self.db_warning,
                 "k2_ms0_wall": self.wall0, "frames": self.frames, "bad_frames": self.bad, "counts": self.counts,
-                "complete": ok, "summary": lines, "boot": bytes(self.boot).decode("utf-8", "replace")}
+                "complete": ok, "summary": lines, "boots": self.boot_index, "boot_id": self.boot_id,
+                "reset_flags": self.reset_flags, "boot": bytes(self.boot).decode("utf-8", "replace")}
         (self.out / "meta.json").write_text(json.dumps(meta, indent=1) + "\n")
 
     def close(self):

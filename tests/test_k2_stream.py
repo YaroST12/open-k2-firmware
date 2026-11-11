@@ -47,6 +47,13 @@ def hello(ms=1000, mask=15, hz=20, history=False, fw="e32bcda"):
     return frame(4, struct.pack("<BBHIB", 1, mask, hz, ms, 1 if history else 0) + fw.encode())
 
 
+def bootf(boots, flags):
+    return frame(11, struct.pack("<HI", boots, flags))
+
+
+PIN, POR, SW, IWDG = 1 << 26, 1 << 27, 1 << 28, 1 << 29
+
+
 def text(ms, line, tag=1):
     return frame(5, struct.pack("<IB", ms, tag) + line.encode())
 
@@ -230,6 +237,52 @@ class TestKinds(unittest.TestCase):
         s.feed(frame(7, b"\x00\x01"))
         s.feed(run(5, 1, 1, 1))
         self.assertEqual(s.counts["run"], 1)
+
+
+class TestBootBoundary(unittest.TestCase):
+    def test_boot_frame_names_the_boot_and_the_reset_cause(self):
+        out = []
+        s = new_session(echo=lambda k, line: out.append(line))
+        s.feed(hello() + bootf(12, POR | PIN))
+        self.assertEqual((s.boot_id, s.reset_flags), (12, POR | PIN))
+        self.assertTrue(any("boot #12" in x and "PIN POR" in x for x in out))
+
+    def test_a_restart_with_a_smaller_clock_is_a_boot_boundary(self):
+        out = []
+        with tempfile.TemporaryDirectory() as t:
+            s = new_session(t, echo=lambda k, line: out.append(line))
+            s.feed(hello(ms=1000) + bootf(12, POR | PIN) + run(40000, 1, 1, 1) + beat(40000))
+            s.feed(hello(ms=900) + bootf(13, SW | PIN) + run(1500, 1, 1, 1) + beat(1500))
+            s.close()
+            self.assertEqual(s.boot_index, 2)
+            self.assertTrue(any("BOOT BOUNDARY" in x for x in out))
+            self.assertTrue(any("boot #13" in x and "PIN SW" in x for x in out))
+            ms = [r["t_ms"] for r in rows(t, "run")]
+            self.assertEqual(ms, sorted(ms))                      # the second boot's clock continues after the first one
+            self.assertEqual([r["boot_index"] for r in rows(t, "run")], [1, 2])
+            self.assertEqual(s.counts["run"], 1)                  # counters are per boot (the device's are)
+            self.assertIn("boot #13", (Path(t) / "timeline.txt").read_text())
+
+    def test_a_boundary_is_found_without_a_boot_frame_too(self):
+        s = new_session()
+        s.feed(hello(ms=5000) + run(9000, 1, 1, 1))
+        s.feed(hello(ms=100) + run(300, 1, 1, 1))                 # firmware from before the Boot frame
+        self.assertEqual(s.boot_index, 2)
+        self.assertIsNone(s.boot_id)
+
+    def test_a_stream_restart_on_the_same_boot_is_not_a_boundary(self):
+        s = new_session()
+        s.feed(hello(ms=5000) + bootf(12, POR) + run(9000, 1, 1, 1))
+        s.feed(hello(ms=9500) + bootf(12, POR))                   # `stream off` / `stream on`, clock kept running
+        self.assertEqual(s.boot_index, 1)
+
+    def test_the_summary_keeps_the_verdict_of_each_boot(self):
+        s = new_session()
+        s.feed(hello(ms=1000) + bootf(1, POR) + run(2000, 1, 1, 1))
+        s.feed(hello(ms=100) + bootf(2, SW) + run(300, 1, 1, 1))
+        ok, lines = s.summary()
+        self.assertTrue(any(x.startswith("boot 1") for x in lines))
+        self.assertTrue(any(x.startswith("boot 2") and "(#2)" in x for x in lines))
 
 
 class TestLoss(unittest.TestCase):

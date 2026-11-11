@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// UFCS wire frames against the published standard (T/TAF 083-2024): encode, decode, CRC-8 (poly 0x29),
+// UFCS wire frames against what real sources send (reverse-engineered): encode, decode, CRC-8 (poly 0x29),
 // the header fields (receiver address, message number, protocol version, message type), the control and
 // data command codes, Output_Capabilities decode and Request build. The byte vectors of the "FH22" tests
 // are a wire capture of a real source (a Baseus FH22 charger power bank), not hand-built.
