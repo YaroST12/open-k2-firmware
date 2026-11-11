@@ -2452,6 +2452,7 @@ bool sink_hard_reset(bool lab_inline) {
     return true;
 }
 void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
+void sink_cap_override(const std::uint32_t* pdos, std::uint8_t n) { g_sink.set_sink_cap_override(pdos, n); }
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     g_cc1_mv = cc1_mv;   // kept for the attach scan's ADC cross-check (pd::rd_window_line) and its re-run on fresh levels
     g_cc2_mv = cc2_mv;
@@ -2752,6 +2753,7 @@ usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv) {
     c.on_lines(dp_mv, dm_mv);
     return c.link();
 }
+usblink::Raw usb_raw() { return g_engine.usb.raw(); }
 const pd::ExtInfo& ext() { return g_engine.ext; }
 bool cable_thunderbolt() { return g_engine.cable_thunderbolt(); }
 std::uint32_t rx_count() { return g_engine.caps.rx_count; }

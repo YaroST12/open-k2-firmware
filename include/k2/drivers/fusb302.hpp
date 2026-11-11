@@ -243,6 +243,10 @@ void sink_release();
 // User-requested hard reset; false = refused (no CC, or inline). `lab_inline` = the remote's lab-only
 // `pd reset --inline --confirm` (gated by pd::lab_reset_verdict): its one Hard Reset goes out even inline.
 bool sink_hard_reset(bool lab_inline = false);
+// Device twin live proof: answer the source's Get_Sink_Cap with these caller-owned words (1..7, not copied, they must outlive the
+// override) instead of the K2's own; (nullptr, 0) restores the K2's. Only the Sink_Capabilities answer changes (pd::Sink::
+// set_sink_cap_override). The run that sets it clears it, on every exit path.
+void sink_cap_override(const std::uint32_t* pdos, std::uint8_t n);
 void sink_set_cap(std::uint32_t mv);  // highest voltage a request may ask for (from the power monitor)
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv);  // measured CC voltages; inline, no sink Rd near 1.5 V = sink left. Also stored as the latest net levels (g_cc1_mv/g_cc2_mv) for the attach scan's Rd-window cross-check and its re-run on fresh levels while a line is attached with no PD decoded yet; -1 = unknown
 // A sink's Rd level (the sink band, about 1.5 V) on a CC line while the K2 pulls none down itself, from the latest sink_cc() levels:
@@ -384,6 +388,7 @@ const pd::VdmInfo& sink_vdm();
 // USB / Thunderbolt link classified from the PD traffic seen on SOP, SOP' and SOP''; the idle D+/D- levels (mV, -1 unknown)
 // only decide when no PD data was seen. Passive: never transmits. Limits: k2/pd/usb_link.hpp.
 usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv);
+usblink::Raw usb_raw();   // the PD facts behind it (Enter_USB, Thunderbolt / DisplayPort Enter_Mode): what a twin keeps as "observed"
 const pd::ExtInfo& ext();   // latest extended messages from the source (Manufacturer_Info, Source_Cap_Extended, ...)
 const pd::SinkCapsSeen& sink_caps();  // the sink's own Sink_Capabilities, only when the source asked for them
 const pd::Contract& contract();  // passively decoded Request / PS_RDY      // identity / SVIDs / modes the source sent on SOP

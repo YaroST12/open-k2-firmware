@@ -311,6 +311,15 @@ public:
     // recordings). The Soft_Reset still resets our own state; only the transmission is dropped. Default on.
     void set_answers_sop(bool on) { answers_sop_ = on; }
     bool answers_sop() const { return answers_sop_; }
+    // Impersonation seam of the device twin's live proof: answer Get_Sink_Cap with `n` (1..7) caller-owned words instead of
+    // kSinkCapPdos. The array is NOT copied (the K2 has no spare RAM for a second list): it must outlive the override.
+    // nullptr, n == 0 or n > 7 = the K2's own words. Not cleared by detach(): the run that set it clears it. The revision and
+    // role bits of the header stay the K2's own, and Get_Sink_Cap_Extended keeps its own answer (set_sink_cap_ext_mode).
+    void set_sink_cap_override(const std::uint32_t* pdos, std::uint8_t n) {
+        override_pdos_ = (pdos != nullptr && n >= 1 && n <= 7) ? pdos : nullptr;
+        override_n_ = override_pdos_ != nullptr ? n : 0;
+    }
+    bool sink_cap_overridden() const { return override_pdos_ != nullptr; }
     // Answer to Get_Sink_Cap_Extended: the K2's Sink_Capabilities_Extended (make_skedb, the default: the UGREEN X865 lists its
     // SPR AVS APDO only after it, hardware 2026-11-04), Not_Supported (leaves the X865 at 6 PDOs) or nothing (as the sink
     // did before). Subject to set_gives_sink_cap like the Sink_Capabilities answer.
@@ -422,6 +431,8 @@ private:
     bool gives_sink_cap_ = true;
     bool answers_sop_ = true;
     bool sink_cap_pending_ = false;   // a Get_Sink_Cap answer waits; it has its own slot so it never displaces a Request
+    std::uint8_t override_n_ = 0;               // words in override_pdos_ (set_sink_cap_override)
+    const std::uint32_t* override_pdos_ = nullptr;
     SinkCapExtMode sink_cap_ext_mode_ = SinkCapExtMode::Skedb;
     bool sink_cap_ext_pending_ = false;   // a Get_Sink_Cap_Extended answer waits (own slot, as above)
     std::uint8_t swap_reply_ = 0;         // a role-swap answer waits (Reject / Not_Supported type; own slot, as above)

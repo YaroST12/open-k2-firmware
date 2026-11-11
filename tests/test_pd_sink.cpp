@@ -1314,6 +1314,46 @@ int main() {
         CHECK_EQ(int(r.sink.take_tx(m)), 0);
     }
 
+    // ---- Get_Sink_Cap with an override (the device twin's live proof answers as the twin) ----
+    {
+        Rig r;
+        static const std::uint32_t twin_pdos[4] = {0x0801912C, 0x0002D0C8, 0xC0DC2164, 0x0004B0C8};   // 5 V 3 A, 9 V 2 A, PPS, 20 V 2 A
+        r.sink.set_sink_cap_override(twin_pdos, 4);
+        r.ctl(kCtlGetSinkCap);
+        CHECK_EQ(r.sent.size(), 1u);
+        const auto& m = r.sent.back();
+        CHECK_EQ(m.header, 0x4084);   // four objects now; the revision and role bits are the ones of the plain answer
+        CHECK_EQ(m.len, 16);
+        for (int i = 0; i < 4; ++i) {
+            const std::uint32_t w = m.data[4 * i] | (m.data[4 * i + 1] << 8) | (m.data[4 * i + 2] << 16) | (std::uint32_t(m.data[4 * i + 3]) << 24);
+            CHECK_EQ(w, twin_pdos[i]);
+        }
+        // the Sink_Capabilities_Extended answer stays the K2's own (a twin keeps no SKEDB)
+        r.ctl(kCtlGetSinkCapExt);
+        CHECK_EQ(r.sent.size(), 2u);
+        // back to the K2's own words, and a detach does not clear the override (the live run owns it)
+        r.sink.detach();
+        r.ctl(kCtlGetSinkCap);
+        CHECK_EQ(r.sent.size(), 3u);
+        CHECK_EQ(r.sent.back().len, 16);
+        r.sink.set_sink_cap_override(nullptr, 0);
+        r.ctl(kCtlGetSinkCap);
+        CHECK_EQ(r.sent.size(), 4u);
+        CHECK_EQ(r.sent.back().header, 0x2084);
+        CHECK_EQ(r.sent.back().len, 8);
+        CHECK_EQ(int(r.sent.back().data[0]), 0x0A);
+    }
+    {   // more than seven words or none: the K2's own answer (an override is never a malformed message)
+        Rig r;
+        static const std::uint32_t nine[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+        r.sink.set_sink_cap_override(nine, 9);
+        r.ctl(kCtlGetSinkCap);
+        CHECK_EQ(r.sent.back().len, 8);
+        r.sink.set_sink_cap_override(nine, 0);
+        r.ctl(kCtlGetSinkCap);
+        CHECK_EQ(r.sent.back().len, 8);
+    }
+
     // ---- Get_Sink_Cap_Extended (control type 22, USB PD 7.19.4): Sink_Capabilities_Extended / Not_Supported / silence ----
     {   // the SKEDB itself: 24 bytes, version 1, Sink Modes = AVS + VBUS powered + PPS, EPR fields zero (not EPR capable)
         const auto s = make_skedb();

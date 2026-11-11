@@ -220,10 +220,12 @@ bool Sink::take_tx(TxMsg& out) {
         sink_cap_pending_ = false;
         update_rev();
         out = TxMsg{};
-        out.header = make_header(kDataSinkCap, 2, rev_);
-        out.len = 8;
-        for (int w = 0; w < 2; w++)
-            for (int i = 0; i < 4; i++) out.data[4 * w + i] = std::uint8_t(kSinkCapPdos[w] >> (8 * i));
+        const std::uint32_t* words = override_pdos_ != nullptr ? override_pdos_ : kSinkCapPdos;
+        const std::uint8_t nw = override_pdos_ != nullptr ? override_n_ : 2;
+        out.header = make_header(kDataSinkCap, nw, rev_);
+        out.len = std::uint8_t(4 * nw);
+        for (int w = 0; w < nw; w++)
+            for (int i = 0; i < 4; i++) out.data[4 * w + i] = std::uint8_t(words[w] >> (8 * i));
         last_tx_ = out;
         return true;
     }
