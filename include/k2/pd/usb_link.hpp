@@ -83,6 +83,17 @@ enum class AltState : std::uint8_t { None, Advertised, Entered };
 std::size_t format_speed(const Link& l, std::span<char> out);
 AltState format_alt(const Link& l, std::span<char> out, bool tag = true);
 
+// The words that decided a negotiated link, for a caller that stores them (the device twin): the Enter_USB data object
+// the host sent, the Thunderbolt Enter_Mode VDO, the ACKed DP Configure pin assignment. All zero = nothing negotiated.
+struct Raw {
+    bool eu_ok = false;           // Enter_USB was Accepted since the last Data_Reset
+    std::uint32_t eu_vdo = 0;
+    bool tbt_active = false;      // Thunderbolt Enter_Mode ACKed
+    std::uint32_t tbt_enter_vdo = 0;
+    bool dp_active = false;       // DisplayPort Enter_Mode ACKed
+    std::uint8_t dp_pin = 0;      // ACKed pin assignment, A = b0 .. F = b5
+};
+
 class Classifier {
 public:
     // `payload` = the data objects, little endian, VDM header first for a VDM; control messages have none.
@@ -91,6 +102,7 @@ public:
     void on_lines(std::int32_t dp_mv, std::int32_t dm_mv);
     void on_reset() { *this = Classifier{}; }
     Link link() const;
+    Raw raw() const { return {eu_ok_, eu_vdo_, tbt_active_, tbt_enter_vdo_, dp_active_, dp_pin_}; }
 
 private:
     Link link_core() const;

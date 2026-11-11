@@ -9,8 +9,19 @@ namespace k2::pd {
 namespace {
 constexpr std::uint8_t bit(IdStep s) { return std::uint8_t(1u << unsigned(s)); }
 constexpr std::uint8_t kVdmDiscoverIdentity = 1, kVdmDiscoverSvids = 2, kVdmDiscoverModes = 3;
-constexpr std::uint16_t kPdSvid = 0xFF00;
+constexpr std::uint16_t kPdSvid = 0xFF00, kSvidDp = 0xFF01, kSvidTbt = 0x8087;
 }  // namespace
+
+std::uint16_t id_modes_svid(std::span<const std::uint16_t> svids, unsigned idx) {
+    unsigned at = 0;
+    for (const std::uint16_t want : {kSvidDp, kSvidTbt})
+        if (std::find(svids.begin(), svids.end(), want) != svids.end() && at++ == idx) return want;
+    for (const std::uint16_t s : svids) {
+        if (s == kSvidDp || s == kSvidTbt) continue;
+        if (at++ == idx) return s;
+    }
+    return 0;
+}
 
 const char* id_step_short(IdStep s) {
     switch (s) {
@@ -113,7 +124,7 @@ bool Identify::build(std::span<const std::uint16_t> svids) {
                 attempts_ = 0;
                 return false;
             }
-            cur_svid_ = svids[mode_idx_];
+            cur_svid_ = id_modes_svid(svids, mode_idx_);
             const std::uint32_t h = vdm_header(cur_svid_, kVdmDiscoverModes, rev_);
             m.header = make_header(kMsgVendorDefined, 1, rev_);
             m.len = 4;
@@ -181,8 +192,13 @@ void Identify::on_message(Sop sop, std::uint16_t header, std::span<const std::ui
                                     : st_.step == IdStep::Svids ? kVdmDiscoverSvids : kVdmDiscoverModes;
             if (cmd != want || ctype == 0) return;  // our own request echoed or someone else's command
             if (st_.step == IdStep::Modes && std::uint16_t(payload[2] | (payload[3] << 8)) != cur_svid_) return;
-            if (ctype == 1) step_ok();
-            else if (ctype == 2) step_skipped();
+            if (ctype == 1) {
+                if (st_.step == IdStep::Modes && payload.size() >= 8 && st_.num_modes < kIdModeSvids) {
+                    st_.mode_svid[st_.num_modes] = cur_svid_;
+                    st_.mode_vdo[st_.num_modes++] = payload[4] | (payload[5] << 8) | (payload[6] << 16) | (std::uint32_t(payload[7]) << 24);
+                }
+                step_ok();
+            } else if (ctype == 2) step_skipped();
             else attempt_failed(now);  // BUSY
             break;
         }

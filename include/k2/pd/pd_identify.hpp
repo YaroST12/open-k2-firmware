@@ -42,7 +42,15 @@ struct IdStatus {
     std::array<std::uint32_t, 7> sink_pdos{};
     std::uint32_t revision = 0;     // Revision message data object (0 = none)
     IdWhy why = IdWhy::None;        // set with state Aborted
+    // The first mode VDO of each Discover Modes ACK (at most kIdModeSvids): DisplayPort capabilities, Thunderbolt mode ...
+    std::uint8_t num_modes = 0;
+    std::array<std::uint16_t, kIdModeSvids> mode_svid{};
+    std::array<std::uint32_t, kIdModeSvids> mode_vdo{};
 };
+
+// The SVID Discover Modes asks about at position `idx` (0 = first): DisplayPort (0xFF01) and Thunderbolt (0x8087) when the
+// partner listed them, then the rest in list order. 0 when there is none at that position.
+std::uint16_t id_modes_svid(std::span<const std::uint16_t> svids, unsigned idx);
 
 const char* id_step_name(IdStep s);
 const char* id_step_short(IdStep s);   // for the result: "SVIDs", "Sink caps"

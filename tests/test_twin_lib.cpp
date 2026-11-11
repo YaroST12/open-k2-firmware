@@ -83,7 +83,7 @@ static void test_codec_roundtrip() {
     t.num_pdos = 7;
     t.rdo = 1;
     t.rdo_pdo = 2;
-    CHECK_EQ(encode(t, 1, b), kMaxFileBytes);
+    CHECK_EQ(encode(t, 1, b), kMaxV1Bytes);   // no USB blocks: still a version 1 record
     std::array<std::uint8_t, 10> small{};
     CHECK_EQ(encode(t, 1, small), std::size_t(0));   // no room: nothing written
     // a full 24-character name has no terminator in the file and still reads back whole

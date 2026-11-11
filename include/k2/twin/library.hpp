@@ -17,6 +17,13 @@
 //         the Request pair (flag b0): the RDO, then the source PDO it pointed at, 2 x u32
 //     end CRC16 CCITT (init 0xFFFF, k2::bbstore::crc16) over every byte before it
 // That is 40 bytes at the least, 76 at the most, 52 for a typical phone (three sink PDOs, no Request).
+// Version 2 adds the USB data blocks (k2/twin/usbdata.hpp) after the Request pair. It is written only when a block is present,
+// so a twin without USB data stays a byte-identical version 1 record, and a version 1 record reads on as it always did.
+//     flags b1: a declared block follows: [n_pt, n_svids, n_modes] (counts 0..2, 0..6, 0..2, not all zero), then n_pt x u32
+//         product-type VDOs, n_svids x u16 SVIDs, n_modes x (u16 SVID + u32 mode VDO)       3 .. 35 bytes
+//     flags b2: an observed block follows (after the declared one): vid u16 (the partner), family u8, tbt u8, flags u8, dp_pin u8,
+//         mbps u32, enter_usb u32, tbt_enter u32                                             18 bytes
+//     A flag bit above b2 is damage, and so is b1 or b2 in a version 1 record. The largest record is 76 + 35 + 18 = 129 bytes.
 // A record whose version byte is newer than this build knows is refused, never guessed at (and never overwritten by a
 // list or a count). A save or rename replaces the file atomically (littlefs commit + rename): a power cut leaves the old
 // twin or the new one.
@@ -32,6 +39,7 @@
 #include "k2/core/bbstore.hpp"
 #include "k2/core/fs.hpp"
 #include "k2/pd/emlib.hpp"
+#include "k2/pd/usb_link.hpp"
 #include "k2/twin/learn.hpp"
 #include "k2/twin/twin.hpp"
 
@@ -39,12 +47,17 @@ namespace k2::twin {
 
 inline constexpr unsigned kCapacity = 12;
 inline constexpr std::uint8_t kVersion1 = 1;
-inline constexpr std::uint8_t kVersionMax = kVersion1;   // the newest layout this build reads
+inline constexpr std::uint8_t kVersion2 = 2;
+inline constexpr std::uint8_t kVersionMax = kVersion2;   // the newest layout this build reads
 inline constexpr std::size_t kOffSeq = 4, kOffFlags = 5, kOffNumPdos = 13, kOffName = 14;
 inline constexpr std::size_t kHeaderBytes = kOffName + kNameMax;                        // 38
-inline constexpr std::size_t kMaxFileBytes = kHeaderBytes + kMaxSinkPdos * 4 + 8 + 2;   // 76
+inline constexpr std::size_t kMaxV1Bytes = kHeaderBytes + kMaxSinkPdos * 4 + 8 + 2;     // 76
 inline constexpr std::size_t kMinFileBytes = kHeaderBytes + 2;
-inline constexpr std::uint8_t kFlagRequest = 1;
+inline constexpr std::uint8_t kFlagRequest = 1, kFlagDeclared = 2, kFlagObserved = 4;
+inline constexpr std::size_t kDeclHeader = 3;   // [n_pt, n_svids, n_modes]
+inline constexpr std::size_t kObsBytes = 18;
+inline constexpr std::size_t kMaxDeclBytes = kDeclHeader + kMaxProductVdos * 4 + kMaxDeclSvids * 2 + kMaxDeclModes * 6;   // 35
+inline constexpr std::size_t kMaxFileBytes = kMaxV1Bytes + kMaxDeclBytes + kObsBytes;                                       // 129
 inline constexpr const char* kDir = "/twin";
 
 enum class Dec : std::uint8_t { Ok, Short, Magic, Version, Invalid, Crc };
@@ -56,17 +69,23 @@ inline std::uint16_t get16(const std::uint8_t* p) { return std::uint16_t(p[0] | 
 inline std::uint32_t get32(const std::uint8_t* p) { return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) | (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24); }
 }  // namespace detail
 
-// Writes the version 1 record of `t` as twin number `seq`. Returns its length, 0 when `out` is too small or the twin holds
-// more than kMaxSinkPdos PDOs (nothing is written then).
+constexpr std::size_t decl_bytes(std::size_t n_pt, std::size_t n_svids, std::size_t n_modes) {
+    return kDeclHeader + n_pt * 4 + n_svids * 2 + n_modes * 6;
+}
+
+// Writes the record of `t` as twin number `seq`: version 1 when it has no USB block, version 2 otherwise. Returns its length,
+// 0 when `out` is too small or the twin holds more than the format has room for (nothing is written then).
 inline std::size_t encode(const Twin& t, std::uint8_t seq, std::span<std::uint8_t> out) {
     if (t.num_pdos > kMaxSinkPdos) return 0;
-    const bool req = t.has_request();
-    const std::size_t len = kHeaderBytes + std::size_t(t.num_pdos) * 4 + (req ? 8 : 0) + 2;
+    if (t.decl.n_pt > kMaxProductVdos || t.decl.n_svids > kMaxDeclSvids || t.decl.n_modes > kMaxDeclModes) return 0;
+    const bool req = t.has_request(), decl = t.decl.any(), obs = t.obs.valid;
+    const std::size_t len = kHeaderBytes + std::size_t(t.num_pdos) * 4 + (req ? 8 : 0) +
+                            (decl ? decl_bytes(t.decl.n_pt, t.decl.n_svids, t.decl.n_modes) : 0) + (obs ? kObsBytes : 0) + 2;
     if (out.size() < len) return 0;
     std::uint8_t* b = out.data();
-    b[0] = 'K'; b[1] = '2'; b[2] = 'T'; b[3] = kVersion1;
+    b[0] = 'K'; b[1] = '2'; b[2] = 'T'; b[3] = (decl || obs) ? kVersion2 : kVersion1;
     b[kOffSeq] = seq;
-    b[kOffFlags] = req ? kFlagRequest : 0;
+    b[kOffFlags] = std::uint8_t((req ? kFlagRequest : 0) | (decl ? kFlagDeclared : 0) | (obs ? kFlagObserved : 0));
     detail::put16(&b[6], t.vid);
     detail::put16(&b[8], t.pid);
     detail::put16(&b[10], t.id_hi);
@@ -81,6 +100,28 @@ inline std::size_t encode(const Twin& t, std::uint8_t seq, std::span<std::uint8_
         detail::put32(&b[at + 4], t.rdo_pdo);
         at += 8;
     }
+    if (decl) {
+        b[at++] = t.decl.n_pt;
+        b[at++] = t.decl.n_svids;
+        b[at++] = t.decl.n_modes;
+        for (std::size_t i = 0; i < t.decl.n_pt; ++i, at += 4) detail::put32(&b[at], t.decl.pt[i]);
+        for (std::size_t i = 0; i < t.decl.n_svids; ++i, at += 2) detail::put16(&b[at], t.decl.svids[i]);
+        for (std::size_t i = 0; i < t.decl.n_modes; ++i, at += 6) {
+            detail::put16(&b[at], t.decl.mode_svid[i]);
+            detail::put32(&b[at + 2], t.decl.mode_vdo[i]);
+        }
+    }
+    if (obs) {
+        detail::put16(&b[at], t.obs.partner_vid);
+        b[at + 2] = t.obs.family;
+        b[at + 3] = t.obs.tbt;
+        b[at + 4] = t.obs.flags;
+        b[at + 5] = t.obs.dp_pin;
+        detail::put32(&b[at + 6], t.obs.mbps);
+        detail::put32(&b[at + 10], t.obs.enter_usb);
+        detail::put32(&b[at + 14], t.obs.tbt_enter);
+        at += kObsBytes;
+    }
     detail::put16(&b[at], bbstore::crc16(0xFFFF, {b, at}));
     return len;
 }
@@ -92,9 +133,19 @@ inline Dec decode(std::span<const std::uint8_t> in, std::uint8_t& seq, Twin& out
     if (b[0] != 'K' || b[1] != '2' || b[2] != 'T') return Dec::Magic;
     if (b[3] == 0 || b[3] > kVersionMax) return Dec::Version;
     if (in.size() < kMinFileBytes) return Dec::Short;
-    if ((b[kOffFlags] & ~kFlagRequest) != 0 || b[kOffNumPdos] > kMaxSinkPdos) return Dec::Invalid;
-    const bool req = (b[kOffFlags] & kFlagRequest) != 0;
-    const std::size_t len = kHeaderBytes + std::size_t(b[kOffNumPdos]) * 4 + (req ? 8 : 0) + 2;
+    const std::uint8_t known = b[3] == kVersion1 ? kFlagRequest : std::uint8_t(kFlagRequest | kFlagDeclared | kFlagObserved);
+    if ((b[kOffFlags] & ~known) != 0 || b[kOffNumPdos] > kMaxSinkPdos) return Dec::Invalid;
+    const bool req = (b[kOffFlags] & kFlagRequest) != 0, decl = (b[kOffFlags] & kFlagDeclared) != 0,
+               obs = (b[kOffFlags] & kFlagObserved) != 0;
+    const std::size_t decl_at = kHeaderBytes + std::size_t(b[kOffNumPdos]) * 4 + (req ? 8 : 0);
+    std::size_t dlen = 0;
+    if (decl) {
+        if (in.size() < decl_at + kDeclHeader) return Dec::Short;
+        const std::uint8_t np = b[decl_at], ns = b[decl_at + 1], nm = b[decl_at + 2];
+        if (np > kMaxProductVdos || ns > kMaxDeclSvids || nm > kMaxDeclModes || (np | ns | nm) == 0) return Dec::Invalid;
+        dlen = decl_bytes(np, ns, nm);
+    }
+    const std::size_t len = decl_at + dlen + (obs ? kObsBytes : 0) + 2;
     if (in.size() < len) return Dec::Short;
     if (in.size() > len) return Dec::Invalid;
     if (bbstore::crc16(0xFFFF, {b, len - 2}) != detail::get16(&b[len - 2])) return Dec::Crc;
@@ -112,6 +163,31 @@ inline Dec decode(std::span<const std::uint8_t> in, std::uint8_t& seq, Twin& out
     if (req) {
         t.rdo = detail::get32(&b[at]);
         t.rdo_pdo = detail::get32(&b[at + 4]);
+        at += 8;
+    }
+    if (decl) {
+        t.decl.n_pt = b[at];
+        t.decl.n_svids = b[at + 1];
+        t.decl.n_modes = b[at + 2];
+        at += kDeclHeader;
+        for (std::size_t i = 0; i < t.decl.n_pt; ++i, at += 4) t.decl.pt[i] = detail::get32(&b[at]);
+        for (std::size_t i = 0; i < t.decl.n_svids; ++i, at += 2) t.decl.svids[i] = detail::get16(&b[at]);
+        for (std::size_t i = 0; i < t.decl.n_modes; ++i, at += 6) {
+            t.decl.mode_svid[i] = detail::get16(&b[at]);
+            t.decl.mode_vdo[i] = detail::get32(&b[at + 2]);
+        }
+    }
+    if (obs) {
+        if (b[at + 2] > std::uint8_t(usblink::Family::Usb4v2) || b[at + 3] > std::uint8_t(usblink::Tbt::Tbt5)) return Dec::Invalid;
+        t.obs.valid = true;
+        t.obs.partner_vid = detail::get16(&b[at]);
+        t.obs.family = b[at + 2];
+        t.obs.tbt = b[at + 3];
+        t.obs.flags = b[at + 4];
+        t.obs.dp_pin = b[at + 5];
+        t.obs.mbps = detail::get32(&b[at + 6]);
+        t.obs.enter_usb = detail::get32(&b[at + 10]);
+        t.obs.tbt_enter = detail::get32(&b[at + 14]);
     }
     seq = b[kOffSeq];
     out = t;

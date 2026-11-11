@@ -40,6 +40,12 @@ struct Rig {
         p[3] = std::uint8_t(svid >> 8);
         id.on_message(Sop::Sop, make_header(kMsgVendorDefined, 1 + extra, 2), {p, 4 + 4 * extra}, now);
     }
+    // A Discover Modes ACK carrying one mode VDO `w` (the VDM header word, then `w`).
+    void modes_ack(std::uint16_t svid, std::uint32_t w) {
+        std::uint8_t p[8] = {std::uint8_t((1 << 6) | 3), 0xA0, std::uint8_t(svid), std::uint8_t(svid >> 8),
+                             std::uint8_t(w), std::uint8_t(w >> 8), std::uint8_t(w >> 16), std::uint8_t(w >> 24)};
+        id.on_message(Sop::Sop, make_header(kMsgVendorDefined, 2, 2), {p, 8}, now);
+    }
     void ctl(std::uint8_t type) { id.on_message(Sop::Sop, make_header(type, 0, 2), {}, now); }
     std::uint8_t last_type() const { return sent.back().header & 0x1F; }
     std::uint32_t last_word() const {
@@ -68,11 +74,16 @@ int main() {
         CHECK_EQ(r.last_word(), 0xFF00A002u);
         r.vdm(1, 2, 0xFF00, 1);
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_word(), 0x2717A003u);
-        r.vdm(1, 3, 0x2717, 1);
+        CHECK_EQ(r.last_word(), 0xFF01A003u);  // the readable SVID (DisplayPort) is asked first
+        r.modes_ack(0xFF01, 0x000C0045u);
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_word(), 0xFF01A003u);  // second SVID; the third is never asked
-        r.vdm(1, 3, 0xFF01, 1);
+        CHECK_EQ(r.last_word(), 0x2717A003u);  // then the list order; the third is never asked
+        r.vdm(1, 3, 0x2717, 1);
+        CHECK_EQ(int(r.id.status().num_modes), 2);
+        CHECK_EQ(int(r.id.status().mode_svid[0]), 0xFF01);
+        CHECK_EQ(r.id.status().mode_vdo[0], 0x000C0045u);
+        CHECK_EQ(int(r.id.status().mode_svid[1]), 0x2717);
+        CHECK_EQ(r.id.status().mode_vdo[1], 0u);
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(int(r.last_type()), int(kCtlGetSinkCap));
         const std::uint8_t pdo[8] = {0x2C, 0x91, 0x01, 0x36, 0xC8, 0xD0, 0x02, 0x00};
@@ -112,6 +123,37 @@ int main() {
         CHECK_EQ(r.sent.size(), 3u);
         CHECK_EQ(bool(r.id.status().skipped_mask & (1u << unsigned(IdStep::Modes))), true);
         CHECK_EQ(bool(r.id.status().skipped_mask & (1u << unsigned(IdStep::SinkCap))), true);
+    }
+
+    // ---- Thunderbolt and DisplayPort go first, whatever the list order; a refused SVID records nothing ----
+    {
+        Rig r;
+        r.svids = {0x2717, 0x8087, 0x1234, 0xFF01};
+        r.start();
+        r.next(); r.vdm(1, 1, 0xFF00, 3);
+        r.next(); r.vdm(1, 2, 0xFF00, 1);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_word(), 0xFF01A003u);
+        r.vdm(2, 3, 0xFF01);  // NAK: skipped, and the rest of the modes are given up (existing rule)
+        CHECK_EQ(int(r.id.status().num_modes), 0);
+    }
+    {
+        Rig r;
+        r.svids = {0x2717, 0x8087, 0x1234, 0xFF01};
+        r.start();
+        r.next(); r.vdm(1, 1, 0xFF00, 3);
+        r.next(); r.vdm(1, 2, 0xFF00, 1);
+        r.next();
+        CHECK_EQ(r.last_word(), 0xFF01A003u);
+        r.modes_ack(0xFF01, 0x00000C45u);
+        r.next();
+        CHECK_EQ(r.last_word(), 0x8087A003u);
+        r.modes_ack(0x8087, 0x00000001u);
+        CHECK_EQ(int(r.id.status().num_modes), 2);
+        CHECK_EQ(int(r.id.status().mode_svid[1]), 0x8087);
+        CHECK_EQ(r.id.status().mode_vdo[1], 1u);
+        r.next();  // two SVIDs asked: on to Get_Sink_Cap
+        CHECK_EQ(int(r.last_type()), int(kCtlGetSinkCap));
     }
 
     // ---- never transmits while the CC line is busy ----
