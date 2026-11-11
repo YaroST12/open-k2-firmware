@@ -107,6 +107,23 @@ bool HomePage::on_event(Event e) {
 
 // ---- sampling --------------------------------------------------------------------------------
 
+home::ProtoInfo home::live_proto(const UiContext &ctx, const power::Metrics &pm) {
+    const pd::Link &link = ctx.ui->link();
+    const bool pd_link = link.attached() && !link.waiting();
+    ProtoSource ps;
+    ps.ctr = fusb302::contract();
+    ps.pd_link = pd_link;
+    ps.caps = pd_link ? &pd::active_caps() : nullptr;
+    ps.sink = &fusb302::sink_status();   // the K2's own sink: it never hears its own Requests
+    ps.fc = ctx.fc;
+    ps.vbus_mv = pm.vbus_mv;
+    ps.typec_ma = fusb302::typec_ma();
+    ps.req_period_ms = fusb302::request_period_ms();
+    return derive_proto(ps);
+}
+
+home::ProtoInfo Ui::proto_now() const { return home::live_proto(ctx_, ctx_.pm); }
+
 void HomePage::sample_values(Frame &f, uint32_t now_ms) {
     const bool live = f.mode == hm::Mode::Live, stale = f.mode == hm::Mode::Stale;
     f.pin = fusb302::pin_rd();
@@ -118,18 +135,7 @@ void HomePage::sample_values(Frame &f, uint32_t now_ms) {
             w_mw_ = abs32(pm.power_mw);
             flow_ = pm.flow;
         }
-        const pd::Link &link = ctx_.ui->link();
-        const bool pd_link = link.attached() && !link.waiting();
-        hm::ProtoSource ps;
-        ps.ctr = fusb302::contract();
-        ps.pd_link = pd_link;
-        ps.caps = pd_link ? &pd::active_caps() : nullptr;
-        ps.sink = &fusb302::sink_status();   // the K2's own sink: it never hears its own Requests
-        ps.fc = ctx_.fc;
-        ps.vbus_mv = pm.vbus_mv;
-        ps.typec_ma = fusb302::typec_ma();
-        ps.req_period_ms = fusb302::request_period_ms();
-        f.proto = hm::derive_proto(ps);
+        f.proto = hm::live_proto(ctx_, pm);
         last_proto_ = f.proto;
         f.alarm = hm::alarm_of(static_cast<uint32_t>(a_ma_), f.proto.ma);
     } else if (stale) {

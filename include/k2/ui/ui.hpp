@@ -201,6 +201,8 @@ public:
     // The Connection page's facts (topology, waiting classifier, standby evidence) read with no page on screen:
     // conn::sense_passive over a one-shot window of the latest CC levels, the same implementation the page uses.
     [[gnu::noinline]] conn::Facts passive_facts() const;
+    // The protocol row of Home (kind, level, limit, highest voltage) for the live reading: home::live_proto.
+    [[gnu::noinline]] home::ProtoInfo proto_now() const;
     bool ports_busy() const { return charger_test_busy() || fc_release_.busy(); }
     const char *busy_reason() const;   // why an identity / START is refused right now, nullptr = free
     bool spoof_busy() const { return busy_reason() != nullptr; }

@@ -607,6 +607,12 @@ private:
     bool laid_ = false;                   // the stage's static part is on screen
 };
 
+// The Home protocol row's source: the one derive_proto call site. Home paints from it on every live frame, and the
+// remote session block reads it through Ui::proto_now(), so the label and the limit are never derived twice.
+namespace home {
+ProtoInfo live_proto(const UiContext &ctx, const power::Metrics &pm);
+}
+
 // Home v7 "dual hero": the walk-by page, the whole 224 x 240 content (no title bar, no footer band). VBUS cell
 // y0..69, IBUS cell y72..141 (64 px digits over a faint patient-monitor trend sweep, status edge, exception pill /
 // limit alarm / limit bar), W / Wh / Ah band y144..193, info block y196..239 (USB link, protocol row). The pure

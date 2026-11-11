@@ -277,6 +277,28 @@ static void test_home_shows_the_rd_pin_badge() {
     CHECK_EQ(ink_logical(ui, 131, 1, 91, 17, kCaution), 0);           // cleared: the badge is gone
 }
 
+// The remote session block reads the Home protocol row's source through Ui::proto_now(): one derive_proto call
+// site, the same inputs, no page needed (the Detail page is on screen here, not Home).
+static void test_proto_now_is_the_homes_protocol() {
+    Ui &ui = fresh_ui();
+    ui.goto_page(static_cast<uint8_t>(Page::Detail), g_t);
+    live_pd(false, 20010, 1520);
+    run(ui, 40);
+    const home::ProtoInfo p = ui.proto_now();
+    CHECK_EQ(int(p.kind), int(home::ProtoKind::PdFixed));
+    CHECK_EQ(int(p.mv), 20000);
+    CHECK_EQ(int(p.max_mv), 20000);
+    CHECK_EQ(int(p.ma), 5000);   // the 20 V PDO's current
+    g_stub.contract = {}; g_stub.caps = {}; g_stub.fc = fastcharge::Protocol::Qc3;
+    g_stub.pm.vbus_mv = 9000;
+    run(ui, 10);
+    CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::Qc3));
+    CHECK_EQ(int(ui.proto_now().max_mv), 12000);
+    unplug();
+    run(ui, 40);
+    CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::None));
+}
+
 // A PPS contract and a Quick Charge source (no PD caps, the D+/D- verdict only) fill the protocol row.
 static void test_protocol_states() {
     {
@@ -626,6 +648,7 @@ int main() {
     test_live_home();
     test_home_shows_the_rd_pin_badge();
     test_protocol_states();
+    test_proto_now_is_the_homes_protocol();
     test_sweep();
     test_sweep_strips_match_full_render();
     test_window_cycle();
