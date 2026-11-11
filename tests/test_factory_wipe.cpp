@@ -60,12 +60,13 @@ struct FakeEnv {
     FakeFlash flash;
     std::vector<int> events;                           // 0 unmount, 1 erase, 2 blank check, 3 clear_backup
     int unmounts = 0, backups = 0;
+    bool run_open = false;                             // the flash guard's run state (open on a grown volume)
 
     void unmount() { unmounts++; events.push_back(0); }
     std::uint16_t read16(std::uint32_t addr) const { return flash.read(addr); }
     k2::flash::Status erase(std::uint32_t addr) {
         events.push_back(1);
-        return k2::flash::store_erase_guarded(flash, addr);
+        return k2::flash::store_erase_guarded(flash, addr, run_open);
     }
     bool blank(std::uint32_t addr) { events.push_back(2); return flash.blank_sector(addr); }
     void clear_backup() { backups++; events.push_back(3); }
@@ -209,8 +210,48 @@ static void test_verify_pass_catches_a_lying_erase() {
         CHECK_EQ((a >= flash::kFsBase && a < flash::kFsEnd) || a == 0x080E4000 || a == 0x080E4800 || a == 0x080E6000 || a == 0x080E8000 || a == 0x080FC800, 1);
 }
 
+// A grown volume (145 blocks): the wipe erases the 90 sectors and the 55 sectors of the run, ascending, and nothing else.
+// A littlefs block in the run that happens to start like one of our old stores is not listed twice; the original-data
+// pages and the two kept pages stay byte for byte.
+static void test_grown_volume_wipes_the_run_too() {
+    FakeEnv env;
+    env.run_open = true;
+    env.flash.put(0x080E8000, {'K', '2', 'B', 'B'});            // a volume block that looks like a Black Box sector
+    env.flash.put(0x080E3800, {0, 0, 0, 0});                    // the old e-marker record page
+    env.flash.put(0x080FF800, {0x5A, 0, 0, 0xA5});              // the unknown top page
+    const std::vector<std::uint8_t> native = env.flash.range(0x080E0000, 0x080E4000);
+    const std::vector<std::uint8_t> top = env.flash.range(0x080FF800, 0x08100000);
+    const factory_wipe::Result r = factory_wipe::run(env, true);
+    CHECK_EQ(static_cast<int>(r.err), static_cast<int>(factory_wipe::Err::Ok));
+    CHECK_EQ(r.sectors, 145u);
+    CHECK_EQ(r.erased, 145u);
+    CHECK_EQ(r.verified, 145u);
+    CHECK_EQ(env.flash.erased.size(), 145u);
+    for (std::uint32_t i = 0; i < 145; i++) CHECK_EQ(env.flash.erased[i], flash::fs_block_addr(i));
+    for (std::uint32_t a = flash::kFsRunBase; a < flash::kFsRunEnd; a++) CHECK_EQ(env.flash.mem[a - flash::kFsBase], 0xFF);
+    CHECK_EQ(env.flash.range(0x080E0000, 0x080E4000) == native, 1);
+    CHECK_EQ(env.flash.range(0x080FF800, 0x08100000) == top, 1);
+    CHECK_EQ(env.backups, 1);
+}
+
+// Not grown: the run is foreign ground, listed only page by page on our old signatures, and the kept top page never,
+// even when it carries one.
+static void test_kept_top_page_is_never_listed() {
+    FakeEnv env;
+    env.flash.put(0x080FF000, {'K', '2', 'E', 'L'});
+    env.flash.put(0x080FF800, {'K', '2', 'E', 'L'});
+    const factory_wipe::Result r = factory_wipe::run(env);
+    CHECK_EQ(static_cast<int>(r.err), static_cast<int>(factory_wipe::Err::Ok));
+    CHECK_EQ(r.sectors, 91u);
+    CHECK_EQ(env.flash.erased.back(), 0x080FF000u);
+    for (std::uint32_t a : env.flash.erased) CHECK_EQ(a == 0x080FF800u, 0);
+    CHECK_EQ(env.flash.read(0x080FF800), 0x324B);
+}
+
 int main() {
     test_sector_list();
+    test_grown_volume_wipes_the_run_too();
+    test_kept_top_page_is_never_listed();
     test_clean_run_erases_the_volume_and_our_pages_only();
     test_fresh_unit_loses_only_the_volume();
     test_erase_failure_stops();
