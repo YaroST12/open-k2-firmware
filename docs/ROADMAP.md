@@ -139,7 +139,13 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
 - **Twin limiter text with no claimed power** (2026-11-11, twin-observed review): with no claimed source power,
   predict calls a 60 W hub "limited by the cable". The predict rework on `k2/twin-observed` changes this path;
   re-check after its merge.
-- **PD Stress does not release Rd at its end** (open since before 2026-11-11): the run ends with the K2's Rd still on CC.
+- **PD Stress did not release Rd at its end** (open since before 2026-11-11; fixed on `k2/small-fixes`, hardware check
+  pending): the run ended with the K2's Rd still on CC, the one a pd-reread presented and the run took over. Every end of a
+  run (done, cancelled, a stop that skips the 5 V release, the reboot budget spent) now ends in `PdStressSession::on_finish`
+  with `set_run_owner(false)` and `rd_for_run(false)`, the charger test's release path (a self-powered boot's own Rd pin
+  comes back inside `rd_for_run`). Host tests: `tests/test_ui_pdstress.cpp` `test_a_*_gives_the_rd_back`.
+  Validate (hardware): `k2_remote pd-reread`, start a PD Stress run, let it finish and again cancel one; afterwards CC1/CC2
+  show no K2 Rd (charger-only attach: VBUS drops to 0, cc ~3.3 V) and the log has `[PD] Run start over: Rd off`.
 - **A refused e-marker read kept the last read's mode and acks** (2026-11-11, fixed in 472c40f9, host-tested;
   `tests/test_fusb302_scan.cpp` `test_refused_read_clears_the_last_read`). Validate (hardware): with a sink inline or
   Ra mode on, `k2_remote emarker --json` after a refused read shows `read_mode` none and 0 acks.

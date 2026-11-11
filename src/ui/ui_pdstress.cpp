@@ -111,6 +111,12 @@ void PdStressSession::on_finish(ps::Stop why) {
     ps::journal::Journal j(ps::journal_hw::store());
     j.clear();   // a finished run never resumes
     journal_on_ = false;
+    // Every end of a run (done, cancelled, gave up, reboot budget spent) comes through here, after the 5 V release where there is one.
+    // The Rd a re-read presented became the run's (start_run), so the run gives it back the way the charger test does
+    // (ChargerTestSession::release_run): the sleeping-port wake may act again, and the Rd goes off (a self-powered boot's own Rd
+    // pin comes back inside rd_for_run). Hardware 2026-11-11: the run ended with the Rd still on the line.
+    fusb302::set_run_owner(false);
+    fusb302::rd_for_run(false);
 }
 
 // ---- start, cancel, restore ----------------------------------------------------------------------------------------------------------
