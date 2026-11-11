@@ -296,8 +296,7 @@ remote::DiagInfo Remote::diag() {
     d.poll_gap_max_ms = u.poll_gap_max;
     d.usb_configured = usb::configured() ? 1 : 0;
     static_assert(unsigned(loopguard::Reason::Certain) == remote::kLoopCertain && unsigned(loopguard::Reason::Suspected) == remote::kLoopSuspected);
-    d.loop = static_cast<uint8_t>(static_cast<unsigned>(loopguard::reason()) | (loopguard::pending() ? remote::kLoopPending : 0) |
-                                  (usb::host_active() ? remote::kLoopHost : 0));
+    d.loop = static_cast<uint8_t>(static_cast<unsigned>(loopguard::reason()) | (usb::host_active() ? remote::kLoopHost : 0));
     d.loop_events = loopguard::events();
     return d;
 }

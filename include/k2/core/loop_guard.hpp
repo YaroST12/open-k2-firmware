@@ -12,19 +12,25 @@
 //
 // Rules (Detector, pure, host-tested in tests/test_loop_guard.cpp):
 //  - Certain loop: aux above kCertainMv (5.8 V). No USB 2.0 host gives that; it locks on the first sample.
-//  - Suspected loop: aux >= kAuxPresentMv (4 V) and VBUS >= kVbusPresentMv (4 V) with no active host for kSuspectMs
-//    (3 s). In a loop no host ever configures the K2. A PC enumerates the K2 in well under 1.5 s (power_source::kDecideMs
-//    budgets 2 s for the same question); 3 s leaves room for a slow hub and is still short against any user action. A
-//    dumb 5 V brick on the HID port looks the same and is an accepted false positive (it only refuses raises). So is a PC
-//    while the K2's USB link is off (usbcfg, the default): the K2 never enumerates, a PC and a loop look alike.
+//  - Suspected loop, "the rail follows VBUS": in a loop the HID rail is fed from VBUS, so the two rise together. Aux crossing
+//    kAuxPresentMv (4 V) up within kRiseWindowMs (100 ms) of VBUS crossing kVbusPresentMv (4 V) up, with no active host,
+//    locks at once (no waiting window: the signature is specific, and waiting would leave a raise open). So does the first
+//    sample with both readings known that already shows both up (a loop present at boot, or readings that came up one by one:
+//    no order is known, the safe side). The usual way a loop shows: the charger sees the HID port's Rd through the loop
+//    cable, so VBUS and the rail come up together and the K2 boots with both up.
+//  - Never suspected: a rail that was up before VBUS appeared (a PC plugged in first, a K2 running from a PC and then a charger
+//    attached, a charger that cuts VBUS while the rail stays up, e.g. an auto-off USB-A port every ~6.5 s with no load), and
+//    VBUS up long before the rail (a charger first, then a PC or a 5 V brick on HID). This holds with the K2's USB link off
+//    (usbcfg, the default), where a PC never becomes an active host: an HID-powered K2 runs charger tests unlocked.
+//  - Not seen: a loop cable plugged into HID while the K2 already sinks VBUS (Rd presented): the rail rises long after VBUS,
+//    as for a PC. A passive K2 presents no Rd, so the charger only switches VBUS on when the loop cable brings the HID port's
+//    Rd, and both rise together. The certain rule catches a raise in that case on the first sample above 5.8 V.
 //  - "Active host" is configured AND not suspended: TinyUSB has no VBUS sensing here, so after a PC is unplugged the
-//    device stays "mounted" (suspended). Without the suspend term, a PC swapped for the loop cable while the K2 runs from
-//    the charger would leave a stale "configured" and the suspected rule would never fire.
-//  - Clear: aux below kAuxGoneMv (3.5 V, the HID port is empty) for kClearMs (1 s), or an active host for kClearMs with aux at
-//    a host's level (<= kHostMaxMv). A host never clears a lock while aux is above what a host gives. Hysteresis: the window
-//    starts at 4 V, the clear needs 3.5 V.
-//  - While the suspicion window runs the guard is `pending()`: shown and logged, but not a lock. A raise in that window
-//    puts the bus voltage on aux, which the certain rule catches on the next 20 ms sample.
+//    device stays "mounted" (suspended); a stale "configured" must not block the rule or clear a lock.
+//  - Clear: proof of a separate supply, aux >= 4 V while VBUS < kVbusOffMv (1 V) for kSeparateMs (60 ms: VBUS cut, the rail
+//    stays, which a loop cannot do); aux below kAuxGoneMv (3.5 V, the HID port is empty) for kClearMs (1 s); or an active host
+//    for kClearMs with aux at a host's level (<= kHostMaxMv). A host never clears a lock while aux is above what a host gives.
+//    Hysteresis on both rails: up at 4 V, down below 3.5 V.
 //
 // Enforcement (Enforcer, pure): on the lock edge the 5 V order (every raise path refuses, a PD contract above 5 V is released
 // to PDO 1, a legacy session goes back to 0 V on D+/D-, which every legacy protocol answers with 5 V). VBUS still above
@@ -46,9 +52,12 @@ inline constexpr std::int32_t kHostMaxMv = 5500;      // aux at or below this ca
 inline constexpr std::int32_t kAuxPresentMv = 4000;   // aux at or above: something powers the HID port
 inline constexpr std::int32_t kAuxGoneMv = rdintent::kHostAuxMv;   // aux below: the HID port is empty (3.5 V)
 inline constexpr std::int32_t kVbusPresentMv = 4000;  // PD-bus VBUS at or above: a source feeds the bus
-inline constexpr std::uint32_t kSuspectMs = 3000;     // aux + VBUS up with no active host this long = suspected loop
-inline constexpr std::uint32_t kClearMs = 1000;       // the clear condition must hold this long
-static_assert(kAuxGoneMv < kAuxPresentMv && kHostMaxMv < kCertainMv, "hysteresis bands");
+inline constexpr std::int32_t kVbusGoneMv = 3500;     // PD-bus VBUS below (once up): the bus is down
+inline constexpr std::int32_t kVbusOffMv = 1000;      // PD-bus VBUS below, with the rail up: a separate supply (clears)
+inline constexpr std::uint32_t kRiseWindowMs = 100;   // aux and VBUS crossing 4 V up this close together = suspected loop
+inline constexpr std::uint32_t kSeparateMs = 60;      // the separate-supply proof must hold this long (a few samples)
+inline constexpr std::uint32_t kClearMs = 1000;       // the rail-gone and host clears must hold this long
+static_assert(kAuxGoneMv < kAuxPresentMv && kVbusGoneMv < kVbusPresentMv && kHostMaxMv < kCertainMv, "hysteresis bands");
 
 inline constexpr std::int32_t kStuckMv = 6000;        // VBUS above this after the 5 V order: escalate
 inline constexpr std::int32_t kSafeMv = 5500;         // VBUS at or below this: back at vSafe5V, the sequence re-arms
@@ -63,6 +72,10 @@ enum class Reason : std::uint8_t { None, Certain, Suspected };
 constexpr const char* reason_name(Reason r) {
     return r == Reason::Certain ? "certain" : r == Reason::Suspected ? "suspected" : "none";
 }
+enum class Clear : std::uint8_t { None, Separate, Gone, Host };
+constexpr const char* clear_name(Clear c) {
+    return c == Clear::Separate ? "separate supply" : c == Clear::Gone ? "rail gone" : c == Clear::Host ? "host" : "none";
+}
 
 // One sample. A negative reading = unknown (no ADC snapshot, no monitor): counted as absent, never as a loop.
 struct Sample {
@@ -76,41 +89,69 @@ public:
     // Returns true when locked() changed with this sample.
     bool update(std::uint32_t now, const Sample& s) {
         const bool was = locked();
+        const bool rose = track(now, s);   // the order of the rises, every sample, locked or not
         if (s.aux_mv > kCertainMv) {
-            if (reason_ == Reason::None) ++events_;
+            if (reason_ == Reason::None) { ++events_; cleared_ = Clear::None; }
             reason_ = Reason::Certain;
-            pending_ = gone_ = host_run_ = false;
+            sep_ = gone_ = host_run_ = false;
             return !was;
         }
         if (reason_ != Reason::None) {
-            if (s.aux_mv < kAuxGoneMv) { if (!gone_) { gone_ = true; gone_at_ = now; } }
-            else gone_ = false;
-            if (s.host && s.aux_mv <= kHostMaxMv) { if (!host_run_) { host_run_ = true; host_at_ = now; } }
-            else host_run_ = false;
-            if ((gone_ && now - gone_at_ >= kClearMs) || (host_run_ && now - host_at_ >= kClearMs)) {
+            const bool known = s.aux_mv >= 0;   // an unknown reading proves nothing: it never clears
+            run(sep_, sep_at_, known && s.aux_mv >= kAuxPresentMv && s.vbus_mv >= 0 && s.vbus_mv < kVbusOffMv, now);
+            run(gone_, gone_at_, known && s.aux_mv < kAuxGoneMv, now);
+            run(host_run_, host_at_, known && s.host && s.aux_mv <= kHostMaxMv, now);
+            const Clear c = sep_ && now - sep_at_ >= kSeparateMs ? Clear::Separate
+                            : gone_ && now - gone_at_ >= kClearMs ? Clear::Gone
+                            : host_run_ && now - host_at_ >= kClearMs ? Clear::Host : Clear::None;
+            if (c != Clear::None) {
                 reason_ = Reason::None;
-                gone_ = host_run_ = false;
+                cleared_ = c;
+                sep_ = gone_ = host_run_ = false;
             }
             return locked() != was;
         }
-        const bool suspect = s.aux_mv >= kAuxPresentMv && s.vbus_mv >= kVbusPresentMv && !s.host;
-        if (!suspect) { pending_ = false; return false; }
-        if (!pending_) { pending_ = true; pend_at_ = now; }
-        if (now - pend_at_ < kSuspectMs) return false;
-        pending_ = false;
+        if (!rose || s.host || (gap_ >= 0 && std::uint32_t(gap_) > kRiseWindowMs)) return false;
         reason_ = Reason::Suspected;
+        cleared_ = Clear::None;
         ++events_;
         return true;
     }
     bool locked() const { return reason_ != Reason::None; }
     Reason reason() const { return reason_; }
-    bool pending() const { return pending_; }       // the suspicion window runs (not a lock)
     std::uint16_t events() const { return events_; }   // locks since boot (wraps)
+    // Ms between the two 4 V rises at the last time both came up; -1 = no order known (both already up when first read).
+    std::int32_t rise_gap_ms() const { return gap_; }
+    Clear last_clear() const { return cleared_; }      // what ended the last lock (None while locked or never locked)
 
 private:
+    static void run(bool& on, std::uint32_t& at, bool cond, std::uint32_t now) {
+        if (!cond) on = false;
+        else if (!on) { on = true; at = now; }
+    }
+    // Per-rail up/down with hysteresis and the time of each rise. True on the sample where both rails become up together,
+    // with gap_ set. A sample with an unknown reading is skipped: the order stays as it was.
+    bool track(std::uint32_t now, const Sample& s) {
+        if (s.aux_mv < 0 || s.vbus_mv < 0) return false;
+        const bool a = s.aux_mv >= (aux_up_ ? kAuxGoneMv : kAuxPresentMv);
+        const bool v = s.vbus_mv >= (vbus_up_ ? kVbusGoneMv : kVbusPresentMv);
+        if (a && !aux_up_) aux_at_ = now;
+        if (v && !vbus_up_) vbus_at_ = now;
+        aux_up_ = a;
+        vbus_up_ = v;
+        if (!a || !v) { apart_ = true; both_ = false; return false; }
+        if (both_) return false;
+        both_ = true;
+        gap_ = !apart_ ? -1 : std::int32_t(aux_at_ > vbus_at_ ? aux_at_ - vbus_at_ : vbus_at_ - aux_at_);
+        return true;
+    }
+
     Reason reason_ = Reason::None;
-    bool pending_ = false, gone_ = false, host_run_ = false;
-    std::uint32_t pend_at_ = 0, gone_at_ = 0, host_at_ = 0;
+    Clear cleared_ = Clear::None;
+    bool aux_up_ = false, vbus_up_ = false, both_ = false, apart_ = false;   // apart_: the rails were seen apart once
+    bool sep_ = false, gone_ = false, host_run_ = false;
+    std::uint32_t aux_at_ = 0, vbus_at_ = 0, sep_at_ = 0, gone_at_ = 0, host_at_ = 0;
+    std::int32_t gap_ = -1;
     std::uint16_t events_ = 0;
 };
 
@@ -161,7 +202,6 @@ private:
 void poll(std::uint32_t now_ms);
 bool locked();
 Reason reason();
-bool pending();
 std::uint16_t events();
 
 }  // namespace k2::loopguard

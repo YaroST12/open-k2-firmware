@@ -47,7 +47,7 @@
 //                                    part 2, 29 bytes: fusb_id(1) pd_rx(4) usb_resets(4) usb_isrs(4)
 //                                    log_sent(4) log_dropped(4) poll_gap_max_ms(4) usb_configured(1)
 //                                    loop(1: bits 1:0 HID-cable loop lock 0 none 1 certain 2 suspected,
-//                                    bit2 suspicion window, bit3 USB host active) loop_events(2); a build
+//                                    bit2 reserved 0, bit3 USB host active) loop_events(2); a build
 //                                    before the loop guard answers the first 26
 //                                    part 3, 57 bytes: flags(1: bit i button i dim, bit4 strip covered), then
 //                                    Back Minus Ok Plus x (short(7) long(7)), NUL padded ASCII
@@ -745,10 +745,10 @@ struct SessionInfo {
 size_t encode_session(std::span<uint8_t> out, const SessionInfo&);
 // GET_STATE part 2 (diag): the counters the Diag page prints. poll_gap_max_ms is the longest main-loop gap since the last
 // [USB] heartbeat line (the driver zeroes it there), exactly what the page shows.
-// The loop byte is the HID-cable loop guard (k2/core/loop_guard.hpp): the lock reason (loopguard::Reason), the suspicion window
-// and the host signal it reads.
+// The loop byte is the HID-cable loop guard (k2/core/loop_guard.hpp): the lock reason (loopguard::Reason, bits 1:0) and the host
+// signal it reads (bit 3); bit 2 is reserved (0).
 constexpr size_t kDiagLen = 29;
-constexpr uint8_t kLoopCertain = 1, kLoopSuspected = 2, kLoopReasonMask = 3, kLoopPending = 4, kLoopHost = 8;
+constexpr uint8_t kLoopCertain = 1, kLoopSuspected = 2, kLoopReasonMask = 3, kLoopHost = 8;
 struct DiagInfo {
     uint8_t fusb_id = 0;
     uint32_t pd_rx = 0, usb_resets = 0, usb_isrs = 0, log_sent = 0, log_dropped = 0, poll_gap_max_ms = 0;

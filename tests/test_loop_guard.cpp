@@ -14,6 +14,75 @@ void hold(Detector& d, std::uint32_t from, std::uint32_t to, Sample s) {
 }  // namespace
 
 int main() {
+    // ---- The "rail follows VBUS" rule: a loop's HID rail is fed from VBUS, so the two rise (and fall) together ----
+    {   // R1. A PC on HID first (USB link off: never an active host), then a charger on the PD bus: never a lock.
+        Detector d;
+        hold(d, 0, 5000, {5000, 0, false});
+        hold(d, 5020, 60000, {5000, 5000, false});
+        CHECK_EQ(d.locked(), false);
+        CHECK_EQ(d.events(), 0);
+    }
+    {   // R2. A charger first (the K2 runs from the PD bus), then a PC (or a 5 V brick) on HID: never a lock.
+        Detector d;
+        hold(d, 0, 5000, {300, 5000, false});
+        hold(d, 5020, 60000, {5000, 5000, false});
+        CHECK_EQ(d.locked(), false);
+        CHECK_EQ(d.events(), 0);
+    }
+    {   // R3. A loop: the rail and VBUS rise together (same sample, or the rail one sample after VBUS): locked at once.
+        Detector d;
+        hold(d, 0, 1000, {0, 0, false});
+        CHECK_EQ(d.update(1020, {5000, 5000, false}), true);
+        CHECK_EQ(d.locked(), true);
+        CHECK_EQ(int(d.reason()), int(Reason::Suspected));
+        CHECK_EQ(d.events(), 1);
+        Detector e;
+        hold(e, 0, 1000, {0, 0, false});
+        e.update(1020, {300, 5000, false});                    // VBUS first
+        CHECK_EQ(e.update(1040, {5000, 5000, false}), true);   // the rail one sample later
+        CHECK_EQ(e.locked(), true);
+    }
+    {   // R4. A loop present at boot: the first samples already show both up, no order known: locked.
+        Detector d;
+        CHECK_EQ(d.update(0, {5000, 5000, false}), true);
+        CHECK_EQ(d.locked(), true);
+        CHECK_EQ(int(d.reason()), int(Reason::Suspected));
+        Detector e;   // the readings come up one by one at boot (no ADC snapshot, no monitor yet): still no order known
+        hold(e, 0, 100, {-1, -1, false});
+        hold(e, 120, 400, {5000, -1, false});
+        CHECK_EQ(e.locked(), false);
+        e.update(420, {5000, 5000, false});
+        CHECK_EQ(e.locked(), true);
+    }
+    {   // R5. An auto-off charger (a USB-A port that cuts VBUS every ~6.5 s with no load) with the HID rail up: never locks.
+        Detector d;
+        hold(d, 0, 2000, {5000, 0, false});
+        for (std::uint32_t t = 2020; t < 120000; t += 6500) {
+            hold(d, t, t + 6000, {5000, 5000, false});
+            hold(d, t + 6020, t + 6480, {5000, 0, false});
+        }
+        CHECK_EQ(d.locked(), false);
+        CHECK_EQ(d.events(), 0);
+    }
+    {   // R6. Locked, then VBUS cut while the rail stays up: a separate supply, cannot be a loop: clears.
+        Detector d;
+        d.update(0, {5000, 5000, false});
+        CHECK_EQ(d.locked(), true);
+        hold(d, 20, 200, {5000, 300, false});
+        CHECK_EQ(d.locked(), false);
+        CHECK_EQ(d.events(), 1);
+        hold(d, 220, 30000, {5000, 5000, false});   // VBUS back: the rail was up first, no new lock
+        CHECK_EQ(d.locked(), false);
+    }
+    {   // R7. Boot with both up, then an active host for kClearMs: clears.
+        Detector d;
+        d.update(0, {5000, 5000, false});
+        CHECK_EQ(d.locked(), true);
+        hold(d, 20, 1500, {5000, 5000, false});      // enumeration
+        hold(d, 1520, 1520 + kClearMs, {5000, 5000, true});
+        CHECK_EQ(d.locked(), false);
+    }
+
     {   // Certain loop: the aux rail above anything a USB 2.0 host gives locks at once, whatever the host state says.
         Detector d;
         CHECK_EQ(d.locked(), false);
@@ -28,59 +97,96 @@ int main() {
         Detector d;
         hold(d, 0, 60000, {5250, 20000, true});
         CHECK_EQ(d.locked(), false);
-        CHECK_EQ(d.pending(), false);
         CHECK_EQ(d.events(), 0);
     }
     {   // Nothing on the HID port (aux dead, the K2 runs from the PD bus): never a lock.
         Detector d;
         hold(d, 0, 60000, {300, 20000, false});
         CHECK_EQ(d.locked(), false);
-        CHECK_EQ(d.pending(), false);
     }
     {   // HID-powered with nothing on the PD bus: no VBUS, no loop.
         Detector d;
         hold(d, 0, 60000, {5000, 0, false});
         CHECK_EQ(d.locked(), false);
     }
-    {   // Suspected loop: aux and VBUS up, no host, for kSuspectMs. Pending before, locked at the end of the window.
+    {   // The rise window: the rail kRiseWindowMs after VBUS still locks (rise_gap_ms says how far apart), one sample later not.
         Detector d;
-        hold(d, 0, kSuspectMs - 20, {5000, 5000, false});
-        CHECK_EQ(d.locked(), false);
-        CHECK_EQ(d.pending(), true);
-        CHECK_EQ(d.update(kSuspectMs, {5000, 5000, false}), true);
-        CHECK_EQ(d.locked(), true);
-        CHECK_EQ(d.pending(), false);
-        CHECK_EQ(int(d.reason()), int(Reason::Suspected));
-        CHECK_EQ(d.events(), 1);
+        d.update(0, {0, 0, false});
+        d.update(20, {0, 5000, false});
+        hold(d, 40, 20 + kRiseWindowMs - 20, {3000, 5000, false});
+        CHECK_EQ(d.update(20 + kRiseWindowMs, {5000, 5000, false}), true);
+        CHECK_EQ(d.rise_gap_ms(), std::int32_t(kRiseWindowMs));
+        Detector e;
+        e.update(0, {0, 0, false});
+        e.update(20, {0, 5000, false});
+        hold(e, 40, 20 + kRiseWindowMs, {3000, 5000, false});
+        CHECK_EQ(e.update(40 + kRiseWindowMs, {5000, 5000, false}), false);
+        CHECK_EQ(e.rise_gap_ms(), std::int32_t(kRiseWindowMs + 20));
+        Detector f;   // the rail first, VBUS within the window (sample order of two readings): the same loop
+        f.update(0, {0, 0, false});
+        f.update(20, {5000, 300, false});
+        CHECK_EQ(f.update(40, {5000, 5000, false}), true);
+        Detector g;   // the boot rule reports no order known
+        g.update(0, {5000, 5000, false});
+        CHECK_EQ(g.rise_gap_ms(), -1);
     }
-    {   // A PC that configures inside the window (boot enumeration) leaves no lock and ends the pending state.
+    {   // An active host at the moment both rise blocks the suspicion (a PC that already configured the K2).
         Detector d;
-        hold(d, 0, 1500, {5000, 5000, false});
-        CHECK_EQ(d.pending(), true);
-        hold(d, 1520, 20000, {5000, 5000, true});
-        CHECK_EQ(d.pending(), false);
+        CHECK_EQ(d.update(0, {5000, 5000, true}), false);
+        hold(d, 20, 10000, {5000, 5000, false});   // the host suspends later: no new rise, no lock
         CHECK_EQ(d.locked(), false);
     }
-    {   // The window restarts when the condition breaks (aux below the present level, VBUS gone).
+    {   // Rail hysteresis: VBUS dipping into the band (3.5..4 V) is no fall, so its return is no rise.
         Detector d;
-        hold(d, 0, kSuspectMs - 100, {5000, 5000, false});
-        d.update(kSuspectMs - 80, {5000, 0, false});
-        hold(d, kSuspectMs - 60, 2 * kSuspectMs - 200, {5000, 5000, false});
+        hold(d, 0, 1000, {5000, 0, false});
+        hold(d, 1020, 2000, {5000, 5000, false});
+        d.update(2020, {300, 3700, false});          // the rail drops; VBUS sags into the band
+        CHECK_EQ(d.update(2040, {5000, 5000, false}), false);   // the rail is back alone: VBUS never fell
         CHECK_EQ(d.locked(), false);
-        hold(d, 2 * kSuspectMs - 180, 2 * kSuspectMs + 100, {5000, 5000, false});
-        CHECK_EQ(d.locked(), true);
     }
-    {   // Aux in the hysteresis band (between gone and present) does not start the window.
+    {   // Aux in the hysteresis band (between gone and present) is not up: no lock with VBUS.
         Detector d;
         hold(d, 0, 10000, {kAuxPresentMv - 100, 5000, false});
         CHECK_EQ(d.locked(), false);
-        CHECK_EQ(d.pending(), false);
+    }
+    {   // A VBUS cut shorter than kSeparateMs keeps the lock; the clear names its cause.
+        Detector d;
+        d.update(0, {5000, 5000, false});
+        hold(d, 20, 20 + kSeparateMs - 20, {5000, 300, false});
+        d.update(20 + kSeparateMs, {5000, 5000, false});
+        CHECK_EQ(d.locked(), true);
+        CHECK_EQ(int(d.last_clear()), int(Clear::None));
+        hold(d, 2000, 2000 + kSeparateMs, {5000, 300, false});
+        CHECK_EQ(d.locked(), false);
+        CHECK_EQ(int(d.last_clear()), int(Clear::Separate));
+    }
+    {   // VBUS between 1 V and the gone level with the rail up proves nothing: no separate-supply clear.
+        Detector d;
+        d.update(0, {5000, 5000, false});
+        hold(d, 20, 5000, {5000, 2000, false});
+        CHECK_EQ(d.locked(), true);
+    }
+    {   // Unknown readings never clear a lock (no ADC snapshot while another driver owns the pins).
+        Detector d;
+        d.update(0, {5000, 5000, false});
+        hold(d, 20, 10000, {-1, 300, true});
+        hold(d, 10020, 20000, {5000, -1, false});   // the rail up, VBUS unknown: no separate-supply proof
+        CHECK_EQ(d.locked(), true);
+    }
+    {   // A loop cable plugged into HID while the K2 already sinks VBUS (Rd presented): the rail rises long after VBUS, as for a
+        // PC. Not suspected (documented gap); the certain rule takes the first raise above 5.8 V.
+        Detector d;
+        hold(d, 0, 5000, {0, 5000, false});
+        hold(d, 5020, 10000, {5000, 5000, false});
+        CHECK_EQ(d.locked(), false);
+        CHECK_EQ(d.update(10020, {9000, 9000, false}), true);
+        CHECK_EQ(int(d.reason()), int(Reason::Certain));
     }
     {   // Clear: aux below kAuxGoneMv for kClearMs (the loop cable pulled). A shorter dip keeps the lock.
         Detector d;
-        hold(d, 0, kSuspectMs, {5000, 5000, false});
+        d.update(0, {5000, 5000, false});
         CHECK_EQ(d.locked(), true);
-        const std::uint32_t t0 = kSuspectMs + 20;
+        const std::uint32_t t0 = 20;
         hold(d, t0, t0 + kClearMs - 40, {kAuxGoneMv - 100, 5000, false});
         d.update(t0 + kClearMs - 20, {kAuxPresentMv, 5000, false});   // back up before the clear time: still locked
         CHECK_EQ(d.locked(), true);
@@ -94,13 +200,14 @@ int main() {
     }
     {   // Clear: a host that configures and stays active for kClearMs (a dumb brick swapped for a PC).
         Detector d;
-        hold(d, 0, kSuspectMs, {5000, 5000, false});
+        hold(d, 0, 3000, {5000, 5000, false});
         CHECK_EQ(d.locked(), true);
-        const std::uint32_t t0 = kSuspectMs + 20;
+        const std::uint32_t t0 = 3020;
         hold(d, t0, t0 + kClearMs - 20, {5000, 5000, true});
         CHECK_EQ(d.locked(), true);
         d.update(t0 + kClearMs, {5000, 5000, true});
         CHECK_EQ(d.locked(), false);
+        CHECK_EQ(int(d.last_clear()), int(Clear::Host));
     }
     {   // A certain lock is not cleared by a "host" while aux is still above what a host gives (kHostMaxMv).
         Detector d;
@@ -114,9 +221,9 @@ int main() {
     }
     {   // A suspected lock that then sees aux above kCertainMv becomes certain; no new event.
         Detector d;
-        hold(d, 0, kSuspectMs, {5000, 5000, false});
+        hold(d, 0, 3000, {5000, 5000, false});
         CHECK_EQ(int(d.reason()), int(Reason::Suspected));
-        d.update(kSuspectMs + 20, {9000, 9000, false});
+        d.update(3020, {9000, 9000, false});
         CHECK_EQ(int(d.reason()), int(Reason::Certain));
         CHECK_EQ(d.events(), 1);
     }
@@ -138,6 +245,9 @@ int main() {
     CHECK_STR(reason_name(Reason::None), "none");
     CHECK_STR(reason_name(Reason::Certain), "certain");
     CHECK_STR(reason_name(Reason::Suspected), "suspected");
+    CHECK_STR(clear_name(Clear::Separate), "separate supply");
+    CHECK_STR(clear_name(Clear::Gone), "rail gone");
+    CHECK_STR(clear_name(Clear::Host), "host");
 
     // ---- Enforcer: the sequence that brings a locked bus back to 5 V ----
     {   // Not locked: nothing to do.

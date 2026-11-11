@@ -570,6 +570,8 @@
   "573": "[LOOP] suspect aux=%d vbus=%d, no USB host: lock in %u ms\n",
   "574": "[LOOP] suspect over aux=%d vbus=%d host=%d\n",
   "575": "[LOOP] request pos %d %d mV refused: 5V lock\n",
-  "576": "[LOOP] trigger PDO%u refused: 5V lock\n"
+  "576": "[LOOP] trigger PDO%u refused: 5V lock\n",
+  "577": "[LOOP] lock %s aux=%d vbus=%d host=%d gap=%d n=%u\n",
+  "578": "[LOOP] clear %s aux=%d vbus=%d host=%d\n"
  }
 }

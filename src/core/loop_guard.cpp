@@ -14,7 +14,6 @@ namespace k2::loopguard {
 namespace {
 Detector g_det;
 Enforcer g_enf;
-bool g_pending_logged = false;
 
 Sample sample() {
     Sample s;
@@ -50,18 +49,12 @@ void act(Action a, std::int32_t vbus_mv) {
 void poll(std::uint32_t now_ms) {
     const Sample s = sample();
     if (g_det.update(now_ms, s)) {
-        if (g_det.locked())
-            K2LOG("[LOOP] lock %s aux=%d vbus=%d host=%d n=%u\n", reason_name(g_det.reason()), int(s.aux_mv), int(s.vbus_mv),
-                  int(s.host), unsigned(g_det.events()));
+        if (g_det.locked())   // gap = ms between the rail's and VBUS's 4 V rises, -1 = both already up when first read
+            K2LOG("[LOOP] lock %s aux=%d vbus=%d host=%d gap=%d n=%u\n", reason_name(g_det.reason()), int(s.aux_mv),
+                  int(s.vbus_mv), int(s.host), int(g_det.rise_gap_ms()), unsigned(g_det.events()));
         else
-            K2LOG("[LOOP] clear aux=%d vbus=%d host=%d\n", int(s.aux_mv), int(s.vbus_mv), int(s.host));
-    }
-    if (g_det.pending() != g_pending_logged) {
-        g_pending_logged = g_det.pending();
-        if (g_pending_logged)
-            K2LOG("[LOOP] suspect aux=%d vbus=%d, no USB host: lock in %u ms\n", int(s.aux_mv), int(s.vbus_mv), unsigned(kSuspectMs));
-        else if (!g_det.locked())
-            K2LOG("[LOOP] suspect over aux=%d vbus=%d host=%d\n", int(s.aux_mv), int(s.vbus_mv), int(s.host));
+            K2LOG("[LOOP] clear %s aux=%d vbus=%d host=%d\n", clear_name(g_det.last_clear()), int(s.aux_mv), int(s.vbus_mv),
+                  int(s.host));
     }
     fusb302::sink_set_hv_lock(g_det.locked());   // acts on the edges only
     act(g_enf.update(now_ms, g_det.locked(), s.vbus_mv), s.vbus_mv);
@@ -69,7 +62,6 @@ void poll(std::uint32_t now_ms) {
 
 bool locked() { return g_det.locked(); }
 Reason reason() { return g_det.reason(); }
-bool pending() { return g_det.pending(); }
 std::uint16_t events() { return g_det.events(); }
 
 }  // namespace k2::loopguard

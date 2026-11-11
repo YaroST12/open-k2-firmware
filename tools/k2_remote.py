@@ -523,8 +523,8 @@ def decode_diag(p):
            "log_dropped": u32(17), "poll_gap_max_ms": u32(21), "usb_configured": bool(p[25])}
     if len(p) >= DIAG_LOOP_LEN:
         why = p[26] & 3
-        out["loop"] = {"locked": why != 0, "reason": LOOP_REASONS.get(why, f"reason {why}"), "pending": bool(p[26] & 4),
-                       "host": bool(p[26] & 8), "events": int.from_bytes(p[27:29], "little")}
+        out["loop"] = {"locked": why != 0, "reason": LOOP_REASONS.get(why, f"reason {why}"), "host": bool(p[26] & 8),
+                       "events": int.from_bytes(p[27:29], "little")}   # bit 2 reserved
     return out
 
 

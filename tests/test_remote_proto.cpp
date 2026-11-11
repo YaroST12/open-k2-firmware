@@ -256,7 +256,7 @@ static void test_state_diag_part() {
                                 0x09,                          // loop: certain lock (1), USB host active (bit 3)
                                 0x02, 0x01});                  // loop locks since boot
     CHECK_EQ(kDiagLen, 29);
-    CHECK_EQ(kLoopSuspected, 2); CHECK_EQ(kLoopReasonMask, 3); CHECK_EQ(kLoopPending, 4); CHECK_EQ(kLoopHost, 8);
+    CHECK_EQ(kLoopSuspected, 2); CHECK_EQ(kLoopReasonMask, 3); CHECK_EQ(kLoopHost, 8);
 }
 
 static void test_state_keys_part() {

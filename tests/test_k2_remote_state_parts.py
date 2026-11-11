@@ -130,14 +130,15 @@ class DiagDecode(unittest.TestCase):
         d = kr.decode_diag(DIAG)
         self.assertEqual(d, {"fusb_id": 0x91, "pd_rx": 0x01020304, "usb_resets": 5, "usb_isrs": 0x0A0B0C0D,
                              "log_sent": 300, "log_dropped": 2, "poll_gap_max_ms": 17, "usb_configured": True,
-                             "loop": {"locked": True, "reason": "certain", "pending": False, "host": True, "events": 0x0102}})
+                             "loop": {"locked": True, "reason": "certain", "host": True, "events": 0x0102}})
 
     def test_loop_block(self):
-        # The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): bits 1:0 the reason, bit 2 the suspicion window, bit 3 a USB host.
+        # The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): bits 1:0 the reason, bit 2 reserved (0), bit 3 a USB host.
         loop = lambda b: kr.decode_diag(DIAG[:26] + bytes([b, 3, 0]))["loop"]
-        self.assertEqual(loop(0x00), {"locked": False, "reason": "none", "pending": False, "host": False, "events": 3})
-        self.assertEqual(loop(0x04), {"locked": False, "reason": "none", "pending": True, "host": False, "events": 3})
-        self.assertEqual(loop(0x02), {"locked": True, "reason": "suspected", "pending": False, "host": False, "events": 3})
+        self.assertEqual(loop(0x00), {"locked": False, "reason": "none", "host": False, "events": 3})
+        self.assertEqual(loop(0x04), {"locked": False, "reason": "none", "host": False, "events": 3})   # reserved bit ignored
+        self.assertEqual(loop(0x02), {"locked": True, "reason": "suspected", "host": False, "events": 3})
+        self.assertEqual(loop(0x08), {"locked": False, "reason": "none", "host": True, "events": 3})
         self.assertEqual(loop(0x03)["reason"], "reason 3")   # not defined: named, not guessed
 
     def test_older_firmware_has_no_loop_block(self):
