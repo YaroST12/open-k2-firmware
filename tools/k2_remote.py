@@ -20,6 +20,7 @@ import k2_lock  # noqa: E402
 import charger_summary  # noqa: E402
 import step_label  # noqa: E402
 import report_card  # noqa: E402
+import twin_proto  # noqa: E402
 from k2_flasher import FRAME_SIZE, LinuxHidTransport  # noqa: E402
 
 REQ_MAGIC = b"\xA5\x4B"
@@ -76,7 +77,11 @@ FLASH_STATUS = ["Ok", "Refused", "Busy", "KeyFail", "ProgramError", "WriteProtec
 CMD_FC = 0x32             # active fast-charge trigger (scan / trigger / reset / status)
 CMD_EM_LIB = 0x61         # saved-cable library: list/get/save/delete/rename/spoof
 CMD_CARDS = 0x62          # charger report cards: list / get (chunked) / rename / delete
-CMD_STORE = 0x60          # flash store: list / save-emarker / save-log
+CMD_TWIN = 0x63           # device twins: list / get (chunked) / predict / learn / rename / delete / run / status / result / usb / cancel
+(TW_LIST, TW_GET, TW_PREDICT, TW_LEARN, TW_RENAME, TW_DELETE, TW_RUN, TW_STATUS, TW_RESULT, TW_USB, TW_CANCEL) = range(11)
+TW_RUN_CONFIRM, TW_LEARN_DRY, TW_ERR_NO_CAPS = 1, 1, 8
+TW_RUN_WAIT_S = 180       # how long `twin run` follows a run before it gives up waiting (the run itself goes on)
+CMD_STORE = 0x60         # flash store: list / save-emarker / save-log
 CMD_BLACK_BOX = 0x70       # PD black box ring: read from a cursor / clear / freeze / status (tools/pd_trace.py)
 BB_READ, BB_CLEAR, BB_FREEZE, BB_STATUS, BB_CAP_LIST, BB_CAP_READ, BB_CAP_CLEAR = 0, 1, 2, 3, 4, 5, 6
 CMD_TRANS_CAP = 0x71      # transition capture: VBUS + CC at ~1 kHz around a PD step (tools/pd_trace.py transition)
@@ -252,6 +257,8 @@ class RemoteError(RuntimeError):
             text += " (a charger test or an FC release owns the link: the library write waits for it)"
         if cmd == CMD_STORE and status == STATUS_BUSY:
             text += " (a charger test or an FC release owns the link: the flash save waits for it)"
+        if cmd == CMD_TWIN and status == STATUS_BUSY:
+            text += " (a twin run, a charger test or an FC release owns the link: the write waits for it; `twin status`, `twin cancel`)"
         if cmd == CMD_ACTION and status == STATUS_BUSY:
             text += " (a charger test or an FC release owns the ports, or a negotiation is in flight: the action did not run)"
         if cmd == CMD_IDENTIFY_DEVICE and payload and payload[0] == PD_ERR_INLINE:
@@ -1690,6 +1697,206 @@ def cmd_cards(link, a):
     raise FcRefused(f"unknown cards command {c}")
 
 
+TwinFailed = twin_proto.TwinError   # a twin command the K2 refused, or a record this tool cannot read
+
+
+def _twin(link, payload):
+    return link.call(CMD_TWIN, bytes(payload)).payload
+
+
+def _twin_numbers(link):
+    return twin_proto.decode_list(_twin(link, [TW_LIST]))
+
+
+def _twin_record(link, seq):
+    """The twin's record, read in parts (48 bytes each) and decoded."""
+    raw, part = b"", 0
+    while True:
+        _, _, parts, data = twin_proto.chunk_info(_twin(link, [TW_GET, seq, part]))
+        raw += data
+        part += 1
+        if part >= min(parts, 8):
+            return twin_proto.decode_record(raw)
+
+
+def _twin_usb(link, seq):
+    """The twin's USB data lines: what it declared alone, what was sniffed inline ("" = nothing held)."""
+    return {w: twin_proto.decode_usb(_twin(link, [TW_USB, seq, i]))["text"] for i, w in enumerate(twin_proto.USB_WHICH)}
+
+
+def _twin_name(text):
+    try:
+        raw = text.encode("ascii")
+    except UnicodeEncodeError:
+        raw = b""
+    if not 1 <= len(raw) <= twin_proto.NAME_MAX:
+        raise FcRefused(f"name is 1..{twin_proto.NAME_MAX} characters of A-Z a-z 0-9 space - _ .")
+    return raw
+
+
+def _twin_row(rec, pred):
+    return {"seq": rec["seq"], "name": rec["name"], "vid": rec["vid"], "pid": rec["pid"], "prediction": pred,
+            "summary": pred["summary"] if pred else "no charger list", "note": pred["note"] if pred else ""}
+
+
+def _twin_predict(link, rec):
+    p = _twin(link, [TW_PREDICT, rec["seq"]])
+    return None if p[:1] == bytes([TW_ERR_NO_CAPS]) else twin_proto.decode_predict(p)
+
+
+def _twin_run(link, a):
+    if not a.confirm:
+        raise FcRefused("a live proof negotiates with the charger as each twin (the contract changes, the output moves to the twin's "
+                        "voltage for about a second): add --confirm")
+    seqs = a.ids or _twin_numbers(link)
+    if not seqs:
+        raise TwinFailed("twin run: no twins")
+    r = twin_proto.decode_run(_twin(link, [TW_RUN, TW_RUN_CONFIRM, len(seqs)] + list(seqs)))
+    if not r["started"]:
+        hint = {"no charger": " (attach to a charger first: `pd attach`)", "link inline": " (a real sink is behind the K2)"}.get(r["refusal"], "")
+        raise TwinFailed(f"twin run: {r['refusal']}{hint}")
+    deadline = time.monotonic() + a.wait
+    try:
+        while True:
+            st = twin_proto.decode_status(_twin(link, [TW_STATUS]))   # also keeps the dead-man lease fed
+            if not st["running"]:
+                break
+            if time.monotonic() > deadline:
+                raise TwinFailed(f"twin run: still running after {a.wait:g} s (it goes on; `twin status`, `twin cancel`)")
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        _twin(link, [TW_CANCEL])
+        raise
+    rows = []
+    for s in seqs:
+        slot = twin_proto.decode_slot(_twin(link, [TW_RESULT, s]))
+        rec = _twin_record(link, s)
+        pred = _twin_predict(link, rec)
+        row = _twin_row(rec, pred)
+        row.update(verdict=slot["verdict"], skip=slot["skip"], measured_mv=slot["measured_mv"],
+                   proof=twin_proto.proof(slot["verdict"], slot["measured_mv"], pred) if pred else slot["verdict"])
+        rows.append(row)
+    return {"twin": "run", "run": st, "rows": rows}
+
+
+def cmd_twin(link, a):
+    """Device twins: what a charger would give a learned device, and a live proof of it."""
+    c = a.twin_cmd
+    if c == "list":
+        return {"twin": "list", "list": [_twin_record(link, s) for s in _twin_numbers(link)]}
+    if c == "show":
+        return {"twin": "show", "record": _twin_record(link, a.id), "usb": _twin_usb(link, a.id)}
+    if c == "predict":
+        rows = []
+        for s in a.ids or _twin_numbers(link):
+            rec = _twin_record(link, s)
+            rows.append(_twin_row(rec, _twin_predict(link, rec)))
+        return {"twin": "predict", "rows": rows}
+    if c == "run":
+        return _twin_run(link, a)
+    if c == "status":
+        return {"twin": "status", "status": twin_proto.decode_status(_twin(link, [TW_STATUS]))}
+    if c == "result":
+        return {"twin": "result", "result": twin_proto.decode_slot(_twin(link, [TW_RESULT, a.id]))}
+    if c == "cancel":
+        p = _twin(link, [TW_CANCEL])
+        twin_proto.check(p, 2, "cancel")
+        return {"twin": "cancel", "was_running": bool(p[1])}
+    if c == "learn":
+        name = _twin_name(a.name) if a.name else b""
+        how = 0 if a.source == "identify" else 1
+        r = twin_proto.decode_learn(_twin(link, [TW_LEARN, how, TW_LEARN_DRY if a.dry else 0] + list(name)))
+        return {"twin": "learn", "source": a.source, "dry": a.dry, "learn": r}
+    if c == "rename":
+        twin_proto.check(_twin(link, [TW_RENAME, a.id] + list(_twin_name(a.name))), 2, "rename")
+        return {"twin": "rename", "seq": a.id, "name": a.name}
+    if c == "delete":
+        if not a.confirm:
+            raise FcRefused("delete removes a twin: add --confirm")
+        twin_proto.check(_twin(link, [TW_DELETE, a.id, 1]), 2, "delete")
+        return {"twin": "delete", "seq": a.id}
+    if c == "usb":
+        return {"twin": "usb", "seq": a.id, "usb": _twin_usb(link, a.id) if a.which is None else
+                {a.which: twin_proto.decode_usb(_twin(link, [TW_USB, a.id, twin_proto.USB_WHICH.index(a.which)]))["text"]}}
+    if c == "export":
+        recs = []
+        for s in _twin_numbers(link):
+            rec = _twin_record(link, s)
+            rec["usb"] = _twin_usb(link, s)
+            recs.append(rec)
+        with open(a.out, "w") as f:
+            json.dump(recs, f, indent=1)
+            f.write("\n")
+        return {"twin": "export", "file": a.out, "count": len(recs)}
+    raise FcRefused(f"unknown twin command {c}")
+
+
+def _twin_flags(rec):
+    return ", ".join(n for n, v in (("request", rec["request"]), ("declared", rec["declared"]), ("observed", rec["observed"])) if v) or "-"
+
+
+def render_twin(r):
+    k = r["twin"]
+    if k == "list":
+        if not r["list"]:
+            return "no twins: learn one with `twin learn identify`"
+        return "\n".join(f"  {t['seq']:3} {t['name'] or '(unnamed)':24} {t['vid']:04X}:{t['pid']:04X} {len(t['pdos'])} sink PDOs  "
+                         f"{_twin_flags(t):28} {t['bytes']} B" for t in r["list"])
+    if k == "show":
+        t = r["record"]
+        lines = [f"twin {t['seq']}: {t['name']}  {t['vid']:04X}:{t['pid']:04X}  id header 0x{t['id_hi']:04X}  PD rev {t['pd_rev']}  "
+                 f"({t['bytes']} bytes, format {t['version']})"]
+        lines += [f"  sink PDO {i + 1}: {twin_proto.pdo_text(p)}  raw=0x{p:08X}" for i, p in enumerate(t["pdos"])]
+        if not t["pdos"]:
+            lines.append("  no sink PDOs (made from a sniffed Request: the live proof speaks the K2's own capabilities)")
+        if t["request"]:
+            lines.append(f"  sniffed Request 0x{t['request']['rdo']:08X} against source PDO 0x{t['request']['pdo']:08X}")
+        lines.append("  declared: " + (r["usb"]["declared"] or "no declared USB data (run Identify with the device alone)"))
+        lines.append("  observed: " + (r["usb"]["observed"] or "no observed USB data (learn it from a sniff inline)"))
+        lines.append(twin_proto.USB_HONESTY)
+        return "\n".join(lines)
+    if k in ("predict", "run"):
+        if not r["rows"]:
+            return "no twins: learn one with `twin learn identify`"
+        lines = []
+        for w in r["rows"]:
+            tail = w["note"] + (" [mismatch]" if w["prediction"] and w["prediction"]["mismatch"] else "")
+            if k == "run":
+                tail = f"{w['proof']}" + (f" ({w['skip']})" if w["skip"] else "") + f"   predicted {w['summary']}, {w['note']}"
+                lines.append(f"  {w['seq']:3} {w['name']:24} {tail}")
+            else:
+                lines.append(f"  {w['seq']:3} {w['name']:24} {w['summary']:14} {tail}")
+        full = sum(1 for w in r["rows"] if w["prediction"] and w["note"] in ("full", "the device takes no more"))
+        lines.append(f"{full} of {len(r['rows'])} full on this charger" if k == "predict" else f"run {r['run']['reason']}")
+        return "\n".join(lines)
+    if k == "status":
+        s = r["status"]
+        return (f"twin run: {'running' if s['running'] else 'idle'}, {s['done']} of {s['count']} done"
+                + (f", now twin {s['current']}" if s["running"] else f", last {s['reason']}")
+                + (", restoring" if s["restoring"] else "") + f"; verdicts held for {s['with_verdict'] or 'none'}")
+    if k == "result":
+        x = r["result"]
+        return f"twin {x['seq']}: {x['verdict']}" + (f" ({x['skip']})" if x["skip"] else "") + (f" {twin_proto.volts(x['measured_mv'])}" if x["measured_mv"] else "")
+    if k == "cancel":
+        return "run cancelled" if r["was_running"] else "no run was going"
+    if k == "learn":
+        x = r["learn"]
+        what = f"{x['vid']:04X}:{x['pid']:04X}, {x['num_pdos']} sink PDOs" + (f", {', '.join(x['has'])}" if x["has"] else "")
+        if r["dry"]:
+            return f"learned (dry run, nothing saved): {what}"
+        return f"saved as twin {x['seq']}: {what}" + (" (already known" + (", unchanged)" if x["unchanged"] else ", merged)") if x["existed"] else "")
+    if k == "rename":
+        return f"twin {r['seq']} is now {r['name']}"
+    if k == "delete":
+        return f"deleted twin {r['seq']}"
+    if k == "usb":
+        lines = [f"  {w}: {t or 'nothing held'}" for w, t in r["usb"].items()]
+        return "\n".join(lines + [twin_proto.USB_HONESTY])
+    if k == "export":
+        return f"wrote {r['count']} twins to {r['file']}"
+    return "ok"
+
+
 def cmd_emarker(link, a):
     sc = getattr(a, "em_cmd", None)
     if sc in ("learn", "learned"):
@@ -3070,6 +3277,8 @@ def _render(name, r):
             lines.append(f"  [{i}] {p['type']:8} {p['min_mv'] / 1000:g}-{p['max_mv'] / 1000:g} V "
                          f"{p['max_ma'] / 1000:g} A {p['max_mw'] / 1000:g} W  raw=0x{p['raw']:08X}")
         return "\n".join(lines)
+    if r.get("twin"):
+        return render_twin(r)
     if r.get("cards"):
         k = r["cards"]
         if k == "list":
@@ -3224,7 +3433,8 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
-            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards}
+            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards,
+            "twin": cmd_twin}
 
 
 def _add_lease_args(parser):
@@ -3291,6 +3501,37 @@ def build_parser():
     el.add_argument("--save", action="store_true", help="save the learned clone into the cable library")
     es.add_parser("learned", help="the last learn run's summary and transcript (no run)")
     es.add_parser("unmatched", help="the SOP'/SOP'' requests the armed fake cable received and nothing answered")
+    sw = sub.add_parser("twin", help="device twins: what a charger would give a learned device, and a live proof of it")
+    sws = sw.add_subparsers(dest="twin_cmd", required=True)
+    sws.add_parser("list", help="saved twins")
+    sx = sws.add_parser("show", help="one twin: sink PDOs, sniffed Request, USB data")
+    sx.add_argument("id", type=int)
+    sx = sws.add_parser("predict", help="what this charger would give each twin (no transmission)")
+    sx.add_argument("ids", nargs="*", type=int, help="twin ids (default: all)")
+    sx = sws.add_parser("run", help="live proof: negotiate with the charger AS each twin (needs `pd attach` first)")
+    sx.add_argument("ids", nargs="*", type=int, help="twin ids (default: all)")
+    sx.add_argument("--confirm", action="store_true", help="required: the contract changes while the proof runs")
+    sx.add_argument("--wait", type=float, default=TW_RUN_WAIT_S, help=f"seconds to wait for the run (default {TW_RUN_WAIT_S})")
+    _add_lease_args(sx)
+    sws.add_parser("status", help="state of the live proof")
+    sx = sws.add_parser("result", help="the live verdict held for one twin")
+    sx.add_argument("id", type=int)
+    sws.add_parser("cancel", help="stop a running live proof")
+    sx = sws.add_parser("learn", help="make a twin from the last Identify (device alone) or a sniffed Request (inline)")
+    sx.add_argument("source", choices=["identify", "sniff"])
+    sx.add_argument("--name", help="1..24 characters")
+    sx.add_argument("--dry", action="store_true", help="show what would be learned, save nothing")
+    sx = sws.add_parser("rename", help="rename a twin")
+    sx.add_argument("id", type=int)
+    sx.add_argument("name")
+    sx = sws.add_parser("delete", help="delete a twin")
+    sx.add_argument("id", type=int)
+    sx.add_argument("--confirm", action="store_true")
+    sx = sws.add_parser("usb", help="a twin's USB data lines (declared / observed)")
+    sx.add_argument("id", type=int)
+    sx.add_argument("which", nargs="?", choices=list(twin_proto.USB_WHICH))
+    sx = sws.add_parser("export", help="all twins as a JSON array (raw record hex plus USB text)")
+    sx.add_argument("--out", required=True)
     sc = sub.add_parser("cards", help="charger report cards: list / show / export / rename / delete")
     scs = sc.add_subparsers(dest="cards_cmd", required=True)
     scs.add_parser("list", help="saved cards, newest first")
@@ -3586,7 +3827,7 @@ def _main(a):
     except FcRefused as e:
         print(f"refused: {e}", file=sys.stderr)
         return 5
-    except (StoreFailed, CardsFailed, WipeFailed, DumpFailed) as e:
+    except (StoreFailed, CardsFailed, TwinFailed, WipeFailed, DumpFailed) as e:
         print(f"error: {e}", file=sys.stderr)
         return 6
     except (RemoteError, FrameError) as e:

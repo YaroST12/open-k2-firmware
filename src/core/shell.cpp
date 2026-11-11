@@ -25,6 +25,8 @@ constexpr std::string_view kHelp =
     "lab: accp|qc2|qc3|qc3+|afc|fcp|scp|vooc|ufcs|vivo|dpdm|vbus|cc rp|rd|pd caps|request|... see docs/PROTOCOL_LAB.md\r\n"
     "ufcs show|set <field> <v>|reset|probe|result   UFCS frame/timing tuner (RAM) and the 5 V probe, no confirm\r\n"
     "lcd show | lcd spi <4|8>    LCD SPI clock divider (RAM only, /8 at boot) and paint totals, no confirm\r\n"
+    "twin list|predict [n]|status|cancel|learn identify|sniff [dry] [name]|rename n name   device twins (docs/DEVICE_TWIN.md)\r\n"
+    "twin run [n|all] confirm | twin delete n confirm   the live proof negotiates with the charger as the twin\r\n"
     "above 5 V needs a trailing confirm; closing the port returns to 5 V\r\n";
 
 constexpr std::array<std::string_view, static_cast<std::size_t>(fc::Proto::Count)> kProtos = {
@@ -195,6 +197,78 @@ void cmd_stream(Backend& b, const Tokens& k) {
     done(b, b.stream(mask ? mask : 15, hz, history));
 }
 
+// A library number 1..12.
+bool twin_seq(std::string_view s, std::uint8_t& out) {
+    std::uint32_t v;
+    if (!number(s, v) || v < 1 || v > kTwinMax) return false;
+    out = static_cast<std::uint8_t>(v);
+    return true;
+}
+
+// The rest of the line from token `first` on, as one name (single spaces inside are kept as typed); false when it is empty or too long.
+bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
+    if (k.n <= first) return false;
+    const char* b = k.t[first].data();
+    const char* e = k.t[k.n - 1].data() + k.t[k.n - 1].size();
+    name = std::string_view(b, static_cast<std::size_t>(e - b));
+    return name.size() <= kTwinNameMax;
+}
+
+void cmd_twin(Backend& b, const Tokens& k) {
+    constexpr const char* kUsage =
+        "usage: twin list | predict [n|all] | run [n|all] confirm | status | cancel | learn identify|sniff [dry] [name] | rename n name | delete n confirm";
+    if (k.n < 2) return err(b, kUsage);
+    const std::string_view s = k.t[1];
+    TwinCmd c;
+    if (same(s, "list") && k.n == 2) { c.op = TwinOp::List; return done(b, b.twin(c)); }
+    if (same(s, "status") && k.n == 2) { c.op = TwinOp::Status; return done(b, b.twin(c)); }
+    if (same(s, "cancel") && k.n == 2) { c.op = TwinOp::Cancel; return done(b, b.twin(c)); }
+    if (same(s, "predict")) {
+        c.op = TwinOp::Predict;
+        if (k.n == 2 || (k.n == 3 && same(k.t[2], "all"))) c.all = true;
+        else if (k.n != 3 || !twin_seq(k.t[2], c.seq)) return err(b, "usage: twin predict [1..12|all]");
+        return done(b, b.twin(c));
+    }
+    if (same(s, "run")) {
+        c.op = TwinOp::Run;
+        std::size_t i = 2;
+        if (k.n > i && same(k.t[i], "all")) { c.all = true; i++; }
+        else if (k.n > i && !same(k.t[i], "confirm")) {
+            if (!twin_seq(k.t[i], c.seq)) return err(b, "usage: twin run [1..12|all] confirm");
+            i++;
+        } else c.all = true;
+        if (k.n == i) return err(b, "a live run negotiates with the charger and needs a trailing confirm");
+        if (k.n != i + 1 || !same(k.t[i], "confirm")) return err(b, "usage: twin run [1..12|all] confirm");
+        c.confirm = true;
+        return done(b, b.twin(c));
+    }
+    if (same(s, "learn")) {
+        if (k.n < 3) return err(b, kUsage);
+        if (same(k.t[2], "identify")) c.op = TwinOp::Learn;
+        else if (same(k.t[2], "sniff")) c.op = TwinOp::LearnSniff;
+        else return err(b, "usage: twin learn identify|sniff [dry] [name]");
+        std::size_t i = 3;
+        if (k.n > i && same(k.t[i], "dry")) { c.dry = true; i++; }
+        if (k.n > i && !twin_name(k, i, c.name)) return err(b, "name is at most 24 characters");
+        return done(b, b.twin(c));
+    }
+    if (same(s, "rename")) {
+        c.op = TwinOp::Rename;
+        if (k.n < 4 || !twin_seq(k.t[2], c.seq)) return err(b, "usage: twin rename 1..12 <name>");
+        if (!twin_name(k, 3, c.name)) return err(b, "name is at most 24 characters");
+        return done(b, b.twin(c));
+    }
+    if (same(s, "delete")) {
+        c.op = TwinOp::Delete;
+        if (k.n < 3 || !twin_seq(k.t[2], c.seq) || k.n > 4) return err(b, "usage: twin delete 1..12 confirm");
+        if (k.n == 3) return err(b, "a delete needs a trailing confirm");
+        if (!same(k.t[3], "confirm")) return err(b, "usage: twin delete 1..12 confirm");
+        c.confirm = true;
+        return done(b, b.twin(c));
+    }
+    err(b, kUsage);
+}
+
 }  // namespace
 
 void Shell::execute(std::string_view line) {
@@ -230,6 +304,7 @@ void Shell::execute(std::string_view line) {
     if (same(c, "sniff")) return cmd_sniff(b_, k);
     if (same(c, "trace")) return cmd_trace(b_, k);
     if (same(c, "stream")) return cmd_stream(b_, k);
+    if (same(c, "twin")) return cmd_twin(b_, k);
     err(b_, "unknown command (help)");
 }
 

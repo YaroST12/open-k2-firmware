@@ -31,6 +31,8 @@ struct LiveCtx {
 twin::Facts facts_now();
 // Prediction against the charger's list now (pd::active_caps()). False: no list, nothing predicted.
 bool predict(const twin::Twin& t, twin::Outcome& out);
+// The `[TWIN] predict` log line, one per prediction shown to a user (the remote's and the shell's).
+void log_predict(std::uint8_t seq, const twin::Outcome& o);
 
 // ---- live proof ----
 twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx);

@@ -24,6 +24,20 @@ namespace k2::shell {
 inline constexpr int kMaxMv = 36000;
 inline constexpr std::size_t kLineMax = 128;
 
+// A parsed `twin ...` line (k2/twin/wire.hpp has the same operations on the HID remote). `seq` is the library number 1..12;
+// `all` = every twin; `name` points into the typed line (valid during the call only), at most kTwinNameMax characters.
+enum class TwinOp : std::uint8_t { List, Predict, Run, Status, Learn, LearnSniff, Delete, Rename, Cancel };
+inline constexpr std::size_t kTwinNameMax = 24;
+inline constexpr unsigned kTwinMax = 12;
+struct TwinCmd {
+    TwinOp op = TwinOp::List;
+    std::uint8_t seq = 0;
+    bool all = false;
+    bool confirm = false;   // a run and a delete reach the backend only with it
+    bool dry = false;       // learn: show what would be saved, save nothing
+    std::string_view name;
+};
+
 // Every action returns nullptr when done, else a short reason ("busy", "no monitor", ...).
 struct Backend {
     virtual void write(std::string_view s) = 0;                // text to the terminal
@@ -52,6 +66,8 @@ struct Backend {
     }
     // Protocol lab command (k2/core/lab.hpp), already parsed and confirm-checked; prints its own result lines.
     virtual const char* lab(const lab::Cmd&) { return "lab not available"; }
+    // Device twin command (k2/twin), already parsed and confirm-checked; prints its own result lines.
+    virtual const char* twin(const TwinCmd&) { return "twin not available"; }
 
 protected:
     ~Backend() = default;

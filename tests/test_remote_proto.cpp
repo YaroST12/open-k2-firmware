@@ -449,6 +449,111 @@ static void test_emlib_writes_refused_while_busy() {
     }
 }
 
+// Cmd::Twin: the dispatcher checks lengths and ranges, the confirm bit of a run and the busy guard of the writes before the
+// backend sees anything; an accepted run arms the HID lease (it holds the output above 5 V).
+static void test_twin_dispatch() {
+    auto request = [](uint8_t seq, const std::vector<uint8_t>& payload) {
+        std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, 0x63, seq, static_cast<uint8_t>(payload.size())};
+        v.insert(v.end(), payload.begin(), payload.end());
+        v.resize(kFrameSize, 0);
+        return v;
+    };
+    Fake f; Frame r;
+    // reads reach the backend, with the exact payload
+    CHECK_EQ(run(f, request(1, {0}), r), 1);
+    check_header(r, 0x63, 1, Status::Ok, 2);
+    CHECK_EQ(int(f.twin_req.size()), 1);
+    CHECK_EQ(run(f, request(2, {1, 12, 2}), r), 1);     // get twin 12, part 2 (the last)
+    check_header(r, 0x63, 2, Status::Ok, 2);
+    CHECK_EQ(run(f, request(3, {1, 12, 3}), r), 1);     // part 3 does not exist
+    check_header(r, 0x63, 3, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(4, {1, 0, 0}), r), 1);      // twin 0 and 13 do not exist
+    check_header(r, 0x63, 4, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(5, {2, 13}), r), 1);
+    check_header(r, 0x63, 5, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(6, {2, 3}), r), 1);
+    check_header(r, 0x63, 6, Status::Ok, 2);
+    CHECK_EQ(run(f, request(7, {9, 3, 1}), r), 1);      // usb, observed
+    check_header(r, 0x63, 7, Status::Ok, 2);
+    CHECK_EQ(run(f, request(8, {9, 3, 2}), r), 1);
+    check_header(r, 0x63, 8, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(9, {7}), r), 1);            // status
+    check_header(r, 0x63, 9, Status::Ok, 2);
+    CHECK_EQ(run(f, request(10, {7, 0}), r), 1);
+    check_header(r, 0x63, 10, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(11, {8, 4}), r), 1);        // result
+    check_header(r, 0x63, 11, Status::Ok, 2);
+    CHECK_EQ(run(f, request(12, {10}), r), 1);          // cancel is always allowed
+    check_header(r, 0x63, 12, Status::Ok, 2);
+    CHECK_EQ(run(f, request(13, {11}), r), 1);          // unknown op
+    check_header(r, 0x63, 13, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(14, {}), r), 1);
+    check_header(r, 0x63, 14, Status::BadLength, 0);
+    // learn: how 0 / 1, flags bit0 only, a name up to kTwNameMax
+    CHECK_EQ(run(f, request(15, {3, 0, 0}), r), 1);
+    check_header(r, 0x63, 15, Status::Ok, 2);
+    CHECK_EQ(run(f, request(16, {3, 2, 0}), r), 1);
+    check_header(r, 0x63, 16, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(17, {3, 0, 2}), r), 1);
+    check_header(r, 0x63, 17, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(18, {3, 1}), r), 1);
+    check_header(r, 0x63, 18, Status::BadLength, 0);
+    std::vector<uint8_t> longname(3 + kTwNameMax + 1, 'a');
+    longname[0] = 3; longname[1] = 0; longname[2] = 0;
+    CHECK_EQ(run(f, request(19, longname), r), 1);
+    check_header(r, 0x63, 19, Status::BadLength, 0);
+    // delete wants its confirm byte
+    CHECK_EQ(run(f, request(20, {5, 2, 0}), r), 1);
+    check_header(r, 0x63, 20, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(21, {5, 2, 1}), r), 1);
+    check_header(r, 0x63, 21, Status::Ok, 2);
+    CHECK_EQ(run(f, request(22, {4, 2, 'X'}), r), 1);   // rename
+    check_header(r, 0x63, 22, Status::Ok, 2);
+    CHECK_EQ(run(f, request(23, {4, 2}), r), 1);        // rename to nothing
+    check_header(r, 0x63, 23, Status::BadLength, 0);
+
+    // run: the confirm bit last of the checks, then the busy guard; an accepted run arms the lease
+    f.calls = 0; f.lease_arms = 0;
+    CHECK_EQ(run(f, request(30, {6, 0, 0}), r), 1);
+    check_header(r, 0x63, 30, Status::NeedConfirm, 0);
+    CHECK_EQ(f.calls, 0);
+    CHECK_EQ(run(f, request(31, {6, 2, 0}), r), 1);     // an unknown flag bit
+    check_header(r, 0x63, 31, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(32, {6, 1, 2, 3}), r), 1);  // count says 2, one number follows
+    check_header(r, 0x63, 32, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(33, {6, 1, 2, 3, 3}), r), 1);   // the same twin twice
+    check_header(r, 0x63, 33, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(34, {6, 1, 1, 13}), r), 1);
+    check_header(r, 0x63, 34, Status::BadArg, 0);
+    CHECK_EQ(f.calls, 0);
+    CHECK_EQ(run(f, request(35, {6, 1, 0}), r), 1);     // all, confirmed
+    check_header(r, 0x63, 35, Status::Ok, 2);
+    CHECK_EQ(f.lease_arms, 1);
+    f.twin_first = 5;                                    // a refusal from the backend: no lease
+    CHECK_EQ(run(f, request(36, {6, 1, 1, 3}), r), 1);
+    check_header(r, 0x63, 36, Status::Ok, 2);
+    CHECK_EQ(f.lease_arms, 1);
+    f.twin_first = 0;
+    f.ports_busy_value = true;                           // writes refused before the backend: Busy + [kTwErrBusy]
+    f.calls = 0;
+    const std::vector<std::vector<uint8_t>> writes = {{6, 1, 0}, {5, 2, 1}, {4, 2, 'X'}, {3, 0, 0}};
+    uint8_t seq = 40;
+    for (const auto& w : writes) {
+        CHECK_EQ(run(f, request(seq, w), r), 1);
+        check_header(r, 0x63, seq, Status::Busy, 1);
+        CHECK_EQ(int(r[kRspHeader]), int(kTwErrBusy));
+        seq++;
+    }
+    CHECK_EQ(f.calls, 0);
+    // reads, the dry learn, cancel and status stay open while busy
+    for (const auto& g : std::vector<std::vector<uint8_t>>{{0}, {1, 1, 0}, {2, 1}, {3, 0, 1}, {7}, {8, 1}, {9, 1, 0}, {10}}) {
+        CHECK_EQ(run(f, request(seq, g), r), 1);
+        check_header(r, 0x63, seq, Status::Ok, 2);
+        seq++;
+    }
+    CHECK_EQ(f.calls, 8);
+}
+
 // The flash store saves (emarker, log) and the card rename / delete share the flash with a charger test's own
 // card save: refused while a run or an FC release owns the link, before the backend sees them. The store
 // replies Status::Busy (no payload); the cards keep their Ok + [kCardsErrBusy] shape the host tool already
@@ -2377,6 +2482,7 @@ int main() {
     test_emlib_writes_refused_while_busy();
     test_store_cards_writes_refused_while_busy();
     test_cards();
+    test_twin_dispatch();
     test_blackbox();
     test_transcap();
     test_debug_fake_pdos();

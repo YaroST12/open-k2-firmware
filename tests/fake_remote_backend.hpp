@@ -274,4 +274,11 @@ struct Fake {
         out[0] = 0xC4; out[1] = 0x33;
         return 2;
     }
+    std::vector<uint8_t> twin_req;
+    uint8_t twin_first = 0;   // what the fake answers in out[0] (0 = accepted)
+    size_t twin(std::span<const uint8_t> req, std::span<uint8_t> out) {
+        calls++; twin_req.assign(req.begin(), req.end());
+        out[0] = twin_first; out[1] = req[0];
+        return 2;
+    }
 };

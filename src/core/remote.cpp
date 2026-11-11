@@ -43,6 +43,8 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/pd/transcap.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/twin/twin_hw.hpp"
+#include "k2/twin/wire.hpp"
 #include "k2/ui/ui_qrtest.hpp"
 #include "k2/core/version.hpp"
 
@@ -636,11 +638,11 @@ void Remote::lease_tick() {
 remote::StopInfo Remote::stop() {
     struct RealEnv {
         Remote &r;
-        bool test_active() { return r.ui_.charger_test_busy(); }
+        bool test_active() { return r.ui_.charger_test_busy() || r.ui_.twin_live_busy(); }   // a twin live proof is a test here
         bool fc_active() { return fctrig::status().state != fc::State::Idle || fctrig::scan_running(); }
         bool pd_held() { return fusb302::sink_status().held; }
         bool spoof_active() { return emk_spoof::active(); }
-        void cancel_test() { r.ui_.cancel_charger_test(); }
+        void cancel_test() { r.ui_.cancel_charger_test(); r.ui_.cancel_twin(); }
         void stop_fc() { r.ui_.stop_fc(systick::millis()); }
         void release_pd() { r.ui_.trigger_release(systick::millis()); }
         void disarm_spoof() { emk_spoof::disarm(); r.spoof_seq_ = 0; }
@@ -1254,6 +1256,48 @@ static_assert(remote::kCardsList == report_card::remote::kList && remote::kCards
 size_t Remote::cards(std::span<const uint8_t> p, std::span<uint8_t> out) {
     CardsApi api;
     return report_card::remote::handle(api, p, out);
+}
+
+namespace {
+// The Twin command's Api: the library in flash (k2::storage), the live proof and the learning (k2::twin_hw).
+struct TwinApi {
+    Ui& ui;
+    unsigned list(std::span<uint8_t> o) { return storage::twin_list(o); }
+    bool get(uint8_t s, twin::Twin& t) { return storage::twin_get(s, t); }
+    bool predict(const twin::Twin& t, twin::Outcome& o, twin::Facts& f) {
+        f = twin_hw::facts_now();
+        return twin_hw::predict(t, o);
+    }
+    void log_predict(uint8_t seq, const twin::Twin&, const twin::Outcome& o) { twin_hw::log_predict(seq, o); }
+    twin_hw::Learned learn(uint8_t how, std::string_view name, bool save) {
+        return how == 0 ? twin_hw::learn_from_identify(name, save) : twin_hw::learn_from_sniff(name, save);
+    }
+    twin::Err rename(uint8_t s, std::string_view n) { return storage::twin_rename(s, n); }
+    twin::Err remove(uint8_t s) { return storage::twin_remove(s); }
+    twin::live::Refusal run(std::span<const uint8_t> seqs, bool confirmed) {
+        return twin_hw::live_start(seqs, confirmed, ui.twin_ctx(systick::millis()));
+    }
+    const twin::live::Runner& runner() const { return twin_hw::live(); }
+    bool running() const { return twin_hw::live_running(); }
+    void cancel() { ui.cancel_twin(); }
+};
+static_assert(remote::kTwList == twin::wire::kOpList && remote::kTwGet == twin::wire::kOpGet &&
+              remote::kTwPredict == twin::wire::kOpPredict && remote::kTwLearn == twin::wire::kOpLearn &&
+              remote::kTwRename == twin::wire::kOpRename && remote::kTwDelete == twin::wire::kOpDelete &&
+              remote::kTwRun == twin::wire::kOpRun && remote::kTwStatus == twin::wire::kOpStatus &&
+              remote::kTwResult == twin::wire::kOpResult && remote::kTwUsb == twin::wire::kOpUsb &&
+              remote::kTwCancel == twin::wire::kOpCancel);
+static_assert(remote::kTwErrBusy == twin::wire::kErrBusy && remote::kTwNameMax == twin::kNameMax &&
+              remote::kTwMax == twin::kCapacity && remote::kTwParts == twin::wire::kMaxParts &&
+              remote::kTwRunConfirm == twin::wire::kRunConfirm);
+static_assert(twin::wire::kMaxRsp == remote::kMaxRspPayload);
+}  // namespace
+
+// Reads (list, get, predict, usb, status, result, cancel) never write. Writes (learn without the dry bit, rename, delete, run)
+// reach here only when no test or FC release owns the link (the dispatcher refuses them with Busy otherwise).
+size_t Remote::twin(std::span<const uint8_t> p, std::span<uint8_t> out) {
+    TwinApi api{ui_};
+    return twin::wire::handle(api, p, out);
 }
 
 // The transition capture. Arming changes the power monitor's mode and stores nothing; a charger test that is

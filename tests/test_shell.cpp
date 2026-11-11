@@ -42,6 +42,11 @@ struct Fake : shell::Backend {
         calls += "stream" + std::to_string(mask) + "," + std::to_string(hz) + (history ? ",old" : "") + ";";
         return fail;
     }
+    const char* twin(const shell::TwinCmd& c) override {
+        calls += "twin" + std::to_string(int(c.op)) + "," + std::to_string(c.seq) + (c.all ? ",all" : "") + (c.confirm ? ",c" : "") +
+                 (c.dry ? ",dry" : "") + ",'" + std::string(c.name) + "';";
+        return fail;
+    }
 };
 
 // Run one line; returns what the backend was asked to do, `out` keeps the text.
@@ -187,6 +192,38 @@ int main() {
     CHECK_EQ(said(f, "err: unknown tuner field"), true);
     CHECK_EQ(run(f, "help").empty(), true);
     CHECK_EQ(said(f, "ufcs show|set"), true);
+    // device twins: op numbers are shell::TwinOp (List 0, Predict 1, Run 2, Status 3, Learn 4, LearnSniff 5, Delete 6, Rename 7, Cancel 8)
+    CHECK_STR((run(f, "twin list")).c_str(), "twin0,0,'';");
+    CHECK_STR((run(f, "twin status")).c_str(), "twin3,0,'';");
+    CHECK_STR((run(f, "twin cancel")).c_str(), "twin8,0,'';");
+    CHECK_STR((run(f, "twin predict 3")).c_str(), "twin1,3,'';");
+    CHECK_STR((run(f, "twin predict")).c_str(), "twin1,0,all,'';");
+    CHECK_STR((run(f, "twin predict all")).c_str(), "twin1,0,all,'';");
+    CHECK_STR((run(f, "twin predict 0")).c_str(), "");
+    CHECK_STR((run(f, "twin predict 13")).c_str(), "");
+    CHECK_EQ(said(f, "err: usage: twin predict"), true);
+    // a run is a live negotiation with the charger: it needs the trailing confirm
+    CHECK_STR((run(f, "twin run 2")).c_str(), "");
+    CHECK_EQ(said(f, "needs a trailing confirm"), true);
+    CHECK_STR((run(f, "twin run 2 confirm")).c_str(), "twin2,2,c,'';");
+    CHECK_STR((run(f, "twin run all confirm")).c_str(), "twin2,0,all,c,'';");
+    CHECK_STR((run(f, "twin run confirm")).c_str(), "twin2,0,all,c,'';");
+    CHECK_STR((run(f, "twin run 2 3 confirm")).c_str(), "");
+    // learning: the name is the rest of the line, `dry` previews without saving
+    CHECK_STR((run(f, "twin learn identify Pixel 9")).c_str(), "twin4,0,'Pixel 9';");
+    CHECK_STR((run(f, "twin learn sniff dry Camera")).c_str(), "twin5,0,dry,'Camera';");
+    CHECK_STR((run(f, "twin learn identify")).c_str(), "twin4,0,'';");
+    CHECK_STR((run(f, "twin learn inline")).c_str(), "");
+    CHECK_STR((run(f, "twin learn identify 0123456789012345678901234")).c_str(), "");   // 25 characters
+    CHECK_EQ(said(f, "err: name"), true);
+    CHECK_STR((run(f, "twin rename 4 My phone")).c_str(), "twin7,4,'My phone';");
+    CHECK_STR((run(f, "twin rename 4")).c_str(), "");
+    CHECK_STR((run(f, "twin delete 4")).c_str(), "");
+    CHECK_EQ(said(f, "needs a trailing confirm"), true);
+    CHECK_STR((run(f, "twin delete 4 confirm")).c_str(), "twin6,4,c,'';");
+    CHECK_STR((run(f, "twin")).c_str(), "");
+    CHECK_STR((run(f, "twin frob")).c_str(), "");
+    CHECK_EQ(said(f, "err: usage: twin"), true);
     // unknown / empty lines
     CHECK_STR((run(f, "frobnicate")).c_str(), "");
     CHECK_EQ(said(f, "unknown"), true);

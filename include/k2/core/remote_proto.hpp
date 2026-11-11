@@ -385,6 +385,7 @@ enum class Cmd : uint8_t {
     Store = 0x60,       // flash store: list / save e-marker / save log, see kStore* below (the saves: Busy while a run or an FC release owns the link)
     EmLib = 0x61,       // saved-cable library: list / get / save / delete / rename / spoof, see kEm* below
     Cards = 0x62,       // charger report cards: list / get (chunked) / rename / delete, see kCards* below (rename, delete: Ok + [kCardsErrBusy] while a run or an FC release owns the link)
+    Twin = 0x63,        // device twins: list / get / predict / learn / rename / delete / run / status / result / usb / cancel, see kTw* below and k2/twin/wire.hpp
     Lab = 0x51,         // lab probes: PA8 load pulse, see the layout above
     CableR = 0x50,      // passive cable resistance (k2/pd/cable_r.hpp), see the layout above
     Ufcs = 0x52,        // UFCS tuner and 5 V probe (k2/fastcharge/ufcs_tune.hpp, k2/fastcharge/ufcs_probe.hpp), see the layout above
@@ -410,7 +411,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::DebugEprInfo, Cmd::DebugLcd, Cmd::DebugCcProbe,
     Cmd::GetIdentity, Cmd::IdentifyDevice, Cmd::PdRequest, Cmd::PdReset, Cmd::PdTriggerStatus, Cmd::PdRelease, Cmd::PdMatch, Cmd::UsbLink, Cmd::PdReread,
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
-    Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
+    Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
 };
 
@@ -522,6 +523,22 @@ constexpr uint8_t kEmErrInline = 6;
 constexpr uint8_t kEmErrBusy = 7;  // active negotiation/scan/test refuses an arm, disarm remains explicit
 constexpr size_t kEmListMax = (kMaxRspPayload - 3) / 2;   // 27 numbers per LIST response
 constexpr size_t kEmNameMax = 24;
+// TWIN op codes (first payload byte of Cmd::Twin), the device twins of k2/twin/library.hpp. The response layouts are in
+// k2/twin/wire.hpp; every response starts with err (twin::Err, or kTwErr* for what the library cannot say).
+//   LIST    [0]                  GET     [1, seq, part]      PREDICT [2, seq]            (the charger now on CC, no transmission)
+//   LEARN   [3, how, flags, name...]   how 0 = from Identify, 1 = from a sniffed Request; flags bit0 = dry run (no save)
+//   RENAME  [4, seq, name...]    DELETE  [5, seq, 1]         RUN     [6, flags, n, seq * n]  flags bit0 = confirm, n 0 = all
+//   STATUS  [7]                  RESULT  [8, seq]            USB     [9, seq, which]  which 0 declared, 1 observed
+//   CANCEL  [10]                 -> [err, was_running]
+// Writes (LEARN without the dry bit, RENAME, DELETE, RUN) answer Busy + [kTwErrBusy] while a run, a test or an FC release owns
+// the link; RUN without the confirm bit answers NeedConfirm; an accepted RUN arms the HID lease (it holds the output above 5 V).
+constexpr uint8_t kTwList = 0, kTwGet = 1, kTwPredict = 2, kTwLearn = 3, kTwRename = 4, kTwDelete = 5, kTwRun = 6, kTwStatus = 7,
+                  kTwResult = 8, kTwUsb = 9, kTwCancel = 10;
+constexpr uint8_t kTwErrBusy = 7;     // twin::wire::kErrBusy
+constexpr uint8_t kTwRunConfirm = 1, kTwLearnDry = 1;
+constexpr size_t kTwNameMax = 24;     // twin::kNameMax (static_asserted in remote.cpp)
+constexpr size_t kTwMax = 12;         // twin::kCapacity (twin numbers are 1..kTwMax)
+constexpr size_t kTwParts = 3;        // GET parts (twin::wire::kMaxParts)
 // BLACKBOX op codes (first payload byte of Cmd::BlackBox); match k2::pdtrace::kOp*.
 constexpr uint8_t kBbRead = 0, kBbClear = 1, kBbFreeze = 2, kBbStatus = 3, kBbCapList = 4, kBbCapRead = 5, kBbCapClear = 6;
 // TRANSCAP op codes (first payload byte of Cmd::TransCap); the status response is kTcStatusBytes long.
@@ -1055,6 +1072,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.ports_busy() } -> std::same_as<bool>;   // a charger test or an FC release owns the link (Ui::ports_busy)
     { b.emlib(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // whole request payload (checked), out; returns the payload size
     { b.cards(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
+    { b.twin(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;    // same shape as emlib (Cmd::Twin, validated by the dispatcher)
     { b.transcap(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
 };
 
@@ -1683,6 +1701,64 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             return reply(Status::Ok, std::span<const uint8_t>(buf.data(), 1));
         }
         return reply_n(backend.cards(p, buf));
+    }
+    case Cmd::Twin: {
+        if (p.empty()) return reply(Status::BadLength);
+        const auto seq_ok = [&](size_t i) { return p[i] >= 1 && p[i] <= kTwMax; };
+        switch (p[0]) {
+        case kTwList:
+        case kTwStatus:
+        case kTwCancel:
+            if (p.size() != 1) return reply(Status::BadLength);
+            break;
+        case kTwGet:
+            if (p.size() != 3) return reply(Status::BadLength);
+            if (!seq_ok(1) || p[2] >= kTwParts) return reply(Status::BadArg);
+            break;
+        case kTwPredict:
+        case kTwResult:
+            if (p.size() != 2) return reply(Status::BadLength);
+            if (!seq_ok(1)) return reply(Status::BadArg);
+            break;
+        case kTwLearn:
+            if (p.size() < 3 || p.size() > 3 + kTwNameMax) return reply(Status::BadLength);
+            if (p[1] > 1 || (p[2] & ~kTwLearnDry) != 0) return reply(Status::BadArg);
+            break;
+        case kTwRename:
+            if (p.size() < 3 || p.size() > 2 + kTwNameMax) return reply(Status::BadLength);
+            if (!seq_ok(1)) return reply(Status::BadArg);
+            break;
+        case kTwDelete:
+            if (p.size() != 3) return reply(Status::BadLength);
+            if (!seq_ok(1) || p[2] != 1) return reply(Status::BadArg);
+            break;
+        case kTwUsb:
+            if (p.size() != 3) return reply(Status::BadLength);
+            if (!seq_ok(1) || p[2] > 1) return reply(Status::BadArg);
+            break;
+        case kTwRun: {
+            if (p.size() < 3 || p.size() != 3u + p[2]) return reply(Status::BadLength);
+            if ((p[1] & ~kTwRunConfirm) != 0 || p[2] > kTwMax) return reply(Status::BadArg);
+            for (size_t i = 0; i < p[2]; ++i) {
+                if (!seq_ok(3 + i)) return reply(Status::BadArg);
+                for (size_t j = 0; j < i; ++j)
+                    if (p[3 + j] == p[3 + i]) return reply(Status::BadArg);
+            }
+            if ((p[1] & kTwRunConfirm) == 0) return reply(Status::NeedConfirm);   // a run changes the contract
+            break;
+        }
+        default:
+            return reply(Status::BadArg);
+        }
+        // The writes share the flash and the link with a running test: refused before the backend sees them.
+        const bool writes = p[0] == kTwRename || p[0] == kTwDelete || p[0] == kTwRun || (p[0] == kTwLearn && (p[2] & kTwLearnDry) == 0);
+        if (writes && backend.ports_busy()) {
+            buf[0] = kTwErrBusy;
+            return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
+        }
+        const size_t n = backend.twin(p, buf);
+        if (p[0] == kTwRun && n > 0 && buf[0] == 0) backend.lease_arm();   // started: it holds the output above 5 V
+        return reply_n(n);
     }
     case Cmd::BlackBox: {
         if (p.empty()) return reply(Status::BadLength);

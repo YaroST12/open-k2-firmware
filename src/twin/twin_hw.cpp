@@ -108,6 +108,11 @@ bool predict(const twin::Twin& t, twin::Outcome& out) {
     return true;
 }
 
+void log_predict(std::uint8_t seq, const twin::Outcome& o) {
+    K2LOG("[TWIN] predict #%u kind=%u %u mV %u mA want=%u mW lim=%u obs=%u\n", unsigned(seq), unsigned(o.kind), unsigned(o.mv),
+          unsigned(o.ma), unsigned(o.want_mw), unsigned(o.limiter), unsigned(o.observed));
+}
+
 twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx) {
     if (pd::is_fake()) return twin::live::Refusal::NoSource;   // a fake list has no charger behind it
     fusb302::set_run_owner(true);

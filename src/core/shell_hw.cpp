@@ -35,6 +35,9 @@
 #include "k2/drivers/usbcfg.hpp"
 #include "k2/core/remote.hpp"
 #include "k2/core/remote_proto.hpp"
+#include "k2/core/storage.hpp"
+#include "k2/twin/present.hpp"
+#include "k2/twin/twin_hw.hpp"
 #include "tusb.h"
 #include "k2/ui/ui.hpp"
 
@@ -705,8 +708,126 @@ const char* lab_run(const lab::Cmd& c) {
     }
 }
 
+// ---- device twins (k2/twin): the same library, prediction and live proof as the remote's Twin command, as text lines ----
+static_assert(shell::kTwinMax == twin::kCapacity && shell::kTwinNameMax == twin::kNameMax);
+
+bool g_twin_started = false;   // this shell started a live proof: closing the port ends it (5 V back), like an FC trigger
+
+template <class... A>
+void tput(const char* f, A... a) {
+    char b[128];
+    put({b, fmt::format(std::span<char>(b, sizeof b), f, a...)});
+}
+
+// The numbers in the library, ascending.
+unsigned twin_numbers(std::array<std::uint8_t, twin::kCapacity>& seqs) { return storage::twin_list(seqs); }
+
+// `#2 Pixel 9  27W PPS  full  pos 6 9000mV 3000mA`, or the plain identity when `predict_it` is off.
+void twin_print(std::uint8_t seq, const twin::Twin& t, bool predict_it) {
+    if (!predict_it) {
+        tput("#%u %s  vid=%04X pid=%04X pdos=%u\r\n", unsigned(seq), t.name.data(), unsigned(t.vid), unsigned(t.pid),
+             unsigned(t.num_pdos));
+        return;
+    }
+    twin::Outcome o;
+    if (!twin_hw::predict(t, o)) {
+        tput("#%u %s  no charger list\r\n", unsigned(seq), t.name.data());
+        return;
+    }
+    twin_hw::log_predict(seq, o);
+    char s[24];
+    twin::present::summary(o, s);
+    if (o.kind == twin::Kind::None) {
+        tput("#%u %s  %s\r\n", unsigned(seq), t.name.data(), s);
+        return;
+    }
+    tput("#%u %s  %s  %s  pos %u %umV %umA%s\r\n", unsigned(seq), t.name.data(), s, twin::present::note(o.limiter), unsigned(o.pos),
+         unsigned(o.mv), unsigned(o.ma), o.mismatch ? " mismatch" : "");
+}
+
+const char* twin_status() {
+    const twin::live::Runner& r = twin_hw::live();
+    tput("twin %s %u/%u current=%u reason=%s%s\r\n", twin_hw::live_running() ? "running" : "idle", unsigned(r.done_count()),
+         unsigned(r.count()), unsigned(r.current()), twin::live::name(r.reason()), r.restoring() ? " restoring" : "");
+    for (std::uint8_t seq = 1; seq <= twin::kCapacity; seq++) {
+        const twin::live::Slot& s = r.slot(seq);
+        twin::Twin t;
+        if (s.verdict == twin::live::Verdict::None || !storage::twin_get(seq, t)) continue;
+        twin::Outcome o;
+        if (!twin_hw::predict(t, o)) o = twin::Outcome{};
+        char p[24];
+        twin::present::proof(s.verdict, s.measured_mv, o, p);
+        tput("#%u %s  %s%s%s\r\n", unsigned(seq), t.name.data(), p, s.skip != twin::live::Skip::None ? "  " : "",
+             twin::live::name(s.skip));
+    }
+    return nullptr;
+}
+
+const char* twin_command(const shell::TwinCmd& c) {
+    using shell::TwinOp;
+    std::array<std::uint8_t, twin::kCapacity> seqs{};
+    twin::Twin t;
+    switch (c.op) {
+    case TwinOp::List:
+    case TwinOp::Predict: {
+        const bool pr = c.op == TwinOp::Predict;
+        const unsigned n = twin_numbers(seqs);
+        if (n == 0) { put("no twins saved\r\n"); return nullptr; }
+        bool shown = false;
+        for (unsigned i = 0; i < n; i++) {
+            if (pr && !c.all && seqs[i] != c.seq) continue;
+            if (storage::twin_get(seqs[i], t)) { twin_print(seqs[i], t, pr); shown = true; }
+        }
+        return shown ? nullptr : twin::err_name(twin::Err::NotFound);
+    }
+    case TwinOp::Status: return twin_status();
+    case TwinOp::Cancel: {
+        const bool was = twin_hw::live_running();
+        g_ui->cancel_twin();
+        tput("twin cancelled was_running=%u\r\n", was ? 1u : 0u);
+        return nullptr;
+    }
+    case TwinOp::Run: {
+        unsigned n = 0;
+        if (c.all) n = twin_numbers(seqs);
+        else if (storage::twin_get(c.seq, t)) seqs[n++] = c.seq;
+        else return twin::err_name(twin::Err::NotFound);
+        const twin::live::Refusal r =
+            twin_hw::live_start(std::span<const std::uint8_t>(seqs.data(), n), c.confirm, g_ui->twin_ctx(systick::millis()));
+        if (r != twin::live::Refusal::None) return twin::live::name(r);
+        g_twin_started = true;
+        tput("twin run started n=%u (twin status for the verdicts)\r\n", n);
+        return nullptr;
+    }
+    case TwinOp::Learn:
+    case TwinOp::LearnSniff: {
+        if (!c.dry && g_ui->ports_busy()) return "busy";
+        const twin_hw::Learned l = c.op == TwinOp::Learn ? twin_hw::learn_from_identify(c.name, !c.dry)
+                                                         : twin_hw::learn_from_sniff(c.name, !c.dry);
+        if (l.how == twin_hw::Learn::Store) return twin::err_name(l.store.err);
+        if (l.how != twin_hw::Learn::Ok) return twin_hw::name(l.how);
+        tput("twin %s #%u %s vid=%04X pid=%04X pdos=%u%s%s\r\n", c.dry ? "learned (dry, not saved)" : "saved",
+             unsigned(l.store.seq), l.twin.name.data(), unsigned(l.twin.vid), unsigned(l.twin.pid), unsigned(l.twin.num_pdos),
+             l.store.existed ? " updated" : "", l.store.unchanged ? " unchanged" : "");
+        return nullptr;
+    }
+    case TwinOp::Rename: {
+        if (g_ui->ports_busy()) return "busy";
+        const twin::Err e = storage::twin_rename(c.seq, c.name);
+        return e == twin::Err::Ok ? nullptr : twin::err_name(e);
+    }
+    case TwinOp::Delete: {
+        if (g_ui->ports_busy()) return "busy";
+        const twin::Err e = storage::twin_remove(c.seq);
+        return e == twin::Err::Ok ? nullptr : twin::err_name(e);
+    }
+    }
+    return "?";
+}
+
 struct Hw final : shell::Backend {
     void write(std::string_view s) override { put(s); }
+    const char* twin(const shell::TwinCmd& c) override { return twin_command(c); }
 
     void state() override {
         char b[200];
@@ -877,6 +998,10 @@ void session_end() {
     g_log_on = false;
     if (dpsniff::streaming()) dpsniff::cancel();
     dbg_hw::stop();
+    if (g_twin_started) {
+        g_twin_started = false;
+        g_ui->cancel_twin();
+    }
     if (g_fc_started) fc_stop();
     silent_end();
     raw_to_hiz();
