@@ -181,6 +181,11 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   pull-up still read `USB DATA` (`test_equal_pair_is_not_a_data_host_but_real_data_is`). Validate: repeat the 60-sample
   poll on the same port and cable: 0 `USB DATA` samples, `APPLE 2.4A` -> `NO INPUT` at each cut; then a PC port with a
   device behind the K2 (J/K traffic or the 0.7-1.0 V pull-up) still reads `USB DATA`.
+  **Hardware 1.0.0-600-0c0eb0ae (same port and cable, PC-powered, `runs/2026-11-11-integ600-hw/`): passes.** 60 s poll,
+  346 samples, VBUS sagging to 4.04 V in 166 of them: all `APPLE 2.4A`, 0 `USB DATA` (`cut60.txt`; VBUS never reached 0
+  this time, so no `NO INPUT`). `dm 0`, 200 ms, `dm hiz`: VBUS stayed at or below 5.12 V, label `APPLE 2.4A` throughout,
+  never `AFC FCP` (`idle_check.txt`). Still open: a real data device behind the K2 reads `USB DATA`, and a QC / AFC unit
+  still detects.
 - **The recorder stream has no boot id or reset cause** (2026-11-11): two boots in one recording look like one (the
   "Power reads 0" scare). Fixed on `k2/small-fixes`, hardware check pending: a new Boot frame (kind 11: session boot
   counter, CRM reset flags) follows the Hello; `tools/k2_stream.py` prints `BOOT BOUNDARY`, keeps the clock rising,
