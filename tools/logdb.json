@@ -581,6 +581,7 @@
   "584": "[LPRB] cancelled step=%s\n",
   "585": "[FC] dcp check dm_ref=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
   "586": "[FC] idle dp=%s dm=%s mismatch=0x%X",
-  "587": "[TEST] preflight refused: load attached, latched by %s (%d mV)\n"
+  "587": "[TEST] preflight refused: load attached, latched by %s (%d mV)\n",
+  "588": "[BB] saves=%u skipped=%u errors=%u last=%ums max=%ums entries=%d free=%u kind=%u held=%d wait=%u C=%u D=%u E=%u drop=%u defer=%u\n"
  }
 }

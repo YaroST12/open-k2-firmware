@@ -12,10 +12,12 @@
 //   - each capture once: a slot is remembered by its sequence number;
 //   - hold_run(): while a charger test runs, the captures that every PD row makes (Contract, and the VBUS dip and edge
 //     captures that its 21 V to 5 V steps raise) wait for the end of the run (one save is about 600 flash half-words
-//     with interrupts off, 95-290 ms of main loop gap on the device). Only the rare events (hard reset, detach,
-//     refusal) still go. The three RAM slots keep the newest captures, so a run that makes more than three waits
-//     loses the oldest. The hold lapses by itself kHoldLapseMs after the last call, so a session that stops renewing
-//     it cannot keep it up.
+//     with interrupts off, 95-290 ms of main loop gap on the device). The rare events (hard reset, detach, refusal) go
+//     at once, but only kRareBudget of them per run: a charger that resets on every row would otherwise cost one save
+//     (a sector erase and ~600 programs) per row, so the rest wait too. A waiting capture is kept in its RAM slot
+//     (pdtrace::keep_capture): a newer capture takes another slot, and only when all three are waiting is the oldest
+//     lost, which `dropped` counts. When the hold lapses the waiting captures go out one save per poll(), oldest first.
+//     The hold lapses by itself kHoldLapseMs after the last call, so a session that stops renewing it cannot keep it up.
 //   - make_room(): the ring gives the journal's blocks back (see bbstore.hpp) at boot and when a run starts.
 #pragma once
 #include <array>
@@ -30,12 +32,15 @@ namespace k2::bbpersist {
 
 inline constexpr std::uint32_t kQuietMs = 300;
 inline constexpr std::uint32_t kHoldLapseMs = 2000;
+inline constexpr std::uint32_t kRareBudget = 2;   // rare-kind captures written during one held run; the rest wait for its end
 
 struct Status {
     bool ready = false;                // the ring was mounted
     bool idle = false;                 // idle gate closed: captures are not written
     bool held = false;                 // a charger test runs: the per-row captures wait
     std::uint32_t waiting = 0;         // finished captures the hold kept back at the last scan
+    std::uint32_t dropped = 0;         // waiting captures a newer one overwrote (every RAM slot was waiting)
+    std::uint32_t deferred = 0;        // rare-kind captures the run budget made wait (they are written after the run)
     std::array<std::uint32_t, 8> by_kind{};  // captures written, by pdtrace::Trigger
     unsigned last_kind = 0;            // trigger of the last save
     bool last_while_held = false;      // the hold was up when it was written (a held kind written anyway = a bug)
@@ -54,7 +59,11 @@ public:
     explicit Persister(fs::Fs& f) : ring_(f) { ring_.set_reserve(bbstore::kJournalReserveBlocks); }
 
     // A charger test runs: the per-row captures wait (see the header). Renew it every tick of the test.
-    void hold_run() { hold_ms_ = systick::millis(); hold_set_ = true; }
+    void hold_run() {
+        if (!holding()) rare_run_ = 0;   // a new run: the budget of rare saves starts over
+        hold_ms_ = systick::millis();
+        hold_set_ = true;
+    }
 
     // The journal's blocks free again (the ring evicts its oldest captures); returns how many went.
     unsigned make_room() {
@@ -83,7 +92,8 @@ public:
         st_.ready = true;
     }
 
-    // Main loop: saves finished, unsaved captures, oldest first.
+    // Main loop: saves finished, unsaved captures, oldest first, one flash write per call (the main loop gets a pass
+    // between two saves).
     void poll() {
         if (!st_.ready) return;
         const bool hold = holding();
@@ -92,14 +102,24 @@ public:
             std::uint32_t seq = ~0u, waiting = 0;
             for (std::size_t i = 0; i < pdtrace::kCapSlots; i++) {
                 const auto in = pdtrace::capture_info(i);
-                if (in.trigger == pdtrace::Trigger::None || in.filling || in.stored || in.seq == saved_[i]) continue;
-                if (hold && held_kind(in.trigger)) { waiting++; continue; }
+                if (in.trigger == pdtrace::Trigger::None) { pending_[i] = 0; continue; }
+                if (pending_[i] != 0 && pending_[i] != in.seq) { st_.dropped++; pending_[i] = 0; }   // a newer capture took the slot
+                if (in.filling || in.stored || in.seq == saved_[i]) continue;
+                if (hold && waits(in.trigger)) {
+                    waiting++;
+                    if (pending_[i] != in.seq) {
+                        pending_[i] = in.seq;
+                        pdtrace::keep_capture(i, true);
+                        if (!held_kind(in.trigger)) st_.deferred++;
+                    }
+                    continue;
+                }
                 if (in.seq < seq) { seq = in.seq; pick = int(i); }
             }
             st_.waiting = waiting;
             if (pick < 0) return;
             const std::size_t i = std::size_t(pick);
-            if (pdtrace::idle()) { saved_[i] = seq; st_.skipped++; continue; }
+            if (pdtrace::idle()) { settled(i, seq); st_.skipped++; continue; }
             if (pdtrace::since_activity_ms() < kQuietMs) return;
             const auto in = pdtrace::capture_info(i);
             const auto data = pdtrace::capture_data(i);
@@ -112,7 +132,8 @@ public:
             }
             st_.last_ms = systick::millis() - t0;
             if (st_.last_ms > st_.max_ms) st_.max_ms = st_.last_ms;
-            saved_[i] = seq;
+            settled(i, seq);
+            if (hold && !held_kind(in.trigger)) rare_run_++;   // a rare kind went out mid-run: it counts against the budget
             if (e == bbstore::Err::TooBig || e == bbstore::Err::Full) st_.skipped++;
             else if (e != bbstore::Err::Ok) st_.errors++;
             else {
@@ -123,6 +144,7 @@ public:
                 st_.last_while_held = hold;
             }
             refresh();
+            return;
         }
     }
 
@@ -138,12 +160,22 @@ private:
     Status st_;
     std::uint32_t hold_ms_ = 0;
     bool hold_set_ = false;
+    std::uint32_t rare_run_ = 0;   // rare-kind captures written since the hold started
     bool holding() const { return hold_set_ && systick::millis() - hold_ms_ < kHoldLapseMs; }
     // What a charger-test row makes by itself: the Contract capture, and the dip and edge captures of its voltage steps.
     static bool held_kind(pdtrace::Trigger t) {
         return t == pdtrace::Trigger::Contract || t == pdtrace::Trigger::VbusDip || t == pdtrace::Trigger::Edges;
     }
+    // Waits for the end of the run: the per-row kinds always, the rare kinds once the run has used its budget.
+    bool waits(pdtrace::Trigger t) const { return held_kind(t) || rare_run_ >= kRareBudget; }
     std::array<std::uint32_t, pdtrace::kCapSlots> saved_{};
+    std::array<std::uint32_t, pdtrace::kCapSlots> pending_{};   // sequence of the capture each slot holds back (0 = none)
+    // The capture of slot `i` was written or given up: it is not waiting any more and its slot may be reused.
+    void settled(std::size_t i, std::uint32_t seq) {
+        saved_[i] = seq;
+        pending_[i] = 0;
+        pdtrace::keep_capture(i, false);
+    }
     // The LZ working buffer of one capture, from the shared scratch arena (k2/core/scratch.hpp); the caller holds the lease.
     static constexpr std::size_t kBufBytes = lz::bound(pdtrace::kCapBytes);
     static_assert(kBufBytes <= scratch::kSize, "scratch arena too small for the Black Box LZ buffer");

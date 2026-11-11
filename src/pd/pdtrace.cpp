@@ -106,6 +106,7 @@ const view::Link& live_link() { return g_link.link(); }
 std::uint32_t since_activity_ms() { return g_idle.since(systick::millis()); }
 bool idle() { return g_idle.idle(systick::millis()); }
 bool restore_capture(Trigger t, std::span<const std::uint8_t> data, std::size_t pre) { return g_caps.restore(t, data, pre); }
+void keep_capture(std::size_t slot, bool on) { g_caps.keep(slot, on); }
 
 CaptureInfo capture_info(std::size_t slot) {
     CaptureInfo i;
