@@ -509,6 +509,11 @@
   "512": "[CT] re-attach decision: claim %u W, best offer %u W, nothing above 3 A=%u -> %s\n",
   "513": "[RMT] pd attach refused: %s (target_mv=%d busy=%d inline=%d trigger=%d confirm=%d)\n",
   "514": "[RMT] pd attach refused: confirm needed (chosen pos=%d %d mV)\n",
-  "515": "[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums blocked=%ums\n"
+  "515": "[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums blocked=%ums\n",
+  "516": "[RMT] lease armed %d\n",
+  "517": "[RMT] lease expired: stop\n",
+  "518": "[RMT] host gone: stop\n",
+  "519": "[RMT] stop active=%d vbus=%d fc_rel=%d\n",
+  "520": "[UI] trigger PDO%u over-load above 5V needs confirm\n"
  }
 }
