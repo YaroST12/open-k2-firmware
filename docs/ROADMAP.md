@@ -39,10 +39,57 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 - One Request in flight and the verified 5 V release (2026-11-09, 3a37f22, Anker splitter re-announcing mid-run):
   a single PDO 1 Request after the re-announce, VBUS back at 5 V, run "done" instead of "unsafe (5V release
   failed)" (Black Box `runs/anker-split/bb12.txt`, local).
+- `pd attach` takes a fixed PDO at the target before a PPS / AVS range (2026-11-11, 27780f2a on 1.0.0-515, NOVOO RG100
+  alone): a second `pd attach` 5000 had picked the PPS APDO (PDO 5) on 511; on 515 5 V -> PDO 1, 9 V -> PDO 2, 12 V ->
+  PDO 5 PPS at 12 V (`runs/2026-11-11-novoo-alone/after-515.txt`, local; `pd::pick_attach_pdo`, `tests/test_attach_pick.cpp`).
+- The lease settles on a held 5 V contract (2026-11-11, 13e6a618 on 1.0.0-515, NOVOO RG100 alone): after a twin run that
+  ended on a held PDO 1 contract at 5.10 V the lease read "not armed ... ended: settled" instead of staying armed into a
+  needless stop (`runs/2026-11-11-novoo-alone/after-515.txt`, local; `lease::safe_5v`, `tests/test_lease.cpp`).
+- Abort after a twin run (2026-11-11, 1.0.0-511, NOVOO RG100 alone): `pd-reread --abort` after a twin run released the
+  lab attach; the earlier "abort ignored" report did not reproduce once the attach-owner fix 4fd3c9ac was in.
 
 ## Current bugs
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
+
+- **The driver's own PDO 1 answers mark the contract held** (2026-11-11, found while fixing the lease; open, design
+  pending). `fusb302.cpp` answers caps on its own through `Sink::trigger()`, which sets `SinkStatus.held` like a user
+  trigger: `run start: request PDO 1` (a run's Rd attach), `acked caps: request PDO 1` (any caps the chip acked, the
+  self-power hold included) and `auto re-request after hard reset`. So a 5 V contract nobody owns reads `held=True`:
+  after a twin run (its release, the re-attach, then `run start: request PDO 1`, `runs/2026-11-11-novoo-alone/b4-twin/`),
+  after a re-read (the 2026-11-10 "tool busy" START refusal, worked around by `pd::reread_own_hold`) and after a hard reset.
+  Effects: the lease did not settle (fixed separately, 13e6a618), `pd status` shows a hold the user never made, a
+  charger-test START on a K2 that is neither self- nor bus-powered is refused "PD hold: release it", and the legacy
+  "unsafe" exit of the charger test (`charger_test.cpp`, `!in.pd.held`) waits for a hold nobody will release.
+  - Not the fix: clearing `held` on these Requests. The sink answers a re-announce during Requesting / Transition only
+    while held (`pd_sink.cpp`, the re-announce branch); without it the source's tSenderResponse expires into a Hard
+    Reset (CUKTECH C1, 2026-11-04). The charger test's 5 V steps also read `held` (plateau, renewal).
+  - Fix (proposed): an ownership mark next to `held`, e.g. `SinkStatus.auto_hold`, set by the driver's own PDO 1
+    answers and cleared by any `sink_request`; `pd::reread_own_hold`, the PdHold busy reason, the charger-test exit
+    and `pd status` read "held by the driver at 5 V" as not held. Host tests: each auto path sets the mark, a user
+    trigger clears it, START is allowed on an auto hold and refused on a user hold.
+  - Validate (hardware): K2 alone on the NOVOO: twin run, then `pd status` reads the auto hold, a charger-test START is
+    allowed, the lease settles; a `pd attach` 9000 hold still blocks START.
+- **The K2 attaches late and misses the source's offers** (2026-11-11, three times: Anker, the flipped hub on the
+  Legion left port, NOVOO -> K2 -> Legion side port): VBUS was up 294 ms before the K2 registered the attach, so the
+  first message it caught was PS_RDY or VCONN_Swap. Not seen when the K2 was attached before the charger. Test case:
+  `runs/2026-11-11-integ-hw/twin/h-side-inline/` (local).
+  - Validate (hardware): NOVOO -> K2 -> Legion side port, about 10 plug cycles at each end with the recorder on; every
+    attach decodes the Source_Capabilities.
+- **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
+  the K2 falls back to the Type-C level. Probably a knock-on of the late attach; re-check after that fix. Also seen:
+  `k2_remote state` said `USB DATA` while Home said `SVOOC` (the shell must say what the screen says).
+- **The recorder stream has no boot id or reset cause** (2026-11-11): two boots in one recording look like one (the
+  "Power reads 0" scare). Validate: one K2 replug (or `reboot`) inside a recording shows two boot ids and the reset flags.
+- **Twin limiter text with no claimed power** (2026-11-11, twin-observed review): with no claimed source power,
+  predict calls a 60 W hub "limited by the cable". The predict rework on `k2/twin-observed` changes this path;
+  re-check after its merge.
+- **PD Stress does not release Rd at its end** (open since before 2026-11-11): the run ends with the K2's Rd still on CC.
+- **A refused e-marker read kept the last read's mode and acks** (2026-11-11, fixed in 472c40f9, host-tested;
+  `tests/test_fusb302_scan.cpp` `test_refused_read_clears_the_last_read`). Validate (hardware): with a sink inline or
+  Ra mode on, `k2_remote emarker --json` after a refused read shows `read_mode` none and 0 acks.
+- **Docs: `docs/CHARGER_QUIRKS.md` still calls the Baseus cable of the FH22 / CUKTECH notes a "plain cable"** (2026-11-11):
+  that cable later answered as chipped (5 A normal); reword those notes.
 
 - **Connection page ("Who's attached") flickers on a steady link** (2026-11-10, user report; handoff row 2c): the tab
   refreshed its info without anything new appearing. Fixed in bd9dd91b, hardware check pending.
