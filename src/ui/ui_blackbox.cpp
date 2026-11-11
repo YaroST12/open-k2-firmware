@@ -241,7 +241,7 @@ void BlackBoxPage::paint_list() {
     const Surface &c = ctx_.content;
     const bool empty = nrows_ == 0;
     if (bound_ != (empty ? 1 : 0)) {                  // first paint, or the list became empty / non-empty
-        gfx_fill(c, 0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH), kBg);
+        if (!ctx_.blank) gfx_fill(c, 0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH), kBg);   // a blank screen is kBg already
         if (empty) paint_empty_text();
         ctx_.rows.init(c, empty ? kEmptyListY : kit::kBodyY, row_fn, this);
         ctx_.rows.invalidate();
@@ -359,7 +359,7 @@ void BlackBoxPage::draw_line_row(void *self, int index, const Rect &, bool, Fiel
 void BlackBoxPage::enter_mode(Mode m) {
     mode_ = m;
     const Surface &c = ctx_.content;
-    gfx_fill(c, 0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH), kBg);   // keep the status bar
+    if (!ctx_.blank) gfx_fill(c, 0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH), kBg);   // keep the status bar; a blank screen is kBg already
     bound_ = -1;
     head_painted_ = false;
     link_painted_ = false;

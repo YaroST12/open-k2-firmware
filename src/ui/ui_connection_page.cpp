@@ -763,26 +763,28 @@ void ConnectionPage::paint_tab_indicator() {
         const std::string_view name = conn::tab_name(static_cast<conn::Tab>(t));
         const int16_t x = static_cast<int16_t>(t * kit::kProgPitch);
         const int16_t w = kit::kProgSegW;
-        gfx_fill(c, x, kTabY, w, kTabH, kBg);
-        gfx_text(c, kLabelFont, static_cast<int16_t>(x + (w - static_cast<int>(name.size()) * kLabelFont.adv) / 2),
-                 static_cast<int16_t>(kTabY + 2), name, on ? kFocus : kDim, kBg);
+        const kit::TextRun label{static_cast<int16_t>(x + (w - static_cast<int>(name.size()) * kLabelFont.adv) / 2),
+                                 static_cast<int16_t>(kTabY + 2), &kLabelFont, name, on ? kFocus : kDim};
+        kit::paint_texts(c, {x, kTabY, w, static_cast<int16_t>(kTabH - 2)}, &label, 1, kBg);   // ground and name, once
         gfx_fill(c, x, static_cast<int16_t>(kTabY + kTabH - 2), w, 2, on ? kFocus : kRule);
+        if (kit::kProgPitch > w) gfx_fill(c, static_cast<int16_t>(x + w), kTabY, static_cast<int16_t>(kit::kProgPitch - w), kTabH, kBg);   // the gap between cells
     }
 }
 
 // A large message and one wrapped hint line group (the port-aware text of conn::empty_state).
 void ConnectionPage::paint_empty() {
     const Surface &c = ctx_.content;
-    gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);
-    paint_tab_indicator();
+    paint_tab_indicator();   // the strip owns kBodyY .. kRowY0
     body_ = Body::Empty;
     const conn::Empty e = conn::empty_state(tab_, facts_);
     char buf[kFitBuf];
-    gfx_text(c, kMid, 8, 74, fit_text(kMid, e.title, c.w - 16, buf), kText, kBg);
     std::array<std::string_view, 4> lines;
     const int n = conn::wrap(e.hint, static_cast<std::size_t>((c.w - 16) / kSmall.adv), lines);
+    kit::TextRun runs[5];
+    runs[0] = {8, 74, &kMid, fit_text(kMid, e.title, c.w - 16, buf), kText};
     for (int i = 0; i < n; i++)
-        gfx_text(c, kSmall, 8, static_cast<int16_t>(112 + i * 20), lines[static_cast<std::size_t>(i)], kDim, kBg);
+        runs[1 + i] = {8, static_cast<int16_t>(112 + i * 20), &kSmall, lines[static_cast<std::size_t>(i)], kDim};
+    kit::paint_texts(c, {0, kRowY0, c.w, static_cast<int16_t>(kFooterY - kRowY0)}, runs, 1 + n, kBg);   // the body ground and its texts, once
 }
 
 void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
@@ -840,32 +842,39 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     }
     int painted = 0;
     if (full) {
-        gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);   // below the bar's rule
+        // Every pixel once: the tab strip and the row slots paint their own ground; only the empty tail under the table is
+        // wiped (and not even that on a blank screen).
         paint_tab_indicator();
-    } else if (count_moved) {
-        // Only the vacated slots and the old closing rule (the list's empty tail below stays background).
+        const int tail = kRowY0 + R.n * kRowPitch + (R.n < kMaxList ? 1 : 0);   // under the closing hairline
+        if (!ctx_.blank && kFooterY > tail) gfx_fill(c, 0, static_cast<int16_t>(tail), c.w, static_cast<int16_t>(kFooterY - tail), kBg);
+    } else if (count_moved && body_n_ > R.n) {
+        // Only the vacated slots and the old closing rule (the list's empty tail below stays background). A longer table
+        // overwrites the old rule with its new rows.
         const int clear_to = kRowY0 + body_n_ * kRowPitch + 1;
         gfx_fill(c, 0, static_cast<int16_t>(clear_from), c.w, clear_to - clear_from, kBg);
     }
     for (int i = 0; i < R.n; i++) {
         const int16_t y = static_cast<int16_t>(kRowY0 + i * kRowPitch);
-        const bool in_cleared = count_moved && y >= clear_from;   // the slot was just wiped: repaint whatever the hash says
+        const bool in_cleared = count_moved && y >= clear_from;   // the slot is new or was just wiped: repaint whatever the hash says
         if (!full && !in_cleared && sigs[static_cast<std::size_t>(i)] == row_sig_[static_cast<std::size_t>(i)]) continue;
         painted++;
         const Rows::R &row = R.r[i];
-        if (!full) gfx_fill(c, 0, y, c.w, kRowPitch, kBg);   // the row's own slot only; the next row's hairline is its own
         gfx_fill(c, 0, y, c.w, 1, kRule);
-        gfx_text(c, kLabelFont, kKeyX, static_cast<int16_t>(y + kKeyDy), row.key, kDim, kBg);
+        // The row's ground below its rule with the key and the value texts on it, each pixel once (the next row's hairline is its own).
+        kit::TextRun runs[3];
+        int nr = 0;
+        runs[nr++] = {kKeyX, static_cast<int16_t>(y + kKeyDy), &kLabelFont, row.key, kDim};
         const std::string_view all = row.v.view();
         const int16_t vy = static_cast<int16_t>(y + kValDy);
         if (row.cut > 0 && all.size() <= static_cast<std::size_t>(kValCells)) {   // built to fit: head in its colour, current in kAmp
-            gfx_text(c, kSmall, kValX, vy, all.substr(0, row.cut), dim ? kStale : row.c, kBg);
-            gfx_text(c, kSmall, static_cast<int16_t>(kValX + row.cut * kSmall.adv), vy, all.substr(row.cut), dim ? kStale : kAmp, kBg);
+            runs[nr++] = {kValX, vy, &kSmall, all.substr(0, row.cut), dim ? kStale : row.c};
+            runs[nr++] = {static_cast<int16_t>(kValX + row.cut * kSmall.adv), vy, &kSmall, all.substr(row.cut), dim ? kStale : kAmp};
         } else {
             // Every row is built to fit the value column (vendor names, tags and flags are added whole or not at all),
             // so a cut here is a copy bug: fit_text fails the host gate on it.
-            gfx_text(c, kSmall, kValX, vy, fit_text(kSmall, all, c.w - kValX - 4, buf), dim ? kStale : row.c, kBg);
+            runs[nr++] = {kValX, vy, &kSmall, fit_text(kSmall, all, c.w - kValX - 4, buf), dim ? kStale : row.c};
         }
+        kit::paint_texts(c, {0, static_cast<int16_t>(y + 1), c.w, static_cast<int16_t>(kRowPitch - 1)}, runs, nr, kBg);
     }
     if ((full || count_moved) && R.n < kMaxList)
         gfx_fill(c, 0, static_cast<int16_t>(kRowY0 + R.n * kRowPitch), c.w, 1, kRule);   // closes the table (moved with the count)

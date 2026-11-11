@@ -95,6 +95,12 @@ public:
     // Full-width lane: while the list does not overflow the row base runs under the scrollbar lane too (no notch beside
     // a focused row, and the page needs no lane painter); an overflowing list keeps the lane for its thumb. Reset by init().
     void set_full_lane(bool on) { full_lane_ = on; }
+    // Self-grounded rows (opaque rows only): the list draws the rule line but not the base under the row; the callback paints
+    // every pixel of the row below the rule, ground included, each once (kit::fill_except around its text and marker boxes).
+    // Reset by init().
+    void set_self_ground(bool on) { self_ground_ = on; }
+    // The width a row spans right now: the surface, less the scrollbar lane while the list overflows (or has no full lane).
+    int16_t row_width() const { return static_cast<int16_t>(surf_.w - (full_lane_ && !st_.overflows() ? 0 : ListView::kBarW)); }
     // Moves the window to `offset` (clamped) without drawing: the caller's next draw() paints it once.
     void set_offset(int offset) { st_.scroll(offset - st_.offset); }
 
@@ -137,6 +143,7 @@ private:
     int32_t rule_ = -1;
     int16_t extra_ = 0;               // focus expansion (set_focus_extra)
     bool full_lane_ = false;
+    bool self_ground_ = false;
     int16_t slot_y_[kMaxRows] = {};   // y each slot was last painted at (-1 = never): a shift repaints
     int16_t tail_used_ = -1;          // list height the rows covered at the last draw (-1 = unknown)
     // What the scrollbar currently shows, to redraw it only when it changes.

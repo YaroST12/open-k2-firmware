@@ -200,8 +200,10 @@ enum class StatusReadout : uint8_t { None, Live, Stale };
 // Fills the whole band, then the optional 12 px icon (x 4) and the S12 title. A title that would
 // reach past x `right` is cut short with "..." instead of being overpainted by the right readout.
 // A non-empty `badge` is drawn right-aligned to `right`, separated from the title by a 1 px rule.
+// `readout_follows`: the caller repaints the right-hand readout area (x 140 and up, draw_top_readout) right after, so the band
+// covers only x 0..139 and that area is written once, not twice.
 void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_view title, int16_t right = 132,
-                      std::string_view badge = {});
+                      std::string_view badge = {}, bool readout_follows = false);
 
 // The top chrome bar's role badge (draw_status_left's `badge`): a held Rd pin names its line
 // ("Rd pin CC2"), so a leftover pin (pd-reread --pin) is visible on the status line; no pin is the

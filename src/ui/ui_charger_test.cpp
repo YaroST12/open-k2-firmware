@@ -1501,7 +1501,7 @@ void ChargerTestPage::bar() {
         break;
     default: t.put("Charger test"); break;
     }
-    kit::draw_top_bar(ctx_.content, t.view(), step, fusb302::self_powered() ? "SNK" : "PAS");
+    kit::draw_top_bar(ctx_.content, t.view(), step, fusb302::self_powered() ? "SNK" : "PAS", true);   // title_badge follows in update
     bar_valid_ = false;   // the band repaint erased the V x A readout: title_badge paints it again
     bar_key_ = static_cast<uint8_t>(static_cast<uint8_t>(stage_) + 1);
 }

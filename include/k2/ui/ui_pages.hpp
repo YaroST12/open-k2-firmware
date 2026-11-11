@@ -69,6 +69,10 @@ struct UiContext {
     power::Metrics pm{};             // what the screen shows: One Euro smoothed (Settings > Smoothing)
     power::Metrics pm_avg{};         // the 128-sample average: the charger test's current, link detection, cable resistance
     bool pm_online = false;
+    // True while the Ui paints a whole page onto a screen it knows is kBg everywhere (after the full clear or the erase pass:
+    // Ui::paint_incoming, render_for_capture). A page's first paint may then skip a body wipe, since the pixels are already
+    // kBg. Never true in the erase replay, a resync or a refresh: those paint over live ink.
+    bool blank = false;
     std::int32_t vbus_fast_mv = 0;   // VBUS without the 2.5 s average: every judgement of a VBUS transition reads this, pm is display
     EnergyMeter meter;
     WattHistory watts;           // Big sparklines, one sample per second: forward power (mW)

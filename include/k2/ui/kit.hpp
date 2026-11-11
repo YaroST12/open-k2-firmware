@@ -34,13 +34,36 @@ constexpr int16_t kNoteMaxPx = 190;       // note box: x28 .. 218
 constexpr int kWindowRows = (kFooterY - kBodyY - kFocusExtra) / kRowH;   // rows in the default body, with the open row: 7
 static_assert(kWindowRows == 7, "the focused row's 14 px must fit above the footer");
 static_assert(kBodyY + kWindowRows * kRowH + kFocusExtra <= kFooterY, "a RowList never reaches the footer band");
+constexpr int16_t kListBottom = kBodyY + kWindowRows * kRowH + kFocusExtra;   // where a default RowList (at kBodyY) ends: 220
 constexpr int16_t kProgPitch = 75, kProgSegW = 74, kProgY = kBarH - 1, kProgH = 2;   // wizard progress rule
 constexpr int kProgSegs = 3;
+constexpr int16_t kBelowBar = kProgY + kProgH;   // first row no top bar touches (22): a body fill starts here, never at kBarH
 constexpr int16_t kKvValueX = 72;         // key/value tables: value column (x92 for long keys)
 constexpr int16_t kInfoTagX = 4, kInfoValueX = 52, kInfoPitch = 20;   // InfoBlock columns
 
 // y of a 16 px (or `font_h` px) text line inside a row of `pitch` whose rule is on the top line.
 constexpr int16_t row_text_y(int16_t pitch, int16_t font_h) { return static_cast<int16_t>(1 + (pitch - font_h) / 2); }
+
+// ---- single-pass ground ---------------------------------------------------------------------------------------------------
+// A box of the surface: what a ground fill leaves to a glyph, a marker or a rule that is drawn over it.
+struct Box {
+    int16_t x, y, w, h;
+};
+// Paints `r` in `color` except where `holes` go (clipped to `r`, may touch; at most 6 are used). Whatever is drawn afterwards owns
+// its hole, so no pixel is streamed twice: the panel bus is the cost of a redraw. On a stretched page a glyph no longer covers
+// its hole (it keeps its native size), so there the whole of `r` is filled and the glyphs paint over it.
+void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color);
+
+// A text line of a ground: its origin, font, text and ink (the bg is the ground's).
+struct TextRun {
+    int16_t x, y;
+    const Font *font;
+    std::string_view text;
+    uint16_t ink;
+};
+// `ground` in `bg` with every run's text on it, each pixel streamed once: the ground is filled around the runs' boxes
+// (the box a gfx_text writes is text_width x font height), then the runs are drawn. At most 6 runs leave a hole; more still draw.
+void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint16_t bg);
 
 // ---- VerdictCell --------------------------------------------------------------------------------------------------------
 // pass: green tint + green ink; fail: solid red + black ink; none / stopped: no fill, dim ink (a mode the charger never
@@ -93,8 +116,10 @@ void draw_struck_text(const Surface &s, const Font &f, int16_t x, int16_t y, std
 // rest in kRule. step 0 leaves the plain hairline.
 void draw_progress_rule(const Surface &s, int step);
 // Band, title (with "n/3 " in front for a wizard step 1..3), badge behind its rule, and the progress rule. The live V x A
-// readout is the page's (PageBase::title_badge), it repaints on its own cache.
-void draw_top_bar(const Surface &s, std::string_view title, int step = 0, std::string_view badge = {});
+// readout is the page's (PageBase::title_badge), it repaints on its own cache. `readout_follows`: the caller repaints the
+// readout area (x 140..223) right after, so the band leaves it alone (one write per pixel).
+void draw_top_bar(const Surface &s, std::string_view title, int step = 0, std::string_view badge = {},
+                  bool readout_follows = false);
 
 // ---- RowList -------------------------------------------------------------------------------------------------------------
 enum class Marker : uint8_t { None, Radio, Box3, Check, Verdict, Icon };
@@ -139,6 +164,9 @@ public:
     void draw(uint32_t now_ms);
     void invalidate();   // after an erase, a capture pass or a page repaint
     void restart() { list_.set_offset(0); }   // a page with several lists on one binding (the wizard's stages): a new list starts on top
+    // Clears the body around a default list (one at kBodyY): the strips above and below it. The list repaints every row it
+    // owns (opaque rows, the tail strip), so a body fill under it would write those pixels twice.
+    static void clear_body_around(const Surface &s);
 
 private:
     static void draw_row_cb(void *ctx, int index, const Rect &r, bool highlighted, Field &f);

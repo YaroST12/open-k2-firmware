@@ -45,18 +45,18 @@ void fixture() {
 struct Dest { const char *name; uint8_t index; unsigned full_max; };
 // The walk: the six rotation pages, then the Tools / Settings submenus that open without a record or parameters.
 constexpr Dest kDests[] = {
-    {"Home", 0, 59200}, {"Detail", 1, 32600}, {"Charger", 2, 70900}, {"Lines", 3, 38400}, {"Tools", 4, 71900}, {"Settings", 5, 73500},
-    {"Connection", kPdPage, 78500}, {"Diag", kDiagPage, 34700},
-    {"Trigger", kMenuPageBase + static_cast<uint8_t>(Menu::Trigger), 160500},
-    {"PdTrigger", kMenuPageBase + static_cast<uint8_t>(Menu::PdTrigger), 162200},
-    {"CableR", kMenuPageBase + static_cast<uint8_t>(Menu::CableR), 67900},
-    {"BlackBox", kMenuPageBase + static_cast<uint8_t>(Menu::BlackBox), 139100},
-    {"Spoof", kMenuPageBase + static_cast<uint8_t>(Menu::Spoof), 57200},
-    {"UsbLink", kMenuPageBase + static_cast<uint8_t>(Menu::UsbLink), 64200},
-    {"Cards", kMenuPageBase + static_cast<uint8_t>(Menu::Cards), 68800},
+    {"Home", 0, 57700}, {"Detail", 1, 29500}, {"Charger", 2, 57100}, {"Lines", 3, 34400}, {"Tools", 4, 57200}, {"Settings", 5, 56600},
+    {"Connection", kPdPage, 52800}, {"Diag", kDiagPage, 31700},
+    {"Trigger", kMenuPageBase + static_cast<uint8_t>(Menu::Trigger), 57400},
+    {"PdTrigger", kMenuPageBase + static_cast<uint8_t>(Menu::PdTrigger), 57000},
+    {"CableR", kMenuPageBase + static_cast<uint8_t>(Menu::CableR), 19900},
+    {"BlackBox", kMenuPageBase + static_cast<uint8_t>(Menu::BlackBox), 43800},
+    {"Spoof", kMenuPageBase + static_cast<uint8_t>(Menu::Spoof), 47700},
+    {"UsbLink", kMenuPageBase + static_cast<uint8_t>(Menu::UsbLink), 56600},
+    {"Cards", kMenuPageBase + static_cast<uint8_t>(Menu::Cards), 57700},
 };
 // The worst page switch, as a multiple of the screen (ratchet, see full_max).
-constexpr double kSwitchMaxX = 7.50;
+constexpr double kSwitchMaxX = 6.00;
 constexpr unsigned kN = sizeof kDests / sizeof kDests[0];
 
 struct Row { unsigned sent, unique; };

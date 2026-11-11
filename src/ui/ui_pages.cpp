@@ -188,7 +188,8 @@ void PageBase::title_bar() {
     char badge[11];
     const std::string_view role = menu ? std::string_view(fusb302::self_powered() ? "SNK" : "PAS")
                                        : role_badge(fusb302::pin_rd(), badge);
-    draw_status_left(ctx_.content, menu && has_icon_, icon_, name, 132, role);
+    // The readout area is the page's update() job (title_badge, always called first thing and always repainting after this).
+    draw_status_left(ctx_.content, menu && has_icon_, icon_, name, 132, role, true);
 }
 
 // Right end of the top chrome bar: the compact fmt3(V) x fmt3(A) readout, swapped for the stale-grey
@@ -846,7 +847,7 @@ int16_t pt_text_y(const kit::KvLayout &l, int row) {
 
 void PdTriggerPage::draw_static() {
     reset_paint();
-    gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, int16_t(kFooterY - kBarH), kBg);
+    if (!ctx_.blank) gfx_fill(ctx_.content, 0, kit::kBelowBar, ctx_.content.w, int16_t(kFooterY - kit::kBelowBar), kBg);
     paint_bar();
 }
 
@@ -876,8 +877,7 @@ void PdTriggerPage::paint_bar() {
         case WizStep::Live: title = "PD live"; break;
         }
     }
-    kit::draw_top_bar(ctx_.content, title, step, fusb302::self_powered() ? "SNK" : "PAS");
-    if (step == 0) gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, 1, kBg);   // LIVE / refusal: the plain hairline, no rule left over
+    kit::draw_top_bar(ctx_.content, title, step, fusb302::self_powered() ? "SNK" : "PAS", true);   // (a plain bar also clears the rule's 2nd row)
 }
 
 // Opened from Tools: refuse outright inline, unplugged or without caps; else the wizard starts on the
@@ -942,7 +942,7 @@ void PdTriggerPage::update(uint32_t now_ms) {
         const uint32_t keep_bar = barsig_;
         reset_paint();
         barsig_ = keep_bar;
-        gfx_fill(ctx_.content, 0, kit::kBodyY, ctx_.content.w, int16_t(kFooterY - kit::kBodyY), kBg);   // below the progress rule
+        if (!ctx_.blank) gfx_fill(ctx_.content, 0, kit::kBodyY, ctx_.content.w, int16_t(kFooterY - kit::kBodyY), kBg);   // below the progress rule
         body_step_ = static_cast<uint8_t>(wiz_.step);
     }
     paint_bar();
@@ -1386,7 +1386,7 @@ void CableRPage::paint_table(const CrView &v) {
     if (sig == csig_) return;
     csig_ = sig;
     const Surface &c = ctx_.content;
-    gfx_fill(c, 0, kBarH, c.w, int16_t(kFooterY - kBarH), kBg);   // body between the bars
+    if (!ctx_.blank) gfx_fill(c, 0, kBarH, c.w, int16_t(kFooterY - kBarH), kBg);   // body between the bars (a blank screen is kBg)
     rsig_ = 0;
     for (Field &f : val_) f.invalidate();
     if (v.meter_missing) {
@@ -1539,7 +1539,7 @@ void TriggerPage::paint_bar() {
     bar_valid_ = false;   // the band repaint erased the readout: title_badge redraws it
     const char *title = scan ? "FC scan" : retarget ? "Retarget" : "FC trigger";
     const int step = scan || stage == trig::Stage::Live ? 0 : stage == trig::Stage::Pick ? 1 : stage == trig::Stage::Edit ? 2 : 3;
-    kit::draw_top_bar(ctx_.content, title, step, fusb302::self_powered() ? "SNK" : "PAS");
+    kit::draw_top_bar(ctx_.content, title, step, fusb302::self_powered() ? "SNK" : "PAS", true);
 }
 
 void TriggerPage::sample() {
@@ -1673,7 +1673,12 @@ void TriggerPage::paint_main(uint32_t now_ms) {
                          unsigned(power::max_vbus_mv());
     const bool fresh = sig != bsig_;
     if (fresh) {
-        gfx_fill(c, 0, kBarH, c.w, int16_t(kFooterY - kBarH), kBg);
+        // Wipe the previous stage's body, unless the screen is blank already (a repaint after a clear or an erase), and for
+        // the protocol list only around it: the list writes every row it owns.
+        if (!ctx_.blank) {
+            if (stage == trig::Stage::Pick && !cleanup) kit::RowList::clear_body_around(c);
+            else gfx_fill(c, 0, kit::kBelowBar, c.w, int16_t(kFooterY - kit::kBelowBar), kBg);
+        }
         bsig_ = sig;
         fsig_ = 0;
         tsig_ = 0;
@@ -1842,8 +1847,10 @@ void TriggerPage::update(uint32_t now_ms) {
     model_.tick(ctx_.now);
     const uint8_t kind = scan_view() ? 1 : 0;   // the release monitor takes the body from the scan results too
     if (kind != kind_) {
+        // First paint after an invalidate on a blank screen (ctx_.blank): the body is kBg already.
+        const bool blank = kind_ == 255 && ctx_.blank;
         kind_ = kind;
-        gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, int16_t(kFooterY - kBarH), kBg);
+        if (!blank) gfx_fill(ctx_.content, 0, kit::kBelowBar, ctx_.content.w, int16_t(kFooterY - kit::kBelowBar), kBg);
         bsig_ = fsig_ = tsig_ = ysig_ = 0;
         tile_sig_.fill(0);
     }

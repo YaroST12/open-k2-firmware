@@ -603,7 +603,7 @@ void CardsPage::update(uint32_t now_ms) {
         content_sig_ = csig;
         sig_ = msig;
         painted_ = true;
-        clear_body();
+        if (!ctx_.blank && !(mode_ == Mode::List && n_ == 0)) clear_body();   // a blank screen is kBg; the empty list paints its own ground
         switch (mode_) {
         case Mode::List:    n_ ? paint_list(true) : paint_empty(); break;
         case Mode::Detail:  paint_detail(); break;
@@ -621,10 +621,14 @@ void CardsPage::update(uint32_t now_ms) {
 
 void CardsPage::paint_empty() {
     const Surface &c = ctx_.content;
-    put_line(c, kSmall, 8, 30, c.w - 16, "No report cards yet", kText, kBg);
-    put_line(c, kLabelFont, 8, 54, c.w - 16, "Finish a Charger test and the", kDim, kBg);
-    put_line(c, kLabelFont, 8, 68, c.w - 16, "K2 keeps one card per charger", kDim, kBg);
-    put_line(c, kLabelFont, 8, 82, c.w - 16, "that offers PD source caps.", kDim, kBg);
+    // The body ground and the four constant lines in one pass; the table is width-checked at compile time.
+    static constexpr const char *kEmptyTitle = "No report cards yet";
+    static constexpr const char *kEmptyHint[3] = {"Finish a Charger test and the", "K2 keeps one card per charger",
+                                                   "that offers PD source caps."};
+    static_assert(fits_px(8, kEmptyTitle, 224 - 16) && all_fit(kEmptyHint, 6, 224 - 16), "empty-state copy fits (16 px font: 8 px/cell, 12 px font: 6)");
+    const kit::TextRun runs[4] = {{8, 30, &kSmall, kEmptyTitle, kText},      {8, 54, &kLabelFont, kEmptyHint[0], kDim},
+                                  {8, 68, &kLabelFont, kEmptyHint[1], kDim}, {8, 82, &kLabelFont, kEmptyHint[2], kDim}};
+    kit::paint_texts(c, {0, kBarH, c.w, static_cast<int16_t>(kFooterY - kBarH)}, runs, 4, kBg);
     draw_footer_cached(c, FooterTone::Info, note_.view().size() ? note_.view() : "0 cards saved", foot_);
 }
 

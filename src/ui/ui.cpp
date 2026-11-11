@@ -16,6 +16,8 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/drivers/buttons.hpp"
+#include "k2/ui/kit.hpp"
+#include "k2/ui/text.hpp"
 #include "k2/ui/ui_calc.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -273,9 +275,11 @@ void Ui::paint_incoming(uint32_t now_ms, uint32_t t0) {
     ContentViewport viewport(layout_.content);
     current().invalidate();   // the erase pass erased everything the field caches remember; a built page has drawn nothing
     current().sample();
+    ctx_.blank = true;        // every caller cleared the screen or ran the erase pass first: kBg under the whole content
     current().draw_static();
     draw_panel();
     current().update(now_ms);
+    ctx_.blank = false;
     draw_release_notice();
     draw_rotation_notice(now_ms);
     last_update_ms_ = now_ms;
@@ -343,23 +347,35 @@ void Ui::draw_slot(unsigned slot) {
     if (r.w <= 0 || r.h <= 0) return;
 
     Surface s = surface_of(r);
-    gfx_fill(s, 0, 0, s.w, s.h, bg);
 
-    // The label sits in the slot's text zone (divider and padding excluded) and is centred in it.
+    // The label sits in the slot's text zone (divider and padding excluded) and is centred in it. The slot's ground is
+    // painted around the label and the divider, which cover their own pixels: every pixel of the slot is streamed once.
     char text[24];
     const bool column = panel_is_column(orient_.edge);
     const int along = column ? s.h : s.w;       // slot length along the panel
     const LabelZone zone = label_zone(along, slot);
     const unsigned chars = label_text(text, lab, zone.max_chars);
+    kit::Box holes[2];
+    int nh = 0;
+    int16_t tx = 0, ty = 0;
     if (chars > 0) {
         const int16_t a0 = static_cast<int16_t>(label_origin(zone, chars));
-        if (column)   // glyphs rotated 90 degrees, running along the slot
-            gfx_text_rot(s, kLabelFont, static_cast<int16_t>((s.w - kLabelFont.height) / 2), a0, text, fg, bg,
-                         panel_text_dir(orient_.edge));
-        else
-            gfx_text(s, kLabelFont, a0, static_cast<int16_t>((s.h - kLabelFont.height) / 2), text, fg, bg);
+        const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, std::string_view(text, chars)));
+        tx = column ? static_cast<int16_t>((s.w - kLabelFont.height) / 2) : a0;
+        ty = column ? a0 : static_cast<int16_t>((s.h - kLabelFont.height) / 2);
+        const int16_t fh = static_cast<int16_t>(kLabelFont.height);
+        holes[nh++] = {tx, ty, column ? fh : tw, column ? tw : fh};
     }
-    if (slot > 0) {   // divider on the slot's leading edge, between this slot and the previous one
+    if (slot > 0)   // divider on the slot's leading edge, between this slot and the previous one
+        holes[nh++] = column ? kit::Box{0, 0, s.w, kDividerPx} : kit::Box{0, 0, kDividerPx, s.h};
+    kit::fill_except(s, {0, 0, s.w, s.h}, holes, nh, bg);
+    if (chars > 0) {
+        if (column)   // glyphs rotated 90 degrees, running along the slot
+            gfx_text_rot(s, kLabelFont, tx, ty, std::string_view(text, chars), fg, bg, panel_text_dir(orient_.edge));
+        else
+            gfx_text(s, kLabelFont, tx, ty, std::string_view(text, chars), fg, bg);
+    }
+    if (slot > 0) {
         if (column) gfx_fill(s, 0, 0, s.w, kDividerPx, kPanelLine);
         else gfx_fill(s, 0, 0, kDividerPx, s.h, kPanelLine);
     }
@@ -823,9 +839,11 @@ void Ui::render_for_capture(uint32_t now_ms) {
     rotation_notice_drawn_ = false;
     gfx_fill(ctx_.content, 0, 0, ctx_.content.w, ctx_.content.h, kBg);
     current().invalidate();   // the clear erased everything the field caches remember
+    ctx_.blank = true;
     current().draw_static();
     draw_panel();
     current().update(now_ms);
+    ctx_.blank = false;
     draw_release_notice();
     if (hold_shown_) { hold_shown_ = false; draw_hold_card(hold_ms_); }   // the card is part of the screen
     if (!hold_shown_) draw_rotation_notice(now_ms);

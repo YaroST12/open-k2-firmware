@@ -14,6 +14,7 @@ namespace k2 {
 namespace {
 
 constexpr int kMaxW = kScreenW;
+constexpr int kReadoutX = 140;   // the top bar's right-hand readout area starts here (draw_top_readout)
 
 bool fits(const Surface &s, int x, int y, int w, int h) {
     return x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= s.w && y + h <= s.h;
@@ -64,8 +65,8 @@ struct BandRow {
 };
 
 template <class Paint>
-void draw_band(const Surface &s, int x, int y, int h, Paint paint) {
-    const int width = std::min<int>(s.w - x, kScreenW);
+void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = kScreenW) {
+    const int width = std::min<int>(s.w - x, std::min<int>(kScreenW, max_w));
     h = std::min<int>(h, s.h - y);
     if (x < 0 || y < 0 || width <= 0 || h <= 0) return;
     const Rect band = ContentViewport::mapped_rect(
@@ -277,7 +278,13 @@ int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uin
               bool solid) {
     const int w = pill_width(static_cast<int>(text.size()));
     const uint16_t fill = solid ? color : tint;
-    fill_round(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill);
+    // The pill's ground goes round the text's box, which the glyphs paint themselves: every pixel is streamed once (a stretched
+    // page keeps the whole fill, there a glyph box does not match the logical hole).
+    if (ContentViewport::stretched())
+        fill_round(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill);
+    else
+        fill_round_hole(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 1),
+                        static_cast<int16_t>(text_width(kLabelFont, text)), static_cast<int16_t>(kLabelFont.height));
     gfx_text(s, kLabelFont, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 1), text, solid ? kBg : color, fill);
     return w;
 }
@@ -395,20 +402,20 @@ void IconCell::draw(Icon icon, uint16_t fg, uint16_t bg) {
 }
 
 void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_view title, int16_t right,
-                      std::string_view badge) {
+                      std::string_view badge, bool readout_follows) {
     const int x = has_icon ? 20 : 4;
     char buf[kFitBuf];
     const int badge_w = static_cast<int>(badge.size() * kLabelAdv);
     const int sep = badge.empty() ? right : right - badge_w - 5;   // 4 px gap, 1 px rule before the badge
     const auto fitted = fit_text(kLabelFont, title, sep - 4 - x, buf);
-    draw_band(s, 0, 0, kBarH, [&](BandRow &row) {
+    draw_band(s, 0, 0, kBarH - 1, [&](BandRow &row) {   // the band stops above the hairline row, which is painted once below
         if (has_icon && fits(s, 4, kBarTextY, kIconSize, kIconSize)) row.icon(4, kBarTextY, icon, kDim, kBar);
         row.text(kLabelFont, x, kBarTextY, fitted, kText, kBar);
         if (!badge.empty()) {
             row.fill(sep, 1, kFaint);
             row.text(kLabelFont, sep + 5, kBarTextY, badge, kDim, kBar);
         }
-    });
+    }, readout_follows ? kReadoutX : kScreenW);
     gfx_fill(s, 0, static_cast<int16_t>(kBarH - 1), s.w, 1, kRule);   // the hairline below the bar
 }
 
@@ -417,7 +424,7 @@ void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_vi
 // capture passes (which redraw once per strip) leave different pixels behind than a plain tick.
 void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps,
                       Arrow flow, uint8_t rotation, std::string_view last_text) {
-    draw_band(s, 140, 0, kBarH - 1, [&](BandRow &row) {
+    draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) {
         if (mode == StatusReadout::Live) {
             if (flow != Arrow::Idle) {   // slot x 140..149, centred on the 12 px text rows
                 const unsigned rot = rotation & 3u;

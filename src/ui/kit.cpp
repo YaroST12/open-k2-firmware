@@ -27,14 +27,10 @@ void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t
     gfx_text(s, f, static_cast<int16_t>(x + (w - text_width(f, t)) / 2), y, t, fg, bg);
 }
 
-// A box of the panel: what a fill leaves to a glyph, a rule or a bracket that is drawn over it.
-struct Box {
-    int16_t x, y, w, h;
-};
-
-// Paints `r` in `color` except where `holes` go. A glyph or a rule that is drawn afterwards owns its box, so no pixel is
-// streamed twice (the panel bus is the cost of a redraw). Holes are clipped to `r` and may touch; at most kMaxHoles.
 constexpr int kMaxHoles = 6;
+}  // namespace
+
+// The comment in kit.hpp. Holes are clipped to `r` and may touch; the bands between their edges are filled left to right.
 void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color) {
     if (ContentViewport::stretched()) n = 0;   // a stretched page: a glyph no longer covers its hole, so the glyph paints over a full fill
     Box h[kMaxHoles];
@@ -74,6 +70,16 @@ void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t colo
     }
 }
 
+void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint16_t bg) {
+    Box holes[kMaxHoles];
+    int m = 0;
+    for (int i = 0; i < n && m < kMaxHoles; i++)
+        holes[m++] = {runs[i].x, runs[i].y, static_cast<int16_t>(text_width(*runs[i].font, runs[i].text)), static_cast<int16_t>(runs[i].font->height)};
+    fill_except(s, ground, holes, m, bg);
+    for (int i = 0; i < n; i++) gfx_text(s, *runs[i].font, runs[i].x, runs[i].y, runs[i].text, runs[i].ink, bg);
+}
+
+namespace {
 // A labelled verdict cell's text layout: the font by cell height, the fitted text and its centred line box.
 struct LabelLayout {
     const Font *font;
@@ -198,7 +204,7 @@ void draw_progress_rule(const Surface &s, int step) {
         gfx_fill(s, static_cast<int16_t>(i * kProgPitch), kProgY, kProgSegW, kProgH, i < step ? kFocus : kRule);
 }
 
-void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge) {
+void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge, bool readout_follows) {
     char buf[40];
     size_t n = 0;
     if (step >= 1 && step <= kProgSegs) {
@@ -208,7 +214,7 @@ void draw_top_bar(const Surface &s, std::string_view title, int step, std::strin
         buf[n++] = ' ';
     }
     for (size_t i = 0; i < title.size() && n < sizeof(buf); i++) buf[n++] = title[i];
-    draw_status_left(s, false, Icon::Bolt, std::string_view(buf, n), 132, badge);
+    draw_status_left(s, false, Icon::Bolt, std::string_view(buf, n), 132, badge, readout_follows);
     if (step > 0) draw_progress_rule(s, step);
     else gfx_fill(s, 0, kProgY + 1, s.w, kProgH - 1, kBg);   // a plain bar over a wizard bar (Review -> Running): the rule's 2nd row must go (the hairline above was repainted)
 }
@@ -240,8 +246,15 @@ void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint1
     case Marker::Radio:
         // A square, no circle to rasterise: the pick is a solid block, the others a hollow 1 px frame. The whole 12 px
         // square is repainted on every state, so a half-drawn one cannot exist; solid versus hollow is the shape cue.
-        fill(0, 0, m.w, m.h, col);
-        if (!on) fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
+        if (on) {
+            fill(0, 0, m.w, m.h, col);
+        } else {   // the frame's four sides, then the inside: every pixel of the square once
+            fill(0, 0, m.w, 1, col);
+            fill(0, static_cast<int16_t>(m.h - 1), m.w, 1, col);
+            fill(0, 1, 1, static_cast<int16_t>(m.h - 2), col);
+            fill(static_cast<int16_t>(m.w - 1), 1, 1, static_cast<int16_t>(m.h - 2), col);
+            fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
+        }
         break;
     case Marker::Box3:
     case Marker::Check:
@@ -275,6 +288,7 @@ void RowList::init(const Surface &s, int16_t y, RowFn fn, void *ctx) {
     list_.set_row_sig(row_sig_cb, this);
     list_.set_row_bg(kBg, kFocusT, kRule);
     list_.set_full_lane(true);
+    list_.set_self_ground(true);   // draw_row_cb paints the row's ground itself, around its text and marker
     list_.set_highlight(sel_);
     if (rebind) list_.set_offset(0);
     extra_ = -1;
@@ -283,6 +297,11 @@ void RowList::init(const Surface &s, int16_t y, RowFn fn, void *ctx) {
 void RowList::invalidate() {
     list_.invalidate();
     extra_ = -1;
+}
+
+void RowList::clear_body_around(const Surface &s) {
+    gfx_fill(s, 0, kBelowBar, s.w, static_cast<int16_t>(kBodyY - kBelowBar), kBg);
+    gfx_fill(s, 0, kListBottom, s.w, static_cast<int16_t>(kFooterY - kListBottom), kBg);
 }
 
 uint32_t RowList::row_sig_cb(void *ctx, int index) {
@@ -310,9 +329,7 @@ void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &)
     self->fn_(self->ctx_, index, hi, sp);
     const int16_t y = r.y;
     const uint16_t bg = hi ? kFocusT : kBg;
-    if (hi) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, static_cast<int16_t>(r.h - 1), kFocus);
     if (sp.marker == Marker::Icon && sp.marker_color == 0 && hi) sp.marker_color = kFocus;
-    draw_marker(s, kMarkX, static_cast<int16_t>(y + 7), sp, bg);
 
     const int16_t ty = static_cast<int16_t>(y + row_text_y(kRowH, kSmall.height));
     // A yielding tail (a hint, not a value) is left out when the text would not fit beside it; with nothing at the right
@@ -324,34 +341,63 @@ void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &)
         if (kTextX + text_width(kSmall, sp.text) + col2w + kTailGap + tw > kTailX) tail = {};
     }
     int right = sp.chevron || !tail.empty() ? kTailX : s.w - ListView::kBarW;
-    char buf[kFitBuf], tbuf[kFitBuf];
+    char buf[kFitBuf], tbuf[kFitBuf], cbuf[kFitBuf], nbuf[kFitBuf];
+    // Layout first: every text box and the marker become holes in the row's ground, so each pixel is written once (the
+    // ground fills the rest of the row below the rule, which the list drew). Chevron and pill sit on the ground.
+    Box holes[5];
+    int nh = 0;
+    const auto hole = [&](int16_t hx, int16_t hy, int w, int h) {
+        holes[nh++] = {hx, hy, static_cast<int16_t>(w), static_cast<int16_t>(h)};
+    };
+    if (sp.marker != Marker::None) hole(kMarkX, static_cast<int16_t>(y + 7), kMarkSize, kMarkSize);
+    std::string_view tail_v;
+    int pill_w = 0;
     if (sp.chevron) {
-        draw_drill(s, kTailX, static_cast<int16_t>(y + 1 + (kRowH - 1) / 2), sp.tail_color);
         right -= kChevW + kTailGap;
     } else if (!tail.empty() && sp.tail_tint) {
-        const std::string_view v = fit_text(kLabelFont, tail, kTailMaxPx - 8, tbuf);
-        const int pw = pill_width(static_cast<int>(v.size()));
-        const int16_t px0 = static_cast<int16_t>(kTailX - pw);
-        fill_round(s, px0, static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2), static_cast<int16_t>(pw), kPillH, 3, sp.tail_tint);
-        gfx_text(s, kLabelFont, static_cast<int16_t>(px0 + 4), static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2 + 1), v,
-                 sp.tail_color, sp.tail_tint);
-        right -= pw + kTailGap;
+        tail_v = fit_text(kLabelFont, tail, kTailMaxPx - 8, tbuf);
+        pill_w = pill_width(static_cast<int>(tail_v.size()));
+        right -= pill_w + kTailGap;
     } else if (!tail.empty()) {
-        const std::string_view v = fit_text(kSmall, tail, kTailMaxPx, tbuf);
-        const int vw = text_width(kSmall, v);
-        gfx_text(s, kSmall, static_cast<int16_t>(kTailX - vw), ty, v, sp.tail_color, bg);
+        tail_v = fit_text(kSmall, tail, kTailMaxPx, tbuf);
+        const int vw = text_width(kSmall, tail_v);
+        hole(static_cast<int16_t>(kTailX - vw), ty, vw, kSmall.height);
         right -= vw + kTailGap;
     }
+    std::string_view col2_v;
     if (!sp.col2.empty()) {
-        const std::string_view c = fit_text(kSmall, sp.col2, right - kCol2X, tbuf);
-        gfx_text(s, kSmall, kCol2X, ty, c, kDim, bg);
+        col2_v = fit_text(kSmall, sp.col2, right - kCol2X, cbuf);
+        hole(kCol2X, ty, text_width(kSmall, col2_v), kSmall.height);
         right = kCol2X - 4;
     }
-    gfx_text(s, kSmall, kTextX, ty,
-             sp.data ? fit_data(kSmall, sp.text, right - kTextX, buf) : fit_text(kSmall, sp.text, right - kTextX, buf),
-             sp.text_color, bg);
-    if (hi && r.h > kRowH && !sp.note.empty())
-        gfx_text(s, kLabelFont, kTextX, static_cast<int16_t>(y + kNoteDy), fit_text(kLabelFont, sp.note, kNoteMaxPx, buf), kDim, bg);
+    const std::string_view text_v =
+        sp.data ? fit_data(kSmall, sp.text, right - kTextX, buf) : fit_text(kSmall, sp.text, right - kTextX, buf);
+    hole(kTextX, ty, text_width(kSmall, text_v), kSmall.height);
+    std::string_view note_v;
+    if (hi && r.h > kRowH && !sp.note.empty()) {
+        note_v = fit_text(kLabelFont, sp.note, kNoteMaxPx, nbuf);
+        hole(kTextX, static_cast<int16_t>(y + kNoteDy), text_width(kLabelFont, note_v), kLabelFont.height);
+    }
+
+    const int16_t gx = hi ? 3 : 0;   // a focused row starts with the 3 px focus bar
+    if (hi) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, static_cast<int16_t>(r.h - 1), kFocus);
+    fill_except(s, {gx, static_cast<int16_t>(y + 1), static_cast<int16_t>(self->list_.row_width() - gx), static_cast<int16_t>(r.h - 1)},
+                holes, nh, bg);
+
+    draw_marker(s, kMarkX, static_cast<int16_t>(y + 7), sp, bg);
+    if (sp.chevron) {
+        draw_drill(s, kTailX, static_cast<int16_t>(y + 1 + (kRowH - 1) / 2), sp.tail_color);
+    } else if (pill_w) {
+        const int16_t px0 = static_cast<int16_t>(kTailX - pill_w);
+        fill_round(s, px0, static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2), static_cast<int16_t>(pill_w), kPillH, 3, sp.tail_tint);
+        gfx_text(s, kLabelFont, static_cast<int16_t>(px0 + 4), static_cast<int16_t>(y + 1 + (kRowH - 1 - kPillH) / 2 + 1), tail_v,
+                 sp.tail_color, sp.tail_tint);
+    } else if (!tail_v.empty()) {
+        gfx_text(s, kSmall, static_cast<int16_t>(kTailX - text_width(kSmall, tail_v)), ty, tail_v, sp.tail_color, bg);
+    }
+    if (!col2_v.empty()) gfx_text(s, kSmall, kCol2X, ty, col2_v, kDim, bg);
+    gfx_text(s, kSmall, kTextX, ty, text_v, sp.text_color, bg);
+    if (!note_v.empty()) gfx_text(s, kLabelFont, kTextX, static_cast<int16_t>(y + kNoteDy), note_v, kDim, bg);
 }
 
 void RowList::draw(uint32_t now_ms) {

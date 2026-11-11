@@ -19,7 +19,7 @@ void ListView::init(const Surface &s, int16_t x, int16_t y, uint8_t chars, int16
     st_.visible = rows;
     st_.set_count(st_.count);
     highlight_ = -1;
-    extra_ = 0; full_lane_ = false; tail_used_ = -1;
+    extra_ = 0; full_lane_ = false; self_ground_ = false; tail_used_ = -1;
     text_dy_ = static_cast<int16_t>((row_h - font.height) / 2);
     for (int i = 0; i < rows; i++) {
         row_[i].init(s, font, x, static_cast<int16_t>(y + i * row_h + text_dy_), chars, Align::Left, 0xFFFF, kBg);
@@ -89,7 +89,7 @@ void ListView::draw(uint32_t now_ms) {
             // Opaque rows (set_row_bg) refill on every repaint, in the row's own colours.
             if (opaque_ && rule_ >= 0) {   // the rule line first, the base below it: no pixel is written twice
                 gfx_fill(surf_, 0, sy, rw, 1, static_cast<uint16_t>(rule_));
-                gfx_fill(surf_, 0, static_cast<int16_t>(sy + 1), rw, static_cast<int16_t>(sh - 1), hi ? hi_bg_ : bg_);
+                if (!self_ground_) gfx_fill(surf_, 0, static_cast<int16_t>(sy + 1), rw, static_cast<int16_t>(sh - 1), hi ? hi_bg_ : bg_);
             } else {
                 gfx_fill(surf_, 0, sy, rw, sh, opaque_ ? (hi ? hi_bg_ : bg_) : kBg);
             }

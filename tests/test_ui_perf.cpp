@@ -53,9 +53,9 @@ static void test_page_switch_budgets() {
     struct { uint8_t page; unsigned budget; const char *name; } cases[] = {
         // Every switch starts from Home, whose erase replay now composes the two measurement cells, the
         // band and the info block (about 9 000 px more than the old Home): budgets carry that.
-        {1, 100000, "Detail"}, {2, 175000, "Charger"}, {kPdPage, 200000, "Connection"}, {kDiagPage, 100000, "Diag"},
+        {1, 84000, "Detail"}, {2, 111500, "Charger"}, {kPdPage, 142500, "Connection"}, {kDiagPage, 86000, "Diag"},
         // Settings rows are 39 px (two text lines); five of them fill the content area.
-        {3, 102000, "Lines"}, {4, 140000, "Tools"}, {5, 140000, "Settings"},
+        {3, 89000, "Lines"}, {4, 111500, "Tools"}, {5, 111000, "Settings"},
     };
     for (auto &c : cases) {
         g_lcd_pixels = 0;
