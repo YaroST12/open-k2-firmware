@@ -135,6 +135,9 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   inline false within ~20 s and stays false through 5 or more cuts; `tools/ct_start.py --units qc2,qc3` starts (no
   "load attached", no "dropped to"). If refused, quote the `latched by` line. Then a phone behind the K2 on the same
   port: still inline (`latched by load`).
+  **Hardware 2026-11-11, 1.0.0-594-cd569683:** inline false in 60 of 60 samples over ~8 cuts; `ct_start.py --units
+  qc2,qc3` started from the PC and passed (10 pass, 0 fail; `runs/2026-11-11-integ594-hw/` in the integ worktree).
+  Open: the phone-behind negative check.
 
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
