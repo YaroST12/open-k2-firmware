@@ -19,6 +19,13 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 ## Verified on hardware
 
+- The K2 attaches in time for the source's offers (late-attach bug, 2026-11-11; NOVOO -> K2 -> Legion side port, which
+  failed 3 of 3 before). Cause: an attach latched on a line reading low while the other net sat in the Rd window, the
+  unattached scan at only 2 Hz, and the scan not running at all during a long redraw (a ~150 ms Home repaint as VBUS
+  appears). Fix: `pd::ScanPace` (`pd_scanpace.hpp`, kicked by a no-Rp detach, a VBUS rise or a new Rd-window line),
+  `pd::rd_window_override` for the low attached line (6cbb12bf), and `fusb302::scan_service()` from the LCD idle hook
+  (77a384e8). Evidence: 6cbb12bf 8 of 9 (the miss was the repaint stall), 77a384e8 10 of 10 on CC1, every attach decoding
+  Source_Capabilities first, no reboots (`runs/2026-11-11-late-attach/`, verdicts by `tools/cycles.py` there).
 - PD trigger fixed (request a PDO, PPS voltage) and PPS on a lone charger; PPS stepping up and down in small increments.
 - Identify on a Pixel (identity, SVIDs, modes, sink caps).
 - The charger test: PD fixed, PPS, AVS and EPR steps, and the legacy units, with report cards (CHARGER_TEST_FLOW,
@@ -58,23 +65,10 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
-- **The K2 attaches late and misses the source's offers** (2026-11-11, three times: Anker, the flipped hub on the
-  Legion left port, NOVOO -> K2 -> Legion side port): VBUS was up 294 ms before the K2 registered the attach, so the
-  first message it caught was PS_RDY or VCONN_Swap. Not seen when the K2 was attached before the charger. Test case:
-  `runs/2026-11-11-integ-hw/twin/h-side-inline/` (local).
-  - Cause (from the capture): two things. (1) The K2 sat attached on the wrong line, CC2 at 0 mV, while CC1 read 1678 mV
-    (Rp over the laptop's Rd); the Rd-window re-check did not move it because a low reading on the other net counts as
-    ambiguous, so it waited 630 ms for the no-Rp detach. (2) The unattached scan ran only on every 25th poll (2 Hz): after
-    the detach it came 350 ms later, past Source_Caps / Request / Accept, and the first frame decoded was PS_RDY.
-  - Fix on `k2/late-attach` (host-tested, hardware check pending): `pd::ScanPace` (`pd_scanpace.hpp`) keeps the 500 ms
-    cadence and runs the scan on the next poll (at least 60 ms after the last one) after a no-Rp detach, a VBUS rise through
-    3.5 V or a new Rd-window line; `pd::rd_window_override` moves an attached line that itself reads low (no Rp) to the
-    other net in the window (the comparator still confirms it). Host: `tests/test_scan_pace.cpp`, `test_pd_ccscan`,
-    `test_fusb302_scan` (the low-line move, the next-poll rescan, the VBUS-low detach keeping the 500 ms period; red first).
-  - Validate (hardware): NOVOO -> K2 -> Legion side port, about 10 plug cycles at each end with the recorder on; every
-    attach decodes the Source_Capabilities.
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
-  the K2 falls back to the Type-C level. Probably a knock-on of the late attach; re-check after that fix. Also seen:
+  the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
+  1.0.0-520-77a384e8, no `USB DATA` while VBUS >= 8 V, `runs/2026-11-11-late-attach/cycles-520/`); the open part is the
+  mismatch below. Also seen:
   `k2_remote state` said `USB DATA` while Home said `SVOOC` (the shell must say what the screen says).
 - **The recorder stream has no boot id or reset cause** (2026-11-11): two boots in one recording look like one (the
   "Power reads 0" scare). Validate: one K2 replug (or `reboot`) inside a recording shows two boot ids and the reset flags.
