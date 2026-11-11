@@ -15,6 +15,7 @@
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/core/fmt.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/drivers/lcd_timing.hpp"
@@ -226,6 +227,7 @@ const char* lab_guard(bool drives) {
     if (drives) {
         if (g_ui->link().inline_mode()) return "a sink is attached";
         if (power::max_vbus_mv() == 0) return "no power monitor";
+        if (loopguard::locked()) return loopguard::kLockText;   // raw D+/D- levels are legacy raises
     }
     return nullptr;
 }
@@ -908,6 +910,7 @@ struct Hw final : shell::Backend {
             if (fctrig::status().state != fc::State::Idle || g_ui->ports_busy()) return "busy";
             if (g_ui->link().inline_mode()) return "a sink is attached";
             if (power::max_vbus_mv() == 0) return "no power monitor";
+            if (loopguard::locked()) return loopguard::kLockText;
         }
         if (dp) {
             dpdm::set_dp(d);
@@ -1084,7 +1087,7 @@ void poll() {
     // A raw level above 5 V-class signalling is only safe under the monitor's ceiling: drop it if VBUS got there.
     if (g_raw_dp || g_raw_dm) {
         const auto pm = power::read();
-        if (!pm || pm->vbus_mv > power::max_vbus_mv() || (!g_fc_started && pm->vbus_mv > kLabAbortMv)) raw_to_hiz();
+        if (!pm || pm->vbus_mv > power::max_vbus_mv() || (!g_fc_started && pm->vbus_mv > kLabAbortMv) || loopguard::locked()) raw_to_hiz();
     }
     if (g_silent_until && static_cast<std::int32_t>(systick::millis() - g_silent_until) >= 0) silent_end();
     std::array<char, 32> buf;

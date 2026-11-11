@@ -35,6 +35,7 @@ int scan_target_mv(Proto p) {
 Fail Scanner::start(bool confirmed, bool allow_inline) {
     if (running()) return Fail::Busy;
     if (env_.ceiling_mv() <= 0) return Fail::NoMonitor;
+    if (env_.hv_locked()) return Fail::OverLimit;   // the HID-cable loop 5 V lock: the scan reaches 9 V
     if (!confirmed) return Fail::NeedConfirm;
     if (!allow_inline && env_.inline_reason() != link::Reason::None) return Fail::Inline;
     if (eng_.state() == State::Negotiating || eng_.state() == State::Active) return Fail::Busy;
@@ -83,6 +84,7 @@ void Scanner::poll() {
     Fail guard = Fail::None;
     if (!allow_inline_ && env_.inline_reason() != link::Reason::None) guard = Fail::Inline;
     else if (env_.ceiling_mv() <= 0) guard = Fail::NoMonitor;
+    else if (env_.hv_locked()) guard = Fail::OverLimit;   // the HID-cable loop 5 V lock
     else if (env_.vbus_mv() < kScanMinSourceMv) guard = Fail::SourceLost;
     else if (env_.vbus_mv() > env_.ceiling_mv()) guard = Fail::Overvoltage;
     else if (eng_.state() == State::Failed && (eng_.fail() == Fail::Overvoltage || eng_.fail() == Fail::NoMonitor)) guard = eng_.fail();

@@ -299,6 +299,7 @@ void charger_hears(std::span<const std::uint8_t> m) {   // a K2 message the char
     if (!ext && ndo && type == 2) {   // Request
         const std::uint32_t rdo = m.size() >= 6 ? std::uint32_t(m[2] | m[3] << 8 | m[4] << 16 | std::uint32_t(m[5]) << 24) : 0;
         ++S->stats.requests;
+        if (((rdo >> 28) & 0xF) > 1) ++S->stats.raise_requests;
         wlog("[WORLD] charger: Request RDO 0x%08X (object %u)", unsigned(rdo), unsigned(rdo >> 28) & 0xF);
         c.pe = ChargerState::AcceptDue;
         c.request_at = S->pt;

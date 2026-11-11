@@ -3,6 +3,7 @@
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_setup_page.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/core/bbpersist.hpp"
@@ -203,6 +204,7 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     // No USB host: the K2 runs on this VBUS and its own draw crosses the shunt; only what is above it is a load.
     if (!usb::configured()) in.ibus_ma = std::max(0, in.ibus_ma - static_cast<int>(pd::kSelfSupplyAllowanceMa));
     in.inline_load = ctx_.inline_mode; in.fake = pd::is_fake(); in.busy = ctx_.ui->spoof_busy();
+    in.loop_lock = loopguard::locked();   // the HID-cable loop 5 V lock: refuses the start, ends a run (Reason::Loop)
     in.pd = fusb302::sink_status();
     in.epr_info = &fusb302::epr_info_list();
     in.xm = &fusb302::xiaomi_trace();

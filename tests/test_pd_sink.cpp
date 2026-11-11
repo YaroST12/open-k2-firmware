@@ -1817,5 +1817,90 @@ int main() {
         CHECK_COND(!q.sink.status().held);
         CHECK_COND(!q.sink.status().auto_hold);
     }
+    // ---- HID-cable loop 5 V lock (k2/core/loop_guard.hpp): every raise refused, a held level back to PDO 1 ----
+    {   // Locked: fixed above 5 V, PPS above 5.5 V and EPR entry are refused and nothing goes on the wire; 5 V passes.
+        Rig r;
+        r.sink.set_hv_lock(true, r.now);
+        CHECK_COND(r.sink.hv_lock());
+        // The lock is a 5 V cap: OverCap (pd::Err has no room for a new value, see its comment).
+        CHECK_EQ(r.sink.trigger({2, 0, 0}, r.now), Err::OverCap);
+        CHECK_EQ(r.sink.trigger({3, 0, 0}, r.now), Err::OverCap);
+        CHECK_EQ(r.sink.trigger({5, 9000, 0}, r.now), Err::OverCap);   // PPS 9 V
+        CHECK_EQ(r.sink.trigger({5, 0, 0}, r.now), Err::OverCap);      // PPS at its maximum (11 V)
+        CHECK_EQ(r.sink.trigger({0, 0, 0}, r.now), Err::OverCap);      // EPR entry
+        CHECK_EQ(r.sink.trigger({8, 0, 0}, r.now), Err::OverCap);      // an EPR position (needs the entry first)
+        r.pump();
+        CHECK_EQ(r.sent.size(), 0u);
+        CHECK_EQ(r.sink.trigger({5, 5500, 1000}, r.now), Err::Ok);    // PPS at 5.5 V: still vSafe5V
+        r.pump(); r.accept_and_ready();
+        CHECK_EQ(r.sink.trigger({1, 0, 0}, r.now), Err::Ok);          // PDO 1
+        r.pump(); r.accept_and_ready();
+        CHECK_EQ(r.sink.answer_5v({1, 0, 0}, r.now), Err::Ok);
+        r.sink.set_hv_lock(false, r.now);                             // unlocked: raises go out again
+        r.pump(); r.accept_and_ready();
+        CHECK_EQ(r.sink.trigger({2, 0, 0}, r.now), Err::Ok);
+    }
+    {   // The lock edge with a 15 V contract held: a Request for PDO 1 at once, the hold dropped.
+        Rig r;
+        CHECK_EQ(r.sink.trigger({3, 0, 0}, r.now), Err::Ok);
+        r.pump(); r.accept_and_ready();
+        CHECK_EQ(r.sink.status().mv, 15000);
+        const std::size_t before = r.sent.size();
+        r.sink.set_hv_lock(true, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), before + 1);
+        CHECK_EQ(r.last_type(), kDataRequest);
+        CHECK_EQ((r.last_rdo() >> 28) & 7, 1);   // object position 1
+        CHECK_COND(!r.sink.status().held);
+        r.accept_and_ready();
+        CHECK_EQ(r.sink.status().mv, 5000);
+        r.sink.set_hv_lock(true, r.now);        // still locked: no second edge, nothing sent
+        r.pump();
+        CHECK_EQ(r.sent.size(), before + 1);
+    }
+    {   // The lock edge at a 5 V contract: nothing to send.
+        Rig r;
+        CHECK_EQ(r.sink.trigger({1, 0, 0}, r.now), Err::Ok);
+        r.pump(); r.accept_and_ready();
+        const std::size_t before = r.sent.size();
+        r.sink.set_hv_lock(true, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), before);
+    }
+    {   // The lock edge while a 20 V Request is in flight: PDO 1 follows right after its PS_RDY (one Request at a time).
+        Rig r;
+        CHECK_EQ(r.sink.trigger({4, 0, 0}, r.now), Err::Ok);
+        r.pump();
+        const std::size_t before = r.sent.size();
+        r.sink.set_hv_lock(true, r.now);
+        r.pump();
+        CHECK_EQ(r.sent.size(), before);       // queued behind the Request in flight
+        r.accept_and_ready();
+        CHECK_EQ(r.last_type(), kDataRequest);
+        CHECK_EQ((r.last_rdo() >> 28) & 7, 1);
+    }
+    {   // The lock edge while the EPR entry is under way: the entry is dropped.
+        Rig r;
+        r.caps = make_caps(true);
+        CHECK_EQ(r.sink.trigger({1, 0, 0}, r.now), Err::Ok);
+        r.pump(); r.accept_and_ready();
+        CHECK_EQ(r.sink.trigger({8, 0, 0}, r.now), Err::Ok);   // EPR 28 V: EPR_Mode Enter first
+        r.pump();
+        CHECK_COND(r.sink.status().state == SinkState::EprEntering);
+        r.sink.set_hv_lock(true, r.now);
+        CHECK_COND(r.sink.status().state != SinkState::EprEntering && r.sink.status().state != SinkState::EprWaitCaps);
+        CHECK_COND(!r.sink.status().held);
+    }
+    {   // A re-announce while locked, contract at 5 V held by nobody: answered with PDO 1, never a level above 5 V.
+        Rig r;
+        CHECK_EQ(r.sink.trigger({1, 0, 0}, r.now), Err::Ok);
+        r.pump(); r.accept_and_ready();
+        r.sink.set_hv_lock(true, r.now);
+        const std::uint8_t caps[4] = {0x2C, 0x91, 0x01, 0};
+        r.sink.on_message(Sop::Sop, make_header(kDataSourceCap, 1, 2) | (1u << 8), caps, r.now);
+        r.pump();
+        CHECK_EQ(r.last_type(), kDataRequest);
+        CHECK_EQ((r.last_rdo() >> 28) & 7, 1);
+    }
     return test_report("test_pd_sink");
 }

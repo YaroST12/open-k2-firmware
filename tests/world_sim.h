@@ -136,6 +136,7 @@ bool noinit_found();          // the .noinit section of this executable was loca
 bool plus_held();             // the PLUS key at this moment
 struct ChargerStats {
     int attaches = 0, detaches = 0, hard_resets = 0, contracts = 0, requests = 0, caps_sent = 0, caps_acked = 0;
+    int raise_requests = 0;         // Requests for an object above 1 (above vSafe5V) the charger heard
     double rd_gap_max_ms = 0, rd_gap_max_at = 0;   // the longest time an attached charger with VBUS at 5 V saw no Rd
     double first_attach_ms = -1;
     bool attached_at_end = false;

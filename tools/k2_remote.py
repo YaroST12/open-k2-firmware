@@ -243,7 +243,7 @@ TEST_REASONS = ["none", "disabled", "not advertised", "over voltage cap", "not i
                 "rebooted during request", "rebooted during handover", "EPR entry refused", "no contract",
                 "source shut off (needs replug)", "no PD after re-attach", "VBUS cut, source recovered", "blocked by PD",
                 "no QC3+ response", "rebooted 3x", "needs external power", "PD gave up before START", "Class A only (12 V max)",
-                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution"]
+                "not unlocked", "20 V via QC3 only", "PD only (output off)", "capped below target", "withdrawn by source", "wrong voltage on 5V contract", "needs load", "floored above target", "step resolution", "HID-cable loop: 5V lock"]
 TEST_MAX_STEPS = 112  # Runner's bounded storage: pd::kMaxPdos * 6 + 46
 # fastcharge::Protocol in enum order (include/k2/fastcharge/fastcharge_classify.hpp)
 FC_NAMES = ["...", "NO INPUT", "NO QUICK", "DCP 5V", "QC3.0", "QC2.0 5V", "QC2.0 9V", "QC2.0 12V",
@@ -506,16 +506,26 @@ def decode_session(p):
             "flags": {name: bool(p[30] >> i & 1) for i, name in enumerate(SESSION_FLAGS)}}
 
 
-DIAG_LEN = 26
+DIAG_LEN = 26        # a build before the HID-cable loop guard
+DIAG_LOOP_LEN = 29   # + loop(1) loop_events(2)
+LOOP_REASONS = {0: "none", 1: "certain", 2: "suspected"}   # k2::loopguard::Reason
 
 
 def decode_diag(p):
     """GET_STATE [2]: the Diag page counters (src/core/remote_proto.cpp encode_diag). poll_gap_max_ms is the longest
-    main-loop gap since the last [USB] heartbeat line, as the page shows it."""
+    main-loop gap since the last [USB] heartbeat line, as the page shows it. "loop" is the HID-cable loop 5 V lock
+    (k2/core/loop_guard.hpp), absent on a build before it."""
     _need(p, DIAG_LEN, "state diag")
+    if len(p) > DIAG_LEN:
+        _need(p, DIAG_LOOP_LEN, "state diag loop block")
     u32 = lambda o: int.from_bytes(p[o:o + 4], "little")
-    return {"fusb_id": p[0], "pd_rx": u32(1), "usb_resets": u32(5), "usb_isrs": u32(9), "log_sent": u32(13),
-            "log_dropped": u32(17), "poll_gap_max_ms": u32(21), "usb_configured": bool(p[25])}
+    out = {"fusb_id": p[0], "pd_rx": u32(1), "usb_resets": u32(5), "usb_isrs": u32(9), "log_sent": u32(13),
+           "log_dropped": u32(17), "poll_gap_max_ms": u32(21), "usb_configured": bool(p[25])}
+    if len(p) >= DIAG_LOOP_LEN:
+        why = p[26] & 3
+        out["loop"] = {"locked": why != 0, "reason": LOOP_REASONS.get(why, f"reason {why}"), "host": bool(p[26] & 8),
+                       "events": int.from_bytes(p[27:29], "little")}   # bit 2 reserved
+    return out
 
 
 KEYS_LEN = 57

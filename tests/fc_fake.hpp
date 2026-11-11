@@ -27,6 +27,7 @@ struct FakeCharger : k2::fc::Env {
     std::uint32_t qc2_delay_ms = 100;
     int qc3_max_mv = 12000;
     k2::link::Reason inline_now = k2::link::Reason::None;   // PD contract / load behind the K2
+    bool hv_lock = false;          // the HID-cable loop 5 V lock (k2/core/loop_guard.hpp)
     bool vbus_known = true;
     bool afc_ok = true;            // AFC charger answers the ping
     bool accp_charger = false;     // answers ACCP register frames (FCP / SCP) once the switch opened
@@ -85,6 +86,7 @@ struct FakeCharger : k2::fc::Env {
     }
     int ceiling_mv() override { return ceiling; }
     k2::link::Reason inline_reason() override { return inline_now; }
+    bool hv_locked() override { return hv_lock; }
     static int level(Drive d) {
         switch (d) {
         case Drive::V0p6: return 600;

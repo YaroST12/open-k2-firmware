@@ -54,6 +54,44 @@ static void inline_guard() {
     CHECK(std::string_view(name(Fail::Inline)) == "PD or load active");
 }
 
+// The HID-cable loop 5 V lock: no level above 5 V starts or is retargeted to; a running session above 5 V is aborted (both
+// lines to 0 V, the protocol's own return to 5 V); 5 V sessions still run.
+static void hv_lock_guard() {
+    {
+        FakeCharger c;
+        Engine e(c);
+        c.hv_lock = true;
+        CHECK(e.start(Proto::Qc2, 9000, true) == Fail::OverLimit);
+        CHECK(e.start(Proto::Qc3, 9000, true) == Fail::OverLimit);
+        CHECK(e.start(Proto::Qc3, 5400, true) == Fail::OverLimit);   // QC3 / SCP are programmable: only 5 V itself
+        CHECK(e.start(Proto::Afc, 9000, true) == Fail::OverLimit);
+        CHECK(e.start(Proto::Fcp, 9000, true) == Fail::OverLimit);
+        CHECK(e.start(Proto::Scp, 9000, true) == Fail::OverLimit);
+        CHECK(e.start(Proto::Ufcs, 9000, true) == Fail::OverLimit);
+        CHECK(c.set_calls == 0 && c.resets == 0 && e.state() == State::Idle);   // pins untouched
+        CHECK(e.start(Proto::Qc2, 5000, false) == Fail::None);                  // 5 V runs
+        c.run(e, 3000);
+        CHECK(e.state() == State::Active);
+        CHECK(e.set_target(9000, true) == Fail::OverLimit);                     // no retarget above 5 V
+        CHECK(c.vbus_mv() == 5000);
+    }
+    {   // Locked while a QC2 session holds 9 V: aborted on the next poll, VBUS back at 5 V.
+        FakeCharger c;
+        Engine e(c);
+        CHECK(e.start(Proto::Qc2, 9000, true) == Fail::None);
+        c.run(e, 3000);
+        CHECK(e.state() == State::Active && c.vbus_mv() == 9000);
+        const int resets = c.resets;
+        c.hv_lock = true;
+        e.poll();
+        CHECK(e.state() == State::Failed);
+        CHECK(e.fail() == Fail::OverLimit);
+        CHECK(c.resets == resets + 1);
+        c.run(e, 3000);
+        CHECK(c.vbus_mv() == 5000);
+    }
+}
+
 static void qc2_9v() {
     FakeCharger c;
     Engine e(c);
@@ -1393,6 +1431,7 @@ static void state_log_words() {
 }
 
 int main() {
+    hv_lock_guard();
     state_log_words();
     paint_critical_follows_the_phase();
     service_hs_keeps_the_handshake_on_time_under_paints();

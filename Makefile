@@ -386,9 +386,10 @@ $(HOST_DIR)/test_fusb302_scan: $(OBJ_DIR)/tests/test_fusb302_scan.o $(SCAN_OBJS)
 # power-monitor drivers and the whole UI against tests/world_sim.cpp. Its objects come FIRST on the link line: they are built
 # with -DK2_HOST_PINS, so their copies of the inline pin accessors win over the lib set's. ui_stubs.cpp is rebuilt with
 # -DK2_WORLD_STUBS (no clock, FUSB302, power, ADC or Rd-comeback stand-ins). The reboot world boots each life through the real
-# PD half of boot() (src/core/boot_pd.cpp) and the real self-powered comeback (src/core/rd_comeback.cpp).
+# PD half of boot() (src/core/boot_pd.cpp) and the real self-powered comeback (src/core/rd_comeback.cpp); the main loop runs the
+# real HID-cable loop guard (src/core/loop_guard.cpp) on the world's aux rail and VBUS.
 WORLD_SRCS    = tests/test_world_replay.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp
-WORLD_SRCS    += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/rd_comeback.cpp
+WORLD_SRCS    += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
 WORLD_OBJS     = $(patsubst %.cpp, $(OBJ_DIR)/world/%.o, $(WORLD_SRCS)) $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302.o
 WORLD_OBJS    += $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/drivers/power_monitor.cpp $(SRC_DIR)/drivers/accelerometer.cpp)
 HOST_WORLD_CMD = $(HOST_CXX) $(HOST_CXXFLAGS) -DK2_HOST_PINS -DK2_WORLD_STUBS -MMD -MP -c $< -o $@

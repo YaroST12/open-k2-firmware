@@ -56,8 +56,10 @@ enum class Reason : uint8_t {
                          // (measured_mv = the collapsed VBUS); the levels after it still run (no chain skip)
     Floored,             // a low programmable row (PdLow) whose output stopped at a steady floor ABOVE the target: the source advertises 3.3 V
                          // but regulates at 5 V. A fail, measured_mv = the floor (the mirror of Capped's ceiling logic)
-    StepResolution       // a PPS step-walk row whose +20 mV step the source did not follow (rounded to a coarser quantum or ignored):
+    StepResolution,      // a PPS step-walk row whose +20 mV step the source did not follow (rounded to a coarser quantum or ignored):
                          // a fail, detail = the measured move in mV (0 = no move)
+    Loop                 // the HID-cable loop 5 V lock (k2/core/loop_guard.hpp, Input::loop_lock): no run starts; a lock mid-run fails the
+                         // row in flight and ends the run back at 5 V
 };
 // Step.detail of a PPS step-walk row while it is Pending/Running (finish() overwrites it with the result); sits above every
 // engine code and the EPR skip codes so the card and the tools never mistake it for one.
@@ -243,6 +245,7 @@ struct Input {
     int vbus_mv = -1, ibus_ma = 0;   // ibus_ma: magnitude; above kLoadAbortMa during a raised row means a load
     uint32_t pd_quiet_ms = UINT32_MAX;   // ms since the last PD frame was received (since the handover began)
     bool inline_load = false, fake = false, busy = false, cable_observed = false, pd_traffic = false, spoof_on = false;
+    bool loop_lock = false;   // k2::loopguard::locked(): the HID-cable loop 5 V lock (Reason::Loop)
     // The K2 runs on the source's own VBUS through a pinned Rd (fusb302::self_powered()). start() and resume() latch it for the
     // run: a unit boundary must not drop VBUS (the K2 would die), and a VBUS loss suspends the run instead of ending it.
     bool self_powered = false;

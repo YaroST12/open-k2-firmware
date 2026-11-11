@@ -102,7 +102,7 @@ def test_v9_spread_decodes_per_level():
         rec[198 + k] = e & 0xFF
     c = report_card.decode(bytes(rec))
     assert c["ranges"][0]["err_mv"] == [88, 30, -17, -24]
-    assert len(report_card.REASONS) == 47 and report_card.REASONS[45:] == ["floored above target", "step resolution"]
+    assert len(report_card.REASONS) == 48 and report_card.REASONS[45:] == ["floored above target", "step resolution", "HID-cable loop: 5V lock"]
     rec[33] = 8                                   # the same bytes as a v8 payload (198): no spread is read
     c8 = report_card.decode(bytes(rec[:198]))
     assert "err_mv" not in c8["ranges"][0]

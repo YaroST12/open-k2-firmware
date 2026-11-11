@@ -242,6 +242,7 @@ static void test_state_diag_part() {
     Fake f; Frame r;
     f.dg.fusb_id = 0x91; f.dg.pd_rx = 0x01020304; f.dg.usb_resets = 5; f.dg.usb_isrs = 0x0A0B0C0D;
     f.dg.log_sent = 300; f.dg.log_dropped = 2; f.dg.poll_gap_max_ms = 17; f.dg.usb_configured = 1;
+    f.dg.loop = kLoopCertain | kLoopHost; f.dg.loop_events = 0x0102;
     CHECK_EQ(run(f, request(0x03, 50, {2}), r), 1);
     check_header(r, 0x03, 50, Status::Ok, kDiagLen);
     check_bytes(r, kRspHeader, {0x91,                          // FUSB302 device id
@@ -251,8 +252,11 @@ static void test_state_diag_part() {
                                 0x2C, 0x01, 0, 0,              // log reports sent (300)
                                 2, 0, 0, 0,                    // log reports dropped
                                 17, 0, 0, 0,                   // longest main-loop gap, ms
-                                1});                           // USB configured
-    CHECK_EQ(kDiagLen, 26);
+                                1,                             // USB configured
+                                0x09,                          // loop: certain lock (1), USB host active (bit 3)
+                                0x02, 0x01});                  // loop locks since boot
+    CHECK_EQ(kDiagLen, 29);
+    CHECK_EQ(kLoopSuspected, 2); CHECK_EQ(kLoopReasonMask, 3); CHECK_EQ(kLoopHost, 8);
 }
 
 static void test_state_keys_part() {

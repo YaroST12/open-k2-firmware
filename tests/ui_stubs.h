@@ -236,6 +236,8 @@ struct StubState {
     std::vector<uint8_t> ps_file;
     bool ps_file_present = false, ps_write_fails = false;
     int ps_writes = 0, ps_removes = 0;
+    // The HID-cable loop guard (k2/core/loop_guard.hpp): loopguard::locked() answers this.
+    bool loop_locked = false;
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store

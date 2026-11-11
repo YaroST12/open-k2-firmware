@@ -1721,6 +1721,44 @@ static void test_faults() {
         CHECK_EQ(f.releases > 0, mode != 1 && mode != 3 && mode != 4);
     }
 }
+// The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): a run never starts (ahead of the confirm, so the screen names the lock
+// first), and a lock that appears mid-run fails the row in flight, hands the contract back and ends the run with the reason.
+static void test_loop_lock_refuses_and_aborts() {
+    {
+        Fake f; ct::Runner r(f);
+        f.in.loop_lock = true;
+        CHECK_EQ(r.start(f.caps, kPd, f.in, false), ct::Reason::Loop);
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::Loop);
+        CHECK_EQ(ct::Runner::preview(f.caps, kPd, f.in).refusal, ct::Reason::Loop);
+        CHECK_EQ(f.pd_requests + f.fc_requests + f.releases, 0);
+        CHECK_STR(ct::name(ct::Reason::Loop), "HID-cable loop: 5V lock");
+        CHECK_STR(ct::refusal_words(ct::Reason::Loop), "HID-cable loop: 5V lock");
+    }
+    {   // mid-row
+        Fake f; ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+        run_until(f, r, [&] { return f.pd_requests >= 1; }); f.tick(r, 600);
+        const int requests = f.pd_requests;
+        f.in.loop_lock = true;
+        f.tick(r, 100);
+        CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Fail);
+        CHECK_EQ(int(r.steps()[0].reason), int(ct::Reason::Loop));
+        CHECK_EQ(f.releases > 0, true);
+        f.tick(r, 20000);
+        CHECK_EQ(r.busy(), false);
+        CHECK_EQ(int(r.reason()), int(ct::Reason::Loop));
+        CHECK_EQ(f.pd_requests, requests);   // no row after the lock
+    }
+    {   // in the Baseline (5 V, before the first row): the run ends without a row
+        Fake f; f.in.vbus_mv = 5100; ct::Runner r(f);
+        CHECK_EQ(r.start(f.caps, kPd, f.in, true), ct::Reason::None);
+        r.hold(true); f.tick(r, 200);
+        f.in.loop_lock = true;
+        r.hold(false); f.tick(r, 20000);
+        CHECK_EQ(r.busy(), false);
+        CHECK_EQ(int(r.reason()), int(ct::Reason::Loop));
+        CHECK_EQ(f.pd_requests + f.fc_requests, 0);
+    }
+}
 static void test_timeouts_and_skips() {
     Fake f; ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
     run_until(f, r, [&] { return f.pd_requests >= 1; });
@@ -6818,7 +6856,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

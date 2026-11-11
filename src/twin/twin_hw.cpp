@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "k2/core/log.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/core/storage.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/pd/pd_source.hpp"
@@ -64,7 +65,7 @@ twin::live::Input make_input(const LiveCtx& c) {
     in.facts = facts_now();
     in.cap_mv = c.cap_mv;
     in.self_powered = fusb302::self_powered() || power_source::bus_powered();   // as the charger test judges it
-    in.busy = c.busy;
+    in.busy = c.busy || loopguard::locked();   // the HID-cable loop 5 V lock: refused to start (Busy), a run is cancelled to 5 V
     in.inline_link = c.inline_link;
     return in;
 }

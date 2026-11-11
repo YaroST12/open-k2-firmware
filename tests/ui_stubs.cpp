@@ -8,6 +8,7 @@
 #include "k2/core/fs.hpp"
 #include "ui_stubs.h"
 #include "k2/core/bbpersist.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/chargertest/charger_journal_hw.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/pd/link.hpp"
@@ -583,6 +584,7 @@ namespace usb {
 Stats stats;
 StatsSnapshot stats_snapshot() { return {stats.resets, stats.isrs, stats.log_sent, stats.log_dropped, stats.poll_gap_max}; }
 bool configured() { return g_stub.usb_configured; }
+bool host_active() { return g_stub.usb_configured; }   // configured and awake: the stand-in never suspends
 void poll() { g_stub.polls++; }
 void log(std::string_view) {}
 void log_fmt(const char* fmt, ...) {
@@ -723,6 +725,15 @@ bool set(Setting s) {
     return g_stub.usb_set_ok;
 }
 }  // namespace k2::usbcfg
+
+#ifndef K2_WORLD_STUBS   // the world links the real src/core/loop_guard.cpp (its HID-loop variants assert the lock)
+namespace k2::loopguard {
+void poll(std::uint32_t) {}
+bool locked() { return g_stub.loop_locked; }
+Reason reason() { return g_stub.loop_locked ? Reason::Suspected : Reason::None; }
+std::uint16_t events() { return 0; }
+}  // namespace k2::loopguard
+#endif
 
 namespace k2::uiprefs {
 Prefs stored() { return g_stub.prefs; }

@@ -208,6 +208,7 @@ size_t encode_diag(std::span<uint8_t> out, const DiagInfo &s) {
     w.u8(s.fusb_id); w.u32(s.pd_rx);
     w.u32(s.usb_resets); w.u32(s.usb_isrs); w.u32(s.log_sent); w.u32(s.log_dropped); w.u32(s.poll_gap_max_ms);
     w.u8(s.usb_configured);
+    w.u8(s.loop); w.u16(s.loop_events);
     return w.size();
 }
 
