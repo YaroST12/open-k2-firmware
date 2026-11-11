@@ -658,6 +658,114 @@ static void test_cc_cross_gates() {
     CHECK_EQ(int(inl.cc_cross()), int(CrossKind::None));
 }
 
+// Pattern usb-a-no-load-auto-off (CUKTECH 120W USB-A port, K2 on HID power, 2026-11-11): with nothing drawing, the port cuts
+// VBUS every ~6.5 s and switches it back on by itself. Through an A-to-C cable the CC Rp is fed from VBUS, so the line goes with
+// it and every cut is a Link detach and a new attach. One cycle: kAoOnMs at 5.10 V, then a kAoCutMs cut below 4 V.
+constexpr std::uint32_t kAoOnMs = 6000, kAoCutMs = 800, kAoPeriodMs = kAoOnMs + kAoCutMs;
+static bool ao_cut(std::uint32_t t) { return t % kAoPeriodMs >= kAoOnMs; }
+static LinkInput auto_off(std::uint32_t t, std::int32_t ma = 0, std::uint32_t req = 0) {
+    LinkInput i = inl(t, ao_cut(t) ? 3900 : 5100, ma, req);
+    i.cc = ao_cut(t) ? 0 : 2;
+    return i;
+}
+
+// The ROADMAP bug: a latch held from a sink that has left (here a phone charged on the port, then unplugged) never cleared,
+// because every cut restarted the 10 s quiet window and the port is never on for 10 s. The cut is neither proof nor evidence:
+// the quiet window pauses through it and goes on counting after it, so 0 mA and no PD across the cuts clears the latch.
+static void test_an_auto_off_port_clears_a_held_latch() {
+    Link l;
+    for (std::uint32_t t = 0; t < 3000; t += 20) l.update(inl(t, 5100, 500, 0));   // a phone charges (the port stays on)
+    CHECK_EQ(l.inline_mode(), 1);
+    const std::uint32_t t0 = 3000;   // the phone is unplugged: the port starts its no-load cycle
+    for (std::uint32_t t = 0; t < 2 * kAoPeriodMs + 4000; t += 20) l.update(auto_off(t0 + t));
+    CHECK_EQ(l.attached(), 1);
+    CHECK_EQ(l.inline_mode(), 0);    // 10 s of attached quiet, gathered across the cuts
+    for (std::uint32_t t = 2 * kAoPeriodMs + 4000; t < 10 * kAoPeriodMs; t += 20) l.update(auto_off(t0 + t));
+    CHECK_EQ(l.inline_mode(), 0);    // and the cuts never latch it again
+}
+
+// The deep form of the cut: with no load the output decays slowly, and the Rp fed from it sweeps the sink band (0.8-2.2 V) for
+// a couple of seconds on the way down while the line is still attached. A sink-band level read through a collapsing VBUS is the
+// cable's own Rp, not a sink: it must not latch a standalone K2.
+static LinkInput auto_off_decay(std::uint32_t t) {
+    constexpr std::uint32_t kOn = 6000, kDecay = 2000, kDark = 800, kPeriod = kOn + kDecay + kDark;
+    const std::uint32_t p = t % kPeriod;
+    if (p < kOn) { LinkInput i = inl(t, 5100, 0); i.cc = 2; return i; }
+    if (p < kOn + kDecay) {
+        LinkInput i = inl(t, std::int32_t(3400 - (p - kOn) * 2200 / kDecay), 0);   // 3.4 V down to 1.2 V
+        i.cc = 2;
+        i.far_sink_cc = true;
+        return i;
+    }
+    LinkInput i = inl(t, 300, 0);
+    i.cc = 0;
+    return i;
+}
+
+static void test_an_auto_off_ports_collapsing_rp_is_not_a_sink() {
+    Link l;
+    for (std::uint32_t t = 0; t < 60000; t += 20) {
+        l.update(auto_off_decay(t));
+        if (l.inline_mode()) break;
+    }
+    CHECK_EQ(l.inline_mode(), 0);
+}
+
+// Guards on the same hiccuping port: a real sink behind the K2 keeps the latch, cut after cut.
+static void test_a_sink_drawing_through_the_cuts_stays_inline() {
+    for (const std::int32_t ma : {500, 80}) {   // a phone charging; an SSD on a data link (just above the 50 mA rule)
+        Link l;
+        for (std::uint32_t t = 0; t < 60000; t += 20) {
+            const bool drawing = !ao_cut(t) && t % kAoPeriodMs >= 300;   // the sink draws again 300 ms after each re-attach
+            l.update(auto_off(t, drawing ? ma : 0));
+        }
+        CHECK_EQ(l.inline_mode(), 1);
+        CHECK_EQ(int(l.inline_cause()), int(InlineCause::Load));
+    }
+}
+
+static void test_a_sink_talking_pd_through_the_cuts_stays_inline() {
+    Link l;
+    for (std::uint32_t t = 0; t < 60000; t += 20) {
+        const std::uint32_t requests = t / kAoPeriodMs + (t % kAoPeriodMs >= 400 ? 1 : 0);   // one Request per re-attach
+        l.update(auto_off(t, 0, requests));
+    }
+    CHECK_EQ(l.inline_mode(), 1);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::Request));
+}
+
+static void test_a_far_rd_with_vbus_up_through_the_cuts_stays_inline() {
+    Link l;
+    for (std::uint32_t t = 0; t < 60000; t += 20) {
+        LinkInput i = auto_off(t);
+        i.far_sink_cc = !ao_cut(t);   // a sink's Rd while the source feeds the link
+        l.update(i);
+    }
+    CHECK_EQ(l.inline_mode(), 1);
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::FarRd));
+}
+
+// The pause keeps the quiet gathered before a cut, but a sink that comes back with VBUS gets kInlineResumeMs to show itself:
+// a latch never clears in the first moments after VBUS returns.
+static void test_after_a_cut_the_sink_gets_time_to_show_itself() {
+    Link l;
+    l.update(inl(0, 5100, 900));
+    CHECK_EQ(l.inline_mode(), 1);
+    for (std::uint32_t t = 20; t < 9500; t += 20) l.update(inl(t, 5100, 0));        // 9.5 s quiet
+    for (std::uint32_t t = 9500; t < 10300; t += 20) {                              // a cut: VBUS and the line gone
+        LinkInput i = inl(t, 3900, 0);
+        i.cc = 0;
+        l.update(i);
+    }
+    CHECK_EQ(l.attached(), 0);
+    for (std::uint32_t t = 10300; t < 10300 + kInlineResumeMs - 200; t += 20) l.update(inl(t, 5100, 0));
+    CHECK_EQ(l.inline_mode(), 1);     // back, quiet, but not yet for kInlineResumeMs
+    l.update(inl(10300 + kInlineResumeMs - 100, 5100, 700));   // the sink draws again
+    for (std::uint32_t t = 10300 + kInlineResumeMs; t < 10300 + kInlineResumeMs + kInlineQuietMs - 500; t += 20)
+        l.update(inl(t, 5100, 0));
+    CHECK_EQ(l.inline_mode(), 1);     // its draw restarted the whole quiet window
+}
+
 int main() {
     test_boot_attached_and_stable();
     test_vbus_detach_debounce();
@@ -699,5 +807,11 @@ int main() {
     test_cc_cross_negatives_charger_alone_and_phone_alone();
     test_cc_cross_case_3_is_a_hint();
     test_cc_cross_gates();
+    test_an_auto_off_port_clears_a_held_latch();
+    test_an_auto_off_ports_collapsing_rp_is_not_a_sink();
+    test_a_sink_drawing_through_the_cuts_stays_inline();
+    test_a_sink_talking_pd_through_the_cuts_stays_inline();
+    test_a_far_rd_with_vbus_up_through_the_cuts_stays_inline();
+    test_after_a_cut_the_sink_gets_time_to_show_itself();
     return test_report("test_pd_link");
 }

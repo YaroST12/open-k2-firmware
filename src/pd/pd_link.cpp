@@ -23,11 +23,12 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         rx_attach_ = last_rx_;
         verdict_ = PdVerdict::Pending;
         none_why_ = PdNoneWhy::None;
-        quiet_since_ = at_ms;   // a held inline state is judged from this attach on, not from the load before the gap
+        // A held inline state keeps the quiet it had before the gap; the gap itself is paused (update(), vbus_cut()).
     }
 }
 
 void Link::update(const LinkInput& in) {
+    const std::uint32_t dt = in.now_ms - last_now_;   // since the previous tick: the step a paused quiet window moves by
     last_rx_ = in.caps_rx;
     last_now_ = in.now_ms;
     vbus_known_ = in.vbus_known;
@@ -102,6 +103,15 @@ void Link::update(const LinkInput& in) {
         none_why_ = v.why;
     }
 
+    // A VBUS cut or a detach inside the hold: the quiet window pauses (it moves along with the clock, never past it).
+    const bool up_now = in.vbus_known && in.vbus_mv >= kVSafe5MinMv;
+    if (up_now) { vbus_up_ms_ = in.now_ms; up_seen_ = true; }
+    const bool cut = vbus_cut(in.vbus_known, in.vbus_mv, up_seen_, in.now_ms, vbus_up_ms_);
+    if (inline_ && (!attached_ || cut)) {
+        quiet_since_ = in.now_ms - quiet_since_ > dt ? quiet_since_ + dt : in.now_ms;
+        paused_at_ = in.now_ms;
+    }
+
     if (attached_) {
         const std::int32_t mag = power::abs_sat(in.current_ma);
         const bool loaded = in.current_known && mag > kInlineCurrentMa + (in.self_supply_ma > 0 ? in.self_supply_ma : 0);
@@ -116,10 +126,12 @@ void Link::update(const LinkInput& in) {
         // The lines alone: a PD-level VBUS nobody on this side asked for, or a sink's Rd on CC (see kInlineForeignMs).
         // A sink's Rd is evidence of a contract only while a source feeds the link: with VBUS never at vSafe5V for
         // kDarkSinkMs (since the attach or the last time it was) the "sink" is a dual-role port toggling its Rp (a phone alone).
-        if (in.vbus_known && in.vbus_mv >= kVSafe5MinMv) vbus_up_ms_ = in.now_ms;
+        // In a VBUS cut the level is void too: a VBUS-fed Rp (A-to-C cable) sweeps the sink band while the output collapses.
         const std::uint32_t up_since = vbus_up_ms_ > attach_at_ ? vbus_up_ms_ : attach_at_;
         const bool dark_far = in.vbus_known && in.now_ms - up_since >= kDarkSinkMs;
-        const bool foreign_now = !own_recent && ((in.vbus_known && in.vbus_mv > kInlineVbusMv && !own_ever_) || (in.far_sink_cc && !dark_far));
+        const bool far = in.far_sink_cc && (up_now || (!cut && !dark_far));
+        const bool foreign_vbus = in.vbus_known && in.vbus_mv > kInlineVbusMv && !own_ever_;
+        const bool foreign_now = !own_recent && (foreign_vbus || far);
         bool foreign = false;
         if (foreign_now) {
             if (!foreign_timing_) { foreign_timing_ = true; foreign_since_ = in.now_ms; }
@@ -136,10 +148,16 @@ void Link::update(const LinkInput& in) {
             }
         }
         if (!inline_) {
-            if (loaded || in.requests != requests_at_attach_ || rise || foreign) { inline_ = true; quiet_since_ = in.now_ms; }
+            const bool request = in.requests != requests_at_attach_;
+            if (loaded || request || rise || foreign) {
+                inline_ = true;
+                quiet_since_ = in.now_ms;
+                cause_ = loaded ? InlineCause::Load : request ? InlineCause::Request : rise ? InlineCause::Rise :
+                         far ? InlineCause::FarRd : InlineCause::Vbus;
+            }
         } else if (loaded || new_request || rise || foreign_now) {
             quiet_since_ = in.now_ms;    // live traffic: keep the guard
-        } else if (in.now_ms - quiet_since_ > kInlineQuietMs) {
+        } else if (in.now_ms - quiet_since_ > kInlineQuietMs && in.now_ms - paused_at_ >= kInlineResumeMs) {
             inline_ = false;             // the sink left without a CC detach: Auto-CRC comes back
             requests_at_attach_ = in.requests;
             vbus_was_low_ = false;       // a high VBUS that stays does not re-latch
