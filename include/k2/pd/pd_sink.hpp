@@ -207,7 +207,13 @@ struct SinkStatus {
     bool epr_mode = false;
     std::uint8_t pos = 0;     // contract position when Ready
     std::uint16_t mv = 0, ma = 0;
-    std::uint32_t hard_resets = 0;         // Hard Resets the K2 SENT (do_hard_reset on the wire): the K2-must-not-send checks and the UI read this
+    // Timing of the last Request's answers, the sink's `now` stamps (0 = did not happen since the Accept): the source's Accept, and
+    // its PS_RDY message. A contract taken as ready without any PS_RDY (pattern no-psrdy-on-downstep: VBUS settled at the target) sets
+    // ps_rdy_inferred and leaves ps_rdy_at 0. A new Accept clears both. The charger test flags a PS_RDY outside the spec's window or
+    // with VBUS outside the band from these (Evidence::timing); nothing here changes a verdict.
+    std::uint32_t accept_at = 0, ps_rdy_at = 0;
+    bool ps_rdy_inferred = false;
+    std::uint32_t hard_resets = 0;        // Hard Resets the K2 SENT (do_hard_reset on the wire): the K2-must-not-send checks and the UI read this
     std::uint32_t source_hard_resets = 0;  // Hard Resets the SOURCE sent (on_hard_reset_rx); the charger test counts both as "the link was reset"
     std::uint8_t epr_fail = 0;  // Data field of the last EPR_Mode Enter_Failed (epr_fail_name); 0 after a new Enter
     bool xiaomi_svid = false;    // the source listed SVID 0x2717 this session (the auth chain is expected, ~0.7 s after the contract)

@@ -14,7 +14,8 @@ import k2_remote as kr
 HEADER = bytes([1, 4, 3, 2, 1, 8, 7, 6, 5, 3, 0, 3, 1, 0, 0])
 HEADER2 = bytes([2, 4, 3, 2, 1, 8, 7, 6, 5, 3, 0, 3, 1, 0, 0,
                  0xFF, 0xFF, 7, 0, 0x10, 0, 4, 0, 0x12, 0x32, 0xFF,
-                 0xA0, 0x8C, 0x50, 0xC3, 0x88, 0x13, 0x17, 0x44, 0x33, 0x22, 0x11, 0x81, 0x71, 0x97])
+                 0xA0, 0x8C, 0x50, 0xC3, 0x88, 0x13, 0x17, 0x44, 0x33, 0x22, 0x11, 0x81, 0x71, 0x97,
+                 5, 35])   # item G: ps_rdy_timing (out of band + late), ps_rdy_max in 20 ms units
 LEGACY = {"selection": None, "stage": None, "evidence": None, "resumed": 0}
 ROW0 = bytes([2, 0, 1, 0x20, 0x4E, 0, 0, 0x58, 0x4D, 2, 0, 0, 0, 0, 0, 0])
 ROW1 = bytes([0, 6, 1, 0x28, 0x23, 0xE8, 3, 0, 0, 1, 0, 0, 0x40, 0x32, 0xDC, 0xC0])
@@ -171,6 +172,7 @@ class ChargerTest(unittest.TestCase):
             "advertised": {"pps": True, "epr_table": True, "spr_avs": True, "epr_capable": True, "partial_epr": True},
             "monitor_mv": 36000, "physical_cable": {"observed": True, "max_mv": 50000, "max_ma": 5000},
             "spoof_on": True, "independent_revision_tested": False,
+            "ps_rdy": {"out_of_band": True, "inferred": False, "late": True, "worst_ms": 700},
             "pass_scope": "negotiation and measured voltage only; not rated-current/power or revision conformance"})
         self.assertEqual([s["algorithm"] for s in r["steps"]], ["qc3", "pps", "afc"])
         self.assertEqual([s["group"] for s in r["steps"]], ["qc3", "pd", "afc"])
@@ -179,6 +181,21 @@ class ChargerTest(unittest.TestCase):
             *[(0x0B, bytes([2, i, 4, 3, 2, 1, 8, 7, 6, 5])) for i in range(3)], (0x0B, b"\x02")])
         self.assertIn("RMDO 3.2 self-report", kr.render("charger-test", r))
         self.assertIn("not power or revision conformance", kr.render("charger-test", r))
+        self.assertIn("PS_RDY quirks: out of band, late (worst 700 ms)", kr.render("charger-test", r))
+
+    def test_schema2_ps_rdy_timing_decode(self):
+        # item G: the two header bytes after the PDO-count byte; no flag, no note
+        quiet = bytearray(HEADER2); quiet[40:42] = bytes([0, 0])
+        e = kr.decode_charger_test(bytes(quiet))["evidence"]["ps_rdy"]
+        self.assertEqual(e, {"out_of_band": False, "inferred": False, "late": False, "worst_ms": 0})
+        self.assertNotIn("PS_RDY quirks", kr.render("charger-test", kr.decode_charger_test(bytes(quiet))))
+        inferred = bytearray(HEADER2); inferred[40:42] = bytes([2, 255])
+        e = kr.decode_charger_test(bytes(inferred))["evidence"]["ps_rdy"]
+        self.assertEqual(e, {"out_of_band": False, "inferred": True, "late": False, "worst_ms": 5100})
+        self.assertIn("PS_RDY quirks: inferred (worst 5100 ms)", kr.render("charger-test", kr.decode_charger_test(bytes(inferred))))
+        bad = bytearray(HEADER2); bad[40] = 8   # an unknown flag bit is a frame error
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(bytes(bad))
 
     def test_schema2_draft_bit31_is_the_pps_sweep_flag(self):
         # remote_proto.hpp: draft_selected bit 31 = the PPS deep sweep on (an Options flag, not a test);
@@ -373,7 +390,7 @@ class ChargerTest(unittest.TestCase):
         row = bytes([6]) + ROW0[1:]
         good = page(HEADER2, 0, [row])
         for offset, value in ((0, 3), (11, 113), (23, 0x3C), (39, 12), (18, 0x80), (22, 0x20),
-                              (40, 20), (41, 12), (42, 0x80), (49, 5), (50, len(kr.TEST_REASONS))):   # (22, 0x20) = draft bit 29: below the sweep flags, still illegal
+                              (40, 8), (42, 20), (43, 12), (44, 0x80), (51, 5), (52, len(kr.TEST_REASONS))):   # (22, 0x20) = draft bit 29: below the sweep flags, still illegal
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(bad)
@@ -383,7 +400,7 @@ class ChargerTest(unittest.TestCase):
                 with self.assertRaises(kr.FrameError):
                     kr.cmd_charger_test(Link([HEADER2, changed]), self.args("results", "--out", "host-build/evidence.json"))
                 write.assert_not_called()
-        for bad in (HEADER2[:39], HEADER2 + b"\0", good + ROW0, good[:-1]):
+        for bad in (HEADER2[:41], HEADER2 + b"\0", good + ROW0, good[:-1]):
             with self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(bad)
 

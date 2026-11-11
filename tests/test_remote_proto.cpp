@@ -1516,21 +1516,22 @@ static void test_charger_test_wire() {
     f.test_results = {0x01020304, 0x05060708, 3, 0, 1, steps};
     f.test_results.evidence = {.selected = ct::kAllAlgorithms, .session = 0x11223344,
         .monitor_mv = 36000, .cable_mv = 50000, .cable_ma = 5000, .raw_header = 0x7181,
-        .wire_rev = 2, .flags = 255, .num_pdos = 7,
+        .wire_rev = 2, .flags = 255, .num_pdos = 7, .timing = 5, .ps_rdy_max = 35,
         .reported = {.valid = true, .rev_major = 3, .rev_minor = 2, .ver_major = 1, .ver_minor = 7}};
     f.test_results.configured = ct::bit(ct::Algorithm::Pps) | ct::bit(ct::Algorithm::Pd32Revision);
     f.test_results.stage = 4;
     f.test_results.cursor = 9;     // high nibble of the PDO-count byte
     CHECK_EQ(run(f, request(0x0B, 16, {2}), r), 1);
-    check_header(r, 0x0B, 16, Status::Ok, 40);
+    check_header(r, 0x0B, 16, Status::Ok, 42);
     check_bytes(r, 6, {2, 4, 3, 2, 1, 8, 7, 6, 5, 3, 0, 3, 1, 0, 0,
                       0xFF, 0xFF, 63, 0, 0x10, 0, 4, 0, 0x12, 0x32, 0xFF,
-                      0xA0, 0x8C, 0x50, 0xC3, 0x88, 0x13, 0x17, 0x44, 0x33, 0x22, 0x11, 0x81, 0x71, 0x97});
+                      0xA0, 0x8C, 0x50, 0xC3, 0x88, 0x13, 0x17, 0x44, 0x33, 0x22, 0x11, 0x81, 0x71, 0x97,
+                      5, 35});   // item G: ps_rdy_timing, ps_rdy_max
     for (unsigned i = 0; i < steps.size(); ++i) {
         CHECK_EQ(run(f, request(0x0B, 17, {2, uint8_t(i), 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
-        check_header(r, 0x0B, 17, Status::Ok, 56);
+        check_header(r, 0x0B, 17, Status::Ok, 58);
         CHECK_EQ(r[19], i); CHECK_EQ(r[20], 1);
-        CHECK_EQ(r[46], static_cast<uint8_t>(steps[i].algorithm));
+        CHECK_EQ(r[48], static_cast<uint8_t>(steps[i].algorithm));
     }
     for (auto p : {std::initializer_list<uint8_t>{0}, {1}, {3}, {3, 0, 4, 3, 2, 1, 8, 7, 6, 5},
                    {2, 4, 4, 3, 2, 1, 8, 7, 6, 5}}) {
@@ -1539,8 +1540,8 @@ static void test_charger_test_wire() {
     }
     CHECK_EQ(run(f, request(0x0B, 19, {2, 0, 5, 3, 2, 1, 8, 7, 6, 5}), r), 1);
     check_header(r, 0x0B, 19, Status::Busy, 0);
-    std::array<uint8_t, 55> short2{};
-    CHECK_EQ(encode_charger_test(short2, f.test_results, 0, true, 2), 40);
+    std::array<uint8_t, 57> short2{};
+    CHECK_EQ(encode_charger_test(short2, f.test_results, 0, true, 2), 42);
     CHECK_EQ(short2[14], 0); CHECK_EQ(encode_charger_test(short2, f.test_results, 0, true, 3), 0);
 
     const ct::Step revision{.algorithm = ct::Algorithm::Pd30Revision,
@@ -1558,9 +1559,9 @@ static void test_charger_test_wire() {
     check_header(r, 0x0B, 21, Status::Ok, 47);
     CHECK_EQ(r[21], 0); CHECK_EQ(r[37], 6); CHECK_EQ(r[47], static_cast<uint8_t>(ct::Reason::NoOffer));
     CHECK_EQ(run(f, request(0x0B, 22, {2, 1, 4, 3, 2, 1, 8, 7, 6, 5}), r), 1);
-    CHECK_EQ(r[17], 5); CHECK_EQ(r[18], 2); CHECK_EQ(r[46], static_cast<uint8_t>(ct::Algorithm::Pd30Revision));
-    CHECK_EQ(r[55], static_cast<uint8_t>(ct::Verdict::Skip));
-    CHECK_EQ(r[56], static_cast<uint8_t>(ct::Reason::RevisionUntestable));
+    CHECK_EQ(r[17], 5); CHECK_EQ(r[18], 2); CHECK_EQ(r[48], static_cast<uint8_t>(ct::Algorithm::Pd30Revision));
+    CHECK_EQ(r[57], static_cast<uint8_t>(ct::Verdict::Skip));
+    CHECK_EQ(r[58], static_cast<uint8_t>(ct::Reason::RevisionUntestable));
     CHECK_EQ(f.fc_calls + f.releases + f.resets + f.store_calls + f.reboots + f.shots, 0);
 }
 

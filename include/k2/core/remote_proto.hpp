@@ -74,8 +74,11 @@
 //                                    wire_rev[1:0]/draft_stage[5:2](1),
 //                                    RMDO spec nibbles(1), EvidenceFlag(1), monitor_mv(2),
 //                                    physical_cable_mv(2) ma(2), RMDO version nibbles(1),
-//                                    source_session(4), raw_source_header(2), observed_pdos(1).
-//                                    Header is 40 bytes; n<=1, row byte 0 is Algorithm, not Group.
+//                                    source_session(4), raw_source_header(2), observed_pdos(1),
+//                                    ps_rdy_timing(1: TimingFlag bits seen on any PD row - bit0 PS_RDY with VBUS out of
+//                                    band, bit1 PS_RDY inferred, bit2 later than the spec maximum), ps_rdy_max(1: the worst
+//                                    Accept -> PS_RDY time in 20 ms units, 255 = 5.1 s or more, 0 = none measured).
+//                                    Header is 42 bytes; n<=1, row byte 0 is Algorithm, not Group.
 //                                    Evidence is retained at run start; draft selection/stage are live.
 //                                    Header 2 means PD3.x, not a minor revision. Source RMDO is a
 //                                    self-report; EPR/SPR AVS are feature evidence, not conformance.
@@ -539,7 +542,7 @@ inline ChargerTestSnapshot charger_test_snapshot(const charger_test::Runner& r,
 constexpr uint8_t kChargerTestSchema = 1;
 constexpr size_t kChargerTestHeader = 15, kChargerTestRow = 16, kChargerTestPage = 2;
 constexpr uint8_t kChargerTestSchema2 = 2;
-constexpr size_t kChargerTestHeader2 = 40, kChargerTestPage2 = 1;
+constexpr size_t kChargerTestHeader2 = 42, kChargerTestPage2 = 1;
 static_assert(kChargerTestHeader + kChargerTestRow * kChargerTestPage <= kMaxRspPayload);
 static_assert(kChargerTestHeader2 + kChargerTestRow * kChargerTestPage2 <= kMaxRspPayload);
 size_t charger_test_count(const ChargerTestSnapshot&, uint8_t schema);

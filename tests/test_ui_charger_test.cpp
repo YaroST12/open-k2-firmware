@@ -164,7 +164,7 @@ static void read_results(Ui& ui) {
     backend.test_results = charger_test_snapshot(runner, ui.charger_test_selection(), ui.charger_test_stage());
     std::array<uint8_t, 64> req{0xA5, 0x4B, 0x0B, 42, 1, 2}, rsp{};
     CHECK_EQ(handle_request(req, backend, rsp), true);
-    CHECK_EQ(rsp[4], 0); CHECK_EQ(rsp[5], 40);
+    CHECK_EQ(rsp[4], 0); CHECK_EQ(rsp[5], 42);
     CHECK_EQ(rsp[15], static_cast<uint8_t>(state));
     req[4] = 10;
     for (unsigned n = 0; n < 4; ++n) {

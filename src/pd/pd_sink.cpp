@@ -823,6 +823,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
         case kCtlAccept:
             if (st_.state == SinkState::Requesting) {
                 xm_.answer = ReqAnswer::Accept; xm_.answer_at = now;
+                st_.accept_at = now; st_.ps_rdy_at = 0; st_.ps_rdy_inferred = false;
                 st_.state = SinkState::Transition;
                 down_set_ = false;   // a new step: the band dwell starts empty
                 deadline_ = now + (plan_.mv && plan_.mv < st_.mv ? kPsRdyDownMs : kPsRdyMs);
@@ -833,6 +834,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
             break;
         case kCtlPsRdy:
             if (st_.state == SinkState::Transition) {
+                st_.ps_rdy_at = now;
                 after_ps_rdy(now);
             } else if (st_.state == SinkState::Aborting && accepted_) {
                 after_ps_rdy(now);  // plan_ holds PDO 1
@@ -962,7 +964,7 @@ void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
         (plan_.type == PdoType::Pps || plan_.type == PdoType::Avs)) {
         if (mv < programmable_floor_mv(plan_.mv) || mv > programmable_ceiling_mv(plan_.mv)) down_set_ = false;
         else if (!down_set_ || mv < down_ref_mv_ - kRiseMv || mv > down_ref_mv_ + kRiseMv) { down_ref_mv_ = mv; down_at_ = now; down_set_ = true; }
-        else if (now - down_at_ >= kDownSettleMs) { down_set_ = false; after_ps_rdy(now); return; }
+        else if (now - down_at_ >= kDownSettleMs) { down_set_ = false; st_.ps_rdy_inferred = true; after_ps_rdy(now); return; }
     }
     if (st_.state != SinkState::Ready || !st_.held || !contract_) return;
     // Track the descent from the first sample after PS_RDY, so a fall that began inside the settle time counts.

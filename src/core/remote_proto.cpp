@@ -135,6 +135,7 @@ size_t encode_charger_test(std::span<uint8_t> out, const ChargerTestSnapshot& s,
         w.u16(e.monitor_mv); w.u16(e.cable_mv); w.u16(e.cable_ma);
         w.u8((e.reported.ver_major << 4) | e.reported.ver_minor);
         w.u32(e.session); w.u16(e.raw_header); w.u8((e.num_pdos & 15) | (std::min<unsigned>(s.cursor, 15) << 4));
+        w.u8(e.timing); w.u8(e.ps_rdy_max);
     }
     size_t row = 0, written = 0;
     for (const auto& step : s.steps) {

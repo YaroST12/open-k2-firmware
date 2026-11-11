@@ -820,7 +820,7 @@ def decode_charger_test(p):
     if schema not in (1, 2):
         raise FrameError(f"unsupported charger-test schema {schema}")
     modern = schema == 2
-    header, page_size, maximum, reasons = (40, 1, TEST_MAX_STEPS, len(TEST_REASONS)) if modern else (15, 2, 95, 20)
+    header, page_size, maximum, reasons = (42, 1, TEST_MAX_STEPS, len(TEST_REASONS)) if modern else (15, 2, 95, 20)
     if (state >= len(TEST_STATES) or reason >= reasons or total > maximum or
             current > total or start > total or n > page_size or start + n > total or len(p) != header + 16 * n):
         raise FrameError("invalid charger-test page shape")
@@ -834,7 +834,7 @@ def decode_charger_test(p):
         sweep = bool(draft_mask & TEST_SWEEP_BIT)   # draft bit 31: the PPS deep sweep is on (an Options flag, not a test)
         avs_sweep = bool(draft_mask & TEST_AVS_SWEEP_BIT)   # draft bit 30: the AVS deep sweep is on
         draft_mask &= ~(TEST_SWEEP_BIT | TEST_AVS_SWEEP_BIT)
-        if (run_mask | draft_mask) & ~TEST_ALL or stage >= len(TEST_STAGES) or p[39] & 15 > 11:
+        if (run_mask | draft_mask) & ~TEST_ALL or stage >= len(TEST_STAGES) or p[39] & 15 > 11 or p[40] & ~7:
             raise FrameError("invalid charger-test selection or evidence")
         out["selection"] = {"run_mask": run_mask, "configured_mask": draft_mask, "pps_sweep": sweep,
                             "avs_sweep": avs_sweep,
@@ -854,6 +854,8 @@ def decode_charger_test(p):
                            "spr_avs": bool(flags & 8), "epr_capable": bool(flags & 16), "partial_epr": bool(flags & 64)},
             "monitor_mv": monitor, "physical_cable": {"observed": bool(flags & 32), "max_mv": cable_mv, "max_ma": cable_ma},
             "spoof_on": bool(flags & 128), "independent_revision_tested": False,
+            # PS_RDY timing quirks the engine tolerates and the verdicts ignore (TimingFlag bits; worst Accept -> PS_RDY in 20 ms units)
+            "ps_rdy": {"out_of_band": bool(p[40] & 1), "inferred": bool(p[40] & 2), "late": bool(p[40] & 4), "worst_ms": p[41] * 20},
             "pass_scope": "negotiation and measured voltage only; not rated-current/power or revision conformance"}
     rows = []
     for i in range(n):
@@ -2596,6 +2598,10 @@ def _render(name, r):
             notes.append(f"  start guards: monitor {e['monitor_mv']} mV; physical cable {cable['max_mv']} mV / "
                          f"{cable['max_ma']} mA ({'observed claims' if cable['observed'] else 'unknown default'}); "
                          f"spoof {'on' if e['spoof_on'] else 'off'}")
+            q = e["ps_rdy"]
+            names = [n for k, n in (("out_of_band", "out of band"), ("inferred", "inferred"), ("late", "late")) if q[k]]
+            if names:
+                notes.append(f"  PS_RDY quirks: {', '.join(names)} (worst {q['worst_ms']} ms); no verdict reads them")
         rows = []
         for s in r["steps"]:
             rows.append(f"  {s['index']}: {s['protocol']} {s['target_mv']} mV -> {s['measured_mv']} mV "

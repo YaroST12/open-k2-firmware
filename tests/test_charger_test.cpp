@@ -70,6 +70,9 @@ struct Fake final : ct::Env {
     // pattern output-capped-below-advertised (Baseus FH22, 2026-11-08): a PD source accepts every request of its list (PS_RDY, the
     // contract is live) but the converter stops at this level (0 = no cap).
     int pd_max_mv = 0;
+    // Item G (PS_RDY timing quirks): the Accept -> PS_RDY time the sink status stamps (ps_rdy_delay_ms, only for a request at
+    // ps_rdy_delay_mv when that is set), and a PS_RDY the sink took as inferred (ps_rdy_inferred_fake).
+    uint32_t ps_rdy_delay_ms = 0; int ps_rdy_delay_mv = 0; bool ps_rdy_inferred_fake = false;
     // A scripted PD output shape for the sweep tests (0 = follow the request): pd_offset_mv lands the output this far
     // from it above 5 V; at/above pd_fold_from_mv the output folds back to pd_fold_to_mv (steady - the FH22 shape);
     // pd_drop_at_mv hard-resets the source on the request at that level (a lost source mid-sweep).
@@ -231,6 +234,9 @@ struct Fake final : ct::Env {
             }
         }
         in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok;
+        in.pd.accept_at = in.now;
+        in.pd.ps_rdy_at = in.now + (!ps_rdy_delay_mv || int(c.mv) == ps_rdy_delay_mv ? ps_rdy_delay_ms : 0u);
+        in.pd.ps_rdy_inferred = ps_rdy_inferred_fake;
         if (c.pos >= 8 && !in.pd.epr_mode && epr_caps.valid) { spr_caps = caps; caps = epr_caps; }   // the sink enters EPR first
         in.pd.held = true; in.pd.epr_mode = in.pd.epr_mode || c.pos >= 8;
         if (latch_mv && int(c.mv) == latch_mv) latch_at = in.now + latch_delay_ms + 1;
@@ -3571,6 +3577,52 @@ static void test_pps_step_walk_passes_on_20mv_steps() {
         if (s.algorithm == A::Pps && s.pos == 6 && s.mv == 8000 && s.verdict == ct::Verdict::Pass) ++pass8000;
     CHECK_EQ(pass8000, 3u);   // the two mid level rows (the 7.14 <-> 11 V jump) and the step-walk row all passed
 }
+// Item G: the PS_RDY timing quirks are noted (Evidence::timing, one [CT] line per flagged row), never judged: the verdicts of a run
+// whose source is late / inferred / out of band equal the verdicts of the same run without the quirk.
+static std::vector<std::pair<ct::Verdict, ct::Reason>> verdicts_of(const ct::Runner& r) {
+    std::vector<std::pair<ct::Verdict, ct::Reason>> v;
+    for (const auto& s : r.steps()) v.emplace_back(s.verdict, s.reason);
+    return v;
+}
+static void test_ps_rdy_late_is_noted_and_never_judged() {
+    static_assert(!ct::ps_rdy_late(550, false) && ct::ps_rdy_late(551, false) && !ct::ps_rdy_late(1020, true) && ct::ps_rdy_late(1021, true));
+    Fake plain; ct::Runner rp(plain); run_pps_only(plain, rp);
+    CHECK_EQ(rp.evidence().timing, 0);
+    CHECK_EQ(rp.evidence().ps_rdy_max, 0);
+    Fake f; f.ps_rdy_delay_ms = 700; ct::Runner r(f); run_pps_only(f, r);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ((r.evidence().timing & ct::PsRdyLate) != 0, true);
+    CHECK_EQ((r.evidence().timing & (ct::PsRdyInferred | ct::PsRdyOutOfBand)) == 0, true);
+    CHECK_EQ(r.evidence().ps_rdy_max, 35);   // 700 ms in 20 ms units
+    CHECK_EQ(verdicts_of(r) == verdicts_of(rp), true);
+    Fake ok; ok.ps_rdy_delay_ms = 500; ct::Runner ro(ok); run_pps_only(ok, ro);   // inside the spec maximum: nothing to note
+    CHECK_EQ(ro.evidence().timing, 0);
+    CHECK_EQ(ro.evidence().ps_rdy_max, 25);
+}
+static void test_ps_rdy_inferred_is_noted_and_never_judged() {
+    Fake plain; ct::Runner rp(plain); run_pps_only(plain, rp);
+    Fake f; f.ps_rdy_inferred_fake = true; ct::Runner r(f); run_pps_only(f, r);
+    CHECK_EQ((r.evidence().timing & ct::PsRdyInferred) != 0, true);
+    CHECK_EQ(verdicts_of(r) == verdicts_of(rp), true);
+}
+// FH22 (2026-11-08): PS_RDY at a 21 V contract with 19.42 V delivered. The capped rows keep their Capped verdict; the quirk is noted.
+static void test_ps_rdy_out_of_band_is_noted_and_never_judged() {
+    Fake f; f.pd_max_mv = 19400; ct::Runner r(f); run_pps_only(f, r);
+    CHECK_EQ((r.evidence().timing & ct::PsRdyOutOfBand) != 0, true);
+    CHECK_EQ(count_reason_all(r, ct::Reason::Capped) >= 1u, true);
+    Fake plain; ct::Runner rp(plain); run_pps_only(plain, rp);
+    CHECK_EQ((rp.evidence().timing & ct::PsRdyOutOfBand) == 0, true);
+}
+// The latches restart at every step-walk level: a level that is late is seen although the base level had its PS_RDY long before.
+static void test_ps_rdy_timing_is_noted_per_walk_level() {
+    Fake f; f.ps_rdy_delay_ms = 800; f.ps_rdy_delay_mv = 8060;   // only the walk's fourth level (8000 + 3 x 20 mV) is late
+    ct::Runner r(f); r.start(f.caps, kPd, f.in, true);
+    f.tick(r, 400000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ((r.evidence().timing & ct::PsRdyLate) != 0, true);
+    CHECK_EQ(r.evidence().ps_rdy_max, 40);
+    CHECK_EQ(count_reason_all(r, ct::Reason::StepResolution), 0u);
+}
 // ROADMAP "PPS deep sweep": opt-in (Options::pps_sweep), one row per APDO marked kDetailSweep, every 100 mV a Request
 // through the gate at <= 1 A; a steady out-of-band point is RECORDED, not a stop - the FH22 shape (tracks -150 mV to
 // 19.75 V at the 19.9 V request, then folds back to 19.42 V from 20.0 V) is recorded to the top and the summary names
@@ -6561,6 +6613,8 @@ int main() {
     test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
     test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_a_capped_row_does_not_wait_the_full_timeout(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();
     test_pps_step_walk_passes_a_drifting_source(); test_pps_step_walk_passes_a_slow_but_correct_source();
+    test_ps_rdy_late_is_noted_and_never_judged(); test_ps_rdy_inferred_is_noted_and_never_judged();
+    test_ps_rdy_out_of_band_is_noted_and_never_judged(); test_ps_rdy_timing_is_noted_per_walk_level();
     test_pps_step_walk_fails_a_flat_source_as_steps_ignored(); test_pps_step_walk_fails_a_source_that_rounds_to_100mv_on_the_jump();
     return test_report("test_charger_test");
 }

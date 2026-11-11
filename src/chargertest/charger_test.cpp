@@ -1358,6 +1358,7 @@ void Runner::request(Input in) {
     phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0; from_mv_ = std::max(in.vbus_mv, 0);
     peak_lo_mv_ = 0xFFFF; peak_hi_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
+    row_timing_ = 0; row_ps_rdy_ms_ = 0;
     state_ = State::Requesting;
     if (s.group == Group::Pd) {
         pd_owned_ = true;
@@ -1458,6 +1459,13 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
     if (sweep_row) { s.detail = kDetailSweep; sweep_close(s); }
     s.tries = s.group >= Group::Vooc && s.group <= Group::SuperVooc65 ? in.fc_tries : 0;
     if (s.group == Group::Pd) {
+        // Item G: the row's PS_RDY quirks go to the run's evidence and the log (no verdict reads them, the card does not show them yet).
+        evidence_.ps_rdy_max = std::max<uint8_t>(evidence_.ps_rdy_max, uint8_t(std::min<unsigned>(row_ps_rdy_ms_ / 20u, 255u)));
+        if (row_timing_) {
+            evidence_.timing |= row_timing_;
+            K2LOG("[CT] ps_rdy row=%u flags=%u ms=%u\n", unsigned(index_), unsigned(row_timing_), unsigned(row_ps_rdy_ms_));
+        }
+        row_timing_ = 0; row_ps_rdy_ms_ = 0;
         // Attempts after a retry, the first one included. The first EPR row also carries the retries of the baseline entry
         // that made its list available (epr_tries_, consumed here).
         unsigned retried = pd_retry_ == index_ ? retries_ : 0u;
@@ -1567,6 +1575,7 @@ void Runner::walk_step(Input in, const Step& eff) {
     stable_ = false;
     walk_steady_.clear(); walk_grant_ms_ = 0;   // the next granted level waits for its own steady VBUS
     from_mv_ = std::max(in.vbus_mv, 0);         // a level up from where VBUS stands now
+    row_accepted_ = row_ps_rdy_ = false;        // this level is its own Accept / PS_RDY exchange (latch_row)
     phase_ms_ = in.now;   // each granted level gets its own Requesting timeout (the steady wait is bounded per level)
     const auto err = env_.request_pd({s.pos, walk_mv_, s.ma, false});
     if (err == pd::Err::Busy) busy_retry_at_ = in.now + 200;
@@ -1611,6 +1620,7 @@ void Runner::sweep_point(Input in, const Step& eff) {
     stable_ = false;
     phase_ms_ = in.now;
     from_mv_ = std::max(in.vbus_mv, 0);
+    row_accepted_ = row_ps_rdy_ = false;   // this point is its own Accept / PS_RDY exchange (latch_row)
     const auto err2 = env_.request_pd({s.pos, sweep_mv_, uint16_t(ma), false});
     if (err2 == pd::Err::Busy) busy_retry_at_ = in.now + 200;
     else if (err2 != pd::Err::Ok) finish(in, Verdict::Fail, Reason::Request, 128 + static_cast<uint8_t>(err2));
@@ -1714,12 +1724,30 @@ bool Runner::legacy_row_ran() const {
 }
 // pattern pps-off-at-no-load (suspected): the per-poll latch of a PD row. Accepted = the sink waits in Transition (Accept seen, no
 // PS_RDY yet) in this attach session; PS_RDY = Ready on this row's PDO; the current is the highest the port drew since the Request.
+// The latches follow the level the Request out asks (level_mv): a step-walk level or a sweep point is its own Accept / PS_RDY exchange
+// (walk_step / sweep_point restart row_accepted_ / row_ps_rdy_ before they ask), so a later level's PS_RDY is seen for itself.
 void Runner::latch_row(const Input& in) {
     const auto& s = steps_[index_];
     if (in.session == session_ && in.pd.state == pd::SinkState::Transition) row_accepted_ = true;
-    if (in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos && in.pd.mv == s.mv)
+    if (!row_ps_rdy_ && in.pd.state == pd::SinkState::Ready && in.pd.result == pd::SinkResult::Ok && in.pd.pos == s.pos &&
+        in.pd.mv == level_mv(s)) {
         row_ps_rdy_ = true;
+        note_ps_rdy(in, s);
+    }
     row_max_ma_ = std::max(row_max_ma_, in.ibus_ma);
+}
+int Runner::level_mv(const Step& s) const { return is_step_walk(s) ? walk_mv_ : is_sweep(s) ? sweep_mv_ : int(s.mv); }
+// The first Ready edge of a level: what its PS_RDY showed. Observation only (Evidence::timing, the [CT] ps_rdy line in finish()): the
+// out-of-band reading uses the row's own band, the lateness the sink's Accept / PS_RDY stamps, the inferred flag the sink's own call.
+void Runner::note_ps_rdy(const Input& in, const Step& s) {
+    Step at = s;
+    at.mv = uint16_t(level_mv(s));
+    if (!in_band(at, in.vbus_mv, from_mv_)) row_timing_ |= PsRdyOutOfBand;
+    if (in.pd.ps_rdy_inferred) { row_timing_ |= PsRdyInferred; return; }
+    if (!in.pd.accept_at || in.pd.ps_rdy_at < in.pd.accept_at) return;   // no stamps (a Ready from before this exchange): nothing measured
+    const uint32_t ms = in.pd.ps_rdy_at - in.pd.accept_at;
+    if (ps_rdy_late(ms, s.algorithm == Algorithm::Epr || s.algorithm == Algorithm::EprAvs)) row_timing_ |= PsRdyLate;
+    row_ps_rdy_ms_ = uint16_t(std::max<uint32_t>(row_ps_rdy_ms_, std::min<uint32_t>(ms, 65535)));
 }
 // A programmable row the source Accepted and never made ready, whose VBUS collapsed (under 85 % of the row's level, as a cut)
 // while the port drew next to nothing: the source turned its output off for lack of load. A fixed row, a PS_RDY that was seen,
@@ -1729,7 +1757,7 @@ bool Runner::needs_load(const Input& in) const {
     const bool programmable = s.group == Group::Pd &&
         (s.algorithm == Algorithm::Pps || s.algorithm == Algorithm::SprAvs || s.algorithm == Algorithm::EprAvs);
     return programmable && row_accepted_ && !row_ps_rdy_ && row_max_ma_ < kNeedsLoadMaxMa &&
-        in.vbus_mv >= 0 && in.vbus_mv < int(s.mv) * 85 / 100;
+        in.vbus_mv >= 0 && in.vbus_mv < level_mv(s) * 85 / 100;
 }
 // The source hard-reset (or detached) in the middle of a PD row: its contract is gone. Wait for it to come back
 // (recover_ lets Releasing wait for vSafe5V) and ask the row once more; a further loss ends it as before. An EPR row (the entry

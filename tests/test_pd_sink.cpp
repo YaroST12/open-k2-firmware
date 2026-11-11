@@ -857,6 +857,30 @@ int main() {
         CHECK_EQ(int(r.sink.status().result), int(SinkResult::Ok));
     }
     {
+        // Item G: the status stamps the source's Accept and PS_RDY (the sink's `now`), a new Accept clears the PS_RDY stamp, and a
+        // contract taken as ready without a PS_RDY says so (ps_rdy_inferred) and keeps ps_rdy_at 0.
+        Rig r;
+        r.sink.trigger({3, 0, 0}, r.now); r.pump();
+        r.run(100); r.ctl(kCtlAccept);
+        const std::uint32_t accepted = r.now;
+        CHECK_EQ(int(r.sink.status().accept_at == accepted), 1);
+        CHECK_EQ(int(r.sink.status().ps_rdy_at), 0);
+        r.run(600); r.ctl(kCtlPsRdy);
+        CHECK_EQ(int(r.sink.status().ps_rdy_at == r.now), 1);
+        CHECK_EQ(int(r.sink.status().ps_rdy_at - r.sink.status().accept_at), 600);
+        CHECK_EQ(int(r.sink.status().ps_rdy_inferred), 0);
+        r.run(kSettleMs + 100);
+        r.caps.pdos[5] = decode_pdo(0xC0000000 | (110u << 17) | (33u << 8) | 60u);   // PPS 3.3-11 V 3 A
+        CHECK_EQ(int(r.sink.trigger({6, 3300, 3000}, r.now)), int(Err::Ok));
+        r.pump(); r.ctl(kCtlAccept);
+        CHECK_EQ(int(r.sink.status().ps_rdy_at), 0);                              // cleared by the new Accept
+        CHECK_EQ(int(r.sink.status().accept_at == r.now), 1);
+        for (std::uint32_t t = 0; t < 1200; t += 100) { r.sink.on_vbus(3500, r.now); r.pump(); r.run(100); }
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));              // inferred from the settled VBUS
+        CHECK_EQ(int(r.sink.status().ps_rdy_inferred), 1);
+        CHECK_EQ(int(r.sink.status().ps_rdy_at), 0);
+    }
+    {
         // Item B: the shortcut needs VBUS steady inside the band [target - margin, ceiling] for kDownSettleMs. A single sample, a
         // sample below the floor (a glitch, an output that went dark), a fall through the band and a bounce out of it all keep the
         // sink waiting for PS_RDY.

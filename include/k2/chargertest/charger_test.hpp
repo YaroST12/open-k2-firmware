@@ -295,11 +295,20 @@ enum EvidenceFlag : uint8_t {
 };
 // What the source's own messages showed during the run (Evidence::seen); latched by the Runner, passive notes only.
 enum SeenFlag : uint8_t { SeenOppoSvid = 1 };
+// PS_RDY timing quirks the engine tolerates and no verdict reads (Evidence::timing, OR over the run's PD rows; one [CT] ps_rdy line
+// names the row). PsRdyOutOfBand = PS_RDY arrived while VBUS sat outside the row's band (FH22: PS_RDY at a 21 V contract with 19.42 V
+// delivered); PsRdyInferred = no PS_RDY came and the sink took the contract as ready from a settled VBUS (no PS_RDY on a down-step);
+// PsRdyLate = PS_RDY came later than the spec maximum after the Accept. The waits the engine tolerates stay kPsRdyMs / kPsRdyDownMs.
+enum TimingFlag : uint8_t { PsRdyOutOfBand = 1, PsRdyInferred = 2, PsRdyLate = 4 };
+inline constexpr uint32_t kPsRdyMaxSprMs = 550, kPsRdyMaxEprMs = 1020;
+constexpr bool ps_rdy_late(uint32_t accept_to_ps_rdy_ms, bool epr) { return accept_to_ps_rdy_ms > (epr ? kPsRdyMaxEprMs : kPsRdyMaxSprMs); }
 struct Evidence {
     uint32_t selected = 0, session = 0;
     uint16_t monitor_mv = 0, cable_mv = 20000, cable_ma = 3000, raw_header = 0;
     uint16_t scp_ma = 0;   // the SCP current limit the adapter reported (0 = not read); a card keeps it in 50 mA units
     uint8_t wire_rev = 0, flags = 0, num_pdos = 0, seen = 0;
+    uint8_t timing = 0;       // TimingFlag bits seen on any PD row of this run (not journaled, not on the card)
+    uint8_t ps_rdy_max = 0;   // the worst Accept -> PS_RDY time of the run in 20 ms units, saturating at 255; 0 = none measured
     uint8_t rebalanced = 0;   // how often the source re-announced its list mid-run and the PD rows were re-planned per row (budget-reannounce-mid-run)
     pd::Revision reported{};
 };
@@ -801,7 +810,12 @@ private:
     // Latched per PD row (reset in request()), read where a lost programmable row ends: pattern pps-off-at-no-load = accepted (the
     // sink waited in Transition), never PS_RDY (Ready with this row's PDO), the port drew under kNeedsLoadMaxMa the whole row.
     bool row_accepted_ = false, row_ps_rdy_ = false; int row_max_ma_ = 0;
+    // The timing quirks of this row (TimingFlag bits, over its walk levels / sweep points) and its worst Accept -> PS_RDY time. They are
+    // reset in request(); the accepted / PS_RDY latches above restart at every walk level and sweep point (level_mv_).
+    uint8_t row_timing_ = 0; uint16_t row_ps_rdy_ms_ = 0;
+    int level_mv(const Step&) const;   // the voltage the Request out now asks (the row's, a walk level's, a sweep point's)
     void latch_row(const Input&);
+    void note_ps_rdy(const Input&, const Step&);
     bool needs_load(const Input&) const;
     enum class Probe : uint8_t { Off, Pending, Closing, Running } probe_ = Probe::Off;
     uint32_t probe_ms_ = 0;
