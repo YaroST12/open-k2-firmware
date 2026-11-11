@@ -974,6 +974,12 @@ class ActivePd(unittest.TestCase):
         self.assertIn("busy", str(e))
         self.assertIn("charger test", str(e))
 
+    def test_store_busy_refusal_names_the_owner(self):
+        # a store save during a charger test or an FC release is Busy with no payload
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_STORE)
+        self.assertIn("busy", str(e))
+        self.assertIn("charger test", str(e))
+
     def test_reset_release_status(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="reset"))

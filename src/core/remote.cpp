@@ -1173,16 +1173,14 @@ struct CardsApi {
 };
 static_assert(remote::kCardsList == report_card::remote::kList && remote::kCardsGet == report_card::remote::kGet &&
               remote::kCardsRename == report_card::remote::kRename && remote::kCardsDelete == report_card::remote::kDelete &&
-              remote::kCardsChunks == report_card::remote::kChunks);
+              remote::kCardsChunks == report_card::remote::kChunks &&
+              remote::kCardsErrBusy == report_card::remote::kErrBusy);
 }  // namespace
 
-// Writes (rename, delete) only on these explicit commands, and not while a charger test is running (it would
-// save its own card at the end and the flash is shared).
+// Writes (rename, delete) only on these explicit commands. The dispatcher refuses them with kCardsErrBusy
+// while a charger test or an FC release owns the link (the run saves its own card at the end and the flash
+// is shared), so they never get here then.
 size_t Remote::cards(std::span<const uint8_t> p, std::span<uint8_t> out) {
-    if ((p[0] == remote::kCardsRename || p[0] == remote::kCardsDelete) && ui_.charger_test_busy()) {
-        out[0] = report_card::remote::kErrBusy;
-        return 1;
-    }
     CardsApi api;
     return report_card::remote::handle(api, p, out);
 }

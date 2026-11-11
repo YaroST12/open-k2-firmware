@@ -247,6 +247,8 @@ class RemoteError(RuntimeError):
             text += f" ({PD_ERRS[payload[0]]})"
         if cmd == CMD_EM_LIB and status == STATUS_BUSY:
             text += " (a charger test or an FC release owns the link: the library write waits for it)"
+        if cmd == CMD_STORE and status == STATUS_BUSY:
+            text += " (a charger test or an FC release owns the link: the flash save waits for it)"
         if cmd == CMD_IDENTIFY_DEVICE and payload and payload[0] == PD_ERR_INLINE:
             # the inline Identify refusal (BadArg + pd::Err::Inline), not "busy": a live sink is
             # attached, the K2 transmits nothing, the Sink tab shows the sniffed identity

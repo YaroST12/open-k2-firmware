@@ -363,9 +363,9 @@ enum class Cmd : uint8_t {
     AppleRead = 0x4A,       // lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp): [op] 0 status, 1 arm + re-request the current contract -> AppleReadInfo; a refusal carries its pd::AppleRefusal as the one-byte payload
     DebugFault = 0x31,  // debug: provoke a CPU fault, needs kFaultMagic + kind
     Fc = 0x32,          // active fast-charge trigger, see the layout above
-    Store = 0x60,       // flash store: list / save e-marker / save log, see kStore* below
+    Store = 0x60,       // flash store: list / save e-marker / save log, see kStore* below (the saves: Busy while a run or an FC release owns the link)
     EmLib = 0x61,       // saved-cable library: list / get / save / delete / rename / spoof, see kEm* below
-    Cards = 0x62,       // charger report cards: list / get (chunked) / rename / delete, see kCards* below
+    Cards = 0x62,       // charger report cards: list / get (chunked) / rename / delete, see kCards* below (rename, delete: Ok + [kCardsErrBusy] while a run or an FC release owns the link)
     Lab = 0x51,         // lab probes: PA8 load pulse, see the layout above
     CableR = 0x50,      // passive cable resistance (k2/pd/cable_r.hpp), see the layout above
     Ufcs = 0x52,        // UFCS tuner and 5 V probe (k2/fastcharge/ufcs_tune.hpp, k2/fastcharge/ufcs_probe.hpp), see the layout above
@@ -454,6 +454,7 @@ constexpr uint8_t kStoreFlagSingle = 1, kStoreFlagForeign = 2, kStoreFlagLog = 4
 // CARDS op codes (first payload byte of Cmd::Cards); the layouts are in k2/chargertest/report_card_remote.hpp, which
 // src/core/remote.cpp checks against these. Delete needs the trailing 1; rename takes a 1..20 byte name.
 inline constexpr uint8_t kCardsList = 0, kCardsGet = 1, kCardsRename = 2, kCardsDelete = 3;
+inline constexpr uint8_t kCardsErrBusy = 5;   // Ok + [kCardsErrBusy]: a rename / delete while a run or an FC release owns the link (report_card::remote::kErrBusy)
 inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 48 = 5.2 -> 6 chunks (v10 payload; report_card::remote::kChunks, static_asserted in remote.cpp)
 
 // EMLIB op codes (first payload byte of Cmd::EmLib), the saved-cable library of k2/pd/emlib.hpp. Every
@@ -1421,6 +1422,9 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         default:
             return reply(Status::BadArg);
         }
+        // The saves share the flash with a charger test's own card save: Busy while a run or an FC release
+        // owns the link, before the backend sees the call (list stays open).
+        if (p[0] != kStoreList && backend.ports_busy()) return reply(Status::Busy);
         return reply_n(encode_store(buf, backend.store_cmd(p[0], p.size() > 1 ? p[1] : 0)));
     }
     case Cmd::CableR:
@@ -1591,6 +1595,12 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             break;
         default:
             return reply(Status::BadArg);
+        }
+        // Rename and delete write the card flash a running charger test saves into at its end: refused while a
+        // run or an FC release owns the link, in the cards' own Ok + [kCardsErrBusy] shape.
+        if ((p[0] == kCardsRename || p[0] == kCardsDelete) && backend.ports_busy()) {
+            buf[0] = kCardsErrBusy;
+            return reply(Status::Ok, std::span<const uint8_t>(buf.data(), 1));
         }
         return reply_n(backend.cards(p, buf));
     }

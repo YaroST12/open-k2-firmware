@@ -434,6 +434,55 @@ static void test_emlib_writes_refused_while_busy() {
     }
 }
 
+// The flash store saves (emarker, log) and the card rename / delete share the flash with a charger test's own
+// card save: refused while a run or an FC release owns the link, before the backend sees them. The store
+// replies Status::Busy (no payload); the cards keep their Ok + [kCardsErrBusy] shape the host tool already
+// reads. Lists and gets stay open.
+static void test_store_cards_writes_refused_while_busy() {
+    auto request = [](uint8_t cmd, uint8_t seq, const std::vector<uint8_t>& payload) {
+        std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, cmd, seq, static_cast<uint8_t>(payload.size())};
+        v.insert(v.end(), payload.begin(), payload.end());
+        v.resize(kFrameSize, 0);
+        return v;
+    };
+    Fake f; Frame r;
+    f.ports_busy_value = true;
+    for (uint8_t op : {uint8_t(1), uint8_t(3)}) {
+        f.calls = 0; f.store_calls = 0;
+        CHECK_EQ(run(f, request(0x60, 40 + op, {op}), r), 1);
+        check_header(r, 0x60, 40 + op, Status::Busy, 0);
+        CHECK_EQ(f.store_calls, 0);                                  // never reached the backend
+    }
+    f.calls = 0;
+    CHECK_EQ(run(f, request(0x60, 50, {0}), r), 1);                  // list stays open
+    check_header(r, 0x60, 50, Status::Ok, 8);
+    CHECK_EQ(f.store_calls, 1);
+    const std::vector<std::vector<uint8_t>> card_writes = {{3, 1, 0, 1}, {2, 1, 0, 'A'}};
+    uint8_t seq = 60;
+    for (const auto& w : card_writes) {
+        f.calls = 0;
+        CHECK_EQ(run(f, request(0x62, seq, w), r), 1);
+        check_header(r, 0x62, seq, Status::Ok, 1);
+        CHECK_EQ(int(r[kRspHeader]), int(k2::remote::kCardsErrBusy));
+        CHECK_EQ(f.calls, 0);
+        seq++;
+    }
+    for (const auto& g : std::vector<std::vector<uint8_t>>{{0}, {1, 1, 0, 0}}) {
+        f.calls = 0;
+        CHECK_EQ(run(f, request(0x62, seq, g), r), 1);
+        check_header(r, 0x62, seq, Status::Ok, 2);
+        CHECK_EQ(f.calls, 1);
+        seq++;
+    }
+    f.ports_busy_value = false;
+    f.calls = 0; f.store_calls = 0;
+    CHECK_EQ(run(f, request(0x60, 70, {1}), r), 1);
+    check_header(r, 0x60, 70, Status::Ok, 8);
+    CHECK_EQ(f.store_calls, 1);
+    CHECK_EQ(run(f, request(0x62, 71, {3, 1, 0, 1}), r), 1);
+    check_header(r, 0x62, 71, Status::Ok, 2);
+}
+
 static void test_emlib() {
     Fake f; Frame r;
     // Each op reaches the backend with its whole payload; the response is the backend's bytes.
@@ -2057,6 +2106,7 @@ int main() {
     test_lab();
     test_emlib();
     test_emlib_writes_refused_while_busy();
+    test_store_cards_writes_refused_while_busy();
     test_cards();
     test_blackbox();
     test_transcap();
