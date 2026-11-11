@@ -62,7 +62,61 @@ void meter_write(std::uint32_t count) {
 void ensure_panel() {
     if (!g_panel_attached) { g_panel_sink.attach(g_panel, LCD_WIDTH, 0, LCD_HEIGHT); g_panel_attached = true; }
 }
+
+// ---- paint timing (g_lcd_timing set): the cadence of src/drivers/lcd.cpp, on the world's virtual clock ----
+LcdIdleHook g_idle_hook;
+struct TimedDma { bool busy = false; double start_us = 0; std::uint32_t total = 0; } g_tdma;
+std::uint32_t g_stream_px;   // pixels since the last service round (lcd.cpp g_stream_px)
+
+void t_spend(double us) { if (us > 0) g_lcd_timing->spend_us(us); }
+void t_serve() { if (g_idle_hook) g_idle_hook(); }   // usb::service() is a no-op on the host
+void t_stream_service(std::uint32_t n) {
+    g_stream_px += n;
+    if (g_stream_px >= g_lcd_timing->service_px) { g_stream_px = 0; t_serve(); }
+}
+// lcd.cpp dma_wait(): spin until the transfer has left, serving every dma_service_px pixels moved.
+void t_dma_wait() {
+    if (!g_tdma.busy) return;
+    const LcdTiming &t = *g_lcd_timing;
+    const std::uint32_t total = g_tdma.total;
+    std::uint32_t served = 0;
+    for (;;) {
+        const double now = t.now_us();
+        const double moved = (now - g_tdma.start_us) / t.px_us;
+        const std::uint32_t done = moved >= total ? total : static_cast<std::uint32_t>(moved);
+        if (done >= total) break;
+        if (done - served >= t.dma_service_px) { served = done; g_stream_px = 0; t_serve(); continue; }
+        const double target = g_tdma.start_us + std::min<double>(total, served + t.dma_service_px) * t.px_us;
+        t_spend(std::max(target - now, 0.01));
+    }
+    g_tdma.busy = false;
+    t_stream_service(total - served);
+}
+void t_dma_start(std::uint32_t n) { g_tdma = {true, g_lcd_timing->now_us(), n}; }
+void t_fill(std::uint32_t n) {   // lcd.cpp stream_fill() on the panel
+    t_spend(g_lcd_timing->call_us);
+    t_dma_wait();
+    if (k2::lcd::use_dma(n)) { t_dma_start(n); return; }   // left in flight
+    while (n) {
+        const std::uint32_t k = n < 256 ? n : 256;
+        t_spend(k * g_lcd_timing->px_us);
+        n -= k;
+        t_stream_service(k);
+    }
+}
+void t_pixels(std::uint32_t n, bool erase) {   // lcd.cpp stream_pixels() on the panel
+    t_spend(n * g_lcd_timing->px_cpu_us);
+    if (erase) return t_fill(n);
+    t_spend(g_lcd_timing->call_us);
+    t_dma_wait();
+    if (k2::lcd::use_dma(n)) { t_dma_start(n); t_dma_wait(); return; }
+    t_spend(n * g_lcd_timing->px_us);
+    t_stream_service(n);
+}
 }  // namespace
+
+const LcdTiming *g_lcd_timing = nullptr;
+LcdIdleHook lcd_idle_hook() { return g_idle_hook; }
 
 namespace k2::lcd {
 
@@ -77,6 +131,7 @@ bool sink_band(std::uint16_t& first, std::uint16_t& last) {
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     g_lcd_windows++;
     if (g_sink) { g_sink_work.begins++; g_sink->begin(x0, y0, x1, y1); return; }
+    if (g_lcd_timing) { t_dma_wait(); t_spend(g_lcd_timing->call_us + g_lcd_timing->window_us); g_stream_px = 0; }
     ensure_panel();
     g_panel_sink.window(x0, y0, x1, y1);
     g_wx0 = g_cx = x0; g_wy0 = g_cy = y0; g_wx1 = x1; g_wy1 = y1;
@@ -90,6 +145,7 @@ void stream_pixels(std::span<const std::uint16_t> px) {
         g_sink->pixels(px.data(), static_cast<std::uint32_t>(px.size()));
         return;
     }
+    if (g_lcd_timing) t_pixels(static_cast<std::uint32_t>(px.size()), g_erase);
     g_lcd_pixels += static_cast<unsigned>(px.size());
     meter_write(static_cast<std::uint32_t>(px.size()));
     if (g_erase) {
@@ -108,13 +164,18 @@ void stream_fill(std::uint16_t color, std::uint32_t count) {
         g_sink->fill(color, count);
         return;
     }
+    if (g_lcd_timing) t_fill(count);
     g_lcd_pixels += count;
     meter_write(count);
     if (g_erase) color = 0;
     g_panel_sink.fill(color, count);
 }
 
-void stream_end() {}
+void stream_end() {
+    if (g_sink || !g_lcd_timing) return;
+    t_spend(g_lcd_timing->call_us);
+    t_dma_wait();   // the last fill may still be on the wire
+}
 
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color) {
     if (!w || !h) return;
@@ -130,8 +191,10 @@ void fill(std::uint16_t color) {
     g_clearing = false;
 }
 void set_rotation(std::uint8_t) {}
+void set_idle_hook(void (*hook)()) { g_idle_hook = hook; }
 void pump() {
     g_lcd_pumps++;
+    if (g_lcd_timing) t_serve();
     if (g_pump_snap_armed) {
         g_pump_snap_armed = false;
         std::copy(g_panel, g_panel + LCD_WIDTH * LCD_HEIGHT, g_pump_panel);

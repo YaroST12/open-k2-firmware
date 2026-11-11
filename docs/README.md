@@ -41,6 +41,7 @@ Index of the user and developer documentation. The project overview, build, flas
 | [`ROADMAP.md`](ROADMAP.md) | Status of every feature and what is verified on hardware |
 | [`HW_TEST_PROCEDURES.md`](HW_TEST_PROCEDURES.md) | Step-by-step on-device test procedures, with a results log |
 | [`CODING_STANDARDS.md`](CODING_STANDARDS.md) | Rules for code and commits |
+| [`TESTING.md`](TESTING.md) | The host world replay: running it, making a scenario from a recording, the timing model and the reboot world |
 
 ## Mock-ups and images
 

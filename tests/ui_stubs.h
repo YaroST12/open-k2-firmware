@@ -85,6 +85,7 @@ struct StubState {
     uint8_t pin = 0;                         // fusb302::pin_rd() override (0 = derive from self_powered: CC2)
     uint8_t trial_line = 0, trial_moves = 0; bool trial_live = false;   // fusb302::line_trial(): the direct-plug fallback's line / moves / live
     bool bus_powered = false, supply_decided = true;   // power_source: no host and VBUS at boot / the host window is over
+    bool usb_configured = true;              // usb::configured(): a host enumerated the HID link (the reboot world has none)
     bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;
     bool reread_hold = false;                // fusb302::reread_own_hold(): a finished re-read's own leftover PDO 1 hold
     int reread_take_overs = 0;               // fusb302::reread_take_over(): a tool (PD Stress, twin run) took the re-read's attach over
@@ -212,6 +213,7 @@ struct StubState {
     k2::transcap::Meta tc_meta{};
     std::vector<std::vector<uint8_t>> reports;
     void (*on_report)() = nullptr;
+    void (*on_log)(const char* line) = nullptr;   // every formatted K2LOG line, uncapped (the world-replay test keeps them timed)
     std::vector<uint8_t> bin_log;          // usb::log_bin(): the K2LOG entries the stub ring holds (whole entries, oldest first)
     uint32_t bin_base = 0;
     bool bin_older = false;

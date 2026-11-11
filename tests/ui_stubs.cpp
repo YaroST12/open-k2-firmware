@@ -32,11 +32,15 @@ namespace k2 {
 
 extern const char kGitHash[] = "v1-test-3-gabc1234";
 
+// K2_WORLD_STUBS: the world-replay test (tests/test_world_replay.cpp) links the real FUSB302 and power-monitor drivers and
+// its own clock, ADC and USB log (tests/world_sim.cpp), so those stand-ins are left out of its copy of this file.
+#ifndef K2_WORLD_STUBS
 namespace systick {
 uint32_t millis() { return g_stub.ms++; }
 uint32_t micros() { return g_stub.ms * 1000; }
 void delay_ms(uint32_t ms) { g_stub.ms += ms; g_stub.delays_ms += ms; if (g_stub.delay_hook) g_stub.delay_hook(); }
 }  // namespace systick
+#endif
 
 namespace link {
 void set_inline_mode(bool on) { g_stub.link_inline = on; }
@@ -52,6 +56,7 @@ Reason inline_now() {
 }
 }  // namespace link
 
+#ifndef K2_WORLD_STUBS
 namespace fusb302 {
 const pd::SourceCaps& caps() { return g_stub.caps; }
 std::uint32_t rx_count() { return g_stub.caps.rx_count; }
@@ -220,7 +225,9 @@ std::uint32_t cable_seq() { return g_stub.cable_seq; }
 std::uint32_t session() { return g_stub.session; }
 void sink_cc(std::int32_t, std::int32_t) {}
 }  // namespace fusb302
+#endif
 
+#ifndef K2_WORLD_STUBS   // the world links the real src/core/rd_comeback.cpp (its reboot world boots through it)
 namespace rdcomeback {
 bool pending() { return false; }
 const rdintent::Intent& found() { return g_stub.rdc_found; }
@@ -236,6 +243,7 @@ void end_reattach() { g_stub.rdc_ends++; }
 bool begin_rescan() { g_stub.rdc_rescan_begins++; return g_stub.rdc_rescan_ok; }
 bool rescan_landing() { return g_stub.rdc_rescan_landing; }
 }  // namespace rdcomeback
+#endif
 
 namespace rescan {
 // The page's Refresh goes through here; the stub answers what the test set and counts the asks (the real one decides on the
@@ -495,6 +503,7 @@ std::uint32_t unmatched() { return 0; }
 const emk_quirk::SeenLog& seen() { static const emk_quirk::SeenLog none; return none; }
 }  // namespace emk_spoof
 
+#ifndef K2_WORLD_STUBS
 namespace power {
 Chip chip() { return g_stub.power_chip; }
 std::int32_t max_vbus_mv() { return g_stub.max_vbus_mv; }
@@ -526,6 +535,7 @@ bool fast_vbus_mv(std::int32_t& mv) {   // one VBUS register read
 }
 void restart_average() {}
 }  // namespace power
+#endif
 
 namespace transcap {
 ArmResult arm(std::uint8_t step, std::uint16_t arg) {
@@ -552,9 +562,11 @@ bool find_stored(std::uint32_t run_id, std::uint16_t step, Meta& m) {
 }
 }  // namespace transcap
 
+#ifndef K2_WORLD_STUBS
 namespace adc {
 std::optional<Reading> read() { return g_stub.adc; }
 }  // namespace adc
+#endif
 
 namespace fastcharge {
 Protocol read() { return g_stub.fc; }
@@ -570,7 +582,7 @@ bool bus_powered() { return g_stub.bus_powered; }
 namespace usb {
 Stats stats;
 StatsSnapshot stats_snapshot() { return {stats.resets, stats.isrs, stats.log_sent, stats.log_dropped, stats.poll_gap_max}; }
-bool configured() { return true; }
+bool configured() { return g_stub.usb_configured; }
 void poll() { g_stub.polls++; }
 void log(std::string_view) {}
 void log_fmt(const char* fmt, ...) {
@@ -581,6 +593,7 @@ void log_fmt(const char* fmt, ...) {
     const int n = vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     if (n <= 0) return;
+    if (g_stub.on_log) g_stub.on_log(buf);
     if (g_stub.log_text.size() > 64 * 1024) g_stub.log_text.clear();
     g_stub.log_text.append(buf, std::min<std::size_t>(static_cast<std::size_t>(n), sizeof buf - 1));
     if (g_stub.log_fmts.size() > 64 * 1024) g_stub.log_fmts.clear();

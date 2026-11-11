@@ -64,7 +64,10 @@ checked against the code or hardware when this was written.
    default), `msc::init` (drive), `shell_hw::init`, `http_server::init` (Net, K2_NET=1 builds), a 50 ms delay, the `[BOOT]` /
    `[RST]` lines, `fusb302::init`, `boottrace::report_previous`, `session::init`, `bbpersist::init`,
    `uiprefs::stored` + `fs::wipe_legacy`, `adc::log_raw`, `fastcharge::init`, `Ui::init`,
-   accelerometer init, then the LCD idle hook and the loop. `lcd.cpp` calls `usb::service()` and the hook every 2048 px
+   accelerometer init, then the LCD idle hook and the loop. The PD half of this (the Rd decision of a reset, the
+   self-powered comeback, the bring-up loop) is `bootpd::early(keys, warm)` right after `i2c::init` and
+   `bootpd::late(early)` where `fusb302::init` runs (`src/core/boot_pd.cpp`), so the host world replay boots its
+   firmware lives through the same calls. `lcd.cpp` calls `usb::service()` and the hook every 2048 px
    in a stream (every 468 px in a DMA wait), so a redraw never leaves the bus unserved. The hook runs at most once per
    ms: `fusb302::service()` (drains PD frames), `fctrig::service_ufcs()` (the UFCS message exchange),
    `fctrig::service_hs()` (the QC2 / QC3 / QC3+ handshake steps, `fc::Engine::hs_step`; the engine's `busy_` flag keeps it
@@ -73,7 +76,10 @@ checked against the code or hardware when this was written.
 
 ### 2.2 Main loop
 
-`main` loops forever and ends each pass with `wfi`; SysTick wakes it every millisecond.
+`main` loops forever and ends each pass with `wfi`; SysTick wakes it every millisecond. The pass body and the
+LCD idle hook live in `src/core/main_loop.cpp` (`k2::mainloop::Context`, `install_hooks()`, `begin()`, `pass()`):
+`main.cpp` only builds the context in `boot()` and calls `pass()` + `wfi` forever. The host world replay
+(`tests/test_world_replay.cpp`, see "World replay" below) calls the same `pass()`, so it cannot drift from the firmware.
 
 | Period | Work |
 | :--- | :--- |
@@ -1130,3 +1136,27 @@ Unit lifecycle (`Runner::begin_detach` / `begin_attach`, `Env::detach()` / `Env:
 A unit failure never stops the run; only `ShutOff` (a PD row cut below its target whose source never returns, "source shut off (needs replug)") skips the rest. A PD row cut whose source then returns is `Reason::CutRecovered` ("VBUS cut, source recovered"), is not retried, and the runner waits (bounded by `kCapsReturnMs`) for valid caps before the next PD row. The PD plan takes its source capabilities from the first Legacy attach (caps are heard there), else from the first Pd attach (`late_pd_`). The identity probe runs at the end of the first Pd unit, while the charger sits in its 5 V contract.
 
 One owner of the Request in Pd mode: the START's first caps queue the single Request for PDO 1 (`handle_frame`, `start_request_blockers`); `pd::VbusWait` holds the START wait for up to `kStartContractWaitMs` (3 s) while that Request is Requesting/Transition/Aborting; `Sink::release` while a PDO 1 Request is in flight only clears `held` and sends nothing (hardware 2026-11-04, UGREEN X865: a release during the pending first Request sent a second Request 12 ms later, TX timeout, two Accept/PS_RDY pairs). The Runner itself calls `request_pd` only for the rows. A reboot inside a unit restores from the journal as Skip(RebootHandover) for a Legacy attach (`Phase::Handover`) or Stopped with the pending rows otherwise.
+
+## World replay (host)
+
+A host test that runs the real firmware loop in a modelled world, so timing bugs (a frame lost behind a long repaint,
+a Rd gap across a reboot) fail in `make test` instead of on the bench. How to run it, the timing model with its
+calibration, and how to add a scenario are in [TESTING.md](TESTING.md).
+
+| Part | What it is | Where |
+| :--- | :--- | :--- |
+| Firmware under test | the real `mainloop::pass()` and LCD idle hook, `bootmode::decide`, `bootpd::early/late`, `rdcomeback`, the FUSB302 and power-monitor drivers, the whole UI, the fs volume | `src/core/main_loop.cpp`, `src/core/boot_pd.cpp`, `src/core/rd_comeback.cpp`, `src/drivers/fusb302.cpp`, ... |
+| The world | chips and nets, never firmware: a FUSB302 register file with a routed RX FIFO and TX, an INA226, the ADC nets, VBUS, the CC levels, a virtual nanosecond clock with per-call costs | `tests/world_sim.{h,cpp}` |
+| LCD cost | wire time per pixel plus a calibrated CPU share, with the real idle hook inside the paint | `tests/fake_lcd.{h,cpp}` (`LcdTiming`) |
+| Scenarios | a bench recording turned into the world the K2 sat in (VBUS, Rp levels, ADC, every PD frame) with per-episode expectations | `tools/trace2scenario.py` → `tests/scenarios/*.scn` |
+| Driver | one forked process per run (scenario × episode × page × loop phase); the reboot cases fork one process per firmware life | `tests/test_world_replay.cpp` |
+
+Build: the world objects are compiled with `-DK2_HOST_PINS -DK2_WORLD_STUBS` and come first on the link line;
+`tests/ui_stubs.cpp` leaves out its clock, FUSB302, power, ADC and Rd-comeback stand-ins under `K2_WORLD_STUBS`.
+What a power loss keeps is modelled as the hardware keeps it: the flash volume and the backup registers (session record
+and pin mark, up to a hold time per scenario; the host world supplies `session::init` / `backup_alive` over the same
+record) survive a dark, SRAM does not (the `.noinit` probe reads back as garbage). The Rd marker's voucher
+(`session::backup_alive`) is thus decided by the firmware itself, see TESTING.md "Reboot world".
+The world must stay a model of hardware: any firmware logic the test needs is called, never copied. When a test needs a
+firmware sequence that only exists inline in `main.cpp`, move it behind a function both call (as `main_loop` and
+`boot_pd` were).
