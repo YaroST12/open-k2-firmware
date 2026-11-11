@@ -530,6 +530,22 @@
   "533": "[TWIN] live start n=%u -> %s\n",
   "534": "[TWIN] learn identify -> %u vid=%04x pdos=%u modes=%u\n",
   "535": "[TWIN] learn sniff -> %u vid=%04x pdos=%u obs=%u\n",
-  "536": "[VOOC] session %u end: stalled on 0x%02X, %u silent replies\n"
+  "536": "[VOOC] session %u end: stalled on 0x%02X, %u silent replies\n",
+  "537": "[PD] Soft_Reset sent on a live contract\n",
+  "538": "[PS] journal write failed fs=%s ms=%u\n",
+  "539": "[PS] slow journal write ms=%u\n",
+  "540": "[STRESS] journal off: the record could not be written\n",
+  "541": "[STRESS] seq %u/%u %s start steps=%u\n",
+  "542": "[STRESS] seq %s end trans=%u points=%u score_cp=%u skipped=%u\n",
+  "543": "[STRESS] event %s seq=%s detail=%u\n",
+  "544": "[STRESS] note %s\n",
+  "545": "[STRESS] finish %s trans=%u points=%u score_cp=%u elapsed_ms=%u reboots=%u\n",
+  "546": "[STRESS] start mask=0x%x cycles_pct=%u pace=%u max_s=%u max_trans=%u journal=%u\n",
+  "547": "[STRESS] start refused: %s\n",
+  "548": "[STRESS] journal dropped (%s)\n",
+  "549": "[STRESS] journal found: next=%u losses=%u, waiting for a steady VBUS\n",
+  "550": "[STRESS] resume dropped: %s\n",
+  "551": "[STRESS] resume at sequence %u after reboot %u%s\n",
+  "552": "[STRESS] resume refused: %s\n"
  }
 }
