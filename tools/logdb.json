@@ -499,6 +499,9 @@
   "502": "[WAKE] + released after %d ms: CC1 %d mV CC2 %d mV VBUS %d mV\n",
   "503": "[WAKE] t=%d ms key=%d CC1 %d mV CC2 %d mV VBUS %d mV\n",
   "504": "[LCD] SPI3 divider /%u (CTRL1=%04x)\n",
-  "505": "[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums\n"
+  "505": "[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums\n",
+  "506": "[FC] dcp check aborted have=%d idle=%d ours=%d",
+  "507": "[FC] dcp check dm_idle=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
+  "508": "[AFC] n=%d tx=0x%02X rx=%d vbus=%d\n"
  }
 }

@@ -104,7 +104,8 @@ RESOLVE = [
     (r"k2::(fc|fctrig)::", r"k2::fctrig::.*HwEnv::", ("env",)),
     (r"k2::shell(_hw)?::", r"k2::shell_hw::.*Hw::", ("shell",)),
     (r"k2::lcd::", r"k2::.*sink_(begin|pixels|fill)", ("lcd",)),
-    (r"k2::charger_test::Runner::",
+    # LTO inlines Runner::start / cancel into the session's begin_run / cancel, so the seam calls show up under those names too.
+    (r"k2::charger_test::Runner::|k2::ChargerTestSession::(begin_run|cancel)\(",
      r"k2::ChargerTestPage::(request_pd|request_fc|release|detach|attach|legacy_only|pd_rescan|phase|attempt"
      r"|probe_identity|epr_info_ask|record)\(", ("env",)),
     # The vfat image asks its provider for a file's bytes (fill) or a directory entry's long name (lfn)
