@@ -166,7 +166,7 @@ def docker(*args):
 def table(rows, head):
     w = [max(len(str(r[i])) for r in rows + [head]) for i in range(len(head))]
     # numbers right-aligned, text left-aligned
-    fmt = lambda r: "  ".join(str(c).rjust(w[i]) if re.fullmatch(r"[-+]?[\d.]+%?|bytes|share|delta|old|new|copies", str(c))
+    fmt = lambda r: "  ".join(str(c).rjust(w[i]) if re.fullmatch(r"[-+]?[\d.]+%?|bytes|share|delta|old|new|copies|hosts", str(c))
                               else str(c).ljust(w[i]) for i, c in enumerate(r)).rstrip()
     return [fmt(head)] + [fmt(r) for r in rows]
 
@@ -199,6 +199,16 @@ def report(syms, inline, top, inline_top, describe):
         out.append("== several copies of one function (clones and instances, total over 300 B)")
         out += table([[a, b, short(c)] for a, b, c in sorted(d, reverse=True)[:15]], ["bytes", "copies", "function"]) + [""]
     if inline:
+        out.append("== bytes of one file's code that sit inside functions defined elsewhere (inlined or merged by LTO);")
+        out.append("   many hosts and many bytes = a helper that is duplicated into each caller")
+        agg = collections.defaultdict(lambda: [0, 0])
+        for s in code:
+            for f, v in inline.get(s.addr, {}).items():
+                if f != (s.path or "") and v:
+                    agg[f][0] += v
+                    agg[f][1] += 1
+        out += table([[v[0], v[1], k] for k, v in sorted(agg.items(), key=lambda kv: -kv[1][0])[:25]],
+                     ["bytes", "hosts", "file"]) + [""]
         out.append(f"== what the {inline_top} heaviest functions are made of (bytes by source file of the instructions;")
         out.append("   the function's own file first, then what was inlined or merged in)")
         shown = 0
