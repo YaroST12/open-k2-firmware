@@ -3,8 +3,9 @@
 // Black Box diagnosis: "why is PD failing" for one attach session, as plain ranked findings with their evidence.
 //
 // Pure logic, no I/O, no heap (host-tested in tests/test_pd_diag.cpp). One analyser, two homes:
-//  - on the K2, pdtrace feeds it every record it writes (the same post-Collapse bytes the ring gets) plus a 20 ms
-//    advance() tick, so it keeps counting after the 8 KB ring has wrapped; the last finished session survives unplug;
+//  - on the K2, k2/pd/diag_live.hpp feeds it every ring record each main-loop pass, power windows from every monitor
+//    sample and an advance() tick, so it keeps counting after the 8 KB ring has wrapped; the last finished session
+//    survives unplug;
 //  - on the host, tools/bbdiag.cpp feeds it a trace.raw (k2_stream) or a `pd_trace.py dump --raw` file.
 //
 // PASSIVE: the analyser only reads records; nothing here transmits or touches CC, VBUS or D+/D-.
