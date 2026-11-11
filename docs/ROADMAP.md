@@ -88,6 +88,11 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   (hardware): on the CUKTECH USB-A port, boot shows `[FC] idle dp=hiz dm=hiz mismatch=0x0` and VBUS stays ~5.1 V for
   minutes; `dm 0`, 200 ms, `dm hiz` keeps 5.1 V; after a charger-test run VBUS returns to 5 V; the QC2/QC3 units pass;
   the Lines page shows what a released pair reads alone and on a DCP / Apple / QC charger.
+  **Hardware 2026-11-11, 1.0.0-564-eb320818, CUKTECH USB-A:** `dm 0`, 200 ms, `dm hiz` kept VBUS at 5.12 V (old idle:
+  11.75 V); the K2-started QC run (self-powered) passed QC2 5/9/12 V, QC3 5→12→5 V, QC3B 5/12 V, UFCS 5/8/11/5 V
+  (15 pass, 0 fail), VBUS back at 5.12 V after it. The released pair reads the port's own 2.70/2.68 V divider
+  (`APPLE 2.4A`). Still open: the boot `[FC] idle` line, the pair alone and on DCP / QC-only chargers, the IQ4 rerun.
+  Evidence `runs/2026-11-11-idle-dpdm-hw/` (integ worktree).
 
 - **`[LINK]` verdict undercounts the caps during a long repaint** (2026-11-11, found by the host world replay on
   k2/pd-replay, not on hardware): when the attach and the caps decode both land inside one long Home repaint, the verdict
