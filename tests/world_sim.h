@@ -79,8 +79,67 @@ struct FrameFate {
     double fw_read_ms = -1;
 };
 const std::vector<FrameFate>& fates();
-struct LogLine { double world_ms; std::string text; };
+struct LogLine { double world_ms; std::string text; int life = 0; };
 const std::vector<LogLine>& logs();
 unsigned tx_starts();      // TX_START writes (an inline sniffer must never transmit)
+
+// ---- The reboot world: power loss, cold boot and a charger that serves a valid Rd ----
+// The K2 lives on the charger's VBUS. Each firmware life is a fork of the test's run process: when the K2's rail falls below
+// the brown-out level the life ends (_exit), and the next one boots cold from the same pristine image, so every static starts
+// over as after a power-on reset. What a real power loss keeps is kept in shared memory: the flash volume (the /rd.rec marker,
+// the stores), the .noinit section (rdintent::Canary) when SRAM survived the dark, the FUSB302's registers while its own supply
+// held, and the world itself (clock, charger, VBUS, log). Every number is in the report and in docs/TESTING.md.
+struct ChargerModel {               // a PD source on one CC line (its Rp), the e-marker look not modelled
+    int line = 2;                   // the K2 line the charger's CC wire lands on
+    std::vector<std::uint8_t> caps; // Source_Capabilities data objects, 4 bytes each
+    double cc_debounce_ms = 150;    // tCCDebounce: Rd present this long before VBUS goes on (100-200 ms)
+    double pd_debounce_ms = 15;     // tPDDebounce: Rd gone this long while attached = a detach, VBUS off (10-20 ms)
+    double rise_mv_per_ms = 250;    // VBUS slew on
+    double fall_mv_per_ms = 20;     // VBUS decay off, with the K2 as the load (0 V ~300 ms after the cut, CHARGER_QUIRKS)
+    double first_caps_ms = 100;     // first Source_Capabilities after VBUS reaches vSafe5V
+    double caps_period_ms = 150;    // tTypeCSendSourceCap while nobody acknowledges
+    int caps_count = 50;            // nCapsCount: then no PD (VBUS stays at 5 V)
+    double sender_response_ms = 27; // tSenderResponse: acknowledged caps with no Request = Hard Reset
+    double accept_ms = 6, ps_rdy_ms = 90;   // Request -> Accept -> PS_RDY (runs/selfpwr-drop/e8: 5.9 ms, 90.1 ms)
+    double hr_off_ms = 800;         // a Hard Reset: VBUS off, then back after tSrcRecover (0.66-1 s) without a CC check
+};
+struct PowerModel {                 // the K2's supply (all inferred, see docs/TESTING.md)
+    double dropout_mv = 300;        // 3.3 V rail = supply - dropout, capped at 3300
+    double mcu_bor_mv = 2700;       // the MCU runs at or above this rail level (cold boot on the way up)
+    double fusb_por_mv = 2000;      // the FUSB302 keeps its registers at or above this rail level; below it they are lost
+    double boot_ms = 1.0;           // reset to the first instruction of boot() (clock start-up)
+    bool sram_kept = true;          // .noinit survives a dark (rdintent::Canary; unmeasured on this board, ROADMAP "Stale Rd marker")
+};
+struct RebootEvent { double t; enum Kind { HardReset, Unplug, Replug } kind; };
+struct RebootScenario {
+    std::string name;
+    ChargerModel ch;
+    PowerModel pm;
+    bool hid_loop = false;          // a C-to-C loop from the K2's receptacle to its HID port: the HID port's Rd is on the bus and
+                                    // its VBUS feeds the K2's aux rail (masks the software bridging: the charger always sees an Rd)
+    double plus_until_ms = 0;       // PLUS held from power-up until then (a key mode boot; the key's Rd on CC2 while held)
+    double end_ms = 10000;
+    std::vector<RebootEvent> events;
+};
+void reboot_start(const RebootScenario& sc, const Timing& t);   // the K2 unpowered at world time 0
+bool reboot_wait_boot();      // the run's process, K2 dead: run the world until the rail can boot it (false: the scenario ended)
+void life_begin();            // the life's process, before boot(): firmware clock 0, .noinit as the dark left it
+void life_end();              // the life reached the scenario's end alive (the caller then exits 0)
+inline constexpr int kLifeDied = 3;   // a life's exit status when the rail fell below the brown-out level
+bool noinit_found();          // the .noinit section of this executable was located (the canary can survive a dark)
+bool plus_held();             // the PLUS key at this moment
+struct ChargerStats {
+    int attaches = 0, detaches = 0, hard_resets = 0, contracts = 0, requests = 0, caps_sent = 0, caps_acked = 0;
+    double rd_gap_max_ms = 0, rd_gap_max_at = 0;   // the longest time an attached charger with VBUS at 5 V saw no Rd
+    double first_attach_ms = -1;
+    bool attached_at_end = false;
+};
+struct RebootResult {
+    int lives = 0;
+    bool alive_at_end = false;
+    double last_boot_ms = -1;
+    ChargerStats ch;
+};
+RebootResult reboot_result();   // after the last life (the run's process)
 
 }  // namespace world

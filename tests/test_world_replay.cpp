@@ -26,8 +26,12 @@
 #include "test_util.h"
 #include "ui_stubs.h"
 #include "world_sim.h"
+#include "k2/core/boot_pd.hpp"
 #include "k2/core/bootmode.hpp"
 #include "k2/core/main_loop.hpp"
+#include "k2/core/rd_comeback.hpp"
+#include "k2/core/rd_intent.hpp"
+#include "k2/drivers/fs_flash.hpp"
 #include "k2/core/remote.hpp"
 #include "k2/drivers/accelerometer.hpp"
 #include "k2/drivers/adc.hpp"
@@ -55,12 +59,14 @@ constexpr int kPhases = 10, kPhaseStepMs = 53;
 constexpr double kSettleMs = 2500;               // boot this long before the episode window opens
 const char* const kPageName[] = {"Home", "Detail"};
 
+struct RebootCase;
 struct Job {
     const world::Scenario* sc;
     const world::Episode* ep;
     const world::Expect* ex;
     int page, phase;
-    std::string out;   // the child's report file
+    std::string out;                    // the child's report file
+    const RebootCase* rc = nullptr;     // a reboot-world case instead of a replay run
 };
 
 world::Timing timing() {
@@ -73,24 +79,38 @@ world::Timing timing() {
 void reboot_stub() {}
 void dfu_stub() {}
 
-// main.cpp boot() as far as the PD link sees it on a plain cold boot with nothing pinned: the chip-default Rd goes (no Rd), the
-// FUSB302 comes up passive, the power monitor and the UI start, the hooks go in. The slow init in between (LCD, USB, the volume)
-// takes no part: the run boots kSettleMs before the window.
+// main.cpp boot() as far as the PD link sees it, a cold boot: the boot keys (PLUS, in the reboot world), the PD half of the boot
+// through the same calls main.cpp makes (src/core/boot_pd.cpp: the Rd intent marker, the Rd decision, the comeback's early PD
+// service, the self-power bring-up), the power monitor, the volume, the UI, the hooks. The rest of the slow init (LCD, USB) takes
+// no part. With nothing held and no marker (the replay) the chip-default Rd goes and the FUSB302 comes up passive.
 void boot(int page) {
-    k2::fusb302::self_power_early(k2::bootmode::Mode::Plain, false);
-    k2::fusb302::init();
-    k2::adc::init();
+    const std::uint8_t held = world::plus_held() ? k2::bootmode::kPlus : 0;
+    const k2::bootmode::Mode keys = k2::bootmode::decide(held);
+    const k2::bootpd::Early pd_boot = k2::bootpd::early(keys, false);
+    k2::adc::init();        // boottrace::init: the ADC and the power monitor
     k2::power::init();
+    {
+        bool formatted = false;
+        k2::fs::init(formatted);
+    }
+    k2::systick::delay_ms(50);
+    k2::bootpd::late(pd_boot);
     k2::fastcharge::init();
     static k2::Ui ui;
     static k2::Remote remote{ui};
     static k2::bootscreen::Controller bootscreen;
     static k2::accelerometer::Driver accel;
+    static k2::mainloop::Context ctx{ui, remote, bootscreen, accel, reboot_stub, dfu_stub};
     ui.init(k2::systick::millis(), false);
     if (page) ui.goto_page(std::uint8_t(page), k2::systick::millis());
+    ctx.rescan_landing_due = k2::rdcomeback::found().kind == k2::rdintent::IntentKind::Rescan;
+    if (k2::bootmode::self_powered(keys)) {   // as main.cpp: the key that chose the mode is not the user's
+        bootscreen.start(0);
+        ctx.boot_key_swallow = true;
+        ctx.boot_key = k2::Button::Plus;
+    }
     accel.init(k2::systick::millis());
     k2::mainloop::install_hooks();
-    static k2::mainloop::Context ctx{ui, remote, bootscreen, accel, reboot_stub, dfu_stub};
     k2::mainloop::begin(ctx);
 }
 
@@ -173,8 +193,154 @@ std::string line_of(const Job& j, const Result& r) {
     return b;
 }
 
+// ---- reboot bridging ----
+// The reboot world (tests/world_sim.h): a charger that turns VBUS on only for a valid Rd, the K2's rail, brown-out and the cold
+// boot through the real boot path. Each case says what the firmware does across the power loss; docs/TESTING.md "Reboot world"
+// lists the model's numbers and where they come from.
+struct LogWant { int life; const char* text; };
+struct RebootCase {
+    std::string name, variant;
+    world::RebootScenario sc;
+    int lives = 0;                  // firmware lives (power-on resets) in the scenario
+    bool alive = false;             // the K2 runs at the end
+    int contracts = 0;              // contracts the charger completed (PS_RDY acknowledged), at least
+    std::vector<LogWant> logs;      // lines that must appear in that life's log
+    std::vector<LogWant> absent;    // lines that must not
+    std::string note;
+};
+
+// Source_Capabilities data objects of the charger in tests/scenarios/h-side-inline.scn (5 V 3 A first, a PPS last).
+std::vector<std::uint8_t> h_side_caps() {
+    const std::string hex = "2c9101082cd102002cb10400f44106006432a4c1";
+    std::vector<std::uint8_t> v;
+    for (std::size_t i = 0; i + 1 < hex.size(); i += 2) v.push_back(std::uint8_t(std::stoul(hex.substr(i, 2), nullptr, 16)));
+    return v;
+}
+
+// hr-session: a PLUS boot on a charger alone (the key's Rd makes the charger start VBUS), a self-powered session (contract, the
+// follower writes the Session marker), PLUS released at 1.5 s; at 6 s the charger sends a Hard Reset and cuts VBUS for ~0.8 s: the
+// K2 dies and boots again, cold, when VBUS comes back. Variants: SRAM kept or lost over the dark (.noinit: the marker's canary) x
+// the K2's HID port looped to its own receptacle or not (the loop's Rd holds the charger, its VBUS feeds the aux rail).
+std::vector<RebootCase> reboot_cases() {
+    std::vector<RebootCase> v;
+    for (int hid = 0; hid < 2; hid++)
+        for (int kept = 1; kept >= 0; kept--) {
+            RebootCase c;
+            c.name = "hr-session";
+            c.variant = std::string(kept ? "sram-kept" : "sram-lost") + (hid ? "-hid-loop" : "");
+            c.sc.name = c.name;
+            c.sc.ch.caps = h_side_caps();
+            c.sc.pm.sram_kept = kept;
+            c.sc.hid_loop = hid;
+            c.sc.plus_until_ms = 1500;
+            c.sc.end_ms = 10000;
+            c.sc.events = {{6000, world::RebootEvent::HardReset}};
+            c.lives = 2;
+            c.logs = {{1, "[PD] self-power bring-up: contract ready"}, {1, "[RDI] marker written: session pin=2"}};
+            if (!hid && kept) {
+                c.alive = true;
+                c.contracts = 2;
+                c.logs.insert(c.logs.end(), {{2, "[RDI] comeback boot: session pin=2"}, {2, "[RDI] comeback vouched"},
+                                             {2, "[PD] self-power bring-up: contract ready"}});
+                c.note = "the comeback bridges the Hard Reset";
+            } else if (!hid) {
+                c.alive = false;
+                c.contracts = 1;
+                c.logs.insert(c.logs.end(), {{2, "the SRAM canary did not survive"}, {2, "[WORLD] charger: no Rd"}});
+                c.note = "FINDING: no SRAM over the Hard Reset's dark = a stale record; the plain boot drops the Rd, the charger detaches";
+            } else {
+                c.alive = true;
+                c.contracts = 1;
+                c.logs.push_back({2, kept ? "a USB host powers this boot" : "the SRAM canary did not survive"});
+                c.absent = {{2, "[RDI] comeback boot"}};
+                c.note = "the loop's Rd holds the charger; its aux rail makes the record a host boot's: passive, alive, no contract";
+            }
+            v.push_back(std::move(c));
+        }
+    return v;
+}
+
+// One firmware life: power-on reset, the boot, the main loop until the scenario ends (or the rail drops: world_sim exits).
+[[noreturn]] void life(double end_ms) {
+    world::life_begin();
+    boot(0);
+    const world::Timing t = timing();
+    while (world::world_ms() < end_ms) {
+        k2::mainloop::pass();
+        world::spend_us(t.pass_us);
+        world::wfi();
+    }
+    world::life_end();
+    std::_Exit(0);
+}
+
+struct RebootOut {
+    bool pass = true;
+    std::string why;
+    world::RebootResult r;
+};
+
+RebootOut run_reboot(const RebootCase& c) {
+    RebootOut o;
+    auto fail = [&](const std::string& w) { o.pass = false; o.why += (o.why.empty() ? "" : "; ") + w; };
+    world::reboot_start(c.sc, timing());
+    if (!world::noinit_found()) fail(".noinit not found in this executable: the canary cannot survive a dark");
+    while (world::reboot_wait_boot()) {
+        std::fflush(nullptr);
+        const pid_t p = fork();
+        if (p == 0) life(c.sc.end_ms);
+        int st = 0;
+        waitpid(p, &st, 0);
+        if (!WIFEXITED(st) || (WEXITSTATUS(st) != 0 && WEXITSTATUS(st) != world::kLifeDied)) {
+            fail("a life crashed (status " + std::to_string(st) + ")");
+            break;
+        }
+    }
+    o.r = world::reboot_result();
+    const world::RebootResult& r = o.r;
+    if (r.lives != c.lives) fail("lives=" + std::to_string(r.lives) + ", want " + std::to_string(c.lives));
+    if (r.alive_at_end != c.alive) fail(c.alive ? "dead at the end" : "alive at the end");
+    if (r.ch.contracts < c.contracts) fail("contracts=" + std::to_string(r.ch.contracts) + ", want >=" + std::to_string(c.contracts));
+    if (c.alive && r.ch.rd_gap_max_ms >= c.sc.ch.pd_debounce_ms) {
+        char b[96];
+        std::snprintf(b, sizeof b, "Rd gap %.1f ms >= tPDDebounce %.0f ms", r.ch.rd_gap_max_ms, c.sc.ch.pd_debounce_ms);
+        fail(b);
+    }
+    const auto& logs = world::logs();
+    auto seen = [&](const LogWant& w) {
+        return std::any_of(logs.begin(), logs.end(), [&](const world::LogLine& l) { return l.life == w.life && l.text.find(w.text) != std::string::npos; });
+    };
+    for (const LogWant& w : c.logs) if (!seen(w)) fail("life " + std::to_string(w.life) + " never logged \"" + w.text + "\"");
+    for (const LogWant& w : c.absent) if (seen(w)) fail("life " + std::to_string(w.life) + " logged \"" + w.text + "\"");
+    return o;
+}
+
+[[noreturn]] void reboot_child(const Job& j) {
+    const RebootCase& c = *j.rc;
+    const RebootOut o = run_reboot(c);
+    const world::RebootResult& r = o.r;
+    char b[640];
+    std::snprintf(b, sizeof b,
+                  "%-18s %-22s %s lives=%d alive=%d contracts=%d hard_resets=%d attaches=%d detaches=%d caps_acked=%d/%d "
+                  "rd_gap_max=%.1fms@%.1f last_boot=%.1f  (%s)%s%s",
+                  c.name.c_str(), c.variant.c_str(), o.pass ? "PASS" : "FAIL", r.lives, r.alive_at_end ? 1 : 0, r.ch.contracts,
+                  r.ch.hard_resets, r.ch.attaches, r.ch.detaches, r.ch.caps_acked, r.ch.caps_sent, r.ch.rd_gap_max_ms,
+                  r.ch.rd_gap_max_at, r.last_boot_ms, c.note.c_str(), o.pass ? "" : "  -- ", o.why.c_str());
+    std::ofstream out(j.out);
+    out << b << "\n";
+    if (std::getenv("K2_WORLD_LOG"))
+        for (const world::LogLine& l : world::logs()) {
+            char p[64];
+            std::snprintf(p, sizeof p, "    log L%d %9.1f ", l.life, l.world_ms);
+            out << p << l.text;
+        }
+    out.close();
+    std::_Exit(o.pass ? 0 : 1);
+}
+
 // The child: one run, its report line (and on K2_WORLD_LOG the log and the lost frames) into j.out; exit 0 on PASS.
 [[noreturn]] void child(const Job& j) {
+    if (j.rc) reboot_child(j);
     const Result r = run(j);
     std::ofstream o(j.out);
     o << line_of(j, r) << "\n";
@@ -256,6 +422,10 @@ int main() {
             }
         }
     }
+    static const std::vector<RebootCase> rcs = reboot_cases();
+    for (const RebootCase& c : rcs)
+        if (picked(0, c.name) && picked(1, c.variant))
+            jobs.push_back({nullptr, nullptr, nullptr, 0, 0, "runs/world-replay/job" + std::to_string(jobs.size()) + ".txt", &c});
     std::fflush(stdout);
 
     const long ncpu = std::max(1L, sysconf(_SC_NPROCESSORS_ONLN));
@@ -291,7 +461,9 @@ int main() {
         std::stringstream body;
         body << in.rdbuf();
         std::string text = body.str();
-        if (text.empty()) text = jobs[i].sc->name + " " + jobs[i].ep->name + " crashed, status " + std::to_string(status[i]) + "\n";
+        if (text.empty())
+            text = (jobs[i].rc ? jobs[i].rc->name + " " + jobs[i].rc->variant : jobs[i].sc->name + " " + jobs[i].ep->name) +
+                   " crashed, status " + std::to_string(status[i]) + "\n";
         rep << text;
         g_checks++;
         if (status[i] != 0) {

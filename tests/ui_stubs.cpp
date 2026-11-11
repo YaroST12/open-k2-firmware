@@ -227,6 +227,7 @@ void sink_cc(std::int32_t, std::int32_t) {}
 }  // namespace fusb302
 #endif
 
+#ifndef K2_WORLD_STUBS   // the world links the real src/core/rd_comeback.cpp (its reboot world boots through it)
 namespace rdcomeback {
 bool pending() { return false; }
 const rdintent::Intent& found() { return g_stub.rdc_found; }
@@ -242,6 +243,7 @@ void end_reattach() { g_stub.rdc_ends++; }
 bool begin_rescan() { g_stub.rdc_rescan_begins++; return g_stub.rdc_rescan_ok; }
 bool rescan_landing() { return g_stub.rdc_rescan_landing; }
 }  // namespace rdcomeback
+#endif
 
 namespace rescan {
 // The page's Refresh goes through here; the stub answers what the test set and counts the asks (the real one decides on the
@@ -580,7 +582,7 @@ bool bus_powered() { return g_stub.bus_powered; }
 namespace usb {
 Stats stats;
 StatsSnapshot stats_snapshot() { return {stats.resets, stats.isrs, stats.log_sent, stats.log_dropped, stats.poll_gap_max}; }
-bool configured() { return true; }
+bool configured() { return g_stub.usb_configured; }
 void poll() { g_stub.polls++; }
 void log(std::string_view) {}
 void log_fmt(const char* fmt, ...) {
