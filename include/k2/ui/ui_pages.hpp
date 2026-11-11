@@ -338,6 +338,7 @@ private:
     [[gnu::noinline]] void save_card_store();   // save_card's tail: the previous card, the write and the delta, on its own frame
     UiContext& ctx_;
     ChargerTestPage* view_ = nullptr;   // the painted half while it exists
+    const char* fc_words_ = nullptr;    // the footer words of the handshake the last start() opened (null: that protocol has none)
     charger_test::Runner runner_;
     char card_name_[24] = {};  // saved card name of this run, the Results heading
     report_card::Identity card_id_{};
@@ -445,6 +446,7 @@ public:
     // Repaint hooks the session calls while this page is alive.
     void on_stage(bool entering);          // the stage changed: wipe the body (not while entering), drop the caches
     void on_message() { foot_.invalidate(); foot_sig_ = 0; }
+    void announce(const char* words);      // a handshake window is about to open: its footer line, painted now (Running only)
     void on_confirmation_dropped();        // the confirm window ended: the footer and START cell show it again
     void on_cable_changed();               // the Cable choice moved from outside: repaint it
     ListState list_state() const;
@@ -457,6 +459,10 @@ public:
     // no cap. The gauge band and the step dot are one pair: the gauge is item 1, the grid's rebuild and ResultGrid::sync_dots
     // (kRunDotPx a move, never gated) come right after it, so on a step change the band and the dot move in the same tick.
     static constexpr int kFlightPx = 6000;
+    // The one tick that may paint more: the start of a row whose engine times its own handshake. The session (not the update) paints
+    // the footer line that names the window, kAnnouncePx (the footer band, 224 x 18), after that tick's update and before the
+    // engine starts; the screen is still for the next >= 1 s anyway (Runner::paint_blocked). Counted against nothing else.
+    static constexpr int kAnnouncePx = 224 * 18;
     static constexpr int kFlightRowPx = 224 * 42 + kit::kStrikeRowMaxPx + kit::kDotRowMaxPx;
     static constexpr int kHeroPx = 5000;         // the 4-digit 48 px readout (4 x 24 x 48) plus its unit
     static constexpr int kNeedlePx = 200;        // the old and the new needle column and the window edge they cross

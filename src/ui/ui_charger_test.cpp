@@ -77,6 +77,28 @@ static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider t
 // stage of its own (27 characters at most): the second press goes straight on.
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
 static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
+// A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
+// does not serve, Runner::paint_blocked). One Info footer line says why, painted before the engine starts and left alone until the
+// window ends. Protocols with no such window say nothing. Footer text: 27 cells at most.
+constexpr const char* kQc2Words = "QC2: handshake";
+constexpr const char* kQc3Words = "QC3: handshake";
+constexpr const char* kQc3PlusWords = "QC3+: handshake";
+constexpr const char* kVoocWords = "VOOC: listening";
+constexpr const char* kUfcsWords = "UFCS: handshake";
+constexpr const char* kVivoWords = "VIVO: handshake";
+constexpr const char* kHandshakeWords[] = {kQc2Words, kQc3Words, kQc3PlusWords, kVoocWords, kUfcsWords, kVivoWords};
+static_assert(all_fit(kHandshakeWords, kSmallAdvPx, 216), "a handshake footer line is wider than the footer");
+const char* handshake_words(fc::Proto p) {
+    switch (p) {
+    case fc::Proto::Qc2: return kQc2Words;
+    case fc::Proto::Qc3: return kQc3Words;
+    case fc::Proto::Qc3Plus: return kQc3PlusWords;
+    case fc::Proto::Vooc: case fc::Proto::SuperVooc: case fc::Proto::SuperVooc65: return kVoocWords;
+    case fc::Proto::Ufcs: return kUfcsWords;
+    case fc::Proto::Vivo: return kVivoWords;
+    default: return nullptr;
+    }
+}
 // The Rd gap of the planned re-attach (measured on the lab recipe: 30 ms is enough for the charger to drop VBUS, and the cable
 // look follows the fresh attach) and how long the charger's new contract is awaited before the run goes on regardless.
 constexpr uint32_t kReattachGapMs = 30;
@@ -206,6 +228,10 @@ pd::Err ChargerTestSession::request_pd(pd::Choice c) {
 }
 fc::Fail ChargerTestSession::request_fc(fc::Proto p, int mv, bool retarget, int ma) {
     const int ufcs_ma = p == fc::Proto::Ufcs ? ma : 0;   // a UFCS row's ma is its Request current (0 = the no-cable 2 A)
+    if (!retarget) {
+        fc_words_ = handshake_words(p);
+        if (fc_words_ && view_) view_->announce(fc_words_);   // before the engine starts: nothing can be painted once it has
+    }
     return retarget ? fctrig::set_target(mv, true, ufcs_ma) : fctrig::start(p, mv, true, false, ma, ufcs_ma);
 }
 void ChargerTestSession::legacy_only(bool on) { fusb302::legacy_only(on); }
@@ -1484,6 +1510,19 @@ void ChargerTestPage::bar() {
 void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
     draw_footer_cached(ctx_.content, tone, text, foot_);
 }
+constexpr int kFooterBandH = 240 - kFooterY;   // the footer band: y222..239
+// The footer's signature (tone + text; never 0): the same value whoever painted it, so a repaint finds its words already there.
+static uint32_t footer_sig(FooterTone tone, std::string_view text) {
+    return mix_u32(mix(mix_init(), text), static_cast<uint32_t>(tone)) | 1u;
+}
+// A handshake window is about to open (ChargerTestSession::request_fc, before fctrig::start): paint the footer line that says
+// why the screen will be still, and remember it as painted so the page does not repaint it from inside the window.
+void ChargerTestPage::announce(const char* words) {
+    if (stage_ != Stage::Running || !laid_) return;
+    const std::string_view text(words);
+    foot(FooterTone::Info, text);
+    foot_sig_ = footer_sig(FooterTone::Info, text);
+}
 
 // The footer of the stage (no key names: the strip says what the keys do). Returns its tone; a message takes it on every stage.
 [[gnu::noinline]] FooterTone ChargerTestPage::footer_line(StrBuf<32> &f) {
@@ -1556,6 +1595,7 @@ void ChargerTestPage::foot(FooterTone tone, std::string_view text) {
         if (runner_.state() == ct::State::Unsafe) { f.put("Unplug; verify measured 5V"); return FooterTone::Error; }
         if (runner_.reason() != ct::Reason::None) { f.put(ct::refusal_words(runner_.reason())); return FooterTone::Caution; }
         if (steps.empty()) { f.put("Starting"); return FooterTone::Info; }
+        if (s_.fc_words_ && fctrig::paint_critical()) { f.put(s_.fc_words_); return FooterTone::Info; }   // the window the screen sits out
         unsigned i, n;
         const char *unit;
         unit_progress(runner_, std::min(runner_.index(), steps.size() - 1), i, n, unit);
@@ -1878,7 +1918,6 @@ int follow_line(const result_layout::Layout &l, std::span<const result_layout::L
 }
 // The pixels one update may still paint (Running, a step in flight). An item that does not fit stays dirty and paints on a
 // later tick. (The grid, whose rows can exceed the cap, is admitted separately: alone, with kFlightRowPx.)
-constexpr int kFooterBandH = 240 - kFooterY;   // the footer band: y222..239
 struct Budget {
     int cap;
     int spent = 0;
@@ -2200,7 +2239,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     {
         StrBuf<32> f;
         const FooterTone tone = footer_line(f);
-        const uint32_t sig = mix_u32(mix(mix_init(), f.view()), static_cast<uint32_t>(tone)) | 1u;
+        const uint32_t sig = footer_sig(tone, f.view());
         if (sig != foot_sig_ && bg.admit(c.w * kFooterBandH)) {
             foot_sig_ = sig;
             foot(tone, f.view());

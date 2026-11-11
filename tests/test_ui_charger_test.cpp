@@ -2874,8 +2874,10 @@ static unsigned pending_ink_above(int y) {
         for (int x = kGridCellsX; x < 224; ++x) n += g_panel[yy * LCD_WIDTH + x] == kFaint;
     return n;
 }
+static std::string_view handshake_words(int proto);   // below: the footer line a handshake row announces
 // In flight a tick paints at most the budget: kFlightPx for the items together, kFlightRowPx for one grid row on an otherwise
-// idle tick. Between steps (no step in flight) there is no cap.
+// idle tick. Between steps (no step in flight) there is no cap. The one exception is the tick that starts a handshake row: it
+// also paints the footer line naming the window (kAnnouncePx), which is not counted here.
 static void test_a_row_in_flight_paints_inside_the_budget() {
     Ui ui; start_all_run(ui);
     uint32_t now = 1500; unsigned flight_ticks = 0, max_px = 0, settled_ticks = 0, max_settled_grid = 0, max_settled_px = 0;
@@ -2883,9 +2885,12 @@ static void test_a_row_in_flight_paints_inside_the_budget() {
     std::vector<uint16_t> before(LCD_WIDTH * LCD_HEIGHT);
     for (; now <= 60000 && ui.charger_test_busy(); now += 100) {
         std::copy_n(g_panel, before.size(), before.begin());
-        const unsigned px0 = g_lcd_pixels;
+        const unsigned px0 = g_lcd_pixels, starts0 = static_cast<unsigned>(g_stub.fc_starts);
         ui.tick(now);
-        const unsigned px = g_lcd_pixels - px0;
+        // the tick that starts a handshake row also paints its footer line (ChargerTestPage::kAnnouncePx), once
+        const unsigned total = g_lcd_pixels - px0;
+        const unsigned announce = static_cast<unsigned>(g_stub.fc_starts) != starts0 && !handshake_words(g_stub.fc_proto).empty() ? ChargerTestPage::kAnnouncePx : 0;
+        const unsigned px = total > announce ? total - announce : 0;
         const auto& r = ui.charger_test_results();
         if (ui.charger_test_stage() != kRunningStage || !r.quiet()) { prev_rev = ~0u; same = 0; continue; }
         ++flight_ticks;
@@ -2995,6 +3000,64 @@ static void test_a_started_row_that_ends_as_a_skip_still_logs_its_gap() {
     CHECK_EQ(ui.charger_test_results().steps()[skipped].verdict, ct::Verdict::Skip);
     CHECK_EQ(rows[skipped].seen, true);                 // the skipped row that ran has its gap line
     CHECK_EQ(rows[skipped].has_blocked, true);
+}
+// A screen that stops for the length of a handshake says why first: one Info footer line, painted before the engine starts (never
+// inside the window it names), on screen for the whole window, and gone once the window ends.
+static std::string_view handshake_words(int proto) {
+    switch (proto) {
+    case int(k2::fc::Proto::Qc2): return "QC2: handshake";
+    case int(k2::fc::Proto::Qc3): return "QC3: handshake";
+    case int(k2::fc::Proto::Qc3Plus): return "QC3+: handshake";
+    case int(k2::fc::Proto::Vooc): case int(k2::fc::Proto::SuperVooc): case int(k2::fc::Proto::SuperVooc65): return "VOOC: listening";
+    case int(k2::fc::Proto::Ufcs): return "UFCS: handshake";
+    case int(k2::fc::Proto::Vivo): return "VIVO: handshake";
+    default: return {};
+    }
+}
+// footer_says draws the words onto the panel as it compares, so a second look would find its own ink: look without touching.
+static bool footer_shows(std::string_view text) {
+    std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> keep;
+    std::copy_n(g_panel, keep.size(), keep.begin());
+    const bool shown = footer_says(text, kText);
+    std::copy_n(keep.begin(), keep.size(), g_panel);
+    return shown;
+}
+static unsigned g_start_calls, g_start_with_words;   // engine starts of a handshake protocol, and how many found the words on screen
+static void count_words_at_start(int proto) {
+    const auto w = handshake_words(proto);
+    if (w.empty()) return;
+    ++g_start_calls;
+    g_start_with_words += footer_shows(w);
+}
+static void test_a_handshake_window_says_why_the_screen_is_still() {
+    Ui ui; start_all_run(ui);
+    g_start_calls = g_start_with_words = 0;
+    g_stub.fc_open_on_start = true; g_stub.fc_start_hook = count_words_at_start;
+    bool seen[11] = {};
+    std::string_view words; size_t row = ~size_t(0); uint32_t opened = 0, closed = 0;
+    unsigned in_window = 0, with_words = 0, after = 0, after_gone = 0, windows = 0;
+    for (uint32_t now = 1500; now <= 400000 && ui.charger_test_busy(); now += 100) {
+        const unsigned starts0 = g_stub.fc_starts;
+        ui.tick(now);
+        const auto& r = ui.charger_test_results();
+        const bool quiet = ui.charger_test_stage() == kRunningStage && r.quiet();
+        if (g_stub.fc_starts != starts0 && g_stub.fc_critical) {
+            opened = now; closed = 0; row = r.index(); words = handshake_words(g_stub.fc_proto); seen[g_stub.fc_proto] = true; ++windows;
+        }
+        if (g_stub.fc_critical && quiet && !words.empty()) {
+            if (now - opened >= 800) { g_stub.fc_critical = false; closed = now; }   // the window ends
+            else { ++in_window; with_words += footer_shows(words); }
+        } else if (closed && quiet && r.index() == row && !words.empty() && now - closed <= 500 && now > closed) {
+            ++after; after_gone += !footer_shows(words);   // the window is over: the footer is the step's own again
+        }
+    }
+    g_stub.fc_critical = false; g_stub.fc_open_on_start = false; g_stub.fc_start_hook = nullptr;
+    CHECK_EQ(seen[int(k2::fc::Proto::Qc2)], true); CHECK_EQ(seen[int(k2::fc::Proto::Qc3)], true);
+    CHECK_EQ(windows > 2, true); CHECK_EQ(in_window > 5, true);
+    CHECK_EQ(with_words, in_window);                  // every blocked tick shows the words
+    CHECK_EQ(g_start_calls > 2, true);
+    CHECK_EQ(g_start_with_words, g_start_calls);      // painted before the engine started, not from inside the window
+    CHECK_EQ(after > 0, true); CHECK_EQ(after_gone > 0, true);
 }
 // The grid follows the step under test: the Running cell is on screen a few ticks after every step starts, with no scrolling.
 static void test_the_running_grid_follows_the_step() {
@@ -4041,6 +4104,7 @@ int main() {
     test_the_plan_is_written_in_pieces_before_the_first_request(); test_a_busy_link_defers_the_plan_but_not_for_ever(); test_a_cancel_during_the_plan_leaves_no_run(); test_a_replan_is_polled_and_done_before_the_first_phase_marker();
     test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step();
     test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
+    test_a_handshake_window_says_why_the_screen_is_still();
     test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick();
     test_a_manual_scroll_of_the_running_grid_holds_then_resumes();
     test_resume_self_and_bus_powered_present_no_rd();

@@ -444,8 +444,10 @@ namespace k2::fctrig {
 // Host stand-in for the trigger driver: idle, never running, records what the UI asked for.
 static Status g_status{fc::State::Idle, fc::Proto::Qc2, fc::Fail::None, 0, 0};
 Fail start(Proto proto, int mv, bool confirmed, bool allow_inline, int, int) {
+    if (g_stub.fc_start_hook) g_stub.fc_start_hook(int(proto));
     g_stub.fc_starts++;
     g_stub.fc_start_mv = mv; g_stub.fc_confirmed = confirmed;
+    if (!g_stub.fc_start_fail && g_stub.fc_open_on_start) g_stub.fc_critical = true;
     if (!g_stub.fc_start_fail) {
         g_stub.fc_proto = int(proto); g_stub.fc_target_mv = mv;
         g_stub.fc_state = int(g_stub.fc_answers ? State::Active : State::Negotiating);

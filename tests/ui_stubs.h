@@ -156,6 +156,8 @@ struct StubState {
     int fc_state = 0;            // k2::fc::State returned by the fctrig stub
     k2::fc::Caps fc_caps;        // fctrig::caps() of the stub: what the SCP / UFCS sessions read
     bool fc_critical = false;    // fctrig::paint_critical(): an engine window the idle hook does not service
+    bool fc_open_on_start = false;   // fctrig::start opens an engine window (fc_critical) at once, as an HVDCP handshake does
+    void (*fc_start_hook)(int proto) = nullptr;   // called at the top of fctrig::start: what the screen holds as the engine is about to start
     bool fc_answers = false;    // fctrig::start reaches Active (the charger answered); false stays Negotiating forever
     int fc_proto = 0, fc_target_mv = 0;   // the fctrig stub's status protocol and target
     bool fc_scanning = false;    // fctrig::scan_running
