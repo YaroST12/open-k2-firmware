@@ -15,6 +15,11 @@
 // A save replaces the file atomically (littlefs commit + rename), so a power cut leaves the old card or the
 // new one. A card keeps its number (id), run count and name through re-tests; a rename keeps its place in
 // the order. kMaxCards = 64 live cards; saving a new charger when full drops the one with the lowest stamp.
+// More files than that (cards an older build could not read came back): the index keeps the 64 highest stamps
+// whatever the name order, the rest are never listed, and the next save of a new charger removes them with the
+// lowest stamp, so the count comes down to 64; nothing is deleted at boot or by a read. Two files with one number:
+// the newer card (higher stamp) keeps it, the older is shown with one above the highest number in use, written
+// only by its own next save.
 // A run whose results are identical to the stored card (same_results(), rule in report_card.hpp) is not stored
 // as a second copy: the stored card gets its repeat count (times) and the time of the latest repeat, and the
 // file is rewritten with a new stamp, so the charger still counts as the most recently tested.
@@ -109,6 +114,9 @@ public:
                 unsigned oldest = 0;
                 for (unsigned i = 1; i < n_; ++i) if (idx_[i].stamp < idx_[oldest].stamp) oldest = i;
                 if (Err e = drop(idx_[oldest].fp); e != Err::Ok) return e;
+                // and so do the files the index left out (older than every listed card), so the count comes down to the cap
+                for (unsigned k = 0; k < n_left_; ++k)
+                    if (Err e = drop(left_[k]); e != Err::Ok && e != Err::NotFound) return e;
             }
             std::uint16_t top = 0;
             for (unsigned i = 0; i < n_; ++i) if (idx_[i].card_no > top) top = idx_[i].card_no;
@@ -142,9 +150,17 @@ private:
     struct Ent { std::uint32_t fp = 0, stamp = 0; std::uint16_t card_no = 0; };
     struct Order { std::array<std::uint8_t, kMaxCards> at{}; unsigned n = 0; };
 
+    // Card files the index left out (more than kMaxCards on the volume), remembered for the next eviction. A save removes
+    // these; more than kMaxLeft are removed over several saves.
+    static constexpr unsigned kMaxLeft = 8;
+    // Card names per directory walk of the index build (the walk is repeated past the first kScan names).
+    static constexpr unsigned kScan = kMaxCards;
+
     fs::Fs& fs_;
     mutable std::array<Ent, kMaxCards> idx_{};
     mutable unsigned n_ = 0;
+    mutable std::array<std::uint32_t, kMaxLeft> left_{};
+    mutable unsigned n_left_ = 0;
     mutable bool valid_ = false;
     static constexpr bool known_size(std::size_t n) { return n == kFileSize || n == kFileSizeV9 || n == kFileSizeV8 || n == kFileSizeV7 || n == kFileSizeV6 || n == kFileSizeV5 || n == kFileSizeV4 || n == kFileSizeV3; }
     static bool parse_name(const char* n, std::uint32_t& fp) {
@@ -179,30 +195,69 @@ private:
         if (!read(fp, b)) return false;
         // Old v3/v4 payloads are zero-padded to kPayload; decode migrates them and migrate_to_current
         // raises the in-memory card to the current format (fields the old format lacked stay zeroed)
-        return decode_card({b.data() + 8 + 4, kPayload}, c) && (migrate_to_current(c), true) && c.id.fp == fp;
+        if (!decode_card({b.data() + 8 + 4, kPayload}, c) || c.id.fp != fp) return false;
+        migrate_to_current(c);
+        // The number the index gives it (renumber()), which the card's next save stores
+        for (unsigned i = 0; i < n_; ++i) if (idx_[i].fp == fp) c.card_no = idx_[i].card_no;
+        return true;
     }
     std::uint32_t stamp_of(std::uint32_t fp) const {
         for (unsigned i = 0; i < n_; ++i) if (idx_[i].fp == fp) return idx_[i].stamp;
         return 1;
     }
 
+    // Builds the index from every card file: the kMaxCards highest stamps whatever the name order (littlefs lists by
+    // name), the rest remembered in left_ for the next eviction. Reads only: nothing is deleted or rewritten here.
     void ensure() const {
         if (valid_) return;
         n_ = 0;
-        std::array<std::uint32_t, kMaxCards> fps{};
-        unsigned nf = 0;
-        fs_.list(kDir, [&](const fs::Info& i) {
-            std::uint32_t fp;
-            // Accept every card file size ever written (v3 158 ... v9 228, current 264 bytes; known_size)
-            if (i.dir || !known_size(i.size) || !parse_name(i.name, fp)) return true;
-            if (nf < fps.size()) fps[nf++] = fp;
-            return nf < fps.size();
-        });
-        for (unsigned k = 0; k < nf; ++k) {
-            Ent e;
-            if (read_entry(fps[k], e)) idx_[n_++] = e;
+        n_left_ = 0;
+        for (unsigned skip = 0;;) {
+            std::array<std::uint32_t, kScan> fps{};
+            unsigned nf = 0, seen = 0;
+            fs_.list(kDir, [&](const fs::Info& i) {
+                std::uint32_t fp;
+                // Accept every card file size ever written (v3 158 ... v9 228, current 264 bytes; known_size)
+                if (i.dir || !known_size(i.size) || !parse_name(i.name, fp)) return true;
+                if (seen++ < skip) return true;
+                fps[nf++] = fp;
+                return nf < fps.size();
+            });
+            for (unsigned k = 0; k < nf; ++k) {
+                Ent e;
+                if (read_entry(fps[k], e)) keep(e);
+            }
+            if (nf < fps.size()) break;
+            skip += nf;
         }
+        renumber();
         valid_ = true;
+    }
+    // One entry into the index: while it is full, the lowest stamp of the index and e is left out.
+    void keep(const Ent& e) const {
+        if (n_ < kMaxCards) { idx_[n_++] = e; return; }
+        unsigned lo = 0;
+        for (unsigned i = 1; i < n_; ++i) if (idx_[i].stamp < idx_[lo].stamp) lo = i;
+        std::uint32_t out = e.fp;
+        if (e.stamp > idx_[lo].stamp) { out = idx_[lo].fp; idx_[lo] = e; }
+        if (n_left_ < kMaxLeft) left_[n_left_++] = out;
+    }
+    // Two files with one card number (an older build handed the number out again while it could not see a file): the
+    // newer card keeps it, an older one is shown with one above the highest number in use. In RAM only: the card's next
+    // save stores it (load() hands the index number out).
+    void renumber() const {
+        std::uint16_t top = 0;
+        for (unsigned i = 0; i < n_; ++i) if (idx_[i].card_no > top) top = idx_[i].card_no;
+        const Order o = order();
+        for (unsigned i = 1; i < o.n; ++i) {
+            Ent& e = idx_[o.at[i]];
+            for (unsigned j = 0; j < i; ++j)
+                if (idx_[o.at[j]].card_no == e.card_no) {
+                    top = std::uint16_t(top + 1) ? std::uint16_t(top + 1) : top;
+                    e.card_no = top;
+                    break;
+                }
+        }
     }
     // One card file of the index build: reads the file and decodes it into e. noinline on purpose: the
     // 210-byte file buffer and the decoded Card live on this frame only — ensure() runs under every
