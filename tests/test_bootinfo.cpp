@@ -17,8 +17,8 @@ using namespace k2::bootinfo;
 
 static Snapshot plus_boot() {
     Snapshot s;
-    std::strcpy(s.fw, "1.0");
-    std::strcpy(s.git, "a1b2c3d-dirty");
+    std::strcpy(s.fw, "1.0.0-435-a1b2c3d4-dirty");
+    std::strcpy(s.git, "v1.0-435-ga1b2c3d4-dirty");
     s.proto = 1;
     s.mode = bootmode::Mode::PlusRdCc2;
     s.keys = bootmode::kPlus;
@@ -49,9 +49,9 @@ int main() {
     CHECK_EQ(n, std::strlen(buf));
     CHECK(n <= kQrMax);
     // The firmware identity comes first, the same strings PING answers (version, git describe with -dirty, proto).
-    CHECK(t.starts_with("K2B1 fw=1.0 g=a1b2c3d-dirty p=1 t=4321 vb=5012 c1=3290 c2=0 pl=1 m=plus "));
-    CHECK(field(t, "fw") == "1.0");
-    CHECK(field(t, "g") == "a1b2c3d-dirty");
+    CHECK(t.starts_with("K2B1 fw=1.0.0-435-a1b2c3d4-dirty g=v1.0-435-ga1b2c3d4-dirty p=1 t=4321 vb=5012 c1=3290 c2=0 pl=1 m=plus "));
+    CHECK(field(t, "fw") == "1.0.0-435-a1b2c3d4-dirty");
+    CHECK(field(t, "g") == "v1.0-435-ga1b2c3d4-dirty");
     CHECK(field(t, "p") == "1");
     CHECK(field(t, "m") == "plus");
     CHECK(field(t, "k") == "8");
@@ -141,7 +141,18 @@ int main() {
         const std::size_t len = format(s, tiny);
         CHECK(len <= 19);
         CHECK_EQ(tiny[len], 0);
-        CHECK(std::string_view(tiny, len).starts_with("K2B1 fw=1.0 g=a1b2"));
+        CHECK(std::string_view(tiny, len).starts_with("K2B1 fw=1.0.0-435"));
+    }
+    // The version string the build stamps (up to 31 characters) is kept whole by the snapshot, not cut like the old 11.
+    {
+        Snapshot p = plus_boot();
+        const char* longest = "15.15.255-99999-123456789-dirty";      // 31 characters: a 9-digit hash after 99999 commits
+        CHECK_EQ(std::strlen(longest), sizeof p.fw - 1);
+        std::strcpy(p.fw, longest);
+        char b[kQrMax + 1];
+        const std::string_view u(b, format(p, b));
+        CHECK(field(u, "fw") == longest);
+        CHECK(field(u, "g") == "v1.0-435-ga1b2c3d4-dirty");
     }
     // A long git-describe string (tag + distance + hash + -dirty) is kept whole, the identity never shrinks.
     {

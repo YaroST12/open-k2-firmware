@@ -7,8 +7,8 @@ description: Build open_k2 in the Docker toolchain image, optionally through the
 
 inputs:
   version:
-    description: "Firmware version stamped into the image and the .k2 container (K2_FW_VERSION, major.minor, each 0-15)"
-    default: "1.0"
+    description: "Override for K2_FW_VERSION. Empty (the default): the Makefile derives <major>.<minor>.<patch>-<iteration>-<hash> from the newest v* tag (tools/fw_version.py)"
+    default: ""
   gate:
     description: "true: run make gate (-Werror build, invariants, stack, map, ids, host tests, size, K2_NET=1 variant); false: plain make docker-build"
     default: "true"
@@ -43,10 +43,11 @@ runs:
     - name: Build
       shell: bash
       env:
-        K2_FW_VERSION: ${{ inputs.version }}
+        VERSION_OVERRIDE: ${{ inputs.version }}
         HOST_CXX: g++-14
         HOST_CC: gcc-14
       run: |
+        if [ -n "$VERSION_OVERRIDE" ]; then export K2_FW_VERSION="$VERSION_OVERRIDE"; else export K2_FW_VERSION="$(python3 tools/fw_version.py)"; fi
         export K2_GIT="$(git describe --always --dirty)"
         echo "firmware ${K2_FW_VERSION}, git ${K2_GIT}"
         if [ "${{ inputs.gate }}" = "true" ]; then make gate; else make docker-build; fi

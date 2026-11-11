@@ -35,9 +35,11 @@ MAKEFLAGS += -j$(K2_J)
 
 # Build identification shown by the remote PING command. Computed on the host and passed into
 # the Docker build (the container has no git view of the worktree); only version.o depends on it.
-K2_FW_VERSION ?= 1.0
+# K2_FW_VERSION is ONE string, `<major>.<minor>.<patch>-<iteration>-<hash>[-dirty]` (tools/fw_version.py: the newest
+# v* tag, the commit count since it, the short hash); K2_GIT stays the raw `git describe` for traceability.
+K2_FW_VERSION ?= $(shell $(PYTHON) tools/fw_version.py)
 K2_GIT ?= $(shell git describe --always --dirty 2>/dev/null || echo unknown)
-GIT_STAMP = $(BUILD_DIR)/.git-$(K2_GIT)
+GIT_STAMP = $(BUILD_DIR)/.git-$(K2_GIT)-$(K2_FW_VERSION)
 # A missing identity stamp must rebuild version.o, even when .SECONDARY keeps host objects.
 .NOTINTERMEDIATE: $(GIT_STAMP)
 

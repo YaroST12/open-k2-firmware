@@ -33,6 +33,7 @@ import zipfile
 import k2_lock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import logdb  # noqa: E402  K2LOG msg#id lines -> text (tools/logdb.py)
+import fw_version  # noqa: E402  the version string and its major.minor nibbles (tools/fw_version.py)
 
 # --- Hardware & Protocol Constants ---
 VID = 0x0716
@@ -58,6 +59,12 @@ SIG_OFFSET = 2064                                    # 0x08004010: the model sig
 K200 = b"K200"
 MARKER_OFFSET = 3072  # 0x08003800 + 3072 = 0x08004400
 COMMIT_MARKER = b"\xfe\xff\xff\xff"
+# The full firmware version string (`1.0.0-435-26b245ac`): 48 bytes at the very start of .text, 0x08004404, "K2FW" then NUL
+# padded text (src/core/version.cpp). It sits in code space, so the bootloader never looks at it; the one-byte
+# major.minor word at 0x08004000 stays what the bootloader reads. Firmware from before the record has no "K2FW" there.
+FWID_OFFSET = 3076
+FWID_SIZE = 48
+FWID_MAGIC = b"K2FW"
 K2_GUID = uuid.UUID("5a3f8522-366b-46cc-aacc-dbfbe2fee02a")
 
 # 256-byte S-box decoding table for .k2 container
@@ -374,6 +381,27 @@ class Protocol:
         return result
 
 
+def fwid_text(record):
+    """The version string of a firmware-id record (FWID_SIZE bytes read at FWID_OFFSET), or None when the record is
+    not there (old firmware, erased flash) or does not hold printable text."""
+    if record is None or len(record) < len(FWID_MAGIC) + 1 or bytes(record[:len(FWID_MAGIC)]) != FWID_MAGIC:
+        return None
+    body = bytes(record[len(FWID_MAGIC):FWID_SIZE]).split(b"\x00", 1)[0]
+    if not body or not all(0x20 < c < 0x7F for c in body):
+        return None
+    return body.decode("ascii")
+
+
+def version_label(ver_byte, record):
+    """The version to show for an image: the full string of its firmware-id record, else major.minor from the
+    bootloader's version byte (firmware from before the record)."""
+    return fwid_text(record) or f"{ver_byte >> 4}.{ver_byte & 15}"
+
+
+def upgrade_line(old, new):
+    return f"Device upgraded from v{old} to v{new}"
+
+
 def recovery_app(app: bytes):
     """The application a recovery container carries, and whether the model signature had to be put back.
 
@@ -456,8 +484,7 @@ class Firmware:
         if not (reset & 1) or not (APP_START <= (reset & ~1) < APP_START + size):
             raise ValueError(f"Reset vector 0x{reset:08X} outside flash application range")
 
-        ver_byte = app[2048]
-        ver_str = f"{ver_byte >> 4}.{ver_byte & 15}"
+        ver_str = version_label(app[2048], app[FWID_OFFSET:FWID_OFFSET + FWID_SIZE])
         return cls(bytes(raw), app, rel_date.isoformat(), ver_str, model)
 
     @classmethod
@@ -483,14 +510,10 @@ class Firmware:
             buf.extend(b"\xff" * (4 - (len(buf) % 4)))
 
         # Version byte at offset 2048
+        # (version_str may be the full 1.0.0-435-26b245ac: only its major.minor fit the byte)
         if buf[2048] == 0xFF:
-            try:
-                parts = version_str.split(".")
-                major = int(parts[0]) & 0x0F
-                minor = int(parts[1]) & 0x0F if len(parts) > 1 else 0
-                buf[2048] = (major << 4) | minor
-            except Exception:
-                buf[2048] = 0x10
+            major, minor = fw_version.major_minor(version_str)
+            buf[2048] = (major << 4) | minor
 
         # Commit marker offset must be uncommitted (0xFFFFFFFF) in package
         buf[MARKER_OFFSET:MARKER_OFFSET + 4] = b"\xff\xff\xff\xff"
@@ -585,11 +608,12 @@ class K2Updater:
 
         ver_byte = self.protocol.read_memory(APP_START + 2048, 1)[0]
         marker = self.protocol.read_marker(APP_START + MARKER_OFFSET)
+        record = self.protocol.read_memory(APP_START + FWID_OFFSET, FWID_SIZE)
 
         return Identity(
             boot_strings=strings,
             info_sha256=hashlib.sha256(info).hexdigest(),
-            current_version=f"{ver_byte >> 4}.{ver_byte & 15}",
+            current_version=version_label(ver_byte, record),
             current_marker_hex=marker.hex()
         )
 
@@ -686,10 +710,9 @@ class K2Updater:
             app = full_flash[APP_START - FLASH_START:APP_LIMIT - FLASH_START]
             if len(full_flash) > NVRAM_START - FLASH_START:
                 (dest_dir / "native_nvram.bin").write_bytes(full_flash[NVRAM_START - FLASH_START:])
-            ver_byte = app[2048]
             ident = replace(
                 ident,
-                current_version=f"{ver_byte >> 4}.{ver_byte & 15}",
+                current_version=version_label(app[2048], app[FWID_OFFSET:FWID_OFFSET + FWID_SIZE]),
                 current_marker_hex=app[MARKER_OFFSET:MARKER_OFFSET + 4].hex()
             )
 
@@ -1121,7 +1144,10 @@ def build_parser():
     p_pack = subparsers.add_parser("pack", help="Pack raw application binary (.bin) into .k2 container")
     p_pack.add_argument("bin_file", help="Path to raw application .bin")
     p_pack.add_argument("k2_file", help="Destination path for .k2 container")
-    p_pack.add_argument("--version", default="1.0", help="Firmware version string (default: 1.0)")
+    p_pack.add_argument("--version", default="1.0",
+                        help="Firmware version, e.g. 1.0.0-435-26b245ac (default: 1.0); only its major.minor go into the "
+                             "bootloader's version byte, and only when the image left that byte erased. The full string "
+                             "the package shows is the firmware's own record (see FWID_OFFSET)")
 
     # backup
     p_backup = subparsers.add_parser(
@@ -1267,7 +1293,7 @@ def run(args, log):
             ident = flash_with_backup(
                 updater, fw, Path(args.backup_dir) if args.backup_dir else default_backup_dir(),
                 no_backup=args.no_backup, auto_reboot=not args.no_reboot)
-            print(f"\nFlashing completed and verified! Device upgraded from v{ident.current_version} to v{fw.version}")
+            print(f"\nFlashing completed and verified! {upgrade_line(ident.current_version, fw.version)}")
 
             if args.monitor and not args.no_reboot:
                 transport.close()

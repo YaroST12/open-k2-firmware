@@ -24,8 +24,8 @@ using namespace k2;
 
 static bootinfo::Snapshot plus_boot() {
     bootinfo::Snapshot s;
-    std::strcpy(s.fw, "1.0");
-    std::strcpy(s.git, "fcb3128-dirty");
+    std::strcpy(s.fw, "1.0.0-435-fcb31281-dirty");
+    std::strcpy(s.git, "v1.0-435-gfcb31281-dirty");
     s.proto = 1;
     s.mode = bootmode::Mode::PlusRdCc2;
     s.keys = bootmode::kPlus;
@@ -142,7 +142,16 @@ static void test_timeline() {
 static void test_lines() {
     bootscreen::Lines l;
     bootscreen::format_lines(plus_boot(), 7, l);
-    CHECK(std::string(l.id) == "fw 1.0 fcb3128-dirty p1");
+    CHECK(std::string(l.id) == "fw 1.0.0-435-fcb31281-dirty p1");   // the version string carries the hash: no second git field
+    // The longest version the snapshot holds (31 characters), proto 255, still fits the panel's 40 characters.
+    bootinfo::Snapshot longest = plus_boot();
+    std::memset(longest.fw, 'v', sizeof longest.fw - 1);
+    longest.fw[sizeof longest.fw - 1] = '\0';
+    longest.proto = 255;
+    bootscreen::format_lines(longest, 1, l);
+    CHECK(std::strlen(l.id) <= 40);
+    CHECK(std::strlen(l.id) == 3 + (sizeof longest.fw - 1) + 5);
+    bootscreen::format_lines(plus_boot(), 7, l);
     CHECK(std::string(l.up) == "up 12.3 s  frame 7");
     CHECK(std::string(l.mode) == "plus  Rd CC2>CC1 at 650 ms");
     bootinfo::Snapshot p = plus_boot();
@@ -206,7 +215,7 @@ static void test_render() {
     CHECK(got_text == text);
     CHECK(got_record == record);
     CHECK(text.starts_with("K2:BI1:"));
-    CHECK(got_record.starts_with("K2B1 fw=1.0 g=fcb3128-dirty p=1 "));         // the firmware identity first
+    CHECK(got_record.starts_with("K2B1 fw=1.0.0-435-fcb31281-dirty g=v1.0-435-gfcb31281-dirty p=1 "));   // the firmware identity first
     // Black on white only inside the QR box, white all around it (the first frame clears the panel), a clean quiet zone.
     int stray = 0, quiet_bad = 0;
     for (int y = 0; y < p.box; y++)

@@ -603,3 +603,61 @@ test("isZip tells a ZIP from a .k2 container", () => {
   assert.equal(B.isZip(B.makeZip([{ name: "a", data: text("b") }], NOW)), true);
   assert.equal(B.isZip(u8(0xDE, 0xAD, 0xBE, 0xEF)), false);
 });
+
+// ---- the full version string (tools/k2_flasher.py FWID_*, src/core/version.cpp) ---------------------------
+
+const FULL = "1.0.0-435-26b245ac";
+const record = (txt, magic = "K2FW") => {
+  const r = new Uint8Array(B.FWID_SIZE);
+  for (let i = 0; i < magic.length; i++) r[i] = magic.charCodeAt(i);
+  for (let i = 0; i < txt.length; i++) r[4 + i] = txt.charCodeAt(i);
+  return r;
+};
+const appWithRecord = (txt, verByte = 0x10) => {
+  const app = new Uint8Array(3076 + B.FWID_SIZE).fill(0xFF);
+  app.set([0x00, 0x00, 0x02, 0x20, 0x01, 0x38, 0x00, 0x08], 0);
+  app[2048] = verByte;
+  if (txt !== null) app.set(record(txt), B.FWID_OFFSET);
+  return app;
+};
+
+test("the version record sits at the start of .text, 0x08004404", () => {
+  assert.equal(B.APP_START + B.FWID_OFFSET, 0x08004404);
+  assert.equal(B.FWID_SIZE, 48);
+});
+
+test("fwidText reads the record, and nothing else", () => {
+  assert.equal(B.fwidText(record(FULL)), FULL);
+  assert.equal(B.fwidText(record(FULL + "-dirty")), FULL + "-dirty");
+  assert.equal(B.fwidText(new Uint8Array(48).fill(0xFF)), null);
+  assert.equal(B.fwidText(new Uint8Array(48)), null);
+  assert.equal(B.fwidText(record("1.0", "K2FX")), null);
+  assert.equal(B.fwidText(record("")), null);
+  assert.equal(B.fwidText(record("\x01\x02abc")), null);
+  assert.equal(B.fwidText(u8(0x4B, 0x32, 0x46)), null);
+  assert.equal(B.versionLabel(0x10, record(FULL)), FULL);
+  assert.equal(B.versionLabel(0x10, new Uint8Array(48).fill(0xFF)), "1.0");       // old firmware: the nibbles
+});
+
+test("a package shows the full string when the image has the record, major.minor when it does not", () => {
+  assert.equal(B.Firmware.fromApp(appWithRecord(FULL), "2026-11-11").version, FULL);
+  assert.equal(B.Firmware.fromApp(appWithRecord(null, 0x27), "2026-11-11").version, "2.7");
+});
+
+test("fromApp with the full string puts only major.minor into an erased version byte", () => {
+  const app = appWithRecord(null); app[2048] = 0xFF;
+  assert.equal(B.Firmware.fromApp(app, "2026-11-11", FULL).app[2048], 0x10);
+  assert.equal(B.Firmware.fromApp(app, "2026-11-11", "1.2.3-0-abcdef12-dirty").app[2048], 0x12);
+  assert.equal(B.Firmware.fromApp(appWithRecord(FULL, 0x10), "2026-11-11", "3.4.0-1-abcdef12").app[2048], 0x10);   // never touches a set byte
+});
+
+test("backup() names the installed full version, and old firmware keeps its nibbles", async () => {
+  const { flash } = makeFlash();
+  flash.set(record(FULL), B.APP_START - B.FLASH_START + B.FWID_OFFSET);
+  const { link } = fakeBootloader({ flash });
+  const r = await link.backup({ appOnly: true, now: new Date("2026-11-11T10:00:00Z") });
+  assert.equal(r.manifest.identity.current_version, FULL);
+  assert.ok(r.zipName.startsWith("K2_BACKUP_" + FULL + "_"));
+  const old = fakeBootloader({ flash: makeFlash().flash }).link;
+  assert.equal((await old.backup({ appOnly: true, now: new Date("2026-11-11T10:00:00Z") })).manifest.identity.current_version, "2.7");
+});

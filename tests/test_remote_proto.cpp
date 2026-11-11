@@ -149,6 +149,21 @@ static void test_ping_long_git_string() {
     CHECK_EQ(std::string_view(reinterpret_cast<const char *>(&buf[5]), 13) == "cef22c4-dirty", true);
 }
 
+static void test_ping_full_version_string() {
+    // The version is one string `<major>.<minor>.<patch>-<iteration>-<hash>[-dirty]`; git stays the raw describe.
+    std::array<uint8_t, 64> buf{};
+    const std::string_view ver = "1.0.0-435-26b245ac-dirty";           // 24 characters
+    const std::string_view git = "v1.0-435-g26b245ac-dirty";           // 24 characters: exactly kPingGitLen
+    PingInfo p{1, git, ver};
+    const size_t n = encode_ping(buf, p);
+    CHECK_EQ(n, size_t(1 + 4 + kPingGitLen + ver.size()));
+    CHECK_EQ(std::string_view(reinterpret_cast<const char *>(&buf[5]), git.size()) == git, true);
+    CHECK_EQ(std::string_view(reinterpret_cast<const char *>(&buf[5 + kPingGitLen]), ver.size()) == ver, true);
+    // 29 characters is the most the 58-byte response payload holds after proto, uptime and git (version.cpp
+    // static_asserts the build's string to that).
+    CHECK_EQ(1 + 4 + kPingGitLen + 29, kMaxRspPayload);
+}
+
 static void test_button() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x02, 1, {2, 100, 0}), r), 1);
@@ -2269,6 +2284,7 @@ int main() {
     test_seq_echo();
     test_ping();
     test_ping_long_git_string();
+    test_ping_full_version_string();
     test_button();
     test_state();
     test_state_session_part();

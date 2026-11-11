@@ -10,7 +10,7 @@
  * 0x08004000: Firmware Version Word (Offset 2048)
  * 0x08004010: Model Identification Signature "K200" (Offset 2064, checked by bootloader)
  * 0x08004400: Bootloader DFU Commit Marker (Offset 3072)
- * 0x08004404: Application Code (.text, .rodata)
+ * 0x08004404: Application Code (.text, .rodata); its first 48 bytes are the "K2FW" version record (.fwid)
  */
 
 ENTRY(Reset_Handler)
@@ -53,6 +53,7 @@ SECTIONS
   .text 0x08004404 :
   {
     . = ALIGN(4);
+    KEEP(*(.fwid))          /* 48-byte "K2FW" version record at 0x08004404 (src/core/version.cpp) */
     *(.text)
     *(.text*)
     *(.rodata)

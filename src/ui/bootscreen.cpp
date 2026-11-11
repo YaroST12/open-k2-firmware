@@ -31,7 +31,7 @@ const char* rd_name(std::uint8_t pin) { return pin == 1 ? "CC1" : pin == 2 ? "CC
 }  // namespace
 
 void format_lines(const bootinfo::Snapshot& s, std::uint32_t frame, Lines& out) {
-    fmt::format(out.id, "fw %s %s p%u", s.fw, s.git, unsigned(s.proto));
+    fmt::format(out.id, "fw %s p%u", s.fw, unsigned(s.proto));   // the version string carries the hash; the raw git is in the QR line
     fmt::format(out.up, "up %u.%u s  frame %u", unsigned(s.t_ms / 1000), unsigned(s.t_ms % 1000 / 100), unsigned(frame));
     const char* m = s.mode == bootmode::Mode::PlusRdCc2 ? "plus" : s.mode == bootmode::Mode::OkRdCc1 ? "ok" : "plain";
     if (s.move.moved)

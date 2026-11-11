@@ -2153,7 +2153,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
     return guarded("ping", async function () {
       var p = await S.k2.ping(); S.ping = p; S.pingAt = Date.now();
       put("dv-fw", p.version); put("dv-git", p.git); put("dv-proto", String(p.proto));
-      var f = $("fw"); f.hidden = false; f.textContent = "fw " + p.version + " (" + p.git + ")";
+      var f = $("fw"); f.hidden = false; f.textContent = "fw " + p.version;
       if (S.st) put("dv-chip", S.st.chip + (S.st.pm_online ? "" : " (offline)"));
     }, true);
   }
@@ -2727,7 +2727,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = K2Proto;
       if (S.gen !== gen) return;
       S.ping = info; S.pingAt = Date.now(); S.timerStart = Date.now();
       put("dv-fw", info.version); put("dv-git", info.git); put("dv-proto", String(info.proto));
-      var fw = $("fw"); fw.hidden = false; fw.textContent = "fw " + info.version + " (" + info.git + ")";
+      var fw = $("fw"); fw.hidden = false; fw.textContent = "fw " + info.version;
       setEnabled(true); setStatus("connected", "ok");
       logAppend("[web] connected: proto " + info.proto + ", uptime " + (info.uptime_ms / 1000).toFixed(1) + " s", true);
       await runProbes(gen);

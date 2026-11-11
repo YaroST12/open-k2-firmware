@@ -38,7 +38,7 @@ Step-by-step hardware test procedures for every protocol and feature, with a res
 - **A release asset**: every release on the [Releases page](https://github.com/YaroST12/open-k2-firmware/releases) carries `open_k2.k2` (the container to flash), `open_k2.bin`, `open_k2.elf` and `SHA256SUMS`. Flash the `.k2` with the page above (file picker) or `python3 tools/k2_flasher.py flash open_k2.k2 --auto-dfu`.
 - **CI builds** of `main` and of pull requests are workflow artifacts (Actions > ci), not releases; the flasher page never offers them.
 
-Cut a release (maintainers): `git tag vX.Y && git push origin vX.Y`. `release.yml` runs the full gate with the version taken from the tag (`X.Y`, or `X.Y.Z`; major and minor 0 to 15, the container stores them in one byte), creates the GitHub Release with the assets and notes, and redeploys the Pages site so the flasher follows. One-time repo setup: Settings > Pages > Source: GitHub Actions.
+Cut a release (maintainers): `git tag vX.Y && git push origin vX.Y`. `release.yml` runs the full gate with the version string derived from the tag by `tools/fw_version.py` (`vX.Y` gives `X.Y.0-0-<hash>`, `vX.Y.Z` gives `X.Y.Z-0-<hash>`; builds after the tag read `X.Y.0-<commits since>-<hash>`; major and minor 0 to 15, the container stores them in one byte), creates the GitHub Release with the assets and notes, and redeploys the Pages site so the flasher follows. One-time repo setup: Settings > Pages > Source: GitHub Actions.
 
 ## Build
 

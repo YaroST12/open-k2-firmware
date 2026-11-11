@@ -26,6 +26,10 @@ var K2Boot = (function () {
   var MAX_CONTAINER = NVRAM_START - APP_START;   // erase runs in 2 KB sectors from APP_START over the container length
   var SIG_OFFSET = 2064, K200 = [0x4B, 0x32, 0x30, 0x30];   // model signature word at 0x08004010, checked by the bootloader
   var MARKER_OFFSET = 3072, COMMIT_MARKER = [0xFE, 0xFF, 0xFF, 0xFF];
+  // The full firmware version (1.0.0-435-26b245ac): 48 bytes at the start of .text, 0x08004404, "K2FW" + NUL padded text
+  // (src/core/version.cpp; same as tools/k2_flasher.py FWID_*). The bootloader never reads it; firmware from before it
+  // has no "K2FW" there and shows major.minor from the version byte.
+  var FWID_OFFSET = 3076, FWID_SIZE = 48, FWID_MAGIC = [0x4B, 0x32, 0x46, 0x57];
   var K2_GUID_LE = [34, 133, 63, 90, 107, 54, 204, 70, 170, 204, 219, 251, 226, 254, 224, 42];   // uuid bytes_le
   var CMD = { ERROR: 1, ACK: 2, HANDSHAKE: 3, END_SESSION: 4, BEGIN_SESSION: 5, ERASE: 8,
               WRITE: 9, READ_MARKER: 10, READ: 11, LOG: 21, LOG_RESET: 22, REBOOT: 23 };
@@ -112,6 +116,20 @@ var K2Boot = (function () {
   function xorReduce(b) { var x = 0; for (var i = 0; i < b.length; i++) x = (x ^ b[i]) >>> 0; return x; }
   function sum32(b) { var s = 0; for (var i = 0; i < b.length; i++) s = (s + b[i]) >>> 0; return s >>> 0; }
 
+  // The version text of a firmware-id record, or null when it is not there (old firmware, erased flash) or not text.
+  function fwidText(rec) {
+    if (!rec || rec.length < FWID_MAGIC.length + 1) return null;
+    var i, s = "";
+    for (i = 0; i < FWID_MAGIC.length; i++) if (rec[i] !== FWID_MAGIC[i]) return null;
+    for (i = FWID_MAGIC.length; i < Math.min(rec.length, FWID_SIZE) && rec[i] !== 0; i++) {
+      if (rec[i] <= 0x20 || rec[i] >= 0x7F) return null;
+      s += String.fromCharCode(rec[i]);
+    }
+    return s || null;
+  }
+  // The version to show: the record's full string, else major.minor from the bootloader's version byte.
+  function versionLabel(verByte, rec) { return fwidText(rec) || (verByte >> 4) + "." + (verByte & 15); }
+
   function Firmware(source, app, dateStr, version) {
     this.source = source; this.app = app; this.dateStr = dateStr; this.version = version;
   }
@@ -144,8 +162,7 @@ var K2Boot = (function () {
       throw new ProtocolError("Invalid Cortex-M stack pointer: 0x" + sp.toString(16));
     if (!(reset & 1) || !(APP_START <= (reset & ~1) && (reset & ~1) < APP_START + size))
       throw new ProtocolError("Reset vector 0x" + reset.toString(16) + " outside flash application range");
-    var verByte = app[2048];
-    return new Firmware(raw.slice(0), app, dateStr, (verByte >> 4) + "." + (verByte & 15));
+    return new Firmware(raw.slice(0), app, dateStr, versionLabel(app[2048], app.slice(FWID_OFFSET, FWID_OFFSET + FWID_SIZE)));
   };
 
   // Wraps a raw app binary (Cortex-M vector table at 0) into a .k2 container.
@@ -161,11 +178,12 @@ var K2Boot = (function () {
       buf = grown;
     }
     if (buf[2048] === 0xFF) {
-      var parts = versionStr.split(".");
-      var major = parseInt(parts[0], 10) & 0x0F;
-      var minor = parts.length > 1 ? (parseInt(parts[1], 10) & 0x0F) : 0;
-      if (isNaN(major)) major = 1;
-      buf[2048] = ((isNaN(major) ? 1 : major) << 4) | (isNaN(minor) ? 0 : minor);
+      // versionStr may be the full 1.0.0-435-26b245ac: only its major.minor fit the bootloader's byte
+      var parts = versionStr.replace(/^v/, "").split(/[.-]/);
+      var major = parseInt(parts[0], 10), minor = parts.length > 1 ? parseInt(parts[1], 10) : 0;
+      if (isNaN(major)) { major = 1; minor = 0; }
+      if (isNaN(minor)) minor = 0;
+      buf[2048] = ((major & 0x0F) << 4) | (minor & 0x0F);
     }
     buf[MARKER_OFFSET] = 0xFF; buf[MARKER_OFFSET + 1] = 0xFF; buf[MARKER_OFFSET + 2] = 0xFF; buf[MARKER_OFFSET + 3] = 0xFF;
     // Trim trailing 0xFF beyond MARKER_OFFSET + 4 (same rule as k2_flasher.py).
@@ -352,7 +370,8 @@ var K2Boot = (function () {
     if (!confirmed) throw new ProtocolError("Connected hardware not confirmed as K2: " + JSON.stringify(strings));
     var verByte = (await this.readMemory(APP_START + 2048, 1))[0];
     var marker = await this.readMarker(APP_START + MARKER_OFFSET);
-    return { bootStrings: strings, info: info, currentVersion: (verByte >> 4) + "." + (verByte & 15), currentMarker: hex(marker) };
+    var record = await this.readMemory(APP_START + FWID_OFFSET, FWID_SIZE);
+    return { bootStrings: strings, info: info, currentVersion: versionLabel(verByte, record), currentMarker: hex(marker) };
   };
 
   // Full flash sequence (tools/k2_flasher.py K2Updater.flash). progress(stage, cur, tot).
@@ -626,7 +645,7 @@ var K2Boot = (function () {
     var bootloader = flash.slice(0, APP_START - FLASH_START);
     var app = flash.slice(APP_START - FLASH_START, APP_LIMIT - FLASH_START);
     var nvram = flash.length > NVRAM_START - FLASH_START ? flash.slice(NVRAM_START - FLASH_START) : null;
-    ident.currentVersion = (app[2048] >> 4) + "." + (app[2048] & 15);
+    ident.currentVersion = versionLabel(app[2048], app.slice(FWID_OFFSET, FWID_OFFSET + FWID_SIZE));
     ident.currentMarker = hex(app.slice(MARKER_OFFSET, MARKER_OFFSET + 4));
 
     stage("backup-recovery");
@@ -684,6 +703,7 @@ var K2Boot = (function () {
     SECTOR_SIZE: SECTOR_SIZE, SECTOR_COUNT: SECTOR_COUNT, APP_LIMIT: APP_LIMIT, FS_START: FS_START,
     NVRAM_START: NVRAM_START, MAX_CONTAINER: MAX_CONTAINER, FLASH_END: FLASH_END, READ_CHUNK: READ_CHUNK,
     MARKER_OFFSET: MARKER_OFFSET, COMMIT_MARKER: COMMIT_MARKER, CMD: CMD,
+    FWID_OFFSET: FWID_OFFSET, FWID_SIZE: FWID_SIZE, fwidText: fwidText, versionLabel: versionLabel,
     DECODE_TABLE: DECODE_TABLE, ProtocolError: ProtocolError,
     buildFrame: buildFrame, parseFrame: parseFrame, isBootloaderFrame: isBootloaderFrame,
     crc32: crc32, makeZip: makeZip, readZip: readZip, isZip: isZip, recoveryFromBackupZip: recoveryFromBackupZip,

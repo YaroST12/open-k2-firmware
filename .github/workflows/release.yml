@@ -1,7 +1,8 @@
 # Cut a release: push a tag `vMAJOR.MINOR` (e.g. `git tag v1.2 && git push origin v1.2`; a third `.PATCH` part is accepted).
-# The firmware is built through the full gate with K2_FW_VERSION = the tag without its `v`, and a GitHub Release is
+# The firmware is built through the full gate; its version string is derived from the tag (tools/fw_version.py: on the
+# tag `v1.2` it reads `1.2.0-0-<hash>`), and a GitHub Release is
 # created with open_k2.k2, open_k2.bin, open_k2.elf and SHA256SUMS attached (release notes generated from the commits).
-# The container stores the version in one byte (two nibbles), so major and minor must each be 0-15; any other tag fails
+# The bootloader's version byte holds two nibbles, so major and minor must each be 0-15; any other tag fails
 # before the build. Pre-release tags (`v1.2-rc1`) are rejected for the same reason: the Pages flasher offers releases only.
 #
 # After the release exists, the last step starts pages.yml on `main` (`gh workflow run pages.yml --ref main`) so the
@@ -42,8 +43,7 @@ jobs:
 
       - uses: ./.github/actions/build-firmware
         with:
-          version: ${{ steps.ver.outputs.version }}
-          gate: "true"
+          gate: "true"                  # the version string is derived from the tag checked out (fetch-depth 0)
 
       - name: Create the release
         env:

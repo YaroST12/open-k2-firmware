@@ -152,6 +152,22 @@ class Decoders(unittest.TestCase):
         self.assertEqual(kr.decode_ping(payload),
                          {"proto": 1, "uptime_ms": 0x01020304, "git": "abc1234", "version": "1.0"})
 
+    def test_ping_new_firmware_full_version_and_raw_git(self):
+        # `version` is the one version string, `git` the raw describe (24 bytes, full: no NUL in the field)
+        payload = (bytes([1, 0, 0, 0, 0]) + b"v1.0-435-g26b245ac-dirty" + b"1.0.0-435-26b245ac-dirty")
+        self.assertEqual(kr.decode_ping(payload),
+                         {"proto": 1, "uptime_ms": 0, "git": "v1.0-435-g26b245ac-dirty", "version": "1.0.0-435-26b245ac-dirty"})
+
+    def test_ping_old_firmware_still_reads(self):
+        # firmware before the version string: version "1.0", git is the bare hash
+        payload = bytes([1, 0, 0, 0, 0]) + b"26b245ac".ljust(24, b"\x00") + b"1.0"
+        r = kr.decode_ping(payload)
+        self.assertEqual((r["version"], r["git"]), ("1.0", "26b245ac"))
+
+    def test_ping_text_shows_the_full_version(self):
+        r = {"proto": 1, "uptime_ms": 2000, "git": "v1.0-435-g26b245ac", "version": "1.0.0-435-26b245ac"}
+        self.assertEqual(kr.render("ping", r), "K2 firmware 1.0.0-435-26b245ac git v1.0-435-g26b245ac proto 1 uptime 2.0 s")
+
     def test_ping_keeps_a_dirty_hash(self):
         payload = bytes([1, 0, 0, 0, 0]) + b"cef22c4-dirty".ljust(24, b"\x00") + b"1.0"
         self.assertEqual(kr.decode_ping(payload)["git"], "cef22c4-dirty")

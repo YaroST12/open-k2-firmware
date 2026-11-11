@@ -38,7 +38,7 @@ inline Plan plan(int n) { return qrview::plan(n, kTextH); }
 
 // The three readable lines (each at most 40 characters, the panel's width in the 6 px font), NUL terminated.
 struct Lines {
-    char id[48];      // "fw 1.0 fcb3128-dirty p1": the same strings PING answers
+    char id[48];      // "fw 1.0.0-435-fcb31281-dirty p1": the version string PING answers (the hash is in it), then the proto
     char up[48];      // "up 12.3 s  frame 7"
     char mode[48];    // "plus  Rd CC2>CC1 at 650 ms" / "ok  Rd CC1, no move"
 };

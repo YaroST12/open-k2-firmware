@@ -51,8 +51,8 @@ struct Move {
 };
 
 struct Snapshot {
-    char fw[12] = {};                    // firmware version, as PING reports it (e.g. "1.0")
-    char git[24] = {};                   // build hash as PING reports it: `git describe --always --dirty`, so "...-dirty" when dirty
+    char fw[32] = {};                    // firmware version, as PING reports it ("1.0.0-435-26b245ac", "-dirty" when dirty; 31 characters fit)
+    char git[32] = {};                   // raw build id as PING reports it: `git describe --always --dirty`, so "...-dirty" when dirty
     std::uint8_t proto = 0;              // remote protocol number (PING's proto byte)
     bootmode::Mode mode = bootmode::Mode::Plain;
     std::uint8_t keys = 0;               // bootmode::kBack | kOk | kPlus seen at reset

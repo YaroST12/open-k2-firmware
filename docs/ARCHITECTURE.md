@@ -212,6 +212,32 @@ into silent `.bss` corruption. Four layers:
 (`extern "C"`) with their `section`/`used` attributes. `make gate` checks all of this and that the map has
 no `malloc`, `operator new` or `__cxa_*`. A wrong layout leaves the K2 in DFU.
 
+### 2.6 The firmware version string
+
+The version is ONE string, `<major>.<minor>.<patch>-<iteration>-<hash>`, for example `1.0.0-435-26b245ac`, with
+`-dirty` appended on a dirty tree. `tools/fw_version.py` derives it from `git describe --tags --long --always
+--dirty --match 'v[0-9]*'`: the newest `v*` tag (lightweight or annotated) normalised to three numbers (`v1.0` gives `1.0.0`, `v1.1` gives
+`1.1.0`, `v1.2.3` stays), the commit count since the tag, the short hash without git's `g`. With no usable tag it
+reads `0.0.0-0-<hash>`, with no git at all `0.0.0-0-unknown`. The Makefile calls the tool once (`K2_FW_VERSION`; an
+environment or command-line value wins; `make docker-build` forwards it because the container has no git view) and
+`src/core/version.cpp` bakes it into the image (`kFwVersion`, at most 29 characters, `static_assert`ed: that is what
+fits PING's 58-byte payload after proto, uptime and git). The raw `git describe --always --dirty` stays as `kGitHash`
+for traceability.
+
+Where it shows: PING (`version` is the full string, `git` the raw describe in 24 bytes, so the raw form is cut at 1000
+commits since the tag); the boot-screen line `fw <version> p<proto>` and the `K2B1 fw=<version> g=<git> p=<proto>`
+text (`bootinfo::Snapshot::fw` holds 31 characters); the web dashboard; the Python and WebHID flashers (installed
+version, "Device upgraded from vX to vY", backup names, `pack --version`); the msc drive README. Not carried: the
+report card's firmware token (a fixed 4-byte commit-hash token, `fw_hash(kGitHash)`), the QR log record and the
+stream hello (both carry the raw git).
+
+The bootloader reads only the one-byte `.meta_version` (major and minor nibbles, `0x10` for 1.0), which stays as it
+was. The full string also sits in a 48-byte record, `"K2FW"` + 44 NUL padded text bytes (`.fwid`,
+`src/core/version.cpp`), placed by `link.ld` first in `.text` at 0x08004404 (app offset 3076). It lies in code space,
+so the bootloader never looks at it; the flashers read it from a package and from the device (`FWID_OFFSET` in
+`tools/k2_flasher.py` and `webhid-flasher/k2boot.js`). Firmware from before the record has no `K2FW` there and is
+shown as `major.minor`.
+
 ## 3. Layers
 
 | Layer | Files (`include/k2/<group>/*.hpp` + `src/<group>/*.cpp` unless noted) | Notes |
@@ -624,7 +650,7 @@ Everything else (`pd_engine`, `pd_ext`, `pd_vdm`) decodes what is seen. Message 
 A charger-powered K2 with no USB has no log, and the K2LOG lines of the first seconds are gone before a host attaches, so the self-powered boot decision (which key, which Rd, whether the single Rd moved, whether the Ra went on for a cable identity: `ra=<0|1>:<verdict>` from `bootra::last()` and `fusb302::ra_active()`, rules in `include/k2/pd/boot_ra.hpp`) is kept as data and shown two ways. The collector `bootinfo::collect` (`src/core/bootinfo_hw.cpp`) reads only the drivers' own records (`fusb302::boot_record` / `boot_note_at`, `boottrace::move_record` / `sample_count`, `sysreset`, `adc`, `power`); the pure formatter `bootinfo::format` (`src/core/bootinfo.cpp`) turns the `Snapshot` into one ASCII line, at most 240 characters, that starts with the firmware identity (`K2B1 fw=<version> g=<git describe, -dirty when dirty> p=<remote proto>`, the strings PING answers) and carries the fields documented in `include/k2/core/bootinfo.hpp`. The name K2B1 is also the Black Box file header's magic (`.bbe`); the two never meet (one is a text prefix, the other a file header).
 
 - **Remote:** `BOOT_INFO` 0x35, `python3 tools/k2_remote.py bootinfo [--json]`. Request `part, off`; part 0 is the text in 48-byte chunks (the text is frozen at the first chunk so the chunks of one read agree), part 1 the first-seconds power samples (9 bytes each). The reply echoes part, off, total, count. The same ids are in `tools/web/k2proto.js`.
-- **LCD:** in a key-mode boot (`bootmode::self_powered`, which a marker's comeback is not: it has no key) `main` starts a `bootscreen::Controller`, but the screen appears only when the key that chose the mode stays down for `kShowAfterMs` (3 s) from the reset. A key released sooner (an ordinary PLUS or OK plug-in) ends the Controller silently and the normal UI is on the panel from the start: no QR, no 30 s takeover. The key picks the mode at reset either way, and until it is up its own button events (Long, Hold = the reboot gesture) are swallowed in `main`, the other keys work at once. The first frame is drawn by the main loop (never from the boot path, so the SWITCHES0 write and the move rule keep their timing). Once shown, while the key is held, one frame every 500 ms; after release the last frame stays 30 s, then `Ui::repaint` hands the panel back. A frame is the K2B1 text wrapped as a `qrshare` BootInfo frame (`K2:BI1:<base45>`, see `docs/QR_SHARE.md`) and drawn by `qrview` as a QR code (alphanumeric mode, level L, automatic mask, version <= 10, at least 3 px per module, a 4-module quiet zone, black on white, centred) with three lines under it: `fw <version> <git> p<proto>`, `up <s> s  frame <n>`, `<mode>  Rd <from>><to> at <ms> ms` or `Rd <pin>, no move`. The K2B1 text, the frame text, the QR workspace and one pixel line (about 2.3 KB) come from the scratch arena for one draw. While the screen is up the UI neither ticks nor takes buttons, so nothing paints over the code; a short BACK press closes it early, and a remote screenshot request closes it first (a capture repaints the UI's fields over the code). The web dashboard's screenshot does not know about the screen: it shows the UI underneath.
+- **LCD:** in a key-mode boot (`bootmode::self_powered`, which a marker's comeback is not: it has no key) `main` starts a `bootscreen::Controller`, but the screen appears only when the key that chose the mode stays down for `kShowAfterMs` (3 s) from the reset. A key released sooner (an ordinary PLUS or OK plug-in) ends the Controller silently and the normal UI is on the panel from the start: no QR, no 30 s takeover. The key picks the mode at reset either way, and until it is up its own button events (Long, Hold = the reboot gesture) are swallowed in `main`, the other keys work at once. The first frame is drawn by the main loop (never from the boot path, so the SWITCHES0 write and the move rule keep their timing). Once shown, while the key is held, one frame every 500 ms; after release the last frame stays 30 s, then `Ui::repaint` hands the panel back. A frame is the K2B1 text wrapped as a `qrshare` BootInfo frame (`K2:BI1:<base45>`, see `docs/QR_SHARE.md`) and drawn by `qrview` as a QR code (alphanumeric mode, level L, automatic mask, version <= 10, at least 3 px per module, a 4-module quiet zone, black on white, centred) with three lines under it: `fw <version> p<proto>` (the version string carries the hash; the raw git is in the K2B1 text), `up <s> s  frame <n>`, `<mode>  Rd <from>><to> at <ms> ms` or `Rd <pin>, no move`. The K2B1 text, the frame text, the QR workspace and one pixel line (about 2.3 KB) come from the scratch arena for one draw. While the screen is up the UI neither ticks nor takes buttons, so nothing paints over the code; a short BACK press closes it early, and a remote screenshot request closes it first (a capture repaints the UI's fields over the code). The web dashboard's screenshot does not know about the screen: it shows the UI underneath.
 - **Rate-limited log:** the `[PD] Source_Capabilities` K2LOG block of a source that repeats its caps every few hundred ms is logged once per 10 s per attach session (and at once on a change), with a count of the repeats held back (`pd::CapsLogGate`, `include/k2/pd/caps_log_gate.hpp`). The Black Box records every message regardless.
 
 Host tests: `tests/test_bootinfo.cpp` (format), `tests/test_bootscreen.cpp` (layout rule, timeline, lines, and the whole path text -> QR -> panel pixels -> an independent reader, `tests/qr_decode.hpp`, -> the same text), `tests/test_qr.cpp`, `tests/test_caps_log_gate.cpp`, `tests/test_remote_proto.cpp`. The screen as the host test renders it: `docs/ui_mockups/bootscreen.png`.
