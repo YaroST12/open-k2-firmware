@@ -75,6 +75,10 @@ const char* name(State s) {
     return "?";
 }
 
+const char* log_name(State s, Fail f) {
+    return s == State::Failed && f == Fail::Detected ? "detected" : name(s);
+}
+
 const char* name(Fail f) {
     switch (f) {
     case Fail::None: return "none";

@@ -471,9 +471,10 @@ void poll() {
     }
     if (g_engine.state() != g_last_state) {
         g_last_state = g_engine.state();
-        K2LOG("[FC] %s %s vbus=%dmV target=%dmV tries=%d%s%s\n", fc::name(g_engine.proto()), fc::name(g_last_state),
-                     g_engine.reached_mv(), g_engine.target_mv(), g_engine.vooc_tries(), g_last_state == State::Failed ? " reason=" : "",
-                     g_last_state == State::Failed ? fc::name(g_engine.fail()) : "");
+        const bool failure = fc::log_is_failure(g_last_state, g_engine.fail());
+        K2LOG("[FC] %s %s vbus=%dmV target=%dmV tries=%d%s%s\n", fc::name(g_engine.proto()),
+                     fc::log_name(g_last_state, g_engine.fail()), g_engine.reached_mv(), g_engine.target_mv(),
+                     g_engine.vooc_tries(), failure ? " reason=" : "", failure ? fc::name(g_engine.fail()) : "");
     }
 }
 

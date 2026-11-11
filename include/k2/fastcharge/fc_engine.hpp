@@ -48,6 +48,10 @@ inline constexpr std::size_t kVoocBurstSteps = 80, kVoocTrainSteps = 13 * 4 + 3;
 const char* name(Proto p);
 const char* name(State s);
 const char* name(Fail f);
+// The [FC] state line: a session that ends as Fail::Detected is a pass (the row reads "detected"), so its line says
+// `VOOC detected vbus=...` and carries no reason; a real failure stays `failed ... reason=<why>`.
+constexpr bool log_is_failure(State s, Fail f) { return s == State::Failed && f != Fail::Detected; }
+const char* log_name(State s, Fail f);
 
 // Everything the engine touches. The firmware glue (k2::fctrig) and the host fakes implement it;
 // the defaults do nothing so a test only overrides what it needs.

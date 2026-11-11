@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Engine tests: QC2 / QC3 / QC3+ against a fake HVDCP charger on a fake clock, and every safety rule.
 #include <cstdio>
+#include <cstring>
 
 #include "fc_fake.hpp"
 
@@ -1377,7 +1378,22 @@ static void service_hs_serves_only_the_qc_handshake() {
     }
 }
 
+// The [FC] state line (fctrig::poll): the detection pass reads "VOOC detected vbus=...", not "failed ... reason=detected",
+// because the row passes; a real failure keeps "failed" and its reason.
+static void state_log_words() {
+    const auto is = [](const char* a, const char* b) { return std::strcmp(a, b) == 0; };
+    CHECK(is(log_name(State::Failed, Fail::Detected), "detected"));
+    CHECK(!log_is_failure(State::Failed, Fail::Detected));
+    CHECK(is(log_name(State::Failed, Fail::NoResponse), "failed"));
+    CHECK(log_is_failure(State::Failed, Fail::NoResponse));
+    CHECK(is(log_name(State::Active, Fail::None), "active"));
+    CHECK(!log_is_failure(State::Active, Fail::None));
+    CHECK(is(log_name(State::Idle, Fail::Detected), "idle"));   // only a failed state turns into "detected"
+    CHECK(is(log_name(State::Negotiating, Fail::None), "negotiating"));
+}
+
 int main() {
+    state_log_words();
     paint_critical_follows_the_phase();
     service_hs_keeps_the_handshake_on_time_under_paints();
     service_hs_is_guarded_against_poll();
