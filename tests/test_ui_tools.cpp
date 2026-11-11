@@ -56,7 +56,7 @@ static void test_fc() {
 // Connection, Black Box, Report cards and Diag never block: Connection's own actions carry the inline confirm.
 static void test_always_ready_tools() {
     for (int t = 4; t < kToolCount; t++) {
-        if (t == 3) continue;
+        if (t == 3 || t == kToolLoopProbe) continue;   // the two that need the power monitor
         for (int mask = 0; mask < 32; mask++) {
             const Readiness r = tool_readiness(t, st(mask & 1, mask & 2, mask & 4, mask & 8, mask & 16 ? 5000 : 0), mask & 8);
             CHECK_EQ(int(r.level), int(ToolLevel::Ready));
@@ -70,7 +70,21 @@ static void test_cable_r() {
     CHECK_EQ(r.level == ToolLevel::Blocked, 1);
     CHECK_STR(r.tag, "NO PM");
     // Out-of-range tool numbers fall back to ready, not a crash.
-    CHECK_EQ(tool_readiness(9, st(false, false, false), true).level == ToolLevel::Ready, 1);
+    CHECK_EQ(tool_readiness(kToolCount, st(false, false, false), true).level == ToolLevel::Ready, 1);
+}
+
+// The loop probe reads everything through the power monitor: without one it is blocked with Cable R's tag, with one it is
+// ready whatever is on the ports (its own start refuses VBUS above 5.5 V).
+static void test_loop_probe_tool() {
+    CHECK_STR(tool_hint(kToolLoopProbe), "cable into own HID port");
+    for (int mask = 0; mask < 16; mask++) {
+        const SetupState s = st(mask & 1, mask & 2, mask & 4, mask & 8, mask & 8 ? 5000 : 0);
+        CHECK_EQ(int(tool_readiness(kToolLoopProbe, s, true).level), int(ToolLevel::Ready));
+        const Readiness r = tool_readiness(kToolLoopProbe, s, false);
+        CHECK_EQ(int(r.level), int(ToolLevel::Blocked));
+        CHECK_STR(r.tag, "NO PM");
+        CHECK_STR(r.reason, "Power meter not found");
+    }
 }
 
 static void test_spoof_tool() {
@@ -94,6 +108,8 @@ static void test_hurt_table() {
         ToolHurt::Nothing,   // 5 Black Box: passive recorder
         ToolHurt::Nothing,   // 6 Report cards: read-only
         ToolHurt::Nothing,   // 7 Diag: counters
+        ToolHurt::Nothing,   // 8 Device twins: the live proof refuses a live sink itself
+        ToolHurt::Nothing,   // 9 Loop probe: its far end is the K2's own HID port; it refuses above 5.5 V itself
     };
     for (int t = 0; t < kToolCount; t++) {
         CHECK_EQ(int(tool_hurt_by(t)), int(kExpect[t]));
@@ -118,5 +134,6 @@ int main() {
     test_always_ready_tools();
     test_cable_r();
     test_spoof_tool();
+    test_loop_probe_tool();
     return test_report("test_ui_tools");
 }

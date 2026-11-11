@@ -20,6 +20,7 @@
 #include "k2/core/binlog.hpp"
 #include "k2/core/bootinfo.hpp"
 #include "k2/core/lz.hpp"
+#include "k2/loopprobe/loop_probe.hpp"
 #include "k2/ui/qr.hpp"
 #include "k2/ui/qrshare.hpp"
 #include "k2/ui/qrshare_records.hpp"
@@ -115,6 +116,56 @@ static Bytes log_record(std::size_t* entries_out = nullptr) {
     return b;
 }
 
+// A loop probe result (k2/loopprobe/loop_probe.hpp) as the run leaves it: every step done but the e-marker (none sniffed),
+// readings of a 5 V charger behind a C-to-C cable into the HID port. tests/test_k2_qr.py reads the fields back.
+static Bytes loop_record() {
+    namespace lp = k2::loopprobe;
+    lp::Record r;
+    std::memcpy(r.fw.data(), "1.0.0-515-67ce114d", 18);
+    r.start_ms = 61234;
+    const lp::Record::StepRec steps[lp::kSteps] = {
+        {std::uint8_t(lp::Status::Done), 0, 0, 640},
+        {std::uint8_t(lp::Status::Done), 0, 640, 2810},
+        {std::uint8_t(lp::Status::Done), 0, 3450, 1350},
+        {std::uint8_t(lp::Status::Skipped), std::uint8_t(lp::Why::NoEmarker), 4800, 0},
+        {std::uint8_t(lp::Status::Done), 0, 4800, 260},
+    };
+    std::copy(std::begin(steps), std::end(steps), r.step.begin());
+    r.base_n = 16;
+    r.base = {{{5061, 5048, 5072}, {-212, -230, -190}, {5012, 4990, 5030}, {598, 590, 605}, {601, 595, 609},
+               {412, 405, 420}, {3, 0, 9}}};
+    r.hid0 = {lp::kHidCore | lp::kHidRxDp | lp::kHidPinDp, 0x2A5, 1};
+    r.hid1 = {lp::kHidCore | lp::kHidRxDp | lp::kHidPinDp, 0x2A5, 1};
+    r.link = {1, lp::kLinkInline, 2};
+    r.bc = 0x12;
+    r.drop_n = 8;
+    const std::int16_t vb[8] = {5060, 5068, 5066, 5057, 5056, 5065, 5067, 5061};
+    const std::int16_t ib[8] = {-212, -160, -175, -228, -229, -176, -161, -211};
+    for (std::size_t i = 0; i < 8; i++)
+        r.drop[i] = {std::uint8_t(lp::kDropPlan[i]), 6, {vb[i], std::int16_t(vb[i] - 4), std::int16_t(vb[i] + 4)},
+                     {ib[i], std::int16_t(ib[i] - 6), std::int16_t(ib[i] + 6)}, std::int16_t(vb[i] - 50)};
+    r.dp_n = 6;
+    const std::int16_t dpv[6] = {3, 2, 598, 3290, 4, 3};
+    const std::int16_t dmv[6] = {2, 1, 3, 2, 596, 3288};
+    const std::uint8_t hid[6] = {0, 0, 0, lp::kHidRxDp, 0, lp::kHidRxDm};
+    for (std::size_t i = 0; i < 6; i++)
+        r.dp[i] = {std::uint8_t(unsigned(lp::kDpPlan[i].dp) << 4 | unsigned(lp::kDpPlan[i].dm)), dpv[i], dmv[i], hid[i], 5070};
+    r.pull_method = std::uint8_t(lp::PullMethod::CorePullup);
+    r.pull_n = 2;
+    r.pull[0] = {0, 2, 3, 0};
+    r.pull[1] = {1, 3270, 4, lp::kHidRxDp};
+    r.cc.sw0 = 0x04;
+    r.cc.pc = 0x00;
+    r.cc.flags = lp::kCcRestored;
+    r.cc.n = 5;
+    const std::uint16_t c1[5] = {512, 300, 512, 512, 511};
+    const std::uint16_t c2[5] = {3, 2, 1990, 4, 3};
+    for (std::size_t i = 0; i < 5; i++) r.cc.rows[i] = {lp::kCcPlan[i], c1[i], c2[i], std::uint8_t(0x10 | 2), 5060};
+    Bytes b(lp::kRecordBytes);
+    b.resize(lp::encode(r, b));
+    return b;
+}
+
 static std::vector<Fixture> fixtures() {
     using T = qs::Type;
     std::vector<Fixture> f;
@@ -131,7 +182,9 @@ static std::vector<Fixture> fixtures() {
     f.push_back({"pdcaps_epr", T::PdCaps, qs::kSchemaPdCaps, build([](auto o) { return r::pdcaps(caps_epr(), o); }, r::kMaxPdCaps)});
     f.push_back({"card", T::Card, qs::kSchemaCard, build([](auto o) { return r::card(card_v5(), o); }, r::kMaxCard)});
     f.push_back({"log", T::Log, qs::kSchemaLog, log_record()});
+    f.push_back({"loop", T::LoopProbe, qs::kSchemaLoop, loop_record()});
     // The records that gain from the LZ4 flag (a quarter or more): the same bytes as above, packed.
+    // (The loop probe result does not: its readings barely repeat, so pack() declines it and it goes out in two parts.)
     for (const char* base : {"emk_rows", "card"}) {
         for (const Fixture& x : std::vector<Fixture>(f)) {
             if (x.name != base) continue;
@@ -364,6 +417,10 @@ static void test_firmware_parsers_read_the_records() {
                     CHECK(v2 == x.rec);
                     CHECK_EQ(x.rec[0], qs::records::kSchemaV2);
                 }
+        } else if (x.name == "loop") {
+            const auto r = k2::loopprobe::decode(x.rec);   // the probe's own decoder reads the shared record back
+            CHECK(r.has_value());
+            if (r) CHECK_EQ(r->drop[3].ibus.avg, -228);
         }
     }
 }
@@ -423,9 +480,14 @@ static void test_golden() {
 // Part counts by record: the multipart share the UI shows (the eight-row clone) needs two.
 static void test_part_counts() {
     for (const Fixture& x : fixtures()) {
-        const unsigned want = x.name == "emk_rows" ? 2u : 1u;   // its packed form and its v2 form are one part
+        // the eight-row clone is two parts plain (its packed and v2 forms are one); the 399-byte loop probe result is two
+        const unsigned want = x.name == "emk_rows" || x.name == "loop" ? 2u : 1u;
         CHECK_EQ(qs::part_count(x.rec.size()), want);
         if (x.packed) CHECK(x.rec.size() * 4 <= (x.name == "emk_rows_lz" ? 510u : 184u) * 3);
+        if (x.name == "loop") {   // pack() declines it: the share view cycles the two parts
+            Bytes z(lz::bound(x.rec.size()));
+            CHECK_EQ(qs::pack(x.rec, z), 0u);
+        }
     }
 }
 

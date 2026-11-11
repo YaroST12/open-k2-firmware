@@ -726,6 +726,9 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Probe: an on-device lab that, at 5 V, reads what the loop cable shows (VBUS and GND drop under a K2 current step,
     D+/D- continuity through the HID PHY's line state, the CC wire through the HID port's Rd, the e-marker) and shows
     the raw dump as a QR record for host decoding (`tools/k2_qr.py`), kept on flash for `k2_remote` later.
+    **Built and host-tested (branch k2/loop-probe), not verified on hardware**: Tools > Loop probe, `k2_remote.py
+    loop-probe` (0x57), the LOOP share type; docs/LOOP_PROBE.md (steps, readings, limits, hardware test plan). The HID
+    port's own Rd is not switchable, so the CC step drops the K2's own Rd on the PD-bus side one line at a time instead.
 - **Ripple viewer, on the K2 and on the web page** (user decision 2026-11-11: both views, fast and slow time scales).
   - Fast scales: the PA1 capture (AC-coupled, 512 samples, sample-time codes 0..7 = 1072..60 kS/s, a 0.48..8.6 ms
     window); a time/div selector maps to the codes; auto V/div; p-p, RMS and the dominant frequency from the `k2::ripple`
@@ -904,6 +907,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   a sense fixture on CC1, CC2 and D-.
 - WebHID dashboard in Chrome (Linux hidraw path tested with the Python tools only).
 - OPPO VOOC / SVOOC: no handshake seen yet (CHARGER_QUIRKS).
+- The HID-cable loop probe (Tools > Loop probe): built and host-tested only; the test plan is in `LOOP_PROBE.md`.
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at

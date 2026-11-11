@@ -7,6 +7,7 @@
 #include <span>
 
 #include "k2/core/bootmode.hpp"
+#include "k2/loopprobe/loop_cc.hpp"
 #include "k2/pd/cc_probe.hpp"
 #include "k2/pd/ra_probe.hpp"
 #include "k2/pd/ra_class.hpp"
@@ -161,6 +162,15 @@ void debug_cc_matrix(uint8_t v, uint16_t modes);
 // own VBUS flag ends the hold at once. Args must already pass ccprobe::check_args.
 using VbusFn = std::int32_t (*)();
 ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Result &out);
+// The loop probe's CC step (k2/loopprobe/loop_cc.hpp): with VBUS up at 5 V, hold each plan entry (the K2's own Rd on CC1 only,
+// CC2 only, none, or as found) for hold_us, then sample the ADC's newest CC sweep, BC_LVL with the measure switch on each line
+// and VBUS. Only the pull-down bits change; the measure switch and the CC switch pins stay as found. Between entries SWITCHES0
+// goes back to the found value and service() runs, so the PD side never sees the probe's state. Refused with no write while a
+// sink contract, an engine (identify, probe, re-read, prep, a run's Rd, the Ra mode) or VCONN is active, with VBUS above
+// 5.5 V, or for a plan that fails cc_plan_ok. VBUS above 5.5 V at a sample ends the plan (kCcAborted). Restores SWITCHES0
+// and reads it back (kCcRestored). Blocks for about plan.size() x (hold_us + 1 ms).
+loopprobe::CcRefusal loop_cc_hold(std::span<const std::uint8_t> plan, std::uint16_t hold_us, VbusFn vbus_mv,
+                                  loopprobe::CcResult &out);
 // `k2_remote emarker probe`: sense the pull-down a silent cable chip hangs on its supply pin. A cable alone in the port (nothing
 // inline, no contract, no Rd of ours on any line, VBUS dark): sample both CC lines at the snapshot (idle), then with the K2's
 // VCONN switch on CC1 only and on CC2 only (the other line just measured), 2 / 10 / 100 ms into each phase, and put everything

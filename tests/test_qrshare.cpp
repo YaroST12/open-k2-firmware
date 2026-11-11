@@ -111,6 +111,8 @@ static void test_text() {
     Type t;
     CHECK(type_from_tag("EMK", t) && t == Type::Emarker);
     CHECK(!type_from_tag("EM", t) && !type_from_tag("", t));
+    CHECK(tag(Type::LoopProbe) == "LOOP");
+    CHECK(type_from_tag("LOOP", t) && t == Type::LoopProbe);
 
     char out[kTextBuf];
     CHECK_EQ(encode_part(Type::BootInfo, 1, {}, 0, out), 0u);                       // empty record

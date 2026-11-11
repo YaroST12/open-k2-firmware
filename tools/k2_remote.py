@@ -116,6 +116,10 @@ PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "
              "VBUS over the limit", "load on the output", "no recovery without a replug", "step stuck", "no PD contract",
              "link inline", "too many K2 reboots"]
 # ---- end PD Stress constants ----
+# ---- Loop probe (docs/LOOP_PROBE.md): constants ----
+CMD_LOOP_PROBE = 0x57     # loop probe: the stored result file /lp/last.rec, chunked read only (k2/loopprobe/loop_probe_hw.hpp)
+LOOP_CHUNK = 48           # remote::kLoopProbeChunk
+# ---- end Loop probe constants ----
 UFCS_STATUS, UFCS_GET, UFCS_SET, UFCS_RESET, UFCS_PROBE, UFCS_STOP, UFCS_READ = range(7)
 UFCS_CHUNK = 48
 # Same order and ranges as k2::ufcs::kFields (include/k2/fastcharge/ufcs_tune.hpp); tests/test_k2_remote_ufcs.py checks the sync.
@@ -148,7 +152,7 @@ ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin"]
+PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe"]
 ROTATION_PAGES = 6
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
@@ -469,7 +473,7 @@ def decode_state(p):
 # GET_STATE part 1 (the session block): the enums follow include/k2/ui/ui_types.hpp, fc_proto.hpp, home.hpp and conn.hpp.
 SESSION_PROTO_KINDS = ["none", "pd-fixed", "pd-epr", "pps", "avs", "qc2", "qc3", "fcp", "scp", "ufcs", "svooc",
                        "typec", "dcp", "unknown", "detecting"]
-SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress"]
+SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress", "loop-probe"]
 SESSION_TOPOLOGY = ["unknown", "no-source", "cable-single-cc", "direct-receptacle"]
 SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"]
 SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"]
@@ -2748,6 +2752,48 @@ def cmd_pd_stress(link, a):
 # ---- end PD Stress ----
 
 
+# ---- Loop probe (docs/LOOP_PROBE.md): CMD_LOOP_PROBE 0x57 ----
+def loop_probe_read_file(link):
+    """The stored result file /lp/last.rec, read in LOOP_CHUNK pieces; b"" when the K2 holds no result."""
+    out = bytearray()
+    total = None
+    while total is None or len(out) < total:
+        p = link.call(CMD_LOOP_PROBE, len(out).to_bytes(2, "little")).payload
+        _need(p, 5, "loop-probe")
+        total = p[2] | p[3] << 8
+        n = p[4]
+        _need(p, 5 + n, "loop-probe")
+        if n == 0:
+            break
+        out += p[5:5 + n]
+    return bytes(out)
+
+
+def cmd_loop_probe(link, a):
+    import loop_probe_rec
+    f = loop_probe_read_file(link)
+    if not f:
+        return {"loop_probe": None}
+    try:
+        return {"loop_probe": loop_probe_rec.decode_file(f)}
+    except loop_probe_rec.BadRecord as e:
+        raise SystemExit(f"loop-probe: {e}")
+
+
+def render_loop_probe(r):
+    lp = r["loop_probe"]
+    if lp is None:
+        return "no loop probe result stored (run it on the K2: Tools > Loop probe)"
+    lines = [f"loop probe v{lp['version']}, fw {lp['fw']}, started at {lp['start_ms']} ms uptime"
+             + (", in progress (the K2 rebooted or is still running it)" if lp["in_progress"] else "")]
+    for name, s in lp["steps"].items():
+        lines.append(f"  {name:<9}{s['status']}" + (f" ({s['why']})" if s["why"] else "")
+                     + (f", t {s['t_ms']} ms, {s['dur_ms']} ms" if s["status"] != "not_run" else ""))
+    lines.append("raw values: --json, or the LOOP QR via tools/k2_qr.py decode")
+    return "\n".join(lines)
+# ---- end Loop probe ----
+
+
 LAB_REASONS = ["none", "timeout", "vbus_low", "vbus_high", "mcu_hot", "external", "done"]
 
 
@@ -3678,6 +3724,8 @@ def _render(name, r):
         return "\n".join(lines)
     if name == "pd-stress":    # PD Stress
         return render_pdstress(r)
+    if name == "loop-probe":   # Loop probe
+        return render_loop_probe(r)
     if name == "ufcs":
         return render_ufcs(r)
     if name == "qrtest":
@@ -3729,7 +3777,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards,
             "twin": cmd_twin}
 
@@ -4080,6 +4128,8 @@ def build_parser():
     spss.add_parser("result", help="the raw result: per-sequence counters and distributions, per-event points, the score")
     spss.add_parser("stop", help="stop the run (never refused)")
     # ---- end PD Stress parser ----
+    sub.add_parser("loop-probe", help="the last HID-cable loop probe result stored on the K2 (read only; the probe "
+                   "starts on the K2, Tools > Loop probe); raw values with --json")
     sc = sub.add_parser("cable-r", help="cable resistance: passive two-point meter or Kelvin 8-wire (never drives VBUS)")
     scs = sc.add_subparsers(dest="cable_cmd", required=True)
     scs.add_parser("status", help="idle reference, loaded point, result")

@@ -572,6 +572,12 @@
   "575": "[LOOP] request pos %d %d mV refused: 5V lock\n",
   "576": "[LOOP] trigger PDO%u refused: 5V lock\n",
   "577": "[LOOP] lock %s aux=%d vbus=%d host=%d gap=%d n=%u\n",
-  "578": "[LOOP] clear %s aux=%d vbus=%d host=%d\n"
+  "578": "[LOOP] clear %s aux=%d vbus=%d host=%d\n",
+  "579": "[LPRB] write failed fs=%s ms=%u\n",
+  "580": "[LPRB] slow write ms=%u\n",
+  "581": "[LPRB] boot: closed the run interrupted in %s\n",
+  "582": "[LPRB] start result=%u\n",
+  "583": "[LPRB] end step=%s status=%u why=%s ms=%u\n",
+  "584": "[LPRB] cancelled step=%s\n"
  }
 }

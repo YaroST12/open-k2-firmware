@@ -41,14 +41,15 @@ enum class Type : std::uint8_t {
     Card = 4,        // the report card record as stored (k2/chargertest/report_card.hpp encode_card)
     Identity = 5,    // text "fw=<version> g=<git> p=<proto>"
     Log = 6,         // the newest binary log entries (k2/core/binlog.hpp), see qrshare_records.hpp
-    // 7..127 are free; bit 7 of the byte is kPackedFlag
+    LoopProbe = 7,   // the HID-cable loop probe result (k2/loopprobe/loop_probe.hpp encode(), 399 bytes)
+    // 8..127 are free; bit 7 of the byte is kPackedFlag
 };
 
 inline constexpr std::uint8_t kSchemaBootInfo = 1, kSchemaEmarker = 1, kSchemaPdCaps = 1, kSchemaCard = 1, kSchemaIdentity = 1,
-                              kSchemaLog = 1;
+                              kSchemaLog = 1, kSchemaLoop = 1;
 inline constexpr std::uint8_t kPackedFlag = 0x80;
 
-std::string_view tag(Type t);                          // "BI", "EMK", "PDC", "CARD", "ID", "LOG"; "" for a type this build does not know
+std::string_view tag(Type t);                          // "BI", "EMK", "PDC", "CARD", "ID", "LOG", "LOOP"; "" for a type this build does not know
 bool type_from_tag(std::string_view tag, Type& out);
 
 inline constexpr std::size_t kHeaderLen = 12;

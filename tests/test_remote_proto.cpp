@@ -1314,6 +1314,30 @@ static void test_pd_stress() {
     check_header(r, 0x55, 16, Status::BadLength, 0);
 }
 
+// LOOP_PROBE (0x57): the last loop probe result as its flash file holds it, read in 48-byte chunks; nothing stored = total 0.
+static void test_loop_probe() {
+    Fake f; Frame r;
+    CHECK_EQ(run(f, request(0x57, 1, {0, 0}), r), 1);
+    check_header(r, 0x57, 1, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {0, 0, 0, 0, 0});              // no result yet
+    f.lp_file.resize(407);
+    for (size_t i = 0; i < f.lp_file.size(); i++) f.lp_file[i] = uint8_t(i * 7);
+    CHECK_EQ(run(f, request(0x57, 2, {0, 0}), r), 1);
+    check_header(r, 0x57, 2, Status::Ok, 5 + 48);
+    check_bytes(r, kRspHeader, {0, 0, 0x97, 0x01, 48, 0, 7, 14});
+    CHECK_EQ(run(f, request(0x57, 3, {0x80, 0x01}), r), 1);    // off 384: the last 23 bytes
+    check_header(r, 0x57, 3, Status::Ok, 5 + 23);
+    check_bytes(r, kRspHeader, {0x80, 0x01, 0x97, 0x01, 23, uint8_t(384 * 7)});
+    CHECK_EQ(run(f, request(0x57, 4, {0x97, 0x01}), r), 1);    // the end: empty
+    check_header(r, 0x57, 4, Status::Ok, 5);
+    CHECK_EQ(run(f, request(0x57, 5, {0x98, 0x01}), r), 1);    // past it
+    check_header(r, 0x57, 5, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x57, 6, {0}), r), 1);
+    check_header(r, 0x57, 6, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x57, 7, {}), r), 1);
+    check_header(r, 0x57, 7, Status::BadLength, 0);
+}
+
 static void test_boot_info() {
     Fake f; Frame r;
     f.boot_line.assign(100, 'x');
@@ -2642,6 +2666,7 @@ int main() {
     test_boot_info();
     test_ufcs();
     test_pd_stress();
+    test_loop_probe();
     test_qrtest();
     test_debug_fault();
     test_build_response_pads_and_cuts();

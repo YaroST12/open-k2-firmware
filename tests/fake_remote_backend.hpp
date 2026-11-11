@@ -260,6 +260,15 @@ struct Fake {
         for (; n < out.size() && off + n < ps_blob.size(); n++) out[n] = ps_blob[off + n];
         return n;
     }
+    // Loop probe (Cmd::LoopProbe): the stored result file, empty = none.
+    std::vector<uint8_t> lp_file;
+    uint16_t loopprobe_len() { calls++; return uint16_t(lp_file.size()); }
+    size_t loopprobe_read(uint16_t off, std::span<uint8_t> out) {
+        calls++;
+        size_t n = 0;
+        for (; n < out.size() && off + n < lp_file.size(); n++) out[n] = lp_file[off + n];
+        return n;
+    }
     // QrTest (Cmd::QrTest): the dispatcher validates and builds the list itself; the backend only opens/pops the page.
     Status qrtest_status = Status::Ok;
     std::array<uint8_t, 3> qrtest_shown{}; bool qrtest_show_called = false; bool qrtest_stopped = false;

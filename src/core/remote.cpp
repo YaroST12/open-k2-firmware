@@ -48,6 +48,7 @@
 #include "k2/twin/twin_hw.hpp"
 #include "k2/twin/wire.hpp"
 #include "k2/ui/ui_qrtest.hpp"
+#include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/core/version.hpp"
 
 namespace k2 {
@@ -1173,6 +1174,10 @@ void Remote::pdstress_stop() { ui_.pd_stress().cancel(); }
 
 size_t Remote::pdstress_read(uint16_t off, std::span<uint8_t> out) { return ui_.pd_stress().result_read(off, out); }
 // ---- end PD Stress ----
+
+uint16_t Remote::loopprobe_len() { return loopprobe::hw::file_len(); }
+
+size_t Remote::loopprobe_read(uint16_t off, std::span<uint8_t> out) { return loopprobe::hw::file_read(off, out); }
 
 remote::Status Remote::qrtest_show(uint8_t version, uint8_t px, uint8_t quiet) {
     if (!qrtest::show(ui_, version, px, quiet, systick::millis())) {

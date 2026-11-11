@@ -17,6 +17,7 @@
 #include "k2/ui/ui_spoof.hpp"
 #include "k2/ui/ui_cards.hpp"
 #include "k2/ui/ui_twin.hpp"
+#include "k2/ui/ui_loop_probe.hpp"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
@@ -47,16 +48,17 @@ inline constexpr std::size_t kLargestMenu = std::max({arena_bytes<TriggerPage>()
                                                       arena_bytes<CableRPage>(), arena_bytes<BlackBoxPage>(), arena_bytes<SpoofPage>(),
                                                       arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<CardsPage>(),
                                                       arena_bytes<SharePage>(), arena_bytes<ConnectionPage>(), arena_bytes<DiagPage>(),
-                                                      arena_bytes<TwinPage>()});
+                                                      arena_bytes<TwinPage>(), arena_bytes<LoopProbePage>()});
 // Tools > Connection > Saved cables > Share, and the other three-menu chains (Connection > Spoof, Cards / Black box > Share).
 inline constexpr std::size_t kLongestChain =
     std::max({arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, SpoofPage>(),
               arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, BlackBoxPage, SharePage>(),
-              arena_bytes<ChargerTestPage, SharePage>()});
+              arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ToolsPage, LoopProbePage, SharePage>()});
 inline constexpr std::size_t kPageArenaBytes = std::max(kLargestBase + kLargestMenu, kLongestChain);
 static_assert(kPageArenaBytes >= kLargestBase + kLargestMenu, "any rotation page takes any one menu");
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest menu chain fits");
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, SharePage>(), "the charger test shares its card");
+static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, LoopProbePage, SharePage>(), "the loop probe shares its result");
 // The QR scan-test page carries its encode workspace as a member, so it is opened only over a base page small
 // enough for both (qrtest::show lands on Tools first when the current base is too big); it never takes a menu on top.
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page with its workspace fits over the Tools base");
@@ -144,6 +146,8 @@ public:
     const QrTestPage &qrtest_page() const { return *find<QrTestPage>(Menu::QrTest); }
     // The open Device twins page (host tests); it exists only while Menu::Twin is on the stack. Not const: peek() builds a row.
     TwinPage &twin_page() { return *find<TwinPage>(Menu::Twin); }
+    // The Loop probe page while Menu::LoopProbe is on the stack, else nullptr (host tests).
+    LoopProbePage *loop_probe_page() const { return find<LoopProbePage>(Menu::LoopProbe); }
     // Top submenu; Menu::Count when none is open.
     Menu menu() const { return depth_ ? stack_[depth_ - 1] : Menu::Count; }
     // Page index for the remote: the rotation page, or kMenuPageBase + menu while one is open.
@@ -234,8 +238,10 @@ public:
     };
     [[gnu::noinline]] Session session();
     // A Device twin live proof (twin_hw::live_running) and a PD Stress run own the ports like a charger test does.
-    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_.active(); }
+    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_.active() || loop_probe_busy(); }
     bool twin_live_busy() const;
+    // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
+    bool loop_probe_busy() const;
     // What the twin live runner needs from the UI: the clock, the monitor ceiling, the latest VBUS and who else owns the ports
     // (the twin run itself is not "else"). The remote's `twin run` and the Device twins page start a run with it.
     twin_hw::LiveCtx twin_ctx(uint32_t now_ms) const;

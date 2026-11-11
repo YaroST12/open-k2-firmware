@@ -9,7 +9,7 @@ const char *tool_hint(int tool) {
     static constexpr const char *kHints[kToolCount] = {
         "charger on top or bottom", "PD charger, either port", "act as a saved cable", "charger + cable + load",
         "source, cable and device", "passive PD recorder", "saved charger results", "USB, PD and system state",
-        "will it charge my device"};
+        "will it charge my device", "cable into own HID port"};
     return kHints[tool < 0 || tool >= kToolCount ? 0 : tool];
 }
 
@@ -60,6 +60,7 @@ constexpr ToolRule kRules[kToolCount] = {
     {ToolHurt::Nothing, always_ready},   // 6 Report cards
     {ToolHurt::Nothing, always_ready},   // 7 Diag
     {ToolHurt::Nothing, always_ready},   // 8 Device twins (the live proof refuses a live sink itself)
+    {ToolHurt::Nothing, cable_r},        // 9 Loop probe (every reading comes from the power monitor; it refuses above 5.5 V itself)
 };
 
 }  // namespace

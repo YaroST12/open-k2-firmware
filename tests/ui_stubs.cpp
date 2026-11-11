@@ -26,6 +26,8 @@
 #include <cstring>
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/core/version.hpp"
+#include "k2/loopprobe/loop_probe_hw.hpp"
 
 StubState g_stub;
 
@@ -644,6 +646,79 @@ RamStore g_ram;
 }  // namespace
 journal::Store& store() { return g_ram; }
 }  // namespace k2::pdstress::journal_hw
+
+namespace k2 {
+const char kFwVersion[] = "1.0.0-0-host";   // what the loop probe records (src/core/version.cpp is firmware-only)
+}  // namespace k2
+
+namespace k2::loopprobe::hw {
+// Host stand-in for the loop probe's drivers: fixed readings from g_stub, every line action a no-op, the result file in RAM.
+namespace {
+class RamStore final : public Store {
+public:
+    bool read(std::span<std::uint8_t> out, std::size_t& n) override {
+        n = 0;
+        if (!g_stub.lp_file_present || g_stub.lp_file.size() > out.size()) return false;
+        std::copy(g_stub.lp_file.begin(), g_stub.lp_file.end(), out.begin());
+        n = g_stub.lp_file.size();
+        return true;
+    }
+    bool write(std::span<const std::uint8_t> in) override {
+        g_stub.lp_file.assign(in.begin(), in.end());
+        g_stub.lp_file_present = true;
+        g_stub.lp_writes++;
+        return true;
+    }
+};
+RamStore g_lp_store;
+
+class StubEnv final : public Env {
+public:
+    Sample sample() override {
+        Sample s;
+        s.pm_ok = g_stub.lp_pm_ok;
+        s.vbus_mv = g_stub.lp_vbus_mv;
+        s.ibus_ma = 150;
+        s.adc_ok = true;
+        s.aux_mv = g_stub.lp_aux_mv;
+        s.dp_mv = s.dm_mv = 600;
+        s.cc1_mv = 410;
+        return s;
+    }
+    std::int32_t vbus_fast_mv() override { return g_stub.lp_pm_ok ? g_stub.lp_vbus_mv : -1; }
+    Hid hid() override { return {}; }
+    Link link() override { return {}; }
+    void load(Load) override {}
+    void spin(std::uint32_t) override { g_stub.lp_spins++; }
+    void drive(DpState) override {}
+    bool bus_dpdm(std::int32_t& dp_mv, std::int32_t& dm_mv) override { dp_mv = dm_mv = 0; return true; }
+    void dpdm_release() override {}
+    PullMethod pull(bool) override { return PullMethod::None; }
+    void pull_restore() override {}
+    Emk emarker() override { return {}; }
+    void cc_hold(std::span<const std::uint8_t> plan, std::uint16_t, CcResult& out) override {
+        g_stub.lp_cc_holds++;
+        out = {};
+        out.n = static_cast<std::uint8_t>(std::min(plan.size(), out.rows.size()));
+        for (std::size_t i = 0; i < out.n; i++) {
+            out.rows[i].cfg = plan[i];
+            out.rows[i].vbus_mv = static_cast<std::uint16_t>(g_stub.lp_vbus_mv);
+        }
+    }
+    bool save(const Record& r) override { return loopprobe::save(g_lp_store, r); }
+};
+StubEnv g_lp_env;
+}  // namespace
+Env& env() { return g_lp_env; }
+Store& store() { return g_lp_store; }
+std::uint16_t file_len() { return g_stub.lp_file_present ? static_cast<std::uint16_t>(g_stub.lp_file.size()) : 0; }
+std::size_t file_read(std::uint16_t off, std::span<std::uint8_t> out) {
+    if (!g_stub.lp_file_present || off >= g_stub.lp_file.size()) return 0;
+    const std::size_t n = std::min(out.size(), g_stub.lp_file.size() - off);
+    std::copy_n(g_stub.lp_file.begin() + off, n, out.begin());
+    return n;
+}
+}  // namespace k2::loopprobe::hw
 
 namespace k2::fctrig {
 // Host stand-in for the trigger driver: idle, never running, records what the UI asked for.

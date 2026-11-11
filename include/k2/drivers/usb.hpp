@@ -64,6 +64,24 @@ bool configured();
 // False while the USB link is off (the core never started).
 bool host_active();
 
+// The HID port's data lines as this side sees them (read-only; the loop probe, k2/loopprobe/loop_probe_hw.hpp). `core`:
+// the USB core runs (the link is on); rx_dp / rx_dm and frame (the counter of the last SOF, 11 bits) come from the core
+// and are false / 0 without it. pin_dp / pin_dm are the PA12 / PA11 input levels, valid either way.
+struct Lines {
+    bool core = false, configured = false;
+    bool rx_dp = false, rx_dm = false;
+    bool pin_dp = false, pin_dm = false;
+    std::uint16_t frame = 0;
+};
+Lines lines();
+
+// The HID port's D+ pull-up, switched for the loop probe's reverse-direction check. With the core running it is the
+// core's 1.5k pull-up (the PHY stays powered, so the receivers keep reading); with the link off it is PA12's weak input
+// pull-up. The first call remembers what was there and dp_pullup_restore() puts it back (a no-op without a call).
+enum class Pull : std::uint8_t { None, Core, Gpio };
+Pull dp_pullup(bool on);
+void dp_pullup_restore();
+
 // Queue one log line (truncated to 63 bytes) / a printf-style line (see k2/core/fmt.hpp).
 void log(std::string_view msg);
 // One observer of every log line (the debug shell's `log on`); nullptr removes it. The callback

@@ -44,6 +44,7 @@ per module with one text line under the box.
 | 4 | CARD | charger report card |
 | 5 | ID | firmware identity: `fw=1.0 g=<git> p=<proto>` |
 | 6 | LOG | the newest K2LOG entries, binary (see Log record) |
+| 7 | LOOP | the HID-cable loop probe result, binary (see Loop probe record) |
 
 Bit 7 of the type byte (`0x80`, `kPackedFlag`) is the **LZ4 flag**: the record is an LZ4 block (`k2/core/lz.hpp`), not the raw
 bytes. The part's `record_len` and `record_crc` are those of the packed block, so a reader assembles the parts first and inflates
@@ -67,6 +68,7 @@ reuse the serialisers the firmware already has, so an import on the K2 can call 
 | CARD | schema 1: the report card as the store keeps it (`k2/chargertest/report_card.hpp` `encode_card()`: 0xA6, type, payload length, 0, the payload, CRC-16; card format 8). Schema 2: the bit-packed record below | 204 B as schema 1 (formats 3 to 7: 150 to 198 B); 68 to 188 B as schema 2 |
 | ID | ASCII `fw=<version> g=<git, -dirty when dirty> p=<remote proto>`, the strings PING answers | at most 64 B |
 | LOG | `git_len` u8, the git string, `flags` u8 (bit0: older entries were dropped), `base_ms` u32 (uptime of the entry before the first one), `now_ms` u32 (uptime when the record was made), then whole log entries to the end | 10 + git + entries, at most 510 B |
+| LOOP | the loop probe record, version 1 (`k2/loopprobe/loop_probe.hpp` `encode()`, layout under "Loop probe record") | 399 B, two parts |
 
 ### Schema 2: the bit-packed card and e-marker record
 
@@ -156,6 +158,26 @@ them so. The two that pack are the EMK record with quirks (510 to 239 B: two par
 and the card (format 8: 204 to 109 B, 338 to 197 characters, QR version 10 to 7; the format 5 card was 184 to 107 B, 309 to 194 characters).
 Golden vectors with the flag: `emk_rows_lz`, `card_lz` in `tests/fixtures/qrshare.tsv`.
 
+### Loop probe record
+
+The result of the HID-cable loop probe (`docs/LOOP_PROBE.md`), the same bytes the K2 keeps in `/lp/last.rec` behind an 8-byte
+file head (`LPR`, version, length u16, CRC-16/CCITT-FALSE u16). Raw readings only, little endian, exactly 399 bytes:
+
+| Field | Layout |
+|---|---|
+| head | `version` u8 (1), `flags` u8 (bit0: in progress, the CC step had started), `fw[30]` (NUL padded), `start_ms` u32 (uptime at START) |
+| steps | 5 x (`status` u8: 0 not run, 1 done, 2 skipped, 3 aborted, 4 interrupted; `why` u8; `t_ms` u32 from start; `dur_ms` u16), in the order Baseline, Drop, D+/D-, E-marker, CC |
+| baseline | `n` u8, then avg/min/max i16 of VBUS mV, IBUS mA, aux mV, D+ mV, D- mV, CC1 mV, CC2 mV; HID port at start and end (`bits` u8, `frame` u16, `resets` u16); `active_cc` u8, link flags u8, guard u8, BC_LVL u8 |
+| drop | `n` u8, 8 x (`load` u8, samples u8, VBUS avg/min/max i16, IBUS avg/min/max i16, aux i16) |
+| D+/D- | `n` u8, 6 x (`drive` u8 = D+ level << 4 \| D- level, bus D+ mV i16, bus D- mV i16, HID bits u8, VBUS max mV i16); `pull_method` u8, `n` u8, 2 x (`on` u8, bus D+ mV i16, bus D- mV i16, HID bits u8) |
+| e-marker | `valid` u8, `num_vdos` u8, 6 x VDO u32, `seq` u16, `read_mode` u8 |
+| CC | `refusal` u8, `switches0` u8 as found, CC switch pins u8, `flags` u8 (bit0 restored, bit1 VBUS abort, bit2 disturbed), `n` u8, 5 x (`cfg` u8: 0x80 as found, 1 Rd CC1 only, 2 Rd CC2 only, 0 none; CC1 u16 and CC2 u16 in 12-bit ADC counts; BC_LVL u8: bits 1:0 CC1, 3:2 CC2, bit4 valid; VBUS mV u16) |
+
+Unpacked it is two parts. The share view packs it like any record when LZ4 saves a quarter: a run with skipped steps and empty
+rows does (the host fixture of `tests/test_ui_loop_probe.cpp` packs 399 to 203 B, one part), a run of varied readings may not.
+The LZ4 flag in the type byte tells the decoder either way. `tools/k2_qr.py decode` prints every
+field with its unit in the key name (`tools/loop_probe_rec.py`, the same decoder `k2_remote.py loop-probe` uses on the file).
+
 ## Measured capacity per part
 
 Text length of one part is `len("K2:<tag><schema>:") + 3 * ceil(frame / 2)` with the base45 rule above; the smallest QR version
@@ -170,6 +192,7 @@ Text length of one part is `len("K2:<tag><schema>:") + 3 * ceil(frame / 2)` with
 | boot | 173 B | 1 | 291 | 9 |
 | card (format 8) | 204 B | 1 | 338 | 10 |
 | emk with 8 quirk rows | 510 B | 2 (255 B each) | 415 | 11 |
+| loop probe result | 399 B | 2 (200 + 199 B) | 333 | 9 |
 | emk with 8 quirk rows, LZ4 flag | 239 B packed | 1 | 391 | 10 |
 | card, LZ4 flag | 109 B packed | 1 | 197 | 7 |
 
@@ -194,7 +217,8 @@ geometry"): a version 12 frame is a 219 px box at 3 px per module, centred.
   then encodes with the generator's poll hook set to `lcd::pump` (USB and the idle hook are served once per mask candidate,
   eight times), wipes and draws the code.
 - **Long OK = Share** (`docs/UI_DESIGN.md`) on: a saved cable (Who's attached, Actions, Saved cables), the Who's attached Source tab, a report
-  card (Tools, Report cards, detail), the charger test Results page (the card of that run) and the Diag page (the log).
+  card (Tools, Report cards, detail), the charger test Results page (the card of that run), the Diag page (the log) and the
+  Loop probe page (Tools, Loop probe: the last result; a finished run opens the share view by itself).
   A record that LZ4 shrinks by 25 % or more goes out packed (the flag above); the share view packs in place in the scratch arena.
 - Left out: built-in chips and the identity record have no opener (the LOG head carries the git string and uptime; no text
   headroom left for a second chooser; the identity and boot-info links and page views exist and are tested, so an opener is

@@ -27,11 +27,12 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import logdb  # noqa: E402
+import loop_probe_rec  # noqa: E402
 import pd_trace  # noqa: E402
 import report_card  # noqa: E402
 
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
-TYPES = {1: "BI", 2: "EMK", 3: "PDC", 4: "CARD", 5: "ID", 6: "LOG"}
+TYPES = {1: "BI", 2: "EMK", 3: "PDC", 4: "CARD", 5: "ID", 6: "LOG", 7: "LOOP"}
 TAGS = {v: k for k, v in TYPES.items()}
 PACKED = 0x80   # bit 7 of the type byte: the record is an LZ4 block (inflated after the parts are joined)
 MAX_UNPACKED = 1 << 16
@@ -408,8 +409,16 @@ def decode_log(rec):
     return out
 
 
+def decode_loop(rec):
+    """A LOOP record: the HID-cable loop probe result, every field with its unit (tools/loop_probe_rec.py)."""
+    try:
+        return loop_probe_rec.decode_record(rec)
+    except loop_probe_rec.BadRecord as e:
+        raise QrError(str(e))
+
+
 DECODERS = {"BI": decode_boot, "ID": decode_identity, "EMK": decode_emarker, "PDC": decode_pdcaps, "CARD": decode_card,
-            "LOG": decode_log}
+            "LOG": decode_log, "LOOP": decode_loop}
 
 
 # ---- schema v2: the bit-packed link records (the twin of k2/ui/qrshare_records.hpp pack_v2) ----

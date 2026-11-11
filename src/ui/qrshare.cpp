@@ -15,7 +15,7 @@ constexpr char kAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
 struct TagRow { Type type; const char* tag; };
 constexpr TagRow kTags[] = {
     {Type::BootInfo, "BI"}, {Type::Emarker, "EMK"}, {Type::PdCaps, "PDC"}, {Type::Card, "CARD"}, {Type::Identity, "ID"},
-    {Type::Log, "LOG"},
+    {Type::Log, "LOG"}, {Type::LoopProbe, "LOOP"},
 };
 
 int alphabet_index(char c) {
