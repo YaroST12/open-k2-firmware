@@ -118,12 +118,24 @@ def test_run_header_names_the_cable_identity_of_the_dialog():
     assert "SPOOF" not in charger_summary.summarize({**run, "evidence": {}}).splitlines()[0]
 
 
+def _fixed_pdo(ma, mv=20000):
+    return (mv // 50) << 10 | ma // 10          # a fixed supply PDO: 50 mV and 10 mA units
+
+
 def test_run_header_cable_wording_follows_the_source_offers():
-    def head(cable):
-        run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {"physical_cable": cable}, "steps": []}
+    def head(cable, offers=()):
+        steps = [{"protocol": "pd", "pos": i, "result": "pass", "reason": "none", "detail_reason": "none",
+                  "target_mv": 20000, "measured_mv": 20000, "continuous": False, "raw_pdo": _fixed_pdo(ma)}
+                 for i, ma in enumerate(offers)]
+        run = {"run_id": 1, "state": "done", "reason": "none", "evidence": {"physical_cable": cable}, "steps": steps}
         return charger_summary.summarize(run).splitlines()[0]
     assert "cable not read, default limit 20 V/3 A" in head({"max_mv": 20000, "max_ma": 3000, "observed": 0})
-    assert "cable not read; source offers 5 A" in head({"max_mv": 20000, "max_ma": 5000, "observed": 0})
+    assert "cable not read; source offers 5 A" in head({"max_mv": 20000, "max_ma": 5000, "observed": 0}, (3000, 5000))
+    # The firmware assumes a 5 A cable once a source offers more than 3 A: the header names the real offer, not that limit.
+    h = head({"max_mv": 20000, "max_ma": 5000, "observed": 0}, (3000, 3250))
+    assert "cable not read; source offers 3.25 A" in h and "offers 5 A" not in h
+    # No offer in the steps (an empty run): the assumed limit is named as such, never as an offer.
+    assert "cable not read, default limit 20 V/5 A" in head({"max_mv": 20000, "max_ma": 5000, "observed": 0})
     assert "cable 20 V/5 A" in head({"max_mv": 20000, "max_ma": 5000, "observed": 1})
     assert "default limit 50 V/5 A" in head({"max_mv": 50000, "max_ma": 5000, "observed": 0})   # EPR-proven, old wording
 

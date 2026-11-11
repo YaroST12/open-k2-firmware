@@ -67,12 +67,14 @@ def summarize(r):
     ev = r.get("evidence", {})
     n = {k: sum(s["result"] == k for s in steps) for k in ("pass", "fail", "skip")}
     cable = ev.get("physical_cable", {})
+    offered_ma = max((step_label.pdo_ma(s.get("raw_pdo", 0)) for s in steps), default=0)
     limits = f"{_v(cable.get('max_mv', 0))} V/{cable.get('max_ma', 0) / 1000:g} A"
     if cable.get("observed"):
         cable_txt = limits
-    elif cable.get("max_ma", 0) > 3000 and cable.get("max_mv", 0) <= 20000:
-        # The firmware raised the limit from the source offers (current above 3 A implies a 5 A cable).
-        cable_txt = f"not read; source offers {cable['max_ma'] / 1000:g} A"
+    elif cable.get("max_ma", 0) > 3000 and cable.get("max_mv", 0) <= 20000 and offered_ma > 3000:
+        # The firmware assumed a 5 A cable because the source offers more than 3 A; the header names the real
+        # highest offer (the steps' PDOs), never the assumed limit.
+        cable_txt = f"not read; source offers {offered_ma / 1000:g} A"
     else:
         cable_txt = f"not read, default limit {limits}"
     # `cable_identity` = k2_remote.charger_cable() read after the run: the identity the START dialog's Ra mode presented.
