@@ -4,20 +4,22 @@
 // chip's pull-down (Ra) on its supply pin, and on which of the two CC lines? Pure code over the probe's raw samples.
 //
 // Two signs, both required (a single sample never decides):
-//  1. Idle: with nothing driven, the K2's CC2 sits ~1.69 V (the scan's own bias, tied to CC2 only; CC1 has none, so its
-//     idle level is ~0 mV either way). A pull-down on the CC2 pin collapses that bias to ~0 mV [measured, the Baseus cable
-//     in one orientation: cc2 0 mV against 1662-1694 mV for an empty port or a chipless cable].
-//  2. VCONN: the K2 drives its VCONN source (~2.87 V through ~85 ohm, inferred) onto one line at a time. A bare pin keeps
-//     ~2.87 V; a pin with a ~1 kohm pull-down sags to ~2.63-2.65 V [measured]. The droop of the driven pin against the
-//     other driven pin is the second sign.
-// A pull-down on CC2 shows both (collapsed idle + droop under VCONN on CC2); a pull-down on CC1 shows the droop on CC1
-// only (CC1 has no idle bias to collapse) with the CC2 bias intact. Anything else, a collapse without the droop (a held
-// PLUS key clamps CC2 to ~2 mV and loads the source by only ~47 mV, inferred), a droop without the collapse, a drift
-// between the 10 ms and the 100 ms sample, a missing sample, an aborted run, is "unclear" and never a verdict.
+//  1. Idle: with nothing driven, the K2's CC2 sits ~1.64-1.71 V (the scan's own bias, tied to CC2 only; CC1 has none, so
+//     its idle level is 0-11 mV either way). A pull-down on the CC2 pin collapses that bias to 0 mV.
+//  2. VCONN: the K2 drives its VCONN source onto one line at a time and each line is judged against its OWN bare level,
+//     never against the other line: a bare CC1 reads 2868-2872 mV, a bare CC2 reads 3268-3283 mV (a different level, so a
+//     cross-line difference is not a droop: it read an empty port as a CC1 chip), and a pin with a cable's ~1 kohm pull-down
+//     reads 2640-2643 mV on either line, up to 2683 mV on CC1 while a cable's chip is still settling.
+// A pull-down on CC2 shows both (collapsed idle + CC2 loaded under VCONN on CC2, CC1 bare); a pull-down on CC1 shows CC1
+// loaded under VCONN on CC1 with CC2 bare and the bias intact; no pull-down is the bias intact with both lines bare. Anything
+// else (a collapse with both lines bare, such as a held PLUS key; a load without the collapse on CC2; both lines loaded; a
+// pin whose 10 ms and 100 ms samples sit on different sides of its threshold; a missing sample; an aborted run) is
+// "unclear" and never a verdict. The line that is NOT driven is never judged: with a CUKTECH 6 A cable on CC1 the
+// undriven CC2 read 1255-1264 mV instead of ~3278 mV, with a Baseus cable it read 3278 (CC1 chip) or 0 (CC2 chip).
 //
-// Provenance: the idle and the loaded levels are measured (docs/K2_PORTS_SPEC.md, "The CC front end"). The levels of VCONN
-// on an empty port or a chipless cable, and of a pull-down on CC1, are modelled, not measured: the thresholds below leave
-// 100 mV or more on each side of every measured level and are to be re-fitted from the first hardware run.
+// Provenance: measured, 2026-11-11, build 1.0.0-509, each cable alone in the bottom port (docs/K2_PORTS_SPEC.md, "The CC front
+// end"): an empty port, a chipless C-to-C cable, a Baseus 5 A cable in both orientations (chip on CC1, chip on CC2) and a
+// CUKTECH 6 A cable (chip on CC1). tests/test_ra_class.cpp holds the raw counts of all five runs.
 #pragma once
 #include <cstdint>
 #include "k2/pd/ra_probe.hpp"
@@ -42,17 +44,22 @@ constexpr const char *name(PullDown p) {
     }
 }
 
-// Idle CC2 below this is a collapsed bias (measured collapsed 0 mV; margin 394 mV to the CC1 idle floor of 6 mV, 1262 mV
-// to the lowest measured bias 1662 mV).
+// Idle CC2 below this is a collapsed bias; the same 400 mV as raprobe::kSourceLowMaxMv, which also bounds idle CC1.
+// Margins: collapsed idle CC2 measured 0 mV (400 mV under it), idle CC1 measured 0-11 mV (389 mV under it), the lowest
+// measured bias 1635 mV (1235 mV over it).
 constexpr std::int32_t kCollapseMv = 400;
-// The pin under VCONN must sit at least this far under the other driven pin (measured droop 225-243 mV; the modelled PLUS
-// key 47 mV: 73 mV above the model's worst case, 105-123 mV under the measured droop).
-constexpr std::int32_t kDroopMinMv = 120;
-// The undroopped pin under VCONN must read at least this (measured bare pin 2867-2872 mV; loaded pin tops at 2646 mV).
-constexpr std::int32_t kUnloadedMinMv = 2750;
-// The 10 ms and the 100 ms sample of a VCONN phase may differ by at most this (measured settling 2627 -> 2646 mV = 19 mV).
-constexpr std::int32_t kStableMv = 60;
-// The idle CC2 bias band is raprobe::kBiasMinMv .. kBiasMaxMv (1400-2000 mV); idle CC1 below raprobe::kSourceLowMaxMv.
+// A driven line is "bare" (no cable pull-down) at or above its threshold and "loaded" below it. Each line has its own
+// threshold, set midway between its loaded and its bare levels:
+//   CC1: loaded 2640-2644 mV, 2683 mV at the end of a chip's settling (CUKTECH, 100 ms); bare 2868-2872 mV.
+//        2775 mV: 92 mV above the highest loaded reading, 93 mV below the lowest bare one.
+//   CC2: loaded 2641-2643 mV; bare 3268-3283 mV.
+//        2960 mV: 317 mV above the highest loaded reading, 308 mV below the lowest bare one.
+// A pin counts only when its 10 ms and its 100 ms sample sit on the same side (a pin still moving across its threshold, or
+// a drift that big, is "unclear"): that replaces a fixed settling tolerance, which a chip's 39 mV creep came within 21 mV of.
+constexpr std::int32_t kCc1BareMinMv = 2775;
+constexpr std::int32_t kCc2BareMinMv = 2960;
+// The idle CC2 bias band is raprobe::kBiasMinMv .. kBiasMaxMv (1400-2000 mV; measured 1635-1712 mV, 235 mV and 288 mV of
+// margin); idle CC1 below raprobe::kSourceLowMaxMv.
 
 // The judged levels, in mV. The 2 ms sample of a VCONN phase is a transient (the sweep behind it may predate the switch
 // change) and is never read; the other line during a VCONN phase is not judged.
@@ -63,9 +70,12 @@ struct Levels {
     std::int32_t v2_early = 0, v2_settled = 0;     // CC2 with VCONN on CC2, at 10 ms and 100 ms
 };
 
-namespace detail {
-constexpr std::int32_t abs32(std::int32_t v) { return v < 0 ? -v : v; }
-}  // namespace detail
+enum class LineState : std::uint8_t { Loaded, Bare, Mixed };
+
+constexpr LineState line_state(std::int32_t early, std::int32_t settled, std::int32_t bare_min) {
+    const bool e = early >= bare_min, s = settled >= bare_min;
+    return e != s ? LineState::Mixed : e ? LineState::Bare : LineState::Loaded;
+}
 
 constexpr PullDown classify_levels(const Levels &l) {
     using namespace raprobe;
@@ -74,19 +84,12 @@ constexpr PullDown classify_levels(const Levels &l) {
     const bool collapsed = l.idle_cc2_max < kCollapseMv;
     const bool biased = l.idle_cc2_min >= kBiasMinMv && l.idle_cc2_max <= kBiasMaxMv;
     if (!collapsed && !biased) return PullDown::Unclear;
-    // Each driven pin must have settled.
-    if (detail::abs32(l.v1_early - l.v1_settled) > kStableMv) return PullDown::Unclear;
-    if (detail::abs32(l.v2_early - l.v2_settled) > kStableMv) return PullDown::Unclear;
-    // Judge with the lower of the two samples of a pin, so a drift cannot lift a droop out of the margin.
-    const std::int32_t v1 = l.v1_early < l.v1_settled ? l.v1_early : l.v1_settled;
-    const std::int32_t v2 = l.v2_early < l.v2_settled ? l.v2_early : l.v2_settled;
-    const bool v1_bare = v1 >= kUnloadedMinMv;
-    const bool v2_bare = v2 >= kUnloadedMinMv;
-    const bool cc2_drooped = v1_bare && (v1 - v2 >= kDroopMinMv);
-    const bool cc1_drooped = v2_bare && (v2 - v1 >= kDroopMinMv);
-    if (cc2_drooped && collapsed) return PullDown::Cc2;
-    if (cc1_drooped && biased) return PullDown::Cc1;
-    if (biased && v1_bare && v2_bare) return PullDown::None;
+    const LineState c1 = line_state(l.v1_early, l.v1_settled, kCc1BareMinMv);
+    const LineState c2 = line_state(l.v2_early, l.v2_settled, kCc2BareMinMv);
+    if (c1 == LineState::Mixed || c2 == LineState::Mixed) return PullDown::Unclear;
+    if (collapsed && c2 == LineState::Loaded && c1 == LineState::Bare) return PullDown::Cc2;
+    if (biased && c1 == LineState::Loaded && c2 == LineState::Bare) return PullDown::Cc1;
+    if (biased && c1 == LineState::Bare && c2 == LineState::Bare) return PullDown::None;
     return PullDown::Unclear;
 }
 

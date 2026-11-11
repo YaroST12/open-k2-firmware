@@ -49,14 +49,14 @@ std::uint16_t g_mark;                  // the pin mark (backup register DR21): s
 bool g_i2c_fail;                       // every chip register access fails (the bus is dead)
 
 // The CC nets as the ADC sees them (what adc::latest_cc returns): a physical model for the silent-cable-chip probe. The
-// PLUS-coupling bias on CC2, the chip's VCONN switch (SWITCHES0 bit4 = CC1, bit5 = CC2) sourcing ~2.87 V through ~85 ohm,
-// and a cable chip's Ra (~1 kohm) on one line. The idle levels and the loaded VCONN level are the 2026-11-11 hardware
-// numbers; the VCONN level of a bare line is measured on CC1 only. Off by default: the stub then reports "no sweep" as before.
+// PLUS-coupling bias on CC2, the chip's VCONN switch (SWITCHES0 bit4 = CC1, bit5 = CC2) and a cable chip's Ra (~1 kohm)
+// on one line. All levels are the 2026-11-11 hardware numbers: a bare CC1 reads ~2870 mV under VCONN, a bare CC2 ~3275 mV,
+// a line with the cable's Ra ~2644 mV. Off by default: the stub then reports "no sweep" as before.
 struct AdcWorld {
     bool on = false;
     int pulldown = 0;            // 0 none, 1 or 2: the cable's Ra on that line
     int idle1 = 6, bias2 = 1692; // idle levels (mV)
-    int vconn_open = 2870, vconn_loaded = 2644;
+    int vconn_open1 = 2870, vconn_open2 = 3275, vconn_loaded = 2644;
     bool plus_held = false;      // PLUS clamps the CC2 net to ~2 mV and loads a VCONN source on it a little (assumed ~47 mV)
     int rp1 = -1, rp2 = -1;      // a source's Rp: the level of that line without VCONN (mV), -1 = none
 };
@@ -65,7 +65,7 @@ std::uint16_t adc_raw(int mv) { return std::uint16_t((mv * 4096 + 1650) / 3300);
 int adc_line_mv(int line) {
     const bool vconn = (g_reg[0x02] & (line == 1 ? 0x10 : 0x20)) != 0;
     const bool pd = g_adc.pulldown == line;
-    if (vconn) return pd ? g_adc.vconn_loaded : (line == 2 && g_adc.plus_held) ? g_adc.vconn_open - 47 : g_adc.vconn_open;
+    if (vconn) return pd ? g_adc.vconn_loaded : line == 1 ? g_adc.vconn_open1 : g_adc.plus_held ? g_adc.vconn_open2 - 47 : g_adc.vconn_open2;
     if (line == 1) return g_adc.rp1 >= 0 ? g_adc.rp1 : pd ? 0 : g_adc.idle1;
     if (g_adc.rp2 >= 0) return g_adc.rp2;
     return g_adc.plus_held ? 2 : pd ? 0 : g_adc.bias2;
@@ -4757,15 +4757,15 @@ void test_ra_probe_empty_port_runs_the_plan_and_restores_everything() {
     CHECK_EQ(int(r.sw1), int(sw1));
     CHECK_EQ(int(r.pc), (p0 ? 1 : 0) | (p1 ? 2 : 0) | (p2 ? 4 : 0));
     CHECK_EQ(int(r.vconn_pc), 0);
-    // The empty port (measured): CC1 6 mV, the CC2 bias 1692 mV. VCONN on a bare CC1 reads 2870 mV with CC2 still at the bias.
-    // VCONN on CC2 is assumed to read the same on the bare line (not measured: the VCONN2 phase of an empty port).
+    // The empty port (measured): CC1 6 mV, the CC2 bias 1692 mV. VCONN on a bare CC1 reads 2870 mV with CC2 still at the bias;
+    // VCONN on a bare CC2 reads 3275 mV (a different level from CC1's).
     for (int i = 0; i < 3; i++) {
         CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseIdle, i)].cc1_raw), int(raw_mv(6)));
         CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseIdle, i)].cc2_raw), int(raw_mv(1692)));
         CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn1, i)].cc1_raw), int(raw_mv(2870)));
         CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn1, i)].cc2_raw), int(raw_mv(1692)));
         CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn2, i)].cc1_raw), int(raw_mv(6)));
-        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn2, i)].cc2_raw), int(raw_mv(2870)));
+        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn2, i)].cc2_raw), int(raw_mv(3275)));
     }
     // Whole run: three phases of 100 ms and one settle gap (the fake clock only moves in the waits).
     CHECK_EQ(g_ms - t0 >= raprobe::total_ms() && g_ms - t0 <= raprobe::total_ms() + 10, true);
@@ -4809,21 +4809,21 @@ void test_ra_probe_samples_follow_the_ra_and_report_raw_values_only() {
     CHECK_EQ(int(r.s[5].cc1_raw), int(raw_mv(2870)));
     CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(2644)));
     rp_cleanup();
-    // The same on CC1 (assumed: the CC1 pull-down under VCONN is not measured): idle CC1 stays 0, VCONN on CC1 droops.
+    // The same on CC1 (measured, Baseus and CUKTECH cables): idle CC1 stays 0, VCONN on CC1 droops, bare CC2 reads 3275.
     rp_world();
     g_adc.pulldown = 1;
     CHECK_EQ(int(rp_run(r)), 0);
     CHECK_EQ(int(r.s[2].cc1_raw), int(raw_mv(0)));
     CHECK_EQ(int(r.s[2].cc2_raw), int(raw_mv(1692)));
     CHECK_EQ(int(r.s[5].cc1_raw), int(raw_mv(2644)));
-    CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(2870)));
+    CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(3275)));
     rp_cleanup();
-    // PLUS held: the CC2 net is clamped at idle (looks like a collapsed bias) and VCONN on CC2 droops only a little.
+    // PLUS held: the CC2 net is clamped at idle (looks like a collapsed bias) and VCONN on CC2 droops only a little (assumed).
     rp_world();
     g_adc.plus_held = true;
     CHECK_EQ(int(rp_run(r)), 0);
     CHECK_EQ(int(r.s[2].cc2_raw), int(raw_mv(2)));
-    CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(2870 - 47)));
+    CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(3275 - 47)));
     rp_cleanup();
 }
 

@@ -5,8 +5,8 @@
 // cable whose chip is there but silent has one on the line the K2's VCONN would power. Three phases of three raw ADC
 // samples each (2, 10 and 100 ms after the phase starts):
 //   idle   : nothing driven, the snapshot pin levels; the CC2 net idles at ~1.7 V (PLUS-key coupling) and an Ra on it collapses it
-//   VCONN1 : the chip's VCONN switch on CC1 only (PC13 low): CC1 reads ~2.87 V bare, less through a cable Ra
-//   VCONN2 : the same on CC2
+//   VCONN1 : the chip's VCONN switch on CC1 only (PC13 low): CC1 reads ~2.87 V bare, ~2.64 V through a cable Ra
+//   VCONN2 : the same on CC2: ~3.27 V bare, ~2.64 V through a cable Ra
 // This header is the pure part (plan, refusals, guards, wire result); the register work is fusb302::ra_probe() in
 // src/drivers/fusb302.cpp and the verdict is k2/pd/ra_class.hpp. Host-tested in tests/test_ra_probe.cpp. The levels
 // come from docs/K2_PORTS_SPEC.md ("The CC front end", measured 2026-11-11) and are tunable constants, not facts.
