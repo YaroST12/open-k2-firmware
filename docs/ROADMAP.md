@@ -206,11 +206,17 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `k2/card-256` (106f33d2), hardware check pending: `append` refuses before it compresses when the reserve cannot be met
   and it has no capture of its own to drop, and `fs::Fs::used_blocks` is cached until the next write, so a refusal reads
   no flash (`tests/test_bbstore.cpp`, `tests/test_bbpersist.cpp`: a refused capture is not retried by later polls).
-  Validate: loop_survey on the auto-off port shows no 41 ms pass and `[BB] ... last=` near 0 ms on a refusal. (2) The
+  Validate: loop_survey on the auto-off port shows no 41 ms pass and `[BB] ... last=` near 0 ms on a refusal.
+  **Hardware 1.0.0-606-d3bc07ea (CUKTECH USB-A, cutting): passes.** `[BB] skipped=12..19 last=2-3ms max=3ms`; Home
+  PD-service gap max 87 ms -> 8 ms, gaps over 10 ms 8 -> 0 (`runs/loop-survey/v1.0-606-gd3bc07ea/`). (2) The
   space: open, decision pending. A 256 B inline card file does not solve it (64 inline cards still take 54-74 blocks
   after re-tests, the metadata pairs split); the caps sum to 215 of 90 blocks (docs/ARCHITECTURE.md "Volume budget",
   `tests/test_volume_budget.cpp`). Options: several cards per file, or lower caps. Also fixed there: v8/v9 card files
-  (212/228 B) were not listed (b4c391fc); `cards list` may show more cards after the update. Evidence
+  (212/228 B) were not listed (b4c391fc); `cards list` may show more cards after the update. **That fix has a
+  regression on 1.0.0-606:** 69 card files, and the index takes the first 64 in name order, so five of the newest cards
+  (high-hex fingerprints) drop out of `cards list`, and three ids (53, 57, 58) are duplicated (they were reused while the old
+  files were invisible); `[BB] free=0`. Nothing deleted. Fix in progress on `k2/card-256`; no charger-test save on 606.
+  `runs/2026-11-11-integ600-hw/cards-{before,after}.txt`. Evidence
   `runs/loop-survey/` (integ worktree).
 - **PD Stress did not release Rd at its end** (open since before 2026-11-11; fixed on `k2/small-fixes`, hardware check
   pending): the run ended with the K2's Rd still on CC, the one a pd-reread presented and the run took over. Every end of a
