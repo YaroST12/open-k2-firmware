@@ -81,7 +81,7 @@ static void test_render() {
     CHECK_EQ(first >= 0, 1);
     CHECK_EQ(last, font_16.ascent - 1);                    // last ink row sits on the baseline
 
-    // The 48 px '8' has solid ink and, for an anti-aliased (4 bpp) face, blended edge pixels.
+    // The 48 px '8' has solid ink and, being an anti-aliased face, blended edge pixels.
     bool saw_fg = false, saw_edge = false;
     for (int r = 0; r < font_48.height; r++) {
         int w = render_row(font_48, "8", r, lut, row, 240);
@@ -91,7 +91,7 @@ static void test_render() {
         }
     }
     CHECK_EQ(saw_fg, 1);
-    CHECK_EQ(saw_edge, font_48.bpp == 4);
+    CHECK_EQ(saw_edge, 1);
 
     // Clipping: the row never writes more than max_px pixels.
     uint16_t guard[8] = {1, 1, 1, 1, 1, 1, 1, 1};
@@ -228,7 +228,7 @@ static void test_font_tables() {
     CHECK_EQ(font_12.height <= 12, 1);  CHECK_EQ(font_16.height <= 16, 1);
     CHECK_EQ(font_24.height <= 24, 1);  CHECK_EQ(font_48.height <= 32, 1);
     for (const Font *f : {&font_12, &font_16, &font_24, &font_48}) {
-        CHECK_EQ(f->bpp == 1 || f->bpp == 4, 1);
+        CHECK_EQ(f->zmax >= 1 && f->zmax <= 15, 1);
         for (uint16_t k = 0; k < f->count; k++) {
             const Glyph &g = f->glyphs[k];
             if (k) CHECK_EQ(f->codepoints[k] > f->codepoints[k - 1], 1);            // sorted: binary search
@@ -239,18 +239,16 @@ static void test_font_tables() {
     }
 }
 
-// ---- 4 bpp and 1 bpp glyph decoding on hand-built fonts ----------------------------------------
+// ---- run-length coded glyph decoding on a hand-built font ---------------------------------------
 
 namespace {
-// A 3x2 glyph, coverage levels row0 = 0 5 15, row1 = 10 0 7; two pixels per byte, high nibble first,
-// row stride (w + 1) / 2 = 2 bytes. Pen advance 4, box starts one pixel right of the pen.
-const uint8_t kBmp4[] = {0x05, 0xF0, 0xA0, 0x70};
+// A 3x2 glyph, coverage levels row0 = 0 5 15, row1 = 10 0 7 (one 8-row group: no length bytes). With
+// zmax 2 the stream is the tokens [0 0] (one zero), 5, F, A, [0 0], 7: nibbles 0 0 5 F A 0 0 7, high
+// nibble first. Pen advance 4, box starts one pixel right of the pen.
+const uint8_t kBmp4[] = {0x00, 0x5F, 0xA0, 0x07};
 const uint16_t kCp[] = {'A'};
 const Glyph kGlyph[] = {{0, 3, 2, 1, 2, 4}};   // offset, w, h, left, top, adv
-const Font kF4 = {kBmp4, kCp, kGlyph, 1, 4, 2, 0, 2, 2, 4};
-// Same shape at 1 bpp: row0 = 0 1 1, row1 = 1 0 1, one byte per row.
-const uint8_t kBmp1[] = {0x60, 0xA0};
-const Font kF1 = {kBmp1, kCp, kGlyph, 1, 4, 2, 0, 2, 2, 1};
+const Font kF4 = {kBmp4, kCp, kGlyph, 1, 4, 2, 0, 2, 2, 2};
 }  // namespace
 
 static void test_four_bpp_blend() {
@@ -293,15 +291,6 @@ static void test_four_bpp_column_matches_row() {
             CHECK_EQ(col[r], row[c]);
         }
     }
-}
-
-static void test_one_bpp_still_decodes() {
-    uint16_t lut[16], row[4];
-    make_blend_lut(0xFFFF, 0x0000, lut);
-    render_row(kF1, "A", 0, lut, row, 4);
-    CHECK_EQ(row[1], 0x0000);  CHECK_EQ(row[2], 0xFFFF);  CHECK_EQ(row[3], 0xFFFF);
-    render_row(kF1, "A", 1, lut, row, 4);
-    CHECK_EQ(row[1], 0xFFFF);  CHECK_EQ(row[2], 0x0000);  CHECK_EQ(row[3], 0xFFFF);
 }
 
 // The callers that stream a wide row in chunks (gfx_text, the Home cell) take it as render_row_span windows:
@@ -362,6 +351,5 @@ int main() {
     test_four_bpp_blend();
     test_four_bpp_blends_against_cell_background();
     test_four_bpp_column_matches_row();
-    test_one_bpp_still_decodes();
     return test_report("test_text");
 }
