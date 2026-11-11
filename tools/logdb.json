@@ -503,6 +503,9 @@
   "506": "[FC] dcp check aborted have=%d idle=%d ours=%d",
   "507": "[FC] dcp check dm_idle=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
   "508": "[AFC] n=%d tx=0x%02X rx=%d vbus=%d\n",
-  "509": "[CT] ps_rdy row=%u flags=%u ms=%u\n"
+  "509": "[CT] ps_rdy row=%u flags=%u ms=%u\n",
+  "510": "[PD] Rd CC%u -> CC%u: no VBUS after %u ms on a direct plug (try %u)\n",
+  "511": "[CT] offer still below the claim after the cable read: %u W of %u W\n",
+  "512": "[CT] re-attach decision: claim %u W, best offer %u W, nothing above 3 A=%u -> %s\n"
  }
 }
