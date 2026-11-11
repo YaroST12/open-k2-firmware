@@ -14,6 +14,7 @@
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/handback.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/remote.hpp"
 #include "k2/core/rescan.hpp"
@@ -101,6 +102,7 @@ void end_boot_screen(uint32_t now) {
     k2::dpsniff::poll(now, k2::power::read().value_or(k2::power::Metrics{}).vbus_mv);
     if (const auto pm = k2::power::read()) k2::pdtrace::vbus_sample(k2::power::vbus_fast_mv().value_or(pm->vbus_mv), pm->current_ma);   // black box, gated 50 ms / 100 mV / 20 mA; VBUS un-averaged so its steps carry their real time
     k2::adc::poll();
+    k2::loopguard::poll(now);               // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
     const bool sensor_was_online = c.accelerometer.online();
     if (c.accelerometer.poll(now)) {
         c.ui.feed_gravity(c.accelerometer.read(), now);

@@ -59,6 +59,10 @@ void service();
 
 // True once the host has configured the device.
 bool configured();
+// A host configured the device and keeps the bus awake (not suspended). There is no VBUS sensing: after a PC is unplugged the
+// device stays "configured" but suspended, so this is the live "a PC is on the HID port" signal (k2/core/loop_guard.hpp).
+// False while the USB link is off (the core never started).
+bool host_active();
 
 // Queue one log line (truncated to 63 bytes) / a printf-style line (see k2/core/fmt.hpp).
 void log(std::string_view msg);

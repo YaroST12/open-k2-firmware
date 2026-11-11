@@ -3,6 +3,7 @@
 #include "k2/ui/ui.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
@@ -364,10 +365,14 @@ Ui::Session Ui::session() {
     return s;
 }
 
+// The loop lock's footer line (8 px a character in the 220 px footer band).
+static_assert(fits_px(8, loopguard::kLockText, 220), "the loop lock line is wider than the footer band");
+
 // PD Stress asks this one: the same owners as busy_reason() minus the ones a run causes itself (a held contract, the sink state, an
 // EPR contract). Its own run is not "foreign".
 const char *Ui::foreign_busy() const {
     const auto fs = fctrig::status();
+    if (loopguard::locked()) return loopguard::kLockText;   // a run starts nothing above 5 V, a restore waits (k2/core/loop_guard.hpp)
     if (charger_test_busy()) return "Test running: stop it";
     if (fc_release_.busy()) return "5V release: wait";
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return "QC trigger: stop it";
@@ -815,6 +820,11 @@ Ui::TriggerOutcome Ui::trigger(const pd::Choice &c, uint32_t now_ms, bool confir
     }
     if (pd::is_fake()) return {pd::Err::NoCaps, false};
     const bool above_5v = trigger_needs_confirm(pd::active_caps(), c, ctx_.cap_mv);
+    if (above_5v && loopguard::locked()) {   // before the confirm prompt: nothing to confirm (the sink refuses the same, OverCap)
+        K2LOG("[LOOP] trigger PDO%u refused: 5V lock\n", c.pos);
+        ctx_.trig_armed = false;
+        return {pd::Err::OverCap, false};
+    }
     // Lab over-load: the confirm rule is judged first, so a refused-attach state cannot skip it (both flags needed).
     if (pd::over_load_verdict(over_load, above_5v, confirm) == pd::OverLoadVerdict::NeedConfirm) {
         K2LOG("[UI] trigger PDO%u over-load above 5V needs confirm\n", c.pos);
@@ -1162,9 +1172,10 @@ void Ui::tick(uint32_t now_ms) {
     link::set_inline_mode(link_.inline_mode());
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
-    twin_hw::live_poll(twin_ctx(now_ms));
+    twin_hw::live_poll(twin_ctx(now_ms));   // the twin proof ends itself under the loop lock (its busy input, twin_hw.cpp)
+    if (loopguard::locked() && pdstress_.running()) pdstress_.cancel();   // the HID-cable loop 5 V lock: released to 5 V at this poll
     pdstress_.poll(now_ms);   // after the charger test's poll: that one clears the run-owner flag a run of ours has set
-    const bool stress_note = pdstress_.footer() != nullptr;
+    const bool stress_note = pdstress_.footer() != nullptr || loopguard::locked();   // a footer note: the run's line or the loop lock
     if (pdstress_note_ && !stress_note) current().invalidate();   // the run's line goes: the page repaints its own footer
     pdstress_note_ = stress_note;
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
@@ -1193,6 +1204,8 @@ void Ui::draw_release_notice() {
         const bool unsafe = fc_release_.state() == trig::Release::State::Unsafe;
         draw_footer(ctx_.content, unsafe ? FooterTone::Error : FooterTone::Caution,
                     unsafe ? "Unsafe VBUS: unplug source" : "FC releasing; verify 5V");
+    } else if (loopguard::locked() && menu() != Menu::Trigger) {
+        draw_footer(ctx_.content, FooterTone::Caution, loopguard::kLockText);   // on whatever page is up, while the lock holds
     } else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger) {
         draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up
     }

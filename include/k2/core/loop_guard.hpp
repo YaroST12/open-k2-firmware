@@ -55,6 +55,10 @@ inline constexpr std::int32_t kSafeMv = 5500;         // VBUS at or below this: 
 inline constexpr std::uint32_t kOrderMs = 600;        // 5 V order -> Hard Reset (tPSTransition 550 ms + a sample)
 inline constexpr std::uint32_t kResetMs = 1000;       // Hard Reset -> CC detach (tSafe0V 650 ms + margin)
 
+// The one line the lock shows: the Caution footer on every page while locked, PD Stress's refusal, the shell's lab refusal. The
+// charger test's Reason::Loop name is the same words (its pure table cannot include this header).
+inline constexpr const char* kLockText = "HID-cable loop: 5V lock";
+
 enum class Reason : std::uint8_t { None, Certain, Suspected };
 constexpr const char* reason_name(Reason r) {
     return r == Reason::Certain ? "certain" : r == Reason::Suspected ? "suspected" : "none";

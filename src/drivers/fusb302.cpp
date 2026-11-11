@@ -2641,6 +2641,12 @@ pd::Err request_inner(const pd::Choice& c, bool over_load) {
         K2LOG("[PD] trigger over-load: far sink attached, no far PD message this attach (lab only)\n");
     }
     if (g_active_cc == 0) return pd::Err::NoCaps;
+    if (g_sink.hv_lock() && c.pos > 1) {
+        // The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): only PDO 1 (vSafe5V) may be asked for. Checked before the
+        // un-ACKed-caps preparation below, which would otherwise answer Ok and refuse later; pd::Sink::trigger holds the same rule.
+        K2LOG("[LOOP] request pos %d %d mV refused: 5V lock\n", c.pos, c.mv);
+        return pd::Err::OverCap;
+    }
     if (g_ident.running() || g_probe.running() || g_prep.active()) return pd::Err::Busy;
     if (!g_session.fresh()) {   // never a Request that answers nothing: the offers must be from this attach
         K2LOG("[PD] Trigger refused: no Source_Capabilities in this attach (session %u)\n",
@@ -2683,6 +2689,12 @@ bool sink_hard_reset(bool lab_inline) {
     return true;
 }
 void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
+void sink_set_hv_lock(bool on) {
+    if (on == g_sink.hv_lock()) return;
+    if (on) g_prep.abort();   // a re-announce prepared for a raise must not send it
+    g_sink.set_hv_lock(on, systick::millis());
+    trace_sink();
+}
 void sink_cap_override(const std::uint32_t* pdos, std::uint8_t n) { g_sink.set_sink_cap_override(pdos, n); }
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     g_cc1_mv = cc1_mv;   // kept for the attach scan's ADC cross-check (pd::rd_window_line) and its re-run on fresh levels

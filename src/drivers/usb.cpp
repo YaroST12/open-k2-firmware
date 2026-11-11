@@ -114,6 +114,7 @@ void detach(std::uint32_t hold_ms) {
 }
 
 bool configured() { return tud_mounted(); }
+bool host_active() { return g_started && tud_mounted() && !tud_suspended(); }
 
 void poll() {
     if (!g_started) return;            // USB link off (k2/drivers/usbcfg.hpp): the core was never started

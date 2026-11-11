@@ -368,7 +368,34 @@ static void test_the_status_block_follows_the_run() {
     CHECK_EQ(st.elapsed_ms, u2.pd_stress().elapsed_ms(g_now));
 }
 
+// The HID-cable loop 5 V lock (k2/core/loop_guard.hpp) in the Ui: PD Stress does not start and a run is cancelled back to 5 V, a PD
+// trigger above 5 V is refused before any confirm prompt, and the Caution footer line names the lock.
+static void test_the_loop_lock_refuses_and_cancels() {
+    fixture(); g_stub.loop_locked = true;
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Busy));
+    CHECK_STR(ui.foreign_busy(), "HID-cable loop: 5V lock");
+    const int requests = g_stub.requests;
+    const Ui::TriggerOutcome t = ui.trigger(pd::Choice{3, 15000, 3000}, g_now, false);
+    CHECK_EQ(int(t.err), int(pd::Err::OverCap));
+    CHECK_EQ(t.need_confirm, false);
+    CHECK_EQ(int(ui.trigger(pd::Choice{3, 15000, 3000}, g_now, true).err), int(pd::Err::OverCap));
+    CHECK_EQ(g_stub.requests, requests);
+    CHECK_EQ(logged("[LOOP] trigger PDO3 refused: 5V lock"), true);
+    g_stub.loop_locked = false;
+    CHECK_EQ(ui.foreign_busy() == nullptr, true);
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Ok));
+    run(ui, 3000);
+    CHECK_EQ(ui.pd_stress().running(), true);
+    g_stub.loop_locked = true;
+    run(ui, 6000);
+    CHECK_EQ(ui.pd_stress().running(), false);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::Cancelled));
+    CHECK_EQ(g_stub.releases >= 1, true);
+}
+
 int main() {
+    test_the_loop_lock_refuses_and_cancels();
     test_the_status_block_follows_the_run();
     test_refuses_without_a_monitor();
     test_refuses_without_a_source_list();

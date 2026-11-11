@@ -8,6 +8,7 @@
 #include "k2/core/fs.hpp"
 #include "ui_stubs.h"
 #include "k2/core/bbpersist.hpp"
+#include "k2/core/loop_guard.hpp"
 #include "k2/chargertest/charger_journal_hw.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/pd/link.hpp"
@@ -723,6 +724,14 @@ bool set(Setting s) {
     return g_stub.usb_set_ok;
 }
 }  // namespace k2::usbcfg
+
+namespace k2::loopguard {
+void poll(std::uint32_t) {}
+bool locked() { return g_stub.loop_locked; }
+Reason reason() { return g_stub.loop_locked ? Reason::Suspected : Reason::None; }
+bool pending() { return false; }
+std::uint16_t events() { return 0; }
+}  // namespace k2::loopguard
 
 namespace k2::uiprefs {
 Prefs stored() { return g_stub.prefs; }

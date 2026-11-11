@@ -562,6 +562,14 @@
   "565": "[EMK] pull-down probe: refused reason=%u verdict=%s\n",
   "566": "[EMK] pull-down probe: verdict=%s n=%u flags=%u\n",
   "567": "[RDI] boot look: record %s pin=%u canary=%d host=%d sram=%u/%u\n",
-  "568": "[RDI] record %s pin=%u ignored: the backup registers did not survive this boot (a stale record)\n"
+  "568": "[RDI] record %s pin=%u ignored: the backup registers did not survive this boot (a stale record)\n",
+  "569": "[LOOP] %s vbus=%d\n",
+  "570": "[LOOP] detach refused (inline or pinned Rd): VBUS stays %d mV\n",
+  "571": "[LOOP] lock %s aux=%d vbus=%d host=%d n=%u\n",
+  "572": "[LOOP] clear aux=%d vbus=%d host=%d\n",
+  "573": "[LOOP] suspect aux=%d vbus=%d, no USB host: lock in %u ms\n",
+  "574": "[LOOP] suspect over aux=%d vbus=%d host=%d\n",
+  "575": "[LOOP] request pos %d %d mV refused: 5V lock\n",
+  "576": "[LOOP] trigger PDO%u refused: 5V lock\n"
  }
 }

@@ -266,6 +266,9 @@ bool sink_hard_reset(bool lab_inline = false);
 // set_sink_cap_override). The run that sets it clears it, on every exit path.
 void sink_cap_override(const std::uint32_t* pdos, std::uint8_t n);
 void sink_set_cap(std::uint32_t mv);  // highest voltage a request may ask for (from the power monitor)
+// The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): while on, the sink refuses every request above 5 V (pd::Err::OverCap) and
+// re-announced offers are answered at 5 V; the edge to on releases a contract (or an EPR entry) above 5 V to PDO 1.
+void sink_set_hv_lock(bool on);
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv);  // measured CC voltages; inline, no sink Rd near 1.5 V = sink left. Also stored as the latest net levels (g_cc1_mv/g_cc2_mv) for the attach scan's Rd-window cross-check and its re-run on fresh levels while a line is attached with no PD decoded yet; -1 = unknown
 // A sink's Rd level (the sink band, about 1.5 V) on a CC line while the K2 pulls none down itself, from the latest sink_cc() levels:
 // a phone or laptop on the other end of an inline K2, visible even when no PD message is ever exchanged. False while the K2's own
