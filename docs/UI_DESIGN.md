@@ -641,8 +641,10 @@ button; entering the page and reading/capturing it remain passive.
 3. **Pressed feedback.** The pressed slot flashes `focus` for 120 ms. The long-press slot stays lit
    until release.
 4. **Hazardous applies are deliberate.** FC uses a Review screen and two released short OK presses
-   above 5V; no navigation or hold sends voltage. FC has no on-device inline override. Existing
-   The Who's attached Identify and Read cable actions ask for a second OK while a live sink is inline. Energy reset can be undone for 5 s.
+   above 5V; no navigation or hold sends voltage. FC has no on-device inline override. The Who's
+   attached Identify and Read cable actions are refused outright while a live sink is inline (the K2
+   never transmits there; the Sink tab shows the sniffed identity), with no second-OK override. Energy
+   reset can be undone for 5 s.
 5. **The reboot hold is visible** (HoldCard).
 6. **Stale lifecycle.**
    - Unplug: the screen goes grey and shows the LAST pill.

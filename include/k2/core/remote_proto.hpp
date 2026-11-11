@@ -525,6 +525,11 @@ constexpr size_t kAdcRawAll = 10, kAdcScanSlots = 7;
 
 enum class Status : uint8_t { Ok = 0, UnknownCmd = 1, BadLength = 2, BadArg = 3, Busy = 4, NeedConfirm = 5 };
 
+// The reply for an action the UI declined to run (a charger test or an FC release owns the ports, a negotiation is
+// in flight): Busy with no payload, never NeedConfirm - NeedConfirm means "add the confirm byte" and only the
+// confirm check (action_needs_confirm) answers it. A host that retried with confirm after a busy refusal would get nothing new.
+constexpr Status action_start_status(bool started) { return started ? Status::Ok : Status::Busy; }
+
 enum class ParseError : uint8_t {
     None,
     TooShort,    // fewer bytes than a header

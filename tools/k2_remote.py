@@ -108,7 +108,7 @@ SHOT_FORMAT_RLE565 = 1
 
 STATUS_OK, STATUS_UNKNOWN_CMD, STATUS_BAD_LENGTH, STATUS_BAD_ARG, STATUS_BUSY, STATUS_NEED_CONFIRM = 0, 1, 2, 3, 4, 5
 STATUS_NAMES = {0: "ok", 1: "unknown command", 2: "bad length", 3: "bad argument", 4: "busy",
-                5: "needs --confirm: this raises the output above 5 V, drives D+/D-, or may interrupt a live sink"}
+                5: "needs --confirm: this raises the output above 5 V or drives D+/D-"}
 
 BUTTONS = {"back": 0, "minus": 1, "ok": 2, "plus": 3}
 ACTIONS = {"pd-rescan": 1, "emarker": 2, "energy-reset": 3, "fc-scan": 4, "fc-reset": 5, "identify": 6}
@@ -249,6 +249,8 @@ class RemoteError(RuntimeError):
             text += " (a charger test or an FC release owns the link: the library write waits for it)"
         if cmd == CMD_STORE and status == STATUS_BUSY:
             text += " (a charger test or an FC release owns the link: the flash save waits for it)"
+        if cmd == CMD_ACTION and status == STATUS_BUSY:
+            text += " (a charger test or an FC release owns the ports, or a negotiation is in flight: the action did not run)"
         if cmd == CMD_IDENTIFY_DEVICE and payload and payload[0] == PD_ERR_INLINE:
             # the inline Identify refusal (BadArg + pd::Err::Inline), not "busy": a live sink is
             # attached, the K2 transmits nothing, the Sink tab shows the sniffed identity
@@ -3133,7 +3135,9 @@ def build_parser():
     sa.add_argument("--confirm", action="store_true", help="allow a voltage above 5 V (the same flag as `pd request`)")
     spds.add_parser("status", help="trigger engine state")
     si = sub.add_parser("identify-device", help="ask the attached device for its identity (idle CC only)")
-    si.add_argument("--confirm", action="store_true", help="allow it while a live sink is attached")
+    si.add_argument("--confirm", action="store_true",
+                    help="no effect (kept so old scripts still parse): inline, with a live sink attached, the K2 refuses "
+                         "Identify outright and the Sink tab shows the sniffed identity")
     si.add_argument("--wait", type=float, default=ID_POLL_S, help="seconds to wait for the sequence")
     sa = sub.add_parser("apple-read", help="lab-only: read an Apple charger's register file (SVID 0x05AC). Arms the readout "
                                            "(our SVIDs ACK adds 0x05AC), re-requests the CURRENT contract and reads the result. "

@@ -1132,6 +1132,10 @@ static void test_action_page_reboot_log() {
     check_header(r, 0x06, 1, Status::Ok, 1);
     CHECK_EQ(r[kRspHeader], 2);
     CHECK_EQ(f.last_action, 2);
+    // A declined action (ports busy, negotiation in flight) is Busy, never NeedConfirm; the dispatcher passes
+    // the backend's Busy through with no payload.
+    CHECK_EQ(int(k2::remote::action_start_status(true)), int(Status::Ok));
+    CHECK_EQ(int(k2::remote::action_start_status(false)), int(Status::Busy));
     CHECK_EQ(run(f, request(0x06, 2, {}), r), 1);
     check_header(r, 0x06, 2, Status::BadLength, 0);
     CHECK_EQ(f.last_confirm, 0);

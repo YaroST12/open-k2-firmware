@@ -269,7 +269,7 @@ Put all artefacts in `runs/xiaomi20k-5a/`.
    Repeat step 2.
    - Log every SOP' frame the bank sends. A vendor SVID 0x2717 SOP' request means the bank wants the Xiaomi cable
      extension (compare the CUKTECH notes).
-4. **Mi 11 request shape.** On whichever list shows an APDO ≥ 5 A, run `pd attach 10000 <apdo_max_mA>`, then step
+4. **Mi 11 request shape.** On whichever list shows an APDO ≥ 5 A, run `pd attach 10000 <apdo_max_mA> --confirm`, then step
    9.0 → 10.0 V in 20 mV steps under a 4-5 A load.
    - Never exceed the advertised current.
    - Watch for Reject, Hard Reset and VBUS sag.

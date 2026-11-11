@@ -27,7 +27,7 @@ Read this, then `docs/CHARGER_QUIRKS.md` (per-charger evidence) and `docs/EMARKE
 
 ## Tools (repo root)
 
-- `k2_remote.py`: `ping`, `state`, `pdos`, `pd request ... --confirm`, `pd attach <mV> <mA> <action>`,
+- `k2_remote.py`: `ping`, `state`, `pdos`, `pd request ... --confirm`, `pd attach [mV] [mA] [--confirm]` (default 5 V; above 5 V needs `--confirm`; refused inline),
   `pd-rescan`, `charger-test summary|results`, `screenshot OUT.png`, `log on|off`, `dfu --confirm`.
 - `ct_start.py --units pd --wait N` — start a charger-test run, wait N s.
 - `pd_trace.py clear|dump|freeze|resume` — CC line trace.

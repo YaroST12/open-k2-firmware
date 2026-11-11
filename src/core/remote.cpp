@@ -439,9 +439,9 @@ remote::Status Remote::action(uint8_t id, bool confirm) {
     K2LOG("[RMT] action=%d confirm=%d\n", static_cast<int>(id), confirm ? 1 : 0);
     // The dispatcher already refuses this; the backend asks again so no other caller can start a VBUS-raising action unconfirmed.
     if (remote::action_needs_confirm(id) && !confirm) return remote::Status::NeedConfirm;
-    if (!ui_.run_action(static_cast<Action>(id), systick::millis(), confirm))
-        return remote::Status::NeedConfirm;
-    return remote::Status::Ok;
+    // A declined run (a charger test or an FC release owns the ports, a negotiation is in flight) is Busy with no
+    // payload; NeedConfirm is only the confirm check above.
+    return remote::action_start_status(ui_.run_action(static_cast<Action>(id), systick::millis(), confirm));
 }
 
 remote::IdentifyResult Remote::identify_device(uint8_t op) {

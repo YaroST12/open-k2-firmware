@@ -980,6 +980,17 @@ class ActivePd(unittest.TestCase):
         self.assertIn("busy", str(e))
         self.assertIn("charger test", str(e))
 
+    def test_action_busy_is_not_need_confirm(self):
+        # a declined action (ports busy, negotiation in flight) is Busy, and the message says so
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_ACTION)
+        self.assertIn("busy", str(e))
+        self.assertIn("charger test", str(e))
+        self.assertNotIn("confirm", str(e).lower())
+
+    def test_identify_device_confirm_help_says_it_does_nothing(self):
+        help_text = kr.build_parser()._subparsers._group_actions[0].choices["identify-device"].format_help()
+        self.assertIn("no effect", help_text)
+
     def test_reset_release_status(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="reset"))

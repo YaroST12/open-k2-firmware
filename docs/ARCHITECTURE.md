@@ -984,7 +984,7 @@ Presets (Settings > Smoothing, default Medium). Measured on the host with 50 Hz 
 
 A drop of 0.5 V therefore shows within one display refresh (one sample) at Low and Medium and within two at High, while the jitter is cut by more than half at Medium. A 1 V/s ramp trails the input by less than 0.1 V at every preset. The preset is applied with `power::set_smoothing()` (re-seeds the filter, the next sample is shown as read) and stored in `/prefs.cfg` byte 6 (see the file table: 0 = default, else 1 + preset index; older firmware ignores it).
 
-Verified on-device 2026-11-04 (cf064ec, Anker Nano II 100W on the bottom port, 9 V contract held via `pd attach 9000`): the Settings > Smoothing row cycles Off/Low/Medium/High with the hint text changing on screen, and the home readout at the held 9 V differs between Off and Medium (pixel diff in the readout region; raw VBUS 9.06-9.08 V over 10 s, no hard resets). Screenshots: /tmp/k2runs/smooth-settings-{0,off,medium}.png, smooth-home-{off,medium}-9v.png.
+Verified on-device 2026-11-04 (cf064ec, Anker Nano II 100W on the bottom port, 9 V contract held via `pd attach 9000 --confirm`): the Settings > Smoothing row cycles Off/Low/Medium/High with the hint text changing on screen, and the home readout at the held 9 V differs between Off and Medium (pixel diff in the readout region; raw VBUS 9.06-9.08 V over 10 s, no hard resets). Screenshots: /tmp/k2runs/smooth-settings-{0,off,medium}.png, smooth-home-{off,medium}-9v.png.
 
 ### k2_remote.py
 
