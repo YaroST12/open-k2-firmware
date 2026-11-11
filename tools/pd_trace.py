@@ -10,6 +10,10 @@ JSONL file (one JSON object per event).
   pd_trace.py live  [--jsonl FILE] [--raw FILE] [--tail] [--interval S]   poll the ring, print as it comes
   pd_trace.py dump  [--jsonl FILE] [--raw FILE] [--clear]                  everything in the ring, once
   pd_trace.py decode FILE [--jsonl FILE]                                   decode a raw ring dump (--raw)
+  pd_trace.py diagnose FILE [--twin JSON] [--json] [--power FILE]          "why is PD failing": the K2's own
+                                                                           Black Box diagnosis over a saved capture
+                                                                           (trace.raw or a --raw dump), per session;
+                                                                           draw from power.jsonl when it is there
   pd_trace.py captures                                                     list the trigger-frozen captures
   pd_trace.py capture N [--jsonl FILE] [--raw FILE]                        decode capture slot N (contract change,
                                                                            hard reset, VBUS dip, detach)
@@ -907,6 +911,88 @@ def run_trace_stream(port, sink, all_records=False, seconds=None, clock=time.mon
     return ts
 
 
+REPO = Path(__file__).resolve().parent.parent
+
+
+def twin_args(path, name=None, assumed=False, host=False):
+    """bbdiag options for a twin JSON: an identify result ({"identify": {"sink_pdos"}, "identity": {"vid", "pid",
+    "vendor"}}) or a flat {"name", "sink_pdos", "vid", "pid", "host"}."""
+    j = json.loads(Path(path).read_text())
+    ident = j.get("identity", {}) if isinstance(j.get("identity"), dict) else {}
+    pdos = j.get("sink_pdos") or j.get("identify", {}).get("sink_pdos") or []
+    if not pdos:
+        raise ValueError(f"{path}: no sink_pdos in the twin JSON")
+    vid = j.get("vid", ident.get("vid", 0))
+    pid = j.get("pid", ident.get("pid", 0))
+    label = name or j.get("name") or " ".join(x for x in (ident.get("vendor"), ident.get("model")) if x) or Path(path).stem
+    args = ["--twin-name", label, "--twin-pdos", ",".join(f"{int(x) & 0xFFFFFFFF:08X}" for x in pdos)]
+    if vid or pid:
+        args += ["--twin-vid", str(vid), "--twin-pid", str(pid)]
+    if host or j.get("host"):
+        args.append("--twin-host")
+    if assumed:
+        args.append("--assumed")
+    return args
+
+
+def bbdiag_binary():
+    """Build (or refresh) host-build/bbdiag from src/pd/diag.cpp: the same analyser the K2 runs."""
+    import subprocess
+    r = subprocess.run(["make", "-s", "-C", str(REPO), "host-build/bbdiag"], capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise RuntimeError("building host-build/bbdiag failed:\n" + r.stdout + r.stderr)
+    return REPO / "host-build" / "bbdiag"
+
+
+POWER_WINDOW = struct.Struct("<IHHHhHHhh")   # tools/bbdiag_walk.hpp: t_ms, span_ms, n, mv, ma, vmin, vmax, imin, imax
+
+
+def power_windows(jsonl_path):
+    """A k2_stream power.jsonl as bbdiag power-window records. Each row covers every 20 Hz monitor sample since the
+    one before: its mean plus, when it spans more than one sample, the extremes (a single sample is its own min/max).
+    The Black Box ring's VBUS records are rate and deadband limited, so these are the analyser's draw input."""
+    out = bytearray()
+    with open(jsonl_path) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("kind", "power") != "power" or "vbus_mv" not in r or not r.get("valid", True):
+                continue
+            mv, ma = int(r["vbus_mv"]), int(r["ibus_ma"])
+            clamp_i = lambda v: max(-32768, min(32767, int(v)))   # noqa: E731
+            out += POWER_WINDOW.pack(int(r["t_ms"]) & 0xFFFFFFFF, min(int(r.get("span_ms", 0)), 0xFFFF),
+                                     min(int(r.get("n", 1)), 0xFFFF), min(mv, 0xFFFF), clamp_i(ma),
+                                     min(int(r.get("vbus_min", mv)), 0xFFFF), min(int(r.get("vbus_max", mv)), 0xFFFF),
+                                     clamp_i(r.get("ibus_min", ma)), clamp_i(r.get("ibus_max", ma)))
+    return bytes(out)
+
+
+def run_diagnose(a):
+    import subprocess
+    import tempfile
+    cmd = [str(bbdiag_binary()), a.file]
+    if a.json:
+        cmd.append("--json")
+    if a.twin:
+        cmd += twin_args(a.twin, a.twin_name, a.assumed, a.twin_host)
+    power = a.power
+    if power is None:   # a k2_stream run directory keeps power.jsonl next to trace.raw
+        guess = Path(a.file).with_name("power.jsonl")
+        power = str(guess) if guess.exists() else None
+    with tempfile.TemporaryDirectory() as tmp:
+        if power and power != "none":
+            if power.endswith(".jsonl"):
+                win = Path(tmp) / "power.bin"
+                win.write_bytes(power_windows(power))
+                power = str(win)
+            cmd += ["--power", power]
+            print(f"power windows: {a.power or 'power.jsonl next to the trace'}", file=sys.stderr)
+        r = subprocess.run(cmd, timeout=120)
+    return r.returncode
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="PD black box: read and decode the K2's FUSB302 / PD trace ring")
     p.add_argument("--path", help="hidraw path (default: auto-detect)")
@@ -931,6 +1017,16 @@ def main(argv=None):
     d = sub.add_parser("decode", help="decode a raw dump written with --raw")
     d.add_argument("file")
     d.add_argument("--jsonl", metavar="FILE")
+    dg = sub.add_parser("diagnose", help="Black Box diagnosis of a saved capture (runs the device's analyser)")
+    dg.add_argument("file", help="a k2_stream trace.raw or a `dump --raw` file")
+    dg.add_argument("--json", action="store_true", help="findings as JSON, one object per session")
+    dg.add_argument("--twin", metavar="JSON", help="the device's twin: an identify JSON (k2_remote identify --json, "
+                    "its sink_pdos and identity) or {\"name\", \"sink_pdos\", \"vid\", \"pid\", \"host\"}")
+    dg.add_argument("--twin-name", help="name the twin (default: from the JSON)")
+    dg.add_argument("--assumed", action="store_true", help="the twin is assumed for this capture, not matched")
+    dg.add_argument("--twin-host", action="store_true", help="the twin is a USB host (a laptop)")
+    dg.add_argument("--power", metavar="FILE", help="k2_stream power.jsonl (or bbdiag power-window .bin) with the "
+                    "fast VBUS/IBUS min/max windows; default: power.jsonl next to the trace, 'none' to skip")
     c = sub.add_parser("capture", help="decode one trigger-frozen capture")
     c.add_argument("slot", type=int)
     c.add_argument("--jsonl", metavar="FILE")
@@ -953,6 +1049,9 @@ def main(argv=None):
 
     if a.cmd == "transition" and a.tc_cmd == "decode":
         return transition_output(Path(a.file).read_bytes(), a)
+
+    if a.cmd == "diagnose":
+        return run_diagnose(a)
 
     if a.cmd == "decode":
         sink = Sink(a.jsonl)
