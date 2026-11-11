@@ -127,7 +127,26 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
   1.0.0-520-77a384e8, no `USB DATA` while VBUS >= 8 V, `runs/2026-11-11-late-attach/cycles-520/`); the open part is the
   mismatch below. Also seen:
-  `k2_remote state` said `USB DATA` while Home said `SVOOC` (the shell must say what the screen says).
+  `k2_remote state` said `USB DATA` while Home said `SVOOC` (the shell must say what the screen says). **Fixed on
+  `k2/fc-equal-pair`, hardware check pending:** the shell, remote and heartbeat word (`fastcharge::label()`) and the Home
+  row (`home::derive_proto`) now share one rule, `fastcharge::vooc_session_live(verdict, live)`: a live VOOC monitor
+  session with a verdict other than `NoInput` reads SVOOC on both (host test
+  `test_shell_label_and_home_row_agree_on_a_live_session`). Still open: the Detail / Connection pages take the raw
+  `fastcharge::read()` (`src/ui/ui.cpp`, `ctx_.fc`); `fastcharge::label()` there would make every page agree. Validate:
+  OP15 on SVOOC, `k2_remote state` and a Home screenshot say the same word.
+- **Fast-charge verdict reads `AFC FCP` on an equal steady 0.4 V pair** (2026-11-11, CUKTECH 10 GaN 120W USB-A, no
+  load, 1.0.0-564): after shell `dm 0` 200 ms then `dm hiz` the lines read 420 / 387 mV for about 3 s at VBUS 5.12 V and
+  the label read `AFC FCP` for about 2 s. Cause: `band_5v` took bucket(D+)=1 with bucket(D-)=0 as AFC/FCP, and the two
+  equal lines straddled the 0.3 V bucket edge. **Fixed on `k2/fc-equal-pair`, hardware check pending:**
+  `afc_fcp_levels()` refuses an equal pair (also in the 9 V and 12 V bands); an equal 0.6 / 0.6 pair still reads
+  `NO QUICK` without the active proof. Validate: on the CUKTECH USB-A port, `dm 0`, 200 ms, `dm hiz`: the label never
+  reads `AFC FCP`, and a QC / AFC unit on the desk still detects.
+- **Fast-charge verdict flaps during an output sag or cut** (2026-11-11, same port): `APPLE 2.4A` -> `USB DATA` (equal
+  ~2 V lines while VBUS is 4.0 .. 4.8 V) -> `NO INPUT` on every ~6.5 s VBUS cut. **Fixed on `k2/fc-equal-pair`, hardware
+  check pending:** `SagGuard` holds the last verdict while VBUS is below 4.75 V and for one ring refill after
+  (bounded to 250 polls); `NO INPUT` still passes at once. Validate: through three VBUS cuts the label goes `APPLE 2.4A`
+  -> `NO INPUT` with no `USB DATA` in between (`k2_remote state` polled every 100 ms); a real USB data device inline
+  still reads `USB DATA`.
 - **The recorder stream has no boot id or reset cause** (2026-11-11): two boots in one recording look like one (the
   "Power reads 0" scare). Validate: one K2 replug (or `reboot`) inside a recording shows two boot ids and the reset flags.
 - **Twin limiter text with no claimed power** (2026-11-11, twin-observed review): with no claimed source power,

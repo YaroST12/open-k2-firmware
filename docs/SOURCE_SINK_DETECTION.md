@@ -136,7 +136,9 @@ our firmware does.
   active step is `fastcharge`'s DCP check (three polls once per attach, only when the K2 is alone on a 5 V
   source and the pair is quiet: D+ 0 V, then D- 0.6 V with D+ released as the reference, then D+ 0 V with
   D- still driven, D- read back), see `dcp_check_allowed()` in `include/k2/fastcharge/fastcharge_classify.hpp`
-  and `dpdm::kDcpProbe`.
+  and `dpdm::kDcpProbe`. An equal low pair is never read as AFC/FCP (those drive D+ and D- apart), and the verdict is
+  held while VBUS sags below 4.75 V or is cut (`SagGuard`), see `docs/FASTCHARGE_PROTOCOLS.md` "Passive classifier rules".
+  The shell and remote `fc` word and the Home protocol row share one SVOOC rule (`vooc_session_live`).
 
 ### 1.6 Where results surface
 
