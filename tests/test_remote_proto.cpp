@@ -1156,13 +1156,15 @@ static void test_debug_lcd() {
     // The paint totals since boot ride behind the DMA state: pixels sent to the panel, ms inside the stream calls, ms inside fs flash writes.
     f.lcd_snap.paint_px = 0x0A0B0C0D; f.lcd_snap.paint_ms = 1500; f.lcd_snap.fs_ms = 42;
     CHECK_EQ(run(f, request(0x29, 1, {}), r), 1);
-    check_header(r, 0x29, 1, Status::Ok, 22);   // the last byte is the SPI3 divider (8 by default)
+    // Behind the paint totals: the SPI3 divider (8 by default), then the run's worst blocked-paint window as u16 ms (0 = none).
+    check_header(r, 0x29, 1, Status::Ok, 24);
     check_bytes(r, kRspHeader, {3, 0x04, 0x03, 0x02, 0x01, 7, 0, 0, 0,
-                                0x0D, 0x0C, 0x0B, 0x0A, 0xDC, 0x05, 0, 0, 42, 0, 0, 0, 8});
+                                0x0D, 0x0C, 0x0B, 0x0A, 0xDC, 0x05, 0, 0, 42, 0, 0, 0, 8, 0, 0});
     f.lcd_snap.spi_div = 4;
+    f.lcd_snap.blocked_ms = 3100;
     CHECK_EQ(run(f, request(0x29, 3, {}), r), 1);
-    check_header(r, 0x29, 3, Status::Ok, 22);
-    check_bytes(r, kRspHeader + 21, {4});
+    check_header(r, 0x29, 3, Status::Ok, 24);
+    check_bytes(r, kRspHeader + 21, {4, 0x1C, 0x0C});
     CHECK_EQ(run(f, request(0x29, 2, {1}), r), 1);
     check_header(r, 0x29, 2, Status::BadLength, 0);
 }

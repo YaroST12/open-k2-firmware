@@ -274,6 +274,7 @@ void ChargerTestSession::record(const ct::Step& s) {
     if (s.verdict == ct::Verdict::Skip) {
         if (idx < runner_.steps().size() && runev::skip(ctx_.now, static_cast<uint16_t>(idx), static_cast<uint16_t>(s.reason)))
             K2LOG("[TEST] rows from %u skipped: %s\n", unsigned(idx), detail_name(s));
+        if (idx == g_ev_row) log_row_gap(idx, ctx_.now);   // a row that began and then ended as a skip (QC2 Class B "Class A") still ran
         return;
     }
     if (idx < runner_.steps().size()) {
@@ -292,13 +293,17 @@ void ChargerTestSession::record(const ct::Step& s) {
                   unsigned(s.pos), unsigned(rw->lo_mv), unsigned(rw->hi_mv), unsigned(rw->n),
                   ct::name(s.verdict), ct::name(s.reason),
                   unsigned(rw->sum.peak_mv), unsigned(rw->sum.peak_at_mv), unsigned(rw->sum.fold_mv), unsigned(rw->sum.fold_from_mv));
-    // What held the loop while the row was in flight: the longest main-loop iteration (1 ms when healthy) and the longest
-    // gap between two UI ticks (20 ms when healthy), in ms since the row began. A big number names a blocking path.
-    // Same window: what painting cost the row (ms inside the lcd stream calls, wire wait included; pixels sent to the panel)
-    // and what the file-system flash writes cost (ms inside page program / sector erase).
+    log_row_gap(idx, ctx_.now);
+}
+// What held the loop while the row was in flight: the longest main-loop iteration (1 ms when healthy) and the longest
+// gap between two UI ticks (20 ms when healthy), in ms since the row began. A big number names a blocking path.
+// Same window: what painting cost the row (ms inside the lcd stream calls, wire wait included; pixels sent to the panel),
+// what the file-system flash writes cost (ms inside page program / sector erase), and the longest continuous time the page
+// wanted to paint and could not (an engine window the idle hook does not serve): the screen held still that long.
+void ChargerTestSession::log_row_gap(size_t idx, uint32_t now) {
     const paint::Reading pw = paint::meter.window();
-    K2LOG("[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums\n", unsigned(idx), unsigned(gap::loop.peak()),
-          unsigned(gap::ui.peak()), unsigned(pw.paint_ms), unsigned(pw.px), unsigned(pw.fs_ms));
+    K2LOG("[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums blocked=%ums\n", unsigned(idx), unsigned(gap::loop.peak()),
+          unsigned(gap::ui.peak()), unsigned(pw.paint_ms), unsigned(pw.px), unsigned(pw.fs_ms), unsigned(gap::blocked.peak(now)));
 }
 // pattern budget-reannounce-mid-run: the source re-announced its list mid-run and the PD rows were re-planned per row (the row in
 // flight finished or was withdrawn, the still-offered rows follow the new list, the dropped ones read "withdrawn by source").
@@ -585,6 +590,7 @@ void ChargerTestSession::resume_run(uint32_t now) {
     fusb302::set_run_owner(true);
     charger_journal::hw::resumed(runner_.resumed());
     g_ev_row = kNoRow;
+    gap::blocked.begin_run(now);
     runev::emit(runev::Code::Resume, now, ev8(runner_.index()));
     set_stage(Stage::Running); follow_ = true;
 }
@@ -856,6 +862,7 @@ void ChargerTestSession::poll(uint32_t now) {
         const auto& s = runner_.steps()[idx];
         g_ev_row = static_cast<uint16_t>(idx);
         gap::loop.begin_window(); gap::ui.begin_window(); paint::meter.begin_window();   // the row's own longest gaps and paint cost (read by record())
+        gap::blocked.begin_window(now);
         runev::emit(runev::Code::RowStart, now, ev8(idx), static_cast<uint16_t>(s.group), static_cast<uint16_t>(s.algorithm), s.pos);
     }
     if (runner_.suspended()) {
@@ -1157,6 +1164,7 @@ void ChargerTestSession::begin_run() {
     if (r == ct::Reason::None || runner_.state() == ct::State::Unsafe) {
         fusb302::set_run_owner(true);   // from the START itself, not from the next tick
         g_ev_row = kNoRow;
+        gap::blocked.begin_run(ctx_.now);
         runev::emit(runev::Code::Start, ctx_.now, ev8(meta.units.n), ev8(runner_.steps().size()), 0);
         // The plan goes to flash in pieces, one file per tick on a quiet link (a synchronous begin held the main loop 1.5-2.2 s with
         // the charger's contract up, 2026-11-08: no GoodCRC, hard reset). The Runner waits in its Baseline for it (hold), so no
@@ -2423,8 +2431,11 @@ void ChargerTestPage::update(uint32_t now) {
     selection_ = std::clamp(selection_, 0, last_row());
     fill_cable_names();
     // A step in flight inside an engine window the idle hook does not serve (the handshake pulses, the VOOC receive slices,
-    // the UFCS/VIVO windows): nothing paints. The tick is dropped, the next one repaints what is dirty.
-    if (stage_ == Stage::Running && laid_ && runner_.paint_blocked(fctrig::paint_critical())) return;
+    // the UFCS/VIVO windows): nothing paints. The tick is dropped, the next one repaints what is dirty. Every tick tells the
+    // blocked-paint meter whether it was sat out: its longest window is the `[CT] gap ... blocked=` of the row.
+    const bool blocked = stage_ == Stage::Running && laid_ && runner_.paint_blocked(fctrig::paint_critical());
+    gap::blocked.note(now, blocked);
+    if (blocked) return;
     if (bar_key_ != static_cast<uint8_t>(static_cast<uint8_t>(stage_) + 1)) bar();
     title_badge(false);
     switch (stage_) {

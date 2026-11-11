@@ -9,6 +9,7 @@
 #include <span>
 #include <string_view>
 #include "k2/core/log.hpp"
+#include "k2/core/gap_meter.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/cable_r.hpp"
@@ -869,6 +870,7 @@ remote::LcdSnapshot Remote::debug_lcd() {
     s.paint_ms = t.paint_ms;
     s.fs_ms = t.fs_ms;
     s.spi_div = static_cast<uint8_t>(lcd::spi_div());
+    s.blocked_ms = static_cast<uint16_t>(std::min<uint32_t>(gap::blocked.run_peak(systick::millis()), 0xFFFFu));
     K2LOG("[RMT] debug lcd flags=%u transfers=%u stalls=%u\n", s.flags, unsigned(s.transfers), unsigned(s.stalls));
     return s;
 }

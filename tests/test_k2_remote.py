@@ -278,6 +278,13 @@ class Decoders(unittest.TestCase):
         self.assertEqual(kr.decode_lcd(full + bytes([8]))["spi_div"], 8)
         self.assertIn("spi_div=4", kr.render("debug", {"lcd": kr.decode_lcd(full + bytes([4]))}))
         self.assertIn("paint_px=987654", kr.render("debug", {"lcd": d}))
+        # The run's worst blocked-paint window (u16 ms) rides behind the divider; shorter replies carry no blocked_ms.
+        self.assertNotIn("blocked_ms", kr.decode_lcd(full + bytes([4])))
+        r = kr.decode_lcd(full + bytes([8]) + (3100).to_bytes(2, "little"))
+        self.assertEqual(r["spi_div"], 8)
+        self.assertEqual(r["blocked_ms"], 3100)
+        self.assertEqual(kr.decode_lcd(full + bytes([8, 0, 0]))["blocked_ms"], 0)
+        self.assertIn("blocked_ms=3100", kr.render("debug", {"lcd": r}))
 
     def test_debug_cc_probe(self):
         sent = []

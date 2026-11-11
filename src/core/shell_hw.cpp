@@ -18,6 +18,7 @@
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/drivers/lcd_timing.hpp"
+#include "k2/core/gap_meter.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/fastcharge/qc.hpp"
@@ -677,6 +678,7 @@ const char* lab_lcd(const lab::Cmd& c) {
     l.u("paint_px", t.px);
     l.u("paint_ms", t.paint_ms);
     l.u("fs_ms", t.fs_ms);
+    l.u("blocked_ms", gap::blocked.run_peak(systick::millis()));   // the run's longest blocked-paint window
     l.send();
     return nullptr;
 }

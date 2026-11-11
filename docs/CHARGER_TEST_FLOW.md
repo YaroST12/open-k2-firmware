@@ -568,8 +568,13 @@ While a step is in flight (`Runner::quiet()`: Requesting or Holding) the page is
   would touch the label); the row scroll and the row repaints that follow may lag by a tick or two. When the new cell is
   not on screen yet the dot paints as soon as its row does. The chip of the step in flight is found by its level
   (`Token::mv`), because a legacy chip merges the up and down steps of one level and stays pending until the last of them.
-- Each step's end line carries the longest main-loop gap and the longest UI-tick gap during the step
-  (`[CT] gap row=N loop=Xms ui=Yms`, `include/k2/core/gap_meter.hpp`).
+- Each step's end line carries the longest main-loop gap and the longest UI-tick gap during the step, what painting cost
+  it, and the longest continuous time the page wanted to paint and could not
+  (`[CT] gap row=N loop=Xms ui=Yms paint=Pms px=N fs=Fms blocked=Bms`, `include/k2/core/gap_meter.hpp`). `blocked` runs
+  from the first tick the page sat out inside an engine window to the first tick it painted again (`BlockMeter`, noted
+  by every `ChargerTestPage::update`); the screen is still for that long. A row that began and then ended as a skip (the
+  QC2 Class B 20 V wait, "Class A") gets the same gap line; rows skipped without ever starting do not. The run's worst
+  window is in the DebugLcd reply (`k2_remote.py --json debug lcd`, key `blocked_ms`, `lcd show`).
 
 ## Legacy entry when the source never gives up PD
 

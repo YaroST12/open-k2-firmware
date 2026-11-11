@@ -2922,6 +2922,80 @@ static void test_a_row_in_an_engine_window_paints_nothing() {
     g_stub.fc_critical = false;
     CHECK_EQ(blocked > 5, true); CHECK_EQ(free_px_ticks > 0, true);   // the window blocked paints, the rest of the step did not
 }
+// Every "[CT] gap row=N ... blocked=Mms" line the log holds, by row (the log is emptied, so each tick's lines are read once).
+struct GapLine { bool seen = false, has_blocked = false; unsigned blocked = 0; };
+static void harvest_gap_lines(std::array<GapLine, 128>& rows) {
+    const std::string& log = g_stub.log_text;
+    for (size_t at = log.find("[CT] gap row="); at != std::string::npos; at = log.find("[CT] gap row=", at + 1)) {
+        const size_t eol = log.find('\n', at);
+        const std::string line = log.substr(at, eol == std::string::npos ? std::string::npos : eol - at);
+        unsigned row = 0;
+        if (std::sscanf(line.c_str(), "[CT] gap row=%u", &row) != 1 || row >= rows.size()) continue;
+        rows[row].seen = true;
+        const size_t b = line.find("blocked=");
+        if (b != std::string::npos && std::sscanf(line.c_str() + b, "blocked=%ums", &rows[row].blocked) == 1) rows[row].has_blocked = true;
+    }
+    g_stub.log_text.clear();
+}
+// The page wanted to paint and could not: that continuous time is named per row on the row's `[CT] gap` line, so a freeze the
+// operator sees can be read back from the log (hardware 2026-11-11: QC2 1.4 s, QC3 3.1 s, nothing measured it).
+static void test_the_gap_line_names_the_blocked_window() {
+    Ui ui; start_all_run(ui);
+    std::array<GapLine, 128> rows{};
+    g_stub.log_text.clear();
+    size_t target = ~size_t(0), prev_idx = ~size_t(0); uint32_t first = 0, last_blocked = 0; bool open = false; unsigned expect = 0;
+    for (uint32_t now = 1500; now <= 400000 && ui.charger_test_busy(); now += 100) {
+        const auto& r = ui.charger_test_results();
+        const bool quiet = ui.charger_test_stage() == kRunningStage && r.quiet();
+        if (quiet && r.index() != prev_idx) { prev_idx = r.index(); if (target == ~size_t(0) && prev_idx >= 2) { target = prev_idx; first = now + 200; } }
+        // Row `target`: an engine window from 200 ms into the row for 600 ms (it may be cut short by the row's own end).
+        g_stub.fc_critical = quiet && r.index() == target && now >= first && now < first + 600;
+        const bool was_open = open;
+        open = g_stub.fc_critical;
+        if (open && !was_open) expect = 0;
+        if (open) { expect = now + 100 - first; last_blocked = now; }
+        ui.tick(now);
+        harvest_gap_lines(rows);
+    }
+    g_stub.fc_critical = false;
+    CHECK_EQ(target != ~size_t(0), true);
+    unsigned with_field = 0, seen = 0;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (!rows[i].seen) continue;
+        ++seen; with_field += rows[i].has_blocked;
+        if (i != target) CHECK_EQ(rows[i].blocked, 0u);   // a row that never wanted to paint in vain reads 0
+    }
+    CHECK_EQ(seen > 5, true);
+    CHECK_EQ(with_field, seen);   // every gap line carries the field
+    CHECK_EQ(rows[target].has_blocked, true);
+    // The window the page saw: from its first blocked tick to the first free one (tick-sized slack either way).
+    CHECK_EQ(rows[target].blocked + 100 >= expect, true);
+    CHECK_EQ(rows[target].blocked <= expect + 100, true);
+    CHECK_EQ(rows[target].blocked >= 300, true);
+    (void)last_blocked;
+}
+// A row that began and then ended as a skip (the QC2 Class B 20 V wait: "Class A") used to leave no `[CT] gap` line at all, so its
+// blocked time was lost. It is logged like any other row that ran.
+static void test_a_started_row_that_ends_as_a_skip_still_logs_its_gap() {
+    Ui ui; start_all_run(ui);
+    std::array<GapLine, 128> rows{};
+    g_stub.log_text.clear();
+    size_t skipped = ~size_t(0);
+    for (uint32_t now = 1500; now <= 400000 && ui.charger_test_busy(); now += 100) {
+        const auto& r = ui.charger_test_results();
+        const bool quiet = ui.charger_test_stage() == kRunningStage && r.quiet();
+        const bool b20 = quiet && r.index() < r.steps().size() && r.steps()[r.index()].algorithm == ct::Algorithm::Qc2ClassB;
+        if (b20) { g_stub.fc_state = static_cast<int>(k2::fc::State::Failed); skipped = r.index(); }   // the charger stops following
+        g_stub.fc_critical = b20;                                                                          // and the page sat blocked
+        ui.tick(now);
+        harvest_gap_lines(rows);
+    }
+    g_stub.fc_critical = false;
+    CHECK_EQ(skipped != ~size_t(0), true);
+    CHECK_EQ(ui.charger_test_results().steps()[skipped].verdict, ct::Verdict::Skip);
+    CHECK_EQ(rows[skipped].seen, true);                 // the skipped row that ran has its gap line
+    CHECK_EQ(rows[skipped].has_blocked, true);
+}
 // The grid follows the step under test: the Running cell is on screen a few ticks after every step starts, with no scrolling.
 static void test_the_running_grid_follows_the_step() {
     Ui ui; start_all_run(ui);
@@ -3966,6 +4040,7 @@ int main() {
     test_a_row_in_flight_writes_no_journal_record(); test_a_row_in_flight_paints_inside_the_budget();
     test_the_plan_is_written_in_pieces_before_the_first_request(); test_a_busy_link_defers_the_plan_but_not_for_ever(); test_a_cancel_during_the_plan_leaves_no_run(); test_a_replan_is_polled_and_done_before_the_first_phase_marker();
     test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step();
+    test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
     test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick();
     test_a_manual_scroll_of_the_running_grid_holds_then_resumes();
     test_resume_self_and_bus_powered_present_no_rd();

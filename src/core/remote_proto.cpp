@@ -251,6 +251,7 @@ size_t encode_lcd(std::span<uint8_t> out, const LcdSnapshot &s) {
     w.u8(s.flags); w.u32(s.transfers); w.u32(s.stalls);
     w.u32(s.paint_px); w.u32(s.paint_ms); w.u32(s.fs_ms);
     w.u8(s.spi_div);
+    w.u16(s.blocked_ms);
     return w.size();
 }
 

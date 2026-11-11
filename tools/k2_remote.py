@@ -2305,7 +2305,9 @@ def decode_epr_info(p):
 def decode_lcd(p):
     """DebugLcd reply: [flags (bit0 DMA built in, bit1 DMA trusted), transfers u32, stalls u32], then (newer firmware)
     paint totals since boot: [pixels sent to the panel u32, ms inside lcd stream calls u32, ms inside fs flash writes u32],
-    then the LCD SPI3 clock divider u8 (8 at every boot, 4 after the lab switch `lcd spi 4`)."""
+    then the LCD SPI3 clock divider u8 (8 at every boot, 4 after the lab switch `lcd spi 4`), then the longest time the
+    charger-test page sat blocked from painting in the current or last run, u16 ms (0 = never; the key is absent on an
+    older firmware)."""
     _need(p, 9, "lcd")
     state = "disabled" if not p[0] & 1 else ("ok" if p[0] & 2 else "stalled")
     r = {"dma": state, "transfers": int.from_bytes(p[1:5], "little"), "stalls": int.from_bytes(p[5:9], "little")}
@@ -2315,6 +2317,8 @@ def decode_lcd(p):
         r["fs_ms"] = int.from_bytes(p[17:21], "little")
     if len(p) >= 22:
         r["spi_div"] = p[21]
+    if len(p) >= 24:
+        r["blocked_ms"] = int.from_bytes(p[22:24], "little")
     return r
 
 
