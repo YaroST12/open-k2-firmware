@@ -464,6 +464,7 @@ size_t encode_emarker(std::span<uint8_t> out, const EmarkerSnapshot &e, uint8_t 
         w.u8(e.sop); w.u8(e.spec_rev); w.u8(e.vdo_version); w.u8(e.latency_code);
         w.u8(e.termination); w.u8(e.flags);
         w.u8(e.max_temp_c); w.u8(e.shutdown_temp_c); w.u8(e.u3_power); w.u8(e.usb_lanes);
+        w.u8(e.answered_orientation); w.u8(e.answered_hdr_rev); w.u8(e.answered_svdm); w.u8(e.answered_attempt);
         return w.size();
     }
     w.u8(e.valid); w.u8(e.is_active);

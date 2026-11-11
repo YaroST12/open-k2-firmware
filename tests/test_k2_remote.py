@@ -406,6 +406,42 @@ class Decoders(unittest.TestCase):
         self.assertTrue(i["epr"] and i["cuktech"] and not i["xiaomi"])
         self.assertIn("iPad", kr.render("identity", i))
 
+    PART0 = bytes([1, 1, 0xAC, 0x05, 0x34, 0x12, 0, 0, 0, 0, 2, 3, 5, 50, 240, 0, 0]) + b"Apple\x00USB4"
+    P2_OLD = bytes([1, 2, 1, 3, 3, 0x8C, 60, 70, 2, 2])
+
+    def test_emarker_answered_baseus(self):
+        # Orientation B, PD 3.x header, SVDM 1.0, second attempt: the 100 W cable that answers only that.
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + bytes([2, 2, 1, 2]))
+        self.assertEqual((e["orientation"], e["header_rev"], e["svdm"], e["attempt"]), ("B", "PD 3.x", "1.0", 2))
+        self.assertEqual((e["max_temp_c"], e["usb_lanes"]), (60, 2))   # the old part-2 fields are unchanged
+        self.assertIn("answered: orientation B (CC2 BMC, CC1 VCONN), PD 3.x header, SVDM 1.0, attempt 2",
+                      kr.render("emarker", e))
+
+    def test_emarker_answered_cuktech_first_attempt(self):
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + bytes([1, 2, 2, 1]))
+        self.assertEqual((e["orientation"], e["header_rev"], e["svdm"], e["attempt"]), ("A", "PD 3.x", "2.0", 1))
+        self.assertIn("answered: orientation A (CC1 BMC, CC2 VCONN), PD 3.x header, SVDM 2.0, attempt 1",
+                      kr.render("emarker", e))
+
+    def test_emarker_answered_pd2_row(self):
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + bytes([1, 1, 1, 3]))
+        self.assertEqual((e["header_rev"], e["svdm"], e["attempt"]), ("PD 2.0", "1.0", 3))
+        self.assertIn("PD 2.0 header, SVDM 1.0, attempt 3", kr.render("emarker", e))
+
+    def test_emarker_answered_old_firmware_and_none(self):
+        # A 10-byte part 2 (firmware before the tail): the fields decode, as null, and no answered line is printed.
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD)
+        for k in ("orientation", "header_rev", "svdm", "attempt"):
+            self.assertIn(k, e)
+            self.assertIsNone(e[k])
+        self.assertNotIn("answered:", kr.render("emarker", e))
+        # A 14-byte part 2 with nothing answered (a sniffed cable): the same.
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + bytes(4))
+        self.assertIsNone(e["orientation"])
+        self.assertNotIn("answered:", kr.render("emarker", e))
+        # Without part 2 at all nothing changes (no detail keys).
+        self.assertNotIn("orientation", kr.decode_emarker(self.PART0, b""))
+
 
 def rle_runs(px):
     """Reference encoder: runs only (valid RLE565)."""

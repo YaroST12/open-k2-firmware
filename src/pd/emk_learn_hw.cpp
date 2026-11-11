@@ -30,6 +30,7 @@ bool exchange(void*, const emk_learn::Request& req, emk_learn::Reply& rep) {
 
 void body(void* ctx) {
     auto& job = *static_cast<Job*>(ctx);
+    g_result.answered = fusb302::cable_answered();   // the scan that opened this session found the cable
     emk_learn::learn(&exchange, nullptr, *job.opt, g_result);
     job.done = true;
 }
@@ -42,6 +43,7 @@ Err run(const emk_learn::Options& opt, bool confirmed) {
     g_result.outcome = emk_learn::Outcome::NoIdentity;
     g_result.rec = {};
     g_result.quirks = {};
+    g_result.answered = {};
     g_result.svids = g_result.probes = g_result.silent = 0;
     g_result.truncated = false;
     g_result.clear_log();

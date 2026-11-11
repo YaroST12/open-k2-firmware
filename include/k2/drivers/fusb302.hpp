@@ -393,6 +393,9 @@ void park();
 
 const pd::SourceCaps& caps();
 const pd::Emarker& emarker();
+// Which scan orientation and which attempt-table row the cable answered (emk_variant.hpp). Empty (valid() false)
+// when no VCONN scan found the cable, e.g. the e-marker was only sniffed or none was read.
+emk_variant::Answered cable_answered();
 // Current-attach physical wire evidence only; injected frames and spoofing cannot raise this.
 const pd::CableLimits& physical_cable();
 const pd::Revision& source_revision();  // passively received source RMDO, never Identify's sink answer

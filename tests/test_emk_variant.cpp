@@ -58,7 +58,48 @@ static void test_variant_text() {
     CHECK_EQ(ev::svdm_text(kPd3Svdm1) == "1.0", true);
 }
 
+static void test_answered_from_the_table() {
+    // Baseus: orientation as found (B here), the second table row answered.
+    const ev::Answered baseus = ev::answered_from(2, 1);
+    CHECK_EQ(int(baseus.orientation), 2);
+    CHECK_EQ(int(baseus.spec_rev), 2);   // PD 3.x header
+    CHECK_EQ(int(baseus.svdm), 1);       // SVDM 1.0
+    CHECK_EQ(int(baseus.attempt), 2);    // 1-based
+    CHECK_EQ(baseus.valid(), true);
+    // CUKTECH: first row.
+    const ev::Answered cuk = ev::answered_from(1, 0);
+    CHECK_EQ(int(cuk.spec_rev), 2);
+    CHECK_EQ(int(cuk.svdm), 2);
+    CHECK_EQ(int(cuk.attempt), 1);
+    // The old-cable row and an index off the table.
+    const ev::Answered old = ev::answered_from(1, 2);
+    CHECK_EQ(int(old.spec_rev), 1);
+    CHECK_EQ(int(old.svdm), 1);
+    CHECK_EQ(int(old.attempt), 3);
+    CHECK_EQ(ev::answered_from(1, ev::kAttempts).valid(), false);
+    CHECK_EQ(ev::Answered{}.valid(), false);
+}
+
+static void test_answered_text() {
+    const ev::Answered baseus = ev::answered_from(1, 1);
+    CHECK_EQ(ev::orientation_text(baseus).view() == "A (CC1 BMC, CC2 VCONN)", true);
+    CHECK_EQ(ev::orientation_text(ev::answered_from(2, 0)).view() == "B (CC2 BMC, CC1 VCONN)", true);
+    CHECK_EQ(ev::combo_text(baseus).view() == "PD 3.x header, SVDM 1.0, attempt 2", true);
+    CHECK_EQ(ev::combo_text(ev::answered_from(1, 0)).view() == "PD 3.x header, SVDM 2.0, attempt 1", true);
+    CHECK_EQ(ev::combo_text(ev::answered_from(2, 2)).view() == "PD 2.0 header, SVDM 1.0, attempt 3", true);
+    CHECK_EQ(ev::short_text(baseus).view() == "A, PD3, SVDM 1.0", true);
+    CHECK_EQ(ev::short_text(ev::answered_from(2, 2)).view() == "B, PD2, SVDM 1.0", true);
+    // Nothing answered: the empty text, never a stale combination.
+    CHECK_EQ(ev::short_text(ev::Answered{}).view().empty(), true);
+    CHECK_EQ(ev::combo_text(ev::Answered{}).view().empty(), true);
+    CHECK_EQ(ev::orientation_text(ev::Answered{}).view().empty(), true);
+    // The widest report text stays inside the Text buffer.
+    static_assert(ev::combo_text(ev::answered_from(2, 2)).n < ev::Text{}.s.size());
+}
+
 int main() {
+    test_answered_from_the_table();
+    test_answered_text();
     test_table_order();
     test_vdm_header_carries_the_svdm_version_not_the_pd_revision();
     test_pd_header_carries_the_spec_revision();

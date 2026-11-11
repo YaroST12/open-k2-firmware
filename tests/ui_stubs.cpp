@@ -72,6 +72,7 @@ bool apple_armed() { return g_stub.apple.valid && g_stub.apple.why == pd::AppleW
 bool answers_sop() { return true; }
 usblink::Link usb_link(std::int32_t, std::int32_t) { return g_stub.ul; }
 bool cable_thunderbolt() { return g_stub.cable_tb; }
+emk_variant::Answered cable_answered() { return g_stub.cable_ans; }
 void rescan() { g_stub.rescans++; }
 void set_inline(bool on) { g_stub.inl = on; }
 bool inline_mode() { return g_stub.inl; }

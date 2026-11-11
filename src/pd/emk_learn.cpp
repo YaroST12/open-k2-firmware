@@ -243,6 +243,10 @@ std::size_t encode_summary(const Result* last, std::span<std::uint8_t> out) {
     out[8] = static_cast<std::uint8_t>(last->quirks.unmatched);
     put16(&out[9], emrec::vdo(last->rec, 1) & 0xFFFFu);
     put16(&out[11], emrec::vdo(last->rec, 3) >> 16);
+    out[13] = last->answered.orientation;
+    out[14] = last->answered.spec_rev;
+    out[15] = last->answered.svdm;
+    out[16] = last->answered.attempt;
     return kSummaryBytes;
 }
 

@@ -60,4 +60,68 @@ constexpr std::array<std::uint8_t, 14> discover_identity_frame(Variant v) {
 constexpr std::string_view header_text(Variant v) { return v.spec_rev == 1 ? "PD 2.0" : "PD 3.x"; }
 constexpr std::string_view svdm_text(Variant v) { return v.svdm >= 2 ? "2.0" : "1.0"; }
 
+// What a cable answered: the orientation of the scan and the table row. One byte each on the wire (remote
+// GET_EMARKER part 2 tail, the learn summary tail), in this order; all zero = nothing answered / not known.
+struct Answered {
+    std::uint8_t orientation = 0;   // 0 none, 1 = A (CC1 BMC, CC2 VCONN), 2 = B (CC2 BMC, CC1 VCONN)
+    std::uint8_t spec_rev = 0;      // 0 none, 1 = PD 2.0 header, 2 = PD 3.x header
+    std::uint8_t svdm = 0;          // 0 none, 1 = SVDM 1.0, 2 = SVDM 2.0
+    std::uint8_t attempt = 0;       // 1-based position in the table within the orientation, 0 none
+    constexpr bool valid() const { return orientation != 0; }
+    constexpr bool operator==(const Answered&) const = default;
+};
+
+// `attempt` is the 0-based table index (an index off the table gives "nothing answered").
+constexpr Answered answered_from(std::uint8_t orientation, std::size_t attempt) {
+    if (orientation == 0 || orientation > 2 || attempt >= kAttempts) return {};
+    const Variant v = kTable[attempt];
+    return {orientation, v.spec_rev, v.svdm, std::uint8_t(attempt + 1)};
+}
+
+// A fixed small text, built without the heap so it can be checked at compile time and logged with %s.
+struct Text {
+    std::array<char, 72> s{};
+    std::uint8_t n = 0;
+    constexpr std::string_view view() const { return {s.data(), n}; }
+    constexpr const char* c_str() const { return s.data(); }
+    constexpr void add(std::string_view t) {
+        for (const char c : t) if (n + 1u < s.size()) s[n++] = c;
+    }
+    constexpr void add(char c) { add(std::string_view(&c, 1)); }
+};
+
+constexpr char orientation_letter(const Answered& a) { return a.orientation == 2 ? 'B' : 'A'; }
+
+// "A (CC1 BMC, CC2 VCONN)" / "B (CC2 BMC, CC1 VCONN)"; empty when nothing answered.
+constexpr Text orientation_text(const Answered& a) {
+    Text t;
+    if (!a.valid()) return t;
+    t.add(orientation_letter(a));
+    t.add(a.orientation == 2 ? " (CC2 BMC, CC1 VCONN)" : " (CC1 BMC, CC2 VCONN)");
+    return t;
+}
+
+// "PD 3.x header, SVDM 1.0, attempt 2"; empty when nothing answered.
+constexpr Text combo_text(const Answered& a) {
+    Text t;
+    if (!a.valid()) return t;
+    const Variant v{a.spec_rev, a.svdm};
+    t.add(header_text(v));
+    t.add(" header, SVDM ");
+    t.add(svdm_text(v));
+    t.add(", attempt ");
+    t.add(char('0' + (a.attempt % 10)));
+    return t;
+}
+
+// The one-row form for the cable screen: "A, PD3, SVDM 1.0"; empty when nothing answered.
+constexpr Text short_text(const Answered& a) {
+    Text t;
+    if (!a.valid()) return t;
+    t.add(orientation_letter(a));
+    t.add(a.spec_rev == 1 ? ", PD2, SVDM " : ", PD3, SVDM ");
+    t.add(svdm_text(Variant{a.spec_rev, a.svdm}));
+    return t;
+}
+
 }  // namespace k2::emk_variant

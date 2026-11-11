@@ -530,7 +530,8 @@ inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 4
 //                                   2 CUKTECH 6A, 4 OnePlus 100W; 3 is the retired OnePlus 100W (mag) and arms 4);
 //                                   an id past the table is BadArg
 //   LEARN   (blocks: a run takes seconds; refused with kEmErrBusy while a PD tool is active)
-//           req [6, 0]              rsp summary (k2::emk_learn::kSummaryBytes = 13): the last run, outcome 0 = none yet
+//           req [6, 0]              rsp summary (k2::emk_learn::kSummaryBytes = 17, the last 4 are the answered
+//                                   tail, absent on older firmware): the last run, outcome 0 = none yet
 //           req [6, 1, options]     run: powers the cable in the bottom port (VCONN) and replays Discover Identity /
 //                                   SVIDs / Modes and the seeds; options = [flags (bit0 sweep, bit1 confirm inline),
 //                                   nseeds <= 4, seed * nseeds], a seed = svid u16, cmd 0..31, nvdo 0..2, vdo u32 * nvdo;
@@ -893,6 +894,9 @@ struct EmarkerSnapshot {
     uint8_t sop = 0, spec_rev = 0, vdo_version = 0, latency_code = 0, termination = 0;
     uint8_t flags = 0;                       // kEmFlag* bits
     uint8_t max_temp_c = 0, shutdown_temp_c = 0, u3_power = 0, usb_lanes = 0;
+    // Part 2 tail (bytes 10..13, appended): how the cable answered the read. Orientation 0 none / 1 A (CC1 BMC, CC2
+    // VCONN) / 2 B; PD header revision 1 PD 2.0 / 2 PD 3.x; SVDM 1 / 2; attempt 1-based within the orientation.
+    uint8_t answered_orientation = 0, answered_hdr_rev = 0, answered_svdm = 0, answered_attempt = 0;
 };
 
 constexpr uint8_t kEmFlagTypeC = 1 << 0, kEmFlagVconn = 1 << 1, kEmFlagEpr = 1 << 2,

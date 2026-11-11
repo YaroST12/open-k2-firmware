@@ -1547,6 +1547,55 @@ void test_svdm1_cable_session_follow_ups_carry_their_variant() {
     }
 }
 
+// What the cable answered is kept with the cable: the orientation of the scan and the table row (1-based attempt).
+void test_answered_names_orientation_and_attempt() {
+    reset_world();
+    g_cable.cc = 1;                                          // orientation A, first variant
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    const emk_variant::Answered a = fusb302::cable_answered();
+    CHECK_EQ(int(a.orientation), 1);
+    CHECK_EQ(int(a.spec_rev), 2);
+    CHECK_EQ(int(a.svdm), 2);
+    CHECK_EQ(int(a.attempt), 1);
+    CHECK_EQ(usb_has("Response on Orientation A (CC1 BMC, CC2 VCONN), PD 3.x header, SVDM 2.0, attempt 1"), true);
+
+    reset_world();
+    g_cable.cc = 1;
+    g_cable.only_pd3_svdm1 = true;                           // the Baseus cable: second row
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    const emk_variant::Answered b = fusb302::cable_answered();
+    CHECK_EQ(int(b.orientation), 1);
+    CHECK_EQ(int(b.spec_rev), 2);
+    CHECK_EQ(int(b.svdm), 1);
+    CHECK_EQ(int(b.attempt), 2);
+    CHECK_EQ(usb_has("Response on Orientation A (CC1 BMC, CC2 VCONN), PD 3.x header, SVDM 1.0, attempt 2"), true);
+
+    reset_world();
+    g_cable.cc = 2;                                          // the other orientation: A silent, B answers its second row
+    g_cable.only_pd3_svdm1 = true;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    const emk_variant::Answered c = fusb302::cable_answered();
+    CHECK_EQ(int(c.orientation), 2);
+    CHECK_EQ(int(c.attempt), 2);                             // counted within the orientation, not over both
+    CHECK_EQ(usb_has("Response on Orientation B (CC2 BMC, CC1 VCONN), PD 3.x header, SVDM 1.0, attempt 2"), true);
+
+    reset_world();
+    g_cable.cc = 1;
+    g_cable.answers_pd3 = false;                             // an old cable: the PD 2.0 row, attempt 3
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    const emk_variant::Answered d = fusb302::cable_answered();
+    CHECK_EQ(int(d.spec_rev), 1);
+    CHECK_EQ(int(d.svdm), 1);
+    CHECK_EQ(int(d.attempt), 3);
+
+    // A scan that finds nothing leaves nothing answered.
+    reset_world();
+    g_cable.answers_pd3 = false;
+    g_cable.answers_pd2 = false;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(fusb302::cable_answered().valid(), false);
+}
+
 // ---- Rd lifetime (k2/rd-release) ----
 // Hardware 2026-11-06: after pd-reread (finished or aborted), `pd release`, `pd attach` + release, `--line 2`, `--ra on` or a spoof-armed
 // session the K2 sometimes kept Rd on CC2 (SWITCHES0 0x0A, VBUS 5.2 V) until a reboot: the charger never saw a detach.
@@ -4520,6 +4569,7 @@ int main() {
     test_cable_session_without_a_cable_never_calls_the_body();
     test_cable_session_is_refused_like_the_scan();
     test_svdm1_cable_session_follow_ups_carry_their_variant();
+    test_answered_names_orientation_and_attempt();
     test_hid_cold_boot_is_passive_before_the_main_loop();      // last: they start from self_power_early and end with no pin
     test_hid_warm_reset_inherits_no_rd();
     test_hid_reread_abort_releases_rd();

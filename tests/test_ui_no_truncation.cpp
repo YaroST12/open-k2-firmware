@@ -70,11 +70,13 @@ void apply(const Scenario &sc) {
         for (int i = 0; i < sc.pdos; ++i) g_stub.caps.pdos[i] = mix[i];
     }
     g_stub.em = {};
+    g_stub.cable_ans = {};
     if (sc.cable) {
         g_stub.em.valid = true;
         g_stub.em.vid = 0x2B1D; g_stub.em.pid = 0x1234;
         g_stub.em.max_current_a = 5; g_stub.em.max_voltage_v = 50; g_stub.em.max_power_w = 250;
         g_stub.em.epr_capable = true;
+        g_stub.cable_ans = k2::emk_variant::answered_from(2, 1);  // orientation B, PD3 + SVDM 1.0
     }
     // Device twins: names as long as the library takes (24 cells) next to short ones, one of every outcome kind.
     stub_twin_reset();

@@ -666,8 +666,31 @@ TERMINATION = ["Passive (VCONN not required)", "Passive (VCONN required)",
                "Active (1 end powered)", "Active (both ends powered)"]
 
 
+ANSWERED_ORIENTATION = {1: "A", 2: "B"}
+ANSWERED_ORIENTATION_TEXT = {"A": "A (CC1 BMC, CC2 VCONN)", "B": "B (CC2 BMC, CC1 VCONN)"}
+
+
+def decode_answered(b):
+    """The answered tail of part 2 and of the learn summary: [orientation (1 A, 2 B), PD header revision (1 PD 2.0,
+    2 PD 3.x), SVDM (1, 2), attempt (1-based within the orientation)]. Fewer than 4 bytes (older firmware) or no
+    orientation (nothing answered) gives every field None."""
+    if b is None or len(b) < 4 or b[0] not in ANSWERED_ORIENTATION:
+        return {"orientation": None, "header_rev": None, "svdm": None, "attempt": None}
+    return {"orientation": ANSWERED_ORIENTATION[b[0]], "header_rev": {1: "PD 2.0", 2: "PD 3.x"}.get(b[1]),
+            "svdm": {1: "1.0", 2: "2.0"}.get(b[2]), "attempt": b[3] or None}
+
+
+def answered_line(r):
+    """`answered: orientation A (CC1 BMC, CC2 VCONN), PD 3.x header, SVDM 1.0, attempt 2`, or "" when not known."""
+    if r.get("orientation") is None:
+        return ""
+    return (f"answered: orientation {ANSWERED_ORIENTATION_TEXT[r['orientation']]}, {r['header_rev'] or '?'} header, "
+            f"SVDM {r['svdm'] or '?'}, attempt {r['attempt'] or '?'}")
+
+
 def decode_emarker_detail(p2):
-    """Part 2: cable VDO detail. Codes are named here, the firmware sends numbers."""
+    """Part 2: cable VDO detail. Codes are named here, the firmware sends numbers. 10 bytes from older firmware,
+    14 with the answered tail."""
     _need(p2, 10, "emarker detail")
     f = p2[5]
     lat = p2[3]
@@ -678,7 +701,8 @@ def decode_emarker_detail(p2):
             "type_c_plug": bool(f & 1), "vconn_required": bool(f & 2), "epr_cable": bool(f & 4),
             "vdo2_valid": bool(f & 8), "usb4": bool(f & 16), "usb_gen2": bool(f & 32),
             "optical": bool(f & 64), "thunderbolt": bool(f & 128),
-            "max_temp_c": p2[6], "shutdown_temp_c": p2[7], "u3_power": p2[8], "usb_lanes": p2[9]}
+            "max_temp_c": p2[6], "shutdown_temp_c": p2[7], "u3_power": p2[8], "usb_lanes": p2[9],
+            **decode_answered(p2[10:14])}
 
 
 def decode_identity(p):
@@ -1548,8 +1572,8 @@ def encode_learn_options(seeds, sweep=False, confirm=False):
 
 
 def decode_learn_summary(p):
-    _need(p, 13, "emarker learn")
-    return {"outcome": LEARN_OUTCOMES[p[1]] if p[1] < len(LEARN_OUTCOMES) else str(p[1]), "svids": p[2], "probes": p[3],
+    _need(p, 13, "emarker learn")   # 17 bytes from the firmware that appends the answered tail
+    return {**decode_answered(p[13:17]), "outcome": LEARN_OUTCOMES[p[1]] if p[1] < len(LEARN_OUTCOMES) else str(p[1]), "svids": p[2], "probes": p[3],
             "silent": p[4], "truncated": bool(p[5] & 1), "log_full": bool(p[5] & 2), "entries": p[6], "rows": p[7],
             "unmatched_policy": UNMATCHED_POLICIES[p[8]] if p[8] < len(UNMATCHED_POLICIES) else str(p[8]),
             "vid": int.from_bytes(p[9:11], "little"), "pid": int.from_bytes(p[11:13], "little")}
@@ -1650,6 +1674,8 @@ def render_learn(r):
              f"silent={s['silent']} rows={s['rows']} unmatched={s['unmatched_policy']}"
              + (" TRUNCATED (more answers than rows)" if s["truncated"] else "")
              + (" (transcript full)" if s["log_full"] else "")]
+    if answered_line(s):
+        lines.append("  " + answered_line(s))
     lines += [_learn_entry_text(e) for e in r["entries"]]
     if r.get("saved"):
         lines.append(f"saved as id {r['saved']['seq']}" + (" (already saved)" if r["saved"]["existed"] else ""))
@@ -3220,6 +3246,8 @@ def _emarker_detail_text(r):
               f"{'  optical' if r['optical'] else ''}")
     if r["thunderbolt"]:
         s += "\n  Thunderbolt SVID 0x8087 advertised"
+    if answered_line(r):
+        s += "\n  " + answered_line(r)
     return s
 
 

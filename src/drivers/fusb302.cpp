@@ -156,7 +156,8 @@ pd::CableLimits g_physical_cable;
 std::uint32_t g_physical_session = 0;
 pd::CableLimits g_scanned_cable;   // the VCONN scan before a run start (no source was there to ask the cable)
 bool g_scanned_valid = false;
-pd::Sink g_sink;      // transmit-side state machines are pure too; this file only sends their messages
+emk_variant::Answered g_answered;   // orientation and attempt-table row of the last VCONN scan that found the cable
+pd::Sink g_sink;     // transmit-side state machines are pure too; this file only sends their messages
 pd::Identify g_ident;
 bool g_probe_logged = true;
 pd::Probe g_probe;   // report-card source probe: never retries, ends within kProbeTotalMs
@@ -358,8 +359,9 @@ constexpr auto kDiFrames = make_di_frames();
 
 // One orientation: `sw0` powers VCONN on one CC, `sw1` routes BMC to the other. Walks the attempt table, one
 // request window each: 40 ms VCONN settle, then 3 x (2 ms flush + 80 ms of polling) = 286 ms at most, ~235 ms per
-// silent attempt measured on hardware.
-bool scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
+// silent attempt measured on hardware. Returns the 0-based table row that was answered, or kNoAnswer.
+constexpr std::size_t kNoAnswer = emk_variant::kAttempts;
+std::size_t scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
     cc_switches(true);
     wr(kPower, kPwrAll);
     wr(kSwitches0, sw0);
@@ -399,10 +401,10 @@ bool scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
             K2LOG("[EMK] rx sop=%d type=%d num_do=%d\n", int(sop), int(header & 0x1F), int(num_do));
             if (sop == pd::Sop::Sop || num_do == 0) continue;  // our GoodCRC / the source: keep waiting
             g_engine.on_message(sop, header, {body.data(), num_do * 4}, g_active_cc);
-            if (g_engine.cable.valid) return true;
+            if (g_engine.cable.valid) return attempt;
         }
     }
-    return false;
+    return kNoAnswer;
 }
 
 std::uint8_t ctl1() { return phy::control1(g_crc_on, g_sop_prime_hook != nullptr, g_cable_read); }
@@ -1587,6 +1589,7 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     const bool tx_was_allowed = g_tx_allowed;
     g_tx_allowed = true;   // the VCONN scan is an active feature: its SOP' Discover Identity goes on the wire
     g_engine.reset_cable();
+    g_answered = {};
     g_scanned_valid = false;
     struct Pre { std::uint8_t power = kPwrAll, sw0 = 0, sw1 = 0; } pre;
     // Snapshot; if a read fails, fall back to what the driver itself would have set.
@@ -1603,10 +1606,16 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     // A: CC2 powers VCONN (SWITCHES0 0x24), BMC on CC1 (SWITCHES1 0x25).
     // B: CC1 powers VCONN (SWITCHES0 0x18), BMC on CC2 (SWITCHES1 0x26).
     bool found = true;
-    if (scan_orientation(0x24, 0x25)) {
-        K2LOG("[EMARK] Response on Orientation A (CC1 BMC, CC2 VCONN)\n");
-    } else if (scan_orientation(0x18, 0x26)) {
-        K2LOG("[EMARK] Response on Orientation B (CC2 BMC, CC1 VCONN)\n");
+    std::size_t row = scan_orientation(0x24, 0x25);
+    std::uint8_t orient = 1;
+    if (row == kNoAnswer) {
+        row = scan_orientation(0x18, 0x26);
+        orient = 2;
+    }
+    g_answered = emk_variant::answered_from(orient, row);   // empty when nothing answered
+    if (g_answered.valid()) {
+        K2LOG("[EMARK] Response on Orientation %s, %s\n", emk_variant::orientation_text(g_answered).c_str(),
+              emk_variant::combo_text(g_answered).c_str());
     } else {
         found = false;
     }
@@ -2026,6 +2035,7 @@ static void detach_reset(std::uint8_t status0) {
     g_getcap_force = false;
     g_msg_id = 0;
     g_engine.reset_cable();  // the next sniff must not report the old cable as heard
+    g_answered = {};
     g_engine.reset_sink();
     g_engine.reset_source();  // the offers go with the partner: nothing of charger A may serve charger B
     g_new_source = true;
@@ -2808,6 +2818,7 @@ void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> 
 
 const pd::SourceCaps& caps() { return g_engine.caps; }
 const pd::Emarker& emarker() { return g_engine.cable; }
+emk_variant::Answered cable_answered() { return g_engine.cable.valid ? g_answered : emk_variant::Answered{}; }
 const pd::VdmInfo& vdm() { return g_engine.vdm; }
 const pd::VdmInfo& sink_vdm() { return g_engine.sink_vdm; }
 usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv) {

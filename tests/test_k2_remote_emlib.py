@@ -92,9 +92,11 @@ class EmLib(unittest.TestCase):
         self.assertIsNone(a.em_cmd)
 
 
-def summary(outcome=1, entries=2, rows=2):
-    # [err, outcome, svids, probes, silent, flags, nlog, rows, policy, vid u16, pid u16]
-    return bytes([0, outcome, 1, 4, 0, 0, entries, rows, 0]) + (0x22D9).to_bytes(2, "little") + (0x6116).to_bytes(2, "little")
+def summary(outcome=1, entries=2, rows=2, answered=None):
+    # [err, outcome, svids, probes, silent, flags, nlog, rows, policy, vid u16, pid u16] and, from the newer firmware,
+    # the answered tail [orientation, header rev, svdm, attempt]; None = the 13-byte form of an older firmware.
+    s = bytes([0, outcome, 1, 4, 0, 0, entries, rows, 0]) + (0x22D9).to_bytes(2, "little") + (0x6116).to_bytes(2, "little")
+    return s if answered is None else s + bytes(answered)
 
 
 def entry(i, step, req, rep, header=0x0F | (2 << 6) | (1 << 8)):
@@ -156,6 +158,34 @@ class Learn(unittest.TestCase):
         r, l = run(["emarker", "learned"], [bytes(13)])
         self.assertEqual(l.sent[0][1], bytes([6, 0]))
         self.assertEqual(kr.render("emarker", r), "no learn run yet")
+        r, _ = run(["emarker", "learned"], [bytes(17)])   # the newer firmware's all-zero summary
+        self.assertEqual(kr.render("emarker", r), "no learn run yet")
+
+    def test_summary_names_the_answered_combination(self):
+        # Baseus: orientation as found (B here), PD 3.x header, SVDM 1.0, second attempt.
+        r, _ = run(["emarker", "learned"], [summary(entries=0, rows=0, answered=[2, 2, 1, 2])])
+        s = r["summary"]
+        self.assertEqual((s["orientation"], s["header_rev"], s["svdm"], s["attempt"]), ("B", "PD 3.x", "1.0", 2))
+        self.assertIn("answered: orientation B (CC2 BMC, CC1 VCONN), PD 3.x header, SVDM 1.0, attempt 2",
+                      kr.render("emarker", r))
+        # CUKTECH: orientation A, PD 3.x header, SVDM 2.0, first attempt.
+        r, _ = run(["emarker", "learn"], [summary(entries=0, rows=0, answered=[1, 2, 2, 1])])
+        s = r["summary"]
+        self.assertEqual((s["orientation"], s["header_rev"], s["svdm"], s["attempt"]), ("A", "PD 3.x", "2.0", 1))
+        self.assertIn("answered: orientation A (CC1 BMC, CC2 VCONN), PD 3.x header, SVDM 2.0, attempt 1",
+                      kr.render("emarker", r))
+
+    def test_summary_from_older_firmware_has_null_answered(self):
+        r, _ = run(["emarker", "learned"], [summary(entries=0, rows=0)])   # 13 bytes
+        s = r["summary"]
+        for k in ("orientation", "header_rev", "svdm", "attempt"):
+            self.assertIn(k, s)
+            self.assertIsNone(s[k])
+        self.assertEqual(s["vid"], 0x22D9)                                 # the rest decodes as before
+        self.assertNotIn("answered:", kr.render("emarker", r))
+        r, _ = run(["emarker", "learned"], [summary(entries=0, rows=0, answered=[0, 0, 0, 0])])
+        self.assertIsNone(r["summary"]["orientation"])
+        self.assertNotIn("answered:", kr.render("emarker", r))
 
     def test_unmatched(self):
         totals = bytes([0, 5, 0, 2])

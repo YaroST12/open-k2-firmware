@@ -413,6 +413,11 @@ remote::EmarkerSnapshot Remote::emarker() {
               (m->usb4_supported ? remote::kEmFlagUsb4 : 0) | (m->usb_gen2 ? remote::kEmFlagGen2 : 0) |
               (m->optical_isolated ? remote::kEmFlagOptical : 0) |
               (fusb302::cable_thunderbolt() ? remote::kEmFlagThunderbolt : 0);
+    const emk_variant::Answered a = fusb302::cable_answered();
+    e.answered_orientation = a.orientation;
+    e.answered_hdr_rev = a.spec_rev;
+    e.answered_svdm = a.svdm;
+    e.answered_attempt = a.attempt;
     return e;
 }
 

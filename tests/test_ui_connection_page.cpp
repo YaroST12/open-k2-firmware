@@ -651,7 +651,7 @@ static void test_non_displayed_inputs_do_not_run_match_live() {
 // the candidate is drawn the same way the row draws it (kSmall at kValX, kText on kBg) and compared pixel
 // for pixel, then the page's band is restored. The row geometry is ui_connection_page.cpp's (kRowY0 =
 // kit::kBodyY + 18, pitch 20, value at x 64).
-static bool row_value_is(int idx, const char *text) {
+static bool row_value_is(int idx, const char *text, uint16_t ink = kText) {
     constexpr int kValX = 64, kPitch = 20, kRowY0 = kit::kBodyY + 18;
     constexpr int W = 224 - kValX;   // the value column up to the right edge
     const int y = kRowY0 + idx * kPitch;
@@ -661,7 +661,7 @@ static bool row_value_is(int idx, const char *text) {
         for (int x = 0; x < W; x++) saved[(dy - 1) * W + x] = g_panel[(y + dy) * LCD_WIDTH + kValX + x];
     const Surface s{0, 0, LCD_WIDTH, LCD_HEIGHT};
     gfx_fill(s, kValX, y + 1, W, kPitch - 1, kBg);
-    gfx_text(s, kSmall, kValX, vy, text, kText, kBg);
+    gfx_text(s, kSmall, kValX, vy, text, ink, kBg);
     bool same = true;
     for (int dy = 1; dy < kPitch && same; dy++)
         for (int x = 0; x < W; x++)
@@ -757,6 +757,7 @@ static void test_worst_case_rows_fit() {
     em.max_current_a = 5; em.max_voltage_v = 50; em.max_power_w = 250; em.epr_capable = true;
     em.vdo2_valid = true; em.usb_lanes = 2; em.usb4_supported = true; em.vconn_required = true; em.type_c_plug = true;
     g_stub.cable_tb = true;
+    g_stub.cable_ans = emk_variant::answered_from(2, 1);   // "B, PD3, SVDM 1.0": the ninth row (VCONN required) of the Cable tab
     g_stub.ul.family = usblink::Family::Usb32; g_stub.ul.mbps = 5000; g_stub.ul.dp = true;
     g_stub.ul.conf = usblink::Confidence::Negotiated;
     uint32_t t = 31000;
@@ -770,7 +771,39 @@ static void test_worst_case_rows_fit() {
 #ifdef K2_TRUNC_LOG
     CHECK_EQ(k2::trunc::failures(), 0);
 #endif
-    g_stub.em = {}; g_stub.vdm = {}; g_stub.sink_vdm = {}; g_stub.ul = {}; g_stub.cable_tb = false;
+    g_stub.em = {}; g_stub.vdm = {}; g_stub.sink_vdm = {}; g_stub.ul = {}; g_stub.cable_tb = false; g_stub.cable_ans = {};
+}
+
+// The Cable tab's last row names how the cable answered the read, in the short form with commas (the font has no
+// middle dot): "B, PD3, SVDM 1.0" for the Baseus cable, "A, PD3, SVDM 2.0" for the CUKTECH one. No answer (a clone,
+// an older reading) = no row.
+static void test_cable_tab_answered_row() {
+    Ui &ui = fresh_ui();
+    make_inline(ui, 50000);
+    g_stub.pm_online = true;
+    pd::Emarker &em = g_stub.em;
+    em.valid = true; em.vid = 0x2E99; em.vendor_str = "Baseus"; em.speed_str = "USB 2.0"; em.latency_str = "<10 ns (~1 m)";
+    em.max_current_a = 5; em.max_voltage_v = 20; em.max_power_w = 100;
+    uint32_t t = 51000;
+    ui.tick(t);
+    show(ui, 1, t);
+    const int rows_without = body_hairlines();   // ID, Speed, Current, Voltage, EPR, Type, Length + the closing rule
+    CHECK_EQ(rows_without, 8);
+    CHECK(!row_value_is(7, "B, PD3, SVDM 1.0"));
+    g_stub.cable_ans = emk_variant::answered_from(2, 1);
+    show(ui, 1, t);
+    CHECK_EQ(body_hairlines(), rows_without + 1);
+    CHECK(row_value_is(7, "B, PD3, SVDM 1.0", kDim));
+    g_stub.cable_ans = emk_variant::answered_from(1, 0);
+    show(ui, 1, t);
+    CHECK(row_value_is(7, "A, PD3, SVDM 2.0", kDim));
+    g_stub.cable_ans = emk_variant::answered_from(1, 2);
+    show(ui, 1, t);
+    CHECK(row_value_is(7, "A, PD2, SVDM 1.0", kDim));
+#ifdef K2_TRUNC_LOG
+    CHECK_EQ(k2::trunc::failures(), 0);
+#endif
+    g_stub.em = {}; g_stub.cable_ans = {};
 }
 
 // ---- a live link repaints the rows that changed, not the whole tab ----
@@ -1277,6 +1310,7 @@ int main() {
     test_the_rescan_comeback_lands_on_the_source_tab();
     test_live_request_repaints_only_its_rows();
     test_worst_case_rows_fit();
+    test_cable_tab_answered_row();
     test_each_tab_shows_its_own_side();
     test_sink_tab_not_empty_when_a_sink_was_seen();
     test_source_tab_leaves_waiting_after_timeout();

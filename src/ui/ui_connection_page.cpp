@@ -11,6 +11,7 @@
 // from the pop-up, through Ui::run_action and its inline confirm.
 #include "k2/core/log.hpp"
 #include "k2/core/survey.hpp"
+#include "k2/pd/emk_variant.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/power_calc.hpp"
@@ -372,6 +373,15 @@ constexpr int kNoPdMsgCells = (224 - 16) / 8;   // 26 cells of S16
 static_assert(kNoPdMsgY0 + 18 + (kNoPdMsgLines - 1) * kNoPdMsgPitch + 16 <= kNoPdRowY0, "the message block ends before the rows");
 static_assert(kNoPdRowY0 + 3 * kRowPitch <= kFooterY, "three measured rows end at the footer");
 static_assert(conn::kStatusCells <= static_cast<std::size_t>(kFooterCells), "the survey texts fit the footer line");
+// The Cable tab's Answered row: every orientation and table row fits the value column, and the 12 px key fits the
+// 58 px before it (6 px per cell).
+constexpr bool answered_rows_fit() {
+    for (std::uint8_t o = 1; o <= 2; o++)
+        for (std::size_t i = 0; i < emk_variant::kAttempts; i++)
+            if (emk_variant::short_text(emk_variant::answered_from(o, i)).view().size() > static_cast<std::size_t>(kValCells)) return false;
+    return std::string_view("Answered").size() * 6 <= static_cast<std::size_t>(kValX - kKeyX);
+}
+static_assert(answered_rows_fit(), "the Answered row's key and value fit their columns");
 
 // A value row. `cut` > 0 splits the value there: the head in `c`, the tail (the current) in kAmp; so a "20/28V 5A" line
 // reads in unit colours. 0 = one colour.
@@ -574,6 +584,10 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     ty.put(em.type_c_plug ? ", Type-C" : ", captive");
     if (em.vconn_required) R.add("VCONN", kText).put("required");
     R.add("Length", kText).put(em.latency_str ? em.latency_str : "?");
+    // How the cable answered the read ("A, PD3, SVDM 1.0"): only when this firmware's scan found it (a clone's or
+    // an older reading has none). With VCONN required this is the ninth and last row.
+    const emk_variant::Text ans = emk_variant::short_text(fusb302::cable_answered());
+    if (!ans.view().empty()) R.add("Answered", kDim).put(ans.view());
 }
 
 // One row: "5V 3A 9V 3A" whole entries that fit the 19 cells, then a "+" when more follow (never a cut entry).

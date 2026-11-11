@@ -89,6 +89,7 @@ struct Result {
     Outcome outcome = Outcome::NoIdentity;
     emrec::Record& rec;                           // the Discover Identity answer as a saved-clone record
     emk_quirk::Quirks& quirks;
+    emk_variant::Answered answered;               // the scan orientation and table row the cable answered (set by the caller; learn() leaves it)
     std::uint8_t svids = 0;                       // SVIDs the cable listed
     std::uint8_t probes = 0;                      // exchanges made
     std::uint8_t silent = 0;                      // probes the cable did not answer
@@ -122,9 +123,11 @@ inline constexpr std::size_t kOptionsMax = 2 + kMaxSeeds * (4 + 4 * 2);
 bool parse_options(std::span<const std::uint8_t> p, Options& out, bool& confirm);
 
 // Summary (the status and run response): [err, outcome (0 nothing yet, 1 learned, 2 no identity, 3 aborted), svids,
-// probes, silent, flags (bit0 truncated, bit1 log full), nlog, rows, unmatched policy, vid u16, pid u16].
-// `last` null = nothing learned yet.
-inline constexpr std::size_t kSummaryBytes = 13;
+// probes, silent, flags (bit0 truncated, bit1 log full), nlog, rows, unmatched policy, vid u16, pid u16,
+// then the answered tail: orientation (0 none, 1 A, 2 B), PD header revision (1 PD 2.0, 2 PD 3.x), SVDM (1, 2),
+// attempt (1-based within the orientation)]. The tail was added after the 13-byte form; a host tool accepts both
+// lengths and reads the tail as unknown when it is absent. `last` null = nothing learned yet.
+inline constexpr std::size_t kSummaryBytes = 17;
 std::size_t encode_summary(const Result* last, std::span<std::uint8_t> out);
 
 // One transcript entry: [err, i, step, spec_rev, req_n, got, rep_n, reply PD header u16, request words, reply words]

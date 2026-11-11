@@ -67,6 +67,7 @@ struct StubState {
     k2::pd::VdmInfo sink_vdm{};
     k2::pd::AppleInfo apple{};             // what fusb302::apple_info() returns (the lab-only readout's last run)
     bool cable_tb = false;
+    k2::emk_variant::Answered cable_ans{};   // what fusb302::cable_answered() returns (the Cable tab's Answered row)
     k2::usblink::Link ul{};               // what fusb302::usb_link() returns (the USB / Data rows of the Connection page)
     uint8_t cc = 1;
     k2::pd::Contract contract{};

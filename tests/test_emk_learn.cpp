@@ -402,6 +402,7 @@ static void test_summary_and_entry_encoding() {
     CHECK_EQ(out[0], 0);   // err
     CHECK_EQ(out[1], 0);   // outcome: none
     for (std::size_t i = 2; i < n; i++) CHECK_EQ(out[i], 0);
+    CHECK_EQ(emk_learn::kSummaryBytes, 17u);   // 13 bytes before the answered tail
 
     FakeCable c;
     c.table = {kSvids22D9, kModes22D9, kOppo};
@@ -409,9 +410,15 @@ static void test_summary_and_entry_encoding() {
     o.seeds[0] = {0x22D9, 31, 0, {}};
     o.nseeds = 1;
     emk_learn::Standalone r;
+    r.answered = k2::emk_variant::answered_from(2, 1);   // orientation B, second row (PD 3.x header, SVDM 1.0)
     CHECK_EQ(emk_learn::learn(&fake_exchange, &c, o, r), true);
+    CHECK_EQ(r.answered == k2::emk_variant::answered_from(2, 1), true);   // the plan leaves what the scan answered alone
     n = emk_learn::encode_summary(&r, out);
     CHECK_EQ(n, emk_learn::kSummaryBytes);
+    CHECK_EQ(out[13], 2);     // orientation B
+    CHECK_EQ(out[14], 2);     // PD 3.x header
+    CHECK_EQ(out[15], 1);     // SVDM 1.0
+    CHECK_EQ(out[16], 2);     // attempt 2
     CHECK_EQ(out[0], 0);
     CHECK_EQ(out[1], 1);      // learned
     CHECK_EQ(out[2], 1);      // svids

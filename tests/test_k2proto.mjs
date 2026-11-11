@@ -1092,6 +1092,21 @@ test("emarker detail decode names the codes", () => {
   assert.throws(() => P.decodeEmarkerDetail(u8(1, 2, 3)), P.FrameError);
 });
 
+test("emarker detail names the answered orientation and query combination, null on older firmware", () => {
+  const base = [1, 2, 3, 2, 3, 0, 60, 80, 4, 2];
+  let d = P.decodeEmarkerDetail(u8(...base, 2, 2, 1, 2));   // Baseus: orientation B, PD 3.x header, SVDM 1.0, attempt 2
+  assert.deepEqual([d.orientation, d.header_rev, d.svdm, d.attempt], ["B", "PD 3.x", "1.0", 2]);
+  d = P.decodeEmarkerDetail(u8(...base, 1, 2, 2, 1));       // CUKTECH: A, PD 3.x, SVDM 2.0, first attempt
+  assert.deepEqual([d.orientation, d.header_rev, d.svdm, d.attempt], ["A", "PD 3.x", "2.0", 1]);
+  d = P.decodeEmarkerDetail(u8(...base, 1, 1, 1, 3));       // the PD 2.0 row
+  assert.deepEqual([d.orientation, d.header_rev, d.svdm, d.attempt], ["A", "PD 2.0", "1.0", 3]);
+  for (const old of [u8(...base), u8(...base, 0, 0, 0, 0)]) {
+    d = P.decodeEmarkerDetail(old);
+    assert.deepEqual([d.orientation, d.header_rev, d.svdm, d.attempt], [null, null, null, null]);
+    assert.equal(d.usb_lanes, 2);
+  }
+});
+
 test("emarker over the link attaches the detail when part 2 answers", async () => {
   const part0 = [1, 1, 0xAC, 0x05, 0x34, 0x12, 0, 0, 0, 0, 2, 3, 5, 50, 240, 0, 1, ...Array.from("Apple\0USB4", (c) => c.charCodeAt(0))];
   const { link } = rig((f) => [rsp(5, f[3], 0, f[5] === 0 ? part0 : f[5] === 1 ? [4, 3, 2, 1] : [1, 2, 3, 2, 3, 0, 60, 80, 4, 2])]);
@@ -1465,6 +1480,17 @@ test("e-marker learn: run sends the options, then reads every transcript entry",
   assert.deepEqual(r.entries[0].reply, [0x22D9A05F, 0xAB01CD02, 7]);
   await assert.rejects(() => k.emLearn([1, 2, 3, 4, 5].map(() => ({ svid: 1, cmd: 1 }))), RangeError);
   await assert.rejects(() => k.emLearn([{ svid: 1, cmd: 32 }]), RangeError);
+});
+
+test("e-marker learn: the summary carries the answered combination when the firmware sends it", async () => {
+  const sum = [0, 1, 1, 4, 0, 0, 0, 2, 0, 0xD9, 0x22, 0x16, 0x61];
+  let { link } = rig((f) => [rsp(0x61, f[3], 0, [...sum, 2, 2, 1, 2])]);
+  let r = await new P.K2Remote(link).emLearned();
+  assert.deepEqual([r.summary.orientation, r.summary.header_rev, r.summary.svdm, r.summary.attempt], ["B", "PD 3.x", "1.0", 2]);
+  ({ link } = rig((f) => [rsp(0x61, f[3], 0, sum)]));
+  r = await new P.K2Remote(link).emLearned();
+  assert.deepEqual([r.summary.orientation, r.summary.header_rev, r.summary.svdm, r.summary.attempt], [null, null, null, null]);
+  assert.equal(r.summary.pid, 0x6116);
 });
 
 test("e-marker learn: a busy refusal and the unmatched log", async () => {
