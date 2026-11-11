@@ -38,8 +38,8 @@ Patterns so far (names used below):
 | `placeholder-vid` | Reports VID/PID FFFF:FFFF | treated as no identity |
 | `pd2-ama-identity` | Dock identity uses the PD 2.0 Alternate Mode Adapter product type | AMA VDO parsed for USB speed |
 | `proprietary-power-path` | Higher power only over a proprietary cable/connector (e.g. Lenovo slim tip), not over PD | none; note on card |
-| `needs-load` | Protocol handshake only completes with current flowing (VOOC/SVOOC) | reported as "needs load" |
-| `vooc-family-same-wake` | The VOOC, SVOOC and SVOOC65 units open with the same wake train. A charger that gives the VOOC unit not one frame (engine `NeedsLoad` after every wake train) gives the other two none either (inferred from the shared wake; no charger on hand has answered any of the three) | after a VOOC unit that ended `NeedsLoad`, the pending SVOOC and SVOOC65 rows are skipped with the same reason and no wake trains are sent. A VOOC unit that heard frames and then got no answer (`NoResponse`) says nothing about them: they still run. Host-tested, not yet on hardware |
+| `needs-load` | Protocol handshake only completes with current flowing (VOOC/SVOOC). For VOOC unproven: the engine's `NeedsLoad` means "never clocked after 3 wakes" (also seen on non-VOOC chargers), and in the 2026-11-11 no-phone run the 120 W brick clocked a frame with no load at all (OnePlus section) | reported as "needs load" |
+| `vooc-family-same-wake` | The VOOC, SVOOC and SVOOC65 units open with the same wake and the adapter opens with the same ident (0xA8 on the OnePlus 120 W brick, 2026-11-11 capture), so one session cannot tell the variants apart without answering, and the K2 never answers | the first family row that runs decides the others: "detected" (ident clocked) passes them, `NeedsLoad` (never clocked) or `NoResponse` (frames, no ident) skips them with that reason; they run no session of their own (`Runner::finish`). Host-tested (`test_vooc_family_shares_one_session`), not yet on hardware |
 | `idle-bias-is-not-a-charger` | Not a charger: the K2's own passive idle drives D+ and D- to about 0.6 V through one divider (653/653 mV at boot, 592/591 mV for 89 s behind a phone and an SSD), which reads as an equal steady pair, the shape of a BC1.2 dedicated charger | an equal steady pair inside 0.5 .. 0.79 V on both lines is "no quick charge", never "DCP 5V"; only an active check (D+ to 0 V for one poll, D- must fall by >= 150 mV against its own idle reading) can call a short. A handshake latch is judged only from a full sample ring. Apple 0.5 A (2.0 / 2.0 V) stays "DCP 5V". The active check is unverified on hardware |
 | `qc-redetect-after-reset` | A source redoes its D+/D- detection after the lines went to 0 V and misses a handshake that starts inside that window (AFC 12 V 0.7 s after the 9 V row's reset; QC2 12 V; QC3 Class B 5 V; see the Baseus 140W and power-strip entries) | every legacy session waits the 500 ms hold before its first move (all of QC2 / QC3 / AFC / FCP / SCP / VOOC / SVOOC / UFCS / vivo, not only the HVDC-style and SCP paths), and the planner keeps the later levels of a unit as retargets in one session (QC2, QC3, AFC and, since 78416967, FCP 9 V and 12 V). `afc-redetect-after-reset` is the AFC instance |
 | `legacy-row-wide-band` | Not a charger: the legacy rows (AFC, FCP, SCP, UFCS, vivo) judged VBUS in 85..110 % of the level, so a 9 V row settling at 8.0 V or 9.8 V passed | pass within +-5 % of the level (150 mV at least); 5 V rows use the vSafe5V window (4.75-5.5 V); a row below the rail it starts from keeps the unloaded programmable ceiling and the SCP 4.5 V row also needs the adapter's readback within 150 mV. Measured passes on hardware sit at 99.3..104.4 %. The engine's own session-health band (`fc::in_band`) is unchanged |
@@ -635,7 +635,24 @@ Ports (operator, 2026-11-10): C1 and C2 are the 120 W ports (20 V 6 A with the X
     seen only behind the Baseus 140 W top port (which balances its ports by cutting power, see its section).
 
 ### OnePlus / OPPO SUPERVOOC chargers
-- `needs-load`: VOOC/SVOOC ident answers, but the 0x82 status step needs current flowing.
+- **USB-A port speaks SVOOC with a phone** (2026-11-11, v1.0-427, `runs/2026-11-11-op15-svooc/`, OnePlus 15 at ~85 %,
+  the brick's own A-to-C cable, K2 inline and passive): two plug-ins, two full sessions, 3,473 frames (1,732 adapter
+  commands, 1,730 phone replies, no bad frame). Each session: the phone's 40-clock wake burst through the brick's closed
+  D+/D- short, 0.54-0.56 s of both lines low, then the brick opens the short and clocks ident 0xA8 (first one unanswered,
+  the second answered 0x00D), a ~1 s handshake, then a steady 0x82 poll every 44.2 ms. VBUS 5.34 V 0.88 A -> 8.65 V 2.0 A
+  -> 9.0 V 3.6 A within seconds, then 8.95 -> 9.08 V at 3.60 A. The passive classifier read "VOOC WARP", then "SVOOC".
+  Decoded facts and the guessed command names: `docs/FASTCHARGE_PROTOCOLS.md` (inline capture subsection).
+- **No phone** (2026-11-11, v1.0-415, charger test, `runs/2026-11-11-integ-hw/oneplus-usba/log.txt`): every K2 wake read
+  `[VOOC] no frame x1, D+ falls in 3 ms: PA7=0 PB0=0`, then `[VOOC] cmd 0xFF frame 0x1FF`, ~0.54 s after the wake: the
+  old frame start missed the ident, which starts with D+ already held low, and caught the reply slot where nobody drives
+  D-. VOOC ended "no response" (3 tries), and SVOOC and SVOOC65 repeated the same train (33 s of the run). The brick
+  clocked a frame with no load at all, 0.54 s after the wake, the delay of the ident in the phone capture (that it was
+  the ident is inferred), so this port does not need current to start clocking. Since k2/vooc-detect the frame start
+  takes either D+ edge, 0x1FF counts as nothing heard, the first ident ends the session as "detected" with nothing
+  answered, and one session decides all three rows. Hardware check pending: expected VOOC/SVOOC/SVOOC65 all Pass
+  "detected", VBUS within 5.0-5.5 V throughout.
+- `needs-load` (older wording, pre-2026-11-11): the "needs load" seen on this brick meant "never clocked", not a VOOC
+  answer (see the re-validation notes below).
 - `rd-rd-debug-accessory-latch` (2026-11-06, 120 W brick on the top plug, K2 on HID power, `runs/t23-diag/`): Rd on CC2 alone (PLUS boot, or `pd-reread --line 2`) gives VBUS 5.26 V within ~150 ms. Rd on both lines (the retired widen, 300 ms after reset) made the brick turn its Rp off on both pins and stay off until the plug was pulled.
 - `acked-caps-without-request` (same day, `pd-reread` attach): the first Source_Capabilities got our GoodCRC, no Request followed, the brick sent a Hard Reset 26-27 ms later and VBUS fell to ~0.37 V for ~650 ms before it came back. Fixed by the acked-caps rule (see the pattern table).
 - `caps-retry-window` (same day, PLUS boot on the top plug, K2 charger-powered, Auto-CRC off): the brick sent Source_Capabilities every ~150 ms, got no GoodCRC, and gave PD up after 7-10 s; VBUS stayed 5 V but no caps ever came again, so START found `pdo_count 0` and every PD row said "not advertised". Only a detach or a Hard Reset brings PD back, and either one kills a self-powered K2. Handled by taking a plain 5 V contract as soon as the first caps arrive (the window is the first 7-10 s of the attach, and a key-mode boot is inside it only when the firmware is up within that time; the self-hold: a self-powered K2 keeps a plain 5 V contract); if PD is gone anyway, the START reason is "PD gave up before START" instead of "not advertised". Not verified on hardware yet (T23 part B0). The window length is from one log; measure it on other chargers before relying on it.
@@ -674,6 +691,10 @@ Ports (operator, 2026-11-10): C1 and C2 are the 120 W ports (20 V 6 A with the X
     activity, e.g. behind a USB-C PD trigger) is available: repeat the branch's wake with the load on the K2 top plug.
   - A wake train of 13 pulses (506/510/1010/1510 us) never made any charger clock; no run in `runs/` ever decoded a VOOC
     frame from a charger.
+  - Update 2026-11-11: the load hypothesis is in doubt. In the no-phone charger-test run the brick clocked a frame
+    0.54 s after the K2's wake, with no load (see "No phone" above); the old decoder could not read it. The 2026-11-11
+    `[FC] dcp check ... result=2` also found the pair shorted at idle on this port, against the "does not short" reading
+    above; not reconciled.
 
 ### VIA Labs dock (042B:0211, via TB3 dock tests)
 - `pd2-ama-identity`: ID header product type 5 (AMA), AMA VDO 0x0000000A = USB 3.2 Gen1+Gen2.

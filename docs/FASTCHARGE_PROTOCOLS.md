@@ -134,6 +134,90 @@ What an active engine needs (not done, needs an unplugged-phone test):
   before the first fall.
 - Open: why the adapter drops after the first 0x82 reply (0x074). The data words may be state-dependent (the
   capture is one accepted attempt), or the reply timing needs a closer match.
+- Retired 2026-11-11: the engine no longer answers any adapter command (see "Detection by ident" below). The slave
+  replies above are history; `vooc::tx_reply` remains only for the lab `vooc answer` op.
+
+### OnePlus 15 + OnePlus 120 W, USB-A port, inline capture (2026-11-11)
+
+Source: `runs/2026-11-11-op15-svooc/cap1.edges` (81,980 D+/D- edges over 95 s, 0 overruns, recorded passively with
+`tools/sniff_stream.py`; the phone at ~85 % plugged in twice, the brick's own A-to-C cable, K2 inline: charger on the
+bottom port, phone on the top plug), `power.tsv` (VBUS, current and line levels every ~0.4 s). Committed slices:
+`tests/fixtures/op15_svooc_entry.edges` (0-17.5 s, entry and handshake) and `op15_svooc_replug.edges` (57.5-63.6 s,
+steady state, unplug, second session). Decode with `python3 tools/vooc_edges.py file <edges> --summary` or
+`--edges LO HI` (raw edges of a window). Times below are ms on the tool's axis (first edge = 0). Everything in this
+subsection is observed unless tagged.
+
+**Entry, first plug-in (who drives what):**
+1. 0 ms: both lines high; D- falls at 0.89 ms, D+ at 7.34 ms. Then 14.69 s with both lines low (the phone not yet
+   talking).
+2. 14,699.36 ms: **wake burst**. D+ and D- rise and fall *together* (the two edges of each step 0.5-5 us apart),
+   first half-period 246 us, then 293-301 us: 40 clocks (80 edges), ending with both lines low at 14,723.0 ms. The two
+   lines moving as one is one driver seen through the brick's closed D+/D- short (the port is a DCP at idle:
+   `[FC] dcp check ... result=2`). That the phone drives D+ is inferred: it is the only side that is active before the
+   first command, and the K2 reproduces the burst by driving D+ alone (below).
+3. 14,723.0-15,262.46 ms: both lines held low for 539.5 ms.
+4. 15,262.462 ms: D- rises, D+ rises 5.3 us later. From here the two lines move independently: **the short is open**.
+   This rise is pulse 1 of the first command, whose fall was the end of the burst (D+ held low), so an edge-based
+   decoder has to start a frame on either D+ edge after a 2 ms quiet gap, not only on a fall.
+5. That first frame is the ident `0xA8`, answered `0x000` (the phone silent). 165.6 ms later the adapter sends `0xA8`
+   again and the phone answers `0x00D`.
+
+The second plug-in repeats the shape: wake burst at 61,572.2 ms, first ident 561 ms later.
+
+**Handshake** (session 1, ms from the first ident; command -> reply word; the names are the tool's guesses, see
+`SVOOC_CMDS`): 0 A8 -> 000; 165.6 A8 -> 00D; 209.0 98 -> 073; 233.1 98 -> 023; 257.3 9E -> 010; 281.3 80 -> 010;
+305.4 94 -> 010; 329.5 98 -> 010; 373.9 8A -> 028; 397.8 98 -> 010; 422.0 8E -> 010; 466.3 9A -> 030; 500.9 82 -> 074;
+535.5 82 -> 00B; 570.2 84 -> 071; 604.8 84 -> 031; 639.5 86 -> 06B; 674.1 86 -> 03A; 708.8 88 -> 05D; 743.4 88 -> 042;
+778.1 8A -> 048; 812.7 8A -> 052; 847.4 8C -> 046; 882.1 8C -> 066; 916.8 88 -> 04D; 960.1 94 -> 000. Then `0x84` about
+ten more times and the steady `0x82` poll.
+
+**Steady state:** only `0x82`, every 44.2 ms (median), 943 times in session 1 and 715 in session 2; the reply word rises
+`0x04C` -> `0x06A` (session 1) and `0x055` -> `0x06B` (session 2), with an isolated `0x07F` early in each ramp. VBUS creeps
+8.95 -> 9.08 V at a constant 3.60 A. Inferred, unproven: the reply is a battery-voltage reading and the adapter regulates
+VBUS to about twice it. VBUS/current through the entry: 5.34 V 0.88 A -> 8.65 V 2.0 A -> 9.0 V 3.6 A in a few seconds.
+
+**Guessed, not proven:** every command name (`ident` aside, which is the first command of every session), the meaning
+of every reply word, the `0x07F` sentinel, and which ident (0xA8, 0xAC, 0xA6 in `vooc::is_ident`) belongs to which
+adapter generation. 0xA8 opens the session on this 120 W brick, so one ident does not tell VOOC, SVOOC and SVOOC 65 W
+apart.
+
+### Detection by ident, no trigger (k2/vooc-detect, 2026-11-11)
+
+Rule (operator, 2026-11-11): the K2 never answers a VOOC adapter. Any reply can lead a SuperVOOC adapter towards its
+high-current output (11 V at up to 11 A), so the charger test detects and stops.
+
+- Wake: odd tries play the phone's entry burst (80 steps of 300 us, D+ 3.3 V / 0 V, D- Hi-Z so the closed short carries
+  it, ending low; reverse-engineered from the capture above); even tries the older 13-period train. 3 tries, 1.5 s
+  listen after each (the ident came 0.54 s after the burst), 3 s rest between them.
+- Listen: frames start on either D+ edge after D+ held one level for 2 ms (`vooc::FrameStart`). An all-ones word
+  (0x1FF, command 0xFF) is the idle-high line, nothing heard (`vooc::heard`).
+- The first ident ends the session at once as `Fail::Detected` and releases the lines (both 0 V for 500 ms, then the
+  passive idle). Any other command is counted, never answered. VBUS above 5.5 V aborts (`Overvoltage`) and releases.
+  The engine refuses VOOC inline even with `allow_inline` and aborts if inline appears mid-session.
+- Outcomes: ident -> "detected"; only idle or no frames after 3 wakes -> `NeedsLoad` ("needs load", the old wording
+  for "never clocked"); frames but no ident -> `NoResponse`. Rules for the charger-test rows:
+  `docs/CHARGER_TEST_FLOW.md`.
+- Not done: telling VOOC from SVOOC from SVOOC 65 W (needs answers), any voltage step.
+
+### Inline monitor, passive (k2/vooc-detect, 2026-11-11)
+
+While the K2 is inline (data on both plugs), holds no PD contract and owns D+/D- for nothing else, the lines float and
+the D+/D- edge ISR (`dpsniff`) feeds every edge to `vooc::Decoder` (`include/k2/fastcharge/vooc_decode.hpp`). It is
+pure code over edge words and shares the tool's framing: frames split by a 2 ms gap, a first pulse over 1 ms timed
+from its rise, command then reply within 12 ms, a new session after 1 s of silence, the handshake up to the first
+pause over 60 ms, the steady `0x82` period from gaps under 200 ms. A host test (`tests/test_vooc_decode_isolation.py`)
+proves the decoder header reaches no pin, register or driver.
+
+- Cost: ~1,030 edges/s through the ISR in steady state (bursts of ~6.7 k edges/s for ~24 ms in the wake). RAM: the
+  decoder is 220 B (its summary 148 B), no edge buffer.
+- Summary: sessions, wake bursts, partial frames, edges, frames, pairs, handshake pairs, the ident and its reply,
+  per-command counts with the last reply of each (16 commands, then `other`), and for `0x82` the last / min / max reply
+  plus the last and mean period.
+- Readout: `k2_remote.py --json fc vooc [--on|--off]` (FC op 4, a sub-op of command 0x32), CDC shell
+  `fc vooc [on|off]`, `[VOOC] session N start` / `end` log lines, the Home protocol row `SVOOC 9.0V3.6A` (the measured
+  VBUS and IBUS, not a rating, so no limit bar) and a raw `VOOC 0x82 0x06B raw` row on the Connection page (no-PD Sink
+  body). Reply words are printed as hex with no unit: their meaning is a guess.
+- The monitor is on by default (a RAM switch, not saved). Not yet run on hardware.
 
 ## 4. UFCS
 

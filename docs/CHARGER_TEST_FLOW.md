@@ -105,7 +105,7 @@ and the card (`result_layout`, `is_absent`), not as a full unit.
 | FCP, SCP | the ACCP register exchange was answered (an unanswered read or write aborts the row; SCP at 5 V ends as "detected" once every identifying read answered) | Fail, no handshake / no response |
 | AFC | the ping byte was answered | Fail, no response |
 | UFCS | the charger acknowledged our frames and sent its output capabilities | Fail, no handshake / no response |
-| VOOC, SVOOC, SVOOC65 | the adapter sent command frames after our wake train (identification decoded plus an SVOOC-only command is "detected"; accepted and ramped is a pass) | Fail, needs load |
+| VOOC, SVOOC, SVOOC65 | the adapter clocked its identification command (0xA8, 0xAC or 0xA6) after our wake: Pass "detected", the session ends at once and nothing is ever answered (no trigger, no level change). One session decides all three rows (below) | Fail, needs load (never clocked) or no response (frames, no ident); the other two family rows skip with the same reason |
 | VIVO | the charger sent a reply frame (cmd 0x08) or its entry notice (cmd 0x55); any other frame, including the K2's own request echoed back through a D+/D- short, is ignored | Fail, no response |
 
 QC2 detection reads the D+/D- state, not the voltage: a DCP or BC1.2 charger keeps the lines shorted and D- stays at
@@ -119,6 +119,27 @@ Host tests: `test_charger_test` (`test_silent_source_fails_every_handshake_row` 
 5 V source and expects no pass; `test_answered_handshake_passes_the_5v_row` expects a pass once the handshake is
 answered), `test_fc_engine` (`plain_sources_are_not_qc`, `hvdcp_5v_needs_the_handshake_and_passes_with_it`) and
 `test_fc_vivo` (`own_echo_is_not_a_charger`).
+
+### VOOC family "detected" and the legacy skip rules (2026-11-11)
+
+The K2 answers no VOOC command (operator rule: never risk a SuperVOOC adapter switching to 11 V at up to 11 A), so a
+VOOC row can only prove that the adapter speaks the protocol. Its verdict is **Pass, "detected"** (`fc::Fail::Detected`
+in the row's detail, like the SCP 5 V row): no voltage was asked for, VBUS stays in 5.0-5.5 V (above 5.5 V the session
+aborts with `Overvoltage` and releases the lines), and the card and Results show the word "detected" instead of a level.
+
+- **One session for the family** (pattern `vooc-family-same-wake`): VOOC, SVOOC and SVOOC65 open with the same wake and
+  the same ident (0xA8 on the 120 W brick), so one ident cannot tell the variants apart. The first family row that runs
+  decides the others: "detected" passes them, "needs load" (never clocked, 3 wakes) or "no response" (frames, no ident)
+  skips them with that reason. They keep their names and run no session. Cost on a charger that does not speak VOOC:
+  one session of 3 wakes (about 10.5 s plus the 500 ms hold), instead of three.
+- **AFC, FCP, SCP:** an unacknowledged first exchange (`Unsupported`) skips the unit's other rows.
+- **UFCS:** no answer to the opening exchange (`NoResponse`) skips the unit's other rows.
+- **VIVO:** a first VIVO row with no frame in its entry window (`NoResponse`) skips the other VIVO rows.
+
+Host tests: `test_charger_test` (`test_vooc_family_shares_one_session`,
+`test_vivo_no_response_skips_the_other_vivo_rows`), `test_fc_engine` (`vooc_ident_is_detected_and_nothing_is_answered`,
+`vooc_other_commands_are_never_answered`, `vooc_all_ones_frame_is_nothing_heard`, `vooc_never_inline`,
+`vooc_stop_releases`, `vooc_wake_forms_alternate`).
 
 ## SCP and UFCS rows follow what the charger reported (2026-11-08)
 
