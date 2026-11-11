@@ -80,10 +80,10 @@ bool timed(Code c) {
     }
 }
 
-// The tail time, <= kTailChars: m:ss, h:mm:ss below 10 h, then "12h05m", then whole hours.
+// The tail time, <= kTailChars: m:ss below an hour, then "1h05m" / "12h05m", from 100 h whole hours.
 void tail_clock(Out& o, std::uint32_t ms) {
     const std::uint32_t t = ms / 1000;
-    if (t < 36000) { o.clock(ms); return; }
+    if (t < 3600) { o.clock(ms); return; }
     o.u(t / 3600); o.c('h');
     if (t / 3600 < 100) { o.two(t / 60 % 60); o.c('m'); }
 }

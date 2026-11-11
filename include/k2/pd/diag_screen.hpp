@@ -14,8 +14,8 @@
 
 namespace k2::pd::diag::screen {
 
-inline constexpr std::size_t kLabelChars = 16;     // a RowList label (font 16 from x28, beside a 7-char tail) and Home row 1
-inline constexpr std::size_t kTailChars = 7;       // the tail: the finding's time, m:ss or h:mm:ss
+inline constexpr std::size_t kLabelChars = 16;     // a RowList label (font 16 from x28, beside a 6-char tail) and Home row 1
+inline constexpr std::size_t kTailChars = 6;       // the tail: the finding's time, m:ss, "1h05m", "12h05m", "1111h"
 inline constexpr std::size_t kNoteChars = 31;      // the focused row's note (font 12 from x28)
 inline constexpr std::size_t kVerdictChars = 27;   // a footer or a full-width 16 px line
 

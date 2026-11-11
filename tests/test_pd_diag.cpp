@@ -1408,7 +1408,7 @@ void test_screen_ramp() {
 }
 
 // Every code with the widest numbers its fields can carry (diag.cpp evaluate(): u8 counters saturate at 255, the
-// u16 ones at 65535; currents to 12.34 A, VBUS to 28.5 V, 240 W, times to 9:59:59 and past 10 h) still fits its row.
+// u16 ones at 65535; currents to 12.34 A, VBUS to 28.5 V, 240 W, times from 59:59 to past 100 h) still fits its row.
 void test_screen_worst_case_fits() {
     Report r;
     r.empty = false;
@@ -1455,7 +1455,7 @@ void test_screen_worst_case_fits() {
         CHECK_COND(seen);
     }
     for (const NeedFrom nf : {NeedFrom::AssumedTwin, NeedFrom::SinkCaps, NeedFrom::Skedb})
-        for (const std::uint32_t t : {35'999'000u, 359'999'000u, 4'000'000'000u})
+        for (const std::uint32_t t : {3'599'000u, 35'999'000u, 359'999'000u, 4'000'000'000u})
             for (const auto& w : worst) {
                 r.need_from = nf;
                 r.n = 1;
