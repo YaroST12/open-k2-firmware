@@ -516,6 +516,36 @@ class Decoders(unittest.TestCase):
         self.assertEqual((e["attached"], e["acks"]), (True, 1))
         self.assertIn("acked, no answer", kr.render("emarker", e))
 
+    def test_emarker_pull_down_verdict_and_its_text(self):
+        # The 17-byte part 2: the read tail, then the Ra probe's verdict (0 not probed, 1 none, 2 CC1, 3 CC2, 4 unclear).
+        tail = bytes([0, 0, 0, 0, 1, 1])            # nothing answered, read alone, the chip acknowledged one variant
+        for code, name in ((0, "not-probed"), (1, "none"), (2, "cc1"), (3, "cc2"), (4, "unclear")):
+            e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + tail + bytes([code]))
+            self.assertEqual(e["pull_down"], name)
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + tail + bytes([3]))
+        self.assertIn("no answer, but a chip's pull-down is on CC2: read this cable with the charger attached, "
+                      "or try its other end", kr.render("emarker", e))
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + tail + bytes([2]))
+        self.assertIn("pull-down is on CC1", kr.render("emarker", e))
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + tail + bytes([1]))
+        self.assertIn("no chip found", kr.render("emarker", e))
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + tail + bytes([4]))
+        self.assertIn("pull-down unclear", kr.render("emarker", e))
+        self.assertNotIn("read this cable", kr.render("emarker", e))
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + tail + bytes([0]))
+        self.assertNotIn("pull-down", kr.render("emarker", e))
+        self.assertNotIn("no chip found", kr.render("emarker", e))
+        # A value this tool does not know is shown as a number, never dropped.
+        e = kr.decode_emarker(self.PART0, b"", self.P2_OLD + tail + bytes([9]))
+        self.assertEqual(e["pull_down"], "9")
+
+    def test_emarker_pull_down_unknown_on_older_firmware(self):
+        for p2 in (self.P2_OLD, self.P2_OLD + bytes(4), self.P2_OLD + bytes([0, 0, 0, 0, 2, 1])):
+            e = kr.decode_emarker(self.PART0, b"", p2)
+            self.assertIn("pull_down", e)
+            self.assertIsNone(e["pull_down"])
+            self.assertNotIn("pull-down", kr.render("emarker", e))
+
     def test_emarker_read_mode_unknown_on_older_firmware(self):
         for p2 in (self.P2_OLD, self.P2_OLD + bytes([2, 2, 1, 2]), self.P2_OLD + bytes([0, 0, 0, 0, 0, 0])):
             e = kr.decode_emarker(self.PART0, b"", p2)

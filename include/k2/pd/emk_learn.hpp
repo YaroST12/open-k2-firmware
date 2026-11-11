@@ -93,6 +93,7 @@ struct Result {
     emk_variant::Answered answered;               // the scan orientation and table row the cable answered (set by the caller; learn() leaves it)
     std::uint8_t read_mode = 0;                   // how the scan ran: 0 none, 1 cable alone, 2 source attached (emk_attached::Mode; set by the caller)
     std::uint8_t read_acks = 0;                   // query variants the chip acknowledged during the scan (set by the caller)
+    std::uint8_t pull_down = 0;                   // Ra probe verdict after a cable-alone read that found nothing (raclass::PullDown value; set by the caller; 0 = not probed)
     std::uint8_t svids = 0;                       // SVIDs the cable listed
     std::uint8_t probes = 0;                      // exchanges made
     std::uint8_t silent = 0;                      // probes the cable did not answer
@@ -129,10 +130,11 @@ bool parse_options(std::span<const std::uint8_t> p, Options& out, bool& confirm)
 // probes, silent, flags (bit0 truncated, bit1 log full), nlog, rows, unmatched policy, vid u16, pid u16,
 // then the answered tail: orientation (0 none, 1 A, 2 B), PD header revision (1 PD 2.0, 2 PD 3.x), SVDM (1, 2),
 // attempt (1-based within the orientation), then the read tail: read mode (0 none, 1 cable alone, 2 source attached),
-// variants acknowledged]. The answered tail was added after the 13-byte form and the read tail after the 17-byte form;
-// a host tool accepts all lengths and reads a missing tail as unknown. Outcome 4 = acked, no answer. `last` null =
+// variants acknowledged, then the pull-down verdict (0 not probed, 1 none, 2 on CC1, 3 on CC2, 4 unclear; k2::raclass::PullDown)].
+// The answered tail was added after the 13-byte form, the read tail after the 17-byte form and the verdict after the 19-byte
+// form; a host tool accepts all lengths and reads a missing tail as unknown. Outcome 4 = acked, no answer. `last` null =
 // nothing learned yet.
-inline constexpr std::size_t kSummaryBytes = 19;
+inline constexpr std::size_t kSummaryBytes = 20;
 std::size_t encode_summary(const Result* last, std::span<std::uint8_t> out);
 
 // One transcript entry: [err, i, step, spec_rev, req_n, got, rep_n, reply PD header u16, request words, reply words]

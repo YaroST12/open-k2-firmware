@@ -402,7 +402,7 @@ static void test_summary_and_entry_encoding() {
     CHECK_EQ(out[0], 0);   // err
     CHECK_EQ(out[1], 0);   // outcome: none
     for (std::size_t i = 2; i < n; i++) CHECK_EQ(out[i], 0);
-    CHECK_EQ(emk_learn::kSummaryBytes, 19u);   // 13 bytes, the answered tail (4), then the read tail (2)
+    CHECK_EQ(emk_learn::kSummaryBytes, 20u);   // 13 bytes, the answered tail (4), the read tail (2), then the pull-down verdict (1)
 
     FakeCable c;
     c.table = {kSvids22D9, kModes22D9, kOppo};
@@ -413,6 +413,7 @@ static void test_summary_and_entry_encoding() {
     r.answered = k2::emk_variant::answered_from(2, 1);   // orientation B, second row (PD 3.x header, SVDM 1.0)
     r.read_mode = 2;                                     // the scan ran with a source attached
     r.read_acks = 2;
+    r.pull_down = 3;                                     // the Ra probe found a pull-down on CC2
     CHECK_EQ(emk_learn::learn(&fake_exchange, &c, o, r), true);
     CHECK_EQ(r.answered == k2::emk_variant::answered_from(2, 1), true);   // the plan leaves what the scan answered alone
     n = emk_learn::encode_summary(&r, out);
@@ -423,6 +424,7 @@ static void test_summary_and_entry_encoding() {
     CHECK_EQ(out[16], 2);     // attempt 2
     CHECK_EQ(out[17], 2);     // read mode: attached
     CHECK_EQ(out[18], 2);     // variants acknowledged
+    CHECK_EQ(out[19], 3);     // pull-down verdict: CC2
     CHECK_EQ(out[0], 0);
     CHECK_EQ(out[1], 1);      // learned
     CHECK_EQ(out[2], 1);      // svids
@@ -507,6 +509,7 @@ static void test_acked_no_answer_outcome_goes_on_the_wire() {
     CHECK_EQ(emk_learn::encode_summary(&q, out), emk_learn::kSummaryBytes);
     CHECK_EQ(out[1], 2);
     CHECK_EQ(out[17], 0);
+    CHECK_EQ(out[19], 0);     // never probed
 }
 
 int main() {

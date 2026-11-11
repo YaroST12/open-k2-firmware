@@ -33,6 +33,7 @@ void note_read() {
     const emk_attached::ReadInfo ri = fusb302::last_cable_read();
     g_result.read_mode = static_cast<std::uint8_t>(ri.mode);
     g_result.read_acks = ri.acks;
+    g_result.pull_down = static_cast<std::uint8_t>(fusb302::pull_down());
 }
 
 void body(void* ctx) {
@@ -52,7 +53,7 @@ Err run(const emk_learn::Options& opt, bool confirmed) {
     g_result.rec = {};
     g_result.quirks = {};
     g_result.answered = {};
-    g_result.read_mode = g_result.read_acks = 0;
+    g_result.read_mode = g_result.read_acks = g_result.pull_down = 0;
     g_result.svids = g_result.probes = g_result.silent = 0;
     g_result.truncated = false;
     g_result.clear_log();

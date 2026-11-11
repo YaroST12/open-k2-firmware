@@ -417,12 +417,20 @@ var K2Proto = (function () {
     return { read_mode: ["none", "alone", "attached"][m] || String(m), attached: m === 1 || m === 2 ? m === 2 : null, acks: p[at + 1] };
   }
 
+  // The pull-down verdict (1 byte at `at`, absent on older firmware): what the Ra probe made of a chip's pull-down after a
+  // cable-alone read that found nothing. Mirrors decode_pull_down in k2_remote.py: null when absent, an unknown code kept
+  // as its number.
+  var PULL_DOWNS = ["not-probed", "none", "cc1", "cc2", "unclear"];
+  function decodePullDown(p, at) {
+    return p.length < at + 1 ? null : (PULL_DOWNS[p[at]] || String(p[at]));
+  }
+
   // GET_EMARKER part 2 (k2/pd-read): cable VDO detail. The firmware sends numbers, they are named here.
   function decodeEmarkerDetail(p) {
     need(p, 10, "emarker detail");
     var f = p[5];
     var ans = decodeAnswered(p, 10), rd = decodeRead(p, 14);
-    return { read_mode: rd.read_mode, attached: rd.attached, acks: rd.acks, orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, sop: ["none", "SOP'", "SOP''"][p[0]] || "none", pd_rev: { 1: "2.0", 2: "3.x" }[p[1]] || null,
+    return { pull_down: decodePullDown(p, 16), read_mode: rd.read_mode, attached: rd.attached, acks: rd.acks, orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, sop: ["none", "SOP'", "SOP''"][p[0]] || "none", pd_rev: { 1: "2.0", 2: "3.x" }[p[1]] || null,
              vdo_version: p[2], latency_code: p[3], latency: LATENCY[p[3]] || "code " + p[3],
              termination: TERMINATION[p[4] & 3],
              type_c_plug: !!(f & 1), vconn_required: !!(f & 2), epr_cable: !!(f & 4), vdo2_valid: !!(f & 8),
@@ -892,9 +900,9 @@ var K2Proto = (function () {
   var LEARN_POLICIES = ["ignore", "nak", "not-supported"];
   function words(p, at, n) { var o = []; for (var i = 0; i < n; i++) o.push(u32(p, at + 4 * i)); return o; }
   function decodeLearnSummary(p) {
-    emOk(p, "emarker learn"); need(p, 13, "emarker learn");   // 17 bytes with the answered tail, 19 with the read tail
+    emOk(p, "emarker learn"); need(p, 13, "emarker learn");   // 17 bytes with the answered tail, 19 with the read tail, 20 with the pull-down verdict
     var ans = decodeAnswered(p, 13), rd = decodeRead(p, 17);
-    return { read_mode: rd.read_mode, attached: rd.attached, acks: rd.acks, orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, outcome: LEARN_OUTCOMES[p[1]] || String(p[1]), svids: p[2], probes: p[3], silent: p[4], truncated: !!(p[5] & 1),
+    return { pull_down: decodePullDown(p, 19), read_mode: rd.read_mode, attached: rd.attached, acks: rd.acks, orientation: ans.orientation, header_rev: ans.header_rev, svdm: ans.svdm, attempt: ans.attempt, outcome: LEARN_OUTCOMES[p[1]] || String(p[1]), svids: p[2], probes: p[3], silent: p[4], truncated: !!(p[5] & 1),
              logFull: !!(p[5] & 2), entries: p[6], rows: p[7], unmatchedPolicy: LEARN_POLICIES[p[8]] || String(p[8]),
              vid: u16(p, 9), pid: u16(p, 11) };
   }

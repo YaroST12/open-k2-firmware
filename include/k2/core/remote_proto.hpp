@@ -532,8 +532,8 @@ inline constexpr size_t kCardsNameMax = 20, kCardsChunks = 6;   // 250 bytes / 4
 //                                   2 CUKTECH 6A, 4 OnePlus 100W; 3 is the retired OnePlus 100W (mag) and arms 4);
 //                                   an id past the table is BadArg
 //   LEARN   (blocks: a run takes seconds; refused with kEmErrBusy while a PD tool is active)
-//           req [6, 0]              rsp summary (k2::emk_learn::kSummaryBytes = 19, bytes 13..16 are the answered
-//                                   tail, 17..18 the read tail; absent on older firmware): the last run, outcome 0 = none yet
+//           req [6, 0]              rsp summary (k2::emk_learn::kSummaryBytes = 20, bytes 13..16 are the answered
+//                                   tail, 17..18 the read tail, 19 the pull-down verdict; absent on older firmware): the last run, outcome 0 = none yet
 //           req [6, 1, options]     run: powers the cable in the bottom port (VCONN) and replays Discover Identity /
 //                                   SVIDs / Modes and the seeds; options = [flags (bit0 sweep, bit1 confirm inline),
 //                                   nseeds <= 4, seed * nseeds], a seed = svid u16, cmd 0..31, nvdo 0..2, vdo u32 * nvdo;
@@ -903,6 +903,10 @@ struct EmarkerSnapshot {
     // 1 cable alone, 2 source attached with the K2's Rd kept) and how many query variants the chip acknowledged. Set
     // even when no cable was found: "silent alone" and "silent with the source attached" differ.
     uint8_t read_mode = 0, read_acks = 0;
+    // Part 2 pull-down verdict (byte 16, appended after the read tail): what the Ra probe made of the chip's pull-down
+    // after a cable-alone read that found nothing (0 not probed, 1 none, 2 on CC1, 3 on CC2, 4 unclear;
+    // k2::raclass::PullDown).
+    uint8_t pull_down = 0;
 };
 
 constexpr uint8_t kEmFlagTypeC = 1 << 0, kEmFlagVconn = 1 << 1, kEmFlagEpr = 1 << 2,

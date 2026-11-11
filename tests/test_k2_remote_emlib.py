@@ -92,7 +92,7 @@ class EmLib(unittest.TestCase):
         self.assertIsNone(a.em_cmd)
 
 
-def summary(outcome=1, entries=2, rows=2, answered=None, read=None):
+def summary(outcome=1, entries=2, rows=2, answered=None, read=None, pull_down=None):
     # [err, outcome, svids, probes, silent, flags, nlog, rows, policy, vid u16, pid u16] and, from the newer firmware,
     # the answered tail [orientation, header rev, svdm, attempt] and the read tail [mode (1 alone, 2 attached), acks];
     # None = the 13-byte form of an older firmware (answered only: 17 bytes).
@@ -101,6 +101,8 @@ def summary(outcome=1, entries=2, rows=2, answered=None, read=None):
         s += bytes(answered)
     if read is not None:
         s += bytes(read)
+    if pull_down is not None:
+        s += bytes([pull_down])     # the 20-byte form: the Ra probe's verdict
     return s
 
 
@@ -204,6 +206,18 @@ class Learn(unittest.TestCase):
         r, _ = run(["emarker", "learned"], [summary(outcome=4, entries=0, rows=0, answered=[0, 0, 0, 0], read=[2, 1])])
         self.assertEqual(r["summary"]["outcome"], "acked-no-answer")
         self.assertIn("learn acked-no-answer", kr.render("emarker", r))
+        # The 20-byte form adds the Ra probe's verdict; the 19-byte form and the older ones leave it unknown.
+        r, _ = run(["emarker", "learned"], [summary(outcome=2, entries=0, rows=0, answered=[0, 0, 0, 0], read=[1, 0], pull_down=3)])
+        self.assertEqual(r["summary"]["pull_down"], "cc2")
+        self.assertIn("a chip's pull-down is on CC2", kr.render("emarker", r))
+        r, _ = run(["emarker", "learned"], [summary(outcome=2, entries=0, rows=0, answered=[0, 0, 0, 0], read=[1, 0], pull_down=1)])
+        self.assertEqual(r["summary"]["pull_down"], "none")
+        self.assertIn("no chip found", kr.render("emarker", r))
+        r, _ = run(["emarker", "learned"], [summary(outcome=2, entries=0, rows=0, answered=[0, 0, 0, 0], read=[1, 0], pull_down=0)])
+        self.assertEqual(r["summary"]["pull_down"], "not-probed")
+        self.assertNotIn("pull-down", kr.render("emarker", r))
+        r, _ = run(["emarker", "learned"], [summary(entries=0, rows=0, answered=[2, 2, 1, 2], read=[2, 1])])
+        self.assertIsNone(r["summary"]["pull_down"])
         # The 17-byte (answered only) and 13-byte forms: the read facts are unknown, not alone.
         for old in (summary(entries=0, rows=0, answered=[2, 2, 1, 2]), summary(entries=0, rows=0)):
             r, _ = run(["emarker", "learned"], [old])

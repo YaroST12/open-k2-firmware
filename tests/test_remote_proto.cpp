@@ -956,9 +956,11 @@ static void test_emarker() {
     f.em.answered_orientation = 2; f.em.answered_hdr_rev = 2; f.em.answered_svdm = 1; f.em.answered_attempt = 2;
     // Then the read tail: how the read ran (2 = a source was attached, Rd kept) and the variants the chip acknowledged.
     f.em.read_mode = 2; f.em.read_acks = 1;
+    // Last: the Ra probe's pull-down verdict (3 = a pull-down on CC2).
+    f.em.pull_down = 3;
     CHECK_EQ(run(f, request(0x05, 3, {2}), r), 1);
-    check_header(r, 0x05, 3, Status::Ok, 16);
-    check_bytes(r, kRspHeader, {1, 2, 1, 3, 3, 0x8C, 60, 70, 2, 2, 2, 2, 1, 2, 2, 1});
+    check_header(r, 0x05, 3, Status::Ok, 17);
+    check_bytes(r, kRspHeader, {1, 2, 1, 3, 3, 0x8C, 60, 70, 2, 2, 2, 2, 1, 2, 2, 1, 3});
     CHECK_EQ(run(f, request(0x05, 4, {3}), r), 1);
     check_header(r, 0x05, 4, Status::BadArg, 0);
 }

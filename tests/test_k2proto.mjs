@@ -1123,6 +1123,18 @@ test("emarker detail reports the read mode: attached, alone, unknown on older fi
   assert.deepEqual([d.read_mode, d.attached], ["none", null]);
 });
 
+test("emarker detail reports the pull-down verdict: named, unknown codes kept, null on older firmware", () => {
+  const base = [1, 2, 3, 2, 3, 0, 60, 80, 4, 2];
+  const names = ["not-probed", "none", "cc1", "cc2", "unclear"];
+  names.forEach((n, code) => {
+    assert.equal(P.decodeEmarkerDetail(u8(...base, 0, 0, 0, 0, 1, 1, code)).pull_down, n);
+  });
+  assert.equal(P.decodeEmarkerDetail(u8(...base, 0, 0, 0, 0, 1, 1, 9)).pull_down, "9");
+  for (const old of [u8(...base), u8(...base, 2, 2, 1, 2), u8(...base, 0, 0, 0, 0, 2, 1)]) {
+    assert.equal(P.decodeEmarkerDetail(old).pull_down, null);
+  }
+});
+
 test("emarker over the link attaches the detail when part 2 answers", async () => {
   const part0 = [1, 1, 0xAC, 0x05, 0x34, 0x12, 0, 0, 0, 0, 2, 3, 5, 50, 240, 0, 1, ...Array.from("Apple\0USB4", (c) => c.charCodeAt(0))];
   const { link } = rig((f) => [rsp(5, f[3], 0, f[5] === 0 ? part0 : f[5] === 1 ? [4, 3, 2, 1] : [1, 2, 3, 2, 3, 0, 60, 80, 4, 2])]);
@@ -1521,7 +1533,11 @@ test("e-marker learn: the summary carries the read mode and the acked-no-answer 
     ({ link } = rig((f) => [rsp(0x61, f[3], 0, old)]));
     r = await new P.K2Remote(link).emLearned();
     assert.deepEqual([r.summary.attached, r.summary.acks], [null, null]);
+    assert.equal(r.summary.pull_down, null);
   }
+  ({ link } = rig((f) => [rsp(0x61, f[3], 0, [0, 2, ...sum.slice(2), 0, 0, 0, 0, 1, 0, 3])]));
+  r = await new P.K2Remote(link).emLearned();
+  assert.equal(r.summary.pull_down, "cc2");
 });
 
 test("e-marker learn: a busy refusal and the unmatched log", async () => {

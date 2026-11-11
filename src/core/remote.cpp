@@ -421,6 +421,7 @@ remote::EmarkerSnapshot Remote::emarker() {
     const emk_attached::ReadInfo ri = fusb302::last_cable_read();
     e.read_mode = static_cast<uint8_t>(ri.mode);
     e.read_acks = ri.acks;
+    e.pull_down = static_cast<uint8_t>(fusb302::pull_down());
     return e;
 }
 
