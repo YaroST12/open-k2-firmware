@@ -502,6 +502,7 @@
   "505": "[CT] gap row=%u loop=%ums ui=%ums paint=%ums px=%u fs=%ums\n",
   "506": "[FC] dcp check aborted have=%d idle=%d ours=%d",
   "507": "[FC] dcp check dm_idle=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
-  "508": "[AFC] n=%d tx=0x%02X rx=%d vbus=%d\n"
+  "508": "[AFC] n=%d tx=0x%02X rx=%d vbus=%d\n",
+  "509": "[CT] ps_rdy row=%u flags=%u ms=%u\n"
  }
 }
