@@ -201,8 +201,8 @@ high-current output (11 V at up to 11 A), so the charger test detects and stops.
 
 ### Inline monitor, passive (k2/vooc-detect, 2026-11-11)
 
-While the K2 is inline (data on both plugs), holds no PD contract and owns D+/D- for nothing else, the lines float and
-the D+/D- edge ISR (`dpsniff`) feeds every edge to `vooc::Decoder` (`include/k2/fastcharge/vooc_decode.hpp`). It is
+While the K2 is inline (a far sink draws through it, `link::far_sink_draws`) and owns D+/D- for nothing else, the lines
+float and the D+/D- edge ISR (`dpsniff`) feeds every edge to `vooc::Decoder` (`include/k2/fastcharge/vooc_decode.hpp`). It is
 pure code over edge words and shares the tool's framing: frames split by a 2 ms gap, a first pulse over 1 ms timed
 from its rise, command then reply within 12 ms, a new session after 1 s of silence, the handshake up to the first
 pause over 60 ms, the steady `0x82` period from gaps under 200 ms. A host test (`tests/test_vooc_decode_isolation.py`)
@@ -215,8 +215,13 @@ proves the decoder header reaches no pin, register or driver.
   plus the last and mean period.
 - Readout: `k2_remote.py --json fc vooc [--on|--off]` (FC op 4, a sub-op of command 0x32), CDC shell
   `fc vooc [on|off]`, `[VOOC] session N start` / `end` log lines, the Home protocol row `SVOOC 9.0V3.6A` (the measured
-  VBUS and IBUS, not a rating, so no limit bar) and a raw `VOOC 0x82 0x06B raw` row on the Connection page (no-PD Sink
-  body). Reply words are printed as hex with no unit: their meaning is a guess.
+  VBUS and IBUS, not a rating, so no limit bar) and a raw `VOOC 0x82 0x06B raw` row on the Connection page (Sink body,
+  with or without a PD contract). Reply words are printed as hex with no unit: their meaning is a guess.
+- A PD contract does not stop the monitor (2026-11-11, a phone on the USB-C port holds a 5 V contract on CC and runs
+  SuperVOOC on D+/D- at once). The gate is the far sink alone; a live proven session wins the Home protocol row over the
+  PD contract text and the PD row returns when the session ends. The passive label (classifier) still says PD while no
+  session is live. A USB data link under a contract trips the edge-storm guard like any other (test "PD contract + data
+  traffic -> paused, no decode").
 - Edge-storm guard (`include/k2/fastcharge/edge_guard.hpp`, `tests/test_edge_guard.cpp`). Inline is exactly where a
   USB 2.0 data link runs through the K2, and a full-speed link toggles D+/D- faster than the ISR can return. The ISR
   counts interrupts in two tumbling windows in O(1) (two subtractions, two compares, no division) and masks its own two

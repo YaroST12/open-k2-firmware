@@ -10,6 +10,7 @@
 
 #include "k2/fastcharge/edge_guard.hpp"
 #include "k2/fastcharge/edges.hpp"
+#include "k2/fastcharge/vooc_decode.hpp"
 #include "test_util.h"
 
 using namespace k2;
@@ -190,7 +191,61 @@ static void test_quiet_lines_reenable() {
     CHECK_EQ(b.storms(), 3u);
 }
 
+// The ISR as dpsniff::isr_body() runs it: the guard counts every interrupt, a trip masks the lines (nothing more arrives),
+// otherwise the word goes to the decoder.
+struct IsrModel {
+    StormGuard g;
+    vooc::Decoder d;
+    bool masked = false;
+    std::uint32_t decoded = 0;
+    void irq(std::uint32_t t, bool dm, bool dp) {
+        if (masked) return;
+        if (g.hit(t)) { masked = true; return; }
+        ++decoded;
+        d.push(edges::pack(t, dm, dp));
+    }
+};
+
+// A PD contract no longer keeps the monitor off (the phone on the USB-C port holds a contract and runs SuperVOOC), so
+// USB data through the K2 with a contract - the common case - meets the guard and nothing else: the lines are masked
+// within kStormWorstIrqs interrupts, the decoder has seen no frame, the back-off pauses the monitor.
+static void test_pd_contract_with_data_traffic_is_paused_and_not_decoded() {
+    CHECK(vooc::monitor_wanted(true, true, true));   // far sink + contract + free lines + switch on: the monitor runs
+    IsrModel m;
+    m.g.reset(0);
+    std::uint32_t t = 0;
+    bool dp = true, dm = false;
+    for (int i = 0; i < 100000; ++i, t += 150) {     // a full-speed J/K train, one edge per 150 cycles
+        dp = !dp; dm = !dm;
+        m.irq(t, dm, dp);
+    }
+    CHECK(m.masked);
+    CHECK(m.decoded <= edges::kStormWorstIrqs);
+    const auto& s = m.d.summary();
+    CHECK_EQ(s.frames, 0u);
+    CHECK_EQ(int(s.sessions), 0);
+    CHECK(!s.active);
+    CHECK(!vooc::live_of(true, s).seen);             // the screen shows nothing for data traffic
+    Backoff b;
+    CHECK_EQ(b.trip(1000), 1000u);                   // the main loop's reaction: pause
+    CHECK(b.paused());
+}
+
+// The same ISR model on a real SuperVOOC capture: the guard stays quiet and the session decodes (with or without a PD
+// contract on CC; the model has no contract input because the monitor has none either).
+static void test_vooc_session_decodes_through_the_isr_model() {
+    const auto w = load("tests/fixtures/op15_svooc_entry.edges");
+    IsrModel m;
+    m.g.reset(w.front() & ~63u);
+    for (const std::uint32_t x : w) m.irq(x & ~63u, (x >> 1) & 1u, x & 1u);
+    CHECK(!m.masked);
+    CHECK(m.d.summary().sessions >= 1);
+    CHECK(m.d.summary().frames > 100);
+}
+
 int main() {
+    test_pd_contract_with_data_traffic_is_paused_and_not_decoded();
+    test_vooc_session_decodes_through_the_isr_model();
     test_usb_train_trips_within_the_bound();
     test_sof_like_traffic_trips_the_long_window();
     test_vooc_captures_do_not_trip();

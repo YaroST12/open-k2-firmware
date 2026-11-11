@@ -400,6 +400,7 @@ struct TabData {
     bool in_use = false;    // possibly inline: the line is live and a device behind the K2 may be using it
     fastcharge::Protocol fc;
     int32_t vbus_mv = -1;   // the fast VBUS reading in 100 mV steps (what the Type-C row shows), -1 unknown
+    uint32_t vooc = 0;      // the Sink tab's raw VOOC note (ConnectionPage::vooc_), 0 = no live session
 };
 
 // The Type-C row's VBUS: the un-averaged reading, 100 mV steps (the row's resolution), -1 when the
@@ -647,6 +648,18 @@ void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink) {
     }
 }
 
+// The inline VOOC monitor's raw note (`note` = ConnectionPage::vooc_: 1<<16 | the last r82 word; 0 = no live session):
+// the steady command and its last reply word, raw (what the word means is a guess, docs/FASTCHARGE_PROTOCOLS.md), so no
+// unit; "-" before the first reply. One line, 17 cells of the 19-cell value column.
+void vooc_row(Rows &R, uint32_t note) {
+    if (!note) return;
+    StrBuf<28> &v = R.add("VOOC", kDim);
+    v.put("0x82 ");
+    const uint32_t w = note & 0xFFFFu;
+    if (w == vooc::kNoReply) v.put("-");
+    else v.put("0x").put_hex(w, 3).put(" raw");
+}
+
 [[gnu::noinline]] void sink_rows(Rows &R, const TabData &d) {
     const MatchResult &r = *d.r;
     const pd::Identity &id = fusb302::sink_vdm().identity;
@@ -675,6 +688,7 @@ void put_sink_pdos(Rows &R, const char *key, std::span<const uint32_t> sink) {
     strip_rows(R, r, d.ul);
     link_rows(R, d);
     proto_row(R, fusb302::sink_vdm());
+    vooc_row(R, d.vooc);   // a live session next to a PD contract: the phone holds both (before Caps, which drops first)
     if (!d.sink.empty()) put_sink_pdos(R, "Caps", d.sink);
     else R.add("Caps", kFaint).put("not seen");
 }
@@ -816,6 +830,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     d.fc = static_cast<fastcharge::Protocol>(fc_);
     d.in_use = link.inline_mode();
     d.vbus_mv = vbus_;
+    d.vooc = vooc_;
     // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" the tab replaces its
     // placeholder rows with one short message and the rows that are actually measured. The Sink tab gates
     // on any no-PD verdict (a device on the line that never talks PD); the Source tab only when the source
@@ -920,15 +935,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     }
     if (sink_tab) {
         put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
-        if (vooc_) {
-            // The inline VOOC monitor: the steady command and its last reply word, raw (what the word means is a
-            // guess, docs/FASTCHARGE_PROTOCOLS.md), so no unit; "-" before the first reply.
-            StrBuf<28> &v = R.add("VOOC", kDim);
-            v.put("0x82 ");
-            const uint32_t w = vooc_ & 0xFFFFu;
-            if (w == vooc::kNoReply) v.put("-");
-            else v.put("0x").put_hex(w, 3).put(" raw");
-        }
+        vooc_row(R, vooc_);
     } else if (legacy_row_protocol(ctx_.fc) && ctx_.fc != fastcharge::Protocol::Pending) {
         StrBuf<6> fcn;
         fc_pill_text(ctx_.fc, fcn);

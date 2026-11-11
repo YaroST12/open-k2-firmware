@@ -74,11 +74,12 @@ struct Summary {
     std::uint32_t p82_mean_us() const { return p82_n ? p82_sum_us / p82_n : 0; }
 };
 
-// The inline monitor may hold D+ / D- as floating inputs when the operator left it on, a data device draws current
-// through the K2 (link::Reason::DataDevice: inline without a PD contract) and nothing else owns the lines (no fast-charge
-// engine, scan, probe, reset hold or Black Box arm of its own).
-constexpr bool monitor_wanted(bool enabled, bool inline_data, bool pd_contract, bool lines_free) {
-    return enabled && inline_data && !pd_contract && lines_free;
+// The inline monitor may hold D+ / D- as floating inputs when the operator left it on, a far sink draws current through
+// the K2 (link::far_sink_draws: with or without a PD contract - a phone holds a 5 V contract on CC and runs SuperVOOC on
+// D+ / D- at the same time) and nothing else owns the lines (no fast-charge engine, scan, probe, reset hold or Black Box
+// arm of its own). Ordinary data traffic on the lines is the edge-storm guard's job (edge_guard.hpp), not this gate's.
+constexpr bool monitor_wanted(bool enabled, bool inline_sink, bool lines_free) {
+    return enabled && inline_sink && lines_free;
 }
 
 // What the screen may show of a running monitor: `seen` while a session is live and proven VOOC (the phone answered

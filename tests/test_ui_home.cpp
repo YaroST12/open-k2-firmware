@@ -340,6 +340,22 @@ static void test_protocol_states() {
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no alarm
         g_stub.vooc = {};
     }
+    {   // the phone on the USB-C port: a 5 V PD contract AND a live SuperVOOC session; the session wins the row, the PD
+        // row returns when it ends
+        Ui &ui = home_ui();
+        live_pd(false, 9130, 2810);
+        g_stub.contract.pos = 1; g_stub.contract.mv = 5000; g_stub.contract.op_ma = 3000; g_stub.contract.max_ma = 3000;
+        g_stub.fc = fastcharge::Protocol::UsbData;
+        g_stub.vooc.seen = true; g_stub.vooc.r82 = 0x6F;
+        run(ui, 40);
+        dump("v7", "svooc_over_pd");
+        CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::Svooc));
+        CHECK_EQ(int(ui.proto_now().ma), 0);
+        CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no alarm
+        g_stub.vooc = {};
+        run(ui, 40);
+        CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::PdFixed));
+    }
 }
 
 // The sweep paints the faint trend line behind the digits once samples arrive and nothing while idle.

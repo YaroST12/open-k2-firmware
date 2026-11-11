@@ -237,15 +237,15 @@ static void test_command_table_overflow_counts_other() {
     CHECK(find(s, 0x80) && find(s, 0x80)->last == vooc::kNoReply);
 }
 
-// When the monitor may hold the lines: inline (a data device drawing current, no PD contract), nothing else owns them,
-// and the operator has not switched it off.
+// When the monitor may hold the lines: inline (a far sink draws through the K2), nothing else owns them, and the
+// operator has not switched it off. A PD contract is no reason to stay off: the phone on the USB-C port holds a 5 V
+// contract and runs SuperVOOC on D+/D- at the same time (hardware 2026-11-11), so the policy has no contract input.
 static void test_monitor_policy() {
     using vooc::monitor_wanted;
-    CHECK(monitor_wanted(true, true, false, true));
-    CHECK(!monitor_wanted(false, true, false, true));   // switched off
-    CHECK(!monitor_wanted(true, false, false, true));   // not inline (or a PD contract)
-    CHECK(!monitor_wanted(true, true, true, true));     // a PD contract on CC
-    CHECK(!monitor_wanted(true, true, false, false));   // an engine, the reset hold or another owner has the lines
+    CHECK(monitor_wanted(true, true, true));
+    CHECK(!monitor_wanted(false, true, true));    // switched off
+    CHECK(!monitor_wanted(true, false, true));    // not inline: nothing draws through the K2
+    CHECK(!monitor_wanted(true, true, false));    // an engine, the reset hold or another owner has the lines
 }
 
 // What the screen may say (Home `SVOOC`, the raw 0x82 note): only while the monitor runs and the session is live and

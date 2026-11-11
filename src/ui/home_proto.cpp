@@ -75,6 +75,19 @@ ProtoInfo fixed_info(ProtoKind k, uint32_t mv, uint32_t ma, uint32_t max_mv) {
 }  // namespace
 
 ProtoInfo derive_proto(const ProtoSource &s) {
+    if (s.vooc_live) {
+        // A live, proven VOOC exchange on D+/D- wins over any PD contract: a phone holds a 5 V contract on CC and runs
+        // SuperVOOC on the data lines at the same time, and the lines carry what really charges it. The charger
+        // announces no level we can read, so the row shows the measured VBUS and |IBUS| at 0.1 resolution. No rating:
+        // ma stays 0 (no limit bar, no alarm). The PD row returns when the session ends.
+        ProtoInfo p;
+        p.kind = ProtoKind::Svooc;
+        p.measured = true;
+        p.mv = s.vbus_mv > 0 ? (static_cast<uint32_t>(s.vbus_mv) + 50) / 100 * 100 : 0;
+        const uint32_t a = static_cast<uint32_t>(s.ibus_ma < 0 ? -s.ibus_ma : s.ibus_ma);
+        p.shown_ma = (a + 50) / 100 * 100;
+        return p;
+    }
     // The K2's OWN sink holds the contract (SinkStatus ready/held, pos and PDO known via the caps):
     // the footer uses that contract - the K2 never hears its own Requests on CC, so the sniffed
     // `ctr` belongs to a far sink and is used only when ours holds none (or its PDO is unknown).
@@ -96,17 +109,6 @@ ProtoInfo derive_proto(const ProtoSource &s) {
         return p;
     }
     if (s.ctr.valid && (s.pd_link || s.caps)) return from_pd(s);
-    if (s.vooc_live) {
-        // The decoded VOOC exchange proves the protocol; the charger announces no level we can read, so the row shows
-        // the measured VBUS and |IBUS| at 0.1 resolution. No rating: ma stays 0 (no limit bar, no alarm).
-        ProtoInfo p;
-        p.kind = ProtoKind::Svooc;
-        p.measured = true;
-        p.mv = s.vbus_mv > 0 ? (static_cast<uint32_t>(s.vbus_mv) + 50) / 100 * 100 : 0;
-        const uint32_t a = static_cast<uint32_t>(s.ibus_ma < 0 ? -s.ibus_ma : s.ibus_ma);
-        p.shown_ma = (a + 50) / 100 * 100;
-        return p;
-    }
     const uint32_t v = nominal_mv(s.vbus_mv);
     switch (s.fc) {
     case Protocol::Pending: return {ProtoKind::Detecting};

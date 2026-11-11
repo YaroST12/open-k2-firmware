@@ -307,10 +307,18 @@ static void test_inline_vooc_session_shows_measured_level_and_current() {
     s.ibus_ma = 0;
     format_proto(derive_proto(s), t);
     CHECK_STR(t.value.c_str(), "10.0V0.0A");   // a fixed place, not a missing current
-    // A PD contract wins (the monitor never runs with one, but the row must not trust a stale flag).
+    // A live proven session wins over a PD contract: the phone on the USB-C port holds a 5 V contract and fast-charges
+    // over SuperVOOC (hardware 2026-11-11, 9.13 V at 2.8 A), so the contract text would name the wrong level.
     pd::SourceCaps c = caps_epr();
-    ProtoSource d = pd_source(c, 2, 9000);
+    ProtoSource d = pd_source(c, 2, 9130);
     d.vooc_live = true;
+    d.ibus_ma = 2810;
+    ProtoInfo dp = derive_proto(d);
+    CHECK_EQ(static_cast<int>(dp.kind), static_cast<int>(ProtoKind::Svooc));
+    format_proto(dp, t);
+    CHECK_STR(t.tag.c_str(), "SVOOC");
+    CHECK_STR(t.value.c_str(), "9.1V2.8A");
+    d.vooc_live = false;   // the session ended: the PD row returns
     CHECK_EQ(static_cast<int>(derive_proto(d).kind), static_cast<int>(ProtoKind::PdFixed));
     // No live session: the classifier's guess as before (a level, no current).
     s.vooc_live = false; s.fc = Protocol::Svooc; s.vbus_mv = 8962;

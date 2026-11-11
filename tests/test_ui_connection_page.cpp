@@ -1225,7 +1225,46 @@ static void test_sink_tab_no_pd_shows_the_raw_vooc_note() {
     g_stub.vooc = {};
 }
 
+// The phone on the USB-C port holds a PD contract AND runs SuperVOOC on D+/D- (hardware 2026-11-11): the Sink tab's PD
+// body gets the same one-line raw note, `VOOC 0x82 0x06F raw`, as one more row (a slot of the 20 px list, y 42 + 20 i),
+// and loses it when the session ends. The text is built by the same helper as the no-PD body; it must fit the 19 value
+// cells (the truncation log fails the gate otherwise).
+static int slots_with_ink() {
+    int n = 0;
+    for (int i = 0; i < 9; i++) n += ink_in(42 + 20 * i + 2, 42 + 20 * i + 18) > 20 ? 1 : 0;
+    return n;
+}
+static void test_sink_tab_pd_body_shows_the_raw_vooc_note() {
+    Ui &ui = fresh_ui();
+    g_stub.cc = 1;
+    g_stub.pm.vbus_mv = 5030;
+    g_stub.pm.current_ma = 70;
+    g_stub.far_cc = true;
+    g_stub.caps.valid = true;
+    g_stub.caps.rx_count = 50;
+    g_stub.pd_seen_attach = true;
+    g_stub.ol_facts.far_pd_message = true;                 // the sink answered: a PD link, not the no-PD body
+    g_stub.vooc = {};
+    uint32_t t = 60000;
+    for (int i = 0; i < 20; i++) ui.tick(t += 100);
+    ui.goto_page(kConnTabAlias + 2, t += 100);
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::Present));
+    const int before = slots_with_ink();
+    CHECK(before >= 3 && before <= 8);                     // room for one more row
+    g_stub.vooc.seen = true;
+    g_stub.vooc.r82 = 0x6F;
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    dump_panel("k2_pd_sink_vooc");
+    CHECK_EQ(slots_with_ink(), before + 1);                // the VOOC row
+    g_stub.vooc = {};
+    for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    CHECK_EQ(slots_with_ink(), before);                    // the session ended: the row is gone at once
+    g_stub.vooc = {};
+}
+
 int main() {
+    test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
     test_sink_tab_offers_identify_when_a_device_is_alone();
     test_identify_log_keeps_fixed_text_in_the_format();

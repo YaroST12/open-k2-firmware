@@ -46,6 +46,15 @@ constexpr Reason inline_reason(const Probe& p) {
     return mag > kInlineCurrentMa + (p.self_supply_ma > 0 ? p.self_supply_ma : 0) ? Reason::DataDevice : Reason::None;
 }
 
+// A far sink draws through the K2 (the pd::Link latch, or more than kInlineCurrentMa above the K2's own supply), whether
+// or not a PD contract is decoded: the inline_reason() ladder with the contract step left out. The inline VOOC monitor
+// asks this, not inline_reason(): the phone on the USB-C port holds a 5 V PD contract and runs SuperVOOC on D+/D- at
+// the same time.
+constexpr bool far_sink_draws(Probe p) {
+    p.pd_active = false;
+    return inline_reason(p) == Reason::DataDevice;
+}
+
 constexpr int kPdLikelyMinMv = pd::kVSafe5MaxMv;   // above 5.5 V only a negotiated contract or a legacy trigger
 
 // CC attached, VBUS above 5.5 V and current flowing, but no Source_Capabilities seen (the K2 booted

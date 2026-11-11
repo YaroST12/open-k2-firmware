@@ -71,6 +71,22 @@ static void test_sticky_inline() {
     CHECK_EQ(kInlineCurrentMa, k2::pd::kInlineCurrentMa); // one threshold, not two copies
 }
 
+// The inline VOOC monitor's gate: a far sink draws through the K2, with or without a PD contract (the USB-C phone holds a
+// 5 V contract and runs SuperVOOC on D+/D-). inline_reason() says PdContract first, so it cannot answer this.
+static void test_far_sink_draws() {
+    CHECK_EQ(far_sink_draws(probe(9130, 2800, true)), true);          // PD contract + load
+    CHECK_EQ(far_sink_draws(probe(9130, 2800, false)), true);         // load, no contract (USB-A port)
+    CHECK_EQ(far_sink_draws(probe(5000, 13, true)), false);           // a contract, nothing drawing: the K2 itself or an idle link
+    CHECK_EQ(far_sink_draws(probe(5000, 13, false)), false);
+    Probe sticky = probe(5000, 13, true);
+    sticky.sticky_inline = true;                                      // pd::Link latched a far sink
+    CHECK_EQ(far_sink_draws(sticky), true);
+    Probe own = probe(5100, 95, true);
+    own.self_supply_ma = k2::pd::kSelfSupplyAllowanceMa;              // the K2's own supply current is no sink
+    CHECK_EQ(far_sink_draws(own), false);
+    CHECK_EQ(far_sink_draws(Probe{}), false);                         // monitor offline, nothing latched
+}
+
 static void test_names() {
     CHECK_STR(name(Reason::None), "none");
     CHECK_STR(name(Reason::PdContract), "PD contract");
@@ -93,6 +109,7 @@ int main() {
     test_self_supply();
     test_names();
     test_sticky_inline();
+    test_far_sink_draws();
     test_pd_likely();
     return test_report("test_link_guard");
 }

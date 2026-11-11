@@ -77,13 +77,12 @@ void dcp_begin(const Ring& ring, int vbus_mv, int dm_idle_mv, const link::Probe&
     g_dcp_probing = true;
 }
 
-// Inline VOOC monitor (dpsniff): the lines float while a data device charges through the K2 and no engine, scan,
-// probe, DCP check or reset hold owns them. A Black Box arm is passive too and does not stop it.
-void monitor(bool pd_active) {
+// Inline VOOC monitor (dpsniff): the lines float while a far sink draws through the K2 (with or without a PD contract)
+// and no engine, scan, probe, DCP check or reset hold owns them. A Black Box arm is passive too and does not stop it.
+void monitor() {
     const bool lines_free = fctrig::status().state == fctrig::State::Idle && !fctrig::scan_running() &&
                             !fctrig::ufcs_probe_running() && !dpdm::reset_busy() && !g_dcp_probing;
-    const bool inline_data = link::inline_now() == link::Reason::DataDevice;
-    dpsniff::monitor_poll(vooc::monitor_wanted(dpsniff::monitor_enabled(), inline_data, pd_active, lines_free), lines_free);
+    dpsniff::monitor_poll(vooc::monitor_wanted(dpsniff::monitor_enabled(), link::far_sink_now(), lines_free), lines_free);
 }
 }  // namespace
 
@@ -111,7 +110,7 @@ void poll() {
     if (!line) {
         dcp_reset();   // the ADC lost the lines (another driver owns them): never leave a probe level behind
         g_verdict = vbus < 4000 ? Protocol::NoInput : Protocol::Pending;
-        monitor(link::probe_now().pd_active);
+        monitor();
         return;
     }
     const link::Probe probe = link::probe_now();
@@ -139,7 +138,7 @@ void poll() {
     }
     g_verdict = classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),
                          cc_source_no_pd, !g_handshake_seen, g_dcp_proof, floating);
-    monitor(probe.pd_active);
+    monitor();
 }
 
 Protocol read() { return g_verdict; }

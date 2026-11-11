@@ -24,4 +24,8 @@ bool pd_likely_now();
 // Reason an active operation must not touch the lines now; Reason::None when the output is idle.
 Reason inline_now();
 
+// A far sink draws through the K2, with or without a decoded PD contract (link_guard.hpp far_sink_draws): the inline
+// VOOC monitor's gate.
+bool far_sink_now();
+
 }  // namespace k2::link
