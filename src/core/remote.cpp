@@ -13,6 +13,7 @@
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/paint_meter.hpp"
 #include "k2/drivers/adc.hpp"
+#include "k2/pd/attach_pick.hpp"
 #include "k2/pd/cable_r.hpp"
 #include "k2/fastcharge/dpsniff.hpp"
 #include "k2/fastcharge/edges.hpp"
@@ -59,74 +60,6 @@ constexpr const char *kButtonNames[4] = {"BACK", "-", "OK", "+"};   // Button or
 static_assert(pd::kMaxPdos == remote::kMaxPdos, "PDO table size must match the protocol");
 static_assert(std::tuple_size_v<decltype(pd::Emarker::raw_vdos)> == remote::kMaxVdos,
               "VDO table size must match the protocol");
-
-// Select the best PDO for a target voltage. Returns a Choice with pos=0 if no suitable PDO found.
-pd::Choice select_pdo_for_voltage(const pd::SourceCaps& caps, uint16_t target_mv, uint16_t target_ma) {
-    pd::Choice c{};
-    if (!caps.valid || caps.num_pdos == 0) return c;
-    
-    // Clamp target to the monitor ceiling
-    const std::int32_t cap_mv = power::max_vbus_mv();
-    if (cap_mv <= 0) return c;  // no power monitor
-    if (target_mv > static_cast<uint16_t>(cap_mv)) target_mv = static_cast<uint16_t>(cap_mv);
-    
-    // Find the best matching PDO
-    pd::Choice best{};
-    uint16_t best_score = 0;
-    
-    for (unsigned i = 0; i < caps.num_pdos && i < pd::kMaxPdos; i++) {
-        const pd::Pdo& pdo = caps.pdos[i];
-        
-        if (!pd::fits_monitor(pdo.max_mv, cap_mv)) continue;  // Skip PDOs above our ceiling
-        
-        // For fixed PDOs, check if the voltage matches
-        if (pdo.type == pd::PdoType::Fixed) {
-            // Check if this PDO can provide the target voltage
-            if (pdo.max_mv >= target_mv && (i == 0 || pdo.max_mv <= target_mv + 1000)) {
-                // Prefer exact match or closest below target
-                uint16_t score = pdo.max_mv >= target_mv ? 10000 : pdo.max_mv;
-                if (score > best_score) {
-                    best_score = score;
-                    best = {static_cast<uint8_t>(i + 1), 0, target_ma ? target_ma : pdo.max_ma};
-                }
-            }
-        } else if (pdo.type == pd::PdoType::Pps || pdo.type == pd::PdoType::Avs) {
-            // For PPS/AVS, check if target is within range
-            const uint16_t lo = pdo.min_mv;
-            const uint16_t hi = std::min(pdo.max_mv, static_cast<uint16_t>(cap_mv));
-            if (target_mv >= lo && target_mv <= hi) {
-                // Prefer PPS/AVS PDOs that can provide the exact voltage
-                uint16_t score = 20000 + (target_mv >= lo && target_mv <= hi ? 1000 : 0);
-                if (score > best_score) {
-                    best_score = score;
-                    best = {static_cast<uint8_t>(i + 1), target_mv, target_ma};
-                }
-            }
-        }
-    }
-    
-    // If no PPS/AVS found and we have a fixed PDO above 5V, use the highest one below target
-    if (best.pos == 0 && target_mv > 5000) {
-        for (unsigned i = 0; i < caps.num_pdos && i < pd::kMaxPdos; i++) {
-            const pd::Pdo& pdo = caps.pdos[i];
-            if (pdo.type == pd::PdoType::Fixed && pdo.max_mv <= cap_mv && pdo.max_mv <= target_mv) {
-                if (pdo.max_mv > best.mv) {
-                    best = {static_cast<uint8_t>(i + 1), 0, target_ma ? target_ma : pdo.max_ma};
-                }
-            }
-        }
-    }
-    
-    // If still nothing and target is 9000, try PDO 1 (5V) as fallback
-    if (best.pos == 0 && caps.num_pdos > 0) {
-        const pd::Pdo& pdo = caps.pdos[0];
-        if (pd::fits_monitor(pdo.max_mv, cap_mv)) {
-            best = {1, 0, target_ma ? target_ma : pdo.max_ma};
-        }
-    }
-    
-    return best;
-}
 
 constexpr uint32_t kStreamTimeoutMs = 500;
 constexpr unsigned kStreamMinFree = 3;
@@ -751,7 +684,7 @@ remote::PdAttachResult Remote::pd_attach(uint16_t target_mv, uint16_t target_ma,
     }
 
     // Select the best PDO for the target voltage
-    pd::Choice c = select_pdo_for_voltage(caps, target_mv, target_ma);
+    pd::Choice c = pd::pick_attach_pdo(caps, target_mv, target_ma, cap_mv);
 
     if (c.pos == 0) {
         // No suitable PDO found, return current status
