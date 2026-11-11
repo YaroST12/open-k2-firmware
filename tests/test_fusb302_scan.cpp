@@ -1678,7 +1678,9 @@ void check_held_after_reread(std::uint8_t pos) {
     CHECK_EQ(usb_has("[REREAD] attach released"), false);
     CHECK_EQ(usb_has("[PD] Contract released"), false);
 }
-void check_released_then_drops(std::uint32_t after_ms) {
+// `pd release` after the tool took the attach over: back to 5 V, not held, and the attach (Rd, contract at 5 V) stays up, the tool's
+// to end (`pd-reread --abort`, a detach): the re-read's old release timer no longer fires on it, however long after.
+void check_released_keeps_the_attach(std::uint32_t after_ms) {
     fusb302::sink_release();
     if (fusb302::sink_status().pos != 1 || fusb302::sink_status().state != pd::SinkState::Ready) {
         for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
@@ -1689,16 +1691,18 @@ void check_released_then_drops(std::uint32_t after_ms) {
     CHECK_EQ(int(fusb302::sink_status().pos), 1);
     CHECK_EQ(fusb302::sink_status().held, false);
     settle_ms(10000);
-    CHECK_EQ(sw0_rd() != 0, true);           // the 5 V contract stays readable for a while after `pd release`
+    CHECK_EQ(sw0_rd() != 0, true);           // the 5 V contract stays readable after `pd release`
     settle_ms(after_ms);
-    check_rd_gone(false);
+    CHECK_EQ(sw0_rd() != 0, true);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    CHECK_EQ(usb_has("[REREAD] attach released"), false);
 }
 // pd-reread, then `pd attach 5000 3000` on the PDO the re-read's contract already holds.
 void test_trigger_on_the_rereads_own_pdo_stays_held() {
     reread_attach_then_finished();
     attach_after_reread(1, 5000);
     check_held_after_reread(1);
-    check_released_then_drops(36000);
+    check_released_keeps_the_attach(36000);
     clean_up_rd_tests();
 }
 // pd-reread, then `pd attach 9000 3000`: another PDO (passes on hardware; kept).
@@ -1706,7 +1710,48 @@ void test_trigger_on_another_pdo_after_a_reread_stays_held() {
     reread_attach_then_finished();
     attach_after_reread(2, 9000);
     check_held_after_reread(2);
-    check_released_then_drops(36000);
+    check_released_keeps_the_attach(36000);
+    clean_up_rd_tests();
+}
+
+// ---- Another tool takes the re-read's attach (k2/attach-owner) ----
+// Hardware 2026-11-11 (1.0.0-493, NOVOO RG100 on the top plug): `pd-reread --mask 8`, then PD Stress. The re-read's own 30 s
+// release timer ("[REREAD] attach released") fired inside the run's Soft_Reset step and the link went dark. The attach belongs to
+// whoever took it over; the release only ever ends an attach nobody took over, and never while a run owns the line.
+// A re-read nobody took over: released after its linger, as before.
+void test_a_reread_nobody_took_over_still_releases_after_the_linger() {
+    reread_attach_then_finished();
+    settle_ms(40000);
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
+    check_rd_gone(false);
+    clean_up_rd_tests();
+}
+// A request of another tool after the re-read (PD Stress: Request, then Soft_Reset steps that drop `held`): the attach is the tool's.
+void test_a_request_then_a_soft_reset_after_a_reread_is_not_released() {
+    reread_attach_then_finished();
+    attach_after_reread(2, 9000);
+    CHECK_EQ(fusb302::sink_soft_reset(), true);
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    push_frame(0xE0, ctl_msg(3, 5), {});
+    for (int i = 0; i < 30; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(fusb302::sink_status().held, false);   // the Soft_Reset dropped the hold: nothing else keeps the attach
+    settle_ms(70000);
+    CHECK_EQ(usb_has("[REREAD] attach released"), false);
+    CHECK_EQ(sw0_rd() != 0, true);
+    clean_up_rd_tests();
+}
+// A re-read started or finished while a run owns the line is never released while the run lasts; its linger starts over after.
+void test_the_release_never_fires_while_a_run_owner_is_set() {
+    reread_attach_then_finished();
+    fusb302::set_run_owner(true);
+    settle_ms(70000);
+    CHECK_EQ(usb_has("[REREAD] attach released"), false);
+    CHECK_EQ(sw0_rd() != 0, true);
+    fusb302::set_run_owner(false);
+    settle_ms(10000);
+    CHECK_EQ(usb_has("[REREAD] attach released"), false);   // the linger starts over when the run ends
+    settle_ms(30000);
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
     clean_up_rd_tests();
 }
 
@@ -4288,6 +4333,9 @@ int main() {
     test_cc_detach_refused_inline();
     test_trigger_on_the_rereads_own_pdo_stays_held();
     test_trigger_on_another_pdo_after_a_reread_stays_held();
+    test_a_reread_nobody_took_over_still_releases_after_the_linger();
+    test_a_request_then_a_soft_reset_after_a_reread_is_not_released();
+    test_the_release_never_fires_while_a_run_owner_is_set();
     test_cable_session_exchanges_run_with_vconn_up_and_restore_after();
     test_cable_session_without_a_cable_never_calls_the_body();
     test_cable_session_is_refused_like_the_scan();

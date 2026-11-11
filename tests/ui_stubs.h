@@ -84,6 +84,7 @@ struct StubState {
     bool bus_powered = false, supply_decided = true;   // power_source: no host and VBUS at boot / the host window is over
     bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;
     bool reread_hold = false;                // fusb302::reread_own_hold(): a finished re-read's own leftover PDO 1 hold
+    int reread_take_overs = 0;               // fusb302::reread_take_over(): a tool (PD Stress, twin run) took the re-read's attach over
     std::uint8_t idle_wake_hold = 0;         // fusb302::idle_wake_line(): the Wake sleeping port's Rd hold
     std::int32_t open_cc_mv[2] = {-1, -1};   // fusb302::open_cc_mv(): the settled open readings of CC1 / CC2
     int rd_run_changes = 0;

@@ -161,9 +161,11 @@ bool g_probe_logged = true;
 pd::Probe g_probe;   // report-card source probe: never retries, ends within kProbeTotalMs
 bool g_reread_logged = true;
 pd::Reread g_reread;   // source-cap re-read (after-contract conversation); never retries, ends within kRereadTotalMs
+// The re-read's attach ownership is these two flags plus the release timer below. Every other owner of the link clears the flags
+// (reread_take_over: sink_request, a PD Stress / twin run start; rd_for_run, unit_*, cc_detach): the attach is then theirs and the
+// timer never fires on it. Only an attach nobody took over is released here; `pd-reread --abort` adopts a lab-held Rd again.
 bool g_reread_owns_rd = false;            // the re-read's attach presented Rd (rd_for_run) and gives it back; any other owner clears this
 bool g_reread_made_contract = false;      // the re-read's attach made the contract (Request PDO 1) and ends it; any other owner clears this
-bool g_trigger_took_over = false;         // a user trigger (sink_request) holds the re-read's contract: its Rd stays until the trigger ends
 std::uint32_t g_reread_release_at = 0;    // when the owned Rd / contract goes back after a finished run (linger: the contract stays readable)
 std::uint8_t g_force_cc = 0;              // debug (pd-reread --line N): the only line the attach scan may take; 0 = normal; stays until cleared (pd-reread --abort / --line 0) or reboot
 constexpr std::uint32_t kRereadLingerMs = 30000;
@@ -1712,8 +1714,8 @@ pd::RereadLink reread_link() {
 // Once per pass: logs a finished re-read (Black Box mark and log line) and ends the attach it made itself: back to PDO 1,
 // the contract forgotten (Auto-CRC and the sink demand go with it) and the Rd it presented dropped. At once when nothing
 // came of the run, after the linger otherwise (the contract and the caps stay readable: k2_remote pdos). A run on a contract
-// that was already there, or one a START / trigger / unit took over, is never touched; a held trigger (also one that took
-// the re-read's contract over) keeps contract and Rd until `pd release`, then this linger starts over.
+// that was already there, or one a START / trigger / PD Stress / twin / unit took over (reread_take_over clears the ownership),
+// is never touched, and nothing is released while a run owns the line (the linger starts over when it ends).
 void reread_housekeeping(std::uint32_t now) {
     if (!g_reread.running() && !g_reread_logged) {
         g_reread_logged = true;
@@ -1727,13 +1729,11 @@ void reread_housekeeping(std::uint32_t now) {
         const bool nothing = rs.attach_failed || rs.state == pd::RereadState::Aborted;
         g_reread_release_at = nothing ? now : now + kRereadLingerMs;
     }
-    if (g_trigger_took_over && (g_reread_owns_rd || g_reread_made_contract)) {
-        // A user trigger (pd attach) took the contract over; the Rd the re-read presented stays on until the attach ends. The
-        // sink's `held` cannot say this: the re-read's own START Request is held too. The trigger is the user's until
-        // `pd release` (or a detach); the re-read's linger starts over after it (hardware 2026-11-06: Rd and VBUS went at +39 s).
-        const pd::SinkStatus& ts = g_sink.status();
+    if (g_run_owner && (g_reread_owns_rd || g_reread_made_contract)) {
+        // A charger test, PD Stress or twin run owns the line: its Soft_Reset / unit gaps are not an idle attach (hardware
+        // 2026-11-11: the release fired inside a PD Stress run). Whatever the run does with the Rd is its own; the linger of an
+        // attach it never took over starts over when the run ends.
         g_reread_release_at = now + kRereadLingerMs;
-        if (!ts.held && !g_prep.active()) g_trigger_took_over = false;
         return;
     }
     if ((g_reread_owns_rd || g_reread_made_contract) && !g_reread.running() && g_reread_logged &&
@@ -2419,10 +2419,11 @@ pd::OverLoadFacts over_load_facts() {
             far_req || g_engine.sink_ctl_seen || g_engine.sink.valid || g_engine.sink_vdm.num_svids != 0};
 }
 
-pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
+namespace {
+// The Request itself, with no ownership change: the re-read's own attach asks through it (reread_start); everyone else goes
+// through sink_request below, which also takes the re-read's attach over.
+pd::Err request_inner(const pd::Choice& c, bool over_load) {
     if (g_legacy_only) return pd::Err::Busy;
-    (void)confirmed;  // the UI / remote layer owns the "above 5 V needs confirm" rule
-    g_reread_made_contract = false;   // a trigger takes the contract over from a re-read (reread_start sets the flag after its own)
     if (const pd::TriggerRefusal r = trigger_refusal(); r != pd::TriggerRefusal::None) {
         // Lab-only bypass (`k2_remote pd request ... --over-load`): allowed only while the far sink is a
         // passive load (Rd only, no PD message this attach). Refused otherwise, and the UI / charger
@@ -2445,13 +2446,21 @@ pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
         g_prep_choice = c;
         g_prep.start(systick::millis(), g_caps_count, false);
         K2LOG("[PD] Trigger pos %d %d mV %d mA: preparing (last caps not ACKed)\n", c.pos, c.mv, c.ma);
-        g_trigger_took_over = true;
         return pd::Err::Ok;
     }
     const pd::Err e = g_sink.trigger(c, systick::millis());
     log_trigger(c, e);
     trace_sink();
-    if (e == pd::Err::Ok) g_trigger_took_over = true;   // reread_start clears it again after its own internal Request
+    return e;
+}
+}  // namespace
+
+// A Request that was accepted for sending is a tool talking on the link: the re-read's attach (Rd, PDO 1 contract) is the
+// tool's from here on, whatever happens to `held` later (a Soft_Reset step drops it). A refused Request changes nothing.
+pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
+    (void)confirmed;  // the UI / remote layer owns the "above 5 V needs confirm" rule
+    const pd::Err e = request_inner(c, over_load);
+    if (e == pd::Err::Ok) reread_take_over();
     return e;
 }
 void sink_release() {
@@ -2567,8 +2576,8 @@ bool identify_start(bool confirmed) {
     } else if (alone) {
         // A stale active CC (the phone's VBUS went dark without a CC detach): ask for the contract the way
         // the re-read's attach does; the first VDM still waits for Ready below.
-        const pd::Err e = sink_request({1, 0, 0}, false);
-        g_trigger_took_over = false;
+        const pd::Err e = request_inner({1, 0, 0}, false);
+        g_reread_made_contract = false;   // the identity's own Request: a re-read's Rd stays its to release, its contract is not
         K2LOG("[ID] alone: CC%u held, Request PDO 1 err=%u\n", unsigned(g_active_cc), unsigned(e));
     }
     if (alone) {
@@ -2622,7 +2631,6 @@ bool reread_start(std::uint8_t mask) {
     }
     const unsigned held = g_engine.caps.valid ? g_engine.caps.num_pdos : 0;
     g_reread_logged = false;
-    g_trigger_took_over = false;   // a new run: the attach below is the re-read's own
     g_reread.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, mask, std::uint8_t(held), systick::millis(), true);
     pdtrace::mark(pdtrace::kMarkReread, g_reread.status().mask, std::uint16_t(held));
     K2LOG("[REREAD] started mask=0x%02X with %u PDOs held, contract %d\n", unsigned(g_reread.status().mask), held, int(have_contract));
@@ -2631,9 +2639,8 @@ bool reread_start(std::uint8_t mask) {
             if (!g_rd_start && set_rd_for_run(true, false)) g_reread_owns_rd = g_reread_made_contract = true;   // the START path's Request makes the contract
             K2LOG("[REREAD] attach: no CC yet, Rd %s\n", g_rd_start ? "presented" : "refused");
         } else {
-            const pd::Err e = sink_request({1, 0, 0}, false);
+            const pd::Err e = request_inner({1, 0, 0}, false);   // ours: no take-over
             g_reread_made_contract = e == pd::Err::Ok;
-            g_trigger_took_over = false;   // that Request is ours, not a user trigger
             K2LOG("[REREAD] attach: Request PDO 1 err=%u\n", unsigned(e));
         }
     }
@@ -2751,6 +2758,12 @@ void reread_abort() {
 }
 const pd::RereadStatus& reread_status() { return g_reread.status(); }
 bool reread_own_hold() { return pd::reread_own_hold(g_sink.status(), g_reread_made_contract); }
+void reread_take_over() {
+    if (!g_reread_owns_rd && !g_reread_made_contract) return;   // nothing of a re-read to take over (the common case)
+    K2LOG("[REREAD] attach taken over: Rd %d, contract %d stay with the new owner\n", int(g_reread_owns_rd), int(g_reread_made_contract));
+    g_reread_owns_rd = false;
+    g_reread_made_contract = false;
+}
 void set_sink_cap_ext_mode(pd::SinkCapExtMode m) {
     g_sink.set_sink_cap_ext_mode(m);
     K2LOG("[PD] Get_Sink_Cap_Extended answer mode %u\n", unsigned(m));

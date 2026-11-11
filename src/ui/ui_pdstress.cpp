@@ -145,6 +145,9 @@ ps::StartResult PdStressSession::start_run(const ps::Options& o, std::uint32_t n
         engine_.reset();
         journal_on_ = false;
     }
+    // The run owns the link from here: a pd-reread attach it starts on (Rd, PDO 1 contract) is the run's, and the re-read's
+    // 30 s release must not fire inside a Soft_Reset step (hardware 2026-11-11). A refused start takes nothing over.
+    if (r == ps::StartResult::Ok) fusb302::reread_take_over();
     update_footer();
     return r;
 }

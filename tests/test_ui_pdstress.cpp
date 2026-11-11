@@ -109,6 +109,24 @@ static void test_a_run_owns_the_ports_and_says_so_in_the_footer() {
     CHECK_EQ(logged("[STRESS] start"), true);
 }
 
+// A run takes over the attach a pd-reread made (hardware 2026-11-11: the re-read's 30 s release cut a run at its Soft_Reset step).
+// A refused start takes nothing over.
+static void test_a_started_run_takes_the_rereads_attach_over() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    CHECK_EQ(g_stub.reread_take_overs, 0);
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Ok));
+    CHECK_EQ(g_stub.reread_take_overs >= 1, true);
+}
+
+static void test_a_refused_run_leaves_the_rereads_attach_alone() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    ui.context().inline_mode = true;
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Inline));
+    CHECK_EQ(g_stub.reread_take_overs, 0);
+}
+
 static void test_a_run_ends_by_itself_and_leaves_a_result() {
     fixture();
     std::unique_ptr<Ui> h; Ui& ui = *boot(h);
@@ -355,6 +373,8 @@ int main() {
     test_refuses_without_a_monitor();
     test_refuses_without_a_source_list();
     test_refuses_inline();
+    test_a_started_run_takes_the_rereads_attach_over();
+    test_a_refused_run_leaves_the_rereads_attach_alone();
     test_refuses_while_another_tool_owns_the_ports();
     test_refuses_a_second_start();
     test_a_run_owns_the_ports_and_says_so_in_the_footer();

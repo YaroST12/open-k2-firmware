@@ -134,6 +134,7 @@ twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirme
     const twin::live::Refusal r = g_run.start(g_env, seqs, make_input(ctx), confirmed);
     K2LOG("[TWIN] live start n=%u -> %s\n", unsigned(seqs.size()), twin::live::name(r));
     if (r != twin::live::Refusal::None) fusb302::set_run_owner(false);   // a started run that already ended cleared it itself
+    else fusb302::reread_take_over();   // the run owns the link: a pd-reread attach is the run's, its release timer must not fire
     return r;
 }
 
