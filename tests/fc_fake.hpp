@@ -46,7 +46,7 @@ struct FakeCharger : k2::fc::Env {
     std::uint32_t now = 0;
     std::uint32_t us_rem = 0;
     // pins and charger state
-    Drive dp = Drive::V0p6, dm = Drive::V0p6;
+    Drive dp = k2::dpdm::kIdle.dp, dm = k2::dpdm::kIdle.dm;   // the K2's passive idle until a session drives them
     bool open = false;
     std::uint32_t dp_since = 0;
     bool continuous = false;

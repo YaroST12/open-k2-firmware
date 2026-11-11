@@ -80,6 +80,15 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **The D+/D- passive idle put QC chargers into HVDCP and let VBUS jump to 12 V** (2026-11-11, CUKTECH 10 GaN 120W
+  USB-A; fixed in 872baa31, host-tested; `tests/test_dpdm.cpp`, `tests/test_fastcharge_classify.cpp`
+  `test_floating_short_needs_the_active_check`): the idle drove both lines to 0.6 V, the HVDCP entry level and the QC2
+  12 V code; a shell `dm 0`, 200 ms, `dm 0.6 confirm` took VBUS 5.1 -> 11.75 V, and after a charger-test run VBUS sat
+  at 12.13 V for ~40 s. The idle now releases both lines (CHARGER_QUIRKS `idle-0.6V-enters-hvdcp`). Validate
+  (hardware): on the CUKTECH USB-A port, boot shows `[FC] idle dp=hiz dm=hiz mismatch=0x0` and VBUS stays ~5.1 V for
+  minutes; `dm 0`, 200 ms, `dm hiz` keeps 5.1 V; after a charger-test run VBUS returns to 5 V; the QC2/QC3 units pass;
+  the Lines page shows what a released pair reads alone and on a DCP / Apple / QC charger.
+
 - **`[LINK]` verdict undercounts the caps during a long repaint** (2026-11-11, found by the host world replay on
   k2/pd-replay, not on hardware): when the attach and the caps decode both land inside one long Home repaint, the verdict
   reports `verdict_caps=0` while the driver decoded `caps=1`; the verdict itself is still `present`. Repro:

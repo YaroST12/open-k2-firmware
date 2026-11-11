@@ -66,7 +66,7 @@ std::size_t read_record(std::size_t from, std::span<std::uint8_t> out, std::size
 // Inline VOOC monitor (k2/fastcharge/vooc_decode.hpp). While a far sink draws through the K2 (a PD contract on CC may
 // run at the same time) and nothing else owns D+/D- (vooc::monitor_wanted), the lines are the Sniff floating inputs and the EXTI ISR feeds every edge to the frame
 // decoder, which keeps the live summary; no edge buffer, no mode RAM. It never drives: arming only sets the Sniff state,
-// ending puts back the passive idle (0.6 V) when the lines are still free, and leaves them alone when an engine or a
+// ending puts back the passive idle (dpdm::idle(), both lines released) when the lines are still free, and leaves them alone when an engine or a
 // Black Box arm has them. A Black Box arm or stream running at the same time feeds the decoder too.
 // fastcharge::poll() calls monitor_poll() every ~20 ms; `wanted` from vooc::monitor_wanted, `lines_free` = no engine,
 // scan, probe or reset hold owns the pins. Logs one `[VOOC] session N start` / `end` line per session.

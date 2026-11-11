@@ -362,10 +362,7 @@ void monitor_stop(bool lines_free) {
     const bool sniffing = g_sess.armed() || g_stream;
     if (!sniffing) exti_off();
     // Only undo our own state: an engine that took the lines meanwhile owns them; a Black Box arm keeps the Sniff state.
-    if (lines_free && !sniffing) {
-        dpdm::set_dp(dpdm::Drive::V0p6);
-        dpdm::set_dm(dpdm::Drive::V0p6);
-    }
+    if (lines_free && !sniffing) dpdm::idle();
     K2LOG("[VOOC] monitor off sessions=%u frames=%u lines=%s\n", unsigned(s.sessions), unsigned(s.frames),
           lines_free && !sniffing ? "idle" : "kept");
 }

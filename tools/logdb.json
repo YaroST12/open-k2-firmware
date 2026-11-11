@@ -578,6 +578,8 @@
   "581": "[LPRB] boot: closed the run interrupted in %s\n",
   "582": "[LPRB] start result=%u\n",
   "583": "[LPRB] end step=%s status=%u why=%s ms=%u\n",
-  "584": "[LPRB] cancelled step=%s\n"
+  "584": "[LPRB] cancelled step=%s\n",
+  "585": "[FC] dcp check dm_ref=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
+  "586": "[FC] idle dp=%s dm=%s mismatch=0x%X"
  }
 }

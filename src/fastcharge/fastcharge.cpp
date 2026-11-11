@@ -20,18 +20,19 @@ Protocol g_verdict = Protocol::Pending;
 // drops below presence, so the ring's lifetime is the attach). Fed to classify() as cc_attach_quiet.
 bool g_handshake_seen = false;
 
-// Active DCP check (see dcp_check_result): once per attach, only for the bias pair. The check spans two
-// polls (about 20 ms): poll N drives D+ to 0 V, poll N+1 reads D- from the newest ADC sweeps and restores
-// the passive idle; nothing waits in a loop.
-bool g_dcp_probing = false;
+// Active DCP check (see dcp_check_result): once per attach, only for a quiet pair. The check plays the three
+// dpdm::kDcpProbe steps one per poll (about 60 ms in all): Clear, Ref (D- read on the next poll as the reference),
+// Pull (D- read on the next poll as the probed level), then restores the passive idle; nothing waits in a loop.
+std::size_t g_dcp_step = 0;     // probe steps applied so far; 0 = no check running
 bool g_dcp_done = false;        // the check ran for this attach
 bool g_dcp_proof = false;       // it found D- following D+: a real short
-int g_dcp_idle_dm_mv = 0;       // D- before the drive
+int g_dcp_ref_dm_mv = 0;        // D- in the Ref step
 int g_ring_skip = 0;            // polls to keep out of the ring after the probe (the averaged ADC reading lags)
 
 void dcp_reset() {
-    if (g_dcp_probing) dpdm::dcp_probe_end();
-    g_dcp_probing = g_dcp_done = g_dcp_proof = false;
+    if (g_dcp_step) dpdm::dcp_probe_end(g_dcp_step - 1);
+    g_dcp_step = 0;
+    g_dcp_done = g_dcp_proof = false;
     g_ring_skip = 0;
 }
 
@@ -40,28 +41,41 @@ bool engine_idle() {
            !dpdm::reset_busy() && !dpsniff::armed();
 }
 
-// Second step: read D- from the newest sweeps, restore the passive idle, decide. The probe tick's sample
-// stays out of the ring, and so do the next two (the averaged ADC reading still holds the driven level).
-void dcp_finish() {
-    g_dcp_probing = false;
-    g_dcp_done = true;
+void dcp_abort(bool have, bool idle, bool ours) {
+    if (ours) dpdm::dcp_probe_end(g_dcp_step - 1);
+    g_dcp_step = 0;
     g_ring_skip = 2;
+    K2LOG("[FC] dcp check aborted have=%d idle=%d ours=%d", have, idle, ours);
+}
+
+// One poll of a running check: read D- from the newest sweeps, then apply the next step, or restore the passive
+// idle and decide after the last one. The probe's samples stay out of the ring, and so do the next two after it
+// (the averaged ADC reading still holds the driven level).
+void dcp_advance() {
+    g_dcp_done = true;
     std::int32_t dp = 0, dm = 0;
     const bool have = adc::latest_dpdm(dp, dm);
     const bool idle = engine_idle();
-    const bool ours = dpdm::dcp_probe_end();     // false when another owner rewrote the pins meanwhile
-    if (!have || !idle || !ours) {
-        K2LOG("[FC] dcp check aborted have=%d idle=%d ours=%d", have, idle, ours);
+    const std::size_t last = g_dcp_step - 1;
+    const bool ours = dpdm::drive() == dpdm::kDcpProbe[last];   // false when another owner rewrote the lines meanwhile
+    if (!have || !idle || !ours) return dcp_abort(have, idle, ours);
+    if (last == 1) g_dcp_ref_dm_mv = dm;                         // D- in the Ref step
+    if (g_dcp_step < dpdm::kDcpProbe.size()) {
+        dpdm::dcp_probe_step(g_dcp_step);
+        g_dcp_step++;
         return;
     }
-    const DcpCheck r = dcp_check_result(g_dcp_idle_dm_mv, dm);
+    dpdm::dcp_probe_end(last);
+    g_dcp_step = 0;
+    g_ring_skip = 2;
+    const DcpCheck r = dcp_check_result(g_dcp_ref_dm_mv, dm);
     g_dcp_proof = r == DcpCheck::Shorted;
-    K2LOG("[FC] dcp check dm_idle=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
-          static_cast<int>(g_dcp_idle_dm_mv), static_cast<int>(dm), static_cast<int>(dp), static_cast<int>(r));
+    K2LOG("[FC] dcp check dm_ref=%d dm_pulled=%d dp_pulled=%d result=%d (0 invalid, 1 open, 2 short)",
+          static_cast<int>(g_dcp_ref_dm_mv), static_cast<int>(dm), static_cast<int>(dp), static_cast<int>(r));
 }
 
-// First step: when every gate holds, drive D+ to 0 V and let the next poll read D-.
-void dcp_begin(const Ring& ring, int vbus_mv, int dm_idle_mv, const link::Probe& probe, bool cc_source_no_pd) {
+// First step: when every gate holds, apply the Clear step and let the next polls run the rest.
+void dcp_begin(const Ring& ring, int vbus_mv, const link::Probe& probe, bool cc_source_no_pd) {
     DcpCheckGate g;
     g.vbus_mv = vbus_mv;
     g.not_inline = link::inline_now() == link::Reason::None;
@@ -69,28 +83,25 @@ void dcp_begin(const Ring& ring, int vbus_mv, int dm_idle_mv, const link::Probe&
     g.pd_likely = link::pd_likely(probe);
     g.cc_source_no_pd = cc_source_no_pd;
     g.engine_idle = engine_idle();
-    g.lines_free = dpdm::mismatch(dpdm::read()) == 0;
+    g.lines_free = dpdm::mismatch(dpdm::drive()) == 0;
     g.done_this_attach = g_dcp_done;
     if (!dcp_check_allowed(g, ring)) return;
-    g_dcp_idle_dm_mv = dm_idle_mv;
-    dpdm::dcp_probe_begin();
-    g_dcp_probing = true;
+    if (dpdm::dcp_probe_step(0)) g_dcp_step = 1;
 }
 
 // Inline VOOC monitor (dpsniff): the lines float while a far sink draws through the K2 (with or without a PD contract)
 // and no engine, scan, probe, DCP check or reset hold owns them. A Black Box arm is passive too and does not stop it.
 void monitor() {
     const bool lines_free = fctrig::status().state == fctrig::State::Idle && !fctrig::scan_running() &&
-                            !fctrig::ufcs_probe_running() && !dpdm::reset_busy() && !g_dcp_probing;
+                            !fctrig::ufcs_probe_running() && !dpdm::reset_busy() && g_dcp_step == 0;
     dpsniff::monitor_poll(vooc::monitor_wanted(dpsniff::monitor_enabled(), link::far_sink_now(), lines_free), lines_free);
 }
 }  // namespace
 
 unsigned log_idle() {
-    const auto sw = dpdm::read();
-    const bool pa7 = sw.pa7, pb0 = sw.pb0, pb1 = sw.sw1, pb2 = sw.sw2;
-    const unsigned bad = idle_mismatch(pa7, pb0, pb1, pb2);
-    K2LOG("[FC] idle PA7=%d PB0=%d PB1=%d PB2=%d mismatch=0x%X", pa7, pb0, pb1, pb2, bad);
+    const dpdm::Pair d = dpdm::drive();
+    const unsigned bad = dpdm::mismatch(d);
+    K2LOG("[FC] idle dp=%s dm=%s mismatch=0x%X", dpdm::name(d.dp), dpdm::name(d.dm), bad);
     return bad;
 }
 
@@ -117,7 +128,7 @@ void poll() {
     // CC attached with no decoded Source_Capabilities is a default-USB data host (Rp on CC):
     // its D+/D- pair carries data, so the classifier must not read a charger handshake into it.
     const bool cc_source_no_pd = probe.cc_active && !probe.pd_active;
-    // The inline VOOC monitor floats the lines (no 0.6 V bias): their levels are no handshake, so they neither fill the
+    // The inline VOOC monitor owns the lines (Sniff inputs, a data device inline): their levels are no handshake, so they neither fill the
     // window nor set the latch, and the window starts fresh when the monitor lets go.
     const bool floating = dpsniff::monitoring();
     if (vbus < 4000) {   // a new source starts a fresh window
@@ -128,12 +139,12 @@ void poll() {
         g_ring.clear();
     } else {
         bool skip = false;                    // the probe's own samples are not the source's lines
-        if (g_dcp_probing) { dcp_finish(); skip = true; }
+        if (g_dcp_step) { dcp_advance(); skip = true; }
         else if (g_ring_skip > 0) { g_ring_skip--; skip = true; }
         if (!skip) {
             g_ring.push(line->dp_mv, line->dm_mv);
             g_handshake_seen = update_handshake_latch(g_handshake_seen, g_ring, line->dp_mv, line->dm_mv);
-            dcp_begin(g_ring, vbus, line->dm_mv, probe, cc_source_no_pd);
+            dcp_begin(g_ring, vbus, probe, cc_source_no_pd);
         }
     }
     g_verdict = classify(g_ring, line->dp_mv, line->dm_mv, vbus, probe.pd_active, link::pd_likely(probe),

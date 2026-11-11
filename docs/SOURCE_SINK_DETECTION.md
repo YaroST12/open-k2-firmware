@@ -125,15 +125,18 @@ our firmware does.
   edge ring, `include/k2/fastcharge/edges.hpp`), feeding `fc_engine`.
 - Proprietary D+/D- protocols (QC2/QC3/QC3+, AFC, FCP, SCP, VOOC/SVOOC, UFCS) are *actively
   probed* by the charger-test runner, not passively detected: `src/fastcharge/fc_engine.cpp` (`Proto` enum
-  :43-52, `Fail::Detected` :85), pin driving `include/k2/drivers/dpdm.hpp:75-132` (`set_dp/set_dm`,
+  :43-52, `Fail::Detected` :85), pin driving `include/k2/drivers/dpdm.hpp:114-181` (`set_dp/set_dm`,
   `play`, VOOC `rx_command`/`tx_reply`, `discharge`/`start_reset`). Passive D+/D- observation is
   limited to voltage levels and edge timing.
 - BC1.2 is read, not probed: a dedicated charger (D+ shorted to D-) shows as an equal, steady pair of
-  levels. There is no SDP / CDP probe (no charging-downstream-port negotiation is attempted). The K2's own
-  idle drives both lines to about 0.6 V, so an equal steady pair in the 0.5 .. 0.79 V window proves
-  nothing; the one active step is `fastcharge`'s DCP check (D+ pulled to 0 V once per attach, only when
-  the K2 is alone on a 5 V source, D- read back), see `dcp_check_allowed()` in
-  `include/k2/fastcharge/fastcharge_classify.hpp`.
+  levels. There is no SDP / CDP probe (no charging-downstream-port negotiation is attempted). The K2's
+  passive idle releases both lines (`dpdm::kIdle`; until 2026-11-11 it drove both to 0.6 V, which put QC
+  chargers into HVDCP, see `idle-0.6V-enters-hvdcp` in `docs/CHARGER_QUIRKS.md`), so a floating short reads
+  equal and low, and an equal pair in the 0.5 .. 0.79 V window proves nothing on its own either; the one
+  active step is `fastcharge`'s DCP check (three polls once per attach, only when the K2 is alone on a 5 V
+  source and the pair is quiet: D+ 0 V, then D- 0.6 V with D+ released as the reference, then D+ 0 V with
+  D- still driven, D- read back), see `dcp_check_allowed()` in `include/k2/fastcharge/fastcharge_classify.hpp`
+  and `dpdm::kDcpProbe`.
 
 ### 1.6 Where results surface
 

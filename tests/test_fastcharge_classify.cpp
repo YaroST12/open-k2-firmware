@@ -189,16 +189,6 @@ static void test_short_names() {
     CHECK_STR(short_name(static_cast<Protocol>(200)), "?");
 }
 
-static void test_idle() {
-    // idle: PA7 high, PB0 low, PB1 high, PB2 low
-    CHECK_EQ(idle_mismatch(true, false, true, false), 0);
-    CHECK_EQ(idle_mismatch(false, false, true, false), 1);
-    CHECK_EQ(idle_mismatch(true, true, true, false), 2);
-    CHECK_EQ(idle_mismatch(true, false, false, false), 4);
-    CHECK_EQ(idle_mismatch(true, false, true, true), 8);      // what i2c.cpp leaves PB2 at today
-    CHECK_EQ(idle_mismatch(false, true, false, true), 15);
-}
-
 // Hardware finding: a Pixel on a PD3.1 contract (8.9 V, 1.35 A) showed "AFC FCP" with D+ = 819 mV,
 // D- = 1 mV: the phone's own data pull-up, not a legacy handshake.
 static void test_pd_likely() {
@@ -452,17 +442,18 @@ static void test_active_dcp_check() {
     Ring moving;
     for (int i = 0; i < 50; i++) moving.push((i & 1) ? 2030 : 590, 590);
     CHECK_EQ(classify(moving, 590, 590, 5000, false, false, false, true, true), Protocol::UsbData);
-    // bias_pair: full window, equal and steady, inside 0.5 .. 0.79 V.
-    CHECK_EQ(bias_pair(bias), true);
+    // quiet_pair: full window, equal and steady, at or below 0.79 V.
+    CHECK_EQ(quiet_pair(bias), true);
     Ring part;
     part.push(592, 591);
-    CHECK_EQ(bias_pair(part), false);
+    CHECK_EQ(quiet_pair(part), false);
     Ring shorted_hi;
     for (int i = 0; i < 50; i++) shorted_hi.push(3300, 3300);
-    CHECK_EQ(bias_pair(shorted_hi), false);
+    CHECK_EQ(quiet_pair(shorted_hi), false);
     Ring qc2;
     for (int i = 0; i < 50; i++) qc2.push(600, 0);
-    CHECK_EQ(bias_pair(qc2), false);
+    CHECK_EQ(quiet_pair(qc2), false);
+    CHECK_EQ(quiet_pair(moving), false);
 
     // Gate: every condition must hold, and a failed attach does not retry within the same attach.
     DcpCheckGate g;
@@ -487,7 +478,43 @@ static void test_active_dcp_check() {
     x = g; x.done_this_attach = true;
     CHECK_EQ(dcp_check_allowed(x, bias), false);
     CHECK_EQ(dcp_check_allowed(g, part), false);                 // ring not full
-    CHECK_EQ(dcp_check_allowed(g, qc2), false);                  // not the bias pair
+    CHECK_EQ(dcp_check_allowed(g, qc2), false);                  // not a quiet pair
+    CHECK_EQ(dcp_check_allowed(g, shorted_hi), false);           // a steady short above 0.79 V reads DCP 5V passively
+}
+
+// The passive idle releases both lines (dpdm kIdle), so a pair nothing drives floats: a BC1.2 short with nothing
+// behind the K2 reads equal and low, below the 0.4 V floor of a passive DCP verdict. The active check may run on any
+// quiet pair (equal and steady at or below 0.79 V, 0 V included), and its proof names that pair DCP 5V; without the
+// proof a floating pair stays NO QUICK, as an open pair at 0 V always did.
+static void test_floating_short_needs_the_active_check() {
+    Ring floating;
+    for (int i = 0; i < 50; i++) floating.push(0, 0);
+    Ring low;
+    for (int i = 0; i < 50; i++) low.push(130, 110);
+    Ring split;                                                  // one line low, the other at 0.6 V: no short
+    for (int i = 0; i < 50; i++) split.push(0, 600);
+    Ring high_pair;
+    for (int i = 0; i < 50; i++) high_pair.push(800, 800);
+    CHECK_EQ(quiet_pair(floating), true);
+    CHECK_EQ(quiet_pair(low), true);
+    CHECK_EQ(quiet_pair(split), false);
+    CHECK_EQ(quiet_pair(high_pair), false);
+    CHECK_EQ(int(classify(floating, 0, 0, 5000)), int(Protocol::NoQuick));
+    CHECK_EQ(int(classify(low, 130, 110, 5000)), int(Protocol::NoQuick));
+    CHECK_EQ(int(classify(floating, 0, 0, 5000, false, false, false, true, true)), int(Protocol::Dcp5V));
+    CHECK_EQ(int(classify(low, 130, 110, 5000, false, false, false, true, true)), int(Protocol::Dcp5V));
+    // The proof never overrides a data host or a PD contract, and never turns a split pair into a DCP.
+    CHECK_EQ(int(classify(floating, 0, 0, 5000, false, false, true, true, true)), int(Protocol::UsbData));
+    CHECK_EQ(int(classify(floating, 0, 0, 5000, true, false, false, true, true)), int(Protocol::Pd));
+    CHECK_EQ(int(classify(split, 0, 600, 5000, false, false, false, true, true)), int(Protocol::NoQuick));
+    DcpCheckGate g;
+    g.vbus_mv = 5000; g.not_inline = true; g.engine_idle = true; g.lines_free = true;
+    CHECK_EQ(dcp_check_allowed(g, floating), true);
+    CHECK_EQ(dcp_check_allowed(g, low), true);
+    CHECK_EQ(dcp_check_allowed(g, split), false);
+    // The check's reference is D- driven to 0.6 V with D+ released: the dcp_check_result window still applies.
+    CHECK_EQ(dcp_check_result(610, 90), DcpCheck::Shorted);
+    CHECK_EQ(dcp_check_result(610, 600), DcpCheck::Open);
 }
 
 // While the inline VOOC monitor owns D+/D- (floating inputs, no 0.6 V bias, dpsniff::monitoring()), the levels are
@@ -539,7 +566,6 @@ int main() {
     test_names();
     test_wire_values();
     test_short_names();
-    test_idle();
     test_pd_and_usb_data();
     test_pd_likely();
     test_dcp_needs_stability();
@@ -548,6 +574,7 @@ int main() {
     test_bias_pair_is_not_a_dcp();
     test_handshake_latch_and_stale_ring();
     test_active_dcp_check();
+    test_floating_short_needs_the_active_check();
     test_floating_lines_are_not_a_protocol();
     return test_report("test_fastcharge_classify");
 }
