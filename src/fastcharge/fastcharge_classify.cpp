@@ -36,7 +36,11 @@ constexpr int kQuietMaxDv = kBiasMaxDv;
 // within 0.2 V. A live data link can average equal (SE0 idle, high-speed signalling) but its levels move with bus
 // activity, so one equal-level sample never proves a short. `steady` needs at least 0.4 V (a passive DCP verdict),
 // `bias` marks a level inside the bias window and `quiet` one at or below kQuietMaxDv (0 V included).
+// `equal` is that test alone, at any level (0 V included): the pair is one level on both lines, so no handshake is
+// being driven. FCP and AFC put D+ and D- on different levels; the 0.3 V bucket edge can split an equal low pair into
+// "0.6 V" and "0 V" (hardware 2026-11-11: 420 / 387 mV read AFC FCP).
 struct SteadyPair {
+    bool equal = false;
     bool steady = false;
     bool bias = false;
     bool quiet = false;
@@ -53,7 +57,7 @@ SteadyPair steady_pair(const Ring& ring) {
         if (m > hi) hi = m;
     }
     if (hi - lo > 2) return {};
-    return {lo >= 4, lo >= kBiasMinDv && hi <= kBiasMaxDv, hi <= kQuietMaxDv};
+    return {true, lo >= 4, lo >= kBiasMinDv && hi <= kBiasMaxDv, hi <= kQuietMaxDv};
 }
 
 // BC1.2 short: a steady equal pair outside the bias window passively, or any quiet pair the active check proved
@@ -63,9 +67,15 @@ bool dcp_shorted(const Ring& ring, bool active_proof) {
     return (p.steady && !p.bias) || (active_proof && p.quiet);
 }
 
+// FCP / AFC handshake levels: D+ on the 0.6 V rail with D- at 0 V. Those are two different levels; an equal pair (see
+// SteadyPair) that the bucket edge split that way is one level on both lines, not a handshake.
+bool afc_fcp_levels(const Ring& ring, int bdp, int bdm) {
+    return bdp == 1 && bdm == 0 && !steady_pair(ring).equal;
+}
+
 Protocol band_5v(const Ring& ring, int bdp, int bdm, int dp_mv, int dm_mv, bool cc_source_no_pd, bool dcp_proof) {
     if (bdp == 1 && high(bdm)) return Protocol::Qc3;
-    if (bdp == 1 && bdm == 0) return Protocol::AfcFcp;     // passive: QC2.0 5 V needs an active trigger
+    if (afc_fcp_levels(ring, bdp, bdm)) return Protocol::AfcFcp;   // passive: QC2.0 5 V needs an active trigger
     if (bdp == 1 && bdm == 4) return Protocol::Scp;
     if (bdp == 2 && bdm == 2) return Protocol::Apple24;
     if (bdp == 2 && dm_mv >= 1900 && dm_mv <= 2100) return Protocol::Apple21;
@@ -90,19 +100,19 @@ Protocol band_low_voltage(int bdp, int bdm) {
     return Protocol::PdPe;
 }
 
-Protocol band_9v(int bdp, int bdm) {
+Protocol band_9v(const Ring& ring, int bdp, int bdm) {
     if (bdp == 1 && high(bdm)) return Protocol::Qc3;
     if (high(bdp) && bdm == 1) return Protocol::Qc2_9V;
-    if (bdp == 1 && bdm == 0) return Protocol::AfcFcp;
+    if (afc_fcp_levels(ring, bdp, bdm)) return Protocol::AfcFcp;
     if (bdp == 1 && bdm == 4) return Protocol::Scp;
     if (high(bdp) && pulsing(bdm)) return Protocol::Svooc;
     return Protocol::PdMtk;
 }
 
-Protocol band_12v(int bdp, int bdm) {
+Protocol band_12v(const Ring& ring, int bdp, int bdm) {
     if (bdp == 1 && bdm == 1) return Protocol::Qc2_12V;
     if (bdp == 1 && high(bdm)) return Protocol::Qc3;
-    if (bdp == 1 && bdm == 0) return Protocol::AfcFcp;
+    if (afc_fcp_levels(ring, bdp, bdm)) return Protocol::AfcFcp;
     if (bdp == 1 && bdm == 4) return Protocol::Scp;
     return Protocol::PdMtk;
 }
@@ -168,8 +178,8 @@ Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_a
     if (bdp == 1 && bdm == 0 && dp_mv >= kDataIdleMinMv && dp_mv <= kDataIdleMaxMv) return Protocol::UsbData;
     if (vbus_mv < kBand5VMax) return band_5v(ring, bdp, bdm, dp_mv, dm_mv, cc_source_no_pd, dcp_proof);
     if (vbus_mv < kBand7VMax) return band_low_voltage(bdp, bdm);
-    if (vbus_mv <= kBand9VMax) return band_9v(bdp, bdm);
-    if (vbus_mv >= kBand12VMin && vbus_mv <= kBand12VMax) return band_12v(bdp, bdm);
+    if (vbus_mv <= kBand9VMax) return band_9v(ring, bdp, bdm);
+    if (vbus_mv >= kBand12VMin && vbus_mv <= kBand12VMax) return band_12v(ring, bdp, bdm);
     if (vbus_mv >= kBand20VMin && vbus_mv <= kBand20VMax) return band_20v(bdp, bdm);
     return Protocol::Pd;   // gaps between the bands and above 21.5 V
 }
@@ -243,8 +253,9 @@ const char* short_name(Protocol p) {
 bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv) {
     // A part-filled ring still holds the previous attach's samples (clear() resets the counters only).
     if (!ring.full()) return false;
-    // An equal 0.6 V pair is a short carrying a sink's detection source (once the K2's own idle), not a charger's.
-    if (const SteadyPair p = steady_pair(ring); p.bias) return false;
+    // An equal pair at or below 0.7 V is one level on both lines: a short carrying a sink's detection source (once the
+    // K2's own idle, 0.6 V) or a floating short (420 / 387 mV after the D+/D- release), never a charger driving D+.
+    if (const SteadyPair p = steady_pair(ring); p.quiet) return false;
     const int bdp = bucket(ring.dp), bdm = bucket(ring.dm);
     if (pulsing(bdp) || pulsing(bdm) || high(bdp) || high(bdm)) return true;
     if (bdp == 1 && dp_mv < kDataIdleMinMv) return true;
@@ -259,6 +270,34 @@ bool update_handshake_latch(bool latched, const Ring& ring, int dp_mv, int dm_mv
 
 bool quiet_pair(const Ring& ring) {
     return ring.full() && steady_pair(ring).quiet;
+}
+
+Protocol SagGuard::apply(Protocol fresh, int vbus_mv) {
+    if (fresh == Protocol::NoInput) {   // a cut starts a new episode: the next attach refills the window from nothing
+        held = fresh;
+        sag_polls = 0;
+        refill = static_cast<unsigned>(kRingSize);
+        return fresh;
+    }
+    const bool low = vbus_mv < kVsafe5MinMv;
+    if (low) {
+        if (sag_polls <= kSagHoldPolls) sag_polls++;
+        refill = static_cast<unsigned>(kRingSize);
+    }
+    const bool active = (low || refill > 0) && sag_polls <= kSagHoldPolls;
+    if (!low && refill > 0 && --refill == 0) sag_polls = 0;
+    // Only a verdict read off the data pair is held; PD and PD? come from the FUSB302 and Pending is no verdict.
+    if (fresh == Protocol::Pd || fresh == Protocol::PdLikely || fresh == Protocol::Pending) {
+        if (!active) held = fresh;
+        return fresh;
+    }
+    if (!active) {
+        held = fresh;
+        return fresh;
+    }
+    const bool held_is_data_verdict = held != Protocol::NoInput && held != Protocol::Pending && held != Protocol::Pd &&
+                                      held != Protocol::PdLikely;
+    return held_is_data_verdict ? held : Protocol::Pending;
 }
 
 DcpCheck dcp_check_result(int ref_dm_mv, int probed_dm_mv) {

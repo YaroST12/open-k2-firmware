@@ -110,12 +110,36 @@ bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv);
 // that is not an equal bias-window pair.
 bool update_handshake_latch(bool latched, const Ring& ring, int dp_mv, int dm_mv);
 
+// A live, proven VOOC session counts only with VBUS present: without it nothing is live. The one rule behind both the
+// remote/shell label (report_label) and the Home protocol row (home::derive_proto).
+constexpr bool vooc_session_live(Protocol verdict, bool vooc_live) {
+    return vooc_live && verdict != Protocol::NoInput;
+}
+
 // The verdict as the remote and the shell report it, so they say what Home says: a live, proven VOOC session names the
 // source SVOOC whatever the passive classifier read (USB DATA while the lines float, PD next to a contract). Without VBUS
 // nothing is live.
 constexpr Protocol report_label(Protocol verdict, bool vooc_live) {
-    return vooc_live && verdict != Protocol::NoInput ? Protocol::Svooc : verdict;
+    return vooc_session_live(verdict, vooc_live) ? Protocol::Svooc : verdict;
 }
+
+// Output sag guard. A source whose VBUS sags or is cut (a port that switches off with no load) drags the data lines down
+// with it: the window mixes two levels, or the Type-C data-host tail reads a divider level as data, so the classifier
+// flaps to USB DATA between a real verdict and NO INPUT. Below vSafe5V min (4.75 V), and for one window after VBUS
+// returns (the ring still holds sag samples), the data pair is no basis for a judgment: the guard keeps the last verdict
+// that was reached with a good supply, or says Pending when there is none. NO INPUT, PD and PD? come from CC / VBUS /
+// the FUSB302 and pass through. A source that simply sits below 4.75 V (weak, loaded) is judged again after
+// kSagHoldPolls polls (about 5 s at the 20 ms poll). Real data behind the K2 reads USB DATA with a good supply as before.
+inline constexpr int kVsafe5MinMv = 4750;
+inline constexpr unsigned kSagHoldPolls = 250;
+struct SagGuard {
+    Protocol held = Protocol::Pending;   // last verdict reached outside a sag
+    unsigned sag_polls = 0;              // consecutive polls of the current sag, saturating at kSagHoldPolls + 1
+    unsigned refill = 0;                 // polls still owed for the window to refill after the supply returned
+
+    Protocol apply(Protocol fresh, int vbus_mv);
+    void reset() { *this = SagGuard{}; }
+};
 
 // Display string of a verdict (including "NO INPUT" and "..."); "?" if unknown.
 const char* name(Protocol p);
