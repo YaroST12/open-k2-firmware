@@ -888,14 +888,17 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
-  aux > 5.8 V, suspected after 3 s of aux and VBUS >= 4 V with no configured, awake USB host; cleared by an empty HID
-  port or an active host for 1 s. Under the lock every raise refuses (PD sink and request entry, PD trigger, legacy
-  triggers and scanner, charger test `Reason::Loop`, PD Stress, twin, lab shell), a contract above 5 V goes to PDO 1,
-  then Hard Reset (600 ms above 6 V), then CC detach (1 s later). Validate at 5 V only, never request above 5 V while
-  looped: loop cable + charger -> `[LOOP] suspect` then `[LOOP] lock suspected`, the Caution footer "HID-cable loop: 5V
-  lock" after 3 s, charger test START refused (Loop), PD trigger above 5 V refused, legacy trigger refused; then a PC
-  on HID (USB link on) + charger -> no lock, `state --json` shows `loop.host` true and `loop.locked` false; logs read
-  from the Black Box / log after the PC is back.
+  aux > 5.8 V; suspected ("the rail follows VBUS") when the HID rail and VBUS cross 4 V up within 100 ms of each other,
+  or are both already up at boot, with no configured, awake USB host; cleared by VBUS < 1 V with the rail up (a separate
+  supply), an empty HID port or an active host for 1 s. Under the lock every raise refuses (PD sink and request entry,
+  PD trigger, legacy triggers and scanner, charger test `Reason::Loop`, PD Stress, twin, lab shell), a contract above
+  5 V goes to PDO 1, then Hard Reset (600 ms above 6 V), then CC detach (1 s later). Validate at 5 V only, never request
+  above 5 V while looped: (1) passive K2, plug charger + loop cable -> `[LOOP] lock suspected ... gap=-1` (or a small
+  gap), the Caution footer "HID-cable loop: 5V lock" at once, charger test START refused (Loop), PD trigger above 5 V
+  refused, legacy trigger refused; (2) PC on HID with the USB link OFF, then a charger, charger test START -> no lock;
+  (3) charger first, then the PC -> no lock; (4) PC on HID + the CUKTECH USB-A auto-off port cycling VBUS -> never a
+  lock; (5) PC on HID (link on) + charger -> `state --json` shows `loop.host` true and `loop.locked` false. Logs read
+  over the PC afterwards.
 
 ## Core platform
 
