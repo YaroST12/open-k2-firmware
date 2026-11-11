@@ -396,7 +396,7 @@ enum class Cmd : uint8_t {
     PdRelease = 0x44,       // back to 5 V (Request PDO 1)
     PdMatch = 0x45,         // passive wants-vs-offers verdict -> MatchSnapshot (see encode_match)
     UsbLink = 0x46,         // USB / Thunderbolt link classified from sniffed PD -> UsbLinkSnapshot (see encode_usb_link)
-    PdReread = 0x47,        // [op, mask] source-cap re-read: 0 status, 1 start, 2 abort, 3 sink-cap-ext mode, ..., 8 Rd glitch of mask x 10 ms -> RereadInfo (see above)
+    PdReread = 0x47,        // [op, mask] source-cap re-read: 0 status, 1 start, 2 abort (releases the lab attach whoever made it; Busy = a run or a far sink owns the line, nothing changed), 3 sink-cap-ext mode, ..., 8 Rd glitch of mask x 10 ms -> RereadInfo (see above)
     PdAttach = 0x48,        // [target_mv u16] [target_ma u16] [flags] -> PdTriggerSnapshot; mv 0 = 5000 mV, clamped to 36000 mV; flags bit0 = confirm (needed above 5000 mV); refused inline / busy = status + err byte
     PdHandback = 0x49,      // optional [flags]: bit0 confirm (kPdFlagConfirm) -> [HandbackVerdict]; phase-1 lab hand-back (see k2/core/handback.hpp)
     AppleRead = 0x4A,       // lab-only Apple charger readout (SVID 0x05AC, k2/pd/apple_readout.hpp): [op] 0 status, 1 arm + re-request the current contract -> AppleReadInfo; a refusal carries its pd::AppleRefusal as the one-byte payload

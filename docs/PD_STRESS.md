@@ -141,6 +141,11 @@ python3 tools/k2_remote.py pd-stress status | result | stop
 The CDC shell has the same: `pdstress start [options] confirm | status | result [off] | stop`. The remote command id is 0x55 (`CMD_PD_STRESS`):
 ops 0 status, 1 start, 2 read result (48-byte chunks), 3 stop. Start needs the confirm flag.
 
+A run started on the attach of a lab `pd-reread` (the usual way to get a contract on a brick before the run) takes that attach over
+(`fusb302::reread_take_over()` in `start_run`): the re-read's 30 s release timer is cancelled and the Rd and contract belong to the run.
+The release never fires while a run owns the line, so a run cannot be cut by it (hardware 2026-11-11 saw it at a Soft_Reset step). After
+the run the attach stays up until `pd-reread --abort` (refused with busy while the run lasts) or a detach.
+
 ## Result
 
 `pd_stress.py run` saves `result.json` (the raw blob decoded, with the charger name and the start time), `report.txt` (header, each sequence with its

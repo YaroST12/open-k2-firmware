@@ -260,6 +260,8 @@ class RemoteError(RuntimeError):
         text = f"command {cmd} failed: {STATUS_NAMES.get(status, status)}"
         if cmd == CMD_CHARGER_TEST and status == STATUS_BUSY:
             text += " (RAM results changed; retry charger-test results)"
+        if cmd == CMD_PD_REREAD and status == STATUS_BUSY:
+            text += " (a charger test, PD Stress or twin run owns the link, or a far sink is inline: nothing was changed; a run's end releases its own attach)"
         if cmd == CMD_DEBUG_CC_PROBE and status == STATUS_BUSY:
             text += " (the K2 is not passive: a charger test, a contract, Rd, VBUS at 1 V or more; the [CCPROBE] log line names the reason)"
         if cmd == CMD_DEBUG_CC_PROBE and status == STATUS_BAD_ARG:
@@ -3724,7 +3726,9 @@ def build_parser():
     sr = sub.add_parser("pd-reread", help="source-cap re-read in PD mode: Get_Source_Cap_Extended, Discover Identity, SVIDs, Get_Source_Cap (see k2/pd/pd_reread.hpp)")
     sr.add_argument("--mask", type=_reread_mask, default=None, help="steps: 1 caps-ext, 2 identity, 4 svids, 8 get-cap, 16 second get-cap (default 15)")
     sr.add_argument("--wait", type=float, default=REREAD_POLL_S, help="seconds to wait for the run, attach phase included")
-    sr.add_argument("--abort", action="store_true", help="stop a run and release the Rd the run presented")
+    sr.add_argument("--abort", action="store_true", help="stop a run and release the lab attach, whoever made it: the re-read's own, `pd attach` / "
+                    "`pd request` (back to 5 V first), a finished re-read's Rd. Refused (busy, nothing changed) while a "
+                    "charger test, PD Stress or twin run owns the link or a far sink is inline")
     sr.add_argument("--line", type=int, choices=(0, 1, 2), default=None,
                     help="debug: the attach scan may take only this CC line (Rd then goes on that line alone); with another "
                          "line already taken and no contract the run forgets it first. Stays set for later attaches (a charger "

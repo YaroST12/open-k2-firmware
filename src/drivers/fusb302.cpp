@@ -1749,6 +1749,7 @@ void reread_housekeeping(std::uint32_t now) {
         if (g_reread_owns_rd) set_rd_for_run(false, false);
         g_reread_owns_rd = false; g_ident_owns_rd = false;
         g_reread_made_contract = false;
+        g_legacy_only = false;
         g_sink.detach();
     }
 }
@@ -2750,11 +2751,26 @@ bool cc_detach() {
     K2LOG("[PD] CC detach: Rd off for %u ms\n", unsigned(pd::kRdHoldMs));
     return true;
 }
-void reread_abort() {
+// `pd-reread --abort`: stops a re-read and ends the lab attach, whoever started it. The attach a re-read made itself is released by
+// the housekeeping at once; an attach a lab command took over (`pd attach` / `pd request`, a finished re-read whose Rd stays up)
+// has no owner flag left, so it is adopted here: the Rd run-start presented and the contract go on the same release path. Refused
+// (false, nothing changed) while a run owns the line (charger test, PD Stress, twin: their end releases it) and inline (a real
+// sink's Rd must not be touched). The boot-mode Rd pin and a running Identify / probe are their own owners and stay.
+bool reread_abort() {
+    if (inline_now() || g_run_owner) return false;
     g_force_cc = 0;
     ra_set(false);
     g_reread.abort();
-    if (g_reread_owns_rd || g_reread_made_contract) g_reread_release_at = systick::millis();   // housekeeping ends the attach on its next pass
+    const std::uint32_t now = systick::millis();
+    if (g_reread_owns_rd || g_reread_made_contract) {
+        g_reread_release_at = now;   // housekeeping ends the attach on its next pass
+    } else if (g_rd_start && g_pin_rd == 0 && !g_ident.running() && !g_probe.running()) {
+        K2LOG("[REREAD] abort: lab-held attach adopted, Rd and contract released\n");
+        g_reread_owns_rd = true;
+        g_reread_made_contract = g_sink.status().state != pd::SinkState::Idle;
+        g_reread_release_at = now;
+    }
+    return true;
 }
 const pd::RereadStatus& reread_status() { return g_reread.status(); }
 bool reread_own_hold() { return pd::reread_own_hold(g_sink.status(), g_reread_made_contract); }

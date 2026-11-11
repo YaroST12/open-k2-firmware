@@ -766,6 +766,7 @@ Setup: K2 on HID power only, USB HID enabled in Tools, charger brick (OnePlus 12
 
 1. Right after the flash (a warm reset; the chip still holds what the old image left): read the CC levels (Lines page screenshot or `k2_remote state`). Pass: cc1 and cc2 both near 3.19 V and VBUS 0 V (passive, charger waiting for a sink). Fail: both near 1.6 V (Rd on both lines), or VBUS 5 V nobody asked for.
 2. `k2_remote pd-reread --wait 20`: VBUS goes to 5 V and Rd shows on the attached line (expected while it runs). Then `k2_remote pd-reread --abort`. Pass: within 2 s Rd is off (cc back near 3.19 V, VBUS 0 V). Fail: Rd stays on CC2 or VBUS stays at 5.0 V.
+   Also after `pd attach` (and after the re-read has finished, or after `pd release`): `k2_remote pd attach 5000 3000`, then `k2_remote pd-reread --abort`. Pass: the log shows `[REREAD] abort: lab-held attach adopted` then `[REREAD] attach released`, VBUS 0 V and both CC lines back at the charger's Rp level within 2 s. While a charger test, PD Stress or twin run is active `--abort` answers busy and changes nothing.
 3. Start `pd-reread --wait 20` again and, while Rd is on, `k2_remote reboot` (no abort). After the reboot (compare `ping` uptime with the wall clock) check cc1 and cc2. Pass: near 3.19 V on both, VBUS 0 V: a warm reset of a HID-powered K2 is a detach. Fail: Rd inherited, VBUS 5.27 V.
 4. Log: the boot shows `[BOOT] mode=plain` and `Rd pin 0x0 inherited 0`.
 5. Cold start: unplug HID and the brick, plug HID only, then the brick. Pass: the same passive state as step 1.

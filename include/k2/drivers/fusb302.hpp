@@ -316,7 +316,13 @@ const pd::ProbeStatus& probe_status();
 // times out without TXSENT still waits for the step's answer. The result lands in reread_status(), a [REREAD] log line
 // and a Black Box mark.
 bool reread_start(std::uint8_t mask = pd::kRereadDefault);
-void reread_abort();
+// `pd-reread --abort`: the lab's one way to end whatever the lab left on the link. Stops a running re-read, clears the forced
+// line and the Ra mode, and releases the Rd and contract the K2 holds for nobody: the re-read's own attach at once, and a
+// lab-held one the re-read no longer owns (after `pd attach` / `pd request`, a finished re-read another tool took over, `pd
+// release`) the same way: back to 5 V first, then the contract forgotten and Rd off ([REREAD] attach released), so the source
+// sees the sink leave. false = refused, nothing changed: a charger test / PD Stress / twin run owns the line (run_owner) or a
+// far sink is inline. A boot-pinned Rd (self-powered or bus-powered K2) and a running Identify or probe are not lab-held and stay.
+bool reread_abort();
 // True while the only hold on the wire is the re-read's own leftover attach (pd::reread_own_hold: a finished re-read's
 // PDO 1 5 V contract inside its linger). A charger-test START and the spoof arming take it over like the self-hold
 // instead of refusing "tool busy" / "Ra refused: contract".

@@ -1755,6 +1755,83 @@ void test_the_release_never_fires_while_a_run_owner_is_set() {
     clean_up_rd_tests();
 }
 
+// `pd-reread --abort` ends the lab attach whoever started it (hardware 2026-11-11: after `pd attach` it released nothing).
+// The Rd is gone, the contract with it, and the answer is true.
+void check_abort_ends_the_attach() {
+    CHECK_EQ(fusb302::reread_abort(), true);
+    settle_ms(6000);
+    check_rd_gone(false);
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
+}
+void test_abort_after_pd_attach_on_the_rereads_pdo_ends_the_attach() {
+    reread_attach_then_finished();
+    attach_after_reread(1, 5000);
+    check_held_after_reread(1);
+    check_abort_ends_the_attach();
+    clean_up_rd_tests();
+}
+void test_abort_after_pd_attach_at_9v_returns_to_5v_and_ends_the_attach() {
+    reread_attach_then_finished();
+    attach_after_reread(2, 9000);
+    CHECK_EQ(fusb302::reread_abort(), true);
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    push_frame(0xE0, ctl_msg(3, 5), {});     // the way back to 5 V is Accepted and PS_RDY'd, then the Rd goes
+    push_frame(0xE0, ctl_msg(6, 6), {});
+    settle_ms(6000);
+    check_rd_gone(false);
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
+    clean_up_rd_tests();
+}
+void test_abort_after_pd_attach_and_pd_release_ends_the_attach() {
+    reread_attach_then_finished();
+    attach_after_reread(1, 5000);
+    fusb302::sink_release();
+    settle_ms(40000);                        // the 5 V attach stays up: it is the lab's now, not the re-read's
+    CHECK_EQ(sw0_rd() != 0, true);
+    check_abort_ends_the_attach();
+    clean_up_rd_tests();
+}
+// A finished re-read whose Rd is still up inside its own linger: `--abort` ends it at once.
+void test_abort_after_a_finished_reread_ends_the_attach_at_once() {
+    reread_attach_then_finished();
+    CHECK_EQ(sw0_rd() != 0, true);
+    CHECK_EQ(fusb302::reread_abort(), true);
+    settle_ms(6000);
+    check_rd_gone(false);
+    CHECK_EQ(usb_has("[REREAD] attach released"), true);
+    clean_up_rd_tests();
+}
+// Nothing of the lab's held: a no-op that still answers true.
+void test_abort_with_nothing_held_is_a_no_op() {
+    reread_style_boot();
+    CHECK_EQ(fusb302::reread_abort(), true);
+    settle_ms(2000);
+    CHECK_EQ(usb_has("[REREAD] attach released"), false);
+    CHECK_EQ(usb_has("lab-held attach adopted"), false);
+    clean_up_rd_tests();
+}
+// A run owns the line: refused, nothing changed, and the run's attach stays.
+void test_abort_is_refused_while_a_run_owns_the_line() {
+    reread_attach_then_finished();
+    attach_after_reread(1, 5000);
+    fusb302::set_run_owner(true);
+    CHECK_EQ(fusb302::reread_abort(), false);
+    settle_ms(70000);
+    CHECK_EQ(sw0_rd() != 0, true);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    CHECK_EQ(usb_has("[REREAD] attach released"), false);
+    fusb302::set_run_owner(false);
+    clean_up_rd_tests();
+}
+// A real sink inline: refused, its Rd is never touched.
+void test_abort_is_refused_inline() {
+    reread_style_boot();
+    fusb302::set_inline(true);
+    CHECK_EQ(fusb302::reread_abort(), false);
+    fusb302::set_inline(false);
+    clean_up_rd_tests();
+}
+
 // pd-reread --ra on ... then `--ra off --line 0` and --abort: PC13 low, Rd off, contract gone.
 void test_ra_off_then_abort_releases_rd() {
     spoof_hook_on();
@@ -4336,6 +4413,13 @@ int main() {
     test_a_reread_nobody_took_over_still_releases_after_the_linger();
     test_a_request_then_a_soft_reset_after_a_reread_is_not_released();
     test_the_release_never_fires_while_a_run_owner_is_set();
+    test_abort_after_pd_attach_on_the_rereads_pdo_ends_the_attach();
+    test_abort_after_pd_attach_at_9v_returns_to_5v_and_ends_the_attach();
+    test_abort_after_pd_attach_and_pd_release_ends_the_attach();
+    test_abort_after_a_finished_reread_ends_the_attach_at_once();
+    test_abort_with_nothing_held_is_a_no_op();
+    test_abort_is_refused_while_a_run_owns_the_line();
+    test_abort_is_refused_inline();
     test_cable_session_exchanges_run_with_vconn_up_and_restore_after();
     test_cable_session_without_a_cable_never_calls_the_body();
     test_cable_session_is_refused_like_the_scan();

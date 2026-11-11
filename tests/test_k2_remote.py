@@ -1251,6 +1251,15 @@ class ActivePd(unittest.TestCase):
         kr.cmd_pd_reread(link, self.args(mask=None, wait=1, line=0), sleep=lambda s: None)
         self.assertEqual([c[1][:1] for c in link.calls[:2]], [bytes([4]), bytes([1])])
 
+    def test_reread_refusal_names_the_owner(self):
+        # `pd-reread --abort` (and a start) answer Busy while a charger test, PD Stress or twin run owns the link or a far
+        # sink is inline: the text says so and that nothing was changed.
+        text = str(kr.RemoteError(kr.STATUS_BUSY, kr.CMD_PD_REREAD))
+        self.assertIn("owns the link", text)
+        self.assertIn("inline", text)
+        self.assertIn("nothing was changed", text)
+        self.assertNotIn("owns the link", str(kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_PD_REREAD)))
+
     def test_reread_decodes_the_attach_flags(self):
         a = kr.decode_reread(bytes([1, 0, 15, 0, 0, 0, 0, 0, 2]))   # waiting for the contract
         self.assertEqual((a["state"], a["attaching"], a["attach_failed"], a["avs"]), ("running", True, False, False))

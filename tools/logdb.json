@@ -547,6 +547,8 @@
   "550": "[STRESS] resume dropped: %s\n",
   "551": "[STRESS] resume at sequence %u after reboot %u%s\n",
   "552": "[STRESS] resume refused: %s\n",
-  "553": "[REREAD] attach taken over: Rd %d, contract %d stay with the new owner\n"
+  "553": "[REREAD] attach taken over: Rd %d, contract %d stay with the new owner\n",
+  "554": "[RMT] reread abort\n",
+  "555": "[REREAD] abort: lab-held attach adopted, Rd and contract released\n"
  }
 }

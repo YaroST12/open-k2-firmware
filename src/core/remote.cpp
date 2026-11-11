@@ -476,8 +476,9 @@ remote::RereadResult Remote::reread(uint8_t op, uint8_t mask) {
     if (op == 1) {
         K2LOG("[RMT] reread start mask=0x%02X\n", static_cast<unsigned>(mask));
         if (!fusb302::reread_start(mask)) { r.status = remote::Status::Busy; return r; }
-    } else if (op == 2) {
-        fusb302::reread_abort();
+    } else if (op == 2) {   // stop a re-read and release the lab attach, whoever made it; Busy = a run or a far sink owns the line, nothing changed
+        K2LOG("[RMT] reread abort\n");
+        if (ui_.ports_busy() || !fusb302::reread_abort()) { r.status = remote::Status::Busy; return r; }
     } else if (op == 3) {
         fusb302::set_sink_cap_ext_mode(static_cast<pd::SinkCapExtMode>(mask));
     } else if (op == 4) {   // the next run's attach scan may take only this line (0 = normal)
