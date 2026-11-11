@@ -18,3 +18,12 @@ struct SinkWork {
     unsigned long long pixels = 0, fill_pixels = 0;
 };
 extern SinkWork g_sink_work;
+// Overdraw meter (panel mode only, not screenshot sinks): per-pixel write counts since lcd_meter_reset(). The full-screen
+// lcd::fill() (the clear before a repaint) is not metered, like the clear subtracted from the hardware readings.
+extern unsigned g_meter_sent;      // pixels sent since the reset
+extern unsigned g_meter_unique;    // distinct panel pixels written at least once since the reset
+void lcd_meter_reset();
+const uint8_t *lcd_meter_writes();   // per pixel (240*240, y * 240 + x): writes since the reset, saturating at 255
+// What was written to one pixel row span more than once: rows y0..y1-1, x0..x1-1.
+unsigned lcd_meter_rewritten(int x0, int y0, int x1, int y1);   // sum over the area of (writes - 1) for pixels written twice or more
+void lcd_meter_trace_dump(const char *label);   // K2_OVERDRAW_TRACE=1: print and clear the rewrite call stacks
