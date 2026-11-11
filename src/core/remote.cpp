@@ -815,10 +815,11 @@ struct WipeEnv {
 
 remote::FactoryWipeInfo Remote::factory_wipe(uint8_t reset_mode) {
     if (ui_.charger_test_busy()) K2LOG("[WIPE] note: a charger test was running\n");
+    const bool grown = fs::grown();          // the run is part of the volume this boot: it goes too
     K2LOG("[WIPE] factory wipe: %u volume sectors + our own legacy pages, reset=%s\n",
-          static_cast<unsigned>(factory_wipe::kFsSectors), reset_mode == 1 ? "iwdg" : "sys");
+          static_cast<unsigned>(grown ? flash::kFsGrownBlocks : factory_wipe::kFsSectors), reset_mode == 1 ? "iwdg" : "sys");
     WipeEnv env;
-    const factory_wipe::Result r = factory_wipe::run(env);
+    const factory_wipe::Result r = factory_wipe::run(env, grown);
     remote::FactoryWipeInfo i;
     i.err = static_cast<uint8_t>(r.err);
     i.sectors = r.sectors; i.erased = r.erased; i.verified = r.verified; i.failed = r.failed;

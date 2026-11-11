@@ -19,7 +19,7 @@ bool g_imported = false;
 void import_legacy(fs::Fs& f) {
     if (g_imported) return;
     g_imported = true;
-    if (f.exists(kPath)) return;
+    if (f.exists(kPath) || fs::legacy_done()) return;   // after the wipe the page may be a volume block (grown volume)
     std::array<std::uint8_t, 8> r{};
     std::memcpy(r.data(), flash::store_view(kLegacyAddr), r.size());
     if (std::memcmp(r.data(), kMagic.data(), kMagic.size()) != 0) return;

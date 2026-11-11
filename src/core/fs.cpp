@@ -63,7 +63,8 @@ const char* err_name(Err e) {
     return "?";
 }
 
-Fs::Fs(BlockDevice& dev, std::uint32_t block_count) : dev_(dev), blocks_(block_count) {
+Fs::Fs(BlockDevice& dev, std::uint32_t block_count, std::uint32_t grown_blocks)
+    : dev_(dev), blocks_(block_count), grown_(grown_blocks > block_count ? grown_blocks : 0) {
     cfg_.context = &dev_;
     cfg_.read = cb_read;
     cfg_.prog = cb_prog;
@@ -86,15 +87,40 @@ Fs::Fs(BlockDevice& dev, std::uint32_t block_count) : dev_(dev), blocks_(block_c
 Err Fs::mount() {
     if (mounted_) return Err::Ok;
     changed();
-    const Err e = map(lfs_mount(&lfs_, &cfg_));
+    // littlefs takes the size from the superblock only when the config says 0, and then trusts any count it finds; an
+    // explicit count refuses a mismatch (LFS_ERR_INVAL) after reading just the superblock pair. So: the base size, then
+    // the grown one.
+    cfg_.block_count = blocks_;
+    int r = lfs_mount(&lfs_, &cfg_);
+    if (r == LFS_ERR_INVAL && grown_ != 0) {
+        cfg_.block_count = grown_;
+        r = lfs_mount(&lfs_, &cfg_);
+    }
+    const Err e = map(r);
     mounted_ = e == Err::Ok;
     return e;
 }
 
-Err Fs::format() {
+Err Fs::format(std::uint32_t blocks) {
     unmount();
     changed();
+    if (blocks == 0) blocks = blocks_;
+    if (blocks != blocks_ && blocks != grown_) return Err::Invalid;
+    cfg_.block_count = blocks;
     return map(lfs_format(&lfs_, &cfg_));
+}
+
+Err Fs::grow() {
+    if (!mounted_) return Err::NotReady;
+    if (grown_ == 0) return Err::Invalid;
+    if (lfs_.block_count == grown_) return Err::Ok;
+    changed();
+    const Err e = map(lfs_fs_grow(&lfs_, grown_));
+    if (e != Err::Ok) {   // lfs_fs_grow sets the new size before its commit: let the superblock decide it again
+        unmount();
+        mount();
+    }
+    return e;
 }
 
 Err Fs::mount_or_format(bool& formatted) {
