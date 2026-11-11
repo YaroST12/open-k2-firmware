@@ -14,6 +14,8 @@
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/handback.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/loop_stats.hpp"
+#include "k2/core/paint_meter.hpp"
 #include "k2/core/rd_comeback.hpp"
 #include "k2/core/remote.hpp"
 #include "k2/core/rescan.hpp"
@@ -169,7 +171,11 @@ uint32_t g_stack_lowest = kStackLowBytes;
 void idle_hook() {   // drain PD frames during long draws (tSenderResponse ~30 ms)
     static uint32_t last;
     const uint32_t t = k2::systick::millis();
-    if (t != last) { last = t; k2::fusb302::service(); k2::fctrig::service_ufcs(); k2::fctrig::service_hs(); }
+    if (t != last) {
+        last = t;
+        k2::loopstat::stats.service.note(t);   // instrumentation: the PD service cadence inside a paint
+        k2::fusb302::service(); k2::fctrig::service_ufcs(); k2::fctrig::service_hs();
+    }
     // Unattached, poll() does not run during a long redraw (a Home repaint as VBUS appears is ~150 ms): read VBUS here and
     // let a rise kick the CC scan, or the source's offers ~130 ms after its VBUS go by unrouted (fusb302.hpp scan_service).
     static uint32_t last_scan;
@@ -196,6 +202,9 @@ void begin(Context& ctx) {
 
 void pass() {
     Context& c = *g_ctx;
+    const uint32_t pass_t0_us = k2::systick::micros();          // instrumentation (k2/core/loop_stats.hpp): this pass's length
+    const uint64_t pass_px0 = k2::paint::meter.px_count();      // and the pixels it sent
+    k2::loopstat::stats.loop.note(k2::systick::millis());
     k2::gap::loop.note(k2::systick::millis());   // the longest iteration of a charger-test row ([CT] gap)
     k2::usb::poll();
     if (k2::usbcfg::current.drive && k2::msc::io()) k2::usb::poll();   // READ10 renders here, never under a paint
@@ -220,6 +229,7 @@ void pass() {
     const uint32_t now = k2::systick::millis();
     if (now != g_last_ms) {                     // sample buttons once per millisecond
         g_last_ms = now;
+        k2::loopstat::stats.service.note(now);
         k2::fusb302::service();
         for (int i = 0; i < 4; i++) {
             const Button b = static_cast<Button>(i);
@@ -262,6 +272,8 @@ void pass() {
         g_last_heartbeat_ms = now;
         heartbeat(now, g_press_count, ++g_heartbeats);
     }
+    k2::loopstat::stats.note_pass(c.ui.page_index(), k2::systick::micros() - pass_t0_us,
+                                  static_cast<uint32_t>(k2::paint::meter.px_count() - pass_px0));
 }
 
 }  // namespace k2::mainloop
