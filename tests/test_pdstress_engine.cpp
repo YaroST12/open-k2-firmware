@@ -78,6 +78,9 @@ struct Sim : Env {
     std::uint32_t hold_until = 0;
     unsigned nreq = 0;
     unsigned refuse = 0;   // refuse this many request() calls with Busy
+    int boundary_calls = 0;
+    std::uint32_t boundary_open_at = 0;   // boundary_ok() answers true from this time on (0 = always)
+    bool boundary_ok(std::uint32_t t) override { ++boundary_calls; return t >= boundary_open_at; }
 
     Sim() {
         s.attached = true;
@@ -853,9 +856,49 @@ void ready_pace_survives_a_busy_sink() {
     CHECK_EQ(r.total_events(), 0);
 }
 
+// A sequence boundary is where the session writes its journal: the engine holds the first step of a sequence until the Env says the
+// write is done (or the link was too busy for one), and never longer than kBoundaryMs.
+void boundary_hold_waits_for_the_env() {
+    Rig r;
+    r.o = only(Seq::Ladder, 20);
+    r.sim.boundary_open_at = r.sim.now + 1500;
+    CHECK_EQ(int(r.start()), int(StartResult::Ok));
+    r.run(1400);
+    CHECK_EQ(r.sim.reqs.size(), size_t(0));
+    CHECK_COND(r.sim.boundary_calls > 0);
+    r.run(3000);
+    CHECK_COND(r.sim.reqs.size() > 0);
+    CHECK_COND(r.sim.reqs[0].at >= 1000 + 1500);
+}
+
+void boundary_hold_is_bounded() {
+    Rig r;
+    r.o = only(Seq::Ladder, 20);
+    r.sim.boundary_open_at = 0xFFFFFFFFu;   // the Env never says yes
+    CHECK_EQ(int(r.start()), int(StartResult::Ok));
+    r.run(kBoundaryMs - 100);
+    CHECK_EQ(r.sim.reqs.size(), size_t(0));
+    r.run(3000);
+    CHECK_COND(r.sim.reqs.size() > 0);
+}
+
+// Every sequence start is a boundary, so the hold is asked at least once per sequence.
+void boundary_hold_per_sequence() {
+    Rig r;
+    r.o.mask = seq_bit(Seq::Ladder) | seq_bit(Seq::Reannounce) | seq_bit(Seq::SoftReset);
+    r.o.cycles_pct = 20;
+    CHECK_EQ(int(r.start()), int(StartResult::Ok));
+    r.run(300000);
+    CHECK_COND(r.eng.finished());
+    CHECK_COND(r.sim.boundary_calls >= 3);
+}
+
 }  // namespace
 
 int main() {
+    boundary_hold_waits_for_the_env();
+    boundary_hold_is_bounded();
+    boundary_hold_per_sequence();
     start_refusals();
     clean_run_scores_zero();
     full_default_run_is_clean();

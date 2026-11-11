@@ -111,6 +111,9 @@ public:
     virtual bool get_caps() = 0;                        // solicited Get_Source_Cap; false = refused
     virtual bool soft_reset() = 0;                      // Soft_Reset on the wire; false = refused
     virtual void release() = 0;                         // back to 5 V
+    // Asked at every poll while a sequence has just begun, before its first step: true = go on. The firmware writes its journal here
+    // (on a quiet link) and says false until that is done. The engine waits at most kBoundaryMs.
+    virtual bool boundary_ok(std::uint32_t /*now_ms*/) { return true; }
     // Reporting hooks (the firmware logs [STRESS] lines and journals from them; the defaults do nothing).
     virtual void on_seq_start(Seq, std::uint8_t /*idx*/, std::uint8_t /*total*/, std::uint16_t /*steps*/) {}
     virtual void on_seq_end(Seq, const Counts&, bool /*skipped*/) {}
@@ -122,7 +125,8 @@ public:
 // Timing constants of the engine itself (ms).
 inline constexpr std::uint32_t kStepMaxMs = 10000;       // a Request not resolved by the sink after this: the engine gives up (Stuck)
 inline constexpr std::uint32_t kRecoverMs = 10000;       // VBUS below the dropout line and not back by then: no recovery
-inline constexpr std::uint32_t kBusyMs = 3000;           // a refused-for-now Request is retried this long
+inline constexpr std::uint32_t kBoundaryMs = 2000;       // the longest the first step of a sequence waits for the Env's journal write
+inline constexpr std::uint32_t kBusyMs = 3000;          // a refused-for-now Request is retried this long
 inline constexpr std::uint32_t kTopDownMs = 1000;        // at most one down-step from the top level per second
 inline constexpr std::uint32_t kReleaseMs = 6000;        // the final 5 V release must be confirmed by then
 inline constexpr std::uint32_t kStartMs = 10000;         // a contract must exist by then
@@ -164,6 +168,7 @@ public:
     const Record& record() const { return rec_; }
     Counts total() const { return rec_.total(kMaxSeqs); }
     std::uint8_t reboots() const { return resume_.losses; }
+    const Resume& resume() const { return resume_; }          // the reboot accounting the journal carries (next / elapsed are the caller's)
     std::uint8_t given_up(Seq s) const { return resume_.given_up[static_cast<std::size_t>(s)]; }
     // The order list (what will run), for status and the journal.
     Seq order(std::uint8_t i) const { return order_[i]; }
@@ -217,6 +222,8 @@ private:
     // the transition in flight / just completed
     Step cur_step_{};
     bool establishing_ = false, have_step_ = false;
+    bool boundary_ = false;                // a sequence has just begun: its first step waits for Env::boundary_ok()
+    std::uint32_t boundary_ms_ = 0;
     std::uint32_t issue_ms_ = 0, busy_since_ = 0;
     std::uint32_t req_us0_ = 0, ps_rdy_us0_ = 0, ps_rdy_at0_ = 0, caps_rx0_ = 0, req_us_ = 0;
     std::uint16_t prev_mv_ = 0, target_ = 0;
@@ -335,6 +342,8 @@ inline bool Engine::begin_seq(std::uint32_t now) {
         have_step_ = false;
         if (!resume_.seq_losses[qi]) reset(rec_.rec(qi));   // a sequence resumed after a reboot keeps what it had
         env_->on_seq_start(q, std::uint8_t(cur_ + 1), n_order_, len_);
+        boundary_ = true;
+        boundary_ms_ = now;
         return true;
     }
     return false;
@@ -520,6 +529,12 @@ inline void Engine::pace(std::uint32_t now, const Snapshot& s) {
     if (step_ >= len_) {
         end_seq(false);
         if (!begin_seq(now)) { finish(Stop::Done, now, true); return; }
+    }
+    // A sequence boundary: the Env may hold the first step for its journal write (it asks for a quiet link); bounded, so a chatty
+    // source cannot stall the run.
+    if (boundary_) {
+        if (!env_->boundary_ok(now) && now - boundary_ms_ < kBoundaryMs) return;
+        boundary_ = false;
     }
     auto st = step(order_[cur_], step_, env_->caps(), L_, cycles_, env_->epr_proof(), s.self_powered);
     if (!st) { ++step_; return; }
