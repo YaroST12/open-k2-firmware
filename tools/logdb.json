@@ -520,6 +520,15 @@
   "523": "[SNIFF] stopped: data traffic (%u edges in %u ms)\n",
   "524": "[VOOC] monitor paused: data traffic (%u edges in %u ms), retry in %u ms\n",
   "525": "[VOOC] monitor on (inline: D+ PA7 / D- PB1, PB2 floating)\n",
-  "526": "[VOOC] monitor off sessions=%u frames=%u lines=%s\n"
+  "526": "[VOOC] monitor off sessions=%u frames=%u lines=%s\n",
+  "527": "[STORE] twin-save -> %s #%u%s\n",
+  "528": "[STORE] twin-remove #%u -> %s\n",
+  "529": "[STORE] twin-rename #%u -> %s\n",
+  "530": "[TWIN] live #%u %s %u mV skip=%u\n",
+  "531": "[TWIN] live end %s\n",
+  "532": "[TWIN] predict #%u kind=%u %u mV %u mA want=%u mW lim=%u obs=%u\n",
+  "533": "[TWIN] live start n=%u -> %s\n",
+  "534": "[TWIN] learn identify -> %u vid=%04x pdos=%u modes=%u\n",
+  "535": "[TWIN] learn sniff -> %u vid=%04x pdos=%u obs=%u\n"
  }
 }
