@@ -301,6 +301,7 @@ public:
         std::uint16_t len = 0, pre = 0;
         bool filling = false;
         bool stored = false;         // loaded from flash after a boot: at_ms is meaningless
+        bool keep = false;           // a finished capture still waiting for its flash write: a new capture takes another slot
         std::array<std::uint8_t, Bytes> buf{};
     };
 
@@ -311,17 +312,14 @@ public:
         auto& cd = cooldown_[std::size_t(t) % 8];
         if (cd.set && now_ms - cd.at < kTriggerCooldownMs) return false;
         cd = {true, now_ms};
-        Slot* pick = &slots_[0];
-        for (auto& s : slots_) {
-            if (s.seq == 0) { pick = &s; break; }
-            if (s.seq < pick->seq) pick = &s;
-        }
+        Slot* pick = pick_slot();
         pick->trigger = t;
         pick->seq = ++seq_;
         pick->at_ms = now_ms;
         pick->until_ms = now_ms + kCapPostMs;
         pick->filling = true;
         pick->stored = false;
+        pick->keep = false;
         const auto r = ring.read(ring.cursor_for_last(pre_max < Bytes ? pre_max : Bytes), pick->buf);
         pick->len = std::uint16_t(r.bytes);
         pick->pre = pick->len;
@@ -332,16 +330,13 @@ public:
     // comes from the ring, no cooldown applies. Returns the slot index.
     template <std::size_t N>
     std::size_t begin_open(Trigger t, std::uint32_t now_ms, const Ring<N>& ring, std::size_t pre_max) {
-        Slot* pick = &slots_[0];
-        for (auto& s : slots_) {
-            if (s.seq == 0) { pick = &s; break; }
-            if (s.seq < pick->seq) pick = &s;
-        }
+        Slot* pick = pick_slot();
         pick->trigger = t;
         pick->seq = ++seq_;
         pick->at_ms = pick->until_ms = now_ms;
         pick->filling = false;
         pick->stored = false;
+        pick->keep = false;
         const auto r = ring.read(ring.cursor_for_last(pre_max < Bytes ? pre_max : Bytes), pick->buf);
         pick->len = pick->pre = std::uint16_t(r.bytes);
         return std::size_t(pick - slots_.data());
@@ -358,16 +353,13 @@ public:
     // Put a capture read back from flash into the oldest slot. It never fills and carries no age.
     bool restore(Trigger t, std::span<const std::uint8_t> data, std::size_t pre) {
         if (data.size() > Bytes) return false;
-        Slot* pick = &slots_[0];
-        for (auto& s : slots_) {
-            if (s.seq == 0) { pick = &s; break; }
-            if (s.seq < pick->seq) pick = &s;
-        }
+        Slot* pick = pick_slot();
         pick->trigger = t;
         pick->seq = ++seq_;
         pick->at_ms = pick->until_ms = 0;
         pick->filling = false;
         pick->stored = true;
+        pick->keep = false;
         pick->len = std::uint16_t(data.size());
         pick->pre = std::uint16_t(pre < data.size() ? pre : data.size());
         for (std::size_t i = 0; i < data.size(); i++) pick->buf[i] = data[i];
@@ -385,11 +377,25 @@ public:
     void tick(std::uint32_t now_ms) {
         for (auto& s : slots_) if (s.filling && std::int32_t(now_ms - s.until_ms) >= 0) s.filling = false;
     }
-    void clear() { for (auto& s : slots_) { s.seq = 0; s.trigger = Trigger::None; s.len = 0; s.filling = false; s.stored = false; } cooldown_ = {}; }
+    void clear() { for (auto& s : slots_) { s.seq = 0; s.trigger = Trigger::None; s.len = 0; s.filling = false; s.stored = false; s.keep = false; } cooldown_ = {}; }
     const Slot& slot(std::size_t i) const { return slots_[i]; }
     static constexpr std::size_t count() { return Slots; }
+    // Protects a slot's capture from reuse while a newer capture can take another slot (see Slot::keep).
+    void keep(std::size_t i, bool on) { if (i < Slots) slots_[i].keep = on; }
 
 private:
+    // The slot a new capture takes: an empty one, else the oldest that is not kept, else the oldest of all (a run that
+    // makes more captures than there are slots still loses the oldest, which the persister counts).
+    Slot* pick_slot() {
+        Slot* oldest = &slots_[0];
+        Slot* unkept = nullptr;
+        for (auto& s : slots_) {
+            if (s.seq == 0) return &s;
+            if (s.seq < oldest->seq) oldest = &s;
+            if (!s.keep && (!unkept || s.seq < unkept->seq)) unkept = &s;
+        }
+        return unkept ? unkept : oldest;
+    }
     struct Cool { bool set = false; std::uint32_t at = 0; };
     std::array<Slot, Slots> slots_{};
     std::array<Cool, 8> cooldown_{};
@@ -451,6 +457,9 @@ struct CaptureInfo {
 };
 CaptureInfo capture_info(std::size_t slot);
 std::span<const std::uint8_t> capture_data(std::size_t slot);
+// A finished capture still waiting for its flash write is kept: a new capture takes another slot and only reuses a kept one
+// when every slot is kept (the persister's `dropped` count). The flag clears when the slot is reused or cleared.
+void keep_capture(std::size_t slot, bool on);
 
 void rx(std::uint8_t token, std::uint16_t header, std::span<const std::uint8_t> objs_and_crc);
 void rx_bad(std::uint8_t token, std::uint8_t b1, std::uint8_t b2);

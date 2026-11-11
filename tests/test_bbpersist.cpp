@@ -302,5 +302,56 @@ int main() {
         CHECK_EQ(p.status().skipped, 2u);
         CHECK_EQ(disk.progs + disk.erases, 0u);
     }
+    {   // a run's rare captures: kRareBudget go out at once, the rest wait kept in their slots (a Contract capture takes
+        // another slot), a full set of waiting captures loses its oldest and counts it, and the end of the run writes one
+        // capture per poll()
+        FakeFlash f;
+        bbpersist::Persister p(f.fs);
+        pdtrace::init();
+        pdtrace::clear_captures();
+        p.init();
+        std::uint32_t t = 1000000;
+        const auto settle_at = [&](std::uint32_t at) { g_stub.ms = at + 600 + kQuiet + 10; p.hold_run(); p.poll(); };
+        const auto contract = [&](std::uint32_t at, std::uint8_t pos) {
+            g_stub.ms = at - 300;
+            msg(0x7101, {0x0001912C, 0x0002D12C});
+            pdtrace::sink(0, 0, true, false, pos);
+            g_stub.ms = at + 600;
+            msg(0x0001, {});
+        };
+        for (unsigned k = 0; k < 4; k++, t += 1500) { capture(t, 0x7000 + k); settle_at(t); }
+        CHECK_EQ(p.status().entries, int(bbpersist::kRareBudget));   // two hard resets written, two waited
+        CHECK_EQ(p.status().waiting, 2u);
+        CHECK_EQ(p.status().deferred, 2u);
+        CHECK_EQ(p.status().dropped, 0u);
+        contract(t, 1);                                              // a per-row capture: it must not take a waiting slot
+        settle_at(t);
+        t += 1500;
+        CHECK_EQ(p.status().waiting, 3u);
+        CHECK_EQ(p.status().dropped, 0u);
+        CHECK_EQ(p.status().entries, int(bbpersist::kRareBudget));
+        contract(t, 2);                                              // every slot waits now: the oldest is overwritten
+        settle_at(t);
+        CHECK_EQ(p.status().dropped, 1u);
+        CHECK_EQ(p.status().waiting, 3u);
+        // the run ends: one save per poll, oldest first, nothing left waiting
+        g_stub.ms += bbpersist::kHoldLapseMs + 10;
+        const int before = p.status().entries;
+        p.poll();
+        CHECK_EQ(p.status().entries, before + 1);
+        p.poll();
+        CHECK_EQ(p.status().entries, before + 2);
+        p.poll();
+        CHECK_EQ(p.status().entries, before + 3);
+        CHECK_EQ(p.status().waiting, 0u);
+        p.poll();
+        CHECK_EQ(p.status().entries, before + 3);
+        // a new run gets its budget back
+        const std::uint32_t saves = p.status().saves;
+        t = g_stub.ms + 3000;
+        capture(t, 0x7100);
+        settle_at(t);
+        CHECK_EQ(p.status().saves, saves + 1);
+    }
     return test_report("test_bbpersist");
 }
