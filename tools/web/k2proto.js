@@ -176,6 +176,7 @@ var K2Proto = (function () {
     if (p[0] !== 1 && !modern) throw new FrameError("unsupported charger-test schema " + p[0]);
     var header = modern ? 42 : 15, page = modern ? 1 : 2, reasons = modern ? TEST_REASONS.length : 20;
     var total = p[11], current = p[12], start = p[13], n = p[14];
+    if (modern && p.length === 40 + 16 * n) header = 40;   // firmware up to v1.0-400: no ps_rdy timing bytes
     if (p[9] >= TEST_STATES.length || p[10] >= reasons || total > (modern ? 106 : 95) || current > total ||
         start > total || n > page || start + n > total || p.length !== header + 16 * n)
       throw new FrameError("invalid charger-test page shape");
@@ -190,7 +191,7 @@ var K2Proto = (function () {
       var avsSweep = !!(draft & 0x40000000);   // draft bit 30: the AVS deep sweep is on
       draft = draft & 0x3FFFFFFF;
       wire = p[23] & 3;
-      if ((runMask | draft) & ~TEST_ALL || stage >= TEST_STAGES.length || (p[39] & 15) > 11 || (p[40] & ~7))
+      if ((runMask | draft) & ~TEST_ALL || stage >= TEST_STAGES.length || (p[39] & 15) > 11 || (header === 42 && (p[40] & ~7)))
         throw new FrameError("invalid charger-test selection or evidence");
       out.selection = { run_mask: runMask, configured_mask: draft, pps_sweep: ppsSweep, avs_sweep: avsSweep,
                         run: TEST_ALGORITHMS.filter(function (_, i) { return runMask & (1 << i); }),
@@ -205,7 +206,7 @@ var K2Proto = (function () {
         monitor_mv: v.getUint16(26, true),
         physical_cable: { observed: !!(f & 32), max_mv: v.getUint16(28, true), max_ma: v.getUint16(30, true) },
         spoof_on: !!(f & 128), independent_revision_tested: false,
-        ps_rdy: { out_of_band: !!(p[40] & 1), inferred: !!(p[40] & 2), late: !!(p[40] & 4), worst_ms: p[41] * 20 },
+        ps_rdy: header === 42 ? { out_of_band: !!(p[40] & 1), inferred: !!(p[40] & 2), late: !!(p[40] & 4), worst_ms: p[41] * 20 } : null,
         pass_scope: "negotiation and measured voltage only; not rated-current/power or revision conformance"
       };
     }

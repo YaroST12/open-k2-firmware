@@ -197,6 +197,26 @@ class ChargerTest(unittest.TestCase):
         with self.assertRaises(kr.FrameError):
             kr.decode_charger_test(bytes(bad))
 
+    def test_schema2_old_40_byte_header_still_decodes(self):
+        # firmware up to v1.0-400 sends a 40-byte schema-2 header: no ps_rdy timing bytes. ct_start.py died on it.
+        old = HEADER2[:40]
+        r = kr.decode_charger_test(old)
+        self.assertEqual((r["schema"], r["stage"], r["count"], r["cursor"]), (2, "review", 0, 9))
+        self.assertEqual(r["evidence"]["pdo_count"], 7)
+        self.assertEqual(r["evidence"]["monitor_mv"], 36000)
+        self.assertIsNone(r["evidence"]["ps_rdy"])   # not reported by this firmware, which is not "no quirks"
+        paged = kr.decode_charger_test(page(old, 0, [ROW0]))
+        self.assertNotIn("PS_RDY quirks", kr.render("charger-test", r))
+        # the two shapes are told apart by length alone: 40/56 old, 42/58 new; the row decodes the same under both
+        new = kr.decode_charger_test(page(HEADER2, 0, [ROW0]))
+        self.assertEqual(new["evidence"]["ps_rdy"]["worst_ms"], 700)
+        self.assertEqual(paged["count"], 1)
+        self.assertEqual(paged["steps"], new["steps"])
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(HEADER2[:41])
+        with self.assertRaises(kr.FrameError):
+            kr.decode_charger_test(old + bytes(3))
+
     def test_schema2_draft_bit31_is_the_pps_sweep_flag(self):
         # remote_proto.hpp: draft_selected bit 31 = the PPS deep sweep on (an Options flag, not a test);
         # with the sweep on, status must still decode (hardware 7a1a5ed: "invalid charger-test selection")

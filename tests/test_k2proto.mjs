@@ -263,6 +263,22 @@ test("charger-test exact schema2 selection and retained evidence", () => {
   assert.deepEqual(e.selection.run, []); assert.deepEqual(e.steps, []);
 });
 
+// Firmware up to v1.0-400 sends a 40-byte schema-2 header (no ps_rdy timing bytes); the decoder tells the shapes
+// apart by length (40/56 old, 42/58 new) and reports ps_rdy as null for the old one.
+test("charger-test old 40-byte schema2 header still decodes", () => {
+  const old = TEST_HEADER2.slice(0, 40);
+  const r = P.decodeChargerTest(old);
+  assert.equal(r.schema, 2); assert.equal(r.stage, "review");
+  assert.equal(r.evidence.pdo_count, 7); assert.equal(r.evidence.monitor_mv, 36000);
+  assert.equal(r.evidence.ps_rdy, null);
+  const paged = P.decodeChargerTest(testPage(old, 0, [TEST_ROWS[0]]));
+  const fresh = P.decodeChargerTest(testPage(TEST_HEADER2, 0, [TEST_ROWS[0]]));
+  assert.equal(paged.count, 1);
+  assert.deepEqual(paged.steps, fresh.steps);
+  assert.equal(fresh.evidence.ps_rdy.worst_ms, 700);
+  assert.throws(() => P.decodeChargerTest(TEST_HEADER2.slice(0, 41)), P.FrameError);
+});
+
 test("charger-test schema2 pages, error detail keeps algorithm identity", async () => {
   const { remote, sent } = chargerRig([TEST_HEADER2, ...TEST_ROWS.map((r, i) => testPage(TEST_HEADER2, i, [r])), TEST_HEADER2]);
   const r = await remote.chargerTest("results");
