@@ -627,6 +627,15 @@ public:
     // The deep sweep (ROADMAP "PPS deep sweep"): the finished rows (one per APDO) and the whole point record
     // (one int16 error per point). The results strip, the card and the remote read it through this view.
     ctsweep::View sweep_view() const { return {{sweep_rows_.data(), n_sweep_rows_}, {sweep_err_.data(), sweep_used_}}; }
+    // PD Stress borrows the point buffer for its own record (no second 1.3 KB of .bss). Refused while a test runs; the last test's sweep
+    // plot is gone afterwards (the view reads empty), which the caller says out loud. Empty span = refused.
+    std::span<int16_t> claim_sweep_record() {
+        if (busy()) return {};
+        n_sweep_rows_ = 0;
+        sweep_used_ = 0;
+        sweep_first_ = sweep_n_ = 0;
+        return {sweep_err_.data(), sweep_err_.size()};
+    }
     // The sweep row under test, live: its point range, the setpoint in flight and the last recorded point (the Running view).
     ctsweep::Live sweep_live() const {
         ctsweep::Live l;

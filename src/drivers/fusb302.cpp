@@ -2507,6 +2507,18 @@ pd::Err refresh_source_caps() {
     if (g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active()) return pd::Err::Busy;
     return g_sink.request_source_caps(systick::millis());
 }
+// A Soft_Reset on a live contract (PD Stress, the legal-but-risky probe). The sink does what the unit hold does without the wire work: the
+// contract is dropped, the MessageID counters restart, and the caps the source answers with get PDO 1 at 5 V from the acked-caps path. The
+// same refusals as the Refresh, plus: only from a settled contract, never on top of a transition in flight.
+bool sink_soft_reset() {
+    if (g_active_cc == 0 || inline_now() || g_legacy_only) return false;
+    if (g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active()) return false;
+    if (g_sink.status().state != pd::SinkState::Ready) return false;
+    g_sink.soft_reset(systick::millis());
+    trace_sink();
+    K2LOG("[PD] Soft_Reset sent on a live contract\n");
+    return true;
+}
 std::uint32_t caps_count() { return g_caps_count; }
 bool legacy_only_active() { return g_legacy_only; }
 

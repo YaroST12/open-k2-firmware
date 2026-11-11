@@ -282,6 +282,9 @@ bool get_source_caps(bool confirmed = false);
 // (pd::Sink::request_source_caps). Ok = queued; Busy = refused (inline, PD-silent session, no CC attached, a trigger prepare or an
 // identify/probe/re-read running, or the gate says so). The answer shows as caps_count() moving.
 pd::Err refresh_source_caps();
+// Soft_Reset on a live, settled contract (PD Stress only): the contract drops, the source re-announces, the sink Requests PDO 1 at 5 V.
+// false = refused (no CC, inline, PD-silent session, an owner talking on the line, or the sink not in Ready).
+bool sink_soft_reset();
 // Source_Capabilities messages received since boot.
 std::uint32_t caps_count();
 // A charger-test legacy unit holds the line PD-silent (legacy_only(true)): a rescan changes nothing then.

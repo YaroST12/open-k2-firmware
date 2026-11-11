@@ -3920,6 +3920,26 @@ static void test_pps_deep_sweep_is_opt_in() {
     for (const auto& s : r.steps()) CHECK_EQ(ct::is_sweep(s), false);
     CHECK_EQ(r.sweep_view().rows.size(), 0u);
 }
+// PD Stress borrows the deep sweep's point buffer: refused while a run is on, empties the view when granted, hands out the whole buffer.
+static void test_claim_sweep_record_lends_the_point_buffer() {
+    Fake f;
+    ct::Runner r(f);
+    ct::Options o{.selected = ct::bit(A::Pps)}; o.pps_sweep = true;
+    CHECK_EQ(r.start(f.caps, o, f.in, true), ct::Reason::None);
+    f.tick(r, 30);   // running
+    CHECK_EQ(r.busy(), true);
+    CHECK_EQ(r.claim_sweep_record().size(), 0u);   // refused while a test runs
+    f.tick(r, 900000);
+    CHECK_EQ(r.state(), ct::State::Done);
+    CHECK_EQ(r.sweep_view().points.size() > 0, true);
+    const auto rec = r.claim_sweep_record();
+    CHECK_EQ(rec.size(), size_t(ctsweep::kMaxPoints));
+    CHECK_EQ(rec.size() >= 636u, true);   // the PD Stress record (kRecordWords) fits
+    CHECK_EQ(r.sweep_view().rows.size(), 0u);   // the old plot is gone, not misread through a foreign record
+    CHECK_EQ(r.sweep_view().points.size(), 0u);
+    rec[0] = 123;   // the span is writable and stays valid
+    CHECK_EQ(r.sweep_view().points.size(), 0u);
+}
 // ROADMAP "AVS deep sweep": opt-in via Options::avs_sweep, one kDetailSweep row per AVS APDO (algorithm SprAvs /
 // EprAvs), every 100 mV across the APDO (the AVS Request granularity) capped at the monitor ceiling, <= 1 A never
 // above the APDO's current or the cable. Same record, strip and summary as the PPS sweep.
@@ -6765,6 +6785,7 @@ int main() {
     test_pps_step_walk_passes_on_20mv_steps(); test_pps_step_walk_fails_when_steps_round_to_100mv(); test_pps_step_walk_fails_when_steps_are_ignored();
     test_pps_deep_sweep_records_every_point_and_the_fold_back(); test_pps_deep_sweep_stops_at_the_first_lost_source(); test_pps_deep_sweep_is_opt_in();
     test_sweep_live_follows_the_row_in_flight(); test_sweep_live_is_idle_without_a_sweep_row();
+    test_claim_sweep_record_lends_the_point_buffer();
     test_avs_deep_sweep_plans_and_runs_per_spr_avs_apdo(); test_avs_deep_sweep_epr_capped_at_the_monitor_ceiling();
     test_pps_step_walk_passes_a_noisy_step_and_fails_a_short_sum();
     test_pps_step_walk_waits_for_the_base_to_settle();
