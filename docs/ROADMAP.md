@@ -215,11 +215,15 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   (212/228 B) were not listed (b4c391fc); `cards list` may show more cards after the update. **That fix has a
   regression on 1.0.0-606:** 69 card files, and the index takes the first 64 in name order, so five of the newest cards
   (high-hex fingerprints) drop out of `cards list`, and three ids (53, 57, 58) are duplicated (they were reused while the old
-  files were invisible); `[BB] free=0`. Nothing deleted. Fix in progress on `k2/card-256`; no charger-test save on 606.
+  files were invisible); `[BB] free=0`. Nothing deleted. **Fixed** (fa248b6f, merged 3df20b8f): the index keeps the 64
+  newest stamps and a duplicate number goes to the older card; on 1.0.0-611, 64 cards, no duplicates, #53/#57/#58 kept.
+  All cards were then exported (outside the repo) and wiped from the K2 on 2026-11-12.
   `runs/2026-11-11-integ600-hw/cards-{before,after}.txt`. Evidence
   `runs/loop-survey/` (integ worktree).
-  **The space, part one: the volume grows from 90 to 145 blocks** (2026-11-12, `k2/fs-grow`, built and host-tested
-  only). After the legacy wipe, `fs::grow()` proves the 55 pages 0x080E4000..0x080FF800 blank, writes the intent
+  **The space, part one: the volume grows from 90 to 145 blocks** (2026-11-12, `k2/fs-grow`, merged 9fcfcc71;
+  **grown on hardware, 1.0.0-617:** `[BBSTORE] free=229376` = 112 free blocks, past the old 90; the run's pages and
+  the kept pages are byte-identical to the 2026-11-12 snapshot, since only the superblock in blocks 0/1 changed. The
+  `[FS] grown` line fell before the start of the log ring the stream reads back. Checks 4 and 5 below are still open). After the legacy wipe, `fs::grow()` proves the 55 pages 0x080E4000..0x080FF800 blank, writes the intent
   `/.grow`, opens that run in the flash guard and runs `lfs_fs_grow`; on any non-blank page it stays at 90 blocks. The
   kept pages 0x080E3800 and 0x080FF800 are refused by every erase and program, the factory wipe included; a power cut
   leaves 90 or 145 blocks, never a format (`tests/test_fs_grow.cpp`: 976 cut points). 64 cards + the 20-block journal
