@@ -113,6 +113,12 @@ struct Fake {
         out = probe_res;
         return Status::Ok;
     }
+    k2::raprobe::Result ra_res{}; Status ra_status = Status::Ok; int ra_pc = -1;
+    Status ra_probe(const k2::raprobe::Args &a, k2::raprobe::Result &out) {
+        calls++; ra_pc = a.vconn_pc;
+        out = ra_res;
+        return ra_status;
+    }
     LcdSnapshot lcd_snap{};
     LcdSnapshot debug_lcd() { calls++; return lcd_snap; }
     Status debug_fake_pdos(uint8_t n) { calls++; fake_n = n; return fake_status; }

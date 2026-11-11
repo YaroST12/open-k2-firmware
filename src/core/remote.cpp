@@ -972,6 +972,23 @@ remote::Status Remote::debug_cc_probe(const ccprobe::Args &a, ccprobe::Result &o
     return remote::Status::Ok;
 }
 
+// The silent-cable-chip probe (docs/K2_PORTS_SPEC.md, k2/pd/ra_probe.hpp). Raw samples only; the verdict is the classifier's.
+remote::Status Remote::ra_probe(const raprobe::Args &a, raprobe::Result &out) {
+    if (ui_.charger_test_busy()) {
+        K2LOG("[TEST] debug refused: test running\n");
+        out.refusal = static_cast<uint8_t>(raprobe::Refusal::Running);
+        return remote::Status::Busy;
+    }
+    K2LOG("[RAPROBE] start vconn_pc=%u\n", a.vconn_pc);
+    const raprobe::Refusal why = fusb302::ra_probe(a, cc_probe_vbus_mv, out);
+    // 1 inline, 2 contract, 3 Rd, 4 Ra mode, 5 an engine or the VCONN experiment running, 6 VBUS unknown, 7 VBUS up, 8 chip bus, 9 a source level on CC
+    if (why != raprobe::Refusal::None) K2LOG("[RAPROBE] refused reason=%u n=%u\n", unsigned(why), out.n);
+    else K2LOG("[RAPROBE] done n=%u flags=%u (1 aborted by VBUS, 2 restored) snapshot sw0=%02X sw1=%02X pc=%u vconn_pc=%u vbus_max=%u\n",
+               out.n, out.flags, out.sw0, out.sw1, out.pc, out.vconn_pc, out.vbus_max_mv);
+    for (unsigned i = 0; i < out.n && i < out.s.size(); i++) K2LOG("[RAPROBE] #%u cc1=%u cc2=%u\n", i, out.s[i].cc1_raw, out.s[i].cc2_raw);
+    return why == raprobe::Refusal::None ? remote::Status::Ok : remote::Status::Busy;
+}
+
 remote::VconnSnapshot Remote::debug_vconn(uint8_t op) {
     remote::VconnSnapshot s;
     s.ok = 1;

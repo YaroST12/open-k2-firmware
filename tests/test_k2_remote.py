@@ -348,6 +348,67 @@ class Decoders(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()):
                     kr.build_parser().parse_args(args)
 
+    def test_emarker_probe(self):
+        sent = []
+        # refusal 0, flags=restored, n=9, sw0=0, sw1=0x20, pc=6, vconn_pc=0, vbus_max=3 mV, then 9 raw cc1/cc2 pairs
+        raws = [(8, 2100), (8, 2101), (8, 2099),      # idle: the CC2 bias
+                (3560, 2100), (3561, 2101), (3562, 2100),   # VCONN on CC1: bare line
+                (8, 2100), (8, 2101), (8, 2102)]
+        reply = bytes([0, 2, 9, 0, 0x20, 6, 0]) + (3).to_bytes(2, "little") + b"".join(
+            a.to_bytes(2, "little") + b.to_bytes(2, "little") for a, b in raws)
+
+        class Link:
+            timeout_s = 1.0
+
+            def call(self, cmd, payload=b""):
+                sent.append((cmd, payload, self.timeout_s))
+                return kr.parse_response(rsp(cmd, 1, 0, reply))
+
+        link = Link()
+        a = kr.build_parser().parse_args(["emarker", "probe"])
+        r = kr.COMMANDS["emarker"](link, a)
+        self.assertEqual(sent[-1][:2], (kr.CMD_EMARKER_PROBE, b""))
+        self.assertGreaterEqual(sent[-1][2], 2.0)   # the K2 blocks for the ~330 ms plan
+        self.assertEqual(link.timeout_s, 1.0)       # restored
+        p = r["ra_probe"]
+        self.assertTrue(p["restored"])
+        self.assertFalse(p["aborted"])
+        self.assertEqual(p["snapshot"], {"sw0": "0x00", "sw1": "0x20", "pc": 6})
+        self.assertEqual((p["vconn_pc"], p["vbus_max_mv"]), (0, 3))
+        self.assertEqual(len(p["samples"]), 9)
+        s0, s3 = p["samples"][0], p["samples"][3]
+        self.assertEqual((s0["phase"], s0["t_ms"], s0["cc1_raw"], s0["cc2_raw"], s0["cc2_mv"]), ("idle", 2, 8, 2100, 1691))
+        self.assertEqual((s3["phase"], s3["t_ms"], s3["cc1_mv"]), ("vconn_cc1", 2, 2868))
+        self.assertEqual(p["samples"][8]["phase"], "vconn_cc2")
+        self.assertEqual(p["samples"][8]["t_ms"], 100)
+        text = kr.render("emarker", r)
+        self.assertIn("restored", text)
+        self.assertIn("vconn_cc1", text)
+        # the optional argument: PC14/15 closed for the VCONN phases
+        a = kr.build_parser().parse_args(["emarker", "probe", "--vconn-pc", "6"])
+        kr.COMMANDS["emarker"](link, a)
+        self.assertEqual(sent[-1][1], bytes([6]))
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                kr.build_parser().parse_args(["emarker", "probe", "--vconn-pc", "8"])
+        # no reading is None, a short frame is a protocol error
+        reply = bytes([0, 0, 1, 0, 0, 6, 0]) + (3).to_bytes(2, "little") + (0xFFFF).to_bytes(2, "little") + (5).to_bytes(2, "little")
+        s = kr.COMMANDS["emarker"](link, kr.build_parser().parse_args(["emarker", "probe"]))["ra_probe"]["samples"][0]
+        self.assertEqual((s["cc1_raw"], s["cc1_mv"], s["cc2_raw"]), (None, None, 5))
+        reply = bytes([0, 2, 9, 0, 0x20, 6, 0, 3])
+        with self.assertRaises(kr.FrameError):
+            kr.COMMANDS["emarker"](link, kr.build_parser().parse_args(["emarker", "probe"]))
+
+    def test_emarker_probe_refusals_name_their_reason(self):
+        for code, word in ((1, "inline"), (2, "contract"), (3, "Rd"), (6, "VBUS reading"), (7, "VBUS is 1 V or more"),
+                           (9, "source level")):
+            e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_EMARKER_PROBE, bytes([code]))
+            self.assertIn(word, str(e))
+        e = kr.RemoteError(kr.STATUS_BAD_ARG, kr.CMD_EMARKER_PROBE, bytes([2]))
+        self.assertIn("PC13", str(e))
+        e = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_EMARKER_PROBE, b"")
+        self.assertIn("not passive", str(e))
+
     def test_direction_and_magnitude_readout(self):
         def st(ma, mw):
             return {"vbus_mv": 20000, "current_ma": ma, "power_mw": mw, "energy_mwh": 1,

@@ -2229,6 +2229,117 @@ ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Resul
     return ccprobe::Refusal::None;
 }
 
+raprobe::Refusal ra_probe(const raprobe::Args &a, VbusFn vbus_mv, raprobe::Result &out) {
+    out = {};
+    const auto refuse = [&](raprobe::Refusal why) {
+        out.refusal = std::uint8_t(why);
+        return why;
+    };
+    std::uint8_t sw0 = 0, sw1 = 0, st0 = 0;
+    if (!rd(kSwitches0, sw0) || !rd(kSwitches1, sw1) || !rd(kStatus0, st0)) return refuse(raprobe::Refusal::Bus);
+
+    // The state that must be idle. Not g_active_cc: an empty port latches active_cc = 2 on its CC2 bias (docs/K2_PORTS_SPEC.md).
+    raprobe::Ctx c;
+    c.inline_sink = g_inline;
+    const pd::SinkState ss = g_sink.status().state;
+    c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
+    c.rd = g_rd_op || g_rd_start || g_pin_rd != 0 || (sw0 & (kPdwn1 | kPdwn2)) != 0;
+    c.ra_mode = g_ra;
+    c.engine_running = g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
+    c.vconn_on = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;
+    c.vbus_flag = (st0 & raprobe::kStatus0VbusOk) != 0;   // the chip sees VBUS even when the monitor does not
+    c.vbus_mv = vbus_mv ? vbus_mv() : -1;
+    if (const raprobe::Refusal why = raprobe::refusal(c); why != raprobe::Refusal::None) return refuse(why);
+
+    out.sw0 = sw0;
+    out.sw1 = sw1;
+    out.pc = probe_levels();
+    out.vconn_pc = std::uint8_t(a.vconn_pc & 6u);   // PC13 high is an Ra on the CC1 net: never next to VCONN
+    const auto note_vbus = [&](std::int32_t v) {
+        if (v < 0) return;
+        const std::uint16_t u = std::uint16_t(v > 0xFFFE ? 0xFFFE : v);
+        if (out.vbus_max_mv == raprobe::kNoRaw || u > out.vbus_max_mv) out.vbus_max_mv = u;
+    };
+    note_vbus(c.vbus_mv);
+
+    const auto release = [&] {   // SWITCHES0 first (the VCONN switch off), then the pin levels
+        wr(kSwitches0, sw0);
+        probe_set_levels(out.pc);
+    };
+    // Wait until `ms` after `t0`, calling service() every millisecond and watching VBUS (the chip's flag every pass, the
+    // monitor every 5 ms). Returns false when VBUS rose: everything is already back (the VCONN switch goes off first).
+    const auto wait = [&](std::uint32_t t0, std::uint32_t ms) {
+        const std::uint32_t due = ms * 1000u;
+        std::uint32_t checked = 0;
+        for (;;) {
+            const std::uint32_t el = systick::micros() - t0;
+            if (el >= due) return true;
+            service();
+            std::uint8_t s = 0;
+            bool up = rd(kStatus0, s) && raprobe::vbus_abort(-1, s);
+            if (!up && vbus_mv && el - checked >= 5000) {
+                checked = el;
+                const std::int32_t v = vbus_mv();
+                note_vbus(v);
+                up = raprobe::vbus_abort(v, 0);
+            }
+            if (up) {
+                release();
+                out.flags |= raprobe::kFlagAborted;
+                return false;
+            }
+            if (due - el > 1500) delay_ms(1); else systick::delay_us(50);   // delay_ms keeps the USB endpoint serviced
+        }
+    };
+    // A source's Rp on either line (or no ADC sweep to say it is not): VCONN must not go on.
+    const auto source_on_line = [](std::uint16_t r1, std::uint16_t r2) {
+        return r1 == raprobe::kNoRaw || r2 == raprobe::kNoRaw || raprobe::source_level(raprobe::raw_to_mv(r1), raprobe::raw_to_mv(r2));
+    };
+    const auto run_phase = [&](std::uint8_t phase) {
+        if (phase != raprobe::kPhaseIdle) {   // the idle phase changes nothing
+            probe_set_levels(raprobe::phase_pc(phase, out.pc, out.vconn_pc));
+            wr(kSwitches0, raprobe::phase_sw0(phase, sw0));
+        }
+        const std::uint32_t t0 = systick::micros();
+        for (std::uint8_t i = 0; i < raprobe::kSamplesPerPhase; i++) {
+            if (!wait(t0, raprobe::kSampleMs[i])) return false;
+            raprobe::Sample &s = out.s[raprobe::sample_index(phase, i)];
+            std::uint16_t r1 = 0, r2 = 0;
+            if (adc::latest_cc(r1, r2)) { s.cc1_raw = r1; s.cc2_raw = r2; }
+            out.n++;
+        }
+        return true;
+    };
+
+    if (!run_phase(raprobe::kPhaseIdle)) return refuse(raprobe::Refusal::VbusHigh);   // a charger arrived: nothing was driven
+    const raprobe::Sample &idle = out.s[raprobe::sample_index(raprobe::kPhaseIdle, raprobe::kSamplesPerPhase - 1)];
+    if (source_on_line(idle.cc1_raw, idle.cc2_raw)) return refuse(raprobe::Refusal::SourceLevel);   // before any VCONN
+
+    bool ok = run_phase(raprobe::kPhaseVconn1);
+    if (ok) {   // between the phases: everything back for a settle gap, then the idle guard again on a fresh sweep
+        release();
+        ok = wait(systick::micros(), raprobe::kSettleMs);
+        std::uint16_t r1 = 0, r2 = 0;
+        if (ok && (!adc::latest_cc(r1, r2) || source_on_line(r1, r2))) {
+            out.flags |= raprobe::kFlagAborted;
+            ok = false;
+        }
+    }
+    if (ok) ok = run_phase(raprobe::kPhaseVconn2);
+    if (ok) release();
+
+    // Restore in the reverse order, then read it all back: the flag says whether it landed.
+    for (int attempt = 0; attempt < 2; attempt++) {
+        release();
+        std::uint8_t b0 = 0xFF, b1 = 0xFF;
+        if (rd(kSwitches0, b0) && rd(kSwitches1, b1) && b0 == sw0 && b1 == sw1 && probe_levels() == out.pc) {
+            out.flags |= raprobe::kFlagRestored;
+            break;
+        }
+    }
+    return raprobe::Refusal::None;
+}
+
 // Nobody else owns the Rd of an idle / dark port: no boot pin, run start, active operation, debug Ra or forced line, and no
 // sink downstream. The two idle-wake gates in poll() (the hold itself, the dark-attach release) share it. A charger-test run
 // owns the line for its whole length (g_run_owner): its unit cycle drops its own Rd and the source's VBUS between units, and

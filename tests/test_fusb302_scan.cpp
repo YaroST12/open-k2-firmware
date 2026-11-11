@@ -46,6 +46,30 @@ bool g_auto_txsent;                    // every TX_START reports TXSENT once (a 
 std::uint32_t g_vconn_since;           // ms when VCONN started flowing (0 = not)
 std::vector<std::string> g_usb;
 std::uint16_t g_mark;                  // the pin mark (backup register DR21): survives the "warm resets" the tests simulate
+bool g_i2c_fail;                       // every chip register access fails (the bus is dead)
+
+// The CC nets as the ADC sees them (what adc::latest_cc returns): a physical model for the silent-cable-chip probe. The
+// PLUS-coupling bias on CC2, the chip's VCONN switch (SWITCHES0 bit4 = CC1, bit5 = CC2) sourcing ~2.87 V through ~85 ohm,
+// and a cable chip's Ra (~1 kohm) on one line. The idle levels and the loaded VCONN level are the 2026-11-11 hardware
+// numbers; the VCONN level of a bare line is measured on CC1 only. Off by default: the stub then reports "no sweep" as before.
+struct AdcWorld {
+    bool on = false;
+    int pulldown = 0;            // 0 none, 1 or 2: the cable's Ra on that line
+    int idle1 = 6, bias2 = 1692; // idle levels (mV)
+    int vconn_open = 2870, vconn_loaded = 2644;
+    bool plus_held = false;      // PLUS clamps the CC2 net to ~2 mV and loads a VCONN source on it a little (assumed ~47 mV)
+    int rp1 = -1, rp2 = -1;      // a source's Rp: the level of that line without VCONN (mV), -1 = none
+};
+AdcWorld g_adc;
+std::uint16_t adc_raw(int mv) { return std::uint16_t((mv * 4096 + 1650) / 3300); }
+int adc_line_mv(int line) {
+    const bool vconn = (g_reg[0x02] & (line == 1 ? 0x10 : 0x20)) != 0;
+    const bool pd = g_adc.pulldown == line;
+    if (vconn) return pd ? g_adc.vconn_loaded : (line == 2 && g_adc.plus_held) ? g_adc.vconn_open - 47 : g_adc.vconn_open;
+    if (line == 1) return g_adc.rp1 >= 0 ? g_adc.rp1 : pd ? 0 : g_adc.idle1;
+    if (g_adc.rp2 >= 0) return g_adc.rp2;
+    return g_adc.plus_held ? 2 : pd ? 0 : g_adc.bias2;
+}
 
 // The cable under test.
 struct Cable {
@@ -153,6 +177,7 @@ bool host_pin(Port p, std::uint8_t n, HostPin op, unsigned) {
 
 namespace i2c {
 bool write(Bus, std::uint8_t, std::uint8_t reg, std::span<const std::uint8_t> d) {
+    if (g_i2c_fail) return false;
     if (reg == 0x43) {
         g_txfifo.assign(d.begin(), d.end());
         std::string s = "FIFO";
@@ -170,6 +195,7 @@ bool write(Bus, std::uint8_t, std::uint8_t reg, std::span<const std::uint8_t> d)
     return true;
 }
 bool read(Bus, std::uint8_t, std::uint8_t reg, std::span<std::uint8_t> out) {
+    if (g_i2c_fail) return false;
     if (reg == 0x43) {
         for (auto& b : out) {
             b = g_rx.empty() ? 0 : g_rx.front();
@@ -215,7 +241,12 @@ void log_fmt(const char* fmt, ...) {
 }  // namespace usb
 
 namespace adc {
-bool latest_cc(std::uint16_t&, std::uint16_t&) { return false; }   // the VCONN glue reads the CC nets; no ADC here
+bool latest_cc(std::uint16_t& cc1, std::uint16_t& cc2) {   // the CC nets; no sweep unless a test turns the AdcWorld model on
+    if (!g_adc.on) return false;
+    cc1 = adc_raw(adc_line_mv(1));
+    cc2 = adc_raw(adc_line_mv(2));
+    return true;
+}
 }  // namespace adc
 
 namespace pinmark {   // the backup register that survives a warm reset
@@ -238,6 +269,8 @@ void reset_world() {
     g_rd_model = false;
     g_lvl_rd[0] = g_lvl_rd[1] = g_lvl_nord[0] = g_lvl_nord[1] = 0;
     g_cable = Cable{};
+    g_adc = AdcWorld{};
+    g_i2c_fail = false;
     g_reg[0x02] = 0x03;                                      // PDWN1|PDWN2 (Rd), nothing measured
     g_reg[0x03] = 0x20;                                      // passive: SPECREV=01, Auto-CRC off
 }
@@ -4661,6 +4694,275 @@ void test_alone_scan_records_its_mode() {
     CHECK_EQ(find_from("W 02=18") > 0, true);
 }
 
+// ---- the silent-cable-chip probe (fusb302::ra_probe): a cable alone, VBUS dark, no Rd of ours ----
+// The wire sequence and the restore against the fake chip and the AdcWorld model; the refusal order and the plan numbers are
+// in tests/test_ra_probe.cpp. The ADC levels are the 2026-11-11 hardware numbers where measured, assumptions where labelled.
+int g_rp_vbus_mv;            // what the power monitor callback reports
+int g_rp_vbus_rise_ms = -1;  // from this g_ms on the monitor reads 5 V
+int g_rp_flag_ms = -1;       // from this g_ms on the chip's own VBUS flag (STATUS0 bit 7) is set
+int g_rp_bus_dies_ms = -1;   // from this g_ms on every chip access fails
+std::int32_t rp_vbus() {
+    if (g_rp_bus_dies_ms >= 0 && int(g_ms) >= g_rp_bus_dies_ms) g_i2c_fail = true;
+    if (g_rp_flag_ms >= 0 && int(g_ms) >= g_rp_flag_ms) g_reg[0x40] |= 0x80;
+    if (g_rp_vbus_rise_ms >= 0 && int(g_ms) >= g_rp_vbus_rise_ms) return 5000;
+    return g_rp_vbus_mv;
+}
+void rp_world() {   // a passive, empty port with the ADC model on
+    power_cycle_forget_pin();
+    fusb302::set_force_line(0);
+    reread_style_boot();
+    g_adc = AdcWorld{};
+    g_adc.on = true;
+    g_rp_vbus_mv = 0;
+    g_rp_vbus_rise_ms = g_rp_flag_ms = g_rp_bus_dies_ms = -1;
+    g_log.clear();
+}
+void rp_cleanup() {
+    g_adc = AdcWorld{};
+    g_i2c_fail = false;
+    g_rp_vbus_rise_ms = g_rp_flag_ms = g_rp_bus_dies_ms = -1;
+    fusb302::set_inline(false);
+    fusb302::ra_set(false);
+    clean_up_rd_tests();
+    power_cycle_forget_pin();
+}
+// Every SWITCHES0 value written since the log was cleared, in order.
+std::vector<unsigned> sw0_writes() {
+    std::vector<unsigned> v;
+    for (const auto& s : g_log) if (s.rfind("W 02=", 0) == 0) v.push_back(unsigned(std::stoul(s.substr(5), nullptr, 16)));
+    return v;
+}
+bool rp_nothing_driven() {   // no SWITCHES0 write, no CC switch pin write, no transmit
+    for (const auto& s : g_log)
+        if (s.rfind("W 02=", 0) == 0 || s.rfind("PC1", 0) == 0 || s.rfind("FIFO", 0) == 0 || s.rfind("W 06=", 0) == 0) return false;
+    return true;
+}
+raprobe::Refusal rp_run(raprobe::Result& r, const raprobe::Args& a = raprobe::Args{}) {
+    return fusb302::ra_probe(a, rp_vbus, r);
+}
+std::uint16_t raw_mv(int mv) { return adc_raw(mv); }
+
+void test_ra_probe_empty_port_runs_the_plan_and_restores_everything() {
+    rp_world();
+    CHECK_EQ(sw0_rd(), 0u);                                   // the precondition: no Rd of ours
+    const unsigned sw0 = g_reg[0x02], sw1 = g_reg[0x03];
+    const bool p0 = g_pin[0], p1 = g_pin[1], p2 = g_pin[2];
+    const std::uint32_t t0 = g_ms;
+    raprobe::Result r;
+    CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::None));
+    CHECK_EQ(int(r.refusal), 0);
+    CHECK_EQ(int(r.n), 9);
+    CHECK_EQ(int(r.flags), int(raprobe::kFlagRestored));
+    CHECK_EQ(int(r.sw0), int(sw0));
+    CHECK_EQ(int(r.sw1), int(sw1));
+    CHECK_EQ(int(r.pc), (p0 ? 1 : 0) | (p1 ? 2 : 0) | (p2 ? 4 : 0));
+    CHECK_EQ(int(r.vconn_pc), 0);
+    // The empty port (measured): CC1 6 mV, the CC2 bias 1692 mV. VCONN on a bare CC1 reads 2870 mV with CC2 still at the bias.
+    // VCONN on CC2 is assumed to read the same on the bare line (not measured: the VCONN2 phase of an empty port).
+    for (int i = 0; i < 3; i++) {
+        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseIdle, i)].cc1_raw), int(raw_mv(6)));
+        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseIdle, i)].cc2_raw), int(raw_mv(1692)));
+        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn1, i)].cc1_raw), int(raw_mv(2870)));
+        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn1, i)].cc2_raw), int(raw_mv(1692)));
+        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn2, i)].cc1_raw), int(raw_mv(6)));
+        CHECK_EQ(int(r.s[raprobe::sample_index(raprobe::kPhaseVconn2, i)].cc2_raw), int(raw_mv(2870)));
+    }
+    // Whole run: three phases of 100 ms and one settle gap (the fake clock only moves in the waits).
+    CHECK_EQ(g_ms - t0 >= raprobe::total_ms() && g_ms - t0 <= raprobe::total_ms() + 10, true);
+    // SWITCHES0: VCONN on CC1 only (0x10), back, VCONN on CC2 only (0x20), back; never a pull-down, pull-up or measure bit.
+    const std::vector<unsigned> w = sw0_writes();
+    CHECK_EQ(w.size() >= 4, true);
+    int n10 = 0, n20 = 0, first10 = -1, first20 = -1;
+    for (std::size_t i = 0; i < w.size(); i++) {
+        if (w[i] == 0x10) { n10++; if (first10 < 0) first10 = int(i); }
+        else if (w[i] == 0x20) { n20++; if (first20 < 0) first20 = int(i); }
+        else CHECK_EQ(w[i], sw0);                             // everything else is the snapshot value
+    }
+    CHECK_EQ(n10, 1);
+    CHECK_EQ(n20, 1);
+    CHECK_EQ(first10 < first20, true);
+    CHECK_EQ(w.front(), 0x10u);                               // the idle phase changes nothing
+    CHECK_EQ(w.back(), sw0);
+    // The restore: chip and pins read back as the snapshot.
+    CHECK_EQ(unsigned(g_reg[0x02]), sw0);
+    CHECK_EQ(unsigned(g_reg[0x03]), sw1);
+    CHECK_EQ(g_pin[0], p0);
+    CHECK_EQ(g_pin[1], p1);
+    CHECK_EQ(g_pin[2], p2);
+    // The default VCONN condition (the measured one): PC13 low, PC14 and PC15 low, the Ra on the CC1 net never on.
+    CHECK_EQ(find_from("PC13=1"), -1);
+    CHECK_EQ(find_from("PC14=0") > 0, true);
+    CHECK_EQ(find_from("PC15=0") > 0, true);
+    // Never a transmit: no TX FIFO load, no TX_START.
+    for (const auto& s : g_log) { CHECK_EQ(s.rfind("FIFO", 0) == 0, false); CHECK_EQ(s.rfind("W 06=", 0) == 0, false); }
+    rp_cleanup();
+}
+
+void test_ra_probe_samples_follow_the_ra_and_report_raw_values_only() {
+    // A cable chip's Ra on CC2: the CC2 bias collapses at idle and VCONN on CC2 droops (measured numbers); CC1 VCONN is bare.
+    rp_world();
+    g_adc.pulldown = 2;
+    raprobe::Result r;
+    CHECK_EQ(int(rp_run(r)), 0);
+    CHECK_EQ(int(r.n), 9);
+    CHECK_EQ(int(r.s[2].cc2_raw), int(raw_mv(0)));
+    CHECK_EQ(int(r.s[5].cc1_raw), int(raw_mv(2870)));
+    CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(2644)));
+    rp_cleanup();
+    // The same on CC1 (assumed: the CC1 pull-down under VCONN is not measured): idle CC1 stays 0, VCONN on CC1 droops.
+    rp_world();
+    g_adc.pulldown = 1;
+    CHECK_EQ(int(rp_run(r)), 0);
+    CHECK_EQ(int(r.s[2].cc1_raw), int(raw_mv(0)));
+    CHECK_EQ(int(r.s[2].cc2_raw), int(raw_mv(1692)));
+    CHECK_EQ(int(r.s[5].cc1_raw), int(raw_mv(2644)));
+    CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(2870)));
+    rp_cleanup();
+    // PLUS held: the CC2 net is clamped at idle (looks like a collapsed bias) and VCONN on CC2 droops only a little.
+    rp_world();
+    g_adc.plus_held = true;
+    CHECK_EQ(int(rp_run(r)), 0);
+    CHECK_EQ(int(r.s[2].cc2_raw), int(raw_mv(2)));
+    CHECK_EQ(int(r.s[8].cc2_raw), int(raw_mv(2870 - 47)));
+    rp_cleanup();
+}
+
+void test_ra_probe_can_keep_pc14_and_pc15_closed_for_the_vconn_phases() {
+    rp_world();
+    raprobe::Result r;
+    CHECK_EQ(int(rp_run(r, raprobe::Args{6})), 0);
+    CHECK_EQ(int(r.vconn_pc), 6);
+    CHECK_EQ(find_from("PC14=0"), -1);                         // the switches never open
+    CHECK_EQ(find_from("PC15=0"), -1);
+    CHECK_EQ(find_from("PC13=1"), -1);
+    CHECK_EQ(int(r.flags & raprobe::kFlagRestored), int(raprobe::kFlagRestored));
+    CHECK_EQ(g_pin[0], false);
+    CHECK_EQ(g_pin[1], true);
+    CHECK_EQ(g_pin[2], true);
+    // An argument that would put PC13 high (an Ra on the CC1 net) next to VCONN is masked off, never driven.
+    rp_world();
+    CHECK_EQ(int(rp_run(r, raprobe::Args{7})), 0);
+    CHECK_EQ(int(r.vconn_pc), 6);
+    CHECK_EQ(find_from("PC13=1"), -1);
+    rp_cleanup();
+}
+
+void test_ra_probe_refusals_drive_nothing_and_name_their_reason() {
+    raprobe::Result r;
+    rp_world();                                                // a real sink downstream
+    fusb302::set_inline(true);
+    g_log.clear();
+    CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::Inline));
+    CHECK_EQ(int(r.refusal), int(raprobe::Refusal::Inline));
+    CHECK_EQ(rp_nothing_driven(), true);
+    CHECK_EQ(int(r.n), 0);
+    rp_cleanup();
+
+    rp_world();                                                // an Rd on a line (a boot-mode pin, a run's Rd, the chip's default)
+    g_reg[0x02] = 0x01;
+    g_log.clear();
+    CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::Rd));
+    CHECK_EQ(rp_nothing_driven(), true);
+    rp_cleanup();
+
+    rp_world();                                                // the Ra mode (PC13 held high)
+    CHECK_EQ(fusb302::ra_set(true), true);
+    g_log.clear();
+    CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::RaMode));
+    CHECK_EQ(rp_nothing_driven(), true);
+    rp_cleanup();
+
+    rp_world();                                                // no power monitor
+    g_log.clear();
+    CHECK_EQ(int(fusb302::ra_probe(raprobe::Args{}, nullptr, r)), int(raprobe::Refusal::VbusUnknown));
+    CHECK_EQ(rp_nothing_driven(), true);
+
+    rp_world();                                                // VBUS on the monitor
+    g_rp_vbus_mv = 5000;
+    g_log.clear();
+    CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::VbusHigh));
+    CHECK_EQ(rp_nothing_driven(), true);
+
+    rp_world();                                                // the chip's own VBUS flag, the monitor says 0
+    g_reg[0x40] = 0x80;
+    g_log.clear();
+    CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::VbusHigh));
+    CHECK_EQ(rp_nothing_driven(), true);
+    rp_cleanup();
+
+    rp_world();                                                // the chip does not answer
+    g_i2c_fail = true;
+    g_log.clear();
+    CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::Bus));
+    CHECK_EQ(int(r.refusal), int(raprobe::Refusal::Bus));
+    CHECK_EQ(rp_nothing_driven(), true);
+    rp_cleanup();
+}
+
+void test_ra_probe_never_puts_vconn_on_a_line_a_source_sits_on() {
+    raprobe::Result r;
+    const int rp1[] = {3294, 900, -1, -1};                     // CC1: an open Rp, an Rp over a cable Ra
+    const int rp2[] = {-1, -1, 3294, 900};                     // CC2: the same
+    for (int i = 0; i < 4; i++) {
+        rp_world();
+        g_adc.rp1 = rp1[i];
+        g_adc.rp2 = rp2[i];
+        const unsigned sw0 = g_reg[0x02];
+        CHECK_EQ(int(rp_run(r)), int(raprobe::Refusal::SourceLevel));
+        CHECK_EQ(int(r.refusal), int(raprobe::Refusal::SourceLevel));
+        CHECK_EQ(int(r.n), 3);                                 // the idle samples that named it
+        CHECK_EQ(rp_nothing_driven(), true);                   // no VCONN, no pin change
+        CHECK_EQ(unsigned(g_reg[0x02]), sw0);
+        rp_cleanup();
+    }
+}
+
+void test_ra_probe_a_charger_appearing_mid_probe_switches_vconn_off_at_once() {
+    raprobe::Result r;
+    // The monitor sees VBUS 50 ms into the CC1 VCONN phase (phase starts 100 ms in): the switch goes off, the CC2 phase never runs.
+    rp_world();
+    const unsigned sw0 = g_reg[0x02];
+    const std::uint32_t t0 = g_ms;
+    g_rp_vbus_rise_ms = int(t0) + 150;
+    CHECK_EQ(int(rp_run(r)), 0);
+    CHECK_EQ(int(r.flags & raprobe::kFlagAborted), int(raprobe::kFlagAborted));
+    CHECK_EQ(int(r.flags & raprobe::kFlagRestored), int(raprobe::kFlagRestored));
+    CHECK_EQ(int(r.n), 5);                                     // idle x3, then the 2 ms and 10 ms VCONN1 samples
+    const std::vector<unsigned> w = sw0_writes();
+    CHECK_EQ(w.size() >= 2, true);
+    CHECK_EQ(w[0], 0x10u);
+    CHECK_EQ(w[1], sw0);                                       // the very next write takes it off
+    CHECK_EQ(find_from("W 02=20"), -1);
+    CHECK_EQ(unsigned(g_reg[0x02]), sw0);
+    CHECK_EQ(g_ms - t0 < raprobe::total_ms(), true);           // it did not run the rest of the plan
+    rp_cleanup();
+    // The chip's own VBUS flag does the same when the monitor stays at 0.
+    rp_world();
+    g_rp_flag_ms = int(g_ms) + 150;
+    CHECK_EQ(int(rp_run(r)), 0);
+    CHECK_EQ(int(r.flags & raprobe::kFlagAborted), int(raprobe::kFlagAborted));
+    CHECK_EQ(find_from("W 02=20"), -1);
+    CHECK_EQ(unsigned(g_reg[0x02]) & 0x30u, 0u);
+    rp_cleanup();
+    // A source that shows its Rp after the first VCONN phase (the settle gap): the CC2 phase is not entered either.
+    rp_world();
+    g_rp_vbus_rise_ms = int(g_ms) + 215;                       // in the settle gap before the CC2 phase (200..230 ms)
+    CHECK_EQ(int(rp_run(r)), 0);
+    CHECK_EQ(int(r.flags & raprobe::kFlagAborted), int(raprobe::kFlagAborted));
+    CHECK_EQ(find_from("W 02=20"), -1);
+    rp_cleanup();
+}
+
+void test_ra_probe_reports_a_restore_that_did_not_land() {
+    // The bus dies during the CC1 VCONN phase: the restore cannot be written or read back, the flag stays clear.
+    raprobe::Result r;
+    rp_world();
+    g_rp_bus_dies_ms = int(g_ms) + 150;
+    CHECK_EQ(int(rp_run(r)), 0);                               // it still returns (no wait on a dead bus)
+    CHECK_EQ(int(r.flags & raprobe::kFlagRestored), 0);
+    g_i2c_fail = false;
+    rp_cleanup();
+}
 
 int main() {
     test_run_rd_survives_the_passive_scan();
@@ -4846,7 +5148,14 @@ int main() {
     test_attached_scan_logs_a_variant_that_was_acked_but_not_answered_and_tries_the_next();
     test_attached_scan_waits_the_full_window_for_an_acked_variant();
     test_attached_scan_stops_on_a_hard_reset_from_the_source_and_latches_it();   // each one ends with a detach / Rd off
-    test_attached_is_selected_from_the_power_monitor_caps_and_sink_when_vbusok_reads_zero();   // last
+    test_attached_is_selected_from_the_power_monitor_caps_and_sink_when_vbusok_reads_zero();
+    test_ra_probe_empty_port_runs_the_plan_and_restores_everything();            // last: each one ends with rp_cleanup()
+    test_ra_probe_samples_follow_the_ra_and_report_raw_values_only();
+    test_ra_probe_can_keep_pc14_and_pc15_closed_for_the_vconn_phases();
+    test_ra_probe_refusals_drive_nothing_and_name_their_reason();
+    test_ra_probe_never_puts_vconn_on_a_line_a_source_sits_on();
+    test_ra_probe_a_charger_appearing_mid_probe_switches_vconn_off_at_once();
+    test_ra_probe_reports_a_restore_that_did_not_land();
     return test_report("test_fusb302_scan");
 }
 

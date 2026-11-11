@@ -92,6 +92,17 @@ CMD_UFCS = 0x52           # UFCS frame/timing tuner (RAM only) and the 5 V hands
 CMD_QRTEST = 0x53         # QR scan-test rig (k2/ui/ui_qrtest.hpp): fit table / full-screen test QR / stop; draws only
 QRTEST_LIST, QRTEST_SHOW, QRTEST_STOP = 0, 1, 2
 QRTEST_CHUNK = 48
+CMD_EMARKER_PROBE = 0x56  # silent-cable-chip probe: optional [vconn_pc]; raw ADC samples of the idle and VCONN phases (k2/pd/ra_probe.hpp)
+# raprobe::Refusal and raprobe::ArgError, index = the byte the K2 sends; the text is what the operator should read
+RA_PROBE_REFUSALS = ["", "a sink is inline (a charger or load downstream)", "a PD contract is active",
+                     "Rd is presented (a boot-mode pin or an engine holds it)", "the Ra mode is on",
+                     "an identify / probe / re-read / VCONN experiment is running", "VBUS reading unavailable",
+                     "VBUS is 1 V or more: something powers the port", "the chip bus did not answer",
+                     "a source level sits on a CC line (a charger waiting for a sink?): VCONN was not applied"]
+RA_PROBE_ARG_ERRORS = ["", "vconn_pc above 7", "vconn_pc has PC13 set (an Ra on the CC1 net, never together with VCONN)"]
+RA_PROBE_PHASES = ["idle", "vconn_cc1", "vconn_cc2"]
+RA_PROBE_SAMPLE_MS = [2, 10, 100]      # k2::raprobe::kSampleMs, per phase
+RA_PROBE_TIMEOUT_S = 3.0               # the K2 blocks for the ~330 ms plan
 # ---- PD Stress (docs/PD_STRESS.md): constants ----
 CMD_PD_STRESS = 0x55      # PD Stress: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_stress.py)
 PDS_STATUS, PDS_START, PDS_READ, PDS_STOP = 0, 1, 2, 3
@@ -266,6 +277,11 @@ class RemoteError(RuntimeError):
             text += " (the K2 is not passive: a charger test, a contract, Rd, VBUS at 1 V or more; the [CCPROBE] log line names the reason)"
         if cmd == CMD_DEBUG_CC_PROBE and status == STATUS_BAD_ARG:
             text += " (sw0 with a pull-up bit, a VCONN bit with PC13 high or with PDWN on the same line; ms 10..5000; pc 0..7)"
+        if cmd == CMD_EMARKER_PROBE and status == STATUS_BUSY:
+            text += (f" (refused, nothing was driven: {RA_PROBE_REFUSALS[payload[0]]})" if payload and 0 < payload[0] < len(RA_PROBE_REFUSALS)
+                     else " (the K2 is not passive: a charger test is running, or the port is not idle)")
+        if cmd == CMD_EMARKER_PROBE and status == STATUS_BAD_ARG and payload and 0 < payload[0] < len(RA_PROBE_ARG_ERRORS):
+            text += f" ({RA_PROBE_ARG_ERRORS[payload[0]]})"
         if cmd in (CMD_PD_REQUEST, CMD_PD_RESET, CMD_PD_RELEASE, CMD_PD_ATTACH) and payload and payload[0] < len(PD_ERRS) and payload[0]:
             text += f" ({PD_ERRS[payload[0]]})"
         if cmd == CMD_EM_LIB and status == STATUS_BUSY:
@@ -1996,9 +2012,59 @@ def cmd_emarker(link, a):
         return cmd_emlearn(link, a)
     if sc == "unmatched":
         return cmd_emunmatched(link, a)
+    if sc == "probe":
+        return cmd_emprobe(link, a)
     if sc:
         return cmd_emlib(link, a)
     return cmd_emarker_data(link, a)
+
+
+def decode_ra_probe(p):
+    """EmarkerProbe reply: refusal flags n sw0 sw1 pc vconn_pc (1 byte each) vbus_max_mv (u16), then n x [cc1_raw u16,
+    cc2_raw u16]. Raw 0xFFFF = no reading; vbus_max 0xFFFF = no monitor reading. Samples run in phase order
+    (idle x3, VCONN on CC1 x3, VCONN on CC2 x3) at RA_PROBE_SAMPLE_MS after each phase started."""
+    _need(p, 9, "emarker probe")
+    refusal, flags, n, sw0, sw1, pc, vconn_pc = p[:7]
+    vbus_max = p[7] | p[8] << 8
+    _need(p, 9 + 4 * n, "emarker probe samples")
+    per = len(RA_PROBE_SAMPLE_MS)
+    samples = []
+    for k in range(n):
+        cc1, cc2 = struct.unpack_from("<HH", p, 9 + 4 * k)
+        samples.append({
+            "phase": RA_PROBE_PHASES[k // per] if k // per < len(RA_PROBE_PHASES) else k // per,
+            "t_ms": RA_PROBE_SAMPLE_MS[k % per],
+            "cc1_raw": None if cc1 == 0xFFFF else cc1, "cc2_raw": None if cc2 == 0xFFFF else cc2,
+            "cc1_mv": None if cc1 == 0xFFFF else cc1 * 3300 // 4096, "cc2_mv": None if cc2 == 0xFFFF else cc2 * 3300 // 4096,
+        })
+    return {"refusal": refusal, "aborted": bool(flags & 1), "restored": bool(flags & 2),
+            "snapshot": {"sw0": f"0x{sw0:02X}", "sw1": f"0x{sw1:02X}", "pc": pc}, "vconn_pc": vconn_pc,
+            "vbus_max_mv": None if vbus_max == 0xFFFF else vbus_max, "samples": samples}
+
+
+def cmd_emprobe(link, a):
+    """The silent-cable-chip probe: raw samples only, the K2 returns no verdict here. The K2 blocks ~330 ms."""
+    payload = b"" if a.vconn_pc is None else bytes([a.vconn_pc])
+    saved, link.timeout_s = link.timeout_s, max(link.timeout_s, RA_PROBE_TIMEOUT_S)
+    try:
+        p = link.call(CMD_EMARKER_PROBE, payload).payload
+    finally:
+        link.timeout_s = saved
+    return {"emlib": "probe", "ra_probe": decode_ra_probe(p)}
+
+
+def render_ra_probe(r):
+    p = r["ra_probe"]
+    head = ("emarker probe: " + ("ABORTED, VBUS rose (VCONN went off at once); " if p["aborted"] else "")
+            + ("restored" if p["restored"] else "RESTORE NOT CONFIRMED")
+            + f" (was sw0={p['snapshot']['sw0']} sw1={p['snapshot']['sw1']} pc={p['snapshot']['pc']}; "
+            f"vconn levels pc={p['vconn_pc']}; vbus max {p['vbus_max_mv']} mV)")
+
+    def mv(v):
+        return "-" if v is None else f"{v}"
+    rows = [f"  {s['phase']:9} t={s['t_ms']:3} ms  CC1 {mv(s['cc1_raw']):>4} ({mv(s['cc1_mv']):>4} mV)  "
+            f"CC2 {mv(s['cc2_raw']):>4} ({mv(s['cc2_mv']):>4} mV)" for s in p["samples"]]
+    return "\n".join([head] + rows)
 
 
 def cmd_emlib(link, a):
@@ -3476,6 +3542,8 @@ def _render(name, r):
             return render_learn(r)
         if k == "unmatched":
             return render_unmatched(r)
+        if k == "probe":
+            return render_ra_probe(r)
         if k == "list":
             if not r["cables"]:
                 return "no saved cables"
@@ -3677,6 +3745,12 @@ def build_parser():
     el.add_argument("--save", action="store_true", help="save the learned clone into the cable library")
     es.add_parser("learned", help="the last learn run's summary and transcript (no run)")
     es.add_parser("unmatched", help="the SOP'/SOP'' requests the armed fake cable received and nothing answered")
+    epb = es.add_parser("probe", help="silent-cable-chip probe, raw samples only: a cable ALONE in the BOTTOM port (no charger, "
+                        "VBUS dark): idle levels and each CC line under the K2's own VCONN at 2 / 10 / 100 ms; the K2 refuses "
+                        "(and says why) if anything but a bare cable is there")
+    epb.add_argument("--vconn-pc", type=int, choices=range(0, 8), default=None, metavar="0..7",
+                     help="PC13/14/15 levels during the VCONN phases (bit1 PC14, bit2 PC15; bit0 is refused); default 0, "
+                     "the condition of the reference numbers; 6 closes both analog switches")
     sw = sub.add_parser("twin", help="device twins: what a charger would give a learned device, and a live proof of it")
     sws = sw.add_subparsers(dest="twin_cmd", required=True)
     sws.add_parser("list", help="saved twins")

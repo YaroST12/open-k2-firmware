@@ -8,6 +8,7 @@
 
 #include "k2/core/bootmode.hpp"
 #include "k2/pd/cc_probe.hpp"
+#include "k2/pd/ra_probe.hpp"
 #include "k2/pd/emk_attached.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_ra.hpp"
@@ -153,6 +154,15 @@ void debug_cc_matrix(uint8_t v, uint16_t modes);
 // own VBUS flag ends the hold at once. Args must already pass ccprobe::check_args.
 using VbusFn = std::int32_t (*)();
 ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Result &out);
+// `k2_remote emarker probe`: sense the pull-down a silent cable chip hangs on its supply pin. A cable alone in the port (nothing
+// inline, no contract, no Rd of ours on any line, VBUS dark): sample both CC lines at the snapshot (idle), then with the K2's
+// VCONN switch on CC1 only and on CC2 only (the other line just measured), 2 / 10 / 100 ms into each phase, and put everything
+// back. Raw ADC counts only (k2/pd/ra_probe.hpp); the verdict is k2/pd/ra_class.hpp. Any other state returns its Refusal
+// (also in out.refusal) and drives nothing; a Rp-like level on either line at idle refuses before VCONN is ever applied. A
+// VBUS rise (monitor above 1 V or the chip's flag) while VCONN is on switches it off at once and ends the run (kFlagAborted).
+// Never transmits. Blocks the caller for raprobe::total_ms(), calling service() every millisecond. a.vconn_pc passes
+// raprobe::check_args (PC13 is masked off regardless).
+raprobe::Refusal ra_probe(const raprobe::Args &a, VbusFn vbus_mv, raprobe::Result &out);
 bool rd_for_run_on();
 // The Wake sleeping port's idle Rd hold: the line (1 CC1, 2 CC2) the K2 presents an Rd on while it waits for a source that sleeps,
 // 0 = none. The CC levels on that line are then loaded by our Rd, not the far port's own (the crossed-CC detector stands down).

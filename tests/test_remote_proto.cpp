@@ -1592,6 +1592,41 @@ static void test_debug_cc_probe() {
     check_header(r, 0x2A, 11, Status::Busy, 0);
 }
 
+static void test_emarker_probe() {
+    Fake f; Frame r;
+    // The probe: no payload = the default VCONN levels (PC13/14/15 low); three raw samples are enough to show the layout.
+    f.ra_res.refusal = 0; f.ra_res.flags = 2; f.ra_res.n = 3; f.ra_res.sw0 = 0x00; f.ra_res.sw1 = 0x20; f.ra_res.pc = 6;
+    f.ra_res.vconn_pc = 0; f.ra_res.vbus_max_mv = 0x0102;
+    f.ra_res.s[0] = {0x0008, 0x083A}; f.ra_res.s[1] = {0x0100, 0xFFFF}; f.ra_res.s[2] = {0x0FFF, 0x0000};
+    CHECK_EQ(run(f, request(0x56, 1, {}), r), 1);
+    check_header(r, 0x56, 1, Status::Ok, 9 + 3 * 4);
+    check_bytes(r, kRspHeader, {0, 2, 3, 0x00, 0x20, 6, 0, 0x02, 0x01});
+    check_bytes(r, kRspHeader + 9, {0x08, 0x00, 0x3A, 0x08, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0x0F, 0x00, 0x00});
+    CHECK_EQ(f.ra_pc, 0);
+    // The full nine samples fit one frame (9 + 36 = 45).
+    f.ra_res.n = 9;
+    CHECK_EQ(run(f, request(0x56, 2, {6}), r), 1);
+    check_header(r, 0x56, 2, Status::Ok, 9 + 9 * 4);
+    CHECK_EQ(f.ra_pc, 6);                                    // PC14 and PC15 closed for the VCONN phases
+    f.ra_res.n = 3;
+    // The pure argument rules refuse before the backend is called, and name the rule.
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x56, 3, {1}), r), 1);          // PC13 high is an Ra on CC1: never with VCONN
+    check_header(r, 0x56, 3, Status::BadArg, 1);
+    CHECK_EQ(r[6], 2);                                       // ArgError::VconnRail
+    CHECK_EQ(run(f, request(0x56, 4, {8}), r), 1);
+    check_header(r, 0x56, 4, Status::BadArg, 1);
+    CHECK_EQ(r[6], 1);                                       // ArgError::Pc
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(run(f, request(0x56, 5, {0, 0}), r), 1);
+    check_header(r, 0x56, 5, Status::BadLength, 0);
+    // A refusal is Busy with its reason as the one-byte payload; nothing else rides with it.
+    f.ra_status = Status::Busy; f.ra_res.refusal = 6;       // Refusal::VbusHigh
+    CHECK_EQ(run(f, request(0x56, 6, {}), r), 1);
+    check_header(r, 0x56, 6, Status::Busy, 1);
+    CHECK_EQ(r[6], 6);
+}
+
 static void test_debug_fake_pdos() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x20, 3, {7}), r), 1);
@@ -2568,6 +2603,7 @@ int main() {
     test_debug_epr_info();
     test_debug_lcd();
     test_debug_cc_probe();
+    test_emarker_probe();
     test_debug_pd_msg();
     test_screenshot();
     test_stream_frame();

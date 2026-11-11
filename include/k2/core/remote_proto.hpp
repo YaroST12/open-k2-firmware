@@ -342,6 +342,7 @@
 #include "k2/core/lease.hpp"
 #include "k2/core/stop.hpp"
 #include "k2/pd/cc_probe.hpp"
+#include "k2/pd/ra_probe.hpp"
 #include "k2/chargertest/charger_test.hpp"
 #include "k2/chargertest/ct_cable.hpp"
 #include "k2/pd/emk_learn.hpp"
@@ -425,6 +426,7 @@ enum class Cmd : uint8_t {
     ChargerAvsSweep = 0x54, // [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset; an Options flag
                          // next to the PPS sweep's, journaled in the meta record). rsp [on(1)]. Busy while a run is active.
     PdStress = 0x55,        // PD Stress: status / start / result (chunked) / stop, see the layout above (0x54 is the AVS sweep)
+    EmarkerProbe = 0x56,    // optional [vconn_pc]: the silent-cable-chip probe, raw ADC samples only -> see encode_ra_probe (k2/pd/ra_probe.hpp); a refusal = Busy + [raprobe::Refusal], a bad argument = BadArg + [raprobe::ArgError]
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -436,7 +438,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
-    Cmd::PdStress,
+    Cmd::PdStress, Cmd::EmarkerProbe,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -1021,6 +1023,10 @@ size_t encode_lcd(std::span<uint8_t> out, const LcdSnapshot &s);
 // DebugCcProbe reply: flags(1) n(1) sw0(1) sw1(1) pc(1) modes(2) of the snapshot that was restored, then n samples of
 // t_us(4) cc1_raw(2) cc2_raw(2) vbus_mv(2) st0_cc1(1) st0_cc2(1). At most 7 + 4 * 12 = 55 bytes.
 size_t encode_cc_probe(std::span<uint8_t> out, const ccprobe::Result &r);
+// EmarkerProbe reply: refusal(1) flags(1) n(1) sw0(1) sw1(1) pc(1) vconn_pc(1) vbus_max_mv(2) of the snapshot that was
+// restored (flags bit0 aborted by VBUS, bit1 restored), then n samples of cc1_raw(2) cc2_raw(2); raw ADC counts, 0xFFFF =
+// no reading. Phase order: idle x3, VCONN on CC1 x3, VCONN on CC2 x3. At most 9 + 9 * 4 = 45 bytes.
+size_t encode_ra_probe(std::span<uint8_t> out, const raprobe::Result &r);
 size_t encode_fc(std::span<uint8_t> out, const FcInfo &i);
 size_t encode_store(std::span<uint8_t> out, const StoreInfo &i);
 size_t encode_factory_wipe(std::span<uint8_t> out, const FactoryWipeInfo &i);
@@ -1094,6 +1100,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.debug_epr_info(u8) } -> std::same_as<EprInfoSnapshot>;
     { b.debug_lcd() } -> std::same_as<LcdSnapshot>;
     { b.debug_cc_probe(std::declval<const ccprobe::Args &>(), std::declval<ccprobe::Result &>()) } -> std::same_as<Status>;
+    { b.ra_probe(std::declval<const raprobe::Args &>(), std::declval<raprobe::Result &>()) } -> std::same_as<Status>;
     { b.debug_link(on) } -> std::same_as<Status>;
     { b.log_enabled() } -> std::same_as<bool>;
     { b.set_log(on) } -> std::same_as<void>;
@@ -1406,6 +1413,24 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         const Status st = backend.debug_cc_probe(a, res);
         if (st != Status::Ok) return reply(st);
         return reply_n(encode_cc_probe(buf, res));
+    }
+    case Cmd::EmarkerProbe: {
+        // [] or [vconn_pc]: the PC13/14/15 levels of the VCONN phases (default 0). The argument rules are k2/pd/ra_probe.hpp; the
+        // refusals (not passive) come back as Busy with the raprobe::Refusal as the one-byte payload.
+        if (p.size() > 1) return reply(Status::BadLength);
+        raprobe::Args a;
+        if (!p.empty()) a.vconn_pc = p[0];
+        if (const raprobe::ArgError e = raprobe::check_args(a); e != raprobe::ArgError::None) {
+            buf[0] = static_cast<uint8_t>(e);
+            return reply(Status::BadArg, std::span<const uint8_t>(buf.data(), 1));
+        }
+        raprobe::Result res;
+        const Status st = backend.ra_probe(a, res);
+        if (st != Status::Ok) {
+            buf[0] = res.refusal;
+            return reply(st, std::span<const uint8_t>(buf.data(), 1));
+        }
+        return reply_n(encode_ra_probe(buf, res));
     }
     case Cmd::AdcRaw:
         if (!p.empty()) return reply(Status::BadLength);

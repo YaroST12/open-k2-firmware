@@ -87,6 +87,7 @@ public:
     remote::Status debug_pd_msg(uint8_t sop, uint16_t header, std::span<const uint8_t> payload);
     remote::Status debug_cc_matrix(uint8_t v, uint16_t modes);
     remote::Status debug_cc_probe(const ccprobe::Args &a, ccprobe::Result &out);   // passive only, blocks a.ms; Busy for any other state
+    remote::Status ra_probe(const raprobe::Args &a, raprobe::Result &out);   // the silent-cable-chip probe (~330 ms); passive only, Busy + out.refusal otherwise
     remote::VconnSnapshot debug_vconn(uint8_t op);   // 0 status, 1 send VCONN_Swap, 2 VCONN off
     remote::EprInfoSnapshot debug_epr_info(uint8_t op);   // 0 status, 1 ask (gated on the EPR bit), 2 ask regardless
     remote::LcdSnapshot debug_lcd();

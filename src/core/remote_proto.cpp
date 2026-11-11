@@ -322,6 +322,15 @@ size_t encode_cc_probe(std::span<uint8_t> out, const ccprobe::Result &r) {
     return w.size();
 }
 
+size_t encode_ra_probe(std::span<uint8_t> out, const raprobe::Result &r) {
+    Writer w(out);
+    const size_t n = std::min<size_t>(r.n, r.s.size());
+    w.u8(r.refusal); w.u8(r.flags); w.u8(static_cast<uint8_t>(n)); w.u8(r.sw0); w.u8(r.sw1); w.u8(r.pc); w.u8(r.vconn_pc);
+    w.u16(r.vbus_max_mv);
+    for (size_t k = 0; k < n; k++) { w.u16(r.s[k].cc1_raw); w.u16(r.s[k].cc2_raw); }
+    return w.size();
+}
+
 size_t encode_fc(std::span<uint8_t> out, const FcInfo &i) {
     Writer w(out);
     w.u8(i.state); w.u8(i.proto); w.u8(i.fail); w.u8(i.scan_flags); w.u8(i.scan_step);
