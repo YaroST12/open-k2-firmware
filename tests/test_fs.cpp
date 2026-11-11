@@ -350,6 +350,24 @@ void test_inline_limit() {
     CHECK_EQ(f.used_blocks(), u0 + 1);
 }
 
+// A used_blocks() call made while a file is open for writing (here from inside a write_chunks fill) must not leave a
+// figure cached that the rest of that write makes stale.
+void fill_and_ask(void* ctx, std::size_t off, std::span<std::uint8_t> out) {
+    static_cast<fs::Fs*>(ctx)->used_blocks();
+    fill_pattern(nullptr, off, out);
+}
+void test_used_blocks_asked_mid_write_is_not_kept() {
+    RamDisk d(kBlocks);
+    fs::Fs f(d, kBlocks);
+    bool formatted = false;
+    CHECK_EQ(f.mount_or_format(formatted) == fs::Err::Ok, 1);
+    CHECK_EQ(f.write_chunks("/big", 9000, fill_and_ask, &f) == fs::Err::Ok, 1);
+    const std::uint32_t after = f.used_blocks();
+    const auto truth = std::uint32_t(lfs_fs_size(&f.raw()));
+    if (after != truth) std::printf("  used_blocks stale after a mid-write ask: %u vs %u\n", after, truth);
+    CHECK_EQ(after, truth);
+}
+
 }  // namespace
 
 int main() {
@@ -367,5 +385,6 @@ int main() {
     test_write_chunks_power_cut_sweep();
     test_used_blocks_walks_once_until_a_write();
     test_inline_limit();
+    test_used_blocks_asked_mid_write_is_not_kept();
     return test_report("test_fs");
 }
