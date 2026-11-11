@@ -4694,6 +4694,20 @@ void test_alone_scan_records_its_mode() {
     CHECK_EQ(find_from("W 02=18") > 0, true);
 }
 
+// A refused read ran nothing: last_cable_read() must not keep the previous read's mode and acks (hardware review
+// 2026-11-11: the host printed "read: cable alone" beside an inline refusal).
+void test_refused_read_clears_the_last_read() {
+    reset_world();
+    g_cable.cc = 1;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Alone));
+    fusb302::set_inline(true);
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::None));
+    CHECK_EQ(int(fusb302::last_cable_read().acks), 0);
+    fusb302::set_inline(false);
+}
+
 // ---- the silent-cable-chip probe (fusb302::ra_probe): a cable alone, VBUS dark, no Rd of ours ----
 // The wire sequence and the restore against the fake chip and the AdcWorld model; the refusal order and the plan numbers are
 // in tests/test_ra_probe.cpp. The ADC levels are the 2026-11-11 hardware numbers where measured, assumptions where labelled.
@@ -5239,6 +5253,7 @@ int main() {
     test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();   // last: ends with a detach
     test_request_period_is_tracked_and_reset_with_the_attach();                           // last: ends with a detach
     test_alone_scan_records_its_mode();
+    test_refused_read_clears_the_last_read();
     test_attached_scan_keeps_rd_and_the_attach_and_tries_one_orientation();
     test_attached_scan_on_cc2_never_puts_vconn_on_cc2();
     test_attached_scan_with_a_cable_on_the_idle_orientation_finds_nothing_and_keeps_the_attach();

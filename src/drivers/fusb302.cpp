@@ -1597,6 +1597,7 @@ bool cable_exchange_impl(const emk_learn::Request& req, emk_learn::Reply& rep, s
 
 bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, void* ctx) {
     if (mode == pd::EmarkerMode::Sniff) return sniff_emarker();
+    g_read_info = {};   // a refused read runs nothing: never report the previous read's mode and acks beside it
     if (!emkra::vconn_switch_allowed(g_ra)) {
         K2LOG("[EMARK] Refused: the Ra mode is on (the chip's VCONN switch would fight the Ra on CC1)\n");
         return false;
