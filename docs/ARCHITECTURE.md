@@ -123,7 +123,7 @@ RAM is 96 KB at 0x20000000 (`link.ld`); never touch SRAM above it. Layout, low t
 | Region | Content |
 | :--- | :--- |
 | `.data` | initialised data and `.ramfunc` (flash programming runs from RAM); about 0.9 KB |
-| `.noinit` | the Rd intent marker's SRAM canary (`src/core/rd_comeback.cpp`, `rdintent::Canary`): NOLOAD, **not zeroed at reset** (the zero loop starts at `_sbss`), so it survives warm resets and whatever dark period SRAM itself survives; 16 B |
+| `.noinit` | the SRAM retention probe (`src/core/rd_comeback.cpp`, `bootinfo` `sr=`): 32 words, NOLOAD, **not zeroed at reset** (the zero loop starts at `_sbss`). SRAM does not survive a VBUS dark on this board (0 of 32 words after 1 s, 2026-11-11), so the Rd marker's stale-record voucher is the backup-register session record (`session::backup_alive`), not SRAM; 128 B |
 | `OVERLAY` `.mode_net` / `.mode_drive` / `.mode_sniff` / `.mode_trans` | one shared region at the same address, sized to the largest tenant. Default build (`K2_NET=0`): 16 KB, the D+/D- edge buffer (`.mode_sniff`) is the largest, the transition recorder is 15.9 KB, the drive image about 8 KB. `K2_NET=1` build: about 24 KB, lwIP + NCM + DHCP + HTTP (`.mode_net`) is the largest, which is the ~8 KB the default build gets back |
 | `.bss` | everything else (about 55 KB in the build inspected, 859f858) |
 | `.stack_guard` | 128 B no-access MPU region (`_sguard`..`_eguard`, 128-aligned) right above `.bss` (`end`/`_end` symbols for newlib's `_sbrk`) |
