@@ -110,7 +110,9 @@ def test_v9_spread_decodes_per_level():
 
 def test_brand_table_matches_the_firmware():
     hdr = (ROOT / "include" / "k2" / "chargertest" / "report_card.hpp").read_text()
-    fw = {int(v, 16): n for v, n in re.findall(r'case 0x([0-9A-F]{4}): return "([^"]+)"', hdr)}
+    consts = dict(re.findall(r'inline constexpr uint16_t (k\w+) = 0x([0-9A-Fa-f]{4});', hdr))   # case kSamsungVid: ...
+    fw = {int(consts.get(v, v[2:] if v.startswith("0x") else v), 16): n
+          for v, n in re.findall(r'case (0x[0-9A-F]{4}|k\w+): return "([^"]+)"', hdr)}
     assert fw == report_card.BRANDS
 
 
