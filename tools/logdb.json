@@ -562,6 +562,8 @@
   "565": "[EMK] pull-down probe: refused reason=%u verdict=%s\n",
   "566": "[EMK] pull-down probe: verdict=%s n=%u flags=%u\n",
   "567": "[RDI] boot look: record %s pin=%u canary=%d host=%d sram=%u/%u\n",
-  "568": "[RDI] record %s pin=%u ignored: the backup registers did not survive this boot (a stale record)\n"
+  "568": "[RDI] record %s pin=%u ignored: the backup registers did not survive this boot (a stale record)\n",
+  "569": "[LOOP] write failed fs=%s ms=%u\n",
+  "570": "[LOOP] slow write ms=%u\n"
  }
 }

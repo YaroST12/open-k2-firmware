@@ -2251,6 +2251,72 @@ ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Resul
     return ccprobe::Refusal::None;
 }
 
+loopprobe::CcRefusal loop_cc_hold(std::span<const std::uint8_t> plan, std::uint16_t hold_us, VbusFn vbus_mv,
+                                  loopprobe::CcResult &out) {
+    using loopprobe::CcRefusal;
+    out = {};
+    const auto refuse = [&](CcRefusal why) {
+        out.refusal = std::uint8_t(why);
+        return why;
+    };
+    if (!loopprobe::cc_plan_ok(plan)) return refuse(CcRefusal::BadPlan);
+    std::uint8_t sw0 = 0;
+    if (!rd(kSwitches0, sw0)) return refuse(CcRefusal::Bus);
+    out.sw0 = sw0;
+    out.pc = probe_levels();
+    const pd::SinkState ss = g_sink.status().state;
+    if (ss != pd::SinkState::Idle && ss != pd::SinkState::Failed) return refuse(CcRefusal::Contract);
+    if (g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active() || g_rd_op || g_rd_start || g_ra)
+        return refuse(CcRefusal::Engine);
+    if (g_vconn_applied || g_vconn.state() != pd::VconnState::Off || (sw0 & (kVconnCc1 | kVconnCc2)) != 0)
+        return refuse(CcRefusal::Vconn);
+    const auto vbus = [&] { return vbus_mv ? vbus_mv() : std::int32_t(-1); };
+    if (vbus() > loopprobe::kCcVbusLimitMv) return refuse(CcRefusal::VbusHigh);
+
+    // Per entry: write the Rd bits, hold (no service(): the PD side must not act on the probe's state), sample, put the
+    // found value back, then service() before the next entry.
+    std::uint8_t n = 0;
+    for (const std::uint8_t cfg : plan) {
+        const std::uint8_t v = loopprobe::cc_sw0(sw0, cfg);
+        wr(kSwitches0, v);
+        systick::delay_us(hold_us);
+        loopprobe::CcRow &row = out.rows[n++];
+        row.cfg = cfg;
+        std::uint8_t back = 0xFF;
+        if (!rd(kSwitches0, back) || back != v) out.flags |= loopprobe::kCcDisturbed;
+        std::uint16_t r1 = 0xFFFF, r2 = 0xFFFF;
+        adc::latest_cc(r1, r2);
+        row.cc1_raw = r1;
+        row.cc2_raw = r2;
+        std::uint8_t a1 = 0, a2 = 0;
+        const bool ok1 = wr(kSwitches0, ccprobe::measure_sw0(v, 1));
+        systick::delay_us(loopprobe::kCcMeasureUs);
+        const bool ok2 = ok1 && rd(kStatus0, a1) && wr(kSwitches0, ccprobe::measure_sw0(v, 2));
+        systick::delay_us(loopprobe::kCcMeasureUs);
+        const bool ok = ok2 && rd(kStatus0, a2);
+        row.bc = std::uint8_t((a1 & 3u) | (a2 & 3u) << 2 | (ok ? 0x10u : 0u));
+        const std::int32_t mv = vbus();
+        row.vbus_mv = std::uint16_t(mv < 0 ? 0xFFFF : (mv > 0xFFFE ? 0xFFFE : mv));
+        wr(kSwitches0, sw0);
+        if (mv > loopprobe::kCcVbusLimitMv) {
+            out.flags |= loopprobe::kCcAborted;
+            break;
+        }
+        service();
+    }
+    out.n = n;
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+        wr(kSwitches0, sw0);
+        std::uint8_t b0 = 0xFF;
+        if (rd(kSwitches0, b0) && b0 == sw0 && probe_levels() == out.pc) {
+            out.flags |= loopprobe::kCcRestored;
+            break;
+        }
+    }
+    return CcRefusal::None;
+}
+
 raprobe::Refusal ra_probe(const raprobe::Args &a, VbusFn vbus_mv, raprobe::Result &out) {
     out = {};
     const auto refuse = [&](raprobe::Refusal why) {

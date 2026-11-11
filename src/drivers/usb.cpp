@@ -115,6 +115,68 @@ void detach(std::uint32_t hold_ms) {
 
 bool configured() { return tud_mounted(); }
 
+Lines lines() {
+    Lines l;
+    l.core = g_started;
+    if (g_started) {
+        const std::uint16_t fnr = reg::usb_fnr();
+        l.configured = tud_mounted();
+        l.rx_dp = (fnr & reg::kUsbFnrRxdp) != 0;
+        l.rx_dm = (fnr & reg::kUsbFnrRxdm) != 0;
+        l.frame = fnr & reg::kUsbFnrFrame;
+    }
+    l.pin_dp = pins::usb_dp.read();
+    l.pin_dm = pins::usb_dm.read();
+    return l;
+}
+
+namespace {
+// What dp_pullup() found before its first change: the core's pull-up bit, or PA12's mode nibble and output latch.
+struct PullSaved {
+    Pull kind = Pull::None;
+    std::uint32_t cfg = 0;
+    std::uint32_t mode = 0;
+    bool odr = false;
+};
+PullSaved g_pull;
+
+std::uint32_t pa12_mode() { return (reg::gpio(pins::usb_dp.port).CRH >> ((pins::usb_dp.n & 7u) * 4u)) & 0xFu; }
+}  // namespace
+
+Pull dp_pullup(bool on) {
+    if (g_pull.kind == Pull::None) {
+        g_pull.kind = g_started ? Pull::Core : Pull::Gpio;
+        g_pull.cfg = reg::usb_cfg() & reg::kUsbCfgPullupOff;
+        g_pull.mode = pa12_mode();
+        g_pull.odr = (reg::gpio(pins::usb_dp.port).ODR & pins::usb_dp.mask()) != 0;
+    }
+    // init() leaves PA12 an input with its weak pull-up next to the core's 1.5k: "off" releases both, "on" with the core
+    // brings back the pin as found, without it the weak pull-up is the only one there is.
+    if (g_pull.kind == Pull::Core) {
+        if (on) {
+            reg::usb_cfg() &= ~reg::kUsbCfgPullupOff;
+            pins::usb_dp.write(g_pull.odr);
+            pins::usb_dp.mode(reg::Mode(g_pull.mode));
+        } else {
+            reg::usb_cfg() |= reg::kUsbCfgPullupOff;
+            pins::usb_dp.mode(reg::Mode::InFloating);
+        }
+    } else if (on) {
+        pins::usb_dp.pull_up();
+    } else {
+        pins::usb_dp.mode(reg::Mode::InFloating);
+    }
+    return g_pull.kind;
+}
+
+void dp_pullup_restore() {
+    if (g_pull.kind == Pull::None) return;
+    if (g_pull.kind == Pull::Core) reg::usb_cfg() = (reg::usb_cfg() & ~reg::kUsbCfgPullupOff) | g_pull.cfg;
+    pins::usb_dp.write(g_pull.odr);
+    pins::usb_dp.mode(reg::Mode(g_pull.mode));
+    g_pull = {};
+}
+
 void poll() {
     if (!g_started) return;            // USB link off (k2/drivers/usbcfg.hpp): the core was never started
     static std::uint32_t last_ms;

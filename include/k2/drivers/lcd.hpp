@@ -18,6 +18,10 @@ void init();
 // The driver is unusable until init() runs again.
 void park();
 
+// Backlight on or off (a plain GPIO: there is no brightness level in between). The panel keeps its content; the
+// loop probe (k2/loopprobe/loop_probe_hw.hpp) steps the K2's own draw with it. init() turns it on.
+void set_backlight(bool on);
+
 // ST7789 rotation 0..3 (MADCTL 0x00/0x60/0xC0/0xA0). The 240x240 panel sits in a 240x320
 // RAM, so the flipped modes shift the window origin by 80; only rotation 0 is verified.
 void set_rotation(std::uint8_t rotation);

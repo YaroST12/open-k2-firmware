@@ -330,6 +330,8 @@ void park() {
     systick::delay_ms(5);   // SLPIN needs 5 ms before the next command
 }
 
+void set_backlight(bool on) { p::lcd_bl.write(on); }
+
 void set_rotation(std::uint8_t rotation) {
     rotation &= 3;
     g_x_off = rotation == 3 ? kRamOffset : 0;

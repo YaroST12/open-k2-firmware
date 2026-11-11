@@ -210,5 +210,11 @@ inline Spi& spi3() { return at<Spi>(0x40003C00); }
 
 inline R16& usb_istr() { return at<R16>(0x40005C00 + 0x44); }
 constexpr uint16_t kUsbIstrReset = 1u << 10;
+// Frame number register: the frame counter of the last SOF and the PHY's D+ / D- receiver levels (read-only).
+inline R16& usb_fnr() { return at<R16>(0x40005C00 + 0x48); }
+constexpr uint16_t kUsbFnrFrame = 0x7FF, kUsbFnrRxdm = 1u << 14, kUsbFnrRxdp = 1u << 15;
+// The core's configuration word: bit 1 set = the internal D+ 1.5k pull-up off (TinyUSB's connect / disconnect write it).
+inline R32& usb_cfg() { return at<R32>(0x40005C00 + 0x60); }
+constexpr uint32_t kUsbCfgPullupOff = 1u << 1;
 
 }  // namespace k2::reg
