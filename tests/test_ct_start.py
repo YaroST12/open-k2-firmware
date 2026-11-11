@@ -32,8 +32,17 @@ class Preflight(unittest.TestCase):
         self.assertIsNone(self.run_pf([{"vbus_mv": 5000, "pd_valid": True}]))
 
     def test_rescan_then_vbus_gone_refused(self):
-        r = self.run_pf([{"vbus_mv": 5000, "pd_valid": False}, {"vbus_mv": 0, "pd_valid": False}])
+        # gone for the whole wait: refused, naming the last reading
+        r = self.run_pf([{"vbus_mv": 5000, "pd_valid": False}] + [{"vbus_mv": 0, "pd_valid": False}] * 20)
         self.assertIn("dropped", r)
+
+    def test_rescan_landing_in_an_auto_off_cut_waits_for_vbus(self):
+        # pattern usb-a-no-load-auto-off: a USB-A port with nothing drawing cuts VBUS every ~6.5 s (to ~3.9-4.4 V, then back
+        # by itself). The one reading after the rescan landed in a cut ("VBUS dropped to 4.42 V", 1.0.0-564): the START
+        # itself presents Rd and waits for VBUS, so the preflight waits for the port to come back too.
+        cut = {"vbus_mv": 4420, "pd_valid": False}
+        r = self.run_pf([{"vbus_mv": 5120, "pd_valid": False}, cut, cut, {"vbus_mv": 5120, "pd_valid": False}])
+        self.assertIsNone(r)
 
     def test_legacy_only_proceeds(self):
         self.assertIsNone(self.run_pf([{"vbus_mv": 5000, "pd_valid": False}, {"vbus_mv": 5000, "pd_valid": False}]))
