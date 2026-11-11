@@ -179,7 +179,27 @@ static void overvoltage_during_result_hold_stops_scan() {
     CHECK(s.fail() == Fail::Overvoltage);
 }
 
+// The HID-cable loop 5 V lock: the scan reaches 9 V, so it does not start; a scan that is running stops at the lock.
+static void hv_lock_guard() {
+    FakeCharger c;
+    Engine e(c);
+    Scanner s(e, c);
+    c.hv_lock = true;
+    CHECK(s.start(true) == Fail::OverLimit);
+    CHECK(c.set_calls == 0 && c.resets == 0 && !s.running());
+    c.hv_lock = false;
+    CHECK(s.start(true) == Fail::None);
+    run(c, e, s, 300);
+    CHECK(s.running());
+    c.hv_lock = true;
+    run(c, e, s, 5);
+    CHECK(!s.running());
+    CHECK(s.fail() == Fail::OverLimit);
+    CHECK(e.state() != State::Negotiating && e.state() != State::Active);
+}
+
 int main() {
+    hv_lock_guard();
     order_and_refusals();
     inline_guard();
     qc_only_charger();

@@ -104,6 +104,7 @@ const char* name(Fail f) {
 Fail Engine::validate(Proto p, int& target_mv, bool confirmed) const {
     const int ceiling = env_.ceiling_mv();
     if (ceiling <= 0) return Fail::NoMonitor;
+    if (env_.hv_locked() && target_mv > kLockMv) return Fail::OverLimit;   // the HID-cable loop 5 V lock
     switch (p) {
     case Proto::Qc2:
         if (!qc::qc2_levels(target_mv)) return Fail::Unsupported;
@@ -1027,6 +1028,7 @@ void Engine::poll_step() {
     // reached (the row ends as "voltage not reached"), not an overvoltage.
     const bool unmoved = entry_mv_ > 0 && target_mv_ < entry_mv_ && vbus <= entry_mv_ * 103 / 100;
     if (vbus > env_.ceiling_mv()) return abort(Fail::Overvoltage);   // the monitor's own limit: an overvoltage whoever answered
+    if (env_.hv_locked() && (target_mv_ > kLockMv || vbus > kLockVbusMv)) return abort(Fail::OverLimit);   // HID-cable loop
     // Past the target's guard band. Before the charger has answered AFC / FCP / SCP itself this is a QC-only source following the
     // D+/D- levels: the bus is dropped all the same, but the finding is "not supported", not an overvoltage.
     // VIVO is the same case while no frame of the charger has been heard (vheard_); its NoResponse stays as it is, that is a result of its own.

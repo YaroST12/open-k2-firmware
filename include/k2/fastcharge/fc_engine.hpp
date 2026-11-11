@@ -45,6 +45,9 @@ enum class Fail : std::uint8_t {
 // (3.3 V 300 us, 0 V 300 us); and the 13-period train of the 2026-11-02 work.
 inline constexpr std::size_t kVoocBurstSteps = 80, kVoocTrainSteps = 13 * 4 + 3;
 
+// The HID-cable loop 5 V lock (Env::hv_locked): the highest target, and the highest VBUS a running session may show.
+inline constexpr int kLockMv = 5000, kLockVbusMv = 5500;
+
 const char* name(Proto p);
 const char* name(State s);
 const char* name(Fail f);
@@ -62,6 +65,9 @@ struct Env {
     virtual int dm_mv() { return -1; }
     virtual int ceiling_mv() { return 0; }     // power::max_vbus_mv(); 0 = nothing may be triggered
     virtual link::Reason inline_reason() { return link::Reason::None; }   // k2::link::inline_now()
+    // The HID-cable loop 5 V lock (k2::loopguard::locked()): no target above kLockMv starts or is retargeted to (OverLimit),
+    // and a running session above it, or with VBUS above kLockVbusMv, is aborted with OverLimit (both lines to 0 V).
+    virtual bool hv_locked() { return false; }
     virtual void set_dp(Drive) {}
     virtual void set_dm(Drive) {}
     virtual void play(std::span<const Step>) {}   // blocking timed list
