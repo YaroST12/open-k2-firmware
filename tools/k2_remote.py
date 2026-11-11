@@ -1343,7 +1343,15 @@ def attach_hunt_evidence(link, run_id, rows):
         return
 
 
-def cmd_charger_test(link, a):
+class ResultsChanged(FrameError):
+    """The firmware's RAM results moved under an export (a running suite rewrites rows and the revision)."""
+
+
+RESULTS_ATTEMPTS = 4     # whole exports tried before the results are declared unsettled
+RESULTS_RETRY_S = 0.3    # pause between exports, so a row boundary can pass
+
+
+def cmd_charger_test(link, a, sleep=time.sleep):
     if a.test_cmd == "view":   # the screens as data; firmware without the form answers BadArg / BadLength
         try:
             return decode_charger_test_view(link.call(CMD_CHARGER_TEST, bytes([3])).payload)
@@ -1352,6 +1360,23 @@ def cmd_charger_test(link, a):
                 raise
             raise FrameError("this firmware has no charger-test view (older than the shell-parity build); "
                              "use charger-test status or a screenshot") from None
+    if a.test_cmd == "status":
+        return _charger_test_export(link, a)
+    # results / summary read the whole table over many pages: a revision change under the read (Busy from the firmware, or a page
+    # that no longer matches) is a moving table, not a failure. Read again, a bounded number of times, then say so.
+    for attempt in range(1, RESULTS_ATTEMPTS + 1):
+        try:
+            return _charger_test_export(link, a)
+        except (ResultsChanged, RemoteError) as e:
+            if isinstance(e, RemoteError) and not (e.cmd == CMD_CHARGER_TEST and e.status == STATUS_BUSY):
+                raise
+            if attempt == RESULTS_ATTEMPTS:
+                raise ResultsChanged(f"charger-test results kept changing in {RESULTS_ATTEMPTS} reads of {RESULTS_RETRY_S} s apart "
+                                     f"(last: {e}); retry results when the run is between rows") from e
+            sleep(RESULTS_RETRY_S)
+
+
+def _charger_test_export(link, a):
     try:
         response = link.call(CMD_CHARGER_TEST, b"\x02")
     except RemoteError as e:
@@ -1371,11 +1396,11 @@ def cmd_charger_test(link, a):
         page = decode_charger_test(link.call(CMD_CHARGER_TEST, req).payload)
         if (any(page[k] != meta[k] for k in meta if k not in ("start", "count", "steps", "cursor")) or
                 page["start"] != len(rows) or page["count"] != min(1 if query else 2, meta["total"] - len(rows))):
-            raise FrameError("charger-test results changed or page did not advance; retry results")
+            raise ResultsChanged("charger-test results changed or page did not advance; retry results")
         rows.extend(page["steps"])
     end = decode_charger_test(link.call(CMD_CHARGER_TEST, query).payload)
     if end != meta:
-        raise FrameError("charger-test results changed during export; retry results")
+        raise ResultsChanged("charger-test results changed during export; retry results")
     attach_hunt_evidence(link, meta["run_id"], rows)   # read after the export proved stable; the evidence is not part of that check
     result["steps"] = rows
     if a.test_cmd == "summary" and not getattr(a, "json", False):

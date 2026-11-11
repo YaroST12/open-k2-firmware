@@ -109,20 +109,52 @@ class ChargerTest(unittest.TestCase):
 
     def test_no_partial_export_on_mutation_or_errors(self):
         changed = bytearray(HEADER); changed[5] += 1
-        for bad in (bytes(changed), page(HEADER, 0, []), page(HEADER, 1, [ROW0]),
-                    kr.RemoteError(kr.STATUS_BUSY, kr.CMD_CHARGER_TEST),
-                    kr.RemoteError(kr.STATUS_UNKNOWN_CMD, kr.CMD_CHARGER_TEST), kr.RemoteTimeout("timeout")):
+        for bad, reads in ((bytes(changed), kr.RESULTS_ATTEMPTS), (page(HEADER, 0, []), kr.RESULTS_ATTEMPTS),
+                           (page(HEADER, 1, [ROW0]), kr.RESULTS_ATTEMPTS),
+                           (kr.RemoteError(kr.STATUS_BUSY, kr.CMD_CHARGER_TEST), kr.RESULTS_ATTEMPTS),
+                           (kr.RemoteError(kr.STATUS_UNKNOWN_CMD, kr.CMD_CHARGER_TEST), 1), (kr.RemoteTimeout("timeout"), 1)):
             with self.subTest(bad=bad), patch.object(Path, "write_text") as write:
-                link = Link([HEADER, bad])
+                link = Link([HEADER, bad] * reads)   # a moving table is read again, a bounded number of times; other errors end at once
                 with self.assertRaises((kr.FrameError, kr.RemoteError, kr.RemoteTimeout)):
-                    kr.cmd_charger_test(link, self.args("results", "--out", "host-build/evidence.json"))
+                    kr.cmd_charger_test(link, self.args("results", "--out", "host-build/evidence.json"), sleep=lambda s: None)
                 write.assert_not_called()
-                self.assertEqual(len(link.sent), 2)
-        link = Link([HEADER, page(HEADER, 0, [ROW0, ROW1]), page(HEADER, 2, [ROW2]), bytes(changed)])
+                self.assertEqual(len(link.sent), 2 * reads)
+        link = Link([HEADER, page(HEADER, 0, [ROW0, ROW1]), page(HEADER, 2, [ROW2]), bytes(changed)] * kr.RESULTS_ATTEMPTS)
         with patch.object(Path, "write_text") as write, self.assertRaises(kr.FrameError):
-            kr.cmd_charger_test(link, self.args("results", "--out", "host-build/evidence.json"))
+            kr.cmd_charger_test(link, self.args("results", "--out", "host-build/evidence.json"), sleep=lambda s: None)
         write.assert_not_called()
         self.assertIn("retry charger-test results", str(kr.RemoteError(4, 0x0B)))
+
+    def test_results_changed_under_the_read_is_read_again(self):
+        """ct_start, 2026-11-11: the summary fetch ended a 14 min run with `busy (RAM results changed)`; a revision that moves under
+        the read (Busy on a page, or a page that no longer matches) is read again, bounded, with a pause."""
+        changed = bytearray(HEADER); changed[5] += 1
+        good = [HEADER, page(HEADER, 0, [ROW0, ROW1]), page(HEADER, 2, [ROW2]), HEADER]
+        busy = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_CHARGER_TEST)
+        for name, bad_tail in (("busy on a page", [HEADER, busy]), ("page of another revision", [HEADER, page(bytes(changed), 0, [ROW0, ROW1])]),
+                               ("table moved by the closing read", [HEADER, page(HEADER, 0, [ROW0, ROW1]), page(HEADER, 2, [ROW2]), bytes(changed)])):
+            for failures in range(kr.RESULTS_ATTEMPTS):   # 0..N-1 unsettled reads, then a settled one
+                with self.subTest(case=name, failures=failures):
+                    sleeps, link = [], Link(bad_tail * failures + good)
+                    for a in (self.args("results"), self.args("summary")):
+                        sleeps.clear(); link.payloads = list(bad_tail * failures + good)
+                        result = kr.cmd_charger_test(link, a, sleep=sleeps.append)
+                        self.assertEqual(result["steps"], EXPECTED_ROWS)
+                        self.assertEqual(sleeps, [kr.RESULTS_RETRY_S] * failures)
+
+    def test_results_that_never_settle_fail_clearly(self):
+        busy = kr.RemoteError(kr.STATUS_BUSY, kr.CMD_CHARGER_TEST)
+        link, sleeps = Link([HEADER, busy] * kr.RESULTS_ATTEMPTS), []
+        with self.assertRaises(kr.FrameError) as ctx:
+            kr.cmd_charger_test(link, self.args("summary"), sleep=sleeps.append)
+        self.assertIn(f"kept changing in {kr.RESULTS_ATTEMPTS} reads", str(ctx.exception))
+        self.assertEqual(len(link.sent), 2 * kr.RESULTS_ATTEMPTS)
+        self.assertEqual(len(sleeps), kr.RESULTS_ATTEMPTS - 1)   # no pause after the last read
+        # a Busy that is not this table's (another command) is not retried
+        link = Link([HEADER, kr.RemoteError(kr.STATUS_BUSY, kr.CMD_BUTTON)])
+        with self.assertRaises(kr.RemoteError):
+            kr.cmd_charger_test(link, self.args("results"), sleep=sleeps.append)
+        self.assertEqual(len(link.sent), 2)
 
     def test_bad_wire_shape_and_enums(self):
         good = page(HEADER, 0, [ROW0, ROW1])
@@ -418,7 +450,8 @@ class ChargerTest(unittest.TestCase):
             changed = bytearray(good); changed[offset] ^= 1
             with self.subTest(offset=offset), patch.object(Path, "write_text") as write:
                 with self.assertRaises(kr.FrameError):
-                    kr.cmd_charger_test(Link([HEADER2, changed]), self.args("results", "--out", "host-build/evidence.json"))
+                    kr.cmd_charger_test(Link([HEADER2, changed] * kr.RESULTS_ATTEMPTS), self.args("results", "--out", "host-build/evidence.json"),
+                                        sleep=lambda s: None)
                 write.assert_not_called()
         for bad in (HEADER2[:41], HEADER2 + b"\0", good + ROW0, good[:-1]):
             with self.assertRaises(kr.FrameError):
