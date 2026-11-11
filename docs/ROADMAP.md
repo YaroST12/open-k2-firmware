@@ -104,11 +104,15 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   rest of SCP (`rebooted 3x`) and the run finished (`resumed 2`). Cause, seen with the K2 on PC power (`--units scp`,
   `runs/2026-11-11-iq4-scp/`): the IQ4 does not follow SCP 10 V (row timeout at 5.0 V), then cuts VBUS to 0 for ~70 ms
   and restarts PD (CHARGER_QUIRKS `output-reset-after-unanswered-scp`). The charger's behaviour, handled by the budget;
-  parked by the user.
+  parked by the user. On 1.0.0-594 (PC-powered full run) SCP 10 / 12 V were skipped `PD active: use QC port`, so no cut.
 - **FCP 12 V not released on the IQ4** (2026-11-11, PC-powered `--units fcp,scp`): the D+/D- reset left VBUS at 12.1 V,
   the run stopped Unsafe "5V release failed" after 8 s; a PD Soft_Reset then gave 5 V in ~150 ms
-  (`fc-holds-after-bus-reset`). Seen once; the self-powered full run went on from FCP to SCP 5 V.
-- **QC2 / QC3 fail on the IQ4 above 5 V** (2026-11-11 self-powered full run: QC2 9 V `voltage not reached`, QC3
+  (`fc-holds-after-bus-reset`). Seen once; the self-powered full run went on from FCP to SCP 5 V. Not seen again on
+  1.0.0-594 (idle fix in): FCP 12 V released in both PC-powered runs (`--units qc2,qc3,fcp` and the full run,
+  `runs/2026-11-11-iq4-idle/`), so the old 0.6 V / 0.6 V idle (QC2 12 V code) is the likely cause. Close after one more.
+- ~~**QC2 / QC3 fail on the IQ4 above 5 V**~~ fixed by the D+/D- idle fix (k2/idle-dpdm): on 1.0.0-594 (PC-powered,
+  `runs/2026-11-11-iq4-idle/`) `--units qc2,qc3,fcp` 13 pass / 0 fail, and the full run 27 pass / 4 fail / 26 skip with
+  QC2 5/9/12 V, QC3 5→12→5 V, QC3B 5/12 V all pass. History: (2026-11-11 self-powered full run: QC2 9 V `voltage not reached`, QC3
   `timeout`), although QC2 12.1 V and QC3 11.8 V passed on 2026-11-04 (5c548f7). A state left by the vendor units or a
   regression. `--units qc2,qc3` alone (PC-powered, run 4, `runs/2026-11-11-iq4-scp/ct_qc.txt`) fails the same way: QC2 9 V
   at 5.10 V, QC3 / QC3B timeout at 5.10 V, so not a leftover state. Next: the same units on another charger that passed QC

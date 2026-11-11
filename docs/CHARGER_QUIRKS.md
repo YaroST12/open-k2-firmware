@@ -313,6 +313,12 @@ Patterns so far (names used below):
   after FCP 12 V the D+/D- reset did not release (`fc-holds-after-bus-reset`). **QC2 9 V and QC3 above 5 V failed** in the
   self-powered full run although QC2 12.1 V and QC3 11.8 V passed on 11-04: not explained yet (a charger state left by the
   vendor units, or a regression).
+- 2026-11-11 late (1.0.0-594-cd569683, idle fix in, PC-powered, `runs/2026-11-11-iq4-idle/`): `--units qc2,qc3,fcp`
+  13 pass / 0 fail; full run 27 pass / 4 fail / 26 skip. QC2 5/9/12 V, QC3 5→12→5 V, QC3B 5/12 V (Class A), FCP 5/9/12 V
+  pass and FCP 12 V released: the QC fails above were the K2's old 0.6 V / 0.6 V D+/D- idle, not the charger. PD and PPS
+  as before (5.10-19.77 V). SCP 5 V detected, 10 / 12 V skipped `PD active: use QC port`. AFC 9 V `unsupported` at
+  5.13 V (it passed on 11-04, then after QC; now it runs after FCP + SCP: order or state unverified). VOOC "needs load",
+  VIVO no response, UFCS no handshake, QC3+ none: as on 11-04.
 
 ### Baseus EnerCore CJ11 70W (model E0307E)
 - 2026-11-07 (65aaeaf, old legacy-first order, HID-powered, Ra spoof armed; `runs/home1`): legacy units on real handshakes:
