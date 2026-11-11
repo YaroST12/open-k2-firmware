@@ -10,6 +10,7 @@
 
 #include "../tools/bbdiag_walk.hpp"
 #include "k2/pd/diag.hpp"
+#include "k2/pd/diag_screen.hpp"
 #include "k2/pd/diag_wire.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/pdtrace.hpp"
@@ -1308,6 +1309,174 @@ void test_ram_budget() {
     CHECK_COND(sizeof(Analyzer) <= 800);
 }
 
+// ---- the K2 screen's compact form (k2/pd/diag_screen.hpp) ----
+
+struct ScreenRows {
+    std::vector<screen::Row> rows;
+    explicit ScreenRows(const Report& r) {
+        for (unsigned i = 0; i < screen::row_count(r); i++) {
+            screen::Row w;
+            CHECK_COND(screen::row(r, i, w));
+            rows.push_back(w);
+        }
+    }
+    void dump(const char* name) const {
+        std::printf("--- screen %s\n", name);
+        for (const auto& w : rows) std::printf("  [%d] %-16s %7s | %s\n", int(w.sev), w.label.data(), w.tail.data(), w.note.data());
+    }
+};
+
+void check_fits(const screen::Row& w) {
+    const auto l = std::strlen(w.label.data()), t = std::strlen(w.tail.data()), n = std::strlen(w.note.data());
+    CHECK_COND(l > 0 && l <= screen::kLabelChars);
+    CHECK_COND(t <= screen::kTailChars);
+    CHECK_COND(n <= screen::kNoteChars);
+    if (l > screen::kLabelChars || t > screen::kTailChars || n > screen::kNoteChars)
+        std::printf("  too long: '%s' '%s' '%s'\n", w.label.data(), w.tail.data(), w.note.data());
+}
+
+void test_screen_case1() {
+    const auto raw = load("tests/fixtures/bbdiag/hub_rear_60w.raw");
+    TwinHint twin{"Legion rear port", kLegionPdos, true, true};
+    Run run;
+    run.a.feed(raw);
+    run.r = evaluate(run.a.shown(), &twin, run.a.now_ms());
+    const ScreenRows s(run.r);
+    s.dump("case 1");
+    CHECK_COND(s.rows.size() >= 4);
+    if (s.rows.size() < 4) return;
+    CHECK_STR(s.rows[0].label.data(), "Power short");
+    CHECK_STR(s.rows[0].note.data(), "needs 65W (twin), gets 60W");
+    CHECK_STR(s.rows[0].tail.data(), "");   // the Request's time, not an event: no tail
+    CHECK_STR(s.rows[1].label.data(), "No mismatch flag");
+    CHECK_STR(s.rows[1].note.data(), "took 20V3A, bit not set");
+    bool draw = false, quiet = false;
+    for (const auto& w : s.rows) {
+        check_fits(w);
+        if (std::strncmp(w.label.data(), "Draw ", 5) == 0) { draw = true; CHECK_COND(std::strncmp(w.note.data(), "on 20V3A, peak ", 15) == 0); }
+        if (std::strcmp(w.label.data(), "No resets") == 0) { quiet = true; CHECK_EQ(int(w.sev), int(Sev::Ok)); }
+    }
+    CHECK_COND(draw);
+    CHECK_COND(quiet);
+    CHECK_COND(s.rows.back().lanes);
+    CHECK_STR(s.rows.back().label.data(), "Data lanes");
+    CHECK_STR(s.rows.back().note.data(), "pass through; PD: DP alt mode");
+    char v[40];
+    screen::verdict(run.r, v);
+    CHECK_STR(v, "Link OK, power short");
+    char w[24];
+    Sev sev = Sev::Ok;
+    screen::word(run.r, w, sev);
+    CHECK_STR(w, "Power short");
+    CHECK_EQ(int(sev), int(run.r.f[0].sev));
+}
+
+void test_screen_empty_and_no_pd() {
+    Report r;
+    CHECK_EQ(screen::row_count(r), 0u);
+    char v[40], w[24];
+    Sev sev = Sev::Fail;
+    screen::verdict(r, v);
+    CHECK_STR(v, "No PD session yet");
+    screen::word(r, w, sev);
+    CHECK_STR(w, "No PD session");
+    CHECK_EQ(int(sev), int(Sev::Ok));
+    r.empty = false;
+    r.no_pd = true;
+    r.vbus_mv = 5040;
+    screen::verdict(r, v);
+    CHECK_STR(v, "No PD seen, VBUS 5V");
+    screen::word(r, w, sev);
+    CHECK_STR(w, "No PD seen");
+}
+
+// The over-contract ramp: the Home word is the top Fail's label, in its severity.
+void test_screen_ramp() {
+    Run run;
+    const auto raw = load("tests/fixtures/bbdiag/ramp_70w.raw");
+    run.a.feed(raw);
+    run.r = evaluate(run.a.shown(), nullptr, run.a.now_ms());
+    const ScreenRows s(run.r);
+    s.dump("ramp");
+    for (const auto& w : s.rows) check_fits(w);
+    char v[40], w[24];
+    Sev sev = Sev::Ok;
+    screen::word(run.r, w, sev);
+    if (run.r.n && run.r.f[0].sev <= Sev::Warn) CHECK_STR(w, s.rows[0].label.data());
+    screen::verdict(run.r, v);
+    CHECK_COND(std::strlen(v) <= screen::kVerdictChars);
+}
+
+// Every code with the widest numbers its fields can carry (diag.cpp evaluate(): u8 counters saturate at 255, the
+// u16 ones at 65535; currents to 12.34 A, VBUS to 28.5 V, 240 W, times to 9:59:59 and past 10 h) still fits its row.
+void test_screen_worst_case_fits() {
+    Report r;
+    r.empty = false;
+    r.vbus_mv = 28450;
+    r.peak_ma = 12340;
+    r.lanes.eusb = true; r.lanes.usb_mode = 2; r.lanes.tbt = true; r.lanes.dp = true; r.lanes.dp_pin = 'D';
+    r.quiet_contract = r.quiet_link = r.quiet_quality = r.band_checked = r.quiet_roles = true;
+    struct W { Code c; std::int32_t a, b, c2, d; };
+    constexpr std::int32_t kOdD = 3 | 999 << 2 | 999 << 12 | 1 << 22;   // OverDraw d: both faults, longest bursts
+    const W worst[] = {
+        {Code::PowerShort, 240000, 240000, 0, 0}, {Code::PowerShort, 9950, 9950, 0, 0},
+        {Code::MismatchFlag, 0, 0, 0, 0},
+        {Code::NoMismatchFlag, 28450, 12340, 0, 0},
+        {Code::OverDraw, 12340, 3250, 100 | 255 << 8 | 500 << 16, kOdD}, {Code::OverDraw, 12340, 3250, 100 | 1 << 8, kOdD},
+        {Code::OverDraw, 12340, 3250, 100, 1}, {Code::OverDraw, 12340, 3250, 100, 2}, {Code::OverDraw, 12340, 3250, 100, 0},
+        {Code::Pinned, 12340, 100, 35'999'000, 0},
+        {Code::Draw, 28450, 12340, 240000, 35'999'000}, {Code::Draw, 0, 0, 9950, 0},
+        {Code::DrawReduced, 12340, 99, 255, 0}, {Code::DrawReduced, 12340, 12340, 255, 1},
+        {Code::FiveVoltOnly, 28450, 28450, 0, 0},
+        {Code::ContractUnseen, 28450, 1, 0, 0}, {Code::ContractUnseen, 0, 0, 0, 0},
+        {Code::NoContract, 28450, 0, 0, 0},
+        {Code::ActiveSink, 28450, 12340, 15, 0}, {Code::ActiveSink, 0, 0, 15, 0},
+        {Code::HardReset, 255, 0, 0, 0}, {Code::SoftReset, 255, 255, 0, 0}, {Code::Reattach, 255, 0, 0, 0},
+        {Code::Rejected, 255, 0, 0, 0}, {Code::WaitLoop, 255, 0, 0, 0}, {Code::ManyRequests, 255, 0, 0, 0},
+        {Code::NoAccept, 255, 0, 0, 0}, {Code::LateAccept, 65535, 0, 0, 0}, {Code::NoPsRdy, 255, 0, 0, 0},
+        {Code::LatePsRdy, 65535, 1, 0, 0}, {Code::CapsUnanswered, 65535, 0, 0, 0},
+        {Code::VbusLow, 10050, 28450, 12340, 0}, {Code::VbusLow, 4500, 28450, 12340, 0},
+        {Code::VbusHigh, 28450, 28450, 0, 0},
+        {Code::VbusLost, 255, 65535, 3250, 0}, {Code::VbusLost, 255, 1000, 3250, 0},
+        {Code::InputCuts, 65535, 65535, 0, 0},
+        {Code::OverSustained, 12340, 3250, 5000 | 100 << 16, 35'999'000},
+        {Code::NoGoodCrc, 255, 0, 0, 0}, {Code::Retries, 255, 0, 0, 0}, {Code::TxFail, 255, 0, 0, 0},
+        {Code::RxBad, 255, 0, 0, 0},
+        {Code::SwapRefused, 1, 1, 16, 48000}, {Code::SwapRefused, 1, 0, 0, 0}, {Code::SwapRefused, 2, 1, 0, 0},
+        {Code::SwapRefused, 4, 0, 0, 0}, {Code::SwapRefused, 8, 0, 0, 0},
+        {Code::ModeNak, 7, 1, 0, 0}, {Code::ModeNak, 2, 0, 0, 0}, {Code::ModeNak, 4, 0, 0, 0},
+        {Code::EnterUsbRefused, 0, 0, 0, 0}, {Code::EprFailed, 255, 0, 0, 0}, {Code::CableCap, 12340, 0, 0, 0},
+        {Code::VdmLoop, 0xFF01 << 8 | 17, 255, 4, 0}, {Code::VdmLoop, 1, 255, 1, 0}, {Code::VdmLoop, 0x8087 << 8 | 16, 255, 0, 0},
+        {Code::CableSilent, 255, 255, 0, 0},
+    };
+    for (int c = 0; c <= int(Code::CableSilent); c++) {   // every code is in the table
+        bool seen = false;
+        for (const auto& w : worst) seen |= int(w.c) == c;
+        CHECK_COND(seen);
+    }
+    for (const NeedFrom nf : {NeedFrom::AssumedTwin, NeedFrom::SinkCaps, NeedFrom::Skedb})
+        for (const std::uint32_t t : {35'999'000u, 359'999'000u, 4'000'000'000u})
+            for (const auto& w : worst) {
+                r.need_from = nf;
+                r.n = 1;
+                r.f[0] = Finding{Sev::Fail, Group::Power, w.c, t, w.a, w.b, w.c2, w.d};
+                const ScreenRows s(r);
+                for (const auto& row : s.rows) check_fits(row);
+                char wd[24];
+                Sev sev;
+                screen::word(r, wd, sev);
+                CHECK_COND(std::strlen(wd) <= screen::kLabelChars);
+            }
+    for (int link = 0; link < 3; link++)
+        for (int p = 0; p <= 8; p++) {
+            r.link = std::uint8_t(link);
+            r.power = std::uint8_t(p);
+            char vd[40];
+            screen::verdict(r, vd);
+            CHECK_COND(std::strlen(vd) <= screen::kVerdictChars);
+        }
+}
+
 // Cmd 0x72 on the wire: status, a line read back in chunks through `off`, a finding with its evidence and name.
 void test_wire_encode() {
     const auto raw = load("tests/fixtures/bbdiag/hub_rear_60w.raw");
@@ -1443,5 +1612,9 @@ int main() {
     test_lines_fit_and_codes_named();
     test_ram_budget();
     test_wire_encode();
+    test_screen_case1();
+    test_screen_empty_and_no_pd();
+    test_screen_ramp();
+    test_screen_worst_case_fits();
     return test_report("test_pd_diag");
 }

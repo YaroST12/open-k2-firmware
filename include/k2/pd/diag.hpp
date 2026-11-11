@@ -214,13 +214,16 @@ struct Finding {
 enum class NeedFrom : std::uint8_t { None, SinkCaps, Skedb, Twin, AssumedTwin };
 
 inline constexpr std::size_t kMaxFindings = 16;
+// Report::power: what the session's power picture is (the verdict's second half).
+inline constexpr std::uint8_t kPowerShort = 1, kPowerOk = 2, kPowerUnknown = 3, kPowerUnseen = 4, kPowerNone = 5,
+                              kPowerActive = 6, kPowerNoPd = 7, kPowerOver = 8;
 struct Report {
     bool empty = true;        // no session yet
     bool live = false;        // the session is still running
     bool no_pd = false;       // no PD message at all
     bool active = false;      // the K2 was the sink (it sent messages)
     std::uint8_t link = 0;    // 0 healthy, 1 degraded, 2 unstable
-    std::uint8_t power = 0;   // see diag.cpp kPower*
+    std::uint8_t power = 0;   // kPower*
     std::uint32_t dur_ms = 0, start_us = 0;
     NeedFrom need_from = NeedFrom::None;
     std::uint32_t need_mw = 0, offer_mw = 0;
