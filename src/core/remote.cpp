@@ -418,6 +418,9 @@ remote::EmarkerSnapshot Remote::emarker() {
     e.answered_hdr_rev = a.spec_rev;
     e.answered_svdm = a.svdm;
     e.answered_attempt = a.attempt;
+    const emk_attached::ReadInfo ri = fusb302::last_cable_read();
+    e.read_mode = static_cast<uint8_t>(ri.mode);
+    e.read_acks = ri.acks;
     return e;
 }
 

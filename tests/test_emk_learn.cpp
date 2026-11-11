@@ -402,7 +402,7 @@ static void test_summary_and_entry_encoding() {
     CHECK_EQ(out[0], 0);   // err
     CHECK_EQ(out[1], 0);   // outcome: none
     for (std::size_t i = 2; i < n; i++) CHECK_EQ(out[i], 0);
-    CHECK_EQ(emk_learn::kSummaryBytes, 17u);   // 13 bytes before the answered tail
+    CHECK_EQ(emk_learn::kSummaryBytes, 19u);   // 13 bytes, the answered tail (4), then the read tail (2)
 
     FakeCable c;
     c.table = {kSvids22D9, kModes22D9, kOppo};
@@ -411,6 +411,8 @@ static void test_summary_and_entry_encoding() {
     o.nseeds = 1;
     emk_learn::Standalone r;
     r.answered = k2::emk_variant::answered_from(2, 1);   // orientation B, second row (PD 3.x header, SVDM 1.0)
+    r.read_mode = 2;                                     // the scan ran with a source attached
+    r.read_acks = 2;
     CHECK_EQ(emk_learn::learn(&fake_exchange, &c, o, r), true);
     CHECK_EQ(r.answered == k2::emk_variant::answered_from(2, 1), true);   // the plan leaves what the scan answered alone
     n = emk_learn::encode_summary(&r, out);
@@ -419,6 +421,8 @@ static void test_summary_and_entry_encoding() {
     CHECK_EQ(out[14], 2);     // PD 3.x header
     CHECK_EQ(out[15], 1);     // SVDM 1.0
     CHECK_EQ(out[16], 2);     // attempt 2
+    CHECK_EQ(out[17], 2);     // read mode: attached
+    CHECK_EQ(out[18], 2);     // variants acknowledged
     CHECK_EQ(out[0], 0);
     CHECK_EQ(out[1], 1);      // learned
     CHECK_EQ(out[2], 1);      // svids
@@ -488,9 +492,27 @@ static void test_seen_encoding() {
     CHECK_EQ(q::kSeenMax <= 58, true);
 }
 
+static void test_acked_no_answer_outcome_goes_on_the_wire() {
+    std::array<std::uint8_t, 64> out{};
+    emk_learn::Standalone r;
+    r.outcome = emk_learn::Outcome::AckedNoAnswer;   // the chip acknowledged the query and never answered it
+    r.read_mode = 1;
+    r.read_acks = 3;
+    CHECK_EQ(emk_learn::encode_summary(&r, out), emk_learn::kSummaryBytes);
+    CHECK_EQ(out[1], 4);      // outcome + 1: learned 1, no identity 2, aborted 3, acked-no-answer 4
+    CHECK_EQ(out[17], 1);     // alone
+    CHECK_EQ(out[18], 3);
+    // A plain silent cable stays "no identity".
+    emk_learn::Standalone q;
+    CHECK_EQ(emk_learn::encode_summary(&q, out), emk_learn::kSummaryBytes);
+    CHECK_EQ(out[1], 2);
+    CHECK_EQ(out[17], 0);
+}
+
 int main() {
     test_parse_options();
     test_summary_and_entry_encoding();
+    test_acked_no_answer_outcome_goes_on_the_wire();
     test_seen_encoding();
     test_vdm_request_header();
     test_identity_only();

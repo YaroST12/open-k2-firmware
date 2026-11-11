@@ -157,6 +157,7 @@ std::uint32_t g_physical_session = 0;
 pd::CableLimits g_scanned_cable;   // the VCONN scan before a run start (no source was there to ask the cable)
 bool g_scanned_valid = false;
 emk_variant::Answered g_answered;   // orientation and attempt-table row of the last VCONN scan that found the cable
+emk_attached::ReadInfo g_read_info; // mode (alone / attached) and acknowledged variants of the last VCONN scan of this attach
 pd::Sink g_sink;     // transmit-side state machines are pure too; this file only sends their messages
 pd::Identify g_ident;
 bool g_probe_logged = true;
@@ -361,8 +362,11 @@ constexpr auto kDiFrames = make_di_frames();
 // request window each: 40 ms VCONN settle, then 3 x (2 ms flush + 80 ms of polling) = 286 ms at most, ~235 ms per
 // silent attempt measured on hardware. Returns the 0-based table row that was answered, or kNoAnswer.
 constexpr std::size_t kNoAnswer = emk_variant::kAttempts;
-std::size_t scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
-    cc_switches(true);
+// `attached` (a source is on the line): PC13 follows the plan, a Hard Reset from the source ends the scan (it latches for
+// service()), and the INTERRUPTA reads go on after the first GoodCRC so the reset is seen. Every GoodCRC of the cable
+// counts in g_read_info.acks; a variant that was acknowledged but not answered is logged as such.
+std::size_t scan_orientation(std::uint8_t sw0, std::uint8_t sw1, bool pc13, bool attached) {
+    cc_switches(pc13);
     wr(kPower, kPwrAll);
     wr(kSwitches0, sw0);
     wr(kSwitches1, sw1);
@@ -373,19 +377,28 @@ std::size_t scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
         flush_fifos();
         delay_ms(2);
         clear_irqs();
+        if (attached && g_hr_latched) return kNoAnswer;   // the source is power-cycling: nothing will answer, service() resets the engine
         const auto& di = kDiFrames[attempt];
         fifo_write_tx(std::uint16_t(di[5] | (di[6] << 8)), {di.data() + 7, 4}, di);  // SOP' Discover Identity: header + VDM header
         wr(kControl0, kTxStart);
         // [EMK] probe: INTERRUPTA TXSENT / RETRYFAIL tell whether the cable's GoodCRC came back.
-        bool tx_seen = false;
+        bool tx_seen = false, acked = false;
 
         for (int t = 0; t < 40; t++) {  // up to 80 ms for the answer
             delay_ms(2);
             std::uint8_t ia = 0;
-            if (!tx_seen && rd(kInterruptA, ia) && (ia & (kIntTxSent | kIntRetryFail))) {
-                tx_seen = true;
-                K2LOG("[EMK] sw0=0x%02X attempt %d (PD %d.0, SVDM %d.0): SOP' %s after %d ms\n", sw0, int(attempt),
-                            var.spec_rev == 1 ? 2 : 3, int(var.svdm), (ia & kIntTxSent) ? "GoodCRC" : "RETRYFAIL (no GoodCRC)", (t + 1) * 2);
+            if ((!tx_seen || attached) && rd(kInterruptA, ia)) {
+                if (ia & kIntHardRst) {
+                    g_hr_latched = true;
+                    if (attached) return kNoAnswer;
+                }
+                if (!tx_seen && (ia & (kIntTxSent | kIntRetryFail))) {
+                    tx_seen = true;
+                    acked = (ia & kIntTxSent) != 0;
+                    if (acked && g_read_info.acks < 255) g_read_info.acks++;
+                    K2LOG("[EMK] sw0=0x%02X attempt %d (PD %d.0, SVDM %d.0): SOP' %s after %d ms\n", sw0, int(attempt),
+                                var.spec_rev == 1 ? 2 : 3, int(var.svdm), acked ? "GoodCRC" : "RETRYFAIL (no GoodCRC)", (t + 1) * 2);
+                }
             }
             std::uint8_t status1;
             if (!rd(kStatus1, status1) || (status1 & kRxEmpty)) continue;
@@ -403,6 +416,11 @@ std::size_t scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
             g_engine.on_message(sop, header, {body.data(), num_do * 4}, g_active_cc);
             if (g_engine.cable.valid) return attempt;
         }
+        // The full response window ran out. A GoodCRC without an answer is a powered chip that did not like this variant
+        // (or was starved): the next variant goes out, and the read says so.
+        if (acked)
+            K2LOG("[EMK] sw0=0x%02X attempt %d (PD %d.0, SVDM %d.0): acked, no answer\n", sw0, int(attempt),
+                  var.spec_rev == 1 ? 2 : 3, int(var.svdm));
     }
     return kNoAnswer;
 }
@@ -1200,6 +1218,7 @@ bool init() {
     g_engine.reset();
     g_physical_cable = {};
     g_physical_session = 0;
+    g_read_info = {};
     g_sink.bind(&g_engine.caps);
     g_sink.bind_epr_info(&g_engine.epr_info);
     g_msg_id = 0;
@@ -1600,17 +1619,30 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     K2LOG("[EMARK] Scanning for E-Marker (Dual-orientation SOP')...\n");
     K2LOG("[EMK] snapshot POWER=0x%02X SW0=0x%02X SW1=0x%02X inline=%d active_cc=%d cable_acks=%u\n",
                 pre.power, pre.sw0, pre.sw1, int(inline_now()), int(g_active_cc), unsigned(g_engine.cable_acks));
-    cc_switches(true);
+    // With a source attached the scan keeps the K2's Rd on the live line and tries only that line's orientation; a cable
+    // alone gets both orientations and no Rd (emk_attached.hpp). STATUS0 is read only where a source could be attached,
+    // so the cable-alone register sequence stays as it was.
+    std::uint8_t st0 = 0;
+    const bool rd_up = (g_active_cc == 1 || g_active_cc == 2) &&
+                       (pre.sw0 & (g_active_cc == 1 ? pd::phy::kPdwn1 : pd::phy::kPdwn2)) != 0;
+    if (rd_up && !rd(kStatus0, st0)) st0 = 0;
+    const emk_attached::Plan plan = emk_attached::plan(
+        emk_attached::attached(g_active_cc, pre.sw0, (st0 & ccprobe::kStatus0VbusOk) != 0, g_engine.contract.valid), g_active_cc);
+    g_read_info = {plan.attached ? emk_attached::Mode::Attached : emk_attached::Mode::Alone, 0};
+    if (rd_up)
+        K2LOG("[EMK] scan mode %s: active_cc=%d vbus_ok=%d contract=%d\n", emk_attached::mode_text(g_read_info.mode).data(),
+              int(g_active_cc), int((st0 & ccprobe::kStatus0VbusOk) != 0), int(g_engine.contract.valid));
+    cc_switches(plan.pc13);
     g_cable_read = true;   // every flush below writes CONTROL1 with SOP' and SOP'' receive on
 
-    // A: CC2 powers VCONN (SWITCHES0 0x24), BMC on CC1 (SWITCHES1 0x25).
-    // B: CC1 powers VCONN (SWITCHES0 0x18), BMC on CC2 (SWITCHES1 0x26).
+    // Alone: A (CC2 powers VCONN, SWITCHES0 0x24, BMC on CC1, SWITCHES1 0x25), then B (CC1 powers VCONN, 0x18, BMC on
+    // CC2, 0x26). Attached: only the orientation whose BMC line is the live one, with the Rd (PDWN) kept on it.
     bool found = true;
-    std::size_t row = scan_orientation(0x24, 0x25);
-    std::uint8_t orient = 1;
-    if (row == kNoAnswer) {
-        row = scan_orientation(0x18, 0x26);
-        orient = 2;
+    std::size_t row = kNoAnswer;
+    std::uint8_t orient = 0;
+    for (std::uint8_t i = 0; i < plan.count && row == kNoAnswer; i++) {
+        row = scan_orientation(plan.steps[i].sw0, plan.steps[i].sw1, plan.pc13, plan.attached);
+        orient = plan.steps[i].orientation;
     }
     g_answered = emk_variant::answered_from(orient, row);   // empty when nothing answered
     if (g_answered.valid()) {
@@ -2036,6 +2068,7 @@ static void detach_reset(std::uint8_t status0) {
     g_msg_id = 0;
     g_engine.reset_cable();  // the next sniff must not report the old cable as heard
     g_answered = {};
+    g_read_info = {};
     g_engine.reset_sink();
     g_engine.reset_source();  // the offers go with the partner: nothing of charger A may serve charger B
     g_new_source = true;
@@ -2819,6 +2852,7 @@ void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> 
 const pd::SourceCaps& caps() { return g_engine.caps; }
 const pd::Emarker& emarker() { return g_engine.cable; }
 emk_variant::Answered cable_answered() { return g_engine.cable.valid ? g_answered : emk_variant::Answered{}; }
+emk_attached::ReadInfo last_cable_read() { return g_read_info; }
 const pd::VdmInfo& vdm() { return g_engine.vdm; }
 const pd::VdmInfo& sink_vdm() { return g_engine.sink_vdm; }
 usblink::Link usb_link(std::int32_t dp_mv, std::int32_t dm_mv) {

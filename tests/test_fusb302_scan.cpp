@@ -58,6 +58,7 @@ struct Cable {
     std::vector<unsigned> vendor_ids;   // MessageID of every such request
     int vendor_vconn_ms = -1;           // VCONN age at the last such request
     bool vendor_drop = false;           // ... but then no GoodCRC at all: RETRYFAIL
+    bool ack_only = false;              // GoodCRCs every Discover Identity (a powered chip) but never answers it
     bool only_pd3_svdm1 = false;        // a real cable (hardware 2026-11-11): acknowledges only a PD 3.x header with SVDM 1.0 (VDM 0xFF008001)
     std::vector<unsigned> req_hdr;      // PD header (low 16 bits) of every later request of a session
     std::vector<std::uint32_t> req_vdm; // VDM header of every such request
@@ -68,7 +69,7 @@ std::string hex(unsigned v) { char b[16]; std::snprintf(b, sizeof b, "%02X", v);
 void log(const std::string& s) { g_log.push_back(s); }
 
 void update_vconn() {
-    const bool on = g_pin[0] && g_pin[1] && g_pin[2] && (g_reg[0x02] & 0x30) != 0;
+    const bool on = g_pin[1] && g_pin[2] && (g_reg[0x02] & 0x30) != 0;   // PC13 is an Ra, not a VCONN switch (emk_ra.hpp)
     if (on && !g_vconn_since) g_vconn_since = g_ms;
     if (!on) g_vconn_since = 0;
 }
@@ -112,6 +113,11 @@ void tx_start() {
         if ((vdm >> 16) == 0x22D9 && (vdm & 0x1F) == 31)
             push_frame(0xC0, std::uint16_t(0x0F | 0x100 | (2u << 6) | (3u << 12)),
                        {(vdm & ~(3u << 6)) | (1u << 6), 0xAB01CD02u, 7u});
+        return;
+    }
+    if (g_cable.ack_only && is_di) {                                  // acknowledged, never answered
+        g_ia_script.push_back(0x04);                                  // INTERRUPTA TXSENT: the chip saw the GoodCRC
+        push_frame(0xC0, 0x0101, {});
         return;
     }
     if ((pd3 && !g_cable.answers_pd3) || (pd2 && !g_cable.answers_pd2) || !(pd3 || pd2) || !recognised) return;
@@ -4490,6 +4496,155 @@ void test_wake_vs_test_setting_off_leaves_a_run_start_rd_alone() {
     sp_end();
 }
 
+// ---- the scan with a source attached (k2/emk-attached) ----
+// Hardware 2026-11-11: a cable whose chip lives on the charger's supply acknowledged the K2's first Discover Identity and
+// then starved, because the scan dropped the K2's Rd (SWITCHES0 0x24 / 0x18 carry no PDWN) and the charger took VBUS away.
+// With a source attached the scan keeps the Rd on the live line, tries only the orientation of that line and never puts
+// VCONN on it. SWITCHES0 0x24 (VCONN_CC2 + MEAS_CC1) with active_cc = 2 put VCONN on the live CC2 wire.
+
+// Every SWITCHES0 value written from log index `from` on.
+std::vector<unsigned> sw0_writes(std::size_t from) {
+    std::vector<unsigned> v;
+    for (std::size_t i = from; i < g_log.size(); i++)
+        if (g_log[i].rfind("W 02=", 0) == 0) v.push_back(unsigned(std::stoul(g_log[i].substr(5), nullptr, 16)));
+    return v;
+}
+
+// A source attached on CC1 with the K2's Rd, a 5 V contract up and VBUS above the comparator.
+void attached_source_on_cc1() {
+    start_attach_to_ready();
+    g_auto_txsent = false;
+    g_reg[0x40] = 0xA0;                                          // COMP + VBUSOK
+    g_cable.cc = 1;
+    g_cable.only_pd3_svdm1 = true;                               // the second variant answers
+}
+
+void test_attached_scan_keeps_rd_and_the_attach_and_tries_one_orientation() {
+    attached_source_on_cc1();
+    const std::size_t from = g_log.size();
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    const std::vector<unsigned> w = sw0_writes(from);
+    CHECK_EQ(w.empty(), false);
+    for (unsigned v : w) {
+        CHECK_EQ(v & 0x01u, 0x01u);                              // Rd (PDWN1) up in every write, the scan's and the restore's
+        CHECK_EQ(v & 0x10u, 0u);                                 // VCONN never on CC1, the live line
+    }
+    CHECK_EQ(find_from("W 02=24", from), -1);                    // today's orientation A
+    CHECK_EQ(find_from("W 02=18", from), -1);                    // today's orientation B: no second orientation
+    CHECK_EQ(find_from("W 02=25", from) > 0, true);              // PDWN1 + MEAS_CC1 + VCONN_CC2
+    CHECK_EQ(usb_has("Response on Orientation A"), true);
+    CHECK_EQ(int(fusb302::cable_answered().attempt), 2);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Attached));
+    // The attach survives: Rd up, no Hard Reset, the contract and the caps still valid, VBUS up all the way.
+    CHECK_EQ(sw0_rd(), 1u);
+    CHECK_EQ(g_reg[0x40] & 0x80u, 0x80u);
+    CHECK_EQ(usb_has("Hard Reset"), false);
+    CHECK_EQ(usb_has("Hard reset"), false);
+    settle_ms(100);
+    CHECK_EQ(fusb302::caps().valid, true);
+    CHECK_EQ(int(fusb302::sink_status().state), int(pd::SinkState::Ready));
+    CHECK_EQ(sw0_rd(), 1u);
+    clean_up_rd_tests();
+}
+
+void test_attached_scan_on_cc2_never_puts_vconn_on_cc2() {
+    attached_source_on_cc1();
+    // The same attach on the other line: the fake chip's active line is the one the passive scan chose; force CC2.
+    clean_up_rd_tests();
+    reread_style_boot();
+    fusb302::set_force_line(2);
+    CHECK_EQ(fusb302::rd_for_run(true), true);
+    g_reg[0x40] = 0xA0;
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) { g_ms += 20; fusb302::poll(); }
+    CHECK_EQ(usb_has("Active CC detected"), true);
+    for (int i = 0; i < 5; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    g_cable.cc = 2;
+    g_cable.only_pd3_svdm1 = true;
+    const std::size_t from = g_log.size();
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    for (unsigned v : sw0_writes(from)) {
+        CHECK_EQ(v & 0x02u, 0x02u);                              // Rd (PDWN2) up
+        CHECK_EQ(v & 0x20u, 0u);                                 // VCONN never on CC2, the live line
+    }
+    CHECK_EQ(find_from("W 02=24", from), -1);
+    CHECK_EQ(find_from("W 02=1A", from) > 0, true);              // PDWN2 + MEAS_CC2 + VCONN_CC1
+    CHECK_EQ(usb_has("Response on Orientation B"), true);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Attached));
+    clean_up_rd_tests();
+}
+
+void test_attached_scan_with_a_cable_on_the_idle_orientation_finds_nothing_and_keeps_the_attach() {
+    attached_source_on_cc1();
+    g_cable.cc = 2;                                              // the e-marker sits on CC2: that orientation would put VCONN on the live CC2
+    const std::size_t from = g_log.size();
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    for (unsigned v : sw0_writes(from)) CHECK_EQ(v & 0x01u, 0x01u);
+    CHECK_EQ(find_from("W 02=18", from), -1);                    // never tried
+    CHECK_EQ(g_cable.answered, 0);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Attached));
+    CHECK_EQ(fusb302::last_cable_read().acked_no_answer(false), false);
+    CHECK_EQ(sw0_rd(), 1u);
+    clean_up_rd_tests();
+}
+
+void test_attached_scan_logs_a_variant_that_was_acked_but_not_answered_and_tries_the_next() {
+    attached_source_on_cc1();
+    g_cable.only_pd3_svdm1 = false;
+    g_cable.ack_only = true;                                     // a chip that GoodCRCs each variant and never answers
+    const int tx0 = g_cable.tx_seen;                             // the attach's own Request counts too
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(g_cable.tx_seen - tx0, 3);                                // each variant got its full window, one after the other
+    CHECK_EQ(usb_has("attempt 0 (PD 3.0, SVDM 2.0): acked, no answer"), true);
+    CHECK_EQ(usb_has("attempt 1 (PD 3.0, SVDM 1.0): acked, no answer"), true);
+    CHECK_EQ(usb_has("attempt 2 (PD 2.0, SVDM 1.0): acked, no answer"), true);
+    CHECK_EQ(int(fusb302::last_cable_read().acks), 3);
+    CHECK_EQ(fusb302::last_cable_read().acked_no_answer(false), true);
+    CHECK_EQ(fusb302::cable_answered().valid(), false);
+    CHECK_EQ(sw0_rd(), 1u);
+    clean_up_rd_tests();
+}
+
+void test_attached_scan_waits_the_full_window_for_an_acked_variant() {
+    attached_source_on_cc1();
+    g_cable.only_pd3_svdm1 = false;
+    g_cable.ack_only = true;
+    const std::uint32_t t0 = g_ms;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    // 40 ms VCONN settle + 3 windows of 2 ms flush + 80 ms polling, never cut short by the ack.
+    CHECK_EQ(g_ms - t0 >= 40u + 3u * 82u, true);
+    clean_up_rd_tests();
+}
+
+void test_attached_scan_stops_on_a_hard_reset_from_the_source_and_latches_it() {
+    attached_source_on_cc1();
+    g_cable.only_pd3_svdm1 = false;
+    g_reg[0x3E] = 0x01;                                          // INTERRUPTA HARDRST (clear-on-read in the chip)
+    const int tx0 = g_cable.tx_seen;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(g_cable.tx_seen - tx0, 0);                        // the source is power-cycling: the scan does not go on
+    g_reg[0x3E] = 0;
+    for (int i = 0; i < 5; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(usb_has("Hard reset received from the source"), true);   // the latch reached service()
+    clean_up_rd_tests();
+}
+
+void test_alone_scan_records_its_mode() {
+    reset_world();
+    g_cable.cc = 1;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Alone));
+    reset_world();
+    g_cable.answers_pd3 = false;
+    g_cable.answers_pd2 = false;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(int(fusb302::last_cable_read().mode), int(emk_attached::Mode::Alone));
+    CHECK_EQ(int(fusb302::last_cable_read().acks), 0);
+    // The cable alone still drops Rd and tries both orientations (the sequence the older tests pin).
+    CHECK_EQ(find_from("W 02=24") > 0, true);
+    CHECK_EQ(find_from("W 02=18") > 0, true);
+}
+
+
 int main() {
     test_run_rd_survives_the_passive_scan();
     test_trigger_refused_after_a_foreign_request_without_inline();   // first: g_sink keeps state across tests
@@ -4667,6 +4822,13 @@ int main() {
     test_inline_vdm_probe_refused();
     test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();   // last: ends with a detach
     test_request_period_is_tracked_and_reset_with_the_attach();                           // last: ends with a detach
+    test_alone_scan_records_its_mode();
+    test_attached_scan_keeps_rd_and_the_attach_and_tries_one_orientation();
+    test_attached_scan_on_cc2_never_puts_vconn_on_cc2();
+    test_attached_scan_with_a_cable_on_the_idle_orientation_finds_nothing_and_keeps_the_attach();
+    test_attached_scan_logs_a_variant_that_was_acked_but_not_answered_and_tries_the_next();
+    test_attached_scan_waits_the_full_window_for_an_acked_variant();
+    test_attached_scan_stops_on_a_hard_reset_from_the_source_and_latches_it();   // last: each one ends with a detach / Rd off
     return test_report("test_fusb302_scan");
 }
 

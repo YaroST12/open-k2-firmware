@@ -74,6 +74,7 @@ enum class Outcome : std::uint8_t {
     Learned,        // identity read, the rest explored
     NoIdentity,     // the cable never answered Discover Identity (no VCONN, wrong port, plain cable)
     Aborted,        // an exchange was not acknowledged mid-run
+    AckedNoAnswer,  // the chip acknowledged (GoodCRC) the scan's queries and never answered one: powered, but not by the K2 alone
 };
 
 // The learned clone (record and quirk table) lives in storage the caller lends: the firmware passes the spoof's own
@@ -90,6 +91,8 @@ struct Result {
     emrec::Record& rec;                           // the Discover Identity answer as a saved-clone record
     emk_quirk::Quirks& quirks;
     emk_variant::Answered answered;               // the scan orientation and table row the cable answered (set by the caller; learn() leaves it)
+    std::uint8_t read_mode = 0;                   // how the scan ran: 0 none, 1 cable alone, 2 source attached (emk_attached::Mode; set by the caller)
+    std::uint8_t read_acks = 0;                   // query variants the chip acknowledged during the scan (set by the caller)
     std::uint8_t svids = 0;                       // SVIDs the cable listed
     std::uint8_t probes = 0;                      // exchanges made
     std::uint8_t silent = 0;                      // probes the cable did not answer
@@ -122,12 +125,14 @@ bool learn(ExchangeFn fn, void* ctx, const Options& opt, Result& out);
 inline constexpr std::size_t kOptionsMax = 2 + kMaxSeeds * (4 + 4 * 2);
 bool parse_options(std::span<const std::uint8_t> p, Options& out, bool& confirm);
 
-// Summary (the status and run response): [err, outcome (0 nothing yet, 1 learned, 2 no identity, 3 aborted), svids,
+// Summary (the status and run response): [err, outcome (0 nothing yet, 1 learned, 2 no identity, 3 aborted, 4 acked no answer), svids,
 // probes, silent, flags (bit0 truncated, bit1 log full), nlog, rows, unmatched policy, vid u16, pid u16,
 // then the answered tail: orientation (0 none, 1 A, 2 B), PD header revision (1 PD 2.0, 2 PD 3.x), SVDM (1, 2),
-// attempt (1-based within the orientation)]. The tail was added after the 13-byte form; a host tool accepts both
-// lengths and reads the tail as unknown when it is absent. `last` null = nothing learned yet.
-inline constexpr std::size_t kSummaryBytes = 17;
+// attempt (1-based within the orientation), then the read tail: read mode (0 none, 1 cable alone, 2 source attached),
+// variants acknowledged]. The answered tail was added after the 13-byte form and the read tail after the 17-byte form;
+// a host tool accepts all lengths and reads a missing tail as unknown. Outcome 4 = acked, no answer. `last` null =
+// nothing learned yet.
+inline constexpr std::size_t kSummaryBytes = 19;
 std::size_t encode_summary(const Result* last, std::span<std::uint8_t> out);
 
 // One transcript entry: [err, i, step, spec_rev, req_n, got, rep_n, reply PD header u16, request words, reply words]

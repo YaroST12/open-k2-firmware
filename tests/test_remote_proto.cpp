@@ -954,9 +954,11 @@ static void test_emarker() {
     f.em.max_temp_c = 60; f.em.shutdown_temp_c = 70; f.em.u3_power = 2; f.em.usb_lanes = 2;
     // The answered tail (orientation B, PD 3.x header, SVDM 1.0, attempt 2: the Baseus cable) follows the 10 detail bytes.
     f.em.answered_orientation = 2; f.em.answered_hdr_rev = 2; f.em.answered_svdm = 1; f.em.answered_attempt = 2;
+    // Then the read tail: how the read ran (2 = a source was attached, Rd kept) and the variants the chip acknowledged.
+    f.em.read_mode = 2; f.em.read_acks = 1;
     CHECK_EQ(run(f, request(0x05, 3, {2}), r), 1);
-    check_header(r, 0x05, 3, Status::Ok, 14);
-    check_bytes(r, kRspHeader, {1, 2, 1, 3, 3, 0x8C, 60, 70, 2, 2, 2, 2, 1, 2});
+    check_header(r, 0x05, 3, Status::Ok, 16);
+    check_bytes(r, kRspHeader, {1, 2, 1, 3, 3, 0x8C, 60, 70, 2, 2, 2, 2, 1, 2, 2, 1});
     CHECK_EQ(run(f, request(0x05, 4, {3}), r), 1);
     check_header(r, 0x05, 4, Status::BadArg, 0);
 }

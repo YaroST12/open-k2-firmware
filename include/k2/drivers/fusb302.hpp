@@ -8,6 +8,7 @@
 
 #include "k2/core/bootmode.hpp"
 #include "k2/pd/cc_probe.hpp"
+#include "k2/pd/emk_attached.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_ra.hpp"
 #include "k2/pd/pd.hpp"
@@ -396,6 +397,12 @@ const pd::Emarker& emarker();
 // Which scan orientation and which attempt-table row the cable answered (emk_variant.hpp). Empty (valid() false)
 // when no VCONN scan found the cable, e.g. the e-marker was only sniffed or none was read.
 emk_variant::Answered cable_answered();
+// How the last VCONN cable read of this attach ran: with the cable alone (both orientations, no Rd), or with a source
+// attached (the K2's Rd kept on the live line, one orientation), and how many query variants the chip acknowledged
+// (GoodCRC). mode None = no read since the attach. A silent cable alone and a silent cable with the source attached are
+// different facts: readers of "cable not read" use this to tell them apart; acked_no_answer(false) = a powered chip
+// that acknowledged but never answered.
+emk_attached::ReadInfo last_cable_read();
 // Current-attach physical wire evidence only; injected frames and spoofing cannot raise this.
 const pd::CableLimits& physical_cable();
 const pd::Revision& source_revision();  // passively received source RMDO, never Identify's sink answer

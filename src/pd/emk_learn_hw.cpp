@@ -28,9 +28,17 @@ bool exchange(void*, const emk_learn::Request& req, emk_learn::Reply& rep) {
     return fusb302::cable_exchange(req, rep, kReplyTimeoutMs);
 }
 
+// How the scan ran and how many variants the chip acknowledged (a result of "nothing found" carries them too).
+void note_read() {
+    const emk_attached::ReadInfo ri = fusb302::last_cable_read();
+    g_result.read_mode = static_cast<std::uint8_t>(ri.mode);
+    g_result.read_acks = ri.acks;
+}
+
 void body(void* ctx) {
     auto& job = *static_cast<Job*>(ctx);
     g_result.answered = fusb302::cable_answered();   // the scan that opened this session found the cable
+    note_read();
     emk_learn::learn(&exchange, nullptr, *job.opt, g_result);
     job.done = true;
 }
@@ -44,6 +52,7 @@ Err run(const emk_learn::Options& opt, bool confirmed) {
     g_result.rec = {};
     g_result.quirks = {};
     g_result.answered = {};
+    g_result.read_mode = g_result.read_acks = 0;
     g_result.svids = g_result.probes = g_result.silent = 0;
     g_result.truncated = false;
     g_result.clear_log();
@@ -53,6 +62,8 @@ Err run(const emk_learn::Options& opt, bool confirmed) {
     K2LOG("[EMK] learn start seeds=%u sweep=%u\n", static_cast<unsigned>(opt.nseeds), static_cast<unsigned>(opt.sweep));
     fusb302::cable_session(confirmed, &body, &job);
     if (!job.done) {
+        note_read();
+        if (fusb302::last_cable_read().acked_no_answer(false)) g_result.outcome = emk_learn::Outcome::AckedNoAnswer;
         K2LOG("[EMK] learn: no e-marked cable (nothing found or the scan was refused)\n");
         return Err::NoCable;
     }

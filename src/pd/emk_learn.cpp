@@ -247,6 +247,8 @@ std::size_t encode_summary(const Result* last, std::span<std::uint8_t> out) {
     out[14] = last->answered.spec_rev;
     out[15] = last->answered.svdm;
     out[16] = last->answered.attempt;
+    out[17] = last->read_mode;
+    out[18] = last->read_acks;
     return kSummaryBytes;
 }
 
