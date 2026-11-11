@@ -140,7 +140,7 @@ For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**)
 
 - [Controls in detail](#controls-in-detail)
 - [Top-level pages](#top-level-pages): [Home](#home), [Detail](#detail), [Charger test](#charger-test), [Lines](#lines), [Tools](#tools), [Settings](#settings)
-- [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Device twins](#device-twins), [Diag](#diag)
+- [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Device twins](#device-twins), [PD Stress](#pd-stress), [Diag](#diag)
 - [Share (QR)](#share-qr)
 - [Settings](#settings-reference): [USB Link](#usb-link), [Autorotate](#autorotate), [Rotate buttons, Screenshot, Smoothing, Wake sleeping port](#other-settings)
 - [USB link modes](#usb-link-modes) and [USB drive contents](#usb-drive-contents)
@@ -451,6 +451,10 @@ Cards are saved in flash and exported on the USB drive and with `k2_remote.py ca
 - A twin cannot predict vendor fast-charge modes or what a battery will pull; see [`DEVICE_TWIN.md`](DEVICE_TWIN.md) for the rules, the record format, the USB data a twin keeps and the limits.
 
 Shell: `twin list | predict | run n confirm | status | cancel | learn | rename | delete`. Host: `k2_remote.py twin ...`.
+
+### PD Stress
+
+A separate tool, run from the computer only (no Tools page): it renegotiates the attached charger hard, inside the PD protocol and with nothing on the output, and scores the result (0 = ideal). While it runs, a one-line footer on whatever page is up shows the sequence. Start it with `python3 tools/pd_stress.py run --charger NAME --confirm`. Sequences, safety rules, the score table and how to retune it: [`PD_STRESS.md`](PD_STRESS.md).
 
 ### Diag
 

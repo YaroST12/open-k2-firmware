@@ -98,6 +98,12 @@ marked `<<< RX` when the source sent anything beyond the single 0x00 framing-err
 Parsed but answered `err: not implemented in this firmware`: `pd softreset|raw`, `vivo raw`, `cc rp|rd`
 (no raw PD transmit path or CC pull control in the FUSB302 driver yet), and `--sop`. (The legacy `cc open`, `pd silent|reset|rescan` are unchanged.)
 
+### PD Stress (not a lab command)
+
+Renegotiation stress with a score is its own tool, not a lab sequence: `pdstress start ... confirm | status | result | stop` on the shell,
+`k2_remote.py pd-stress ...` and `tools/pd_stress.py run|rescore|report` on the host. It stays inside the PD protocol (legal probes only) and
+never adds load. See [`PD_STRESS.md`](PD_STRESS.md).
+
 ## Scripts (tools/proto_lab.py)
 
 `proto_lab.py list`; `proto_lab.py script <name> [--mv --ma]`; `proto_lab.py run "<cmd>" ...`.

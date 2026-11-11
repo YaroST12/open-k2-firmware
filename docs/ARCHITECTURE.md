@@ -600,6 +600,7 @@ One namespace per subsystem, headers in `include/k2/<group>/`, sources in `src/<
 | `k2::cable_r` | Passive cable resistance estimate (idle vs load) | `power` |
 | `k2::dpdm`, `qc`, `afc`, `accp`, `vooc`, `uart2`, `fc_engine`, `fc_scan`, `fc_safety`, `fctrig`, `fastcharge_classify` | Fast-charge: D+/D- matrix, QC/AFC/FCP/SCP/VOOC, one-click scan, trigger safety rules, passive classifier | `i2c`, `power` |
 | `gfx`, `text`, `blend`, `ui*`, `buttons` | Renderer, fonts, UI pages, button state machine | `lcd`, drivers |
+| `k2::pdstress` (`plan`, `engine`, `score`, `dist`, `result`, `journal`) + `PdStressSession` | PD Stress: renegotiation stress of the attached charger, scored (0 = ideal). Pure plan / engine / score / histograms / result blob / reboot journal over an `Env` seam; the session binds it to `fusb302::sink_request`, the power monitor and the file system, lends the charger test's record buffer and puts one footer line on the page that is up. Shell first: remote command 0x55, CDC `pdstress`, host `tools/pd_stress.py` (run, rescore, report). See `docs/PD_STRESS.md` | `pd`, `fusb302`, `power`, `bbstore`, `ChargerTestSession` (record buffer) |
 | `main.cpp` | Bring-up order and the service loop | everything |
 
 Pure logic (`pd`, `fmt`, `power_calc`, `net_frame`, `ui_calc`, `ui_layout`, `text`, `blend`,
