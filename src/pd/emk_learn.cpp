@@ -7,7 +7,6 @@ namespace {
 
 enum class Cls : std::uint8_t { None, Ack, Nak, Busy, NotSupported, Other };
 
-constexpr std::uint8_t kPdRev2 = 1, kPdRev3 = 2;   // the PD header specification revision field
 constexpr std::uint8_t kCtlNotSupported = 16;
 constexpr std::uint8_t kMsgVdm = 0x0F;
 constexpr std::uint8_t kSweepFirst = 16, kSweepLast = 31;   // the SVID-specific command range
@@ -33,7 +32,7 @@ struct Run {
     ExchangeFn fn;
     void* ctx;
     Result& out;
-    std::uint8_t rev = kPdRev3;
+    emk_variant::Variant var = emk_variant::kFirst;    // the variant every request goes out in; the answered one after identity()
     bool aborted = false;
     bool saw_not_supported = false, saw_nak = false;   // from the probes of requests the cable has no row for
     std::array<std::uint16_t, kMaxSvids> svid{};
@@ -42,7 +41,7 @@ struct Run {
     // One request at the current revision. False when the exchange was not acknowledged.
     bool probe(Step step, std::span<const std::uint32_t> words, Reply& rep) {
         Request req;
-        req.spec_rev = rev;
+        req.spec_rev = var.spec_rev;
         req.n = static_cast<std::uint8_t>(words.size() > kMaxObjs ? kMaxObjs : words.size());
         for (unsigned i = 0; i < req.n; i++) req.w[i] = words[i];
         rep = {};
@@ -76,9 +75,9 @@ struct Run {
     }
 
     bool identity() {
-        for (const std::uint8_t r : {kPdRev3, kPdRev2}) {   // PD 3.x first, old cables answer only PD 2.0
-            rev = r;
-            const std::uint32_t w[1] = {vdm_request(0xFF00, 1, rev)};
+        for (const emk_variant::Variant cand : emk_variant::kTable) {   // the scan's attempt table, in its order
+            var = cand;
+            const std::uint32_t w[1] = {vdm_request(0xFF00, 1, var)};
             Reply rep;
             aborted = false;
             if (!probe(Step::Identity, w, rep)) continue;
@@ -86,7 +85,7 @@ struct Run {
             std::array<std::uint32_t, 5> v{};
             for (unsigned i = 0; i < 5 && i < rep.n; i++) v[i] = rep.w[i];
             std::uint8_t sr = emrec::spec_rev_from_pd(static_cast<std::uint8_t>((rep.header >> 6) & 3u));
-            if (sr == 0) sr = rev;
+            if (sr == 0) sr = var.spec_rev;
             out.rec = emrec::make(v, sr);
             return emrec::valid(out.rec);
         }
@@ -106,14 +105,14 @@ struct Run {
     }
 
     bool svids_and_modes() {
-        const std::uint32_t w[1] = {vdm_request(0xFF00, 2, rev)};
+        const std::uint32_t w[1] = {vdm_request(0xFF00, 2, var)};
         Reply rep;
         if (!probe(Step::Svids, w, rep)) return false;
         const Cls c = classify(w[0], rep);
         add_reply_row(w[0], c, rep);
         if (c == Cls::Ack) take_svids(rep);
         for (unsigned i = 0; i < nsvid; i++) {
-            const std::uint32_t m[1] = {vdm_request(svid[i], 3, rev)};
+            const std::uint32_t m[1] = {vdm_request(svid[i], 3, var)};
             if (!probe(Step::Modes, m, rep)) return false;
             add_reply_row(m[0], classify(m[0], rep), rep);
         }
@@ -129,7 +128,7 @@ struct Run {
         for (unsigned i = 0; i < opt.nseeds && i < kMaxSeeds; i++) {
             const Seed& s = opt.seeds[i];
             std::array<std::uint32_t, 3> w{};
-            w[0] = vdm_request(s.svid, s.cmd, rev);
+            w[0] = vdm_request(s.svid, s.cmd, var);
             const unsigned nv = s.nvdo > 2 ? 2 : s.nvdo;
             for (unsigned k = 0; k < nv; k++) w[1 + k] = s.vdo[k];
             Reply rep;
@@ -162,7 +161,7 @@ struct Run {
         for (unsigned i = 0; i < n; i++) {
             for (unsigned cmd = kSweepFirst; cmd <= kSweepLast; cmd++) {
                 if (is_seed(opt, list[i], static_cast<std::uint8_t>(cmd))) continue;
-                const std::uint32_t w[1] = {vdm_request(list[i], static_cast<std::uint8_t>(cmd), rev)};
+                const std::uint32_t w[1] = {vdm_request(list[i], static_cast<std::uint8_t>(cmd), var)};
                 Reply rep;
                 if (!probe(Step::Sweep, w, rep)) return false;
                 const Cls c = classify(w[0], rep);

@@ -29,6 +29,7 @@ struct Behaviour {
 
 struct FakeCable {
     bool pd3 = true;                     // answers a PD 3.x request; false: only PD 2.0 (spec rev field 1)
+    bool svdm1_only = false;             // acknowledges only a PD 3.x header with an SVDM 1.0 VDM header (nothing as PD 2.0)
     bool alive = true;                   // false: the cable is not there at all (no answer, GoodCRC or not)
     int fail_after = -1;                 // the exchange reports "no GoodCRC" from this call on
     std::vector<std::uint32_t> id{0xFF00A041, 0x1C00203C, 0x00000123, 0x00010000, 0x00082052};
@@ -53,6 +54,7 @@ static bool fake_exchange(void* ctx, const Request& req, Reply& rep) {
     if (c.fail_after >= 0 && static_cast<int>(c.seen.size()) > c.fail_after) return false;
     if (!c.alive) return true;                         // GoodCRC only (or no cable: the fake does not tell)
     const std::uint32_t h = req.w[0];
+    if (c.svdm1_only && (req.spec_rev != 2 || (h & 0x2000u))) return true;   // GoodCRC, no answer
     const std::uint16_t svid = static_cast<std::uint16_t>(h >> 16);
     const unsigned cmd = h & 0x1F;
     if (svid == 0xFF00 && cmd == 1) {
@@ -157,12 +159,58 @@ static void test_pd2_only_cable() {
     emk_learn::Standalone r;
     CHECK_EQ(emk_learn::learn(&fake_exchange, &c, none(), r), true);
     CHECK_EQ(r.rec[0x14], 1);   // PD 2.0
+    // The attempt table: PD 3.x + SVDM 2.0, PD 3.x + SVDM 1.0, PD 2.0 + SVDM 1.0.
+    CHECK_EQ(c.seen.size(), 4u);
+    if (c.seen.size() != 4u) return;
     CHECK_EQ(c.seen[0].spec_rev, 2);
-    CHECK_EQ(c.seen[1].spec_rev, 1);
+    CHECK_EQ(c.seen[0].w[0], 0xFF00A001u);
+    CHECK_EQ(c.seen[1].spec_rev, 2);
     CHECK_EQ(c.seen[1].w[0], 0xFF008001u);
-    // The rest of the walk goes at the cable's revision.
     CHECK_EQ(c.seen[2].spec_rev, 1);
-    CHECK_EQ(c.seen[2].w[0], 0xFF008002u);
+    CHECK_EQ(c.seen[2].w[0], 0xFF008001u);
+    // The rest of the walk goes at the cable's variant.
+    CHECK_EQ(c.seen[3].spec_rev, 1);
+    CHECK_EQ(c.seen[3].w[0], 0xFF008002u);
+}
+
+// The Baseus 100 W cable: acknowledges only a PD 3.x header with SVDM 1.0. Found on the second attempt; Discover
+// SVIDs, Discover Modes and the seeds then use that header revision AND that SVDM version.
+static void test_svdm1_only_cable_learns_and_follows_up_with_its_variant() {
+    FakeCable c;
+    c.svdm1_only = true;
+    c.table = {kSvids22D9, kModes22D9, kOppo};
+    emk_learn::Options o;
+    o.seeds[0] = {0x22D9, 31, 0, {}};
+    o.nseeds = 1;
+    emk_learn::Standalone r;
+    CHECK_EQ(emk_learn::learn(&fake_exchange, &c, o, r), true);
+    CHECK_EQ(int(r.outcome), int(emk_learn::Outcome::Learned));
+    CHECK_EQ(c.seen.size(), 5u);   // DI (SVDM 2.0, silent), DI (SVDM 1.0), SVIDs, Modes, seed
+    if (c.seen.size() != 5u) return;
+    CHECK_EQ(c.seen[0].w[0], 0xFF00A001u);
+    CHECK_EQ(c.seen[1].spec_rev, 2);
+    CHECK_EQ(c.seen[1].w[0], 0xFF008001u);
+    for (unsigned i = 2; i < 5; i++) CHECK_EQ(c.seen[i].spec_rev, 2);       // PD 3.x header
+    CHECK_EQ(c.seen[2].w[0], 0xFF008002u);                                  // SVDM 1.0
+    CHECK_EQ(c.seen[3].w[0], 0x22D98003u);
+    CHECK_EQ(c.seen[4].w[0], 0x22D9801Fu);
+    CHECK_EQ(r.svids, 1);
+    CHECK_EQ(r.quirks.count, 3);
+    CHECK_EQ(r.rec[0x14], 2);   // the cable's answer carried a PD 3.x header
+}
+
+// A cable that answers the first variant sees exactly what it saw before: one Discover Identity, then SVDM 2.0.
+static void test_first_variant_cable_behaves_as_before() {
+    FakeCable c;
+    c.table = {kSvids22D9, kModes22D9};
+    emk_learn::Standalone r;
+    CHECK_EQ(emk_learn::learn(&fake_exchange, &c, none(), r), true);
+    CHECK_EQ(c.seen.size(), 3u);   // DI, SVIDs, Modes
+    if (c.seen.size() != 3u) return;
+    CHECK_EQ(c.seen[0].spec_rev, 2);
+    CHECK_EQ(c.seen[0].w[0], 0xFF00A001u);
+    CHECK_EQ(c.seen[1].w[0], 0xFF00A002u);
+    CHECK_EQ(c.seen[2].w[0], 0x22D9A003u);
 }
 
 static void test_no_identity() {
@@ -171,7 +219,7 @@ static void test_no_identity() {
     emk_learn::Standalone r;
     CHECK_EQ(emk_learn::learn(&fake_exchange, &c, none(), r), false);
     CHECK_EQ(int(r.outcome), int(emk_learn::Outcome::NoIdentity));
-    CHECK_EQ(c.seen.size(), 2u);   // PD 3.x then PD 2.0, nothing more
+    CHECK_EQ(c.seen.size(), 3u);   // the three variants of the table, nothing more
     CHECK_EQ(r.quirks.count, 0);
 }
 
@@ -301,9 +349,11 @@ static void test_row_budget_truncates() {
 }
 
 static void test_vdm_request_header() {
-    CHECK_EQ(emk_learn::vdm_request(0xFF00, 1, 2), 0xFF00A001u);
-    CHECK_EQ(emk_learn::vdm_request(0xFF00, 1, 1), 0xFF008001u);
-    CHECK_EQ(emk_learn::vdm_request(0x22D9, 31, 2), 0x22D9A01Fu);
+    constexpr emk_variant::Variant pd3_svdm2{2, 2}, pd3_svdm1{2, 1}, pd2_svdm1{1, 1};
+    CHECK_EQ(emk_learn::vdm_request(0xFF00, 1, pd3_svdm2), 0xFF00A001u);
+    CHECK_EQ(emk_learn::vdm_request(0xFF00, 1, pd2_svdm1), 0xFF008001u);
+    CHECK_EQ(emk_learn::vdm_request(0xFF00, 1, pd3_svdm1), 0xFF008001u);   // PD 3.x header, SVDM 1.0
+    CHECK_EQ(emk_learn::vdm_request(0x22D9, 31, pd3_svdm2), 0x22D9A01Fu);
 }
 
 // ---- remote wire forms ----
@@ -439,6 +489,8 @@ int main() {
     test_identity_only();
     test_full_walk_and_clone_answers_the_same();
     test_pd2_only_cable();
+    test_svdm1_only_cable_learns_and_follows_up_with_its_variant();
+    test_first_variant_cable_behaves_as_before();
     test_no_identity();
     test_link_lost_aborts();
     test_nak_busy_and_not_supported();

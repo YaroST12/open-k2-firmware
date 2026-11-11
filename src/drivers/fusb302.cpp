@@ -28,6 +28,7 @@
 #include "k2/pd/pd_ccmode.hpp"
 #include "k2/pd/caps_log_gate.hpp"
 #include "k2/pd/emk_ra.hpp"
+#include "k2/pd/emk_variant.hpp"
 #include "k2/pd/pd_ccscan.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
@@ -345,16 +346,19 @@ bool transmit(const pd::TxMsg& m) {
 
 // ---- e-marker scan ----
 
-// Discover Identity request to SOP' as a FIFO token stream: SOP1 SOP1 SOP3 SOP3, PACKSYM|6,
-// PD header 0x108F, VDM header 0xFF00A001, JAM_CRC, EOP, TXOFF.
-constexpr std::array<std::uint8_t, 14> kDiscoverIdentity{
-    0x12, 0x12, 0x1B, 0x1B, 0x86, 0x8F, 0x10, 0x01, 0xA0, 0x00, 0xFF, 0xFF, 0x14, 0xFE};
+// Discover Identity request to SOP' as a FIFO token stream (SOP1 SOP1 SOP3 SOP3, PACKSYM|6, PD header, VDM header,
+// JAM_CRC, EOP, TXOFF), one per variant of the attempt table (emk_variant.hpp: PD 3.x + SVDM 2.0 = header 0x108F /
+// VDM 0xFF00A001, PD 3.x + SVDM 1.0 = 0x108F / 0xFF008001, PD 2.0 + SVDM 1.0 = 0x104F / 0xFF008001).
+constexpr std::array<std::array<std::uint8_t, 14>, emk_variant::kAttempts> make_di_frames() {
+    std::array<std::array<std::uint8_t, 14>, emk_variant::kAttempts> f{};
+    for (std::size_t i = 0; i < f.size(); i++) f[i] = emk_variant::discover_identity_frame(emk_variant::kTable[i]);
+    return f;
+}
+constexpr auto kDiFrames = make_di_frames();
 
-// The same request as PD 2.0 (header 0x104F, VDM 0xFF008001): old cables answer only that.
-constexpr std::array<std::uint8_t, 14> kDiscoverIdentityPd2{
-    0x12, 0x12, 0x1B, 0x1B, 0x86, 0x4F, 0x10, 0x01, 0x80, 0x00, 0xFF, 0xFF, 0x14, 0xFE};
-
-// One orientation: `sw0` powers VCONN on one CC, `sw1` routes BMC to the other.
+// One orientation: `sw0` powers VCONN on one CC, `sw1` routes BMC to the other. Walks the attempt table, one
+// request window each: 40 ms VCONN settle, then 3 x (2 ms flush + 80 ms of polling) = 286 ms at most, ~235 ms per
+// silent attempt measured on hardware.
 bool scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
     cc_switches(true);
     wr(kPower, kPwrAll);
@@ -362,11 +366,12 @@ bool scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
     wr(kSwitches1, sw1);
     delay_ms(40);  // VCONN must power up the cable's e-marker before it can answer
 
-    for (int attempt = 0; attempt < 2; attempt++) {
+    for (std::size_t attempt = 0; attempt < emk_variant::kAttempts; attempt++) {
+        const emk_variant::Variant var = emk_variant::kTable[attempt];
         flush_fifos();
         delay_ms(2);
         clear_irqs();
-        const auto& di = attempt == 0 ? kDiscoverIdentity : kDiscoverIdentityPd2;  // PD 3.0, then PD 2.0
+        const auto& di = kDiFrames[attempt];
         fifo_write_tx(std::uint16_t(di[5] | (di[6] << 8)), {di.data() + 7, 4}, di);  // SOP' Discover Identity: header + VDM header
         wr(kControl0, kTxStart);
         // [EMK] probe: INTERRUPTA TXSENT / RETRYFAIL tell whether the cable's GoodCRC came back.
@@ -377,8 +382,8 @@ bool scan_orientation(std::uint8_t sw0, std::uint8_t sw1) {
             std::uint8_t ia = 0;
             if (!tx_seen && rd(kInterruptA, ia) && (ia & (kIntTxSent | kIntRetryFail))) {
                 tx_seen = true;
-                K2LOG("[EMK] sw0=0x%02X attempt %d (PD %d.0): SOP' %s after %d ms\n", sw0, attempt,
-                            attempt == 0 ? 3 : 2, (ia & kIntTxSent) ? "GoodCRC" : "RETRYFAIL (no GoodCRC)", (t + 1) * 2);
+                K2LOG("[EMK] sw0=0x%02X attempt %d (PD %d.0, SVDM %d.0): SOP' %s after %d ms\n", sw0, int(attempt),
+                            var.spec_rev == 1 ? 2 : 3, int(var.svdm), (ia & kIntTxSent) ? "GoodCRC" : "RETRYFAIL (no GoodCRC)", (t + 1) * 2);
             }
             std::uint8_t status1;
             if (!rd(kStatus1, status1) || (status1 & kRxEmpty)) continue;

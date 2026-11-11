@@ -6,7 +6,9 @@
 // The K2 powers the cable (VCONN) and plays the source's side on SOP': Discover Identity, Discover SVIDs, Discover
 // Modes for every SVID the cable lists, then the seeds (requests the caller knows a charger or brick makes, for
 // instance the vendor command an OPPO brick sends) and optionally a sweep of the vendor command range (16..31) on
-// the cable's SVIDs. Every reply becomes a Row of an emk_quirk::Quirks table, the Discover Identity answer becomes
+// the cable's SVIDs. Discover Identity walks the attempt table (emk_variant.hpp: PD 3.x + SVDM 2.0, PD 3.x +
+// SVDM 1.0, PD 2.0 + SVDM 1.0) and every later request uses the variant that was answered, header revision and
+// SVDM version both. Every reply becomes a Row of an emk_quirk::Quirks table, the Discover Identity answer becomes
 // the identity record, so the result is a complete saved clone (k2/pd/emlib.hpp). The wire side is behind one
 // callback (fusb302::cable_exchange in the firmware, a fake cable in the tests).
 #pragma once
@@ -15,6 +17,7 @@
 #include <span>
 
 #include "k2/pd/emk_quirk.hpp"
+#include "k2/pd/emk_variant.hpp"
 #include "k2/pd/emrec.hpp"
 
 namespace k2::emk_learn {
@@ -129,9 +132,10 @@ std::size_t encode_summary(const Result* last, std::span<std::uint8_t> out);
 inline constexpr std::size_t kEntryMax = 9 + 4 * 3 + 4 * kMaxObjs;
 std::size_t encode_entry(const Result& r, unsigned i, std::span<std::uint8_t> out);
 
-// Structured VDM request header: SVID, structured, version (PD 3.x: major 1; PD 2.0: 0), command, object position 0.
-constexpr std::uint32_t vdm_request(std::uint16_t svid, std::uint8_t cmd, std::uint8_t spec_rev) {
-    return (std::uint32_t(svid) << 16) | 0x8000u | (spec_rev >= 2 ? 0x2000u : 0u) | (cmd & 0x1Fu);
+// Structured VDM request header: SVID, structured, SVDM version of the variant (2.0: major 1; 1.0: 0), command,
+// object position 0. The PD header revision of the same variant goes in Request::spec_rev.
+constexpr std::uint32_t vdm_request(std::uint16_t svid, std::uint8_t cmd, emk_variant::Variant v) {
+    return emk_variant::vdm_header(svid, cmd, v);
 }
 
 }  // namespace k2::emk_learn

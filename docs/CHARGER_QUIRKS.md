@@ -704,6 +704,10 @@ Ports (operator, 2026-11-10): C1 and C2 are the 120 W ports (20 V 6 A with the X
 - QC Class B (20 V) present; QC2 12 V "source lost at 7.37 V" once.
 - FCP rejects the current-limit write (reg 0x2D NACK) but switches voltage fine.
 
+### Cable note: Baseus 100 W C-to-C (VID 0x2E99): answers only a PD 3.x header with SVDM 1.0
+- Pattern `cable-svdm1-only` (reverse-engineered from the 2026-11-11 hardware captures, `runs/2026-11-11-integ-hw/cables/c3-baseus*`): the cable acknowledges an SOP' Discover Identity only when the PD header says PD 3.x (0x108F) and the VDM header is SVDM 1.0 (0xFF008001); it gets no GoodCRC for PD 3.x + SVDM 2.0 (0xFF00A001) or for PD 2.0 + SVDM 1.0 (the two attempts the K2 scan used to make), and it answers with an SVDM 2.1 VDM header (0xFF00A841).
+- Handling: the cable read walks the attempt table PD 3.x + SVDM 2.0, PD 3.x + SVDM 1.0, PD 2.0 + SVDM 1.0 per orientation (`k2/pd/emk_variant.hpp`) and keeps the answered variant, header revision and SVDM version, for the Discover SVIDs / Modes / seed requests of the same session. Detected by the answer, never by VID.
+
 ### E-marker response faking (quirk table and learn, 2026-11-06, host-tested only)
 - Why: the OnePlus brick (cable VID 0x22D9, PID 0x0015) sends an SOP' Discover Identity and then an SOP' "SVID-specific command 31, REQ, SVID 0x22D9" about 17.4 ms later (`runs/oneplus/04-spoof-dump.txt`). The old spoof answered only the Discover Identity with a fixed 66-byte record and GoodCRC'd the rest, and the brick settled on 3 A offers. The reply to command 31 is unknown until captured.
 - Framework: each saved clone carries an ordered quirk table (first match wins). Matching is by header and data-word value/mask, never by VID:PID in code. Unmatched SOP'/SOP'' requests are logged (`[EMK] unmatched ...`) and the last 4 are readable with `k2_remote.py emarker unmatched`.

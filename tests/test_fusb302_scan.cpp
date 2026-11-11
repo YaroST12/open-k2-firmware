@@ -4,10 +4,11 @@
 // file, TX/RX FIFOs, an ordered event log), a fake GPIO log (K2_HOST_PINS seam in k2/drivers/regs.hpp) and a
 // fake cable that only answers when the physical conditions hold. The expected Vconn sequence is the
 // one of the C implementation at b79ce3d (src/fusb302.c emarker_read / scan_orientation), with one
-// deliberate difference: the second attempt asks again as PD 2.0.
+// deliberate difference: the later attempts ask again with the other variants of the attempt table
+// (k2/pd/emk_variant.hpp: PD 3.x + SVDM 2.0, PD 3.x + SVDM 1.0, PD 2.0 + SVDM 1.0).
 //
 //   - Vconn mode (nothing attached): PC14/PC15/PC13 high, POWER 0x0F, SWITCHES0/1 per orientation,
-//     40 ms of VCONN, then two Discover Identity attempts; afterwards PC13 low, Rd back on.
+//     40 ms of VCONN, then three Discover Identity attempts; afterwards PC13 low, Rd back on.
 //   - Sniff mode (a source is attached): CC switches, VCONN and Rd are never touched.
 #include "test_util.h"
 #include "k2/drivers/fusb302.hpp"
@@ -57,6 +58,9 @@ struct Cable {
     std::vector<unsigned> vendor_ids;   // MessageID of every such request
     int vendor_vconn_ms = -1;           // VCONN age at the last such request
     bool vendor_drop = false;           // ... but then no GoodCRC at all: RETRYFAIL
+    bool only_pd3_svdm1 = false;        // a real cable (hardware 2026-11-11): acknowledges only a PD 3.x header with SVDM 1.0 (VDM 0xFF008001)
+    std::vector<unsigned> req_hdr;      // PD header (low 16 bits) of every later request of a session
+    std::vector<std::uint32_t> req_vdm; // VDM header of every such request
 } g_cable;
 
 std::string hex(unsigned v) { char b[16]; std::snprintf(b, sizeof b, "%02X", v); return b; }
@@ -85,6 +89,8 @@ void tx_start() {
                        g_txfifo[7] == 0x01;   // the VDM header 0xFF00xx01: Discover Identity
     const bool pd3 = is_di && g_txfifo[5] == 0x8F;
     const bool pd2 = is_di && g_txfifo[5] == 0x4F;
+    const bool svdm1 = g_txfifo.size() > 8 && !(g_txfifo[8] & 0x20);   // VDM header bit 13 clear: structured VDM version 1.0
+    const bool recognised = !g_cable.only_pd3_svdm1 || (g_txfifo.size() > 8 && g_txfifo[5] == 0x8F && svdm1);
     const unsigned vconn_line = g_cable.cc == 1 ? 0x20 : 0x10;       // VCONN on the other CC
     const unsigned tx_line = g_cable.cc == 1 ? 0x01 : 0x02;          // BMC to the cable's wire
     const bool powered = g_vconn_since && g_ms - g_vconn_since >= 25;
@@ -93,8 +99,10 @@ void tx_start() {
     if (!pd3 && !pd2 && g_cable.vendor && g_txfifo.size() >= 11) {   // a later request of a cable session
         const std::uint32_t vdm = g_txfifo[7] | (g_txfifo[8] << 8) | (g_txfifo[9] << 16) | (std::uint32_t(g_txfifo[10]) << 24);
         g_cable.vendor_ids.push_back((g_txfifo[6] >> 1) & 7u);
+        g_cable.req_hdr.push_back(g_txfifo[5] | (g_txfifo[6] << 8));
+        g_cable.req_vdm.push_back(vdm);
         g_cable.vendor_vconn_ms = int(g_ms - g_vconn_since);
-        if (g_cable.vendor_drop) {                                    // nothing comes back: the chip's retries run out
+        if (g_cable.vendor_drop || !recognised) {                                  // nothing comes back: the chip's retries run out
             g_ia_script.push_back(0x10);                              // INTERRUPTA RETRYFAIL
             return;
         }
@@ -106,12 +114,12 @@ void tx_start() {
                        {(vdm & ~(3u << 6)) | (1u << 6), 0xAB01CD02u, 7u});
         return;
     }
-    if ((pd3 && !g_cable.answers_pd3) || (pd2 && !g_cable.answers_pd2) || !(pd3 || pd2)) return;
+    if ((pd3 && !g_cable.answers_pd3) || (pd2 && !g_cable.answers_pd2) || !(pd3 || pd2) || !recognised) return;
     ++g_cable.answered;
     push_frame(0xC0, 0x0101, {});                                     // GoodCRC from the cable
     const std::uint16_t rev = pd3 ? (2u << 6) : (1u << 6);
-    push_frame(0xC0, std::uint16_t(0x0F | 0x100 | rev | (5u << 12)),        // Discover Identity ACK
-               {0xFF00A041u, (3u << 27) | 0x05ACu, 0, 0x12340005u, (3u << 9) | (2u << 5) | 2u});
+    push_frame(0xC0, std::uint16_t(0x0F | 0x100 | rev | (5u << 12)),        // Discover Identity ACK, the version of the question
+               {svdm1 ? 0xFF008041u : 0xFF00A041u,(3u << 27) | 0x05ACu, 0, 0x12340005u, (3u << 9) | (2u << 5) | 2u});
 }
 
 }  // namespace
@@ -248,6 +256,7 @@ int find_from(const std::string& s, std::size_t from = 0) {
 // The sequence of one orientation as b79ce3d wrote it, up to the first TX_START.
 const char* kDi3 = "FIFO 12 12 1B 1B 86 8F 10 01 A0 00 FF FF 14 FE";
 const char* kDi2 = "FIFO 12 12 1B 1B 86 4F 10 01 80 00 FF FF 14 FE";
+const char* kDi3Svdm1 = "FIFO 12 12 1B 1B 86 8F 10 01 80 00 FF FF 14 FE";   // PD 3.x header, SVDM 1.0 VDM header 0xFF008001
 
 std::vector<std::string> orientation_prefix(const char* sw0, const char* sw1) {
     // read_emarker() closes the CC switches and starts VCONN (old: one BSRR), then each orientation
@@ -315,8 +324,61 @@ void test_pd2_only_cable_answers_the_retry() {
     g_cable.cc = 1;
     g_cable.answers_pd3 = false;
     CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
-    CHECK_EQ(g_cable.tx_seen, 2);                            // PD 3.0 unanswered, PD 2.0 answered
-    CHECK_EQ(find_from(kDi2) > find_from(kDi3), true);
+    CHECK_EQ(g_cable.tx_seen, 3);                            // PD 3.x + SVDM 2.0 and 1.0 unanswered, PD 2.0 + SVDM 1.0 answered
+    CHECK_EQ(find_from(kDi2) > find_from(kDi3Svdm1), true);
+    CHECK_EQ(find_from(kDi3Svdm1) > find_from(kDi3), true);
+}
+
+// A real cable (a Baseus 100 W C-to-C, hardware 2026-11-11) acknowledges only a PD 3.x message header with a structured VDM
+// version 1.0 header (0xFF008001): it is the second variant, found on the second attempt, and PD 2.0 is never sent.
+void test_svdm1_only_cable_answers_the_second_variant() {
+    reset_world();
+    g_cable.cc = 1;
+    g_cable.only_pd3_svdm1 = true;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(g_cable.tx_seen, 2);                            // PD 3.x + SVDM 2.0 unanswered, PD 3.x + SVDM 1.0 answered
+    CHECK_EQ(g_cable.answered, 1);
+    const int a1 = find_from(kDi3);
+    const int a2 = find_from(kDi3Svdm1);
+    CHECK_EQ(a1 > 0, true);
+    CHECK_EQ(a2 > a1, true);
+    CHECK_EQ(find_from(kDi2), -1);                           // answered before the PD 2.0 variant
+    CHECK_EQ(usb_has("Response on Orientation A"), true);
+    CHECK_EQ(fusb302::emarker().valid, true);
+    CHECK_EQ(fusb302::emarker().max_current_a, 5);
+}
+
+// The same cable on the other orientation: A spends all three variants, B answers its second.
+void test_svdm1_only_cable_on_orientation_b() {
+    reset_world();
+    g_cable.cc = 2;
+    g_cable.only_pd3_svdm1 = true;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(g_cable.tx_seen, 5);                            // 3 silent on A, 2 on B
+    CHECK_EQ(usb_has("Response on Orientation B"), true);
+}
+
+// A cable that answers the first variant sees exactly what it saw before the table grew: one message, nothing after it.
+void test_first_variant_cable_sees_one_request() {
+    reset_world();
+    g_cable.cc = 1;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), true);
+    CHECK_EQ(g_cable.tx_seen, 1);
+    CHECK_EQ(find_from(kDi3Svdm1), -1);
+    CHECK_EQ(find_from(kDi2), -1);
+}
+
+// The log line names the whole combination of the attempt (the chip's TXSENT is reported for every attempt here).
+void test_attempt_log_names_header_revision_and_svdm_version() {
+    reset_world();
+    g_auto_txsent = true;
+    g_cable.answers_pd3 = false;
+    g_cable.answers_pd2 = false;
+    CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
+    CHECK_EQ(usb_has("sw0=0x24 attempt 0 (PD 3.0, SVDM 2.0): SOP' GoodCRC"), true);
+    CHECK_EQ(usb_has("sw0=0x24 attempt 1 (PD 3.0, SVDM 1.0): SOP' GoodCRC"), true);
+    CHECK_EQ(usb_has("sw0=0x24 attempt 2 (PD 2.0, SVDM 1.0): SOP' GoodCRC"), true);
+    CHECK_EQ(usb_has("sw0=0x18 attempt 2 (PD 2.0, SVDM 1.0): SOP' GoodCRC"), true);
 }
 
 void test_no_cable_scans_both_orientations_and_restores() {
@@ -324,13 +386,13 @@ void test_no_cable_scans_both_orientations_and_restores() {
     g_cable.answers_pd3 = false;
     g_cable.answers_pd2 = false;
     CHECK_EQ(fusb302::read_emarker(false, pd::EmarkerMode::Vconn), false);
-    CHECK_EQ(g_cable.tx_seen, 4);                            // 2 orientations x 2 attempts
+    CHECK_EQ(g_cable.tx_seen, 6);                            // 2 orientations x 3 variants
     CHECK_EQ(usb_has("No E-Marker detected"), true);
     CHECK_EQ(g_pin[0], false);                               // VCONN off again
     CHECK_EQ(g_reg[0x02], 0x03);
     CHECK_EQ(g_reg[0x03], 0x20);
-    // Two orientations, each at least 40 ms plus two 80 ms windows of polling.
-    CHECK_EQ(g_ms - 1000 >= 2 * (40 + 2 * 80), true);
+    // Two orientations, each at least 40 ms plus three 80 ms windows of polling.
+    CHECK_EQ(g_ms - 1000 >= 2 * (40 + 3 * 80), true);
 }
 
 void test_vconn_needs_pc13_and_the_far_line() {
@@ -1453,6 +1515,36 @@ void test_cable_session_is_refused_like_the_scan() {
     CHECK_EQ(find_from("PC13=1"), -1);
     CHECK_EQ(usb_has("Refused"), true);
     fusb302::set_inline(false);
+}
+
+// The session of an SVDM 1.0 cable: a later request goes out with the PD 3.x header and the SVDM 1.0 VDM header the caller
+// chose (the cable acknowledges only that); the same request as SVDM 2.0 gets no GoodCRC.
+void svdm1_session_body(void* p) {
+    auto& s = *static_cast<SessionProbe*>(p);
+    emk_learn::Request r;
+    r.spec_rev = 2;
+    r.n = 1;
+    r.w[0] = 0xFF008002u;                                   // Discover SVIDs, SVDM 1.0
+    s.ra = fusb302::cable_exchange(r, s.a, 50);
+    r.w[0] = 0xFF00A002u;                                   // the same as SVDM 2.0
+    s.rb = fusb302::cable_exchange(r, s.b, 50);
+}
+
+void test_svdm1_cable_session_follow_ups_carry_their_variant() {
+    reset_world();
+    g_cable.cc = 1;
+    g_cable.only_pd3_svdm1 = true;
+    g_cable.vendor = true;
+    SessionProbe s;
+    CHECK_EQ(fusb302::cable_session(false, &svdm1_session_body, &s), true);
+    CHECK_EQ(s.ra, true);
+    CHECK_EQ(s.rb, false);
+    CHECK_EQ(g_cable.req_hdr.size(), 2u);
+    if (g_cable.req_hdr.size() == 2 && g_cable.req_vdm.size() == 2) {
+        CHECK_EQ(g_cable.req_hdr[0] & 0xFF, 0x8Fu);          // PD 3.x header, as given
+        CHECK_EQ(g_cable.req_vdm[0], 0xFF008002u);           // SVDM 1.0, as given
+        CHECK_EQ(g_cable.req_vdm[1], 0xFF00A002u);
+    }
 }
 
 // ---- Rd lifetime (k2/rd-release) ----
@@ -4355,6 +4447,10 @@ int main() {
     test_cable_on_cc1_orientation_a();
     test_cable_on_cc2_orientation_b();
     test_pd2_only_cable_answers_the_retry();
+    test_svdm1_only_cable_answers_the_second_variant();
+    test_svdm1_only_cable_on_orientation_b();
+    test_first_variant_cable_sees_one_request();
+    test_attempt_log_names_header_revision_and_svdm_version();
     test_no_cable_scans_both_orientations_and_restores();
     test_vconn_needs_pc13_and_the_far_line();
     test_inline_gate_refuses_unconfirmed_vconn();
@@ -4423,6 +4519,7 @@ int main() {
     test_cable_session_exchanges_run_with_vconn_up_and_restore_after();
     test_cable_session_without_a_cable_never_calls_the_body();
     test_cable_session_is_refused_like_the_scan();
+    test_svdm1_cable_session_follow_ups_carry_their_variant();
     test_hid_cold_boot_is_passive_before_the_main_loop();      // last: they start from self_power_early and end with no pin
     test_hid_warm_reset_inherits_no_rd();
     test_hid_reread_abort_releases_rd();
