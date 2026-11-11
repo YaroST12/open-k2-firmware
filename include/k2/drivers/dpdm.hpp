@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// D+/D- switch network driver. Four GPIOs steer the USB-A port's data lines between the
-// charger-protocol front end and the ADC sense inputs. The passive idle state
-// is PA7=1, PB0=0, PB1=1, PB2=0: it DRIVES both lines to a 0.6 V level through the switch network
-// (hardware: 653/653 mV at boot, 592/591 mV behind a phone), which the ADC senses. Only the Hi-Z
-// drive releases a line to a plain analog input.
-// The driver owns these pins; other code reads the state through read(), never the GPIO.
+// D+/D- switch network driver. Four GPIOs (PA7/PB0 for D+, PB1/PB2 for D-) steer the USB-A port's data lines
+// through a resistor network to 0 / 0.6 / 2.0 / 3.3 V; the ADC senses both lines. The passive idle (kIdle)
+// releases both lines (all four pins analog inputs): the K2 drives nothing until a session, probe or shell
+// command takes the lines, and every one of them gives the lines back through idle() or start_reset().
+// The driver owns these pins; other code reads the state through drive() and read(), never the GPIO.
 #pragma once
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -53,6 +54,42 @@ constexpr PinPair dm_pins(Drive d) {   // D-: PB1, PB2
     }
 }
 
+// What both lines are set to at once.
+struct Pair {
+    Drive dp, dm;
+    constexpr bool operator==(const Pair&) const = default;
+};
+
+// The passive idle: both lines released, nothing driven.
+// Until 2026-11-11 the idle was the factory start-up pin pattern PA7=1 PB0=0 PB1=1 PB2=0, which drives both lines to
+// 0.6 V. That is the HVDCP entry level on D+ and the QC2 12 V code on the pair: a Quick Charge adapter entered HVDCP
+// after ~1.25 s of it, and any D- dip and return then raised VBUS to 12 V with nothing requested (hardware:
+// CUKTECH 10 USB-A, 5.1 -> 11.75 V). The released pair is neither (see hvdcp_entry_level, qc2_code).
+inline constexpr Pair kIdle{Drive::HiZ, Drive::HiZ};
+
+// D+ driven to a level inside the HVDCP entry window (0.325 .. 2 V, docs/agents/QC_RESEARCH.md section 1): a
+// Quick Charge adapter that sees D+ there for about 1 s leaves BC1.2 mode. 2.0 V sits on the window's top edge and
+// counts as inside. An undriven line (HiZ, Listen, Sniff) is not a level the K2 sets.
+constexpr bool hvdcp_entry_level(Drive dp) { return dp == Drive::V0p6 || dp == Drive::V2p0; }
+
+// The pair is one of the QC2 voltage codes (5 V 0.6/0, 9 V 3.3/0.6, 12 V 0.6/0.6, 20 V 3.3/3.3).
+constexpr bool qc2_code(Pair p) {
+    return (p.dp == Drive::V0p6 && (p.dm == Drive::V0 || p.dm == Drive::V0p6)) ||
+           (p.dp == Drive::V3p3 && (p.dm == Drive::V0p6 || p.dm == Drive::V3p3));
+}
+
+// Steps of the active DCP check, one per fast-charge poll (~20 ms each):
+//   0 Clear: D+ 0 V, D- released. D+ below 0.325 V drops any charger left in HVDCP back to 5 V.
+//   1 Ref:   D+ released, D- 0.6 V. The ADC reads D- as the reference level.
+//   2 Pull:  D+ 0 V, D- 0.6 V. A D+/D- short pulls D- down with D+; open lines leave D- where it was.
+// Then both lines return to kIdle. Through a closed short D+ follows D- to ~0.6 V for the one Ref poll, far
+// below the ~1 s an HVDCP adapter needs, and no step is a QC2 code.
+inline constexpr std::array<Pair, 3> kDcpProbe{{
+    {Drive::V0, Drive::HiZ},
+    {Drive::HiZ, Drive::V0p6},
+    {Drive::V0, Drive::V0p6},
+}};
+
 // One timed step of a pulse / bit sequence: both lines at these levels for `us` microseconds.
 struct Step {
     Drive dp, dm;
@@ -63,21 +100,26 @@ struct Levels {
     bool pa7, pb0, sw1, sw2;  // PA7, PB0, PB1, PB2
 };
 
-inline constexpr Levels kPassiveIdle{true, false, true, false};
+// One bit per line that is not at kIdle (bit0 D+, bit1 D-); 0 = the lines are at the passive idle.
+constexpr unsigned mismatch(Pair p) { return (p.dp != kIdle.dp ? 1u : 0u) | (p.dm != kIdle.dm ? 2u : 0u); }
 
-// One bit per pin that differs from the passive idle state (bit0 PA7, bit1 PB0, bit2 PB1, bit3 PB2).
-constexpr unsigned mismatch(const Levels& l) {
-    return (l.pa7 != kPassiveIdle.pa7 ? 1u : 0u) | (l.pb0 != kPassiveIdle.pb0 ? 2u : 0u) |
-           (l.sw1 != kPassiveIdle.sw1 ? 4u : 0u) | (l.sw2 != kPassiveIdle.sw2 ? 8u : 0u);
-}
+// Short name of a drive for log lines ("hiz", "0", "0.6", "2.0", "3.3", "rx", "listen", "sniff").
+const char* name(Drive d);
 
-// Enable GPIOA/GPIOB clocks, make the four pins push-pull outputs and drive kPassiveIdle.
+// Enable GPIOA/GPIOB clocks and put both lines at kIdle (the four pins analog inputs).
 void init();
 
 // Drive one line. Pins are written before their mode changes, so a line never glitches through
 // the old level. Never exceeds what the pins can express: the caller decides when to use them.
 void set_dp(Drive d);
 void set_dm(Drive d);
+
+// What set_dp / set_dm last applied to each line (the GPIO input register cannot tell a released
+// line from a 0 V one, so the driver keeps it). Listen on D+ reads back as Sniff in the PB0 clock mode.
+Pair drive();
+
+// Both lines to kIdle now.
+void idle();
 
 // Play a step list with 1 us resolution from the core cycle counter. Interrupts are masked while a
 // list of up to ~20 ms runs (pulse widths of 40 us need it) and the lost SysTick ms are re-counted.
@@ -123,21 +165,22 @@ EdgeCount count_dp_edges(std::uint32_t window_us);
 // Both lines to 0 V right now; any HVDCP / AFC / FCP / SCP charger falls back to 5 V.
 void discharge();
 
-// Pin sequence of the active DCP check (fastcharge_classify.hpp, dcp_check_result): D+ is driven to 0 V
-// with D- left on its idle 0.6 V. Both calls return at once; the caller waits between them and reads D-
-// with the ADC. dcp_probe_end() restores the passive idle only when the pins still hold the probe state
-// (returns false when something else rewrote them meanwhile, and then leaves them alone).
-void dcp_probe_begin();
-bool dcp_probe_end();
+// Pin sequence of the active DCP check (fastcharge_classify.hpp, dcp_check_result), steps from kDcpProbe.
+// dcp_probe_step(i) applies step i and returns at once; the caller waits a poll between steps and reads D-
+// with the ADC. Moving on from step i (to step i+1, or back to idle with dcp_probe_end(i)) only happens while
+// the lines still hold step i: both calls return false when another owner rewrote them meanwhile, and then
+// leave them alone.
+bool dcp_probe_step(std::size_t i);
+bool dcp_probe_end(std::size_t i);
 
-// Full reset: discharge both lines at once, hold 0 V for 500 ms, then restore the passive
-// idle state. Non-blocking: the hold ends in poll(). Safe to call repeatedly (restarts the hold).
+// Full reset: discharge both lines at once, hold 0 V for 500 ms, then return both lines to the
+// passive idle. Non-blocking: the hold ends in poll(). Safe to call repeatedly (restarts the hold).
 void start_reset();
 bool reset_busy();
 void cancel_reset();
 void poll();
 
-// Current pin levels (input data register, valid for outputs too).
+// Current pin levels (input data register, valid for outputs and digital inputs; a released, analog pin reads 0).
 Levels read();
 
 }  // namespace k2::dpdm

@@ -60,27 +60,31 @@ enum class Protocol : std::uint8_t {
 // here: the CC2 bias net reads ~1.69 V with nothing attached, and only the FUSB302's own Rp
 // detection counts as "CC attached".
 // A DCP (D+ shorted to D-) is only concluded from a level that sits still over the whole window:
-// a live data link averages equal too, but its levels move with bus activity. An equal steady pair
-// inside the bias window (0.5 .. 0.79 V on both lines) is the K2's own idle drive (both lines driven to
-// 0.6 V) and proves no short, so passively it reads NO QUICK; `dcp_proof` (the active check below
-// found D- following a pulled-low D+) turns that same pair into DCP 5V.
-// `lines_floating`: the inline VOOC monitor owns D+/D- (dpsniff::monitoring(): floating inputs, no 0.6 V bias, a data
+// a live data link averages equal too, but its levels move with bus activity. Passively that needs an
+// equal steady pair of at least 0.4 V outside the bias window (0.5 .. 0.79 V on both lines). A bias-window
+// pair is a short carrying someone's 0.6 V detection source (until 2026-11-11 the K2's own idle drove both
+// lines there) and proves no short on its own; a floating short reads equal and low (the K2's idle releases
+// both lines). Both read NO QUICK passively; `dcp_proof` (the active check below found D- following a
+// pulled-low D+) turns any quiet pair (quiet_pair) into DCP 5V.
+// `lines_floating`: the inline VOOC monitor owns D+/D- (dpsniff::monitoring(): Sniff floating inputs, a data
 // device inline). The levels are then the device's and the charger's, not a handshake: USB DATA (PD still wins).
 Protocol classify(const Ring& ring, int dp_mv, int dm_mv, int vbus_mv, bool pd_active = false, bool pd_likely = false,
                   bool cc_source_no_pd = false, bool cc_attach_quiet = true, bool dcp_proof = false,
                   bool lines_floating = false);
 
-// The window holds the K2's own bias: full, both lines equal and steady at 0.5 .. 0.79 V.
-bool bias_pair(const Ring& ring);
+// The window holds a quiet pair: full, both lines equal and steady at or below 0.79 V.
+bool quiet_pair(const Ring& ring);
 
-// Active DCP check: with D- left on the bias, D+ is driven to 0 V for one poll interval and D- is read.
-// A BC1.2 short drags D- down with it; an open pair leaves it on the bias. The pins are the K2's
-// own symmetric 0.6 V divider, there is no strong / weak asymmetry between the lines, so the decision is
-// relative to D-'s own idle reading: shorted when D- fell by at least kDcpDropMv. Invalid when the idle
-// reading is not the bias (the pair already moved), which gives no verdict. Unverified on hardware.
+// Active DCP check (steps in dpdm::kDcpProbe, one per poll): D+ to 0 V with D- released (clears any HVDCP
+// state), then D- driven to 0.6 V with D+ released (the reference reading `ref_dm_mv`), then D+ pulled to 0 V
+// with D- still on 0.6 V (`probed_dm_mv`). A BC1.2 short drags D- down with D+; an open pair leaves it on its
+// 0.6 V. Both lines use the K2's symmetric 0.6 V / 0 V dividers, there is no strong / weak asymmetry between
+// them, so the decision is relative to the reference: shorted when D- fell by at least kDcpDropMv. Invalid when
+// the reference is outside the bias window (0.5 .. 0.79 V: something else pulls D-), which gives no verdict.
+// Unverified on hardware.
 inline constexpr int kDcpDropMv = 150;
 enum class DcpCheck : std::uint8_t { Invalid, Open, Shorted };
-DcpCheck dcp_check_result(int idle_dm_mv, int probed_dm_mv);
+DcpCheck dcp_check_result(int ref_dm_mv, int probed_dm_mv);
 
 // Everything that must hold before the check may drive the lines. The caller fills it from the other
 // drivers (link, fctrig, dpdm); the rule is pure.
@@ -91,18 +95,19 @@ struct DcpCheckGate {
     bool pd_likely = false;         // CC attached, VBUS above 5.5 V, load flowing, no caps seen
     bool cc_source_no_pd = false;   // CC shows an attached source with no PD: a default-USB data host
     bool engine_idle = false;       // no fctrig trigger, scan, UFCS probe or reset hold
-    bool lines_free = false;        // the four switch pins read back as the idle state, no sniffer armed
+    bool lines_free = false;        // both lines at the passive idle (dpdm::mismatch(dpdm::drive()) == 0)
     bool done_this_attach = false;  // the check ran once already for this attach
 };
 bool dcp_check_allowed(const DcpCheckGate& g, const Ring& ring);
 
 // True when the window shows a charger handshake on the data pair: a pulsing or high bucket on either
 // line, a steady 0.6 V rail below the USB data-idle window (FCP/AFC), a BC1.2 short, or the Samsung
-// divider levels. Idle lines (0 V, the ~0.8 V data pull-up, a steady ~2 V) are not a handshake.
+// divider levels. Idle lines (0 V or floating low, the ~0.8 V data pull-up, a steady ~2 V, an equal pair
+// in the bias window) are not a handshake.
 bool handshake_pattern(const Ring& ring, int dp_mv, int dm_mv);
 
 // The "handshake seen this attach" latch: stays set once set, and is only fed from a full window
-// that is not the K2's own bias pair.
+// that is not an equal bias-window pair.
 bool update_handshake_latch(bool latched, const Ring& ring, int dp_mv, int dm_mv);
 
 // The verdict as the remote and the shell report it, so they say what Home says: a live, proven VOOC session names the
@@ -117,9 +122,5 @@ const char* name(Protocol p);
 
 // At most 8 characters, for the Home status bar.
 const char* short_name(Protocol p);
-
-// The idle state of the four D+/D- switch pins is PA7 high, PB0 low, PB1 high,
-// PB2 low. Returns a bit per pin that differs: bit0 PA7, bit1 PB0, bit2 PB1, bit3 PB2.
-unsigned idle_mismatch(bool pa7, bool pb0, bool pb1, bool pb2);
 
 }  // namespace k2::fastcharge

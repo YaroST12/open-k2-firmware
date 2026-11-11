@@ -37,10 +37,10 @@ inline constexpr Pin ina_scl   {Port::B, 8};   // power monitor (INA2xx), push-p
 inline constexpr Pin ina_sda   {Port::B, 9};
 
 // ---- Board switches, driven once at start-up; owned by k2::dpdm and k2::board ----
-inline constexpr Pin sw_pa7    {Port::A, 7};   // D+/D- switch network (k2::dpdm), idle high
-inline constexpr Pin sw_pb0    {Port::B, 0};   // k2::dpdm, idle low
-inline constexpr Pin dp_dm_sw1 {Port::B, 1};   // k2::dpdm, idle high
-inline constexpr Pin dp_dm_sw2 {Port::B, 2};   // k2::dpdm, idle low
+inline constexpr Pin sw_pa7    {Port::A, 7};   // D+/D- switch network (k2::dpdm), D+; idle analog (released)
+inline constexpr Pin sw_pb0    {Port::B, 0};   // k2::dpdm, D+; idle analog
+inline constexpr Pin dp_dm_sw1 {Port::B, 1};   // k2::dpdm, D-; idle analog
+inline constexpr Pin dp_dm_sw2 {Port::B, 2};   // k2::dpdm, D-; idle analog
 inline constexpr Pin sw_pb13   {Port::B, 13};  // k2::board (function unknown), low
 inline constexpr Pin sw_pb15   {Port::B, 15};  // k2::board (function unknown), low
 

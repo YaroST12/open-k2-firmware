@@ -27,6 +27,7 @@ constexpr std::uint32_t kMaskedLimitUs = 20'000;
 bool g_dwt;
 bool g_resetting;
 std::uint32_t g_reset_start_ms;
+Pair g_drive = kIdle;   // what set_dp / set_dm last applied
 
 inline std::uint32_t cyc() { return *reinterpret_cast<volatile std::uint32_t*>(kDwtCyccnt); }
 
@@ -89,12 +90,9 @@ struct HwIo {
 
 void init() {
     crm().APB2EN |= Crm::APB2EN_GPIOA | Crm::APB2EN_GPIOB;
-    // Drive the level before switching to output so the pins never glitch through the old state.
-    p::sw_pa7.write(kPassiveIdle.pa7);
-    p::sw_pb0.write(kPassiveIdle.pb0);
-    p::dp_dm_sw1.write(kPassiveIdle.sw1);
-    p::dp_dm_sw2.write(kPassiveIdle.sw2);
-    for (const Pin& pin : {p::sw_pa7, p::sw_pb0, p::dp_dm_sw1, p::dp_dm_sw2}) pin.mode(Mode::OutPp50);
+    // The ODR bits go low first, so a later switch to output never starts from a stale high level.
+    for (const Pin& pin : {p::sw_pa7, p::sw_pb0, p::dp_dm_sw1, p::dp_dm_sw2}) pin.clear();
+    idle();
     dwt_init();
     g_resetting = false;
 }
@@ -103,14 +101,39 @@ Levels read() {
     return {p::sw_pa7.read(), p::sw_pb0.read(), p::dp_dm_sw1.read(), p::dp_dm_sw2.read()};
 }
 
+const char* name(Drive d) {
+    switch (d) {
+    case Drive::HiZ:        return "hiz";
+    case Drive::V0:         return "0";
+    case Drive::V0p6:       return "0.6";
+    case Drive::V2p0:       return "2.0";
+    case Drive::V3p3:       return "3.3";
+    case Drive::RxPulldown: return "rx";
+    case Drive::Listen:     return "listen";
+    case Drive::Sniff:      return "sniff";
+    }
+    return "?";
+}
+
 namespace { bool g_clk_pb0; }
 void set_clock_pin(ClockPin c) { g_clk_pb0 = c == ClockPin::Pb0; }
 ClockPin clock_pin() { return g_clk_pb0 ? ClockPin::Pb0 : ClockPin::Pa7; }
 void set_dp(Drive d) {
     if (d == Drive::Listen && g_clk_pb0) d = Drive::Sniff;   // both D+ pins floating digital inputs
     apply(p::sw_pa7, p::sw_pb0, dp_pins(d));
+    g_drive.dp = d;
 }
-void set_dm(Drive d) { apply(p::dp_dm_sw1, p::dp_dm_sw2, dm_pins(d)); }
+void set_dm(Drive d) {
+    apply(p::dp_dm_sw1, p::dp_dm_sw2, dm_pins(d));
+    g_drive.dm = d;
+}
+
+Pair drive() { return g_drive; }
+
+void idle() {
+    set_dp(kIdle.dp);
+    set_dm(kIdle.dm);
+}
 
 void play(std::span<const Step> steps) {
     const std::uint32_t total = fc::total_us(steps);
@@ -261,15 +284,18 @@ void discharge() {
     set_dm(Drive::V0);
 }
 
-void dcp_probe_begin() {
-    set_dp(Drive::V0);          // D+ to 0 V; D- stays on its idle 0.6 V
+// Only move on from our own state: a session that took the lines meanwhile has rewritten them already.
+// Step 0 starts from the idle.
+bool dcp_probe_step(std::size_t i) {
+    if (i >= kDcpProbe.size() || g_drive != (i == 0 ? kIdle : kDcpProbe[i - 1])) return false;
+    set_dp(kDcpProbe[i].dp);
+    set_dm(kDcpProbe[i].dm);
+    return true;
 }
 
-bool dcp_probe_end() {
-    const Levels l = read();
-    // Only undo our own state: a session that took the lines meanwhile has rewritten them already.
-    if (l.pa7 || l.pb0 || !l.sw1 || l.sw2) return false;
-    set_dp(Drive::V0p6);
+bool dcp_probe_end(std::size_t i) {
+    if (i >= kDcpProbe.size() || g_drive != kDcpProbe[i]) return false;
+    idle();
     return true;
 }
 
@@ -287,8 +313,7 @@ void cancel_reset() { g_resetting = false; }
 void poll() {
     if (g_resetting && systick::millis() - g_reset_start_ms >= kResetHoldMs) {
         g_resetting = false;
-        set_dp(Drive::V0p6);          // passive idle: PA7=1 PB0=0 PB1=1 PB2=0
-        set_dm(Drive::V0p6);
+        idle();
     }
 }
 
