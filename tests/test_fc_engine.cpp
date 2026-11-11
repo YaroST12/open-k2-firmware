@@ -43,6 +43,7 @@ static void inline_guard() {
     c.inline_now = Reason::DataDevice;
     CHECK(e.start(Proto::Afc, 9000, true) == Fail::Inline);
     CHECK(e.start(Proto::Afc, 9000, false, true) == Fail::NeedConfirm);     // the override is no confirm either
+    CHECK(e.start(Proto::Vooc, 5000, false, true) == Fail::NeedConfirm);    // the override needs the confirm at 5 V too
     CHECK(c.set_calls == 0);
     CHECK(e.start(Proto::Qc2, 9000, true, true) == Fail::None);   // both given: runs
     CHECK(e.state() == State::Negotiating);

@@ -795,6 +795,7 @@ Fail Engine::start(Proto p, int target_mv, bool confirmed, bool allow_inline, in
     if (state_ == State::Negotiating || state_ == State::Active) return Fail::Busy;
     const Fail f = validate(p, target_mv, confirmed);
     if (f != Fail::None) return f;
+    if (allow_inline && !confirmed) return Fail::NeedConfirm;   // the override drives D+/D- with a sink possibly attached: both flags
     if (!allow_inline && env_.inline_reason() != link::Reason::None) return Fail::Inline;
     const std::uint32_t now = env_.now_ms();
     proto_ = p;

@@ -1866,6 +1866,9 @@ def cmd_fc(link, a):
         if mv > FC_SAFE_MV and not a.confirm:
             raise FcRefused(f"{a.volts:g} V is above 5 V: add --confirm "
                             "(known charger, nothing valuable attached)")
+        if a.allow_inline and not a.confirm:
+            raise FcRefused("--allow-inline drives D+/D- with a sink possibly attached, at any voltage: "
+                            "it needs --confirm too (both flags)")
         payload = bytes([FC_OP_TRIGGER, FC_PROTOS.index(a.proto)]) + mv.to_bytes(2, "little") + bytes([(FC_CONFIRM if a.confirm else 0) | (FC_ALLOW_INLINE if a.allow_inline else 0)])
     try:
         return decode_fc(link.call(CMD_FC, payload).payload)
@@ -3168,12 +3171,13 @@ def build_parser():
     sfs.add_parser("reset", help="back to 5 V, then passive idle")
     sfc = sfs.add_parser("scan", help="auto-detect the charger (steps up to 9 V)")
     sfc.add_argument("--confirm", action="store_true", help="required: the scan raises VBUS")
-    sfc.add_argument("--allow-inline", action="store_true", help="override the PD-contract / load guard")
-    sft = sfs.add_parser("trigger", help="request one protocol at one voltage")
+    sfc.add_argument("--allow-inline", action="store_true", help="override the PD-contract / load guard (with --confirm)")
+    sft =sfs.add_parser("trigger", help="request one protocol at one voltage")
     sft.add_argument("proto", choices=FC_PROTOS)
     sft.add_argument("--volts", type=float, required=True)
-    sft.add_argument("--confirm", action="store_true", help="required above 5 V")
-    sft.add_argument("--allow-inline", action="store_true", help="override the PD-contract / load guard")
+    sft.add_argument("--confirm", action="store_true", help="required above 5 V, and with --allow-inline at any voltage")
+    sft.add_argument("--allow-inline", action="store_true",
+                     help="override the PD-contract / load guard (needs --confirm at any voltage)")
     sst = sub.add_parser("store", help="flash store behind the USB drive (writes only when asked)")
     sss = sst.add_subparsers(dest="store_cmd", required=True)
     sss.add_parser("list", help="records in the store")

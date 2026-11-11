@@ -689,10 +689,16 @@ static void test_fc() {
     check_header(r, 0x32, 23, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x32, 24, {3, 0, 0x88, 0x13, 4}), r), 1);   // unknown bit
     check_header(r, 0x32, 24, Status::BadArg, 0);
-    CHECK_EQ(run(f, request(0x32, 25, {3, 6, 0x88, 0x13, 2}), r), 1);   // 5 V with the override only: fine
-    check_header(r, 0x32, 25, Status::Ok, 10 + 8);
-    CHECK_EQ(f.fc_flags, 2);
+    // The override drives D+/D- with a sink possibly attached: the hazard is the attach, not the voltage level, so
+    // `--allow-inline` needs the confirm bit at 5 V too (RED before the fix: this was accepted, fc_calls == 1).
+    CHECK_EQ(run(f, request(0x32, 25, {3, 6, 0x88, 0x13, 2}), r), 1);   // 5 V with the override only: refused
+    check_header(r, 0x32, 25, Status::BadArg, 0);
+    CHECK_EQ(f.fc_calls, 0);
+    CHECK_EQ(run(f, request(0x32, 26, {3, 6, 0x88, 0x13, 3}), r), 1);   // 5 V, both flags: fine
+    check_header(r, 0x32, 26, Status::Ok, 10 + 8);
+    CHECK_EQ(f.fc_flags, 3);
     CHECK_EQ(f.fc_calls, 1);
+    f.fc_calls = 1;
     // A backend refusal is passed on.
     f.fc_status = Status::Busy;
     CHECK_EQ(run(f, request(0x32, 13, {3, 0, 0x88, 0x13, 0}), r), 1);

@@ -656,8 +656,11 @@ class FcCommands(unittest.TestCase):
 
     def test_allow_inline_flag(self):
         sent = []
-        self.run_cmd(["fc", "trigger", "vooc", "--volts", "5", "--allow-inline"], sent)
-        self.assertEqual(sent[-1], (kr.CMD_FC, bytes([3, 6, 0x88, 0x13, 2])))
+        with self.assertRaises(kr.FcRefused):                 # at 5 V too: both flags, nothing is sent
+            self.run_cmd(["fc", "trigger", "vooc", "--volts", "5", "--allow-inline"], sent)
+        self.assertEqual(sent, [])
+        self.run_cmd(["fc", "trigger", "vooc", "--volts", "5", "--confirm", "--allow-inline"], sent)
+        self.assertEqual(sent[-1], (kr.CMD_FC, bytes([3, 6, 0x88, 0x13, 3])))
         self.run_cmd(["fc", "trigger", "qc2", "--volts", "9", "--confirm", "--allow-inline"], sent)
         self.assertEqual(sent[-1], (kr.CMD_FC, bytes([3, 0, 0x28, 0x23, 3])))
         self.run_cmd(["fc", "scan", "--confirm", "--allow-inline"], sent)

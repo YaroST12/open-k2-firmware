@@ -28,8 +28,10 @@ Shorthand: `R` = `python3 tools/k2_remote.py`, `T` = `python3 tools/pd_trace.py`
    that `vbus_mv` is about 5000 before touching the cabling.
 4. **Triggers are refused with a device inline.** PD trigger shows `LOAD: Load attached: unplug it`
    (the tool is blocked); staged on-device FC refuses with `Load/PD active: refused`, with no bypass.
-   Identify retains its explicit second-OK override. Remote FC retains explicit `--allow-inline`;
-   do not use it unless the test says so: overriding means the load sees the raised voltage.
+   Identify retains its explicit second-OK override. Remote FC retains explicit `--allow-inline`, which needs
+   `--confirm` too at any voltage (firmware and client refuse it alone, 5 V included: the hazard is driving D+/D-
+   with a sink attached); do not use it unless the test says so: overriding means the load sees the raised voltage.
+   `pd request --over-load` above 5 V likewise needs both `--over-load` and `--confirm`.
 5. **A dummy load or the K2 alone is the sink.** The K2 is the sink on the port the charger is plugged into;
    leave the other port empty unless the test needs a load or a cable.
 6. **Port naming** (screen upright, `UI_DESIGN.md` section 1): the **top** edge has a **male** USB-C plug,

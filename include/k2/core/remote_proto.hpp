@@ -1392,7 +1392,10 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         case kFcTrigger: {
             if (p.size() != 5) return reply(Status::BadLength);
             const uint16_t mv = detail::rd16(&p[2]);
-            if (p[1] >= kFcProtoCount || (p[4] & ~kFcFlagMask) || (mv > kFcSafeMv && !(p[4] & kFcConfirm)))
+            // Above 5 V needs the confirm bit; so does --allow-inline at any voltage (it drives D+/D- with a
+            // sink possibly attached: both flags, like `pd reset --inline --confirm`).
+            if (p[1] >= kFcProtoCount || (p[4] & ~kFcFlagMask) ||
+                ((mv > kFcSafeMv || (p[4] & kFcAllowInline)) && !(p[4] & kFcConfirm)))
                 return reply(Status::BadArg);
             break;
         }
