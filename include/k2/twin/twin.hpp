@@ -25,7 +25,7 @@ inline constexpr std::uint32_t kPdoHigherCapability = 1u << 28;
 struct Twin {
     std::array<char, kNameMax + 1> name{};
     std::uint16_t vid = 0, pid = 0;  // 0 = not read
-    std::uint8_t product_type = 0;   // ID Header bits 29:27, UFP product type (0 = undefined / not read)
+    std::uint16_t id_hi = 0;         // Discover Identity ID Header bits 31:23: USB comms host / device, UFP type, modal, DFP type (0 = not read)
     std::uint8_t pd_rev = 0;         // wire revision of its messages: 1 PD 2.0, 2 PD 3.x, 0 = not read
     std::uint8_t num_pdos = 0;       // sink PDOs held in `pdos`
     std::array<std::uint32_t, kMaxSinkPdos> pdos{};
@@ -33,6 +33,8 @@ struct Twin {
     std::uint32_t rdo = 0, rdo_pdo = 0;
 
     bool has_request() const { return rdo != 0 && rdo_pdo != 0; }
+    std::uint8_t ufp_type() const { return std::uint8_t((id_hi >> 4) & 7u); }   // ID Header 29:27: 1 hub, 2 peripheral, 3 power bank
+    std::uint8_t dfp_type() const { return std::uint8_t(id_hi & 7u); }          // ID Header 25:23: 1 hub, 2 host, 3 charger
 };
 
 }  // namespace k2::twin

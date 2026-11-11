@@ -15,7 +15,8 @@
 //     voltage wins (less current in the cable); after that the lower position.
 //  5. Nothing above 5 V usable: the contract is the 5 V PDO (Kind::FiveV). The RDO then carries Capability Mismatch when the
 //     twin's sink PDO 1 has Higher Capability set: the device said it needs more than vSafe5V.
-//  6. No usable result (no valid source list, no sink PDOs, a first sink PDO that is not 5 V): Kind::None.
+//  6. No usable result (no valid source list, no sink PDOs and no sniffed Request, a first sink PDO that is not 5 V): Kind::None.
+//     A twin made from a sniffed Request alone (no sink PDOs) answers by rule 7 only.
 //  7. A sniffed Request wins over rules 4-5 when the new list has a PDO of the same shape as the one the device asked from
 //     (fixed: the same voltage; PPS: a range that contains the voltage it asked for), flagged `observed`. Its current is what the
 //     device asked for when it asked for LESS than that PDO then offered (that is its real need); when it asked for everything
@@ -189,16 +190,17 @@ inline std::uint32_t want_mw(const Twin& t) {
 // Rules 1-10. `caps` is the charger's list as in hand (SourceCaps::pdos by position).
 inline Outcome predict(const Twin& t, const pd::SourceCaps& caps, const Facts& f) {
     Outcome out;
-    if (!caps.valid || caps.num_pdos == 0 || t.num_pdos == 0) return out;
+    if (!caps.valid || caps.num_pdos == 0 || (t.num_pdos == 0 && !t.has_request())) return out;
     pd::Pdo sink[kMaxSinkPdos];
     const std::size_t ns = std::min<std::size_t>(t.num_pdos, kMaxSinkPdos);
     for (std::size_t i = 0; i < ns; ++i) sink[i] = pd::decode_pdo(t.pdos[i]);
-    if (sink[0].type != pd::PdoType::Fixed || sink[0].max_mv != pd::kVsafe5vMv) return out;   // rule 6
-    const bool higher_cap = (t.pdos[0] & kPdoHigherCapability) != 0;
+    // Rule 6. A twin with no sink PDOs (made from a sniffed Request alone) has only rule 7 to go by.
+    if (ns != 0 && (sink[0].type != pd::PdoType::Fixed || sink[0].max_mv != pd::kVsafe5vMv)) return out;
+    const bool higher_cap = ns != 0 && (t.pdos[0] & kPdoHigherCapability) != 0;
 
     detail::Cand best;
     const bool seen = detail::observed_candidate(t, caps, sink, ns, f, best);   // rule 7
-    if (!seen) {
+    if (!seen && ns != 0) {
         const std::size_t n = std::min<std::size_t>(caps.num_pdos, caps.pdos.size());
         for (std::size_t i = 0; i < n; ++i) {
             for (std::size_t j = 0; j < ns; ++j) {
@@ -220,7 +222,7 @@ inline Outcome predict(const Twin& t, const pd::SourceCaps& caps, const Facts& f
 
     // Rule 10.
     const bool met = best.observed ? best.lim_ma >= best.need_ma : out.mw >= out.want_mw;
-    if (best.observed && met) out.want_mw = out.mw;
+    if (best.observed && (met || out.want_mw == 0)) out.want_mw = detail::mw_of(best.mv, best.need_ma);   // what it asked for
     if (met) {
         out.limiter = rdintent::best_power_w(caps) * 1000u > out.mw ? Limiter::Device : Limiter::None;
     } else {

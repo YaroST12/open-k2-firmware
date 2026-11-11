@@ -170,6 +170,19 @@ static void test_rule7_observed_request() {
     o = predict(p, caps_of({fx(5000, 3000), pps(9000, 21000, 3000)}), {});
     CHECK_EQ(o.observed, 0);
     EXPECT(o, Kind::Pps, 2, 11000, 3000, Limiter::Device, false);
+    // a twin made from a sniffed Request alone (no Sink_Capabilities were ever read) predicts from that Request only:
+    // a charger with the same shape of PDO answers, any other gets Kind::None (rule 6: there is no sink PDO 1 to judge by)
+    Twin r;
+    r.rdo = 2u << 28 | (2000u / 10) << 10 | 2000u / 10;
+    r.rdo_pdo = fx(9000, 3000);
+    o = predict(r, caps_of({fx(5000, 3000), fx(9000, 3000), fx(20000, 3000)}), {});
+    EXPECT(o, Kind::Fixed, 2, 9000, 2000, Limiter::Device, false);
+    CHECK_EQ(o.observed, 1);
+    CHECK_EQ(o.want_mw, o.mw);
+    o = predict(r, caps_of({fx(5000, 3000), fx(20000, 3000)}), {});
+    CHECK_EQ(int(o.kind), int(Kind::None));
+    o = predict(r, caps_of({fx(5000, 3000), fx(9000, 1000)}), {});   // the charger gives less than it asked
+    EXPECT(o, Kind::Fixed, 2, 9000, 1000, Limiter::Charger, true);
 }
 
 // Rule 8: never above what the charger advertises, and never above the limits of a cable that is known (Facts::cable_*, 0 = unknown).
