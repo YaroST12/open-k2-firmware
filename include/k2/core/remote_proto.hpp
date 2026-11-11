@@ -826,8 +826,10 @@ struct PdTriggerSnapshot {
     uint8_t trial_moves = 0;           // how often the direct-plug fallback moved the Rd this attach (appended after trial_line)
 };
 // Result of PD_ATTACH: Ok carries the trigger snapshot; any other status is a refusal (err = pd::Err) and the
-// snapshot is not sent.
-struct PdAttachResult { Status status = Status::Ok; uint8_t err = 0; PdTriggerSnapshot snapshot{}; };
+// snapshot is not sent. `raised` (not on the wire): the attach actually started or holds a contract above 5 V (a request
+// above 5 V was accepted by the sink engine). An attach that only presented Rd, found no PDO, or whose request failed
+// raised nothing, so the dead-man lease must not arm for it.
+struct PdAttachResult { Status status = Status::Ok; uint8_t err = 0; PdTriggerSnapshot snapshot{}; bool raised = false; };
 // PD_MATCH payload (ui_match.hpp verdict): [caps_seen, request_seen, sink_ok, flags, verdict, rows,
 // want_pos, want_mv u16, want_ma u16, need_ma u16, have_ma u16, src_max_mv u16, src_max_w u16 (watts),
 // row state per PDO (rows bytes)]. Row states: 0 unknown, 1 selected, 2 selected low, 3 ok, 4 low, 5 no,
@@ -1393,7 +1395,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             buf[0] = res.err;
             return reply(res.status, std::span<const uint8_t>(buf.data(), 1));
         }
-        if (target_mv > kFcSafeMv) backend.lease_arm();   // an accepted attach above 5 V
+        if (res.raised) backend.lease_arm();   // only an attach that started / holds a request above 5 V (not Rd-only, no PDO, a failed request)
         return reply_n(encode_pd_trigger(buf, res.snapshot));
     }
     case Cmd::PdHandback: {

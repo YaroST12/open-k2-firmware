@@ -171,9 +171,10 @@ struct Fake {
         return t;
     }
     uint16_t attach_mv = 0, attach_ma = 0; bool attach_confirm = false; int attaches = 0; PdOpResult attach_verdict{};   // a non-Ok verdict is a refusal: status + err byte, no snapshot
+    bool attach_raised = false;   // the accepted attach started / holds a contract above 5 V (false: only Rd, no PDO, a failed request)
     PdAttachResult pd_attach(uint16_t target_mv, uint16_t target_ma, bool confirm) {
         calls++; attach_mv = target_mv; attach_ma = target_ma; attach_confirm = confirm; attaches++;
-        return {attach_verdict.status, attach_verdict.err, pd_trigger()};
+        return {attach_verdict.status, attach_verdict.err, pd_trigger(), attach_raised};
     }
     int fc_calls = 0; uint8_t fc_op = 0xFF, fc_proto = 0xFF; uint16_t fc_mv = 0xFFFF; uint8_t fc_flags = 0;
     Status fc_status = Status::Ok;

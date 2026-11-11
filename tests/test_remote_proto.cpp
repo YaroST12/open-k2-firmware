@@ -2207,12 +2207,20 @@ static void test_arming_commands_arm_only_when_accepted_above_5v() {
     // pd attach: the default target is 5 V (no arm); above 5 V arms when accepted
     run(f, request(0x48, 6, {0x88, 0x13}), r);                          // 5000 mV
     CHECK_EQ(f.lease_arms, 2);
+    f.attach_raised = false;                                            // accepted, but only Rd was presented / no PDO / the request failed
     run(f, request(0x48, 7, {0x28, 0x23, 0, 0, 1}), r);                 // 9000 mV, confirm
+    CHECK_EQ(f.lease_arms, 2);                                          // nothing was raised: no lease
+    f.attach_raised = true;                                             // the sink engine took a request above 5 V
+    run(f, request(0x48, 7, {0x28, 0x23, 0, 0, 1}), r);
     CHECK_EQ(f.lease_arms, 3);
     f.attach_verdict = {Status::Busy, 5};
     run(f, request(0x48, 8, {0x28, 0x23, 0, 0, 1}), r);                 // ports busy: refused
     CHECK_EQ(f.lease_arms, 3);
+    f.attach_verdict = {Status::NeedConfirm, 0};
+    run(f, request(0x48, 8, {0x28, 0x23, 0, 0, 0}), r);                 // not confirmed
+    CHECK_EQ(f.lease_arms, 3);
     f.attach_verdict = {};
+    f.attach_raised = false;
 
     // fc: a trigger above 5 V and any scan arm; status, reset and a 5 V trigger do not
     run(f, request(0x32, 9, {3, 1, 0x28, 0x23, 1}), r);                 // trigger qc3 at 9000 mV, confirm
@@ -2246,7 +2254,51 @@ static void test_arming_commands_arm_only_when_accepted_above_5v() {
     CHECK_EQ(f.lease_arms, 6);
 }
 
+// The same dispatcher over a backend whose lease_arm() drives the real k2::lease::Lease (the firmware's model), so the
+// tests read the lease's own `armed` flag, not a call counter. now_ms is the test clock.
+struct LeaseFake : Fake {
+    k2::lease::Lease model;
+    uint32_t now_ms = 1000;
+    void lease_arm() { model.arm(now_ms); }
+    void lease_touch() { model.touch(now_ms); }
+    bool armed() const { return model.info(now_ms).armed; }
+};
+
+static void test_lease_arms_only_for_what_was_raised() {
+    LeaseFake f;
+    Frame r;
+    f.attach_raised = false;
+    // a pd attach that only presented Rd (or found no PDO, or whose request failed) is accepted but raised nothing
+    run(f, request(0x48, 1, {0x28, 0x23, 0, 0, 1}), r);                 // 9000 mV, confirm
+    CHECK(!f.armed());
+    // refused attaches (busy / inline / not confirmed) raise nothing either
+    f.attach_verdict = {Status::Busy, 5};
+    run(f, request(0x48, 2, {0x28, 0x23, 0, 0, 1}), r);
+    CHECK(!f.armed());
+    f.attach_verdict = {Status::NeedConfirm, 0};
+    run(f, request(0x48, 3, {0x28, 0x23, 0, 0, 0}), r);
+    CHECK(!f.armed());
+    f.attach_verdict = {};
+    // the attach whose request the sink engine accepted holds 9 V: armed
+    f.attach_raised = true;
+    run(f, request(0x48, 4, {0x28, 0x23, 0, 0, 1}), r);
+    CHECK(f.armed());
+    // a later failed command does not clear an armed lease (nothing but stop / release / reset / test / settle does)
+    f.attach_raised = false;
+    run(f, request(0x48, 5, {0x28, 0x23, 0, 0, 1}), r);                 // accepted, raised nothing
+    CHECK(f.armed());
+    f.attach_verdict = {Status::Busy, 5};
+    run(f, request(0x48, 6, {0x28, 0x23, 0, 0, 1}), r);                 // refused
+    CHECK(f.armed());
+    f.attach_verdict = {};
+    f.rq_result = {Status::BadArg, 3};
+    run(f, request(0x41, 7, {2, 1, 0, 0, 0, 0}), r);                    // a refused pd request
+    CHECK(f.armed());
+    f.rq_result = {};
+}
+
 int main() {
+    test_lease_arms_only_for_what_was_raised();
     test_lease_wire();
     test_every_valid_request_refreshes_the_lease();
     test_arming_commands_arm_only_when_accepted_above_5v();

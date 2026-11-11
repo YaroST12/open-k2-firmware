@@ -760,8 +760,9 @@ remote::PdAttachResult Remote::pd_attach(uint16_t target_mv, uint16_t target_ma,
         K2LOG("[RMT] pd attach: sink_request err=%s\n", pd::err_name(e));
     }
 
-    // Return the current trigger status
-    return {remote::Status::Ok, 0, pd_trigger()};
+    // Return the current trigger status. Only a request the sink engine accepted for a level above 5 V holds the output
+    // under host control, so only that arms the dead-man lease (a failed request, Rd-only or no-PDO attach raised nothing).
+    return {remote::Status::Ok, 0, pd_trigger(), e == pd::Err::Ok && chosen_mv > pd::kAttachDefaultMv};
 }
 
 remote::PdTriggerSnapshot Remote::pd_trigger() {
