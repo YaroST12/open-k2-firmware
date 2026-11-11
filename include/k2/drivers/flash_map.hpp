@@ -80,6 +80,22 @@ static_assert(kBbLegacyBase == legacy::kBlackBoxBase && kJournalLegacyBase == le
               kCardsLegacyBase == legacy::kCardsBase && usbcfg::kLegacyAddr == legacy::kLegacyUsbCfg && uiprefs::kLegacyAddr == legacy::kLegacyUiPrefs,
               "the map and the ownership proof describe the same legacy stores");
 static_assert(regions_ok(), "flash regions overlap, are misaligned or leave their range");
+
+// The grown volume's run (k2::flash::fs_block_addr, blocks 90..144). It lies over the legacy rows above: on a unit whose
+// run held our old raw stores, the legacy wipe empties it first, and the volume grows into it only once every page reads
+// blank (k2/core/fs_grow.hpp); on any other content the volume stays at 90 blocks. Not part of kRegions, which stays
+// disjoint.
+inline constexpr Region kFsRun{"littlefs grown run", flash::kFsRunBase, flash::kFsRunEnd, Access::Fs};
+inline constexpr Region kKeptRecordPage{"kept: old e-marker record page", flash::kKeptPages[0], flash::kKeptPages[0] + flash::kSectorSize, Access::Native};
+inline constexpr Region kKeptTopPage{"kept: top page, unknown owner", flash::kKeptPages[1], flash::kKeptPages[1] + flash::kSectorSize, Access::Native};
+static_assert(kFsRun.begin == kRegions[4].begin, "the run starts with the legacy candidate range");
+static_assert(kFsRun.end == kKeptTopPage.begin && kKeptTopPage.end == flash::kStoreEnd, "the run ends below the kept top page");
+static_assert(kKeptRecordPage.begin == store::kLibraryAddr, "the kept record page is the native e-marker library page");
+static_assert(kKeptRecordPage.end <= kFsRun.begin && kRegions[0].end <= kKeptRecordPage.begin, "the kept record page is in no volume range");
+static_assert(flash::fs_block_addr(flash::kFsBlocks - 1) + flash::kSectorSize == kRegions[0].end &&
+                  flash::fs_block_addr(flash::kFsBlocks) == kFsRun.begin &&
+                  flash::fs_block_addr(flash::kFsGrownBlocks - 1) + flash::kSectorSize == kFsRun.end,
+              "blocks 0..89 fill the littlefs row, blocks 90..144 the run");
 static_assert(kRegions.front().begin == flash::kFsBase && kRegions.back().end == flash::kStoreEnd, "the map covers the flash up to its end");
 static_assert(kRegions[1].begin == flash::kFsEnd, "the native area starts where the file system ends");
 
