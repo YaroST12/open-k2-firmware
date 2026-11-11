@@ -78,21 +78,20 @@ static_assert(all_fit(kPresetNames, kSmallAdvPx, 150), "a preset name is wider t
 constexpr const char* kReattachConfirm = "Press again, K2 blinks once";
 static_assert(fits_px(kSmallAdvPx, kReattachConfirm, 216), "the re-attach confirmation is wider than the footer");
 // A row whose engine times its own pulses stops the screen for the length of the handshake (the engine window the LCD idle hook
-// does not serve, Runner::paint_blocked). One Info footer line says why, painted before the engine starts and left alone until the
-// window ends. Protocols with no such window say nothing. Footer text: 27 cells at most.
-constexpr const char* kQc2Words = "QC2: handshake";
-constexpr const char* kQc3Words = "QC3: handshake";
-constexpr const char* kQc3PlusWords = "QC3+: handshake";
+// does not serve, Runner::paint_blocked; Engine::blocks_paint names the protocols). One Info footer line says why, painted before
+// the engine starts and left alone until the window ends. Protocols with no such window say nothing: the QC2 / QC3 / QC3+ handshake
+// is served from the idle hook and never stops the screen. Footer text: 27 cells at most.
+constexpr const char* kFcpWords = "FCP: handshake";
+constexpr const char* kScpWords = "SCP: handshake";
 constexpr const char* kVoocWords = "VOOC: listening";
 constexpr const char* kUfcsWords = "UFCS: handshake";
 constexpr const char* kVivoWords = "VIVO: handshake";
-constexpr const char* kHandshakeWords[] = {kQc2Words, kQc3Words, kQc3PlusWords, kVoocWords, kUfcsWords, kVivoWords};
+constexpr const char* kHandshakeWords[] = {kFcpWords, kScpWords, kVoocWords, kUfcsWords, kVivoWords};
 static_assert(all_fit(kHandshakeWords, kSmallAdvPx, 216), "a handshake footer line is wider than the footer");
 const char* handshake_words(fc::Proto p) {
     switch (p) {
-    case fc::Proto::Qc2: return kQc2Words;
-    case fc::Proto::Qc3: return kQc3Words;
-    case fc::Proto::Qc3Plus: return kQc3PlusWords;
+    case fc::Proto::Fcp: return kFcpWords;
+    case fc::Proto::Scp: return kScpWords;
     case fc::Proto::Vooc: case fc::Proto::SuperVooc: case fc::Proto::SuperVooc65: return kVoocWords;
     case fc::Proto::Ufcs: return kUfcsWords;
     case fc::Proto::Vivo: return kVivoWords;

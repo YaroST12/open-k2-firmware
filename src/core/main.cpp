@@ -257,7 +257,7 @@ void dfu_now() {
     k2::lcd::set_idle_hook([] {   // drain PD frames during long draws (tSenderResponse ~30 ms)
         static uint32_t last;
         const uint32_t t = k2::systick::millis();
-        if (t != last) { last = t; k2::fusb302::service(); k2::fctrig::service_ufcs(); }
+        if (t != last) { last = t; k2::fusb302::service(); k2::fctrig::service_ufcs(); k2::fctrig::service_hs(); }
         k2::transcap::poll();   // keep the transition capture's 1 kHz timeline through a redraw
     });
     // USB connects LAST. TinyUSB answers control requests only from tud_task(), so the D+ pull-up

@@ -483,6 +483,7 @@ void poll() {
 }
 
 void service_ufcs() { g_engine.service_ufcs(); }
+void service_hs() { g_engine.service_hs(); }
 bool paint_critical() { return g_engine.paint_critical(); }
 
 Status status() {

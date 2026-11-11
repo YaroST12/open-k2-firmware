@@ -447,7 +447,8 @@ Fail start(Proto proto, int mv, bool confirmed, bool allow_inline, int, int) {
     if (g_stub.fc_start_hook) g_stub.fc_start_hook(int(proto));
     g_stub.fc_starts++;
     g_stub.fc_start_mv = mv; g_stub.fc_confirmed = confirmed;
-    if (!g_stub.fc_start_fail && g_stub.fc_open_on_start) g_stub.fc_critical = true;
+    // Only a protocol the engine keeps the page out of (Engine::blocks_paint) opens a window; the QC handshake is served by the hook.
+    if (!g_stub.fc_start_fail && g_stub.fc_open_on_start && fc::Engine::blocks_paint(proto)) g_stub.fc_critical = true;
     if (!g_stub.fc_start_fail) {
         g_stub.fc_proto = int(proto); g_stub.fc_target_mv = mv;
         g_stub.fc_state = int(g_stub.fc_answers ? State::Active : State::Negotiating);

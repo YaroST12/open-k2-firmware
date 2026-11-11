@@ -549,9 +549,20 @@ While a step is in flight (`Runner::quiet()`: Requesting or Holding) the page is
 - `kFlightRowPx` = 224 x 42 + `kStrikeRowMaxPx` + `kDotRowMaxPx` px (about 20 ms): one grid row, alone, on a tick where
   nothing else painted.
   `ResultGrid::draw_some` paints the running row first and defers the rest (`pending()`).
-- `lcd.cpp` services USB, the FUSB302 and the UFCS handshake every 2 048 px inside a stream, so none of this adds a
-  blind spot above about 4.4 ms. The idle hook does not serve the engine windows (HS pulses, VOOC slices, UFCS / VIVO
-  frames): `Runner::paint_blocked(fctrig::paint_critical())` is true there and the tick paints nothing.
+- `lcd.cpp` services USB, the FUSB302, the UFCS handshake and the QC handshake (`fctrig::service_hs()`) every 2 048 px
+  inside a stream (every 468 px in a DMA wait), so none of this adds a blind spot above about 4.4 ms. The hook serves the
+  QC2 / QC3 / QC3+ handshake (HsDischarge, HsFloatDp, HsBias, HsWaitDrop of `fc::Engine`; the shared step is
+  `Engine::hs_step`, re-entrancy guarded against `poll()` by `busy_`): every timed edge there is a lower bound (100 ms at
+  0 V, 100 ms D+ high-Z, 50 ms before the dm0 sample) or a poll with a wide upper bound (the charger drops about 1.25 s
+  after D+ 0.6 V), so a late round delays an edge by at most one hook round plus a paint. The hook never logs and never
+  aborts: a bad dm0 or the drop timeout is left to `poll()`.
+  The hook does not serve the other engine windows: `Engine::paint_critical()` stays true for the FCP handshake (its
+  drop starts the register script, run by `poll()`), the SCP wake (HsbBias .. HsbFinish: 190, 322/190/87/50 and 38 ms
+  pulses, tolerance not measured), VOOC listening (15 ms receive slices), UFCS open and the vivo UART phases.
+  `Runner::paint_blocked(fctrig::paint_critical())` is true there and the tick paints nothing; a footer line names the
+  window (`FCP: handshake`, `SCP: handshake`, `VOOC: listening`, `UFCS: handshake`, `VIVO: handshake`), painted in the tick
+  before the engine starts (`ChargerTestPage::kAnnouncePx`, the one paint the flight budget does not count) and replaced
+  by the step's own footer when the window ends. The SCP reset (HsbReset, a 1 s wait at 0 V) is no window.
 - The verdict grid follows the step, anchored to the bottom (`ResultGrid::anchor_bottom`): the window's bottom edge sits
   on the row of the step that started, the finished rows stay above it, and scrolling counts pixels because the rows
   differ in height. Early in a run, with too few finished rows to fill the window, the window stays at the top (no empty

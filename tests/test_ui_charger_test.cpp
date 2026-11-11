@@ -2918,10 +2918,13 @@ static void test_a_row_in_an_engine_window_paints_nothing() {
     uint32_t now = 1500; unsigned blocked = 0, free_px_ticks = 0;
     for (; now <= 40000 && ui.charger_test_busy(); now += 100) {
         g_stub.fc_critical = (now / 1000) % 2 == 0;   // every other second an engine window is open
-        const unsigned px0 = g_lcd_pixels;
+        const unsigned px0 = g_lcd_pixels, starts0 = g_stub.fc_starts;
         ui.tick(now);
         if (ui.charger_test_stage() != kRunningStage || !ui.charger_test_results().quiet()) continue;
-        if (g_stub.fc_critical) { ++blocked; CHECK_EQ(g_lcd_pixels - px0, 0u); }
+        // The tick that starts a handshake row paints its footer line (kAnnouncePx) before the engine starts: the forced window
+        // here opens ahead of the start, which a real engine window never does.
+        const unsigned announce = g_stub.fc_starts != starts0 && !handshake_words(g_stub.fc_proto).empty() ? ChargerTestPage::kAnnouncePx : 0;
+        if (g_stub.fc_critical) { ++blocked; CHECK_EQ(g_lcd_pixels - px0 - announce, 0u); }
         else free_px_ticks += g_lcd_pixels != px0;
     }
     g_stub.fc_critical = false;
@@ -3005,9 +3008,8 @@ static void test_a_started_row_that_ends_as_a_skip_still_logs_its_gap() {
 // inside the window it names), on screen for the whole window, and gone once the window ends.
 static std::string_view handshake_words(int proto) {
     switch (proto) {
-    case int(k2::fc::Proto::Qc2): return "QC2: handshake";
-    case int(k2::fc::Proto::Qc3): return "QC3: handshake";
-    case int(k2::fc::Proto::Qc3Plus): return "QC3+: handshake";
+    case int(k2::fc::Proto::Fcp): return "FCP: handshake";
+    case int(k2::fc::Proto::Scp): return "SCP: handshake";
     case int(k2::fc::Proto::Vooc): case int(k2::fc::Proto::SuperVooc): case int(k2::fc::Proto::SuperVooc65): return "VOOC: listening";
     case int(k2::fc::Proto::Ufcs): return "UFCS: handshake";
     case int(k2::fc::Proto::Vivo): return "VIVO: handshake";
@@ -3052,12 +3054,39 @@ static void test_a_handshake_window_says_why_the_screen_is_still() {
         }
     }
     g_stub.fc_critical = false; g_stub.fc_open_on_start = false; g_stub.fc_start_hook = nullptr;
-    CHECK_EQ(seen[int(k2::fc::Proto::Qc2)], true); CHECK_EQ(seen[int(k2::fc::Proto::Qc3)], true);
+    CHECK_EQ(seen[int(k2::fc::Proto::Fcp)], true); CHECK_EQ(seen[int(k2::fc::Proto::Scp)], true);
+    CHECK_EQ(seen[int(k2::fc::Proto::Qc2)], false); CHECK_EQ(seen[int(k2::fc::Proto::Qc3)], false);   // the hook serves those: no window, no words
     CHECK_EQ(windows > 2, true); CHECK_EQ(in_window > 5, true);
     CHECK_EQ(with_words, in_window);                  // every blocked tick shows the words
     CHECK_EQ(g_start_calls > 2, true);
     CHECK_EQ(g_start_with_words, g_start_calls);      // painted before the engine started, not from inside the window
     CHECK_EQ(after > 0, true); CHECK_EQ(after_gone > 0, true);
+}
+// The QC2 / QC3 / QC3+ handshake is served from the LCD idle hook (fctrig::service_hs), so its window never stops the page: the
+// clock (and the hero, whenever the voltage moves) keeps painting through the first seconds of every QC step. Hardware 2026-11-11:
+// the screen froze for 1.4 s (QC2) to 3.1 s (QC3) because the page paid nothing while the engine held the pulse timing.
+static void test_the_running_screen_keeps_updating_through_a_qc_handshake() {
+    Ui ui; start_all_run(ui);
+    g_stub.fc_open_on_start = true;
+    bool in_qc = false; uint32_t began = 0; unsigned windows = 0, buckets = 0, dead_buckets = 0, blocked_ticks = 0, bucket_px = 0;
+    for (uint32_t now = 1500; now <= 400000 && ui.charger_test_busy(); now += 100) {
+        const unsigned starts0 = g_stub.fc_starts, px0 = g_lcd_pixels;
+        g_stub.fc_critical = false;   // a window a blocking protocol (FCP, SCP, VOOC...) opened is not this test's business
+        ui.tick(now);
+        const auto proto = static_cast<k2::fc::Proto>(g_stub.fc_proto);
+        const bool qc = proto == k2::fc::Proto::Qc2 || proto == k2::fc::Proto::Qc3 || proto == k2::fc::Proto::Qc3Plus;
+        if (g_stub.fc_starts != starts0) { in_qc = qc; began = now; bucket_px = 0; windows += qc; }
+        if (!in_qc) continue;
+        if (ui.charger_test_stage() != kRunningStage || !ui.charger_test_results().quiet()) { in_qc = false; continue; }
+        blocked_ticks += g_stub.fc_critical;
+        bucket_px += g_lcd_pixels - px0;
+        const uint32_t into = now - began;
+        if (into >= 1000 && into % 1000 == 0 && into <= 3000) { ++buckets; dead_buckets += bucket_px == 0; bucket_px = 0; }
+    }
+    g_stub.fc_critical = false; g_stub.fc_open_on_start = false;
+    CHECK_EQ(windows > 2, true); CHECK_EQ(buckets > 2, true);
+    CHECK_EQ(blocked_ticks, 0u);      // the engine reports no window the page must wait out
+    CHECK_EQ(dead_buckets, 0u);       // and every second of the handshake the screen changed
 }
 // The grid follows the step under test: the Running cell is on screen a few ticks after every step starts, with no scrolling.
 static void test_the_running_grid_follows_the_step() {
@@ -4104,7 +4133,7 @@ int main() {
     test_the_plan_is_written_in_pieces_before_the_first_request(); test_a_busy_link_defers_the_plan_but_not_for_ever(); test_a_cancel_during_the_plan_leaves_no_run(); test_a_replan_is_polled_and_done_before_the_first_phase_marker();
     test_a_row_in_an_engine_window_paints_nothing(); test_the_running_grid_follows_the_step();
     test_the_gap_line_names_the_blocked_window(); test_a_started_row_that_ends_as_a_skip_still_logs_its_gap();
-    test_a_handshake_window_says_why_the_screen_is_still();
+    test_a_handshake_window_says_why_the_screen_is_still(); test_the_running_screen_keeps_updating_through_a_qc_handshake();
     test_failed_units_stay_above_the_running_row(); test_the_gauge_band_and_the_dot_move_in_the_same_tick();
     test_a_manual_scroll_of_the_running_grid_holds_then_resumes();
     test_resume_self_and_bus_powered_present_no_rd();

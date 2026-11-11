@@ -1235,25 +1235,50 @@ static void qc_redetect_waits_the_500ms_hold() {
     }
 }
 
-// The windows in which the main loop must not be held by a redraw: the ones the engine times itself from poll() (the HVDCP
-// handshake pulses, the VOOC receive slices, the UFCS handshake, the vivo UART frames). Everything the idle hook serves, and the
-// settle / loop phases, are not.
+// The windows in which the main loop must not be held by a redraw: the ones the engine times itself from poll() (the FCP / SCP
+// handshake pulses, the VOOC receive slices, the UFCS handshake, the vivo UART frames). Everything the idle hook serves (the QC2 /
+// QC3 / QC3+ handshake included), and the settle / loop phases, are not.
 static void paint_critical_follows_the_phase() {
     FakeCharger c;
     Engine e(c);
     CHECK(!e.paint_critical());   // idle
     CHECK(e.start(Proto::Qc2, 9000, true) == Fail::None);
-    CHECK(e.paint_critical());    // the handshake begins
-    bool critical_seen = false, settled = false;
+    CHECK(!e.paint_critical());   // the QC2 handshake is served by service_hs(): the screen keeps moving
+    bool critical_seen = false;
     for (int i = 0; i < 3000 && e.state() != State::Active; i++) {
         c.run(e, 1);
         critical_seen = critical_seen || e.paint_critical();
-        if (e.state() == State::Active) settled = !e.paint_critical();
     }
-    CHECK(critical_seen);
-    CHECK(e.state() == State::Active && settled);   // Active QC2: the settle / loop phase, free to paint
+    CHECK(!critical_seen);
+    CHECK(e.state() == State::Active);
     e.stop();
     CHECK(!e.paint_critical());   // Idle again
+
+    // FCP keeps its handshake window blocked (the same HVDCP steps, then a register script that is not served from the hook).
+    FakeCharger f;
+    Engine fe(f);
+    CHECK(fe.start(Proto::Fcp, 9000, true) == Fail::None);
+    CHECK(fe.paint_critical());
+    bool fcp_blocked_to_drop = true;
+    for (int i = 0; i < 1400; i++) { f.run(fe, 1); fcp_blocked_to_drop = fcp_blocked_to_drop && fe.paint_critical(); }
+    CHECK(fcp_blocked_to_drop);   // discharge, float, bias and the wait for the charger's drop (about 1.4 s)
+
+    // SCP: the 1 s at 0 V is a pure wait (a late edge is harmless), the bias and wake train are blocked.
+    FakeCharger s;
+    Engine se(s);
+    CHECK(se.start(Proto::Scp, 9000, true) == Fail::None);
+    bool reset_free = true;
+    for (int i = 0; i < 900; i++) { s.run(se, 1); reset_free = reset_free && !se.paint_critical(); }
+    CHECK(reset_free);
+    for (int i = 0; i < 300; i++) s.run(se, 1);
+    CHECK(se.paint_critical());   // HsbBias, then the wake train
+
+    // The policy by protocol (the UI asks it before the engine starts).
+    CHECK(!Engine::blocks_paint(Proto::Qc2) && !Engine::blocks_paint(Proto::Qc3) && !Engine::blocks_paint(Proto::Qc3Plus));
+    CHECK(!Engine::blocks_paint(Proto::Afc));
+    CHECK(Engine::blocks_paint(Proto::Fcp) && Engine::blocks_paint(Proto::Scp) && Engine::blocks_paint(Proto::Vooc));
+    CHECK(Engine::blocks_paint(Proto::SuperVooc) && Engine::blocks_paint(Proto::SuperVooc65));
+    CHECK(Engine::blocks_paint(Proto::Ufcs) && Engine::blocks_paint(Proto::Vivo));
 
     FakeCharger v;
     Engine vo(v);
@@ -1263,8 +1288,110 @@ static void paint_critical_follows_the_phase() {
     CHECK(listening);   // VoocListen: 15 ms slices, a frame between two of them is lost
 }
 
+// A charger that logs every pin edge with the fake clock, and can re-enter the engine's hook entry from inside a pin write.
+struct EdgeLog : FakeCharger {
+    struct Edge { std::uint32_t t; int pin; int drive; };
+    std::vector<Edge> edges;
+    Engine* reenter = nullptr;
+    void set_dp(Drive d) override { edges.push_back({now, 0, int(d)}); FakeCharger::set_dp(d); if (reenter) reenter->service_hs(); }
+    void set_dm(Drive d) override { edges.push_back({now, 1, int(d)}); FakeCharger::set_dm(d); if (reenter) reenter->service_hs(); }
+};
+// The idle hook runs about every 2.2 ms of wire time inside a stream (0.5 ms during a DMA wait); a draw's own work between two rounds
+// stretches that, so the model gives the hook a round every kHookGapMs of a paint, 3 ms.
+static constexpr unsigned kHookGapMs = 3;
+// Start `p` and run `horizon` ms of the main loop. paint_ms = 0: poll() every millisecond (the reference). Otherwise every loop pass
+// is preceded by a paint of paint_ms ms that holds the main loop (nothing but the hook runs, one round per kHookGapMs).
+static std::vector<EdgeLog::Edge> hs_edges(Proto p, unsigned paint_ms, unsigned horizon, State* end = nullptr, bool reenter = false) {
+    EdgeLog c;
+    Engine e(c);
+    if (reenter) c.reenter = &e;
+    CHECK(e.start(p, 9000, true) == Fail::None);
+    while (c.now < horizon) {
+        for (unsigned i = 1; i <= paint_ms; i++) {
+            c.now++;
+            c.update_open();
+            if (i % kHookGapMs == 0) e.service_hs();
+        }
+        c.now++;
+        c.update_open();
+        e.poll();
+    }
+    if (end) *end = e.state();
+    return c.edges;
+}
+// The same pins in the same order, every wait at least as long as the reference's and at most one hook gap (plus the one poll
+// that is already there) longer. The wait for the charger's own drop is polled every 10 ms, so it may land on another grid point.
+static void same_pins_and_waits(const std::vector<EdgeLog::Edge>& ref, const std::vector<EdgeLog::Edge>& got, unsigned horizon) {
+    std::size_t n = 0;
+    while (n < ref.size() && ref[n].t + 40 < horizon) ++n;   // the edges the painted run had time to reach as well
+    CHECK(n >= 6);
+    CHECK(got.size() >= n);
+    for (std::size_t i = 0; i < n && i < got.size(); i++) {
+        CHECK(got[i].pin == ref[i].pin && got[i].drive == ref[i].drive);
+        if (i == 0) continue;
+        const int r = int(ref[i].t - ref[i - 1].t), g = int(got[i].t - got[i - 1].t);
+        const bool polled = r >= 1000;   // the drop wait and the 1 s of the QC3 baseline entry
+        CHECK(g - r >= (polled ? -10 : 0));
+        CHECK(g - r <= int(kHookGapMs) + (polled ? 10 : 0) + 1);
+    }
+}
+// Every Hs phase (discharge, float, bias, wait for the drop) and the hand-over to the QC2 levels / the QC3 baseline, under paints of
+// 7 ms (a text row) and 20 ms (the largest row repaint): the hook keeps the handshake on its timing, the pin sequence does not move.
+static void service_hs_keeps_the_handshake_on_time_under_paints() {
+    struct Case { Proto p; unsigned horizon; } const cases[] = {{Proto::Qc2, 1700}, {Proto::Qc3, 2700}, {Proto::Qc3Plus, 2700}};
+    for (const Case& k : cases) {
+        State s0{}, s7{}, s20{};
+        const auto ref = hs_edges(k.p, 0, k.horizon, &s0);
+        const auto p7 = hs_edges(k.p, 7, k.horizon, &s7);
+        const auto p20 = hs_edges(k.p, 20, k.horizon, &s20);
+        same_pins_and_waits(ref, p7, k.horizon);
+        same_pins_and_waits(ref, p20, k.horizon);
+        CHECK(s7 == s0 && s20 == s0);
+        CHECK(s0 == State::Negotiating || s0 == State::Active);
+    }
+}
+// The hook entry reached from inside poll() (a pin write that ends up in a draw) does nothing: no second step of the phase.
+static void service_hs_is_guarded_against_poll() {
+    const auto plain = hs_edges(Proto::Qc2, 0, 1700);
+    const auto nested = hs_edges(Proto::Qc2, 0, 1700, nullptr, true);
+    CHECK(nested.size() == plain.size());
+    for (std::size_t i = 0; i < plain.size() && i < nested.size(); i++)
+        CHECK(nested[i].t == plain[i].t && nested[i].pin == plain[i].pin && nested[i].drive == plain[i].drive);
+}
+// What the hook never does: serve a protocol that keeps its window blocked (FCP), run a phase past the handshake, abort.
+static void service_hs_serves_only_the_qc_handshake() {
+    {   // FCP: the hook alone never moves a pin past the start
+        EdgeLog c; Engine e(c);
+        CHECK(e.start(Proto::Fcp, 9000, true) == Fail::None);
+        const std::size_t n0 = c.edges.size();
+        for (int i = 0; i < 400; i++) { c.now++; c.update_open(); e.service_hs(); }
+        CHECK(c.edges.size() == n0);
+    }
+    {   // QC2 after the handshake: the settle phase is poll()'s
+        EdgeLog c; Engine e(c);
+        CHECK(e.start(Proto::Qc2, 9000, true) == Fail::None);
+        for (int i = 0; i < 1800; i++) { c.now++; c.update_open(); e.poll(); }
+        CHECK(e.state() == State::Active);
+        const std::size_t n0 = c.edges.size();
+        for (int i = 0; i < 200; i++) { c.now++; c.update_open(); e.service_hs(); }
+        CHECK(c.edges.size() == n0 && e.state() == State::Active);
+    }
+    {   // a charger that never drops D-: the hook waits past the timeout and leaves the verdict to poll()
+        EdgeLog c; Engine e(c);
+        c.hvdcp = false;
+        CHECK(e.start(Proto::Qc2, 9000, true) == Fail::None);
+        for (int i = 0; i < 3500; i++) { c.now++; c.update_open(); e.service_hs(); }
+        CHECK(e.state() == State::Negotiating);
+        for (int i = 0; i < 20; i++) { c.now++; c.update_open(); e.poll(); }
+        CHECK(e.state() == State::Failed);
+    }
+}
+
 int main() {
     paint_critical_follows_the_phase();
+    service_hs_keeps_the_handshake_on_time_under_paints();
+    service_hs_is_guarded_against_poll();
+    service_hs_serves_only_the_qc_handshake();
     qc_redetect_waits_the_500ms_hold();
     refusals();
     inline_guard();

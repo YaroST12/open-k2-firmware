@@ -128,18 +128,30 @@ public:
     // Only the UFCS message exchange (ACKs, retransmissions, timers) of poll(): safe to call from inside a long blocking
     // draw, so a source's tACKReceive window does not depend on how long the main loop spends elsewhere. No-op outside UFCS.
     void service_ufcs();
+    // The QC2 / QC3 / QC3+ HVDCP handshake steps only (discharge, float, bias, the wait for the charger's drop), from the same LCD
+    // idle hook: a draw delays a step by at most one hook round (about 2.2 ms of wire time, 0.5 ms in a DMA wait) instead of by the
+    // whole draw. Never logs, blocks or aborts; a step that went wrong is left to poll(), which aborts. A no-op inside poll() / inside
+    // itself (guarded), for FCP (its drop starts the register script, which only poll() runs) and outside the handshake.
+    void service_hs();
 
     State state() const { return state_; }
-    // The engine is inside a window it times itself from poll() (nothing else serves it): the HVDCP handshake pulses (Hs*, Hsb*:
-    // ms-timed D+/D- steps and a wake pulse), the VOOC receive slices (15 ms: a frame between two of them is lost), the UFCS
-    // handshake (UfcsOpen; the Ping..Keep exchange is served by the LCD idle hook) and the vivo UART frames. A redraw there
+    // Whether a session of `p` ever opens a window paint_critical() reports; the UI asks it before the engine starts (to say why the
+    // screen will sit still). The QC2 / QC3 / QC3+ handshake is served by service_hs() and AFC has only tolerant phases.
+    static constexpr bool blocks_paint(Proto p) {
+        return p != Proto::Qc2 && p != Proto::Qc3 && p != Proto::Qc3Plus && p != Proto::Afc && p != Proto::Count;
+    }
+    // The engine is inside a window it times itself from poll() (nothing else serves it): the FCP / SCP handshake pulses (Hs* of
+    // FCP, Hsb*: ms-timed D+/D- steps and a wake pulse), the VOOC receive slices (15 ms: a frame between two of them is lost), the
+    // UFCS handshake (UfcsOpen; the Ping..Keep exchange is served by the LCD idle hook) and the vivo UART frames. A redraw there
     // (even a 5 ms one) can cost the handshake, so the charger-test page paints nothing while this is true. The settle and loop
-    // phases (QC2 / QC3 / AFC / SCP keep-alive) and the hook-served UFCS exchange are tolerant: they are not listed.
+    // phases (QC2 / QC3 / AFC / SCP keep-alive), the QC2 / QC3 / QC3+ handshake (service_hs()), the SCP reset (a plain wait: a
+    // late end of it is harmless) and the hook-served UFCS exchange are tolerant: they are not listed.
     bool paint_critical() const {
         if (state_ != State::Negotiating && state_ != State::Active) return false;
         switch (phase_) {
         case Phase::HsDischarge: case Phase::HsFloatDp: case Phase::HsBias: case Phase::HsSample: case Phase::HsWaitDrop:
-        case Phase::HsbReset: case Phase::HsbBias: case Phase::HsbWake: case Phase::HsbWaitLow: case Phase::HsbFinish:
+            return proto_ == Proto::Fcp;
+        case Phase::HsbBias: case Phase::HsbWake: case Phase::HsbWaitLow: case Phase::HsbFinish:
         case Phase::VoocListen:
         case Phase::UfcsOpen:
         case Phase::VivoOpen: case Phase::VivoSeq: case Phase::VivoRun: return true;
@@ -179,6 +191,8 @@ private:
         std::uint8_t reg, val;
         std::uint16_t wait_ms;
     };
+    void poll_step();        // poll() inside its re-entrancy guard
+    Fail hs_step(std::uint32_t now);   // one HVDCP handshake step (HsDischarge .. HsWaitDrop), shared by poll() and service_hs()
     void begin_protocol();   // the AFC / VOOC / UFCS / vivo openings, after the re-detection hold
     void build_script();
     void run_script();
@@ -213,6 +227,7 @@ private:
     int guard_mv() const;
 
     Env& env_;
+    bool busy_ = false;           // poll() or service_hs() is running: the other one (reached through a draw) does nothing
     State state_ = State::Idle;
     Proto proto_ = Proto::Qc2;
     Fail fail_ = Fail::None;

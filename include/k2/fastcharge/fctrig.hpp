@@ -35,6 +35,10 @@ void poll();
 // 10 ms ACK window holds through a redraw. Does nothing while no UFCS trigger runs.
 void service_ufcs();
 
+// The QC2 / QC3 / QC3+ handshake steps only (engine.service_hs()); same hook, same rate: a redraw delays a pulse by one hook round,
+// not by the whole draw. No log, no abort (poll() judges a handshake that failed), nothing outside that handshake.
+void service_hs();
+
 // The engine is inside a window only the main loop serves (Engine::paint_critical): the page paints nothing then.
 bool paint_critical();
 

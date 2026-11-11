@@ -64,7 +64,12 @@ checked against the code or hardware when this was written.
    default), `msc::init` (drive), `shell_hw::init`, `http_server::init` (Net, K2_NET=1 builds), a 50 ms delay, the `[BOOT]` /
    `[RST]` lines, `fusb302::init`, `boottrace::report_previous`, `session::init`, `bbpersist::init`,
    `uiprefs::stored` + `fs::wipe_legacy`, `adc::log_raw`, `fastcharge::init`, `Ui::init`,
-   accelerometer init, then the LCD idle hook (drains PD frames during long draws) and the loop.
+   accelerometer init, then the LCD idle hook and the loop. `lcd.cpp` calls `usb::service()` and the hook every 2048 px
+   in a stream (every 468 px in a DMA wait), so a redraw never leaves the bus unserved. The hook runs at most once per
+   ms: `fusb302::service()` (drains PD frames), `fctrig::service_ufcs()` (the UFCS message exchange),
+   `fctrig::service_hs()` (the QC2 / QC3 / QC3+ handshake steps, `fc::Engine::hs_step`; the engine's `busy_` flag keeps it
+   from re-entering `poll()`, and it never logs or aborts) and `transcap::poll()`. Engine phases it does not serve stay
+   in `Engine::paint_critical()`, and the charger-test page paints nothing while one is open.
 
 ### 2.2 Main loop
 

@@ -945,7 +945,71 @@ void Engine::service_ufcs() {
     ufcs_poll(env_.now_ms());
 }
 
+// The HVDCP handshake steps (method A) that poll() and service_hs() share: one deadline-driven step of HsDischarge .. HsWaitDrop.
+// Fail::NoHandshake = the charger did not answer; poll() aborts on it, the hook leaves it to poll().
+Fail Engine::hs_step(std::uint32_t now) {
+    switch (phase_) {
+    case Phase::HsDischarge:
+        if (now < due_ms_) break;
+        env_.set_dp(Drive::HiZ);
+        go(Phase::HsFloatDp, kFloatDpMs);
+        break;
+    case Phase::HsFloatDp:
+        if (now < due_ms_) break;
+        env_.set_dp(Drive::V0p6);
+        env_.set_dm(Drive::HiZ);
+        go(Phase::HsBias, kBiasMs);
+        break;
+    case Phase::HsBias:
+        if (now < due_ms_) break;
+        dm0_mv_ = env_.dm_mv();
+        if (!qc::handshake_initial_ok(dm0_mv_)) return Fail::NoHandshake;
+        go(Phase::HsWaitDrop, kDropPollMs);
+        break;
+    case Phase::HsWaitDrop: {
+        if (now < due_ms_) break;
+        const int dm = env_.dm_mv();
+        if (qc::handshake_dropped(dm0_mv_, dm)) {
+            band_ms_ = now;
+            env_.set_dm(Drive::V0);
+            if (proto_ == Proto::Fcp) {
+                applied_mv_ = target_mv_;
+                build_script();
+                begin_script();
+            } else if (proto_ == Proto::Qc2) {
+                apply_target_levels();
+                go(Phase::Qc2Settle, 0);
+            } else {
+                applied_mv_ = target_mv_;
+                go(Phase::Qc3Enter, kQc3EnterWaitMs);   // 1000 ms with D- low before the baseline
+            }
+            break;
+        }
+        if (now - phase_ms_ >= kDropTimeoutMs - kDropPollMs && now - change_ms_ >= kDropTimeoutMs + 400) return Fail::NoHandshake;
+        due_ms_ = now + kDropPollMs;
+        break;
+    }
+    default: break;
+    }
+    return Fail::None;
+}
+
+void Engine::service_hs() {
+    if (busy_ || state_ != State::Negotiating || proto_ == Proto::Fcp) return;
+    if (phase_ < Phase::HsDischarge || phase_ > Phase::HsWaitDrop) return;
+    busy_ = true;
+    (void)hs_step(env_.now_ms());
+    busy_ = false;
+}
+
 void Engine::poll() {
+    if (busy_) return;
+    busy_ = true;
+    poll_step();
+    busy_ = false;
+}
+
+void Engine::poll_step() {
     if (state_ != State::Negotiating && state_ != State::Active) return;
     const std::uint32_t now = env_.now_ms();
     const int vbus = env_.vbus_mv();
@@ -971,43 +1035,9 @@ void Engine::poll() {
     case Phase::RedetectHold:
         if (now < due_ms_) return;
         return begin_protocol();
-    case Phase::HsDischarge:
-        if (now < due_ms_) return;
-        env_.set_dp(Drive::HiZ);
-        return go(Phase::HsFloatDp, kFloatDpMs);
-    case Phase::HsFloatDp:
-        if (now < due_ms_) return;
-        env_.set_dp(Drive::V0p6);
-        env_.set_dm(Drive::HiZ);
-        return go(Phase::HsBias, kBiasMs);
-    case Phase::HsBias: {
-        if (now < due_ms_) return;
-        dm0_mv_ = env_.dm_mv();
-        if (!qc::handshake_initial_ok(dm0_mv_)) return abort(Fail::NoHandshake);
-        return go(Phase::HsWaitDrop, kDropPollMs);
-    }
-    case Phase::HsWaitDrop: {
-        if (now < due_ms_) return;
-        const int dm = env_.dm_mv();
-        if (qc::handshake_dropped(dm0_mv_, dm)) {
-            band_ms_ = now;
-            env_.set_dm(Drive::V0);
-            if (proto_ == Proto::Fcp) {
-                applied_mv_ = target_mv_;
-                build_script();
-                return begin_script();
-            }
-            if (proto_ == Proto::Qc2) {
-                apply_target_levels();
-                return go(Phase::Qc2Settle, 0);
-            }
-            applied_mv_ = target_mv_;
-            return go(Phase::Qc3Enter, kQc3EnterWaitMs);   // 1000 ms with D- low before the baseline
-        }
-        if (now - phase_ms_ >= kDropTimeoutMs - kDropPollMs && now - change_ms_ >= kDropTimeoutMs + 400) {
-            return abort(Fail::NoHandshake);
-        }
-        due_ms_ = now + kDropPollMs;
+    case Phase::HsDischarge: case Phase::HsFloatDp: case Phase::HsBias: case Phase::HsWaitDrop: {
+        const Fail f = hs_step(now);
+        if (f != Fail::None) return abort(f);
         return;
     }
     case Phase::Qc3Enter:
