@@ -77,6 +77,7 @@ struct StubState {
     k2::raguard::WaitKind wait_kind = k2::raguard::WaitKind::Unknown;   // fusb302::wait_kind / set_wait_kind
     bool caps_this_attach = false;        // fusb302::caps_this_attach()
     uint8_t pin = 0;                         // fusb302::pin_rd() override (0 = derive from self_powered: CC2)
+    uint8_t trial_line = 0, trial_moves = 0; bool trial_live = false;   // fusb302::line_trial(): the direct-plug fallback's line / moves / live
     bool bus_powered = false, supply_decided = true;   // power_source: no host and VBUS at boot / the host window is over
     bool rd_run = false, vbus_on_rd = false, pm_after_rd = false;
     bool reread_hold = false;                // fusb302::reread_own_hold(): a finished re-read's own leftover PDO 1 hold

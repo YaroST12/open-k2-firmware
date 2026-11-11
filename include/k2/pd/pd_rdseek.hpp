@@ -122,6 +122,62 @@ private:
     bool have_prev_ = false;
 };
 
+// The direct-plug line fallback (pattern direct-plug-one-line-wake, 2026-11-11, a 100 W charger plugged straight into the K2's
+// top port, runs/2026-11-11-vidless-6a/novoo-rg100): with the source's receptacle against ours BOTH CC lines carry its Rp, the
+// scan picks one of them, and a charger that wakes only with the Rd on the other line stayed dark for ever (Rd on CC1: the Rp
+// divider read 1.64 V, no VBUS for 7.5 s; Rd on CC2: Source_Capabilities 210 ms later). The old seek moves only off a line
+// with no Rp, and the key-mode move "a direct plug stays". So when our single Rd sits on a line that shows the Rp, the other
+// line (no Rd of ours on it) also reads high, and VBUS has not come up, the Rd moves to the other line, one line at a time
+// (never both: the Debug Accessory signature). Schedule: first line 1.5 s, other line 1.5 s, first line 5 s, other line 5 s,
+// then stay: a slow waker (pattern slow-rp-wake, 3.86 s on the right line) needs the longer pass. Never for a line somebody
+// pinned or forced (the caller's `eligible`), never once VBUS or PD traffic has shown a line alive.
+inline constexpr std::uint32_t kLineTrialMs[4] = {1500, 1500, 5000, 5000};   // the dwell on the line the Rd is on, per try
+inline constexpr std::uint8_t kLineTrialMoves = 3;                            // A -> B -> A -> B, the fourth dwell stays
+inline constexpr std::uint32_t kOtherRpStableMs = 60;   // the other line reads high this long before it counts (CC2 spikes for a tick during a chip measurement)
+
+class LineFallback {
+public:
+    void reset() { *this = LineFallback{}; }   // a fresh attach or a detach: the whole schedule again
+    // One call per poll while attached. `eligible`: the Rd on the line is the K2's own and free to move (an active feature,
+    // never inline, never a pinned / forced line, never the Ra mode, no PD traffic yet). `rp_seen`: the comparator sees the
+    // Rp over our Rd on the line. `vbus_dark`: VBUS is below 3 V. `other_rp`: the line without our Rd reads high (>= the
+    // standby level). Returns true once when the Rd should move to the other line; the next update starts the next dwell.
+    bool update(std::uint32_t now, bool eligible, bool rp_seen, bool vbus_dark, bool other_rp) {
+        if (!eligible) { armed_ = false; high_ = false; return false; }
+        if (!vbus_dark) { done_ = true; armed_ = false; high_ = false; return false; }   // a line is alive: it is the source's
+        if (done_) return false;
+        if (other_rp) { if (!high_) { high_ = true; high_since_ = now; } } else high_ = false;
+        if (!rp_seen) { armed_ = false; return false; }   // no Rp over our Rd: the old seek's business, the clock restarts
+        if (!armed_) { armed_ = true; since_ = now; return false; }
+        if (high_ && now - high_since_ >= kOtherRpStableMs) direct_ = true;
+        if (moves_ >= kLineTrialMoves) return false;
+        if (!direct_ || now - since_ < kLineTrialMs[moves_]) return false;
+        ran_ms_ = now - since_;
+        ++moves_;
+        since_ = now;
+        high_ = false;    // the readings of the move's own tick are the old Rd's tail
+        direct_ = false;  // proven again on the new line (our old one, now without Rd, must read high again)
+        return true;
+    }
+    std::uint8_t moves() const { return moves_; }
+    // How long the dwell that just ended ran (for the log line), valid after update() returned true.
+    std::uint32_t ran_ms() const { return ran_ms_; }
+    // A direct plug is being tried: the schedule has a move left or its last dwell is still running.
+    bool live(std::uint32_t now) const {
+        if (!armed_ || done_ || !(direct_ || moves_ > 0)) return false;
+        return moves_ < kLineTrialMoves || now - since_ < kLineTrialMs[kLineTrialMoves];
+    }
+private:
+    bool armed_ = false;     // the dwell clock runs (Rp seen over our Rd, eligible, VBUS dark)
+    bool done_ = false;      // VBUS came up in this attach: no more moves
+    bool direct_ = false;    // the other line has read high for kOtherRpStableMs: a direct plug
+    bool high_ = false;
+    std::uint32_t high_since_ = 0;
+    std::uint32_t since_ = 0;
+    std::uint32_t ran_ms_ = 0;
+    std::uint8_t moves_ = 0;
+};
+
 // The idle wake (pattern slow-rp-wake, idle path, 2026-11-10): an idle K2 with no source detected and no Rd of its
 // own presents none, so a sleeping source - the splitter's port with nothing attached, one CC line reading the
 // standby signature open, VBUS 78 mV, "No source" - is never asked and never wakes; only a pinned re-read woke it

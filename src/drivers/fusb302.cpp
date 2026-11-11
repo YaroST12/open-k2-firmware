@@ -83,6 +83,7 @@ bool g_pd_seen_attach = false;       // the same, but only a new attach clears i
 // one. `g_seek_passive` marks such an attach; a move to the other line keeps it, a fresh attach (scan, window re-check) decides again.
 pd::RdSeek g_rdseek;
 bool g_seek_passive = false;
+pd::LineFallback g_linefb;   // direct plug (Rp on both lines), no VBUS on the picked line: the single Rd tries the other line (pd_rdseek.hpp)
 pd::IdleWake g_idle_wake;   // the idle/no-source Rd hold on a standby-signature line (pattern slow-rp-wake, idle path)
 std::uint32_t g_ident_session = 0;   // attach session of the latest identify_start (its Sink_Caps belong to it)   // contract.requests at attach: later ones came from a sink on the far side
 std::uint32_t g_attach_ms = 0;   // millis() at the attach of the current partner
@@ -513,6 +514,7 @@ void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, b
     g_idle_wake.on_attach(c.line);   // an attach during an idle Rd hold: the no-Rp detach stays off inside the dwell window
     if (!seek_move) {
         g_rdseek.reset(g_idle_wake.enabled());   // setting off: the open readings go with the attach, as before the idle wake
+        g_linefb.reset();                        // a fresh attach: the direct-plug schedule starts again (a fallback move keeps it)
         g_seek_passive = !pinned && (rd_both & (kPdwn1 | kPdwn2)) == 0;   // no Rd on any line while the scan read: the pick is unverified
     }
     if (pinned || seek_move) apply_rd();   // the pinned Rd follows the active line (pd::rd_lines)
@@ -667,6 +669,7 @@ void detect_cc_orientation() {
 void cc_window_recheck() {
     if (g_active_cc == 0 || g_pd_traffic || g_force_cc != 0 || g_pin_rd != 0) return;
     if (g_rdseek.moves() != 0) return;   // the Rd seek found the line by the Rp itself: the ADC levels do not overrule that
+    if (g_linefb.moves() != 0) return;   // a direct plug: both lines read high by design, the fallback chose the line
     const std::uint32_t now = systick::millis();
     if (std::int32_t(now - g_cc_recheck_at) < std::int32_t(kCcRecheckMinMs)) return;
     g_cc_recheck_at = now;
@@ -709,6 +712,26 @@ void rd_seek_move() {
     const std::uint32_t dwell = g_rdseek.standby(g_active_cc) ? pd::kSlowWakeDwellMs : pd::kRdSeekDwellMs;
     K2LOG("[FUSB302] Rd seek: no Rp on CC%u over our Rd for %u ms, Rd moves to CC%u (move %u of %u)\n", unsigned(g_active_cc),
           unsigned(dwell), unsigned(to), unsigned(g_rdseek.moves()), unsigned(pd::kRdSeekMoves));
+    apply_cc_choice({true, g_cc_mask, to}, false, 0, true);
+}
+
+// The direct-plug line fallback (pd::LineFallback, pattern direct-plug-one-line-wake): our Rd sits on a line that shows the Rp,
+// the other line (no Rd of ours on it) reads the open Rp level too, and VBUS stays dark: the charger may wake only for the other
+// line. The same Rd owners as the seek (a charger-test run, pd-reread, pd attach: g_rd_op / g_rd_start), and the same lines that
+// are nobody's to move: a key mode's or lab pin, the Ra mode, a forced line (pd-reread --line), a sink downstream, PD already seen.
+// The move is the seek's: one SWITCHES0 write, so the Rd leaves one line and lands on the other in the same register write.
+bool line_fallback_eligible() {
+    return (g_rd_op || g_rd_start) && !downstream_now() && !g_ra && g_pin_rd == 0 && g_force_cc == 0 && !g_pd_traffic;
+}
+bool line_fallback_other_rp() {
+    if (g_vconn_applied) return false;   // the chip's own supply sits on that line: its level says nothing about a source
+    const std::int32_t mv = g_active_cc == 1 ? g_cc2_mv : g_cc1_mv;
+    return mv >= pd::kStandbyOpenMv;
+}
+void line_fallback_move() {
+    const std::uint8_t from = g_active_cc, to = from == 1 ? 2 : 1;
+    K2LOG("[PD] Rd CC%u -> CC%u: no VBUS after %u ms on a direct plug (try %u)\n", unsigned(from), unsigned(to),
+          unsigned(g_linefb.ran_ms()), unsigned(g_linefb.moves()));
     apply_cc_choice({true, g_cc_mask, to}, false, 0, true);
 }
 
@@ -1128,6 +1151,13 @@ void self_power_restore() {
 
 bool self_powered() { return g_pin_rd != 0; }
 std::uint8_t pin_rd() { return g_pin_rd; }
+LineTrial line_trial() {
+    LineTrial t;
+    t.moves = g_linefb.moves();
+    t.live = g_active_cc != 0 && g_linefb.live(systick::millis());
+    t.line = t.live ? g_active_cc : 0;
+    return t;
+}
 
 // `debug pin`: a HID-powered K2 acts like a charger-powered one (lab only). The pin, its mark (so a warm reset inherits it, as
 // after a key-mode boot) and SWITCHES0 follow; 0 gives it back. Refused with a sink inline.
@@ -1968,6 +1998,7 @@ static void detach_reset(std::uint8_t status0) {
     g_vbus_mv = -1;
     g_rdseek.reset(g_idle_wake.enabled());   // the next attach decides again whether its line was picked without Rd (the open readings stay only while the idle wake needs them)
     g_idle_wake.reset();   // back to idle: the wake re-decides from the fresh open readings
+    g_linefb.reset();      // a detach ends the direct-plug schedule with the attach it belonged to
     g_seek_passive = false;
     g_detach.reset();
     g_sink.detach();
@@ -2221,6 +2252,9 @@ void poll() {
                   int(g_vbus_mv), unsigned(systick::millis() - quiet_since), int(g_cc_sink_mv));
             detach_reset(status0);
         } else if (got && g_rdseek.update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
+        else if (got && g_linefb.update(now_ms, line_fallback_eligible(), (status0 & kComp) != 0, g_vbus_mv < pd::kDarkVbusMv,
+                                        line_fallback_other_rp()))
+            line_fallback_move();
         else if (got && g_detach.update(systick::millis(), g_vbus_mv,
                                         (status0 & kComp) != 0 || g_rdseek.holding_slow(systick::millis(), g_active_cc) ||
                                             g_idle_wake.holding_slow(systick::millis(), g_active_cc, g_rdseek.open_mv(g_active_cc)),

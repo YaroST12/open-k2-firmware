@@ -58,6 +58,16 @@ void self_power_restore();
 bool self_powered();
 std::uint8_t pin_rd();   // boot-mode Rd bits (bit0 CC1, bit1 CC2), 0 = plain boot: no Rd ever unless an active feature asks
 
+// The direct-plug line fallback (pd::LineFallback): our single Rd is being tried on the lines of a charger plugged straight in
+// (both CC lines carry its Rp, no VBUS yet). `line`: the line the Rd sits on (1 / 2, 0 = no attach); `moves`: moves made in this
+// attach (0..3); `live`: a try is running (a move is left or the last dwell has not run out), the UI's "Waking charger" fact.
+struct LineTrial {
+    std::uint8_t line = 0;
+    std::uint8_t moves = 0;
+    bool live = false;
+};
+LineTrial line_trial();
+
 // What this boot did to the pins, for the boot-info screen and `bootinfo` (k2/core/bootinfo.hpp). RAM only, read-only.
 struct BootRecord {
     std::uint8_t pin_initial;    // Rd bits the boot wrote first

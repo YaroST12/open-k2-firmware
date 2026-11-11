@@ -60,6 +60,7 @@ uint8_t device_id() { return 0x92; }
 uint8_t active_cc() { return g_stub.cc; }
 bool self_powered() { return g_stub.self_powered || g_stub.pin != 0; }
 std::uint8_t pin_rd() { return g_stub.pin != 0 ? g_stub.pin : (g_stub.self_powered ? 2 : 0); }
+LineTrial line_trial() { return {g_stub.trial_line, g_stub.trial_moves, g_stub.trial_live}; }
 bool rd_inherited() { return g_stub.rd_inherited; }
 void self_power_release() { g_stub.rd_releases++; g_stub.rd_inherited = false; }
 const pd::VdmInfo& vdm() { return g_stub.vdm; }

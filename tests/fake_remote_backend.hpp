@@ -146,10 +146,13 @@ struct Fake {
     HandbackResult hb_result{};
     HandbackResult pd_handback(uint8_t flags = 0) { calls++; hb_calls++; hb_flags = flags; return hb_result; }
     uint8_t trig_pin = 0;   // what pd_trigger() reports as the pinned Rd line
+    uint8_t trig_line = 0, trig_moves = 0;   // the direct-plug line trial pd_trigger() reports (line under trial, Rd moves)
     PdTriggerSnapshot pd_trigger() {
         calls++;
         PdTriggerSnapshot t{5, 1, 1, 0, 4, 0x4E20, 0x0BB8, 0x01020304, 0x05060708};
         t.pin = trig_pin;
+        t.trial_line = trig_line;
+        t.trial_moves = trig_moves;
         return t;
     }
     uint16_t attach_mv = 0, attach_ma = 0; int attaches = 0;

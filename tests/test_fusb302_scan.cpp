@@ -2929,6 +2929,198 @@ void test_seek_never_moves_a_pinned_rd() {
     power_cycle_forget_pin();
 }
 
+// ---- the direct-plug line fallback (pd::LineFallback, 2026-11-11, a 100 W charger straight into the K2's top port) ----
+// Both CC lines read the source's Rp (3.3 V open, a 1.64 V divider under our Rd) and the charger wakes only for an Rd on ONE of
+// them. The scan picks a line; with no VBUS the single Rd moves to the other one on the 1.5 s / 1.5 s / 5 s / 5 s schedule.
+// The model feeds the UI's ADC levels (sink_cc) and VBUS (sink_vbus) every 20 ms like the main loop does.
+struct DirectPlug {
+    bool direct = true;          // both lines carry an Rp; false = a cable: only `rp_line` does
+    unsigned rp_line = 1;        // the line with the Rp on a one-line cable
+    unsigned wake_line = 2;      // the charger raises VBUS when our Rd has been on this line for wake_ms (0 = never)
+    unsigned wake_ms = 200;
+    bool up = false;
+    std::uint32_t on_since = 0;
+    unsigned on_line = 0;
+};
+void dp_world(const DirectPlug& d) {
+    power_cycle_forget_pin();
+    fusb302::set_force_line(0);
+    reread_style_boot();
+    g_rd_model = true;
+    for (int i = 0; i < 2; i++) {
+        const bool rp = d.direct || unsigned(i + 1) == d.rp_line;
+        g_lvl_nord[i] = rp ? 3300 : 0;
+        g_lvl_rd[i] = rp ? 1640 : 0;
+    }
+    g_reg[0x40] = 0x23;
+}
+void dp_step(DirectPlug& d, unsigned ms) {
+    for (unsigned t = 0; t < ms; t += 20) {
+        g_ms += 20;
+        const unsigned rd = sw0_rd();
+        const unsigned line = rd == 1 ? 1u : rd == 2 ? 2u : 0u;
+        if (line != d.on_line) { d.on_line = line; d.on_since = g_ms; }
+        if (!d.up && d.wake_line != 0 && line == d.wake_line && g_ms - d.on_since >= d.wake_ms) d.up = true;
+        const bool direct_or = d.direct;
+        fusb302::sink_cc((rd & 1) ? 1640 : (direct_or || d.rp_line == 1) ? 3300 : 0,
+                         (rd & 2) ? 1640 : (direct_or || d.rp_line == 2) ? 3300 : 0);
+        fusb302::sink_vbus(d.up ? 5000 : 0);
+        fusb302::poll();
+        fusb302::service();
+    }
+}
+int dp_moves_logged() {
+    int n = 0;
+    for (const auto& s : g_usb) if (s.find("on a direct plug") != std::string::npos) ++n;
+    return n;
+}
+void dp_attach(DirectPlug& d) {
+    CHECK_EQ(fusb302::rd_for_run(true), true);
+    for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) dp_step(d, 20);
+    CHECK_EQ(usb_has("Active CC detected"), true);
+    dp_step(d, 100);
+}
+void dp_end() {
+    fusb302::rd_for_run(false);
+    settle_ms(100);
+    clean_up_rd_tests();
+}
+
+void test_direct_plug_dark_first_line_moves_the_rd_at_the_first_dwell() {
+    DirectPlug d;
+    dp_world(d);
+    dp_attach(d);
+    const unsigned first = sw0_rd();
+    CHECK_EQ(first == 1u || first == 2u, true);               // one Rd, on the line the scan picked
+    d.wake_line = first == 1u ? 2u : 1u;                      // the charger answers the OTHER line
+    g_log.clear();
+    const std::uint32_t t0 = g_ms;
+    for (int i = 0; i < 200 && dp_moves_logged() == 0; i++) dp_step(d, 20);
+    CHECK_EQ(dp_moves_logged(), 1);
+    CHECK_EQ(g_ms - t0 >= 1300u, true);                       // not before the dwell (the attach's own 100 ms already ran) ...
+    CHECK_EQ(g_ms - t0 <= 1700u, true);                       // ... and about 1.5 s after the Rd landed
+    CHECK_EQ(sw0_rd(), first == 1u ? 2u : 1u);                // the single Rd followed
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    char want[96];
+    std::snprintf(want, sizeof want, "[PD] Rd CC%u -> CC%u: no VBUS after ", first, first == 1u ? 2u : 1u);
+    CHECK_EQ(usb_has(want), true);
+    CHECK_EQ(usb_has("on a direct plug (try 1)"), true);
+    const auto trial = fusb302::line_trial();
+    CHECK_EQ(int(trial.line), int(sw0_rd()));
+    CHECK_EQ(int(trial.moves), 1);
+    CHECK_EQ(trial.live, true);
+    dp_step(d, 3000);                                         // VBUS came up on the second line: it stays, no second move
+    CHECK_EQ(dp_moves_logged(), 1);
+    CHECK_EQ(int(fusb302::line_trial().moves), 1);
+    CHECK_EQ(fusb302::line_trial().live, false);
+    CHECK_EQ(usb_has("Detach"), false);
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    dp_end();
+}
+
+void test_direct_plug_slow_waker_is_found_in_the_longer_pass() {
+    DirectPlug d;
+    dp_world(d);
+    dp_attach(d);
+    const unsigned first = sw0_rd();
+    d.wake_line = first == 1u ? 2u : 1u;
+    d.wake_ms = 4000;                                         // 1.5 s on that line is too short, 5 s is enough
+    g_log.clear();
+    dp_step(d, 20000);
+    CHECK_EQ(dp_moves_logged(), 3);
+    CHECK_EQ(d.up, true);
+    CHECK_EQ(sw0_rd(), d.wake_line);
+    CHECK_EQ(usb_has("(try 3)"), true);
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    dp_end();
+}
+
+void test_direct_plug_that_never_wakes_stays_on_the_last_line_after_the_schedule() {
+    DirectPlug d;
+    d.wake_line = 0;
+    dp_world(d);
+    dp_attach(d);
+    g_log.clear();
+    dp_step(d, 30000);
+    CHECK_EQ(dp_moves_logged(), 3);                           // 1.5 s, 1.5 s, 5 s, then the last 5 s and it stays
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    CHECK_EQ(fusb302::line_trial().live, false);
+    dp_end();
+}
+
+void test_a_one_line_cable_keeps_the_old_behaviour_and_never_moves_for_the_fallback() {
+    DirectPlug d;
+    d.direct = false; d.rp_line = 1; d.wake_line = 0;
+    dp_world(d);
+    dp_attach(d);
+    g_log.clear();
+    dp_step(d, 15000);
+    CHECK_EQ(dp_moves_logged(), 0);
+    CHECK_EQ(int(fusb302::line_trial().moves), 0);
+    CHECK_EQ(fusb302::line_trial().live, false);
+    CHECK_EQ(never_rd_on_both_lines(0), true);
+    dp_end();
+}
+
+void test_vbus_up_on_the_first_line_never_moves() {
+    DirectPlug d;
+    dp_world(d);
+    dp_attach(d);
+    d.wake_line = sw0_rd();                                   // the first line wakes within 200 ms
+    g_log.clear();
+    dp_step(d, 12000);
+    CHECK_EQ(dp_moves_logged(), 0);
+    dp_end();
+}
+
+void test_a_forced_or_pinned_line_is_never_moved_by_the_fallback() {
+    {   // pd-reread --line 2
+        DirectPlug d;
+        d.wake_line = 0;
+        dp_world(d);
+        fusb302::set_force_line(2);
+        dp_attach(d);
+        g_log.clear();
+        dp_step(d, 15000);
+        CHECK_EQ(dp_moves_logged(), 0);
+        CHECK_EQ(usb_has("Active CC detected: CC1"), false);
+        dp_end();
+    }
+    {   // the Ra mode: Rd on CC2 alone by design
+        DirectPlug d;
+        d.wake_line = 0;
+        dp_world(d);
+        CHECK_EQ(fusb302::ra_set(true), true);
+        dp_attach(d);
+        g_log.clear();
+        dp_step(d, 15000);
+        CHECK_EQ(dp_moves_logged(), 0);
+        dp_end();
+    }
+    {   // a key mode's pin (PLUS: Rd on CC2): only self_power_move ever moves it
+        reset_world();
+        g_mark = 0;
+        fusb302::self_power_early(bootmode::Mode::PlusRdCc2, false);
+        fusb302::init();
+        fusb302::set_proactive_discover(false);
+        g_rd_model = true;
+        g_lvl_nord[0] = g_lvl_nord[1] = 3300;
+        g_lvl_rd[0] = g_lvl_rd[1] = 1640;
+        g_reg[0x40] = 0x23;
+        DirectPlug d;
+        d.wake_line = 0;
+        for (int i = 0; i < 100 && !usb_has("Active CC detected"); i++) dp_step(d, 20);
+        CHECK_EQ(usb_has("Active CC detected"), true);
+        g_log.clear();
+        dp_step(d, 15000);
+        CHECK_EQ(dp_moves_logged(), 0);
+        CHECK_EQ(int(fusb302::pin_rd()), 2);
+        CHECK_EQ(never_rd_on_both_lines(0), true);
+        self_hold_end();
+        power_cycle_forget_pin();
+    }
+}
+
 // ---- A sink behind the K2 is the end of the K2's own Rd and Requests (hardware 2026-11-09, build b00178c) ----
 // Hub - K2 - phone: the K2 booted with Rd on CC2 from the first write (a stale record), Requested PDO 1 at 272 ms, and went on
 // Requesting on every re-announce (12 times over 3 s) until the phone's own Request collided with one. The inline latch alone was
@@ -4081,6 +4273,12 @@ int main() {
     test_seek_ignores_an_attach_that_was_picked_with_rd_on();
     test_seek_never_runs_inline_in_the_ra_mode_or_on_a_forced_line();
     test_seek_never_moves_a_pinned_rd();
+    test_direct_plug_dark_first_line_moves_the_rd_at_the_first_dwell();
+    test_direct_plug_slow_waker_is_found_in_the_longer_pass();
+    test_direct_plug_that_never_wakes_stays_on_the_last_line_after_the_schedule();
+    test_a_one_line_cable_keeps_the_old_behaviour_and_never_moves_for_the_fallback();
+    test_vbus_up_on_the_first_line_never_moves();
+    test_a_forced_or_pinned_line_is_never_moved_by_the_fallback();
     test_a_far_sinks_request_takes_the_pinned_rd_off_and_ends_the_k2s_requests();   // last: each one ends with a detach / Rd off
     test_a_far_sink_downstream_keeps_the_k2_off_the_line_for_vdms_and_resets();
     test_inline_survives_a_detach_and_the_pinned_rd_stays_off_until_the_link_clears_it();

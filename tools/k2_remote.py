@@ -494,13 +494,15 @@ def _name_of(table, i):
 def decode_pd_trigger(p):
     _need(p, 13, "pd trigger status")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
-    # source_hard_resets (u32, appended after hard_resets) and pin (u8, appended after that) are absent
-    # from older firmware: 0 then
+    # source_hard_resets (u32, appended after hard_resets), pin (u8) and the direct-plug line trial (line, moves: u8 each)
+    # are absent from older firmware: 0 then
     return {"state": _name_of(SINK_STATES, p[0]), "result": _name_of(SINK_RESULTS, p[1]), "held": bool(p[2]),
             "epr": bool(p[3]), "pos": p[4], "mv": u16(5), "ma": u16(7),
             "hard_resets": int.from_bytes(p[9:13], "little"),
             "source_hard_resets": int.from_bytes(p[13:17], "little") if len(p) >= 17 else 0,
-            "pin": p[17] if len(p) >= 18 else 0}
+            "pin": p[17] if len(p) >= 18 else 0,
+            "trial_line": p[18] if len(p) >= 19 else 0,    # CC line our single Rd is trying while the direct-plug schedule is live
+            "trial_moves": p[19] if len(p) >= 20 else 0}   # moves of the Rd by the direct-plug fallback this attach
 
 
 MATCH_VERDICTS = ["no-caps", "no-request", "outside-caps", "wants-higher-v", "current-limited",
@@ -2658,7 +2660,9 @@ def _render(name, r):
             return f"handback {r['verdict']}"   # the phase-1 lab op's verdict: allowed, or why it was refused
         return (f"trigger {r['state']} result={r['result']} held={r['held']} epr={r['epr']} "
                 f"pdo={r['pos']} {r['mv'] / 1000:g} V {r['ma'] / 1000:g} A hard_resets={r['hard_resets']} source_hard_resets={r['source_hard_resets']}"
-                + (f" Rd pin CC{r['pin']}" if r.get("pin") else ""))   # a leftover pinned Rd (pd-reread --pin)
+                + (f" Rd pin CC{r['pin']}" if r.get("pin") else "")   # a leftover pinned Rd (pd-reread --pin)
+                + (f" Rd trying CC{r['trial_line']}" if r.get("trial_line") else "")   # the direct-plug schedule is live on that line
+                + (f" line_moves={r['trial_moves']}" if r.get("trial_moves") else ""))
     if name == "pd-reread":
         extra = " attaching" if r.get("attaching") else (" no contract" if r.get("attach_failed") else "")
         extra += " ra" if r.get("ra") else ""

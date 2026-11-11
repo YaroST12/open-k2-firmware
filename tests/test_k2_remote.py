@@ -917,6 +917,20 @@ class ActivePd(unittest.TestCase):
         self.assertEqual(kr.decode_pd_trigger(self.TRIG)["pin"], 0)                # older firmware: no pin byte
         self.assertNotIn("Rd pin", kr.render("pd", kr.decode_pd_trigger(self.TRIG)))
 
+    def test_pd_status_carries_the_direct_plug_line_trial(self):
+        # 20 bytes: ..., pin u8, then trial_line u8 (the line our single Rd is trying while the schedule is live) and trial_moves u8
+        base = self.TRIG + bytes([2, 0, 0, 0]) + bytes([0])
+        r = kr.decode_pd_trigger(base + bytes([2, 1]))
+        self.assertEqual((r["pin"], r["trial_line"], r["trial_moves"]), (0, 2, 1))
+        self.assertIn("Rd trying CC2", kr.render("pd", r))
+        self.assertIn("line_moves=1", kr.render("pd", r))
+        idle = kr.decode_pd_trigger(base + bytes([0, 3]))   # schedule over: no line, the moves stay readable
+        self.assertEqual((idle["trial_line"], idle["trial_moves"]), (0, 3))
+        self.assertNotIn("Rd trying", kr.render("pd", idle))
+        old = kr.decode_pd_trigger(base)                    # firmware before the fallback: 18 bytes
+        self.assertEqual((old["trial_line"], old["trial_moves"]), (0, 0))
+        self.assertNotIn("line_moves", kr.render("pd", old))
+
     def test_request_without_confirm_sends_flag_zero(self):
         link = self.Link({kr.CMD_PD_TRIGGER_STATUS: self.TRIG})
         kr.cmd_pd(link, self.args(pd_cmd="request", pos=2, mv=0, ma=0, confirm=False))

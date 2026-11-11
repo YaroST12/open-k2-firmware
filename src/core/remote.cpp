@@ -633,6 +633,9 @@ remote::PdTriggerSnapshot Remote::pd_trigger() {
     t.hard_resets = s.hard_resets;
     t.source_hard_resets = s.source_hard_resets;
     t.pin = fusb302::pin_rd();   // a leftover Rd pin (pd-reread --pin) shows here until it clears
+    const fusb302::LineTrial lt = fusb302::line_trial();
+    t.trial_line = lt.line;      // the line under trial while the direct-plug schedule is live, else 0
+    t.trial_moves = lt.moves;
     return t;
 }
 
