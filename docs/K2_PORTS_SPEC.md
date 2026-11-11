@@ -315,8 +315,8 @@ source, file:line given), **[measured]** (a hardware number from the 2026-11-11 
   the analog switch to the FUSB302's CC1/CC2 pin closed [code]. `cc_switches()` writes all three (`src/drivers/fusb302.cpp:258`);
   PC13 follows `emkra::pc13_high(vconn, g_ra)` (`include/k2/pd/emk_ra.hpp`) [code].
 - PC13 high is a ~1 kohm Ra to ground on the CC1 net (a waiting charger's CC1 fell to ~322 mV, 2026-11-06; `emk_ra.hpp:4-8`), not a VCONN
-  supply switch [measured]. The "rail that is off" wording in `include/k2/pd/cc_probe.hpp:10-11` is contradicted by the 2026-11-11
-  runs: 2.87 V appeared on a bare CC1 with PC13 **low** and only the chip's VCONN_CC1 bit (0x10) set, so the chip's own VCONN
+  supply switch [measured]. The 2026-11-11 runs showed it again (the old "rail that is off" wording in `include/k2/pd/cc_probe.hpp` is
+  corrected): 2.87 V appeared on a bare CC1 with PC13 **low** and only the chip's VCONN_CC1 bit (0x10) set, so the chip's own VCONN
   switch reaches the pin whatever PC13 does [measured].
 - The alone e-marker scan drives PC13 **high** (`include/k2/pd/emk_attached.hpp:43-52`, `p.pc13` stays true when alone), so CC1 also
   carries that ~1 kohm Ra during the scan: in orientation B (VCONN on CC1) it is a second load beside the cable's, in orientation A
