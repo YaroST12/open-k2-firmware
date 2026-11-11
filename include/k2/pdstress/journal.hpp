@@ -160,10 +160,12 @@ inline Verdict derive(Image& im, std::uint16_t caps_now, bool cancel) {
 // Where the record lives. The firmware binds it to the file system; tests use a fake that can fail.
 class Store {
 public:
-    virtual ~Store() = default;
     virtual bool read(std::span<std::uint8_t> out, std::size_t& n) = 0;   // false = no record
     virtual bool write(std::span<const std::uint8_t> in) = 0;             // atomic replace; false = failed
     virtual void remove() = 0;
+
+protected:
+    ~Store() = default;   // never deleted through the interface (a virtual destructor would pull operator delete into the firmware link)
 };
 
 class Journal {

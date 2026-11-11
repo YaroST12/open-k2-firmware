@@ -35,7 +35,7 @@ uint32_t now_us() { return systick::micros(); }
 // Setup and paging
 // ---------------------------------------------------------------------------------------
 
-Ui::Ui() : charger_test_(ctx_) {
+Ui::Ui() : charger_test_(ctx_), pdstress_(ctx_, charger_test_) {
     ctx_.ui = this;
     pages_.push<HomePage>(ctx_);   // the arena is never empty: page_ starts on Home
 }
@@ -107,6 +107,7 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
     set_page(Page::Home, now_ms);
     ctx_.cables.load();   // the remembered cable selection, before boot_restore's boot-time arming reads it
     if (charger_test_.boot_restore(cancel_resume)) set_page(Page::ChargerTest, now_ms);   // reboot-resume: "Resume run?" (or by itself)
+    else pdstress_.boot_restore(cancel_resume, now_ms);   // a PD Stress journal resumes by itself once VBUS is steady
     K2LOG("[ROT] Settings > Autorotate: auto or manual\n");
 }
 
@@ -272,6 +273,7 @@ BusyWhy Ui::busy_why() const {
     const auto fs = fctrig::status();
     if (charger_test_busy()) return BusyWhy::TestRunning;
     if (twin_live_busy()) return BusyWhy::TwinRun;
+    if (pdstress_.active()) return BusyWhy::PdStress;   // PD Stress: running or resuming
     if (fc_release_.busy()) return BusyWhy::FcRelease;
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return BusyWhy::QcTrigger;
     if (sink.held && !fusb302::rd_for_run_on() && !fusb302::reread_own_hold() && !fusb302::self_powered() && !power_source::bus_powered())
@@ -295,6 +297,7 @@ const char *Ui::busy_reason() const {
     case BusyWhy::EmScan: return "E-marker scan: wait";
     case BusyWhy::Identify: return "Identify: wait";
     case BusyWhy::TwinRun: return "Twin proof: stop it";
+    case BusyWhy::PdStress: return pdstress_.busy_reason();   // "PD Stress: stop it" / "PD Stress: resuming"
     case BusyWhy::None: break;
     }
     return nullptr;
@@ -353,6 +356,18 @@ Ui::Session Ui::session() {
                                    (ctx_.em_scanning ? kSessionEmScanning : 0) | (ctx_.em_listen_until ? kSessionEmListening : 0) |
                                    (ctx_.em_quiet ? kSessionEmQuiet : 0) | (ctx_.id_no_device ? kSessionIdNoDevice : 0));
     return s;
+}
+
+// PD Stress asks this one: the same owners as busy_reason() minus the ones a run causes itself (a held contract, the sink state, an
+// EPR contract). Its own run is not "foreign".
+const char *Ui::foreign_busy() const {
+    const auto fs = fctrig::status();
+    if (charger_test_busy()) return "Test running: stop it";
+    if (fc_release_.busy()) return "5V release: wait";
+    if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return "QC trigger: stop it";
+    if (ctx_.em_scanning) return "E-marker scan: wait";
+    if (fusb302::identify_status().state == pd::IdState::Running) return "Identify: wait";
+    return nullptr;
 }
 
 void Ui::redraw(uint32_t now_ms) {
@@ -1142,6 +1157,10 @@ void Ui::tick(uint32_t now_ms) {
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
     twin_hw::live_poll(twin_ctx(now_ms));
+    pdstress_.poll(now_ms);   // after the charger test's poll: that one clears the run-owner flag a run of ours has set
+    const bool stress_note = pdstress_.footer() != nullptr;
+    if (pdstress_note_ && !stress_note) current().invalidate();   // the run's line goes: the page repaints its own footer
+    pdstress_note_ = stress_note;
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
     update_hold_card(now_ms);
@@ -1168,6 +1187,8 @@ void Ui::draw_release_notice() {
         const bool unsafe = fc_release_.state() == trig::Release::State::Unsafe;
         draw_footer(ctx_.content, unsafe ? FooterTone::Error : FooterTone::Caution,
                     unsafe ? "Unsafe VBUS: unplug source" : "FC releasing; verify 5V");
+    } else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger) {
+        draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up
     }
 }
 

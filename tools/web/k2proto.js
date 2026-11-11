@@ -321,7 +321,7 @@ var K2Proto = (function () {
   var SESSION_LEN = 31;
   var SESSION_PROTO_KINDS = ["none", "pd-fixed", "pd-epr", "pps", "avs", "qc2", "qc3", "fcp", "scp", "ufcs", "svooc",
                              "typec", "dcp", "unknown", "detecting"];
-  var SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run"];
+  var SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress"];
   var SESSION_TOPOLOGY = ["unknown", "no-source", "cable-single-cc", "direct-receptacle"];
   var SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"];
   var SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"];

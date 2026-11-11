@@ -20,6 +20,7 @@
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
+#include "k2/ui/pd_stress_session.hpp"
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/page_arena.hpp"
 #include "k2/twin/twin_hw.hpp"
@@ -232,8 +233,8 @@ public:
         uint8_t flags = 0;               // kSession*
     };
     [[gnu::noinline]] Session session();
-    // A Device twin live proof (twin_hw::live_running) owns the ports like a charger test does.
-    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy(); }
+    // A Device twin live proof (twin_hw::live_running) and a PD Stress run own the ports like a charger test does.
+    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_.active(); }
     bool twin_live_busy() const;
     // What the twin live runner needs from the UI: the clock, the monitor ceiling, the latest VBUS and who else owns the ports
     // (the twin run itself is not "else"). The remote's `twin run` and the Device twins page start a run with it.
@@ -241,6 +242,12 @@ public:
     void cancel_twin();                  // BACK, the remote `stop`: ends a live proof, 5 V asked
     BusyWhy busy_why() const;          // why an identity / START is refused right now, BusyWhy::None = free
     const char *busy_reason() const;   // the footer text of busy_why(), nullptr = free
+    // ---- PD Stress (the resident session; the remote and the shell start and read it through these) ----
+    PdStressSession &pd_stress() { return pdstress_; }
+    const PdStressSession &pd_stress() const { return pdstress_; }
+    // Why PD Stress may not start now: another tool owns the ports. The holds, the contract and the sink state a run
+    // causes itself are not counted (busy_reason() would refuse the run for its own doing).
+    const char *foreign_busy() const;
     bool spoof_busy() const { return busy_reason() != nullptr; }
     const trig::Release &fc_release() const { return fc_release_; }
     void stop_fc(uint32_t now_ms);
@@ -332,6 +339,8 @@ private:
     // arena comes last so the pages are gone before anything they point at.
     UiContext ctx_;
     ChargerTestSession charger_test_;
+    PdStressSession pdstress_;      // after the charger test: it borrows that session's sweep buffer for its record
+    bool pdstress_note_ = false;    // the run's footer line was on screen last tick
     trig::Release fc_release_;
     ShareRecord share_rec_;         // the record the Share view shows: filled by the opener before the page exists
     StackArena<PageIf, kPageArenaBytes, kPageArenaDepth> pages_;

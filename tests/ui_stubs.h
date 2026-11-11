@@ -224,6 +224,12 @@ struct StubState {
     std::vector<uint8_t> twin_start_seqs;  // the numbers of the last live_start()
     bool twin_start_confirmed = false;     // ... and its confirm flag
     unsigned twin_stamp = 0;               // moves the prediction stamp (twin_hw::predict_stamp) like a new charger list would
+    // PD Stress: Soft_Reset asks and the journal file (journal_hw::store()) the stand-in keeps in RAM.
+    int ps_soft_resets = 0;
+    bool ps_soft_reset_ok = true;
+    std::vector<uint8_t> ps_file;
+    bool ps_file_present = false, ps_write_fails = false;
+    int ps_writes = 0, ps_removes = 0;
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store

@@ -23,7 +23,7 @@ enum class Action : uint8_t { PdRescan = 1, EmarkerScan = 2, EnergyReset = 3,
 
 // What keeps an identity or a START out (Ui::busy_why); busy_reason() is its footer text. The values ride the remote's
 // session block (GET_STATE part 1) as they are.
-enum class BusyWhy : uint8_t { None, TestRunning, FcRelease, QcTrigger, PdHold, Epr, PdRequest, EmScan, Identify, TwinRun };
+enum class BusyWhy : uint8_t { None, TestRunning, FcRelease, QcTrigger, PdHold, Epr, PdRequest, EmScan, Identify, TwinRun, PdStress };   // new values are appended: the numbers are on the wire
 
 // Ui::Session::flags (and the wire byte): one bit per transient chrome state the screens show.
 inline constexpr uint8_t kSessionHoldCard = 1 << 0;       // BACK held: the "Reboot in N" card

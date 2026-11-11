@@ -68,7 +68,8 @@ constexpr const char* stop_name(Stop s) {
     return "?";
 }
 
-enum class StartResult : std::uint8_t { Ok, Busy, NoCaps, Inline, NoSequence, NoStore, Running };
+// NoMonitor is the session's refusal (no power monitor reading, so no VBUS judgement and no overvoltage guard); the engine never returns it.
+enum class StartResult : std::uint8_t { Ok, Busy, NoCaps, Inline, NoSequence, NoStore, Running, NoMonitor };
 constexpr const char* start_name(StartResult r) {
     switch (r) {
         case StartResult::Ok: return "ok";
@@ -78,6 +79,7 @@ constexpr const char* start_name(StartResult r) {
         case StartResult::NoSequence: return "no sequence applies";
         case StartResult::NoStore: return "no record buffer";
         case StartResult::Running: return "already running";
+        case StartResult::NoMonitor: return "no power monitor";
     }
     return "?";
 }
@@ -101,7 +103,6 @@ struct Resume {
 
 class Env {
 public:
-    virtual ~Env() = default;
     virtual Snapshot snapshot() = 0;
     virtual const pd::SourceCaps& caps() = 0;
     virtual std::uint32_t cap_mv() = 0;                 // the monitor ceiling a request may ask for
@@ -120,6 +121,9 @@ public:
     virtual void on_event(Seq, Event, std::uint32_t /*detail*/) {}
     virtual void on_note(const char*) {}
     virtual void on_finish(Stop) {}
+
+protected:
+    ~Env() = default;   // never deleted through the interface: a virtual destructor would pull operator delete (and malloc) into the link
 };
 
 // Timing constants of the engine itself (ms).

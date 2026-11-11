@@ -18,6 +18,7 @@
 #include "k2/core/rescan.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/twin/twin_hw.hpp"
+#include "k2/pdstress/journal_hw.hpp"
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -179,6 +180,7 @@ void sink_release() {
     }
 }
 bool sink_hard_reset(bool) { g_stub.hard_resets++; return true; }
+bool sink_soft_reset() { g_stub.ps_soft_resets++; return g_stub.ps_soft_reset_ok; }
 void sink_set_cap(std::uint32_t mv) { g_stub.sink_cap = mv; }
 void sink_vbus(std::int32_t mv) { g_stub.sink_vbus = mv; }
 const pd::SinkStatus& sink_status() { return g_stub.sink; }
@@ -597,6 +599,32 @@ void send_report(const std::uint8_t* r) {
 }  // namespace usb
 
 }  // namespace k2
+
+namespace k2::pdstress::journal_hw {
+// Host stand-in for the PD Stress journal file: RAM, with a switch that makes the write fail.
+namespace {
+class RamStore final : public journal::Store {
+public:
+    bool read(std::span<std::uint8_t> out, std::size_t& n) override {
+        n = 0;
+        if (!g_stub.ps_file_present || g_stub.ps_file.size() > out.size()) return false;
+        std::copy(g_stub.ps_file.begin(), g_stub.ps_file.end(), out.begin());
+        n = g_stub.ps_file.size();
+        return true;
+    }
+    bool write(std::span<const std::uint8_t> in) override {
+        if (g_stub.ps_write_fails) return false;
+        g_stub.ps_file.assign(in.begin(), in.end());
+        g_stub.ps_file_present = true;
+        g_stub.ps_writes++;
+        return true;
+    }
+    void remove() override { g_stub.ps_file.clear(); g_stub.ps_file_present = false; g_stub.ps_removes++; }
+};
+RamStore g_ram;
+}  // namespace
+journal::Store& store() { return g_ram; }
+}  // namespace k2::pdstress::journal_hw
 
 namespace k2::fctrig {
 // Host stand-in for the trigger driver: idle, never running, records what the UI asked for.

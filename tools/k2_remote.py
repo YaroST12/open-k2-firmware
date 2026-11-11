@@ -438,7 +438,7 @@ def decode_state(p):
 # GET_STATE part 1 (the session block): the enums follow include/k2/ui/ui_types.hpp, fc_proto.hpp, home.hpp and conn.hpp.
 SESSION_PROTO_KINDS = ["none", "pd-fixed", "pd-epr", "pps", "avs", "qc2", "qc3", "fcp", "scp", "ufcs", "svooc",
                        "typec", "dcp", "unknown", "detecting"]
-SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run"]
+SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress"]
 SESSION_TOPOLOGY = ["unknown", "no-source", "cable-single-cc", "direct-receptacle"]
 SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"]
 SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"]
