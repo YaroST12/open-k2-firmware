@@ -32,6 +32,11 @@ FRAME_PULSES = 9
 FRAME_GAP_US = 2000.0
 LAST_BIT_US = 300.0
 PAIR_MAX_US = 12000.0
+LONG_PULSE_US = 1000.0
+SESSION_GAP_MS = 1000.0       # a session starts with the first frame after this much silence
+HANDSHAKE_GAP_MS = 60.0       # observed: the handshake ends with a ~75 ms pause before the ramp
+STEADY_CMD = 0x82
+STEADY_MAX_MS = 200.0
 SVOOC_CMDS = {0xA8: "ident", 0x98: "battery 1", 0x86: "battery 2", 0x80: "status", 0x92: "status", 0x8E: "status", 0x9E: "status",
               0x88: "cable R", 0x8A: "telemetry", 0x82: "current limit", 0x84: "voltage ramp",
               0x9A: "heartbeat", 0x94: "heartbeat", 0x8C: "voltage step"}
@@ -64,7 +69,10 @@ def decode_chunk(p):
 
 
 def edges_from_records(buf):
-    """Raw capture bytes -> [(t_us, dm, dp)] with the 26-bit time unwrapped across records."""
+    """Raw capture bytes -> [(t_us, dm, dp)] with the 26-bit time unwrapped across records.
+
+    The ISR is the only producer and its timestamps never go back, so every backward step is one
+    wrap (17.9 s). A half-range test would misread a quiet gap of more than 8.9 s as a step back."""
     out, base, last = [], 0, None
     i = 0
     while i < len(buf):
@@ -74,7 +82,7 @@ def edges_from_records(buf):
         if buf[i + 1] == T_EDGES:
             _, ev = decode_chunk(buf[i + 6:i + n])
             for u, st in ev:
-                if last is not None and u < last - (1 << 25):
+                if last is not None and u < last:
                     base += 1 << 26
                 last = u
                 out.append(((base + u) * UNIT_US, bool(st & 2), bool(st & 1)))
@@ -103,9 +111,11 @@ def decode_frames(edges):
         elif not ev[k - 1][2] and ev[k][2] and fall is not None:
             pulses.append((fall, ev[k][0], idle))
             fall = None
+    # Group by rise time: the first ident after the wake burst starts with D+ already low, so its
+    # pulse 1 is only a rise, hundreds of ms after its fall.
     groups = []
     for p in pulses:
-        if groups and p[0] - groups[-1][-1][0] <= FRAME_GAP_US:
+        if groups and p[1] - groups[-1][-1][1] <= FRAME_GAP_US:
             groups[-1].append(p)
         else:
             groups.append([p])
@@ -127,7 +137,10 @@ def decode_frames(edges):
         v = 0
         for b in bits:
             v = (v << 1) | b
-        f = {"t_us": g[0][0], "bits": bits, "n": len(g), "idle": 1 if g[0][2] else 0,
+        fall, rise, idle = g[0]
+        if rise - fall > LONG_PULSE_US:     # D+ was held low before the frame: time it from the rise
+            fall, idle = rise, level(rise - LONG_PULSE_US)
+        f = {"t_us": fall, "bits": bits, "n": len(g), "idle": 1 if idle else 0,
              "value": v if len(g) == FRAME_PULSES else None, "complete": len(g) == FRAME_PULSES}
         paired = prev is not None and prev["role"] == "cmd" and f["t_us"] - prev["t_us"] < PAIR_MAX_US
         f["role"] = "reply" if (f["idle"] or paired) else "cmd"
@@ -181,6 +194,113 @@ def report(edges):
     return lines
 
 
+def _pairs(frames):
+    """Complete frames -> [(t_us, cmd, reply or None)]: a command and the reply that follows it."""
+    out, i = [], 0
+    while i < len(frames):
+        f = frames[i]
+        if f["role"] != "cmd":
+            i += 1
+            continue
+        nxt = frames[i + 1] if i + 1 < len(frames) else None
+        if nxt is not None and nxt["role"] == "reply" and nxt["t_us"] - f["t_us"] < PAIR_MAX_US:
+            out.append((f["t_us"], f["value"] >> 1, nxt["value"]))
+            i += 2
+        else:
+            out.append((f["t_us"], f["value"] >> 1, None))
+            i += 1
+    return out
+
+
+def summary(edges):
+    """-> {"wakes": [{"t_ms", "clocks"}], "sessions": [...]}, times in ms from the first edge.
+
+    A session runs from the first complete frame after SESSION_GAP_MS of silence to its last frame.
+    Its handshake is the command/reply pairs from an ident at the session start up to the first
+    pause over HANDSHAKE_GAP_MS once the ident has been answered (times from the session start).
+    The steady state is the STEADY_CMD poll: its median period and its reply series."""
+    if not edges:
+        return {"wakes": [], "sessions": []}
+    t0 = edges[0][0]
+    frames = decode_frames(edges)
+    wakes = [{"t_ms": (f["t_us"] - t0) / 1000.0, "clocks": f["n"]} for f in frames if f["n"] > FRAME_PULSES]
+    groups = []
+    for f in (f for f in frames if f["complete"]):
+        if groups and (f["t_us"] - groups[-1][-1]["t_us"]) / 1000.0 <= SESSION_GAP_MS:
+            groups[-1].append(f)
+        else:
+            groups.append([f])
+    sessions = []
+    for g in groups:
+        pairs = _pairs(g)
+        start = g[0]["t_us"]
+        hs = []
+        if pairs and pairs[0][1] in VOOC_CMDS:
+            answered = False
+            for k, (t, cmd, rep) in enumerate(pairs):
+                if answered and k and (t - pairs[k - 1][0]) / 1000.0 > HANDSHAKE_GAP_MS:
+                    break
+                hs.append(((t - start) / 1000.0, cmd, rep))
+                answered = answered or (cmd in VOOC_CMDS and bool(rep))
+        hist = {}
+        for _, cmd, _ in pairs:
+            hist[cmd] = hist.get(cmd, 0) + 1
+        steady = pairs[len(hs):]
+        gaps = sorted((b[0] - a[0]) / 1000.0 for a, b in zip(steady, steady[1:])
+                      if a[1] == b[1] == STEADY_CMD and (b[0] - a[0]) / 1000.0 < STEADY_MAX_MS)
+        sessions.append({"start_ms": (start - t0) / 1000.0, "end_ms": (g[-1]["t_us"] - t0) / 1000.0,
+                         "frames": len(g), "handshake": hs, "histogram": hist,
+                         "period_ms": gaps[len(gaps) // 2] if gaps else None,
+                         "replies_82": [rep for _, cmd, rep in steady if cmd == STEADY_CMD and rep is not None]})
+    return {"wakes": wakes, "sessions": sessions}
+
+
+def _runs(values):
+    out = []
+    for v in values:
+        if out and out[-1][0] == v:
+            out[-1][1] += 1
+        else:
+            out.append([v, 1])
+    return out
+
+
+def summary_lines(edges):
+    s = summary(edges)
+    lines = [f"{len(edges)} edges, {len(s['sessions'])} sessions (labels are guesses, values are raw)"]
+    for w in s["wakes"]:
+        lines.append(f"wake burst {w['clocks']} clocks at {w['t_ms']:.3f} ms")
+    for n, ses in enumerate(s["sessions"], 1):
+        lines.append(f"session {n}: {ses['start_ms']:.3f} .. {ses['end_ms']:.3f} ms, {ses['frames']} frames")
+        if ses["handshake"]:
+            lines.append("  handshake (ms from the session start):")
+        else:
+            lines.append("  handshake: not in the capture (the session starts without an ident)")
+        for t, cmd, rep in ses["handshake"]:
+            name = SVOOC_CMDS.get(cmd) or VOOC_CMDS.get(cmd) or ""
+            r = "none" if rep is None else f"0x{rep:03X}" + (" (silent)" if rep == 0 else "")
+            lines.append(f"  {t:9.3f}  0x{cmd:02X} -> {r:16s} {name}")
+        hist = ", ".join(f"0x{c:02X} x{k}" for c, k in sorted(ses["histogram"].items(), key=lambda x: -x[1]))
+        lines.append(f"  commands: {hist}")
+        if ses["period_ms"] is not None:
+            reps = ", ".join(f"0x{v:03X}" + (f" x{k}" if k > 1 else "") for v, k in _runs(ses["replies_82"]))
+            lines.append(f"  steady 0x{STEADY_CMD:02X} every {ses['period_ms']:.1f} ms, replies: {reps}")
+    return lines
+
+
+def edge_window(edges, lo_ms, hi_ms):
+    """Every raw edge between lo_ms and hi_ms (from the first edge), with the step from the one before."""
+    if not edges:
+        return []
+    t0, out = edges[0][0], []
+    for k, (t, dm, dp) in enumerate(edges):
+        ms = (t - t0) / 1000.0
+        if lo_ms <= ms <= hi_ms:
+            dt = t - edges[k - 1][0] if k else 0.0
+            out.append(f"{ms:12.4f} ms  dp={int(dp)} dm={int(dm)}  +{dt:.1f}us")
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -190,6 +310,10 @@ def main(argv=None):
     c.add_argument("--timeout", type=float, default=1.0)
     f = sub.add_parser("file")
     f.add_argument("raw")
+    for p in (c, f):
+        p.add_argument("--summary", action="store_true", help="sessions, handshakes, command histogram")
+        p.add_argument("--edges", nargs=2, type=float, metavar=("LO_MS", "HI_MS"),
+                       help="dump every edge in this window (ms from the first edge)")
     a = ap.parse_args(argv)
     if a.cmd == "file":
         data = Path(a.raw).read_bytes()
@@ -204,7 +328,13 @@ def main(argv=None):
                 data, _ = k2_remote.blackbox_capture_read(link, a.slot)
             finally:
                 link.transport.close()
-    print("\n".join(report(edges_from_records(data))))
+    edges = edges_from_records(data)
+    if a.edges:
+        print("\n".join(edge_window(edges, *a.edges)))
+    elif a.summary:
+        print("\n".join(summary_lines(edges)))
+    else:
+        print("\n".join(report(edges)))
     return 0
 
 

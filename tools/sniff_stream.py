@@ -8,7 +8,7 @@
 
 It sends `sniff stream`, collects the framed records until N seconds pass or Ctrl-C, sends `sniff stop`,
 then writes PREFIX.raw (every byte received) and PREFIX.edges (Edges records, the format of
-`vooc_edges.py file`), and prints the vooc_edges report. Frame format: 0xA5, len, payload, sum8(len+payload);
+`vooc_edges.py file`), and prints the vooc_edges summary (sessions, handshakes, commands). Frame format: 0xA5, len, payload, sum8(len+payload);
 the payload is one include/k2/fastcharge/edges.hpp chunk (idx, first_units, varint edges).
 """
 import argparse
@@ -133,7 +133,8 @@ def main(argv=None):
         print(f"device: {m.group(1)} edges queued, {m.group(2)} overruns, {m.group(3)} bytes framed")
     else:
         print("no 'sniff stats' line received (check the port, the shell and that nothing else owns the ports)")
-    print("\n".join(vooc_edges.report(edges)[:60]))
+    print("\n".join(vooc_edges.summary_lines(edges)))
+    print(f"(every frame: vooc_edges.py file {a.out}.edges; one window: add --edges LO_MS HI_MS)")
     return 0
 
 
