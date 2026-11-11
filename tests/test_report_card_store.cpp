@@ -561,6 +561,32 @@ static void test_duplicate_numbers_newer_keeps_it() {
     CHECK_EQ(g.id.fp, 0xB2u);
 }
 
+// The case that made the duplicates on hardware: a v8 card file an older build could not read kept its number 5 while
+// the number went to a new v10 card. The invisible card's stamp can sit above the v10 card's (stamps were handed out
+// from the cards the build could see), so the stamp alone would move the number the user has seen away from the v10
+// card. A current-format file keeps its number over an older-format one; the stamp decides only between equals.
+static void test_duplicate_number_stays_with_the_current_format() {
+    Vol v;
+    rc::Card old8 = card(0xA1, 1); old8.card_no = 5; old8.runs = 1; rc::set_name(old8, "Invisible v8");
+    rc::Card cur = card(0xB2, 2); cur.card_no = 5; cur.runs = 1; rc::set_name(cur, "Current v10");
+    rc::Card c = card(0xC3, 3); c.card_no = 7; c.runs = 1;
+    write_old_card(v, old8, 198, 8, 30);                    // the higher stamp
+    write_old_card(v, cur, 250, 10, 20);
+    write_old_card(v, c, 250, 10, 15);
+    v.reboot();
+    v.disk.reset_counters();
+    rc::Card g;
+    CHECK_EQ(v.s->get(5, g), 1);
+    CHECK_EQ(g.id.fp, 0xB2u);
+    CHECK_EQ(v.s->get(8, g), 1);
+    CHECK_EQ(g.id.fp, 0xA1u);
+    CHECK_STR(g.name, "Invisible v8");
+    std::array<std::uint16_t, 4> nums{};
+    CHECK_EQ(v.s->numbers(nums), 3u);
+    CHECK_EQ(nums[0], 8); CHECK_EQ(nums[1], 5); CHECK_EQ(nums[2], 7);   // the list order stays by stamp
+    CHECK_EQ(v.disk.progs + v.disk.erases, 0u);
+}
+
 int main() {
     test_empty_and_first_put();
     test_retest_replaces_and_keeps_name();
@@ -583,5 +609,6 @@ int main() {
     test_over_cap_lists_the_newest_by_stamp();
     test_save_over_cap_ends_at_the_cap();
     test_duplicate_numbers_newer_keeps_it();
+    test_duplicate_number_stays_with_the_current_format();
     return test_report("test_report_card_store");
 }
