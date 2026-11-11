@@ -98,7 +98,16 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `timeout`), although QC2 12.1 V and QC3 11.8 V passed on 2026-11-04 (5c548f7). A state left by the vendor units or a
   regression. `--units qc2,qc3` alone (PC-powered, run 4, `runs/2026-11-11-iq4-scp/ct_qc.txt`) fails the same way: QC2 9 V
   at 5.10 V, QC3 / QC3B timeout at 5.10 V, so not a leftover state. Next: the same units on another charger that passed QC
-  before, to split a firmware regression from an IQ4 change.
+  before, to split a firmware regression from an IQ4 change. CUKTECH 10 GaN 120W USB-A (QC2 12.13 V on 2026-11-07),
+  2026-11-11 on 1.0.0-524: through the first cable the port held 5.12 V with no load and answered nothing (QC2/QC3 "no
+  handshake": D- stayed at D+ 0.65 V, FCP rejected), likely a port or cable state, since another cable restored the
+  usual no-load cycling. With that cable no run could start (next bug). `runs/2026-11-11-cuktech-qc/`.
+- **The charger test cannot start on a USB-A port that cuts its output with no load** (2026-11-11, CUKTECH 120W USB-A,
+  HID-powered K2, 1.0.0-524): preflight refuses "load attached" at 0 mA. Every attach starts "possibly inline"
+  (`pd_link.cpp`), which clears only after `kInlineQuietMs` (10 s) attached and quiet. The port cuts VBUS every ~6.5 s
+  (`usb-a-no-load-auto-off`), and each cut is a new attach, so the flag never clears. On 2026-11-07 (before the default)
+  the same setup ran. Fix direction: a source with no Rd beyond the K2 and no PD traffic, at 0 mA through the cut, is not
+  a sink; or count the cut as the same attach.
 
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
