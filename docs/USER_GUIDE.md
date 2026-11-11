@@ -140,7 +140,7 @@ For QC, AFC, FCP, SCP and VOOC chargers use **FC trigger** (start with **SCAN**)
 
 - [Controls in detail](#controls-in-detail)
 - [Top-level pages](#top-level-pages): [Home](#home), [Detail](#detail), [Charger test](#charger-test), [Lines](#lines), [Tools](#tools), [Settings](#settings)
-- [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Diag](#diag)
+- [Tools](#tools-reference): [FC trigger](#fc-trigger), [PD trigger](#pd-trigger), [Spoof](#spoof), [Cable R](#cable-r), [Who's attached](#whos-attached), [Saved cables](#saved-cables), [Black Box](#black-box), [Report cards](#report-cards), [Device twins](#device-twins), [Diag](#diag)
 - [Share (QR)](#share-qr)
 - [Settings](#settings-reference): [USB Link](#usb-link), [Autorotate](#autorotate), [Rotate buttons, Screenshot, Smoothing, Wake sleeping port](#other-settings)
 - [USB link modes](#usb-link-modes) and [USB drive contents](#usb-drive-contents)
@@ -260,7 +260,7 @@ Read-only. Use it to see whether a charger is waiting, which CC line the cable u
 
 ![Tools](guide/img/tools.png)
 
-The hub. Eight entries; each row shows a readiness tag, or a chevron when it is ready. +/- moves, OK opens.
+The hub. Nine entries; each row shows a readiness tag, or a chevron when it is ready. +/- moves, OK opens.
 
 | Entry | Hint on the row | Tag when not ready |
 | :--- | :--- | :--- |
@@ -271,6 +271,7 @@ The hub. Eight entries; each row shows a readiness tag, or a chevron when it is 
 | Who's attached | source, cable and device | always ready |
 | Black Box | passive PD recorder | always ready |
 | Report cards | saved charger results | always ready |
+| Device twins | what a charger gives your devices | always ready (the live proof refuses a live sink itself) |
 | Diag | USB, PD and system state | always ready |
 
 Spoof is a shortcut: it opens Who's attached on the Cable tab and then the Spoof page.
@@ -440,6 +441,16 @@ Row summary, for example `2P 1~ 1F`: tests passed (P), partly (~; capped or stop
 | Card | BACK | Step back |
 
 Cards are saved in flash and exported on the USB drive and with `k2_remote.py cards list | show | export | rename | delete`. Format: [`QR_SHARE.md`](QR_SHARE.md).
+
+### Device twins
+
+**Will this charger charge my device, and how fast?** A twin is a stored device: its sink capabilities (what it asks a charger for), and optionally the Request it was seen to make. The page lists your twins against the charger that is attached now. Each row shows the contract that device would get (for example `33W PPS`, `36W of 55W`, `5V only`, `no contract`), and the focused row says what limits it: the device, this charger or the cable. Nothing is sent for the prediction.
+
+- **Learn** (last row): learns a twin from the last Who's attached > Identify of a device that sat alone on the K2. From the shell or host: `twin learn identify` (device alone) or `twin learn sniff` (a device and its charger, K2 between them).
+- **Prove it** (OK on a twin, OK again within 5 s): the K2 answers the charger as that device, sends the Request it predicted and checks that the charger accepts it and VBUS settles. It needs a PD charger attached and the K2 as an active sink (not inline with a live device), asks for a confirmation (the contract changes), and returns to 5 V when done. BACK stops it.
+- A twin cannot predict vendor fast-charge modes or what a battery will pull; see [`DEVICE_TWIN.md`](DEVICE_TWIN.md) for the rules, the record format, the USB data a twin keeps and the limits.
+
+Shell: `twin list | predict | run n confirm | status | cancel | learn | rename | delete`. Host: `k2_remote.py twin ...`.
 
 ### Diag
 
