@@ -74,6 +74,12 @@ std::size_t format(const Snapshot& s, std::span<char> out) {
     o.str(" mk=");
     if (s.mark_read) o.hex(s.mark); else o.put('-');
     o.str(" ra="); o.dec(s.ra_on ? 1 : 0); o.put(':'); o.str(bootra::name(bootra::Verdict(s.ra_why)));
+    o.str(" ri=");
+    if (!s.ri_looked) o.put('-');
+    else if (!s.ri_kind) o.put('0');
+    else { o.put(s.ri_kind); o.dec(s.ri_pin); o.put(s.ri_canary ? 'y' : 'n'); o.put(s.ri_host ? 'y' : 'n'); }
+    o.str(" sr="); o.dec(s.sram_words);
+    o.str(" bp="); o.dec(s.bp_boots); o.put(':'); o.dec(s.bp_prev ? 1 : 0);
     o.str(" mv=");
     if (s.move.moved) {
         o.dec(s.move.ms); o.put(':'); o.hex(s.move.from); o.put('>'); o.hex(s.move.to); o.put(':');

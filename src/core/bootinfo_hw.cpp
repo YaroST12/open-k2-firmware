@@ -8,6 +8,8 @@
 #include "k2/drivers/adc.hpp"
 #include "k2/pd/boot_ra.hpp"
 #include "k2/core/boottrace_store.hpp"
+#include "k2/core/rd_comeback.hpp"
+#include "k2/chargertest/session_store.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/pins.hpp"
 #include "k2/drivers/power_monitor.hpp"
@@ -67,6 +69,16 @@ void collect(Snapshot& s) {
     s.inherited = r.inherited;
     s.ra_on = fusb302::ra_active();
     s.ra_why = std::uint8_t(bootra::last());
+    const rdcomeback::BootLook& l = rdcomeback::boot_look();
+    s.ri_looked = l.looked;
+    s.ri_kind = l.kind == rdintent::IntentKind::Session ? 's' : l.kind == rdintent::IntentKind::Reattach ? 'a'
+              : l.kind == rdintent::IntentKind::Rescan ? 'r' : 0;
+    s.ri_pin = l.pin;
+    s.ri_canary = l.canary;
+    s.ri_host = l.host;
+    s.sram_words = l.sram_words;
+    s.bp_boots = session::boots();
+    s.bp_prev = session::previous().has_value();
     s.move = boottrace::move_record();
     const unsigned n = fusb302::boot_note_count();
     for (unsigned i = 0; i < n && s.note_n < s.notes.size(); i++) {

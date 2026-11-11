@@ -31,6 +31,20 @@ using rdintent::IntentKind;
 // reflashed K2 never carries one.
 __attribute__((section(".noinit"), used)) Canary g_canary;
 
+// The SRAM retention probe (BootLook::sram_words): a fixed pattern in .noinit, counted and rewritten at the top of every begin().
+__attribute__((section(".noinit"), used)) std::uint32_t g_probe[kProbeWords];
+constexpr std::uint32_t probe_word(std::size_t i) { return 0x6B32A55Au ^ (static_cast<std::uint32_t>(i) * 0x9E3779B1u); }
+BootLook g_look;
+
+std::uint8_t probe_take() {
+    std::uint8_t n = 0;
+    for (std::size_t i = 0; i < kProbeWords; i++) {
+        if (g_probe[i] == probe_word(i)) n++;
+        g_probe[i] = probe_word(i);
+    }
+    return n;
+}
+
 // One owner for every write of /rd.rec: the record and its canary go together. A save that lands on the volume arms the canary
 // with the same record (save() also returns true when the volume already holds it, so the canary is re-armed then too);
 // None removes the record and clears the canary.
@@ -95,10 +109,14 @@ void release() {
 }  // namespace
 
 bootmode::Mode begin(bootmode::Mode keys, bool warm) {
+    g_look.sram_words = probe_take();
     if (!rdintent::reads_marker(keys, warm)) return keys;
     fs::Fs& f = fs::instance();
     if (f.mount() != fs::Err::Ok) return keys;   // never formats here: the ordinary init does, after the Rd is decided
     const Intent in = rdintent::load(f);
+    g_look.looked = true;
+    g_look.kind = in.kind;
+    g_look.pin = in.pin;
     // The canary says whether this cold boot is the marker's comeback or a stale leftover: it survived this reset's dark period
     // and vouches for exactly this record. A bare unplug leaves the marker but not the canary (the K2 sat dead and SRAM decayed),
     // so that next plain boot stays passive - no Rd for whatever is on the port now (hardware 2026-11-09, build b00178c).
@@ -107,6 +125,10 @@ bootmode::Mode begin(bootmode::Mode keys, bool warm) {
         K2LOG("[RDI] record %s pin=%u ignored: the SRAM canary did not survive this boot (a stale record)\n", kind_name(in.kind),
               static_cast<unsigned>(in.pin));
     const bool host = in.kind != IntentKind::None && host_powered_now();
+    g_look.canary = canary;
+    g_look.host = host;
+    K2LOG("[RDI] boot look: record %s pin=%u canary=%d host=%d sram=%u/%u\n", kind_name(in.kind), static_cast<unsigned>(in.pin),
+          canary ? 1 : 0, host ? 1 : 0, static_cast<unsigned>(g_look.sram_words), static_cast<unsigned>(kProbeWords));
     if (host) K2LOG("[RDI] record %s pin=%u ignored: a USB host powers this boot (aux rail up), plain boot stays passive\n", kind_name(in.kind),
                     static_cast<unsigned>(in.pin));
     const bootmode::Mode mode = rdintent::boot_mode(keys, warm, in, host, canary);
@@ -212,6 +234,8 @@ bool begin_rescan() {
     if (!save_marker(in)) return false;
     return rdintent::load(fs::instance()) == in;
 }
+
+const BootLook& boot_look() { return g_look; }
 
 bool rescan_landing() { return rescanbridge::lands_on_page(g_found.kind, g_vouched ? rdintent::Verdict::Vouched : rdintent::Verdict::Wait); }
 

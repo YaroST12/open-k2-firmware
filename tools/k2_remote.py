@@ -3240,6 +3240,16 @@ def parse_bootinfo_text(text):
            "reset_flags": hx(f["rf"]), "warm": f["w"] == "1",
            "pin": {"initial": pin[0], "now": pin[1], "boot": pin[2], "inherited": pin[3]},
            "mark": None if f["mk"] == "-" else hx(f["mk"]), "move": None, "readbacks": [], "notes": [], "notes_not_shown": 0}
+    ri = f.get("ri")
+    if ri is not None:   # the Rd intent marker as the boot read it (absent before 1.0.0-521)
+        out["rd_marker"] = ({"read": False} if ri == "-" else {"read": True, "record": None} if ri == "0" else
+                            {"read": True, "record": {"s": "session", "a": "reattach", "r": "rescan"}.get(ri[0], ri[0]),
+                             "pin": int(ri[1]), "canary": ri[2] == "y", "host": ri[3] == "y"})
+    if "sr" in f:
+        out["sram_probe_words"] = int(f["sr"])
+    if "bp" in f:
+        b, prev = f["bp"].split(":")
+        out["session"] = {"boots": int(b), "previous": prev == "1"}
     if f["mv"] != "-":
         ms, pins, vbus, c1, c2 = f["mv"].split(":")
         frm, to = pins.split(">")

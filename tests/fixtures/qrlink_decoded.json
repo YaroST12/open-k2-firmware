@@ -49,6 +49,9 @@
    ],
    "plus_held": true,
    "proto": 1,
+   "rd_marker": {
+    "read": false
+   },
    "readbacks": [
     {
      "ms": 50,
@@ -64,6 +67,11 @@
     }
    ],
    "reset_flags": 603979776,
+   "session": {
+    "boots": 0,
+    "previous": false
+   },
+   "sram_probe_words": 0,
    "t_ms": 12345,
    "vbus_mv": 5012,
    "warm": false
@@ -121,6 +129,9 @@
    ],
    "plus_held": true,
    "proto": 1,
+   "rd_marker": {
+    "read": false
+   },
    "readbacks": [
     {
      "ms": 50,
@@ -136,6 +147,11 @@
     }
    ],
    "reset_flags": 603979776,
+   "session": {
+    "boots": 0,
+    "previous": false
+   },
+   "sram_probe_words": 0,
    "t_ms": 12345,
    "vbus_mv": 5012,
    "warm": false

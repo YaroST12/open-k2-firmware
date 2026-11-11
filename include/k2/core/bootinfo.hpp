@@ -14,6 +14,8 @@
 //        m=<plain|ok|plus> k=<key mask hex, bootmode::k*: 1 BACK, 2 MINUS, 4 OK, 8 PLUS> pa=<pin levels hex: 1 PA9, 2 PA13, 4 PB14, 8 PA14;
 //        1 = high = released> rf=<reset flags hex> w=<warm reset 0|1> pin=<initial Rd,now,boot,inherited> mk=<pin mark hex|->
 //        ra=<Ra on CC1 now 0|1>:<boot decision: -|arm|plain|noid|refused|cable|noread|fail>
+//        ri=<the Rd intent marker as this boot read it: - not read (warm or key boot) | 0 no record | <kind s|a|r><pin><canary y|n><host y|n>>
+//        sr=<words of the .noinit SRAM probe that survived the reset, 0..32> bp=<backup-register session boots>:<previous record 0|1>
 //        mv=<ms>:<from>><to>:<vbus>:<cc1>:<cc2>|- sw=<readback hex>@<ms>,...|- n=<ms><s|c><hex>,...[+<more>]
 // Rd pin values are the FUSB302 pull-down bits (1 = CC1, 2 = CC2, 0 = none). `mv` is the one-time move of the single Rd (the
 // rule's inputs at that moment, vbus -1 = no power monitor answer). `sw` are SWITCHES0 read back from the chip at ~50 ms,
@@ -65,6 +67,13 @@ struct Snapshot {
     bool inherited = false;
     bool ra_on = false;                  // PC13 high: the Ra on CC1 (a cable identity is armed for the source's discovery)
     std::uint8_t ra_why = 0;             // bootra::Verdict of this boot's decision (0 = not made)
+    bool ri_looked = false;              // rdcomeback::BootLook: the marker was read (cold plain boot)
+    char ri_kind = 0;                    // 's' session, 'a' reattach, 'r' rescan, 0 = no record
+    std::uint8_t ri_pin = 0;
+    bool ri_canary = false, ri_host = false;
+    std::uint8_t sram_words = 0;         // of rdcomeback::kProbeWords
+    std::uint16_t bp_boots = 0;          // k2::session::boots()
+    bool bp_prev = false;                // the backup registers held the previous boot's record
     Move move;
     std::uint8_t note_n = 0;             // entries of `notes` in use (kinds 0 and 1 first, then the readbacks)
     std::array<Note, kMaxNotes> notes{};

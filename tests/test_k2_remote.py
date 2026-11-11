@@ -1917,6 +1917,15 @@ class BootInfo(unittest.TestCase):
         self.assertEqual((f["mode"], f["warm"], f["mark"], f["move"], f["readbacks"], f["notes"], f["pins_low"]),
                          ("plain", True, 0xB502, None, [], [], []))
         self.assertEqual(f["notes_not_shown"], 0)
+        self.assertNotIn("rd_marker", f)   # a line from before 1.0.0-521
+
+    def test_parse_the_rd_marker_sram_probe_and_session(self):
+        base = "K2B1 fw=dev g=0 p=1 t=9 vb=0 c1=0 c2=0 pl=0 m=plain k=0 pa=F rf=C000000 w=0 pin=0,0,0,0 mk=- ra=0:plain "
+        f = kr.parse_bootinfo_text(base + "ri=s2nn sr=3 bp=5:1 mv=- sw=- n=-")
+        self.assertEqual(f["rd_marker"], {"read": True, "record": "session", "pin": 2, "canary": False, "host": False})
+        self.assertEqual((f["sram_probe_words"], f["session"]), (3, {"boots": 5, "previous": True}))
+        self.assertEqual(kr.parse_bootinfo_text(base + "ri=0 sr=32 bp=1:0 mv=- sw=- n=-")["rd_marker"], {"read": True, "record": None})
+        self.assertEqual(kr.parse_bootinfo_text(base + "ri=- sr=32 bp=1:0 mv=- sw=- n=-")["rd_marker"], {"read": False})
 
     def test_not_a_k2b1_line_is_an_error(self):
         with self.assertRaises(ValueError):

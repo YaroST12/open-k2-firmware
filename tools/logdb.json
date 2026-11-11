@@ -560,6 +560,7 @@
   "563": "[RAPROBE] done n=%u flags=%u (1 aborted by VBUS, 2 restored) snapshot sw0=%02X sw1=%02X pc=%u vconn_pc=%u vbus_max=%u\n",
   "564": "[RAPROBE] #%u cc1=%u cc2=%u\n",
   "565": "[EMK] pull-down probe: refused reason=%u verdict=%s\n",
-  "566": "[EMK] pull-down probe: verdict=%s n=%u flags=%u\n"
+  "566": "[EMK] pull-down probe: verdict=%s n=%u flags=%u\n",
+  "567": "[RDI] boot look: record %s pin=%u canary=%d host=%d sram=%u/%u\n"
  }
 }

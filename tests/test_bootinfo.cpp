@@ -110,6 +110,26 @@ int main() {
         char c[kQrMax + 1];
         CHECK(field(std::string_view(c, format(q, c)), "ra") == "0:-");
     }
+    // The Rd intent marker as the boot read it, the SRAM probe and the backup-register session.
+    {
+        Snapshot q;
+        char c[kQrMax + 1];
+        std::string_view u(c, format(q, c));
+        CHECK(field(u, "ri") == "-");
+        CHECK(field(u, "sr") == "0");
+        CHECK(field(u, "bp") == "0:0");
+        q.ri_looked = true;
+        u = std::string_view(c, format(q, c));
+        CHECK(field(u, "ri") == "0");
+        q.ri_kind = 's'; q.ri_pin = 2; q.ri_canary = false; q.ri_host = false; q.sram_words = 7; q.bp_boots = 12; q.bp_prev = true;
+        u = std::string_view(c, format(q, c));
+        CHECK(field(u, "ri") == "s2nn");
+        CHECK(field(u, "sr") == "7");
+        CHECK(field(u, "bp") == "12:1");
+        q.ri_kind = 'a'; q.ri_canary = true; q.ri_host = true;
+        u = std::string_view(c, format(q, c));
+        CHECK(field(u, "ri") == "a2yy");
+    }
     // Vbus -1 in the move (no power monitor answer) stays readable.
     {
         Snapshot p = plus_boot();
