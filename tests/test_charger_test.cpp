@@ -70,6 +70,12 @@ struct Fake final : ct::Env {
     // pattern output-capped-below-advertised (Baseus FH22, 2026-11-08): a PD source accepts every request of its list (PS_RDY, the
     // contract is live) but the converter stops at this level (0 = no cap).
     int pd_max_mv = 0;
+    // The FH22 shape (2026-11-11): a Request at out_script_mv starts a scripted output (out_script: {ms since the Request, VBUS mV},
+    // piecewise linear, the last point holds) and the sink's PPS keep-alive: ka_period_ms after the Request (and after every
+    // PS_RDY) it re-requests the same level, so the sink is Requesting (not ready) for the next ka_windows entry (cycled) ms.
+    int out_script_mv = 0; std::vector<std::pair<uint32_t, int>> out_script; uint32_t out_t0 = 0; bool out_on = false;
+    uint32_t ka_period_ms = 0, ka_at = 0, ka_end = 0; std::vector<uint32_t> ka_windows; size_t ka_i = 0;
+    unsigned step_ms = 100;   // the poll period of tick()
     // Item G (PS_RDY timing quirks): the Accept -> PS_RDY time the sink status stamps (ps_rdy_delay_ms, only for a request at
     // ps_rdy_delay_mv when that is set), and a PS_RDY the sink took as inferred (ps_rdy_inferred_fake).
     uint32_t ps_rdy_delay_ms = 0; int ps_rdy_delay_mv = 0; bool ps_rdy_inferred_fake = false;
@@ -182,6 +188,7 @@ struct Fake final : ct::Env {
     pd::Err request_pd(pd::Choice c) override {
         if (!alive()) return pd::Err::Busy;
         ++pd_requests; choices.push_back(c); req_times.push_back(in.now);
+        out_on = false; ka_at = ka_end = 0;   // a new Request ends the scripted output and the keep-alive of the old one
         if (c.hunt) { hunt_times.push_back(in.now); hunt_authed.push_back(in.pd.xiaomi_authed);
                       hunt_apdo_ma.push_back(c.pos >= 1 && c.pos <= caps.num_pdos ? caps.pdos[c.pos - 1].max_ma : 0u); if (c.pos >= 1 && c.pos <= caps.num_pdos) trace_hunt_request(c); }
         if (c.pos == 0 || (c.pos >= 8 && !in.pd.epr_mode && epr_caps.valid)) {
@@ -264,6 +271,10 @@ struct Fake final : ct::Env {
             else if (pd_offset_mv) in.vbus_mv = int(c.mv) + pd_offset_mv;
         }
         if (pd_max_mv && int(c.mv) > pd_max_mv) in.vbus_mv = pd_max_mv;
+        if (out_script_mv && int(c.mv) == out_script_mv && !out_script.empty()) {
+            out_on = true; out_t0 = in.now; in.vbus_mv = out_script.front().second;
+            if (ka_period_ms) ka_at = in.now + ka_period_ms;
+        }
         return pd::Err::Ok;
     }
     fc::Fail request_fc(fc::Proto p, int mv, bool retarget, int ma) override {
@@ -295,7 +306,7 @@ struct Fake final : ct::Env {
     void release(bool pd) override {
         if (!alive()) return;
         ++releases; fc_releases += !pd;
-        collapse_t0 = 0; in.ibus_ma = 0;
+        collapse_t0 = 0; in.ibus_ma = 0; out_on = false; ka_at = ka_end = 0;
         if (!pd) { fc_released = true; fc_released_at = in.now; }
         if (!release_ok || latched) return;
         in.vbus_mv = 5000;
@@ -432,8 +443,8 @@ struct Fake final : ct::Env {
         caps.pdos[6] = pd::decode_pdo(0xc0000000 | (210u << 17) | (50u << 8) | 64);
     }
     void tick(ct::Runner& r, unsigned ms) {
-        for (unsigned n = 0; n < ms; n += 100) {
-            in.now += 100;
+        for (unsigned n = 0; n < ms; n += step_ms) {
+            in.now += step_ms;
             in.pd.xiaomi_svid = xiaomi_svid && in.now >= svid_back_at; in.pd.xiaomi_authed = in.pd.xiaomi_svid && auth_at && in.now >= auth_at;
             if (auth_caps_on && in.pd.xiaomi_authed && in.now >= auth_at + auth_caps_delay_ms) { auth_caps_on = false; caps = auth_caps; xm_reannounce = true; }
             xm.authed = in.pd.xiaomi_authed; xm.authed_at = xm.authed ? auth_at : 0; xm.reannounced = xm.authed && xm_reannounce;
@@ -523,6 +534,24 @@ struct Fake final : ct::Env {
                 else in.vbus_mv = walk_settle_from_mv + (walk_settle_to_mv - walk_settle_from_mv) * int(t) / int(walk_settle_ms);
             }
             if (walk_ripple_mv && in.vbus_mv > 1000) in.vbus_mv += ((in.now / 100) % 2) ? walk_ripple_mv : -walk_ripple_mv;
+            if (out_on) {   // the scripted output of out_script_mv's Request
+                const uint32_t t = in.now - out_t0;
+                int v = out_script.back().second;
+                for (size_t k = 1; k < out_script.size(); ++k)
+                    if (t < out_script[k].first) {
+                        const auto a = out_script[k - 1], b = out_script[k];
+                        v = a.second + int(int64_t(b.second - a.second) * int(t - a.first) / int(b.first - a.first));
+                        break;
+                    }
+                in.vbus_mv = v;
+            }
+            if (ka_period_ms && ka_at && in.now >= ka_at && in.pd.state == pd::SinkState::Ready) {   // the sink's keep-alive Request
+                ka_at = 0; in.pd.state = pd::SinkState::Requesting; in.pd.result = pd::SinkResult::None;
+                ka_end = in.now + ka_windows[ka_i++ % ka_windows.size()];
+            }
+            if (ka_end && in.now >= ka_end) {   // PS_RDY
+                ka_end = 0; in.pd.state = pd::SinkState::Ready; in.pd.result = pd::SinkResult::Ok; ka_at = in.now + ka_period_ms;
+            }
             // noise_mv: the SAMPLE swings +-noise_mv around the level (burst-mode ripple); the level itself is untouched. noise_flip
             // flips the swing's phase with every PD request, so two levels read by one sample each sit on opposite sides.
             const int before = in.vbus_mv;
@@ -2087,6 +2116,48 @@ static void test_a_capped_row_does_not_wait_the_full_timeout() {
     CHECK_EQ(capped_at != 0, true);
     CHECK_EQ(capped_at - asked_at < 8000u, true);   // not the 12 s timeout
     CHECK_EQ(capped_at - asked_at >= ct::kCappedPlateauMs, true);   // but only after the plateau was proven
+}
+// Hardware 2026-11-11 (Baseus FH22, PPS 21 V row on a source that stops at 19.42 V): the sink's PPS keep-alive re-requests the same
+// level every 5 s and `ready` drops for 20-140 ms between its Request and PS_RDY. That reset the plateau just before it reached
+// kCappedPlateauMs, every time, so the row waited out the 12 s timeout. The keep-alive of the SAME level keeps the plateau.
+struct KaRun { uint32_t asked_at = 0, capped_at = 0; ct::Verdict verdict = ct::Verdict::Pending; ct::Reason reason = ct::Reason::None; };
+static KaRun run_21v_row(Fake& f, std::vector<std::pair<uint32_t, int>> script, std::vector<uint32_t> windows, uint32_t until_ms) {
+    f.out_script_mv = 21000; f.out_script = std::move(script); f.ka_period_ms = 5000; f.ka_windows = std::move(windows); f.step_ms = 20;
+    ct::Runner r(f);
+    r.start(f.caps, {.selected = ct::bit(A::Pps)}, f.in, true);
+    KaRun k; size_t seen = 0;
+    for (unsigned n = 0; n < 2000000 && r.state() != ct::State::Done; n += f.step_ms) {
+        f.tick(r, f.step_ms);
+        for (; seen < f.choices.size(); ++seen) if (!k.asked_at && f.choices[seen].mv == 21000) k.asked_at = f.in.now;
+        if (!k.asked_at) continue;
+        for (const auto& s : r.steps())
+            if (s.mv == 21000 && !s.hunt && s.verdict >= ct::Verdict::Pass && !k.capped_at) { k.capped_at = f.in.now; k.verdict = s.verdict; k.reason = s.reason; }
+        if (k.capped_at || f.in.now - k.asked_at > until_ms) break;
+    }
+    return k;
+}
+static void test_keep_alive_windows_do_not_restart_the_capped_plateau() {
+    Fake f;
+    const auto k = run_21v_row(f, {{0, 5000}, {2500, 19420}}, {20, 140}, 20000);
+    CHECK_EQ(int(k.reason), int(ct::Reason::Capped));
+    CHECK_EQ(k.capped_at != 0, true);
+    CHECK_EQ(k.capped_at - k.asked_at >= ct::kCappedPlateauMs, true);   // only after the plateau was proven
+    CHECK_EQ(k.capped_at - k.asked_at < 9500u, true);                   // ~2.5 s ramp + 5 s plateau, not the 12 s timeout
+}
+// A slow ramp that pauses on a ledge (3 s, under kCappedPlateauMs) and then rises still passes, keep-alive windows and all.
+static void test_a_ledge_shorter_than_the_capped_plateau_still_passes_through_keep_alive() {
+    Fake f;
+    const auto k = run_21v_row(f, {{0, 5000}, {2000, 15000}, {5000, 15000}, {6000, 21000}}, {20, 140}, 20000);
+    CHECK_EQ(int(k.verdict), int(ct::Verdict::Pass));
+    CHECK_EQ(int(k.reason), int(ct::Reason::None));
+}
+// A keep-alive Request that stays unanswered for longer than the bound is not a renewal: the plateau restarts at its PS_RDY, so the
+// verdict comes from the row timeout as it did.
+static void test_a_long_unanswered_keep_alive_restarts_the_plateau() {
+    Fake f;
+    const auto k = run_21v_row(f, {{0, 5000}, {2500, 19420}}, {2500}, 20000);
+    CHECK_EQ(int(k.reason), int(ct::Reason::Capped));
+    CHECK_EQ(k.capped_at - k.asked_at >= 11500u, true);
 }
 static void test_an_uncapped_pps_run_has_no_capped_step() {
     Fake f; ct::Runner r(f);
@@ -6669,7 +6740,7 @@ int main() {
     test_pps_step_walk_waits_for_the_base_to_settle();
     test_walk_steady_window();
     test_pps_step_walk_steady_wait_is_bounded_by_the_timeout();
-    test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_a_capped_row_does_not_wait_the_full_timeout(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();
+    test_walk_steady_mean(); test_pps_step_walk_records_the_mean_of_a_noisy_level(); test_a_capped_row_does_not_wait_the_full_timeout(); test_keep_alive_windows_do_not_restart_the_capped_plateau(); test_a_ledge_shorter_than_the_capped_plateau_still_passes_through_keep_alive(); test_a_long_unanswered_keep_alive_restarts_the_plateau(); test_pps_deep_sweep_records_the_mean_of_a_noisy_point();
     test_pps_step_walk_passes_a_drifting_source(); test_pps_step_walk_passes_a_slow_but_correct_source();
     test_ps_rdy_late_is_noted_and_never_judged(); test_ps_rdy_inferred_is_noted_and_never_judged();
     test_ps_rdy_out_of_band_is_noted_and_never_judged(); test_ps_rdy_timing_is_noted_per_walk_level();

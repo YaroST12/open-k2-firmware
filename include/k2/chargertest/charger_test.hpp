@@ -486,6 +486,9 @@ inline constexpr uint32_t kPlateauMs = 3000;
 // it waited out the 12 s row timeout for the same verdict. Longer than kPlateauMs so a source that pauses on a ledge and then goes on
 // rising (a slow ramp) still gets its time; the timeout path keeps the kPlateauMs rule.
 inline constexpr uint32_t kCappedPlateauMs = 5000;
+// The sink's PPS keep-alive (kPpsKeepAliveMs) re-requests the same level and `ready` drops for the 20-140 ms between its Request and
+// PS_RDY (FH22, 2026-11-11): that window does not restart the plateau. A Request unanswered for longer than this does.
+inline constexpr uint32_t kPlateauRenewMs = 1000;
 inline constexpr int kCappedFloorMv = 5500;
 // A QC Class B 20 V row (15 s QC2 / 12 s QC3 timeout) whose VBUS has stayed inside the 12 V band for kClassAStuckMs since the row
 // started is a Class A top: nothing is on its way to 20 V. The row ends as the timeout would end it, without the rest of the wait.
@@ -715,9 +718,10 @@ private:
     VbusMean band_;
     bool capped(const Step&, const Input&, bool ready) const;   // a programmable row's timeout is a ceiling (see kPlateauMs)
     bool floored(const Step&, const Input&, bool ready) const;  // ... or a floor: a low row whose output sits steady above the band ceiling
-    void track_plateau(const Input&, bool ready, uint32_t gap);
+    void track_plateau(const Input&, bool ready, bool renewing, uint32_t gap);
     int from_mv_ = 0;          // VBUS when the Requesting row's level was asked (0 = unknown): a programmable row going up gets the tight band
     uint16_t plat_mv_ = 0;     // the level a Requesting programmable row's samples have stayed within 1 % of (0 = none yet)
+    uint16_t plat_nr_ms_ = 0;  // how long the sink's keep-alive Request has been unanswered inside that plateau (kPlateauRenewMs)
     uint32_t plat_ms_ = 0;     // since when
     // The lowest / highest VBUS a Requesting QC Class B 20 V row has seen (kClassAStuck*); reset by request().
     uint16_t peak_lo_mv_ = 0xFFFF, peak_hi_mv_ = 0;

@@ -1298,9 +1298,21 @@ bool Runner::band_ok(const Step& s, const Input& in, uint32_t gap) {
 }
 // pattern output-capped-below-advertised: follow the output of a programmable row whose contract is live (see kPlateauMs).
 // The steady level is tracked whatever it is: capped() reads it only above kCappedFloorMv, floored() only for a low row.
-void Runner::track_plateau(const Input& in, bool ready, uint32_t gap) {
-    if (!ready || gap > 250 || in.vbus_mv < 0) { plat_mv_ = 0; return; }
-    if (!plat_mv_ || std::abs(in.vbus_mv - int(plat_mv_)) > std::max(100, int(plat_mv_) / 100)) {
+// renewing: the sink re-requests the row's own level (the PPS keep-alive, every kPpsKeepAliveMs): `ready` drops between its Request
+// and PS_RDY, and that window keeps the plateau while VBUS stays on it, for at most kPlateauRenewMs (a Request that stays unanswered
+// longer restarts it, and ends the row through the paths of its own). A gap, a VBUS excursion or a level change still restart it.
+void Runner::track_plateau(const Input& in, bool ready, bool renewing, uint32_t gap) {
+    const int tol = std::max(100, int(plat_mv_) / 100);
+    if (gap > 250 || in.vbus_mv < 0) { plat_mv_ = 0; plat_nr_ms_ = 0; return; }
+    if (!ready) {
+        if (renewing && plat_mv_ && std::abs(in.vbus_mv - int(plat_mv_)) <= tol && plat_nr_ms_ + gap <= kPlateauRenewMs) {
+            plat_nr_ms_ = static_cast<uint16_t>(plat_nr_ms_ + gap);
+            return;
+        }
+        plat_mv_ = 0; plat_nr_ms_ = 0; return;
+    }
+    plat_nr_ms_ = 0;
+    if (!plat_mv_ || std::abs(in.vbus_mv - int(plat_mv_)) > tol) {
         plat_mv_ = static_cast<uint16_t>(std::min(in.vbus_mv, 65535)); plat_ms_ = in.now;
     }
 }
@@ -1363,7 +1375,7 @@ void Runner::request(Input in) {
     }
     if (is_sweep(s)) sweep_begin(s, in);   // the sweep starts at the APDO's first point
     if (s.mv > 5000) env_.phase(Phase::Request, index_);   // journal marker BEFORE anything above 5 V
-    phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0; from_mv_ = std::max(in.vbus_mv, 0);
+    phase_ms_ = in.now; stable_ = false; resets_ = link_resets(in.pd); band_.clear(); plat_mv_ = 0; plat_nr_ms_ = 0; from_mv_ = std::max(in.vbus_mv, 0);
     peak_lo_mv_ = 0xFFFF; peak_hi_mv_ = 0;
     row_accepted_ = row_ps_rdy_ = false; row_max_ma_ = 0;   // the needs-load latch is per Request (a retry starts it again)
     row_timing_ = 0; row_ps_rdy_ms_ = 0;
@@ -2588,7 +2600,8 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
                 state_ = State::Holding; phase_ms_ = stable_ms_;
             }
         } else stable_ = false;
-        track_plateau(in, ready, gap);
+        track_plateau(in, ready, s.group == Group::Pd && in.pd.held && in.pd.pos == s.pos && in.pd.mv == eff.mv &&
+                      (in.pd.state == pd::SinkState::Requesting || in.pd.state == pd::SinkState::Transition), gap);
         if (is_class_b_peak(s) && in.vbus_mv >= 0) {
             peak_lo_mv_ = std::min<uint16_t>(peak_lo_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
             peak_hi_mv_ = std::max<uint16_t>(peak_hi_mv_, static_cast<uint16_t>(std::min(in.vbus_mv, 65535)));
