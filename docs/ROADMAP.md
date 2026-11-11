@@ -117,11 +117,19 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   raises VBUS to 12 V unrequested (reproduced with `dm 0` for 200 ms: 5.1 → 11.75 V; after the run it sat at 12.13 V
   ~40 s). Fix on k2/idle-dpdm. Possibly the cause of the IQ4 FCP hold above.
 - **The charger test cannot start on a USB-A port that cuts its output with no load** (2026-11-11, CUKTECH 120W USB-A,
-  HID-powered K2, 1.0.0-524): preflight refuses "load attached" at 0 mA. Every attach starts "possibly inline"
-  (`pd_link.cpp`), which clears only after `kInlineQuietMs` (10 s) attached and quiet. The port cuts VBUS every ~6.5 s
-  (`usb-a-no-load-auto-off`), and each cut is a new attach, so the flag never clears. On 2026-11-07 (before the default)
-  the same setup ran. Fix direction: a source with no Rd beyond the K2 and no PD traffic, at 0 mA through the cut, is not
-  a sink; or count the cut as the same attach.
+  HID-powered K2, 1.0.0-524): preflight refuses "load attached" at 0 mA. The port cuts VBUS every ~6.5 s
+  (`usb-a-no-load-auto-off`). An attach does not start inline on this base; once the latch was set, each re-attach
+  after a cut restarted the 10 s `kInlineQuietMs` window (the port gives ~6 s), and the collapsing VBUS-fed Rp sweeps
+  the CC level through the sink band, which read as a far Rd. Fixed in dee4041c, hardware check pending: a cut (VBUS
+  below 4.75 V within 3 s of being up) is neither proof nor evidence. The quiet window pauses through a cut or a short
+  detach instead of restarting, a far Rd counts only while VBUS is up, and clearing waits 2 s after any pause. Current
+  and sink Requests still latch everywhere (zero-TX inline rule kept). The refusal now logs `latched by <cause>`
+  (9401cb5d). Same port, separate path: `ct_start.py` refused "VBUS dropped to 4.42 V after the PD rescan" on one
+  sample landing in a cut; it now waits for VBUS (76fbc6b5). START itself already tolerated the sag.
+  Validate: K2 on PC/HID power, CUKTECH USB-A port, C-to-A cable, nothing behind the K2: `k2_remote state` shows
+  inline false within ~20 s and stays false through 5 or more cuts; `tools/ct_start.py --units qc2,qc3` starts (no
+  "load attached", no "dropped to"). If refused, quote the `latched by` line. Then a phone behind the K2 on the same
+  port: still inline (`latched by load`).
 
 - **Fast-charge detection says `USB DATA` under a 20 V contract** (2026-11-11, same captures): with the offers missed
   the K2 falls back to the Type-C level. Probably a knock-on of the late attach. Not seen after that fix (10 attaches on
