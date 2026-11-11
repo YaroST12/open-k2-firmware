@@ -25,7 +25,11 @@ A clean charger scores 0.00. Source of truth: `include/k2/pdstress/` (engine, pl
 4. EPR only with the cable proof (P9, opt-in), never by default. 48 V is skipped on a 36 V K2.
 5. Charger quirks found here are written as behaviour patterns into `docs/CHARGER_QUIRKS.md`, never as a VID:PID table; behaviour is detected by
    signature.
-6. `stop` is never refused: any host can end a run at any time and the K2 releases to its normal state.
+6. `stop` is never refused: any host can end a run at any time and the K2 releases to its normal state. The one-call `stop` (HID `Cmd::Stop`
+   0x4B, the shell `stop`, `k2_remote stop`) ends a PD Stress run exactly like a charger test (`Ui::cancel_runs`) and reports it in the "test" bit
+   of its mask; a run that waits to resume after a reboot is dropped. The dead-man lease treats a run like a charger test as well: while one runs the
+   lease ends quietly and does not stop it (`Ui::run_busy`), so a host that goes away leaves the run to finish on its own caps (900 s, 1200 transitions).
+   The session block names the owner with `BusyWhy::PdStress` (10, appended after `twin-run` 9; `pd-stress` in `k2_remote` and the web page).
 
 ## Sequences
 

@@ -261,6 +261,12 @@ twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
 
 void Ui::cancel_twin() { twin_hw::live_cancel(); }
 
+void Ui::cancel_runs() {
+    cancel_charger_test();
+    cancel_twin();
+    pdstress_.cancel();
+}
+
 // The hold that START's own PDO 1 request puts on the sink (Rd presented for a run) is not a foreign tool, and neither is the
 // self-hold of a self-powered or bus-powered K2 (its own plain 5 V contract): that hold is the K2's supply, so releasing it
 // would cut the K2's power and it never blocks. Neither is a finished re-read's own leftover PDO 1 contract inside its

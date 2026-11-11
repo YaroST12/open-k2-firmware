@@ -627,7 +627,7 @@ void Remote::lease_tick() {
     const bool safe_5v = sk.state == pd::SinkState::Idle && !sk.held &&
                          fctrig::status().state == fc::State::Idle && !fctrig::scan_running() &&
                          vbus && *vbus >= 4500 && *vbus <= 5500;
-    switch (lease_.tick(now, usb::configured(), safe_5v, ui_.charger_test_busy())) {
+    switch (lease_.tick(now, usb::configured(), safe_5v, ui_.run_busy())) {   // a charger test or a PD Stress run
     case lease::Event::None: break;
     case lease::Event::Expired: K2LOG("[RMT] lease expired: stop\n"); stop(); break;
     case lease::Event::HostGone: K2LOG("[RMT] host gone: stop\n"); stop(); break;
@@ -638,11 +638,11 @@ void Remote::lease_tick() {
 remote::StopInfo Remote::stop() {
     struct RealEnv {
         Remote &r;
-        bool test_active() { return r.ui_.charger_test_busy() || r.ui_.twin_live_busy(); }   // a twin live proof is a test here
+        bool test_active() { return r.ui_.run_busy() || r.ui_.twin_live_busy(); }   // a twin live proof and a PD Stress run are tests here
         bool fc_active() { return fctrig::status().state != fc::State::Idle || fctrig::scan_running(); }
         bool pd_held() { return fusb302::sink_status().held; }
         bool spoof_active() { return emk_spoof::active(); }
-        void cancel_test() { r.ui_.cancel_charger_test(); r.ui_.cancel_twin(); }
+        void cancel_test() { r.ui_.cancel_runs(); }
         void stop_fc() { r.ui_.stop_fc(systick::millis()); }
         void release_pd() { r.ui_.trigger_release(systick::millis()); }
         void disarm_spoof() { emk_spoof::disarm(); r.spoof_seq_ = 0; }

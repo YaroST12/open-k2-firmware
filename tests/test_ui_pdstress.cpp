@@ -148,6 +148,40 @@ static void test_cancel_releases_and_ends_the_run() {
     CHECK_EQ(ui.pd_stress().footer() == nullptr, true);
 }
 
+// ---- stop and the dead-man lease ---------------------------------------------------------------------------------------------------
+
+// The remote's `stop` (and the lease expiry, and the shell `stop`) end a run through Ui::cancel_runs, exactly as they end a charger
+// test; the lease is told a run owns the ports through Ui::run_busy, again like a charger test. The session block names the owner
+// with the next free BusyWhy value, appended after twin-run (9): the numbers are on the wire.
+static void test_stop_ends_a_run_like_a_charger_test() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    CHECK_EQ(ui.run_busy(), false);
+    CHECK_EQ(int(ui.pd_stress().start(ladder_once(), g_now)), int(ps::StartResult::Ok));
+    run(ui, 3000);
+    CHECK_EQ(ui.run_busy(), true);
+    CHECK_EQ(int(ui.busy_why()), 10);
+    CHECK_EQ(int(ui.busy_why()), int(BusyWhy::PdStress));
+    CHECK_EQ(int(BusyWhy::TwinRun), 9);   // appended, never renumbered
+    CHECK_EQ(int(ui.session().busy), 10);
+    CHECK_STR(ui.busy_reason(), "PD Stress: stop it");
+    ui.cancel_runs();
+    run(ui, 6000);
+    CHECK_EQ(ui.pd_stress().running(), false);
+    CHECK_EQ(int(ui.pd_stress().engine()->stop()), int(ps::Stop::Cancelled));
+    CHECK_EQ(g_stub.releases >= 1, true);
+    CHECK_EQ(ui.run_busy(), false);
+    CHECK_EQ(int(ui.busy_why()), int(BusyWhy::None));
+}
+
+static void test_stop_with_no_run_is_a_no_op() {
+    fixture();
+    std::unique_ptr<Ui> h; Ui& ui = *boot(h);
+    ui.cancel_runs();
+    CHECK_EQ(ui.run_busy(), false);
+    CHECK_EQ(ui.pd_stress().has_result(), false);
+}
+
 // ---- the journal --------------------------------------------------------------------------------------------------------------------
 
 static ps::Options two_sequences() {
@@ -326,6 +360,8 @@ int main() {
     test_a_run_owns_the_ports_and_says_so_in_the_footer();
     test_a_run_ends_by_itself_and_leaves_a_result();
     test_cancel_releases_and_ends_the_run();
+    test_stop_ends_a_run_like_a_charger_test();
+    test_stop_with_no_run_is_a_no_op();
     test_a_host_powered_k2_writes_no_journal();
     test_a_self_supplied_k2_writes_the_journal_at_a_boundary_and_clears_it_at_the_end();
     test_a_failing_store_turns_the_journal_off_and_the_run_goes_on();

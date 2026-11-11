@@ -248,6 +248,11 @@ public:
     // Why PD Stress may not start now: another tool owns the ports. The holds, the contract and the sink state a run
     // causes itself are not counted (busy_reason() would refuse the run for its own doing).
     const char *foreign_busy() const;
+    // The runs that own the ports until they end, which the dead-man lease therefore leaves alone: a charger test or a PD Stress run.
+    bool run_busy() const { return charger_test_busy() || pdstress_.active(); }
+    // The remote `stop` (the lease expiry and the shell `stop` land there too): ends a charger test, a twin proof and a PD Stress run.
+    // The run releases the source to 5 V itself on the next poll; a PD Stress run waiting to resume after a reboot is dropped.
+    void cancel_runs();
     bool spoof_busy() const { return busy_reason() != nullptr; }
     const trig::Release &fc_release() const { return fc_release_; }
     void stop_fc(uint32_t now_ms);
