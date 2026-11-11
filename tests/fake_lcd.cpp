@@ -66,31 +66,35 @@ void ensure_panel() {
 // ---- paint timing (g_lcd_timing set): the cadence of src/drivers/lcd.cpp, on the world's virtual clock ----
 LcdIdleHook g_idle_hook;
 struct TimedDma { bool busy = false; double start_us = 0; std::uint32_t total = 0; } g_tdma;
-std::uint32_t g_stream_px;   // pixels since the last service round (lcd.cpp g_stream_px)
+// lcd.cpp g_pacer, on the virtual clock in whole microseconds (wrap-safe like the device's cycle counter).
+k2::lcd::ServicePacer g_pacer{k2::lcd::kServiceUs};
+double g_round_end_us;   // when the last round ended, for the DMA wait's next stop
 
+std::uint32_t t_clock() { return static_cast<std::uint32_t>(static_cast<std::uint64_t>(g_lcd_timing->now_us())); }
 void t_spend(double us) { if (us > 0) g_lcd_timing->spend_us(us); }
-void t_serve() { if (g_idle_hook) g_idle_hook(); }   // usb::service() is a no-op on the host
-void t_stream_service(std::uint32_t n) {
-    g_stream_px += n;
-    if (g_stream_px >= g_lcd_timing->service_px) { g_stream_px = 0; t_serve(); }
+void t_round() {   // lcd.cpp run_round(): usb::service() is a no-op on the host
+    if (g_idle_hook) g_idle_hook();
+    g_round_end_us = g_lcd_timing->now_us();
+    g_pacer.finish(t_clock());
 }
-// lcd.cpp dma_wait(): spin until the transfer has left, serving every dma_service_px pixels moved.
+void t_stream_service() {   // lcd.cpp stream_service()
+    if (g_pacer.start(t_clock())) t_round();
+}
+// lcd.cpp dma_wait(): spin until the transfer has left, serving on the same cadence while it spins.
 void t_dma_wait() {
     if (!g_tdma.busy) return;
     const LcdTiming &t = *g_lcd_timing;
-    const std::uint32_t total = g_tdma.total;
-    std::uint32_t served = 0;
+    const double end = g_tdma.start_us + g_tdma.total * t.px_us;
     for (;;) {
         const double now = t.now_us();
-        const double moved = (now - g_tdma.start_us) / t.px_us;
-        const std::uint32_t done = moved >= total ? total : static_cast<std::uint32_t>(moved);
-        if (done >= total) break;
-        if (done - served >= t.dma_service_px) { served = done; g_stream_px = 0; t_serve(); continue; }
-        const double target = g_tdma.start_us + std::min<double>(total, served + t.dma_service_px) * t.px_us;
-        t_spend(std::max(target - now, 0.01));
+        if (now >= end) break;
+        if (g_pacer.start(t_clock())) { t_round(); continue; }
+        // Spin to the transfer's end or the next due round (+1 us: the pacer counts whole microseconds), whichever is first.
+        const double next = g_round_end_us + k2::lcd::kServiceUs + 1.0;
+        t_spend(std::max(std::min(end, next) - now, 0.01));
     }
     g_tdma.busy = false;
-    t_stream_service(total - served);
+    t_stream_service();
 }
 void t_dma_start(std::uint32_t n) { g_tdma = {true, g_lcd_timing->now_us(), n}; }
 void t_fill(std::uint32_t n) {   // lcd.cpp stream_fill() on the panel
@@ -101,7 +105,7 @@ void t_fill(std::uint32_t n) {   // lcd.cpp stream_fill() on the panel
         const std::uint32_t k = n < 256 ? n : 256;
         t_spend(k * g_lcd_timing->px_us);
         n -= k;
-        t_stream_service(k);
+        t_stream_service();
     }
 }
 void t_pixels(std::uint32_t n, bool erase) {   // lcd.cpp stream_pixels() on the panel
@@ -111,7 +115,7 @@ void t_pixels(std::uint32_t n, bool erase) {   // lcd.cpp stream_pixels() on the
     t_dma_wait();
     if (k2::lcd::use_dma(n)) { t_dma_start(n); t_dma_wait(); return; }
     t_spend(n * g_lcd_timing->px_us);
-    t_stream_service(n);
+    t_stream_service();
 }
 }  // namespace
 
@@ -131,7 +135,7 @@ bool sink_band(std::uint16_t& first, std::uint16_t& last) {
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     g_lcd_windows++;
     if (g_sink) { g_sink_work.begins++; g_sink->begin(x0, y0, x1, y1); return; }
-    if (g_lcd_timing) { t_dma_wait(); t_spend(g_lcd_timing->call_us + g_lcd_timing->window_us); g_stream_px = 0; }
+    if (g_lcd_timing) { t_dma_wait(); t_spend(g_lcd_timing->call_us + g_lcd_timing->window_us); }
     ensure_panel();
     g_panel_sink.window(x0, y0, x1, y1);
     g_wx0 = g_cx = x0; g_wy0 = g_cy = y0; g_wx1 = x1; g_wy1 = y1;
@@ -194,7 +198,7 @@ void set_rotation(std::uint8_t) {}
 void set_idle_hook(void (*hook)()) { g_idle_hook = hook; }
 void pump() {
     g_lcd_pumps++;
-    if (g_lcd_timing) t_serve();
+    if (g_lcd_timing && g_pacer.force()) t_round();
     if (g_pump_snap_armed) {
         g_pump_snap_armed = false;
         std::copy(g_panel, g_panel + LCD_WIDTH * LCD_HEIGHT, g_pump_panel);

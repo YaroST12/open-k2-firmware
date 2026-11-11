@@ -143,7 +143,7 @@ public:
     // draw, so a source's tACKReceive window does not depend on how long the main loop spends elsewhere. No-op outside UFCS.
     void service_ufcs();
     // The QC2 / QC3 / QC3+ HVDCP handshake steps only (discharge, float, bias, the wait for the charger's drop), from the same LCD
-    // idle hook: a draw delays a step by at most one hook round (about 2.2 ms of wire time, 0.5 ms in a DMA wait) instead of by the
+    // idle hook: a draw delays a step by at most one hook round (the hook runs once 1 ms has passed, lcd::kServiceUs) instead of by the
     // whole draw. Never logs, blocks or aborts; a step that went wrong is left to poll(), which aborts. A no-op inside poll() / inside
     // itself (guarded), for FCP (its drop starts the register script, which only poll() runs) and outside the handshake.
     void service_hs();

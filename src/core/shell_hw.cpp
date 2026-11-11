@@ -671,14 +671,12 @@ const char* lab_lcd(const lab::Cmd& c) {
         g_ui->repaint(systick::millis());
     }
     const unsigned div = lcd::spi_div();
-    const lcd::SpiDiv sd = div == 4 ? lcd::SpiDiv::Div4 : lcd::SpiDiv::Div8;
     const lcd::DmaInfo d = lcd::dma_info();
     const paint::Reading t = paint::meter.total();
     Line l(c, lab::name(c.id));
     l.u("div", div);
     l.u("mhz", lcd::kApb1Hz / 1'000'000u / div);
-    l.u("service_px", lcd::service_pixels(sd));
-    l.u("dma_service_px", lcd::dma_service_px(sd));
+    l.u("service_us", lcd::kServiceUs);
     l.s("dma", !d.enabled ? "disabled" : d.ok ? "ok" : "stalled");
     l.u("transfers", d.transfers);
     l.u("stalls", d.stalls);

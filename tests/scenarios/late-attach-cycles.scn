@@ -668,18 +668,18 @@ frame 501558.492 2 e0b007e429783b rec SOP:Not_Supported
 frame 501560.445 2 e041068ec9d841 rec SOP:GoodCRC
 # episode <name> <t0> <t1> line <n> rise <t>; expect <episode> <checks> (edit by hand)
 episode rise166.8 166016.3 169783.6 line 2 rise 166816.3  # first recorded frame Source_Capabilities
-expect rise166.8 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise166.8 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1
 episode rise420.8 419975.6 423734.7 line 2 rise 420775.6  # first recorded frame PS_RDY template_offset 253954.2
-expect rise420.8 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise420.8 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1
 episode rise424.7 423914.6 427672.9 line 2 rise 424714.6  # first recorded frame Source_Capabilities
-expect rise424.7 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise424.7 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1
 episode rise431.5 430709.5 434467.1 line 2 rise 431509.5  # first recorded frame Source_Capabilities
-expect rise431.5 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise431.5 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1
 episode rise435.4 434620.0 438382.6 line 2 rise 435420.0  # first recorded frame Source_Capabilities
-expect rise435.4 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise435.4 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1
 episode rise490.8 489963.7 493711.0 line 2 rise 490763.7  # first recorded frame Source_Capabilities
-expect rise490.8 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise490.8 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1
 episode rise495.8 495006.2 498754.1 line 2 rise 495806.2  # first recorded frame Source_Capabilities
-expect rise495.8 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise495.8 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1
 episode rise500.6 499841.1 503645.9 line 2 rise 500641.1  # first recorded frame Source_Capabilities
-expect rise500.6 first_sop=Source_Capabilities caps>=1 verdict=present
+expect rise500.6 first_sop=Source_Capabilities caps>=1 verdict=present verdict_caps>=1

@@ -31,16 +31,13 @@ enum class Cmd : std::uint8_t {
 constexpr std::uint8_t kMadctl[4] = {0x00, 0x60, 0xC0, 0xA0};
 constexpr std::uint16_t kRamOffset = 80;  // 240x240 window inside the 240x320 controller RAM
 // SPI3 clock divider off APB1 (120 MHz): DIV8 (15 MHz) is the boot value and ships; DIV4 (30 MHz) is a lab switch
-// (set_spi_div, not persisted). Both service intervals below are wire-time budgets, so they follow the divider
-// (lcd_timing.hpp: service_pixels = ~2.2 ms of pixels pushed by hand, dma_service_px = ~0.5 ms during a DMA wait).
+// (set_spi_div, not persisted). The service cadence during a paint is elapsed time (lcd_timing.hpp kServiceUs), so it
+// does not depend on the divider.
 constexpr SpiDiv kBootSpiDiv = SpiDiv::Div8;
 constexpr std::uint16_t ctrl1_for(SpiDiv div) { return (Spi::CTRL1_LCD & ~Spi::CTRL1_BR_MASK) | br_field(div); }
 SpiDiv g_div = kBootSpiDiv;
 std::uint16_t g_ctrl1 = ctrl1_for(kBootSpiDiv);
-std::uint32_t g_service_px = service_pixels(kBootSpiDiv);
-std::uint32_t g_dma_service_px = dma_service_px(kBootSpiDiv);
 bool g_stream_open;   // a pixel stream owns CS: the divider must not change
-static_assert(service_pixels(SpiDiv::Div8) == 2048 && dma_service_px(SpiDiv::Div8) == 468, "boot intervals unchanged");
 static_assert(br_field(SpiDiv::Div2) == Spi::CTRL1_BR_DIV2 && br_field(SpiDiv::Div4) == Spi::CTRL1_BR_DIV4 &&
               br_field(SpiDiv::Div8) == Spi::CTRL1_BR_DIV8, "divider table matches the register bits");
 static_assert(ctrl1_for(SpiDiv::Div2) == 0xC347, "CTRL1 /2 encoding");
@@ -76,7 +73,6 @@ constexpr unsigned kDmaCh = 1;                              // channel 2 (index 
 constexpr std::uint32_t kDmaClearCh = 0xFu << (4 * kDmaCh);  // GIF/TCIF/HTIF/TEIF of that channel
 
 std::uint16_t g_x_off, g_y_off;
-std::uint32_t g_stream_px;
 const Sink* g_sink;  // non-null while a screenshot is being rendered
 
 // Command path: the data register must be written as a byte or the SPI would send a 16-bit
@@ -174,13 +170,21 @@ void set_window(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint1
 
 void (*g_idle_hook)() = nullptr;  // set_idle_hook(): time-critical work during long draws
 
-void stream_service(std::uint32_t count) {
-    g_stream_px += count;
-    if (g_stream_px >= g_service_px) {
-        g_stream_px = 0;
-        usb::service();
-        if (g_idle_hook) g_idle_hook();
-    }
+// The service cadence (lcd_timing.hpp kServiceUs, docs/ARCH_REWORK.md E1) on the core-cycle clock. systick::ticks() is
+// SysTick VAL plus the millisecond count, so it is correct with IRQs enabled (the pending bit covers a wrap not yet counted).
+constexpr std::uint32_t kServiceTicks = kServiceUs * (systick::kSysclkHz / 1'000'000u);
+ServicePacer g_pacer{kServiceTicks};
+
+void run_round() {
+    usb::service();
+    if (g_idle_hook) g_idle_hook();
+    g_pacer.finish(systick::ticks());
+}
+
+// One usb::service() + idle-hook round when kServiceUs has passed since the last one ended. Never nested: a stream call
+// reached from inside the round (the hook, usb::service) finds the round open and returns.
+void stream_service() {
+    if (g_pacer.start(systick::ticks())) run_round();
 }
 
 void push_pixel(std::uint16_t c) { spi_write16(c); }
@@ -197,11 +201,6 @@ bool g_dma_busy;
 bool g_dma_ok = kLcdDma;          // cleared for good by a stalled transfer
 bool g_dma_proven;                // first completed transfer logged
 std::uint32_t g_dma_done, g_dma_stalls;   // completed / abandoned transfers since boot (dma_info)
-
-void serve() {
-    usb::service();
-    if (g_idle_hook) g_idle_hook();
-}
 
 void dma_start(const std::uint16_t* src, std::uint32_t n) {
     DmaRegs& d = dma2();
@@ -235,17 +234,13 @@ void dma_wait() {
     if (!g_dma_busy) return;
     DmaChannel& ch = dma2().ch[kDmaCh];
     const std::uint32_t total = g_dma_n;
-    std::uint32_t left = ch.DTCNT, last = left, served = 0;
+    std::uint32_t left = ch.DTCNT, last = left;
     std::uint32_t moved_ms = systick::millis();
     bool stalled = false;
     while (left) {
         if (left != last) { last = left; moved_ms = systick::millis(); }
         else if (systick::millis() - moved_ms >= kDmaStallMs) { stalled = true; break; }
-        if (total - left - served >= g_dma_service_px) {
-            served = total - left;
-            g_stream_px = 0;
-            serve();
-        }
+        stream_service();   // the CPU only waits here: serve on the same elapsed-time cadence
         left = ch.DTCNT;
     }
     g_dma_busy = false;
@@ -261,7 +256,7 @@ void dma_wait() {
         g_dma_proven = true;
         K2LOG("[LCD] DMA ok n=%u\n", unsigned(total));
     }
-    stream_service(total - served);   // pixels since the last in-wait service count toward the next
+    stream_service();
 }
 
 // Runs the whole count through DMA in <=65535-unit pieces. src == nullptr is a fill of
@@ -348,7 +343,9 @@ bool sink_band(std::uint16_t& first, std::uint16_t& last) {
 }
 void set_idle_hook(void (*hook)()) { g_idle_hook = hook; }
 
-void pump() { serve(); }
+void pump() {
+    if (g_pacer.force()) run_round();
+}
 
 DmaInfo dma_info() { return {kLcdDma, kLcdDma && g_dma_ok, g_dma_done, g_dma_stalls}; }
 
@@ -361,8 +358,6 @@ bool set_spi_div(unsigned divider) {
     spi_wait_idle();
     g_div = d;
     g_ctrl1 = ctrl1_for(d);
-    g_service_px = service_pixels(d);
-    g_dma_service_px = dma_service_px(d);
     spi3().CTRL1 = g_ctrl1 & ~Spi::CTRL1_SPIEN;   // BR only changes with SPE clear
     spi3().CTRL1 = g_ctrl1;
     K2LOG("[LCD] SPI3 divider /%u (CTRL1=%04x)\n", divider, unsigned(g_ctrl1));
@@ -403,8 +398,7 @@ void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uin
     const PaintTimer timer(0);
     set_window(x0, y0, x1, y1);  // leaves CS low, DC high: the pixel stream continues the frame
     spi_frame_16bit(true);  // 16-bit pixel frames from here until stream_end()
-    g_stream_px = 0;
-    g_stream_open = true;
+    g_stream_open = true;   // the service cadence carries on from the previous window (elapsed time, not reset here)
 }
 
 void stream_pixels(std::span<const std::uint16_t> px) {
@@ -417,7 +411,7 @@ void stream_pixels(std::span<const std::uint16_t> px) {
     }
     dma_wait();   // a fill started by the caller may still be on the wire
     for (std::uint16_t c : px) push_pixel(c);
-    stream_service(px.size());
+    stream_service();
 }
 
 void stream_fill(std::uint16_t color, std::uint32_t count) {
@@ -435,7 +429,7 @@ void stream_fill(std::uint16_t color, std::uint32_t count) {
         const std::uint32_t n = count < 256 ? count : 256;
         for (std::uint32_t i = 0; i < n; i++) push_pixel(color);
         count -= n;
-        stream_service(n);
+        stream_service();
     }
 }
 

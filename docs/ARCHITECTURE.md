@@ -67,8 +67,11 @@ checked against the code or hardware when this was written.
    accelerometer init, then the LCD idle hook and the loop. The PD half of this (the Rd decision of a reset, the
    self-powered comeback, the bring-up loop) is `bootpd::early(keys, warm)` right after `i2c::init` and
    `bootpd::late(early)` where `fusb302::init` runs (`src/core/boot_pd.cpp`), so the host world replay boots its
-   firmware lives through the same calls. `lcd.cpp` calls `usb::service()` and the hook every 2048 px
-   in a stream (every 468 px in a DMA wait), so a redraw never leaves the bus unserved. The hook runs at most once per
+   firmware lives through the same calls. `lcd.cpp` calls `usb::service()` and the hook once 1 ms
+   (`lcd::kServiceUs`) has passed since the last round ended, on elapsed time (`lcd::ServicePacer` over the cycle counter):
+   it checks after every stream call's pixels, every 256 px of a polled fill and inside every DMA wait, and the cadence
+   runs on across stream windows (a new window does not reset it), so a redraw never leaves the bus unserved for more
+   than about 1 ms plus one round. A round is never nested. The hook runs at most once per
    ms: `fusb302::service()` (drains PD frames), `fctrig::service_ufcs()` (the UFCS message exchange),
    `fctrig::service_hs()` (the QC2 / QC3 / QC3+ handshake steps, `fc::Engine::hs_step`; the engine's `busy_` flag keeps it
    from re-entering `poll()`, and it never logs or aborts) and `transcap::poll()`. Engine phases it does not serve stay

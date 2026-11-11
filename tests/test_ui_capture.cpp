@@ -710,10 +710,12 @@ uint32_t g_walk_t = 100000;
 
 void walk_settle(Ui &ui) { for (int i = 0; i < 4; ++i) ui.tick(g_walk_t += 120); }
 
-// Goes to destination `b` and returns how many pixels differ from a repaint of it at the same instant.
+// Goes to destination `b` and returns how many pixels differ from a clean paint of it at the same instant (a clear, then a
+// repaint: the repaint of an opaque page alone paints over what is there).
 int walk_switch_diff(Ui &ui, unsigned b) {
     ui.goto_page(kWalkDests[b].index, g_walk_t += 10);
     const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
+    k2::lcd::fill(kBg);
     ui.repaint(g_walk_t);
     int diff = 0;
     for (size_t i = 0; i < got.size(); ++i) diff += got[i] != g_panel[i];
@@ -801,6 +803,48 @@ void test_switch_exact() {
             }
     }
     CHECK_EQ(bad_overlay, 0);
+    ui.set_rotation(0, g_walk_t += 10);
+    g_stub = old;
+}
+
+// Ui::repaint of an opaque page (Ui::page_opaque / menu_opaque) skips the full-screen clear: the page paints every pixel of
+// the content and the strip paints every pixel of its slots. Over a screen of a colour no page uses (whatever was there
+// before: the boot QR screen, a lab redraw), the repaint must equal a clean one (a clear, then the repaint), pixel for pixel.
+// Pages that are not opaque keep the clear.
+void test_repaint_opaque() {
+    const auto old = g_stub;
+    auto holder = std::make_unique<Ui>();
+    Ui &ui = *holder;
+    fill_seven();
+    g_stub.pm_online = true; g_stub.pm.vbus_mv = 20030; g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456;
+    g_stub.pm.flow = k2::power::Flow::Forward;
+    constexpr uint16_t kSentinel = 0xF81F;   // magenta
+    constexpr unsigned kScreen = 240u * 240u;
+    ui.init(g_walk_t);
+    int bad = 0;
+    for (uint8_t r = 0; r < 4; ++r) {
+        ui.set_rotation(r, g_walk_t += 10);
+        walk_settle(ui);
+        for (unsigned b = 0; b < kWalkN; ++b) {
+            walk_open(ui, b);
+            k2::lcd::fill(kSentinel);
+            const unsigned px0 = g_lcd_pixels, sent0 = g_meter_sent;
+            ui.repaint(g_walk_t += 10);
+            const unsigned cleared = (g_lcd_pixels - px0) - (g_meter_sent - sent0);   // lcd::fill() pixels are not metered
+            const std::vector<uint16_t> got(g_panel, g_panel + kScreen);
+            k2::lcd::fill(kBg);
+            ui.repaint(g_walk_t);
+            int diff = 0;
+            for (size_t i = 0; i < got.size(); ++i) diff += got[i] != g_panel[i];
+            const unsigned want_cleared = kWalkDests[b].opaque ? 0u : kScreen;
+            if (diff || cleared != want_cleared) {
+                std::printf("  repaint %s rotation %u: %d px differ from a clean paint, %u px cleared (want %u)\n",
+                            kWalkDests[b].name, unsigned(r), diff, cleared, want_cleared);
+                ++bad;
+            }
+        }
+    }
+    CHECK_EQ(bad, 0);
     ui.set_rotation(0, g_walk_t += 10);
     g_stub = old;
 }
@@ -1583,5 +1627,6 @@ int main() {
     ui.goto_page(0, 9900);
     CHECK_EQ(k2::g_missing_glyphs, 0u);
     test_switch_exact();
+    test_repaint_opaque();
     return test_report("test_ui_capture");
 }

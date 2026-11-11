@@ -30,10 +30,11 @@ void lcd_meter_trace_dump(const char *label);   // K2_OVERDRAW_TRACE=1: print an
 
 // Optional paint timing, off (nullptr) for every test but the world replay (tests/test_world_replay.cpp). When set, the fake
 // spends virtual time the way src/drivers/lcd.cpp does on the panel: runs of kDmaMinPixels or more go out by "DMA" (a fill
-// returns with its transfer in flight, the next call waits for it), the idle hook runs every dma_service_px pixels inside a
-// DMA wait and every service_px pixels pushed by hand, and every pixel costs its wire time. The CPU work that produces the
-// pixels (glyph rendering, layout) is not on the host clock, so it is charged per call and per streamed pixel. Screenshot
-// sink calls cost nothing (they never touch the panel). lcd::pump() runs the idle hook only while timing is on.
+// returns with its transfer in flight, the next call waits for it), the idle hook runs on the driver's elapsed-time cadence
+// (lcd_timing.hpp ServicePacer, kServiceUs since the last round ended: checked after every call's pixels and while a DMA
+// wait spins), and every pixel costs its wire time. The CPU work that produces the pixels (glyph rendering, layout) is not
+// on the host clock, so it is charged per call and per streamed pixel. Screenshot sink calls cost nothing (they never touch
+// the panel). lcd::pump() runs the idle hook only while timing is on.
 struct LcdTiming {
     void (*spend_us)(double us);   // advance the virtual clock (the world serves its own events inside)
     double (*now_us)();
@@ -41,8 +42,6 @@ struct LcdTiming {
     double call_us;                // CPU per stream_* call (the driver's own bookkeeping)
     double window_us;              // per stream_begin: CASET / RASET / RAMWR in 8-bit frames
     double px_cpu_us;              // CPU per stream_pixels pixel: rendering the run the call pushes
-    unsigned dma_service_px;       // 468 at /8
-    unsigned service_px;           // 2048 at /8
 };
 extern const LcdTiming *g_lcd_timing;
 using LcdIdleHook = void (*)();

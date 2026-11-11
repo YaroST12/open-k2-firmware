@@ -29,9 +29,9 @@ void set_rotation(std::uint8_t rotation);
 void fill(std::uint16_t color);
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color);
 
-// Streamed write into the window (x0,y0)-(x1,y1) inclusive. usb::service() and the idle hook run
-// every ~2.2 ms of wire time on the polled path (2048 px at /8, 4096 px at /4) and every ~0.5 ms during a DMA wait
-// (468 px at /8, 937 px at /4: lcd_timing.hpp), so that a long fill cannot starve the USB stack or PD. Runs of 32+ pixels go out by DMA (SPI3 TX):
+// Streamed write into the window (x0,y0)-(x1,y1) inclusive. usb::service() and the idle hook run once 1 ms has passed
+// since their last round (lcd_timing.hpp kServiceUs, elapsed time across windows, checked after every call's pixels and
+// inside DMA waits), so that a paint cannot starve the USB stack or PD. Runs of 32+ pixels go out by DMA (SPI3 TX):
 // stream_fill returns with its last piece still on the wire, and the next lcd call (the next
 // stream_*, stream_end, a command) waits for it; stream_pixels returns with its buffer consumed.
 // -DK2_LCD_DMA=0 builds the polled-only driver.
@@ -96,8 +96,9 @@ DmaInfo dma_info();
 bool set_spi_div(unsigned divider);
 unsigned spi_div();
 
-// Called every few hundred streamed pixels (with usb::service) so time-critical work, such as
-// answering PD messages, keeps running while a page draws. nullptr disables it.
+// Called (after usb::service) once per kServiceUs of a paint, so time-critical work, such as answering PD messages,
+// keeps running while a page draws. Never nested: an lcd call made from inside the hook does not run it again.
+// nullptr disables it.
 void set_idle_hook(void (*hook)());
 
 // One round of the same service work outside a stream (usb::service() and the idle hook), for a long computation that

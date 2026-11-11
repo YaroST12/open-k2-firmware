@@ -42,11 +42,14 @@ void fixture() {
     for (int i = 0; i < 7; i++) g_stub.caps.pdos[i] = mix[i];
 }
 
-// full_max: the budget for one full paint after a clear, px sent. A ratchet: it only goes down (each phase of the overdraw work
-// tightens it to what the page now costs); a page that gets dearer fails here.
+// full_max: the budget for one full paint after a clear (Ui::repaint), px sent. A ratchet: it only goes down (each phase of the
+// overdraw work tightens it to what the page now costs); a page that gets dearer fails here.
+// An opaque page (WalkDest::opaque) has no row here (0): its repaint skips the clear and paints over the screen, every pixel,
+// so it is held to the opaque switch bound (kOpaqueMaxX / kScaledOpaqueMaxX) instead. Its blank paint after a clear only
+// remains on the screenshot path (Ui::render_for_capture), which costs no wire time.
 // The walk is tests/ui_walk.h (shared with test_ui_capture); the budgets sit in the same order.
 constexpr unsigned kN = kWalkN;
-constexpr unsigned kFullMax[kN] = {57700, 29500, 57100, 34400, 57200, 56600, 52800, 31700, 57400, 57000, 19900, 43800, 47700, 56600, 57700};
+constexpr unsigned kFullMax[kN] = {0, 0, 57100, 0, 0, 0, 52800, 0, 57400, 57000, 19900, 43800, 47700, 0, 57700};
 constexpr const WalkDest *kDests = kWalkDests;
 // The worst page switch, as a multiple of the screen (ratchet, see full_max). A menu reached from a menu is two switches
 // (goto_page pops to the base page, then pushes), which is what the worst cell is.
@@ -121,6 +124,7 @@ void walk() {
         ui.goto_page(0, g_now += 10);
         if (!ui.goto_page(kDests[i].index, g_now += 10)) { std::printf("cannot open %s\n", kDests[i].name); CHECK_EQ(0, 1); continue; }
         settle(ui);
+        lcd::fill(0);   // kBg: the repaint of an opaque page alone does not clear
         lcd_meter_reset();
         ui.repaint(g_now += 10);
         g_full[i] = meter();
@@ -140,6 +144,7 @@ void walk() {
             g_sw[a][b] = meter();
             // Pixel-exact: the switch must leave what a clean paint of B leaves (same instant, same data).
             const std::vector<uint16_t> got(g_panel, g_panel + size_t(LCD_WIDTH) * LCD_HEIGHT);
+            lcd::fill(0);   // kBg, as above
             ui.repaint(g_now);
             int diff = 0, first = -1;
             for (size_t i = 0; i < got.size(); ++i)
@@ -165,7 +170,7 @@ void walk() {
 }
 
 void print_tables(double worst) {
-    std::printf("Full paint after a clear (px sent / unique px touched / ratios):\n");
+    std::printf("Full repaint, Ui::repaint (an opaque page over the screen, the rest after a clear; px sent / unique px touched / ratios):\n");
     std::printf("  %-11s %8s %8s %7s %9s %9s\n", "page", "sent", "unique", "s/u", "s/53760", "s/57600");
     for (unsigned i = 0; i < kN; ++i)
         std::printf("  %-11s %8u %8u %7.2f %9.2f %9.2f\n", kDests[i].name, g_full[i].sent, g_full[i].unique,
@@ -207,7 +212,9 @@ void check_rotation(uint8_t rotation, bool print) {
     const double opaque_max = scaled ? kScaledOpaqueMaxX : kOpaqueMaxX;
     for (unsigned i = 0; i < kN; ++i) {
         CHECK_EQ(g_full[i].unique > 0, true);
-        const unsigned budget = scaled ? static_cast<unsigned>(kFullMax[i] * kScaledFullSlack) : kFullMax[i];
+        const unsigned budget = kDests[i].opaque ? static_cast<unsigned>(opaque_max * kScreenPx)
+                                : scaled         ? static_cast<unsigned>(kFullMax[i] * kScaledFullSlack)
+                                                 : kFullMax[i];
         if (g_full[i].sent > budget)
             std::printf("  OVER BUDGET %s: %u px sent, budget %u\n", kDests[i].name, g_full[i].sent, budget);
         CHECK_EQ(g_full[i].sent <= budget, true);

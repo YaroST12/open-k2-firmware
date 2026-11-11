@@ -96,8 +96,10 @@ All 18 scenario pages are over the ceilings. The full table is at the end of `ru
 - **Detail** never has a long pass, but its service gap equals its pass gap: on Detail the idle hook never runs.
 - **The `[LINK]` verdict undercount** is a loop-gap bug, not a PD-service bug. In this run set it shows on 15 Home runs
   and 0 Detail runs. Detail's PD service is worse, but its pass gap stays under 50 ms. The link layer samples driver
-  state in `Ui::tick` (`src/ui/ui.cpp:1135` `link_.update(in)`), so two caps arriving inside one 190 ms Home repaint
-  look like one caps edge.
+  state in `Ui::tick` (`src/ui/ui.cpp:1135` `link_.update(in)`). Corrected in phase 2 (E2): the counter it samples
+  (`fusb302::rx_count()`) was already monotonic, so no increment was lost; the count's baseline was. `Link` took it at
+  the attach edge, the first tick that saw VBUS, and on Home that tick came after a 200 ms repaint during which the
+  driver had decoded the new source's caps, so they counted for nobody.
 
 ## Duty table
 
@@ -128,7 +130,7 @@ on Home and up to 48 ms on Detail and Diag. The worst blocking driver call is li
 | USB HID / CDC | Host polls every 1 ms; enumeration timeouts in the hundreds of ms | ISRs USB_LP / HP only queue events (`usb.cpp:232`, `:238`); `tud_task` in `usb::poll` (`usb.cpp:118`, every pass); `usb::service` from LCD serve and `delay_ms` (`usb.cpp:140`) | hook-like (LCD serve) | low for enumeration. Log reports wait and drop under `drop=`. `poll_gap_max` resets at every heartbeat (`usb.cpp:218`) |
 | Remote commands and dead-man lease | Lease 30 s default, `kSafeHoldMs` 5 s (`include/k2/core/lease.hpp`) | `Remote::poll` every pass (`remote.cpp:581`) | loop | none (gap ≪ lease) |
 | Buttons | Debounce 20 ms, long 500 ms, hold 5 s (`buttons.hpp:13-15`) | Sampled every 1 ms in `pass` (`main_loop.cpp:230-262`) | loop | **at risk**: a press shorter than a paint (Home repaint 215 ms) is never seen. A press that ends inside a paint is debounced late |
-| `[LINK]` verdict caps count | One count per Source_Capabilities | `Ui::tick` → `link_.update` (`src/ui/ui.cpp:1135`) samples driver state | loop | **broken today**: undercount on 15 Home runs |
+| `[LINK]` verdict caps count | One count per Source_Capabilities | `Ui::tick` → `link_.update` (`src/ui/ui.cpp:1135`) samples driver state | loop | was **broken**: undercount on 15 Home runs; fixed by E2 (the count starts at the detach) |
 | QC2/QC3 handshake (HVDCP) | Levels for 100 / 100 / 50 ms, drop poll 10 ms, 2 s timeout | `fctrig::service_hs` from the hook (`fc_engine.cpp:1005`) and `poll_step` | hook | low (deadline-driven, tolerant) |
 | QC3 / QC3+ pulse trains | 2250 us hold/gap (QC3), 40/50 us (QC3+) (`qc.hpp:57-58`) | `dpdm::play` busy-waits on DWT with IRQs masked when ≤ 20 ms (`dpdm.cpp:25`, `:115-128`), from `poll_step` | loop (bursts ≤ 18 ms between 20 ms gaps) | none for the pulses (masked). The burst itself masks SysTick, USB and EXTI for up to 18 ms |
 | FCP / SCP / AFC single-wire exchange | 162 us bits, slave ping 0.3-4 ms after a 2 ms wait (`include/k2/fastcharge/wire.hpp:17-23`) | `exchange_once` (`fctrig.cpp:49`) blocks ~10-30 ms per exchange, IRQs masked in `wait_dm` / `capture_dm`; SCP keep-alive every 100 ms; all from `poll` | loop | low for the wire (masked). The exchange and keep-alive are not covered by `paint_critical` (`fc_engine.hpp:157`) |
@@ -236,7 +238,7 @@ The measurements point at three small, contained changes:
      Or sample the raw levels in SysTick into a small ring.
    - Fixes: presses lost during paints. Small.
 
-There is also the overdraw: a repaint clears the panel and then paints it opaque again (`ui.cpp:1033`), which is 61 ms of
+There is also the overdraw (fixed in phase 2, step 4): a repaint clears the panel and then paints it opaque again (`ui.cpp:1033`), which is 61 ms of
 wire time per repaint. Skipping the clear for pages that paint every pixel is a small step towards A.
 
 ### Recommendation
@@ -263,17 +265,58 @@ their tables; `tools/loop_survey.py` on hardware confirms it. When a ceiling hol
      `tests/fake_lcd.cpp` follows.
    - Expected: the service gap is ≤ 2 ms in both surveys (Detail 47 → ~2, Home 30 → ~2).
    - Then: gate the PD service ceiling (10 ms) in the world replay.
+   - **Done (k2/arch-e1).** `lcd::ServicePacer` (`lcd_timing.hpp`, host-tested in `test_lcd_timing`) runs a round once
+     `kServiceUs` (1000 µs) has passed since the last round ended, on the cycle counter; `stream_begin` no longer
+     resets it, `pump()` forces a round, a round is never nested. The fake LCD uses the same class on the virtual clock.
+     Paint survey, PD service gap max (ms), before → after:
+
+     | Page | Before | After |
+     |---|---:|---:|
+     | Home live / idle | 13.8 / 13.8 | 1.1 / 1.1 |
+     | Detail live / idle | 48.1 / 48.1 | 1.2 / 1.1 |
+     | Charger | 15.4 | 1.2 |
+     | Lines | 13.6 | 1.2 |
+     | Tools | 14.5 | 1.2 |
+     | Settings | 14.3 | 1.2 |
+     | Connection | 19.8 | 1.3 |
+     | Diag | 45.8 | 1.2 |
+     | CT wizard / running / results | 15.7 / 41.0 / 29.3 | 1.3 / 1.3 / 1.3 |
+
+     The 10 ms PD service ceiling is now enforced in `test_paint_survey` (part of `make gate`). The world replay's
+     service max went from 28-30 ms (Home) and 29-47 ms (Detail) to 23-24 ms on all 18 pages, and stays report-only
+     there: every remaining gap over 10 ms (one per phase, 13-24 ms) is a blocking CC scan (`detect_cc_orientation`,
+     from the pass or from the hook's `scan_service`), which is step 6. The cost: each 1 ms round reads the FUSB302
+     over I2C, so the longest pass grows (Home 186-194 → 211-232 ms, Detail 29-47 → 36-68 ms in the model).
+     `kServiceUs` is the knob if the hardware shows the same.
 2. **E2: caps counted at the driver.**
    - Change: a driver-side serial number per Source_Capabilities. The link layer counts the serial numbers it has
      not yet seen.
    - Expected: the 15 undercounting Home runs reach the expected `verdict_caps`.
    - Then: turn on `verdict_caps_min` for the late-attach episodes.
+   - **Done (k2/arch-e1), with a corrected diagnosis.** The driver serial existed already (`fusb302::rx_count()`,
+     monotonic since boot) and `Link` already counted deltas of it. The bug was the baseline: `set_attached(true)` took
+     it at the first tick that saw VBUS, after a Home repaint during which the caps had arrived (`[DEBUG-e2]` trace of
+     `late-attach-cycles:rise420.8:Home:53`: caps 1 decoded at 420928 while the link was detached with a stale 165 mV
+     sample, caps 2 inside the 400 ms tick gap, attach edge at 421462 with baseline 2 → `caps=0`). The baseline is now
+     the counter at the last detach (the same one `waiting()` uses). `test_pd_verdict` covers it; `verdict_caps>=1` is
+     on for the 8 late-attach and the h-side-inline episodes. World replay: `verdict_caps=0` on 15 runs (11 after E1)
+     → 0; 110 runs count 1, 70 count 2. With the fix reverted the scenario expects fail 11 runs.
 3. **E3: buttons from the hook.**
    - Change: the detectors also run in the idle hook, and their events are queued for the pass.
    - Test: a host test pressing during a forced repaint (tests/test_ui_* with g_lcd_timing).
 4. **Overdraw: no clear before an opaque repaint.**
    - Expected: the forced repaint drops by ~57 600 px. Paint survey numbers go down; screenshots stay identical
      (render tests).
+   - **Done (k2/arch-e1).** `Ui::repaint` of an opaque page or menu (`page_opaque` / `menu_opaque`: Home, Detail, Lines,
+     Tools, Settings, Diag, UsbLink) skips `lcd::fill(kBg)` and paints over the screen (`paint_incoming(blank=false)`,
+     the path an opaque switch already takes). The rest (Charger test, Connection, the other menus, the full-panel QR
+     pages) keep the clear: their paint relies on a kBg ground. `test_ui_capture` `test_repaint_opaque` repaints every
+     walk page over a magenta screen in the four rotations and requires a clean paint's pixels and no clear (opaque) or
+     exactly one (the rest); red before (57 600 px cleared). Pixels sent by a forced repaint, before → after: Home
+     115 200 → 57 600, Detail 87 024 → 58 800, Diag 89 192 → 58 272; the paint survey's worst call: Home 214.5 →
+     153.0 ms, Detail 135.0 → 106.6, Lines 128.7 → 95.3, Tools 160.2 → 99.9, Settings 162.8 → 102.6, Diag 140.0 →
+     108.4. All 543 host render dumps (`K2_DUMP`, 17 UI tests) are byte-identical. `test_ui_overdraw` now holds an
+     opaque page's repaint to the opaque switch bound; the tests that use a repaint as the clean reference clear first.
 5. **A, page by page.**
    - Change: a kit-level `Budget` (`kFlightPx` generalised) and a dirty-item queue. Home first (cells are already
      items), then the charger test outside a step, Connection, Detail, Diag, Lines, Tools, Settings.
@@ -313,8 +356,10 @@ python3 tools/loop_survey.py --dwell 20 --pages home,detail
 
 The host numbers above are the prediction. In particular:
 
-- Detail and Diag should show a PD service max near their pass max (≈ 45 ms);
-- Home should show passes over 100 ms on a repaint (open Home from another page).
+- Detail and Diag should show a PD service max near their pass max (≈ 45 ms); after E1 the paint part of it is
+  ~1-2 ms, and what stays over 10 ms is the CC scan (13-24 ms, unattached only) and other blocking driver calls;
+- Home should show passes over 100 ms on a repaint (open Home from another page), after E1 ~10-15 % longer;
+- the shell's `lcd show` prints `service_us=1000` after E1 (`service_px` / `dma_service_px` before).
 
 Two differences from the host:
 

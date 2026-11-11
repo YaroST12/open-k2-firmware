@@ -1055,8 +1055,15 @@ void Ui::refresh(uint32_t now_ms) {
 }
 
 void Ui::repaint(uint32_t now_ms) {
-    lcd::fill(kBg);
     hold_shown_ = false;
+    // An opaque page paints every pixel of the content and the strip every pixel of its slots (the switch into one skips the
+    // erase for the same reason, test_ui_capture checks both pixel for pixel): the full-screen clear would only be overdraw.
+    if (depth_ == 0 ? page_opaque(page_) : menu_opaque(menu())) {
+        rotation_notice_drawn_ = false;
+        paint_incoming(now_ms, now_us(), false);
+        return;
+    }
+    lcd::fill(kBg);
     redraw(now_ms);
 }
 

@@ -486,7 +486,7 @@ public:
     void describe(ChargerTestSession::View& v);   // the page's half of the view: the list's row count and the footer's words
     // The paint budget of a Running update (every 100 ms) while a step is in flight (Runner::quiet()). Pixels are the measure:
     // the panel streams ~2.13 us per pixel plus ~15 us per window, and lcd.cpp services USB, FUSB302 and the UFCS handshake
-    // every 2048 pixels (~4.4 ms) inside a stream. The items (gauge, hero + needle, clock, texts, progress, footer) share
+    // once 1 ms has passed since the last round (lcd::kServiceUs, elapsed time) inside a stream. The items (gauge, hero + needle, clock, texts, progress, footer) share
     // kFlightPx (~13 ms); a grid row, the one item that can exceed it, paints alone on a tick where nothing else did, up to
     // kFlightRowPx (the tallest row, 224 x 42 px, plus the strike-throughs of its Skip cells painted over their text, at most
     // kit::kStrikeRowMaxPx, plus a Running cell's dot, kit::kDotRowMaxPx, ~20 ms). Between steps (and while laying out) there is

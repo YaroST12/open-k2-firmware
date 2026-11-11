@@ -20,7 +20,9 @@ void Link::set_attached(bool on, std::uint32_t at_ms) {
         new_source_ = true;
         vbus_was_low_ = false;
         attach_at_ = at_ms;
-        rx_attach_ = last_rx_;
+        // The count starts at the detach, not at this edge: the edge is the first tick that saw VBUS, and the driver may have
+        // decoded the new source's caps before it (a paint held the tick, or the VBUS sample lagged the CC attach).
+        rx_attach_ = rx_at_detach_;
         verdict_ = PdVerdict::Pending;
         none_why_ = PdNoneWhy::None;
         quiet_since_ = at_ms;   // a held inline state is judged from this attach on, not from the load before the gap

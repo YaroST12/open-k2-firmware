@@ -88,8 +88,8 @@ The test picks the new file up with no code change.
 | LCD CPU, per streamed pixel | 1.65 µs | calibrated, below |
 | INA226 bus register | mean over the last conversion period | 4.48 ms at the driver's 0x4407, 280 µs in its fast mode |
 
-The real LCD idle hook runs inside a timed paint, as `lcd.cpp` calls it: every 468 pixels inside a DMA wait, and
-every 2048 pixels pushed by hand. So the PD service during a repaint is the firmware's own.
+The real LCD idle hook runs inside a timed paint, as `lcd.cpp` calls it: once 1 ms of virtual time has passed since
+the last round, checked inside DMA waits and after every stream call (`lcd::ServicePacer`, the same class). So the PD service during a repaint is the firmware's own.
 
 **Calibration.**
 

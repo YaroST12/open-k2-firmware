@@ -570,8 +570,9 @@ While a step is in flight (`Runner::quiet()`: Requesting or Holding) the page is
 - `kFlightRowPx` = 224 x 42 + `kStrikeRowMaxPx` + `kDotRowMaxPx` px (about 20 ms): one grid row, alone, on a tick where
   nothing else painted.
   `ResultGrid::draw_some` paints the running row first and defers the rest (`pending()`).
-- `lcd.cpp` services USB, the FUSB302, the UFCS handshake and the QC handshake (`fctrig::service_hs()`) every 2 048 px
-  inside a stream (every 468 px in a DMA wait), so none of this adds a blind spot above about 4.4 ms. The hook serves the
+- `lcd.cpp` services USB, the FUSB302, the UFCS handshake and the QC handshake (`fctrig::service_hs()`) once 1 ms
+  has passed since the last round (elapsed time, checked inside DMA waits and after every stream call, carried across
+  windows), so none of this adds a blind spot above about 1 ms plus one round. The hook serves the
   QC2 / QC3 / QC3+ handshake (HsDischarge, HsFloatDp, HsBias, HsWaitDrop of `fc::Engine`; the shared step is
   `Engine::hs_step`, re-entrancy guarded against `poll()` by `busy_`): every timed edge there is a lower bound (100 ms at
   0 V, 100 ms D+ high-Z, 50 ms before the dm0 sample) or a poll with a wide upper bound (the charger drops about 1.25 s
