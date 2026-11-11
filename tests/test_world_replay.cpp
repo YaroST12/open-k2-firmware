@@ -220,6 +220,7 @@ struct RebootCase {
     int contracts = 0;              // contracts the charger completed (PS_RDY acknowledged), at least
     std::vector<LogWant> logs;      // lines that must appear in that life's log
     std::vector<LogWant> absent;    // lines that must not
+    double raise_at_ms = -1;        // world ms: the firmware asks for PDO 2 (9 V) once, as the lab's `pd request 2` does (-1: never)
     std::string note;
 };
 
@@ -256,6 +257,15 @@ std::vector<RebootCase> reboot_cases() {
             c.logs = {{1, "[PD] self-power bring-up: contract ready"}, {1, "[RDI] marker written: session pin=2"},
                       {1, "[SESS] no previous session record"}, {1, "[TEST] boot_look looked=0 kind=none pin=0 canary=0 host=0"}};
             c.absent = {{1, "[RDI] boot look"}};
+            if (hid) {
+                // The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): the rail and VBUS are already up together at each boot (no
+                // order known), so each life locks; a 9 V request in the contract of life 1 is refused and never reaches the charger.
+                c.raise_at_ms = 3000;
+                c.logs.insert(c.logs.end(), {{1, "[LOOP] lock suspected"}, {1, "[LOOP] request pos 2 0 mV refused: 5V lock"},
+                                             {2, "[LOOP] lock suspected"}});
+            } else {
+                c.absent.insert(c.absent.end(), {{1, "[LOOP] lock"}, {2, "[LOOP] lock"}});   // nothing on HID: never a lock
+            }
             if (!hid && kept) {
                 c.alive = true;
                 c.contracts = 2;
@@ -299,11 +309,22 @@ std::vector<RebootCase> reboot_cases() {
 }
 
 // One firmware life: power-on reset, the boot, the main loop until the scenario ends (or the rail drops: world_sim exits).
-[[noreturn]] void life(double end_ms) {
+// raise_at_ms >= 0: once, in the life that runs at that world time (within 1 s of it), ask for PDO 2 as the lab's request does.
+[[noreturn]] void life(double end_ms, double raise_at_ms) {
     world::life_begin();
     boot(0);
     const world::Timing t = timing();
+    bool raised = false;
     while (world::world_ms() < end_ms) {
+        if (!raised && raise_at_ms >= 0 && world::world_ms() >= raise_at_ms) {
+            raised = true;
+            if (world::world_ms() < raise_at_ms + 1000) {
+                const k2::pd::Err e = k2::fusb302::sink_request({.pos = 2});
+                char b[48];
+                std::snprintf(b, sizeof b, "[TEST] request PDO 2: err %d", int(e));
+                world::note(b);
+            }
+        }
         k2::mainloop::pass();
         world::spend_us(t.pass_us);
         world::wfi();
@@ -326,7 +347,7 @@ RebootOut run_reboot(const RebootCase& c) {
     while (world::reboot_wait_boot()) {
         std::fflush(nullptr);
         const pid_t p = fork();
-        if (p == 0) life(c.sc.end_ms);
+        if (p == 0) life(c.sc.end_ms, c.raise_at_ms);
         int st = 0;
         waitpid(p, &st, 0);
         if (!WIFEXITED(st) || (WEXITSTATUS(st) != 0 && WEXITSTATUS(st) != world::kLifeDied)) {
@@ -339,6 +360,8 @@ RebootOut run_reboot(const RebootCase& c) {
     if (r.lives != c.lives) fail("lives=" + std::to_string(r.lives) + ", want " + std::to_string(c.lives));
     if (r.alive_at_end != c.alive) fail(c.alive ? "dead at the end" : "alive at the end");
     if (r.ch.contracts < c.contracts) fail("contracts=" + std::to_string(r.ch.contracts) + ", want >=" + std::to_string(c.contracts));
+    if (c.sc.hid_loop && r.ch.raise_requests > 0)   // the loop's HID port follows the bus: nothing above 5 V may be asked for
+        fail("raise requests=" + std::to_string(r.ch.raise_requests) + " with the HID-cable loop, want 0");
     if (c.alive && r.ch.rd_gap_max_ms >= c.sc.ch.pd_debounce_ms) {
         char b[96];
         std::snprintf(b, sizeof b, "Rd gap %.1f ms >= tPDDebounce %.0f ms", r.ch.rd_gap_max_ms, c.sc.ch.pd_debounce_ms);
