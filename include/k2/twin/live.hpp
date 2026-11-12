@@ -19,6 +19,12 @@
 //               kBandWaitMs without it: OutOfBand. A sample above pd::overcap_abort_mv, or the engine's own overvoltage
 //               abort, ends the twin as Unsafe with the release already asked.
 //  6. Release.  sink_release(): back to 5 V before the next twin.
+//  0. Wake.     (only when the charger has not offered a list yet) A charger waiting on the plug, or one that holds VBUS but sent
+//               no list, is woken first: Env::wake() presents Rd, the charger raises 5 V and lists, the K2 takes the 5 V contract
+//               (kWakeMs for all of it). Nothing above 5 V is asked before the list is in hand; no list: the run ends as
+//               Reason::NoOffer with the Rd given back (Env::unwake). It is done only after start()'s confirm, never on opening a
+//               page, and never for a dual-role port (may_wake): a phone alone on the K2 must not be turned into a source. A run
+//               that finished leaves the Rd to the Env's owner (the Device twins page keeps it so the list stays on screen).
 //  After the last twin the K2's own Sink_Capabilities come back (impersonate(nullptr)) and the K2 attaches once more so the
 //  charger's picture of its sink is the K2's again. cancel() skips that last attach: it asks for 5 V, clears the impersonation
 //  and ends; the charger keeps the twin's words until the next attach of any kind.
@@ -40,6 +46,7 @@
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_sink.hpp"
+#include "k2/pd/ra_guard.hpp"
 #include "k2/twin/library.hpp"
 #include "k2/twin/predict.hpp"
 #include "k2/twin/twin.hpp"
@@ -48,6 +55,7 @@ namespace k2::twin::live {
 
 inline constexpr std::uint32_t kDarkMs = 10000, kDarkHoldMs = 300, kDetachQuickMs = 1500;   // the charger test's detach rule
 inline constexpr std::uint32_t kCapsMs = 8000;      // attach -> the list and the 5 V contract
+inline constexpr std::uint32_t kWakeMs = 8000;      // Rd presented to a silent charger -> its list and the 5 V contract
 inline constexpr std::uint32_t kRequestMs = 5000;   // Request -> PS_RDY (the engine's own limits are shorter; this is the backstop)
 inline constexpr std::uint32_t kHoldMs = 1000;      // in band for this long = granted
 inline constexpr std::uint32_t kBandWaitMs = 4000;  // PS_RDY -> in band
@@ -59,7 +67,7 @@ enum class Verdict : std::uint8_t {
 };
 // Why a twin was Skipped: nothing was sent for it.
 enum class Skip : std::uint8_t { None, NoPrediction, AboveCeiling, RequestRefused, NoTwin };
-enum class Reason : std::uint8_t { Done, Cancelled, Busy };
+enum class Reason : std::uint8_t { Done, Cancelled, Busy, NoOffer };   // NoOffer: the woken charger never listed (the wire's reason byte)
 // Why start() said no.
 enum class Refusal : std::uint8_t { None, NeedConfirm, Busy, Inline, NoMonitor, NoSource, NoTwins };
 
@@ -105,8 +113,17 @@ constexpr const char* name(Reason r) {
         case Reason::Done: return "done";
         case Reason::Cancelled: return "cancelled";
         case Reason::Busy: return "ports taken";
+        case Reason::NoOffer: return "no offer";
     }
     return "?";
+}
+
+// May the K2 present Rd to make a charger that has not offered yet show its list? A charger waiting on the plug (Rp steady, VBUS
+// dark), or VBUS up with no list, with no sink behind the K2. Never a dual-role port: a phone alone on the K2 toggles Rp looking for
+// a partner, and presenting Rd would make it source VBUS (Learn from device depends on it staying a device).
+constexpr bool may_wake(raguard::WaitKind wait, int vbus_mv, bool inline_link) {
+    if (inline_link || wait == raguard::WaitKind::DualRolePort) return false;
+    return wait == raguard::WaitKind::ChargerWaiting || vbus_mv >= 1000;
 }
 
 // What one twin's run left (4 bytes; the table is indexed by the twin's number).
@@ -127,6 +144,7 @@ struct Input {
     bool self_powered = false;
     bool busy = false;                        // another tool owns the ports (charger test, FC release)
     bool inline_link = false;                 // a real sink sits behind the K2
+    bool wakeable = false;                    // may_wake(): a silent charger the K2 may wake with its own Rd (only read without a list)
 };
 
 class Env {
@@ -141,6 +159,12 @@ public:
     virtual pd::Err request(pd::Choice c) = 0;
     virtual void release() = 0;               // back to 5 V
     virtual void record(std::uint8_t seq, const Slot& s) = 0;   // a twin ended
+    // Wake a charger that has not offered: present Rd (rd_for_run(true)); the START path then takes its 5 V contract. False = the
+    // driver refused (a sink is inline): nothing was changed.
+    virtual bool wake() { return false; }
+    // Give the Rd back after a wake that failed or was cut short (cancel, ports taken). A run that finished (Reason::Done) does not
+    // call this: finished() is the owner's moment to keep or release it.
+    virtual void unwake() {}
     virtual void finished(Reason) {}
 protected:
     ~Env() = default;
@@ -155,7 +179,9 @@ public:
         if (in.busy) return Refusal::Busy;
         if (in.inline_link) return Refusal::Inline;
         if (in.vbus_mv < 0 || in.cap_mv < 5000) return Refusal::NoMonitor;
-        if (in.vbus_mv < 1000 || in.caps == nullptr || !in.caps->valid) return Refusal::NoSource;
+        const bool listed = in.caps != nullptr && in.caps->valid;
+        // No list yet: only a charger the K2 may wake. A list in hand needs VBUS up as before.
+        if (listed ? in.vbus_mv < 1000 : !in.wakeable) return Refusal::NoSource;
         if (!confirmed) return Refusal::NeedConfirm;
         env_ = &env;
         slots_ = {};
@@ -166,6 +192,16 @@ public:
         detached_ = false;
         restoring_ = false;
         impersonating_ = false;
+        woke_ = false;
+        if (!listed) {
+            if (!env.wake()) return Refusal::Inline;   // the driver refused (a sink is inline): nothing changed
+            woke_ = true;
+            caps_seq0_ = in.caps_seq;
+            phase_ = Phase::Wake;
+            phase_at_ = in.now;
+            reason_ = Reason::Done;
+            return Refusal::None;
+        }
         next_twin(in);
         return Refusal::None;
     }
@@ -178,6 +214,8 @@ public:
     std::uint8_t done_count() const { return std::min<std::uint8_t>(idx_, n_); }
     Reason reason() const { return reason_; }
     bool restoring() const { return restoring_ && running(); }
+    bool waking() const { return phase_ == Phase::Wake; }   // Rd presented, waiting for the silent charger's list
+    bool woke() const { return woke_; }                     // this run presented the Rd (it stays set after the run ended)
 
     // Stops now: 5 V asked when a level above it may be held, Rd back when the K2 was detached, the K2's own caps restored.
     void cancel(Reason why = Reason::Cancelled) {
@@ -195,6 +233,7 @@ public:
         if (!running()) return;
         if (in.busy || in.inline_link) { cancel(Reason::Busy); return; }
         switch (phase_) {
+            case Phase::Wake: poll_wake(in); break;
             case Phase::Dark: poll_dark(in); break;
             case Phase::Caps: poll_caps(in); break;
             case Phase::Request: poll_request(in); break;
@@ -206,7 +245,7 @@ public:
     }
 
 private:
-    enum class Phase : std::uint8_t { Idle, Dark, Caps, Request, Hold, Release, Done };
+    enum class Phase : std::uint8_t { Idle, Wake, Dark, Caps, Request, Hold, Release, Done };
 
     // The K2's own Sink_Capabilities back, only when a twin's were ever put in place (a run that skips every twin touches nothing).
     void clear_impersonation() {
@@ -216,6 +255,9 @@ private:
     }
 
     void end(Reason why) {
+        // The Rd this run presented goes back when the wake itself failed or was cut short, or the ports were taken. After a
+        // proof (Done, or a cancel past the wake) finished() decides: the page keeps it so the list stays on screen.
+        if (woke_ && (phase_ == Phase::Wake || why == Reason::Busy)) env_->unwake();
         clear_impersonation();
         phase_ = Phase::Done;
         reason_ = why;
@@ -296,6 +338,22 @@ private:
         caps_seq0_ = in.caps_seq;
         phase_ = Phase::Caps;
         phase_at_ = in.now;
+    }
+
+    // Rd is on: the charger raises 5 V, lists, and the START path takes the 5 V contract. Then the proof goes on as for a charger
+    // that had listed all along (the plan on the new list, impersonate, detach, attach).
+    void poll_wake(const Input& in) {
+        const bool listed = in.caps_seq != caps_seq0_ && in.caps != nullptr && in.caps->valid;
+        if (listed && in.sink.state == pd::SinkState::Ready && in.sink.pos == 1) {
+            phase_ = Phase::Caps;   // the wake is over: a run that skips every twin ends Done and keeps the Rd (end() above)
+            next_twin(in);
+            return;
+        }
+        if (in.now - phase_at_ < kWakeMs) return;
+        Slot& s = slots_[order_[idx_]];
+        s.verdict = Verdict::NoCaps;
+        env_->record(order_[idx_], s);
+        end(Reason::NoOffer);
     }
 
     void poll_dark(const Input& in) {
@@ -448,7 +506,7 @@ private:
     std::uint8_t n_ = 0, idx_ = 0;
     Phase phase_ = Phase::Idle;
     Reason reason_ = Reason::Done;
-    bool never_dark_ = false, detached_ = false, restoring_ = false, requested_above_5v_ = false, impersonating_ = false;
+    bool never_dark_ = false, detached_ = false, restoring_ = false, requested_above_5v_ = false, impersonating_ = false, woke_ = false;
     std::uint32_t phase_at_ = 0, dark_since_ = 0, ready_at_ = 0, in_since_ = 0, last_t_ = 0, caps_seq0_ = 0;
     pd::Choice want_{};
     Kind kind_ = Kind::None;

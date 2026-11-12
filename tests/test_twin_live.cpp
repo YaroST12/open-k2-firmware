@@ -43,7 +43,7 @@ const Twin kOp15 = twin_of({0x2601912C, 0x0002D12C, 0x0003C12C, 0xC0DC3264}, "OP
 const pd::SourceCaps kC1 = caps_of({0x0A01912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0x0006412C, 0xC8DC323C, 0xC990323C});
 
 enum class Mode { Grant, Reject, NoPsRdy, Timeout, OutOfBand, Over, Reset };
-enum class Ev { None, Dark, Attach, Reply, Release };
+enum class Ev { None, Dark, Attach, Reply, Release, Wake };
 
 // The charger behind the K2, the Env the runner talks to, and the clock: step() advances 10 ms at a time.
 struct Sim : Env {
@@ -52,6 +52,9 @@ struct Sim : Env {
     std::map<std::uint8_t, Slot> recorded;
     pd::SourceCaps caps = kC1, caps_after = kC1;
     bool swap_caps = false, no_caps = false, never_dark = false, self_powered = false, busy = false, inline_link = false;
+    // A charger that has not offered yet: it lists `offer` once the K2 presents Rd (wake), unless wake_answers is false.
+    bool wakeable = false, wake_refused = false, wake_answers = true;
+    pd::SourceCaps offer = kC1;
     pd::Err req_err = pd::Err::Ok;
     Mode mode = Mode::Grant;
     std::uint32_t now = 1000, seq = 1, cap_mv = 36000;
@@ -106,6 +109,13 @@ struct Sim : Env {
         sink.state = pd::SinkState::Transition;
         ev = Ev::Release; ev_at = now + 100;
     }
+    bool wake() override {
+        log.push_back("wake");
+        if (wake_refused) return false;
+        if (wake_answers) { ev = Ev::Wake; ev_at = now + 400; }
+        return true;
+    }
+    void unwake() override { log.push_back("unwake"); }
     void record(std::uint8_t seq_no, const Slot& s) override { recorded[seq_no] = s; log.push_back(std::string("record ") + std::to_string(seq_no) + " " + name(s.verdict)); }
     void finished(Reason why) override { finished_called = true; fin = why; log.push_back(std::string("finished ") + name(why)); }
 
@@ -135,6 +145,9 @@ struct Sim : Env {
             case Ev::Release:
                 sink.state = pd::SinkState::Ready; sink.pos = 1; sink.result = pd::SinkResult::None; vbus = 5000;
                 break;
+            case Ev::Wake:   // Rd on: the charger raises 5 V, lists, and the K2 takes the 5 V contract
+                caps = offer; ++seq; sink.state = pd::SinkState::Ready; sink.pos = 1; sink.result = pd::SinkResult::None; vbus = 5000;
+                break;
             case Ev::None: break;
         }
     }
@@ -150,7 +163,15 @@ struct Sim : Env {
         in.self_powered = self_powered;
         in.busy = busy;
         in.inline_link = inline_link;
+        in.wakeable = wakeable;
         return in;
+    }
+    // A charger waiting on the plug that has not offered: no list, VBUS dark.
+    void waiting() {
+        caps = pd::SourceCaps{};
+        vbus = 0;
+        wakeable = true;
+        sink.state = pd::SinkState::Idle;
     }
 
     Refusal start(std::initializer_list<std::uint8_t> seqs, bool confirmed = true) {
@@ -483,7 +504,169 @@ static void test_names() {
     CHECK_EQ(sizeof(Slot), 4u);
 }
 
+// ---- wake on prove: a charger that has not offered yet ----
+
+static void test_may_wake_table() {
+    using raguard::WaitKind;
+    CHECK_COND(may_wake(WaitKind::ChargerWaiting, 0, false));       // a charger waiting for a sink: VBUS dark, Rp steady
+    CHECK_COND(may_wake(WaitKind::Unknown, 5000, false));           // VBUS up and no list
+    CHECK_COND(!may_wake(WaitKind::Unknown, 0, false));             // no history, nothing on the line
+    CHECK_COND(!may_wake(WaitKind::Unknown, -1, false));
+    CHECK_COND(!may_wake(WaitKind::NoSource, 0, false));
+    CHECK_COND(!may_wake(WaitKind::DualRolePort, 0, false));        // a phone alone must not become a source
+    CHECK_COND(!may_wake(WaitKind::DualRolePort, 5000, false));
+    CHECK_COND(!may_wake(WaitKind::ChargerWaiting, 0, true));       // a sink sits behind the K2: its Rd stays alone
+    CHECK_COND(!may_wake(WaitKind::Unknown, 5000, true));
+}
+
+static void test_wake_refusals_touch_nothing() {
+    {
+        Sim s;
+        s.waiting();
+        s.wakeable = false;                                          // a phone, or nothing: the old refusal
+        CHECK_EQ(int(s.start({1})), int(Refusal::NoSource));
+        CHECK_COND(s.log.empty());
+    }
+    {
+        Sim s;
+        s.waiting();
+        CHECK_EQ(int(s.start({1}, false)), int(Refusal::NeedConfirm));   // the first press only arms: Rd is not presented
+        CHECK_COND(!s.r.running());
+        CHECK_COND(s.log.empty());
+    }
+    {
+        Sim s;
+        s.waiting();
+        s.busy = true;
+        CHECK_EQ(int(s.start({1})), int(Refusal::Busy));
+        CHECK_COND(s.log.empty());
+    }
+    {
+        Sim s;
+        s.waiting();
+        s.inline_link = true;
+        CHECK_EQ(int(s.start({1})), int(Refusal::Inline));
+        CHECK_COND(s.log.empty());
+    }
+    {
+        Sim s;
+        s.waiting();
+        s.cap_mv = 0;
+        CHECK_EQ(int(s.start({1})), int(Refusal::NoMonitor));
+        CHECK_COND(s.log.empty());
+    }
+    {
+        Sim s;
+        s.waiting();
+        s.wake_refused = true;                                       // the driver would not present Rd (a sink appeared)
+        CHECK_EQ(int(s.start({1})), int(Refusal::Inline));
+        CHECK_COND(!s.r.running());
+        CHECK_EQ(s.count_of("unwake"), 0);
+    }
+}
+
+static void test_wake_then_proof() {
+    Sim s;
+    s.waiting();
+    CHECK_EQ(int(s.start({1})), int(Refusal::None));
+    CHECK_COND(s.r.running());
+    CHECK_COND(s.r.waking());
+    CHECK_EQ(int(s.r.current()), 1);
+    CHECK_EQ(s.log.size(), 1u);                                      // Rd presented, nothing else
+    CHECK_COND(s.log[0] == "wake");
+    s.run();
+    CHECK_COND(s.r.woke());
+    CHECK_COND(!s.r.waking());
+    CHECK_EQ(int(s.fin), int(Reason::Done));
+    CHECK_EQ(int(s.r.slot(1).verdict), int(Verdict::Granted));
+    // Order: Rd, then the twin's words and the fresh attach, and only then a Request (never above 5 V before the caps).
+    const int wake = s.index_of("wake"), imp = s.index_of("impersonate Pixel"), det = s.index_of("detach"), req = s.index_of("request");
+    CHECK_COND(wake == 0 && imp > wake && det > imp && req > det);
+    CHECK_EQ(s.count_of("wake"), 1);
+    CHECK_EQ(s.count_of("unwake"), 0);                               // a finished run leaves the Rd to the owner (the page keeps it)
+}
+
+static void test_wake_skips_the_wake_when_a_list_exists() {
+    Sim s;
+    s.wakeable = true;                                               // caps are there: this is the ordinary proof
+    CHECK_EQ(int(s.start({1})), int(Refusal::None));
+    CHECK_COND(!s.r.waking());
+    s.run();
+    CHECK_COND(!s.r.woke());
+    CHECK_EQ(s.count_of("wake"), 0);
+    CHECK_EQ(int(s.r.slot(1).verdict), int(Verdict::Granted));
+}
+
+static void test_wake_no_offer_releases_and_says_so() {
+    Sim s;
+    s.waiting();
+    s.wake_answers = false;                                          // legacy charger, or one that stays dark
+    CHECK_EQ(int(s.start({1})), int(Refusal::None));
+    const std::uint32_t t0 = s.now;
+    s.run();
+    CHECK_COND(s.now - t0 >= kWakeMs && s.now - t0 <= kWakeMs + 100);   // bounded, never forever
+    CHECK_EQ(int(s.fin), int(Reason::NoOffer));
+    CHECK_EQ(int(s.r.reason()), int(Reason::NoOffer));
+    CHECK_STR(name(Reason::NoOffer), "no offer");
+    CHECK_EQ(s.count_of("unwake"), 1);                               // Rd given back
+    CHECK_EQ(int(s.r.slot(1).verdict), int(Verdict::NoCaps));
+    CHECK_EQ(s.count_of("request"), 0);
+    CHECK_EQ(s.count_of("impersonate"), 0);
+    CHECK_EQ(s.count_of("detach"), 0);
+    CHECK_COND(!s.r.running());
+}
+
+static void test_wake_cancel_gives_rd_back() {
+    Sim s;
+    s.waiting();
+    s.start({1});
+    for (int i = 0; i < 5; i++) s.step();                            // still waiting for the charger
+    CHECK_COND(s.r.waking());
+    s.r.cancel();
+    CHECK_COND(!s.r.running());
+    CHECK_EQ(int(s.fin), int(Reason::Cancelled));
+    CHECK_EQ(s.count_of("unwake"), 1);
+    CHECK_EQ(int(s.r.slot(1).verdict), int(Verdict::Cancelled));
+    CHECK_EQ(s.count_of("attach"), 0);
+    CHECK_EQ(s.count_of("request"), 0);
+    CHECK_EQ(s.count_of("release"), 0);                              // nothing above 5 V was ever asked
+}
+
+static void test_wake_busy_mid_wake_cancels() {
+    Sim s;
+    s.waiting();
+    s.start({1});
+    s.step();
+    s.inline_link = true;                                            // a sink appeared behind the K2
+    s.step();
+    CHECK_COND(!s.r.running());
+    CHECK_EQ(int(s.fin), int(Reason::Busy));
+    CHECK_EQ(s.count_of("unwake"), 1);
+}
+
+static void test_wake_then_skipped_twin_still_ends_done() {
+    Sim s;
+    s.waiting();
+    s.cap_mv = 9000;                                                 // the Pixel's 11 V level is above the monitor: nothing is sent for it
+    s.start({1});
+    s.run();
+    CHECK_EQ(int(s.fin), int(Reason::Done));
+    CHECK_COND(s.r.woke());
+    CHECK_EQ(int(s.r.slot(1).verdict), int(Verdict::Skipped));
+    CHECK_EQ(int(s.r.slot(1).skip), int(Skip::AboveCeiling));
+    CHECK_EQ(s.count_of("request"), 0);
+    CHECK_EQ(s.count_of("detach"), 0);                               // nothing was impersonated: the wake is the whole run
+}
+
 int main() {
+    test_may_wake_table();
+    test_wake_refusals_touch_nothing();
+    test_wake_then_proof();
+    test_wake_skips_the_wake_when_a_list_exists();
+    test_wake_no_offer_releases_and_says_so();
+    test_wake_cancel_gives_rd_back();
+    test_wake_busy_mid_wake_cancels();
+    test_wake_then_skipped_twin_still_ends_done();
     test_refusals_touch_nothing();
     test_granted_pps();
     test_five_volts_needs_no_request();
