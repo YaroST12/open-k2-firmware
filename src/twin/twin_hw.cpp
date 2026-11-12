@@ -230,4 +230,52 @@ Learned learn_from_sniff(std::string_view name, bool save) {
     return out;
 }
 
+namespace {
+InlineLearn g_inline;
+std::array<char, twin::kNameMax + 1> g_inline_name{};
+std::size_t g_inline_name_n = 0;
+}  // namespace
+
+pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx) {
+    pd::IqFacts f;
+    f.confirmed = confirmed;
+    f.busy = ctx.busy || ctx.owners_busy || g_run.running() || loopguard::locked();
+    f.self_powered = power_source::bus_powered();   // the driver adds its own pinned-Rd self power
+    const pd::IqRefusal r = fusb302::interrogate_start(f);
+    K2LOG("[TWIN] learn inline start save=%u -> %s\n", unsigned(save), pd::iq_refusal_name(r));
+    if (r != pd::IqRefusal::None) return r;
+    g_inline = InlineLearn{};
+    g_inline.pending = true;
+    g_inline.save = save;
+    g_inline_name_n = std::min<std::size_t>(name.size(), twin::kNameMax);
+    std::memcpy(g_inline_name.data(), name.data(), g_inline_name_n);
+    return r;
+}
+
+void inline_poll() {
+    if (!g_inline.pending || fusb302::interrogate_running()) return;
+    g_inline.pending = false;
+    g_inline.done = true;
+    Learned out;
+    out.how = Learn::NoContract;
+    const pd::IqStatus& st = fusb302::interrogate_status();
+    if (twin::from_interrogated(st, out.twin))
+        out = save_learned(out, std::string_view(g_inline_name.data(), g_inline_name_n), g_inline.save);
+    g_inline.result = out;
+    K2LOG("[TWIN] learn inline -> %u vid=%04x pdos=%u req=%u rev=%08x ext=%u\n", unsigned(out.how), unsigned(out.twin.vid),
+          unsigned(out.twin.num_pdos), unsigned(out.twin.has_request()), unsigned(out.twin.revision), unsigned(out.twin.sink_ext_len));
+}
+
+void inline_cancel() {
+    if (!g_inline.pending && !fusb302::interrogate_running()) return;
+    g_inline.pending = false;   // a stopped run teaches nothing
+    fusb302::interrogate_abort();
+}
+
+bool inline_running() { return g_inline.pending || fusb302::interrogate_running(); }
+
+const InlineLearn& inline_learn() { return g_inline; }
+
+const pd::IqStatus& inline_status() { return fusb302::interrogate_status(); }
+
 }  // namespace k2::twin_hw

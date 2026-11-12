@@ -16,8 +16,9 @@ Status: built and host-tested (`tests/test_twin_*.cpp`, `tests/test_ui_twin.cpp`
 | Profile and prediction (pure) | `include/k2/twin/twin.hpp`, `predict.hpp` | `predict(Twin, SourceCaps, Facts) -> Outcome` |
 | Library record and learning (pure) | `library.hpp`, `learn.hpp`, `usbdata.hpp`, `present.hpp` | record codec, merge rules, USB-data decoders, the one-line texts |
 | Live proof (pure state machine) | `live.hpp` | `Runner` over an `Env` seam, host-tested with a fake `Env` |
-| Hardware glue | `include/k2/twin/twin_hw.hpp`, `src/twin/twin_hw.cpp` | flash library via `k2::storage`, Identify and sniff learning, the live proof over `fusb302` |
-| Remote | `wire.hpp`, `Cmd::Twin = 0x63` | ops List 0, Get 1, Predict 2, Learn 3, Rename 4, Delete 5, Run 6, Status 7, Result 8, Usb 9, Cancel 10 |
+| Hardware glue | `include/k2/twin/twin_hw.hpp`, `src/twin/twin_hw.cpp` | flash library via `k2::storage`, Identify, sniff and inline-interrogation learning, the live proof over `fusb302` |
+| Inline interrogation (pure sequencer) | `include/k2/pd/pd_interrogate.hpp`, `src/pd/pd_interrogate.cpp` | reset, sniff, ask, reset; driven by `fusb302::interrogate_*` (section 9) |
+| Remote | `wire.hpp`, `Cmd::Twin = 0x63` | ops List 0, Get 1, Predict 2, Learn 3, Rename 4, Delete 5, Run 6, Status 7, Result 8, Usb 9, Cancel 10, Inline 11 |
 | Shell | `twin list \| status \| cancel \| predict \| run \| learn \| rename \| delete` | `src/core/shell.cpp`, `src/core/shell_hw.cpp` |
 | Host tool | `tools/k2_remote.py twin ...`, `tools/twin_proto.py` | `show`, `usb`, `export` are host-side views of the same records |
 | Screen | `src/ui/ui_twin.cpp`, `include/k2/ui/ui_twin.hpp` | Tools > Device twins |
@@ -61,28 +62,43 @@ The prediction is a PD contract. It cannot say anything about:
 
 ## 4. Learning a twin
 
-A twin is learned from one of two observations. The record keeps only what is needed to predict (compact: a typical phone is **52 bytes**).
+A twin is learned from one of three observations. The record keeps only what is needed to predict (compact: a typical phone is **52 bytes**).
 
 | Source | Command | When |
 | :--- | :--- | :--- |
 | Identify, device **alone** on the K2 | screen: Tools > Device twins > Learn row; shell `twin learn identify [dry] [name]`; host `k2_remote.py twin learn identify` | the device is attached to the K2 with no charger. Identify (`identify-device`, `pd::IdState`, `include/k2/pd/pd_identify.hpp`) asks it for identity, SVIDs, modes and its Sink_Capabilities. |
 | A Request the K2 **sniffed** inline | shell `twin learn sniff [dry] [name]`; host `twin learn sniff` | a real charger and the real device, the K2 between them sending nothing. The sniffed Request (the contract the device really asked for) is stored next to the sink PDOs. |
+| The device **interrogated** inline | screen: the Learn row with a device inline (confirm first); shell `twin learn inline confirm [dry] [name]`; host `twin learn inline --confirm [--dry] [--name N]`, lab `pd interrogate --inline --confirm [--save]` | a real charger and the real device, the K2 between them. The K2 resets the link, asks the device as its source and resets it again (section 9). The twin gets the identity, SVIDs, modes, sink PDOs, the sniffed Request, the Revision and Sink_Capabilities_Extended. |
 
-`dry` shows what would be learned and saves nothing. Learning the same device again merges into its twin (same VID and PID): the library says `updated` or `unchanged`. The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"), with " 2", " 3" on repeats. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
+`dry` shows what would be learned and saves nothing. Learning the same device again merges into its twin: the library says `updated` or `unchanged`.
+
+### Same device (the merge key)
+
+`twin::same_device` (`include/k2/twin/learn.hpp`) decides whether a new observation belongs to a saved twin:
+
+1. Both carry an identity (VID not 0): the same VID and PID, nothing else.
+2. One carries an identity and the other does not: never the same. A sink PDO list or a Request does not prove which identified device it was (two phones of one vendor list the same PDOs).
+3. Neither carries one: the same sink PDO list when both have one, otherwise the same sniffed Request (the RDO and the source PDO it pointed at). With nothing to compare the two are different devices: two devices that never answered Discover Identity do not merge just because both read 0000:0000.
+
+What the new observation knows replaces the saved value, what it does not know leaves the saved value alone, and the saved name stays.
+
+The library holds 12 twins The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"), with " 2", " 3" on repeats. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
 
 ### Record format
 
-Magic "K2T", CRC16 CCITT, two versions:
+Magic "K2T", CRC16 CCITT, three versions:
 
 - **v1**: 40 to 76 bytes: identity, sink PDOs, optionally the sniffed Request pair (flag bit 0).
 - **v2**: v1 plus a **declared block** of 3 to 35 bytes (flag bit 1) and an **observed block** of 18 bytes (flag bit 2). A record without USB data is written as v1, byte-identical to what a firmware without the USB properties wrote, and old records stay readable. Any other flag bit, or flag bit 1 or 2 in a v1 record, is damage.
-- Largest record 76 + 35 + 18 = 129 bytes; the typical phone (three sink PDOs) is 52 bytes.
+- **v3**: v2 plus the PD 3 answers of an inline interrogation: the **Revision** data object, 4 bytes (flag bit 3), and the **Sink_Capabilities_Extended** block, a length byte (1 to 24) and that many bytes (flag bit 4). Written only when one of them is present, so every older record stays byte-identical; flag bit 3 or 4 in a v1 or v2 record is damage.
+- Largest record 76 + 35 + 18 = 129 bytes, for every version: twelve of them are what the volume budget holds for `/twin` (one byte more each spills the directory into another metadata pair). The v3 blocks go in only while the record stays within 129 bytes, the extended block left out first, then the Revision; only a twin that also carries full USB blocks loses them. The typical phone (three sink PDOs) is 52 bytes, 89 with a Request and both v3 blocks.
 
 Cross-check vectors (also in `tests/test_twin_lib.cpp` and `tests/test_twin_proto.py`):
 
 ```
 PIXEL     (52 B) 4b3254010300d118e14ea0010203506978656c203900000000000000000000000000000000002c9101002cd102002c21dcc8e465
 PIXEL_REQ (60 B) 4b3254010501d118e14ea0010203506978656c203900000000000000000000000000000000002c9101002cd102002c21dcc82cb104102cb10400a8b5
+CANON_V3  (65 B) 4b3254030619000000000000020243616e6f6e000000000000000000000000000000000000002c9101002cb104002cb144432cb10400000010320401020304b427
 ```
 
 ## 5. Running it: predict, prove, read
@@ -103,7 +119,7 @@ Tools > Device twins (layout and wording: `docs/UI_SYSTEM.md` section 9). Two vi
 | OK on Delete twin | arms ("Deletes this twin for good"); a second OK deletes it and returns to the list ("Twin deleted") |
 | OK on Re-learn | as the Learn row; a different device is saved as another twin ("Saved as another twin") |
 | BACK | stops a read or a proof (5 V back), disarms, closes the detail, then leaves the page |
-| OK on the Learn row ("Learn from device") | a device alone on the K2 (a dual-role phone: VBUS dark, no source caps, its Rp toggling) is read first: the page starts the Sink-tab Identify, shows "Reading the device" (Back stops it), and learns when it ends ("Device did not answer" when it never did). Anything else learns from the last Identify. Footers: "Twin learned", "Twin updated", "Already known", "Plug a device in alone", "Nothing to learn from", "Library full" |
+| OK on the Learn row ("Learn from device") | a device alone on the K2 (a dual-role phone: VBUS dark, no source caps, its Rp toggling) is read first: the page starts the Sink-tab Identify, shows "Reading the device" (Back stops it), and learns when it ends ("Device did not answer" when it never did). A device **inline** behind its charger is interrogated: the first OK arms ("Resets the link. Confirm", or the refusal: "Tool or test running", "K2 holds the contract", "K2 runs on this VBUS"), the second starts it; the footer follows it ("Resetting the link", "Asking the device"), Back stops it ("Stopped. Link reset", the final reset still goes out), the end learns ("Twin learned", "Learned. Contract changed" in amber when the device asked differently after the reset, "Device did not answer"). VBUS dark with no charger listing and nothing of the above: "No power: add a charger". Anything else learns from the last Identify. Footers: "Twin learned", "Twin updated", "Already known", "Plug a device in alone", "Nothing to learn from", "Library full" |
 
 The proof refuses up front, with a footer, when the live proof cannot be run: a tool or test is running, a device is inline, the power monitor is not ready, there is no charger to run against. Renaming stays off the device (shell or host tool).
 
@@ -115,6 +131,7 @@ twin predict [n|all]               what this charger gives each twin, no transmi
 twin run [n|all] confirm           the live proof (wakes a charger that has not offered)
 twin status | twin cancel
 twin learn identify|sniff [dry] [name]
+twin learn inline confirm [dry] [name]   interrogate the device inline (two Hard Resets); `twin status` follows it
 twin rename n name | twin delete n confirm
 ```
 
@@ -127,6 +144,8 @@ python3 tools/k2_remote.py twin predict [ids]
 python3 tools/k2_remote.py twin run [ids] --confirm [--wait S]
 python3 tools/k2_remote.py twin status | result N | cancel
 python3 tools/k2_remote.py twin learn identify|sniff [--name N] [--dry]
+python3 tools/k2_remote.py twin learn inline --confirm [--name N] [--dry] [--wait S]
+python3 tools/k2_remote.py pd interrogate --inline --confirm [--save] [--name N]   (lab face: dry unless --save)
 python3 tools/k2_remote.py twin rename N NAME | delete N --confirm
 python3 tools/k2_remote.py twin usb N [declared|observed]
 python3 tools/k2_remote.py twin export --out twins.json
@@ -226,10 +245,37 @@ What this needs that exists: the declared block (the DP capabilities and Thunder
 Identify (Tools > Who's attached, `identify-device`, and the Learn row) is a conversation: the K2 sends Discover Identity and the later steps to the device, which means the K2 holds a port role and a contract during it.
 
 - **Device alone on the K2** (no charger): the existing Identify-alone path waits for a Ready contract with the device, presents Rd, and the Rd gate keeps the link; at the end of the run the release drops the contract and the K2 hands back to 5 V where that hand-back already works. **Dropping the device's contract for the interrogation is acceptable** (operator decision) because the device is alone and nothing is being charged.
-- **Inline** (a charger and a device with the K2 between them): the K2 **sends nothing**. Learning there is `twin learn sniff`, which only reads the device's Request. The Identify command is refused inline by the existing guard.
+- **Inline** (a charger and a device with the K2 between them): by default the K2 **sends nothing**; `twin learn sniff` only reads the device's Request and the Identify command is refused inline by the existing guard. The one exception is the **inline interrogation** below (user decision 2026-11-13: "for the device ID we have to be able to interrogate things"); it runs only on an explicit confirm.
 - **Physically impossible**: anything that would need VCONN is not attempted ("stop that part").
 
 This is documented from the code paths and their tests. **Not hardware-verified**: what the device's contract does after the end-of-run release (whether it returns to 5 V, stays or resets) is the first thing the hardware plan below measures.
+
+### 9.1 The inline interrogation
+
+The pure sequencer is `pd::Interrogate` (`include/k2/pd/pd_interrogate.hpp`, host-tested in `tests/test_pd_interrogate.cpp`); the driver (`fusb302::interrogate_start/abort/running/status`) owns the wire, `twin_hw::inline_*` learns from it, and the Device twins page, the shell and the remote start it.
+
+| Phase | What happens |
+| :--- | :--- |
+| Reset1 | a Hard Reset from the K2; skipped when a fresh contract was sniffed (caps, Request, Accept, PS_RDY with no reset since) |
+| Sniff1 | the renegotiation, sniffed: Source_Capabilities, the device's Request, Accept, PS_RDY (5 s at most) |
+| Settle | 250 ms after PS_RDY and 150 ms of a quiet line (3 s at most): the charger's own post-contract questions go first, and what the device answers them is kept like an answer to the K2 |
+| Ask | Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended and Get_Revision (PD 3.x only), Discover SVIDs and Discover Modes (only when the Identity ACK says modal operation); a step already answered is not asked again |
+| Reset2 | a second Hard Reset: the charger's MessageID bookkeeping and what it overheard are left behind |
+| Sniff2 | the renegotiated contract, compared with the first (`same contract`, `contract changed`, `no contract after the reset`) |
+
+Rules (all in the sequencer, each pinned by a host test):
+
+- **Roles and revision.** The K2 speaks as the source: power role source, data role DFP (or what the source's header says), the contract's revision (the lower of the device's Request and the source's header). A PD 2.0 device is asked with SVDM version 1.0 and is never asked Get_Sink_Cap_Extended or Get_Revision.
+- **MessageID.** The next ID after the newest non-GoodCRC SOP message with the source power role on the wire (the charger's or the K2's own), a fresh ID per attempt, so the device's duplicate filter never drops a question as a retransmission. Risk: the charger's own next message reuses that ID, and a device that filters strictly by ID may drop it once; the final reset makes that harmless.
+- **Answers.** Only a message with the sink power role answers (the charger may also answer a question it overheard; ignored). A step gets two attempts 200 ms apart; NAK, Not_Supported and Reject end it.
+- **Transmit.** Auto-CRC stays off (the K2 never GoodCRCs inline: the charger already does), the frame goes out once with no hardware retry (CONTROL3 retries 0 for that frame, restored after), and the transmit result does not count: the device's and the charger's GoodCRCs collide on the wire and the device answers anyway.
+- **Bounded.** 20 s of asking from the start, at most 2 Hard Resets from the charger or the device mid-run; the final reset always goes out once a question was sent, also after BACK / `twin cancel`. While a reset or its renegotiation is in flight the driver's VBUS detach rule is held off (VBUS is expected to drop); the CC rule still ends the run on a real unplug.
+- **Refused** while another PD tool runs (Identify, probe, re-read, trigger prepare, VCONN, an armed Get_Source_Cap, an SOP' responder such as the e-marker spoof), without a CC line, without a device inline, while a charger test, PD Stress, the SuperVOOC trigger, the FC scan, an FC release, a loop probe or a twin proof owns the ports, while the K2 holds or makes its own contract, and when the K2 is powered from this VBUS (the reset would cut its own supply).
+- **Evidence.** `[IQ]` log lines (start, each phase, each transmitted question, the end with the asked / answered / refused / silent masks, both contracts, the answers) and a Black Box mark `interrogate` per phase change; `[TWIN] learn inline ...` for the learn.
+
+The learned twin (`twin::from_interrogated`): the identity, product-type VDOs, SVIDs and modes, the sink PDOs, the device's revision, the Request of the first contract (else the second), the Revision data object and the Sink_Capabilities_Extended block (record v3). A run that read no contract and no sink PDOs teaches nothing ("Device did not answer").
+
+**Not hardware-verified.** First hardware check: a phone behind a bench charger, `pd interrogate --inline --confirm` (dry), then `twin learn inline --confirm`; record `ping` uptime, VBUS and both contracts, and that the phone charges again after the final reset.
 
 ## 10. Hardware plan
 

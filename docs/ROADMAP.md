@@ -1093,6 +1093,18 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   a sense fixture on CC1, CC2 and D-.
 - WebHID dashboard in Chrome (Linux hidraw path tested with the Python tools only).
 - OPPO VOOC / SVOOC: no handshake seen yet (CHARGER_QUIRKS).
+- **Inline interrogation** (k2/inline-interrogate, built and host-tested only; `docs/DEVICE_TWIN.md` 9.1, the one inline
+  TX exception, `CONNECTION_MATRIX.md` X11). With a device inline behind its charger the K2 hard-resets the link (unless
+  a fresh contract was sniffed), asks the device as its source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended,
+  Get_Revision, SVIDs, Modes), hard-resets again and learns a twin. Surfaces: Device twins > Learn (confirm), shell
+  `twin learn inline confirm [dry] [name]`, `k2_remote twin learn inline --confirm`, lab `pd interrogate --inline
+  --confirm`. Validate (hardware, a phone behind a bench charger, no load, K2 on HID power): (1) `pd interrogate
+  --inline --confirm` prints asked / answered per question, both contracts and the run length; (2) `pd_trace.py dump`
+  shows two K2 Hard Resets, the questions with the source roles and the expected MessageIDs, the device's answers;
+  (3) the phone charges again after the final reset (`state`), `ping` uptime grows through the run (no reboot);
+  (4) `twin learn inline --confirm --name X` saves a twin with the identity and sink PDOs; (5) the screen path:
+  Learn row -> "Resets the link. Confirm" -> OK -> "Resetting the link" / "Asking the device" -> "Twin learned".
+  Open: whether a device with a strict MessageID filter drops the charger's next message after our question.
 - The HID-cable loop probe (Tools > Loop probe): built and host-tested only; the test plan is in `LOOP_PROBE.md`.
 - **PD Stress page** (Tools > PD Stress, k2/pdstress-ui, built and host-tested only; `docs/UI_DESIGN.md` 4.5). Setup
   1/2 (P1..P12 checklist, Cycles, Pace, saved results), Review 2/2 (KvTable + two-press START), Running (48 px VBUS,

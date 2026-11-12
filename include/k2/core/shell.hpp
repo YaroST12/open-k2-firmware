@@ -26,7 +26,8 @@ inline constexpr std::size_t kLineMax = 128;
 
 // A parsed `twin ...` line (k2/twin/wire.hpp has the same operations on the HID remote). `seq` is the library number 1..12;
 // `all` = every twin; `name` points into the typed line (valid during the call only), at most kTwinNameMax characters.
-enum class TwinOp : std::uint8_t { List, Predict, Run, Status, Learn, LearnSniff, Delete, Rename, Cancel };
+// LearnInline: interrogate the device inline (twin_hw::inline_start; two Hard Resets, so `confirm` is set only when typed).
+enum class TwinOp : std::uint8_t { List, Predict, Run, Status, Learn, LearnSniff, Delete, Rename, Cancel, LearnInline };
 inline constexpr std::size_t kTwinNameMax = 24;
 inline constexpr unsigned kTwinMax = 12;
 struct TwinCmd {

@@ -232,7 +232,8 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
 
 void cmd_twin(Backend& b, const Tokens& k) {
     constexpr const char* kUsage =
-        "usage: twin list | predict [n|all] | run [n|all] confirm | status | cancel | learn identify|sniff [dry] [name] | rename n name | delete n confirm";
+        "usage: twin list | predict [n|all] | run [n|all] confirm | status | cancel | learn identify|sniff [dry] [name] | "
+        "learn inline confirm [dry] [name] | rename n name | delete n confirm";
     if (k.n < 2) return err(b, kUsage);
     const std::string_view s = k.t[1];
     TwinCmd c;
@@ -260,10 +261,16 @@ void cmd_twin(Backend& b, const Tokens& k) {
     }
     if (same(s, "learn")) {
         if (k.n < 3) return err(b, kUsage);
+        std::size_t i = 3;
         if (same(k.t[2], "identify")) c.op = TwinOp::Learn;
         else if (same(k.t[2], "sniff")) c.op = TwinOp::LearnSniff;
-        else return err(b, "usage: twin learn identify|sniff [dry] [name]");
-        std::size_t i = 3;
+        else if (same(k.t[2], "inline")) {
+            c.op = TwinOp::LearnInline;
+            if (k.n == i || !same(k.t[i], "confirm"))
+                return err(b, "an inline interrogation hard-resets the link twice: twin learn inline confirm [dry] [name]");
+            c.confirm = true;
+            i++;
+        } else return err(b, "usage: twin learn identify|sniff|inline [confirm] [dry] [name]");
         if (k.n > i && same(k.t[i], "dry")) { c.dry = true; i++; }
         if (k.n > i && !twin_name(k, i, c.name)) return err(b, "name is at most 24 characters");
         return done(b, b.twin(c));

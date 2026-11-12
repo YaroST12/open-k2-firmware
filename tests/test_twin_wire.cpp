@@ -306,6 +306,26 @@ struct FakeApi {
     const live::Runner& runner() const { return r; }
     bool running() const { return is_running; }
     void cancel() { ++cancels; is_running = false; }
+    // the inline interrogation
+    pd::IqRefusal iq_refusal = pd::IqRefusal::None;
+    bool iq_running = false, iq_save = false, iq_confirmed = false;
+    int iq_starts = 0, iq_cancels = 0;
+    char iq_name[32]{};
+    twin_hw::InlineLearn iq_learn{};
+    pd::IqStatus iq{};
+    pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed) {
+        ++iq_starts;
+        iq_save = save;
+        iq_confirmed = confirmed;
+        std::memset(iq_name, 0, sizeof iq_name);
+        std::memcpy(iq_name, name.data(), std::min(name.size(), sizeof iq_name - 1));
+        if (iq_refusal == pd::IqRefusal::None) iq_running = true;
+        return iq_refusal;
+    }
+    void inline_cancel() { ++iq_cancels; iq_running = false; }
+    bool inline_running() const { return iq_running; }
+    const twin_hw::InlineLearn& inline_learn() const { return iq_learn; }
+    const pd::IqStatus& inline_status() const { return iq; }
     void put(std::uint8_t s, const char* name) {
         held[s] = true;
         lib[s] = big_twin();
@@ -426,12 +446,124 @@ void test_handler_run_status_cancel() {
     CHECK_EQ(wire::handle(a, v, tiny), 0u);
 }
 
+// INLINE: start passes the name, the dry bit and the confirm; a refusal says which; status, abort and the answers read back.
+void test_handler_inline() {
+    FakeApi a;
+    std::array<std::uint8_t, wire::kMaxRsp> out{};
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm, 'C', 'a', 'n'}, out), 3u);
+    CHECK_EQ(int(out[0]), 0);
+    CHECK_EQ(int(out[1]), int(wire::kInlineStart));
+    CHECK_EQ(int(out[2]), int(pd::IqRefusal::None));
+    CHECK_EQ(a.iq_save, true);
+    CHECK_EQ(a.iq_confirmed, true);
+    CHECK_STR(a.iq_name, "Can");
+    a.iq_running = false;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineDry}, out), 3u);   // the handler passes no confirm on
+    CHECK_EQ(a.iq_save, false);
+    CHECK_EQ(a.iq_confirmed, false);
+    a.iq_refusal = pd::IqRefusal::OwnContract;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm}, out), 3u);
+    CHECK_EQ(int(out[0]), int(wire::kErrIqRefused));
+    CHECK_EQ(int(out[2]), int(pd::IqRefusal::OwnContract));
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, 4}, out), 1u);   // an unknown flag bit
+    CHECK_EQ(int(out[0]), int(Err::Invalid));
+    CHECK_EQ(a.iq_starts, 3);
+
+    // STATUS: the run, the masks, the identity, both contracts and what was learned
+    a.iq_running = true;
+    a.iq_learn.pending = true;
+    a.iq.phase = pd::IqPhase::Done;
+    a.iq.step = pd::IqStep::Done;
+    a.iq.match = pd::IqMatch::Differs;
+    a.iq.rev = 2;
+    a.iq.asked_mask = 0x3F;
+    a.iq.ok_mask = 0x1B;
+    a.iq.refused_mask = 0x04;
+    a.iq.silent_mask = 0x20;
+    a.iq.sent = 7;
+    a.iq.dev_acks = 6;
+    a.iq.resets_sent = 2;
+    a.iq.id.valid = true;
+    a.iq.id.vid = 0x04A9;
+    a.iq.id.pid = 0x3254;
+    a.iq.num_svids = 1;
+    a.iq.num_sink_pdos = 2;
+    a.iq.sink_ext_len = 24;
+    a.iq.revision = 0x32100000u;
+    a.iq.first = {true, 4, 2, 0x4344B12Cu, 0x0004B12Cu};
+    a.iq.second = {true, 1, 2, 0x1304B12Cu, 0x0001912Cu};
+    a.iq.started_at = 1000;
+    a.iq.ended_at = 4500;
+    a.iq_learn.result.how = twin_hw::Learn::Ok;
+    a.iq_learn.result.store.seq = 3;
+    a.iq_learn.result.store.existed = true;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStatus}, out), wire::kIqStatusBytes);
+    CHECK_EQ(int(out[2]), 1);
+    CHECK_EQ(int(out[3]), 1);
+    CHECK_EQ(int(out[5]), int(pd::IqPhase::Done));
+    CHECK_EQ(int(out[8]), int(pd::IqMatch::Differs));
+    CHECK_EQ(int(out[10]), 0x3F);
+    CHECK_EQ(int(out[11]), 0x1B);
+    CHECK_EQ(int(out[12]), 0x04);
+    CHECK_EQ(int(out[13]), 0x20);
+    CHECK_EQ(int(out[19] | out[20] << 8), 0x04A9);
+    CHECK_EQ(int(out[21] | out[22] << 8), 0x3254);
+    CHECK_EQ(int(out[25]), 2);
+    CHECK_EQ(int(out[26]), 24);
+    CHECK_EQ(int(out[30]), 0x32);
+    CHECK_EQ(int(out[31]), 1);
+    CHECK_EQ(int(out[32]), 4);
+    CHECK_EQ(int(out[36]), 0x43);
+    CHECK_EQ(int(out[38]), 1);
+    CHECK_EQ(int(out[45]), 3);
+    CHECK_EQ(int(out[46]), 1);
+    CHECK_EQ(int(out[48] | out[49] << 8), 3500);
+
+    // ANSWERS: the sink PDOs, the extended caps bytes, the identity VDOs, the SVIDs and modes; part 4 does not exist
+    a.iq.sink_pdos[0] = 0x2601912Cu;
+    a.iq.sink_pdos[1] = 0x0002D12Cu;
+    for (std::size_t i = 0; i < 24; ++i) a.iq.sink_ext[i] = std::uint8_t(i + 1);
+    a.iq.id.num_vdos = 3;
+    a.iq.id.vdos[2] = 0xAABBCCDDu;
+    a.iq.svids[0] = 0xFF01;
+    a.iq.num_modes = 1;
+    a.iq.mode_svid[0] = 0xFF01;
+    a.iq.mode_vdo[0] = 0x00000405u;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 0}, out), 4u + 8u);
+    CHECK_EQ(int(out[3]), 2);
+    CHECK_EQ(int(out[7]), 0x26);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 1}, out), 4u + 24u);
+    CHECK_EQ(int(out[4]), 1);
+    CHECK_EQ(int(out[27]), 24);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 2}, out), 5u + 12u);
+    CHECK_EQ(int(out[3]), 1);
+    CHECK_EQ(int(out[4]), 3);
+    CHECK_EQ(int(out[13]), 0xDD);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 3}, out), 4u + 2u + 1u + 6u);
+    CHECK_EQ(int(out[4] | out[5] << 8), 0xFF01);
+    CHECK_EQ(int(out[6]), 1);
+    CHECK_EQ(int(out[9]), 0x05);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 4}, out), 1u);
+    CHECK_EQ(int(out[0]), int(Err::Invalid));
+
+    // ABORT: says whether a run was going
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAbort}, out), 3u);
+    CHECK_EQ(int(out[2]), 1);
+    CHECK_EQ(a.iq_cancels, 1);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAbort}, out), 3u);
+    CHECK_EQ(int(out[2]), 0);
+    CHECK_EQ(call(a, {wire::kOpInline}, out), 1u);
+    CHECK_EQ(call(a, {wire::kOpInline, 9}, out), 1u);
+    CHECK_EQ(int(out[0]), int(Err::Invalid));
+}
+
 }  // namespace
 
 int main() {
     test_handler_list_get_predict();
     test_handler_writes();
     test_handler_run_status_cancel();
+    test_handler_inline();
     test_list();
     test_record_chunks_reassemble();
     test_predict_bytes();

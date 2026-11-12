@@ -18,6 +18,7 @@ namespace k2::twin {
 
 inline constexpr std::size_t kMaxSinkPdos = 7;  // the 3-bit object count of a Sink_Capabilities message
 inline constexpr std::size_t kNameMax = 24;     // same rule and size as the saved-cable names (k2/pd/emlib.hpp)
+inline constexpr std::size_t kSinkExtBytes = 24; // a Sink_Capabilities_Extended data block (PD 3.1 and later: 24 bytes)
 
 // Sink PDO 1 (the vSafe5V one) carries the flags; bit 28 = Higher Capability: the device needs more than 5 V for full function.
 inline constexpr std::uint32_t kPdoHigherCapability = 1u << 28;
@@ -62,6 +63,11 @@ struct Twin {
     std::uint32_t rdo = 0, rdo_pdo = 0;
     Declared decl;   // USB data, declared (device alone)
     Observed obs;    // USB data, observed (sniffed inline)
+    // PD 3 answers read by an inline interrogation (k2/pd/pd_interrogate.hpp), raw: the Revision data object (0 = not read)
+    // and the Sink_Capabilities_Extended data block (sink_ext_len bytes, 0 = not read).
+    std::uint32_t revision = 0;
+    std::uint8_t sink_ext_len = 0;
+    std::array<std::uint8_t, kSinkExtBytes> sink_ext{};
 
     bool has_request() const { return rdo != 0 && rdo_pdo != 0; }
     std::uint8_t ufp_type() const { return std::uint8_t((id_hi >> 4) & 7u); }   // ID Header 29:27: 1 hub, 2 peripheral, 3 power bank

@@ -23,11 +23,19 @@
 //         product-type VDOs, n_svids x u16 SVIDs, n_modes x (u16 SVID + u32 mode VDO)       3 .. 35 bytes
 //     flags b2: an observed block follows (after the declared one): vid u16 (the partner), family u8, tbt u8, flags u8, dp_pin u8,
 //         mbps u32, enter_usb u32, tbt_enter u32                                             18 bytes
-//     A flag bit above b2 is damage, and so is b1 or b2 in a version 1 record. The largest record is 76 + 35 + 18 = 129 bytes.
+//     A flag bit above b2 is damage, and so is b1 or b2 in a version 1 record. The largest version 2 record is 76 + 35 + 18 = 129
+//     bytes.
+// Version 3 adds the PD 3 answers of an inline interrogation, after the observed block, written only when one is present (a twin
+// without them stays a byte-identical version 1 or 2 record):
+//     flags b3: the Revision data object, u32                                                 4 bytes
+//     flags b4: the Sink_Capabilities_Extended block: len u8 (1..24), then len bytes          2 .. 25 bytes
+//     A flag bit above b4 is damage, and so is b3 or b4 in a version 1 or 2 record. A record still never exceeds 129 bytes
+//     (kMaxFileBytes, the volume budget): the writer leaves the extended block out, then the Revision, when they would not fit.
+//     Only a twin that also carries a full declared and observed block loses them; a phone with three sink PDOs and a Request keeps both (89 bytes).
 // A record whose version byte is newer than this build knows is refused, never guessed at (and never overwritten by a
 // list or a count). A save or rename replaces the file atomically (littlefs commit + rename): a power cut leaves the old
 // twin or the new one.
-// The library keeps no state of its own and takes no scratch arena: a record is under 100 bytes and lives on the stack.
+// The library keeps no state of its own and takes no scratch arena: a record is at most kMaxFileBytes (158) and lives on the stack.
 #pragma once
 #include <array>
 #include <cstddef>
@@ -48,16 +56,22 @@ namespace k2::twin {
 inline constexpr unsigned kCapacity = 12;
 inline constexpr std::uint8_t kVersion1 = 1;
 inline constexpr std::uint8_t kVersion2 = 2;
-inline constexpr std::uint8_t kVersionMax = kVersion2;   // the newest layout this build reads
+inline constexpr std::uint8_t kVersion3 = 3;
+inline constexpr std::uint8_t kVersionMax = kVersion3;   // the newest layout this build reads
 inline constexpr std::size_t kOffSeq = 4, kOffFlags = 5, kOffNumPdos = 13, kOffName = 14;
 inline constexpr std::size_t kHeaderBytes = kOffName + kNameMax;                        // 38
 inline constexpr std::size_t kMaxV1Bytes = kHeaderBytes + kMaxSinkPdos * 4 + 8 + 2;     // 76
 inline constexpr std::size_t kMinFileBytes = kHeaderBytes + 2;
-inline constexpr std::uint8_t kFlagRequest = 1, kFlagDeclared = 2, kFlagObserved = 4;
+inline constexpr std::uint8_t kFlagRequest = 1, kFlagDeclared = 2, kFlagObserved = 4, kFlagRevision = 8, kFlagSinkExt = 16;
 inline constexpr std::size_t kDeclHeader = 3;   // [n_pt, n_svids, n_modes]
 inline constexpr std::size_t kObsBytes = 18;
+inline constexpr std::size_t kRevBytes = 4;
 inline constexpr std::size_t kMaxDeclBytes = kDeclHeader + kMaxProductVdos * 4 + kMaxDeclSvids * 2 + kMaxDeclModes * 6;   // 35
-inline constexpr std::size_t kMaxFileBytes = kMaxV1Bytes + kMaxDeclBytes + kObsBytes;                                       // 129
+inline constexpr std::size_t kMaxV2Bytes = kMaxV1Bytes + kMaxDeclBytes + kObsBytes;                                         // 129
+// A record never grows past the largest version 2 one: twelve records of this size are what the volume budget holds for /twin
+// (tests/test_volume_budget.cpp; one more byte each spills the directory into a third metadata pair). The version 3 blocks go in
+// only while they fit under it.
+inline constexpr std::size_t kMaxFileBytes = kMaxV2Bytes;                                                                   // 129
 inline constexpr const char* kDir = "/twin";
 
 enum class Dec : std::uint8_t { Ok, Short, Magic, Version, Invalid, Crc };
@@ -73,19 +87,27 @@ constexpr std::size_t decl_bytes(std::size_t n_pt, std::size_t n_svids, std::siz
     return kDeclHeader + n_pt * 4 + n_svids * 2 + n_modes * 6;
 }
 
-// Writes the record of `t` as twin number `seq`: version 1 when it has no USB block, version 2 otherwise. Returns its length,
-// 0 when `out` is too small or the twin holds more than the format has room for (nothing is written then).
+// Writes the record of `t` as twin number `seq`: version 1 when it has no USB block, version 2 with one, version 3 when the
+// Revision or the extended block went in (each only while the record stays within kMaxFileBytes). Returns its length, 0 when
+// `out` is too small or the twin holds more than the format has room for (nothing is written then).
 inline std::size_t encode(const Twin& t, std::uint8_t seq, std::span<std::uint8_t> out) {
     if (t.num_pdos > kMaxSinkPdos) return 0;
     if (t.decl.n_pt > kMaxProductVdos || t.decl.n_svids > kMaxDeclSvids || t.decl.n_modes > kMaxDeclModes) return 0;
+    if (t.sink_ext_len > kSinkExtBytes) return 0;
     const bool req = t.has_request(), decl = t.decl.any(), obs = t.obs.valid;
-    const std::size_t len = kHeaderBytes + std::size_t(t.num_pdos) * 4 + (req ? 8 : 0) +
-                            (decl ? decl_bytes(t.decl.n_pt, t.decl.n_svids, t.decl.n_modes) : 0) + (obs ? kObsBytes : 0) + 2;
+    const std::size_t base = kHeaderBytes + std::size_t(t.num_pdos) * 4 + (req ? 8 : 0) +
+                             (decl ? decl_bytes(t.decl.n_pt, t.decl.n_svids, t.decl.n_modes) : 0) + (obs ? kObsBytes : 0) + 2;
+    // the version 3 blocks only while the record stays within kMaxFileBytes: the Revision first, then the extended block
+    const bool rev = t.revision != 0 && base + kRevBytes <= kMaxFileBytes;
+    const std::size_t with_rev = base + (rev ? kRevBytes : 0);
+    const bool ext = t.sink_ext_len != 0 && with_rev + 1 + t.sink_ext_len <= kMaxFileBytes;
+    const std::size_t len = with_rev + (ext ? 1 + std::size_t(t.sink_ext_len) : 0);
     if (out.size() < len) return 0;
     std::uint8_t* b = out.data();
-    b[0] = 'K'; b[1] = '2'; b[2] = 'T'; b[3] = (decl || obs) ? kVersion2 : kVersion1;
+    b[0] = 'K'; b[1] = '2'; b[2] = 'T'; b[3] = (rev || ext) ? kVersion3 : (decl || obs) ? kVersion2 : kVersion1;
     b[kOffSeq] = seq;
-    b[kOffFlags] = std::uint8_t((req ? kFlagRequest : 0) | (decl ? kFlagDeclared : 0) | (obs ? kFlagObserved : 0));
+    b[kOffFlags] = std::uint8_t((req ? kFlagRequest : 0) | (decl ? kFlagDeclared : 0) | (obs ? kFlagObserved : 0) |
+                                (rev ? kFlagRevision : 0) | (ext ? kFlagSinkExt : 0));
     detail::put16(&b[6], t.vid);
     detail::put16(&b[8], t.pid);
     detail::put16(&b[10], t.id_hi);
@@ -122,6 +144,15 @@ inline std::size_t encode(const Twin& t, std::uint8_t seq, std::span<std::uint8_
         detail::put32(&b[at + 14], t.obs.tbt_enter);
         at += kObsBytes;
     }
+    if (rev) {
+        detail::put32(&b[at], t.revision);
+        at += kRevBytes;
+    }
+    if (ext) {
+        b[at++] = t.sink_ext_len;
+        std::memcpy(&b[at], t.sink_ext.data(), t.sink_ext_len);
+        at += t.sink_ext_len;
+    }
     detail::put16(&b[at], bbstore::crc16(0xFFFF, {b, at}));
     return len;
 }
@@ -133,10 +164,13 @@ inline Dec decode(std::span<const std::uint8_t> in, std::uint8_t& seq, Twin& out
     if (b[0] != 'K' || b[1] != '2' || b[2] != 'T') return Dec::Magic;
     if (b[3] == 0 || b[3] > kVersionMax) return Dec::Version;
     if (in.size() < kMinFileBytes) return Dec::Short;
-    const std::uint8_t known = b[3] == kVersion1 ? kFlagRequest : std::uint8_t(kFlagRequest | kFlagDeclared | kFlagObserved);
+    const std::uint8_t known = b[3] == kVersion1   ? kFlagRequest
+                               : b[3] == kVersion2 ? std::uint8_t(kFlagRequest | kFlagDeclared | kFlagObserved)
+                                                   : std::uint8_t(kFlagRequest | kFlagDeclared | kFlagObserved | kFlagRevision | kFlagSinkExt);
     if ((b[kOffFlags] & ~known) != 0 || b[kOffNumPdos] > kMaxSinkPdos) return Dec::Invalid;
     const bool req = (b[kOffFlags] & kFlagRequest) != 0, decl = (b[kOffFlags] & kFlagDeclared) != 0,
-               obs = (b[kOffFlags] & kFlagObserved) != 0;
+               obs = (b[kOffFlags] & kFlagObserved) != 0, rev = (b[kOffFlags] & kFlagRevision) != 0,
+               ext = (b[kOffFlags] & kFlagSinkExt) != 0;
     const std::size_t decl_at = kHeaderBytes + std::size_t(b[kOffNumPdos]) * 4 + (req ? 8 : 0);
     std::size_t dlen = 0;
     if (decl) {
@@ -145,7 +179,14 @@ inline Dec decode(std::span<const std::uint8_t> in, std::uint8_t& seq, Twin& out
         if (np > kMaxProductVdos || ns > kMaxDeclSvids || nm > kMaxDeclModes || (np | ns | nm) == 0) return Dec::Invalid;
         dlen = decl_bytes(np, ns, nm);
     }
-    const std::size_t len = decl_at + dlen + (obs ? kObsBytes : 0) + 2;
+    const std::size_t ext_at = decl_at + dlen + (obs ? kObsBytes : 0) + (rev ? kRevBytes : 0);
+    std::size_t elen = 0;
+    if (ext) {
+        if (in.size() < ext_at + 1) return Dec::Short;
+        if (b[ext_at] == 0 || b[ext_at] > kSinkExtBytes) return Dec::Invalid;
+        elen = 1 + std::size_t(b[ext_at]);
+    }
+    const std::size_t len = ext_at + elen + 2;
     if (in.size() < len) return Dec::Short;
     if (in.size() > len) return Dec::Invalid;
     if (bbstore::crc16(0xFFFF, {b, len - 2}) != detail::get16(&b[len - 2])) return Dec::Crc;
@@ -188,6 +229,16 @@ inline Dec decode(std::span<const std::uint8_t> in, std::uint8_t& seq, Twin& out
         t.obs.mbps = detail::get32(&b[at + 6]);
         t.obs.enter_usb = detail::get32(&b[at + 10]);
         t.obs.tbt_enter = detail::get32(&b[at + 14]);
+        at += kObsBytes;
+    }
+    if (rev) {
+        t.revision = detail::get32(&b[at]);
+        if (t.revision == 0) return Dec::Invalid;   // the writer sets b3 only for a read Revision
+        at += kRevBytes;
+    }
+    if (ext) {
+        t.sink_ext_len = b[at];
+        std::memcpy(t.sink_ext.data(), &b[at + 1], t.sink_ext_len);
     }
     seq = b[kOffSeq];
     out = t;
@@ -258,18 +309,18 @@ public:
         return 0;
     }
 
-    // Saves a twin. A device already in the library (same VID and PID) is updated in place: the saved name stays and
-    // merge() folds in what `in` learned; nothing is written when that changes nothing. A new device takes the lowest free
-    // number, its name from `in` or else the auto name, made unique with " 2", " 3" ...
+    // Saves a twin. A device already in the library (same_device: the identity, else a fingerprint) is updated in place: the
+    // saved name stays and merge() folds in what `in` learned; nothing is written when that changes nothing. A new device takes
+    // the lowest free number, its name from `in` or else the auto name, made unique with " 2", " 3" ...
     Result save(const Twin& in) {
         Result r;
         if (in.num_pdos > kMaxSinkPdos || (in.name[0] != 0 && !emlib::name_valid(in.name.data()))) { r.err = Err::Invalid; return r; }
         All all;
         const unsigned n = list(all);
-        if (in.vid != 0) {
+        {
             for (unsigned i = 0; i < n; i++) {
                 Twin cur;
-                if (!get(all[i], cur) || cur.vid != in.vid || cur.pid != in.pid) continue;
+                if (!get(all[i], cur) || !same_device(cur, in)) continue;
                 r.seq = all[i];
                 r.existed = true;
                 Twin merged = cur;

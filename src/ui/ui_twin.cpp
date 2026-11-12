@@ -7,7 +7,9 @@
 #include "k2/core/storage.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/pd/pd_link.hpp"
+#include "k2/pd/pd_passive.hpp"
 #include "k2/pd/pd_source.hpp"
+#include "k2/twin/learn.hpp"
 #include "k2/twin/present.hpp"
 #include "k2/twin/twin_hw.hpp"
 #include "k2/twin/usbdata.hpp"
@@ -38,8 +40,13 @@ constexpr const char *kFooters[] = {
     // A charger that has not offered: the wake (docs/UI_SYSTEM.md 9.9). The K2 presents Rd only after the confirm.
     "Wakes the charger. Confirm", "Waking charger", "Charger has not offered", "Charger did not offer",
     "Stopped. Charger released",
+    // Learning a device inline: the K2 resets the link and asks the device itself (docs/DEVICE_TWIN.md section 9).
+    "Resets the link. Confirm", "Resetting the link", "Asking the device", "Stopped. Link reset", "Learned. Contract changed",
+    "K2 runs on this VBUS", "K2 holds the contract", "No power: add a charger",
 };
 constexpr int kFootWakeArm = 24, kFootWaking = 25, kFootSilent = 26, kFootNoOffer = 27, kFootWakeStop = 28;
+constexpr int kFootIqArm = 29, kFootIqReset = 30, kFootIqAsk = 31, kFootIqStop = 32, kFootIqDiffers = 33, kFootIqSelf = 34,
+              kFootIqOwn = 35, kFootNoPower = 36;
 constexpr const char *kNotes[] = {
     "no charger to predict from", "reads a device alone on the K2", "live proof running", "removes it from the K2",
     "no contract, charger", "stopped", "charger sent no caps", "unsafe VBUS, stopped", "gets 100 of 240W, charger",
@@ -187,6 +194,7 @@ void TwinPage::enter() {
     note_until_ = 0;
     hide_proof_ = false;
     started_ = false;
+    iq_wait_ = false;
     detail_ = false;
     wake_ok_ = false;
     title_ = "Device twins";
@@ -202,6 +210,8 @@ void TwinPage::leave() {
     twin_hw::wake_release();
     if (learn_wait_) fusb302::identify_abort();   // the read this page started: release the line, learn nothing
     learn_wait_ = false;
+    if (iq_wait_) twin_hw::inline_cancel();       // the interrogation this page started: its final reset goes out, nothing is learned
+    iq_wait_ = false;
     started_ = false;
     detail_ = false;
     title_ = "Device twins";
@@ -395,6 +405,12 @@ void TwinPage::compose_footer() {
         foot_text_.put(kFooters[14]);
         return;
     }
+    if (iq_wait_) {   // the resets drop VBUS: say which step the link is in
+        const pd::IqPhase p = twin_hw::inline_status().phase;
+        const bool resetting = p == pd::IqPhase::Reset1 || p == pd::IqPhase::Sniff1 || p == pd::IqPhase::Reset2 || p == pd::IqPhase::Sniff2;
+        foot_text_.put(kFooters[resetting ? kFootIqReset : kFootIqAsk]);
+        return;
+    }
     if (running()) {
         if (detail_) {
             foot_text_.put(twin_hw::live().waking() ? kFooters[kFootWaking] : kFooters[23]);
@@ -419,9 +435,9 @@ void TwinPage::compose_footer() {
         }
         return;
     }
-    if (arm_ == Arm::Delete) {
+    if (arm_ == Arm::Delete || arm_ == Arm::Learn) {
         foot_tone_ = FooterTone::Caution;
-        foot_text_.put(kFooters[16]);
+        foot_text_.put(kFooters[arm_ == Arm::Delete ? 16 : kFootIqArm]);
         return;
     }
     if (detail_) {
@@ -457,11 +473,15 @@ void TwinPage::compose_footer() {
     foot_text_.put(buf);
 }
 
-void TwinPage::learn() {
-    const twin_hw::Learned r = twin_hw::learn_from_identify(std::string_view{}, true);
+void TwinPage::learn() { learned(twin_hw::learn_from_identify(std::string_view{}, true), false); }
+
+// What a learn stored, or why it stored nothing. `contract_changed`: an interrogation's renegotiated contract differs from the
+// first one (the device asked differently once it was asked): learned, but said in amber.
+void TwinPage::learned(const twin_hw::Learned &r, bool contract_changed) {
     switch (r.how) {
     case twin_hw::Learn::Ok:
         if (detail_ && r.store.seq != det_seq_) say(kFooters[18], kCaution);   // another device answered: this twin is kept
+        else if (contract_changed) say(kFooters[kFootIqDiffers], kCaution);
         else say(r.store.unchanged ? kFooters[9] : r.store.existed ? kFooters[8] : kFooters[7], r.store.unchanged ? kDim : kOk);
         reload();
         if (!detail_)
@@ -477,19 +497,72 @@ void TwinPage::learn() {
 // OK on Learn (or Re-learn). A device alone on the K2 (a dual-role phone: VBUS dark, no source caps, the toggling Rp) is read
 // first: the page starts the same Identify as Who's attached > Sink and learns when it ends (update()). Anything else
 // learns from the last Identify, as before (a sink behind the K2 inline, a device identified a moment ago).
+// A device inline behind a charger is asked on that link (learn_inline, after a confirm: the run resets the link twice). With
+// no device inline, none alone, VBUS dark and no Identify to learn from, nothing can be asked: the footer says to add a charger.
 void TwinPage::learn_row(uint32_t now_ms) {
     const pd::Link &link = ctx_.ui->link();
-    const bool alone = pd::identify_alone(link.inline_mode() || ctx_.inline_mode, ctx_.pm_online,
-                                          ctx_.pm_online ? ctx_.vbus_fast_mv : -1, fusb302::caps_this_attach(),
-                                          link.wait_kind());
-    if (alone && ctx_.ui->identify(now_ms) == Ui::IdResult::Started) {
-        learn_wait_ = true;
-        learn_wait_until_ = now_ms + kLearnWaitMs;
-        note_.clear();
-        note_until_ = 0;
-        return;
+    const bool inline_link = link.inline_mode() || ctx_.inline_mode;
+    const int32_t vbus = ctx_.pm_online ? ctx_.vbus_fast_mv : -1;
+    const bool alone = pd::identify_alone(inline_link, ctx_.pm_online, vbus, fusb302::caps_this_attach(), link.wait_kind());
+    const bool dark = vbus >= 0 && vbus < pd::kDetachVbusMv && !pd::active_caps().valid;   // no VBUS and no charger listing
+    const twin::LearnPath path = twin::learn_path(alone, inline_link, fusb302::identify_current(), dark);
+    if (path != twin::LearnPath::Interrogate) arm_ = Arm::None;   // the device left the link between the two presses
+    switch (path) {
+    case twin::LearnPath::Identify:
+        if (ctx_.ui->identify(now_ms) == Ui::IdResult::Started) {
+            learn_wait_ = true;
+            learn_wait_until_ = now_ms + kLearnWaitMs;
+            note_.clear();
+            note_until_ = 0;
+            return;
+        }
+        break;
+    case twin::LearnPath::Interrogate: learn_inline(); return;
+    case twin::LearnPath::NoPower: say(kFooters[kFootNoPower], kCaution); return;
+    case twin::LearnPath::LastIdentify: break;
     }
     learn();
+}
+
+// OK on Learn with a device inline. Like Prove live, the first press asks without the confirm: a real refusal (a tool running,
+// the K2's own contract, the K2 powered from this VBUS) is said at once, "needs the confirm" arms for kConfirmWindowMs.
+void TwinPage::learn_inline() {
+    const bool confirm = arm_ == Arm::Learn && static_cast<int32_t>(ctx_.now - armed_until_) < 0;
+    arm_ = Arm::None;
+    switch (twin_hw::inline_start(std::string_view{}, true, confirm, ctx_.ui->twin_ctx(ctx_.now))) {
+    case pd::IqRefusal::None:
+        iq_wait_ = true;
+        note_.clear();
+        note_until_ = 0;
+        break;
+    case pd::IqRefusal::NeedConfirm:
+        arm_ = Arm::Learn;
+        armed_until_ = ctx_.now + Ui::kConfirmWindowMs;
+        note_.clear();
+        note_until_ = 0;
+        break;
+    case pd::IqRefusal::Running:
+    case pd::IqRefusal::Busy: say(kFooters[2], kCaution); break;
+    case pd::IqRefusal::SelfPowered: say(kFooters[kFootIqSelf], kCaution); break;
+    case pd::IqRefusal::OwnContract: say(kFooters[kFootIqOwn], kCaution); break;
+    case pd::IqRefusal::NoCc:
+    case pd::IqRefusal::NotInline: say(kFooters[11], kCaution); break;
+    }
+}
+
+// The interrogation is over: what it learned (twin_hw::inline_poll learned and saved it), else the device never answered.
+void TwinPage::learn_inline_end() {
+    iq_wait_ = false;
+    const twin_hw::InlineLearn &l = twin_hw::inline_learn();
+    if (!l.done) {
+        say(kFooters[15], kCaution);
+        return;
+    }
+    if (l.result.how == twin_hw::Learn::NoContract) {   // nothing answered, nothing sniffed
+        say(kFooters[15], kCaution);
+        return;
+    }
+    learned(l.result, twin_hw::inline_status().match == pd::IqMatch::Differs);
 }
 
 // The Identify this page started is over (or ran out of time): learn from it, or say the device never answered.
@@ -836,6 +909,13 @@ bool TwinPage::on_event(Event e) {
             update(ctx_.now);
             return true;
         }
+        if (iq_wait_) {                               // stop the interrogation; its final reset still goes out, nothing is learned
+            iq_wait_ = false;
+            twin_hw::inline_cancel();
+            say(kFooters[kFootIqStop], kDim);
+            update(ctx_.now);
+            return true;
+        }
         if (running()) {
             const bool was_waking = twin_hw::live().waking();   // cancelled before the list came: the charger's Rd goes back at once
             ctx_.ui->cancel_twin();
@@ -855,14 +935,14 @@ bool TwinPage::on_event(Event e) {
         return false;                                 // the list, idle: the Ui pops the page
     case Button::Plus:
     case Button::Minus:
-        if (running() || learn_wait_) return true;
+        if (running() || learn_wait_ || iq_wait_) return true;
         arm_ = Arm::None;                             // a cursor move disarms
         if (detail_) act_ = std::clamp(act_ + (e.button == Button::Plus ? 1 : -1), 0, kActions - 1);
         else sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, n_);
         update(ctx_.now);
         return true;
     case Button::Ok:
-        if (running() || learn_wait_) return true;
+        if (running() || learn_wait_ || iq_wait_) return true;
         if (!detail_) {
             if (sel_ >= n_) learn_row(ctx_.now);
             else open_detail();
@@ -891,7 +971,7 @@ bool TwinPage::on_event(Event e) {
 PanelLabels TwinPage::labels() const {
     PanelLabels l = list_labels(base_labels());
     const char *ok = "";
-    if (running() || learn_wait_) {
+    if (running() || learn_wait_ || iq_wait_) {
         l.b[static_cast<int>(Button::Back)].shrt = "Stop";
     } else if (arm_ != Arm::None) {
         ok = "Confirm";
@@ -922,6 +1002,7 @@ void TwinPage::update(uint32_t now_ms) {
         det_sig_ = 0;
     }
     if (learn_wait_ && (!fusb302::identify_busy() || static_cast<int32_t>(now_ms - learn_wait_until_) >= 0)) learn_wait_end();
+    if (iq_wait_ && !twin_hw::inline_running()) learn_inline_end();   // the sequencer bounds its own time (pd::kIqTotalMs)
     if (!loaded_ || gen_ != storage::generation() || stamp_ != twin_hw::predict_stamp()) {
         const bool charger_changed = loaded_ && stamp_ != twin_hw::predict_stamp();
         reload();

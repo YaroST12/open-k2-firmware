@@ -393,10 +393,10 @@ void test_record_v2() {
     v1[kOffFlags] |= kFlagObserved;
     detail::put16(&v1[nv1 - 2], bbstore::crc16(0xFFFF, {v1.data(), nv1 - 2}));
     CHECK_EQ(int(decode({v1.data(), nv1}, seq, r)), int(Dec::Invalid));
-    // a version 3 record is refused, never guessed
+    // a record from a newer layout than this build knows (version 4) is refused, never guessed
     std::array<std::uint8_t, kMaxFileBytes> v3{};
     const std::size_t nv3 = encode(t, 1, v3);
-    v3[3] = 3;
+    v3[3] = 4;
     CHECK_EQ(int(decode({v3.data(), nv3}, seq, r)), int(Dec::Version));
     // counts that overrun the block
     std::array<std::uint8_t, kMaxFileBytes> bad{};

@@ -14,6 +14,7 @@
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
+#include "k2/pd/pd_interrogate.hpp"
 #include "k2/pd/pd_vdm.hpp"
 #include "k2/twin/twin.hpp"
 
@@ -126,6 +127,80 @@ inline bool from_sniffed(const pd::Contract& c, const pd::SourceCaps& caps, cons
     return true;
 }
 
+// A twin from an inline interrogation (k2/pd/pd_interrogate.hpp): what the device answered while the K2 asked it on its own
+// charger's link (identity and USB words, sink PDOs, Revision, Sink_Capabilities_Extended) plus the contract the K2 sniffed
+// before asking (the second one, after the final reset, when no first was seen). The device's revision is its Request's.
+// False while the run is still going, or when it read neither a contract nor sink PDOs; an aborted run keeps what it read.
+static_assert(kSinkExtBytes == pd::kIqSinkExtBytes, "the twin keeps the whole extended block the interrogation reads");
+inline bool from_interrogated(const pd::IqStatus& st, Twin& out) {
+    out = Twin{};
+    if (!pd::iq_finished(st.phase)) return false;
+    const pd::IqContract& c = st.first.ready ? st.first : st.second;
+    if (!c.ready && st.num_sink_pdos == 0) return false;
+    if (st.id.valid) {
+        out.vid = st.id.vid;
+        out.pid = st.id.pid;
+        out.id_hi = id_hi_of(st.id.id_header);
+        constexpr std::size_t kFirstPt = 4;   // as from_identify: VDM header, ID Header, cert stat, product VDO, then these
+        const std::size_t have = std::min<std::size_t>(st.id.num_vdos, st.id.vdos.size());
+        for (std::size_t i = kFirstPt; i < have && out.decl.n_pt < kMaxProductVdos; ++i) out.decl.pt[out.decl.n_pt++] = st.id.vdos[i];
+    }
+    for (std::size_t i = 0; i < st.num_svids && i < st.svids.size() && out.decl.n_svids < kMaxDeclSvids; ++i)
+        out.decl.svids[out.decl.n_svids++] = st.svids[i];
+    const std::size_t nm = std::min<std::size_t>(st.num_modes, kMaxDeclModes);
+    for (std::size_t i = 0; i < nm; ++i) {
+        out.decl.mode_svid[i] = st.mode_svid[i];
+        out.decl.mode_vdo[i] = st.mode_vdo[i];
+    }
+    out.decl.n_modes = std::uint8_t(nm);
+    out.pd_rev = c.ready && c.dev_rev != 0 ? c.dev_rev : st.rev;
+    out.num_pdos = std::uint8_t(std::min<std::size_t>(st.num_sink_pdos, kMaxSinkPdos));
+    for (std::size_t i = 0; i < out.num_pdos; ++i) out.pdos[i] = st.sink_pdos[i];
+    if (c.ready && c.rdo != 0 && c.src_pdo != 0) {
+        out.rdo = c.rdo;
+        out.rdo_pdo = c.src_pdo;
+    }
+    out.revision = st.revision;
+    out.sink_ext_len = std::uint8_t(std::min<std::size_t>(st.sink_ext_len, kSinkExtBytes));
+    std::copy_n(st.sink_ext.begin(), out.sink_ext_len, out.sink_ext.begin());
+    return true;
+}
+
+// What OK on "Learn from device" does (the Device twins page), in this order:
+//  - a device alone on the K2 (a dual-role phone: VBUS dark, its toggling Rp; pd::identify_alone): Identify it;
+//  - a device inline behind the K2 on its own charger: interrogate it there (twin_hw::inline_start; confirm first);
+//  - an Identify of the partner on the port that is still current: learn from it;
+//  - `vbus_dark` (the monitor reads no VBUS and no charger has listed) and nothing of the above: the device has no power,
+//    nothing can be asked;
+//  - else learn from whatever the last Identify left (the library's answer says why not).
+enum class LearnPath : std::uint8_t { Identify, Interrogate, LastIdentify, NoPower };
+constexpr LearnPath learn_path(bool alone, bool inline_link, bool identify_current, bool vbus_dark) {
+    if (alone) return LearnPath::Identify;
+    if (inline_link) return LearnPath::Interrogate;
+    if (identify_current || !vbus_dark) return LearnPath::LastIdentify;
+    return LearnPath::NoPower;
+}
+
+// The merge key: is `in` a new observation of the saved twin's device? (docs/DEVICE_TWIN.md section 4, "Same device")
+//  1. Both carry an identity (VID != 0): the same VID and PID, nothing else.
+//  2. One carries an identity, the other not: never. A sink PDO list or a Request is no proof of WHICH identified device it
+//     was (two Google phones list the same PDOs; two phones ask the same charger for the same 9 V 3 A).
+//  3. Neither carries one: equal sink PDO lists when both have one; else the sniffed Request (the RDO and the source PDO it
+//     pointed at) when both have one. Nothing to compare = never the same device: two devices that never said who they are
+//     do not merge just because both read 0000:0000.
+inline bool same_pdos(const Twin& a, const Twin& b) {
+    if (a.num_pdos == 0 || a.num_pdos != b.num_pdos) return false;
+    for (std::size_t i = 0; i < a.num_pdos && i < a.pdos.size(); ++i)
+        if (a.pdos[i] != b.pdos[i]) return false;
+    return true;
+}
+inline bool same_device(const Twin& saved, const Twin& in) {
+    if (saved.vid != 0 && in.vid != 0) return saved.vid == in.vid && saved.pid == in.pid;
+    if (saved.vid != 0 || in.vid != 0) return false;
+    if (saved.num_pdos != 0 && in.num_pdos != 0) return same_pdos(saved, in);
+    return saved.has_request() && in.has_request() && saved.rdo == in.rdo && saved.rdo_pdo == in.rdo_pdo;
+}
+
 // Folds a new observation `in` into the saved twin of the same device. The saved name stays (a rename wins). What `in` knows
 // replaces what the twin had; what `in` does not know (no sink PDOs from a sniff, no Request from an Identify, no identity
 // words) leaves the saved value alone, so the two ways of learning add up instead of undoing each other.
@@ -142,6 +217,11 @@ inline void merge(Twin& saved, const Twin& in) {
     }
     if (in.decl.any()) saved.decl = in.decl;   // a device that answered no USB words leaves the saved block alone
     if (in.obs.valid) saved.obs = in.obs;
+    if (in.revision != 0) saved.revision = in.revision;
+    if (in.sink_ext_len != 0) {
+        saved.sink_ext_len = in.sink_ext_len;
+        saved.sink_ext = in.sink_ext;
+    }
 }
 
 }  // namespace k2::twin

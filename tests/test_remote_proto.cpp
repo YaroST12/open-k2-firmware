@@ -500,7 +500,7 @@ static void test_twin_dispatch() {
     check_header(r, 0x63, 11, Status::Ok, 2);
     CHECK_EQ(run(f, request(12, {10}), r), 1);          // cancel is always allowed
     check_header(r, 0x63, 12, Status::Ok, 2);
-    CHECK_EQ(run(f, request(13, {11}), r), 1);          // unknown op
+    CHECK_EQ(run(f, request(13, {12}), r), 1);          // unknown op
     check_header(r, 0x63, 13, Status::BadArg, 0);
     CHECK_EQ(run(f, request(14, {}), r), 1);
     check_header(r, 0x63, 14, Status::BadLength, 0);
@@ -567,6 +567,43 @@ static void test_twin_dispatch() {
         seq++;
     }
     CHECK_EQ(f.calls, 8);
+
+    // inline interrogation: status / abort / answers are reads; start needs the confirm bit and is a write
+    f.ports_busy_value = false;
+    f.calls = 0;
+    seq = 70;
+    const struct { std::vector<uint8_t> p; Status st; } iq[] = {
+        {{11}, Status::BadLength},             {{11, 0}, Status::Ok},          {{11, 0, 0}, Status::BadLength},
+        {{11, 2}, Status::Ok},                 {{11, 3, 3}, Status::Ok},       {{11, 3, 4}, Status::BadArg},
+        {{11, 3}, Status::BadLength},          {{11, 4}, Status::BadArg},      {{11, 1, 0}, Status::NeedConfirm},
+        {{11, 1, 1}, Status::NeedConfirm},     {{11, 1, 4}, Status::BadArg},   {{11, 1}, Status::BadLength},
+        {{11, 1, 2}, Status::Ok},              {{11, 1, 3, 'C', 'a'}, Status::Ok},
+    };
+    int reached = 0;
+    for (const auto& c : iq) {
+        CHECK_EQ(run(f, request(seq, c.p), r), 1);
+        check_header(r, 0x63, seq, c.st, c.st == Status::Ok ? 2 : 0);
+        if (c.st == Status::Ok) reached++;
+        seq++;
+    }
+    CHECK_EQ(f.calls, reached);
+    std::vector<uint8_t> iq_long(3 + kTwNameMax + 1, 'a');
+    iq_long[0] = 11; iq_long[1] = 1; iq_long[2] = 2;
+    CHECK_EQ(run(f, request(seq, iq_long), r), 1);
+    check_header(r, 0x63, seq, Status::BadLength, 0);
+    seq++;
+    f.ports_busy_value = true;                           // start is refused while the ports are owned; the reads stay open
+    f.calls = 0;
+    CHECK_EQ(run(f, request(seq, {11, 1, 2}), r), 1);
+    check_header(r, 0x63, seq, Status::Busy, 1);
+    CHECK_EQ(int(r[kRspHeader]), int(kTwErrBusy));
+    seq++;
+    for (const auto& g : std::vector<std::vector<uint8_t>>{{11, 0}, {11, 2}, {11, 3, 0}}) {
+        CHECK_EQ(run(f, request(seq, g), r), 1);
+        check_header(r, 0x63, seq, Status::Ok, 2);
+        seq++;
+    }
+    CHECK_EQ(f.calls, 3);
 }
 
 // The flash store saves (emarker, log) and the card rename / delete share the flash with a charger test's own

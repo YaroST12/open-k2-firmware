@@ -817,6 +817,19 @@ const char* twin_status() {
         tput("#%u %s  %s%s%s\r\n", unsigned(seq), t.name.data(), p, s.skip != twin::live::Skip::None ? "  " : "",
              twin::live::name(s.skip));
     }
+    // The inline interrogation, once one ran: its phase, what it asked and what came back (bit n = pd::IqStep n), and the learn.
+    const pd::IqStatus& q = twin_hw::inline_status();
+    if (q.phase != pd::IqPhase::Idle) {
+        const twin_hw::InlineLearn& l = twin_hw::inline_learn();
+        tput("inline %s why=%s %s vid=%04X pdos=%u\r\n", pd::iq_phase_name(q.phase), pd::iq_why_name(q.why),
+             pd::iq_match_name(q.match), unsigned(q.id.valid ? q.id.vid : 0), unsigned(q.num_sink_pdos));
+        tput("inline asked=%02x answered=%02x refused=%02x silent=%02x sent=%u resets=%u/%u\r\n", unsigned(q.asked_mask),
+             unsigned(q.ok_mask), unsigned(q.refused_mask), unsigned(q.silent_mask), unsigned(q.sent), unsigned(q.resets_sent),
+             unsigned(q.resets_seen));
+        if (l.done)
+            tput("inline learn %s #%u%s%s\r\n", twin_hw::name(l.result.how), unsigned(l.result.store.seq),
+                 l.result.store.existed ? " updated" : "", l.save ? "" : " (dry, not saved)");
+    }
     return nullptr;
 }
 
@@ -839,7 +852,7 @@ const char* twin_command(const shell::TwinCmd& c) {
     }
     case TwinOp::Status: return twin_status();
     case TwinOp::Cancel: {
-        const bool was = twin_hw::live_running();
+        const bool was = twin_hw::live_running() || twin_hw::inline_running();
         g_ui->cancel_twin();
         tput("twin cancelled was_running=%u\r\n", was ? 1u : 0u);
         return nullptr;
@@ -866,6 +879,12 @@ const char* twin_command(const shell::TwinCmd& c) {
         tput("twin %s #%u %s vid=%04X pid=%04X pdos=%u%s%s\r\n", c.dry ? "learned (dry, not saved)" : "saved",
              unsigned(l.store.seq), l.twin.name.data(), unsigned(l.twin.vid), unsigned(l.twin.pid), unsigned(l.twin.num_pdos),
              l.store.existed ? " updated" : "", l.store.unchanged ? " unchanged" : "");
+        return nullptr;
+    }
+    case TwinOp::LearnInline: {
+        const pd::IqRefusal r = twin_hw::inline_start(c.name, !c.dry, c.confirm, g_ui->twin_ctx(systick::millis()));
+        if (r != pd::IqRefusal::None) return pd::iq_refusal_name(r);
+        tput("twin inline started%s (twin status follows it, twin cancel stops it)\r\n", c.dry ? " dry" : "");
         return nullptr;
     }
     case TwinOp::Rename: {

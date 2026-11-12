@@ -624,6 +624,15 @@
   "627": "[SVOOC] stall: %ums at=%ums stage=%s ticked=%ums release timer=%u loop=%u edge=%u shots=%u\n",
   "628": "[BATT] boot %s run=%u resumes=%u\n",
   "629": "[BATT] run=%u %s phase=%d end=%u s=%u in_uwh=%u out_uwh=%u\n",
-  "630": "[BATT] record write %s run=%u\n"
+  "630": "[BATT] record write %s run=%u\n",
+  "631": "[IQ] t=%u TX type %u id %u rev %u: %s (%d ms)\n",
+  "632": "[IQ] t=%u %s, step %s\n",
+  "633": "[IQ] end %s (%s), contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X, %u sent, %u device GoodCRC, resets %u sent %u seen\n",
+  "634": "[IQ] contracts: first pos %u RDO 0x%08X PDO 0x%08X, second pos %u RDO 0x%08X PDO 0x%08X\n",
+  "635": "[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n",
+  "636": "[IQ] t=%u started (contract sniffed: %u, source id %u)\n",
+  "637": "[IQ] refused: %s\n",
+  "638": "[TWIN] learn inline start save=%u -> %s\n",
+  "639": "[TWIN] learn inline -> %u vid=%04x pdos=%u req=%u rev=%08x ext=%u\n"
  }
 }

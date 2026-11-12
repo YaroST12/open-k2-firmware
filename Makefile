@@ -371,6 +371,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress_page.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/diag_screen.cpp $(SRC_DIR)/ui/ui_diagnosis.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/battery/battery_store.cpp $(SRC_DIR)/battery/battery_wire.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/battery_view.cpp $(SRC_DIR)/ui/ui_battery.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/pd/pd_interrogate.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP
@@ -389,6 +390,7 @@ $(OBJ_DIR)/lfs/%.o: %.c include/k2/core/lfs_cfg.h
 	@$(call RUN,HOST_LFS_CMD)
 SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/apple_readout.cpp
 SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/diag.cpp
+SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_interrogate.cpp
 SCAN_OBJS      = $(patsubst %.cpp, $(OBJ_DIR)/scan/%.o, $(SCAN_TEST_LIB))
 
 HOST_CXX_CMD   = $(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@

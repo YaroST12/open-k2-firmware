@@ -451,6 +451,148 @@ void test_learn_read_without_answer() {
     CHECK_EQ(g_stub.twin_learns, 0);
 }
 
+// ---- learning inline: the device asked on its own charger's link (twin_hw::inline_*) ----
+// A device drawing current behind the K2: the Link latches inline.
+void make_inline(Ui &ui) {
+    g_stub.cc = 1;
+    g_stub.pm_online = true;
+    g_stub.pm.vbus_mv = 15000;
+    g_stub.pm.current_ma = 1500;
+    for (int i = 0; i < 4; i++) step(ui, 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 1);
+}
+
+// The device and its charger leave; the Link lets go of inline after kInlineHoldMs (the Ui is shared by every case).
+void unplug_inline(Ui &ui) {
+    g_stub.cc = 0;
+    g_stub.pm.vbus_mv = 0;
+    g_stub.pm.current_ma = 0;
+    for (int i = 0; i < 4; i++) step(ui, 100);
+    step(ui, pd::kInlineHoldMs + 1000);
+    step(ui, 100);
+    CHECK_EQ(int(ui.link().inline_mode()), 0);
+}
+
+twin::Twin named_twin(const char *name) {
+    twin::Twin t;
+    for (std::size_t i = 0; name[i] != 0 && i < twin::kNameMax; i++) t.name[i] = name[i];
+    t.rdo = 0x4344B12Cu;
+    t.rdo_pdo = 0x0004B12Cu;
+    return t;
+}
+
+// OK arms (the run resets the link twice: VBUS drops), the second OK starts it; the footer says the step; the end learns.
+// Red first: inline, the Learn row only learned from the last Identify ("Plug a device in alone").
+void test_learn_inline_interrogates_after_a_confirm() {
+    reset();
+    Ui &ui = open_page();
+    make_inline(ui);
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.twin_iq_starts, 0);
+    CHECK_EQ(g_stub.twin_learns, 0);
+    CHECK_STR(footer_of(ui).c_str(), "Resets the link. Confirm");
+    CHECK_STR(label(ui, Button::Ok), "Confirm");
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.twin_iq_starts, 1);
+    CHECK_EQ(g_stub.twin_iq_confirmed ? 1 : 0, 1);
+    CHECK_EQ(g_stub.twin_iq_save ? 1 : 0, 1);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Sniff1;
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Resetting the link");
+    CHECK_STR(label(ui, Button::Back), "Stop");
+    press(ui, Button::Ok);                               // a second OK while it runs starts nothing
+    CHECK_EQ(g_stub.twin_iq_starts, 1);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Ask;
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Asking the device");
+    g_stub.twin_iq_status.phase = pd::IqPhase::Reset2;
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Resetting the link");
+    g_stub.twin_iq_learned.how = twin_hw::Learn::Ok;
+    g_stub.twin_iq_learned.twin = named_twin("Canon");
+    g_stub.twin_iq_status.phase = pd::IqPhase::Done;
+    g_stub.twin_iq_status.match = pd::IqMatch::Same;
+    step(ui, 100);
+    CHECK_EQ(int(g_stub.twins.size()), 1);
+    CHECK_STR(footer_of(ui).c_str(), "Twin learned");
+    CHECK_STR(text_of(ui, 0).c_str(), "Canon");
+    CHECK_EQ(g_stub.twin_learns, 0);                     // never the last-Identify path
+    unplug_inline(ui);
+}
+
+// The renegotiated contract differs from the first one: learned, said in amber. Nothing to learn: said so.
+void test_learn_inline_results() {
+    reset();
+    Ui &ui = open_page();
+    make_inline(ui);
+    g_stub.twin_iq_learned.how = twin_hw::Learn::Ok;
+    g_stub.twin_iq_learned.twin = named_twin("Canon");
+    g_stub.twin_iq_status.match = pd::IqMatch::Differs;
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Done;
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Learned. Contract changed");
+    step(ui, 3000);
+    g_stub.twin_iq_learned = twin_hw::Learned{};
+    g_stub.twin_iq_learned.how = twin_hw::Learn::NoContract;
+    g_stub.twin_iq_status.match = pd::IqMatch::Unknown;
+    press(ui, Button::Plus);                             // the Learn row (one twin above it)
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.twin_iq_starts, 2);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Aborted;
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Device did not answer");
+    unplug_inline(ui);
+}
+
+// BACK stops the run (its final reset still goes out) and learns nothing; the refusals say why.
+void test_learn_inline_stop_and_refusals() {
+    reset();
+    Ui &ui = open_page();
+    make_inline(ui);
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Ask;
+    step(ui, 100);
+    press(ui, Button::Back);
+    CHECK_EQ(g_stub.twin_iq_cancels, 1);
+    CHECK_EQ(int(ui.menu_depth()) > 0 ? 1 : 0, 1);       // Back stopped the run, it did not pop the page
+    if (ui.menu_depth() == 0) return;
+    CHECK_STR(footer_of(ui).c_str(), "Stopped. Link reset");
+    step(ui, 100);
+    CHECK_EQ(int(g_stub.twins.size()), 0);
+    const struct { pd::IqRefusal r; const char *text; } cases[] = {
+        {pd::IqRefusal::Busy, "Tool or test running"},
+        {pd::IqRefusal::SelfPowered, "K2 runs on this VBUS"},
+        {pd::IqRefusal::OwnContract, "K2 holds the contract"},
+    };
+    for (const auto &c : cases) {
+        step(ui, 3000);
+        g_stub.twin_iq_refusal = c.r;
+        press(ui, Button::Ok);
+        press(ui, Button::Ok);
+        CHECK_STR(footer_of(ui).c_str(), c.text);
+    }
+    g_stub.twin_iq_refusal = pd::IqRefusal::None;
+    unplug_inline(ui);
+}
+
+// Not inline, not a phone alone, VBUS dark, no Identify to learn from: nothing can be asked.
+void test_learn_without_power() {
+    reset();
+    Ui &ui = open_page();
+    g_stub.pm_online = true;
+    g_stub.pm.vbus_mv = 0;
+    g_stub.caps.valid = false;
+    step(ui, 100);
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.twin_learns, 0);
+    CHECK_EQ(g_stub.twin_iq_starts, 0);
+    CHECK_STR(footer_of(ui).c_str(), "No power: add a charger");
+}
+
 void test_footer_note_times_out() {
     reset();
     Ui &ui = open_page();
@@ -631,6 +773,10 @@ int main() {
     test_learn_row();
     test_learn_reads_a_device_alone();
     test_learn_read_without_answer();
+    test_learn_inline_interrogates_after_a_confirm();
+    test_learn_inline_results();
+    test_learn_inline_stop_and_refusals();
+    test_learn_without_power();
     test_footer_note_times_out();
     test_wake_not_before_confirm();
     test_wake_then_prove();

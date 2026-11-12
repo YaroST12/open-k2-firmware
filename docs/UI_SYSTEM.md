@@ -960,6 +960,8 @@ Footer, Info tone:
 | no charger | `No charger: no predictions` |
 | empty library | `No twin yet. Learn one` |
 | learning | `Reading the device`, then for 2.5 s `Twin learned`, `Twin updated`, `Already known`, `Plug a device in alone`, `Device did not answer`, `Library full` |
+| learning inline (a device behind its charger) | armed: `Resets the link. Confirm` (Caution, OK label `Confirm`); running: `Resetting the link` / `Asking the device` (Back label `Stop`); then for 2.5 s `Twin learned`, `Learned. Contract changed` (Caution), `Device did not answer`, `Stopped. Link reset`; refusals `Tool or test running`, `K2 holds the contract`, `K2 runs on this VBUS` |
+| nothing to ask (VBUS dark, no charger listing, no device alone) | `No power: add a charger` (Caution, 2.5 s) |
 
 - The top offer uses the protocol row format of section 6.4.
 - It is the charger's highest-power fixed or EPR level **(system default: a range row such as

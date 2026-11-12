@@ -25,6 +25,7 @@ struct LiveCtx {
     std::uint32_t cap_mv = 0;       // the monitor ceiling (pd::request_cap_mv)
     bool busy = false;              // a charger test or an FC release owns the ports
     bool inline_link = false;       // a real sink sits behind the K2
+    bool owners_busy = false;       // a SuperVOOC / QC trigger or PD Stress owns the link (refuses an inline interrogation)
 };
 
 // The charger's power claim (Source_Capabilities_Extended PDP) and the cable the K2 read, for twin::predict.
@@ -78,5 +79,22 @@ struct Learned {
 // `name` empty = the auto name. Saves into the library (merging by VID:PID) unless `save` is false (a dry look).
 Learned learn_from_identify(std::string_view name, bool save = true);
 Learned learn_from_sniff(std::string_view name, bool save = true);
+
+// ---- learning inline: the device asked on its own charger's link (fusb302::interrogate_*, k2/pd/pd_interrogate.hpp) ----
+// The K2 resets the link when it has no fresh sniffed contract, asks the device as its source, resets the link again and learns
+// what the device answered (twin::from_interrogated). Each reset drops VBUS, so it needs `confirmed`. One run at a time; Ui::tick
+// calls inline_poll(), which learns (and saves unless `save` is false) once the run is over.
+struct InlineLearn {
+    bool pending = false;   // a run inline_start started, not learned from yet
+    bool done = false;      // the latest run was learned from: `result`
+    bool save = true;
+    Learned result{};       // how = NoContract when the run read nothing to learn from
+};
+pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx);
+void inline_poll();
+void inline_cancel();        // BACK / `stop`: the run ends (its final reset still goes out); nothing is learned from it
+bool inline_running();       // the run, or its learning, is not over
+const InlineLearn& inline_learn();
+const pd::IqStatus& inline_status();
 
 }  // namespace k2::twin_hw

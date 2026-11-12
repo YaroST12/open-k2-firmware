@@ -33,6 +33,18 @@ def predict_payload(seq=1, kind=2, limiter=0, flags=0, pos=6, mv=11000, ma=3000,
             + le16(cable_mv))
 
 
+def iq_status(running=0, pending=0, done=0, phase=0, step=6, why=0, match=0, rev=2, asked=0, ok=0, refused=0, silent=0, sent=0,
+              acks=0, resets=0, seen=0, skipped=0, vid=0, pid=0, n_svids=0, n_modes=0, n_pdos=0, ext=0, revision=0,
+              first=(0, 0, 0), second=(0, 0, 0), how=0, err=0, seq=0, existed=0, unchanged=0, ms=0):
+    """The INLINE STATUS response, byte for byte as twin::wire::encode_iq_status lays it out (tests/test_twin_wire.cpp)."""
+    p = (bytes([0, 0, running, pending, done, phase, step, why, match, rev, asked, ok, refused, silent, sent, acks, resets, seen,
+                skipped]) + le16(vid) + le16(pid) + bytes([n_svids, n_modes, n_pdos, ext]) + le32(revision)
+         + bytes(first[:2]) + le32(first[2]) + bytes(second[:2]) + le32(second[2])
+         + bytes([how, err, seq, existed, unchanged]) + le16(ms))
+    assert len(p) == tp.IQ_STATUS_BYTES
+    return p
+
+
 class Record(unittest.TestCase):
     def test_crc16_is_ccitt_false(self):
         self.assertEqual(tp.crc16(b"123456789"), 0x29B1)
@@ -87,6 +99,32 @@ class Record(unittest.TestCase):
         self.assertEqual(r["observed"]["enter_usb"], 0xAABBCCDD)
         self.assertEqual(r["observed"]["tbt_enter"], 0x01020304)
         self.assertEqual(r["bytes"], len(raw))
+
+    def test_version3_revision_and_sink_ext(self):
+        # What the firmware encoder writes for an anonymous device learned by an inline interrogation: two sink PDOs, the
+        # sniffed Request, the Revision data object (PD 3.2, version 1.0) and four Sink_Capabilities_Extended bytes; number 6.
+        raw = bytes.fromhex("4b3254030619000000000000020243616e6f6e000000000000000000000000000000000000002c9101002cb104002cb14443"
+                            "2cb10400000010320401020304b427")
+        r = tp.decode_record(raw)
+        self.assertEqual((r["version"], r["seq"], r["name"]), (3, 6, "Canon"))
+        self.assertEqual(r["request"], {"rdo": 0x4344B12C, "pdo": 0x0004B12C})
+        self.assertEqual(r["revision"], 0x32100000)
+        self.assertEqual(r["sink_ext"], "01020304")
+        self.assertEqual(r["bytes"], 65)
+        # a version 1 record says it read neither
+        self.assertIsNone(tp.decode_record(PIXEL)["revision"])
+        self.assertIsNone(tp.decode_record(PIXEL)["sink_ext"])
+        # a version 3 flag in a version 2 record is damage; an extended block of length 0 too
+        v2 = bytearray(raw[:-2])
+        v2[3] = 2
+        with self.assertRaisesRegex(tp.BadRecord, "invalid"):
+            tp.decode_record(bytes(v2) + le16(tp.crc16(bytes(v2))))
+        z = bytearray(raw[:-2])
+        z[-5] = 0
+        with self.assertRaisesRegex(tp.BadRecord, "invalid"):
+            tp.decode_record(bytes(z) + le16(tp.crc16(bytes(z))))
+        with self.assertRaisesRegex(tp.BadRecord, "version"):
+            tp.decode_record(raw[:3] + bytes([4]) + raw[4:])
 
     def test_sink_pdo_text(self):
         self.assertEqual(tp.pdo_text(0x0001912C), "5.0 V 3.0 A")
@@ -317,6 +355,56 @@ class Command(unittest.TestCase):
         self.assertTrue(r["was_running"])
         r, _ = run_cli(["twin", "status"], [bytes([0, 0, 0, 0, 0, 0, 0]) + le16(0)])
         self.assertFalse(r["status"]["running"])
+
+    def test_learn_inline_needs_confirm_on_the_host_too(self):
+        with self.assertRaises(kr.FcRefused):
+            run_cli(["twin", "learn", "inline"], [])
+        with self.assertRaises(kr.FcRefused):
+            run_cli(["pd", "interrogate", "--confirm"], [])   # --inline is the only mode
+
+    def test_learn_inline_refused_names_why(self):
+        with self.assertRaisesRegex(kr.TwinFailed, "holds its own contract.*pd release"):
+            run_cli(["twin", "learn", "inline", "--confirm"], [bytes([10, 1, 5])])
+
+    def test_learn_inline_polls_then_reads_the_answers(self):
+        running = iq_status(running=1, pending=1, phase=4)
+        done = iq_status(done=1, phase=7, match=2, asked=0x3F, ok=0x1B, refused=0x04, silent=0x20, sent=7, acks=6, resets=2,
+                         vid=0x04A9, pid=0x3254, n_pdos=2, ext=24, revision=0x32100000, first=(1, 4, 0x4344B12C),
+                         second=(1, 1, 0x1304B12C), seq=3, ms=3500)
+        answers = [bytes([0, 3, 0, 2]) + le32(0x2601912C) + le32(0x0002D12C),
+                   bytes([0, 3, 1, 24]) + bytes(range(1, 25)),
+                   bytes([0, 3, 2, 1, 2]) + le32(0xFF00A841) + le32(0x18000000),
+                   bytes([0, 3, 3, 1]) + le16(0xFF01) + bytes([1]) + le16(0xFF01) + le32(0x405)]
+        r, link = run_cli(["twin", "learn", "inline", "--confirm", "--name", "Canon"], [bytes([0, 1, 0]), running, done] + answers)
+        self.assertEqual(link.sent[0], (0x63, bytes([11, 1, 2]) + b"Canon"))
+        self.assertEqual(link.sent[1], (0x63, bytes([11, 0])))
+        self.assertEqual([s[1] for s in link.sent[3:]], [bytes([11, 3, k]) for k in range(4)])
+        s = r["inline"]
+        self.assertEqual((s["phase"], s["match"], s["vid"], s["pid"], s["ms"]), ("done", "contract changed", 0x04A9, 0x3254, 3500))
+        self.assertEqual(s["asked"], tp.IQ_STEPS)
+        self.assertEqual(s["answered"], ["Discover Identity", "Get_Sink_Cap", "Get_Revision", "Discover SVIDs"])
+        self.assertEqual((s["refused"], s["silent"]), (["Get_Sink_Cap_Extended"], ["Discover Modes"]))
+        self.assertEqual(s["first"], {"ready": True, "pos": 4, "rdo": 0x4344B12C})
+        self.assertEqual(r["answers"]["sink_pdos"], [0x2601912C, 0x0002D12C])
+        self.assertEqual(r["answers"]["sink_ext"], bytes(range(1, 25)).hex())
+        self.assertEqual(r["answers"]["svids"], [0xFF01])
+        self.assertEqual(r["answers"]["modes"], [{"svid": 0xFF01, "vdo": 0x405}])
+        text = kr.render("twin", r)
+        for want in ("done after 3.5 s", "asked as PD 3.x", "refused: Get_Sink_Cap_Extended", "silent: Discover Modes",
+                     "04A9:3254", "contract changed", "saved as twin 3", "Revision: 0x32100000"):
+            self.assertIn(want, text)
+        json.dumps(r)
+
+    def test_pd_interrogate_is_a_dry_learn(self):
+        done = iq_status(done=1, phase=8, why=4, how=3)
+        answers = [bytes([0, 3, 0, 0]), bytes([0, 3, 1, 0]), bytes([0, 3, 2, 0, 0]), bytes([0, 3, 3, 0, 0])]
+        r, link = run_cli(["pd", "interrogate", "--inline", "--confirm"], [bytes([0, 1, 0]), done] + answers)
+        self.assertEqual(link.sent[0], (0x63, bytes([11, 1, 3])))   # confirm + dry
+        text = kr.render("pd", r)
+        self.assertIn("aborted (no renegotiation)", text)
+        self.assertIn("learned nothing: the device answered nothing to learn from", text)
+        r, _ = run_cli(["pd", "interrogate", "--inline", "--confirm"], [bytes([0, 1, 0]), iq_status(phase=7, why=1)] + answers)
+        self.assertIn("learned nothing (stopped)", kr.render("pd", r))
 
     def test_export_writes_decoded_records_with_raw_hex(self):
         import tempfile

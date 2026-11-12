@@ -417,13 +417,21 @@ static void test_learn_names_and_rename_wins() {
     from_identify(identity_of(0x18D1, 0x4EE3, 2u << 27), st, 2, t4);
     r = l.save(t4);
     CHECK_STR(name_of(l, r.seq).c_str(), "Google 33W 2");
-    // a device with no VID is never matched to another: each learn adds one (named by number)
+    // a device with no VID is never matched to an identified one, even with their PDO list; learned again it is matched by its
+    // sink PDO list (same_device), not added a second time
     Twin anon;
     from_identify(pd::Identity{}, st, 2, anon);
     CHECK_EQ(l.save(anon).seq, 4);
-    CHECK_EQ(l.save(anon).seq, 5);
+    r = l.save(anon);
+    CHECK_EQ(r.seq, 4);
+    CHECK_EQ(r.unchanged ? 1 : 0, 1);
     CHECK_STR(name_of(l, 4).c_str(), "Device 33W");
-    CHECK_STR(name_of(l, 5).c_str(), "Device 33W 2");
+    CHECK_EQ(l.count(), 4u);
+    // another anonymous device (another PDO list) is a twin of its own
+    Twin anon2;
+    from_identify(pd::Identity{}, done_with_caps({0x3601912C, 0x0002D12C}), 2, anon2);
+    CHECK_EQ(l.save(anon2).seq, 5);
+    CHECK_STR(name_of(l, 5).c_str(), "Device 27W");
 }
 
 static pd::SourceCaps source_with(std::initializer_list<std::uint32_t> words) {
@@ -521,7 +529,304 @@ static void test_learn_sniffed_attaches() {
     CHECK_EQ(l.save(s3).seq, 3);
 }
 
+// The merge key (learn.hpp same_device): the identity when both twins have one; without it a fingerprint. Two devices that
+// never said who they are are not the same device just because both read 0000:0000.
+static Twin anon_req(std::uint32_t rdo, std::uint32_t src_pdo) {
+    Twin t;
+    t.rdo = rdo;
+    t.rdo_pdo = src_pdo;
+    return t;
+}
+
+static void test_same_device() {
+    const std::uint32_t canon_rdo = 0x4344B12Cu, src15 = 0x0004B12Cu;
+    // both with an identity: VID and PID decide, nothing else
+    Twin a = pixel(), b = pixel();
+    b.pdos[0] = 0x3601912D;
+    CHECK_EQ(same_device(a, b) ? 1 : 0, 1);
+    b.pid = 0x4EE2;
+    CHECK_EQ(same_device(a, b) ? 1 : 0, 0);
+    // neither with an identity: the sink PDO lists when both have one
+    Twin x = pixel(), y = pixel();
+    x.vid = x.pid = y.vid = y.pid = 0;
+    CHECK_EQ(same_device(x, y) ? 1 : 0, 1);
+    y.pdos[2] = 0xC0DC323D;
+    CHECK_EQ(same_device(x, y) ? 1 : 0, 0);
+    y.pdos[2] = x.pdos[2];
+    y.num_pdos = 2;
+    CHECK_EQ(same_device(x, y) ? 1 : 0, 0);
+    // ... else the sniffed Request with the source PDO it pointed at
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), anon_req(canon_rdo, src15)) ? 1 : 0, 1);
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), anon_req(canon_rdo ^ 1, src15)) ? 1 : 0, 0);
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), anon_req(canon_rdo, 0x0006412Cu)) ? 1 : 0, 0);
+    Twin req_and_pdos = anon_req(canon_rdo, src15);
+    req_and_pdos.num_pdos = 1;
+    req_and_pdos.pdos[0] = 0x0001912C;
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), req_and_pdos) ? 1 : 0, 1);   // a later interrogation of the sniffed device
+    // nothing to compare: never the same
+    CHECK_EQ(same_device(Twin{}, Twin{}) ? 1 : 0, 0);
+    // one with an identity, one without: never (neither a Request nor an equal PDO list says WHICH identified device it was)
+    Twin named = anon_req(canon_rdo, src15);
+    named.vid = 0x05AC;
+    named.pid = 0x1234;
+    CHECK_EQ(same_device(named, anon_req(canon_rdo, src15)) ? 1 : 0, 0);
+    Twin p_named = pixel(), p_anon = pixel();
+    p_anon.vid = p_anon.pid = 0;
+    CHECK_EQ(same_device(p_named, p_anon) ? 1 : 0, 0);
+    CHECK_EQ(same_device(p_anon, p_named) ? 1 : 0, 0);
+}
+
+static void test_library_merges_anonymous_by_fingerprint() {
+    Vol v;
+    Library l(v.f);
+    const std::uint32_t canon_rdo = 0x4344B12Cu, src15 = 0x0004B12Cu;
+    // the Canon learned twice by sniffing: one twin, "unchanged" the second time
+    CHECK_EQ(l.save(anon_req(canon_rdo, src15)).seq, 1);
+    Result r = l.save(anon_req(canon_rdo, src15));
+    CHECK_EQ(r.seq, 1);
+    CHECK_EQ(r.existed ? 1 : 0, 1);
+    CHECK_EQ(r.unchanged ? 1 : 0, 1);
+    // another anonymous device with another Request is a second twin, not a merge into the first
+    CHECK_EQ(l.save(anon_req(0x2304B12Cu, 0x0002D12Cu)).seq, 2);
+    // an interrogation of the Canon that found sink PDOs but no identity lands on twin 1
+    Twin q = anon_req(canon_rdo, src15);
+    q.num_pdos = 2;
+    q.pdos = {0x0001912C, 0x0004B12C};
+    r = l.save(q);
+    CHECK_EQ(r.seq, 1);
+    CHECK_EQ(r.existed ? 1 : 0, 1);
+    Twin t;
+    l.get(1, t);
+    CHECK_EQ(t.num_pdos, 2);
+    CHECK_EQ(l.count(), 2u);
+    // a learn that read an identity is another twin, even with the same sink PDOs: the anonymous one stays as it was
+    Twin named = q;
+    named.vid = 0x04A9;
+    named.pid = 0x3001;
+    r = l.save(named);
+    CHECK_EQ(r.seq, 3);
+    CHECK_EQ(r.existed ? 1 : 0, 0);
+    l.get(1, t);
+    CHECK_EQ(t.vid, 0);
+}
+
+// Version 3 adds what an inline interrogation reads from PD 3 devices: the Revision data object and the
+// Sink_Capabilities_Extended block. Only a twin that holds one of them is written as version 3.
+static void test_codec_v3() {
+    std::array<std::uint8_t, kMaxFileBytes> b{};
+    std::uint8_t seq = 0;
+    Twin u;
+    // without them: the old versions, byte for byte
+    Twin p = pixel("Pixel");
+    CHECK_EQ(int(encode(p, 1, b) != 0), 1);
+    CHECK_EQ(b[3], kVersion1);
+    p.decl.n_svids = 1;
+    p.decl.svids[0] = 0xFF01;
+    encode(p, 1, b);
+    CHECK_EQ(b[3], kVersion2);
+
+    // the Revision data object alone: flag b3, four bytes after the USB blocks
+    Twin t = pixel("Rev");
+    t.revision = 0x32100000u;   // PD 3.2, version 1.0
+    std::size_t n = encode(t, 2, b);
+    CHECK_EQ(b[3], kVersion3);
+    CHECK_EQ(b[kOffFlags], kFlagRevision);
+    CHECK_EQ(n, kHeaderBytes + 3 * 4 + 4 + 2);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(u.revision, 0x32100000u);
+    CHECK_EQ(int(u.sink_ext_len), 0);
+
+    // the Sink_Capabilities_Extended block alone: flag b4, a length byte and that many bytes
+    Twin e = pixel("Ext");
+    e.sink_ext_len = 21;
+    for (std::size_t i = 0; i < 21; ++i) e.sink_ext[i] = std::uint8_t(0xA0 + i);
+    n = encode(e, 3, b);
+    CHECK_EQ(b[3], kVersion3);
+    CHECK_EQ(b[kOffFlags], kFlagSinkExt);
+    CHECK_EQ(n, kHeaderBytes + 3 * 4 + 1 + 21 + 2);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(int(u.sink_ext_len), 21);
+    CHECK_EQ(u.sink_ext[0], 0xA0);
+    CHECK_EQ(u.sink_ext[20], 0xB4);
+    CHECK_EQ(u.sink_ext[21], 0);
+    CHECK_EQ(u.revision, 0u);
+
+    // a phone with a Request and both blocks: 89 bytes, everything kept
+    Twin ph = pixel("Phone");
+    ph.rdo = 0x4344B12Cu;
+    ph.rdo_pdo = 0x0004B12Cu;
+    ph.revision = 0x31000000u;
+    ph.sink_ext_len = kSinkExtBytes;
+    ph.sink_ext.fill(0x5A);
+    n = encode(ph, 4, b);
+    CHECK_EQ(n, std::size_t(89));
+    CHECK_EQ(b[kOffFlags], kFlagRequest | kFlagRevision | kFlagSinkExt);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(int(u.sink_ext_len), int(kSinkExtBytes));
+    CHECK_EQ(u.sink_ext[kSinkExtBytes - 1], 0x5A);
+
+    // the record never grows past kMaxFileBytes (the volume budget): with every other block full, the extended block stays out,
+    // then the Revision; what is written still reads back
+    Twin big = ph;
+    big.num_pdos = 7;
+    big.decl.n_pt = kMaxProductVdos;
+    big.decl.n_svids = kMaxDeclSvids;
+    big.decl.n_modes = kMaxDeclModes;
+    big.obs.valid = true;
+    n = encode(big, 4, b);
+    CHECK_EQ(n, kMaxFileBytes);
+    CHECK_EQ(b[3], kVersion2);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(u.revision, 0u);
+    CHECK_EQ(int(u.sink_ext_len), 0);
+    big.num_pdos = 6;   // four bytes free: the Revision goes in, the extended block still does not
+    n = encode(big, 4, b);
+    CHECK_EQ(n, kMaxFileBytes);
+    CHECK_EQ(b[kOffFlags], kFlagRequest | kFlagDeclared | kFlagObserved | kFlagRevision);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(u.revision, 0x31000000u);
+    big.num_pdos = 0;   // 28 bytes free: an extended block of 23 bytes fits after the Revision, one of 24 does not
+    big.sink_ext_len = 23;
+    CHECK_EQ(encode(big, 4, b), kMaxFileBytes);
+    big.sink_ext_len = 24;
+    CHECK_EQ(encode(big, 4, b), kMaxFileBytes - 24);
+
+    // more extended bytes than the block holds: nothing written
+    Twin over = e;
+    over.sink_ext_len = kSinkExtBytes + 1;
+    CHECK_EQ(encode(over, 1, b), std::size_t(0));
+
+    auto recrc = [](std::array<std::uint8_t, kMaxFileBytes>& r, std::size_t len) {
+        detail::put16(&r[len - 2], bbstore::crc16(0xFFFF, {r.data(), len - 2}));
+    };
+    // a version 2 record with a version 3 flag is damage, not a new format
+    std::array<std::uint8_t, kMaxFileBytes> c{};
+    n = encode(t, 2, c);
+    c[3] = kVersion2;
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)), int(Dec::Invalid));
+    // an extended block of length 0 or over the maximum is damage
+    n = encode(e, 3, c);
+    const std::size_t ext_at = kHeaderBytes + 3 * 4;
+    c[ext_at] = 0;
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)) != int(Dec::Ok), true);
+    n = encode(e, 3, c);
+    c[ext_at] = std::uint8_t(kSinkExtBytes + 1);
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)) != int(Dec::Ok), true);
+    // a version 4 record is refused, never guessed
+    n = encode(big, 4, c);
+    c[3] = 4;
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)), int(Dec::Version));
+
+    // merge keeps them the way it keeps everything else: what the new observation knows replaces, the rest stays
+    Twin saved = pixel("Saved");
+    merge(saved, t);
+    CHECK_EQ(saved.revision, 0x32100000u);
+    merge(saved, e);
+    CHECK_EQ(saved.revision, 0x32100000u);
+    CHECK_EQ(int(saved.sink_ext_len), 21);
+    merge(saved, pixel(""));
+    CHECK_EQ(int(saved.sink_ext_len), 21);
+}
+
+// An inline interrogation's answers as a twin: identity, sink PDOs, the PD 3 answers, the USB words, and the contract it
+// sniffed before asking (the Canon on its own charger, runs/clone-canon).
+static void test_from_interrogated() {
+    pd::IqStatus st;
+    st.phase = pd::IqPhase::Done;
+    st.rev = 2;
+    st.first = {true, 4, 2, 0x4344B12Cu, 0x0004B12Cu};
+    st.second = st.first;
+    st.num_sink_pdos = 2;
+    st.sink_pdos = {0x0001912C, 0x0004B12C};
+    st.revision = 0x32100000u;
+    st.sink_ext_len = 21;
+    st.sink_ext[0] = 0xA9;
+    st.sink_ext[20] = 0x3C;
+    Twin t;
+    CHECK_EQ(from_interrogated(st, t) ? 1 : 0, 1);
+    CHECK_EQ(t.vid, 0);
+    CHECK_EQ(t.pd_rev, 2);
+    CHECK_EQ(t.num_pdos, 2);
+    CHECK_EQ(t.pdos[1], 0x0004B12Cu);
+    CHECK_EQ(t.rdo, 0x4344B12Cu);
+    CHECK_EQ(t.rdo_pdo, 0x0004B12Cu);
+    CHECK_EQ(t.revision, 0x32100000u);
+    CHECK_EQ(int(t.sink_ext_len), 21);
+    CHECK_EQ(t.sink_ext[20], 0x3C);
+    CHECK_EQ(t.decl.any() ? 1 : 0, 0);
+    CHECK_EQ(t.name[0], 0);
+
+    // with an identity and USB words: the same fields from_identify keeps
+    st.id = identity_of(0x04A9, 0x3001, (1u << 30) | (1u << 26) | (2u << 27));
+    st.id.vdos[4] = 0x11000000u;
+    st.id.num_vdos = 5;
+    st.num_svids = 2;
+    st.svids[0] = 0xFF01;
+    st.svids[1] = 0x04A9;
+    st.num_modes = 1;
+    st.mode_svid[0] = 0xFF01;
+    st.mode_vdo[0] = 0x000C0045u;
+    CHECK_EQ(from_interrogated(st, t) ? 1 : 0, 1);
+    CHECK_EQ(t.vid, 0x04A9);
+    CHECK_EQ(t.pid, 0x3001);
+    CHECK_EQ(t.id_hi, id_hi_of(st.id.id_header));
+    CHECK_EQ(int(t.decl.n_pt), 1);
+    CHECK_EQ(t.decl.pt[0], 0x11000000u);
+    CHECK_EQ(int(t.decl.n_svids), 2);
+    CHECK_EQ(int(t.decl.svids[1]), 0x04A9);
+    CHECK_EQ(int(t.decl.n_modes), 1);
+    CHECK_EQ(t.decl.mode_vdo[0], 0x000C0045u);
+
+    // no sniffed first contract (the run began with its own reset and the device asked after): the second one is the Request
+    pd::IqStatus s2 = st;
+    s2.first = {};
+    CHECK_EQ(from_interrogated(s2, t) ? 1 : 0, 1);
+    CHECK_EQ(t.rdo, 0x4344B12Cu);
+    // the device's own revision is its Request's, not the one the questions went out in
+    s2.first = st.first;
+    s2.first.dev_rev = 1;
+    s2.rev = 1;
+    CHECK_EQ(from_interrogated(s2, t) ? 1 : 0, 1);
+    CHECK_EQ(t.pd_rev, 1);
+
+    // a run that is still going, or one that learned neither a contract nor sink PDOs, is not a twin
+    pd::IqStatus run = st;
+    run.phase = pd::IqPhase::Ask;
+    CHECK_EQ(from_interrogated(run, t) ? 1 : 0, 0);
+    pd::IqStatus none;
+    none.phase = pd::IqPhase::Aborted;
+    none.id = st.id;
+    CHECK_EQ(from_interrogated(none, t) ? 1 : 0, 0);
+    // an aborted run keeps what it did read
+    pd::IqStatus cut = st;
+    cut.phase = pd::IqPhase::Aborted;
+    cut.why = pd::IqWhy::Timeout;
+    CHECK_EQ(from_interrogated(cut, t) ? 1 : 0, 1);
+    CHECK_EQ(t.num_pdos, 2);
+}
+
+// OK on "Learn from device": alone -> Identify, inline -> interrogate, a current Identify -> learn from it, dark -> no power.
+static void test_learn_path() {
+    using P = LearnPath;
+    CHECK_EQ(int(learn_path(true, false, false, true)), int(P::Identify));
+    CHECK_EQ(int(learn_path(true, true, true, false)), int(P::Identify));        // alone wins (the inline latch is stale then)
+    CHECK_EQ(int(learn_path(false, true, false, false)), int(P::Interrogate));
+    CHECK_EQ(int(learn_path(false, true, true, true)), int(P::Interrogate));     // inline: ask it, even with an older Identify
+    CHECK_EQ(int(learn_path(false, false, true, true)), int(P::LastIdentify));   // identified a moment ago, released since
+    CHECK_EQ(int(learn_path(false, false, false, false)), int(P::LastIdentify)); // VBUS up, not inline (the K2 is the sink)
+    CHECK_EQ(int(learn_path(false, false, false, true)), int(P::NoPower));       // a device with no charger, not a phone alone
+}
+
 int main() {
+    test_learn_path();
+    test_from_interrogated();
+    test_codec_v3();
+    test_same_device();
+    test_library_merges_anonymous_by_fingerprint();
     test_codec_roundtrip();
     test_codec_guards();
     test_codec_v1_golden();

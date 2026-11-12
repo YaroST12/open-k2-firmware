@@ -78,9 +78,11 @@ CMD_FC = 0x32             # active fast-charge trigger (scan / trigger / reset /
 CMD_EM_LIB = 0x61         # saved-cable library: list/get/save/delete/rename/spoof
 CMD_CARDS = 0x62          # charger report cards: list / get (chunked) / rename / delete
 CMD_TWIN = 0x63           # device twins: list / get (chunked) / predict / learn / rename / delete / run / status / result / usb / cancel
-(TW_LIST, TW_GET, TW_PREDICT, TW_LEARN, TW_RENAME, TW_DELETE, TW_RUN, TW_STATUS, TW_RESULT, TW_USB, TW_CANCEL) = range(11)
+(TW_LIST, TW_GET, TW_PREDICT, TW_LEARN, TW_RENAME, TW_DELETE, TW_RUN, TW_STATUS, TW_RESULT, TW_USB, TW_CANCEL,
+ TW_INLINE) = range(12)
 TW_RUN_CONFIRM, TW_LEARN_DRY, TW_ERR_NO_CAPS = 1, 1, 8
 TW_RUN_WAIT_S = 180       # how long `twin run` follows a run before it gives up waiting (the run itself goes on)
+TW_IQ_WAIT_S = 45         # `twin learn inline`: the K2 bounds the run itself (20 s of asking + the resets back), then this
 CMD_STORE = 0x60         # flash store: list / save-emarker / save-log
 CMD_BLACK_BOX = 0x70       # PD black box ring: read from a cursor / clear / freeze / status (tools/pd_trace.py)
 BB_READ, BB_CLEAR, BB_FREEZE, BB_STATUS, BB_CAP_LIST, BB_CAP_READ, BB_CAP_CLEAR = 0, 1, 2, 3, 4, 5, 6
@@ -1953,6 +1955,86 @@ def _twin_run(link, a):
     return {"twin": "run", "run": st, "rows": rows}
 
 
+IQ_HINTS = {"no device inline": " (the device must draw from its charger THROUGH the K2)",
+            "the K2 holds its own contract": " (`pd release` first: the K2 must not be the sink)",
+            "the K2 runs on this VBUS": " (power the K2 from its HID port, not from the measured line)",
+            "a test or trigger owns the ports": " (`stop`, or wait for the run to end)"}
+
+
+def _twin_learn_inline(link, a, sleep=time.sleep, clock=time.monotonic):
+    """Interrogate the device inline: the K2 hard-resets the link (unless a fresh contract was sniffed), asks the device as its
+    source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended, Get_Revision, SVIDs, Modes), hard-resets again, and learns a
+    twin from the answers (saved unless --dry). Polls the status until the K2 says it is over; Ctrl-C stops it (the final
+    reset still goes out)."""
+    if not a.confirm:
+        raise FcRefused("an inline interrogation hard-resets the link twice (VBUS drops to 0 V and comes back, the device "
+                        "renegotiates): add --confirm")
+    name = list(_twin_name(a.name)) if a.name else []
+    flags = twin_proto.IQ_CONFIRM | (twin_proto.IQ_DRY if a.dry else 0)
+    r = twin_proto.decode_iq_start(_twin(link, [TW_INLINE, twin_proto.IQ_START, flags] + name))
+    if not r["started"]:
+        raise TwinFailed(f"twin learn inline: {r['refusal']}{IQ_HINTS.get(r['refusal'], '')}")
+    wait = getattr(a, "wait", TW_IQ_WAIT_S)
+    deadline = clock() + wait
+    try:
+        while True:
+            st = twin_proto.decode_iq_status(_twin(link, [TW_INLINE, twin_proto.IQ_STATUS]))
+            if not st["running"] and not st["pending"]:
+                break
+            if clock() > deadline:
+                _twin(link, [TW_INLINE, twin_proto.IQ_ABORT])
+                raise TwinFailed(f"twin learn inline: still running after {wait:g} s (stopped; the final reset goes out)")
+            sleep(0.25)
+    except KeyboardInterrupt:
+        _twin(link, [TW_INLINE, twin_proto.IQ_ABORT])
+        raise
+    answers = {}
+    for part in range(twin_proto.IQ_PARTS):
+        x = twin_proto.decode_iq_answers(_twin(link, [TW_INLINE, twin_proto.IQ_ANSWERS, part]))
+        x.pop("part")
+        answers.update(x)
+    return {"twin": "learn", "source": "inline", "dry": a.dry, "inline": st, "answers": answers}
+
+
+def _render_learn_inline(r):
+    s, x = r["inline"], r["answers"]
+    end = s["phase"] + (f" ({s['why']})" if s["why"] != "none" else "")
+    lines = [f"inline interrogation: {end} after {s['ms'] / 1000:.1f} s, asked as PD {'3.x' if s['rev'] >= 2 else '2.0'}, "
+             f"{s['sent']} questions sent, {s['dev_acks']} GoodCRC from the device, resets {s['resets_sent']} sent"
+             + (f" / {s['resets_seen']} seen" if s["resets_seen"] else "")
+             + (" (first reset skipped: a fresh contract was sniffed)" if s["skipped_first_reset"] else "")]
+    for k in ("asked", "answered", "refused", "silent"):
+        lines.append(f"  {k}: {', '.join(s[k]) or 'none'}")
+
+    def contract(c):
+        return f"PDO {c['pos']} RDO 0x{c['rdo']:08X}" if c["ready"] else "none"
+    lines.append(f"  contract before: {contract(s['first'])}; after: {contract(s['second'])} ({s['match']})")
+    if s["vid"] or s["pid"]:
+        lines.append(f"  identity: {s['vid']:04X}:{s['pid']:04X}" + (f", VDOs {' '.join(f'0x{v:08X}' for v in x['identity_vdos'])}"
+                                                                    if x.get("identity_vdos") else ""))
+    lines += [f"  sink PDO {i + 1}: {twin_proto.pdo_text(p)}  raw=0x{p:08X}" for i, p in enumerate(x.get("sink_pdos", []))]
+    if x.get("sink_ext"):
+        lines.append(f"  Sink_Capabilities_Extended: {x['sink_ext']}")
+    if s["revision"]:
+        lines.append(f"  Revision: 0x{s['revision']:08X}")
+    if x.get("svids"):
+        lines.append("  SVIDs: " + " ".join(f"0x{v:04X}" for v in x["svids"])
+                     + "".join(f"; mode 0x{m['svid']:04X}: 0x{m['vdo']:08X}" for m in x.get("modes", [])))
+    learn = s["learn"]
+    if not s["done"]:
+        lines.append("  learned nothing (stopped)")
+    elif learn["how"] == "nothing sniffed":   # twin_hw::Learn::NoContract: no answer and no contract to learn from
+        lines.append("  learned nothing: the device answered nothing to learn from")
+    elif learn["how"] != "ok":
+        lines.append(f"  learned nothing: {learn['how']}" + (f" ({learn['store_err']})" if learn["how"] == "not stored" else ""))
+    elif r["dry"]:
+        lines.append("  learned (dry run, nothing saved)")
+    else:
+        lines.append(f"  saved as twin {learn['seq']}" + (" (already known" + (", unchanged)" if learn["unchanged"] else ", merged)")
+                                                        if learn["existed"] else ""))
+    return "\n".join(lines)
+
+
 def cmd_twin(link, a):
     """Device twins: what a charger would give a learned device, and a live proof of it."""
     c = a.twin_cmd
@@ -1976,6 +2058,8 @@ def cmd_twin(link, a):
         p = _twin(link, [TW_CANCEL])
         twin_proto.check(p, 2, "cancel")
         return {"twin": "cancel", "was_running": bool(p[1])}
+    if c == "learn" and a.source == "inline":
+        return _twin_learn_inline(link, a)
     if c == "learn":
         name = _twin_name(a.name) if a.name else b""
         how = 0 if a.source == "identify" else 1
@@ -2053,6 +2137,8 @@ def render_twin(r):
         return f"twin {x['seq']}: {x['verdict']}" + (f" ({x['skip']})" if x["skip"] else "") + (f" {twin_proto.volts(x['measured_mv'])}" if x["measured_mv"] else "")
     if k == "cancel":
         return "run cancelled" if r["was_running"] else "no run was going"
+    if k == "learn" and r.get("source") == "inline":
+        return _render_learn_inline(r)
     if k == "learn":
         x = r["learn"]
         what = f"{x['vid']:04X}:{x['pid']:04X}, {x['num_pdos']} sink PDOs" + (f", {', '.join(x['has'])}" if x["has"] else "")
@@ -3383,6 +3469,12 @@ def cmd_pd(link, a):
     (--over-load lifts the refusal only while the far sink is a passive load, lab only;
     the other exception is the lab-only `pd reset --inline --confirm`)."""
     sub = a.pd_cmd
+    if sub == "interrogate":
+        # The lab face of `twin learn inline`: the same run on the K2 (Cmd::Twin INLINE), dry unless --save.
+        if not getattr(a, "inline", False):
+            raise FcRefused("pd interrogate: only --inline exists (a device alone is read by `identify-device`)")
+        a.dry = not getattr(a, "save", False)
+        return _twin_learn_inline(link, a)
     if sub == "request":
         mv, ma = getattr(a, "mv", 0) or 0, getattr(a, "ma", 0) or 0
         flags = (1 if getattr(a, "confirm", False) else 0) | (2 if getattr(a, "over_load", False) else 0)
@@ -4016,6 +4108,8 @@ def _render(name, r):
             lines.append("  Alt: DP")
         return "\n".join(lines)
     if name == "pd":
+        if r.get("twin") == "learn":
+            return _render_learn_inline(r)   # pd interrogate --inline
         if r.get("pd_cmd") == "handback":
             return f"handback {r['verdict']}"   # the phase-1 lab op's verdict: allowed, or why it was refused
         return (f"trigger {r['state']} result={r['result']} held={r['held']}{'(auto)' if r.get('held') and r.get('auto_hold') else ''} epr={r['epr']} "
@@ -4328,10 +4422,13 @@ def build_parser():
     sx = sws.add_parser("result", help="the live verdict held for one twin")
     sx.add_argument("id", type=int)
     sws.add_parser("cancel", help="stop a running live proof")
-    sx = sws.add_parser("learn", help="make a twin from the last Identify (device alone) or a sniffed Request (inline)")
-    sx.add_argument("source", choices=["identify", "sniff"])
+    sx = sws.add_parser("learn", help="make a twin from the last Identify (device alone), a sniffed Request (inline), or by "
+                                      "interrogating the device inline (`inline --confirm`: two Hard Resets, VBUS drops)")
+    sx.add_argument("source", choices=["identify", "sniff", "inline"])
     sx.add_argument("--name", help="1..24 characters")
     sx.add_argument("--dry", action="store_true", help="show what would be learned, save nothing")
+    sx.add_argument("--confirm", action="store_true", help="inline: required, the K2 hard-resets the link before and after asking")
+    sx.add_argument("--wait", type=float, default=TW_IQ_WAIT_S, help=f"inline: seconds to follow the run (default {TW_IQ_WAIT_S})")
     sx = sws.add_parser("rename", help="rename a twin")
     sx.add_argument("id", type=int)
     sx.add_argument("name")
@@ -4390,6 +4487,15 @@ def build_parser():
                                           "inline and the far sink sent no Request this attach; refused during a "
                                           "charger test. Never reachable from the UI, the shell or the charger test")
     sh.add_argument("--confirm", action="store_true", help="confirm the lab op (required)")
+    si = spds.add_parser("interrogate", help="ask the device inline as its source: Hard Reset (unless a fresh contract was "
+                                             "sniffed), Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended, Get_Revision, "
+                                             "SVIDs, Modes, Hard Reset back; prints what it asked and what came back. Saves "
+                                             "nothing unless --save (then it is `twin learn inline`)")
+    si.add_argument("--inline", action="store_true", help="required: the device sits inline behind the K2 on its own charger")
+    si.add_argument("--confirm", action="store_true", help="required: two Hard Resets, VBUS drops to 0 V and comes back")
+    si.add_argument("--save", action="store_true", help="learn a twin from the answers and save it")
+    si.add_argument("--name", help="twin name with --save, 1..24 characters")
+    si.add_argument("--wait", type=float, default=TW_IQ_WAIT_S, help=f"seconds to follow the run (default {TW_IQ_WAIT_S})")
     spds.add_parser("release", help="back to 5 V (Request PDO 1)")
     sa = spds.add_parser("attach", help="attach as PD sink and request the target voltage (default 5000 mV; above 5 V needs "
                                          "--confirm; refused inline and during a charger test, with no Rd and nothing sent)")
