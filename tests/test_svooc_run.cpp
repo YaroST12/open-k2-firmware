@@ -1,0 +1,239 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+// The guarded SuperVOOC trigger's guards and session (k2/fastcharge/svooc_run.hpp): every refusal at the start, every
+// abort while it runs (with the 12.0 V and 50 mA boundaries), the wake / listen / rest steps, the exit check that VBUS
+// came back to 5 V, and the report.
+#include "k2/fastcharge/svooc_run.hpp"
+#include "test_util.h"
+
+using namespace k2;
+using svooc::Abort;
+using svooc::Refusal;
+using svooc::Stage;
+using svooc::Step;
+
+#define CHECK(c) CHECK_EQ(!!(c), 1)
+
+namespace {
+
+svooc::StartFacts ok_start() {
+    svooc::StartFacts f;
+    f.confirmed = true;
+    f.host_ok = true;
+    f.vbus_known = f.current_known = true;
+    f.vbus_mv = 5100;
+    f.ibus_ma = 3;
+    f.ram_free = true;
+    return f;
+}
+
+svooc::Sample ok_sample(std::uint32_t now) {
+    svooc::Sample s;
+    s.now_ms = now;
+    s.host_ok = true;
+    s.vbus_known = s.current_known = true;
+    s.vbus_mv = 5100;
+    s.ibus_ma = 2;
+    return s;
+}
+
+void test_start_refusals() {
+    CHECK_EQ(svooc::refusal(ok_start()), Refusal::None);
+    struct Case { void (*edit)(svooc::StartFacts&); Refusal want; };
+    const Case cases[] = {
+        {[](svooc::StartFacts& f) { f.confirmed = false; }, Refusal::NotConfirmed},
+        {[](svooc::StartFacts& f) { f.ports_busy = true; }, Refusal::Busy},
+        {[](svooc::StartFacts& f) { f.host_ok = false; }, Refusal::NoHost},
+        {[](svooc::StartFacts& f) { f.vbus_known = false; }, Refusal::NoMonitor},
+        {[](svooc::StartFacts& f) { f.current_known = false; }, Refusal::NoMonitor},
+        {[](svooc::StartFacts& f) { f.far_sink = true; }, Refusal::Sink},
+        {[](svooc::StartFacts& f) { f.inline_mode = true; }, Refusal::Inline},
+        {[](svooc::StartFacts& f) { f.pd_contract = true; }, Refusal::PdContract},
+        {[](svooc::StartFacts& f) { f.ibus_ma = 51; }, Refusal::Current},
+        {[](svooc::StartFacts& f) { f.ibus_ma = -51; }, Refusal::Current},
+        {[](svooc::StartFacts& f) { f.vbus_mv = 4499; }, Refusal::NotFiveVolts},
+        {[](svooc::StartFacts& f) { f.vbus_mv = 5501; }, Refusal::NotFiveVolts},
+        {[](svooc::StartFacts& f) { f.ram_free = false; }, Refusal::NoRam},
+    };
+    for (const Case& c : cases) {
+        svooc::StartFacts f = ok_start();
+        c.edit(f);
+        CHECK_EQ(svooc::refusal(f), c.want);
+    }
+    // the boundaries that still start
+    for (int ma : {50, -50, 0}) { svooc::StartFacts f = ok_start(); f.ibus_ma = ma; CHECK_EQ(svooc::refusal(f), Refusal::None); }
+    for (int mv : {4500, 5500}) { svooc::StartFacts f = ok_start(); f.vbus_mv = mv; CHECK_EQ(svooc::refusal(f), Refusal::None); }
+    // a refused start leaves the run idle with the reason in the report
+    svooc::Run r;
+    svooc::StartFacts f = ok_start();
+    f.ram_free = false;
+    CHECK_EQ(r.start(f, 100), Refusal::NoRam);
+    CHECK_EQ(r.stage(), Stage::Idle);
+    CHECK_EQ(r.report().refusal, Refusal::NoRam);
+}
+
+// Started: wake at once, listen kWakeListenMs, rest kWakeRestMs, up to kWakeTries wakes; no command at all ends the run
+// as NoAdapter.
+void test_wake_listen_rest_and_no_adapter() {
+    svooc::Run r;
+    CHECK_EQ(r.start(ok_start(), 1000), Refusal::None);
+    std::uint32_t t = 1000;
+    CHECK_EQ(r.poll(ok_sample(t)), Step::Wake);
+    CHECK_EQ(r.stage(), Stage::Listen);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs - 1)), Step::None);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Step::Rest);
+    t += svooc::kWakeListenMs;
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeRestMs - 1)), Step::None);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeRestMs)), Step::Wake);
+    t += svooc::kWakeRestMs;
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Step::Rest);
+    t += svooc::kWakeListenMs + svooc::kWakeRestMs;
+    CHECK_EQ(r.poll(ok_sample(t)), Step::Wake);
+    CHECK_EQ(r.report().tries, svooc::kWakeTries);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Step::Release);
+    CHECK_EQ(r.report().abort, Abort::NoAdapter);
+    CHECK_EQ(r.stage(), Stage::Exit);
+}
+
+// A command heard while listening: the run answers (the wire does the work) until the time cap.
+void test_answer_until_the_cap() {
+    svooc::Run r;
+    r.start(ok_start(), 0);
+    CHECK_EQ(r.poll(ok_sample(0)), Step::Wake);
+    svooc::Sample s = ok_sample(600);
+    s.commands = 1;
+    CHECK_EQ(r.poll(s), Step::None);
+    CHECK_EQ(r.stage(), Stage::Answer);
+    s.now_ms = svooc::kCapMs - 1;
+    s.accepted = true;
+    CHECK_EQ(r.poll(s), Step::None);
+    s.now_ms = svooc::kCapMs;
+    CHECK_EQ(r.poll(s), Step::Release);
+    CHECK_EQ(r.report().abort, Abort::TimeCap);
+    CHECK(r.report().accepted);
+    // a shorter cap from the caller, never a longer one
+    svooc::Run q;
+    q.start(ok_start(), 0, 5000);
+    q.poll(ok_sample(0));
+    CHECK_EQ(q.poll(ok_sample(4999)), Step::Rest);
+    svooc::Run w;
+    w.start(ok_start(), 0, 60000);
+    CHECK_EQ(w.report().cap_ms, svooc::kCapMs);
+}
+
+// Running and answering: each guard ends the run with its reason and one Release.
+Abort abort_after(void (*edit)(svooc::Sample&)) {
+    svooc::Run r;
+    r.start(ok_start(), 0);
+    r.poll(ok_sample(0));
+    svooc::Sample s = ok_sample(500);
+    s.commands = 3;
+    r.poll(s);
+    s.now_ms = 700;
+    edit(s);
+    const Step st = r.poll(s);
+    if (st != Step::Release) return Abort::None;
+    s.now_ms = 720;
+    if (r.poll(s) == Step::Release) return Abort::None;   // only one Release
+    return r.report().abort;
+}
+
+void test_every_abort() {
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.vbus_mv = 12001; }), Abort::Overvoltage);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.vbus_mv = 12000; }), Abort::None);   // 12.0 V itself still runs
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.ibus_ma = 51; }), Abort::Current);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.ibus_ma = -51; }), Abort::Current);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.ibus_ma = 50; }), Abort::None);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.ibus_ma = -50; }), Abort::None);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.off_script = true; }), Abort::OffScript);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.host_ok = false; }), Abort::HostGone);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.vbus_known = false; }), Abort::NoMonitor);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.current_known = false; }), Abort::NoMonitor);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.far_sink = true; }), Abort::Sink);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.inline_mode = true; }), Abort::Sink);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.pd_contract = true; }), Abort::PdContract);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.storm = true; }), Abort::Storm);
+    // the guards hold in every stage, also while listening after a wake
+    svooc::Run r;
+    r.start(ok_start(), 0);
+    r.poll(ok_sample(0));
+    svooc::Sample s = ok_sample(10);
+    s.vbus_mv = 12500;
+    CHECK_EQ(r.poll(s), Step::Release);
+    CHECK_EQ(r.report().abort, Abort::Overvoltage);
+}
+
+// stop() (the lease, `stop`, BACK): Release once, reason Stopped; a stop of an idle run does nothing.
+void test_stop() {
+    svooc::Run idle;
+    CHECK_EQ(idle.stop(Abort::Stopped, 5), Step::None);
+    CHECK_EQ(idle.stage(), Stage::Idle);
+    svooc::Run r;
+    r.start(ok_start(), 0);
+    r.poll(ok_sample(0));
+    CHECK_EQ(r.stop(Abort::Stopped, 100), Step::Release);
+    CHECK_EQ(r.stop(Abort::Stopped, 101), Step::None);
+    CHECK_EQ(r.report().abort, Abort::Stopped);
+    CHECK_EQ(r.stage(), Stage::Exit);
+}
+
+// After the release: VBUS back at or under 5.5 V ends the run with exit_ok; still high after kExitWatchMs ends it with
+// exit_ok false and the reading, for the report.
+void test_exit_check() {
+    svooc::Run r;
+    r.start(ok_start(), 0);
+    r.poll(ok_sample(0));
+    svooc::Sample s = ok_sample(500);
+    s.commands = 30;
+    s.accepted = true;
+    s.vbus_mv = 8900;
+    r.poll(s);
+    s.now_ms = 600;
+    s.vbus_mv = 12001;
+    CHECK_EQ(r.poll(s), Step::Release);
+    s.now_ms = 1500;
+    s.vbus_mv = 9000;
+    CHECK_EQ(r.poll(s), Step::None);
+    CHECK_EQ(r.stage(), Stage::Exit);
+    s.now_ms = 2600;
+    s.vbus_mv = 5500;
+    r.poll(s);
+    CHECK_EQ(r.stage(), Stage::Done);
+    const svooc::Report rep = r.report();
+    CHECK(rep.exit_checked);
+    CHECK(rep.exit_ok);
+    CHECK_EQ(rep.vbus_exit_mv, 5500);
+    CHECK_EQ(rep.vbus_max_mv, 12001);
+    CHECK_EQ(rep.vbus_start_mv, 5100);
+    CHECK_EQ(rep.abort, Abort::Overvoltage);
+    CHECK_EQ(rep.elapsed_ms, 600u);   // start to release
+
+    svooc::Run h;
+    h.start(ok_start(), 0);
+    h.poll(ok_sample(0));
+    CHECK_EQ(h.stop(Abort::Stopped, 100), Step::Release);
+    svooc::Sample hs = ok_sample(100 + svooc::kExitWatchMs - 1);
+    hs.vbus_mv = 9100;
+    h.poll(hs);
+    CHECK_EQ(h.stage(), Stage::Exit);
+    hs.now_ms = 100 + svooc::kExitWatchMs;
+    h.poll(hs);
+    CHECK_EQ(h.stage(), Stage::Done);
+    CHECK(h.report().exit_checked);
+    CHECK(!h.report().exit_ok);
+    CHECK_EQ(h.report().vbus_exit_mv, 9100);
+    CHECK(!h.running());
+    CHECK(h.report().ibus_max_ma >= 2);
+}
+
+}  // namespace
+
+int main() {
+    test_start_refusals();
+    test_wake_listen_rest_and_no_adapter();
+    test_answer_until_the_cap();
+    test_every_abort();
+    test_stop();
+    test_exit_check();
+    return test_report("test_svooc_run");
+}
