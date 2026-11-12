@@ -88,6 +88,10 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   `transmit()` reads that GoodCRC as the acknowledgement (CHARGER_QUIRKS `goodcrc-without-txsent`). Validate
   (hardware): `pd-reread` on the IQ4 with a log,trace recording shows `GoodCRC in the RX FIFO` (or TXSENT) for
   Get_Source_Cap_Extended, the caps-ext step answered or refused, and no "K2 send failed" on the Diag row.
+  **Hardware 2026-11-12, 1.0.0-670-de1f8994, Anker IQ4:** `TX_RESULT GoodCRC in the RX FIFO (no TXSENT) after 2 ms`,
+  the IQ4's Not_Supported 7.2 ms after the send (was 124 ms, read behind the 40-poll wait); every other TX still TXSENT
+  after 1 ms; `diagnose`: "PD link healthy", no TxFail. Leaves this list with the merge to main.
+  Evidence `runs/integ-0312/txack/` (integ worktree).
 
 - **The D+/D- passive idle put QC chargers into HVDCP and let VBUS jump to 12 V** (2026-11-11, CUKTECH 10 GaN 120W
   USB-A; fixed in 872baa31, host-tested; `tests/test_dpdm.cpp`, `tests/test_fastcharge_classify.cpp`
@@ -1107,8 +1111,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   Attention on 1.0.0-668 (Anker IQ4, `pd attach`, then `pd request 2 --confirm` and `pd release`, no load): the
   5 -> 9 V and 9 -> 5 V steps each put DROP + SAG in the upper cell with the dot (runs/integ-home/att/hw-sheet2.png);
   no reboot, `stack_free` 13,976 B. A screenshot stalls the loop for about 6.6 s, which Attention reads as Home off
-  screen (2 s quiet again), so a step right after a screenshot is learnt, not shown. Open: with no load the DROP card
-  only says `need 1A` / `--`, so it marks a VBUS step without showing it (a question for the user).
+  screen (2 s quiet again), so a step right after a screenshot is learnt, not shown. With no load the DROP card only
+  says `need 1A` / `--`, so it marks a VBUS step without showing it: a special case, left as is (user, 2026-11-12).
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
