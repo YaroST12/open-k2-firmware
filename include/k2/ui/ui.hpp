@@ -18,6 +18,7 @@
 #include "k2/ui/ui_cards.hpp"
 #include "k2/ui/ui_twin.hpp"
 #include "k2/ui/ui_loop_probe.hpp"
+#include "k2/ui/ui_pdstress_page.hpp"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
@@ -48,7 +49,7 @@ inline constexpr std::size_t kLargestMenu = std::max({arena_bytes<TriggerPage>()
                                                       arena_bytes<CableRPage>(), arena_bytes<BlackBoxPage>(), arena_bytes<SpoofPage>(),
                                                       arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<CardsPage>(),
                                                       arena_bytes<SharePage>(), arena_bytes<ConnectionPage>(), arena_bytes<DiagPage>(),
-                                                      arena_bytes<TwinPage>(), arena_bytes<LoopProbePage>()});
+                                                      arena_bytes<TwinPage>(), arena_bytes<LoopProbePage>(), arena_bytes<PdStressPage>()});
 // Tools > Connection > Saved cables > Share, and the other three-menu chains (Connection > Spoof, Cards / Black box > Share).
 inline constexpr std::size_t kLongestChain =
     std::max({arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, SpoofPage>(),
@@ -148,6 +149,8 @@ public:
     TwinPage &twin_page() { return *find<TwinPage>(Menu::Twin); }
     // The Loop probe page while Menu::LoopProbe is on the stack, else nullptr (host tests).
     LoopProbePage *loop_probe_page() const { return find<LoopProbePage>(Menu::LoopProbe); }
+    // The PD Stress page while Menu::PdStress is on the stack, else nullptr (host tests).
+    PdStressPage *pd_stress_page() const { return find<PdStressPage>(Menu::PdStress); }
     // Top submenu; Menu::Count when none is open.
     Menu menu() const { return depth_ ? stack_[depth_ - 1] : Menu::Count; }
     // Page index for the remote: the rotation page, or kMenuPageBase + menu while one is open.

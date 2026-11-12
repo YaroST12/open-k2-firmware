@@ -140,6 +140,7 @@ ps::StartResult PdStressSession::start_run(const ps::Options& o, std::uint32_t n
     if (rec.empty()) return ps::StartResult::NoStore;
     last_now_ = now_ms;
     engine_.emplace(static_cast<ps::Env&>(*this), ps::Record(rec));
+    next_run_no();
     journal_on_ = self_supplied();
     cancel_asked_ = false;
     frozen_ = false;
@@ -205,6 +206,7 @@ void PdStressSession::restore_step(std::uint32_t now_ms) {
     restore_ = Restore::None;
     last_now_ = now_ms;
     engine_.emplace(static_cast<ps::Env&>(*this), ps::Record(rec));
+    next_run_no();
     journal_on_ = self_supplied();
     cancel_asked_ = false;
     frozen_ = false;

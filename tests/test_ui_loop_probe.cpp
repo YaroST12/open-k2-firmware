@@ -275,7 +275,8 @@ void test_tools_row_opens_the_page() {
     g_t += 1000;
     ui.init(g_t);
     ui.goto_page(uint8_t(Page::Tools), g_t + 50);
-    for (int i = 0; i < ToolsPage::kTools; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);   // to the last row
+    ui.context().keep.tools_sel = 0;
+    for (int i = 0; i < kToolLoopProbe; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);   // to the Loop probe row
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 100);
     CHECK_EQ(int(ui.menu()), int(Menu::LoopProbe));
     CHECK_STR(ToolsPage::tool_name(kToolLoopProbe), "Loop probe");

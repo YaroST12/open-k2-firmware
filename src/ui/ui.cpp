@@ -70,6 +70,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
     case Menu::Twin: return pages_.push<TwinPage>(ctx_);
     case Menu::LoopProbe: return pages_.push<LoopProbePage>(ctx_);
+    case Menu::PdStress: return pages_.push<PdStressPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -464,7 +465,8 @@ void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
 }
 
 bool Ui::push_menu(Menu m, uint32_t now_ms) {
-    if (ports_busy()) {
+    // The PD Stress page opens over its own run (a run the remote started shows there, and its BACK stops it); it only reads the session.
+    if (ports_busy() && !(m == Menu::PdStress && pdstress_.active())) {
         K2LOG("[TEST] menu refused: test/release in progress\n");
         return false;
     }
@@ -1229,8 +1231,8 @@ void Ui::draw_release_notice() {
                     unsafe ? "Unsafe VBUS: unplug source" : "FC releasing; verify 5V");
     } else if (loopguard::locked() && menu() != Menu::Trigger) {
         draw_footer(ctx_.content, FooterTone::Caution, loopguard::kLockText);   // on whatever page is up, while the lock holds
-    } else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger) {
-        draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up
+    } else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger && menu() != Menu::PdStress) {
+        draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up (its own page has its footer)
     }
 }
 

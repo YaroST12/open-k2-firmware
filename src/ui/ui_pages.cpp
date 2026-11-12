@@ -1309,7 +1309,7 @@ void PdTriggerPage::invalidate() { reset_paint(); }
 
 const char *ToolsPage::tool_name(int i) {
     static constexpr const char *kNames[kTools] = {"FC trigger", "PD trigger", "Spoof", "Cable R", "Who's attached", "Black Box", "Report cards", "Diag", "Device twins",
-                                                   "Loop probe"};
+                                                   "Loop probe", "PD Stress"};
     // A Tools row is the 12 px icon, the title and the readiness tag (at most 6 characters, 48 px) at the right: the title gets
     // x28 up to the tag less its gap, 130 px.
     static_assert(all_fit(kNames, kSmallAdvPx, 130), "a Tools entry name is wider than its row");
@@ -1327,7 +1327,7 @@ void ToolsPage::draw_static() {
 // its tone, or the drill-in chevron when the tool is Ready. The list repaints a row only when this content changed.
 void ToolsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr Icon kIcons[kToolCount] = {Icon::Brick, Icon::Pd, Icon::Ghost, Icon::Res, Icon::Plug, Icon::Blackbox, Icon::Report, Icon::Chip, Icon::Phone,
-                                                Icon::Usb};
+                                                Icon::Usb, Icon::Wave};
     const auto *self = static_cast<const ToolsPage *>(ctx);
     const Readiness &rd = self->rd_[i];
     out.marker = kit::Marker::Icon;

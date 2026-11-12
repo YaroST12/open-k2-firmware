@@ -56,7 +56,7 @@ static void test_fc() {
 // Connection, Black Box, Report cards and Diag never block: Connection's own actions carry the inline confirm.
 static void test_always_ready_tools() {
     for (int t = 4; t < kToolCount; t++) {
-        if (t == 3 || t == kToolLoopProbe) continue;   // the two that need the power monitor
+        if (t == 3 || t == kToolLoopProbe || t == kToolPdStress) continue;   // the ones that need the power monitor (and PD Stress a charger)
         for (int mask = 0; mask < 32; mask++) {
             const Readiness r = tool_readiness(t, st(mask & 1, mask & 2, mask & 4, mask & 8, mask & 16 ? 5000 : 0), mask & 8);
             CHECK_EQ(int(r.level), int(ToolLevel::Ready));
@@ -87,6 +87,17 @@ static void test_loop_probe_tool() {
     }
 }
 
+// PD Stress needs the three things its run refuses without: an empty output, the power monitor and a PD source list.
+static void test_pd_stress_tool() {
+    CHECK_STR(tool_hint(kToolPdStress), "PD charger, no load");
+    CHECK_STR(tool_readiness(kToolPdStress, st(true, false, true), true).tag, "READY");
+    CHECK_STR(tool_readiness(kToolPdStress, st(true, true, true), true).tag, "LOAD");
+    CHECK_STR(tool_readiness(kToolPdStress, st(true, false, true), false).tag, "NO PM");
+    const Readiness r = tool_readiness(kToolPdStress, st(false, false, false), true);
+    CHECK_EQ(int(r.level), int(ToolLevel::Blocked));
+    CHECK_STR(r.tag, "NO PD");
+}
+
 static void test_spoof_tool() {
     SetupState st;
     CHECK_EQ(int(tool_readiness(kToolSpoof, st, true).level), int(ToolLevel::Ready));
@@ -110,6 +121,7 @@ static void test_hurt_table() {
         ToolHurt::Nothing,   // 7 Diag: counters
         ToolHurt::Nothing,   // 8 Device twins: the live proof refuses a live sink itself
         ToolHurt::Nothing,   // 9 Loop probe: its far end is the K2's own HID port; it refuses above 5.5 V itself
+        ToolHurt::Load,      // 10 PD Stress: asks the charger for every level, a load would take each one
     };
     for (int t = 0; t < kToolCount; t++) {
         CHECK_EQ(int(tool_hurt_by(t)), int(kExpect[t]));
@@ -135,5 +147,6 @@ int main() {
     test_cable_r();
     test_spoof_tool();
     test_loop_probe_tool();
+    test_pd_stress_tool();
     return test_report("test_ui_tools");
 }
