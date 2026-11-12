@@ -661,31 +661,37 @@ void Ui::update_hold_card(uint32_t now_ms, RebootChord::Step step) {
     draw_hold_card(ms);
 }
 
+// Fieldbook: an orange card with a 2 px ink frame, the count in font 24 and "release to cancel" in font 12 centred on it,
+// and an ink bar filling along its bottom edge towards the reboot. Square corners, like every Fieldbook block.
 void Ui::draw_hold_card(uint32_t ms) {
     const Surface &c = ctx_.content;
+    constexpr int16_t kX = 10, kY = 70, kW = 204, kH = 84, kF = 2;               // the card, its frame inside
+    constexpr int16_t kIn = kW - 2 * kF, kBarH = 10, kBarY = kY + kH - kF - kBarH;
+    constexpr int16_t kCountX = kX + (kW - 11 * 12) / 2, kNoteX = kX + (kW - 17 * 6) / 2;
     const uint32_t total = kChordRebootMs;
     const int left = hold_secs_left(ms, total);
-    const int px = hold_fill_px(ms, total, 172);
+    const int px = hold_fill_px(ms, total, kIn);
     hold_ms_ = ms;
     if (!hold_shown_) {
         hold_shown_ = true;
         hold_px_ = hold_left_ = -1;
-        fill_round(c, 12, 70, 200, 84, 8, kSurface2);
-        frame_round(c, 12, 70, 200, 84, 8, 2, kError);
-        draw_icon(c, 26, 86, Icon::Warn, kError, kSurface2);
-        fill_round(c, 26, 118, 172, 6, 1, kRule);
-        gfx_text(c, kLabelFont, 26, 132, "Release to cancel", kDim, kSurface2);
+        gfx_fill(c, kX, kY, kW, kF, kInk);
+        gfx_fill(c, kX, kY + kH - kF, kW, kF, kInk);
+        gfx_fill(c, kX, kY + kF, kF, kH - 2 * kF, kInk);
+        gfx_fill(c, kX + kW - kF, kY + kF, kF, kH - 2 * kF, kInk);
+        gfx_fill(c, kX + kF, kY + kF, kIn, kH - 2 * kF, kCaution);
+        gfx_text(c, kLabelFont, kNoteX, 116, "release to cancel", kSpotInk, kCaution);
     }
     if (left != hold_left_) {
         hold_left_ = left;
         char t[12] = "Reboot in ";
         t[10] = static_cast<char>('0' + left);
         t[11] = 0;
-        gfx_text(c, kMid, 44, 82, t, kText, kSurface2);
+        gfx_text(c, kMid, kCountX, 84, t, kSpotInk, kCaution);
     }
     if (px != hold_px_) {
         hold_px_ = px;
-        if (px > 0) fill_round(c, 26, 118, px, 6, 1, kError);
+        if (px > 0) gfx_fill(c, kX + kF, kBarY, static_cast<int16_t>(px), kBarH, kSpotInk);
     }
 }
 

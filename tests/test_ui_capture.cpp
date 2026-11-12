@@ -921,10 +921,14 @@ int main() {
     CHECK_EQ(ui.hold_card_visible() ? 1 : 0, 1);
     {   // The page beneath is frozen while the card shows, so only the card itself is checked here.
         std::vector<uint16_t> direct(g_panel, g_panel + 240 * 240);
-        int red = 0;
+        int orange = 0, frame = 0;   // Fieldbook: the orange card inside a 2 px ink frame
         for (int y = 70; y < 154; y++)
-            for (int x = 12; x < 212; x++) red += direct[y * 240 + x] == k2::kError;
-        CHECK_EQ(red > 300, 1);   // frame + warning icon + progress fill
+            for (int x = 10; x < 214; x++) {
+                orange += direct[y * 240 + x] == k2::kCaution;
+                frame += direct[y * 240 + x] == k2::kInk;
+            }
+        CHECK_EQ(orange > 200 * 60, 1);
+        CHECK_EQ(frame >= 2 * (204 + 84) * 2 - 16, 1);
         dump_ppm("host-build/k2_home_reboot_hold_direct.ppm", direct.data());
     }
     ui.set_pressed(k2::Button::Ok, false, 7100);
