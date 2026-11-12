@@ -335,6 +335,24 @@
 //                                    version, length u16, CRC-16 u16, then the 399-byte record of k2/loopprobe/loop_probe.hpp).
 //                                    total 0 = no result stored. BadArg for off > total. The probe itself starts on the K2 only
 //                                    (Tools, Loop probe): its HID port is in the loop, so there is no host to start it.
+// ---- Battery efficiency recorder (k2/battery, docs/BATTERY_RECORDER.md) ---------------------------------------------------------
+//   0x58 BATTERY     req op(1) [args]  rsp per op (pure handler: k2/battery/battery_wire.hpp)
+//                                    Status block (40 bytes): state(1: 0 idle, 1 measuring, 2 between the round trip's phases,
+//                                    3 done) mode(1: 0 charge, 1 discharge, 2 round trip) wiring(1: 0 same port, 1 moved)
+//                                    phases(1) result(1: what this op did: 0 ok, 1 busy, 2 no monitor, 3 bad arg, 4 not now)
+//                                    flags(1: bit0 the last record write failed, bit1 record not written yet, bit2 monitor online,
+//                                    bit3 the efficiency is final) id(2) end_ma(2) end_s(2) run_s(4) phase_s(4) uwh_in(4)
+//                                    uwh_out(4) uah_in(4) uah_out(4) eff_permille(2: 0xFFFF none; a round trip's discharge
+//                                    running = so far) runs_stored(1) next_wiring(1). The run is the one in RAM: running, or the
+//                                    last one ended since boot.
+//                                    op 0 status. op 1 start, args mode(1) wiring(1). op 2 end the measuring phase by hand.
+//                                    op 3 start the discharge now (between). op 4 finish the run wherever it is. op 5 config,
+//                                    args end_ma(2) end_s(2) next_wiring(1) (the running run takes the thresholds at once).
+//                                    Every one of these answers the status block; a refusal is Ok + the result byte.
+//                                    op 6 list: rsp n(1) id(2) x n, newest first.
+//                                    op 7 read, args id(2) off(2): rsp off(2) total(2) n(1) data(n), n <= 48; the 246-byte run
+//                                    record (k2/battery/battery.hpp); id 0 = the run in RAM; total 0 = no such run.
+//                                    Wrong length BadLength, unknown op BadArg.
 // ---- end PD Stress --------------------------------------------------------------------------------------------------------------
 //   0x32 FC          req op(1) [args] [args]  rsp state proto fail scan_flags scan_step target_mv(2) vbus_mv(2)
 //                                    num_results(1) { proto outcome mv(2) } x num_results
@@ -428,6 +446,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/battery/battery_wire.hpp"
 #include "k2/core/bootinfo.hpp"
 #include "k2/core/build_config.h"
 #include "k2/core/lease.hpp"
@@ -524,6 +543,7 @@ enum class Cmd : uint8_t {
     PdStress = 0x55,        // PD Stress: status / start / result (chunked) / stop, see the layout above (0x54 is the AVS sweep)
     EmarkerProbe = 0x56,    // optional [vconn_pc]: the silent-cable-chip probe, raw ADC samples only -> see encode_ra_probe (k2/pd/ra_probe.hpp); a refusal = Busy + [raprobe::Refusal], a bad argument = BadArg + [raprobe::ArgError]
     LoopProbe = 0x57,       // off(2): the loop probe's stored result file, chunked, see the layout above
+    Battery = 0x58,         // battery efficiency recorder: status / start / end / next / finish / config / list / read, see above
 };
 
 inline constexpr Cmd kCmdIds[] = {
@@ -535,7 +555,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
-    Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid,
+    Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid, Cmd::Battery,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -1332,6 +1352,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.transcap(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
     { b.diagnose(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::Diagnose)
     { b.trace_hid(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::TraceHid, validated by the dispatcher)
+    { b.battery(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;    // same shape (Cmd::Battery)
 };
 
 namespace detail {
@@ -2216,6 +2237,13 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             return reply(Status::BadArg);
         }
         return reply_n(backend.trace_hid(p, buf));
+    }
+    case Cmd::Battery: {
+        if (p.empty()) return reply(Status::BadLength);
+        const size_t want = k2::battery::wire::req_len(p[0]);
+        if (want == 0) return reply(Status::BadArg);
+        if (p.size() != want) return reply(Status::BadLength);
+        return reply_n(backend.battery(p, buf));
     }
     case Cmd::Log:
         if (p.size() > 1) return reply(Status::BadLength);

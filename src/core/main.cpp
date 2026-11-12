@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Open-K2 firmware entry: hardware bring-up, button sampling, and the periodic service loop.
 #include <cstdint>
+#include "k2/battery/battery_hw.hpp"
 #include "k2/drivers/buttons.hpp"
 #include "k2/ui/capture.hpp"
 #include "k2/core/gap_meter.hpp"
@@ -187,6 +188,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     k2::fs::wipe_legacy();                  // ... then the pre-littlefs raw pages are erased, once (marker /.legacy)
     k2::fs::grow();                         // ... and only then may the volume grow into the run they lived in (blank proof); scans the rings
     k2::bbpersist::init();                  // black box: its ring is scanned now; reload the newest captures
+    k2::battery::hw::init(warm_reset);      // battery recorder: a warm reset resumes its run, a cold boot closes a cut one
     k2::systick::delay_ms(20);   // let the DMA ring fill before the raw one-shot sweep
     k2::adc::log_raw();
     k2::fastcharge::init();

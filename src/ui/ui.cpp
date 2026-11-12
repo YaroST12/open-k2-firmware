@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui.hpp"
+#include "k2/battery/battery_hw.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
@@ -87,6 +88,7 @@ PageIf *Ui::build_menu(Menu m) {
         if (p && place_next_) p->as_place();   // the Log place, before enter() and the first paint
         return p;
     }
+    case Menu::Battery: return pages_.push<BatteryPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -104,6 +106,7 @@ ListState Ui::list_state() {
         case Menu::Autorotate: return top_as<AutorotatePage>().list_state();
         case Menu::Twin: return top_as<TwinPage>().list_state();
         case Menu::Diagnosis: return top_as<DiagnosisPage>().list_state();
+        case Menu::Battery: return top_as<BatteryPage>().list_state();
         default: return ListState{};
         }
     }
@@ -399,6 +402,7 @@ Ui::Session Ui::session() {
     if (depth_) {
         switch (menu()) {
         case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: case Menu::Twin: case Menu::Diagnosis:
+        case Menu::Battery:
             rows = list_state().count > 0;
             break;
         case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: rows = true; break;
@@ -414,7 +418,7 @@ Ui::Session Ui::session() {
         }
         default: break;
         }
-    } else if (page_ == Page::Tools) {   // the Bench paints its six places itself; a place's actions use the RowList
+    } else if (page_ == Page::Tools) {   // the Bench paints its seven places itself; a place's actions use the RowList
         const ToolsPage &t = top_as<ToolsPage>();
         s.count = static_cast<uint8_t>(t.count());
         s.sel = static_cast<uint8_t>(t.selected());
@@ -775,14 +779,19 @@ void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCoun
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
     const bool conn_place = p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device;
     const bool log_place = p == bench::Place::Log;
+    const bool batt_place = p == bench::Place::Battery;
     if (p == bench::Place::K2) {   // the K2 place is the settings page; its BACK opens the Bench with K2 focused
         ctx_.keep.bench_sel = static_cast<int>(p);
         set_page(Page::Settings, now_ms);
         return;
     }
     // Meter: the Bench itself. The others: a place page over the Bench; BACK pops it and the Bench shows the place focused.
-    if (conn_place || log_place) ctx_.keep.bench_sel = static_cast<int>(p);
+    if (conn_place || log_place || batt_place) ctx_.keep.bench_sel = static_cast<int>(p);
     set_page(Page::Tools, now_ms);   // set_page keeps a base page asked for again
+    if (batt_place) {   // the battery recorder's page
+        if (push_menu(Menu::Battery, now_ms)) sync_panel();
+        return;
+    }
     if (log_place) {   // the PD diagnosis as the Log place: the stamp, the findings, the Black Box row
         place_next_ = true;
         if (push_menu(Menu::Diagnosis, now_ms)) sync_panel();
@@ -1308,6 +1317,11 @@ UiAction Ui::tick(uint32_t now_ms) {
 #endif
     if (pdstress_note_ && !stress_note) current().invalidate();   // the note goes: the page repaints its own footer
     pdstress_note_ = stress_note;
+    // The battery recorder's running dot (draw_release_notice): when the run stops, the page repaints whole once, so whatever
+    // the dot covered (a bar, a hero) comes back.
+    const bool batt_run = battery::hw::service().rec().active();
+    if (batt_dot_ && !batt_run && !hold_shown_ && menu() != Menu::Share && menu() != Menu::QrTest) repaint(now_ms);
+    batt_dot_ = batt_run;
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
     const RebootChord::Step chord = chord_.step(now_ms);
@@ -1345,6 +1359,13 @@ void Ui::draw_release_notice() {
         draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up (its own page has its footer)
     }
 #endif
+    // A battery run in progress: the 5 x 5 accent dot (the charger test's running dot) in the content's top-right corner, on
+    // every page but a QR code (it could land on the code).
+    if (battery_dot()) gfx_fill(ctx_.content, kBattDotX, 0, kBattDot, kBattDot, kFocus);
+}
+
+bool Ui::battery_dot() const {
+    return battery::hw::service().rec().active() && menu() != Menu::Share && menu() != Menu::QrTest;
 }
 
 void Ui::log_timing(uint32_t now_ms) {

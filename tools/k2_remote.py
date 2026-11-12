@@ -124,6 +124,8 @@ PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "
 # ---- Loop probe (docs/LOOP_PROBE.md): constants ----
 CMD_LOOP_PROBE = 0x57     # loop probe: the stored result file /lp/last.rec, chunked read only (k2/loopprobe/loop_probe_hw.hpp)
 LOOP_CHUNK = 48           # remote::kLoopProbeChunk
+CMD_BATTERY = 0x58        # battery efficiency recorder: status / start / end / next / finish / config / list / read (k2/battery)
+BATTERY_CHUNK = 48        # battery::wire::kChunk
 # ---- end Loop probe constants ----
 UFCS_STATUS, UFCS_GET, UFCS_SET, UFCS_RESET, UFCS_PROBE, UFCS_STOP, UFCS_READ = range(7)
 UFCS_CHUNK = 48
@@ -157,7 +159,7 @@ ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis"]
+PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery"]
 ROTATION_PAGES = 6
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
@@ -3053,6 +3055,90 @@ def loop_probe_read_file(link):
     return bytes(out)
 
 
+# ---- Battery efficiency recorder (docs/BATTERY_RECORDER.md): CMD_BATTERY 0x58 ----
+BATTERY_OPS = {"status": 0, "start": 1, "end": 2, "next": 3, "finish": 4, "config": 5, "list": 6, "read": 7}
+
+
+def battery_status(link, op="status", args=b""):
+    import battery_rec
+    p = link.call(CMD_BATTERY, bytes([BATTERY_OPS[op]]) + args).payload
+    _need(p, battery_rec.STATUS_BYTES, "battery " + op)
+    return battery_rec.decode_status(p)
+
+
+def battery_read_record(link, rid):
+    """One run record (id 0 = the run in RAM), read in BATTERY_CHUNK pieces; b"" when the K2 has no such run."""
+    out = bytearray()
+    total = None
+    while total is None or len(out) < total:
+        p = link.call(CMD_BATTERY, bytes([BATTERY_OPS["read"]]) + rid.to_bytes(2, "little") + len(out).to_bytes(2, "little")).payload
+        _need(p, 5, "battery read")
+        total = p[2] | p[3] << 8
+        n = p[4]
+        _need(p, 5 + n, "battery read")
+        if n == 0:
+            break
+        out += p[5:5 + n]
+    return bytes(out)
+
+
+def battery_list(link):
+    p = link.call(CMD_BATTERY, bytes([BATTERY_OPS["list"]])).payload
+    _need(p, 1, "battery list")
+    _need(p, 1 + 2 * p[0], "battery list")
+    return [p[1 + 2 * i] | p[2 + 2 * i] << 8 for i in range(p[0])]
+
+
+def cmd_battery(link, a):
+    import battery_rec
+    op = a.battery_cmd
+    if op == "status":
+        return {"battery": battery_status(link)}
+    if op == "list":
+        return {"battery_runs": battery_list(link)}
+    if op == "read":
+        ids = battery_list(link) if a.all else [a.id]
+        recs = []
+        for rid in ids:
+            raw = battery_read_record(link, rid)
+            if not raw:
+                if not a.all:
+                    raise SystemExit(f"battery read: no run {rid}" if rid else "battery read: no run since boot")
+                continue
+            try:
+                recs.append(battery_rec.decode_record(raw))
+            except battery_rec.BadRecord as e:
+                raise SystemExit(f"battery read {rid}: {e}")
+        return {"battery_records": recs} if a.all else {"battery_record": recs[0]}
+    if op == "start":
+        wiring = a.wiring if a.wiring is not None else battery_status(link)["next_wiring"]
+        args = bytes([battery_rec.MODES.index(a.mode), battery_rec.WIRINGS.index(wiring)])
+        s = battery_status(link, "start", args)
+    elif op == "config":
+        cur = battery_status(link)
+        end_ma = a.end_ma if a.end_ma is not None else cur["end_ma"]
+        end_s = a.end_s if a.end_s is not None else cur["end_s"]
+        wiring = a.wiring if a.wiring is not None else cur["next_wiring"]
+        s = battery_status(link, "config", struct.pack("<HHB", end_ma, end_s, battery_rec.WIRINGS.index(wiring)))
+    else:
+        s = battery_status(link, op)
+    if s["result"] != "ok":
+        raise SystemExit(f"battery {op}: refused ({s['result']})")
+    return {"battery": s}
+
+
+def render_battery(r):
+    import battery_rec
+    if "battery_runs" in r:
+        return "stored runs (newest first): " + (", ".join(str(i) for i in r["battery_runs"]) or "none")
+    if "battery_record" in r:
+        return battery_rec.render_record(r["battery_record"])
+    if "battery_records" in r:
+        return "\n".join(battery_rec.render_record(x) for x in r["battery_records"]) or "no runs stored"
+    return battery_rec.render_status(r["battery"])
+# ---- end Battery ----
+
+
 def cmd_loop_probe(link, a):
     import loop_probe_rec
     f = loop_probe_read_file(link)
@@ -4096,6 +4182,8 @@ def _render(name, r):
         return render_pdstress(r)
     if name == "loop-probe":   # Loop probe
         return render_loop_probe(r)
+    if name == "battery":      # Battery efficiency recorder
+        return render_battery(r)
     if name == "ufcs":
         return render_ufcs(r)
     if name == "qrtest":
@@ -4149,7 +4237,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards,
             "twin": cmd_twin}
 
@@ -4542,6 +4630,26 @@ def build_parser():
     # ---- end PD Stress parser ----
     sub.add_parser("loop-probe", help="the last HID-cable loop probe result stored on the K2 (read only; the probe "
                    "starts on the K2, Tools > Loop probe); raw values with --json")
+    sbat = sub.add_parser("battery", help="battery efficiency recorder (Bench > Battery): status, start, end, next, finish, "
+                          "config, list, read; raw values with --json (docs/BATTERY_RECORDER.md)")
+    sbats = sbat.add_subparsers(dest="battery_cmd", required=True)
+    sbats.add_parser("status", help="state, phase, Wh and mAh in/out, time, efficiency, end rule")
+    sbst = sbats.add_parser("start", help="start a run: charge, discharge or round-trip (refused while one runs)")
+    sbst.add_argument("mode", choices=("charge", "discharge", "round-trip"))
+    sbst.add_argument("--wiring", choices=("same-port", "moved"), default=None,
+                      help="same-port: the bank stays on the output port (discharge = reverse flow); moved: the bank "
+                           "moves to the input port to discharge (default: the K2's setting)")
+    sbats.add_parser("end", help="end the measuring phase by hand (a round trip then waits for its discharge)")
+    sbats.add_parser("next", help="round trip: start the discharge now")
+    sbats.add_parser("finish", help="end the run wherever it is")
+    sbcf = sbats.add_parser("config", help="end rule and the next run's wiring (omitted values stay)")
+    sbcf.add_argument("--end-ma", type=int, default=None, help="a phase ends under this current, 20..2000 mA (default 50)")
+    sbcf.add_argument("--end-s", type=int, default=None, help="... held this long, 10..3600 s (default 60)")
+    sbcf.add_argument("--wiring", choices=("same-port", "moved"), default=None)
+    sbats.add_parser("list", help="ids of the stored runs, newest first")
+    sbrd = sbats.add_parser("read", help="one run record with its curve (id 0 or omitted: the run in RAM)")
+    sbrd.add_argument("id", type=int, nargs="?", default=0)
+    sbrd.add_argument("--all", action="store_true", help="every stored run")
     sc = sub.add_parser("cable-r", help="cable resistance: passive two-point meter or Kelvin 8-wire (never drives VBUS)")
     scs = sc.add_subparsers(dest="cable_cmd", required=True)
     scs.add_parser("status", help="idle reference, loaded point, result")

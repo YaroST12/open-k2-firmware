@@ -6,12 +6,12 @@ namespace k2 {
 
 enum class Icon : uint8_t { Bolt, Cable, Therm, Warn, Check, Cross, Phone, Chip, Ohm, Clock, Pc, Plug,
                             Brick, Anon, Pd, Res, Emark, Blackbox, Report, Ghost, Usb, Rotate, Keys, Camera, Wave,
-                            Info, Meter };
+                            Info, Meter, Battery };
 
 // Emark..Wave: the Tools / Settings menu rows (E-marker, Black Box, Report cards, Spoof, USB link,
 // Autorotate, Rotate buttons, Screenshot, Smoothing).
 constexpr int kIconSize = 12;
-constexpr int kIconCount = 27;
+constexpr int kIconCount = 28;
 extern const uint16_t kIconBits[kIconCount][kIconSize];   // row bits, bit 11 = leftmost pixel
 
 }  // namespace k2

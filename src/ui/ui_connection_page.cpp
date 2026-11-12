@@ -954,9 +954,9 @@ void add_extras(Rows &R, const std::array<conn::Item, conn::kMaxItems> &it, int 
     }
 }
 
-// A place page: the identity block's band (y22..67) and the list under it, with a 4 px lane on the right for the scroll thumb.
-constexpr int16_t kIdY = kit::kBelowBar, kIdHeadY = kIdY + 2, kIdLineY = kIdY + 30, kIdDashY = kIdY + 44;
-constexpr int16_t kPlaceListY = kIdY + 46;
+// A place page: the identity block's band (y22..67, kit::kIdY) and the list under it, with a 4 px lane on the right for the
+// scroll thumb.
+using kit::kPlaceListY;
 constexpr int16_t kLane = 4;
 constexpr int kPlaceSlots = (kFooterY - kPlaceListY) / kRowPitch;   // 7
 static_assert(kPlaceSlots == ConnectionPage::kPlaceRows && kPlaceSlots <= kVisRows, "a place page shows seven list rows under its identity block");
@@ -1083,69 +1083,9 @@ void paint_thumb(const Surface &c, int first, int total, bool full, uint32_t &si
     gfx_fill(c, tx, static_cast<int16_t>(ty + th), kLane - 1, static_cast<int16_t>(kFooterY - ty - th), kBg);
 }
 
-// A place page's identity block (CONCEPT 6): the headline in font 24 with up to three chips beside it, one line of font 12
-// under it and the dashed rule. An empty or no-PD state is a dim headline and the line saying what to do.
-struct Ident {
-    enum Kind : uint8_t { Solid, Outline, Ok, Volt };
-    struct Chip { StrBuf<12> t; Kind k = Solid; };
-    StrBuf<16> head;   // 15 cells of font 24: the longest empty-state word
-    bool dim = false;
-    Chip chip[3];
-    int n = 0;
-    StrBuf<36> line;
-    void add(std::string_view t, Kind k) {
-        if (n >= 3) return;
-        chip[n].t.put(t);
-        chip[n++].k = k;
-    }
-};
-static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside the lane");
-
-void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig) {
-    uint32_t h = fnv(2166136261u, uint32_t(id.dim) | uint32_t(id.n) << 1);
-    for (char ch : id.head.view()) h = fnv(h, uint8_t(ch));
-    for (int i = 0; i < id.n; i++) {
-        h = fnv(h, 0x100u | id.chip[i].k);
-        for (char ch : id.chip[i].t.view()) h = fnv(h, uint8_t(ch));
-    }
-    h = fnv(h, 0x200u);
-    for (char ch : id.line.view()) h = fnv(h, uint8_t(ch));
-    h |= 1u;
-    if (!full && h == sig) return;
-    sig = h;
-    const int16_t hw = static_cast<int16_t>(text_width(kMid, id.head.view()));
-    const int16_t chip_y = static_cast<int16_t>(kIdHeadY + (kMid.height - kit::kChipH) / 2);
-    kit::Box holes[6];
-    int nh = 0;
-    holes[nh++] = {8, kIdHeadY, hw, static_cast<int16_t>(kMid.height)};
-    int16_t cx[3] = {};
-    int shown = 0;
-    for (int16_t x = static_cast<int16_t>(8 + hw + 8); shown < id.n; shown++) {   // a chip that does not fit is left out whole
-        const int cw = kit::chip_w(id.chip[shown].t.view());
-        if (x + cw > c.w - 8) break;
-        cx[shown] = x;
-        holes[nh++] = {x, chip_y, static_cast<int16_t>(cw), kit::kChipH};
-        x = static_cast<int16_t>(x + cw + 4);
-    }
-    const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, id.line.view()));
-    if (lw > 0) holes[nh++] = {8, kIdLineY, lw, static_cast<int16_t>(kLabelFont.height)};
-    kit::fill_except(c, {0, kIdY, c.w, static_cast<int16_t>(kIdDashY - kIdY)}, holes, nh, kBg);
-    gfx_text(c, kMid, 8, kIdHeadY, id.head.view(), id.dim ? kInk2 : kInk, kBg);
-    for (int i = 0; i < shown; i++) {
-        const Ident::Chip &ch = id.chip[i];
-        switch (ch.k) {
-        case Ident::Solid: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kChip, kOnChip); break;
-        case Ident::Outline: kit::draw_chip_frame(c, cx[i], chip_y, ch.t.view(), kInk2, kInk, kBg); break;
-        case Ident::Ok: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kPassFill, kOnPass); break;
-        case Ident::Volt: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kSpotVolt, kSpotInk); break;
-        }
-    }
-    if (lw > 0) gfx_text(c, kLabelFont, 8, kIdLineY, id.line.view(), kInk2, kBg);
-    gfx_fill(c, 0, kIdDashY, 8, 1, kBg);
-    kit::draw_dashed(c, 8, static_cast<int16_t>(c.w - 8), kIdDashY, kInk3, kBg);
-    gfx_fill(c, static_cast<int16_t>(c.w - 8), kIdDashY, 8, 1, kBg);
-    gfx_fill(c, 0, static_cast<int16_t>(kIdDashY + 1), c.w, static_cast<int16_t>(kPlaceListY - kIdDashY - 1), kBg);
-}
+// A place page's identity block: the kit's (kit::Ident, kit::paint_identity), shared with the Battery place.
+using kit::Ident;
+using kit::paint_identity;
 
 // "2B01:0001 Anker": the ids, the vendor only when it fits the line whole.
 void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) {

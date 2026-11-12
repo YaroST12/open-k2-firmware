@@ -110,9 +110,9 @@ constexpr Act kCable[] = {
 constexpr Act kDevice[] = {
     {"Twins", K::Tool, 11, nullptr},
 };
-// Log and K2 are pages of their own (the PD diagnosis with its Black Box row, the settings with System state and Boot
-// info): they add no Bench tools.
-constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Log", "K2"};
+// Battery, Log and K2 are pages of their own (the efficiency recorder, the PD diagnosis with its Black Box row, the settings
+// with System state and Boot info): they add no Bench tools.
+constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Battery", "Log", "K2"};
 
 template <size_t N> constexpr Acts acts(const Act (&a)[N]) { return {a, static_cast<int>(N)}; }
 
@@ -141,6 +141,7 @@ Acts actions(Place p) {
     case Place::Charger: return acts(kCharger);
     case Place::Cable: return acts(kCable);
     case Place::Device: return acts(kDevice);
+    case Place::Battery:
     case Place::Log:
     case Place::K2:
     case Place::Meter: break;
@@ -186,6 +187,10 @@ Row row(Place p, const Facts &f) {
         s.put_char(' ');
         put_amps(s, f.ctr_ma);
         if (f.vbus && f.mw >= 1000) s.put(", gets ").put_u32(static_cast<uint32_t>((f.mw + 500) / 1000)).put_char('W');
+        break;
+    case Place::Battery:
+        r.known = f.batt;
+        s.put(f.batt_status.view().empty() ? std::string_view("No run") : f.batt_status.view());
         break;
     case Place::Log:
         r.known = true;

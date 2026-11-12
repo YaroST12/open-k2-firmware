@@ -15,7 +15,7 @@ All coordinates are logical content pixels: x 0..223, y 0..239.
 ## 0 Fieldbook (2026-11-12)
 
 The Fieldbook rework (concept `runs/ui-rework-fable/CONCEPT.md`, branch `k2/fieldbook`) replaced the paging hub with a
-Meter and a Bench of six places. Where this section and a later one differ, this section is current; the later sections
+Meter and a Bench of six places (seven since the Battery place, 2026-11-13). Where this section and a later one differ, this section is current; the later sections
 keep the measured geometry of the parts that did not change.
 
 ### 0.1 Theme
@@ -38,17 +38,22 @@ and unplugged) and the digit/tint contrast (WCAG 2.x); `K2_DUMP=dir` writes the 
 
 ```
 Meter (Home)  Up/Dn flip the faces: Flow, Numbers, Lines.  OK -> Bench
-  Bench       Meter, Charger, Cable, Device, Log, K2. Each row: rail node (solid = known, hollow = nothing), name, status line
+  Bench       Meter, Charger, Cable, Device, Battery, Log, K2. Each row: rail node (solid = known, hollow = nothing), name, status line
     Charger   place page: Source identity + fact table + Test charger, Request voltage, Fast charge, Report cards
     Cable     place page: e-marker identity + fact table + Read e-marker, Save cable, Saved cables, Spoof as..., Resistance, Loop probe
     Device    place page: request identity + fact table + Ask device, Twins
+    Battery   efficiency recorder: run identity + In / Out / Time / Efficiency + start, end, settings, Saved runs, Share
     Log       PD diagnosis: verdict stamp, findings, Black Box row
     K2        settings: firmware identity, USB Link .. Wake sleeping port, System state, Boot info
 ```
 
 - The device boots into Flow. OK on a face opens the Bench; BACK on the Bench returns to the face it came from.
+- The Bench rows are 28 px (seven of them from y24 to y220): the name in font 16 on the row's top line, the status in font
+  12 right under it (y+16), the icon at y+8 and the 8 px node at y+4 (`ToolsPage::kRowPitch` and friends). Six places had
+  32 px rows.
 - A place page sits over the Bench (`Ui::open_place`): Charger, Cable and Device are the Connection page locked to one tab
-  (`ConnectionPage::lock`), Log is `DiagnosisPage::as_place`, K2 is `SettingsPage`. BACK from a place lands on the Bench
+  (`ConnectionPage::lock`), Battery is `BatteryPage` (`Menu::Battery`), Log is `DiagnosisPage::as_place`, K2 is
+  `SettingsPage`. BACK from a place lands on the Bench
   with that place focused (`keep.bench_sel`). Each place remembers its last action row (`keep.place_sel`).
 - The remote page names are unchanged (`tools` = the Bench).
 
@@ -81,6 +86,21 @@ on the place page.
   list from y66, then `System state` (the Diag page) and `Boot info` (this boot's K2B1 record shared as QR codes).
 - A RowList that starts below an identity block or a stamp ends above y220; the page fills that gap once
   (`kit::fill_list_gap`).
+
+### 0.4a Battery place
+
+The battery efficiency recorder (`docs/BATTERY_RECORDER.md`), `BatteryPage` (`src/ui/ui_battery.cpp`), its texts and rows
+pure in `k2/ui/battery_view.hpp` (`tests/test_ui_battery.cpp`).
+
+| part | geometry and copy |
+|---|---|
+| Identity | the place identity block (`kit::Ident`, `kit::paint_identity`, 0.3): `No run` dim with `Charge, discharge or round trip`; `Charging` / `Discharging` with a `1 of 2` / `2 of 2` chip on a round trip and `Same port, 1h05m12s, 5.431Wh in`; `Charged` + `1 of 2` and the swap instruction between the phases; done: the efficiency (`80.0%`, Ok chip `Round trip`) or the Wh (`Charged` / `Discharged` chip, outline `Cut short` after a power loss) and `Run 7, 2h01m, Same port` |
+| List | kit RowList from y68 (`kit::kPlaceListY`): the facts first (In / Out in `kEnergy` with the mAh in the note, Time with the gaps or the split in the note, Efficiency with "so far" while the discharge runs), then the actions. Idle or done: Start charge, Start discharge, Start round trip, Wiring (`Same port` / `Moved`), End below (`50mA`), End after (`60s`, `2m`..), Saved runs (chevron), Share as QR when done. A run in progress: End charge / End discharge, Finish run (a round trip's charge), Start discharge (between), End below, End after |
+| Saved runs | identity `Saved runs` / `Newest first, OK opens one`; rows `#7 Round trip` with the efficiency, the Wh or `cut` as tail and `6.115Wh in, 5.001Wh out, 19m` as note; OK opens the run (its identity, facts and Share as QR); BACK returns to the list, then to the main view |
+| Keys | Up/Dn move; OK runs the row (strip verb Start, Stop, Toggle, Cycle, Open, Share; View in Saved runs); End and Finish arm first (row text `kCaution`, strip `Confirm`, Caution footer `OK again ends the charge`) and run on a second OK within 5 s; moving off disarms |
+| Footer | Info `Nothing measuring` / `Ends under 50mA for 60s` / `Discharge starts by itself`; Ok `Round trip 80.0% efficient` / `Run 7 saved`; Caution `Run not saved to flash`, `Phase cut by a power loss`; Error `No power monitor`; a refusal (`Last run not saved yet`) for 2.5 s |
+| Running dot | while a run measures or waits: a 5 x 5 `kFocus` square at content (219, 0) on every page but a QR code (`Ui::draw_release_notice`); the page repaints whole once when the run stops |
+| Bench row | `No run`, `Charging 1h05m, 12.34Wh`, `Charged 12.34Wh, waiting`, `Round trip 80.0%`, `Discharged 9.87Wh`, `Cut short, 12.34Wh`; battery icon |
 
 ### 0.5 Changed parts
 

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The Bench (Fieldbook, CONCEPT 7): six places on one page, each a row with what is known about it, and a place's actions on
+// The Bench (Fieldbook, CONCEPT 7): seven places on one page, each a row with what is known about it, and a place's actions on
 // the same page. The tables and the row texts are pure (bench:: in ui_tools.cpp); this file reads the drivers and paints.
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
+#include "k2/battery/battery_hw.hpp"
 #include "k2/core/version.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/usbcfg.hpp"
@@ -13,6 +14,7 @@
 #include "k2/pd/link.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/pdtrace.hpp"
+#include "k2/ui/battery_view.hpp"
 #include "k2/ui/home_model.hpp"
 #include "k2/ui/text/tools.hpp"
 #include "k2/ui/ui.hpp"
@@ -24,8 +26,10 @@ namespace k2 {
 
 namespace {
 using bench::Place;
-constexpr Icon kPlaceIcons[bench::kPlaces] = {Icon::Meter, Icon::Plug, Icon::Cable, Icon::Phone, Icon::Report, Icon::Chip};
-static_assert(ToolsPage::kBenchEnd <= kit::kListBottom, "the six places end above the strip the Ui lays before the footer");
+constexpr Icon kPlaceIcons[bench::kPlaces] = {Icon::Meter, Icon::Plug, Icon::Cable, Icon::Phone, Icon::Battery, Icon::Report,
+                                              Icon::Chip};
+static_assert(ToolsPage::kBenchEnd <= kit::kListBottom, "the seven places end above the strip the Ui lays before the footer");
+static_assert(ToolsPage::kNameDy + 16 <= ToolsPage::kStatusDy, "a row's name and status line do not overlap");
 static_assert(ToolsPage::kStatusDy + 12 <= ToolsPage::kRowPitch, "a row's status line stays inside the row");
 static_assert(ToolsPage::kTextX + bench::kStatusChars * 6 <= ToolsPage::kIconX, "a status line ends before the icon");
 
@@ -91,6 +95,13 @@ bench::Facts ToolsPage::facts() const {
         f.captures = static_cast<uint8_t>(f.captures + (pdtrace::capture_info(i).trigger != pdtrace::Trigger::None));
     f.version = kFwVersion;
     f.hid = usbcfg::current.hid;
+    const battery::Recorder &rec = battery::hw::service().rec();
+    if (rec.state() != battery::State::Idle) {
+        battery::Record r;
+        rec.to_record(r);
+        f.batt = true;
+        battery::view::bench_status(battery::view::shown(r, true), f.batt_status);
+    }
     return f;
 }
 

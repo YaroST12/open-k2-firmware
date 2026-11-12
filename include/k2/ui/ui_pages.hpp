@@ -963,9 +963,10 @@ private:
 };
 
 // Tools hub: a list of tools, each opens its own submenu. Short [+] / [-] select, OK opens.
-// The Bench (Page::Tools; the remote still calls it "tools"), src/ui/ui_bench.cpp: the six places (bench::Place) with what is
-// known about each. OK opens a place's page (Ui::open_place): the Meter faces, the Charger / Cable / Device place pages
-// (ConnectionPage locked to a tab), the Log place (DiagnosisPage), the K2 place (SettingsPage). Every tool of the old hub is
+// The Bench (Page::Tools; the remote still calls it "tools"), src/ui/ui_bench.cpp: the seven places (bench::Place) with what
+// is known about each. OK opens a place's page (Ui::open_place): the Meter faces, the Charger / Cable / Device place pages
+// (ConnectionPage locked to a tab), the Battery place (BatteryPage), the Log place (DiagnosisPage), the K2 place
+// (SettingsPage). Every tool of the old hub is
 // one place page's action.
 class ToolsPage final : public PageBase {
 public:
@@ -976,14 +977,15 @@ public:
     PanelLabels labels() const override;
     void invalidate() override;
     ListState list_state() const { return ListState{}; }
-    int count() const { return bench::kPlaces; }   // rows: the six places
+    int count() const { return bench::kPlaces; }   // rows: the seven places
     int selected() const;                           // the focused one of them (ctx_.keep.bench_sel)
     bench::Facts facts() const;   // what the Bench rows read now, from the context and the drivers
-    // Bench geometry (logical content px).
-    static constexpr int16_t kRowY0 = 24, kRowPitch = 32;
-    static constexpr int16_t kTextX = 28, kNameDy = 2, kStatusDy = 19, kIconX = 204, kIconDy = 10;
-    static constexpr int16_t kNodeX = 8, kNodeDy = 6, kNodeSz = 8, kRailX = 11, kRailW = 2;
-    static constexpr int16_t kBenchEnd = kRowY0 + bench::kPlaces * kRowPitch;   // 216
+    // Bench geometry (logical content px): seven 28 px rows, the name (font 16) on the row's top line, the status (font 12)
+    // right under it, the icon and the node centred on the pair.
+    static constexpr int16_t kRowY0 = 24, kRowPitch = 28;
+    static constexpr int16_t kTextX = 28, kNameDy = 0, kStatusDy = 16, kIconX = 204, kIconDy = 8;
+    static constexpr int16_t kNodeX = 8, kNodeDy = 4, kNodeSz = 8, kRailX = 11, kRailW = 2;
+    static constexpr int16_t kBenchEnd = kRowY0 + bench::kPlaces * kRowPitch;   // 220
     static constexpr int kTools = kToolCount;
     // Row -> submenu. The Spoof row is a shortcut: it opens Connection's Cable tab on the Spoof list (the same
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.

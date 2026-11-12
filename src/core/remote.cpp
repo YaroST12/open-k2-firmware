@@ -4,6 +4,7 @@
 // FUSB302 and power monitor. Everything here runs in the main loop; the USB callback only queues.
 #include "k2/core/remote.hpp"
 #include "k2/core/remote_keys.hpp"
+#include "k2/battery/battery_hw.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include <algorithm>
 #include <array>
@@ -1382,6 +1383,11 @@ size_t Remote::diagnose(std::span<const uint8_t> p, std::span<uint8_t> out) {
 // The Black Box push mode over HID: the session and the report pump live in k2::trace_hid_hw (service() in the main loop).
 size_t Remote::trace_hid(std::span<const uint8_t> p, std::span<uint8_t> out) {
     return k2::trace_hid_hw::command(p, out);
+}
+
+// The battery recorder: the same Service the Battery place drives.
+size_t Remote::battery(std::span<const uint8_t> p, std::span<uint8_t> out) {
+    return k2::battery::wire::handle(k2::battery::hw::service(), k2::battery::hw::monitor_online(), p, out);
 }
 
 // The transition capture. Arming changes the power monitor's mode and stores nothing; a charger test that is

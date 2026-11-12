@@ -17,6 +17,7 @@
 
 #include <cstdarg>
 
+#include "k2/battery/battery.hpp"
 #include "k2/core/binlog.hpp"
 #include "k2/core/bootinfo.hpp"
 #include "k2/core/lz.hpp"
@@ -116,6 +117,28 @@ static Bytes log_record(std::size_t* entries_out = nullptr) {
     return b;
 }
 
+// A battery recorder round trip (k2/battery/battery.hpp), same port: an hour of 10 W in, the 61 s quiet that ends it, then an
+// hour of 8 W out ended by hand. tests/test_k2_qr.py and tests/test_k2_remote_battery.py read the fields back.
+static Bytes battery_record() {
+    namespace bt = k2::battery;
+    bt::Recorder r;
+    r.start(bt::Mode::RoundTrip, bt::Wiring::SamePort, bt::Config{}, 7);
+    std::uint32_t t = 0;
+    const auto feed = [&](std::uint32_t ms, std::int32_t mv, std::int32_t ma) {
+        for (std::uint32_t e = 0; e < ms; e += 1000, t += 1000) r.sample(t, mv, ma, true);
+    };
+    feed(3601'000, 5000, 2000);
+    feed(61'000, 5000, 0);
+    r.next();
+    feed(3600'000, 5000, -1600);
+    r.finish();
+    bt::Record rec;
+    r.to_record(rec);
+    Bytes b(bt::kRecordBytes);
+    b.resize(bt::encode(rec, b));
+    return b;
+}
+
 // A loop probe result (k2/loopprobe/loop_probe.hpp) as the run leaves it: every step done but the e-marker (none sniffed),
 // readings of a 5 V charger behind a C-to-C cable into the HID port. tests/test_k2_qr.py reads the fields back.
 static Bytes loop_record() {
@@ -183,6 +206,7 @@ static std::vector<Fixture> fixtures() {
     f.push_back({"card", T::Card, qs::kSchemaCard, build([](auto o) { return r::card(card_v5(), o); }, r::kMaxCard)});
     f.push_back({"log", T::Log, qs::kSchemaLog, log_record()});
     f.push_back({"loop", T::LoopProbe, qs::kSchemaLoop, loop_record()});
+    f.push_back({"battery", T::Battery, qs::kSchemaBattery, battery_record()});
     // The records that gain from the LZ4 flag (a quarter or more): the same bytes as above, packed.
     // (The loop probe result does not: its readings barely repeat, so pack() declines it and it goes out in two parts.)
     for (const char* base : {"emk_rows", "card"}) {
@@ -421,6 +445,11 @@ static void test_firmware_parsers_read_the_records() {
             const auto r = k2::loopprobe::decode(x.rec);   // the probe's own decoder reads the shared record back
             CHECK(r.has_value());
             if (r) CHECK_EQ(r->drop[3].ibus.avg, -228);
+        } else if (x.name == "battery") {
+            k2::battery::Record r;                          // the recorder's own decoder reads the shared record back
+            CHECK(k2::battery::decode(x.rec, r));
+            CHECK(k2::battery::has_efficiency(r));
+            CHECK_EQ(r.id, 7);
         }
     }
 }

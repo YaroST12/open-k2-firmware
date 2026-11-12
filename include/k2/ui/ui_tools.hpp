@@ -42,14 +42,17 @@ ToolHurt tool_hurt_by(int tool);
 // `pm_online`: the power monitor answers (Cable R needs it).
 Readiness tool_readiness(int tool, const SetupState &st, bool pm_online);
 
-// ---- the Bench (Fieldbook, CONCEPT 7): six places, each a list of actions ------------------------------------------------
-// The Bench replaced the page carousel and the Tools hub: Meter (back to the faces), Charger, Cable, Device, Log, K2. Every
-// tool of the old hub is one place's action; a place adds the pages that used to sit in the carousel (Test charger, Settings)
-// and the lists that hid behind a tool (Saved cables). Pure: the tables and the row texts; ToolsPage paints them.
+// ---- the Bench (Fieldbook, CONCEPT 7): seven places, each a list of actions ----------------------------------------------
+// The Bench replaced the page carousel and the Tools hub: Meter (back to the faces), Charger, Cable, Device, Battery, Log,
+// K2. Every tool of the old hub is one place's action; a place adds the pages that used to sit in the carousel (Test
+// charger, Settings) and the lists that hid behind a tool (Saved cables). Battery is the efficiency recorder's page
+// (BatteryPage, k2/ui/ui_battery.hpp). Pure: the tables and the row texts; ToolsPage paints them.
 namespace bench {
 
-enum class Place : uint8_t { Meter, Charger, Cable, Device, Log, K2 };
-inline constexpr int kPlaces = 6;
+enum class Place : uint8_t { Meter, Charger, Cable, Device, Battery, Log, K2 };
+inline constexpr int kPlaces = 7;
+// A row's second line (font 12, at most kStatusChars) and whether its node is solid (something known) or hollow.
+inline constexpr int kStatusChars = 28;
 
 enum class ActKind : uint8_t { Tool, Page, Menu };   // arg: a tool slot (ui_tools), a Page, a Menu
 struct Act {
@@ -82,9 +85,9 @@ struct Facts {
     uint8_t captures = 0;               // Black Box captures held
     const char *version = "";           // kFwVersion
     bool hid = false;                   // the HID function enumerates
+    bool batt = false;                  // the battery recorder has a run since boot (running or done)
+    StrBuf<kStatusChars + 1> batt_status;   // its line (battery::view::bench_status); empty = "No run"
 };
-// A row's second line (font 12, at most kStatusChars) and whether its node is solid (something known) or hollow.
-inline constexpr int kStatusChars = 28;
 struct Row { bool known = false; StrBuf<kStatusChars + 1> status; };
 Row row(Place p, const Facts &f);
 // The Bench's fact line (at most 27 characters): what is attached.

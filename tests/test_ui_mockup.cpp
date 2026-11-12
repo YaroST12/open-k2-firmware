@@ -7,6 +7,7 @@
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "ui_stubs.h"
+#include "k2/battery/battery_hw.hpp"
 #include "k2/ui/ui.hpp"
 #include "ui_nav.h"
 #include "diag_fixture.h"
@@ -95,6 +96,28 @@ int main() {
     ui.open_place(bench::Place::Log, t); render(ui, t, "place_log");
     ui.goto_page(uint8_t(Page::Home), t); t += 100;
     ui.open_place(bench::Place::K2, t); render(ui, t, "place_k2");
+    // The Battery place: idle, a round trip charging (the running dot), then done; the Bench with the run on its row.
+    stub_battery_reset();
+    ui.goto_page(uint8_t(Page::Home), t); t += 100;
+    ui.open_place(bench::Place::Battery, t); render(ui, t, "place_battery");
+    {
+        namespace bt = battery;
+        uint32_t tb = t;   // the recorder's own clock: the pages after this one keep the UI's
+        bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
+        for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
+        render(ui, t, "place_battery_charging");
+        ui.goto_page(uint8_t(Page::Tools), t); render(ui, t, "bench_battery_running");
+        bt::hw::service().rec().end_phase();
+        bt::hw::service().rec().next();
+        const int32_t ma = g_stub.pm.current_ma;
+        g_stub.pm.current_ma = -1500;   // same port: the bank's outflow runs backwards through the K2
+        for (int k = 0; k < 600; k++) bt::hw::poll(tb += 1000, true);
+        bt::hw::service().rec().finish();
+        bt::hw::poll(tb += 1000, true);
+        g_stub.pm.current_ma = ma;
+        ui.open_place(bench::Place::Battery, t); render(ui, t, "place_battery_done");
+    }
+    stub_battery_reset();
 
     // The Cable tab of a cable that gave no identity, alone: a chip's pull-down on a CC line ("chip silent") versus none
     // ("no chip"), and the older / unprobed reading. Charger and contract are gone, as they are with the cable alone.

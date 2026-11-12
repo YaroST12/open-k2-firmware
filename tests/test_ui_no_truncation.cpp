@@ -10,6 +10,7 @@
 #include "card_fixtures.h"
 #include "diag_fixture.h"
 #include "fake_lcd.h"
+#include "k2/battery/battery_hw.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "ui_stubs.h"
 #include "ui_nav.h"
@@ -112,7 +113,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
                                              "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loop-probe",
-                                             "pd-stress", "diagnosis"};
+                                             "pd-stress", "diagnosis", "battery"};
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
@@ -193,6 +194,50 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
     g_stub.pm.current_ma = amps_before;
     g_stub.sink = sink_before;
     g_stub.caps.active_cc = cc_before;
+    // Battery: every row focused (note open) idle, then a round trip through its states (charging, the armed hand end, between
+    // the phases, discharging, done), the saved runs and a stored run.
+    enter("battery", rot, sc.name);
+    stub_battery_reset();
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    if (ui.push_menu(Menu::Battery, g_t)) {
+        auto step = [&](Button b, const char *what) {
+            ui.on_button(b, ButtonEvent::Short, g_t);
+            draw_for_a_while(ui, what, rot, sc.name);
+        };
+        auto all_rows = [&](const char *what) {
+            for (int i = 0; i < 14; ++i) step(Button::Plus, what);
+            for (int i = 0; i < 14; ++i) step(Button::Minus, what);
+        };
+        auto go_to = [&](battery::view::Act a) {
+            const BatteryPage *p = ui.battery_page();
+            for (int i = 0; p && i < 14 && p->act() != a; ++i) step(Button::Plus, "bt-move");
+        };
+        all_rows("bt-idle");
+        go_to(battery::view::Act::StartRoundTrip);
+        step(Button::Ok, "bt-start");
+        battery::hw::poll(g_t, true);
+        all_rows("bt-charging");
+        go_to(battery::view::Act::EndPhase);
+        step(Button::Ok, "bt-armed");
+        step(Button::Ok, "bt-between");
+        battery::hw::poll(g_t, true);
+        all_rows("bt-between");
+        go_to(battery::view::Act::Next);
+        step(Button::Ok, "bt-discharging");
+        all_rows("bt-discharging");
+        go_to(battery::view::Act::EndPhase);
+        step(Button::Ok, "bt-armed-2");
+        step(Button::Ok, "bt-done");
+        battery::hw::poll(g_t, true);
+        all_rows("bt-done");
+        go_to(battery::view::Act::Runs);
+        step(Button::Ok, "bt-runs");
+        step(Button::Ok, "bt-stored");
+        all_rows("bt-stored");
+        step(Button::Back, "bt-runs");
+        step(Button::Back, "bt-done");
+    }
+    stub_battery_reset();
     // PD diagnosis: every row of the fixture reports has been the focused one (note line open), and Home row 1 with each.
     {
         static const char *const kDiagFixtures[] = {"tests/fixtures/bbdiag/hub_rear_60w.raw", "tests/fixtures/bbdiag/ramp_70w.raw",
