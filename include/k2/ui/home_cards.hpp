@@ -93,8 +93,9 @@ public:
     static constexpr uint32_t kDwellMs = 5000, kMaxStepMs = 1000;
     void reset();
     void tick(uint32_t now_ms, bool live, CardMask ok);
-    // The attention seam: put `c` in the upper cell now (live only, never ENERGY, only a card with data). It holds until
-    // the upper cell's next dwell; forced() is true until then, so the painter can draw the attention dot.
+    // The attention seam (Attention below): put `c` in the upper cell now (live only, never ENERGY, only a card with
+    // data). It holds, the upper cell's dwell steps paused, until force_top(Card::Count) releases it; forced() is true
+    // until then, so the painter draws the attention dot. On release the card stays until the next dwell.
     void force_top(Card c, CardMask ok);
     Card top() const { return live_ ? top_ : Card::Peak; }
     Card bottom() const { return !live_ || energy_ ? Card::Energy : bot_; }
@@ -104,6 +105,34 @@ private:
     Card top_ = Card::Peak, bot_ = Card::Drop;
     bool energy_ = true, live_ = false, primed_ = false, forced_ = false;
     uint32_t act_ms_ = 0, last_ms_ = 0;
+};
+
+// ---- attention ---------------------------------------------------------------------------------
+// What is changing right now, for the upper card cell (CardCycler::force_top, with the dot). Every kStepMs each input is
+// compared with its slow average (an EMA, 3 % per step), then folded into it:
+//   VBUS more than max(250 mV, 2.5 % of its average) off   -> DROP  (VBUS dropped or jumped; the card holds DROP + SAG)
+//   CC1 or CC2 more than 150 mV off its average             -> LINES
+//   a peak power 10 % (and at least 0.5 W) above the last announced one -> PEAK
+// A trigger holds its card kHoldMs, re-armed while the signal keeps moving. A stronger card (DROP 3 > LINES 2 > PEAK 1)
+// takes over a weaker one, never the reverse. The first kQuietMs of a session, or after a gap longer than kGapMs (Home
+// was off screen), only learn the averages. Not live: nothing, and the next session starts over.
+class Attention {
+public:
+    static constexpr uint32_t kStepMs = 100, kHoldMs = 5000, kQuietMs = 2000, kGapMs = 1000;
+    static constexpr int32_t kVbusMinMv = 250, kVbusPermille = 25, kCcMv = 150;
+    static constexpr uint32_t kPeakMinMw = 500;
+    void reset() { *this = Attention{}; }
+    // `cc1_mv` / `cc2_mv` < 0: no reading (that line is not watched). Returns want().
+    Card update(uint32_t now_ms, bool live, int32_t vbus_mv, int32_t cc1_mv, int32_t cc2_mv, uint32_t peak_mw);
+    Card want() const { return card_; }   // the card that wants the upper cell, Card::Count for none
+private:
+    void prime(uint32_t now_ms, int32_t vbus_mv, int32_t cc1_mv, int32_t cc2_mv, uint32_t peak_mw);
+    void trigger(uint32_t now_ms, Card c);
+    int32_t avg_v_ = 0, avg_cc_[2] = {};   // x256
+    bool cc_ok_[2] = {};
+    uint32_t peak_ref_mw_ = 0, start_ms_ = 0, last_ms_ = 0, until_ms_ = 0;
+    bool primed_ = false;
+    Card card_ = Card::Count;
 };
 
 }  // namespace k2::home

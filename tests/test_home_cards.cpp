@@ -257,10 +257,15 @@ static void test_cycler_force_seam() {
     CHECK_COND(c.bottom() != Card::Energy);
     c.force_top(Card::Energy, kAll);                   // never Wh / Ah on top
     CHECK_EQ(ci(c.top()), ci(Card::Cable));
-    // The forced card holds until the next dwell of the upper cell, then the deck moves on and the mark goes.
-    t = run(c, t, 5100, true, kAll);
-    CHECK_COND(c.top() != Card::Cable);
+    // The forced card holds through the upper cell's dwells until released; then the mark goes and the deck moves on.
+    t = run(c, t, 12000, true, kAll);
+    CHECK_EQ(ci(c.top()), ci(Card::Cable));
+    CHECK_EQ(c.forced() ? 1 : 0, 1);
+    c.force_top(Card::Count, kAll);
+    CHECK_EQ(ci(c.top()), ci(Card::Cable));            // released: the card stays until the next dwell
     CHECK_EQ(c.forced() ? 1 : 0, 0);
+    t = run(c, t, t + 5100, true, kAll);
+    CHECK_COND(c.top() != Card::Cable);
     // Not live: no forcing.
     c.tick(t, false, kAll);
     c.force_top(Card::Lines, kAll);
@@ -303,6 +308,87 @@ static void test_settled_level() {
     CHECK_EQ(x.has_sag() ? 1 : 0, 0);
 }
 
+
+// Attention: drive update() every 100 ms with a steady input, then disturb one signal.
+struct AttIn { int32_t v = 20000, cc1 = 1650, cc2 = 70; uint32_t peak = 10000; };
+static uint32_t att_run(Attention &a, uint32_t t, uint32_t dur, const AttIn &in) {
+    for (uint32_t end = t + dur; t < end; t += 100) a.update(t, true, in.v, in.cc1, in.cc2, in.peak);
+    return t;
+}
+static void test_attention() {
+    Attention a;
+    AttIn in;
+    // The quiet start: a jump inside the first 2 s is only learnt.
+    uint32_t t = att_run(a, 1000, 1000, in);
+    in.v = 15000;
+    t = att_run(a, t, 500, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    a.reset();
+    in = AttIn{};
+    t = att_run(a, t, 3000, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));             // steady: nothing
+    // VBUS 20 V -> 19.6 V: 400 mV, under 2.5 % of 20 V (500 mV): nothing. 19.4 V: DROP.
+    in.v = 19600; t = att_run(a, t, 300, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    in.v = 19400; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Drop));
+    // It holds 5 s after the signal settles (the average catches up, then the hold runs out).
+    in.v = 20000; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Drop));
+    t = att_run(a, t, 6000, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    // At 5 V the floor is 250 mV.
+    a.reset(); in = AttIn{}; in.v = 5100;
+    t = att_run(a, t, 3000, in);
+    in.v = 4900; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    in.v = 4800; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Drop));
+    // CC: 150 mV off its average -> LINES; a weaker card never takes over DROP, DROP takes over LINES.
+    a.reset(); in = AttIn{};
+    t = att_run(a, t, 3000, in);
+    in.cc1 = 1450; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Lines));
+    in.cc1 = 1650; in.peak = 20000; t = att_run(a, t, 100, in);   // a new peak: weaker than LINES
+    CHECK_EQ(ci(a.want()), ci(Card::Lines));
+    in.v = 18000; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Drop));
+    in.cc2 = 400; t = att_run(a, t, 100, in);                     // LINES moves while DROP holds: DROP stays
+    CHECK_EQ(ci(a.want()), ci(Card::Drop));
+    // PEAK: 10 % and at least 0.5 W above the last announced peak.
+    a.reset(); in = AttIn{};
+    t = att_run(a, t, 3000, in);
+    in.peak = 10900; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    in.peak = 11000; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Peak));
+    t = att_run(a, t, 4000, in);
+    in.peak = 12200; t = att_run(a, t, 100, in);                  // re-armed by the next 10 %
+    t = att_run(a, t, 4000, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Peak));
+    t = att_run(a, t, 1100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    a.reset(); in = AttIn{}; in.peak = 100;
+    t = att_run(a, t, 3000, in);
+    in.peak = 400; t = att_run(a, t, 100, in);                    // +300 % but under 0.5 W: noise at no load
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    // A line without a reading is not watched; it is learnt once it has one.
+    a.reset(); in = AttIn{}; in.cc2 = -1;
+    t = att_run(a, t, 3000, in);
+    in.cc2 = 3300; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    // A gap (Home off screen) starts the quiet window over; not live clears the card.
+    in.cc2 = 70; in.v = 20000;
+    t = att_run(a, t, 3000, in);
+    in.v = 9000; t = att_run(a, t + 5000, 500, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+    t = att_run(a, t, 2000, in);
+    in.v = 20000; t = att_run(a, t, 100, in);
+    CHECK_EQ(ci(a.want()), ci(Card::Drop));
+    a.update(t, false, 0, -1, -1, 0);
+    CHECK_EQ(ci(a.want()), ci(Card::Count));
+}
+
 int main() {
     test_settled_level();
     test_drop_state();
@@ -315,5 +401,6 @@ int main() {
     test_cycler_skips_cards_without_data();
     test_cycler_freeze_and_reset();
     test_cycler_force_seam();
+    test_attention();
     return test_report("test_home_cards");
 }

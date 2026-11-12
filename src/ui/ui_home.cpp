@@ -759,6 +759,16 @@ void HomePage::update(uint32_t now_ms) {
     if (live && (ctx_.cable.has_idle() || ctx_.extremes.has_sag())) ok |= hm::card_bit(hm::Card::Drop);
     if (fusb302::emarker().valid) ok |= hm::card_bit(hm::Card::Cable);
     ctx_.keep.cards.tick(now_ms, live, ok);
+    {   // Attention: a card whose signal is moving right now takes the upper cell, with the dot (home_cards.hpp)
+        // While a card wants the cell it is forced every tick (it may have gained its data since); the release goes
+        // to the cycler once, when the attention ends.
+        const std::optional<adc::Reading> &an = ctx_.analog;
+        hm::Attention &att = ctx_.keep.attention;
+        const hm::Card was = att.want();
+        const hm::Card want = att.update(now_ms, live, ctx_.pm.vbus_mv, an ? an->cc1_mv : -1, an ? an->cc2_mv : -1,
+                                         ctx_.extremes.peak_mw());
+        if (want != hm::Card::Count || was != hm::Card::Count) ctx_.keep.cards.force_top(want, ok);
+    }
 
     int step_col[3], step_n[3];
     update_sweep(f, now_ms, step_col, step_n);

@@ -174,8 +174,7 @@ void CardCycler::tick(uint32_t now_ms, bool live, CardMask ok) {
             else bot_ = c;
         }
     }
-    if (step_index(act_ms_, kDwellMs) != step_index(old, kDwellMs)) {
-        forced_ = false;
+    if (step_index(act_ms_, kDwellMs) != step_index(old, kDwellMs) && !forced_) {   // an attention card holds the cell
         const Card c = next_card(top_, energy_ ? Card::Count : bot_, ok);
         if (c != Card::Count) top_ = c;
     }
@@ -183,10 +182,87 @@ void CardCycler::tick(uint32_t now_ms, bool live, CardMask ok) {
 }
 
 void CardCycler::force_top(Card c, CardMask ok) {
-    if (!live_ || c == Card::Energy || c == Card::Count || !has(ok, c)) return;
+    if (c == Card::Count) {   // released: the card stays until the next dwell, without the dot
+        forced_ = false;
+        return;
+    }
+    if (!live_ || c == Card::Energy || !has(ok, c)) return;
     top_ = c;
     forced_ = true;
     settle(ok);
+}
+
+namespace {
+constexpr int prio(Card c) { return c == Card::Drop ? 3 : c == Card::Lines ? 2 : c == Card::Peak ? 1 : 0; }
+constexpr int32_t off(int32_t x, int32_t avg256) {
+    const int32_t d = x - (avg256 >> 8);
+    return d < 0 ? -d : d;
+}
+// avg += (x - avg) * 3 %, in 1/256 mV
+constexpr int32_t fold(int32_t avg256, int32_t x) { return avg256 + static_cast<int32_t>((int64_t{x} * 256 - avg256) * 3 / 100); }
+}  // namespace
+
+void Attention::prime(uint32_t now_ms, int32_t vbus_mv, int32_t cc1_mv, int32_t cc2_mv, uint32_t peak_mw) {
+    avg_v_ = vbus_mv * 256;
+    const int32_t cc[2] = {cc1_mv, cc2_mv};
+    for (int i = 0; i < 2; i++) {
+        cc_ok_[i] = cc[i] >= 0;
+        avg_cc_[i] = cc_ok_[i] ? cc[i] * 256 : 0;
+    }
+    peak_ref_mw_ = peak_mw;
+    start_ms_ = last_ms_ = now_ms;
+    primed_ = true;
+    card_ = Card::Count;
+}
+
+void Attention::trigger(uint32_t now_ms, Card c) {
+    if (card_ != Card::Count && prio(c) < prio(card_)) return;   // a weaker card never takes over
+    card_ = c;
+    until_ms_ = now_ms + kHoldMs;
+}
+
+Card Attention::update(uint32_t now_ms, bool live, int32_t vbus_mv, int32_t cc1_mv, int32_t cc2_mv, uint32_t peak_mw) {
+    if (!live) {
+        reset();
+        return card_;
+    }
+    if (vbus_mv < 0) vbus_mv = -vbus_mv;
+    if (!primed_ || now_ms - last_ms_ > kGapMs) {
+        prime(now_ms, vbus_mv, cc1_mv, cc2_mv, peak_mw);
+        return card_;
+    }
+    if (now_ms - last_ms_ < kStepMs) return card_;
+    last_ms_ = now_ms;
+    const bool quiet = now_ms - start_ms_ < kQuietMs;
+
+    const int32_t level = avg_v_ >> 8;
+    const int32_t thr = level * kVbusPermille / 1000 > kVbusMinMv ? level * kVbusPermille / 1000 : kVbusMinMv;
+    if (!quiet && off(vbus_mv, avg_v_) > thr) trigger(now_ms, Card::Drop);
+    avg_v_ = fold(avg_v_, vbus_mv);
+
+    const int32_t cc[2] = {cc1_mv, cc2_mv};
+    for (int i = 0; i < 2; i++) {
+        if (cc[i] < 0) continue;
+        if (!cc_ok_[i]) {   // a line that just got a reading: learn it first
+            cc_ok_[i] = true;
+            avg_cc_[i] = cc[i] * 256;
+            continue;
+        }
+        if (!quiet && off(cc[i], avg_cc_[i]) > kCcMv) trigger(now_ms, Card::Lines);
+        avg_cc_[i] = fold(avg_cc_[i], cc[i]);
+    }
+
+    if (quiet) {
+        if (peak_mw > peak_ref_mw_) peak_ref_mw_ = peak_mw;
+    } else if (peak_mw >= peak_ref_mw_ + (peak_ref_mw_ / 10 > kPeakMinMw ? peak_ref_mw_ / 10 : kPeakMinMw)) {
+        peak_ref_mw_ = peak_mw;
+        trigger(now_ms, Card::Peak);
+    } else if (peak_mw < peak_ref_mw_) {
+        peak_ref_mw_ = peak_mw;   // the peaks were reset (long OK): announce from the new start
+    }
+
+    if (card_ != Card::Count && static_cast<int32_t>(now_ms - until_ms_) >= 0) card_ = Card::Count;
+    return card_;
 }
 
 }  // namespace k2::home

@@ -125,6 +125,7 @@ struct UiContext {
         trend::Window home_window = trend::Window::S10;   // Home: the trend window OK short cycles
         home::Qty home_hero = home::Qty::W;               // Home: the hero quantity Long Back cycles (uiprefs, restored at boot)
         home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
+        home::Attention attention;                        // Home: what is changing now, for the upper card and its dot
         int tools_sel = 0;                                // Tools: the highlighted tool
         int settings_sel = 0;                             // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()

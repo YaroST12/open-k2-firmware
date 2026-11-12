@@ -314,9 +314,16 @@ The 1 px row rule sits on y 136, not 135: the landscape mapping squeezes 240 log
   same card; a card without data is skipped. The lower cell shows Energy (Wh over Ah, decimal-aligned) every other
   turn. Deck: PEAK (max W, V, A of the session), DROP + SAG (the worst VBUS drop under load against the settled level),
   CABLE (only with a valid e-marker read), LINES (D+ / D- / CC). The deck and the extremes reset on attach and on long
-  OK (which also resets the energy). Stale or idle: PEAK above Energy, in grey. `force_top` is the host seam that pins
-  a card; the showing card carries a 5 x 5 `kFocus` dot. A swap repaints only its own cell; digits update at most 4
-  times a second.
+  OK (which also resets the energy). Stale or idle: PEAK above Energy, in grey. A swap repaints only its own cell;
+  digits update at most 4 times a second.
+- **Attention** (`home::Attention`, 2026-11-12). The card whose signal is moving right now takes the upper cell and
+  carries a 5 x 5 `kFocus` dot against its top-right corner (the charger test's running-step dot). Every 100 ms each
+  signal is compared with its slow average (EMA, 3 % per step): VBUS off by more than max(250 mV, 2.5 %) -> DROP + SAG;
+  CC1 or CC2 off by more than 150 mV -> LINES; a peak power 10 % (and 0.5 W) above the last announced one -> PEAK. The
+  card holds 5 s after the last trigger (re-armed while the signal keeps moving; the upper cell's dwell pauses), DROP
+  over LINES over PEAK. The first 2 s of a session, and the first 2 s after Home comes back on screen, only learn the
+  averages. A card without data (DROP before an idle reference or a sag) is not forced. On release the dot goes and the
+  card stays until the next dwell.
 - **Labels.** Home BACK = `Back` / `Hero`; OK = `Zoom` / `Reset`.
 - **Reboot.** OK + BACK held together for 3 s reboots from any page; the HoldCard shows from 1 s with `Release to
   cancel`. Releasing either key cancels. While the chord is held, both keys' own short and long actions are

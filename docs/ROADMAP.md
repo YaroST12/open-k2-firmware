@@ -1120,7 +1120,7 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | ST7789V 240x240 LCD, screenshots | done | verified | `k2::lcd`, `gfx`, `capture` | |
 | 4 buttons, long/hold events | done | verified | `buttons`, `ui_events` | |
 | Reboot gesture: OK + BACK held 3 s (HoldCard from 1 s, replaces the 5 s BACK hold, 2026-11-12) | done | not verified (host-tested: `test_ui_calc`, `test_ui_pages`) | `RebootChord` (`ui_calc`), `Ui::feed_chord` | |
-| Home 2c: W hero (Long BACK cycles W / V / A, kept), V/A ledger, cycling cards (PEAK, DROP + SAG, CABLE, LINES, Energy), W alarms at 90 % / 100 % of the contract (UI_DESIGN 4.0a) | done | not verified (host renders `runs/ui-home/2c/`) | `ui_home`, `home_cards`, `home_model`, `home_cell` | PASSIVE |
+| Home 2c: W hero (Long BACK cycles W / V / A, kept), V/A ledger, cycling cards (PEAK, DROP + SAG, CABLE, LINES, Energy), W alarms at 90 % / 100 % of the contract (UI_DESIGN 4.0a); Attention: the moving card takes the upper cell with a dot (2026-11-12, `test_home_cards`) | done | partly verified (1.0.0-666: idle, live, LAST, hero cycle; see the validate row) | `ui_home`, `home_cards`, `home_model`, `home_cell` | PASSIVE |
 | INA226/228/237 power monitor | done | verified (INA226) | `k2::power_monitor` | PASSIVE |
 | 7-channel ADC1 + DMA1, temperature | done | verified | `k2::adc` | PASSIVE |
 | Ripple capture on PA1 | done | not verified | `k2::adc`, `capture` | PASSIVE |

@@ -835,6 +835,7 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         ctx_.trend.clear();
         ctx_.extremes.reset();     // and Home's PEAK / SAG and the card cycle
         ctx_.keep.cards.reset();
+        ctx_.keep.attention.reset();
         ctx_.live.clear();   // OK on Home also drops the frozen LAST state
         K2LOG("[UI] energy meter reset\n");
         current().update(now_ms);
@@ -1167,6 +1168,7 @@ UiAction Ui::tick(uint32_t now_ms) {
         if (live && !extremes_live_) {   // an attach: Home's peaks, sag and card cycle start over (they stay frozen while stale)
             ctx_.extremes.reset();
             ctx_.keep.cards.reset();
+            ctx_.keep.attention.reset();
             sag_settle_.reset();
         }
         extremes_live_ = live;

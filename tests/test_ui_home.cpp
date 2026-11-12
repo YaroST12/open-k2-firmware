@@ -787,7 +787,12 @@ static void test_drop_and_sag_cards() {
     CHECK_EQ(x.has_sag() ? 1 : 0, 1);
     CHECK_EQ(x.sag_level_mv(), 20000u);
     CHECK_EQ(x.sag_bp(), 75u);
-    // Show the DROP card above at once (the attention seam) and render it.
+    // The load step's new peak has PEAK wanting the upper cell (home::Attention).
+    CHECK_EQ(int(ui.context().keep.attention.want()), int(hm::Card::Peak));
+    CHECK_EQ(int(ui.context().keep.cards.top()), int(hm::Card::Peak));
+    CHECK_TRUE(ui.context().keep.cards.forced());
+    // Show the DROP card above at once through the seam (the attention cleared first) and render it.
+    ui.context().keep.attention.reset();
     ui.context().keep.cards.force_top(hm::Card::Drop, 0xFF);
     run(ui, 3);
     dump("2c", "card_drop");
