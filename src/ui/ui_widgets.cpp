@@ -385,7 +385,9 @@ void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRU
     char buf[kFitBuf];                                  // a footer that would run off the surface ends in "..."
     const auto fitted = fit_text(kSmall, text, std::min<int>(kFooterTextPx, s.w - kFooterTextX), buf K2_TRUNC_ARG);
     draw_band(s, 0, fy, s.h - fy, [&](BandRow &row) {
-        row.fill(0, kScreenW, st.fill);   // the whole band row: in landscape it is 240 panel px, not the 224 logical ones
+        // the whole band row: in landscape it is 240 panel px, not the 224 logical ones
+        row.fill(0, kScreenW, row.y == fy && st.rule ? st.rule : st.fill);
+        if (st.bar) row.fill(0, kFooterBarW, st.bar);
         row.text(kSmall, kFooterTextX, fy + 1, fitted, st.text, st.fill);
     });
 }
@@ -401,22 +403,29 @@ void IconCell::draw(Icon icon, uint16_t fg, uint16_t bg) {
     e.paint(sg, [&] { draw_icon(surf, x, y, icon, fg, bg); });
 }
 
+// Fieldbook masthead: no fill (the band is the ground), the 12 px icon at x8, the title in font 16 at x8 (x26 behind
+// the icon) or, when that would not fit before the badge or the readout, in font 12; an exception badge (a held Rd pin)
+// right-aligned to `right` behind a 1 px rule; the accent rule under it (row kBarH-1; draw_top_bar adds the second row).
 void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_view title, int16_t right,
                       std::string_view badge, bool readout_follows) {
-    const int x = has_icon ? 20 : 4;
     char buf[kFitBuf];
     const int badge_w = static_cast<int>(badge.size() * kLabelAdv);
     const int sep = badge.empty() ? right : right - badge_w - 5;   // 4 px gap, 1 px rule before the badge
-    const auto fitted = fit_text(kLabelFont, title, sep - 4 - x, buf);
-    draw_band(s, 0, 0, kBarH - 1, [&](BandRow &row) {   // the band stops above the hairline row, which is painted once below
-        if (has_icon && fits(s, 4, kBarTextY, kIconSize, kIconSize)) row.icon(4, kBarTextY, icon, kDim, kBar);
-        row.text(kLabelFont, x, kBarTextY, fitted, kText, kBar);
+    const bool big = text_width(kSmall, title) <= sep - 4 - (has_icon ? kMastTitleIconX : kMastTitleX);
+    // The font 12 fallback sits tighter: 2 px after the icon, 3 px before the badge rule.
+    const int x = !has_icon ? kMastTitleX : big ? kMastTitleIconX : kMastIconX + kIconSize + 2;
+    const Font &tf = big ? kSmall : kLabelFont;
+    const auto fitted = fit_text(tf, title, sep - (big ? 4 : 3) - x, buf);
+    const int ty = big ? kMastTitleY : kBarTextY;
+    draw_band(s, 0, 0, kBarH - 1, [&](BandRow &row) {   // the band stops above the rule row, which is painted once below
+        if (has_icon && fits(s, kMastIconX, kBarTextY, kIconSize, kIconSize)) row.icon(kMastIconX, kBarTextY, icon, kInk, kBar);
+        row.text(tf, x, ty, fitted, kInk, kBar);
         if (!badge.empty()) {
-            row.fill(sep, 1, kFaint);
-            row.text(kLabelFont, sep + 5, kBarTextY, badge, kDim, kBar);
+            row.fill(sep, 1, kInk3);
+            row.text(kLabelFont, sep + 5, kBarTextY, badge, kInk2, kBar);
         }
     }, readout_follows ? kReadoutX : kScreenW);
-    gfx_fill(s, 0, static_cast<int16_t>(kBarH - 1), s.w, 1, kRule);   // the hairline below the bar
+    gfx_fill(s, 0, static_cast<int16_t>(kBarH - 1), s.w, 1, kAccent);   // the masthead rule
 }
 
 // The call repaints the band rows 0..kBarH-2 over x 140..223; the hairline row (kBarH-1) is never
@@ -430,18 +439,21 @@ void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view vol
                 const unsigned rot = rotation & 3u;
                 row.chevron(140 + (kChevW - physical_chevron_w(rot)) / 2,
                             kBarTextY + (static_cast<int>(kLabelFont.height) - physical_chevron_h(rot)) / 2,
-                            flow == Arrow::Up, rot, kFlow);
+                            flow == Arrow::Up, rot, kInk);
             }
-            // Fixed slots right-aligned to x 218 so the digits never jitter horizontally.
-            // Values too wide for their slot show "OVR" (the full measurement lives on its page).
+            // Fixed slots right-aligned so the digits never jitter horizontally, each led by a 3 px colour key (the
+            // quantity's spot colour: the text itself is ink). Values too wide for their slot show "OVR".
             constexpr int kSlotPx = 5 * kLabelAdv;
             const std::string_view v = text_width(kLabelFont, volts) > kSlotPx ? "OVR" : volts;
             const std::string_view a = text_width(kLabelFont, amps) > kSlotPx ? "OVR" : amps;
             if (v.data() != volts.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, volts, kSlotPx);   // a measurement, not copy
             if (a.data() != amps.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, amps, kSlotPx);
-            row.text(kLabelFont, 152, kBarTextY, v, kVolt, kBar);
-            row.text(kLabelFont, 184, kBarTextY, "\xC3\x97", kDim, kBar);
-            row.text(kLabelFont, 190, kBarTextY, a, kAmp, kBar);
+            if (row.y >= kMastKeyY && row.y < kMastKeyY + kMastKeyH) {
+                row.fill(kMastVoltKeyX, kMastKeyW, kSpotVolt);
+                row.fill(kMastAmpKeyX, kMastKeyW, kSpotAmp);
+            }
+            row.text(kLabelFont, kMastVoltX + kSlotPx - text_width(kLabelFont, v), kBarTextY, v, kInk, kBar);
+            row.text(kLabelFont, kMastAmpX + kSlotPx - text_width(kLabelFont, a), kBarTextY, a, kInk, kBar);
         } else if (mode == StatusReadout::Stale) {
             row.last_pill(last_text);   // BandRow-native: no nested stream inside the band write
         }

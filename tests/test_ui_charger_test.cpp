@@ -716,7 +716,10 @@ static void test_back_chain() {
 // The top bar counts three steps: "1/3 Tests" (also over Custom and its Group pages), "2/3 Spoof cable", "3/3 Review". The progress
 // rule under it (3 segments, pitch 75) lights the segments up to the step.
 static void check_header(std::string_view title, int step) {
-    check_text_at(kLabelFont, kBarTextY, title, kText, kBar, 4);
+    // The masthead title: font 16 at x8, or font 12 when it would run into the SNK badge (the stub is self-powered).
+    constexpr int kRoomBeforeSnk = 132 - 3 * kLabelAdv - 5 - 4 - kMastTitleX;
+    if (text_width(kSmall, title) <= kRoomBeforeSnk) check_text_at(kSmall, kMastTitleY, title, kInk, kBar, kMastTitleX);
+    else check_text_at(kLabelFont, kBarTextY, title, kInk, kBar, kMastTitleX);
     for (int i = 0; i < 3; ++i)
         CHECK_EQ(g_panel[kit::kProgY * LCD_WIDTH + i * kit::kProgPitch + 5], i < step ? kFocus : kRule);
 }
@@ -1180,7 +1183,7 @@ static void test_results_grid_rows_rail_and_footer() {
     CHECK_EQ(g_panel[70 * LCD_WIDTH + 100] == kRule && g_panel[71 * LCD_WIDTH + 100] == kRule, true);   // the 2 px rule over the grid
     CHECK_EQ(g_panel[72 * LCD_WIDTH + 1] == kFocus, true);                                           // rail on the focused row
     CHECK_EQ(g_panel[72 * LCD_WIDTH + 30] == kFocusT, true);                                         // and its tint
-    CHECK_EQ(g_panel[72 * LCD_WIDTH + kit::kResultLabelW] == kRule, true);                           // the label strip's rule
+    CHECK_EQ(g_panel[72 * LCD_WIDTH + kit::kResultLabelW] == kBg, true);                            // no label rule: white space
     CHECK_EQ(g_panel[73 * LCD_WIDTH + kit::kResultLabelW + 2] == kOkT, true);                        // a passing cell: the flat pass fill
     const auto footer_ink = [&] {
         std::vector<uint16_t> f;

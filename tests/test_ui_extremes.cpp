@@ -64,13 +64,14 @@ static void check_menu_mini(Ui &ui, std::string_view text, bool volts = false) {
     const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters,
                                     kSlotLens, kPanelThickness).content;
     // The chrome bar readout has fixed slots: the band maps its origin (x 140 = 140*240/224 at
-    // the wide rotations) but paints text at native pixel advances: volts at +12, amps at +50.
-    // Status bands map their origin but paint text at native pixel advances.
-    const int x = box.x + 140 * box.w / 224 + (volts ? 12 : 50);
+    // the wide rotations) but paints text at native pixel advances: each value right-aligned in its 30 px slot, volts from
+    // +15 (x155), amps from +52 (x192), in ink (the colour key in front of it carries the quantity).
+    const int slot = 5 * static_cast<int>(kLabelAdv);
+    const int x = box.x + 140 * box.w / 224 + (volts ? kMastVoltX : kMastAmpX) - 140 + slot - text_width(kLabelFont, text);
     const int y = box.y + kBarTextY;
-    CHECK_EQ(text_width(kLabelFont, text) <= 5 * static_cast<int>(kLabelAdv), true);
+    CHECK_EQ(text_width(kLabelFont, text) <= slot, true);
     uint16_t lut[16], line[240];
-    make_blend_lut(volts ? kVolt : kAmp, kBar, lut);
+    make_blend_lut(kInk, kBar, lut);
     for (int row = 0; row < kLabelFont.height; ++row) {
         const int n = render_row(kLabelFont, text, row, lut, line, 240);
         const bool same = std::equal(line, line + n, g_panel + (y + row) * LCD_WIDTH + x);

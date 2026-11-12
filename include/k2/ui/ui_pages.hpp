@@ -1096,7 +1096,7 @@ public:
     ListState list_state() const { return {kRows, kRows, 0}; }
     int selected() const { return sel_; }
 private:
-    static constexpr int kRows = 6;   // 26 px rows: six fit under the title bar with the footer (the list view shows seven)
+    static constexpr int kRows = 7;   // 26 px rows: the list view shows seven (the focused one open) above the footer
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
     int &sel_ = ctx_.keep.settings_sel;   // remembered across page switches
     Elem foot_;

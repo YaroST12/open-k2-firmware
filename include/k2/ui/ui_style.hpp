@@ -4,45 +4,75 @@
 #pragma once
 #include <cstdint>
 #include "k2/ui/font_aa.hpp"
-#include "k2/ui/font_aa.hpp"
+#include "k2/ui/theme.hpp"
 #include "k2/ui/ui_labels.hpp"
 
 namespace k2 {
 
-// RGB565 palette (UI design v2 section 3.3; tests/test_ui_tokens.py checks it against the mockup
-// renderer's table). Dark background, one distinct colour per measured quantity. Each hue has a
-// tint (about 15 % of the hue on black) for pill, tile and selected-row fills.
-constexpr uint16_t kBg = 0x0000;
-constexpr uint16_t kSurface = 0x18E3;   // cards, flow-diagram panel
-constexpr uint16_t kSurface2 = 0x2124;  // overlays (HoldCard)
-constexpr uint16_t kBar = 0x08A9;       // title / status bar
-constexpr uint16_t kRule = 0x2945;      // dividers, gauge tracks, sparkline grid
-constexpr uint16_t kText = 0xFFFF;
-constexpr uint16_t kDim = 0x8410;
-constexpr uint16_t kFaint = 0x4208;     // "no data"
-constexpr uint16_t kVolt = 0xFFE0;      // yellow: V, CC pill, VBUS trace
-constexpr uint16_t kAmp = 0x07FF;       // cyan: A, FIX PDO, protocol pills
-constexpr uint16_t kWatt = 0xFB2C;      // coral: W, PPS PDO, W bars only (never a warning colour)
-constexpr uint16_t kEnergy = 0x07E0;    // green: Wh, active contract, PD pill
-constexpr uint16_t kCharge = 0x5D1F;    // blue: Ah
-constexpr uint16_t kOhm = 0xB5B6;       // silver: load R
-constexpr uint16_t kDPlus = 0xFB20;     // orange D+ tag
-constexpr uint16_t kDMinus = 0x2D7F;    // blue D- tag
-constexpr uint16_t kFlow = 0x07E0;      // flow arrows and chevrons: one colour for both directions
-constexpr uint16_t kOk = 0x07E0;
-constexpr uint16_t kCaution = 0xFC00;   // amber
-constexpr uint16_t kError = 0xF800;
-constexpr uint16_t kWarn = kError;      // legacy name
-constexpr uint16_t kStale = 0xC618;     // frozen values, LAST pill
-constexpr uint16_t kFocus = 0x07FF;     // selected row bar, edit underline, current page dot
-constexpr uint16_t kVoltT = 0x2120, kAmpT = 0x0124, kWattT = 0x3083, kEnergyT = 0x0120, kOkT = 0x0120;
-constexpr uint16_t kChargeT = 0x0866, kCautionT = 0x2900, kErrorT = 0x3000, kStaleT = 0x2104;
-constexpr uint16_t kFocusT = 0x0146, kDimT = 0x2104, kDPlusT = 0x3080, kDMinusT = 0x0108, kFaintT = 0x1082;
-// Home trend sweep: the 1 px level line above a tint column, one dim step brighter than the tint.
-constexpr uint16_t kVoltL = 0x6B40, kAmpL = 0x0350, kWattL = 0x6945;
-constexpr uint16_t kPanelBg = 0x2104;
-constexpr uint16_t kPanelHi = 0x07FF;   // pressed slot
-constexpr uint16_t kPanelLine = 0x8410;   // slot divider: light grey, clearly visible on kPanelBg
+// RGB565 palette tokens. The values are the theme's (k2/ui/theme.hpp): three const tables in flash, one copied into
+// theme::pal at boot. Each name is a reference into that copy, so a token is a run-time read, never a constant
+// expression. The legacy names (kText, kVolt, kFocusT ...) keep their meaning per theme; new code uses the Fieldbook
+// names below them (docs/UI_SYSTEM.md "Palette").
+#define K2_TOKEN(name, field) inline const uint16_t &name = theme::pal.field;
+K2_TOKEN(kBg, bg)
+K2_TOKEN(kSurface, surface)     // cards, flow-diagram panel
+K2_TOKEN(kSurface2, surface2)   // overlays
+K2_TOKEN(kBar, bar)             // title / status bar ground
+K2_TOKEN(kRule, rule)           // dividers, gauge tracks
+K2_TOKEN(kText, ink)
+K2_TOKEN(kDim, ink2)
+K2_TOKEN(kFaint, ink3)          // "no data"
+K2_TOKEN(kVolt, l_volt)         // V text (Classic yellow; ink on Paper and Night)
+K2_TOKEN(kAmp, l_amp)
+K2_TOKEN(kWatt, l_watt)
+K2_TOKEN(kEnergy, l_energy)
+K2_TOKEN(kCharge, l_charge)
+K2_TOKEN(kOhm, l_ohm)
+K2_TOKEN(kDPlus, l_dplus)
+K2_TOKEN(kDMinus, l_dminus)
+K2_TOKEN(kFlow, l_flow)
+K2_TOKEN(kOk, ok)
+K2_TOKEN(kCaution, warn)        // amber
+K2_TOKEN(kError, err)
+K2_TOKEN(kWarn, err)            // legacy name of kError
+K2_TOKEN(kStale, l_stale)       // frozen values, LAST pill
+K2_TOKEN(kFocus, l_focus)       // selected row bar, picked markers, progress
+K2_TOKEN(kVoltT, l_volt_t) K2_TOKEN(kAmpT, l_amp_t) K2_TOKEN(kWattT, l_watt_t) K2_TOKEN(kEnergyT, l_energy_t)
+K2_TOKEN(kOkT, ok_t) K2_TOKEN(kChargeT, l_charge_t) K2_TOKEN(kCautionT, warn_t) K2_TOKEN(kErrorT, err_t)
+K2_TOKEN(kStaleT, stale) K2_TOKEN(kFocusT, l_focus_t) K2_TOKEN(kDimT, l_dim_t) K2_TOKEN(kDPlusT, l_dplus_t)
+K2_TOKEN(kDMinusT, l_dminus_t) K2_TOKEN(kFaintT, l_faint_t)
+// Trend sweep: the 1 px level line above a tint column.
+K2_TOKEN(kVoltL, l_volt_l) K2_TOKEN(kAmpL, l_amp_l) K2_TOKEN(kWattL, l_watt_l)
+K2_TOKEN(kPanelBg, bg2)
+K2_TOKEN(kPanelHi, l_panel_hi)     // pressed slot
+K2_TOKEN(kPanelLine, l_panel_line) // slot divider
+
+// ---- Fieldbook tokens (theme.hpp; CONCEPT section 3) ----
+K2_TOKEN(kBg2, bg2)             // key rail, bar tracks, neutral chips
+K2_TOKEN(kInk, ink)             // text
+K2_TOKEN(kInk2, ink2)           // keys, notes, tails
+K2_TOKEN(kInk3, ink3)           // placeholders, dot leaders, blocked rows (never a value)
+K2_TOKEN(kOnInk, on_ink)        // text on an inverted block
+K2_TOKEN(kOnInkDim, on_ink_dim)
+K2_TOKEN(kInkLift, ink_lift)    // trend and bar track on the W field
+K2_TOKEN(kStaleFill, stale)     // a field holding a last reading
+K2_TOKEN(kStaleInk, stale_ink)  // digits of a stale field
+K2_TOKEN(kSpotVolt, volt) K2_TOKEN(kSpotVoltD, volt_d) K2_TOKEN(kSpotAmp, amp) K2_TOKEN(kSpotAmpD, amp_d)
+K2_TOKEN(kErrD, err_d)
+K2_TOKEN(kSpotInk, spot_ink)    // text on a spot fill (volt, amp, ok, warn)
+K2_TOKEN(kErrInk, err_ink)      // text on the error red
+K2_TOKEN(kFocusFill, focus) K2_TOKEN(kOnFocus, on_focus) K2_TOKEN(kOnFocusDim, on_focus_dim)
+K2_TOKEN(kFocusBar, focus_bar)  // 0 = none
+K2_TOKEN(kAccent, accent)       // masthead rule, progress, picked markers, running outline, Bench line
+K2_TOKEN(kCap, cap) K2_TOKEN(kOnCap, on_cap)          // the OK cap of the key rail
+K2_TOKEN(kTicket, ticket) K2_TOKEN(kOnTicket, on_ticket)
+K2_TOKEN(kTicketFrame, ticket_frame)                  // 0 = none
+K2_TOKEN(kChip, chip) K2_TOKEN(kOnChip, on_chip)      // solid state chips, line tags
+K2_TOKEN(kWattFill, watt) K2_TOKEN(kWattInk, watt_ink) K2_TOKEN(kWattD, watt_d) K2_TOKEN(kWattDim, watt_dim)
+K2_TOKEN(kQrLt, qr_lt) K2_TOKEN(kQrDk, qr_dk)
+K2_TOKEN(kPassFill, pass) K2_TOKEN(kOnPass, on_pass) K2_TOKEN(kPartFill, part) K2_TOKEN(kOnPart, on_part)
+#undef K2_TOKEN
+inline constexpr uint16_t kAlarmInk = theme::kAlarmInk;   // white on red, every theme
 
 // Slot lengths along the panel (pixels) come from kSlotLenPx (ui_labels.hpp). Each centre is the
 // slot start + len / 2, so the slots tile 0..240. To follow measured button positions, change the

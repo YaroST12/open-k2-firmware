@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/list_view.hpp"
+#include "k2/ui/theme.hpp"
 
 namespace k2 {
 
 namespace {
-constexpr uint16_t kBg = 0x0000;
-constexpr uint16_t kTrack = 0x2104;
-constexpr uint16_t kThumb = 0x8410;
+// The theme's ground, and the scroll lane: a thumb in ink2 on the ground (Fieldbook has no track; Classic keeps its panel grey).
+const uint16_t &kBg = theme::pal.bg;
+const uint16_t &kTrack = theme::pal.bg;
+const uint16_t &kThumb = theme::pal.ink2;
 }
 
 void ListView::init(const Surface &s, int16_t x, int16_t y, uint8_t chars, int16_t row_h, int rows,

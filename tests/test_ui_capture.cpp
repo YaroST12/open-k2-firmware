@@ -177,6 +177,11 @@ static int count_colours(int x0, int y0, int x1, int y1, std::initializer_list<u
             for (uint16_t c : cols) n += g_panel[y * 240 + x] == c;
     return n;
 }
+// The fact line (panel rows 222..239 of the content) carries something besides the ground: an Info line is the ground
+// with a rule row and dim text, so its fill alone cannot tell it is there.
+static bool footer_painted() {
+    return count_colours(0, 222, 224, 240, {k2::kBg}) < 224 * 18;
+}
 // Stale Home is grey end to end: no measurement colour in the readouts, the strips or the energy row;
 // the status bar below y 18 is untouched by this check.
 static void check_home_all_grey(const char *what) {
@@ -1016,7 +1021,7 @@ int main() {
     ui.goto_page(kPdPage + 1, 9000);                       // Connection > Cable: the stub holds the cable above
     ui.tick(9050);
     test_screen(ui, "conn_cable_full", 9200);
-    CHECK_EQ(g_panel[230 * 240 + 100] != k2::kBg, 1);      // the status bar is painted
+    CHECK_EQ(footer_painted(), 1);                         // the fact line is painted
     ui.on_button(Button::Ok, ButtonEvent::Short, 9300);    // the pop-up over the filled tab
     test_screen(ui, "conn_cable_popup", 9400);
     ui.on_button(Button::Back, ButtonEvent::Short, 9500);
@@ -1133,7 +1138,7 @@ int main() {
     {   // Running: the status bar carries the progress
         g_stub.ident.state = k2::pd::IdState::Running; g_stub.ident.ok_mask = 0x03;
         test_screen(ui, "conn_sink_identify_running", 13900);
-        CHECK_EQ(g_panel[230 * 240 + 100] != k2::kBg, 1);
+        CHECK_EQ(footer_painted(), 1);
         g_stub.ident = {};
     }
     {   // A live sink on the other port: Identify is refused on the first press, the status bar says so
@@ -1163,7 +1168,7 @@ int main() {
         g_stub.ident.revision = 0x30000000;
         g_stub.ident.num_sink_pdos = 1; g_stub.ident.sink_pdos[0] = (uint32_t(400) << 10) | 150;
         test_screen(ui, "conn_sink_result", 14500);
-        CHECK_EQ(g_panel[230 * 240 + 100] != k2::kBg, 1);    // status bar
+        CHECK_EQ(footer_painted(), 1);                       // fact line
         g_stub.sink_vdm = {}; g_stub.ident = {};
     }
     {   // Aborted names its reason: "Aborted: unplugged" runs well past the 7 characters of a bare "Aborted"
@@ -1192,7 +1197,7 @@ int main() {
         ui.on_button(Button::Ok, ButtonEvent::Short, 14817);     // pop-up: Identify is greyed, the status bar names why
         test_screen(ui, "conn_sink_nodevice", 14820);
         int amber = 0;
-        for (int y = 222; y < 240; y++) for (int x = 20; x < 218; x++) amber += g_panel[y * 240 + x] == k2::kCaution;
+        for (int y = 222; y < 240; y++) for (int x = 0; x < 218; x++) amber += g_panel[y * 240 + x] == k2::kCaution;
         CHECK_EQ(amber > 0, 1);
         ui.on_button(Button::Back, ButtonEvent::Short, 14830);   // close the pop-up
         g_stub.pm = saved_pm; g_stub.adc = saved_adc;
@@ -1221,8 +1226,8 @@ int main() {
         key(Button::Minus, ButtonEvent::Long);          // back to 9V
         key(Button::Ok);
         test_screen(ui, "fc_review", t += 100);
-        CHECK_EQ(g_panel[190 * 240 + 1], k2::kFocus);   // the SEND cell: 2 px focus outline
-        CHECK_EQ(g_panel[190 * 240 + 100], k2::kFocusT);
+        CHECK_EQ(g_panel[190 * 240 + 9], k2::kTicketFrame);   // the SEND ticket: inset 8, Classic 2 px frame
+        CHECK_EQ(g_panel[190 * 240 + 100], k2::kTicket);
         key(Button::Ok);
         test_screen(ui, "fc_armed", t += 100);
         CHECK_EQ(g_panel[180 * 240 + 20], k2::kCaution);   // armed: the cell turns amber
@@ -1276,7 +1281,7 @@ int main() {
         g_stub.fc_start_fail = static_cast<int>(k2::fc::Fail::NoBand);
         key(Button::Ok); key(Button::Ok); key(Button::Ok); key(Button::Ok);
         test_screen(ui, "fc_refused", t += 100);
-        CHECK_EQ(g_panel[230 * 240 + 1], k2::kErrorT);                  // refusal: Error band fill, no icon
+        CHECK_EQ(g_panel[230 * 240 + 1], k2::kError);                   // refusal: the solid red fact line, no icon
         CHECK_EQ(count_colours(4, 222, 220, 239, {k2::kError}) > 20, true);
         g_stub.fc_start_fail = 0;
         ui.goto_page(static_cast<uint8_t>(Page::Home), t += 100);
@@ -1342,9 +1347,9 @@ int main() {
     g_stub.pm.vbus_mv = 4900; g_stub.pm.current_ma = -2050;
     ui.tick(5700);
     test_screen(ui, "cable_result", 5200);
-    {   // edge-to-edge: rules at the top of every row and under the table, no card fill anywhere in the body
-        CHECK_EQ(g_panel[24 * 240 + 100], k2::kRule);
-        CHECK_EQ(g_panel[(24 + 3 * 26) * 240 + 2], k2::kRule);
+    {   // a receipt: no rules between the rows, no card fill anywhere in the body
+        CHECK_EQ(g_panel[24 * 240 + 100], k2::kBg);
+        CHECK_EQ(g_panel[(24 + 3 * 26) * 240 + 2], k2::kBg);
         int card = 0;
         for (int y = 24; y < 222; y++) for (int x = 0; x < 220; x++) card += g_panel[y * 240 + x] == k2::kSurface;
         CHECK_EQ(card, 0);
@@ -1355,7 +1360,7 @@ int main() {
         CHECK_EQ(scale, 66);
         CHECK_EQ(g_panel[(103 + 64 + 2) * 240 + 100], k2::kRule);    // the other two segments stay unlit
     }
-    CHECK_EQ(g_panel[230 * 240 + 100] != k2::kBg, 1);      // footer band
+    CHECK_EQ(footer_painted(), 1);                         // fact line
     g_stub.pm.vbus_mv = 4300; g_stub.pm.current_ma = -4050;
     ui.tick(5800);
     test_screen(ui, "cable_poor", 5200);
@@ -1581,7 +1586,7 @@ int main() {
         test_screen(ui, "bb_link", 43330);
         check_steady(ui, "bb_link", 43335);
         CHECK_EQ(g_panel[60 * 240 + 200], k2::kBg);                // key/value rows on the page, no cards
-        CHECK_EQ(g_panel[44 * 240 + 150], k2::kRule);              // the hairline over the first row
+        CHECK_EQ(g_panel[44 * 240 + 150], k2::kBg);                // no hairline over the first row (a receipt)
         ui.on_button(Button::Back, ButtonEvent::Short, 43340);
         ui.on_button(Button::Back, ButtonEvent::Short, 43350);     // list
         ui.on_button(Button::Plus, ButtonEvent::Short, 43355);     // the visible "Live link" row below the captures

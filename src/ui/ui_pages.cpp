@@ -187,8 +187,9 @@ void PageBase::title_bar() {
     const bool menu = is_menu();
     const char *name = menu ? title_ : kBarNames[static_cast<int>(id_)];
     char badge[11];
-    const std::string_view role = menu ? std::string_view(fusb302::self_powered() ? "SNK" : "PAS")
-                                       : role_badge(fusb302::pin_rd(), badge);
+    std::string_view role = menu ? std::string_view(fusb302::self_powered() ? "SNK" : "PAS")
+                                 : role_badge(fusb302::pin_rd(), badge);
+    if (role == "PAS") role = {};   // Fieldbook: the masthead carries a role only as an exception (a held Rd pin, a sink)
     // The readout area is the page's update() job (title_badge, always called first thing and always repainting after this).
     draw_status_left(ctx_.content, menu && has_icon_, icon_, name, 132, role, true);
 }
@@ -319,9 +320,6 @@ void detail_offer_text(const pd::SourceCaps &caps, StrBuf<28> &out) {
     out.put_u32(mw / 1000).put("W max, ").put_u32(static_cast<uint32_t>(caps.num_pdos)).put(" PDO");
 }
 
-namespace {
-constexpr uint16_t kRailLevel[3] = {0x0200, 0x0400, kFlow};   // dim, mid, bright green
-}
 
 void home_cc_text(int cc, int32_t mv, StrBuf<10> &out) {
     out.put("CC").put_char(cc == 1 ? '1' : cc == 2 ? '2' : '-').put_char(' ');
@@ -711,7 +709,7 @@ constexpr int16_t kLnRowY0 = 24, kLnRowPitch = 26;
 constexpr int16_t kLnRowY(int i) { return static_cast<int16_t>(kLnRowY0 + i * kLnRowPitch); }
 constexpr int16_t kLnBarX = 96, kLnBarH = 12;
 constexpr int16_t kVerdictY = 140;                     // first hairline of the verdict rows
-constexpr uint16_t kLnColor[4] = {kDPlus, kDMinus, kVolt, kVolt};
+const uint16_t *const kLnColor[4] = {&kDPlus, &kDMinus, &kVolt, &kVolt};
 constexpr const char *kLnTag[4] = {"D+", "D-", "CC1", "CC2"};
 constexpr kit::KvLayout kLnKv{kVerdictY + 26, 26, 6, &kLabelFont, nullptr, 40, 16, Align::Left};   // Rp and MCU rows
 
@@ -760,7 +758,7 @@ void LinesPage::draw_static() {
     if (!ctx_.blank) lay_ground();
     for (int i = 0; i <= 4; i++) gfx_fill(c, 0, kLnRowY(i), c.w, 1, kRule);
     for (int i = 0; i < 4; i++) {
-        draw_pill(c, 6, static_cast<int16_t>(kLnRowY(i) + 5), kLnTag[i], kLnColor[i], 0, true);
+        draw_pill(c, 6, static_cast<int16_t>(kLnRowY(i) + 5), kLnTag[i], *kLnColor[i], 0, true);
         v_[i].init(c, kSmall, static_cast<int16_t>(kLnBarX - 4 * kSmall.adv), static_cast<int16_t>(kLnRowY(i) + 5), 4, Align::Right, kText, kBg);
         px_[i] = -1;
     }
@@ -783,7 +781,7 @@ void LinesPage::paint_bar(int i, int32_t mv, bool have) {
     const Surface &c = ctx_.content;
     const int16_t y = static_cast<int16_t>(kLnRowY(i) + 7);
     gfx_fill(c, kLnBarX, y, kLinesBarW, kLnBarH, kBg);
-    if (px > 0) gfx_fill(c, kLnBarX, y, static_cast<int16_t>(px), kLnBarH, kLnColor[i]);
+    if (px > 0) gfx_fill(c, kLnBarX, y, static_cast<int16_t>(px), kLnBarH, *kLnColor[i]);
     for (int32_t t : {kLinesTickLowMv, kLinesTickHighMv})   // the ticks sit over the bar
         gfx_fill(c, static_cast<int16_t>(kLnBarX + lines_tick_px(t)), static_cast<int16_t>(kLnRowY(i) + 4), 1, 18, kDim);
 }
@@ -2013,8 +2011,8 @@ void SettingsPage::draw_static() {
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kTitles[kRows] = {"USB Link", "Autorotate", "Rotate buttons", "Screenshot", "Smoothing",
-                                                   "Wake sleeping port"};
-    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug};
+                                                   "Wake sleeping port", "Theme"};
+    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug, Icon::Info};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     const auto *self = static_cast<const SettingsPage *>(ctx);
@@ -2054,11 +2052,18 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = kPresetNotes[p < smoothing::kPresetCount ? p : 0];
         break;
     }
-    default: {   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
+    case 5: {   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
         const bool on = fusb302::idle_wake();
         out.tail = on ? "ON" : "OFF";
         out.tail_color = on ? kOk : kDim;
         out.note = on ? "Idle Rd on a sleeping port" : "Idle stays passive";
+        break;
+    }
+    default: {   // the theme the next boot applies; a change waits for the reboot (no run-time repaint path)
+        static constexpr const char *kNotes[theme::kCount] = {"light ink on a dark ground", "dark ink on paper",
+                                                              "the first firmware colours"};
+        out.tail = theme::name(theme::chosen());
+        out.note = theme::reboot_pending() ? "reboot to apply" : kNotes[static_cast<int>(theme::chosen())];
         break;
     }
     }
@@ -2068,8 +2073,13 @@ void SettingsPage::update(uint32_t) {
     title_badge(false);
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now);
-    draw_footer_cached(ctx_.content, FooterTone::Info,
-                       sel_ >= 2 ? "Remembered across boots" : "Opens a settings page", foot_);
+    static constexpr const char *kReboot[theme::kCount] = {"Reboot to apply: Night", "Reboot to apply: Paper",
+                                                           "Reboot to apply: Classic"};
+    if (theme::reboot_pending())
+        draw_footer_cached(ctx_.content, FooterTone::Caution, kReboot[static_cast<int>(theme::chosen())], foot_);
+    else
+        draw_footer_cached(ctx_.content, FooterTone::Info,
+                           sel_ >= 2 ? "Remembered across boots" : "Opens a settings page", foot_);
 }
 
 bool SettingsPage::on_event(Event e) {
@@ -2084,6 +2094,13 @@ bool SettingsPage::on_event(Event e) {
             p.smoothing = smoothing::preset_from_index((static_cast<unsigned>(power::smoothing_preset()) + 1) % smoothing::kPresetCount);
             uiprefs::set(p);
             power::set_smoothing(p.smoothing);
+            update(ctx_.now);
+        } else if (sel_ == 6) {   // Night -> Paper -> Classic -> Night; remembered, in force from the next boot
+            uiprefs::Prefs p = uiprefs::stored();
+            const auto next = theme::id_from((static_cast<unsigned>(theme::chosen()) + 1) % theme::kCount);
+            p.theme = static_cast<uint8_t>(next);
+            uiprefs::set(p);
+            theme::choose(next);
             update(ctx_.now);
         } else if (sel_ == 5) {   // remembered in the same record, applied at once (off drops a running hold)
             uiprefs::Prefs p = uiprefs::stored();
@@ -2109,7 +2126,7 @@ bool SettingsPage::on_event(Event e) {
 }
 
 PanelLabels SettingsPage::labels() const {
-    PanelLabels labels = setting_labels(base_labels(), sel_ >= 2 ? sel_ == 4 ? "Cycle" : "Toggle" : "Open");
+    PanelLabels labels = setting_labels(base_labels(), sel_ >= 2 ? sel_ == 4 || sel_ == 6 ? "Cycle" : "Toggle" : "Open");
     labels.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};
     return labels;
 }

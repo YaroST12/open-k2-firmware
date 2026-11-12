@@ -20,8 +20,9 @@ static uint16_t px(int x, int y) { return g_panel[y * LCD_WIDTH + x]; }
 static void test_single_pass_updates() {
     const Surface content{0, 0, 224, 240};
     clear();
-    gfx_fill(content, 0, kFooterY, content.w, 240 - kFooterY, kOkT);
-    gfx_text(content, kSmall, kFooterTextX, kFooterY + 1, "All subsystems up", kOk, kOkT);
+    gfx_fill(content, 0, kFooterY, content.w, 240 - kFooterY, kOkT);   // Fieldbook Ok fact line: tint, 4 px bar, ink text
+    gfx_fill(content, 0, kFooterY, kFooterBarW, 240 - kFooterY, kOk);
+    gfx_text(content, kSmall, kFooterTextX, kFooterY + 1, "All subsystems up", kInk, kOkT);
     std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> expected;
     std::copy(std::begin(g_panel), std::end(g_panel), expected.begin());
     draw_footer(content, FooterTone::Caution, "Another status");
@@ -32,10 +33,11 @@ static void test_single_pass_updates() {
     CHECK_EQ(std::equal(expected.begin(), expected.end(), std::begin(g_panel)), true);
 
     clear();
-    gfx_fill(content, 140, 0, content.w - 140, kBarH - 1, kBar);   // band rows, not the hairline row
-    gfx_text(content, kLabelFont, 152, kBarTextY, "20.0V", kVolt, kBar);
-    gfx_text(content, kLabelFont, 184, kBarTextY, "\xC3\x97", kDim, kBar);
-    gfx_text(content, kLabelFont, 190, kBarTextY, "2.99A", kAmp, kBar);
+    gfx_fill(content, 140, 0, content.w - 140, kBarH - 1, kBar);   // band rows, not the rule row
+    gfx_fill(content, kMastVoltKeyX, kMastKeyY, kMastKeyW, kMastKeyH, kSpotVolt);   // each value led by its colour key, ink text
+    gfx_fill(content, kMastAmpKeyX, kMastKeyY, kMastKeyW, kMastKeyH, kSpotAmp);
+    gfx_text(content, kLabelFont, kMastVoltX, kBarTextY, "20.0V", kInk, kBar);
+    gfx_text(content, kLabelFont, kMastAmpX, kBarTextY, "2.99A", kInk, kBar);
     std::copy(std::begin(g_panel), std::end(g_panel), expected.begin());
     draw_top_readout(content, StatusReadout::Stale, "9.00V", "");   // the LAST pill, then the live readout again
     draw_top_readout(content, StatusReadout::Live, "20.0V", "2.99A");
@@ -124,24 +126,27 @@ static void test_icon() {
     CHECK_EQ(static_cast<int>(Icon::Info) + 1, kIconCount);   // Info is the last icon
 }
 
-// The footer tone table: the tone is the band FILL (neutral bar, green, amber, red tint) with its text colour.
+// The fact line's tone table (Fieldbook): Info = the ground with a rule on top and ink2 text; Ok / Caution = the tint with
+// a 4 px bar of the tone and ink text; Error = solid red with the on-red ink.
 static void test_footer_tones() {
-    struct Row { FooterTone tone; uint16_t fill; uint16_t text; };
-    static constexpr Row kTable[] = {
-        {FooterTone::Info, kBar, kText},
-        {FooterTone::Ok, kOkT, kOk},
-        {FooterTone::Caution, kCautionT, kCaution},
-        {FooterTone::Error, kErrorT, kError},
+    struct Row { FooterTone tone; uint16_t fill; uint16_t text; uint16_t bar; };
+    const Row kTable[] = {
+        {FooterTone::Info, kBg, kInk2, 0},
+        {FooterTone::Ok, kOkT, kInk, kOk},
+        {FooterTone::Caution, kCautionT, kInk, kCaution},
+        {FooterTone::Error, kError, kErrInk, 0},
     };
     for (const Row &r : kTable) {
         const FooterStyle s = footer_style(r.tone);
         CHECK_EQ(s.fill, r.fill);
         CHECK_EQ(s.text, r.text);
+        CHECK_EQ(s.bar, r.bar);
     }
-    // Only the Ok tone may carry the ok fill or the ok colour.
+    CHECK_EQ(footer_style(FooterTone::Info).rule, kRule);
+    // Only the Ok tone may carry the ok fill or the ok bar.
     for (FooterTone t : {FooterTone::Info, FooterTone::Caution, FooterTone::Error}) {
         CHECK_EQ(footer_style(t).fill == kOkT, false);
-        CHECK_EQ(footer_style(t).text == kOk, false);
+        CHECK_EQ(footer_style(t).bar == kOk, false);
     }
     // footer_tone_of maps a status colour a caller holds; anything else is neutral.
     CHECK_EQ(static_cast<int>(footer_tone_of(kOk)), static_cast<int>(FooterTone::Ok));
@@ -149,11 +154,12 @@ static void test_footer_tones() {
     CHECK_EQ(static_cast<int>(footer_tone_of(kError)), static_cast<int>(FooterTone::Error));
     CHECK_EQ(static_cast<int>(footer_tone_of(kDim)), static_cast<int>(FooterTone::Info));
     CHECK_EQ(static_cast<int>(footer_tone_of(kVolt)), static_cast<int>(FooterTone::Info));
-    // The drawn band carries the fill at its left margin and under the right margin, with no icon.
+    // The drawn band carries the bar (or the fill) at its left edge and the fill under the right margin, with no icon.
     for (const Row &r : kTable) {
         clear(0x0003);
         draw_footer(kScr, r.tone, "State. Action");
-        CHECK_EQ(px(1, 230), r.fill);
+        CHECK_EQ(px(1, 230), r.bar ? r.bar : r.fill);
+        CHECK_EQ(px(6, 230), r.fill);
         CHECK_EQ(px(223, 239), r.fill);
     }
 }
@@ -286,20 +292,22 @@ static void test_footer() {
     CHECK_EQ(px(100, kFooterY), kOkT);            // band y 222..239, full content width, filled by the tone
     CHECK_EQ(px(223, 239), kOkT);
     CHECK_EQ(px(0, kFooterY - 1), 0x0003);        // nothing above the band
-    bool text = false, left = false;
+    bool text = false, bar = true, gap = false;
     for (int y = kFooterY; y < 240; y++) {
-        for (int x = 0; x < 4; x++) if (px(x, y) != kOkT) left = true;
-        for (int x = 4; x < 223; x++) if (px(x, y) != kOkT) text = true;
+        for (int x = 0; x < kFooterBarW; x++) bar &= px(x, y) == kOk;
+        for (int x = kFooterBarW; x < kFooterTextX; x++) if (px(x, y) != kOkT) gap = true;
+        for (int x = kFooterTextX; x < 223; x++) if (px(x, y) != kOkT) text = true;
     }
-    CHECK_EQ(left, 0);                            // no icon: the margin x0..3 stays plain fill
-    CHECK_EQ(text, 1);                            // the text starts at x 4
+    CHECK_EQ(bar, 1);                             // the tone bar x0..3, no icon
+    CHECK_EQ(gap, 0);                             // then plain fill up to the text
+    CHECK_EQ(text, 1);                            // the text starts at x 8
     bool early = false;
-    for (int y = kFooterY; y < 240; y++) for (int x = 4; x < 12; x++) if (px(x, y) != kOkT) early = true;
+    for (int y = kFooterY; y < 240; y++) for (int x = 8; x < 16; x++) if (px(x, y) != kOkT) early = true;
     CHECK_EQ(early, 1);
 }
 
 static void test_footer_fit() {
-    // Too long for the band: it is cut with "..." and nothing is painted past x 219. (This is the device's last
+    // Too long for the band: it is cut with "..." and nothing is painted past the content edge. (This is the device's last
     // resort; the fixture is deliberately over long, so it is outside the no-truncation gate.)
     trunc::Pause allowed;
     const char *longs[] = {"No VBUS. Plug a source in and wait for the PD contract to settle",
@@ -308,16 +316,16 @@ static void test_footer_fit() {
         clear(0x0003);
         draw_footer(kScr, FooterTone::Info, t);
         int last = -1;
-        for (int y = kFooterY; y < 240; y++) for (int x = 0; x < 224; x++) if (px(x, y) != kBar) last = x > last ? x : last;
+        for (int y = kFooterY + 1; y < 240; y++) for (int x = 0; x < 224; x++) if (px(x, y) != kBg) last = x > last ? x : last;
         CHECK_EQ(last >= 100, 1);
-        CHECK_EQ(last < 220, 1);
+        CHECK_EQ(last < 224, 1);
     }
-    // A text that fits is untouched: 26 characters at x 4 end near x 212.
+    // A text that fits is untouched: 26 characters at x 8 end near x 216.
     clear(0x0003);
     draw_footer(kScr, FooterTone::Info, "D+/D- dividers: Apple 2.4A");
     int last = -1;
-    for (int y = kFooterY; y < 240; y++) for (int x = 20; x < 224; x++) if (px(x, y) != kBar) last = x > last ? x : last;
-    CHECK_EQ(last > 190 && last < 214, 1);
+    for (int y = kFooterY + 1; y < 240; y++) for (int x = 20; x < 224; x++) if (px(x, y) != kBg) last = x > last ? x : last;
+    CHECK_EQ(last > 194 && last < 218, 1);
 }
 
 static void test_role_badge() {
@@ -334,34 +342,37 @@ static void test_role_badge() {
 }
 
 static void test_status_bar() {
-    CHECK_EQ(kBarH, 21);                       // 20 px chrome bar + the 1 px hairline below it
+    CHECK_EQ(kBarH, 21);                       // 20 px masthead + the 1 px accent rule below it
 
     clear(0x0004);
     draw_status_left(kScr, false, Icon::Bolt, "Home");
     bool volt = false;
-    for (int y = 0; y < kBarH - 1; y++) for (int x = 4; x < 32; x++) if (px(x, y) == kText) volt = true;
+    for (int y = 0; y < kBarH - 1; y++) for (int x = kMastTitleX; x < 48; x++) if (px(x, y) == kInk) volt = true;
     CHECK_EQ(volt, 1);                         // the page name on the left
     CHECK_EQ(px(100, 1), kBar);                // the whole band is the bar colour
     bool hairline = true;
-    for (int x = 0; x < 224; x++) hairline &= px(x, kBarH - 1) == kRule;
-    CHECK_EQ(hairline, 1);                     // the hairline below the bar
-    CHECK_EQ(px(100, kBarH), 0x0004);          // nothing below the hairline
+    for (int x = 0; x < 224; x++) hairline &= px(x, kBarH - 1) == kAccent;
+    CHECK_EQ(hairline, 1);                     // the accent rule below the masthead
+    CHECK_EQ(px(100, kBarH), 0x0004);          // nothing below the rule
 
     clear(0x0004);
     std::array<char, 8> v5{}, v3{};            // fixed slots: same start x for any value
-    draw_status_left(kScr, false, Icon::Bolt, "X");   // the hairline belongs to the title pass
+    draw_status_left(kScr, false, Icon::Bolt, "X");   // the rule belongs to the title pass
     draw_top_readout(kScr, StatusReadout::Live, "20.0V", "1.52A");
     volt = false;
-    bool amp = false, mid = false;
+    bool amp = false, vkey = true, akey = true;
     for (int y = 0; y < kBarH; y++) {
-        for (int x = 152; x < 182; x++) if (px(x, y) == kVolt) volt = true;
-        for (int x = 184; x < 190; x++) if (px(x, y) == kDim) mid = true;
-        for (int x = 190; x < 218; x++) if (px(x, y) == kAmp) amp = true;
+        for (int x = kMastVoltX; x < kMastVoltX + 30; x++) if (px(x, y) == kInk) volt = true;
+        for (int x = kMastAmpX; x < kMastAmpX + 30; x++) if (px(x, y) == kInk) amp = true;
     }
-    CHECK_EQ(volt, 1); CHECK_EQ(mid, 1); CHECK_EQ(amp, 1);
+    for (int y = kMastKeyY; y < kMastKeyY + kMastKeyH; y++) for (int x = 0; x < kMastKeyW; x++) {
+        vkey &= px(kMastVoltKeyX + x, y) == kSpotVolt;   // each value led by its colour key
+        akey &= px(kMastAmpKeyX + x, y) == kSpotAmp;
+    }
+    CHECK_EQ(volt, 1); CHECK_EQ(amp, 1); CHECK_EQ(vkey, 1); CHECK_EQ(akey, 1);
     hairline = true;
-    for (int x = 140; x < 224; x++) hairline &= px(x, kBarH - 1) == kRule;
-    CHECK_EQ(hairline, 1);                     // the readout passes never touch the hairline row
+    for (int x = 140; x < 224; x++) hairline &= px(x, kBarH - 1) == kAccent;
+    CHECK_EQ(hairline, 1);                     // the readout passes never touch the rule row
     CHECK_EQ(px(100, 0), kBar);                // the left of the bar belongs to the title
 
     clear(0x0004);
@@ -371,7 +382,7 @@ static void test_status_bar() {
         for (int x = 140; x < 224; x++) {
             if (px(x, y) == kStale) stale = true;
         }
-        for (int x = 190; x < 218; x++) if (px(x, y) == kVolt) pill = true;
+        for (int x = 190; x < 218; x++) if (px(x, y) == kSpotVolt) pill = true;
     }
     CHECK_EQ(stale, 1);                        // the LAST pill in the stale grey, right-aligned
     CHECK_EQ(pill, 0);                         // the frozen readout makes room and hides
@@ -397,7 +408,7 @@ static void test_status_bar_flow() {
         for (int y = 0; y < kBarH - 1; y++) for (int x = 140; x < 152; x++) {
             const bool in = x >= x0 && x < x0 + w && y >= y0 && y < y0 + h;
             const bool mask = in && (physical_chevron_row(toward_top, r, y - y0) >> (x - x0) & 1);
-            CHECK_EQ(px(x, y) == kFlow, mask);
+            CHECK_EQ(px(x, y) == kInk, mask);
             n += mask;
         }
         CHECK_EQ(n, 22);                        // apex row 2 px plus five rows of 4 px: the same shape at every rotation
@@ -406,19 +417,19 @@ static void test_status_bar_flow() {
     clear(0x0004);
     draw_top_readout(kScr, StatusReadout::Live, "20.0V", "1.52A", Arrow::Up, 0);
     int top = 0, bot = 0;
-    for (int x = 140; x < 150; x++) { top += px(x, 7) == kFlow; bot += px(x, 12) == kFlow; }
+    for (int x = 140; x < 150; x++) { top += px(x, 7) == kInk; bot += px(x, 12) == kInk; }
     CHECK_EQ(top, 2); CHECK_EQ(bot, 4);
     clear(0x0004);
     draw_top_readout(kScr, StatusReadout::Live, "20.0V", "1.52A", Arrow::Down, 0);
     top = bot = 0;
-    for (int x = 140; x < 150; x++) { top += px(x, 7) == kFlow; bot += px(x, 12) == kFlow; }
+    for (int x = 140; x < 150; x++) { top += px(x, 7) == kInk; bot += px(x, 12) == kInk; }
     CHECK_EQ(top, 4); CHECK_EQ(bot, 2);
     // Idle, stale and empty bars draw no direction.
     for (StatusReadout m : {StatusReadout::Live, StatusReadout::Stale, StatusReadout::None}) {
         clear(0x0004);
         draw_top_readout(kScr, m, "20.0V", "1.52A", m == StatusReadout::Live ? Arrow::Idle : Arrow::Up, 0);
         int flow = 0;
-        for (int y = 0; y < kBarH; y++) for (int x = 140; x < 224; x++) flow += px(x, y) == kFlow;
+        for (int y = 0; y < kBarH; y++) for (int x = 140; x < 150; x++) flow += px(x, y) == kInk;
         CHECK_EQ(flow, 0);
     }
 }

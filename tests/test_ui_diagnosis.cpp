@@ -75,11 +75,11 @@ static void test_page_case1() {
     CHECK(rows >= 6);
     CHECK_EQ(ui.diagnosis_page().list_state().count, int(rows));
     CHECK_EQ(ui.diagnosis_page().selected(), 0);
-    // The first row is the worst finding: a Fail cell (solid red) and the red-tinted footer.
+    // The first row is the worst finding: a Fail cell (solid red) and the solid red fact line.
     diag::screen::Row r0;
     CHECK(diag::screen::row(case1, 0, r0));
     CHECK_EQ(int(r0.sev), int(diag::Sev::Fail));
-    CHECK(count_px(kErrorT) > 3000);                 // the footer band, 220 x 18
+    CHECK(count_px(kError) > 3000);                  // the fact line, 224 x 18, solid red
     CHECK(count_px(kError) > 100);                   // the fail cell
     // PLUS walks down to the last row and stops there; MINUS walks back.
     for (unsigned i = 0; i < rows + 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 1300 + i);

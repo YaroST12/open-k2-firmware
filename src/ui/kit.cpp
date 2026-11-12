@@ -70,6 +70,79 @@ void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t colo
     }
 }
 
+// The comment in kit.hpp. The label sits in the slot's text zone, centred; the ground is painted around the label, the cap
+// and the triangle, which cover their own pixels.
+void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down) {
+    char text[24];
+    const int along = column ? s.h : s.w;       // slot length along the panel
+    const LabelZone zone = label_zone(along, slot);
+    const std::string_view shrt = lab.shrt;
+    const bool armed = is_ok && shrt == "Confirm";
+    const int tri = !down && (shrt == kUp || shrt == kDn) ? (shrt == kUp ? 1 : -1) : 0;   // reader-up / reader-down triangle
+    const unsigned chars = tri ? 0 : label_text(text, lab, zone.max_chars);
+    const std::string_view label(text, chars);
+    const bool cap = is_ok && chars > 0 && !down;
+    const uint16_t ground = down ? kCap : kBg2;
+    const uint16_t cap_fill = armed ? kCaution : kCap;
+    const uint16_t bg = cap ? cap_fill : ground;
+    const uint16_t fg = down ? kOnCap : cap ? (armed ? kSpotInk : kOnCap)
+                      : lab.dim ? kInk3 : shrt == "Stop" ? kError : kInk2;
+    Box holes[2];
+    int nh = 0;
+    int16_t tx = 0, ty = 0;
+    const int16_t fh = static_cast<int16_t>(kLabelFont.height);
+    const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, label));
+    if (chars > 0) {
+        const int16_t a0 = static_cast<int16_t>(label_origin(zone, chars));
+        tx = column ? static_cast<int16_t>((s.w - fh) / 2) : a0;
+        ty = column ? a0 : static_cast<int16_t>((s.h - fh) / 2);
+        if (cap) {   // the cap spans the zone along the rail and 14 px across it; the text sits on it
+            const int16_t c0 = static_cast<int16_t>(zone.start - 2), cl = static_cast<int16_t>(zone.len + 4);
+            const int16_t across = column ? s.w : s.h, c1 = static_cast<int16_t>((across - 14) / 2);
+            holes[nh++] = column ? Box{c1, c0, 14, cl} : Box{c0, c1, cl, 14};
+        } else {
+            holes[nh++] = {tx, ty, column ? fh : tw, column ? tw : fh};
+        }
+    }
+    Box tri_box{};
+    if (tri) {   // a 9 x 5 triangle (5 x 9 on a column rail) centred in the zone
+        const int16_t cx = static_cast<int16_t>(zone.start + zone.len / 2);
+        tri_box = column ? Box{static_cast<int16_t>((s.w - 5) / 2), static_cast<int16_t>(cx - 4), 5, 9}
+                         : Box{static_cast<int16_t>(cx - 4), static_cast<int16_t>((s.h - 5) / 2), 9, 5};
+        holes[nh++] = tri_box;
+    }
+    fill_except(s, {0, 0, s.w, s.h}, holes, nh, ground);
+    if (cap) {
+        const Box t{tx, ty, column ? fh : tw, column ? tw : fh};
+        fill_except(s, holes[0], &t, 1, cap_fill);
+    }
+    if (chars > 0) {
+        if (column) gfx_text_rot(s, kLabelFont, tx, ty, label, fg, bg, dir);   // glyphs rotated 90 degrees, along the slot
+        else gfx_text(s, kLabelFont, tx, ty, label, fg, bg);
+    }
+    if (!tri) return;
+    // Physical direction of the reader's "up": the row rail reads upright; a column rail's letter tops face left (Ccw) or
+    // right (Cw). Each line of the box is written once: ground, the triangle's span, ground.
+    const bool up = tri > 0;
+    const int toward = !column ? (up ? 0 : 1) : (dir == TextDir::Ccw) == up ? 2 : 3;   // 0 -y, 1 +y, 2 -x, 3 +x
+    const uint16_t ink = lab.dim ? kInk3 : kInk2;
+    for (int i = 0; i < 5; i++) {
+        const int k = toward == 0 || toward == 2 ? i : 4 - i;   // line index from the apex side
+        const int16_t lo = static_cast<int16_t>(4 - k), span = static_cast<int16_t>(2 * k + 1);
+        if (!column) {
+            const int16_t ly = static_cast<int16_t>(tri_box.y + i);
+            gfx_fill(s, tri_box.x, ly, lo, 1, ground);
+            gfx_fill(s, static_cast<int16_t>(tri_box.x + lo), ly, span, 1, ink);
+            gfx_fill(s, static_cast<int16_t>(tri_box.x + lo + span), ly, lo, 1, ground);
+        } else {
+            const int16_t lx = static_cast<int16_t>(tri_box.x + i);
+            gfx_fill(s, lx, tri_box.y, 1, lo, ground);
+            gfx_fill(s, lx, static_cast<int16_t>(tri_box.y + lo), 1, span, ink);
+            gfx_fill(s, lx, static_cast<int16_t>(tri_box.y + lo + span), 1, lo, ground);
+        }
+    }
+}
+
 void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint16_t bg) {
     Box holes[kMaxHoles];
     int m = 0;
@@ -301,7 +374,7 @@ void RowList::init(const Surface &s, int16_t y, RowFn fn, void *ctx) {
     if (rows > ListView::kMaxRows) rows = ListView::kMaxRows;
     list_.init(s, 0, y, 1, kRowH, rows, kSmall, draw_row_cb, this);
     list_.set_row_sig(row_sig_cb, this);
-    list_.set_row_bg(kBg, kFocusT, kRule);
+    list_.set_row_bg(kBg, kFocusFill, kBg);   // Fieldbook: white space between rows, no hairlines
     list_.set_full_lane(true);
     list_.set_self_ground(true);   // draw_row_cb paints the row's ground itself, around its text and marker
     list_.set_highlight(sel_);
@@ -343,8 +416,17 @@ void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &)
     RowSpec sp;
     self->fn_(self->ctx_, index, hi, sp);
     const int16_t y = r.y;
-    const uint16_t bg = hi ? kFocusT : kBg;
-    if (sp.marker == Marker::Icon && sp.marker_color == 0 && hi) sp.marker_color = kFocus;
+    // Focus is inversion: the focused row is a solid focus block and everything on it takes the on-focus inks. Classic
+    // keeps its tinted block, the 3 px bar and the cyan markers.
+    const uint16_t bg = hi ? kFocusFill : kBg;
+    const bool bar = hi && kFocusBar != 0;
+    if (hi && !bar) {   // the inverted block: every ink on it is the on-focus ink (a verdict marker keeps its own fill)
+        sp.text_color = kOnFocus;
+        if (!sp.tail_tint) sp.tail_color = kOnFocusDim;
+        if (sp.marker != Marker::Verdict) sp.marker_color = kOnFocus;
+    } else if (hi && sp.marker == Marker::Icon && sp.marker_color == 0) {
+        sp.marker_color = kAccent;   // Classic: the row keeps its inks on the tint, a plain icon turns cyan
+    }
 
     const int16_t ty = static_cast<int16_t>(y + row_text_y(kRowH, kSmall.height));
     // A yielding tail (a hint, not a value) is left out when the text would not fit beside it; with nothing at the right
@@ -394,8 +476,8 @@ void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &)
         hole(kTextX, static_cast<int16_t>(y + kNoteDy), text_width(kLabelFont, note_v), kLabelFont.height);
     }
 
-    const int16_t gx = hi ? 3 : 0;   // a focused row starts with the 3 px focus bar
-    if (hi) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, static_cast<int16_t>(r.h - 1), kFocus);
+    const int16_t gx = bar ? 3 : 0;   // Classic: a focused row starts with the 3 px focus bar
+    if (bar) gfx_fill(s, 0, static_cast<int16_t>(y + 1), 3, static_cast<int16_t>(r.h - 1), kFocusBar);
     fill_except(s, {gx, static_cast<int16_t>(y + 1), static_cast<int16_t>(self->list_.row_width() - gx), static_cast<int16_t>(r.h - 1)},
                 holes, nh, bg);
 
@@ -410,9 +492,10 @@ void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &)
     } else if (!tail_v.empty()) {
         gfx_text(s, kSmall, static_cast<int16_t>(kTailX - text_width(kSmall, tail_v)), ty, tail_v, sp.tail_color, bg);
     }
-    if (!col2_v.empty()) gfx_text(s, kSmall, kCol2X, ty, col2_v, kDim, bg);
+    const uint16_t dim = hi ? kOnFocusDim : kDim;
+    if (!col2_v.empty()) gfx_text(s, kSmall, kCol2X, ty, col2_v, dim, bg);
     gfx_text(s, kSmall, kTextX, ty, text_v, sp.text_color, bg);
-    if (!note_v.empty()) gfx_text(s, kLabelFont, kTextX, static_cast<int16_t>(y + kNoteDy), note_v, kDim, bg);
+    if (!note_v.empty()) gfx_text(s, kLabelFont, kTextX, static_cast<int16_t>(y + kNoteDy), note_v, dim, bg);
 }
 
 void RowList::draw(uint32_t now_ms) {
@@ -449,10 +532,18 @@ void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, i
     const Font &f = font_or_small(l.label_font);
     for (int i = 0; i < n; i++) {
         const int16_t y = kv_row_y(l, i);
-        gfx_fill(s, 0, y, s.w, 1, kRule);
-        gfx_text(s, f, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, f.height)), labels[i], kDim, kBg);
+        gfx_fill(s, 0, y, s.w, 1, kBg);   // Fieldbook receipt: white space, no hairline (the row stays owned)
+        const int16_t ty = static_cast<int16_t>(y + row_text_y(l.pitch, f.height));
+        gfx_text(s, f, l.label_x, ty, labels[i], kInk2, kBg);
+        draw_leader(s, static_cast<int16_t>(l.label_x + text_width(f, labels[i]) + 5), static_cast<int16_t>(l.value_x - 4),
+                    static_cast<int16_t>(ty + f.ascent - 2));
     }
-    gfx_fill(s, 0, kv_row_y(l, n), s.w, 1, kRule);
+    gfx_fill(s, 0, kv_row_y(l, n), s.w, 1, kBg);
+}
+
+void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
+    for (int x = (x0 + kLeaderPitch - 1) / kLeaderPitch * kLeaderPitch; x + kLeaderDot <= x1; x += kLeaderPitch)
+        gfx_fill(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot, kInk3);
 }
 
 void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {
@@ -484,8 +575,8 @@ void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key
             bool ours K2_TRUNC_DEF) {
     const Font &kf = font_or_small(l.label_font), &vf = font_or_small(l.value_font);
     char buf[kFitBuf];
-    gfx_fill(s, 0, y, s.w, 1, kRule);
-    gfx_text(s, kf, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), key, kDim, kBg);
+    gfx_fill(s, 0, y, s.w, 1, kBg);
+    gfx_text(s, kf, l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), key, kInk2, kBg);
     const int box = l.value_chars * vf.adv;
     gfx_text(s, vf, l.value_x, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)),
              ours ? fit_text(vf, value, box, buf K2_TRUNC_ARG) : fit_data(vf, value, box, buf K2_TRUNC_ARG), value_color, kBg);
@@ -503,11 +594,25 @@ void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint
 }
 
 void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view word) {
-    const uint16_t fill = error ? kError : kCaution;
+    const uint16_t fill = error ? kError : kCaution, ink = error ? kErrInk : kSpotInk;
     gfx_fill(s, 0, y, s.w, kAlertH, fill);
-    draw_warn_triangle(s, 8, static_cast<int16_t>(y + 8), 20, kBg, fill);
+    draw_warn_triangle(s, 8, static_cast<int16_t>(y + 8), 20, ink, fill);
     char buf[kFitBuf];
-    gfx_text(s, kMid, 36, static_cast<int16_t>(y + (kAlertH - kMid.height) / 2), fit_text(kMid, word, s.w - 36 - 4, buf), kBg, fill);
+    gfx_text(s, kMid, 36, static_cast<int16_t>(y + (kAlertH - kMid.height) / 2), fit_text(kMid, word, s.w - 36 - 4, buf), ink, fill);
+    // The hazard stripe under the band: alternating ink and band-colour spans of 6 px, shifted 1 px per row (diagonal
+    // bars 12 px apart). Every pixel is written once.
+    constexpr int kS = kAlertStripeH, kP = 2 * kAlertStripeH;
+    for (int r = 0; r < kS; r++) {
+        const int16_t ry = static_cast<int16_t>(y + kAlertH + r);
+        const int o = kS - 1 - r;
+        for (int x = 0; x < s.w;) {
+            const int pos = ((x - o) % kP + kP) % kP;
+            const bool bar = pos >= kS;
+            const int len = std::min<int>(bar ? kP - pos : kS - pos, s.w - x);
+            gfx_fill(s, static_cast<int16_t>(x), ry, static_cast<int16_t>(len), 1, bar ? fill : ink);
+            x += len;
+        }
+    }
 }
 
 // ---- ActionCell ----------------------------------------------------------------------------------------------------------
@@ -516,11 +621,15 @@ void ActionCell::draw_idle(std::string_view verb, std::string_view hint) {
     sig = mix(mix(sig, verb), hint);
     e_.paint(sig, [&] {
         bar_px_ = -1;
-        gfx_fill(surf_, 0, y_, surf_.w, h_, kFocusT);
-        outline(surf_, 0, y_, surf_.w, h_, 2, kFocus);
+        // The ticket: an ink block inset by the side gutters (Classic: its tint with the 2 px cyan frame).
+        const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
+        gfx_fill(surf_, 0, y_, kTicketInset, h_, kBg);
+        gfx_fill(surf_, static_cast<int16_t>(kTicketInset + w), y_, kTicketInset, h_, kBg);
+        gfx_fill(surf_, kTicketInset, y_, w, h_, kTicket);
+        if (kTicketFrame) outline(surf_, kTicketInset, y_, w, h_, 2, kTicketFrame);
         const int content = kMid.height + (hint.empty() ? 0 : 6 + kLabelFont.height);
         const int16_t top = static_cast<int16_t>(y_ + (h_ - content) / 2);
-        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, verb, kText, kFocusT);
+        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, verb, kOnTicket, kTicket);
         if (hint.empty()) return;
         char buf[kFitBuf];
         constexpr int16_t kTri = 11;
@@ -528,31 +637,35 @@ void ActionCell::draw_idle(std::string_view verb, std::string_view hint) {
         const int tw = kTri + 4 + text_width(kLabelFont, t);
         const int16_t x0 = static_cast<int16_t>((surf_.w - tw) / 2);
         const int16_t ly = static_cast<int16_t>(top + kMid.height + 6);
-        draw_warn_triangle(surf_, x0, static_cast<int16_t>(ly + (kLabelFont.height - kTri) / 2), kTri, kCaution, kFocusT);
-        gfx_text(surf_, kLabelFont, static_cast<int16_t>(x0 + kTri + 4), ly, t, kCaution, kFocusT);
+        draw_warn_triangle(surf_, x0, static_cast<int16_t>(ly + (kLabelFont.height - kTri) / 2), kTri, kCaution, kTicket);
+        gfx_text(surf_, kLabelFont, static_cast<int16_t>(x0 + kTri + 4), ly, t, kOnTicket, kTicket);
     });
 }
 
 void ActionCell::draw_armed(std::string_view word, std::string_view sub, int left_permille) {
     uint32_t sig = mix_u32(mix_init(), 1);
     sig = mix(mix(sig, word), sub);
+    const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
     e_.paint(sig, [&] {
         bar_px_ = -1;
-        gfx_fill(surf_, 0, y_, surf_.w, h_, kCaution);
+        gfx_fill(surf_, 0, y_, kTicketInset, h_, kBg);
+        gfx_fill(surf_, static_cast<int16_t>(kTicketInset + w), y_, kTicketInset, h_, kBg);
+        gfx_fill(surf_, kTicketInset, y_, w, h_, kCaution);
         const int content = kMid.height + 4 + kLabelFont.height;
         const int16_t top = static_cast<int16_t>(y_ + (h_ - kBarH - content) / 2);
-        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, word, kBg, kCaution);
-        centred_text(surf_, kLabelFont, 4, static_cast<int16_t>(surf_.w - 8), static_cast<int16_t>(top + kMid.height + 4), sub, kBg, kCaution);
+        centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, word, kSpotInk, kCaution);
+        centred_text(surf_, kLabelFont, 4, static_cast<int16_t>(surf_.w - 8), static_cast<int16_t>(top + kMid.height + 4), sub, kSpotInk, kCaution);
     });
     if (left_permille < 0) left_permille = 0;
     if (left_permille > 1000) left_permille = 1000;
-    const int16_t span = static_cast<int16_t>(surf_.w - 1);
+    const int16_t span = static_cast<int16_t>(w - 1);
     const int16_t px = static_cast<int16_t>((span * left_permille + 500) / 1000);
     if (px == bar_px_) return;
     const int16_t by = static_cast<int16_t>(y_ + h_ - kBarH);
-    if (bar_px_ < 0) gfx_fill(surf_, 0, by, px, kBarH, kBg);
-    else if (px < bar_px_) gfx_fill(surf_, px, by, static_cast<int16_t>(bar_px_ - px), kBarH, kCaution);
-    else gfx_fill(surf_, bar_px_, by, static_cast<int16_t>(px - bar_px_), kBarH, kBg);
+    const int16_t x0 = kTicketInset;
+    if (bar_px_ < 0) gfx_fill(surf_, x0, by, px, kBarH, kSpotInk);
+    else if (px < bar_px_) gfx_fill(surf_, static_cast<int16_t>(x0 + px), by, static_cast<int16_t>(bar_px_ - px), kBarH, kCaution);
+    else gfx_fill(surf_, static_cast<int16_t>(x0 + bar_px_), by, static_cast<int16_t>(px - bar_px_), kBarH, kSpotInk);
     bar_px_ = px;
 }
 
@@ -649,14 +762,12 @@ void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view ro
     const std::string_view lab = fit_text(kLabelFont, row_label, kResultLabelW - 8, buf);
     const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, lab));
     const Box lab_box{static_cast<int16_t>(kResultLabelW - 5 - lw), static_cast<int16_t>(y + (h - kLabelFont.height) / 2), lw, kLabelFont.height};
-    if (focus) {
-        gfx_fill(s, 0, y, 3, body, kFocus);
-        fill_except(s, {3, y, static_cast<int16_t>(kResultLabelW - 3), body}, &lab_box, 1, kFocusT);
-    } else {
-        fill_except(s, {0, y, kResultLabelW, body}, &lab_box, 1, kBg);
-    }
-    gfx_text(s, kLabelFont, lab_box.x, lab_box.y, lab, focus ? kFocus : kDim, focus ? kFocusT : kBg);
-    gfx_fill(s, kResultLabelW, y, 1, body, kRule);
+    // Focus is inversion: the label cell is a focus block (Classic: its tint behind the 3 px bar).
+    const int16_t bar = focus && kFocusBar ? 3 : 0;
+    if (bar) gfx_fill(s, 0, y, bar, body, kFocusBar);
+    fill_except(s, {bar, y, static_cast<int16_t>(kResultLabelW - bar), body}, &lab_box, 1, focus ? kFocusFill : kBg);
+    gfx_text(s, kLabelFont, lab_box.x, lab_box.y, lab, focus ? kOnFocus : kDim, focus ? kFocusFill : kBg);
+    gfx_fill(s, kResultLabelW, y, 1, body, kBg);   // Fieldbook: white space between the label strip and the cells
     if (n <= 0) {
         gfx_fill(s, kResultLabelW + 1, y, static_cast<int16_t>(s.w - kResultLabelW - 1), body, kBg);
         return;
@@ -692,8 +803,8 @@ void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view ro
         while (j + 1 < n && cells[j + 1].current == cells[i].current) j++;
         if (!cells[i].current.empty()) {
             const Bracket b = bracket_of(s, y, n, i, j, cells[i].current);
-            gfx_text(s, kLabelFont, b.text.x, b.text.y, cells[i].current, focus ? kFocus : kDim, kBg);
-            for (int k = 0; k < b.nseg; k++) gfx_fill(s, b.segs[k].x, b.segs[k].y, b.segs[k].w, b.segs[k].h, kDim);
+            gfx_text(s, kLabelFont, b.text.x, b.text.y, cells[i].current, focus ? kInk : kDim, kBg);
+            for (int k = 0; k < b.nseg; k++) gfx_fill(s, b.segs[k].x, b.segs[k].y, b.segs[k].w, b.segs[k].h, kInk3);
         }
         i = j + 1;
     }

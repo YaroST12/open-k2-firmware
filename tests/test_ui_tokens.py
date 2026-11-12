@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Yaraslau Furman
-"""The firmware colour tokens (include/k2/ui/ui_style.hpp) must equal the design table in
-docs/ui_mockups/render_mockups.py (UI design v2, section 3.3), and kWatt stays out of warnings."""
+"""The Classic theme (include/k2/ui/theme.hpp, classic()) resolves the legacy colour tokens of
+include/k2/ui/ui_style.hpp to the design table in docs/ui_mockups/render_mockups.py (UI design v2,
+section 3.3): Classic is the first firmware palette, kept as is. kWatt stays out of warnings."""
 import re
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HDR = (ROOT / "include/k2/ui/ui_style.hpp").read_text()
+STYLE = (ROOT / "include/k2/ui/ui_style.hpp").read_text()
+THEME = (ROOT / "include/k2/ui/theme.hpp").read_text()
 MOCK = (ROOT / "docs/ui_mockups/render_mockups.py").read_text()
 
 # firmware name -> mockup token
@@ -22,14 +24,13 @@ PAIRS = {
 }
 
 
-def firmware_tokens():
-    out = {}
-    for m in re.finditer(r"constexpr uint16_t ([^;]+);", HDR):
-        for d in m.group(1).split(","):
-            n, _, v = d.partition("=")
-            if v.strip().startswith("0x"):
-                out[n.strip()] = int(v.strip(), 16)
-    return out
+def classic_tokens():
+    """Token name -> its Classic value: K2_TOKEN(name, field) in ui_style.hpp, `p.field = 0x...;` in classic()."""
+    fields = dict(re.findall(r"K2_TOKEN\((\w+), (\w+)\)", STYLE))
+    body = THEME[THEME.index("constexpr Palette classic()"):]
+    body = body[:body.index("return p;")]
+    values = {f: int(v, 16) for f, v in re.findall(r"p\.(\w+) = (0x[0-9A-Fa-f]+);", body)}
+    return {name: values[field] for name, field in fields.items() if field in values}
 
 
 def mockup_tokens():
@@ -38,8 +39,8 @@ def mockup_tokens():
 
 
 class Tokens(unittest.TestCase):
-    def test_match_design_table(self):
-        fw, mk = firmware_tokens(), mockup_tokens()
+    def test_classic_matches_design_table(self):
+        fw, mk = classic_tokens(), mockup_tokens()
         for name, tok in PAIRS.items():
             self.assertIn(name, fw, name)
             self.assertEqual(fw[name], mk[tok], f"{name} vs {tok}")

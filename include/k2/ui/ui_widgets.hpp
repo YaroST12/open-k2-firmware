@@ -151,7 +151,8 @@ void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, int xs, 
 // Footer: the band y 222..239, no icon. The tone is the band FILL (docs/UI_DESIGN.md section 6, item 9) and the
 // message is S16 text from x 4. The whole band is repainted, so a message change needs no clearing.
 constexpr int16_t kFooterY = 222;
-constexpr int16_t kFooterTextX = 4;
+constexpr int16_t kFooterTextX = 8;
+constexpr int16_t kFooterBarW = 4;   // the tone bar at the left edge of an Ok / Caution fact line
 
 // The most cells a footer line holds: the text runs x 4..219 (27 cells of the 8 px font). Constant footer strings
 // are static_asserted against it; a longer runtime one is cut with "..." as the last resort and host builds report it
@@ -161,22 +162,26 @@ constexpr int kFooterTextPx = kFooterCells * static_cast<int>(kSmallAdvPx);   //
 
 // Footer tone: Info is the neutral band (also for a plain hint or a count), Ok a good or active state, Caution an
 // amber warning, Error a red one. A tone is a fill plus its text colour, so the mapping lives in one table.
+// The Fieldbook fact line: Info is the ground with a 1 px rule on its top row and ink2 text; Ok and Caution a tint with a
+// 4 px bar of the tone at the left edge and ink text; Error solid red with the on-red ink. `bar` 0 = none.
 enum class FooterTone : uint8_t { Ok, Info, Caution, Error };
 struct FooterStyle {
     uint16_t fill;
     uint16_t text;
+    uint16_t bar = 0;    // the left-edge tone bar
+    uint16_t rule = 0;   // the top row's rule (Info)
 };
-constexpr FooterStyle footer_style(FooterTone t) {
+inline FooterStyle footer_style(FooterTone t) {
     switch (t) {
-    case FooterTone::Ok:      return {kOkT, kOk};
-    case FooterTone::Caution: return {kCautionT, kCaution};
-    case FooterTone::Error:   return {kErrorT, kError};
+    case FooterTone::Ok:      return {kOkT, kInk, kOk, 0};
+    case FooterTone::Caution: return {kCautionT, kInk, kCaution, 0};
+    case FooterTone::Error:   return {kError, kErrInk, 0, 0};
     case FooterTone::Info:    break;
     }
-    return {kBar, kText};
+    return {kBg, kInk2, 0, kRule};
 }
 // The tone for a status colour a caller already holds (kOk, kCaution, kError; anything else is neutral).
-constexpr FooterTone footer_tone_of(uint16_t color) {
+inline FooterTone footer_tone_of(uint16_t color) {
     return color == kOk ? FooterTone::Ok : color == kCaution ? FooterTone::Caution
          : color == kError ? FooterTone::Error : FooterTone::Info;
 }
@@ -193,6 +198,10 @@ void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text
 // 1 px hairline (kRule) between the bar and the content.
 constexpr int kBarH = 21;
 constexpr int16_t kBarTextY = 4;
+// Fieldbook masthead geometry: icon and title, and the live readout's slots (right-aligned, each led by a 3 x 9 key).
+constexpr int16_t kMastIconX = 8, kMastTitleX = 8, kMastTitleIconX = 26, kMastTitleY = 2;
+constexpr int16_t kMastKeyW = 3, kMastKeyH = 9, kMastKeyY = 6;
+constexpr int16_t kMastVoltKeyX = 151, kMastVoltX = 155, kMastAmpKeyX = 187, kMastAmpX = 192;   // value slots are 30 px
 
 enum class Arrow : uint8_t { Idle, Up, Down };
 enum class StatusReadout : uint8_t { None, Live, Stale };

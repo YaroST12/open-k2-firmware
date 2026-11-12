@@ -551,44 +551,11 @@ void Ui::draw_slot(unsigned slot) {
     const bool down = pressed_[static_cast<int>(b)];
     slot_sig_[slot] = slot_sig(slot);
     if (current().hides_strip()) return;   // a full-panel page (the QR code) owns the strip's pixels
-    const uint16_t bg = down ? kPanelHi : kPanelBg;
-    const uint16_t fg = down ? kBg : lab.dim ? kDim : kText;
     const Rect &r = layout_.slot[slot];
     if (r.w <= 0 || r.h <= 0) return;
 
-    Surface s = surface_of(r);
-
-    // The label sits in the slot's text zone (divider and padding excluded) and is centred in it. The slot's ground is
-    // painted around the label and the divider, which cover their own pixels: every pixel of the slot is streamed once.
-    char text[24];
-    const bool column = panel_is_column(orient_.edge);
-    const int along = column ? s.h : s.w;       // slot length along the panel
-    const LabelZone zone = label_zone(along, slot);
-    const unsigned chars = label_text(text, lab, zone.max_chars);
-    kit::Box holes[2];
-    int nh = 0;
-    int16_t tx = 0, ty = 0;
-    if (chars > 0) {
-        const int16_t a0 = static_cast<int16_t>(label_origin(zone, chars));
-        const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, std::string_view(text, chars)));
-        tx = column ? static_cast<int16_t>((s.w - kLabelFont.height) / 2) : a0;
-        ty = column ? a0 : static_cast<int16_t>((s.h - kLabelFont.height) / 2);
-        const int16_t fh = static_cast<int16_t>(kLabelFont.height);
-        holes[nh++] = {tx, ty, column ? fh : tw, column ? tw : fh};
-    }
-    if (slot > 0)   // divider on the slot's leading edge, between this slot and the previous one
-        holes[nh++] = column ? kit::Box{0, 0, s.w, kDividerPx} : kit::Box{0, 0, kDividerPx, s.h};
-    kit::fill_except(s, {0, 0, s.w, s.h}, holes, nh, bg);
-    if (chars > 0) {
-        if (column)   // glyphs rotated 90 degrees, running along the slot
-            gfx_text_rot(s, kLabelFont, tx, ty, std::string_view(text, chars), fg, bg, panel_text_dir(orient_.edge));
-        else
-            gfx_text(s, kLabelFont, tx, ty, std::string_view(text, chars), fg, bg);
-    }
-    if (slot > 0) {
-        if (column) gfx_fill(s, 0, 0, s.w, kDividerPx, kPanelLine);
-        else gfx_fill(s, 0, 0, kDividerPx, s.h, kPanelLine);
-    }
+    kit::draw_key_slot(surface_of(r), panel_is_column(orient_.edge), panel_text_dir(orient_.edge), slot, lab,
+                       action == Button::Ok, down);
 }
 
 void Ui::draw_panel() {

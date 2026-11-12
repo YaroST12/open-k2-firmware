@@ -16,6 +16,7 @@
 #include "k2/ui/list_view.hpp"
 #include "k2/ui/ui_elem.hpp"
 #include "k2/ui/ui_icons.hpp"
+#include "k2/ui/ui_labels.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/ui_widgets.hpp"
 
@@ -54,6 +55,12 @@ struct Box {
 // a glyph no longer covers its hole (it keeps its native size), so there the whole of `r` is filled and the glyphs paint over it.
 void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color);
 
+// The key rail's slot `slot` (0..3 along the edge) on its surface `s` (the whole slot): Up / Dn are drawn triangles, OK an
+// inverted cap with its verb (orange while a confirm is armed), BACK a dim word (red `Stop` while a run is in flight), on the
+// bg2 rail. `column` = a side rail (the text runs along it in `dir`); `down` = the key is held (the slot flashes in the cap
+// colour). Every pixel of the slot is written once.
+void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, const SlotLabel &lab, bool is_ok, bool down);
+
 // A text line of a ground: its origin, font, text and ink (the bg is the ground's).
 struct TextRun {
     int16_t x, y;
@@ -85,12 +92,14 @@ struct VerdictStyle {
     uint16_t fill, ink, dot;
     bool filled, dotted;
 };
-constexpr VerdictStyle verdict_style(Verdict v) {
+// Fieldbook: a verdict is a spot fill with the ink that reads on it (pass green + spot ink, fail red + on-red ink, partial
+// orange + spot ink); the states without a verdict are text only.
+inline VerdictStyle verdict_style(Verdict v) {
     switch (v) {
-    case Verdict::Pass:    return {kOkT, kOk, 0, true, false};
-    case Verdict::Fail:    return {kError, kBg, 0, true, false};
-    case Verdict::Partial: return {kCautionT, kCaution, 0, true, false};
-    case Verdict::Running: return {0, kFaint, kFocus, false, true};   // the pending look + the bright dot (the shape cue)
+    case Verdict::Pass:    return {kPassFill, kOnPass, 0, true, false};
+    case Verdict::Fail:    return {kError, kErrInk, 0, true, false};
+    case Verdict::Partial: return {kPartFill, kOnPart, 0, true, false};
+    case Verdict::Running: return {0, kFaint, kAccent, false, true};   // the pending look + the accent dot (the shape cue)
     case Verdict::Pending: return {0, kFaint, 0, false, false};
     case Verdict::None:
     case Verdict::Skip:
@@ -196,8 +205,12 @@ struct KvLayout {
     Align align = Align::Left;
 };
 constexpr int16_t kv_row_y(const KvLayout &l, int i) { return static_cast<int16_t>(l.y0 + i * l.pitch); }
-// The static part: hairlines and keys. `labels` holds n strings.
+// The static part (Fieldbook receipt): keys in ink2, a dot leader from each key to the value column, white space
+// between the rows (the row lines stay owned, in the ground colour). `labels` holds n strings.
 void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, int n);
+// A receipt's dot leader: 2 x 2 px ink3 dots every kLeaderPitch px between x0 and x1 (the dot's top row is y).
+constexpr int16_t kLeaderPitch = 6, kLeaderDot = 2;
+void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y);
 // Initialises n value cells (white on kBg) at the layout's value box of each row.
 // `chars` (optional, n entries) narrows each cell to its own worst-case width; a right-aligned cell keeps the layout's right
 // edge (value_x + value_chars * advance), so a repaint never reaches a long key to its left.
@@ -216,6 +229,7 @@ void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key
 // Full-width band, kCaution or kError fill: a 20 px black triangle and the word in S24 (black ink). Short lines below it
 // are the page's (S16 on kBg), choices below those are a RowList.
 constexpr int16_t kAlertH = 36;
+constexpr int16_t kAlertStripeH = 6;   // the hazard stripe painted under the band (y + kAlertH .. + 5): the page's lines start below it
 void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view word);
 // A warning triangle of `sz` px (the lab's glyph): solid `color`, exclamation mark in `ink`.
 void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint16_t color, uint16_t ink);
@@ -224,6 +238,8 @@ void draw_warn_triangle(const Surface &s, int16_t x, int16_t y, int16_t sz, uint
 // The one thing OK can do on a page (START). Idle: 2 px kFocus outline, kFocusT fill, the verb in S24 centred and an
 // optional caution hint (triangle + S12) under it. Armed: kCaution fill, black word (CONFIRM), a S12 line and a 4 px
 // black bar along the bottom that drains over the confirm window (only the vacated columns repaint).
+// Fieldbook dress: the ticket, an inverted block inset by the 8 px side gutters (the gutters are painted in the ground).
+constexpr int16_t kTicketInset = 8;
 class ActionCell {
 public:
     static constexpr int16_t kBarH = 4;

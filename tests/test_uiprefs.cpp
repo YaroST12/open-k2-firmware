@@ -175,6 +175,27 @@ void test_home_hero_bits() {
     CHECK_EQ(uiprefs::decode(uiprefs::encode(Prefs{.home_hero = 1})).idle_wake, 0);
 }
 
+// The theme lives in bits 4..5 of the smoothing byte: 0 Night (a fresh device and every older record), 1 Paper,
+// 2 Classic. The smoothing preset in the low nibble is unaffected, so the two travel together.
+void test_theme_bits() {
+    using uiprefs::Prefs;
+    CHECK_EQ(Prefs{}.theme, 0);
+    CHECK_EQ(uiprefs::encode(Prefs{}) == uiprefs::encode(Prefs{.theme = 0}), 1);   // Night adds nothing to the file
+    const auto paper = uiprefs::encode(Prefs{.theme = 1});
+    CHECK_EQ(paper[6], 0x10);
+    CHECK_EQ(uiprefs::decode(paper).theme, 1);
+    CHECK_EQ(uiprefs::decode(paper).smoothing == smoothing::kDefault, 1);
+    const std::array<std::uint8_t, 8> classic_low{'K', '2', 'U', 'P', 0, 0xFF, 0x22, 0};   // Classic + preset index 1
+    CHECK_EQ(uiprefs::decode(classic_low).theme, 2);
+    CHECK_EQ(uiprefs::decode(classic_low).smoothing == smoothing::preset_from_index(1), 1);
+    const std::array<std::uint8_t, 8> unknown{'K', '2', 'U', 'P', 0, 0xFF, 0x30, 0};   // 3 is no theme: Night
+    CHECK_EQ(uiprefs::decode(unknown).theme, 0);
+    for (std::uint8_t t = 0; t < 3; t++) {
+        const Prefs in{.smoothing = smoothing::preset_from_index(3), .rotation = 1, .home_hero = 2, .theme = t};
+        CHECK_EQ(uiprefs::decode(uiprefs::encode(in)) == in, 1);
+    }
+}
+
 void test_legacy_page_is_outside_the_volume() {
     CHECK_EQ(flash::store_sector_allowed(uiprefs::kLegacyAddr), 0);   // no static grant: erasable only with our signature on it
     CHECK_EQ(flash::legacy_candidate(uiprefs::kLegacyAddr), 1);
@@ -192,6 +213,7 @@ int main() {
     test_orientation_byte();
     test_idle_wake_bit();
     test_home_hero_bits();
+    test_theme_bits();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

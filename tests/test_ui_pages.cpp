@@ -1669,7 +1669,7 @@ static void test_usb_link_toggles() {
 // and keeps the neutral bar fill (the words say it too).
 static void test_usb_link_footer_icon_tone() {
     Ui &ui = fresh_ui();
-    auto fill_at = [](uint16_t col) { return g_panel[230 * 240 + 1] == col ? 100 : 0; };   // the band's left margin
+    auto fill_at = [](uint16_t col) { return g_panel[230 * 240 + 6] == col ? 100 : 0; };   // the band fill, right of the tone bar
     auto icon_count = fill_at;
     g_stub = StubState();
     g_stub.usb_stored = {false, false};
@@ -1678,7 +1678,7 @@ static void test_usb_link_footer_icon_tone() {
     ui.push_menu(Menu::UsbLink, 22100);
     ui.tick(22200); ui.tick(22300);
     CHECK_EQ(icon_count(kOkT), 0);                      // off: no green
-    CHECK_EQ(icon_count(kBar) > 10, 1);                 // the neutral band is there
+    CHECK_EQ(icon_count(kBg) > 10, 1);                  // the neutral (ground) band is there
     ui.pop_menu(22400);
     g_stub = StubState();
     g_stub.usb_stored = {true, false};

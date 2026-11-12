@@ -138,10 +138,10 @@ static void test_row_list_geometry() {
     CHECK_EQ(px(2, y2 + 39), kFocus);                   // runs the whole 40 px (hairline excluded)
     CHECK_EQ(px(150, y2 + 39), kFocusT);                // the open row is one tinted block
     CHECK_EQ(px(150, y2 + 1), kFocusT);
-    CHECK_EQ(px(150, y2), kRule);
-    CHECK_EQ(px(100, y2 + 40), kRule);                  // row 3 starts 40 px below row 2: the rows below shifted by 14
+    CHECK_EQ(px(150, y2), kBg);                         // Fieldbook: no hairlines, the row's top line is the ground
+    CHECK_EQ(px(100, y2 + 40), kBg);                    // row 3 starts 40 px below row 2: the rows below shifted by 14
     CHECK_EQ(px(1, y2 + 40 + 3) != kFocus, 1);
-    CHECK_EQ(px(100, 24 + 26), kRule);                  // rows above keep the 26 px pitch
+    CHECK_EQ(px(100, 24 + 26), kBg);                    // rows above keep the 26 px pitch
     CHECK_EQ(ink_in(28, 120, y2 + 24, y2 + 36, kFocusT) > 0, 1);   // the 12 px note
     CHECK_EQ(ink_in(28, 120, 24 + 26 + 14, 24 + 26 + 26, kBg) > 0, 1);   // an unfocused row has its text, no note below it
     // Past the last row the rest of the list rect is plain kBg, the footer band below is untouched.
@@ -182,7 +182,8 @@ static void test_row_without_note_stays_26() {
     l.set_count(m.n); l.select(2); l.draw(1);
     const int y2 = 24 + 2 * 26;
     CHECK_EQ(px(1, y2 + 3), kFocus);
-    CHECK_EQ(px(100, y2 + 26), kRule);                  // the next row follows at the plain pitch
+    CHECK_EQ(px(100, y2 + 26), kBg);                    // the next row follows at the plain pitch
+    CHECK_EQ(px(1, y2 + 25), kFocus);
     CHECK_EQ(px(1, y2 + 26 + 3) != kFocus, 1);
     // Moving the focus from a noteless to a noted row and back leaves no stale pixels in the 14 px strip.
     for (auto &n : m.note) n.clear();
@@ -461,7 +462,15 @@ static void test_alert_band() {
     kit::draw_alert_band(kSurf, 30, false, "CAUTION");
     CHECK_EQ(px(200, 33), kCaution);
     CHECK_EQ(px(0, 30 + kit::kAlertH - 1), kCaution);
-    CHECK_EQ(px(100, 30 + kit::kAlertH), kBase);
+    {   // the hazard stripe under the band: ink and band-colour spans on every row, then nothing
+        for (int r = 0; r < kit::kAlertStripeH; r++) {
+            CHECK_EQ(ink_in(0, 224, 30 + kit::kAlertH + r, 30 + kit::kAlertH + r + 1, kCaution) > 0, 1);
+            int fill = 0;
+            for (int x = 0; x < 224; x++) fill += px(x, 30 + kit::kAlertH + r) == kCaution;
+            CHECK_EQ(fill >= 106 && fill <= 118, 1);   // about half of each row: diagonal bars 12 px apart
+        }
+        CHECK_EQ(px(100, 30 + kit::kAlertH + kit::kAlertStripeH), kBase);
+    }
     CHECK_EQ(ink_in(32, 120, 34, 60, kCaution) > 0, 1);   // the word, in black ink
     kit::draw_alert_band(kSurf, 30, true, "STOPPED");
     CHECK_EQ(px(200, 33), kError);
@@ -477,15 +486,18 @@ static void test_action_cell() {
     a.init(kSurf, 156, 64);
     lcd::fill(kBase);
     a.draw_idle("START", "no load on the port");
-    CHECK_EQ(px(0, 156), kFocus);                       // 2 px outline
-    CHECK_EQ(px(1, 157), kFocus);
-    CHECK_EQ(px(223, 219), kFocus);
-    CHECK_EQ(px(5, 160), kFocusT);
+    CHECK_EQ(px(0, 156), kBg);                          // the ticket: ground gutters of kTicketInset px
+    CHECK_EQ(px(7, 190), kBg);
+    CHECK_EQ(px(216, 190), kBg);
+    CHECK_EQ(px(8, 156), kTicketFrame);                 // Classic: the 2 px cyan frame (Paper, Night: none)
+    CHECK_EQ(px(9, 157), kTicketFrame);
+    CHECK_EQ(px(215, 219), kTicketFrame);
+    CHECK_EQ(px(13, 160), kTicket);
     const unsigned pxn = g_lcd_pixels;
     a.draw_idle("START", "no load on the port");        // cached
     CHECK_EQ(g_lcd_pixels, pxn);
     a.draw_armed("CONFIRM", "start in 5s window", 1000);
-    CHECK_EQ(px(5, 160), kCaution);
+    CHECK_EQ(px(13, 160), kCaution);
     CHECK_EQ(px(100, 219), kBg);                        // the 4 px bar spans the full width
     CHECK_EQ(px(100, 216), kBg);
     CHECK_EQ(px(100, 215), kCaution);
@@ -499,7 +511,7 @@ static void test_action_cell() {
     CHECK_EQ(g_lcd_pixels - before < 30 * 8, 1);
     a.invalidate();
     a.draw_idle("START", "");
-    CHECK_EQ(px(5, 160), kFocusT);
+    CHECK_EQ(px(13, 160), kTicket);
 }
 
 static void test_progress_bar() {
@@ -531,11 +543,16 @@ static void test_kv_and_info() {
     const char *const labels[3] = {"Tests", "Peak", "Cable"};
     lcd::fill(kBase);
     kit::kv_static(kSurf, lay, labels, 3);
-    CHECK_EQ(px(100, 24), kRule);
-    CHECK_EQ(px(100, 24 + 26), kRule);
-    CHECK_EQ(px(100, 24 + 3 * 26), kRule);              // closing hairline
+    CHECK_EQ(px(100, 24), kBg);                         // receipt rows: white space, no hairlines
+    CHECK_EQ(px(100, 24 + 26), kBg);
+    CHECK_EQ(px(100, 24 + 3 * 26), kBg);                // the closing line is ground too
     CHECK_EQ(px(100, 24 + 4 * 26), kBase);
     CHECK_EQ(ink_in(6, 60, 24 + 1, 24 + 26, kBg) > 0, 1);   // key
+    {   // the dot leader from the key to the value column, 2 x 2 px dots
+        int dots = 0;
+        for (int y = 24; y < 24 + 26; y++) for (int x = 50; x < lay.value_x - 4; x++) dots += px(x, y) == kFaint;
+        CHECK_EQ(dots > 0 && dots % 4 == 0, 1);
+    }
     Field cells[3];
     kit::kv_cells(kSurf, lay, cells, 3);
     cells[1].draw("20V 3.25A");
@@ -552,7 +569,7 @@ static void test_kv_and_info() {
     CHECK_EQ(ink_in(rl.value_x, left5, 24 + 26 + 1, 24 + 2 * 26, kBase), 0);
     lcd::fill(kBase);
     kit::kv_row(kSurf, lay, 24, "Header", "PD3.1", kText);
-    CHECK_EQ(px(100, 24), kRule);
+    CHECK_EQ(px(100, 24), kBg);
     CHECK_EQ(ink_in(72, 120, 25, 49, kBg) > 0, 1);
     lcd::fill(kBase);
     kit::draw_info_row(kSurf, 50, "PD", "20V5A");
@@ -579,7 +596,7 @@ static void test_result_row() {
     const ResultCell vc[4] = {{Verdict::Pass, "5V", {}}, {Verdict::Fail, "9V", {}}, {Verdict::Skip, "12V", {}}, {Verdict::Running, "20V", {}}};
     lcd::fill(kBase);
     kit::draw_result_row(kSurf, 100, 26, "QC2", vc, 4);
-    CHECK_EQ(px(60, 110), kRule);                       // label rule
+    CHECK_EQ(px(60, 110), kBg);                         // no label rule: white space
     CHECK_EQ(px(2, 110), kBg);                          // strip is not focused
     CHECK_EQ(ink_in(6, 56, 100, 125, kBg) > 0, 1);      // the 12 px label
     CHECK_EQ(px(65, 102), kOkT);                        // pass cell: tint
@@ -607,7 +624,7 @@ static void test_result_row() {
     CHECK_EQ(px(1, 110), kFocus);
     CHECK_EQ(px(30, 102), kFocusT);
     CHECK_EQ(px(59, 110), kFocusT);
-    CHECK_EQ(px(60, 110), kRule);
+    CHECK_EQ(px(60, 110), kBg);
 
     // Section rule: two kRule lines on the row's top, the content starts under them.
     lcd::fill(kBase);
@@ -623,9 +640,9 @@ static void test_result_row() {
     CHECK_EQ(px(65, 100 + 23), kOkT);                   // cells are 24 px tall
     CHECK_EQ(px(65, 100 + 24), kBg);                    // and the bracket zone below is plain
     CHECK_EQ(ink_in(61, 224, 100 + 28, 100 + 40, kBg) > 0, 1);   // current labels and brackets
-    CHECK_EQ(px(63, 100 + 31), kDim);                   // the run 5V 9V 12V: bracket line left end
-    CHECK_EQ(px(63, 100 + 29), kDim);                   // its 3 px end tick
-    CHECK_EQ(px(63, 100 + 28), kDim);                   // ... 3 px above the line
+    CHECK_EQ(px(63, 100 + 31), kFaint);                   // the run 5V 9V 12V: bracket line left end
+    CHECK_EQ(px(63, 100 + 29), kFaint);                   // its 3 px end tick
+    CHECK_EQ(px(63, 100 + 28), kFaint);                   // ... 3 px above the line
     CHECK_EQ(px(63, 100 + 27), kBg);
     // Neutral: the bracket under the failed 12V is dim, never red.
     int reds = 0;

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "test_util.h"
 #include "k2/ui/ui.hpp"
+#include "k2/ui/kit.hpp"
 #include "k2/ui/ui_viewport.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "fake_lcd.h"
@@ -55,11 +56,11 @@ static void test_native_menu_fonts() {
             draw_footer(logical, FooterTone::Caution, "Identify");
         }
         uint16_t lut[16], line[240];
-        make_blend_lut(kCaution, kCautionT, lut);
+        make_blend_lut(kInk, kCautionT, lut);   // a Caution fact line: ink on the amber tint
         const int footer_top = box.y + kFooterY * box.h / 240 + 1;
         for (int row = 0; row < kSmall.height; ++row) {
             const int width = render_row(kSmall, "Identify", row, lut, line, 240);
-            CHECK_EQ(std::equal(line, line + width, g_panel + (footer_top + row) * 240 + box.x + kFooterTextX), true);
+            CHECK_EQ(std::equal(line, line + width, g_panel + (footer_top + row) * 240 + box.x + kFooterTextX * box.w / 224), true);
         }
         Field field;
         {
@@ -155,10 +156,10 @@ static void test_captures_and_keys() {
                 ui.set_pressed(static_cast<Button>(key), true, 6300);
                 for (unsigned slot = 0; slot < 4; ++slot) {
                     const auto& box = layout.slot[slot];
-                    const int px = box.x + (panel_is_column(orient.edge) ? 1 : 10);
-                    const int py = box.y + (panel_is_column(orient.edge) ? 10 : 1);
+                    const int px = box.x + (panel_is_column(orient.edge) ? 0 : 10);   // the rail edge: outside the OK cap
+                    const int py = box.y + (panel_is_column(orient.edge) ? 10 : 0);
                     if (!qrtest)
-                        CHECK_EQ(g_panel[py * 240 + px], slot_button(orient, slot) == static_cast<Button>(key) ? kPanelHi : kPanelBg);
+                        CHECK_EQ(g_panel[py * 240 + px], slot_button(orient, slot) == static_cast<Button>(key) ? kCap : kBg2);   // a held key flashes in the cap colour
                     // Independently apply the MADCTL coordinate permutation back to physical glass.
                     const int lx = box.x + box.w / 2, ly = box.y + box.h / 2;
                     const int physical_y = r == 0 ? ly : r == 1 ? lx : r == 2 ? 239 - ly : 239 - lx;
@@ -303,7 +304,7 @@ static void test_settings_rotation_modes() {
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 6100);
     ui.on_button(Button::Plus, ButtonEvent::Long, 6200);
     CHECK_EQ(ui.page() == Page::Settings, true);
-    CHECK_EQ(ui.list_state().count, 6);
+    CHECK_EQ(ui.list_state().count, 7);   // ... Wake sleeping port, Theme
     {   // Smoothing row: Medium by default, OK cycles High -> Off -> Low -> Medium, stores each and applies it at once
         g_stub.prefs = {true, false}; g_stub.prefs_sets = 0; g_stub.smoothing_applied = smoothing::Preset::Medium;
         for (int i = 0; i < 4; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 6205 + i);
@@ -317,11 +318,11 @@ static void test_settings_rotation_modes() {
             CHECK_EQ(g_stub.prefs.screenshot, false);
         }
         CHECK_EQ(g_stub.prefs_sets, 4);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 6230);   // the Wake sleeping port row follows (the list ends there)
-        for (int i = 0; i < 4; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, 6240 + i);   // back to the top
+        ui.on_button(Button::Plus, ButtonEvent::Short, 6230);   // the Wake sleeping port row follows (then Theme ends the list)
+        for (int i = 0; i < 5; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, 6240 + i);   // back to the top
         g_stub.prefs = {};
     }
-    {   // Wake sleeping port row (the last): Off by default, OK toggles it, stores it with the other flags, applies it now
+    {   // Wake sleeping port row (row 5, before Theme): Off by default, OK toggles it, stores it with the other flags, applies it now
         g_stub.prefs = {true, false}; g_stub.prefs_sets = 0; g_stub.idle_wake = false;
         for (int i = 0; i < 5; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 6250 + i);
         CHECK_EQ(g_stub.idle_wake, false);
@@ -332,7 +333,7 @@ static void test_settings_rotation_modes() {
         CHECK_EQ(g_stub.prefs_sets, 1);
         ui.on_button(Button::Ok, ButtonEvent::Short, 6261);
         CHECK_EQ(g_stub.idle_wake, false); CHECK_EQ(g_stub.prefs.idle_wake, false);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 6262);   // the list ends here: still the same row
+        ui.on_button(Button::Plus, ButtonEvent::Short, 6262); ui.on_button(Button::Minus, ButtonEvent::Short, 6262);   // Theme follows; back
         ui.on_button(Button::Ok, ButtonEvent::Short, 6263);
         CHECK_EQ(g_stub.idle_wake, true);
         ui.on_button(Button::Ok, ButtonEvent::Short, 6264);
@@ -501,22 +502,9 @@ static void check_physical_slot_label(Ui &ui, uint8_t rotation, unsigned slot, B
     std::copy(std::begin(g_panel), std::end(g_panel), actual.begin());
     const SlotLabel lab = ui.labels().b[static_cast<int>(action)];
     Surface s{box.x, box.y, box.w, box.h};
-    gfx_fill(s, 0, 0, s.w, s.h, kPanelBg);
-    const bool column = panel_is_column(orient.edge);
-    const LabelZone zone = label_zone(column ? s.h : s.w, slot);
-    char text[24];
-    const unsigned chars = label_text(text, lab, zone.max_chars);
-    const int16_t origin = static_cast<int16_t>(label_origin(zone, chars));
-    if (chars && column)
-        gfx_text_rot(s, kLabelFont, static_cast<int16_t>((s.w - kLabelFont.height) / 2),
-                     origin, text, lab.dim ? kDim : kText, kPanelBg, panel_text_dir(orient.edge));
-    else if (chars)
-        gfx_text(s, kLabelFont, origin, static_cast<int16_t>((s.h - kLabelFont.height) / 2),
-                 text, lab.dim ? kDim : kText, kPanelBg);
-    if (slot > 0) {
-        if (column) gfx_fill(s, 0, 0, s.w, kDividerPx, kPanelLine);
-        else gfx_fill(s, 0, 0, kDividerPx, s.h, kPanelLine);
-    }
+    // The reference: the kit's slot painter fed the label of `action` (the mapping under test is which action's label
+    // lands in which physical slot; the painter itself is pinned in test_kit).
+    kit::draw_key_slot(s, panel_is_column(orient.edge), panel_text_dir(orient.edge), slot, lab, action == Button::Ok, false);
     for (int y = box.y; y < box.y + box.h; ++y)
         CHECK_EQ(std::equal(g_panel + y * 240 + box.x, g_panel + y * 240 + box.x + box.w,
                             actual.begin() + y * 240 + box.x), true);
