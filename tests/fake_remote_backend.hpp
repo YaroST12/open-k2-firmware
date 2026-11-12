@@ -52,6 +52,7 @@ struct Fake {
         s.temp_deci_c = -25; s.fc = 6; s.adc_flags = 11; s.mcu_temp_deci_c = 371;
         s.link_flags = kLinkStale | kLinkInline; s.age_s = 83; s.cable_age_s = 0x0102;
         s.reset_flags = (1u << 27) | (1u << 26);
+        s.inline_cause = 5;   // pd::InlineCause::FarRd
         return s;
     }
     SessionInfo sess{};
@@ -221,7 +222,11 @@ struct Fake {
         calls++; lab_duty = duty; lab_ms = ms; LabResult r; r.reason = 6; r.duty = duty; r.ms = ms; r.peak_ma = 120; return r;
     }
     uint8_t sniff_sub = 0xFF;
-    SniffInfo lab_sniff(uint8_t sub) { calls++; sniff_sub = sub; SniffInfo r; r.state = 2; r.reason = 3; r.flags = 2; r.edges = 0x0123; return r; }
+    uint8_t sniff_status = 0, sniff_refusal = 0;   // a refused arm: remote::Status and remote::SniffRefusal
+    SniffInfo lab_sniff(uint8_t sub) {
+        calls++; sniff_sub = sub; SniffInfo r; r.state = 2; r.reason = 3; r.flags = 2; r.edges = 0x0123;
+        r.status = sniff_status; r.refusal = sniff_refusal; return r;
+    }
     // --- vooc-monitor (k2/vooc-detect) ---
     int vooc_set = -1;                  // last switch argument (2 = keep)
     VoocSnapshot vooc_snap{};
@@ -231,6 +236,31 @@ struct Fake {
         return vooc_snap;
     }
     // --- end vooc-monitor ---
+    // --- svooc-trigger ---
+    int svooc_starts = 0, svooc_stops = 0, svooc_cap = -1;
+    k2::svooc::Refusal svooc_refusal = k2::svooc::Refusal::None;   // what the next start answers
+    SvoocSnapshot svooc_snap{};
+    bool svooc_usb_a = false;           // the waiver flag the last start carried
+    std::array<k2::svooc::PairRow, k2::svooc::kLogPairs> svooc_rows{};   // the pair list svooc_pairs serves (svooc_snap.log.n of them)
+    k2::svooc::Params svooc_params{};    // the responder parameters the last start carried (as sent: the firmware clamps)
+    k2::svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a, const k2::svooc::Params &p) {
+        calls++; svooc_starts++; svooc_cap = cap_s; svooc_usb_a = usb_a; svooc_params = p;
+        svooc_snap.report.refusal = svooc_refusal;
+        svooc_snap.report.usb_a = usb_a;
+        if (svooc_refusal == k2::svooc::Refusal::None) svooc_snap.stage = k2::svooc::Stage::Wake;
+        return svooc_refusal;
+    }
+    void svooc_stop() { calls++; svooc_stops++; svooc_snap.report.abort = k2::svooc::Abort::Stopped; }
+    SvoocSnapshot svooc_info() { calls++; return svooc_snap; }
+    size_t svooc_pairs(uint16_t from, std::span<k2::svooc::PairRow> out) {
+        calls++;
+        size_t n = 0;
+        while (n < out.size() && from + n < svooc_snap.log.n) { out[n] = svooc_rows[from + n]; n++; }
+        return n;
+    }
+    bool locked = false;                // D+/D- locked by a running trigger
+    bool lines_locked() { return locked; }
+    // --- end svooc-trigger ---
     // UFCS tuner / probe: a RAM field array standing in for the tuner, a canned blob for the read op
     std::uint32_t ufcs_vals[k2::ufcs::kFieldCount] = {};
     Status ufcs_busy = Status::Ok;      // what set / ops answer when forced

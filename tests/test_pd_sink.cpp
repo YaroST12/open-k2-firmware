@@ -1902,5 +1902,61 @@ int main() {
         CHECK_EQ(r.last_type(), kDataRequest);
         CHECK_EQ((r.last_rdo() >> 28) & 7, 1);
     }
+    // ---- external VBUS owner (the SuperVOOC trigger raises VBUS under the K2's own 5 V contract, hardware 2026-11-12) ----
+    {   // Control: without the suspension a rise above target + 10 % under the held 5 V contract is an abort (existing guard).
+        Rig r;
+        CHECK_EQ(r.sink.answer_5v({1, 0, 0}, r.now), Err::Ok);
+        r.pump(); r.accept_and_ready();
+        r.run(kSettleMs + 100);
+        const std::size_t before = r.sent.size();
+        r.sink.on_vbus(5000, r.now); r.pump(); r.run(100);   // the rise is judged against the lowest sample so far
+        CHECK_EQ(r.sent.size(), before);
+        r.sink.on_vbus(9000, r.now); r.pump();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
+        CHECK_EQ(r.sent.size(), before + 1);
+    }
+    {   // Suspended: VBUS anywhere from 5 V to far over the cap produces no TX and no state change, for as long as it lasts.
+        Rig r;
+        CHECK_EQ(r.sink.answer_5v({1, 0, 0}, r.now), Err::Ok);
+        r.pump(); r.accept_and_ready();
+        r.run(kSettleMs + 100);
+        const std::size_t before = r.sent.size();
+        r.sink.set_vbus_external(true, r.now);
+        CHECK_COND(r.sink.vbus_external());
+        for (int mv : {5000, 8000, 9000, 12000, 12000, 38000}) {
+            r.sink.on_vbus(mv, r.now); r.pump(); r.run(100);
+        }
+        r.run(2 * kSettleMs + kDescentMaxMs);   // long enough for the Hard Reset timers and any keepalive
+        r.sink.on_vbus(12000, r.now); r.pump();
+        CHECK_EQ(r.sent.size(), before);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        CHECK_COND(r.sink.status().held);
+        // Clear while VBUS is still high and settling: the settle window applies, nothing goes out yet.
+        r.sink.set_vbus_external(false, r.now);
+        CHECK_COND(!r.sink.vbus_external());
+        for (int mv = 12000; mv > 5000; mv -= 500) { r.sink.on_vbus(mv, r.now); r.pump(); r.run(100); }
+        CHECK_EQ(r.sent.size(), before);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        // Settled at 5 V: still quiet.
+        for (int i = 0; i < 40; ++i) { r.sink.on_vbus(5000, r.now); r.pump(); r.run(100); }
+        CHECK_EQ(r.sent.size(), before);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+        // The guard is back after the clear: a rise past the settle window aborts again.
+        r.sink.on_vbus(9000, r.now); r.pump();
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Aborting));
+    }
+    {   // Messages from the source are still handled while suspended.
+        Rig r;
+        CHECK_EQ(r.sink.answer_5v({1, 0, 0}, r.now), Err::Ok);
+        r.pump(); r.accept_and_ready();
+        r.sink.set_vbus_external(true, r.now);
+        const std::size_t before = r.sent.size();
+        r.sink.on_vbus(12000, r.now); r.pump();
+        CHECK_EQ(r.sent.size(), before);
+        r.ctl(kCtlGetSinkCap);   // the answer to the source's question still goes out
+        r.run(100);
+        CHECK_EQ(r.sent.size(), before + 1);
+        CHECK_EQ(int(r.sink.status().state), int(SinkState::Ready));
+    }
     return test_report("test_pd_sink");
 }

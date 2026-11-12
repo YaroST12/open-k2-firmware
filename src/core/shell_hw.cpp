@@ -904,6 +904,8 @@ struct Hw final : shell::Backend {
     void write(std::string_view s) override { put(s); }
     const char* twin(const shell::TwinCmd& c) override { return twin_command(c); }
     const char* diag() override { return diag_print(); }
+    // The guarded SuperVOOC trigger (HID remote only) drives D-: the parser keeps every D+/D- and sniffer command out.
+    const char* lines_locked() override { return fctrig::svooc_running() ? "busy (SuperVOOC trigger running)" : nullptr; }
 
     void state() override {
         char b[200];

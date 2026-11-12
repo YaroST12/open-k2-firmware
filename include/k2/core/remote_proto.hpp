@@ -34,7 +34,8 @@
 //                                    fc = fastcharge::Protocol verdict; flags bit0 ADC reading
 //                                    valid, bit1 board NTC temperature valid, bit2 NTC calibrated,
 //                                    bit3 MCU temperature valid; then mcu_temp_deci_c(i16), then the link
-//                                    block and the reset flags (53 bytes in all, see encode_state)
+//                                    block and the reset flags, then inline_cause(1, pd::InlineCause: what latched
+//                                    the inline state, 0 while not inline) (54 bytes in all, see encode_state)
 //                         req [part(1)] part 0 = the reply above; any other payload: BadLength (more than
 //                                    one byte) or BadArg (unknown part), so a host can tell an old build
 //                                    part 1, 31 bytes: mah(i32) elapsed_s(u32) proto_kind(1) limit_ma(2)
@@ -256,6 +257,10 @@
 //                                    op 1 sniff, args sub(1) [confirm(1)]: sub 0 cancel, 1 arm, 2 status, 3 selftest (D+ toggled,
 //                                    needs confirm = 1, only while armed and nothing attached). Answers state(1) reason(1)
 //                                    flags(1: bit0 overflow, bit1 stored) edges(2). The capture is read with BLACKBOX capread.
+//                                    A refused arm is Busy with one byte, SniffRefusal: 1 a trigger, scan or test owns
+//                                    D+/D-, 2 no RAM (the USB drive or net function holds the shared RAM), 3 the
+//                                    SuperVOOC trigger drives D- (also for cancel and selftest; status stays open).
+//                                    The load probe is Busy too while that trigger runs (no load on the output).
 //                                    op 0 load probe, args duty_pct(1) ms(2): pulses the PA8 test load (TIM1 CH1) for
 //                                    ms (<= 200) at duty (<= 95) and answers reason(1) duty(1) ms(2) idle_ma(2s)
 //                                    peak_ma(2s) min_vbus_mv(2) vbus_before_mv(2) temp_before_dc(2s) temp_after_dc(2s) pin_high_pct(1,
@@ -325,6 +330,7 @@
 //                                    num_results(1) { proto outcome mv(2) } x num_results
 //                                    op 0 status; op 1 reset (to 5 V, then passive idle);
 //                                    op 2 scan, arg flags(1); op 3 trigger, args proto(1) mv(2) flags(1).
+//                                    Scan and trigger answer Busy while the SuperVOOC trigger (op 5) runs.
 //                                    flags bit0 = confirm (needed by the scan and above 5000 mV, else
 //                                    BadArg), bit1 = override the PD-contract / load guard (never a
 //                                    confirmation); other bits BadArg. A guard refusal answers BadArg
@@ -341,8 +347,46 @@
 //                                      window, retry_ms = the pause left; stall_cmd / stall_n = the trailing run of one
 //                                      command whose reply stayed silent (bit5 once stall_n reaches vooc::kStallPolls).
 //                                      page 1 / 2: n(1) { cmd(1) count(2) last(2) } x n, rows 0-7 / 8-15.
-//                                      Other pages or on > 1 BadArg, wrong length BadLength. Never Busy.
+//                                      Other pages or on > 1 BadArg, wrong length BadLength. Busy only for the on / off
+//                                      switch while the SuperVOOC trigger (op 5) runs; the read is never Busy.
 //                                    --- end vooc-monitor ---
+//                                    --- svooc-trigger ---
+//                                    op 5 svooc, the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp),
+//                                      not the FC block. Sub-ops:
+//                                      [5, 0, 0]             status: the summary (the only page; others BadArg);
+//                                      [5, 1, flags, cap_s]  start: flags carry kFcConfirm (none: NeedConfirm) and
+//                                                            may carry kSvoocUsbA (bit 2: the operator waives the
+//                                                            far-sink refusal for a legacy A port, svooc_run.hpp);
+//                                                            other bits BadArg; cap_s 0 = 20 s, 1..20 (more: BadArg);
+//                                                            a refused start answers Busy with the summary (its
+//                                                            refusal byte says why); an accepted one arms the lease;
+//                                      [5, 1, flags, cap_s, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s]
+//                                                            the same start with the responder's operator parameters
+//                                                            (svooc_script.hpp Params; the 4-byte request is this one
+//                                                            with i86 5 / 5, r82 0x51, vtarget 0, esc_at 0). Any other
+//                                                            length: BadLength. Values are clamped by the firmware, not
+//                                                            refused: i86 1..0x23, r82 0..0x7E, vtarget_mv 0 (off) or
+//                                                            at most 11000, esc_at_s at most 20 (0 = no escape);
+//                                      [5, 2]                stop (reason "stopped"), then the summary;
+//                                      [5, 3, from_lo, from_hi]  the run's command>reply pairs from index `from`.
+//                                      Summary (45 bytes; the first 36 are the original summary): stage refusal abort tries flags(bit0 accepted, bit1 exit
+//                                      checked, bit2 exit ok, bit3 D- driven now, bit4 USB-A waiver in use) phase
+//                                      off_run last_cmd (u8 each) commands replies missed cut partials pairs_total
+//                                      (u16 each) pairs_kept(1, saturates at 255: the log reply has the real count)
+//                                      cap_ms elapsed_ms vbus_start_mv vbus_max_mv vbus_exit_mv ibus_max_ma (u16 each),
+//                                      contract_start contract_end (u8 each, svooc::Contract), inline_cause (u8,
+//                                      pd::InlineCause behind a refusal "inline mode" or an abort "sink appeared").
+//                                      Appended (36..44): i86_first(1) i86_esc(1) r82(1) vtarget_mv(2) esc_at_s(1), the
+//                                      effective (clamped) responder parameters, then escape(1, svooc::Escape: 0 off,
+//                                      1 armed, 2 sent, 3 adapter sent 0x86 next, 4 it did not) and escape_t_ms(2, when
+//                                      the 0x07F went out, ms since the wake).
+//                                      Log reply: kept(2) from(2) n(1) { cmd(1) word(2) t_ms(2) vbus_mv(2) } x n, at
+//                                      most 7 rows per page; kept is the pair count of the latest wake (up to 512);
+//                                      word 0xFFFF = not answered; t_ms = the command's start, ms since that wake;
+//                                      vbus_mv = the monitor sample when the pair closed (0 = none). `from` at or past
+//                                      kept answers an empty page (n = 0), not an error. Wrong length BadLength,
+//                                      unknown sub-op or status page BadArg.
+//                                    --- end svooc-trigger ---
 //   0x21 ADC_RAW     req -            rsp ok(1) all(10 x u16) scan(7 x u16)
 //                                    all = one-shot raw counts of ADC channels 0..7, 16, 17;
 //                                    scan = the 100-sweep averages in slot order aux cc1 cc2 dp dm
@@ -372,6 +416,8 @@
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/fastcharge/edge_guard.hpp"
+#include "k2/fastcharge/svooc_run.hpp"
+#include "k2/fastcharge/svooc_wire.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
 #include "k2/fastcharge/vooc_decode.hpp"
 #include "k2/ui/ui_qrtest.hpp"
@@ -528,6 +574,32 @@ struct VoocSnapshot {
     edges::GuardInfo guard{};
 };
 // --- end vooc-monitor ---
+// --- svooc-trigger: FC op 5, the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp, layout above) ---
+constexpr uint8_t kFcSvooc = 5;
+constexpr uint8_t kSvoocStatus = 0, kSvoocStart = 1, kSvoocStop = 2, kSvoocLog = 3;
+constexpr uint8_t kSvoocUsbA = 4;             // start flags bit2: waive the far-sink refusal (legacy A port, no PD anywhere)
+constexpr uint8_t kSvoocStartMask = kFcConfirm | kSvoocUsbA;
+constexpr uint8_t kSvoocCapMaxS = svooc::kCapMs / 1000;   // 20
+constexpr size_t kSvoocRowsPerPage = 7;
+constexpr size_t kSvoocRowBytes = 7;
+constexpr size_t kSvoocLogHeader = 5;
+constexpr size_t kSvoocSummaryBase = 36;      // the summary's original part
+constexpr size_t kSvoocSummaryBytes = 45;     // base + the operator parameters and the escape outcome (9 bytes)
+constexpr size_t kSvoocStartExtBytes = 10;    // the extended start request, op 5 / 1 with the responder parameters
+static_assert(kSvoocSummaryBytes <= kMaxRspPayload && kSvoocLogHeader + kSvoocRowBytes * kSvoocRowsPerPage <= kMaxRspPayload);
+static_assert(svooc::kLogPairs <= 0xFFFF);
+struct SvoocSnapshot {
+    svooc::Stage stage = svooc::Stage::Idle;
+    svooc::Report report{};
+    svooc::Phase phase = svooc::Phase::Ident;
+    uint8_t off_run = 0;
+    bool driving = false;
+    svooc::Log log{};
+    svooc::Params params{};                         // the effective (clamped) responder parameters
+    svooc::Escape escape = svooc::Escape::Off;
+    uint32_t escape_t_ms = 0;
+};
+// --- end svooc-trigger ---
 
 // Store op codes (first payload byte of Cmd::Store). The request is [op] for list / save-emarker /
 // save-log. Op 2 (erase of the native pages) is retired: it answers BadArg. save-emarker saves the
@@ -748,6 +820,7 @@ struct StateInfo {
     uint32_t age_s = 0;       // seconds since the charger was unplugged (0 while live)
     uint32_t cable_age_s = 0; // seconds since the e-marker scan
     uint32_t reset_flags = 0; // CRM CTRLSTS reset flags of this boot (bits 26..31: PIN POR SW IWDG WWDG LPWR)
+    uint8_t inline_cause = 0; // pd::InlineCause of the inline latch (0 = none / not inline), appended after reset_flags
 };
 constexpr uint8_t kLinkStale = 1 << 0, kLinkWaiting = 1 << 1, kLinkInline = 1 << 2,
                   kLinkCableStale = 1 << 3, kLinkCableScanned = 1 << 4,
@@ -917,8 +990,11 @@ struct LabResult {
     int16_t temp_before_dc = 0, temp_after_dc = 0;
     uint8_t pin_high_pct = 0;
 };
+// Why a `lab sniff arm` was refused: the one payload byte of its Busy reply (0 = no reason sent).
+enum class SniffRefusal : uint8_t { None = 0, Ports = 1, NoRam = 2, Svooc = 3 };   // a trigger / scan / test owns D+/D-; the USB drive holds the RAM; the SuperVOOC trigger drives D-
 struct SniffInfo {
     uint8_t status = 0;                 // remote::Status the backend reports (0 = Ok)
+    uint8_t refusal = 0;                // SniffRefusal of a refused arm, sent as the Busy reply's one byte
     uint8_t state = 0;                  // 0 idle, 1 armed, 2 recording
     uint8_t reason = 0;                 // edges::End of the last session
     uint8_t flags = 0;                  // bit0 buffer overflowed, bit1 a Black Box capture was stored
@@ -1091,6 +1167,8 @@ size_t encode_cable_r(std::span<uint8_t> out, const CableRInfo &i);
 size_t encode_lab(std::span<uint8_t> out, const LabResult &r);
 size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r);
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);   // vooc-monitor: FC op 4, one page
+size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v);   // svooc-trigger: FC op 5, the summary
+size_t encode_svooc_log(std::span<uint8_t> out, uint16_t kept, uint16_t from, std::span<const svooc::PairRow> rows);   // op 5 / 3
 size_t encode_ufcs(std::span<uint8_t> out, const UfcsInfo &i);   // status block: state verdict class start blob_len(2) nfields
 // One tuner field: field(1) value(4) lo(4) hi(4) default(4); lo / hi / default come from ufcs::kFields.
 size_t encode_ufcs_field(std::span<uint8_t> out, uint8_t field, uint32_t value);
@@ -1183,6 +1261,14 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.fc_cmd(u8, u8, u16, u8) } -> std::same_as<Status>;   // op, proto, mV, flags (kFcConfirm | kFcAllowInline)
     { b.fc_info() } -> std::same_as<FcInfo>;
     { b.vooc_monitor(u8) } -> std::same_as<VoocSnapshot>;   // vooc-monitor: 0 off, 1 on, 2 keep; then the summary
+    { b.svooc_start(u8, on, std::declval<const svooc::Params &>()) } -> std::same_as<svooc::Refusal>;   // svooc-trigger: cap seconds (0 = 20), USB-A waiver, responder parameters (unclamped); the confirm is checked first
+    { b.svooc_stop() } -> std::same_as<void>;
+    { b.svooc_info() } -> std::same_as<SvoocSnapshot>;
+    { b.svooc_pairs(u16, std::declval<std::span<svooc::PairRow>>()) } -> std::same_as<size_t>;   // pair rows from an index; returns the count written
+    // The SuperVOOC trigger holds D+/D- (or watches VBUS come back): the dispatcher answers Busy to every op that drives or
+    // claims D+/D-, the sniffer or the output load (fc scan / trigger, vooc switch, lab sniff 0/1/3, lab load, UFCS probe,
+    // the FcScan action) before the backend sees it.
+    { b.lines_locked() } -> std::same_as<bool>;
     { b.store_cmd(u8, u8) } -> std::same_as<StoreInfo>;   // op (list / save-emarker / save-log), slot unused
     { b.cable_r_reset() } -> std::same_as<void>;      // clears the passive reference
     { b.cable_r_mode(true) } -> std::same_as<void>;   // false = passive meter, true = Kelvin 8-wire
@@ -1338,6 +1424,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p.size() != 1 && p.size() != 2) return reply(Status::BadLength);
         const bool confirm = p.size() == 2 && p[1] != 0;
         if (action_needs_confirm(p[0]) && !confirm) return reply(Status::NeedConfirm);
+        if (p[0] == kActionFcScan && backend.lines_locked()) return reply(Status::Busy);   // the SuperVOOC trigger drives D-
         const Status st = backend.action(p[0], confirm);
         if (st != Status::Ok) return reply(st);
         if (p[0] == kActionFcScan) backend.lease_arm();   // the scan raises VBUS under host control (accepted, so confirmed)
@@ -1629,9 +1716,52 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p[0] == kFcVooc) {
             if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
             if (p[1] >= kVoocPages || (p.size() == 3 && p[2] > 1)) return reply(Status::BadArg);
+            if (p.size() == 3 && backend.lines_locked()) return reply(Status::Busy);   // the switch, while the SuperVOOC trigger runs
             return reply_n(encode_vooc(buf, backend.vooc_monitor(p.size() == 3 ? p[2] : 2), p[1]));
         }
         // --- end vooc-monitor ---
+        // --- svooc-trigger: drives D-, so the start needs the confirm flag and arms the lease ---
+        if (p[0] == kFcSvooc) {
+            if (p.size() < 2) return reply(Status::BadLength);
+            switch (p[1]) {
+            case kSvoocStatus:
+                if (p.size() != 3) return reply(Status::BadLength);
+                if (p[2] != 0) return reply(Status::BadArg);
+                return reply_n(encode_svooc(buf, backend.svooc_info()));
+            case kSvoocStart: {
+                // 4 bytes: the original request (every operator parameter at its default); 10: the extended one.
+                if (p.size() != 4 && p.size() != kSvoocStartExtBytes) return reply(Status::BadLength);
+                if ((p[2] & ~kSvoocStartMask) || p[3] > kSvoocCapMaxS) return reply(Status::BadArg);
+                if (!(p[2] & kFcConfirm)) return reply(Status::NeedConfirm);
+                svooc::Params sp;
+                if (p.size() == kSvoocStartExtBytes) {
+                    sp.i86_first = p[4]; sp.i86_esc = p[5]; sp.r82 = p[6];
+                    sp.vtarget_mv = static_cast<uint16_t>(p[7] | (p[8] << 8)); sp.esc_at_s = p[9];
+                }
+                const svooc::Refusal r = backend.svooc_start(p[3], (p[2] & kSvoocUsbA) != 0, sp);
+                const size_t n = encode_svooc(buf, backend.svooc_info());
+                if (r != svooc::Refusal::None) return reply(Status::Busy, std::span<const uint8_t>(buf.data(), n));
+                backend.lease_arm();   // the adapter may raise VBUS: the dead-man lease holds from now
+                return reply_n(n);
+            }
+            case kSvoocStop:
+                if (p.size() != 2) return reply(Status::BadLength);
+                backend.svooc_stop();
+                return reply_n(encode_svooc(buf, backend.svooc_info()));
+            case kSvoocLog: {
+                if (p.size() != 4) return reply(Status::BadLength);
+                const uint16_t from = static_cast<uint16_t>(p[2] | (p[3] << 8));
+                const uint16_t kept = backend.svooc_info().log.n;
+                std::array<svooc::PairRow, kSvoocRowsPerPage> rows{};
+                const size_t want = from < kept ? std::min<size_t>(kSvoocRowsPerPage, kept - from) : 0;
+                const size_t got = want ? std::min(want, backend.svooc_pairs(from, std::span<svooc::PairRow>(rows.data(), want))) : 0;
+                return reply_n(encode_svooc_log(buf, kept, from, std::span<const svooc::PairRow>(rows.data(), got)));
+            }
+            default:
+                return reply(Status::BadArg);
+            }
+        }
+        // --- end svooc-trigger ---
         switch (p[0]) {
         case kFcStatus:
         case kFcReset:
@@ -1654,6 +1784,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         default:
             return reply(Status::BadArg);
         }
+        if ((p[0] == kFcScan || p[0] == kFcTrigger) && backend.lines_locked()) return reply(Status::Busy);   // the SuperVOOC trigger
         if (p[0] != kFcStatus) {
             const bool trig = p[0] == kFcTrigger;
             const Status st = backend.fc_cmd(p[0], trig ? p[1] : 0, trig ? detail::rd16(&p[2]) : 0,
@@ -1694,13 +1825,22 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
             if (p[1] > 3) return reply(Status::BadArg);
             if (p[1] == 3 && (p.size() != 3 || p[2] != 1)) return reply(Status::NeedConfirm);
+            if (p[1] != 2 && backend.lines_locked()) {   // arm, cancel, selftest: the SuperVOOC trigger owns the sniffer
+                buf[0] = static_cast<uint8_t>(SniffRefusal::Svooc);
+                return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
+            }
             const SniffInfo r = backend.lab_sniff(p[1]);
-            if (r.status != static_cast<uint8_t>(Status::Ok)) return reply(static_cast<Status>(r.status));
+            if (r.status != static_cast<uint8_t>(Status::Ok)) {
+                if (r.refusal == 0) return reply(static_cast<Status>(r.status));
+                buf[0] = r.refusal;   // why the arm was refused (SniffRefusal)
+                return reply(static_cast<Status>(r.status), std::span<const uint8_t>(buf.data(), 1));
+            }
             return reply_n(encode_sniff(buf, r));
         }
         if (p[0] != kLabLoad) return reply(Status::BadArg);
         if (p.size() != 5) return reply(Status::BadLength);
         if (p[4] != 1) return reply(Status::NeedConfirm);
+        if (backend.lines_locked()) return reply(Status::Busy);   // no load on the output while the SuperVOOC trigger runs
         const LabResult r = backend.lab_load(p[1], static_cast<uint16_t>(p[2] | p[3] << 8));
         if (r.status != static_cast<uint8_t>(Status::Ok)) return reply(static_cast<Status>(r.status));
         return reply_n(encode_lab(buf, r));
@@ -1739,6 +1879,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         default:
             return reply(Status::BadArg);
         }
+        if (p[0] == kUfcsProbe && backend.lines_locked()) return reply(Status::Busy);   // the probe's UART runs on D+/D-
         if (p[0] != kUfcsStatus) {
             const Status st = backend.ufcs_op(p[0]);
             if (st != Status::Ok) return reply(st);

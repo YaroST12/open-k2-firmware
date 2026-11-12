@@ -13,7 +13,8 @@ namespace k2::link {
 bool pd_active();
 
 // The UI feeds pd::Link::inline_mode() here every tick; it is the owner of the "inline" verdict.
-void set_inline_mode(bool on);
+// `cause` is pd::Link::inline_cause() (None while not inline): the SuperVOOC trigger reads it from the probe.
+void set_inline_mode(bool on, pd::InlineCause cause = pd::InlineCause::None);
 
 // Live probe of the FUSB302 and the power monitor.
 Probe probe_now();

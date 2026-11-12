@@ -79,6 +79,10 @@ std::size_t read_record(std::size_t from, std::span<std::uint8_t> out, std::size
 // monitor still owns the floating lines).
 void monitor_poll(bool wanted, bool lines_free);
 bool monitoring();
+// The SuperVOOC trigger takes over from the monitor: stops it (the decoder's session is closed and logged, the lines go to
+// the passive idle) and returns true if it was running. It does not re-arm while the trigger's hook is claimed
+// (monitor_poll); once the run is over and fastcharge::poll() sees the lines free, monitor_poll starts it again as usual.
+bool monitor_yield();
 void monitor_enable(bool on);     // the operator's switch (RAM only, on at boot)
 bool monitor_enabled();
 struct MonitorInfo {
@@ -88,5 +92,27 @@ struct MonitorInfo {
 };
 MonitorInfo monitor_info();       // a copy taken with interrupts masked
 vooc::Live monitor_live();        // the screen's view (vooc::live_of), interrupts masked for a few reads
+
+// Edge hook of the guarded SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp), the one user of this ISR that DRIVES: the
+// ISR hands it every edge word (after the storm guard, before the recorder) and the hook may set D- through dpdm. The
+// trigger owns the hook from hook_claim() to hook_end(); meanwhile arm(), arm_stream() and arm_synth() answer Busy and
+// the EXTI lines stay on when a recording or the monitor ends.
+//   hook_claim()  the mode RAM for the session's recording: NoRam while the USB drive or net function holds it (the
+//                 real reason, reported as such), Busy while a Black Box arm, a stream or the monitor runs. Lines untouched.
+//   hook_listen() both lines to the Sniff floating inputs, the hook live, EXTI on; the first call per claim also arms
+//                 the recorder, so the session's edges (the adapter's and our own D- drive) become a Black Box capture
+//                 of type "D+/D- edges" (it ends on its own: full, 500 ms quiet, 6 s from the first edge).
+//   hook_mute()   the ISR stops calling the hook and EXTI goes off (the wake burst drives D+ itself).
+//   hook_end()    hook off, the recording ends and is stored, EXTI off. The lines are the caller's to put back.
+//   hook_storm()  the edge-storm guard tripped since the last hook_listen() (the ISR masked the lines).
+//   line_word()   the current levels as an edge word (edges::pack of now, D-, D+).
+using Hook = void (*)(std::uint32_t word);
+ArmResult hook_claim();
+void hook_listen(Hook h);
+void hook_mute();
+void hook_end();
+bool hooked();
+bool hook_storm();
+std::uint32_t line_word();
 
 }  // namespace k2::dpsniff

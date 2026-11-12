@@ -993,8 +993,29 @@ void Sink::on_tx_result(bool ok, std::uint32_t now) {
     else fail(SinkResult::TxFailed, st_.epr_mode || contract_ ? SinkState::Ready : SinkState::Idle);
 }
 
+void Sink::set_vbus_external(bool on, std::uint32_t now) {
+    if (on == vbus_external_) return;
+    vbus_external_ = on;
+    if (on) return;
+    // The owner lets go while VBUS may still be above the contract and falling: nothing is judged against samples from before
+    // (descent / release-check / down-step tracking restart), and the settle window runs from now with the longest descent window
+    // (a charger leaving a high-voltage mode drains an unloaded output slowly), so the return to the contract is not an abort.
+    tracking_ = false;
+    vref_set_ = false;
+    down_set_ = false;
+    verify_ = false;
+    st_.verifying = false;
+    ready_at_ = now;
+    descent_ms_ = kDescentMaxMs;
+    next_keepalive_ = now + kPpsKeepAliveMs;
+    if (st_.epr_mode) next_epr_ka_ = now + kEprKeepAliveMs;
+}
+
 void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
     vbus_mv_ = mv; vbus_at_ = now; vbus_seen_ = true;
+    // An external VBUS owner (set_vbus_external): the sample is kept, nothing is judged. This also skips the owner-covered
+    // over-cap abort: the owner (the SuperVOOC trigger) has its own, tighter 12 V ceiling and drops the session itself.
+    if (vbus_external_) return;
     if (verify_ && st_.state == SinkState::Ready) {   // the descent after a release: progress is a sample >= kFallStepMv below the last best
         if (!vref_set_ || mv + kFallStepMv <= vref_mv_) { vref_mv_ = mv; vref_at_ = now; vref_set_ = true; }
         if (mv <= kVSafe5MaxMv) { verify_ = false; st_.verifying = false; }
@@ -1123,7 +1144,7 @@ void Sink::tick(std::uint32_t now) {
             if (!retx_pending_ && !tx_pending_ && due(deadline_)) do_hard_reset(abort_result_, SinkState::Failed);
             break;
         case SinkState::Ready:
-            if (tx_pending_) break;
+            if (tx_pending_ || vbus_external_) break;   // an external VBUS owner: no verify, no keep-alive, nothing of our own
             if (verify_) { verify_vbus(now); break; }
             if (st_.held && contract_ && (plan_.type == PdoType::Pps || plan_.type == PdoType::Avs) &&
                 due(next_keepalive_)) {

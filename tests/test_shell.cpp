@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // The debug-shell line parser (k2/core/shell.hpp) against a recording backend: grammar, the confirm
 // rule for anything that can raise VBUS above 5 V, argument limits and line editing.
+#include <cstdio>
 #include <string>
 
 #include "k2/core/shell.hpp"
@@ -48,6 +49,8 @@ struct Fake : shell::Backend {
         return fail;
     }
     const char* diag() override { calls += "diag;"; return fail; }
+    const char* locked = nullptr;   // the D+/D- lock reason (the guarded SuperVOOC trigger runs)
+    const char* lines_locked() override { return locked; }
 };
 
 // Run one line; returns what the backend was asked to do, `out` keeps the text.
@@ -269,5 +272,54 @@ int main() {
     f.fail = nullptr;
     run(f, "help");
     CHECK_EQ(said(f, "diag "), true);
+
+    // D+/D- locked (the guarded SuperVOOC trigger drives D-): every command that drives or claims D+/D- or the sniffer is
+    // refused with the backend's reason and never reaches it, whatever level or mode; stop, fc reset and the read-only
+    // commands still go through.
+    {
+        Fake g;
+        g.locked = "busy (SuperVOOC trigger running)";
+        const char* refused[] = {
+            "dp hiz", "dm hiz", "dm 0", "dp 3.3 confirm",
+            "fc trigger qc2 5000", "fc trigger qc2 9000 confirm", "fc vooc on", "fc vooc off",
+            "sniff stream", "sniff stop", "sniff synth 100",
+            "accp ping", "accp read 1", "qc2 5000", "qc3 set 5000", "qc3+ set 5000", "afc 5000", "fcp 5000", "scp 5000 1000",
+            "vooc wake confirm", "vooc listen", "vooc answer 1 2 confirm", "vooc sniff",
+            "ufcs ping", "ufcs caps", "ufcs probe", "ufcs request 5000 1000", "vivo request 5000 1000", "dpdm hiz hiz",
+        };
+        for (const char* line : refused) {
+            const std::string calls = run(g, line);
+            CHECK_STR(calls.c_str(), "");
+            if (!said(g, "err: busy (SuperVOOC trigger running)")) std::printf("  not refused: %s -> %s\n", line, g.out.c_str());
+            CHECK_EQ(said(g, "err: busy (SuperVOOC trigger running)"), true);
+        }
+        CHECK_STR((run(g, "stop")).c_str(), "stop;");
+        CHECK_STR((run(g, "fc reset")).c_str(), "fcreset;");
+        CHECK_STR((run(g, "fc vooc")).c_str(), "vooc2;");                 // the summary read
+        CHECK_STR((run(g, "state")).c_str(), "state;");
+        CHECK_STR((run(g, "ufcs show")).c_str(), "lab:ufcs.show:0;");     // RAM tuner, no bus
+        CHECK_STR((run(g, "vbus")).c_str(), "lab:vbus:0;");
+        CHECK_STR((run(g, "pd caps")).c_str(), "lab:pd.caps:0;");         // CC, not D+/D-
+        // unlocked again: the same commands reach the backend
+        g.locked = nullptr;
+        CHECK_STR((run(g, "dm hiz")).c_str(), "dm0;");
+        CHECK_STR((run(g, "sniff stop")).c_str(), "sniff0,0;");
+        CHECK_STR((run(g, "vooc listen")).c_str(), "lab:vooc.listen:0;");
+    }
+    // Which lab commands drive or claim D+/D- (the lock's list): every fast-charge family and dpdm, none of the PD, CC,
+    // VBUS, LCD, PD Stress or UFCS tuner ones.
+    {
+        using lab::Id;
+        for (Id id : {Id::AccpPing, Id::AccpRead, Id::AccpWrite, Id::AccpDump, Id::Qc2, Id::Qc3Set, Id::Qc3Up, Id::Qc3Down,
+                      Id::Qc3pSet, Id::Qc3pUp, Id::Qc3pDown, Id::Afc, Id::Fcp, Id::Scp, Id::VoocWake, Id::VoocListen,
+                      Id::VoocAnswer, Id::VoocSniff, Id::UfcsPing, Id::UfcsCaps, Id::UfcsRequest, Id::UfcsRaw, Id::UfcsProbe,
+                      Id::VivoRaw, Id::VivoRequest, Id::Dpdm})
+            CHECK_EQ(lab::drives_lines(id), true);
+        for (Id id : {Id::UfcsSet, Id::UfcsShow, Id::UfcsReset, Id::UfcsResult, Id::CcRp, Id::CcRd, Id::Vbus, Id::PdCaps,
+                      Id::PdRequest, Id::PdPps, Id::PdAvs, Id::PdEpr, Id::PdVdm, Id::PdGet, Id::PdReread, Id::PdHardReset,
+                      Id::PdSoftReset, Id::PdRaw, Id::LcdShow, Id::LcdSpi, Id::PdStressStart, Id::PdStressStatus,
+                      Id::PdStressResult, Id::PdStressStop})
+            CHECK_EQ(lab::drives_lines(id), false);
+    }
     return test_report("test_shell");
 }

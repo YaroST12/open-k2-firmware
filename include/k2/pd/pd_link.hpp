@@ -26,6 +26,7 @@
 #include <cstdint>
 
 #include "k2/pd/cc_crossed.hpp"
+#include "k2/pd/inline_cause.hpp"
 #include "k2/pd/pd_verdict.hpp"
 #include "k2/pd/ra_guard.hpp"
 
@@ -111,20 +112,6 @@ inline constexpr std::uint32_t kInlineResumeMs = 2000;
 
 constexpr bool vbus_cut(bool vbus_known, std::int32_t vbus_mv, bool up_seen, std::uint32_t now_ms, std::uint32_t last_up_ms) {
     return vbus_known && vbus_mv < kVSafe5MinMv && up_seen && now_ms - last_up_ms < kDarkSinkMs;
-}
-
-// What latched the inline state (Link::inline_cause()): the [TEST] preflight refusal names it.
-enum class InlineCause : std::uint8_t { None, Load, Request, Rise, Vbus, FarRd };
-constexpr const char* inline_cause_name(InlineCause c) {
-    switch (c) {
-        case InlineCause::None: return "none";
-        case InlineCause::Load: return "load";
-        case InlineCause::Request: return "sink request";
-        case InlineCause::Rise: return "vbus rise";
-        case InlineCause::Vbus: return "foreign vbus";
-        case InlineCause::FarRd: return "far rd";
-    }
-    return "?";
 }
 
 class Link {

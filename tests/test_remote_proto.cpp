@@ -194,7 +194,7 @@ static void test_button() {
 static void test_state() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x03, 8, {}), r), 1);
-    check_header(r, 0x03, 8, Status::Ok, 53);
+    check_header(r, 0x03, 8, Status::Ok, 54);
     check_bytes(r, kRspHeader, {1, 2, 2, 4, 1, 3, 1, 1,
                                 0x20, 0x4E, 0x00, 0x00,          // 20000 mV
                                 0x24, 0xFA, 0xFF, 0xFF,          // -1500 mA
@@ -209,7 +209,8 @@ static void test_state() {
                                 0x05,                            // link: stale | inline
                                 83, 0, 0, 0,                     // unplugged 83 s ago
                                 0x02, 0x01, 0, 0,                // cable scanned 258 s ago
-                                0x00, 0x00, 0x00, 0x0C});        // boot reset flags: POR | PIN (CTRLSTS bits 27, 26)
+                                0x00, 0x00, 0x00, 0x0C,          // boot reset flags: POR | PIN (CTRLSTS bits 27, 26)
+                                0x05});                          // inline cause: far rd
 }
 
 // GET_STATE parts: an empty request (or part 0) is the base reply above; part 1 is the session block, the chrome the
@@ -231,7 +232,7 @@ static void test_state_session_part() {
                                 2, 10, 1, 0xFF,             // depth and the menu stack
                                 0x05, 3, 7, 2, 0x14});      // sub, sel, count, home window, flags
     CHECK_EQ(run(f, request(0x03, 41, {0}), r), 1);          // part 0 = the base reply
-    check_header(r, 0x03, 41, Status::Ok, 53);
+    check_header(r, 0x03, 41, Status::Ok, 54);
     CHECK_EQ(run(f, request(0x03, 42, {9}), r), 1);          // an unknown part
     check_header(r, 0x03, 42, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x03, 43, {1, 1}), r), 1);       // more than the part byte
@@ -321,6 +322,16 @@ static void test_lab() {
     check_header(r, 0x51, 8, Status::BadArg, 0);
     { const auto q = request(0x51, 9, {1}); CHECK_EQ(run(f, q, r), 1); }
     check_header(r, 0x51, 9, Status::BadLength, 0);
+    // A refused arm says why in one byte: the shared RAM held by the USB drive is not "busy".
+    f.sniff_status = static_cast<uint8_t>(Status::Busy);
+    f.sniff_refusal = static_cast<uint8_t>(SniffRefusal::NoRam);
+    { const auto q = request(0x51, 10, {1, 1}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 10, Status::Busy, 1);
+    check_bytes(r, kRspHeader, {2});
+    f.sniff_refusal = static_cast<uint8_t>(SniffRefusal::Ports);
+    { const auto q = request(0x51, 11, {1, 1}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 11, Status::Busy, 1);
+    check_bytes(r, kRspHeader, {1});
 }
 
 static void test_cable_r() {
@@ -1128,6 +1139,202 @@ static void test_flash_dump() {
 
 // --- vooc-monitor (k2/vooc-detect) ---
 // FC op 4: the inline VOOC monitor, page 0 summary, pages 1 / 2 the command rows; an optional switch byte first.
+// FC op 5: the guarded SuperVOOC trigger. Start needs the confirm flag (NeedConfirm, never reaching the backend), a cap
+// of at most 20 s; a refused start is Busy with the summary (refusal byte) and arms no lease; an accepted one arms it.
+static void test_fc_svooc_trigger() {
+    Fake f; Frame r;
+    int calls = f.calls;
+    CHECK_EQ(run(f, request(0x32, 1, {5, 1, 0, 0}), r), 1);
+    check_header(r, 0x32, 1, Status::NeedConfirm, 0);
+    CHECK_EQ(run(f, request(0x32, 2, {5, 1, 3, 0}), r), 1);          // an unknown flag (allow-inline) is no confirm
+    check_header(r, 0x32, 2, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 40, {5, 1, 8, 0}), r), 1);         // an unknown bit beside the confirm
+    check_header(r, 0x32, 40, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 41, {5, 1, 4, 0}), r), 1);         // the USB-A waiver alone is no confirm either
+    check_header(r, 0x32, 41, Status::NeedConfirm, 0);
+    CHECK_EQ(run(f, request(0x32, 3, {5, 1, 1, 21}), r), 1);         // cap above 20 s
+    check_header(r, 0x32, 3, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 4, {5, 1, 1}), r), 1);
+    check_header(r, 0x32, 4, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 5, {5}), r), 1);
+    check_header(r, 0x32, 5, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 6, {5, 9}), r), 1);
+    check_header(r, 0x32, 6, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 1}), r), 1);             // the status has one page; pairs are op 3
+    check_header(r, 0x32, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 42, {5, 3, 0}), r), 1);
+    check_header(r, 0x32, 42, Status::BadLength, 0);
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(f.svooc_starts, 0);
+    // Refused for the RAM: Busy, the summary carries the reason, no lease.
+    f.svooc_refusal = k2::svooc::Refusal::NoRam;
+    CHECK_EQ(run(f, request(0x32, 8, {5, 1, 1, 0}), r), 1);
+    check_header(r, 0x32, 8, Status::Busy, 45);
+    CHECK_EQ(r[kRspHeader + 1], static_cast<uint8_t>(k2::svooc::Refusal::NoRam));
+    CHECK_EQ(f.lease_arms, 0);
+    // Accepted with a 12 s cap: Ok, the lease armed once.
+    f.svooc_refusal = k2::svooc::Refusal::None;
+    CHECK_EQ(run(f, request(0x32, 9, {5, 1, 1, 12}), r), 1);
+    check_header(r, 0x32, 9, Status::Ok, 45);
+    CHECK_EQ(f.svooc_cap, 12);
+    CHECK(!f.svooc_usb_a);
+    // The 4-byte request is the old one: every operator parameter at its default (0x86 target 0x005, 0x82 word 0x051, no
+    // closed loop, no escape).
+    CHECK_EQ(f.svooc_params.i86_first, 0x005);
+    CHECK_EQ(f.svooc_params.i86_esc, 0x005);
+    CHECK_EQ(f.svooc_params.r82, 0x051);
+    CHECK_EQ(f.svooc_params.vtarget_mv, 0);
+    CHECK_EQ(f.svooc_params.esc_at_s, 0);
+    CHECK_EQ(f.lease_arms, 1);
+    CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(k2::svooc::Stage::Wake));
+    // The USB-A waiver rides the start flags (bit 2) beside the confirm and reaches the backend.
+    CHECK_EQ(run(f, request(0x32, 43, {5, 1, 5, 0}), r), 1);
+    check_header(r, 0x32, 43, Status::Ok, 45);
+    CHECK(f.svooc_usb_a);
+    CHECK_EQ(r[kRspHeader + 4] & 0x10, 0x10);                         // summary flags bit 4: waiver in use
+    f.svooc_snap.report.usb_a = false; f.svooc_usb_a = false;
+    // The extended start [5, 1, flags, cap_s, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s] (10 bytes) hands
+    // the parameters to the backend as sent (the firmware clamps); the lengths in between are BadLength.
+    CHECK_EQ(run(f, request(0x32, 47, {5, 1, 1, 9, 0x0F, 0x23, 0x60, 0xF8, 0x2A, 4}), r), 1);   // vtarget 0x2AF8 = 11000
+    check_header(r, 0x32, 47, Status::Ok, 45);
+    CHECK_EQ(f.svooc_cap, 9);
+    CHECK_EQ(f.svooc_params.i86_first, 0x00F);
+    CHECK_EQ(f.svooc_params.i86_esc, 0x023);
+    CHECK_EQ(f.svooc_params.r82, 0x060);
+    CHECK_EQ(f.svooc_params.vtarget_mv, 11000);
+    CHECK_EQ(f.svooc_params.esc_at_s, 4);
+    CHECK_EQ(f.lease_arms, 3);
+    CHECK_EQ(run(f, request(0x32, 48, {5, 1, 1, 0, 5}), r), 1);                             // 5 bytes
+    check_header(r, 0x32, 48, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 49, {5, 1, 1, 0, 5, 5, 0x51, 0, 0}), r), 1);              // 9 bytes: no esc_at_s
+    check_header(r, 0x32, 49, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 51, {5, 1, 1, 0, 5, 5, 0x51, 0, 0, 0, 0}), r), 1);        // 11 bytes
+    check_header(r, 0x32, 51, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 50, {5, 1, 1, 21, 5, 5, 0x51, 0, 0, 0}), r), 1);          // the cap check still holds
+    check_header(r, 0x32, 50, Status::BadArg, 0);
+    CHECK_EQ(f.svooc_starts, 4);
+    f.lease_arms = 2;
+    f.svooc_params = {};
+    // The summary in the documented order.
+    k2::svooc::Report &rep = f.svooc_snap.report;
+    f.svooc_snap.stage = k2::svooc::Stage::Exit;
+    rep.abort = k2::svooc::Abort::Overvoltage; rep.tries = 1; rep.accepted = true; rep.exit_checked = true;
+    rep.exit_ok = false; rep.cap_ms = 20000; rep.elapsed_ms = 3456; rep.vbus_start_mv = 5100; rep.vbus_max_mv = 12001;
+    rep.vbus_exit_mv = 9000; rep.ibus_max_ma = 7;
+    rep.contract_start = k2::svooc::Contract::Own5V; rep.contract_end = k2::svooc::Contract::Other;
+    rep.inline_cause = k2::pd::InlineCause::FarRd;
+    f.svooc_snap.phase = k2::svooc::Phase::Ramp; f.svooc_snap.off_run = 1; f.svooc_snap.driving = true;
+    k2::svooc::Log &lg = f.svooc_snap.log;
+    lg.commands = 30; lg.replies = 29; lg.missed = 1; lg.cut = 0; lg.partials = 2; lg.pairs_total = 31; lg.last_cmd = 0x82;
+    lg.n = 18;
+    for (unsigned i = 0; i < 18; i++) f.svooc_rows[i] = {static_cast<uint8_t>(0x80 + i), static_cast<uint16_t>(0x100 + i),
+                                                         static_cast<uint16_t>(500 + 25 * i), static_cast<uint16_t>(5000 + i)};
+    CHECK_EQ(run(f, request(0x32, 10, {5, 0, 0}), r), 1);
+    check_header(r, 0x32, 10, Status::Ok, 45);
+    check_bytes(r, kRspHeader, {static_cast<uint8_t>(k2::svooc::Stage::Exit), 0, static_cast<uint8_t>(k2::svooc::Abort::Overvoltage),
+                                1, 0x0B, static_cast<uint8_t>(k2::svooc::Phase::Ramp), 1, 0x82,
+                                30, 0, 29, 0, 1, 0, 0, 0, 2, 0, 31, 0, 18,
+                                0x20, 0x4E, 0x80, 0x0D, 0xEC, 0x13, 0xE1, 0x2E, 0x28, 0x23, 7, 0, 1, 2, 5,
+                                // appended (36..44): the effective parameters i86_first i86_esc r82 vtarget(2) esc_at_s,
+                                // the escape state, when it was sent (u16): defaults and "off" here
+                                0x05, 0x05, 0x51, 0, 0, 0, 0, 0, 0});
+    // Parameters and escape outcome in the appended bytes.
+    f.svooc_snap.params.i86_first = 0x00F; f.svooc_snap.params.i86_esc = 0x023; f.svooc_snap.params.r82 = 0x060;
+    f.svooc_snap.params.vtarget_mv = 9000; f.svooc_snap.params.esc_at_s = 3;
+    f.svooc_snap.escape = k2::svooc::Escape::Got86; f.svooc_snap.escape_t_ms = 3044;
+    CHECK_EQ(run(f, request(0x32, 52, {5, 0, 0}), r), 1);
+    check_header(r, 0x32, 52, Status::Ok, 45);
+    check_bytes(r, kRspHeader + 36, {0x0F, 0x23, 0x60, 0x28, 0x23, 3, 3, 0xE4, 0x0B});
+    f.svooc_snap.params = {}; f.svooc_snap.escape = k2::svooc::Escape::Off; f.svooc_snap.escape_t_ms = 0;
+    // Log pages [5, 3, from_lo, from_hi]: kept(2) from(2) n(1) { cmd word(2) t_ms(2) vbus_mv(2) } x n, 7 per page.
+    CHECK_EQ(run(f, request(0x32, 11, {5, 3, 0, 0}), r), 1);
+    check_header(r, 0x32, 11, Status::Ok, 5 + 7 * 7);
+    check_bytes(r, kRspHeader, {18, 0, 0, 0, 7,
+                                0x80, 0x00, 0x01, 0xF4, 0x01, 0x88, 0x13,     // cmd 80 word 100 t 500 ms vbus 5000
+                                0x81, 0x01, 0x01, 0x0D, 0x02, 0x89, 0x13});   // cmd 81 word 101 t 525 ms vbus 5001
+    CHECK_EQ(run(f, request(0x32, 12, {5, 3, 14, 0}), r), 1);                 // from 14: the last 4
+    check_header(r, 0x32, 12, Status::Ok, 5 + 7 * 4);
+    check_bytes(r, kRspHeader, {18, 0, 14, 0, 4, 0x8E, 0x0E, 0x01});
+    CHECK_EQ(run(f, request(0x32, 13, {5, 3, 18, 0}), r), 1);                 // at the end: an empty page, not an error
+    check_header(r, 0x32, 13, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {18, 0, 18, 0, 0});
+    CHECK_EQ(run(f, request(0x32, 44, {5, 3, 0x00, 0x02}), r), 1);            // from 512 > kept
+    check_header(r, 0x32, 44, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {18, 0, 0, 2, 0});
+    // A long run: kept 512 (the summary saturates its u8 count at 255), the last page holds the last 1 pair.
+    lg.n = 512; lg.pairs_total = 700;
+    for (unsigned i = 0; i < 512; i++) f.svooc_rows[i] = {static_cast<uint8_t>(i), static_cast<uint16_t>(i), static_cast<uint16_t>(i), 5000};
+    CHECK_EQ(run(f, request(0x32, 45, {5, 0, 0}), r), 1);
+    CHECK_EQ(r[kRspHeader + 20], 255);
+    CHECK_EQ(run(f, request(0x32, 46, {5, 3, 0xFF, 0x01}), r), 1);            // from 511
+    check_header(r, 0x32, 46, Status::Ok, 5 + 7);
+    check_bytes(r, kRspHeader, {0x00, 0x02, 0xFF, 0x01, 1, 0xFF});
+    lg.n = 18; lg.pairs_total = 31;
+    // Stop.
+    CHECK_EQ(run(f, request(0x32, 14, {5, 2}), r), 1);
+    check_header(r, 0x32, 14, Status::Ok, 45);
+    CHECK_EQ(f.svooc_stops, 1);
+    CHECK_EQ(r[kRspHeader + 2], static_cast<uint8_t>(k2::svooc::Abort::Stopped));
+    CHECK_EQ(f.lease_arms, 2);   // the plain start and the USB-A start armed it once each; the reads and the stop did not
+}
+
+// While the SuperVOOC trigger holds D+/D- (backend.lines_locked()), every remote op that drives or claims D+/D-, the
+// sniffer or the output load is Busy before the backend sees it: fc scan / trigger, the vooc monitor switch, lab sniff
+// arm / cancel / selftest (refusal byte Svooc), lab load, the UFCS probe, the FcScan action. Reads, fc reset, the
+// trigger's own ops and stop still pass.
+static void test_lines_locked_by_the_svooc_trigger() {
+    Fake f; Frame r;
+    f.locked = true;
+    const int calls = f.calls;
+    struct Case { std::vector<uint8_t> req; uint8_t cmd; };
+    const auto request = [](uint8_t cmd, uint8_t seq, const std::vector<uint8_t> &payload) {
+        std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, cmd, seq, static_cast<uint8_t>(payload.size())};
+        v.insert(v.end(), payload.begin(), payload.end());
+        v.resize(kFrameSize, 0);
+        return v;
+    };
+    const Case refused[] = {
+        {{2, 1}, 0x32},                       // fc scan, confirmed
+        {{3, 0, 0x88, 0x13, 0}, 0x32},        // fc trigger qc2 5000 mV
+        {{4, 0, 1}, 0x32},                    // vooc monitor on
+        {{4, 0, 0}, 0x32},                    // vooc monitor off
+        {{1, 1}, 0x51},                       // lab sniff arm
+        {{1, 0}, 0x51},                       // lab sniff cancel
+        {{1, 3, 1}, 0x51},                    // lab sniff selftest
+        {{0, 50, 10, 0, 1}, 0x51},            // lab load (a load on the output)
+        {{kUfcsProbe}, 0x52},                 // UFCS probe
+        {{kActionFcScan, 1}, 0x06},           // the FcScan action
+    };
+    uint8_t seq = 1;
+    for (const Case &c : refused) {
+        CHECK_EQ(run(f, request(c.cmd, seq, c.req), r), 1);
+        CHECK_EQ(r[4], static_cast<uint8_t>(Status::Busy));
+        if (r[4] != static_cast<uint8_t>(Status::Busy)) std::printf("  not refused: cmd 0x%02X op %u\n", c.cmd, c.req[0]);
+        ++seq;
+    }
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(f.lease_arms, 0);
+    // lab sniff names the trigger in its refusal byte
+    CHECK_EQ(run(f, request(0x51, 40, {1, 1}), r), 1);
+    check_header(r, 0x51, 40, Status::Busy, 1);
+    CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(SniffRefusal::Svooc));
+    // still open: fc status and reset, the vooc read, the trigger's status and stop, lab sniff status, UFCS status / stop
+    const Case open[] = {
+        {{0}, 0x32}, {{1}, 0x32}, {{4, 0}, 0x32}, {{5, 0, 0}, 0x32}, {{5, 2}, 0x32},
+        {{1, 2}, 0x51}, {{kUfcsStatus}, 0x52}, {{kUfcsStop}, 0x52},
+    };
+    for (const Case &c : open) {
+        CHECK_EQ(run(f, request(c.cmd, seq, c.req), r), 1);
+        CHECK_EQ(r[4], static_cast<uint8_t>(Status::Ok));
+        if (r[4] != static_cast<uint8_t>(Status::Ok)) std::printf("  refused: cmd 0x%02X op %u\n", c.cmd, c.req[0]);
+        ++seq;
+    }
+    // unlocked: the sniff arm reaches the backend again
+    f.locked = false;
+    CHECK_EQ(run(f, request(0x51, 60, {1, 1}), r), 1);
+    CHECK_EQ(f.sniff_sub, 1);
+}
+
 static void test_fc_vooc_monitor() {
     Fake f; Frame r;
     k2::vooc::Summary &s = f.vooc_snap.s;
@@ -2718,6 +2925,8 @@ int main() {
     test_ripple();
     test_fc();
     test_fc_vooc_monitor();   // vooc-monitor
+    test_fc_svooc_trigger();  // svooc-trigger
+    test_lines_locked_by_the_svooc_trigger();
     test_ripple_frame();
     test_pdos();
     test_emarker();

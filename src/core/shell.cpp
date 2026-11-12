@@ -90,6 +90,13 @@ void done(Backend& b, const char* result) {
     else b.write("ok\r\n");
 }
 
+// D+/D- locked by the backend: the refusal is written and true returned; the command must not reach the backend.
+bool locked(Backend& b) {
+    const char* why = b.lines_locked();
+    if (why) err(b, why);
+    return why != nullptr;
+}
+
 // Consumes an optional trailing `confirm` from [first, n); false when something else follows.
 bool trailing_confirm(const Tokens& k, std::size_t first, bool& confirm) {
     confirm = false;
@@ -110,6 +117,7 @@ void cmd_drive(Backend& b, const Tokens& k, bool dp) {
     bool confirm;
     if (!trailing_confirm(k, 2, confirm)) return err(b, "unexpected argument");
     if (needs_confirm && !confirm) return err(b, "this level needs a trailing confirm");
+    if (locked(b)) return;
     done(b, b.drive(dp, d));
 }
 
@@ -135,8 +143,8 @@ void cmd_fc(Backend& b, const Tokens& k) {
     if (k.n == 2 && same(k.t[1], "reset")) return done(b, b.fc_reset());
     if (k.n >= 2 && same(k.t[1], "vooc")) {
         if (k.n == 2) return done(b, b.vooc_monitor(2));
-        if (k.n == 3 && same(k.t[2], "on")) return done(b, b.vooc_monitor(1));
-        if (k.n == 3 && same(k.t[2], "off")) return done(b, b.vooc_monitor(0));
+        if (k.n == 3 && same(k.t[2], "on")) return locked(b) ? void() : done(b, b.vooc_monitor(1));
+        if (k.n == 3 && same(k.t[2], "off")) return locked(b) ? void() : done(b, b.vooc_monitor(0));
         return err(b, "usage: fc vooc [on|off]");
     }
     if (k.n < 4 || !same(k.t[1], "trigger")) return err(b, "usage: fc trigger <proto> <mV> [confirm] | fc reset");
@@ -149,14 +157,17 @@ void cmd_fc(Backend& b, const Tokens& k) {
     bool confirm;
     if (!trailing_confirm(k, 4, confirm)) return err(b, "unexpected argument");
     if (static_cast<int>(mv) > fc::kConfirmAboveMv && !confirm) return err(b, "above 5000 mV needs a trailing confirm");
+    if (locked(b)) return;
     done(b, b.fc_trigger(static_cast<fc::Proto>(proto), static_cast<int>(mv), confirm));
 }
 
 void cmd_sniff(Backend& b, const Tokens& k) {
-    std::uint32_t rate;
-    if (k.n == 2 && same(k.t[1], "stream")) return done(b, b.sniff(1, 0));
-    if (k.n == 2 && same(k.t[1], "stop")) return done(b, b.sniff(0, 0));
-    if (k.n == 3 && same(k.t[1], "synth") && number(k.t[2], rate) && rate >= 1 && rate <= 100000) return done(b, b.sniff(2, rate));
+    std::uint32_t rate = 0;
+    int mode = -1;
+    if (k.n == 2 && same(k.t[1], "stream")) mode = 1;
+    else if (k.n == 2 && same(k.t[1], "stop")) mode = 0;
+    else if (k.n == 3 && same(k.t[1], "synth") && number(k.t[2], rate) && rate >= 1 && rate <= 100000) mode = 2;
+    if (mode >= 0) return locked(b) ? void() : done(b, b.sniff(mode, mode == 2 ? rate : 0));
     err(b, "usage: sniff stream | sniff stop | sniff synth <1..100000 edges/s>");
 }
 
@@ -301,6 +312,7 @@ void Shell::execute(std::string_view line) {
     if (lab::is_family(c)) {
         lab::Cmd cmd;
         if (const char* why = lab::parse(k.t.data(), k.n, cmd)) return err(b_, why);
+        if (lab::drives_lines(cmd.id) && locked(b_)) return;
         return done(b_, b_.lab(cmd));
     }
     if (same(c, "cc")) return cmd_cc(b_, k);

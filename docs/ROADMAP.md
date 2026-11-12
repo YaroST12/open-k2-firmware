@@ -80,6 +80,13 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **VOOC wake burst blocks the main loop 24 ms** (2026-11-12, k2/svooc-trigger; known, left as is by decision). The
+  guarded SuperVOOC trigger (`src/fastcharge/svooc_trig.cpp` `wake()`) plays the 80 x 300 us D+ burst through
+  `dpdm::play`, unmasked but blocking, the same as the engine's `vooc_wake()` (`src/fastcharge/fc_engine.cpp`). For
+  those 24 ms nothing calls `fusb302::service()`, the guards do not sample and the LCD idle hook does not run, against
+  the "never block the main loop over ~1 ms" rule. It runs only at the start of a try (up to 3 per run), with D- released
+  and VBUS at 5 V. A fix would play the burst from a timer or as main-loop steps.
+
 - **PD Stress "softreset" unplugs the charger** (2026-11-12, Xiaomi 20K bank on 1.0.0-670; parked with the tool, which is
   compiled out by default since the same day: `K2_PDSTRESS=0`). `fusb302::sink_soft_reset()` -> `Sink::soft_reset()` queues
   the Soft_Reset and sets the sink Idle, not held, at once. The demand block in `fusb302::service()` then sees no

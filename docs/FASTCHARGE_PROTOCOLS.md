@@ -184,7 +184,9 @@ apart.
 ### Detection by ident, no trigger (k2/vooc-detect, 2026-11-11)
 
 Rule (operator, 2026-11-11): the K2 never answers a VOOC adapter. Any reply can lead a SuperVOOC adapter towards its
-high-current output (11 V at up to 11 A), so the charger test detects and stops.
+high-current output (11 V at up to 11 A), so the charger test detects and stops. This still holds for the charger test,
+the scan, the fast-charge engine and the UI. The one exception (operator, 2026-11-12) is the guarded no-load trigger
+below, reachable from the HID remote only.
 
 - Wake: odd tries play the phone's entry burst (80 steps of 300 us, D+ 3.3 V / 0 V, D- Hi-Z so the closed short carries
   it, ending low; reverse-engineered from the capture above); even tries the older 13-period train. 3 tries, 1.5 s
@@ -247,6 +249,128 @@ proves the decoder header reaches no pin, register or driver.
 - While the monitor owns the lines (Sniff floating inputs), the D+/D- classifier reads `USB DATA` whatever the
   levels (PD still wins), and the window starts fresh when the monitor lets go.
 - The monitor is on by default (a RAM switch, not saved). Not yet run on hardware.
+
+### Guarded SuperVOOC trigger, no load (k2/svooc-trigger, 2026-11-12, NOT run on hardware)
+
+Approved by the operator on 2026-11-12 under the guards below. The K2 stands in for the phone: it wakes the adapter,
+answers each command on D- with the word a OnePlus 15 sent, and lets the adapter raise VBUS while nothing draws
+current. Remote only, no UI entry:
+
+    python3 tools/k2_remote.py fc svooc-trigger --confirm [--cap SECONDS] [--usb-a] [--i86-first N] [--r82 N | --vtarget MV]
+                                                [--i86-at S [--i86 N]]   # polls until the run ends, Ctrl-C = stop
+    python3 tools/k2_remote.py fc svooc-status                             # the last report and the first 40 pairs
+    python3 tools/k2_remote.py [--json] fc svooc-log [--start N] [--count N]   # the whole command>reply list
+    python3 tools/k2_remote.py fc svooc-stop
+
+- Monitor handoff (2026-11-12): the passive VOOC monitor is no obstacle to a start. Once every other check passes, the
+  trigger stops it (`dpsniff::monitor_yield`: the decoder's session is closed and logged, the lines go to the passive idle)
+  and claims the lines. The monitor cannot re-arm while the trigger's hook is claimed or `fctrig::svooc_running()`
+  (fastcharge::poll's `lines_free`), and resumes by itself after the run when its normal conditions hold. A Black Box arm
+  or stream still refuses the start, and a Black Box arm / stream during the run is refused (`SniffRefusal::Svooc`).
+- Legacy A port waiver (`--usb-a`, start flags bit 2, `svooc::StartFacts::usb_a`): for a charger's USB-A port wired
+  through an A-to-C cable into the K2's bottom (female) port, nothing on the other port. The K2 then sees a far sink (the
+  adapter side looks like a load) and would refuse. The operator's flag waives ONLY that far-sink refusal, at the start and
+  as the in-run abort "sink appeared", and only while no PD is active anywhere (link `pd_active` false and no contract,
+  `Contract::None`); with PD active the start is refused as "USB-A waiver but PD is active". The waiver also reaches
+  the inline latch, but only for the two topology causes (`pd::InlineCause`, `include/k2/pd/inline_cause.hpp`): `FarRd`
+  (a sink's Rd on CC with none of the K2's own while a source feeds the link: what a charger's Rp through an A-to-C cable
+  looks like) and `Vbus` (VBUS above 5.5 V for 1.5 s with no contract of the K2's own: the A port simply being on).
+  `Load`, `Request` and `Rise` (current over 50 mA, a foreign PD Request, a VBUS rise the K2 did not cause) and a latch
+  with no recorded cause still refuse the start and abort a run ("inline mode (cause: load)" ...). A latched topology
+  cause is upgraded to `Load` / `Request` by `pd::Link` when that traffic shows up later, so the in-run guard sees a real
+  sink arrive; `Rise` is left out of the upgrade because the trigger's own ramp raises VBUS. Every other guard stays:
+  |I| <= 50 mA, VBUS 4.5-5.5 V at the start, the 12 V ceiling, off-script, host loss, the cap, the exit watch, and the
+  PD-appears aborts. The passive VOOC monitor holding D+/D- in Sniff is not a line conflict (`svooc::lines_off_idle`);
+  the trigger takes the lines over from it. The report (`usb_a_waiver`, summary flags bit 4, the summary's cause byte,
+  state byte 53 `inline_cause`) and the `[SVOOC] start` log line say "far-sink / inline check waived (USB-A)".
+- Full pair list (`fc svooc-log`, FC op 5 sub-op 3 `[5, 3, from_lo, from_hi]`): the wire keeps up to 512 command>reply
+  pairs of the latest wake (6 B each in RAM, plus 2 B of VBUS), each with the command's start in ms since that wake
+  (u16, saturating) and the monitor's VBUS when the pair closed (0 = none); 7 rows (49 B) per reply page, so a whole
+  list is at most 74 requests. The list stays readable after the run until the next wake. `--json` prints
+  `{"svooc_log": {"kept", "start", "pairs": [{"i", "t_ms", "vbus_mv", "cmd", "word"}]}}`. `svooc-trigger` and
+  `svooc-status` print the first 40 pairs of it.
+
+- Operator parameters of the responder (`svooc::Params` in `svooc_script.hpp`; none of them touches a guard, the 50 mA,
+  12 V, cap, exit watch and waivers stay as they are). Values are clamped, not refused, by the firmware; the report,
+  `svooc-status`, the `svooc-log` header and the `[SVOOC] start` log line show the effective ones.
+  - `--i86-first N` (0x001..0x023, default 0x005): the answer to every 0x86 after the handshake. The 0x86 reply is about
+    100 mA per count (hardware, inferred), so 0x005 asks for about 0.5 A.
+  - `--r82 N` (0x000..0x07E, default 0x051): a constant answer to every 0x82 poll. At a steady 3.6 A the charger's VBUS
+    followed `VBUS_mV = 20.35 * N + 6918` (fit of the notes, inferred).
+  - `--vtarget MV` (at most 11000 mV; 0 = off, replaces `--r82`): closed loop. At every 0x82 poll the reply is computed
+    from the latest measured VBUS, `reply = n(VBUS) + k`, clamped to 0..0x07E, with `n(v) = round((v - 6918) / 20.35)`
+    (the fit above, a phone's own word at 3.6 A) and `k = max(0, 0x07E - n(target))`. The word never reads below the
+    phone's and reaches the top of the scale (0x07E, "battery high") exactly when VBUS reaches the target; a target
+    above 9482 mV, which the scale cannot say, gives the phone's own word. The pair log keeps the VBUS of every pair, so
+    the reply per pair and the reading it came from can be compared. With no VBUS reading yet the constant word goes
+    out. An inferred rule, not a known adapter behaviour.
+  - `--i86-at S [--i86 N]` (S 1..20 s after the wake): the first 0x82 poll at or after S answers 0x07F (the escape word:
+    the charger then sends a fresh 0x86 instead of the next 0x82); that 0x86 is answered with N (default 0x005, range as
+    above); every later 0x86 too. The outcome is `armed` (not reached), `sent`, `got 86` (the charger's next command
+    was 0x86) or `no 86`, with the time of the 0x07F in ms since the wake.
+  - Remote protocol (append-only, length-gated): the start request is `[5, 1, flags, cap]` (every parameter at its
+    default) or ten bytes `[5, 1, flags, cap, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s]`; any other
+    length is BadLength. The summary grew from 36 to 45 bytes (36..44: the effective i86_first, i86_esc, r82, vtarget
+    u16, esc_at_s, the escape state and its time u16), so a decoder takes the base from a 36-byte payload and the rest
+    when 45 arrive (`tools/k2_remote.py` does).
+- Decode errors on the USB-C run 3 (0x98 read as 0x9C, 0x8E as 0x82; 2026-11-12): not reproducible on the host. Every
+  captured session replays clean through the wire, and both misreads are a single D- level at one bit position (0x98 vs
+  0x9C differ in bit 2, 0x8E vs 0x82 in bits 2 and 3), so a wrong D- level at the pad is the likely cause (the pin
+  floating after the reply, a weak or slow charger drive on the USB-C path), not the framing. Unproven until the
+  D+/D- edges of a faulty run are read back with `lab sniff` and `tools/vooc_edges.py`; no wire change was made.
+
+Three pure parts (host-tested) and one glue file:
+
+- Responder (`include/k2/fastcharge/svooc_script.hpp`). Replies keyed by (command, occurrence), replayed from the
+  captured sessions only (`op15_svooc_entry`, `op15_svooc_replug`, `op15_svooc_usbc_entry`, `oneplus15_svooc_init`
+  fixtures; the init script is identical in all four). Ident 0xA8 > 0x00D (up to 3 times), then
+  98>073 98>023 9E>010 80>010 94>010 98>010 8A>028 98>010 8E>010 9A>030 82>074 82>00B 84>071 84>031 86>06B 86>03A
+  88>05D 88>042 8A>048 8A>052 8C>046 8C>066 88>04D (accepted). After that (inferred from the accepted sessions, meaning
+  unknown): 94 silent, 84 > 010 seven times then 030 once, 86 > 0x005 (operator parameter), 82 > 0x051 every poll (a
+  default of the operator parameters below, the lowest word of the USB-C session; the phone's word rose slowly; the
+  earlier fixed 86 > 023 / 00F alternation is gone). Anything else is off-script and answered
+  silent; the third off-script command in a row stops the responder. `tests/test_svooc_script.cpp` feeds every
+  capture's commands through it and matches the phone's words.
+- Bit layer (`include/k2/fastcharge/svooc_wire.hpp`). Eats the dpsniff edge words. A command frame is 9 D+ low pulses;
+  bit k is the D- level the edge before pulse k+1's fall left. The reply slot is the next frame within 12 ms of the
+  command; D- is taken high at its first fall and set to bit k 50 us after rise k (the phone's measured delay, 45-66 us),
+  MSB first. After the 9th bit D- stays driven until 2.4 ms after the last rise (the phone held it 2.3-2.6 ms) or the
+  next frame's first edge, then is released (floating, the line idles high). A slot whose clock stops is released 1 ms
+  after its last edge. `tests/test_svooc_wire.cpp` replays the captured edge files through it.
+- Guards and session (`include/k2/fastcharge/svooc_run.hpp`, `tests/test_svooc_run.cpp`). Refuses to start without
+  the confirm flag, while D+/D- are owned (engine, scan, probe, charger test, Black Box arm / stream, a line not at idle),
+  without the host link or the power monitor, with a sink on the bottom port (Rd on CC) or inline mode, with a PD
+  contract other than the K2's own 5 V one (see below), with |I| > 50 mA, with VBUS outside 4.5-5.5 V, or when the shared RAM belongs to the USB drive (reported as
+  "no RAM: USB drive enabled", not "busy"). While running, every main-loop pass aborts on: host gone, monitor lost,
+  VBUS > 12.0 V (12.0 V itself runs), |I| > 50 mA, a sink or inline device appearing, a PD contract appearing, changing or being lost, an edge
+  storm on D+/D-, the charger off-script for more than 2 frames, the run-time cap (20 s, shorter on request). The
+  lease expiring or the host's `stop` ends it as "stopped".
+- The K2's own 5 V contract (hardware 2026-11-12): the OnePlus SUPERVOOC 120 W USB-C port keeps VBUS at 0 V until it sees
+  Rd, so on USB-C the K2 pins Rd (`pd-reread --pin 1 --no-run`) and then auto-holds a PD contract (PDO 1, 5 V; the real
+  phone does the same before SuperVOOC takes over on D+/D-). That contract is allowed at the start and during the run:
+  held by the K2's own sink, Ready, position 1 (the fixed 5 V PDO), at or under 5.0 V, not EPR, not inline, no far sink
+  (`svooc::classify`). Any other contract (above 5 V, PPS / AVS, EPR, one a far sink or an inline charger holds, one only
+  decoded passively, one mid-renegotiation) is refused at the start as "PD contract not own 5 V". During the run the
+  contract changing to anything else aborts as "PD contract changed", and losing it (hard reset, detach) as "PD contract
+  lost": the D+/D- session is meaningless then. The report carries the contract at the start and at the end
+  (`none` / `own 5 V` / `other`). The exit never touches the contract or the Rd pin; the main session releases them
+  (`pd-reread --pin 0`). Wake / listen as the detection (burst, 1.5 s listen, 3 s
+  rest, 3 tries), "no adapter answer" after that.
+- Exit, always: stop answering, release D-, both lines to the passive idle; then watch VBUS for 5 s. Back at or under
+  5.5 V is reported as such, still higher as "STILL ABOVE 5.5 V" with the reading. Report: highest VBUS, highest |I|,
+  commands / replies / missed / cut, the command > reply pairs (the first 40 in the report, all through `svooc-log`), the abort or refusal reason. Log lines
+  `[SVOOC] start / wake / release / exit`.
+- Glue (`src/fastcharge/svooc_trig.cpp`). The dpsniff ISR (EXTI7 D+ / EXTI2 D-) calls the wire through a hook; the
+  ISR busy-waits from the edge's own cycle stamp to rise + 50 us (never longer) and sets D- through `dpdm::set_dm`.
+  The ISR latency budget: a bit is in time while it lands before the adapter's latch just before the next fall,
+  0.43-0.51 ms after the rise, so ~380 us of slack for a late interrupt; command bits come from the state the previous
+  edge left, so a late interrupt does not misread them. The session's edges (the adapter's and our own D-) are recorded
+  as a Black Box "D+/D- edges" capture from the first listen on (first 6 s), the hardware proof of the timing.
+- Unproven on hardware: the D- drive timing and level as the adapter sees them (PB1/PB2 push-pull through the switch
+  network), whether the wake burst wakes an adapter with no phone, the ISR latency under USB and LCD traffic, the
+  20 ms guard sampling against a fast VBUS rise, and a flash write stalling the ISR mid-frame. A USB-C SUPERVOOC
+  adapter gives VBUS only to a sink (Rd); in the K2's passive boot it stays at 0 V and the start is refused (VBUS not
+  5 V).
 
 ### Passive classifier rules that guard against a false handshake (2026-11-11, `src/fastcharge/fastcharge_classify.cpp`)
 

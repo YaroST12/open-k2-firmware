@@ -64,7 +64,7 @@ void delay_ms(uint32_t ms) { g_stub.ms += ms; g_stub.delays_ms += ms; if (g_stub
 #endif
 
 namespace link {
-void set_inline_mode(bool on) { g_stub.link_inline = on; }
+void set_inline_mode(bool on, pd::InlineCause) { g_stub.link_inline = on; }
 Reason inline_now() {
     Probe p;
     p.pd_active = g_stub.caps.valid && g_stub.caps.active_cc != 0;
@@ -806,6 +806,7 @@ void stop() {
     if (g_stub.reader_scanner) g_stub.reader_scanner->abort();
 }
 void poll() {}
+bool svooc_running() { return false; }   // the guarded SuperVOOC trigger is remote only: never on in the UI tests
 bool paint_critical() { return g_stub.fc_critical; }
 const ufcs::Tuner& ufcs_tuner() { return g_stub.ufcs_tuner; }
 TuneSet ufcs_set(ufcs::Field f, std::uint32_t v) {
