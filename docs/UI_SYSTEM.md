@@ -910,7 +910,10 @@ Gets and wants block:
 |---|---|---|
 | Full | gets at least 100 % of wants | `kOk` |
 | Partial | gets at least 60 % | `kCaution` |
-| Poor | below 60 %, no contract, or 5 V only (whatever the numbers say) | `kError` |
+| Poor | below 60 %, or no contract | `kError` |
+
+- By power ratio only, whatever the kind: a 5 V device that gets its 15 W is Full (green); a charger that falls back
+  to 5 V for a 55 W device is Poor by the ratio (27 %). Only `Kind::None` (no contract) is Poor without a ratio.
 
 - No prediction yet (no charger on the plug): `gets --` stays `kFaint` and `wants` is neutral `kText`, never red.
 - The grade is a second cue, not the only one: the contract, the limit text and the list note say the same in words.

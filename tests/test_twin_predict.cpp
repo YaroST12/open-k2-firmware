@@ -244,7 +244,7 @@ static void test_want_mw() {
 }
 
 // The grade of a prediction: power it gets against the power it wants. Full at 100 % and over, Partial from 60 %, else Poor;
-// no contract and 5 V only are Poor whatever the numbers say.
+// no contract is Poor; every other kind, 5 V only included, is graded by the ratio alone.
 static void test_grade() {
     Outcome o;
     o.kind = Kind::Fixed;
@@ -266,14 +266,18 @@ static void test_grade() {
     CHECK_EQ(int(grade(o, 0)), int(Grade::Full));         // it wants nothing: nothing is missing
     o.kind = Kind::FiveV;
     o.mw = 15000;
-    CHECK_EQ(int(grade(o, 15000)), int(Grade::Poor));     // 5 V only is Poor even at 100 %
+    CHECK_EQ(int(grade(o, 15000)), int(Grade::Full));     // 5 V only is graded by ratio: a 15 W device getting 15 W is Full
+    o.mw = 15000;
+    CHECK_EQ(int(grade(o, 55000)), int(Grade::Poor));     // a 55 W device held at 5 V (27 %)
+    o.mw = 33000;
+    CHECK_EQ(int(grade(o, 55000)), int(Grade::Partial));  // 60 %: by ratio, whatever the kind
     o.kind = Kind::None;
     o.mw = 33000;
     CHECK_EQ(int(grade(o, 33000)), int(Grade::Poor));     // no contract
     // The real pairs: the 5 A cable identity lifts the OP15 from 36 W (65 %, Partial) to its 55 W
     CHECK_EQ(int(grade(predict(kOp15, caps_arr(kC1_3a), {}), want_mw(kOp15))), int(Grade::Partial));
     CHECK_EQ(int(grade(predict(kOp15, caps_arr(kC1_5a), {}), want_mw(kOp15))), int(Grade::Full));
-    CHECK_EQ(int(grade(predict(kLaptop, caps_arr(kC1_3a), {}), want_mw(kLaptop))), int(Grade::Poor));
+    CHECK_EQ(int(grade(predict(kLaptop, caps_arr(kC1_3a), {}), want_mw(kLaptop))), int(Grade::Full));   // 5 V 3 A is its 15 W
 }
 
 // The Request the live proof sends: the position and the voltage and current this prediction chose.

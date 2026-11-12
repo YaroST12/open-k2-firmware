@@ -190,11 +190,12 @@ inline std::uint32_t want_mw(const Twin& t) {
 // How well a prediction serves the device: the power it gets (o.mw) against the power it wants (`want`, from want_mw).
 //   Full    gets at least what it wants
 //   Partial gets at least 60 % of it
-//   Poor    below 60 %, no contract at all, or 5 V only (whatever the numbers say)
+//   Poor    below 60 %, or no contract at all
+// By power ratio only: a 5 V device that gets its 15 W is Full; a charger that falls back to 5 V for a 55 W device is Poor.
 enum class Grade : std::uint8_t { Full, Partial, Poor };
 
 inline Grade grade(const Outcome& o, std::uint32_t want) {
-    if (o.kind == Kind::None || o.kind == Kind::FiveV) return Grade::Poor;
+    if (o.kind == Kind::None) return Grade::Poor;
     if (o.mw >= want) return Grade::Full;
     if (static_cast<std::uint64_t>(o.mw) * 100u >= static_cast<std::uint64_t>(want) * 60u) return Grade::Partial;
     return Grade::Poor;
