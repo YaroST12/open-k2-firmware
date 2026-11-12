@@ -186,6 +186,10 @@ namespace dbg {
 struct Sample { std::uint16_t t; std::uint16_t trim; std::uint16_t fnr; std::uint8_t acc; std::uint8_t errs; std::uint8_t rst; std::uint8_t gap; std::uint16_t isr; };
 struct Early { std::uint32_t ms, apb1, cfg, cntr, daddr, crh, idr; };
 std::array<Early, 2> early;
+struct Ev { std::uint16_t ms; std::uint16_t v; };
+std::array<Ev, 48> ev;
+std::size_t nev;
+std::uint16_t lastv = 0xFFFF;
 std::array<Sample, 160> s;
 std::size_t n;
 std::uint32_t t0, init_ms, init_trim, errs, gapw, last_t;
@@ -212,7 +216,11 @@ void sample(std::uint32_t now, std::uint32_t gap) {
             log_fmt("[DEBUG-ue1] E daddr=%X crh=%08X idr=%04X\n", unsigned(e.daddr), unsigned(e.crh), unsigned(e.idr));
         }
     }
-    if (dumped && di < n && tud_mounted() && g_queue.free() > 8) {
+    static std::size_t vi;
+    if (dumped && vi < nev && tud_mounted() && g_queue.free() > 8) {
+        log_fmt("[DEBUG-ue1] V ms=%d v=%03X\n", int(ev[vi].ms), unsigned(ev[vi].v));
+        vi++;
+    } else if (dumped && vi >= nev && di < n && tud_mounted() && g_queue.free() > 8) {
         {
             const Sample& x = s[di++];
             log_fmt("[DEBUG-ue1] t=%d tr=%04X f=%04X a=%X e=%d r=%d g=%d i=%d\n", int(x.t), unsigned(x.trim),
@@ -232,9 +240,21 @@ void take(Early& e) {
     e.idr = reg::gpio(pins::usb_dp.port).IDR;
 }
 }  // namespace dbg
+// [DEBUG-ue1] from SysTick: PA12/PA11 levels, PA12 mode nibble + ODR, USB clock bit, on every change.
+void dbg_tick() {
+    const std::uint32_t ms = systick::millis();
+    if (ms > 6000 || dbg::nev >= dbg::ev.size()) return;
+    const auto& g = reg::gpio(pins::usb_dp.port);
+    std::uint16_t v = 0;
+    if (g.IDR & (1u << 12)) v |= 1;
+    if (g.IDR & (1u << 11)) v |= 2;
+    if (g.ODR & (1u << 12)) v |= 4;
+    if (reg::crm().APB1EN & reg::Crm::APB1EN_USB) v |= 8;
+    v |= std::uint16_t(((g.CRH >> 16) & 0xF) << 4);
+    if (v != dbg::lastv) { dbg::lastv = v; dbg::ev[dbg::nev++] = {std::uint16_t(ms), v}; }
+}
 void dbg_boot_mark() {
     dbg::take(dbg::early[0]);
-    pins::usb_dp.mode(reg::Mode::InFloating);   // [DEBUG-ue1] experiment: release the entry pull-up
 }
 void dbg_init_mark() {
     dbg::take(dbg::early[1]); dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
