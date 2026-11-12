@@ -602,6 +602,55 @@ void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t i
     }
 }
 
+static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside the lane");
+
+void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig) {
+    const auto fnv = [](uint32_t h, uint32_t v) { return (h ^ v) * 16777619u; };
+    uint32_t h = fnv(2166136261u, uint32_t(id.dim) | uint32_t(id.n) << 1);
+    for (char ch : id.head.view()) h = fnv(h, uint8_t(ch));
+    for (int i = 0; i < id.n; i++) {
+        h = fnv(h, 0x100u | id.chip[i].k);
+        for (char ch : id.chip[i].t.view()) h = fnv(h, uint8_t(ch));
+    }
+    h = fnv(h, 0x200u);
+    for (char ch : id.line.view()) h = fnv(h, uint8_t(ch));
+    h |= 1u;
+    if (!full && h == sig) return;
+    sig = h;
+    const int16_t hw = static_cast<int16_t>(text_width(kMid, id.head.view()));
+    const int16_t chip_y = static_cast<int16_t>(kIdHeadY + (kMid.height - kChipH) / 2);
+    Box holes[6];
+    int nh = 0;
+    holes[nh++] = {8, kIdHeadY, hw, static_cast<int16_t>(kMid.height)};
+    int16_t cx[3] = {};
+    int shown = 0;
+    for (int16_t x = static_cast<int16_t>(8 + hw + 8); shown < id.n; shown++) {   // a chip that does not fit is left out whole
+        const int cw = chip_w(id.chip[shown].t.view());
+        if (x + cw > c.w - 8) break;
+        cx[shown] = x;
+        holes[nh++] = {x, chip_y, static_cast<int16_t>(cw), kChipH};
+        x = static_cast<int16_t>(x + cw + 4);
+    }
+    const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, id.line.view()));
+    if (lw > 0) holes[nh++] = {8, kIdLineY, lw, static_cast<int16_t>(kLabelFont.height)};
+    fill_except(c, {0, kIdY, c.w, static_cast<int16_t>(kIdDashY - kIdY)}, holes, nh, kBg);
+    gfx_text(c, kMid, 8, kIdHeadY, id.head.view(), id.dim ? kInk2 : kInk, kBg);
+    for (int i = 0; i < shown; i++) {
+        const Ident::Chip &ch = id.chip[i];
+        switch (ch.k) {
+        case Ident::Solid: draw_chip(c, cx[i], chip_y, ch.t.view(), kChip, kOnChip); break;
+        case Ident::Outline: draw_chip_frame(c, cx[i], chip_y, ch.t.view(), kInk2, kInk, kBg); break;
+        case Ident::Ok: draw_chip(c, cx[i], chip_y, ch.t.view(), kPassFill, kOnPass); break;
+        case Ident::Volt: draw_chip(c, cx[i], chip_y, ch.t.view(), kSpotVolt, kSpotInk); break;
+        }
+    }
+    if (lw > 0) gfx_text(c, kLabelFont, 8, kIdLineY, id.line.view(), kInk2, kBg);
+    gfx_fill(c, 0, kIdDashY, 8, 1, kBg);
+    draw_dashed(c, 8, static_cast<int16_t>(c.w - 8), kIdDashY, kInk3, kBg);
+    gfx_fill(c, static_cast<int16_t>(c.w - 8), kIdDashY, 8, 1, kBg);
+    gfx_fill(c, 0, static_cast<int16_t>(kIdDashY + 1), c.w, static_cast<int16_t>(kPlaceListY - kIdDashY - 1), kBg);
+}
+
 void fill_list_gap(const Surface &s, int16_t y) {
     const int16_t end = list_end(y);
     if (end < kListBottom) gfx_fill(s, 0, end, s.w, static_cast<int16_t>(kListBottom - end), kBg);

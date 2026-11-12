@@ -14,6 +14,7 @@
 #include <string_view>
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/list_view.hpp"
+#include "k2/ui/ui_calc.hpp"
 #include "k2/ui/ui_elem.hpp"
 #include "k2/ui/ui_icons.hpp"
 #include "k2/ui/ui_labels.hpp"
@@ -231,6 +232,30 @@ constexpr int chip_w(std::string_view text) { return static_cast<int>(text.size(
 // to x1 (exclusive), every pixel once.
 constexpr int16_t kDashOn = 4, kDashOff = 2;
 void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t ink, uint16_t bg);
+
+// A place page's identity block (CONCEPT 6; the Connection places and the Battery place): the band y22..67 - the headline in
+// font 24 at x8 with up to three chips beside it, one line of font 12 under it and the dashed rule - and the list under it from
+// kPlaceListY. An empty or idle state is a dim headline and the line saying what to do. A chip that does not fit is left out
+// whole.
+constexpr int16_t kIdY = kBelowBar, kIdHeadY = kIdY + 2, kIdLineY = kIdY + 30, kIdDashY = kIdY + 44;
+constexpr int16_t kPlaceListY = kIdY + 46;
+struct Ident {
+    enum Kind : uint8_t { Solid, Outline, Ok, Volt };
+    struct Chip { StrBuf<12> t; Kind k = Solid; };
+    StrBuf<16> head;   // 15 cells of font 24: the longest empty-state word
+    bool dim = false;
+    Chip chip[3];
+    int n = 0;
+    StrBuf<36> line;
+    void add(std::string_view t, Kind k) {
+        if (n >= 3) return;
+        chip[n].t.put(t);
+        chip[n++].k = k;
+    }
+};
+static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside a place list's scroll lane");
+// Paints the band when its content hash moved from `sig` (or `full`); sig is updated.
+void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig);
 // Initialises n value cells (white on kBg) at the layout's value box of each row.
 // `chars` (optional, n entries) narrows each cell to its own worst-case width; a right-aligned cell keeps the layout's right
 // edge (value_x + value_chars * advance), so a repaint never reaches a long key to its left.
