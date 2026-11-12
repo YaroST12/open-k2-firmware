@@ -51,9 +51,12 @@ void flush() {
 // first attach after a setting change (reset with the cable plugged) starts from a fresh port.
 constexpr std::uint32_t kDetachHoldMs = 150;
 
+void dbg_init_mark();   // [DEBUG-ue1]
+
 void init() {
     using namespace reg;
     Crm& c = crm();
+    dbg_init_mark();
 
     // 1. GPIOA clock; keep the USB core and ACC off while PA11/PA12 are reconfigured.
     c.APB2EN |= Crm::APB2EN_GPIOA;
@@ -178,12 +181,48 @@ void dp_pullup_restore() {
     g_pull = {};
 }
 
+// [DEBUG-ue1] enumeration probe: samples for the first seconds after init(), dumped once later.
+namespace dbg {
+struct Sample { std::uint16_t t; std::uint16_t trim; std::uint16_t fnr; std::uint8_t acc; std::uint8_t errs; std::uint8_t rst; std::uint8_t gap; std::uint16_t isr; };
+std::array<Sample, 160> s;
+std::size_t n;
+std::uint32_t t0, init_ms, init_trim, errs, gapw, last_t;
+bool dumped;
+void sample(std::uint32_t now, std::uint32_t gap) {
+    const std::uint16_t istr = reg::usb_istr();
+    if (istr & (1u << 13)) { errs++; reg::usb_istr() = static_cast<std::uint16_t>(~(1u << 13)); }
+    if (gap > gapw) gapw = gap;
+    const std::uint32_t t = now - t0;
+    if (t < 6000 && n < s.size() && (n == 0 || t - last_t >= 25)) {
+        last_t = t;
+        s[n++] = {std::uint16_t(t), std::uint16_t(reg::crm().CTRL & 0xFFFF), reg::usb_fnr(),
+                  std::uint8_t(reg::acc().STS), std::uint8_t(errs), std::uint8_t(stats.resets),
+                  std::uint8_t(std::min<std::uint32_t>(gapw, 255)), std::uint16_t(stats.isrs)};
+        gapw = 0;
+    }
+    static std::size_t di;
+    if (!dumped && t > 9000) {
+        dumped = true;
+        log_fmt("[DEBUG-ue1] init_ms=%d trim0=%04X n=%d\n", int(init_ms), unsigned(init_trim), int(n));
+    }
+    if (dumped && di < n && tud_mounted() && g_queue.free() > 8) {
+        {
+            const Sample& x = s[di++];
+            log_fmt("[DEBUG-ue1] t=%d tr=%04X f=%04X a=%X e=%d r=%d g=%d i=%d\n", int(x.t), unsigned(x.trim),
+                    unsigned(x.fnr), unsigned(x.acc), int(x.errs), int(x.rst), int(x.gap), int(x.isr));
+        }
+    }
+}
+}  // namespace dbg
+void dbg_init_mark() { dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
+
 void poll() {
     if (!g_started) return;            // USB link off (k2/drivers/usbcfg.hpp): the core was never started
     static std::uint32_t last_ms;
     static bool first = true;
     const std::uint32_t now = systick::millis();
     if (!first && now - last_ms > stats.poll_gap_max) stats.poll_gap_max = now - last_ms;
+    dbg::sample(now, first ? 0 : now - last_ms);
     first = false;
     last_ms = now;
 
