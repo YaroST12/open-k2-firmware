@@ -58,16 +58,18 @@ struct ToolRule {
 constexpr ToolRule kRules[kToolSlots] = {
     {ToolHurt::Load, fc_trigger},        // 0 FC trigger
     {ToolHurt::Load, pd_trigger},        // 1 PD trigger
-    {ToolHurt::Load, spoof},             // 2 Spoof (shortcut into Connection's Cable tab)
+    {ToolHurt::Load, spoof},             // 2 Spoof (shortcut into Cable read's Spoof list)
     {ToolHurt::Nothing, cable_r},        // 3 Cable R
-    {ToolHurt::Nothing, always_ready},   // 4 Connection
-    {ToolHurt::Nothing, always_ready},   // 5 Black Box
-    {ToolHurt::Nothing, always_ready},   // 6 PD diagnosis (passive: reads the Black Box records)
-    {ToolHurt::Nothing, always_ready},   // 7 Report cards
-    {ToolHurt::Nothing, always_ready},   // 8 Diag
-    {ToolHurt::Nothing, always_ready},   // 9 Device twins (the live proof refuses a live sink itself)
-    {ToolHurt::Nothing, cable_r},        // 10 Loop probe (every reading comes from the power monitor; it refuses above 5.5 V itself)
-    {ToolHurt::Load, pd_stress},         // 11 PD Stress
+    {ToolHurt::Nothing, always_ready},   // 4 Charger ID (reads; Refresh confirms on its own)
+    {ToolHurt::Nothing, always_ready},   // 5 Cable read (its read carries the inline confirm)
+    {ToolHurt::Nothing, always_ready},   // 6 Device ID (Identify carries the inline confirm)
+    {ToolHurt::Nothing, always_ready},   // 7 Black Box
+    {ToolHurt::Nothing, always_ready},   // 8 PD diagnosis (passive: reads the Black Box records)
+    {ToolHurt::Nothing, always_ready},   // 9 Report cards
+    {ToolHurt::Nothing, always_ready},   // 10 Diag
+    {ToolHurt::Nothing, always_ready},   // 11 Device twins (the live proof refuses a live sink itself)
+    {ToolHurt::Nothing, cable_r},        // 12 Loop probe (every reading comes from the power monitor; it refuses above 5.5 V itself)
+    {ToolHurt::Load, pd_stress},         // 13 PD Stress
 };
 
 }  // namespace

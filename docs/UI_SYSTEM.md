@@ -746,6 +746,17 @@ Scope: every interactive page takes the unified design; the read-only instrument
 3. **Tools, blocked rows: option A.** Icon in the tone colour, the tail word lower case in `kDim`; only the footer
    carries the red.
 4. **Who's attached tabs: option B.** The active tab is filled `kFocusT`, so it reads as focus, not progress.
+5. **Who's attached is split into three tools** (later the same day; the tabbed page did not work well). Tools lists
+   `Charger ID`, `Cable read` and `Device ID`. Each is `ConnectionPage` locked to one tab (`lock()`):
+   - no tab strip, rows from `kBodyY`; Plus/Minus never switch the tab;
+   - OK runs the tool's own action (`Refresh`, `Read`, `Ask`); the other actions are plain rows under the result
+     (RowList look: label at x10, focus `kFocusT` + 3 px bar), walked with Up/Dn; Up past the first row returns to the
+     tool's action; the list scrolls by whole rows;
+   - a greyed action row names its reason in the footer while focused; the tool's own action says it only on OK (it
+     would repeat the band);
+   - long OK still shares (QR).
+   `K2_WHOS_ATTACHED=1` brings the tabbed page back behind the three rows; the host tests build with it and switch the
+   single tools on with `Ui::set_single_tools`. Renders: `runs/ui-split/sheet.png`.
 
 ## 8 Code against renders, labs and the old skill
 

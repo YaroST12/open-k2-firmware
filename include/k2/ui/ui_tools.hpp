@@ -18,12 +18,15 @@ struct Readiness {
     const char *reason = "";         // footer sentence when not ready, at most 27 characters; empty when ready
 };
 
-constexpr int kToolSlots = 12;       // the per-tool tables: PD Stress is the last slot, so a K2_PDSTRESS=0 build only shows one row less
-constexpr int kToolCount = K2_PDSTRESS ? 12 : 11;   // rows shown: FC trigger, PD trigger, Spoof, Cable R, Connection, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
-constexpr int kToolSpoof = 2;        // the Spoof row opens Connection on the Cable tab's Spoof list, not a menu of its own
-constexpr int kToolLoopProbe = 10;   // the HID-cable loop probe (needs the power monitor, like Cable R)
-constexpr int kToolPdStress = 11;    // renegotiation stress: a PD charger, the power monitor, nothing on the output
-constexpr int kToolRows = 11;        // one row per tool (the list scrolls: not all of them fit above the footer at once)
+constexpr int kToolSlots = 14;       // the per-tool tables: PD Stress is the last slot, so a K2_PDSTRESS=0 build only shows one row less
+constexpr int kToolCount = K2_PDSTRESS ? 14 : 13;   // rows shown: FC trigger, PD trigger, Spoof, Cable R, Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
+constexpr int kToolSpoof = 2;        // the Spoof row opens Cable read's Spoof list, not a menu of its own
+constexpr int kToolChargerId = 4;    // Charger ID, Cable read, Device ID: the Connection page on one tab each (Tab order)
+constexpr int kToolCableRead = 5;
+constexpr int kToolDeviceId = 6;
+constexpr int kToolLoopProbe = 12;   // the HID-cable loop probe (needs the power monitor, like Cable R)
+constexpr int kToolPdStress = 13;    // renegotiation stress: a PD charger, the power monitor, nothing on the output
+constexpr int kToolRows = 13;        // one row per tool (the list scrolls: not all of them fit above the footer at once)
 
 // Port-neutral setup hint under the tool name (at most 24 characters; never says which port).
 const char *tool_hint(int tool);

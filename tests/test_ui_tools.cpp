@@ -53,7 +53,7 @@ static void test_fc() {
     CHECK_STR(tool_readiness(0, st(true, true, true), true).tag, "load");
 }
 
-// Connection, Black Box, PD diagnosis, Report cards and Diag never block: Connection's own actions carry the inline confirm.
+// Charger ID, Cable read, Device ID, Black Box, PD diagnosis, Report cards and Diag never block: Connection's own actions carry the inline confirm.
 static void test_always_ready_tools() {
     for (int t = 4; t < kToolCount; t++) {
         if (t == 3 || t == kToolLoopProbe || t == kToolPdStress) continue;   // the ones that need the power monitor (and PD Stress a charger)
@@ -115,14 +115,16 @@ static void test_hurt_table() {
         ToolHurt::Load,      // 1 PD trigger: requests a contract, a load would take it
         ToolHurt::Load,      // 2 Spoof: answers as a cable with Auto-CRC off, a live sink is cut
         ToolHurt::Nothing,   // 3 Cable R: measures under the user's own load
-        ToolHurt::Nothing,   // 4 Connection: reads, its active actions confirm on their own
-        ToolHurt::Nothing,   // 5 Black Box: passive recorder
-        ToolHurt::Nothing,   // 6 PD diagnosis: reads the Black Box records
-        ToolHurt::Nothing,   // 7 Report cards: read-only
-        ToolHurt::Nothing,   // 8 Diag: counters
-        ToolHurt::Nothing,   // 9 Device twins: the live proof refuses a live sink itself
-        ToolHurt::Nothing,   // 10 Loop probe: its far end is the K2's own HID port; it refuses above 5.5 V itself
-        ToolHurt::Load,      // 11 PD Stress: asks the charger for every level, a load would take each one
+        ToolHurt::Nothing,   // 4 Charger ID: reads, Refresh confirms on its own
+        ToolHurt::Nothing,   // 5 Cable read: its read carries the inline confirm
+        ToolHurt::Nothing,   // 6 Device ID: Identify carries the inline confirm
+        ToolHurt::Nothing,   // 7 Black Box: passive recorder
+        ToolHurt::Nothing,   // 8 PD diagnosis: reads the Black Box records
+        ToolHurt::Nothing,   // 9 Report cards: read-only
+        ToolHurt::Nothing,   // 10 Diag: counters
+        ToolHurt::Nothing,   // 11 Device twins: the live proof refuses a live sink itself
+        ToolHurt::Nothing,   // 12 Loop probe: its far end is the K2's own HID port; it refuses above 5.5 V itself
+        ToolHurt::Load,      // 13 PD Stress: asks the charger for every level, a load would take each one
     };
     for (int t = 0; t < kToolCount; t++) {
         CHECK_EQ(int(tool_hurt_by(t)), int(kExpect[t]));

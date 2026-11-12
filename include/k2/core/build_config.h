@@ -13,6 +13,10 @@
  *              0 = none of it (the default since 2026-11-12: the tool found no charger fault, only its own Soft_Reset bug, see
  *                  ROADMAP). The Tools list ends at Loop probe, the remote and the shell answer "unsupported". The host tests
  *                  pass -DK2_PDSTRESS=1 so the logic keeps compiling; `make K2_PDSTRESS=1` builds the tool back. */
+/* K2_WHOS_ATTACHED  1 = Tools > Charger ID / Cable read / Device ID open the old tabbed "Who's attached" page on that tab
+ *                     (tab strip, Tab+/Tab-, the action pop-up).
+ *                   0 = each opens its own single tool: one tab, no strip, OK runs the tool's action, the other actions are
+ *                       rows under the result (the default since 2026-11-12: the tabbed page did not work well). */
 #ifndef K2_BUILD_CONFIG_H_
 #define K2_BUILD_CONFIG_H_
 
@@ -22,6 +26,10 @@
 
 #ifndef K2_PDSTRESS
 #define K2_PDSTRESS 0
+#endif
+
+#ifndef K2_WHOS_ATTACHED
+#define K2_WHOS_ATTACHED 0
 #endif
 
 #endif /* K2_BUILD_CONFIG_H_ */

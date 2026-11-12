@@ -62,7 +62,12 @@ PageIf *Ui::build_menu(Menu m) {
     switch (m) {
     case Menu::Trigger: return pages_.push<TriggerPage>(ctx_);
     case Menu::Emarker: return pages_.push<EmarkerPage>(ctx_);
-    case Menu::Connection: return pages_.push<ConnectionPage>(ctx_);
+    case Menu::Connection: {
+        ConnectionPage *p = pages_.push<ConnectionPage>(ctx_);
+        if (p && conn_lock_ >= 0) p->lock(static_cast<conn::Tab>(conn_lock_));   // a single tool, before enter() and the first paint
+        conn_lock_ = -1;
+        return p;
+    }
     case Menu::Diag: return pages_.push<DiagPage>(ctx_);
     case Menu::CableR: return pages_.push<CableRPage>(ctx_);
     case Menu::BlackBox: return pages_.push<BlackBoxPage>(ctx_);
@@ -1022,7 +1027,7 @@ void Ui::refresh_action_views(uint32_t now_ms) {
 }
 
 bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
-    if (menu() == Menu::Connection && !spoof) {   // already there: just switch the tab
+    if (menu() == Menu::Connection && !spoof && (!single_tools_ || connection_page().tab() == tab)) {   // already there: switch the tab
         ContentViewport viewport(layout_.content);
         ConnectionPage &conn = top_as<ConnectionPage>();
         conn.open_tab(tab);
@@ -1031,9 +1036,10 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     }
     if (depth_ > 0) set_page(page_, now_ms);   // a single Connection on the Tools page, whatever was open
     ctx_.now = now_ms;
-    if (!push_menu(Menu::Connection, now_ms)) return false;
+    conn_lock_ = single_tools_ ? static_cast<int8_t>(tab) : -1;   // Charger ID / Cable read / Device ID (K2_WHOS_ATTACHED=0)
+    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; return false; }
     ConnectionPage &conn = top_as<ConnectionPage>();   // just built: the Connection page is on top
-    conn.open_tab(tab);
+    if (!single_tools_) conn.open_tab(tab);
     if (spoof) return push_menu(Menu::Spoof, now_ms);
     ContentViewport viewport(layout_.content);
     conn.update(now_ms);

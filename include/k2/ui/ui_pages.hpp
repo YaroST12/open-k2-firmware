@@ -748,6 +748,12 @@ public:
     ListState list_state() const { return ListState{}; }   // tabs, not a scrolling list
     conn::Tab tab() const { return tab_; }
     void open_tab(conn::Tab t);
+    // A single tool (K2_WHOS_ATTACHED=0): the page shows one tab, no tab strip, its title is the tool's, OK runs the tab's own
+    // action and the other actions are rows under the result (user, 2026-11-12). Charger ID = Source, Cable read = Cable,
+    // Device ID = Sink.
+    void lock(conn::Tab t);
+    bool locked() const { return locked_; }
+    int action_row() const { return act_sel_; }   // the focused action row (an index into the extras), -1 = none
     bool popup_open() const { return popup_; }
     conn::Facts facts() const { return facts_; }
     int popup_count() const { return n_items_; }
@@ -785,6 +791,8 @@ private:
     void paint_tab_indicator();
     void paint_empty();
     void paint_popup(uint32_t now_ms);
+    int16_t row_y0() const;                // where the body starts: under the tab strip, or at kBodyY for a single tool
+    uint32_t actions_sig() const;          // the single tool's action rows: focus and enabled states
     void close_popup();
     conn::Tab tab_ = conn::Tab::Source;
     conn::Facts facts_;
@@ -792,6 +800,8 @@ private:
     pd::PdNoneWhy none_why_ = pd::PdNoneWhy::None;
     bool popup_ = false;
     bool popup_drawn_ = false;
+    bool locked_ = false;                  // a single tool (lock()): one tab, the actions as rows
+    int act_sel_ = -1;                     // single tool: the focused action row (items_[1 + act_sel_]), -1 = none: OK runs items_[0]
     bool more_ = false;                    // Details: the second page of the Source tab (reset by a tab change)
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
     bool id_asked_ = false;               // Identify started from the pop-up: its progress shows in the status bar
@@ -945,7 +955,8 @@ public:
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
     static Menu tool_menu(int i) {
         constexpr Menu kMenus[kToolSlots] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
-                                             Menu::Connection, Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
+                                             Menu::Connection, Menu::Connection, Menu::Connection,
+                                             Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
                                              Menu::Twin, Menu::LoopProbe, Menu::PdStress};
         return kMenus[i < 0 || i >= kToolCount ? 0 : i];
     }

@@ -1324,8 +1324,8 @@ void ToolsPage::draw_static() {
 // the tool is Ready, else its tail word in kDim (UI_SYSTEM.md 7.13.3: only the footer carries the red). The focused row opens
 // the tool's hint as its note. The list repaints a row only when this content changed.
 void ToolsPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
-    static constexpr Icon kIcons[kToolSlots] = {Icon::Brick, Icon::Pd,     Icon::Ghost,  Icon::Res,  Icon::Plug,  Icon::Blackbox,
-                                                Icon::Check, Icon::Report, Icon::Chip, Icon::Phone, Icon::Usb, Icon::Wave};
+    static constexpr Icon kIcons[kToolSlots] = {Icon::Brick,    Icon::Pd,    Icon::Ghost,  Icon::Res,  Icon::Plug,  Icon::Emark,  Icon::Phone,
+                                                Icon::Blackbox, Icon::Check, Icon::Report, Icon::Chip, Icon::Phone, Icon::Usb,    Icon::Wave};
     const auto *self = static_cast<const ToolsPage *>(ctx);
     const Readiness &rd = self->rd_[i];
     out.marker = kit::Marker::Icon;
@@ -1368,6 +1368,8 @@ bool ToolsPage::on_event(Event e) {
     }
     if (e.press == Press::Short && e.button == Button::Ok) {
         if (sel_ == kToolSpoof) ctx_.ui->open_connection(conn::Tab::Cable, true, ctx_.now);   // the Spoof shortcut
+        else if (sel_ >= kToolChargerId && sel_ <= kToolDeviceId)   // Charger ID, Cable read, Device ID: Tab order
+            ctx_.ui->open_connection(static_cast<conn::Tab>(sel_ - kToolChargerId), false, ctx_.now);
         else ctx_.ui->push_menu(tool_menu(sel_), ctx_.now);
         return true;
     }

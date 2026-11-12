@@ -45,6 +45,7 @@ static void fixture() {
         {pd::PdoType::Pps, 0, 3300, 20000, 5000, 100000}};
     for (int i = 0; i < 7; i++) g_stub.caps.pdos[i] = mix[i];
     g_stub.cc = 1;
+    g_stub.pd_seen_attach = true;   // the attach's PD verdict: present
     g_stub.em.valid = true; g_stub.em.max_voltage_v = 20; g_stub.em.max_current_a = 5; g_stub.em.max_power_w = 100;
     g_stub.em.vendor_str = "CUKTECH"; g_stub.em.vid = 0x2B01;
     g_stub.cable_ans = k2::emk_variant::answered_from(1, 0);   // orientation A, PD3 + SVDM 2.0: the first attempt
@@ -75,6 +76,20 @@ int main() {
     static const char* const tabs[] = {"pd_source", "pd_cable", "pd_sink"};
     for (int i = 0; i < 3; i++) { render(ui, t, tabs[i]); ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
 
+    // The single tools (K2_WHOS_ATTACHED=0): Charger ID, Cable read, Device ID; Cable read again with its third action row
+    // focused, then Charger ID's Details.
+    ui.set_single_tools(true);
+    static const char* const tools[] = {"tool_charger_id", "tool_cable_read", "tool_device_id"};
+    for (int i = 0; i < 3; i++) {
+        ui.goto_page(uint8_t(Page::Home), t); t += 100;
+        ui.open_connection(static_cast<conn::Tab>(i), false, t); render(ui, t, tools[i]);
+        if (i == 1) {
+            for (int k = 0; k < 3; k++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
+            render(ui, t, "tool_cable_read_row3");
+        }
+    }
+    ui.set_single_tools(false);
+
     // The Cable tab of a cable that gave no identity, alone: a chip's pull-down on a CC line ("chip silent") versus none
     // ("no chip"), and the older / unprobed reading. Charger and contract are gone, as they are with the cable alone.
     {
@@ -93,6 +108,12 @@ int main() {
             g_stub.pull_down = s.p;
             bare.goto_page(static_cast<uint8_t>(kConnTabAlias + 1), tb + 100); render(bare, tb, s.name);
         }
+        bare.set_single_tools(true);   // Cable read with no answer: the band, its line, then the action rows
+        bare.goto_page(uint8_t(Page::Home), tb); tb += 100;
+        bare.open_connection(conn::Tab::Cable, false, tb); render(bare, tb, "tool_cable_read_empty");
+        bare.goto_page(uint8_t(Page::Home), tb); tb += 100;
+        bare.open_connection(conn::Tab::Sink, false, tb); render(bare, tb, "tool_device_id_empty");
+        bare.set_single_tools(false);
         g_stub = saved;
     }
 

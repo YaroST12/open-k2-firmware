@@ -1296,6 +1296,69 @@ static void test_sink_tab_pd_body_shows_the_raw_vooc_note() {
     g_stub.vooc = {};
 }
 
+// The single tools (K2_WHOS_ATTACHED=0): Charger ID, Cable read and Device ID are this page locked to one tab. No tab strip,
+// Plus/Minus never switch the tab, OK runs the tool's own action, the other actions are rows Up/Dn walks.
+static const char *ok_label(Ui &ui) { return ui.labels().b[static_cast<int>(Button::Ok)].shrt; }
+
+static void test_single_tools_lock_one_tab() {
+    Ui &ui = fresh_ui();
+    ui.set_single_tools(true);
+    CHECK(ui.open_connection(conn::Tab::Cable, false, 20000));
+    ui.tick(20050);
+    CHECK_EQ(cp(ui).locked(), true);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
+    CHECK_EQ(cp(ui).action_row(), -1);
+    CHECK_STR(ok_label(ui), "Read");                                   // OK: the tool's own action
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].shrt, "Dn");
+    CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 20100);             // Dn: the first extra, Save cable
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));                // never a tab switch
+    CHECK_EQ(cp(ui).action_row(), 0);
+    CHECK_STR(ok_label(ui), "Save");
+    for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20150 + i * 10);
+    CHECK_EQ(cp(ui).action_row(), 4);                                  // stops on the last of the five extras
+    for (int i = 0; i < 10; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20300 + i * 10);
+    CHECK_EQ(cp(ui).action_row(), -1);                                 // Up past the first: back to the tool's action
+    CHECK_STR(ok_label(ui), "Read");
+    ui.on_button(Button::Back, ButtonEvent::Short, 20500);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+
+    CHECK(ui.open_connection(conn::Tab::Source, false, 21000));        // Charger ID
+    ui.tick(21050);
+    CHECK_EQ(cp(ui).locked(), true);
+    CHECK_STR(ok_label(ui), "Refresh");
+    CHECK(ui.open_connection(conn::Tab::Sink, false, 21100));          // Device ID: a new single tool, not a tab switch
+    ui.tick(21150);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
+    CHECK_STR(ok_label(ui), "Ask");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].shrt, "Dn");   // Refresh is the one extra
+    ui.on_button(Button::Back, ButtonEvent::Short, 21200);
+    CHECK_EQ(int(ui.menu_depth()), 0);
+    ui.set_single_tools(false);
+}
+
+// The Tools hub rows open the single tools in Tab order; the Spoof shortcut lands on Cable read.
+static void test_tools_rows_open_single_tools() {
+    Ui &ui = fresh_ui();
+    ui.set_single_tools(true);
+    const conn::Tab kTabs[] = {conn::Tab::Source, conn::Tab::Cable, conn::Tab::Sink};
+    for (int k = 0; k < 3; k++) {
+        ui.goto_page(static_cast<uint8_t>(Page::Tools), 20000 + k * 1000);
+        ui.context().keep.tools_sel = 0;   // the hub keeps its row across visits
+        for (int i = 0; i < kToolChargerId + k; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20010 + k * 1000 + i * 10);
+        ui.on_button(Button::Ok, ButtonEvent::Short, 20500 + k * 1000);
+        CHECK_EQ(on_pd(ui), 1);
+        if (!on_pd(ui)) return;
+        CHECK_EQ(cp(ui).locked(), true);
+        CHECK_EQ(int(cp(ui).tab()), int(kTabs[k]));
+        ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
+    }
+    CHECK(ui.open_connection(conn::Tab::Cable, true, 25000));
+    CHECK_EQ(int(ui.menu()), int(Menu::Spoof));
+    CHECK_EQ(cp(ui).locked(), true);
+    ui.set_single_tools(false);
+}
+
 int main() {
     test_sink_tab_pd_body_shows_the_raw_vooc_note();
     test_sink_tab_no_pd_shows_the_raw_vooc_note();
@@ -1336,5 +1399,7 @@ int main() {
     test_sink_tab_no_pd_offered_unanswered();
     test_source_tab_no_pd_never_offered_all_rotations();
     test_pd_present_keeps_identify_offered();
+    test_single_tools_lock_one_tab();
+    test_tools_rows_open_single_tools();
     return test_report("test_ui_connection_page");
 }

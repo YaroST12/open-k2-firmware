@@ -1455,7 +1455,7 @@ static void test_blackbox_submenu() {
     pdtrace::init();
     ui.goto_page(static_cast<uint8_t>(Page::Tools), kT0);
     for (int i = 0; i < kToolCount; i++) press(ui, Button::Minus, ButtonEvent::Short, kT0 + 5);   // clamp on the first tool
-    for (int i = 0; i < 5; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10);   // Black Box is tool 5 (USB link follows)
+    for (int i = 0; i < 7; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10);   // Black Box is tool 7 (after the three ID tools)
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 20);
     CHECK_EQ(ui.menu() == Menu::BlackBox, 1);
     CHECK_EQ(ui.page_index(), kMenuPageBase + static_cast<uint8_t>(Menu::BlackBox));

@@ -285,6 +285,20 @@ struct ActFacts {
     bool pd_none = false;       // the settled verdict is "no PD this attach": a no-PD device cannot be identified
 };
 
+// The strip verb of an action (kOkVerbs): a single tool's OK names the action it runs.
+constexpr const char *act_verb(Act a, bool more) {
+    switch (a) {
+    case Act::Refresh: return "Refresh";
+    case Act::Details: return more ? "Cancel" : "View";
+    case Act::ShareCaps: case Act::ShareCable: return "Share";
+    case Act::ReadCable: return "Read";
+    case Act::SaveCable: return "Save";
+    case Act::SpoofAs: case Act::SavedCables: return "Open";
+    case Act::Identify: return "Ask";
+    }
+    return "";
+}
+
 inline constexpr const char *kWhyLiveSink = "Live sink: unplug load";
 // The no-PD gate's own refusal word (fits the 24-cell pop-up "why"): the same sentence the tab shows.
 inline constexpr const char *kWhyNoPd = "No PD from this device";

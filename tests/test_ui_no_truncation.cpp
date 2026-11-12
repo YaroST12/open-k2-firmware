@@ -642,7 +642,7 @@ void test_resume_words() {
 // The Tools entry that opens the Connection page is called "Who's attached" (14 cells, the longest Tools name): its menu row and
 // the page's title bar must be drawn whole in every rotation (the font has the apostrophe: Spleen and Atkinson cover ASCII 32..126).
 void test_whos_attached() {
-    CHECK_STR(ToolsPage::tool_name(4), "Who's attached");
+    CHECK_STR(ToolsPage::tool_name(4), "Charger ID");
     CHECK_EQ(fits_px(kSmallAdvPx, "Who's attached", 130), true);   // the Tools row title box
     apply(kScenarios[0]);
     static Ui ui;

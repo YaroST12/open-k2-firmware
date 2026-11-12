@@ -282,20 +282,20 @@ static void test_page() {
 }
 
 static void test_tools_hub_lists_cards() {
-    CHECK_EQ(kToolCount, 12);   // Device twins, the Loop probe, then PD Stress (tests/test_ui_tools.cpp, test_ui_pdstress_page.cpp)
-    CHECK_STR(ToolsPage::tool_name(9), "Device twins");
-    CHECK_EQ(ToolsPage::tool_menu(9) == Menu::Twin, 1);
+    CHECK_EQ(kToolCount, 14);   // Device twins, the Loop probe, then PD Stress (tests/test_ui_tools.cpp, test_ui_pdstress_page.cpp)
+    CHECK_STR(ToolsPage::tool_name(11), "Device twins");
+    CHECK_EQ(ToolsPage::tool_menu(11) == Menu::Twin, 1);
+    CHECK_EQ(int(tool_readiness(11, SetupState{}, false).level), int(ToolLevel::Ready));
+    CHECK_EQ(std::strlen(tool_hint(11)) <= 24 && std::strlen(tool_hint(11)) > 0, 1);
+    CHECK_STR(ToolsPage::tool_name(8), "PD diagnosis");
+    CHECK_EQ(ToolsPage::tool_menu(8) == Menu::Diagnosis, 1);
+    CHECK_STR(ToolsPage::tool_name(9), "Report cards");
+    CHECK_EQ(ToolsPage::tool_menu(9) == Menu::Cards, 1);
+    CHECK_EQ(ToolsPage::tool_menu(2) == Menu::Spoof, 1);
+    CHECK_EQ(ToolsPage::tool_menu(10) == Menu::Diag, 1);
+    CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(int(tool_readiness(9, SetupState{}, false).level), int(ToolLevel::Ready));
     CHECK_EQ(std::strlen(tool_hint(9)) <= 24 && std::strlen(tool_hint(9)) > 0, 1);
-    CHECK_STR(ToolsPage::tool_name(6), "PD diagnosis");
-    CHECK_EQ(ToolsPage::tool_menu(6) == Menu::Diagnosis, 1);
-    CHECK_STR(ToolsPage::tool_name(7), "Report cards");
-    CHECK_EQ(ToolsPage::tool_menu(7) == Menu::Cards, 1);
-    CHECK_EQ(ToolsPage::tool_menu(2) == Menu::Spoof, 1);
-    CHECK_EQ(ToolsPage::tool_menu(8) == Menu::Diag, 1);
-    CHECK_EQ(int(tool_readiness(6, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(int(tool_readiness(7, SetupState{}, false).level), int(ToolLevel::Ready));
-    CHECK_EQ(std::strlen(tool_hint(7)) <= 24 && std::strlen(tool_hint(7)) > 0, 1);
 }
 
 // K2_DUMP=dir: the FH22 card (#18, from the golden fixtures) as the user sees it, 1:1 at rotation 3 (buttons at the bottom), into

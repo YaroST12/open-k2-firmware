@@ -59,6 +59,8 @@ constexpr const char *kOkVerbs[] = {
     "Learn",
     // Connection page: OK opens the tab's action pop-up
     "Actions",
+    // Charger ID / Cable read / Device ID: the tool's own action, or the focused action row
+    "Read", "Save", "Share",
     // Charger-flow setup pages (their wording is owned by the charger test)
     "Go", "Set", "Pick", "Resume", "Diff", "Steps", "All", "Off", "Cancel",
 };

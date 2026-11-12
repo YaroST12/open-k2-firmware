@@ -145,6 +145,10 @@ public:
     bool goto_page(uint8_t page, uint32_t now_ms);
     // Opens Connection (Tools) on `tab`; `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
+    // K2_WHOS_ATTACHED=0: open_connection opens the single tool of that tab (ConnectionPage::lock), not the tabbed page.
+    // The host tests build with K2_WHOS_ATTACHED=1 (the tabbed page's tests) and switch single tools on to test them.
+    void set_single_tools(bool on) { single_tools_ = on; }
+    bool single_tools() const { return single_tools_; }
     // The comeback of a bridged Refresh (core/rescan.cpp): Connection on its Source tab, saying "Rescanned (rebooted)".
     bool land_rescanned(uint32_t now_ms);
     // Submenus: a small stack (depth 3: Tools > Connection > Saved cables > Share). While one is open it gets every event,
@@ -358,6 +362,8 @@ private:
     Menu stack_[3] = {Menu::Count, Menu::Count, Menu::Count};
     void refresh_action_views(uint32_t now_ms);
     unsigned depth_ = 0;
+    bool single_tools_ = !K2_WHOS_ATTACHED;
+    int8_t conn_lock_ = -1;   // open_connection -> build_menu: the tab a single tool locks to, -1 = the tabbed page
     bool pressed_[4] = {};          // lit, indexed by Button
     bool down_[4] = {};             // physically down
     bool remote_down_[4] = {};      // a remote +/- is held, indexed by the physical key it lights

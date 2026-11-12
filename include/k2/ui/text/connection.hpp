@@ -50,6 +50,10 @@ inline constexpr const char *kNoPdUnansweredL = "PD offers went unanswered";  //
 inline constexpr const char *kNoPdLines[] = {kNoPdNeverL, kNoPdUnansweredL};
 static_assert(all_fit(kNoPdLines, 8, kLinePx), "a no-PD line is wider than 26 cells");
 
+// ---- the single tools (K2_WHOS_ATTACHED=0): one tab each, its title in the TopBar (font 16 from x4, before the readout)
+inline constexpr const char *kToolTitles[] = {"Charger ID", "Cable read", "Device ID"};   // by conn::Tab: Source, Cable, Sink
+static_assert(all_fit(kToolTitles, 8, 96), "a single tool's title is wider than the TopBar's title box");
+
 // ---- footers (at most 27 characters, facts, no key names) -----------------------------------------------------------
 inline constexpr const char *kSourceUnread = "Source caps not read yet";   // a field of the open tab was never asked
 inline constexpr const char *kCableUnread = "Cable not fully read yet";

@@ -322,7 +322,9 @@ Settings 5 (`Count` = 6); `Menu` (modal submenus, never in the rotation) = Trigg
 from Connection), PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe,
 PdStress. `GET_STATE.page` reports `kMenuPageBase` (= `Page::Count` = 6) + `Menu` while a submenu is open, so Connection is 16,
 Diag 17 and PdStress 21 (remote page name `pdstress`).
-(The Connection page is shown on screen, in the Tools list and in its title bar, as "Who's attached"; the identifiers
+(The Connection page is shown in Tools as three single tools, Charger ID / Cable read / Device ID: `ConnectionPage::lock(tab)`
+via `Ui::open_connection`, which passes the tab to `build_menu` through `conn_lock_` so the page is locked before its
+first paint. With `K2_WHOS_ATTACHED=1` it is the tabbed page titled "Who's attached" again. The identifiers
 `Menu::Connection`, `ConnectionPage`, the remote id `tools/connection` and the page name `connection` keep the old name.)
 The Connection tabs have remote-only aliases `kConnTabAlias` (= 6 + `Menu::Count`) + 0 Source, 1 Cable, 2 Sink, today 22 / 23 / 24 (SET_PAGE opens
 Connection on that tab; `k2_remote.py` maps pd/source, emarker/cable, identify/sink to them). The offers-versus-request comparison lives in
