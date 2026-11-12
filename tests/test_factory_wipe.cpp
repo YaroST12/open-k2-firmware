@@ -210,13 +210,16 @@ static void test_verify_pass_catches_a_lying_erase() {
         CHECK_EQ((a >= flash::kFsBase && a < flash::kFsEnd) || a == 0x080E4000 || a == 0x080E4800 || a == 0x080E6000 || a == 0x080E8000 || a == 0x080FC800, 1);
 }
 
-// A grown volume (145 blocks): the wipe erases the 90 sectors and the 55 sectors of the run, ascending, and nothing else.
+// A grown unit (run open: the 111-block volume plus the report-card and Black Box rings, or a 145-block volume): the wipe
+// erases the 90 sectors and the 55 sectors of the run, ascending, and nothing else, so both rings go with the volume.
 // A littlefs block in the run that happens to start like one of our old stores is not listed twice; the original-data
 // pages and the two kept pages stay byte for byte.
 static void test_grown_volume_wipes_the_run_too() {
     FakeEnv env;
     env.run_open = true;
     env.flash.put(0x080E8000, {'K', '2', 'B', 'B'});            // a volume block that looks like a Black Box sector
+    env.flash.put(flash::kCardRingBase, {'K', 'R', 'C', 1});    // a card ring sector
+    env.flash.put(flash::kBbRingBase + (flash::kBbRingSectors - 1) * flash::kSectorSize + 40, {1, 2, 3, 4});   // the last BB sector
     env.flash.put(0x080E3800, {0, 0, 0, 0});                    // the old e-marker record page
     env.flash.put(0x080FF800, {0x5A, 0, 0, 0xA5});              // the unknown top page
     const std::vector<std::uint8_t> native = env.flash.range(0x080E0000, 0x080E4000);
@@ -229,6 +232,8 @@ static void test_grown_volume_wipes_the_run_too() {
     CHECK_EQ(env.flash.erased.size(), 145u);
     for (std::uint32_t i = 0; i < 145; i++) CHECK_EQ(env.flash.erased[i], flash::fs_block_addr(i));
     for (std::uint32_t a = flash::kFsRunBase; a < flash::kFsRunEnd; a++) CHECK_EQ(env.flash.mem[a - flash::kFsBase], 0xFF);
+    for (std::uint32_t s = 0; s < flash::kRingSectors; s++)   // both rings: card ring then Black Box ring, all erased
+        CHECK_EQ(env.flash.erased[flash::kFsVolumeBlocks + s], flash::kCardRingBase + s * flash::kSectorSize);
     CHECK_EQ(env.flash.range(0x080E0000, 0x080E4000) == native, 1);
     CHECK_EQ(env.flash.range(0x080FF800, 0x08100000) == top, 1);
     CHECK_EQ(env.backups, 1);

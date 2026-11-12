@@ -1150,7 +1150,7 @@ void ChargerTestSession::confirmed_start() {
 }
 // After the identity is settled: Rd (and the wait for VBUS) as the last stage, then the run.
 void ChargerTestSession::press_start() {
-    bbpersist::make_room();   // the Black Box gives the journal its blocks back now, not on some later save inside the run
+    bbpersist::make_room();   // the Black Box ring's spare sector is erased now, not inside the run (its rare captures need it)
     if (start_begin()) { wait_step(ctx_.now); return; }   // Waiting; a charger already up ends it on this very call
     launch();
 }

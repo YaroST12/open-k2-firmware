@@ -33,7 +33,7 @@ struct StubState {
     bool journal_load = false, rd_inherited = false;
     int journal_finishes = 0, journal_resumes = 0, journal_attempts = 0, journal_metas = 0, rd_releases = 0;
     int bb_holds = 0;   // bbpersist::hold_run() calls: a live charger-test run renews it every tick
-    int bb_make_rooms = 0;   // bbpersist::make_room() calls: START frees the journal's blocks before Rd goes on
+    int bb_make_rooms = 0;   // bbpersist::make_room() calls: START makes the Black Box ring's spare sector blank before Rd goes on
     // The journal's polled jobs (arm = rows and header of a run start, replan = the changed rows). A job needs `arm_pumps` /
     // `replan_pumps` pump() calls to finish (0 = one per row plus the header, as the real one writes them).
     int journal_arms = 0, journal_pumps = 0, journal_cancels = 0, journal_replan_starts = 0;

@@ -7,7 +7,9 @@
 #include <vector>
 
 #include "k2/chargertest/report_card_remote.hpp"
-#include "ramdisk.hpp"
+#include "k2/chargertest/report_card_store.hpp"
+#include "k2/drivers/flash.hpp"
+#include "ramflash.hpp"
 #include "test_util.h"
 
 using namespace k2;
@@ -15,14 +17,14 @@ namespace rc = k2::report_card;
 namespace rr = k2::report_card::remote;
 namespace ct = k2::charger_test;
 
-// One littlefs volume on a RAM disk with a card store on it.
+// The card ring on a RAM flash with a card store on it.
 struct FakeFlash {
-    k2test::RamDisk disk{96};
-    fs::Fs fs{disk, 96};
-    FakeFlash() { bool fm = false; fs.mount_or_format(fm); }
+    k2test::RamFlash disk;
+    ringlog::Ring ring{disk, flash::kCardRingBase, flash::kCardRingSectors, rc::kRingKind, rc::kRingReserve};
+    FakeFlash() { ring.scan(); }
 };
 struct Store : rc::Store {
-    explicit Store(FakeFlash& f) : rc::Store(f.fs) {}
+    explicit Store(FakeFlash& f) : rc::Store(f.ring) {}
 };
 
 struct Api {

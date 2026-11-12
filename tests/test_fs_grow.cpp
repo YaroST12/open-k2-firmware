@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Host tests for growing the littlefs volume from 90 to 145 blocks (k2::fs::Fs::grow, k2/core/fs_grow.hpp): a volume
+// Host tests for growing the littlefs volume from 90 to 111 blocks (k2::fs::Fs::grow, k2/core/fs_grow.hpp): a volume
 // mounts at either size, grows only on proof, survives a power cut at any program or erase of the grow, and a fresh
-// format takes the grown size only when the run is proven blank.
+// format takes the grown size only when the run is proven blank. The rest of the run (blocks 111..144) belongs to the ring
+// logs: the volume never writes there. A wide volume (145 blocks, the layout before the rings) still mounts and opens the
+// run so k2/core/fs_migrate.hpp can shrink it.
 #include <array>
 #include <cstring>
 #include <string>
@@ -19,7 +21,8 @@ using k2test::RamDisk;
 namespace {
 
 constexpr std::uint32_t kBase = flash::kFsBlocks;        // 90
-constexpr std::uint32_t kGrown = flash::kFsGrownBlocks;  // 145
+constexpr std::uint32_t kGrown = flash::kFsVolumeBlocks; // 111
+constexpr std::uint32_t kWide = flash::kFsGrownBlocks;   // 145: the whole run, the layout before the ring logs
 
 std::span<const std::uint8_t> sv(const std::string& s) { return {reinterpret_cast<const std::uint8_t*>(s.data()), s.size()}; }
 
@@ -69,9 +72,10 @@ void test_fs_refuses_a_foreign_block_count() {
     CHECK_EQ(h.mount() == fs::Err::Ok, 0);
 }
 
-// The grown volume has room for the new blocks: about 55 more 2 KB files than the base volume.
+// The grown volume has room for the new blocks: about 21 more 2 KB files than the base volume, and it never writes past
+// its last block (the ring logs' sectors stay blank however full it gets).
 void test_grown_volume_uses_the_new_blocks() {
-    RamDisk d(kGrown);
+    RamDisk d(kWide);
     fs::Fs f(d, kBase, kGrown);
     CHECK_EQ(f.format(kGrown) == fs::Err::Ok, 1);
     CHECK_EQ(f.mount() == fs::Err::Ok, 1);
@@ -82,8 +86,31 @@ void test_grown_volume_uses_the_new_blocks() {
         std::snprintf(p, sizeof p, "/f%u", n);
         if (f.write_file(p, sv(std::string(2048, char('a' + n % 26)))) != fs::Err::Ok) break;
     }
-    CHECK_EQ(n > 120, 1);
+    CHECK_EQ(n > kBase, 1);
     CHECK_EQ(n < kGrown, 1);
+    bool rings_blank = true;
+    for (std::size_t i = std::size_t(kGrown) * fs::kBlockSize; i < d.image().size(); ++i) rings_blank &= d.image()[i] == 0xFF;
+    CHECK_EQ(rings_blank, 1);
+}
+
+// A wide volume (145 blocks, grown before the ring layout) mounts only on an Fs that names the wide size; it reports wide()
+// and not grown(), and keeps its files.
+void test_wide_volume_mounts_for_the_move() {
+    RamDisk d(kWide);
+    {
+        fs::Fs f(d, kWide);
+        CHECK_EQ(f.format() == fs::Err::Ok, 1);
+        CHECK_EQ(f.mount() == fs::Err::Ok, 1);
+        CHECK_EQ(f.write_file("/a", sv(std::string(3000, 'w'))) == fs::Err::Ok, 1);
+    }
+    fs::Fs narrow(d, kBase, kGrown);
+    CHECK_EQ(narrow.mount() == fs::Err::Ok, 0);
+    fs::Fs g(d, kBase, kGrown, kWide);
+    CHECK_EQ(g.mount() == fs::Err::Ok, 1);
+    CHECK_EQ(g.block_count(), kWide);
+    CHECK_EQ(g.wide(), 1);
+    CHECK_EQ(g.grown(), 0);
+    CHECK_COND(slurp(g, "/a") == std::string(3000, 'w'));
 }
 
 // ---- The boot sequence (k2/core/fs_grow.hpp) ------------------------------------------------------------------------
@@ -91,7 +118,7 @@ void test_grown_volume_uses_the_new_blocks() {
 // The RAM disk behind the flash guard: a program or erase of a run block (90..144) before the run is open is refused
 // and counted, like flash::store_program/store_erase refuse it on the device.
 struct GuardedDisk final : fs::BlockDevice {
-    RamDisk ram{kGrown};
+    RamDisk ram{kWide};
     bool open = false;
     int violations = 0;
     int read(std::uint32_t b, std::uint32_t o, void* buf, std::uint32_t n) override { return ram.read(b, o, buf, n); }
@@ -154,7 +181,7 @@ void test_blank_run_grows() {
     const fsgrow::Result r = fsgrow::grow(f, env);
     CHECK_EQ(int(r.outcome), int(fsgrow::Outcome::Grown));
     CHECK_EQ(f.block_count(), kGrown);
-    CHECK_EQ(f.exists(fsgrow::kIntent), 0);               // the intent is gone once the superblock says 145
+    CHECK_EQ(f.exists(fsgrow::kIntent), 0);               // the intent is gone once the superblock says 111
     check_files(f);
     // The new blocks take data: more than the 90-block volume could hold.
     unsigned n = 0;
@@ -165,7 +192,7 @@ void test_blank_run_grows() {
     }
     CHECK_EQ(n > kBase, 1);
     CHECK_EQ(d.violations, 0);
-    // Booting again: the grown volume mounts at 145 and opens the run itself; grow() has nothing to do.
+    // Booting again: the grown volume mounts at 111 and opens the run itself; grow() has nothing to do.
     fs::Fs g(d, kBase, kGrown);
     Env env2{d};
     d.open = false;
@@ -212,8 +239,8 @@ void test_no_grow_before_the_legacy_wipe() {
     CHECK_EQ(env.opens, 0);
 }
 
-// A fresh format (nothing mounts) takes 145 blocks only on a blank run, and then needs no legacy wipe: a blank run holds
-// no old store. Data in the run: 90 blocks, the data untouched.
+// A fresh format (nothing mounts) takes 111 blocks only on a blank run (the ring logs' sectors included), and then needs
+// no legacy wipe: a blank run holds no old store. Data in the run: 90 blocks, the data untouched.
 void test_fresh_format_size_follows_the_proof() {
     {
         GuardedDisk d;
@@ -241,6 +268,42 @@ void test_fresh_format_size_follows_the_proof() {
         CHECK_EQ(d.at(0x080E6000), 'K');
         CHECK_EQ(d.violations, 0);
     }
+    {   // a byte in a ring sector counts too: the rings start on proven-blank sectors only
+        GuardedDisk d;
+        d.at(flash::kBbRingBase + 100) = 0x42;
+        fs::Fs f(d, kBase, kGrown);
+        Env env{d};
+        bool formatted = false;
+        CHECK_EQ(fsgrow::mount(f, env, formatted) == fs::Err::Ok, 1);
+        CHECK_EQ(f.block_count(), kBase);
+        CHECK_EQ(d.open, 0);
+    }
+}
+
+// A wide volume found at boot opens the run (its blocks are ours) and grow() leaves it alone: the move into the ring
+// layout is fs_migrate's job.
+void test_wide_volume_opens_the_run() {
+    GuardedDisk d;
+    {
+        fs::Fs f(d, kWide);
+        d.open = true;
+        CHECK_EQ(f.format() == fs::Err::Ok, 1);
+        CHECK_EQ(f.mount() == fs::Err::Ok, 1);
+        f.write_file(fsgrow::kLegacyMarker, sv("1"));
+        f.write_file(fsgrow::kIntent, sv("1"));
+        d.open = false;
+    }
+    fs::Fs f(d, kBase, kGrown, kWide);
+    Env env{d};
+    bool formatted = true;
+    CHECK_EQ(fsgrow::mount(f, env, formatted) == fs::Err::Ok, 1);
+    CHECK_EQ(formatted, 0);
+    CHECK_EQ(d.open, 1);
+    CHECK_EQ(f.wide(), 1);
+    CHECK_EQ(int(fsgrow::grow(f, env).outcome), int(fsgrow::Outcome::AlreadyGrown));
+    CHECK_EQ(f.block_count(), kWide);
+    CHECK_EQ(f.exists(fsgrow::kIntent), 0);
+    CHECK_EQ(d.violations, 0);
 }
 
 // A grow cut short after its intent was committed may leave our own half-written blocks in the run: the intent says the
@@ -266,7 +329,7 @@ void test_intent_resumes_over_our_own_leftovers() {
     check_files(f);
 }
 
-// A power cut at every program and erase of the grow: the next boot mounts 90 or 145 blocks (never a format), every
+// A power cut at every program and erase of the grow: the next boot mounts 90 or 111 blocks (never a format), every
 // file is intact, and the grow then completes.
 int power_cut_sweep(int churn, bool* compacted) {
     GuardedDisk ref;
@@ -337,10 +400,12 @@ int main() {
     test_fs_mounts_both_sizes_and_grows();
     test_fs_refuses_a_foreign_block_count();
     test_grown_volume_uses_the_new_blocks();
+    test_wide_volume_mounts_for_the_move();
     test_blank_run_grows();
     test_data_in_the_run_blocks_the_grow();
     test_no_grow_before_the_legacy_wipe();
     test_fresh_format_size_follows_the_proof();
+    test_wide_volume_opens_the_run();
     test_intent_resumes_over_our_own_leftovers();
     test_power_cut_sweep_during_the_grow();
     return test_report("test_fs_grow");

@@ -33,6 +33,9 @@ inline constexpr std::uint32_t kLegacySectors = (flash::kStoreEnd - flash::kStor
 inline constexpr std::uint32_t kMaxSectors = kFsSectors + kLegacySectors;                                   // 146
 static_assert(kMaxSectors <= 0xFFFF, "the counts travel as u16");
 static_assert(flash::kFsGrownBlocks <= kMaxSectors, "a grown volume fits the same bound");
+static_assert(flash::fs_block_addr(flash::kFsGrownBlocks - 1) + flash::kSectorSize == flash::kBbRingBase + flash::kBbRingSectors * flash::kSectorSize &&
+                  flash::fs_block_addr(flash::kFsVolumeBlocks) == flash::kCardRingBase,
+              "the wipe of a grown unit (blocks 0..144) covers both rings");
 static_assert(kLegacySectors <= 64, "the proven legacy sectors fit one 64-bit mask");
 
 // Address of file system sector i (ascending); 0 past the end.
@@ -66,9 +69,10 @@ concept Env = requires(E& e, const E& ce, std::uint32_t addr) {
     e.clear_backup();                                           // this firmware's backup registers only
 };
 
-// `grown`: the volume has kFsGrownBlocks blocks (k2/core/fs_grow.hpp) and the flash guard has the run open. Its run
-// sectors are then volume sectors and are wiped with it; the legacy proof is not asked about them (a volume block may
-// start like an old store), and the only candidate left outside the run is the kept top page, which is never listed.
+// `grown`: the flash guard has the run open (a volume grown into it, k2/core/fs_grow.hpp, with the report-card and Black
+// Box rings in the rest of it, or a 145-block volume whose move waits). Every run sector is then ours and is wiped with
+// the volume (blocks 0..144: the rings included); the legacy proof is not asked about them (a volume block may start like
+// an old store), and the only candidate left outside the run is the kept top page, which is never listed.
 template <Env E>
 Result run(E& e, bool grown = false) {
     Result r;

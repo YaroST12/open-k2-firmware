@@ -9,18 +9,17 @@
 
 namespace k2::bbpersist {
 namespace {
-Persister g_p(fs::instance());
+Persister g_p(fs::bb_ring());
 }  // namespace
 
 void init() {
     g_p.init();
     const Status s = g_p.status();
-    K2LOG("[BBSTORE] entries=%d used=%u free=%u reserve=%u evicted=%u\n", s.entries, static_cast<unsigned>(s.used_bytes),
-          static_cast<unsigned>(s.free_bytes), static_cast<unsigned>(bbstore::kJournalReserveBlocks),
-          static_cast<unsigned>(s.made_room));
+    K2LOG("[BBSTORE] ring=%d entries=%d used=%u free=%u\n", s.ready ? 1 : 0, s.entries, static_cast<unsigned>(s.used_bytes),
+          static_cast<unsigned>(s.free_bytes));
 }
 // One line per save or refusal, with how long the main loop stood still: a save runs flash programs with interrupts off.
-void poll() {
+void poll(bool may_erase) {
     const Status a = g_p.status();
     g_p.poll();
     const Status b = g_p.status();
@@ -34,12 +33,19 @@ void poll() {
               b.last_kind, b.last_while_held ? 1 : 0, static_cast<unsigned>(b.waiting),
               static_cast<unsigned>(b.by_kind[1]), static_cast<unsigned>(b.by_kind[3]), static_cast<unsigned>(b.by_kind[5]),
               static_cast<unsigned>(b.dropped), static_cast<unsigned>(b.deferred));
+    if (g_p.maintain(may_erase)) {
+        const Status s = g_p.status();
+        K2LOG("[BB] ring erase: dropped=%u erases=%u entries=%d free=%u\n", static_cast<unsigned>(s.made_room - b.made_room),
+              static_cast<unsigned>(s.erases), s.entries, static_cast<unsigned>(s.free_bytes));
+    }
 }
 void hold_run() { g_p.hold_run(); }
-// At START, before Rd goes on: the journal's blocks are free for the whole run (one line only when something went).
+// At START, before Rd goes on: the ring's spare sector is blank for the whole run (one line only when something was erased).
 void make_room() {
+    const std::uint32_t e0 = g_p.status().erases;
     const unsigned n = g_p.make_room();
-    if (n) K2LOG("[BB] made room: %u captures evicted, free=%u\n", n, static_cast<unsigned>(g_p.status().free_bytes));
+    if (g_p.status().erases != e0)
+        K2LOG("[BB] made room: %u captures dropped, free=%u\n", n, static_cast<unsigned>(g_p.status().free_bytes));
 }
 Status status() { return g_p.status(); }
 

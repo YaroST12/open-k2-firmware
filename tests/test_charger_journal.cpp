@@ -605,34 +605,6 @@ static void test_failure_keeps_the_filesystem_error() {
     CHECK_EQ(int(w.j->begin(1, kOpt, evidence(), plan(57))), int(cj::Err::Flash));
     CHECK_EQ(int(w.j->last_fs()), int(fs::Err::NoSpace));
 }
-// The Black Box keeps the journal's room: with the other stores filling the volume down to the reserve plus a few blocks and a
-// ring that saves captures all along, a run of the full plan still journals without a failed write.
-static void test_black_box_leaves_the_journal_its_room() {
-    Vol v;
-    bbstore::Ring ring(*v.fs);
-    ring.mount();
-    std::vector<uint8_t> blob(2000, 0x5A);
-    char name[16];
-    for (int n = 0; n < 200; ++n) {
-        if (v.fs->block_count() - v.fs->used_blocks() <= bbstore::kJournalReserveBlocks + 6) break;
-        std::snprintf(name, sizeof name, "/x%d", n);
-        if (v.fs->write_file(name, blob) != fs::Err::Ok) break;
-    }
-    std::array<uint8_t, 4096> scratch;
-    std::vector<uint8_t> raw(1500);
-    for (unsigned k = 0; k < 60; ++k) {
-        for (size_t i = 0; i < raw.size(); ++i) raw[i] = uint8_t((i % 41 < 30 ? i * 3 : k + i / 41) + k);
-        CHECK_EQ(int(ring.append({1, 1000, 10}, raw, scratch)) != int(bbstore::Err::Flash), true);
-    }
-    auto big = plan(ct::kMaxSteps);
-    CHECK_EQ(int(v.j->begin(1, kOpt, evidence(), big)), int(cj::Err::Ok));
-    for (size_t n = 0; n < big.size(); ++n) {
-        big[n].verdict = ct::Verdict::Pass;
-        CHECK_EQ(int(v.commit(big, n)), int(cj::Err::Ok));
-    }
-    CHECK_EQ(int(v.j->finish(5, 0)), int(cj::Err::Ok));
-}
-
 // A polled arm writes at most one file per pump(): the main loop returns to the PD engine between two of them. What one pump
 // holds the loop for is the model in RamDisk::cost_ms(): a header or a sweep step is a few ms, a section file up to about 215 ms.
 static void test_polled_arm_is_bounded_per_pump_and_writes_the_header_last() {
@@ -977,7 +949,7 @@ int main() {
     test_a_resumed_run_keeps_writing_only_what_changed(); test_phase_marker_maps_through_sections(); test_note_plan_finds_changed_sections();
     test_polled_arm_is_bounded_per_pump_and_writes_the_header_last();
     test_polled_arm_stops_at_a_failure_and_a_too_big_plan();
-    test_failure_keeps_the_filesystem_error(); test_black_box_leaves_the_journal_its_room();
+    test_failure_keeps_the_filesystem_error();
     test_roundtrip(); test_capped_step_roundtrip(); test_power_cut_at_every_operation(); test_power_cut_during_begin();
     test_restart_replaces_the_run(); test_flash_failure_marks_broken(); test_meta_and_attempt_roundtrip(); test_meta_without_a_guard_reads_zero();
     test_meta_and_attempt_power_cut(); test_an_ended_run_is_not_resumable(); test_finish_cut_at_every_operation();

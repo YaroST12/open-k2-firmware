@@ -3,25 +3,43 @@
 // Persister (k2/core/bbpersist.hpp): finished captures go to the flash ring, a boot reloads the newest
 // ones into the RAM slots, and nothing is written while the link is busy or after a long idle.
 #include <cstring>
+#include <memory>
 #include <set>
 #include <algorithm>
 #include <vector>
 
 #include "k2/core/bbpersist.hpp"
+#include "k2/drivers/flash.hpp"
 #include "k2/pd/pdtrace.hpp"
-#include "ramdisk.hpp"
+#include "ramflash.hpp"
 #include "test_util.h"
 #include "ui_stubs.h"
 
 using namespace k2;
 
 namespace {
-// One littlefs volume on a RAM disk (what survives a power cycle).
+// The Black Box ring on a RAM flash (what survives a power cycle); reboot() scans it again with a fresh ring.
 struct FakeFlash {
-    k2test::RamDisk disk{96};
-    fs::Fs fs{disk, 96};
-    FakeFlash() { bool fm = false; fs.mount_or_format(fm); }
+    k2test::RamFlash disk;
+    std::unique_ptr<ringlog::Ring> ring;
+    FakeFlash() { reboot(); }
+    void reboot() {
+        ring = std::make_unique<ringlog::Ring>(disk, flash::kBbRingBase, flash::kBbRingSectors, bbstore::kRingKind);
+        ring->scan();
+    }
     std::uint64_t programs() const { return disk.progs; }
+    // Stores incompressible captures (one to a sector) with no maintenance until the ring refuses; returns how many.
+    int fill() {
+        bbstore::Ring r(*ring);
+        r.mount();
+        std::vector<std::uint8_t> raw(1980), scratch(lz::bound(raw.size()));
+        std::uint32_t x = 12345;
+        int n = 0;
+        for (;; n++) {
+            for (auto& b : raw) { x = x * 1664525u + 1013904223u; b = std::uint8_t(x >> 24); }
+            if (r.append({unsigned(pdtrace::Trigger::Contract), 0, 0}, raw, scratch) != bbstore::Err::Ok) return n;
+        }
+    }
 };
 
 void msg(std::uint16_t hdr, std::initializer_list<std::uint32_t> objs = {}) {
@@ -60,13 +78,14 @@ int main() {
     const std::uint32_t kQuiet = bbpersist::kQuietMs;
     {   // nothing yet; a finished capture is written once, after the link went quiet
         FakeFlash f;
-        bbpersist::Persister p(f.fs);
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
         p.init();
         const auto w0 = f.programs();                     // the format and the mount are done
         CHECK_EQ(p.status().entries, 0);
-        CHECK_EQ(p.status().free_bytes > 80 * 2048, 1);
+        CHECK_EQ(p.status().free_bytes, flash::kBbRingSectors * (ringlog::kSector - ringlog::kSectorHeader));
+        CHECK_EQ(p.status().ready, 1);
         capture(100000, 0x05AC);
         g_stub.ms = 100000 + 600 + 5;
         p.poll();                                         // traffic 5 ms ago: wait
@@ -82,7 +101,7 @@ int main() {
     }
     {   // a capture that is still filling is left alone
         FakeFlash f;
-        bbpersist::Persister p(f.fs);
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
         p.init();
@@ -99,7 +118,7 @@ int main() {
         FakeFlash f;
         std::vector<std::vector<std::uint8_t>> sent;
         {
-            bbpersist::Persister p(f.fs);
+            bbpersist::Persister p(*f.ring);
             pdtrace::init();
             pdtrace::clear_captures();
             p.init();
@@ -115,7 +134,8 @@ int main() {
         pdtrace::init();                                  // reboot: RAM slots are gone
         pdtrace::clear_captures();
         g_stub.ms = 5000;
-        bbpersist::Persister p(f.fs);
+        f.reboot();
+        bbpersist::Persister p(*f.ring);
         p.init();
         CHECK_EQ(p.status().entries, 5);
         int stored = 0;
@@ -146,7 +166,7 @@ int main() {
     }
     {   // idle: no PD traffic and no VBUS change for the idle time, so a finished capture is not written
         FakeFlash f;
-        bbpersist::Persister p(f.fs);
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
         p.init();
@@ -164,7 +184,7 @@ int main() {
     {   // hold_run: a live run writes nothing but the rare captures (hard reset, detach, refusal): Contract, VBUS-dip and edge
         // captures wait, whatever the row. Hardware 2026-11-08: saves=7..29 of 95-144 ms inside a run with only Contract held.
         FakeFlash f;
-        bbpersist::Persister p(f.fs);
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
         p.init();
@@ -207,40 +227,53 @@ int main() {
         CHECK_EQ(p.status().last_kind, unsigned(pdtrace::Trigger::VbusDip));
         CHECK_EQ(p.status().last_while_held, 0);
     }
-    {   // make_room: a ring that grew to the whole volume under an older build gives the journal its blocks back at once, oldest first
-        k2test::RamDisk disk{40};
-        fs::Fs vol{disk, 40};
-        bool fm = false;
-        vol.mount_or_format(fm);
-        int before = 0;
-        {   // fill: no reserve, as the older build did
-            bbstore::Ring r(vol);
-            r.set_reserve(0);
-            r.mount();
-            std::vector<std::uint8_t> raw(1500);
-            std::vector<std::uint8_t> scratch(lz::bound(raw.size()));
-            std::uint32_t x = 12345;
-            for (int i = 0; i < 40; i++) {
-                for (auto& b : raw) { x = x * 1664525u + 1013904223u; b = std::uint8_t(x >> 24); }
-                r.append({unsigned(pdtrace::Trigger::Contract), 0, 0}, raw, scratch);
-            }
-            before = r.stats().entries;
-            CHECK_EQ(vol.block_count() - vol.used_blocks() < bbstore::kJournalReserveBlocks, 1);   // full, as on the device (90/90)
-        }
-        bbpersist::Persister p(vol);
+    {   // make_room (a charger test starts): a full ring erases its oldest sector at once and drops that capture; the mount
+        // never erases, and a second call finds nothing to do
+        FakeFlash f;
+        CHECK_EQ(f.fill(), int(flash::kBbRingSectors));              // one capture to a sector, every sector used
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
-        p.init();                                                     // the room is made at the mount, not on some later save
-        CHECK_EQ(vol.block_count() - vol.used_blocks() >= bbstore::kJournalReserveBlocks, 1);
-        CHECK_EQ(p.status().entries < before, 1);
-        const int entries = p.status().entries;
-        CHECK_EQ(p.make_room(), 0u);                                  // already there: nothing is evicted
-        CHECK_EQ(p.status().entries, entries);
+        p.init();
+        CHECK_EQ(f.disk.erases, 0u);
+        CHECK_EQ(p.status().entries, int(flash::kBbRingSectors));
+        CHECK_EQ(p.make_room(), 1u);
+        CHECK_EQ(f.disk.erases, 1u);
+        CHECK_EQ(p.status().entries, int(flash::kBbRingSectors) - 1);
+        CHECK_EQ(p.status().made_room, 1u);
+        CHECK_EQ(p.status().erases, 1u);
+        CHECK_EQ(p.make_room(), 0u);
+        CHECK_EQ(f.disk.erases, 1u);
+    }
+    {   // maintain (main loop): erases only when the caller allows it, never while a run holds, and one erase per
+        // kEraseGapMs at most
+        FakeFlash f;
+        f.fill();
+        bbpersist::Persister p(*f.ring);
+        pdtrace::init();
+        pdtrace::clear_captures();
+        p.init();
+        g_stub.ms = 3000000;
+        CHECK_EQ(p.maintain(false), 0);                               // a test, PD Stress or a busy link
+        p.hold_run();
+        CHECK_EQ(p.maintain(true), 0);                                // the run's hold is up
+        CHECK_EQ(f.disk.erases, 0u);
+        g_stub.ms += bbpersist::kHoldLapseMs + 10;
+        CHECK_EQ(p.maintain(true), 1);
+        CHECK_EQ(f.disk.erases, 1u);
+        CHECK_EQ(p.maintain(true), 0);                                // the spare sector is blank: nothing to do
+        f.fill();                                                     // another capture takes it
+        CHECK_EQ(p.maintain(true), 0);                                // too soon after the last erase
+        CHECK_EQ(f.disk.erases, 1u);
+        g_stub.ms += bbpersist::kEraseGapMs;
+        CHECK_EQ(p.maintain(true), 1);
+        CHECK_EQ(f.disk.erases, 2u);
+        CHECK_EQ(p.status().erases, 2u);
     }
     {   // hold_run, the Contract captures: during a charger test the per-row Contract captures wait (a save stalls the loop for ~250 ms with
         // interrupts off); the rare ones (hard reset) still go, and the Contract ones go once the hold lapses.
         FakeFlash f;
-        bbpersist::Persister p(f.fs);
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
         p.init();
@@ -270,43 +303,37 @@ int main() {
         CHECK_EQ(p.status().held, 0);
         CHECK_EQ(p.status().entries, 2);                              // the Contract capture is saved now (if still in a slot)
     }
-    {   // a refused capture (no room above the reserve, nothing of ours to evict) is refused once: later polls neither retry it
-        // nor touch the volume, and the next capture costs one refusal again (hardware 2026-11-11: two refusals per VBUS cut)
-        k2test::RamDisk disk{90};
-        fs::Fs vol{disk, 90};
-        bool fm = false;
-        vol.mount_or_format(fm);
-        std::vector<std::uint8_t> blob(2000, 0x5A);
-        char name[16];
-        for (int n = 0; n < 90 && vol.block_count() - vol.used_blocks() > 6; n++) {
-            std::snprintf(name, sizeof name, "/x%d", n);
-            CHECK_EQ(vol.write_file(name, blob) == fs::Err::Ok, 1);
-        }
-        bbpersist::Persister p(vol);
+    {   // a full ring (no maintenance yet) refuses a capture once: later polls neither retry it nor touch the flash, the next
+        // capture costs one refusal again, and a save never erases (hardware 2026-11-11: two refusals per VBUS cut)
+        FakeFlash f;
+        f.fill();
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
         p.init();
+        const int entries = p.status().entries;
         capture(800000, 0x5555);
         g_stub.ms = 800000 + 600 + kQuiet + 10;
+        const auto ops = f.disk.ops();
         p.poll();
         CHECK_EQ(p.status().skipped, 1u);
         CHECK_EQ(p.status().saves, 0u);
-        CHECK_EQ(p.status().entries, 0);
-        disk.reset_counters();
+        CHECK_EQ(p.status().entries, entries);
+        CHECK_EQ(f.disk.ops(), ops);
         for (int k = 0; k < 50; k++) { g_stub.ms += 20; p.poll(); }
         CHECK_EQ(p.status().skipped, 1u);                             // not retried
-        CHECK_EQ(disk.read_bytes + disk.progs + disk.erases, 0u);     // and the polls never touched the volume
+        CHECK_EQ(f.disk.ops(), ops);                                  // and the polls never touched the flash
         capture(900000, 0x6666);
         g_stub.ms = 900000 + 600 + kQuiet + 10;
         p.poll();
         CHECK_EQ(p.status().skipped, 2u);
-        CHECK_EQ(disk.progs + disk.erases, 0u);
+        CHECK_EQ(f.disk.ops(), ops);
     }
     {   // a run's rare captures: kRareBudget go out at once, the rest wait kept in their slots (a Contract capture takes
         // another slot), a full set of waiting captures loses its oldest and counts it, and the end of the run writes one
         // capture per poll()
         FakeFlash f;
-        bbpersist::Persister p(f.fs);
+        bbpersist::Persister p(*f.ring);
         pdtrace::init();
         pdtrace::clear_captures();
         p.init();

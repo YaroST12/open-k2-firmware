@@ -1069,7 +1069,7 @@ namespace dpsniff { void poll(std::uint32_t, std::int32_t) {} }
 namespace boottrace { void flush_log() {} void poll() {} }   // poll: the self-power bring-up's (src/core/boot_pd.cpp)
 namespace bootscreen { void draw_live(std::uint32_t) {} }
 namespace bootinfo { bool boot_key_held() { return false; } }
-namespace bbpersist { void poll() {} }
+namespace bbpersist { void poll(bool) {} }
 namespace transcap { void poll() {} }
 
 }  // namespace k2

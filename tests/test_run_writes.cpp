@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Flash writes during a charger test. One littlefs volume on a counting RAM disk carries the run journal and the Black Box
-// ring, the way the firmware shares its volume. A Baseus-FH22-shaped run is played row by row (verdicts into the journal, the
-// phase marker before each PD row, the captures a PD row makes) and every erase and program is attributed to the store that
-// made it and to the phase it fell in: during the run (from the arm to the finish) or after it. Every littlefs sector erase
-// freezes the main loop for tens of ms on the device (USB, the 1 ms PD service and SysTick), so the number that matters is
-// how many erases fall inside the run, and the Black Box part of it must not grow with the run.
+// Flash writes during a charger test. A littlefs volume on a counting RAM disk carries the run journal, the Black Box ring
+// log sits on its own sectors (a RAM flash), as on the device. A Baseus-FH22-shaped run is played row by row (verdicts into
+// the journal, the phase marker before each PD row, the captures a PD row makes) and every erase and program is attributed
+// to the store that made it and to the phase it fell in: during the run (from the arm to the finish) or after it. Every
+// sector erase freezes the main loop for tens of ms on the device (USB, the 1 ms PD service and SysTick), so the number that
+// matters is how many erases fall inside the run: the Black Box makes none there (a save never erases, its maintenance
+// waits for the end of the run), and its writes must not grow with the run.
 #include <cstdio>
 #include <memory>
 #include <vector>
 
 #include "k2/chargertest/charger_journal.hpp"
 #include "k2/core/bbpersist.hpp"
+#include "k2/drivers/flash.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "ramdisk.hpp"
+#include "ramflash.hpp"
 #include "test_util.h"
 #include "ui_stubs.h"
 
@@ -65,8 +68,10 @@ struct Counts {
 };
 
 struct Sim {
-    k2test::RamDisk disk{96};
-    fs::Fs fs{disk, 96};
+    k2test::RamDisk disk{111};
+    fs::Fs fs{disk, 111};
+    k2test::RamFlash bb_flash;
+    ringlog::Ring bb_ring{bb_flash, flash::kBbRingBase, flash::kBbRingSectors, bbstore::kRingKind};
     std::unique_ptr<cj::Journal> j;
     std::unique_ptr<bbpersist::Persister> bb;
     std::vector<ct::Step> steps = plan();
@@ -78,25 +83,36 @@ struct Sim {
     Sim() {
         bool fm = false;
         fs.mount_or_format(fm);
+        bb_ring.scan();
         j = std::make_unique<cj::Journal>(fs);
-        bb = std::make_unique<bbpersist::Persister>(fs);
+        bb = std::make_unique<bbpersist::Persister>(bb_ring);
         pdtrace::init();
         pdtrace::clear_captures();
         bb->init();
         g_stub.ms = 1000000;
     }
+    // What f() made on the journal's volume.
     template <class F> Counts spend(F&& f) {
         disk.reset_counters();
         f();
         return {disk.erases, disk.progs, disk.halfwords, disk.cost_ms()};
     }
+    // What f() made on the Black Box ring (the same cost model as RamDisk::cost_ms()).
+    template <class F> Counts spend_bb(F&& f) {
+        const Counts c0{bb_flash.erases, bb_flash.progs, bb_flash.halfwords, 0};
+        f();
+        Counts c{bb_flash.erases - c0.erases, bb_flash.progs - c0.progs, bb_flash.halfwords - c0.halfwords, 0};
+        c.ms = 0.2 * double(c.halfwords) + 35.0 * double(c.erases);
+        return c;
+    }
     void tick(unsigned ms = 50) { g_stub.ms += ms; pdtrace::vbus_sample(5000, 0); }
     void traffic() { pdtrace::rx(0xE0, 0x0001, std::vector<std::uint8_t>(4, 0)); }
-    // The UI's tick: renew the hold, one Black Box poll, and one journal write when the link has been quiet.
+    // The UI's tick: renew the hold, one Black Box poll, and one journal write when the link has been quiet. The main
+    // loop's maintenance runs too, allowed only outside the run (the firmware's gate: no charger test, a quiet link).
     void service(bool journal_too) {
         if (running) bb->hold_run();
         const std::uint32_t before = bb->status().saves;
-        const Counts b = spend([&] { bb->poll(); });
+        const Counts b = spend_bb([&] { bb->poll(); bb->maintain(!running); });
         (running ? bb_run : bb_after).add(b);
         const std::uint32_t made = bb->status().saves - before;
         if (made > max_per_poll) max_per_poll = made;
@@ -119,6 +135,7 @@ struct Sim {
         if (i == 0 || steps[i - 1].group != s.group) { pdtrace::cc(pdtrace::CcEvent::Detach, 1, 0); traffic(); }
     }
     void play() {
+        bb->make_room();                                   // START, before Rd goes on: the run's rare captures find room
         const Counts a = spend([&] { CHECK_EQ(int(j->begin(kRun, kOpt, evidence(), steps)), int(cj::Err::Ok)); });
         journal_run.add(a);
         j_arm = a;
@@ -166,11 +183,11 @@ int main() {
                 (unsigned long long)s.bb_after.erases, (unsigned long long)s.bb_after.progs, (unsigned long long)s.bb_after.halfwords,
                 s.bb_after.ms, unsigned(st.saves), unsigned(st.skipped), st.entries, polls, unsigned(st.dropped), unsigned(st.deferred));
     // The Black Box writes nothing that a run has to wait for beyond a small fixed number of captures (the rare kinds that
-    // the run lets through), however many rows fail: the rest is saved after the run.
-    CHECK_EQ(s.bb_run.erases <= 6, true);
+    // the run lets through), however many rows fail, and erases nothing during the run: the rest is saved after the run.
+    CHECK_EQ(s.bb_run.erases, 0u);
     CHECK_EQ(s.bb_run.halfwords <= 2 * 700, true);
     CHECK_EQ(st.saves >= 1, true);   // and what is left after the run does reach the flash
-    CHECK_EQ(s.bb_after.erases > 0, true);
+    CHECK_EQ(s.bb_after.progs > 0, true);
     CHECK_EQ(s.max_per_poll, 1u);    // one write per idle pass
     // The captures that did not fit the three RAM slots are counted, not silent: the run made far more than three.
     CHECK_EQ(st.deferred > 0, true);

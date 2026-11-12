@@ -7,10 +7,14 @@
 
 #include <cstring>
 
+#include "k2/chargertest/report_card_store.hpp"
+#include "k2/core/bbstore.hpp"
 #include "k2/drivers/flash.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/core/fs_grow.hpp"
+#include "k2/core/fs_migrate.hpp"
 #include "k2/core/legacy_wipe.hpp"
+#include "k2/core/scratch.hpp"
 #include "k2/drivers/usb.hpp"
 
 namespace k2::fs {
@@ -27,21 +31,22 @@ int status_to_io(flash::Status st) {
 
 class FlashDevice final : public BlockDevice {
 public:
-    // Blocks 90..144 live in the run; k2::flash refuses their erase and program until the run is opened on proof.
+    // Blocks 90..144 live in the run; k2::flash refuses their erase and program until the run is opened on proof. A volume
+    // of 111 blocks never asks for more; only a wide one (145, its shrink pending) reads the rest.
     int read(std::uint32_t block, std::uint32_t off, void* buf, std::uint32_t n) override {
-        if (block >= kGrownBlocks || off + n > kBlockSize) return kIoFail;
+        if (block >= kWideBlocks || off + n > kBlockSize) return kIoFail;
         std::memcpy(buf, flash::store_view(addr(block) + off), n);
         return 0;
     }
     int prog(std::uint32_t block, std::uint32_t off, const void* buf, std::uint32_t n) override {
-        if (block >= kGrownBlocks || off + n > kBlockSize) return kIoFail;
+        if (block >= kWideBlocks || off + n > kBlockSize) return kIoFail;
         const std::uint32_t t0 = systick::ticks();
         const int rc = status_to_io(flash::store_program(addr(block) + off, {static_cast<const std::uint8_t*>(buf), n}));
         paint::meter.add_fs(systick::ticks() - t0);   // time inside the flash write (the main loop waits for it)
         return rc;
     }
     int erase(std::uint32_t block) override {
-        if (block >= kGrownBlocks) return kIoFail;
+        if (block >= kWideBlocks) return kIoFail;
         const std::uint32_t t0 = systick::ticks();
         const int rc = status_to_io(flash::store_erase(addr(block)));
         paint::meter.add_fs(systick::ticks() - t0);
@@ -52,9 +57,40 @@ private:
     static std::uint32_t addr(std::uint32_t block) { return flash::fs_block_addr(block); }
 };
 
+// The ring seam on the real flash: memory-mapped reads, the guarded program and erase (the run must be open).
+class FlashIo final : public ringlog::Io {
+public:
+    const std::uint8_t* view(std::uint32_t a) override { return flash::store_view(a); }
+    bool program(std::uint32_t a, std::span<const std::uint8_t> d) override {
+        const std::uint32_t t0 = systick::ticks();
+        const bool ok = flash::store_program(a, d) == flash::Status::Ok;
+        paint::meter.add_fs(systick::ticks() - t0);
+        return ok;
+    }
+    bool erase_sector(std::uint32_t a) override {
+        const std::uint32_t t0 = systick::ticks();
+        const bool ok = flash::store_erase(a) == flash::Status::Ok;
+        paint::meter.add_fs(systick::ticks() - t0);
+        return ok;
+    }
+};
+
 FlashDevice g_dev;
-Fs g_fs(g_dev, kFlashBlocks, kGrownBlocks);
+Fs g_fs(g_dev, kFlashBlocks, kGrownBlocks, kWideBlocks);
 bool g_formatted = false;
+FlashIo g_io;
+ringlog::Ring g_cards(g_io, flash::kCardRingBase, flash::kCardRingSectors, report_card::kRingKind, report_card::kRingReserve);
+ringlog::Ring g_bb(g_io, flash::kBbRingBase, flash::kBbRingSectors, bbstore::kRingKind);
+bool g_rings = false;
+
+void init_rings() {
+    if (g_rings || !g_fs.ready() || !g_fs.grown() || !flash::fs_run_open()) return;
+    g_cards.scan();
+    g_bb.scan();
+    g_rings = true;
+    K2LOG("[RING] cards: live=%u blank=%u dirty=%u  bb: live=%u blank=%u dirty=%u", g_cards.live(), g_cards.blank(), g_cards.dirty(),
+          g_bb.live(), g_bb.blank(), g_bb.dirty());
+}
 
 // The real flash for the grow sequence: memory-mapped blank check, the guard's run switch.
 struct GrowEnv {
@@ -72,10 +108,30 @@ Fs& instance() { return g_fs; }
 bool formatted_at_boot() { return g_formatted; }
 bool grown() { return flash::fs_run_open(); }
 bool legacy_done() { return g_fs.exists(fsgrow::kLegacyMarker); }
+ringlog::Ring& card_ring() { return g_cards; }
+ringlog::Ring& bb_ring() { return g_bb; }
+bool rings_ready() { return g_rings; }
+
+namespace {
+
+void log_migration(const fsmigrate::Result& r) {
+    static constexpr const char* kName[] = {"none", "done", "deferred", "stuck", "failed"};
+    K2LOG("[FS] ring layout move %s%s: used=%u above=%u passes=%u files=%u erased=%u%s err=%s", kName[unsigned(r.outcome)],
+          r.resumed ? " (resumed)" : "", unsigned(r.used_blocks), unsigned(r.above), r.passes, r.files, r.erased,
+          r.tight ? " tcap+log dropped" : "", err_name(r.err));
+}
+
+}  // namespace
 
 Err init(bool& formatted) {
     GrowEnv env;
-    const Err e = fsgrow::mount(g_fs, env, formatted);
+    Err e = fsgrow::mount(g_fs, env, formatted);
+    if (e == Err::Ok && g_fs.wide()) {   // the layout before the rings: emptied above 111 blocks and shrunk, once
+        const scratch::Lease lease("fs.migrate");
+        const fsmigrate::Result r = fsmigrate::migrate(g_fs, g_io, {scratch::arena(), scratch::kSize});
+        log_migration(r);
+        if (!g_fs.ready()) e = g_fs.mount();
+    }
     g_formatted = formatted;
     if (e == Err::Ok) {
         g_fs.clean_tmp("/");
@@ -122,6 +178,9 @@ void grow() {
         K2LOG("[FS] grown %u -> %u blocks%s used=%u", unsigned(kFlashBlocks), unsigned(g_fs.block_count()),
               r.resumed ? " (resumed after a cut)" : "", unsigned(g_fs.used_blocks()));
         break;
+    case fsgrow::Outcome::AlreadyGrown:
+        if (g_fs.wide()) K2LOG("[FS] %u blocks, the move into the ring layout waits: rings off", unsigned(g_fs.block_count()));
+        break;
     case fsgrow::Outcome::NotBlank:
         K2LOG("[FS] grow skipped: 0x%08X not blank", unsigned(r.addr));
         break;
@@ -131,10 +190,10 @@ void grow() {
     case fsgrow::Outcome::Failed:
         K2LOG("[FS] grow failed: %s (stays at %u blocks, retried next boot)", err_name(r.err), unsigned(g_fs.block_count()));
         break;
-    case fsgrow::Outcome::AlreadyGrown:
     case fsgrow::Outcome::NotMounted:
         break;
     }
+    init_rings();
 }
 
 }  // namespace k2::fs

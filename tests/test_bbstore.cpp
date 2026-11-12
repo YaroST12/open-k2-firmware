@@ -1,26 +1,42 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Black-box flash ring (k2/core/bbstore.hpp) over a fake flash: append, remount, wrap and eviction,
-// torn writes, corruption, region policy and the idle gate.
+// Black Box store (k2/core/bbstore.hpp) over its ring log on a RAM flash: append, reboot, the newest 32, a full ring that
+// refuses without erasing, maintenance that drops the oldest sector, torn writes, corruption and the idle gate.
 #include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include "k2/core/bbstore.hpp"
-#include "ramdisk.hpp"
+#include "k2/drivers/flash.hpp"
+#include "ramflash.hpp"
 #include "test_util.h"
 
 using namespace k2;
 
 namespace {
-// One littlefs volume on a RAM disk (what survives a power cycle).
+// The Black Box ring on a RAM flash; reboot() rescans it with a fresh ring and store (no RAM state survives). idle()
+// runs the maintenance the main loop runs while nothing is busy, until it has nothing left to do.
 struct Vol {
-    k2test::RamDisk disk{96};
-    fs::Fs fs{disk, 96};
-    Vol() { bool fm = false; fs.mount_or_format(fm); }
+    k2test::RamFlash disk;
+    std::unique_ptr<ringlog::Ring> ring;
+    std::unique_ptr<bbstore::Ring> r;
+    Vol() { reboot(); }
+    void reboot() {
+        r.reset();
+        ring = std::make_unique<ringlog::Ring>(disk, flash::kBbRingBase, flash::kBbRingSectors, bbstore::kRingKind);
+        ring->scan();
+        r = std::make_unique<bbstore::Ring>(*ring);
+        r->mount();
+    }
+    int idle() {
+        int dropped = 0;
+        for (int d; (d = r->maintain(true)) >= 0;) dropped += d;
+        return dropped;
+    }
 };
 
 using Buf = std::vector<std::uint8_t>;
@@ -37,14 +53,14 @@ Buf noise(std::size_t n) {
     return b;
 }
 
-using Ring = bbstore::Ring;
 std::array<std::uint8_t, 4096> g_scratch;
 
-bbstore::Err add(Ring& r, unsigned seed, std::size_t n = 1500, std::uint32_t at_s = 10) {
+bbstore::Err add(bbstore::Ring& r, unsigned seed, std::size_t n = 1500, std::uint32_t at_s = 10) {
     const Buf b = sample(seed, n);
     return r.append({1 + seed % 4, 1000, at_s}, b, g_scratch);
 }
-std::vector<unsigned> order(Ring& r) {
+// The seeds of the listed captures, oldest first.
+std::vector<unsigned> order(const bbstore::Ring& r) {
     std::vector<unsigned> seeds;
     r.each([&](const bbstore::Entry& e) {
         Buf out(2048);
@@ -54,266 +70,217 @@ std::vector<unsigned> order(Ring& r) {
     });
     return seeds;
 }
+// Appends with no maintenance until the ring refuses; returns how many went in.
+unsigned fill(Vol& v, unsigned first) {
+    unsigned k = first;
+    while (add(*v.r, k) == bbstore::Err::Ok) k++;
+    return k - first;
+}
 }  // namespace
 
 int main() {
     {   // layout and policy constants
         CHECK_EQ(bbstore::kMaxEntries, 32u);
-        CHECK_EQ(bbstore::kMaxFile, 2044u);                  // one data block of a littlefs file
-        CHECK_EQ(bbstore::kFileHeader + bbstore::kMaxPacked, bbstore::kMaxFile);
+        CHECK_EQ(bbstore::kHeader + bbstore::kMaxPacked, ringlog::kMaxPayload);   // one capture at most fills a sector
+        CHECK_EQ(bbstore::kRingKind, std::uint8_t('B'));
+        CHECK_EQ(flash::kBbRingSectors, 20u);
     }
-    {   // empty volume
-        Vol f;
-        Ring r(f.fs);
-        r.mount();
-        const auto s = r.stats();
+    {   // empty ring
+        Vol v;
+        const auto s = v.r->stats();
         CHECK_EQ(s.entries, 0);
-        CHECK_EQ(s.used_bytes, 0);
-        CHECK_EQ(s.free_bytes > 80 * fs::kBlockSize, 1);
-        CHECK_EQ(r.next_boot(), 0);
+        CHECK_EQ(s.used_bytes, 0u);
+        CHECK_EQ(s.free_bytes, flash::kBbRingSectors * (ringlog::kSector - ringlog::kSectorHeader));
+        CHECK_EQ(v.r->next_boot(), 0);
+        CHECK_EQ(v.r->ready(), 1);
+        CHECK_EQ(v.r->needs_maintenance(), 0);
         int n = 0;
-        r.each([&](const bbstore::Entry&) { n++; });
+        v.r->each([&](const bbstore::Entry&) { n++; });
         CHECK_EQ(n, 0);
     }
-    {   // append, power cycle (a new Fs and Ring over the same disk), read back
-        Vol f;
-        {
-            Ring r(f.fs);
-            r.mount();
-            CHECK_EQ(int(add(r, 1)), int(bbstore::Err::Ok));
-            CHECK_EQ(int(add(r, 2, 900, 55)), int(bbstore::Err::Ok));
-        }
-        fs::Fs fs2(f.disk, 96);
-        fs2.mount();
-        Ring r(fs2);
-        r.mount();
-        CHECK_EQ(r.stats().entries, 2);
-        CHECK_EQ(r.next_boot(), 1);
-        struct Seen { bbstore::Entry e; Buf packed; };
-        std::vector<Seen> es;
-        r.each([&](const bbstore::Entry& e) { es.push_back({e, Buf(e.packed.begin(), e.packed.end())}); });
-        CHECK_EQ(es.size(), 2);
-        CHECK_EQ(es[0].e.trigger, 2);
-        CHECK_EQ(es[0].e.raw_len, 1500);
-        CHECK_EQ(es[0].e.pre, 1000);
-        CHECK_EQ(es[1].e.raw_len, 900);
-        CHECK_EQ(es[1].e.at_s, 55);
-        CHECK_EQ(es[1].e.boot, 0);
+    {   // a ring that was never scanned refuses cleanly
+        k2test::RamFlash disk;
+        ringlog::Ring rl(disk, flash::kBbRingBase, flash::kBbRingSectors, bbstore::kRingKind);
+        bbstore::Ring r(rl);
+        CHECK_EQ(r.ready(), 0);
+        CHECK_EQ(int(add(r, 1)), int(bbstore::Err::Flash));
+        CHECK_EQ(r.maintain(true), -1);
+        CHECK_EQ(disk.ops(), 0);
+    }
+    {   // append, power cycle, read back
+        Vol v;
+        CHECK_EQ(int(add(*v.r, 1)), int(bbstore::Err::Ok));
+        CHECK_EQ(int(add(*v.r, 2, 900, 55)), int(bbstore::Err::Ok));
+        v.reboot();
+        CHECK_EQ(v.r->stats().entries, 2);
+        CHECK_EQ(v.r->next_boot(), 1);
+        std::vector<bbstore::Entry> es;
+        v.r->each([&](const bbstore::Entry& e) { es.push_back(e); });   // e.packed maps the flash: valid until an erase
+        CHECK_EQ(es.size(), 2u);
+        CHECK_EQ(es[0].trigger, 2);
+        CHECK_EQ(es[0].raw_len, 1500);
+        CHECK_EQ(es[0].pre, 1000);
+        CHECK_EQ(es[1].raw_len, 900);
+        CHECK_EQ(es[1].at_s, 55u);
+        CHECK_EQ(es[1].boot, 0);
         Buf out(2048);
-        bbstore::Entry e1 = es[1].e;
-        e1.packed = es[1].packed;
-        CHECK_EQ(r.unpack(e1, out), 900);
+        CHECK_EQ(v.r->unpack(es[1], out), 900u);
         const Buf want = sample(2, 900);
         CHECK_EQ(std::memcmp(out.data(), want.data(), 900), 0);
-        CHECK_EQ(es[0].e.packed_len < 1500, 1);
-        CHECK_EQ(r.stats().used_bytes > 0, 1);
-        CHECK_EQ(int(add(r, 3)), int(bbstore::Err::Ok));
-        CHECK_EQ(r.stats().entries, 3);
+        CHECK_EQ(es[0].packed_len < 1500, 1);
+        CHECK_EQ(v.r->stats().used_bytes, 2 * bbstore::kHeader + es[0].packed_len + es[1].packed_len);
+        CHECK_EQ(int(add(*v.r, 3)), int(bbstore::Err::Ok));
+        CHECK_EQ(v.r->stats().entries, 3);
+        v.reboot();
+        bbstore::Entry last{};
+        v.r->each([&](const bbstore::Entry& e) { last = e; });
+        CHECK_EQ(last.boot, 1);                      // written by the second boot
+        CHECK_EQ(v.r->next_boot(), 2);
     }
-    {   // wrap: the store keeps the newest kMaxEntries captures and evicts the oldest one by one
-        Vol f;
-        Ring r(f.fs);
-        r.mount();
-        for (unsigned k = 0; k < 200; k++) CHECK_EQ(int(add(r, k)), int(bbstore::Err::Ok));
-        const auto seeds = order(r);
-        CHECK_EQ(seeds.size(), bbstore::kMaxEntries);
-        CHECK_EQ(seeds.back(), 199);                       // newest kept
-        CHECK_EQ(seeds.front(), 199 - bbstore::kMaxEntries + 1);
-        for (std::size_t i = 1; i < seeds.size(); i++) CHECK_EQ(seeds[i], seeds[i - 1] + 1);   // contiguous, in order
-        const auto s = r.stats();
-        CHECK_EQ(s.entries, int(seeds.size()));
-        // a remount finds the same newest entry and the same count
-        fs::Fs fs2(f.disk, 96);
-        fs2.mount();
-        Ring r2(fs2);
-        r2.mount();
-        CHECK_EQ(r2.stats().entries, s.entries);
-        CHECK_EQ(order(r2).back(), 199);
-        CHECK_EQ(int(add(r2, 200)), int(bbstore::Err::Ok));
-        CHECK_EQ(order(r2).back(), 200);
+    {   // a full ring refuses without erasing (no erase, no program); maintenance only when the caller allows it, then
+        // the next capture fits. Seeds stay below 256: sample() repeats with seed mod 256.
+        Vol v;
+        const unsigned n = fill(v, 0);
+        CHECK_EQ(n > bbstore::kMaxEntries, 1);       // the ring holds more than the newest 32 a boot lists
+        CHECK_EQ(v.ring->blank(), 0u);
+        CHECK_EQ(v.disk.erases, 0u);
+        CHECK_EQ(v.r->needs_maintenance(), 1);
+        const auto ops = v.disk.ops();
+        CHECK_EQ(int(add(*v.r, 250)), int(bbstore::Err::Full));
+        CHECK_EQ(v.disk.ops(), ops);
+        CHECK_EQ(v.r->maintain(false), -1);          // not now: a test or a busy link
+        CHECK_EQ(v.disk.ops(), ops);
+        const int dropped = v.r->maintain(true);     // the oldest sector goes, with its captures
+        CHECK_EQ(dropped > 0, 1);
+        CHECK_EQ(v.disk.erases, 1u);
+        CHECK_EQ(v.r->needs_maintenance(), 0);
+        CHECK_EQ(v.r->maintain(true), -1);           // nothing left to do
+        CHECK_EQ(int(add(*v.r, 250)), int(bbstore::Err::Ok));
+        const auto seeds = order(*v.r);
+        CHECK_EQ(seeds.size(), std::size_t(bbstore::kMaxEntries));
+        CHECK_EQ(seeds.back(), 250u);
     }
-    {   // a full volume evicts the oldest capture instead of failing (no reserve: the NoSpace path of the write itself)
-        Vol f;
-        Ring r(f.fs);
-        r.set_reserve(0);
-        r.mount();
-        for (unsigned k = 0; k < 10; k++) add(r, k);
-        // another store takes most of the volume
-        std::vector<std::uint8_t> blob(2000, 0x5A);
-        char name[16];
-        int n = 0;
-        for (; n < 200; n++) {
-            std::snprintf(name, sizeof name, "/x%d", n);
-            if (f.fs.write_file(name, blob) != fs::Err::Ok) break;
-        }
-        CHECK_EQ(n > 10, 1);
-        CHECK_EQ(int(add(r, 50)), int(bbstore::Err::Ok));
-        const auto seeds = order(r);
-        CHECK_EQ(seeds.back(), 50);
-        CHECK_EQ(seeds.size() < 11, 1);
-    }
-    {   // reserve: the ring leaves the journal its blocks. It evicts its own oldest captures to stay above the reserve
-        // and never takes the free blocks below it, however full the other stores make the volume.
-        constexpr std::uint32_t kReserve = 20;
-        Vol f;
-        Ring r(f.fs);
-        r.set_reserve(kReserve);
-        r.mount();
-        for (unsigned k = 0; k < 10; k++) CHECK_EQ(int(add(r, k)), int(bbstore::Err::Ok));
-        std::vector<std::uint8_t> blob(2000, 0x5A);
-        char name[16];
-        for (int n = 0; n < 200; n++) {                                  // another store fills the volume down to reserve + 3
-            if (f.fs.block_count() - f.fs.used_blocks() <= kReserve + 3) break;
-            std::snprintf(name, sizeof name, "/x%d", n);
-            if (f.fs.write_file(name, blob) != fs::Err::Ok) break;
-        }
-        const std::uint32_t free0 = f.fs.block_count() - f.fs.used_blocks();
-        CHECK_EQ(free0 <= kReserve + 3, 1);
-        for (unsigned k = 20; k < 40; k++) {
-            const auto e = add(r, k);
-            CHECK_EQ(int(e), int(bbstore::Err::Ok));
-            CHECK_EQ(f.fs.block_count() - f.fs.used_blocks() >= kReserve, 1);
-        }
-        CHECK_EQ(order(r).back(), 39);
-        CHECK_EQ(r.stats().entries <= 12, 1);                             // 20 saves, and the ring hardly grew: each gave one back
-    }
-    {   // reserve: nothing to evict and still under it = Full, and the disk is not touched
-        Vol f;
-        Ring r(f.fs);
-        r.set_reserve(20);
-        r.mount();
-        std::vector<std::uint8_t> blob(2000, 0x5A);
-        char name[16];
-        for (int n = 0; n < 200; n++) {
-            if (f.fs.block_count() - f.fs.used_blocks() <= 10) break;
-            std::snprintf(name, sizeof name, "/x%d", n);
-            if (f.fs.write_file(name, blob) != fs::Err::Ok) break;
-        }
-        const auto progs = f.disk.progs, erases = f.disk.erases;
-        CHECK_EQ(int(add(r, 1)), int(bbstore::Err::Full));
-        CHECK_EQ(f.disk.progs, progs);
-        CHECK_EQ(f.disk.erases, erases);
-        CHECK_EQ(r.stats().entries, 0);
-    }
-    {   // the default reserve is the journal's room
-        CHECK_EQ(bbstore::kJournalReserveBlocks, 20u);
-    }
-    {   // Full is cheap: on a volume the cards filled (hardware 2026-11-11: 61 cards, 5 free blocks, no capture of its own) the
-        // ring refused every capture after compressing it and walking the whole volume, 41 ms with the loop stopped, twice per
-        // VBUS cut. Now it refuses before the compression (the scratch buffer is never written) and, with nothing written in
-        // between, without a second walk (Fs caches used_blocks).
-        k2test::RamDisk disk{90};
-        fs::Fs vol{disk, 90};
-        bool fm = false;
-        vol.mount_or_format(fm);
-        Ring r(vol);
-        r.mount();
-        CHECK_EQ(vol.mkdir("/cards") == fs::Err::Ok, 1);
-        std::vector<std::uint8_t> card(264, 0xC4);
-        char name[32];
-        for (unsigned n = 0; n < 64; n++) {                               // a volume of 264-byte cards, one data block each
-            if (vol.block_count() - vol.used_blocks() <= 6) break;
-            std::snprintf(name, sizeof name, "/cards/%08x.card", 0x1000 + n);
-            CHECK_EQ(vol.write_file(name, card) == fs::Err::Ok, 1);
-        }
-        std::vector<std::uint8_t> blob(2000, 0x5A);
-        for (int n = 0; n < 40 && vol.block_count() - vol.used_blocks() > 6; n++) {
-            std::snprintf(name, sizeof name, "/x%d", n);
-            CHECK_EQ(vol.write_file(name, blob) == fs::Err::Ok, 1);
-        }
-        CHECK_EQ(vol.block_count() - vol.used_blocks() <= 6, 1);
-        CHECK_EQ(vol.write_file("/log.txt", blob) == fs::Err::Ok, 1);   // another store wrote last: the next figure is stale
-        disk.reset_counters();
-        vol.used_blocks();
-        const auto walk = disk.read_bytes;                                // what one walk of this volume reads
-        CHECK_EQ(vol.write_file("/log.txt", blob) == fs::Err::Ok, 1);
+    {   // a ring with no room for even a small capture refuses before the compression: the scratch buffer is not written
+        Vol v;
+        const Buf b = noise(1980);                   // one capture fills a sector to its last few bytes
+        while (v.r->append({1, 100, 1}, b, g_scratch) == bbstore::Err::Ok) {}
+        CHECK_EQ(v.r->stats().free_bytes < ringlog::record_bytes(bbstore::kHeader + 16), 1);
         g_scratch.fill(0xEE);
-        disk.reset_counters();
-        CHECK_EQ(int(add(r, 1)), int(bbstore::Err::Full));
+        CHECK_EQ(int(add(*v.r, 1)), int(bbstore::Err::Full));
         bool untouched = true;
-        for (auto b : g_scratch) untouched = untouched && b == 0xEE;
-        CHECK_EQ(untouched, 1);                                           // refused before lz::compress
-        CHECK_EQ(disk.progs + disk.erases, 0u);
-        disk.reset_counters();
-        CHECK_EQ(int(add(r, 2)), int(bbstore::Err::Full));                // the second capture of the same cut
-        if (disk.read_bytes * 4 >= walk) std::printf("  refusal read %llu bytes, a walk %llu\n", (unsigned long long)disk.read_bytes, (unsigned long long)walk);
-        CHECK_EQ(disk.read_bytes * 4 < walk, 1);                          // no walk: a fraction of one
-        for (auto b : g_scratch) untouched = untouched && b == 0xEE;
+        for (auto x : g_scratch) untouched = untouched && x == 0xEE;
         CHECK_EQ(untouched, 1);
     }
-    {   // too big: random data of a full capture does not fit one block; nothing is written
-        Vol f;
-        Ring r(f.fs);
-        r.mount();
-        const Buf b = noise(2048);
-        f.disk.reset_counters();
-        CHECK_EQ(int(r.append({1, 100, 1}, b, g_scratch)), int(bbstore::Err::TooBig));
-        CHECK_EQ(f.disk.progs, 0);
-        CHECK_EQ(int(r.append({1, 100, 1}, Buf{}, g_scratch)), int(bbstore::Err::TooBig));
-    }
-    {   // power loss at every operation of an append: the old captures survive, writing continues
-        Vol probe;
-        {
-            Ring r(probe.fs);
-            r.mount();
-            add(r, 1);
-            add(r, 2);
-            probe.disk.reset_counters();
-            add(r, 3);
+    {   // wrap: with idle moments between captures the ring keeps going; a boot lists the newest kMaxEntries, in order
+        Vol v;
+        for (unsigned k = 0; k < 200; k++) {
+            v.idle();
+            CHECK_EQ(int(add(*v.r, k)), int(bbstore::Err::Ok));
         }
-        const int ops = probe.disk.ops_done();
+        const auto seeds = order(*v.r);
+        CHECK_EQ(seeds.size(), std::size_t(bbstore::kMaxEntries));
+        CHECK_EQ(seeds.back(), 199u);
+        CHECK_EQ(seeds.front(), 199 - bbstore::kMaxEntries + 1);
+        for (std::size_t i = 1; i < seeds.size(); i++) CHECK_EQ(seeds[i], seeds[i - 1] + 1);
+        const auto s = v.r->stats();
+        v.reboot();
+        CHECK_EQ(v.r->stats().entries, s.entries);
+        CHECK_EQ(order(*v.r).back(), 199u);
+        v.idle();
+        CHECK_EQ(int(add(*v.r, 200)), int(bbstore::Err::Ok));
+        CHECK_EQ(order(*v.r).back(), 200u);
+    }
+    {   // worst case: incompressible captures, one to a sector; the ring holds 20, 19 after the next idle moment (one
+        // sector kept blank)
+        Vol v;
+        const Buf b = noise(1900);
+        unsigned n = 0;
+        for (unsigned k = 0; k < 40; k++) {
+            v.idle();
+            if (v.r->append({1, 100, k}, b, g_scratch) == bbstore::Err::Ok) n++;
+        }
+        CHECK_EQ(n, 40u);
+        CHECK_EQ(v.r->stats().entries, int(flash::kBbRingSectors));
+        CHECK_EQ(v.idle(), 1);
+        CHECK_EQ(v.r->stats().entries, int(flash::kBbRingSectors - bbstore::kSpare));
+    }
+    {   // too big: random data of a full capture does not fit one record; nothing is written
+        Vol v;
+        const Buf b = noise(2048);
+        const auto ops = v.disk.ops();
+        CHECK_EQ(int(v.r->append({1, 100, 1}, b, g_scratch)), int(bbstore::Err::TooBig));
+        CHECK_EQ(int(v.r->append({1, 100, 1}, Buf{}, g_scratch)), int(bbstore::Err::TooBig));
+        CHECK_EQ(int(v.r->append({1, 100, 1}, sample(1, 1500), std::span<std::uint8_t>(g_scratch).first(16))), int(bbstore::Err::TooBig));
+        CHECK_EQ(v.disk.ops(), ops);
+    }
+    {   // power loss at every program of an append: the old captures survive, writing continues after a reboot
+        Vol probe;
+        add(*probe.r, 1);
+        add(*probe.r, 2);
+        const int before = probe.disk.ops();
+        add(*probe.r, 3);
+        const int ops = probe.disk.ops() - before;
         CHECK_EQ(ops > 0, 1);
         for (int cut = 0; cut <= ops; cut++) {
-            Vol f;
-            {
-                Ring r(f.fs);
-                r.mount();
-                add(r, 1);
-                add(r, 2);
-                f.disk.cut_after(cut);
-                add(r, 3);
-            }
-            f.disk.revive();
-            fs::Fs fs2(f.disk, 96);
-            bool fm = false;
-            fs2.mount_or_format(fm);
-            Ring r2(fs2);
-            r2.mount();
-            const auto seeds = order(r2);
+            Vol v;
+            add(*v.r, 1);
+            add(*v.r, 2);
+            v.disk.cut_after(cut);
+            add(*v.r, 3);
+            v.disk.revive();
+            v.reboot();
+            const auto seeds = order(*v.r);
             CHECK_EQ(seeds.size() == 2 || seeds.size() == 3, 1);
-            CHECK_EQ(seeds[0], 1);
-            CHECK_EQ(seeds[1], 2);
-            CHECK_EQ(int(add(r2, 4)), int(bbstore::Err::Ok));
-            CHECK_EQ(order(r2).back(), 4);
+            CHECK_EQ(seeds.size() >= 2 && seeds[0] == 1 && seeds[1] == 2, 1);
+            v.idle();
+            CHECK_EQ(int(add(*v.r, 4)), int(bbstore::Err::Ok));
+            CHECK_EQ(order(*v.r).back(), 4u);
         }
     }
-    {   // a flipped byte in a stored file fails the checksum: the capture is skipped
-        Vol f;
-        Ring r(f.fs);
-        r.mount();
-        add(r, 1);
-        add(r, 2);
-        std::vector<std::uint8_t> raw(2048);
-        std::size_t n = 0;
-        CHECK_EQ(int(f.fs.read_file("/bb/00000001.bbe", raw, n)), int(fs::Err::Ok));
-        raw[30] ^= 0x08;
-        CHECK_EQ(int(f.fs.write_file("/bb/00000001.bbe", {raw.data(), n})), int(fs::Err::Ok));
-        Ring r2(f.fs);
-        r2.mount();
-        const auto seeds = order(r2);
-        CHECK_EQ(seeds.size(), 1);
-        CHECK_EQ(seeds[0], 2);
+    {   // power loss at every program and erase of the maintenance of a full ring: the captures of the other sectors stay,
+        // a torn erase leaves a dirty sector the next maintenance erases, then captures fit again
+        for (int cut = 0;; cut++) {
+            Vol v;
+            fill(v, 0);
+            const auto before = order(*v.r);
+            v.disk.cut_after(cut);
+            v.r->maintain(true);
+            const bool lost = v.disk.dead();
+            v.disk.revive();
+            v.reboot();
+            const auto after = order(*v.r);
+            CHECK_EQ(after.size(), before.size());     // the newest 32 sit far from the oldest sector
+            CHECK_EQ(after.back(), before.back());
+            v.idle();
+            CHECK_EQ(v.ring->dirty(), 0u);
+            CHECK_EQ(int(add(*v.r, 210)), int(bbstore::Err::Ok));
+            if (!lost) break;
+        }
     }
-    {   // clear removes every capture
-        Vol f;
-        Ring r(f.fs);
-        r.mount();
-        for (unsigned k = 0; k < 10; k++) add(r, k);
-        CHECK_EQ(int(r.clear()), int(bbstore::Err::Ok));
-        CHECK_EQ(r.stats().entries, 0);
-        Ring r2(f.fs);
-        r2.mount();
-        CHECK_EQ(r2.stats().entries, 0);
+    {   // a flipped bit in a stored capture fails the record CRC: that capture is skipped, the others load
+        Vol v;
+        add(*v.r, 1);
+        add(*v.r, 2);
+        long at = -1;
+        v.r->each([&](const bbstore::Entry& e) { if (at < 0) at = e.packed.data() - v.disk.image().data(); });
+        CHECK_EQ(at > 0, 1);
+        v.disk.image()[std::size_t(at) + 20] ^= 0x08;
+        v.reboot();
+        const auto seeds = order(*v.r);
+        CHECK_EQ(seeds.size(), 1u);
+        CHECK_EQ(seeds.size() == 1 && seeds[0] == 2, 1);
+        CHECK_EQ(v.r->stats().entries, 1);
+    }
+    {   // another owner's data in a ring sector (a dirty sector) is never read as a capture and is erased by maintenance
+        Vol v;
+        const std::array<std::uint8_t, 4> junk{0x12, 0x34, 0x56, 0x78};
+        CHECK_EQ(v.disk.program(flash::kBbRingBase + 3 * flash::kSectorSize, junk), 1);
+        v.reboot();
+        CHECK_EQ(v.ring->dirty(), 1u);
+        CHECK_EQ(v.r->needs_maintenance(), 1);
+        CHECK_EQ(v.r->maintain(true), 0);
+        CHECK_EQ(v.ring->dirty(), 0u);
+        CHECK_EQ(v.disk.blank(flash::kBbRingBase + 3 * flash::kSectorSize), 1);
     }
     {   // idle gate
         bbstore::IdleGate g;
