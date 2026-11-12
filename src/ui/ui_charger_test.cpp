@@ -2654,7 +2654,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         update(ctx_.now);
         return;
     }
-    if (runner_.busy()) { cancel(); update(ctx_.now); return; }
+    if (runner_.busy()) return;   // BACK reads Stop while a run is live (UI_SYSTEM.md 7.13.1); OK is free
     switch (stage_) {
     case Stage::Algorithms:   // a preset picks and advances; "Custom..." opens the per-family list
         if (selection_ < kPresets) {
@@ -2696,7 +2696,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         if (confirm_live()) confirmed_start();   // the second press: guard, identity, then Rd and the wait last
         else open_confirmation();                // the first press: the confirm window, nothing touched
         break;
-    case Stage::Waiting: wait_abort(); break;   // OK is a cancel here too: the wait is never the answer to a stray press
+    case Stage::Waiting: break;   // BACK stops the wait (it reads Stop); OK is free
     case Stage::Identity: case Stage::Ask: break;   // retired, never entered
     case Stage::Refuse:
         if (selection_ == 0) {   // Start anyway: the identity runs armed, the guard's reading goes to the journal
@@ -2738,7 +2738,7 @@ PanelLabels ChargerTestPage::labels() const {
     const char *ok = "";
     const char *ok_long = "";
     if (runner_.busy()) {
-        ok = "Stop";
+        ok = "";   // BACK reads Stop (UI_SYSTEM.md 7.13.1)
     } else {
         switch (stage_) {
         case Stage::Algorithms: ok = selection_ < kPresets ? "Pick" : "Open"; break;
@@ -2750,7 +2750,7 @@ PanelLabels ChargerTestPage::labels() const {
         case Stage::Cable: ok = "Pick"; break;
         case Stage::Review: ok = confirming_ ? "Confirm" : "Start"; break;
         case Stage::Refuse: ok = "Start"; break;
-        case Stage::Waiting: ok = "Cancel"; break;
+        case Stage::Waiting: ok = ""; break;   // BACK reads Stop
         case Stage::Results:
             ok = selection_ >= static_cast<int>(line_n_) ? "Diff" : "Steps";
             if (card_no_ != 0) ok_long = "Share";
@@ -2768,6 +2768,7 @@ PanelLabels ChargerTestPage::labels() const {
         l.b[static_cast<int>(Button::Minus)].shrt = "";
         l.b[static_cast<int>(Button::Plus)].shrt = "";
     }
+    if (runner_.busy() || stage_ == Stage::Waiting) l.b[static_cast<int>(Button::Back)].shrt = "Stop";
     return l;
 }
 

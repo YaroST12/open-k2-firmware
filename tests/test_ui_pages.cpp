@@ -937,7 +937,8 @@ static void test_trigger_submenu() {
     g_stub.fc_state = static_cast<int>(fc::State::Active);
     g_stub.fc_proto = int(fc::Proto::Qc3); g_stub.fc_target_mv = 9000;
     ui.tick(t += 100);
-    CHECK_STR(label(ui, Button::Ok), "Stop");
+    CHECK_STR(label(ui, Button::Ok), "");      // BACK reads Stop while a level is live (UI_SYSTEM.md 7.13.1)
+    CHECK_STR(label(ui, Button::Back), "Stop");
     press(ui, Button::Plus, ButtonEvent::Short, t += 100);
     CHECK_EQ(g_stub.fc_retargets, 0);
     CHECK_STR(label(ui, Button::Ok), "Next");

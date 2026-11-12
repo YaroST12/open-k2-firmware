@@ -44,7 +44,8 @@ PanelLabels nav_labels(unsigned page, unsigned page_count) {
 
 PanelLabels list_labels(PanelLabels base) {
     base.b[static_cast<int>(Button::Minus)].shrt = kUp;
-    base.b[static_cast<int>(Button::Minus)].lng_alt = "Prv";
+    // A tight slot may shorten a real long press ("Prev" -> "Prv"); a menu has no long press, so no "Up/Prv" there.
+    if (*base.b[static_cast<int>(Button::Minus)].lng) base.b[static_cast<int>(Button::Minus)].lng_alt = "Prv";
     base.b[static_cast<int>(Button::Plus)].shrt = kDn;
     return base;
 }

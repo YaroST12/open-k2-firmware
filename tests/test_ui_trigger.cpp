@@ -145,7 +145,7 @@ static void test_retarget_stop() {
     for (auto run : {Run::Scan, Run::Negotiating}) {
         CHECK_EQ(int(event(m, Button::Plus, Press::Long, run).kind), int(Model::Req::None));
         CHECK_EQ(int(event(m, Button::Back, Press::Short, run).kind), int(Model::Req::Stop));
-        CHECK_EQ(int(event(m, Button::Ok, Press::Short, run).kind), int(Model::Req::Stop));
+        CHECK_EQ(int(event(m, Button::Ok, Press::Short, run).kind), int(Model::Req::None));   // OK is free: BACK reads Stop
     }
 }
 static void test_scan_labels() {

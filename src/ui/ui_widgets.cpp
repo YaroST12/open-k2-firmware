@@ -385,7 +385,7 @@ void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRU
     char buf[kFitBuf];                                  // a footer that would run off the surface ends in "..."
     const auto fitted = fit_text(kSmall, text, std::min<int>(kFooterTextPx, s.w - kFooterTextX), buf K2_TRUNC_ARG);
     draw_band(s, 0, fy, s.h - fy, [&](BandRow &row) {
-        row.fill(0, s.w, st.fill);
+        row.fill(0, kScreenW, st.fill);   // the whole band row: in landscape it is 240 panel px, not the 224 logical ones
         row.text(kSmall, kFooterTextX, fy + 1, fitted, st.text, st.fill);
     });
 }

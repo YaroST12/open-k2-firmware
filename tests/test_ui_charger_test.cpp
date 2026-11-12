@@ -594,7 +594,11 @@ static void test_navigation_and_stop_controls() {
         for (; now <= 20000 && g_stub.requests < 1; now += 100) ui.tick(now);
         CHECK_EQ(g_stub.requests, 1);
         if (mode == 0) press(ui, Button::Back, now);
-        if (mode == 1) press(ui, Button::Ok, now);
+        if (mode == 1) {   // OK is free while running: nothing stops until BACK
+            press(ui, Button::Ok, now);
+            CHECK_EQ(g_stub.releases, 0);
+            press(ui, Button::Back, now);
+        }
         if (mode == 2) ui.on_button(Button::Plus, ButtonEvent::Long, now);
         if (mode == 3) CHECK_EQ(ui.on_button(Button::Back, ButtonEvent::Hold, now), UiAction::None);   // stops the run, no reboot
         CHECK_EQ(g_stub.releases, 1); CHECK_EQ(ui.charger_test_busy(), true);
@@ -1732,12 +1736,14 @@ static void test_start_wait_is_not_blocking() {
         CHECK_EQ(g_stub.requests + g_stub.fc_starts, 0);   // nothing runs; START's own e-marker scan (VBUS 0) is the one read
         CHECK_EQ(g_stub.scans, 1); CHECK_EQ(g_stub.rescans + g_stub.lib_saves + g_stub.spoof_arms, 0);
     }
-    { // OK cancels too (the remote's press): a second OK mid-wait must not leave Rd on
+    { // OK is free mid-wait (BACK reads Stop): it leaves the wait alone; BACK then cancels with nothing left on
         fixture(); g_stub.pm.vbus_mv = 0;
         Ui ui; open(ui); review(ui);
         start_press(ui, 1300); confirm_press_nowait(ui, 1300);
         ui.tick(1400);
-        press(ui, Button::Ok, 1900);
+        press(ui, Button::Ok, 1800);
+        CHECK_EQ(ui.charger_test_stage(), 13);
+        press(ui, Button::Back, 1900);
         CHECK_EQ(ui.charger_test_stage(), 4);
         CHECK_EQ(g_stub.rd_run, false);
         CHECK_EQ(ui.charger_test_busy(), false);

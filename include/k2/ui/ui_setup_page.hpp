@@ -17,7 +17,7 @@ enum class Step : uint8_t { Tests, Cable, Review, Results };
 inline PanelLabels labels(PanelLabels base, Step s, const char* ok, const char* ok_long = "") {
     auto at = [&](Button b) -> SlotLabel& { return base.b[static_cast<int>(b)]; };
     at(Button::Minus).shrt = "Up";
-    at(Button::Minus).lng_alt = "Prv";
+    if (*at(Button::Minus).lng) at(Button::Minus).lng_alt = "Prv";   // only a real long press gets the short spelling
     at(Button::Plus).shrt = "Dn";
     at(Button::Ok) = {ok, ok_long, "", false};
     (void)s;

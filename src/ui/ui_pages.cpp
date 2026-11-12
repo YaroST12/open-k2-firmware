@@ -1947,7 +1947,7 @@ PanelLabels TriggerPage::labels() const {
         return l;
     }
     if (r != trig::Run::Idle || model_.retargeting())
-        l.b[static_cast<int>(Button::Back)] = {"Stop", "Stop", "", false};
+        l.b[static_cast<int>(Button::Back)] = {"Stop", "", "", false};   // any BACK press stops; one word
     l.b[static_cast<int>(Button::Ok)] = trig::ok_label(model_, r);
     if (r != trig::Run::Scan && r != trig::Run::Negotiating) {
         l.b[static_cast<int>(Button::Plus)] = trig::plus_label(model_);

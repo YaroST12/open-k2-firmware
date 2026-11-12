@@ -140,11 +140,10 @@ public:
         const int dir = e.button == Button::Plus ? 1 : -1;
         if (run == Run::Scan || run == Run::Negotiating) {
             disarm();
-            if (e.button == Button::Ok && e.press == Press::Short) stop(req);
-            return true;
+            return true;   // BACK reads Stop (UI_SYSTEM.md 7.13.1); OK is free
         }
         if (stage_ == Stage::Live) {
-            if (e.button == Button::Ok && e.press == Press::Short) { stop(req); return true; }
+            if (e.button == Button::Ok) return true;   // BACK reads Stop; OK is free
             if (run == Run::Live && volt && e.press == Press::Short && can_step()) {
                 retarget_ = true;
                 stage_ = Stage::Edit;
@@ -260,9 +259,9 @@ inline SlotLabel minus_label(const Model &m) {
     if (m.stage() == Stage::Live && m.can_step()) return {"-", "", "", false};
     return {};
 }
-// OK advances the staged editor; only Review sends. Running scans/handshakes always offer Stop.
+// OK advances the staged editor; only Review sends. While a scan, handshake or level runs, BACK reads Stop and OK is blank.
 inline SlotLabel ok_label(const Model &m, Run run) {
-    if (run == Run::Scan || run == Run::Negotiating || m.stage() == Stage::Live) return {"Stop", "", "", false};
+    if (run == Run::Scan || run == Run::Negotiating || m.stage() == Stage::Live) return {};   // BACK reads Stop
     if (m.armed()) return {"Confirm", "", "", false};
     return {m.stage() == Stage::Review ? "Send" : "Next", "", "", !m.available()};
 }
