@@ -28,11 +28,12 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import logdb  # noqa: E402
 import loop_probe_rec  # noqa: E402
+import battery_rec  # noqa: E402
 import pd_trace  # noqa: E402
 import report_card  # noqa: E402
 
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
-TYPES = {1: "BI", 2: "EMK", 3: "PDC", 4: "CARD", 5: "ID", 6: "LOG", 7: "LOOP"}
+TYPES = {1: "BI", 2: "EMK", 3: "PDC", 4: "CARD", 5: "ID", 6: "LOG", 7: "LOOP", 8: "BATT"}
 TAGS = {v: k for k, v in TYPES.items()}
 PACKED = 0x80   # bit 7 of the type byte: the record is an LZ4 block (inflated after the parts are joined)
 MAX_UNPACKED = 1 << 16
@@ -417,8 +418,16 @@ def decode_loop(rec):
         raise QrError(str(e))
 
 
+def decode_battery(rec):
+    """A BATT record: one battery recorder run, phases, totals, efficiency and curve (tools/battery_rec.py)."""
+    try:
+        return battery_rec.decode_record(rec)
+    except battery_rec.BadRecord as e:
+        raise QrError(str(e))
+
+
 DECODERS = {"BI": decode_boot, "ID": decode_identity, "EMK": decode_emarker, "PDC": decode_pdcaps, "CARD": decode_card,
-            "LOG": decode_log, "LOOP": decode_loop}
+            "LOG": decode_log, "LOOP": decode_loop, "BATT": decode_battery}
 
 
 # ---- schema v2: the bit-packed link records (the twin of k2/ui/qrshare_records.hpp pack_v2) ----

@@ -34,7 +34,7 @@ FIX = load()
 class Golden(unittest.TestCase):
     def test_every_fixture_present(self):
         self.assertEqual(set(FIX), {"boot", "identity", "emk_plain", "emk_rows", "pdcaps_spr", "pdcaps_epr", "card",
-                                    "log", "loop", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2"})
+                                    "log", "loop", "battery", "emk_rows_lz", "card_lz", "emk_rows_v2", "card_v2"})
 
     def test_decode_joins_the_golden_record(self):
         for name, fx in FIX.items():
@@ -267,6 +267,21 @@ class Fields(unittest.TestCase):
         self.assertEqual((r["cc"]["rows"][2]["cc2_raw"], r["cc"]["rows"][2]["vbus_mv"]), (1990, 5060))
         self.assertTrue(r["cc"]["restored"])
         self.assertEqual(r["cc"]["switches0_found"], "0x04")
+
+    def test_battery(self):
+        # tests/test_qrshare_records.cpp battery_record(): a same-port round trip, 10 W in for an hour, 8 W out for an hour
+        self.assertEqual(len(FIX["battery"]["parts"]), 1)
+        r = self.rec("battery")
+        self.assertEqual((r["id"], r["mode"], r["wiring"], r["state"]), (7, "round-trip", "same-port", "done"))
+        self.assertEqual([(p["kind"], p["end"]) for p in r["phases"]], [("charge", "auto"), ("discharge", "manual")])
+        self.assertEqual(r["phases"][0]["time_s"], 3601)
+        self.assertAlmostEqual(r["phases"][0]["in_uwh"] / 1e6, 10.0, delta=0.01)
+        self.assertAlmostEqual(r["phases"][1]["out_uwh"] / 1e6, 8.0, delta=0.01)
+        self.assertEqual(r["phases"][0]["out_uwh"], 0)
+        self.assertIn(r["efficiency_permille"], range(798, 801))
+        self.assertEqual(r["curve"][0], {"t_s": 0, "phase": 0, "mv": 5000, "ma": 2000})
+        self.assertEqual(r["curve"][-1]["phase"], 1)
+        self.assertEqual(r["curve"][-1]["ma"], -1600)
 
 
 class LoopProbeFile(unittest.TestCase):

@@ -153,6 +153,7 @@ public:
     size_t twin(std::span<const uint8_t> req, std::span<uint8_t> out);    // device twins (k2::twin::wire over k2::storage and k2::twin_hw)
     size_t transcap(std::span<const uint8_t> req, std::span<uint8_t> out);   // transition capture (k2::transcap)
     size_t diagnose(std::span<const uint8_t> req, std::span<uint8_t> out);   // Black Box diagnosis (k2::pd::diag::live)
+    size_t battery(std::span<const uint8_t> req, std::span<uint8_t> out);    // battery recorder (k2::battery::wire over battery::hw)
     uint8_t screenshot_seq() const { return shot_seq_; }
     bool log_enabled();
     void set_log(bool on);

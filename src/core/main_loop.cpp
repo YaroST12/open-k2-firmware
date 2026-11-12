@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "k2/battery/battery_hw.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/bbpersist.hpp"
@@ -132,6 +133,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
         const bool may_erase = !c.ui.ports_busy() && k2::pdtrace::since_activity_ms() >= kEraseQuietMs;
         k2::bbpersist::poll(may_erase);     // saves finished captures once the link is quiet
         k2::report_card::hw::poll(may_erase);
+        k2::battery::hw::poll(now, may_erase);   // battery recorder: every sample; its record only at a phase boundary
     }
     if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
     // The QR screen owns the panel: the UI does not draw meanwhile. The UI's tick ends the OK + Back reboot chord.

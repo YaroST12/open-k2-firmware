@@ -113,6 +113,8 @@ static void test_text() {
     CHECK(!type_from_tag("EM", t) && !type_from_tag("", t));
     CHECK(tag(Type::LoopProbe) == "LOOP");
     CHECK(type_from_tag("LOOP", t) && t == Type::LoopProbe);
+    CHECK(tag(Type::Battery) == "BATT");
+    CHECK(type_from_tag("BATT", t) && t == Type::Battery);
 
     char out[kTextBuf];
     CHECK_EQ(encode_part(Type::BootInfo, 1, {}, 0, out), 0u);                       // empty record

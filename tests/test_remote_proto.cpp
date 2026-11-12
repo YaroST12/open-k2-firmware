@@ -784,6 +784,38 @@ static void test_diagnose() {
     check_header(r, 0x72, 8, Status::BadArg, 0);
     CHECK_EQ(f.calls, 0);
 }
+static void test_battery() {
+    Fake f; Frame r;
+    // every op with its exact length reaches the backend; the reply is the backend's bytes
+    uint8_t seq = 1;
+    const auto ok = [&](std::initializer_list<uint8_t> req) {
+        CHECK_EQ(run(f, request(0x58, seq, req), r), 1);
+        check_header(r, 0x58, seq, Status::Ok, 2);
+        check_bytes(r, kRspHeader, {0xBA, *req.begin()});
+        CHECK_EQ(f.batt_req.size(), req.size());
+        seq++;
+    };
+    ok({0});
+    ok({1, 2, 1});
+    ok({2});
+    ok({3});
+    ok({4});
+    ok({5, 50, 0, 60, 0, 0});
+    ok({6});
+    ok({7, 1, 0, 48, 0});
+    f.calls = 0;
+    CHECK_EQ(run(f, request(0x58, seq, {}), r), 1);
+    check_header(r, 0x58, seq++, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x58, seq, {1, 2}), r), 1);          // start without the wiring
+    check_header(r, 0x58, seq++, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x58, seq, {0, 0}), r), 1);          // status with a stray byte
+    check_header(r, 0x58, seq++, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x58, seq, {7, 1, 0, 0}), r), 1);    // read without the high offset byte
+    check_header(r, 0x58, seq++, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x58, seq, {8}), r), 1);
+    check_header(r, 0x58, seq++, Status::BadArg, 0);
+    CHECK_EQ(f.calls, 0);
+}
 static void test_blackbox() {
     Fake f; Frame r;
     // Read: the cursor is a u32 (default 0); the backend's bytes come back as the payload.
@@ -2897,6 +2929,7 @@ int main() {
     test_blackbox();
     test_transcap();
     test_diagnose();
+    test_battery();
     test_debug_fake_pdos();
     test_debug_link();
     test_debug_epr_info();

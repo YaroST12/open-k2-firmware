@@ -35,6 +35,7 @@
 #include "k2/core/version.hpp"
 #include "k2/core/bootinfo_hw.hpp"
 #include "k2/loopprobe/loop_probe_hw.hpp"
+#include "k2/battery/battery_hw.hpp"
 
 StubState g_stub;
 
@@ -1003,6 +1004,28 @@ std::size_t list(std::span<std::uint16_t> out) { return g_psf->store.list(out); 
 std::size_t read(std::uint16_t id, std::size_t off, std::span<std::uint8_t> out) { return g_psf->store.read(id, off, out); }
 Err remove(std::uint16_t id) { return g_psf->store.remove(id); }
 }  // namespace k2::pdstress::store::hw
+
+// The battery recorder: the real Service over its own RAM volume and the stubbed (or, in the world, real) power monitor.
+namespace {
+struct BattFs {
+    k2test::RamDisk disk{32};
+    k2::fs::Fs fs{disk, 32};
+    k2::battery::Service::Checkpoint ckpt{};
+    k2::battery::Service service;
+    BattFs() { bool fm = false; fs.mount_or_format(fm); service.boot(&fs, &ckpt, false); }
+};
+std::unique_ptr<BattFs> g_batt = std::make_unique<BattFs>();
+}  // namespace
+void stub_battery_reset() { g_batt = std::make_unique<BattFs>(); }
+namespace k2::battery::hw {
+void init(bool warm_reset) { g_batt->service.boot(&g_batt->fs, &g_batt->ckpt, warm_reset); }
+void poll(std::uint32_t now_ms, bool may_write) {
+    const auto m = k2::power::read_raw();
+    g_batt->service.poll(now_ms, m ? m->vbus_mv : 0, m ? m->current_ma : 0, m.has_value(), may_write);
+}
+Service& service() { return g_batt->service; }
+bool monitor_online() { return k2::power::read_raw().has_value(); }
+}  // namespace k2::battery::hw
 namespace k2::report_card::hw {
 std::size_t list(std::span<Card> out) { return g_cf->store.list(out); }
 std::size_t numbers(std::span<std::uint16_t> out) { return g_cf->store.numbers(out); }

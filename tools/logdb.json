@@ -619,6 +619,9 @@
   "622": "[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n",
   "623": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n",
   "624": "[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
-  "625": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us\n"
+  "625": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us\n",
+  "626": "[BATT] boot %s run=%u resumes=%u\n",
+  "627": "[BATT] run=%u %s phase=%d end=%u s=%u in_uwh=%u out_uwh=%u\n",
+  "628": "[BATT] record write %s run=%u\n"
  }
 }

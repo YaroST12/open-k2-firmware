@@ -235,6 +235,7 @@ public:
 
 private:
     void checkpoint();
+    bool flush();                 // writes the record (and prunes before a new file); false on a failed write
     fs::Fs *fs_ = nullptr;
     Checkpoint *ckpt_ = nullptr;
     Recorder rec_{};
@@ -242,6 +243,8 @@ private:
     Wiring wiring_ = Wiring::SamePort;
     std::uint32_t ckpt_ms_ = 0, retry_ms_ = 0;
     bool failed_ = false;
+    bool may_write_ = true;       // the last poll's permission: a start flushes an unwritten earlier run only when allowed
+    State ckpt_state_ = State::Idle;   // the run's state the checkpoint holds: a change is checkpointed at the next poll
 };
 
 }  // namespace k2::battery

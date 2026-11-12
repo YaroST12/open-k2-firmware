@@ -346,7 +346,8 @@ void Recorder::resumed() {
     primed_ = false;
     if (resumes_ < 63) resumes_++;
     if (state_ == State::Measuring) ph_[current()].gaps++;
-    dirty_ = true;
+    // Not dirty: the record on flash already says "running" with this id, and a write now would land mid-measurement. The
+    // resume count reaches flash with the next phase boundary.
 }
 
 }  // namespace k2::battery
