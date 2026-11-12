@@ -256,6 +256,8 @@
 //                                    op 1 sniff, args sub(1) [confirm(1)]: sub 0 cancel, 1 arm, 2 status, 3 selftest (D+ toggled,
 //                                    needs confirm = 1, only while armed and nothing attached). Answers state(1) reason(1)
 //                                    flags(1: bit0 overflow, bit1 stored) edges(2). The capture is read with BLACKBOX capread.
+//                                    A refused arm is Busy with one byte, SniffRefusal: 1 a trigger, scan or test owns
+//                                    D+/D-, 2 no RAM (the USB drive or net function holds the shared RAM).
 //                                    op 0 load probe, args duty_pct(1) ms(2): pulses the PA8 test load (TIM1 CH1) for
 //                                    ms (<= 200) at duty (<= 95) and answers reason(1) duty(1) ms(2) idle_ma(2s)
 //                                    peak_ma(2s) min_vbus_mv(2) vbus_before_mv(2) temp_before_dc(2s) temp_after_dc(2s) pin_high_pct(1,
@@ -917,8 +919,11 @@ struct LabResult {
     int16_t temp_before_dc = 0, temp_after_dc = 0;
     uint8_t pin_high_pct = 0;
 };
+// Why a `lab sniff arm` was refused: the one payload byte of its Busy reply (0 = no reason sent).
+enum class SniffRefusal : uint8_t { None = 0, Ports = 1, NoRam = 2 };   // a trigger / scan / test owns D+/D-; the USB drive holds the RAM
 struct SniffInfo {
     uint8_t status = 0;                 // remote::Status the backend reports (0 = Ok)
+    uint8_t refusal = 0;                // SniffRefusal of a refused arm, sent as the Busy reply's one byte
     uint8_t state = 0;                  // 0 idle, 1 armed, 2 recording
     uint8_t reason = 0;                 // edges::End of the last session
     uint8_t flags = 0;                  // bit0 buffer overflowed, bit1 a Black Box capture was stored
@@ -1695,7 +1700,11 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             if (p[1] > 3) return reply(Status::BadArg);
             if (p[1] == 3 && (p.size() != 3 || p[2] != 1)) return reply(Status::NeedConfirm);
             const SniffInfo r = backend.lab_sniff(p[1]);
-            if (r.status != static_cast<uint8_t>(Status::Ok)) return reply(static_cast<Status>(r.status));
+            if (r.status != static_cast<uint8_t>(Status::Ok)) {
+                if (r.refusal == 0) return reply(static_cast<Status>(r.status));
+                buf[0] = r.refusal;   // why the arm was refused (SniffRefusal)
+                return reply(static_cast<Status>(r.status), std::span<const uint8_t>(buf.data(), 1));
+            }
             return reply_n(encode_sniff(buf, r));
         }
         if (p[0] != kLabLoad) return reply(Status::BadArg);

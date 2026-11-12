@@ -271,6 +271,9 @@ class FrameError(ValueError):
     pass
 
 
+SNIFF_REFUSED_PORTS, SNIFF_REFUSED_NO_RAM = 1, 2   # remote::SniffRefusal: the one byte of a refused `lab sniff arm`
+
+
 class RemoteError(RuntimeError):
     def __init__(self, status, cmd, payload=b""):
         self.status, self.cmd, self.payload = status, cmd, payload
@@ -306,6 +309,10 @@ class RemoteError(RuntimeError):
             text += f" ({HANDBACK_VERDICTS[payload[0]]})"
         if cmd == CMD_APPLE_READ and payload and payload[0] < len(APPLE_REFUSALS):
             text += f" ({APPLE_REFUSALS[payload[0]]})"   # the arm refusal reason (pd::AppleRefusal)
+        if cmd == CMD_LAB and status == STATUS_BUSY and payload and payload[0] == SNIFF_REFUSED_NO_RAM:
+            text = f"command {cmd} failed: refused: no RAM: USB drive enabled (switch the drive off in Tools > USB link and replug)"
+        elif cmd == CMD_LAB and status == STATUS_BUSY and payload and payload[0] == SNIFF_REFUSED_PORTS:
+            text += " (a trigger, scan or test owns D+/D-)"
         if cmd == CMD_QRTEST and status == STATUS_BAD_ARG and payload:
             text += f" ({payload.decode('ascii', errors='replace')})"   # the show op's reason (range / box fit)
         super().__init__(text)

@@ -1112,8 +1112,17 @@ remote::LabResult Remote::lab_load(uint8_t duty, uint16_t ms) {
 remote::SniffInfo Remote::lab_sniff(uint8_t sub) {
     remote::SniffInfo out;
     if (sub == 1) {
-        if (ui_.ports_busy() || fctrig::status().state != fc::State::Idle || fctrig::scan_running()) { out.status = static_cast<uint8_t>(remote::Status::Busy); return out; }
-        if (dpsniff::arm() != dpsniff::ArmResult::Ok) { out.status = static_cast<uint8_t>(remote::Status::Busy); return out; }
+        const auto refuse = [&out](remote::SniffRefusal why) {
+            out.status = static_cast<uint8_t>(remote::Status::Busy);
+            out.refusal = static_cast<uint8_t>(why);
+            return out;
+        };
+        if (ui_.ports_busy() || fctrig::status().state != fc::State::Idle || fctrig::scan_running()) return refuse(remote::SniffRefusal::Ports);
+        switch (dpsniff::arm()) {
+        case dpsniff::ArmResult::Ok: break;
+        case dpsniff::ArmResult::NoRam: return refuse(remote::SniffRefusal::NoRam);   // the USB drive holds the RAM, nothing is busy
+        case dpsniff::ArmResult::Busy: return refuse(remote::SniffRefusal::Ports);
+        }
     } else if (sub == 0) {
         dpsniff::cancel();
     } else if (sub == 3) {

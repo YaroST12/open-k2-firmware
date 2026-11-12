@@ -221,7 +221,11 @@ struct Fake {
         calls++; lab_duty = duty; lab_ms = ms; LabResult r; r.reason = 6; r.duty = duty; r.ms = ms; r.peak_ma = 120; return r;
     }
     uint8_t sniff_sub = 0xFF;
-    SniffInfo lab_sniff(uint8_t sub) { calls++; sniff_sub = sub; SniffInfo r; r.state = 2; r.reason = 3; r.flags = 2; r.edges = 0x0123; return r; }
+    uint8_t sniff_status = 0, sniff_refusal = 0;   // a refused arm: remote::Status and remote::SniffRefusal
+    SniffInfo lab_sniff(uint8_t sub) {
+        calls++; sniff_sub = sub; SniffInfo r; r.state = 2; r.reason = 3; r.flags = 2; r.edges = 0x0123;
+        r.status = sniff_status; r.refusal = sniff_refusal; return r;
+    }
     // --- vooc-monitor (k2/vooc-detect) ---
     int vooc_set = -1;                  // last switch argument (2 = keep)
     VoocSnapshot vooc_snap{};

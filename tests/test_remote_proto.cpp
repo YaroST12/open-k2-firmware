@@ -321,6 +321,16 @@ static void test_lab() {
     check_header(r, 0x51, 8, Status::BadArg, 0);
     { const auto q = request(0x51, 9, {1}); CHECK_EQ(run(f, q, r), 1); }
     check_header(r, 0x51, 9, Status::BadLength, 0);
+    // A refused arm says why in one byte: the shared RAM held by the USB drive is not "busy".
+    f.sniff_status = static_cast<uint8_t>(Status::Busy);
+    f.sniff_refusal = static_cast<uint8_t>(SniffRefusal::NoRam);
+    { const auto q = request(0x51, 10, {1, 1}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 10, Status::Busy, 1);
+    check_bytes(r, kRspHeader, {2});
+    f.sniff_refusal = static_cast<uint8_t>(SniffRefusal::Ports);
+    { const auto q = request(0x51, 11, {1, 1}); CHECK_EQ(run(f, q, r), 1); }
+    check_header(r, 0x51, 11, Status::Busy, 1);
+    check_bytes(r, kRspHeader, {1});
 }
 
 static void test_cable_r() {
