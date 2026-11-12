@@ -109,9 +109,10 @@ void check_font(const RefFont &rf) {
 
     for (size_t k = 0; k < rf.glyphs.size(); k++) {
         const RefGlyph &g = rf.glyphs[k];
-        bad_table += f->codepoints[k] != g.cp;
         const Glyph &fg = f->glyphs[k];
-        bad_table += fg.w != g.w || fg.h != g.h || fg.left != g.left || fg.top != g.top || fg.adv != rf.adv;
+        bad_table += find_glyph(*f, g.cp) != &fg;                     // the lookup (dense run + sparse tail) finds it
+        bad_table += k < f->dense ? g.cp != 0x20 + k : f->codepoints[k - f->dense] != g.cp;
+        bad_table += fg.w != g.w || fg.h != g.h || fg.left != g.left || fg.top != g.top;
         const std::string s = utf8(g.cp);
 
         for (int r = 0; r < f->height; r++) {

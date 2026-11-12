@@ -22,13 +22,15 @@ uint32_t next_codepoint(std::string_view s, size_t &i) {
 
 static const Glyph *lookup(const Font &f, uint32_t cp) {
     if (cp > 0xFFFF) return nullptr;
-    size_t lo = 0, hi = f.count;
+    if (cp - 0x20 < f.dense) return &f.glyphs[cp - 0x20];       // the leading run is indexed directly
+    const size_t sparse = f.count - f.dense;
+    size_t lo = 0, hi = sparse;
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
         if (f.codepoints[mid] < cp) lo = mid + 1;
         else hi = mid;
     }
-    return (lo < f.count && f.codepoints[lo] == cp) ? &f.glyphs[lo] : nullptr;
+    return (lo < sparse && f.codepoints[lo] == cp) ? &f.glyphs[f.dense + lo] : nullptr;
 }
 
 uint32_t g_missing_glyphs = 0;

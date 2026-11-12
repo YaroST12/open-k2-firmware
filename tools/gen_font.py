@@ -467,29 +467,42 @@ def input_stamp():
     return h.hexdigest()[:16]
 
 
+def dense_run(f):
+    """How many leading glyphs are 0x20, 0x21, ... in order (found by index, so they need no code point)."""
+    k = 0
+    while k < len(f["glyphs"]) and f["glyphs"][k]["cp"] == 0x20 + k:
+        k += 1
+    return k
+
+
 def c_source(f, banner):
     n = len(f["glyphs"])
+    dense = dense_run(f)
+    sparse = n - dense
+    assert dense <= 255 and all(a["cp"] < b["cp"] for a, b in zip(f["glyphs"], f["glyphs"][1:])), f["name"]
     lines = [banner, '#include "k2/ui/font_aa.hpp"', "", "namespace k2 {", "", "namespace {", ""]
     lines.append(f"const uint8_t bitmap[{len(f['bitmap'])}] = {{")
     for i in range(0, len(f["bitmap"]), 16):
         lines.append("    " + ", ".join(f"0x{b:02X}" for b in f["bitmap"][i:i + 16]) + ",")
     lines.append("};\n")
-    lines.append(f"const uint16_t codepoints[{n}] = {{")
-    cps = [f"0x{g['cp']:04X}" for g in f["glyphs"]]
-    for i in range(0, n, 12):
-        lines.append("    " + ", ".join(cps[i:i + 12]) + ",")
-    lines.append("};\n")
+    if sparse:
+        lines.append(f"const uint16_t codepoints[{sparse}] = {{")
+        cps = [f"0x{g['cp']:04X}" for g in f["glyphs"][dense:]]
+        for i in range(0, sparse, 12):
+            lines.append("    " + ", ".join(cps[i:i + 12]) + ",")
+        lines.append("};\n")
     lines.append(f"const Glyph glyphs[{n}] = {{")
-    lines.append("    /* offset, w, h, left, top, adv */")
+    lines.append("    /* offset, w, h, left, top */")
     for g in f["glyphs"]:
         ch = chr(g["cp"])
         label = ch if 32 < g["cp"] < 127 and ch not in "*/\\" else f"U+{g['cp']:04X}"
-        lines.append(f"    {{ {g['off']}, {g['w']}, {g['h']}, {g['left']}, {g['top']}, {g['adv']} }}, /* {label} */")
+        lines.append(f"    {{ {g['off']}, {g['w']}, {g['h']}, {g['left']}, {g['top']} }}, /* {label} */")
     lines.append("};\n")
     lines.append("}  // namespace\n")
     lines.append(f"const Font {f['name']} = {{")
-    lines.append("    .bitmap = bitmap, .codepoints = codepoints, .glyphs = glyphs,")
-    lines.append(f"    .count = {n}, .adv = {f['adv']}, .ascent = {f['ascent']}, .descent = {f['descent']},")
+    lines.append(f"    .bitmap = bitmap, .codepoints = {'codepoints' if sparse else 'nullptr'}, .glyphs = glyphs,")
+    lines.append(f"    .count = {n}, .dense = {dense}, .adv = {f['adv']}, .ascent = {f['ascent']}, "
+                 f".descent = {f['descent']},")
     lines.append(f"    .height = {f['ascent'] + f['descent']}, .px = {f['size']}, .zmax = {f['zmax']},")
     lines.append("};\n")
     lines.append("}  // namespace k2")
@@ -525,14 +538,17 @@ struct Glyph {
     uint16_t offset;
     uint8_t  w, h;
     int8_t   left, top;
-    uint8_t  adv;
 };
 
+// Glyph lookup: glyphs[0 .. dense-1] are the code points 0x20 .. 0x20+dense-1 in order, found by
+// index with no table; glyphs[dense .. count-1] carry the sorted code points in `codepoints`
+// (count - dense entries, entry i belongs to glyphs[dense + i]).
 struct Font {
     const uint8_t  *bitmap;
-    const uint16_t *codepoints;  // sorted ascending, `count` entries
-    const Glyph    *glyphs;      // parallel to codepoints
+    const uint16_t *codepoints;  // sorted ascending, the glyphs after the dense run
+    const Glyph    *glyphs;      // `count` entries
     uint16_t count;
+    uint8_t  dense;    // leading glyphs that are 0x20, 0x21, ... with no codepoints entry
     uint8_t  adv;      // advance of every glyph (monospace)
     uint8_t  ascent;   // tallest glyph above the baseline
     uint8_t  descent;  // deepest glyph below the baseline
@@ -561,7 +577,7 @@ def decl(f):
 
 
 def flash_note(f):
-    table = len(f["glyphs"]) * (8 + 2)
+    table = len(f["glyphs"]) * 6 + (len(f["glyphs"]) - dense_run(f)) * 2
     return (f"{f['name']}: {len(f['glyphs'])} glyphs, zmax {f['zmax']}, bitmap {len(f['bitmap'])} B "
             f"(plain 4 bpp {f['packed']} B), tables {table} B, total ~{len(f['bitmap']) + table + 20} B flash")
 

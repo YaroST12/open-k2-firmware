@@ -204,11 +204,16 @@ static void test_missing_glyph_count() {
 
 // ---- glyph table sanity (the shipped fonts, whatever source they were generated from) -----------
 
+// The code point of glyph k: the dense leading run is 0x20 + k, the rest is in the sorted table.
+static uint32_t glyph_cp(const Font &f, size_t k) {
+    return k < f.dense ? 0x20u + static_cast<uint32_t>(k) : f.codepoints[k - f.dense];
+}
+
 static bool has_all(const Font &f, std::string_view chars) {
     for (size_t i = 0; i < chars.size();) {
         const uint32_t cp = next_codepoint(chars, i);
         bool found = false;
-        for (uint16_t k = 0; k < f.count; k++) found |= f.codepoints[k] == cp;
+        for (uint16_t k = 0; k < f.count; k++) found |= glyph_cp(f, k) == cp;
         if (!found) return false;
     }
     return true;
@@ -231,8 +236,8 @@ static void test_font_tables() {
         CHECK_EQ(f->zmax >= 1 && f->zmax <= 15, 1);
         for (uint16_t k = 0; k < f->count; k++) {
             const Glyph &g = f->glyphs[k];
-            if (k) CHECK_EQ(f->codepoints[k] > f->codepoints[k - 1], 1);            // sorted: binary search
-            CHECK_EQ(g.adv, f->adv);                                                // monospace
+            if (k) CHECK_EQ(glyph_cp(*f, k) > glyph_cp(*f, k - 1), 1);              // sorted: binary search
+            CHECK_COND(find_glyph(*f, glyph_cp(*f, k)) == &g);                      // every glyph is found
             CHECK_EQ(g.left >= 0 && g.left + g.w <= f->adv, 1);                     // ink inside its cell
             CHECK_EQ(g.top <= f->ascent && g.h - g.top <= f->descent, 1);          // ink inside the line box
         }
@@ -247,8 +252,8 @@ namespace {
 // nibble first. Pen advance 4, box starts one pixel right of the pen.
 const uint8_t kBmp4[] = {0x00, 0x5F, 0xA0, 0x07};
 const uint16_t kCp[] = {'A'};
-const Glyph kGlyph[] = {{0, 3, 2, 1, 2, 4}};   // offset, w, h, left, top, adv
-const Font kF4 = {kBmp4, kCp, kGlyph, 1, 4, 2, 0, 2, 2, 2};
+const Glyph kGlyph[] = {{0, 3, 2, 1, 2}};   // offset, w, h, left, top
+const Font kF4 = {kBmp4, kCp, kGlyph, 1, 0, 4, 2, 0, 2, 2, 2};   // count 1, dense 0, adv 4, ...
 }  // namespace
 
 static void test_four_bpp_blend() {
@@ -309,7 +314,7 @@ static void test_row_span_matches_row() {
     const Font *fonts[] = {&font_12, &font_16, &font_24, &font_48, &font_64};
     for (const Font *f : fonts) {
         std::string s;
-        for (size_t i = 0; i < f->count; i++) append_utf8(s, f->codepoints[i]);
+        for (size_t i = 0; i < f->count; i++) append_utf8(s, glyph_cp(*f, i));
         const int width = text_width(*f, s);
         std::vector<uint16_t> whole(static_cast<size_t>(width) + 8), chunked(whole.size());
         for (int chunk : {80, 7, 33, 1}) {
