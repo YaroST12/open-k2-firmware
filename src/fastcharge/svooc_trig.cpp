@@ -28,6 +28,15 @@ using svooc::Next;
 svooc::Run g_run;
 svooc::Wire g_wire;      // fed by the ISR; the main loop reaches it with interrupts masked
 bool g_exit_logged = true;
+bool g_vbus_owned = false;   // the sink is told this run owns VBUS (fusb302::sink_set_vbus_external)
+
+// The run owns VBUS: the adapter raises it outside PD while the K2 keeps its own 5 V contract silent, as a phone does. The sink
+// must not abort that contract because VBUS rose; the run has its own 12 V ceiling. Handed back once the run is over.
+void own_vbus(bool on) {
+    if (on == g_vbus_owned) return;
+    g_vbus_owned = on;
+    fusb302::sink_set_vbus_external(on);
+}
 
 // The wake: the phone's burst of the 2026-11-11 capture (reverse-engineered), the one fc_engine's vooc_wake plays on odd
 // tries: D+ 40 x (3.3 V 300 us, 0 V 300 us), 24 ms, ending low; D- released. The adapter clocked its first ident
@@ -170,6 +179,7 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s) {
         return r;
     }
     g_exit_logged = false;
+    own_vbus(true);
     K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s\n", unsigned(g_run.report().cap_ms),
           int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract));
     return r;
@@ -185,7 +195,10 @@ void service() {
 
 void poll() {
     const Stage st = g_run.stage();
-    if (st == Stage::Idle || st == Stage::Done) return;
+    if (st == Stage::Idle || st == Stage::Done) {
+        own_vbus(false);   // every exit path ends in Done (or never left Idle): the sink judges VBUS again
+        return;
+    }
     service();
     const Live l = live();
     svooc::Sample s;

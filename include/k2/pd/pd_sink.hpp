@@ -331,6 +331,13 @@ public:
     // end the attempt without a Hard Reset on the wire. The sink state and result are the same as with one (Failed, Timeout).
     void set_never_hard_reset(bool on) { never_hard_reset_ = on; }
     bool never_hard_reset() const { return never_hard_reset_; }
+    // Somebody else owns VBUS for now (the SuperVOOC trigger: the charger raises VBUS on its own, outside PD, while the K2 keeps its
+    // own 5 V contract silent). While set the sink originates nothing because VBUS left the contract: no held-contract rise/limit
+    // abort, no over-cap abort (the owner has its own, tighter ceiling), no release verification, no keep-alive. Messages from the
+    // source are still answered. Clearing resets the descent/verify tracking and restarts the settle window, so a VBUS still
+    // coming back to the contract is not judged against stale samples. Not cleared by detach(): the owner clears it.
+    void set_vbus_external(bool on, std::uint32_t now);
+    bool vbus_external() const { return vbus_external_; }
 
     void on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now);
     void on_tx_result(bool ok, std::uint32_t now);  // GoodCRC seen (true) or retries exhausted (false)
@@ -470,6 +477,7 @@ private:
     std::int32_t ref_mv_ = 0;    // lowest VBUS sample of the current descent
     std::uint32_t ref_at_ = 0;   // when ref_mv_ last improved by kFallStepMv
     bool tracking_ = false;
+    bool vbus_external_ = false;   // set_vbus_external()
     std::int32_t down_ref_mv_ = 0;   // the down-step band dwell: the first in-band sample, and when the dwell began
     std::uint32_t down_at_ = 0;
     bool down_set_ = false;
