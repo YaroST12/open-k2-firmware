@@ -461,6 +461,159 @@ void test_footer_note_times_out() {
     CHECK_STR(footer_of(ui).c_str(), "No twin yet. Learn one");
 }
 
+// ---- wake on prove (docs/UI_SYSTEM.md 9.9) ----
+// A charger that has not offered: its Rp sits steady on CC1, VBUS is dark, nothing was listed. g_stub.twin_offer is what it lists
+// once the K2 presents Rd (the stub's Env::wake delivers it after g_stub.twin_wake_ms).
+void make_waiting(Ui &ui) {
+    g_stub.twin_offer = g_stub.caps;
+    g_stub.caps = {};
+    g_stub.caps_this_attach = false;
+    g_stub.cc = 0;
+    g_stub.pm_online = true;
+    g_stub.pm.vbus_mv = 0;
+    adc::Reading r;
+    r.cc1_mv = 3300;
+    g_stub.adc = r;
+    for (int i = 0; i < 15; i++) step(ui, 100);
+    CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::ChargerWaiting));
+}
+
+void test_wake_not_before_confirm() {
+    reset();
+    add_three();
+    Ui &ui = open_page();
+    make_waiting(ui);
+    CHECK_STR(footer_of(ui).c_str(), "Charger has not offered");   // the list: a charger waits, it is not "No charger"
+    CHECK_STR(note_of(ui, 0).c_str(), "charger has not offered");
+    CHECK_EQ(int(plain_of(ui, 0).marker), int(kit::Marker::None));   // nothing to predict yet
+    open_twin(ui, 0);
+    CHECK_STR(footer_of(ui).c_str(), "Charger has not offered");
+    CHECK_STR(note_of(ui, 0).c_str(), "wakes the charger first");
+    CHECK_STR(label(ui, Button::Ok), "Run");
+    press(ui, Button::Ok);                       // arms, presents nothing
+    CHECK_EQ(g_stub.twin_starts, 0);
+    CHECK_EQ(ui.twin_page().armed() ? 1 : 0, 1);
+    CHECK_STR(footer_of(ui).c_str(), "Wakes the charger. Confirm");
+    CHECK_STR(label(ui, Button::Ok), "Confirm");
+    step(ui, 200);
+    CHECK_EQ(g_stub.rd_run_changes, 0);          // opening the page and arming never touched Rd
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 0);
+}
+
+void test_wake_then_prove() {
+    reset();
+    add_three();
+    Ui &ui = open_page();
+    make_waiting(ui);
+    open_twin(ui, 0);
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);                       // confirmed: Rd goes on, the charger is woken
+    CHECK_EQ(g_stub.twin_starts, 1);
+    CHECK_EQ(g_stub.twin_start_confirmed ? 1 : 0, 1);
+    CHECK_EQ(g_stub.twin_start_keep_wake ? 1 : 0, 1);   // the page keeps the woken Rd until it is left
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 1);
+    CHECK_EQ(twin_hw::live().waking() ? 1 : 0, 1);
+    CHECK_STR(footer_of(ui).c_str(), "Waking charger");
+    CHECK_STR(label(ui, Button::Back), "Stop");
+    step(ui, 100);
+    CHECK_STR(note_of(ui, 0).c_str(), "waking the charger");
+    run_out(ui);                                 // caps arrive, the prediction is made, the proof runs and ends
+    CHECK_EQ(twin_hw::live_running() ? 1 : 0, 0);
+    CHECK_EQ(int(g_stub.caps.valid), 1);
+    CHECK_EQ(int(spec_of(ui, 0).state), int(kit::Verdict::Pass));
+    CHECK_STR(note_of(ui, 0).c_str(), "proved 33W");
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 1);          // held: without Rd the caps would vanish under the verdict
+    CHECK_EQ(g_stub.twin_wake_releases, 0);
+    press(ui, Button::Back);                     // to the list
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 1);
+    press(ui, Button::Back);                     // leaves the page: Rd goes back
+    CHECK_EQ(g_stub.twin_wake_releases, 1);
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 0);
+}
+
+void test_wake_refused_without_a_charger() {
+    reset();
+    add_three();
+    g_stub.caps.valid = false;                   // nothing on the plug: Unknown
+    Ui &ui = open_page();
+    open_twin(ui, 0);
+    CHECK_STR(footer_of(ui).c_str(), "No charger: no predictions");
+    CHECK_STR(note_of(ui, 0).c_str(), "no charger to predict from");
+    press(ui, Button::Ok);
+    CHECK_STR(footer_of(ui).c_str(), "No charger to run against");
+    CHECK_EQ(g_stub.twin_starts, 0);
+    CHECK_EQ(g_stub.rd_run_changes, 0);
+
+    reset();                                     // a phone toggling its Rp (dual-role): never woken
+    add_three();
+    Ui &ui2 = open_page();
+    make_alone(ui2);
+    open_twin(ui2, 0);
+    CHECK_STR(footer_of(ui2).c_str(), "No charger: no predictions");
+    press(ui2, Button::Ok);
+    CHECK_STR(footer_of(ui2).c_str(), "No charger to run against");
+    CHECK_EQ(g_stub.twin_starts, 0);
+    CHECK_EQ(g_stub.rd_run_changes, 0);
+}
+
+void test_wake_no_offer() {
+    reset();
+    add_three();
+    g_stub.twin_wake_answers = false;            // the charger never lists
+    Ui &ui = open_page();
+    make_waiting(ui);
+    open_twin(ui, 0);
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    step(ui, 500);
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 1);
+    CHECK_STR(footer_of(ui).c_str(), "Waking charger");
+    run_out(ui);
+    CHECK_EQ(int(twin_hw::live().reason()), int(twin::live::Reason::NoOffer));
+    CHECK_STR(footer_of(ui).c_str(), "Charger did not offer");
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 0);          // given back at once, the page has nothing to hold
+    CHECK_EQ(g_stub.twin_unwakes, 1);
+    CHECK_EQ(g_stub.twin_starts, 1);
+}
+
+void test_wake_back_stops() {
+    reset();
+    add_three();
+    g_stub.twin_wake_answers = false;
+    Ui &ui = open_page();
+    make_waiting(ui);
+    open_twin(ui, 0);
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    step(ui, 150);
+    CHECK_EQ(twin_hw::live().waking() ? 1 : 0, 1);
+    press(ui, Button::Back);
+    CHECK_EQ(g_stub.twin_cancels, 1);
+    CHECK_STR(footer_of(ui).c_str(), "Stopped. Charger released");
+    run_out(ui);
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 0);
+    CHECK_EQ(g_stub.twin_unwakes, 1);
+    CHECK_EQ(twin_hw::live_running() ? 1 : 0, 0);
+    CHECK_EQ(ui.twin_page().in_detail() ? 1 : 0, 1);   // BACK stopped the wake, it did not leave the page
+}
+
+void test_wake_leaving_releases() {
+    reset();
+    add_three();
+    g_stub.twin_wake_answers = false;
+    Ui &ui = open_page();
+    make_waiting(ui);
+    open_twin(ui, 0);
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    step(ui, 150);
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 1);
+    ui.goto_page(uint8_t(Page::Home), g_t + 10);   // paged away mid-wake
+    step(ui, 300);
+    CHECK_EQ(g_stub.twin_cancels, 1);
+    CHECK_EQ(g_stub.rd_run ? 1 : 0, 0);
+}
+
 }  // namespace
 
 int main() {
@@ -479,5 +632,11 @@ int main() {
     test_learn_reads_a_device_alone();
     test_learn_read_without_answer();
     test_footer_note_times_out();
+    test_wake_not_before_confirm();
+    test_wake_then_prove();
+    test_wake_refused_without_a_charger();
+    test_wake_no_offer();
+    test_wake_back_stops();
+    test_wake_leaving_releases();
     return test_report("test_ui_twin");
 }

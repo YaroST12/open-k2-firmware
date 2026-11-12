@@ -35,13 +35,19 @@ constexpr const char *kFooters[] = {
     "Reading the device", "Device did not answer", "Deletes this twin for good", "Twin deleted", "Saved as another twin",
     "Basis: its sink caps", "Basis: its sniffed Request", "No charger: no predictions", "Twin not deleted",
     "Live proof running",
+    // A charger that has not offered: the wake (docs/UI_SYSTEM.md 9.9). The K2 presents Rd only after the confirm.
+    "Wakes the charger. Confirm", "Waking charger", "Charger has not offered", "Charger did not offer",
+    "Stopped. Charger released",
 };
+constexpr int kFootWakeArm = 24, kFootWaking = 25, kFootSilent = 26, kFootNoOffer = 27, kFootWakeStop = 28;
 constexpr const char *kNotes[] = {
     "no charger to predict from", "reads a device alone on the K2", "live proof running", "removes it from the K2",
     "no contract, charger", "stopped", "charger sent no caps", "unsafe VBUS, stopped", "gets 100 of 240W, charger",
     "charger refused 20V", "no PS_RDY at 20V", "charger reset at 20V", "out of band 20.0V", "asks the charger for 20V5A",
     "asks for PPS 20.5V5A",
+    "wakes the charger first", "waking the charger", "charger has not offered",
 };
+constexpr int kNoteWakes = 15, kNoteWaking = 16, kNoteSilent = 17;
 constexpr const char *kLimit[] = {"full power", "limit: device max", "limit: charger", "limit: cable (5A)"};
 static_assert(all_fit(kFooters, kSmallAdvPx, kFooterCells * static_cast<int>(kSmallAdvPx)), "a Device twins footer is wider than the footer line");
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Device twins note is wider than the note box");
@@ -150,6 +156,7 @@ void TwinPage::enter() {
     hide_proof_ = false;
     started_ = false;
     detail_ = false;
+    wake_ok_ = false;
     title_ = "Device twins";
     has_icon_ = true;
     reload();
@@ -157,8 +164,10 @@ void TwinPage::enter() {
 }
 
 // Paged away or popped while this page's own proof is running: ask 5 V back and end it (a run the remote started is left alone).
+// The Rd a woken charger's proof left on for the page goes back too: opening the page presents nothing, leaving it leaves nothing.
 void TwinPage::leave() {
     if (started_ && running()) ctx_.ui->cancel_twin();
+    twin_hw::wake_release();
     if (learn_wait_) fusb302::identify_abort();   // the read this page started: release the line, learn nothing
     learn_wait_ = false;
     started_ = false;
@@ -209,8 +218,10 @@ void TwinPage::say(std::string_view text, uint16_t color) {
 // The focused twin's note: the prediction ("gets 36 of 55W, cable"), or the proof on this charger ("proved 36W").
 void TwinPage::entry_note(const Entry &e, bool running_this, StrBuf<40> &out) const {
     out.clear();
-    if (!e.have) {
-        out.put(kNotes[0]);
+    if (!e.have) {   // no list to predict from: a charger waiting on the plug is a charger that has not offered yet
+        if (running_this && twin_hw::live().waking()) out.put(kNotes[kNoteWaking]);
+        else if (running_this) out.put(kNotes[2]);
+        else out.put(wake_ok_ ? kNotes[kNoteSilent] : kNotes[0]);
         return;
     }
     if (running_this) {
@@ -305,11 +316,15 @@ void TwinPage::build_action_row(int index, bool focused, kit::RowSpec &out) {
             }
         }
         const bool provable = e && e->have && e->out.kind != twin::Kind::None && e->out.kind != twin::Kind::FiveV;
-        if (!provable) out.text_color = kDim;
+        const bool wakes = e && !e->have && wake_ok_;   // no list yet, a charger on the plug: the proof wakes it first
+        if (!provable && !wakes) out.text_color = kDim;
         if (!focused) return;
         row_note_.clear();
-        if (!e || !e->have) {
+        if (!e) {
             row_note_.put(kNotes[0]);
+        } else if (!e->have) {
+            if (wakes && out.marker != kit::Marker::Verdict) row_note_.put(kNotes[kNoteWakes]);
+            else entry_note(*e, running(), row_note_);
         } else if (out.marker == kit::Marker::Verdict) {
             entry_note(*e, false, row_note_);
         } else if (provable) {
@@ -350,7 +365,11 @@ void TwinPage::compose_footer() {
     }
     if (running()) {
         if (detail_) {
-            foot_text_.put(kFooters[23]);
+            foot_text_.put(twin_hw::live().waking() ? kFooters[kFootWaking] : kFooters[23]);
+            return;
+        }
+        if (twin_hw::live().waking()) {
+            foot_text_.put(kFooters[kFootWaking]);
             return;
         }
         const live::Runner &r = twin_hw::live();
@@ -364,7 +383,7 @@ void TwinPage::compose_footer() {
             foot_text_.put(e->out.kind == twin::Kind::Pps ? "Asks for PPS " : "Asks the charger for ");
             put_level(foot_text_, e->out.mv, 'V');
         } else {
-            foot_text_.put(kFooters[0]);
+            foot_text_.put(wake_ok_ ? kFooters[kFootWakeArm] : kFooters[0]);
         }
         return;
     }
@@ -375,7 +394,7 @@ void TwinPage::compose_footer() {
     }
     if (detail_) {
         const Entry *e = det_entry();
-        if (!e || !e->have) foot_text_.put(kFooters[21]);
+        if (!e || !e->have) foot_text_.put(wake_ok_ ? kFooters[kFootSilent] : kFooters[21]);
         else foot_text_.put(e->out.observed ? kFooters[20] : kFooters[19]);
         return;
     }
@@ -395,6 +414,10 @@ void TwinPage::compose_footer() {
     }
     if (n_ > 0 && have_caps_ && offer_.view().size()) {
         foot_text_.put(offer_.view()).put(": ").put_u32(static_cast<uint32_t>(full_)).put(" of ").put_u32(static_cast<uint32_t>(n_)).put(" full");
+        return;
+    }
+    if (n_ > 0 && !have_caps_ && wake_ok_) {   // a charger waits on the plug: it has not offered yet, not "no charger"
+        foot_text_.put(kFooters[kFootSilent]);
         return;
     }
     char buf[32];
@@ -451,7 +474,8 @@ void TwinPage::run_entry(const Entry &e) {
     const std::array<uint8_t, 1> seqs{e.seq};
     const bool confirm = arm_ == Arm::Prove && static_cast<int32_t>(ctx_.now - armed_until_) < 0;
     arm_ = Arm::None;
-    switch (twin_hw::live_start(seqs, confirm, ctx_.ui->twin_ctx(ctx_.now))) {
+    // keep_wake: a charger woken for this proof keeps its Rd after the run, so the list stays on screen; leave() gives it back.
+    switch (twin_hw::live_start(seqs, confirm, ctx_.ui->twin_ctx(ctx_.now), true)) {
     case live::Refusal::None:
         started_ = true;
         hide_proof_ = false;
@@ -697,7 +721,9 @@ void TwinPage::paint_detail(uint32_t now_ms) {
     const bool run = running();
     uint32_t sig = mix_u32(mix_init(), static_cast<uint32_t>(first_) | (static_cast<uint32_t>(box_y_) << 8) |
                                            (static_cast<uint32_t>(arm_) << 16) | (static_cast<uint32_t>(run) << 20) |
-                                           (static_cast<uint32_t>(hide_proof_) << 21));
+                                           (static_cast<uint32_t>(hide_proof_) << 21) |
+                                           (static_cast<uint32_t>(run && twin_hw::live().waking()) << 22) |
+                                           (static_cast<uint32_t>(wake_ok_) << 23));
     sig = mix_u32(sig, gen_ ^ (stamp_ << 1));
     if (e) sig = mix_u32(sig, static_cast<uint32_t>(twin_hw::live().slot(e->seq).verdict) + 1);
     if (sig == 0) sig = 1;
@@ -733,11 +759,16 @@ void TwinPage::paint_detail(uint32_t now_ms) {
             else v.put("--");
             if (vbus_shown_.view().empty()) {
                 StrBuf<24> asked;
-                if (e && e->have) {
-                    put_level(asked, e->out.mv, 'V');
-                    put_level(asked, e->out.ma, 'A');
+                if (twin_hw::live().waking()) {   // Rd is on, the charger has not listed yet: nothing is asked of it
+                    asked.put(kFooters[kFootWaking]);
+                    kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), "Step", asked.view());
+                } else {
+                    if (e && e->have) {
+                        put_level(asked, e->out.mv, 'V');
+                        put_level(asked, e->out.ma, 'A');
+                    }
+                    kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), "Asked", asked.view());
                 }
-                kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), "Asked", asked.view());
             }
             if (v.view() != vbus_shown_.view()) kit::draw_info_row(s, static_cast<int16_t>(kCellY + 24), "VBUS", v.view(), kVolt);
             vbus_shown_.clear();
@@ -763,8 +794,9 @@ bool TwinPage::on_event(Event e) {
             return true;
         }
         if (running()) {
+            const bool was_waking = twin_hw::live().waking();   // cancelled before the list came: the charger's Rd goes back at once
             ctx_.ui->cancel_twin();
-            say(kFooters[1], kDim);
+            say(kFooters[was_waking ? kFootWakeStop : 1], kDim);
             update(ctx_.now);
             return true;
         }
@@ -836,7 +868,16 @@ void TwinPage::update(uint32_t now_ms) {
         note_.clear();
     }
     if (arm_ != Arm::None && static_cast<int32_t>(now_ms - armed_until_) >= 0) arm_ = Arm::None;   // the confirm window ran out
-    if (started_ && !running()) started_ = false;
+    if (started_ && !running()) {
+        started_ = false;
+        if (twin_hw::live().reason() == live::Reason::NoOffer) say(kFooters[kFootNoOffer], kCaution);   // the woken charger never listed
+    }
+    const bool wake_ok = twin_hw::can_wake(ctx_.ui->twin_ctx(now_ms));
+    if (wake_ok != wake_ok_) {   // a charger waits on the plug (or left): the notes and footers that say so repaint
+        wake_ok_ = wake_ok;
+        ctx_.rows.invalidate();
+        det_sig_ = 0;
+    }
     if (learn_wait_ && (!fusb302::identify_busy() || static_cast<int32_t>(now_ms - learn_wait_until_) >= 0)) learn_wait_end();
     if (!loaded_ || gen_ != storage::generation() || stamp_ != twin_hw::predict_stamp()) {
         const bool charger_changed = loaded_ && stamp_ != twin_hw::predict_stamp();
