@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "k2/chargertest/report_card_hw.hpp"
 #include "k2/chargertest/session_store.hpp"
 #include "k2/core/bbpersist.hpp"
 #include "k2/core/bootinfo_hw.hpp"
@@ -94,6 +95,9 @@ void end_boot_screen(uint32_t now) {
     }
 }
 
+// A ring-log erase waits for this long without PD traffic or a VBUS change.
+constexpr uint32_t kEraseQuietMs = 1000;
+
 // The periodic bodies of the main loop are their own functions: their locals (power readings, log arguments)
 // are popped before the loop goes on, instead of widening main's frame, which sits under every call.
 [[gnu::noinline]] void slow_tasks(uint32_t now) {
@@ -122,7 +126,11 @@ void end_boot_screen(uint32_t now) {
         c.rescan_landing_due = false;
         if (k2::rdcomeback::rescan_landing()) c.ui.land_rescanned(now);
     }
-    k2::bbpersist::poll();                  // saves finished captures once the link is quiet
+    {   // ring maintenance erases (~35 ms each) only with no charger test, PD Stress run or other port owner and a quiet link
+        const bool may_erase = !c.ui.ports_busy() && k2::pdtrace::since_activity_ms() >= kEraseQuietMs;
+        k2::bbpersist::poll(may_erase);     // saves finished captures once the link is quiet
+        k2::report_card::hw::poll(may_erase);
+    }
     if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
     if (!c.bootscreen.showing()) c.ui.tick(now);        // the QR screen owns the panel: the UI does not draw meanwhile
 }

@@ -71,6 +71,28 @@ void test_run_guard() {
     CHECK_EQ(flash::erase_allowed(0x080FF800, emlib_rd), 0);
 }
 
+// The ring layout of the run: littlefs keeps blocks 0..110 (the first 21 run sectors), the report-card ring and the Black
+// Box ring share the other 34 sectors up to the kept top page. The rings are run sectors, so the run's guard covers them:
+// writable once the run is open on proof, never before, and never the kept pages around them.
+void test_ring_layout() {
+    CHECK_EQ(flash::kFsVolumeBlocks, 111u);
+    CHECK_EQ(flash::kCardRingBase, 0x080EE800u);
+    CHECK_EQ(flash::kCardRingBase, flash::fs_block_addr(flash::kFsVolumeBlocks));
+    CHECK_EQ(flash::kCardRingSectors, 22u);
+    CHECK_EQ(flash::kBbRingBase, 0x080F9800u);
+    CHECK_EQ(flash::kBbRingSectors, 12u);
+    CHECK_EQ(flash::kBbRingBase + flash::kBbRingSectors * flash::kSectorSize, 0x080FF800u);   // up to the kept top page
+    CHECK_EQ(flash::kFsVolumeBlocks + flash::kCardRingSectors + flash::kBbRingSectors, flash::kFsGrownBlocks);
+    for (std::uint32_t a = flash::kCardRingBase; a < flash::kFsRunEnd; a += flash::kSectorSize) {
+        CHECK_EQ(flash::fs_run_sector(a), 1);
+        CHECK_EQ(flash::erase_allowed(a, blank_rd), 0);
+        CHECK_EQ(flash::erase_allowed(a, blank_rd, true), 1);
+        CHECK_EQ(flash::store_allowed(a, 2), 0);
+        CHECK_EQ(flash::store_allowed(a, 2, true), 1);
+    }
+    CHECK_EQ(flash::erase_allowed(flash::kBbRingBase + flash::kBbRingSectors * flash::kSectorSize, blank_rd, true), 0);
+}
+
 }  // namespace
 
 int main() {
@@ -112,5 +134,6 @@ int main() {
     CHECK_EQ(flash::store_allowed(0x080FF800, 2), 0);
     test_grow_block_map();
     test_run_guard();
+    test_ring_layout();
     return test_report("test_flash_map");
 }

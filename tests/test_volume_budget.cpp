@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Volume budget (docs/ARCHITECTURE.md "Volume budget"): what every store of the 90-block littlefs volume costs at its cap.
-// Each store is filled alone on a large RAM disk (so none runs out) and must stay within its row of the table below, the
-// same numbers as the document: a store that grows goes red here first. Then every store is filled on one 90-block volume,
-// in the order the device fills it, and the Black Box gets what is left above the journal reserve.
+// Volume budget (docs/ARCHITECTURE.md "Volume budget"): what every store of the littlefs volume costs at its cap, and what
+// the two ring logs beside it hold. Each littlefs store is filled alone on a large RAM disk (so none runs out) and must stay
+// within its row of the table below, the same numbers as the document: a store that grows goes red here first. Then every
+// store is filled on one volume of the ring layout (flash::kFsVolumeBlocks, 111 blocks), in the order the device fills it,
+// and the journal of the largest plan must still fit. The report cards and the Black Box live in their own rings
+// (k2/core/ringlog.hpp): their rows are filled through their own classes on a RAM flash.
 //
 // Files of stores whose records need a whole subsystem to build (e-marker library, twins, transition captures, loop probe,
 // PD stress journal and saved results, the small settings files, the log snapshot) are written at their real paths with their real sizes
 // through the same Fs::write_file the stores use: littlefs's cost depends on the path, the size and the count only.
-// The cards, the charger journal and the Black Box are filled through their own classes.
+// The charger journal is filled through its own class.
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -19,6 +21,7 @@
 #include "k2/chargertest/report_card_store.hpp"
 #include "k2/core/bbstore.hpp"
 #include "k2/core/rd_intent.hpp"
+#include "k2/drivers/flash.hpp"
 #include "k2/loopprobe/loop_probe.hpp"
 #include "k2/pd/emlib.hpp"
 #include "k2/pd/transcap_store.hpp"
@@ -26,6 +29,7 @@
 #include "k2/pdstress/pdstress_store.hpp"
 #include "k2/twin/library.hpp"
 #include "ramdisk.hpp"
+#include "ramflash.hpp"
 #include "test_util.h"
 
 using namespace k2;
@@ -40,12 +44,11 @@ static_assert(twin::kMaxFileBytes <= fs::kInlineMax);
 static_assert(transcap::kMetaBytes <= fs::kInlineMax);
 static_assert(rdintent::kSize <= fs::kInlineMax);
 static_assert(emlib::kFileSize <= fs::kInlineMax);
-// Open: a v10 card file is 8 bytes over the limit and takes a data block each (open item in docs/ARCHITECTURE.md "Volume budget").
-static_assert(report_card::kFileSize == fs::kInlineMax + 8);
 
-constexpr std::uint32_t kBlocks = 90;      // fs_flash::kFlashBlocks
-constexpr std::uint32_t kGrownBlocks = 145;   // fs_flash::kGrownBlocks: grown into the blank run (k2/core/fs_grow.hpp)
-constexpr std::uint32_t kLarge = 512;      // one store alone, never out of room
+constexpr std::uint32_t kBase = flash::kFsBlocks;           // 90: the volume before it grows
+constexpr std::uint32_t kVolume = flash::kFsVolumeBlocks;   // 111: the volume of the ring layout
+constexpr std::uint32_t kLarge = 512;                       // one store alone, never out of room
+static_assert(kBase == 90 && kVolume == 111);
 
 struct Vol {
     std::uint32_t blocks;
@@ -123,30 +126,6 @@ bool fill_tcap(fs::Fs& f) {
     }
     return true;
 }
-rc::Card card(std::uint32_t fp, unsigned variant) {
-    rc::Card c;
-    c.id.fp = fp; c.fw = 0xABCD; c.uptime_s = fp;
-    for (unsigned g = 0; g < 6; ++g) c.group[g] = {rc::GV::Pass, std::uint16_t(9000 + 1000 * ((g + variant) % 4)), 0, 0};
-    rc::set_name(c, "Budget charger");
-    return c;
-}
-// kMaxCards cards, then 100 re-tests of random cards with new results (the steady state of a used device: every re-test
-// rewrites its card).
-bool fill_cards(fs::Fs& f) {
-    rc::Store s(f);
-    std::mt19937 rng(11);
-    std::vector<std::uint32_t> fps;
-    for (unsigned i = 0; i < rc::kMaxCards; ++i) fps.push_back(rng() | 1u);
-    for (unsigned i = 0; i < rc::kMaxCards; ++i) {
-        rc::Card c = card(fps[i], 0);
-        if (s.put(c) != rc::Err::Ok) return false;
-    }
-    for (unsigned k = 1; k <= 100; ++k) {
-        rc::Card c = card(fps[rng() % fps.size()], k);
-        if (s.put(c) != rc::Err::Ok) return false;
-    }
-    return true;
-}
 // The charger journal of the largest plan (kMaxSteps rows over all five sections) with every small record written.
 std::vector<ct::Step> max_plan() {
     const ct::Algorithm algs[] = {ct::Algorithm::Pd3Fixed, ct::Algorithm::Pps, ct::Algorithm::Qc3, ct::Algorithm::Vooc, ct::Algorithm::Ufcs};
@@ -169,29 +148,13 @@ bool fill_journal(fs::Fs& f) {
     return j.phase(ct::Phase::Request, plan, 3) == cj::Err::Ok && j.resumed(2) == cj::Err::Ok && j.meta(cj::RunMeta{}) == cj::Err::Ok &&
            j.attempt(3, 1) == cj::Err::Ok;
 }
-// Black Box captures that pack to one data block each (the largest file the ring writes); returns how many were saved.
-unsigned fill_bb(fs::Fs& f, std::uint32_t reserve) {
-    bbstore::Ring r(f);
-    r.set_reserve(reserve);
-    r.mount();
-    std::vector<std::uint8_t> raw(1900);
-    std::vector<std::uint8_t> scratch(lz::bound(raw.size()));
-    std::uint32_t x = 99;
-    unsigned saved = 0;
-    for (unsigned i = 0; i < bbstore::kMaxEntries; ++i) {
-        for (auto& b : raw) { x = x * 1664525u + 1013904223u; b = std::uint8_t(x >> 24); }
-        if (r.append({1, 0, i}, raw, scratch) != bbstore::Err::Ok) break;
-        ++saved;
-    }
-    return saved;
-}
 
 struct Row {
     const char* name;
     bool (*fill)(fs::Fs&);
     std::uint32_t budget;   // worst-case blocks, docs/ARCHITECTURE.md "Volume budget"
 };
-// The table of docs/ARCHITECTURE.md, in the order the stores are filled on the shared volume (small first, cards last).
+// The table of docs/ARCHITECTURE.md, in the order the stores are filled on the shared volume (small first).
 const Row kRows[] = {
     {"settings (usb/cable/prefs/rd/.legacy)", fill_settings, 0},
     {"/log.txt", fill_log, 1},
@@ -201,11 +164,10 @@ const Row kRows[] = {
     {"/twin (12 x 129 B)", fill_twin, 4},
     {"/tcap (4 + 1 in flight)", fill_tcap, 24},
     {"/emk (140 x 98 B)", fill_emk, 54},
-    {"/cards (64 x 264 B, after re-tests)", fill_cards, 70},
+    {"/jr (largest plan)", fill_journal, 7},
 };
 constexpr Row kEmkQuirks{"/emk (140 x 517 B, every quirk block full)", fill_emk_quirks, 152};
-constexpr std::uint32_t kJournalBudget = 7;    // /jr of the largest plan; bbstore::kJournalReserveBlocks keeps 20 free for it
-constexpr std::uint32_t kBbBudget = 34;        // /bb, 32 captures of one block each
+constexpr std::uint32_t kSuperblock = 2;
 
 std::uint32_t measure(const Row& r) {
     Vol v(kLarge);
@@ -219,87 +181,102 @@ std::uint32_t measure(const Row& r) {
 }
 
 void test_each_store_within_its_budget() {
-    std::uint32_t sum = 0;
-    for (const Row& r : kRows) sum += measure(r);
+    std::uint32_t sum = 0, budget = 0;
+    for (const Row& r : kRows) { sum += measure(r); budget += r.budget; }
     measure(kEmkQuirks);
-    {
-        Vol v(kLarge);
-        CHECK_EQ(fill_journal(v.fs), 1);
-        const std::uint32_t n = v.used() - v.empty;
-        std::printf("[budget] %-42s %3u blocks (budget %u, reserve %u)\n", "/jr (largest plan)", n, kJournalBudget, bbstore::kJournalReserveBlocks);
-        CHECK_EQ(n <= kJournalBudget, 1);
-        CHECK_EQ(kJournalBudget <= bbstore::kJournalReserveBlocks, 1);
-    }
-    {
-        Vol v(kLarge);
-        const unsigned saved = fill_bb(v.fs, 0);
-        const std::uint32_t n = v.used() - v.empty;
-        std::printf("[budget] %-42s %3u blocks (budget %u)\n", "/bb (32 captures)", n, kBbBudget);
-        CHECK_EQ(saved, bbstore::kMaxEntries);
-        CHECK_EQ(n <= kBbBudget, 1);
-    }
-    std::printf("[budget] worst case: superblock 2 + stores %u + journal reserve %u + Black Box %u = %u of %u blocks\n", sum,
-                bbstore::kJournalReserveBlocks, kBbBudget, 2 + sum + bbstore::kJournalReserveBlocks + kBbBudget, kBlocks);
+    std::printf("[budget] littlefs worst case: superblock %u + stores %u (budget %u) = %u of %u blocks\n", kSuperblock, sum, budget,
+                kSuperblock + sum, kVolume);
+    CHECK_EQ(kSuperblock + budget <= kVolume, 1);   // the table's sum fits the volume of the ring layout
 }
 
-struct Picture {
-    const Row* ran_out = nullptr;   // the first store that did not fit, nullptr = all fit
-    std::uint32_t free_before_bb = 0;
-    unsigned saved = 0;             // Black Box captures above the journal reserve
-};
-
-// Every store at its cap on one volume of `blocks`, in the device's order: where the volume runs out, and how many captures
-// the Black Box gets above the journal reserve.
-Picture all_stores_on(std::uint32_t blocks) {
+// Every store at its cap on one volume of `blocks`, in the device's order; returns the first that did not fit (nullptr: all
+// fit) and the free blocks left.
+const Row* all_stores_on(std::uint32_t blocks, std::uint32_t& free) {
     Vol v(blocks);
-    Picture p;
-    for (const Row& r : kRows) {
-        if (!r.fill(v.fs)) { p.ran_out = &r; break; }
-    }
-    p.free_before_bb = v.free();
-    p.saved = fill_bb(v.fs, bbstore::kJournalReserveBlocks);
-    std::printf("[budget] all stores at their cap on %u blocks: %s%s; %u free; the Black Box saved %u of %u captures\n", blocks,
-                p.ran_out ? "ran out at " : "all fit", p.ran_out ? p.ran_out->name : "", p.free_before_bb, p.saved, bbstore::kMaxEntries);
-    return p;
+    const Row* out = nullptr;
+    for (const Row& r : kRows)
+        if (!r.fill(v.fs)) { out = &r; break; }
+    free = v.free();
+    std::printf("[budget] all stores at their cap on %u blocks: %s%s; %u free\n", blocks, out ? "ran out at " : "all fit",
+                out ? out->name : "", free);
+    return out;
 }
 
-// The cards alone at their cap after re-tests, every other store empty, then the Black Box above the journal reserve.
-Picture cards_alone_on(std::uint32_t blocks) {
-    Vol v(blocks);
-    Picture p;
-    CHECK_EQ(fill_cards(v.fs), 1);
-    p.free_before_bb = v.free();
-    p.saved = fill_bb(v.fs, bbstore::kJournalReserveBlocks);
-    std::printf("[budget] 64 cards alone on %u blocks: %u free (reserve %u); the Black Box saved %u of %u captures\n", blocks,
-                p.free_before_bb, bbstore::kJournalReserveBlocks, p.saved, bbstore::kMaxEntries);
-    return p;
-}
-
-// Today's caps do not fit the 90-block volume (docs/ARCHITECTURE.md "Volume budget"). Pinned, so a change to any cap or
-// format shows up here and the document follows it.
+// The volume of the ring layout holds every littlefs store at its cap (typical e-marker files), the journal of the largest
+// plan last, with room to spare; the 90-block base volume does not (pinned: the reason the layout needs the run).
 void test_all_stores_on_one_volume() {
-    const Picture p = all_stores_on(kBlocks);
-    CHECK_EQ(p.ran_out != nullptr, 1);
-    CHECK_EQ(p.saved, 0u);
+    std::uint32_t free = 0;
+    CHECK_EQ(all_stores_on(kVolume, free) == nullptr, 1);
+    CHECK_EQ(free >= 8, 1);
+    CHECK_EQ(all_stores_on(kBase, free) != nullptr, 1);
 }
 
-// 64 card files leave fewer free blocks than the journal reserve on 90 blocks: the Black Box gets nothing. This is the
-// state the device reached with 61 cards.
-void test_cards_alone_starve_the_black_box() {
-    const Picture p = cards_alone_on(kBlocks);
-    CHECK_EQ(p.free_before_bb < bbstore::kJournalReserveBlocks + 1, 1);
-    CHECK_EQ(p.saved, 0u);
+// ---- the rings --------------------------------------------------------------------------------------------------------
+rc::Card card(std::uint32_t fp, unsigned variant) {
+    rc::Card c;
+    c.id.fp = fp; c.fw = 0xABCD; c.uptime_s = fp;
+    for (unsigned g = 0; g < 6; ++g) c.group[g] = {rc::GV::Pass, std::uint16_t(9000 + 1000 * ((g + variant) % 4)), 0, 0};
+    rc::set_name(c, "Budget charger");
+    return c;
 }
 
-// The grown volume (145 blocks, k2/core/fs_grow.hpp) at today's caps: every store in device order still does not fit (the
-// e-marker library and the cards alone ask for more than the 55 new blocks give), but 64 cards, the journal reserve and all
-// 32 Black Box captures do.
-void test_grown_volume_picture() {
-    const Picture all = all_stores_on(kGrownBlocks);
-    CHECK_EQ(all.ran_out != nullptr, 1);
-    const Picture cards = cards_alone_on(kGrownBlocks);
-    CHECK_EQ(cards.free_before_bb >= bbstore::kJournalReserveBlocks + kBbBudget, 1);
-    CHECK_EQ(cards.saved, bbstore::kMaxEntries);
+// The card ring: kMaxCards cards, then 400 re-tests of random cards with new results and idle maintenance between them (the
+// steady state of a used device). Every card stays listed, and the live cards take 10 of the 22 sectors at most when
+// compact (7 to a sector).
+void test_card_ring_budget() {
+    k2test::RamFlash disk;
+    ringlog::Ring ring(disk, flash::kCardRingBase, flash::kCardRingSectors, rc::kRingKind, rc::kRingReserve);
+    ring.scan();
+    rc::Store s(ring);
+    std::mt19937 rng(11);
+    std::vector<std::uint32_t> fps;
+    for (unsigned i = 0; i < rc::kMaxCards; ++i) fps.push_back(rng() | 1u);
+    unsigned refused = 0;
+    const auto put = [&](rc::Card& c) {
+        while (s.maintain(true)) {}
+        if (s.put(c) != rc::Err::Ok) ++refused;
+    };
+    for (unsigned i = 0; i < rc::kMaxCards; ++i) { rc::Card c = card(fps[i], 0); put(c); }
+    for (unsigned k = 1; k <= 400; ++k) { rc::Card c = card(fps[rng() % fps.size()], k); put(c); }
+    while (s.maintain(true)) {}
+    CHECK_EQ(refused, 0u);
+    CHECK_EQ(s.count(), std::size_t(rc::kMaxCards));
+    constexpr unsigned kCompact = (rc::kMaxCards + 6) / 7;
+    std::printf("[budget] card ring: %u cards, %u sectors live, %u blank of %u (compact: %u sectors), %llu erases for 464 saves\n",
+                unsigned(s.count()), ring.live(), ring.blank(), flash::kCardRingSectors, kCompact, (unsigned long long)disk.erases);
+    CHECK_EQ(kCompact, 10u);
+    CHECK_EQ(kCompact + rc::kSpare <= flash::kCardRingSectors, 1);
+    CHECK_EQ(ring.blank() >= rc::kSpare, 1);
+}
+
+// The Black Box ring: captures of a typical size (two to a sector) fill more than the 32 a boot lists; incompressible ones
+// (one to a sector, the worst case) keep 19 with the spare sector blank.
+void test_bb_ring_budget() {
+    const auto run = [](std::size_t raw_bytes, bool random) {
+        k2test::RamFlash disk;
+        ringlog::Ring ring(disk, flash::kBbRingBase, flash::kBbRingSectors, bbstore::kRingKind);
+        ring.scan();
+        bbstore::Ring r(ring);
+        r.mount();
+        std::vector<std::uint8_t> raw(raw_bytes), scratch(lz::bound(raw_bytes));
+        std::uint32_t x = 99;
+        for (unsigned i = 0; i < 200; ++i) {
+            for (std::size_t k = 0; k < raw.size(); ++k) {
+                x = x * 1664525u + 1013904223u;
+                raw[k] = random ? std::uint8_t(x >> 24) : std::uint8_t((k % 41 < 30 ? k * 3 : i + k / 41) + i);
+            }
+            while (r.maintain(true) >= 0) {}
+            CHECK_EQ(int(r.append({1, 0, i}, raw, scratch)), int(bbstore::Err::Ok));
+        }
+        while (r.maintain(true) >= 0) {}
+        unsigned held = 0;
+        ring.each([&](const ringlog::Record&) { ++held; return true; });
+        std::printf("[budget] Black Box ring, %s %zu B captures: %u held, %d listed\n", random ? "incompressible" : "typical",
+                    raw_bytes, held, r.stats().entries);
+        return held;
+    };
+    CHECK_EQ(run(1500, false) > bbstore::kMaxEntries, 1);
+    CHECK_EQ(run(1980, true), flash::kBbRingSectors - bbstore::kSpare);
 }
 
 }  // namespace
@@ -307,7 +284,7 @@ void test_grown_volume_picture() {
 int main() {
     test_each_store_within_its_budget();
     test_all_stores_on_one_volume();
-    test_cards_alone_starve_the_black_box();
-    test_grown_volume_picture();
+    test_card_ring_budget();
+    test_bb_ring_budget();
     return test_report("test_volume_budget");
 }

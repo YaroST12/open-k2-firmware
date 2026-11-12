@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Report card store bound to the real flash (src/chargertest/report_card_hw.cpp). Every call runs from the main loop
-// (never from an ISR); a save is one small littlefs file commit.
+// Report card store bound to the real flash (src/chargertest/report_card_hw.cpp): the report-card ring log
+// (k2::fs::card_ring()). Every call runs from the main loop (never from an ISR); a save is one ring record (no erase).
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -23,5 +23,8 @@ Err put(Card& c, Card& prev, bool& had);         // same, with the caller's buff
 Err rename(std::uint16_t card_no, std::string_view name);
 Err remove(std::uint16_t card_no);
 Context context();                               // firmware hash, boot counter and uptime for a new card
+// Main loop: one maintenance erase of the ring when it needs one and `may_erase` (no charger test, no PD Stress run, a
+// quiet PD link), at most one per second (Store::maintain).
+void poll(bool may_erase);
 
 }  // namespace k2::report_card::hw

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Black Box persistence: finished captures are compressed into the /bb files on littlefs (k2/core/bbstore.hpp) and
-// a boot reloads the newest ones into the RAM capture slots, so the UI shows them again. The class
-// takes the volume for host tests; src/core/bbpersist.cpp binds the real one.
+// Black Box persistence: finished captures are compressed into the Black Box ring log on raw flash (k2/core/bbstore.hpp)
+// and a boot reloads the newest ones into the RAM capture slots, so the UI shows them again. The class takes the ring for
+// host tests; src/core/bbpersist.cpp binds the real one (k2::fs::bb_ring()). No ring (a volume that is not in the ring
+// layout): nothing is stored or reloaded.
 //
 // Writing rules, all about not stalling PD traffic and not wearing the flash:
 //   - only finished captures (the post-trigger window is over);
@@ -18,7 +19,9 @@
 //     (pdtrace::keep_capture): a newer capture takes another slot, and only when all three are waiting is the oldest
 //     lost, which `dropped` counts. When the hold lapses the waiting captures go out one save per poll(), oldest first.
 //     The hold lapses by itself kHoldLapseMs after the last call, so a session that stops renewing it cannot keep it up.
-//   - make_room(): the ring gives the journal's blocks back (see bbstore.hpp) at boot and when a run starts.
+//   - a save never erases; maintain() does, one sector at most per kEraseGapMs, only when the caller says erasing is fine
+//     (no charger test, no PD Stress run, a link quiet for a while) and never while the hold is up. make_room() runs that
+//     maintenance to the end at once: when a run starts, before Rd goes on, so the run's rare captures find a blank sector.
 #pragma once
 #include <array>
 #include <cstdint>
@@ -33,6 +36,7 @@ namespace k2::bbpersist {
 inline constexpr std::uint32_t kQuietMs = 300;
 inline constexpr std::uint32_t kHoldLapseMs = 2000;
 inline constexpr std::uint32_t kRareBudget = 2;   // rare-kind captures written during one held run; the rest wait for its end
+inline constexpr std::uint32_t kEraseGapMs = 1000;   // between two maintenance erases (each stops the main loop ~35 ms)
 
 struct Status {
     bool ready = false;                // the ring was mounted
@@ -44,10 +48,11 @@ struct Status {
     std::array<std::uint32_t, 8> by_kind{};  // captures written, by pdtrace::Trigger
     unsigned last_kind = 0;            // trigger of the last save
     bool last_while_held = false;      // the hold was up when it was written (a held kind written anyway = a bug)
-    std::uint32_t made_room = 0;       // captures evicted by make_room()
-    int entries = 0;                   // captures in flash
+    std::uint32_t made_room = 0;       // captures dropped by maintenance (the oldest sector erased)
+    std::uint32_t erases = 0;          // maintenance erases since boot
+    int entries = 0;                   // captures in flash (the newest kMaxEntries counted)
     std::uint32_t used_bytes = 0, free_bytes = 0;
-    std::uint32_t skipped = 0;         // captures dropped while idle, too big or without room above the reserve
+    std::uint32_t skipped = 0;         // captures dropped while idle, too big or with no room in the ring
     std::uint32_t errors = 0;          // flash errors
     std::uint32_t saves = 0;           // captures written
     std::uint32_t last_ms = 0;         // duration of the last save (the main loop was blocked this long)
@@ -56,7 +61,7 @@ struct Status {
 
 class Persister {
 public:
-    explicit Persister(fs::Fs& f) : ring_(f) { ring_.set_reserve(bbstore::kJournalReserveBlocks); }
+    explicit Persister(ringlog::Ring& r) : ring_(r) {}
 
     // A charger test runs: the per-row captures wait (see the header). Renew it every tick of the test.
     void hold_run() {
@@ -65,18 +70,41 @@ public:
         hold_set_ = true;
     }
 
-    // The journal's blocks free again (the ring evicts its oldest captures); returns how many went.
+    // Runs the ring's maintenance to the end now (a dirty sector, the spare blank one); returns the captures it dropped.
     unsigned make_room() {
-        const unsigned n = ring_.make_room();
+        if (!st_.ready) return 0;
+        unsigned n = 0;
+        for (int k = 0; k < 4; k++) {
+            const int d = ring_.maintain(true);
+            if (d < 0) break;
+            st_.erases++;
+            n += unsigned(d);
+        }
         st_.made_room += n;
         refresh();
         return n;
     }
 
-    // Mounts the ring and reloads the newest stored captures, oldest first.
+    // One maintenance erase when the ring needs one, erasing is fine (`may_erase`, see the header), the hold is down and
+    // kEraseGapMs has passed since the last. Returns true when it erased.
+    bool maintain(bool may_erase) {
+        if (!st_.ready || !may_erase || holding() || !ring_.needs_maintenance()) return false;
+        const std::uint32_t now = systick::millis();
+        if (erased_once_ && now - erase_ms_ < kEraseGapMs) return false;
+        const int d = ring_.maintain(true);
+        if (d < 0) return false;
+        erase_ms_ = now;
+        erased_once_ = true;
+        st_.erases++;
+        st_.made_room += unsigned(d);
+        refresh();
+        return true;
+    }
+
+    // Mounts the ring and reloads the newest stored captures, oldest first. No ring: stays off.
     void init() {
+        if (!ring_.ready()) return;
         ring_.mount();
-        make_room();
         // Every stored capture is visited (the entry is valid during the call); the slots keep the newest ones.
         {
             const scratch::Lease lease("bbpersist.init");
@@ -160,6 +188,8 @@ private:
     Status st_;
     std::uint32_t hold_ms_ = 0;
     bool hold_set_ = false;
+    std::uint32_t erase_ms_ = 0;
+    bool erased_once_ = false;
     std::uint32_t rare_run_ = 0;   // rare-kind captures written since the hold started
     bool holding() const { return hold_set_ && systick::millis() - hold_ms_ < kHoldLapseMs; }
     // What a charger-test row makes by itself: the Contract capture, and the dip and edge captures of its voltage steps.
@@ -201,9 +231,9 @@ private:
 
 // The firmware instance over the real flash (src/core/bbpersist.cpp).
 void init();
-void poll();
+void poll(bool may_erase);   // saves, then one maintenance erase when allowed (Persister::maintain)
 void hold_run();
-void make_room();   // logs what it evicted
+void make_room();   // logs what it dropped
 Status status();
 
 }  // namespace k2::bbpersist

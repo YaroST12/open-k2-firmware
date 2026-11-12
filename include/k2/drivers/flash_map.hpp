@@ -96,6 +96,13 @@ static_assert(flash::fs_block_addr(flash::kFsBlocks - 1) + flash::kSectorSize ==
                   flash::fs_block_addr(flash::kFsBlocks) == kFsRun.begin &&
                   flash::fs_block_addr(flash::kFsGrownBlocks - 1) + flash::kSectorSize == kFsRun.end,
               "blocks 0..89 fill the littlefs row, blocks 90..144 the run");
+// The run in the ring layout: littlefs blocks 90..110, then the report-card ring and the Black Box ring (k2/core/ringlog.hpp)
+// up to the kept top page. All three are run sectors, writable only with the run open.
+inline constexpr Region kCardRing{"report-card ring", flash::kCardRingBase, flash::kBbRingBase, Access::Fs};
+inline constexpr Region kBbRing{"Black Box ring", flash::kBbRingBase, flash::kFsRunEnd, Access::Fs};
+static_assert(kCardRing.begin == flash::fs_block_addr(flash::kFsVolumeBlocks - 1) + flash::kSectorSize && kCardRing.begin > kFsRun.begin &&
+                  kCardRing.end == kBbRing.begin && kBbRing.end == kFsRun.end,
+              "the rings follow the volume's last block, back to back, up to the end of the run");
 static_assert(kRegions.front().begin == flash::kFsBase && kRegions.back().end == flash::kStoreEnd, "the map covers the flash up to its end");
 static_assert(kRegions[1].begin == flash::kFsEnd, "the native area starts where the file system ends");
 

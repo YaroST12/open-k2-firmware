@@ -588,6 +588,16 @@
   "591": "[FS] grow skipped: legacy wipe pending",
   "592": "[FS] grow failed: %s (stays at %u blocks, retried next boot)",
   "593": "[BB] saves=%u skipped=%u errors=%u last=%ums max=%ums entries=%d free=%u kind=%u held=%d wait=%u C=%u D=%u E=%u drop=%u defer=%u\n",
-  "594": "[PS] result save id=%u err=%u ms=%u\n"
+  "594": "[PS] result save id=%u err=%u ms=%u\n",
+  "595": "[CARD] write refused: %s (blank=%u dirty=%u)\n",
+  "596": "[CARD] ring maintenance: %s blank=%u dirty=%u live=%u\n",
+  "597": "[BBSTORE] ring=%d entries=%d used=%u free=%u\n",
+  "598": "[BB] ring erase: dropped=%u erases=%u entries=%d free=%u\n",
+  "599": "[BB] made room: %u captures dropped, free=%u\n",
+  "600": "[RING] cards: live=%u blank=%u dirty=%u  bb: live=%u blank=%u dirty=%u",
+  "601": "[FS] ring layout copy %s%s: files=%u dirs=%u bytes=%u used=%u log=%u/%u sectors%s%s err=%s",
+  "602": "[FS] %u blocks, the copy into the ring layout waits: rings off",
+  "603": "[FS] ring layout move %s%s: used=%u above=%u passes=%u files=%u erased=%u%s err=%s",
+  "604": "[FS] %u blocks, the move into the ring layout waits: rings off"
  }
 }

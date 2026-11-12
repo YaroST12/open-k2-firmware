@@ -155,6 +155,25 @@ static_assert(kFsRunEnd == kKeptPages[1] && kKeptPages[1] + kSectorSize == kNati
 static_assert(kKeptPages[0] < kFsRunBase && kKeptPages[0] >= kFsEnd, "the old e-marker record page is outside both ranges");
 static_assert(fs_block_map_ok(), "every block is a sector of its own, outside the kept and original-data pages");
 
+// ---- The ring layout of the run ----------------------------------------------------------------
+//
+// littlefs keeps blocks 0..kFsVolumeBlocks-1 (the base range and the first 21 run sectors). The rest of the run holds two
+// append-only ring logs on raw sectors (k2/core/ringlog.hpp), so neither store can take the other's room or the volume's:
+//   report cards  kCardRingBase  22 sectors (44 KB)   64 live cards are 10 sectors, the rest is room to carry them forward
+//                                                     and a 4-sector reserve against power cuts during a carry
+//   Black Box     kBbRingBase    12 sectors (24 KB)   about 2 captures a sector (user, 2026-11-12: least important store)
+// The ring sectors are run sectors: the run's guard covers them (open on proof, never the kept pages). An older unit
+// whose volume grew to all 145 blocks migrates into this layout at boot (k2/core/fs_migrate.hpp).
+inline constexpr std::uint32_t kFsVolumeBlocks = 111;
+inline constexpr unsigned kCardRingSectors = 22;
+inline constexpr unsigned kBbRingSectors = 12;
+inline constexpr std::uint32_t kCardRingBase = fs_block_addr(kFsVolumeBlocks);                    // 0x080EE800
+inline constexpr std::uint32_t kBbRingBase = kCardRingBase + kCardRingSectors * kSectorSize;      // 0x080F9800
+inline constexpr std::uint32_t kRingBase = kCardRingBase;
+inline constexpr unsigned kRingSectors = kCardRingSectors + kBbRingSectors;                       // 34
+static_assert(kFsVolumeBlocks > kFsBlocks && kFsVolumeBlocks + kRingSectors == kFsGrownBlocks, "the rings take the rest of the run");
+static_assert(kBbRingBase + kBbRingSectors * kSectorSize == kFsRunEnd, "the Black Box ring ends below the kept top page");
+
 // A sector of the run (whether the run is open is the caller's business).
 constexpr bool fs_run_sector(std::uint32_t addr) {
     return addr % kSectorSize == 0 && addr >= kFsRunBase && addr < kFsRunEnd;

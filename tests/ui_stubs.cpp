@@ -5,6 +5,7 @@
 // signatures of the real drivers; a signature change breaks this file at compile time.
 #include <memory>
 #include "ramdisk.hpp"
+#include "ramflash.hpp"
 #include "k2/core/fs.hpp"
 #include "ui_stubs.h"
 #include "k2/core/bbpersist.hpp"
@@ -911,13 +912,14 @@ void attempt(std::size_t, std::uint8_t) { g_stub.journal_attempts++; }
 void finish(std::uint8_t, std::uint8_t) { g_stub.journal_finishes++; g_stub.journal_log += 'N'; g_stub.journal_arm_open = false; }
 }  // namespace k2::charger_journal::hw
 
-// Report cards: a real Store over littlefs on a RAM disk (power-cut behaviour is tested in tests/test_report_card_store.cpp).
+// Report cards: a real Store over the card ring on a RAM flash (power-cut behaviour is tested in
+// tests/test_report_card_store.cpp).
 namespace {
 struct CardFs {
-    k2test::RamDisk disk{96};
-    k2::fs::Fs fs{disk, 96};
-    k2::report_card::Store store{fs};
-    CardFs() { bool fm = false; fs.mount_or_format(fm); }
+    k2test::RamFlash disk;
+    k2::ringlog::Ring ring{disk, k2::flash::kCardRingBase, k2::flash::kCardRingSectors, k2::report_card::kRingKind, k2::report_card::kRingReserve};
+    k2::report_card::Store store{ring};
+    CardFs() { ring.scan(); }
 };
 std::unique_ptr<CardFs> g_cf = std::make_unique<CardFs>();
 std::uint32_t g_card_gen = 0;
@@ -951,9 +953,16 @@ std::size_t numbers(std::span<std::uint16_t> out) { return g_cf->store.numbers(o
 std::uint32_t generation() { return g_card_gen; }
 bool find(std::uint32_t fp, Card& c) { return g_cf->store.find(fp, c); }
 bool get(std::uint16_t no, Card& c) { return g_cf->store.get(no, c); }
-Err put(Card& c) { const Err e = g_cf->store.put(c); if (e == Err::Ok) ++g_card_gen; return e; }
-Err put(Card& c, Card& prev, bool& had) { const Err e = g_cf->store.put(c, prev, had); if (e == Err::Ok) ++g_card_gen; return e; }
+// The device's main loop runs the ring maintenance in the idle time between two saves; the stub runs it before each one.
+Err put(Card& c) { while (g_cf->store.maintain(true)) {} const Err e = g_cf->store.put(c); if (e == Err::Ok) ++g_card_gen; return e; }
+Err put(Card& c, Card& prev, bool& had) {
+    while (g_cf->store.maintain(true)) {}
+    const Err e = g_cf->store.put(c, prev, had);
+    if (e == Err::Ok) ++g_card_gen;
+    return e;
+}
 Err rename(std::uint16_t no, std::string_view n) { const Err e = g_cf->store.rename(no, n); if (e == Err::Ok) ++g_card_gen; return e; }
 Err remove(std::uint16_t no) { const Err e = g_cf->store.remove(no); if (e == Err::Ok) ++g_card_gen; return e; }
 Context context() { return {.fw = 0x0FF2C610, .boots = 4, .uptime_s = g_stub.ms / 1000}; }
+void poll(bool may_erase) { g_cf->store.maintain(may_erase); }
 }  // namespace k2::report_card::hw
