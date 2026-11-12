@@ -241,6 +241,16 @@
 //                                    2 finding: req idx(1); rsp findings(1) sev(1) group(1) code(1) t_ms(4)
 //                                      a(4) b(4) c(4) d(4) then the code's name (k2::pd::diag::code_name).
 //                                    Wrong length BadLength, unknown op BadArg.
+//   0x73 TRACE_HID   req op(1) [args]  rsp state(1) reports(4) records(4) lost(4) (13 bytes, every op)
+//                                    The Black Box ring pushed over the HID port (k2/core/trace_hid.hpp, tools/pd_trace.py
+//                                    hid-stream). Ops: 0 stop (silent); 1 start, args flags(1: bit0 from the oldest
+//                                    record, else from now) timeout_ms(2, 0 = 3000, clamped 250..60000); 2 keepalive;
+//                                    3 status. state 0 off 1 streaming. While streaming the K2 pushes 0xA7 reports
+//                                    (A7 kind seq len payload, 64 bytes) of whole ring records and holds the K2LOG text reports
+//                                    back; the responses (0xA6) still pass. Without a keepalive within the timeout the
+//                                    K2 sends an End report and the port is normal again. reports/records/lost are
+//                                    the session totals (lost = ring records overwritten before they were sent).
+//                                    Wrong length BadLength, unknown op or flag bit BadArg.
 //   0x50 CABLE_R     req [op(1)]       rsp flags(1) grade(1) r_mohm(2) idle_mv(2) idle_ma(2) load_mv(2) load_ma(2)
 //                                        pos_mohm(2) gnd_mohm(2)
 //                                    op 0 (or no payload) status; op 1 reset the cable-resistance
@@ -500,6 +510,7 @@ enum class Cmd : uint8_t {
     BlackBox = 0x70,    // PD black box ring: read / clear / freeze / status, see the layout above
     TransCap = 0x71,    // transition capture: arm / trigger / status / read, see the layout above
     Diagnose = 0x72,    // Black Box diagnosis (read-only): status / line / finding, see the layout above
+    TraceHid = 0x73,    // Black Box ring pushed over HID: stop / start / keepalive / status, see the layout above
     ChargerTest = 0x0B, // read-only RAM charger-suite metadata / paged results
     ChargerUnits = 0x0C, // [n, unit...] the units of the next charger run, in order (charger_test::Unit); n = 0 = default order.
                          // Busy while a run is active, BadArg for an unknown unit or a duplicate. Reset to default by every START.
@@ -524,7 +535,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
-    Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose,
+    Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose, Cmd::TraceHid,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -690,6 +701,11 @@ constexpr uint8_t kTcStatus = 0, kTcArm = 1, kTcTrigger = 2, kTcDisarm = 3, kTcS
                   kTcStored = 7, kTcClear = 8;
 constexpr size_t kTcStatusBytes = 26;
 constexpr size_t kTcListEntry = 11;   // seq(4) run_id(4) step(2) reason(1)
+// TRACE_HID op codes (first payload byte of Cmd::TraceHid); the response is kThRspBytes long for every op.
+constexpr uint8_t kThStop = 0, kThStart = 1, kThKeepalive = 2, kThStatus = 3;
+constexpr uint8_t kThFlagAll = 0x01;   // start: from the oldest ring record
+constexpr size_t kThRspBytes = 13;     // state(1) reports(4) records(4) lost(4)
+static_assert(kThRspBytes <= kMaxRspPayload);
 // CABLE_R op codes (optional first payload byte of Cmd::CableR).
 // LAB op codes (first payload byte of Cmd::Lab).
 constexpr uint8_t kLabLoad = 0;
@@ -1315,6 +1331,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.twin(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;    // same shape as emlib (Cmd::Twin, validated by the dispatcher)
     { b.transcap(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
     { b.diagnose(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::Diagnose)
+    { b.trace_hid(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::TraceHid, validated by the dispatcher)
 };
 
 namespace detail {
@@ -2184,6 +2201,21 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (want == 0) return reply(Status::BadArg);
         if (p.size() != want) return reply(Status::BadLength);
         return reply_n(backend.diagnose(p, buf));
+    }
+    case Cmd::TraceHid: {
+        if (p.empty()) return reply(Status::BadLength);
+        switch (p[0]) {
+        case kThStop: case kThKeepalive: case kThStatus:
+            if (p.size() != 1) return reply(Status::BadLength);
+            break;
+        case kThStart:
+            if (p.size() != 4) return reply(Status::BadLength);
+            if ((p[1] & ~kThFlagAll) != 0) return reply(Status::BadArg);
+            break;
+        default:
+            return reply(Status::BadArg);
+        }
+        return reply_n(backend.trace_hid(p, buf));
     }
     case Cmd::Log:
         if (p.size() > 1) return reply(Status::BadLength);

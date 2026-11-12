@@ -33,6 +33,7 @@
 #include "k2/drivers/usb.hpp"
 #include "k2/core/version.hpp"
 #include "k2/core/bootinfo_hw.hpp"
+#include "k2/core/trace_hid_hw.hpp"
 #include "k2/loopprobe/loop_probe_hw.hpp"
 
 StubState g_stub;
@@ -1024,6 +1025,12 @@ std::uint16_t sessions() { return g_stub.diag_state == 2 ? 1 : 0; }
 std::uint32_t session_ms() { return 0; }
 void verdict_text(std::span<char> out) { k2::pd::diag::verdict(g_stub.diag_report, out); }
 }  // namespace k2::pd::diag::live
+
+// The HID Black Box push mode: the main loop calls its service pass; the worlds never start it.
+namespace k2::trace_hid_hw {
+void service() {}
+bool active() { return false; }
+}  // namespace k2::trace_hid_hw
 
 // K2 > Boot info: the record of this boot (the default snapshot, a fixed firmware string).
 namespace k2::bootinfo {

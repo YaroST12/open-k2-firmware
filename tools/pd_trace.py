@@ -9,6 +9,11 @@ JSONL file (one JSON object per event).
 
   pd_trace.py live  [--jsonl FILE] [--raw FILE] [--tail] [--interval S]   poll the ring, print as it comes
   pd_trace.py dump  [--jsonl FILE] [--raw FILE] [--clear]                  everything in the ring, once
+  pd_trace.py stream [--port TTY] [--all] [--seconds S] [--jsonl F] [--raw F]   live over the CDC shell port
+  pd_trace.py hid-stream [--all] [--seconds S] [--timeout-ms MS] [--jsonl F] [--raw F]
+                                                                           live over the HID port (0x73): the K2
+                                                                           mutes its log text, packs whole records
+                                                                           into 64 B reports, names every loss
   pd_trace.py decode FILE [--jsonl FILE]                                   decode a raw ring dump (--raw)
   pd_trace.py diagnose FILE [--twin JSON] [--json] [--power FILE]          "why is PD failing": the K2's own
                                                                            Black Box diagnosis over a saved capture
@@ -912,6 +917,106 @@ def run_trace_stream(port, sink, all_records=False, seconds=None, clock=time.mon
     return ts
 
 
+# ---- live stream over the HID port (remote command 0x73) ------------------------------------------
+# `0x73 TRACE_HID` switches the HID interface into a push mode (include/k2/core/trace_hid.hpp): the K2 stops its log
+# text and sends only trace reports, 64 bytes each:  0xA7, kind, seq, len, payload, zero padding.
+# kind 1/2/3 = Start/Data/Lost with the same bodies as the CDC frames above, 0x10 = End (reason 1 = keepalive timeout).
+# `seq` counts the reports from 0 (wraps at 256), so a report the host never read is counted, not guessed.
+HID_SYNC = 0xA7
+HID_KIND_END = 0x10
+HID_PAYLOAD_MAX = 60
+HID_END_REASONS = {1: "keepalive timeout"}
+
+
+class HidTraceStream:
+    """Consumes the raw 64-byte HID reads (the link's tap), decodes the 0xA7 reports with the CDC TraceStream
+    (one decoder for both transports) and reports every hole: Lost (the device ring wrapped), a ring offset gap,
+    and a missing report number."""
+
+    def __init__(self, sink, tl=None):
+        self.sink = sink
+        self.ts = TraceStream(sink, tl)
+        self.reports = self.missed_reports = self.payload_bytes = 0
+        self.seq_next = None
+        self.ended = False
+        self.end_reason = None
+
+    def feed_report(self, raw):
+        """One HID read. Anything that is not a well formed 0xA7 report (log text, remote answers) is ignored."""
+        if len(raw) < 4 or raw[0] != HID_SYNC:
+            return
+        kind, seq, n = raw[1], raw[2], raw[3]
+        if n > HID_PAYLOAD_MAX or 4 + n > len(raw):
+            self.ts.bad += 1
+            self.sink.note(f"--- report {seq} dropped: length {n} ---", {"marker": "bad_report", "seq": seq})
+            return
+        pl = bytes(raw[4:4 + n])
+        self.reports += 1
+        self.payload_bytes += n
+        if kind != K_START and self.seq_next is not None and seq != self.seq_next:
+            missing = (seq - self.seq_next) & 0xFF
+            self.missed_reports += missing
+            self.sink.note(f"--- {missing} report(s) missing (sequence {self.seq_next} -> {seq}) ---",
+                           {"marker": "missing_reports", "count": missing, "from": self.seq_next, "to": seq})
+        self.seq_next = (seq + 1) & 0xFF
+        if kind == HID_KIND_END:
+            self.ended = True
+            self.end_reason = pl[0] if pl else 0
+            self.sink.note(f"--- device ended the stream: {HID_END_REASONS.get(self.end_reason, f'reason {self.end_reason}')} ---",
+                           {"marker": "end", "reason": self.end_reason})
+        else:
+            self.ts.handle(kind, pl)
+
+    def summary(self, seconds=None):
+        s = (f"{self.reports} reports, {self.ts.records} records, {self.ts.lost_records} lost on the device, "
+             f"{self.missed_reports} missing reports, {self.ts.gaps} ring gaps, {self.ts.bad} bad reports, "
+             f"{self.ts.restarts} ring restarts")
+        if seconds and seconds > 0:
+            s += f"; {self.payload_bytes / seconds / 1024:.1f} KiB/s of payload over {seconds:.1f} s"
+        return s
+
+
+def run_hid_stream(link, sink, all_records=False, seconds=None, timeout_ms=3000, clock=time.monotonic):
+    """Starts the HID push mode, reads until `seconds`, Ctrl-C or the device's End report, keeps the session alive,
+    stops it. -> HidTraceStream. The caller holds the device lock and the link."""
+    import k2_remote as kr
+    hs = HidTraceStream(sink)
+    old_tap, link.tap = link.tap, hs.feed_report     # call() drops the 0xA7 reports it reads: the tap sees them first
+    keep_every = max(timeout_ms, 250) / 3000.0
+    t0 = clock()
+    hs.elapsed = 0.0
+    try:
+        link.call(kr.CMD_TRACE_HID, bytes([kr.TH_START, kr.TH_FLAG_ALL if all_records else 0]) +
+                  struct.pack("<H", timeout_ms))
+        last_keep = clock()
+        alive = True
+        try:
+            while not hs.ended and (seconds is None or clock() - t0 < seconds):
+                link._read(50)
+                if clock() - last_keep >= keep_every:
+                    link.seq = (link.seq % 255) + 1      # the answer is not awaited: the read loop drops it
+                    link.transport.write(kr.pack_request(kr.CMD_TRACE_HID, link.seq, bytes([kr.TH_KEEPALIVE])))
+                    last_keep = clock()
+        except KeyboardInterrupt:
+            pass
+        except OSError as e:
+            alive = False
+            sink.note(f"--- link lost: {e} ---", {"marker": "link_lost"})
+        hs.elapsed = clock() - t0
+        if alive and not hs.ended:
+            try:
+                link.call(kr.CMD_TRACE_HID, bytes([kr.TH_STOP]))
+            except (kr.RemoteTimeout, OSError):
+                sink.note("--- stop was not answered: the device ends the mode itself after the keepalive timeout ---",
+                          {"marker": "stop_unanswered"})
+            end = clock() + 0.2
+            while clock() < end:                          # reports queued ahead of the stop answer
+                link._read(20)
+    finally:
+        link.tap = old_tap
+    return hs
+
+
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -1015,6 +1120,14 @@ def main(argv=None):
     st.add_argument("--raw", metavar="FILE", help="also save the ring records (decode them later with `decode`)")
     st.add_argument("--seconds", type=float, help="stop after this long (default: until Ctrl-C)")
     st.add_argument("--all", action="store_true", help="start at the oldest record in the ring instead of now")
+    hst = sub.add_parser("hid-stream", help="live records over the HID port in push mode (the K2 stops its log text "
+                         "while it runs; needs HID enabled, no CDC port)")
+    hst.add_argument("--jsonl", metavar="FILE")
+    hst.add_argument("--raw", metavar="FILE", help="also save the ring records (decode them later with `decode`)")
+    hst.add_argument("--seconds", type=float, help="stop after this long (default: until Ctrl-C)")
+    hst.add_argument("--all", action="store_true", help="start at the oldest record in the ring instead of now")
+    hst.add_argument("--timeout-ms", type=int, default=3000,
+                     help="keepalive timeout the device enforces (250..60000, default 3000); the reader renews it")
     d = sub.add_parser("decode", help="decode a raw dump written with --raw")
     d.add_argument("file")
     d.add_argument("--jsonl", metavar="FILE")
@@ -1097,6 +1210,14 @@ def main(argv=None):
                     ns = argparse.Namespace(bb_cmd=a.cmd)
                     print(json.dumps(k2_remote.cmd_blackbox(link, ns)))
                     return 0
+                if a.cmd == "hid-stream":
+                    sink = Sink(a.jsonl, a.raw)
+                    try:
+                        hs = run_hid_stream(link, sink, a.all, a.seconds, a.timeout_ms)
+                    finally:
+                        sink.close()
+                    print(hs.summary(hs.elapsed))
+                    return 0 if hs.ts.started and not hs.ts.bad else 1
                 sink = Sink(a.jsonl, a.raw)
                 try:
                     run_stream(link, sink, a.cmd == "live", getattr(a, "tail", False), getattr(a, "interval", 0.05),

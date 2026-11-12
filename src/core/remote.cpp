@@ -54,6 +54,7 @@
 #include "k2/core/version.hpp"
 #include "k2/pd/diag_live.hpp"
 #include "k2/pd/diag_wire.hpp"
+#include "k2/core/trace_hid_hw.hpp"
 
 namespace k2 {
 
@@ -1376,6 +1377,11 @@ size_t Remote::diagnose(std::span<const uint8_t> p, std::span<uint8_t> out) {
     namespace live = k2::pd::diag::live;
     const live::State st = live::state();
     return k2::pd::diag::wire::encode(live::report(), static_cast<uint8_t>(st), live::sessions(), p, out);
+}
+
+// The Black Box push mode over HID: the session and the report pump live in k2::trace_hid_hw (service() in the main loop).
+size_t Remote::trace_hid(std::span<const uint8_t> p, std::span<uint8_t> out) {
+    return k2::trace_hid_hw::command(p, out);
 }
 
 // The transition capture. Arming changes the power monitor's mode and stores nothing; a charger test that is

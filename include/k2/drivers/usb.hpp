@@ -121,6 +121,12 @@ std::array<std::string_view, 2> log_view();
 void log_enable(bool on);
 bool log_enabled();
 
+// HID quiet: while on, log()/log_fmt() text is not queued on the HID IN endpoint (the log ring, the tap and the CDC
+// shell still get it), so a push session (k2/core/trace_hid.hpp) owns the 1 kHz pipe. Separate from log_enable(), which
+// is the host's own switch and survives the session. send_report() is never gated.
+void set_hid_quiet(bool on);
+bool hid_quiet();
+
 // Queue one 64-byte non-log report (a remote-control response) on the HID IN endpoint, in
 // order with the log lines. Never gated by log_enable().
 void send_report(const std::uint8_t* report);

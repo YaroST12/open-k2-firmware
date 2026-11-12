@@ -759,6 +759,34 @@ static void test_transcap() {
     CHECK_EQ(run(f, request(0x71, 8, {9}), r), 1);
     check_header(r, 0x71, 8, Status::BadArg, 0);
 }
+static void test_trace_hid() {
+    Fake f; Frame r;
+    // stop / keepalive / status: the op byte only
+    for (uint8_t op : {kThStop, kThKeepalive, kThStatus}) {
+        CHECK_EQ(run(f, request(0x73, 1, {op}), r), 1);
+        check_header(r, 0x73, 1, Status::Ok, 2);
+        check_bytes(r, kRspHeader, {0x7D, op});
+        CHECK_EQ(f.th_req.size(), 1u); CHECK_EQ(f.th_req[0], op);
+        CHECK_EQ(run(f, request(0x73, 2, {op, 0}), r), 1);
+        check_header(r, 0x73, 2, Status::BadLength, 0);
+    }
+    // start: op flags timeout_ms(2, little endian)
+    CHECK_EQ(run(f, request(0x73, 3, {kThStart, 1, 0xB8, 0x0B}), r), 1);
+    check_header(r, 0x73, 3, Status::Ok, 2);
+    CHECK_EQ(f.th_req.size(), 4u); CHECK_EQ(f.th_req[1], 1); CHECK_EQ(f.th_req[2], 0xB8); CHECK_EQ(f.th_req[3], 0x0B);
+    CHECK_EQ(run(f, request(0x73, 4, {kThStart}), r), 1);
+    check_header(r, 0x73, 4, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x73, 5, {kThStart, 0, 0}), r), 1);
+    check_header(r, 0x73, 5, Status::BadLength, 0);
+    // flag bits this protocol does not know are refused
+    CHECK_EQ(run(f, request(0x73, 6, {kThStart, 0x02, 0, 0}), r), 1);
+    check_header(r, 0x73, 6, Status::BadArg, 0);
+    // no op, unknown op
+    CHECK_EQ(run(f, request(0x73, 7, {}), r), 1);
+    check_header(r, 0x73, 7, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x73, 8, {9}), r), 1);
+    check_header(r, 0x73, 8, Status::BadArg, 0);
+}
 static void test_diagnose() {
     Fake f; Frame r;
     // status: the op byte only; line: op idx off; finding: op idx
@@ -2914,6 +2942,7 @@ int main() {
     test_twin_dispatch();
     test_blackbox();
     test_transcap();
+    test_trace_hid();
     test_diagnose();
     test_debug_fake_pdos();
     test_debug_link();

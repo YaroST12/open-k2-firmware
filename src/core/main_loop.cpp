@@ -24,6 +24,7 @@
 #include "k2/core/shell_hw.hpp"
 #include "k2/core/stage_meter.hpp"
 #include "k2/core/survey.hpp"
+#include "k2/core/trace_hid_hw.hpp"
 #include "k2/drivers/accelerometer.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/buttons.hpp"
@@ -271,6 +272,7 @@ void pass() {
     case k2::RemoteEvent::Fault:      k2::fault::trigger(c.remote.fault_kind()); break;
     case k2::RemoteEvent::None:       break;
     }
+    k2::trace_hid_hw::service();                // Black Box push over HID: queues reports while the mode is on (no-op otherwise)
 
     mark(Stage::Fctrig);
     k2::fctrig::poll();

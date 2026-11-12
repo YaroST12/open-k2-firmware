@@ -105,18 +105,21 @@ public:
         return running_ && (!announced_ || cursor_ != r.head());
     }
 
-    // The next frame into `out` (at least kFrameMax bytes); its length, 0 when there is nothing to send.
+    struct Body { Kind kind = Kind::Start; std::size_t len = 0; };   // len 0 = nothing to send
+
+    // The next frame body (kind and payload) into `pl`, which holds at least max(13, 4 + chunk) bytes; `chunk` caps
+    // the ring bytes of a Data body and must be at least pdtrace::kMaxRecord. The CDC framing (next) and the HID
+    // report packing (k2/core/trace_hid.hpp) both wrap these bodies, so the loss semantics are one piece of code.
     template <std::size_t N>
-    std::size_t next(const pdtrace::Ring<N>& r, std::span<std::uint8_t> out) {
-        if (!running_ || out.size() < kFrameMax) return 0;
-        std::uint8_t* pl = out.data() + 3;
+    Body next_body(const pdtrace::Ring<N>& r, std::uint8_t* pl, std::size_t chunk) {
+        if (!running_) return {};
         if (!announced_) {
             announced_ = true;
             pl[0] = all_ ? 1 : 0;
             put32(pl + 1, cursor_);
             put32(pl + 5, r.head());
             put32(pl + 9, r.tail());
-            return seal(out, Kind::Start, 13);
+            return {Kind::Start, 13};
         }
         const bool beyond = cursor_ > r.head();   // a ring that restarted under the cursor
         if (beyond || cursor_ < r.tail()) {
@@ -128,15 +131,23 @@ public:
             put32(pl, rec);
             put32(pl + 4, bytes);
             pl[8] = beyond ? 1 : 0;
-            return seal(out, Kind::Lost, 9);
+            return {Kind::Lost, 9};
         }
-        if (cursor_ == r.head()) return 0;
-        const auto rd = r.read(cursor_, out.subspan(3 + 4, kChunk));
-        if (rd.bytes == 0) return 0;
+        if (cursor_ == r.head()) return {};
+        const auto rd = r.read(cursor_, std::span<std::uint8_t>(pl + 4, chunk));
+        if (rd.bytes == 0) return {};
         put32(pl, cursor_);
         for (std::size_t i = 0; i < rd.bytes; i += pl[4 + i]) { seq_++; stats_.records++; }
         cursor_ = rd.next;
-        return seal(out, Kind::Data, 4 + rd.bytes);
+        return {Kind::Data, 4 + rd.bytes};
+    }
+
+    // The next CDC frame into `out` (at least kFrameMax bytes); its length, 0 when there is nothing to send.
+    template <std::size_t N>
+    std::size_t next(const pdtrace::Ring<N>& r, std::span<std::uint8_t> out) {
+        if (!running_ || out.size() < kFrameMax) return 0;
+        const Body b = next_body(r, out.data() + 3, kChunk);
+        return b.len == 0 ? 0 : seal(out, b.kind, b.len);
     }
 
     // One main-loop pass: hands `write` whole frames while `room` (free bytes in the CDC TX FIFO) holds

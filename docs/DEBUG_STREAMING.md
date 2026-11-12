@@ -125,6 +125,62 @@ state. Nothing runs in an ISR: the charger page pushes events from the main loop
 with the free room of the CDC FIFO and a bounded frame count. `tests/test_dbg_stream.cpp` checks the per-pass frame bound,
 the priorities, the saturation and loss accounting, and that a stalled reader costs no work.
 
+### Black Box over the HID port (`pd_trace.py hid-stream`)
+
+When the CDC port is not there (HID-only mode, or a host that cannot open a serial port) the Black Box ring can be pushed
+over the HID interface instead. Remote command `0x73 TRACE_HID` turns the HID interface into a trace-only push mode, the
+reader takes whole records in batches, and the loss reporting is the CDC stream's, reused (`Streamer::next_body` builds the
+Start, Data and Lost bodies for both transports).
+
+```
+python3 tools/pd_trace.py hid-stream [--all] [--seconds N] [--timeout-ms 3000] [--jsonl F] [--raw F]
+```
+
+Same outputs as `pd_trace.py stream` (`--jsonl`, `--raw`, live printing, Ctrl-C stops cleanly), under the device lock. The
+`--raw` file decodes with `pd_trace.py decode`.
+
+**Command 0x73.** Requests: `stop` (`00`), `start` (`01 flags timeout_ms(2 LE)`, flag bit 0 = begin at the oldest record,
+other bits are rejected), `keepalive` (`02`), `status` (`03`). Every op answers 13 bytes: `state(1) reports(4) records(4)
+lost(4)`, each counter u32 LE, counting this session.
+
+**Report layout** (one HID IN report, 64 B, zero padded): `0xA7 kind seq len payload`.
+
+| kind | meaning | payload |
+|---|---|---|
+| 1 Start | the session began | `flags(1) cursor(4) head(4) tail(4)` (the CDC Start body) |
+| 2 Data | whole ring records | `offset(4)` ring offset of the first record, then up to 56 bytes of records |
+| 3 Lost | the ring wrapped past the reader | `records(4) bytes(4) flags(1)` (flag bit 0: ring restarted, cursor reset) |
+| 0x10 End | the device ended the mode | `reason(1)`: 1 = keepalive timeout |
+
+`seq` counts the reports of the session from 0 and wraps at 256, so a report the host never read is counted, not guessed.
+A record never straddles two reports: the K2 packs as many whole records as fit in 56 bytes (one 41 byte worst-case record
+or two 28 byte ones), so the reader decodes every report on its own.
+
+**Loss is explicit.** Three separate signals, all printed as `---` lines in the timeline and counted in the summary: a Lost
+report (the device ring wrapped before the K2 could send; exact record and byte counts), an offset gap between Data reports
+(the ring offsets skip), and a missing `seq` (a report was dropped on the USB side). Nothing is dropped silently.
+
+**What is off while the mode runs.** The K2LOG / `usb::log` text reports are not queued on HID (the log ring, the CDC
+shell and the stream tap still get the text), and no other unsolicited HID report is sent. Remote command responses still
+go out, which is how `stop`, `keepalive` and `status` answer. Log reports already in the IN queue when the mode starts
+drain first and are ignored by the reader.
+
+**Stop rule.** The mode ends on `stop` or on a keepalive timeout. `start` arms a deadline of `timeout_ms` (clamped to
+250..60000 ms, 0 selects 3000); `keepalive` moves it. The reader renews it about three times per timeout, so a killed host
+script silences the K2 for at most one timeout and the normal remote protocol and log text come back by themselves. At the
+deadline the K2 sends one End report (reason 1) and releases HID; if the IN queue is full at that moment (the host stopped
+reading) the End report is skipped and the mode ends anyway, so a dead reader can never hold the port quiet.
+
+**Throughput (estimate, not measured on hardware).** The HID IN endpoint polls every 1 ms, so the ceiling is one 64 byte
+report per millisecond: up to 56 KB/s of ring bytes, against about 16 KB/s on the 16 B CDC bulk pipe. The real figure is
+lower because whole-record packing wastes the tail of a report (a 41 byte record leaves 15 bytes unused), and the K2 queues
+at most 8 reports per main-loop pass and keeps three queue slots free for command responses. The ring itself (8 KB, a
+chatty source fills it in seconds) is the limit that matters: the mode exists so the reader can keep up, and when it cannot,
+the Lost report says by how much. The summary line prints the payload rate achieved.
+
+Pure logic (`include/k2/core/trace_hid.hpp`: packing, sequence, deadline, loss) is covered by `tests/test_trace_hid.cpp`
+with a fake ring; the reader by `tests/test_pd_trace_hid_stream.py` with a scripted transport.
+
 ## 3. Recording a session
 
 ```

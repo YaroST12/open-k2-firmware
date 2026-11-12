@@ -337,6 +337,12 @@ struct Fake {
         out[0] = 0x7C; out[1] = req[0];
         return 2;
     }
+    std::vector<uint8_t> th_req;
+    size_t trace_hid(std::span<const uint8_t> req, std::span<uint8_t> out) {
+        calls++; th_req.assign(req.begin(), req.end());
+        out[0] = 0x7D; out[1] = req[0];
+        return 2;
+    }
     std::vector<uint8_t> cards_req;
     size_t cards(std::span<const uint8_t> req, std::span<uint8_t> out) {
         calls++; cards_req.assign(req.begin(), req.end());

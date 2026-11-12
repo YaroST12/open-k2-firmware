@@ -36,6 +36,7 @@ constexpr std::size_t kSlotSize = 64;  // one HID report
 TxQueue<kQueueSize, kSlotSize> g_queue;
 volatile bool g_started;
 bool g_log_on = true;
+bool g_hid_quiet = false;   // a trace push session owns the IN endpoint (set_hid_quiet)
 
 }  // namespace
 
@@ -268,7 +269,7 @@ std::array<std::string_view, 2> log_view() { return g_ring.view(); }
 void log(std::string_view msg) {
     g_ring.push(msg.substr(0, kSlotSize - 1));   // what the HID line would carry
     if (g_tap) g_tap(msg.substr(0, kSlotSize - 1));
-    if (!g_log_on) return;
+    if (!g_log_on || g_hid_quiet) return;
     std::array<std::uint8_t, kSlotSize> slot{};
     std::copy_n(msg.begin(), std::min(msg.size(), kSlotSize - 1), slot.begin());
     push(slot, true);
@@ -280,6 +281,8 @@ std::uint8_t tx_free() { return g_queue.free(); }
 
 void log_enable(bool on) { g_log_on = on; }
 bool log_enabled() { return g_log_on; }
+void set_hid_quiet(bool on) { g_hid_quiet = on; }
+bool hid_quiet() { return g_hid_quiet; }
 
 void vlog_fmt(const char* fmt, std::va_list ap) {
     char buf[kSlotSize];
