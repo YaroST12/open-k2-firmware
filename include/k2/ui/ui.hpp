@@ -23,6 +23,7 @@
 #include "k2/ui/ui_pdstress_page.hpp"
 #endif
 #include "k2/ui/ui_diagnosis.hpp"
+#include "k2/ui/ui_battery.hpp"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
@@ -59,11 +60,10 @@ inline constexpr std::size_t kLargestMenu = std::max({arena_bytes<TriggerPage>()
 #if K2_PDSTRESS
                                                       arena_bytes<PdStressPage>(),
 #endif
-                                                     
-                                                      arena_bytes<DiagnosisPage>()});
+                                                      arena_bytes<DiagnosisPage>(), arena_bytes<BatteryPage>()});
 // Bench > Cable > Saved cables > Share, and the other menu chains: a place page (Connection) under each tool of its place
 // (Charger: Request voltage, Fast charge, Report cards > Share, Stress test; Cable: Spoof, Resistance, Loop probe > Share;
-// Device: Twins), Black box > Share, the charger test's card.
+// Device: Twins), Black box > Share, the charger test's card, Battery > Share.
 inline constexpr std::size_t kLongestChain =
     std::max({arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, SpoofPage>(),
               arena_bytes<ToolsPage, ConnectionPage, PdTriggerPage>(), arena_bytes<ToolsPage, ConnectionPage, TriggerPage>(),
@@ -74,6 +74,7 @@ inline constexpr std::size_t kLongestChain =
 #endif
               arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, DiagnosisPage, BlackBoxPage, SharePage>(),
               arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ToolsPage, LoopProbePage, SharePage>(),
+              arena_bytes<ToolsPage, BatteryPage, SharePage>(),
               arena_bytes<SettingsPage, DiagPage, SharePage>()});
 inline constexpr std::size_t kPageArenaBytes = std::max(kLargestBase + kLargestMenu, kLongestChain);
 static_assert(kPageArenaBytes >= kLargestBase + kLargestMenu, "any rotation page takes any one menu");
@@ -190,6 +191,8 @@ public:
 #endif
     // The open PD diagnosis page (host tests); it exists only while Menu::Diagnosis is on the stack.
     const DiagnosisPage &diagnosis_page() const { return *find<DiagnosisPage>(Menu::Diagnosis); }
+    // The Battery place while Menu::Battery is on the stack, else nullptr (host tests).
+    const BatteryPage *battery_page() const { return find<BatteryPage>(Menu::Battery); }
     // Top submenu; Menu::Count when none is open.
     Menu menu() const { return depth_ ? stack_[depth_ - 1] : Menu::Count; }
     // Page index for the remote: the rotation page, or kMenuPageBase + menu while one is open.
@@ -351,7 +354,9 @@ private:
     // Full repaint of the current page after a real lcd::fill (init, rotation change), where the screen is already blank.
     void redraw(uint32_t now_ms);
     void draw_panel();
-    void draw_release_notice();
+    void draw_release_notice();   // the footer notes every page shares, and the battery recorder's running dot
+    bool battery_dot() const;     // a battery run is in progress and the page may carry its dot
+    static constexpr int16_t kBattDot = 5, kBattDotX = 224 - kBattDot;
     void sync_panel();   // redraws the slots whose label changed since they were drawn
     uint32_t slot_sig(unsigned slot);
     uint32_t slot_sig_[4] = {};
@@ -414,6 +419,7 @@ private:
     PdStressSession pdstress_;      // after the charger test: it borrows that session's sweep buffer for its record
 #endif
     bool pdstress_note_ = false;    // a footer note (the PD Stress run's line or the loop lock) was on screen last tick
+    bool batt_dot_ = false;         // a battery run was in progress last tick (its dot on screen, draw_release_notice)
     trig::Release fc_release_;
     ShareRecord share_rec_;         // the record the Share view shows: filled by the opener before the page exists
     StackArena<PageIf, kPageArenaBytes, kPageArenaDepth> pages_;

@@ -142,15 +142,15 @@ static void test_hurt_table() {
     CHECK_EQ(int(tool_hurt_by(kToolCount)), int(ToolHurt::Nothing));
 }
 
-// The Bench: every tool of the old hub is exactly one place's action, the Meter has none, every name fits a row. Log and K2
-// are pages of their own: the PD diagnosis (tool 8) with its Black Box row (tool 7), the settings with System state (tool 10).
+// The Bench: every tool of the old hub is exactly one place's action, the Meter has none, every name fits a row. Battery, Log
+// and K2 are pages of their own (Battery: the efficiency recorder, no tool of the old hub): the PD diagnosis (tool 8) with its Black Box row (tool 7), the settings with System state (tool 10).
 static void test_bench_places_cover_every_tool() {
     using namespace bench;
     int seen[kToolSlots] = {};
     for (int p = 0; p < kPlaces; p++) {
         const Acts a = actions(static_cast<Place>(p));
         const Place pl = static_cast<Place>(p);
-        if (pl == Place::Meter || pl == Place::Log || pl == Place::K2) { CHECK_EQ(a.n, 0); continue; }
+        if (pl == Place::Meter || pl == Place::Battery || pl == Place::Log || pl == Place::K2) { CHECK_EQ(a.n, 0); continue; }
         CHECK_EQ(a.n > 0, true);
         CHECK_EQ(a.n <= 6, true);   // a place's action list fits under its identity without a long scroll
         for (int i = 0; i < a.n; i++) {
@@ -213,6 +213,8 @@ static void test_bench_rows() {
     CHECK_EQ(brow(Place::Charger, f) == "None on either port", true);
     CHECK_EQ(brow(Place::Cable, f) == "Not read", true);
     CHECK_EQ(brow(Place::Device, f) == "None inline", true);
+    CHECK_EQ(brow(Place::Battery, f) == "No run", true);
+    CHECK_EQ(row(Place::Battery, f).known, false);
     CHECK_EQ(brow(Place::Log, f) == "No session", true);
     f.captures = 3;
     CHECK_EQ(brow(Place::Log, f) == "No session, 3 captures", true);
@@ -227,6 +229,8 @@ static void test_bench_rows() {
     f.cable = true; f.cable_a = 5; f.cable_v = 20; f.cable_w = 100;
     f.contract = true; f.ctr_mv = 20000; f.ctr_ma = 3000;
     f.diag.put("Healthy"); f.captures = 1; f.hid = true;
+    f.batt = true; f.batt_status.put("Round trip 80.0%");
+    CHECK_EQ(brow(Place::Battery, f) == "Round trip 80.0%", true);
     CHECK_EQ(brow(Place::Meter, f) == "36.75W  20.04V  1.834A", true);
     CHECK_EQ(brow(Place::Charger, f) == "PD3.x 100W, 7 offers", true);
     CHECK_EQ(brow(Place::Cable, f) == "5A 20V, 100W", true);

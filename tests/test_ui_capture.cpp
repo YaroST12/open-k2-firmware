@@ -1524,8 +1524,8 @@ int main() {
         CHECK_EQ(g_panel[163 * 240 + 8], k2::kError);         // Meter dot red
         g_stub.pm_online = true;
     }
-    {   // The Bench: six 32 px rows from y24, the rail and the nodes at x8..15, the focused row on the focus ground (Classic:
-        // the bar at x0..2); then the Charger place, its actions as a RowList with the blockers' tails and the footer.
+    {   // The Bench: seven 28 px rows from y24, the rail and the nodes at x8..15 (y+4..11), the focused row on the focus ground
+        // (Classic: the bar at x0..2); then the Charger place, its actions as a RowList with the blockers' tails and the footer.
         const auto saved_pm = g_stub.pm;
         const auto saved_em = g_stub.em;
         g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 1000;
@@ -1534,13 +1534,13 @@ int main() {
         ui.context().keep.bench_sel = 1;
         ui.open_place(bench::Place::Meter, 31000);
         test_screen(ui, "bench", 31100);
-        CHECK_EQ(g_panel[(24 + 32 + 10) * 240 + 1], k2::kFocusBar);    // the Charger row's focus bar
-        CHECK_EQ(g_panel[(24 + 32 + 10) * 240 + 150], k2::kFocusFill); // and its ground
-        CHECK_EQ(g_panel[(24 + 9) * 240 + 11], k2::kAccent);           // Meter: VBUS is live, a solid node
-        CHECK_EQ(g_panel[(24 + 64 + 9) * 240 + 11], k2::kBg);          // Cable: nothing read, a hollow node
-        CHECK_EQ(g_panel[(24 + 64 + 6) * 240 + 11], k2::kAccent);      // ... with its 2 px frame
-        CHECK_EQ(g_panel[(24 + 64 + 2) * 240 + 11], k2::kAccent);      // the rail runs between the nodes
-        CHECK_EQ(g_panel[(24 + 2) * 240 + 11], k2::kBg);               // but not above the first one
+        CHECK_EQ(g_panel[(24 + 28 + 10) * 240 + 1], k2::kFocusBar);    // the Charger row's focus bar
+        CHECK_EQ(g_panel[(24 + 28 + 10) * 240 + 150], k2::kFocusFill); // and its ground
+        CHECK_EQ(g_panel[(24 + 7) * 240 + 11], k2::kAccent);           // Meter: VBUS is live, a solid node
+        CHECK_EQ(g_panel[(24 + 56 + 7) * 240 + 11], k2::kBg);          // Cable: nothing read, a hollow node
+        CHECK_EQ(g_panel[(24 + 56 + 4) * 240 + 11], k2::kAccent);      // ... with its 2 px frame
+        CHECK_EQ(g_panel[(24 + 56 + 1) * 240 + 11], k2::kAccent);      // the rail runs between the nodes
+        CHECK_EQ(g_panel[(24 + 1) * 240 + 11], k2::kBg);               // but not above the first one
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
         ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
         ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: Test charger focused

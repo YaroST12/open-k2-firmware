@@ -370,6 +370,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_loop_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress_page.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/diag_screen.cpp $(SRC_DIR)/ui/ui_diagnosis.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/battery/battery.cpp $(SRC_DIR)/battery/battery_store.cpp $(SRC_DIR)/battery/battery_wire.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/ui/battery_view.cpp $(SRC_DIR)/ui/ui_battery.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP

@@ -864,13 +864,13 @@ static void test_tools_hub() {
     ui.goto_page(static_cast<uint8_t>(Page::Tools), kT0);
     CHECK_EQ(ui.list_state().count, 0);   // fixed rows, no scroll
     CHECK_EQ(ui.menu_depth(), 0u);
-    // The Bench: short +/- move between the six places (no wrap, no paging), OK opens one on the same page.
+    // The Bench: short +/- move between the seven places (no wrap, no paging), OK opens one on the same page.
     ui.context().keep.bench_sel = 0;
     press(ui, Button::Minus, ButtonEvent::Short, kT0 + 10);
     CHECK_EQ(ui.context().keep.bench_sel, 0);
     for (int i = 0; i < 8; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 20);
     CHECK_EQ(ui.context().keep.bench_sel, bench::kPlaces - 1);
-    for (int i = 0; i < 3; i++) press(ui, Button::Minus, ButtonEvent::Short, kT0 + 30);   // Cable
+    for (int i = 0; i < 4; i++) press(ui, Button::Minus, ButtonEvent::Short, kT0 + 30);   // K2 > Log > Battery > Device > Cable
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)] = 0;
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 35);
     CHECK_EQ(ui.page() == Page::Tools, 1);
