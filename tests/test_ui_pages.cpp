@@ -1560,6 +1560,32 @@ static void test_log_place() {
     CHECK_EQ(DiagnosisPage::stamp_of(r) == kit::Verdict::Pass, true);
 }
 
+// Bench > K2 is the settings page as a place: the settings, then System state (the Diag page) and Boot info (this boot's
+// record as QR codes); BACK lands on the Bench with K2 focused.
+static void test_k2_place() {
+    Ui &ui = fresh_ui();
+    ui.context().keep.settings_sel = 0;
+    ui.open_place(bench::Place::K2, kT0);
+    CHECK_EQ(ui.page() == Page::Settings, true);
+    CHECK_EQ(ui.list_state().count, SettingsPage::kRows);
+    for (int i = 0; i < SettingsPage::kSystemRow; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);
+    CHECK_STR(label(ui, Button::Ok), "Open");
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 30);
+    CHECK_EQ(ui.menu() == Menu::Diag, 1);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 40);
+    CHECK_EQ(ui.menu_depth(), 0u);
+    press(ui, Button::Plus, ButtonEvent::Short, kT0 + 50);   // Boot info
+    CHECK_EQ(ui.context().keep.settings_sel, SettingsPage::kBootRow);
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 60);
+    CHECK_EQ(ui.menu() == Menu::Share, 1);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 70);
+    CHECK_EQ(ui.menu_depth(), 0u);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 80);   // the place leaves to the Bench, K2 focused
+    CHECK_EQ(ui.page() == Page::Tools, true);
+    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::K2));
+    ui.context().keep.settings_sel = 0;
+}
+
 // The chrome bar has no flow rail any more (micro-GUI phase 1): direction shows only as the
 // readout's sign-free digits and the hero knows nothing of it; the digit filter is the test.
 static void test_home_flow_arrow() {
@@ -1864,6 +1890,7 @@ int main() {
     test_cable_submenu();
     test_blackbox_submenu();
     test_log_place();
+    test_k2_place();
     test_debug_fake_zero_clears();
     test_fake_zero_leaves_no_gone_rows();
     test_pd_list_clears_on_detach();   // last: it leaves the forced link detached

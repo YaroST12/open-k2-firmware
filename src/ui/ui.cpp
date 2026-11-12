@@ -765,6 +765,12 @@ void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCoun
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
     const bool conn_place = p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device;
     const bool log_place = p == bench::Place::Log;
+    if (p == bench::Place::K2) {   // the K2 place is the settings page; its BACK opens the Bench with K2 focused
+        ctx_.keep.bench_sel = static_cast<int>(p);
+        ctx_.keep.place = static_cast<uint8_t>(bench::Place::Meter);
+        set_page(Page::Settings, now_ms);
+        return;
+    }
     if (conn_place || log_place) {   // a place page over the Bench: BACK pops it and the Bench shows with the place focused
         ctx_.keep.bench_sel = static_cast<int>(p);
         p = bench::Place::Meter;

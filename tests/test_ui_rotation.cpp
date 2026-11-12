@@ -301,11 +301,9 @@ static void test_settings_rotation_modes() {
     Ui ui;
     ui.init(0);
     ui.tick(6000);
-    ui.open_place(bench::Place::K2, 6100);   // Bench > K2 > Settings (its first action)
-    ui.context().keep.place_sel[static_cast<int>(bench::Place::K2)] = 0;
-    ui.on_button(Button::Ok, ButtonEvent::Short, 6200);
+    ui.open_place(bench::Place::K2, 6100);   // Bench > K2: the settings are the place page
     CHECK_EQ(ui.page() == Page::Settings, true);
-    CHECK_EQ(ui.list_state().count, 7);   // ... Wake sleeping port, Theme
+    CHECK_EQ(ui.list_state().count, SettingsPage::kRows);   // ... Wake sleeping port, Theme, System state, Boot info
     {   // Smoothing row: Medium by default, OK cycles High -> Off -> Low -> Medium, stores each and applies it at once
         g_stub.prefs = {true, false}; g_stub.prefs_sets = 0; g_stub.smoothing_applied = smoothing::Preset::Medium;
         for (int i = 0; i < 4; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 6205 + i);

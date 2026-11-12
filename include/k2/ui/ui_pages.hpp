@@ -1128,19 +1128,25 @@ private:
 
 class SettingsPage final : public PageBase {
 public:
-    explicit SettingsPage(UiContext &c) : PageBase(c, Page::Settings, "Settings", Icon::Chip) {}
+    // The K2 place (Bench > K2): the firmware's identity (version, then uptime and the USB link) over the settings, then
+    // System state and Boot info.
+    explicit SettingsPage(UiContext &c) : PageBase(c, Page::Settings, "K2", Icon::Chip) { bar_icon_ = true; }
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
     PanelLabels labels() const override;
-    void invalidate() override { ctx_.rows.invalidate(); foot_.invalidate(); }
-    ListState list_state() const { return {kRows, kRows, 0}; }
+    void invalidate() override { ctx_.rows.invalidate(); foot_.invalidate(); id_.invalidate(); }
+    ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
+    static constexpr int kRows = 9;
+    static constexpr int kSystemRow = 7, kBootRow = 8;
+    static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
 private:
-    static constexpr int kRows = 7;   // 26 px rows: the list view shows seven (the focused one open) above the footer
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
+    void paint_identity();
+    bool share_boot_info();
     int &sel_ = ctx_.keep.settings_sel;   // remembered across page switches
-    Elem foot_;
+    Elem foot_, id_;
 };
 
 class AutorotatePage final : public PageBase {

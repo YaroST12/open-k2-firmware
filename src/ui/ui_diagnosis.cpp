@@ -101,6 +101,7 @@ void DiagnosisPage::draw_static() {
     ctx_.rows.init(ctx_.content, place_ ? kPlaceListY : kit::kBodyY, &DiagnosisPage::row_fn, this);
     ctx_.rows.set_count(list_rows());
     ctx_.rows.select(sel_);
+    if (place_) kit::fill_list_gap(ctx_.content, kPlaceListY);
     invalidate();
 }
 

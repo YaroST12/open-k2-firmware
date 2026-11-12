@@ -602,6 +602,11 @@ void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t i
     }
 }
 
+void fill_list_gap(const Surface &s, int16_t y) {
+    const int16_t end = list_end(y);
+    if (end < kListBottom) gfx_fill(s, 0, end, s.w, static_cast<int16_t>(kListBottom - end), kBg);
+}
+
 void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {
     const Font &f = font_or_small(l.value_font);
     for (int i = 0; i < n; i++) {

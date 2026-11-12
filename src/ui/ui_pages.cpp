@@ -31,6 +31,8 @@
 #include "k2/core/scratch.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/core/version.hpp"
+#include "k2/core/bootinfo_hw.hpp"
+#include "k2/drivers/usbcfg.hpp"
 #include "k2/pd/link.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -252,8 +254,7 @@ bool PageBase::back_event(Event e) {
         return true;
     }
     if (e.button != Button::Back) return false;
-    ui.open_place(id_ == Page::Settings ? bench::Place::K2 : id_ == Page::ChargerTest ? bench::Place::Charger : bench::Place::Meter,
-                  ctx_.now);
+    ui.open_place(id_ == Page::ChargerTest ? bench::Place::Charger : bench::Place::Meter, ctx_.now);   // the K2 place: the Bench
     return true;
 }
 
@@ -1984,10 +1985,45 @@ PanelLabels setting_labels(PanelLabels labels, const char *action) {
 
 void SettingsPage::draw_static() {
     title_bar();
-    ctx_.rows.init(ctx_.content, kit::kBodyY, row_fn, this);
+    ctx_.rows.init(ctx_.content, kListY, row_fn, this);
     ctx_.rows.set_count(kRows);
     ctx_.rows.select(sel_);
+    kit::fill_list_gap(ctx_.content, kListY);
     foot_.invalidate();
+    id_.invalidate();
+}
+
+// The K2's identity: the version in font 16, then "up 1h05m  HID on" in font 12 (minutes, so it repaints once a minute),
+// and the dashed line the place pages close their identity with. y22..65, each pixel once.
+void SettingsPage::paint_identity() {
+    const uint32_t up_min = ctx_.now / 60000u;
+    const bool hid = usbcfg::current.hid;
+    id_.paint(mix_u32(mix_u32(mix_init(), up_min), hid), [&] {
+        const Surface &c = ctx_.content;
+        StrBuf<32> line;
+        line.put("up ");
+        if (up_min >= 60) {
+            line.put_u32(up_min / 60).put_char('h');
+            if (up_min % 60 < 10) line.put_char('0');
+        }
+        line.put_u32(up_min % 60).put_char('m');
+        line.put(hid ? "  USB HID on" : "  USB HID off");
+        const kit::TextRun runs[2] = {{8, kIdHeadY, &kSmall, std::string_view(kFwVersion), kText},
+                                      {8, kIdLineY, &kLabelFont, line.view(), kDim}};
+        kit::paint_texts(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kIdDashY - kit::kBelowBar)}, runs, 2, kBg);
+        kit::draw_dashed(c, 0, c.w, kIdDashY, kInk3, kBg);
+        gfx_fill(c, 0, static_cast<int16_t>(kIdDashY + 1), c.w, static_cast<int16_t>(kListY - kIdDashY - 1), kBg);
+    });
+}
+
+// Boot info: the K2B1 record (the boot screen's QR) of this boot, shared as QR codes.
+bool SettingsPage::share_boot_info() {
+    std::span<std::uint8_t> buf = ctx_.ui->share_buffer();
+    if (buf.size() < bootinfo::kQrMax + 1) return false;
+    bootinfo::Snapshot snap;
+    bootinfo::collect(snap);
+    const std::size_t len = bootinfo::format(snap, {reinterpret_cast<char *>(buf.data()), bootinfo::kQrMax + 1});
+    return ctx_.ui->open_share(qrshare::Type::BootInfo, qrshare::kSchemaBootInfo, "Boot info", len, ctx_.now);
 }
 
 // Row i: a neutral icon, the setting name, its current value at the right (green when ON; a chevron on the row that only
@@ -1995,8 +2031,9 @@ void SettingsPage::draw_static() {
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kTitles[kRows] = {"USB Link", "Autorotate", "Rotate buttons", "Screenshot", "Smoothing",
-                                                   "Wake sleeping port", "Theme"};
-    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug, Icon::Info};
+                                                   "Wake sleeping port", "Theme", "System state", "Boot info"};
+    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug, Icon::Info,
+                                           Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     const auto *self = static_cast<const SettingsPage *>(ctx);
@@ -2043,6 +2080,14 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = on ? "Idle Rd on a sleeping port" : "Idle stays passive";
         break;
     }
+    case kSystemRow:
+        out.chevron = true;
+        out.note = "meter, USB, FUSB302, MCU";
+        break;
+    case kBootRow:
+        out.chevron = true;
+        out.note = "this boot's record as a QR code";
+        break;
     default: {   // the theme the next boot applies; a change waits for the reboot (no run-time repaint path)
         static constexpr const char *kNotes[theme::kCount] = {"light ink on a dark ground", "dark ink on paper",
                                                               "the first firmware colours"};
@@ -2055,6 +2100,7 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 
 void SettingsPage::update(uint32_t) {
     title_badge(false);
+    paint_identity();
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now);
     static constexpr const char *kReboot[theme::kCount] = {"Reboot to apply: Night", "Reboot to apply: Paper",
@@ -2063,7 +2109,11 @@ void SettingsPage::update(uint32_t) {
         draw_footer_cached(ctx_.content, FooterTone::Caution, kReboot[static_cast<int>(theme::chosen())], foot_);
     else
         draw_footer_cached(ctx_.content, FooterTone::Info,
-                           sel_ >= 2 ? "Remembered across boots" : "Opens a settings page", foot_);
+                           sel_ == kSystemRow ? "Checks of every subsystem"
+                           : sel_ == kBootRow ? "Shared as QR codes"
+                           : sel_ >= 2        ? "Remembered across boots"
+                                              : "Opens a settings page",
+                           foot_);
 }
 
 bool SettingsPage::on_event(Event e) {
@@ -2101,6 +2151,10 @@ bool SettingsPage::on_event(Event e) {
             uiprefs::set(p);
             uiprefs::screenshot_enabled = p.screenshot;
             update(ctx_.now);
+        } else if (sel_ == kSystemRow) {
+            ctx_.ui->push_menu(Menu::Diag, ctx_.now);
+        } else if (sel_ == kBootRow) {
+            share_boot_info();
         } else {
             ctx_.ui->push_menu(sel_ == 0 ? Menu::UsbLink : Menu::Autorotate, ctx_.now);
         }
@@ -2110,7 +2164,8 @@ bool SettingsPage::on_event(Event e) {
 }
 
 PanelLabels SettingsPage::labels() const {
-    PanelLabels labels = setting_labels(base_labels(), sel_ >= 2 ? sel_ == 4 || sel_ == 6 ? "Cycle" : "Toggle" : "Open");
+    const bool opens = sel_ < 2 || sel_ >= kSystemRow;
+    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : sel_ == 4 || sel_ == 6 ? "Cycle" : "Toggle");
     labels.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};
     return labels;
 }

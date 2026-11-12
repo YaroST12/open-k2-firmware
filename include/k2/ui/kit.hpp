@@ -36,6 +36,10 @@ constexpr int kWindowRows = (kFooterY - kBodyY - kFocusExtra) / kRowH;   // rows
 static_assert(kWindowRows == 7, "the focused row's 14 px must fit above the footer");
 static_assert(kBodyY + kWindowRows * kRowH + kFocusExtra <= kFooterY, "a RowList never reaches the footer band");
 constexpr int16_t kListBottom = kBodyY + kWindowRows * kRowH + kFocusExtra;   // where a default RowList (at kBodyY) ends: 220
+// Where a RowList that starts at `y` ends (its whole rows, the open one counted, as RowList::init sizes them). A list under an
+// identity block or a stamp ends above kListBottom; the page fills the gap once (fill_list_gap) so no old page shows there.
+constexpr int16_t list_end(int16_t y) { return static_cast<int16_t>(y + (kFooterY - y - kFocusExtra) / kRowH * kRowH + kFocusExtra); }
+void fill_list_gap(const Surface &s, int16_t y);
 constexpr int16_t kProgPitch = 75, kProgSegW = 74, kProgY = kBarH - 1, kProgH = 2;   // wizard progress rule
 constexpr int kProgSegs = 3;
 constexpr int16_t kBelowBar = kProgY + kProgH;   // first row no top bar touches (22): a body fill starts here, never at kBarH

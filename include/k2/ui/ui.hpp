@@ -73,7 +73,8 @@ inline constexpr std::size_t kLongestChain =
               arena_bytes<ToolsPage, ConnectionPage, PdStressPage>(),
 #endif
               arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, DiagnosisPage, BlackBoxPage, SharePage>(),
-              arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ToolsPage, LoopProbePage, SharePage>()});
+              arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ToolsPage, LoopProbePage, SharePage>(),
+              arena_bytes<SettingsPage, DiagPage, SharePage>()});
 inline constexpr std::size_t kPageArenaBytes = std::max(kLargestBase + kLargestMenu, kLongestChain);
 static_assert(kPageArenaBytes >= kLargestBase + kLargestMenu, "any rotation page takes any one menu");
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest menu chain fits");
