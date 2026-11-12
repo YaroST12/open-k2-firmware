@@ -256,11 +256,11 @@ void dbg_tick() {
 }
 void dbg_boot_mark() {
     dbg::take(dbg::early[0]);
-    // [DEBUG-ue1] experiment: pull-up off + PHY down on whatever the bootloader left, clock gated again.
-    reg::crm().APB1EN |= reg::Crm::APB1EN_USB;
-    reg::usb_cfg() |= reg::kUsbCfgPullupOff;
-    *reinterpret_cast<volatile std::uint32_t*>(0x40005C40) |= 0x3u;   // CNTR FRES | PDWN
-    reg::crm().APB1EN &= ~reg::Crm::APB1EN_USB;
+    // [DEBUG-ue1] experiment: SE0 from the first instruction until init() (D+/D- push-pull low).
+    pins::usb_dm.mode(reg::Mode::OutPp50);
+    pins::usb_dp.mode(reg::Mode::OutPp50);
+    pins::usb_dm.clear();
+    pins::usb_dp.clear();
 }
 void dbg_init_mark() {
     dbg::take(dbg::early[1]); dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
