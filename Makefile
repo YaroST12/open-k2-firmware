@@ -21,6 +21,11 @@ INC_DIR = include
 # `make docker-build K2_NET=1`) builds it back; the last gate step (tools/gate.py) builds it in build-net/ so it keeps
 # compiling and linking. See include/k2/core/build_config.h.
 K2_NET ?= 0
+# K2_PDSTRESS=1 builds Tools > PD Stress back in (its page, session, journal and store, the remote command 0x55 and the
+# `pdstress` shell commands). Off by default since 2026-11-12: it found no charger fault. The host tests always build it
+# (HOST_CXXFLAGS) so its logic keeps compiling. See include/k2/core/build_config.h.
+K2_PDSTRESS ?= 0
+
 # K2_WEB=1 puts the web parts back into `make test` and `make gate`: the node tests of the web pages (tools/web, webhid-flasher),
 # the host tests of the network function (test_net_dhcp, test_usb_desc_net), the Python checks that read the web page's JS, and
 # the gate's K2_NET=1 firmware variant. Off by default (2026-11-11: those parts are mostly unused; they get fixed in one go).
@@ -60,6 +65,10 @@ CXX_SRCS = $(foreach f,$(sort $(notdir $(CODE_SRCS))),$(filter %/$(f),$(CODE_SRC
 NET_CXX_SRCS = $(SRC_DIR)/net/net.cpp $(SRC_DIR)/net/http_server.cpp   # the network function (K2_NET=1 only)
 ifneq ($(K2_NET),1)
 CXX_SRCS := $(filter-out $(NET_CXX_SRCS),$(CXX_SRCS))
+endif
+PDSTRESS_CXX_SRCS = $(wildcard $(SRC_DIR)/pdstress/*.cpp) $(SRC_DIR)/ui/ui_pdstress.cpp $(SRC_DIR)/ui/ui_pdstress_page.cpp   # K2_PDSTRESS=1 only
+ifneq ($(K2_PDSTRESS),1)
+CXX_SRCS := $(filter-out $(PDSTRESS_CXX_SRCS),$(CXX_SRCS))
 endif
 OBJS    = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS)) \
           $(patsubst $(SRC_DIR)/%.cpp, $(BUILD_DIR)/%.o, $(CXX_SRCS))
@@ -124,7 +133,7 @@ CFLAGS += -Os -g3 -Wall -Wextra -ffunction-sections -fdata-sections
 # Measured -800 B text under LTO.
 CFLAGS += -fmerge-all-constants
 CFLAGS += -I$(INC_DIR)
-CFLAGS += -DK2_NET=$(K2_NET)
+CFLAGS += -DK2_NET=$(K2_NET) -DK2_PDSTRESS=$(K2_PDSTRESS)
 CFLAGS += -MMD -MP
 
 # TinyUSB: include path + MCU selection; third-party code is built without -Wextra noise.
@@ -340,7 +349,7 @@ HOST_CXX       ?= g++
 # The host tests build with the network function in (K2_NET=1) because they cover its pure logic and
 # the K2_NET=1 descriptors; test_usb_desc_nonet below is the one object built with K2_NET=0.
 HOST_K2_NET    = 1
-HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_TRUNC_LOG=1
+HOST_CXXFLAGS  = -std=c++23 -Wall -Wextra -O0 -g -I$(INC_DIR) -Itests -I$(LFS_DIR) -I$(QR_DIR) -DK2_NET=$(HOST_K2_NET) -DK2_PDSTRESS=1 -DK2_TRUNC_LOG=1
 TEST_CXX_LIB   = $(SRC_DIR)/ui/ui.cpp $(SRC_DIR)/ui/ui_pages.cpp $(SRC_DIR)/ui/ui_detail.cpp $(SRC_DIR)/ui/capture.cpp tests/ui_stubs.cpp $(SRC_DIR)/ui/gfx.cpp $(SRC_DIR)/ui/rle565.cpp tests/fake_lcd.cpp $(SRC_DIR)/core/remote_proto.cpp $(SRC_DIR)/core/fmt.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_link.cpp $(SRC_DIR)/drivers/power_calc.cpp $(SRC_DIR)/drivers/adc_calc.cpp $(SRC_DIR)/fastcharge/fastcharge_classify.cpp $(SRC_DIR)/ui/ui_calc.cpp $(SRC_DIR)/drivers/buttons.cpp $(SRC_DIR)/ui/ui_layout.cpp $(SRC_DIR)/ui/ui_labels.cpp $(SRC_DIR)/ui/list_view.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/ui/ui_pdtrig.cpp $(SRC_DIR)/ui/ui_wizard.cpp $(SRC_DIR)/fastcharge/fc_engine.cpp $(SRC_DIR)/fastcharge/fc_scan.cpp $(SRC_DIR)/ui/text.cpp $(SRC_DIR)/pd/emrec.cpp $(SRC_DIR)/pd/emk_quirk.cpp $(SRC_DIR)/pd/emk_respond.cpp $(SRC_DIR)/pd/emk_learn.cpp $(SRC_DIR)/pd/emname.cpp $(SRC_DIR)/pd/emjson.cpp $(SRC_DIR)/drivers/vfat.cpp $(SRC_DIR)/drivers/drive.cpp $(SRC_DIR)/ui/ui_widgets.cpp $(SRC_DIR)/ui/ui_icons.cpp $(SRC_DIR)/ui/ui_match.cpp $(SRC_DIR)/ui/ui_lines.cpp $(SRC_DIR)/ui/ui_tools.cpp $(SRC_DIR)/ui/ui_emarker.cpp $(SRC_DIR)/ui/ui_cabler.cpp $(SRC_DIR)/ui/ui_connection_page.cpp $(SRC_DIR)/ui/ui_blackbox.cpp $(SRC_DIR)/ui/ui_spoof.cpp $(SRC_DIR)/ui/ui_cards.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_view.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(wildcard $(SRC_DIR)/ui/fonts/*.cpp)
 TEST_CXX_SRCS  = $(wildcard tests/test_*.cpp)
 TEST_CXX_LIB  += tests/trunc_log.cpp $(SRC_DIR)/ui/orientation.cpp $(SRC_DIR)/core/shell.cpp $(SRC_DIR)/core/lab.cpp
@@ -547,7 +556,7 @@ nav-headers:
 	@$(COMPDB)
 
 docker-build: | $(NAV_DIR)/dirs.txt
-	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_NET=$(K2_NET) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
+	$(DOCKER_RUN) $(DOCKER_IMG) make K2_GIT=$(K2_GIT) K2_FW_VERSION=$(K2_FW_VERSION) K2_WERROR=$(K2_WERROR) K2_NET=$(K2_NET) K2_PDSTRESS=$(K2_PDSTRESS) BUILD_DIR=$(BUILD_DIR) K2_HOST_ROOT=$(CURDIR)
 
 docker-flash:
 	docker run --rm --privileged -v $(CURDIR):/workspace -v /dev:/dev $(DOCKER_IMG) make flash

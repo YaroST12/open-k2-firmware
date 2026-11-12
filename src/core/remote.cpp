@@ -1184,6 +1184,7 @@ size_t Remote::ufcs_read(uint16_t off, std::span<uint8_t> out) {
 }
 
 // ---- PD Stress ----
+#if K2_PDSTRESS
 remote::PdStressInfo Remote::pdstress_info() {
     const PdStressSession::Status s = ui_.pd_stress().status(systick::millis());
     remote::PdStressInfo i;
@@ -1203,6 +1204,13 @@ remote::Status Remote::pdstress_start(const remote::PdStressStart &s) {
 void Remote::pdstress_stop() { ui_.pd_stress().cancel(); }
 
 size_t Remote::pdstress_read(uint16_t off, std::span<uint8_t> out) { return ui_.pd_stress().result_read(off, out); }
+#else
+// K2_PDSTRESS=0: the dispatcher answers the command UnknownCmd and never calls these; they only satisfy the backend concept.
+remote::PdStressInfo Remote::pdstress_info() { return {}; }
+remote::Status Remote::pdstress_start(const remote::PdStressStart &) { return remote::Status::UnknownCmd; }
+void Remote::pdstress_stop() {}
+size_t Remote::pdstress_read(uint16_t, std::span<uint8_t>) { return 0; }
+#endif
 // ---- end PD Stress ----
 
 uint16_t Remote::loopprobe_len() { return loopprobe::hw::file_len(); }

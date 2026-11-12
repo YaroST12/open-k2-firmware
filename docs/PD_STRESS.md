@@ -1,5 +1,9 @@
 # PD Stress
 
+**Compiled out by default since 2026-11-12** (`K2_PDSTRESS=0`; build it back with `make K2_PDSTRESS=1` or
+`make docker-build K2_PDSTRESS=1`). It found no charger fault, only its own Soft_Reset bug (ROADMAP "Current bugs").
+The host tests keep building it.
+
 PD Stress renegotiates a charger as hard as USB-PD allows and scores what the charger did with it. It is a separate tool, not a charger-test unit and
 not on the report card: the charger test is polite (one pass over what the source advertises), PD Stress is aggressive but stays inside the protocol.
 A clean charger scores 0.00. Source of truth: `include/k2/pdstress/` (engine, plan, score, dist, result, journal), the session glue in

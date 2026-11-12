@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // Debug shell line parser, see k2/core/shell.hpp.
 #include "k2/core/shell.hpp"
+#include "k2/core/build_config.h"
 
 namespace k2::shell {
 namespace {
@@ -28,7 +29,9 @@ constexpr std::string_view kHelp =
     "lcd show | lcd spi <4|8>    LCD SPI clock divider (RAM only, /8 at boot) and paint totals, no confirm\r\n"
     "twin list|predict [n]|status|cancel|learn identify|sniff [dry] [name]|rename n name   device twins (docs/DEVICE_TWIN.md)\r\n"
     "twin run [n|all] confirm | twin delete n confirm   the live proof negotiates with the charger as the twin\r\n"
+#if K2_PDSTRESS
     "pdstress start [--mask m --cycles pct --pace 0..2 --max-s s --max-trans n] confirm | status | result [off] | stop   PD Stress, docs/PD_STRESS.md\r\n"
+#endif
     "above 5 V needs a trailing confirm; closing the port returns to 5 V\r\n";
 
 constexpr std::array<std::string_view, static_cast<std::size_t>(fc::Proto::Count)> kProtos = {

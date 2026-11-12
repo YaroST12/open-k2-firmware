@@ -937,7 +937,7 @@ public:
     // Row -> submenu. The Spoof row is a shortcut: it opens Connection's Cable tab on the Spoof list (the same
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
     static Menu tool_menu(int i) {
-        constexpr Menu kMenus[kToolCount] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
+        constexpr Menu kMenus[kToolSlots] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
                                              Menu::Connection, Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
                                              Menu::Twin, Menu::LoopProbe, Menu::PdStress};
         return kMenus[i < 0 || i >= kToolCount ? 0 : i];

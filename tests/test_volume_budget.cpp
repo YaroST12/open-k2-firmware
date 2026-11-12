@@ -153,14 +153,15 @@ struct Row {
     const char* name;
     bool (*fill)(fs::Fs&);
     std::uint32_t budget;   // worst-case blocks, docs/ARCHITECTURE.md "Volume budget"
+    bool pdstress = false;  // a PD Stress store: on the device only in a K2_PDSTRESS=1 build (off by default since 2026-11-12)
 };
 // The table of docs/ARCHITECTURE.md, in the order the stores are filled on the shared volume (small first).
 const Row kRows[] = {
     {"settings (usb/cable/prefs/rd/.legacy)", fill_settings, 0},
     {"/log.txt", fill_log, 1},
     {"/lp/last.rec", fill_lp, 3},
-    {"/ps/run.rec", fill_ps, 3},
-    {"/ps results (8 x 1376 B + 1 in flight)", fill_psr, 11},
+    {"/ps/run.rec", fill_ps, 3, true},
+    {"/ps results (8 x 1376 B + 1 in flight)", fill_psr, 11, true},
     {"/twin (12 x 129 B)", fill_twin, 4},
     {"/tcap (4 + 1 in flight)", fill_tcap, 24},
     {"/emk (140 x 98 B)", fill_emk, 54},
@@ -190,24 +191,28 @@ void test_each_store_within_its_budget() {
 }
 
 // Every store at its cap on one volume of `blocks`, in the device's order; returns the first that did not fit (nullptr: all
-// fit) and the free blocks left.
-const Row* all_stores_on(std::uint32_t blocks, std::uint32_t& free) {
+// fit) and the free blocks left. `pdstress`: the PD Stress stores too (a K2_PDSTRESS=1 build).
+const Row* all_stores_on(std::uint32_t blocks, std::uint32_t& free, bool pdstress = false) {
     Vol v(blocks);
     const Row* out = nullptr;
-    for (const Row& r : kRows)
+    for (const Row& r : kRows) {
+        if (r.pdstress && !pdstress) continue;
         if (!r.fill(v.fs)) { out = &r; break; }
+    }
     free = v.free();
-    std::printf("[budget] all stores at their cap on %u blocks: %s%s; %u free\n", blocks, out ? "ran out at " : "all fit",
-                out ? out->name : "", free);
+    std::printf("[budget] all stores%s at their cap on %u blocks: %s%s; %u free\n", pdstress ? " (PD Stress too)" : "", blocks,
+                out ? "ran out at " : "all fit", out ? out->name : "", free);
     return out;
 }
 
 // The volume of the ring layout holds every littlefs store at its cap (typical e-marker files), the journal of the largest
-// plan last, with room to spare; the 90-block base volume does not (pinned: the reason the layout needs the run).
+// plan last, with room to spare; the 90-block base volume does not (pinned: the reason the layout needs the run). The default
+// build has no PD Stress; a K2_PDSTRESS=1 build must still fit, without the spare.
 void test_all_stores_on_one_volume() {
     std::uint32_t free = 0;
     CHECK_EQ(all_stores_on(kVolume, free) == nullptr, 1);
     CHECK_EQ(free >= 8, 1);
+    CHECK_EQ(all_stores_on(kVolume, free, true) == nullptr, 1);
     CHECK_EQ(all_stores_on(kBase, free) != nullptr, 1);
 }
 

@@ -6,7 +6,7 @@
 namespace k2 {
 
 const char *tool_hint(int tool) {
-    static constexpr const char *kHints[kToolCount] = {
+    static constexpr const char *kHints[kToolSlots] = {
         "charger on top or bottom", "PD charger, either port", "act as a saved cable", "charger + cable + load",
         "source, cable and device", "passive PD recorder", "passive PD verdict", "saved charger results", "USB, PD and system state",
         "will it charge my device", "cable into own HID port", "PD charger, no load"};
@@ -59,7 +59,7 @@ struct ToolRule {
     Readiness (*check)(const SetupState &, bool pm_online);
 };
 
-constexpr ToolRule kRules[kToolCount] = {
+constexpr ToolRule kRules[kToolSlots] = {
     {ToolHurt::Load, fc_trigger},        // 0 FC trigger
     {ToolHurt::Load, pd_trigger},        // 1 PD trigger
     {ToolHurt::Load, spoof},             // 2 Spoof (shortcut into Connection's Cable tab)

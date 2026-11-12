@@ -689,6 +689,7 @@ const char* lab_lcd(const lab::Cmd& c) {
     return nullptr;
 }
 
+#if K2_PDSTRESS
 // PD Stress over the CDC shell: the same ops as the remote command 0x55 (one glue, Remote::pdstress_*). `stop` is never refused for a busy
 // link; `start` refuses by itself when another tool owns the ports (the status line then says why).
 const char* lab_pdstress(const lab::Cmd& c) {
@@ -733,12 +734,18 @@ const char* lab_pdstress(const lab::Cmd& c) {
     l.send();
     return nullptr;
 }
+#endif
 
 const char* lab_run(const lab::Cmd& c) {
     using I = lab::Id;
     if (const char* why = check_opts(c)) return why;
     switch (c.id) {
+#if K2_PDSTRESS
     case I::PdStressStart: case I::PdStressStatus: case I::PdStressResult: case I::PdStressStop: return lab_pdstress(c);
+#else
+    case I::PdStressStart: case I::PdStressStatus: case I::PdStressResult: case I::PdStressStop:
+        return "PD Stress is not built in (make K2_PDSTRESS=1)";
+#endif
     case I::LcdShow: case I::LcdSpi: return lab_lcd(c);
     case I::AccpPing: case I::AccpRead: case I::AccpWrite: case I::AccpDump: return lab_accp(c);
     case I::Qc3Up: case I::Qc3Down: case I::Qc3pUp: case I::Qc3pDown: return lab_qc_pulse(c);

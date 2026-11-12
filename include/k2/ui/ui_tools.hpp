@@ -5,6 +5,7 @@
 // so the hub never disagrees with the refusal inside the tool.
 #pragma once
 #include <cstdint>
+#include "k2/core/build_config.h"
 #include "k2/ui/ui_pdtrig.hpp"
 
 namespace k2 {
@@ -17,7 +18,8 @@ struct Readiness {
     const char *reason = "Ready";    // footer sentence, at most 28 characters
 };
 
-constexpr int kToolCount = 12;       // FC trigger, PD trigger, Spoof, Cable R, Connection, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
+constexpr int kToolSlots = 12;       // the per-tool tables: PD Stress is the last slot, so a K2_PDSTRESS=0 build only shows one row less
+constexpr int kToolCount = K2_PDSTRESS ? 12 : 11;   // rows shown: FC trigger, PD trigger, Spoof, Cable R, Connection, Black Box, PD diagnosis, Report cards, Diag, Device twins, Loop probe, PD Stress (ToolsPage::tool_menu maps to Menu)
 constexpr int kToolSpoof = 2;        // the Spoof row opens Connection on the Cable tab's Spoof list, not a menu of its own
 constexpr int kToolLoopProbe = 10;   // the HID-cable loop probe (needs the power monitor, like Cable R)
 constexpr int kToolPdStress = 11;    // renegotiation stress: a PD charger, the power monitor, nothing on the output

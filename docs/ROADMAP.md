@@ -80,6 +80,16 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **PD Stress "softreset" unplugs the charger** (2026-11-12, Xiaomi 20K bank on 1.0.0-670; parked with the tool, which is
+  compiled out by default since the same day: `K2_PDSTRESS=0`). `fusb302::sink_soft_reset()` -> `Sink::soft_reset()` queues
+  the Soft_Reset and sets the sink Idle, not held, at once. The demand block in `fusb302::service()` then sees no
+  operation: `g_tx_allowed` drops in the same tick, so `transmit()` refuses the queued Soft_Reset (no Reset/TX record in
+  the Black Box), and `kCrcLingerMs` (300 ms) later the Rd gate takes Rd off (`SWITCHES0 <= 0x08`); the source sees a
+  detach and cuts VBUS. Black Box `runs/ps-review/xiaomi-full/bb.txt` at 796321 ms. Fix when the tool comes back: count
+  the sink's soft-reset wait (`sr_wait_`, 400 ms to the new caps) as in flight in that demand, with a host test that
+  the TX goes out and Rd stays. The unit hold's Soft_Reset (`fusb302.cpp` unit hold) keeps its own Rd and is not
+  affected.
+
 - **Diag "K2 send failed" on every charger after a re-read** (2026-11-12, Anker IQ4 on 1.0.0-668; pre-existing): the
   FUSB302 raised neither TXSENT nor RETRYFAIL for Get_Source_Cap_Extended although the source's GoodCRC with our
   MessageID sat in the RX FIFO (all 12 traced sends, 7 chargers), so the trace logged a TX timeout and the Diag row a

@@ -18,12 +18,17 @@
 #include "k2/ui/ui_cards.hpp"
 #include "k2/ui/ui_twin.hpp"
 #include "k2/ui/ui_loop_probe.hpp"
+#include "k2/core/build_config.h"
+#if K2_PDSTRESS
 #include "k2/ui/ui_pdstress_page.hpp"
+#endif
 #include "k2/ui/ui_diagnosis.hpp"
 #include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_share.hpp"
 #include "k2/ui/ui_pages.hpp"
+#if K2_PDSTRESS
 #include "k2/ui/pd_stress_session.hpp"
+#endif
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/page_arena.hpp"
 #include "k2/twin/twin_hw.hpp"
@@ -50,7 +55,11 @@ inline constexpr std::size_t kLargestMenu = std::max({arena_bytes<TriggerPage>()
                                                       arena_bytes<CableRPage>(), arena_bytes<BlackBoxPage>(), arena_bytes<SpoofPage>(),
                                                       arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<CardsPage>(),
                                                       arena_bytes<SharePage>(), arena_bytes<ConnectionPage>(), arena_bytes<DiagPage>(),
-                                                      arena_bytes<TwinPage>(), arena_bytes<LoopProbePage>(), arena_bytes<PdStressPage>(),
+                                                      arena_bytes<TwinPage>(), arena_bytes<LoopProbePage>(),
+#if K2_PDSTRESS
+                                                      arena_bytes<PdStressPage>(),
+#endif
+                                                     
                                                       arena_bytes<DiagnosisPage>()});
 // Tools > Connection > Saved cables > Share, and the other three-menu chains (Connection > Spoof, Cards / Black box > Share).
 inline constexpr std::size_t kLongestChain =
@@ -157,7 +166,9 @@ public:
     // The Loop probe page while Menu::LoopProbe is on the stack, else nullptr (host tests).
     LoopProbePage *loop_probe_page() const { return find<LoopProbePage>(Menu::LoopProbe); }
     // The PD Stress page while Menu::PdStress is on the stack, else nullptr (host tests).
+#if K2_PDSTRESS
     PdStressPage *pd_stress_page() const { return find<PdStressPage>(Menu::PdStress); }
+#endif
     // The open PD diagnosis page (host tests); it exists only while Menu::Diagnosis is on the stack.
     const DiagnosisPage &diagnosis_page() const { return *find<DiagnosisPage>(Menu::Diagnosis); }
     // Top submenu; Menu::Count when none is open.
@@ -250,7 +261,7 @@ public:
     };
     [[gnu::noinline]] Session session();
     // A Device twin live proof (twin_hw::live_running) and a PD Stress run own the ports like a charger test does.
-    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_.active() || loop_probe_busy(); }
+    bool ports_busy() const { return charger_test_busy() || fc_release_.busy() || twin_live_busy() || pdstress_active() || loop_probe_busy(); }
     bool twin_live_busy() const;
     // A loop probe run (Tools -> Loop probe) drives D+/D-, the backlight and the K2's own Rd: the ports are its until it ends.
     bool loop_probe_busy() const;
@@ -261,13 +272,18 @@ public:
     BusyWhy busy_why() const;          // why an identity / START is refused right now, BusyWhy::None = free
     const char *busy_reason() const;   // the footer text of busy_why(), nullptr = free
     // ---- PD Stress (the resident session; the remote and the shell start and read it through these) ----
+#if K2_PDSTRESS
     PdStressSession &pd_stress() { return pdstress_; }
     const PdStressSession &pd_stress() const { return pdstress_; }
+    bool pdstress_active() const { return pdstress_.active(); }
+#else
+    bool pdstress_active() const { return false; }   // K2_PDSTRESS=0: the tool is not built in
+#endif
     // Why PD Stress may not start now: another tool owns the ports. The holds, the contract and the sink state a run
     // causes itself are not counted (busy_reason() would refuse the run for its own doing).
     const char *foreign_busy() const;
     // The runs that own the ports until they end, which the dead-man lease therefore leaves alone: a charger test or a PD Stress run.
-    bool run_busy() const { return charger_test_busy() || pdstress_.active(); }
+    bool run_busy() const { return charger_test_busy() || pdstress_active(); }
     // The remote `stop` (the lease expiry and the shell `stop` land there too): ends a charger test, a twin proof and a PD Stress run.
     // The run releases the source to 5 V itself on the next poll; a PD Stress run waiting to resume after a reboot is dropped.
     void cancel_runs();
@@ -372,8 +388,10 @@ private:
     // arena comes last so the pages are gone before anything they point at.
     UiContext ctx_;
     ChargerTestSession charger_test_;
+#if K2_PDSTRESS
     PdStressSession pdstress_;      // after the charger test: it borrows that session's sweep buffer for its record
-    bool pdstress_note_ = false;    // the run's footer line was on screen last tick
+#endif
+    bool pdstress_note_ = false;    // a footer note (the PD Stress run's line or the loop lock) was on screen last tick
     trig::Release fc_release_;
     ShareRecord share_rec_;         // the record the Share view shows: filled by the opener before the page exists
     StackArena<PageIf, kPageArenaBytes, kPageArenaDepth> pages_;

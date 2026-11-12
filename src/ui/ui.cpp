@@ -37,7 +37,11 @@ uint32_t now_us() { return systick::micros(); }
 // Setup and paging
 // ---------------------------------------------------------------------------------------
 
-Ui::Ui() : charger_test_(ctx_), pdstress_(ctx_, charger_test_) {
+Ui::Ui() : charger_test_(ctx_)
+#if K2_PDSTRESS
+           , pdstress_(ctx_, charger_test_)
+#endif
+{
     ctx_.ui = this;
     pages_.push<HomePage>(ctx_);   // the arena is never empty: page_ starts on Home
 }
@@ -70,7 +74,9 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::QrTest: return pages_.push<QrTestPage>(ctx_);
     case Menu::Twin: return pages_.push<TwinPage>(ctx_);
     case Menu::LoopProbe: return pages_.push<LoopProbePage>(ctx_);
+#if K2_PDSTRESS
     case Menu::PdStress: return pages_.push<PdStressPage>(ctx_);
+#endif
     case Menu::Diagnosis: return pages_.push<DiagnosisPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
@@ -113,7 +119,9 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
     set_page(Page::Home, now_ms);
     ctx_.cables.load();   // the remembered cable selection, before boot_restore's boot-time arming reads it
     if (charger_test_.boot_restore(cancel_resume)) set_page(Page::ChargerTest, now_ms);   // reboot-resume: "Resume run?" (or by itself)
+#if K2_PDSTRESS
     else pdstress_.boot_restore(cancel_resume, now_ms);   // a PD Stress journal resumes by itself once VBUS is steady
+#endif
     // A loop probe record still marked in progress: the K2 restarted inside its CC step. Close it (CC Interrupted / Rebooted);
     // Tools -> Loop probe and `k2_remote loop-probe` report it. The probe itself never resumes.
     if (const auto step = loopprobe::boot_check(loopprobe::hw::store()))
@@ -284,7 +292,9 @@ void Ui::cancel_twin() { twin_hw::live_cancel(); }
 void Ui::cancel_runs() {
     cancel_charger_test();
     cancel_twin();
+#if K2_PDSTRESS
     pdstress_.cancel();
+#endif
     if (LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe)) probe->cancel(ctx_.now);
 }
 
@@ -305,7 +315,7 @@ BusyWhy Ui::busy_why() const {
     const auto fs = fctrig::status();
     if (charger_test_busy()) return BusyWhy::TestRunning;
     if (twin_live_busy()) return BusyWhy::TwinRun;
-    if (pdstress_.active()) return BusyWhy::PdStress;   // PD Stress: running or resuming
+    if (pdstress_active()) return BusyWhy::PdStress;   // PD Stress: running or resuming
     if (loop_probe_busy()) return BusyWhy::LoopProbe;
     if (fc_release_.busy()) return BusyWhy::FcRelease;
     if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return BusyWhy::QcTrigger;
@@ -330,7 +340,11 @@ const char *Ui::busy_reason() const {
     case BusyWhy::EmScan: return "E-marker scan: wait";
     case BusyWhy::Identify: return "Identify: wait";
     case BusyWhy::TwinRun: return "Twin proof: stop it";
+#if K2_PDSTRESS
     case BusyWhy::PdStress: return pdstress_.busy_reason();   // "PD Stress: stop it" / "PD Stress: resuming"
+#else
+    case BusyWhy::PdStress: return "PD Stress: stop it";   // unreachable: pdstress_active() is false
+#endif
     case BusyWhy::LoopProbe: return "Loop probe: stop it";
     case BusyWhy::None: break;
     }
@@ -480,7 +494,7 @@ void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
 
 bool Ui::push_menu(Menu m, uint32_t now_ms) {
     // The PD Stress page opens over its own run (a run the remote started shows there, and its BACK stops it); it only reads the session.
-    if (ports_busy() && !(m == Menu::PdStress && pdstress_.active())) {
+    if (ports_busy() && !(m == Menu::PdStress && pdstress_active())) {
         K2LOG("[TEST] menu refused: test/release in progress\n");
         return false;
     }
@@ -1254,10 +1268,14 @@ UiAction Ui::tick(uint32_t now_ms) {
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
     twin_hw::live_poll(twin_ctx(now_ms));   // the twin proof ends itself under the loop lock (its busy input, twin_hw.cpp)
+#if K2_PDSTRESS
     if (loopguard::locked() && pdstress_.running()) pdstress_.cancel();   // the HID-cable loop 5 V lock: released to 5 V at this poll
     pdstress_.poll(now_ms);   // after the charger test's poll: that one clears the run-owner flag a run of ours has set
     const bool stress_note = pdstress_.footer() != nullptr || loopguard::locked();   // a footer note: the run's line or the loop lock
-    if (pdstress_note_ && !stress_note) current().invalidate();   // the run's line goes: the page repaints its own footer
+#else
+    const bool stress_note = loopguard::locked();
+#endif
+    if (pdstress_note_ && !stress_note) current().invalidate();   // the note goes: the page repaints its own footer
     pdstress_note_ = stress_note;
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
@@ -1290,9 +1308,12 @@ void Ui::draw_release_notice() {
                     unsafe ? "Unsafe VBUS: unplug source" : "FC releasing; verify 5V");
     } else if (loopguard::locked() && menu() != Menu::Trigger) {
         draw_footer(ctx_.content, FooterTone::Caution, loopguard::kLockText);   // on whatever page is up, while the lock holds
-    } else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger && menu() != Menu::PdStress) {
+    }
+#if K2_PDSTRESS
+    else if (const char *line = pdstress_.footer(); line && menu() != Menu::Trigger && menu() != Menu::PdStress) {
         draw_footer(ctx_.content, FooterTone::Info, line);   // the run's one line, on whatever page is up (its own page has its footer)
     }
+#endif
 }
 
 void Ui::log_timing(uint32_t now_ms) {

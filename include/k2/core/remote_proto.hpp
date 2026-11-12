@@ -362,6 +362,7 @@
 #include <span>
 #include <string_view>
 #include "k2/core/bootinfo.hpp"
+#include "k2/core/build_config.h"
 #include "k2/core/lease.hpp"
 #include "k2/core/stop.hpp"
 #include "k2/pd/cc_probe.hpp"
@@ -1755,7 +1756,8 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         buf[2] = uint8_t(total); buf[3] = uint8_t(total >> 8); buf[4] = uint8_t(n);
         return reply_n(5 + n);
     }
-    // ---- PD Stress ----
+    // ---- PD Stress (K2_PDSTRESS=0: not built in, the command is unknown) ----
+#if K2_PDSTRESS
     case Cmd::PdStress: {
         if (p.empty()) return reply(Status::BadLength);
         switch (p[0]) {
@@ -1796,6 +1798,10 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             return reply(Status::BadArg);
         }
     }
+#else
+    case Cmd::PdStress:
+        return reply(Status::UnknownCmd);
+#endif
     // ---- end PD Stress ----
     case Cmd::QRTest: {
         if (p.empty()) return reply(Status::BadLength);
