@@ -51,12 +51,9 @@ void flush() {
 // first attach after a setting change (reset with the cable plugged) starts from a fresh port.
 constexpr std::uint32_t kDetachHoldMs = 150;
 
-void dbg_init_mark();   // [DEBUG-ue1]
-
 void init() {
     using namespace reg;
     Crm& c = crm();
-    dbg_init_mark();
 
     // 1. GPIOA clock; keep the USB core and ACC off while PA11/PA12 are reconfigured.
     c.APB2EN |= Crm::APB2EN_GPIOA;
@@ -181,97 +178,12 @@ void dp_pullup_restore() {
     g_pull = {};
 }
 
-// [DEBUG-ue1] enumeration probe: samples for the first seconds after init(), dumped once later.
-namespace dbg {
-struct Sample { std::uint16_t t; std::uint16_t trim; std::uint16_t fnr; std::uint8_t acc; std::uint8_t errs; std::uint8_t rst; std::uint8_t gap; std::uint16_t isr; };
-struct Early { std::uint32_t ms, apb1, cfg, cntr, daddr, crh, idr; };
-std::array<Early, 2> early;
-struct Ev { std::uint16_t ms; std::uint16_t v; };
-std::array<Ev, 48> ev;
-std::size_t nev;
-std::uint16_t lastv = 0xFFFF;
-std::array<Sample, 160> s;
-std::size_t n;
-std::uint32_t t0, init_ms, init_trim, errs, gapw, last_t;
-bool dumped;
-void sample(std::uint32_t now, std::uint32_t gap) {
-    const std::uint16_t istr = reg::usb_istr();
-    if (istr & (1u << 13)) { errs++; reg::usb_istr() = static_cast<std::uint16_t>(~(1u << 13)); }
-    if (gap > gapw) gapw = gap;
-    const std::uint32_t t = now - t0;
-    if (t < 6000 && n < s.size() && (n == 0 || t - last_t >= 25)) {
-        last_t = t;
-        s[n++] = {std::uint16_t(t), std::uint16_t(reg::crm().CTRL & 0xFFFF), reg::usb_fnr(),
-                  std::uint8_t(reg::acc().STS), std::uint8_t(errs), std::uint8_t(stats.resets),
-                  std::uint8_t(std::min<std::uint32_t>(gapw, 255)), std::uint16_t(stats.isrs)};
-        gapw = 0;
-    }
-    static std::size_t di;
-    if (!dumped && t > 9000) {
-        dumped = true;
-        log_fmt("[DEBUG-ue1] init_ms=%d trim0=%04X n=%d\n", int(init_ms), unsigned(init_trim), int(n));
-        for (const Early& e : early) {
-            log_fmt("[DEBUG-ue1] E ms=%d apb1=%08X cfg=%X cntr=%X\n", int(e.ms), unsigned(e.apb1), unsigned(e.cfg),
-                    unsigned(e.cntr));
-            log_fmt("[DEBUG-ue1] E daddr=%X crh=%08X idr=%04X\n", unsigned(e.daddr), unsigned(e.crh), unsigned(e.idr));
-        }
-    }
-    static std::size_t vi;
-    if (dumped && vi < nev && tud_mounted() && g_queue.free() > 8) {
-        log_fmt("[DEBUG-ue1] V ms=%d v=%03X\n", int(ev[vi].ms), unsigned(ev[vi].v));
-        vi++;
-    } else if (dumped && vi >= nev && di < n && tud_mounted() && g_queue.free() > 8) {
-        {
-            const Sample& x = s[di++];
-            log_fmt("[DEBUG-ue1] t=%d tr=%04X f=%04X a=%X e=%d r=%d g=%d i=%d\n", int(x.t), unsigned(x.trim),
-                    unsigned(x.fnr), unsigned(x.acc), int(x.errs), int(x.rst), int(x.gap), int(x.isr));
-        }
-    }
-}
-void take(Early& e) {
-    reg::crm().APB2EN |= reg::Crm::APB2EN_GPIOA;
-    e.ms = systick::millis();
-    e.apb1 = reg::crm().APB1EN;
-    reg::crm().APB1EN |= reg::Crm::APB1EN_USB;   // read the core with its clock on, then restore the gate
-    e.cfg = reg::usb_cfg();
-    e.cntr = *reinterpret_cast<volatile std::uint32_t*>(0x40005C40);
-    if (!(e.apb1 & reg::Crm::APB1EN_USB)) reg::crm().APB1EN &= ~reg::Crm::APB1EN_USB;
-    e.daddr = reg::gpio(pins::usb_dp.port).ODR;   // ODR (PA12 = bit 12)
-    e.crh = reg::gpio(pins::usb_dp.port).CRH;
-    e.idr = reg::gpio(pins::usb_dp.port).IDR;
-}
-}  // namespace dbg
-// [DEBUG-ue1] from SysTick: PA12/PA11 levels, PA12 mode nibble + ODR, USB clock bit, on every change.
-void dbg_tick() {
-    const std::uint32_t ms = systick::millis();
-    if (ms > 6000 || dbg::nev >= dbg::ev.size()) return;
-    const auto& g = reg::gpio(pins::usb_dp.port);
-    std::uint16_t v = 0;
-    if (g.IDR & (1u << 12)) v |= 1;
-    if (g.IDR & (1u << 11)) v |= 2;
-    if (g.ODR & (1u << 12)) v |= 4;
-    if (reg::crm().APB1EN & reg::Crm::APB1EN_USB) v |= 8;
-    v |= std::uint16_t(((g.CRH >> 16) & 0xF) << 4);
-    if (v != dbg::lastv) { dbg::lastv = v; dbg::ev[dbg::nev++] = {std::uint16_t(ms), v}; }
-}
-void dbg_boot_mark() {
-    dbg::take(dbg::early[0]);
-    // [DEBUG-ue1] experiment: D+/D- inputs with the weak pull-down (ODR low), traced from SysTick.
-    pins::usb_dm.clear();
-    pins::usb_dp.clear();
-    pins::usb_dm.mode(reg::Mode::InPull);
-    pins::usb_dp.mode(reg::Mode::InPull);
-}
-void dbg_init_mark() {
-    dbg::take(dbg::early[1]); dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
-
 void poll() {
     if (!g_started) return;            // USB link off (k2/drivers/usbcfg.hpp): the core was never started
     static std::uint32_t last_ms;
     static bool first = true;
     const std::uint32_t now = systick::millis();
     if (!first && now - last_ms > stats.poll_gap_max) stats.poll_gap_max = now - last_ms;
-    dbg::sample(now, first ? 0 : now - last_ms);
     first = false;
     last_ms = now;
 

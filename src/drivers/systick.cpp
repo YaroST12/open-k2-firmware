@@ -28,12 +28,8 @@ void init() {
 
 void set_tick_hook(void (*hook)()) { g_tick_hook = hook; }
 
-}  // namespace k2::systick
-namespace k2::usb { void dbg_tick(); }   // [DEBUG-ue1]
-namespace k2::systick {
 void tick() {
     g_millis = g_millis + 1;
-    k2::usb::dbg_tick();   // [DEBUG-ue1]
     if (g_tick_hook) g_tick_hook();
 }
 

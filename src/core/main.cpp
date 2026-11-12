@@ -56,8 +56,6 @@
 #include "k2/net/net.hpp"
 #endif
 
-namespace k2::usb { void dbg_boot_mark(); }   // [DEBUG-ue1]
-
 namespace {
 
 using k2::Button;
@@ -138,7 +136,6 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     k2::sysreset::capture_flags();          // reset cause first, before anything can reset again
     k2::reg::scb().VTOR = 0x08003800;
     const k2::bootmode::Mode keys_mode = sample_boot_mode();   // buttons first, before any slow init
-    k2::usb::dbg_boot_mark();   // [DEBUG-ue1]
     k2::crm::init();
     k2::systick::init();
     k2::i2c::init();
