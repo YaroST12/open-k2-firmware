@@ -250,7 +250,7 @@ proves the decoder header reaches no pin, register or driver.
   levels (PD still wins), and the window starts fresh when the monitor lets go.
 - The monitor is on by default (a RAM switch, not saved). Not yet run on hardware.
 
-### Guarded SuperVOOC trigger, no load (k2/svooc-trigger, 2026-11-12, NOT run on hardware)
+### Guarded SuperVOOC trigger, no load (k2/svooc-trigger, 2026-11-12, run on hardware: OnePlus 120 W, no load)
 
 Approved by the operator on 2026-11-12 under the guards below. The K2 stands in for the phone: it wakes the adapter,
 answers each command on D- with the word a OnePlus 15 sent, and lets the adapter raise VBUS while nothing draws
@@ -312,7 +312,34 @@ current. Remote only, no UI entry:
     default) or ten bytes `[5, 1, flags, cap, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s]`; any other
     length is BadLength. The summary grew from 36 to 45 bytes (36..44: the effective i86_first, i86_esc, r82, vtarget
     u16, esc_at_s, the escape state and its time u16), so a decoder takes the base from a 36-byte payload and the rest
-    when 45 arrive (`tools/k2_remote.py` does).
+    when 45 arrive (`tools/k2_remote.py` does). Then to 54 bytes (45..53, diagnostics): the edge words the ISR handed
+    the wire since the wake (u16, saturating), when the last one came (u16, ms since the wake), the longest main-loop
+    gap while the lines were held (u16 ms, `Report::poll_gap_max_ms`), and the run's Black Box edge recording: edges
+    kept (u16) and how it ended (`edges::End`). `svooc-status` prints them as one `diag:` line, and the release logs
+    `[SVOOC] diag: edges= last_edge= poll_gap_max= rec= end=`.
+- Hardware findings, OnePlus 120 W USB-A port through an A-to-C cable (`--usb-a`), no load, runs 5-7 (2026-11-12):
+  - The 0x86 answer after the handshake governs the ramp. With 0x005 VBUS climbed about 10 mV per 0x82 poll (8.73 V to
+    9.09 V in 36 polls); with 0x00A about 158 mV per poll to 11.0 V; with 0x023 about 169 mV per poll to 11.1 V. The
+    charger regulates toward a current target (inferred).
+  - `--vtarget 8000` (every 0x82 answered 0x07E) gave the same VBUS trajectory as the constant 0x051: at no load the
+    0x82 word does not govern VBUS.
+  - `--i86-at 2 --i86 0x00A`: 0x82 > 07F at 2000 ms, the charger sent 0x86 on the next frame (2043 ms), it was answered
+    0x00A, and VBUS then climbed to 11.0 V.
+  - Every run, whatever the cap (8, 10, 20 s), logged exactly 72 pairs (73 with the escape), about 3.3-3.4 s after the
+    wake, then nothing until the cap: no missed slot, no cut, no partial frame, VBUS held. The bit layer is not the
+    cause (`test_long_run_answers_every_pair` answers 434 pairs, about 19,500 edges, of the same script). What coincides:
+    the run's own Black Box edge recording holds 4096 edges (about 57 per pair over 72 pairs) and is a finished capture
+    when full; a passive capture of a phone's handshake and polls has about 3,350 edges in 72 pairs (46 per pair), and
+    the K2's own D- drive and release may add edges it lacks (not measured). A finished capture is saved
+    to flash at once on a quiet link, and a save blocks the main loop for 95-290 ms, so the wire's tick cannot let D-
+    go after a reply's 2.4 ms hold and D- stays driven with the last bit (0x051 ends in 1) when the adapter starts its
+    next command. Fix: no Black Box save and no ring erase while the trigger runs (`src/core/main_loop.cpp`); the
+    capture is saved after the run. Unproven on hardware: the next run must pass 72 pairs, and its `diag:` line tells
+    which part held (recording ended `full` with a small poll gap = the gate worked; the last edge right after the last
+    pair = the adapter itself went quiet).
+  - A start right after a run ended "charger off-script after 0.0 s, wakes 0" with the previous run's counts: the run's
+    first poll came before the wake re-began the wire, so the last run's stopped wire counted. Fixed: the run ignores
+    the wire's facts until its first wake, and an accepted start re-begins the wire.
 - Decode errors on the USB-C run 3 (0x98 read as 0x9C, 0x8E as 0x82; 2026-11-12): not reproducible on the host. Every
   captured session replays clean through the wire, and both misreads are a single D- level at one bit position (0x98 vs
   0x9C differ in bit 2, 0x8E vs 0x82 in bits 2 and 3), so a wrong D- level at the pad is the likely cause (the pin

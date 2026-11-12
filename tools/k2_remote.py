@@ -2483,6 +2483,9 @@ SVOOC_SUMMARY_BYTES = 35        # the base layout; a 36th byte (inline cause) is
 SVOOC_SUMMARY_CAUSE = 35
 SVOOC_SUMMARY_EXT = 36          # 36..44, read when the firmware sends them: i86_first i86_esc r82 vtarget(2) esc_at_s escape esc_t(2)
 SVOOC_SUMMARY_EXT_BYTES = 45
+SVOOC_SUMMARY_DIAG = 45         # 45..53, read when the firmware sends them: edges(2) last_edge_ms(2) poll_gap_max_ms(2) rec_edges(2) rec_end
+SVOOC_SUMMARY_DIAG_BYTES = 54
+SVOOC_REC_ENDS = ["recording", "full", "idle", "detach", "timeout", "cancelled", "storm"]   # edges::End
 SVOOC_START_EXT = 10            # the start request with the responder parameters (op 5 / 1 / flags / cap / 6 bytes)
 SVOOC_I86_DEFAULT, SVOOC_I86_MIN, SVOOC_I86_MAX = 0x005, 1, 0x023   # the 0x86 answer, a count of about 100 mA
 SVOOC_R82_DEFAULT, SVOOC_R82_MAX = 0x051, 0x07E                    # the steady 0x82 answer (0x07F is the escape word)
@@ -2560,6 +2563,10 @@ def decode_svooc_summary(p):
         ext = {"params": {"i86_first": f"0x{p[o]:03X}", "i86_esc": f"0x{p[o + 1]:03X}", "r82": f"0x{p[o + 2]:03X}",
                           "vtarget_mv": u16(o + 3), "esc_at_s": p[o + 5]},
                "escape": name(SVOOC_ESCAPES, p[o + 6]), "escape_t_ms": u16(o + 7)}
+    if len(p) >= SVOOC_SUMMARY_DIAG_BYTES:   # a firmware that reports the wire's edges, the main-loop gap and the recording
+        o = SVOOC_SUMMARY_DIAG
+        ext["diag"] = {"edges": u16(o), "last_edge_ms": u16(o + 2), "poll_gap_max_ms": u16(o + 4), "rec_edges": u16(o + 6),
+                       "rec_end": name(SVOOC_REC_ENDS, p[o + 8])}
     return {**ext, "stage": name(SVOOC_STAGES, p[0]), "refusal": refusal, "abort": abort, "inline_cause": cause,
             "wakes": p[3], "accepted": bool(p[4] & 1), "exit_checked": bool(p[4] & 2), "exit_ok": bool(p[4] & 4),
             "driving": bool(p[4] & 8), "usb_a_waiver": bool(p[4] & 16), "phase": name(SVOOC_PHASES, p[5]), "off_run": p[6],
@@ -2672,6 +2679,11 @@ def render_svooc(s):
                  f"max |I| {s['ibus_max_ma']} mA")
     lines.append(f"  PD contract: start {s['contract_start']}, end {s['contract_end']}")
     lines += _svooc_params_lines(s)
+    d = s.get("diag")
+    if d:
+        lines.append(f"  diag: {d['edges']} edges to the wire, the last at {d['last_edge_ms']} ms after the wake; "
+                     f"longest main-loop gap {d['poll_gap_max_ms']} ms; Black Box recording {d['rec_edges']} edges, "
+                     f"ended {d['rec_end']}")
     if s["usb_a_waiver"]:
         lines.append("  far-sink / inline check waived (USB-A): the operator's waiver, no PD anywhere at the start")
     if s["inline_cause"] != "none":

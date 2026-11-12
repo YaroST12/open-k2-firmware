@@ -18,7 +18,9 @@
 // ISR does not misread them either. No logging in the ISR.
 // Main-loop part: poll() every pass (via fctrig::poll) and service() about every ms (the LCD idle hook, via
 // fctrig::service_ufcs) let go of D- after the last bit's hold and expire slots; poll() also runs the guards and hands
-// the latest VBUS sample to the wire for the closed-loop 0x82 word (svooc_script.hpp).
+// the latest VBUS sample to the wire for the closed-loop 0x82 word (svooc_script.hpp). So the main loop must not stall
+// while running(): the main loop writes no flash then (no Black Box save, no ring erase; src/core/main_loop.cpp), and
+// Report::poll_gap_max_ms shows the longest gap it had.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -55,6 +57,8 @@ struct Snapshot {
     svooc::Params params{};                          // the effective (clamped) responder parameters
     svooc::Escape escape = svooc::Escape::Off;       // what came of the escape (Params::esc_at_s)
     std::uint32_t escape_t_ms = 0;                   // when its 0x07F was sent, ms since the wake
+    std::uint16_t rec_edges = 0;                     // the run's Black Box edge recording (dpsniff::status()): edges kept
+    std::uint8_t rec_end = 0;                        // and how it ended (edges::End; 0 = still recording)
 };
 Snapshot snapshot();   // a copy, interrupts masked for the wire's part
 

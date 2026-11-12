@@ -175,6 +175,28 @@ class SvoocTrigger(unittest.TestCase):
         self.assertIn(": no 86", text)
         self.assertIn("    1    143 ms  9.10 V  82>07F", text)
 
+    def test_diagnostics_decode_and_render(self):
+        """Bytes 45..53: wire edges, last edge (ms after the wake), longest poll gap, the Black Box recording."""
+        p = ext_summary(stage=6, kept=0) + (5000).to_bytes(2, "little") + (3351).to_bytes(2, "little") + \
+            (212).to_bytes(2, "little") + (4096).to_bytes(2, "little") + bytes([1])
+        s = kr.decode_svooc_summary(p)
+        self.assertEqual(s["diag"], {"edges": 5000, "last_edge_ms": 3351, "poll_gap_max_ms": 212, "rec_edges": 4096,
+                                     "rec_end": "full"})
+        s["pairs"], s["pairs_kept"] = [], 0
+        self.assertIn("  diag: 5000 edges to the wire, the last at 3351 ms after the wake; longest main-loop gap 212 ms; "
+                      "Black Box recording 4096 edges, ended full", kr.render_svooc(s))
+        older = kr.decode_svooc_summary(ext_summary(stage=6))
+        self.assertNotIn("diag", older)
+        older["pairs"], older["pairs_kept"] = [], 0
+        self.assertNotIn("diag:", kr.render_svooc(older))
+
+    def test_recording_ends_follow_the_firmware(self):
+        text = (ROOT / "include/k2/fastcharge/edges.hpp").read_text()
+        ends = re.search(r"enum class End : std::uint8_t \{([^}]*)\}", text).group(1)
+        names = [w.split("=")[0].strip().lower() for w in ends.split(",")]
+        self.assertEqual(names, ["none", "full", "idle", "detach", "timeout", "cancel", "storm"])
+        self.assertEqual(kr.SVOOC_REC_ENDS, ["recording", "full", "idle", "detach", "timeout", "cancelled", "storm"])
+
     def test_waiver_refused_with_pd_names_the_reason(self):
         link = Link([summary()], start_status=kr.STATUS_BUSY, start_payload=summary(refusal=11))
         with self.assertRaises(kr.FcRefused) as cm:

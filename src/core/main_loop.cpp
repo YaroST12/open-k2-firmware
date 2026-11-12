@@ -128,7 +128,12 @@ constexpr uint32_t kEraseQuietMs = 1000;
         c.rescan_landing_due = false;
         if (k2::rdcomeback::rescan_landing()) c.ui.land_rescanned(now);
     }
-    {   // ring maintenance erases (~35 ms each) only with no charger test, PD Stress run or other port owner and a quiet link
+    // ring maintenance erases (~35 ms each) only with no charger test, PD Stress run or other port owner and a quiet link.
+    // No flash at all while the SuperVOOC trigger runs: a Black Box save stalls this loop for 95-290 ms (and masks
+    // interrupts for every half-word), so the wire's tick cannot let D- go after a reply's hold. The trigger's own edge
+    // recording (4096 edges) is a finished capture after ~72 pairs, where every hardware run of 2026-11-12 stopped.
+    // Waiting captures go out once the run is over.
+    if (!k2::fctrig::svooc_running()) {
         const bool may_erase = !c.ui.ports_busy() && k2::pdtrace::since_activity_ms() >= kEraseQuietMs;
         k2::bbpersist::poll(may_erase);     // saves finished captures once the link is quiet
         k2::report_card::hw::poll(may_erase);
