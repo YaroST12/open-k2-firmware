@@ -18,18 +18,21 @@ The Fieldbook rework (concept `runs/ui-rework-fable/CONCEPT.md`, branch `k2/fiel
 Meter and a Bench of six places. Where this section and a later one differ, this section is current; the later sections
 keep the measured geometry of the parts that did not change.
 
-### 0.1 Themes
+### 0.1 Theme
 
-Paper, Night and Classic are const palettes (`include/k2/ui/theme.hpp`), picked at boot; Night is the default. A theme
-change asks for a reboot (Settings row `Theme`, footer `Reboot to apply: <name>`). Classic keeps cyan for amps and focus
-and the four trend shades.
+Classic is the only palette (user decision 2026-11-13: Night and Paper are gone, there is no Theme row). It is one
+`constexpr Palette` in `include/k2/ui/theme.hpp`; every token of `ui_style.hpp` is a compile-time constant read from it,
+so the old palette tables, the boot-time copy and the Settings reboot prompt are gone. The theme bits in the stored
+settings (byte 6, bits 4..5) are written 0 and ignored on read, so a record that names Night or Paper loads as Classic.
+Classic keeps cyan for amps and focus.
 
-Flow trends (`trace_*` and `area_*` in the palette, `kTraceVolt`..`kAreaStale` in `ui_style.hpp`): each field's 1 px
-trend line and the faint area under it are the field's block moved towards its digit ink (`mix565`, 32nds): the area 3/32
-(stale grey 2/32), the line as far as a 3:1 contrast against both the block above it and the area below it needs. The
-digits keep at least 4.5:1 over the area (a stale grey: 4.0, its block alone gives Paper 4.17). A 1 px line crossing a
-digit is bounded by digits/block = digits/line x line/block: 2.0 to 5.1:1 live, 1.2 to 2.6:1 stale. `tests/test_ui_flow_contrast.cpp`
-measures all of it (WCAG 2.x) per theme and prints the table; `K2_DUMP=dir` writes the Flow scenes for `tools/panel2png.py`.
+Flow trends are the pre-Fieldbook drawing (restored 2026-11-13 from `3c59f9e1`, `paint_qty` in `src/ui/ui_home.cpp`; the
+trend painter `src/ui/home_cell.cpp` never changed): a black field, the quantity's colour for its digits, unit and status
+edge, a dark tint column (`kVoltT`, `kAmpT`, `kWattT`) under a brighter 1 px level line (`kVoltL`, `kAmpL`, `kWattL`), and a
+1 px `kRule` cursor gap. Stale is the grey pair (`kPanelBg` tint, `kFaint` line); idle draws no trend. Over the limit is
+white on `kError` with a `kErrD` bar track, near is the orange chip with orange digits and bar. `tests/test_ui_flow_trend.cpp`
+renders the charge, ramp, idle, LAST and unplugged scenes, asserts the line and tint pixels (and their absence after LAST
+and unplugged) and the digit/tint contrast (WCAG 2.x); `K2_DUMP=dir` writes the Flow scenes for `tools/panel2png.py`.
 
 ### 0.2 Navigation
 
@@ -40,7 +43,7 @@ Meter (Home)  Up/Dn flip the faces: Flow, Numbers, Lines.  OK -> Bench
     Cable     place page: e-marker identity + fact table + Read e-marker, Save cable, Saved cables, Spoof as..., Resistance, Loop probe
     Device    place page: request identity + fact table + Ask device, Twins
     Log       PD diagnosis: verdict stamp, findings, Black Box row
-    K2        settings: firmware identity, USB Link .. Theme, System state, Boot info
+    K2        settings: firmware identity, USB Link .. Wake sleeping port, System state, Boot info
 ```
 
 - The device boots into Flow. OK on a face opens the Bench; BACK on the Bench returns to the face it came from.

@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// The Flow face (Home) draws a patient-monitor trend behind the digits of every quantity block. This test renders the
-// face with realistic live data (a 20 V 3 A charge with ripple, a 5 V to 20 V ramp, a 5 V idle, a LAST snapshot) in
-// the three themes and checks the contrast of what the trend is made of (WCAG 2.x relative luminance):
-//  - the trend's line against the block it is drawn on and against the area under it: at least 3:1;
-//  - the numerals against the block, the area and the line they sit over: at least 4.5:1.
-// K2_DUMP=dir also writes every render as k2_flow_<theme>_<scenario>.panel (tools/panel2png.py).
+// The Flow face (Home) draws a patient-monitor trend behind the digits of every quantity field. The user took the pre-Fieldbook
+// look back (2026-11-13: "older graphs looked better"): a black field, the quantity's own colour for its digits, a dark tint
+// column under a brighter 1 px level line (kVoltT/kVoltL, kAmpT/kAmpL, kWattT/kWattL), and for a stale (LAST) field a grey
+// tint with a faint line. This test renders the face with realistic live data (a 20 V 3 A charge with ripple, a 5 V to 20 V
+// ramp, a 5 V idle, a LAST snapshot) and pins that look on the panel:
+//  - the line and tint colours of all three quantities are drawn on a black ground, and none of them when idle;
+//  - the LAST field draws neither a live line nor a live tint;
+//  - the digits stay readable over the tint (WCAG 2.x relative luminance, at least 4.5:1).
+// K2_DUMP=dir also writes every render as k2_flow_<scenario>.panel (tools/panel2png.py).
 #include "test_util.h"
 #include "fake_lcd.h"
 #include "ui_stubs.h"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_style.hpp"
-#include "k2/ui/theme.hpp"
 #include "k2/pd/pd_source.hpp"
 #include <cmath>
 #include <cstdint>
@@ -111,11 +113,11 @@ static void feed(Scene s, int f) {
     }
 }
 
-static void dump(const char *theme_name, const char *scene) {
+static void dump(const char *scene) {
     const char *dir = std::getenv("K2_DUMP");
     if (!dir) return;
     char p[256];
-    std::snprintf(p, sizeof p, "%s/k2_flow_%s_%s.panel", dir, theme_name, scene);
+    std::snprintf(p, sizeof p, "%s/k2_flow_%s.panel", dir, scene);
     if (FILE *f = std::fopen(p, "wb")) {
         std::fwrite(g_panel, 2, 240 * 240, f);
         std::fclose(f);
@@ -144,64 +146,47 @@ static int count_px(uint16_t colour) {
     return n;
 }
 
-// What the trend of one field is made of, in one theme: the block it sits on, the digit ink, the line and the area.
-struct TraceCase { const char *name; uint16_t fill, ink, line, area; bool stale; };
-
-static void check_theme(theme::Id id) {
-    const theme::Palette &p = theme::table(id);
-    const char *tn = theme::name(id).data();
-    const TraceCase cases[] = {
-        {"V", p.volt, p.spot_ink, p.trace_volt, p.area_volt, false},
-        {"A", p.amp, p.spot_ink, p.trace_amp, p.area_amp, false},
-        {"W", p.watt, p.watt_ink, p.trace_watt, p.area_watt, false},
-        {"LAST", p.stale, p.stale_ink, p.trace_stale, p.area_stale, true},
-    };
-    for (const TraceCase &t : cases) {
-        const double lf = ratio(t.line, t.fill), la = ratio(t.line, t.area), af = ratio(t.area, t.fill);
-        const double df = ratio(t.ink, t.fill), da = ratio(t.ink, t.area), dl = ratio(t.ink, t.line);
-        std::printf("[contrast] %-7s %-4s line/block %.2f line/area %.2f area/block %.2f | digits/block %.2f digits/area %.2f digits/line %.2f\n",
-                    tn, t.name, lf, la, af, df, da, dl);
-        CHECK_TRUE(lf >= 3.0);                  // the line against the block above it
-        CHECK_TRUE(la >= 3.0);                  // and against the area below it
-        if (!t.stale) {
-            CHECK_TRUE(af >= 1.1);              // the area is a visible fill, not the block again
-            CHECK_TRUE(da >= 4.5);              // digits over a live area
-        } else {
-            CHECK_TRUE(da >= 4.0);              // a stale grey is almost a line-only trace: its block alone gives Paper's digits 4.17
-        }
-        CHECK_TRUE(dl >= (t.stale ? 1.2 : 2.0));// a 1 px line crossing a digit: bounded by digits/block = digits/line * line/block
+// The palette's own pairs: the digits of a quantity over its tint column.
+static void check_palette() {
+    struct Pair { const char *name; uint16_t digits, tint, line; };
+    const Pair pairs[] = {{"V", kVolt, kVoltT, kVoltL}, {"A", kAmp, kAmpT, kAmpL}, {"W", kWatt, kWattT, kWattL}};
+    for (const Pair &p : pairs) {
+        const double dt = ratio(p.digits, p.tint), dg = ratio(p.digits, kBg), lg = ratio(p.line, kBg);
+        std::printf("[trend] %s digits/tint %.2f digits/ground %.2f line/ground %.2f\n", p.name, dt, dg, lg);
+        CHECK_TRUE(dt >= 4.5);   // the numerals stay readable over their own tint
+        CHECK_TRUE(dg >= 4.5);
+        CHECK_TRUE(lg > 1.5);    // the line is a visible step above the ground (the old look: a dim shade, not a second colour)
     }
-    // The over-contract field is not a trend (no sweep): it stays white on red in every theme, untouched by this test's palette.
-    CHECK_EQ(theme::kAlarmInk, 0xFFFF);
-    std::printf("[contrast] %-7s OVER white/err %.2f (unchanged)\n", tn, ratio(theme::kAlarmInk, p.err));
-}
-
-static void render_scenes(theme::Id id) {
-    theme::apply(id);
-    const char *n = theme::name(id).data();
-    char lower[16];
-    int k = 0;
-    for (const char *c = n; *c && k < 15; c++) lower[k++] = static_cast<char>(*c | 0x20);
-    lower[k] = 0;
-    check_theme(id);
-    {
-        Ui &ui = fresh_ui();
-        run(ui, Scene::Charge, 150);
-        dump(lower, "charge");
-        // the trends are on the panel in the new shades: lines and areas of all three quantities
-        const theme::Palette &p = theme::table(id);
-        for (uint16_t c : {p.trace_volt, p.trace_amp, p.trace_watt}) CHECK_TRUE(count_px(c) > 40);
-        for (uint16_t c : {p.area_volt, p.area_amp, p.area_watt}) CHECK_TRUE(count_px(c) > 400);
-        unplug();
-        g_stub.pm.vbus_mv = 0;
-        for (int i = 0; i < 20; i++) { g_t += 100; ui.tick(g_t); }
-        dump(lower, "last");
-    }
-    { Ui &ui = fresh_ui(); run(ui, Scene::Ramp, 150); dump(lower, "ramp"); }
-    { Ui &ui = fresh_ui(); run(ui, Scene::Idle5, 150); dump(lower, "idle5"); }
+    CHECK_EQ(kBg, 0x0000);       // black ground
 }
 
 int main() {
-    for (theme::Id id : {theme::Id::Night, theme::Id::Paper, theme::Id::Classic}) render_scenes(id);
-    return test_report("test_ui_flow_contrast");
+    check_palette();
+    {
+        Ui &ui = fresh_ui();
+        run(ui, Scene::Charge, 150);
+        dump("charge");
+        // the three trends are on the panel: the line of each quantity and its tint column under it
+        for (uint16_t c : {kVoltL, kAmpL, kWattL}) CHECK_TRUE(count_px(c) > 40);
+        for (uint16_t c : {kVoltT, kAmpT, kWattT}) CHECK_TRUE(count_px(c) > 400);
+        unplug();
+        g_stub.pm.vbus_mv = 0;
+        for (int i = 0; i < 20; i++) { g_t += 100; ui.tick(g_t); }
+        dump("last");
+        // LAST: the trend keeps its shape in grey, never in the quantities' colours
+        for (uint16_t c : {kVoltL, kAmpL, kWattL}) CHECK_EQ(count_px(c), 0);
+        for (uint16_t c : {kVoltT, kAmpT, kWattT}) CHECK_EQ(count_px(c), 0);
+        CHECK_TRUE(count_px(kPanelBg) > 400);   // the stale tint
+    }
+    { Ui &ui = fresh_ui(); run(ui, Scene::Ramp, 150); dump("ramp"); for (uint16_t c : {kVoltL, kAmpL, kWattL}) CHECK_TRUE(count_px(c) > 40); }
+    { Ui &ui = fresh_ui(); run(ui, Scene::Idle5, 150); dump("idle5"); for (uint16_t c : {kVoltL, kAmpL, kWattL}) CHECK_TRUE(count_px(c) > 40); }
+    {   // no source: no trend, nothing drawn in the live shades
+        Ui &ui = fresh_ui();
+        unplug();
+        g_stub.pm.vbus_mv = 0;
+        for (int i = 0; i < 40; i++) { g_t += 100; ui.tick(g_t); }
+        dump("idle");
+        for (uint16_t c : {kVoltL, kAmpL, kWattL, kVoltT, kAmpT, kWattT}) CHECK_EQ(count_px(c), 0);
+    }
+    return test_report("test_ui_flow_trend");
 }

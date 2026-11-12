@@ -122,14 +122,14 @@ static int count_ink(const PRect &r) { return count_not(r, kBg); }
 // The frame (2c): the 2 px rules under the hero and over the info block, the ledger / card divider and the 1 px rule
 // between the rows. Every pixel of each mapped rect must be kRule, and
 // each must keep at least one physical row / column (a 1 px line must not be squeezed away by the mapping).
-// Fieldbook: the gaps between the fields are white space (the ground) and the rule over the session block is the accent.
+// Classic: the rules are kRule; the rule over the session block is the accent (cyan).
 static int frame_damage(Ui &ui, const char *what) {
     struct Line { const char *name; int x, y, w, h; uint16_t color; };
     const Line lines[] = {
-        {"rule1", 0, hm::kRule1Y, hm::kW, 2, kBg},
+        {"rule1", 0, hm::kRule1Y, hm::kW, 2, kRule},
         {"rule3", 0, hm::kRule3Y, hm::kW, 2, kAccent},
-        {"vrule", hm::kVRuleX, hm::kRowY0[0], 1, hm::kRowY1[1] - hm::kRowY0[0] + 1, kBg},
-        {"rowrule", 0, hm::kRowRuleY, hm::kW, 1, kBg},
+        {"vrule", hm::kVRuleX, hm::kRowY0[0], 1, hm::kRowY1[1] - hm::kRowY0[0] + 1, kRule},
+        {"rowrule", 0, hm::kRowRuleY, hm::kW, 1, kRule},
     };
     int bad = 0;
     for (const Line &l : lines) {
