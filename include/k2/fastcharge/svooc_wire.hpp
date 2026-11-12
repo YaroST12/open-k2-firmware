@@ -109,6 +109,7 @@ public:
     // log().n are stale; only pair(i) for i < log().n is meaningful.
     void begin(std::uint32_t word) {
         static_cast<WireState&>(*this) = WireState{};
+        resp_.configure(params_);   // the operator's parameters outlive the reset
         have_ = true;
         st_ = std::uint8_t(word & 3u);
         t0_ = fall_t_ = last_rise_ = word & ~63u;
@@ -158,6 +159,15 @@ public:
         pend_ = false;
         return driving_ ? release(0) : Action{};
     }
+
+    // The responder's operator parameters (svooc_script.hpp Params), applied at every begin(). Set before the run starts, or
+    // with the ISR masked; they do not survive a reset of the Wire object, only of begin().
+    void set_params(const Params& p) {
+        params_ = p;
+        resp_.configure(params_);
+    }
+    // The latest VBUS reading in mV (0 = unknown) for the closed-loop 0x82 word; a 16-bit store, safe against the ISR.
+    void set_vbus_mv(std::uint16_t mv) { vbus_mv_ = mv; }
 
     bool driving() const { return driving_; }
     bool stopped() const { return stopped_; }
@@ -223,7 +233,7 @@ private:
         open(Role::Slot, t);
         log_.last_cmd = pend_cmd_;
         if (stopped_) { record(pend_cmd_, kNoWord); return a; }
-        const Answer ans = resp_.on_command(pend_cmd_);
+        const Answer ans = resp_.on_command(pend_cmd_, (pend_t_ - t0_) / (kCyclesPerUs * 1000u), vbus_mv_);
         if (resp_.abort()) {   // the third off-script command in a row: no answer, the trigger stops
             stopped_ = true;
             record(pend_cmd_, kNoWord);
@@ -248,6 +258,8 @@ private:
     }
 
     std::array<LogPair, kLogPairs> pairs_{};
+    Params params_{};
+    std::uint16_t vbus_mv_ = 0;   // written by the main loop, read by the ISR: one aligned 16-bit word, each call reads it afresh
 };
 
 }  // namespace k2::svooc

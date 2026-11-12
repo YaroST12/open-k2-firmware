@@ -155,10 +155,10 @@ void release() {
     dpdm::idle();          // both lines to the passive idle
     const svooc::Report& r = g_run.report();
     const svooc::Log& lg = g_wire.log();
-    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s\n",
+    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
           svooc::name(r.abort), unsigned(r.elapsed_ms), unsigned(lg.commands), unsigned(lg.replies), unsigned(lg.missed),
           unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma), svooc::name(r.contract_start),
-          svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause));
+          svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause), svooc::name(g_wire.responder().escape()));
 }
 
 void act(Next s) {
@@ -172,7 +172,7 @@ void act(Next s) {
 
 }  // namespace
 
-svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool usb_a) {
+svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool usb_a, const svooc::Params& params) {
     if (g_run.running()) return svooc::Refusal::Busy;
     const Live l = live();
     svooc::StartFacts f;
@@ -212,9 +212,16 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     }
     g_exit_logged = false;
     own_vbus(true);
-    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n", unsigned(g_run.report().cap_ms),
-          int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract), pd::inline_cause_name(f.inline_cause),
-          usb_a ? " far-sink / inline check waived (USB-A)" : "");
+    {
+        Critical cs;
+        g_wire.set_params(params);   // the ISR is not listening yet (wake() starts it); begin() keeps them
+        g_wire.set_vbus_mv(0);
+    }
+    const svooc::Params& ep = g_wire.responder().params();
+    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us\n",
+          unsigned(g_run.report().cap_ms), int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract),
+          pd::inline_cause_name(f.inline_cause), usb_a ? " far-sink / inline check waived (USB-A)" : "",
+          unsigned(ep.i86_first), unsigned(ep.i86_esc), unsigned(ep.r82), unsigned(ep.vtarget_mv), unsigned(ep.esc_at_s));
     return r;
 }
 
@@ -235,6 +242,8 @@ void poll() {
     service();
     stamp_pair_vbus();
     const Live l = live();
+    // The closed-loop 0x82 word follows the latest sample: 0 = no reading (the wire then answers the constant word).
+    g_wire.set_vbus_mv(l.vbus_known && l.vbus_mv > 0 ? std::uint16_t(l.vbus_mv > 0xFFFF ? 0xFFFF : l.vbus_mv) : std::uint16_t(0));
     svooc::Sample s;
     s.now_ms = systick::millis();
     s.host_ok = l.host_ok;
@@ -273,6 +282,9 @@ Snapshot snapshot() {
     s.off_run = g_wire.responder().off_run();
     s.driving = g_wire.driving();
     s.log = g_wire.log();
+    s.params = g_wire.responder().params();
+    s.escape = g_wire.responder().escape();
+    s.escape_t_ms = g_wire.responder().escape_t_ms();
     return s;
 }
 

@@ -318,9 +318,61 @@ void test_abort_and_stop() {
     CHECK(g.w.stopped());
 }
 
+// The operator's parameters survive the wire's own reset (the first edge calls begin()), the escape's clock is the wire's
+// ms since it began (the pair stamps), and the VBUS the main loop hands in reaches the closed loop.
+void test_params_vbus_and_escape_clock() {
+    svooc::Params p;
+    p.esc_at_s = 2;
+    p.i86_first = 0x005;
+    p.i86_esc = 0x00F;
+    p.vtarget_mv = 9000;
+    Synth s;
+    s.edge(s.t, true, false);
+    // Pair k starts at 5 + 44 k ms: index 34 is the first ramp 0x82 (1501 ms), 45 the last before 2 s (1985 ms), 46 the
+    // first at or past it (2029 ms).
+    std::vector<std::uint8_t> cmds{svooc::kIdent};
+    for (const auto& st : svooc::kScript) cmds.push_back(st.cmd);
+    cmds.push_back(0x94);
+    for (int i = 0; i < 8; ++i) cmds.push_back(0x84);
+    cmds.push_back(0x86);                                    // index 33
+    for (int i = 0; i < 12; ++i) cmds.push_back(0x82);       // 34..45
+    cmds.push_back(0x82);                                    // 46: the escape
+    cmds.push_back(0x86);                                    // 47: the adapter's answer to it
+    for (int i = 0; i < 3; ++i) cmds.push_back(0x82);
+    Feed f;
+    f.w.set_params(p);
+    f.w.set_vbus_mv(8400);
+    std::uint32_t at = s.t + 5000 * kUs;
+    for (std::uint8_t c : cmds) {
+        s.command(at, c);
+        s.clock(at + 9000 * kUs);
+        at += 44000 * kUs;
+    }
+    f.all(s.words);
+    CHECK(!f.w.stopped());
+    CHECK_EQ(f.w.log().n, cmds.size());
+    CHECK(f.w.responder().accepted());
+    CHECK_EQ(f.w.responder().params().i86_esc, 0x00F);   // set_params before the first edge survived begin()
+    const std::size_t first86 = 1 + svooc::kScript.size() + 1 + 8;
+    CHECK_EQ(f.w.pair(first86).cmd, 0x86);
+    CHECK_EQ(f.w.pair(first86).word, 0x005);
+    CHECK_EQ(f.w.pair(first86 + 1).word, svooc::closed_loop_reply(8400, 9000));
+    CHECK_EQ(first86, 33u);
+    CHECK_EQ(f.w.pair(45).t_ms, 1985u);
+    CHECK_EQ(f.w.pair(45).word, svooc::closed_loop_reply(8400, 9000));
+    CHECK_EQ(f.w.pair(46).t_ms, 2029u);
+    CHECK_EQ(f.w.pair(46).word, svooc::kEscapeWord);
+    CHECK_EQ(f.w.pair(47).cmd, 0x86);
+    CHECK_EQ(f.w.pair(47).word, 0x00F);
+    CHECK(f.w.responder().escape() == svooc::Escape::Got86);
+    CHECK_EQ(f.w.responder().escape_t_ms(), 2029u);
+    CHECK_EQ(f.w.pair(48).word, svooc::closed_loop_reply(8400, 9000));
+}
+
 }  // namespace
 
 int main() {
+    test_params_vbus_and_escape_clock();
     test_captures();
     test_reply_slot_and_hold();
     test_next_command_releases();

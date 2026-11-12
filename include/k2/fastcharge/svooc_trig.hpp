@@ -17,7 +17,8 @@
 // rise): ~380 us of slack. Command bits are taken from the D- state the previous edge left (svooc_wire.hpp), so a late
 // ISR does not misread them either. No logging in the ISR.
 // Main-loop part: poll() every pass (via fctrig::poll) and service() about every ms (the LCD idle hook, via
-// fctrig::service_ufcs) let go of D- after the last bit's hold and expire slots; poll() also runs the guards.
+// fctrig::service_ufcs) let go of D- after the last bit's hold and expire slots; poll() also runs the guards and hands
+// the latest VBUS sample to the wire for the closed-loop 0x82 word (svooc_script.hpp).
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -34,7 +35,10 @@ namespace k2::svooc_trig {
 // stops it (dpsniff::monitor_yield) and takes the lines; fastcharge::poll() keeps it from re-arming while running() and
 // lets it resume after the run. cap_s: 0 = the full kCapMs, else 1..20 s.
 // usb_a: the operator's waiver of the far-sink refusal for a legacy A port (svooc_run.hpp; refused when PD is active).
-svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool usb_a = false);
+// params: the responder's operator knobs (svooc_script.hpp Params: the 0x86 current target, the constant or closed-loop
+// 0x82 word, the escape); clamped there, the effective values are in Snapshot::params. No guard depends on them.
+svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool usb_a = false,
+                     const svooc::Params& params = {});
 void stop();         // stop answering, lines to passive idle (reason Stopped); nothing while not running
 void poll();         // main loop
 void service();      // ~1 ms: the wire's tick only
@@ -48,6 +52,9 @@ struct Snapshot {
     std::uint8_t off_run = 0;
     bool driving = false;
     svooc::Log log{};
+    svooc::Params params{};                          // the effective (clamped) responder parameters
+    svooc::Escape escape = svooc::Escape::Off;       // what came of the escape (Params::esc_at_s)
+    std::uint32_t escape_t_ms = 0;                   // when its 0x07F was sent, ms since the wake
 };
 Snapshot snapshot();   // a copy, interrupts masked for the wire's part
 

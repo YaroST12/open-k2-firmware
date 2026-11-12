@@ -79,8 +79,9 @@ void test_handshake_matches_every_capture() {
 }
 
 // After 88 > 04D. The ramp words follow the captures: 94 silent (all four accepted sessions), 0x84 answered 0x010 for
-// the fewest steps any session took (7) and then the 0x030 every session ended the ramp with, 0x86 alternating 0x023 /
-// 0x00F as in cap1, and every 0x82 poll the one fixed word kSteadyWord.
+// the fewest steps any session took (7) and then the 0x030 every session ended the ramp with, 0x86 answered the session
+// current target (default kI86Default, about 0.5 A; the captures had 0x023 and 0x02D), and every 0x82 poll the one fixed
+// word kSteadyWord.
 void test_ramp_and_steady_words() {
     svooc::Responder r;
     for (const Pair& p : kUsbc) {
@@ -89,7 +90,7 @@ void test_ramp_and_steady_words() {
     }
     const struct { std::uint8_t cmd; std::uint16_t want; } after[] = {
         {0x94, 0x000}, {0x84, 0x010}, {0x84, 0x010}, {0x84, 0x010}, {0x84, 0x010}, {0x84, 0x010}, {0x84, 0x010},
-        {0x84, 0x010}, {0x84, 0x030}, {0x86, 0x023}, {0x82, 0x051}, {0x86, 0x00F}, {0x82, 0x051}, {0x86, 0x023},
+        {0x84, 0x010}, {0x84, 0x030}, {0x86, 0x005}, {0x82, 0x051}, {0x86, 0x005}, {0x82, 0x051}, {0x86, 0x005},
         {0x82, 0x051}, {0x82, 0x051},
     };
     for (const auto& x : after) {
@@ -160,9 +161,178 @@ void test_counts_are_part_of_the_key() {
     CHECK(!t.on_command(0xA8).on_script);
 }
 
+// A responder past the handshake and the ramp (94, eight 84 polls), with the given parameters.
+svooc::Responder ramped(const svooc::Params& p = {}) {
+    svooc::Responder r;
+    r.configure(p);
+    for (const Pair& q : kUsbc) { r.on_command(q.cmd); if (r.accepted()) break; }
+    r.on_command(0x94);
+    for (int i = 0; i < 8; ++i) r.on_command(0x84);
+    return r;
+}
+
+// The post-accept 0x86 word is a parameter: default 0x005, clamped to 0x001..0x023. Every 0x86 is answered with it.
+void test_i86_parameter_and_clamp() {
+    CHECK_EQ(svooc::kI86Default, 0x005);
+    svooc::Params d;
+    CHECK_EQ(d.i86_first, 0x005);
+    CHECK_EQ(d.r82, svooc::kSteadyWord);
+    CHECK_EQ(d.vtarget_mv, 0);
+    CHECK_EQ(d.esc_at_s, 0);
+    svooc::Responder r = ramped();
+    CHECK_EQ(r.on_command(0x86).word, 0x005);
+    CHECK_EQ(r.on_command(0x86).word, 0x005);
+    const struct { std::uint16_t asked, got; } cases[] = {{0x000, 0x001}, {0x001, 0x001}, {0x00F, 0x00F}, {0x023, 0x023},
+                                                          {0x024, 0x023}, {0x1FF, 0x023}};
+    for (const auto& c : cases) {
+        svooc::Params p;
+        p.i86_first = c.asked;
+        svooc::Responder x = ramped(p);
+        CHECK_EQ(x.on_command(0x86).word, c.got);
+        CHECK_EQ(x.params().i86_first, c.got);   // the effective value is what params() reports
+    }
+}
+
+// --r82: the constant 0x82 word, clamped to 0x000..0x07E (0x07F is the escape, reserved).
+void test_r82_parameter_and_clamp() {
+    const struct { std::uint16_t asked, got; } cases[] = {{0x000, 0x000}, {0x051, 0x051}, {0x07E, 0x07E}, {0x07F, 0x07E},
+                                                          {0x1FF, 0x07E}};
+    for (const auto& c : cases) {
+        svooc::Params p;
+        p.r82 = c.asked;
+        svooc::Responder x = ramped(p);
+        for (int i = 0; i < 3; ++i) CHECK_EQ(x.on_command(0x82).word, c.got);
+    }
+}
+
+// The closed-loop rule (svooc_script.hpp): count(v) = round((v - 6918) / 20.35), the real phone's 0x82 word at 3.6 A;
+// reply = clamp(count(v) + k, 0, 0x7E) with k = max(0, 0x7E - count(vtarget)): never below the phone's word, and the top
+// of the scale (0x7E, "battery high") exactly when VBUS reaches the target.
+void test_closed_loop_rule() {
+    using svooc::vbus_count;
+    CHECK_EQ(vbus_count(6918), 0);
+    CHECK_EQ(vbus_count(8570), 81);      // 0x051 is 8567 mV on the fit
+    CHECK_EQ(vbus_count(9087), 107);     // the capture's 0x06B at 9087 mV
+    CHECK_EQ(vbus_count(5270), -81);     // below the fit's zero: negative, the caller clamps
+    CHECK_EQ(svooc::closed_loop_reply(9000, 9000), 0x07E);
+    CHECK_EQ(svooc::closed_loop_reply(9500, 9000), 0x07E);   // above the target stays at the top
+    CHECK(svooc::closed_loop_reply(8500, 9000) < 0x07E);
+    CHECK(svooc::closed_loop_reply(8500, 9000) > svooc::closed_loop_reply(8000, 9000));
+    CHECK_EQ(svooc::closed_loop_reply(5270, 9000), 0);       // far below: clamps at 0
+    // The word moves 1 per 20.35 mV: 20 steps of 20 mV are about 20 counts apart.
+    const int span = svooc::closed_loop_reply(8800, 9000) - svooc::closed_loop_reply(8400, 9000);
+    CHECK(span >= 19 && span <= 21);
+    // A target above what the 7-bit word can say (count 0x7E = 9482 mV): k = 0, the phone's own word, saturating.
+    CHECK_EQ(svooc::closed_loop_reply(9087, 11000), 107);
+    CHECK_EQ(svooc::closed_loop_reply(11000, 11000), 0x07E);
+    // The responder uses the measured VBUS of each poll; without a reading (0) it falls back to r82.
+    svooc::Params p;
+    p.vtarget_mv = 9000;
+    svooc::Responder r = ramped(p);
+    CHECK_EQ(r.on_command(0x82, 0, 0).word, svooc::kSteadyWord);
+    const std::uint16_t a = r.on_command(0x82, 0, 8000).word;
+    const std::uint16_t b = r.on_command(0x82, 0, 8400).word;
+    const std::uint16_t c = r.on_command(0x82, 0, 9000).word;
+    CHECK(a < b);
+    CHECK(b < c);
+    CHECK_EQ(c, 0x07E);
+    CHECK_EQ(a, svooc::closed_loop_reply(8000, 9000));
+}
+
+// The vtarget clamp: nonzero targets are held to 11000 mV at most (below the 12 V guard); 0 = closed loop off.
+void test_vtarget_clamp() {
+    svooc::Params p;
+    p.vtarget_mv = 15000;
+    CHECK_EQ(p.clamped().vtarget_mv, 11000);
+    p.vtarget_mv = 11000;
+    CHECK_EQ(p.clamped().vtarget_mv, 11000);
+    p.vtarget_mv = 9000;
+    CHECK_EQ(p.clamped().vtarget_mv, 9000);
+    p.vtarget_mv = 0;
+    CHECK_EQ(p.clamped().vtarget_mv, 0);
+    svooc::Params q;
+    q.vtarget_mv = 30000;
+    svooc::Responder r = ramped(q);
+    CHECK_EQ(r.params().vtarget_mv, 11000);
+}
+
+// The escape: after esc_at_s seconds one 0x82 poll is answered 0x07F; the charger then sends 0x86 on its next command
+// and that one is answered i86_esc (clamped like i86_first); the first 0x86 answers stay i86_first before it.
+void test_escape_provokes_a_fresh_0x86() {
+    svooc::Params p;
+    p.esc_at_s = 3;
+    p.i86_first = 0x005;
+    p.i86_esc = 0x00F;
+    svooc::Responder r = ramped(p);
+    CHECK(r.escape() == svooc::Escape::Armed);
+    CHECK_EQ(r.on_command(0x86, 1000).word, 0x005);
+    CHECK_EQ(r.on_command(0x82, 2999).word, svooc::kSteadyWord);   // not yet
+    CHECK(r.escape() == svooc::Escape::Armed);
+    CHECK_EQ(r.on_command(0x82, 3000).word, svooc::kEscapeWord);
+    CHECK(r.escape() == svooc::Escape::Sent);
+    const svooc::Answer a = r.on_command(0x86, 3044);
+    CHECK(a.on_script);
+    CHECK_EQ(a.word, 0x00F);
+    CHECK(r.escape() == svooc::Escape::Got86);
+    CHECK_EQ(r.on_command(0x82, 3088).word, svooc::kSteadyWord);   // once only
+    CHECK_EQ(r.on_command(0x82, 9000).word, svooc::kSteadyWord);
+    CHECK_EQ(r.on_command(0x86, 9044).word, 0x00F);                // the target stays the new one
+    CHECK(r.escape() == svooc::Escape::Got86);
+    CHECK_EQ(r.escape_t_ms(), 3000u);
+}
+
+// No 0x86 after the escape: recorded as such, the next 0x86 (when it comes) still takes the new target; nothing aborts.
+void test_escape_without_0x86() {
+    svooc::Params p;
+    p.esc_at_s = 1;
+    p.i86_esc = 0x040;   // clamped to 0x023
+    svooc::Responder r = ramped(p);
+    CHECK_EQ(r.on_command(0x82, 1000).word, svooc::kEscapeWord);
+    CHECK_EQ(r.on_command(0x82, 1044).word, svooc::kSteadyWord);   // the charger polled 0x82 again: no 0x86
+    CHECK(r.escape() == svooc::Escape::NoGet86);
+    CHECK(!r.abort());
+    CHECK_EQ(r.on_command(0x86, 1100).word, 0x023);
+}
+
+// Off by default and in the handshake: esc_at_s = 0 never escapes; an 0x82 poll of the handshake (answered 074 / 00B) is
+// no escape point even past the time.
+void test_escape_off_and_handshake() {
+    svooc::Responder r = ramped();
+    CHECK(r.escape() == svooc::Escape::Off);
+    CHECK_EQ(r.on_command(0x82, 60000).word, svooc::kSteadyWord);
+    svooc::Params p;
+    p.esc_at_s = 1;
+    svooc::Responder h;
+    h.configure(p);
+    for (const Pair& q : kUsbc) {
+        const svooc::Answer a = h.on_command(q.cmd, 5000);
+        CHECK(a.word != svooc::kEscapeWord);
+        if (h.accepted()) break;
+    }
+}
+
+// The escape word wins over the closed loop for the one poll.
+void test_escape_over_closed_loop() {
+    svooc::Params p;
+    p.esc_at_s = 1;
+    p.vtarget_mv = 9000;
+    svooc::Responder r = ramped(p);
+    CHECK_EQ(r.on_command(0x82, 1500, 8000).word, svooc::kEscapeWord);
+    CHECK_EQ(r.on_command(0x86, 1544, 8100).word, 0x005);
+    CHECK_EQ(r.on_command(0x82, 1588, 8200).word, svooc::closed_loop_reply(8200, 9000));
+}
+
 }  // namespace
 
 int main() {
+    test_i86_parameter_and_clamp();
+    test_r82_parameter_and_clamp();
+    test_closed_loop_rule();
+    test_vtarget_clamp();
+    test_escape_provokes_a_fresh_0x86();
+    test_escape_without_0x86();
+    test_escape_off_and_handshake();
+    test_escape_over_closed_loop();
     test_handshake_matches_every_capture();
     test_ramp_and_steady_words();
     test_ramp_overrun_is_off_script();
