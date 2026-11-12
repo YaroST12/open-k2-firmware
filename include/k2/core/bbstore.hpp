@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Black Box store: compressed PD captures that survive power-off, one record each in the Black Box ring log on raw flash
-// (k2/core/ringlog.hpp, 20 sectors at flash::kBbRingBase), apart from the littlefs volume and from the report cards. Pure
+// (k2/core/ringlog.hpp, 12 sectors at flash::kBbRingBase), apart from the littlefs volume and from the report cards. Pure
 // logic over a ringlog::Ring, host-tested by tests/test_bbstore.cpp on a RAM flash that can lose power at any call.
 //
 // Record (ring type kRecCapture), payload:
@@ -29,7 +29,7 @@
 
 namespace k2::bbstore {
 
-inline constexpr unsigned kMaxEntries = 32;
+inline constexpr unsigned kMaxEntries = 16;   // the 12-sector ring holds about 22 typical captures, 11 at worst
 inline constexpr std::uint8_t kRingKind = 'B';
 inline constexpr std::uint8_t kRecCapture = 1;
 inline constexpr std::uint32_t kHeader = 12;

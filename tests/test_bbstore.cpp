@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Black Box store (k2/core/bbstore.hpp) over its ring log on a RAM flash: append, reboot, the newest 32, a full ring that
+// Black Box store (k2/core/bbstore.hpp) over its ring log on a RAM flash: append, reboot, the newest 16, a full ring that
 // refuses without erasing, maintenance that drops the oldest sector, torn writes, corruption and the idle gate.
 #include <array>
 #include <cstdint>
@@ -80,10 +80,10 @@ unsigned fill(Vol& v, unsigned first) {
 
 int main() {
     {   // layout and policy constants
-        CHECK_EQ(bbstore::kMaxEntries, 32u);
+        CHECK_EQ(bbstore::kMaxEntries, 16u);
         CHECK_EQ(bbstore::kHeader + bbstore::kMaxPacked, ringlog::kMaxPayload);   // one capture at most fills a sector
         CHECK_EQ(bbstore::kRingKind, std::uint8_t('B'));
-        CHECK_EQ(flash::kBbRingSectors, 20u);
+        CHECK_EQ(flash::kBbRingSectors, 12u);
     }
     {   // empty ring
         Vol v;
@@ -141,7 +141,7 @@ int main() {
         // the next capture fits. Seeds stay below 256: sample() repeats with seed mod 256.
         Vol v;
         const unsigned n = fill(v, 0);
-        CHECK_EQ(n > bbstore::kMaxEntries, 1);       // the ring holds more than the newest 32 a boot lists
+        CHECK_EQ(n > bbstore::kMaxEntries, 1);       // the ring holds more than the newest 16 a boot lists
         CHECK_EQ(v.ring->blank(), 0u);
         CHECK_EQ(v.disk.erases, 0u);
         CHECK_EQ(v.r->needs_maintenance(), 1);
@@ -249,7 +249,7 @@ int main() {
             v.disk.revive();
             v.reboot();
             const auto after = order(*v.r);
-            CHECK_EQ(after.size(), before.size());     // the newest 32 sit far from the oldest sector
+            CHECK_EQ(after.size(), before.size());     // the newest 16 sit far from the oldest sector
             CHECK_EQ(after.back(), before.back());
             v.idle();
             CHECK_EQ(v.ring->dirty(), 0u);

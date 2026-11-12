@@ -207,7 +207,7 @@ rc::Card card(std::uint32_t fp, unsigned variant) {
 }
 
 // The card ring: kMaxCards cards, then 400 re-tests of random cards with new results and idle maintenance between them (the
-// steady state of a used device). Every card stays listed, and the live cards take 10 of the 14 sectors at most when
+// steady state of a used device). Every card stays listed, and the live cards take 10 of the 22 sectors at most when
 // compact (7 to a sector).
 void test_card_ring_budget() {
     k2test::RamFlash disk;

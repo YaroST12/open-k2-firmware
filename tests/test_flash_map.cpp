@@ -78,9 +78,9 @@ void test_ring_layout() {
     CHECK_EQ(flash::kFsVolumeBlocks, 111u);
     CHECK_EQ(flash::kCardRingBase, 0x080EE800u);
     CHECK_EQ(flash::kCardRingBase, flash::fs_block_addr(flash::kFsVolumeBlocks));
-    CHECK_EQ(flash::kCardRingSectors, 14u);
-    CHECK_EQ(flash::kBbRingBase, 0x080F5800u);
-    CHECK_EQ(flash::kBbRingSectors, 20u);
+    CHECK_EQ(flash::kCardRingSectors, 22u);
+    CHECK_EQ(flash::kBbRingBase, 0x080F9800u);
+    CHECK_EQ(flash::kBbRingSectors, 12u);
     CHECK_EQ(flash::kBbRingBase + flash::kBbRingSectors * flash::kSectorSize, 0x080FF800u);   // up to the kept top page
     CHECK_EQ(flash::kFsVolumeBlocks + flash::kCardRingSectors + flash::kBbRingSectors, flash::kFsGrownBlocks);
     for (std::uint32_t a = flash::kCardRingBase; a < flash::kFsRunEnd; a += flash::kSectorSize) {

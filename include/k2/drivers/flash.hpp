@@ -159,15 +159,16 @@ static_assert(fs_block_map_ok(), "every block is a sector of its own, outside th
 //
 // littlefs keeps blocks 0..kFsVolumeBlocks-1 (the base range and the first 21 run sectors). The rest of the run holds two
 // append-only ring logs on raw sectors (k2/core/ringlog.hpp), so neither store can take the other's room or the volume's:
-//   report cards  kCardRingBase  14 sectors (28 KB)   64 live cards are 10 sectors, the rest is room to carry them forward
-//   Black Box     kBbRingBase    20 sectors (40 KB)   about 2 captures a sector, 32 kept
+//   report cards  kCardRingBase  22 sectors (44 KB)   64 live cards are 10 sectors, the rest is room to carry them forward
+//                                                     and a 4-sector reserve against power cuts during a carry
+//   Black Box     kBbRingBase    12 sectors (24 KB)   about 2 captures a sector (user, 2026-11-12: least important store)
 // The ring sectors are run sectors: the run's guard covers them (open on proof, never the kept pages). An older unit
 // whose volume grew to all 145 blocks migrates into this layout at boot (k2/core/fs_migrate.hpp).
 inline constexpr std::uint32_t kFsVolumeBlocks = 111;
-inline constexpr unsigned kCardRingSectors = 14;
-inline constexpr unsigned kBbRingSectors = 20;
+inline constexpr unsigned kCardRingSectors = 22;
+inline constexpr unsigned kBbRingSectors = 12;
 inline constexpr std::uint32_t kCardRingBase = fs_block_addr(kFsVolumeBlocks);                    // 0x080EE800
-inline constexpr std::uint32_t kBbRingBase = kCardRingBase + kCardRingSectors * kSectorSize;      // 0x080F5800
+inline constexpr std::uint32_t kBbRingBase = kCardRingBase + kCardRingSectors * kSectorSize;      // 0x080F9800
 inline constexpr std::uint32_t kRingBase = kCardRingBase;
 inline constexpr unsigned kRingSectors = kCardRingSectors + kBbRingSectors;                       // 34
 static_assert(kFsVolumeBlocks > kFsBlocks && kFsVolumeBlocks + kRingSectors == kFsGrownBlocks, "the rings take the rest of the run");

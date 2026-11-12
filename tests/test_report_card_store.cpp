@@ -21,10 +21,11 @@ struct Vol {
     k2test::RamFlash disk;
     std::unique_ptr<ringlog::Ring> ring;
     std::unique_ptr<rc::Store> s;
-    Vol() { reboot(); }
+    unsigned reserve = rc::kRingReserve, sectors = flash::kCardRingSectors;
+    explicit Vol(unsigned r = rc::kRingReserve, unsigned n = flash::kCardRingSectors) : reserve(r), sectors(n) { reboot(); }
     void reboot() {
         s.reset();
-        ring = std::make_unique<ringlog::Ring>(disk, flash::kCardRingBase, flash::kCardRingSectors, rc::kRingKind, rc::kRingReserve);
+        ring = std::make_unique<ringlog::Ring>(disk, flash::kCardRingBase, sectors, rc::kRingKind, reserve);
         ring->scan();
         s = std::make_unique<rc::Store>(*ring);
     }
@@ -720,7 +721,10 @@ static void test_random_ops_match_a_model() {
 static void test_tombstone_carried_out_of_a_middle_sector() {
     int middle = 0;
     for (int cut = 0;; ++cut) {
-        Vol v;                                       // no maintenance until the ring is full: put() straight to the store
+        // The geometry this case was built on (14 sectors, a reserve of 2): one cut then uses up the slack and reaches the
+        // middle-sector path of victim(). The shipped ring (22 sectors, reserve 4) needs three such cuts in a row; the
+        // path is the same code either way.
+        Vol v(2, 14);                                   // no maintenance until the ring is full: put() straight to the store
         for (unsigned i = 0; i < 7; ++i) { rc::Card c = card(0x6000 + i); v.s->put(c); }       // sector 0: A..G
         rc::Card h = card(0x6007);
         v.s->put(h);                                                                           // sector 1: H
@@ -735,7 +739,7 @@ static void test_tombstone_carried_out_of_a_middle_sector() {
             rc::Card c = card(0x6108 + (k * 7 + k / 8) % 56, 1 + int(k % 6), 1);
             if (v.s->put(c) != rc::Err::Ok) break;
         }
-        CHECK_EQ(v.ring->blank(), rc::kRingReserve);
+        CHECK_EQ(v.ring->blank(), v.reserve);
         const std::uint32_t tail = v.ring->tail();
         v.disk.cut_after(cut);
         v.idle();

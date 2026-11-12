@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Report card store: the newest card per charger, as records of the report-card ring log on raw flash
-// (k2/core/ringlog.hpp, 14 sectors at flash::kCardRingBase). Pure logic over a ringlog::Ring, host-tested by
+// (k2/core/ringlog.hpp, 22 sectors at flash::kCardRingBase). Pure logic over a ringlog::Ring, host-tested by
 // tests/test_report_card_store.cpp on a RAM flash that can lose power at any program or erase.
 //
 // Records (ring type byte):
@@ -46,9 +46,11 @@ inline constexpr unsigned kMaxCards = 64;
 inline constexpr std::uint8_t kRingKind = 'C';                             // the ring's sector kind byte
 inline constexpr std::uint8_t kRecCard = 1, kRecGone = 2;
 inline constexpr std::size_t kRecBytes = 4 + kMaxRecord;                   // stamp + framed card: 260
-// Blank sectors only maintain() writes: one to carry cards forward into, one it never fills, because a power cut that
-// tears a record header closes the sector being written (see ringlog.hpp) and the next pass needs somewhere to go.
-inline constexpr unsigned kRingReserve = 2;
+// Blank sectors only maintain() writes: one to carry cards forward into, the rest it never fills, because a power cut that
+// tears a record header closes the sector being written (see ringlog.hpp) and the next pass needs somewhere to go. Four, so
+// three cuts in a row inside carries of a full ring still leave room (two cuts could exhaust a reserve of 2; user,
+// 2026-11-12: bigger reserve).
+inline constexpr unsigned kRingReserve = 4;
 inline constexpr unsigned kSpare = kRingReserve + 1;                        // blank sectors maintain() keeps when it may
 static_assert(kRecBytes <= ringlog::kMaxPayload);
 static_assert(ringlog::per_sector(kRecBytes) == 7, "seven cards to a sector");
