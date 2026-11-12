@@ -175,6 +175,9 @@ struct Report {
     // The link's inline cause when the start was refused as Inline, or the run ended as Abort::Sink on an inline link
     // (None otherwise: a far sink without inline mode, or no refusal).
     pd::InlineCause inline_cause = pd::InlineCause::None;
+    // The longest time between two polls while the run held D+/D- (start to release). The ISR answers the adapter, but
+    // only the main loop's tick lets D- go after a reply's hold, so a stalled main loop (a flash write) shows here.
+    std::uint32_t poll_gap_max_ms = 0;
 };
 
 // Log and report names (tools/k2_remote.py keeps the same lists, in the same order).
@@ -270,7 +273,7 @@ public:
         report_.ibus_max_ma = magnitude(f.ibus_ma);
         report_.contract_start = report_.contract_end = start_contract_ = f.contract;
         report_.usb_a = usb_a_ = f.usb_a;
-        start_t_ = now_ms;
+        start_t_ = last_poll_ms_ = now_ms;
         stage_ = Stage::Wake;
         return Refusal::None;
     }
@@ -283,6 +286,10 @@ public:
         if (stage_ == Stage::Wake) {
             s.off_script = s.accepted = s.storm = false;
             s.commands = 0;
+        }
+        if (lines_held()) {
+            report_.poll_gap_max_ms = std::max(report_.poll_gap_max_ms, s.now_ms - last_poll_ms_);
+            last_poll_ms_ = s.now_ms;
         }
         track(s);
         if (stage_ == Stage::Exit) { watch_exit(s); return Next::None; }
@@ -374,7 +381,7 @@ private:
     Contract start_contract_ = Contract::None;
     bool usb_a_ = false;
     Report report_;
-    std::uint32_t start_t_ = 0, stage_t_ = 0;
+    std::uint32_t start_t_ = 0, stage_t_ = 0, last_poll_ms_ = 0;
     std::int32_t last_vbus_ = 0;
 };
 

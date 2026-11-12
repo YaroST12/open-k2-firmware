@@ -369,7 +369,7 @@
 //                                                            at most 11000, esc_at_s at most 20 (0 = no escape);
 //                                      [5, 2]                stop (reason "stopped"), then the summary;
 //                                      [5, 3, from_lo, from_hi]  the run's command>reply pairs from index `from`.
-//                                      Summary (45 bytes; the first 36 are the original summary): stage refusal abort tries flags(bit0 accepted, bit1 exit
+//                                      Summary (54 bytes; the first 36 are the original summary): stage refusal abort tries flags(bit0 accepted, bit1 exit
 //                                      checked, bit2 exit ok, bit3 D- driven now, bit4 USB-A waiver in use) phase
 //                                      off_run last_cmd (u8 each) commands replies missed cut partials pairs_total
 //                                      (u16 each) pairs_kept(1, saturates at 255: the log reply has the real count)
@@ -380,6 +380,11 @@
 //                                      effective (clamped) responder parameters, then escape(1, svooc::Escape: 0 off,
 //                                      1 armed, 2 sent, 3 adapter sent 0x86 next, 4 it did not) and escape_t_ms(2, when
 //                                      the 0x07F went out, ms since the wake).
+//                                      Appended (45..53), diagnostics: edges(2, the edge words the ISR handed the
+//                                      wire since the wake, saturates) last_edge_ms(2, when the last one came, ms since
+//                                      the wake) poll_gap_max_ms(2, the longest main-loop gap while the lines were held)
+//                                      rec_edges(2) rec_end(1, edges::End: 0 recording, 1 full, 2 idle, 3 detach,
+//                                      4 timeout, 5 cancel, 6 storm), the run's Black Box edge recording.
 //                                      Log reply: kept(2) from(2) n(1) { cmd(1) word(2) t_ms(2) vbus_mv(2) } x n, at
 //                                      most 7 rows per page; kept is the pair count of the latest wake (up to 512);
 //                                      word 0xFFFF = not answered; t_ms = the command's start, ms since that wake;
@@ -584,7 +589,7 @@ constexpr size_t kSvoocRowsPerPage = 7;
 constexpr size_t kSvoocRowBytes = 7;
 constexpr size_t kSvoocLogHeader = 5;
 constexpr size_t kSvoocSummaryBase = 36;      // the summary's original part
-constexpr size_t kSvoocSummaryBytes = 45;     // base + the operator parameters and the escape outcome (9 bytes)
+constexpr size_t kSvoocSummaryBytes = 54;     // base + the operator parameters and the escape outcome (9 bytes) + diagnostics (9)
 constexpr size_t kSvoocStartExtBytes = 10;    // the extended start request, op 5 / 1 with the responder parameters
 static_assert(kSvoocSummaryBytes <= kMaxRspPayload && kSvoocLogHeader + kSvoocRowBytes * kSvoocRowsPerPage <= kMaxRspPayload);
 static_assert(svooc::kLogPairs <= 0xFFFF);
@@ -598,6 +603,8 @@ struct SvoocSnapshot {
     svooc::Params params{};                         // the effective (clamped) responder parameters
     svooc::Escape escape = svooc::Escape::Off;
     uint32_t escape_t_ms = 0;
+    uint16_t rec_edges = 0;                         // the run's Black Box edge recording: edges kept (dpsniff::Status)
+    uint8_t rec_end = 0;                            // and how it ended (edges::End; 0 = still recording)
 };
 // --- end svooc-trigger ---
 

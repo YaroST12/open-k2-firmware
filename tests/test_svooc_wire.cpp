@@ -393,6 +393,70 @@ void test_begin_after_stop_is_a_fresh_wire() {
     CHECK_EQ(f.w.responder().params().i86_first, 0x00A);
 }
 
+// The wire's own count of the edge words the ISR handed it, and when the last one came (ms since begin): the status
+// tells "the adapter went quiet" (the last edge right after the last pair) from "edges kept coming and were not decoded"
+// (hardware 2026-11-12: every run stopped logging after ~72 pairs).
+void test_edge_count_and_last_edge() {
+    Synth s;
+    s.edge(s.t, true, false);   // begins the wire
+    std::uint32_t at = s.t + 5000 * kUs;
+    for (int i = 0; i < 2; ++i) {
+        s.command(at, 0xA8);
+        s.clock(at + 9000 * kUs);
+        at += 44000 * kUs;
+    }
+    const std::size_t framed = s.words.size() - 1;
+    s.edge(s.t + 200000 * kUs, true, true);   // a lone D- move 200 ms after the wire began
+    s.edge(s.t + 250000 * kUs, true, false);
+    Feed f;
+    f.all(s.words);
+    CHECK_EQ(f.w.log().commands, 2u);
+    CHECK_EQ(f.w.log().edges, std::uint32_t(framed + 2));
+    CHECK_EQ(f.w.log().last_edge_ms, 250u);
+    f.w.begin(edges::pack(s.t + 300000 * kUs, false, true));
+    CHECK_EQ(f.w.log().edges, 0u);
+    CHECK_EQ(f.w.log().last_edge_ms, 0u);
+}
+
+// A whole 20 s run as the hardware runs it: ident, handshake, ramp, then 0x82 polls every 44 ms, the main loop ticking
+// every ms. The wire decodes and answers every pair far past the ~72 pairs (~4,096 edges, the Black Box recorder's
+// capacity) where the hardware runs of 2026-11-12 stopped logging: that stop is not in the bit layer.
+void test_long_run_answers_every_pair() {
+    Synth s;
+    s.edge(s.t, true, false);
+    std::vector<std::uint8_t> cmds{svooc::kIdent};
+    for (const auto& st : svooc::kScript) cmds.push_back(st.cmd);
+    cmds.push_back(0x94);
+    for (int i = 0; i < 8; ++i) cmds.push_back(0x84);
+    cmds.push_back(0x86);
+    while (cmds.size() < 434) cmds.push_back(0x82);   // to ~19 s after the wake
+    std::uint32_t at = s.t + 5000 * kUs;
+    for (const std::uint8_t c : cmds) {
+        s.command(at, c);
+        s.clock(at + 9000 * kUs);
+        at += 44000 * kUs;
+    }
+    Feed f;
+    std::uint32_t tick = s.words.front() & ~63u;
+    for (const std::uint32_t x : s.words) {
+        for (; std::int32_t((x & ~63u) - tick) > 0; tick += 1000 * kUs) f.count(f.w.tick(tick));
+        f.count(f.w.edge(x));
+    }
+    for (int i = 0; i < 5; ++i, tick += 1000 * kUs) f.count(f.w.tick(tick));
+    CHECK(f.w.log().edges > 4096u);
+    CHECK_EQ(f.w.log().commands, cmds.size());
+    CHECK_EQ(f.w.log().replies, cmds.size());
+    CHECK_EQ(f.w.log().missed, 0u);
+    CHECK_EQ(f.w.log().cut, 0u);
+    CHECK_EQ(f.w.log().partials, 0u);
+    CHECK(!f.w.stopped());
+    CHECK_EQ(f.w.log().n, cmds.size());
+    CHECK_EQ(f.w.pair(cmds.size() - 1).cmd, 0x82);
+    CHECK_EQ(f.w.pair(cmds.size() - 1).word, svooc::kSteadyWord);
+    CHECK_EQ(f.takes, int(cmds.size()));
+    CHECK_EQ(f.releases, int(cmds.size()));
+}
+
 }  // namespace
 
 int main() {
@@ -406,5 +470,7 @@ int main() {
     test_ten_pulses_are_no_command();
     test_abort_and_stop();
     test_begin_after_stop_is_a_fresh_wire();
+    test_edge_count_and_last_edge();
+    test_long_run_answers_every_pair();
     return test_report("test_svooc_wire");
 }

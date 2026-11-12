@@ -540,6 +540,45 @@ void test_restart_ignores_the_previous_wire() {
     CHECK_EQ(r.report().abort, Abort::OffScript);
 }
 
+// The longest gap between two polls while the run holds the lines: the ISR answers the adapter, but D- is let go after a
+// reply only by the main loop's tick, so a stalled main loop (a flash write) shows here. The exit watch does not count.
+void test_poll_gap() {
+    svooc::Run r;
+    r.start(ok_start(), 1000);
+    CHECK_EQ(r.report().poll_gap_max_ms, 0u);
+    r.poll(ok_sample(1000));
+    svooc::Sample s = ok_sample(1600);   // 600 ms listening
+    s.commands = 1;
+    r.poll(s);
+    CHECK_EQ(r.report().poll_gap_max_ms, 600u);
+    s.now_ms = 1610;
+    r.poll(s);
+    s.now_ms = 1890;                     // 280 ms with no poll while answering
+    r.poll(s);
+    s.now_ms = 1900;
+    r.poll(s);
+    CHECK_EQ(r.report().poll_gap_max_ms, 600u);
+    CHECK_EQ(r.stop(Abort::Stopped, 1905), Next::Release);
+    s.now_ms = 3000;                     // the exit watch
+    s.vbus_mv = 9000;
+    r.poll(s);
+    CHECK_EQ(r.report().poll_gap_max_ms, 600u);
+    s.now_ms = 3100;
+    s.vbus_mv = 5100;
+    r.poll(s);
+    CHECK_EQ(r.stage(), Stage::Done);
+    // a fresh start forgets it; a gap while answering counts
+    CHECK_EQ(r.start(ok_start(), 9000), Refusal::None);
+    CHECK_EQ(r.report().poll_gap_max_ms, 0u);
+    r.poll(ok_sample(9000));
+    s = ok_sample(9010);
+    s.commands = 1;
+    r.poll(s);
+    s.now_ms = 9300;
+    r.poll(s);
+    CHECK_EQ(r.report().poll_gap_max_ms, 290u);
+}
+
 }  // namespace
 
 int main() {
@@ -557,5 +596,6 @@ int main() {
     test_lines_off_idle();
     test_names();
     test_restart_ignores_the_previous_wire();
+    test_poll_gap();
     return test_report("test_svooc_run");
 }

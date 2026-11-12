@@ -159,6 +159,9 @@ void release() {
           svooc::name(r.abort), unsigned(r.elapsed_ms), unsigned(lg.commands), unsigned(lg.replies), unsigned(lg.missed),
           unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma), svooc::name(r.contract_start),
           svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause), svooc::name(g_wire.responder().escape()));
+    const dpsniff::Status rec = dpsniff::status();
+    K2LOG("[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n", unsigned(lg.edges),
+          unsigned(lg.last_edge_ms), unsigned(r.poll_gap_max_ms), unsigned(rec.edges), unsigned(rec.reason));
 }
 
 void act(Next s) {
@@ -289,6 +292,9 @@ Snapshot snapshot() {
     s.params = g_wire.responder().params();
     s.escape = g_wire.responder().escape();
     s.escape_t_ms = g_wire.responder().escape_t_ms();
+    const dpsniff::Status rec = dpsniff::status();
+    s.rec_edges = rec.edges;
+    s.rec_end = static_cast<std::uint8_t>(rec.reason);
     return s;
 }
 

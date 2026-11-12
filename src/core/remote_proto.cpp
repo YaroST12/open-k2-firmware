@@ -465,6 +465,9 @@ size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v) {
     w.u8(static_cast<uint8_t>(pm.i86_first)); w.u8(static_cast<uint8_t>(pm.i86_esc)); w.u8(static_cast<uint8_t>(pm.r82));
     w.u16(pm.vtarget_mv); w.u8(static_cast<uint8_t>(pm.esc_at_s));
     w.u8(static_cast<uint8_t>(v.escape)); w.u16(u16c(v.escape_t_ms));
+    // 45..53: diagnostics
+    w.u16(u16c(lg.edges)); w.u16(lg.last_edge_ms); w.u16(u16c(r.poll_gap_max_ms));
+    w.u16(v.rec_edges); w.u8(v.rec_end);
     return w.size();
 }
 
