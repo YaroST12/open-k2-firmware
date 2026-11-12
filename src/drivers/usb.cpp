@@ -232,9 +232,10 @@ void take(Early& e) {
     reg::crm().APB2EN |= reg::Crm::APB2EN_GPIOA;
     e.ms = systick::millis();
     e.apb1 = reg::crm().APB1EN;
-    const bool on = e.apb1 & reg::Crm::APB1EN_USB;
-    e.cfg = on ? reg::usb_cfg() : 0xEEEE;
-    e.cntr = on ? *reinterpret_cast<volatile std::uint32_t*>(0x40005C40) : 0xEEEE;
+    reg::crm().APB1EN |= reg::Crm::APB1EN_USB;   // read the core with its clock on, then restore the gate
+    e.cfg = reg::usb_cfg();
+    e.cntr = *reinterpret_cast<volatile std::uint32_t*>(0x40005C40);
+    if (!(e.apb1 & reg::Crm::APB1EN_USB)) reg::crm().APB1EN &= ~reg::Crm::APB1EN_USB;
     e.daddr = reg::gpio(pins::usb_dp.port).ODR;   // ODR (PA12 = bit 12)
     e.crh = reg::gpio(pins::usb_dp.port).CRH;
     e.idr = reg::gpio(pins::usb_dp.port).IDR;
@@ -255,6 +256,11 @@ void dbg_tick() {
 }
 void dbg_boot_mark() {
     dbg::take(dbg::early[0]);
+    // [DEBUG-ue1] experiment: pull-up off + PHY down on whatever the bootloader left, clock gated again.
+    reg::crm().APB1EN |= reg::Crm::APB1EN_USB;
+    reg::usb_cfg() |= reg::kUsbCfgPullupOff;
+    *reinterpret_cast<volatile std::uint32_t*>(0x40005C40) |= 0x3u;   // CNTR FRES | PDWN
+    reg::crm().APB1EN &= ~reg::Crm::APB1EN_USB;
 }
 void dbg_init_mark() {
     dbg::take(dbg::early[1]); dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
