@@ -184,7 +184,9 @@ apart.
 ### Detection by ident, no trigger (k2/vooc-detect, 2026-11-11)
 
 Rule (operator, 2026-11-11): the K2 never answers a VOOC adapter. Any reply can lead a SuperVOOC adapter towards its
-high-current output (11 V at up to 11 A), so the charger test detects and stops.
+high-current output (11 V at up to 11 A), so the charger test detects and stops. This still holds for the charger test,
+the scan, the fast-charge engine and the UI. The one exception (operator, 2026-11-12) is the guarded no-load trigger
+below, reachable from the HID remote only.
 
 - Wake: odd tries play the phone's entry burst (80 steps of 300 us, D+ 3.3 V / 0 V, D- Hi-Z so the closed short carries
   it, ending low; reverse-engineered from the capture above); even tries the older 13-period train. 3 tries, 1.5 s
@@ -247,6 +249,58 @@ proves the decoder header reaches no pin, register or driver.
 - While the monitor owns the lines (Sniff floating inputs), the D+/D- classifier reads `USB DATA` whatever the
   levels (PD still wins), and the window starts fresh when the monitor lets go.
 - The monitor is on by default (a RAM switch, not saved). Not yet run on hardware.
+
+### Guarded SuperVOOC trigger, no load (k2/svooc-trigger, 2026-11-12, NOT run on hardware)
+
+Approved by the operator on 2026-11-12 under the guards below. The K2 stands in for the phone: it wakes the adapter,
+answers each command on D- with the word a OnePlus 15 sent, and lets the adapter raise VBUS while nothing draws
+current. Remote only, no UI entry:
+
+    python3 tools/k2_remote.py fc svooc-trigger --confirm [--cap SECONDS]   # polls until the run ends, Ctrl-C = stop
+    python3 tools/k2_remote.py fc svooc-status                             # the last report and the logged pairs
+    python3 tools/k2_remote.py fc svooc-stop
+
+Three pure parts (host-tested) and one glue file:
+
+- Responder (`include/k2/fastcharge/svooc_script.hpp`). Replies keyed by (command, occurrence), replayed from the
+  captured sessions only (`op15_svooc_entry`, `op15_svooc_replug`, `op15_svooc_usbc_entry`, `oneplus15_svooc_init`
+  fixtures; the init script is identical in all four). Ident 0xA8 > 0x00D (up to 3 times), then
+  98>073 98>023 9E>010 80>010 94>010 98>010 8A>028 98>010 8E>010 9A>030 82>074 82>00B 84>071 84>031 86>06B 86>03A
+  88>05D 88>042 8A>048 8A>052 8C>046 8C>066 88>04D (accepted). After that (inferred from the accepted sessions, meaning
+  unknown): 94 silent, 84 > 010 seven times then 030 once, 86 > 023 / 00F alternately, 82 > 0x051 every poll (one fixed
+  word, the lowest of the USB-C session; the phone's word rose slowly). Anything else is off-script and answered
+  silent; the third off-script command in a row stops the responder. `tests/test_svooc_script.cpp` feeds every
+  capture's commands through it and matches the phone's words.
+- Bit layer (`include/k2/fastcharge/svooc_wire.hpp`). Eats the dpsniff edge words. A command frame is 9 D+ low pulses;
+  bit k is the D- level the edge before pulse k+1's fall left. The reply slot is the next frame within 12 ms of the
+  command; D- is taken high at its first fall and set to bit k 50 us after rise k (the phone's measured delay, 45-66 us),
+  MSB first. After the 9th bit D- stays driven until 2.4 ms after the last rise (the phone held it 2.3-2.6 ms) or the
+  next frame's first edge, then is released (floating, the line idles high). A slot whose clock stops is released 1 ms
+  after its last edge. `tests/test_svooc_wire.cpp` replays the captured edge files through it.
+- Guards and session (`include/k2/fastcharge/svooc_run.hpp`, `tests/test_svooc_run.cpp`). Refuses to start without
+  the confirm flag, while D+/D- are owned (engine, scan, probe, charger test, sniffer, monitor, a line not at idle),
+  without the host link or the power monitor, with a sink on the bottom port (Rd on CC) or inline mode, with a PD
+  contract, with |I| > 50 mA, with VBUS outside 4.5-5.5 V, or when the shared RAM belongs to the USB drive (reported as
+  "no RAM: USB drive enabled", not "busy"). While running, every main-loop pass aborts on: host gone, monitor lost,
+  VBUS > 12.0 V (12.0 V itself runs), |I| > 50 mA, a sink or inline device appearing, a PD contract appearing, an edge
+  storm on D+/D-, the charger off-script for more than 2 frames, the run-time cap (20 s, shorter on request). The
+  lease expiring or the host's `stop` ends it as "stopped". Wake / listen as the detection (burst, 1.5 s listen, 3 s
+  rest, 3 tries), "no adapter answer" after that.
+- Exit, always: stop answering, release D-, both lines to the passive idle; then watch VBUS for 5 s. Back at or under
+  5.5 V is reported as such, still higher as "STILL ABOVE 5.5 V" with the reading. Report: highest VBUS, highest |I|,
+  commands / replies / missed / cut, the first 40 command > reply pairs, the abort or refusal reason. Log lines
+  `[SVOOC] start / wake / release / exit`.
+- Glue (`src/fastcharge/svooc_trig.cpp`). The dpsniff ISR (EXTI7 D+ / EXTI2 D-) calls the wire through a hook; the
+  ISR busy-waits from the edge's own cycle stamp to rise + 50 us (never longer) and sets D- through `dpdm::set_dm`.
+  The ISR latency budget: a bit is in time while it lands before the adapter's latch just before the next fall,
+  0.43-0.51 ms after the rise, so ~380 us of slack for a late interrupt; command bits come from the state the previous
+  edge left, so a late interrupt does not misread them. The session's edges (the adapter's and our own D-) are recorded
+  as a Black Box "D+/D- edges" capture from the first listen on (first 6 s), the hardware proof of the timing.
+- Unproven on hardware: the D- drive timing and level as the adapter sees them (PB1/PB2 push-pull through the switch
+  network), whether the wake burst wakes an adapter with no phone, the ISR latency under USB and LCD traffic, the
+  20 ms guard sampling against a fast VBUS rise, and a flash write stalling the ISR mid-frame. A USB-C SUPERVOOC
+  adapter gives VBUS only to a sink (Rd); in the K2's passive boot it stays at 0 V and the start is refused (VBUS not
+  5 V).
 
 ### Passive classifier rules that guard against a false handshake (2026-11-11, `src/fastcharge/fastcharge_classify.cpp`)
 
