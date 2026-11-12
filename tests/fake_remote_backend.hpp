@@ -52,6 +52,7 @@ struct Fake {
         s.temp_deci_c = -25; s.fc = 6; s.adc_flags = 11; s.mcu_temp_deci_c = 371;
         s.link_flags = kLinkStale | kLinkInline; s.age_s = 83; s.cable_age_s = 0x0102;
         s.reset_flags = (1u << 27) | (1u << 26);
+        s.inline_cause = 5;   // pd::InlineCause::FarRd
         return s;
     }
     SessionInfo sess{};

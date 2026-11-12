@@ -270,6 +270,7 @@ remote::StateInfo Remote::state() {
     s.age_s = link.attached() ? 0 : link.detached_for_s(now);
     s.cable_age_s = link.cable_scanned() ? link.cable_age_s(now) : 0;
     s.reset_flags = sysreset::reset_flags() & 0xFC000000u;   // CTRLSTS reset-cause bits 26..31 only
+    s.inline_cause = static_cast<uint8_t>(link.inline_cause());
     return s;
 }
 

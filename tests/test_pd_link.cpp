@@ -745,6 +745,37 @@ static void test_a_far_rd_with_vbus_up_through_the_cuts_stays_inline() {
     CHECK_EQ(int(l.inline_cause()), int(InlineCause::FarRd));
 }
 
+// The cause of a latch that only the topology explains (a far Rd, a foreign VBUS) is replaced when traffic proves a device
+// (a load, a Request): the SuperVOOC trigger's USB-A waiver reads this and must not stay blind to a device that wakes later.
+// A VBUS rise is not such proof here: the trigger's own ramp raises VBUS and the latch stays what it was.
+static LinkInput far_rd_link(std::uint32_t t, std::int32_t vbus, std::int32_t ma, std::uint32_t req) {
+    LinkInput i = inl(t, vbus, ma, req);
+    i.cc = 2;
+    i.far_sink_cc = true;
+    return i;
+}
+
+static void test_a_topology_cause_gives_way_to_traffic() {
+    for (const int later : {0, 1}) {   // 0: a load shows up, 1: a sink's Request shows up
+        Link l;
+        std::uint32_t t = 0;
+        for (; t < 4000; t += 20) l.update(far_rd_link(t, 5100, 0, 0));
+        CHECK_EQ(l.inline_mode(), 1);
+        CHECK_EQ(int(l.inline_cause()), int(InlineCause::FarRd));
+        l.update(far_rd_link(t, 5100, later == 0 ? 400 : 0, later == 1 ? 1 : 0));
+        CHECK_EQ(int(l.inline_cause()), int(later == 0 ? InlineCause::Load : InlineCause::Request));
+    }
+    Link l;   // a rise (VBUS 5.1 V up to 9 V) leaves the topology cause alone
+    std::uint32_t t = 0;
+    for (; t < 4000; t += 20) l.update(far_rd_link(t, 5100, 0, 0));
+    for (; t < 6000; t += 20) l.update(far_rd_link(t, 9000, 0, 0));
+    CHECK_EQ(int(l.inline_cause()), int(InlineCause::FarRd));
+    Link m;   // a load latch keeps its cause when a Request follows
+    m.update(inl(0, 5100, 400));
+    m.update(inl(20, 5100, 400, 1));
+    CHECK_EQ(int(m.inline_cause()), int(InlineCause::Load));
+}
+
 // The pause keeps the quiet gathered before a cut, but a sink that comes back with VBUS gets kInlineResumeMs to show itself:
 // a latch never clears in the first moments after VBUS returns.
 static void test_after_a_cut_the_sink_gets_time_to_show_itself() {
@@ -812,6 +843,7 @@ int main() {
     test_a_sink_drawing_through_the_cuts_stays_inline();
     test_a_sink_talking_pd_through_the_cuts_stays_inline();
     test_a_far_rd_with_vbus_up_through_the_cuts_stays_inline();
+    test_a_topology_cause_gives_way_to_traffic();
     test_after_a_cut_the_sink_gets_time_to_show_itself();
     return test_report("test_pd_link");
 }

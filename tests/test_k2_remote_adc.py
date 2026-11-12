@@ -58,6 +58,13 @@ class State(unittest.TestCase):
         self.assertEqual(kr.PAGES[:6], ["home", "detail", "chargertest", "lines", "tools", "settings"])
         self.assertEqual(kr.PAGES[6:], ["trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis"])
 
+    def test_inline_cause_is_the_last_byte(self):
+        base = STATE_HEAD + STATE_TAIL + bytes(13)   # + link flags(1) age_s(4) cable_age_s(4) reset_flags(4) = 53 bytes
+        self.assertEqual(len(base), 53)
+        self.assertNotIn("inline_cause", kr.decode_state(base))   # the older 53-byte reply
+        self.assertEqual(kr.decode_state(base + bytes([5]))["inline_cause"], "far rd")
+        self.assertEqual(kr.decode_state(base + bytes([0]))["inline_cause"], "none")
+
     def test_unknown_verdict(self):
         s = kr.decode_state(STATE_HEAD + STATE_TAIL[:-4] + bytes([99, 0, 0, 0]))
         self.assertEqual(s["fc"], "99")

@@ -159,6 +159,11 @@ void Link::update(const LinkInput& in) {
             }
         } else if (loaded || new_request || rise || foreign_now) {
             quiet_since_ = in.now_ms;    // live traffic: keep the guard
+            // A latch that only the topology explained (a far Rd, a foreign VBUS) turns into the traffic cause once a load or
+            // a Request shows a device (the SuperVOOC trigger's USB-A waiver covers the topology causes only). A rise stays
+            // out: a trigger of the K2's own raises VBUS without a contract of ours, and would end its run.
+            if ((cause_ == InlineCause::FarRd || cause_ == InlineCause::Vbus) && (loaded || new_request))
+                cause_ = loaded ? InlineCause::Load : InlineCause::Request;
         } else if (in.now_ms - quiet_since_ > kInlineQuietMs && in.now_ms - paused_at_ >= kInlineResumeMs) {
             inline_ = false;             // the sink left without a CC detach: Auto-CRC comes back
             requests_at_attach_ = in.requests;

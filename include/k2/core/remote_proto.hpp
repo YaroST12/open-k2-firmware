@@ -34,7 +34,8 @@
 //                                    fc = fastcharge::Protocol verdict; flags bit0 ADC reading
 //                                    valid, bit1 board NTC temperature valid, bit2 NTC calibrated,
 //                                    bit3 MCU temperature valid; then mcu_temp_deci_c(i16), then the link
-//                                    block and the reset flags (53 bytes in all, see encode_state)
+//                                    block and the reset flags, then inline_cause(1, pd::InlineCause: what latched
+//                                    the inline state, 0 while not inline) (54 bytes in all, see encode_state)
 //                         req [part(1)] part 0 = the reply above; any other payload: BadLength (more than
 //                                    one byte) or BadArg (unknown part), so a host can tell an old build
 //                                    part 1, 31 bytes: mah(i32) elapsed_s(u32) proto_kind(1) limit_ma(2)
@@ -361,12 +362,13 @@
 //                                                            refusal byte says why); an accepted one arms the lease;
 //                                      [5, 2]                stop (reason "stopped"), then the summary;
 //                                      [5, 3, from_lo, from_hi]  the run's command>reply pairs from index `from`.
-//                                      Summary (35 bytes): stage refusal abort tries flags(bit0 accepted, bit1 exit
+//                                      Summary (36 bytes): stage refusal abort tries flags(bit0 accepted, bit1 exit
 //                                      checked, bit2 exit ok, bit3 D- driven now, bit4 USB-A waiver in use) phase
 //                                      off_run last_cmd (u8 each) commands replies missed cut partials pairs_total
 //                                      (u16 each) pairs_kept(1, saturates at 255: the log reply has the real count)
 //                                      cap_ms elapsed_ms vbus_start_mv vbus_max_mv vbus_exit_mv ibus_max_ma (u16 each),
-//                                      contract_start contract_end (u8 each, svooc::Contract).
+//                                      contract_start contract_end (u8 each, svooc::Contract), inline_cause (u8,
+//                                      pd::InlineCause behind a refusal "inline mode" or an abort "sink appeared").
 //                                      Log reply: kept(2) from(2) n(1) { cmd(1) word(2) t_ms(2) vbus_mv(2) } x n, at
 //                                      most 7 rows per page; kept is the pair count of the latest wake (up to 512);
 //                                      word 0xFFFF = not answered; t_ms = the command's start, ms since that wake;
@@ -570,7 +572,7 @@ constexpr uint8_t kSvoocCapMaxS = svooc::kCapMs / 1000;   // 20
 constexpr size_t kSvoocRowsPerPage = 7;
 constexpr size_t kSvoocRowBytes = 7;
 constexpr size_t kSvoocLogHeader = 5;
-constexpr size_t kSvoocSummaryBytes = 35;
+constexpr size_t kSvoocSummaryBytes = 36;
 static_assert(kSvoocSummaryBytes <= kMaxRspPayload && kSvoocLogHeader + kSvoocRowBytes * kSvoocRowsPerPage <= kMaxRspPayload);
 static_assert(svooc::kLogPairs <= 0xFFFF);
 struct SvoocSnapshot {
@@ -802,6 +804,7 @@ struct StateInfo {
     uint32_t age_s = 0;       // seconds since the charger was unplugged (0 while live)
     uint32_t cable_age_s = 0; // seconds since the e-marker scan
     uint32_t reset_flags = 0; // CRM CTRLSTS reset flags of this boot (bits 26..31: PIN POR SW IWDG WWDG LPWR)
+    uint8_t inline_cause = 0; // pd::InlineCause of the inline latch (0 = none / not inline), appended after reset_flags
 };
 constexpr uint8_t kLinkStale = 1 << 0, kLinkWaiting = 1 << 1, kLinkInline = 1 << 2,
                   kLinkCableStale = 1 << 3, kLinkCableScanned = 1 << 4,

@@ -4,6 +4,7 @@
 // abort while it runs (with the 12.0 V and 50 mA boundaries), the wake / listen / rest steps, the exit check that VBUS
 // came back to 5 V, and the report.
 #include <string_view>
+#include <utility>
 
 #include "k2/fastcharge/svooc_run.hpp"
 #include "test_util.h"
@@ -418,6 +419,82 @@ void test_usb_a_waiver() {
     CHECK_EQ(after([](svooc::Sample& s) { s.host_ok = false; }, true), Abort::HostGone);
 }
 
+// The waiver also covers inline mode, but only when the link latched it for a topology reason: a far Rd or a foreign VBUS
+// is what an A-to-C cable into the bottom port looks like. A load, a sink's Request or a VBUS rise says a device is there.
+void test_usb_a_waiver_inline_cause() {
+    using pd::InlineCause;
+    const InlineCause topology[] = {InlineCause::FarRd, InlineCause::Vbus};
+    const InlineCause device[] = {InlineCause::None, InlineCause::Load, InlineCause::Request, InlineCause::Rise};
+    const auto facts = [](InlineCause c, bool usb_a) {
+        svooc::StartFacts f = ok_start();
+        f.inline_mode = true;
+        f.inline_cause = c;
+        f.usb_a = usb_a;
+        return f;
+    };
+    for (const InlineCause c : topology) {
+        CHECK_EQ(svooc::refusal(facts(c, true)), Refusal::None);      // waived
+        CHECK_EQ(svooc::refusal(facts(c, false)), Refusal::Inline);   // never without the flag
+        svooc::StartFacts f = facts(c, true);
+        f.contract = svooc::Contract::Own5V;                           // PD anywhere still refuses the flag itself
+        CHECK_EQ(svooc::refusal(f), Refusal::UsbAWithPd);
+        f = facts(c, true);
+        f.ibus_ma = 51;                                                // and the 50 mA rule stays
+        CHECK_EQ(svooc::refusal(f), Refusal::Current);
+    }
+    for (const InlineCause c : device) {
+        CHECK_EQ(svooc::refusal(facts(c, true)), Refusal::Inline);    // the flag does not buy these
+        CHECK_EQ(svooc::refusal(facts(c, false)), Refusal::Inline);
+    }
+    // The refusal carries the cause for the log and the remote.
+    svooc::Run refused;
+    CHECK_EQ(refused.start(facts(InlineCause::Load, true), 0), Refusal::Inline);
+    CHECK_EQ(int(refused.report().inline_cause), int(InlineCause::Load));
+    CHECK_EQ(int(svooc::Run{}.report().inline_cause), int(InlineCause::None));
+    // Running with the waiver: a topology cause runs on, a later switch to a device cause aborts, the report says which.
+    const auto abort_on = [&](InlineCause start_cause, InlineCause now_cause, bool usb_a, bool inline_now = true) {
+        svooc::Run run;
+        CHECK_EQ(run.start(facts(start_cause, usb_a), 0), Refusal::None);
+        run.poll(ok_sample(0));
+        svooc::Sample s = ok_sample(10);
+        s.inline_mode = inline_now;
+        s.inline_cause = now_cause;
+        run.poll(s);
+        return std::pair{run.report().abort, run.report().inline_cause};
+    };
+    for (const InlineCause c : topology) {
+        CHECK_EQ(int(abort_on(c, c, true).first), int(Abort::None));
+        CHECK_EQ(int(abort_on(c, InlineCause::Load, true).first), int(Abort::Sink));
+        CHECK_EQ(int(abort_on(c, InlineCause::Request, true).first), int(Abort::Sink));
+        CHECK_EQ(int(abort_on(c, InlineCause::Rise, true).first), int(Abort::Sink));
+        CHECK_EQ(int(abort_on(c, InlineCause::None, true).first), int(Abort::Sink));
+    }
+    CHECK_EQ(int(abort_on(InlineCause::FarRd, InlineCause::Request, true).second), int(InlineCause::Request));
+    CHECK_EQ(int(abort_on(InlineCause::FarRd, InlineCause::FarRd, true, false).first), int(Abort::None));
+    // a plain run (no waiver) from a clear link aborts on any inline cause, topology ones included
+    for (const InlineCause c : topology) {
+        svooc::Run run;
+        CHECK_EQ(run.start(ok_start(), 0), Refusal::None);
+        svooc::Sample s = ok_sample(10);
+        s.inline_mode = true;
+        s.inline_cause = c;
+        run.poll(s);
+        CHECK_EQ(int(run.report().abort), int(Abort::Sink));
+        CHECK_EQ(int(run.report().inline_cause), int(c));
+    }
+}
+
+// D+/D- off the passive idle refuse the start, except the Sniff state the passive monitor itself holds (the takeover
+// stops it afterwards): a mismatch that is only the monitor's is not "busy".
+void test_lines_off_idle() {
+    CHECK(!svooc::lines_off_idle(0, false));
+    CHECK(!svooc::lines_off_idle(0, true));
+    for (const unsigned bits : {1u, 2u, 3u}) {
+        CHECK(svooc::lines_off_idle(bits, false));    // someone else's drive or a Black Box state
+        CHECK(!svooc::lines_off_idle(bits, true));    // the monitor's own floating inputs
+    }
+}
+
 // Every reason has its own name (the log and tools/k2_remote.py print them).
 void test_names() {
     for (int i = 0; i <= int(Refusal::NoRam); ++i) CHECK(svooc::name(Refusal(i))[0] != '?');
@@ -438,6 +515,8 @@ int main() {
     test_own_contract_start();
     test_own_contract_runs_and_aborts();
     test_usb_a_waiver();
+    test_usb_a_waiver_inline_cause();
+    test_lines_off_idle();
     test_names();
     return test_report("test_svooc_run");
 }

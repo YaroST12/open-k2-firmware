@@ -14,8 +14,10 @@ sys.path.insert(0, str(ROOT / "tools"))
 import k2_remote as kr
 
 
-def summary(stage=0, refusal=0, abort=0, accepted=False, exit_ok=False, kept=0, total=0, vmax=5100, vexit=0, usb_a=False):
-    p = bytearray(kr.SVOOC_SUMMARY_BYTES)
+def summary(stage=0, refusal=0, abort=0, accepted=False, exit_ok=False, kept=0, total=0, vmax=5100, vexit=0, usb_a=False, cause=None):
+    p = bytearray(kr.SVOOC_SUMMARY_BYTES + (0 if cause is None else 1))   # cause None = the older 35-byte layout
+    if cause is not None:
+        p[kr.SVOOC_SUMMARY_CAUSE] = cause
     p[0], p[1], p[2], p[3] = stage, refusal, abort, 1
     p[4] = (1 if accepted else 0) | (2 if stage == 6 else 0) | (4 if exit_ok else 0) | (16 if usb_a else 0)
     p[18:20] = total.to_bytes(2, "little")
@@ -108,7 +110,7 @@ class SvoocTrigger(unittest.TestCase):
         r = kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--usb-a", "--cap", "9"), sleep=lambda s: None)
         self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 1, 5, 9])))   # confirm | usb-a
         self.assertTrue(r["svooc"]["usb_a_waiver"])
-        self.assertIn("far-sink check waived (USB-A)", kr.render("fc", r))
+        self.assertIn("far-sink / inline check waived (USB-A)", kr.render("fc", r))
         # no --confirm: the waiver alone sends nothing
         link = Link([summary()])
         with self.assertRaises(kr.FcRefused):
@@ -120,6 +122,25 @@ class SvoocTrigger(unittest.TestCase):
         with self.assertRaises(kr.FcRefused) as cm:
             kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--usb-a"), sleep=lambda s: None)
         self.assertIn("USB-A waiver but PD is active", str(cm.exception))
+
+    def test_inline_refusal_names_the_cause(self):
+        inline = kr.SVOOC_REFUSALS.index("inline mode")
+        link = Link([summary()], start_status=kr.STATUS_BUSY, start_payload=summary(refusal=inline, cause=5))
+        with self.assertRaises(kr.FcRefused) as cm:
+            kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--usb-a"), sleep=lambda s: None)
+        self.assertIn("inline mode (cause: far rd)", str(cm.exception))
+        # the older 35-byte summary has no cause: the plain name
+        s = kr.decode_svooc_summary(summary(refusal=inline))
+        self.assertEqual((s["refusal"], s["inline_cause"]), ("inline mode", "none"))
+        # a cause byte next to a refusal that is not the inline one adds nothing
+        self.assertEqual(kr.decode_svooc_summary(summary(refusal=10, cause=1))["refusal"], "no RAM: USB drive enabled")
+
+    def test_inline_abort_names_the_cause(self):
+        sink = kr.SVOOC_ABORTS.index("sink appeared")
+        s = kr.decode_svooc_summary(summary(stage=6, abort=sink, cause=1))
+        self.assertEqual((s["abort"], s["inline_cause"]), ("sink appeared (cause: load)", "load"))
+        s["pairs"], s["pairs_kept"] = [], 0
+        self.assertIn("inline latch cause: load", kr.render_svooc(s))
 
     def test_full_log_is_paged_seven_at_a_time(self):
         rows = [(i & 255, i, i * 25, 5000 + i) for i in range(100)]
@@ -190,6 +211,11 @@ class NamesMatchFirmware(unittest.TestCase):
         p[33], p[34] = 1, 0
         s = kr.decode_svooc_summary(bytes(p))
         self.assertEqual((s["contract_start"], s["contract_end"]), ("own 5 V", "none"))
+
+    def test_inline_causes_follow_the_firmware(self):
+        text = (ROOT / "include/k2/pd/inline_cause.hpp").read_text()
+        body = re.search(r"constexpr const char\* inline_cause_name\(InlineCause c\) \{(.*?)\n\}", text, re.S).group(1)
+        self.assertEqual(re.findall(r'return "([^"]*)";', body)[:-1], kr.INLINE_CAUSES)
 
     def test_stages_and_phases(self):
         run = (ROOT / "include/k2/fastcharge/svooc_run.hpp").read_text()

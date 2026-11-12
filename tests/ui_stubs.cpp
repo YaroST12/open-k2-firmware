@@ -49,7 +49,7 @@ void delay_ms(uint32_t ms) { g_stub.ms += ms; g_stub.delays_ms += ms; if (g_stub
 #endif
 
 namespace link {
-void set_inline_mode(bool on) { g_stub.link_inline = on; }
+void set_inline_mode(bool on, pd::InlineCause) { g_stub.link_inline = on; }
 Reason inline_now() {
     Probe p;
     p.pd_active = g_stub.caps.valid && g_stub.caps.active_cc != 0;

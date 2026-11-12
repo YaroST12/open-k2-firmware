@@ -10,9 +10,13 @@ namespace k2::link {
 
 namespace {
 bool g_sticky_inline = false;
+pd::InlineCause g_inline_cause = pd::InlineCause::None;
 }
 
-void set_inline_mode(bool on) { g_sticky_inline = on; }
+void set_inline_mode(bool on, pd::InlineCause cause) {
+    g_sticky_inline = on;
+    g_inline_cause = on ? cause : pd::InlineCause::None;
+}
 
 bool pd_active() {
     const auto& c = fusb302::caps();
@@ -28,6 +32,7 @@ Probe probe_now() {
     p.pd_active = (c.valid && c.active_cc != 0) || fusb302::contract().valid;
     p.cc_active = c.active_cc != 0;
     p.sticky_inline = g_sticky_inline;
+    p.inline_cause = g_inline_cause;
     p.self_supply_ma = usb::configured() ? 0 : pd::kSelfSupplyAllowanceMa;   // no USB host: the K2 may run on this VBUS
     if (const auto m = power::read()) {
         p.vbus_known = p.current_known = true;

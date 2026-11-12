@@ -184,6 +184,8 @@ PD_ERRS = ["ok", "no source caps", "bad PDO position", "over the voltage cap", "
            "inline: a live sink is attached", "busy (identify running)"]
 PD_ERR_INLINE = PD_ERRS.index("inline: a live sink is attached")   # pd::Err::Inline, carried by refusals' payload byte 0
 # pd::HandbackVerdict in order: the reply payload byte of CMD_PD_HANDBACK (allowed or the refusal reason)
+# pd::InlineCause in order (include/k2/pd/inline_cause.hpp, inline_cause_name): what latched the inline state
+INLINE_CAUSES = ["none", "load", "sink request", "vbus rise", "foreign vbus", "far rd"]
 HANDBACK_VERDICTS = ["allowed", "charger test running", "confirm needed", "not inline", "no contract owned",
                      "far sink Request seen this attach", "already handed back this attach"]
 SINK_STATES = ["idle", "epr-entering", "epr-wait-caps", "requesting", "transition", "ready", "aborting", "failed"]
@@ -478,6 +480,8 @@ def decode_state(p):
     if len(p) >= 53:                              # why this boot happened (CTRLSTS flags, cleared after capture)
         flags = int.from_bytes(p[49:53], "little")
         st.update({"reset_flags": flags, "reset_cause": reset_cause_name(flags)})
+    if len(p) >= 54:                              # what latched the inline state (pd::InlineCause), after the reset flags
+        st["inline_cause"] = INLINE_CAUSES[p[53]] if p[53] < len(INLINE_CAUSES) else str(p[53])
     return st
 
 
@@ -2475,7 +2479,8 @@ def render_vooc(v):
 FC_OP_SVOOC = 5
 SVOOC_STATUS, SVOOC_START, SVOOC_STOP, SVOOC_LOG = 0, 1, 2, 3
 SVOOC_USB_A = 4                 # start flags bit 2: waive the far-sink refusal (legacy A port, no PD anywhere)
-SVOOC_SUMMARY_BYTES = 35
+SVOOC_SUMMARY_BYTES = 35        # the base layout; a 36th byte (inline cause) is read when the firmware sends it
+SVOOC_SUMMARY_CAUSE = 35
 SVOOC_LOG_HEADER = 5            # kept(2) from(2) n(1), then n rows of cmd(1) word(2) t_ms(2) vbus_mv(2)
 SVOOC_LOG_ROW = 7
 SVOOC_SHOWN_PAIRS = 40          # svooc-trigger / svooc-status print the first pairs; `svooc-log` reads the whole list
@@ -2488,6 +2493,8 @@ SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no pow
 SVOOC_ABORTS = ["none", "VBUS over 12 V", "current over 50 mA", "charger off-script", "host gone", "power monitor lost",
                 "sink appeared", "PD contract appeared", "D+/D- edge storm", "no adapter answer", "time cap", "stopped", "PD contract lost", "PD contract changed"]
 SVOOC_CONTRACTS = ["none", "own 5 V", "other"]
+SVOOC_INLINE_REFUSAL = SVOOC_REFUSALS.index("inline mode")
+SVOOC_INLINE_ABORT = SVOOC_ABORTS.index("sink appeared")
 SVOOC_PHASES = ["ident", "handshake", "ramp"]
 
 
@@ -2505,7 +2512,13 @@ def decode_svooc_summary(p):
     _need(p, SVOOC_SUMMARY_BYTES, "svooc")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
     name = lambda names, i: names[i] if i < len(names) else str(i)
-    return {"stage": name(SVOOC_STAGES, p[0]), "refusal": name(SVOOC_REFUSALS, p[1]), "abort": name(SVOOC_ABORTS, p[2]),
+    cause = name(INLINE_CAUSES, p[SVOOC_SUMMARY_CAUSE]) if len(p) > SVOOC_SUMMARY_CAUSE else "none"
+    refusal, abort = name(SVOOC_REFUSALS, p[1]), name(SVOOC_ABORTS, p[2])
+    if cause != "none" and p[1] == SVOOC_INLINE_REFUSAL:   # what latched the inline state, e.g. "inline mode (cause: far rd)"
+        refusal += f" (cause: {cause})"
+    if cause != "none" and p[2] == SVOOC_INLINE_ABORT:
+        abort += f" (cause: {cause})"
+    return {"stage": name(SVOOC_STAGES, p[0]), "refusal": refusal, "abort": abort, "inline_cause": cause,
             "wakes": p[3], "accepted": bool(p[4] & 1), "exit_checked": bool(p[4] & 2), "exit_ok": bool(p[4] & 4),
             "driving": bool(p[4] & 8), "usb_a_waiver": bool(p[4] & 16), "phase": name(SVOOC_PHASES, p[5]), "off_run": p[6],
             "last_cmd": f"0x{p[7]:02X}",
@@ -2594,7 +2607,9 @@ def render_svooc(s):
                  f"max |I| {s['ibus_max_ma']} mA")
     lines.append(f"  PD contract: start {s['contract_start']}, end {s['contract_end']}")
     if s["usb_a_waiver"]:
-        lines.append("  far-sink check waived (USB-A): the operator's waiver, no PD anywhere at the start")
+        lines.append("  far-sink / inline check waived (USB-A): the operator's waiver, no PD anywhere at the start")
+    if s["inline_cause"] != "none":
+        lines.append(f"  inline latch cause: {s['inline_cause']}")
     if s["pairs"]:
         words = [f"{p['cmd'][2:]}>{p['word'][2:] if p['word'] else '---'}" for p in s["pairs"]]
         more = "; the whole list: `fc svooc-log`" if s["pairs_kept"] > len(words) else ""

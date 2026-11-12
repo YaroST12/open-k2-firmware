@@ -270,10 +270,18 @@ current. Remote only, no UI entry:
   through an A-to-C cable into the K2's bottom (female) port, nothing on the other port. The K2 then sees a far sink (the
   adapter side looks like a load) and would refuse. The operator's flag waives ONLY that far-sink refusal, at the start and
   as the in-run abort "sink appeared", and only while no PD is active anywhere (link `pd_active` false and no contract,
-  `Contract::None`); with PD active the start is refused as "USB-A waiver but PD is active". Every other guard stays:
+  `Contract::None`); with PD active the start is refused as "USB-A waiver but PD is active". The waiver also reaches
+  the inline latch, but only for the two topology causes (`pd::InlineCause`, `include/k2/pd/inline_cause.hpp`): `FarRd`
+  (a sink's Rd on CC with none of the K2's own while a source feeds the link: what a charger's Rp through an A-to-C cable
+  looks like) and `Vbus` (VBUS above 5.5 V for 1.5 s with no contract of the K2's own: the A port simply being on).
+  `Load`, `Request` and `Rise` (current over 50 mA, a foreign PD Request, a VBUS rise the K2 did not cause) and a latch
+  with no recorded cause still refuse the start and abort a run ("inline mode (cause: load)" ...). A latched topology
+  cause is upgraded to `Load` / `Request` by `pd::Link` when that traffic shows up later, so the in-run guard sees a real
+  sink arrive; `Rise` is left out of the upgrade because the trigger's own ramp raises VBUS. Every other guard stays:
   |I| <= 50 mA, VBUS 4.5-5.5 V at the start, the 12 V ceiling, off-script, host loss, the cap, the exit watch, and the
-  inline / PD-appears aborts. The report (`usb_a_waiver`, summary flags bit 4) and the `[SVOOC] start` log line say
-  "far-sink check waived (USB-A)".
+  PD-appears aborts. The passive VOOC monitor holding D+/D- in Sniff is not a line conflict (`svooc::lines_off_idle`);
+  the trigger takes the lines over from it. The report (`usb_a_waiver`, summary flags bit 4, the summary's cause byte,
+  state byte 53 `inline_cause`) and the `[SVOOC] start` log line say "far-sink / inline check waived (USB-A)".
 - Full pair list (`fc svooc-log`, FC op 5 sub-op 3 `[5, 3, from_lo, from_hi]`): the wire keeps up to 512 command>reply
   pairs of the latest wake (6 B each in RAM, plus 2 B of VBUS), each with the command's start in ms since that wake
   (u16, saturating) and the monitor's VBUS when the pair closed (0 = none); 7 rows (49 B) per reply page, so a whole

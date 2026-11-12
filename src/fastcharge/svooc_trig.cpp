@@ -71,10 +71,13 @@ void on_edge(std::uint32_t word) { apply(g_wire.edge(word)); }
 // A line not at the passive idle, or one of the other D+/D- users running. The passive VOOC monitor is not one of them: it
 // only listens, so start() stops it (dpsniff::monitor_yield) once the other checks pass. A Black Box arm or stream is: it
 // keeps its recording, so the start refuses.
+// The monitor's own state is a line mismatch too (both lines Sniff, floating): it is no obstacle (svooc::lines_off_idle).
 bool lines_taken() {
+    const dpdm::Pair d = dpdm::drive();
+    const bool monitor_sniff = dpsniff::monitoring() && d.dp == dpdm::Drive::Sniff && d.dm == dpdm::Drive::Sniff;
     return fctrig::status().state != fc::State::Idle || fctrig::scan_running() || fctrig::ufcs_probe_running() ||
-           dpdm::reset_busy() || dpdm::mismatch(dpdm::drive()) != 0 || dpsniff::armed() || dpsniff::streaming() ||
-           dpsniff::hooked();
+           dpdm::reset_busy() || svooc::lines_off_idle(dpdm::mismatch(d), monitor_sniff) || dpsniff::armed() ||
+           dpsniff::streaming() || dpsniff::hooked();
 }
 
 // VBUS (monitor sample) when each logged pair closed, parallel to the wire's pair list; 0 = no sample. The wire counts
@@ -98,6 +101,7 @@ struct Live {
     bool host_ok = false, vbus_known = false, current_known = false;
     std::int32_t vbus_mv = 0, ibus_ma = 0;
     bool far_sink = false, inline_mode = false;
+    pd::InlineCause inline_cause = pd::InlineCause::None;
     svooc::Contract contract = svooc::Contract::None;
 };
 
@@ -109,6 +113,7 @@ Live live() {
     if (const auto m = power::read_raw()) { l.current_known = true; l.ibus_ma = m->current_ma; }
     const link::Probe p = link::probe_now();
     l.inline_mode = p.sticky_inline;
+    l.inline_cause = p.sticky_inline ? p.inline_cause : pd::InlineCause::None;
     l.far_sink = fusb302::over_load_facts().far_sink;
     // The contract: the K2's own 5 V fixed one (PDO 1 as sink) is allowed, anything else is not (svooc::classify).
     const pd::SinkStatus& ss = fusb302::sink_status();
@@ -150,10 +155,10 @@ void release() {
     dpdm::idle();          // both lines to the passive idle
     const svooc::Report& r = g_run.report();
     const svooc::Log& lg = g_wire.log();
-    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s\n",
+    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s\n",
           svooc::name(r.abort), unsigned(r.elapsed_ms), unsigned(lg.commands), unsigned(lg.replies), unsigned(lg.missed),
           unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma), svooc::name(r.contract_start),
-          svooc::name(r.contract_end));
+          svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause));
 }
 
 void act(Next s) {
@@ -181,6 +186,7 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     f.ibus_ma = l.ibus_ma;
     f.far_sink = l.far_sink;
     f.inline_mode = l.inline_mode;
+    f.inline_cause = l.inline_cause;
     f.contract = l.contract;
     const mode_ram::Tenant owner = mode_ram::owner();
     f.ram_free = owner == mode_ram::Tenant::None || owner == mode_ram::Tenant::Sniff;
@@ -199,14 +205,16 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     const svooc::Refusal r = g_run.start(f, systick::millis(), cap_ms);
     if (r != svooc::Refusal::None) {
         if (claimed) dpsniff::hook_end();
-        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s%s\n", svooc::name(r), int(f.vbus_mv), int(f.ibus_ma),
-              svooc::name(f.contract), usb_a ? " (USB-A waiver asked)" : "");
+        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n", svooc::name(r), int(f.vbus_mv),
+              int(f.ibus_ma), svooc::name(f.contract), pd::inline_cause_name(f.inline_cause),
+              usb_a ? " (USB-A waiver asked)" : "");
         return r;
     }
     g_exit_logged = false;
     own_vbus(true);
-    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s%s\n", unsigned(g_run.report().cap_ms),
-          int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract), usb_a ? " far-sink check waived (USB-A)" : "");
+    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n", unsigned(g_run.report().cap_ms),
+          int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract), pd::inline_cause_name(f.inline_cause),
+          usb_a ? " far-sink / inline check waived (USB-A)" : "");
     return r;
 }
 
@@ -236,6 +244,7 @@ void poll() {
     s.ibus_ma = l.ibus_ma;
     s.far_sink = l.far_sink;
     s.inline_mode = l.inline_mode;
+    s.inline_cause = l.inline_cause;
     s.contract = l.contract;
     s.storm = dpsniff::hook_storm();
     {

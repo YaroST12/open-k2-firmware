@@ -49,7 +49,8 @@ class DecoderIsolation(unittest.TestCase):
         # The guarded SuperVOOC trigger's responder, bit layer and guards decide everything and drive nothing: the
         # glue (src/fastcharge/svooc.cpp) is the only part that moves D-.
         allowed = {"algorithm", "array", "cstddef", "cstdint", "k2/fastcharge/vooc.hpp",
-                   "k2/fastcharge/svooc_script.hpp", "k2/fastcharge/svooc_wire.hpp"}
+                   "k2/fastcharge/svooc_script.hpp", "k2/fastcharge/svooc_wire.hpp",
+                   "k2/pd/inline_cause.hpp"}   # the pure InlineCause enum, so the guards read the latch cause
         for name in ("svooc_script.hpp", "svooc_wire.hpp", "svooc_run.hpp"):
             text = (ROOT / "include/k2/fastcharge" / name).read_text()
             with self.subTest(name=name):

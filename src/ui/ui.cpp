@@ -1274,7 +1274,7 @@ UiAction Ui::tick(uint32_t now_ms) {
     fusb302::set_inline(link_.inline_mode());
     fusb302::set_wait_kind(link_.wait_kind());   // the alone-Identify decision reads this (pd::identify_alone)
     if (ctx_.analog) fusb302::sink_cc(ctx_.analog->cc1_mv, ctx_.analog->cc2_mv);
-    link::set_inline_mode(link_.inline_mode());
+    link::set_inline_mode(link_.inline_mode(), link_.inline_cause());
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
     twin_hw::live_poll(twin_ctx(now_ms));   // the twin proof ends itself under the loop lock (its busy input, twin_hw.cpp)

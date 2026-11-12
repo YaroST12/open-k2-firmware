@@ -188,6 +188,7 @@ size_t encode_state(std::span<uint8_t> out, const StateInfo &s) {
     w.u16(static_cast<uint16_t>(s.mcu_temp_deci_c));
     w.u8(s.link_flags); w.u32(s.age_s); w.u32(s.cable_age_s);
     w.u32(s.reset_flags);
+    w.u8(s.inline_cause);
     return w.size();
 }
 
@@ -458,6 +459,7 @@ size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v) {
     w.u16(u16c(r.cap_ms)); w.u16(u16c(r.elapsed_ms)); w.u16(u16c(r.vbus_start_mv)); w.u16(u16c(r.vbus_max_mv));
     w.u16(u16c(r.vbus_exit_mv)); w.u16(u16c(r.ibus_max_ma));
     w.u8(static_cast<uint8_t>(r.contract_start)); w.u8(static_cast<uint8_t>(r.contract_end));
+    w.u8(static_cast<uint8_t>(r.inline_cause));
     return w.size();
 }
 
