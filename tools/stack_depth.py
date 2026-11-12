@@ -99,6 +99,8 @@ RESOLVE = [
     (r"k2::ChargerTestSession::poll", r"k2::fs::.*cb_(read|prog|erase|sync)\(", ("lfs",)),
     (r"k2::fs::.*cb_(read|prog|erase|sync)\(", r"k2::fs::BlockDevice::(read|prog|erase)\(", ("flash",)),
     (r"k2::systick::tick\(", r"k2::load::.*tick_hook", ("hook",)),
+    # The loop's Context hooks (main.cpp fills them): reboot (the OK + Back chord from Ui::tick, REBOOT) and DFU.
+    (r"k2::mainloop::", r"(^|::)(reboot_now|dfu_now)\(", ("hook",)),
     (r"k2::systick::delay_ms\(", r"k2::boottrace\w*::.*poll", ("hook",)),
     (r"k2::usb::log\(", r"k2::shell_hw::.*tap", ("hook",)),
     (r"k2::(fc|fctrig)::", r"k2::fctrig::.*HwEnv::", ("env",)),
