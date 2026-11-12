@@ -79,10 +79,13 @@ constexpr std::string_view qty_label(hm::Qty q) { return q == hm::Qty::W ? "POWE
 constexpr std::string_view qty_unit(hm::Qty q) { return q == hm::Qty::W ? "W" : q == hm::Qty::V ? "V" : "A"; }
 constexpr char qty_unit_char(hm::Qty q) { return q == hm::Qty::W ? 'W' : q == hm::Qty::V ? 'V' : 'A'; }
 // Fieldbook fields: a live quantity is a block of its spot colour (W the inverse block) with ink digits and its trend in
-// the darker shade of the spot.
+// shades between the block and the ink.
 uint16_t qty_fill(hm::Qty q) { return q == hm::Qty::W ? kWattFill : q == hm::Qty::V ? kSpotVolt : kSpotAmp; }
 uint16_t qty_on(hm::Qty q) { return q == hm::Qty::W ? kWattInk : kSpotInk; }
 uint16_t qty_dark(hm::Qty q) { return q == hm::Qty::W ? kWattD : q == hm::Qty::V ? kSpotVoltD : kSpotAmpD; }
+// The trend: a 1 px line and a faint area under it, mixed from the block towards the digit ink (theme.hpp).
+uint16_t qty_line(hm::Qty q) { return q == hm::Qty::W ? kTraceWatt : q == hm::Qty::V ? kTraceVolt : kTraceAmp; }
+uint16_t qty_area(hm::Qty q) { return q == hm::Qty::W ? kAreaWatt : q == hm::Qty::V ? kAreaVolt : kAreaAmp; }
 // A field's look in one mode: the block, the digit ink, the label ink.
 struct FieldLook { uint16_t fill, ink, label; };
 FieldLook field_look(hm::Mode m, hm::Qty q, bool over) {
@@ -440,9 +443,10 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int st
     cell.x1 = s.x1;
     cell.bg = look.fill;
     cell.sweep = shown && !over && sweep_ok_;
-    // The trend is the darker shade of the spot (live) or of the grey (stale); the cursor is a 1 px gap in it.
-    cell.tint = live ? qty_dark(q) : kInk3;
-    cell.line = cell.tint;
+    // The trend is a line (at least 3:1 against the block and the area) over a faint area that keeps the digits at 4.5:1;
+    // live in the spot's own mix, stale in the grey's. The cursor is a 1 px gap in it.
+    cell.tint = live ? qty_area(q) : kAreaStale;
+    cell.line = live ? qty_line(q) : kTraceStale;
     cell.cursor_line = look.fill;
     cell.sw = &sw_[si];
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));

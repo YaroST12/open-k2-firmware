@@ -34,6 +34,10 @@ struct Palette {
     C accent, cap, on_cap, ticket, on_ticket, ticket_frame;   // ticket_frame 0 = none
     C chip, on_chip, watt, watt_ink, watt_d, watt_dim, qr_lt, qr_dk;
     C pass, on_pass, part, on_part;   // verdict cells: Paper/Night solid spots, Classic the old tint + hue
+    // The Flow trends (home_cell.cpp): per live quantity (and the grey of a stale field) the 1 px line and the faint area
+    // under it, both mixed from the field's block towards its digit ink. The line is at least 3:1 against the block above
+    // it and against the area below it; the digits stay at least 4.5:1 over the area (tests/test_ui_flow_contrast.cpp).
+    C trace_volt, trace_amp, trace_watt, trace_stale, area_volt, area_amp, area_watt, area_stale;
     // ---- legacy tokens (the ui_style.hpp names), resolved for this theme
     C surface, surface2, bar, l_volt, l_amp, l_watt, l_energy, l_charge, l_ohm, l_dplus, l_dminus, l_flow, l_stale, l_focus;
     C l_volt_t, l_amp_t, l_watt_t, l_energy_t, l_charge_t, l_focus_t, l_dim_t, l_dplus_t, l_dminus_t, l_faint_t;
@@ -46,6 +50,16 @@ inline constexpr C kSpotOk = 0x3DCC, kSpotWarn = 0xFC44, kSpotErr = 0xC985, kSpo
 inline constexpr C kPaperGround = 0xF79C, kInkGround = 0x10C3;
 // The alarm ink: white on the error red in every theme (user decision 2026-11-12, the Flow over-contract state).
 inline constexpr C kAlarmInk = 0xFFFF;
+
+// `a` moved n/32 of the way towards `b`, channel by channel in RGB565 (truncating). The trend shades of a field are its
+// block moved towards its digit ink, so they stay in the block's hue (Classic keeps its cyan, yellow and coral).
+constexpr C mix565(C a, C b, int n) {
+    const int r = (a >> 11) & 31, g = (a >> 5) & 63, bl = a & 31;
+    const int rb = (b >> 11) & 31, gb = (b >> 5) & 63, bb = b & 31;
+    return static_cast<C>(((r + (rb - r) * n / 32) << 11) | ((g + (gb - g) * n / 32) << 5) | (bl + (bb - bl) * n / 32));
+}
+// Area under a trend: 3/32 of the way to the ink (2/32 on a stale grey, whose block already leaves its digits little room).
+inline constexpr int kAreaN = 3, kAreaStaleN = 2;
 
 constexpr Palette paper_or_night(bool night) {
     const C bg = night ? kInkGround : kPaperGround, ink = night ? kPaperGround : kInkGround;
@@ -65,6 +79,11 @@ constexpr Palette paper_or_night(bool night) {
     p.chip = ink; p.on_chip = bg; p.watt = ink; p.watt_ink = bg; p.watt_d = ink_lift; p.watt_dim = on_ink_dim;
     p.qr_lt = kPaperGround; p.qr_dk = kInkGround;
     p.pass = kSpotOk; p.on_pass = kInkGround; p.part = kSpotWarn; p.on_part = kInkGround;
+    // line: block to ink in 32nds, the least that puts it 3:1 off both the block and its area (measured: the test)
+    p.trace_volt = mix565(p.volt, p.spot_ink, 18); p.trace_amp = mix565(p.amp, p.spot_ink, 20);
+    p.trace_watt = mix565(p.watt, p.watt_ink, night ? 18 : 14); p.trace_stale = mix565(p.stale, p.stale_ink, night ? 22 : 28);
+    p.area_volt = mix565(p.volt, p.spot_ink, kAreaN); p.area_amp = mix565(p.amp, p.spot_ink, kAreaN);
+    p.area_watt = mix565(p.watt, p.watt_ink, kAreaN); p.area_stale = mix565(p.stale, p.stale_ink, kAreaStaleN);
     // legacy: surfaces and tints are bg2, the masthead has no fill, the unit hues are ink, focus is the accent ink
     p.surface = bg2; p.surface2 = bg2; p.bar = bg;
     p.l_volt = ink; p.l_amp = ink; p.l_watt = ink; p.l_energy = ink; p.l_charge = ink; p.l_ohm = ink;
@@ -87,6 +106,10 @@ constexpr Palette classic() {
     p.chip = 0x07FF; p.on_chip = 0x0000; p.watt = 0xFB2C; p.watt_ink = 0x0000; p.watt_d = 0xDA88; p.watt_dim = 0x0000;
     p.qr_lt = 0xFFFF; p.qr_dk = 0x0000;
     p.pass = 0x0120; p.on_pass = 0x07E0; p.part = 0x2900; p.on_part = 0xFC00;
+    p.trace_volt = mix565(p.volt, p.spot_ink, 16); p.trace_amp = mix565(p.amp, p.spot_ink, 16);
+    p.trace_watt = mix565(p.watt, p.watt_ink, 19); p.trace_stale = mix565(p.stale, p.stale_ink, 17);
+    p.area_volt = mix565(p.volt, p.spot_ink, kAreaN); p.area_amp = mix565(p.amp, p.spot_ink, kAreaN);
+    p.area_watt = mix565(p.watt, p.watt_ink, kAreaN); p.area_stale = mix565(p.stale, p.stale_ink, kAreaStaleN);
     // legacy: the firmware tokens of 2026-11-12, unchanged
     p.surface = 0x18E3; p.surface2 = 0x2124; p.bar = 0x08A9;
     p.l_volt = 0xFFE0; p.l_amp = 0x07FF; p.l_watt = 0xFB2C; p.l_energy = 0x07E0; p.l_charge = 0x5D1F; p.l_ohm = 0xB5B6;

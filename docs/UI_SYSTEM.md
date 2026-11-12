@@ -24,6 +24,13 @@ Paper, Night and Classic are const palettes (`include/k2/ui/theme.hpp`), picked 
 change asks for a reboot (Settings row `Theme`, footer `Reboot to apply: <name>`). Classic keeps cyan for amps and focus
 and the four trend shades.
 
+Flow trends (`trace_*` and `area_*` in the palette, `kTraceVolt`..`kAreaStale` in `ui_style.hpp`): each field's 1 px
+trend line and the faint area under it are the field's block moved towards its digit ink (`mix565`, 32nds): the area 3/32
+(stale grey 2/32), the line as far as a 3:1 contrast against both the block above it and the area below it needs. The
+digits keep at least 4.5:1 over the area (a stale grey: 4.0, its block alone gives Paper 4.17). A 1 px line crossing a
+digit is bounded by digits/block = digits/line x line/block: 2.0 to 5.1:1 live, 1.2 to 2.6:1 stale. `tests/test_ui_flow_contrast.cpp`
+measures all of it (WCAG 2.x) per theme and prints the table; `K2_DUMP=dir` writes the Flow scenes for `tools/panel2png.py`.
+
 ### 0.2 Navigation
 
 ```

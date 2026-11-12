@@ -411,14 +411,18 @@ static void test_protocol_states() {
 static void test_sweep() {
     Ui &ui = home_ui();
     run(ui, 4);
-    CHECK_EQ(ink_logical(ui, 4, 2, 220, 70, kWattD), 0);                // idle: no sweep
+    CHECK_EQ(ink_logical(ui, 4, 2, 220, 70, kTraceWatt) + ink_logical(ui, 4, 2, 220, 70, kAreaWatt), 0);   // idle: no sweep
     live_pd(false, 20010, 1520);
     run(ui, 60);
-    // The trend is the darker shade of the field's spot colour (the cursor is a 1 px gap of the field in it).
-    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 70, kWattD) > 10);            // the hero's
-    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kSpotVoltD) > 10);   // and both ledger rows', over the same span
-    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kSpotAmpD) > 10);
-    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kSpotVoltD) + ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kSpotAmpD), 0);   // never under the cards
+    // The trend is a line and a faint area in shades of the field's own block (the cursor is a 1 px gap of the field in it).
+    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 70, kTraceWatt) > 10);            // the hero's
+    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 70, kAreaWatt) > 100);
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kTraceVolt) > 10);   // and both ledger rows', over the same span
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kTraceAmp) > 10);
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kAreaVolt) > 100);
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kAreaAmp) > 100);
+    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kTraceVolt) + ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kTraceAmp)
+                 + ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kAreaVolt) + ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kAreaAmp), 0);   // never under the cards
 }
 
 // Every repaint strip of the moving sweep must leave the panel exactly as a full-frame render of the same state would.
