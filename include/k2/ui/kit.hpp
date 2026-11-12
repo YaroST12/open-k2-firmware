@@ -112,14 +112,15 @@ constexpr int dot_px(Verdict v, bool labelled) { return v == Verdict::Running &&
 void draw_struck_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t ink, uint16_t bg);
 
 // ---- TopBar -------------------------------------------------------------------------------------------------------------
-// Wizard progress rule: the bar's bottom edge (rows 20..21) as three 74 px segments, the first `step` in kFocus and the
-// rest in kRule. step 0 leaves the plain hairline.
-void draw_progress_rule(const Surface &s, int step);
-// Band, title (with "n/3 " in front for a wizard step 1..3), badge behind its rule, and the progress rule. The live V x A
-// readout is the page's (PageBase::title_badge), it repaints on its own cache. `readout_follows`: the caller repaints the
-// readout area (x 140..223) right after, so the band leaves it alone (one write per pixel).
+// Wizard progress rule: the bar's bottom edge (rows 20..21) as `segs` segments over 224 px with a 1 px gap between them
+// (three: 74 px each; two: 111 + 112), the first `step` in kFocus and the rest in kRule. step 0 leaves the plain hairline.
+void draw_progress_rule(const Surface &s, int step, int segs = kProgSegs);
+// Band, title (with "n/<segs> " in front for a wizard step 1..segs), badge behind its rule, and the progress rule. The live
+// V x A readout is the page's (PageBase::title_badge), it repaints on its own cache. `readout_follows`: the caller repaints
+// the readout area (x 140..223) right after, so the band leaves it alone (one write per pixel). `segs`: the wizard's step
+// count, 2 or 3 (the charger test has three, PD Stress two).
 void draw_top_bar(const Surface &s, std::string_view title, int step = 0, std::string_view badge = {},
-                  bool readout_follows = false);
+                  bool readout_follows = false, int segs = kProgSegs);
 
 // ---- RowList -------------------------------------------------------------------------------------------------------------
 enum class Marker : uint8_t { None, Radio, Box3, Check, Verdict, Icon };

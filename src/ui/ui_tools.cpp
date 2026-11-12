@@ -9,7 +9,7 @@ const char *tool_hint(int tool) {
     static constexpr const char *kHints[kToolCount] = {
         "charger on top or bottom", "PD charger, either port", "act as a saved cable", "charger + cable + load",
         "source, cable and device", "passive PD recorder", "saved charger results", "USB, PD and system state",
-        "will it charge my device", "cable into own HID port"};
+        "will it charge my device", "cable into own HID port", "PD charger, no load"};
     return kHints[tool < 0 || tool >= kToolCount ? 0 : tool];
 }
 
@@ -45,6 +45,15 @@ Readiness spoof(const SetupState &st, bool) {   // refused while a live sink is 
     return {};
 }
 
+// PD Stress asks the charger for every level it offers: nothing may sit on the output, it reads VBUS and IBUS from the power
+// monitor, and it needs a PD source list (the run itself refuses the same three; this only tags the row).
+Readiness pd_stress(const SetupState &st, bool pm_online) {
+    if (st.inline_mode) return {ToolLevel::Blocked, "LOAD", "Load attached: unplug it"};
+    if (!pm_online) return {ToolLevel::Blocked, "NO PM", "Power meter not found"};
+    if (!setup_hint(Tool::PdTrigger, st).ready) return {ToolLevel::Blocked, "NO PD", "No PD source on either port"};
+    return {};
+}
+
 struct ToolRule {
     ToolHurt hurt;
     Readiness (*check)(const SetupState &, bool pm_online);
@@ -61,6 +70,7 @@ constexpr ToolRule kRules[kToolCount] = {
     {ToolHurt::Nothing, always_ready},   // 7 Diag
     {ToolHurt::Nothing, always_ready},   // 8 Device twins (the live proof refuses a live sink itself)
     {ToolHurt::Nothing, cable_r},        // 9 Loop probe (every reading comes from the power monitor; it refuses above 5.5 V itself)
+    {ToolHurt::Load, pd_stress},         // 10 PD Stress
 };
 
 }  // namespace

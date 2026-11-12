@@ -20,6 +20,7 @@
 #include "k2/core/survey.hpp"
 #include "k2/twin/twin_hw.hpp"
 #include "k2/pdstress/journal_hw.hpp"
+#include "k2/pdstress/pdstress_store_hw.hpp"
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -922,6 +923,28 @@ std::unique_ptr<CardFs> g_cf = std::make_unique<CardFs>();
 std::uint32_t g_card_gen = 0;
 }  // namespace
 void stub_cards_reset() { g_cf = std::make_unique<CardFs>(); ++g_card_gen; }
+
+// PD Stress saved results: the real store over littlefs on its own RAM disk.
+namespace {
+struct PsFs {
+    k2test::RamDisk disk{32};
+    k2::fs::Fs fs{disk, 32};
+    k2::pdstress::store::Store store{fs};
+    PsFs() { bool fm = false; fs.mount_or_format(fm); }
+};
+std::unique_ptr<PsFs> g_psf = std::make_unique<PsFs>();
+}  // namespace
+void stub_ps_saved_reset() { g_psf = std::make_unique<PsFs>(); }
+namespace k2::pdstress::store::hw {
+Err put(fs::Fs::Fill fill, void* ctx, std::uint16_t& id) {
+    if (g_stub.ps_save_fails) return Err::Full;
+    g_stub.ps_saves++;
+    return g_psf->store.put(fill, ctx, id);
+}
+std::size_t list(std::span<std::uint16_t> out) { return g_psf->store.list(out); }
+std::size_t read(std::uint16_t id, std::size_t off, std::span<std::uint8_t> out) { return g_psf->store.read(id, off, out); }
+Err remove(std::uint16_t id) { return g_psf->store.remove(id); }
+}  // namespace k2::pdstress::store::hw
 namespace k2::report_card::hw {
 std::size_t list(std::span<Card> out) { return g_cf->store.list(out); }
 std::size_t numbers(std::span<std::uint16_t> out) { return g_cf->store.numbers(out); }

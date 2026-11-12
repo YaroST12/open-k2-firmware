@@ -33,6 +33,7 @@ namespace ct = charger_test;
 namespace {
 
 uint32_t g_t = 10000;   // the stub clock this test drives
+int g_ps_results = 0;   // walks whose PD Stress run reached its Results (the walk must cover them, not only the refusals)
 
 struct Scenario {
     const char *name;
@@ -109,7 +110,8 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         draw_for_a_while(ui, kPageNames[p], rot, sc.name);
     }
     static const char *const kMenuNames[] = {"trigger", "emarker", "pd-trigger", "cable-r", "black-box", "spoof", "usb-link",
-                                             "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loop-probe"};
+                                             "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loop-probe",
+                                             "pd-stress"};
     static_assert(std::size(kMenuNames) == static_cast<std::size_t>(Menu::Count), "a menu without a name here is walked under another's label");
     for (uint8_t m = 0; m < static_cast<uint8_t>(Menu::Count); ++m) {
         enter(kMenuNames[m], rot, sc.name);
@@ -145,6 +147,51 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         ui.on_button(Button::Back, ButtonEvent::Short, g_t);                    // stops a live run (pops an idle page)
         draw_for_a_while(ui, "loop-stopped", rot, sc.name);
     }
+    // PD Stress: every Setup row focused (its note open), Review idle and armed, a run, its stop, every result row, both Detail
+    // pages, then Save (the saved row shows on Setup) and a saved result opened again.
+    // The run refuses a load, so the output is empty for it and the stub converter follows each Request.
+    enter("pd-stress", rot, sc.name);
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), g_t);
+    const int32_t amps_before = g_stub.pm.current_ma;
+    const auto sink_before = g_stub.sink;
+    const auto cc_before = g_stub.caps.active_cc;
+    g_stub.pm.current_ma = 0;
+    if (g_stub.caps.valid) g_stub.caps.active_cc = 1;
+    g_stub.sink.state = pd::SinkState::Ready; g_stub.sink.result = pd::SinkResult::Ok;
+    g_stub.sink.pos = 1; g_stub.sink.mv = 5000; g_stub.sink.ps_rdy_inferred = true;
+    if (ui.push_menu(Menu::PdStress, g_t)) {
+        auto step = [&](Button b, const char *what) {
+            ui.on_button(b, ButtonEvent::Short, g_t);
+            draw_for_a_while(ui, what, rot, sc.name);
+        };
+        ui.context().keep.pdstress.sel = 0;
+        draw_for_a_while(ui, "ps-setup", rot, sc.name);
+        for (int i = 0; i < 24; ++i) step(Button::Plus, "ps-setup-rows");
+        ui.context().keep.pdstress.sel = PdStressPage::kDoneRow;
+        step(Button::Ok, "ps-review");
+        step(Button::Ok, "ps-armed");
+        step(Button::Ok, "ps-running");                                          // starts (or the refusal footer)
+        for (int i = 0; i < 10; ++i) { g_t += 500; ui.tick(g_t); }
+        step(Button::Back, "ps-stopping");                                       // stops a run (Setup on an idle Review)
+        for (int i = 0; i < 60 && ui.pd_stress().active(); ++i) { g_t += 500; ui.tick(g_t); }
+        draw_for_a_while(ui, "ps-results", rot, sc.name);
+        if (ui.pd_stress_page() && ui.pd_stress_page()->stage() == PdStressPage::Stage::Results) {
+            g_ps_results++;
+            step(Button::Ok, "ps-detail");
+            step(Button::Plus, "ps-detail-2");
+            step(Button::Back, "ps-results");
+            for (int i = 0; i < 16; ++i) step(Button::Plus, "ps-result-rows");
+            const int save = ui.pd_stress_page()->result_rows() - 2;
+            for (int i = 0; i < 16; ++i) step(Button::Minus, "ps-result-rows");
+            for (int i = 0; i < save; ++i) step(Button::Plus, "ps-result-rows");
+            step(Button::Ok, "ps-saved");
+            ui.context().keep.pdstress.sel = PdStressPage::kSavedRow0;
+            step(Button::Ok, "ps-saved-result");
+        }
+    }
+    g_stub.pm.current_ma = amps_before;
+    g_stub.sink = sink_before;
+    g_stub.caps.active_cc = cc_before;
     static const char *const kTabNames[] = {"conn-source", "conn-cable", "conn-sink"};
     for (uint8_t tab = 0; tab < 3; ++tab) {
         enter(kTabNames[tab], rot, sc.name);
@@ -604,5 +651,6 @@ int main() {
     test_long_cable_names();
     test_card_screens();
     test_walk();
+    CHECK_EQ(g_ps_results > 0, true);
     return test_report("test_ui_no_truncation");
 }

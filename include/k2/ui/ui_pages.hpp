@@ -38,6 +38,7 @@
 #include "k2/pd/ra_guard.hpp"
 #include "k2/chargertest/resume_text.hpp"
 #include "k2/pd/emlib.hpp"
+#include "k2/pdstress/plan.hpp"
 #include "k2/pd/emrec.hpp"
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/drivers/fusb302.hpp"
@@ -119,6 +120,13 @@ struct UiContext {
         int tools_sel = 0;                                // Tools: the highlighted tool
         int settings_sel = 0;                             // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
+        struct PdStress {                                 // Tools > PD Stress: the setup the next START uses
+            std::uint16_t mask = pdstress::kDefaultSeqMask;   // picked sequences (bit = pdstress::Seq)
+            std::uint8_t cycles = 2;                      // index into PdStressPage::kCyclesPct (25 / 50 / 100 / 200 %)
+            std::uint8_t pace = 0;                        // pdstress::Options::pace
+            std::uint8_t sel = 0;                         // the Setup list's cursor
+            std::uint16_t closed_run = 0;                 // PdStressSession::run_no() of the result last saved or discarded
+        } pdstress;
     } keep;
     // The pure precheck over the live readings (unknown = -1): is there a device to ask at all?
     bool no_device() const {
@@ -906,7 +914,7 @@ public:
     static Menu tool_menu(int i) {
         constexpr Menu kMenus[kToolCount] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
                                              Menu::Connection, Menu::BlackBox, Menu::Cards, Menu::Diag, Menu::Twin,
-                                             Menu::LoopProbe};
+                                             Menu::LoopProbe, Menu::PdStress};
         return kMenus[i < 0 || i >= kToolCount ? 0 : i];
     }
     static const char *tool_name(int i);

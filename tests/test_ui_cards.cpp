@@ -282,7 +282,7 @@ static void test_page() {
 }
 
 static void test_tools_hub_lists_cards() {
-    CHECK_EQ(kToolCount, 10);   // Device twins, then the Loop probe (tests/test_ui_tools.cpp covers that row)
+    CHECK_EQ(kToolCount, 11);   // Device twins, the Loop probe, then PD Stress (tests/test_ui_tools.cpp, test_ui_pdstress_page.cpp)
     CHECK_STR(ToolsPage::tool_name(8), "Device twins");
     CHECK_EQ(ToolsPage::tool_menu(8) == Menu::Twin, 1);
     CHECK_EQ(int(tool_readiness(8, SetupState{}, false).level), int(ToolLevel::Ready));

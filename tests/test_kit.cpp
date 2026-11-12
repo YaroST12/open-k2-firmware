@@ -109,6 +109,21 @@ static void test_progress_rule() {
     CHECK_EQ(px(10, 21), kFocus);
     CHECK_EQ(px(100, 21), kRule);
     CHECK_EQ(px(2, 2), kBar);
+    // A two-step wizard: two segments over the same 224 px, 0..110 and 112..223, the gap at 111.
+    lcd::fill(kBase);
+    kit::draw_progress_rule(kSurf, 1, 2);
+    for (int row : {20, 21}) {
+        CHECK_EQ(px(0, row), kFocus);
+        CHECK_EQ(px(110, row), kFocus);
+        CHECK_EQ(px(111, row), kBase);
+        CHECK_EQ(px(112, row), kRule);
+        CHECK_EQ(px(223, row), kRule);
+    }
+    lcd::fill(kBase);
+    kit::draw_top_bar(kSurf, "Review", 2, "PAS", false, 2);
+    CHECK_EQ(px(10, 21), kFocus);
+    CHECK_EQ(px(200, 21), kFocus);
+    CHECK_EQ(px(111, 21), kBase);
 }
 
 static void test_row_list_geometry() {

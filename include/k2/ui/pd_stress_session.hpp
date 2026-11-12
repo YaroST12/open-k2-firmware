@@ -13,9 +13,9 @@
 // link and, after a reboot, resumes by itself once VBUS has been steady (pdstress/journal.hpp). It presents no Rd of its own: a resume
 // needs the Rd the boot already has, and a host-powered K2 never journals (a charger cut does not reboot it).
 //
-// Adding a Tools-page entry later needs: a page class (menu Menu::PdStress) with a RowList of the sequences (mask), the cycle scale and
-// the pace, a START ActionCell that calls start() with the confirm arming of the other tools, a Running view reading status() and
-// result_read(), and a row in the Tools list. None of it touches this class.
+// The Tools-page entry is PdStressPage (ui_pdstress_page.hpp, Menu::PdStress): it picks the sequences, the cycle scale and the pace,
+// calls start() after a two-press confirm, reads engine() while a run goes on and the result blob afterwards (run_no() tells it which
+// result the user has already saved or discarded). It only reads this class, apart from start() and cancel().
 #pragma once
 
 #include <cstddef>
@@ -65,6 +65,9 @@ public:
     bool active() const { return running() || restoring(); }
     bool has_result() const { return engine_.has_value(); }
     const pdstress::Engine* engine() const { return engine_ ? &*engine_ : nullptr; }
+    // Which result has_result() holds: a new number (never 0) each time a run starts or resumes into a new engine. The page keeps
+    // the number of the result the user saved or discarded, so it opens on the results only for one not dealt with yet.
+    std::uint16_t run_no() const { return run_no_; }
     // The result blob (pdstress/result.hpp) from byte `off`; 0 when there is no result or `off` is past the end.
     std::size_t result_read(std::size_t off, std::span<std::uint8_t> out) const;
     // Elapsed run time: frozen when the run ended.
@@ -120,6 +123,7 @@ private:
     bool save_journal(std::uint32_t now_ms);
     pdstress::result::Info info(std::uint32_t now_ms) const;
     void update_footer();
+    void next_run_no() { run_no_ = static_cast<std::uint16_t>(run_no_ + 1 ? run_no_ + 1 : 1); }
 
     UiContext& ctx_;
     ChargerTestSession& ct_;
@@ -134,6 +138,7 @@ private:
     bool frozen_ = false;               // the run ended: elapsed_ms is fixed
     std::uint32_t frozen_ms_ = 0;
     std::uint32_t last_now_ = 0;
+    std::uint16_t run_no_ = 0;           // run_no()
     std::uint8_t footer_seq_ = 0xFF, footer_total_ = 0xFF, footer_kind_ = 0xFF;
     StrBuf<28> foot_;
 };
