@@ -587,6 +587,7 @@
   "590": "[FS] grow skipped: 0x%08X not blank",
   "591": "[FS] grow skipped: legacy wipe pending",
   "592": "[FS] grow failed: %s (stays at %u blocks, retried next boot)",
-  "593": "[BB] saves=%u skipped=%u errors=%u last=%ums max=%ums entries=%d free=%u kind=%u held=%d wait=%u C=%u D=%u E=%u drop=%u defer=%u\n"
+  "593": "[BB] saves=%u skipped=%u errors=%u last=%ums max=%ums entries=%d free=%u kind=%u held=%d wait=%u C=%u D=%u E=%u drop=%u defer=%u\n",
+  "594": "[PS] result save id=%u err=%u ms=%u\n"
  }
 }

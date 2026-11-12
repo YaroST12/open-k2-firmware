@@ -236,6 +236,9 @@ struct StubState {
     std::vector<uint8_t> ps_file;
     bool ps_file_present = false, ps_write_fails = false;
     int ps_writes = 0, ps_removes = 0;
+    // PD Stress saved results (pdstress::store::hw, a littlefs RAM disk): a switch that makes Save fail, and the Save count.
+    bool ps_save_fails = false;
+    int ps_saves = 0;
     // The HID-cable loop guard (k2/core/loop_guard.hpp): loopguard::locked() answers this.
     bool loop_locked = false;
     // The loop probe: what its Env reads (loopprobe::hw::env()) and its result file (loopprobe::hw::store()), kept in RAM.
@@ -247,6 +250,7 @@ struct StubState {
 };
 extern StubState g_stub;
 void stub_cards_reset();   // empties the RAM-backed report card store
+void stub_ps_saved_reset();   // empties the RAM-backed PD Stress saved results
 // Adds a twin to the stub library (the sink PDO words are the device's own); returns its number.
 uint8_t stub_twin_add(const char *name, std::initializer_list<uint32_t> sink_pdos, uint16_t vid = 0, uint16_t pid = 0);
 void stub_twin_reset();    // empties the library and the simulated proof (a fresh g_stub does the library; this the runner)
