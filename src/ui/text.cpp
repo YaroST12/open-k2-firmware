@@ -33,17 +33,57 @@ static const Glyph *lookup(const Font &f, uint32_t cp) {
 
 uint32_t g_missing_glyphs = 0;
 
-// Coverage level 0..15 (index into the blend LUT) of pixel (gx, gy) of a glyph. 4 bpp rows hold two
-// pixels per byte, left pixel in the high nibble; 1 bpp rows hold eight, leftmost in bit 7, and ink
-// is full coverage (font_aa.hpp).
-inline uint8_t level(const Font &f, const Glyph &g, int gx, int gy) {
-    if (f.bpp == 4) {
-        const uint8_t b = f.bitmap[g.offset + gy * ((g.w + 1) / 2) + (gx >> 1)];
-        return (gx & 1) ? (b & 0x0F) : (b >> 4);
+namespace {
+
+// A reader over the run-length coded pixels of one glyph group (token format: font_aa.hpp). It is
+// the whole decoder state: a byte pointer, the nibble phase and the run being handed out, so a
+// row is decoded in one pass with no buffer.
+struct Pix {
+    const uint8_t *p;
+    uint8_t zmax;
+    bool lo = false;     // the next nibble is the low one of *p
+    uint8_t lvl = 0;     // level of the current run
+    uint8_t left = 0;    // pixels of the current run not handed out yet
+
+    uint8_t nibble() {
+        if (!lo) { lo = true; return *p >> 4; }
+        lo = false;
+        return *p++ & 0x0F;
     }
-    const uint8_t b = f.bitmap[g.offset + gy * ((g.w + 7) / 8) + (gx >> 3)];
-    return ((b << (gx & 7)) & 0x80) ? 15 : 0;
+    void token() {
+        const uint8_t t = nibble();
+        if (t) { lvl = t; left = 1; return; }
+        const uint8_t n = nibble();
+        if (n < zmax) { lvl = 0; left = n + 1; }
+        else { lvl = 15; left = n - zmax + 3; }
+    }
+    uint8_t next() {
+        if (!left) token();
+        left--;
+        return lvl;
+    }
+    void skip(int n) {
+        while (n > 0) {
+            if (!left) token();
+            const int t = left < n ? left : n;
+            left = static_cast<uint8_t>(left - t);
+            n -= t;
+        }
+    }
+};
+
+// A reader placed on pixel (gx, gy) of a glyph: add up the lengths of the 8-row groups above gy, then
+// scan the tokens of the rows of its group that precede it (at most 7 rows plus gx pixels).
+Pix open_at(const Font &f, const Glyph &g, int gx, int gy) {
+    const uint8_t *len = f.bitmap + g.offset;
+    const uint8_t *group = len + ((g.h + 7) >> 3) - 1;   // the length bytes come first
+    for (int k = gy >> 3; k > 0; k--) group += *len++;
+    Pix px{group, f.zmax};
+    px.skip((gy & 7) * g.w + gx);
+    return px;
 }
+
+}  // namespace
 
 const Glyph *find_glyph(const Font &f, uint32_t cp) {
     const Glyph *g = lookup(f, cp);
@@ -72,11 +112,16 @@ int render_row_span(const Font &f, std::string_view s, int row, const uint16_t (
             // The ink box starts (ascent - top) rows below the top of the line box.
             int gy = row - (f.ascent - g->top);
             if (gy >= 0 && gy < g->h) {
-                for (int gx = 0; gx < g->w; gx++) {
-                    int x = pen + g->left + gx;
-                    if (x < x0 || x >= x1) continue;
-                    const uint8_t l = level(f, *g, gx, gy);
-                    if (l) out[x - x0] = lut[l];   // glyph ink lies inside its cell: no overlap to merge
+                // The columns of the ink box inside the window [x0, x1); the decoder starts on the first.
+                const int gx0 = x0 - pen - g->left > 0 ? x0 - pen - g->left : 0;
+                const int gx1 = x1 - pen - g->left < g->w ? x1 - pen - g->left : g->w;
+                if (gx0 < gx1) {
+                    Pix px = open_at(f, *g, gx0, gy);
+                    uint16_t *dst = out + (pen + g->left - x0);
+                    for (int gx = gx0; gx < gx1; gx++) {
+                        const uint8_t l = px.next();
+                        if (l) dst[gx] = lut[l];   // glyph ink lies inside its cell: no overlap to merge
+                    }
                 }
             }
         }
@@ -102,11 +147,17 @@ int render_column(const Font &f, std::string_view s, int col, const uint16_t (&l
         if (!g) return f.height;
         int gx = col - (col / f.adv) * f.adv - g->left;
         if (gx < 0 || gx >= g->w) return f.height;
+        // One column of the box, top to bottom: each 8-row group is its own stream, entered at row start.
+        const uint8_t *len = f.bitmap + g->offset;
+        const uint8_t *group = len + ((g->h + 7) >> 3) - 1;
+        Pix px{group, f.zmax};
         for (int gy = 0; gy < g->h; gy++) {
-            int y = f.ascent - g->top + gy;
-            if (y < 0 || y >= f.height) continue;
-            const uint8_t l = level(f, *g, gx, gy);
-            if (l) out[y] = lut[l];
+            if (gy && !(gy & 7)) { group += *len++; px = Pix{group, f.zmax}; }
+            px.skip(gx);
+            const uint8_t l = px.next();
+            px.skip(g->w - gx - 1);
+            const int y = f.ascent - g->top + gy;
+            if (l && y >= 0 && y < f.height) out[y] = lut[l];
         }
         return f.height;
     }

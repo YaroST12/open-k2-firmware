@@ -16,13 +16,19 @@ axis with fontTools; both are third-party modules, so run it from a venv:
 stamp written into every generated file (font file hashes + generator parameters); the Spleen source
 needs neither module.
 
-Glyph format (see include/k2/ui/font_aa.hpp): each glyph is cropped to its ink box and stored as rows of
-pixels, either 1 bit (Spleen: 8 per byte, leftmost pixel in bit 7, stride (w + 7) / 8 bytes) or 4 bits
-(Atkinson: coverage 0..15, two per byte with the left pixel in the high nibble, stride (w + 1) / 2
-bytes). `left` is the pixel offset of the box from the pen position, `top` its height above the common
-baseline. Every glyph of a font has the same advance (monospace) and its ink lies inside its own cell,
-so neighbouring glyphs never overlap. Glyphs a Spleen BDF lacks are hand-drawn in
-tools/font_overrides.py; glyphs Atkinson lacks (the four arrows) are rasterised from JetBrains Mono.
+Glyph format (see include/k2/ui/font_aa.hpp): each glyph is cropped to its ink box; its pixels are
+coverage levels 0..15 (Spleen: 0 and 15 only), run-length coded as nibbles in groups of 8 rows so a
+renderer decodes any row of any glyph in one pass with no buffer. The coding is chosen here (per-font
+zero-run limit `zmax`) and decoded again for a round-trip check on every run. `left` is the pixel offset
+of the box from the pen position, `top` its height above the common baseline. Every glyph of a font has
+the same advance (monospace) and its ink lies inside its own cell, so neighbouring glyphs never overlap.
+Glyphs a Spleen BDF lacks are hand-drawn in tools/font_overrides.py; glyphs Atkinson lacks (the four
+arrows) are rasterised from JetBrains Mono.
+
+tools/font_levels.txt holds the uncompressed levels of the Atkinson fonts (with the input stamp of the
+rasteriser run that made them). It lets the tables be regenerated, and `--check` verified bit for bit,
+without freetype-py/fonttools, and it is the independent reference tests/test_font_decode.cpp decodes
+the shipped tables against.
 """
 import argparse
 import hashlib
@@ -139,18 +145,6 @@ def clip_rows(w, h, left, top, rows, ascent, descent):
     return hi - lo, len(rows), left + lo, top, rows
 
 
-def pack(rows, w):
-    out = bytearray()
-    for row in rows:
-        for x in range(0, w, 8):
-            b = 0
-            for i in range(8):
-                if x + i < w and row[x + i]:
-                    b |= 0x80 >> i
-            out.append(b)
-    return bytes(out)
-
-
 def scale_font(ascent, descent, glyphs, num, den):
     """Scale a font by num/den, nearest neighbour, in line-box coordinates (so every glyph is sampled
     on the same grid). Returns (ascent, descent, glyphs) in the same glyph convention."""
@@ -196,21 +190,122 @@ def build_font(name, size, chars, source):
         ink = [clip_rows(*rendered[ch][:4], rendered[ch][5], ascent, descent) for ch in chars]   # (w, h, left, top, rows)
         ascent = max(g[3] for g in ink)
         descent = max(0, max(g[1] - g[3] for g in ink))
-    bitmap = bytearray()
     glyphs = []
     for ch in chars:
         w, h, left, top, adv, rows = rendered[ch]
         w, h, left, top, rows = clip_rows(w, h, left, top, rows, ascent, descent)
-        data = pack(rows, w)
-        glyphs.append(dict(cp=ord(ch), off=len(bitmap), w=w, h=h, left=left, top=top, adv=adv))
-        bitmap += data
+        # 1 bit ink becomes coverage 15 (full foreground), so both sources share one coding.
+        glyphs.append(dict(cp=ord(ch), w=w, h=h, left=left, top=top, adv=adv,
+                           rows=[[15 if v else 0 for v in r] for r in rows]))
     advs = {g["adv"] for g in glyphs}
     assert len(advs) == 1, f"{name}: not monospace {advs}"
-    assert len(bitmap) < 65536, f"{name}: bitmap too large for 16-bit offsets"
     for g in glyphs:
         assert -128 <= g["left"] < 128 and -128 <= g["top"] < 128
-    return dict(name=name, size=size, bitmap=bytes(bitmap), glyphs=glyphs, bpp=1,
-                adv=advs.pop(), ascent=ascent, descent=descent)
+    return encode_font(dict(name=name, size=size, glyphs=glyphs, adv=advs.pop(), ascent=ascent, descent=descent))
+
+
+# ---- Glyph coding (the format is documented in HEADER / include/k2/ui/font_aa.hpp) ---------------------
+
+GROUP_ROWS = 8   # rows per independently addressable group of one glyph
+FULL_MIN = 3     # shortest run of level 15 that gets a run token (shorter ones stay literals)
+
+
+def encode_stream(px, zmax):
+    """Nibbles for a flat list of levels 0..15: a literal 1..15 is one pixel; `0 n` with n < zmax is n + 1
+    zero pixels, with n >= zmax it is n - zmax + FULL_MIN pixels of level 15."""
+    out, i = [], 0
+    full_max = 15 - zmax + FULL_MIN
+    while i < len(px):
+        v, j = px[i], i
+        while j < len(px) and px[j] == v:
+            j += 1
+        run, i = j - i, j
+        if v == 0:
+            while run:
+                k = min(run, zmax)
+                out += [0, k - 1]
+                run -= k
+        elif v == 15:
+            while run:
+                if run < FULL_MIN:
+                    out += [15] * run
+                    break
+                k = min(run, full_max)
+                out += [0, zmax + k - FULL_MIN]
+                run -= k
+        else:
+            out += [v] * run
+    return out
+
+
+def decode_stream(nibs, zmax, count):
+    """Inverse of encode_stream: `count` pixels from the nibbles (extra padding nibbles are ignored)."""
+    out, i = [], 0
+    while len(out) < count:
+        t = nibs[i]
+        i += 1
+        if t:
+            out.append(t)
+            continue
+        n = nibs[i]
+        i += 1
+        out += [0] * (n + 1) if n < zmax else [15] * (n - zmax + FULL_MIN)
+    assert len(out) == count, "a run crosses its group"
+    return out
+
+
+def encode_glyph(rows, w, zmax):
+    """(groups - 1) length bytes, then the groups: each GROUP_ROWS rows as one byte-aligned nibble stream."""
+    if w == 0 or not rows:
+        return b""
+    groups = []
+    for r0 in range(0, len(rows), GROUP_ROWS):
+        nibs = encode_stream([v for r in rows[r0:r0 + GROUP_ROWS] for v in r], zmax)
+        nibs += [0] * (len(nibs) & 1)
+        groups.append(bytes((nibs[i] << 4) | nibs[i + 1] for i in range(0, len(nibs), 2)))
+    assert all(len(g) < 256 for g in groups[:-1]), "a group is longer than its length byte"
+    return bytes(len(g) for g in groups[:-1]) + b"".join(groups)
+
+
+def decode_glyph(data, w, h, zmax):
+    """Inverse of encode_glyph: the h rows of w levels."""
+    if w == 0 or h == 0:
+        return []
+    ngroups = -(-h // GROUP_ROWS)
+    pos, rows = ngroups - 1, []
+    for k in range(ngroups):
+        gh = min(GROUP_ROWS, h - k * GROUP_ROWS)
+        end = pos + data[k] if k < ngroups - 1 else len(data)
+        nibs = [n for b in data[pos:end] for n in (b >> 4, b & 15)]
+        px = decode_stream(nibs, zmax, gh * w)
+        rows += [px[r * w:(r + 1) * w] for r in range(gh)]
+        pos = end
+    return rows
+
+
+def packed_size(g):
+    """Bytes the glyph took as plain 4 bpp rows (two pixels per byte): the figure the coding is compared with."""
+    return (g["w"] + 1) // 2 * g["h"]
+
+
+def encode_font(f):
+    """Add the coded `bitmap`, every glyph's `off` and the font's `zmax` to a font dict of level rows. The zero
+    run limit is the one that makes the whole table smallest; the result is decoded again and compared."""
+    best = None
+    for zmax in range(1, 16):
+        blobs = [encode_glyph(g["rows"], g["w"], zmax) for g in f["glyphs"]]
+        size = sum(map(len, blobs))
+        if best is None or size < best[0]:
+            best = (size, zmax, blobs)
+    size, zmax, blobs = best
+    assert size < 65536, f"{f['name']}: bitmap too large for 16-bit offsets"
+    off = 0
+    for g, blob in zip(f["glyphs"], blobs):
+        g["off"] = off
+        off += len(blob)
+        assert decode_glyph(blob, g["w"], g["h"], zmax) == g["rows"], f"{f['name']}: U+{g['cp']:04X} does not round-trip"
+    f.update(bitmap=b"".join(blobs), zmax=zmax, packed=sum(map(packed_size, f["glyphs"])))
+    return f
 
 
 # ---- Atkinson Hyperlegible Mono (outline font, 4 bpp) ------------------------------------------------
@@ -219,6 +314,7 @@ def build_font(name, size, chars, source):
 # ascent + descent over the glyph set; the 48 px role is digits only, so its cap is the digit height.
 ROLES = {12: (6, 12), 16: (8, 16), 24: (12, 24), 48: (24, 32), 64: (32, 40)}
 ROLE_CHARS = {12: SET_12, 16: SET_16, 24: SET_16, 48: SET_48, 64: SET_64}
+ROLE_ORDER = (12, 16, 24, 48, 64)
 DIGIT_ROLES = (48, 64)   # digits-only roles: the height cap is the digit height above the baseline
 # Weight axis per role: small text is a touch heavier so thin stems keep their contrast on the panel.
 ROLE_WGHT = {12: 500, 16: 450, 24: 400, 48: 400, 64: 450}
@@ -325,18 +421,9 @@ def fit_cell(w, left, rows, adv):
     return w - cut_l - cut_r, left + cut_l, keep, max((max(r) for r in lost if r), default=0)
 
 
-def pack4(rows, w):
-    """4 bpp rows: two pixels per byte, left pixel in the high nibble, odd widths padded with level 0."""
-    out = bytearray()
-    for r in rows:
-        for x in range(0, w, 2):
-            out.append((r[x] << 4) | (r[x + 1] if x + 1 < w else 0))
-    return bytes(out)
-
-
 def build_outline_font(role, main, borrow):
-    """One role of the Atkinson set -> font dict like build_font. `main` is the face pinned at the role's
-    weight, `borrow` the face the BORROWED glyphs come from."""
+    """One role of the Atkinson set -> font dict of uncompressed levels (see levels_font; encode_font codes
+    it). `main` is the face pinned at the role's weight, `borrow` the face the BORROWED glyphs come from."""
     chars = sorted(set(ROLE_CHARS[role]), key=ord)
     ppem = autofit(main, role)
     main.set_size(ppem)
@@ -363,16 +450,12 @@ def build_outline_font(role, main, borrow):
         ink.append((ch, w, h, left, top, crows))
     ascent = max(LINE_BOX[role][0], max(g[4] for g in ink))
     descent = max(LINE_BOX[role][1], max(g[2] - g[4] for g in ink))
-    bitmap, glyphs = bytearray(), []
-    for ch, w, h, left, top, rows in ink:
-        glyphs.append(dict(cp=ord(ch), off=len(bitmap), w=w, h=h, left=left, top=top, adv=adv))
-        bitmap += pack4(rows, w)
-    assert len(bitmap) < 65536, f"role {role}: bitmap too large for 16-bit offsets"
+    glyphs = [dict(cp=ord(ch), w=w, h=h, left=left, top=top, adv=adv, rows=rows) for ch, w, h, left, top, rows in ink]
     assert ascent + descent <= ROLES[role][1] or role in DIGIT_ROLES, f"role {role}: line box {ascent + descent} too tall"
     for g in glyphs:
         assert -128 <= g["left"] < 128 and -128 <= g["top"] < 128
-    return dict(name=f"font_{role}", size=role, bitmap=bytes(bitmap), glyphs=glyphs, adv=adv, ascent=ascent,
-                descent=descent, bpp=4, ppem=ppem, wght=ROLE_WGHT[role], borrowed=borrowed, clipped=clipped)
+    return encode_font(dict(name=f"font_{role}", size=role, glyphs=glyphs, adv=adv, ascent=ascent, descent=descent,
+                            ppem=ppem, wght=ROLE_WGHT[role], borrowed=borrowed, clipped=clipped))
 
 
 def input_stamp():
@@ -407,7 +490,7 @@ def c_source(f, banner):
     lines.append(f"const Font {f['name']} = {{")
     lines.append("    .bitmap = bitmap, .codepoints = codepoints, .glyphs = glyphs,")
     lines.append(f"    .count = {n}, .adv = {f['adv']}, .ascent = {f['ascent']}, .descent = {f['descent']},")
-    lines.append(f"    .height = {f['ascent'] + f['descent']}, .px = {f['size']}, .bpp = {f['bpp']},")
+    lines.append(f"    .height = {f['ascent'] + f['descent']}, .px = {f['size']}, .zmax = {f['zmax']},")
     lines.append("};\n")
     lines.append("}  // namespace k2")
     return "\n".join(lines) + "\n"
@@ -422,11 +505,20 @@ HEADER = """\
 
 namespace k2 {
 
-// One glyph, cropped to its ink box and lying inside its own advance cell. Pixel rows start at
-// font.bitmap + offset and are packed by Font::bpp:
-//   bpp 1: set = ink, eight pixels per byte (leftmost in bit 7), row stride (w + 7) / 8 bytes;
-//   bpp 4: coverage 0..15 (the blend LUT index, 0 = background .. 15 = foreground), two pixels per
-//          byte (left pixel in the high nibble), row stride (w + 1) / 2 bytes.
+// One glyph, cropped to its ink box and lying inside its own advance cell. Its pixels start at
+// font.bitmap + offset and are coverage levels 0..15 (the blend LUT index, 0 = background .. 15 =
+// foreground), run-length coded as nibbles, high nibble first. The h rows are cut into groups of 8
+// (the last one may be shorter); each group is one flat row-major stream of its pixels, starts on a
+// byte boundary, and no run crosses a group. A glyph's data is
+//   (groups - 1) bytes: the byte length of every group but the last, then
+//   the groups one after another; the last byte of a group is padded with a 0 nibble.
+// Tokens (z = Font::zmax, chosen per font by the generator to make the table smallest):
+//   t, 1..15          one pixel of level t
+//   0 n, n <  z       n + 1 pixels of level 0   (1 .. z)
+//   0 n, n >= z       n - z + 3 pixels of level 15   (3 .. 18 - z)
+// Row r of a glyph is therefore reached by adding the lengths of the r / 8 groups before it and
+// scanning at most 7 rows of tokens: any glyph and row is addressable with no buffer. A glyph
+// without ink (w = 0, h = 0) has no data.
 // `left` = box x offset from the pen, `top` = box height above the baseline (the box covers rows
 // top-1 .. top-h of the baseline).
 struct Glyph {
@@ -446,7 +538,7 @@ struct Font {
     uint8_t  descent;  // deepest glyph below the baseline
     uint8_t  height;   // ascent + descent: pixel height of one text line
     uint8_t  px;       // nominal em size in pixels
-    uint8_t  bpp = 1;  // bits per pixel of the glyph rows: 1 or 4
+    uint8_t  zmax;     // zero-run limit of this font's pixel coding (1..15), see Glyph
 };
 
 @DECLS@
@@ -454,10 +546,10 @@ struct Font {
 """
 
 SOURCE_NOTE = {
-    "atkinson": "// Monospace 4 bits per pixel fonts rasterised from Atkinson Hyperlegible Mono 2.001 (SIL OFL 1.1)\n"
+    "atkinson": "// Monospace 16-level fonts rasterised from Atkinson Hyperlegible Mono 2.001 (SIL OFL 1.1)\n"
                 "// at 12, 16, 24, 48 and 64 px cells; the four arrows come from JetBrains Mono 2.304 (SIL OFL 1.1).\n"
                 "// Sources, hashes and licences: third_party/fonts/.",
-    "spleen": "// Monospace 1 bit per pixel bitmap fonts converted from Spleen 2.2.0 (BSD-2-Clause) BDF sources\n"
+    "spleen": "// Monospace bitmap fonts (ink = level 15) converted from Spleen 2.2.0 (BSD-2-Clause) BDF sources\n"
               "// (6x12, 8x16, 12x24, and 12x24 scaled x2 for the 48 px digits). Sources and licence:\n"
               "// third_party/fonts/spleen/.",
 }
@@ -470,8 +562,8 @@ def decl(f):
 
 def flash_note(f):
     table = len(f["glyphs"]) * (8 + 2)
-    return (f"{f['name']}: {len(f['glyphs'])} glyphs, {f['bpp']} bpp, bitmap {len(f['bitmap'])} B, "
-            f"tables {table} B, total ~{len(f['bitmap']) + table + 20} B flash")
+    return (f"{f['name']}: {len(f['glyphs'])} glyphs, zmax {f['zmax']}, bitmap {len(f['bitmap'])} B "
+            f"(plain 4 bpp {f['packed']} B), tables {table} B, total ~{len(f['bitmap']) + table + 20} B flash")
 
 
 def spleen_outputs():
@@ -488,21 +580,87 @@ def spleen_outputs():
     return outs, report
 
 
+LEVELS_TXT = ROOT / "tools/font_levels.txt"
+
+
+class StaleLevels(Exception):
+    """tools/font_levels.txt is missing or made from other inputs, and there is no rasteriser to remake it."""
+
+
+def levels_text(fonts):
+    """The uncompressed level cache: one `font` line, then per glyph a `glyph` line and h rows of hex digits."""
+    lines = ["# GENERATED by tools/gen_font.py - do not edit.",
+             "# Uncompressed coverage levels (one hex digit per pixel, 0 = background .. F = foreground) of the",
+             "# Atkinson fonts as rasterised: the input of the coding in src/ui/fonts/*.cpp, and the reference",
+             "# tests/test_font_decode.cpp decodes the shipped tables against.",
+             "# font <px> <count> <adv> <ascent> <descent> <height> ppem <p> wght <w> borrowed <cp,..|->",
+             "# glyph <codepoint> <w> <h> <left> <top>, then h rows",
+             f"# Input stamp {input_stamp()}"]
+    for f in fonts:
+        borrowed = ",".join(str(ord(c)) for c in f["borrowed"]) or "-"
+        lines.append(f"font {f['size']} {len(f['glyphs'])} {f['adv']} {f['ascent']} {f['descent']} "
+                     f"{f['ascent'] + f['descent']} ppem {f['ppem']} wght {f['wght']} borrowed {borrowed}")
+        for g in f["glyphs"]:
+            lines.append(f"glyph {g['cp']} {g['w']} {g['h']} {g['left']} {g['top']}")
+            lines += ["".join(f"{v:X}" for v in row) for row in g["rows"]]
+    return "\n".join(lines) + "\n"
+
+
+def parse_levels(text):
+    """(input stamp, [font dict of level rows]) from levels_text output."""
+    stamp, fonts, rows_left = None, [], 0
+    for line in text.splitlines():
+        if line.startswith("# Input stamp "):
+            stamp = line.split()[-1]
+        if line.startswith("#") or not line:
+            continue
+        t = line.split()
+        if rows_left:
+            g["rows"].append([int(c, 16) for c in line])
+            rows_left -= 1
+        elif t[0] == "font":
+            role, _count, adv, asc, desc, _h = map(int, t[1:7])
+            borrowed = "".join(chr(int(c)) for c in t[12].split(",")) if t[12] != "-" else ""
+            fonts.append(dict(name=f"font_{role}", size=role, glyphs=[], adv=adv, ascent=asc, descent=desc,
+                              ppem=float(t[8]), wght=int(t[10]), borrowed=borrowed, clipped=[]))   # clipped: report only
+        else:
+            cp, w, h, left, top = map(int, t[1:6])
+            g = dict(cp=cp, w=w, h=h, left=left, top=top, adv=fonts[-1]["adv"], rows=[])
+            fonts[-1]["glyphs"].append(g)
+            rows_left = h
+    return stamp, fonts
+
+
+def atkinson_levels():
+    """The Atkinson fonts as uncompressed level rows, coded: rasterised when freetype-py and fonttools are
+    installed, else read from tools/font_levels.txt (which must carry today's input stamp)."""
+    if have_rasteriser():
+        borrow = Outline(BORROW_TTF)
+        return [build_outline_font(role, Outline(ATKINSON_TTF, ROLE_WGHT[role]), borrow) for role in ROLE_ORDER]
+    if not LEVELS_TXT.exists():
+        raise StaleLevels(f"{LEVELS_TXT.relative_to(ROOT)} is missing and freetype-py/fonttools are not installed")
+    stamp, fonts = parse_levels(LEVELS_TXT.read_text())
+    if stamp != input_stamp():
+        raise StaleLevels(f"{LEVELS_TXT.relative_to(ROOT)} is from other inputs ({stamp}, now {input_stamp()}) and "
+                          "freetype-py/fonttools are not installed: run tools/gen_font.py once from a venv that has them")
+    return [encode_font(f) for f in fonts]
+
+
 def atkinson_outputs():
     outs, decls, report = {}, [], []
-    borrow = Outline(BORROW_TTF)
-    for role in (12, 16, 24, 48, 64):
-        f = build_outline_font(role, Outline(ATKINSON_TTF, ROLE_WGHT[role]), borrow)
+    fonts = atkinson_levels()
+    for f in fonts:
         lent = f" Borrowed from JetBrains Mono: {' '.join(f['borrowed'])}." if f["borrowed"] else ""
         outs[OUT_SRC / f"{f['name']}.cpp"] = c_source(
             f, "// GENERATED by tools/gen_font.py - do not edit.\n"
-               f"// Atkinson Hyperlegible Mono 2.001 (SIL OFL 1.1), wght {f['wght']}, {f['ppem']} ppem, 4 bpp.{lent}\n"
+               f"// Atkinson Hyperlegible Mono 2.001 (SIL OFL 1.1), wght {f['wght']}, {f['ppem']} ppem, 16 levels, run-length coded.{lent}\n"
                f"// Input stamp {input_stamp()}")
         decls.append(decl(f))
         report.append(flash_note(f) + f", {f['ppem']} ppem wght {f['wght']}"
                       + (f", borrowed '{''.join(f['borrowed'])}'" if f["borrowed"] else "")
                       + (f", clipped {f['clipped']}" if f["clipped"] else ""))
     outs[OUT_HDR] = HEADER.replace("@SOURCE@", SOURCE_NOTE["atkinson"]).replace("@DECLS@", "\n".join(decls))
+    outs[LEVELS_TXT] = levels_text(fonts)
     return outs, report
 
 
@@ -519,26 +677,16 @@ def have_rasteriser():
         return False
 
 
-def stamp_current():
-    """Without a rasteriser: the committed Atkinson files carry the stamp of today's inputs."""
-    want = f"// Input stamp {input_stamp()}"
-    return [str(p) for p in sorted(OUT_SRC.glob("font_*.cpp")) if want not in p.read_text().splitlines()]
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--source", choices=["atkinson", "spleen"], default="atkinson")
     args = ap.parse_args()
-    if args.check and args.source == "atkinson" and not have_rasteriser():
-        bad = stamp_current()
-        if bad:
-            print("out of date (input stamp; freetype-py/fonttools not installed, nothing rasterised):",
-                  *bad, sep="\n  ")
-            return 1
-        print("fonts up to date (input stamp only: freetype-py/fonttools not installed, nothing rasterised)")
-        return 0
-    outs, report = make_outputs(args.source)
+    try:
+        outs, report = make_outputs(args.source)
+    except StaleLevels as e:
+        print("out of date:", e)
+        return 1
     if args.check:
         bad = [str(p) for p, t in outs.items() if not p.exists() or p.read_text() != t]
         if bad:
