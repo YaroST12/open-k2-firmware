@@ -780,11 +780,16 @@ void test_switch_exact() {
                 const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
                 k2::lcd::fill(kBg);
                 ui.repaint(g_walk_t);
-                int d = 0;
-                for (size_t i = 0; i < got.size(); ++i) d += got[i] != g_panel[i];
+                int d = 0, x0 = 240, y0 = 240, x1 = -1, y1 = -1;
+                for (size_t i = 0; i < got.size(); ++i)
+                    if (got[i] != g_panel[i]) {
+                        d++;
+                        const int x = int(i % 240), y = int(i / 240);
+                        x0 = std::min(x0, x); y0 = std::min(y0, y); x1 = std::max(x1, x); y1 = std::max(y1, y);
+                    }
                 if (d) {
-                    std::printf("  Bench %s %s differs from a clean paint: rotation %u, %d px\n", back ? "back from" : "to",
-                                k2::bench::place_name(place), unsigned(r), d);
+                    std::printf("  Bench %s %s differs from a clean paint: rotation %u, %d px in x%d..%d y%d..%d\n",
+                                back ? "back from" : "to", k2::bench::place_name(place), unsigned(r), d, x0, x1, y0, y1);
                     ++bad_place;
                 }
             }
@@ -1533,16 +1538,20 @@ int main() {
         CHECK_EQ(g_panel[(24 + 64 + 2) * 240 + 11], k2::kAccent);      // the rail runs between the nodes
         CHECK_EQ(g_panel[(24 + 2) * 240 + 11], k2::kBg);               // but not above the first one
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
-        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // Charger
         ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
+        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // the Charger place page: Test charger focused
         test_screen(ui, "bench_charger", 31300);
-        CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Charger));
-        CHECK_EQ(count_colours(28, 24 + 78 + 4, 200, 24 + 78 + 22, {k2::kInk3}) > 0, true);   // Fast charge (row 3): blocked, dim
-        CHECK_EQ(count_colours(150, 24 + 78, 214, 24 + 104, {k2::kError}) > 0, false);        // its "load" tail is not red
-        ui.on_button(Button::Plus, ButtonEvent::Short, 31400);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 31410);         // Request voltage: blocked by the load
+        CHECK_EQ(ui.menu() == Menu::Connection, 1);
+        const ConnectionPage &cp = ui.connection_page();
+        auto row_y = [&](int act) { return 68 + (cp.result_rows() + act - cp.window_first()) * 20; };   // a list slot's top
+        CHECK_EQ(g_panel[(row_y(0) + 10) * 240 + 150], k2::kFocusFill);   // Test charger, focused
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31400);         // Request voltage: blocked by the load
         test_screen(ui, "bench_charger_blocked", 31500);
         CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT}) > 0, true);   // the footer carries the blocker
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31510);         // Fast charge: Request voltage unfocused
+        ui.tick(31520);
+        CHECK_EQ(count_colours(8, row_y(1) + 2, 150, row_y(1) + 18, {k2::kInk3}) > 0, true);   // blocked: dim
+        CHECK_EQ(count_colours(150, row_y(1), 214, row_y(1) + 20, {k2::kError}) > 0, false);  // its tail is not red
         g_stub.pm = saved_pm;
         g_stub.em = saved_em;
         ui.debug_link(false, 31510); ui.debug_link(true, 31520); // isolate the synthetic load fixture

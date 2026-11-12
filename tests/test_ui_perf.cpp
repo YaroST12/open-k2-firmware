@@ -50,9 +50,10 @@ static void test_page_switch_budgets() {
     // Settings: Ui::page_opaque) paints once with no erase pass, so it costs about one screen; a page that is not opaque
     // (Charger, Connection) still pays the erase replay of the page it replaces, Home's included (its two measurement cells,
     // band and info block make that replay dear). Connection (entered here on the Source tab) wipes and repaints its whole
-    // body: up to eight rows of text over a full-body fill. tests/test_ui_overdraw.cpp prices every pair.
+    // body: up to eight rows of text over a full-body fill. tests/test_ui_overdraw.cpp prices every pair. Connection also sets
+    // its OK verb once its first update has built the rows (a key-rail slot repaint inside the switch).
     struct { uint8_t page; unsigned budget; const char *name; } cases[] = {
-        {1, 59500, "Detail"}, {2, 111000, "Charger"}, {kPdPage, 142000, "Connection"}, {kDiagPage, 58800, "Diag"},
+        {1, 59500, "Detail"}, {2, 111000, "Charger"}, {kPdPage, 142600, "Connection"}, {kDiagPage, 58800, "Diag"},
         {3, 60000, "Lines"}, {4, 58800, "Tools"}, {5, 58200, "Settings"},
     };
     for (auto &c : cases) {

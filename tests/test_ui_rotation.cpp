@@ -564,7 +564,8 @@ static void test_optional_rotated_buttons() {
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 7400);
     ui.on_button(Button::Minus, ButtonEvent::Short, 7500);
     ui.on_button(Button::Ok, ButtonEvent::Short, 7600);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Cable));   // rotation 2 swaps the direction: [-] moves down a row
+    CHECK_EQ(ui.menu() == Menu::Connection, true);                       // a place page ...
+    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));    // rotation 2 swaps the direction: [-] moves down a row
     ui.on_button(Button::Back, ButtonEvent::Short, 7700);
     CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
     CHECK_EQ(ui.menu_depth(), 0u);
@@ -722,7 +723,7 @@ static void test_remote_keys_are_logical() {
         u.goto_page(static_cast<uint8_t>(Page::Tools), 1200);   // the Bench opens on Charger
         if (remote) { u.on_remote_button(key, ButtonEvent::Short, 1300); u.on_remote_button(Button::Ok, ButtonEvent::Short, 1400); }
         else        { u.on_button(key, ButtonEvent::Short, 1300);        u.on_button(Button::Ok, ButtonEvent::Short, 1400); }
-        return static_cast<int>(u.context().keep.place);
+        return u.menu() == Menu::Connection ? u.context().keep.bench_sel : -1;   // a place page opened over the Bench
     };
     const int cable = static_cast<int>(bench::Place::Cable);
     CHECK_EQ(pick(true, Button::Plus) == cable, true);    // remote plus = down
@@ -786,7 +787,8 @@ static void test_remote_keys_are_logical() {
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 8100);
     ui.on_remote_button(Button::Plus, ButtonEvent::Short, 8200);
     ui.on_remote_button(Button::Ok, ButtonEvent::Short, 8300);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Cable));
+    CHECK_EQ(ui.menu() == Menu::Connection, true);   // the Cable place page
+    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));
 }
 
 int main() {

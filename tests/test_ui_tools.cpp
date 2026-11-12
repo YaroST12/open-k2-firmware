@@ -4,6 +4,7 @@
 #include <string>
 #include <cstring>
 #include "test_util.h"
+#include "k2/ui/ui_connection.hpp"
 #include "k2/ui/ui_tools.hpp"
 
 using namespace k2;
@@ -157,8 +158,42 @@ static void test_bench_places_cover_every_tool() {
             if (a.a[i].kind == ActKind::Tool) seen[a.a[i].arg]++;
         }
     }
-    for (int t = 0; t < kToolCount; t++) CHECK_EQ(seen[t], 1);
+    // Spoof, Charger ID, Cable read and Device ID are the place pages themselves (conn::place_actions below).
+    for (int t = 0; t < kToolCount; t++)
+        CHECK_EQ(seen[t], t == kToolSpoof || (t >= kToolChargerId && t <= kToolDeviceId) ? 0 : 1);
     CHECK_EQ(std::strcmp(place_name(Place::K2), "K2"), 0);
+}
+
+// A place page's rows: its own read first (Cable, Device) or last (Charger, read again), the cable's actions, then the
+// place's tools in Bench order. items[0] is the read OK runs with no row focused.
+static std::string place_rows(conn::Tab t, const conn::ActFacts &a) {
+    std::array<conn::Item, conn::kMaxItems> it{};
+    const int n = conn::place_actions(t, a, it);
+    std::string s = std::string(it[0].label) + ":";
+    for (int i = 1; i < n; i++) s += std::string(i > 1 ? "," : "") + it[static_cast<size_t>(i)].label;
+    return s;
+}
+
+static void test_place_actions() {
+    conn::ActFacts a;
+    CHECK_EQ(place_rows(conn::Tab::Source, a) ==
+                 (K2_PDSTRESS ? "Read again:Test charger,Request voltage,Fast charge,Report cards,Stress test,Read again"
+                              : "Read again:Test charger,Request voltage,Fast charge,Report cards,Read again"), true);
+    CHECK_EQ(place_rows(conn::Tab::Cable, a) == "Read e-marker:Read e-marker,Save cable,Saved cables,Spoof as...,Resistance,Loop probe",
+             true);
+    CHECK_EQ(place_rows(conn::Tab::Sink, a) == "Ask device:Ask device,Twins,Read again", true);
+    std::array<conn::Item, conn::kMaxItems> it{};
+    const int n = conn::place_actions(conn::Tab::Cable, a, it);
+    CHECK_EQ(it[2].enabled, false);                                   // Save cable: no cable read
+    CHECK_EQ(it[5].act == conn::Act::Bench && it[5].arg == 0, true);  // Resistance: the Cable place's first tool
+    CHECK_EQ(n, 7);
+    a.attached = true;
+    conn::place_actions(conn::Tab::Sink, a, it);
+    CHECK_EQ(it[0].enabled && it[1].enabled, true);                   // a device to ask
+    a.pd_none = true;
+    conn::place_actions(conn::Tab::Sink, a, it);
+    CHECK_EQ(it[1].enabled, false);
+    CHECK_EQ(std::strcmp(it[1].why, conn::kWhyNoPd), 0);
 }
 
 static std::string brow(bench::Place p, const bench::Facts &f) {
@@ -204,6 +239,7 @@ static void test_bench_rows() {
 
 int main() {
     test_bench_places_cover_every_tool();
+    test_place_actions();
     test_bench_rows();
     test_hurt_table();
     test_every_tool_has_text();

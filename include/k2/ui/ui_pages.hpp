@@ -167,6 +167,10 @@ void em_detail_value(int index, const emlib::Entry &ent, StrBuf<24> &out);
 void temp_short_text(const std::optional<adc::Reading> &r, StrBuf<8> &out);   // MCU die temp: "MCU37C" / "MCU --"
 // The live setup the tool readiness reads (the link and the power monitor; ui_tools.hpp).
 SetupState setup_state(const UiContext &c);
+// The Bench's places (ui_bench.cpp): the masthead icon of each, and what an action of a place does when OK opens it (a tool's
+// menu, a page; the place page and the Bench share it).
+Icon place_icon(bench::Place p);
+void open_bench_act(Ui &ui, const bench::Act &a, uint32_t now_ms);
 
 // FC protocol pill on the Home totals card: the verdict's short name cut to 4 characters
 // ("QC3", "AFC", "VOOC"); empty when there is no verdict worth a pill.
@@ -759,12 +763,15 @@ public:
     ListState list_state() const { return ListState{}; }   // tabs, not a scrolling list
     conn::Tab tab() const { return tab_; }
     void open_tab(conn::Tab t);
-    // A single tool (K2_WHOS_ATTACHED=0): the page shows one tab, no tab strip, its title is the tool's, OK runs the tab's own
-    // action and the other actions are rows under the result (user, 2026-11-12). Charger ID = Source, Cable read = Cable,
-    // Device ID = Sink.
+    // A place page (Fieldbook CONCEPT 8; the single tools of K2_WHOS_ATTACHED=0 before it): the page shows one tab as the
+    // Charger, Cable or Device place - the identity block, then the full fact table, then the place's actions, in one list
+    // that scrolls under the identity. No tab strip, no Details page. OK with no row focused runs the place's own read.
     void lock(conn::Tab t);
     bool locked() const { return locked_; }
     int action_row() const { return act_sel_; }   // the focused action row (an index into the extras), -1 = none
+    static constexpr int kPlaceRows = 7;          // a place page: list rows on screen under the identity block
+    int window_first() const { return first_; }   // a place page: the first list row on screen
+    int result_rows() const { return res_n_; }    // a place page: the fact rows of the last paint (the actions follow)
     bool popup_open() const { return popup_; }
     conn::Facts facts() const { return facts_; }
     int popup_count() const { return n_items_; }
@@ -800,7 +807,7 @@ private:
                                         : tab_ == conn::Tab::Source && none_why_ == pd::PdNoneWhy::SourceNeverOffered);
     }
     void paint_tab_indicator();
-    void paint_empty();
+    void paint_empty(bool redraw);
     void paint_popup(uint32_t now_ms);
     int16_t row_y0() const;                // where the body starts: under the tab strip, or at kBodyY for a single tool
     uint32_t actions_sig() const;          // the single tool's action rows: focus and enabled states
@@ -811,8 +818,13 @@ private:
     pd::PdNoneWhy none_why_ = pd::PdNoneWhy::None;
     bool popup_ = false;
     bool popup_drawn_ = false;
-    bool locked_ = false;                  // a single tool (lock()): one tab, the actions as rows
-    int act_sel_ = -1;                     // single tool: the focused action row (items_[1 + act_sel_]), -1 = none: OK runs items_[0]
+    bool locked_ = false;                  // a place page (lock()): one tab, the actions as rows
+    int act_sel_ = -1;                     // place page: the focused action row (items_[1 + act_sel_]), -1 = none: OK runs items_[0]
+    int first_ = 0;                        // place page: the first list row on screen (follows the focus, Up / Dn scroll it with none)
+    uint8_t res_n_ = 0, tot_n_ = 0;        // place page: fact rows and all rows of the last paint (the keys scroll by them)
+    uint32_t id_sig_ = 0;                  // place page: the identity block's hash (0 = repaint)
+    uint32_t thumb_sig_ = 0;               // place page: the scroll thumb's (first, total) as painted
+    void place_key(bool down);             // place page: Up / Dn
     bool more_ = false;                    // Details: the second page of the Source tab (reset by a tab change)
     StrBuf<40> status_txt_;                // the bottom bar as last painted (tests read it; the page never does)
     bool id_asked_ = false;               // Identify started from the pop-up: its progress shows in the status bar
@@ -989,7 +1001,6 @@ private:
     void bind();                                       // title and actions of the mode ctx_.keep.place names
     void paint_bench();                                // the rows whose content changed (all after invalidate())
     void paint_row(int i, bool known, bool focus);
-    void open(const bench::Act &a);
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
     bench::Acts acts_{nullptr, 0};
     Readiness rd_[kMaxActs];                           // readiness of the open place's actions, refreshed in update()

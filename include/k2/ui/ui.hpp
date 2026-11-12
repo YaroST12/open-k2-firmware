@@ -61,9 +61,17 @@ inline constexpr std::size_t kLargestMenu = std::max({arena_bytes<TriggerPage>()
 #endif
                                                      
                                                       arena_bytes<DiagnosisPage>()});
-// Tools > Connection > Saved cables > Share, and the other three-menu chains (Connection > Spoof, Cards / Black box > Share).
+// Bench > Cable > Saved cables > Share, and the other menu chains: a place page (Connection) under each tool of its place
+// (Charger: Request voltage, Fast charge, Report cards > Share, Stress test; Cable: Spoof, Resistance, Loop probe > Share;
+// Device: Twins), Black box > Share, the charger test's card.
 inline constexpr std::size_t kLongestChain =
     std::max({arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, SpoofPage>(),
+              arena_bytes<ToolsPage, ConnectionPage, PdTriggerPage>(), arena_bytes<ToolsPage, ConnectionPage, TriggerPage>(),
+              arena_bytes<ToolsPage, ConnectionPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, CableRPage>(),
+              arena_bytes<ToolsPage, ConnectionPage, LoopProbePage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, TwinPage>(),
+#if K2_PDSTRESS
+              arena_bytes<ToolsPage, ConnectionPage, PdStressPage>(),
+#endif
               arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, BlackBoxPage, SharePage>(),
               arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ToolsPage, LoopProbePage, SharePage>()});
 inline constexpr std::size_t kPageArenaBytes = std::max(kLargestBase + kLargestMenu, kLongestChain);

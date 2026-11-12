@@ -219,17 +219,15 @@ void ToolsPage::update(uint32_t now_ms) {
         draw_footer_cached(ctx_.content, FooterTone::Info, bench::act_hint(acts_.a[sel]), foot_);
 }
 
-void ToolsPage::open(const bench::Act &a) {
-    Ui &ui = *ctx_.ui;
+Icon place_icon(Place p) { return kPlaceIcons[static_cast<int>(p) < bench::kPlaces ? static_cast<int>(p) : 0]; }
+
+// A tool opens its menu over the page OK was pressed on (the place page stays under it, BACK comes back to it); a page
+// replaces everything (Test charger, Settings).
+void open_bench_act(Ui &ui, const bench::Act &a, uint32_t now_ms) {
     switch (a.kind) {
-    case bench::ActKind::Tool:
-        if (a.arg == kToolSpoof) ui.open_connection(conn::Tab::Cable, true, ctx_.now);   // the Spoof list over Cable read
-        else if (a.arg >= kToolChargerId && a.arg <= kToolDeviceId)                    // Charger ID, Cable read, Device ID
-            ui.open_connection(static_cast<conn::Tab>(a.arg - kToolChargerId), false, ctx_.now);
-        else ui.push_menu(tool_menu(a.arg), ctx_.now);
-        break;
-    case bench::ActKind::Page: ui.goto_page(a.arg, ctx_.now); break;
-    case bench::ActKind::Menu: ui.push_menu(static_cast<Menu>(a.arg), ctx_.now); break;
+    case bench::ActKind::Tool: ui.push_menu(ToolsPage::tool_menu(a.arg), now_ms); break;
+    case bench::ActKind::Page: ui.goto_page(a.arg, now_ms); break;
+    case bench::ActKind::Menu: ui.push_menu(static_cast<Menu>(a.arg), now_ms); break;
     }
 }
 
@@ -248,7 +246,7 @@ bool ToolsPage::on_event(Event e) {
     }
     if (e.button == Button::Ok) {
         if (!on_bench()) {
-            if (sel < acts_.n) open(acts_.a[sel]);
+            if (sel < acts_.n) open_bench_act(ui, acts_.a[sel], ctx_.now);
         } else if (sel == static_cast<int>(Place::Meter)) {
             ui.show_face(ctx_.now);
         } else {

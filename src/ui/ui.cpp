@@ -759,8 +759,21 @@ void Ui::flip_face(int dir, uint32_t now_ms) {
 void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCount ? ctx_.keep.face : 0], now_ms); }
 
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
+    const bool conn_place = p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device;
+    if (conn_place) {   // a place page over the Bench: BACK pops it and the Bench shows with the place focused
+        ctx_.keep.bench_sel = static_cast<int>(p);
+        p = bench::Place::Meter;
+    }
     ctx_.keep.place = static_cast<uint8_t>(p);
     set_page(Page::Tools, now_ms);   // the same page repaints in its new mode (set_page keeps a base page asked for again)
+    if (!conn_place) return;
+    const conn::Tab tab = ctx_.keep.bench_sel == static_cast<int>(bench::Place::Charger) ? conn::Tab::Source
+                        : ctx_.keep.bench_sel == static_cast<int>(bench::Place::Cable) ? conn::Tab::Cable : conn::Tab::Sink;
+    conn_lock_ = static_cast<int8_t>(tab);
+    if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; return; }
+    ContentViewport viewport(layout_.content);
+    top_as<ConnectionPage>().update(now_ms);
+    sync_panel();   // the OK verb follows the rows the first update built
 }
 
 void Ui::to_meter(uint32_t now_ms) { set_page(Page::Home, now_ms); }
@@ -1031,6 +1044,7 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     if (spoof) return push_menu(Menu::Spoof, now_ms);
     ContentViewport viewport(layout_.content);
     conn.update(now_ms);
+    sync_panel();   // the OK verb follows the rows the first update built
     return true;
 }
 

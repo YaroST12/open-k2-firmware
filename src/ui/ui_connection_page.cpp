@@ -23,6 +23,7 @@
 #include "k2/ui/qrshare_records.hpp"
 #include "k2/core/storage.hpp"
 #include "k2/pd/usb_link.hpp"
+#include "k2/ui/text.hpp"
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_pages.hpp"
 #include "k2/ui/ui_style.hpp"
@@ -108,22 +109,47 @@ void ConnectionPage::enter() {
     id_asked_ = false;
     sig_valid_ = false;
     act_sel_ = -1;
+    first_ = 0;
+    id_sig_ = thumb_sig_ = 0;
     sense(ctx_.now);                   // facts only; the topology window starts with this one sample
-    if (locked_) return;               // a single tool keeps its tab
+    if (locked_) {                     // a place keeps its tab and comes back on the row it was left on (update clamps it)
+        act_sel_ = ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))];
+        return;
+    }
     tab_ = conn::default_tab(facts_);   // Sink if a device is inline or was seen on CC, else Source if a charger is seen, else Cable if a cable is held
     defaulted_ = true;
 }
 
-// A single tool (Charger ID, Cable read, Device ID): this page locked to one tab, no tab strip, OK runs the tool's own
-// action and its other actions are rows under the result (UI_SYSTEM 7.13).
+// A place page (Charger, Cable, Device): this page locked to one tab, no tab strip, the place's name and icon in the masthead.
+// OK with no row focused runs the place's own read; its actions are rows under the fact table.
 void ConnectionPage::lock(conn::Tab t) {
     locked_ = true;
     tab_ = t;
     defaulted_ = false;
     more_ = false;
     act_sel_ = -1;
-    title_ = text::conn::kToolTitles[static_cast<int>(t)];
+    first_ = 0;
+    const bench::Place p = conn::place_of(t);
+    title_ = bench::place_name(p);
+    icon_ = place_icon(p);
+    bar_icon_ = true;
     sig_valid_ = false;
+}
+
+// Up / Dn on a place page. With a row focused they move the focus (Up from the first row lets go of it: OK then reads again);
+// with none they scroll the fact table a window at a time, and Dn takes the first row once it is on screen.
+void ConnectionPage::place_key(bool down) {
+    const int rows = n_items_ - 1;
+    constexpr int step = kPlaceRows - 1;   // a window less one row: the last row seen stays on screen
+    if (down) {
+        if (act_sel_ >= 0) { if (act_sel_ + 1 < rows) act_sel_++; }
+        else if (rows > 0 && res_n_ < first_ + kPlaceRows) act_sel_ = 0;
+        else first_ += step;   // place_first clamps it at the next paint
+    } else {
+        if (act_sel_ >= 0) act_sel_--;
+        else first_ = first_ > step ? first_ - step : 0;
+    }
+    if (act_sel_ >= 0) ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))] = static_cast<uint8_t>(act_sel_);
 }
 
 void ConnectionPage::leave() {
@@ -140,12 +166,14 @@ void ConnectionPage::draw_static() {
     title_bar();
     sig_valid_ = false;
     popup_drawn_ = false;   // the pop-up re-binds and repaints the shared RowList
+    id_sig_ = thumb_sig_ = 0;
     status_.invalidate();
 }
 
 void ConnectionPage::invalidate() {
     sig_valid_ = false;
     popup_drawn_ = false;
+    id_sig_ = thumb_sig_ = 0;
     status_.invalidate();
 }
 
@@ -178,9 +206,8 @@ PanelLabels ConnectionPage::labels() const {
         const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
         const char *verb = i < n_items_ ? conn::act_verb(items_[static_cast<std::size_t>(i)].act, more_) : "";
         l.b[static_cast<int>(Button::Ok)] = {verb, share ? "Share" : "", "", false};
-        const bool list = n_items_ > 1;
-        l.b[static_cast<int>(Button::Plus)] = {list ? "Dn" : "", "", "", false};
-        l.b[static_cast<int>(Button::Minus)] = {list ? "Up" : "", "", "", false};
+        l.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};    // a place page always scrolls or moves the focus
+        l.b[static_cast<int>(Button::Minus)] = {"Up", "", "", false};
         return l;
     }
     l.b[static_cast<int>(Button::Ok)] = {"Actions", share ? "Share" : "", "", false};
@@ -207,12 +234,17 @@ bool ConnectionPage::on_event(Event e) {
     }
     if (locked_ && shrt && e.button != Button::Back) {
         switch (e.button) {
-        case Button::Plus: if (act_sel_ + 2 < n_items_) act_sel_++; break;   // Dn: down the action rows
-        case Button::Minus: if (act_sel_ >= 0) act_sel_--; break;            // Up: back to none (OK runs the tool's action)
+        case Button::Plus: place_key(true); break;
+        case Button::Minus: place_key(false); break;
         case Button::Ok: {
             const int i = act_sel_ < 0 ? 0 : 1 + act_sel_;
             if (i >= n_items_) break;
             const conn::Item &it = items_[static_cast<std::size_t>(i)];
+            if (it.act == conn::Act::Bench) {   // a tool or a page of the place: it may replace this page, so nothing here is touched after
+                const bench::Acts b = bench::actions(conn::place_of(tab_));
+                if (it.arg >= 0 && it.arg < b.n) open_bench_act(*ctx_.ui, b.a[it.arg], ctx_.now);   // a blocked tool opens and says why
+                return true;
+            }
             if (it.enabled) activate(it, ctx_.now);
             else set_op(it.why, ctx_.now);
             break;
@@ -287,6 +319,22 @@ void ConnectionPage::build_items() {
     // The no-PD gate (ROADMAP 2026-11-10, Row C): with the settled verdict "no PD" a device on the line
     // cannot be identified. The alone path (a dual-role phone) is PD-capable and stays offered.
     a.pd_none = verdict_ == pd::PdVerdict::None && (facts_.inline_sink || facts_.sink_seen) && !a.alone;
+    if (locked_) {
+        n_items_ = conn::place_actions(tab_, a, items_);
+        // The place's tools carry the Bench's readiness: a blocked one is dimmed with its tag and the fact line says why.
+        const SetupState ss = setup_state(ctx_);
+        const bench::Acts b = bench::actions(conn::place_of(tab_));
+        for (int i = 0; i < n_items_; i++) {
+            conn::Item &it = items_[static_cast<std::size_t>(i)];
+            if (it.act != conn::Act::Bench || it.arg < 0 || it.arg >= b.n || b.a[it.arg].kind != bench::ActKind::Tool) continue;
+            const Readiness rd = tool_readiness(b.a[it.arg].arg, ss, ctx_.pm_online);
+            it.enabled = rd.level != ToolLevel::Blocked;
+            it.caution = rd.level == ToolLevel::Caution;
+            it.why = rd.reason;
+            it.tag = rd.level == ToolLevel::Ready ? "" : rd.tag;
+        }
+        return;
+    }
     n_items_= conn::actions(tab_, a, items_);
     if (popup_sel_ >= n_items_) popup_sel_ = n_items_ - 1;
     if (popup_sel_ < 0) popup_sel_ = 0;
@@ -338,6 +386,7 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
         if (!started) set_op(ctx_.id_no_device ? "No device to ask" : "Identify refused", now_ms);
         break;
     }
+    case conn::Act::Bench: break;   // on_event opens it (it may leave this page)
     }
     close_popup();
 }
@@ -428,17 +477,26 @@ static_assert(answered_rows_fit(), "the Answered row's key and value fit their c
 
 // A value row. `cut` > 0 splits the value there: the head in `c`, the tail (the current) in kAmp; so a "20/28V 5A" line
 // reads in unit colours. 0 = one colour.
+// The rows are built in order and only the window is kept: `skip` rows are counted and dropped, the next kCap stored, the rest
+// counted. A place page builds twice - once to count (skip = kCountOnly), once for the window it then shows.
 struct Rows {
     struct R {
         const char *key = ""; StrBuf<28> v; uint16_t c = kText; uint8_t cut = 0;
-        int8_t act = -1;       // an action row (a single tool's extras): its index, -1 = a result row
+        int8_t act = -1;       // an action row (a place page's extras): its index, -1 = a result row
         bool focus = false, off = false;
+        bool drill = false;    // an action row that opens a page: the chevron when it has no tail
+        bool perf = false;     // the first action row under fact rows: the dashed perforation on its top line
+        const char *tail = ""; // an action row's tail word (a tool's readiness tag)
     };
-    static constexpr int kCap = kMaxList + conn::kMaxItems;   // a single tool's result rows past the ninth scroll, then its actions
+    static constexpr int kCap = kMaxList;
+    static constexpr int kCountOnly = 1 << 14;
     R r[kCap];
-    R spill;   // rows past the last visible one land here and are dropped
+    R spill;   // rows outside the window land here and are dropped
     R *open = &spill;
-    int n = 0;
+    int n = 0;       // rows stored (the window)
+    int total = 0;   // rows built
+    int skip = 0;    // rows before the window
+    void reset(int from) { n = 0; total = 0; skip = from; open = &spill; }
     StrBuf<28> &add(const char *key, uint16_t c = kText) {
         R &x = push();
         x.key = key; x.c = c;
@@ -446,7 +504,8 @@ struct Rows {
         return x.v;
     }
     R &push() {
-        R &x = n < kCap ? r[n++] : spill;
+        const bool in = total++ >= skip && n < kCap;
+        R &x = in ? r[n++] : spill;
         x = R{};
         open = &x;
         return x;
@@ -880,42 +939,62 @@ namespace {
 // A single tool's other actions, as rows after the result (items_[0] is the tool's own action: OK runs it with no row
 // focused). A greyed row stays in its place; the footer names why while it is focused.
 void add_extras(Rows &R, const std::array<conn::Item, conn::kMaxItems> &it, int n, int sel) {
+    const bool facts = R.total > 0;   // fact rows above: the first action row carries the perforation
     for (int i = 1; i < n; i++) {
+        const conn::Item &x0 = it[static_cast<std::size_t>(i)];
         Rows::R &x = R.push();
         x.key = "";
-        x.v.put(it[static_cast<std::size_t>(i)].label);
+        x.v.put(x0.label);
         x.act = static_cast<int8_t>(i - 1);
+        x.perf = facts && i == 1;
         x.focus = sel == i - 1;
-        x.off = !it[static_cast<std::size_t>(i)].enabled;
+        x.off = !x0.enabled;
+        x.tail = x0.tag;
+        x.drill = x0.act == conn::Act::Bench || x0.act == conn::Act::SpoofAs || x0.act == conn::Act::SavedCables;
     }
 }
 
-// The window of R that starts at row `first`, painted from y0 down to the footer: one 20 px hairline row per slot, a slot
-// repainted alone when its hash moved (Row D), the vacated slots cleared and the table closed by one hairline. An action row
-// is the RowList look: its label at x10, focused = kFocusT ground and the 3 px kFocus bar. Returns the rows painted.
-int paint_list(const Surface &c, const Rows &R, int16_t y0, int first, bool full, bool dim, bool blank,
-               std::array<uint32_t, kVisRows> &sig_io, uint8_t &n_io) {
+// A place page: the identity block's band (y22..67) and the list under it, with a 4 px lane on the right for the scroll thumb.
+constexpr int16_t kIdY = kit::kBelowBar, kIdHeadY = kIdY + 2, kIdLineY = kIdY + 30, kIdDashY = kIdY + 44;
+constexpr int16_t kPlaceListY = kIdY + 46;
+constexpr int16_t kLane = 4;
+constexpr int kPlaceSlots = (kFooterY - kPlaceListY) / kRowPitch;   // 7
+static_assert(kPlaceSlots == ConnectionPage::kPlaceRows && kPlaceSlots <= kVisRows, "a place page shows seven list rows under its identity block");
+static_assert(kValX + kValCells * 8 <= 224 - kLane, "the value column ends before the scroll lane");
+
+// The window of R (already windowed by the builder), painted from y0 down to the footer: one 20 px row per slot, a slot
+// repainted alone when its hash moved (Row D), the vacated slots cleared. The tabbed page draws a hairline on every row's top
+// and closes the table with one; a place page (`place`) has no hairlines - the first action row carries the dashed
+// perforation - and keeps the lane at the right edge for its scroll thumb. An action row: its label (x10, or x8 on a place
+// page), focused = kFocusT ground and the 3 px kFocus bar, or on a place page the inverted focus block, a tail word or the
+// chevron. Returns the rows painted.
+int paint_list(const Surface &c, const Rows &R, int16_t y0, bool full, bool dim, bool blank,
+               std::array<uint32_t, kVisRows> &sig_io, uint8_t &n_io, bool place = false) {
     const int slots = std::min(kVisRows, (kFooterY - y0) / kRowPitch);
-    const int n = std::clamp(R.n - first, 0, slots);
+    const int n = std::clamp(R.n, 0, slots);
+    const int16_t w = place ? static_cast<int16_t>(c.w - kLane) : c.w;
+    const int close = place ? 0 : 1;   // the closing hairline's row
     constexpr int16_t kKeyDy = kit::row_text_y(kRowPitch, 12), kValDy = kit::row_text_y(kRowPitch, 16);
     const bool count_moved = !full && n_io != n;
     const int clear_from = y0 + std::min<int>(n_io, n) * kRowPitch;   // first slot that may be stale
     std::array<uint32_t, kVisRows> sigs{};
     for (int i = 0; i < n; i++) {
-        const Rows::R &row = R.r[first + i];
+        const Rows::R &row = R.r[i];
         uint32_t h = fnv(2166136261u, uint32_t(row.c) | uint32_t(row.cut) << 16 | uint32_t(dim) << 24);
-        h = fnv(h, uint32_t(uint8_t(row.act)) | uint32_t(row.focus) << 8 | uint32_t(row.off) << 9);
+        h = fnv(h, uint32_t(uint8_t(row.act)) | uint32_t(row.focus) << 8 | uint32_t(row.off) << 9 | uint32_t(row.drill) << 10
+                       | uint32_t(row.perf) << 11);
         for (const char *k = row.key; *k; k++) h = fnv(h, uint8_t(*k));
         h = fnv(h, 0x100u);   // key / value separator
         for (char ch : row.v.view()) h = fnv(h, uint8_t(ch));
+        for (const char *k = row.tail; *k; k++) h = fnv(h, uint8_t(*k));
         sigs[static_cast<std::size_t>(i)] = h;
     }
     if (full) {
-        const int tail = y0 + n * kRowPitch + (n < slots ? 1 : 0);   // under the closing hairline
-        if (!blank && kFooterY > tail) gfx_fill(c, 0, static_cast<int16_t>(tail), c.w, static_cast<int16_t>(kFooterY - tail), kBg);
+        const int tail = y0 + n * kRowPitch + (n < slots ? close : 0);   // under the closing hairline
+        if (!blank && kFooterY > tail) gfx_fill(c, 0, static_cast<int16_t>(tail), w, static_cast<int16_t>(kFooterY - tail), kBg);
     } else if (count_moved && n_io > n) {
-        const int clear_to = y0 + n_io * kRowPitch + 1;
-        gfx_fill(c, 0, static_cast<int16_t>(clear_from), c.w, static_cast<int16_t>(clear_to - clear_from), kBg);
+        const int clear_to = y0 + n_io * kRowPitch + close;
+        gfx_fill(c, 0, static_cast<int16_t>(clear_from), w, static_cast<int16_t>(clear_to - clear_from), kBg);
     }
     char buf[kFitBuf];
     int painted = 0;
@@ -924,9 +1003,30 @@ int paint_list(const Surface &c, const Rows &R, int16_t y0, int first, bool full
         const bool in_cleared = count_moved && y >= clear_from;
         if (!full && !in_cleared && sigs[static_cast<std::size_t>(i)] == sig_io[static_cast<std::size_t>(i)]) continue;
         painted++;
-        const Rows::R &row = R.r[first + i];
-        gfx_fill(c, 0, y, c.w, 1, kRule);
-        const kit::Box body{0, static_cast<int16_t>(y + 1), c.w, static_cast<int16_t>(kRowPitch - 1)};
+        const Rows::R &row = R.r[i];
+        if (!place) gfx_fill(c, 0, y, c.w, 1, kRule);
+        else if (row.perf) kit::draw_dashed(c, 0, w, y, kInk3, kBg);   // the perforation above the actions
+        else gfx_fill(c, 0, y, w, 1, kBg);
+        const kit::Box body{0, static_cast<int16_t>(y + 1), w, static_cast<int16_t>(kRowPitch - 1)};
+        if (row.act >= 0 && place) {
+            const bool bar = row.focus && kFocusBar != 0;
+            const uint16_t bg = row.focus ? kFocusFill : kBg;
+            const uint16_t ink = row.off ? (row.focus ? kOnFocusDim : kInk3) : (row.focus ? kOnFocus : kInk);
+            const uint16_t dim_ink = row.focus ? kOnFocusDim : kInk2;
+            const std::string_view tail = row.tail;
+            kit::TextRun t[2];
+            int nt = 0;
+            t[nt++] = {8, static_cast<int16_t>(y + kValDy), &kSmall, row.v.view(), ink};
+            if (!tail.empty())
+                t[nt++] = {static_cast<int16_t>(w - 8 - static_cast<int>(tail.size()) * kSmall.adv), static_cast<int16_t>(y + kValDy),
+                           &kSmall, tail, dim_ink};
+            const kit::Box g = bar ? kit::Box{3, body.y, static_cast<int16_t>(w - 3), body.h} : body;
+            if (bar) gfx_fill(c, 0, body.y, 3, body.h, kFocusBar);
+            kit::paint_texts(c, g, t, nt, bg);
+            if (tail.empty() && row.drill && !row.off)
+                kit::draw_drill(c, static_cast<int16_t>(w - 8), static_cast<int16_t>(body.y + body.h / 2), dim_ink);
+            continue;
+        }
         if (row.act >= 0) {
             const kit::TextRun t{10, static_cast<int16_t>(y + kValDy), &kSmall, row.v.view(), row.off ? kFaint : kText};
             kit::paint_texts(c, body, &t, 1, row.focus ? kFocusT : kBg);
@@ -948,17 +1048,183 @@ int paint_list(const Surface &c, const Rows &R, int16_t y0, int first, bool full
         }
         kit::paint_texts(c, body, runs, nr, kBg);
     }
-    if ((full || count_moved) && n < slots)
+    if (!place && (full || count_moved) && n < slots)
         gfx_fill(c, 0, static_cast<int16_t>(y0 + n * kRowPitch), c.w, 1, kRule);   // closes the table (moved with the count)
     sig_io = sigs;
     n_io = static_cast<uint8_t>(n);
     return painted;
 }
 
-// The first row of the window: the focused action row stays on screen (the list scrolls by whole rows).
-int window_first(int focus_row, int y0) {
-    const int slots = std::min(kVisRows, (kFooterY - y0) / kRowPitch);
-    return focus_row >= slots ? focus_row - slots + 1 : 0;
+// A place page's window: the focused action row stays on screen with the least scroll; with no row focused the window stays
+// where the keys left it. Clamped so the list never ends above the last slot.
+int place_first(int first, int focus_row, int total) {
+    if (focus_row >= 0) {
+        if (focus_row < first) first = focus_row;
+        if (focus_row >= first + kPlaceSlots) first = focus_row - kPlaceSlots + 1;
+    }
+    return std::clamp(first, 0, std::max(0, total - kPlaceSlots));
+}
+
+// The scroll thumb in the lane (x220..223 of the list band): a 3 px kInk3 bar for the window's share of the list, only when the
+// list is longer than the window; the lane's ground otherwise. Painted when (first, total) moved.
+void paint_thumb(const Surface &c, int first, int total, bool full, uint32_t &sig) {
+    const uint32_t h = (uint32_t(first) << 8 | uint32_t(total)) + 1u;
+    if (!full && h == sig) return;
+    sig = h;
+    const int16_t x = static_cast<int16_t>(c.w - kLane), band = static_cast<int16_t>(kFooterY - kPlaceListY);
+    gfx_fill(c, x, kPlaceListY, 1, band, kBg);
+    if (total <= kPlaceSlots) { gfx_fill(c, static_cast<int16_t>(x + 1), kPlaceListY, kLane - 1, band, kBg); return; }
+    const int track = kPlaceSlots * kRowPitch;
+    const int16_t ty = static_cast<int16_t>(kPlaceListY + first * track / total);
+    const int16_t th = static_cast<int16_t>(std::max(6, kPlaceSlots * track / total));
+    const int16_t tx = static_cast<int16_t>(x + 1);
+    gfx_fill(c, tx, kPlaceListY, kLane - 1, static_cast<int16_t>(ty - kPlaceListY), kBg);
+    gfx_fill(c, tx, ty, kLane - 1, th, kInk3);
+    gfx_fill(c, tx, static_cast<int16_t>(ty + th), kLane - 1, static_cast<int16_t>(kFooterY - ty - th), kBg);
+}
+
+// A place page's identity block (CONCEPT 6): the headline in font 24 with up to three chips beside it, one line of font 12
+// under it and the dashed rule. An empty or no-PD state is a dim headline and the line saying what to do.
+struct Ident {
+    enum Kind : uint8_t { Solid, Outline, Ok, Volt };
+    struct Chip { StrBuf<12> t; Kind k = Solid; };
+    StrBuf<16> head;   // 15 cells of font 24: the longest empty-state word
+    bool dim = false;
+    Chip chip[3];
+    int n = 0;
+    StrBuf<36> line;
+    void add(std::string_view t, Kind k) {
+        if (n >= 3) return;
+        chip[n].t.put(t);
+        chip[n++].k = k;
+    }
+};
+static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside the lane");
+
+void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig) {
+    uint32_t h = fnv(2166136261u, uint32_t(id.dim) | uint32_t(id.n) << 1);
+    for (char ch : id.head.view()) h = fnv(h, uint8_t(ch));
+    for (int i = 0; i < id.n; i++) {
+        h = fnv(h, 0x100u | id.chip[i].k);
+        for (char ch : id.chip[i].t.view()) h = fnv(h, uint8_t(ch));
+    }
+    h = fnv(h, 0x200u);
+    for (char ch : id.line.view()) h = fnv(h, uint8_t(ch));
+    h |= 1u;
+    if (!full && h == sig) return;
+    sig = h;
+    const int16_t hw = static_cast<int16_t>(text_width(kMid, id.head.view()));
+    const int16_t chip_y = static_cast<int16_t>(kIdHeadY + (kMid.height - kit::kChipH) / 2);
+    kit::Box holes[6];
+    int nh = 0;
+    holes[nh++] = {8, kIdHeadY, hw, static_cast<int16_t>(kMid.height)};
+    int16_t cx[3] = {};
+    int shown = 0;
+    for (int16_t x = static_cast<int16_t>(8 + hw + 8); shown < id.n; shown++) {   // a chip that does not fit is left out whole
+        const int cw = kit::chip_w(id.chip[shown].t.view());
+        if (x + cw > c.w - 8) break;
+        cx[shown] = x;
+        holes[nh++] = {x, chip_y, static_cast<int16_t>(cw), kit::kChipH};
+        x = static_cast<int16_t>(x + cw + 4);
+    }
+    const int16_t lw = static_cast<int16_t>(text_width(kLabelFont, id.line.view()));
+    if (lw > 0) holes[nh++] = {8, kIdLineY, lw, static_cast<int16_t>(kLabelFont.height)};
+    kit::fill_except(c, {0, kIdY, c.w, static_cast<int16_t>(kIdDashY - kIdY)}, holes, nh, kBg);
+    gfx_text(c, kMid, 8, kIdHeadY, id.head.view(), id.dim ? kInk2 : kInk, kBg);
+    for (int i = 0; i < shown; i++) {
+        const Ident::Chip &ch = id.chip[i];
+        switch (ch.k) {
+        case Ident::Solid: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kChip, kOnChip); break;
+        case Ident::Outline: kit::draw_chip_frame(c, cx[i], chip_y, ch.t.view(), kInk2, kInk, kBg); break;
+        case Ident::Ok: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kPassFill, kOnPass); break;
+        case Ident::Volt: kit::draw_chip(c, cx[i], chip_y, ch.t.view(), kSpotVolt, kSpotInk); break;
+        }
+    }
+    if (lw > 0) gfx_text(c, kLabelFont, 8, kIdLineY, id.line.view(), kInk2, kBg);
+    gfx_fill(c, 0, kIdDashY, 8, 1, kBg);
+    kit::draw_dashed(c, 8, static_cast<int16_t>(c.w - 8), kIdDashY, kInk3, kBg);
+    gfx_fill(c, static_cast<int16_t>(c.w - 8), kIdDashY, 8, 1, kBg);
+    gfx_fill(c, 0, static_cast<int16_t>(kIdDashY + 1), c.w, static_cast<int16_t>(kPlaceListY - kIdDashY - 1), kBg);
+}
+
+// "2B01:0001 Anker": the ids, the vendor only when it fits the line whole.
+void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) {
+    l.put_hex(vid, 4).put_char(':').put_hex(pid, 4);
+    if (vendor && vendor[0] && l.view().size() + 1 + std::string_view(vendor).size() <= 35) l.put_char(' ').put(vendor);
+}
+
+// The identity of a place with something on it (the empty and no-PD states are the page's own): Charger = the source's
+// power, its PD revision and offer kinds, the contract in use and its ID; Cable = the rating, its power and EPR, the chip's
+// ID; Device = what it asks, the request's state and offer, and what that is of the offer.
+[[gnu::noinline]] void place_ident(Ident &id, conn::Tab tab, const TabData &d, bool stale) {
+    const MatchResult &r = *d.r;
+    switch (tab) {
+    case conn::Tab::Source: {
+        if (d.waiting) { id.head.put("Waiting"); id.dim = true; id.line.put("for the charger's offers"); return; }
+        if (!r.caps_seen) {
+            id.head.put(r.typec_ma || r.typec_rp ? "Type-C" : "No offers");
+            id.dim = true;
+            id.line.put(r.typec_ma || r.typec_rp ? "no PD offers on the line" : "no PD offers yet");
+            return;
+        }
+        const pd::SourceCaps &caps = *d.caps;
+        id.head.put_u32(r.src_max_mw / 1000).put_char('W');
+        if (caps.spec_rev == 1 || caps.spec_rev == 2) id.add(pd::wire_revision_name(caps.spec_rev), Ident::Solid);
+        bool pps = false, avs = false;
+        for (int i = 0; i < r.rows; i++) {
+            pps = pps || caps.pdos[i].type == pd::PdoType::Pps;
+            avs = avs || caps.pdos[i].type == pd::PdoType::Avs;
+        }
+        if (caps.epr) id.add("EPR", Ident::Outline);
+        if (pps) id.add("PPS", Ident::Outline);
+        else if (avs) id.add("AVS", Ident::Outline);
+        if (r.request_seen) {
+            StrBuf<12> t;
+            put_v(t, r.want_mv);
+            t.put("V ");
+            put_a(t, r.want_ma);
+            id.add(t.view(), Ident::Volt);
+        }
+        id.line.put_u32(uint32_t(r.rows)).put(r.rows == 1 ? " offer, ID " : " offers, ID ");
+        const pd::Identity &vid = fusb302::vdm().identity;
+        if (vid.valid) put_line_id(id.line, vid.vid, vid.pid, vid.vendor);
+        else {
+            const char *w = conn::sv_word(survey::state().entry(pd::SvField::Identity));
+            id.line.put(w[0] ? w : "unknown");
+        }
+        return;
+    }
+    case conn::Tab::Cable: {
+        const pd::Emarker &em = fusb302::emarker();
+        if (!em.valid) { id.head.put("Not read"); id.dim = true; id.line.put("no e-marker answer held"); return; }
+        id.head.put_u32(em.max_current_a).put("A ").put_u32(em.max_voltage_v).put_char('V');
+        id.dim = stale;
+        StrBuf<12> w;
+        w.put_u32(em.max_power_w).put_char('W');
+        id.add(w.view(), Ident::Solid);
+        id.add(em.epr_capable ? "EPR" : "no EPR", Ident::Outline);
+        put_line_id(id.line, em.vid, em.pid, em.vendor_str);
+        const std::string_view kind = em.is_active ? ", active" : ", passive";
+        if (id.line.view().size() + kind.size() <= 35) id.line.put(kind);
+        return;
+    }
+    case conn::Tab::Sink: {
+        if (d.k2_sink) { id.head.put("K2"); id.line.put("the K2 draws the power itself"); return; }
+        if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("the device asked for no offer"); return; }
+        put_v(id.head, r.want_mv);
+        id.head.put("V ");
+        put_a(id.head, r.want_ma);
+        const pd::Contract &ct = fusb302::contract();
+        const char *st = request_state_name(ct);
+        if (st[0]) id.add(st, ct.ready ? Ident::Ok : Ident::Outline);
+        const pd::Pdo *p = r.want_pos > 0 && r.want_pos <= d.caps->num_pdos ? &d.caps->pdos[r.want_pos - 1] : nullptr;
+        StrBuf<12> o;
+        o.put(p && p->type == pd::PdoType::Pps ? "PPS" : p && p->type == pd::PdoType::Avs ? "AVS" : "PDO").put_u32(uint32_t(r.want_pos));
+        id.add(o.view(), Ident::Outline);
+        id.line.put("asks ").put_u32(r.want_mw / 1000).put("W of ").put_u32(r.src_max_mw / 1000).put("W offered");
+        return;
+    }
+    }
 }
 
 }  // namespace
@@ -967,25 +1233,72 @@ int16_t ConnectionPage::row_y0() const { return locked_ ? kTabY : kRowY0; }
 
 uint32_t ConnectionPage::actions_sig() const {
     if (!locked_) return 0;
-    uint32_t h = fnv(2166136261u, uint32_t(act_sel_ + 1) | uint32_t(n_items_) << 8 | uint32_t(more_) << 16);
-    for (int i = 0; i < n_items_; i++) h = fnv(h, uint32_t(items_[static_cast<std::size_t>(i)].enabled));
+    uint32_t h = fnv(2166136261u, uint32_t(act_sel_ + 1) | uint32_t(n_items_) << 8 | uint32_t(more_) << 16 | uint32_t(first_) << 20);
+    for (int i = 0; i < n_items_; i++) {
+        const conn::Item &it = items_[static_cast<std::size_t>(i)];
+        h = fnv(h, uint32_t(it.enabled) | uint32_t(it.caution) << 1);
+        for (const char *k = it.tag; *k; k++) h = fnv(h, uint8_t(*k));
+    }
     return h;
 }
 
-// An empty tab: the band and its one line (the port-aware text of conn::empty_state), then a single tool's action rows.
-void ConnectionPage::paint_empty() {
+namespace {
+// What a place page paints under its identity block: the fact rows `build` adds, then the place's actions; built once to
+// count, then for the window (the focus decides it, else the keys). The members it moves are the page's.
+struct PlaceList {
+    int &first;
+    uint8_t &res_n, &tot_n;
+    uint32_t &thumb_sig;
+    std::array<uint32_t, kVisRows> &sig;
+    uint8_t &n_io;
+};
+template <class Build>
+void paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items, int act_sel, bool full,
+                      bool dim, PlaceList s, Build &&build) {
+    Rows R;
+    R.reset(Rows::kCountOnly);
+    build(R);
+    const int results = R.total;
+    add_extras(R, items, n_items, act_sel);
+    const int total = R.total;
+    s.first = place_first(s.first, act_sel >= 0 ? results + act_sel : -1, total);
+    s.res_n = static_cast<uint8_t>(results);
+    s.tot_n = static_cast<uint8_t>(total);
+    R.reset(s.first);
+    build(R);
+    add_extras(R, items, n_items, act_sel);
+    paint_list(c, R, kPlaceListY, full, dim, false, s.sig, s.n_io, true);
+    paint_thumb(c, s.first, total, full, s.thumb_sig);
+}
+}  // namespace
+
+// An empty tab: the band and its one line (the port-aware text of conn::empty_state); a place page: the dim headline and
+// that line in its identity block, then its action rows.
+void ConnectionPage::paint_empty(bool redraw) {
     const Surface &c = ctx_.content;
+    const conn::Empty e = conn::empty_state(tab_, facts_);
+    if (locked_) {
+        const bool full = redraw || body_ == Body::None || body_ == Body::Popup;
+        Ident id;
+        id.head.put(e.title);
+        id.dim = true;
+        id.line.put(e.hint);
+        paint_identity(c, id, full, id_sig_);
+        paint_place_list(c, items_, n_items_, act_sel_, full, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_},
+                         [](Rows &) {});
+        body_ = Body::Empty;
+        body_tab_ = tab_;
+        return;
+    }
     paint_tab_indicator();   // the strip owns kBodyY .. kRowY0
     body_ = Body::Empty;
-    const conn::Empty e = conn::empty_state(tab_, facts_);
     const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
     paint_band(c, y0, e.title);
     const kit::TextRun line{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, e.hint, kDim};
     kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &line, 1, kBg);
     Rows R;
-    if (locked_) add_extras(R, items_, n_items_, act_sel_);
     body_n_ = 0;
-    paint_list(c, R, list_y, window_first(act_sel_, list_y), true, false, false, row_sig_, body_n_);
+    paint_list(c, R, list_y, true, false, false, row_sig_, body_n_);
 }
 
 void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
@@ -1012,24 +1325,37 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
         paint_no_pd_body(r, redraw);
         return;
     }
+    const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
+    if (locked_) {   // a place page: the identity block, then the full fact table (the Source tab's survey rows included)
+        const bool full = redraw || body_ == Body::None || body_ == Body::Popup;
+        Ident id;
+        place_ident(id, tab_, d, dim);
+        paint_identity(c, id, full, id_sig_);
+        paint_place_list(c, items_, n_items_, act_sel_, full, dim, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_},
+                         [&](Rows &R) {
+                             switch (tab_) {
+                             case conn::Tab::Source: source_rows(R, d); if (!d.waiting) details_rows(R); break;
+                             case conn::Tab::Cable: cable_rows(R, d); break;
+                             case conn::Tab::Sink: sink_rows(R, d); break;
+                             }
+                         });
+        body_ = Body::Rows;
+        body_tab_ = tab_;
+        return;
+    }
     Rows R;
     switch (tab_) {
     case conn::Tab::Source: if (more_) details_rows(R); else source_rows(R, d); break;
     case conn::Tab::Cable: cable_rows(R, d); break;
     case conn::Tab::Sink: sink_rows(R, d); break;
     }
-    if (!locked_ && R.n > kMaxList) R.n = kMaxList;   // the tabbed page never scrolls: rows past the ninth are dropped
-    const int results = R.n;
-    if (locked_) add_extras(R, items_, n_items_, act_sel_);
-    const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
     const int16_t y0 = row_y0();
     // Fixed row slots (Row D): a whole-body pass only when the area was wiped or never drawn here (new tab,
     // pop-up closed, empty state left). A row-count change no longer wipes: the vacated slots are cleared and
     // the closing hairline moves; every other row keeps its slot and repaints alone when its hash changed.
     const bool full = redraw || body_ != Body::Rows || body_tab_ != tab_;
     if (full) paint_tab_indicator();
-    const int first = act_sel_ >= 0 ? window_first(results + act_sel_, y0) : 0;
-    const int painted = paint_list(c, R, y0, first, full, dim, ctx_.blank, row_sig_, body_n_);
+    const int painted = paint_list(c, R, y0, full, dim, ctx_.blank, row_sig_, body_n_);   // the tabbed page never scrolls
     body_ = Body::Rows;
     body_tab_ = tab_;
     K2LOG("[CONN] body full=%d rows=%d\n", full ? 1 : 0, painted);
@@ -1045,22 +1371,35 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     // The measured rows (at most three). The Type-C row uses the match's Rp reading (the active CC line driven into the
     // Rp window counts even before typec_ma()'s 3 s mark).
     const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
+    auto build = [&](Rows &R) {
+        {
+            StrBuf<28> &v = R.add("Type-C", kText);
+            typec_row_text(vbus_, rp_ma, v);   // the debounced VBUS (Row D), like the list body
+            if (v.view().empty()) v.put("unknown");
+        }
+        if (sink_tab) {
+            put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
+            vooc_row(R, vooc_);
+        } else if (legacy_row_protocol(ctx_.fc) && ctx_.fc != fastcharge::Protocol::Pending) {
+            StrBuf<6> fcn;
+            fc_pill_text(ctx_.fc, fcn);
+            if (!fcn.view().empty()) R.add("Legacy", kEnergy).put(fcn.view());
+        }
+    };
+    if (locked_) {   // a place page: "No PD" as the dim headline, its case on the line, then the measured rows and the actions
+        const bool full = redraw || body_ == Body::None || body_ == Body::Popup;
+        Ident id;
+        id.head.put(text::conn::kNoPd);
+        id.dim = true;
+        id.line.put(line);
+        paint_identity(c, id, full, id_sig_);
+        paint_place_list(c, items_, n_items_, act_sel_, full, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_}, build);
+        body_ = Body::NoPd;
+        body_tab_ = tab_;
+        return;
+    }
     Rows R;
-    {
-        StrBuf<28> &v = R.add("Type-C", kText);
-        typec_row_text(vbus_, rp_ma, v);   // the debounced VBUS (Row D), like the list body
-        if (v.view().empty()) v.put("unknown");
-    }
-    if (sink_tab) {
-        put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
-        vooc_row(R, vooc_);
-    } else if (legacy_row_protocol(ctx_.fc) && ctx_.fc != fastcharge::Protocol::Pending) {
-        StrBuf<6> fcn;
-        fc_pill_text(ctx_.fc, fcn);
-        if (!fcn.view().empty()) R.add("Legacy", kEnergy).put(fcn.view());
-    }
-    const int results = R.n;
-    if (locked_) add_extras(R, items_, n_items_, act_sel_);
+    build(R);
     const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
     const bool full = redraw || body_ != Body::NoPd || body_tab_ != tab_;
     if (full) {
@@ -1077,8 +1416,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
         kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &lr, 1, kBg);
         nopd_msg_sig_ = mh;
     }
-    const int first = act_sel_ >= 0 ? window_first(results + act_sel_, list_y) : 0;
-    paint_list(c, R, list_y, first, full, false, true, row_sig_, body_n_);
+    paint_list(c, R, list_y, full, false, true, row_sig_, body_n_);
     body_ = Body::NoPd;
     body_tab_ = tab_;
     K2LOG("[CONN] body nopd rows=%d\n", R.n);
@@ -1117,9 +1455,19 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
     const bool focus_off = focus >= 0 && focus < n_items_ && !items_[static_cast<std::size_t>(focus)].enabled;
     // The pop-up's or an action row's greyed item names why; the tool's own action says it only when OK is pressed (its
     // reason would repeat the band: NO DEVICE / "No device seen").
+    const conn::Item *row = locked_ && act_sel_ >= 0 && focus < n_items_ ? &items_[static_cast<std::size_t>(focus)] : nullptr;
     if (focus_off && (popup_ || act_sel_ >= 0)) {
         txt.put(items_[static_cast<std::size_t>(focus)].why);
+        tone = row && row->act == conn::Act::Bench ? FooterTone::Error : FooterTone::Caution;   // a blocked tool, as on the Bench
+    } else if (row && row->caution) {
+        txt.put(row->why);
         tone = FooterTone::Caution;
+    } else if (row && row->act == conn::Act::Bench && !before(now_ms, op_until_)) {   // the focused tool's note
+        const bench::Acts b = bench::actions(conn::place_of(tab_));
+        if (row->arg >= 0 && row->arg < b.n) {   // the note in footer voice: a sentence
+            const std::string_view hint = bench::act_hint(b.a[row->arg]);
+            if (!hint.empty()) txt.put_char(hint[0] >= 'a' && hint[0] <= 'z' ? static_cast<char>(hint[0] - 'a' + 'A') : hint[0]).put(hint.substr(1));
+        }
     } else if (ctx_.em_scanning) {
         txt.put("Reading cable...");
     } else if (before(now_ms, ctx_.em_listen_until)) {
@@ -1265,9 +1613,10 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = fnv(h, uint32_t(facts_.cable_fact));
         h = fnv(h, asig);
         if (sig_valid_ && h == sig_) return;
+        const bool redraw = !sig_valid_;
         sig_ = h;
         sig_valid_ = true;
-        paint_empty();
+        paint_empty(redraw);
         return;
     }
 

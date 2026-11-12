@@ -278,12 +278,15 @@ void test_tools_row_opens_the_page() {
     ui.context().keep.bench_sel = 0;
     for (int i = 0; i < 2; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 60);
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 70);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Cable));
+    CHECK_EQ(int(ui.menu()), int(Menu::Connection));   // the Cable place page
+    const ConnectionPage &cp = ui.connection_page();
+    CHECK_EQ(int(cp.tab()), int(conn::Tab::Cable));
     const bench::Acts acts = bench::actions(bench::Place::Cable);
-    int row = 0;
-    while (row < acts.n && !(acts.a[row].kind == bench::ActKind::Tool && acts.a[row].arg == kToolLoopProbe)) row++;
-    CHECK_EQ(row < acts.n, true);
-    for (int i = 0; i < row; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 80);   // to the Loop probe row
+    int row = 1;   // items 1.. are the rows (item 0 is the place's own read)
+    while (row < cp.popup_count() &&
+           !(cp.popup_item(row).act == conn::Act::Bench && acts.a[cp.popup_item(row).arg].arg == kToolLoopProbe)) row++;
+    CHECK_EQ(row < cp.popup_count(), true);
+    for (int i = cp.action_row() + 1; i < row; i++) ui.on_button(Button::Plus, ButtonEvent::Short, g_t + 80);   // to Loop probe
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t + 100);
     CHECK_EQ(int(ui.menu()), int(Menu::LoopProbe));
     CHECK_STR(ToolsPage::tool_name(kToolLoopProbe), "Loop probe");

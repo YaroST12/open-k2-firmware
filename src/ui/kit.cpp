@@ -571,6 +571,29 @@ int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uin
     return w;
 }
 
+int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg) {
+    const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, text));
+    const int16_t w = static_cast<int16_t>(tw + 8);
+    gfx_fill(s, x, y, w, 1, frame);
+    gfx_fill(s, x, static_cast<int16_t>(y + kChipH - 1), w, 1, frame);
+    gfx_fill(s, x, static_cast<int16_t>(y + 1), 1, kChipH - 2, frame);
+    gfx_fill(s, static_cast<int16_t>(x + w - 1), static_cast<int16_t>(y + 1), 1, kChipH - 2, frame);
+    const int16_t tx = static_cast<int16_t>(x + 4);
+    const Box hole{tx, static_cast<int16_t>(y + 1), tw, static_cast<int16_t>(kLabelFont.height)};
+    fill_except(s, {static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2), kChipH - 2}, &hole, 1, bg);
+    gfx_text(s, kLabelFont, tx, static_cast<int16_t>(y + 1), text, ink, bg);
+    return w;
+}
+
+void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t ink, uint16_t bg) {
+    for (int16_t x = x0; x < x1; x = static_cast<int16_t>(x + kDashOn + kDashOff)) {
+        const int16_t on = static_cast<int16_t>(std::min<int>(kDashOn, x1 - x));
+        gfx_fill(s, x, y, on, 1, ink);
+        const int16_t off = static_cast<int16_t>(std::min<int>(kDashOff, x1 - x - on));
+        if (off > 0) gfx_fill(s, static_cast<int16_t>(x + on), y, off, 1, bg);
+    }
+}
+
 void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {
     const Font &f = font_or_small(l.value_font);
     for (int i = 0; i < n; i++) {

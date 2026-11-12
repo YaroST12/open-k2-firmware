@@ -216,6 +216,13 @@ void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y);
 // centred). Every pixel once: the ground goes round the word's box. Returns the width. A tag (D+, CC1, PD) or a verdict word.
 constexpr int16_t kChipH = 14;
 int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w = 0);
+// The outline chip (PPS, OFF, no EPR): a 1 px `frame` round the word on `bg`, the same box as draw_chip. Returns the width.
+int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg);
+constexpr int chip_w(std::string_view text) { return static_cast<int>(text.size()) * 6 + 8; }   // font 12: 6 px a cell
+// A 1 px dashed rule (the perforation under an identity block, above a place's actions): 4 px of `ink`, 2 px of `bg`, from x0
+// to x1 (exclusive), every pixel once.
+constexpr int16_t kDashOn = 4, kDashOff = 2;
+void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t ink, uint16_t bg);
 // Initialises n value cells (white on kBg) at the layout's value box of each row.
 // `chars` (optional, n entries) narrows each cell to its own worst-case width; a right-aligned cell keeps the layout's right
 // edge (value_x + value_chars * advance), so a repaint never reaches a long key to its left.

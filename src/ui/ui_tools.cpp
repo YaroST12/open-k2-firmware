@@ -89,13 +89,13 @@ namespace bench {
 namespace {
 using K = ActKind;
 constexpr uint8_t pg(Page p) { return static_cast<uint8_t>(p); }
-constexpr uint8_t mn(Menu m) { return static_cast<uint8_t>(m); }
 
 // Tool slots (ui_tools.hpp / text/tools.hpp): 0 FC trigger, 1 PD trigger, 2 Spoof, 3 Cable R, 4 Charger ID, 5 Cable read,
 // 6 Device ID, 7 Black Box, 8 PD diagnosis, 9 Report cards, 10 Diag, 11 Device twins, 12 Loop probe, 13 PD Stress.
+// Charger, Cable and Device are the place pages (the Connection page in place mode, conn::place_actions): their own reads
+// (Charger ID, Cable read with Spoof and Saved cables, Device ID) are the page itself; these are the tools it adds.
 constexpr Act kCharger[] = {
     {"Test charger", K::Page, pg(Page::ChargerTest), "grades every offer"},
-    {"Charger ID", K::Tool, 4, nullptr},
     {"Request voltage", K::Tool, 1, nullptr},
     {"Fast charge", K::Tool, 0, nullptr},
     {"Report cards", K::Tool, 9, nullptr},
@@ -104,14 +104,10 @@ constexpr Act kCharger[] = {
 #endif
 };
 constexpr Act kCable[] = {
-    {"Cable read", K::Tool, 5, nullptr},
-    {"Saved cables", K::Menu, mn(Menu::Emarker), "cables you stored"},
-    {"Spoof as...", K::Tool, 2, nullptr},
     {"Resistance", K::Tool, 3, nullptr},
     {"Loop probe", K::Tool, 12, nullptr},
 };
 constexpr Act kDevice[] = {
-    {"Device ID", K::Tool, 6, nullptr},
     {"Twins", K::Tool, 11, nullptr},
 };
 constexpr Act kLog[] = {

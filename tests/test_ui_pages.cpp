@@ -100,14 +100,16 @@ static void test_global_paging() {
     ui.context().keep.bench_sel = static_cast<int>(bench::Place::Charger);
     ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Charger));
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);                       // the Charger place page over the Bench
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::ChargerTest, 1);
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Charger));
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Source));
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
+    CHECK_EQ(ui.menu_depth(), 0u);
     CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
     ui.context().keep.bench_sel = static_cast<int>(bench::Place::Meter);   // the Meter row goes back to the faces
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
@@ -823,6 +825,16 @@ static constexpr uint32_t kT0 = 40000;
 // The row of tool slot `tool` in place `p` (-1 when the place has no such action).
 static int act_row(bench::Place p, int tool) {
     const bench::Acts a = bench::actions(p);
+    if (p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device) {   // a place page's rows
+        const conn::Tab tab = p == bench::Place::Charger ? conn::Tab::Source : p == bench::Place::Cable ? conn::Tab::Cable : conn::Tab::Sink;
+        std::array<conn::Item, conn::kMaxItems> it{};
+        const int n = conn::place_actions(tab, conn::ActFacts{}, it);
+        for (int i = 1; i < n; i++) {
+            const conn::Item &x = it[static_cast<size_t>(i)];
+            if (x.act == conn::Act::Bench && a.a[x.arg].kind == bench::ActKind::Tool && a.a[x.arg].arg == tool) return i - 1;
+        }
+        return -1;
+    }
     for (int i = 0; i < a.n; i++)
         if (a.a[i].kind == bench::ActKind::Tool && a.a[i].arg == tool) return i;
     return -1;
@@ -853,20 +865,22 @@ static void test_tools_hub() {
     for (int i = 0; i < 8; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 20);
     CHECK_EQ(ui.context().keep.bench_sel, bench::kPlaces - 1);
     for (int i = 0; i < 3; i++) press(ui, Button::Minus, ButtonEvent::Short, kT0 + 30);   // Cable
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)] = 0;
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 35);
     CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Cable));
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // the Cable place page over the Bench
+    CHECK_EQ(int(ui.connection_page().tab()), int(conn::Tab::Cable));
     // In a place, short +/- select an action and OK opens it: Cable > Resistance is Cable R.
     for (int i = 0; i < act_row(bench::Place::Cable, 3); i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 38);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
-    CHECK_EQ(ui.menu_depth(), 1u);
+    CHECK_EQ(ui.menu_depth(), 2u);
     CHECK_EQ(ui.menu() == Menu::CableR, 1);
     CHECK_EQ(ui.page_index(), kMenuPageBase + static_cast<uint8_t>(Menu::CableR));
     // BACK returns to the place, with the selection kept.
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 50);
-    CHECK_EQ(ui.menu_depth(), 0u);
-    CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Cable));
+    CHECK_EQ(ui.menu_depth(), 1u);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
+    CHECK_EQ(ui.connection_page().action_row(), act_row(bench::Place::Cable, 3));
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 60);
     CHECK_EQ(ui.menu() == Menu::CableR, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 70);
@@ -880,14 +894,13 @@ static void test_tools_hub() {
     CHECK_EQ(ui.menu() == Menu::PdTrigger, 1);
     CHECK_STR(label(ui, Button::Back), "Back");
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
-    // Connection: Charger > Charger ID; BACK goes back to the place, a second BACK to the Bench.
-    open_act(ui, bench::Place::Charger, kToolChargerId, kT0 + 150);
+    // BACK from the tool goes back to the Charger place page, a second BACK to the Bench.
     CHECK_EQ(ui.menu() == Menu::Connection, 1);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 180);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
-    press(ui, Button::Back, ButtonEvent::Short, kT0 + 190);
     CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
+    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Charger));
     CHECK_EQ(g_stub.fc_stops, 0);                  // nothing was triggered: leaving the trigger tool left the pins alone
 }
 
@@ -904,7 +917,7 @@ static void test_submenu_is_modal() {
     CHECK_EQ(ui.menu() == Menu::Trigger, 1);
     // A short BACK pops; nothing was triggered, so the bus is left alone (no dpdm reset pulse).
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 120);
-    CHECK_EQ(ui.menu_depth(), 0u);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);   // back on the Charger place page
     CHECK_EQ(g_stub.fc_stops, stops);
     // Back in the place: a long BACK goes straight to the Meter.
     press(ui, Button::Back, ButtonEvent::Long, kT0 + 130);
@@ -919,7 +932,7 @@ static void test_submenu_is_modal() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 170);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 172);
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 174);
-    CHECK_EQ(ui.menu_depth(), 0u);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(g_stub.fc_stops, s1);
     // Failed state still pending: BACK resets as well.
     open_trigger(ui, kT0 + 180);
@@ -1004,7 +1017,7 @@ static void test_trigger_submenu() {
     CHECK_EQ(int(ui.trigger({1, 0, 0}, t += 100, false).err), int(pd::Err::Busy));
     // Leaving during cleanup must not drop the guard.
     press(ui, Button::Back, ButtonEvent::Short, t += 100);
-    CHECK_EQ(ui.menu_depth(), 0u);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);
     CHECK_EQ(ui.ports_busy(), true);
     CHECK_EQ(ui.push_menu(Menu::PdTrigger, t += 100), false);
     CHECK_EQ(ui.goto_page(uint8_t(Page::ChargerTest), t += 100), true);
@@ -1488,7 +1501,7 @@ static void test_cable_submenu() {
     CHECK_EQ(ui.menu() == Menu::CableR, 1);
     press(ui, Button::Ok, ButtonEvent::Short, kT0 + 220);    // reset clears the estimate
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 230);
-    CHECK_EQ(ui.menu_depth(), 0u);
+    CHECK_EQ(ui.menu() == Menu::Connection, 1);               // back on the Cable place page
     g_stub.pm_online = false;
 }
 

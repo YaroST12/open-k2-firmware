@@ -1296,69 +1296,87 @@ static void test_sink_tab_pd_body_shows_the_raw_vooc_note() {
     g_stub.vooc = {};
 }
 
-// The single tools (K2_WHOS_ATTACHED=0): Charger ID, Cable read and Device ID are this page locked to one tab. No tab strip,
-// Plus/Minus never switch the tab, OK runs the tool's own action, the other actions are rows Up/Dn walks.
+// The place pages (Fieldbook): Charger, Cable and Device are this page locked to one tab, opened over the Bench. No tab strip,
+// Plus/Minus never switch the tab; a place comes back on its last row, Up past the first row lets go of the focus (OK then
+// runs the place's own read), BACK pops back to the Bench with the place focused.
 static const char *ok_label(Ui &ui) { return ui.labels().b[static_cast<int>(Button::Ok)].shrt; }
 
 static void test_single_tools_lock_one_tab() {
     Ui &ui = fresh_ui();
-    ui.set_single_tools(true);
-    CHECK(ui.open_connection(conn::Tab::Cable, false, 20000));
+    ui.open_place(bench::Place::Cable, 20000);
     ui.tick(20050);
+    CHECK_EQ(int(ui.menu()), int(Menu::Connection));
+    CHECK_EQ(int(ui.page()), int(Page::Tools));                       // over the Bench
     CHECK_EQ(cp(ui).locked(), true);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));
-    CHECK_EQ(cp(ui).action_row(), -1);
-    CHECK_STR(ok_label(ui), "Read");                                   // OK: the tool's own action
+    CHECK_EQ(cp(ui).action_row(), 0);                                  // the first row: Read e-marker
+    CHECK_STR(ok_label(ui), "Read");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].shrt, "Dn");
     CHECK_EQ(label_violation(ui.labels()) == nullptr, true);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 20100);             // Dn: the first extra, Save cable
+    ui.on_button(Button::Plus, ButtonEvent::Short, 20100);             // Dn: Save cable
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Cable));                // never a tab switch
-    CHECK_EQ(cp(ui).action_row(), 0);
+    CHECK_EQ(cp(ui).action_row(), 1);
     CHECK_STR(ok_label(ui), "Save");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20150 + i * 10);
-    CHECK_EQ(cp(ui).action_row(), 4);                                  // stops on the last of the five extras
+    CHECK_EQ(cp(ui).action_row(), 5);                                  // stops on the last of the six rows (Loop probe)
+    CHECK_STR(ok_label(ui), "Open");
     for (int i = 0; i < 10; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20300 + i * 10);
-    CHECK_EQ(cp(ui).action_row(), -1);                                 // Up past the first: back to the tool's action
+    CHECK_EQ(cp(ui).action_row(), -1);                                 // Up past the first: no row, OK reads the e-marker
     CHECK_STR(ok_label(ui), "Read");
     ui.on_button(Button::Back, ButtonEvent::Short, 20500);
     CHECK_EQ(int(ui.menu_depth()), 0);
+    CHECK_EQ(int(ui.page()), int(Page::Tools));
+    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));   // the Bench list ...
+    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));    // ... on the place just left
 
-    CHECK(ui.open_connection(conn::Tab::Source, false, 21000));        // Charger ID
+    ui.open_place(bench::Place::Charger, 21000);
     ui.tick(21050);
     CHECK_EQ(cp(ui).locked(), true);
-    CHECK_STR(ok_label(ui), "Refresh");
-    CHECK(ui.open_connection(conn::Tab::Sink, false, 21100));          // Device ID: a new single tool, not a tab switch
+    CHECK_STR(ok_label(ui), "Open");                                   // Test charger
+    ui.on_button(Button::Minus, ButtonEvent::Short, 21060);
+    CHECK_STR(ok_label(ui), "Refresh");                                // no row: read the charger again
+    ui.open_place(bench::Place::Device, 21100);                        // a new place, not a tab switch
     ui.tick(21150);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
-    CHECK_STR(ok_label(ui), "Ask");
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Plus)].shrt, "Dn");   // Refresh is the one extra
+    CHECK_STR(ok_label(ui), "Ask");                                    // Ask device
     ui.on_button(Button::Back, ButtonEvent::Short, 21200);
     CHECK_EQ(int(ui.menu_depth()), 0);
-    ui.set_single_tools(false);
 }
 
-// The Bench places open the single tools: Charger ID in Charger, Cable read in Cable, Device ID in Device (each its place's
-// row 1, 0, 0); the Spoof shortcut lands on Cable read.
+// The Bench opens the place pages: Charger, Cable, Device each on its own tab. A place's tool opens its menu over the place
+// page (BACK comes back to it); Test charger replaces both and its BACK lands on the Charger place again. The Spoof shortcut
+// (single tools) lands on the Cable place.
 static void test_tools_rows_open_single_tools() {
     Ui &ui = fresh_ui();
-    ui.set_single_tools(true);
     const conn::Tab kTabs[] = {conn::Tab::Source, conn::Tab::Cable, conn::Tab::Sink};
-    const bench::Place kPlaces[] = {bench::Place::Charger, bench::Place::Cable, bench::Place::Device};
     for (int k = 0; k < 3; k++) {
-        const bench::Acts acts = bench::actions(kPlaces[k]);
-        int row = 0;
-        while (row < acts.n && !(acts.a[row].kind == bench::ActKind::Tool && acts.a[row].arg == kToolChargerId + k)) row++;
-        CHECK(row < acts.n);
-        ui.context().keep.place_sel[static_cast<int>(kPlaces[k])] = 0;   // a place keeps its row across visits
-        ui.open_place(kPlaces[k], 20000 + k * 1000);
-        for (int i = 0; i < row; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20010 + k * 1000 + i * 10);
+        ui.open_place(bench::Place::Meter, 20000 + k * 1000);
+        for (int i = 0; i < 6; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 20010 + k * 1000 + i * 10);   // Meter row
+        for (int i = 0; i <= k; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20100 + k * 1000 + i * 10);
         ui.on_button(Button::Ok, ButtonEvent::Short, 20500 + k * 1000);
         CHECK_EQ(on_pd(ui), 1);
         if (!on_pd(ui)) return;
         CHECK_EQ(cp(ui).locked(), true);
         CHECK_EQ(int(cp(ui).tab()), int(kTabs[k]));
         ui.on_button(Button::Back, ButtonEvent::Short, 20600 + k * 1000);
+        CHECK_EQ(int(ui.menu_depth()), 0);
     }
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 1;   // Request voltage
+    ui.open_place(bench::Place::Charger, 24000);
+    CHECK_STR(cp(ui).popup_item(2).label, "Request voltage");
+    ui.on_button(Button::Ok, ButtonEvent::Short, 24100);
+    CHECK_EQ(int(ui.menu()), int(Menu::PdTrigger));
+    CHECK_EQ(int(ui.menu_depth()), 2);                                  // over the place page
+    ui.on_button(Button::Back, ButtonEvent::Short, 24200);
+    CHECK_EQ(on_pd(ui), 1);
+    ui.on_button(Button::Minus, ButtonEvent::Short, 24300);             // Test charger
+    ui.on_button(Button::Ok, ButtonEvent::Short, 24400);
+    CHECK_EQ(int(ui.page()), int(Page::ChargerTest));
+    CHECK_EQ(int(ui.menu_depth()), 0);
+    ui.on_button(Button::Back, ButtonEvent::Short, 24500);
+    CHECK_EQ(on_pd(ui), 1);
+    CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Source));
+    ui.set_single_tools(true);
     CHECK(ui.open_connection(conn::Tab::Cable, true, 25000));
     CHECK_EQ(int(ui.menu()), int(Menu::Spoof));
     CHECK_EQ(cp(ui).locked(), true);

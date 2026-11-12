@@ -27,6 +27,7 @@
 #include "k2/pd/ra_guard.hpp"
 #include "k2/ui/text/connection.hpp"
 #include "k2/ui/ui_calc.hpp"
+#include "k2/ui/ui_tools.hpp"
 
 namespace k2::conn {
 
@@ -266,14 +267,18 @@ void status_text(const StatusIn &s, StrBuf<N> &out) {
 }
 
 // ---- action pop-up ----------------------------------------------------------------------------------
-enum class Act : std::uint8_t { Refresh, ShareCaps, ReadCable, SaveCable, SpoofAs, SavedCables, ShareCable, Identify, Details };
+// Bench: a place page's tool (bench::actions of the place, `arg` its index there); the page fills its readiness.
+enum class Act : std::uint8_t { Refresh, ShareCaps, ReadCable, SaveCable, SpoofAs, SavedCables, ShareCable, Identify, Details, Bench };
 struct Item {
     Act act = Act::Refresh;
     const char *label = "";
     bool enabled = true;
     const char *why = "";       // shown in the status bar when a greyed item is chosen
+    int8_t arg = -1;            // Act::Bench: the index into bench::actions(place)
+    bool caution = false;       // usable, but the footer names a caution (a Bench tool's readiness)
+    const char *tag = "";       // the row's tail word (a Bench tool's readiness tag), "" = none
 };
-inline constexpr int kMaxItems = 6;
+inline constexpr int kMaxItems = 8;
 
 struct ActFacts {
     bool more = false;          // the Source tab shows its second page (Details): the item goes back
@@ -293,7 +298,7 @@ constexpr const char *act_verb(Act a, bool more) {
     case Act::ShareCaps: case Act::ShareCable: return "Share";
     case Act::ReadCable: return "Read";
     case Act::SaveCable: return "Save";
-    case Act::SpoofAs: case Act::SavedCables: return "Open";
+    case Act::SpoofAs: case Act::SavedCables: case Act::Bench: return "Open";
     case Act::Identify: return "Ask";
     }
     return "";
@@ -329,6 +334,37 @@ constexpr int actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out
         break;
     }
     }
+    return n;
+}
+
+// ---- place pages (Fieldbook CONCEPT 8): Charger = Source, Cable = Cable, Device = Sink --------------------------------
+constexpr bench::Place place_of(Tab t) {
+    return t == Tab::Source ? bench::Place::Charger : t == Tab::Cable ? bench::Place::Cable : bench::Place::Device;
+}
+
+// A place page's items: out[0] is the page's own read (OK while no row is focused: read again, read the e-marker, ask the
+// device), out[1..] its rows in order - the cable's own actions first, then the tools of the place (bench::actions, Act::Bench
+// with their index; the page fills their readiness), the charger's and the device's read again last. Share is long OK, so it
+// has no row; nothing opens a second page.
+inline int place_actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out) {
+    int n = 0;
+    auto put = [&](const Item &it) { if (n < kMaxItems) out[std::size_t(n++)] = it; };
+    const Item again{Act::Refresh, "Read again", true, ""};
+    const Item read{Act::ReadCable, "Read e-marker", true, ""};
+    const bool seen = a.attached || a.alone;
+    const bool id_ok = seen && !(a.pd_none && !a.alone);
+    const Item ask{Act::Identify, "Ask device", id_ok, !id_ok && seen ? kWhyNoPd : "No device seen"};
+    put(t == Tab::Source ? again : t == Tab::Cable ? read : ask);
+    if (t == Tab::Cable) {
+        put(read);
+        put({Act::SaveCable, "Save cable", a.cable_valid, "No cable read"});
+        put({Act::SavedCables, "Saved cables", true, ""});
+        put({Act::SpoofAs, "Spoof as...", !a.inline_sink, kWhyLiveSink});
+    }
+    if (t == Tab::Sink) put(ask);
+    const bench::Acts b = bench::actions(place_of(t));
+    for (int i = 0; i < b.n; i++) put({Act::Bench, b.a[i].name, true, "", static_cast<int8_t>(i)});
+    if (t != Tab::Cable) put(again);
     return n;
 }
 
