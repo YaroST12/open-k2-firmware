@@ -374,7 +374,7 @@ namespace twin_hw {
 namespace {
 // The live proof, simulated: the REAL twin::live::Runner over a charger that answers with g_stub.caps (grants the Request, or
 // rejects it when g_stub.twin_reject), so the page sees genuine slots and phases. Events fire on the caller's clock.
-enum class Ev : std::uint8_t { None, Dark, Attach, Reply, Release };
+enum class Ev : std::uint8_t { None, Dark, Attach, Reply, Release, Wake };
 struct StubTwinEnv final : twin::live::Env {
     twin::live::Runner run;
     pd::SinkStatus sink;
@@ -382,8 +382,32 @@ struct StubTwinEnv final : twin::live::Env {
     std::uint32_t seq = 1, now = 0, ev_at = 0;
     Ev ev = Ev::None;
     pd::Choice last{};
+    bool woke = false, keep = false, held = false;   // the Rd this run presented / the starter keeps it / a finished run left it
 
     StubTwinEnv() { sink.state = pd::SinkState::Ready; sink.pos = 1; }
+    void set_rd(bool on) {
+        if (g_stub.rd_run != on) { g_stub.rd_run = on; g_stub.rd_run_changes++; }
+    }
+    bool wake() override {
+        if (g_stub.inl) return false;
+        set_rd(true);
+        woke = true;
+        if (g_stub.twin_wake_answers) { ev = Ev::Wake; ev_at = now + g_stub.twin_wake_ms; }
+        return true;
+    }
+    void unwake() override {
+        if (!woke) return;
+        woke = false;
+        ev = Ev::None;
+        g_stub.twin_unwakes++;
+        set_rd(false);
+    }
+    void finished(twin::live::Reason why) override {
+        if (!woke) return;
+        woke = false;
+        if (keep && (why == twin::live::Reason::Done || why == twin::live::Reason::Cancelled)) { held = true; return; }
+        set_rd(false);
+    }
     bool load(std::uint8_t n, twin::Twin& out) override { return storage::twin_get(n, out); }
     void impersonate(const twin::Twin*) override {}
     void detach() override { sink.state = pd::SinkState::Idle; ev = Ev::Dark; ev_at = now + 100; }
@@ -414,19 +438,24 @@ struct StubTwinEnv final : twin::live::Env {
             vbus = last.mv != 0 ? int(last.mv) : int(g_stub.caps.pdos[last.pos - 1].max_mv);
             break;
         case Ev::Release: sink.state = pd::SinkState::Ready; sink.pos = 1; sink.result = pd::SinkResult::None; vbus = 5000; break;
+        case Ev::Wake:   // the woken charger lists and the K2 takes its 5 V contract
+            g_stub.caps = g_stub.twin_offer;
+            seq++; sink.state = pd::SinkState::Ready; sink.pos = 1; sink.result = pd::SinkResult::None; vbus = 5000;
+            break;
         case Ev::None: break;
         }
     }
     twin::live::Input input(const LiveCtx& c) const {
         twin::live::Input in;
         in.now = c.now;
-        in.vbus_mv = vbus;
+        in.vbus_mv = g_stub.caps.valid ? vbus : 0;   // a charger that has not listed holds VBUS dark
         in.caps = &g_stub.caps;
         in.caps_seq = seq;
         in.sink = sink;
         in.cap_mv = 36000;
         in.busy = c.busy;
         in.inline_link = c.inline_link;
+        in.wakeable = twin::live::may_wake(g_stub.wait_kind, c.vbus_fast_mv, c.inline_link);
         return in;
     }
 };
@@ -443,14 +472,23 @@ std::uint32_t predict_stamp() {
     for (std::size_t i = 0; g_stub.caps.valid && i < g_stub.caps.num_pdos; i++) h = (h ^ g_stub.caps.pdos[i].raw) * 16777619u;
     return h + g_stub.twin_stamp;
 }
-twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx) {
+bool can_wake(const LiveCtx& ctx) { return !g_stub.caps.valid && g_sim.input(ctx).wakeable; }
+void wake_release() {
+    if (!g_sim.held) return;
+    g_sim.held = false;
+    g_stub.twin_wake_releases++;
+    g_sim.set_rd(false);
+}
+twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx, bool keep_wake) {
     if (g_stub.twin_refusal != twin::live::Refusal::None) return g_stub.twin_refusal;
     g_sim.now = ctx.now;
+    g_sim.keep = keep_wake;
     const twin::live::Refusal r = g_sim.run.start(g_sim, seqs, g_sim.input(ctx), confirmed);
     if (r == twin::live::Refusal::None) {
         g_stub.twin_starts++;
         g_stub.twin_start_seqs.assign(seqs.begin(), seqs.end());
         g_stub.twin_start_confirmed = confirmed;
+        g_stub.twin_start_keep_wake = keep_wake;
     }
     return r;
 }

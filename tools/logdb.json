@@ -600,6 +600,8 @@
   "603": "[FS] ring layout move %s%s: used=%u above=%u passes=%u files=%u erased=%u%s err=%s",
   "604": "[FS] %u blocks, the move into the ring layout waits: rings off",
   "605": "[UI] home hero=%u\n",
-  "606": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u (%s)\n"
+  "606": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u (%s)\n",
+  "607": "[TWIN] wake: Rd presented to a silent charger\n",
+  "608": "[TWIN] wake: Rd released\n"
  }
 }

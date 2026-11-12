@@ -231,6 +231,13 @@ struct StubState {
     int twin_starts = 0, twin_cancels = 0; // live_start() calls the runner accepted, live_cancel() calls
     std::vector<uint8_t> twin_start_seqs;  // the numbers of the last live_start()
     bool twin_start_confirmed = false;     // ... and its confirm flag
+    bool twin_start_keep_wake = false;     // ... and whether the page asked to keep the woken Rd after the run
+    // A silent charger woken by the run (Env::wake presents Rd = g_stub.rd_run): its list after twin_wake_ms, or never.
+    k2::pd::SourceCaps twin_offer{};
+    bool twin_wake_answers = true;
+    std::uint32_t twin_wake_ms = 400;
+    int twin_unwakes = 0;                  // Rd given back by a failed / cut-short wake (Env::unwake)
+    int twin_wake_releases = 0;            // wake_release() calls that gave a held Rd back
     unsigned twin_stamp = 0;               // moves the prediction stamp (twin_hw::predict_stamp) like a new charger list would
     // PD Stress: Soft_Reset asks and the journal file (journal_hw::store()) the stand-in keeps in RAM.
     int ps_soft_resets = 0;

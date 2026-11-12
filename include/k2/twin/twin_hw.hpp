@@ -38,7 +38,15 @@ std::uint32_t predict_stamp();
 void log_predict(std::uint8_t seq, const twin::Outcome& o);
 
 // ---- live proof ----
-twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx);
+// A charger that has not offered a list is woken with the K2's own Rd first (twin::live::may_wake), only after `confirmed`. The Rd
+// a finished run presented is released at the run's end, unless `keep_wake` (the Device twins page): then it stays until
+// wake_release(), so the charger keeps listing while the page shows the result.
+twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx, bool keep_wake = false);
+// True when a live proof could start now without a list: a charger waits on the plug (or holds VBUS without listing) and no
+// sink or phone is behind the K2. Cheap; the page asks every tick.
+bool can_wake(const LiveCtx& ctx);
+// Gives back the Rd a finished run left to the caller (leaving the page). Nothing to do when none is held.
+void wake_release();
 void live_poll(const LiveCtx& ctx);
 void live_cancel();                // BACK and `stop`: 5 V asked, the K2's own Sink_Capabilities back, the run over
 bool live_running();
