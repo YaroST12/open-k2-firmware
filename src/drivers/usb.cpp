@@ -184,6 +184,8 @@ void dp_pullup_restore() {
 // [DEBUG-ue1] enumeration probe: samples for the first seconds after init(), dumped once later.
 namespace dbg {
 struct Sample { std::uint16_t t; std::uint16_t trim; std::uint16_t fnr; std::uint8_t acc; std::uint8_t errs; std::uint8_t rst; std::uint8_t gap; std::uint16_t isr; };
+struct Early { std::uint32_t ms, apb1, cfg, cntr, daddr, crh, idr; };
+std::array<Early, 2> early;
 std::array<Sample, 160> s;
 std::size_t n;
 std::uint32_t t0, init_ms, init_trim, errs, gapw, last_t;
@@ -204,6 +206,11 @@ void sample(std::uint32_t now, std::uint32_t gap) {
     if (!dumped && t > 9000) {
         dumped = true;
         log_fmt("[DEBUG-ue1] init_ms=%d trim0=%04X n=%d\n", int(init_ms), unsigned(init_trim), int(n));
+        for (const Early& e : early) {
+            log_fmt("[DEBUG-ue1] E ms=%d apb1=%08X cfg=%X cntr=%X\n", int(e.ms), unsigned(e.apb1), unsigned(e.cfg),
+                    unsigned(e.cntr));
+            log_fmt("[DEBUG-ue1] E daddr=%X crh=%08X idr=%04X\n", unsigned(e.daddr), unsigned(e.crh), unsigned(e.idr));
+        }
     }
     if (dumped && di < n && tud_mounted() && g_queue.free() > 8) {
         {
@@ -213,8 +220,21 @@ void sample(std::uint32_t now, std::uint32_t gap) {
         }
     }
 }
+void take(Early& e) {
+    reg::crm().APB2EN |= reg::Crm::APB2EN_GPIOA;
+    e.ms = systick::millis();
+    e.apb1 = reg::crm().APB1EN;
+    const bool on = e.apb1 & reg::Crm::APB1EN_USB;
+    e.cfg = on ? reg::usb_cfg() : 0xEEEE;
+    e.cntr = on ? *reinterpret_cast<volatile std::uint32_t*>(0x40005C40) : 0xEEEE;
+    e.daddr = on ? *reinterpret_cast<volatile std::uint32_t*>(0x40005C4C) : 0xEEEE;
+    e.crh = reg::gpio(pins::usb_dp.port).CRH;
+    e.idr = reg::gpio(pins::usb_dp.port).IDR;
+}
 }  // namespace dbg
-void dbg_init_mark() { dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
+void dbg_boot_mark() { dbg::take(dbg::early[0]); }
+void dbg_init_mark() {
+    dbg::take(dbg::early[1]); dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
 
 void poll() {
     if (!g_started) return;            // USB link off (k2/drivers/usbcfg.hpp): the core was never started
