@@ -2,16 +2,11 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_tools.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
+#include "k2/ui/text/tools.hpp"
 
 namespace k2 {
 
-const char *tool_hint(int tool) {
-    static constexpr const char *kHints[kToolSlots] = {
-        "charger on top or bottom", "PD charger, either port", "act as a saved cable", "charger + cable + load",
-        "source, cable and device", "passive PD recorder", "passive PD verdict", "saved charger results", "USB, PD and system state",
-        "will it charge my device", "cable into own HID port", "PD charger, no load"};
-    return kHints[tool < 0 || tool >= kToolCount ? 0 : tool];
-}
+const char *tool_hint(int tool) { return text::tools::kHints[tool < 0 || tool >= kToolCount ? 0 : tool]; }
 
 // Each tool owns its predicate (a function of its own) and declares what it is hurt by. Whether the far
 // port is occupied is the same fact for all of them (SetupState::inline_mode); what it means differs:
@@ -19,20 +14,21 @@ const char *tool_hint(int tool) {
 //   Inline: the tool only talks to the cable or the partner, so something downstream hides or hijacks the far end.
 //   Nothing: the tool is passive, or measures under the user's own load.
 namespace {
+using namespace text::tools;
 
 Readiness fc_trigger(const SetupState &st, bool) {   // no on-device inline override
-    if (st.inline_mode) return {ToolLevel::Blocked, "LOAD", "Load attached: unplug it"};
+    if (st.inline_mode) return {ToolLevel::Blocked, kTagLoad, kLoadAttached};
     return {};
 }
 
 Readiness pd_trigger(const SetupState &st, bool) {   // refuses without a PD source or with a load
-    if (st.inline_mode) return {ToolLevel::Blocked, "LOAD", "Load attached: unplug it"};
-    if (!setup_hint(Tool::PdTrigger, st).ready) return {ToolLevel::Blocked, "NO PD", "No PD source on either port"};
+    if (st.inline_mode) return {ToolLevel::Blocked, kTagLoad, kLoadAttached};
+    if (!setup_hint(Tool::PdTrigger, st).ready) return {ToolLevel::Blocked, kTagNoPd, kNoPd};
     return {};
 }
 
 Readiness cable_r(const SetupState &, bool pm_online) {   // reads V and I from the power monitor; wants a load
-    if (!pm_online) return {ToolLevel::Blocked, "NO PM", "Power meter not found"};
+    if (!pm_online) return {ToolLevel::Blocked, kTagNoPm, kNoPm};
     return {};
 }
 
@@ -41,16 +37,16 @@ Readiness cable_r(const SetupState &, bool pm_online) {   // reads V and I from 
 Readiness always_ready(const SetupState &, bool) { return {}; }
 
 Readiness spoof(const SetupState &st, bool) {   // refused while a live sink is inline (Auto-CRC is off then)
-    if (st.inline_mode) return {ToolLevel::Blocked, "LOAD", "Live sink: unplug load"};
+    if (st.inline_mode) return {ToolLevel::Blocked, kTagLoad, kLiveSink};
     return {};
 }
 
 // PD Stress asks the charger for every level it offers: nothing may sit on the output, it reads VBUS and IBUS from the power
 // monitor, and it needs a PD source list (the run itself refuses the same three; this only tags the row).
 Readiness pd_stress(const SetupState &st, bool pm_online) {
-    if (st.inline_mode) return {ToolLevel::Blocked, "LOAD", "Load attached: unplug it"};
-    if (!pm_online) return {ToolLevel::Blocked, "NO PM", "Power meter not found"};
-    if (!setup_hint(Tool::PdTrigger, st).ready) return {ToolLevel::Blocked, "NO PD", "No PD source on either port"};
+    if (st.inline_mode) return {ToolLevel::Blocked, kTagLoad, kLoadAttached};
+    if (!pm_online) return {ToolLevel::Blocked, kTagNoPm, kNoPm};
+    if (!setup_hint(Tool::PdTrigger, st).ready) return {ToolLevel::Blocked, kTagNoPd, kNoPd};
     return {};
 }
 

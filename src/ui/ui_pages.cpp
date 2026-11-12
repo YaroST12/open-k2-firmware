@@ -7,6 +7,7 @@
 #include "k2/ui/uiprefs.hpp"
 #include "k2/ui/ui_lines.hpp"
 #include "k2/ui/ui_tools.hpp"
+#include "k2/ui/text/tools.hpp"
 #include "k2/ui/ui_emarker.hpp"
 #include "k2/ui/ui_orientation.hpp"
 #include "k2/core/log.hpp"
@@ -1308,12 +1309,8 @@ void PdTriggerPage::invalidate() { reset_paint(); }
 // ---------------------------------------------------------------------------------------
 
 const char *ToolsPage::tool_name(int i) {
-    static constexpr const char *kNames[kToolSlots] = {"FC trigger", "PD trigger", "Spoof", "Cable R", "Who's attached", "Black Box",
-                                                   "PD diagnosis", "Report cards", "Diag", "Device twins", "Loop probe", "PD Stress"};
-    // A Tools row is the 12 px icon, the title and the readiness tag (at most 6 characters, 48 px) at the right: the title gets
-    // x28 up to the tag less its gap, 130 px.
-    static_assert(all_fit(kNames, kSmallAdvPx, 130), "a Tools entry name is wider than its row");
-    return kNames[i < 0 || i >= kTools ? 0 : i];
+    static_assert(text::tools::kSlots == kToolSlots);
+    return text::tools::kNames[i < 0 || i >= kTools ? 0 : i];   // the hub's copy: include/k2/ui/text/tools.hpp
 }
 
 void ToolsPage::draw_static() {
@@ -1323,9 +1320,10 @@ void ToolsPage::draw_static() {
     ctx_.rows.select(sel_);
 }
 
-// Row i: the tool icon (dim, tone-coloured when the tool is not Ready), the name, and at the right the readiness tag in
-// its tone, or the drill-in chevron when the tool is Ready. The list repaints a row only when this content changed.
-void ToolsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
+// Row i: the tool icon (dim, tone-coloured when the tool is not Ready), the name, and at the right the drill-in chevron when
+// the tool is Ready, else its tail word in kDim (UI_SYSTEM.md 7.13.3: only the footer carries the red). The focused row opens
+// the tool's hint as its note. The list repaints a row only when this content changed.
+void ToolsPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
     static constexpr Icon kIcons[kToolSlots] = {Icon::Brick, Icon::Pd,     Icon::Ghost,  Icon::Res,  Icon::Plug,  Icon::Blackbox,
                                                 Icon::Check, Icon::Report, Icon::Chip, Icon::Phone, Icon::Usb, Icon::Wave};
     const auto *self = static_cast<const ToolsPage *>(ctx);
@@ -1333,12 +1331,13 @@ void ToolsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     out.marker = kit::Marker::Icon;
     out.icon = kIcons[i < 0 || i >= kToolCount ? 0 : i];
     out.text = tool_name(i);
+    if (focused) out.note = tool_hint(i);
     if (rd.level == ToolLevel::Ready) {
         out.chevron = true;
         return;
     }
-    out.marker_color = out.tail_color = rd.level == ToolLevel::Caution ? kCaution : kError;
-    out.tail = rd.tag;
+    out.marker_color = rd.level == ToolLevel::Caution ? kCaution : kError;
+    out.tail = rd.tag;   // tail_color stays kDim
 }
 
 void ToolsPage::update(uint32_t) {
@@ -1348,9 +1347,16 @@ void ToolsPage::update(uint32_t) {
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now);
     const Readiness &cur = rd_[sel_];
-    const bool ready = cur.level == ToolLevel::Ready;
-    const FooterTone tone = ready ? FooterTone::Ok : cur.level == ToolLevel::Caution ? FooterTone::Caution : FooterTone::Error;
-    draw_footer_cached(ctx_.content, tone, cur.reason, foot_);
+    if (cur.level != ToolLevel::Ready) {   // the focused tool's blocker, in its tone
+        draw_footer_cached(ctx_.content, cur.level == ToolLevel::Caution ? FooterTone::Caution : FooterTone::Error, cur.reason, foot_);
+        return;
+    }
+    int ready = 0;   // a ready tool needs no green band: the hub's fact, Info tone
+    for (int i = 0; i < kToolCount; i++) ready += rd_[i].level == ToolLevel::Ready;
+    StrBuf<27> f;
+    if (ready == kToolCount) f.put(text::tools::kAllReady);
+    else f.put_u32(static_cast<uint32_t>(ready)).put(text::tools::kSomeReady).put_u32(kToolCount).put(text::tools::kSomeReadyTail);
+    draw_footer_cached(ctx_.content, FooterTone::Info, f.view(), foot_);
 }
 
 bool ToolsPage::on_event(Event e) {

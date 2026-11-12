@@ -1488,9 +1488,11 @@ int main() {
         // readiness tag as text at the right edge.
         CHECK_EQ(g_panel[30 * 240 + 1], k2::kFocus);           // selection bar of row 0
         CHECK_EQ(g_panel[30 * 240 + 160], k2::kFocusT);        // selected row fill
-        CHECK_EQ(count_colours(8, 57, 20, 69, {k2::kError}) > 0, true);    // PD trigger icon (row 1): blocked by the load
-        CHECK_EQ(count_colours(160, 30, 214, 46, {k2::kError}) > 0, true); // selected FC row: its LOAD tag is blocked, in text
-        CHECK_EQ(count_colours(8, 83, 20, 95, {k2::kError}) > 0, true);    // Spoof icon (row 2): a live sink is cut
+        // The focused row opens to 40 px with its hint, so row 1 starts at y64 and row 2 at y90.
+        CHECK_EQ(count_colours(8, 70, 20, 84, {k2::kError}) > 0, true);    // PD trigger icon (row 1): blocked by the load
+        CHECK_EQ(count_colours(150, 28, 214, 46, {k2::kError}) > 0, false); // FC row's "load" tail is kDim: only the footer is red
+        CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT}) > 0, true); // the footer carries the blocker
+        CHECK_EQ(count_colours(8, 96, 20, 110, {k2::kError}) > 0, true);   // Spoof icon (row 2): a live sink is cut
         for (int i = 0; i < 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 31200);
         test_screen(ui, "tools_hub_pd", 31300);
         CHECK_EQ(g_panel[110 * 240 + 1], k2::kFocus);          // row 3 (24 + 3*26 + 8)

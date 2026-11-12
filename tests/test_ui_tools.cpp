@@ -21,8 +21,8 @@ static void test_every_tool_has_text() {
         for (int mask = 0; mask < 32; mask++) {
             const Readiness r = tool_readiness(t, st(mask & 1, mask & 2, mask & 4, mask & 8, mask & 16 ? 5000 : 0), mask & 8);
             CHECK_EQ(std::strlen(r.tag) <= 6, 1);
-            CHECK_EQ(std::strlen(r.reason) <= 28, 1);
-            CHECK_EQ(std::strlen(r.reason) > 0, 1);
+            CHECK_EQ(std::strlen(r.reason) <= 27, 1);
+            CHECK_EQ(std::strlen(r.reason) > 0, r.level != ToolLevel::Ready);   // a ready tool's footer is the hub's fact
         }
     }
     // Hints never name a port by position.
@@ -40,17 +40,17 @@ static void test_pd_trigger_matches_refusal() {
         const bool refused = s.inline_mode || !setup_hint(Tool::PdTrigger, s).ready;
         CHECK_EQ(r.level == ToolLevel::Blocked, refused);
     }
-    CHECK_STR(tool_readiness(1,st(false, false, false), true).tag, "NO PD");
+    CHECK_STR(tool_readiness(1,st(false, false, false), true).tag, "no PD");
     CHECK_STR(tool_readiness(1,st(false, false, false), true).reason, "No PD source on either port");
-    CHECK_STR(tool_readiness(1,st(true, false, true), true).tag, "READY");
-    CHECK_STR(tool_readiness(1,st(true, true, true), true).tag, "LOAD");
+    CHECK_STR(tool_readiness(1,st(true, false, true), true).tag, "ready");
+    CHECK_STR(tool_readiness(1,st(true, true, true), true).tag, "load");
 }
 
 static void test_fc() {
     CHECK_EQ(tool_readiness(0, st(false, false, false), true).level == ToolLevel::Ready, 1);
     CHECK_EQ(tool_readiness(0, st(true, true, true), true).level == ToolLevel::Blocked, 1);
     CHECK_STR(tool_readiness(0, st(true, true, true), true).reason, "Load attached: unplug it");
-    CHECK_STR(tool_readiness(0, st(true, true, true), true).tag, "LOAD");
+    CHECK_STR(tool_readiness(0, st(true, true, true), true).tag, "load");
 }
 
 // Connection, Black Box, PD diagnosis, Report cards and Diag never block: Connection's own actions carry the inline confirm.
@@ -68,7 +68,7 @@ static void test_cable_r() {
     CHECK_EQ(tool_readiness(3, st(false, false, false), true).level == ToolLevel::Ready, 1);
     const Readiness r = tool_readiness(3, st(false, false, false), false);
     CHECK_EQ(r.level == ToolLevel::Blocked, 1);
-    CHECK_STR(r.tag, "NO PM");
+    CHECK_STR(r.tag, "no PM");
     // Out-of-range tool numbers fall back to ready, not a crash.
     CHECK_EQ(tool_readiness(kToolCount, st(false, false, false), true).level == ToolLevel::Ready, 1);
 }
@@ -82,7 +82,7 @@ static void test_loop_probe_tool() {
         CHECK_EQ(int(tool_readiness(kToolLoopProbe, s, true).level), int(ToolLevel::Ready));
         const Readiness r = tool_readiness(kToolLoopProbe, s, false);
         CHECK_EQ(int(r.level), int(ToolLevel::Blocked));
-        CHECK_STR(r.tag, "NO PM");
+        CHECK_STR(r.tag, "no PM");
         CHECK_STR(r.reason, "Power meter not found");
     }
 }
@@ -90,12 +90,12 @@ static void test_loop_probe_tool() {
 // PD Stress needs the three things its run refuses without: an empty output, the power monitor and a PD source list.
 static void test_pd_stress_tool() {
     CHECK_STR(tool_hint(kToolPdStress), "PD charger, no load");
-    CHECK_STR(tool_readiness(kToolPdStress, st(true, false, true), true).tag, "READY");
-    CHECK_STR(tool_readiness(kToolPdStress, st(true, true, true), true).tag, "LOAD");
-    CHECK_STR(tool_readiness(kToolPdStress, st(true, false, true), false).tag, "NO PM");
+    CHECK_STR(tool_readiness(kToolPdStress, st(true, false, true), true).tag, "ready");
+    CHECK_STR(tool_readiness(kToolPdStress, st(true, true, true), true).tag, "load");
+    CHECK_STR(tool_readiness(kToolPdStress, st(true, false, true), false).tag, "no PM");
     const Readiness r = tool_readiness(kToolPdStress, st(false, false, false), true);
     CHECK_EQ(int(r.level), int(ToolLevel::Blocked));
-    CHECK_STR(r.tag, "NO PD");
+    CHECK_STR(r.tag, "no PD");
 }
 
 static void test_spoof_tool() {
@@ -129,7 +129,7 @@ static void test_hurt_table() {
         // A PD charger on one port, the far port empty vs occupied; power monitor present.
         const Readiness quiet = tool_readiness(t, st(true, false, true, true, 5000), true);
         const Readiness inl = tool_readiness(t, st(true, true, true, true, 5000), true);
-        CHECK_EQ(std::strcmp(inl.tag, "LOAD") == 0, kExpect[t] == ToolHurt::Load);
+        CHECK_EQ(std::strcmp(inl.tag, "load") == 0, kExpect[t] == ToolHurt::Load);
         CHECK_EQ(std::strcmp(inl.tag, "INLINE") == 0, kExpect[t] == ToolHurt::Inline);
         if (kExpect[t] == ToolHurt::Nothing) CHECK_EQ(int(inl.level), int(quiet.level));
         if (kExpect[t] == ToolHurt::Load) CHECK_EQ(int(inl.level), int(ToolLevel::Blocked));

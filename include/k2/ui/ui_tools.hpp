@@ -14,8 +14,8 @@ enum class ToolLevel : uint8_t { Ready, Caution, Blocked };
 
 struct Readiness {
     ToolLevel level = ToolLevel::Ready;
-    const char *tag = "READY";       // at most 6 characters, shown in the selected row's pill
-    const char *reason = "Ready";    // footer sentence, at most 28 characters
+    const char *tag = "ready";       // the row's tail when not ready, at most 6 characters (text/tools.hpp)
+    const char *reason = "";         // footer sentence when not ready, at most 27 characters; empty when ready
 };
 
 constexpr int kToolSlots = 12;       // the per-tool tables: PD Stress is the last slot, so a K2_PDSTRESS=0 build only shows one row less
