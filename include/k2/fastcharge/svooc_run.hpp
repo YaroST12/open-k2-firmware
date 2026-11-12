@@ -275,8 +275,15 @@ public:
         return Refusal::None;
     }
 
-    Next poll(const Sample& s) {
+    Next poll(const Sample& sample) {
         if (stage_ == Stage::Idle || stage_ == Stage::Done) return Next::None;
+        // Before the first wake the wire and the hook still hold the previous run's facts (the glue re-begins them at the
+        // wake): its stopped wire, command count, handshake and storm flag are none of this run's.
+        Sample s = sample;
+        if (stage_ == Stage::Wake) {
+            s.off_script = s.accepted = s.storm = false;
+            s.commands = 0;
+        }
         track(s);
         if (stage_ == Stage::Exit) { watch_exit(s); return Next::None; }
         report_.commands = s.commands;

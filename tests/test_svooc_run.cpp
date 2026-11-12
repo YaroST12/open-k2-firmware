@@ -502,6 +502,44 @@ void test_names() {
     CHECK(std::string_view(svooc::name(Refusal::NoRam)) == "no RAM: USB drive enabled");
 }
 
+// A second run on the same objects (hardware 2026-11-12: the start after a run that ended by its time cap ended at once,
+// "charger off-script after 0.0 s, wakes 0", with the previous run's 72 commands in its report). The glue's first poll
+// comes before the wake re-begins the wire, so its sample still carries the last run's wire facts: the stopped wire
+// (Wire::stop() at every release), its command count, the handshake and the hook's storm flag. None of them belongs to
+// the new run: it wakes, and its report starts from zero.
+void test_restart_ignores_the_previous_wire() {
+    svooc::Run r;
+    r.start(ok_start(), 0, 8000);
+    r.poll(ok_sample(0));
+    svooc::Sample s = ok_sample(600);
+    s.commands = 72;
+    s.accepted = true;
+    r.poll(s);
+    s.now_ms = 8000;
+    s.off_script = true;   // Wire::stop() at the release
+    CHECK_EQ(r.poll(s), Next::Release);
+    s.now_ms = 8100;
+    r.poll(s);
+    CHECK_EQ(r.stage(), Stage::Done);
+
+    CHECK_EQ(r.start(ok_start(), 48000), Refusal::None);
+    svooc::Sample stale = ok_sample(48000);
+    stale.off_script = true;
+    stale.commands = 72;
+    stale.accepted = true;
+    stale.storm = true;
+    CHECK_EQ(r.poll(stale), Next::Wake);
+    CHECK_EQ(r.stage(), Stage::Listen);
+    CHECK_EQ(r.report().abort, Abort::None);
+    CHECK_EQ(r.report().commands, 0u);
+    CHECK(!r.report().accepted);
+    // from the wake on the wire is the new run's: its facts count again
+    svooc::Sample fresh = ok_sample(48600);
+    fresh.off_script = true;
+    CHECK_EQ(r.poll(fresh), Next::Release);
+    CHECK_EQ(r.report().abort, Abort::OffScript);
+}
+
 }  // namespace
 
 int main() {
@@ -518,5 +556,6 @@ int main() {
     test_usb_a_waiver_inline_cause();
     test_lines_off_idle();
     test_names();
+    test_restart_ignores_the_previous_wire();
     return test_report("test_svooc_run");
 }

@@ -214,6 +214,10 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
     own_vbus(true);
     {
         Critical cs;
+        // The last run's wire is stopped (release() stops it) and holds its log: a fresh one now, so the status shows
+        // nothing of it before the wake re-begins the wire (svooc::Run ignores the wire's facts until then too).
+        g_wire.begin(dpsniff::line_word());
+        g_pair_vbus_n = 0;
         g_wire.set_params(params);   // the ISR is not listening yet (wake() starts it); begin() keeps them
         g_wire.set_vbus_mv(0);
     }

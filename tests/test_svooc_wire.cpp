@@ -369,6 +369,30 @@ void test_params_vbus_and_escape_clock() {
     CHECK_EQ(f.w.pair(48).word, svooc::closed_loop_reply(8400, 9000));
 }
 
+// The glue reuses one Wire for every run and stops it at each release: begin() (the next start, then its wake) gives the
+// next run a live wire with an empty log, and keeps the operator's parameters.
+void test_begin_after_stop_is_a_fresh_wire() {
+    svooc::Params p;
+    p.i86_first = 0x00A;
+    Feed f;
+    f.w.set_params(p);
+    Synth s;
+    s.edge(s.t, true, false);
+    s.command(s.t + 5000 * kUs, 0xA8);
+    s.clock(s.t + 14000 * kUs);
+    f.all(s.words);
+    CHECK_EQ(f.w.log().commands, 1u);
+    f.w.stop();
+    CHECK(f.w.stopped());
+    f.w.begin(edges::pack(s.words.back() + 1000 * kUs, false, true));
+    CHECK(!f.w.stopped());
+    CHECK(!f.w.driving());
+    CHECK_EQ(f.w.log().commands, 0u);
+    CHECK_EQ(f.w.log().n, 0u);
+    CHECK_EQ(f.w.log().pairs_total, 0u);
+    CHECK_EQ(f.w.responder().params().i86_first, 0x00A);
+}
+
 }  // namespace
 
 int main() {
@@ -381,5 +405,6 @@ int main() {
     test_log_capacity_and_stamps();
     test_ten_pulses_are_no_command();
     test_abort_and_stop();
+    test_begin_after_stop_is_a_fresh_wire();
     return test_report("test_svooc_wire");
 }
