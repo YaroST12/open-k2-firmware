@@ -59,6 +59,8 @@ K2_TOKEN(kStaleFill, stale)     // a field holding a last reading
 K2_TOKEN(kStaleInk, stale_ink)  // digits of a stale field
 K2_TOKEN(kSpotVolt, volt) K2_TOKEN(kSpotVoltD, volt_d) K2_TOKEN(kSpotAmp, amp) K2_TOKEN(kSpotAmpD, amp_d)
 K2_TOKEN(kErrD, err_d)
+K2_TOKEN(kTraceVolt, trace_volt) K2_TOKEN(kTraceAmp, trace_amp) K2_TOKEN(kTraceWatt, trace_watt) K2_TOKEN(kTraceStale, trace_stale)
+K2_TOKEN(kAreaVolt, area_volt) K2_TOKEN(kAreaAmp, area_amp) K2_TOKEN(kAreaWatt, area_watt) K2_TOKEN(kAreaStale, area_stale)
 K2_TOKEN(kSpotInk, spot_ink)    // text on a spot fill (volt, amp, ok, warn)
 K2_TOKEN(kErrInk, err_ink)      // text on the error red
 K2_TOKEN(kFocusFill, focus) K2_TOKEN(kOnFocus, on_focus) K2_TOKEN(kOnFocusDim, on_focus_dim)
