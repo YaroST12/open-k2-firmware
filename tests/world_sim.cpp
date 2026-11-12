@@ -219,8 +219,11 @@ double hist_mv(double t) {   // reboot world: VBUS at world time t from the rece
     return S->vh_mv[S->vh_i % kHist];
 }
 
+double (*g_vbus_model)(double) = nullptr;
+
 double vbus_mv_at(double t) {
     if (S->reboot) return hist_mv(t);
+    if (g_vbus_model) return g_vbus_model(t);
     const auto& v = g_sc->vbus;
     if (v.empty()) return 0;
     if (t <= v.front().t) return v.front().mv;
@@ -621,6 +624,18 @@ void ina_write(std::uint8_t reg, std::span<const std::uint8_t> d) {
 }
 
 // ---- the flash volume ----
+// With Timing::flash_erase_ms / flash_halfword_us set, every erase and every programmed half-word costs that much firmware time
+// with interrupts masked (src/drivers/flash.cpp ram_store_op), and a pending interrupt runs between two half-words.
+FlashStats g_flash_stats;
+double g_mask_from_us = -1;     // firmware us the current masked stretch began (-1: none)
+std::uint32_t g_lost_ticks = 0;   // SysTicks masked stretches swallowed
+void flash_cost(double us) {
+    if (us <= 0) return;
+    const double t0 = S->us;
+    spend_masked_us(us);
+    g_flash_stats.masked_ms += us / 1000.0;
+    if (us / 1000.0 > g_flash_stats.longest_op_ms) { g_flash_stats.longest_op_ms = us / 1000.0; g_flash_stats.longest_at_fw_ms = t0 / 1000.0; }
+}
 class WorldFlash final : public k2::fs::BlockDevice {
 public:
     int read(std::uint32_t b, std::uint32_t off, void* buf, std::uint32_t n) override {
@@ -631,12 +646,22 @@ public:
     int prog(std::uint32_t b, std::uint32_t off, const void* buf, std::uint32_t n) override {
         if (b >= k2::fs::kFlashBlocks || off + n > k2::fs::kBlockSize) return k2::fs::kIoFail;
         std::uint8_t* d = &S->flash[std::size_t(b) * k2::fs::kBlockSize + off];
-        for (std::uint32_t i = 0; i < n; i++) d[i] &= static_cast<const std::uint8_t*>(buf)[i];
+        const std::uint8_t* s = static_cast<const std::uint8_t*>(buf);
+        for (std::uint32_t i = 0; i < n; i++) d[i] &= s[i];
+        if (g_t.flash_halfword_us > 0)
+            for (std::uint32_t i = 0; i < n; i += 2) {
+                if (s[i] == 0xFF && (i + 1 >= n || s[i + 1] == 0xFF)) continue;   // store_program skips an erased half-word
+                g_flash_stats.halfwords++;
+                flash_cost(g_t.flash_halfword_us);
+                spend_us(0.5);   // the loop between two programs: a pending interrupt runs here
+            }
         return 0;
     }
     int erase(std::uint32_t b) override {
         if (b >= k2::fs::kFlashBlocks) return k2::fs::kIoFail;
         std::memset(&S->flash[std::size_t(b) * k2::fs::kBlockSize], 0xFF, k2::fs::kBlockSize);
+        g_flash_stats.erases++;
+        flash_cost(g_t.flash_erase_ms * 1000.0);
         return 0;
     }
 };
@@ -685,19 +710,88 @@ void common_start(const Timing& t) {
     g_stub.on_log = on_log;
     g_lcd = {lcd_spend, lcd_now, t.px_us, t.lcd_call_us, t.lcd_window_us, t.px_cpu_us};
     g_lcd_timing = &g_lcd;
+    g_flash_stats = {};
+    g_mask_from_us = -1;
+    g_lost_ticks = 0;
+    g_vbus_model = nullptr;
 }
 
 }  // namespace
 
-void spend_us(double us) {
-    if (us <= 0) return;
+namespace {
+IrqSource* g_irq = nullptr;
+bool g_in_isr = false;
+
+void advance(double us) {
     const double target = S->us + us;
     if (!g_in_spend) {
         g_in_spend = true;
         world_until(target);
         g_in_spend = false;
     }
+    if (g_irq) g_irq->world_to(target);
     S->us = target;
+}
+
+bool irq_open() { return g_irq && !g_in_isr && k2::host::irq_masked == 0; }
+
+void run_isr() {
+    g_in_isr = true;
+    g_irq->fire();
+    g_in_isr = false;
+}
+
+void deliver_due() {   // interrupts that came while masked run as soon as the mask clears
+    for (int guard = 0; guard < 64 && irq_open(); ++guard) {
+        const double n = g_irq->next_us();
+        if (n < 0 || n > S->us) return;
+        run_isr();
+    }
+}
+}  // namespace
+
+void set_irq_source(IrqSource* s) {
+    g_irq = s;
+    g_in_isr = false;
+    k2::host::irq_masked = 0;
+    k2::host::on_unmask = s ? deliver_due : nullptr;
+}
+bool in_isr() { return g_in_isr; }
+
+// SysTick is an interrupt too: while a stretch runs masked, millis() stands still, and of the ticks it spans only one stays
+// pending (it runs at the unmask), so a long masked stretch leaves the ms clock behind the cycle counter for good.
+void spend_masked_us(double us) {
+    const bool outer = g_mask_from_us < 0;
+    if (outer) g_mask_from_us = S->us;
+    ++k2::host::irq_masked;
+    spend_us(us);
+    if (outer) {
+        const double crossed = std::floor(S->us / 1000.0) - std::floor(g_mask_from_us / 1000.0);
+        if (crossed > 1) g_lost_ticks += std::uint32_t(crossed - 1);
+        g_mask_from_us = -1;
+    }
+    if (--k2::host::irq_masked == 0) deliver_due();
+}
+double clock_us() {   // what the SysTick-based clocks read: frozen while masked, minus the ticks a masked stretch lost
+    const double us = g_mask_from_us >= 0 ? g_mask_from_us : S->us;
+    return us - g_lost_ticks * 1000.0;
+}
+
+void set_vbus_model(double (*mv_at)(double)) { g_vbus_model = mv_at; }
+const FlashStats& flash_stats() { return g_flash_stats; }
+
+void spend_us(double us) {
+    if (us <= 0) return;
+    double left = us;
+    while (irq_open()) {   // the interrupted code's own time stays `us`; a handler's time comes on top
+        const double n = g_irq->next_us();
+        if (n < 0 || n >= S->us + left) break;
+        const double d = n > S->us ? n - S->us : 0.0;
+        advance(d);
+        left -= d;
+        run_isr();
+    }
+    advance(left);
 }
 
 double world_ms() { return world_now(); }
@@ -907,9 +1001,9 @@ namespace systick {
 namespace { void (*g_wait_hook)(); void (*g_delay_hook)(); void (*g_tick_hook)(); }
 void init() {}
 void tick() {}
-std::uint32_t millis() { world::spend_us(world::g_t.clock_read_us); return std::uint32_t(world::S->us / 1000.0); }
-std::uint32_t micros() { world::spend_us(world::g_t.clock_read_us); return std::uint32_t(world::S->us); }
-std::uint32_t ticks() { world::spend_us(world::g_t.clock_read_us); return std::uint32_t(std::fmod(world::S->us * 240.0, 4294967296.0)); }
+std::uint32_t millis() { world::spend_us(world::g_t.clock_read_us); return std::uint32_t(world::clock_us() / 1000.0); }
+std::uint32_t micros() { world::spend_us(world::g_t.clock_read_us); return std::uint32_t(world::clock_us()); }
+std::uint32_t ticks() { world::spend_us(world::g_t.clock_read_us); return std::uint32_t(std::fmod(world::clock_us() * 240.0, 4294967296.0)); }
 void set_delay_hook(void (*hook)()) { g_delay_hook = hook; }
 void set_wait_hook(void (*hook)()) { g_wait_hook = hook; }
 void set_tick_hook(void (*hook)()) { g_tick_hook = hook; }
@@ -1040,7 +1134,9 @@ bool latest_dpdm(std::int32_t& dp, std::int32_t& dm) {
 // record, black box, boot trace) have no flash here; the D+/D- side (fastcharge, dpsniff, fctrig) is not modelled yet
 // (docs/TESTING.md "World replay", sink and QC); the transition capture's poll is the delay_ms() wait hook and records nothing.
 namespace usb { void log_stats() {} }
+#ifndef K2_WORLD_SVOOC   // the SuperVOOC world's stall injection rides this poll (tests/world_svooc.cpp)
 namespace shell_hw { void poll() {} }
+#endif
 // The session record's backup registers (src/chargertest/session_store.cpp reaches BPR at 0x40006C00, which a host cannot): the
 // same init / voucher over State::bpr_session. Every boot writes a fresh record, so the record is the voucher of the next one. poll()
 // would only rewrite it as the PD state changes: the voucher needs no more than that valid record.
@@ -1069,7 +1165,9 @@ namespace net { void log_stats() {} }
 namespace msc { void poll() {} bool io() { return false; } }
 namespace http_server { void service() {} void log_stats() {} }
 namespace handback { void poll(std::uint32_t) {} }
+#ifndef K2_WORLD_SVOOC   // the SuperVOOC world (tests/world_svooc.cpp) runs the trigger's glue: its fctrig hands on to it
 namespace fctrig { void service_ufcs() {} void service_hs() {} }
+#endif
 namespace fault { void trigger(std::uint8_t) {} }
 namespace fastcharge { unsigned init() { return 0; } unsigned log_idle() { return 0; } void poll() {} }
 namespace dpsniff { void poll(std::uint32_t, std::int32_t) {} }

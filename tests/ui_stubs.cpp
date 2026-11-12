@@ -49,7 +49,9 @@ void delay_ms(uint32_t ms) { g_stub.ms += ms; g_stub.delays_ms += ms; if (g_stub
 #endif
 
 namespace link {
+#ifndef K2_WORLD_SVOOC   // the SuperVOOC world keeps the cause too (its probe_now reports it to the trigger's guards)
 void set_inline_mode(bool on, pd::InlineCause) { g_stub.link_inline = on; }
+#endif
 Reason inline_now() {
     Probe p;
     p.pd_active = g_stub.caps.valid && g_stub.caps.active_cc != 0;
@@ -790,8 +792,10 @@ void stop() {
     g_stub.fc_state = int(State::Idle); g_stub.fc_scanning = false;
     if (g_stub.reader_scanner) g_stub.reader_scanner->abort();
 }
+#ifndef K2_WORLD_SVOOC   // the SuperVOOC world (tests/world_svooc.cpp) runs the real trigger glue behind these two
 void poll() {}
 bool svooc_running() { return false; }   // the guarded SuperVOOC trigger is remote only: never on in the UI tests
+#endif
 bool paint_critical() { return g_stub.fc_critical; }
 const ufcs::Tuner& ufcs_tuner() { return g_stub.ufcs_tuner; }
 TuneSet ufcs_set(ufcs::Field f, std::uint32_t v) {
