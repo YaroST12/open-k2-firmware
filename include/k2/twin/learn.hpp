@@ -166,6 +166,21 @@ inline bool from_interrogated(const pd::IqStatus& st, Twin& out) {
     return true;
 }
 
+// What OK on "Learn from device" does (the Device twins page), in this order:
+//  - a device alone on the K2 (a dual-role phone: VBUS dark, its toggling Rp; pd::identify_alone): Identify it;
+//  - a device inline behind the K2 on its own charger: interrogate it there (twin_hw::inline_start; confirm first);
+//  - an Identify of the partner on the port that is still current: learn from it;
+//  - `vbus_dark` (the monitor reads no VBUS and no charger has listed) and nothing of the above: the device has no power,
+//    nothing can be asked;
+//  - else learn from whatever the last Identify left (the library's answer says why not).
+enum class LearnPath : std::uint8_t { Identify, Interrogate, LastIdentify, NoPower };
+constexpr LearnPath learn_path(bool alone, bool inline_link, bool identify_current, bool vbus_dark) {
+    if (alone) return LearnPath::Identify;
+    if (inline_link) return LearnPath::Interrogate;
+    if (identify_current || !vbus_dark) return LearnPath::LastIdentify;
+    return LearnPath::NoPower;
+}
+
 // The merge key: is `in` a new observation of the saved twin's device? (docs/DEVICE_TWIN.md section 4, "Same device")
 //  1. Both carry an identity (VID != 0): the same VID and PID, nothing else.
 //  2. One carries an identity, the other not: never. A sink PDO list or a Request is no proof of WHICH identified device it

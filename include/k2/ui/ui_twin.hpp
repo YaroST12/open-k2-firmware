@@ -8,7 +8,9 @@
 //    (solid = full power, half = limited, hollow = 5 V only; half and hollow in amber ink), then "Learn from device". The
 //    focused row opens a note ("gets 36 of 55W, cable"). Once a live proof ran on this charger the marker is the kit verdict
 //    cell and the note reads the result ("proved 36W", "charger refused 12V"). Footer: the charger's top offer and the count
-//    ("PD 20V3A: 2 of 5 full"). OK on a twin opens its detail; OK on Learn reads a device alone on the K2.
+//    ("PD 20V3A: 2 of 5 full"). OK on a twin opens its detail; OK on Learn reads a device alone on the K2, or (confirm first)
+//    interrogates a device inline behind its charger: the K2 resets the link, asks the device, resets it again
+//    (twin_hw::inline_start; the footer says "Resetting the link" / "Asking the device").
 //  Detail: TopBar "Twin"; the name; the gets / wants block (font 24 watts, a bar of what it gets against what it wants, the
 //    contract and what limits it, numbers graded green / amber / red); a header "Source" | name and a 1 px hairline split the
 //    block: the charger's facts left, the device's right (fixed levels, PPS ranges, USB); then action rows Prove live, Re-learn from device,
@@ -24,6 +26,7 @@
 
 #include "k2/twin/library.hpp"
 #include "k2/twin/predict.hpp"
+#include "k2/twin/twin_hw.hpp"
 #include "k2/ui/kit.hpp"
 #include "k2/ui/ui_pages.hpp"
 
@@ -46,6 +49,7 @@ public:
     int first_line() const { return first_; }      // detail lines scrolled off the top
     bool armed() const { return arm_ != Arm::None; }
     bool reading() const { return learn_wait_; }
+    bool asking() const { return iq_wait_; }       // this page's inline interrogation is running
     std::string_view footer() const { return foot_text_.view(); }   // what the footer shows now (tests, remote screenshots)
     // Row `index` as the list (or the detail's action list) paints it (views stay valid until the next call into the page).
     void peek(int index, bool focused, kit::RowSpec &out) { build_row(index, focused, out); }
@@ -59,7 +63,7 @@ private:
         twin::Outcome out{};
         std::array<char, twin::kNameMax + 1> name{};
     };
-    enum class Arm : uint8_t { None, Prove, Delete };
+    enum class Arm : uint8_t { None, Prove, Delete, Learn };   // Learn: an inline interrogation (it resets the link twice)
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);
     void build_row(int index, bool focused, kit::RowSpec &out);
     void build_list_row(int index, bool focused, kit::RowSpec &out);
@@ -69,8 +73,11 @@ private:
     void compose_footer();
     void say(std::string_view text, uint16_t color);
     void learn();
+    void learned(const twin_hw::Learned &r, bool contract_changed);
     void learn_row(uint32_t now_ms);                         // OK on Learn / Re-learn: read a device alone first, then learn
     void learn_wait_end();
+    void learn_inline();                                     // OK on Learn with a device inline: arm, then interrogate it
+    void learn_inline_end();                                 // the interrogation this page started is over: say what it learned
     void run_entry(const Entry &e);
     void open_detail();
     void close_detail();
@@ -97,6 +104,7 @@ private:
     bool hide_proof_ = false;                                // another charger since the last run: its verdicts no longer apply
     bool learn_wait_ = false;                                // this page started an Identify and learns when it ends
     uint32_t learn_wait_until_ = 0;
+    bool iq_wait_ = false;                                   // this page started an inline interrogation (twin_hw::inline_*)
     bool started_ = false;                                   // this page started the run in flight (leave() stops only that one)
     uint32_t gen_ = 0, stamp_ = 0;
     int sel_ = 0;                                            // list cursor

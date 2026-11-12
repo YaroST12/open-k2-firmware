@@ -294,7 +294,7 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     paint_incoming(now_ms, t0, blank);
 }
 
-bool Ui::twin_live_busy() const { return twin_hw::live_running(); }
+bool Ui::twin_live_busy() const { return twin_hw::live_running() || twin_hw::inline_running(); }   // a proof or an inline interrogation
 
 twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
     twin_hw::LiveCtx c;
@@ -303,10 +303,14 @@ twin_hw::LiveCtx Ui::twin_ctx(uint32_t now_ms) const {
     c.cap_mv = ctx_.cap_mv;
     c.busy = charger_test_busy() || fc_release_.busy() || loop_probe_busy();
     c.inline_link = link_.inline_mode() || ctx_.inline_mode;
+    c.owners_busy = pdstress_active() || fctrig::svooc_running() || fctrig::scan_running();
     return c;
 }
 
-void Ui::cancel_twin() { twin_hw::live_cancel(); }
+void Ui::cancel_twin() {
+    twin_hw::live_cancel();
+    twin_hw::inline_cancel();
+}
 
 void Ui::cancel_runs() {
     cancel_charger_test();
@@ -1299,6 +1303,7 @@ UiAction Ui::tick(uint32_t now_ms) {
     ctx_.inline_mode = link_.inline_mode();
     charger_test_.poll(now_ms);
     twin_hw::live_poll(twin_ctx(now_ms));   // the twin proof ends itself under the loop lock (its busy input, twin_hw.cpp)
+    twin_hw::inline_poll();                 // an inline interrogation that ended: learn from it once
 #if K2_PDSTRESS
     if (loopguard::locked() && pdstress_.running()) pdstress_.cancel();   // the HID-cable loop 5 V lock: released to 5 V at this poll
     pdstress_.poll(now_ms);   // after the charger test's poll: that one clears the run-owner flag a run of ours has set

@@ -627,6 +627,8 @@
   "630": "[IQ] contracts: first pos %u RDO 0x%08X PDO 0x%08X, second pos %u RDO 0x%08X PDO 0x%08X\n",
   "631": "[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n",
   "632": "[IQ] t=%u started (contract sniffed: %u, source id %u)\n",
-  "633": "[IQ] refused: %s\n"
+  "633": "[IQ] refused: %s\n",
+  "634": "[TWIN] learn inline start save=%u -> %s\n",
+  "635": "[TWIN] learn inline -> %u vid=%04x pdos=%u req=%u rev=%08x ext=%u\n"
  }
 }

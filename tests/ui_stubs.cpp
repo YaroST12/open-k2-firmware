@@ -527,12 +527,54 @@ Learned learn_from_identify(std::string_view name, bool save) {
     r.store = storage::twin_save(r.twin);
     return r;
 }
+namespace {
+InlineLearn g_iq_learn;
+bool g_iq_running = false;
+}  // namespace
+pd::IqRefusal inline_start(std::string_view, bool save, bool confirmed, const LiveCtx& ctx) {
+    g_stub.twin_iq_confirmed = confirmed;
+    if (g_stub.twin_iq_refusal != pd::IqRefusal::None) return g_stub.twin_iq_refusal;
+    if (ctx.busy || ctx.owners_busy) return pd::IqRefusal::Busy;
+    if (!ctx.inline_link) return pd::IqRefusal::NotInline;
+    if (!confirmed) return pd::IqRefusal::NeedConfirm;
+    g_stub.twin_iq_starts++;
+    g_stub.twin_iq_save = save;
+    g_iq_learn = InlineLearn{};
+    g_iq_learn.pending = true;
+    g_iq_learn.save = save;
+    g_iq_running = true;
+    if (!pd::iq_finished(g_stub.twin_iq_status.phase)) return pd::IqRefusal::None;
+    g_stub.twin_iq_status.phase = pd::IqPhase::Reset1;   // a test that left a finished run behind starts a fresh one
+    return pd::IqRefusal::None;
+}
+void inline_poll() {
+    if (!g_iq_learn.pending) return;
+    if (!pd::iq_finished(g_stub.twin_iq_status.phase)) return;
+    g_iq_running = false;
+    g_iq_learn.pending = false;
+    g_iq_learn.done = true;
+    Learned r = g_stub.twin_iq_learned;
+    if (r.how == Learn::Ok && g_iq_learn.save) r.store = storage::twin_save(r.twin);
+    g_iq_learn.result = r;
+}
+void inline_cancel() {
+    if (!g_iq_learn.pending) return;
+    g_stub.twin_iq_cancels++;
+    g_iq_learn.pending = false;
+    g_iq_running = false;
+    g_stub.twin_iq_status.phase = pd::IqPhase::Aborted;
+}
+bool inline_running() { return g_iq_learn.pending || g_iq_running; }
+const InlineLearn& inline_learn() { return g_iq_learn; }
+const pd::IqStatus& inline_status() { return g_stub.twin_iq_status; }
 }  // namespace twin_hw
 }  // namespace k2
 
 void stub_twin_reset() {
     k2::twin_hw::g_sim = k2::twin_hw::StubTwinEnv();
     g_stub.twins.clear();
+    k2::twin_hw::g_iq_learn = k2::twin_hw::InlineLearn{};
+    k2::twin_hw::g_iq_running = false;
 }
 
 namespace k2 {

@@ -809,7 +809,20 @@ static void test_from_interrogated() {
     CHECK_EQ(t.num_pdos, 2);
 }
 
+// OK on "Learn from device": alone -> Identify, inline -> interrogate, a current Identify -> learn from it, dark -> no power.
+static void test_learn_path() {
+    using P = LearnPath;
+    CHECK_EQ(int(learn_path(true, false, false, true)), int(P::Identify));
+    CHECK_EQ(int(learn_path(true, true, true, false)), int(P::Identify));        // alone wins (the inline latch is stale then)
+    CHECK_EQ(int(learn_path(false, true, false, false)), int(P::Interrogate));
+    CHECK_EQ(int(learn_path(false, true, true, true)), int(P::Interrogate));     // inline: ask it, even with an older Identify
+    CHECK_EQ(int(learn_path(false, false, true, true)), int(P::LastIdentify));   // identified a moment ago, released since
+    CHECK_EQ(int(learn_path(false, false, false, false)), int(P::LastIdentify)); // VBUS up, not inline (the K2 is the sink)
+    CHECK_EQ(int(learn_path(false, false, false, true)), int(P::NoPower));       // a device with no charger, not a phone alone
+}
+
 int main() {
+    test_learn_path();
     test_from_interrogated();
     test_codec_v3();
     test_same_device();

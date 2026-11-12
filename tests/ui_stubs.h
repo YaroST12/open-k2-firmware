@@ -239,6 +239,13 @@ struct StubState {
     int twin_unwakes = 0;                  // Rd given back by a failed / cut-short wake (Env::unwake)
     int twin_wake_releases = 0;            // wake_release() calls that gave a held Rd back
     unsigned twin_stamp = 0;               // moves the prediction stamp (twin_hw::predict_stamp) like a new charger list would
+    // The inline interrogation (twin_hw::inline_*): the refusal inline_start answers (None = started), the run's status as the
+    // test drives it (a finished phase ends the run), and what its learning answers (an Ok one with save adds its twin).
+    k2::pd::IqRefusal twin_iq_refusal = k2::pd::IqRefusal::None;
+    k2::pd::IqStatus twin_iq_status{};
+    k2::twin_hw::Learned twin_iq_learned{};
+    int twin_iq_starts = 0, twin_iq_cancels = 0;
+    bool twin_iq_confirmed = false, twin_iq_save = false;
     // PD Stress: Soft_Reset asks and the journal file (journal_hw::store()) the stand-in keeps in RAM.
     int ps_soft_resets = 0;
     bool ps_soft_reset_ok = true;
