@@ -173,8 +173,8 @@ void model_row_text(power::Chip chip, StrBuf<24> &s) {
 // Shared page helpers
 // ---------------------------------------------------------------------------------------
 
-// Short bar names (8 cells at most) of the rotation pages, in Page order.
-static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Tools", "Settings"};
+// Short bar names (8 cells at most) of the rotation pages, in Page order (a Bench place names itself: bar_icon_ + title_).
+static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Bench", "Settings"};
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
 void PageBase::title_bar() {
@@ -185,13 +185,13 @@ void PageBase::title_bar() {
     // The band repaint erases the right-side readout; the next title_badge call repaints it.
     bar_valid_ = false;
     const bool menu = is_menu();
-    const char *name = menu ? title_ : kBarNames[static_cast<int>(id_)];
+    const char *name = menu || bar_icon_ ? title_ : kBarNames[static_cast<int>(id_)];
     char badge[11];
     std::string_view role = menu ? std::string_view(fusb302::self_powered() ? "SNK" : "PAS")
                                  : role_badge(fusb302::pin_rd(), badge);
     if (role == "PAS") role = {};   // Fieldbook: the masthead carries a role only as an exception (a held Rd pin, a sink)
     // The readout area is the page's update() job (title_badge, always called first thing and always repainting after this).
-    draw_status_left(ctx_.content, (menu || meter_face()) && has_icon_, icon_, name, 132, role, true);
+    draw_status_left(ctx_.content, (menu || meter_face() || bar_icon_) && has_icon_, icon_, name, 132, role, true);
 }
 
 void PageBase::title_pager(int current) {
@@ -236,8 +236,24 @@ void PageBase::title_badge(bool last) {
 }
 
 bool PageBase::back_event(Event e) {
-    if (is_menu() || e.button != Button::Back || e.press != Press::Short || id_ == Page::Home) return false;
-    ctx_.ui->goto_page(0, ctx_.now);   // one press home (design 6.1)
+    if (is_menu() || e.press != Press::Short) return false;
+    Ui &ui = *ctx_.ui;
+    if (any_face()) {
+        if (e.button == Button::Plus || e.button == Button::Minus) {   // Dn = the next face: Flow, Numbers, Lines, Flow...
+            ui.flip_face(e.button == Button::Plus ? 1 : -1, ctx_.now);
+            return true;
+        }
+        if (e.button == Button::Ok) {
+            ui.open_place(bench::Place::Meter, ctx_.now);   // the Bench's own list
+            return true;
+        }
+        if (e.button != Button::Back || id_ == Page::Home) return false;
+        ui.to_meter(ctx_.now);
+        return true;
+    }
+    if (e.button != Button::Back) return false;
+    ui.open_place(id_ == Page::Settings ? bench::Place::K2 : id_ == Page::ChargerTest ? bench::Place::Charger : bench::Place::Meter,
+                  ctx_.now);
     return true;
 }
 
@@ -257,7 +273,9 @@ PanelLabels PageBase::base_labels() const {
         p.b[static_cast<int>(Button::Plus)] = {kDn, "", "", false};
         return p;
     }
-    return nav_labels(static_cast<unsigned>(id_), static_cast<unsigned>(Page::Count));
+    PanelLabels p = nav_labels();
+    if (any_face()) p.b[static_cast<int>(Button::Ok)] = {"Bench", "", "", false};
+    return p;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -359,7 +377,6 @@ void contract_text(const pd::Contract &c, StrBuf<24> &out) {
 // E-marker
 // ---------------------------------------------------------------------------------------
 
-namespace {
 // Live setup for the hints (see setup_hint): the link and the power monitor, nothing else.
 SetupState setup_state(const UiContext &c) {
     const pd::Link &link = c.ui->link();
@@ -371,7 +388,6 @@ SetupState setup_state(const UiContext &c) {
     st.vbus_known = c.pm_online;
     st.vbus_mv = c.pm.vbus_mv;
     return st;
-}
 }
 
 
@@ -1352,89 +1368,6 @@ PanelLabels PdTriggerPage::labels() const {
 }
 
 void PdTriggerPage::invalidate() { reset_paint(); }
-
-// ---------------------------------------------------------------------------------------
-// Tools hub and placeholder tools
-// ---------------------------------------------------------------------------------------
-
-const char *ToolsPage::tool_name(int i) {
-    static_assert(text::tools::kSlots == kToolSlots);
-    return text::tools::kNames[i < 0 || i >= kTools ? 0 : i];   // the hub's copy: include/k2/ui/text/tools.hpp
-}
-
-void ToolsPage::draw_static() {
-    title_bar();
-    ctx_.rows.init(ctx_.content, kit::kBodyY, row_fn, this);
-    ctx_.rows.set_count(kToolCount);
-    ctx_.rows.select(sel_);
-}
-
-// Row i: the tool icon (dim, tone-coloured when the tool is not Ready), the name, and at the right the drill-in chevron when
-// the tool is Ready, else its tail word in kDim (UI_SYSTEM.md 7.13.3: only the footer carries the red). The focused row opens
-// the tool's hint as its note. The list repaints a row only when this content changed.
-void ToolsPage::row_fn(void *ctx, int i, bool focused, kit::RowSpec &out) {
-    static constexpr Icon kIcons[kToolSlots] = {Icon::Brick,    Icon::Pd,    Icon::Ghost,  Icon::Res,  Icon::Plug,  Icon::Emark,  Icon::Phone,
-                                                Icon::Blackbox, Icon::Check, Icon::Report, Icon::Chip, Icon::Phone, Icon::Usb,    Icon::Wave};
-    const auto *self = static_cast<const ToolsPage *>(ctx);
-    const Readiness &rd = self->rd_[i];
-    out.marker = kit::Marker::Icon;
-    out.icon = kIcons[i < 0 || i >= kToolCount ? 0 : i];
-    out.text = tool_name(i);
-    if (focused) out.note = tool_hint(i);
-    if (rd.level == ToolLevel::Ready) {
-        out.chevron = true;
-        return;
-    }
-    out.marker_color = rd.level == ToolLevel::Caution ? kCaution : kError;
-    out.tail = rd.tag;   // tail_color stays kDim
-}
-
-void ToolsPage::update(uint32_t) {
-    title_badge(false);
-    const SetupState ss = setup_state(ctx_);
-    for (int i = 0; i < kToolCount; i++) rd_[i] = tool_readiness(i, ss, ctx_.pm_online);
-    ctx_.rows.select(sel_);
-    ctx_.rows.draw(ctx_.now);
-    const Readiness &cur = rd_[sel_];
-    if (cur.level != ToolLevel::Ready) {   // the focused tool's blocker, in its tone
-        draw_footer_cached(ctx_.content, cur.level == ToolLevel::Caution ? FooterTone::Caution : FooterTone::Error, cur.reason, foot_);
-        return;
-    }
-    int ready = 0;   // a ready tool needs no green band: the hub's fact, Info tone
-    for (int i = 0; i < kToolCount; i++) ready += rd_[i].level == ToolLevel::Ready;
-    StrBuf<27> f;
-    if (ready == kToolCount) f.put(text::tools::kAllReady);
-    else f.put_u32(static_cast<uint32_t>(ready)).put(text::tools::kSomeReady).put_u32(kToolCount).put(text::tools::kSomeReadyTail);
-    draw_footer_cached(ctx_.content, FooterTone::Info, f.view(), foot_);
-}
-
-bool ToolsPage::on_event(Event e) {
-    if (e.press == Press::Short && (e.button == Button::Plus || e.button == Button::Minus)) {
-        const int n = sel_ + (e.button == Button::Plus ? 1 : -1);
-        if (n >= 0 && n < kTools) sel_ = n;
-        update(ctx_.now);
-        return true;
-    }
-    if (e.press == Press::Short && e.button == Button::Ok) {
-        if (sel_ == kToolSpoof) ctx_.ui->open_connection(conn::Tab::Cable, true, ctx_.now);   // the Spoof shortcut
-        else if (sel_ >= kToolChargerId && sel_ <= kToolDeviceId)   // Charger ID, Cable read, Device ID: Tab order
-            ctx_.ui->open_connection(static_cast<conn::Tab>(sel_ - kToolChargerId), false, ctx_.now);
-        else ctx_.ui->push_menu(tool_menu(sel_), ctx_.now);
-        return true;
-    }
-    return back_event(e);
-}
-
-PanelLabels ToolsPage::labels() const {
-    PanelLabels l = list_labels(base_labels());   // short [+]/[-] move the selection here; long still pages
-    l.b[static_cast<int>(Button::Ok)] = {"Open", "", "", false};
-    return l;
-}
-
-void ToolsPage::invalidate() {
-    ctx_.rows.invalidate();
-    foot_.invalidate();
-}
 
 // ---------------------------------------------------------------------------------------
 // Cable resistance submenu (passive two-point method)

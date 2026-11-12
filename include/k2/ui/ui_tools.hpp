@@ -6,7 +6,9 @@
 #pragma once
 #include <cstdint>
 #include "k2/core/build_config.h"
+#include "k2/ui/ui_calc.hpp"
 #include "k2/ui/ui_pdtrig.hpp"
+#include "k2/ui/ui_types.hpp"
 
 namespace k2 {
 
@@ -39,5 +41,55 @@ ToolHurt tool_hurt_by(int tool);
 
 // `pm_online`: the power monitor answers (Cable R needs it).
 Readiness tool_readiness(int tool, const SetupState &st, bool pm_online);
+
+// ---- the Bench (Fieldbook, CONCEPT 7): six places, each a list of actions ------------------------------------------------
+// The Bench replaced the page carousel and the Tools hub: Meter (back to the faces), Charger, Cable, Device, Log, K2. Every
+// tool of the old hub is one place's action; a place adds the pages that used to sit in the carousel (Test charger, Settings)
+// and the lists that hid behind a tool (Saved cables). Pure: the tables and the row texts; ToolsPage paints them.
+namespace bench {
+
+enum class Place : uint8_t { Meter, Charger, Cable, Device, Log, K2 };
+inline constexpr int kPlaces = 6;
+
+enum class ActKind : uint8_t { Tool, Page, Menu };   // arg: a tool slot (ui_tools), a Page, a Menu
+struct Act {
+    const char *name;
+    ActKind kind;
+    uint8_t arg;
+    const char *hint;   // the fact line while the row is focused; nullptr = the tool's own (tool_hint)
+};
+struct Acts { const Act *a; int n; };
+
+Acts actions(Place p);
+const char *place_name(Place p);
+const char *act_hint(const Act &a);
+
+// What a Bench row reads. The Ui fills it from the drivers; the texts below are pure.
+struct Facts {
+    bool vbus = false;                  // the meter reads a live VBUS
+    int32_t mv = 0, ma = 0, mw = 0;
+    bool caps = false;                  // PD source capabilities heard
+    uint8_t spec_rev = 0;               // their header's revision (2 = PD 3.x)
+    uint32_t max_mw = 0;
+    uint8_t offers = 0;
+    const char *fc = nullptr;           // the passive fast-charge verdict's short name; nullptr when none
+    bool cable = false;                 // an e-marker read
+    uint8_t cable_a = 0, cable_v = 0;
+    uint16_t cable_w = 0;
+    bool contract = false;              // a PD contract in force
+    int32_t ctr_mv = 0, ctr_ma = 0;
+    StrBuf<17> diag;                    // the PD diagnosis word (home::format_diag); empty without a session
+    uint8_t captures = 0;               // Black Box captures held
+    const char *version = "";           // kFwVersion
+    bool hid = false;                   // the HID function enumerates
+};
+// A row's second line (font 12, at most kStatusChars) and whether its node is solid (something known) or hollow.
+inline constexpr int kStatusChars = 28;
+struct Row { bool known = false; StrBuf<kStatusChars + 1> status; };
+Row row(Place p, const Facts &f);
+// The Bench's fact line (at most 27 characters): what is attached.
+void fact(const Facts &f, StrBuf<28> &out);
+
+}  // namespace bench
 
 }  // namespace k2

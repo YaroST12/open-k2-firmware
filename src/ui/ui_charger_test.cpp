@@ -2580,6 +2580,10 @@ bool ChargerTestPage::on_event(Event e) {
     const bool open_group = long_ok && stage_ == Stage::Custom && selection_ < kFamilyCount && selection_ != kFamXiaomi;
     const bool toggle_group = long_ok && stage_ == Stage::Group;
     if (e.press != Press::Short && !open_group && !toggle_group && !(e.press == Press::Long && e.button == Button::Back)) return false;
+    // A long BACK stops first (a run, a resume offer, an armed START, the wait); with nothing to stop it goes to the Meter (the Ui).
+    if (e.press == Press::Long && e.button == Button::Back && stage_ != Stage::Resume && stage_ != Stage::Waiting && !runner_.busy() &&
+        !confirming_)
+        return false;
     if (open_group) {
         family_ = selection_;
         set_stage(Stage::Group, 0);

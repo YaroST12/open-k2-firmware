@@ -83,4 +83,140 @@ Readiness tool_readiness(int tool, const SetupState &st, bool pm_online) {
     return kRules[tool].check(st, pm_online);
 }
 
+// ---- the Bench ------------------------------------------------------------------------------------------------------------
+
+namespace bench {
+namespace {
+using K = ActKind;
+constexpr uint8_t pg(Page p) { return static_cast<uint8_t>(p); }
+constexpr uint8_t mn(Menu m) { return static_cast<uint8_t>(m); }
+
+// Tool slots (ui_tools.hpp / text/tools.hpp): 0 FC trigger, 1 PD trigger, 2 Spoof, 3 Cable R, 4 Charger ID, 5 Cable read,
+// 6 Device ID, 7 Black Box, 8 PD diagnosis, 9 Report cards, 10 Diag, 11 Device twins, 12 Loop probe, 13 PD Stress.
+constexpr Act kCharger[] = {
+    {"Test charger", K::Page, pg(Page::ChargerTest), "grades every offer"},
+    {"Charger ID", K::Tool, 4, nullptr},
+    {"Request voltage", K::Tool, 1, nullptr},
+    {"Fast charge", K::Tool, 0, nullptr},
+    {"Report cards", K::Tool, 9, nullptr},
+#if K2_PDSTRESS
+    {"Stress test", K::Tool, 13, nullptr},
+#endif
+};
+constexpr Act kCable[] = {
+    {"Cable read", K::Tool, 5, nullptr},
+    {"Saved cables", K::Menu, mn(Menu::Emarker), "cables you stored"},
+    {"Spoof as...", K::Tool, 2, nullptr},
+    {"Resistance", K::Tool, 3, nullptr},
+    {"Loop probe", K::Tool, 12, nullptr},
+};
+constexpr Act kDevice[] = {
+    {"Device ID", K::Tool, 6, nullptr},
+    {"Twins", K::Tool, 11, nullptr},
+};
+constexpr Act kLog[] = {
+    {"PD diagnosis", K::Tool, 8, nullptr},
+    {"Black Box", K::Tool, 7, nullptr},
+};
+constexpr Act kK2[] = {
+    {"Settings", K::Page, pg(Page::Settings), "theme, rotation, USB link"},
+    {"System state", K::Tool, 10, nullptr},
+};
+constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Log", "K2"};
+
+template <size_t N> constexpr Acts acts(const Act (&a)[N]) { return {a, static_cast<int>(N)}; }
+
+void put_volts(StrBuf<kStatusChars + 1> &s, int32_t mv) {
+    if (mv % 1000 == 0) s.put_u32(static_cast<uint32_t>(mv / 1000));
+    else s.put_fixed(mv, mv % 100 == 0 ? 1 : 2);
+    s.put_char('V');
+}
+void put_amps(StrBuf<kStatusChars + 1> &s, int32_t ma) {
+    if (ma % 1000 == 0) s.put_u32(static_cast<uint32_t>(ma / 1000));
+    else s.put_fixed(ma, ma % 100 == 0 ? 1 : 2);
+    s.put_char('A');
+}
+// "1.0.1-6" of "1.0.1-6-e67edd0e[-dirty]": the release and the iteration, the hash stays in Boot info.
+std::string_view short_version(const char *v) {
+    const std::string_view s = v ? v : "";
+    const size_t a = s.find('-');
+    if (a == std::string_view::npos) return s;
+    const size_t b = s.find('-', a + 1);
+    return b == std::string_view::npos ? s : s.substr(0, b);
+}
+}  // namespace
+
+Acts actions(Place p) {
+    switch (p) {
+    case Place::Charger: return acts(kCharger);
+    case Place::Cable: return acts(kCable);
+    case Place::Device: return acts(kDevice);
+    case Place::Log: return acts(kLog);
+    case Place::K2: return acts(kK2);
+    case Place::Meter: break;
+    }
+    return {nullptr, 0};
+}
+
+const char *place_name(Place p) { return kPlaceNames[static_cast<int>(p) < kPlaces ? static_cast<int>(p) : 0]; }
+
+const char *act_hint(const Act &a) { return a.hint ? a.hint : a.kind == ActKind::Tool ? tool_hint(a.arg) : ""; }
+
+Row row(Place p, const Facts &f) {
+    Row r;
+    auto &s = r.status;
+    switch (p) {
+    case Place::Meter:
+        r.known = f.vbus;
+        if (!f.vbus) { s.put("no VBUS"); break; }
+        s.put_abs_fixed(f.mw, f.mw >= 99995 ? 1 : 2).put("W  ").put_fixed(f.mv, 2).put("V  ").put_abs_fixed(f.ma, 3).put_char('A');
+        break;
+    case Place::Charger:
+        r.known = f.caps || f.fc;
+        if (f.caps) {
+            s.put(f.spec_rev >= 2 ? "PD3.x " : f.spec_rev == 1 ? "PD2.0 " : "PD ");
+            s.put_u32((f.max_mw + 500) / 1000).put("W, ").put_u32(f.offers).put(f.offers == 1 ? " offer" : " offers");
+        } else if (f.fc) {
+            s.put(f.fc).put(" on the lines");
+        } else {
+            s.put("none on either port");
+        }
+        break;
+    case Place::Cable:
+        r.known = f.cable;
+        if (!f.cable) { s.put("not read"); break; }
+        s.put_u32(f.cable_a).put("A ").put_u32(f.cable_v).put_char('V');
+        if (f.cable_w) s.put(", ").put_u32(f.cable_w).put_char('W');
+        break;
+    case Place::Device:
+        r.known = f.contract;
+        if (!f.contract) { s.put("none inline"); break; }
+        s.put("asks ");
+        put_volts(s, f.ctr_mv);
+        s.put_char(' ');
+        put_amps(s, f.ctr_ma);
+        if (f.vbus && f.mw >= 1000) s.put(", gets ").put_u32(static_cast<uint32_t>((f.mw + 500) / 1000)).put_char('W');
+        break;
+    case Place::Log:
+        r.known = true;
+        s.put(f.diag.view().empty() ? std::string_view("no session") : f.diag.view());
+        if (f.captures) s.put(", ").put_u32(f.captures).put(f.captures == 1 ? " capture" : " captures");
+        break;
+    case Place::K2:
+        r.known = true;
+        s.put(short_version(f.version)).put(f.hid ? ", HID on" : ", HID off");
+        break;
+    }
+    return r;
+}
+
+void fact(const Facts &f, StrBuf<28> &out) {
+    if (f.caps) out.put("Charger on a port, PD");
+    else if (f.fc) out.put("Charger on a port, ").put(f.fc);
+    else if (f.vbus) out.put("Power on the line");
+    else out.put("Nothing attached");
+}
+
+}  // namespace bench
+
 }  // namespace k2

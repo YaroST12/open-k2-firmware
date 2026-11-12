@@ -95,11 +95,11 @@ static void test_a_page_is_built_fresh_and_the_share_record_survives() {
     CHECK_EQ(int(ui.share().index()), 0);
 }
 
-// Home's trend window, the Tools and Settings cursors and the FC trigger draft are not in the pages.
+// Home's trend window, the Bench and Settings cursors and the FC trigger draft are not in the pages.
 static void test_remembered_state_survives_leaving_the_page() {
     Ui &ui = fresh();
     CHECK(ui.context().keep.home_window == trend::Window::S10);
-    press(ui, Button::Ok, 1200);                       // Home: OK cycles the trend window
+    press(ui, Button::Plus, 1200, ButtonEvent::Long);  // Flow: a long Dn steps the trend span
     const trend::Window w = ui.context().keep.home_window;
     CHECK(w != trend::Window::S10);
     ui.goto_page(static_cast<uint8_t>(Page::Detail), 1300);
@@ -107,14 +107,23 @@ static void test_remembered_state_survives_leaving_the_page() {
     CHECK(ui.context().keep.home_window == w);
 
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 1500);
+    CHECK_EQ(ui.context().keep.bench_sel, 1);          // the Bench opens on Charger
     press(ui, Button::Plus, 1600);
     press(ui, Button::Plus, 1610);
-    CHECK_EQ(ui.context().keep.tools_sel, 2);
+    CHECK_EQ(ui.context().keep.bench_sel, 3);
     ui.goto_page(static_cast<uint8_t>(Page::Home), 1700);
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 1800);
-    CHECK_EQ(ui.context().keep.tools_sel, 2);
+    CHECK_EQ(ui.context().keep.bench_sel, 3);
     press(ui, Button::Minus, 1810);                    // the rebuilt page steps on from where the cursor was
-    CHECK_EQ(ui.context().keep.tools_sel, 1);
+    CHECK_EQ(ui.context().keep.bench_sel, 2);
+    press(ui, Button::Ok, 1820);                       // a place remembers its own action
+    press(ui, Button::Plus, 1830);
+    CHECK_EQ(int(ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)]), 1);
+    ui.goto_page(static_cast<uint8_t>(Page::Home), 1840);
+    press(ui, Button::Ok, 1850);                       // OK on Flow: the Bench's list, the focus still on the last place
+    CHECK(ui.page() == Page::Tools);
+    CHECK_EQ(int(ui.context().keep.place), static_cast<int>(bench::Place::Meter));
+    CHECK_EQ(ui.context().keep.bench_sel, 2);
 
     ui.goto_page(static_cast<uint8_t>(Page::Settings), 1900);
     press(ui, Button::Plus, 2000);

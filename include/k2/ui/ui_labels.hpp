@@ -57,13 +57,14 @@ struct PanelLabels { SlotLabel b[4]; };
 // word) the long word or its alternative. Writes ASCII; returns the length, 0 when nothing fits.
 unsigned label_text(char (&out)[24], const SlotLabel &l, unsigned max_chars);
 
-// The labels every page shares: BACK ("Back" on every page, Home too), [-] "-/Prev" and [+] "+/Next", dimmed on the
-// first / last page respectively. OK is left empty for the page to fill in.
-PanelLabels nav_labels(unsigned page, unsigned page_count);
+// The labels every page shares: BACK "Back", [-] / [+] "Up" / "Dn" (a list's focus, the Meter's face; Fieldbook has no
+// paging press). OK is left empty for the page to fill in.
+PanelLabels nav_labels();
 
 // The strip vocabulary (docs/UI_DESIGN.md 6, "Strip vocabulary"):
-//  * BACK is "Back" everywhere ("Stop" only while a fast-charge run is live: there it stops the output).
-//  * [-] / [+] move through a list as "Up" / "Dn" (long "Prev" / "Next" pages), and change a value as "-" / "+".
+//  * BACK is "Back" everywhere ("Stop" only while a fast-charge run is live: there it stops the output); Flow, with no
+//    level above it, leaves the short press blank and shows its long "Hero".
+//  * [-] / [+] move through a list as "Up" / "Dn", and change a value as "-" / "+".
 //    "Tab-" / "Tab+" switch the PD tabs, "Mode" toggles the Cable R method.
 //  * OK is a verb of the focused item, one of kOkVerbs (its long press is free text: Reset, Menu, Grp, Charger).
 //  * The footer never repeats the strip: no "OK", "BACK" or "+/-" instructions in footer text.

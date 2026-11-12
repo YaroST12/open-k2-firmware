@@ -16,6 +16,8 @@ enum class Qty : uint8_t { V, A, W };
 inline constexpr uint16_t kNone = 0xFFFF;   // column with no sample yet
 
 constexpr Window next(Window w) { return w == Window::S10 ? Window::S60 : w == Window::S60 ? Window::M10 : Window::S10; }
+constexpr Window prev(Window w) { return w == Window::S10 ? Window::M10 : w == Window::S60 ? Window::S10 : Window::S60; }
+static_assert(prev(next(Window::S10)) == Window::S10 && prev(next(Window::M10)) == Window::M10);
 constexpr const char *label(Window w) { return w == Window::S10 ? "10s" : w == Window::S60 ? "60s" : "10m"; }
 
 struct Range {

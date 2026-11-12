@@ -301,8 +301,9 @@ static void test_settings_rotation_modes() {
     Ui ui;
     ui.init(0);
     ui.tick(6000);
-    ui.goto_page(static_cast<uint8_t>(Page::Tools), 6100);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 6200);
+    ui.open_place(bench::Place::K2, 6100);   // Bench > K2 > Settings (its first action)
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::K2)] = 0;
+    ui.on_button(Button::Ok, ButtonEvent::Short, 6200);
     CHECK_EQ(ui.page() == Page::Settings, true);
     CHECK_EQ(ui.list_state().count, 7);   // ... Wake sleeping port, Theme
     {   // Smoothing row: Medium by default, OK cycles High -> Off -> Low -> Medium, stores each and applies it at once
@@ -554,16 +555,18 @@ static void test_optional_rotated_buttons() {
 
     ui.set_rotation(2, 7000);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 7100);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 7200);
-    CHECK_EQ(ui.page(), Page::ChargerTest);   // rotation 2 swaps the direction: Plus goes to the previous page
-    ui.on_button(Button::Minus, ButtonEvent::Long, 7300);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 7200);
+    CHECK_EQ(ui.page(), Page::Detail);   // rotation 2 swaps the direction: Plus flips to the previous face
+    ui.on_button(Button::Minus, ButtonEvent::Short, 7300);
     CHECK_EQ(ui.page(), Page::Lines);
 
+    ui.context().keep.bench_sel = static_cast<int>(bench::Place::Charger);
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 7400);
     ui.on_button(Button::Minus, ButtonEvent::Short, 7500);
     ui.on_button(Button::Ok, ButtonEvent::Short, 7600);
-    CHECK_EQ(ui.menu(), Menu::PdTrigger);   // rotation 2 swaps the direction: [-] moves down one row from FC trigger
+    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Cable));   // rotation 2 swaps the direction: [-] moves down a row
     ui.on_button(Button::Back, ButtonEvent::Short, 7700);
+    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
     CHECK_EQ(ui.menu_depth(), 0u);
 
     const auto before_chord = ui.page();
@@ -574,14 +577,12 @@ static void test_optional_rotated_buttons() {
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 8000);
     ui.set_pressed(Button::Plus, true, 8100);
     ui.set_rotation(0, 8200);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 8300);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 8300);   // the press that crossed the rotation does nothing
     CHECK_EQ(ui.page(), Page::Lines);
     ui.set_pressed(Button::Plus, false, 8400);
-    ui.on_button(Button::Plus, ButtonEvent::Short, 8400);
-    CHECK_EQ(ui.page(), Page::Lines);
     ui.set_pressed(Button::Plus, true, 8500);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 9100);
-    CHECK_EQ(ui.page(), Page::Tools);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 9100);   // a fresh one at rotation 0: Dn flips to the next face
+    CHECK_EQ(ui.page(), Page::Home);
     ui.set_pressed(Button::Plus, false, 9200);
 
     ui.set_rotation(2, 9300);
@@ -590,8 +591,8 @@ static void test_optional_rotated_buttons() {
     ui.on_button(Button::Ok, ButtonEvent::Short, 9375);
     CHECK_EQ(ui.rotate_buttons(), false);
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 9400);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 9500);
-    CHECK_EQ(ui.page(), Page::Tools);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 9500);
+    CHECK_EQ(ui.page(), Page::Home);
     Ui fresh;
     fresh.init(10000);
     CHECK_EQ(fresh.rotate_buttons(), false);
@@ -600,8 +601,8 @@ static void test_optional_rotated_buttons() {
         fresh.feed_gravity(orientation::Gravity{0, -1000, 0}, t);
     CHECK_EQ(fresh.rotation(), 2);
     fresh.goto_page(static_cast<uint8_t>(Page::Lines), 10600);
-    fresh.on_button(Button::Plus, ButtonEvent::Long, 10700);
-    CHECK_EQ(fresh.page(), Page::ChargerTest);
+    fresh.on_button(Button::Plus, ButtonEvent::Short, 10700);
+    CHECK_EQ(fresh.page(), Page::Detail);
 }
 
 static void test_rotated_fc_draft() {
@@ -709,8 +710,8 @@ static void test_remote_keys_are_logical() {
     ui.set_rotation(2, 1100);
     CHECK_EQ(ui.rotation(), 2);
 
-    // The Tools cursor persists, so each key goes to a fresh UI at rotation 2 with Rotate buttons on and the
-    // menu it opens is compared. Remote plus moves down (FC trigger -> PD trigger), as in the default orientation.
+    // The Bench cursor persists, so each key goes to a fresh UI at rotation 2 with Rotate buttons on and the place it
+    // opens is compared. Remote plus moves down (Charger -> Cable), as in the default orientation.
     auto pick = [](bool remote, Button key) {
         g_stub = {};
         Ui u;
@@ -718,24 +719,25 @@ static void test_remote_keys_are_logical() {
         u.tick(1000);
         u.set_rotate_buttons(true);
         u.set_rotation(2, 1100);
-        u.goto_page(static_cast<uint8_t>(Page::Tools), 1200);
+        u.goto_page(static_cast<uint8_t>(Page::Tools), 1200);   // the Bench opens on Charger
         if (remote) { u.on_remote_button(key, ButtonEvent::Short, 1300); u.on_remote_button(Button::Ok, ButtonEvent::Short, 1400); }
         else        { u.on_button(key, ButtonEvent::Short, 1300);        u.on_button(Button::Ok, ButtonEvent::Short, 1400); }
-        return u.menu();
+        return static_cast<int>(u.context().keep.place);
     };
-    CHECK_EQ(pick(true, Button::Plus) == Menu::PdTrigger, true);    // remote plus = down
-    CHECK_EQ(pick(false, Button::Minus) == Menu::PdTrigger, true);  // physical minus at rotation 2 = down
-    CHECK_EQ(pick(false, Button::Plus) == Menu::PdTrigger, false);  // physical plus at rotation 2 = up
+    const int cable = static_cast<int>(bench::Place::Cable);
+    CHECK_EQ(pick(true, Button::Plus) == cable, true);    // remote plus = down
+    CHECK_EQ(pick(false, Button::Minus) == cable, true);  // physical minus at rotation 2 = down
+    CHECK_EQ(pick(false, Button::Plus) == cable, false);  // physical plus at rotation 2 = up
     CHECK_EQ(pick(true, Button::Minus) == pick(false, Button::Plus), true);   // remote minus = up, like that key
 
-    // Long remote plus pages forward (Lines -> Tools) at rotation 2, where a physical long plus pages back.
+    // Remote plus flips to the next face (Lines -> Flow) at rotation 2, where a physical plus flips back.
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 3000);
-    ui.on_remote_button(Button::Plus, ButtonEvent::Long, 3100);
-    CHECK_EQ(ui.page(), Page::Tools);
-    ui.on_remote_button(Button::Minus, ButtonEvent::Long, 3200);
+    ui.on_remote_button(Button::Plus, ButtonEvent::Short, 3100);
+    CHECK_EQ(ui.page(), Page::Home);
+    ui.on_remote_button(Button::Minus, ButtonEvent::Short, 3200);
     CHECK_EQ(ui.page(), Page::Lines);
-    ui.on_button(Button::Plus, ButtonEvent::Long, 3300);
-    CHECK_EQ(ui.page(), Page::ChargerTest);
+    ui.on_button(Button::Plus, ButtonEvent::Short, 3300);
+    CHECK_EQ(ui.page(), Page::Detail);
 
     // Remote plus and minus together (overlapping long presses) are two logical keys, never the rotation gesture.
     ui.goto_page(static_cast<uint8_t>(Page::Lines), 4000);
@@ -780,10 +782,11 @@ static void test_remote_keys_are_logical() {
 
     // Rotation 0 with the setting on or off: logical equals physical.
     ui.set_rotation(0, 8000);
+    ui.context().keep.bench_sel = static_cast<int>(bench::Place::Charger);
     ui.goto_page(static_cast<uint8_t>(Page::Tools), 8100);
     ui.on_remote_button(Button::Plus, ButtonEvent::Short, 8200);
     ui.on_remote_button(Button::Ok, ButtonEvent::Short, 8300);
-    CHECK_EQ(ui.menu(), Menu::PdTrigger);
+    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Cable));
 }
 
 int main() {

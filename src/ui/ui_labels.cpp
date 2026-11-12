@@ -33,12 +33,12 @@ unsigned label_text(char (&out)[24], const SlotLabel &l, unsigned max_chars) {
     return ns;
 }
 
-PanelLabels nav_labels(unsigned page, unsigned page_count) {
+PanelLabels nav_labels() {
     PanelLabels p;
     // Reboot is OK + Back held together for 3 s (on every page and menu) and is not advertised on the panel.
     p.b[static_cast<int>(Button::Back)] = {"Back", "", "", false};
-    p.b[static_cast<int>(Button::Minus)] = {"-", "Prev", "", page == 0};
-    p.b[static_cast<int>(Button::Plus)] = {"+", "Next", "", page + 1 >= page_count};
+    p.b[static_cast<int>(Button::Minus)] = {kUp, "", "", false};
+    p.b[static_cast<int>(Button::Plus)] = {kDn, "", "", false};
     return p;
 }
 
@@ -55,6 +55,8 @@ constexpr const char *kOkVerbs[] = {
     "Scan", "Listen", "Run", "Force", "Start", "Stop", "Send", "Rescan", "Clear", "Open", "Reset",
     "Next", "Select", "View", "Delete", "Arm", "Disarm", "Toggle", "Cycle", "Apply", "Refresh", "Ask",
     "Confirm", "Zoom",
+    // The Meter faces: OK opens the Bench
+    "Bench",
     // Device twins: OK on the last row stores the device just identified
     "Learn",
     // Connection page: OK opens the tab's action pop-up
@@ -85,7 +87,7 @@ bool word_at(const char *s, const char *w) {   // `w` as a whole word at s[0]
 const char *label_violation(const PanelLabels &p) {
     const SlotLabel &back = p.b[static_cast<int>(Button::Back)], &minus = p.b[static_cast<int>(Button::Minus)],
                     &ok = p.b[static_cast<int>(Button::Ok)], &plus = p.b[static_cast<int>(Button::Plus)];
-    if (!one_of(back.shrt, {"Back", "Stop"})) return "BACK must read Back";
+    if (!one_of(back.shrt, {"Back", "Stop", ""})) return "BACK must read Back";
     if (!one_of(minus.shrt, {"", "-", kUp, "Tab-"})) return "[-] must be -, Up or Tab-";
     if (!one_of(plus.shrt, {"", "+", kDn, "Tab+", "Mode"})) return "[+] must be +, Dn, Tab+ or Mode";
     if ((eq(minus.shrt, kUp) && eq(plus.shrt, "+")) || (eq(minus.shrt, "-") && eq(plus.shrt, kDn))) return "list and value pair mixed";

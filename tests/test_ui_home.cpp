@@ -473,23 +473,29 @@ static void test_sweep_strips_match_full_render() {
     }
 }
 
-// OK short cycles the window of all three sweeps; its label sits once, after the hero label.
+// A long Dn steps the window of all three sweeps forward, a long Up back; its label sits once, after the hero label.
 static void test_window_cycle() {
     Ui &ui = home_ui();
     live_pd(false, 20010, 1520);
     run(ui, 10);
     const int a = ink_logical(ui, 46, 3, 30, 12, kWattInk);   // the window label, in the W field's ink
     CHECK_TRUE(a > 3);
-    ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
+    ui.on_button(Button::Plus, ButtonEvent::Long, g_t);
     run(ui, 10);
+    CHECK_TRUE(ui.context().keep.home_window == trend::Window::S60);
     dump("2c", "window_60s");
-    ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
+    ui.on_button(Button::Plus, ButtonEvent::Long, g_t);
     run(ui, 10);
     dump("2c", "window_10m");
-    ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
+    ui.on_button(Button::Minus, ButtonEvent::Long, g_t);
     run(ui, 10);
+    CHECK_TRUE(ui.context().keep.home_window == trend::Window::S60);
+    ui.on_button(Button::Minus, ButtonEvent::Long, g_t);
+    run(ui, 10);
+    CHECK_TRUE(ui.context().keep.home_window == trend::Window::S10);
+    CHECK_TRUE(ui.page() == Page::Home);   // the span presses never leave Flow
     for (int r = 0; r < 2; r++) CHECK_EQ(ink_logical(ui, 30, kRowTop[r] + 3, 18, 12, kSpotInk), 0);   // never in a ledger row
-    CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].shrt, "Zoom");
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].shrt, "Bench");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].lng, "Reset");
 }
 

@@ -599,7 +599,7 @@ static void test_navigation_and_stop_controls() {
             CHECK_EQ(g_stub.releases, 0);
             press(ui, Button::Back, now);
         }
-        if (mode == 2) ui.on_button(Button::Plus, ButtonEvent::Long, now);
+        if (mode == 2) ui.on_button(Button::Back, ButtonEvent::Long, now);   // straight to the Meter: leaving stops the run
         if (mode == 3) CHECK_EQ(ui.on_button(Button::Back, ButtonEvent::Hold, now), UiAction::None);   // stops the run, no reboot
         CHECK_EQ(g_stub.releases, 1); CHECK_EQ(ui.charger_test_busy(), true);
         CHECK_EQ(ui.spoof_busy(), true);
@@ -3992,8 +3992,8 @@ static void test_waiting_plus_minus_do_nothing() {
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.charger_test_stage(), 4);
     CHECK_EQ(g_stub.rd_run, false);
-    // A hold of + on another stage keeps its old meaning: long + pages on.
-    ui.on_button(Button::Plus, ButtonEvent::Long, t + 100);
+    // A long BACK on another stage keeps its meaning: straight to the Meter.
+    ui.on_button(Button::Back, ButtonEvent::Long, t + 100);
     CHECK_EQ(ui.page_index() != page, true);
 }
 static void test_waiting_footer_says_how_to_wake() {

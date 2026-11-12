@@ -216,7 +216,7 @@ static void check_keys(Ui &ui, const char *what) {
         CHECK_EQ(int((k.flags >> i) & 1), p.b[i].dim ? 1 : 0);
     }
     CHECK_EQ(int((k.flags >> 4) & 1), ui.strip_hidden() ? 1 : 0);
-    CHECK_COND(k.k[0].shrt[0] != 0);                  // BACK always says something
+    CHECK_COND(k.k[0].shrt[0] != 0 || k.k[0].lng[0] != 0);   // BACK always says something (Flow: only its long "Hero")
     uint8_t buf[remote::kMaxRspPayload];
     CHECK_EQ(int(remote::encode_keys(buf, k)), int(remote::kKeysLen));
 }
@@ -239,12 +239,14 @@ static void test_keys_follow_the_page() {
     Ui &ui = fresh_ui();
     ui.goto_page(0, g_stub.ms += 1000);
     remote::KeysInfo k = remote::keys_from_labels(ui.labels(), ui.strip_hidden());
-    CHECK_STR(k.k[0].shrt, "Back");
-    CHECK_STR(k.k[1].shrt, "-");
-    CHECK_STR(k.k[1].lng, "Prev");
-    CHECK_EQ(int(k.flags & 2), 2);                    // the first page has nothing before it: [-] dim
+    CHECK_STR(k.k[0].shrt, "");                       // Flow: no level above it, long BACK cycles the hero
+    CHECK_STR(k.k[0].lng, "Hero");
+    CHECK_STR(k.k[1].shrt, "Up");                     // Up / Dn flip the Meter's faces, with a wrap: never dim
+    CHECK_STR(k.k[1].lng, "");
+    CHECK_EQ(int(k.flags & 2), 0);
     CHECK_EQ(int(k.flags & 0x10), 0);                 // the strip is drawn
-    CHECK_STR(k.k[3].shrt, "+");
+    CHECK_STR(k.k[2].shrt, "Bench");
+    CHECK_STR(k.k[3].shrt, "Dn");
     CHECK_EQ(int(k.flags & 8), 0);
     ui.goto_page(static_cast<uint8_t>(Page::Tools), g_stub.ms += 1000);
     ui.push_menu(Menu::Share, g_stub.ms += 100);      // the QR code covers the strip

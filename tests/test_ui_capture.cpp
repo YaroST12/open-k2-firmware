@@ -766,6 +766,32 @@ void test_switch_exact() {
     }
     CHECK_EQ(bad, 0);
 
+    // The Bench's own switches (Ui::open_place, the same page in another mode): its list to each place and back, upright and
+    // scaled.
+    int bad_place = 0;
+    for (uint8_t r = 0; r < 2; ++r) {
+        ui.set_rotation(r, g_walk_t += 10);
+        for (int p = 1; p < k2::bench::kPlaces; ++p)
+            for (int back = 0; back < 2; ++back) {
+                const auto place = static_cast<k2::bench::Place>(p);
+                ui.open_place(back ? place : k2::bench::Place::Meter, g_walk_t += 10);
+                walk_settle(ui);
+                ui.open_place(back ? k2::bench::Place::Meter : place, g_walk_t += 10);
+                const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
+                k2::lcd::fill(kBg);
+                ui.repaint(g_walk_t);
+                int d = 0;
+                for (size_t i = 0; i < got.size(); ++i) d += got[i] != g_panel[i];
+                if (d) {
+                    std::printf("  Bench %s %s differs from a clean paint: rotation %u, %d px\n", back ? "back from" : "to",
+                                k2::bench::place_name(place), unsigned(r), d);
+                    ++bad_place;
+                }
+            }
+    }
+    CHECK_EQ(bad_place, 0);
+    ui.open_place(k2::bench::Place::Meter, g_walk_t += 10);
+
     // Overlays on the outgoing screen, from a page of each kind, to every destination.
     g_stub.pm_online = true; g_stub.pm.vbus_mv = 20030; g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456;
     g_stub.pm.flow = k2::power::Flow::Forward;
@@ -1489,35 +1515,38 @@ int main() {
         CHECK_EQ(g_panel[163 * 240 + 8], k2::kError);         // Meter dot red
         g_stub.pm_online = true;
     }
-    {   // Tools hub v2: focus bar on the selected row, state dots on the others, tag pill on the selected one.
+    {   // The Bench: six 32 px rows from y24, the rail and the nodes at x8..15, the focused row on the focus ground (Classic:
+        // the bar at x0..2); then the Charger place, its actions as a RowList with the blockers' tails and the footer.
         const auto saved_pm = g_stub.pm;
+        const auto saved_em = g_stub.em;
         g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 1000;
+        g_stub.em = {};               // no cable read
         ui.debug_fake_pdos(0, 30900); // release forced-link fixtures so the live load guard updates
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), 31000);
-        for (int i = 0; i < ToolsPage::kTools; i++) ui.on_button(Button::Minus, ButtonEvent::Short, 31010);
-        test_screen(ui, "tools_hub", 31100);
-        // Tools list (kit RowList): rows at 24 + i*26, selection bar x0..2, the 12 px icon at x8 coloured by readiness, the
-        // readiness tag as text at the right edge.
-        CHECK_EQ(g_panel[30 * 240 + 1], k2::kFocus);           // selection bar of row 0
-        CHECK_EQ(g_panel[30 * 240 + 160], k2::kFocusT);        // selected row fill
-        // The focused row opens to 40 px with its hint, so row 1 starts at y64 and row 2 at y90.
-        CHECK_EQ(count_colours(8, 70, 20, 84, {k2::kError}) > 0, true);    // PD trigger icon (row 1): blocked by the load
-        CHECK_EQ(count_colours(150, 28, 214, 46, {k2::kError}) > 0, false); // FC row's "load" tail is kDim: only the footer is red
-        CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT}) > 0, true); // the footer carries the blocker
-        CHECK_EQ(count_colours(8, 96, 20, 110, {k2::kError}) > 0, true);   // Spoof icon (row 2): a live sink is cut
-        for (int i = 0; i < 3; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 31200);
-        test_screen(ui, "tools_hub_pd", 31300);
-        CHECK_EQ(g_panel[110 * 240 + 1], k2::kFocus);          // row 3 (24 + 3*26 + 8)
-        CHECK_EQ(g_panel[30 * 240 + 1], k2::kBg);              // row 0 lost its bar
-        // Eight tools in a seven row window: the scroll thumb is painted in the bar lane, and it moves with the window.
-        const int thumb_top = count_colours(221, 24, 224, 100, {k2::kDim});
-        CHECK_EQ(thumb_top > 0, true);
-        for (int i = 0; i < 4; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 31400);
-        test_screen(ui, "tools_hub_end", 31500);
-        CHECK_EQ(count_colours(221, 24, 224, 100, {k2::kDim}) < thumb_top, true);   // the thumb left the top half
-        CHECK_EQ(count_colours(221, 120, 224, 210, {k2::kDim}) > 0, true);          // and sits in the lower part
+        ui.context().keep.bench_sel = 1;
+        ui.open_place(bench::Place::Meter, 31000);
+        test_screen(ui, "bench", 31100);
+        CHECK_EQ(g_panel[(24 + 32 + 10) * 240 + 1], k2::kFocusBar);    // the Charger row's focus bar
+        CHECK_EQ(g_panel[(24 + 32 + 10) * 240 + 150], k2::kFocusFill); // and its ground
+        CHECK_EQ(g_panel[(24 + 9) * 240 + 11], k2::kAccent);           // Meter: VBUS is live, a solid node
+        CHECK_EQ(g_panel[(24 + 64 + 9) * 240 + 11], k2::kBg);          // Cable: nothing read, a hollow node
+        CHECK_EQ(g_panel[(24 + 64 + 6) * 240 + 11], k2::kAccent);      // ... with its 2 px frame
+        CHECK_EQ(g_panel[(24 + 64 + 2) * 240 + 11], k2::kAccent);      // the rail runs between the nodes
+        CHECK_EQ(g_panel[(24 + 2) * 240 + 11], k2::kBg);               // but not above the first one
+        CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT, k2::kCautionT}) > 0, false);   // the fact line is a fact
+        ui.on_button(Button::Ok, ButtonEvent::Short, 31200);           // Charger
+        ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
+        test_screen(ui, "bench_charger", 31300);
+        CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Charger));
+        CHECK_EQ(count_colours(28, 24 + 78 + 4, 200, 24 + 78 + 22, {k2::kInk3}) > 0, true);   // Fast charge (row 3): blocked, dim
+        CHECK_EQ(count_colours(150, 24 + 78, 214, 24 + 104, {k2::kError}) > 0, false);        // its "load" tail is not red
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31400);
+        ui.on_button(Button::Plus, ButtonEvent::Short, 31410);         // Request voltage: blocked by the load
+        test_screen(ui, "bench_charger_blocked", 31500);
+        CHECK_EQ(count_colours(4, 224, 200, 238, {k2::kErrorT}) > 0, true);   // the footer carries the blocker
         g_stub.pm = saved_pm;
+        g_stub.em = saved_em;
         ui.debug_link(false, 31510); ui.debug_link(true, 31520); // isolate the synthetic load fixture
+        ui.open_place(bench::Place::Meter, 31530);
     }
     {   // Cable tab with no cable data: the large "not read" message, no rows.
         const auto saved = g_stub.em;

@@ -673,7 +673,9 @@ static void test_tick_cost() {
     // their "idle" (3 ticks, inputs unchanged) is not zero; every other page must stay at 0.
     struct { uint8_t page; unsigned idle3_px, worst_px; const char *name; } cases[] = {
         {0, 29500, 29500, "Home"}, {1, 450, 3400, "Detail"}, {2, 0, 1850, "Charger"}, {kPdPage, 0, 1850, "Connect"},
-        {kDiagPage, 0, 2000, "Diag"}, {3, 0, 1850, "Lines"}, {4, 0, 1850, "Tools"}, {5, 0, 1850, "Settings"},
+        {kDiagPage, 0, 2000, "Diag"}, {3, 0, 1850, "Lines"},
+        {4, 0, 3400, "Bench"},   // the Meter row's live readings and the watts a device gets, on top of the bar readout
+        {5, 0, 1850, "Settings"},
     };
     std::printf("page tick = %u ms; px per tick with live values moving (wire ms at DIV8/DIV4/DIV2):\n",
                 unsigned(kPageTickMs));

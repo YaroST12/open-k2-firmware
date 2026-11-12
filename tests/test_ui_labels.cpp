@@ -32,22 +32,21 @@ static void test_label_text() {
 }
 
 static void test_nav_labels() {
-    const unsigned plus_chars = label_max_chars(Button::Plus), minus_chars = label_max_chars(Button::Minus);
-    // [+] and [-] read "+/Next" and "-/Prev" on every page; dim when that paging press is a no-op.
-    for (unsigned page = 0; page < 4; page++) {
-        PanelLabels l = nav_labels(page, 4);
-        CHECK_STR(text_of(l.b[static_cast<int>(Button::Plus)], plus_chars), "+/Next");
-        CHECK_STR(text_of(l.b[static_cast<int>(Button::Minus)], minus_chars), "-/Prev");
-        CHECK_EQ(l.b[static_cast<int>(Button::Minus)].dim, page == 0);
-        CHECK_EQ(l.b[static_cast<int>(Button::Plus)].dim, page == 3);
-        // The navigation default reads just "Back" (Home adds its long "Hero"); there is no Reboot label anywhere: the
-        // OK + Back chord is not advertised on the panel.
-        CHECK_STR(text_of(l.b[0], label_max_chars(Button::Back)), "Back");
-        CHECK_EQ(l.b[0].dim, false);
-        CHECK_STR(l.b[0].lng, "");
-    }
+    const unsigned minus_chars = label_max_chars(Button::Minus);
+    // Fieldbook has no paging press: [-] / [+] move (a list's focus, the Meter's face) as Up / Dn with no long word.
+    const PanelLabels l = nav_labels();
+    CHECK_STR(l.b[static_cast<int>(Button::Minus)].shrt, kUp);
+    CHECK_STR(l.b[static_cast<int>(Button::Plus)].shrt, kDn);
+    CHECK_STR(l.b[static_cast<int>(Button::Minus)].lng, "");
+    CHECK_STR(l.b[static_cast<int>(Button::Plus)].lng, "");
+    CHECK_EQ(l.b[static_cast<int>(Button::Minus)].dim || l.b[static_cast<int>(Button::Plus)].dim, false);
+    // BACK reads just "Back" (Flow puts its long "Hero" there); there is no Reboot label anywhere: the OK + Back chord is
+    // not advertised on the panel.
+    CHECK_STR(text_of(l.b[0], label_max_chars(Button::Back)), "Back");
+    CHECK_EQ(l.b[0].dim, false);
+    CHECK_STR(l.b[0].lng, "");
     // OK carries nothing by default; a page fills it in.
-    CHECK_STR(text_of(nav_labels(1, 4).b[static_cast<int>(Button::Ok)], minus_chars), "");
+    CHECK_STR(text_of(l.b[static_cast<int>(Button::Ok)], minus_chars), "");
 }
 
 static void test_label_zone() {
@@ -106,21 +105,22 @@ static void test_vocabulary() {
         p.b[static_cast<int>(Button::Ok)] = ok;       p.b[static_cast<int>(Button::Plus)] = plus;
         return p;
     };
-    // The shared paging labels are a value pair; list_labels turns them into Up/Dn and keeps Prev / Next.
-    CHECK_EQ(label_violation(nav_labels(1, 4)) == nullptr, 1);
-    PanelLabels lst = list_labels(nav_labels(1, 4));
-    CHECK_STR(text_of(lst.b[static_cast<int>(Button::Minus)], label_max_chars(Button::Minus)), "Up/Prev");
-    CHECK_STR(text_of(lst.b[static_cast<int>(Button::Plus)], label_max_chars(Button::Plus)), "Dn/Next");
+    // The shared labels are a list pair already; list_labels keeps them so, and adds the "Prv" spelling only to a real long.
+    CHECK_EQ(label_violation(nav_labels()) == nullptr, 1);
+    PanelLabels lst = list_labels(nav_labels());
+    CHECK_STR(text_of(lst.b[static_cast<int>(Button::Minus)], label_max_chars(Button::Minus)), "Up");
+    CHECK_STR(text_of(lst.b[static_cast<int>(Button::Plus)], label_max_chars(Button::Plus)), "Dn");
     CHECK_EQ(label_violation(lst) == nullptr, 1);
     // Every OK verb in the table is a valid OK label; nouns and answers are not.
     for (const char *v : {"Scan", "Listen", "Run", "Force", "Start", "Stop", "Send", "Rescan", "Clear", "Open", "Reset",
                           "Next", "Select", "View", "Delete", "Arm", "Disarm", "Toggle", "Cycle", "Apply", "Refresh",
-                          "Ask", "Confirm", "Zoom"})
+                          "Ask", "Confirm", "Zoom", "Bench"})
         CHECK_EQ(label_violation(strip({"Back"}, {}, {v}, {})) == nullptr, 1);
     for (const char *v : {"Span", "Yes", "Again", "Menu", "Mode", "Back"})
         CHECK_EQ(label_violation(strip({"Back"}, {}, {v}, {})) != nullptr, 1);
-    // BACK: only "Back", or "Stop" while a run is live.
+    // BACK: only "Back", or "Stop" while a run is live, or nothing (Flow: no level above it, its long press cycles the hero).
     CHECK_EQ(label_violation(strip({"Stop"}, {}, {}, {})) == nullptr, 1);
+    CHECK_EQ(label_violation(strip({"", "Hero"}, {"Up"}, {"Bench"}, {"Dn"})) == nullptr, 1);
     for (const char *v : {"Cancel", "List", "Prev", "Esc"})
         CHECK_EQ(label_violation(strip({v}, {}, {}, {})) != nullptr, 1);
     // [-]/[+]: Up/Dn, -/+, Tab-/Tab+ and Mode only; "Down", "V+" and a list/value mix are refused.

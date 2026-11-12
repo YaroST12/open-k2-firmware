@@ -141,7 +141,70 @@ static void test_hurt_table() {
     CHECK_EQ(int(tool_hurt_by(kToolCount)), int(ToolHurt::Nothing));
 }
 
+// The Bench: every tool of the old hub is exactly one place's action, the Meter has none, every name fits a row.
+static void test_bench_places_cover_every_tool() {
+    using namespace bench;
+    int seen[kToolSlots] = {};
+    for (int p = 0; p < kPlaces; p++) {
+        const Acts a = actions(static_cast<Place>(p));
+        if (p == 0) { CHECK_EQ(a.n, 0); continue; }
+        CHECK_EQ(a.n > 0, true);
+        CHECK_EQ(a.n <= 6, true);   // a place's action list fits under its identity without a long scroll
+        for (int i = 0; i < a.n; i++) {
+            CHECK_EQ(std::strlen(a.a[i].name) <= 22, true);   // font 16 from x28 to the chevron
+            CHECK_EQ(std::strlen(act_hint(a.a[i])) > 0, true);
+            CHECK_EQ(std::strlen(act_hint(a.a[i])) <= 27, true);
+            if (a.a[i].kind == ActKind::Tool) seen[a.a[i].arg]++;
+        }
+    }
+    for (int t = 0; t < kToolCount; t++) CHECK_EQ(seen[t], 1);
+    CHECK_EQ(std::strcmp(place_name(Place::K2), "K2"), 0);
+}
+
+static std::string brow(bench::Place p, const bench::Facts &f) {
+    const bench::Row r = bench::row(p, f);
+    return std::string(r.status.view());
+}
+
+static void test_bench_rows() {
+    using namespace bench;
+    Facts f;
+    f.version = "1.0.1-6-e67edd0e-dirty";
+    CHECK_EQ(brow(Place::Meter, f) == "no VBUS", true);
+    CHECK_EQ(row(Place::Meter, f).known, false);
+    CHECK_EQ(brow(Place::Charger, f) == "none on either port", true);
+    CHECK_EQ(brow(Place::Cable, f) == "not read", true);
+    CHECK_EQ(brow(Place::Device, f) == "none inline", true);
+    CHECK_EQ(brow(Place::Log, f) == "no session", true);
+    CHECK_EQ(brow(Place::K2, f) == "1.0.1-6, HID off", true);
+    StrBuf<28> fl;
+    fact(f, fl);
+    CHECK_EQ(std::string(fl.view()) == "Nothing attached", true);
+
+    f.vbus = true; f.mv = 20040; f.ma = 1834; f.mw = 36753;
+    f.caps = true; f.spec_rev = 2; f.max_mw = 100000; f.offers = 7;
+    f.cable = true; f.cable_a = 5; f.cable_v = 20; f.cable_w = 100;
+    f.contract = true; f.ctr_mv = 20000; f.ctr_ma = 3000;
+    f.diag.put("healthy"); f.captures = 1; f.hid = true;
+    CHECK_EQ(brow(Place::Meter, f) == "36.75W  20.04V  1.834A", true);
+    CHECK_EQ(brow(Place::Charger, f) == "PD3.x 100W, 7 offers", true);
+    CHECK_EQ(brow(Place::Cable, f) == "5A 20V, 100W", true);
+    CHECK_EQ(brow(Place::Device, f) == "asks 20V 3A, gets 37W", true);
+    CHECK_EQ(brow(Place::Log, f) == "healthy, 1 capture", true);
+    CHECK_EQ(brow(Place::K2, f) == "1.0.1-6, HID on", true);
+    f.ctr_mv = 9000; f.ctr_ma = 2220;
+    CHECK_EQ(brow(Place::Device, f) == "asks 9V 2.22A, gets 37W", true);
+    for (int p = 0; p < kPlaces; p++) CHECK_EQ(row(static_cast<Place>(p), f).known, true);
+    fl.clear();
+    fact(f, fl);
+    CHECK_EQ(std::string(fl.view()) == "Charger on a port, PD", true);
+    f.caps = false; f.fc = "QC3";
+    CHECK_EQ(brow(Place::Charger, f) == "QC3 on the lines", true);
+}
+
 int main() {
+    test_bench_places_cover_every_tool();
+    test_bench_rows();
     test_hurt_table();
     test_every_tool_has_text();
     test_pd_trigger_matches_refusal();

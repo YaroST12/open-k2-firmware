@@ -303,7 +303,7 @@ def _main(argv=None):
             names = page_names()
             remote("page", names.index("diag") if "diag" in names else 0)   # Diag: nothing to change there
             press("plus")                                     # short press
-            press("minus", long=True)                         # long press: previous page, navigation only
+            press("minus", long=True)                         # long press: does nothing on Diag (no paging press any more)
             rep.add("remote short + long press", True, "plus short, minus long")
             debug_fake_pdos(7)
             n = remote("state").get("num_pdos")

@@ -136,9 +136,9 @@ void HomePage::invalidate() {
 }
 
 PanelLabels HomePage::labels() const {
-    PanelLabels l = base_labels();
-    l.b[static_cast<int>(Button::Back)] = {"Back", "Hero", "", false};   // long: the hero cycles W -> V -> A
-    l.b[static_cast<int>(Button::Ok)] = {"Zoom", "Reset", "", false};    // short: trend window; long: energy reset
+    PanelLabels l = base_labels();                                        // Up / Dn flip the faces (long: the trend span)
+    l.b[static_cast<int>(Button::Back)] = {"", "Hero", "", false};       // no level above Flow; long: the hero cycles W -> V -> A
+    l.b[static_cast<int>(Button::Ok)] = {"Bench", "Reset", "", false};   // short: the Bench; long: energy reset
     return l;
 }
 
@@ -147,8 +147,8 @@ bool HomePage::on_event(Event e) {
         ctx_.ui->run_action(Action::EnergyReset, ctx_.now);   // energy, peaks, sag and the card cycler
         return true;
     }
-    if (e.button == Button::Ok && e.press == Press::Short) {
-        window_ = trend::next(window_);
+    if ((e.button == Button::Plus || e.button == Button::Minus) && e.press == Press::Long) {   // the trend span 10s / 60s / 10m
+        window_ = e.button == Button::Plus ? trend::next(window_) : trend::prev(window_);
         sweep_ok_ = false;   // the next update reloads the sweeps for the new window and repaints the cells
         return true;
     }

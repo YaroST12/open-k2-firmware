@@ -261,6 +261,15 @@ bool Ui::menu_opaque(Menu m) {
     }
 }
 
+namespace {
+constexpr Page kFaces[] = {Page::Home, Page::Detail, Page::Lines};   // the Meter's faces: Flow, Numbers, Lines (the pager's order)
+constexpr int kFaceCount = static_cast<int>(sizeof kFaces / sizeof kFaces[0]);
+int face_of(Page p) {
+    for (int i = 0; i < kFaceCount; i++) if (kFaces[i] == p) return i;
+    return -1;
+}
+}  // namespace
+
 void Ui::set_page(Page p, uint32_t now_ms) {
     // Every way out of a page or submenu lands here (paging, BACK, the remote): a trigger never survives.
     const uint32_t t0 = now_us();
@@ -273,6 +282,7 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     const bool changed = p != page_;
     if (changed) pages_.at(0)->leave();
     page_ = p;
+    if (const int f = face_of(p); f >= 0) ctx_.keep.face = static_cast<uint8_t>(f);   // the Bench returns to the face last shown
     const bool blank = clear_for_incoming(now_ms, *outgoing, page_opaque(p));   // the outgoing pages are still alive for a replay
     pages_.pop_to(changed ? 0 : 1);        // the menus go; so does the rotation page unless it is the one asked for
     if (changed) build_base(p);
@@ -398,8 +408,12 @@ Ui::Session Ui::session() {
         }
         default: break;
         }
+    } else if (page_ == Page::Tools) {   // the Bench paints its six places itself; a place's actions use the RowList
+        const ToolsPage &t = top_as<ToolsPage>();
+        s.count = static_cast<uint8_t>(t.count());
+        s.sel = static_cast<uint8_t>(t.selected());
     } else {
-        rows = page_ == Page::Tools || page_ == Page::Settings;
+        rows = page_ == Page::Settings;
     }
     if (rows) {
         const int n = ctx_.rows.count(), c = ctx_.rows.selected();
@@ -726,23 +740,30 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
         top_as<TriggerPage>().on_event({Button::Back, Press::Long});
     if (event.button == Button::Back && event.press == Press::Hold && !depth_ && page_ == Page::ChargerTest)
         charger_test_.cancel();
-    const unsigned pg = static_cast<unsigned>(page_);
-    if (depth_) {   // modal: no paging, the submenu sees everything, a short BACK it declines pops it
-        const Dispatch m = dispatch_modal(event, current());
-        if (m.route == Route::Pop) pop_menu(now_ms);
-        else sync_panel();
-        return UiAction::None;
-    }
-    const Dispatch d = dispatch(event, pg, static_cast<unsigned>(Page::Count), current(),
-                                page_ == Page::ChargerTest && charger_test_.holds_paging());
-    switch (d.global) {
-    case Global::PagePrev: set_page(static_cast<Page>(pg - 1), now_ms); break;
-    case Global::PageNext: set_page(static_cast<Page>(pg + 1), now_ms); break;
-    case Global::None:     break;
-    }
-    if (d.global == Global::None) sync_panel();
+    // A submenu sees everything first and a short BACK it declines pops it; a long BACK nobody takes goes to the Meter.
+    const Dispatch d = depth_ ? dispatch_modal(event, current()) : dispatch(event, current());
+    if (d.route == Route::Pop) pop_menu(now_ms);
+    else if (d.global == Global::ToMeter) to_meter(now_ms);
+    else sync_panel();
     return UiAction::None;
 }
+
+// ---- Fieldbook navigation (kFaces: before set_page) ------------------------------------------------------------------------
+
+void Ui::flip_face(int dir, uint32_t now_ms) {
+    const int f = face_of(page_);
+    const int cur = f < 0 ? ctx_.keep.face : f;
+    set_page(kFaces[(cur + kFaceCount + (dir < 0 ? -1 : 1)) % kFaceCount], now_ms);
+}
+
+void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCount ? ctx_.keep.face : 0], now_ms); }
+
+void Ui::open_place(bench::Place p, uint32_t now_ms) {
+    ctx_.keep.place = static_cast<uint8_t>(p);
+    set_page(Page::Tools, now_ms);   // the same page repaints in its new mode (set_page keeps a base page asked for again)
+}
+
+void Ui::to_meter(uint32_t now_ms) { set_page(Page::Home, now_ms); }
 
 bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
     ContentViewport viewport(layout_.content);

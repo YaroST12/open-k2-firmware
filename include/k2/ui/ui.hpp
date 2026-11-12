@@ -143,6 +143,12 @@ public:
     // Jump to a page by index: a rotation page, kMenuPageBase + Menu (a submenu), or kConnTabAlias + tab
     // (Connection on that tab). Any open submenu is closed first; false when out of range or refused.
     bool goto_page(uint8_t page, uint32_t now_ms);
+    // Fieldbook navigation (CONCEPT 7). The Meter is three faces (Flow, Numbers, Lines) that Up / Dn flip with a wrap; OK on a
+    // face opens the Bench; the Bench opens a place on the same page (Page::Tools); a long BACK nobody takes lands on Flow.
+    void flip_face(int dir, uint32_t now_ms);
+    void show_face(uint32_t now_ms);                          // the face last shown (the Bench's Meter row and its BACK)
+    void open_place(bench::Place p, uint32_t now_ms);         // Place::Meter = the Bench's own list
+    void to_meter(uint32_t now_ms);
     // Opens Connection (Tools) on `tab`; `spoof` goes straight on to the Spoof list (the Tools shortcut).
     bool open_connection(conn::Tab tab, bool spoof, uint32_t now_ms);
     // K2_WHOS_ATTACHED=0: open_connection opens the single tool of that tab (ConnectionPage::lock), not the tabbed page.

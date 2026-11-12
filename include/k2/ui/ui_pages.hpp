@@ -126,7 +126,10 @@ struct UiContext {
         home::Qty home_hero = home::Qty::W;               // Home: the hero quantity Long Back cycles (uiprefs, restored at boot)
         home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
         home::Attention attention;                        // Home: what is changing now, for the upper card and its dot
-        int tools_sel = 0;                                // Tools: the highlighted tool
+        uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Numbers, 2 Lines)
+        uint8_t place = 0;                                // Bench (Page::Tools): 0 its six places, else the place open (bench::Place)
+        int bench_sel = 1;                                // Bench: the focused place (Charger first: the Meter row only goes back)
+        std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
         int settings_sel = 0;                             // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
         struct PdStress {                                 // Tools > PD Stress: the setup the next START uses
@@ -162,6 +165,8 @@ void cable_kelvin_row_text(int index, bool online, int32_t vbus_mv, int32_t ibus
 inline constexpr int kEmDetailRows = 7;
 void em_detail_value(int index, const emlib::Entry &ent, StrBuf<24> &out);
 void temp_short_text(const std::optional<adc::Reading> &r, StrBuf<8> &out);   // MCU die temp: "MCU37C" / "MCU --"
+// The live setup the tool readiness reads (the link and the power monitor; ui_tools.hpp).
+SetupState setup_state(const UiContext &c);
 
 // FC protocol pill on the Home totals card: the verdict's short name cut to 4 characters
 // ("QC3", "AFC", "VOOC"); empty when there is no verdict worth a pill.
@@ -220,7 +225,10 @@ protected:
     // The Meter faces (Numbers, Lines) carry a pager there instead: Flow, Numbers, Lines, `current` solid.
     void title_pager(int current);
     bool meter_face() const { return id_ == Page::Detail || id_ == Page::Lines; }
-    // Short BACK goes to the previous page (nothing on the first page).
+    bool any_face() const { return id_ == Page::Home || meter_face(); }   // Flow too
+    // The navigation a page leaves to the base (CONCEPT 7), short presses only. On a Meter face: Up / Dn flip the face, OK opens
+    // the Bench, BACK goes to Flow (nothing on Flow). Elsewhere BACK goes one level up: the charger test to the Charger place,
+    // Settings to the K2 place. A submenu takes none of it (the Ui pops it on BACK).
     bool back_event(Event e);
     // Short [+] / [-] scroll `lv` down / up one row; declined when the list does not overflow.
     static bool scroll_event(ListView &lv, Event e, uint32_t now_ms = 0);
@@ -231,6 +239,7 @@ protected:
     const char *title_;
     bool has_icon_ = false;
     Icon icon_ = Icon::Bolt;
+    bool bar_icon_ = false;    // a rotation page that shows its icon and title_ in the bar (a Bench place)
     bool bar_valid_ = false;   // the right half of the chrome bar matches bar_sig_
     uint32_t bar_sig_ = 0;
 };
@@ -283,8 +292,6 @@ public:
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
     // The unit order of the next run (Cmd::ChargerUnits); empty = the default order. False for an unknown or repeated unit.
     bool set_units(std::span<const uint8_t> units);
-    // Waiting keeps long + / - for itself: the operator holds + there to wake a charger, so the global paging must not fire.
-    bool holds_paging() const { return stage_ == Stage::Waiting; }
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.
     // The Cable step's cursor follows it. Nothing is armed until a START.
     bool set_cable_choice(ctcable::Choice c);
@@ -945,15 +952,27 @@ private:
 };
 
 // Tools hub: a list of tools, each opens its own submenu. Short [+] / [-] select, OK opens.
+// The Bench (Page::Tools; the remote still calls it "tools"), src/ui/ui_bench.cpp: the six places (bench::Place) with what is
+// known about each, and a place's actions on the same page (ctx_.keep.place). Every tool of the old hub is one place's action.
 class ToolsPage final : public PageBase {
 public:
-    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Tools, "Tools", Icon::Chip) {}
+    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Tools, "Bench", Icon::Chip) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
     PanelLabels labels() const override;
     void invalidate() override;
     ListState list_state() const { return ListState{}; }
+    bench::Place place() const { return static_cast<bench::Place>(ctx_.keep.place < bench::kPlaces ? ctx_.keep.place : 0); }
+    int count() const;      // rows: the six places, or the open place's actions
+    int selected() const;   // the focused one of them
+    bench::Facts facts() const;   // what the Bench rows read now, from the context and the drivers
+    // Bench geometry (logical content px).
+    static constexpr int16_t kRowY0 = 24, kRowPitch = 32;
+    static constexpr int16_t kTextX = 28, kNameDy = 2, kStatusDy = 19, kIconX = 204, kIconDy = 10;
+    static constexpr int16_t kNodeX = 8, kNodeDy = 6, kNodeSz = 8, kRailX = 11, kRailW = 2;
+    static constexpr int16_t kBenchEnd = kRowY0 + bench::kPlaces * kRowPitch;   // 216
+    static constexpr int kMaxActs = 6;
     static constexpr int kTools = kToolCount;
     // Row -> submenu. The Spoof row is a shortcut: it opens Connection's Cable tab on the Spoof list (the same
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
@@ -965,12 +984,19 @@ public:
         return kMenus[i < 0 || i >= kToolCount ? 0 : i];
     }
     static const char *tool_name(int i);
-    int selected() const { return sel_; }
 private:
+    bool on_bench() const { return place() == bench::Place::Meter; }
+    void bind();                                       // title and actions of the mode ctx_.keep.place names
+    void paint_bench();                                // the rows whose content changed (all after invalidate())
+    void paint_row(int i, bool known, bool focus);
+    void open(const bench::Act &a);
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
-    Readiness rd_[kToolCount];             // readiness of every tool, refreshed in update(); the rows read it
-    Elem foot_;                            // footer element cache (draw_footer_cached)
-    int &sel_ = ctx_.keep.tools_sel;       // remembered across page switches
+    bench::Acts acts_{nullptr, 0};
+    Readiness rd_[kMaxActs];                           // readiness of the open place's actions, refreshed in update()
+    uint32_t sig_[bench::kPlaces] = {};                // each Bench row's node and focus as painted (0 = repaint)
+    Field status_[bench::kPlaces];                     // each Bench row's status line (char-diffed: the Meter row is live)
+    bool tail_ = false;                                // the strip under the last row is painted
+    Elem foot_;                                        // footer element cache (draw_footer_cached)
 };
 
 // Staged FC trigger (Tools): Pick/Edit/Review/Apply. Only accepted requests touch D+/D-;

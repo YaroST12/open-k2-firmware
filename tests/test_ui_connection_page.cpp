@@ -1337,15 +1337,21 @@ static void test_single_tools_lock_one_tab() {
     ui.set_single_tools(false);
 }
 
-// The Tools hub rows open the single tools in Tab order; the Spoof shortcut lands on Cable read.
+// The Bench places open the single tools: Charger ID in Charger, Cable read in Cable, Device ID in Device (each its place's
+// row 1, 0, 0); the Spoof shortcut lands on Cable read.
 static void test_tools_rows_open_single_tools() {
     Ui &ui = fresh_ui();
     ui.set_single_tools(true);
     const conn::Tab kTabs[] = {conn::Tab::Source, conn::Tab::Cable, conn::Tab::Sink};
+    const bench::Place kPlaces[] = {bench::Place::Charger, bench::Place::Cable, bench::Place::Device};
     for (int k = 0; k < 3; k++) {
-        ui.goto_page(static_cast<uint8_t>(Page::Tools), 20000 + k * 1000);
-        ui.context().keep.tools_sel = 0;   // the hub keeps its row across visits
-        for (int i = 0; i < kToolChargerId + k; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20010 + k * 1000 + i * 10);
+        const bench::Acts acts = bench::actions(kPlaces[k]);
+        int row = 0;
+        while (row < acts.n && !(acts.a[row].kind == bench::ActKind::Tool && acts.a[row].arg == kToolChargerId + k)) row++;
+        CHECK(row < acts.n);
+        ui.context().keep.place_sel[static_cast<int>(kPlaces[k])] = 0;   // a place keeps its row across visits
+        ui.open_place(kPlaces[k], 20000 + k * 1000);
+        for (int i = 0; i < row; i++) ui.on_button(Button::Plus, ButtonEvent::Short, 20010 + k * 1000 + i * 10);
         ui.on_button(Button::Ok, ButtonEvent::Short, 20500 + k * 1000);
         CHECK_EQ(on_pd(ui), 1);
         if (!on_pd(ui)) return;

@@ -434,10 +434,10 @@ void test_a_run_started_elsewhere_opens_running() {
 void test_the_tools_row_opens_the_page() {
     fixture();
     std::unique_ptr<Ui> h; Ui &ui = boot(h);
-    ui.goto_page(uint8_t(Page::Tools), g_now);
+    ui.context().keep.place_sel[static_cast<int>(bench::Place::Charger)] = 0;
+    ui.open_place(bench::Place::Charger, g_now);   // Stress test is the Charger place's last action
     run(ui, 120);
-    ui.context().keep.tools_sel = 0;
-    presses(ui, Button::Plus, kToolPdStress);
+    presses(ui, Button::Plus, bench::actions(bench::Place::Charger).n - 1);
     press(ui, Button::Ok);
     run(ui, 120);
     CHECK_EQ(int(ui.menu()), int(Menu::PdStress));
