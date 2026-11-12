@@ -1095,6 +1095,11 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   protocol row). A remote press during a screenshot transfer is held until the transfer ends (the screenshot stalls the
   loop), so the shell sequence press, wait, screenshot is the reliable one. Not checked on hardware: rotations, the card
   timing, PEAK / DROP under a load (load testing paused), the OK + BACK chord (`k2_remote press` holds one key).
+  Attention on 1.0.0-668 (Anker IQ4, `pd attach`, then `pd request 2 --confirm` and `pd release`, no load): the
+  5 -> 9 V and 9 -> 5 V steps each put DROP + SAG in the upper cell with the dot (runs/integ-home/att/hw-sheet2.png);
+  no reboot, `stack_free` 13,976 B. A screenshot stalls the loop for about 6.6 s, which Attention reads as Home off
+  screen (2 s quiet again), so a step right after a screenshot is learnt, not shown. Open: with no load the DROP card
+  only says `need 1A` / `--`, so it marks a VBUS step without showing it (a question for the user).
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
