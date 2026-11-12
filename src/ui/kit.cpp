@@ -32,16 +32,31 @@ constexpr int kMaxHoles = 6;
 
 // The comment in kit.hpp. Holes are clipped to `r` and may touch; the bands between their edges are filled left to right.
 void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color) {
-    if (ContentViewport::scaled()) n = 0;   // a scaled page: a glyph no longer covers its hole, so the glyph paints over a full fill
+    // A scaled page: a glyph keeps its native size, so it covers only the native w x h from its hole's mapped corner, not the
+    // whole stretched hole. Each hole shrinks to the part whose mapping stays inside that native box (whatever paints the hole
+    // covers at least that much); the rest of the hole gets the ground and the painter goes over it.
+    const bool scaled = ContentViewport::scaled();
     Box h[kMaxHoles];
     int16_t ys[2 * kMaxHoles + 2];
     int m = 0, k = 0;
     ys[k++] = r.y;
     ys[k++] = static_cast<int16_t>(r.y + r.h);
     for (int i = 0; i < n && m < kMaxHoles; i++) {
-        const int x0 = holes[i].x > r.x ? holes[i].x : r.x, y0 = holes[i].y > r.y ? holes[i].y : r.y;
-        const int x1 = holes[i].x + holes[i].w < r.x + r.w ? holes[i].x + holes[i].w : r.x + r.w;
-        const int y1 = holes[i].y + holes[i].h < r.y + r.h ? holes[i].y + holes[i].h : r.y + r.h;
+        Box hb = holes[i];
+        if (scaled) {
+            auto mapped = [&](int w, int hh) {
+                return ContentViewport::mapped_rect({static_cast<int16_t>(s.x + hb.x), static_cast<int16_t>(s.y + hb.y),
+                                                     static_cast<int16_t>(w), static_cast<int16_t>(hh)});
+            };
+            int w = hb.w, hh = hb.h;
+            while (w > 0 && mapped(w, 1).w > hb.w) w--;
+            while (hh > 0 && mapped(1, hh).h > hb.h) hh--;
+            hb.w = static_cast<int16_t>(w);
+            hb.h = static_cast<int16_t>(hh);
+        }
+        const int x0 = hb.x > r.x ? hb.x : r.x, y0 = hb.y > r.y ? hb.y : r.y;
+        const int x1 = hb.x + hb.w < r.x + r.w ? hb.x + hb.w : r.x + r.w;
+        const int y1 = hb.y + hb.h < r.y + r.h ? hb.y + hb.h : r.y + r.h;
         if (x1 <= x0 || y1 <= y0) continue;
         h[m++] = {static_cast<int16_t>(x0), static_cast<int16_t>(y0), static_cast<int16_t>(x1 - x0), static_cast<int16_t>(y1 - y0)};
         ys[k++] = static_cast<int16_t>(y0);
@@ -544,6 +559,16 @@ void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, i
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
     for (int x = (x0 + kLeaderPitch - 1) / kLeaderPitch * kLeaderPitch; x + kLeaderDot <= x1; x += kLeaderPitch)
         gfx_fill(s, static_cast<int16_t>(x), y, kLeaderDot, kLeaderDot, kInk3);
+}
+
+int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w) {
+    const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, text));
+    const int16_t w = std::max<int16_t>(static_cast<int16_t>(tw + 8), min_w);
+    const int16_t tx = static_cast<int16_t>(x + (w - tw) / 2);
+    const Box hole{tx, static_cast<int16_t>(y + 1), tw, static_cast<int16_t>(kLabelFont.height)};
+    fill_except(s, {x, y, w, kChipH}, &hole, 1, fill);
+    gfx_text(s, kLabelFont, tx, static_cast<int16_t>(y + 1), text, ink, fill);
+    return w;
 }
 
 void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {

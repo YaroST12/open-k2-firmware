@@ -211,6 +211,11 @@ void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, i
 // A receipt's dot leader: 2 x 2 px ink3 dots every kLeaderPitch px between x0 and x1 (the dot's top row is y).
 constexpr int16_t kLeaderPitch = 6, kLeaderDot = 2;
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y);
+
+// Fieldbook chip: a square kChipH px block in `fill` with a font 12 word in `ink`, 4 px padding (at least `min_w` wide, the word
+// centred). Every pixel once: the ground goes round the word's box. Returns the width. A tag (D+, CC1, PD) or a verdict word.
+constexpr int16_t kChipH = 14;
+int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w = 0);
 // Initialises n value cells (white on kBg) at the layout's value box of each row.
 // `chars` (optional, n entries) narrows each cell to its own worst-case width; a right-aligned cell keeps the layout's right
 // edge (value_x + value_chars * advance), so a repaint never reaches a long key to its left.
