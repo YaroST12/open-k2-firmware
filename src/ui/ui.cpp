@@ -1152,9 +1152,17 @@ UiAction Ui::tick(uint32_t now_ms) {
         const bool live = ctx_.pm_online && ctx_.pm.vbus_mv >= 1000;
         ctx_.live.note(now_ms, live);
         if (live) {
-            ctx_.last.pm = ctx_.pm;
-            ctx_.last.analog = ctx_.analog;
-            ctx_.last.elapsed_s = ctx_.meter.elapsed_s(now_ms);
+            // The LAST snapshot takes a reading only once it has held for a window (home::steady_snapshot): the tail of a
+            // session (a released contract, VBUS falling through the display filter) is never what stays on screen.
+            const bool attach = !extremes_live_;
+            if (attach || now_ms - snap_ms_ >= home::kSnapshotMs) {
+                const UiContext::Frozen cur{ctx_.pm, ctx_.analog, ctx_.meter.elapsed_s(now_ms), proto_now()};
+                if (attach || home::steady_snapshot(snap_prev_.pm.vbus_mv, cur.pm.vbus_mv, snap_prev_.proto, cur.proto))
+                    ctx_.last = cur;   // on attach at once, so even a short session has a snapshot
+                snap_prev_ = cur;
+                snap_ms_ = now_ms;
+            }
+            ctx_.last.elapsed_s = ctx_.meter.elapsed_s(now_ms);   // the session's length runs to its last live tick
         }
         if (live && !extremes_live_) {   // an attach: Home's peaks, sag and card cycle start over (they stay frozen while stale)
             ctx_.extremes.reset();

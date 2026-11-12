@@ -1088,6 +1088,13 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   hero survives a reboot, the cards rotate every 5 s with the lower cell 2.5 s behind, a live load shows PEAK and
   DROP + SAG, `stack_free` in the heartbeat; OK + BACK shows the HoldCard at 1 s and reboots at 3 s, a BACK hold
   alone does not reboot.
+  Hardware 2026-11-12 (1.0.0-666, Anker IQ4, `pd-reread` for a live 5 V contract): idle, live and LAST render;
+  Long BACK cycles W -> V -> A and back (`[UI] home hero=N`, saved) and the A hero survived a reboot; heartbeat
+  `stack_free` 14,392 B. Found: LAST froze the session's tail (VBUS 3.323 V mid-decay, protocol `PD 3V` after the
+  contract went), fixed by a steady-window snapshot (`home::steady_snapshot`, 500 ms, VBUS within 10 % and the same
+  protocol row). A remote press during a screenshot transfer is held until the transfer ends (the screenshot stalls the
+  loop), so the shell sequence press, wait, screenshot is the reliable one. Not checked on hardware: rotations, the card
+  timing, PEAK / DROP under a load (load testing paused), the OK + BACK chord (`k2_remote press` holds one key).
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at

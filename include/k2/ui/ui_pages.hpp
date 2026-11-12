@@ -110,7 +110,8 @@ struct UiContext {
         power::Metrics pm{};
         std::optional<adc::Reading> analog;
         uint32_t elapsed_s = 0;
-    } last;                                                      // the last live snapshot
+        home::ProtoInfo proto{};                                 // the protocol row of that reading
+    } last;   // the last steady live snapshot (Ui::note_last: a falling VBUS or a released contract never lands here)
     bool id_no_device = false;   // Identify was refused: nothing on CC, VBUS low (clears itself once something appears)
     // The one cable-identity list: its selection (what the next charger-test START presents), its saved-clone cache and its
     // armed marker. The wizard's Cable step and Tools -> Spoof both read and change this, so they always agree.
@@ -663,7 +664,6 @@ private:
     Throttle thr_{250};
     int32_t v_mv_ = 0, a_ma_ = 0, w_mw_ = 0;         // |values| as shown
     power::Flow flow_ = power::Flow::Idle;
-    home::ProtoInfo last_proto_{};                    // the protocol of the last live reading (Stale keeps it)
     struct CardData {                                 // the card values as shown (snapshot with the digits)
         uint32_t peak_mw = 0, peak_ma = 0, sag_bp = 0, sag_level_mv = 0;
         bool has_sag = false;

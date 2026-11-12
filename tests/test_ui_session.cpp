@@ -121,6 +121,24 @@ static void test_energy_and_elapsed() {
     CHECK_EQ(int(ui.session().elapsed_s), 32);
 }
 
+// The LAST snapshot is the session's steady reading: a released contract and VBUS falling through the filter never land.
+static void test_last_snapshot_skips_the_tail() {
+    Ui &ui = fresh_ui();
+    live_pd(1000);
+    run(ui, 30, 100);                                   // 3 s steady at 20 V
+    g_stub.contract = {};                               // the contract goes first, VBUS still up for a tick
+    run(ui, 1, 100);
+    g_stub.pm.vbus_mv = 12000; run(ui, 2, 100);         // then VBUS falls through the display filter
+    g_stub.pm.vbus_mv = 3323;  run(ui, 3, 100);
+    g_stub.pm = {}; g_stub.pm_online = true; g_stub.caps = {}; g_stub.fc = fastcharge::Protocol::NoInput;
+    run(ui, 10, 100);
+    const UiContext &c = ui.context();
+    CHECK_EQ(c.last.pm.vbus_mv, 20010);
+    CHECK_EQ(int(c.last.proto.kind), int(home::ProtoKind::PdFixed));
+    CHECK_EQ(int(c.last.proto.mv), 20000);
+    CHECK_EQ(int(c.last.proto.ma), 5000);              // the PDO rating, not the Request
+}
+
 // The protocol row, limit and highest voltage are home::live_proto's.
 static void test_proto_fields() {
     Ui &ui = fresh_ui();
@@ -238,6 +256,7 @@ int main() {
     test_keys_follow_the_page();
     test_busy_code_is_the_reason();
     test_energy_and_elapsed();
+    test_last_snapshot_skips_the_tail();
     test_proto_fields();
     test_passive_fields();
     test_stack_and_connection();

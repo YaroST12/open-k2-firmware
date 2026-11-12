@@ -184,13 +184,12 @@ void HomePage::sample_values(Frame &f, uint32_t now_ms) {
             fresh = true;
         }
         f.proto = hm::live_proto(ctx_, pm);
-        last_proto_ = f.proto;
     } else if (stale) {
         v_mv_ = abs32(pm.vbus_mv);
         a_ma_ = abs32(pm.current_ma);
         w_mw_ = abs32(pm.power_mw);
         flow_ = pm.flow;
-        f.proto = last_proto_;
+        f.proto = ctx_.last.proto;
         fresh = true;
     } else {
         v_mv_ = a_ma_ = w_mw_ = 0;

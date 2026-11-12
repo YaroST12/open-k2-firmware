@@ -135,6 +135,12 @@ struct ProtoText {
 };
 void format_proto(const ProtoInfo &p, ProtoText &out);
 
+// The stale (LAST) snapshot: a live reading is kept only when it matches the one kSnapshotMs before it, VBUS within 10 %
+// and the same protocol row (a measured level may move). A session's tail, VBUS falling through the display filter or
+// the contract released a moment before VBUS goes, is never steady, so LAST keeps the reading from before it.
+inline constexpr uint32_t kSnapshotMs = 500;
+bool steady_snapshot(int32_t prev_mv, int32_t cur_mv, const ProtoInfo &prev, const ProtoInfo &cur);
+
 // The info block's first row when the PD diagnosis has nothing to say (format_diag returns false): the two analog pairs
 // the page already measures, so the bar is never empty. "CC1/2" with "1.62/0.07V" (outside a session), or "D+/D-" with
 // "0.60/0.58V" (live, a session without PD). A negative reading (no ADC sample) shows "-.--".

@@ -360,6 +360,8 @@ private:
     int hold_left_ = -1;            // countdown drawn so far
     uint32_t hold_ms_ = 0;          // chord held time at the last card draw
     bool extremes_live_ = false;    // VBUS was live at the last tick: a rising edge resets the Home peaks and cards
+    UiContext::Frozen snap_prev_{}; // the live reading one snapshot window ago (note_last compares the next one with it)
+    uint32_t snap_ms_ = 0;          // when snap_prev_ was taken
     uint32_t sag_level_ms_ = 0;     // last refresh of ctx_.sag_level_mv
     home::SettledLevel sag_settle_; // the contract level counts for the sag once it has held 1 s
     void update_hold_card(uint32_t now_ms, RebootChord::Step step);

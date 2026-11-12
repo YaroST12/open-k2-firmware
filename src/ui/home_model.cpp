@@ -125,6 +125,15 @@ void range(StrBuf<20> &s, const ProtoInfo &p) {
 
 }  // namespace
 
+bool steady_snapshot(int32_t prev_mv, int32_t cur_mv, const ProtoInfo &prev, const ProtoInfo &cur) {
+    const int64_t a = prev_mv < 0 ? -int64_t(prev_mv) : prev_mv, b = cur_mv < 0 ? -int64_t(cur_mv) : cur_mv;
+    const int64_t d = a > b ? a - b : b - a, hi = a > b ? a : b;
+    if (d * 10 > hi) return false;
+    return prev.kind == cur.kind && prev.ma == cur.ma && prev.lo_mv == cur.lo_mv && prev.hi_mv == cur.hi_mv &&
+           prev.mw == cur.mw && prev.max_mv == cur.max_mv && prev.measured == cur.measured &&
+           (cur.measured || prev.mv == cur.mv);
+}
+
 void format_proto(const ProtoInfo &p, ProtoText &out) {
     out.tag.clear();
     out.value.clear();

@@ -307,6 +307,21 @@ static void test_diag_row() {
     CHECK_EQ(format_diag(Mode::Live, legacy, d), false);
 }
 
+// The LAST snapshot keeps a reading only when it held for a window: a falling VBUS or a released contract is no snapshot.
+static void test_steady_snapshot() {
+    ProtoInfo pd{}; pd.kind = ProtoKind::PdFixed; pd.mv = 5000; pd.ma = 3000; pd.max_mv = 20000;
+    CHECK_EQ(steady_snapshot(5104, 5098, pd, pd), 1);
+    CHECK_EQ(steady_snapshot(5104, 4700, pd, pd), 1);    // within 10 %: a load's sag is still the session
+    CHECK_EQ(steady_snapshot(5104, 3323, pd, pd), 0);    // VBUS falling through the display filter
+    CHECK_EQ(steady_snapshot(20000, 5100, pd, pd), 0);   // a step down: the next window settles it
+    ProtoInfo bare = pd; bare.ma = 0; bare.max_mv = 0;   // the contract released, caps still held: "PD 5V"
+    CHECK_EQ(steady_snapshot(5104, 5100, pd, bare), 0);
+    ProtoInfo v = pd; v.kind = ProtoKind::Svooc; v.measured = true; v.mv = 9000; v.ma = 0;
+    ProtoInfo w = v; w.mv = 9100;
+    CHECK_EQ(steady_snapshot(9000, 9100, v, w), 1);      // a measured level may move
+    CHECK_EQ(steady_snapshot(-5000, -5050, pd, pd), 1);  // reverse flow reads as a magnitude
+}
+
 int main() {
     test_alarm_thresholds();
     test_limit_bar();
@@ -318,6 +333,7 @@ int main() {
     test_elapsed();
     test_level();
     test_protocol_row();
+    test_steady_snapshot();
     test_exception_badge();
     test_max_text_never_comes_from_live_vbus();
     test_alarm_text();
