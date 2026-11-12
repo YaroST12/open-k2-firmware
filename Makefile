@@ -356,6 +356,7 @@ TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_twin.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_pdstress.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/loopprobe/loop_probe.cpp
 TEST_CXX_LIB  += $(SRC_DIR)/ui/ui_loop_probe.cpp
+TEST_CXX_LIB  += $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/diag_screen.cpp $(SRC_DIR)/ui/ui_diagnosis.cpp
 TEST_CXX_BINS  = $(patsubst tests/%.cpp, $(HOST_DIR)/%, $(TEST_CXX_SRCS))
 
 # Every library source is compiled once into $(HOST_DIR)/obj/<set>/<path>.o (with -MMD -MP
@@ -373,7 +374,7 @@ $(OBJ_DIR)/lfs/$(QR_DIR)/%.o: $(QR_DIR)/%.c
 $(OBJ_DIR)/lfs/%.o: %.c include/k2/core/lfs_cfg.h
 	@$(call RUN,HOST_LFS_CMD)
 SCAN_TEST_LIB  = $(SRC_DIR)/drivers/fusb302.cpp $(SRC_DIR)/pd/pdtrace.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp $(SRC_DIR)/pd/pd_engine.cpp $(SRC_DIR)/pd/pd_ext.cpp $(SRC_DIR)/pd/pd_vdm.cpp $(SRC_DIR)/pd/usb_link.cpp $(SRC_DIR)/pd/pd_sink.cpp $(SRC_DIR)/pd/pd_identify.cpp $(SRC_DIR)/pd/pd_probe.cpp $(SRC_DIR)/pd/pd_source.cpp $(SRC_DIR)/pd/apple_readout.cpp
-SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp
+SCAN_TEST_LIB += $(SRC_DIR)/pd/pd_reread.cpp $(SRC_DIR)/pd/diag.cpp
 SCAN_OBJS      = $(patsubst %.cpp, $(OBJ_DIR)/scan/%.o, $(SCAN_TEST_LIB))
 
 HOST_CXX_CMD   = $(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c $< -o $@
@@ -439,6 +440,16 @@ $(OBJ_DIR)/net/mode_ram.o: $(SRC_DIR)/drivers/mode_ram.cpp
 $(HOST_DIR)/test_net_dhcp: $(OBJ_DIR)/tests/test_net_dhcp.o $(OBJ_DIR)/net/net.o $(OBJ_DIR)/net/mode_ram.o $(NETTEST_OBJS)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -Wl,--wrap=udp_sendto -o $@
 
+# The Black Box diagnosis as a host tool (tools/pd_trace.py diagnose runs it): the device's own analyser
+# (src/pd/diag.cpp) fed from a saved capture, so there is no second analyser in Python.
+BBDIAG_OBJS    = $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/pd/diag.cpp $(SRC_DIR)/pd/pdtrace_link.cpp $(SRC_DIR)/pd/pd.cpp)
+$(OBJ_DIR)/tools/%.o: tools/%.cpp
+	@$(call RUN,HOST_CXX_CMD)
+$(HOST_DIR)/bbdiag: $(OBJ_DIR)/tools/bbdiag.o $(BBDIAG_OBJS)
+	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
+.PHONY: bbdiag
+bbdiag: $(HOST_DIR)/bbdiag
+
 -include $(shell find $(HOST_DIR)/obj $(HOST_DIR)/nettest -name '*.d' 2>/dev/null)
 
 # Test run step: one stamp per binary, so tests run in parallel under `make -jN test` and an
@@ -456,7 +467,7 @@ $(HOST_DIR)/run/%.ok: $(HOST_DIR)/%
 	@K2_DUMP=$(HOST_DIR) $< && touch $@
 test-run: $(TEST_STAMPS)
 	@$(COMPDB)
-test-py: test-run
+test-py: test-run $(HOST_DIR)/bbdiag
 	@python3 -m unittest discover -s tests -p 'test_*.py'
 	# --test-timeout is only a hang guard: the functional node rigs disable their own wall-clock watchdogs
 	# (count work, not time), so a rig that stops replying would otherwise hang `make gate` forever. 10 min is

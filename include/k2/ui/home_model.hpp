@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/pd/diag.hpp"
 #include "k2/ui/ui_calc.hpp"
 
 namespace k2::home {
@@ -114,9 +115,9 @@ struct ProtoText {
 };
 void format_proto(const ProtoInfo &p, ProtoText &out);
 
-// The info block's first row when the USB link has nothing to say: the two analog pairs the page already measures,
-// so the bar is never empty. "CC1/2" with "1.62/0.07V" (outside a live session), or "D+/D-" with "0.60/0.58V" (live,
-// link still unknown). A negative reading (no ADC sample) shows "-.--".
+// The info block's first row when the PD diagnosis has nothing to say (format_diag returns false): the two analog pairs
+// the page already measures, so the bar is never empty. "CC1/2" with "1.62/0.07V" (outside a session), or "D+/D-" with
+// "0.60/0.58V" (live, a session without PD). A negative reading (no ADC sample) shows "-.--".
 struct LinesText {
     StrBuf<6> tag;
     StrBuf<16> value;
@@ -125,6 +126,18 @@ void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out);
 
 // ---- cell state --------------------------------------------------------------------------------
 enum class Mode : uint8_t { NoMeter, Idle, Live, Stale };
+
+// The info block's first row while a session is live or stale: the Black Box diagnosis word (pd::diag::screen::word, at
+// most 16 characters) under the "Diag" tag, distinct from row 2's protocol tag. The tone is the worst finding's: red for
+// a Fail, amber for a Warn, dim when nothing is wrong (never green), grey on a stale screen. Returns false where the
+// lines say more: outside a session (Idle, NoMeter) and for a session without PD (a legacy charger).
+inline constexpr std::string_view kDiagTag = "Diag";
+enum class DiagTone : uint8_t { Dim, Caution, Error, Stale };
+struct DiagText {
+    StrBuf<17> value;
+    DiagTone tone = DiagTone::Dim;
+};
+bool format_diag(Mode m, const pd::diag::Report &r, DiagText &out);
 // The power meter has not answered YET: the first seconds of a boot, while the chip is still being found (a key-mode boot lives on a
 // VBUS that is still ramping when the first probe runs, and the main loop is busy with the charger link for seconds). The page says
 // "starting" in a neutral colour; only a meter still missing after the grace is an error. Uptime in ms (the Ui clock starts at boot).

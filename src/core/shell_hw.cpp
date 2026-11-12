@@ -32,6 +32,7 @@
 #include "k2/drivers/systick.hpp"
 #include "k2/core/dbg_stream_hw.hpp"
 #include "k2/pd/pdtrace.hpp"
+#include "k2/pd/diag_live.hpp"
 #include "k2/drivers/usb.hpp"
 #include "k2/drivers/usbcfg.hpp"
 #include "k2/core/remote.hpp"
@@ -873,9 +874,28 @@ const char* twin_command(const shell::TwinCmd& c) {
     return "?";
 }
 
+// `diag`: the report the K2 shows (k2/pd/diag_live.hpp), one terminal line per report line; titles carry their
+// severity, notes are indented under them.
+const char* diag_print() {
+    namespace dg = pd::diag;
+    if (dg::live::state() == dg::live::State::None) { put("no PD session yet\r\n"); return nullptr; }
+    const dg::Report& r = dg::live::report();
+    tput("session %s, %u.%u s, %u finished\r\n", dg::live::state() == dg::live::State::Open ? "open" : "last",
+         unsigned(r.dur_ms / 1000), unsigned(r.dur_ms % 1000 / 100), unsigned(dg::live::sessions()));
+    const unsigned n = dg::line_count(r);
+    for (unsigned i = 0; i < n; i++) {
+        dg::Line l;
+        if (!dg::line(r, i, l)) continue;
+        const char* tag = l.kind != dg::LineKind::Title ? "" : l.sev == dg::Sev::Fail ? "FAIL " : l.sev == dg::Sev::Warn ? "WARN " : "     ";
+        tput("%s%s%s\r\n", l.kind == dg::LineKind::Note ? "      " : "  ", tag, l.text.data());
+    }
+    return nullptr;
+}
+
 struct Hw final : shell::Backend {
     void write(std::string_view s) override { put(s); }
     const char* twin(const shell::TwinCmd& c) override { return twin_command(c); }
+    const char* diag() override { return diag_print(); }
 
     void state() override {
         char b[200];

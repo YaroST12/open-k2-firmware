@@ -4,6 +4,7 @@
 #include <string>
 #include "test_util.h"
 #include "k2/ui/home_model.hpp"
+#include "diag_fixture.h"
 
 using namespace k2;
 using namespace k2::home;
@@ -223,6 +224,44 @@ static void test_alarm_text() {
     CHECK_STR(n.c_str(), "");
 }
 
+// Row 1 of the info block: the Black Box diagnosis word under "Diag" while a PD session is live or stale, toned by the
+// worst finding (red Fail, amber Warn, dim otherwise, grey when stale; never green); the lines otherwise.
+static void test_diag_row() {
+    CHECK_STR(std::string(kDiagTag).c_str(), "Diag");
+    const pd::diag::Report case1 = diag_fixture::case1();
+    CHECK_EQ(case1.empty, false);
+    DiagText d;
+    CHECK_EQ(format_diag(Mode::Live, case1, d), true);
+    CHECK_STR(d.value.c_str(), "Power short");
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Error));
+    CHECK_EQ(format_diag(Mode::Stale, case1, d), true);
+    CHECK_STR(d.value.c_str(), "Power short");
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Stale));
+    // Outside a session the row keeps the lines (CC1/CC2 at rest, no meter).
+    CHECK_EQ(format_diag(Mode::Idle, case1, d), false);
+    CHECK_EQ(format_diag(Mode::NoMeter, case1, d), false);
+    // The same findings as Warn: amber.
+    pd::diag::Report warn = case1;
+    for (unsigned i = 0; i < warn.n; i++)
+        if (warn.f[i].sev == pd::diag::Sev::Fail) warn.f[i].sev = pd::diag::Sev::Warn;
+    CHECK_EQ(format_diag(Mode::Live, warn, d), true);
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Caution));
+    // A healthy inline session: dim, never green.
+    const pd::diag::Report inl = diag_fixture::report("tests/fixtures/bbdiag/legion_inline.raw");
+    CHECK_EQ(format_diag(Mode::Live, inl, d), true);
+    CHECK_STR(d.value.c_str(), "Link healthy");
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Dim));
+    // No session yet: the state in words.
+    CHECK_EQ(format_diag(Mode::Live, pd::diag::Report{}, d), true);
+    CHECK_STR(d.value.c_str(), "No PD session");
+    CHECK_EQ(static_cast<int>(d.tone), static_cast<int>(DiagTone::Dim));
+    // A session without PD (a legacy charger): the D+/D- lines tell more.
+    pd::diag::Report legacy;
+    legacy.empty = false;
+    legacy.no_pd = true;
+    CHECK_EQ(format_diag(Mode::Live, legacy, d), false);
+}
+
 int main() {
     test_alarm_thresholds();
     test_limit_bar();
@@ -236,5 +275,6 @@ int main() {
     test_exception_badge();
     test_max_text_never_comes_from_live_vbus();
     test_alarm_text();
+    test_diag_row();
     return test_report("test_home_model");
 }

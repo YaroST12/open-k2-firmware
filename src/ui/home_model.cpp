@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/home_model.hpp"
 
+#include "k2/pd/diag_screen.hpp"
+
 namespace k2::home {
 namespace {
 
@@ -168,6 +170,20 @@ void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out) {
         if (!i) out.value.put_char('/');
     }
     out.value.put_char('V');
+}
+
+bool format_diag(Mode m, const pd::diag::Report &r, DiagText &out) {
+    out.value.clear();
+    out.tone = DiagTone::Dim;
+    if ((m != Mode::Live && m != Mode::Stale) || r.no_pd) return false;
+    char w[pd::diag::screen::kLabelChars + 8];
+    pd::diag::Sev sev = pd::diag::Sev::Ok;
+    pd::diag::screen::word(r, w, sev);
+    out.value.put(w);
+    out.tone = m == Mode::Stale ? DiagTone::Stale
+             : sev == pd::diag::Sev::Fail ? DiagTone::Error
+             : sev == pd::diag::Sev::Warn ? DiagTone::Caution : DiagTone::Dim;
+    return true;
 }
 
 namespace {

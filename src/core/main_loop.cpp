@@ -36,6 +36,7 @@
 #include "k2/fastcharge/dpsniff.hpp"
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/fastcharge/fctrig.hpp"
+#include "k2/pd/diag_live.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/pd/power_source.hpp"
 #include "k2/pd/transcap.hpp"
@@ -103,8 +104,9 @@ void end_boot_screen(uint32_t now) {
     k2::power_source::poll(now);
     k2::dpsniff::poll(now, k2::power::read().value_or(k2::power::Metrics{}).vbus_mv);
     if (const auto pm = k2::power::read()) k2::pdtrace::vbus_sample(k2::power::vbus_fast_mv().value_or(pm->vbus_mv), pm->current_ma);   // black box, gated 50 ms / 100 mV / 20 mA; VBUS un-averaged so its steps carry their real time
+    k2::pd::diag::live::poll(now);          // Black Box diagnosis: the fresh sample into its power window, its clock
     k2::adc::poll();
-    k2::loopguard::poll(now);               // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
+    k2::loopguard::poll(now);              // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
     const bool sensor_was_online = c.accelerometer.online();
     if (c.accelerometer.poll(now)) {
         c.ui.feed_gravity(c.accelerometer.read(), now);

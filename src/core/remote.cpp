@@ -51,6 +51,8 @@
 #include "k2/ui/ui_qrtest.hpp"
 #include "k2/loopprobe/loop_probe_hw.hpp"
 #include "k2/core/version.hpp"
+#include "k2/pd/diag_live.hpp"
+#include "k2/pd/diag_wire.hpp"
 
 namespace k2 {
 
@@ -1325,6 +1327,13 @@ static_assert(twin::wire::kMaxRsp == remote::kMaxRspPayload);
 size_t Remote::twin(std::span<const uint8_t> p, std::span<uint8_t> out) {
     TwinApi api{ui_};
     return twin::wire::handle(api, p, out);
+}
+
+// The Black Box diagnosis: read-only, the same report the screen shows.
+size_t Remote::diagnose(std::span<const uint8_t> p, std::span<uint8_t> out) {
+    namespace live = k2::pd::diag::live;
+    const live::State st = live::state();
+    return k2::pd::diag::wire::encode(live::report(), static_cast<uint8_t>(st), live::sessions(), p, out);
 }
 
 // The transition capture. Arming changes the power monitor's mode and stores nothing; a charger test that is

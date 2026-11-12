@@ -47,6 +47,7 @@ struct Fake : shell::Backend {
                  (c.dry ? ",dry" : "") + ",'" + std::string(c.name) + "';";
         return fail;
     }
+    const char* diag() override { calls += "diag;"; return fail; }
 };
 
 // Run one line; returns what the backend was asked to do, `out` keeps the text.
@@ -255,5 +256,18 @@ int main() {
         CHECK_STR((g.calls).c_str(), "state;fcreset;");
         CHECK_EQ(said(g, "unknown"), false);
     }
+    // diag: read-only, no arguments; the backend prints the lines itself and only a failure adds an err line
+    CHECK_STR((run(f, "diag")).c_str(), "diag;");
+    CHECK_EQ(said(f, "err"), false);
+    CHECK_EQ(said(f, "ok"), false);
+    CHECK_STR((run(f, "DIAG")).c_str(), "diag;");
+    CHECK_STR((run(f, "diag now")).c_str(), "");
+    CHECK_EQ(said(f, "usage: diag"), true);
+    f.fail = "busy";
+    run(f, "diag");
+    CHECK_EQ(said(f, "err: busy"), true);
+    f.fail = nullptr;
+    run(f, "help");
+    CHECK_EQ(said(f, "diag "), true);
     return test_report("test_shell");
 }

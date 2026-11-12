@@ -1131,6 +1131,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Captures as /bb files (32, oldest evicted), LZ4, written when the link is quiet | done | verified | `bbstore`, `bbpersist`, `lz` |
 | Device viewer (Tools > Black Box) | done | verified | `ui_blackbox`, `pdtrace_view` |
 | Black Box saves deferred inside a charger test: rare kinds budgeted (`kRareBudget` 2 per run), waiting captures kept in their RAM slots, overflow counted (`drop=` / `defer=` in `[BB]`), one write per idle poll after the run (ARCHITECTURE "Flash writes during a charger test") | done, host-tested (`tests/test_run_writes.cpp`: 21 erases inside a 39-row run before, 2 now) | not verified. Validate: (1) a full charger-test run on a source that resets or refuses often (Xiaomi 6 A, FH22) with `tools/loop_survey.py` running: no PD-service gap over the 25 ms answer window inside the run beyond the journal's own writes, and at most two `[BB] ... held=1` saves (the rare ones) between START and the end of Releasing; (2) the `[BB] saves=... drop=N defer=M` lines land after Releasing, one per `poll()` pass, and `pd_trace.py captures` then lists the kept captures; (3) a run that ends by cancel or an unsafe exit flushes the same way | `bbpersist`, `pdtrace` |
+| Diagnosis: ranked Fail / Warn / Info findings per attach session, passive (`pd_trace.py diagnose`, Cmd 0x72, shell `diag`) | done | not verified | `diag`, `diag_live`, `diag_wire` |
+| Diagnosis on screen: Tools > PD diagnosis, Home row 1 `Diag <word>`, Who's attached Source footer | done | not verified | `diag_screen`, `ui_diagnosis`, `home_model` |
 | WebHID timeline viewer, MSC export of captures | planned | n/a | |
 
 ## Transition capture

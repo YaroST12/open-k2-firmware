@@ -216,18 +216,21 @@ struct StatusIn {
     std::string_view op;        // what the last action says ("Reading cable...", "Live sink: OK again"), "" = none
     bool spoof_armed = false;   // a saved cable is armed for the next charger test or attach
     const pd::Survey *sv = nullptr;   // the Refresh survey (nullptr: none, the old status only)
+    std::string_view diag;      // the PD diagnosis verdict of the session (pd::diag::screen::verdict), "" = no PD session
 };
 
 // The bottom bar: an action message wins; then the spoof note when a charger is already attached (the
-// identity is presented at the next attach); then the survey (progress while it runs, the hint while a field of the open
-// tab was never asked, the summary after a run); else the state of the shown tab and the topology word.
+// identity is presented at the next attach); then a running survey's progress; then, on the Source tab, the PD diagnosis
+// verdict of an open session; then the rest of the survey (the hint while a field of the open tab was never asked, the
+// summary after a run); else the state of the shown tab and the topology word.
 template <std::size_t N>
 void status_text(const StatusIn &s, StrBuf<N> &out) {
     out.clear();
     if (!s.op.empty()) { out.put(s.op); return; }
     if (s.spoof_armed && s.f.charger) { out.put("Armed, replug to apply"); return; }
+    if (s.sv && s.sv->running()) { out.put("Reading ").put_u32(s.sv->resolved()).put_char('/').put_u32(s.sv->planned()); return; }
+    if (s.tab == Tab::Source && !s.diag.empty()) { out.put(s.diag); return; }
     if (s.sv) {
-        if (s.sv->running()) { out.put("Reading ").put_u32(s.sv->resolved()).put_char('/').put_u32(s.sv->planned()); return; }
         if (!tab_empty(s.tab, s.f) && tab_unasked(s.tab, *s.sv)) { out.put(kRefreshHint); return; }
         if (s.sv->ran() && s.tab != Tab::Sink && !tab_empty(s.tab, s.f)) { read_summary(*s.sv, out); return; }
     }

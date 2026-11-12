@@ -226,6 +226,20 @@
 //                                    8 clear: rsp 0; deletes every stored capture.
 //                                    The stream format is k2/pd/transcap_calc.hpp encode(); decode it with
 //                                    tools/pd_trace.py transition.
+//   0x72 DIAGNOSE    req op(1) [args] rsp per op (read-only; k2/pd/diag_wire.hpp)
+//                                    The Black Box diagnosis of the session worth showing (the open one, else the
+//                                    last finished one). Ops:
+//                                    0 status: rsp state(1) power(1) link(1) worst_sev(1) findings(1) lines(1)
+//                                      sessions(2) start_us(4) dur_ms(4) (16 bytes); state 0 no session yet,
+//                                      1 open, 2 the last finished; sev 0 fail 1 warn 2 info 3 ok; link 0
+//                                      healthy 1 degraded 2 unstable.
+//                                    1 line: req idx(1) off(1); rsp lines(1) kind(1) sev(1) num(1) len(1) then
+//                                      the line's text from byte `off` (<= 53 bytes; len = the whole line).
+//                                      kind 0 verdict 1 title 2 note 3 healthy 4 data lanes. idx past the end
+//                                      answers the header with kind/sev/num/len 0.
+//                                    2 finding: req idx(1); rsp findings(1) sev(1) group(1) code(1) t_ms(4)
+//                                      a(4) b(4) c(4) d(4) then the code's name (k2::pd::diag::code_name).
+//                                    Wrong length BadLength, unknown op BadArg.
 //   0x50 CABLE_R     req [op(1)]       rsp flags(1) grade(1) r_mohm(2) idle_mv(2) idle_ma(2) load_mv(2) load_ma(2)
 //                                        pos_mohm(2) gnd_mohm(2)
 //                                    op 0 (or no payload) status; op 1 reset the cable-resistance
@@ -424,6 +438,7 @@ enum class Cmd : uint8_t {
     QRTest = 0x53,      // QR scan-test rig (k2/ui/ui_qrtest.hpp): fit table, full-screen test QR, stop; see the layout above
     BlackBox = 0x70,    // PD black box ring: read / clear / freeze / status, see the layout above
     TransCap = 0x71,    // transition capture: arm / trigger / status / read, see the layout above
+    Diagnose = 0x72,    // Black Box diagnosis (read-only): status / line / finding, see the layout above
     ChargerTest = 0x0B, // read-only RAM charger-suite metadata / paged results
     ChargerUnits = 0x0C, // [n, unit...] the units of the next charger run, in order (charger_test::Unit); n = 0 = default order.
                          // Busy while a run is active, BadArg for an unknown unit or a duplicate. Reset to default by every START.
@@ -448,7 +463,7 @@ inline constexpr Cmd kCmdIds[] = {
     Cmd::PdAttach, Cmd::PdHandback, Cmd::AppleRead, Cmd::Stop, Cmd::Lease,
     Cmd::CableR, Cmd::Lab, Cmd::Ufcs, Cmd::QRTest, Cmd::Store, Cmd::EmLib, Cmd::Cards, Cmd::Twin, Cmd::BlackBox, Cmd::TransCap, Cmd::ChargerTest,
     Cmd::ChargerUnits, Cmd::ChargerCable, Cmd::ChargerHunt, Cmd::ChargerSweep, Cmd::ChargerAvsSweep, Cmd::BootInfo,
-    Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe,
+    Cmd::PdStress, Cmd::EmarkerProbe, Cmd::LoopProbe, Cmd::Diagnose,
 };
 
 constexpr bool cmd_ids_unique() {
@@ -1192,6 +1207,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.cards(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
     { b.twin(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;    // same shape as emlib (Cmd::Twin, validated by the dispatcher)
     { b.transcap(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape as emlib
+    { b.diagnose(std::span<const uint8_t>{}, std::span<uint8_t>{}) } -> std::same_as<size_t>;   // same shape (Cmd::Diagnose)
 };
 
 namespace detail {
@@ -1994,6 +2010,13 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             return reply(Status::BadArg);
         }
         return reply_n(backend.transcap(p, buf));
+    }
+    case Cmd::Diagnose: {
+        if (p.empty()) return reply(Status::BadLength);
+        const size_t want = p[0] == 0 ? 1 : p[0] == 1 ? 3 : p[0] == 2 ? 2 : 0;
+        if (want == 0) return reply(Status::BadArg);
+        if (p.size() != want) return reply(Status::BadLength);
+        return reply_n(backend.diagnose(p, buf));
     }
     case Cmd::Log:
         if (p.size() > 1) return reply(Status::BadLength);

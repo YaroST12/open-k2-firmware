@@ -10,8 +10,9 @@
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/power_calc.hpp"
 #include "k2/pd/link.hpp"
+#include "k2/pd/diag_live.hpp"
+#include "k2/pd/diag_screen.hpp"
 #include "k2/pd/pd_source.hpp"
-#include "k2/pd/usb_link.hpp"
 #include "k2/ui/home_proto.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui.hpp"
@@ -34,9 +35,13 @@ constexpr int16_t kPillX = 211, kPillY = 1, kPillBoxH = 17;
 constexpr int16_t kArrowX = 8, kArrowY = 101;
 constexpr int16_t kWarnX = 10, kWarnY = 74;
 constexpr int16_t kInfoRow1Top = 201, kInfoRow2Top = 223;
-constexpr int kUsbChars = 16, kElChars = 5, kWattChars = 4, kEnergyChars = 3;
+constexpr int kDiagChars = 16, kElChars = 5, kWattChars = 4, kEnergyChars = 3;
 constexpr int16_t kElX = 180, kRoleX = 196;
 constexpr int16_t kRowTop[2] = {kInfoRow1Top, kInfoRow2Top};
+// Row 1's diagnosis word (hm::format_diag) and its tag fit between the tag column and the elapsed time.
+static_assert(pd::diag::screen::kLabelChars <= static_cast<std::size_t>(kDiagChars), "the diagnosis word runs into the elapsed time");
+static_assert(hm::kInfoValX + kDiagChars * static_cast<int>(kSmallAdvPx) <= kElX, "the diagnosis word overlaps the elapsed time");
+static_assert(hm::kInfoTagX + hm::kDiagTag.size() * kSmallAdvPx <= static_cast<unsigned>(hm::kInfoValX), "the Diag tag runs into its value");
 
 // Repaint zones of the lower cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
 // keeps its native pixel size while the landscape mapping squeezes the rows, so an old text can reach a few pixels
@@ -334,8 +339,9 @@ void HomePage::paint_cell(int ci, const Frame &f, int step_col, int step_n, bool
 // One compositor cell (y144..239): the third rule, the band's divider and split line, the W / Wh / Ah numbers and the two
 // info rows are items over the base colour, so a text repaint composes the structure under it again (the landscape
 // mapping makes a native glyph box taller than its logical row; a field that cleared its box would cut the rule below).
-// Every row of the info block carries data: row 1 is the USB link, or CC1/CC2 outside a live session, or D+/D- while the
-// link is still unknown; row 2 is the protocol and contract summary.
+// Every row of the info block carries data: row 1 is the PD diagnosis word (live or stale), or CC1/CC2 at rest, or D+/D-
+// for a live session without PD; row 2 is the protocol and contract summary. (The USB link speed left Home: its
+// detection is parked.)
 
 namespace {
 
@@ -367,27 +373,20 @@ void HomePage::paint_lower(const Frame &f) {
         ah = hm::split_decimal({eb[1], static_cast<size_t>(na)});
     }
 
-    // Row 1: the USB data link while live; otherwise the measured lines (CC1/CC2 at rest, D+/D- while the link is unknown).
+    // Row 1: the Black Box diagnosis of the PD session while live or stale (hm::format_diag: its worst finding, or the
+    // state, in the finding's tone); otherwise, and for a session without PD (a legacy charger: the lines tell more), the
+    // measured lines (CC1/CC2 at rest, D+/D- live).
     hm::LinesText lt;
-    std::string_view row1_tag = "USB", row1_val;
+    hm::DiagText dt;
+    std::string_view row1_tag = hm::kDiagTag, row1_val;
     uint16_t row1_tag_col = (m == hm::Mode::Idle || m == hm::Mode::NoMeter) ? kFaint : kDim;
     uint16_t row1_val_col = kDim;
-    char ub[usblink::kUiMaxChars + 1];
-    char fit[kFitBuf];
     const int32_t dp = ctx_.analog ? ctx_.analog->dp_mv : -1, dm = ctx_.analog ? ctx_.analog->dm_mv : -1;
-    bool link_known = false;
-    if (live) {
-        const usblink::Link ul = fusb302::usb_link(dp, dm);
-        const size_t len = usblink::format_ui(ul, ub);
-        const std::string_view s{ub, len};
-        if (!s.empty() && s != "Unkn" && s != "--") {
-            link_known = true;
-            row1_val = len > static_cast<size_t>(kUsbChars) ? fit_data(kSmall, s, kUsbChars * kSmall.adv, fit) : s;
-            row1_val_col = ul.conf == usblink::Confidence::Negotiated ? kText
-                         : (ul.conf == usblink::Confidence::Advertised || ul.conf == usblink::Confidence::Hint) ? kDim : kFaint;
-        }
-    }
-    if (!link_known) {
+    if (hm::format_diag(m, pd::diag::live::report(), dt)) {
+        row1_val = dt.value.view();
+        row1_val_col = dt.tone == hm::DiagTone::Stale ? kStale : dt.tone == hm::DiagTone::Error ? kError
+                     : dt.tone == hm::DiagTone::Caution ? kCaution : kDim;
+    } else {
         if (live) hm::format_lines(true, dp, dm, lt);
         else hm::format_lines(false, ctx_.analog ? ctx_.analog->cc1_mv : -1, ctx_.analog ? ctx_.analog->cc2_mv : -1, lt);
         row1_tag = lt.tag.view();

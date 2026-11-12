@@ -278,6 +278,7 @@ Rules:
 | Saved cables | `em_saved*`, `emarker_none` | RowList of saved cable identities (marker, name as a data cell, rating tail); the detail is a KvTable, a delete confirmation and an empty state are AlertBand pages; the e-marker live scan is on the Who's attached Cable tab, not here |
 | Cable R | `cabler_wait/result/poor/fair/kelvin/kelvin_nofix/meter_missing` | kit KvTable (IDLE / LOAD, or LIVE / SENSE in Kelvin mode, plus `Port: load on top`), then S48 `110` + S24 `mΩ`, a verdict cell (green / amber / solid red) and a flat three-segment scale (66 x 6, lit in the grade colour, otherwise `rule`) with a detail line; a missing meter is the red `METER MISSING` AlertBand; footer facts only |
 | Black Box | (no mockup yet) | state of the trace recorder: captures in RAM and in flash, the last trigger reason; OK freezes a capture by hand. Read on the host with `tools/pd_trace.py` |
+| PD diagnosis | `diagnosis_case1` (`_r1`..`_r6` focus each row), `diagnosis_ramp/stress/last/empty`, `home_diag_*`, `pd_source_diag_case1` | the passive Black Box diagnosis of the PD session (ARCHITECTURE "Diagnosis"): kit RowList, findings first with a verdict cell (Fail red, Warn amber, Info none) and the event time as the tail, healthy lines with the pass cell, the data-lane row with the USB icon and no verdict; the focused row opens its evidence note; the footer is the verdict in the worst finding's tone; LAST pill for a finished session; one waiting row before any. Home row 1 shows `Diag <word>` in the same tones (never green); the Who's attached Source footer shows the verdict of an open session. Not verified on hardware |
 | Spoof | `docs/ui_review_2026-11-06/wizard3/wiz3_rot*_spoof_*` | pick an identity from the shared cable list (Off, built-in chips, saved clones) and turn the SOP' answer on or off; the footer reads `Spoof on` / `Spoof off` style facts. Kit RowList (radio marker; the amber `ARMED` pill is the only tail pill, saved clones carry a dim `saved` tail) under a two-row KvTable (State; Asked / Replied counts) at y 24..76, list from y 76. Not verified on hardware |
 | Report cards | `cards_empty/list/detail/detail_worst/detail_fail/confirm` (+ rot90/180/270) | the charger report cards saved by the charger test (section 4.4). Not verified on hardware |
 
@@ -527,8 +528,9 @@ Buttons: the BACK slot reads `Back/Del` in the list and `List/Del` on a card (lo
   distinct from the allowable PPS request.
                 BACK stops first; leaving also cancels, with verified 5V cleanup.
   Home: long OK resets energy.
-  Tools: short -/+ selects; eight rows, no scroll, in this order: FC trigger, PD trigger, Spoof, Cable R,
-         Who's attached, Black Box, Report cards, Diag. OK opens the row. BACK returns to Tools (selection kept).
+  Tools: short -/+ selects; ten rows, scrolling, in this order: FC trigger, PD trigger, Spoof, Cable R,
+         Who's attached, Black Box, PD diagnosis, Report cards, Diag, Device twins. OK opens the row. BACK returns to
+         Tools (selection kept).
          Spoof is a shortcut into Who's attached on the Cable tab's Spoof list (same list, same arming rules).
          Diag: long OK shares the log.
   Who's attached (5.1): three tabs Source / Cable / Sink; short +/- switch tabs, OK opens the Actions pop-up,

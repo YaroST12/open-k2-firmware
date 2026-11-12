@@ -53,7 +53,7 @@ static void test_fc() {
     CHECK_STR(tool_readiness(0, st(true, true, true), true).tag, "LOAD");
 }
 
-// Connection, Black Box, Report cards and Diag never block: Connection's own actions carry the inline confirm.
+// Connection, Black Box, PD diagnosis, Report cards and Diag never block: Connection's own actions carry the inline confirm.
 static void test_always_ready_tools() {
     for (int t = 4; t < kToolCount; t++) {
         if (t == 3 || t == kToolLoopProbe) continue;   // the two that need the power monitor
@@ -106,10 +106,11 @@ static void test_hurt_table() {
         ToolHurt::Nothing,   // 3 Cable R: measures under the user's own load
         ToolHurt::Nothing,   // 4 Connection: reads, its active actions confirm on their own
         ToolHurt::Nothing,   // 5 Black Box: passive recorder
-        ToolHurt::Nothing,   // 6 Report cards: read-only
-        ToolHurt::Nothing,   // 7 Diag: counters
-        ToolHurt::Nothing,   // 8 Device twins: the live proof refuses a live sink itself
-        ToolHurt::Nothing,   // 9 Loop probe: its far end is the K2's own HID port; it refuses above 5.5 V itself
+        ToolHurt::Nothing,   // 6 PD diagnosis: reads the Black Box records
+        ToolHurt::Nothing,   // 7 Report cards: read-only
+        ToolHurt::Nothing,   // 8 Diag: counters
+        ToolHurt::Nothing,   // 9 Device twins: the live proof refuses a live sink itself
+        ToolHurt::Nothing,   // 10 Loop probe: its far end is the K2's own HID port; it refuses above 5.5 V itself
     };
     for (int t = 0; t < kToolCount; t++) {
         CHECK_EQ(int(tool_hurt_by(t)), int(kExpect[t]));
