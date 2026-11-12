@@ -1348,15 +1348,26 @@ struct TwinApi {
         return twin_hw::live_start(seqs, confirmed, ui.twin_ctx(systick::millis()));
     }
     const twin::live::Runner& runner() const { return twin_hw::live(); }
-    bool running() const { return twin_hw::live_running(); }
+    bool running() const { return twin_hw::live_running() || twin_hw::inline_running(); }
     void cancel() { ui.cancel_twin(); }
+    pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed) {
+        return twin_hw::inline_start(name, save, confirmed, ui.twin_ctx(systick::millis()));
+    }
+    void inline_cancel() { twin_hw::inline_cancel(); }
+    bool inline_running() const { return twin_hw::inline_running(); }
+    const twin_hw::InlineLearn& inline_learn() const { return twin_hw::inline_learn(); }
+    const pd::IqStatus& inline_status() const { return twin_hw::inline_status(); }
 };
 static_assert(remote::kTwList == twin::wire::kOpList && remote::kTwGet == twin::wire::kOpGet &&
               remote::kTwPredict == twin::wire::kOpPredict && remote::kTwLearn == twin::wire::kOpLearn &&
               remote::kTwRename == twin::wire::kOpRename && remote::kTwDelete == twin::wire::kOpDelete &&
               remote::kTwRun == twin::wire::kOpRun && remote::kTwStatus == twin::wire::kOpStatus &&
               remote::kTwResult == twin::wire::kOpResult && remote::kTwUsb == twin::wire::kOpUsb &&
-              remote::kTwCancel == twin::wire::kOpCancel);
+              remote::kTwCancel == twin::wire::kOpCancel && remote::kTwInline == twin::wire::kOpInline);
+static_assert(remote::kTwIqStatus == twin::wire::kInlineStatus && remote::kTwIqStart == twin::wire::kInlineStart &&
+              remote::kTwIqAbort == twin::wire::kInlineAbort && remote::kTwIqAnswers == twin::wire::kInlineAnswers &&
+              remote::kTwIqDry == twin::wire::kInlineDry && remote::kTwIqConfirm == twin::wire::kInlineConfirm &&
+              remote::kTwIqParts == twin::wire::kInlineParts);
 static_assert(remote::kTwErrBusy == twin::wire::kErrBusy && remote::kTwNameMax == twin::kNameMax &&
               remote::kTwMax == twin::kCapacity && remote::kTwParts == twin::wire::kMaxParts &&
               remote::kTwRunConfirm == twin::wire::kRunConfirm);

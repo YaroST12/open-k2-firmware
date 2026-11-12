@@ -14,6 +14,7 @@
 //   RUN      [refusal, n]                              refusal = twin::live::Refusal (0 = started)
 //   STATUS   [err, running, reason, count, done, current, restoring, verdict mask u16]
 //   RESULT   [err, seq, verdict, skip, measured_mv u16]
+//   INLINE   [err, sub, ...]                         the inline interrogation, see encode_iq_status below
 #pragma once
 #include <algorithm>
 #include <array>
@@ -218,10 +219,123 @@ inline std::size_t encode_slot(std::uint8_t seq, const live::Slot& s, std::span<
     return kSlotBytes;
 }
 
+// ---- INLINE: the interrogation of a device inline (twin_hw::inline_*, k2/pd/pd_interrogate.hpp) ------------------------------
+// [11, sub, ...]:
+//   STATUS  [11, 0]                       -> kIqStatusBytes, below
+//   START   [11, 1, flags, name...]       flags bit0 dry (learn, do not save), bit1 confirm -> [err, 1, refusal]
+//                                         err 0 = started, kErrIqRefused = refused: refusal = pd::IqRefusal
+//   ABORT   [11, 2]                       -> [0, 2, was_running]
+//   ANSWERS [11, 3, part]                 -> [0, 3, part, ...] what the device answered:
+//                                         part 0 sink PDOs [n, u32 * 7], 1 Sink_Capabilities_Extended [n, bytes * 24],
+//                                         2 Discover Identity [valid, n, u32 * 6], 3 [n_svids, u16 * 12, n_modes, (u16 svid, u32 vdo) * 2]
+// STATUS: [err 0, sub 0, running, pending, done, phase, step, why, match, rev, asked, ok, refused, silent, sent, dev_acks,
+//          resets_sent, resets_seen, skipped_first_reset, vid u16, pid u16, n_svids, n_modes, n_sink_pdos, sink_ext_len,
+//          revision u32, first ready, first pos, first rdo u32, second ready, second pos, second rdo u32,
+//          learn how, store err, store seq, existed, unchanged, ms u16]
+//   pending: started, not learned from yet; done: the last run was learned from (learn how / store say what it stored);
+//   masks are pd::iq_bit per IqStep; ms: the run's length once it ended (ended_at - started_at, capped), else 0.
+inline constexpr std::uint8_t kInlineStatus = 0, kInlineStart = 1, kInlineAbort = 2, kInlineAnswers = 3;
+inline constexpr std::uint8_t kInlineDry = 1, kInlineConfirm = 2;
+inline constexpr std::uint8_t kInlineParts = 4;
+inline constexpr std::uint8_t kErrIqRefused = 10;
+inline constexpr std::size_t kIqStatusBytes = 50;
+static_assert(kIqStatusBytes <= kMaxRsp && 4 + 1 + 2 * pd::kMaxSvids + 1 + 6 * pd::kIdModeSvids <= kMaxRsp);
+
+inline std::size_t encode_iq_status(bool running, const twin_hw::InlineLearn& l, const pd::IqStatus& s, std::span<std::uint8_t> out) {
+    if (out.size() < kIqStatusBytes) return 0;
+    std::uint8_t* b = out.data();
+    b[0] = 0;
+    b[1] = kInlineStatus;
+    b[2] = running ? 1 : 0;
+    b[3] = l.pending ? 1 : 0;
+    b[4] = l.done ? 1 : 0;
+    b[5] = std::uint8_t(s.phase);
+    b[6] = std::uint8_t(s.step);
+    b[7] = std::uint8_t(s.why);
+    b[8] = std::uint8_t(s.match);
+    b[9] = s.rev;
+    b[10] = s.asked_mask;
+    b[11] = s.ok_mask;
+    b[12] = s.refused_mask;
+    b[13] = s.silent_mask;
+    b[14] = s.sent;
+    b[15] = s.dev_acks;
+    b[16] = s.resets_sent;
+    b[17] = s.resets_seen;
+    b[18] = s.skipped_first_reset ? 1 : 0;
+    detail::le16(&b[19], s.id.valid ? s.id.vid : 0);
+    detail::le16(&b[21], s.id.valid ? s.id.pid : 0);
+    b[23] = s.num_svids;
+    b[24] = s.num_modes;
+    b[25] = s.num_sink_pdos;
+    b[26] = s.sink_ext_len;
+    detail::le32(&b[27], s.revision);
+    b[31] = s.first.ready ? 1 : 0;
+    b[32] = s.first.pos;
+    detail::le32(&b[33], s.first.rdo);
+    b[37] = s.second.ready ? 1 : 0;
+    b[38] = s.second.pos;
+    detail::le32(&b[39], s.second.rdo);
+    b[43] = std::uint8_t(l.result.how);
+    b[44] = std::uint8_t(l.result.store.err);
+    b[45] = l.result.store.seq;
+    b[46] = l.result.store.existed ? 1 : 0;
+    b[47] = l.result.store.unchanged ? 1 : 0;
+    const std::uint32_t ms = pd::iq_finished(s.phase) && s.ended_at >= s.started_at ? s.ended_at - s.started_at : 0;
+    detail::le16(&b[48], std::uint16_t(std::min<std::uint32_t>(ms, 0xFFFFu)));
+    return kIqStatusBytes;
+}
+
+// ANSWERS part `part` (0..kInlineParts-1); an unknown part answers err Invalid.
+inline std::size_t encode_iq_answers(const pd::IqStatus& s, std::uint8_t part, std::span<std::uint8_t> out) {
+    if (out.size() < kMaxRsp) return 0;
+    std::uint8_t* b = out.data();
+    b[0] = 0;
+    b[1] = kInlineAnswers;
+    b[2] = part;
+    std::size_t n = 3;
+    switch (part) {
+        case 0: {
+            const std::size_t k = std::min<std::size_t>(s.num_sink_pdos, s.sink_pdos.size());
+            b[n++] = std::uint8_t(k);
+            for (std::size_t i = 0; i < k; ++i, n += 4) detail::le32(&b[n], s.sink_pdos[i]);
+            return n;
+        }
+        case 1: {
+            const std::size_t k = std::min<std::size_t>(s.sink_ext_len, s.sink_ext.size());
+            b[n++] = std::uint8_t(k);
+            std::memcpy(&b[n], s.sink_ext.data(), k);
+            return n + k;
+        }
+        case 2: {
+            const std::size_t k = s.id.valid ? std::min<std::size_t>(s.id.num_vdos, s.id.vdos.size()) : 0;
+            b[n++] = s.id.valid ? 1 : 0;
+            b[n++] = std::uint8_t(k);
+            for (std::size_t i = 0; i < k; ++i, n += 4) detail::le32(&b[n], s.id.vdos[i]);
+            return n;
+        }
+        case 3: {
+            const std::size_t k = std::min<std::size_t>(s.num_svids, s.svids.size());
+            b[n++] = std::uint8_t(k);
+            for (std::size_t i = 0; i < k; ++i, n += 2) detail::le16(&b[n], s.svids[i]);
+            const std::size_t m = std::min<std::size_t>(s.num_modes, s.mode_svid.size());
+            b[n++] = std::uint8_t(m);
+            for (std::size_t i = 0; i < m; ++i, n += 6) {
+                detail::le16(&b[n], s.mode_svid[i]);
+                detail::le32(&b[n + 2], s.mode_vdo[i]);
+            }
+            return n;
+        }
+        default:
+            b[0] = std::uint8_t(Err::Invalid);
+            return 1;
+    }
+}
+
 // ---- the command handler -----------------------------------------------------------------------------------------------------
 // Op codes: the same numbers as remote::kTw* (static_asserted in src/core/remote.cpp).
 inline constexpr std::uint8_t kOpList = 0, kOpGet = 1, kOpPredict = 2, kOpLearn = 3, kOpRename = 4, kOpDelete = 5, kOpRun = 6,
-                              kOpStatus = 7, kOpResult = 8, kOpUsb = 9, kOpCancel = 10;
+                              kOpStatus = 7, kOpResult = 8, kOpUsb = 9, kOpCancel = 10, kOpInline = 11;
 
 // One Cmd::Twin request over an Api (the hardware one in src/core/remote.cpp, a fake in the host tests). The dispatcher has
 // already checked the lengths and the argument ranges, the confirm bit and the busy guard (k2/core/remote_proto.hpp); this
@@ -234,6 +348,8 @@ inline constexpr std::uint8_t kOpList = 0, kOpGet = 1, kOpPredict = 2, kOpLearn 
 //   Err rename(std::uint8_t, std::string_view)    Err remove(std::uint8_t)
 //   live::Refusal run(std::span<const std::uint8_t> seqs, bool confirmed)
 //   const live::Runner& runner() const    bool running() const    void cancel()
+//   pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed)    void inline_cancel()
+//   bool inline_running() const    const twin_hw::InlineLearn& inline_learn() const    const pd::IqStatus& inline_status() const
 template <class Api>
 std::size_t handle(Api& api, std::span<const std::uint8_t> p, std::span<std::uint8_t> out) {
     if (p.empty() || out.size() < kMaxRsp) return 0;
@@ -311,6 +427,34 @@ std::size_t handle(Api& api, std::span<const std::uint8_t> p, std::span<std::uin
             out[0] = 0;
             out[1] = was ? 1 : 0;
             return 2;
+        }
+        case kOpInline: {
+            if (!need(2)) return err1(std::uint8_t(Err::Invalid));
+            switch (p[1]) {
+                case kInlineStatus:
+                    return encode_iq_status(api.inline_running(), api.inline_learn(), api.inline_status(), out);
+                case kInlineStart: {
+                    if (!need(3) || (p[2] & ~(kInlineDry | kInlineConfirm)) != 0) return err1(std::uint8_t(Err::Invalid));
+                    const pd::IqRefusal r = api.inline_start(text(3), (p[2] & kInlineDry) == 0, (p[2] & kInlineConfirm) != 0);
+                    out[0] = r == pd::IqRefusal::None ? 0 : kErrIqRefused;
+                    out[1] = kInlineStart;
+                    out[2] = std::uint8_t(r);
+                    return 3;
+                }
+                case kInlineAbort: {
+                    const bool was = api.inline_running();
+                    api.inline_cancel();
+                    out[0] = 0;
+                    out[1] = kInlineAbort;
+                    out[2] = was ? 1 : 0;
+                    return 3;
+                }
+                case kInlineAnswers:
+                    if (!need(3)) return err1(std::uint8_t(Err::Invalid));
+                    return encode_iq_answers(api.inline_status(), p[2], out);
+                default:
+                    return err1(std::uint8_t(Err::Invalid));
+            }
         }
         default:
             return err1(std::uint8_t(Err::Invalid));

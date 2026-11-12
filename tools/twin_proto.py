@@ -22,6 +22,19 @@ SKIPS = ["", "nothing usable", "above the monitor ceiling", "request not buildab
 REASONS = ["done", "cancelled", "ports taken", "no offer"]      # twin::live::Reason
 REFUSALS = ["ok", "confirm needed", "busy", "link inline", "no power monitor", "no charger", "no twins"]   # live::Refusal
 USB_WHICH = ["declared", "observed"]
+# The inline interrogation (k2/pd/pd_interrogate.hpp, the *_name() texts of src/pd/pd_interrogate.cpp).
+IQ_PHASES = ["idle", "reset", "sniff", "settle", "ask", "reset back", "sniff back", "done", "aborted"]   # pd::IqPhase
+IQ_STEPS = ["Discover Identity", "Get_Sink_Cap", "Get_Sink_Cap_Extended", "Get_Revision", "Discover SVIDs",
+            "Discover Modes"]                                                                          # pd::IqStep (bit n)
+IQ_WHY = ["none", "stopped", "detached", "inline link lost", "no renegotiation", "too many resets", "time limit"]   # pd::IqWhy
+IQ_MATCH = ["unknown", "same contract", "contract changed", "no contract after the reset"]                     # pd::IqMatch
+IQ_REFUSALS = ["started", "another PD tool is running", "no CC line attached", "no device inline",
+               "a test or trigger owns the ports", "the K2 holds its own contract", "the K2 runs on this VBUS",
+               "needs the confirm"]                                                                    # pd::IqRefusal
+IQ_STATUS, IQ_START, IQ_ABORT, IQ_ANSWERS = 0, 1, 2, 3     # twin::wire::kInline*
+IQ_DRY, IQ_CONFIRM, IQ_PARTS = 1, 2, 4
+ERR_IQ_REFUSED = 10
+IQ_STATUS_BYTES = 50
 
 KAPACITY = 12
 NAME_MAX = 24
@@ -228,6 +241,72 @@ def decode_learn(p):
     flags = p[10]
     return {"seq": p[2], "existed": bool(p[3]), "unchanged": bool(p[4]), "vid": _u16(p, 5), "pid": _u16(p, 7), "num_pdos": p[9],
             "has": [n for bit, n in ((FLAG_REQUEST, "request"), (FLAG_DECLARED, "declared"), (FLAG_OBSERVED, "observed")) if flags & bit]}
+
+
+def _name(names, i):
+    return names[i] if i < len(names) else f"?{i}"
+
+
+def _steps(mask):
+    return [s for i, s in enumerate(IQ_STEPS) if mask & (1 << i)]
+
+
+def decode_iq_start(p):
+    """[err, 1, refusal]: err 0 started, 10 refused (the refusal says why). Not an error here: the caller words it."""
+    if len(p) < 3 or p[1] != IQ_START or p[0] not in (0, ERR_IQ_REFUSED):
+        _ok(p, 3, "learn inline")
+        raise TwinError("twin learn inline: not a start response")
+    return {"started": p[0] == 0, "refusal": _name(IQ_REFUSALS, p[2])}
+
+
+def decode_iq_status(p):
+    """The interrogation's state, what was asked and answered, both contracts and what was learned (wire.hpp encode_iq_status)."""
+    _ok(p, IQ_STATUS_BYTES, "inline status")
+    contract = lambda o: {"ready": bool(p[o]), "pos": p[o + 1], "rdo": _u32(p, o + 2)}   # noqa: E731
+    return {
+        "running": bool(p[2]), "pending": bool(p[3]), "done": bool(p[4]),
+        "phase": _name(IQ_PHASES, p[5]), "step": _name(IQ_STEPS + ["done"], p[6]), "why": _name(IQ_WHY, p[7]),
+        "match": _name(IQ_MATCH, p[8]), "rev": p[9],
+        "asked": _steps(p[10]), "answered": _steps(p[11]), "refused": _steps(p[12]), "silent": _steps(p[13]),
+        "sent": p[14], "dev_acks": p[15], "resets_sent": p[16], "resets_seen": p[17], "skipped_first_reset": bool(p[18]),
+        "vid": _u16(p, 19), "pid": _u16(p, 21), "num_svids": p[23], "num_modes": p[24], "num_sink_pdos": p[25],
+        "sink_ext_len": p[26], "revision": _u32(p, 27), "first": contract(31), "second": contract(37),
+        "learn": {"how": _name(LEARN_NAMES, p[43]), "store_err": ERR_NAMES.get(p[44], f"error {p[44]}"), "seq": p[45],
+                  "existed": bool(p[46]), "unchanged": bool(p[47])},
+        "ms": _u16(p, 48),
+    }
+
+
+def decode_iq_answers(p):
+    """One ANSWERS part: 0 sink PDOs, 1 Sink_Capabilities_Extended bytes, 2 Discover Identity VDOs, 3 SVIDs and modes."""
+    _ok(p, 4, "inline answers")
+    part, b = p[2], p[3:]
+    if part == 0:
+        n = b[0]
+        if len(b) < 1 + 4 * n:
+            raise TwinError("twin inline answers: sink PDOs shorter than they say")
+        return {"part": 0, "sink_pdos": [_u32(b, 1 + 4 * i) for i in range(n)]}
+    if part == 1:
+        n = b[0]
+        if len(b) < 1 + n:
+            raise TwinError("twin inline answers: extended caps shorter than they say")
+        return {"part": 1, "sink_ext": bytes(b[1:1 + n]).hex()}
+    if part == 2:
+        if len(b) < 2 or len(b) < 2 + 4 * b[1]:
+            raise TwinError("twin inline answers: identity shorter than it says")
+        return {"part": 2, "identity_valid": bool(b[0]), "identity_vdos": [_u32(b, 2 + 4 * i) for i in range(b[1])]}
+    if part == 3:
+        n = b[0]
+        if len(b) < 2 + 2 * n:
+            raise TwinError("twin inline answers: SVIDs shorter than they say")
+        svids = [_u16(b, 1 + 2 * i) for i in range(n)]
+        o = 1 + 2 * n
+        m = b[o]
+        if len(b) < o + 1 + 6 * m:
+            raise TwinError("twin inline answers: modes shorter than they say")
+        modes = [{"svid": _u16(b, o + 1 + 6 * i), "vdo": _u32(b, o + 3 + 6 * i)} for i in range(m)]
+        return {"part": 3, "svids": svids, "modes": modes}
+    raise TwinError(f"twin inline answers: unknown part {part}")
 
 
 def decode_usb(p):

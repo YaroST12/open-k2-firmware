@@ -662,10 +662,15 @@ constexpr size_t kEmNameMax = 24;
 //   RENAME  [4, seq, name...]    DELETE  [5, seq, 1]         RUN     [6, flags, n, seq * n]  flags bit0 = confirm, n 0 = all
 //   STATUS  [7]                  RESULT  [8, seq]            USB     [9, seq, which]  which 0 declared, 1 observed
 //   CANCEL  [10]                 -> [err, was_running]
-// Writes (LEARN without the dry bit, RENAME, DELETE, RUN) answer Busy + [kTwErrBusy] while a run, a test or an FC release owns
-// the link; RUN without the confirm bit answers NeedConfirm; an accepted RUN arms the HID lease (it holds the output above 5 V).
+//   INLINE  [11, sub, ...]       the inline interrogation: sub 0 STATUS [11, 0], 1 START [11, 1, flags, name...] flags bit0 dry,
+//                                bit1 confirm; 2 ABORT [11, 2]; 3 ANSWERS [11, 3, part] part 0..3 (k2/twin/wire.hpp)
+// Writes (LEARN without the dry bit, RENAME, DELETE, RUN, INLINE START) answer Busy + [kTwErrBusy] while a run, a test or an FC
+// release owns the link; RUN and INLINE START without the confirm bit answer NeedConfirm (a run changes the contract, an
+// interrogation resets the link twice); an accepted RUN arms the HID lease (it holds the output above 5 V).
 constexpr uint8_t kTwList = 0, kTwGet = 1, kTwPredict = 2, kTwLearn = 3, kTwRename = 4, kTwDelete = 5, kTwRun = 6, kTwStatus = 7,
-                  kTwResult = 8, kTwUsb = 9, kTwCancel = 10;
+                  kTwResult = 8, kTwUsb = 9, kTwCancel = 10, kTwInline = 11;
+constexpr uint8_t kTwIqStatus = 0, kTwIqStart = 1, kTwIqAbort = 2, kTwIqAnswers = 3;
+constexpr uint8_t kTwIqDry = 1, kTwIqConfirm = 2, kTwIqParts = 4;
 constexpr uint8_t kTwErrBusy = 7;     // twin::wire::kErrBusy
 constexpr uint8_t kTwRunConfirm = 1, kTwLearnDry = 1;
 constexpr size_t kTwNameMax = 24;     // twin::kNameMax (static_asserted in remote.cpp)
@@ -2108,11 +2113,33 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             if ((p[1] & kTwRunConfirm) == 0) return reply(Status::NeedConfirm);   // a run changes the contract
             break;
         }
+        case kTwInline:
+            if (p.size() < 2) return reply(Status::BadLength);
+            switch (p[1]) {
+            case kTwIqStatus:
+            case kTwIqAbort:
+                if (p.size() != 2) return reply(Status::BadLength);
+                break;
+            case kTwIqStart:
+                if (p.size() < 3 || p.size() > 3 + kTwNameMax) return reply(Status::BadLength);
+                if ((p[2] & ~(kTwIqDry | kTwIqConfirm)) != 0) return reply(Status::BadArg);
+                if ((p[2] & kTwIqConfirm) == 0) return reply(Status::NeedConfirm);   // two Hard Resets: VBUS drops
+                break;
+            case kTwIqAnswers:
+                if (p.size() != 3) return reply(Status::BadLength);
+                if (p[2] >= kTwIqParts) return reply(Status::BadArg);
+                break;
+            default:
+                return reply(Status::BadArg);
+            }
+            break;
         default:
             return reply(Status::BadArg);
         }
-        // The writes share the flash and the link with a running test: refused before the backend sees them.
-        const bool writes = p[0] == kTwRename || p[0] == kTwDelete || p[0] == kTwRun || (p[0] == kTwLearn && (p[2] & kTwLearnDry) == 0);
+        // The writes share the flash and the link with a running test: refused before the backend sees them. An interrogation
+        // owns the link too: it is refused while anything else does (its own run counts, Ui::ports_busy).
+        const bool writes = p[0] == kTwRename || p[0] == kTwDelete || p[0] == kTwRun || (p[0] == kTwLearn && (p[2] & kTwLearnDry) == 0) ||
+                            (p[0] == kTwInline && p[1] == kTwIqStart);
         if (writes && backend.ports_busy()) {
             buf[0] = kTwErrBusy;
             return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
