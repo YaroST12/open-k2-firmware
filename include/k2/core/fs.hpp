@@ -57,12 +57,15 @@ struct Info {
 class Fs {
 public:
     // `block_count`: the size a plain format() gives. `grown_blocks` (0 = none): the one larger size the volume may grow
-    // to (grow()); the device must answer every block below it.
-    Fs(BlockDevice& dev, std::uint32_t block_count, std::uint32_t grown_blocks = 0);
+    // to (grow()). `wide_blocks` (0 = none): an older, larger size that still mounts (so it can be emptied above
+    // grown_blocks and shrunk, k2/core/fs_migrate.hpp) but is never formatted or grown to. The device must answer every
+    // block below the largest.
+    Fs(BlockDevice& dev, std::uint32_t block_count, std::uint32_t grown_blocks = 0, std::uint32_t wide_blocks = 0);
     Fs(const Fs&) = delete;
     Fs& operator=(const Fs&) = delete;
 
-    // Mounts a volume whose superblock says block_count or grown_blocks; any other size is Err::Invalid (not mounted).
+    // Mounts a volume whose superblock says block_count, grown_blocks or wide_blocks; any other size is Err::Invalid
+    // (not mounted).
     Err mount();
     // Formats at `blocks` (0 = block_count; otherwise block_count or grown_blocks).
     Err format(std::uint32_t blocks = 0);
@@ -99,10 +102,24 @@ public:
     // The mounted volume's size (block_count or grown_blocks); block_count while not mounted.
     std::uint32_t block_count() const { return mounted_ ? std::uint32_t(lfs_.block_count) : blocks_; }
     bool grown() const { return grown_ > blocks_ && block_count() == grown_; }
+    // Mounted at the older, wider size (wide_blocks): it waits to be shrunk to grown_blocks.
+    bool wide() const { return mounted_ && wide_ != 0 && block_count() == wide_; }
     // Grows the mounted volume to grown_blocks (one superblock commit, atomic: a power cut leaves the old size or the
     // new one). The caller proves first that the new blocks hold nothing that is not ours. A failed commit unmounts
     // and remounts, so the in-memory size never runs ahead of the superblock.
     Err grow();
+    // From now on a program or an erase of a block at or above `block` answers as a bad block, so littlefs writes what it
+    // was about to put there into another block (0 = off). k2/core/fs_migrate.hpp rewrites a wide volume under a fence at
+    // grown_blocks until nothing above it is in use, then shrink()s it.
+    void fence(std::uint32_t block) { fence_ = block; }
+    // Blocks in use at or above `block` (a walk of the whole tree; ~0u when the walk fails).
+    std::uint32_t used_from(std::uint32_t block);
+    // Rewrites every metadata pair into its other block (lfs_fs_gc with the smallest compaction threshold); under a fence a
+    // pair whose other block lies above it moves to a new block. Two rounds move both blocks of every pair below the fence.
+    Err compact();
+    // Shrinks a mounted wide volume to grown_blocks (one superblock commit, atomic) and remounts it. Err::Exists while a
+    // block at or above grown_blocks is still in use (nothing changes then).
+    Err shrink();
     // Blocks in use. The first call after a change walks the whole tree (every metadata block, tens of ms on a full volume);
     // later calls answer from memory until a write, append, remove, rename, mkdir, format or remount through this object.
     std::uint32_t used_blocks();
@@ -114,10 +131,15 @@ private:
     Err list_raw(const char* dir, Visit v, void* ctx);
     Err open(lfs_file_t& f, const char* path, int flags);
     void changed() { used_known_ = false; }      // every mutating call: the cached used_blocks() figure is stale
+    static int io_read(const lfs_config* c, lfs_block_t b, lfs_off_t o, void* buf, lfs_size_t n);
+    static int io_prog(const lfs_config* c, lfs_block_t b, lfs_off_t o, const void* buf, lfs_size_t n);
+    static int io_erase(const lfs_config* c, lfs_block_t b);
 
     BlockDevice& dev_;
     std::uint32_t blocks_;
     std::uint32_t grown_;
+    std::uint32_t wide_;
+    std::uint32_t fence_ = 0;
     bool mounted_ = false;
     bool used_known_ = false;
     std::uint32_t used_ = 0;

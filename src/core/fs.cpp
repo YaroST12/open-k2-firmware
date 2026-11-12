@@ -4,6 +4,7 @@
 #include "k2/core/fs.hpp"
 
 #include <cstring>
+#include <utility>
 
 namespace k2::fs {
 
@@ -25,12 +26,13 @@ Err map(int e) {
     }
 }
 
-BlockDevice& dev_of(const lfs_config* c) { return *static_cast<BlockDevice*>(c->context); }
-
-int cb_read(const lfs_config* c, lfs_block_t b, lfs_off_t o, void* buf, lfs_size_t n) { return dev_of(c).read(b, o, buf, n); }
-int cb_prog(const lfs_config* c, lfs_block_t b, lfs_off_t o, const void* buf, lfs_size_t n) { return dev_of(c).prog(b, o, buf, n); }
-int cb_erase(const lfs_config* c, lfs_block_t b) { return dev_of(c).erase(b); }
 int cb_sync(const lfs_config*) { return 0; }
+
+int mark_fenced(void* ctx, lfs_block_t b) {
+    auto& c = *static_cast<std::pair<std::uint32_t, std::uint32_t>*>(ctx);
+    c.second += b >= c.first;
+    return 0;
+}
 
 // "<path>.tmp" into out; false when it does not fit.
 bool tmp_name(const char* path, char (&out)[kPathMax]) {
@@ -63,12 +65,26 @@ const char* err_name(Err e) {
     return "?";
 }
 
-Fs::Fs(BlockDevice& dev, std::uint32_t block_count, std::uint32_t grown_blocks)
-    : dev_(dev), blocks_(block_count), grown_(grown_blocks > block_count ? grown_blocks : 0) {
-    cfg_.context = &dev_;
-    cfg_.read = cb_read;
-    cfg_.prog = cb_prog;
-    cfg_.erase = cb_erase;
+// The block device behind littlefs, with the fence: a program or an erase at or above it answers as a bad block.
+int Fs::io_read(const lfs_config* c, lfs_block_t b, lfs_off_t o, void* buf, lfs_size_t n) {
+    return static_cast<Fs*>(c->context)->dev_.read(b, o, buf, n);
+}
+int Fs::io_prog(const lfs_config* c, lfs_block_t b, lfs_off_t o, const void* buf, lfs_size_t n) {
+    Fs& f = *static_cast<Fs*>(c->context);
+    return f.fence_ && b >= f.fence_ ? kIoCorrupt : f.dev_.prog(b, o, buf, n);
+}
+int Fs::io_erase(const lfs_config* c, lfs_block_t b) {
+    Fs& f = *static_cast<Fs*>(c->context);
+    return f.fence_ && b >= f.fence_ ? kIoCorrupt : f.dev_.erase(b);
+}
+
+Fs::Fs(BlockDevice& dev, std::uint32_t block_count, std::uint32_t grown_blocks, std::uint32_t wide_blocks)
+    : dev_(dev), blocks_(block_count), grown_(grown_blocks > block_count ? grown_blocks : 0),
+      wide_(wide_blocks > block_count && wide_blocks != grown_ ? wide_blocks : 0) {
+    cfg_.context = this;
+    cfg_.read = io_read;
+    cfg_.prog = io_prog;
+    cfg_.erase = io_erase;
     cfg_.sync = cb_sync;
     cfg_.read_size = 2;
     cfg_.prog_size = 2;            // half-word programming
@@ -89,11 +105,12 @@ Err Fs::mount() {
     changed();
     // littlefs takes the size from the superblock only when the config says 0, and then trusts any count it finds; an
     // explicit count refuses a mismatch (LFS_ERR_INVAL) after reading just the superblock pair. So: the base size, then
-    // the grown one.
+    // the grown one, then the wide one.
     cfg_.block_count = blocks_;
     int r = lfs_mount(&lfs_, &cfg_);
-    if (r == LFS_ERR_INVAL && grown_ != 0) {
-        cfg_.block_count = grown_;
+    for (const std::uint32_t n : {grown_, wide_}) {
+        if (r != LFS_ERR_INVAL || n == 0) continue;
+        cfg_.block_count = n;
         r = lfs_mount(&lfs_, &cfg_);
     }
     const Err e = map(r);
@@ -121,6 +138,37 @@ Err Fs::grow() {
         mount();
     }
     return e;
+}
+
+std::uint32_t Fs::used_from(std::uint32_t block) {
+    if (!mounted_) return 0;
+    std::pair<std::uint32_t, std::uint32_t> c{block, 0};
+    if (lfs_fs_traverse(&lfs_, mark_fenced, &c) < 0) return ~0u;
+    return c.second;
+}
+
+Err Fs::compact() {
+    if (!mounted_) return Err::NotReady;
+    changed();
+    // lfs_fs_gc compacts every metadata pair whose commit offset is past compact_thresh: 1 takes them all (every fetched
+    // pair has at least its revision word). The value is below the documented minimum (half a block); that check is an
+    // assert, compiled out here (LFS_NO_ASSERT), and lfs_fs_gc itself only needs it below block_size - prog_size.
+    cfg_.compact_thresh = 1;
+    const int r = lfs_fs_gc(&lfs_);
+    cfg_.compact_thresh = 0;
+    return map(r);
+}
+
+Err Fs::shrink() {
+    if (!mounted_) return Err::NotReady;
+    if (grown_ == 0 || lfs_.block_count == grown_) return Err::Ok;
+    if (wide_ == 0 || lfs_.block_count != wide_) return Err::Invalid;
+    changed();
+    // lfs_fs_grow refuses (LFS_ERR_NOTEMPTY) while a block past the new end is in use (LFS_SHRINKNONRELOCATING).
+    const int r = lfs_fs_grow(&lfs_, grown_);
+    unmount();   // the size of the configuration follows the superblock again (a failed commit leaves the old size)
+    const Err m = mount();
+    return r == LFS_ERR_NOTEMPTY ? Err::Exists : r < 0 ? map(r) : m;
 }
 
 Err Fs::mount_or_format(bool& formatted) {

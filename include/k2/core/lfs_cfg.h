@@ -10,4 +10,5 @@
 #define LFS_NO_WARN
 #define LFS_NO_ERROR
 #define LFS_NAME_MAX 40     /* lfs_info lives on the stack: 41 bytes instead of 256 */
+#define LFS_SHRINKNONRELOCATING   /* lfs_fs_grow may shrink a volume whose top blocks are unused (k2/core/fs_migrate.hpp) */
 #endif
