@@ -254,6 +254,15 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   (6) a factory wipe (0x33) erases both rings (`[RING] ... live=0` after it) and leaves 0x080E3800 and 0x080FF800
   byte-identical (`k2_flasher.py backup` before and after); (7) a unit whose kept files do not fit 111 blocks logs
   `deferred` and keeps working at 145 blocks with no cards or captures stored (host-tested only; no such unit on hand).
+  Hardware 2026-11-12 (1.0.0-651-22bd3fee, integ with pdstress-ui and usb-enum): (2) twins, saved cables, settings and
+  the store list identical to the dump taken before the update (`k2-flash-snapshots/2026-11-12/before-ring-639`, cards
+  exported there first; the 3 old cards were dropped by the move as designed); (3) a PD charger test on an Anker IQ4
+  saved `[CARD] save #1`, listed after a reboot, deleted and gone after the next reboot; (4) three captures saved after
+  the run (7 ms each) and listed after a reboot; (5) no ring erase between START and the end of the run (`[BB] ring
+  erase` only while idle afterwards). (1) not seen: the `[FS]` and `[RING]` boot lines were dropped from the binary log
+  queue before USB came up (`[USB] drop=94`), so the move is proven only by its result. Open: with PD Stress results on
+  the volume, every store at its cap leaves 2 free blocks of 111, below the 8 of `fs_migrate::kMarginBlocks`
+  (`tests/test_volume_budget.cpp:210` fails; sizing decision pending).
 - **PD Stress did not release Rd at its end** (open since before 2026-11-11; fixed on `k2/small-fixes`, hardware check
   pending): the run ended with the K2's Rd still on CC, the one a pd-reread presented and the run took over. Every end of a
   run (done, cancelled, a stop that skips the 5 V release, the reboot budget spent) now ends in `PdStressSession::on_finish`
@@ -261,6 +270,10 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   comes back inside `rd_for_run`). Host tests: `tests/test_ui_pdstress.cpp` `test_a_*_gives_the_rd_back`.
   Validate (hardware): `k2_remote pd-reread`, start a PD Stress run, let it finish and again cancel one; afterwards CC1/CC2
   show no K2 Rd (charger-only attach: VBUS drops to 0, cc ~3.3 V) and the log has `[PD] Run start over: Rd off`.
+  Hardware 2026-11-12 (1.0.0-651): NOT fixed for a run started from a pd-reread. The re-read's Rd is a sink operation
+  (`[REREAD] attach taken over: Rd 1, contract 1 stay with the new owner`), not `rd_for_run`, so `on_finish`'s
+  `rd_for_run(false)` is a no-op (no `Run start over` line); after done and after cancel alike the Rd stayed 30 s, at
+  5 V, until `[PD] Contract released: Rd off, unused for 30 s`.
 - **A refused e-marker read kept the last read's mode and acks** (2026-11-11, fixed in 472c40f9, host-tested;
   `tests/test_fusb302_scan.cpp` `test_refused_read_clears_the_last_read`). Validate (hardware): with a sink inline or
   Ra mode on, `k2_remote emarker --json` after a refused read shows `read_mode` none and 0 acks.
@@ -1063,6 +1076,13 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   waiting for a sink) START is refused in the footer (`No PD source`, Caution tone) and nothing changes on CC; (9)
   screenshots in all four rotations show no clipped text. Not built: `k2_remote pd-stress saved` (the saved list over the
   remote needs new remote ops; the page is the only reader today).
+  Hardware 2026-11-12 (1.0.0-651, Anker IQ4): (1)-(8) pass: P1 at 25 % ran 16 transitions in 21 s, score 0, no reboot,
+  stack_free 15,960 -> 15,896 B; save, reopen, discard, close and reopen during a run, BACK -> `Stopping: back to 5V`
+  and VBUS 5.11 V, passive START refused with `No PD source` (Caution); (9) host-covered only. Screenshots in
+  runs/integ-0312/ps. A re-read's Rd lasts about 15 s, so START must follow `pd-reread` at once. UI notes for review:
+  Running has no `seq n/N` line and the right column (Rej / Wait, Out of band, Reboots) shows no values; Results paints
+  `0 issues` amber; the focus of the Save result / Discard rows lands in the empty label column; a P1 cancelled at 12 of
+  16 transitions reads `clean`; the Tools row on a passive K2 reads `NO PD` in red with a red footer.
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
