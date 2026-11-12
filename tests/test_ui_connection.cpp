@@ -3,6 +3,7 @@
 // Connection (pure model): the smart default tab, the port-aware empty states of every tab x topology, the
 // status bar text, the action pop-up with its greyed Spoof, the wrap helper and the protocol line.
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <string>
 #include "test_util.h"
@@ -67,37 +68,53 @@ static void test_empty_states() {
     // Sink
     CHECK_STR(e(Tab::Sink, Topology::DirectReceptacle).title, "NO DEVICE");
     // The two ports share one CC network and one rail (docs/K2_PORTS_SPEC.md): no copy names a port as "the" device port.
-    CHECK_STR(e(Tab::Sink, Topology::DirectReceptacle).hint, "Plug a device into the other port.");
+    CHECK_STR(e(Tab::Sink, Topology::DirectReceptacle).hint, "Plug into the other port");
     CHECK_STR(e(Tab::Sink, Topology::CableSingleCc).title, "NO DEVICE");
-    CHECK_STR(e(Tab::Sink, Topology::CableSingleCc).hint, "Charger is on one port: no device side in this setup.");
-    CHECK_STR(e(Tab::Sink, Topology::NoSource).hint, "Plug a device into either port.");
+    CHECK_STR(e(Tab::Sink, Topology::CableSingleCc).hint, "Charger only in this setup");
+    CHECK_STR(e(Tab::Sink, Topology::NoSource).hint, "Plug into either port");
     CHECK_STR(e(Tab::Sink, Topology::Unknown).title, "NO DEVICE");
-    CHECK_STR(e(Tab::Sink, Topology::Unknown).hint, "Plug a device into either port.");
+    CHECK_STR(e(Tab::Sink, Topology::Unknown).hint, "Plug into either port");
     // Cable
     CHECK_STR(e(Tab::Cable, Topology::DirectReceptacle).title, "NO CABLE");
-    CHECK_STR(e(Tab::Cable, Topology::DirectReceptacle).hint, "Charger is plugged straight in (no cable).");
+    CHECK_STR(e(Tab::Cable, Topology::DirectReceptacle).hint, "Charger plugged in direct");
     CHECK_STR(e(Tab::Cable, Topology::CableSingleCc).title, "CABLE NOT READ");
-    CHECK_STR(e(Tab::Cable, Topology::CableSingleCc).hint, "OK -> Read cable (unplug the charger first).");
+    CHECK_STR(e(Tab::Cable, Topology::CableSingleCc).hint, "Unplug the charger to read");
     CHECK_STR(e(Tab::Cable, Topology::Unknown).title, "NO CABLE READ");
-    CHECK_STR(e(Tab::Cable, Topology::Unknown).hint, "Plug a cable into either port, then OK -> Read cable.");
+    CHECK_STR(e(Tab::Cable, Topology::Unknown).hint, "Plug a cable into a port");
     CHECK_STR(e(Tab::Cable, Topology::NoSource).title, "NO CABLE READ");
-    // Titles fit the big font (12 px per character) in 224 px; every hint wraps into at most 4 lines of 27.
+    // Titles fit the band (S24 from x32, 15 cells); every hint is ONE line of 26 cells, and no hint names a key.
     for (int t = 0; t < kTabs; t++) {
         for (int o = 0; o < 4; o++) {
             const Empty em = e(static_cast<Tab>(t), static_cast<Topology>(o));
-            CHECK_EQ(std::strlen(em.title) <= 18, 1);
-            std::array<std::string_view, 4> ln{};
-            const int n = wrap(em.hint, 27, ln);
-            CHECK_EQ(n >= 1 && n <= 4, 1);
-            std::string joined;
-            for (int i = 0; i < n; i++) { CHECK_EQ(ln[std::size_t(i)].size() <= 27, 1); joined += (i ? " " : ""); joined += std::string(ln[std::size_t(i)]); }
-            CHECK_STR(joined.c_str(), em.hint);   // nothing lost in the wrap
+            CHECK_EQ(std::strlen(em.title) <= 15, 1);
+            CHECK_EQ(std::strlen(em.hint) <= 26, 1);
+            CHECK_EQ(std::strstr(em.hint, "OK") == nullptr && std::strstr(em.hint, "START") == nullptr, 1);
         }
     }
 }
 
 // A K2 that sees a live line it did not make (VBUS, or a sink's Rd on the far side) says "in use", never "no device",
 // and never names a port: a dock -> K2 -> laptop chain with no PD traffic of its own showed NO DEVICE on the Sink tab.
+// An empty tab's footer never repeats its band (user, 2026-11-12: "NO CABLE READ" over "No cable"): it names the other two
+// tabs, never its own, and fits the 27-cell bar.
+static void test_empty_footer_never_repeats_the_band() {
+    for (int t = 0; t < kTabs; t++)
+        for (int o = 0; o < 4; o++)
+            for (int w = 0; w < 4; w++) {
+                Facts f = facts(false, false, false, static_cast<Topology>(o), false, static_cast<raguard::WaitKind>(w));
+                const Tab tab = static_cast<Tab>(t);
+                StatusIn in;
+                in.tab = tab; in.f = f;
+                StrBuf<40> s;
+                status_text(in, s);
+                std::string low(s.view());
+                for (char &c : low) c = char(std::tolower(static_cast<unsigned char>(c)));
+                const char *own = tab == Tab::Source ? "charger" : tab == Tab::Cable ? "cable" : "device";
+                CHECK_EQ(low.find(own) == std::string::npos, true);
+                CHECK_EQ(s.view().size() <= kStatusCells, true);
+            }
+}
+
 static void test_empty_states_when_possibly_inline() {
     const auto e = [](Tab t, Topology o) { return empty_state(t, facts(true, false, false, o)); };
     for (int t = 0; t < kTabs; t++) {
@@ -106,13 +123,8 @@ static void test_empty_states_when_possibly_inline() {
             CHECK_EQ(std::strstr(em.title, "NO DEVICE") == nullptr, 1);
             CHECK_EQ(std::strstr(em.title, "NO CHARGER") == nullptr, 1);
             CHECK_EQ(std::strstr(em.hint, "bottom") == nullptr && std::strstr(em.hint, "top port") == nullptr, 1);
-            CHECK_EQ(std::strlen(em.title) <= 18, 1);
-            std::array<std::string_view, 4> ln{};
-            const int n = wrap(em.hint, 27, ln);
-            CHECK_EQ(n >= 1 && n <= 4, 1);
-            std::size_t kept = 0;
-            for (int i = 0; i < n; i++) kept += ln[std::size_t(i)].size();
-            CHECK_EQ(kept + std::size_t(n - 1) >= std::strlen(em.hint), 1);   // nothing lost in the wrap
+            CHECK_EQ(std::strlen(em.title) <= 15, 1);
+            CHECK_EQ(std::strlen(em.hint) <= 26, 1);
         }
     }
     CHECK_STR(e(Tab::Source, Topology::Unknown).title, "LINE IN USE");
@@ -136,18 +148,18 @@ static void test_crossed_cc_reads_on_the_tab_and_the_bar() {
     StrBuf<40> s;
     StatusIn in;
     in.tab = Tab::Source; in.f = f;
-    status_text(in, s); CHECK_STR(s.c_str(), "CC CROSSED - flip one cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
     CHECK_EQ(s.view().size() <= kStatusCells, 1);
     f.cross = CrossKind::Hint;
     f.wait = raguard::WaitKind::ChargerWaiting;
     CHECK_STR(empty_state(Tab::Source, f).title, "FLIP A CABLE?");
     in.f = f;
-    status_text(in, s); CHECK_STR(s.c_str(), "Flip a cable?");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
     // None: the other words are untouched.
     f.cross = CrossKind::None;
     CHECK_STR(empty_state(Tab::Source, f).title, "CHARGER WAITING");
     in.f = f;
-    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, via cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
     // The Cable and Sink tabs keep their own words.
     f.cross = CrossKind::Crossed;
     CHECK_STR(empty_state(Tab::Sink, f).title, "NO DEVICE");
@@ -181,9 +193,9 @@ static void test_status_diag_verdict() {
     status_text(in, s); CHECK_STR(s.c_str(), "Live sink: OK again");
     in.op = {};
     in.tab = Tab::Sink;
-    status_text(in, s); CHECK_STR(s.c_str(), "No device, via cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger, no cable read");
     in.tab = Tab::Cable;
-    status_text(in, s); CHECK_STR(s.c_str(), "No cable, via cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger, no device");
     in.tab = Tab::Source;
     in.diag = {};
     status_text(in, s); CHECK_STR(s.c_str(), "Charger, via cable");
@@ -198,19 +210,19 @@ static void test_source_asleep_hint_on_the_tab_and_the_bar() {
     f.open_cc_mv = 2995; f.vbus_mv = 60; f.wake_port_off = true;
     CHECK_EQ(source_asleep(f), 1);
     CHECK_STR(empty_state(Tab::Source, f).title, "SOURCE ASLEEP");
-    CHECK_STR(empty_state(Tab::Source, f).hint, "Source asleep: START or Refresh wakes it.");
+    CHECK_STR(empty_state(Tab::Source, f).hint, "Refresh or a test wakes it");
     StrBuf<40> s;
     StatusIn in;
     in.tab = Tab::Source; in.f = f;
     status_text(in, s);
-    CHECK_STR(s.c_str(), "Source asleep: START wakes");
+    CHECK_STR(s.c_str(), "No device, no cable read");
     CHECK_EQ(s.view().size() <= kStatusCells, 1);   // the bar is 27 cells
     // A waiting charger's open Rp reads the 3.3 V rail: outside the window, the waiting words stay.
     f.open_cc_mv = 3300; f.wait = raguard::WaitKind::ChargerWaiting;
     CHECK_EQ(source_asleep(f), 0);
     CHECK_STR(empty_state(Tab::Source, f).title, "CHARGER WAITING");
     in.f = f;
-    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
     // The CC2 bias net (1.69 V) is below the window: plain "NO CHARGER".
     f.open_cc_mv = 1690; f.wait = raguard::WaitKind::Unknown;
     CHECK_EQ(source_asleep(f), 0);
@@ -255,29 +267,23 @@ static void test_silent_cable_chip_words() {
     CHECK_STR(empty_state(Tab::Cable, in).title, "CABLE NOT READ");
     CHECK_STR(empty_state(Tab::Source, cable_f(Fact::ChipSilent)).title, "NO CHARGER");
     CHECK_STR(empty_state(Tab::Sink, cable_f(Fact::NoChip)).title, "NO DEVICE");
-    // Both hints wrap into the empty body's four lines of (224 - 16) / 8 = 26 cells (font 16), whole words, and the
-    // titles fit the 17-cell title font.
-    std::array<std::string_view, 4> l{};
+    // Both hints are one line of 26 cells (font 16) and the titles fit the band's 15 cells of font 24.
     for (const Empty *e : {&silent, &none}) {
-        const int n = wrap(e->hint, 26, l);
-        CHECK(n >= 1 && n <= 4);
-        std::size_t total = 0;
-        for (int i = 0; i < n; i++) total += l[std::size_t(i)].size();
-        CHECK(total + std::size_t(n - 1) >= std::string_view(e->hint).size());   // nothing cut off by the line cap
-        CHECK(std::string_view(e->title).size() <= 17);
+        CHECK(std::string_view(e->hint).size() <= 26);
+        CHECK(std::string_view(e->title).size() <= 15);
     }
     // The status bar: the fact in place of "No cable", the topology word after it, always within the 27-cell bar.
     StatusIn sin;
     sin.tab = Tab::Cable;
     StrBuf<40> s;
     sin.f = cable_f(Fact::ChipSilent);
-    status_text(sin, s); CHECK_STR(s.c_str(), "Chip silent");
+    status_text(sin, s); CHECK_STR(s.c_str(), "No charger, no device");
     sin.f = cable_f(Fact::ChipSilent, Topology::CableSingleCc);
-    status_text(sin, s); CHECK_STR(s.c_str(), "Chip silent, via cable");
+    status_text(sin, s); CHECK_STR(s.c_str(), "No charger, no device");
     sin.f = cable_f(Fact::NoChip, Topology::DirectReceptacle);
-    status_text(sin, s); CHECK_STR(s.c_str(), "No chip found, top plug");
+    status_text(sin, s); CHECK_STR(s.c_str(), "No charger, no device");
     sin.f = cable_f(Fact::NotRead);
-    status_text(sin, s); CHECK_STR(s.c_str(), "No cable");
+    status_text(sin, s); CHECK_STR(s.c_str(), "No charger, no device");
     sin.f = cable_f(Fact::Read); sin.f.cable = true;
     status_text(sin, s); CHECK_STR(s.c_str(), "Cable read");
 }
@@ -304,7 +310,7 @@ static void test_source_tab_reads_the_waiting_classifier() {
     CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting)).title,
               "CHARGER WAITING");   // RED until the fix: the topology alone says "NO CHARGER"
     CHECK_STR(empty_state(Tab::Source, facts(false, false, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting)).hint,
-              "Charger waits for a sink: start a charger test.");
+              "Start a charger test");
     const Empty ph = empty_state(Tab::Source, facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::DualRolePort));
     CHECK_STR(ph.title, "DUAL-ROLE PORT");   // RED until the fix: a toggling phone still says "CHARGER WAITING"/"NO CHARGER"
     CHECK_EQ(std::strlen(ph.title) <= 18, 1);
@@ -326,15 +332,15 @@ static void test_bar_reads_the_waiting_classifier() {
     StatusIn in;
     in.tab = Tab::Source;
     in.f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::ChargerWaiting);
-    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, via cable");   // RED until the fix: "No charger, via cable"
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");   // an empty tab: the other two tabs
     CHECK_EQ(s.view().size() <= kStatusCells, 1);
     in.f = facts(false, false, false, Topology::DirectReceptacle, false, raguard::WaitKind::ChargerWaiting);
-    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, top plug");    // RED until the fix: "No charger, top plug"
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");   // an empty tab: the other two tabs
     in.f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::DualRolePort);
-    status_text(in, s); CHECK_STR(s.c_str(), "Dual-role port, via cable");    // RED until the fix
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");   // an empty tab: the other two tabs
     CHECK_EQ(s.view().size() <= kStatusCells, 1);
     in.f = facts(false, false, false, Topology::CableSingleCc, false, raguard::WaitKind::NoSource);
-    status_text(in, s); CHECK_STR(s.c_str(), "No charger, via cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
     in.f = facts(false, true, false, Topology::Unknown, false, raguard::WaitKind::ChargerWaiting);
     status_text(in, s); CHECK_STR(s.c_str(), "Charger");   // a charger already attached wins
 }
@@ -358,7 +364,7 @@ static void test_the_three_readers_agree() {
     StrBuf<40> s;
     StatusIn in;
     in.tab = Tab::Source; in.f = f;
-    status_text(in, s); CHECK_STR(s.c_str(), "Charger waiting, via cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
 
     pd::Link phone;
     for (std::uint32_t t = 0; t <= 1000; t += 20) feed(phone, t, 0, (t / 100) % 2 == 0 ? 3300 : 0);   // Rp toggling every 100 ms
@@ -367,7 +373,7 @@ static void test_the_three_readers_agree() {
     f = facts(false, false, false, Topology::CableSingleCc, false, phone.wait_kind());
     CHECK_STR(empty_state(Tab::Source, f).title, "DUAL-ROLE PORT");
     in.f = f;
-    status_text(in, s); CHECK_STR(s.c_str(), "Dual-role port, via cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
 
     pd::Link none;
     for (std::uint32_t t = 0; t <= 1000; t += 20) feed(none, t, 0, 1707);   // idle CC2 only
@@ -376,7 +382,7 @@ static void test_the_three_readers_agree() {
     f = facts(false, false, false, Topology::NoSource, false, none.wait_kind());
     CHECK_STR(empty_state(Tab::Source, f).title, "NO CHARGER");
     in.f = f;
-    status_text(in, s); CHECK_STR(s.c_str(), "No charger");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
 
     // Not passive (the K2 holds the lines itself, e.g. a pinned boot): the classifier is void, the trace dropped.
     pd::Link active;
@@ -403,15 +409,15 @@ static void test_status_text() {
     StrBuf<40> s;
     StatusIn in;
     in.tab = Tab::Source; in.f = facts(false, false, false);
-    status_text(in, s); CHECK_STR(s.c_str(), "No charger");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
     in.f = facts(false, false, false, Topology::DirectReceptacle);
-    status_text(in, s); CHECK_STR(s.c_str(), "No charger, top plug");     // the topology word is in the bar
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");   // an empty tab: the other two tabs
     in.f = facts(false, false, false, Topology::CableSingleCc);
-    status_text(in, s); CHECK_STR(s.c_str(), "No charger, via cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");
     in.f = facts(false, true, false);
     status_text(in, s); CHECK_STR(s.c_str(), "Charger");
     in.tab = Tab::Cable;
-    status_text(in, s); CHECK_STR(s.c_str(), "No cable");
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger, no device");
     in.f = facts(false, true, true);
     status_text(in, s); CHECK_STR(s.c_str(), "Cable read");
     in.tab = Tab::Sink; in.f = facts(true, true, true);
@@ -419,7 +425,7 @@ static void test_status_text() {
     in.f = facts(false, true, true, Topology::Unknown, true);   // seen on CC but not inline any more
     status_text(in, s); CHECK_STR(s.c_str(), "Sink seen on CC");
     in.f = facts(false, false, false);
-    status_text(in, s); CHECK_STR(s.c_str(), "No device");
+    status_text(in, s); CHECK_STR(s.c_str(), "No charger, no cable read");
     // An action message wins; the spoof note shows only with a charger already attached.
     in.op = "Reading cable...";
     status_text(in, s); CHECK_STR(s.c_str(), "Reading cable...");
@@ -462,13 +468,13 @@ static void test_status_survey() {
     in.tab = Tab::Source; in.f = facts(false, true, true);
     pd::Survey sv;
     in.sv = &sv;
-    status_text(in, s); CHECK_STR(s.c_str(), "OK > Refresh to read all");   // nothing asked yet, same words on every tab
+    status_text(in, s); CHECK_STR(s.c_str(), "Source caps not read yet");   // nothing asked yet: the fact, per tab
     in.tab = Tab::Cable;
-    status_text(in, s); CHECK_STR(s.c_str(), "OK > Refresh to read all");
+    status_text(in, s); CHECK_STR(s.c_str(), "Cable not fully read yet");
     in.tab = Tab::Sink; in.f = facts(true, true, true);
     status_text(in, s); CHECK_STR(s.c_str(), "Device inline");              // the sink side is passive: nothing for Refresh to read
     in.tab = Tab::Source; in.f = facts(false, false, false);
-    status_text(in, s); CHECK_STR(s.c_str(), "No charger");                 // an empty tab has no fields to ask
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, no cable read");                 // an empty tab has no fields to ask
     in.f = facts(false, true, true);
 
     sv.start(kLive, 1000);                                                  // running: progress, resolved / planned
@@ -605,26 +611,11 @@ static void test_actions() {
 // and Identify is refused with the same words when the settled verdict is no-PD - except the alone path
 // (a dual-role phone alone is PD-capable).
 static void test_no_pd_gate() {
-    // Copy fits: the titles at 8 px/char in 224 px (28 cells), the body at 26 cells x 6 lines.
-    CHECK_EQ(std::strlen(kNoPdSinkTitle) <= 28, 1);
-    CHECK_EQ(std::strlen(kNoPdSourceTitle) <= 28, 1);
+    // Copy fits: the band word and the one line are width-checked in text/connection.hpp; the refusal fits the pop-up "why".
     CHECK_EQ(std::strlen(kWhyNoPd) <= 24, 1);
-    CHECK_STR(no_pd_title(Tab::Sink), kNoPdSinkTitle);
-    CHECK_STR(no_pd_title(Tab::Source), kNoPdSourceTitle);
-    CHECK_STR(no_pd_case(pd::PdNoneWhy::SinkSilentSourceOffered), kNoPdCaseOffered);
-    CHECK_STR(no_pd_case(pd::PdNoneWhy::SourceNeverOffered), kNoPdCaseNever);
-    {   // the whole Sink message (line2 + the case) wraps into at most 6 lines of 26 cells, nothing lost
-        std::array<std::string_view, 6> ln;
-        std::string all = std::string(kNoPdSinkLine2) + " " + kNoPdCaseOffered;
-        const int n = wrap(all, 26, ln);
-        CHECK(n >= 1 && n <= 6);
-        std::string joined;
-        for (int i = 0; i < n; i++) joined += std::string(ln[std::size_t(i)]) + " ";
-        CHECK(joined.find("identified") != std::string::npos);   // the wrap lost nothing
-        CHECK(joined.find("unanswered") != std::string::npos);
-        all = std::string(kNoPdSinkLine2) + " " + kNoPdCaseNever;
-        CHECK(wrap(all, 26, ln) <= 6);
-    }
+    CHECK_STR(no_pd_line(Tab::Sink, pd::PdNoneWhy::SinkSilentSourceOffered), text::conn::kNoPdUnansweredL);
+    CHECK_STR(no_pd_line(Tab::Sink, pd::PdNoneWhy::SourceNeverOffered), text::conn::kNoPdNeverL);
+    CHECK_STR(no_pd_line(Tab::Source, pd::PdNoneWhy::SourceNeverOffered), text::conn::kNoPdNeverL);
     // The gate: Identify refused with the tab's own words when the verdict is no-PD and a device is on the line.
     std::array<Item, kMaxItems> it{};
     ActFacts a;
@@ -697,6 +688,7 @@ int main() {
     test_topology_word();
     test_empty_states();
     test_empty_states_when_possibly_inline();
+    test_empty_footer_never_repeats_the_band();
     test_source_tab_reads_the_waiting_classifier();
     test_bar_reads_the_waiting_classifier();
     test_the_three_readers_agree();

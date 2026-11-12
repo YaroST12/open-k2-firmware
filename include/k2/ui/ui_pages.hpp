@@ -775,6 +775,13 @@ private:
     void paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
     // The no-PD body (ROADMAP 2026-11-10, Row C): one short message plus the 2-3 measured rows.
     void paint_no_pd_body(const MatchResult &r, bool redraw);
+    // The no-PD gate (ROADMAP 2026-11-10, Row C): the Sink tab on any no-PD verdict with a device on the line, the Source tab
+    // only when the source never offered PD. The Cable tab and the Details page never.
+    bool no_pd_body() const {
+        return verdict_ == pd::PdVerdict::None && !more_ &&
+               (tab_ == conn::Tab::Sink ? (facts_.inline_sink || facts_.sink_seen)
+                                        : tab_ == conn::Tab::Source && none_why_ == pd::PdNoneWhy::SourceNeverOffered);
+    }
     void paint_tab_indicator();
     void paint_empty();
     void paint_popup(uint32_t now_ms);

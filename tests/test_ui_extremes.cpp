@@ -184,12 +184,12 @@ static void test_pd_tabs_text() {
         check_text(ui, 6, 67, 50, 82, kLabelFont, "PD", kDim, kBg);   // key at x 6, row_y+5
         parity(ui, 1300);
     }
-    // Short + moves to the Cable tab: no cable read, so the port-aware empty state names it.
+    // Short + moves to the Cable tab: no cable read, so the verdict band names it.
     ui.on_button(Button::Plus, ButtonEvent::Short, 1400);
     ui.tick(1700);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1700);
-        check_text(ui, 8, 74, 216, 102, kMid, "NO CABLE READ", kText, kBg);
+        check_text(ui, 32, 48, 220, 78, kMid, "NO CABLE READ", kText, kSurface);   // the verdict band (UI_SYSTEM 5.8)
         parity(ui, 1700);
     }
     CHECK_EQ(g_stub.requests + g_stub.scans + g_stub.rescans, 0);

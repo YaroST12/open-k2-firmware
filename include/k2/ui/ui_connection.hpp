@@ -25,6 +25,7 @@
 #include "k2/pd/pd_tabs.hpp"
 #include "k2/pd/pd_verdict.hpp"
 #include "k2/pd/ra_guard.hpp"
+#include "k2/ui/text/connection.hpp"
 #include "k2/ui/ui_calc.hpp"
 
 namespace k2::conn {
@@ -65,9 +66,7 @@ constexpr bool source_asleep(const Facts &f) {
     return !f.charger && !f.inline_sink && f.vbus_mv >= 0 && f.vbus_mv < raguard::kVbusAttachedMv &&
            pd::standby_signature(f.open_cc_mv) && f.wake_port_off;
 }
-inline constexpr const char *kAsleepTitle = "SOURCE ASLEEP";
-inline constexpr const char *kAsleepHint = "Source asleep: START or Refresh wakes it.";
-inline constexpr const char *kAsleepBar = "Source asleep: START wakes";   // 26 cells of the 27-cell bar
+namespace tx = text::conn;   // the page copy (include/k2/ui/text/connection.hpp)
 
 // The tab to open on: Sink when a device is inline or was seen on CC, else Source when a charger is seen,
 // else Cable when a cable is present, else Source (empty).
@@ -87,7 +86,7 @@ constexpr const char *topology_word(Topology t) {
     return t == Topology::DirectReceptacle ? "top plug" : t == Topology::CableSingleCc ? "via cable" : "";
 }
 
-// Empty state of a tab: a large message and one hint (wrapped by the page).
+// Empty state of a tab: the verdict band's word and the one line under it (text::conn, width-checked there).
 struct Empty { const char *title; const char *hint; };
 
 // The two ports share one CC network and one rail (docs/K2_PORTS_SPEC.md), so no text names one port as the device's.
@@ -97,36 +96,36 @@ constexpr Empty empty_state(Tab t, const Facts &f) {
     const bool direct = f.topo == Topology::DirectReceptacle, via_cable = f.topo == Topology::CableSingleCc;
     switch (t) {
     case Tab::Source:
-        if (f.inline_sink) return {"LINE IN USE", "VBUS is live, no source PD seen: a device may be in use."};
+        if (f.inline_sink) return {tx::kLineInUse, tx::kLineInUseL};
         // Crossed CC (pd::Link::cc_cross): the two cables' CC wires land on different K2 lines, so neither far end finds a
         // partner. It outranks the waiting words, which would read the loaded Rp as a charger and the toggle as a phone.
-        if (f.cross == raguard::CrossKind::Crossed) return {"CC CROSSED", "Flip one of the two cables (the CC wires meet no partner)."};
-        if (f.cross == raguard::CrossKind::Hint) return {"FLIP A CABLE?", "A charger waits, nothing answers: try flipping a cable."};
+        if (f.cross == raguard::CrossKind::Crossed) return {tx::kCrossed, tx::kCrossedL};
+        if (f.cross == raguard::CrossKind::Hint) return {tx::kFlip, tx::kFlipL};
         // A sleeping source (pattern slow-rp-wake): an open line in the standby-signature window with VBUS dark
         // and no idle Rd hold. It outranks the waiting words: the standby pull-up also reads as an Rp to the
         // trace, but it never answers - only an Rd (START or Refresh) wakes it.
-        if (source_asleep(f)) return {kAsleepTitle, kAsleepHint};
+        if (source_asleep(f)) return {tx::kAsleep, tx::kAsleepL};
         // The one waiting classifier (f.wait, the Rp trace): a steady Rp = a charger waiting for a sink; a toggling
         // Rp = a dual-role port (a phone alone) looking for a partner, not a charger.
-        if (f.wait == raguard::WaitKind::ChargerWaiting) return {"CHARGER WAITING", "Charger waits for a sink: start a charger test."};
-        if (f.wait == raguard::WaitKind::DualRolePort) return {"DUAL-ROLE PORT", "A phone? It toggles Rp looking for a partner; START makes it source 5 V."};
-        return {"NO CHARGER", "Use either port"};   // one line: the footer already states "No charger"
+        if (f.wait == raguard::WaitKind::ChargerWaiting) return {tx::kWaiting, tx::kWaitingL};
+        if (f.wait == raguard::WaitKind::DualRolePort) return {tx::kDualRole, tx::kDualRoleL};
+        return {tx::kNoCharger, tx::kNoChargerL};
     case Tab::Sink:
-        if (f.inline_sink) return {"DEVICE IN USE", "Something is on the line behind the K2: nothing is asked of it."};
-        if (direct) return {"NO DEVICE", "Plug a device into the other port."};
-        if (via_cable) return {"NO DEVICE", "Charger is on one port: no device side in this setup."};
-        return {"NO DEVICE", "Plug a device into either port."};
+        if (f.inline_sink) return {tx::kDevInUse, tx::kDevInUseL};
+        if (direct) return {tx::kNoDevice, tx::kNoDevDirectL};
+        if (via_cable) return {tx::kNoDevice, tx::kNoDevViaL};
+        return {tx::kNoDevice, tx::kNoDevL};
     case Tab::Cable:
-        if (f.inline_sink) return {"CABLE NOT READ", "A device may be in use: OK -> Read cable asks first."};
+        if (f.inline_sink) return {tx::kCableNotRead, tx::kCableInUseL};
         // A silent chip is not "no e-marker": its pull-down is on the cable, it only did not answer alone (it answers once a
         // source powers it). No pull-down at all means no chip. Both come from the Ra probe of an alone read (pull_down()).
         if (f.cable_fact == cablefact::Fact::ChipSilent)
-            return {"CHIP, NO ANSWER", "A chip is there but did not answer alone. Try with the charger attached."};
+            return {tx::kChipSilent, tx::kChipSilentL};
         if (f.cable_fact == cablefact::Fact::NoChip)
-            return {"NO CHIP FOUND", "Nothing on the cable pulls VCONN down: a plain cable with no e-marker."};
-        if (direct) return {"NO CABLE", "Charger is plugged straight in (no cable)."};
-        if (via_cable) return {"CABLE NOT READ", "OK -> Read cable (unplug the charger first)."};
-        return {"NO CABLE READ", "Plug a cable into either port, then OK -> Read cable."};
+            return {tx::kNoChip, tx::kNoChipL};
+        if (direct) return {tx::kNoCable, tx::kNoCableL};
+        if (via_cable) return {tx::kCableNotRead, tx::kCableViaL};
+        return {tx::kNoCableRead, tx::kNoCableReadL};
     }
     return {"", ""};
 }
@@ -193,7 +192,10 @@ constexpr const char *sv_word(const pd::SvEntry &e) {
     return "";
 }
 
-inline constexpr const char *kRefreshHint = "OK > Refresh to read all";   // one message, the same on every tab
+// A field of the open tab was never asked: the fact, per tab (no key name; the Refresh item reads it).
+constexpr const char *unread_text(Tab t) {
+    return t == Tab::Source ? tx::kSourceUnread : t == Tab::Cable ? tx::kCableUnread : tx::kSinkUnread;
+}
 inline constexpr std::size_t kStatusCells = 27;                            // the footer line (static_asserted against it by the page)
 
 // "Read: 5 got, 2 unsupported": the footer holds 27 cells, "2 not supported" would make the line 28, so the short word. A
@@ -209,6 +211,20 @@ void read_summary(const pd::Survey &s, StrBuf<N> &out) {
     }
 }
 
+// The state of each tab in footer words, lower case (the footer capitalises the first): what an empty tab's footer says
+// about the other two.
+constexpr const char *source_word(const Facts &f) {
+    return f.charger ? "charger" : f.wait == raguard::WaitKind::ChargerWaiting ? "charger waiting"
+           : f.wait == raguard::WaitKind::DualRolePort ? "dual-role port" : "no charger";
+}
+constexpr const char *cable_word(const Facts &f) {
+    return f.cable ? "cable read" : f.cable_fact == cablefact::Fact::ChipSilent ? "chip silent"
+           : f.cable_fact == cablefact::Fact::NoChip ? "no e-marker" : "no cable read";
+}
+constexpr const char *sink_word(const Facts &f) {
+    return f.inline_sink ? "device inline" : f.sink_seen ? "sink on CC" : "no device";
+}
+
 // ---- status bar -------------------------------------------------------------------------------------
 struct StatusIn {
     Tab tab = Tab::Source;
@@ -217,6 +233,7 @@ struct StatusIn {
     bool spoof_armed = false;   // a saved cable is armed for the next charger test or attach
     const pd::Survey *sv = nullptr;   // the Refresh survey (nullptr: none, the old status only)
     std::string_view diag;      // the PD diagnosis verdict of the session (pd::diag::screen::verdict), "" = no PD session
+    bool no_pd = false;         // the tab shows the no-PD body: there are no caps to read, so no "not read yet"
 };
 
 // The bottom bar: an action message wins; then the spoof note when a charger is already attached (the
@@ -227,32 +244,23 @@ template <std::size_t N>
 void status_text(const StatusIn &s, StrBuf<N> &out) {
     out.clear();
     if (!s.op.empty()) { out.put(s.op); return; }
-    if (s.spoof_armed && s.f.charger) { out.put("Armed, replug to apply"); return; }
+    if (s.spoof_armed && s.f.charger) { out.put(tx::kArmedBar); return; }
     if (s.sv && s.sv->running()) { out.put("Reading ").put_u32(s.sv->resolved()).put_char('/').put_u32(s.sv->planned()); return; }
     if (s.tab == Tab::Source && !s.diag.empty()) { out.put(s.diag); return; }
     if (s.sv) {
-        if (!tab_empty(s.tab, s.f) && tab_unasked(s.tab, *s.sv)) { out.put(kRefreshHint); return; }
+        if (!s.no_pd && !tab_empty(s.tab, s.f) && tab_unasked(s.tab, *s.sv)) { out.put(unread_text(s.tab)); return; }
         if (s.sv->ran() && s.tab != Tab::Sink && !tab_empty(s.tab, s.f)) { read_summary(*s.sv, out); return; }
     }
-    switch (s.tab) {
-    case Tab::Source:
-        // The same waiting classifier as the tab (f.wait): the bar never disagrees with it. The crossed-CC words fill the whole
-        // bar (27 cells), so no topology word follows them.
-        if (!s.f.charger && !s.f.inline_sink && s.f.cross == raguard::CrossKind::Crossed) { out.put("CC CROSSED - flip one cable"); return; }
-        if (!s.f.charger && !s.f.inline_sink && s.f.cross == raguard::CrossKind::Hint) { out.put("Flip a cable?"); return; }
-        if (source_asleep(s.f)) { out.put(kAsleepBar); return; }   // same verdict as the tab, bar-length words
-        if (s.f.charger) out.put("Charger");
-        else if (s.f.wait == raguard::WaitKind::ChargerWaiting) out.put("Charger waiting");
-        else if (s.f.wait == raguard::WaitKind::DualRolePort) out.put("Dual-role port");
-        else out.put("No charger");
-        break;
-    case Tab::Cable:
-        out.put(s.f.cable ? "Cable read"
-                : s.f.cable_fact == cablefact::Fact::ChipSilent ? "Chip silent"
-                : s.f.cable_fact == cablefact::Fact::NoChip ? "No chip found" : "No cable");
-        break;
-    case Tab::Sink:   out.put(s.f.inline_sink ? "Device inline" : s.f.sink_seen ? "Sink seen on CC" : "No device"); break;
+    // An empty tab's band already names its own state: the footer never repeats it (user, 2026-11-12) and states what the
+    // other two tabs hold instead, the nearer one first ("Charger, no device"), the second only while it fits.
+    if (tab_empty(s.tab, s.f)) {
+        const char *a = s.tab == Tab::Source ? sink_word(s.f) : source_word(s.f);
+        const char *b = s.tab == Tab::Cable ? sink_word(s.f) : cable_word(s.f);
+        out.put_char(static_cast<char>(a[0] - ('a' - 'A'))).put(a + 1);
+        if (std::string_view(a).size() + 2 + std::string_view(b).size() <= kStatusCells) out.put(", ").put(b);
+        return;
     }
+    out.put(s.tab == Tab::Source ? "Charger" : s.tab == Tab::Cable ? "Cable read" : s.f.inline_sink ? "Device inline" : "Sink seen on CC");
     const char *w = topology_word(s.f.topo);
     if (w[0]) out.put(", ").put(w);
 }
@@ -314,17 +322,9 @@ constexpr int actions(Tab t, const ActFacts &a, std::array<Item, kMaxItems> &out
 // With the settled verdict "no PD" the tab drops its placeholder rows and says so in one short message,
 // then keeps only the 2-3 rows that are actually measured. The words fit the 240x240 kit (wrapped at 26
 // cells, no truncation in any rotation - tests/test_ui_connection.cpp checks the wrap).
-inline constexpr const char *kNoPdSinkTitle = "No PD from this device";   // 22 cells
-inline constexpr const char *kNoPdSourceTitle = "No PD from the source";  // 21 cells
-inline constexpr const char *kNoPdSinkLine2 =
-    "It takes USB power without talking PD, so it can't be identified.";    // 65 chars, wraps at 26 cells
-// Why the sink stayed silent (the two cases the verdict distinguishes).
-inline constexpr const char *kNoPdCaseOffered = "The source's PD offers went unanswered.";  // 39 chars
-inline constexpr const char *kNoPdCaseNever = "The source never offered PD.";             // 28 chars
-
-constexpr const char *no_pd_title(Tab t) { return t == Tab::Source ? kNoPdSourceTitle : kNoPdSinkTitle; }
-constexpr const char *no_pd_case(pd::PdNoneWhy w) {
-    return w == pd::PdNoneWhy::SinkSilentSourceOffered ? kNoPdCaseOffered : kNoPdCaseNever;
+// The band word is tx::kNoPd on both tabs; the line says which case it is.
+constexpr const char *no_pd_line(Tab t, pd::PdNoneWhy w) {
+    return t == Tab::Sink && w == pd::PdNoneWhy::SinkSilentSourceOffered ? tx::kNoPdUnansweredL : tx::kNoPdNeverL;
 }
 
 // ---- protocol line ----------------------------------------------------------------------------------

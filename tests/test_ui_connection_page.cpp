@@ -410,10 +410,10 @@ static void test_source_tab_leaves_waiting_after_timeout() {
     CHECK_EQ(int(ui.link().waiting()), 0);             // the timeout ended the wait
 }
 
-// The no-PD body's geometry (ui_connection_page.cpp): rows from y 160, pitch 20, value at x 64.
+// The no-PD body's geometry (ui_connection_page.cpp): rows from y 108, pitch 20, value at x 64.
 static int nopd_hairlines() {
     int n = 0;
-    for (int y = 160; y < 222; y += 20) {
+    for (int y = 108; y < 222; y += 20) {
         int rule = 0;
         for (int x = 0; x < LCD_WIDTH; x++) rule += g_panel[y * LCD_WIDTH + x] == kRule;
         if (rule >= LCD_WIDTH - 20) n++;
@@ -422,7 +422,7 @@ static int nopd_hairlines() {
 }
 
 static bool nopd_row_value_is(int idx, const char *text, uint16_t colour = kText) {
-    constexpr int kValX = 64, kPitch = 20, kRowY0 = 160;
+    constexpr int kValX = 64, kPitch = 20, kRowY0 = 108;
     constexpr int W = 224 - kValX;
     const int y = kRowY0 + idx * kPitch;
     const int vy = y + kit::row_text_y(kPitch, 16);
@@ -890,6 +890,7 @@ static void attach_charger(Ui &ui, uint32_t &t) {
     g_stub.caps.pdos[0] = {pd::PdoType::Fixed, 0, 5000, 5000, 3000, 15000};
     g_stub.caps.pdos[1] = {pd::PdoType::Fixed, 0, 9000, 9000, 3000, 27000};
     g_stub.caps.raw_header = 0x1181; g_stub.caps.rx_count++;
+    g_stub.pd_seen_attach = true;   // the caps themselves are PD messages
     for (int i = 0; i < 3; i++) ui.tick(t += 100);
     CHECK_EQ(int(ui.link().attached()), 1);
 }
@@ -931,7 +932,7 @@ static void test_survey_status_line() {
     uint32_t t = 20000;
     attach_charger(ui, t);
     show(ui, 0, t);
-    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "OK > Refresh to read all");
+    CHECK_STR(std::string(cp(ui).status_line()).c_str(), "Source caps not read yet");
     show(ui, 1, t);                                                 // Cable tab: its own field is unasked too
     show(ui, 0, t);
     g_stub.survey.start(kSurveyCtx, t);
@@ -1124,7 +1125,7 @@ static int rule_span(int y) {
 // Pixel -> K2 -> SSD with the source's PD offers unanswered: attach with a small load behind the K2, the
 // caps counter climbs past the attach edge (repeated Source_Capabilities), the sink never answers
 // (far_pd_message false). After the settle window the verdict is None / SinkSilentSourceOffered and the
-// Sink tab shows the no-PD body: one message band, then measured rows from y 160 (not the placeholder list
+// Sink tab shows the no-PD body: one message band, then measured rows from y 108 (not the placeholder list
 // from y 42), and the pop-up's Identify is greyed with the tab's own words.
 static void test_sink_tab_no_pd_offered_unanswered() {
     Ui &ui = fresh_ui();
@@ -1150,11 +1151,10 @@ static void test_sink_tab_no_pd_offered_unanswered() {
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
     CHECK_EQ(int(cp(ui).pd_none_why()), int(pd::PdNoneWhy::SinkSilentSourceOffered));
     dump_panel("k2_nopd_sink_offered");
-    // The no-PD body (rotation 0): ink in the message band, the row list starts at y 160 with its hairline.
-    CHECK(ink_in(46, 152) > 100);
-    CHECK(rule_span(160) >= LCD_WIDTH - 20);
-    CHECK(ink_in(161, 200) > 50);
-    CHECK(ink_in(42, 46) == 0);                            // no placeholder row at the old kRowY0
+    // The no-PD body (rotation 0): the verdict band and its line, then the row list from y 108 with its hairline.
+    CHECK(ink_in(42, 106) > 100);
+    CHECK(rule_span(108) >= LCD_WIDTH - 20);
+    CHECK(ink_in(109, 160) > 50);
     // The pop-up: Identify greyed with the same words the tab shows.
     ui.on_button(Button::Ok, ButtonEvent::Short, t += 100);
     CHECK_EQ(cp(ui).popup_open(), true);
@@ -1194,9 +1194,9 @@ static void test_source_tab_no_pd_never_offered_all_rotations() {
         std::snprintf(name, sizeof name, "k2_nopd_source_never_rot%d", r);
         dump_panel(name);
         if (r == 0) {
-            CHECK(ink_in(46, 152) > 100);
-            CHECK(rule_span(160) >= LCD_WIDTH - 20);
-            CHECK(ink_in(161, 200) > 50);
+            CHECK(ink_in(42, 106) > 100);
+            CHECK(rule_span(108) >= LCD_WIDTH - 20);
+            CHECK(ink_in(109, 160) > 50);
         }
     }
     ui.set_rotation(0, t += 100);
@@ -1245,16 +1245,16 @@ static void test_sink_tab_no_pd_shows_the_raw_vooc_note() {
     ui.goto_page(kConnTabAlias + 2, t += 100);
     for (int i = 0; i < 12; i++) ui.tick(t += 100);
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
-    CHECK(ink_in(201, 219) == 0);                          // two rows only: Type-C, Draw
+    CHECK(ink_in(149, 167) == 0);                          // two rows only: Type-C, Draw
     g_stub.vooc.seen = true;
     g_stub.vooc.r82 = 0x6B;
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
     dump_panel("k2_nopd_sink_vooc");
-    CHECK(rule_span(200) >= LCD_WIDTH - 20);
-    CHECK(ink_in(201, 219) > 50);                          // the VOOC note
+    CHECK(rule_span(148) >= LCD_WIDTH - 20);
+    CHECK(ink_in(149, 167) > 50);                          // the VOOC note
     g_stub.vooc = {};
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
-    CHECK(ink_in(201, 219) == 0);
+    CHECK(ink_in(149, 167) == 0);
     g_stub.vooc = {};
 }
 

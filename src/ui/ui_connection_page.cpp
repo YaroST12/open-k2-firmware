@@ -368,12 +368,9 @@ constexpr int16_t kTabY = kit::kBodyY, kTabH = 18, kRowY0 = kTabY + kTabH, kRowP
 constexpr int kMaxList = 9;
 constexpr int kValCells = (224 - kValX - 4) / 8;   // 19 cells of S16 in the value column
 static_assert(kRowY0 + kMaxList * kRowPitch <= kFooterY, "the nine rows end at the footer");
-// The no-PD body (ROADMAP 2026-11-10, Row C): a message block under the tab strip (title + wrapped lines of
-// 26 cells, 8 px each), then the measured rows from kNoPdRowY0. The block ends where the rows start.
-constexpr int16_t kNoPdMsgY0 = 46, kNoPdMsgPitch = 16, kNoPdMsgLines = 6;
-constexpr int16_t kNoPdRowY0 = 160;
-constexpr int kNoPdMsgCells = (224 - 16) / 8;   // 26 cells of S16
-static_assert(kNoPdMsgY0 + 18 + (kNoPdMsgLines - 1) * kNoPdMsgPitch + 16 <= kNoPdRowY0, "the message block ends before the rows");
+// An empty or no-PD tab (UI_SYSTEM 5.8, 7.13): a 36 px verdict band (kSurface, a dash, the word in S24) under the tab strip,
+// ONE line of S16 under it, then (no-PD only) the measured rows from kNoPdRowY0.
+constexpr int16_t kBandY = kRowY0, kBandH = 36, kLineY = kBandY + kBandH + 6, kNoPdRowY0 = kLineY + 16 + 8;
 static_assert(kNoPdRowY0 + 3 * kRowPitch <= kFooterY, "three measured rows end at the footer");
 static_assert(conn::kStatusCells <= static_cast<std::size_t>(kFooterCells), "the survey texts fit the footer line");
 // The Cable tab's Answered row: every orientation and table row fits the value column, and the 12 px key fits the
@@ -800,8 +797,8 @@ uint32_t survey_sig(bool more) {
 // ---------------------------------------------------------------------------------------
 
 void ConnectionPage::paint_tab_indicator() {
-    // Three cells of the bar's rule pitch, the name centred (S12): the active tab in kFocus over a 2 px kFocus rule, the
-    // others kDim over a kRule one, so the strip reads as the bar's progress rule continued.
+    // Three cells of the bar's rule pitch, the name centred (S12): the active tab filled kFocusT, its name kFocus over a 2 px
+    // kFocus rule (UI_SYSTEM 7.13.4); the others kDim on the ground over a kRule one.
     const Surface &c = ctx_.content;
     for (int t = 0; t < conn::kTabs; t++) {
         const bool on = t == static_cast<int>(tab_);
@@ -810,26 +807,28 @@ void ConnectionPage::paint_tab_indicator() {
         const int16_t w = kit::kProgSegW;
         const kit::TextRun label{static_cast<int16_t>(x + (w - static_cast<int>(name.size()) * kLabelFont.adv) / 2),
                                  static_cast<int16_t>(kTabY + 2), &kLabelFont, name, on ? kFocus : kDim};
-        kit::paint_texts(c, {x, kTabY, w, static_cast<int16_t>(kTabH - 2)}, &label, 1, kBg);   // ground and name, once
+        kit::paint_texts(c, {x, kTabY, w, static_cast<int16_t>(kTabH - 2)}, &label, 1, on ? kFocusT : kBg);   // ground and name, once
         gfx_fill(c, x, static_cast<int16_t>(kTabY + kTabH - 2), w, 2, on ? kFocus : kRule);
         if (kit::kProgPitch > w) gfx_fill(c, static_cast<int16_t>(x + w), kTabY, static_cast<int16_t>(kit::kProgPitch - w), kTabH, kBg);   // the gap between cells
     }
 }
 
-// A large message and one wrapped hint line group (the port-aware text of conn::empty_state).
+// The verdict band (UI_SYSTEM 5.8): kSurface, a 20 px dash at x6 (a state with no verdict colour), the word in S24 at x32.
+static void paint_band(const Surface &c, std::string_view word) {
+    gfx_fill(c, 0, kBandY, c.w, kBandH, kSurface);
+    kit::draw_verdict(c, 6, static_cast<int16_t>(kBandY + 8), 20, 20, kit::Verdict::None, "", kSurface);
+    gfx_text(c, kMid, 32, static_cast<int16_t>(kBandY + 6), word, kText, kSurface);
+}
+
+// An empty tab: the band and its one line (the port-aware text of conn::empty_state).
 void ConnectionPage::paint_empty() {
     const Surface &c = ctx_.content;
     paint_tab_indicator();   // the strip owns kBodyY .. kRowY0
     body_ = Body::Empty;
     const conn::Empty e = conn::empty_state(tab_, facts_);
-    char buf[kFitBuf];
-    std::array<std::string_view, 4> lines;
-    const int n = conn::wrap(e.hint, static_cast<std::size_t>((c.w - 16) / kSmall.adv), lines);
-    kit::TextRun runs[5];
-    runs[0] = {8, 74, &kMid, fit_text(kMid, e.title, c.w - 16, buf), kText};
-    for (int i = 0; i < n; i++)
-        runs[1 + i] = {8, static_cast<int16_t>(112 + i * 20), &kSmall, lines[static_cast<std::size_t>(i)], kDim};
-    kit::paint_texts(c, {0, kRowY0, c.w, static_cast<int16_t>(kFooterY - kRowY0)}, runs, 1 + n, kBg);   // the body ground and its texts, once
+    paint_band(c, e.title);
+    const kit::TextRun line{kKeyX, kLineY, &kSmall, e.hint, kDim};
+    kit::paint_texts(c, {0, static_cast<int16_t>(kBandY + kBandH), c.w, static_cast<int16_t>(kFooterY - kBandY - kBandH)}, &line, 1, kBg);
 }
 
 void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
@@ -853,9 +852,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     // on any no-PD verdict (a device on the line that never talks PD); the Source tab only when the source
     // never offered PD at all (an offered-but-unanswered source still shows its caps). The Cable tab and
     // the Details page are untouched, and the empty states (NO DEVICE) are decided before this.
-    const bool no_pd = verdict_ == pd::PdVerdict::None && !more_ &&
-        (tab_ == conn::Tab::Sink ? (facts_.inline_sink || facts_.sink_seen)
-                                 : tab_ == conn::Tab::Source && none_why_ == pd::PdNoneWhy::SourceNeverOffered);
+    const bool no_pd = no_pd_body();
     if (no_pd) {
         paint_no_pd_body(r, redraw);
         return;
@@ -938,9 +935,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
 [[gnu::noinline]] void ConnectionPage::paint_no_pd_body(const MatchResult &r, bool redraw) {
     const Surface &c = ctx_.content;
     const bool sink_tab = tab_ == conn::Tab::Sink;
-    const char *title = conn::no_pd_title(tab_);
-    StrBuf<112> msg;   // kNoPdSinkLine2 (65) + ' ' + kNoPdCaseOffered (39) + NUL fits; no heap
-    if (sink_tab) msg.put(conn::kNoPdSinkLine2).put_char(' ').put(conn::no_pd_case(none_why_));
+    const char *line = conn::no_pd_line(tab_, none_why_);
     // The measured rows (at most three: the list closes at the footer). The Type-C row uses the match's Rp
     // reading (the active CC line driven into the Rp window counts even before typec_ma()'s 3 s mark).
     const uint32_t rp_ma = r.typec_ma ? r.typec_ma : fusb302::typec_ma();
@@ -963,18 +958,13 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
         gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);
         paint_tab_indicator();
     }
-    // The message block: the title, then the wrapped body (26 cells of S16 per line, at most 6 lines).
-    // Painted only when its text moved (a live draw must not repaint the message).
+    // The verdict band and its one line, painted only when the line moved (a live draw must not repaint them).
     uint32_t mh = fnv(2166136261u, uint32_t(tab_) | uint32_t(none_why_) << 4);
-    for (const char *p = title; *p; p++) mh = fnv(mh, uint8_t(*p));
-    for (char ch : msg.view()) mh = fnv(mh, uint8_t(ch));
+    for (const char *p = line; *p; p++) mh = fnv(mh, uint8_t(*p));
     if (full || mh != nopd_msg_sig_) {
-        gfx_fill(c, 0, kNoPdMsgY0, c.w, kNoPdRowY0 - kNoPdMsgY0, kBg);
-        gfx_text(c, kSmall, 8, kNoPdMsgY0, title, kText, kBg);
-        std::array<std::string_view, kNoPdMsgLines> lines;
-        const int n = conn::wrap(msg.view(), static_cast<std::size_t>(kNoPdMsgCells), lines);
-        for (int i = 0; i < n; i++)
-            gfx_text(c, kSmall, 8, static_cast<int16_t>(kNoPdMsgY0 + 18 + i * kNoPdMsgPitch), lines[static_cast<std::size_t>(i)], kDim, kBg);
+        paint_band(c, text::conn::kNoPd);
+        const kit::TextRun lr{kKeyX, kLineY, &kSmall, line, kDim};
+        kit::paint_texts(c, {0, static_cast<int16_t>(kBandY + kBandH), c.w, static_cast<int16_t>(kNoPdRowY0 - kBandY - kBandH)}, &lr, 1, kBg);
         nopd_msg_sig_ = mh;
     }
     // The measured rows, same geometry as the list (hairline per row, the table closed by one); a row
@@ -1055,6 +1045,7 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
         s.f = facts_;
         s.spoof_armed = ctx_.cables.armed();
         s.sv = &survey::state();
+        s.no_pd = no_pd_body();
         const bool op = before(now_ms, op_until_);
         if (op) s.op = op_.view();
         // The PD diagnosis verdict, only while its session is open: a finished one would contradict the tab's live state.
