@@ -123,10 +123,11 @@ void draw_top_bar(const Surface &s, std::string_view title, int step = 0, std::s
                   bool readout_follows = false, int segs = kProgSegs);
 
 // ---- RowList -------------------------------------------------------------------------------------------------------------
-enum class Marker : uint8_t { None, Radio, Box3, Check, Verdict, Icon };
+// Level: a fill level by shape (Device twins' prediction): state 0 hollow frame, 1 the frame with its lower half solid, 2 solid.
+enum class Marker : uint8_t { None, Radio, Box3, Check, Verdict, Icon, Level };
 struct RowSpec {
     Marker marker = Marker::None;
-    uint8_t state = 0;           // Radio / Check: 0 off, 1 on. Box3: 0 off, 1 part, 2 on. Verdict: a Verdict value
+    uint8_t state = 0;           // Radio / Check: 0 off, 1 on. Box3 / Level: 0 off, 1 part, 2 on. Verdict: a Verdict value
     Icon icon = Icon::Bolt;      // Marker::Icon
     uint16_t marker_color = 0;   // 0 = derived (kFocus when on, kDim when off; Icon: kDim)
     std::string_view text;

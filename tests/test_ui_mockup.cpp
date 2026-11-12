@@ -145,27 +145,41 @@ int main() {
     g_stub.caps.valid = true; g_stub.caps.spec_rev = 2;
     for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0003C12Cu, 0x0004B12Cu, 0x0006412Cu, 0xC8DC323Cu, 0xC990323Cu})
         g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);
-    stub_twin_add("Pixel 9", {0x3601912C, 0x0002D12C, 0xC0DC323C});
-    stub_twin_add("Laptop", {0x3601912C});
-    stub_twin_add("OP15", {0x2601912C, 0x0002D12C, 0x0003C12C, 0xC0DC3264});
-    stub_twin_add("Galaxy S24 Ultra case", {0x2601912C, 0x0002D12C, 0xC0DC3264});
+    stub_twin_add("Google 33W", {0x3601912C, 0x0002D12C, 0xC0DC323C});
+    stub_twin_add("Lenovo 5V", {0x3601912C});
+    stub_twin_add("OnePlus 55W", {0x2601912C, 0x0002D12C, 0x0003C12C, 0xC0DC3264});
+    stub_twin_add("Samsung Galaxy S24 Ultra", {0x2601912C, 0x0002D12C, 0xC0DC3264});
+    const auto key = [&](Button b, int n = 1) { for (int i = 0; i < n; i++) { ui.on_button(b, ButtonEvent::Short, t); t += 100; } };
     ui.goto_page(uint8_t(Page::Tools), t + 100);
-    ui.push_menu(Menu::Twin, t + 100); render(ui, t, "twin_list");
-    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
-    ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
-    render(ui, t, "twin_cable");                                         // OP15 focused: limited by the cable
-    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;
-    ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100;
-    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
-    render(ui, t, "twin_confirm");                                       // first OK: the row is armed
-    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    ui.push_menu(Menu::Twin, t + 100); render(ui, t, "twin_list");      // Google focused: full power
+    key(Button::Plus, 2);
+    render(ui, t, "twin_cable");                                         // OnePlus focused: limited by the cable
+    key(Button::Ok);
+    render(ui, t, "twin_detail");                                        // OnePlus: gets / wants, Wants / Offer / USB, Prove live
+    key(Button::Plus, 2);
+    render(ui, t, "twin_detail_delete");                                 // the page scrolled to Delete twin
+    key(Button::Ok);
+    render(ui, t, "twin_delete_confirm");                                // armed: CONFIRM, the 5 s drain
+    key(Button::Back);                                                   // disarm
+    key(Button::Back);                                                   // the list
+    key(Button::Plus);
+    key(Button::Ok);
+    render(ui, t, "twin_long");                                          // a 24-character name on its body row
+    key(Button::Back);
+    key(Button::Minus, 3);
+    key(Button::Ok);                                                     // Google's detail
+    key(Button::Ok);
+    render(ui, t, "twin_confirm");                                       // Prove live armed
+    key(Button::Ok);
     ui.tick(t); t += 150; ui.tick(t);
-    dump("twin_running");
+    dump("twin_running");                                                // Asked / VBUS in the box
     for (int i = 0; i < 600 && twin_hw::live_running(); i++) { t += 25; ui.tick(t); }
-    render(ui, t, "twin_done");                                          // pass cell, the live text in the note, the tally
-    for (int i = 0; i < 5; i++) { ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100; }
+    render(ui, t, "twin_done");                                          // proved: the pass cell, "proved 33W"
+    key(Button::Back);
+    render(ui, t, "twin_list_proved");                                   // the list wears the verdict cell
+    key(Button::Plus, 5);
     render(ui, t, "twin_learn");                                         // the Learn row
-    ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
+    key(Button::Ok);
     render(ui, t, "twin_learn_refused");                                 // nothing identified: the footer says so
     g_stub.caps = {};
     stub_twin_reset();

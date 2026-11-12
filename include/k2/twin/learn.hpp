@@ -21,34 +21,49 @@ namespace k2::twin {
 
 constexpr std::uint16_t id_hi_of(std::uint32_t id_header) { return std::uint16_t((id_header >> 23) & 0x1FFu); }
 
-// The name a twin gets when nobody named it: "<vendor> <product type>" ("Apple Peripheral", "Lenovo Host"), the vendor alone
-// when the type was not read, "VID xxxx" when the VID is not in the vendor table, "Device" with no VID. Always a name the
-// rename rule accepts. The library adds " 2", " 3" ... when another twin already has it.
-inline std::array<char, kNameMax + 1> auto_name(std::uint16_t vid, std::uint16_t id_hi) {
+// The name a twin gets when nobody named it: "<vendor> <max watts>W" ("Google 33W", "Lenovo 65W"), the vendor alone when no
+// sink level was read, "VID xxxx 33W" when the VID is not in the vendor table, "Device 33W" with no VID. `want_w` is the most
+// any of its sink PDOs takes (twin::want_mw, whole watts). The vendor part is shortened so the watts and the library's " 2",
+// " 3" ... suffix always fit. Always a name the rename rule accepts.
+inline constexpr std::size_t kAutoVendorMax = kNameMax - 5 - 3;   // " 240W" and " 12"
+inline std::array<char, kNameMax + 1> auto_name(std::uint16_t vid, std::uint32_t want_w) {
     std::array<char, kNameMax + 1> out{};
-    auto put = [&](const char* s, std::size_t& n) {
-        while (*s != 0 && n < kNameMax) out[n++] = *s++;
-    };
     std::size_t n = 0;
+    auto put = [&](const char* s, std::size_t cap) {
+        while (*s != 0 && n < cap) out[n++] = *s++;
+    };
     if (vid == 0) {
-        put("Device", n);
-        return out;
-    }
-    const char* vendor = pd::vendor_name(vid);
-    if (std::strcmp(vendor, "Unknown") == 0) {
-        put("VID ", n);
+        put("Device", kAutoVendorMax);
+    } else if (const char* vendor = pd::vendor_name(vid); std::strcmp(vendor, "Unknown") == 0) {
+        put("VID ", kAutoVendorMax);
         for (int sh = 12; sh >= 0; sh -= 4) out[n++] = "0123456789ABCDEF"[(vid >> sh) & 0xF];
-        return out;
-    }
-    put(vendor, n);
-    const char* type = pd::id_product_type(std::uint32_t(id_hi) << 23);
-    if (type[0] != 0) {
-        put(" ", n);
-        put(type, n);
+    } else {
+        put(vendor, kAutoVendorMax);
     }
     while (n > 0 && out[n - 1] == ' ') out[--n] = 0;
+    if (want_w != 0) {
+        char t[8];
+        int k = 0;
+        std::uint32_t v = want_w > 999 ? 999 : want_w;
+        do { t[k++] = char('0' + v % 10); v /= 10; } while (v != 0);
+        out[n++] = ' ';
+        while (k != 0) out[n++] = t[--k];
+        out[n++] = 'W';
+    }
+    out[n] = 0;
     return out;
 }
+// The most watts any of the twin's sink PDOs takes (fixed V x I, PPS top voltage x current), rounded to whole watts.
+inline std::uint32_t want_w(const Twin& t) {
+    std::uint64_t best = 0;
+    for (std::size_t i = 0; i < t.num_pdos && i < t.pdos.size(); ++i) {
+        const pd::Pdo s = pd::decode_pdo(t.pdos[i]);
+        if (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps)
+            best = std::max<std::uint64_t>(best, std::uint64_t(s.max_mv) * s.max_ma);
+    }
+    return std::uint32_t((best + 500000u) / 1000000u);
+}
+inline std::array<char, kNameMax + 1> auto_name(const Twin& t) { return auto_name(t.vid, want_w(t)); }
 
 // A twin from a finished Identify of a device that sat alone on the K2: its identity, its Sink_Capabilities, the wire
 // revision. False when the run did not finish or learned no sink PDOs (nothing to predict from). A missing identity still

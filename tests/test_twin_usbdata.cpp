@@ -313,7 +313,7 @@ void test_observed() {
 void test_record_v2() {
     // a twin with no USB blocks stays a version 1 record, byte for byte
     Twin a = phone();
-    a.name = auto_name(a.vid, a.id_hi);
+    a.name = auto_name(a);
     std::array<std::uint8_t, kMaxFileBytes> b{};
     const std::size_t n1 = encode(a, 3, b);
     CHECK_EQ(int(b[3]), 1);

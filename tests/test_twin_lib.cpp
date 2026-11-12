@@ -333,15 +333,21 @@ static pd::IdStatus done_with_caps(std::initializer_list<std::uint32_t> pdos) {
 }
 
 static void test_auto_name() {
-    CHECK_STR(auto_name(0x05AC, 2u << 4).data(), "Apple Peripheral");
-    CHECK_STR(auto_name(0x17EF, 2u << 4).data(), "Lenovo Peripheral");
-    CHECK_STR(auto_name(0x17EF, 2u).data(), "Lenovo Host");               // a laptop answers as a DFP host
-    CHECK_STR(auto_name(0x17EF, 0).data(), "Lenovo");                     // product type not read
-    CHECK_STR(auto_name(0x1234, 2u << 4).data(), "VID 1234");             // an unlisted VID names itself
-    CHECK_STR(auto_name(0x0ABC, 0).data(), "VID 0ABC");
-    CHECK_STR(auto_name(0, 0).data(), "Device");
-    CHECK_EQ(emlib::name_valid(auto_name(0x05AC, 3u << 4).data()) ? 1 : 0, 1);   // always a name the rename rule accepts
-    CHECK_STR(auto_name(0x05AC, 3u << 4).data(), "Apple Power bank");
+    CHECK_STR(auto_name(0x18D1, 33u).data(), "Google 33W");
+    CHECK_STR(auto_name(0x17EF, 65u).data(), "Lenovo 65W");
+    CHECK_STR(auto_name(0x17EF, 0u).data(), "Lenovo");                   // no sink level read
+    CHECK_STR(auto_name(0x1234, 33u).data(), "VID 1234 33W");           // an unlisted VID names itself
+    CHECK_STR(auto_name(0x0ABC, 0u).data(), "VID 0ABC");
+    CHECK_STR(auto_name(0, 27u).data(), "Device 27W");
+    CHECK_STR(auto_name(0, 0u).data(), "Device");
+    CHECK_EQ(emlib::name_valid(auto_name(0x05AC, 140u).data()) ? 1 : 0, 1);   // always a name the rename rule accepts
+    CHECK_EQ(std::strlen(auto_name(0x05AC, 240u).data()) + 3 <= kNameMax ? 1 : 0, 1);   // room for the " 12" suffix
+    Twin t;   // Pixel: 5 V 3 A, 9 V 3 A, PPS 5-11 V 3 A -> 33 W
+    t.vid = 0x18D1;
+    t.num_pdos = 3;
+    t.pdos = {0x3601912Cu, 0x0002D12Cu, 0xC0DC323Cu};
+    CHECK_EQ(want_w(t), 33u);
+    CHECK_STR(auto_name(t).data(), "Google 33W");
 }
 
 static void test_from_identify() {
@@ -382,7 +388,7 @@ static void test_learn_names_and_rename_wins() {
     CHECK_EQ(from_identify(id, st, 2, t) ? 1 : 0, 1);
     Result r = l.save(t);
     CHECK_EQ(int(r.err), int(Err::Ok));
-    CHECK_STR(name_of(l, r.seq).c_str(), "Google Peripheral");
+    CHECK_STR(name_of(l, r.seq).c_str(), "Google 33W");
     // the same device learned again: no new twin, nothing written when nothing changed
     r = l.save(t);
     CHECK_EQ(r.seq, 1);
@@ -406,18 +412,18 @@ static void test_learn_names_and_rename_wins() {
     from_identify(id2, st, 2, t3);
     r = l.save(t3);
     CHECK_EQ(r.seq, 2);
-    CHECK_STR(name_of(l, 2).c_str(), "Google Peripheral");
+    CHECK_STR(name_of(l, 2).c_str(), "Google 33W");
     Twin t4;
     from_identify(identity_of(0x18D1, 0x4EE3, 2u << 27), st, 2, t4);
     r = l.save(t4);
-    CHECK_STR(name_of(l, r.seq).c_str(), "Google Peripheral 2");
+    CHECK_STR(name_of(l, r.seq).c_str(), "Google 33W 2");
     // a device with no VID is never matched to another: each learn adds one (named by number)
     Twin anon;
     from_identify(pd::Identity{}, st, 2, anon);
     CHECK_EQ(l.save(anon).seq, 4);
     CHECK_EQ(l.save(anon).seq, 5);
-    CHECK_STR(name_of(l, 4).c_str(), "Device");
-    CHECK_STR(name_of(l, 5).c_str(), "Device 2");
+    CHECK_STR(name_of(l, 4).c_str(), "Device 33W");
+    CHECK_STR(name_of(l, 5).c_str(), "Device 33W 2");
 }
 
 static pd::SourceCaps source_with(std::initializer_list<std::uint32_t> words) {
@@ -503,7 +509,7 @@ static void test_learn_sniffed_attaches() {
     from_sniffed(contract_at(2, rdo), caps, other, pd::SinkCapsSeen{}, s2);
     r = l.save(s2);
     CHECK_EQ(r.seq, 2);
-    CHECK_STR(name_of(l, 2).c_str(), "Apple Peripheral");
+    CHECK_STR(name_of(l, 2).c_str(), "Apple");
     l.get(2, t);
     CHECK_EQ(t.num_pdos, 0);
     CHECK_EQ(t.has_request() ? 1 : 0, 1);

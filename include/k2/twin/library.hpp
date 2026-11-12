@@ -284,7 +284,7 @@ public:
         if (n >= kCapacity) { r.err = Err::Full; return r; }
         r.seq = next_seq(all, n);
         Twin fresh = in;
-        fresh.name = unique_name(in.name[0] != 0 ? in.name : auto_name(in.vid, in.id_hi), all, n);
+        fresh.name = unique_name(in.name[0] != 0 ? in.name : auto_name(in), all, n);
         r.err = store(r.seq, fresh);
         return r;
     }

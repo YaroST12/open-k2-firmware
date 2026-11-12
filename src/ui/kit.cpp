@@ -259,6 +259,18 @@ void draw_marker(const Surface &s, int16_t x, int16_t y, const RowSpec &r, uint1
             fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
         }
         break;
+    case Marker::Level: {
+        // Every pixel of the square once: the frame, then the inside (ground above the level, ink below it).
+        const int16_t in = static_cast<int16_t>(m.h - 2);
+        const int16_t ink = r.state >= 2 ? in : r.state == 1 ? static_cast<int16_t>(in / 2) : 0;
+        fill(0, 0, m.w, 1, col);
+        fill(0, static_cast<int16_t>(m.h - 1), m.w, 1, col);
+        fill(0, 1, 1, in, col);
+        fill(static_cast<int16_t>(m.w - 1), 1, 1, in, col);
+        if (in - ink > 0) fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(in - ink), bg);
+        if (ink > 0) fill(1, static_cast<int16_t>(1 + in - ink), static_cast<int16_t>(m.w - 2), ink, col);
+        break;
+    }
     case Marker::Box3:
     case Marker::Check:
         fill(1, 1, static_cast<int16_t>(m.w - 2), static_cast<int16_t>(m.h - 2), bg);
