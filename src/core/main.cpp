@@ -136,6 +136,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     k2::sysreset::capture_flags();          // reset cause first, before anything can reset again
     k2::reg::scb().VTOR = 0x08003800;
     const k2::bootmode::Mode keys_mode = sample_boot_mode();   // buttons first, before any slow init
+    k2::usb::hold_detached();               // SE0 on the HID port until usb::init() can answer (k2/drivers/usb.hpp)
     k2::crm::init();
     k2::systick::init();
     k2::i2c::init();
@@ -206,8 +207,10 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     // USB connects LAST. TinyUSB answers control requests only from tud_task(), so the D+ pull-up
     // must not appear while boot still blocks (fs remount, legacy erase with interrupts off, first
     // screen draw): the host's descriptor reads then time out (-71) and it resets the port again
-    // and again (seen 2026-11-06 in the host's kernel log, 3 failed reads per boot).
+    // and again (seen 2026-11-06 in the host's kernel log, 3 failed reads per boot). Until here
+    // hold_detached() keeps the bus in SE0: D+ reads high without it, so the host would attach anyway.
     if (k2::usbcfg::any(k2::usbcfg::current)) k2::usb::init();
+    else k2::usb::release_detached();
     if (k2::usbcfg::current.drive) k2::msc::init();
     k2::shell_hw::init(g_remote, g_ui);
 #if K2_NET

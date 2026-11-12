@@ -47,6 +47,40 @@ void flush() {
     }
 }
 
+namespace {
+// PA11/PA12 as the bootloader handed them over (mode nibble and output latch), for release_detached().
+struct LinesFound {
+    bool held = false;
+    std::uint32_t dm_mode = 0, dp_mode = 0;
+    bool dm_odr = false, dp_odr = false;
+};
+LinesFound g_found;
+
+std::uint32_t pin_mode(reg::Pin p) {
+    const auto& g = reg::gpio(p.port);
+    return ((p.n < 8 ? g.CRL : g.CRH) >> ((p.n & 7u) * 4u)) & 0xFu;
+}
+bool pin_odr(reg::Pin p) { return (reg::gpio(p.port).ODR & p.mask()) != 0; }
+}  // namespace
+
+void hold_detached() {
+    reg::crm().APB2EN |= reg::Crm::APB2EN_GPIOA;
+    g_found = {true, pin_mode(pins::usb_dm), pin_mode(pins::usb_dp), pin_odr(pins::usb_dm), pin_odr(pins::usb_dp)};
+    pins::usb_dm.clear();   // latch low first: the pins never drive high on the way to push-pull
+    pins::usb_dp.clear();
+    pins::usb_dm.mode(reg::Mode::OutPp50);
+    pins::usb_dp.mode(reg::Mode::OutPp50);
+}
+
+void release_detached() {
+    if (!g_found.held || g_started) return;
+    pins::usb_dm.write(g_found.dm_odr);
+    pins::usb_dp.write(g_found.dp_odr);
+    pins::usb_dm.mode(reg::Mode(g_found.dm_mode));
+    pins::usb_dp.mode(reg::Mode(g_found.dp_mode));
+    g_found.held = false;
+}
+
 // SE0 before the pull-up appears: long enough for any host to register a clean disconnect, so the
 // first attach after a setting change (reset with the cable plugged) starts from a fresh port.
 constexpr std::uint32_t kDetachHoldMs = 150;
