@@ -187,6 +187,20 @@ inline std::uint32_t want_mw(const Twin& t) {
     return best;
 }
 
+// A perfect match: the outcome is exactly one of the device's best sink levels (its full voltage at its full current, the most
+// power it takes), and the Request carries no Capability Mismatch.
+inline bool perfect_match(const Twin& t, const Outcome& o) {
+    if (o.kind == Kind::None || o.mismatch) return false;
+    const std::uint32_t want = want_mw(t);
+    for (std::size_t i = 0; i < t.num_pdos && i < t.pdos.size(); ++i) {
+        const pd::Pdo s = pd::decode_pdo(t.pdos[i]);
+        if ((s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps) && detail::mw_of(s.max_mv, s.max_ma) == want &&
+            o.mv == s.max_mv && o.ma == s.max_ma)
+            return true;
+    }
+    return false;
+}
+
 // Rules 1-10. `caps` is the charger's list as in hand (SourceCaps::pdos by position).
 inline Outcome predict(const Twin& t, const pd::SourceCaps& caps, const Facts& f) {
     Outcome out;

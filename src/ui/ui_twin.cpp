@@ -71,6 +71,7 @@ constexpr uint32_t kLearnWaitMs = 15000;   // an alone-Identify: contract wait (
 // Detail geometry (docs/UI_SYSTEM.md 9.2): body lines from kBodyY, the action box under them.
 constexpr int16_t kNameH = 20, kGetsH = 26, kBarLineH = 6, kContractH = 20, kRuleH = 4;
 constexpr int16_t kLeft = 6, kRight = 218;
+constexpr const char *kSourceWord = "Source";   // over the charger's side of the header
 constexpr int16_t kCellY = 156, kCellH = 64;     // the armed ActionCell / the proof box (the charger test's START box)
 constexpr int kInfoChars = (224 - kit::kInfoValueX - 4) / static_cast<int>(kSmallAdvPx);   // 21
 
@@ -316,7 +317,7 @@ void TwinPage::build_action_row(int index, bool focused, kit::RowSpec &out) {
             }
         }
         const bool provable = e && e->have && e->out.kind != twin::Kind::None && e->out.kind != twin::Kind::FiveV;
-        const bool wakes = e && !e->have && wake_ok_;   // no list yet, a charger on the plug: the proof wakes it first
+        const bool wakes = e && !e->have && wake_ok_ && !running();   // no list yet, a charger on the plug: the proof wakes it first
         if (!provable && !wakes) out.text_color = kDim;
         if (!focused) return;
         row_note_.clear();
@@ -651,11 +652,20 @@ void TwinPage::paint_line(int i, int16_t y) {
     const bool have = e && e->have && e->out.kind != twin::Kind::None;
     char buf[kFitBuf];
     switch (i) {
-    case 0:   // the name, in full (24 characters fit from x6)
-        gfx_text(s, kSmall, kLeft, static_cast<int16_t>(y + 2), fit_data(kSmall, det_.name.data(), kRight - kLeft, buf), kText, kBg);
+    case 0: {   // "Source" over what the charger gives (left), the device's name over what it wants (right)
+        gfx_text(s, kSmall, kLeft, static_cast<int16_t>(y + 2), kSourceWord, kDim, kBg);
+        const int16_t room = static_cast<int16_t>(kRight - kLeft - text_width(kSmall, kSourceWord) - kSmallAdvPx);
+        // A long name drops to font 12 on the same baseline rather than lose its end (24 characters fit at 6 px).
+        const bool small = text_width(kSmall, det_.name.data()) > room;
+        const auto &font = small ? kLabelFont : kSmall;
+        const int16_t ny = static_cast<int16_t>(y + 2 + (small ? kSmall.height - kLabelFont.height - 1 : 0));
+        const std::string_view name = fit_data(font, det_.name.data(), room, buf);
+        gfx_text(s, font, static_cast<int16_t>(kRight - text_width(font, name)), ny, name, kText, kBg);
         return;
+    }
     case 1: {   // "gets 36W" ... "wants 55W": font 12 words on the font 24 values' baseline
         const bool proved = e && !hide_proof_ && twin_hw::live().slot(e->seq).verdict == live::Verdict::Granted;
+        const uint16_t ink = have && twin::perfect_match(det_, e->out) ? kOk : kWatt;   // the device's best level, exactly
         const char *word = proved ? "proved" : "gets";
         const int16_t vy = static_cast<int16_t>(y + 1);
         const int16_t wy = static_cast<int16_t>(vy + kMid.height - kLabelFont.height - 2);
@@ -664,11 +674,11 @@ void TwinPage::paint_line(int i, int16_t y) {
         StrBuf<8> v;
         if (have) put_w(v, e->out.mw);
         else v.put("--");
-        gfx_text(s, kMid, gx, vy, v.view(), have ? kWatt : kFaint, kBg);
+        gfx_text(s, kMid, gx, vy, v.view(), have ? ink : kFaint, kBg);
         v.clear();
         put_w(v, twin::want_mw(det_));
         const int16_t vx = static_cast<int16_t>(kRight - text_width(kMid, v.view()));
-        gfx_text(s, kMid, vx, vy, v.view(), kWatt, kBg);
+        gfx_text(s, kMid, vx, vy, v.view(), ink, kBg);
         gfx_text(s, kLabelFont, static_cast<int16_t>(vx - 4 - text_width(kLabelFont, "wants")), wy, "wants", kDim, kBg);
         return;
     }
@@ -720,12 +730,14 @@ void TwinPage::paint_detail(uint32_t now_ms) {
     const Entry *e = det_entry();
     const bool run = running();
     uint32_t sig = mix_u32(mix_init(), static_cast<uint32_t>(first_) | (static_cast<uint32_t>(box_y_) << 8) |
-                                           (static_cast<uint32_t>(arm_) << 16) | (static_cast<uint32_t>(run) << 20) |
-                                           (static_cast<uint32_t>(hide_proof_) << 21) |
-                                           (static_cast<uint32_t>(run && twin_hw::live().waking()) << 22) |
-                                           (static_cast<uint32_t>(wake_ok_) << 23));
-    sig = mix_u32(sig, gen_ ^ (stamp_ << 1));
-    if (e) sig = mix_u32(sig, static_cast<uint32_t>(twin_hw::live().slot(e->seq).verdict) + 1);
+                                           (static_cast<uint32_t>(arm_) << 16) | (static_cast<uint32_t>(run) << 20));
+    // While a proof runs the lines hold still: the charger's list comes and goes with every re-attach, and the verdict, the list
+    // and the notes repaint once, when it ends. Only the box's Step / Asked and VBUS rows move meanwhile.
+    if (!run) {
+        sig = mix_u32(sig, (static_cast<uint32_t>(hide_proof_) << 1) | static_cast<uint32_t>(wake_ok_));
+        sig = mix_u32(sig, gen_ ^ (stamp_ << 1));
+        if (e) sig = mix_u32(sig, static_cast<uint32_t>(twin_hw::live().slot(e->seq).verdict) + 1);
+    }
     if (sig == 0) sig = 1;
     const Surface &s = ctx_.content;
     if (sig != det_sig_) {
@@ -741,6 +753,7 @@ void TwinPage::paint_detail(uint32_t now_ms) {
         gfx_fill(s, 0, box_y_, s.w, static_cast<int16_t>(kFooterY - box_y_), kBg);
         cell_.init(s, kCellY, kCellH);
         vbus_shown_.clear();
+        step_shown_.clear();
         if (arm_ == Arm::None && !run) {
             ctx_.rows.init(s, box_y_, &TwinPage::row_fn, this);
             ctx_.rows.restart();
@@ -757,18 +770,21 @@ void TwinPage::paint_detail(uint32_t now_ms) {
             StrBuf<12> v;
             if (ctx_.pm_online && ctx_.vbus_fast_mv >= 0) v.put_fixed(ctx_.vbus_fast_mv, 2).put_char('V');
             else v.put("--");
-            if (vbus_shown_.view().empty()) {
-                StrBuf<24> asked;
-                if (twin_hw::live().waking()) {   // Rd is on, the charger has not listed yet: nothing is asked of it
-                    asked.put(kFooters[kFootWaking]);
-                    kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), "Step", asked.view());
-                } else {
-                    if (e && e->have) {
-                        put_level(asked, e->out.mv, 'V');
-                        put_level(asked, e->out.ma, 'A');
-                    }
-                    kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), "Asked", asked.view());
-                }
+            // "Step: waking the charger" until it lists, then "Asked: 11V3A"; the row repaints only when its text changes.
+            const bool waking = twin_hw::live().waking();   // Rd is on, the charger has not listed yet: nothing is asked of it
+            StrBuf<24> asked;
+            asked.put_char(waking ? 'w' : 'a');
+            if (waking) {
+                asked.put(kFooters[kFootWaking]);
+            } else if (e && e->have) {
+                put_level(asked, e->out.mv, 'V');
+                put_level(asked, e->out.ma, 'A');
+            }
+            if (asked.view() != step_shown_.view()) {
+                if (!step_shown_.view().empty()) gfx_fill(s, 0, static_cast<int16_t>(kCellY + 4), s.w, kit::kInfoPitch, kBg);
+                kit::draw_info_row(s, static_cast<int16_t>(kCellY + 4), waking ? "Step" : "Asked", asked.view().substr(1));
+                step_shown_.clear();
+                step_shown_.put(asked.view());
             }
             if (v.view() != vbus_shown_.view()) kit::draw_info_row(s, static_cast<int16_t>(kCellY + 24), "VBUS", v.view(), kVolt);
             vbus_shown_.clear();
@@ -873,7 +889,7 @@ void TwinPage::update(uint32_t now_ms) {
         if (twin_hw::live().reason() == live::Reason::NoOffer) say(kFooters[kFootNoOffer], kCaution);   // the woken charger never listed
     }
     const bool wake_ok = twin_hw::can_wake(ctx_.ui->twin_ctx(now_ms));
-    if (wake_ok != wake_ok_) {   // a charger waits on the plug (or left): the notes and footers that say so repaint
+    if (wake_ok != wake_ok_ && !running()) {   // (held while a proof runs: every re-attach flips it) a charger waits on the plug (or left): the notes and footers that say so repaint
         wake_ok_ = wake_ok;
         ctx_.rows.invalidate();
         det_sig_ = 0;

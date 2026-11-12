@@ -124,6 +124,7 @@ private:
     kit::ActionCell cell_;
     StrBuf<12> vbus_shown_;                                  // the proof box's VBUS text as painted
     uint32_t vbus_next_ = 0;
+    StrBuf<24> step_shown_;                                  // the proof box's Step / Asked row as painted (kind char + text)
 };
 
 }  // namespace k2
