@@ -126,6 +126,26 @@ inline bool from_sniffed(const pd::Contract& c, const pd::SourceCaps& caps, cons
     return true;
 }
 
+// The merge key: is `in` a new observation of the saved twin's device? (docs/DEVICE_TWIN.md section 4, "Same device")
+//  1. Both carry an identity (VID != 0): the same VID and PID, nothing else.
+//  2. One carries an identity, the other not: never. A sink PDO list or a Request is no proof of WHICH identified device it
+//     was (two Google phones list the same PDOs; two phones ask the same charger for the same 9 V 3 A).
+//  3. Neither carries one: equal sink PDO lists when both have one; else the sniffed Request (the RDO and the source PDO it
+//     pointed at) when both have one. Nothing to compare = never the same device: two devices that never said who they are
+//     do not merge just because both read 0000:0000.
+inline bool same_pdos(const Twin& a, const Twin& b) {
+    if (a.num_pdos == 0 || a.num_pdos != b.num_pdos) return false;
+    for (std::size_t i = 0; i < a.num_pdos && i < a.pdos.size(); ++i)
+        if (a.pdos[i] != b.pdos[i]) return false;
+    return true;
+}
+inline bool same_device(const Twin& saved, const Twin& in) {
+    if (saved.vid != 0 && in.vid != 0) return saved.vid == in.vid && saved.pid == in.pid;
+    if (saved.vid != 0 || in.vid != 0) return false;
+    if (saved.num_pdos != 0 && in.num_pdos != 0) return same_pdos(saved, in);
+    return saved.has_request() && in.has_request() && saved.rdo == in.rdo && saved.rdo_pdo == in.rdo_pdo;
+}
+
 // Folds a new observation `in` into the saved twin of the same device. The saved name stays (a rename wins). What `in` knows
 // replaces what the twin had; what `in` does not know (no sink PDOs from a sniff, no Request from an Identify, no identity
 // words) leaves the saved value alone, so the two ways of learning add up instead of undoing each other.

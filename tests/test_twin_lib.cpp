@@ -417,13 +417,21 @@ static void test_learn_names_and_rename_wins() {
     from_identify(identity_of(0x18D1, 0x4EE3, 2u << 27), st, 2, t4);
     r = l.save(t4);
     CHECK_STR(name_of(l, r.seq).c_str(), "Google 33W 2");
-    // a device with no VID is never matched to another: each learn adds one (named by number)
+    // a device with no VID is never matched to an identified one, even with their PDO list; learned again it is matched by its
+    // sink PDO list (same_device), not added a second time
     Twin anon;
     from_identify(pd::Identity{}, st, 2, anon);
     CHECK_EQ(l.save(anon).seq, 4);
-    CHECK_EQ(l.save(anon).seq, 5);
+    r = l.save(anon);
+    CHECK_EQ(r.seq, 4);
+    CHECK_EQ(r.unchanged ? 1 : 0, 1);
     CHECK_STR(name_of(l, 4).c_str(), "Device 33W");
-    CHECK_STR(name_of(l, 5).c_str(), "Device 33W 2");
+    CHECK_EQ(l.count(), 4u);
+    // another anonymous device (another PDO list) is a twin of its own
+    Twin anon2;
+    from_identify(pd::Identity{}, done_with_caps({0x3601912C, 0x0002D12C}), 2, anon2);
+    CHECK_EQ(l.save(anon2).seq, 5);
+    CHECK_STR(name_of(l, 5).c_str(), "Device 27W");
 }
 
 static pd::SourceCaps source_with(std::initializer_list<std::uint32_t> words) {
@@ -521,7 +529,90 @@ static void test_learn_sniffed_attaches() {
     CHECK_EQ(l.save(s3).seq, 3);
 }
 
+// The merge key (learn.hpp same_device): the identity when both twins have one; without it a fingerprint. Two devices that
+// never said who they are are not the same device just because both read 0000:0000.
+static Twin anon_req(std::uint32_t rdo, std::uint32_t src_pdo) {
+    Twin t;
+    t.rdo = rdo;
+    t.rdo_pdo = src_pdo;
+    return t;
+}
+
+static void test_same_device() {
+    const std::uint32_t canon_rdo = 0x4344B12Cu, src15 = 0x0004B12Cu;
+    // both with an identity: VID and PID decide, nothing else
+    Twin a = pixel(), b = pixel();
+    b.pdos[0] = 0x3601912D;
+    CHECK_EQ(same_device(a, b) ? 1 : 0, 1);
+    b.pid = 0x4EE2;
+    CHECK_EQ(same_device(a, b) ? 1 : 0, 0);
+    // neither with an identity: the sink PDO lists when both have one
+    Twin x = pixel(), y = pixel();
+    x.vid = x.pid = y.vid = y.pid = 0;
+    CHECK_EQ(same_device(x, y) ? 1 : 0, 1);
+    y.pdos[2] = 0xC0DC323D;
+    CHECK_EQ(same_device(x, y) ? 1 : 0, 0);
+    y.pdos[2] = x.pdos[2];
+    y.num_pdos = 2;
+    CHECK_EQ(same_device(x, y) ? 1 : 0, 0);
+    // ... else the sniffed Request with the source PDO it pointed at
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), anon_req(canon_rdo, src15)) ? 1 : 0, 1);
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), anon_req(canon_rdo ^ 1, src15)) ? 1 : 0, 0);
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), anon_req(canon_rdo, 0x0006412Cu)) ? 1 : 0, 0);
+    Twin req_and_pdos = anon_req(canon_rdo, src15);
+    req_and_pdos.num_pdos = 1;
+    req_and_pdos.pdos[0] = 0x0001912C;
+    CHECK_EQ(same_device(anon_req(canon_rdo, src15), req_and_pdos) ? 1 : 0, 1);   // a later interrogation of the sniffed device
+    // nothing to compare: never the same
+    CHECK_EQ(same_device(Twin{}, Twin{}) ? 1 : 0, 0);
+    // one with an identity, one without: never (neither a Request nor an equal PDO list says WHICH identified device it was)
+    Twin named = anon_req(canon_rdo, src15);
+    named.vid = 0x05AC;
+    named.pid = 0x1234;
+    CHECK_EQ(same_device(named, anon_req(canon_rdo, src15)) ? 1 : 0, 0);
+    Twin p_named = pixel(), p_anon = pixel();
+    p_anon.vid = p_anon.pid = 0;
+    CHECK_EQ(same_device(p_named, p_anon) ? 1 : 0, 0);
+    CHECK_EQ(same_device(p_anon, p_named) ? 1 : 0, 0);
+}
+
+static void test_library_merges_anonymous_by_fingerprint() {
+    Vol v;
+    Library l(v.f);
+    const std::uint32_t canon_rdo = 0x4344B12Cu, src15 = 0x0004B12Cu;
+    // the Canon learned twice by sniffing: one twin, "unchanged" the second time
+    CHECK_EQ(l.save(anon_req(canon_rdo, src15)).seq, 1);
+    Result r = l.save(anon_req(canon_rdo, src15));
+    CHECK_EQ(r.seq, 1);
+    CHECK_EQ(r.existed ? 1 : 0, 1);
+    CHECK_EQ(r.unchanged ? 1 : 0, 1);
+    // another anonymous device with another Request is a second twin, not a merge into the first
+    CHECK_EQ(l.save(anon_req(0x2304B12Cu, 0x0002D12Cu)).seq, 2);
+    // an interrogation of the Canon that found sink PDOs but no identity lands on twin 1
+    Twin q = anon_req(canon_rdo, src15);
+    q.num_pdos = 2;
+    q.pdos = {0x0001912C, 0x0004B12C};
+    r = l.save(q);
+    CHECK_EQ(r.seq, 1);
+    CHECK_EQ(r.existed ? 1 : 0, 1);
+    Twin t;
+    l.get(1, t);
+    CHECK_EQ(t.num_pdos, 2);
+    CHECK_EQ(l.count(), 2u);
+    // a learn that read an identity is another twin, even with the same sink PDOs: the anonymous one stays as it was
+    Twin named = q;
+    named.vid = 0x04A9;
+    named.pid = 0x3001;
+    r = l.save(named);
+    CHECK_EQ(r.seq, 3);
+    CHECK_EQ(r.existed ? 1 : 0, 0);
+    l.get(1, t);
+    CHECK_EQ(t.vid, 0);
+}
+
 int main() {
+    test_same_device();
+    test_library_merges_anonymous_by_fingerprint();
     test_codec_roundtrip();
     test_codec_guards();
     test_codec_v1_golden();

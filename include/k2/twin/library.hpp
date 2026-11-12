@@ -258,18 +258,18 @@ public:
         return 0;
     }
 
-    // Saves a twin. A device already in the library (same VID and PID) is updated in place: the saved name stays and
-    // merge() folds in what `in` learned; nothing is written when that changes nothing. A new device takes the lowest free
-    // number, its name from `in` or else the auto name, made unique with " 2", " 3" ...
+    // Saves a twin. A device already in the library (same_device: the identity, else a fingerprint) is updated in place: the
+    // saved name stays and merge() folds in what `in` learned; nothing is written when that changes nothing. A new device takes
+    // the lowest free number, its name from `in` or else the auto name, made unique with " 2", " 3" ...
     Result save(const Twin& in) {
         Result r;
         if (in.num_pdos > kMaxSinkPdos || (in.name[0] != 0 && !emlib::name_valid(in.name.data()))) { r.err = Err::Invalid; return r; }
         All all;
         const unsigned n = list(all);
-        if (in.vid != 0) {
+        {
             for (unsigned i = 0; i < n; i++) {
                 Twin cur;
-                if (!get(all[i], cur) || cur.vid != in.vid || cur.pid != in.pid) continue;
+                if (!get(all[i], cur) || !same_device(cur, in)) continue;
                 r.seq = all[i];
                 r.existed = true;
                 Twin merged = cur;
