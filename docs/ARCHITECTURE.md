@@ -57,11 +57,14 @@ checked against the code or hardware when this was written.
    thread mode to the PSP (CONTROL.SPSEL, top `_psp_top`; the naked trampoline then calls `k2_reset_main`),
    run `.preinit_array` / `.init_array`, call `main`. `main` enables the MPU stack guard in `fault::init()`.
 3. `main` (`src/core/main.cpp`), in this order: `sysreset::capture_flags` (reset cause), VTOR again,
-   `sample_boot_mode` (buttons: PLUS / OK held at reset select the self-powered boot modes), `crm::init`,
+   `sample_boot_mode` (buttons: PLUS / OK held at reset select the self-powered boot modes),
+   `usb::hold_detached` (SE0 on the HID port until `usb::init`: its D+ reads high from power-up, so an undriven bus
+   looks attached and the host's descriptor reads fail with -71 through the whole boot), `crm::init`,
    `systick::init`, `i2c::init`, optional `fusb302::self_power_early`, `boottrace::init`, `lcd::init`,
    buttons, `dpdm::init`, `load::init`, `fault::init`, `board::init`, `fs::init` (mount or format the
    littlefs volume), `usbcfg::init`, `usb::init` only when a link mode is enabled (USB is off by
-   default), `msc::init` (drive), `shell_hw::init`, `http_server::init` (Net, K2_NET=1 builds), a 50 ms delay, the `[BOOT]` /
+   default; it runs last, just before the loop, and with the link off `usb::release_detached` returns PA11/PA12
+   as the bootloader left them), `msc::init` (drive), `shell_hw::init`, `http_server::init` (Net, K2_NET=1 builds), a 50 ms delay, the `[BOOT]` /
    `[RST]` lines, `fusb302::init`, `boottrace::report_previous`, `session::init`, `bbpersist::init`,
    `uiprefs::stored` + `fs::wipe_legacy`, `adc::log_raw`, `fastcharge::init`, `Ui::init`,
    accelerometer init, then the LCD idle hook and the loop. The PD half of this (the Rd decision of a reset, the

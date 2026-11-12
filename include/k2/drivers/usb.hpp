@@ -40,7 +40,16 @@ struct StatsSnapshot {
 };
 StatsSnapshot stats_snapshot();
 
-// Detach for 20 ms, start the 48 MHz USB clock, enable the core and connect. Call once.
+// First thing at boot (before the clock tree and every slow init step): drive D+/D- low (SE0) until init() connects.
+// The HID port's D+ reads high from power-up whatever the USB core does: with PA12 an input with its weak pull-down, and
+// the core in reset with its own pull-up off, the line still reads high and the host's 50 ms port resets show on it
+// (2026-11-12). Left undriven through the ~1.5 s of boot, the host sees an attached device that never answers: its
+// 64-byte descriptor reads fail with -71 and it power-cycles the port before the core is up.
+void hold_detached();
+// The USB link stays off this boot (no init()): give PA11/PA12 back in the mode hold_detached() found them in.
+void release_detached();
+
+// Detach for 150 ms, start the 48 MHz USB clock, enable the core and connect. Call once.
 void init();
 
 // Leave the bus for good before a reset: stop the stack, disable the USB interrupts and core clock,
