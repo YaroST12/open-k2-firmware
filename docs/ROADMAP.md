@@ -920,15 +920,19 @@ and the hardware check). A row leaves this list when its fix is merged and the h
   - Needs first: the PA1 calibration (step 1 below, TOPADRE 65 W at 20 V) so the fast scales read mV.
   - UI: a Tools page (k2-micro-gui: lab first, the user picks the design); the web Ripple card gains time/div and stats.
   - Shell: the capture and stats reachable over `k2_remote --json` (shell-first rule).
-- **Battery efficiency recorder** (user decision 2026-11-11: one Tools page, three modes Charge / Discharge / Round trip;
-  both wirings selectable).
-  - Counts per phase: Wh and mAh in, Wh and mAh out, time; Round trip shows efficiency = out / in.
-  - Wiring "same port": the bank stays on one side, power flows forward while it charges and backward while it
-    discharges; needs a reverse energy counter (`EnergyMeter` clamps negative power to 0 today).
-  - Wiring "moved between ports": every phase flows forward; the selected phase says which counter takes it; Round
-    trip asks the user to move the bank between the phases.
-  - Open (user): how a phase ends (manual stop, or current under a threshold for N s), whether the V/A curve is saved,
-    the save format (card-style record, shell readout).
+- **Battery efficiency recorder**: done on k2/battery-eff (2026-11-13), built and host-tested, NOT hardware-verified.
+  Spec and behaviour: `docs/BATTERY_RECORDER.md`. (User decisions 2026-11-11 and 2026-11-12: three modes Charge /
+  Discharge / Round trip, wirings same port or moved, its own Bench place "Battery" running in the background.)
+  - Per phase Wh and mAh in and out plus time; Round trip efficiency = Wh out / Wh in. Its own signed integrator
+    (`k2/battery/battery.hpp`), so the same-port discharge counts the reverse flow; `EnergyMeter` is unchanged.
+  - Phase end: under 50 mA for 60 s (settable, RAM-only) or by hand; a 60-point downsampled V/I curve; a 246 B record.
+  - The newest 3 runs on flash (`/bt<id>.rec`, inline in the root pair, 0 blocks), written only at phase boundaries;
+    a warm reset resumes from a `.noinit` checkpoint, a cold boot marks a measuring phase Lost.
+  - Shell `k2_remote.py [--json] battery status|start|end|next|finish|config|list|read` (CMD_BATTERY 0x58), QR share
+    `BATT`, remote page 23.
+  - Validate on hardware: a short charge of a power bank from the bench charger (Wh in against the Home Wh counter),
+    a same-port round trip into a resistive load, a warm reboot mid-phase (`[BATT] boot resumed`), a power cut
+    mid-phase (`[BATT] boot lost`, `Cut short`), heartbeat `stack_free` with the Battery place open.
 
 Features the user asked for on 2026-11-09, specified for a later implementer. Partial work of a stopped agent is on
 local branch `k2/power-levels-wip` (f8226a4: clock/systick/crm/fusb302/power_monitor edits, unfinished, not built);
