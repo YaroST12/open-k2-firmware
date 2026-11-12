@@ -14,6 +14,7 @@
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
+#include "k2/pd/pd_interrogate.hpp"
 #include "k2/pd/pd_vdm.hpp"
 #include "k2/twin/twin.hpp"
 
@@ -123,6 +124,45 @@ inline bool from_sniffed(const pd::Contract& c, const pd::SourceCaps& caps, cons
         out.num_pdos = std::uint8_t(std::min<std::size_t>(seen.n, kMaxSinkPdos));
         for (std::size_t i = 0; i < out.num_pdos; ++i) out.pdos[i] = seen.raw[i];
     }
+    return true;
+}
+
+// A twin from an inline interrogation (k2/pd/pd_interrogate.hpp): what the device answered while the K2 asked it on its own
+// charger's link (identity and USB words, sink PDOs, Revision, Sink_Capabilities_Extended) plus the contract the K2 sniffed
+// before asking (the second one, after the final reset, when no first was seen). The device's revision is its Request's.
+// False while the run is still going, or when it read neither a contract nor sink PDOs; an aborted run keeps what it read.
+static_assert(kSinkExtBytes == pd::kIqSinkExtBytes, "the twin keeps the whole extended block the interrogation reads");
+inline bool from_interrogated(const pd::IqStatus& st, Twin& out) {
+    out = Twin{};
+    if (!pd::iq_finished(st.phase)) return false;
+    const pd::IqContract& c = st.first.ready ? st.first : st.second;
+    if (!c.ready && st.num_sink_pdos == 0) return false;
+    if (st.id.valid) {
+        out.vid = st.id.vid;
+        out.pid = st.id.pid;
+        out.id_hi = id_hi_of(st.id.id_header);
+        constexpr std::size_t kFirstPt = 4;   // as from_identify: VDM header, ID Header, cert stat, product VDO, then these
+        const std::size_t have = std::min<std::size_t>(st.id.num_vdos, st.id.vdos.size());
+        for (std::size_t i = kFirstPt; i < have && out.decl.n_pt < kMaxProductVdos; ++i) out.decl.pt[out.decl.n_pt++] = st.id.vdos[i];
+    }
+    for (std::size_t i = 0; i < st.num_svids && i < st.svids.size() && out.decl.n_svids < kMaxDeclSvids; ++i)
+        out.decl.svids[out.decl.n_svids++] = st.svids[i];
+    const std::size_t nm = std::min<std::size_t>(st.num_modes, kMaxDeclModes);
+    for (std::size_t i = 0; i < nm; ++i) {
+        out.decl.mode_svid[i] = st.mode_svid[i];
+        out.decl.mode_vdo[i] = st.mode_vdo[i];
+    }
+    out.decl.n_modes = std::uint8_t(nm);
+    out.pd_rev = c.ready && c.dev_rev != 0 ? c.dev_rev : st.rev;
+    out.num_pdos = std::uint8_t(std::min<std::size_t>(st.num_sink_pdos, kMaxSinkPdos));
+    for (std::size_t i = 0; i < out.num_pdos; ++i) out.pdos[i] = st.sink_pdos[i];
+    if (c.ready && c.rdo != 0 && c.src_pdo != 0) {
+        out.rdo = c.rdo;
+        out.rdo_pdo = c.src_pdo;
+    }
+    out.revision = st.revision;
+    out.sink_ext_len = std::uint8_t(std::min<std::size_t>(st.sink_ext_len, kSinkExtBytes));
+    std::copy_n(st.sink_ext.begin(), out.sink_ext_len, out.sink_ext.begin());
     return true;
 }
 

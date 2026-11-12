@@ -732,7 +732,85 @@ static void test_codec_v3() {
     CHECK_EQ(int(saved.sink_ext_len), 21);
 }
 
+// An inline interrogation's answers as a twin: identity, sink PDOs, the PD 3 answers, the USB words, and the contract it
+// sniffed before asking (the Canon on its own charger, runs/clone-canon).
+static void test_from_interrogated() {
+    pd::IqStatus st;
+    st.phase = pd::IqPhase::Done;
+    st.rev = 2;
+    st.first = {true, 4, 2, 0x4344B12Cu, 0x0004B12Cu};
+    st.second = st.first;
+    st.num_sink_pdos = 2;
+    st.sink_pdos = {0x0001912C, 0x0004B12C};
+    st.revision = 0x32100000u;
+    st.sink_ext_len = 21;
+    st.sink_ext[0] = 0xA9;
+    st.sink_ext[20] = 0x3C;
+    Twin t;
+    CHECK_EQ(from_interrogated(st, t) ? 1 : 0, 1);
+    CHECK_EQ(t.vid, 0);
+    CHECK_EQ(t.pd_rev, 2);
+    CHECK_EQ(t.num_pdos, 2);
+    CHECK_EQ(t.pdos[1], 0x0004B12Cu);
+    CHECK_EQ(t.rdo, 0x4344B12Cu);
+    CHECK_EQ(t.rdo_pdo, 0x0004B12Cu);
+    CHECK_EQ(t.revision, 0x32100000u);
+    CHECK_EQ(int(t.sink_ext_len), 21);
+    CHECK_EQ(t.sink_ext[20], 0x3C);
+    CHECK_EQ(t.decl.any() ? 1 : 0, 0);
+    CHECK_EQ(t.name[0], 0);
+
+    // with an identity and USB words: the same fields from_identify keeps
+    st.id = identity_of(0x04A9, 0x3001, (1u << 30) | (1u << 26) | (2u << 27));
+    st.id.vdos[4] = 0x11000000u;
+    st.id.num_vdos = 5;
+    st.num_svids = 2;
+    st.svids[0] = 0xFF01;
+    st.svids[1] = 0x04A9;
+    st.num_modes = 1;
+    st.mode_svid[0] = 0xFF01;
+    st.mode_vdo[0] = 0x000C0045u;
+    CHECK_EQ(from_interrogated(st, t) ? 1 : 0, 1);
+    CHECK_EQ(t.vid, 0x04A9);
+    CHECK_EQ(t.pid, 0x3001);
+    CHECK_EQ(t.id_hi, id_hi_of(st.id.id_header));
+    CHECK_EQ(int(t.decl.n_pt), 1);
+    CHECK_EQ(t.decl.pt[0], 0x11000000u);
+    CHECK_EQ(int(t.decl.n_svids), 2);
+    CHECK_EQ(int(t.decl.svids[1]), 0x04A9);
+    CHECK_EQ(int(t.decl.n_modes), 1);
+    CHECK_EQ(t.decl.mode_vdo[0], 0x000C0045u);
+
+    // no sniffed first contract (the run began with its own reset and the device asked after): the second one is the Request
+    pd::IqStatus s2 = st;
+    s2.first = {};
+    CHECK_EQ(from_interrogated(s2, t) ? 1 : 0, 1);
+    CHECK_EQ(t.rdo, 0x4344B12Cu);
+    // the device's own revision is its Request's, not the one the questions went out in
+    s2.first = st.first;
+    s2.first.dev_rev = 1;
+    s2.rev = 1;
+    CHECK_EQ(from_interrogated(s2, t) ? 1 : 0, 1);
+    CHECK_EQ(t.pd_rev, 1);
+
+    // a run that is still going, or one that learned neither a contract nor sink PDOs, is not a twin
+    pd::IqStatus run = st;
+    run.phase = pd::IqPhase::Ask;
+    CHECK_EQ(from_interrogated(run, t) ? 1 : 0, 0);
+    pd::IqStatus none;
+    none.phase = pd::IqPhase::Aborted;
+    none.id = st.id;
+    CHECK_EQ(from_interrogated(none, t) ? 1 : 0, 0);
+    // an aborted run keeps what it did read
+    pd::IqStatus cut = st;
+    cut.phase = pd::IqPhase::Aborted;
+    cut.why = pd::IqWhy::Timeout;
+    CHECK_EQ(from_interrogated(cut, t) ? 1 : 0, 1);
+    CHECK_EQ(t.num_pdos, 2);
+}
+
 int main() {
+    test_from_interrogated();
     test_codec_v3();
     test_same_device();
     test_library_merges_anonymous_by_fingerprint();
