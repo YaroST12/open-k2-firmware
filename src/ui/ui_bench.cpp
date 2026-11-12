@@ -46,12 +46,9 @@ const char *ToolsPage::tool_name(int i) {
     return text::tools::kNames[i < 0 || i >= kTools ? 0 : i];   // the hub's copy: include/k2/ui/text/tools.hpp
 }
 
-int ToolsPage::count() const { return on_bench() ? bench::kPlaces : bench::actions(place()).n; }
-
 int ToolsPage::selected() const {
-    const int n = count();
-    const int s = on_bench() ? ctx_.keep.bench_sel : ctx_.keep.place_sel[static_cast<int>(place())];
-    return s < 0 ? 0 : s >= n ? (n > 0 ? n - 1 : 0) : s;
+    const int s = ctx_.keep.bench_sel;
+    return s < 0 ? 0 : s >= bench::kPlaces ? bench::kPlaces - 1 : s;
 }
 
 bench::Facts ToolsPage::facts() const {
@@ -97,28 +94,12 @@ bench::Facts ToolsPage::facts() const {
     return f;
 }
 
-void ToolsPage::bind() {
-    const Place p = place();
-    acts_ = bench::actions(p);
-    bar_icon_ = !on_bench();
-    title_ = on_bench() ? "Bench" : bench::place_name(p);
-    icon_ = kPlaceIcons[static_cast<int>(p)];
-    static_assert(kMaxActs >= 6, "the longest place (Charger with Stress test) fits rd_");
-}
-
 void ToolsPage::draw_static() {
-    bind();
     title_bar();
-    if (on_bench()) {   // paint_bench lays the whole body from the first update
-        for (int i = 0; i < bench::kPlaces; i++)
-            status_[i].init(ctx_.content, kLabelFont, kTextX, static_cast<int16_t>(kRowY0 + i * kRowPitch + kStatusDy),
-                            bench::kStatusChars, Align::Left, kInk2, kBg);
-        return;
-    }
-    ctx_.rows.init(ctx_.content, kit::kBodyY, row_fn, this);
-    ctx_.rows.restart();      // another place's list starts on top (the selection pulls the window down)
-    ctx_.rows.set_count(acts_.n);
-    ctx_.rows.select(selected());
+    // paint_bench lays the whole body from the first update
+    for (int i = 0; i < bench::kPlaces; i++)
+        status_[i].init(ctx_.content, kLabelFont, kTextX, static_cast<int16_t>(kRowY0 + i * kRowPitch + kStatusDy),
+                        bench::kStatusChars, Align::Left, kInk2, kBg);
 }
 
 // One Bench row, every pixel of it but the status line (a Field, painted after this): the rail and the node (solid = something
@@ -183,40 +164,9 @@ void ToolsPage::paint_bench() {
     draw_footer_cached(ctx_.content, FooterTone::Info, line.view(), foot_);
 }
 
-// A place's action: its name, the drill-in chevron when it can do its job now, else the tool's tail word (its row dimmed when
-// blocked). The fact line carries the reason or the hint, so no row opens a note.
-void ToolsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
-    const auto *self = static_cast<const ToolsPage *>(ctx);
-    if (i < 0 || i >= self->acts_.n) return;
-    const Readiness &rd = self->rd_[i];
-    out.text = self->acts_.a[i].name;
-    if (rd.level == ToolLevel::Ready) {
-        out.chevron = true;
-        return;
-    }
-    if (rd.level == ToolLevel::Blocked) out.text_color = kInk3;
-    out.tail = rd.tag;   // tail_color stays kDim
-}
-
-void ToolsPage::update(uint32_t now_ms) {
+void ToolsPage::update(uint32_t) {
     title_badge(false);
-    if (on_bench()) {
-        paint_bench();
-        return;
-    }
-    const SetupState ss = setup_state(ctx_);
-    for (int i = 0; i < acts_.n && i < kMaxActs; i++)
-        rd_[i] = acts_.a[i].kind == bench::ActKind::Tool ? tool_readiness(acts_.a[i].arg, ss, ctx_.pm_online) : Readiness{};
-    const int sel = selected();
-    ctx_.rows.set_count(acts_.n);
-    ctx_.rows.select(sel);
-    ctx_.rows.draw(now_ms);
-    if (acts_.n <= 0) return;
-    const Readiness &cur = rd_[sel];
-    if (cur.level != ToolLevel::Ready)   // the focused action's blocker, in its tone
-        draw_footer_cached(ctx_.content, cur.level == ToolLevel::Caution ? FooterTone::Caution : FooterTone::Error, cur.reason, foot_);
-    else
-        draw_footer_cached(ctx_.content, FooterTone::Info, bench::act_hint(acts_.a[sel]), foot_);
+    paint_bench();
 }
 
 Icon place_icon(Place p) { return kPlaceIcons[static_cast<int>(p) < bench::kPlaces ? static_cast<int>(p) : 0]; }
@@ -234,29 +184,20 @@ void open_bench_act(Ui &ui, const bench::Act &a, uint32_t now_ms) {
 bool ToolsPage::on_event(Event e) {
     if (e.press != Press::Short) return false;   // a long BACK goes to the Meter (the Ui)
     Ui &ui = *ctx_.ui;
-    const int n = count(), sel = selected();
+    const int sel = selected();
     if (e.button == Button::Plus || e.button == Button::Minus) {
         const int to = sel + (e.button == Button::Plus ? 1 : -1);
-        if (to >= 0 && to < n) {
-            if (on_bench()) ctx_.keep.bench_sel = to;
-            else ctx_.keep.place_sel[static_cast<int>(place())] = static_cast<uint8_t>(to);
-        }
+        if (to >= 0 && to < bench::kPlaces) ctx_.keep.bench_sel = to;
         update(ctx_.now);
         return true;
     }
     if (e.button == Button::Ok) {
-        if (!on_bench()) {
-            if (sel < acts_.n) open_bench_act(ui, acts_.a[sel], ctx_.now);
-        } else if (sel == static_cast<int>(Place::Meter)) {
-            ui.show_face(ctx_.now);
-        } else {
-            ui.open_place(static_cast<Place>(sel), ctx_.now);
-        }
+        if (sel == static_cast<int>(Place::Meter)) ui.show_face(ctx_.now);
+        else ui.open_place(static_cast<Place>(sel), ctx_.now);   // may replace this page: return at once
         return true;
     }
     if (e.button == Button::Back) {
-        if (on_bench()) ui.show_face(ctx_.now);
-        else ui.open_place(Place::Meter, ctx_.now);
+        ui.show_face(ctx_.now);
         return true;
     }
     return false;
@@ -269,7 +210,6 @@ PanelLabels ToolsPage::labels() const {
 }
 
 void ToolsPage::invalidate() {
-    ctx_.rows.invalidate();
     foot_.invalidate();
     for (uint32_t &s : sig_) s = 0;
     for (Field &f : status_) f.invalidate();

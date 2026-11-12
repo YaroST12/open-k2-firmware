@@ -122,7 +122,7 @@ static void test_remembered_state_survives_leaving_the_page() {
     ui.goto_page(static_cast<uint8_t>(Page::Home), 1840);
     press(ui, Button::Ok, 1850);                       // OK on Flow: the Bench's list, the focus still on the last place
     CHECK(ui.page() == Page::Tools);
-    CHECK_EQ(int(ui.context().keep.place), static_cast<int>(bench::Place::Meter));
+    CHECK_EQ(int(ui.menu_depth()), 0);                 // the Bench list itself, no place page over it
     CHECK_EQ(ui.context().keep.bench_sel, 2);
 
     ui.goto_page(static_cast<uint8_t>(Page::Settings), 1900);

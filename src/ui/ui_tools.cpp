@@ -110,14 +110,8 @@ constexpr Act kCable[] = {
 constexpr Act kDevice[] = {
     {"Twins", K::Tool, 11, nullptr},
 };
-constexpr Act kLog[] = {
-    {"PD diagnosis", K::Tool, 8, nullptr},
-    {"Black Box", K::Tool, 7, nullptr},
-};
-constexpr Act kK2[] = {
-    {"Settings", K::Page, pg(Page::Settings), "theme, rotation, USB link"},
-    {"System state", K::Tool, 10, nullptr},
-};
+// Log and K2 are pages of their own (the PD diagnosis with its Black Box row, the settings with System state and Boot
+// info): they add no Bench tools.
 constexpr const char *kPlaceNames[kPlaces] = {"Meter", "Charger", "Cable", "Device", "Log", "K2"};
 
 template <size_t N> constexpr Acts acts(const Act (&a)[N]) { return {a, static_cast<int>(N)}; }
@@ -147,8 +141,8 @@ Acts actions(Place p) {
     case Place::Charger: return acts(kCharger);
     case Place::Cable: return acts(kCable);
     case Place::Device: return acts(kDevice);
-    case Place::Log: return acts(kLog);
-    case Place::K2: return acts(kK2);
+    case Place::Log:
+    case Place::K2:
     case Place::Meter: break;
     }
     return {nullptr, 0};

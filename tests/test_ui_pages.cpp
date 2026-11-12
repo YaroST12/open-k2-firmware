@@ -90,7 +90,7 @@ static void test_global_paging() {
     CHECK_EQ(ui.page() == Page::Lines, 1);
     ui.on_button(Button::Ok, ButtonEvent::Short, t);                  // OK on a face: the Bench
     CHECK_EQ(ui.page() == Page::Tools, 1);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
+    CHECK_EQ(ui.menu_depth(), 0u);
     ui.on_button(Button::Back, ButtonEvent::Short, t);                // BACK on the Bench: the face it came from
     CHECK_EQ(ui.page() == Page::Lines, 1);
     ui.on_button(Button::Back, ButtonEvent::Short, t);                // BACK on Numbers or Lines: Flow
@@ -112,7 +112,7 @@ static void test_global_paging() {
     ui.on_button(Button::Back, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
+    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::Charger));   // the Bench, Charger focused
     ui.context().keep.bench_sel = static_cast<int>(bench::Place::Meter);   // the Meter row goes back to the faces
     ui.on_button(Button::Ok, ButtonEvent::Short, t);
     CHECK_EQ(ui.page() == Page::Home, 1);
@@ -903,7 +903,6 @@ static void test_tools_hub() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 180);
     CHECK_EQ(ui.page() == Page::Tools, 1);
     CHECK_EQ(ui.menu_depth(), 0u);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
     CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Charger));
     CHECK_EQ(g_stub.fc_stops, 0);                  // nothing was triggered: leaving the trigger tool left the pins alone
 }

@@ -565,7 +565,7 @@ static void test_optional_rotated_buttons() {
     CHECK_EQ(ui.menu() == Menu::Connection, true);                       // a place page ...
     CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));    // rotation 2 swaps the direction: [-] moves down a row
     ui.on_button(Button::Back, ButtonEvent::Short, 7700);
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));
+    CHECK_EQ(int(ui.menu_depth()), 0);   // the Bench list itself
     CHECK_EQ(ui.menu_depth(), 0u);
 
     const auto before_chord = ui.page();

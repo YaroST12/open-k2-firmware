@@ -127,8 +127,7 @@ struct UiContext {
         home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
         home::Attention attention;                        // Home: what is changing now, for the upper card and its dot
         uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Numbers, 2 Lines)
-        uint8_t place = 0;                                // Bench (Page::Tools): 0 its six places, else the place open (bench::Place)
-        int bench_sel = 1;                                // Bench: the focused place (Charger first: the Meter row only goes back)
+        int bench_sel = 1;                               // Bench: the focused place (Charger first: the Meter row only goes back)
         std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
         int settings_sel = 0;                             // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
@@ -965,26 +964,26 @@ private:
 
 // Tools hub: a list of tools, each opens its own submenu. Short [+] / [-] select, OK opens.
 // The Bench (Page::Tools; the remote still calls it "tools"), src/ui/ui_bench.cpp: the six places (bench::Place) with what is
-// known about each, and a place's actions on the same page (ctx_.keep.place). Every tool of the old hub is one place's action.
+// known about each. OK opens a place's page (Ui::open_place): the Meter faces, the Charger / Cable / Device place pages
+// (ConnectionPage locked to a tab), the Log place (DiagnosisPage), the K2 place (SettingsPage). Every tool of the old hub is
+// one place page's action.
 class ToolsPage final : public PageBase {
 public:
-    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Tools, "Bench", Icon::Chip) {}
+    explicit ToolsPage(UiContext &c) : PageBase(c, Page::Tools, "Bench", Icon::Meter) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
     PanelLabels labels() const override;
     void invalidate() override;
     ListState list_state() const { return ListState{}; }
-    bench::Place place() const { return static_cast<bench::Place>(ctx_.keep.place < bench::kPlaces ? ctx_.keep.place : 0); }
-    int count() const;      // rows: the six places, or the open place's actions
-    int selected() const;   // the focused one of them
+    int count() const { return bench::kPlaces; }   // rows: the six places
+    int selected() const;                           // the focused one of them (ctx_.keep.bench_sel)
     bench::Facts facts() const;   // what the Bench rows read now, from the context and the drivers
     // Bench geometry (logical content px).
     static constexpr int16_t kRowY0 = 24, kRowPitch = 32;
     static constexpr int16_t kTextX = 28, kNameDy = 2, kStatusDy = 19, kIconX = 204, kIconDy = 10;
     static constexpr int16_t kNodeX = 8, kNodeDy = 6, kNodeSz = 8, kRailX = 11, kRailW = 2;
     static constexpr int16_t kBenchEnd = kRowY0 + bench::kPlaces * kRowPitch;   // 216
-    static constexpr int kMaxActs = 6;
     static constexpr int kTools = kToolCount;
     // Row -> submenu. The Spoof row is a shortcut: it opens Connection's Cable tab on the Spoof list (the same
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
@@ -997,13 +996,8 @@ public:
     }
     static const char *tool_name(int i);
 private:
-    bool on_bench() const { return place() == bench::Place::Meter; }
-    void bind();                                       // title and actions of the mode ctx_.keep.place names
     void paint_bench();                                // the rows whose content changed (all after invalidate())
     void paint_row(int i, bool known, bool focus);
-    static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);
-    bench::Acts acts_{nullptr, 0};
-    Readiness rd_[kMaxActs];                           // readiness of the open place's actions, refreshed in update()
     uint32_t sig_[bench::kPlaces] = {};                // each Bench row's node and focus as painted (0 = repaint)
     Field status_[bench::kPlaces];                     // each Bench row's status line (char-diffed: the Meter row is live)
     bool tail_ = false;                                // the strip under the last row is painted

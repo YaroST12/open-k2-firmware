@@ -773,16 +773,12 @@ void Ui::open_place(bench::Place p, uint32_t now_ms) {
     const bool log_place = p == bench::Place::Log;
     if (p == bench::Place::K2) {   // the K2 place is the settings page; its BACK opens the Bench with K2 focused
         ctx_.keep.bench_sel = static_cast<int>(p);
-        ctx_.keep.place = static_cast<uint8_t>(bench::Place::Meter);
         set_page(Page::Settings, now_ms);
         return;
     }
-    if (conn_place || log_place) {   // a place page over the Bench: BACK pops it and the Bench shows with the place focused
-        ctx_.keep.bench_sel = static_cast<int>(p);
-        p = bench::Place::Meter;
-    }
-    ctx_.keep.place = static_cast<uint8_t>(p);
-    set_page(Page::Tools, now_ms);   // the same page repaints in its new mode (set_page keeps a base page asked for again)
+    // Meter: the Bench itself. The others: a place page over the Bench; BACK pops it and the Bench shows the place focused.
+    if (conn_place || log_place) ctx_.keep.bench_sel = static_cast<int>(p);
+    set_page(Page::Tools, now_ms);   // set_page keeps a base page asked for again
     if (log_place) {   // the PD diagnosis as the Log place: the stamp, the findings, the Black Box row
         place_next_ = true;
         if (push_menu(Menu::Diagnosis, now_ms)) sync_panel();

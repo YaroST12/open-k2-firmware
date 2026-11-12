@@ -1326,8 +1326,7 @@ static void test_single_tools_lock_one_tab() {
     ui.on_button(Button::Back, ButtonEvent::Short, 20500);
     CHECK_EQ(int(ui.menu_depth()), 0);
     CHECK_EQ(int(ui.page()), int(Page::Tools));
-    CHECK_EQ(int(ui.context().keep.place), int(bench::Place::Meter));   // the Bench list ...
-    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));    // ... on the place just left
+    CHECK_EQ(ui.context().keep.bench_sel, int(bench::Place::Cable));    // the Bench list, focused on the place just left
 
     ui.open_place(bench::Place::Charger, 21000);
     ui.tick(21050);

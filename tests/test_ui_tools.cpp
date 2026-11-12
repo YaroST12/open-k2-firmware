@@ -142,13 +142,15 @@ static void test_hurt_table() {
     CHECK_EQ(int(tool_hurt_by(kToolCount)), int(ToolHurt::Nothing));
 }
 
-// The Bench: every tool of the old hub is exactly one place's action, the Meter has none, every name fits a row.
+// The Bench: every tool of the old hub is exactly one place's action, the Meter has none, every name fits a row. Log and K2
+// are pages of their own: the PD diagnosis (tool 8) with its Black Box row (tool 7), the settings with System state (tool 10).
 static void test_bench_places_cover_every_tool() {
     using namespace bench;
     int seen[kToolSlots] = {};
     for (int p = 0; p < kPlaces; p++) {
         const Acts a = actions(static_cast<Place>(p));
-        if (p == 0) { CHECK_EQ(a.n, 0); continue; }
+        const Place pl = static_cast<Place>(p);
+        if (pl == Place::Meter || pl == Place::Log || pl == Place::K2) { CHECK_EQ(a.n, 0); continue; }
         CHECK_EQ(a.n > 0, true);
         CHECK_EQ(a.n <= 6, true);   // a place's action list fits under its identity without a long scroll
         for (int i = 0; i < a.n; i++) {
@@ -158,9 +160,10 @@ static void test_bench_places_cover_every_tool() {
             if (a.a[i].kind == ActKind::Tool) seen[a.a[i].arg]++;
         }
     }
-    // Spoof, Charger ID, Cable read and Device ID are the place pages themselves (conn::place_actions below).
+    // Spoof, Charger ID, Cable read and Device ID are the place pages themselves (conn::place_actions below); Black Box (7),
+    // PD diagnosis (8) and System state (10) are the Log and K2 pages' own rows.
     for (int t = 0; t < kToolCount; t++)
-        CHECK_EQ(seen[t], t == kToolSpoof || (t >= kToolChargerId && t <= kToolDeviceId) ? 0 : 1);
+        CHECK_EQ(seen[t], t == kToolSpoof || (t >= kToolChargerId && t <= kToolDeviceId) || t == 7 || t == 8 || t == 10 ? 0 : 1);
     CHECK_EQ(std::strcmp(place_name(Place::K2), "K2"), 0);
 }
 
