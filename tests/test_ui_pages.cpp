@@ -47,7 +47,7 @@ static const char *label(Ui &ui, Button b) {
 static void test_label_sets() {
     Ui &ui = fresh_ui();
     const char *expect[8][4] = {   // Back, Minus, Ok, Plus
-        {"Back", "-/Prev", "Zoom", "+/Next"},
+        {"Back/Hero", "-/Prev", "Zoom", "+/Next"},   // Home: long Back cycles the hero, long OK resets (no room)
         {"Back", "-/Prev", "",       "+/Next"},   // Detail
         {"Back", "Up/Prev", "Pick",   "Dn/Next"},   // Charger test: a preset picks and advances
         {"Back", "-/Prev", "",       "+/Next"},   // Lines
@@ -94,8 +94,13 @@ static void test_global_paging() {
     ui.goto_page(0, t);
     ui.on_button(Button::Minus, ButtonEvent::Long, t);                // first page: no wrap
     CHECK_EQ(ui.page() == Page::Home, 1);
-    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Hold, t)), static_cast<int>(UiAction::Reboot));
+    // Back held 5 s is no reboot any more (OK + Back held 3 s is: test_reboot_hold_card); long Back on Home cycles the hero.
+    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Hold, t)), static_cast<int>(UiAction::None));
+    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::W));
     CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Long, t)), static_cast<int>(UiAction::None));
+    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::V));
+    CHECK_EQ(ui.page() == Page::Home, 1);
+    ui.set_home_hero(home::Qty::W);   // the Ui carries over between cases
 }
 
 static void test_short_presses_do_not_page() {
@@ -149,25 +154,81 @@ static void test_press_flash() {
     CHECK_EQ(ui.lit(Button::Back) ? 1 : 0, 0);
 }
 
-// BACK held: the HoldCard appears at 1 s, counts down, and a release cancels it and repaints the page.
+// OK + Back held together (user decision 2026-11-12): the HoldCard appears at 1 s and counts down, tick() asks for the
+// reboot once at 3 s, a release cancels it and repaints the page. Back alone never shows it, and the chord's keys do
+// nothing on their own until each is pressed afresh.
 static void test_reboot_hold_card() {
+    constexpr int kNone = static_cast<int>(UiAction::None), kReboot = static_cast<int>(UiAction::Reboot);
+    auto card = [](Ui &u) { return u.hold_card_visible() ? 1 : 0; };
     Ui &ui = fresh_ui();
     ui.goto_page(0, 20000);
-    ui.set_pressed(Button::Back, true, 30000);
-    ui.tick(30500);
-    CHECK_EQ(ui.hold_card_visible() ? 1 : 0, 0);
-    ui.tick(31000);
-    CHECK_EQ(ui.hold_card_visible() ? 1 : 0, 1);
-    ui.tick(32000);
-    CHECK_EQ(ui.hold_card_visible() ? 1 : 0, 1);
-    ui.set_pressed(Button::Back, false, 33000);    // released at 3 s: cancelled
-    ui.tick(33020);
-    CHECK_EQ(ui.hold_card_visible() ? 1 : 0, 0);
-    // A short tap never shows it.
-    ui.set_pressed(Button::Back, true, 40000);
-    ui.set_pressed(Button::Back, false, 40100);
-    ui.tick(40200);
-    CHECK_EQ(ui.hold_card_visible() ? 1 : 0, 0);
+    ui.set_home_hero(home::Qty::W);
+    ui.set_pressed(Button::Back, true, 30000);       // Back alone, held past the old 5 s: no card, no reboot
+    CHECK_EQ(static_cast<int>(ui.tick(31000)), kNone);
+    CHECK_EQ(card(ui), 0);
+    CHECK_EQ(static_cast<int>(ui.tick(35500)), kNone);
+    CHECK_EQ(card(ui), 0);
+    ui.set_pressed(Button::Back, false, 35600);
+    ui.tick(35700);
+
+    ui.set_pressed(Button::Ok, true, 40000);
+    ui.set_pressed(Button::Back, true, 40100);       // the chord starts with the second key
+    CHECK_EQ(static_cast<int>(ui.tick(41000)), kNone);
+    CHECK_EQ(card(ui), 0);
+    CHECK_EQ(static_cast<int>(ui.tick(41100)), kNone);
+    CHECK_EQ(card(ui), 1);                            // 1 s: the card
+    CHECK_EQ(static_cast<int>(ui.tick(42000)), kNone);
+    CHECK_EQ(card(ui), 1);
+    ui.set_pressed(Button::Ok, false, 42500);        // OK let go at 2.4 s: cancelled
+    CHECK_EQ(static_cast<int>(ui.tick(42520)), kNone);
+    CHECK_EQ(card(ui), 0);
+    CHECK_EQ(static_cast<int>(ui.tick(43200)), kNone);   // still held Back alone: nothing comes back
+    CHECK_EQ(card(ui), 0);
+    // The keys' own events (Back's Long = the hero cycle, OK's Short = zoom) are dropped until a fresh press.
+    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Long, 43300)), kNone);
+    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::W));
+    ui.set_pressed(Button::Back, false, 43400);
+    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Short, 43400)), kNone);
+    CHECK_EQ(ui.page() == Page::Home, 1);
+    ui.set_pressed(Button::Back, true, 44000);       // pressed afresh: Back works again
+    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Long, 44500)), kNone);
+    CHECK_EQ(static_cast<int>(ui.context().keep.home_hero), static_cast<int>(home::Qty::V));
+    ui.set_pressed(Button::Back, false, 44600);
+
+    // Held 3 s: the reboot, asked once, from a submenu as well as from a page.
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), 50000);
+    ui.push_menu(Menu::Diag, 50000);
+    ui.set_pressed(Button::Back, true, 50100);
+    ui.set_pressed(Button::Ok, true, 50150);
+    CHECK_EQ(static_cast<int>(ui.tick(51150)), kNone);
+    CHECK_EQ(card(ui), 1);
+    CHECK_EQ(static_cast<int>(ui.tick(53149)), kNone);
+    CHECK_EQ(static_cast<int>(ui.tick(53150)), kReboot);
+    CHECK_EQ(static_cast<int>(ui.tick(53300)), kNone);    // once
+    CHECK_EQ(ui.menu() == Menu::Diag, 1);                  // neither key acted on the menu
+    ui.set_pressed(Button::Ok, false, 53400);
+    ui.set_pressed(Button::Back, false, 53400);
+    ui.tick(53500);
+    CHECK_EQ(card(ui), 0);
+    // The remote's keys make the same chord.
+    ui.set_remote_pressed(Button::Ok, true, 60000);
+    ui.set_remote_pressed(Button::Back, true, 60000);
+    ui.tick(61000);
+    CHECK_EQ(card(ui), 1);
+    ui.set_remote_pressed(Button::Ok, false, 61500);
+    ui.set_remote_pressed(Button::Back, false, 61500);
+    ui.tick(61600);
+    CHECK_EQ(card(ui), 0);
+    // A short tap never shows it (and pressing each key afresh ends the chord's suppression for the next cases).
+    for (Button b : {Button::Back, Button::Ok}) {
+        ui.set_pressed(b, true, 70000);
+        ui.set_pressed(b, false, 70100);
+    }
+    ui.tick(70200);
+    CHECK_EQ(card(ui), 0);
+    ui.pop_menu(70300);
+    ui.goto_page(0, 70400);
+    ui.set_home_hero(home::Qty::W);
 }
 
 static void test_pd_list_with_seven_pdos() {
@@ -524,9 +585,9 @@ static void test_home_gauges_and_footer() {
         for (int y = y0; y < y0 + h; y++) for (int x = x0; x < x0 + w; x++) n += px(x, y) == c;
         return n;
     };
-    CHECK_EQ(inkc(39, 24, 162, 39, kVolt) > 60, 1);    // Home v7: the 64 px V hero
-    CHECK_EQ(inkc(39, 94, 162, 39, kAmp) > 60, 1);     // the 64 px A hero
-    CHECK_EQ(inkc(4, 153, 96, 48, kWatt) > 40, 1);     // the 48 px W
+    CHECK_EQ(inkc(38, 25, 160, 39, kWatt) > 60, 1);    // Home 2c: the 64 px W hero
+    CHECK_EQ(inkc(8, 99, 120, 30, kVolt) > 40, 1);     // the 48 px VBUS ledger row
+    CHECK_EQ(inkc(8, 156, 120, 30, kAmp) > 40, 1);     // the 48 px IBUS ledger row
     // A live reading carries no red; no meter shows the red message in the protocol row.
     auto count = [&](int x0, int x1, uint16_t col) {
         int n = 0;
@@ -824,9 +885,9 @@ static void test_submenu_is_modal() {
     g_stub.fc_state = 0;
     g_stub.pm.vbus_mv = 5000;
     for (int n = 0; n < 6; ++n) ui.tick(kT0 + 200 + n * 100);
-    // The BACK hold still reboots from inside a submenu.
+    // The BACK hold no longer reboots, here either (the OK + Back chord does: test_reboot_hold_card).
     open_trigger(ui, kT0 + 800);
-    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Hold, kT0 + 900)), static_cast<int>(UiAction::Reboot));
+    CHECK_EQ(static_cast<int>(ui.on_button(Button::Back, ButtonEvent::Hold, kT0 + 900)), static_cast<int>(UiAction::None));
     // The remote's set-page closes the submenu and resets when something was triggered.
     open_trigger(ui, kT0 + 950);
     g_stub.fc_state = static_cast<int>(fc::State::Active);
@@ -1423,18 +1484,21 @@ static void test_home_flow_arrow() {
     ui.tick(68000);
     ui.tick(68250);
     // The hero readout is painted once (mode change) and holds with no repaint requests.
-    auto hero_ink = [&](uint16_t col, int y) {
+    auto ink = [&](uint16_t col, int x0, int y0, int w, int h) {
         int n = 0;
-        for (int yy = y; yy < y + 39; yy++)
-            for (int x = 39; x < 201; x++) n += g_panel[yy * 240 + x] == col;
+        for (int yy = y0; yy < y0 + h; yy++)
+            for (int x = x0; x < x0 + w; x++) n += g_panel[yy * 240 + x] == col;
         return n;
     };
-    CHECK_EQ(hero_ink(kVolt, 24) > 60, 1);
-    CHECK_EQ(hero_ink(kAmp, 94) > 60, 1);
-    CHECK_EQ(hero_ink(kWatt, 24) + hero_ink(kWatt, 94), 0);   // the 48 px W lives in the band below
+    auto hero_ink = [&](uint16_t col) { return ink(col, 38, 25, 160, 39); };   // Home 2c: the 64 px hero
+    auto amps_ink = [&](uint16_t col) { return ink(col, 8, 156, 120, 30); };   // the 48 px IBUS ledger row
+    CHECK_EQ(hero_ink(kWatt) > 60, 1);
+    CHECK_EQ(amps_ink(kAmp) > 60, 1);
+    CHECK_EQ(hero_ink(kVolt) + hero_ink(kAmp), 0);   // V and A live in the ledger below
     g_stub.pm.current_ma = -2000; g_stub.pm.power_mw = -40000; g_stub.pm.flow = power::Flow::Reverse;
     ui.tick(68500);
-    CHECK_EQ(hero_ink(kAmp, 94) > 60, 1);  // reversed: still cyan (magnitudes, never a sign)
+    CHECK_EQ(amps_ink(kAmp) > 60, 1);   // reversed: still cyan (magnitudes, never a sign)
+    CHECK_EQ(hero_ink(kWatt) > 60, 1);
     g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0; g_stub.pm.flow = power::Flow::Idle;
     ui.tick(69000);
     g_stub.pm = {};
@@ -1448,18 +1512,18 @@ static void test_home_animation() {
     g_stub.pm.flow = power::Flow::Forward;
     ui.tick(70000);   // later than every other test: the link engine keeps its clock across init()
 
-    // Digit filter: a value change inside 250 ms of the last one waits.
+    // Digit filter: a value change inside 250 ms of the last one waits (the W hero, Home 2c).
     g_stub.pm.vbus_mv = 20000; g_stub.pm.current_ma = 2000; g_stub.pm.power_mw = 40000; g_stub.pm.flow = power::Flow::Forward;
-    g_stub.pm.vbus_mv = 19800;
+    g_stub.pm.power_mw = 39600;
     ui.tick(71000);
     auto region = [&]() {
         std::vector<uint16_t> r;
-        for (int y = 24; y < 24 + 39; y++)
-            for (int x = 39; x < 201; x++) r.push_back(g_panel[y * 240 + x]);
+        for (int y = 25; y < 25 + 39; y++)
+            for (int x = 38; x < 198; x++) r.push_back(g_panel[y * 240 + x]);
         return r;
     };
     const auto before = region();
-    g_stub.pm.vbus_mv = 19900;
+    g_stub.pm.power_mw = 39800;
     ui.tick(71100);
     CHECK_EQ(region() == before ? 1 : 0, 1);           // 100 ms after the last change: held back
     ui.tick(71260);
@@ -1483,16 +1547,17 @@ static void test_home_stale() {
         return n;
     };
     CHECK_EQ(ui.context().stale() ? 1 : 0, 0);
-    CHECK_EQ(count(39, 24, 201, 63, kVolt) > 50, 1);
-    CHECK_EQ(count(39, 24, 201, 63, kStale), 0);
+    CHECK_EQ(count(38, 25, 198, 64, kWatt) > 50, 1);    // Home 2c: the W hero
+    CHECK_EQ(count(38, 25, 198, 64, kStale), 0);
     g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0; g_stub.pm.flow = power::Flow::Idle;
     ui.tick(82000);
     ui.tick(82200);
     CHECK_EQ(ui.context().stale() ? 1 : 0, 1);
-    CHECK_EQ(count(39, 24, 201, 63, kStale) > 50, 1);   // the last voltage, frozen in grey
-    CHECK_EQ(count(39, 24, 201, 63, kVolt), 0);
-    CHECK_EQ(count(39, 94, 201, 133, kStale) > 50, 1);   // the amps too
-    CHECK_EQ(count(150, 1, 222, 18, kStale) > 100, 1);   // the LAST pill: a kStale plate in the VBUS cell's corner
+    CHECK_EQ(count(38, 25, 198, 64, kStale) > 50, 1);   // the last power, frozen in grey
+    CHECK_EQ(count(38, 25, 198, 64, kWatt), 0);
+    CHECK_EQ(count(8, 99, 128, 129, kStale) > 50, 1);   // the volts row too
+    CHECK_EQ(count(8, 156, 128, 186, kStale) > 50, 1);  // and the amps row
+    CHECK_EQ(count(150, 1, 222, 18, kStale) > 100, 1);   // the LAST pill: a kStale plate in the hero cell's corner
     ui.tick(84200);
     ui.tick(84300);
     CHECK_EQ(count(150, 1, 222, 18, kStale) > 100, 1);   // it counts the age but stays a plate

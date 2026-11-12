@@ -50,11 +50,14 @@ void put_item_row(const Item &it, int y, int x0, int x1, uint16_t *out) {
     case ItemKind::Text:
         if (it.font) put_text_row(it, y, x0, x1, out);
         break;
-    case ItemKind::Arrow:
-        if (y < it.y || y >= it.y + kArrowBox) return;
-        for (int x = it.x < x0 ? x0 : it.x, e = (it.x + kArrowBox - 1) > x1 ? x1 : (it.x + kArrowBox - 1); x <= e; x++)
-            if (arrow_hit(it.aux, x - it.x, y - it.y)) out[x - x0] = it.color;
+    case ItemKind::Arrow: {
+        const int s = arrow_box(it);   // a smaller box samples the 22 px mask (nearest pixel)
+        if (y < it.y || y >= it.y + s) return;
+        const int my = (y - it.y) * kArrowBox / s;
+        for (int x = it.x < x0 ? x0 : it.x, e = (it.x + s - 1) > x1 ? x1 : (it.x + s - 1); x <= e; x++)
+            if (arrow_hit(it.aux, (x - it.x) * kArrowBox / s, my)) out[x - x0] = it.color;
         break;
+    }
     case ItemKind::Warn:
         if (y < it.y || y >= it.y + kWarnBox) return;
         for (int x = it.x < x0 ? x0 : it.x, e = (it.x + kWarnBox - 1) > x1 ? x1 : (it.x + kWarnBox - 1); x <= e; x++) {
@@ -93,7 +96,7 @@ int warn_hit(int x, int y) {
 uint16_t bg_at(const Cell &c, int x, int y) {
     if (!c.sweep || !c.sw || y < c.geom.t0 || y > c.geom.t1 || x < kColX0) return c.bg;
     const int col = col_of_x(x);
-    if (col >= kCols) return c.bg;
+    if (col >= c.sw->n) return c.bg;
     if (col == c.sw->cursor && x == x_of_col(col)) return c.cursor_line;   // the thin cursor line; the old trace stays beside it
     const int r = c.sw->rows[col];
     if (r == 0) return c.bg;
@@ -133,7 +136,8 @@ constexpr int kRowChunk = 80;
 void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *row) {
     const Rect pr = ContentViewport::mapped_rect({static_cast<int16_t>(x0), static_cast<int16_t>(y0),
                                                   static_cast<int16_t>(x1 - x0 + 1), static_cast<int16_t>(y1 - y0 + 1)});
-    const Rect cp = ContentViewport::mapped_rect({0, c.geom.top, kW, static_cast<int16_t>(c.geom.bottom - c.geom.top + 1)});
+    const Rect cp = ContentViewport::mapped_rect({c.x0, c.geom.top, static_cast<int16_t>(c.x1 - c.x0 + 1),
+                                                  static_cast<int16_t>(c.geom.bottom - c.geom.top + 1)});
     if (pr.w <= 0 || pr.h <= 0 || cp.w <= 0 || cp.h <= 0) return;
     int rx0 = pr.x, ry0 = pr.y, rx1 = pr.x + pr.w - 1, ry1 = pr.y + pr.h - 1;
     TextBox boxes[kMaxTextBoxes];
@@ -209,8 +213,8 @@ void compose_row(const Cell &c, int y, int x0, int x1, uint16_t *out) {
 }
 
 void paint(const Cell &c, int x0, int y0, int x1, int y1) {
-    if (x0 < 0) x0 = 0;
-    if (x1 > kW - 1) x1 = kW - 1;
+    if (x0 < c.x0) x0 = c.x0;
+    if (x1 > c.x1) x1 = c.x1;
     if (y0 < c.geom.top) y0 = c.geom.top;
     if (y1 > c.geom.bottom) y1 = c.geom.bottom;
     if (x0 > x1 || y0 > y1) return;

@@ -35,7 +35,7 @@ unsigned label_text(char (&out)[24], const SlotLabel &l, unsigned max_chars) {
 
 PanelLabels nav_labels(unsigned page, unsigned page_count) {
     PanelLabels p;
-    // Reboot is a 5 s hold of BACK and is not advertised on the panel.
+    // Reboot is OK + Back held together for 3 s (on every page and menu) and is not advertised on the panel.
     p.b[static_cast<int>(Button::Back)] = {"Back", "", "", false};
     p.b[static_cast<int>(Button::Minus)] = {"-", "Prev", "", page == 0};
     p.b[static_cast<int>(Button::Plus)] = {"+", "Next", "", page + 1 >= page_count};

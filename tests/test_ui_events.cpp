@@ -34,19 +34,20 @@ static void test_conversion() {
 
 static void test_global_first() {
     FakePage p;
-    // Long + / - page, long BACK reboots; the page never sees them.
+    // Long + / - page; the page never sees them.
     auto r = dispatch({Button::Plus, Press::Long}, 1, 4, p);
     CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Global));
     CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::PageNext));
     r = dispatch({Button::Minus, Press::Long}, 1, 4, p);
     CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::PagePrev));
     CHECK_EQ(p.seen, 0);
-    // Reboot is the 5 s hold of BACK, not the 500 ms long press.
+    // The 5 s BACK hold is no gesture any more (the reboot is the OK + Back chord, in the Ui): nothing global, and the page
+    // never sees it either, so a page's long BACK action cannot fire a second time.
     r = dispatch({Button::Back, Press::Hold}, 0, 4, p);
-    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Global));
-    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::Reboot));
+    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Unhandled));
+    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::None));
     r = dispatch({Button::Back, Press::Hold}, 2, 4, p);
-    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::Reboot));
+    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::None));
     CHECK_EQ(p.seen, 0);
     r = dispatch({Button::Back, Press::Long}, 0, 4, p);
     CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::None));
@@ -97,13 +98,15 @@ static void test_modal() {
     CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Pop));
     r = dispatch_modal({Button::Back, Press::Long}, p);            // a 500 ms BACK is no gesture
     CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Unhandled));
-    r = dispatch_modal({Button::Back, Press::Hold}, p);            // the reboot hold still works
-    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Global));
-    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::Reboot));
+    const int seen = p.seen;
+    r = dispatch_modal({Button::Back, Press::Hold}, p);            // no gesture, and the menu is not asked
+    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Unhandled));
+    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::None));
+    CHECK_EQ(p.seen, seen);
 }
 
 // A page that locks paging (the Waiting stage: the operator holds + to wake a charger): long + / - reach the page instead of
-// paging; the BACK hold still reboots, and an unlocked page pages as before.
+// paging; the BACK hold stays no gesture, and an unlocked page pages as before.
 static void test_paging_lock() {
     FakePage p;
     p.swallow_plus_minus = true;
@@ -115,8 +118,8 @@ static void test_paging_lock() {
     r = dispatch({Button::Plus, Press::Hold}, 1, 4, p, true);
     CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Page));
     CHECK_EQ(p.seen, 3);
-    r = dispatch({Button::Back, Press::Hold}, 1, 4, p, true);   // the reboot gesture is not paging
-    CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::Reboot));
+    r = dispatch({Button::Back, Press::Hold}, 1, 4, p, true);
+    CHECK_EQ(static_cast<int>(r.route), static_cast<int>(Route::Unhandled));
     CHECK_EQ(p.seen, 3);
     r = dispatch({Button::Plus, Press::Long}, 1, 4, p, false);   // unlocked: the global handler first, as ever
     CHECK_EQ(static_cast<int>(r.global), static_cast<int>(Global::PageNext));

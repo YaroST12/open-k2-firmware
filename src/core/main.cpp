@@ -112,7 +112,7 @@ k2::bootmode::Mode sample_boot_mode() {
     for (;;) {}
 }
 
-// Same exit as a 5 s BACK hold: say so on the LCD, let queued USB reports go out, reset.
+// Same exit as the OK + Back chord held 3 s: say so on the LCD, let queued USB reports go out, reset.
 [[noreturn]] void reboot_now() {
     g_ui.show_rebooting();
     k2::systick::delay_ms(200);
@@ -182,6 +182,7 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
         k2::fusb302::set_idle_wake(prefs.idle_wake);   // Settings > Wake sleeping port: default off, no Rd at idle
         k2::fusb302::set_vbus_source(&cable_probe_vbus_mv);   // the Ra probe at the end of a silent alone cable read
         g_ui.restore_orientation(prefs.rotation_manual, prefs.rotation, prefs.rotate_buttons);   // before g_ui.init draws the first frame
+        g_ui.restore_home_hero(prefs.home_hero);
     }
     k2::fs::wipe_legacy();                  // ... then the pre-littlefs raw pages are erased, once (marker /.legacy)
     k2::fs::grow();                         // ... and only then may the volume grow into the run they lived in (blank proof)

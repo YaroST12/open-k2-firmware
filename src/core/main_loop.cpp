@@ -126,7 +126,8 @@ void end_boot_screen(uint32_t now) {
     }
     k2::bbpersist::poll();                  // saves finished captures once the link is quiet
     if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
-    if (!c.bootscreen.showing()) c.ui.tick(now);        // the QR screen owns the panel: the UI does not draw meanwhile
+    // The QR screen owns the panel: the UI does not draw meanwhile. The UI's tick ends the OK + Back reboot chord.
+    if (!c.bootscreen.showing() && c.ui.tick(now) == k2::UiAction::Reboot) c.reboot();
 }
 
 // Stack watermark: one line each time the free application stack reaches a new low below 1 KB (the gate's margin),
@@ -252,8 +253,8 @@ void pass() {
                 g_press_count++;
                 if (c.ui.on_remote_button(b, vev, now) == k2::UiAction::Reboot) c.reboot();
             }
-            // The key that chose the boot mode is still down (its Long / Hold would reach the UI, Hold is the reboot gesture):
-            // its events are the boot's, not the user's, until it is up. Other keys work at once.
+            // The key that chose the boot mode is still down (its Long / Hold would reach the UI, and it could be one half of
+            // the OK + Back reboot chord): its events are the boot's, not the user's, until it is up. Other keys work at once.
             if (c.boot_key_swallow && b == c.boot_key) {
                 if (!down && !g_det[i].pressed()) c.boot_key_swallow = false;
                 continue;

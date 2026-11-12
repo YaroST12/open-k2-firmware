@@ -99,6 +99,48 @@ static void test_hold_card_math() {
     CHECK_EQ(hold_fill_px(9000, 5000, 172), 172);
 }
 
+// OK + Back held together for 3 s reboots: the card from 1 s, the reboot once at 3 s, release cancels, and the chord
+// stays active (its single-key events suppressed) until both keys are up.
+static void test_reboot_chord() {
+    using S = RebootChord::Step;
+    RebootChord c;
+    CHECK_EQ(c.active() ? 1 : 0, 0);
+    CHECK_EQ(static_cast<int>(c.step(0)), static_cast<int>(S::None));
+    c.keys(true, false, 100);                       // OK alone: no chord
+    CHECK_EQ(c.active() ? 1 : 0, 0);
+    CHECK_EQ(static_cast<int>(c.step(5000)), static_cast<int>(S::None));
+    c.keys(true, true, 400);                        // Back joins: the chord starts now
+    CHECK_EQ(c.active() ? 1 : 0, 1);
+    CHECK_EQ(c.held_ms(1300), 900u);
+    CHECK_EQ(static_cast<int>(c.step(1399)), static_cast<int>(S::None));
+    CHECK_EQ(static_cast<int>(c.step(1400)), static_cast<int>(S::Card));   // kHoldCardMs in
+    CHECK_EQ(hold_secs_left(c.held_ms(1400), kChordRebootMs), 2);
+    CHECK_EQ(static_cast<int>(c.step(3399)), static_cast<int>(S::Card));
+    CHECK_EQ(static_cast<int>(c.step(3400)), static_cast<int>(S::Reboot));
+    CHECK_EQ(static_cast<int>(c.step(3500)), static_cast<int>(S::Card));   // fires once
+    // Release one key: cancelled, no card, but still active until the other is up too.
+    c.keys(false, true, 3600);
+    CHECK_EQ(static_cast<int>(c.step(9000)), static_cast<int>(S::None));
+    CHECK_EQ(c.active() ? 1 : 0, 1);
+    c.keys(true, true, 3700);                       // pressed again: a new chord, a fresh 3 s
+    CHECK_EQ(static_cast<int>(c.step(5000)), static_cast<int>(S::Card));
+    CHECK_EQ(static_cast<int>(c.step(6699)), static_cast<int>(S::Card));
+    c.keys(false, false, 6699);                     // released before 3 s: cancelled, inactive
+    CHECK_EQ(c.active() ? 1 : 0, 0);
+    CHECK_EQ(static_cast<int>(c.step(7000)), static_cast<int>(S::None));
+    CHECK_EQ(c.held_ms(7000), 0u);
+    // Back first, then OK: the same chord.
+    c.keys(false, true, 8000);
+    CHECK_EQ(c.active() ? 1 : 0, 0);
+    c.keys(true, true, 8200);
+    CHECK_EQ(static_cast<int>(c.step(11199)), static_cast<int>(S::Card));
+    CHECK_EQ(static_cast<int>(c.step(11200)), static_cast<int>(S::Reboot));
+    // A late first step (a stalled loop) still reboots: the time is held time, not a window.
+    RebootChord d;
+    d.keys(true, true, 0);
+    CHECK_EQ(static_cast<int>(d.step(20000)), static_cast<int>(S::Reboot));
+}
+
 static void test_chevron_and_throttle() {
     // 11 chevrons, one step per 250 ms: Up walks toward the top (index 0), Down toward the bottom.
     CHECK_EQ(chevron_bright(0, 11, true), 10);
@@ -385,6 +427,7 @@ int main() {
     test_charge();
     test_fit_and_ohms();
     test_hold_card_math();
+    test_reboot_chord();
     test_chevron_and_throttle();
     test_age_and_tracker();
     test_watt_history();

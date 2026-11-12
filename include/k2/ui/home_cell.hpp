@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Home v7 measurement cell compositor: a cell is a base colour, an optional patient-monitor sweep
+// Home measurement cell compositor: a cell is a base colour, an optional patient-monitor sweep
 // behind it, and an ordered list of items (fills, text, arrows, the warning triangle) drawn over it.
 // Text blends its anti-aliased edge against the pixel underneath, so digits can sit on the sweep and
 // survive a column passing under them. No framebuffer: one row of at most 224 pixels is composed on the
@@ -27,7 +27,7 @@ struct Item {
     ItemKind kind = ItemKind::Fill;
     uint8_t aux = 0;              // Arrow: 0 up, 1 left, 2 down, 3 right (screen), kDashV / kDashH for the idle dash
     int16_t x = 0, y = 0;         // Fill: top-left; Text: pen x and line-box top; Arrow/Warn: top-left of the box
-    int16_t w = 0, h = 0;         // Fill size
+    int16_t w = 0, h = 0;         // Fill size; Arrow: box size in w (0 = kArrowBox), the 22 px mask scaled to it
     uint16_t color = 0;           // Fill colour, Text foreground, Arrow colour, Warn triangle colour
     uint16_t ink = 0;             // Warn: the exclamation mark
     const Font *font = nullptr;
@@ -44,11 +44,12 @@ constexpr Item text(const Font &f, int16_t x, int16_t top, std::string_view s, u
     i.kind = ItemKind::Text; i.x = x; i.y = top; i.font = &f; i.text = s; i.color = color;
     return i;
 }
-constexpr Item arrow(int16_t x, int16_t y, uint8_t aux, uint16_t color) {
+constexpr Item arrow(int16_t x, int16_t y, uint8_t aux, uint16_t color, int16_t size = 0) {
     Item i;
-    i.kind = ItemKind::Arrow; i.x = x; i.y = y; i.aux = aux; i.color = color;
+    i.kind = ItemKind::Arrow; i.x = x; i.y = y; i.aux = aux; i.color = color; i.w = size;
     return i;
 }
+constexpr int arrow_box(const Item &i) { return i.w > 0 ? i.w : kArrowBox; }
 constexpr Item warn(int16_t x, int16_t y, uint16_t color, uint16_t ink) {
     Item i;
     i.kind = ItemKind::Warn; i.x = x; i.y = y; i.color = color; i.ink = ink;
@@ -69,10 +70,11 @@ int warn_hit(int x, int y);
 // ---- sweep -----------------------------------------------------------------------------------
 // Column heights (rows above the sweep bottom, 0 = no sample) of one cell and the cursor that wraps
 // over them. The cursor is a thin line (1 px) in the column about to be written; the old trace stays
-// beside it, nothing is blanked ahead of it.
+// beside it, nothing is blanked ahead of it. `n` columns are used (kCols for the hero, kLedgerCols for a ledger row).
 struct Sweep {
     uint8_t rows[kCols] = {};
     uint8_t cursor = 0;
+    uint8_t n = kCols;
 
     void clear() {
         for (auto &r : rows) r = 0;
@@ -83,36 +85,38 @@ struct Sweep {
     int step(uint8_t level) {
         const int first = cursor;
         rows[cursor] = level;
-        cursor = static_cast<uint8_t>((cursor + 1) % kCols);
+        cursor = static_cast<uint8_t>((cursor + 1) % n);
         return first;
     }
-    // Place n (<= kCols) levels, oldest first, from column 0; the cursor lands after them (wrapping to 0 when full).
+    // Place up to n levels, oldest first, from column 0; the cursor lands after them (wrapping to 0 when full).
     void load(std::span<const uint8_t> levels) {
         clear();
-        const size_t n = levels.size() < static_cast<size_t>(kCols) ? levels.size() : static_cast<size_t>(kCols);
-        for (size_t i = 0; i < n; i++) rows[i] = levels[i];
-        cursor = static_cast<uint8_t>(n % kCols);
+        const size_t k = levels.size() < static_cast<size_t>(n) ? levels.size() : static_cast<size_t>(n);
+        for (size_t i = 0; i < k; i++) rows[i] = levels[i];
+        cursor = static_cast<uint8_t>(k % n);
     }
 };
 
-// Pixel x ranges (inclusive) of the strip a step() touched, as one or two pieces when it wraps.
+// Pixel x ranges (inclusive) of the strip a step() touched, as one or two pieces when it wraps (`cols` = the sweep's n).
 struct XRange { int16_t x0, x1; };
 struct Strip { XRange r[2]; int n; };
-constexpr Strip strip_of(int first_col, int steps = 1) {
+constexpr Strip strip_of(int first_col, int steps = 1, int cols = kCols) {
     Strip s{{{0, 0}, {0, 0}}, 0};
     const int last = first_col + steps;   // the new cursor column (after `steps` steps in a row)
-    if (last < kCols) {
+    if (last < cols) {
         s.r[0] = {x_of_col(first_col), static_cast<int16_t>(x_of_col(last) + 1)};
         s.n = 1;
     } else {
-        s.r[0] = {x_of_col(first_col), static_cast<int16_t>(x_of_col(kCols - 1) + 1)};
-        s.r[1] = {x_of_col(0), static_cast<int16_t>(x_of_col(last - kCols) + 1)};
+        s.r[0] = {x_of_col(first_col), static_cast<int16_t>(x_of_col(cols - 1) + 1)};
+        s.r[1] = {x_of_col(0), static_cast<int16_t>(x_of_col(last - cols) + 1)};
         s.n = 2;
     }
     return s;
 }
 
 // ---- cell ------------------------------------------------------------------------------------
+// A cell owns the rows geom.top..geom.bottom and the columns x0..x1 (the full width by default; a ledger row or a card
+// cell is narrower). paint() never writes outside it.
 struct Cell {
     CellGeom geom{};
     uint16_t bg = 0;                   // base colour of the cell
@@ -120,6 +124,7 @@ struct Cell {
     uint16_t tint = 0, line = 0, cursor_line = 0;
     const Sweep *sw = nullptr;
     std::span<const Item> items;
+    int16_t x0 = 0, x1 = kW - 1;
 };
 
 // Pixel under the items at (x, y): base colour, or the sweep column state.

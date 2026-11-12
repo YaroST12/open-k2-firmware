@@ -27,7 +27,7 @@ enum class Action : uint8_t { PdRescan = 1, EmarkerScan = 2, EnergyReset = 3,
 enum class BusyWhy : uint8_t { None, TestRunning, FcRelease, QcTrigger, PdHold, Epr, PdRequest, EmScan, Identify, TwinRun, PdStress, LoopProbe };   // new values are appended: the numbers are on the wire
 
 // Ui::Session::flags (and the wire byte): one bit per transient chrome state the screens show.
-inline constexpr uint8_t kSessionHoldCard = 1 << 0;       // BACK held: the "Reboot in N" card
+inline constexpr uint8_t kSessionHoldCard = 1 << 0;       // OK + Back held: the "Reboot in N" card
 inline constexpr uint8_t kSessionRotationNotice = 1 << 1; // the rotation notice strip
 inline constexpr uint8_t kSessionEmScanning = 1 << 2;     // an e-marker scan is running
 inline constexpr uint8_t kSessionEmListening = 1 << 3;    // the passive listen window after a scan is open

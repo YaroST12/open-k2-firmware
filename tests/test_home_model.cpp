@@ -20,28 +20,57 @@ static void test_alarm_thresholds() {
 }
 
 static void test_limit_bar() {
-    CHECK_EQ(bar_fill_w(0, 5000), 0);
-    CHECK_EQ(bar_fill_w(10, 0), 0);
-    CHECK_EQ(bar_fill_w(5000, 5000), kBarTrack);
-    CHECK_EQ(bar_fill_w(9000, 5000), kBarTrack);      // over the limit: full track, never past it
-    CHECK_EQ(bar_fill_w(2500, 5000), 103);            // round(204 / 2) + 1
-    CHECK_EQ(bar_tick_x(), 194);
+    CHECK_EQ(bar_fill_w(0, 5000, kHeroBar), 0);
+    CHECK_EQ(bar_fill_w(10, 0, kHeroBar), 0);
+    CHECK_EQ(bar_track(kHeroBar), 205);
+    CHECK_EQ(bar_fill_w(5000, 5000, kHeroBar), 205);
+    CHECK_EQ(bar_fill_w(9000, 5000, kHeroBar), 205);   // over the limit: full track, never past it
+    CHECK_EQ(bar_fill_w(2500, 5000, kHeroBar), 103);   // round(204 / 2) + 1
+    CHECK_EQ(bar_tick_x(kHeroBar), 194);
+    CHECK_EQ(kHeroBar.y, 68);                          // 3 rows inside the hero cell, clear of the 64 px digits (baseline 63)
+    const BarGeom l = ledger_bar(0);
+    CHECK_EQ(bar_track(l), 128);
+    CHECK_EQ(bar_fill_w(2500, 5000, l), 65);           // round(127 / 2) + 1
+    CHECK_EQ(bar_tick_x(l), 120);
+    CHECK_EQ(l.y, 132);
+    CHECK_EQ(ledger_bar(1).y, 190);
+}
+
+// 2c geometry: hero y0..73, 2 px rule, ledger rows y76..135 / y137..193 with a 1 px rule between, the vertical rule
+// at x140, the info block under the rule at y194. Every row of the content belongs to exactly one band.
+static void test_layout() {
+    CHECK_EQ(kRule1Y, kHeroY1 + 1);
+    CHECK_EQ(kRowY0[0], kRule1Y + 2);
+    CHECK_EQ(kRowRuleY, kRowY1[0] + 1);
+    CHECK_EQ(kRowY0[1], kRowRuleY + 1);
+    CHECK_EQ(kRule3Y, kRowY1[1] + 1);
+    CHECK_EQ(kVRuleX, kLedgerX1 + 1);
+    CHECK_EQ(kCardX0, kVRuleX + 1);
+    CHECK_EQ(x_of_col(kLedgerCols - 1) + 1, 135);      // the ledger sweep ends inside its column
+    const CellGeom h = cell_geom(kHeroY0, kHeroY1, true);
+    CHECK_EQ(h.t0, 14);
+    CHECK_EQ(h.t1, 66);
+    CHECK_EQ(cell_geom(kHeroY0, kHeroY1, false).t1, 71);
+    CHECK_EQ(cell_geom(kRowY0[1], kRowY1[1], true).t1, 186);
 }
 
 static void test_sweep_maths() {
     CHECK_EQ(scale_v10(20000), 2300);                 // contract max x 1.15, in 10 mV
     CHECK_EQ(scale_a10(5000), 575);
     CHECK_EQ(scale_v10(0), 2300);                     // unknown contract: 20 V
-    const int span = kVoltCell.span();
-    CHECK_EQ(span, 67);
+    CHECK_EQ(scale_w10(100000), 11500);               // 100 W x 1.15 in 10 mW
+    CHECK_EQ(scale_w10(0), 6900);                     // unknown: 60 W
+    const int span = cell_geom(kHeroY0, kHeroY1, false).span();
+    CHECK_EQ(span, 57);
     CHECK_EQ(sweep_rows(0, 2300, span), 0);
     CHECK_EQ(sweep_rows(1, 2300, span), 0);           // 10 mV or less: no column, like the mockup
     CHECK_EQ(sweep_rows(0xFFFF, 2300, span), 0);      // kNone
     CHECK_EQ(sweep_rows(2300, 2300, span), span + 1);
     CHECK_EQ(sweep_rows(9999, 2300, span), span + 1); // clipped at full scale
-    CHECK_EQ(sweep_rows(1150, 2300, span), 35);       // half scale: round(33.5) + 1
-    CHECK_EQ(kAmpCell.span(), 59);
-    CHECK_EQ(sweep_rows(575, 575, kAmpCell.span()), 60);
+    CHECK_EQ(sweep_rows(1150, 2300, span), 30);       // half scale: round(28.5) + 1
+    const int ls = cell_geom(kRowY0[0], kRowY1[0], true).span();
+    CHECK_EQ(ls, 38);
+    CHECK_EQ(sweep_rows(575, 575, ls), 39);
 }
 
 static void test_sweep_columns() {
@@ -213,15 +242,31 @@ static void test_max_text_never_comes_from_live_vbus() {
 }
 
 static void test_alarm_text() {
-    StrBuf<16> s;
+    StrBuf<20> s;
     alarm_text(Alarm::Near, 4620, 5000, s);
     CHECK_STR(s.c_str(), "92% OF 5A");
-    StrBuf<16> o;
+    StrBuf<20> o;
     alarm_text(Alarm::Over, 5340, 5000, o);
     CHECK_STR(o.c_str(), "OVER 5A LIMIT");
-    StrBuf<16> n;
+    StrBuf<20> n;
     alarm_text(Alarm::None, 100, 5000, n);
     CHECK_STR(n.c_str(), "");
+    // The W hero: the same lines against the contract power.
+    alarm_text(Alarm::Near, 93000, 100000, s, 'W');
+    CHECK_STR(s.c_str(), "93% OF 100W");
+    alarm_text(Alarm::Over, 141000, 140000, o, 'W');
+    CHECK_STR(o.c_str(), "OVER 140W LIMIT");
+    alarm_text(Alarm::Over, 3400, 3250, o);
+    CHECK_STR(o.c_str(), "OVER 3.25A LIMIT");   // the longest line: 16 characters, never cut
+    // A ledger row's short form.
+    alarm_text(Alarm::Near, 93000, 100000, s, 'W', true);
+    CHECK_STR(s.c_str(), "93%");
+    alarm_text(Alarm::Over, 5340, 5000, o, 'A', true);
+    CHECK_STR(o.c_str(), "OVER");
+    StrBuf<12> m;
+    CHECK_EQ(max_text(Mode::Live, 100000, 'W', m), 1);
+    CHECK_STR(m.c_str(), "max 100W");
+    CHECK_EQ(max_text(Mode::Stale, 100000, 'W', m), 0);
 }
 
 // Row 1 of the info block: the Black Box diagnosis word under "Diag" while a PD session is live or stale, toned by the
@@ -265,6 +310,7 @@ static void test_diag_row() {
 int main() {
     test_alarm_thresholds();
     test_limit_bar();
+    test_layout();
     test_sweep_maths();
     test_sweep_columns();
     test_hero_numbers();

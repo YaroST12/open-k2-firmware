@@ -773,8 +773,9 @@ void test_switch_exact() {
                     if (overlay == 2 && kWalkDests[b].index >= 6) continue;   // a menu refuses to open while the release runs
                     walk_open(ui, a);
                     const char *what = "hold card";
-                    if (overlay == 0) {                                    // BACK held: "Reboot in N"
-                        ui.set_pressed(Button::Back, true, g_walk_t += 10);
+                    if (overlay == 0) {                                    // OK + Back held: "Reboot in N"
+                        ui.set_pressed(Button::Ok, true, g_walk_t += 10);
+                        ui.set_pressed(Button::Back, true, g_walk_t);
                         ui.tick(g_walk_t += 100);
                         ui.tick(g_walk_t += 2000);
                         if (!ui.hold_card_visible()) { std::printf("  no hold card on %s\n", kWalkDests[a].name); ++bad_overlay; }
@@ -795,7 +796,12 @@ void test_switch_exact() {
                         std::printf("  %s survives %s -> %s: rotation %u, %d px\n", what, kWalkDests[a].name, kWalkDests[b].name, unsigned(r), d);
                         ++bad_overlay;
                     }
-                    if (overlay == 0) { ui.set_pressed(Button::Back, false, g_walk_t += 10); ui.tick(g_walk_t += 100); }
+                    if (overlay == 0) {   // let go, then press each key afresh: the chord mutes its keys until then
+                        ui.set_pressed(Button::Ok, false, g_walk_t += 10);
+                        ui.set_pressed(Button::Back, false, g_walk_t);
+                        for (Button k : {Button::Ok, Button::Back}) { ui.set_pressed(k, true, g_walk_t += 10); ui.set_pressed(k, false, g_walk_t += 10); }
+                        ui.tick(g_walk_t += 100);
+                    }
                     if (overlay == 1) { ui.configure_rotation(true, r); ui.set_rotation(r, g_walk_t += 10); }   // the gesture locked it
                     if (overlay == 2) for (int n = 0; n < 40; ++n) { g_stub.pm.vbus_mv = 5000; ui.tick(g_walk_t += 100); }
                     g_stub.pm.vbus_mv = 20030;
@@ -870,9 +876,10 @@ int main() {
     g_stub.pm.current_ma = 1520; g_stub.pm.power_mw = 30456; g_stub.pm.flow = k2::power::Flow::Forward;
     test_page(ui, 0, "home_forward");
     ui.goto_page(0, 5000);
+    ui.set_pressed(k2::Button::Ok, true, 5000);
     ui.set_pressed(k2::Button::Back, true, 5000);
     ui.tick(5100);
-    ui.tick(7000);                                                  // BACK held 2 s: "Reboot in 3"
+    ui.tick(7000);                                                  // OK + Back held 2 s: "Reboot in 1"
     CHECK_EQ(ui.hold_card_visible() ? 1 : 0, 1);
     {   // The page beneath is frozen while the card shows, so only the card itself is checked here.
         std::vector<uint16_t> direct(g_panel, g_panel + 240 * 240);
@@ -882,7 +889,9 @@ int main() {
         CHECK_EQ(red > 300, 1);   // frame + warning icon + progress fill
         dump_ppm("host-build/k2_home_reboot_hold_direct.ppm", direct.data());
     }
+    ui.set_pressed(k2::Button::Ok, false, 7100);
     ui.set_pressed(k2::Button::Back, false, 7100);
+    for (k2::Button k : {k2::Button::Ok, k2::Button::Back}) { ui.set_pressed(k, true, 7110); ui.set_pressed(k, false, 7120); }
     ui.tick(7200);
     test_page(ui, 0, "home_novbus");
     g_stub.pm_online = false;

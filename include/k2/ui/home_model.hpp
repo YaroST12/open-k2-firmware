@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Home v7 pure model: layout constants, alarm thresholds, number and protocol-row formatting, the sweep
+// Home 2c pure model: layout constants, alarm thresholds, number and protocol-row formatting, the sweep
 // column maths. No hardware access, no drawing: tests/test_home_model.cpp covers all of it.
 //
 // Logical content is 224 x 240 (the button strip is outside). Rows are inclusive pixel rows.
+// Layout (2c, user decision 2026-11-12): the hero cell y0..73 (W, V or A at 64 px), a 2 px rule, the ledger rows
+// x0..139 (the two other quantities at 48 px, y76..135 and y137..193, a 1 px rule at y136), a 1 px rule at x140, two
+// card cells x141..223,
+// a 2 px rule at y194 and the info block below it.
 #pragma once
 #include <cstdint>
 #include <span>
@@ -15,7 +19,8 @@ namespace k2::home {
 
 // ---- geometry ---------------------------------------------------------------------------------
 constexpr int16_t kW = 224;                 // logical content width
-constexpr int kCols = 110;                  // sweep columns, 2 px each: x 4..223
+constexpr int kCols = 110;                  // hero sweep columns, 2 px each: x 4..223
+constexpr int kLedgerCols = 66;             // ledger sweep columns: x 4..135
 constexpr int16_t kColX0 = 4;
 
 // A measurement cell: the full cell rows (status edge, inversion), the sweep rows inside it.
@@ -24,14 +29,26 @@ struct CellGeom {
     int16_t t0, t1;                         // sweep rows (inclusive)
     constexpr int span() const { return t1 - t0; }
 };
-constexpr CellGeom kVoltCell{0, 69, 2, 69};
-constexpr CellGeom kAmpCell{72, 141, 74, 133};
+// The sweep runs from 14 rows under the cell top (clear of the label line) to the bar, or 2 rows above the bottom.
+constexpr CellGeom cell_geom(int16_t top, int16_t bottom, bool bar) {
+    return {top, bottom, static_cast<int16_t>(top + 14), static_cast<int16_t>(bottom - (bar ? 7 : 2))};
+}
 
-constexpr int16_t kRule1Y = 70, kRule2Y = 142, kRule3Y = 194;   // 2 px rules
-constexpr int16_t kBandY0 = 144, kBandY1 = 193;
-constexpr int16_t kBandMidX = 126, kBandSplitY = 168;
-constexpr int16_t kBarX0 = 10, kBarX1 = 214, kBarY = 136, kBarH = 3;
+constexpr int16_t kHeroY0 = 0, kHeroY1 = 73;
+constexpr int16_t kRule1Y = 74, kRule3Y = 194;                 // 2 px rules under the hero and above the info block
+// The 1 px rule between the rows sits on y136, not y135: the landscape mapping squeezes 240 logical rows into 224 and
+// drops y135 entirely (test_ui_home_landscape checks every rule keeps a physical row).
+constexpr int16_t kRowY0[2] = {76, 137}, kRowY1[2] = {135, 193};   // ledger rows and card cells
+constexpr int16_t kRowRuleY = 136;                             // 1 px rule between the rows (both columns)
+constexpr int16_t kLedgerX1 = 139, kVRuleX = 140, kCardX0 = 141;
 constexpr int16_t kInfoTagX = 4, kInfoValX = 52, kInfoRightX = 220, kInfoRow1Base = 213, kInfoRow2Base = 235;
+
+// ---- contract bar ------------------------------------------------------------------------------
+// 3 px against the contract maximum, 90 % tick: hero x10..214 at its row 68, a ledger row x6..133, 3 rows over its bottom.
+struct BarGeom { int16_t x0, x1, y; };
+constexpr int16_t kBarH = 3;
+constexpr BarGeom kHeroBar{10, 214, static_cast<int16_t>(kHeroY1 - 5)};
+constexpr BarGeom ledger_bar(int row) { return {6, 133, static_cast<int16_t>(kRowY1[row] - 3)}; }
 
 // ---- alarms ------------------------------------------------------------------------------------
 enum class Alarm : uint8_t { None, Near, Over };
@@ -46,21 +63,24 @@ constexpr uint32_t pct_of(uint32_t abs_ma, uint32_t max_ma) {
 }
 
 // ---- limit bar ---------------------------------------------------------------------------------
-constexpr int kBarTrack = kBarX1 - kBarX0 + 1;   // 205 px
-// Filled width of the bar in px (0 = empty, kBarTrack = at or over the limit).
-constexpr int bar_fill_w(uint32_t abs_ma, uint32_t max_ma) {
-    if (max_ma == 0 || abs_ma == 0) return 0;
-    const uint64_t n = static_cast<uint64_t>(abs_ma) * (kBarX1 - kBarX0);
-    const int w = static_cast<int>((n * 2 + max_ma) / (2ull * max_ma)) + 1;   // round(204 f) + 1
-    return w > kBarTrack ? kBarTrack : w;
+constexpr int bar_track(BarGeom b) { return b.x1 - b.x0 + 1; }
+// Filled width of the bar in px (0 = empty, the whole track = at or over the limit).
+constexpr int bar_fill_w(uint32_t abs, uint32_t max, BarGeom b) {
+    if (max == 0 || abs == 0) return 0;
+    const uint64_t n = static_cast<uint64_t>(abs) * static_cast<uint32_t>(b.x1 - b.x0);
+    const int w = static_cast<int>((n * 2 + max) / (2ull * max)) + 1;   // round((x1 - x0) f) + 1
+    return w > bar_track(b) ? bar_track(b) : w;
 }
 // x of the 90 % tick.
-constexpr int16_t bar_tick_x() { return static_cast<int16_t>(kBarX0 + (kBarX1 - kBarX0) * 9 / 10 + ((kBarX1 - kBarX0) * 9 % 10 >= 5 ? 1 : 0)); }
+constexpr int16_t bar_tick_x(BarGeom b) {
+    return static_cast<int16_t>(b.x0 + (b.x1 - b.x0) * 9 / 10 + ((b.x1 - b.x0) * 9 % 10 >= 5 ? 1 : 0));
+}
 
 // ---- sweep -------------------------------------------------------------------------------------
-// Full scale of a cell in 10 mV / 10 mA units: the contract maximum x 1.15 (20 V / 5 A when unknown).
+// Full scale of a cell in 10 mV / 10 mA / 10 mW units: the contract maximum x 1.15 (20 V / 5 A / 60 W when unknown).
 constexpr uint32_t scale_v10(uint32_t max_mv) { return (max_mv ? max_mv : 20000u) * 115u / 1000u; }
 constexpr uint32_t scale_a10(uint32_t max_ma) { return (max_ma ? max_ma : 5000u) * 115u / 1000u; }
+constexpr uint32_t scale_w10(uint32_t max_mw) { return static_cast<uint32_t>(static_cast<uint64_t>(max_mw ? max_mw : 60000u) * 115u / 1000u); }
 // Rows covered by a sample, counted from the cell bottom of the sweep area: 0 = no column,
 // else 1 .. span+1 (the top row of the column is its level line).
 constexpr int sweep_rows(uint32_t v10, uint32_t scale10, int span) {
@@ -157,7 +177,10 @@ constexpr Pill pill_of(Mode m, Alarm a, std::uint8_t pin = 0) {
 // unknown or nothing is live: an unplugged tester never prints a stale "max 1.0V".
 bool max_volts_text(Mode m, const ProtoInfo &p, StrBuf<12> &out);
 bool max_amps_text(Mode m, const ProtoInfo &p, StrBuf<12> &out);
-// IBUS alarm line: "92% OF 5A" (Near) or "OVER 5A LIMIT" (Over).
-void alarm_text(Alarm a, uint32_t abs_ma, uint32_t max_ma, StrBuf<16> &out);
+// The same for any quantity: "max 100W" from a maximum in milli-units.
+bool max_text(Mode m, uint32_t max_milli, char unit, StrBuf<12> &out);
+// Alarm line of a hero cell: "92% OF 5A" / "93% OF 100W" (Near) or "OVER 5A LIMIT" (Over); a ledger row's short form
+// (`brief`): "92%" or "OVER". 20 bytes: the longest line, "OVER 3.25A LIMIT", is 16 characters.
+void alarm_text(Alarm a, uint32_t abs, uint32_t max, StrBuf<20> &out, char unit = 'A', bool brief = false);
 
 }  // namespace k2::home

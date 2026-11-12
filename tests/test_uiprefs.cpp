@@ -154,6 +154,27 @@ void test_idle_wake_bit() {
     CHECK_EQ(uiprefs::load(v.f).idle_wake, 1);
 }
 
+// Home hero (Long Back cycles W -> V -> A): bits 5..6 of the orientation byte, 0 = W (the default, and what every older
+// file holds); 3 is not a hero and reads as W.
+void test_home_hero_bits() {
+    using uiprefs::Prefs;
+    CHECK_EQ(Prefs{}.home_hero, 0);
+    const std::array<std::uint8_t, 8> old{'K', '2', 'U', 'P', 0, 0xFF, 0, 0x1B};   // an older record: rotation bits only
+    CHECK_EQ(uiprefs::decode(old).home_hero, 0);
+    CHECK_EQ(uiprefs::encode(Prefs{}) == uiprefs::encode(Prefs{.home_hero = 0}), 1);   // W adds nothing to the file
+    const std::array<std::uint8_t, 8> amps{'K', '2', 'U', 'P', 0, 0xFF, 0, 0x40};
+    CHECK_EQ(uiprefs::encode(Prefs{.home_hero = 2}) == amps, 1);
+    CHECK_EQ(uiprefs::decode(amps).home_hero, 2);
+    const std::array<std::uint8_t, 8> bad{'K', '2', 'U', 'P', 0, 0xFF, 0, 0x60};
+    CHECK_EQ(uiprefs::decode(bad).home_hero, 0);
+    for (std::uint8_t h = 0; h < 3; h++) {
+        const Prefs in{.rotation_manual = true, .rotation = 2, .rotate_buttons = true, .idle_wake = true, .home_hero = h};
+        const Prefs back = uiprefs::decode(uiprefs::encode(in));
+        CHECK_EQ(back == in, 1);
+    }
+    CHECK_EQ(uiprefs::decode(uiprefs::encode(Prefs{.home_hero = 1})).idle_wake, 0);
+}
+
 void test_legacy_page_is_outside_the_volume() {
     CHECK_EQ(flash::store_sector_allowed(uiprefs::kLegacyAddr), 0);   // no static grant: erasable only with our signature on it
     CHECK_EQ(flash::legacy_candidate(uiprefs::kLegacyAddr), 1);
@@ -170,6 +191,7 @@ int main() {
     test_smoothing_preset();
     test_orientation_byte();
     test_idle_wake_bit();
+    test_home_hero_bits();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

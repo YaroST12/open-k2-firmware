@@ -82,18 +82,23 @@ public:
     // drawn that way (manual = locked at `rotation`; automatic leaves the default until gravity says otherwise).
     // Writes nothing.
     void restore_orientation(bool manual, uint8_t rotation, bool rotate_buttons);
+    // Home's hero quantity (Long Back on Home walks W -> V -> A): set_home_hero puts it in force, repaints Home and
+    // stores it in the uiprefs record; restore_home_hero is the boot-time half (the stored byte, writes nothing).
+    void set_home_hero(home::Qty q);
+    void restore_home_hero(uint8_t stored) { ctx_.keep.home_hero = home::qty_from(stored); }
     // No sensor is guessed: a future verified driver supplies screen-axis gravity in mg.
     void feed_gravity(std::optional<orientation::Gravity> gravity, uint32_t now_ms);
     // Called every main-loop pass (~20 ms): samples power, integrates energy, and every
-    // ~100 ms updates the changed fields of the current page.
-    void tick(uint32_t now_ms);
+    // ~100 ms updates the changed fields of the current page. Returns Reboot once the OK + Back chord has been held
+    // kChordRebootMs (the caller reboots).
+    UiAction tick(uint32_t now_ms);
     // Debounced button event (physical or injected): the global handler first, then the page.
     UiAction on_button(Button b, ButtonEvent ev, uint32_t now_ms);
     // The same for a remote press (Remote::press, WebHID, the scripts): `logical` is the key with its
     // default-orientation meaning (plus = next/down, minus = previous/up), never remapped by the rotation or
     // the Rotate buttons setting, and it takes no part in the +/- rotation gesture.
     UiAction on_remote_button(Button logical, ButtonEvent ev, uint32_t now_ms);
-    // Strip highlight and held state (the BACK reboot card) for a remote key. Plus / minus light the slot of
+    // Strip highlight and held state (the OK + Back reboot chord) for a remote key. Plus / minus light the slot of
     // the physical key that carries that action in the current rotation; a remote key never counts as
     // physically down, so it cannot be one half of the rotation chord.
     void set_remote_pressed(Button logical, bool down, uint32_t now_ms);
@@ -160,7 +165,7 @@ public:
     // tick() clears it. A held button (long-press slot) stays lit until release.
     static constexpr uint32_t kPressFlashMs = 120;
     void set_pressed(Button b, bool down, uint32_t now_ms = 0);
-    bool hold_card_visible() const { return hold_shown_; }   // BACK held >= 1 s: "Reboot in N"
+    bool hold_card_visible() const { return hold_shown_; }   // OK + Back held >= 1 s: "Reboot in N"
     bool lit(Button b) const { return pressed_[static_cast<int>(b)]; }
     void show_rebooting();
     // Screenshot support. render_for_capture() redraws the whole screen (current page and panel)
@@ -342,11 +347,19 @@ private:
     bool held(int k) const { return down_[k] || remote_down_[k]; }
     UiAction finish_button(UiAction action, uint32_t now_ms);
     uint32_t lit_since_[4] = {};
+    // The reboot gesture (OK + Back, ui_calc.hpp RebootChord): fed on every key edge, physical or remote. While it is
+    // active the single-key OK / Back events are dropped, each until that key is pressed afresh.
+    RebootChord chord_;
+    bool suppress_chord_[4] = {};
+    void feed_chord(uint32_t now_ms);
     bool hold_shown_ = false;       // the reboot HoldCard is on screen
     int hold_px_ = -1;              // progress fill drawn so far
     int hold_left_ = -1;            // countdown drawn so far
-    uint32_t hold_ms_ = 0;          // BACK held time at the last card draw
-    void update_hold_card(uint32_t now_ms);
+    uint32_t hold_ms_ = 0;          // chord held time at the last card draw
+    bool extremes_live_ = false;    // VBUS was live at the last tick: a rising edge resets the Home peaks and cards
+    uint32_t sag_level_ms_ = 0;     // last refresh of ctx_.sag_level_mv
+    home::SettledLevel sag_settle_; // the contract level counts for the sag once it has held 1 s
+    void update_hold_card(uint32_t now_ms, RebootChord::Step step);
     void draw_hold_card(uint32_t held_ms);
 
     // What outlives a page is resident: the context (remembered cursors, the trigger draft, the cable meter, the kit), the

@@ -3889,7 +3889,7 @@ def build_parser():
     sp.add_argument("button", choices=sorted(BUTTONS))
     g = sp.add_mutually_exclusive_group()
     g.add_argument("--long", action="store_true", help=f"hold {LONG_PRESS_MS} ms")
-    g.add_argument("--ms", type=int, help="hold time in ms (30..10000); 5000 = reboot hold on back")
+    g.add_argument("--ms", type=int, help="hold time in ms (30..10000); to reset the K2 use `reboot`")
     sub.add_parser("state", help="page, power readings, PD summary")
     st = sub.add_parser("charger-test", help="read existing RAM suite results (never starts or stops tests)")
     sts = st.add_subparsers(dest="test_cmd", required=True)

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Home v7 page ("Dual hero"): the VBUS and IBUS measurement cells with their patient-monitor sweeps, the
-// W / Wh / Ah band and the two-row info block. The pure parts live in home_model / home_proto, the
+// Home 2c page (user decision 2026-11-12): the hero cell (W, V or A at 64 px; Long Back cycles it), the ledger rows with
+// the two other quantities at 48 px, the two right-column cards the cycler picks, and the two-row info block. Every
+// quantity cell carries a patient-monitor sweep. The pure parts live in home_model / home_cards / home_proto, the
 // compositor in home_cell; this file decides what to repaint (zone signatures) and feeds them.
 #include "k2/ui/ui_pages.hpp"
 
@@ -16,6 +17,7 @@
 #include "k2/ui/home_proto.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui.hpp"
+#include "k2/ui/ui_emarker.hpp"
 #include "k2/ui/ui_style.hpp"
 
 namespace k2 {
@@ -27,15 +29,30 @@ namespace {
 // Live colour, stale grey, or idle faint.
 constexpr uint16_t tone(hm::Mode m, uint16_t live) { return m == hm::Mode::Live ? live : m == hm::Mode::Stale ? kStale : kFaint; }
 
-constexpr int16_t kHeroX = 39, kUnitX = 201;          // hero digits and their unit letter
-constexpr int16_t kDigitTop[2] = {24, 94};            // hero line-box tops (VBUS, IBUS)
-constexpr int16_t kUnitTop[2] = {43, 113};
+// ---- quantity cells (slot 0 = hero, 1 / 2 = ledger rows) ---------------------------------------
+constexpr int16_t kHeroDigitX = 38, kHeroDigitTop = 25, kHeroUnitX = 200, kHeroUnitTop = 44;   // baseline 63
 constexpr int16_t kHeroRows = 39;                     // font_64 line height
+constexpr int16_t kLedDigitX = 8, kLedUnitX = 129;    // 48 px digits right-aligned at x127, unit font 16
+constexpr int16_t kLedBase[2] = {129, 186};
+constexpr int16_t kLedRows = 30;                      // font_48 line height
+constexpr int kDigitChars = 5;
 constexpr int16_t kPillX = 211, kPillY = 1, kPillBoxH = 17;
-constexpr int16_t kArrowX = 8, kArrowY = 101;
-constexpr int16_t kWarnX = 10, kWarnY = 74;
+constexpr int16_t kHeroArrowX = 8, kHeroArrowY = 33;  // A as the hero: the 22 px arrow left of the digits
+constexpr int16_t kLedArrowX = 50, kLedArrowDy = 9, kLedArrowBox = 13;
+constexpr int16_t kHeroLabelX = 10, kLedLabelX = 6;
+constexpr int16_t kMaxRightHero = 219, kMaxRightLed = 135;
+static_assert(kHeroDigitX + kDigitChars * 32 - 1 == 197, "hero digits end at x197");
+static_assert(kLedDigitX + kDigitChars * 24 - 1 == 127, "ledger digits end at x127");
+
+// ---- cards (x141..223) -------------------------------------------------------------------------
+constexpr int16_t kCardL = 146, kCardR = 220;          // text column: labels from x146, values right-aligned at x220
+constexpr int16_t kDecX = 182, kEnergyUnitX = 208;     // Wh / Ah: decimal column, unit column
+constexpr int16_t kDotX = 218;                         // the attention dot, 5 x 5 against the top-right corner
+static_assert(kDotX + 5 - 1 <= hm::kW - 2, "the attention dot stays inside the card");
+
+// ---- info block ----------------------------------------------------------------------------------
 constexpr int16_t kInfoRow1Top = 201, kInfoRow2Top = 223;
-constexpr int kDiagChars = 16, kElChars = 5, kWattChars = 4, kEnergyChars = 3;
+constexpr int kDiagChars = 16, kElChars = 5;
 constexpr int16_t kElX = 180, kRoleX = 196;
 constexpr int16_t kRowTop[2] = {kInfoRow1Top, kInfoRow2Top};
 // Row 1's diagnosis word (hm::format_diag) and its tag fit between the tag column and the elapsed time.
@@ -43,14 +60,11 @@ static_assert(pd::diag::screen::kLabelChars <= static_cast<std::size_t>(kDiagCha
 static_assert(hm::kInfoValX + kDiagChars * static_cast<int>(kSmallAdvPx) <= kElX, "the diagnosis word overlaps the elapsed time");
 static_assert(hm::kInfoTagX + hm::kDiagTag.size() * kSmallAdvPx <= static_cast<unsigned>(hm::kInfoValX), "the Diag tag runs into its value");
 
-// Repaint zones of the lower cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
+// Repaint zones of the info cell (logical, inclusive). A zone is wider and lower than its fields on purpose: a glyph
 // keeps its native pixel size while the landscape mapping squeezes the rows, so an old text can reach a few pixels
 // past the logical box of the new one, and the rect repainted for a change has to cover all of it.
 struct Zone { int16_t x0, y0, x1, y1; };
-constexpr Zone kZones[6] = {
-    {0, 144, 128, 197},     // W number and its unit
-    {118, 144, 223, 172},   // Wh
-    {118, 165, 223, 197},   // Ah
+constexpr Zone kInfoZones[3] = {
     {0, 196, 186, 226},     // info row 1: tag and value
     {176, 196, 223, 226},   // info row 1: elapsed time
     {0, 220, 223, 239},     // info row 2: protocol, value, role
@@ -58,25 +72,45 @@ constexpr Zone kZones[6] = {
 constexpr int kCatchUpSteps = 3;                      // late sweep steps taken in one update
 constexpr int kReloadLagSteps = 8;                   // a sweep this many steps behind is rebuilt from the trend
 
-constexpr int32_t abs32(int32_t v) { return v < 0 ? -v : v; }
+constexpr int32_t abs32(int32_t v) { return v < 0 ? (v == INT32_MIN ? INT32_MAX : -v) : v; }
+
+constexpr trend::Qty trend_qty(hm::Qty q) { return q == hm::Qty::W ? trend::Qty::W : q == hm::Qty::V ? trend::Qty::V : trend::Qty::A; }
+constexpr std::string_view qty_label(hm::Qty q) { return q == hm::Qty::W ? "POWER" : q == hm::Qty::V ? "VBUS" : "IBUS"; }
+constexpr std::string_view qty_unit(hm::Qty q) { return q == hm::Qty::W ? "W" : q == hm::Qty::V ? "V" : "A"; }
+constexpr char qty_unit_char(hm::Qty q) { return q == hm::Qty::W ? 'W' : q == hm::Qty::V ? 'V' : 'A'; }
+constexpr uint16_t qty_color(hm::Qty q) { return q == hm::Qty::W ? kWatt : q == hm::Qty::V ? kVolt : kAmp; }
+constexpr uint16_t qty_tint(hm::Qty q) { return q == hm::Qty::W ? kWattT : q == hm::Qty::V ? kVoltT : kAmpT; }
+constexpr uint16_t qty_line(hm::Qty q) { return q == hm::Qty::W ? kWattL : q == hm::Qty::V ? kVoltL : kAmpL; }
+
+// The geometry of a quantity slot: the content rows (the rule under it belongs to the cell too).
+struct Slot { int16_t top, bottom, cell_bottom, x1; };
+constexpr Slot slot_of(int s) {
+    return s == 0 ? Slot{hm::kHeroY0, hm::kHeroY1, static_cast<int16_t>(hm::kRule1Y + 1), static_cast<int16_t>(hm::kW - 1)}
+         : s == 1 ? Slot{hm::kRowY0[0], hm::kRowY1[0], hm::kRowRuleY, hm::kVRuleX}
+                  : Slot{hm::kRowY0[1], hm::kRowY1[1], hm::kRowY1[1], hm::kVRuleX};
+}
+
+uint32_t sig_items(uint32_t h, std::span<const hm::Item> items) {
+    for (const hm::Item &i : items) {
+        h = mix_u32(h, static_cast<uint32_t>(static_cast<uint16_t>(i.x)) | static_cast<uint32_t>(static_cast<uint16_t>(i.y)) << 16);
+        h = mix_u32(mix_u32(h, i.color), static_cast<uint32_t>(i.kind) | static_cast<uint32_t>(i.aux) << 8);
+        h = mix(h, i.text);
+    }
+    return h;
+}
 
 }  // namespace
 
-// What one update decides before it draws: the mode, the protocol, the alarm and the display texts.
+// What one update decides before it draws: the mode, the protocol, the alarms and the display texts.
 struct HomePage::Frame {
     hm::Mode mode = hm::Mode::Idle;
     hm::ProtoInfo proto{};
-    hm::Alarm alarm = hm::Alarm::None;
-    uint8_t pin = 0;           // fusb302::pin_rd(): a held Rd pin shows as the "Rd pin CCx" badge
+    uint32_t max[3] = {};       // per hm::Qty: the contract maximum in milli-units (0 = unknown: no bar, no alarm)
+    hm::Alarm alarm[3] = {};    // per hm::Qty (V never alarms)
+    uint8_t pin = 0;            // fusb302::pin_rd(): a held Rd pin shows as the "Rd pin CCx" badge
     uint32_t now = 0;
-    char hero[2][8] = {};      // V and A, five characters
-    char watt[8] = {};         // W, four characters
+    char text[3][8] = {};       // per hm::Qty: five characters
 };
-
-void HomePage::draw_rules() {
-    const Surface &c = ctx_.content;
-    for (const int16_t y : {hm::kRule1Y, hm::kRule2Y}) gfx_fill(c, 0, y, hm::kW, 2, kRule);
-}
 
 void HomePage::draw_static() {
     invalidate();   // the layout is painted by the first update (it knows the mode)
@@ -84,27 +118,32 @@ void HomePage::draw_static() {
 
 void HomePage::invalidate() {
     statics_ok_ = false;
-    lower_ok_ = false;
-    cell_valid_[0] = cell_valid_[1] = false;
-    thr_.reset();   // the digits repaint at once; mode_ and the sweep stay (a capture re-renders strips of one frame)
-    hd_[0].invalidate();
-    hd_[1].invalidate();
+    info_ok_ = false;
+    for (bool &v : cell_valid_) v = false;
+    for (bool &v : card_valid_) v = false;
+    thr_.reset();   // the digits repaint at once; mode_ and the sweeps stay (a capture re-renders strips of one frame)
+    for (hm::DigitField &d : hd_) d.invalidate();
 }
 
 PanelLabels HomePage::labels() const {
     PanelLabels l = base_labels();
-    l.b[static_cast<int>(Button::Ok)] = {"Zoom", "Reset", "", false};   // short: trend window; long: energy reset
+    l.b[static_cast<int>(Button::Back)] = {"Back", "Hero", "", false};   // long: the hero cycles W -> V -> A
+    l.b[static_cast<int>(Button::Ok)] = {"Zoom", "Reset", "", false};    // short: trend window; long: energy reset
     return l;
 }
 
 bool HomePage::on_event(Event e) {
     if (e.button == Button::Ok && e.press == Press::Long) {
-        ctx_.ui->run_action(Action::EnergyReset, ctx_.now);
+        ctx_.ui->run_action(Action::EnergyReset, ctx_.now);   // energy, peaks, sag and the card cycler
         return true;
     }
     if (e.button == Button::Ok && e.press == Press::Short) {
         window_ = trend::next(window_);
-        sweep_ok_ = false;   // the next update reloads the sweep for the new window and repaints the cells
+        sweep_ok_ = false;   // the next update reloads the sweeps for the new window and repaints the cells
+        return true;
+    }
+    if (e.button == Button::Back && e.press == Press::Long) {
+        ctx_.ui->set_home_hero(hm::next(ctx_.keep.home_hero));
         return true;
     }
     return back_event(e);
@@ -135,59 +174,93 @@ void HomePage::sample_values(Frame &f, uint32_t now_ms) {
     const bool live = f.mode == hm::Mode::Live, stale = f.mode == hm::Mode::Stale;
     f.pin = fusb302::pin_rd();
     const power::Metrics &pm = stale ? ctx_.last.pm : ctx_.pm;
+    bool fresh = false;
     if (live) {
-        if (thr_.pass(now_ms)) {   // the display filter: V, A and W change at most 4 times a second, as one set
+        if (thr_.pass(now_ms)) {   // the display filter: V, A, W and the card values change at most 4 times a second, as one set
             v_mv_ = abs32(pm.vbus_mv);
             a_ma_ = abs32(pm.current_ma);
             w_mw_ = abs32(pm.power_mw);
             flow_ = pm.flow;
+            fresh = true;
         }
         f.proto = hm::live_proto(ctx_, pm);
         last_proto_ = f.proto;
-        f.alarm = hm::alarm_of(static_cast<uint32_t>(a_ma_), f.proto.ma);
     } else if (stale) {
         v_mv_ = abs32(pm.vbus_mv);
         a_ma_ = abs32(pm.current_ma);
         w_mw_ = abs32(pm.power_mw);
         flow_ = pm.flow;
         f.proto = last_proto_;
+        fresh = true;
     } else {
         v_mv_ = a_ma_ = w_mw_ = 0;
         flow_ = power::Flow::Idle;
+        fresh = true;
+    }
+    const uint32_t cmw = hm::contract_mw(f.proto);
+    f.max[static_cast<int>(hm::Qty::W)] = cmw;
+    f.max[static_cast<int>(hm::Qty::V)] = f.proto.max_mv;
+    f.max[static_cast<int>(hm::Qty::A)] = f.proto.ma;
+    if (live) {
+        f.alarm[static_cast<int>(hm::Qty::W)] = hm::alarm_of(static_cast<uint32_t>(w_mw_), cmw);
+        f.alarm[static_cast<int>(hm::Qty::A)] = hm::alarm_of(static_cast<uint32_t>(a_ma_), f.proto.ma);
     }
     if (f.mode == hm::Mode::NoMeter) {
-        for (char (&h)[8] : f.hero) { h[0] = h[1] = '-'; h[2] = 0; }
-        f.watt[0] = f.watt[1] = '-';
-        f.watt[2] = 0;
+        for (char (&h)[8] : f.text) { h[0] = h[1] = '-'; h[2] = 0; }
     } else {
-        hm::fmt_hero(f.hero[0], v_mv_);
-        hm::fmt_hero(f.hero[1], a_ma_);
-        hm::fmt_watts(f.watt, w_mw_);
+        hm::fmt_hero(f.text[static_cast<int>(hm::Qty::W)], w_mw_);
+        hm::fmt_hero(f.text[static_cast<int>(hm::Qty::V)], v_mv_);
+        hm::fmt_hero(f.text[static_cast<int>(hm::Qty::A)], a_ma_);
+    }
+    // The card values, as one set with the digits.
+    if (fresh) {
+        const hm::Extremes &x = ctx_.extremes;
+        card_.peak_mw = x.peak_mw();
+        card_.peak_ma = x.peak_ma();
+        card_.has_sag = x.has_sag();
+        card_.sag_bp = x.sag_bp();
+        card_.sag_level_mv = x.sag_level_mv();
+        card_.drop = hm::drop_of(live, ctx_.cable.has_idle(), ctx_.cable.idle_mv(), ctx_.cable.idle_ma(), v_mv_, a_ma_);
+        const std::optional<adc::Reading> &an = ctx_.analog;
+        card_.lines[0] = an ? an->cc1_mv : -1;
+        card_.lines[1] = an ? an->cc2_mv : -1;
+        card_.lines[2] = an ? an->dp_mv : -1;
+        card_.lines[3] = an ? an->dm_mv : -1;
     }
 }
 
-// ---- sweep -----------------------------------------------------------------------------------
+// ---- sweeps ----------------------------------------------------------------------------------
+// One sweep per slot: the hero's 110 columns, the ledger rows' 66 over the same window. The hero steps on the clock; a
+// ledger row steps when the hero cursor crosses one of its columns (cursor x 66 / 110), so all three show one span.
 
-void HomePage::update_sweep(const Frame &f, uint32_t now_ms, int &step_col, int &step_n) {
-    step_col = -1;
-    step_n = 0;
+void HomePage::update_sweep(const Frame &f, uint32_t now_ms, int (&step_col)[3], int (&step_n)[3]) {
+    for (int i = 0; i < 3; i++) { step_col[i] = -1; step_n[i] = 0; }
     if (f.mode != hm::Mode::Live && f.mode != hm::Mode::Stale) return;
-    const uint32_t sv = hm::scale_v10(f.proto.max_mv), sa = hm::scale_a10(f.proto.ma);
-    const uint32_t sig = mix_u32(mix_u32(mix_init(), sv), sa);
+    const hm::Qty hero = ctx_.keep.home_hero;
+    const hm::Ledger led = hm::ledger_of(hero);
+    const hm::Qty q[3] = {hero, led.row[0], led.row[1]};
+    uint32_t scale[3];
+    int span[3];
+    uint32_t sig = mix_u32(mix_init(), static_cast<uint32_t>(hero));
+    for (int i = 0; i < 3; i++) {
+        const uint32_t mx = f.max[static_cast<int>(q[i])];
+        scale[i] = q[i] == hm::Qty::W ? hm::scale_w10(mx) : q[i] == hm::Qty::V ? hm::scale_v10(mx) : hm::scale_a10(mx);
+        const Slot s = slot_of(i);
+        span[i] = hm::cell_geom(s.top, s.bottom, q[i] != hm::Qty::V && mx > 0).span();
+        sig = mix_u32(mix_u32(sig, scale[i]), static_cast<uint32_t>(span[i]));
+    }
     const uint32_t step = hm::step_ms(static_cast<int>(window_));
     if (sweep_ok_ && (sig != sweep_scale_ || (f.mode == hm::Mode::Live && now_ms - sweep_t_ >= kReloadLagSteps * step)))
         sweep_ok_ = false;
-    constexpr int kLoad = hm::kCols;
-    const int span[2] = {hm::kVoltCell.span(), hm::kAmpCell.span()};
-    const uint32_t scale[2] = {sv, sa};
-    const trend::Qty qty[2] = {trend::Qty::V, trend::Qty::A};
-    if (!sweep_ok_) {   // rebuild both sweeps from the trend: newest sample at the column before the cursor
-        uint16_t col[kLoad];
-        uint8_t lv[kLoad];
-        for (int i = 0; i < 2; i++) {
-            ctx_.trend.columns(window_, qty[i], col, kLoad);
-            for (int k = 0; k < kLoad; k++) lv[k] = static_cast<uint8_t>(hm::sweep_rows(col[k], scale[i], span[i]));
-            sw_[i].load(lv);
+    if (!sweep_ok_) {   // rebuild the sweeps from the trend: newest sample at the column before the cursor
+        uint16_t col[hm::kCols];
+        uint8_t lv[hm::kCols];
+        for (int i = 0; i < 3; i++) {
+            const int n = i == 0 ? hm::kCols : hm::kLedgerCols;
+            sw_[i].n = static_cast<uint8_t>(n);
+            ctx_.trend.columns(window_, trend_qty(q[i]), col, n);
+            for (int k = 0; k < n; k++) lv[k] = static_cast<uint8_t>(hm::sweep_rows(col[k], scale[i], span[i]));
+            sw_[i].load(std::span<const uint8_t>(lv, static_cast<size_t>(n)));
         }
         sweep_ok_ = true;
         sweep_t_ = now_ms;
@@ -197,181 +270,359 @@ void HomePage::update_sweep(const Frame &f, uint32_t now_ms, int &step_col, int 
     }
     const bool replay = now_ms == sweep_seen_;   // a capture re-renders the same frame: no second step
     sweep_seen_ = now_ms;
-    // One column per step. An update catches up on a few late steps at once (one repaint strip covers them);
-    // a longer lag reloads the sweep above.
-    while (f.mode == hm::Mode::Live && !replay && step_n < kCatchUpSteps && now_ms - sweep_t_ >= step) {
+    // One hero column per step. An update catches up on a few late steps at once (one repaint strip covers them);
+    // a longer lag reloads the sweeps above.
+    int hero_n = 0;
+    while (f.mode == hm::Mode::Live && !replay && hero_n < kCatchUpSteps && now_ms - sweep_t_ >= step) {
         sweep_t_ += step;
-        for (int i = 0; i < 2; i++) {
-            const uint8_t lv = static_cast<uint8_t>(hm::sweep_rows(ctx_.trend.latest(window_, qty[i]), scale[i], span[i]));
-            const int first = sw_[i].step(lv);
-            if (i == 0 && step_n == 0) step_col = first;
+        const uint8_t lv = static_cast<uint8_t>(hm::sweep_rows(ctx_.trend.latest(window_, trend_qty(q[0])), scale[0], span[0]));
+        const int first = sw_[0].step(lv);
+        if (step_n[0] == 0) step_col[0] = first;
+        step_n[0]++;
+        hero_n++;
+        const int target = sw_[0].cursor * hm::kLedgerCols / hm::kCols;
+        for (int i = 1; i < 3; i++) {
+            if (sw_[i].cursor == target) continue;
+            const uint8_t l = static_cast<uint8_t>(hm::sweep_rows(ctx_.trend.latest(window_, trend_qty(q[i])), scale[i], span[i]));
+            const int fc = sw_[i].step(l);
+            if (step_n[i] == 0) step_col[i] = fc;
+            step_n[i]++;
         }
-        step_n++;
     }
 }
 
-// ---- cells -----------------------------------------------------------------------------------
+// ---- quantity cells ----------------------------------------------------------------------------
 
-void HomePage::paint_cell(int ci, const Frame &f, int step_col, int step_n, bool digits_changed, int16_t px0, int16_t px1) {
-    const bool amp = ci == 1;
-    const hm::CellGeom g = amp ? hm::kAmpCell : hm::kVoltCell;
-    const hm::Mode m = f.mode;
-    const bool live = m == hm::Mode::Live, shown = live || m == hm::Mode::Stale;
-    const bool over = amp && f.alarm == hm::Alarm::Over, near_ = amp && f.alarm == hm::Alarm::Near;
-    const uint16_t tok = amp ? kAmp : kVolt;
-    const uint16_t ink = over ? kBg : tone(m, tok);                    // digits and unit
-    const uint16_t edge = over ? kText : near_ ? kCaution : tone(m, tok);
-    const uint16_t label = over ? kBg : kDim;
-
+struct HomePage::QtyHead {
     StrBuf<12> ptxt, mtxt;
-    StrBuf<16> atxt;
-    hm::Item it[12];
-    int n = 0;
-    it[n++] = hm::fill(0, g.top, 4, static_cast<int16_t>(g.bottom - g.top + 1), edge);
+    StrBuf<20> atxt;
+};
+
+// At most 4 head items: the warning triangle and the alarm line (or the label and the span), then the pill's plate and
+// text (or the max badge).
+uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::Item *it, int &n) {
+    const bool hero = si == 0;
+    const Slot s = slot_of(si);
+    const hm::Mode m = f.mode;
+    const bool shown = m == hm::Mode::Live || m == hm::Mode::Stale;
+    const int qi = static_cast<int>(q);
+    const hm::Alarm al = f.alarm[qi];
+    const bool over = al == hm::Alarm::Over, near_ = al == hm::Alarm::Near;
+    const uint32_t mx = f.max[qi];
+    const uint16_t label = over ? kBg : kDim;
+    const char uc = qty_unit_char(q);
+    // A W maximum shows in whole watts ("max 36W", "OVER 36W LIMIT"); the alarm itself compares the exact figure.
+    const uint32_t shown_max = q == hm::Qty::W ? (mx + 500) / 1000 * 1000 : mx;
+    StrBuf<12> &ptxt = h.ptxt, &mtxt = h.mtxt;
+    StrBuf<20> &atxt = h.atxt;
+    const int16_t lx = hero ? kHeroLabelX : kLedLabelX;
+    const int16_t ly = static_cast<int16_t>(s.top + 3);
     uint32_t head = mix_init();
-    int16_t head_x0, head_y0, head_y1;
-    if (!amp) {
-        it[n++] = hm::text(kLabelFont, 10, 3, "VBUS", label);
-        if (shown) it[n++] = hm::text(kLabelFont, 40, 3, trend::label(window_), kFaint);
-        const hm::Pill pill = hm::pill_of(m, f.alarm, f.pin);
-        const bool blink_a = ((f.now / 500u) & 1u) == 0;               // OVER blinks at 1 Hz
-        uint16_t fillc = kStale, inkc = kBg;
+    if (al != hm::Alarm::None) {
+        it[n++] = hm::warn(static_cast<int16_t>(lx - 1), static_cast<int16_t>(s.top + 2), near_ ? kCaution : kBg, near_ ? kBg : kError);
+        hm::alarm_text(al, static_cast<uint32_t>(q == hm::Qty::W ? w_mw_ : a_ma_), shown_max, atxt, uc, !hero);
+        it[n++] = hm::text(kLabelFont, static_cast<int16_t>(lx + 13), ly, atxt.view(), near_ ? kCaution : kBg);
+    } else {
+        const std::string_view lab = qty_label(q);
+        it[n++] = hm::text(kLabelFont, lx, ly, lab, label);
+        if (hero && shown)
+            it[n++] = hm::text(kLabelFont, static_cast<int16_t>(lx + (lab.size() + 1) * kLabelFont.adv), ly, trend::label(window_), kFaint);
+    }
+    hm::Pill pill = hm::Pill::None;
+    if (hero) {
+        pill = hm::pill_of(m, hm::Alarm::None, f.pin);   // the alarm line replaces the OVER pill
         switch (pill) {
         case hm::Pill::Last:   ptxt.put("LAST ").put_age(ctx_.live.age_s(f.now)); break;
-        case hm::Pill::NoVbus: ptxt.put("NO VBUS"); fillc = kSurface; inkc = kDim; break;
-        case hm::Pill::Over:   ptxt.put("OVER"); fillc = blink_a ? kError : kCaution; inkc = blink_a ? kText : kBg; break;
-        case hm::Pill::Pin:    ptxt.put("Rd pin CC").put_char(static_cast<char>('0' + f.pin)); fillc = kCaution; inkc = kBg; break;
-        case hm::Pill::None:   break;
+        case hm::Pill::NoVbus: ptxt.put("NO VBUS"); break;
+        case hm::Pill::Pin:    ptxt.put("Rd pin CC").put_char(static_cast<char>('0' + f.pin)); break;
+        case hm::Pill::Over: case hm::Pill::None: break;
         }
         if (pill != hm::Pill::None) {
+            const uint16_t fillc = pill == hm::Pill::NoVbus ? kSurface : pill == hm::Pill::Pin ? kCaution : kStale;
+            const uint16_t inkc = pill == hm::Pill::NoVbus ? kDim : kBg;
             const int16_t pn = static_cast<int16_t>(ptxt.view().size());
             const int16_t x0 = static_cast<int16_t>(kPillX - 8 * pn);
             it[n++] = hm::fill(x0, kPillY, static_cast<int16_t>(8 * pn + 11), kPillBoxH, fillc);
             it[n++] = hm::text(kSmall, static_cast<int16_t>(x0 + 5), 2, ptxt.view(), inkc);
-        } else if (hm::max_volts_text(m, f.proto, mtxt)) {
-            const int16_t mn = static_cast<int16_t>(mtxt.view().size());
-            it[n++] = hm::text(kLabelFont, static_cast<int16_t>(219 - 6 * mn), 3, mtxt.view(), kDim);
         }
-        head = mix_u32(head, static_cast<uint32_t>(pill) | (pill == hm::Pill::Over && blink_a ? 0x10u : 0u));
-        head = mix(mix(head, ptxt.view()), mtxt.view());
-        head_x0 = 100; head_y0 = 0; head_y1 = 18;
-    } else {
-        if (f.alarm != hm::Alarm::None) {
-            it[n++] = hm::warn(kWarnX, kWarnY, near_ ? kCaution : kBg, near_ ? kBg : kError);
-            hm::alarm_text(f.alarm, static_cast<uint32_t>(a_ma_), f.proto.ma, atxt);
-            it[n++] = hm::text(kLabelFont, 25, 75, atxt.view(), near_ ? kCaution : kBg);
-        } else {
-            it[n++] = hm::text(kLabelFont, 10, 75, "IBUS", label);
-            if (hm::max_amps_text(m, f.proto, mtxt)) {
-                const int16_t mn = static_cast<int16_t>(mtxt.view().size());
-                it[n++] = hm::text(kLabelFont, static_cast<int16_t>(219 - 6 * mn), 75, mtxt.view(), kDim);
-            }
-        }
-        head = mix_u32(head, static_cast<uint32_t>(f.alarm));
-        head = mix(mix(head, atxt.view()), mtxt.view());
-        head_x0 = 4; head_y0 = 72; head_y1 = 90;
     }
-    it[n++] = hm::text(kMid, kUnitX, kUnitTop[ci], amp ? "A" : "V", ink);
+    if (pill == hm::Pill::None && al == hm::Alarm::None && hm::max_text(m, shown_max, uc, mtxt)) {
+        const int16_t mn = static_cast<int16_t>(mtxt.view().size());
+        it[n++] = hm::text(kLabelFont, static_cast<int16_t>((hero ? kMaxRightHero : kMaxRightLed) + 1 - 6 * mn), ly, mtxt.view(), kDim);
+    }
+    head = mix_u32(mix_u32(head, static_cast<uint32_t>(al)), static_cast<uint32_t>(pill));
+    return mix(mix(mix(head, ptxt.view()), mtxt.view()), atxt.view());
+}
 
-    uint32_t arrow_sig = 0, bar_sig = 0;
-    if (amp) {
-        if (shown && f.proto.ma > 0) {   // limit bar: track, fill, 90 % tick
-            const int fw = hm::bar_fill_w(static_cast<uint32_t>(a_ma_), f.proto.ma);
-            const uint16_t fc = over ? kBg : near_ ? kCaution : m == hm::Mode::Stale ? kStale : kAmp;
-            const uint16_t tc = m == hm::Mode::Stale ? kDim : kText;
-            it[n++] = hm::fill(hm::kBarX0, hm::kBarY, hm::kBarTrack, hm::kBarH, kRule);
-            if (fw > 0) it[n++] = hm::fill(hm::kBarX0, hm::kBarY, static_cast<int16_t>(fw), hm::kBarH, fc);
-            it[n++] = hm::fill(hm::bar_tick_x(), hm::kBarY - 2, 1, hm::kBarH + 4, tc);
-            bar_sig = mix_u32(mix_u32(mix_u32(1, static_cast<uint32_t>(fw)), fc), tc);
-        }
-        if (shown) {
-            const bool dash = flow_ == power::Flow::Idle;
-            const uint8_t aux = dash ? hm::dash_dir(ctx_.rotation) : hm::arrow_dir(flow_ == power::Flow::Forward, ctx_.rotation);
-            const uint16_t ac = over ? kBg : dash ? kFaint : live ? kFlow : kStale;   // the stale arrow is the frozen grey
-            it[n++] = hm::arrow(kArrowX, kArrowY, aux, ac);
-            arrow_sig = mix_u32(mix_u32(1, aux), ac);
-        }
+void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int step_n) {
+    const bool hero = si == 0;
+    const Slot s = slot_of(si);
+    const hm::Mode m = f.mode;
+    const bool live = m == hm::Mode::Live, shown = live || m == hm::Mode::Stale;
+    const int qi = static_cast<int>(q);
+    const hm::Alarm al = f.alarm[qi];
+    const bool over = al == hm::Alarm::Over, near_ = al == hm::Alarm::Near;
+    const uint32_t mx = f.max[qi];
+    const bool bar = q != hm::Qty::V && mx > 0;
+    const hm::CellGeom g0 = hm::cell_geom(s.top, s.bottom, bar);
+    const uint16_t tok = qty_color(q);
+    const uint16_t ink = over ? kBg : near_ ? kCaution : tone(m, tok);   // digits and unit
+    int16_t px0 = 0, px1 = 0;
+    const bool digits_changed = hd_[si].set(f.text[qi], px0, px1);   // before the items: the digit item views hd_'s text
+
+    // At most 12 items: 2 rules (ledger) or rule + edge (hero), 4 head items, the unit, 3 bar items, the arrow, the digits.
+    QtyHead texts;
+    hm::Item it[12];
+    int n = 0;
+    // Structure: the rules this cell owns.
+    if (hero) {
+        it[n++] = hm::fill(0, hm::kRule1Y, hm::kW, 2, kRule);
+    } else {
+        it[n++] = hm::fill(hm::kVRuleX, s.top, 1, static_cast<int16_t>(s.cell_bottom - s.top + 1), kRule);
+        if (si == 1) it[n++] = hm::fill(0, hm::kRowRuleY, hm::kVRuleX, 1, kRule);
     }
-    it[n++] = hm::text(kHero, kHeroX, kDigitTop[ci], hd_[ci].view(), ink);
+    if (hero) {
+        const uint16_t edge = over ? kText : near_ ? kCaution : tone(m, tok);
+        it[n++] = hm::fill(0, s.top, 4, static_cast<int16_t>(s.bottom - s.top + 1), edge);
+    }
+    const uint32_t head = qty_head(si, q, f, texts, it, n);
+
+    // Unit, bar, arrow, digits.
+    const int16_t dtop = hero ? kHeroDigitTop : static_cast<int16_t>(kLedBase[si - 1] - 30);
+    if (hero) it[n++] = hm::text(kMid, kHeroUnitX, kHeroUnitTop, qty_unit(q), ink);
+    else it[n++] = hm::text(kSmall, kLedUnitX, static_cast<int16_t>(kLedBase[si - 1] - 12), qty_unit(q), ink);
+    const hm::BarGeom bg = hero ? hm::kHeroBar : hm::ledger_bar(si - 1);
+    uint32_t bar_sig = 0, arrow_sig = 0;
+    if (bar && shown) {   // contract bar: track, fill, 90 % tick
+        const uint32_t abs = static_cast<uint32_t>(q == hm::Qty::W ? w_mw_ : a_ma_);
+        const int fw = hm::bar_fill_w(abs, mx, bg);
+        const uint16_t fc = over ? kBg : near_ ? kCaution : m == hm::Mode::Stale ? kStale : tok;
+        const uint16_t tc = m == hm::Mode::Stale ? kDim : kText;
+        it[n++] = hm::fill(bg.x0, bg.y, static_cast<int16_t>(hm::bar_track(bg)), hm::kBarH, kRule);
+        if (fw > 0) it[n++] = hm::fill(bg.x0, bg.y, static_cast<int16_t>(fw), hm::kBarH, fc);
+        it[n++] = hm::fill(hm::bar_tick_x(bg), static_cast<int16_t>(bg.y - 2), 1, hm::kBarH + 4, tc);
+        bar_sig = mix_u32(mix_u32(mix_u32(1, static_cast<uint32_t>(fw)), fc), tc);
+    }
+    const int16_t ax = hero ? kHeroArrowX : kLedArrowX;
+    const int16_t ay = hero ? kHeroArrowY : static_cast<int16_t>(s.top + kLedArrowDy);
+    const int16_t abox = hero ? static_cast<int16_t>(hm::kArrowBox) : kLedArrowBox;
+    if (q == hm::Qty::A && shown) {
+        const bool dash = flow_ == power::Flow::Idle;
+        const uint8_t aux = dash ? hm::dash_dir(ctx_.rotation) : hm::arrow_dir(flow_ == power::Flow::Forward, ctx_.rotation);
+        const uint16_t ac = over ? kBg : dash ? kFaint : live ? kFlow : kStale;   // the stale arrow is the frozen grey
+        it[n++] = hm::arrow(ax, ay, aux, ac, hero ? 0 : kLedArrowBox);
+        arrow_sig = mix_u32(mix_u32(1, aux), ac);
+    }
+    it[n++] = hm::text(hero ? kHero : kBig, hero ? kHeroDigitX : kLedDigitX, dtop, hd_[si].view(), ink);
 
     hm::Cell cell;
-    cell.geom = g;
+    cell.geom = g0;
+    cell.geom.bottom = s.cell_bottom;
+    cell.x1 = s.x1;
     cell.bg = over ? kError : kBg;
     cell.sweep = shown && !over && sweep_ok_;
-    cell.tint = live ? (amp ? kAmpT : kVoltT) : kPanelBg;
-    cell.line = live ? (amp ? kAmpL : kVoltL) : kFaint;
+    cell.tint = live ? qty_tint(q) : kPanelBg;
+    cell.line = live ? qty_line(q) : kFaint;
     cell.cursor_line = kRule;
-    cell.sw = &sw_[ci];
+    cell.sw = &sw_[si];
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
 
     uint32_t base = mix_u32(mix_init(), static_cast<uint32_t>(m));
-    base = mix_u32(base, (over ? 1u : 0u) | (near_ ? 2u : 0u) | (cell.sweep ? 4u : 0u));
+    base = mix_u32(base, (over ? 1u : 0u) | (near_ ? 2u : 0u) | (cell.sweep ? 4u : 0u) | (bar ? 8u : 0u));
     base = mix_u32(mix_u32(base, static_cast<uint32_t>(window_)), sweep_epoch_);
-    base = mix_u32(base, ctx_.rotation & 3u);
+    base = mix_u32(mix_u32(base, ctx_.rotation & 3u), static_cast<uint32_t>(q));
 
-    uint32_t *sig = cell_sig_[ci];
-    if (!cell_valid_[ci] || sig[0] != base) {   // a new state: the whole cell
+    uint32_t *sig = cell_sig_[si];
+    if (!cell_valid_[si] || sig[0] != base) {   // a new state: the whole cell
         sig[0] = base; sig[1] = head; sig[2] = arrow_sig; sig[3] = bar_sig;
-        cell_valid_[ci] = true;
-        hm::paint(cell, 0, g.top, hm::kW - 1, g.bottom);
+        cell_valid_[si] = true;
+        hm::paint(cell, 0, s.top, s.x1, s.cell_bottom);
         return;
     }
     if (sig[1] != head) {
         sig[1] = head;
-        hm::paint(cell, head_x0, head_y0, hm::kW - 1, head_y1);
+        hm::paint(cell, 4, s.top, s.x1, static_cast<int16_t>(s.top + 18));
     }
-    if (amp && sig[2] != arrow_sig) {
+    if (sig[2] != arrow_sig) {
         sig[2] = arrow_sig;
-        hm::paint(cell, kArrowX, kArrowY, kArrowX + hm::kArrowBox - 1, kArrowY + hm::kArrowBox - 1);
+        hm::paint(cell, ax, ay, static_cast<int16_t>(ax + abox - 1), static_cast<int16_t>(ay + abox - 1));
     }
-    if (amp && sig[3] != bar_sig) {
+    if (sig[3] != bar_sig) {
         sig[3] = bar_sig;
-        hm::paint(cell, hm::kBarX0, hm::kBarY - 2, hm::kBarX1, hm::kBarY + hm::kBarH + 1);
+        hm::paint(cell, bg.x0, static_cast<int16_t>(bg.y - 2), bg.x1, static_cast<int16_t>(bg.y + hm::kBarH + 1));
     }
-    if (digits_changed) hm::paint(cell, px0, kDigitTop[ci], px1, kDigitTop[ci] + kHeroRows - 1);
+    if (digits_changed) hm::paint(cell, px0, dtop, px1, static_cast<int16_t>(dtop + (hero ? kHeroRows : kLedRows) - 1));
     if (step_col >= 0 && cell.sweep) {
-        const hm::Strip s = hm::strip_of(step_col, step_n);
-        for (int i = 0; i < s.n; i++) hm::paint(cell, s.r[i].x0, g.t0, s.r[i].x1, g.t1);
+        const hm::Strip st = hm::strip_of(step_col, step_n, sw_[si].n);
+        for (int i = 0; i < st.n; i++) hm::paint(cell, st.r[i].x0, g0.t0, st.r[i].x1, g0.t1);
     }
 }
 
-// ---- lower cell: band and info block -----------------------------------------------------------
-// One compositor cell (y144..239): the third rule, the band's divider and split line, the W / Wh / Ah numbers and the two
-// info rows are items over the base colour, so a text repaint composes the structure under it again (the landscape
-// mapping makes a native glyph box taller than its logical row; a field that cleared its box would cut the rule below).
-// Every row of the info block carries data: row 1 is the PD diagnosis word (live or stale), or CC1/CC2 at rest, or D+/D-
-// for a live session without PD; row 2 is the protocol and contract summary. (The USB link speed left Home: its
-// detection is parked.)
+// ---- cards -----------------------------------------------------------------------------------
+// One compositor cell per card (x141..223); the upper one owns the rule at y136. A card swap repaints the whole cell,
+// a value change only its zone (one per text row).
 
-namespace {
+void HomePage::paint_card(int ci, const Frame &f) {
+    const hm::Mode m = f.mode;
+    const bool live = m == hm::Mode::Live;
+    const hm::CardCycler &cy = ctx_.keep.cards;
+    const hm::Card card = ci == 0 ? cy.top() : cy.bottom();
+    const int16_t y0 = hm::kRowY0[ci], y1 = hm::kRowY1[ci];
+    const int16_t cell_bottom = ci == 0 ? hm::kRowRuleY : y1;
+    const bool dot = ci == 0 && cy.forced();
 
-uint32_t sig_items(uint32_t h, std::span<const hm::Item> items) {
-    for (const hm::Item &i : items) {
-        h = mix_u32(h, static_cast<uint32_t>(i.x) | static_cast<uint32_t>(i.y) << 16);
-        h = mix_u32(h, i.color);
-        h = mix(h, i.text);
+    hm::Item it[14];
+    int n = 0;
+    struct ZoneY { int16_t a, b; } zy[4] = {};
+    int zone_start[5] = {};
+    int nz = 0;
+    auto add = [&](const hm::Item &item) {
+        if (item.kind == hm::ItemKind::Text && item.text.empty()) return;
+        it[n++] = item;
+    };
+    auto zone = [&](int16_t a, int16_t b) { zy[nz] = {static_cast<int16_t>(y0 + a), b < 0 ? y1 : static_cast<int16_t>(y0 + b)}; zone_start[nz++] = n; };
+    auto right = [&](const Font &font, int16_t base, std::string_view s, uint16_t col) {
+        add(hm::text(font, static_cast<int16_t>(kCardR + 1 - static_cast<int>(s.size()) * font.adv), static_cast<int16_t>(y0 + base - font.ascent), s, col));
+    };
+    auto label = [&](std::string_view s, int16_t dy) { add(hm::text(kLabelFont, kCardL, static_cast<int16_t>(y0 + dy), s, kDim)); };
+    if (ci == 0) add(hm::fill(hm::kCardX0, hm::kRowRuleY, static_cast<int16_t>(hm::kW - hm::kCardX0), 1, kRule));
+    if (dot) add(hm::fill(kDotX, static_cast<int16_t>(y0 + 1), 5, 5, kFocus));
+
+    char b0[12], b1[12];
+    StrBuf<8> s0, s1, lines[4];
+    StrBuf<12> sp, speed;
+    switch (card) {
+    case hm::Card::Energy: {   // Wh over Ah, decimal-aligned on x182
+        hm::DecSplit d[2] = {{"--", {}}, {"--", {}}};
+        if (m != hm::Mode::NoMeter) {
+            const int nw = hm::fmt_energy(b0, ctx_.meter.mwh());
+            const int na = hm::fmt_energy(b1, ctx_.meter.mah());
+            d[0] = hm::split_decimal({b0, static_cast<size_t>(nw)});
+            d[1] = hm::split_decimal({b1, static_cast<size_t>(na)});
+        }
+        const uint16_t col[2] = {tone(m, kEnergy), tone(m, kCharge)};
+        const std::string_view unit[2] = {"Wh", "Ah"};
+        const int16_t base[2] = {25, 51};
+        for (int r = 0; r < 2; r++) {
+            zone(static_cast<int16_t>(base[r] - 15), static_cast<int16_t>(base[r] + 6));
+            const int16_t top = static_cast<int16_t>(y0 + base[r] - kSmall.ascent);
+            add(hm::text(kSmall, static_cast<int16_t>(kDecX - static_cast<int>(d[r].int_part.size()) * kSmall.adv), top, d[r].int_part, col[r]));
+            add(hm::text(kSmall, kDecX, top, d[r].rest, col[r]));
+            add(hm::text(kLabelFont, kEnergyUnitX, static_cast<int16_t>(y0 + base[r] - kLabelFont.ascent), unit[r], col[r]));
+        }
+        break;
     }
-    return h;
+    case hm::Card::Peak: {
+        label("PEAK", 3);
+        zone(15, 35);
+        if (card_.peak_mw > 0) {
+            const int k = hm::fmt_watts(b0, static_cast<int32_t>(card_.peak_mw));
+            b0[k] = 'W';
+            right(kSmall, 30, {b0, static_cast<size_t>(k + 1)}, tone(m, kWatt));
+        } else {
+            right(kSmall, 30, "--", kFaint);
+        }
+        zone(38, -1);
+        if (card_.peak_ma > 0) {
+            const int k = hm::fmt_hero(b1, static_cast<int32_t>(card_.peak_ma));
+            b1[k] = 'A';
+            right(kSmall, 56, {b1, static_cast<size_t>(k + 1)}, tone(m, kAmp));
+        } else {
+            right(kSmall, 56, "--", kFaint);
+        }
+        break;
+    }
+    case hm::Card::Drop: {
+        label("DROP", 3);
+        zone(15, 35);
+        switch (card_.drop.state) {
+        case hm::DropState::Value: {
+            const int k = hm::fmt_drop(b0, card_.drop.mv);
+            right(kSmall, 30, {b0, static_cast<size_t>(k)}, tone(m, kVolt));
+            break;
+        }
+        case hm::DropState::NoIdle: right(kLabelFont, 30, "no idle", kDim); break;
+        case hm::DropState::NeedLoad: right(kLabelFont, 30, "need 1A", kDim); break;
+        case hm::DropState::None: right(kLabelFont, 30, "--", kDim); break;
+        }
+        zone(36, -1);
+        label("SAG", 36);
+        if (card_.has_sag && card_.sag_level_mv > 0) {
+            const int k = hm::fmt_sag(b1, card_.sag_bp, card_.sag_level_mv);
+            right(kSmall, 56, {b1, static_cast<size_t>(k)}, tone(m, kVolt));
+        } else {
+            right(kSmall, 56, "--", kFaint);
+        }
+        break;
+    }
+    case hm::Card::Cable: {
+        const pd::Emarker &em = fusb302::emarker();
+        label("CABLE", 3);
+        zone(15, 35);
+        if (em.valid) {
+            emarker_amps_text(em, s0);
+            emarker_volts_text(em, s1);
+            sp.put(s0.view()).put_char(' ').put(s1.view());
+        }
+        right(kSmall, 30, em.valid ? sp.view() : std::string_view("--"), em.valid ? tone(m, kText) : kFaint);
+        zone(38, -1);
+        if (em.valid) emarker_speed_pill(em, speed);
+        right(kLabelFont, 50, speed.view(), kDim);
+        break;
+    }
+    case hm::Card::Lines: {
+        static constexpr std::string_view kName[4] = {"CC1", "CC2", "D+", "D-"};
+        for (int r = 0; r < 4; r++) {
+            const int16_t base = static_cast<int16_t>(15 + 14 * r);
+            zone(static_cast<int16_t>(base - 11), static_cast<int16_t>(base + 2));
+            label(kName[r], static_cast<int16_t>(base - kLabelFont.ascent));
+            const int32_t mv = card_.lines[r];
+            if (mv < 0 || !live) {
+                right(kLabelFont, base, "--", kFaint);
+            } else {
+                lines[r].put_fixed(mv, 2).put_char('V');
+                right(kLabelFont, base, lines[r].view(), kText);
+            }
+        }
+        break;
+    }
+    case hm::Card::Count: break;
+    }
+
+    hm::Cell cell;
+    cell.geom = {y0, cell_bottom, y0, y0};
+    cell.x0 = hm::kCardX0;
+    cell.bg = kBg;
+    cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
+    zone_start[nz] = n;
+    uint32_t base = mix_u32(mix_u32(mix_init(), static_cast<uint32_t>(card)), static_cast<uint32_t>(m));
+    base = mix_u32(mix_u32(base, dot ? 1u : 0u), ctx_.rotation & 3u);
+    uint32_t sig[4] = {};
+    for (int z = 0; z < nz; z++)
+        sig[z] = sig_items(mix_init(), cell.items.subspan(static_cast<size_t>(zone_start[z]), static_cast<size_t>(zone_start[z + 1] - zone_start[z])));
+    uint32_t *old = card_sig_[ci];
+    if (!card_valid_[ci] || card_base_[ci] != base) {   // a new card or state: the whole cell
+        card_valid_[ci] = true;
+        card_base_[ci] = base;
+        for (int z = 0; z < 4; z++) old[z] = sig[z];
+        hm::paint(cell, hm::kCardX0, y0, hm::kW - 1, cell_bottom);
+        return;
+    }
+    for (int z = 0; z < nz; z++) {
+        if (sig[z] == old[z]) continue;
+        old[z] = sig[z];
+        hm::paint(cell, hm::kCardX0, zy[z].a, hm::kW - 1, zy[z].b);
+    }
 }
 
-}  // namespace
+// ---- info block --------------------------------------------------------------------------------
+// One compositor cell (y194..239): the rule above it and the two info rows. Every row carries data: row 1 is the PD
+// diagnosis word (live or stale), or CC1/CC2 at rest, or D+/D- for a live session without PD; row 2 is the protocol and
+// contract summary. (The USB link speed left Home: its detection is parked.)
 
-void HomePage::paint_lower(const Frame &f) {
+void HomePage::paint_info(const Frame &f) {
     const hm::Mode m = f.mode;
     const bool live = m == hm::Mode::Live, stale = m == hm::Mode::Stale;
-
-    // ---- the texts
-    char eb[2][12];
-    hm::DecSplit wh{}, ah{};
-    if (m == hm::Mode::NoMeter) {
-        wh = {"--", {}};
-        ah = {"--", {}};
-    } else {
-        const int nw = hm::fmt_energy(eb[0], ctx_.meter.mwh());
-        const int na = hm::fmt_energy(eb[1], ctx_.meter.mah());
-        wh = hm::split_decimal({eb[0], static_cast<size_t>(nw)});
-        ah = hm::split_decimal({eb[1], static_cast<size_t>(na)});
-    }
 
     // Row 1: the Black Box diagnosis of the PD session while live or stale (hm::format_diag: its worst finding, or the
     // state, in the finding's tone); otherwise, and for a session without PD (a legacy charger: the lines tell more), the
@@ -379,7 +630,7 @@ void HomePage::paint_lower(const Frame &f) {
     hm::LinesText lt;
     hm::DiagText dt;
     std::string_view row1_tag = hm::kDiagTag, row1_val;
-    uint16_t row1_tag_col = (m == hm::Mode::Idle || m == hm::Mode::NoMeter) ? kFaint : kDim;
+    const uint16_t row1_tag_col = (m == hm::Mode::Idle || m == hm::Mode::NoMeter) ? kFaint : kDim;
     uint16_t row1_val_col = kDim;
     const int32_t dp = ctx_.analog ? ctx_.analog->dp_mv : -1, dm = ctx_.analog ? ctx_.analog->dm_mv : -1;
     if (hm::format_diag(m, pd::diag::live::report(), dt)) {
@@ -418,81 +669,64 @@ void HomePage::paint_lower(const Frame &f) {
     }
     const std::string_view role = m == hm::Mode::NoMeter ? "" : fusb302::self_powered() ? "SNK" : "PAS";
 
-    // ---- the items: structure first, then the six zones in kZones order
-    hm::Item it[20];
+    // ---- the items: structure first, then the three zones in kInfoZones order
+    hm::Item it[8];
     int n = 0;
-    int zone_end[6];
+    int zone_start[4];
     auto add = [&](const hm::Item &item) {
         if (item.kind == hm::ItemKind::Text && item.text.empty()) return;
         it[n++] = item;
     };
-    // A fixed-width field: right-aligned numbers start where their cell does, so a text never needs padding.
-    auto field = [&](const Font &font, int16_t x, int chars, bool right, int16_t top, std::string_view s, uint16_t col) {
-        const int pad = right && static_cast<int>(s.size()) < chars ? chars - static_cast<int>(s.size()) : 0;
-        add(hm::text(font, static_cast<int16_t>(x + pad * font.adv), top, s, col));
-    };
     add(hm::fill(0, hm::kRule3Y, hm::kW, 2, kRule));
-    add(hm::fill(hm::kBandMidX, hm::kBandY0, 1, hm::kBandY1 - hm::kBandY0 + 1, kRule));
-    add(hm::fill(hm::kBandMidX + 1, hm::kBandSplitY, hm::kW - hm::kBandMidX - 1, 1, kRule));
-    int zone_start[6];
     zone_start[0] = n;
-    add(hm::text(kMid, 103, 164, "W", tone(m, kWatt)));
-    field(kBig, 4, kWattChars, true, 153, f.watt, tone(m, kWatt));
-    zone_end[0] = n;
-    zone_start[1] = n;
-    add(hm::text(kSmall, 199, 152, "Wh", tone(m, kEnergy)));
-    field(kMid, 124, kEnergyChars, true, 145, wh.int_part, tone(m, kEnergy));
-    field(kMid, 160, kEnergyChars, false, 145, wh.rest, tone(m, kEnergy));
-    zone_end[1] = n;
-    zone_start[2] = n;
-    add(hm::text(kSmall, 199, 177, "Ah", tone(m, kCharge)));
-    field(kMid, 124, kEnergyChars, true, 170, ah.int_part, tone(m, kCharge));
-    field(kMid, 160, kEnergyChars, false, 170, ah.rest, tone(m, kCharge));
-    zone_end[2] = n;
-    zone_start[3] = n;
     add(hm::text(kSmall, hm::kInfoTagX, kRowTop[0], row1_tag, row1_tag_col));
     add(hm::text(kSmall, hm::kInfoValX, kRowTop[0], row1_val, row1_val_col));
-    zone_end[3] = n;
-    zone_start[4] = n;
-    field(kSmall, kElX, kElChars, true, kRowTop[0], {el, eln}, kDim);
-    zone_end[4] = n;
-    zone_start[5] = n;
+    zone_start[1] = n;
+    {   // the elapsed time, right-aligned in its five-character field
+        const int pad = static_cast<int>(eln) < kElChars ? kElChars - static_cast<int>(eln) : 0;
+        add(hm::text(kSmall, static_cast<int16_t>(kElX + pad * kSmall.adv), kRowTop[0], {el, eln}, kDim));
+    }
+    zone_start[2] = n;
     add(hm::text(kSmall, hm::kInfoTagX, kRowTop[1], pt.tag.view(), tcol));
     add(hm::text(kSmall, hm::kInfoValX, kRowTop[1], pt.value.view(), vcol));
     add(hm::text(kSmall, kRoleX, kRowTop[1], role, kDim));
-    zone_end[5] = n;
+    zone_start[3] = n;
 
     hm::Cell cell;
-    cell.geom = {hm::kBandY0, 239, 0, 0};
+    cell.geom = {hm::kRule3Y, 239, 0, 0};
     cell.bg = kBg;
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
 
-    uint32_t sig[6];
-    for (int z = 0; z < 6; z++)
+    uint32_t sig[3];
+    for (int z = 0; z < 3; z++)
         sig[z] = sig_items(mix_u32(mix_init(), static_cast<uint32_t>(m)),
-                           cell.items.subspan(static_cast<size_t>(zone_start[z]), static_cast<size_t>(zone_end[z] - zone_start[z])));
-    if (!lower_ok_) {   // a new state: the whole cell
-        lower_ok_ = true;
-        for (int z = 0; z < 6; z++) lower_sig_[z] = sig[z];
-        hm::paint(cell, 0, hm::kBandY0, hm::kW - 1, 239);
+                           cell.items.subspan(static_cast<size_t>(zone_start[z]), static_cast<size_t>(zone_start[z + 1] - zone_start[z])));
+    if (!info_ok_) {   // a new state: the whole cell
+        info_ok_ = true;
+        for (int z = 0; z < 3; z++) info_sig_[z] = sig[z];
+        hm::paint(cell, 0, hm::kRule3Y, hm::kW - 1, 239);
         return;
     }
-    for (int z = 0; z < 6; z++) {
-        if (sig[z] == lower_sig_[z]) continue;
-        lower_sig_[z] = sig[z];
-        hm::paint(cell, kZones[z].x0, kZones[z].y0, kZones[z].x1, kZones[z].y1);
+    for (int z = 0; z < 3; z++) {
+        if (sig[z] == info_sig_[z]) continue;
+        info_sig_[z] = sig[z];
+        hm::paint(cell, kInfoZones[z].x0, kInfoZones[z].y0, kInfoZones[z].x1, kInfoZones[z].y1);
     }
 }
 
 // ---- statics ---------------------------------------------------------------------------------
 
-// Everything that depends on the mode only. Runs after an invalidate and on every mode change.
+// Everything that depends on the mode and the hero only. Runs after an invalidate, a mode change and a hero change.
+// Home is opaque: every pixel belongs to one of the six cells (hero, two ledger rows, two cards, info), each painted
+// whole on its first update, so nothing is drawn here.
 void HomePage::paint_statics() {
     statics_ok_ = true;
-    lower_ok_ = false;   // the next paint_lower() repaints the whole lower cell
-    draw_rules();
-    hd_[0].init(kHero, kHeroX, kDigitTop[0], 5);
-    hd_[1].init(kHero, kHeroX, kDigitTop[1], 5);
+    info_ok_ = false;
+    for (bool &v : cell_valid_) v = false;
+    for (bool &v : card_valid_) v = false;
+    hd_[0].init(kHero, kHeroDigitX, kHeroDigitTop, kDigitChars);
+    hd_[1].init(kBig, kLedDigitX, static_cast<int16_t>(kLedBase[0] - 30), kDigitChars);
+    hd_[2].init(kBig, kLedDigitX, static_cast<int16_t>(kLedBase[1] - 30), kDigitChars);
 }
 
 // ---- update ----------------------------------------------------------------------------------
@@ -510,17 +744,31 @@ void HomePage::update(uint32_t now_ms) {
         statics_ok_ = false;
         if (!keep_sweep) sweep_ok_ = false;
     }
+    const hm::Qty hero = ctx_.keep.home_hero;
+    if (hero != shown_hero_) {   // Long Back: every quantity moves to another slot
+        shown_hero_ = hero;
+        statics_ok_ = false;
+        sweep_ok_ = false;
+    }
     sample_values(f, now_ms);
     if (!statics_ok_) paint_statics();
-    int step_col = -1;
-    int step_n = 0;
+    // The cards: what has data right now, then one cycler step (the clock runs while live only).
+    const bool live = f.mode == hm::Mode::Live;
+    // PEAK and LINES always have something to say while live (the peak is at least the reading on screen); without PEAK
+    // here the attach tick, whose peak is still 0, would push the deck's head out of the upper cell for a whole dwell.
+    hm::CardMask ok = hm::card_bit(hm::Card::Lines) | hm::card_bit(hm::Card::Peak);
+    if (live && (ctx_.cable.has_idle() || ctx_.extremes.has_sag())) ok |= hm::card_bit(hm::Card::Drop);
+    if (fusb302::emarker().valid) ok |= hm::card_bit(hm::Card::Cable);
+    ctx_.keep.cards.tick(now_ms, live, ok);
+
+    int step_col[3], step_n[3];
     update_sweep(f, now_ms, step_col, step_n);
-    for (int i = 0; i < 2; i++) {
-        int16_t px0 = 0, px1 = 0;
-        const bool changed = hd_[i].set(f.hero[i], px0, px1);
-        paint_cell(i, f, step_col, step_n, changed, px0, px1);
-    }
-    paint_lower(f);
+    const hm::Ledger led = hm::ledger_of(hero);
+    const hm::Qty q[3] = {hero, led.row[0], led.row[1]};
+    for (int i = 0; i < 3; i++) paint_qty(i, q[i], f, step_col[i], step_n[i]);
+    paint_card(0, f);
+    paint_card(1, f);
+    paint_info(f);
 }
 
 }  // namespace k2
