@@ -125,6 +125,7 @@ public:
     svooc::Refusal svooc_start(uint8_t cap_s);                // guarded no-load SuperVOOC trigger (FC op 5), remote only
     void svooc_stop();
     remote::SvoocSnapshot svooc_info();
+    bool lines_locked();                                      // the SuperVOOC trigger holds D+/D- (fctrig::svooc_running)
     // --- end vooc-monitor ---
     remote::UfcsInfo ufcs_info();                         // UFCS tuner / 5 V probe (k2::fctrig)
     uint32_t ufcs_get(uint8_t field);

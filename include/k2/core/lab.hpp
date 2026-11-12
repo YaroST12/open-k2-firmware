@@ -61,4 +61,22 @@ bool is_family(std::string_view w);
 // "fam.verb" text of an id, for output lines ("accp.read").
 std::string_view name(Id id);
 
+// The command drives or claims D+/D- (a fast-charge exchange, a VOOC listen or sniff, the UFCS / vivo UART on the data
+// lines, raw dpdm levels). The shell refuses these while the lines are locked (Backend::lines_locked). Not: the UFCS
+// tuner (RAM), CC, VBUS, PD, LCD and PD Stress commands.
+constexpr bool drives_lines(Id id) {
+    switch (id) {
+    case Id::AccpPing: case Id::AccpRead: case Id::AccpWrite: case Id::AccpDump:
+    case Id::Qc2: case Id::Qc3Set: case Id::Qc3Up: case Id::Qc3Down: case Id::Qc3pSet: case Id::Qc3pUp: case Id::Qc3pDown:
+    case Id::Afc: case Id::Fcp: case Id::Scp:
+    case Id::VoocWake: case Id::VoocListen: case Id::VoocAnswer: case Id::VoocSniff:
+    case Id::UfcsPing: case Id::UfcsCaps: case Id::UfcsRequest: case Id::UfcsRaw: case Id::UfcsProbe:
+    case Id::VivoRaw: case Id::VivoRequest:
+    case Id::Dpdm:
+        return true;
+    default:
+        return false;
+    }
+}
+
 }  // namespace k2::lab

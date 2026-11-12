@@ -257,7 +257,9 @@
 //                                    needs confirm = 1, only while armed and nothing attached). Answers state(1) reason(1)
 //                                    flags(1: bit0 overflow, bit1 stored) edges(2). The capture is read with BLACKBOX capread.
 //                                    A refused arm is Busy with one byte, SniffRefusal: 1 a trigger, scan or test owns
-//                                    D+/D-, 2 no RAM (the USB drive or net function holds the shared RAM).
+//                                    D+/D-, 2 no RAM (the USB drive or net function holds the shared RAM), 3 the
+//                                    SuperVOOC trigger drives D- (also for cancel and selftest; status stays open).
+//                                    The load probe is Busy too while that trigger runs (no load on the output).
 //                                    op 0 load probe, args duty_pct(1) ms(2): pulses the PA8 test load (TIM1 CH1) for
 //                                    ms (<= 200) at duty (<= 95) and answers reason(1) duty(1) ms(2) idle_ma(2s)
 //                                    peak_ma(2s) min_vbus_mv(2) vbus_before_mv(2) temp_before_dc(2s) temp_after_dc(2s) pin_high_pct(1,
@@ -327,6 +329,7 @@
 //                                    num_results(1) { proto outcome mv(2) } x num_results
 //                                    op 0 status; op 1 reset (to 5 V, then passive idle);
 //                                    op 2 scan, arg flags(1); op 3 trigger, args proto(1) mv(2) flags(1).
+//                                    Scan and trigger answer Busy while the SuperVOOC trigger (op 5) runs.
 //                                    flags bit0 = confirm (needed by the scan and above 5000 mV, else
 //                                    BadArg), bit1 = override the PD-contract / load guard (never a
 //                                    confirmation); other bits BadArg. A guard refusal answers BadArg
@@ -343,7 +346,8 @@
 //                                      window, retry_ms = the pause left; stall_cmd / stall_n = the trailing run of one
 //                                      command whose reply stayed silent (bit5 once stall_n reaches vooc::kStallPolls).
 //                                      page 1 / 2: n(1) { cmd(1) count(2) last(2) } x n, rows 0-7 / 8-15.
-//                                      Other pages or on > 1 BadArg, wrong length BadLength. Never Busy.
+//                                      Other pages or on > 1 BadArg, wrong length BadLength. Busy only for the on / off
+//                                      switch while the SuperVOOC trigger (op 5) runs; the read is never Busy.
 //                                    --- end vooc-monitor ---
 //                                    --- svooc-trigger ---
 //                                    op 5 svooc, the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp),
@@ -955,7 +959,7 @@ struct LabResult {
     uint8_t pin_high_pct = 0;
 };
 // Why a `lab sniff arm` was refused: the one payload byte of its Busy reply (0 = no reason sent).
-enum class SniffRefusal : uint8_t { None = 0, Ports = 1, NoRam = 2 };   // a trigger / scan / test owns D+/D-; the USB drive holds the RAM
+enum class SniffRefusal : uint8_t { None = 0, Ports = 1, NoRam = 2, Svooc = 3 };   // a trigger / scan / test owns D+/D-; the USB drive holds the RAM; the SuperVOOC trigger drives D-
 struct SniffInfo {
     uint8_t status = 0;                 // remote::Status the backend reports (0 = Ok)
     uint8_t refusal = 0;                // SniffRefusal of a refused arm, sent as the Busy reply's one byte
@@ -1227,6 +1231,10 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.svooc_start(u8) } -> std::same_as<svooc::Refusal>;   // svooc-trigger: cap seconds (0 = 20); the confirm is checked first
     { b.svooc_stop() } -> std::same_as<void>;
     { b.svooc_info() } -> std::same_as<SvoocSnapshot>;
+    // The SuperVOOC trigger holds D+/D- (or watches VBUS come back): the dispatcher answers Busy to every op that drives or
+    // claims D+/D-, the sniffer or the output load (fc scan / trigger, vooc switch, lab sniff 0/1/3, lab load, UFCS probe,
+    // the FcScan action) before the backend sees it.
+    { b.lines_locked() } -> std::same_as<bool>;
     { b.store_cmd(u8, u8) } -> std::same_as<StoreInfo>;   // op (list / save-emarker / save-log), slot unused
     { b.cable_r_reset() } -> std::same_as<void>;      // clears the passive reference
     { b.cable_r_mode(true) } -> std::same_as<void>;   // false = passive meter, true = Kelvin 8-wire
@@ -1382,6 +1390,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p.size() != 1 && p.size() != 2) return reply(Status::BadLength);
         const bool confirm = p.size() == 2 && p[1] != 0;
         if (action_needs_confirm(p[0]) && !confirm) return reply(Status::NeedConfirm);
+        if (p[0] == kActionFcScan && backend.lines_locked()) return reply(Status::Busy);   // the SuperVOOC trigger drives D-
         const Status st = backend.action(p[0], confirm);
         if (st != Status::Ok) return reply(st);
         if (p[0] == kActionFcScan) backend.lease_arm();   // the scan raises VBUS under host control (accepted, so confirmed)
@@ -1673,6 +1682,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p[0] == kFcVooc) {
             if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
             if (p[1] >= kVoocPages || (p.size() == 3 && p[2] > 1)) return reply(Status::BadArg);
+            if (p.size() == 3 && backend.lines_locked()) return reply(Status::Busy);   // the switch, while the SuperVOOC trigger runs
             return reply_n(encode_vooc(buf, backend.vooc_monitor(p.size() == 3 ? p[2] : 2), p[1]));
         }
         // --- end vooc-monitor ---
@@ -1725,6 +1735,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         default:
             return reply(Status::BadArg);
         }
+        if ((p[0] == kFcScan || p[0] == kFcTrigger) && backend.lines_locked()) return reply(Status::Busy);   // the SuperVOOC trigger
         if (p[0] != kFcStatus) {
             const bool trig = p[0] == kFcTrigger;
             const Status st = backend.fc_cmd(p[0], trig ? p[1] : 0, trig ? detail::rd16(&p[2]) : 0,
@@ -1765,6 +1776,10 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             if (p.size() != 2 && p.size() != 3) return reply(Status::BadLength);
             if (p[1] > 3) return reply(Status::BadArg);
             if (p[1] == 3 && (p.size() != 3 || p[2] != 1)) return reply(Status::NeedConfirm);
+            if (p[1] != 2 && backend.lines_locked()) {   // arm, cancel, selftest: the SuperVOOC trigger owns the sniffer
+                buf[0] = static_cast<uint8_t>(SniffRefusal::Svooc);
+                return reply(Status::Busy, std::span<const uint8_t>(buf.data(), 1));
+            }
             const SniffInfo r = backend.lab_sniff(p[1]);
             if (r.status != static_cast<uint8_t>(Status::Ok)) {
                 if (r.refusal == 0) return reply(static_cast<Status>(r.status));
@@ -1776,6 +1791,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         if (p[0] != kLabLoad) return reply(Status::BadArg);
         if (p.size() != 5) return reply(Status::BadLength);
         if (p[4] != 1) return reply(Status::NeedConfirm);
+        if (backend.lines_locked()) return reply(Status::Busy);   // no load on the output while the SuperVOOC trigger runs
         const LabResult r = backend.lab_load(p[1], static_cast<uint16_t>(p[2] | p[3] << 8));
         if (r.status != static_cast<uint8_t>(Status::Ok)) return reply(static_cast<Status>(r.status));
         return reply_n(encode_lab(buf, r));
@@ -1814,6 +1830,7 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         default:
             return reply(Status::BadArg);
         }
+        if (p[0] == kUfcsProbe && backend.lines_locked()) return reply(Status::Busy);   // the probe's UART runs on D+/D-
         if (p[0] != kUfcsStatus) {
             const Status st = backend.ufcs_op(p[0]);
             if (st != Status::Ok) return reply(st);

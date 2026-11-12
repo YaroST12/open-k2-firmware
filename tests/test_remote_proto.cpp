@@ -1206,6 +1206,63 @@ static void test_fc_svooc_trigger() {
     CHECK_EQ(f.lease_arms, 1);
 }
 
+// While the SuperVOOC trigger holds D+/D- (backend.lines_locked()), every remote op that drives or claims D+/D-, the
+// sniffer or the output load is Busy before the backend sees it: fc scan / trigger, the vooc monitor switch, lab sniff
+// arm / cancel / selftest (refusal byte Svooc), lab load, the UFCS probe, the FcScan action. Reads, fc reset, the
+// trigger's own ops and stop still pass.
+static void test_lines_locked_by_the_svooc_trigger() {
+    Fake f; Frame r;
+    f.locked = true;
+    const int calls = f.calls;
+    struct Case { std::vector<uint8_t> req; uint8_t cmd; };
+    const auto request = [](uint8_t cmd, uint8_t seq, const std::vector<uint8_t> &payload) {
+        std::vector<uint8_t> v = {kReqMagic0, kReqMagic1, cmd, seq, static_cast<uint8_t>(payload.size())};
+        v.insert(v.end(), payload.begin(), payload.end());
+        v.resize(kFrameSize, 0);
+        return v;
+    };
+    const Case refused[] = {
+        {{2, 1}, 0x32},                       // fc scan, confirmed
+        {{3, 0, 0x88, 0x13, 0}, 0x32},        // fc trigger qc2 5000 mV
+        {{4, 0, 1}, 0x32},                    // vooc monitor on
+        {{4, 0, 0}, 0x32},                    // vooc monitor off
+        {{1, 1}, 0x51},                       // lab sniff arm
+        {{1, 0}, 0x51},                       // lab sniff cancel
+        {{1, 3, 1}, 0x51},                    // lab sniff selftest
+        {{0, 50, 10, 0, 1}, 0x51},            // lab load (a load on the output)
+        {{kUfcsProbe}, 0x52},                 // UFCS probe
+        {{kActionFcScan, 1}, 0x06},           // the FcScan action
+    };
+    uint8_t seq = 1;
+    for (const Case &c : refused) {
+        CHECK_EQ(run(f, request(c.cmd, seq, c.req), r), 1);
+        CHECK_EQ(r[4], static_cast<uint8_t>(Status::Busy));
+        if (r[4] != static_cast<uint8_t>(Status::Busy)) std::printf("  not refused: cmd 0x%02X op %u\n", c.cmd, c.req[0]);
+        ++seq;
+    }
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(f.lease_arms, 0);
+    // lab sniff names the trigger in its refusal byte
+    CHECK_EQ(run(f, request(0x51, 40, {1, 1}), r), 1);
+    check_header(r, 0x51, 40, Status::Busy, 1);
+    CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(SniffRefusal::Svooc));
+    // still open: fc status and reset, the vooc read, the trigger's status and stop, lab sniff status, UFCS status / stop
+    const Case open[] = {
+        {{0}, 0x32}, {{1}, 0x32}, {{4, 0}, 0x32}, {{5, 0, 0}, 0x32}, {{5, 2}, 0x32},
+        {{1, 2}, 0x51}, {{kUfcsStatus}, 0x52}, {{kUfcsStop}, 0x52},
+    };
+    for (const Case &c : open) {
+        CHECK_EQ(run(f, request(c.cmd, seq, c.req), r), 1);
+        CHECK_EQ(r[4], static_cast<uint8_t>(Status::Ok));
+        if (r[4] != static_cast<uint8_t>(Status::Ok)) std::printf("  refused: cmd 0x%02X op %u\n", c.cmd, c.req[0]);
+        ++seq;
+    }
+    // unlocked: the sniff arm reaches the backend again
+    f.locked = false;
+    CHECK_EQ(run(f, request(0x51, 60, {1, 1}), r), 1);
+    CHECK_EQ(f.sniff_sub, 1);
+}
+
 static void test_fc_vooc_monitor() {
     Fake f; Frame r;
     k2::vooc::Summary &s = f.vooc_snap.s;
@@ -2797,6 +2854,7 @@ int main() {
     test_fc();
     test_fc_vooc_monitor();   // vooc-monitor
     test_fc_svooc_trigger();  // svooc-trigger
+    test_lines_locked_by_the_svooc_trigger();
     test_ripple_frame();
     test_pdos();
     test_emarker();

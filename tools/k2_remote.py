@@ -271,7 +271,7 @@ class FrameError(ValueError):
     pass
 
 
-SNIFF_REFUSED_PORTS, SNIFF_REFUSED_NO_RAM = 1, 2   # remote::SniffRefusal: the one byte of a refused `lab sniff arm`
+SNIFF_REFUSED_PORTS, SNIFF_REFUSED_NO_RAM, SNIFF_REFUSED_SVOOC = 1, 2, 3   # remote::SniffRefusal: the one byte of a refused `lab sniff`
 
 
 class RemoteError(RuntimeError):
@@ -313,6 +313,8 @@ class RemoteError(RuntimeError):
             text = f"command {cmd} failed: refused: no RAM: USB drive enabled (switch the drive off in Tools > USB link and replug)"
         elif cmd == CMD_LAB and status == STATUS_BUSY and payload and payload[0] == SNIFF_REFUSED_PORTS:
             text += " (a trigger, scan or test owns D+/D-)"
+        elif cmd == CMD_LAB and status == STATUS_BUSY and payload and payload[0] == SNIFF_REFUSED_SVOOC:
+            text += " (the SuperVOOC trigger drives D-: `fc svooc-stop` or wait for it to end)"
         if cmd == CMD_QRTEST and status == STATUS_BAD_ARG and payload:
             text += f" ({payload.decode('ascii', errors='replace')})"   # the show op's reason (range / box fit)
         super().__init__(text)

@@ -247,6 +247,8 @@ struct Fake {
     }
     void svooc_stop() { calls++; svooc_stops++; svooc_snap.report.abort = k2::svooc::Abort::Stopped; }
     SvoocSnapshot svooc_info() { calls++; return svooc_snap; }
+    bool locked = false;                // D+/D- locked by a running trigger
+    bool lines_locked() { return locked; }
     // --- end svooc-trigger ---
     // UFCS tuner / probe: a RAM field array standing in for the tuner, a canned blob for the read op
     std::uint32_t ufcs_vals[k2::ufcs::kFieldCount] = {};

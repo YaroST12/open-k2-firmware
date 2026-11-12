@@ -23,6 +23,10 @@ class SniffRefusalText(unittest.TestCase):
         self.assertIn("busy", text)
         self.assertIn("a trigger, scan or test owns D+/D-", text)
 
+    def test_svooc_trigger_is_named(self):
+        text = str(kr.RemoteError(kr.STATUS_BUSY, kr.CMD_LAB, bytes([3])))
+        self.assertIn("the SuperVOOC trigger drives D-", text)
+
     def test_old_firmware_without_reason_is_plain_busy(self):
         self.assertEqual(str(kr.RemoteError(kr.STATUS_BUSY, kr.CMD_LAB)), f"command {kr.CMD_LAB} failed: busy")
 

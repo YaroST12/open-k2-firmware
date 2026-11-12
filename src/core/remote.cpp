@@ -1155,6 +1155,8 @@ svooc::Refusal Remote::svooc_start(uint8_t cap_s) {
 
 void Remote::svooc_stop() { svooc_trig::stop(); }
 
+bool Remote::lines_locked() { return fctrig::svooc_running(); }
+
 remote::SvoocSnapshot Remote::svooc_info() {
     const svooc_trig::Snapshot s = svooc_trig::snapshot();
     remote::SvoocSnapshot v;
