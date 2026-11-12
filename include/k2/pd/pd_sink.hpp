@@ -64,6 +64,9 @@ struct TxMsg {
     std::uint8_t len = 0;      // bytes in `data`, a multiple of 4 for non-extended messages
     bool hard_reset = false;   // send a hard reset ordered set instead of a message
     bool restart_id = false;   // set the driver's MessageID counter to 0 before stamping (after a Soft_Reset)
+    // An inline interrogation question (pd_interrogate.hpp): the header already carries its MessageID and roles (the driver
+    // neither stamps nor counts it), and the chip sends it once, without its automatic retries, with Auto-CRC off.
+    bool inline_tx = false;
 };
 
 // Header of a sink-to-source message: port power role sink, data role UFP, MessageID 0.

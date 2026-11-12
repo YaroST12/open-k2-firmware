@@ -1,0 +1,475 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Yaraslau Furman
+// The inline interrogation sequencer (k2/pd/pd_interrogate.hpp). The wire is replayed from the bench capture of 2026-11-13
+// (runs/clone-canon/reneg_pdtrace.txt: OnePlus 120 W charger, Canon dual-battery charger as the device, K2 inline): after a
+// Hard Reset the charger lists 6 PDOs (id 0, PD 3.x, src/dfp), the Canon asks for PDO 4 (RDO 0x4344B12C, id 0, PD 3.x),
+// Accept (id 1), PS_RDY (id 2), every message GoodCRC'd by the other side with a PD 2.0 header.
+#include <vector>
+
+#include "k2/pd/pd_interrogate.hpp"
+#include "test_util.h"
+
+using namespace k2::pd;
+
+namespace {
+
+constexpr std::uint16_t kSrc = 0x0120, kSnk = 0x0000;   // power role bit 8, data role bit 5
+constexpr std::uint16_t hdr(std::uint8_t type, std::uint8_t ndo, std::uint8_t rev, std::uint16_t roles, std::uint8_t id,
+                            bool ext = false) {
+    return std::uint16_t(type | (rev << 6) | roles | ((id & 7) << 9) | (ndo << 12) | (ext ? 0x8000u : 0u));
+}
+constexpr std::uint32_t kCaps[6] = {0x0A01912Cu, 0x0002D12Cu, 0x0003C12Cu, 0x0004B12Cu, 0x0006412Cu, 0xC1A4323Cu};
+constexpr std::uint32_t kCanonRdo = 0x4344B12Cu;
+
+void put32(std::vector<std::uint8_t>& b, std::uint32_t w) {
+    for (int i = 0; i < 4; i++) b.push_back(std::uint8_t(w >> (8 * i)));
+}
+std::uint32_t word(const TxMsg& m, unsigned i = 0) {
+    return m.data[4 * i] | (m.data[4 * i + 1] << 8) | (m.data[4 * i + 2] << 16) | (std::uint32_t(m.data[4 * i + 3]) << 24);
+}
+
+struct Rig {
+    Interrogate iq;
+    std::uint32_t now = 10000;
+    std::vector<TxMsg> sent;
+    bool tx_ok = true;
+
+    void rx(std::uint16_t header, std::vector<std::uint8_t> payload = {}) {
+        iq.on_message(Sop::Sop, header, payload, now);
+        now += 1;
+    }
+    // The capture's renegotiation, source ids starting at `id0`, the Request in `dev_rev`.
+    void contract(std::uint8_t id0 = 0, std::uint8_t dev_rev = 2, std::uint32_t rdo = kCanonRdo) {
+        std::vector<std::uint8_t> caps;
+        for (std::uint32_t w : kCaps) put32(caps, w);
+        rx(hdr(1, 6, 2, kSrc, id0), caps);
+        rx(hdr(1, 0, 1, kSnk, id0));   // GoodCRC
+        std::vector<std::uint8_t> req;
+        put32(req, rdo);
+        rx(hdr(2, 1, dev_rev, kSnk, 0), req);
+        rx(hdr(1, 0, 1, kSrc, 0));
+        rx(hdr(3, 0, 2, kSrc, std::uint8_t(id0 + 1)));   // Accept
+        rx(hdr(1, 0, 1, kSnk, std::uint8_t(id0 + 1)));
+        rx(hdr(6, 0, 2, kSrc, std::uint8_t(id0 + 2)));   // PS_RDY
+        rx(hdr(1, 0, 1, kSnk, std::uint8_t(id0 + 2)));
+    }
+    IqRefusal start() {
+        IqFacts f;
+        f.cc = f.inline_link = f.confirmed = true;
+        return iq.start(f, now);
+    }
+    // One 5 ms tick; true when something went out.
+    bool step() {
+        iq.tick(now);
+        TxMsg m;
+        bool out = false;
+        if (iq.take_tx(m)) {
+            sent.push_back(m);
+            if (!m.hard_reset) iq.on_tx_result(tx_ok, now);
+            out = true;
+        }
+        now += 5;
+        return out;
+    }
+    bool next(unsigned limit_ms = 6000) {
+        for (unsigned t = 0; t < limit_ms; t += 5)
+            if (step()) return true;
+        return false;
+    }
+    const TxMsg& last() const {
+        static const TxMsg none{};
+        return sent.empty() ? none : sent.back();
+    }
+    unsigned last_id() const { return (last().header >> 9) & 7; }
+    unsigned last_type() const { return last().header & 0x1F; }
+    // The device's answers (sink role, its own MessageIDs).
+    std::uint8_t dev_id = 3;
+    void dev(std::uint8_t type, std::vector<std::uint32_t> words, std::uint8_t rev = 2) {
+        std::vector<std::uint8_t> p;
+        for (std::uint32_t w : words) put32(p, w);
+        rx(hdr(1, 0, 1, kSrc, dev_id));   // the charger's GoodCRC of it
+        iq.on_message(Sop::Sop, hdr(type, std::uint8_t(words.size()), rev, kSnk, dev_id++), p, now);
+        now += 1;
+    }
+    void dev_ctl(std::uint8_t type) {
+        iq.on_message(Sop::Sop, hdr(type, 0, 2, kSnk, dev_id++), {}, now);
+        now += 1;
+    }
+    void dev_goodcrc(std::uint8_t id) { rx(hdr(1, 0, 1, kSnk, id)); }
+    // A Discover Identity ACK: ID Header (VID `vid`, modal bit when `modal`), cert stat, product VDO (PID).
+    void identity_ack(std::uint16_t vid, std::uint16_t pid, bool modal = false, std::uint8_t rev = 2) {
+        const std::uint32_t idh = (2u << 27) | (modal ? 1u << 26 : 0u) | vid;   // UFP peripheral
+        dev(kMsgVendorDefined, {0xFF00A041u, idh, 0u, (std::uint32_t(pid) << 16) | 0x0100u}, rev);
+    }
+    void sink_ext_ack() {
+        std::vector<std::uint8_t> p = {24, 0x80};   // ext header: data size 24, chunked, chunk 0
+        for (int i = 0; i < 24; i++) p.push_back(std::uint8_t(i + 1));
+        p.push_back(0);
+        p.push_back(0);   // pad to 7 objects
+        rx(hdr(1, 0, 1, kSrc, dev_id));
+        iq.on_message(Sop::Sop, hdr(kExtSinkCapsExt, 7, 2, kSnk, dev_id++, true), p, now);
+        now += 1;
+    }
+    // Run until the run is over (or `limit_ms`), answering nothing.
+    void drain(unsigned limit_ms = 20000) {
+        for (unsigned t = 0; t < limit_ms && iq.running(); t += 5) step();
+    }
+};
+
+constexpr std::uint32_t kSinkPdo1 = 0x0001912Cu, kSinkPdo2 = 0x0004B12Cu;   // 5 V 3 A, 15 V 3 A
+
+}  // namespace
+
+int main() {
+    // ---- a fresh sniffed contract: no first reset, the first question as the source, MessageID after PS_RDY's ----
+    {
+        Rig r;
+        r.contract();
+        CHECK_EQ(int(r.start()), int(IqRefusal::None));
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Settle));
+        CHECK_EQ(bool(r.iq.status().skipped_first_reset), true);
+        CHECK_EQ(bool(r.iq.status().first.ready), true);
+        CHECK_EQ(int(r.iq.status().first.pos), 4);
+        CHECK_EQ(r.iq.status().first.rdo, kCanonRdo);
+        CHECK_EQ(r.iq.status().first.src_pdo, kCaps[3]);
+        const std::uint32_t t0 = r.now;
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_COND(r.now - t0 >= kIqSettleMs);
+        CHECK_EQ(bool(r.last().hard_reset), false);
+        CHECK_EQ(bool(r.last().inline_tx), true);
+        CHECK_EQ(int(r.last().header & 0x1F), int(kMsgVendorDefined));
+        CHECK_EQ(int(r.last().header & 0x0120), int(kSrc));    // source, DFP
+        CHECK_EQ(int((r.last().header >> 6) & 3), 2);          // PD 3.x, the contract's revision
+        CHECK_EQ(r.last_id(), 3u);                             // PS_RDY was id 2
+        CHECK_EQ(word(r.last()), 0xFF00A001u);                 // Discover Identity, SVDM 2.0
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Ask));
+    }
+
+    // ---- the whole round: every answer kept, one fresh MessageID per question, the final reset, the contract compared ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        CHECK_EQ(bool(r.next()), true);                     // Discover Identity, id 3
+        r.dev_goodcrc(3);
+        r.identity_ack(0x04A9, 0x1234);                     // not modal: no SVIDs, no Modes
+        CHECK_EQ(int(r.iq.status().dev_acks), 1);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(r.last_id(), 4u);
+        CHECK_EQ(int(r.last().header & 0x0120), int(kSrc));
+        r.dev(kDataSinkCap, {kSinkPdo1, kSinkPdo2});
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCapExt));
+        CHECK_EQ(r.last_id(), 5u);
+        r.sink_ext_ack();
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetRevision));
+        CHECK_EQ(r.last_id(), 6u);
+        r.dev_ctl(kCtlNotSupported);                        // a PD 3.0 device: no Revision message
+        CHECK_EQ(bool(r.next()), true);                     // nothing left to ask: the final Hard Reset
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff2));
+        r.contract();
+        r.step();
+        const IqStatus& s = r.iq.status();
+        CHECK_EQ(int(s.phase), int(IqPhase::Done));
+        CHECK_EQ(int(s.why), int(IqWhy::None));
+        CHECK_EQ(int(s.match), int(IqMatch::Same));
+        CHECK_EQ(int(s.sent), 4);
+        CHECK_EQ(int(s.resets_sent), 1);
+        CHECK_EQ(int(s.ok_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt)));
+        CHECK_EQ(int(s.refused_mask), int(iq_bit(IqStep::Revision)));
+        CHECK_EQ(bool(s.id.valid), true);
+        CHECK_EQ(int(s.id.vid), 0x04A9);
+        CHECK_EQ(int(s.id.pid), 0x1234);
+        CHECK_EQ(int(s.num_sink_pdos), 2);
+        CHECK_EQ(s.sink_pdos[1], kSinkPdo2);
+        CHECK_EQ(int(s.sink_ext_len), 24);
+        CHECK_EQ(int(s.sink_ext[0]), 1);
+        CHECK_EQ(int(s.sink_ext[23]), 24);
+        CHECK_EQ(s.second.rdo, kCanonRdo);
+        CHECK_EQ(bool(r.iq.running()), false);
+    }
+
+    // ---- MessageID: the next after the newest source-role message, the charger's own included; it wraps 7 -> 0 ----
+    {
+        Rig r;
+        r.contract(5);                                      // caps id 5, Accept 6, PS_RDY 7
+        r.start();
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_id(), 0u);                          // 7 + 1 wraps
+        r.identity_ack(0x18D1, 0x4EE1);
+        // The charger starts something of its own (a Discover Identity request, id 1) before our next question.
+        std::vector<std::uint8_t> di;
+        put32(di, 0xFF00A001u);
+        r.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 1), di);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_id(), 2u);
+        // The charger answering our question itself (a source-role ACK) is no answer: Get_Sink_Cap times out and is asked again.
+        std::vector<std::uint8_t> sc;
+        put32(sc, kSinkPdo1);
+        r.rx(hdr(kDataSinkCap, 1, 2, kSrc, 3), sc);
+        CHECK_EQ(int(r.iq.status().num_sink_pdos), 0);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(r.last_id(), 4u);                          // fresh id: after the charger's 3
+    }
+
+    // ---- silence: one retry with a fresh id, then the step is marked silent and the next one is asked ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.tx_ok = false;                                    // collided GoodCRCs: the transmit result never counts
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_id(), 3u);
+        const std::uint32_t t0 = r.now;
+        CHECK_EQ(bool(r.next()), true);                     // Discover Identity again
+        CHECK_COND(r.now - t0 >= kIqRespMs);
+        CHECK_EQ(word(r.last()), 0xFF00A001u);
+        CHECK_EQ(r.last_id(), 4u);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(r.last_id(), 5u);
+        CHECK_EQ(int(r.iq.status().silent_mask), int(iq_bit(IqStep::Identity)));
+        CHECK_EQ(int(r.iq.status().asked_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap)));
+    }
+
+    // ---- no fresh contract: the first Hard Reset, the renegotiation sniffed, then the questions ----
+    {
+        Rig r;
+        CHECK_EQ(int(r.start()), int(IqRefusal::None));
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Reset1));
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff1));
+        CHECK_EQ(bool(r.iq.status().skipped_first_reset), false);
+        r.now += 1100;                                      // the charger drops VBUS and comes back (bench: ~1 s)
+        r.contract();
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF00A001u);
+        CHECK_EQ(r.last_id(), 3u);
+        CHECK_EQ(int(r.iq.status().first.pos), 4);
+        CHECK_EQ(int(r.iq.status().resets_sent), 1);
+    }
+
+    // ---- the reset gets no renegotiation: aborted, nothing asked, no second reset ----
+    {
+        Rig r;
+        r.start();
+        r.next();
+        r.drain();
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Aborted));
+        CHECK_EQ(int(r.iq.status().why), int(IqWhy::NoContract));
+        CHECK_EQ(int(r.iq.status().resets_sent), 1);
+        CHECK_EQ(int(r.iq.status().sent), 0);
+    }
+
+    // ---- a PD 2.0 device: SVDM 1.0, no Get_Sink_Cap_Extended, no Get_Revision ----
+    {
+        Rig r;
+        r.contract(0, 1);
+        r.start();
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF008001u);
+        CHECK_EQ(int((r.last().header >> 6) & 3), 1);
+        r.dev_ctl(kCtlNotSupported);                        // whatever the device says to a VDM it does not do
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        r.dev(kDataSinkCap, {kSinkPdo1}, 1);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        CHECK_EQ(int(r.iq.status().rev), 1);
+    }
+
+    // ---- modal Identity: Discover SVIDs, then Discover Modes, DisplayPort first ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();
+        r.identity_ack(0x05AC, 0x7513, true);
+        r.next();
+        r.dev(kDataSinkCap, {kSinkPdo1});
+        r.next();
+        r.dev_ctl(kCtlNotSupported);   // no Sink_Capabilities_Extended
+        r.next();
+        r.dev_ctl(kCtlNotSupported);   // no Revision
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF00A002u);
+        r.dev(kMsgVendorDefined, {0xFF00A042u, 0x05ACFF01u});
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF01A003u);
+        r.dev(kMsgVendorDefined, {0xFF01A043u, 0x000C0045u});
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0x05ACA003u);
+        r.dev(kMsgVendorDefined, {0x05ACA083u});            // NAK
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        const IqStatus& s = r.iq.status();
+        CHECK_EQ(int(s.num_svids), 2);
+        CHECK_EQ(int(s.num_modes), 1);
+        CHECK_EQ(int(s.mode_svid[0]), 0xFF01);
+        CHECK_EQ(s.mode_vdo[0], 0x000C0045u);
+        CHECK_COND(s.ok_mask & iq_bit(IqStep::Modes));
+    }
+
+    // ---- the device answered the charger's own questions during the settle: those are not asked again ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.step();
+        std::vector<std::uint8_t> di;
+        put32(di, 0xFF00A001u);
+        r.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 3), di);   // the charger's Discover Identity
+        r.identity_ack(0x2B01, 0x0001);
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Settle));
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));  // Identity known already
+        CHECK_EQ(r.last_id(), 4u);
+        CHECK_EQ(int(r.iq.status().asked_mask), int(iq_bit(IqStep::SinkCap)));
+    }
+
+    // ---- a Hard Reset from the charger mid-run: re-sniff and go on; a third one ends the run ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();
+        r.iq.on_hard_reset(r.now);
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff1));
+        r.contract();
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF00A001u);              // the question that was cut is asked again
+        CHECK_EQ(r.last_id(), 3u);
+        r.iq.on_hard_reset(r.now);
+        r.contract();
+        r.next();
+        r.iq.on_hard_reset(r.now);
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Aborted));
+        CHECK_EQ(int(r.iq.status().why), int(IqWhy::Resets));
+        CHECK_EQ(int(r.iq.status().resets_seen), 3);
+    }
+
+    // ---- the charger Soft_Resets the device mid-run (an answer it did not expect): wait for their new contract, go on, and
+    //      the final reset is still owed ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();
+        r.identity_ack(0x04A9, 0x1234);
+        r.rx(hdr(kCtlSoftReset, 0, 2, kSrc, 0));
+        r.dev_ctl(kCtlAccept);
+        r.step();
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff1));
+        r.contract();
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(r.last_id(), 3u);
+        r.dev(kDataSinkCap, {kSinkPdo1});
+        r.next();
+        r.dev_ctl(kCtlNotSupported);
+        r.next();
+        r.dev_ctl(kCtlNotSupported);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+    }
+
+    // ---- a stop after a question: the final reset still goes, the answers stay; a detach ends at once ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();
+        r.identity_ack(0x04A9, 0x1234);
+        r.iq.abort(IqWhy::Stopped, r.now);
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Reset2));
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        r.contract();
+        r.step();
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Aborted));
+        CHECK_EQ(int(r.iq.status().why), int(IqWhy::Stopped));
+        CHECK_EQ(int(r.iq.status().match), int(IqMatch::Same));
+        CHECK_EQ(int(r.iq.status().id.vid), 0x04A9);
+
+        Rig d;
+        d.contract();
+        d.start();
+        d.next();
+        d.iq.abort(IqWhy::Detached, d.now);
+        CHECK_EQ(int(d.iq.status().phase), int(IqPhase::Aborted));
+        CHECK_EQ(bool(d.next(500)), false);
+    }
+
+    // ---- the second contract differs, or never comes ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();
+        r.dev_ctl(kCtlNotSupported);
+        for (int i = 0; i < 3; i++) {
+            r.next();
+            r.dev_ctl(kCtlNotSupported);
+        }
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        r.contract(0, 2, 0x2304B12Cu);                      // PDO 2 this time
+        r.step();
+        CHECK_EQ(int(r.iq.status().match), int(IqMatch::Differs));
+
+        Rig q;
+        q.contract();
+        q.start();
+        q.next();
+        q.iq.abort(IqWhy::Stopped, q.now);
+        q.drain();
+        CHECK_EQ(int(q.iq.status().match), int(IqMatch::NoSecond));
+        CHECK_COND(q.iq.status().ended_at - q.iq.status().started_at <= kIqTotalMs + kIqRenegMs);
+    }
+
+    // ---- the time limit: no question after kIqTotalMs; the final reset still goes ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.drain(kIqTotalMs + kIqRenegMs + 1000);
+        const IqStatus& s = r.iq.status();
+        CHECK_EQ(int(s.phase), int(IqPhase::Done));           // every step asked twice, all silent: done, nothing learned
+        CHECK_EQ(int(s.silent_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) |
+                                          iq_bit(IqStep::Revision)));
+        CHECK_EQ(int(s.resets_sent), 1);
+        CHECK_COND(s.ended_at - s.started_at <= kIqTotalMs + kIqRenegMs + 10);
+    }
+
+    // ---- refusals, in order ----
+    {
+        IqFacts f;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::NoCc));
+        f.cc = true;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::NotInline));
+        f.inline_link = true;
+        f.busy = true;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::Busy));
+        f.busy = false;
+        f.own_contract = true;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::OwnContract));
+        f.own_contract = false;
+        f.self_powered = true;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::SelfPowered));
+        f.self_powered = false;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::NeedConfirm));
+        f.confirmed = true;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::None));
+        f.other_running = true;
+        CHECK_EQ(int(iq_refusal(f)), int(IqRefusal::Running));
+        Rig r;
+        r.start();
+        CHECK_EQ(int(r.start()), int(IqRefusal::Running));   // one at a time
+    }
+    return test_report("test_pd_interrogate");
+}
