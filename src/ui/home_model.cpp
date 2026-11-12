@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/home_model.hpp"
 
+#include "k2/pd/diag_screen.hpp"
+
 namespace k2::home {
 namespace {
 
@@ -170,7 +172,19 @@ void format_lines(bool data_lines, int32_t a_mv, int32_t b_mv, LinesText &out) {
     out.value.put_char('V');
 }
 
-namespace {
+bool format_diag(Mode m, const pd::diag::Report &r, DiagText &out) {
+    out.value.clear();
+    out.tone = DiagTone::Dim;
+    if ((m != Mode::Live && m != Mode::Stale) || r.no_pd) return false;
+    char w[pd::diag::screen::kLabelChars + 8];
+    pd::diag::Sev sev = pd::diag::Sev::Ok;
+    pd::diag::screen::word(r, w, sev);
+    out.value.put(w);
+    out.tone = m == Mode::Stale ? DiagTone::Stale
+             : sev == pd::diag::Sev::Fail ? DiagTone::Error
+             : sev == pd::diag::Sev::Warn ? DiagTone::Caution : DiagTone::Dim;
+    return true;
+}
 
 bool max_text(Mode m, uint32_t milli, char unit, StrBuf<12> &out) {
     out.clear();
@@ -181,21 +195,24 @@ bool max_text(Mode m, uint32_t milli, char unit, StrBuf<12> &out) {
     return true;
 }
 
-}  // namespace
-
 bool max_volts_text(Mode m, const ProtoInfo &p, StrBuf<12> &out) { return max_text(m, p.max_mv, 'V', out); }
 bool max_amps_text(Mode m, const ProtoInfo &p, StrBuf<12> &out) { return max_text(m, p.ma, 'A', out); }
 
-void alarm_text(Alarm a, uint32_t abs_ma, uint32_t max_ma, StrBuf<16> &out) {
+void alarm_text(Alarm a, uint32_t abs, uint32_t max, StrBuf<20> &out, char unit, bool brief) {
     out.clear();
     if (a == Alarm::None) return;
+    if (brief) {
+        if (a == Alarm::Over) out.put("OVER");
+        else out.put_u32(pct_of(abs, max)).put_char('%');
+        return;
+    }
     char t[12];
-    const int n = fmt_level(t, max_ma);
+    const int n = fmt_level(t, max);
     const std::string_view lim{t, static_cast<size_t>(n)};
     if (a == Alarm::Over) {
-        out.put("OVER ").put(lim).put("A LIMIT");
+        out.put("OVER ").put(lim).put_char(unit).put(" LIMIT");
     } else {
-        out.put_u32(pct_of(abs_ma, max_ma)).put("% OF ").put(lim).put_char('A');
+        out.put_u32(pct_of(abs, max)).put("% OF ").put(lim).put_char(unit);
     }
 }
 

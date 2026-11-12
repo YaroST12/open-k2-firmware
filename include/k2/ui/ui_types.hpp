@@ -10,8 +10,9 @@ enum class Page : uint8_t { Home, Detail, ChargerTest, Lines, Tools, Settings, C
 // Submenus opened from Tools or Settings: modal, they have no place in the rotation. The remote
 // reports a showing submenu as page index kMenuPageBase + Menu. Connection (Source / Cable / Sink) and Diag
 // are Tools entries; Emarker is the saved-cables list opened from Connection's Cable tab; Twin is the Device twins list;
-// LoopProbe is the HID-cable loop probe (Tools); PdStress the renegotiation stress tool (Tools).
-enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe, PdStress, Count };
+// LoopProbe is the HID-cable loop probe (Tools); PdStress the renegotiation stress tool (Tools); Diagnosis is the Black Box
+// diagnosis of the PD session.
+enum class Menu : uint8_t { Trigger, Emarker, PdTrigger, CableR, BlackBox, Spoof, UsbLink, Autorotate, Cards, Share, Connection, Diag, QrTest, Twin, LoopProbe, PdStress, Diagnosis, Count };
 inline constexpr uint8_t kMenuPageBase = static_cast<uint8_t>(Page::Count);
 // Remote-only page indices that open Connection on a tab (kConnTabAlias + Source / Cable / Sink): the old "pd",
 // "emarker" and "identify" page names land here. Ui::page_index() never reports them (Connection reports itself).
@@ -27,7 +28,7 @@ enum class Action : uint8_t { PdRescan = 1, EmarkerScan = 2, EnergyReset = 3,
 enum class BusyWhy : uint8_t { None, TestRunning, FcRelease, QcTrigger, PdHold, Epr, PdRequest, EmScan, Identify, TwinRun, PdStress, LoopProbe };   // new values are appended: the numbers are on the wire
 
 // Ui::Session::flags (and the wire byte): one bit per transient chrome state the screens show.
-inline constexpr uint8_t kSessionHoldCard = 1 << 0;       // BACK held: the "Reboot in N" card
+inline constexpr uint8_t kSessionHoldCard = 1 << 0;       // OK + Back held: the "Reboot in N" card
 inline constexpr uint8_t kSessionRotationNotice = 1 << 1; // the rotation notice strip
 inline constexpr uint8_t kSessionEmScanning = 1 << 2;     // an e-marker scan is running
 inline constexpr uint8_t kSessionEmListening = 1 << 3;    // the passive listen window after a scan is open

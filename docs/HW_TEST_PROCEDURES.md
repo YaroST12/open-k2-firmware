@@ -353,8 +353,11 @@ git identity separately; these instructions do not supersede previous smoke resu
 6. A source that does not release, or a missing power measurement, must reach the8s unsafe
    warning and keep the interlock. Do not induce an unsafe supply on valuable equipment;
    verify actual VBUS independently and unplug. Recover only with measured safe5V.
-7. Hold BACK toward reboot: cancellation happens at500ms; reboot still occurs at5s. Releasing
-   the key cancels reboot, **not** the stop. Do not infer successful5V cleanup from a reboot.
+7. Hold BACK alone for 6 s while live: the stop happens at 500 ms (long BACK) and the K2 does **not**
+   reboot (the BACK hold is no reboot gesture since 2026-11-12). Then hold OK + BACK together: the
+   HoldCard ("Reboot in N", "Release to cancel") shows at 1 s and the K2 reboots at 3 s; releasing
+   either key before 3 s cancels the reboot, **not** a stop already issued. Do not infer successful
+   5V cleanup from a reboot.
 
 Save screens for list/edit/review/live draft and post-exit release, plus `[KEY]`/`[FC]` logs and
 measured VBUS. Host tests cover timeouts, unknown readings and source/session changes; hardware

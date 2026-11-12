@@ -34,7 +34,7 @@ private:
     bool primed_ = false;
 };
 
-// Reboot HoldCard arithmetic: BACK held for held_ms of total_ms. The card shows from kHoldCardMs.
+// Reboot HoldCard arithmetic: the OK + Back chord held for held_ms of total_ms. The card shows from kHoldCardMs.
 constexpr uint32_t kHoldCardMs = 1000;
 constexpr int hold_secs_left(uint32_t held_ms, uint32_t total_ms) {
     return held_ms >= total_ms ? 0 : static_cast<int>((total_ms - held_ms + 999) / 1000);
@@ -42,6 +42,36 @@ constexpr int hold_secs_left(uint32_t held_ms, uint32_t total_ms) {
 constexpr int hold_fill_px(uint32_t held_ms, uint32_t total_ms, int track_px) {
     return held_ms >= total_ms ? track_px : static_cast<int>(static_cast<uint64_t>(held_ms) * static_cast<uint32_t>(track_px) / total_ms);
 }
+
+// The reboot gesture: OK and Back held together for kChordRebootMs, on every page and menu. The HoldCard shows from
+// kHoldCardMs; releasing either key cancels. Once both keys are down the chord is active until BOTH are up again, and
+// the Ui drops the single-key OK / Back events meanwhile (like the Minus + Plus rotation chord), so neither key's long
+// action fires on the way into or out of it.
+constexpr uint32_t kChordRebootMs = 3000;
+class RebootChord {
+public:
+    enum class Step : uint8_t { None, Card, Reboot };
+    void keys(bool ok, bool back, uint32_t now_ms) {
+        if (ok && back) {
+            if (!both_) { both_ = true; active_ = true; fired_ = false; since_ms_ = now_ms; }
+        } else {
+            both_ = false;
+            if (!ok && !back) active_ = false;
+        }
+    }
+    bool active() const { return active_; }
+    uint32_t held_ms(uint32_t now_ms) const { return both_ ? now_ms - since_ms_ : 0; }
+    // Card while the chord has been held kHoldCardMs or more; Reboot once, at kChordRebootMs.
+    Step step(uint32_t now_ms) {
+        const uint32_t h = held_ms(now_ms);
+        if (!both_ || h < kHoldCardMs) return Step::None;
+        if (h >= kChordRebootMs && !fired_) { fired_ = true; return Step::Reboot; }
+        return Step::Card;
+    }
+private:
+    uint32_t since_ms_ = 0;
+    bool both_ = false, active_ = false, fired_ = false;
+};
 
 // Home flow rail: one chevron of `count` is bright, and it steps every kChevStepMs toward the sink.
 // Up (power flows bottom to top): index 0 is the top chevron, so the bright one walks 'count-1 .. 0'.

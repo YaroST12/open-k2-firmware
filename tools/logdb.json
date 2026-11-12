@@ -598,6 +598,8 @@
   "601": "[FS] ring layout copy %s%s: files=%u dirs=%u bytes=%u used=%u log=%u/%u sectors%s%s err=%s",
   "602": "[FS] %u blocks, the copy into the ring layout waits: rings off",
   "603": "[FS] ring layout move %s%s: used=%u above=%u passes=%u files=%u erased=%u%s err=%s",
-  "604": "[FS] %u blocks, the move into the ring layout waits: rings off"
+  "604": "[FS] %u blocks, the move into the ring layout waits: rings off",
+  "605": "[UI] home hero=%u\n",
+  "606": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u (%s)\n"
  }
 }

@@ -34,8 +34,9 @@ using namespace k2;
 
 namespace {
 
-constexpr int kHeroX = 39, kHeroTop = 24;            // Home hero digits, logical content coords (ui_home.cpp)
+constexpr int kHeroX = 38, kHeroTop = 25;            // Home hero digits, logical content coords (ui_home.cpp)
 constexpr int kHeroChars = 5;                        // DigitField of 5 chars
+constexpr home::CellGeom kHeroCell = home::cell_geom(home::kHeroY0, home::kHeroY1, true);   // the Home hero cell
 
 struct Bitmap { int w = 0, h = 0; std::vector<uint16_t> px; };
 
@@ -86,7 +87,7 @@ Layout layout_for(uint8_t rotation) {
 void render_home_cell_string(uint8_t rotation, std::string_view s, const Font &f) {
     std::fill(std::begin(g_panel), std::end(g_panel), kBg);
     home::Cell c;
-    c.geom = home::kVoltCell;
+    c.geom = kHeroCell;
     c.bg = kBg;
     c.sweep = false;
     const home::Item items[1] = {home::text(f, kHeroX, kHeroTop, s, kText)};
@@ -94,7 +95,7 @@ void render_home_cell_string(uint8_t rotation, std::string_view s, const Font &f
     Layout l = layout_for(rotation);
     {
         ContentViewport viewport(l.content);
-        home::paint(c, 0, home::kVoltCell.top, home::kW - 1, home::kVoltCell.bottom);
+        home::paint(c, 0, kHeroCell.top, home::kW - 1, kHeroCell.bottom);
     }
 }
 
@@ -163,7 +164,7 @@ static void test_same_string_glyph_bitmaps() {
 
 static void test_home_page_hero_glyphs() {
     const int box_w = kHeroChars * kHero.adv, box_h = kHero.height;   // the hero line box, logical coords
-    std::array<std::vector<uint8_t>, 4> mask{};                       // full-coverage ink (== kVolt) mask
+    std::array<std::vector<uint8_t>, 4> mask{};                       // full-coverage ink (== kWatt) mask
     std::array<Rect, 4> nat{};
     for (uint8_t r = 0; r < 4; ++r) {
         render_home_page(r);
@@ -176,9 +177,9 @@ static void test_home_page_hero_glyphs() {
         for (int dy = 0; dy < box_h; dy++)
             for (int dx = 0; dx < box_w; dx++) {
                 const uint16_t px = g_panel[(nat[r].y + dy) * LCD_WIDTH + nat[r].x + dx];
-                mask[r][size_t(dy) * box_w + dx] = px == kVolt ? 1 : 0;
+                mask[r][size_t(dy) * box_w + dx] = px == kWatt ? 1 : 0;
             }
-        // Some hero ink must actually be there (the fixture reads 20.04 V).
+        // Some hero ink must actually be there (the fixture reads 36.75 W, the default W hero).
         unsigned ink = 0;
         for (uint8_t v : mask[r]) ink += v;
         CHECK_EQ(ink > 500u, true);
@@ -234,7 +235,7 @@ static void test_source_inverts_mapped_rect() {
 // glyphs crossing the window edges) and the same cell painted as narrow strips (one window per row, edges elsewhere)
 // must leave identical panels, 1:1 and stretched alike.
 static void test_paint_windows_are_invisible() {
-    const int16_t top = home::kVoltCell.top;
+    const int16_t top = kHeroCell.top;
     const home::Item items[4] = {
         home::fill(3, static_cast<int16_t>(top + 2), 217, 6, 0x1234),
         home::text(font_24, 60, static_cast<int16_t>(top + 12), "Window edge 123", kText),
@@ -243,7 +244,7 @@ static void test_paint_windows_are_invisible() {
     };
     for (uint8_t r = 0; r < 4; ++r) {
         home::Cell c;
-        c.geom = home::kVoltCell;
+        c.geom = kHeroCell;
         c.bg = kBg;
         c.sweep = false;
         c.items = items;
@@ -251,14 +252,14 @@ static void test_paint_windows_are_invisible() {
         std::fill(std::begin(g_panel), std::end(g_panel), kBg);
         {
             ContentViewport viewport(l.content);
-            home::paint(c, 0, top, home::kW - 1, home::kVoltCell.bottom);
+            home::paint(c, 0, top, home::kW - 1, kHeroCell.bottom);
         }
         const std::vector<uint16_t> whole(std::begin(g_panel), std::end(g_panel));
         std::fill(std::begin(g_panel), std::end(g_panel), kBg);
         {
             ContentViewport viewport(l.content);
             for (int x = 0; x < home::kW; x += 37)
-                home::paint(c, x, top, x + 36 < home::kW - 1 ? x + 36 : home::kW - 1, home::kVoltCell.bottom);
+                home::paint(c, x, top, x + 36 < home::kW - 1 ? x + 36 : home::kW - 1, kHeroCell.bottom);
         }
         int differ = 0, inked = 0;
         for (size_t i = 0; i < whole.size(); i++) {

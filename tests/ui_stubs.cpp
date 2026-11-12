@@ -22,6 +22,7 @@
 #include "k2/twin/twin_hw.hpp"
 #include "k2/pdstress/journal_hw.hpp"
 #include "k2/pdstress/pdstress_store_hw.hpp"
+#include "k2/pd/diag_live.hpp"
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -966,3 +967,13 @@ Err remove(std::uint16_t no) { const Err e = g_cf->store.remove(no); if (e == Er
 Context context() { return {.fw = 0x0FF2C610, .boots = 4, .uptime_s = g_stub.ms / 1000}; }
 void poll(bool may_erase) { g_cf->store.maintain(may_erase); }
 }  // namespace k2::report_card::hw
+
+// The Black Box diagnosis on the K2: the screens read g_stub.diag_report (a test feeds a fixture through the real analyser).
+namespace k2::pd::diag::live {
+void poll(std::uint32_t) {}
+const Report& report() { return g_stub.diag_report; }
+State state() { return static_cast<State>(g_stub.diag_state); }
+std::uint16_t sessions() { return g_stub.diag_state == 2 ? 1 : 0; }
+std::uint32_t session_ms() { return 0; }
+void verdict_text(std::span<char> out) { k2::pd::diag::verdict(g_stub.diag_report, out); }
+}  // namespace k2::pd::diag::live

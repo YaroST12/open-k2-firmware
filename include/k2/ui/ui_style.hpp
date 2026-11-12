@@ -39,7 +39,7 @@ constexpr uint16_t kVoltT = 0x2120, kAmpT = 0x0124, kWattT = 0x3083, kEnergyT = 
 constexpr uint16_t kChargeT = 0x0866, kCautionT = 0x2900, kErrorT = 0x3000, kStaleT = 0x2104;
 constexpr uint16_t kFocusT = 0x0146, kDimT = 0x2104, kDPlusT = 0x3080, kDMinusT = 0x0108, kFaintT = 0x1082;
 // Home trend sweep: the 1 px level line above a tint column, one dim step brighter than the tint.
-constexpr uint16_t kVoltL = 0x6B40, kAmpL = 0x0350;
+constexpr uint16_t kVoltL = 0x6B40, kAmpL = 0x0350, kWattL = 0x6945;
 constexpr uint16_t kPanelBg = 0x2104;
 constexpr uint16_t kPanelHi = 0x07FF;   // pressed slot
 constexpr uint16_t kPanelLine = 0x8410;   // slot divider: light grey, clearly visible on kPanelBg

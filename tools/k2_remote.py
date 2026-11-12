@@ -86,6 +86,8 @@ CMD_BLACK_BOX = 0x70       # PD black box ring: read from a cursor / clear / fre
 BB_READ, BB_CLEAR, BB_FREEZE, BB_STATUS, BB_CAP_LIST, BB_CAP_READ, BB_CAP_CLEAR = 0, 1, 2, 3, 4, 5, 6
 CMD_TRANS_CAP = 0x71      # transition capture: VBUS + CC at ~1 kHz around a PD step (tools/pd_trace.py transition)
 TC_STATUS, TC_ARM, TC_TRIGGER, TC_DISARM, TC_SAVE, TC_LIVE, TC_LIST, TC_STORED, TC_CLEAR = range(9)
+CMD_DIAGNOSE = 0x72       # Black Box diagnosis (read-only): status / line / finding (also tools/pd_trace.py diagnose)
+DG_STATUS, DG_LINE, DG_FINDING = range(3)
 CMD_LAB = 0x51            # lab probes: PA8 load pulse
 CMD_CABLE_R = 0x50        # passive cable resistance (two-point method), status / reset
 CMD_UFCS = 0x52           # UFCS frame/timing tuner (RAM only) and the 5 V handshake + opener probe (tools/ufcs_sweep.py)
@@ -152,7 +154,7 @@ ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress"]
+PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis"]
 ROTATION_PAGES = 6
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
@@ -2945,6 +2947,60 @@ def cmd_transcap(link, a):
     return {c: True}
 
 
+DG_STATES = ["none", "open", "last"]
+DG_SEV = ["fail", "warn", "info", "ok"]
+DG_LINK = ["healthy", "degraded", "unstable"]
+DG_KIND = ["verdict", "title", "note", "healthy", "lanes"]
+DG_POWER = ["", "power short", "power OK", "need not known", "contract not observed", "no contract made",
+            "K2 is the sink", "no PD", "draw over contract"]
+DG_GROUP = ["power", "contract", "quality", "link", "roles"]
+
+
+def diagnose_read(link):
+    """The Black Box diagnosis the K2 shows: status, every line (read in chunks through `off`), every finding."""
+    p = link.call(CMD_DIAGNOSE, bytes([DG_STATUS])).payload
+    _need(p, 16, "diagnose status")
+    sessions, start_us, dur_ms = struct.unpack_from("<HII", p, 6)
+    out = {"state": _tc_name(DG_STATES, p[0]), "power": _tc_name(DG_POWER, p[1]), "link": _tc_name(DG_LINK, p[2]),
+           "worst": _tc_name(DG_SEV, p[3]), "sessions": sessions, "start_us": start_us, "dur_ms": dur_ms,
+           "lines": [], "findings": []}
+    for i in range(p[5]):
+        text, kind, sev, num, total = b"", 0, 0, 0, None
+        while total is None or len(text) < total:
+            q = link.call(CMD_DIAGNOSE, bytes([DG_LINE, i, len(text)])).payload
+            _need(q, 5, "diagnose line")
+            kind, sev, num, total = q[1], q[2], q[3], q[4]
+            if len(q) == 5:
+                break
+            text += q[5:]
+        out["lines"].append({"kind": _tc_name(DG_KIND, kind), "sev": _tc_name(DG_SEV, sev), "num": num,
+                             "text": text.decode("utf-8", "replace")})
+    for i in range(p[4]):
+        q = link.call(CMD_DIAGNOSE, bytes([DG_FINDING, i])).payload
+        _need(q, 24, "diagnose finding")
+        t_ms, va, vb, vc, vd = struct.unpack_from("<Iiiii", q, 4)
+        out["findings"].append({"sev": _tc_name(DG_SEV, q[1]), "group": _tc_name(DG_GROUP, q[2]),
+                                "code": q[3], "name": q[24:].decode("ascii", "replace"), "t_ms": t_ms,
+                                "a": va, "b": vb, "c": vc, "d": vd})
+    return out
+
+
+def cmd_diagnose(link, a):
+    return diagnose_read(link)
+
+
+def diagnose_text(r):
+    """The diagnosis as the K2 lists it: the verdict, then each finding's title with its notes indented."""
+    if r["state"] == "none":
+        return "no PD session yet"
+    rows = [f"session: {r['state']}, {r['dur_ms'] / 1000:.1f} s, {r['sessions']} seen"]
+    for ln in r["lines"]:
+        tag = {"fail": "FAIL ", "warn": "WARN ", "info": "     ", "ok": "     "}[ln["sev"]] if ln["kind"] == "title" else ""
+        indent = "      " if ln["kind"] == "note" else "  "
+        rows.append(f"{indent}{tag}{ln['text']}")
+    return "\n".join(rows)
+
+
 def cmd_action(link, a):
     saved, link.timeout_s = link.timeout_s, max(link.timeout_s, ACTION_TIMEOUT_S)
     try:
@@ -3545,6 +3601,8 @@ def _render(name, r):
             if "hunt" in s:
                 rows.append(_hunt_line(s["hunt"]))
         return "\n".join([head] + notes + rows)
+    if name == "diagnose" and isinstance(r, dict):
+        return diagnose_text(r)
     if name == "transcap" and isinstance(r, list):   # `transcap list`: the stored captures
         if not r:
             return "no stored captures"
@@ -3805,7 +3863,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards,
             "twin": cmd_twin}
 
@@ -3831,7 +3889,7 @@ def build_parser():
     sp.add_argument("button", choices=sorted(BUTTONS))
     g = sp.add_mutually_exclusive_group()
     g.add_argument("--long", action="store_true", help=f"hold {LONG_PRESS_MS} ms")
-    g.add_argument("--ms", type=int, help="hold time in ms (30..10000); 5000 = reboot hold on back")
+    g.add_argument("--ms", type=int, help="hold time in ms (30..10000); to reset the K2 use `reboot`")
     sub.add_parser("state", help="page, power readings, PD summary")
     st = sub.add_parser("charger-test", help="read existing RAM suite results (never starts or stops tests)")
     sts = st.add_subparsers(dest="test_cmd", required=True)
@@ -4113,6 +4171,8 @@ def build_parser():
     sbbs.add_parser("resume", help="record again")
     sbbs.add_parser("captures", help="list the trigger-frozen captures (read one with pd_trace.py capture N)")
     sbbs.add_parser("clear-captures", help="drop the trigger-frozen captures")
+    sub.add_parser("diagnose", help="the Black Box diagnosis the K2 shows (verdict, findings, healthy lines; "
+                                    "read-only; offline: tools/pd_trace.py diagnose)")
     stc = sub.add_parser("transcap", help="transition capture: arm / trigger / status (dump and plot: tools/pd_trace.py transition)")
     stcs = stc.add_subparsers(dest="tc_cmd", required=True)
     for nm, hp in (("status", "state, sample count, spacing"), ("arm", "start recording VBUS and CC (fast INA226 mode)"),

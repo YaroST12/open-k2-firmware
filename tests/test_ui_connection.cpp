@@ -158,6 +158,37 @@ static void test_crossed_cc_reads_on_the_tab_and_the_bar() {
     status_text(in, s); CHECK_STR(s.c_str(), "Charger");
 }
 
+// The PD diagnosis verdict (pd::diag::screen::verdict) is the Source tab's bar line while a PD session has one. It wins over
+// the survey's Refresh hint and summary; an action message and a running survey's progress still win over it, and the
+// Cable and Sink tabs keep their own words.
+static void test_status_diag_verdict() {
+    StrBuf<40> s;
+    StatusIn in;
+    in.tab = Tab::Source;
+    in.f = facts(false, true, false, Topology::CableSingleCc);
+    in.diag = "Link OK, power short";
+    status_text(in, s); CHECK_STR(s.c_str(), "Link OK, power short");
+    pd::Survey fresh;                                                       // nothing asked yet: the hint would show
+    in.sv = &fresh;
+    status_text(in, s); CHECK_STR(s.c_str(), "Link OK, power short");
+    pd::Survey running;
+    running.start(pd::SvCtx{.contract = true, .inline_sink = false, .charger_test = false, .xiaomi_chain = false,
+                            .pd20 = false, .epr_capable = true}, 1000);
+    in.sv = &running;
+    status_text(in, s); CHECK_STR(s.c_str(), "Reading 0/8");
+    in.sv = nullptr;
+    in.op = "Live sink: OK again";
+    status_text(in, s); CHECK_STR(s.c_str(), "Live sink: OK again");
+    in.op = {};
+    in.tab = Tab::Sink;
+    status_text(in, s); CHECK_STR(s.c_str(), "No device, via cable");
+    in.tab = Tab::Cable;
+    status_text(in, s); CHECK_STR(s.c_str(), "No cable, via cable");
+    in.tab = Tab::Source;
+    in.diag = {};
+    status_text(in, s); CHECK_STR(s.c_str(), "Charger, via cable");
+}
+
 // The idle "Source asleep" hint (pattern slow-rp-wake): an open CC line in the standby-signature window
 // (>= 2.8 V, < 3.15 V, steady) with VBUS dark and Wake sleeping port off - the Source tab and the bottom bar
 // say so. A 3.3 V open line is a waiting charger's Rp, not the signature; the CC2 bias net (1.69 V) is below
@@ -674,6 +705,7 @@ int main() {
     test_silent_cable_chip_words();
     test_wrap();
     test_status_text();
+    test_status_diag_verdict();
     test_status_survey();
     test_survey_words();
     test_actions();

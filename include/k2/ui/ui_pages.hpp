@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include "k2/ui/gfx.hpp"
+#include "k2/ui/home_cards.hpp"
 #include "k2/ui/home_cell.hpp"
 #include "k2/ui/home_model.hpp"
 #include "k2/ui/kit.hpp"
@@ -94,6 +95,10 @@ struct UiContext {
     bool trig_armed = false;     // trigger above 5 V: first OK given, waiting for the second
     uint32_t cap_mv = 5000;      // highest voltage a request may ask for (power monitor limits)
     cable_r::Meter cable;                                        // passive two-point cable resistance
+    // Home's PEAK and SAG cards: peaks and the worst dip since attach (or the last long OK on Home), fed from the raw sample
+    // in Ui::tick against `sag_level_mv`, the level in force (home::sag_level_mv, refreshed every 100 ms while live).
+    home::Extremes extremes;
+    uint32_t sag_level_mv = 0;
     cable_r::Mode cable_mode = cable_r::Mode::Passive;           // Cable R submenu: passive meter or Kelvin 8-wire
     // The pending QR scan-test request (remote Cmd::QrTest op 1, k2/ui/ui_qrtest.hpp): the (version, px, quiet) of
     // the next show, consumed by QrTestPage::enter(). The page itself lives in the page arena.
@@ -117,6 +122,8 @@ struct UiContext {
     // anything that must survive a page switch lives here, not in the page; the page holds a reference under its old name.
     struct Remembered {
         trend::Window home_window = trend::Window::S10;   // Home: the trend window OK short cycles
+        home::Qty home_hero = home::Qty::W;               // Home: the hero quantity Long Back cycles (uiprefs, restored at boot)
+        home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
         int tools_sel = 0;                                // Tools: the highlighted tool
         int settings_sel = 0;                             // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
@@ -624,11 +631,13 @@ namespace home {
 ProtoInfo live_proto(const UiContext &ctx, const power::Metrics &pm);
 }
 
-// Home v7 "dual hero": the walk-by page, the whole 224 x 240 content (no title bar, no footer band). VBUS cell
-// y0..69, IBUS cell y72..141 (64 px digits over a faint patient-monitor trend sweep, status edge, exception pill /
-// limit alarm / limit bar), W / Wh / Ah band y144..193, info block y196..239 (USB link, protocol row). The pure
-// parts are home_model / home_cell / home_proto; this class owns the state and decides what to repaint
-// (src/ui/ui_home.cpp). OK short = trend window, OK long = energy reset.
+// Home 2c (user decision 2026-11-12): the walk-by page, the whole 224 x 240 content (no title bar, no footer band). The
+// hero cell y0..73 (W, V or A at 64 px over a faint patient-monitor sweep, status edge, badge / alarm line, contract
+// bar), the ledger rows x0..139 y76..134 / y136..193 (the two other quantities at 48 px, each with its sweep), the two
+// right-column cards x141..223 the cycler picks (Wh/Ah, PEAK, DROP + SAG, CABLE, LINES), the info block y196..239 (PD
+// diagnosis, protocol row). The pure parts are home_model / home_cards / home_cell / home_proto; this class owns the
+// state and decides what to repaint (src/ui/ui_home.cpp). OK short = trend window, OK long = reset (energy, peaks, sag,
+// cycler), Back long = the next hero.
 class HomePage final : public PageBase {
 public:
     explicit HomePage(UiContext &c) : PageBase(c, Page::Home, "") {}
@@ -640,32 +649,47 @@ public:
 private:
     struct Frame;   // everything one update decides before it draws (ui_home.cpp)
     void sample_values(Frame &f, uint32_t now_ms);
-    void update_sweep(const Frame &f, uint32_t now_ms, int &step_col, int &step_n);
-    void paint_statics();                 // after an invalidate / mode change: the two rules, the hero digit fields
-    void paint_cell(int cell, const Frame &f, int step_col, int step_n, bool digits_changed, int16_t px0, int16_t px1);
-    void paint_lower(const Frame &f);     // the W / Wh / Ah band and the info block: one compositor cell, six repaint zones
-    void draw_rules();                    // the two rules above the lower cell (the third is part of it)
-    // Display filter: V, A and W digits change at most 4 times a second (one throttle, one consistent set).
+    void update_sweep(const Frame &f, uint32_t now_ms, int (&step_col)[3], int (&step_n)[3]);
+    void paint_statics();                 // after an invalidate / mode / hero change: the digit fields, every cell dirty
+    void paint_qty(int slot, home::Qty q, const Frame &f, int step_col, int step_n);   // slot 0 hero, 1 / 2 ledger rows
+    struct QtyHead;   // the head line's texts (ui_home.cpp); the items view them while the cell paints
+    // The head line of a quantity cell: the label or the alarm line, the span, the pill or the max badge, appended to
+    // `it` at `n`; returns the head's signature. Kept out of paint_qty so its text helpers' locals are not on the
+    // stack while the cell paints.
+    [[gnu::noinline]] uint32_t qty_head(int slot, home::Qty q, const Frame &f, QtyHead &h, home::Item *it, int &n);
+    void paint_card(int cell, const Frame &f);   // 0 upper, 1 lower right-column card
+    void paint_info(const Frame &f);      // the info block: one compositor cell, three repaint zones
+    // Display filter: V, A, W digits and the card values change at most 4 times a second (one throttle, one set).
     Throttle thr_{250};
     int32_t v_mv_ = 0, a_ma_ = 0, w_mw_ = 0;         // |values| as shown
     power::Flow flow_ = power::Flow::Idle;
     home::ProtoInfo last_proto_{};                    // the protocol of the last live reading (Stale keeps it)
+    struct CardData {                                 // the card values as shown (snapshot with the digits)
+        uint32_t peak_mw = 0, peak_ma = 0, sag_bp = 0, sag_level_mv = 0;
+        bool has_sag = false;
+        home::Drop drop{};
+        int32_t lines[4] = {-1, -1, -1, -1};          // CC1, CC2, D+, D- in mV (-1 = no reading)
+    } card_;
     uint8_t mode_ = 0xFF;                             // home::Mode last seen (not reset by invalidate); 0xFF = none yet
-    bool statics_ok_ = false;                         // paint_statics() ran since the last invalidate / mode change
-    bool lower_ok_ = false;                           // the lower cell holds what lower_sig_ says
-    uint32_t lower_sig_[6] = {};                      // per zone: W, Wh, Ah, info row 1, elapsed, info row 2
+    home::Qty shown_hero_ = home::Qty::W;             // the hero the cells were laid out for
+    bool statics_ok_ = false;                         // paint_statics() ran since the last invalidate / mode / hero change
+    bool info_ok_ = false;                            // the info cell holds what info_sig_ says
+    uint32_t info_sig_[3] = {};                       // per zone: info row 1, elapsed, info row 2
     trend::Window &window_ = ctx_.keep.home_window;   // remembered across page switches
-    // The sweep survives invalidate() (a capture re-renders strips of one frame); it is reloaded from the
-    // trend after a mode change, a window or scale change, or a long gap (page left, stalled loop).
-    home::Sweep sw_[2];
+    // The sweeps survive invalidate() (a capture re-renders strips of one frame); they are reloaded from the
+    // trend after a mode or hero change, a window or scale change, or a long gap (page left, stalled loop).
+    home::Sweep sw_[3];                               // per slot: hero (110 columns), ledger rows (66)
     bool sweep_ok_ = false;
     uint32_t sweep_t_ = 0;
     uint32_t sweep_seen_ = 0;                         // the `now` of the last update: a replay of one frame never steps
     uint32_t sweep_scale_ = 0;
     uint16_t sweep_epoch_ = 0;                        // bumped on a reload: the cells repaint whole
-    home::DigitField hd_[2];                          // VBUS / IBUS hero digits
-    uint32_t cell_sig_[2][4] = {};                    // per cell: base, head, arrow, bar signatures
-    bool cell_valid_[2] = {false, false};
+    home::DigitField hd_[3];                          // per slot
+    uint32_t cell_sig_[3][4] = {};                    // per slot: base, head, arrow, bar signatures
+    bool cell_valid_[3] = {false, false, false};
+    uint32_t card_base_[2] = {};                      // per card cell: card, mode, dot
+    uint32_t card_sig_[2][4] = {};                    // per card cell: one signature per text row
+    bool card_valid_[2] = {false, false};
 };
 
 // Detail page: every measured value as small text (D+/D-, CC1/CC2, contract, cable, protocol, R, temperature,
@@ -913,8 +937,8 @@ public:
     // CableIdentityList), so tool_menu(2) names the Spoof menu that opens on top of Connection.
     static Menu tool_menu(int i) {
         constexpr Menu kMenus[kToolCount] = {Menu::Trigger, Menu::PdTrigger, Menu::Spoof, Menu::CableR,
-                                             Menu::Connection, Menu::BlackBox, Menu::Cards, Menu::Diag, Menu::Twin,
-                                             Menu::LoopProbe, Menu::PdStress};
+                                             Menu::Connection, Menu::BlackBox, Menu::Diagnosis, Menu::Cards, Menu::Diag,
+                                             Menu::Twin, Menu::LoopProbe, Menu::PdStress};
         return kMenus[i < 0 || i >= kToolCount ? 0 : i];
     }
     static const char *tool_name(int i);

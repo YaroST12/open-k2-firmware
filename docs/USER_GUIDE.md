@@ -44,12 +44,15 @@ USB is **off** after a fresh flash. Without it the K2 still works as a meter, bu
 
 ## The four buttons
 
-| Button | Short press | Long press (0.5 s) | Hold (5 s) |
-| :--- | :--- | :--- | :--- |
-| **BACK** | Go back one level; on a top-level page, go Home | nothing | Reboot (a card counts down "Reboot in N") |
-| **MINUS** | Select up / previous / decrease | Previous page | |
-| **OK** | Do the page's main action | A second action (Share, Reset, Delete...) | |
-| **PLUS** | Select down / next / increase | Next page | |
+| Button | Short press | Long press (0.5 s) |
+| :--- | :--- | :--- |
+| **BACK** | Go back one level; on a top-level page, go Home | On Home: change the big number (W, V, A); elsewhere nothing |
+| **MINUS** | Select up / previous / decrease | Previous page |
+| **OK** | Do the page's main action | A second action (Share, Reset, Delete...) |
+| **PLUS** | Select down / next / increase | Next page |
+
+- **OK and BACK held together for 3 s** reboot the K2 from any page. A card ("Reboot in N", "Release to cancel")
+  appears after 1 s; let go of either button to cancel.
 
 - The strip on the right edge of the screen **always shows what each button does right now**. Read it instead of memorising.
 - Long MINUS / long PLUS page between the six top-level pages. There is no wrap-around: long MINUS does nothing on Home, long PLUS does nothing on Settings.
@@ -79,7 +82,7 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
  |        |            |            +-- (read-only bars: D+, D-, CC1, CC2)
  |        |            +-- Tests (presets, Custom) > Spoof cable > Review > run > Results
  |        +-- 8x2 grid of readings
- +-- big V and A, power, energy, trend
+ +-- big W (or V or A), the other two, trends, cycling cards
 ```
 
 ![Home](guide/img/home.png) ![Tools](guide/img/tools.png)
@@ -89,8 +92,9 @@ Home -- Detail -- Charger test -- Lines -- Tools -- Settings      long MINUS / l
 ### Read volts, amps and watts
 
 1. Plug the charger into one port and the device into the other (the K2 sits inline).
-2. Look at **Home**: VBUS (volts) and IBUS (amps) are the two big cells; power is in the band below.
-3. OK cycles the trend window (10 s, 60 s, 10 min). Long OK resets the energy counter.
+2. Look at **Home**: power (W) is the big number at the top; volts and amps are the two rows below it. Long BACK
+   makes V or A the big number instead (remembered across boots).
+3. OK cycles the trend window (10 s, 60 s, 10 min). Long OK resets the energy counter, the peaks and the cards.
 
 ### See what a charger offers over PD
 
@@ -157,7 +161,7 @@ Every press has three kinds: **short** (acts on release), **long** (fires at 0.5
 
 - **Top-level pages** (Home, Detail, Charger test, Lines, Tools, Settings): long PLUS goes to the next page, long MINUS to the previous. Short BACK goes Home (on Home it does nothing).
 - **Inside a tool or settings submenu**: paging is off. Short BACK first lets the page handle it (for example, step back from a detail view), otherwise it leaves the submenu.
-- **BACK hold (5 s)** works everywhere and reboots the K2. A counting card ("Reboot in N") appears; release before it reaches zero to cancel. A half-second long BACK does nothing.
+- **OK + BACK held together (3 s)** works everywhere and reboots the K2. After 1 s a counting card ("Reboot in N", "Release to cancel") appears; let go of either button before it reaches zero to cancel. While both are held, neither button does its own action; each works again from its next press. Holding BACK alone no longer reboots.
 - **MINUS and PLUS held together** cycle the screen orientation (remembered across boots).
 - **Label strip**: the narrow column on the right shows the current action of each button. Navigation pages show Back, "-/Prev" and "+/Next". Lists show Up and Dn. Greyed or missing labels mean the button does nothing there.
 
@@ -171,16 +175,23 @@ Colours follow one scheme everywhere: green = good or ready, amber = caution or 
 
 The live meter.
 
-- **VBUS** and **IBUS** hero cells with a sweeping trace behind each number.
-- A band with **W**, **Wh** and **Ah** (the energy counter since the last reset).
-- A **limit bar** with a tick at 90 % of the contract current: the bar turns amber from 90 % (near) and red above 100 % (over).
-- Two info rows: the USB protocol in use and the source/role.
+- **One big number** at the top: power (W) by default, with `max NNW` (the contract) at the top right, a **limit bar**
+  with a tick at 90 % of the contract and a sweeping trace behind it. Long BACK makes V or A the big number instead.
+- **Two rows** below on the left: the other two readings, each with its own trace, and the flow arrow beside the amps.
+- **Two cards** on the right that take turns every few seconds: **PEAK** (highest W, V and A since the plug-in),
+  **DROP / SAG** (how far the voltage dips under load), **CABLE** (only with a read e-marker), **LINES** (D+, D-, CC),
+  and **Energy** (Wh over Ah) in the lower card every other turn. Cards with nothing to show are skipped. Unplugged
+  or idle, PEAK and Energy stay in grey.
+- **Alarms**: power turns amber from 90 % of the contract ("93% OF 100W") and red above it ("OVER 100W LIMIT"); the
+  current does the same against the contract current. Volts have no alarm.
+- Two info rows at the bottom: the USB protocol in use and the source/role.
 - Pills: **NO VBUS** (top right) when the port has no voltage; **PAS** (bottom right) while the K2 is passive.
 
 | Button | Action |
 | :--- | :--- |
-| OK | Zoom: cycles the trend window 10 s, 60 s, 10 min |
-| long OK | Reset the energy counter |
+| OK | Zoom: cycles the trend window 10 s, 60 s, 10 min (all three traces) |
+| long OK | Reset the energy counter, the peaks and the cards |
+| long BACK | Change the big number: W, then V, then A (remembered across boots) |
 | BACK | nothing |
 
 Readings are filtered by the **Smoothing** setting; see [Other settings](#other-settings).
@@ -606,7 +617,7 @@ The bootloader area (0x08000000 to 0x080037FF) is never written by this firmware
 | Cable R shows NO PM | The power monitor chip was not found. |
 | QC 20 V fails | Expected (Class B); not a fault. |
 | The screen is rotated | MINUS+PLUS together cycle orientation; or Settings > Autorotate. |
-| The K2 rebooted in the middle of something | BACK held 5 s reboots on purpose. If it was not you, note what you were doing and report it. |
+| The K2 rebooted in the middle of something | OK + BACK held together for 3 s reboots on purpose. If it was not you, note what you were doing and report it. |
 
 ## Glossary
 

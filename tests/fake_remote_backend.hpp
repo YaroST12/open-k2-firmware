@@ -295,6 +295,12 @@ struct Fake {
         out[0] = 0xE0; out[1] = 0x11; out[2] = 0x22;
         return 3;
     }
+    std::vector<uint8_t> diag_req;
+    size_t diagnose(std::span<const uint8_t> req, std::span<uint8_t> out) {
+        calls++; diag_req.assign(req.begin(), req.end());
+        out[0] = 0xD1; out[1] = req[0];
+        return 2;
+    }
     std::vector<uint8_t> tc_req;
     size_t transcap(std::span<const uint8_t> req, std::span<uint8_t> out) {
         calls++; tc_req.assign(req.begin(), req.end());

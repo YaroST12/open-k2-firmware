@@ -596,7 +596,7 @@ static void test_navigation_and_stop_controls() {
         if (mode == 0) press(ui, Button::Back, now);
         if (mode == 1) press(ui, Button::Ok, now);
         if (mode == 2) ui.on_button(Button::Plus, ButtonEvent::Long, now);
-        if (mode == 3) CHECK_EQ(ui.on_button(Button::Back, ButtonEvent::Hold, now), UiAction::Reboot);
+        if (mode == 3) CHECK_EQ(ui.on_button(Button::Back, ButtonEvent::Hold, now), UiAction::None);   // stops the run, no reboot
         CHECK_EQ(g_stub.releases, 1); CHECK_EQ(ui.charger_test_busy(), true);
         CHECK_EQ(ui.spoof_busy(), true);
         for (const uint32_t end = now + 20000; now <= end && ui.charger_test_busy(); now += 100) ui.tick(now);

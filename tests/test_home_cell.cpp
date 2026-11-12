@@ -14,6 +14,10 @@ using namespace k2;
 using namespace k2::home;
 
 static constexpr uint16_t kBgC = 0x0000, kTint = 0x0123, kLine = 0x07E0, kCur = 0x4208, kInk = 0xFFFF;
+// Fixed test geometries (the compositor is geometry-agnostic): a 70-row cell whose sweep reaches its bottom row, and a
+// second cell under it.
+static constexpr CellGeom kVoltCell{0, 69, 2, 69};
+static constexpr CellGeom kAmpCell{72, 141, 74, 141};
 
 static void test_arrow_masks() {
     // Up: a two pixel tip on the top row, the shaft only on the bottom row.
@@ -266,6 +270,59 @@ static void test_paint_streams_the_composed_rows() {
     CHECK_EQ(g_panel[70 * LCD_WIDTH + 100], 0xAAAA);
 }
 
+// 2c: a ledger row's sweep uses 66 columns (x4..135), a smaller arrow samples the 22 px mask, and a narrow cell never
+// paints outside its columns.
+static void test_ledger_sweep_and_narrow_cell() {
+    Sweep s;
+    s.n = kLedgerCols;
+    for (int i = 0; i < kLedgerCols; i++) s.step(1);
+    CHECK_EQ(s.cursor, 0);                            // wrapped after 66 columns
+    uint8_t many[kCols];
+    for (auto &m : many) m = 2;
+    s.load(many);
+    CHECK_EQ(s.cursor, 0);                            // capped at 66
+    CHECK_EQ(s.rows[kLedgerCols], 0);
+    Strip w = strip_of(kLedgerCols - 1, 1, kLedgerCols);
+    CHECK_EQ(w.n, 2);
+    CHECK_EQ(w.r[0].x1, x_of_col(kLedgerCols - 1) + 1);   // x135: inside the ledger column
+    CHECK_EQ(w.r[1].x0, 4);
+
+    Cell c = sweep_cell(s);
+    c.x0 = 0;
+    c.x1 = kLedgerX1;
+    s.rows[kLedgerCols - 1] = 9;
+    s.cursor = 3;
+    CHECK_EQ(bg_at(c, x_of_col(kLedgerCols - 1), 69), kTint);
+    {
+        Sweep t = s;
+        t.rows[kLedgerCols] = 9;                      // a stale value past n is never shown
+        Cell d = c;
+        d.sw = &t;
+        CHECK_EQ(bg_at(d, x_of_col(kLedgerCols), 69), kBgC);
+    }
+    for (auto &p : g_panel) p = 0xAAAA;
+    paint(c, 0, 60, kW - 1, 69);
+    CHECK_EQ(g_panel[69 * LCD_WIDTH + kLedgerX1] != 0xAAAA, 1);
+    CHECK_EQ(g_panel[69 * LCD_WIDTH + kLedgerX1 + 1], 0xAAAA);   // the vertical rule and the cards stay untouched
+
+    // A 13 px arrow: the scaled mask keeps the tip on the top row and the shaft on the bottom row.
+    const Item items[1] = {arrow(50, 100, 0, 0x1357, 13)};
+    Cell a;
+    a.geom = kAmpCell;
+    a.bg = kBgC;
+    a.items = items;
+    uint16_t row[kW];
+    compose_row(a, 100, 0, kW - 1, row);
+    CHECK_EQ(row[50 + 6], 0x1357);
+    CHECK_EQ(row[50], kBgC);
+    compose_row(a, 112, 0, kW - 1, row);
+    CHECK_EQ(row[50 + 6], 0x1357);
+    compose_row(a, 113, 0, kW - 1, row);              // below the 13 px box
+    for (int x = 50; x < 63; x++) CHECK_EQ(row[x], kBgC);
+    CHECK_EQ(arrow_box(items[0]), 13);
+    CHECK_EQ(arrow_box(arrow(0, 0, 0, 0)), kArrowBox);
+}
+
 static void test_digit_field_changed_range() {
     DigitField f;
     f.init(font_64, 38, 24, 5);
@@ -302,6 +359,7 @@ int main() {
     test_items_layer_in_order();
     test_arrow_and_warn_items();
     test_paint_streams_the_composed_rows();
+    test_ledger_sweep_and_narrow_cell();
     test_digit_field_changed_range();
     return test_report("test_home_cell");
 }

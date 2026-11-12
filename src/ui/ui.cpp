@@ -71,6 +71,7 @@ PageIf *Ui::build_menu(Menu m) {
     case Menu::Twin: return pages_.push<TwinPage>(ctx_);
     case Menu::LoopProbe: return pages_.push<LoopProbePage>(ctx_);
     case Menu::PdStress: return pages_.push<PdStressPage>(ctx_);
+    case Menu::Diagnosis: return pages_.push<DiagnosisPage>(ctx_);
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -87,6 +88,7 @@ ListState Ui::list_state() {
         case Menu::Cards: return top_as<CardsPage>().list_state();
         case Menu::Autorotate: return top_as<AutorotatePage>().list_state();
         case Menu::Twin: return top_as<TwinPage>().list_state();
+        case Menu::Diagnosis: return top_as<DiagnosisPage>().list_state();
         default: return ListState{};
         }
     }
@@ -173,6 +175,16 @@ void Ui::store_orientation(uint8_t rotation) {
     p.rotation_manual = rotation_lock_;
     p.rotation = rotation_lock_ ? static_cast<uint8_t>(rotation & 3) : 0;   // the value means nothing in auto: keep the file canonical
     p.rotate_buttons = rotate_buttons_;
+    if (p != before) uiprefs::set(p);
+}
+
+void Ui::set_home_hero(home::Qty q) {
+    ctx_.keep.home_hero = q;
+    K2LOG("[UI] home hero=%u\n", unsigned(home::qty_byte(q)));
+    current().invalidate();   // Home paints its new layout on the next update
+    uiprefs::Prefs p = uiprefs::stored();
+    const uiprefs::Prefs before = p;
+    p.home_hero = home::qty_byte(q);
     if (p != before) uiprefs::set(p);
 }
 
@@ -351,7 +363,9 @@ Ui::Session Ui::session() {
     bool rows = false;
     if (depth_) {
         switch (menu()) {
-        case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: case Menu::Twin: rows = list_state().count > 0; break;
+        case Menu::Trigger: case Menu::Emarker: case Menu::Cards: case Menu::PdTrigger: case Menu::Twin: case Menu::Diagnosis:
+            rows = list_state().count > 0;
+            break;
         case Menu::Spoof: case Menu::UsbLink: case Menu::Autorotate: case Menu::BlackBox: rows = true; break;
         case Menu::Connection: {
             const ConnectionPage &cp = connection_page();
@@ -594,8 +608,19 @@ void Ui::set_pressed(Button b, bool down, uint32_t now_ms) {
     const int k = static_cast<int>(b);
     const bool was_held = held(k);
     if (down && !down_[k]) suppress_rotated_press_[k] = false;
+    if (down && !was_held) suppress_chord_[k] = false;
     down_[k] = down;
     update_lit(k, was_held, now_ms);
+    feed_chord(now_ms);
+}
+
+void Ui::feed_chord(uint32_t now_ms) {
+    constexpr int ok = static_cast<int>(Button::Ok), back = static_cast<int>(Button::Back);
+    chord_.keys(held(ok), held(back), now_ms);
+    if (!chord_.active()) return;
+    suppress_chord_[ok] = suppress_chord_[back] = true;   // neither key's own Short / Long / Hold, until pressed afresh
+    ctx_.keep.trigger.invalidate_confirmation();
+    charger_test_.invalidate_confirmation();
 }
 
 void Ui::set_remote_pressed(Button logical, bool down, uint32_t now_ms) {
@@ -609,17 +634,18 @@ void Ui::set_remote_pressed(Button logical, bool down, uint32_t now_ms) {
     }
     const int k = remote_key_[l];
     const bool was_held = held(k);
+    if (down && !was_held) suppress_chord_[k] = false;
     remote_down_[k] = down;
     if (!down) remote_key_[l] = 0xFF;
     update_lit(k, was_held, now_ms);
+    feed_chord(now_ms);
 }
 
-// Reboot HoldCard (design 6.5, screens.md home_reboot_hold): shown from 1 s of BACK held, counts down to
-// the 5 s reboot, and a release before that removes it and repaints the page. Pixels in content coordinates.
-void Ui::update_hold_card(uint32_t now_ms) {
-    const bool back_held = held(static_cast<int>(Button::Back));
-    const uint32_t ms = now_ms - lit_since_[static_cast<int>(Button::Back)];
-    if (!back_held || ms < kHoldCardMs) {
+// Reboot HoldCard (design 6.5): shown from kHoldCardMs of the OK + Back chord, counts down to the kChordRebootMs
+// reboot, and releasing either key before that removes it and repaints the page. Pixels in content coordinates.
+void Ui::update_hold_card(uint32_t now_ms, RebootChord::Step step) {
+    const uint32_t ms = chord_.held_ms(now_ms);
+    if (step == RebootChord::Step::None) {
         if (hold_shown_) {   // cancelled: wipe the card (an opaque page just paints over it) and repaint the page
             const uint32_t t0 = now_us();
             const bool opaque = depth_ > 0 ? menu_opaque(menu()) : page_opaque(page_);
@@ -633,7 +659,7 @@ void Ui::update_hold_card(uint32_t now_ms) {
 
 void Ui::draw_hold_card(uint32_t ms) {
     const Surface &c = ctx_.content;
-    const uint32_t total = ButtonDetector::kHoldMs;
+    const uint32_t total = kChordRebootMs;
     const int left = hold_secs_left(ms, total);
     const int px = hold_fill_px(ms, total, 172);
     hold_ms_ = ms;
@@ -644,7 +670,7 @@ void Ui::draw_hold_card(uint32_t ms) {
         frame_round(c, 12, 70, 200, 84, 8, 2, kError);
         draw_icon(c, 26, 86, Icon::Warn, kError, kSurface2);
         fill_round(c, 26, 118, 172, 6, 1, kRule);
-        gfx_text(c, kLabelFont, 26, 132, "Release Back to cancel", kDim, kSurface2);
+        gfx_text(c, kLabelFont, 26, 132, "Release to cancel", kDim, kSurface2);
     }
     if (left != hold_left_) {
         hold_left_ = left;
@@ -679,7 +705,7 @@ UiAction Ui::on_button(Button b, ButtonEvent ev, uint32_t now_ms) {
         return UiAction::None;
     }
     if (rotation_chord_ && (b == Button::Minus || b == Button::Plus)) return UiAction::None;
-    if (suppress_rotated_press_[static_cast<int>(b)]) return UiAction::None;
+    if (suppress_rotated_press_[static_cast<int>(b)] || suppress_chord_[static_cast<int>(b)]) return UiAction::None;
     Event mapped = *event;
     mapped.button = oriented_button(b, orient_.rotation, rotate_buttons_);
     return finish_button(dispatch_button(mapped, now_ms), now_ms);
@@ -688,7 +714,9 @@ UiAction Ui::on_button(Button b, ButtonEvent ev, uint32_t now_ms) {
 UiAction Ui::on_remote_button(Button logical, ButtonEvent ev, uint32_t now_ms) {
     const auto event = to_event(logical, ev);
     if (!event) return UiAction::None;
-    // Logical key: no orientation mapping, no rotation chord (a remote has no physical key pair to hold).
+    // Logical key: no orientation mapping, no rotation chord (a remote has no physical key pair to hold). OK and Back
+    // never move, so the reboot chord's suppression is indexed the same for both.
+    if ((logical == Button::Ok || logical == Button::Back) && suppress_chord_[static_cast<int>(logical)]) return UiAction::None;
     return finish_button(dispatch_button(*event, now_ms), now_ms);
 }
 
@@ -717,14 +745,13 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
         const Dispatch m = dispatch_modal(event, current());
         if (m.route == Route::Pop) pop_menu(now_ms);
         else sync_panel();
-        return m.global == Global::Reboot ? UiAction::Reboot : UiAction::None;
+        return UiAction::None;
     }
     const Dispatch d = dispatch(event, pg, static_cast<unsigned>(Page::Count), current(),
                                 page_ == Page::ChargerTest && charger_test_.holds_paging());
     switch (d.global) {
     case Global::PagePrev: set_page(static_cast<Page>(pg - 1), now_ms); break;
     case Global::PageNext: set_page(static_cast<Page>(pg + 1), now_ms); break;
-    case Global::Reboot:   return UiAction::Reboot;
     case Global::None:     break;
     }
     if (d.global == Global::None) sync_panel();
@@ -806,6 +833,8 @@ bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
         ctx_.volts.clear();
         ctx_.amps.clear();
         ctx_.trend.clear();
+        ctx_.extremes.reset();     // and Home's PEAK / SAG and the card cycle
+        ctx_.keep.cards.reset();
         ctx_.live.clear();   // OK on Home also drops the frozen LAST state
         K2LOG("[UI] energy meter reset\n");
         current().update(now_ms);
@@ -1069,7 +1098,7 @@ void Ui::repaint(uint32_t now_ms) {
     redraw(now_ms);
 }
 
-void Ui::tick(uint32_t now_ms) {
+UiAction Ui::tick(uint32_t now_ms) {
     gap::ui.note(now_ms);
     if (requested_rotation_ < 4) {
         const uint8_t target = requested_rotation_;
@@ -1110,6 +1139,8 @@ void Ui::tick(uint32_t now_ms) {
             ctx_.amps.push(now_ms, static_cast<int32_t>(std::min<uint32_t>(power::magnitude(ctx_.pm.current_ma), INT32_MAX)));
             ctx_.trend.push(now_ms, static_cast<uint32_t>(ctx_.pm.vbus_mv) / 10, power::magnitude(ctx_.pm.current_ma) / 10,
                             power::magnitude(ctx_.pm.power_mw) / 10);
+            // Home's PEAK and SAG cards: every raw sample counts (a short spike the display filter rounds away is a peak).
+            ctx_.extremes.sample(raw.vbus_mv, raw.current_ma, raw.power_mw, ctx_.sag_level_mv);
         }   // the trace freezes when stale
         if (ctx_.cable_mode == cable_r::Mode::Passive) ctx_.cable.sample(ctx_.pm_avg.vbus_mv, ctx_.pm_avg.current_ma);
     } else {
@@ -1124,6 +1155,21 @@ void Ui::tick(uint32_t now_ms) {
             ctx_.last.pm = ctx_.pm;
             ctx_.last.analog = ctx_.analog;
             ctx_.last.elapsed_s = ctx_.meter.elapsed_s(now_ms);
+        }
+        if (live && !extremes_live_) {   // an attach: Home's peaks, sag and card cycle start over (they stay frozen while stale)
+            ctx_.extremes.reset();
+            ctx_.keep.cards.reset();
+            sag_settle_.reset();
+        }
+        extremes_live_ = live;
+        if (live && now_ms - sag_level_ms_ >= 100) {   // the level a sag is measured against (home::sag_level_mv), settled
+            sag_level_ms_ = now_ms;
+            const fctrig::Status fst = fctrig::status();
+            const bool qc3 = fst.state == fctrig::State::Active && (fst.proto == fctrig::Proto::Qc3 || fst.proto == fctrig::Proto::Qc3Plus);
+            const uint32_t level = home::sag_level_mv(proto_now(), qc3 && fst.target_mv > 0 ? static_cast<uint32_t>(fst.target_mv) : 0u);
+            ctx_.sag_level_mv = sag_settle_.update(now_ms, level);
+        } else if (!live) {
+            ctx_.sag_level_mv = 0;
         }
     }
     // Kelvin mode: the far-end sense wires of the fixture arrive on CC1, CC2 and D-.
@@ -1205,7 +1251,9 @@ void Ui::tick(uint32_t now_ms) {
     pdstress_note_ = stress_note;
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
-    update_hold_card(now_ms);
+    const RebootChord::Step chord = chord_.step(now_ms);
+    update_hold_card(now_ms, chord);
+    if (chord == RebootChord::Step::Reboot) return UiAction::Reboot;
     if (!hold_shown_ && now_ms - last_update_ms_ >= kPageTickMs) {
         last_update_ms_ = now_ms;
         uint32_t t0 = now_us();
@@ -1222,6 +1270,7 @@ void Ui::tick(uint32_t now_ms) {
         if (dt > field_max_us_) field_max_us_ = dt;
     }
     if (timing_pending_) log_timing(now_ms);
+    return UiAction::None;
 }
 
 void Ui::draw_release_notice() {

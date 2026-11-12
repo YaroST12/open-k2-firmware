@@ -1083,6 +1083,11 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   Running has no `seq n/N` line and the right column (Rej / Wait, Out of band, Reboots) shows no values; Results paints
   `0 issues` amber; the focus of the Save result / Discard rows lands in the empty label column; a P1 cancelled at 12 of
   16 transitions reads `clean`; the Tools row on a passive K2 reads `NO PD` in red with a red footer.
+- Home 2c and the OK + BACK reboot chord (2026-11-12, built and host-tested only). Validate: Home in all four
+  rotations (screenshots; the 1 px row rule at y 136 must show in landscape), Long BACK cycles W -> V -> A and the
+  hero survives a reboot, the cards rotate every 5 s with the lower cell 2.5 s behind, a live load shows PEAK and
+  DROP + SAG, `stack_free` in the heartbeat; OK + BACK shows the HoldCard at 1 s and reboots at 3 s, a BACK hold
+  alone does not reboot.
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
@@ -1106,7 +1111,9 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Layout invariants, flash map | done (gate) | verified | `startup.cpp`, `link.ld`, `flash_map.hpp` | |
 | Pin map, SWJ disabled | done | verified | `k2::pins` | |
 | ST7789V 240x240 LCD, screenshots | done | verified | `k2::lcd`, `gfx`, `capture` | |
-| 4 buttons, long/hold events, hold-BACK reboot | done | verified | `buttons`, `ui_events` | |
+| 4 buttons, long/hold events | done | verified | `buttons`, `ui_events` | |
+| Reboot gesture: OK + BACK held 3 s (HoldCard from 1 s, replaces the 5 s BACK hold, 2026-11-12) | done | not verified (host-tested: `test_ui_calc`, `test_ui_pages`) | `RebootChord` (`ui_calc`), `Ui::feed_chord` | |
+| Home 2c: W hero (Long BACK cycles W / V / A, kept), V/A ledger, cycling cards (PEAK, DROP + SAG, CABLE, LINES, Energy), W alarms at 90 % / 100 % of the contract (UI_DESIGN 4.0a) | done | not verified (host renders `runs/ui-home/2c/`) | `ui_home`, `home_cards`, `home_model`, `home_cell` | PASSIVE |
 | INA226/228/237 power monitor | done | verified (INA226) | `k2::power_monitor` | PASSIVE |
 | 7-channel ADC1 + DMA1, temperature | done | verified | `k2::adc` | PASSIVE |
 | Ripple capture on PA1 | done | not verified | `k2::adc`, `capture` | PASSIVE |
@@ -1186,6 +1193,8 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Captures as /bb files (32, oldest evicted), LZ4, written when the link is quiet | done | verified | `bbstore`, `bbpersist`, `lz` |
 | Device viewer (Tools > Black Box) | done | verified | `ui_blackbox`, `pdtrace_view` |
 | Black Box saves deferred inside a charger test: rare kinds budgeted (`kRareBudget` 2 per run), waiting captures kept in their RAM slots, overflow counted (`drop=` / `defer=` in `[BB]`), one write per idle poll after the run (ARCHITECTURE "Flash writes during a charger test") | done, host-tested (`tests/test_run_writes.cpp`: 21 erases inside a 39-row run before, 2 now) | not verified. Validate: (1) a full charger-test run on a source that resets or refuses often (Xiaomi 6 A, FH22) with `tools/loop_survey.py` running: no PD-service gap over the 25 ms answer window inside the run beyond the journal's own writes, and at most two `[BB] ... held=1` saves (the rare ones) between START and the end of Releasing; (2) the `[BB] saves=... drop=N defer=M` lines land after Releasing, one per `poll()` pass, and `pd_trace.py captures` then lists the kept captures; (3) a run that ends by cancel or an unsafe exit flushes the same way | `bbpersist`, `pdtrace` |
+| Diagnosis: ranked Fail / Warn / Info findings per attach session, passive (`pd_trace.py diagnose`, Cmd 0x72, shell `diag`) | done | not verified | `diag`, `diag_live`, `diag_wire` |
+| Diagnosis on screen: Tools > PD diagnosis, Home row 1 `Diag <word>`, Who's attached Source footer | done | not verified | `diag_screen`, `ui_diagnosis`, `home_model` |
 | WebHID timeline viewer, MSC export of captures | planned | n/a | |
 
 ## Transition capture

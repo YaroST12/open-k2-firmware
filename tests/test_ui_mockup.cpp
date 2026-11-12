@@ -9,6 +9,8 @@
 #include "ui_stubs.h"
 #include "k2/ui/ui.hpp"
 #include "ui_nav.h"
+#include "diag_fixture.h"
+#include "k2/pd/diag_screen.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/emk_spoof.hpp"
 #include <cstdio>
@@ -196,6 +198,56 @@ int main() {
     ui.on_button(Button::Ok, ButtonEvent::Short, t); t += 100;
     render(ui, t, "loop_refused");
     g_stub.lp_vbus_mv = 5050;
+
+    // PD diagnosis: the Tools view of case 1 (Legion rear port on a 60 W hub), its rows focused one by one, the 70 W ramp,
+    // a finished session (LAST) and the empty state; then Home row 1 with each of them.
+    fixture();
+    const pd::diag::Report kCase1 = diag_fixture::case1();
+    const pd::diag::Report kRamp = diag_fixture::report("tests/fixtures/bbdiag/ramp_70w.raw");
+    const pd::diag::Report kStress = diag_fixture::report("tests/fixtures/bbdiag/stress_soft_resets.raw");
+    const pd::diag::Report kInline = diag_fixture::report("tests/fixtures/bbdiag/legion_inline.raw");
+    g_stub.diag_report = kCase1;
+    g_stub.diag_state = 1;
+    ui.goto_page(uint8_t(Page::Tools), t + 100);
+    ui.push_menu(Menu::Diagnosis, t + 100); render(ui, t, "diagnosis_case1");
+    const unsigned n1 = pd::diag::screen::row_count(kCase1);
+    for (unsigned i = 1; i < n1; i++) {
+        ui.on_button(Button::Plus, ButtonEvent::Short, t); t += 100;
+        char name[40];
+        std::snprintf(name, sizeof name, "diagnosis_case1_r%u", i);
+        render(ui, t, name);
+    }
+    g_stub.diag_report = kRamp;
+    for (unsigned i = 0; i < n1; i++) { ui.on_button(Button::Minus, ButtonEvent::Short, t); t += 100; }
+    render(ui, t, "diagnosis_ramp");
+    g_stub.diag_report = kStress;
+    render(ui, t, "diagnosis_stress");
+    g_stub.diag_report = kCase1;
+    g_stub.diag_state = 2;
+    render(ui, t, "diagnosis_last");
+    g_stub.diag_report = {};
+    g_stub.diag_state = 0;
+    render(ui, t, "diagnosis_empty");
+    static const struct { const pd::diag::Report* r; uint8_t state; const char* name; } kHome[] = {
+        {&kCase1, 1, "home_diag_case1"}, {&kRamp, 1, "home_diag_ramp"}, {&kStress, 1, "home_diag_stress"},
+        {&kInline, 1, "home_diag_inline"}, {nullptr, 0, "home_diag_none"}};
+    ui.goto_page(uint8_t(Page::Home), t + 100);
+    for (const auto& h : kHome) {
+        g_stub.diag_report = h.r ? *h.r : pd::diag::Report{};
+        g_stub.diag_state = h.state;
+        render(ui, t, h.name);
+        char w[24];
+        pd::diag::Sev sev;
+        pd::diag::screen::word(g_stub.diag_report, w, sev);
+        printf("%-18s Diag %s (sev %d)\n", h.name, w, int(sev));
+    }
+    // The Connection page's Source tab with an open case-1 session: the verdict is its bar line.
+    g_stub.diag_report = kCase1;
+    g_stub.diag_state = 1;
+    ui.goto_page(kPdPage, t + 100);
+    render(ui, t, "pd_source_diag_case1");
+    g_stub.diag_report = {};
+    g_stub.diag_state = 0;
 
     printf("mockups dumped\n");
     return 0;

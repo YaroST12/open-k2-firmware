@@ -12,7 +12,7 @@ class ButtonDetector {
 public:
     static constexpr uint32_t kDebounceMs = 20;
     static constexpr uint32_t kLongMs = 500;
-    static constexpr uint32_t kHoldMs = 5000;   // the reboot gesture: far from any accidental press
+    static constexpr uint32_t kHoldMs = 5000;   // a deliberate 5 s hold (Back: disarm the trigger, stop the charger test)
 
     // `down` = button currently pressed (already active-low corrected). Call at least every few ms.
     // Short fires on the debounced release; Long fires once when the hold reaches kLongMs,

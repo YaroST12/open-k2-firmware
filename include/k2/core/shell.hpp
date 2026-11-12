@@ -68,6 +68,8 @@ struct Backend {
     virtual const char* lab(const lab::Cmd&) { return "lab not available"; }
     // Device twin command (k2/twin), already parsed and confirm-checked; prints its own result lines.
     virtual const char* twin(const TwinCmd&) { return "twin not available"; }
+    // Black Box diagnosis (k2/pd/diag_live.hpp, read-only): prints the verdict, the findings and the healthy lines itself.
+    virtual const char* diag() { return "diag not available"; }
 
 protected:
     ~Backend() = default;

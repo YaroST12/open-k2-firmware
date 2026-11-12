@@ -37,6 +37,7 @@
 #include "k2/fastcharge/dpsniff.hpp"
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/fastcharge/fctrig.hpp"
+#include "k2/pd/diag_live.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/pd/power_source.hpp"
 #include "k2/pd/transcap.hpp"
@@ -107,8 +108,9 @@ constexpr uint32_t kEraseQuietMs = 1000;
     k2::power_source::poll(now);
     k2::dpsniff::poll(now, k2::power::read().value_or(k2::power::Metrics{}).vbus_mv);
     if (const auto pm = k2::power::read()) k2::pdtrace::vbus_sample(k2::power::vbus_fast_mv().value_or(pm->vbus_mv), pm->current_ma);   // black box, gated 50 ms / 100 mV / 20 mA; VBUS un-averaged so its steps carry their real time
+    k2::pd::diag::live::poll(now);          // Black Box diagnosis: the fresh sample into its power window, its clock
     k2::adc::poll();
-    k2::loopguard::poll(now);               // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
+    k2::loopguard::poll(now);              // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
     const bool sensor_was_online = c.accelerometer.online();
     if (c.accelerometer.poll(now)) {
         c.ui.feed_gravity(c.accelerometer.read(), now);
@@ -132,7 +134,8 @@ constexpr uint32_t kEraseQuietMs = 1000;
         k2::report_card::hw::poll(may_erase);
     }
     if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
-    if (!c.bootscreen.showing()) c.ui.tick(now);        // the QR screen owns the panel: the UI does not draw meanwhile
+    // The QR screen owns the panel: the UI does not draw meanwhile. The UI's tick ends the OK + Back reboot chord.
+    if (!c.bootscreen.showing() && c.ui.tick(now) == k2::UiAction::Reboot) c.reboot();
 }
 
 // Stack watermark: one line each time the free application stack reaches a new low below 1 KB (the gate's margin),
@@ -258,8 +261,8 @@ void pass() {
                 g_press_count++;
                 if (c.ui.on_remote_button(b, vev, now) == k2::UiAction::Reboot) c.reboot();
             }
-            // The key that chose the boot mode is still down (its Long / Hold would reach the UI, Hold is the reboot gesture):
-            // its events are the boot's, not the user's, until it is up. Other keys work at once.
+            // The key that chose the boot mode is still down (its Long / Hold would reach the UI, and it could be one half of
+            // the OK + Back reboot chord): its events are the boot's, not the user's, until it is up. Other keys work at once.
             if (c.boot_key_swallow && b == c.boot_key) {
                 if (!down && !g_det[i].pressed()) c.boot_key_swallow = false;
                 continue;

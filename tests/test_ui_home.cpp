@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Home v7 and Detail pages: the pure readout texts and the states rendered through the real page code.
+// Home 2c and Detail pages: the pure readout texts and the states rendered through the real page code.
 // K2_DUMP=dir also writes the screens as k2_home2_<page>_<state>.panel for tools/panel2png.py.
 #include "test_util.h"
 #include "fake_lcd.h"
@@ -182,7 +182,7 @@ static void wipe_logical(Ui &ui, int lx, int ly, int lw, int lh) {
 }
 
 
-// ---- Home v7 ---------------------------------------------------------------------------------------
+// ---- Home 2c ---------------------------------------------------------------------------------------
 namespace hm = k2::home;
 
 static Ui &home_ui(uint8_t rot = 0) {
@@ -203,8 +203,12 @@ static void unplug() {
     g_stub.fc = fastcharge::Protocol::NoInput;
 }
 
-// Cell regions in logical coordinates.
-static constexpr int kVcellY = 0, kVcellH = 70, kAcellY = 72, kAcellH = 70;
+// Home 2c regions in logical coordinates (W hero by default: V in ledger row 1, A in row 2).
+static constexpr int kHeroH = 74;                                  // y0..73
+static constexpr int kHeroDigits[4] = {38, 25, 160, 39};          // x, y, w, h of the 64 px field
+static constexpr int kRowDigitY[2] = {99, 156};                    // 48 px digits, x8..127, 30 rows
+static constexpr int kRowTop[2] = {76, 137};
+static constexpr int kCardX = 141, kCardW = 83;
 
 // Both pages render every state (the Detail page keeps its screens in the sheet).
 static void test_render_states() {
@@ -239,27 +243,65 @@ static void test_render_states() {
     }
 }
 
-// The live Home: yellow V and cyan A digits, the W, the energy block, the limit bar, no title bar or footer.
+// The live Home 2c: coral W in the hero, yellow V and cyan A in the ledger, PEAK in the upper card, the contract bars, no
+// title bar or footer.
 static void test_live_home() {
     Ui &ui = home_ui();
     live_pd(false, 20010, 1520);
     run(ui, 40);
-    dump("v7", "live_pd");
-    CHECK_TRUE(ink_logical(ui, 39, 24, 162, 39, kVolt) > 60);           // V digits in the hero font
-    CHECK_TRUE(ink_logical(ui, 39, 94, 162, 39, kAmp) > 60);            // A digits
-    CHECK_TRUE(ink_logical(ui, 4, 153, 96, 48, kWatt) > 40);   // W
-    CHECK_TRUE(ink_logical(ui, 124, 144, 99, 24, kEnergy) > 10);        // Wh
-    CHECK_TRUE(ink_logical(ui, 124, 170, 99, 24, kCharge) > 10);        // Ah
-    CHECK_TRUE(ink_logical(ui, 0, 0, 4, 70, kVolt) == 4 * 70);          // the status edge is live
-    CHECK_TRUE(ink_logical(ui, 0, 72, 4, 70, kAmp) == 4 * 70);
-    CHECK_TRUE(ink_logical(ui, 10, 136, 205, 3, kAmp) > 0);             // limit bar fill
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 70, kStale), 0);                // live is never grey
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);               // no alarm, no pill
-    CHECK_TRUE(ink_logical(ui, 150, 3, 70, 12, kDim) > 8);              // dim "max 20V"
-    CHECK_TRUE(ink_logical(ui, 170, 75, 50, 12, kDim) > 8);             // dim "max 3A"
-    CHECK_TRUE(ink_logical(ui, 40, 3, 30, 12, kFaint) > 3);             // the "10s" window label
-    CHECK_TRUE(ink_logical(ui, 4, 201, 40, 16, kDim) > 8);              // USB tag
-    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);             // protocol row
+    dump("2c", "live_pd");
+    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kWatt) > 60);   // W hero digits
+    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[0], 120, 30, kVolt) > 40);   // V in ledger row 1
+    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[1], 120, 30, kAmp) > 40);    // A in ledger row 2
+    CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWatt) == 4 * kHeroH);    // the hero's status edge is live
+    CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kWatt) > 0);               // W bar fill against the 100 W contract
+    CHECK_TRUE(ink_logical(ui, 6, 190, 128, 3, kAmp) > 0);                // A bar fill in row 2
+    CHECK_EQ(ink_logical(ui, 6, 132, 128, 3, kVolt), 0);                  // no bar for V
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[0], kCardW, 58, kWatt) > 10);   // PEAK in the upper card
+    CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, kStale), 0);                 // live is never grey
+    CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);                 // no alarm, no pill
+    CHECK_TRUE(ink_logical(ui, 160, 3, 60, 12, kDim) > 8);                // dim "max 100W"
+    CHECK_TRUE(ink_logical(ui, 90, kRowTop[0] + 3, 46, 12, kDim) > 8);    // dim "max 20V"
+    CHECK_TRUE(ink_logical(ui, 90, kRowTop[1] + 3, 46, 12, kDim) > 8);    // dim "max 5A"
+    CHECK_TRUE(ink_logical(ui, 46, 3, 30, 12, kFaint) > 3);               // the "10s" window label after POWER
+    CHECK_TRUE(ink_logical(ui, 4, 201, 40, 16, kDim) > 8);                // USB tag
+    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);               // protocol row
+}
+
+// Long Back cycles the hero W -> V -> A -> W: each quantity moves to the hero cell, the setting is stored, and a new Ui
+// (a reboot) starts with the stored hero. A record without the field reads W.
+static void test_hero_cycle() {
+    Ui &ui = home_ui();
+    CHECK_EQ(int(ui.context().keep.home_hero), int(hm::Qty::W));
+    live_pd(false, 20010, 1520);
+    run(ui, 20);
+    CHECK_STR(ui.labels().b[static_cast<int>(Button::Back)].lng, "Hero");
+    ui.on_button(Button::Back, ButtonEvent::Long, g_t);
+    run(ui, 20);
+    dump("2c", "hero_v");
+    CHECK_EQ(int(ui.context().keep.home_hero), int(hm::Qty::V));
+    CHECK_EQ(int(uiprefs::stored().home_hero), 1);
+    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kVolt) > 60);
+    CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kVolt) == 4 * kHeroH);
+    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[0], 120, 30, kWatt) > 40);   // W moves to row 1
+    CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kVolt), 0);                  // the V hero has no bar
+    ui.on_button(Button::Back, ButtonEvent::Long, g_t);
+    run(ui, 20);
+    dump("2c", "hero_a");
+    CHECK_EQ(int(uiprefs::stored().home_hero), 2);
+    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kAmp) > 60);
+    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[1], 120, 30, kVolt) > 40);   // V in row 2
+    CHECK_TRUE(ink_logical(ui, 8, 33, 22, 22, kFlow) > 40);               // the hero's flow arrow, left of the digits
+    // A reboot restores the stored hero (main.cpp: restore_home_hero before init). fresh_ui() resets the stub store too.
+    const uint8_t kept = uiprefs::stored().home_hero;
+    Ui &again = fresh_ui();
+    CHECK_EQ(int(again.context().keep.home_hero), int(hm::Qty::W));   // nothing restored: the default
+    again.restore_home_hero(kept);
+    CHECK_EQ(int(again.context().keep.home_hero), int(hm::Qty::A));
+    again.on_button(Button::Back, ButtonEvent::Long, g_t);   // fresh_ui starts on Home: A -> W
+    CHECK_EQ(int(again.context().keep.home_hero), int(hm::Qty::W));
+    CHECK_EQ(int(uiprefs::stored().home_hero), 0);
+    CHECK_EQ(int(hm::qty_from(7)), int(hm::Qty::W));
 }
 
 // A held Rd pin shows the caution badge "Rd pin CC2" in the VBUS cell's upper right (the Home status badge);
@@ -307,10 +349,11 @@ static void test_protocol_states() {
         g_stub.caps.pdos[1] = {pd::PdoType::Pps, 0, 3300, 11000, 3000, 33000};
         g_stub.contract.pos = 2; g_stub.contract.mv = 9100; g_stub.contract.op_ma = 2000; g_stub.contract.max_ma = 3000;
         run(ui, 40);
-        dump("v7", "pps");
-        CHECK_TRUE(ink_logical(ui, 0, 0, 4, 70, kVolt) == 4 * 70);
+        dump("2c", "pps");
+        CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWatt) == 4 * kHeroH);
         CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // protocol row
-        CHECK_TRUE(ink_logical(ui, 10, 136, 205, 3, kAmp) > 0);         // 3 A limit bar
+        CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kWatt) > 0);         // 33 W bar (the APDO's 11 V x 3 A)
+        CHECK_TRUE(ink_logical(ui, 6, 190, 128, 3, kAmp) > 0);          // 3 A limit bar
     }
     {
         Ui &ui = home_ui();
@@ -318,10 +361,11 @@ static void test_protocol_states() {
         g_stub.caps = {}; g_stub.contract = {}; g_stub.em = {};
         g_stub.fc = fastcharge::Protocol::Qc2_9V;
         run(ui, 40);
-        dump("v7", "qc");
-        CHECK_TRUE(ink_logical(ui, 0, 0, 4, 70, kVolt) == 4 * 70);
-        CHECK_TRUE(ink_logical(ui, 39, 24, 162, 39, kVolt) > 60);
+        dump("2c", "qc");
+        CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWatt) == 4 * kHeroH);
+        CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kWatt) > 60);
         CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // "QC2 9V"-style row
+        CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kWatt), 0);            // no current rating: no W bar
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no limit known: no alarm
     }
     {   // inline VOOC monitor: a live session, no PD; the row is "SVOOC 9.0V3.6A" from the readings, and the measured
@@ -332,11 +376,12 @@ static void test_protocol_states() {
         g_stub.fc = fastcharge::Protocol::UsbData;
         g_stub.vooc.seen = true; g_stub.vooc.r82 = 0x6B;
         run(ui, 40);
-        dump("v7", "svooc_inline");
+        dump("2c", "svooc_inline");
         CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::Svooc));
         CHECK_EQ(int(ui.proto_now().ma), 0);
         CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // protocol row
-        CHECK_EQ(ink_logical(ui, 10, 136, 205, 3, kAmp), 0);            // no limit bar
+        CHECK_EQ(ink_logical(ui, 6, 190, 128, 3, kAmp), 0);             // no limit bar
+        CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kWatt), 0);
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no alarm
         g_stub.vooc = {};
     }
@@ -348,7 +393,7 @@ static void test_protocol_states() {
         g_stub.fc = fastcharge::Protocol::UsbData;
         g_stub.vooc.seen = true; g_stub.vooc.r82 = 0x6F;
         run(ui, 40);
-        dump("v7", "svooc_over_pd");
+        dump("2c", "svooc_over_pd");
         CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::Svooc));
         CHECK_EQ(int(ui.proto_now().ma), 0);
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no alarm
@@ -362,11 +407,13 @@ static void test_protocol_states() {
 static void test_sweep() {
     Ui &ui = home_ui();
     run(ui, 4);
-    CHECK_EQ(ink_logical(ui, 4, 2, 220, 66, kVoltL), 0);                // idle: no sweep
+    CHECK_EQ(ink_logical(ui, 4, 2, 220, 70, kWattL), 0);                // idle: no sweep
     live_pd(false, 20010, 1520);
     run(ui, 60);
-    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 66, kVoltL) > 10);
-    CHECK_TRUE(ink_logical(ui, 4, 74, 220, 66, kAmpL) > 10);
+    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 70, kWattL) > 10);            // the hero's
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kVoltL) > 10);   // and both ledger rows', over the same span
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kAmpL) > 10);
+    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kVoltL) + ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kAmpL), 0);   // never under the cards
     CHECK_TRUE(ink_logical(ui, 4, 2, 220, 66, kRule) > 0);              // the cursor line
 }
 
@@ -422,22 +469,22 @@ static void test_sweep_strips_match_full_render() {
     }
 }
 
-// OK short cycles the window label; the label sits only in the VBUS cell.
+// OK short cycles the window of all three sweeps; its label sits once, after the hero label.
 static void test_window_cycle() {
     Ui &ui = home_ui();
     live_pd(false, 20010, 1520);
     run(ui, 10);
-    const int a = ink_logical(ui, 40, 3, 30, 12, kFaint);
+    const int a = ink_logical(ui, 46, 3, 30, 12, kFaint);
     CHECK_TRUE(a > 3);
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
-    dump("v7", "window_60s");
+    dump("2c", "window_60s");
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
-    dump("v7", "window_10m");
+    dump("2c", "window_10m");
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
-    CHECK_EQ(ink_logical(ui, 40, 75, 30, 12, kFaint), 0);               // never in the IBUS cell
+    for (int r = 0; r < 2; r++) CHECK_EQ(ink_logical(ui, 30, kRowTop[r] + 3, 50, 12, kFaint), 0);   // never in a ledger row
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].shrt, "Zoom");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].lng, "Reset");
 }
@@ -460,8 +507,8 @@ static void test_max_text_never_comes_from_live_vbus() {
     g_stub.pm.vbus_mv = 1000 - 1; g_stub.pm.current_ma = 3; g_stub.pm.power_mw = 3;
     g_stub.fc = fastcharge::Protocol::NoInput;
     run(ui, 20);
-    CHECK_EQ(ink_logical(ui, 100, 3, 55, 12, kDim), 0);                 // left of the NO VBUS pill: no "max 1.0V"
-    CHECK_EQ(ink_logical(ui, 170, 75, 50, 12, kDim), 0);
+    CHECK_EQ(ink_logical(ui, 100, 3, 55, 12, kDim), 0);                 // left of the NO VBUS pill: no "max"
+    for (int r = 0; r < 2; r++) CHECK_EQ(ink_logical(ui, 80, kRowTop[r] + 3, 56, 12, kDim), 0);
 }
 
 // Idle: grey zeros, a NO VBUS pill, a faint edge, "No source".
@@ -469,15 +516,16 @@ static void test_idle_home() {
     Ui &ui = home_ui();
     unplug();
     run(ui, 20);
-    dump("v7", "idle");
+    dump("2c", "idle");
     CHECK_TRUE(ink_logical(ui, 190, 1, 30, 17, kSurface) > 100);        // the NO VBUS pill fill
-    CHECK_EQ(ink_logical(ui, 0, 0, 4, 70, kVolt), 0);
-    CHECK_EQ(ink_logical(ui, 0, 0, 4, 70, kFaint), 4 * 70);
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kVolt), 0);                // no live colours at all
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kAmp), 0);
+    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kWatt), 0);
+    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kFaint), 4 * kHeroH);
+    for (uint16_t c : {kVolt, kAmp, kWatt, kEnergy, kCharge})            // no live colours at all
+        CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, c), 0);
     CHECK_TRUE(ink_logical(ui, 52, 223, 120, 16, kDim) > 8);            // "No source"
-    CHECK_EQ(ink_logical(ui, 8, 101, 22, 22, kFlow), 0);                // no arrow
-    CHECK_EQ(ink_logical(ui, 10, 134, 205, 7, kRule), 0);               // no limit bar
+    CHECK_EQ(ink_logical(ui, 50, 146, 13, 13, kFlow), 0);               // no arrow
+    CHECK_EQ(ink_logical(ui, 10, 66, 205, 7, kRule), 0);                // no bars
+    CHECK_EQ(ink_logical(ui, 6, 188, 128, 5, kRule), 0);
 }
 
 // Idle with the rig's CC levels (a charger on one cable, a phone toggling on the other, crossed): row 2 says so in the error
@@ -498,13 +546,13 @@ static void test_idle_home_says_crossed() {
     Ui &ui = home_ui();
     unplug();
     feed_cc(ui, 25, cc_pixel, cc_loaded);
-    dump("v7", "idle-crossed");
+    dump("2c", "idle-crossed");
     CHECK_TRUE(ink_logical(ui, 52, 223, 170, 16, kError) > 8);          // "CROSSED: flip one"
     CHECK_EQ(ink_logical(ui, 52, 223, 120, 16, kDim), 0);               // not "No source"
     Ui &hint = home_ui();
     unplug();
     feed_cc(hint, 25, cc_zero, cc_loaded);
-    dump("v7", "idle-flip-hint");
+    dump("2c", "idle-flip-hint");
     CHECK_TRUE(ink_logical(hint, 52, 223, 170, 16, kCaution) > 8);      // "Flip a cable?"
     Ui &charger = home_ui();
     unplug();
@@ -527,32 +575,39 @@ static void test_stale_home() {
     unplug();
     g_stub.pm.vbus_mv = 0;
     run(ui, 20);
-    dump("v7", "stale");
+    dump("2c", "stale");
     CHECK_TRUE(ink_logical(ui, 150, 1, 70, 17, kStale) > 100);          // the LAST pill fill
-    CHECK_EQ(ink_logical(ui, 0, 0, 4, 70, kStale), 4 * 70);
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kVolt), 0);
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kAmp), 0);
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kEnergy), 0);
-    CHECK_TRUE(ink_logical(ui, 39, 24, 162, 39, kStale) > 60);          // the frozen digits
+    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kStale), 4 * kHeroH);
+    for (uint16_t c : {kVolt, kAmp, kWatt, kEnergy, kCharge})            // grey everywhere
+        CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, c), 0);
+    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kStale) > 60);   // the frozen digits
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[0], kCardW, 58, kStale) > 10);   // PEAK stays, grey, above Wh / Ah
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kStale) > 10);
 }
 
-// Near (>= 90 %) and over (> 100 %) of the contract current.
+// Near (>= 90 %) and over (> 100 %) of the contract: the hero's W against 20 V x 5 A = 100 W in full ("94% OF 100W"),
+// the ledger's A in its short form ("94%").
 static void test_alarms() {
     Ui &ui = home_ui();
-    live_pd(false, 20010, 4700);                                        // 5 A PDO: 94 %
+    live_pd(false, 20010, 4700);                                        // 94 W of 100 W, 4.7 A of 5 A
     run(ui, 20);
-    dump("v7", "near");
-    CHECK_TRUE(ink_logical(ui, 0, 72, 4, 70, kCaution) == 4 * 70);
-    CHECK_TRUE(ink_logical(ui, 10, 72, 200, 20, kCaution) > 20);        // the warn triangle and "94% OF 5A"
-    CHECK_EQ(ink_logical(ui, 0, 72, 224, 70, kError), 0);
+    dump("2c", "near");
+    CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kCaution) == 4 * kHeroH);
+    CHECK_TRUE(ink_logical(ui, 10, 0, 200, 18, kCaution) > 20);         // the warn triangle and "94% OF 100W"
+    CHECK_TRUE(ink_logical(ui, 4, kRowTop[1], 130, 18, kCaution) > 10); // row 2: the triangle and "94%"
+    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[1], 120, 30, kCaution) > 40);
+    CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, kError), 0);
+    CHECK_EQ(ink_logical(ui, 0, kRowTop[0], 140, 58, kCaution), 0);     // V never alarms
     live_pd(false, 20010, 5400);                                        // 108 %
     run(ui, 20);
-    dump("v7", "over");
-    CHECK_TRUE(ink_logical(ui, 0, 72, 224, 70, kError) > 224 * 70 / 2); // the whole IBUS cell is filled
-    CHECK_TRUE(ink_logical(ui, 100, 1, 120, 17, kError) + ink_logical(ui, 100, 1, 120, 17, kCaution) > 100);   // the OVER pill
+    dump("2c", "over");
+    CHECK_TRUE(ink_logical(ui, 0, 0, 224, kHeroH, kError) > 224 * kHeroH / 2);   // the whole hero cell is filled
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 58, kError) > 140 * 58 / 2);  // and the IBUS row
+    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kError), 0);       // the cards stay out of it
     live_pd(false, 20010, 1520);
     run(ui, 20);
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 142, kError), 0);               // back to normal: nothing left behind
+    CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, kError), 0);               // back to normal: nothing left behind
+    CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, kCaution), 0);
 }
 
 // The meter is missing: dashes and a red message.
@@ -560,9 +615,9 @@ static void test_nometer_home() {
     Ui &ui = home_ui();
     g_stub.pm_online = false;
     run(ui, 20);
-    dump("v7", "nometer");
+    dump("2c", "nometer");
     CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kError) > 20);
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 142, kVolt), 0);
+    for (uint16_t c : {kVolt, kAmp, kWatt}) CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, c), 0);
 }
 
 // The first seconds of a boot: the meter is still being found, so the row says "starting" in the neutral colour and only a meter
@@ -586,28 +641,40 @@ static void test_nometer_grace() {
     g_t = saved;
 }
 
-// ---- direction arrow: a 22 px glyph beside the current ----------------------------------------------
+// ---- direction arrow: a 13 px glyph in the IBUS ledger row (22 px when A is the hero) ----------------
 
-static constexpr int kAx = 8, kAy = 101, kAs = 22;
+static constexpr int kAx = 50, kAy = 146, kAs = 13;
 
+// Per half of the box, the widest physical ink line across the arrow's axis: the head's base is far wider than the
+// shaft. Physical pixels, so the landscape stretch (a logical column can cover two panel columns) counts nothing twice.
 struct ArrowInk { int top, bottom, left, right, total; };
 static ArrowInk arrow_ink(Ui &ui, uint16_t color) {
-    ArrowInk a;
-    a.top = ink_logical(ui, kAx, kAy, kAs, kAs / 2, color);
-    a.bottom = ink_logical(ui, kAx, kAy + kAs / 2, kAs, kAs / 2, color);
-    a.left = ink_logical(ui, kAx, kAy, kAs / 2, kAs, color);
-    a.right = ink_logical(ui, kAx + kAs / 2, kAy, kAs / 2, kAs, color);
-    a.total = ink_logical(ui, kAx, kAy, kAs, kAs, color);
+    const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters, kSlotLens, kPanelThickness).content;
+    const int x0 = box.x + kAx * box.w / 224, y0 = box.y + kAy * box.h / 240;
+    const int x1 = box.x + (kAx + kAs) * box.w / 224, y1 = box.y + (kAy + kAs) * box.h / 240;
+    const int w = x1 - x0, h = y1 - y0;
+    ArrowInk a{};
+    for (int i = 0; i < h / 2; i++) {
+        a.top = std::max(a.top, ink(x0, y0 + i, w, 1, color));
+        a.bottom = std::max(a.bottom, ink(x0, y1 - 1 - i, w, 1, color));
+    }
+    for (int i = 0; i < w / 2; i++) {
+        a.left = std::max(a.left, ink(x0 + i, y0, 1, h, color));
+        a.right = std::max(a.right, ink(x1 - 1 - i, y0, 1, h, color));
+    }
+    a.total = ink(x0, y0, w, h, color);
     return a;
 }
 
-// The head is the heavy end. Toward the physical TOP port: up at rotation 0, left at 1, down at 2,
+// The head is the wide end. Toward the physical TOP port: up at rotation 0, left at 1, down at 2,
 // right at 3; toward the BOTTOM port the opposite.
 static void expect_points(const ArrowInk &a, int dir /*0 up, 1 left, 2 down, 3 right*/) {
     const int toward = dir == 0 ? a.top : dir == 1 ? a.left : dir == 2 ? a.bottom : a.right;
     const int away = dir == 0 ? a.bottom : dir == 1 ? a.right : dir == 2 ? a.top : a.left;
-    CHECK_EQ(toward > away + 4, 1);
-    CHECK_EQ(a.total > 40, 1);
+    if (!(toward > away + 2) || a.total <= 20)
+        std::printf("arrow dir %d: toward %d away %d total %d\n", dir, toward, away, a.total);
+    CHECK_EQ(toward > away + 2, 1);
+    CHECK_EQ(a.total > 20, 1);
 }
 
 static void test_flow_arrow() {
@@ -617,14 +684,9 @@ static void test_flow_arrow() {
         run(ui, 20);
         expect_points(arrow_ink(ui, kFlow), r);
         const char rot_name[2] = {static_cast<char>('0' + r), 0};
-        dump("v7_flow_rot", rot_name);
-        // A steady screen does not repaint the arrow: wipe it, run more frames, it stays blank.
-        wipe_logical(ui, kAx, kAy, kAs, kAs);
-        CHECK_EQ(arrow_ink(ui, kFlow).total, 0);
-        run(ui, 20);
-        CHECK_EQ(arrow_ink(ui, kFlow).total, 0);
+        dump("2c_flow_rot", rot_name);
 
-        live_pd(true, 20010, 1520);                        // reverse: toward the physical bottom
+        live_pd(true, 20010, 1520);                       // reverse: toward the physical bottom
         run(ui, 20);
         expect_points(arrow_ink(ui, kFlow), (r + 2) & 3);
 
@@ -633,7 +695,7 @@ static void test_flow_arrow() {
         run(ui, 20);
         CHECK_EQ(ink_logical(ui, kAx, kAy, kAs, kAs, kFlow), 0);
         const int dash = ink_logical(ui, kAx, kAy, kAs, kAs, kFaint);
-        CHECK_EQ(dash >= 8 && dash <= 80, 1);
+        CHECK_EQ(dash >= 3 && dash <= 40, 1);
 
         live_pd(false, 20010, 1520);
         run(ui, 20);
@@ -642,6 +704,12 @@ static void test_flow_arrow() {
         run(ui, 20);
         CHECK_EQ(ink_logical(ui, kAx, kAy, kAs, kAs, kFlow), 0);
         expect_points(arrow_ink(ui, kStale), r);
+        // A steady screen does not repaint the arrow: wipe it, run more frames, it stays blank. (Stale, so no sweep strip
+        // passes over the arrow's columns: a live strip repaints them, arrow included, by design.)
+        wipe_logical(ui, kAx, kAy, kAs, kAs);
+        CHECK_EQ(arrow_ink(ui, kStale).total, 0);
+        run(ui, 20);
+        CHECK_EQ(arrow_ink(ui, kStale).total, 0);
 
         Ui &none = home_ui(r);                             // nothing seen: no arrow at all
         g_stub.pm = {};
@@ -651,10 +719,11 @@ static void test_flow_arrow() {
     }
 }
 
-// The arrow box lies between the label column and the digits, on the current's row.
+// The ledger arrow box lies right of the "IBUS" label, inside row 2, clear of the vertical rule.
 static void test_flow_arrow_geometry() {
-    CHECK_EQ(kAx + kAs <= 39, 1);
-    CHECK_EQ(kAy >= hm::kAmpCell.top + 24 && kAy + kAs <= hm::kAmpCell.bottom, 1);
+    CHECK_EQ(kAx >= 6 + 4 * 6 + 4, 1);
+    CHECK_EQ(kAy >= hm::kRowY0[1] && kAy + kAs <= hm::kRowY1[1], 1);
+    CHECK_EQ(kAx + kAs <= hm::kVRuleX, 1);
 }
 
 // Three consecutive frames of the live screen, for the animation strip.
@@ -667,8 +736,63 @@ static void test_animation_frames() {
         ui.tick(g_t);
         char n[8];
         std::snprintf(n, sizeof n, "anim%d", i);
-        dump("v7", n);
+        dump("2c", n);
     }
+}
+
+// The right-column cards on the page: PEAK above, Wh / Ah below until the first half dwell, then the deck; an attach
+// starts the cycle and the peaks over, long OK resets them; a swap repaints only its own cell.
+static void test_cards_on_the_page() {
+    Ui &ui = home_ui();
+    live_pd(false, 20010, 1520);
+    run(ui, 10);                                                        // 1 s live
+    CHECK_EQ(int(ui.context().keep.cards.top()), int(hm::Card::Peak));
+    CHECK_EQ(int(ui.context().keep.cards.bottom()), int(hm::Card::Energy));
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kEnergy) > 10);   // Wh
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kCharge) > 10);   // Ah
+    CHECK_EQ(ui.context().extremes.peak_mw(), 30400u);
+    // A swap of the lower cell leaves the upper one alone: wipe it, cross the half dwell, it stays blank.
+    wipe_logical(ui, kCardX + 1, kRowTop[0] + 1, kCardW - 2, 50);
+    run(ui, 16);                                                        // 2.6 s live: the lower cell's first step
+    CHECK_TRUE(int(ui.context().keep.cards.bottom()) != int(hm::Card::Energy));
+    dump("2c", "card_lower_step");
+    CHECK_EQ(ink_logical(ui, kCardX + 1, kRowTop[0] + 1, kCardW - 2, 50, kWatt), 0);   // PEAK not repainted (same value)
+    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kEnergy), 0);              // the lower cell changed
+    // A bigger load raises the peak; long OK resets the peaks and the cycle.
+    live_pd(false, 20010, 3000);
+    run(ui, 10);
+    CHECK_EQ(ui.context().extremes.peak_mw(), 60000u);
+    ui.on_button(Button::Ok, ButtonEvent::Long, g_t);
+    CHECK_EQ(ui.context().extremes.peak_mw(), 0u);
+    CHECK_EQ(int(ui.context().keep.cards.bottom()), int(hm::Card::Energy));
+    // Unplug: PEAK over Wh / Ah, grey; a new attach starts over.
+    unplug();
+    g_stub.pm.vbus_mv = 0;
+    run(ui, 10);
+    CHECK_EQ(int(ui.context().keep.cards.top()), int(hm::Card::Peak));
+    CHECK_EQ(int(ui.context().keep.cards.bottom()), int(hm::Card::Energy));
+    live_pd(false, 5000, 500);
+    run(ui, 2);
+    CHECK_EQ(ui.context().extremes.peak_mw(), 2500u);
+}
+
+// The DROP card while a load runs: "need 1A" until the step is big enough, then the volts; the SAG line under it.
+static void test_drop_and_sag_cards() {
+    Ui &ui = home_ui();
+    live_pd(false, 20000, 100);                                         // light load: the cable meter's idle reference
+    run(ui, 30);
+    live_pd(false, 19850, 3000);                                        // 2.9 A more: 150 mV drop, 0.75 % below 20 V
+    run(ui, 40);
+    const hm::Extremes &x = ui.context().extremes;
+    CHECK_EQ(x.has_sag() ? 1 : 0, 1);
+    CHECK_EQ(x.sag_level_mv(), 20000u);
+    CHECK_EQ(x.sag_bp(), 75u);
+    // Show the DROP card above at once (the attention seam) and render it.
+    ui.context().keep.cards.force_top(hm::Card::Drop, 0xFF);
+    run(ui, 3);
+    dump("2c", "card_drop");
+    CHECK_EQ(int(ui.context().keep.cards.top()), int(hm::Card::Drop));
+    CHECK_TRUE(ink_logical(ui, 218, kRowTop[0] + 1, 5, 5, kFocus) == 25);   // the attention dot
 }
 
 int main() {
@@ -694,5 +818,8 @@ int main() {
     test_flow_arrow_geometry();
     test_flow_arrow();
     test_animation_frames();
+    test_hero_cycle();
+    test_cards_on_the_page();
+    test_drop_and_sag_cards();
     return test_report("test_ui_home");
 }

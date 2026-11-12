@@ -119,16 +119,16 @@ static int count_not(const PRect &r, uint16_t color) {
 }
 static int count_ink(const PRect &r) { return count_not(r, kBg); }
 
-// The frame: three 2 px rules, the band's divider and split line. Every pixel of each mapped rect must be kRule, and
+// The frame (2c): the 2 px rules under the hero and over the info block, the ledger / card divider and the 1 px rule
+// between the rows. Every pixel of each mapped rect must be kRule, and
 // each must keep at least one physical row / column (a 1 px line must not be squeezed away by the mapping).
 static int frame_damage(Ui &ui, const char *what) {
     struct Line { const char *name; int x, y, w, h; };
     const Line lines[] = {
         {"rule1", 0, hm::kRule1Y, hm::kW, 2},
-        {"rule2", 0, hm::kRule2Y, hm::kW, 2},
         {"rule3", 0, hm::kRule3Y, hm::kW, 2},
-        {"divider", hm::kBandMidX, hm::kBandY0, 1, hm::kBandY1 - hm::kBandY0 + 1},
-        {"split", hm::kBandMidX + 1, hm::kBandSplitY, hm::kW - hm::kBandMidX - 1, 1},
+        {"vrule", hm::kVRuleX, hm::kRowY0[0], 1, hm::kRowY1[1] - hm::kRowY0[0] + 1},
+        {"rowrule", 0, hm::kRowRuleY, hm::kW, 1},
     };
     int bad = 0;
     for (const Line &l : lines) {

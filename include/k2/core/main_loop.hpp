@@ -24,7 +24,7 @@ struct Context {
     Remote& remote;
     bootscreen::Controller& bootscreen;        // the boot-info QR screen of a key-mode boot
     accelerometer::Driver& accelerometer;
-    void (*reboot)();                          // the 5 s BACK hold or REBOOT: does not return on the device
+    void (*reboot)();                          // the 3 s OK + Back chord or REBOOT: does not return on the device
     void (*dfu)();                             // DFU_ENTER: returns only when entering the bootloader failed
     bool boot_key_swallow = false;             // the key that chose a key-mode boot is still down: its events are not the user's
     Button boot_key = Button::Plus;            // that key (PLUS for the CC2 mode, OK for the CC1 mode)

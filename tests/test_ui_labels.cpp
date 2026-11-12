@@ -40,7 +40,8 @@ static void test_nav_labels() {
         CHECK_STR(text_of(l.b[static_cast<int>(Button::Minus)], minus_chars), "-/Prev");
         CHECK_EQ(l.b[static_cast<int>(Button::Minus)].dim, page == 0);
         CHECK_EQ(l.b[static_cast<int>(Button::Plus)].dim, page == 3);
-        // BACK reads just "Back" on every page, Home included; there is no Reboot label anywhere.
+        // The navigation default reads just "Back" (Home adds its long "Hero"); there is no Reboot label anywhere: the
+        // OK + Back chord is not advertised on the panel.
         CHECK_STR(text_of(l.b[0], label_max_chars(Button::Back)), "Back");
         CHECK_EQ(l.b[0].dim, false);
         CHECK_STR(l.b[0].lng, "");
