@@ -2851,24 +2851,26 @@ static void start_all_run(Ui& ui) {
     review(ui); start_press(ui, 1300); press(ui, Button::Ok, 1400);
 }
 constexpr int kGridTop = 114, kGridBottom = 222, kGridCellsX = 60;   // the verdict grid's rows, and where its cells start
-// The Running cell's dot: a solid kRunDotSize square of kFocus. (kFocus is also the amps cyan, so a pixel is not enough: text never
-// makes a solid 5 x 5 block.) The top-left corners of every such block in the grid window, in reading order.
+// The Running cell's outline: a kRunFrame px kFocus rim along the cell's edge. (kFocus is also the amps cyan, so a pixel is not
+// enough: text never makes a solid corner whose top and left edges both run 10 px, 2 px deep.) The top-left corners of every
+// such rim in the grid window, in reading order.
 static std::vector<std::pair<int, int>> running_dots(int x0 = kGridCellsX, int y0 = kGridTop, int y1 = kGridBottom) {
     std::vector<std::pair<int, int>> out;
-    constexpr int d = k2::kit::kRunDotSize;
-    for (int y = y0; y + d <= y1; ++y)
-        for (int x = x0; x + d <= 224; ++x) {
+    constexpr int t = k2::kit::kRunFrame, run = 10;
+    auto on = [](int x, int y) { return x >= 0 && y >= 0 && g_panel[y * LCD_WIDTH + x] == kFocus; };
+    for (int y = y0; y + run <= y1; ++y)
+        for (int x = x0; x + run <= 224; ++x) {
+            if (on(x - 1, y) || on(x, y - 1)) continue;   // a corner, not the middle of an edge
             bool solid = true;
-            for (int j = 0; j < d && solid; ++j)
-                for (int i = 0; i < d; ++i)
-                    if (g_panel[(y + j) * LCD_WIDTH + x + i] != kFocus) { solid = false; break; }
+            for (int j = 0; j < t && solid; ++j)
+                for (int i = 0; i < run && solid; ++i) solid = on(x + i, y + j) && on(x + j, y + i);
             if (solid) out.emplace_back(x, y);
         }
     return out;
 }
-// Is a Running cell (the one with the dot) on screen in the grid window?
+// Is a Running cell (the one with the outline) on screen in the grid window?
 static bool running_cell_visible() { return !running_dots().empty(); }
-// The running cell's rows in the grid: the dot sits on the cell's top edge, the cell is a verdict cell high (25 px at most).
+// The running cell's rows in the grid: the rim starts on the cell's top edge, the cell is a verdict cell high (25 px at most).
 // False = not on screen.
 static bool running_cell_rows(int& top, int& bottom) {
     const auto dots = running_dots();

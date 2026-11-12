@@ -76,21 +76,22 @@ void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint1
 // pass: green tint + green ink; fail: solid red + black ink; none / stopped: no fill, dim ink (a mode the charger never
 // offered is never red); skip: the same dim ink with a 1 px strike-through across the label (a labelled cell; a label-less
 // one keeps the dash) so a skipped test never reads as pending; pending: no fill, faint ink, no strike;
-// running: the pending look plus a solid kFocus dot (kRunDotSize square) in the cell's top-right corner, or centred in a
-// label-less cell; steady, no blink. The dot is a few pixels, so it can move from cell to cell in the tick the step changes
-// (ResultGrid::sync_dots) without repainting either cell;
+// running: the pending look inside a kRunFrame px kAccent outline along the cell's edge (Fieldbook: an outline only, no
+// dot), or a hollow accent square in a label-less cell; steady, no blink. The outline is the cell's rim, so it can move from
+// cell to cell in the tick the step changes (ResultGrid::sync_dots) without repainting either label;
 // partial: amber tint + amber ink, a 2 px amber bar along the bottom edge (a labelled cell) or a tilde (no label): some of the
 // steps passed or the source capped below the target. Amber because it is abnormal; the bar / tilde because colour alone never
 // carries a state (redundant coding). Appended last: the values travel in RowSpec::state.
 enum class Verdict : uint8_t { Pending, Running, Pass, Fail, None, Skip, Stopped, Partial };
 constexpr int16_t kPartialBarH = 2;   // the bar of a labelled Partial cell
-constexpr int16_t kRunDotSize = 5;    // the Running cell's dot: a kRunDotSize x kRunDotSize square
-constexpr int16_t kRunDotInsetX = 1;  // ... that many px in from the cell's right edge
-constexpr int16_t kRunDotInsetY = 0;  // ... and from its top edge (the label's ink starts 7 px down in a grid cell, so the dot clears it)
-constexpr int kRunDotPx = kRunDotSize * kRunDotSize;
+constexpr int16_t kRunFrame = 2;      // the Running cell's outline: this many px along each edge, inside the cell
+// The outline's pixels on a w x h cell (the four edges, the corners once).
+constexpr int run_mark_px(int w, int h) {
+    return w <= 2 * kRunFrame || h <= 2 * kRunFrame ? w * h : 2 * kRunFrame * (w + h) - 4 * kRunFrame * kRunFrame;
+}
 struct VerdictStyle {
-    uint16_t fill, ink, dot;
-    bool filled, dotted;
+    uint16_t fill, ink, mark;
+    bool filled, marked;
 };
 // Fieldbook: a verdict is a spot fill with the ink that reads on it (pass green + spot ink, fail red + on-red ink, partial
 // orange + spot ink); the states without a verdict are text only.
@@ -99,7 +100,7 @@ inline VerdictStyle verdict_style(Verdict v) {
     case Verdict::Pass:    return {kPassFill, kOnPass, 0, true, false};
     case Verdict::Fail:    return {kError, kErrInk, 0, true, false};
     case Verdict::Partial: return {kPartFill, kOnPart, 0, true, false};
-    case Verdict::Running: return {0, kFaint, kAccent, false, true};   // the pending look + the accent dot (the shape cue)
+    case Verdict::Running: return {0, kFaint, kAccent, false, true};   // the pending look + the accent outline (the shape cue)
     case Verdict::Pending: return {0, kFaint, 0, false, false};
     case Verdict::None:
     case Verdict::Skip:
@@ -114,8 +115,11 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
 // Pixels a cell streams beyond its area: a Skip label's strike is painted over the text, the label's width + 2 px (clipped to
 // the cell). 0 for every other verdict and for an empty label. The budgeted grid adds it to the cell's cost.
 int strike_px(Verdict v, std::string_view label, int16_t w, int16_t h);
-// A labelled Running cell's dot is painted over the cell too: kRunDotPx more. (A label-less one leaves a hole for its dot.)
-constexpr int dot_px(Verdict v, bool labelled) { return v == Verdict::Running && labelled ? kRunDotPx : 0; }
+// A labelled Running cell's outline is painted over the cell's rim: run_mark_px(w, h) more. (A label-less one paints its
+// hollow square inside the glyph's hole.)
+constexpr int mark_px(Verdict v, bool labelled, int w, int h) {
+    return v == Verdict::Running && labelled ? run_mark_px(w, h) : 0;
+}
 // A name in font `f` at (x, y) with the same strike as a Skip cell's label (text, then the 1 px line in `ink` over it): the
 // card's rows of a skipped unit, where the verdict cell is a label-less 12 px glyph. Costs the text width + 2 px more.
 void draw_struck_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text, uint16_t ink, uint16_t bg);
@@ -301,9 +305,10 @@ constexpr int16_t kResultLabelW = 60;                       // label strip, x0..
 // Worst case of strike_px in one 224 px grid row: a strike never exceeds its own cell and the cells tile what is right of the
 // rule, so all five struck at once is the cell span (the headroom the page's one-row budget adds, ui_pages.hpp kFlightRowPx).
 constexpr int kStrikeRowMaxPx = 224 - kResultLabelW - 1;
-// Worst case of the dots in one row: the running step is one cell, so one dot (a row never wears two).
-constexpr int kDotRowMaxPx = kRunDotPx;
 constexpr int16_t kResultRowH = 26, kResultRowHCur = 40;    // volt-only and with-current row heights
+// Worst case of the outlines in one row: the running step is one cell (a row never wears two), at most the whole span right
+// of the rule and the tallest verdict part (a volt-only row under a section rule: 26 - 1).
+constexpr int kMarkRowMaxPx = run_mark_px(224 - kResultLabelW - 1, kResultRowH - 1);
 constexpr int16_t kResultSectionH = 2;                      // the rule above a family's first row
 struct ResultCell {
     Verdict verdict = Verdict::Pending;
@@ -326,11 +331,11 @@ constexpr int16_t result_row_h(const ResultRowSpec &r) {
 struct CellRect {
     int16_t x = 0, y = 0, w = 0, h = 0;
 };
-// The Running cell's dot of a labelled cell (top-right corner), on its own: `on` paints it in kFocus, else the box is wiped
-// to `under` (the cell has no fill, so its base is the caller's background). kRunDotPx pixels either way; the cell and its
-// label are not touched, as long as the dot's box misses the label (the grid's cells are wide enough: tests/test_kit.cpp).
-CellRect run_dot_box(const CellRect &cell);
-void draw_run_dot(const Surface &s, const CellRect &cell, bool on, uint16_t under = kBg);
+// The Running outline of a labelled cell, on its own: `on` paints the kRunFrame px rim in kAccent, else the rim is wiped to
+// `under` (the cell has no fill, so its base is the caller's background). run_mark_px(cell) pixels either way; the label is
+// not touched as long as its ink stays off the rim (mark_hits_label; the grid's cells clear it: tests/test_kit.cpp).
+void draw_run_mark(const Surface &s, const CellRect &cell, bool on, uint16_t under = kBg);
+bool mark_hits_label(const CellRect &cell, std::string_view label);
 // One row at y (h from result_row_h). Every pixel of the row is streamed exactly once, so repainting it needs no erase.
 void draw_result_row(const Surface &s, int16_t y, int16_t h, std::string_view row_label, const ResultCell *cells, int n,
                      bool focus = false, bool section = false);
@@ -364,8 +369,9 @@ public:
     // Rows fully visible from first(); y of the row `index` (-1 when it is not visible).
     int visible() const { return vis_; }
     int row_y(int index) const;
-    // The Running dot's cheap path: the grid remembers where its one dot is on screen, and moves it to the labelled cell the
-    // rows now call Running, kRunDotPx an arrival and kRunDotPx a departure, no budget. The caller runs it first in a tick (before
+    // The Running outline's cheap path (the code still calls it the dot): the grid remembers where its one outline is on
+    // screen, and moves it to the labelled cell the rows now call Running, run_mark_px of the cell an arrival and of the old
+    // cell a departure, no budget. The caller runs it first in a tick (before
     // first() moves) so the dot moves with the step. The old dot leaves wherever it is (the cell then reads Pending until the
     // budgeted draw_some repaints its verdict); the new one arrives when its row is on screen where the rows put it, whether or
     // not its currents changed (they do not move the cell's top edge). A cell whose row is not on screen yet gets its dot from

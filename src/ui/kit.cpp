@@ -208,17 +208,23 @@ void draw_struck_text(const Surface &s, const Font &f, int16_t x, int16_t y, std
 }
 
 // ---- VerdictCell --------------------------------------------------------------------------------------------------------
-CellRect run_dot_box(const CellRect &cell) {
-    return {static_cast<int16_t>(cell.x + cell.w - kRunDotInsetX - kRunDotSize), static_cast<int16_t>(cell.y + kRunDotInsetY), kRunDotSize, kRunDotSize};
+namespace {
+// A t px frame of the box in `ink`: top and bottom full width, the sides between them (each pixel once).
+void frame_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int16_t t, uint16_t ink) {
+    if (w <= 2 * t || h <= 2 * t) { gfx_fill(s, x, y, w, h, ink); return; }
+    gfx_fill(s, x, y, w, t, ink);
+    gfx_fill(s, x, static_cast<int16_t>(y + h - t), w, t, ink);
+    gfx_fill(s, x, static_cast<int16_t>(y + t), t, static_cast<int16_t>(h - 2 * t), ink);
+    gfx_fill(s, static_cast<int16_t>(x + w - t), static_cast<int16_t>(y + t), t, static_cast<int16_t>(h - 2 * t), ink);
 }
+}  // namespace
 
-void draw_run_dot(const Surface &s, const CellRect &cell, bool on, uint16_t under) {
-    const CellRect d = run_dot_box(cell);
-    gfx_fill(s, d.x, d.y, d.w, d.h, on ? verdict_style(Verdict::Running).dot : under);
+void draw_run_mark(const Surface &s, const CellRect &cell, bool on, uint16_t under) {
+    frame_box(s, cell.x, cell.y, cell.w, cell.h, kRunFrame, on ? verdict_style(Verdict::Running).mark : under);
 }
 
 // Every pixel of the cell is streamed once: the fill leaves a hole for the label or the glyph. The exceptions are a Skip
-// label's strike, a 1 px line painted over the text (strike_px), and a Running label's dot over the cell's corner (dot_px).
+// label's strike, a 1 px line painted over the text (strike_px), and a Running label's outline over the cell's rim (mark_px).
 void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, Verdict v, std::string_view label,
                   uint16_t under) {
     const VerdictStyle st = verdict_style(v);
@@ -238,7 +244,7 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
             const Box k = strike_line(*lay.font, hole.x, hole.y, hole.w, x, w);
             gfx_fill(s, k.x, k.y, k.w, k.h, st.ink);
         }
-        if (st.dotted) draw_run_dot(s, {x, y, w, h}, true);   // over the cell's corner, after the text
+        if (st.marked) draw_run_mark(s, {x, y, w, h}, true);   // over the cell's rim, after the text
         return;
     }
     // No label: the state's glyph, centred.
@@ -251,11 +257,7 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
     case Verdict::Skip:
     case Verdict::Stopped: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2}; break;
     case Verdict::Pending: hole = {static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2}; break;
-    case Verdict::Running: {   // the dot itself, centred (a cell too small for it shows the pending dot)
-        const int16_t d = sz >= kRunDotSize ? kRunDotSize : 2;
-        hole = {static_cast<int16_t>(x + (w - d) / 2), static_cast<int16_t>(y + (h - d) / 2), d, d};
-        break;
-    }
+    case Verdict::Running:   // a hollow accent square, the glyph's whole box
     case Verdict::Pass:
     case Verdict::Fail: break;
     case Verdict::Partial: hole = {gx, static_cast<int16_t>(gy + sz / 2 - 3), static_cast<int16_t>(sz), 6}; break;   // the tilde's strip
@@ -282,7 +284,13 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
     case Verdict::Skip:
     case Verdict::Stopped: gfx_fill(s, gx, static_cast<int16_t>(gy + sz / 2 - 1), static_cast<int16_t>(sz), 2, st.ink); break;
     case Verdict::Pending: gfx_fill(s, static_cast<int16_t>(gx + sz / 2 - 1), static_cast<int16_t>(gy + sz / 2 - 1), 2, 2, st.ink); break;
-    case Verdict::Running: gfx_fill(s, hole.x, hole.y, hole.w, hole.h, hole.w == kRunDotSize ? st.dot : st.ink); break;
+    case Verdict::Running: {   // the frame, then its inside in the base (each pixel of the box once)
+        const int16_t t = sz >= 8 ? kRunFrame : 1;
+        frame_box(s, gx, gy, static_cast<int16_t>(sz), static_cast<int16_t>(sz), t, st.mark);
+        gfx_fill(s, static_cast<int16_t>(gx + t), static_cast<int16_t>(gy + t), static_cast<int16_t>(sz - 2 * t),
+                 static_cast<int16_t>(sz - 2 * t), base);
+        break;
+    }
     }
 }
 
@@ -911,8 +919,9 @@ int row_overlay_px(const Surface &s, const ResultRowSpec &r, int16_t h, unsigned
     int px = 0;
     for (int k = 0; k < r.n; k++) {
         if (!((only >> k) & 1)) continue;
-        px += strike_px(r.cells[k].verdict, r.cells[k].label, verdict_cell_rect(s, 0, vh, r.n, k).w, vh);
-        px += dot_px(r.cells[k].verdict, !r.cells[k].label.empty());
+        const int16_t cw = verdict_cell_rect(s, 0, vh, r.n, k).w;
+        px += strike_px(r.cells[k].verdict, r.cells[k].label, cw, vh);
+        px += mark_px(r.cells[k].verdict, !r.cells[k].label.empty(), cw, vh);
     }
     return px;
 }
@@ -978,27 +987,25 @@ int ResultGrid::row_y(int index) const {
     return -1;
 }
 
-namespace {
-// Whether the dot box of a labelled cell overlaps the ink box of one of its glyphs (then wiping the dot would wipe label
-// pixels, so the caller repaints the cell instead). The ink boxes are exact: in a grid cell the line box starts 4 px down and
-// the ink 7, so the dot at the top edge clears it and the cheap wipe applies.
-bool dot_hits_label(const CellRect &cr, std::string_view label) {
+// Whether the outline's rim of a labelled cell overlaps the ink box of one of its glyphs (then wiping the outline would wipe
+// label pixels, so the caller repaints the cell instead). The ink boxes are exact: in a grid cell the line box starts 4 px
+// down and the ink 7, and a label is narrower than its cell by more than the rim, so the cheap wipe applies.
+bool mark_hits_label(const CellRect &cr, std::string_view label) {
     char buf[kFitBuf];
     const LabelLayout lay = label_layout(cr.x, cr.y, cr.w, cr.h, label, buf);
-    const CellRect d = run_dot_box(cr);
+    const int x0 = cr.x + kRunFrame, x1 = cr.x + cr.w - kRunFrame, y0 = cr.y + kRunFrame, y1 = cr.y + cr.h - kRunFrame;
     const Font &f = *lay.font;
     int pen = lay.hole.x;
     for (const char c : lay.text) {
         const Glyph *g = find_glyph(f, static_cast<uint8_t>(c));
-        if (g) {
+        if (g && g->w > 0 && g->h > 0) {
             const int gx = pen + g->left, gy = lay.hole.y + f.ascent - g->top;
-            if (d.x < gx + g->w && d.x + d.w > gx && d.y < gy + g->h && d.y + d.h > gy) return true;
+            if (gx < x0 || gx + g->w > x1 || gy < y0 || gy + g->h > y1) return true;
         }
         pen += f.adv;
     }
     return false;
 }
-}  // namespace
 
 // The grid's dot bookkeeping after a paint: the cell was painted (so a dot that was on it is gone), and a Running one has its
 // dot again (draw_verdict paints it).
@@ -1006,7 +1013,7 @@ void ResultGrid::note_dot(const CellRect &cell, bool running, std::string_view l
     if (dot_on_ && dot_cell_.x == cell.x && dot_cell_.y == cell.y) dot_on_ = false;
     if (!running || label.empty()) return;
     dot_on_ = true; dot_cell_ = cell; dot_slot_ = slot; dot_k_ = k;
-    dot_hit_ = dot_hits_label(cell, label);
+    dot_hit_ = mark_hits_label(cell, label);
 }
 
 int ResultGrid::sync_dots() {
@@ -1028,7 +1035,7 @@ int ResultGrid::sync_dots() {
             for (int k = 0; k < r.n; k++) {
                 if (r.cells[k].verdict != Verdict::Running || r.cells[k].label.empty()) continue;
                 want = verdict_cell_rect(surf_, cy, vh, r.n, k);
-                want_hit = dot_hits_label(want, r.cells[k].label);
+                want_hit = mark_hits_label(want, r.cells[k].label);
                 wslot = slot; wk = k; have = true;
             }
         }
@@ -1043,16 +1050,16 @@ int ResultGrid::sync_dots() {
         if (dot_hit_) {
             valid_[dot_slot_] = false;   // a cell too short for the cheap wipe: its row repaints with the budgeted rows
         } else {
-            draw_run_dot(surf_, dot_cell_, false);
-            spent += kRunDotPx;
+            draw_run_mark(surf_, dot_cell_, false);
+            spent += run_mark_px(dot_cell_.w, dot_cell_.h);
             if (valid_[dot_slot_] && ((vd_[dot_slot_] >> (3 * dot_k_)) & 7u) == run) set_vd(dot_slot_, dot_k_, pend);
         }
         dot_on_ = false;
     }
     // 3. The new dot arrives.
     if (have && !dot_on_) {
-        draw_run_dot(surf_, want, true);
-        spent += kRunDotPx;
+        draw_run_mark(surf_, want, true);
+        spent += run_mark_px(want.w, want.h);
         dot_on_ = true; dot_cell_ = want; dot_slot_ = wslot; dot_k_ = wk; dot_hit_ = want_hit;
         set_vd(wslot, wk, run);
     }

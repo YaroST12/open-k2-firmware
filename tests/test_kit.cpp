@@ -31,6 +31,22 @@ int ink_in(int xa, int xb, int ya, int yb, uint16_t bg) {   // pixels differing 
         for (int x = xa; x < xb; x++) n += px(x, y) != bg;
     return n;
 }
+// The Running outline in rows y0..y1 (grid area x61..223): its pixel count when the kFocus pixels there form exactly one
+// kRunFrame px rim (count == run_mark_px of their bounding box, the box's corners and mid-edges lit, its inside not), 0 when
+// there are none, -1 for anything else (two rims, a dot, a stray pixel).
+int one_rim(int y0, int y1) {
+    int n = 0, l = 240, r = -1, t = 240, b = -1;
+    for (int y = y0; y < y1; y++)
+        for (int x = 61; x < 224; x++)
+            if (px(x, y) == kFocus) { n++; l = std::min(l, x); r = std::max(r, x); t = std::min(t, y); b = std::max(b, y); }
+    if (n == 0) return 0;
+    const int w = r - l + 1, h = b - t + 1;
+    if (n != kit::run_mark_px(w, h)) return -1;
+    const int f = kit::kRunFrame;
+    if (px(l, t) != kFocus || px(r, b) != kFocus || px(l + w / 2, t + f - 1) != kFocus || px(l + f - 1, t + h / 2) != kFocus) return -1;
+    if (w > 2 * f && h > 2 * f && px(l + f, t + f) == kFocus) return -1;
+    return n;
+}
 
 struct Model {
     std::string text[12], tail[12], note[12];
@@ -66,17 +82,17 @@ static void test_tables() {
     CHECK_EQ(kit::verdict_style(Verdict::Pass).ink, kOk);
     CHECK_EQ(kit::verdict_style(Verdict::Fail).fill, kError);
     CHECK_EQ(kit::verdict_style(Verdict::Fail).ink, kBg);
-    CHECK_EQ(kit::verdict_style(Verdict::Running).dotted, 1);
-    CHECK_EQ(kit::verdict_style(Verdict::Running).dot, kFocus);
+    CHECK_EQ(kit::verdict_style(Verdict::Running).marked, 1);
+    CHECK_EQ(kit::verdict_style(Verdict::Running).mark, kFocus);
     CHECK_EQ(kit::verdict_style(Verdict::Running).filled, 0);
     CHECK_EQ(kit::verdict_style(Verdict::Running).ink, kit::verdict_style(Verdict::Pending).ink);
     for (Verdict o : {Verdict::Pass, Verdict::Fail, Verdict::Partial, Verdict::Skip, Verdict::None, Verdict::Pending, Verdict::Stopped})
-        CHECK_EQ(kit::verdict_style(o).dotted, 0);       // only the cell under test has the dot: the shape cue is its own
+        CHECK_EQ(kit::verdict_style(o).marked, 0);       // only the cell under test has the outline: the shape cue is its own
     // partial: amber tint + amber ink (never the red of a fail, never the green of a pass)
     CHECK_EQ(kit::verdict_style(Verdict::Partial).fill, kCautionT);
     CHECK_EQ(kit::verdict_style(Verdict::Partial).ink, kCaution);
     CHECK_EQ(kit::verdict_style(Verdict::Partial).filled, 1);
-    CHECK_EQ(kit::verdict_style(Verdict::Partial).dotted, 0);
+    CHECK_EQ(kit::verdict_style(Verdict::Partial).marked, 0);
     // none, skip and stopped never get a fill and never go red; pending is fainter than they are
     for (Verdict v : {Verdict::None, Verdict::Skip, Verdict::Stopped}) {
         CHECK_EQ(kit::verdict_style(v).filled, 0);
@@ -322,47 +338,42 @@ static void test_verdict_cell() {
     CHECK_EQ(px(51, 101), kError);
     kit::draw_verdict(kSurf, 90, 100, 30, 22, Verdict::None, "", kBg);
     CHECK_EQ(px(91, 101), kBg);                         // no fill: the caller's base
-    // Running: the pending cell (no fill, no outline) plus a 5 px kFocus dot in the top-right corner, clear of the label
+    // Running: the pending cell (no fill) inside a 2 px accent outline along the cell's edge, clear of the label; no dot
     {
         const kit::CellRect cell{130, 100, 30, 22};
-        const kit::CellRect d = kit::run_dot_box(cell);
-        CHECK_EQ(d.w, kit::kRunDotSize);
-        CHECK_EQ(d.x + d.w, 130 + 30 - kit::kRunDotInsetX);  // inset from the right edge
-        CHECK_EQ(d.y, 100 + kit::kRunDotInsetY);             // ... and from the top
+        const int rim = kit::run_mark_px(30, 22);
+        CHECK_EQ(rim, 2 * 2 * (30 + 22) - 16);
+        CHECK_EQ(kit::mark_hits_label(cell, "9V"), false);
         lcd::fill(kBase);
         kit::draw_verdict(kSurf, 130, 100, 30, 22, Verdict::Pending, "9V", kBg);
         const auto pending = snap();
         lcd::fill(kBase);
         g_lcd_pixels = 0;
         kit::draw_verdict(kSurf, 130, 100, 30, 22, Verdict::Running, "9V", kBg);
-        CHECK_EQ(g_lcd_pixels, 30u * 22u + unsigned(kit::dot_px(Verdict::Running, true)));   // the cell once, the dot over it
-        CHECK_EQ(px(130, 100), kBg);                     // no outline, no fill: the caller's base
-        CHECK_EQ(px(131, 101), kBg);
-        for (int yy = d.y; yy < d.y + d.h; yy++)
-            for (int xx = d.x; xx < d.x + d.w; xx++) CHECK_EQ(px(xx, yy), kFocus);
-        CHECK_EQ(px(d.x - 1, d.y + 2) != kFocus, 1);     // exactly the box
-        CHECK_EQ(px(d.x + d.w, d.y + 2) != kFocus, 1);
-        CHECK_EQ(px(d.x + 2, d.y + d.h) != kFocus, 1);
-        CHECK_EQ(changed_in(pending, snap(), 0, 240), kit::kRunDotPx);   // the dot is the only difference from Pending
-        // the label is intact beside it (the dot's box does not touch the text of a cell this wide)
-        CHECK_EQ(ink_in(131, d.x - 1, 101, 121, kBg) > 0, 1);
-        // wiping the dot gives the Pending cell back, pixel for pixel
-        kit::draw_run_dot(kSurf, cell, false);
+        CHECK_EQ(g_lcd_pixels, 30u * 22u + unsigned(kit::mark_px(Verdict::Running, true, 30, 22)));   // the cell, the rim over it
+        for (const auto [xx, yy] : {std::pair{130, 100}, {131, 101}, {159, 121}, {158, 120}, {130, 110}, {159, 110}, {145, 100}, {145, 121}})
+            CHECK_EQ(px(xx, yy), kFocus);                // every edge, 2 px deep
+        CHECK_EQ(px(132, 102), kBg);                     // inside the rim: the caller's base, no fill
+        CHECK_EQ(changed_in(pending, snap(), 0, 240), rim);   // the rim is the only difference from Pending
+        CHECK_EQ(ink_in(132, 157, 102, 119, kBg) > 0, 1);     // the label is intact inside it
+        // wiping the outline gives the Pending cell back, pixel for pixel
+        kit::draw_run_mark(kSurf, cell, false);
         CHECK_EQ(changed_in(pending, snap(), 0, 240), 0);
-        kit::draw_run_dot(kSurf, cell, true);
-        CHECK_EQ(px(d.x, d.y), kFocus);
+        kit::draw_run_mark(kSurf, cell, true);
+        CHECK_EQ(px(130, 100), kFocus);
     }
-    // A label-less Running cell: the dot centred (the glyph of a 12 px marker), nothing else but the base.
+    // A label-less Running cell: a hollow accent square (the glyph of a 12 px marker), nothing else but the base.
     {
         lcd::fill(kBase);
         g_lcd_pixels = 0;
         kit::draw_verdict(kSurf, 100, 150, 12, 12, Verdict::Running, "", kBg);
         CHECK_EQ(g_lcd_pixels, 12u * 12u);
-        int dots = 0;
+        int marks = 0;
         for (int yy = 150; yy < 162; yy++)
-            for (int xx = 100; xx < 112; xx++) dots += px(xx, yy) == kFocus;
-        CHECK_EQ(dots, kit::kRunDotPx);
-        CHECK_EQ(px(105, 155) == kFocus, 1);            // the middle
+            for (int xx = 100; xx < 112; xx++) marks += px(xx, yy) == kFocus;
+        CHECK_EQ(marks, kit::run_mark_px(8, 8));        // the 8 px glyph box (12 - 4), 2 px deep
+        CHECK_EQ(px(102, 152) == kFocus, 1);            // the square's corner
+        CHECK_EQ(px(105, 155), kBg);                    // hollow
         CHECK_EQ(px(100, 150), kBg);
     }
     // Partial: amber tint, and a 2 px amber bar along the bottom edge that a pass does not have (the shape cue, not the colour).
@@ -605,16 +616,18 @@ static void test_result_row() {
     CHECK_EQ(px(101, 110), kBg);                        // the 1 px gap between cells
     CHECK_EQ(px(223, 110), kBg);                        // the right edge stays clear
     CHECK_EQ(px(150, 125), kBg);                        // the last line of a row is never painted over
-    CHECK_EQ(px(183, 110), kBg);                        // running: the pending look, no fill, no ring
-    CHECK_EQ(px(184, 110), kBg);
-    {   // ... and the dot in the cell's top-right corner
-        int dots = 0, left = 224, top = 240;
+    CHECK_EQ(px(186, 110), kBg);                        // running: the pending look, no fill
+    CHECK_EQ(px(190, 110), kBg);
+    {   // ... inside a 2 px outline along the 4th cell's edge (x183..222, the row's top edge), no dot
+        int marks = 0, left = 224, top = 240;
         for (int yy = 100; yy < 126; yy++)
             for (int xx = 0; xx < 224; xx++)
-                if (px(xx, yy) == kFocus) { dots++; left = std::min(left, xx); top = std::min(top, yy); }
-        CHECK_EQ(dots, kit::kRunDotPx);                 // one 5 x 5 box, in the 4th cell (x184..), on the row's top edge
-        CHECK_EQ(left >= 184, 1);
-        CHECK_EQ(top, 100 + kit::kRunDotInsetY);
+                if (px(xx, yy) == kFocus) { marks++; left = std::min(left, xx); top = std::min(top, yy); }
+        CHECK_EQ(left, 183);
+        CHECK_EQ(top, 100);
+        CHECK_EQ(px(184, 110), kFocus);
+        CHECK_EQ(px(222, 110), kFocus);
+        CHECK_EQ(marks >= kit::run_mark_px(30, 20), 1);   // the rim, whatever the cell's exact box
     }
     CHECK_EQ(px(60, 126), kBase);                       // nothing below the row
 
@@ -674,9 +687,9 @@ static void test_result_rows_stream_each_pixel_once() {
                 g_lcd_pixels = 0;
                 kit::draw_verdict(kSurf, 70, 100, 34, h, v, label, kBg);
                 // A Skip label is struck through: the line (text width 24 + 2 px) is painted twice; a labelled Running cell's
-                // dot is painted over its corner (a label-less one leaves a hole for its dot).
+                // outline is painted over its rim (a label-less one paints its square inside the glyph's hole).
                 CHECK_EQ(g_lcd_pixels, 34u * unsigned(h) + (v == Verdict::Skip && !label.empty() ? 26u : 0u) +
-                                           unsigned(kit::dot_px(v, !label.empty())));
+                                           unsigned(kit::mark_px(v, !label.empty(), 34, h)));
             }
         }
     }
@@ -687,11 +700,12 @@ static void test_result_rows_stream_each_pixel_once() {
     const ResultCell mixed[3] = {{Verdict::Pass, "5V", "3A"}, {Verdict::Pass, "9V", {}}, {Verdict::Pass, "12V", "2.25A"}};
     const ResultCell scp[3] = {{Verdict::Pass, "5V", {}}, {Verdict::Fail, "10V", "2.25A"}, {Verdict::Fail, "4.5V", "5A"}};
     const ResultCell lone[1] = {{Verdict::None, "not offered", {}}};
-    // strike: the struck "12V" of the row (26 px), 0 = no Skip cell in it; dot: the Running cell's dot (25 px), 0 = none in it
-    struct Case { const ResultCell *cells; int n; const char *label; unsigned strike, dot; };
-    const Case cases[] = {{volts, 5, "QC2", 26, 25}, {volts, 2, "Huawei", 0, 0}, {cur, 5, "USB PD", 0, 25}, {cur, 3, "PPS", 0, 0},
-                          {mixed, 3, "SPR AVS", 0, 0}, {scp, 3, "SCP", 0, 0}, {lone, 1, "Huawei", 0, 0}, {volts, 0, "Nothing", 0, 0},
-                          {volts, 5, "", 26, 25}};
+    // strike: the struck "12V" of the row (26 px), 0 = no Skip cell in it; run: a Running cell's outline is in it (its rim,
+    // measured as one_rim, is painted over the cell)
+    struct Case { const ResultCell *cells; int n; const char *label; unsigned strike; bool run; };
+    const Case cases[] = {{volts, 5, "QC2", 26, true}, {volts, 2, "Huawei", 0, false}, {cur, 5, "USB PD", 0, true}, {cur, 3, "PPS", 0, false},
+                          {mixed, 3, "SPR AVS", 0, false}, {scp, 3, "SCP", 0, false}, {lone, 1, "Huawei", 0, false}, {volts, 0, "Nothing", 0, false},
+                          {volts, 5, "", 26, true}};
     for (const Case &c : cases) {
         kit::ResultRowSpec spec;
         spec.n = static_cast<uint8_t>(c.n);
@@ -703,7 +717,9 @@ static void test_result_rows_stream_each_pixel_once() {
                 lcd::fill(kBase);
                 g_lcd_pixels = 0;
                 kit::draw_result_row(kSurf, 100, h, c.label, c.cells, c.n, focus, section);
-                CHECK_EQ(g_lcd_pixels, 224u * unsigned(h) + c.strike + c.dot);
+                const int rim = one_rim(100, 100 + h);
+                CHECK_EQ(c.run ? rim > 0 : rim == 0, true);
+                CHECK_EQ(g_lcd_pixels, 224u * unsigned(h) + c.strike + unsigned(rim > 0 ? rim : 0));
                 CHECK_EQ(px(150, 100 + h), kBase);   // nothing below the row
                 unsigned left = 0;   // and no pixel of the row stays unpainted: the repaint needs no erase
                 for (int yy = 100; yy < 100 + h; yy++)
@@ -938,16 +954,10 @@ void dot_fn(void *ctx, int i, kit::ResultRowSpec &out) {
         out.cells[k] = {g < m->run ? kit::Verdict::Pass : g == m->run ? kit::Verdict::Running : kit::Verdict::Pending, kLabels[(g + k) % 5], m->cur && g < m->run ? "1.5A" : ""};
     }
 }
-int focus_px(int y0, int y1) {   // kFocus pixels in the grid's rows
-    int n = 0;
-    for (int y = y0; y < y1; y++)
-        for (int x = 61; x < 224; x++) n += px(x, y) == kFocus;
-    return n;
-}
 }  // namespace
 
-// sync_dots: the dot leaves the cell that was under test and lands on the one that is, for kRunDotPx each (a cell's worth when
-// the dot sits against the label), with no budget and no repaint of the rest; once the window has followed and draw_some has
+// sync_dots: the outline leaves the cell that was under test and lands on the one that is, for a rim each (a cell's worth when
+// the rim touches the label), with no budget and no repaint of the rest; once the window has followed and draw_some has
 // painted the finished cell's verdict, the pixels equal a fresh paint of the same window.
 static void test_result_grid_sync_dots() {
     DotModel m;
@@ -962,7 +972,7 @@ static void test_result_grid_sync_dots() {
     g.init(kSurf, 100, 222, dot_fn, &m);
     g.set_count(m.rows);
     g.draw();
-    CHECK_EQ(focus_px(100, 222), kit::kRunDotPx);        // one dot on screen, on the running cell
+    CHECK_EQ(one_rim(100, 222) > 0, true);               // one outline on screen, on the running cell
     CHECK_EQ(g.sync_dots(), 0);                          // nothing moved: nothing to do
     for (int step = 1; step < total; step++) {
         m.run = step;
@@ -972,11 +982,12 @@ static void test_result_grid_sync_dots() {
         const int spent = g.sync_dots();
         CHECK_EQ(g_lcd_pixels - n0, unsigned(spent));
         CHECK_EQ(spent > 0 && spent < 224 * 26 / 2, true);
-        CHECK_EQ(focus_px(100, 222), g.row_y(want) >= 0 ? kit::kRunDotPx : 0);
+        const int rim = one_rim(100, 222);
+        CHECK_EQ(g.row_y(want) >= 0 ? rim > 0 : rim == 0, true);
         // 2. then what the page does: the window follows, the rows and cells paint
         g.anchor_bottom(want);
         g.draw_some(1 << 20);
-        CHECK_EQ(focus_px(100, 222), kit::kRunDotPx);
+        CHECK_EQ(one_rim(100, 222) > 0, true);
         const auto got = snap();
         lcd::fill(kBase);
         kit::ResultGrid f;
@@ -1005,12 +1016,12 @@ static void test_result_grid_sync_dots_while_rows_change_shape() {
         m.run = step;
         const int want = step / 3;
         g.sync_dots();
-        const int on = focus_px(100, 222);
-        CHECK_EQ(on <= kit::kRunDotPx, true);                                    // never a second dot, in the stale rows
+        const int on = one_rim(100, 222);
+        CHECK_EQ(on >= 0, true);                                                 // never a second outline, in the stale rows
         CHECK_EQ(on == 0 && g.row_y(want) >= 0 && g.row_y(want) + 26 <= 222, false);   // and one when its row is on screen
         g.anchor_bottom(want);
         g.draw_some(1 << 20);
-        CHECK_EQ(focus_px(100, 222), kit::kRunDotPx);
+        CHECK_EQ(one_rim(100, 222) > 0, true);
     }
 }
 

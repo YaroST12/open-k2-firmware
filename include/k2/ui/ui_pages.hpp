@@ -520,15 +520,15 @@ public:
     // once 1 ms has passed since the last round (lcd::kServiceUs, elapsed time) inside a stream. The items (gauge, hero + needle, clock, texts, progress, footer) share
     // kFlightPx (~13 ms); a grid row, the one item that can exceed it, paints alone on a tick where nothing else did, up to
     // kFlightRowPx (the tallest row, 224 x 42 px, plus the strike-throughs of its Skip cells painted over their text, at most
-    // kit::kStrikeRowMaxPx, plus a Running cell's dot, kit::kDotRowMaxPx, ~20 ms). Between steps (and while laying out) there is
-    // no cap. The gauge band and the step dot are one pair: the gauge is item 1, the grid's rebuild and ResultGrid::sync_dots
-    // (kRunDotPx a move, never gated) come right after it, so on a step change the band and the dot move in the same tick.
+    // kit::kStrikeRowMaxPx, plus a Running cell's outline, kit::kMarkRowMaxPx, ~21 ms). Between steps (and while laying out)
+    // there is no cap. The gauge band and the step outline are one pair: the gauge is item 1, the grid's rebuild and
+    // ResultGrid::sync_dots (two cell rims a move, never gated) come right after it, so on a step change they move in one tick.
     static constexpr int kFlightPx = 6000;
     // The one tick that may paint more: the start of a row whose engine times its own handshake. The session (not the update) paints
     // the footer line that names the window, kAnnouncePx (the footer band, 224 x 18), after that tick's update and before the
     // engine starts; the screen is still for the next >= 1 s anyway (Runner::paint_blocked). Counted against nothing else.
     static constexpr int kAnnouncePx = 224 * 18;
-    static constexpr int kFlightRowPx = 224 * 42 + kit::kStrikeRowMaxPx + kit::kDotRowMaxPx;
+    static constexpr int kFlightRowPx = 224 * 42 + kit::kStrikeRowMaxPx + kit::kMarkRowMaxPx;
     static constexpr int kHeroPx = 5000;         // the 4-digit 48 px readout (4 x 24 x 48) plus its unit
     static constexpr int kNeedlePx = 200;        // the old and the new needle column and the window edge they cross
     static constexpr int kRangePx = 36 * 12;     // a sweep row's gauge move: the old and new marker (6 columns each) and needle (2 each)

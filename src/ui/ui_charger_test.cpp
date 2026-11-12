@@ -2236,8 +2236,8 @@ void ChargerTestPage::paint_running(uint32_t now) {
         const kit::RangePos p = kit::draw_range_gauge(c, 6, 98, 210, vbus_g, live.set_mv, live.lo_mv, live.hi_mv, full, {static_cast<int16_t>(mark_px_), static_cast<int16_t>(needle_px_)});
         needle_px_ = p.needle; mark_px_ = p.mark;
     }
-    // 1b. the step dot, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the dot from
-    // the cell that was under test to the one that is (kRunDotPx, never gated). The rows themselves scroll and repaint at item 6.
+    // 1b. the step outline, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the
+    // outline from the cell that was under test to the one that is (two cell rims, never gated). The rows repaint at item 6.
     const uint32_t key = mix_u32(mix_u32(mix_init(), runner_.revision()), static_cast<uint32_t>(runner_.index())) | 1u;
     if (key != grid_key_) {
         grid_key_ = key;
