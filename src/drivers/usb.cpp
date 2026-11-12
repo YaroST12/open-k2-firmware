@@ -227,12 +227,15 @@ void take(Early& e) {
     const bool on = e.apb1 & reg::Crm::APB1EN_USB;
     e.cfg = on ? reg::usb_cfg() : 0xEEEE;
     e.cntr = on ? *reinterpret_cast<volatile std::uint32_t*>(0x40005C40) : 0xEEEE;
-    e.daddr = on ? *reinterpret_cast<volatile std::uint32_t*>(0x40005C4C) : 0xEEEE;
+    e.daddr = reg::gpio(pins::usb_dp.port).ODR;   // ODR (PA12 = bit 12)
     e.crh = reg::gpio(pins::usb_dp.port).CRH;
     e.idr = reg::gpio(pins::usb_dp.port).IDR;
 }
 }  // namespace dbg
-void dbg_boot_mark() { dbg::take(dbg::early[0]); }
+void dbg_boot_mark() {
+    dbg::take(dbg::early[0]);
+    pins::usb_dp.mode(reg::Mode::InFloating);   // [DEBUG-ue1] experiment: release the entry pull-up
+}
 void dbg_init_mark() {
     dbg::take(dbg::early[1]); dbg::t0 = dbg::init_ms = systick::millis(); dbg::init_trim = reg::crm().CTRL & 0xFFFF; }
 
