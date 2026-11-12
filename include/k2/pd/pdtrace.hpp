@@ -59,6 +59,7 @@ inline constexpr std::uint8_t kMarkReread = 5;     // source-cap re-read: start 
 inline constexpr std::uint8_t kMarkQc3Batch = 6;   // a QC3 / QC3+ pulse batch is about to play: a = VBUS mV before it (the next mark's a is the result), b = signed pulse count (int16)
 inline constexpr std::uint8_t kMarkVconn = 7;      // VCONN_Swap experiment: a = state | why << 4 | applied << 8 | active cc << 12, b = mV on the net VCONN goes on
 inline constexpr std::uint8_t kMarkRefusal = 8;    // a refused 6 A hunt row: a = HuntCause | answer << 8 | (timeout 1) << 12, b = targeted APDO limit in mA (the capture freezes with Trigger::Refusal)
+inline constexpr std::uint8_t kMarkInterrogate = 9;  // inline interrogation phase change: a = phase | step << 4 | why << 8 | match << 12 (pd::Iq*), b = asked mask | answered mask << 8
 
 inline constexpr std::size_t kHeader = 6;
 inline constexpr std::size_t kMaxRecord = kHeader + 1 + 2 + 7 * 4 + 4;  // 41: a 7-object Rx frame

@@ -148,7 +148,7 @@ struct IqStatus {
     std::array<std::uint32_t, kIdModeSvids> mode_vdo{};
     std::uint8_t num_sink_pdos = 0;
     std::array<std::uint32_t, 7> sink_pdos{};
-    std::uint8_t sink_ext_len = 0;  // 0 = none, else kIqSinkExtBytes
+    std::uint8_t sink_ext_len = 0;  // 0 = none, else the bytes kept (the data size, at most kIqSinkExtBytes)
     std::array<std::uint8_t, kIqSinkExtBytes> sink_ext{};
     std::uint32_t revision = 0;     // Revision data object (0 = none)
     std::uint32_t started_at = 0, ended_at = 0;
@@ -163,6 +163,11 @@ public:
     // when a question already went out.
     void abort(IqWhy why, std::uint32_t now);
     bool running() const { return st_.phase != IqPhase::Idle && !iq_finished(st_.phase); }
+    // A reset of this run is in flight or its renegotiation is awaited: VBUS is expected to drop (bounded by kIqRenegMs per
+    // sniff), so the driver's VBUS detach rule holds off; the CC rule still ends the run on a real unplug.
+    bool resetting() const {
+        return st_.phase == IqPhase::Reset1 || st_.phase == IqPhase::Sniff1 || st_.phase == IqPhase::Reset2 || st_.phase == IqPhase::Sniff2;
+    }
 
     void on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now);
     void on_hard_reset(std::uint32_t now);   // received on the wire (the charger's or the device's), never our own

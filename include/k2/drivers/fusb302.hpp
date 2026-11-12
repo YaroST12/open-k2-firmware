@@ -18,6 +18,7 @@
 #include "k2/pd/pd_emarker_plan.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
+#include "k2/pd/pd_interrogate.hpp"
 #include "k2/pd/ra_guard.hpp"
 #include "k2/pd/pd_probe.hpp"
 #include "k2/pd/pd_reread.hpp"
@@ -333,6 +334,17 @@ bool identify_busy();      // an Identify is in flight: running, or an alone-Ide
 const pd::IdStatus& identify_status();
 bool identify_current();   // the latest Identify's answers are this partner's (after an alone-Identify's release too, until the port is really gone)
 const pd::Identity& identify_identity();   // the identity the latest Identify collected (kept for the release window)
+
+// Inline interrogation (k2/pd/pd_interrogate.hpp): the one exception to "an inline K2 never transmits", for learning a device
+// twin. A Hard Reset when no fresh contract was sniffed, the device asked as its source/DFP (Discover Identity, Get_Sink_Cap,
+// Get_Sink_Cap_Extended, Get_Revision, Discover SVIDs / Modes), a final Hard Reset, the renegotiated contract compared with the
+// first. `outside`: what the caller knows (another owner busy: charger test, SVOOC trigger, PD Stress, FC release; the K2 fed
+// by this VBUS; the user's confirm); the driver adds the CC, the inline latch, its own engines and a K2-held contract.
+// Returns the refusal (None = started). Auto-CRC stays off throughout; each question goes out once, no chip retries.
+pd::IqRefusal interrogate_start(const pd::IqFacts& outside);
+void interrogate_abort();
+bool interrogate_running();
+const pd::IqStatus& interrogate_status();   // the latest run's, kept until the next start
 
 // Quick source probe for the charger report card (k2/pd/pd_probe.hpp): Discover Identity, Get_Manufacturer_Info and
 // Get_Source_Cap_Extended on SOP, one try each, over within ~1 s whatever the charger does. False when refused

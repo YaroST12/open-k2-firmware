@@ -33,6 +33,7 @@
 #include "k2/pd/pd_scanpace.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
+#include "k2/pd/pd_interrogate.hpp"
 #include "k2/pd/pd_link.hpp"
 #include "k2/pd/pd_probe.hpp"
 #include "k2/pd/pd_reread.hpp"
@@ -168,6 +169,8 @@ bool g_probe_logged = true;
 pd::Probe g_probe;   // report-card source probe: never retries, ends within kProbeTotalMs
 bool g_reread_logged = true;
 pd::Reread g_reread;   // source-cap re-read (after-contract conversation); never retries, ends within kRereadTotalMs
+pd::Interrogate g_iq;  // inline interrogation: the only inline transmitter, ends within pd::kIqTotalMs plus its resets
+pd::IqPhase g_iq_phase = pd::IqPhase::Idle;   // the phase last logged / marked
 // The re-read's attach ownership is these two flags plus the release timer below. Every other owner of the link clears the flags
 // (reread_take_over: sink_request, a PD Stress / twin run start; rd_for_run, unit_*, cc_detach): the attach is then theirs and the
 // timer never fires on it. Only an attach nobody took over is released here; `pd-reread --abort` adopts a lab-held Rd again.
@@ -325,6 +328,56 @@ bool rx_ack_peek(std::uint8_t sent_id, bool& peek) {
     return false;
 }
 
+// A SOP frame as FIFO tokens: SOP1 SOP1 SOP1 SOP2, PACKSYM | length, the header, the data, JAM_CRC, EOP, TXOFF.
+using TxFrame = std::array<std::uint8_t, 4 + 1 + 2 + 28 + 3>;
+unsigned tx_frame(std::uint16_t header, const pd::TxMsg& m, TxFrame& buf) {
+    unsigned n = 0;
+    for (std::uint8_t b : {0x12, 0x12, 0x12, 0x13}) buf[n++] = b;
+    buf[n++] = std::uint8_t(0x80 | (2 + m.len));
+    buf[n++] = std::uint8_t(header);
+    buf[n++] = std::uint8_t(header >> 8);
+    for (unsigned i = 0; i < m.len && i < m.data.size(); i++) buf[n++] = m.data[i];
+    buf[n++] = 0xFF;  // JAM_CRC
+    buf[n++] = 0x14;  // EOP
+    buf[n++] = 0xFE;  // TXOFF
+    return n;
+}
+
+// An inline question (pd::Interrogate, TxMsg::inline_tx): the header already carries the MessageID and the roles the device
+// expects from its source, so g_msg_id is neither used nor moved. Auto-CRC stays off (the charger GoodCRCs the device's
+// answers), and the device's and the charger's PHYs both GoodCRC this frame at once, so the chip sends it exactly once (no
+// auto retry: a retry would land on the device's answer). Nothing is peeked: the GoodCRCs and the answer reach handle_frame()
+// through the normal receive path. The result only says that the frame left (TXSENT); the run never relies on it.
+bool transmit_inline(const pd::TxMsg& m) {
+    TxFrame buf;
+    const unsigned n = tx_frame(m.header, m, buf);
+    clear_irqs();
+    wr(kControl3, 0);   // N_RETRIES 0, AUTO_RETRY off
+    fifo_write_tx(m.header, {m.data.data(), m.len < m.data.size() ? m.len : m.data.size()}, {buf.data(), n});
+    wr(kControl0, kTxStart);
+    g_tx_start_us = systick::micros();
+    bool ok = false;
+    pdtrace::TxResult res = pdtrace::TxResult::Timeout;
+    std::uint8_t last_ia = 0;
+    int waited = 0;
+    for (int t = 0; t < 4; t++) {   // a 30-byte frame takes ~1.2 ms on the wire; the answer comes tens of ms later
+        delay_ms(1);
+        waited = t + 1;
+        std::uint8_t ia = 0;
+        if (!rd(kInterruptA, ia)) continue;
+        last_ia |= ia;
+        if (ia & kIntHardRst) { g_hr_latched = true; break; }
+        if (ia & kIntTxSent) { ok = true; res = pdtrace::TxResult::TxSent; break; }
+        if (ia & kIntRetryFail) { res = pdtrace::TxResult::RetryFail; break; }
+    }
+    wr(kControl3, kRetries3Auto);
+    g_tx_timed_out = res == pdtrace::TxResult::Timeout;
+    pdtrace::tx_result(res, std::uint32_t(waited), last_ia);
+    K2LOG("[IQ] t=%u TX type %u id %u rev %u: %s (%d ms)\n", unsigned(systick::millis()), unsigned(m.header & 0x1F),
+          unsigned((m.header >> 9) & 7), unsigned((m.header >> 6) & 3), ok ? "sent" : "no TXSENT", waited);
+    return ok;
+}
+
 bool transmit(const pd::TxMsg& m) {
     g_tx_timed_out = false;
     if (!g_tx_allowed) {
@@ -344,18 +397,11 @@ bool transmit(const pd::TxMsg& m) {
         K2LOG("[PD] t=%u Hard reset sent\n", unsigned(systick::millis()));
         return true;
     }
+    if (m.inline_tx) return transmit_inline(m);
     if (m.restart_id) g_msg_id = 0;
     const std::uint16_t header = pd::with_msg_id(m.header, g_msg_id);
-    std::array<std::uint8_t, 4 + 1 + 2 + 28 + 3> buf;
-    unsigned n = 0;
-    for (std::uint8_t b : {0x12, 0x12, 0x12, 0x13}) buf[n++] = b;
-    buf[n++] = std::uint8_t(0x80 | (2 + m.len));
-    buf[n++] = std::uint8_t(header);
-    buf[n++] = std::uint8_t(header >> 8);
-    for (unsigned i = 0; i < m.len && i < m.data.size(); i++) buf[n++] = m.data[i];
-    buf[n++] = 0xFF;  // JAM_CRC
-    buf[n++] = 0x14;  // EOP
-    buf[n++] = 0xFE;  // TXOFF
+    TxFrame buf;
+    const unsigned n = tx_frame(header, m, buf);
     clear_irqs();
     if ((header & 0x1F) == pd::kCtlSoftReset && m.len == 0) pdtrace::reset(pdtrace::ResetKind::SoftTx);
     fifo_write_tx(header, {m.data.data(), m.len < m.data.size() ? m.len : m.data.size()}, {buf.data(), n});
@@ -941,6 +987,9 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
     const unsigned msg_type = header & 0x1F, num_do = (header >> 12) & 7;
     g_pd_traffic = true;
     g_pd_seen_attach = true;
+    // Every wire frame, also with no run going: the watch keeps the sniffed contract and the source's MessageID, so a run on a
+    // fresh contract can skip its first reset.
+    if (wire) g_iq.on_message(sop, header, payload, systick::millis());
     // First capabilities after a re-attach: drop the previous charger's data so two sources never mix.
     if (g_new_source && sop == pd::Sop::Sop &&
         ((!ext && msg_type == 0x01 && num_do > 0) || (ext && msg_type == pd::kExtEprSourceCaps))) {
@@ -1964,6 +2013,30 @@ static void downstream_edge() {
     g_down_prev = down;
 }
 
+// The inline interrogation's progress: a Black Box mark and a log line per phase or step change, a summary at the end.
+pd::IqStep g_iq_step = pd::IqStep::Identity;
+void iq_report() {
+    const pd::IqStatus& s = g_iq.status();
+    if (s.phase == g_iq_phase && s.step == g_iq_step) return;
+    g_iq_phase = s.phase;
+    g_iq_step = s.step;
+    pdtrace::mark(pdtrace::kMarkInterrogate,
+                  std::uint16_t(unsigned(s.phase) | unsigned(s.step) << 4 | unsigned(s.why) << 8 | unsigned(s.match) << 12),
+                  std::uint16_t(s.asked_mask | s.ok_mask << 8));
+    K2LOG("[IQ] t=%u %s, step %s\n", unsigned(systick::millis()), pd::iq_phase_name(s.phase), pd::iq_step_name(s.step));
+    if (!pd::iq_finished(s.phase)) return;
+    K2LOG("[IQ] end %s (%s), contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X, %u sent, %u device GoodCRC, "
+          "resets %u sent %u seen\n",
+          pd::iq_phase_name(s.phase), pd::iq_why_name(s.why), pd::iq_match_name(s.match), unsigned(s.asked_mask), unsigned(s.ok_mask),
+          unsigned(s.refused_mask), unsigned(s.silent_mask), unsigned(s.sent), unsigned(s.dev_acks), unsigned(s.resets_sent),
+          unsigned(s.resets_seen));
+    K2LOG("[IQ] contracts: first pos %u RDO 0x%08X PDO 0x%08X, second pos %u RDO 0x%08X PDO 0x%08X\n", unsigned(s.first.pos),
+          unsigned(s.first.rdo), unsigned(s.first.src_pdo), unsigned(s.second.pos), unsigned(s.second.rdo), unsigned(s.second.src_pdo));
+    K2LOG("[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n", unsigned(s.id.vid),
+          unsigned(s.id.pid), unsigned(s.num_sink_pdos), unsigned(s.sink_ext_len), unsigned(s.revision), unsigned(s.num_svids),
+          unsigned(s.num_modes));
+}
+
 void active_tick() {
     const std::uint32_t now = systick::millis();
     downstream_edge();
@@ -2002,7 +2075,8 @@ void active_tick() {
         update_crc(pd::crc_demand(d), pd::rd_demand(d));
         // The TX choke point's input: the same demand that drives Auto-CRC (plus the explicit hard-reset tool).
         // transmit() refuses everything while this is false, so a passive K2 can never put a frame on CC.
-        g_tx_allowed = pd::crc_demand(d) || g_hr_tool_armed;
+        // A running inline interrogation may transmit too, without Auto-CRC (it is no part of the CRC demand).
+        g_tx_allowed = pd::crc_demand(d) || g_hr_tool_armed || g_iq.running();
         if (ready && !counts) contract_expired(now);
     }
     pd::TxMsg m;
@@ -2018,6 +2092,16 @@ void active_tick() {
         K2LOG("[VCONN] TX type %u: %s\n", unsigned(m.header & 0x1F), ok ? "GoodCRC" : "no GoodCRC");
         vconn_mark();
         sent = true;
+    }
+    if (g_iq.running()) {   // the run keeps its own quiet gap and deadlines: ticked before the idle gate
+        if (!inline_now()) g_iq.abort(pd::IqWhy::NotInline, now);
+        g_iq.tick(now);
+        if (!sent && g_iq.take_tx(m)) {
+            const bool hr = m.hard_reset;
+            const bool ok = transmit(m);
+            if (!hr) g_iq.on_tx_result(ok, now);
+            sent = true;
+        }
     }
     trace_sink();
     const pd::SinkState ss = g_sink.status().state;
@@ -2098,6 +2182,7 @@ static void detach_reset(std::uint8_t status0) {
     pins::cc_vconn_gnd.write(g_ra);   // VCONN off before anything else changes (the Ra mode keeps PC13 high)
     g_vconn_applied = false;
     g_vconn.reset(pd::VconnWhy::Abort);
+    if (g_iq.running()) g_iq.abort(pd::IqWhy::Detached, systick::millis());   // nobody left to ask or to reset
     // No SW_RES, on a plain or a pinned boot alike: it restores the chip's power-on SWITCHES0 (0x03, Rd on both
     // lines) until the next write - through the closed CC switches a pinned boot's source would see the Debug
     // Accessory pair for ~0.13 ms, and on a plain boot a host and a dock negotiating through the K2 can see it.
@@ -2576,7 +2661,7 @@ void poll() {
         else if (got && g_linefb.update(now_ms, line_fallback_eligible(), (status0 & kComp) != 0, g_vbus_mv < pd::kDarkVbusMv,
                                         line_fallback_other_rp()))
             line_fallback_move();
-        else if (got && g_detach.update(systick::millis(), g_vbus_mv,
+        else if (got && g_detach.update(systick::millis(), g_iq.resetting() ? -1 : g_vbus_mv,   // an interrogation's reset drops VBUS on purpose
                                         (status0 & kComp) != 0 || g_rdseek.holding_slow(systick::millis(), g_active_cc) ||
                                             g_idle_wake.holding_slow(systick::millis(), g_active_cc, g_rdseek.open_mv(g_active_cc)),
                                         sink_ok)) {
@@ -2625,6 +2710,7 @@ void service() {
             g_ident.abort(pd::IdWhy::HardReset);
             g_probe.abort();
             g_reread.on_link_reset();   // an attach still waiting for its contract goes on: the sink re-requests after a hard reset
+            g_iq.on_hard_reset(systick::millis());   // the charger's or the device's: a run sniffs the renegotiation and goes on
         }
 
         g_rx_empty = true;
@@ -2673,6 +2759,7 @@ void service() {
     }
     if (g_active_cc != 0) active_tick();
     else if (g_reread.running()) g_reread.tick(systick::millis(), false, reread_link());   // an attach whose source has not shown yet: its wait still ends
+    iq_report();   // also after a detach ended a run
     reread_housekeeping(systick::millis());
     ident_result_gate(systick::millis());
     // An alone-Identify runs its first VDM only on a Ready contract of this attach, settled kIdentSettleMs:
@@ -3139,6 +3226,32 @@ bool identify_current() {
     return g_ident_session == g_session.id() || g_ident_alone_hold;
 }
 const pd::Identity& identify_identity() { return g_ident_identity; }
+
+pd::IqRefusal interrogate_start(const pd::IqFacts& outside) {
+    pd::IqFacts f = outside;
+    f.cc = g_active_cc != 0;
+    f.inline_link = inline_now();
+    f.busy = f.busy || g_ident.running() || g_ident_wait || g_probe.running() || g_reread.running() || g_prep.active() ||
+             g_vconn.state() != pd::VconnState::Off || g_getcap_armed || g_sop_prime_hook != nullptr;
+    const pd::SinkStatus& ss = g_sink.status();
+    f.own_contract = f.own_contract || ss.held || (ss.state != pd::SinkState::Idle && ss.state != pd::SinkState::Failed);
+    f.self_powered = f.self_powered || self_powered();
+    const std::uint32_t now = systick::millis();
+    const pd::IqRefusal r = g_iq.start(f, now);
+    if (r == pd::IqRefusal::None) {
+        g_iq_phase = pd::IqPhase::Idle;   // the start is reported even when the previous run ended in the same phase
+        K2LOG("[IQ] t=%u started (contract sniffed: %u, source id %u)\n", unsigned(now), unsigned(g_iq.watch().contract().ready),
+              unsigned(g_iq.watch().next_id()));
+    } else {
+        K2LOG("[IQ] refused: %s\n", pd::iq_refusal_name(r));
+    }
+    return r;
+}
+void interrogate_abort() {
+    if (g_iq.running()) g_iq.abort(pd::IqWhy::Stopped, systick::millis());
+}
+bool interrogate_running() { return g_iq.running(); }
+const pd::IqStatus& interrogate_status() { return g_iq.status(); }
 
 void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> payload) {
     handle_frame(sop == 1 ? pd::Sop::SopP : sop == 2 ? pd::Sop::SopPP : pd::Sop::Sop, header, payload, false);

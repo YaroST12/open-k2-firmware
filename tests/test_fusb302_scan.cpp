@@ -4290,6 +4290,7 @@ void test_inline_vdm_probe_refused() {
 
 void test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();
 void test_request_period_is_tracked_and_reset_with_the_attach();
+void test_inline_interrogation_asks_once_per_question_without_auto_crc();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5411,6 +5412,7 @@ int main() {
     test_silent_cable_alone_reports_where_the_chips_pull_down_is();
     test_a_chipless_cable_and_an_empty_port_get_none_and_a_held_key_is_unclear();
     test_the_verdict_is_not_probed_when_it_cannot_or_need_not_be_taken();    // last: ends with an attached source
+    test_inline_interrogation_asks_once_per_question_without_auto_crc();     // starts from attach_inline, ends with a detach
     return test_report("test_fusb302_scan");
 }
 
@@ -5455,4 +5457,82 @@ void test_request_period_is_tracked_and_reset_with_the_attach() {
     CHECK_EQ(fusb302::request_period_ms(), 0);                             // a new attach starts over
     clean_up_rd_tests();
     power_cycle_forget_pin();
+}
+
+// ---- inline interrogation (k2/pd/pd_interrogate.hpp) on the fake chip: the only inline transmitter ----
+
+// Every SOP frame header loaded into the TX FIFO, in order (from the FIFO log lines).
+std::vector<unsigned> tx_headers() {
+    std::vector<unsigned> out;
+    for (const std::string& s : g_log) {
+        if (s.rfind("FIFO 12 12 12 13 ", 0) != 0) continue;
+        const unsigned lo = unsigned(std::stoul(s.substr(20, 2), nullptr, 16)), hi = unsigned(std::stoul(s.substr(23, 2), nullptr, 16));
+        out.push_back(lo | (hi << 8));
+    }
+    return out;
+}
+
+// The Canon on its own charger (runs/clone-canon): a fresh contract sniffed, the device asked with the next MessageID, each
+// question sent once with the chip's retries off and Auto-CRC never on, the device's answers taken; a stop sends the final
+// Hard Reset. Red first: the driver had no inline transmitter at all.
+void test_inline_interrogation_asks_once_per_question_without_auto_crc() {
+    attach_inline();
+    // refused without the confirm, and never without the inline latch
+    pd::IqFacts f;
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::NeedConfirm));
+    f.confirmed = true;
+    fusb302::set_inline(false);
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::NotInline));
+    fusb302::set_inline(true);
+    f.busy = true;   // the caller's owners (charger test, SVOOC, PD Stress)
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::Busy));
+    f.busy = false;
+    // the contract, as the K2 sniffs it: caps id 0, Request id 0, Accept id 1, PS_RDY id 2
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(2);
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::None));
+    CHECK_EQ(fusb302::interrogate_running(), true);
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::Running));   // one at a time
+    for (int i = 0; i < 600 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
+    std::vector<unsigned> h = tx_headers();
+    CHECK_EQ(h.size(), 1u);
+    CHECK_EQ(hard_reset_written(), false);                                 // a fresh contract: no first reset
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 3u);                        // the source's next MessageID
+    CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 15u);                           // Vendor_Defined: Discover Identity
+    CHECK_EQ(h.empty() ? 0u : (h[0] >> 8) & 1, 1u);                        // as the source
+    const int ctl3_off = find_from("W 09=00");
+    CHECK_EQ(ctl3_off >= 0, true);                                         // chip retries off for this frame
+    CHECK_EQ(find_from("W 09=07", std::size_t(ctl3_off < 0 ? 0 : ctl3_off)) > ctl3_off, true);   // and back after it
+    for (const std::string& s : g_log)                                     // Auto-CRC (SWITCHES1 bit 2) never on
+        if (s.rfind("W 03=", 0) == 0) CHECK_EQ((std::stoul(s.substr(5), nullptr, 16) & 0x04u), 0u);
+    // the device answers (sink role): the identity, then the next question goes out with the next id
+    push_frame(0xE0, hdr(1, 0, false, 3), {});                             // its GoodCRC
+    push_frame(0xE0, std::uint16_t(hdr(15, 4, false, 1)), {0xFF00A041u, (2u << 27) | 0x04A9u, 0, 0x30010100u});
+    for (int i = 0; i < 400 && tx_headers().size() < 2; i++) { g_ms += 1; fusb302::service(); }
+    h = tx_headers();
+    CHECK_EQ(h.size(), 2u);
+    CHECK_EQ(h.size() < 2 ? 0u : (h[1] >> 9) & 7, 4u);
+    CHECK_EQ(h.size() < 2 ? 0u : h[1] & 0x1F, 8u);                         // Get_Sink_Cap
+    CHECK_EQ(fusb302::interrogate_status().id.valid, true);
+    CHECK_EQ(int(fusb302::interrogate_status().id.vid), 0x04A9);
+    // a stop owes the final Hard Reset (a question went out)
+    fusb302::sink_vbus(5000);
+    fusb302::poll();                                                       // the detach rule has seen VBUS up
+    fusb302::interrogate_abort();
+    for (int i = 0; i < 50 && !hard_reset_written(); i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(hard_reset_written(), true);
+    CHECK_EQ(usb_has("[IQ] t="), true);
+    // the charger drops VBUS for longer than the 1 s detach rule while it recovers: no detach, the run waits for its contract
+    for (int i = 0; i < 75; i++) { g_ms += 20; fusb302::sink_vbus(0); fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::active_cc() != 0, true);
+    CHECK_EQ(fusb302::interrogate_running(), true);
+    // no renegotiation follows in this fake: the run ends on its own, and a detach ends whatever is left
+    for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(fusb302::interrogate_running(), false);
+    CHECK_EQ(usb_has("[IQ] end "), true);
+    end_inline_case();
 }

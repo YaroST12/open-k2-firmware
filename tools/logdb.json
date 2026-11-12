@@ -620,6 +620,13 @@
   "623": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n",
   "624": "[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
   "625": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us\n",
-  "626": "[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n"
+  "626": "[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n",
+  "627": "[IQ] t=%u TX type %u id %u rev %u: %s (%d ms)\n",
+  "628": "[IQ] t=%u %s, step %s\n",
+  "629": "[IQ] end %s (%s), contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X, %u sent, %u device GoodCRC, resets %u sent %u seen\n",
+  "630": "[IQ] contracts: first pos %u RDO 0x%08X PDO 0x%08X, second pos %u RDO 0x%08X PDO 0x%08X\n",
+  "631": "[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n",
+  "632": "[IQ] t=%u started (contract sniffed: %u, source id %u)\n",
+  "633": "[IQ] refused: %s\n"
  }
 }
