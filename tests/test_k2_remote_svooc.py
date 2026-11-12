@@ -137,6 +137,13 @@ class NamesMatchFirmware(unittest.TestCase):
     def test_aborts(self):
         self.assertEqual(self.names("Abort"), kr.SVOOC_ABORTS)
 
+    def test_contracts_and_summary_decode(self):
+        self.assertEqual(self.names("Contract"), kr.SVOOC_CONTRACTS)
+        p = bytearray(summary())
+        p[33], p[34] = 1, 0
+        s = kr.decode_svooc_summary(bytes(p))
+        self.assertEqual((s["contract_start"], s["contract_end"]), ("own 5 V", "none"))
+
     def test_stages_and_phases(self):
         run = (ROOT / "include/k2/fastcharge/svooc_run.hpp").read_text()
         stages = re.search(r"enum class Stage : std::uint8_t \{(.*?)\};", run, re.S).group(1)

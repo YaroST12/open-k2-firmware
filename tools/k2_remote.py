@@ -2474,16 +2474,17 @@ def render_vooc(v):
 # polling, sends `stop` on Ctrl-C and prints the report. The name lists follow svooc_run.hpp / svooc_script.hpp in order.
 FC_OP_SVOOC = 5
 SVOOC_STATUS, SVOOC_START, SVOOC_STOP = 0, 1, 2
-SVOOC_SUMMARY_BYTES = 33
+SVOOC_SUMMARY_BYTES = 35
 SVOOC_PAIRS_PER_PAGE = 16
 SVOOC_PAGES = 4                 # summary + 3 pair pages
 SVOOC_CAP_MAX_S = 20
 SVOOC_NO_WORD = 0xFFFF
 SVOOC_STAGES = ["idle", "wake", "listen", "rest", "answer", "exit", "done"]
 SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no power monitor", "sink on the bottom port",
-                  "inline mode", "PD contract held", "current over 50 mA", "VBUS not 5 V", "no RAM: USB drive enabled"]
+                  "inline mode", "PD contract not own 5 V", "current over 50 mA", "VBUS not 5 V", "no RAM: USB drive enabled"]
 SVOOC_ABORTS = ["none", "VBUS over 12 V", "current over 50 mA", "charger off-script", "host gone", "power monitor lost",
-                "sink appeared", "PD contract appeared", "D+/D- edge storm", "no adapter answer", "time cap", "stopped"]
+                "sink appeared", "PD contract appeared", "D+/D- edge storm", "no adapter answer", "time cap", "stopped", "PD contract lost", "PD contract changed"]
+SVOOC_CONTRACTS = ["none", "own 5 V", "other"]
 SVOOC_PHASES = ["ident", "handshake", "ramp"]
 
 
@@ -2506,7 +2507,8 @@ def decode_svooc_summary(p):
             "driving": bool(p[4] & 8), "phase": name(SVOOC_PHASES, p[5]), "off_run": p[6], "last_cmd": f"0x{p[7]:02X}",
             "commands": u16(8), "replies": u16(10), "missed": u16(12), "cut": u16(14), "partials": u16(16),
             "pairs_total": u16(18), "pairs_kept": p[20], "cap_ms": u16(21), "elapsed_ms": u16(23),
-            "vbus_start_mv": u16(25), "vbus_max_mv": u16(27), "vbus_exit_mv": u16(29), "ibus_max_ma": u16(31)}
+            "vbus_start_mv": u16(25), "vbus_max_mv": u16(27), "vbus_exit_mv": u16(29), "ibus_max_ma": u16(31),
+            "contract_start": name(SVOOC_CONTRACTS, p[33]), "contract_end": name(SVOOC_CONTRACTS, p[34])}
 
 
 def decode_svooc_pairs(p):
@@ -2571,6 +2573,7 @@ def render_svooc(s):
                 f"{s['vbus_exit_mv']} mV" + ("" if s["exit_ok"] else " - STILL ABOVE 5.5 V after the exit watch"))
     lines.append(f"  VBUS start {s['vbus_start_mv']} mV, max {s['vbus_max_mv']} mV, exit {exit_txt}; "
                  f"max |I| {s['ibus_max_ma']} mA")
+    lines.append(f"  PD contract: start {s['contract_start']}, end {s['contract_end']}")
     if s["pairs"]:
         words = [f"{p['cmd'][2:]}>{p['word'][2:] if p['word'] else '---'}" for p in s["pairs"]]
         lines.append(f"  pairs ({len(words)} of {s['pairs_total']}, cmd>reply, --- = not answered):")
@@ -4217,7 +4220,8 @@ def build_parser():
     sfvs.add_argument("--off", action="store_true", help="disable it; the lines go back to the passive idle")
     # svooc-trigger
     sfsv = sfs.add_parser("svooc-trigger", help="guarded NO-LOAD SuperVOOC trigger: answers a SUPERVOOC adapter on D- "
-                          "with the captured phone words, aborts above 12 V or 50 mA; polls until it ends, Ctrl-C stops")
+                          "with the captured phone words, aborts above 12 V or 50 mA; refuses any PD contract but the K2's own "
+                          "5 V one and aborts if it changes or is lost; polls until it ends, Ctrl-C stops")
     sfsv.add_argument("--confirm", action="store_true", help="required: the adapter may raise VBUS (up to the 12 V guard)")
     sfsv.add_argument("--cap", type=_svooc_cap, default=0, metavar="SECONDS",
                       help=f"run-time cap 1..{SVOOC_CAP_MAX_S} s (0 or omitted = {SVOOC_CAP_MAX_S} s)")

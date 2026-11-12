@@ -280,11 +280,21 @@ Three pure parts (host-tested) and one glue file:
 - Guards and session (`include/k2/fastcharge/svooc_run.hpp`, `tests/test_svooc_run.cpp`). Refuses to start without
   the confirm flag, while D+/D- are owned (engine, scan, probe, charger test, sniffer, monitor, a line not at idle),
   without the host link or the power monitor, with a sink on the bottom port (Rd on CC) or inline mode, with a PD
-  contract, with |I| > 50 mA, with VBUS outside 4.5-5.5 V, or when the shared RAM belongs to the USB drive (reported as
+  contract other than the K2's own 5 V one (see below), with |I| > 50 mA, with VBUS outside 4.5-5.5 V, or when the shared RAM belongs to the USB drive (reported as
   "no RAM: USB drive enabled", not "busy"). While running, every main-loop pass aborts on: host gone, monitor lost,
-  VBUS > 12.0 V (12.0 V itself runs), |I| > 50 mA, a sink or inline device appearing, a PD contract appearing, an edge
+  VBUS > 12.0 V (12.0 V itself runs), |I| > 50 mA, a sink or inline device appearing, a PD contract appearing, changing or being lost, an edge
   storm on D+/D-, the charger off-script for more than 2 frames, the run-time cap (20 s, shorter on request). The
-  lease expiring or the host's `stop` ends it as "stopped". Wake / listen as the detection (burst, 1.5 s listen, 3 s
+  lease expiring or the host's `stop` ends it as "stopped".
+- The K2's own 5 V contract (hardware 2026-11-12): the OnePlus SUPERVOOC 120 W USB-C port keeps VBUS at 0 V until it sees
+  Rd, so on USB-C the K2 pins Rd (`pd-reread --pin 1 --no-run`) and then auto-holds a PD contract (PDO 1, 5 V; the real
+  phone does the same before SuperVOOC takes over on D+/D-). That contract is allowed at the start and during the run:
+  held by the K2's own sink, Ready, position 1 (the fixed 5 V PDO), at or under 5.0 V, not EPR, not inline, no far sink
+  (`svooc::classify`). Any other contract (above 5 V, PPS / AVS, EPR, one a far sink or an inline charger holds, one only
+  decoded passively, one mid-renegotiation) is refused at the start as "PD contract not own 5 V". During the run the
+  contract changing to anything else aborts as "PD contract changed", and losing it (hard reset, detach) as "PD contract
+  lost": the D+/D- session is meaningless then. The report carries the contract at the start and at the end
+  (`none` / `own 5 V` / `other`). The exit never touches the contract or the Rd pin; the main session releases them
+  (`pd-reread --pin 0`). Wake / listen as the detection (burst, 1.5 s listen, 3 s
   rest, 3 tries), "no adapter answer" after that.
 - Exit, always: stop answering, release D-, both lines to the passive idle; then watch VBUS for 5 s. Back at or under
   5.5 V is reported as such, still higher as "STILL ABOVE 5.5 V" with the reading. Report: highest VBUS, highest |I|,

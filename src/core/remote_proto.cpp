@@ -457,6 +457,7 @@ size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v, uint8_t page
         w.u16(u16c(lg.partials)); w.u16(u16c(lg.pairs_total)); w.u8(static_cast<uint8_t>(lg.n));
         w.u16(u16c(r.cap_ms)); w.u16(u16c(r.elapsed_ms)); w.u16(u16c(r.vbus_start_mv)); w.u16(u16c(r.vbus_max_mv));
         w.u16(u16c(r.vbus_exit_mv)); w.u16(u16c(r.ibus_max_ma));
+        w.u8(static_cast<uint8_t>(r.contract_start)); w.u8(static_cast<uint8_t>(r.contract_end));
         return w.size();
     }
     const size_t from = (page - 1u) * kSvoocPairsPerPage;

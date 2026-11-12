@@ -10,14 +10,18 @@
 //   - D+/D- are free (no trigger, scan, charger test or sniffer of another owner);
 //   - the power monitor reads VBUS and current;
 //   - no sink is on the bottom port (Rd on CC) and the link is not inline (a device behind the K2);
-//   - no PD contract is held;
+//   - no PD contract, except the K2's own: it holds it as the sink, a fixed PDO at or under 5.0 V (position 1, Ready,
+//     not EPR, not inline, no far sink). A USB-C adapter such as the OnePlus SUPERVOOC port keeps VBUS at 0 V until it
+//     sees Rd, so the K2 always has that contract, and the real phone does too before SuperVOOC takes over on D+/D-;
 //   - |I| <= kCurrentMaxMa;
 //   - VBUS is about 5 V (kFiveMinMv .. kFiveMaxMv);
 //   - the mode RAM is free (the recorder of the session's edges; the USB drive borrows it).
 // While it runs, every poll checks, in this order, and the first that fails ends it (abort, one Next::Release):
 //   host gone (lease expiry and USB drop come in as stop()), monitor lost, VBUS > kVbusMaxMv, |I| > kCurrentMaxMa,
-//   a sink or inline device appears, a PD contract appears, an edge storm on D+/D-, the charger off-script for more
-//   than two frames in a row (the wire stopped), the run-time cap.
+//   a sink or inline device appears, a PD contract appears (started without one) or changes to anything but the same
+//   own 5 V one, or is lost (hard reset, detach: the D+/D- session is meaningless then), an edge storm on D+/D-, the
+//   charger off-script for more than two frames in a row (the wire stopped), the run-time cap. The K2 never touches the
+//   contract or the Rd pin itself: the main session releases them.
 // Exit always means: stop answering, let D- go, both lines back to passive idle. Then the run watches VBUS for
 // kExitWatchMs: back at or under kExitOkMv is exit_ok; still above when the watch ends is reported with the reading.
 #pragma once
@@ -45,7 +49,7 @@ enum class Refusal : std::uint8_t {
     NoMonitor,      // the power monitor gives no VBUS or current
     Sink,           // a sink (Rd) on the bottom port
     Inline,         // a device behind the K2 (inline mode)
-    PdContract,     // a PD contract is held
+    PdContract,     // a PD contract is held that is not the K2's own 5 V fixed one
     Current,        // |I| > kCurrentMaxMa
     NotFiveVolts,   // VBUS outside kFiveMinMv .. kFiveMaxMv
     NoRam,          // the mode RAM is lent out (the USB drive is on)
@@ -64,7 +68,34 @@ enum class Abort : std::uint8_t {
     NoAdapter,      // no command after kWakeTries wakes
     TimeCap,        // the run-time cap
     Stopped,        // stop(): the lease, the remote's stop, BACK
+    ContractLost,   // the own 5 V contract went away (hard reset, detach)
+    ContractChanged,// the own 5 V contract became another one
 };
+
+// The PD contract as the guards see it.
+enum class Contract : std::uint8_t {
+    None = 0,   // no PD contract
+    Own5V,      // the K2's own: it holds it as sink, a fixed PDO at or under 5.0 V
+    Other,      // any other: above 5 V, PPS / AVS / EPR, held by a far sink or inline, passively decoded, mid-renegotiation
+};
+
+// The facts classify() reads (the glue fills them from the link probe and the sink status).
+struct ContractFacts {
+    bool pd_active = false;       // PD traffic or a decoded contract on CC
+    bool held = false;            // the K2's own sink holds a contract (SinkStatus::held)
+    bool ready = false;           // SinkState::Ready
+    bool epr_mode = false;
+    bool inline_mode = false;     // a device behind the K2
+    bool far_sink = false;        // a far sink draws through the K2
+    std::uint8_t pos = 0;         // object position of the contract (1 = the 5 V fixed PDO; 2+ may be PPS / AVS)
+    std::uint16_t mv = 0;
+};
+
+constexpr Contract classify(const ContractFacts& c) {
+    if (!c.pd_active && !c.held) return Contract::None;
+    const bool own = c.held && c.ready && !c.epr_mode && !c.inline_mode && !c.far_sink && c.pos == 1 && c.mv <= 5000;
+    return own ? Contract::Own5V : Contract::Other;
+}
 
 enum class Stage : std::uint8_t {
     Idle,     // never started, or refused
@@ -93,7 +124,7 @@ struct StartFacts {
     std::int32_t ibus_ma = 0;     // signed: either direction counts
     bool far_sink = false;
     bool inline_mode = false;
-    bool pd_contract = false;
+    Contract contract = Contract::None;
     bool ram_free = false;
 };
 
@@ -105,7 +136,7 @@ struct Sample {
     std::int32_t ibus_ma = 0;
     bool far_sink = false;
     bool inline_mode = false;
-    bool pd_contract = false;
+    Contract contract = Contract::None;
     bool storm = false;
     bool off_script = false;      // Wire::stopped(): the responder aborted
     std::uint32_t commands = 0;   // Log::commands so far
@@ -126,6 +157,8 @@ struct Report {
     bool exit_checked = false;
     bool exit_ok = false;            // VBUS came back to <= kExitOkMv
     std::int32_t vbus_exit_mv = 0;   // the reading that ended the exit watch
+    Contract contract_start = Contract::None;   // the contract at the start
+    Contract contract_end = Contract::None;     // the latest sample's contract (the end of the run, the exit watch included)
 };
 
 // Log and report names (tools/k2_remote.py keeps the same lists, in the same order).
@@ -138,7 +171,7 @@ constexpr const char* name(Refusal r) {
     case Refusal::NoMonitor: return "no power monitor";
     case Refusal::Sink: return "sink on the bottom port";
     case Refusal::Inline: return "inline mode";
-    case Refusal::PdContract: return "PD contract held";
+    case Refusal::PdContract: return "PD contract not own 5 V";
     case Refusal::Current: return "current over 50 mA";
     case Refusal::NotFiveVolts: return "VBUS not 5 V";
     case Refusal::NoRam: return "no RAM: USB drive enabled";
@@ -160,6 +193,17 @@ constexpr const char* name(Abort a) {
     case Abort::NoAdapter: return "no adapter answer";
     case Abort::TimeCap: return "time cap";
     case Abort::Stopped: return "stopped";
+    case Abort::ContractLost: return "PD contract lost";
+    case Abort::ContractChanged: return "PD contract changed";
+    }
+    return "?";
+}
+
+constexpr const char* name(Contract c) {
+    switch (c) {
+    case Contract::None: return "none";
+    case Contract::Own5V: return "own 5 V";
+    case Contract::Other: return "other";
     }
     return "?";
 }
@@ -173,7 +217,7 @@ constexpr Refusal refusal(const StartFacts& f) {
     if (!f.vbus_known || !f.current_known) return Refusal::NoMonitor;
     if (f.far_sink) return Refusal::Sink;
     if (f.inline_mode) return Refusal::Inline;
-    if (f.pd_contract) return Refusal::PdContract;
+    if (f.contract == Contract::Other) return Refusal::PdContract;
     if (magnitude(f.ibus_ma) > kCurrentMaxMa) return Refusal::Current;
     if (f.vbus_mv < kFiveMinMv || f.vbus_mv > kFiveMaxMv) return Refusal::NotFiveVolts;
     if (!f.ram_free) return Refusal::NoRam;
@@ -191,6 +235,7 @@ public:
         report_.cap_ms = (cap_ms == 0 || cap_ms > kCapMs) ? kCapMs : cap_ms;
         report_.vbus_start_mv = report_.vbus_max_mv = f.vbus_mv;
         report_.ibus_max_ma = magnitude(f.ibus_ma);
+        report_.contract_start = report_.contract_end = start_contract_ = f.contract;
         start_t_ = now_ms;
         stage_ = Stage::Wake;
         return Refusal::None;
@@ -234,6 +279,7 @@ public:
 
 private:
     void track(const Sample& s) {
+        report_.contract_end = s.contract;
         if (s.vbus_known) report_.vbus_max_mv = std::max(report_.vbus_max_mv, s.vbus_mv);
         if (s.current_known) report_.ibus_max_ma = std::max(report_.ibus_max_ma, magnitude(s.ibus_ma));
     }
@@ -244,7 +290,11 @@ private:
         if (s.vbus_mv > kVbusMaxMv) return Abort::Overvoltage;
         if (magnitude(s.ibus_ma) > kCurrentMaxMa) return Abort::Current;
         if (s.far_sink || s.inline_mode) return Abort::Sink;
-        if (s.pd_contract) return Abort::PdContract;
+        if (s.contract != start_contract_) {
+            if (start_contract_ != Contract::Own5V) return Abort::PdContract;   // none at the start: one appeared
+            return s.contract == Contract::None ? Abort::ContractLost : Abort::ContractChanged;
+        }
+        if (s.contract == Contract::Other) return Abort::PdContract;   // (a run never starts with one)
         if (s.storm) return Abort::Storm;
         if (s.off_script) return Abort::OffScript;
         if (s.now_ms - start_t_ >= report_.cap_ms) return Abort::TimeCap;
@@ -277,6 +327,7 @@ private:
     }
 
     Stage stage_ = Stage::Idle;
+    Contract start_contract_ = Contract::None;
     Report report_;
     std::uint32_t start_t_ = 0, stage_t_ = 0;
     std::int32_t last_vbus_ = 0;

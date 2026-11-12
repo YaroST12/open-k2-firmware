@@ -1162,13 +1162,13 @@ static void test_fc_svooc_trigger() {
     // Refused for the RAM: Busy, the summary carries the reason, no lease.
     f.svooc_refusal = k2::svooc::Refusal::NoRam;
     CHECK_EQ(run(f, request(0x32, 8, {5, 1, 1, 0}), r), 1);
-    check_header(r, 0x32, 8, Status::Busy, 33);
+    check_header(r, 0x32, 8, Status::Busy, 35);
     CHECK_EQ(r[kRspHeader + 1], static_cast<uint8_t>(k2::svooc::Refusal::NoRam));
     CHECK_EQ(f.lease_arms, 0);
     // Accepted with a 12 s cap: Ok, the lease armed once.
     f.svooc_refusal = k2::svooc::Refusal::None;
     CHECK_EQ(run(f, request(0x32, 9, {5, 1, 1, 12}), r), 1);
-    check_header(r, 0x32, 9, Status::Ok, 33);
+    check_header(r, 0x32, 9, Status::Ok, 35);
     CHECK_EQ(f.svooc_cap, 12);
     CHECK_EQ(f.lease_arms, 1);
     CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(k2::svooc::Stage::Wake));
@@ -1178,17 +1178,18 @@ static void test_fc_svooc_trigger() {
     rep.abort = k2::svooc::Abort::Overvoltage; rep.tries = 1; rep.accepted = true; rep.exit_checked = true;
     rep.exit_ok = false; rep.cap_ms = 20000; rep.elapsed_ms = 3456; rep.vbus_start_mv = 5100; rep.vbus_max_mv = 12001;
     rep.vbus_exit_mv = 9000; rep.ibus_max_ma = 7;
+    rep.contract_start = k2::svooc::Contract::Own5V; rep.contract_end = k2::svooc::Contract::Other;
     f.svooc_snap.phase = k2::svooc::Phase::Ramp; f.svooc_snap.off_run = 1; f.svooc_snap.driving = true;
     k2::svooc::Log &lg = f.svooc_snap.log;
     lg.commands = 30; lg.replies = 29; lg.missed = 1; lg.cut = 0; lg.partials = 2; lg.pairs_total = 31; lg.last_cmd = 0x82;
     for (unsigned i = 0; i < 18; i++) lg.pairs[i] = {static_cast<uint8_t>(0x80 + i), static_cast<uint16_t>(0x100 + i)};
     lg.n = 18;
     CHECK_EQ(run(f, request(0x32, 10, {5, 0, 0}), r), 1);
-    check_header(r, 0x32, 10, Status::Ok, 33);
+    check_header(r, 0x32, 10, Status::Ok, 35);
     check_bytes(r, kRspHeader, {static_cast<uint8_t>(k2::svooc::Stage::Exit), 0, static_cast<uint8_t>(k2::svooc::Abort::Overvoltage),
                                 1, 0x0B, static_cast<uint8_t>(k2::svooc::Phase::Ramp), 1, 0x82,
                                 30, 0, 29, 0, 1, 0, 0, 0, 2, 0, 31, 0, 18,
-                                0x20, 0x4E, 0x80, 0x0D, 0xEC, 0x13, 0xE1, 0x2E, 0x28, 0x23, 7, 0});
+                                0x20, 0x4E, 0x80, 0x0D, 0xEC, 0x13, 0xE1, 0x2E, 0x28, 0x23, 7, 0, 1, 2});
     // Pair pages: 16 on page 1, the last 2 on page 2, none on page 3.
     CHECK_EQ(run(f, request(0x32, 11, {5, 0, 1}), r), 1);
     check_header(r, 0x32, 11, Status::Ok, 3 + 3 * 16);
@@ -1200,7 +1201,7 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 13, Status::Ok, 3);
     // Stop.
     CHECK_EQ(run(f, request(0x32, 14, {5, 2}), r), 1);
-    check_header(r, 0x32, 14, Status::Ok, 33);
+    check_header(r, 0x32, 14, Status::Ok, 35);
     CHECK_EQ(f.svooc_stops, 1);
     CHECK_EQ(r[kRspHeader + 2], static_cast<uint8_t>(k2::svooc::Abort::Stopped));
     CHECK_EQ(f.lease_arms, 1);

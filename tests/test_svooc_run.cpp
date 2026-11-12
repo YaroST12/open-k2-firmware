@@ -50,7 +50,7 @@ void test_start_refusals() {
         {[](svooc::StartFacts& f) { f.current_known = false; }, Refusal::NoMonitor},
         {[](svooc::StartFacts& f) { f.far_sink = true; }, Refusal::Sink},
         {[](svooc::StartFacts& f) { f.inline_mode = true; }, Refusal::Inline},
-        {[](svooc::StartFacts& f) { f.pd_contract = true; }, Refusal::PdContract},
+        {[](svooc::StartFacts& f) { f.contract = svooc::Contract::Other; }, Refusal::PdContract},
         {[](svooc::StartFacts& f) { f.ibus_ma = 51; }, Refusal::Current},
         {[](svooc::StartFacts& f) { f.ibus_ma = -51; }, Refusal::Current},
         {[](svooc::StartFacts& f) { f.vbus_mv = 4499; }, Refusal::NotFiveVolts},
@@ -153,7 +153,7 @@ void test_every_abort() {
     CHECK_EQ(abort_after([](svooc::Sample& s) { s.current_known = false; }), Abort::NoMonitor);
     CHECK_EQ(abort_after([](svooc::Sample& s) { s.far_sink = true; }), Abort::Sink);
     CHECK_EQ(abort_after([](svooc::Sample& s) { s.inline_mode = true; }), Abort::Sink);
-    CHECK_EQ(abort_after([](svooc::Sample& s) { s.pd_contract = true; }), Abort::PdContract);
+    CHECK_EQ(abort_after([](svooc::Sample& s) { s.contract = svooc::Contract::Other; }), Abort::PdContract);   // appeared
     CHECK_EQ(abort_after([](svooc::Sample& s) { s.storm = true; }), Abort::Storm);
     // the guards hold in every stage, also while listening after a wake
     svooc::Run r;
@@ -228,10 +228,133 @@ void test_exit_check() {
     CHECK(h.report().ibus_max_ma >= 2);
 }
 
+
+// The K2's own 5 V contract (a USB-C charger that wakes on Rd): allowed at the start and while it runs; any other contract
+// is refused, one that changes or goes away aborts, and the report carries the contract at the start and at the end.
+svooc::ContractFacts own5v() {
+    svooc::ContractFacts c;
+    c.pd_active = c.held = c.ready = true;
+    c.pos = 1;
+    c.mv = 5000;
+    return c;
+}
+
+void test_contract_classification() {
+    using svooc::Contract;
+    CHECK_EQ(svooc::classify(svooc::ContractFacts{}), Contract::None);
+    CHECK_EQ(svooc::classify(own5v()), Contract::Own5V);
+    svooc::ContractFacts c = own5v();
+    c.mv = 4900;                       // vSafe5V band: a fixed 5 V PDO reads at or under 5000
+    CHECK_EQ(svooc::classify(c), Contract::Own5V);
+    c = own5v(); c.mv = 9000; c.pos = 2;
+    CHECK_EQ(svooc::classify(c), Contract::Other);        // above 5 V
+    c = own5v(); c.mv = 5001;
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+    c = own5v(); c.pos = 3;                               // a PPS / AVS object, even asked at 5 V
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+    c = own5v(); c.epr_mode = true;
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+    c = own5v(); c.inline_mode = true;                    // a charger behind the K2 / a far sink holds it
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+    c = own5v(); c.far_sink = true;
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+    c = own5v(); c.held = false;                          // decoded passively, not the K2's request
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+    c = own5v(); c.ready = false;                         // mid-renegotiation
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+    c = svooc::ContractFacts{}; c.pd_active = true;       // PD seen, nothing of ours
+    CHECK_EQ(svooc::classify(c), Contract::Other);
+}
+
+void test_own_contract_start() {
+    svooc::StartFacts f = ok_start();
+    f.contract = svooc::Contract::Own5V;
+    CHECK_EQ(svooc::refusal(f), Refusal::None);
+    f.contract = svooc::Contract::Other;                  // 9 V, PPS, EPR, a far holder
+    CHECK_EQ(svooc::refusal(f), Refusal::PdContract);
+    f.contract = svooc::Contract::Own5V;
+    f.inline_mode = true;                                 // inline is refused whatever the contract
+    CHECK_EQ(svooc::refusal(f), Refusal::Inline);
+    f.inline_mode = false; f.far_sink = true;
+    CHECK_EQ(svooc::refusal(f), Refusal::Sink);
+}
+
+svooc::Run own_run(std::uint32_t& t) {
+    svooc::Run r;
+    svooc::StartFacts f = ok_start();
+    f.contract = svooc::Contract::Own5V;
+    r.start(f, 0);
+    t = 0;
+    return r;
+}
+
+svooc::Sample own_sample(std::uint32_t now) {
+    svooc::Sample s = ok_sample(now);
+    s.contract = svooc::Contract::Own5V;
+    return s;
+}
+
+void test_own_contract_runs_and_aborts() {
+    using svooc::Contract;
+    std::uint32_t t;
+    svooc::Run r = own_run(t);
+    CHECK_EQ(r.poll(own_sample(0)), Next::Wake);
+    svooc::Sample s = own_sample(500);
+    s.commands = 3;
+    CHECK_EQ(r.poll(s), Next::None);
+    s.now_ms = 900;
+    s.vbus_mv = 9000;                                     // the adapter raises VBUS; the 5 V contract stays
+    CHECK_EQ(r.poll(s), Next::None);
+    CHECK_EQ(r.stage(), Stage::Answer);
+    CHECK_EQ(r.report().contract_start, Contract::Own5V);
+    CHECK_EQ(r.report().contract_end, Contract::Own5V);
+
+    // renegotiation to anything but the same 5 V fixed PDO aborts
+    svooc::Run c = own_run(t);
+    c.poll(own_sample(0));
+    s = own_sample(300);
+    s.contract = Contract::Other;
+    CHECK_EQ(c.poll(s), Next::Release);
+    CHECK_EQ(c.report().abort, Abort::ContractChanged);
+    CHECK_EQ(c.report().contract_start, Contract::Own5V);
+    CHECK_EQ(c.report().contract_end, Contract::Other);
+    CHECK(std::string_view(svooc::name(Abort::ContractChanged)) == "PD contract changed");
+
+    // lost (hard reset, detach)
+    svooc::Run l = own_run(t);
+    l.poll(own_sample(0));
+    s = own_sample(300);
+    s.contract = Contract::None;
+    CHECK_EQ(l.poll(s), Next::Release);
+    CHECK_EQ(l.report().abort, Abort::ContractLost);
+    CHECK_EQ(l.report().contract_end, Contract::None);
+    CHECK(std::string_view(svooc::name(Abort::ContractLost)) == "PD contract lost");
+    s.now_ms = 320;
+    CHECK_EQ(l.poll(s), Next::None);                      // one Release only
+
+    // no contract at the start: any contract appearing aborts, as before; an own one counts too
+    svooc::Run a;
+    a.start(ok_start(), 0);
+    a.poll(ok_sample(0));
+    s = own_sample(300);
+    CHECK_EQ(a.poll(s), Next::Release);
+    CHECK_EQ(a.report().abort, Abort::PdContract);
+    CHECK_EQ(a.report().contract_start, Contract::None);
+    CHECK_EQ(a.report().contract_end, Contract::Own5V);
+
+    // the other guards keep running under an own contract
+    svooc::Run o = own_run(t);
+    o.poll(own_sample(0));
+    s = own_sample(300);
+    s.vbus_mv = 12001;
+    CHECK_EQ(o.poll(s), Next::Release);
+    CHECK_EQ(o.report().abort, Abort::Overvoltage);
+}
+
 // Every reason has its own name (the log and tools/k2_remote.py print them).
 void test_names() {
     for (int i = 0; i <= int(Refusal::NoRam); ++i) CHECK(svooc::name(Refusal(i))[0] != '?');
-    for (int i = 0; i <= int(Abort::Stopped); ++i) CHECK(svooc::name(Abort(i))[0] != '?');
+    for (int i = 0; i <= int(Abort::ContractChanged); ++i) CHECK(svooc::name(Abort(i))[0] != '?');
     CHECK(std::string_view(svooc::name(Refusal::NoRam)) == "no RAM: USB drive enabled");
 }
 
@@ -244,6 +367,9 @@ int main() {
     test_every_abort();
     test_stop();
     test_exit_check();
+    test_contract_classification();
+    test_own_contract_start();
+    test_own_contract_runs_and_aborts();
     test_names();
     return test_report("test_svooc_run");
 }

@@ -609,6 +609,9 @@
   "612": "[SVOOC] no command after wake %u\n",
   "613": "[SVOOC] refused: %s vbus=%dmV ibus=%dmA\n",
   "614": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA\n",
-  "615": "[SVOOC] exit vbus=%dmV %s\n"
+  "615": "[SVOOC] exit vbus=%dmV %s\n",
+  "616": "[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s\n",
+  "617": "[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s\n",
+  "618": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s\n"
  }
 }

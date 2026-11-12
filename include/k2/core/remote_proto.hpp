@@ -358,10 +358,11 @@
 //                                                            refused start answers Busy with the summary (its refusal
 //                                                            byte says why); an accepted one arms the HID lease;
 //                                      [5, 2]                stop (reason "stopped"), then the summary.
-//                                      Summary (33 bytes): stage refusal abort tries flags(bit0 accepted, bit1 exit
+//                                      Summary (35 bytes): stage refusal abort tries flags(bit0 accepted, bit1 exit
 //                                      checked, bit2 exit ok, bit3 D- driven now) phase off_run last_cmd (u8 each)
 //                                      commands replies missed cut partials pairs_total (u16 each) pairs_kept(1)
-//                                      cap_ms elapsed_ms vbus_start_mv vbus_max_mv vbus_exit_mv ibus_max_ma (u16 each).
+//                                      cap_ms elapsed_ms vbus_start_mv vbus_max_mv vbus_exit_mv ibus_max_ma (u16 each),
+//                                      contract_start contract_end (u8 each, svooc::Contract).
 //                                      Pair page: page(1) kept(1) n(1) { cmd(1) word(2) } x n, 16 per page, word
 //                                      0xFFFF = not answered. Wrong length BadLength, unknown sub-op or page BadArg.
 //                                    --- end svooc-trigger ---
@@ -558,7 +559,7 @@ constexpr uint8_t kSvoocStatus = 0, kSvoocStart = 1, kSvoocStop = 2;
 constexpr uint8_t kSvoocCapMaxS = svooc::kCapMs / 1000;   // 20
 constexpr size_t kSvoocPairsPerPage = 16;
 constexpr uint8_t kSvoocPages = 1 + (svooc::kLogPairs + kSvoocPairsPerPage - 1) / kSvoocPairsPerPage;   // summary + 3
-constexpr size_t kSvoocSummaryBytes = 33;
+constexpr size_t kSvoocSummaryBytes = 35;
 static_assert(kSvoocSummaryBytes <= kMaxRspPayload && 3 + 3 * kSvoocPairsPerPage <= kMaxRspPayload);
 struct SvoocSnapshot {
     svooc::Stage stage = svooc::Stage::Idle;

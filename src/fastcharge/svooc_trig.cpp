@@ -69,7 +69,8 @@ bool lines_taken() {
 struct Live {
     bool host_ok = false, vbus_known = false, current_known = false;
     std::int32_t vbus_mv = 0, ibus_ma = 0;
-    bool far_sink = false, inline_mode = false, pd_contract = false;
+    bool far_sink = false, inline_mode = false;
+    svooc::Contract contract = svooc::Contract::None;
 };
 
 // VBUS and current of the latest monitor sample (no average, no display filter).
@@ -79,9 +80,20 @@ Live live() {
     if (const auto v = power::vbus_fast_mv()) { l.vbus_known = true; l.vbus_mv = *v; }
     if (const auto m = power::read_raw()) { l.current_known = true; l.ibus_ma = m->current_ma; }
     const link::Probe p = link::probe_now();
-    l.pd_contract = p.pd_active;
     l.inline_mode = p.sticky_inline;
     l.far_sink = fusb302::over_load_facts().far_sink;
+    // The contract: the K2's own 5 V fixed one (PDO 1 as sink) is allowed, anything else is not (svooc::classify).
+    const pd::SinkStatus& ss = fusb302::sink_status();
+    svooc::ContractFacts c;
+    c.pd_active = p.pd_active;
+    c.held = ss.held;
+    c.ready = ss.state == pd::SinkState::Ready;
+    c.epr_mode = ss.epr_mode;
+    c.inline_mode = l.inline_mode;
+    c.far_sink = l.far_sink;
+    c.pos = ss.pos;
+    c.mv = ss.mv;
+    l.contract = svooc::classify(c);
     return l;
 }
 
@@ -108,9 +120,10 @@ void release() {
     dpdm::idle();          // both lines to the passive idle
     const svooc::Report& r = g_run.report();
     const svooc::Log& lg = g_wire.log();
-    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA\n",
+    K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s\n",
           svooc::name(r.abort), unsigned(r.elapsed_ms), unsigned(lg.commands), unsigned(lg.replies), unsigned(lg.missed),
-          unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma));
+          unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma), svooc::name(r.contract_start),
+          svooc::name(r.contract_end));
 }
 
 void act(Next s) {
@@ -137,7 +150,7 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s) {
     f.ibus_ma = l.ibus_ma;
     f.far_sink = l.far_sink;
     f.inline_mode = l.inline_mode;
-    f.pd_contract = l.pd_contract;
+    f.contract = l.contract;
     const mode_ram::Tenant owner = mode_ram::owner();
     f.ram_free = owner == mode_ram::Tenant::None || owner == mode_ram::Tenant::Sniff;
     bool claimed = false;
@@ -152,12 +165,13 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s) {
     const svooc::Refusal r = g_run.start(f, systick::millis(), cap_ms);
     if (r != svooc::Refusal::None) {
         if (claimed) dpsniff::hook_end();
-        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA\n", svooc::name(r), int(f.vbus_mv), int(f.ibus_ma));
+        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s\n", svooc::name(r), int(f.vbus_mv), int(f.ibus_ma),
+              svooc::name(f.contract));
         return r;
     }
     g_exit_logged = false;
-    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA\n", unsigned(g_run.report().cap_ms), int(f.vbus_mv),
-          int(f.ibus_ma));
+    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s\n", unsigned(g_run.report().cap_ms),
+          int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract));
     return r;
 }
 
@@ -183,7 +197,7 @@ void poll() {
     s.ibus_ma = l.ibus_ma;
     s.far_sink = l.far_sink;
     s.inline_mode = l.inline_mode;
-    s.pd_contract = l.pd_contract;
+    s.contract = l.contract;
     s.storm = dpsniff::hook_storm();
     {
         Critical cs;
