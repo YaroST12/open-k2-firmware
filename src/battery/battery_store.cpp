@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Battery efficiency recorder: the stored runs (/bt/<id>.rec) and the service that writes them and keeps the SRAM
+// Battery efficiency recorder: the stored runs (/bt<id>.rec) and the service that writes them and keeps the SRAM
 // checkpoint. See k2/battery/battery.hpp.
 #include <cstring>
 
@@ -13,11 +13,11 @@ namespace k2::battery {
 namespace store {
 
 Path path_of(std::uint16_t id) {
-    Path p{'/', 'b', 't', '/'};
+    Path p{'/', 'b', 't'};
     char d[5];
     int n = 0;
     do { d[n++] = char('0' + id % 10); id /= 10; } while (id);
-    std::size_t i = 4;
+    std::size_t i = 3;
     while (n) p[i++] = d[--n];
     for (const char c : {'.', 'r', 'e', 'c'}) p[i++] = c;
     p[i] = 0;
@@ -25,8 +25,10 @@ Path path_of(std::uint16_t id) {
 }
 
 namespace {
-// "<digits>.rec" -> the id; 0 for any other name.
+// "bt<digits>.rec" -> the id; 0 for any other name (the other root files, a write's .tmp).
 std::uint16_t id_of(const char *name) {
+    if (name[0] != 'b' || name[1] != 't') return 0;
+    name += 2;
     std::uint32_t v = 0;
     int digits = 0;
     for (; *name >= '0' && *name <= '9'; name++, digits++) v = v * 10 + std::uint32_t(*name - '0');
@@ -60,7 +62,7 @@ bool load(fs::Fs &f, std::uint16_t id, Record &r) {
 
 bool save(fs::Fs &f, const Record &r) {
     std::uint8_t buf[kRecordBytes];
-    if (encode(r, buf) != kRecordBytes || f.mkdir(kDir) != fs::Err::Ok) return false;
+    if (encode(r, buf) != kRecordBytes) return false;
     return f.write_file(path_of(r.id).data(), buf) == fs::Err::Ok;
 }
 

@@ -190,10 +190,13 @@ private:
 };
 static_assert(std::is_trivially_copyable_v<Recorder>);
 
-// ---- the stored runs: /bt/<id>.rec, the newest kKeep kept -----------------------------------------------------------------
+// ---- the stored runs: /bt<id>.rec, the newest kKeep kept ------------------------------------------------------------------
+// Inline files (246 B each) in the root directory: three of them fit the root metadata pair's slack beside the settings files,
+// so the runs cost no block of their own; a /bt directory would cost its own pair (2 blocks) and a fourth run splits the
+// pair (4 blocks), more than the PD Stress build has left (tests/test_volume_budget.cpp, docs/ARCHITECTURE.md).
 namespace store {
-inline constexpr const char *kDir = "/bt";
-inline constexpr int kKeep = 4;
+inline constexpr const char *kDir = "/";
+inline constexpr int kKeep = 3;
 using Path = std::array<char, 16>;
 Path path_of(std::uint16_t id);
 // The ids on the volume, newest (highest) first; returns how many (at most `max`).

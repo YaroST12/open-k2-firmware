@@ -17,6 +17,7 @@
 #include <random>
 #include <vector>
 
+#include "k2/battery/battery.hpp"
 #include "k2/chargertest/charger_journal.hpp"
 #include "k2/chargertest/report_card_store.hpp"
 #include "k2/core/bbstore.hpp"
@@ -126,6 +127,24 @@ bool fill_tcap(fs::Fs& f) {
     }
     return true;
 }
+// The battery recorder's runs: a run's record (246 B, inline) per file in the root directory, the newest store::kKeep (3)
+// kept, written through the store the way a device writes them (the oldest pruned before a new file). Three fit the root
+// pair's slack (0 blocks); a fourth splits the pair (4 blocks), a /bt directory costs a pair of its own.
+static_assert(k2::battery::kRecordBytes <= fs::kInlineMax);
+bool fill_bt(fs::Fs& f) {
+    namespace bt = k2::battery;
+    for (unsigned id = 1; id <= bt::store::kKeep + 2; ++id) {
+        bt::Record r;
+        r.id = std::uint16_t(id);
+        r.phases = 2;
+        r.mode = bt::Mode::RoundTrip;
+        r.points = bt::Curve::kPoints;
+        bt::store::prune(f, bt::store::kKeep - 1);
+        if (!bt::store::save(f, r)) return false;
+    }
+    std::uint16_t ids[bt::store::kKeep + 1];
+    return bt::store::list(f, ids, bt::store::kKeep + 1) == bt::store::kKeep;
+}
 // The charger journal of the largest plan (kMaxSteps rows over all five sections) with every small record written.
 std::vector<ct::Step> max_plan() {
     const ct::Algorithm algs[] = {ct::Algorithm::Pd3Fixed, ct::Algorithm::Pps, ct::Algorithm::Qc3, ct::Algorithm::Vooc, ct::Algorithm::Ufcs};
@@ -160,6 +179,7 @@ const Row kRows[] = {
     {"settings (usb/cable/prefs/rd/.legacy)", fill_settings, 0},
     {"/log.txt", fill_log, 1},
     {"/lp/last.rec", fill_lp, 3},
+    {"/bt<id>.rec (3 x 246 B, root pair)", fill_bt, 0},
     {"/ps/run.rec", fill_ps, 3, true},
     {"/ps results (8 x 1376 B + 1 in flight)", fill_psr, 11, true},
     {"/twin (12 x 129 B)", fill_twin, 4},

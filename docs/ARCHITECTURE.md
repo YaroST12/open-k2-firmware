@@ -896,6 +896,7 @@ What each littlefs store costs at its cap, in 2 KB blocks, measured by `tests/te
 | settings | `/usb.cfg`, `/cable.cfg`, `/prefs.cfg` (8 B each), `/rd.rec` (10 B), `/.legacy` (1 B), inline in the root pair | 0 |
 | `/log.txt` | 512 B | 1 |
 | `/lp/last.rec` | the loop probe record (`loopprobe::kFileBytes`) | 3 |
+| `/bt<id>.rec` | the battery recorder's newest 3 runs (`battery::store::kKeep`), 246 B each, inline in the root pair beside the settings (a fourth run splits the pair: 4 blocks; a `/bt` directory costs a pair of its own) | 0 |
 | `/ps/run.rec` | the PD Stress journal (`pdstress::journal::kMaxBytes`) | 3 |
 | `/ps/xxxx.psr` | PD Stress saved results: 8 blobs of 1376 B (`pdstress::store::kFileBytes`, one data block each) + 1 in flight (a save writes before it drops the oldest) | 11 |
 | `/twin` | 12 twins of 129 B | 4 |

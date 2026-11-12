@@ -380,7 +380,15 @@ void test_store_list_prune() {
     CHECK_EQ(r.ph[0].uwh_in, 3000u);
     CHECK_EQ(store::load(v.fs, 1, r), false);
     CHECK_EQ(store::next_id(v.fs), 7);
-    CHECK_COND(std::string(store::path_of(65535).data()) == "/bt/65535.rec");
+    CHECK_COND(std::string(store::path_of(65535).data()) == "/bt65535.rec");
+    // the runs share the root with the settings files and the other stores' directories: only bt<id>.rec counts
+    const std::uint8_t b[4] = {1, 2, 3, 4};
+    CHECK_EQ(int(v.fs.write_file("/usb.cfg", b)), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.write_file("/bt9.rec.tmp", b)), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.write_file("/bt.rec", b)), int(k2::fs::Err::Ok));
+    CHECK_EQ(int(v.fs.mkdir("/bt8")), int(k2::fs::Err::Ok));
+    CHECK_EQ(store::list(v.fs, ids, 8), 4);
+    CHECK_EQ(ids[0], 6);
 }
 
 std::uint32_t serve(Service &s, std::uint32_t t, std::uint32_t ms, std::int32_t mv, std::int32_t ma, bool may_write = true,
