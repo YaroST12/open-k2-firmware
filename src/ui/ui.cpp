@@ -82,7 +82,11 @@ PageIf *Ui::build_menu(Menu m) {
 #if K2_PDSTRESS
     case Menu::PdStress: return pages_.push<PdStressPage>(ctx_);
 #endif
-    case Menu::Diagnosis: return pages_.push<DiagnosisPage>(ctx_);
+    case Menu::Diagnosis: {
+        DiagnosisPage *p = pages_.push<DiagnosisPage>(ctx_);
+        if (p && place_next_) p->as_place();   // the Log place, before enter() and the first paint
+        return p;
+    }
     default: return pages_.push<PdTriggerPage>(ctx_);
     }
 }
@@ -760,12 +764,19 @@ void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCoun
 
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
     const bool conn_place = p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device;
-    if (conn_place) {   // a place page over the Bench: BACK pops it and the Bench shows with the place focused
+    const bool log_place = p == bench::Place::Log;
+    if (conn_place || log_place) {   // a place page over the Bench: BACK pops it and the Bench shows with the place focused
         ctx_.keep.bench_sel = static_cast<int>(p);
         p = bench::Place::Meter;
     }
     ctx_.keep.place = static_cast<uint8_t>(p);
     set_page(Page::Tools, now_ms);   // the same page repaints in its new mode (set_page keeps a base page asked for again)
+    if (log_place) {   // the PD diagnosis as the Log place: the stamp, the findings, the Black Box row
+        place_next_ = true;
+        if (push_menu(Menu::Diagnosis, now_ms)) sync_panel();
+        place_next_ = false;
+        return;
+    }
     if (!conn_place) return;
     const conn::Tab tab = ctx_.keep.bench_sel == static_cast<int>(bench::Place::Charger) ? conn::Tab::Source
                         : ctx_.keep.bench_sel == static_cast<int>(bench::Place::Cable) ? conn::Tab::Cable : conn::Tab::Sink;

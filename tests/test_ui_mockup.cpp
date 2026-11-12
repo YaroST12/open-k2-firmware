@@ -91,6 +91,10 @@ int main() {
             render(ui, t, "place_cable_row3");
         }
     }
+    ui.goto_page(uint8_t(Page::Home), t); t += 100;
+    ui.open_place(bench::Place::Log, t); render(ui, t, "place_log");
+    ui.goto_page(uint8_t(Page::Home), t); t += 100;
+    ui.open_place(bench::Place::K2, t); render(ui, t, "place_k2");
 
     // The Cable tab of a cable that gave no identity, alone: a chip's pull-down on a CC line ("chip silent") versus none
     // ("no chip"), and the older / unprobed reading. Charger and contract are gone, as they are with the cable alone.
@@ -276,6 +280,15 @@ int main() {
     g_stub.diag_report = {};
     g_stub.diag_state = 0;
     render(ui, t, "diagnosis_empty");
+    // the same reports as the Log place: the stamp over the findings, the Black Box row last
+    g_stub.diag_report = kCase1;
+    g_stub.diag_state = 1;
+    ui.goto_page(uint8_t(Page::Home), t); t += 100;
+    ui.open_place(bench::Place::Log, t); render(ui, t, "place_log_case1");
+    g_stub.diag_report = kRamp;
+    render(ui, t, "place_log_ramp");
+    g_stub.diag_report = {};
+    g_stub.diag_state = 0;
     static const struct { const pd::diag::Report* r; uint8_t state; const char* name; } kHome[] = {
         {&kCase1, 1, "home_diag_case1"}, {&kRamp, 1, "home_diag_ramp"}, {&kStress, 1, "home_diag_stress"},
         {&kInline, 1, "home_diag_inline"}, {nullptr, 0, "home_diag_none"}};

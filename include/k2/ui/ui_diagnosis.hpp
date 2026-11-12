@@ -27,6 +27,15 @@ public:
     void enter() override { sel_ = 0; }
     const ListState &list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
+    // The Log place (Bench > Log): the title and icon of the place, the verdict as a stamp over the findings, and a last row
+    // that drills into the Black Box. Called before enter() and the first paint.
+    void as_place();
+    bool place() const { return place_; }
+    // The stamp: y22..57, the verdict's fill (kSurface when it has none), its 12 px glyph in a 20 px cell at x6 and the word
+    // (screen::word, the Home row-1 word, <= 16 chars) in font 24 from x30 to x222. The list starts 2 px under it.
+    static constexpr int16_t kStampH = 36, kStampWordX = 30;
+    // The stamp's verdict: a Fail finding red, a Warn amber, a healthy link with the power it needed green, else none.
+    static kit::Verdict stamp_of(const pd::diag::Report &r);
 
     // The verdict cell of a finding's severity (Fail red, Warn amber, Info none, Ok pass).
     static kit::Verdict cell_of(pd::diag::Sev s);
@@ -37,9 +46,15 @@ public:
 private:
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);
     int rows() const;                     // the screen rows, or the one waiting row before any session
+    int list_rows() const { return rows() + (place_ ? 1 : 0); }   // ... and the Black Box row of the Log place
+    bool on_blackbox() const { return place_ && sel_ == rows(); }
+    void paint_stamp();
 
     int sel_ = 0;
+    bool place_ = false;
+    Elem stamp_;                          // the stamp on screen
     pd::diag::screen::Row row_{};         // the row row_fn is building (the RowSpec views point into it)
+    StrBuf<24> bb_note_;                  // the Black Box row's note
     Elem foot_;                           // footer element cache (draw_footer_cached)
 };
 

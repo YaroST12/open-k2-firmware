@@ -6,7 +6,9 @@
 #include <string_view>
 
 #include "k2/pd/diag_live.hpp"
+#include "k2/pd/pdtrace.hpp"
 #include "k2/ui/trunc.hpp"
+#include "k2/ui/ui.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/ui_widgets.hpp"
 
@@ -30,8 +32,54 @@ static_assert(screen::kLabelChars * kSmallAdvPx + kSmallAdvPx + screen::kTailCha
               "a diagnosis label and its tail do not fit one row");
 static_assert(screen::kNoteChars * kLabelAdv <= static_cast<unsigned>(kit::kNoteMaxPx), "a diagnosis note is wider than the note box");
 static_assert(screen::kVerdictChars <= static_cast<std::size_t>(kFooterCells), "the diagnosis verdict is wider than the footer");
+static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kLabelChars) * 12 <= 224 - 2, "the stamp's word runs off the page");
+
+constexpr const char kBlackBox[] = "Black Box";
+// The Log place's list: the findings from under the stamp to the list bottom.
+constexpr int16_t kPlaceListY = kit::kBelowBar + DiagnosisPage::kStampH + 2;
 
 }  // namespace
+
+void DiagnosisPage::as_place() {
+    place_ = true;
+    title_ = bench::place_name(bench::Place::Log);
+    icon_ = place_icon(bench::Place::Log);
+    bar_icon_ = true;
+}
+
+kit::Verdict DiagnosisPage::stamp_of(const diag::Report &r) {
+    switch (screen::worst(r)) {
+    case diag::Sev::Fail: return kit::Verdict::Fail;
+    case diag::Sev::Warn: return kit::Verdict::Partial;
+    case diag::Sev::Info:
+    case diag::Sev::Ok: break;
+    }
+    return tone_of(r) == FooterTone::Ok ? kit::Verdict::Pass : kit::Verdict::None;
+}
+
+// The stamp: the band in the verdict's fill around the glyph cell and the word, each pixel once; repainted on a change.
+void DiagnosisPage::paint_stamp() {
+    const diag::Report &r = live::report();
+    char w[screen::kLabelChars + 8] = {};
+    diag::Sev sev = diag::Sev::Ok;
+    screen::word(r, w, sev);
+    const std::string_view word(w);
+    const kit::Verdict v = stamp_of(r);
+    stamp_.paint(mix_u32(mix(mix_init(), word), static_cast<uint32_t>(v)), [&] {
+        const Surface &c = ctx_.content;
+        const kit::VerdictStyle st = kit::verdict_style(v);
+        const uint16_t fill = st.filled ? st.fill : kSurface, ink = st.filled ? st.ink : kText;
+        const int16_t y = kit::kBelowBar;
+        constexpr int16_t kCellX = 4, kCell = 20, kCellDy = (kStampH - kCell) / 2;
+        const kit::Box cell{kCellX, static_cast<int16_t>(y + kCellDy), kCell, kCell};
+        const kit::TextRun run{kStampWordX, static_cast<int16_t>(y + (kStampH - kMid.height) / 2), &kMid, word, ink};
+        // the ground left of the word's run: the band beside and around the glyph cell
+        kit::fill_except(c, {0, y, kStampWordX, kStampH}, &cell, 1, fill);
+        kit::draw_verdict(c, cell.x, cell.y, cell.w, cell.h, v, "", fill);
+        kit::paint_texts(c, {kStampWordX, y, static_cast<int16_t>(c.w - kStampWordX), kStampH}, &run, 1, fill);
+        gfx_fill(c, 0, static_cast<int16_t>(y + kStampH), c.w, 2, kBg);   // the gap above the list
+    });
+}
 
 kit::Verdict DiagnosisPage::cell_of(diag::Sev s) {
     switch (s) {
@@ -50,14 +98,15 @@ int DiagnosisPage::rows() const {
 
 void DiagnosisPage::draw_static() {
     title_bar();
-    ctx_.rows.init(ctx_.content, kit::kBodyY, &DiagnosisPage::row_fn, this);
-    ctx_.rows.set_count(rows());
+    ctx_.rows.init(ctx_.content, place_ ? kPlaceListY : kit::kBodyY, &DiagnosisPage::row_fn, this);
+    ctx_.rows.set_count(list_rows());
     ctx_.rows.select(sel_);
     invalidate();
 }
 
 void DiagnosisPage::invalidate() {
     foot_.invalidate();
+    stamp_.invalidate();
     ctx_.rows.invalidate();
 }
 
@@ -67,6 +116,21 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
     auto *p = static_cast<DiagnosisPage *>(self);
     out = kit::RowSpec{};
     const diag::Report &r = live::report();
+    if (p->place_ && index == p->rows()) {   // the Log place's last row: the Black Box, with its captures in the note
+        unsigned caps = 0;
+        for (std::size_t i = 0; i < pdtrace::kCapSlots; i++) caps += pdtrace::capture_info(i).trigger != pdtrace::Trigger::None;
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Blackbox;
+        out.text = kBlackBox;
+        out.chevron = true;
+        if (focused) {
+            p->bb_note_.clear();
+            if (caps) p->bb_note_.put_u32(caps).put(caps == 1 ? " capture kept" : " captures kept");
+            else p->bb_note_.put("no captures yet");
+            out.note = p->bb_note_.view();
+        }
+        return;
+    }
     if (!screen::row(r, static_cast<unsigned>(index), p->row_)) {   // no session yet: the waiting row
         out.marker = kit::Marker::Icon;
         out.icon = Icon::Blackbox;
@@ -92,8 +156,9 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
 void DiagnosisPage::update(uint32_t now_ms) {
     const diag::Report &r = live::report();
     title_badge(live::state() == live::State::Last);
-    sel_ = std::clamp(sel_, 0, rows() - 1);
-    ctx_.rows.set_count(rows());
+    if (place_) paint_stamp();
+    sel_ = std::clamp(sel_, 0, list_rows() - 1);
+    ctx_.rows.set_count(list_rows());
     ctx_.rows.select(sel_);
     ctx_.rows.draw(now_ms);
     char v[screen::kVerdictChars + 8];
@@ -111,16 +176,20 @@ FooterTone DiagnosisPage::tone_of(const diag::Report &r) {
 
 bool DiagnosisPage::on_event(Event e) {
     if (e.press == Press::Short && (e.button == Button::Plus || e.button == Button::Minus)) {
-        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, rows() - 1);
-        update(ctx_.now);
+        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, list_rows() - 1);
+        update(ctx_.now);   // the Ui re-reads labels() after the event: the OK verb comes and goes with the Black Box row
+        return true;
+    }
+    if (e.press == Press::Short && e.button == Button::Ok && on_blackbox()) {
+        ctx_.ui->push_menu(Menu::BlackBox, ctx_.now);
         return true;
     }
     return back_event(e);
 }
 
 PanelLabels DiagnosisPage::labels() const {
-    PanelLabels l = list_labels(base_labels());   // short [+]/[-] move the selection; nothing to open
-    l.b[static_cast<int>(Button::Ok)] = {"", "", "", false};
+    PanelLabels l = list_labels(base_labels());   // short [+]/[-] move the selection; OK opens only the Black Box row
+    l.b[static_cast<int>(Button::Ok)] = {on_blackbox() ? "Open" : "", "", "", false};
     return l;
 }
 

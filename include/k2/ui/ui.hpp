@@ -72,7 +72,7 @@ inline constexpr std::size_t kLongestChain =
 #if K2_PDSTRESS
               arena_bytes<ToolsPage, ConnectionPage, PdStressPage>(),
 #endif
-              arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, BlackBoxPage, SharePage>(),
+              arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, DiagnosisPage, BlackBoxPage, SharePage>(),
               arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ToolsPage, LoopProbePage, SharePage>()});
 inline constexpr std::size_t kPageArenaBytes = std::max(kLargestBase + kLargestMenu, kLongestChain);
 static_assert(kPageArenaBytes >= kLargestBase + kLargestMenu, "any rotation page takes any one menu");
@@ -378,6 +378,7 @@ private:
     unsigned depth_ = 0;
     bool single_tools_ = !K2_WHOS_ATTACHED;
     int8_t conn_lock_ = -1;   // open_connection -> build_menu: the tab a single tool locks to, -1 = the tabbed page
+    bool place_next_ = false; // open_place -> build_menu: the PD diagnosis opens as the Log place
     bool pressed_[4] = {};          // lit, indexed by Button
     bool down_[4] = {};             // physically down
     bool remote_down_[4] = {};      // a remote +/- is held, indexed by the physical key it lights

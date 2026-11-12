@@ -10,6 +10,8 @@
 #include "k2/ui/ui_style.hpp"
 #include "ui_nav.h"
 #include "k2/pd/pd_source.hpp"
+#include "k2/pd/diag_live.hpp"
+#include <algorithm>
 #include <string.h>
 #include <string>
 #include <vector>
@@ -835,6 +837,8 @@ static int act_row(bench::Place p, int tool) {
         }
         return -1;
     }
+    if (p == bench::Place::Log)   // the Log place is the PD diagnosis: its findings, then the Black Box row last
+        return tool == 7 ? std::max<int>(1, static_cast<int>(pd::diag::screen::row_count(pd::diag::live::report()))) : -1;
     for (int i = 0; i < a.n; i++)
         if (a.a[i].kind == bench::ActKind::Tool && a.a[i].arg == tool) return i;
     return -1;
@@ -1524,9 +1528,36 @@ static void test_blackbox_submenu() {
     press(ui, Button::Back, ButtonEvent::Short, kT0 + 130);     // back to the list, still in the menu
     CHECK_EQ(ui.menu() == Menu::BlackBox, 1);
     CHECK_STR(label(ui, Button::Ok), "Open");
-    press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 140);     // the list leaves to the Log place it was opened from
+    CHECK_EQ(ui.menu() == Menu::Diagnosis, 1);
+    CHECK_EQ(ui.diagnosis_page().place(), true);
+    press(ui, Button::Back, ButtonEvent::Short, kT0 + 150);     // and the place to the Bench
     CHECK_EQ(ui.menu_depth(), 0u);
     pdtrace::init();
+}
+
+// Bench > Log is the PD diagnosis as a place page: the place's title, the verdict stamp under the bar (the waiting state has
+// no verdict: the surface fill), the findings, then the Black Box row last, the only row OK opens.
+static void test_log_place() {
+    Ui &ui = fresh_ui();
+    pdtrace::init();
+    ui.open_place(bench::Place::Log, kT0);
+    CHECK_EQ(ui.menu() == Menu::Diagnosis, 1);
+    CHECK_EQ(ui.diagnosis_page().place(), true);
+    CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::Log));
+    CHECK_EQ(g_panel[(kit::kBelowBar + 2) * LCD_WIDTH + 100], kSurface);   // the stamp's ground (no verdict yet)
+    CHECK_STR(label(ui, Button::Ok), "");                                   // a finding opens nothing
+    for (int i = 0; i < 12; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);
+    CHECK_EQ(ui.diagnosis_page().selected(), act_row(bench::Place::Log, 7));
+    CHECK_STR(label(ui, Button::Ok), "Open");
+    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
+    CHECK_EQ(ui.menu() == Menu::BlackBox, 1);
+    // the stamp's verdict: nothing seen, none; a healthy link that had its power, pass
+    pd::diag::Report r{};
+    r.empty = true;
+    CHECK_EQ(DiagnosisPage::stamp_of(r) == kit::Verdict::None, true);
+    r.empty = false; r.link = 0; r.power = pd::diag::kPowerOk;
+    CHECK_EQ(DiagnosisPage::stamp_of(r) == kit::Verdict::Pass, true);
 }
 
 // The chrome bar has no flow rail any more (micro-GUI phase 1): direction shows only as the
@@ -1832,6 +1863,7 @@ int main() {
     test_identify_page();
     test_cable_submenu();
     test_blackbox_submenu();
+    test_log_place();
     test_debug_fake_zero_clears();
     test_fake_zero_leaves_no_gone_rows();
     test_pd_list_clears_on_detach();   // last: it leaves the forced link detached
