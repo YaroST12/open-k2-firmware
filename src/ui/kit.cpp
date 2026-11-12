@@ -199,23 +199,26 @@ void draw_verdict(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, 
 }
 
 // ---- TopBar -------------------------------------------------------------------------------------------------------------
-void draw_progress_rule(const Surface &s, int step) {
-    for (int i = 0; i < kProgSegs; i++)
-        gfx_fill(s, static_cast<int16_t>(i * kProgPitch), kProgY, kProgSegW, kProgH, i < step ? kFocus : kRule);
+void draw_progress_rule(const Surface &s, int step, int segs) {
+    constexpr int kSpan = kProgSegs * kProgPitch;   // 225: the segments plus one gap after the last, over 224 px
+    for (int i = 0; i < segs; i++) {
+        const int x0 = i * kSpan / segs, x1 = (i + 1) * kSpan / segs;
+        gfx_fill(s, static_cast<int16_t>(x0), kProgY, static_cast<int16_t>(x1 - x0 - 1), kProgH, i < step ? kFocus : kRule);
+    }
 }
 
-void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge, bool readout_follows) {
+void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge, bool readout_follows, int segs) {
     char buf[40];
     size_t n = 0;
-    if (step >= 1 && step <= kProgSegs) {
+    if (step >= 1 && step <= segs) {
         buf[n++] = static_cast<char>('0' + step);
         buf[n++] = '/';
-        buf[n++] = static_cast<char>('0' + kProgSegs);
+        buf[n++] = static_cast<char>('0' + segs);
         buf[n++] = ' ';
     }
     for (size_t i = 0; i < title.size() && n < sizeof(buf); i++) buf[n++] = title[i];
     draw_status_left(s, false, Icon::Bolt, std::string_view(buf, n), 132, badge, readout_follows);
-    if (step > 0) draw_progress_rule(s, step);
+    if (step > 0) draw_progress_rule(s, step, segs);
     else gfx_fill(s, 0, kProgY + 1, s.w, kProgH - 1, kBg);   // a plain bar over a wizard bar (Review -> Running): the rule's 2nd row must go (the hairline above was repainted)
 }
 
