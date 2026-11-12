@@ -220,6 +220,7 @@ const pd::ProbeStatus& probe_status() { return g_stub.probe; }
 const pd::ExtInfo& ext() { return g_stub.ext; }
 const pd::IdStatus& identify_status() { return g_stub.ident; }
 bool identify_current() { return g_stub.ident_current; }
+bool identify_busy() { return g_stub.ident_wait || g_stub.ident.state == k2::pd::IdState::Running; }
 bool read_emarker(bool confirmed, pd::EmarkerMode mode) {
     g_stub.scans++;
     g_stub.scan_confirmed = confirmed;

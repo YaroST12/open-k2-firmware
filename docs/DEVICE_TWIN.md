@@ -96,7 +96,7 @@ Tools > Device twins: one row per twin. The row shows the predicted wattage and 
 | +/- | move |
 | OK on a twin | first OK: the live proof is requested; if the charger will be asked, the row arms ("Asks the charger. Confirm"). Second OK within 5 s starts it with confirmation. A cursor move or the window expiring disarms. |
 | BACK while running | reads "Stop", cancels (5 V back) |
-| OK on the Learn row | learns from the last Identify (footers say what happened: "Twin learned", "Twin updated", "Already known", "Run Identify first", "Nothing to learn from", "Library full") |
+| OK on the Learn row ("Learn from device") | a device alone on the K2 (a dual-role phone: VBUS dark, no source caps, its Rp toggling) is read first: the page starts the Sink-tab Identify, shows "Reading the device" (Back stops it), and learns when it ends ("Device did not answer" when it never did). Anything else learns from the last Identify. Footers: "Twin learned", "Twin updated", "Already known", "Plug a device in alone", "Nothing to learn from", "Library full" |
 
 The proof refuses up front, with a footer, when the live proof cannot be run: a tool or test is running, a device is inline, the power monitor is not ready, there is no charger to run against. The page has no on-device delete (use the shell or the host tool).
 

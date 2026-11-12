@@ -5,6 +5,8 @@
 #include <algorithm>
 
 #include "k2/core/storage.hpp"
+#include "k2/drivers/fusb302.hpp"
+#include "k2/pd/pd_link.hpp"
 #include "k2/twin/present.hpp"
 #include "k2/twin/twin_hw.hpp"
 #include "k2/ui/ui.hpp"
@@ -20,14 +22,15 @@ namespace present = twin::present;
 
 // The fixed texts. Footers are one line of at most kFooterCells (font 16), notes one line of kNoteMaxPx (font 12); a text
 // that does not fit fails the build, it is never cut.
-constexpr const char kLearnText[] = "Learn from last Identify";
+constexpr const char kLearnText[] = "Learn from device";
 constexpr const char *kFooters[] = {
     "Asks the charger. Confirm", "Stopped. 5 V back", "Tool or test running", "Device inline: unplug it",
     "Power monitor not ready", "No charger to run against", "No twin yet. Learn one", "Twin learned", "Twin updated",
-    "Already known", "Run Identify first", "Nothing to learn from", "Library full", "Twin not stored",
+    "Already known", "Plug a device in alone", "Nothing to learn from", "Library full", "Twin not stored",
+    "Reading the device", "Device did not answer",
 };
 constexpr const char *kNotes[] = {
-    "no charger to predict from", "Identify a device alone first", "live proof running",
+    "no charger to predict from", "reads a device alone on the K2", "live proof running",
     present::note(twin::Limiter::None), present::note(twin::Limiter::Device),
     present::note(twin::Limiter::Charger), present::note(twin::Limiter::Cable),
 };
@@ -46,6 +49,8 @@ kit::Verdict cell_of(live::Verdict v) {
     default: return kit::Verdict::Fail;   // Refused, NoPsRdy, OutOfBand, NoCaps, Reset, Unsafe
     }
 }
+
+constexpr uint32_t kLearnWaitMs = 15000;   // an alone-Identify: contract wait (~650 ms) + the VDMs; generous
 
 }  // namespace
 
@@ -85,6 +90,8 @@ void TwinPage::enter() {
 // Paged away or popped while this page's own proof is running: ask 5 V back and end it (a run the remote started is left alone).
 void TwinPage::leave() {
     if (started_ && running()) ctx_.ui->cancel_twin();
+    if (learn_wait_) fusb302::identify_abort();   // the read this page started: release the line, learn nothing
+    learn_wait_ = false;
     started_ = false;
 }
 
@@ -125,7 +132,7 @@ void TwinPage::say(std::string_view text, uint16_t color) {
 // What a row shows. Text and tail are views into the entry / the page's row buffers, valid until the next call.
 void TwinPage::build_row(int index, bool focused, kit::RowSpec &out) {
     out = kit::RowSpec{};
-    if (index >= n_) {   // "Learn from last Identify"
+    if (index >= n_) {   // "Learn from device"
         out.marker = kit::Marker::Icon;
         out.icon = Icon::Chip;
         out.text = kLearnText;
@@ -185,6 +192,10 @@ void TwinPage::compose_footer() {
         foot_text_.put(note_.view());
         return;
     }
+    if (learn_wait_) {
+        foot_text_.put(kFooters[14]);
+        return;
+    }
     if (running()) {
         const live::Runner &r = twin_hw::live();
         foot_text_.put("Live proof ").put_u32(std::min<unsigned>(r.done_count() + 1, r.count())).put(" of ").put_u32(r.count());
@@ -229,6 +240,32 @@ void TwinPage::learn() {
     }
 }
 
+// OK on the Learn row. A device alone on the K2 (a dual-role phone: VBUS dark, no source caps, the toggling Rp) is read
+// first: the page starts the same Identify as Who's attached > Sink and learns when it ends (update()). Anything else
+// learns from the last Identify, as before (a sink behind the K2 inline, a device identified a moment ago).
+void TwinPage::learn_row(uint32_t now_ms) {
+    const pd::Link &link = ctx_.ui->link();
+    const bool alone = pd::identify_alone(link.inline_mode() || ctx_.inline_mode, ctx_.pm_online,
+                                          ctx_.pm_online ? ctx_.vbus_fast_mv : -1, fusb302::caps_this_attach(),
+                                          link.wait_kind());
+    if (alone && ctx_.ui->identify(now_ms) == Ui::IdResult::Started) {
+        learn_wait_ = true;
+        learn_wait_until_ = now_ms + kLearnWaitMs;
+        note_.clear();
+        note_until_ = 0;
+        return;
+    }
+    learn();
+}
+
+// The Identify this page started is over (or ran out of time): learn from it, or say the device never answered.
+void TwinPage::learn_wait_end() {
+    learn_wait_ = false;
+    if (fusb302::identify_busy()) fusb302::identify_abort();
+    if (fusb302::identify_status().state == pd::IdState::Done && fusb302::identify_current()) learn();
+    else say(kFooters[15], kCaution);
+}
+
 // OK on a twin row. The first press asks the runner without the confirm: its refusal is the real one (a test running, a device
 // inline, no monitor, no charger), and "needs the confirm" arms the row for kConfirmWindowMs. The second press starts it.
 void TwinPage::run_row() {
@@ -261,6 +298,13 @@ bool TwinPage::on_event(Event e) {
     if (e.press != Press::Short) return false;
     switch (e.button) {
     case Button::Back:
+        if (learn_wait_) {                            // stop the read; nothing is learned
+            learn_wait_ = false;
+            fusb302::identify_abort();
+            say(kFooters[1], kDim);
+            update(ctx_.now);
+            return true;
+        }
         if (!running()) return false;                 // idle: the Ui pops the page
         ctx_.ui->cancel_twin();
         say(kFooters[1], kDim);
@@ -273,8 +317,8 @@ bool TwinPage::on_event(Event e) {
         update(ctx_.now);
         return true;
     case Button::Ok:
-        if (!running()) {
-            if (sel_ >= n_) learn();
+        if (!running() && !learn_wait_) {
+            if (sel_ >= n_) learn_row(ctx_.now);
             else run_row();
         }
         update(ctx_.now);
@@ -286,7 +330,8 @@ bool TwinPage::on_event(Event e) {
 PanelLabels TwinPage::labels() const {
     PanelLabels l = list_labels(base_labels());
     const char *ok = "";
-    if (running()) l.b[static_cast<int>(Button::Back)].shrt = "Stop";
+    if (running() || learn_wait_) l.b[static_cast<int>(Button::Back)].shrt = "Stop";
+    if (running() || learn_wait_) ok = "";
     else if (sel_ >= n_) ok = "Learn";
     else ok = armed_seq_ != 0 ? "Confirm" : "Run";
     l.b[static_cast<int>(Button::Ok)] = {ok, "", "", false};
@@ -301,6 +346,7 @@ void TwinPage::update(uint32_t now_ms) {
     }
     if (armed_seq_ != 0 && static_cast<int32_t>(now_ms - armed_until_) >= 0) armed_seq_ = 0;   // the confirm window ran out
     if (started_ && !running()) started_ = false;
+    if (learn_wait_ && (!fusb302::identify_busy() || static_cast<int32_t>(now_ms - learn_wait_until_) >= 0)) learn_wait_end();
     if (!loaded_ || gen_ != storage::generation() || stamp_ != twin_hw::predict_stamp()) {
         const bool charger_changed = loaded_ && stamp_ != twin_hw::predict_stamp();
         reload();

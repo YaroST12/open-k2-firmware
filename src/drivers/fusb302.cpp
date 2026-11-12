@@ -3130,6 +3130,7 @@ void probe_abort() { g_probe.abort(); }
 const pd::ProbeStatus& probe_status() { return g_probe.status(); }
 void identify_abort() { g_ident.abort(pd::IdWhy::Stopped); }
 const pd::IdStatus& identify_status() { return g_ident.status(); }
+bool identify_busy() { return g_ident_wait || g_ident.running(); }
 bool identify_current() {
     if (g_ident_session == 0 || !g_ident_result_valid) return false;
     // After an alone-Identify's release the session has moved on (the phone's VBUS went dark): the result is

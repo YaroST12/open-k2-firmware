@@ -128,7 +128,7 @@ void walk_pages(Ui &ui, int rot, const Scenario &sc) {
         ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // arms the first row (or says why not)
         draw_for_a_while(ui, "twin-armed", rot, sc.name);
         for (int i = 0; i < 6; ++i) { ui.on_button(Button::Plus, ButtonEvent::Short, g_t); g_t += 150; ui.tick(g_t); }
-        ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // Learn from last Identify
+        ui.on_button(Button::Ok, ButtonEvent::Short, g_t);                      // Learn from device
         draw_for_a_while(ui, "twin-learn", rot, sc.name);
     }
     // Loop probe: the armed confirm, a run in flight, its end (share view, then back to the table), a BACK stop.

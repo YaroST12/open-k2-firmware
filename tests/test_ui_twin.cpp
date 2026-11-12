@@ -102,7 +102,7 @@ void test_rows_and_footer() {
     add_three();
     Ui &ui = open_page();
     CHECK_EQ(ui.menu() == Menu::Twin, 1);
-    CHECK_EQ(ui.twin_page().list_state().count, 4);   // three twins and "Learn from last Identify"
+    CHECK_EQ(ui.twin_page().list_state().count, 4);   // three twins and "Learn from device"
     CHECK_STR(text_of(ui, 0).c_str(), "Pixel 9");
     CHECK_STR(tail_of(ui, 0).c_str(), "33W PPS");
     CHECK_STR(text_of(ui, 1).c_str(), "Laptop");
@@ -112,7 +112,7 @@ void test_rows_and_footer() {
     CHECK_STR(note_of(ui, 0).c_str(), "the device takes no more");   // the charger offers more than the Pixel wants
     CHECK_STR(note_of(ui, 1).c_str(), "the device takes no more");
     CHECK_STR(note_of(ui, 2).c_str(), "limited by the cable");
-    CHECK_STR(text_of(ui, 3).c_str(), "Learn from last Identify");
+    CHECK_STR(text_of(ui, 3).c_str(), "Learn from device");
     CHECK_STR(footer_of(ui).c_str(), "1 of 3 full on charger");
     CHECK_STR(label(ui, Button::Ok), "Run");
     CHECK_STR(label(ui, Button::Back), "Back");
@@ -273,7 +273,7 @@ void test_learn_row() {
     g_stub.twin_learned.how = twin_hw::Learn::NotReady;
     press(ui, Button::Ok);
     CHECK_EQ(g_stub.twin_learns, 1);
-    CHECK_STR(footer_of(ui).c_str(), "Run Identify first");
+    CHECK_STR(footer_of(ui).c_str(), "Plug a device in alone");
 
     twin::Twin t;
     const char name[] = "Phone";
@@ -297,12 +297,85 @@ void test_learn_row() {
     CHECK_STR(footer_of(ui).c_str(), "Library full");
 }
 
+// A phone alone on the K2 (VBUS dark, no source caps, its Rp toggling): OK on the Learn row reads it first (the same Identify as
+// Who's attached > Sink), shows that it is reading, and learns once the Identify is over. Red first: the row only learned from an
+// Identify the user had run by hand ("Run Identify first").
+void make_alone(Ui &ui) {
+    g_stub.cc = 1;
+    g_stub.pm_online = true;
+    g_stub.pm.vbus_mv = 0;
+    g_stub.caps.valid = false;
+    g_stub.caps_this_attach = false;
+    for (int i = 0; i < 15; i++) {   // the dual-role toggle: Rp on CC2 every other 100 ms
+        adc::Reading r;
+        r.cc2_mv = static_cast<uint16_t>(i % 2 == 0 ? 3300 : 0);
+        g_stub.adc = r;
+        step(ui, 100);
+    }
+    CHECK_EQ(int(ui.link().wait_kind()), int(raguard::WaitKind::DualRolePort));
+}
+
+void test_learn_reads_a_device_alone() {
+    reset();
+    Ui &ui = open_page();
+    make_alone(ui);
+    g_stub.ident.state = pd::IdState::Running;   // the driver is busy from identify_start() on
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.identifies, 1);
+    CHECK_EQ(g_stub.twin_learns, 0);
+    CHECK_EQ(ui.twin_page().reading() ? 1 : 0, 1);
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Reading the device");
+    CHECK_STR(label(ui, Button::Back), "Stop");
+    press(ui, Button::Ok);                          // a second OK while it reads starts nothing
+    CHECK_EQ(g_stub.identifies, 1);
+
+    twin::Twin t;
+    const char name[] = "Pixel";
+    for (std::size_t i = 0; i + 1 < sizeof name; i++) t.name[i] = name[i];
+    t.pdos[t.num_pdos++] = 0x3601912C;
+    g_stub.twin_learned.how = twin_hw::Learn::Ok;
+    g_stub.twin_learned.twin = t;
+    g_stub.ident.state = pd::IdState::Done;
+    g_stub.ident_current = true;
+    step(ui, 100);
+    CHECK_EQ(g_stub.twin_learns, 1);
+    CHECK_EQ(ui.twin_page().reading() ? 1 : 0, 0);
+    CHECK_STR(footer_of(ui).c_str(), "Twin learned");
+    CHECK_STR(text_of(ui, 0).c_str(), "Pixel");
+}
+
+void test_learn_read_without_answer() {
+    reset();
+    Ui &ui = open_page();
+    make_alone(ui);
+    g_stub.ident.state = pd::IdState::Running;
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.identifies, 1);
+    g_stub.ident.state = pd::IdState::Aborted;     // no contract, or the VDMs went unanswered
+    step(ui, 100);
+    CHECK_EQ(g_stub.twin_learns, 0);
+    CHECK_STR(footer_of(ui).c_str(), "Device did not answer");
+
+    step(ui, 3000);
+    make_alone(ui);                                 // the phone keeps toggling
+    g_stub.ident.state = pd::IdState::Running;     // Back stops a read in flight; nothing is learned
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.identifies, 2);
+    CHECK_EQ(ui.twin_page().reading() ? 1 : 0, 1);
+    press(ui, Button::Back);
+    CHECK_EQ(int(ui.menu_depth()) > 0 ? 1 : 0, 1);  // Back stopped the read, it did not pop the page
+    if (ui.menu_depth() == 0) return;
+    CHECK_EQ(ui.twin_page().reading() ? 1 : 0, 0);
+    CHECK_EQ(g_stub.twin_learns, 0);
+}
+
 void test_footer_note_times_out() {
     reset();
     Ui &ui = open_page();
     g_stub.twin_learned.how = twin_hw::Learn::NotReady;
     press(ui, Button::Ok);
-    CHECK_STR(footer_of(ui).c_str(), "Run Identify first");
+    CHECK_STR(footer_of(ui).c_str(), "Plug a device in alone");
     step(ui, 3000);
     CHECK_STR(footer_of(ui).c_str(), "No twin yet. Learn one");
 }
@@ -320,6 +393,8 @@ int main() {
     test_back_stops_the_run();
     test_leaving_cancels_own_run();
     test_learn_row();
+    test_learn_reads_a_device_alone();
+    test_learn_read_without_answer();
     test_footer_note_times_out();
     return test_report("test_ui_twin");
 }

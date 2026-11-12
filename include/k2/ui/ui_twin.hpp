@@ -3,7 +3,7 @@
 // Tools -> Device twins: what each stored device would get from the charger on the port, and the live proof of it.
 //
 // One kit RowList: a row per twin (name left, the prediction right in the Home protocol-row style: "27W PPS", "60W of 96W",
-// "5V only"), the last row "Learn from last Identify". The focused row opens a note that names the limiter (full / the device
+// "5V only"), the last row "Learn from device". The focused row opens a note that names the limiter (full / the device
 // takes no more / limited by this charger / limited by the cable). OK on a twin row asks the live runner to start without the
 // confirm: it answers with the real refusal (a test running, a device inline, no charger ...) or "need the confirm", and then
 // the row is armed for kConfirmWindowMs, like Review's START; the second OK starts the proof. A finished row wears the verdict
@@ -36,6 +36,7 @@ public:
     const ListState &list_state() const { return ctx_.rows.state(); }
     int cursor() const { return sel_; }
     bool armed() const { return armed_seq_ != 0; }
+    bool reading() const { return learn_wait_; }
     std::string_view footer() const { return foot_text_.view(); }   // what the footer shows now (tests, remote screenshots)
     // Row `index` as the list paints it (views stay valid until the next call into the page).
     void peek(int index, bool focused, kit::RowSpec &out) { build_row(index, focused, out); }
@@ -53,6 +54,8 @@ private:
     void compose_footer();
     void say(std::string_view text, uint16_t color);
     void learn();
+    void learn_row(uint32_t now_ms);                         // OK on the Learn row: read a device alone first, then learn
+    void learn_wait_end();
     void run_row();
     int rows() const { return n_ + 1; }                      // twins + the Learn row
     bool running() const;
@@ -64,6 +67,8 @@ private:
     bool have_caps_ = false;
     bool loaded_ = false;
     bool hide_proof_ = false;                                // another charger since the last run: its verdicts no longer apply
+    bool learn_wait_ = false;                                // this page started an Identify and learns when it ends
+    uint32_t learn_wait_until_ = 0;
     bool started_ = false;                                   // this page started the run in flight (leave() stops only that one)
     uint32_t gen_ = 0, stamp_ = 0;
     int sel_ = 0;

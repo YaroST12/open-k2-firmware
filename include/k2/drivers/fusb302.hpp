@@ -326,6 +326,7 @@ bool legacy_only_active();
 // `confirmed`: an inline K2 never transmits; the sniffed identity shows on the Sink tab instead).
 bool identify_start(bool confirmed = false);
 void identify_abort();
+bool identify_busy();      // an Identify is in flight: running, or an alone-Identify still waiting for its Ready contract
 const pd::IdStatus& identify_status();
 bool identify_current();   // the latest Identify's answers are this partner's (after an alone-Identify's release too, until the port is really gone)
 const pd::Identity& identify_identity();   // the identity the latest Identify collected (kept for the release window)
