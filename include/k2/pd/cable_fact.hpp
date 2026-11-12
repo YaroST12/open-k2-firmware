@@ -35,10 +35,10 @@ constexpr Fact classify(bool read, emk_attached::ReadInfo info, raclass::PullDow
 
 constexpr const char *name(Fact f) {
     switch (f) {
-    case Fact::Read: return "read";
-    case Fact::ChipSilent: return "chip silent";
-    case Fact::NoChip: return "no chip";
-    default: return "not read";
+    case Fact::Read: return "Read";
+    case Fact::ChipSilent: return "Chip silent";
+    case Fact::NoChip: return "No chip";
+    default: return "Not read";
     }
 }
 

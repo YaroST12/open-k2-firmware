@@ -174,21 +174,21 @@ inline bool tab_unasked(Tab t, const pd::Survey &s) {
 // One word for a field that has no value: why the row is empty (<= 19 cells, the value column). Got has no word.
 constexpr const char *sv_word(const pd::SvEntry &e) {
     switch (e.state) {
-    case pd::SvState::NotAsked: return "not asked";
-    case pd::SvState::Pending: return "asking...";
+    case pd::SvState::NotAsked: return "Not asked";
+    case pd::SvState::Pending: return "Asking...";
     case pd::SvState::Got: return "";
-    case pd::SvState::NotSupported: return "not supported";
-    case pd::SvState::NoAnswer: return "no answer";
+    case pd::SvState::NotSupported: return "Not supported";
+    case pd::SvState::NoAnswer: return "No answer";
     case pd::SvState::Blocked:
         switch (e.why) {
-        case pd::SvWhy::Inline: return "inline: blocked";
-        case pd::SvWhy::ChargerTest: return "charger test";
+        case pd::SvWhy::Inline: return "Inline: blocked";
+        case pd::SvWhy::ChargerTest: return "Charger test";
         case pd::SvWhy::XiaomiChain: return "Xiaomi chain";
-        case pd::SvWhy::Pd20: return "not in PD 2.0";
-        case pd::SvWhy::NoEpr: return "no EPR bit";
+        case pd::SvWhy::Pd20: return "Not in PD 2.0";
+        case pd::SvWhy::NoEpr: return "No EPR bit";
         case pd::SvWhy::None: break;
         }
-        return "blocked";
+        return "Blocked";
     }
     return "";
 }

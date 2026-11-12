@@ -514,16 +514,16 @@ static void test_status_survey() {
 // A row says why it is empty: one word per status, each fits the 19-cell value column.
 static void test_survey_words() {
     using pd::SvState; using pd::SvWhy;
-    CHECK_STR(sv_word({SvState::NotAsked, SvWhy::None}), "not asked");
-    CHECK_STR(sv_word({SvState::Pending, SvWhy::None}), "asking...");
+    CHECK_STR(sv_word({SvState::NotAsked, SvWhy::None}), "Not asked");
+    CHECK_STR(sv_word({SvState::Pending, SvWhy::None}), "Asking...");
     CHECK_STR(sv_word({SvState::Got, SvWhy::None}), "");
-    CHECK_STR(sv_word({SvState::NotSupported, SvWhy::None}), "not supported");
-    CHECK_STR(sv_word({SvState::NoAnswer, SvWhy::None}), "no answer");
-    CHECK_STR(sv_word({SvState::Blocked, SvWhy::Inline}), "inline: blocked");
-    CHECK_STR(sv_word({SvState::Blocked, SvWhy::ChargerTest}), "charger test");
+    CHECK_STR(sv_word({SvState::NotSupported, SvWhy::None}), "Not supported");
+    CHECK_STR(sv_word({SvState::NoAnswer, SvWhy::None}), "No answer");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::Inline}), "Inline: blocked");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::ChargerTest}), "Charger test");
     CHECK_STR(sv_word({SvState::Blocked, SvWhy::XiaomiChain}), "Xiaomi chain");
-    CHECK_STR(sv_word({SvState::Blocked, SvWhy::Pd20}), "not in PD 2.0");
-    CHECK_STR(sv_word({SvState::Blocked, SvWhy::NoEpr}), "no EPR bit");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::Pd20}), "Not in PD 2.0");
+    CHECK_STR(sv_word({SvState::Blocked, SvWhy::NoEpr}), "No EPR bit");
     for (unsigned st = 0; st <= unsigned(SvState::Blocked); st++)
         for (unsigned w = 0; w <= unsigned(SvWhy::NoEpr); w++)
             CHECK_EQ(std::strlen(sv_word({SvState(st), SvWhy(w)})) <= 19, 1);

@@ -34,9 +34,9 @@ int main() {
     // No read since the attach.
     CHECK_EQ(int(f(false, Mode::None, 0, PullDown::NotProbed)), int(Fact::NotRead));
     // The words: one per fact, never "no e-marker" for a chip that is there.
-    CHECK_STR(cablefact::name(Fact::Read), "read");
-    CHECK_STR(cablefact::name(Fact::ChipSilent), "chip silent");
-    CHECK_STR(cablefact::name(Fact::NoChip), "no chip");
-    CHECK_STR(cablefact::name(Fact::NotRead), "not read");
+    CHECK_STR(cablefact::name(Fact::Read), "Read");
+    CHECK_STR(cablefact::name(Fact::ChipSilent), "Chip silent");
+    CHECK_STR(cablefact::name(Fact::NoChip), "No chip");
+    CHECK_STR(cablefact::name(Fact::NotRead), "Not read");
     return test_report("test_cable_fact");
 }

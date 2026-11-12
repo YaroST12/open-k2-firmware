@@ -80,7 +80,7 @@ CrView cr_view(bool online, int32_t vbus_mv, int32_t ibus_ma, cable_r::Mode mode
         v.step[0].value.put_fixed(m.idle_mv(), 2).put("V ").put_abs_fixed(m.idle_ma(), 2).put("A");
         v.step[0].tone = CrTone::Ok;
     } else {
-        v.step[0].value.put(vbus_mv < cable_r::kPresentMv ? "no VBUS" : "need < 0.2A");
+        v.step[0].value.put(vbus_mv < cable_r::kPresentMv ? "No VBUS" : "need < 0.2A");
         v.step[0].tone = vbus_mv < cable_r::kPresentMv ? CrTone::Dim : CrTone::Caution;
     }
     v.step[1].label = "LOAD";

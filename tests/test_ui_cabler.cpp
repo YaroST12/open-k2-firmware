@@ -35,7 +35,7 @@ int main() {
         CHECK_STR(v.foot.c_str(), "Unload, then add 1A");
         CHECK_EQ(int(v.has_result), 0);
         const CrView n = cr_view(true, 0, 0, cable_r::Mode::Passive, cable_r::Meter{}, std::nullopt);
-        CHECK_STR(n.step[0].value.c_str(), "no VBUS");
+        CHECK_STR(n.step[0].value.c_str(), "No VBUS");
     }
     {   // idle taken, waiting for the load step
         const cable_r::Meter m = metered(20040, 50, 0, 0);

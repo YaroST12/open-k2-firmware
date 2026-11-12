@@ -634,13 +634,13 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     if (id.valid) put_id(R.add("ID"), id.vid, id.pid, id.vendor);
     else {   // the row says why it is empty: not asked yet (Refresh reads it), asking, no answer, not supported...
         const char *w = conn::sv_word(survey::state().entry(pd::SvField::Identity));
-        R.add("ID", kFaint).put(w[0] ? w : "unknown");
+        R.add("ID", kFaint).put(w[0] ? w : "Unknown");
     }
     const pd::SourceCaps &caps = *d.caps;
     StrBuf<28> &pdv = R.add("PD", r.caps_seen ? kEnergy : kFaint);
     const bool traffic = fusb302::pd_traffic();
     if (r.caps_seen) {
-        pdv.put(caps.spec_rev == 1 || caps.spec_rev == 2 ? pd::wire_revision_name(caps.spec_rev) : "no PD yet");
+        pdv.put(caps.spec_rev == 1 || caps.spec_rev == 2 ? pd::wire_revision_name(caps.spec_rev) : "No PD yet");
         if (caps.epr) pdv.put(" EPR");
         pdv.put_char(' ').put_u32(r.src_max_mw / 1000).put_char('W');
         fixed_rows(R, caps, r.rows);
@@ -653,11 +653,11 @@ void range_row(Rows &R, const char *key, const pd::Pdo &p) {
     } else if (!traffic && (r.typec_ma || r.typec_rp)) {
         // A Type-C Rp advertisement exists (the source is attached): show it with the measured VBUS
         // and the advertised current, a default-USB Rp included.
-        pdv.put(d.in_use ? "none, in use" : "none");
+        pdv.put(d.in_use ? "None, in use" : "None");
         StrBuf<28> &v = R.add("Type-C", kText);
         typec_row_text(d.vbus_mv, r.typec_ma, v);
     } else {
-        pdv.put(traffic ? "active, no caps" : d.in_use ? "none, in use" : "no caps yet");
+        pdv.put(traffic ? "Active, no caps" : d.in_use ? "None, in use" : "No caps yet");
     }
     if (!r.caps_seen && legacy_row_protocol(d.fc)) {   // legacy fast-charge protocols the K2 detected
         StrBuf<6> fcn;
@@ -800,7 +800,7 @@ void vooc_row(Rows &R, uint32_t note) {
     if (id.valid) {
         StrBuf<28> &v = R.add("ID");
         conn::id_value(v, kValCells, fusb302::identify_current(), id.vid, id.pid, id.vendor);
-    } else R.add("ID").put("unknown");   // until the sink answers a Discover Identity (the charger's own, sniffed)
+    } else R.add("ID").put("Unknown");   // until the sink answers a Discover Identity (the charger's own, sniffed)
     if (r.request_seen) {
         put_request(R.add("Request", kAmp), r, *d.caps);
         StrBuf<28> &st = R.add("State", kDim);
@@ -810,20 +810,20 @@ void vooc_row(Rows &R, uint32_t note) {
         rdo_flags_text(fusb302::contract().flags, room, fl);
         if (!fl.view().empty()) st.put(", ").put(fl.view());
     } else {
-        R.add("Request", kFaint).put("none seen");
+        R.add("Request", kFaint).put("None seen");
     }
     strip_rows(R, r, d.ul);
     link_rows(R, d);
     proto_row(R, fusb302::sink_vdm());
     vooc_row(R, d.vooc);   // a live session next to a PD contract: the phone holds both (before Caps, which drops first)
     if (!d.sink.empty()) put_sink_pdos(R, "Caps", d.sink);
-    else R.add("Caps", kFaint).put("not seen");
+    else R.add("Caps", kFaint).put("Not seen");
 }
 
 // One survey field as a row of the Details page: what was read, else the word for why it was not (conn::sv_word).
 void word_row(Rows &R, const char *key, pd::SvField f) {
     const char *w = conn::sv_word(survey::state().entry(f));
-    R.add(key, kFaint).put(w[0] ? w : "unknown");
+    R.add(key, kFaint).put(w[0] ? w : "Unknown");
 }
 
 // The Source tab's second page: what the Refresh survey reads beyond the main rows. An answer that is in is shown whatever
@@ -1190,13 +1190,13 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         if (vid.valid) put_line_id(id.line, vid.vid, vid.pid, vid.vendor);
         else {
             const char *w = conn::sv_word(survey::state().entry(pd::SvField::Identity));
-            id.line.put(w[0] ? w : "unknown");
+            id.line.put(w[0] ? w : "Unknown");
         }
         return;
     }
     case conn::Tab::Cable: {
         const pd::Emarker &em = fusb302::emarker();
-        if (!em.valid) { id.head.put("Not read"); id.dim = true; id.line.put("no e-marker answer held"); return; }
+        if (!em.valid) { id.head.put("Not read"); id.dim = true; id.line.put("No e-marker answer held"); return; }
         id.head.put_u32(em.max_current_a).put("A ").put_u32(em.max_voltage_v).put_char('V');
         id.dim = stale;
         StrBuf<12> w;
@@ -1209,8 +1209,8 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         return;
     }
     case conn::Tab::Sink: {
-        if (d.k2_sink) { id.head.put("K2"); id.line.put("the K2 draws the power itself"); return; }
-        if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("the device asked for no offer"); return; }
+        if (d.k2_sink) { id.head.put("K2"); id.line.put("The K2 draws the power itself"); return; }
+        if (!r.request_seen) { id.head.put("No request"); id.dim = true; id.line.put("The device asked for no offer"); return; }
         put_v(id.head, r.want_mv);
         id.head.put("V ");
         put_a(id.head, r.want_ma);
@@ -1221,7 +1221,7 @@ void put_line_id(StrBuf<36> &l, uint16_t vid, uint16_t pid, const char *vendor) 
         StrBuf<12> o;
         o.put(p && p->type == pd::PdoType::Pps ? "PPS" : p && p->type == pd::PdoType::Avs ? "AVS" : "PDO").put_u32(uint32_t(r.want_pos));
         id.add(o.view(), Ident::Outline);
-        id.line.put("asks ").put_u32(r.want_mw / 1000).put("W of ").put_u32(r.src_max_mw / 1000).put("W offered");
+        id.line.put("Asks ").put_u32(r.want_mw / 1000).put("W of ").put_u32(r.src_max_mw / 1000).put("W offered");
         return;
     }
     }
@@ -1375,7 +1375,7 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
         {
             StrBuf<28> &v = R.add("Type-C", kText);
             typec_row_text(vbus_, rp_ma, v);   // the debounced VBUS (Row D), like the list body
-            if (v.view().empty()) v.put("unknown");
+            if (v.view().empty()) v.put("Unknown");
         }
         if (sink_tab) {
             put_a(R.add("Draw", kAmp), uint32_t(power::abs_sat(ctx_.pm_avg.current_ma)));
