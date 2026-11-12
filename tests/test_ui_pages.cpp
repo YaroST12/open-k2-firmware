@@ -837,8 +837,10 @@ static int act_row(bench::Place p, int tool) {
         }
         return -1;
     }
-    if (p == bench::Place::Log)   // the Log place is the PD diagnosis: its findings, then the Black Box row last
-        return tool == 7 ? std::max<int>(1, static_cast<int>(pd::diag::screen::row_count(pd::diag::live::report()))) : -1;
+    if (p == bench::Place::Log) {   // the Log place is the PD diagnosis: its findings (less the one the stamp names), then the Black Box row
+        const pd::diag::Report &r = pd::diag::live::report();
+        return tool == 7 ? std::max<int>(1, static_cast<int>(pd::diag::screen::row_count(r)) - (pd::diag::screen::names_top_finding(r) ? 1 : 0)) : -1;
+    }
     for (int i = 0; i < a.n; i++)
         if (a.a[i].kind == bench::ActKind::Tool && a.a[i].arg == tool) return i;
     return -1;

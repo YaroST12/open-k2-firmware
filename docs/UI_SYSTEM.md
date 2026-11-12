@@ -59,10 +59,14 @@ on the place page.
 
 ### 0.4 Log place and K2 place
 
-- **Log**: the PD diagnosis list under a 36 px stamp (y22..57): the verdict's fill (fail red, warn orange, a healthy link
+- **Log**: the PD diagnosis list under a 48 px stamp (y22..69): the verdict's fill (fail red, warn orange, a healthy link
   green, else `kSurface`), its 12 px glyph in a 20 px cell at x4, the word (`screen::word`, at most 16 chars) in font 24
-  from x30. The findings follow from y60; the last row is `Black Box` (chevron, note `N captures kept`), the only row
-  OK opens.
+  from x30. No repetition: when the word is the top finding's label (`screen::names_top_finding`) the list starts at the
+  second finding, and that finding's evidence note is the stamp's sub-line (font 12, y+31, from x30; its time is not
+  shown); with no finding to name the word is centred and the list holds every row. The list follows from y72; the last
+  row is `Black Box` (chevron, note `N captures kept`), the only row OK opens.
+- Status words that start a phrase are sentence case (`None on either port`, `Not read`, `No session, 3 captures`);
+  units and values keep their case (`mV`, `5.27V`).
 - **K2**: the version in font 16 at (8, 25), `up 1h05m  USB HID on` in font 12 at y46, a dashed line at y63, the settings
   list from y66, then `System state` (the Diag page) and `Boot info` (this boot's K2B1 record shared as QR codes).
 - A RowList that starts below an identity block or a stamp ends above y220; the page fills that gap once

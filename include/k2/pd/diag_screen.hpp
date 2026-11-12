@@ -35,6 +35,9 @@ void verdict(const Report& r, std::span<char> out);
 // Home row 1: the top finding's label when it is a Fail or a Warn, else the state ("Healthy", "Contract unseen", ...);
 // "No PD session" for an empty report. <= kLabelChars. `sev` gets the colour's severity (Ok = dim, no alarm).
 void word(const Report& r, std::span<char> out, Sev& sev);
+// True when word() is the top finding's label (a Fail or a Warn leads a session that saw PD), so a page that shows the word
+// as a stamp must not list that finding again.
+bool names_top_finding(const Report& r);
 // The worst severity of the findings (Ok when none).
 Sev worst(const Report& r);
 

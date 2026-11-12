@@ -158,7 +158,7 @@ Row row(Place p, const Facts &f) {
     switch (p) {
     case Place::Meter:
         r.known = f.vbus;
-        if (!f.vbus) { s.put("no VBUS"); break; }
+        if (!f.vbus) { s.put("No VBUS"); break; }
         s.put_abs_fixed(f.mw, f.mw >= 99995 ? 1 : 2).put("W  ").put_fixed(f.mv, 2).put("V  ").put_abs_fixed(f.ma, 3).put_char('A');
         break;
     case Place::Charger:
@@ -169,19 +169,19 @@ Row row(Place p, const Facts &f) {
         } else if (f.fc) {
             s.put(f.fc).put(" on the lines");
         } else {
-            s.put("none on either port");
+            s.put("None on either port");
         }
         break;
     case Place::Cable:
         r.known = f.cable;
-        if (!f.cable) { s.put("not read"); break; }
+        if (!f.cable) { s.put("Not read"); break; }
         s.put_u32(f.cable_a).put("A ").put_u32(f.cable_v).put_char('V');
         if (f.cable_w) s.put(", ").put_u32(f.cable_w).put_char('W');
         break;
     case Place::Device:
         r.known = f.contract;
-        if (!f.contract) { s.put("none inline"); break; }
-        s.put("asks ");
+        if (!f.contract) { s.put("None inline"); break; }
+        s.put("Asks ");
         put_volts(s, f.ctr_mv);
         s.put_char(' ');
         put_amps(s, f.ctr_ma);
@@ -189,7 +189,7 @@ Row row(Place p, const Facts &f) {
         break;
     case Place::Log:
         r.known = true;
-        s.put(f.diag.view().empty() ? std::string_view("no session") : f.diag.view());
+        s.put(f.diag.view().empty() ? std::string_view("No session") : f.diag.view());
         if (f.captures) s.put(", ").put_u32(f.captures).put(f.captures == 1 ? " capture" : " captures");
         break;
     case Place::K2:

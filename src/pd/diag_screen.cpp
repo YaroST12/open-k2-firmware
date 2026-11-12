@@ -289,13 +289,15 @@ Sev worst(const Report& r) {
     return w;
 }
 
+bool names_top_finding(const Report& r) { return !r.empty && !r.no_pd && r.n && r.f[0].sev <= Sev::Warn; }
+
 void word(const Report& r, std::span<char> out, Sev& sev) {
     Out o{out};
     if (!out.empty()) out[0] = 0;
     sev = Sev::Ok;
     if (r.empty) { o.s("No PD session"); return; }
     if (r.no_pd) { o.s("No PD seen"); return; }
-    if (r.n && r.f[0].sev <= Sev::Warn) {   // findings are ranked: the first is the worst
+    if (names_top_finding(r)) {   // findings are ranked: the first is the worst
         sev = r.f[0].sev;
         Row w;
         row(r, 0, w);

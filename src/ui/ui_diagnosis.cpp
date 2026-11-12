@@ -33,6 +33,8 @@ static_assert(screen::kLabelChars * kSmallAdvPx + kSmallAdvPx + screen::kTailCha
 static_assert(screen::kNoteChars * kLabelAdv <= static_cast<unsigned>(kit::kNoteMaxPx), "a diagnosis note is wider than the note box");
 static_assert(screen::kVerdictChars <= static_cast<std::size_t>(kFooterCells), "the diagnosis verdict is wider than the footer");
 static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kLabelChars) * 12 <= 224 - 2, "the stamp's word runs off the page");
+static_assert(DiagnosisPage::kStampWordX + static_cast<int>(screen::kNoteChars * kLabelAdv) <= 224 - 2, "the stamp's sub-line runs off the page");
+static_assert(DiagnosisPage::kStampSubY + 12 <= DiagnosisPage::kStampH, "the stamp's sub-line leaves the stamp");
 
 constexpr const char kBlackBox[] = "Black Box";
 // The Log place's list: the findings from under the stamp to the list bottom.
@@ -65,18 +67,24 @@ void DiagnosisPage::paint_stamp() {
     screen::word(r, w, sev);
     const std::string_view word(w);
     const kit::Verdict v = stamp_of(r);
-    stamp_.paint(mix_u32(mix(mix_init(), word), static_cast<uint32_t>(v)), [&] {
+    // the top finding's evidence, when the word names it (the list leaves that finding out): the sub-line
+    screen::Row top{};
+    if (skip()) screen::row(r, 0, top);
+    const std::string_view sub(top.note.data());
+    stamp_.paint(mix_u32(mix(mix(mix_init(), word), sub), static_cast<uint32_t>(v)), [&] {
         const Surface &c = ctx_.content;
         const kit::VerdictStyle st = kit::verdict_style(v);
         const uint16_t fill = st.filled ? st.fill : kSurface, ink = st.filled ? st.ink : kText;
         const int16_t y = kit::kBelowBar;
         constexpr int16_t kCellX = 4, kCell = 20, kCellDy = (kStampH - kCell) / 2;
         const kit::Box cell{kCellX, static_cast<int16_t>(y + kCellDy), kCell, kCell};
-        const kit::TextRun run{kStampWordX, static_cast<int16_t>(y + (kStampH - kMid.height) / 2), &kMid, word, ink};
+        const int16_t word_dy = sub.empty() ? (kStampH - kMid.height) / 2 : kStampWordDy;
+        const kit::TextRun runs[2] = {{kStampWordX, static_cast<int16_t>(y + word_dy), &kMid, word, ink},
+                                      {kStampWordX, static_cast<int16_t>(y + kStampSubY), &kLabelFont, sub, ink}};
         // the ground left of the word's run: the band beside and around the glyph cell
         kit::fill_except(c, {0, y, kStampWordX, kStampH}, &cell, 1, fill);
         kit::draw_verdict(c, cell.x, cell.y, cell.w, cell.h, v, "", fill);
-        kit::paint_texts(c, {kStampWordX, y, static_cast<int16_t>(c.w - kStampWordX), kStampH}, &run, 1, fill);
+        kit::paint_texts(c, {kStampWordX, y, static_cast<int16_t>(c.w - kStampWordX), kStampH}, runs, sub.empty() ? 1 : 2, fill);
         gfx_fill(c, 0, static_cast<int16_t>(y + kStampH), c.w, 2, kBg);   // the gap above the list
     });
 }
@@ -91,8 +99,10 @@ kit::Verdict DiagnosisPage::cell_of(diag::Sev s) {
     return kit::Verdict::Pass;
 }
 
+unsigned DiagnosisPage::skip() const { return place_ && screen::names_top_finding(live::report()) ? 1u : 0u; }
+
 int DiagnosisPage::rows() const {
-    const unsigned n = screen::row_count(live::report());
+    const unsigned n = screen::row_count(live::report()) - skip();
     return n ? static_cast<int>(n) : 1;
 }
 
@@ -132,7 +142,7 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
         }
         return;
     }
-    if (!screen::row(r, static_cast<unsigned>(index), p->row_)) {   // no session yet: the waiting row
+    if (!screen::row(r, static_cast<unsigned>(index) + p->skip(), p->row_)) {   // no session yet: the waiting row
         out.marker = kit::Marker::Icon;
         out.icon = Icon::Blackbox;
         out.text = kWaitText;

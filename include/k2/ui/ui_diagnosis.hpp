@@ -31,9 +31,12 @@ public:
     // that drills into the Black Box. Called before enter() and the first paint.
     void as_place();
     bool place() const { return place_; }
-    // The stamp: y22..57, the verdict's fill (kSurface when it has none), its 12 px glyph in a 20 px cell at x6 and the word
-    // (screen::word, the Home row-1 word, <= 16 chars) in font 24 from x30 to x222. The list starts 2 px under it.
-    static constexpr int16_t kStampH = 36, kStampWordX = 30;
+    // The stamp: y22..69, the verdict's fill (kSurface when it has none), its 12 px glyph in a 20 px cell at x4 and the word
+    // (screen::word, the Home row-1 word, <= 16 chars) in font 24 from x30 to x222. When the word is the top finding's label
+    // (screen::names_top_finding) the list does not repeat that finding: its evidence note is the stamp's sub-line (font 12,
+    // kStampSubY under the stamp's top, from x30) and the word sits at the top; else the word is centred. The list starts
+    // 2 px under the stamp.
+    static constexpr int16_t kStampH = 48, kStampWordX = 30, kStampWordDy = 4, kStampSubY = 31;
     // The stamp's verdict: a Fail finding red, a Warn amber, a healthy link with the power it needed green, else none.
     static kit::Verdict stamp_of(const pd::diag::Report &r);
 
@@ -45,7 +48,8 @@ public:
 
 private:
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);
-    int rows() const;                     // the screen rows, or the one waiting row before any session
+    int rows() const;                     // the listed screen rows (less a finding the stamp names), or the one waiting row
+    unsigned skip() const;                // screen rows the stamp already shows: 0, or 1 in the Log place
     int list_rows() const { return rows() + (place_ ? 1 : 0); }   // ... and the Black Box row of the Log place
     bool on_blackbox() const { return place_ && sel_ == rows(); }
     void paint_stamp();

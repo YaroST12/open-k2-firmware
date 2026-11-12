@@ -107,10 +107,43 @@ static void test_page_empty() {
     CHECK_EQ(int(ui.menu()), int(Menu::Count));
 }
 
+// The Log place: the stamp names the top finding, so the list does not repeat it (it starts at the second finding) and the
+// finding's evidence note moves under the stamp's word; with no finding to name, the list is the whole screen form.
+static void test_place_stamp_replaces_top() {
+    const diag::Report case1 = diag_fixture::case1();
+    CHECK(diag::screen::names_top_finding(case1));
+    g_stub.diag_report = case1;
+    g_stub.diag_state = 1;
+    Ui &ui = fresh_ui();
+    ui.tick(1000);
+    ui.open_place(bench::Place::Log, 1100);
+    ui.tick(1200);
+    const unsigned rows = diag::screen::row_count(case1);
+    CHECK_EQ(ui.diagnosis_page().list_state().count, int(rows));   // the screen rows less the stamped one, plus the Black Box row
+    // the stamp's sub-line (y = stamp + 31 .. 43) carries ink: the top finding's note
+    const int y0 = kit::kBelowBar + DiagnosisPage::kStampSubY;
+    int ink = 0;
+    const std::uint16_t ground = g_panel[(y0 + 1) * LCD_WIDTH + 226];
+    for (int y = y0; y < y0 + 12; y++)
+        for (int x = DiagnosisPage::kStampWordX; x < 222; x++) ink += g_panel[y * LCD_WIDTH + x] != ground;
+    CHECK(ink > 40);
+
+    diag::Report healthy{};
+    healthy.empty = false; healthy.link = 0; healthy.power = diag::kPowerOk;
+    healthy.quiet_contract = healthy.quiet_link = true;
+    CHECK(!diag::screen::names_top_finding(healthy));
+    g_stub.diag_report = healthy;
+    ui.tick(1400);
+    ui.tick(1600);
+    CHECK_EQ(ui.diagnosis_page().list_state().count, int(diag::screen::row_count(healthy)) + 1);
+    ui.on_button(Button::Back, ButtonEvent::Short, 1700);
+}
+
 int main() {
     test_cell_of();
     test_tone_of();
     test_page_case1();
     test_page_empty();
+    test_place_stamp_replaces_top();
     return test_report("test_ui_diagnosis");
 }
