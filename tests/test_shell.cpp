@@ -196,7 +196,8 @@ int main() {
     CHECK_EQ(said(f, "err: unknown tuner field"), true);
     CHECK_EQ(run(f, "help").empty(), true);
     CHECK_EQ(said(f, "ufcs show|set"), true);
-    // device twins: op numbers are shell::TwinOp (List 0, Predict 1, Run 2, Status 3, Learn 4, LearnSniff 5, Delete 6, Rename 7, Cancel 8)
+    // device twins: op numbers are shell::TwinOp (List 0, Predict 1, Run 2, Status 3, Learn 4, LearnSniff 5, Delete 6, Rename 7, Cancel 8,
+    // LearnInline 9)
     CHECK_STR((run(f, "twin list")).c_str(), "twin0,0,'';");
     CHECK_STR((run(f, "twin status")).c_str(), "twin3,0,'';");
     CHECK_STR((run(f, "twin cancel")).c_str(), "twin8,0,'';");
@@ -217,7 +218,12 @@ int main() {
     CHECK_STR((run(f, "twin learn identify Pixel 9")).c_str(), "twin4,0,'Pixel 9';");
     CHECK_STR((run(f, "twin learn sniff dry Camera")).c_str(), "twin5,0,dry,'Camera';");
     CHECK_STR((run(f, "twin learn identify")).c_str(), "twin4,0,'';");
-    CHECK_STR((run(f, "twin learn inline")).c_str(), "");
+    CHECK_STR((run(f, "twin learn inline")).c_str(), "");        // the interrogation resets the link twice: confirm first
+    CHECK_EQ(said(f, "err: an inline interrogation"), true);
+    CHECK_STR((run(f, "twin learn inline confirm")).c_str(), "twin9,0,c,'';");
+    CHECK_STR((run(f, "twin learn inline confirm dry Canon R5")).c_str(), "twin9,0,c,dry,'Canon R5';");
+    CHECK_STR((run(f, "twin learn inline dry confirm")).c_str(), "");
+    CHECK_STR((run(f, "twin learn frob")).c_str(), "");
     CHECK_STR((run(f, "twin learn identify 0123456789012345678901234")).c_str(), "");   // 25 characters
     CHECK_EQ(said(f, "err: name"), true);
     CHECK_STR((run(f, "twin rename 4 My phone")).c_str(), "twin7,4,'My phone';");
