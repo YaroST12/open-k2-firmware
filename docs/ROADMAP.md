@@ -1028,6 +1028,11 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 - WebHID dashboard in Chrome (Linux hidraw path tested with the Python tools only).
 - OPPO VOOC / SVOOC: no handshake seen yet (CHARGER_QUIRKS).
 - The HID-cable loop probe (Tools > Loop probe): built and host-tested only; the test plan is in `LOOP_PROBE.md`.
+- Home 2c and the OK + BACK reboot chord (2026-11-12, built and host-tested only). Validate: Home in all four
+  rotations (screenshots; the 1 px row rule at y 136 must show in landscape), Long BACK cycles W -> V -> A and the
+  hero survives a reboot, the cards rotate every 5 s with the lower cell 2.5 s behind, a live load shows PEAK and
+  DROP + SAG, `stack_free` in the heartbeat; OK + BACK shows the HoldCard at 1 s and reboots at 3 s, a BACK hold
+  alone does not reboot.
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
@@ -1051,7 +1056,9 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 | Layout invariants, flash map | done (gate) | verified | `startup.cpp`, `link.ld`, `flash_map.hpp` | |
 | Pin map, SWJ disabled | done | verified | `k2::pins` | |
 | ST7789V 240x240 LCD, screenshots | done | verified | `k2::lcd`, `gfx`, `capture` | |
-| 4 buttons, long/hold events, hold-BACK reboot | done | verified | `buttons`, `ui_events` | |
+| 4 buttons, long/hold events | done | verified | `buttons`, `ui_events` | |
+| Reboot gesture: OK + BACK held 3 s (HoldCard from 1 s, replaces the 5 s BACK hold, 2026-11-12) | done | not verified (host-tested: `test_ui_calc`, `test_ui_pages`) | `RebootChord` (`ui_calc`), `Ui::feed_chord` | |
+| Home 2c: W hero (Long BACK cycles W / V / A, kept), V/A ledger, cycling cards (PEAK, DROP + SAG, CABLE, LINES, Energy), W alarms at 90 % / 100 % of the contract (UI_DESIGN 4.0a) | done | not verified (host renders `runs/ui-home/2c/`) | `ui_home`, `home_cards`, `home_model`, `home_cell` | PASSIVE |
 | INA226/228/237 power monitor | done | verified (INA226) | `k2::power_monitor` | PASSIVE |
 | 7-channel ADC1 + DMA1, temperature | done | verified | `k2::adc` | PASSIVE |
 | Ripple capture on PA1 | done | not verified | `k2::adc`, `capture` | PASSIVE |
