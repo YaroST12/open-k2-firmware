@@ -734,6 +734,19 @@ No current render in `runs/ui-all`. From the 2026-11-08 renders in `runs/user-gu
 | Report cards | `Back/Del` on BACK | Delete belongs on a row action with a confirm (section 9.6) |
 | Saved cables | RowList with chevrons, then a table | Fine |
 
+### 7.13 Decisions (user, 2026-11-12)
+
+Scope: every interactive page takes the unified design; the read-only instrument pages (Home, Detail) keep theirs.
+
+1. **Stop key: BACK reads `Stop`** on every page while a run is in flight (charger test, twins proof, Loop probe, PD
+   trigger, FC trigger). OK is free: `View` where there is something to open, otherwise blank. BACK stops first; a
+   second BACK leaves.
+2. **Tables: one named dense variant.** The kit table stays 26 px with font-16 keys; `kit::kDenseRowH` 22 px with
+   font-12 keys is the dense variant, chosen per page on purpose (Who's attached, PD trigger steps, Diag).
+3. **Tools, blocked rows: option A.** Icon in the tone colour, the tail word lower case in `kDim`; only the footer
+   carries the red.
+4. **Who's attached tabs: option B.** The active tab is filled `kFocusT`, so it reads as focus, not progress.
+
 ## 8 Code against renders, labs and the old skill
 
 | item | code (wins) | other source |
@@ -749,7 +762,7 @@ No current render in `runs/ui-all`. From the 2026-11-08 renders in `runs/user-gu
 | Results best line | no prefix: `PD 5V 3A  QC3B 5V` | the skill said `Best: ...` |
 | VerdictCell lead | 12 x 12 marker; 14 x 14 and 20 x 20 in two places | the skill said 22 x 22 |
 | AlertBand | 36 px | the skill said about 34..40 |
-| Stop while running | OK reads `Stop`, BACK reads `Back` | the skill said BACK reads `Stop` |
+| Stop while running | BACK reads `Stop` everywhere (decision 7.13.1; the charger test changes) | the code had OK reads `Stop` on the charger test |
 | Landscape renders | positions are mapped 224 x 240 to 240 x 224 | measure from code, not from a landscape png |
 | Tinted footer in landscape | the fill covers 224 of 240 px | a defect, section 7.2 |
 
