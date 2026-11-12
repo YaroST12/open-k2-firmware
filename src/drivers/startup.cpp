@@ -40,6 +40,7 @@ K2_WEAK_HANDLER(USBWakeUp_IRQHandler);
 K2_WEAK_HANDLER(EXTI15_10_IRQHandler);
 K2_WEAK_HANDLER(EXTI2_IRQHandler);
 K2_WEAK_HANDLER(EXTI9_5_IRQHandler);
+K2_WEAK_HANDLER(TMR7_GLOBAL_IRQHandler);
 #undef K2_WEAK_HANDLER
 void USB_LP_CAN1_RX0_IRQHandler();  // defined in usb.cpp
 }
@@ -74,6 +75,7 @@ constexpr auto make_vectors() {
     v[kExceptions - 1 + 23] = EXTI9_5_IRQHandler;          // IRQ 23: D+ (PA7) edge, k2/fastcharge/dpsniff.hpp
     v[kExceptions - 1 + 40] = EXTI15_10_IRQHandler;        // IRQ 40: FUSB302 INT_N (EXTI12)
     v[kExceptions - 1 + 42] = USBWakeUp_IRQHandler;        // IRQ 42
+    v[kExceptions - 1 + 55] = TMR7_GLOBAL_IRQHandler;      // IRQ 55: one-shot timer, k2/drivers/oneshot.hpp
     return v;
 }
 }  // namespace

@@ -49,6 +49,7 @@ constexpr double kSafe5vMv = 4750;   // vSafe5V (min): the charger's PD starts, 
 constexpr int kRdMv = 1680, kOpenMv = 3300;   // an Rp 3 A into one Rd / an Rp with no Rd on the line (trace2scenario OPEN_RP_MV)
 constexpr double kAdcFirstRingUs = 15000;     // adc::init() to the first full ring (src/core/rd_comeback.cpp host_powered_now)
 constexpr int kMaxLives = 20;
+constexpr double kCyclesReadUs = 0.02;        // a DWT CYCCNT read (a few cycles at 240 MHz)
 constexpr std::size_t kNoinitMax = 1024;      // room for the executable's .noinit (the SRAM probe is 128 B); noinit_found() checks it fits
 
 enum : std::uint8_t {
@@ -962,6 +963,12 @@ bool host_pin(Port p, std::uint8_t n, HostPin op, unsigned) {
     return v;
 }
 }  // namespace reg
+
+namespace dpdm {
+// The DWT cycle counter (240 MHz) on the world's clock; a read costs a few cycles (the main loop's stage meter reads it at
+// every stage, the SuperVOOC wire's ISR busy-waits on it).
+std::uint32_t cycles() { world::spend_us(world::kCyclesReadUs); return std::uint32_t(std::fmod(world::S->us * 240.0, 4294967296.0)); }
+}  // namespace dpdm
 
 namespace pinmark {
 // DR21 in the world's backup domain (State::pin_mark): kept over a dark shorter than PowerModel::bpr_hold_ms, like the session record.

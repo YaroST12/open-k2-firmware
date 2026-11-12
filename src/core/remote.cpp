@@ -1166,6 +1166,7 @@ remote::SvoocSnapshot Remote::svooc_info() {
     v.stage = s.stage; v.report = s.report; v.phase = s.phase; v.off_run = s.off_run; v.driving = s.driving; v.log = s.log;
     v.params = s.params; v.escape = s.escape; v.escape_t_ms = s.escape_t_ms;
     v.rec_edges = s.rec_edges; v.rec_end = s.rec_end;
+    v.stall = s.stall; v.rel_timer = s.rel_timer; v.rel_loop = s.rel_loop; v.rel_edge = s.rel_edge;
     return v;
 }
 // --- end svooc-trigger ---
