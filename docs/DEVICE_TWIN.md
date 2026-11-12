@@ -68,21 +68,35 @@ A twin is learned from one of two observations. The record keeps only what is ne
 | Identify, device **alone** on the K2 | screen: Tools > Device twins > Learn row; shell `twin learn identify [dry] [name]`; host `k2_remote.py twin learn identify` | the device is attached to the K2 with no charger. Identify (`identify-device`, `pd::IdState`, `include/k2/pd/pd_identify.hpp`) asks it for identity, SVIDs, modes and its Sink_Capabilities. |
 | A Request the K2 **sniffed** inline | shell `twin learn sniff [dry] [name]`; host `twin learn sniff` | a real charger and the real device, the K2 between them sending nothing. The sniffed Request (the contract the device really asked for) is stored next to the sink PDOs. |
 
-`dry` shows what would be learned and saves nothing. Learning the same device again merges into its twin (same VID and PID): the library says `updated` or `unchanged`. The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"), with " 2", " 3" on repeats. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
+`dry` shows what would be learned and saves nothing. Learning the same device again merges into its twin: the library says `updated` or `unchanged`.
+
+### Same device (the merge key)
+
+`twin::same_device` (`include/k2/twin/learn.hpp`) decides whether a new observation belongs to a saved twin:
+
+1. Both carry an identity (VID not 0): the same VID and PID, nothing else.
+2. One carries an identity and the other does not: never the same. A sink PDO list or a Request does not prove which identified device it was (two phones of one vendor list the same PDOs).
+3. Neither carries one: the same sink PDO list when both have one, otherwise the same sniffed Request (the RDO and the source PDO it pointed at). With nothing to compare the two are different devices: two devices that never answered Discover Identity do not merge just because both read 0000:0000.
+
+What the new observation knows replaces the saved value, what it does not know leaves the saved value alone, and the saved name stays.
+
+The library holds 12 twins The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"), with " 2", " 3" on repeats. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
 
 ### Record format
 
-Magic "K2T", CRC16 CCITT, two versions:
+Magic "K2T", CRC16 CCITT, three versions:
 
 - **v1**: 40 to 76 bytes: identity, sink PDOs, optionally the sniffed Request pair (flag bit 0).
 - **v2**: v1 plus a **declared block** of 3 to 35 bytes (flag bit 1) and an **observed block** of 18 bytes (flag bit 2). A record without USB data is written as v1, byte-identical to what a firmware without the USB properties wrote, and old records stay readable. Any other flag bit, or flag bit 1 or 2 in a v1 record, is damage.
-- Largest record 76 + 35 + 18 = 129 bytes; the typical phone (three sink PDOs) is 52 bytes.
+- **v3**: v2 plus the PD 3 answers of an inline interrogation: the **Revision** data object, 4 bytes (flag bit 3), and the **Sink_Capabilities_Extended** block, a length byte (1 to 24) and that many bytes (flag bit 4). Written only when one of them is present, so every older record stays byte-identical; flag bit 3 or 4 in a v1 or v2 record is damage.
+- Largest record 76 + 35 + 18 = 129 bytes, for every version: twelve of them are what the volume budget holds for `/twin` (one byte more each spills the directory into another metadata pair). The v3 blocks go in only while the record stays within 129 bytes, the extended block left out first, then the Revision; only a twin that also carries full USB blocks loses them. The typical phone (three sink PDOs) is 52 bytes, 89 with a Request and both v3 blocks.
 
 Cross-check vectors (also in `tests/test_twin_lib.cpp` and `tests/test_twin_proto.py`):
 
 ```
 PIXEL     (52 B) 4b3254010300d118e14ea0010203506978656c203900000000000000000000000000000000002c9101002cd102002c21dcc8e465
 PIXEL_REQ (60 B) 4b3254010501d118e14ea0010203506978656c203900000000000000000000000000000000002c9101002cd102002c21dcc82cb104102cb10400a8b5
+CANON_V3  (65 B) 4b3254030619000000000000020243616e6f6e000000000000000000000000000000000000002c9101002cb104002cb144432cb10400000010320401020304b427
 ```
 
 ## 5. Running it: predict, prove, read

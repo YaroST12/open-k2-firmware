@@ -610,7 +610,130 @@ static void test_library_merges_anonymous_by_fingerprint() {
     CHECK_EQ(t.vid, 0);
 }
 
+// Version 3 adds what an inline interrogation reads from PD 3 devices: the Revision data object and the
+// Sink_Capabilities_Extended block. Only a twin that holds one of them is written as version 3.
+static void test_codec_v3() {
+    std::array<std::uint8_t, kMaxFileBytes> b{};
+    std::uint8_t seq = 0;
+    Twin u;
+    // without them: the old versions, byte for byte
+    Twin p = pixel("Pixel");
+    CHECK_EQ(int(encode(p, 1, b) != 0), 1);
+    CHECK_EQ(b[3], kVersion1);
+    p.decl.n_svids = 1;
+    p.decl.svids[0] = 0xFF01;
+    encode(p, 1, b);
+    CHECK_EQ(b[3], kVersion2);
+
+    // the Revision data object alone: flag b3, four bytes after the USB blocks
+    Twin t = pixel("Rev");
+    t.revision = 0x32100000u;   // PD 3.2, version 1.0
+    std::size_t n = encode(t, 2, b);
+    CHECK_EQ(b[3], kVersion3);
+    CHECK_EQ(b[kOffFlags], kFlagRevision);
+    CHECK_EQ(n, kHeaderBytes + 3 * 4 + 4 + 2);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(u.revision, 0x32100000u);
+    CHECK_EQ(int(u.sink_ext_len), 0);
+
+    // the Sink_Capabilities_Extended block alone: flag b4, a length byte and that many bytes
+    Twin e = pixel("Ext");
+    e.sink_ext_len = 21;
+    for (std::size_t i = 0; i < 21; ++i) e.sink_ext[i] = std::uint8_t(0xA0 + i);
+    n = encode(e, 3, b);
+    CHECK_EQ(b[3], kVersion3);
+    CHECK_EQ(b[kOffFlags], kFlagSinkExt);
+    CHECK_EQ(n, kHeaderBytes + 3 * 4 + 1 + 21 + 2);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(int(u.sink_ext_len), 21);
+    CHECK_EQ(u.sink_ext[0], 0xA0);
+    CHECK_EQ(u.sink_ext[20], 0xB4);
+    CHECK_EQ(u.sink_ext[21], 0);
+    CHECK_EQ(u.revision, 0u);
+
+    // a phone with a Request and both blocks: 89 bytes, everything kept
+    Twin ph = pixel("Phone");
+    ph.rdo = 0x4344B12Cu;
+    ph.rdo_pdo = 0x0004B12Cu;
+    ph.revision = 0x31000000u;
+    ph.sink_ext_len = kSinkExtBytes;
+    ph.sink_ext.fill(0x5A);
+    n = encode(ph, 4, b);
+    CHECK_EQ(n, std::size_t(89));
+    CHECK_EQ(b[kOffFlags], kFlagRequest | kFlagRevision | kFlagSinkExt);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(int(u.sink_ext_len), int(kSinkExtBytes));
+    CHECK_EQ(u.sink_ext[kSinkExtBytes - 1], 0x5A);
+
+    // the record never grows past kMaxFileBytes (the volume budget): with every other block full, the extended block stays out,
+    // then the Revision; what is written still reads back
+    Twin big = ph;
+    big.num_pdos = 7;
+    big.decl.n_pt = kMaxProductVdos;
+    big.decl.n_svids = kMaxDeclSvids;
+    big.decl.n_modes = kMaxDeclModes;
+    big.obs.valid = true;
+    n = encode(big, 4, b);
+    CHECK_EQ(n, kMaxFileBytes);
+    CHECK_EQ(b[3], kVersion2);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(u.revision, 0u);
+    CHECK_EQ(int(u.sink_ext_len), 0);
+    big.num_pdos = 6;   // four bytes free: the Revision goes in, the extended block still does not
+    n = encode(big, 4, b);
+    CHECK_EQ(n, kMaxFileBytes);
+    CHECK_EQ(b[kOffFlags], kFlagRequest | kFlagDeclared | kFlagObserved | kFlagRevision);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(u.revision, 0x31000000u);
+    big.num_pdos = 0;   // 28 bytes free: an extended block of 23 bytes fits after the Revision, one of 24 does not
+    big.sink_ext_len = 23;
+    CHECK_EQ(encode(big, 4, b), kMaxFileBytes);
+    big.sink_ext_len = 24;
+    CHECK_EQ(encode(big, 4, b), kMaxFileBytes - 24);
+
+    // more extended bytes than the block holds: nothing written
+    Twin over = e;
+    over.sink_ext_len = kSinkExtBytes + 1;
+    CHECK_EQ(encode(over, 1, b), std::size_t(0));
+
+    auto recrc = [](std::array<std::uint8_t, kMaxFileBytes>& r, std::size_t len) {
+        detail::put16(&r[len - 2], bbstore::crc16(0xFFFF, {r.data(), len - 2}));
+    };
+    // a version 2 record with a version 3 flag is damage, not a new format
+    std::array<std::uint8_t, kMaxFileBytes> c{};
+    n = encode(t, 2, c);
+    c[3] = kVersion2;
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)), int(Dec::Invalid));
+    // an extended block of length 0 or over the maximum is damage
+    n = encode(e, 3, c);
+    const std::size_t ext_at = kHeaderBytes + 3 * 4;
+    c[ext_at] = 0;
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)) != int(Dec::Ok), true);
+    n = encode(e, 3, c);
+    c[ext_at] = std::uint8_t(kSinkExtBytes + 1);
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)) != int(Dec::Ok), true);
+    // a version 4 record is refused, never guessed
+    n = encode(big, 4, c);
+    c[3] = 4;
+    recrc(c, n);
+    CHECK_EQ(int(decode({c.data(), n}, seq, u)), int(Dec::Version));
+
+    // merge keeps them the way it keeps everything else: what the new observation knows replaces, the rest stays
+    Twin saved = pixel("Saved");
+    merge(saved, t);
+    CHECK_EQ(saved.revision, 0x32100000u);
+    merge(saved, e);
+    CHECK_EQ(saved.revision, 0x32100000u);
+    CHECK_EQ(int(saved.sink_ext_len), 21);
+    merge(saved, pixel(""));
+    CHECK_EQ(int(saved.sink_ext_len), 21);
+}
+
 int main() {
+    test_codec_v3();
     test_same_device();
     test_library_merges_anonymous_by_fingerprint();
     test_codec_roundtrip();

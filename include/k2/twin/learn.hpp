@@ -162,6 +162,11 @@ inline void merge(Twin& saved, const Twin& in) {
     }
     if (in.decl.any()) saved.decl = in.decl;   // a device that answered no USB words leaves the saved block alone
     if (in.obs.valid) saved.obs = in.obs;
+    if (in.revision != 0) saved.revision = in.revision;
+    if (in.sink_ext_len != 0) {
+        saved.sink_ext_len = in.sink_ext_len;
+        saved.sink_ext = in.sink_ext;
+    }
 }
 
 }  // namespace k2::twin

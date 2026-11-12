@@ -29,7 +29,10 @@ MAX_SINK_PDOS = 7
 MAX_PT, MAX_SVIDS, MAX_MODES = 2, 6, 2
 HEADER_BYTES = 38
 OBS_BYTES = 18
-FLAG_REQUEST, FLAG_DECLARED, FLAG_OBSERVED = 1, 2, 4
+FLAG_REQUEST, FLAG_DECLARED, FLAG_OBSERVED, FLAG_REVISION, FLAG_SINK_EXT = 1, 2, 4, 8, 16
+SINK_EXT_BYTES = 24
+KNOWN_FLAGS = {1: FLAG_REQUEST, 2: FLAG_REQUEST | FLAG_DECLARED | FLAG_OBSERVED,
+               3: FLAG_REQUEST | FLAG_DECLARED | FLAG_OBSERVED | FLAG_REVISION | FLAG_SINK_EXT}
 
 
 class TwinError(Exception):
@@ -68,16 +71,16 @@ def decode_record(raw):
     if raw[:3] != b"K2T":
         raise BadRecord("record magic")
     version = raw[3]
-    if version == 0 or version > 2:
+    if version not in KNOWN_FLAGS:
         raise BadRecord(f"record version {version}")
     if len(raw) < HEADER_BYTES + 2:
         raise BadRecord("record short")
     flags = raw[5]
-    known = FLAG_REQUEST if version == 1 else FLAG_REQUEST | FLAG_DECLARED | FLAG_OBSERVED
     n_pdos = raw[13]
-    if flags & ~known or n_pdos > MAX_SINK_PDOS:
+    if flags & ~KNOWN_FLAGS[version] or n_pdos > MAX_SINK_PDOS:
         raise BadRecord("record invalid")
     req, decl, obs = bool(flags & FLAG_REQUEST), bool(flags & FLAG_DECLARED), bool(flags & FLAG_OBSERVED)
+    rev, ext = bool(flags & FLAG_REVISION), bool(flags & FLAG_SINK_EXT)
     decl_at = HEADER_BYTES + 4 * n_pdos + (8 if req else 0)
     dlen = 0
     if decl:
@@ -87,7 +90,15 @@ def decode_record(raw):
         if npt > MAX_PT or nsv > MAX_SVIDS or nmo > MAX_MODES or (npt | nsv | nmo) == 0:
             raise BadRecord("record invalid")
         dlen = 3 + 4 * npt + 2 * nsv + 6 * nmo
-    total = decl_at + dlen + (OBS_BYTES if obs else 0) + 2
+    ext_at = decl_at + dlen + (OBS_BYTES if obs else 0) + (4 if rev else 0)
+    elen = 0
+    if ext:
+        if len(raw) < ext_at + 1:
+            raise BadRecord("record short")
+        if raw[ext_at] == 0 or raw[ext_at] > SINK_EXT_BYTES:
+            raise BadRecord("record invalid")
+        elen = 1 + raw[ext_at]
+    total = ext_at + elen + 2
     if len(raw) < total:
         raise BadRecord("record short")
     if len(raw) > total:
@@ -97,7 +108,7 @@ def decode_record(raw):
     out = {"version": version, "seq": raw[4], "name": raw[14:14 + NAME_MAX].split(b"\0", 1)[0].decode("ascii", errors="replace"),
            "vid": _u16(raw, 6), "pid": _u16(raw, 8), "id_hi": _u16(raw, 10), "pd_rev": raw[12],
            "pdos": [_u32(raw, HEADER_BYTES + 4 * i) for i in range(n_pdos)], "request": None, "declared": None, "observed": None,
-           "bytes": len(raw), "raw": raw.hex()}
+           "revision": None, "sink_ext": None, "bytes": len(raw), "raw": raw.hex()}
     at = HEADER_BYTES + 4 * n_pdos
     if req:
         out["request"] = {"rdo": _u32(raw, at), "pdo": _u32(raw, at + 4)}
@@ -116,6 +127,14 @@ def decode_record(raw):
         out["observed"] = {"partner_vid": _u16(raw, at), "family": raw[at + 2], "tbt": raw[at + 3], "flags": raw[at + 4],
                            "dp_pin": raw[at + 5], "mbps": _u32(raw, at + 6), "enter_usb": _u32(raw, at + 10),
                            "tbt_enter": _u32(raw, at + 14)}
+        at += OBS_BYTES
+    if rev:
+        out["revision"] = _u32(raw, at)
+        if out["revision"] == 0:
+            raise BadRecord("record invalid")
+        at += 4
+    if ext:
+        out["sink_ext"] = raw[at + 1:at + 1 + raw[at]].hex()
     return out
 
 

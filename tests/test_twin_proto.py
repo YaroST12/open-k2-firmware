@@ -88,6 +88,32 @@ class Record(unittest.TestCase):
         self.assertEqual(r["observed"]["tbt_enter"], 0x01020304)
         self.assertEqual(r["bytes"], len(raw))
 
+    def test_version3_revision_and_sink_ext(self):
+        # What the firmware encoder writes for an anonymous device learned by an inline interrogation: two sink PDOs, the
+        # sniffed Request, the Revision data object (PD 3.2, version 1.0) and four Sink_Capabilities_Extended bytes; number 6.
+        raw = bytes.fromhex("4b3254030619000000000000020243616e6f6e000000000000000000000000000000000000002c9101002cb104002cb14443"
+                            "2cb10400000010320401020304b427")
+        r = tp.decode_record(raw)
+        self.assertEqual((r["version"], r["seq"], r["name"]), (3, 6, "Canon"))
+        self.assertEqual(r["request"], {"rdo": 0x4344B12C, "pdo": 0x0004B12C})
+        self.assertEqual(r["revision"], 0x32100000)
+        self.assertEqual(r["sink_ext"], "01020304")
+        self.assertEqual(r["bytes"], 65)
+        # a version 1 record says it read neither
+        self.assertIsNone(tp.decode_record(PIXEL)["revision"])
+        self.assertIsNone(tp.decode_record(PIXEL)["sink_ext"])
+        # a version 3 flag in a version 2 record is damage; an extended block of length 0 too
+        v2 = bytearray(raw[:-2])
+        v2[3] = 2
+        with self.assertRaisesRegex(tp.BadRecord, "invalid"):
+            tp.decode_record(bytes(v2) + le16(tp.crc16(bytes(v2))))
+        z = bytearray(raw[:-2])
+        z[-5] = 0
+        with self.assertRaisesRegex(tp.BadRecord, "invalid"):
+            tp.decode_record(bytes(z) + le16(tp.crc16(bytes(z))))
+        with self.assertRaisesRegex(tp.BadRecord, "version"):
+            tp.decode_record(raw[:3] + bytes([4]) + raw[4:])
+
     def test_sink_pdo_text(self):
         self.assertEqual(tp.pdo_text(0x0001912C), "5.0 V 3.0 A")
         self.assertEqual(tp.pdo_text(0x0002D12C), "9.0 V 3.0 A")
