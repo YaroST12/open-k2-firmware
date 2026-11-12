@@ -19,7 +19,7 @@ LIMITERS = ["none", "device", "charger", "cable"]                # twin::Limiter
 VERDICTS = ["not run", "granted", "refused", "no PS_RDY", "out of band", "no list", "link reset", "overvoltage", "skipped",
             "cancelled"]                                          # twin::live::Verdict, name()
 SKIPS = ["", "nothing usable", "above the monitor ceiling", "request not buildable", "twin unreadable"]   # twin::live::Skip
-REASONS = ["done", "cancelled", "ports taken"]                   # twin::live::Reason
+REASONS = ["done", "cancelled", "ports taken", "no offer"]      # twin::live::Reason
 REFUSALS = ["ok", "confirm needed", "busy", "link inline", "no power monitor", "no charger", "no twins"]   # live::Refusal
 USB_WHICH = ["declared", "observed"]
 

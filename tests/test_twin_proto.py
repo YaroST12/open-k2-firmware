@@ -133,6 +133,9 @@ class Responses(unittest.TestCase):
         s = tp.decode_status(bytes([0, 1, 0, 3, 1, 2, 0]) + le16(0b101))
         self.assertEqual((s["running"], s["reason"], s["count"], s["done"], s["current"], s["restoring"]), (True, "done", 3, 1, 2, False))
         self.assertEqual(s["with_verdict"], [1, 3])
+        # the run's end reasons are named on the wire in twin::live::Reason order (3: a woken charger that never listed)
+        self.assertEqual([tp.decode_status(bytes([0, 0, r, 1, 0, 0, 0]) + le16(0))["reason"] for r in range(4)],
+                         ["done", "cancelled", "ports taken", "no offer"])
         slot = tp.decode_slot(bytes([0, 4, 1, 0]) + le16(9012))
         self.assertEqual((slot["seq"], slot["verdict"], slot["skip"], slot["measured_mv"]), (4, "granted", "", 9012))
         sk = tp.decode_slot(bytes([0, 4, 8, 2]) + le16(0))
