@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Guarded SuperVOOC trigger, part 3 of 3: the guards and the session, pure (tests/test_svooc_run.cpp). The firmware glue
-// (src/fastcharge/svooc.cpp) gathers the facts, feeds a Sample every main-loop pass and carries out the Step it gets
-// back; every decision about starting, stopping and the exit check lives here.
+// (src/fastcharge/svooc_trig.cpp) gathers the facts, feeds a Sample every main-loop pass and carries out the Next it
+// gets back; every decision about starting, stopping and the exit check lives here.
 //
 // The trigger runs with NO LOAD only: the K2 stands in for a phone on D+/D- while nothing draws current, so the adapter
 // may raise VBUS but no power flows. It never starts unless (refusal()):
@@ -14,7 +14,7 @@
 //   - |I| <= kCurrentMaxMa;
 //   - VBUS is about 5 V (kFiveMinMv .. kFiveMaxMv);
 //   - the mode RAM is free (the recorder of the session's edges; the USB drive borrows it).
-// While it runs, every poll checks, in this order, and the first that fails ends it (abort, one Step::Release):
+// While it runs, every poll checks, in this order, and the first that fails ends it (abort, one Next::Release):
 //   host gone (lease expiry and USB drop come in as stop()), monitor lost, VBUS > kVbusMaxMv, |I| > kCurrentMaxMa,
 //   a sink or inline device appears, a PD contract appears, an edge storm on D+/D-, the charger off-script for more
 //   than two frames in a row (the wire stopped), the run-time cap.
@@ -77,7 +77,7 @@ enum class Stage : std::uint8_t {
 };
 
 // What the glue does now.
-enum class Step : std::uint8_t {
+enum class Next : std::uint8_t {
     None,
     Wake,      // play the wake burst, then arm the wire (D+ listen, D- sniff)
     Rest,      // a wake went unanswered: keep the lines passive until the next one
@@ -128,6 +128,42 @@ struct Report {
     std::int32_t vbus_exit_mv = 0;   // the reading that ended the exit watch
 };
 
+// Log and report names (tools/k2_remote.py keeps the same lists, in the same order).
+constexpr const char* name(Refusal r) {
+    switch (r) {
+    case Refusal::None: return "none";
+    case Refusal::NotConfirmed: return "not confirmed";
+    case Refusal::Busy: return "D+/D- busy";
+    case Refusal::NoHost: return "no host link";
+    case Refusal::NoMonitor: return "no power monitor";
+    case Refusal::Sink: return "sink on the bottom port";
+    case Refusal::Inline: return "inline mode";
+    case Refusal::PdContract: return "PD contract held";
+    case Refusal::Current: return "current over 50 mA";
+    case Refusal::NotFiveVolts: return "VBUS not 5 V";
+    case Refusal::NoRam: return "no RAM: USB drive enabled";
+    }
+    return "?";
+}
+
+constexpr const char* name(Abort a) {
+    switch (a) {
+    case Abort::None: return "none";
+    case Abort::Overvoltage: return "VBUS over 12 V";
+    case Abort::Current: return "current over 50 mA";
+    case Abort::OffScript: return "charger off-script";
+    case Abort::HostGone: return "host gone";
+    case Abort::NoMonitor: return "power monitor lost";
+    case Abort::Sink: return "sink appeared";
+    case Abort::PdContract: return "PD contract appeared";
+    case Abort::Storm: return "D+/D- edge storm";
+    case Abort::NoAdapter: return "no adapter answer";
+    case Abort::TimeCap: return "time cap";
+    case Abort::Stopped: return "stopped";
+    }
+    return "?";
+}
+
 inline constexpr std::int32_t magnitude(std::int32_t v) { return v < 0 ? -v : v; }
 
 constexpr Refusal refusal(const StartFacts& f) {
@@ -160,32 +196,32 @@ public:
         return Refusal::None;
     }
 
-    Step poll(const Sample& s) {
-        if (stage_ == Stage::Idle || stage_ == Stage::Done) return Step::None;
+    Next poll(const Sample& s) {
+        if (stage_ == Stage::Idle || stage_ == Stage::Done) return Next::None;
         track(s);
-        if (stage_ == Stage::Exit) { watch_exit(s); return Step::None; }
+        if (stage_ == Stage::Exit) { watch_exit(s); return Next::None; }
         report_.commands = s.commands;
         report_.accepted = report_.accepted || s.accepted;
         if (const Abort a = guard(s); a != Abort::None) return finish(a, s.now_ms);
         switch (stage_) {
         case Stage::Wake: return wake(s.now_ms);
         case Stage::Listen:
-            if (s.commands > 0) { stage_ = Stage::Answer; return Step::None; }
-            if (s.now_ms - stage_t_ < kWakeListenMs) return Step::None;
+            if (s.commands > 0) { stage_ = Stage::Answer; return Next::None; }
+            if (s.now_ms - stage_t_ < kWakeListenMs) return Next::None;
             if (report_.tries >= kWakeTries) return finish(Abort::NoAdapter, s.now_ms);
             stage_ = Stage::Rest;
             stage_t_ = s.now_ms;
-            return Step::Rest;
+            return Next::Rest;
         case Stage::Rest:
-            if (s.commands > 0) { stage_ = Stage::Answer; return Step::None; }   // a late ident
-            return s.now_ms - stage_t_ < kWakeRestMs ? Step::None : wake(s.now_ms);
-        default: return Step::None;   // Answer: the wire does the work
+            if (s.commands > 0) { stage_ = Stage::Answer; return Next::None; }   // a late ident
+            return s.now_ms - stage_t_ < kWakeRestMs ? Next::None : wake(s.now_ms);
+        default: return Next::None;   // Answer: the wire does the work
         }
     }
 
     // An outside end (the lease, the remote's stop, BACK, USB gone): Release once; nothing if the lines are not held.
-    Step stop(Abort why, std::uint32_t now_ms) {
-        if (!lines_held()) return Step::None;
+    Next stop(Abort why, std::uint32_t now_ms) {
+        if (!lines_held()) return Next::None;
         return finish(why, now_ms);
     }
 
@@ -215,19 +251,19 @@ private:
         return Abort::None;
     }
 
-    Step wake(std::uint32_t now) {
+    Next wake(std::uint32_t now) {
         ++report_.tries;
         stage_ = Stage::Listen;
         stage_t_ = now;
-        return Step::Wake;
+        return Next::Wake;
     }
 
-    Step finish(Abort why, std::uint32_t now) {
+    Next finish(Abort why, std::uint32_t now) {
         report_.abort = why;
         report_.elapsed_ms = now - start_t_;
         stage_ = Stage::Exit;
         stage_t_ = now;
-        return Step::Release;
+        return Next::Release;
     }
 
     void watch_exit(const Sample& s) {

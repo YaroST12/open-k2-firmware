@@ -1,0 +1,150 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Yaraslau Furman
+"""Host tests for `k2_remote fc svooc-trigger / svooc-status / svooc-stop` (CMD_FC 0x32, op 5): the confirm rule on
+the host, the refusal text from the Busy reply's summary, the poll that holds the lease until the run is done, Ctrl-C
+sending stop, and the name lists matching the firmware's (k2/fastcharge/svooc_run.hpp)."""
+import re
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+
+import k2_remote as kr
+
+
+def summary(stage=0, refusal=0, abort=0, accepted=False, exit_ok=False, kept=0, total=0, vmax=5100, vexit=0):
+    p = bytearray(kr.SVOOC_SUMMARY_BYTES)
+    p[0], p[1], p[2], p[3] = stage, refusal, abort, 1
+    p[4] = (1 if accepted else 0) | (2 if stage == 6 else 0) | (4 if exit_ok else 0)
+    p[18:20] = total.to_bytes(2, "little")
+    p[20] = kept
+    for off, v in ((21, 20000), (23, 4321), (25, 5100), (27, vmax), (29, vexit), (31, 3)):
+        p[off:off + 2] = v.to_bytes(2, "little")
+    return bytes(p)
+
+
+def pairs_page(page, kept, pairs):
+    out = bytearray([page, kept, len(pairs)])
+    for cmd, word in pairs:
+        out += bytes([cmd]) + word.to_bytes(2, "little")
+    return bytes(out)
+
+
+class Link:
+    """Answers op 5 from a script of status summaries; records every request."""
+
+    def __init__(self, statuses, start_status=kr.STATUS_OK, start_payload=None, pages=None):
+        self.sent, self.statuses, self.pages = [], list(statuses), pages or {}
+        self.start_status, self.start_payload = start_status, start_payload
+
+    def call(self, cmd, payload=b""):
+        self.sent.append((cmd, bytes(payload)))
+        assert cmd == kr.CMD_FC and payload[0] == kr.FC_OP_SVOOC
+        if payload[1] == kr.SVOOC_START:
+            if self.start_status != kr.STATUS_OK:
+                raise kr.RemoteError(self.start_status, cmd, self.start_payload or b"")
+            return kr.Response(cmd, 1, 0, summary(stage=1))
+        if payload[1] == kr.SVOOC_STOP:
+            return kr.Response(cmd, 1, 0, summary(stage=5, abort=11))
+        if payload[2] == 0:
+            body = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            return kr.Response(cmd, 1, 0, body)
+        return kr.Response(cmd, 1, 0, self.pages[payload[2]])
+
+
+def args(*argv):
+    return kr.build_parser().parse_args(["fc", *argv])
+
+
+class SvoocTrigger(unittest.TestCase):
+    def test_without_confirm_nothing_is_sent(self):
+        link = Link([summary()])
+        with self.assertRaises(kr.FcRefused):
+            kr.cmd_fc_svooc(link, args("svooc-trigger"), sleep=lambda s: None)
+        self.assertEqual(link.sent, [])
+
+    def test_cap_range(self):
+        self.assertEqual(args("svooc-trigger", "--confirm", "--cap", "12").cap, 12)
+        self.assertEqual(args("svooc-trigger", "--confirm").cap, 0)
+        with self.assertRaises(SystemExit):
+            args("svooc-trigger", "--confirm", "--cap", "21")
+
+    def test_refusal_names_the_real_reason(self):
+        link = Link([summary()], start_status=kr.STATUS_BUSY, start_payload=summary(refusal=10))
+        with self.assertRaises(kr.FcRefused) as cm:
+            kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm"), sleep=lambda s: None)
+        self.assertIn("no RAM: USB drive enabled", str(cm.exception))
+        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 1, 1, 0]))])
+
+    def test_polls_until_done_then_reads_the_pairs(self):
+        done = summary(stage=6, abort=1, accepted=True, kept=18, total=31, vmax=12001, vexit=5000, exit_ok=True)
+        pages = {1: pairs_page(1, 18, [(0xA8, 0x00D)] + [(0x98, 0x073)] * 15),
+                 2: pairs_page(2, 18, [(0x82, 0x051), (0x84, kr.SVOOC_NO_WORD)])}
+        link = Link([summary(stage=2), summary(stage=4), summary(stage=5), done], pages=pages)
+        sleeps = []
+        r = kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--cap", "15"), sleep=sleeps.append)
+        self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 1, 1, 15])))
+        self.assertEqual(len(sleeps), 4)
+        s = r["svooc"]
+        self.assertEqual((s["stage"], s["abort"], s["accepted"], s["vbus_max_mv"]), ("done", "VBUS over 12 V", True, 12001))
+        self.assertEqual(len(s["pairs"]), 18)
+        self.assertEqual(s["pairs"][0], {"cmd": "0xA8", "word": "0x00D"})
+        self.assertEqual(s["pairs"][-1], {"cmd": "0x84", "word": None})
+        text = kr.render("fc", r)
+        self.assertIn("A8>00D", text)
+        self.assertIn("84>---", text)
+        self.assertIn("ended by VBUS over 12 V", text)
+
+    def test_exit_still_high_is_reported(self):
+        link = Link([summary(stage=6, abort=10, vmax=9000, vexit=9000, exit_ok=False)])
+        r = kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm"), sleep=lambda s: None)
+        self.assertIn("STILL ABOVE 5.5 V", kr.render("fc", r))
+
+    def test_ctrl_c_sends_stop_once_and_waits_for_the_end(self):
+        link = Link([summary(stage=4), summary(stage=5), summary(stage=6, abort=11)])
+        calls = []
+
+        def sleep(s):
+            calls.append(s)
+            if len(calls) == 1:
+                raise KeyboardInterrupt
+
+        r = kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm"), sleep=sleep)
+        stops = [p for c, p in link.sent if p[:2] == bytes([5, 2])]
+        self.assertEqual(len(stops), 1)
+        self.assertEqual(r["svooc"]["abort"], "stopped")
+
+    def test_status_and_stop_commands(self):
+        link = Link([summary(stage=6)])
+        kr.cmd_fc_svooc(link, args("svooc-status"))
+        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, 0]))])
+        link = Link([summary(stage=6)])
+        kr.cmd_fc_svooc(link, args("svooc-stop"))
+        self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 2])))
+
+
+class NamesMatchFirmware(unittest.TestCase):
+    def names(self, enum):
+        text = (ROOT / "include/k2/fastcharge/svooc_run.hpp").read_text()
+        body = re.search(r"constexpr const char\* name\(" + enum + r" \w+\) \{(.*?)\n\}", text, re.S).group(1)
+        return re.findall(r'return "([^"]*)";', body)[:-1]   # the last return is the "?" fallback
+
+    def test_refusals(self):
+        self.assertEqual(self.names("Refusal"), kr.SVOOC_REFUSALS)
+
+    def test_aborts(self):
+        self.assertEqual(self.names("Abort"), kr.SVOOC_ABORTS)
+
+    def test_stages_and_phases(self):
+        run = (ROOT / "include/k2/fastcharge/svooc_run.hpp").read_text()
+        stages = re.search(r"enum class Stage : std::uint8_t \{(.*?)\};", run, re.S).group(1)
+        self.assertEqual([w.lower() for w in re.findall(r"^\s*(\w+),", stages, re.M)], kr.SVOOC_STAGES)
+        script = (ROOT / "include/k2/fastcharge/svooc_script.hpp").read_text()
+        phases = re.search(r"enum class Phase : std::uint8_t \{([^}]*)\}", script).group(1)
+        self.assertEqual([w.strip().lower() for w in phases.split(",")], kr.SVOOC_PHASES)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -2465,9 +2465,123 @@ def render_vooc(v):
 # --- end vooc-monitor ---
 
 
+# --- svooc-trigger ---
+# FC op 5: the guarded NO-LOAD SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp). The K2 stands in for a phone and
+# answers the adapter's commands on D- with the words captured from a OnePlus 15; nothing draws current. The firmware
+# refuses or aborts on its own guards (k2/fastcharge/svooc_run.hpp); this side only starts it, keeps the lease alive by
+# polling, sends `stop` on Ctrl-C and prints the report. The name lists follow svooc_run.hpp / svooc_script.hpp in order.
+FC_OP_SVOOC = 5
+SVOOC_STATUS, SVOOC_START, SVOOC_STOP = 0, 1, 2
+SVOOC_SUMMARY_BYTES = 33
+SVOOC_PAIRS_PER_PAGE = 16
+SVOOC_PAGES = 4                 # summary + 3 pair pages
+SVOOC_CAP_MAX_S = 20
+SVOOC_NO_WORD = 0xFFFF
+SVOOC_STAGES = ["idle", "wake", "listen", "rest", "answer", "exit", "done"]
+SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no power monitor", "sink on the bottom port",
+                  "inline mode", "PD contract held", "current over 50 mA", "VBUS not 5 V", "no RAM: USB drive enabled"]
+SVOOC_ABORTS = ["none", "VBUS over 12 V", "current over 50 mA", "charger off-script", "host gone", "power monitor lost",
+                "sink appeared", "PD contract appeared", "D+/D- edge storm", "no adapter answer", "time cap", "stopped"]
+SVOOC_PHASES = ["ident", "handshake", "ramp"]
+
+
+def _svooc_cap(text):
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text!r}") from None
+    if not 0 <= n <= SVOOC_CAP_MAX_S:
+        raise argparse.ArgumentTypeError(f"{n} is outside 0..{SVOOC_CAP_MAX_S} (0 = the full {SVOOC_CAP_MAX_S} s)")
+    return n
+
+
+def decode_svooc_summary(p):
+    _need(p, SVOOC_SUMMARY_BYTES, "svooc")
+    u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
+    name = lambda names, i: names[i] if i < len(names) else str(i)
+    return {"stage": name(SVOOC_STAGES, p[0]), "refusal": name(SVOOC_REFUSALS, p[1]), "abort": name(SVOOC_ABORTS, p[2]),
+            "wakes": p[3], "accepted": bool(p[4] & 1), "exit_checked": bool(p[4] & 2), "exit_ok": bool(p[4] & 4),
+            "driving": bool(p[4] & 8), "phase": name(SVOOC_PHASES, p[5]), "off_run": p[6], "last_cmd": f"0x{p[7]:02X}",
+            "commands": u16(8), "replies": u16(10), "missed": u16(12), "cut": u16(14), "partials": u16(16),
+            "pairs_total": u16(18), "pairs_kept": p[20], "cap_ms": u16(21), "elapsed_ms": u16(23),
+            "vbus_start_mv": u16(25), "vbus_max_mv": u16(27), "vbus_exit_mv": u16(29), "ibus_max_ma": u16(31)}
+
+
+def decode_svooc_pairs(p):
+    _need(p, 3, "svooc pairs")
+    n = p[2]
+    _need(p, 3 + 3 * n, "svooc pairs")
+    pairs = []
+    for i in range(n):
+        cmd, word = p[3 + 3 * i], int.from_bytes(p[4 + 3 * i:6 + 3 * i], "little")
+        pairs.append({"cmd": f"0x{cmd:02X}", "word": None if word == SVOOC_NO_WORD else f"0x{word:03X}"})
+    return pairs
+
+
+def _svooc_read(link):
+    s = decode_svooc_summary(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 0])).payload)
+    pairs = []
+    for page in range(1, SVOOC_PAGES):
+        if len(pairs) >= s["pairs_kept"]:
+            break
+        pairs += decode_svooc_pairs(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, page])).payload)
+    s["pairs"] = pairs
+    return s
+
+
+def cmd_fc_svooc(link, a, sleep=time.sleep, poll_s=0.25):
+    if a.fc_cmd == "svooc-status":
+        return {"svooc": _svooc_read(link)}
+    if a.fc_cmd == "svooc-stop":
+        link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STOP]))
+        return {"svooc": _svooc_read(link)}
+    if not a.confirm:
+        raise FcRefused("the SuperVOOC trigger answers the adapter on D- and the adapter may raise VBUS (up to the 12 V "
+                        "guard): add --confirm (SUPERVOOC adapter alone, NO load, nothing else on the K2)")
+    try:
+        link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_START, FC_CONFIRM, a.cap]))
+    except RemoteError as e:
+        if e.status == STATUS_BUSY and len(e.payload) >= SVOOC_SUMMARY_BYTES:
+            raise FcRefused(f"svooc trigger refused: {decode_svooc_summary(e.payload)['refusal']}") from e
+        raise
+    # Every status read is a request, so it holds the lease; the firmware ends the run itself (guards, cap, exit watch).
+    stopped = False
+    while True:
+        try:
+            sleep(poll_s)
+            s = decode_svooc_summary(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 0])).payload)
+            if s["stage"] in ("done", "idle"):
+                break
+        except KeyboardInterrupt:
+            if stopped:
+                raise
+            link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STOP]))
+            stopped = True
+    return {"svooc": _svooc_read(link)}
+
+
+def render_svooc(s):
+    lines = [f"svooc trigger {s['stage']}: " + (f"ended by {s['abort']}" if s["abort"] != "none" else "running")
+             + f" after {s['elapsed_ms'] / 1000:.1f} s (cap {s['cap_ms'] / 1000:.0f} s), wakes {s['wakes']}"]
+    lines.append(f"  handshake accepted: {'yes' if s['accepted'] else 'no'} (phase {s['phase']}); commands {s['commands']}, "
+                 f"replies {s['replies']}, missed {s['missed']}, cut {s['cut']}, partials {s['partials']}")
+    exit_txt = ("not checked yet" if not s["exit_checked"] else
+                f"{s['vbus_exit_mv']} mV" + ("" if s["exit_ok"] else " - STILL ABOVE 5.5 V after the exit watch"))
+    lines.append(f"  VBUS start {s['vbus_start_mv']} mV, max {s['vbus_max_mv']} mV, exit {exit_txt}; "
+                 f"max |I| {s['ibus_max_ma']} mA")
+    if s["pairs"]:
+        words = [f"{p['cmd'][2:]}>{p['word'][2:] if p['word'] else '---'}" for p in s["pairs"]]
+        lines.append(f"  pairs ({len(words)} of {s['pairs_total']}, cmd>reply, --- = not answered):")
+        lines += ["    " + " ".join(words[i:i + 8]) for i in range(0, len(words), 8)]
+    return "\n".join(lines)
+# --- end svooc-trigger ---
+
+
 def cmd_fc(link, a):
     if a.fc_cmd == "vooc":   # vooc-monitor
         return cmd_fc_vooc(link, a)
+    if a.fc_cmd.startswith("svooc-"):   # svooc-trigger
+        return cmd_fc_svooc(link, a)
     if a.fc_cmd == "status":
         payload = bytes([FC_OP_STATUS])
     elif a.fc_cmd == "reset":
@@ -3806,6 +3920,8 @@ def _render(name, r):
     if name == "fc":
         if "vooc" in r:   # vooc-monitor
             return render_vooc(r["vooc"])
+        if "svooc" in r:   # svooc-trigger
+            return render_svooc(r["svooc"])
         s = r["scan"]
         lines = [f"fc {r['state']} {r['proto']} target {r['target_mv']} mV, VBUS {r['vbus_mv']} mV"
                  + (f" ({r['fail']})" if r["fail"] != "none" else "")]
@@ -4097,6 +4213,14 @@ def build_parser():
     sfvs = sfv.add_mutually_exclusive_group()
     sfvs.add_argument("--on", action="store_true", help="enable the monitor (RAM only, on by default)")
     sfvs.add_argument("--off", action="store_true", help="disable it; the lines go back to the passive idle")
+    # svooc-trigger
+    sfsv = sfs.add_parser("svooc-trigger", help="guarded NO-LOAD SuperVOOC trigger: answers a SUPERVOOC adapter on D- "
+                          "with the captured phone words, aborts above 12 V or 50 mA; polls until it ends, Ctrl-C stops")
+    sfsv.add_argument("--confirm", action="store_true", help="required: the adapter may raise VBUS (up to the 12 V guard)")
+    sfsv.add_argument("--cap", type=_svooc_cap, default=0, metavar="SECONDS",
+                      help=f"run-time cap 1..{SVOOC_CAP_MAX_S} s (0 or omitted = {SVOOC_CAP_MAX_S} s)")
+    sfs.add_parser("svooc-status", help="the SuperVOOC trigger's last report and logged command/reply pairs")
+    sfs.add_parser("svooc-stop", help="stop the SuperVOOC trigger: stop answering, lines to passive idle")
     sst = sub.add_parser("store", help="flash store behind the USB drive (writes only when asked)")
     sss = sst.add_subparsers(dest="store_cmd", required=True)
     sss.add_parser("list", help="records in the store")

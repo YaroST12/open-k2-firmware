@@ -1138,6 +1138,74 @@ static void test_flash_dump() {
 
 // --- vooc-monitor (k2/vooc-detect) ---
 // FC op 4: the inline VOOC monitor, page 0 summary, pages 1 / 2 the command rows; an optional switch byte first.
+// FC op 5: the guarded SuperVOOC trigger. Start needs the confirm flag (NeedConfirm, never reaching the backend), a cap
+// of at most 20 s; a refused start is Busy with the summary (refusal byte) and arms no lease; an accepted one arms it.
+static void test_fc_svooc_trigger() {
+    Fake f; Frame r;
+    int calls = f.calls;
+    CHECK_EQ(run(f, request(0x32, 1, {5, 1, 0, 0}), r), 1);
+    check_header(r, 0x32, 1, Status::NeedConfirm, 0);
+    CHECK_EQ(run(f, request(0x32, 2, {5, 1, 3, 0}), r), 1);          // an unknown flag (allow-inline) is no confirm
+    check_header(r, 0x32, 2, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 3, {5, 1, 1, 21}), r), 1);         // cap above 20 s
+    check_header(r, 0x32, 3, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 4, {5, 1, 1}), r), 1);
+    check_header(r, 0x32, 4, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 5, {5}), r), 1);
+    check_header(r, 0x32, 5, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 6, {5, 9}), r), 1);
+    check_header(r, 0x32, 6, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 4}), r), 1);             // pages 0..3
+    check_header(r, 0x32, 7, Status::BadArg, 0);
+    CHECK_EQ(f.calls, calls);
+    CHECK_EQ(f.svooc_starts, 0);
+    // Refused for the RAM: Busy, the summary carries the reason, no lease.
+    f.svooc_refusal = k2::svooc::Refusal::NoRam;
+    CHECK_EQ(run(f, request(0x32, 8, {5, 1, 1, 0}), r), 1);
+    check_header(r, 0x32, 8, Status::Busy, 33);
+    CHECK_EQ(r[kRspHeader + 1], static_cast<uint8_t>(k2::svooc::Refusal::NoRam));
+    CHECK_EQ(f.lease_arms, 0);
+    // Accepted with a 12 s cap: Ok, the lease armed once.
+    f.svooc_refusal = k2::svooc::Refusal::None;
+    CHECK_EQ(run(f, request(0x32, 9, {5, 1, 1, 12}), r), 1);
+    check_header(r, 0x32, 9, Status::Ok, 33);
+    CHECK_EQ(f.svooc_cap, 12);
+    CHECK_EQ(f.lease_arms, 1);
+    CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(k2::svooc::Stage::Wake));
+    // The summary in the documented order.
+    k2::svooc::Report &rep = f.svooc_snap.report;
+    f.svooc_snap.stage = k2::svooc::Stage::Exit;
+    rep.abort = k2::svooc::Abort::Overvoltage; rep.tries = 1; rep.accepted = true; rep.exit_checked = true;
+    rep.exit_ok = false; rep.cap_ms = 20000; rep.elapsed_ms = 3456; rep.vbus_start_mv = 5100; rep.vbus_max_mv = 12001;
+    rep.vbus_exit_mv = 9000; rep.ibus_max_ma = 7;
+    f.svooc_snap.phase = k2::svooc::Phase::Ramp; f.svooc_snap.off_run = 1; f.svooc_snap.driving = true;
+    k2::svooc::Log &lg = f.svooc_snap.log;
+    lg.commands = 30; lg.replies = 29; lg.missed = 1; lg.cut = 0; lg.partials = 2; lg.pairs_total = 31; lg.last_cmd = 0x82;
+    for (unsigned i = 0; i < 18; i++) lg.pairs[i] = {static_cast<uint8_t>(0x80 + i), static_cast<uint16_t>(0x100 + i)};
+    lg.n = 18;
+    CHECK_EQ(run(f, request(0x32, 10, {5, 0, 0}), r), 1);
+    check_header(r, 0x32, 10, Status::Ok, 33);
+    check_bytes(r, kRspHeader, {static_cast<uint8_t>(k2::svooc::Stage::Exit), 0, static_cast<uint8_t>(k2::svooc::Abort::Overvoltage),
+                                1, 0x0B, static_cast<uint8_t>(k2::svooc::Phase::Ramp), 1, 0x82,
+                                30, 0, 29, 0, 1, 0, 0, 0, 2, 0, 31, 0, 18,
+                                0x20, 0x4E, 0x80, 0x0D, 0xEC, 0x13, 0xE1, 0x2E, 0x28, 0x23, 7, 0});
+    // Pair pages: 16 on page 1, the last 2 on page 2, none on page 3.
+    CHECK_EQ(run(f, request(0x32, 11, {5, 0, 1}), r), 1);
+    check_header(r, 0x32, 11, Status::Ok, 3 + 3 * 16);
+    check_bytes(r, kRspHeader, {1, 18, 16, 0x80, 0x00, 0x01, 0x81, 0x01, 0x01});
+    CHECK_EQ(run(f, request(0x32, 12, {5, 0, 2}), r), 1);
+    check_header(r, 0x32, 12, Status::Ok, 3 + 3 * 2);
+    check_bytes(r, kRspHeader, {2, 18, 2, 0x90, 0x10, 0x01, 0x91, 0x11, 0x01});
+    CHECK_EQ(run(f, request(0x32, 13, {5, 0, 3}), r), 1);
+    check_header(r, 0x32, 13, Status::Ok, 3);
+    // Stop.
+    CHECK_EQ(run(f, request(0x32, 14, {5, 2}), r), 1);
+    check_header(r, 0x32, 14, Status::Ok, 33);
+    CHECK_EQ(f.svooc_stops, 1);
+    CHECK_EQ(r[kRspHeader + 2], static_cast<uint8_t>(k2::svooc::Abort::Stopped));
+    CHECK_EQ(f.lease_arms, 1);
+}
+
 static void test_fc_vooc_monitor() {
     Fake f; Frame r;
     k2::vooc::Summary &s = f.vooc_snap.s;
@@ -2728,6 +2796,7 @@ int main() {
     test_ripple();
     test_fc();
     test_fc_vooc_monitor();   // vooc-monitor
+    test_fc_svooc_trigger();  // svooc-trigger
     test_ripple_frame();
     test_pdos();
     test_emarker();

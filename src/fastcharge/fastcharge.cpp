@@ -39,7 +39,7 @@ void dcp_reset() {
 
 bool engine_idle() {
     return fctrig::status().state == fctrig::State::Idle && !fctrig::scan_running() && !fctrig::ufcs_probe_running() &&
-           !dpdm::reset_busy() && !dpsniff::armed();
+           !dpdm::reset_busy() && !dpsniff::armed() && !fctrig::svooc_running();
 }
 
 void dcp_abort(bool have, bool idle, bool ours) {
@@ -94,7 +94,8 @@ void dcp_begin(const Ring& ring, int vbus_mv, const link::Probe& probe, bool cc_
 // and no engine, scan, probe, DCP check or reset hold owns them. A Black Box arm is passive too and does not stop it.
 void monitor() {
     const bool lines_free = fctrig::status().state == fctrig::State::Idle && !fctrig::scan_running() &&
-                            !fctrig::ufcs_probe_running() && !dpdm::reset_busy() && g_dcp_step == 0;
+                            !fctrig::ufcs_probe_running() && !dpdm::reset_busy() && g_dcp_step == 0 &&
+                            !fctrig::svooc_running();
     dpsniff::monitor_poll(vooc::monitor_wanted(dpsniff::monitor_enabled(), link::far_sink_now(), lines_free), lines_free);
 }
 }  // namespace

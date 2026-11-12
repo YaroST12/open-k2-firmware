@@ -3,6 +3,8 @@
 // The guarded SuperVOOC trigger's guards and session (k2/fastcharge/svooc_run.hpp): every refusal at the start, every
 // abort while it runs (with the 12.0 V and 50 mA boundaries), the wake / listen / rest steps, the exit check that VBUS
 // came back to 5 V, and the report.
+#include <string_view>
+
 #include "k2/fastcharge/svooc_run.hpp"
 #include "test_util.h"
 
@@ -10,7 +12,7 @@ using namespace k2;
 using svooc::Abort;
 using svooc::Refusal;
 using svooc::Stage;
-using svooc::Step;
+using svooc::Next;
 
 #define CHECK(c) CHECK_EQ(!!(c), 1)
 
@@ -78,19 +80,19 @@ void test_wake_listen_rest_and_no_adapter() {
     svooc::Run r;
     CHECK_EQ(r.start(ok_start(), 1000), Refusal::None);
     std::uint32_t t = 1000;
-    CHECK_EQ(r.poll(ok_sample(t)), Step::Wake);
+    CHECK_EQ(r.poll(ok_sample(t)), Next::Wake);
     CHECK_EQ(r.stage(), Stage::Listen);
-    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs - 1)), Step::None);
-    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Step::Rest);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs - 1)), Next::None);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Next::Rest);
     t += svooc::kWakeListenMs;
-    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeRestMs - 1)), Step::None);
-    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeRestMs)), Step::Wake);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeRestMs - 1)), Next::None);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeRestMs)), Next::Wake);
     t += svooc::kWakeRestMs;
-    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Step::Rest);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Next::Rest);
     t += svooc::kWakeListenMs + svooc::kWakeRestMs;
-    CHECK_EQ(r.poll(ok_sample(t)), Step::Wake);
+    CHECK_EQ(r.poll(ok_sample(t)), Next::Wake);
     CHECK_EQ(r.report().tries, svooc::kWakeTries);
-    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Step::Release);
+    CHECK_EQ(r.poll(ok_sample(t + svooc::kWakeListenMs)), Next::Release);
     CHECK_EQ(r.report().abort, Abort::NoAdapter);
     CHECK_EQ(r.stage(), Stage::Exit);
 }
@@ -99,23 +101,23 @@ void test_wake_listen_rest_and_no_adapter() {
 void test_answer_until_the_cap() {
     svooc::Run r;
     r.start(ok_start(), 0);
-    CHECK_EQ(r.poll(ok_sample(0)), Step::Wake);
+    CHECK_EQ(r.poll(ok_sample(0)), Next::Wake);
     svooc::Sample s = ok_sample(600);
     s.commands = 1;
-    CHECK_EQ(r.poll(s), Step::None);
+    CHECK_EQ(r.poll(s), Next::None);
     CHECK_EQ(r.stage(), Stage::Answer);
     s.now_ms = svooc::kCapMs - 1;
     s.accepted = true;
-    CHECK_EQ(r.poll(s), Step::None);
+    CHECK_EQ(r.poll(s), Next::None);
     s.now_ms = svooc::kCapMs;
-    CHECK_EQ(r.poll(s), Step::Release);
+    CHECK_EQ(r.poll(s), Next::Release);
     CHECK_EQ(r.report().abort, Abort::TimeCap);
     CHECK(r.report().accepted);
     // a shorter cap from the caller, never a longer one
     svooc::Run q;
     q.start(ok_start(), 0, 5000);
     q.poll(ok_sample(0));
-    CHECK_EQ(q.poll(ok_sample(4999)), Step::Rest);
+    CHECK_EQ(q.poll(ok_sample(4999)), Next::Rest);
     svooc::Run w;
     w.start(ok_start(), 0, 60000);
     CHECK_EQ(w.report().cap_ms, svooc::kCapMs);
@@ -131,10 +133,10 @@ Abort abort_after(void (*edit)(svooc::Sample&)) {
     r.poll(s);
     s.now_ms = 700;
     edit(s);
-    const Step st = r.poll(s);
-    if (st != Step::Release) return Abort::None;
+    const Next st = r.poll(s);
+    if (st != Next::Release) return Abort::None;
     s.now_ms = 720;
-    if (r.poll(s) == Step::Release) return Abort::None;   // only one Release
+    if (r.poll(s) == Next::Release) return Abort::None;   // only one Release
     return r.report().abort;
 }
 
@@ -159,20 +161,20 @@ void test_every_abort() {
     r.poll(ok_sample(0));
     svooc::Sample s = ok_sample(10);
     s.vbus_mv = 12500;
-    CHECK_EQ(r.poll(s), Step::Release);
+    CHECK_EQ(r.poll(s), Next::Release);
     CHECK_EQ(r.report().abort, Abort::Overvoltage);
 }
 
 // stop() (the lease, `stop`, BACK): Release once, reason Stopped; a stop of an idle run does nothing.
 void test_stop() {
     svooc::Run idle;
-    CHECK_EQ(idle.stop(Abort::Stopped, 5), Step::None);
+    CHECK_EQ(idle.stop(Abort::Stopped, 5), Next::None);
     CHECK_EQ(idle.stage(), Stage::Idle);
     svooc::Run r;
     r.start(ok_start(), 0);
     r.poll(ok_sample(0));
-    CHECK_EQ(r.stop(Abort::Stopped, 100), Step::Release);
-    CHECK_EQ(r.stop(Abort::Stopped, 101), Step::None);
+    CHECK_EQ(r.stop(Abort::Stopped, 100), Next::Release);
+    CHECK_EQ(r.stop(Abort::Stopped, 101), Next::None);
     CHECK_EQ(r.report().abort, Abort::Stopped);
     CHECK_EQ(r.stage(), Stage::Exit);
 }
@@ -190,10 +192,10 @@ void test_exit_check() {
     r.poll(s);
     s.now_ms = 600;
     s.vbus_mv = 12001;
-    CHECK_EQ(r.poll(s), Step::Release);
+    CHECK_EQ(r.poll(s), Next::Release);
     s.now_ms = 1500;
     s.vbus_mv = 9000;
-    CHECK_EQ(r.poll(s), Step::None);
+    CHECK_EQ(r.poll(s), Next::None);
     CHECK_EQ(r.stage(), Stage::Exit);
     s.now_ms = 2600;
     s.vbus_mv = 5500;
@@ -211,7 +213,7 @@ void test_exit_check() {
     svooc::Run h;
     h.start(ok_start(), 0);
     h.poll(ok_sample(0));
-    CHECK_EQ(h.stop(Abort::Stopped, 100), Step::Release);
+    CHECK_EQ(h.stop(Abort::Stopped, 100), Next::Release);
     svooc::Sample hs = ok_sample(100 + svooc::kExitWatchMs - 1);
     hs.vbus_mv = 9100;
     h.poll(hs);
@@ -226,6 +228,13 @@ void test_exit_check() {
     CHECK(h.report().ibus_max_ma >= 2);
 }
 
+// Every reason has its own name (the log and tools/k2_remote.py print them).
+void test_names() {
+    for (int i = 0; i <= int(Refusal::NoRam); ++i) CHECK(svooc::name(Refusal(i))[0] != '?');
+    for (int i = 0; i <= int(Abort::Stopped); ++i) CHECK(svooc::name(Abort(i))[0] != '?');
+    CHECK(std::string_view(svooc::name(Refusal::NoRam)) == "no RAM: USB drive enabled");
+}
+
 }  // namespace
 
 int main() {
@@ -235,5 +244,6 @@ int main() {
     test_every_abort();
     test_stop();
     test_exit_check();
+    test_names();
     return test_report("test_svooc_run");
 }

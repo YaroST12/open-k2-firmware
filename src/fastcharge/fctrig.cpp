@@ -17,6 +17,7 @@
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/uart2.hpp"
+#include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/fastcharge/ufcs.hpp"
 #include "k2/fastcharge/ufcs_diag.hpp"
 #include "k2/drivers/usb.hpp"
@@ -383,7 +384,8 @@ LabXfer lab_xfer(std::span<const std::uint8_t> tx, std::span<std::uint8_t> rx, i
 }
 
 Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline, int scp_ma, int ufcs_ma) {
-    if (g_scanner.running() || dpsniff::armed() || g_prober.running()) return Fail::Busy;   // the edge sniffer is passive and keeps the lines
+    if (g_scanner.running() || dpsniff::armed() || g_prober.running() || svooc_trig::running())
+        return Fail::Busy;   // the edge sniffer is passive and keeps the lines; the SuperVOOC trigger drives D-
     const bool resetting = dpdm::reset_busy();
     const Fail f = g_engine.start(p, target_mv, confirmed, allow_inline, scp_ma, ufcs_ma);
     if (resetting && f == Fail::None) dpdm::cancel_reset();   // the session drives the lines now
@@ -400,7 +402,7 @@ Fail set_target(int target_mv, bool confirmed, int ufcs_ma) {
 }
 
 Fail scan_start(bool confirmed, bool allow_inline) {
-    if (dpsniff::armed() || g_prober.running()) return Fail::Busy;
+    if (dpsniff::armed() || g_prober.running() || svooc_trig::running()) return Fail::Busy;
     const Fail f = g_scanner.start(confirmed, allow_inline);
     g_logged_results = 0;
     K2LOG("[FC] scan start confirmed=%d inline_ok=%d -> %s (link: %s)\n", confirmed ? 1 : 0,
@@ -431,7 +433,8 @@ bool ufcs_tuner_reset() {
 }
 
 ufcs::ProbeStart ufcs_probe_start() {
-    if (g_scanner.running() || dpsniff::armed() || g_engine.state() != State::Idle) return ufcs::ProbeStart::Busy;
+    if (g_scanner.running() || dpsniff::armed() || g_engine.state() != State::Idle || svooc_trig::running())
+        return ufcs::ProbeStart::Busy;
     if (dpdm::reset_busy()) return ufcs::ProbeStart::Resetting;   // let the source see the lines released first
     g_prober.set_tuner(g_tuner);
     const ufcs::ProbeStart s = g_prober.start();
@@ -446,7 +449,10 @@ void ufcs_probe_stop() { g_prober.stop(); }
 std::span<const std::uint8_t> ufcs_probe_blob() { return g_prober.blob(); }
 const ufcs::ProbeResult& ufcs_probe_result() { return g_prober.result(); }
 
+bool svooc_running() { return svooc_trig::running(); }
+
 void stop() {
+    svooc_trig::stop();   // first: stop answering and let D- go
     g_refused = Fail::None;
     g_prober.stop();
     g_scanner.abort();
@@ -456,6 +462,7 @@ void stop() {
 
 void poll() {
     dpdm::poll();
+    svooc_trig::poll();
     g_prober.poll();
     if (g_probe_was_running && !g_prober.running()) {   // the probe just ended: one summary line
         g_probe_was_running = false;
@@ -480,7 +487,10 @@ void poll() {
     }
 }
 
-void service_ufcs() { g_engine.service_ufcs(); }
+void service_ufcs() {
+    svooc_trig::service();   // the SuperVOOC wire's tick: D- let go on time after the last bit
+    g_engine.service_ufcs();
+}
 void service_hs() { g_engine.service_hs(); }
 bool paint_critical() { return g_engine.paint_critical(); }
 

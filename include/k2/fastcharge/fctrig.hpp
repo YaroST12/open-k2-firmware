@@ -27,6 +27,11 @@ Fail start(Proto p, int target_mv, bool confirmed, bool allow_inline = false, in
 Fail set_target(int target_mv, bool confirmed, int ufcs_ma = 0);
 void stop();       // BACK / leaving the page / remote reset: discharge to 5 V, then passive idle
 
+// The guarded SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp, remote only) holds D+/D- or still watches VBUS come
+// back to 5 V: start(), scan_start() and ufcs_probe_start() refuse with Busy, stop() ends it as well, poll() and
+// service_ufcs() run it. The UI's and the remote's busy checks read it here.
+bool svooc_running();
+
 // Call every main-loop iteration: runs the engine and the dpdm reset hold; logs state changes
 // as "[FC] ...".
 void poll();

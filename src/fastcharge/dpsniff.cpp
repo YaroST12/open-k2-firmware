@@ -49,6 +49,13 @@ edges::Backoff g_back;
 std::uint16_t g_storms;       // since boot, monitor and sniff
 edges::Storm g_last_storm;
 
+// The SuperVOOC trigger's hook (hook_claim .. hook_end). g_hook is what the ISR calls; g_hook_owned keeps the
+// sniffer's other users out and the EXTI lines on between hook_mute() and hook_listen().
+Hook volatile g_hook;
+volatile bool g_hook_storm;
+bool g_hook_owned;
+bool g_hook_recorded;         // the recorder was armed for this claim
+
 constexpr std::uint32_t kLines = (1u << 7) | (1u << 2);   // EXTI7 = PA7 (D+), EXTI2 = PB2 (D-)
 
 }  // namespace
@@ -61,10 +68,13 @@ void isr_body() {
         ex.IMR &= ~kLines;
         ex.PR = kLines;
         g_storm = true;
+        if (g_hook) g_hook_storm = true;
         return;
     }
-    if (!g_live && !g_mon) return;
+    const Hook hook = g_hook;
+    if (!g_live && !g_mon && !hook) return;
     const std::uint32_t w = edges::pack(c, pins::dp_dm_sw2.read(), pins::sw_pa7.read());
+    if (hook) hook(w);   // the trigger first: its bit timing runs from the edge (it may wait up to 50 us here)
     if (g_mon && !g_mon_paused) g_mon_ev = g_mon_ev | g_dec.push(w);
     if (!g_live) return;
     if (g_stream) g_ring.push(w);
@@ -89,7 +99,7 @@ void exti_on() {
     reg::nvic().ISER[0] = (1u << 8) | (1u << 23);
 }
 void exti_off() {
-    if (g_mon) return;   // the inline monitor still listens
+    if (g_mon || g_hook) return;   // the inline monitor or the SuperVOOC trigger still listens
     reg::nvic().ICER[0] = (1u << 8) | (1u << 23);
     auto& ex = reg::exti();
     Critical cs;
@@ -138,6 +148,7 @@ void finish(edges::End why) {
 }  // namespace
 
 ArmResult arm() {
+    if (g_hook_owned) return ArmResult::Busy;   // the SuperVOOC trigger drives D-
     if (g_status.state != State::Idle) return ArmResult::Ok;
     if (!mode_ram::claim(mode_ram::Tenant::Sniff)) {
         K2LOG("[SNIFF] refused: the shared RAM belongs to the USB drive or net function; switch the drive off in Tools > USB link and replug\n");
@@ -157,7 +168,7 @@ ArmResult arm() {
 }
 
 ArmResult arm_stream() {
-    if (g_status.state != State::Idle) return ArmResult::Busy;
+    if (g_hook_owned || g_status.state != State::Idle) return ArmResult::Busy;
     if (!mode_ram::claim(mode_ram::Tenant::Sniff)) {
         K2LOG("[SNIFF] refused: the shared RAM belongs to the USB drive or net function\n");
         return ArmResult::NoRam;
@@ -180,7 +191,7 @@ ArmResult arm_stream() {
 }
 
 ArmResult arm_synth(std::uint32_t rate) {
-    if (g_status.state != State::Idle) return ArmResult::Busy;
+    if (g_hook_owned || g_status.state != State::Idle) return ArmResult::Busy;
     if (!mode_ram::claim(mode_ram::Tenant::Sniff)) return ArmResult::NoRam;
     g_ring.init(g_buf, kCapacity);
     g_stream_idx = 0;
@@ -252,7 +263,7 @@ std::size_t read_record(std::size_t from, std::span<std::uint8_t> out, std::size
 }
 
 bool selftest() {
-    if (!g_sess.armed()) return false;
+    if (!g_sess.armed() || g_hook_owned) return false;
     // Not passive by design: only with nothing attached. D+ low then high, twice, 100 us apart.
     for (int i = 0; i < 2; i++) {
         dpdm::set_dp(dpdm::Drive::V0);
@@ -263,6 +274,63 @@ bool selftest() {
     dpdm::set_dp(dpdm::Drive::Sniff);
     return true;
 }
+
+// ---- the SuperVOOC trigger's hook ----
+
+ArmResult hook_claim() {
+    if (g_hook_owned || g_sess.armed() || g_stream || g_mon) return ArmResult::Busy;
+    if (!mode_ram::claim(mode_ram::Tenant::Sniff)) {
+        K2LOG("[SNIFF] trigger refused: the shared RAM belongs to the USB drive or net function\n");
+        return ArmResult::NoRam;
+    }
+    g_hook_owned = true;
+    g_hook_recorded = false;
+    return ArmResult::Ok;
+}
+
+void hook_listen(Hook h) {
+    if (!g_hook_owned) return;
+    dpdm::set_dp(dpdm::Drive::Sniff);
+    dpdm::set_dm(dpdm::Drive::Sniff);
+    if (!g_hook_recorded) {   // the first listen of the claim records the session (the wake burst stays out of it)
+        g_hook_recorded = true;
+        g_rec.init(g_buf, kCapacity);
+        g_sess.arm(systick::millis());
+        g_arm_us = systick::micros();
+        g_arm_cycles = dpdm::cycles();
+        g_status = Status{State::Armed, edges::End::None, 0, false, false, 0};
+        g_live = true;
+    }
+    {
+        Critical cs;
+        g_hook_storm = false;
+        g_hook = h;
+    }
+    exti_on();
+}
+
+void hook_mute() {
+    {
+        Critical cs;
+        g_hook = nullptr;
+    }
+    exti_off();
+}
+
+void hook_end() {
+    if (!g_hook_owned) return;
+    {
+        Critical cs;
+        g_hook = nullptr;
+    }
+    g_hook_owned = false;
+    if (g_sess.cancel() != edges::End::None) finish(edges::End::Cancel);   // stores the capture, EXTI off
+    else exti_off();
+}
+
+bool hooked() { return g_hook_owned; }
+bool hook_storm() { return g_hook_storm; }
+std::uint32_t line_word() { return edges::pack(dpdm::cycles(), pins::dp_dm_sw2.read(), pins::sw_pa7.read()); }
 
 // ---- inline VOOC monitor ----
 
@@ -370,7 +438,7 @@ void monitor_stop(bool lines_free) {
 }  // namespace
 
 void monitor_poll(bool wanted, bool lines_free) {
-    if (wanted && !g_mon) monitor_start();
+    if (wanted && !g_mon && !g_hook_owned) monitor_start();
     else if (!wanted && g_mon) monitor_stop(lines_free);
     storm_service(systick::millis());
     if (!g_mon) return;

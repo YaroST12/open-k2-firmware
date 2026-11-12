@@ -323,7 +323,9 @@ BusyWhy Ui::busy_why() const {
     if (pdstress_active()) return BusyWhy::PdStress;   // PD Stress: running or resuming
     if (loop_probe_busy()) return BusyWhy::LoopProbe;
     if (fc_release_.busy()) return BusyWhy::FcRelease;
-    if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return BusyWhy::QcTrigger;
+    if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active ||
+        fctrig::svooc_running())
+        return BusyWhy::QcTrigger;
     if (pd::user_hold(sink) && !fusb302::rd_for_run_on() && !fusb302::reread_own_hold() && !fusb302::self_powered() && !power_source::bus_powered())
         return BusyWhy::PdHold;
     if (sink.epr_mode) return BusyWhy::Epr;
@@ -424,7 +426,9 @@ const char *Ui::foreign_busy() const {
     if (charger_test_busy()) return "Test running: stop it";
     if (loop_probe_busy()) return "Loop probe: stop it";
     if (fc_release_.busy()) return "5V release: wait";
-    if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active) return "QC trigger: stop it";
+    if (fctrig::scan_running() || fs.state == fc::State::Negotiating || fs.state == fc::State::Active ||
+        fctrig::svooc_running())
+        return "QC trigger: stop it";
     if (ctx_.em_scanning) return "E-marker scan: wait";
     if (fusb302::identify_status().state == pd::IdState::Running) return "Identify: wait";
     return nullptr;
@@ -1141,7 +1145,7 @@ UiAction Ui::tick(uint32_t now_ms) {
     if (LoopProbePage *probe = find<LoopProbePage>(Menu::LoopProbe)) probe->poll(now_ms);   // the same: leaving the page ends a run
     const auto fs = fctrig::status().state;
     const auto &sk = fusb302::sink_status();
-    const bool released = fs == fc::State::Idle && !fctrig::scan_running() &&
+    const bool released = fs == fc::State::Idle && !fctrig::scan_running() && !fctrig::svooc_running() &&
         !sk.held && !sk.epr_mode &&
         (sk.state == pd::SinkState::Idle || sk.state == pd::SinkState::Failed ||
          (sk.state == pd::SinkState::Ready && sk.mv == 5000));

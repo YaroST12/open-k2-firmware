@@ -791,6 +791,7 @@ void stop() {
     if (g_stub.reader_scanner) g_stub.reader_scanner->abort();
 }
 void poll() {}
+bool svooc_running() { return false; }   // the guarded SuperVOOC trigger is remote only: never on in the UI tests
 bool paint_critical() { return g_stub.fc_critical; }
 const ufcs::Tuner& ufcs_tuner() { return g_stub.ufcs_tuner; }
 TuneSet ufcs_set(ufcs::Field f, std::uint32_t v) {

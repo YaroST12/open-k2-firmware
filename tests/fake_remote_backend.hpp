@@ -235,6 +235,19 @@ struct Fake {
         return vooc_snap;
     }
     // --- end vooc-monitor ---
+    // --- svooc-trigger ---
+    int svooc_starts = 0, svooc_stops = 0, svooc_cap = -1;
+    k2::svooc::Refusal svooc_refusal = k2::svooc::Refusal::None;   // what the next start answers
+    SvoocSnapshot svooc_snap{};
+    k2::svooc::Refusal svooc_start(uint8_t cap_s) {
+        calls++; svooc_starts++; svooc_cap = cap_s;
+        svooc_snap.report.refusal = svooc_refusal;
+        if (svooc_refusal == k2::svooc::Refusal::None) svooc_snap.stage = k2::svooc::Stage::Wake;
+        return svooc_refusal;
+    }
+    void svooc_stop() { calls++; svooc_stops++; svooc_snap.report.abort = k2::svooc::Abort::Stopped; }
+    SvoocSnapshot svooc_info() { calls++; return svooc_snap; }
+    // --- end svooc-trigger ---
     // UFCS tuner / probe: a RAM field array standing in for the tuner, a canned blob for the read op
     std::uint32_t ufcs_vals[k2::ufcs::kFieldCount] = {};
     Status ufcs_busy = Status::Ok;      // what set / ops answer when forced

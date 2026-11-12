@@ -122,6 +122,9 @@ public:
     remote::SniffInfo lab_sniff(uint8_t sub);
     // --- vooc-monitor (k2/vooc-detect) ---
     remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
+    svooc::Refusal svooc_start(uint8_t cap_s);                // guarded no-load SuperVOOC trigger (FC op 5), remote only
+    void svooc_stop();
+    remote::SvoocSnapshot svooc_info();
     // --- end vooc-monitor ---
     remote::UfcsInfo ufcs_info();                         // UFCS tuner / 5 V probe (k2::fctrig)
     uint32_t ufcs_get(uint8_t field);

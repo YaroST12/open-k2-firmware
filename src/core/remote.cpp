@@ -33,6 +33,7 @@
 #include "k2/core/boottrace_store.hpp"
 #include "k2/core/handback.hpp"
 #include "k2/fastcharge/fctrig.hpp"
+#include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/pd/pd_passive.hpp"
@@ -576,7 +577,7 @@ void Remote::lease_tick() {
     const pd::SinkStatus &sk = fusb302::sink_status();
     // Nothing holds or negotiates above 5 V and VBUS reads 5 V: the lease may settle on its own (lease::safe_5v).
     lease::SafeFacts f;
-    f.fc_idle = fctrig::status().state == fc::State::Idle && !fctrig::scan_running();
+    f.fc_idle = fctrig::status().state == fc::State::Idle && !fctrig::scan_running() && !fctrig::svooc_running();
     f.vbus_known = vbus.has_value();
     f.vbus_mv = vbus ? *vbus : 0;
     f.sink_idle = sk.state == pd::SinkState::Idle;
@@ -597,7 +598,7 @@ remote::StopInfo Remote::stop() {
     struct RealEnv {
         Remote &r;
         bool test_active() { return r.ui_.run_busy() || r.ui_.twin_live_busy(); }   // a twin live proof and a PD Stress run are tests here
-        bool fc_active() { return fctrig::status().state != fc::State::Idle || fctrig::scan_running(); }
+        bool fc_active() { return fctrig::status().state != fc::State::Idle || fctrig::scan_running() || fctrig::svooc_running(); }
         bool pd_held() { return pd::user_hold(fusb302::sink_status()); }   // the driver's own 5 V answer is nobody's trigger
         bool spoof_active() { return emk_spoof::active(); }
         void cancel_test() { r.ui_.cancel_runs(); }
@@ -1095,7 +1096,7 @@ void Remote::cable_r_mode(bool kelvin) {
 // PA8 load probe (k2/drivers/load.hpp). Refused while a trigger, scan or test owns the ports.
 remote::LabResult Remote::lab_load(uint8_t duty, uint16_t ms) {
     remote::LabResult out;
-    if (ui_.ports_busy() || fctrig::status().state != fc::State::Idle || dpsniff::armed()) { out.status = static_cast<uint8_t>(remote::Status::Busy); return out; }
+    if (ui_.ports_busy() || fctrig::status().state != fc::State::Idle || dpsniff::armed() || fctrig::svooc_running()) { out.status = static_cast<uint8_t>(remote::Status::Busy); return out; }
     if (duty == 0 || duty > load::kMaxDutyPct || ms == 0 || ms > load::kMaxMs) { out.status = static_cast<uint8_t>(remote::Status::BadArg); return out; }
     const load::Result r = load::probe(duty, ms);
     K2LOG("[LOAD] pin=%u%% duty=%u ms=%u reason=%u idle=%d peak=%d vmin=%d t=%d>%d\n", r.pin_high_pct, r.duty, r.ms,
@@ -1145,6 +1146,22 @@ remote::VoocSnapshot Remote::vooc_monitor(uint8_t set) {
     return v;
 }
 // --- end vooc-monitor ---
+
+// --- svooc-trigger: the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp). The dispatcher checked the
+// confirm flag and arms the lease on an accepted start; a charger test, PD Stress or twin run owns the ports here. ---
+svooc::Refusal Remote::svooc_start(uint8_t cap_s) {
+    return svooc_trig::start(true, ui_.ports_busy() || ui_.twin_live_busy(), cap_s);
+}
+
+void Remote::svooc_stop() { svooc_trig::stop(); }
+
+remote::SvoocSnapshot Remote::svooc_info() {
+    const svooc_trig::Snapshot s = svooc_trig::snapshot();
+    remote::SvoocSnapshot v;
+    v.stage = s.stage; v.report = s.report; v.phase = s.phase; v.off_run = s.off_run; v.driving = s.driving; v.log = s.log;
+    return v;
+}
+// --- end svooc-trigger ---
 
 // UFCS tuner and 5 V probe (k2/fastcharge/fctrig.hpp). The tuner is RAM only; the probe never raises VBUS and never
 // sends a Request. A refused probe start answers Ok with the reason in the status block's `start` byte.

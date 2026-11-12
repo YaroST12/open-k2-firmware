@@ -345,6 +345,22 @@
 //                                      page 1 / 2: n(1) { cmd(1) count(2) last(2) } x n, rows 0-7 / 8-15.
 //                                      Other pages or on > 1 BadArg, wrong length BadLength. Never Busy.
 //                                    --- end vooc-monitor ---
+//                                    --- svooc-trigger ---
+//                                    op 5 svooc, the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp),
+//                                      not the FC block. Sub-ops:
+//                                      [5, 0, page]          status: page 0 the summary, pages 1..3 the logged pairs;
+//                                      [5, 1, flags, cap_s]  start: flags must be kFcConfirm (none: NeedConfirm, other
+//                                                            bits BadArg), cap_s 0 = 20 s, 1..20 (more: BadArg); a
+//                                                            refused start answers Busy with the summary (its refusal
+//                                                            byte says why); an accepted one arms the HID lease;
+//                                      [5, 2]                stop (reason "stopped"), then the summary.
+//                                      Summary (33 bytes): stage refusal abort tries flags(bit0 accepted, bit1 exit
+//                                      checked, bit2 exit ok, bit3 D- driven now) phase off_run last_cmd (u8 each)
+//                                      commands replies missed cut partials pairs_total (u16 each) pairs_kept(1)
+//                                      cap_ms elapsed_ms vbus_start_mv vbus_max_mv vbus_exit_mv ibus_max_ma (u16 each).
+//                                      Pair page: page(1) kept(1) n(1) { cmd(1) word(2) } x n, 16 per page, word
+//                                      0xFFFF = not answered. Wrong length BadLength, unknown sub-op or page BadArg.
+//                                    --- end svooc-trigger ---
 //   0x21 ADC_RAW     req -            rsp ok(1) all(10 x u16) scan(7 x u16)
 //                                    all = one-shot raw counts of ADC channels 0..7, 16, 17;
 //                                    scan = the 100-sweep averages in slot order aux cc1 cc2 dp dm
@@ -374,6 +390,8 @@
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
 #include "k2/fastcharge/edge_guard.hpp"
+#include "k2/fastcharge/svooc_run.hpp"
+#include "k2/fastcharge/svooc_wire.hpp"
 #include "k2/fastcharge/ufcs_tune.hpp"
 #include "k2/fastcharge/vooc_decode.hpp"
 #include "k2/ui/ui_qrtest.hpp"
@@ -530,6 +548,23 @@ struct VoocSnapshot {
     edges::GuardInfo guard{};
 };
 // --- end vooc-monitor ---
+// --- svooc-trigger: FC op 5, the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp, layout above) ---
+constexpr uint8_t kFcSvooc = 5;
+constexpr uint8_t kSvoocStatus = 0, kSvoocStart = 1, kSvoocStop = 2;
+constexpr uint8_t kSvoocCapMaxS = svooc::kCapMs / 1000;   // 20
+constexpr size_t kSvoocPairsPerPage = 16;
+constexpr uint8_t kSvoocPages = 1 + (svooc::kLogPairs + kSvoocPairsPerPage - 1) / kSvoocPairsPerPage;   // summary + 3
+constexpr size_t kSvoocSummaryBytes = 33;
+static_assert(kSvoocSummaryBytes <= kMaxRspPayload && 3 + 3 * kSvoocPairsPerPage <= kMaxRspPayload);
+struct SvoocSnapshot {
+    svooc::Stage stage = svooc::Stage::Idle;
+    svooc::Report report{};
+    svooc::Phase phase = svooc::Phase::Ident;
+    uint8_t off_run = 0;
+    bool driving = false;
+    svooc::Log log{};
+};
+// --- end svooc-trigger ---
 
 // Store op codes (first payload byte of Cmd::Store). The request is [op] for list / save-emarker /
 // save-log. Op 2 (erase of the native pages) is retired: it answers BadArg. save-emarker saves the
@@ -1096,6 +1131,7 @@ size_t encode_cable_r(std::span<uint8_t> out, const CableRInfo &i);
 size_t encode_lab(std::span<uint8_t> out, const LabResult &r);
 size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r);
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);   // vooc-monitor: FC op 4, one page
+size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v, uint8_t page);   // svooc-trigger: FC op 5, one page
 size_t encode_ufcs(std::span<uint8_t> out, const UfcsInfo &i);   // status block: state verdict class start blob_len(2) nfields
 // One tuner field: field(1) value(4) lo(4) hi(4) default(4); lo / hi / default come from ufcs::kFields.
 size_t encode_ufcs_field(std::span<uint8_t> out, uint8_t field, uint32_t value);
@@ -1188,6 +1224,9 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.fc_cmd(u8, u8, u16, u8) } -> std::same_as<Status>;   // op, proto, mV, flags (kFcConfirm | kFcAllowInline)
     { b.fc_info() } -> std::same_as<FcInfo>;
     { b.vooc_monitor(u8) } -> std::same_as<VoocSnapshot>;   // vooc-monitor: 0 off, 1 on, 2 keep; then the summary
+    { b.svooc_start(u8) } -> std::same_as<svooc::Refusal>;   // svooc-trigger: cap seconds (0 = 20); the confirm is checked first
+    { b.svooc_stop() } -> std::same_as<void>;
+    { b.svooc_info() } -> std::same_as<SvoocSnapshot>;
     { b.store_cmd(u8, u8) } -> std::same_as<StoreInfo>;   // op (list / save-emarker / save-log), slot unused
     { b.cable_r_reset() } -> std::same_as<void>;      // clears the passive reference
     { b.cable_r_mode(true) } -> std::same_as<void>;   // false = passive meter, true = Kelvin 8-wire
@@ -1637,6 +1676,33 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             return reply_n(encode_vooc(buf, backend.vooc_monitor(p.size() == 3 ? p[2] : 2), p[1]));
         }
         // --- end vooc-monitor ---
+        // --- svooc-trigger: drives D-, so the start needs the confirm flag and arms the lease ---
+        if (p[0] == kFcSvooc) {
+            if (p.size() < 2) return reply(Status::BadLength);
+            switch (p[1]) {
+            case kSvoocStatus:
+                if (p.size() != 3) return reply(Status::BadLength);
+                if (p[2] >= kSvoocPages) return reply(Status::BadArg);
+                return reply_n(encode_svooc(buf, backend.svooc_info(), p[2]));
+            case kSvoocStart: {
+                if (p.size() != 4) return reply(Status::BadLength);
+                if ((p[2] & ~kFcConfirm) || p[3] > kSvoocCapMaxS) return reply(Status::BadArg);
+                if (!(p[2] & kFcConfirm)) return reply(Status::NeedConfirm);
+                const svooc::Refusal r = backend.svooc_start(p[3]);
+                const size_t n = encode_svooc(buf, backend.svooc_info(), 0);
+                if (r != svooc::Refusal::None) return reply(Status::Busy, std::span<const uint8_t>(buf.data(), n));
+                backend.lease_arm();   // the adapter may raise VBUS: the dead-man lease holds from now
+                return reply_n(n);
+            }
+            case kSvoocStop:
+                if (p.size() != 2) return reply(Status::BadLength);
+                backend.svooc_stop();
+                return reply_n(encode_svooc(buf, backend.svooc_info(), 0));
+            default:
+                return reply(Status::BadArg);
+            }
+        }
+        // --- end svooc-trigger ---
         switch (p[0]) {
         case kFcStatus:
         case kFcReset:

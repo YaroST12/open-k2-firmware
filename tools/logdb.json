@@ -602,6 +602,13 @@
   "605": "[UI] home hero=%u\n",
   "606": "[PREFS] qc_after_pd=%d screenshot=%d smoothing=%s rotation=%s%u buttons=%d wake=%d hero=%u (%s)\n",
   "607": "[TWIN] wake: Rd presented to a silent charger\n",
-  "608": "[TWIN] wake: Rd released\n"
+  "608": "[TWIN] wake: Rd released\n",
+  "609": "[SNIFF] trigger refused: the shared RAM belongs to the USB drive or net function\n",
+  "610": "[SVOOC] wake %u\n",
+  "611": "[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA\n",
+  "612": "[SVOOC] no command after wake %u\n",
+  "613": "[SVOOC] refused: %s vbus=%dmV ibus=%dmA\n",
+  "614": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA\n",
+  "615": "[SVOOC] exit vbus=%dmV %s\n"
  }
 }
