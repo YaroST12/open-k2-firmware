@@ -30,6 +30,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 #include "k2/fastcharge/svooc_script.hpp"
 #include "k2/fastcharge/vooc.hpp"
@@ -77,6 +78,11 @@ struct Log {
     std::uint32_t pairs_total = 0;   // pairs seen, also those beyond the log
     std::uint8_t last_cmd = 0;
     std::uint16_t n = 0;          // pairs kept, the first kLogPairs (read them with Wire::pair)
+    // Diagnostics: the edge words the ISR handed in since begin() (the one that began the wire not counted), and when
+    // the last one came, ms since begin (saturates at 65 s). The last edge just after the last pair = the adapter went
+    // quiet; one near the end of the run = edges kept coming that made no frame.
+    std::uint32_t edges = 0;
+    std::uint16_t last_edge_ms = 0;
 };
 
 // Everything the wire resets at begin(); the pair array stays out of it so that reset never builds a 3 KB temporary.
@@ -119,6 +125,8 @@ public:
         const std::uint32_t t = word & ~63u;
         const std::uint8_t st = std::uint8_t(word & 3u);
         if (!have_) { begin(word); return {}; }
+        ++log_.edges;
+        log_.last_edge_ms = ms_since_begin(t);
         if (st == st_) return {};
         const bool was_dp = st_ & 1u, dp = st & 1u, was_dm = st_ & 2u;
         st_ = st;
@@ -153,6 +161,21 @@ public:
         return {};
     }
 
+    // The cycle time at which tick() next has work, nothing if it has none: D- to let go (kHoldUs after a reply's last
+    // rise, kCutUs after a stopped slot's), a frame whose clock went quiet (kGroupGapUs after its last rise, D+ high), a
+    // command whose slot did not come (kReplyWaitUs after its start). Every edge and every tick may move it; the glue arms
+    // an interrupt timer for it after each, so the wire's timing never waits for the main loop.
+    std::optional<std::uint32_t> deadline() const {
+        std::optional<std::uint32_t> d;
+        auto take = [&](std::uint32_t t) {
+            if (!d || std::int32_t(t - *d) < 0) d = t;
+        };
+        if (in_frame_ && !low()) take(last_rise_ + us(kGroupGapUs) + 1);   // tick: now - last_rise_ > gap
+        if (pend_) take(pend_t_ + us(kReplyWaitUs) + 1);                    // tick: now - pend_t_ > wait
+        if (driving_) take(drive_t_ + us(done_ ? kHoldUs : kCutUs));        // tick: now - drive_t_ >= hold / cut
+        return d;
+    }
+
     // The trigger ends: no slot is taken again; D- goes if it is held.
     Action stop() {
         stopped_ = true;
@@ -185,11 +208,16 @@ private:
         return {Action::Kind::Release, false, 0};
     }
 
+    // ms from begin() to cycle time `t`, saturated to 16 bits (65 s; the wire never runs near the 17.9 s wrap).
+    std::uint16_t ms_since_begin(std::uint32_t t) const {
+        const std::uint32_t ms = (t - t0_) / (kCyclesPerUs * 1000u);
+        return std::uint16_t(ms > 0xFFFFu ? 0xFFFFu : ms);
+    }
+
     void record(std::uint8_t cmd, std::uint16_t word) {
         ++log_.pairs_total;
         if (log_.n >= kLogPairs) return;
-        const std::uint32_t ms = (pend_t_ - t0_) / (kCyclesPerUs * 1000u);
-        pairs_[log_.n++] = {cmd, word, std::uint16_t(ms > 0xFFFFu ? 0xFFFFu : ms)};
+        pairs_[log_.n++] = {cmd, word, ms_since_begin(pend_t_)};
     }
 
     void miss() {

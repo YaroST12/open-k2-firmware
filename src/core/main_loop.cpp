@@ -23,10 +23,12 @@
 #include "k2/core/remote.hpp"
 #include "k2/core/rescan.hpp"
 #include "k2/core/shell_hw.hpp"
+#include "k2/core/stage_meter.hpp"
 #include "k2/core/survey.hpp"
 #include "k2/drivers/accelerometer.hpp"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/buttons.hpp"
+#include "k2/drivers/dpdm.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/drivers/msc.hpp"
@@ -97,6 +99,10 @@ void end_boot_screen(uint32_t now) {
     }
 }
 
+// The stage meter (k2/core/stage_meter.hpp): the start of each poll below, so a stall is named and timed.
+using Stage = k2::stage::Id;
+inline void mark(Stage s) { k2::stage::meter.mark(s, k2::dpdm::cycles(), k2::systick::millis()); }
+
 // A ring-log erase waits for this long without PD traffic or a VBUS change.
 constexpr uint32_t kEraseQuietMs = 1000;
 
@@ -104,39 +110,64 @@ constexpr uint32_t kEraseQuietMs = 1000;
 // are popped before the loop goes on, instead of widening main's frame, which sits under every call.
 [[gnu::noinline]] void slow_tasks(uint32_t now) {
     Context& c = *g_ctx;
+    mark(Stage::Fusb302);
     k2::fusb302::poll();
+    mark(Stage::Power);
     k2::power::poll();
+    mark(Stage::PowerSource);
     k2::power_source::poll(now);
+    mark(Stage::Dpsniff);
     k2::dpsniff::poll(now, k2::power::read().value_or(k2::power::Metrics{}).vbus_mv);
+    mark(Stage::Pdtrace);
     if (const auto pm = k2::power::read()) k2::pdtrace::vbus_sample(k2::power::vbus_fast_mv().value_or(pm->vbus_mv), pm->current_ma);   // black box, gated 50 ms / 100 mV / 20 mA; VBUS un-averaged so its steps carry their real time
+    mark(Stage::DiagLive);
     k2::pd::diag::live::poll(now);          // Black Box diagnosis: the fresh sample into its power window, its clock
+    mark(Stage::Adc);
     k2::adc::poll();
+    mark(Stage::LoopGuard);
     k2::loopguard::poll(now);              // the HID-cable loop 5 V lock: before the UI tick, so its tools see the lock this pass
+    mark(Stage::Accel);
     const bool sensor_was_online = c.accelerometer.online();
     if (c.accelerometer.poll(now)) {
         c.ui.feed_gravity(c.accelerometer.read(), now);
         if (sensor_was_online != c.accelerometer.online())
             K2LOG("[ACCEL] %s\n", c.accelerometer.online() ? "online" : "unavailable; retrying");
     }
+    mark(Stage::Fastcharge);
     k2::fastcharge::poll();
+    mark(Stage::Boottrace);
     k2::boottrace::flush_log();             // queued [BOOT] trace lines of the first seconds
+    mark(Stage::Session);
     k2::session::poll();                    // PD session record into the backup registers on change
+    mark(Stage::RdComeback);
     k2::rdcomeback::poll();                 // the Rd intent marker (/rd.rec) in step with the session, written on a quiet link
+    mark(Stage::Handback);
     k2::handback::poll(now);                // the phase-1 lab hand-back sequence, if the remote armed one
+    mark(Stage::Rescan);
     k2::rescan::poll();                     // a Refresh's Get_Source_Cap: the answer, or the CC cycle when the source stays silent
+    mark(Stage::Survey);
     k2::survey::poll(c.ui.charger_test_busy());   // the rest of the Refresh's survey, one message at a time (nothing runs before a Refresh)
     if (c.rescan_landing_due && !k2::rdcomeback::pending()) {   // a Refresh's CC cycle took the K2 down: back on Connection -> Source
         c.rescan_landing_due = false;
         if (k2::rdcomeback::rescan_landing()) c.ui.land_rescanned(now);
     }
-    {   // ring maintenance erases (~35 ms each) only with no charger test, PD Stress run or other port owner and a quiet link
+    // ring maintenance erases (~35 ms each) only with no charger test, PD Stress run or other port owner and a quiet link.
+    // No flash at all while the SuperVOOC trigger runs: a Black Box save stalls this loop for 95-290 ms (and masks
+    // interrupts for every half-word), so the wire's tick cannot let D- go after a reply's hold. The trigger's own edge
+    // recording (4096 edges) is a finished capture after ~72 pairs, where every hardware run of 2026-11-12 stopped.
+    // Waiting captures go out once the run is over.
+    if (!k2::fctrig::svooc_running()) {
         const bool may_erase = !c.ui.ports_busy() && k2::pdtrace::since_activity_ms() >= kEraseQuietMs;
+        mark(Stage::Bbpersist);
         k2::bbpersist::poll(may_erase);     // saves finished captures once the link is quiet
+        mark(Stage::ReportCard);
         k2::report_card::hw::poll(may_erase);
         k2::battery::hw::poll(now, may_erase);   // battery recorder: every sample; its record only at a phase boundary
     }
+    mark(Stage::BootScreen);
     if (c.bootscreen.active()) boot_screen_step(now);   // waits for the key's 3 s, then owns the panel
     // The QR screen owns the panel: the UI does not draw meanwhile. The UI's tick ends the OK + Back reboot chord.
+    mark(Stage::UiTick);
     if (!c.bootscreen.showing() && c.ui.tick(now) == k2::UiAction::Reboot) c.reboot();
 }
 
@@ -221,16 +252,21 @@ void pass() {
     const uint64_t pass_px0 = k2::paint::meter.px_count();      // and the pixels it sent
     k2::loopstat::stats.loop.note(k2::systick::millis());
     k2::gap::loop.note(k2::systick::millis());   // the longest iteration of a charger-test row ([CT] gap)
+    mark(Stage::Usb);
     k2::usb::poll();
     if (k2::usbcfg::current.drive && k2::msc::io()) k2::usb::poll();   // READ10 renders here, never under a paint
+    mark(Stage::Shell);
     k2::shell_hw::poll();
+    mark(Stage::Msc);
     if (k2::usbcfg::current.drive) k2::msc::poll();
 #if K2_NET
     if (k2::usbcfg::current.net) k2::http_server::service();
 #endif
+    mark(Stage::Remote);
     switch (c.remote.poll()) {
     case k2::RemoteEvent::Reboot:     c.reboot(); break;
     case k2::RemoteEvent::Screenshot:
+        mark(Stage::Capture);
         if (c.bootscreen.active()) end_boot_screen(k2::systick::millis());   // a capture repaints the UI's fields over the code
         k2::capture_screen(c.ui, c.remote.screenshot_seq(), k2::systick::millis()); break;
     case k2::RemoteEvent::Dfu:        c.dfu(); break;
@@ -238,14 +274,18 @@ void pass() {
     case k2::RemoteEvent::None:       break;
     }
 
+    mark(Stage::Fctrig);
     k2::fctrig::poll();
+    mark(Stage::Transcap);
     k2::transcap::poll();                       // transition capture: one VBUS/CC sample when due (no-op unless armed)
 
     const uint32_t now = k2::systick::millis();
     if (now != g_last_ms) {                     // sample buttons once per millisecond
         g_last_ms = now;
         k2::loopstat::stats.service.note(now);
+        mark(Stage::Service);
         k2::fusb302::service();
+        mark(Stage::Buttons);
         for (int i = 0; i < 4; i++) {
             const Button b = static_cast<Button>(i);
             // A remote press is a logical key with its own debouncer: it never mixes into the physical pin level,
@@ -280,15 +320,18 @@ void pass() {
     if (now - g_last_loop_ms >= kLoopMs) {
         g_last_loop_ms = now;
         slow_tasks(now);
+        mark(Stage::Stack);
         watch_stack(g_stack_lowest);
     }
 
     if (now - g_last_heartbeat_ms >= kHeartbeatMs) {
         g_last_heartbeat_ms = now;
+        mark(Stage::Heartbeat);
         heartbeat(now, g_press_count, ++g_heartbeats);
     }
     k2::loopstat::stats.note_pass(c.ui.page_index(), k2::systick::micros() - pass_t0_us,
                                   static_cast<uint32_t>(k2::paint::meter.px_count() - pass_px0));
+    mark(Stage::Idle);   // the wfi up to the next pass
 }
 
 }  // namespace k2::mainloop

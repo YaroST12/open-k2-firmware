@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // The Battery place (Bench > Battery): the pure view (k2/ui/battery_view.hpp) - number formats, the rows of each recorder
 // state, the identity block and the footer - and the page through the real Ui: the Bench row, opening the place, starting a
-// run with OK, the running dot on another page, the stored runs, and the renders in the three themes.
+// run with OK, the running dot on another page, the stored runs, and the Classic render.
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -229,22 +229,17 @@ static void test_page() {
     CHECK_EQ(int(ui.menu()), int(Menu::Battery));
 }
 
-// The place in each theme: no text cut (the gate's truncation log), the identity's dashed rule in ink3, nothing left of the
-// page under it from the Bench.
-static void test_themes() {
-    for (theme::Id th : {theme::Id::Night, theme::Id::Paper, theme::Id::Classic}) {
-        theme::apply(th);
-        Ui &ui = fresh_ui();
-        std::uint32_t t = 1000;
-        ui.tick(t);
-        bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
-        for (int i = 0; i < 30; i++) bt::hw::poll(t += 1000, true);
-        ui.open_place(bench::Place::Battery, t);
-        ui.tick(t += 100);
-        CHECK(count_px(kInk3, 8, 66, 216, 67) > 100);   // the perforation under the identity block (y kIdDashY)
-        CHECK(count_px(kBg, 0, 22, 224, 220) > 224 * 100);
-    }
-    theme::apply(theme::Id::Classic);
+// The place in Classic (the only theme): the identity's dashed rule in ink3, nothing left of the page under it from the Bench.
+static void test_classic() {
+    Ui &ui = fresh_ui();
+    std::uint32_t t = 1000;
+    ui.tick(t);
+    bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
+    for (int i = 0; i < 30; i++) bt::hw::poll(t += 1000, true);
+    ui.open_place(bench::Place::Battery, t);
+    ui.tick(t += 100);
+    CHECK(count_px(kInk3, 8, 66, 216, 67) > 100);   // the perforation under the identity block (y kIdDashY)
+    CHECK(count_px(kBg, 0, 22, 224, 220) > 224 * 100);
 }
 
 int main() {
@@ -252,6 +247,6 @@ int main() {
     test_rows();
     test_ident_and_footer();
     test_page();
-    test_themes();
+    test_classic();
     return test_report("test_ui_battery");
 }

@@ -465,6 +465,17 @@ size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v) {
     w.u8(static_cast<uint8_t>(pm.i86_first)); w.u8(static_cast<uint8_t>(pm.i86_esc)); w.u8(static_cast<uint8_t>(pm.r82));
     w.u16(pm.vtarget_mv); w.u8(static_cast<uint8_t>(pm.esc_at_s));
     w.u8(static_cast<uint8_t>(v.escape)); w.u16(u16c(v.escape_t_ms));
+    // 45..53: diagnostics
+    w.u16(u16c(lg.edges)); w.u16(lg.last_edge_ms); w.u16(u16c(r.poll_gap_max_ms));
+    w.u16(v.rec_edges); w.u8(v.rec_end);
+    return w.size();
+}
+
+size_t encode_svooc_timing(std::span<uint8_t> out, const SvoocSnapshot &v) {
+    Writer w(out);
+    const auto u16c = [](std::uint32_t x) { return static_cast<uint16_t>(x > 0xFFFF ? 0xFFFF : x); };
+    w.u32(v.stall.us); w.u16(u16c(v.stall.at_ms)); w.u8(static_cast<uint8_t>(v.stall.id)); w.u16(u16c(v.stall.ticked_ms));
+    w.u16(u16c(v.rel_timer)); w.u16(u16c(v.rel_loop)); w.u16(u16c(v.rel_edge));
     return w.size();
 }
 

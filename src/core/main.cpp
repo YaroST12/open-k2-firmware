@@ -184,7 +184,6 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
         k2::fusb302::set_vbus_source(&cable_probe_vbus_mv);   // the Ra probe at the end of a silent alone cable read
         g_ui.restore_orientation(prefs.rotation_manual, prefs.rotation, prefs.rotate_buttons);   // before g_ui.init draws the first frame
         g_ui.restore_home_hero(prefs.home_hero);
-        k2::theme::apply(k2::theme::id_from(prefs.theme));   // K2 > Theme, before the first frame: no run-time repaint path
     }
     k2::fs::wipe_legacy();                  // ... then the pre-littlefs raw pages are erased, once (marker /.legacy)
     k2::fs::grow();                         // ... and only then may the volume grow into the run they lived in (blank proof); scans the rings

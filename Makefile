@@ -430,6 +430,20 @@ $(OBJ_DIR)/world/%.o: %.cpp
 $(HOST_DIR)/test_world_replay: $(WORLD_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/ui_stubs.o, $(LIB_OBJS))
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
 
+# The SuperVOOC world (tests/test_world_svooc.cpp): the same world plus the real trigger glue (src/fastcharge/svooc_trig.cpp)
+# against the adapter, line and interrupt model in tests/world_svooc.cpp. Built with -DK2_WORLD_SVOOC, which drops the world's
+# and ui_stubs' stand-ins for the trigger hooks (fctrig, shell_hw, link) that tests/world_svooc.cpp provides instead.
+WSVOOC_SRCS    = tests/test_world_svooc.cpp tests/world_svooc.cpp tests/world_sim.cpp tests/ui_stubs.cpp $(SRC_DIR)/core/main_loop.cpp
+WSVOOC_SRCS   += $(SRC_DIR)/core/boot_pd.cpp $(SRC_DIR)/core/rd_comeback.cpp $(SRC_DIR)/core/loop_guard.cpp
+WSVOOC_SRCS   += $(SRC_DIR)/fastcharge/svooc_trig.cpp
+WSVOOC_OBJS    = $(patsubst %.cpp, $(OBJ_DIR)/wsvooc/%.o, $(WSVOOC_SRCS)) $(OBJ_DIR)/scan/$(SRC_DIR)/drivers/fusb302.o
+WSVOOC_OBJS   += $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, $(SRC_DIR)/drivers/power_monitor.cpp $(SRC_DIR)/drivers/accelerometer.cpp)
+HOST_WSVOOC_CMD = $(HOST_CXX) $(HOST_CXXFLAGS) -DK2_HOST_PINS -DK2_WORLD_STUBS -DK2_WORLD_SVOOC -MMD -MP -c $< -o $@
+$(OBJ_DIR)/wsvooc/%.o: %.cpp
+	@$(call RUN,HOST_WSVOOC_CMD)
+$(HOST_DIR)/test_world_svooc: $(WSVOOC_OBJS) $(filter-out $(OBJ_DIR)/lib/tests/ui_stubs.o, $(LIB_OBJS))
+	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
+
 # The spoof state test uses its fake receive/transmit hook, not the UI driver's stand-ins.
 $(HOST_DIR)/test_emk_spoof: $(OBJ_DIR)/tests/test_emk_spoof.o $(patsubst %.cpp, $(OBJ_DIR)/lib/%.o, src/pd/emk_spoof.cpp src/pd/emk_quirk.cpp src/pd/emk_respond.cpp src/pd/emrec.cpp src/core/fmt.cpp)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@

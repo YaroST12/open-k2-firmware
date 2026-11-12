@@ -16,14 +16,22 @@
 // still in time while it lands before the adapter latches it, just before the next fall (0.43-0.51 ms after the
 // rise): ~380 us of slack. Command bits are taken from the D- state the previous edge left (svooc_wire.hpp), so a late
 // ISR does not misread them either. No logging in the ISR.
+// Timer part: the wire's deadlines (svooc_wire.hpp deadline(): the D- release kHoldUs after a reply's last rise, a cut
+// slot, a frame gone quiet, a slot that never came) run from a one-shot timer interrupt (k2/drivers/oneshot.hpp), armed
+// after every edge and every tick, at the same NVIC priority as the edge ISR. So the line timing does not depend on the
+// main loop: a stalled one (a full repaint, a flash write) no longer holds D- into the adapter's next command.
 // Main-loop part: poll() every pass (via fctrig::poll) and service() about every ms (the LCD idle hook, via
-// fctrig::service_ufcs) let go of D- after the last bit's hold and expire slots; poll() also runs the guards and hands
-// the latest VBUS sample to the wire for the closed-loop 0x82 word (svooc_script.hpp).
+// fctrig::service_ufcs) tick the wire as well (the fallback); poll() also runs the guards and hands the latest VBUS
+// sample to the wire for the closed-loop 0x82 word (svooc_script.hpp), so the guards still want a main loop that runs:
+// it writes no flash while running() (no Black Box save, no ring erase; src/core/main_loop.cpp). Report::poll_gap_max_ms
+// shows the longest gap it had, Snapshot::stall which stage it was and when (k2/core/stage_meter.hpp), and the
+// rel_* counters who let D- go after each reply.
 #pragma once
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
+#include "k2/core/stage_meter.hpp"
 #include "k2/fastcharge/svooc_run.hpp"
 #include "k2/fastcharge/svooc_wire.hpp"
 
@@ -55,6 +63,10 @@ struct Snapshot {
     svooc::Params params{};                          // the effective (clamped) responder parameters
     svooc::Escape escape = svooc::Escape::Off;       // what came of the escape (Params::esc_at_s)
     std::uint32_t escape_t_ms = 0;                   // when its 0x07F was sent, ms since the wake
+    std::uint16_t rec_edges = 0;                     // the run's Black Box edge recording (dpsniff::status()): edges kept
+    std::uint8_t rec_end = 0;                        // and how it ended (edges::End; 0 = still recording)
+    stage::Worst stall{};                            // the main loop's longest stage since the wake (frozen at the release)
+    std::uint32_t rel_timer = 0, rel_loop = 0, rel_edge = 0;   // who let D- go: the timer, the main loop, the next frame
 };
 Snapshot snapshot();   // a copy, interrupts masked for the wire's part
 

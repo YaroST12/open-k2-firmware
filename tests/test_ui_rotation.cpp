@@ -303,7 +303,7 @@ static void test_settings_rotation_modes() {
     ui.tick(6000);
     ui.open_place(bench::Place::K2, 6100);   // Bench > K2: the settings are the place page
     CHECK_EQ(ui.page() == Page::Settings, true);
-    CHECK_EQ(ui.list_state().count, SettingsPage::kRows);   // ... Wake sleeping port, Theme, System state, Boot info
+    CHECK_EQ(ui.list_state().count, SettingsPage::kRows);   // ... Wake sleeping port, System state, Boot info
     {   // Smoothing row: Medium by default, OK cycles High -> Off -> Low -> Medium, stores each and applies it at once
         g_stub.prefs = {true, false}; g_stub.prefs_sets = 0; g_stub.smoothing_applied = smoothing::Preset::Medium;
         for (int i = 0; i < 4; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 6205 + i);
@@ -317,11 +317,11 @@ static void test_settings_rotation_modes() {
             CHECK_EQ(g_stub.prefs.screenshot, false);
         }
         CHECK_EQ(g_stub.prefs_sets, 4);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 6230);   // the Wake sleeping port row follows (then Theme ends the list)
+        ui.on_button(Button::Plus, ButtonEvent::Short, 6230);   // the Wake sleeping port row follows (then System state, Boot info)
         for (int i = 0; i < 5; ++i) ui.on_button(Button::Minus, ButtonEvent::Short, 6240 + i);   // back to the top
         g_stub.prefs = {};
     }
-    {   // Wake sleeping port row (row 5, before Theme): Off by default, OK toggles it, stores it with the other flags, applies it now
+    {   // Wake sleeping port row (row 5, before System state): Off by default, OK toggles it, stores it with the other flags, applies it now
         g_stub.prefs = {true, false}; g_stub.prefs_sets = 0; g_stub.idle_wake = false;
         for (int i = 0; i < 5; ++i) ui.on_button(Button::Plus, ButtonEvent::Short, 6250 + i);
         CHECK_EQ(g_stub.idle_wake, false);
@@ -332,7 +332,7 @@ static void test_settings_rotation_modes() {
         CHECK_EQ(g_stub.prefs_sets, 1);
         ui.on_button(Button::Ok, ButtonEvent::Short, 6261);
         CHECK_EQ(g_stub.idle_wake, false); CHECK_EQ(g_stub.prefs.idle_wake, false);
-        ui.on_button(Button::Plus, ButtonEvent::Short, 6262); ui.on_button(Button::Minus, ButtonEvent::Short, 6262);   // Theme follows; back
+        ui.on_button(Button::Plus, ButtonEvent::Short, 6262); ui.on_button(Button::Minus, ButtonEvent::Short, 6262);   // System state follows; back
         ui.on_button(Button::Ok, ButtonEvent::Short, 6263);
         CHECK_EQ(g_stub.idle_wake, true);
         ui.on_button(Button::Ok, ButtonEvent::Short, 6264);

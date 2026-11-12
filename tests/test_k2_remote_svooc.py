@@ -45,9 +45,10 @@ def log_page(rows, first):
 class Link:
     """Answers op 5 from a script of status summaries and a list of pair rows; records every request."""
 
-    def __init__(self, statuses, start_status=kr.STATUS_OK, start_payload=None, rows=None):
+    def __init__(self, statuses, start_status=kr.STATUS_OK, start_payload=None, rows=None, timing=None):
         self.sent, self.statuses, self.rows = [], list(statuses), rows or []
         self.start_status, self.start_payload = start_status, start_payload
+        self.timing = timing   # status page 1; None = a firmware without it (BadArg)
 
     def call(self, cmd, payload=b""):
         self.sent.append((cmd, bytes(payload)))
@@ -60,7 +61,11 @@ class Link:
             return kr.Response(cmd, 1, 0, summary(stage=5, abort=11))
         if payload[1] == kr.SVOOC_LOG:
             return kr.Response(cmd, 1, 0, log_page(self.rows, payload[2] | payload[3] << 8))
-        assert payload[1] == kr.SVOOC_STATUS and payload[2] == 0
+        assert payload[1] == kr.SVOOC_STATUS and payload[2] in (0, 1)
+        if payload[2] == 1:
+            if self.timing is None:
+                raise kr.RemoteError(kr.STATUS_BAD_ARG, cmd, b"")
+            return kr.Response(cmd, 1, 0, self.timing)
         body = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
         return kr.Response(cmd, 1, 0, body)
 
@@ -175,6 +180,28 @@ class SvoocTrigger(unittest.TestCase):
         self.assertIn(": no 86", text)
         self.assertIn("    1    143 ms  9.10 V  82>07F", text)
 
+    def test_diagnostics_decode_and_render(self):
+        """Bytes 45..53: wire edges, last edge (ms after the wake), longest poll gap, the Black Box recording."""
+        p = ext_summary(stage=6, kept=0) + (5000).to_bytes(2, "little") + (3351).to_bytes(2, "little") + \
+            (212).to_bytes(2, "little") + (4096).to_bytes(2, "little") + bytes([1])
+        s = kr.decode_svooc_summary(p)
+        self.assertEqual(s["diag"], {"edges": 5000, "last_edge_ms": 3351, "poll_gap_max_ms": 212, "rec_edges": 4096,
+                                     "rec_end": "full"})
+        s["pairs"], s["pairs_kept"] = [], 0
+        self.assertIn("  diag: 5000 edges to the wire, the last at 3351 ms after the wake; longest main-loop gap 212 ms; "
+                      "Black Box recording 4096 edges, ended full", kr.render_svooc(s))
+        older = kr.decode_svooc_summary(ext_summary(stage=6))
+        self.assertNotIn("diag", older)
+        older["pairs"], older["pairs_kept"] = [], 0
+        self.assertNotIn("diag:", kr.render_svooc(older))
+
+    def test_recording_ends_follow_the_firmware(self):
+        text = (ROOT / "include/k2/fastcharge/edges.hpp").read_text()
+        ends = re.search(r"enum class End : std::uint8_t \{([^}]*)\}", text).group(1)
+        names = [w.split("=")[0].strip().lower() for w in ends.split(",")]
+        self.assertEqual(names, ["none", "full", "idle", "detach", "timeout", "cancel", "storm"])
+        self.assertEqual(kr.SVOOC_REC_ENDS, ["recording", "full", "idle", "detach", "timeout", "cancelled", "storm"])
+
     def test_waiver_refused_with_pd_names_the_reason(self):
         link = Link([summary()], start_status=kr.STATUS_BUSY, start_payload=summary(refusal=11))
         with self.assertRaises(kr.FcRefused) as cm:
@@ -242,10 +269,37 @@ class SvoocTrigger(unittest.TestCase):
         self.assertEqual(len(stops), 1)
         self.assertEqual(r["svooc"]["abort"], "stopped")
 
+    def test_timing_page_decode_and_render(self):
+        """Status page 1: the main loop's worst stage since the wake (when, how long, the ms clock's advance) and who let
+        D- go after the replies. A gap far longer than the clock moved = interrupts were masked."""
+        ui = kr.STAGE_NAMES.index("ui")
+        page = (169123).to_bytes(4, "little") + (3405).to_bytes(2, "little") + bytes([ui]) + (168).to_bytes(2, "little") + \
+            (70).to_bytes(2, "little") + (1).to_bytes(2, "little") + (0).to_bytes(2, "little")
+        link = Link([summary(stage=6)], timing=page)
+        s = kr.cmd_fc_svooc(link, args("svooc-status"))["svooc"]
+        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, 0])), (kr.CMD_FC, bytes([5, 0, 1]))])
+        self.assertEqual(s["timing"], {"stall_us": 169123, "stall_at_ms": 3405, "stall_stage": "ui", "stall_ticked_ms": 168,
+                                       "rel_timer": 70, "rel_loop": 1, "rel_edge": 0})
+        text = kr.render_svooc(s)
+        self.assertIn("  timing: longest main-loop stage ui 169.1 ms at 3405 ms after the wake (ms clock +168); "
+                      "D- let go by the timer 70, the main loop 1, the next frame 0", text)
+        self.assertNotIn("masked", text)
+        masked = page[:7] + (2).to_bytes(2, "little") + page[9:]
+        s = kr.cmd_fc_svooc(Link([summary(stage=6)], timing=masked), args("svooc-status"))["svooc"]
+        self.assertIn("(ms clock +2: interrupts masked ~167 ms)", kr.render_svooc(s))
+        older = kr.cmd_fc_svooc(Link([summary(stage=6)]), args("svooc-status"))["svooc"]   # BadArg: no page 1
+        self.assertNotIn("timing", older)
+        self.assertNotIn("timing:", kr.render_svooc(older))
+
+    def test_stage_names_follow_the_firmware(self):
+        text = (ROOT / "include/k2/core/stage_meter.hpp").read_text()
+        body = re.search(r"constexpr const char\* name\(Id id\) \{(.*?)\n\}", text, re.S).group(1)
+        self.assertEqual(re.findall(r'return "([^"]*)";', body)[:-1], kr.STAGE_NAMES)
+
     def test_status_and_stop_commands(self):
         link = Link([summary(stage=6)])
         kr.cmd_fc_svooc(link, args("svooc-status"))
-        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, 0]))])
+        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, 0])), (kr.CMD_FC, bytes([5, 0, 1]))])
         link = Link([summary(stage=6)])
         kr.cmd_fc_svooc(link, args("svooc-stop"))
         self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 2])))

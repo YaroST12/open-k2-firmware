@@ -78,18 +78,17 @@ constexpr trend::Qty trend_qty(hm::Qty q) { return q == hm::Qty::W ? trend::Qty:
 constexpr std::string_view qty_label(hm::Qty q) { return q == hm::Qty::W ? "POWER" : q == hm::Qty::V ? "VBUS" : "IBUS"; }
 constexpr std::string_view qty_unit(hm::Qty q) { return q == hm::Qty::W ? "W" : q == hm::Qty::V ? "V" : "A"; }
 constexpr char qty_unit_char(hm::Qty q) { return q == hm::Qty::W ? 'W' : q == hm::Qty::V ? 'V' : 'A'; }
-// Fieldbook fields: a live quantity is a block of its spot colour (W the inverse block) with ink digits and its trend in
-// the darker shade of the spot.
-uint16_t qty_fill(hm::Qty q) { return q == hm::Qty::W ? kWattFill : q == hm::Qty::V ? kSpotVolt : kSpotAmp; }
-uint16_t qty_on(hm::Qty q) { return q == hm::Qty::W ? kWattInk : kSpotInk; }
-uint16_t qty_dark(hm::Qty q) { return q == hm::Qty::W ? kWattD : q == hm::Qty::V ? kSpotVoltD : kSpotAmpD; }
-// A field's look in one mode: the block, the digit ink, the label ink.
+// Quantity fields: a black field, the quantity's own colour for its digits, and the trend as a dark tint column under a
+// brighter 1 px level line (the look of the pre-Fieldbook Home, restored 2026-11-13). Stale: the grey, idle: faint.
+uint16_t qty_color(hm::Qty q) { return q == hm::Qty::W ? kWatt : q == hm::Qty::V ? kVolt : kAmp; }
+uint16_t qty_tint(hm::Qty q) { return q == hm::Qty::W ? kWattT : q == hm::Qty::V ? kVoltT : kAmpT; }
+uint16_t qty_line(hm::Qty q) { return q == hm::Qty::W ? kWattL : q == hm::Qty::V ? kVoltL : kAmpL; }
+// A field's look in one mode: the ground, the digit ink, the label ink. An alarm over the limit is white on red.
 struct FieldLook { uint16_t fill, ink, label; };
-FieldLook field_look(hm::Mode m, hm::Qty q, bool over) {
-    if (over) return {kError, kAlarmInk, kAlarmInk};                 // white on red in every theme
-    if (m == hm::Mode::Live) return {qty_fill(q), qty_on(q), qty_on(q)};
-    if (m == hm::Mode::Stale) return {kStaleFill, kStaleInk, kStaleInk};
-    return {kBg, kInk3, kInk2};                                      // idle: the ground, a 4 px key, faint digits
+FieldLook field_look(hm::Mode m, hm::Qty q, bool over, bool near_) {
+    if (over) return {kError, kAlarmInk, kAlarmInk};
+    const uint16_t ink = near_ ? kCaution : m == hm::Mode::Live ? qty_color(q) : m == hm::Mode::Stale ? kStale : kFaint;
+    return {kBg, ink, kDim};
 }
 
 // The geometry of a quantity slot: the content rows (the rule under it belongs to the cell too).
@@ -318,7 +317,7 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
     const hm::Alarm al = f.alarm[qi];
     const bool over = al == hm::Alarm::Over, near_ = al == hm::Alarm::Near;
     const uint32_t mx = f.max[qi];
-    const FieldLook look = field_look(m, q, over);
+    const FieldLook look = field_look(m, q, over, near_);
     const uint16_t label = look.label;
     const char uc = qty_unit_char(q);
     // A W maximum shows in whole watts ("max 36W", "OVER 36W LIMIT"); the alarm itself compares the exact figure.
@@ -337,7 +336,7 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
         const std::string_view lab = qty_label(q);
         it[n++] = hm::text(kLabelFont, lx, ly, lab, label);
         if (hero && shown)
-            it[n++] = hm::text(kLabelFont, static_cast<int16_t>(lx + (lab.size() + 1) * kLabelFont.adv), ly, trend::label(window_), label);
+            it[n++] = hm::text(kLabelFont, static_cast<int16_t>(lx + (lab.size() + 1) * kLabelFont.adv), ly, trend::label(window_), kFaint);
         if (near_) {   // "93% OF 100W" (hero) or "92%" (ledger) as an orange chip at the right end of the label line
             hm::alarm_text(al, static_cast<uint32_t>(q == hm::Qty::W ? w_mw_ : a_ma_), shown_max, atxt, uc, !hero);
             const int16_t tw = static_cast<int16_t>(atxt.view().size() * kLabelFont.adv);
@@ -356,9 +355,9 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
         case hm::Pill::Pin:    ptxt.put("Rd pin CC").put_char(static_cast<char>('0' + f.pin)); break;
         case hm::Pill::Over: case hm::Pill::None: break;
         }
-        if (pill != hm::Pill::None) {   // chips: LAST light on the grey field, NO VBUS on bg2, a held pin orange
-            const uint16_t fillc = pill == hm::Pill::NoVbus ? kBg2 : pill == hm::Pill::Pin ? kCaution : kStaleInk;
-            const uint16_t inkc = pill == hm::Pill::NoVbus ? kInk2 : pill == hm::Pill::Pin ? kSpotInk : kStaleFill;
+        if (pill != hm::Pill::None) {   // chips: LAST grey, NO VBUS on the surface, a held pin orange
+            const uint16_t fillc = pill == hm::Pill::NoVbus ? kSurface : pill == hm::Pill::Pin ? kCaution : kStale;
+            const uint16_t inkc = pill == hm::Pill::NoVbus ? kDim : kBg;
             const int16_t pn = static_cast<int16_t>(ptxt.view().size());
             const int16_t x0 = static_cast<int16_t>(kPillX - 8 * pn);
             it[n++] = hm::fill(x0, kPillY, static_cast<int16_t>(8 * pn + 11), kPillBoxH, fillc);
@@ -384,7 +383,7 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int st
     const uint32_t mx = f.max[qi];
     const bool bar = q != hm::Qty::V && mx > 0;
     const hm::CellGeom g0 = hm::cell_geom(s.top, s.bottom, bar);
-    const FieldLook look = field_look(m, q, over);
+    const FieldLook look = field_look(m, q, over, near_);
     const uint16_t ink = look.ink;   // digits and unit
     int16_t px0 = 0, px1 = 0;
     const bool digits_changed = hd_[si].set(f.text[qi], px0, px1);   // before the items: the digit item views hd_'s text
@@ -393,15 +392,15 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int st
     QtyHead texts;
     hm::Item it[12];
     int n = 0;
-    // Structure: the white space this cell owns between the fields.
+    // Structure: the rules this cell owns.
     if (hero) {
-        it[n++] = hm::fill(0, hm::kRule1Y, hm::kW, 2, kBg);
+        it[n++] = hm::fill(0, hm::kRule1Y, hm::kW, 2, kRule);
     } else {
-        it[n++] = hm::fill(hm::kVRuleX, s.top, 1, static_cast<int16_t>(s.cell_bottom - s.top + 1), kBg);
-        if (si == 1) it[n++] = hm::fill(0, hm::kRowRuleY, hm::kVRuleX, 1, kBg);
+        it[n++] = hm::fill(hm::kVRuleX, s.top, 1, static_cast<int16_t>(s.cell_bottom - s.top + 1), kRule);
+        if (si == 1) it[n++] = hm::fill(0, hm::kRowRuleY, hm::kVRuleX, 1, kRule);
     }
-    if (!shown && !over)   // no VBUS: the field drops to the ground and keeps a 4 px key of its colour
-        it[n++] = hm::fill(0, s.top, 4, static_cast<int16_t>(s.bottom - s.top + 1), qty_fill(q));
+    if (hero)   // the 4 px status edge in the field's ink (white on the alarm red)
+        it[n++] = hm::fill(0, s.top, 4, static_cast<int16_t>(s.bottom - s.top + 1), over ? kAlarmInk : ink);
     const uint32_t head = qty_head(si, q, f, texts, it, n);
 
     // Unit, bar, arrow, digits.
@@ -413,10 +412,10 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int st
     if (bar && shown) {   // contract bar: track, fill, 90 % tick
         const uint32_t abs = static_cast<uint32_t>(q == hm::Qty::W ? w_mw_ : a_ma_);
         const int fw = hm::bar_fill_w(abs, mx, bg);
-        // Ink on the darker shade of the field; orange from 90 %; white on the red field.
-        const uint16_t fc = near_ ? kCaution : ink;
-        const uint16_t tc = ink;
-        const uint16_t track = over ? kErrD : live ? qty_dark(q) : kInk3;
+        // The quantity's colour on a rule-grey track, the 90 % tick in text (dim when stale); orange from 90 %; white on red.
+        const uint16_t fc = ink;
+        const uint16_t tc = over ? kAlarmInk : m == hm::Mode::Stale ? kDim : kText;
+        const uint16_t track = over ? kErrD : kRule;
         it[n++] = hm::fill(bg.x0, bg.y, static_cast<int16_t>(hm::bar_track(bg)), hm::kBarH, track);
         if (fw > 0) it[n++] = hm::fill(bg.x0, bg.y, static_cast<int16_t>(fw), hm::kBarH, fc);
         it[n++] = hm::fill(hm::bar_tick_x(bg), static_cast<int16_t>(bg.y - 2), 1, hm::kBarH + 4, tc);
@@ -428,7 +427,7 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int st
     if (q == hm::Qty::A && shown) {
         const bool dash = flow_ == power::Flow::Idle;
         const uint8_t aux = dash ? hm::dash_dir(ctx_.rotation) : hm::arrow_dir(flow_ == power::Flow::Forward, ctx_.rotation);
-        const uint16_t ac = dash && live ? qty_dark(q) : ink;   // the field's ink; a resting dash in the darker shade
+        const uint16_t ac = over ? kAlarmInk : dash ? kFaint : live ? kFlow : kStale;   // a resting dash faint, the stale arrow grey
         it[n++] = hm::arrow(ax, ay, aux, ac, hero ? 0 : kLedArrowBox);
         arrow_sig = mix_u32(mix_u32(1, aux), ac);
     }
@@ -440,10 +439,11 @@ void HomePage::paint_qty(int si, hm::Qty q, const Frame &f, int step_col, int st
     cell.x1 = s.x1;
     cell.bg = look.fill;
     cell.sweep = shown && !over && sweep_ok_;
-    // The trend is the darker shade of the spot (live) or of the grey (stale); the cursor is a 1 px gap in it.
-    cell.tint = live ? qty_dark(q) : kInk3;
-    cell.line = cell.tint;
-    cell.cursor_line = look.fill;
+    // The trend: a dark tint column under a brighter 1 px line, live in the quantity's own shades, stale in grey. The
+    // cursor is a 1 px rule-coloured gap in it.
+    cell.tint = live ? qty_tint(q) : kPanelBg;
+    cell.line = live ? qty_line(q) : kFaint;
+    cell.cursor_line = kRule;
     cell.sw = &sw_[si];
     cell.items = std::span<const hm::Item>(it, static_cast<size_t>(n));
 
@@ -505,7 +505,7 @@ void HomePage::paint_card(int ci, const Frame &f) {
         add(hm::text(font, static_cast<int16_t>(kCardR + 1 - static_cast<int>(s.size()) * font.adv), static_cast<int16_t>(y0 + base - font.ascent), s, col));
     };
     auto label = [&](std::string_view s, int16_t dy) { add(hm::text(kLabelFont, kCardL, static_cast<int16_t>(y0 + dy), s, kDim)); };
-    if (ci == 0) add(hm::fill(hm::kCardX0, hm::kRowRuleY, static_cast<int16_t>(hm::kW - hm::kCardX0), 1, kBg));   // white space
+    if (ci == 0) add(hm::fill(hm::kCardX0, hm::kRowRuleY, static_cast<int16_t>(hm::kW - hm::kCardX0), 1, kRule));
     if (dot) add(hm::fill(kDotX, static_cast<int16_t>(y0 + 1), 5, 5, kAccent));
 
     char b0[12], b1[12];

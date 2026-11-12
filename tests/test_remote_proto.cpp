@@ -1192,7 +1192,7 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 5, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x32, 6, {5, 9}), r), 1);
     check_header(r, 0x32, 6, Status::BadArg, 0);
-    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 1}), r), 1);             // the status has one page; pairs are op 3
+    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 2}), r), 1);             // the status has two pages; pairs are op 3
     check_header(r, 0x32, 7, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x32, 42, {5, 3, 0}), r), 1);
     check_header(r, 0x32, 42, Status::BadLength, 0);
@@ -1201,13 +1201,13 @@ static void test_fc_svooc_trigger() {
     // Refused for the RAM: Busy, the summary carries the reason, no lease.
     f.svooc_refusal = k2::svooc::Refusal::NoRam;
     CHECK_EQ(run(f, request(0x32, 8, {5, 1, 1, 0}), r), 1);
-    check_header(r, 0x32, 8, Status::Busy, 45);
+    check_header(r, 0x32, 8, Status::Busy, 54);
     CHECK_EQ(r[kRspHeader + 1], static_cast<uint8_t>(k2::svooc::Refusal::NoRam));
     CHECK_EQ(f.lease_arms, 0);
     // Accepted with a 12 s cap: Ok, the lease armed once.
     f.svooc_refusal = k2::svooc::Refusal::None;
     CHECK_EQ(run(f, request(0x32, 9, {5, 1, 1, 12}), r), 1);
-    check_header(r, 0x32, 9, Status::Ok, 45);
+    check_header(r, 0x32, 9, Status::Ok, 54);
     CHECK_EQ(f.svooc_cap, 12);
     CHECK(!f.svooc_usb_a);
     // The 4-byte request is the old one: every operator parameter at its default (0x86 target 0x005, 0x82 word 0x051, no
@@ -1221,14 +1221,14 @@ static void test_fc_svooc_trigger() {
     CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(k2::svooc::Stage::Wake));
     // The USB-A waiver rides the start flags (bit 2) beside the confirm and reaches the backend.
     CHECK_EQ(run(f, request(0x32, 43, {5, 1, 5, 0}), r), 1);
-    check_header(r, 0x32, 43, Status::Ok, 45);
+    check_header(r, 0x32, 43, Status::Ok, 54);
     CHECK(f.svooc_usb_a);
     CHECK_EQ(r[kRspHeader + 4] & 0x10, 0x10);                         // summary flags bit 4: waiver in use
     f.svooc_snap.report.usb_a = false; f.svooc_usb_a = false;
     // The extended start [5, 1, flags, cap_s, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s] (10 bytes) hands
     // the parameters to the backend as sent (the firmware clamps); the lengths in between are BadLength.
     CHECK_EQ(run(f, request(0x32, 47, {5, 1, 1, 9, 0x0F, 0x23, 0x60, 0xF8, 0x2A, 4}), r), 1);   // vtarget 0x2AF8 = 11000
-    check_header(r, 0x32, 47, Status::Ok, 45);
+    check_header(r, 0x32, 47, Status::Ok, 54);
     CHECK_EQ(f.svooc_cap, 9);
     CHECK_EQ(f.svooc_params.i86_first, 0x00F);
     CHECK_EQ(f.svooc_params.i86_esc, 0x023);
@@ -1262,7 +1262,7 @@ static void test_fc_svooc_trigger() {
     for (unsigned i = 0; i < 18; i++) f.svooc_rows[i] = {static_cast<uint8_t>(0x80 + i), static_cast<uint16_t>(0x100 + i),
                                                          static_cast<uint16_t>(500 + 25 * i), static_cast<uint16_t>(5000 + i)};
     CHECK_EQ(run(f, request(0x32, 10, {5, 0, 0}), r), 1);
-    check_header(r, 0x32, 10, Status::Ok, 45);
+    check_header(r, 0x32, 10, Status::Ok, 54);
     check_bytes(r, kRspHeader, {static_cast<uint8_t>(k2::svooc::Stage::Exit), 0, static_cast<uint8_t>(k2::svooc::Abort::Overvoltage),
                                 1, 0x0B, static_cast<uint8_t>(k2::svooc::Phase::Ramp), 1, 0x82,
                                 30, 0, 29, 0, 1, 0, 0, 0, 2, 0, 31, 0, 18,
@@ -1275,9 +1275,27 @@ static void test_fc_svooc_trigger() {
     f.svooc_snap.params.vtarget_mv = 9000; f.svooc_snap.params.esc_at_s = 3;
     f.svooc_snap.escape = k2::svooc::Escape::Got86; f.svooc_snap.escape_t_ms = 3044;
     CHECK_EQ(run(f, request(0x32, 52, {5, 0, 0}), r), 1);
-    check_header(r, 0x32, 52, Status::Ok, 45);
+    check_header(r, 0x32, 52, Status::Ok, 54);
     check_bytes(r, kRspHeader + 36, {0x0F, 0x23, 0x60, 0x28, 0x23, 3, 3, 0xE4, 0x0B});
     f.svooc_snap.params = {}; f.svooc_snap.escape = k2::svooc::Escape::Off; f.svooc_snap.escape_t_ms = 0;
+    // The diagnostics (45..53): edges(u16, saturates) last_edge_ms(u16) poll_gap_max_ms(u16) rec_edges(u16) rec_end(u8).
+    lg.edges = 70000; lg.last_edge_ms = 3351; rep.poll_gap_max_ms = 212;
+    f.svooc_snap.rec_edges = 4096; f.svooc_snap.rec_end = 1;
+    CHECK_EQ(run(f, request(0x32, 53, {5, 0, 0}), r), 1);
+    check_header(r, 0x32, 53, Status::Ok, 54);
+    check_bytes(r, kRspHeader + 45, {0xFF, 0xFF, 0x17, 0x0D, 0xD4, 0x00, 0x00, 0x10, 1});
+    lg.edges = 0; lg.last_edge_ms = 0; rep.poll_gap_max_ms = 0; f.svooc_snap.rec_edges = 0; f.svooc_snap.rec_end = 0;
+    // Status page 1, the timing diagnostics (15 bytes): the main loop's worst stage since the wake, stall_us(u32)
+    // at_ms(u16) stage(u8, k2::stage::Id) ticked_ms(u16), then who let D- go after the replies: timer loop edge (u16 each).
+    f.svooc_snap.stall = {k2::stage::Id::UiTick, 169123, 3405, 168};
+    f.svooc_snap.rel_timer = 70; f.svooc_snap.rel_loop = 1; f.svooc_snap.rel_edge = 70000;
+    CHECK_EQ(run(f, request(0x32, 54, {5, 0, 1}), r), 1);
+    check_header(r, 0x32, 54, Status::Ok, 15);
+    check_bytes(r, kRspHeader, {0xA3, 0x94, 0x02, 0x00, 0x4D, 0x0D, static_cast<uint8_t>(k2::stage::Id::UiTick), 0xA8, 0x00,
+                                70, 0, 1, 0, 0xFF, 0xFF});
+    f.svooc_snap.stall = {}; f.svooc_snap.rel_timer = f.svooc_snap.rel_loop = f.svooc_snap.rel_edge = 0;
+    CHECK_EQ(run(f, request(0x32, 55, {5, 0, 2}), r), 1);             // no third page
+    check_header(r, 0x32, 55, Status::BadArg, 0);
     // Log pages [5, 3, from_lo, from_hi]: kept(2) from(2) n(1) { cmd word(2) t_ms(2) vbus_mv(2) } x n, 7 per page.
     CHECK_EQ(run(f, request(0x32, 11, {5, 3, 0, 0}), r), 1);
     check_header(r, 0x32, 11, Status::Ok, 5 + 7 * 7);
@@ -1304,7 +1322,7 @@ static void test_fc_svooc_trigger() {
     lg.n = 18; lg.pairs_total = 31;
     // Stop.
     CHECK_EQ(run(f, request(0x32, 14, {5, 2}), r), 1);
-    check_header(r, 0x32, 14, Status::Ok, 45);
+    check_header(r, 0x32, 14, Status::Ok, 54);
     CHECK_EQ(f.svooc_stops, 1);
     CHECK_EQ(r[kRspHeader + 2], static_cast<uint8_t>(k2::svooc::Abort::Stopped));
     CHECK_EQ(f.lease_arms, 2);   // the plain start and the USB-A start armed it once each; the reads and the stop did not

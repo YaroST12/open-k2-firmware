@@ -371,7 +371,15 @@
 //                                    --- svooc-trigger ---
 //                                    op 5 svooc, the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp),
 //                                      not the FC block. Sub-ops:
-//                                      [5, 0, 0]             status: the summary (the only page; others BadArg);
+//                                      [5, 0, 0]             status: the summary;
+//                                      [5, 0, 1]             status page 1, the timing diagnostics (15 bytes):
+//                                                            stall_us(4) stall_at_ms(2, ms after the wake)
+//                                                            stall_stage(1, k2::stage::Id, k2/core/stage_meter.hpp)
+//                                                            stall_ticked_ms(2, the ms clock's advance meanwhile: far
+//                                                            below stall_us / 1000 = interrupts were masked), then
+//                                                            who let D- go after the replies since the wake:
+//                                                            rel_timer rel_loop rel_edge (u16 each, saturate);
+//                                                            other pages BadArg;
 //                                      [5, 1, flags, cap_s]  start: flags carry kFcConfirm (none: NeedConfirm) and
 //                                                            may carry kSvoocUsbA (bit 2: the operator waives the
 //                                                            far-sink refusal for a legacy A port, svooc_run.hpp);
@@ -387,7 +395,7 @@
 //                                                            at most 11000, esc_at_s at most 20 (0 = no escape);
 //                                      [5, 2]                stop (reason "stopped"), then the summary;
 //                                      [5, 3, from_lo, from_hi]  the run's command>reply pairs from index `from`.
-//                                      Summary (45 bytes; the first 36 are the original summary): stage refusal abort tries flags(bit0 accepted, bit1 exit
+//                                      Summary (54 bytes; the first 36 are the original summary): stage refusal abort tries flags(bit0 accepted, bit1 exit
 //                                      checked, bit2 exit ok, bit3 D- driven now, bit4 USB-A waiver in use) phase
 //                                      off_run last_cmd (u8 each) commands replies missed cut partials pairs_total
 //                                      (u16 each) pairs_kept(1, saturates at 255: the log reply has the real count)
@@ -398,6 +406,11 @@
 //                                      effective (clamped) responder parameters, then escape(1, svooc::Escape: 0 off,
 //                                      1 armed, 2 sent, 3 adapter sent 0x86 next, 4 it did not) and escape_t_ms(2, when
 //                                      the 0x07F went out, ms since the wake).
+//                                      Appended (45..53), diagnostics: edges(2, the edge words the ISR handed the
+//                                      wire since the wake, saturates) last_edge_ms(2, when the last one came, ms since
+//                                      the wake) poll_gap_max_ms(2, the longest main-loop gap while the lines were held)
+//                                      rec_edges(2) rec_end(1, edges::End: 0 recording, 1 full, 2 idle, 3 detach,
+//                                      4 timeout, 5 cancel, 6 storm), the run's Black Box edge recording.
 //                                      Log reply: kept(2) from(2) n(1) { cmd(1) word(2) t_ms(2) vbus_mv(2) } x n, at
 //                                      most 7 rows per page; kept is the pair count of the latest wake (up to 512);
 //                                      word 0xFFFF = not answered; t_ms = the command's start, ms since that wake;
@@ -434,6 +447,7 @@
 #include "k2/chargertest/ct_cable.hpp"
 #include "k2/pd/emk_learn.hpp"
 #include "k2/pd/emk_quirk.hpp"
+#include "k2/core/stage_meter.hpp"
 #include "k2/fastcharge/edge_guard.hpp"
 #include "k2/fastcharge/svooc_run.hpp"
 #include "k2/fastcharge/svooc_wire.hpp"
@@ -604,7 +618,7 @@ constexpr size_t kSvoocRowsPerPage = 7;
 constexpr size_t kSvoocRowBytes = 7;
 constexpr size_t kSvoocLogHeader = 5;
 constexpr size_t kSvoocSummaryBase = 36;      // the summary's original part
-constexpr size_t kSvoocSummaryBytes = 45;     // base + the operator parameters and the escape outcome (9 bytes)
+constexpr size_t kSvoocSummaryBytes = 54;     // base + the operator parameters and the escape outcome (9 bytes) + diagnostics (9)
 constexpr size_t kSvoocStartExtBytes = 10;    // the extended start request, op 5 / 1 with the responder parameters
 static_assert(kSvoocSummaryBytes <= kMaxRspPayload && kSvoocLogHeader + kSvoocRowBytes * kSvoocRowsPerPage <= kMaxRspPayload);
 static_assert(svooc::kLogPairs <= 0xFFFF);
@@ -618,7 +632,12 @@ struct SvoocSnapshot {
     svooc::Params params{};                         // the effective (clamped) responder parameters
     svooc::Escape escape = svooc::Escape::Off;
     uint32_t escape_t_ms = 0;
+    uint16_t rec_edges = 0;                         // the run's Black Box edge recording: edges kept (dpsniff::Status)
+    uint8_t rec_end = 0;                            // and how it ended (edges::End; 0 = still recording)
+    stage::Worst stall{};                           // status page 1: the main loop's worst stage since the wake
+    uint32_t rel_timer = 0, rel_loop = 0, rel_edge = 0;   // and who let D- go after the replies
 };
+constexpr size_t kSvoocTimingBytes = 15;      // status page 1
 // --- end svooc-trigger ---
 
 // Store op codes (first payload byte of Cmd::Store). The request is [op] for list / save-emarker /
@@ -1188,6 +1207,7 @@ size_t encode_lab(std::span<uint8_t> out, const LabResult &r);
 size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r);
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);   // vooc-monitor: FC op 4, one page
 size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v);   // svooc-trigger: FC op 5, the summary
+size_t encode_svooc_timing(std::span<uint8_t> out, const SvoocSnapshot &v);   // op 5 / 0 page 1: stall and D- release counts
 size_t encode_svooc_log(std::span<uint8_t> out, uint16_t kept, uint16_t from, std::span<const svooc::PairRow> rows);   // op 5 / 3
 size_t encode_ufcs(std::span<uint8_t> out, const UfcsInfo &i);   // status block: state verdict class start blob_len(2) nfields
 // One tuner field: field(1) value(4) lo(4) hi(4) default(4); lo / hi / default come from ufcs::kFields.
@@ -1747,8 +1767,8 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             switch (p[1]) {
             case kSvoocStatus:
                 if (p.size() != 3) return reply(Status::BadLength);
-                if (p[2] != 0) return reply(Status::BadArg);
-                return reply_n(encode_svooc(buf, backend.svooc_info()));
+                if (p[2] > 1) return reply(Status::BadArg);
+                return reply_n(p[2] == 0 ? encode_svooc(buf, backend.svooc_info()) : encode_svooc_timing(buf, backend.svooc_info()));
             case kSvoocStart: {
                 // 4 bytes: the original request (every operator parameter at its default); 10: the extended one.
                 if (p.size() != 4 && p.size() != kSvoocStartExtBytes) return reply(Status::BadLength);

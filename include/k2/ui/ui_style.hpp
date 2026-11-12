@@ -9,11 +9,10 @@
 
 namespace k2 {
 
-// RGB565 palette tokens. The values are the theme's (k2/ui/theme.hpp): three const tables in flash, one copied into
-// theme::pal at boot. Each name is a reference into that copy, so a token is a run-time read, never a constant
-// expression. The legacy names (kText, kVolt, kFocusT ...) keep their meaning per theme; new code uses the Fieldbook
+// RGB565 palette tokens. The values are the one palette's (k2/ui/theme.hpp, Classic): each name is a compile-time
+// constant. The legacy names (kText, kVolt, kFocusT ...) are the firmware's own colours; new code uses the Fieldbook
 // names below them (docs/UI_SYSTEM.md "Palette").
-#define K2_TOKEN(name, field) inline const uint16_t &name = theme::pal.field;
+#define K2_TOKEN(name, field) inline constexpr uint16_t name = theme::pal.field;
 K2_TOKEN(kBg, bg)
 K2_TOKEN(kSurface, surface)     // cards, flow-diagram panel
 K2_TOKEN(kSurface2, surface2)   // overlays
@@ -72,7 +71,7 @@ K2_TOKEN(kWattFill, watt) K2_TOKEN(kWattInk, watt_ink) K2_TOKEN(kWattD, watt_d) 
 K2_TOKEN(kQrLt, qr_lt) K2_TOKEN(kQrDk, qr_dk)
 K2_TOKEN(kPassFill, pass) K2_TOKEN(kOnPass, on_pass) K2_TOKEN(kPartFill, part) K2_TOKEN(kOnPart, on_part)
 #undef K2_TOKEN
-inline constexpr uint16_t kAlarmInk = theme::kAlarmInk;   // white on red, every theme
+inline constexpr uint16_t kAlarmInk = theme::kAlarmInk;   // white on the error red
 
 // Slot lengths along the panel (pixels) come from kSlotLenPx (ui_labels.hpp). Each centre is the
 // slot start + len / 2, so the slots tile 0..240. To follow measured button positions, change the

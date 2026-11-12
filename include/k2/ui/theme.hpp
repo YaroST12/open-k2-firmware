@@ -1,79 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Fieldbook themes: three const RGB565 tables in flash (Night, Paper, Classic), one of them copied into `pal` at boot
-// from the stored setting (uiprefs). A theme change takes effect at the next boot: there is no run-time repaint path,
-// so every colour a page reads is the one it was drawn with.
+// The palette: one const table of RGB565 values, Classic (black ground, cyan focus, yellow volts, coral watts). The
+// Fieldbook experiment shipped Night and Paper beside it; the user took them out (2026-11-13), so there is no theme to
+// choose, no stored setting (uiprefs ignores the old theme bits) and no boot-time copy: `pal` is a constant, and every
+// token of ui_style.hpp reads straight from flash.
 //
-// Two kinds of token live in one table:
+// Two kinds of token live in the one table:
 //  - the Fieldbook tokens (docs/UI_SYSTEM.md "Palette"): ground, inks, spot fills and the role tokens the kit names
 //    (focus, accent, cap, ticket, chip, watt). New code names these (ui_style.hpp kInk, kAccent, ...).
-//  - the legacy tokens of ui_style.hpp (kText, kVolt, kFocusT ...), resolved per theme so a page that still names them
-//    reads well on every ground: on Paper and Night the unit hues become ink (colour is a block, never a glyph) and the
-//    tints become bg2; Classic keeps the firmware's own values, so a legacy page looks as it did.
+//  - the legacy tokens of ui_style.hpp (kText, kVolt, kFocusT ...): the firmware's own colours since before Fieldbook.
 // The values are RGB565-exact. tests/test_theme.cpp pins them.
 #pragma once
 #include <cstdint>
-#include <string_view>
 
 namespace k2::theme {
-
-enum class Id : std::uint8_t { Night = 0, Paper = 1, Classic = 2 };
-inline constexpr int kCount = 3;
-// The stored value (uiprefs) to a theme: anything unknown reads as the default (Night, the fresh-device theme).
-constexpr Id id_from(unsigned v) { return v < static_cast<unsigned>(kCount) ? static_cast<Id>(v) : Id::Night; }
-constexpr std::string_view name(Id t) {
-    return t == Id::Paper ? std::string_view("Paper") : t == Id::Classic ? std::string_view("Classic") : std::string_view("Night");
-}
 
 using C = std::uint16_t;
 struct Palette {
     // ---- Fieldbook tokens
     C bg, bg2, rule, ink, ink2, ink3, on_ink, on_ink_dim, ink_lift, stale, stale_ink;
     C volt, volt_d, amp, amp_d, ok, warn, err, err_d, ok_t, warn_t, err_t, spot_ink, err_ink;
-    C focus, on_focus, on_focus_dim, focus_bar;   // focus_bar 0 = none (Paper, Night: the block alone)
+    C focus, on_focus, on_focus_dim, focus_bar;   // focus_bar 0 = none
     C accent, cap, on_cap, ticket, on_ticket, ticket_frame;   // ticket_frame 0 = none
     C chip, on_chip, watt, watt_ink, watt_d, watt_dim, qr_lt, qr_dk;
-    C pass, on_pass, part, on_part;   // verdict cells: Paper/Night solid spots, Classic the old tint + hue
-    // ---- legacy tokens (the ui_style.hpp names), resolved for this theme
+    C pass, on_pass, part, on_part;   // verdict cells: the dark tint plus the hue
+    // ---- legacy tokens (the ui_style.hpp names)
     C surface, surface2, bar, l_volt, l_amp, l_watt, l_energy, l_charge, l_ohm, l_dplus, l_dminus, l_flow, l_stale, l_focus;
     C l_volt_t, l_amp_t, l_watt_t, l_energy_t, l_charge_t, l_focus_t, l_dim_t, l_dplus_t, l_dminus_t, l_faint_t;
     C l_volt_l, l_amp_l, l_watt_l, l_panel_hi, l_panel_line;
 };
 
-// Spot fills shared by Paper and Night.
-inline constexpr C kSpotVolt = 0xFE85, kSpotVoltD = 0xE5A0, kSpotAmp = 0x5E3E, kSpotAmpD = 0x353B;
-inline constexpr C kSpotOk = 0x3DCC, kSpotWarn = 0xFC44, kSpotErr = 0xC985, kSpotErrD = 0xA124;
-inline constexpr C kPaperGround = 0xF79C, kInkGround = 0x10C3;
-// The alarm ink: white on the error red in every theme (user decision 2026-11-12, the Flow over-contract state).
+// The alarm ink: white on the error red (the Flow over-contract state).
 inline constexpr C kAlarmInk = 0xFFFF;
-
-constexpr Palette paper_or_night(bool night) {
-    const C bg = night ? kInkGround : kPaperGround, ink = night ? kPaperGround : kInkGround;
-    const C bg2 = night ? 0x2125 : 0xE71A, rule = night ? 0x3A09 : 0xCE57;
-    const C ink2 = night ? 0xAD33 : 0x5B0C, ink3 = night ? 0x634E : 0xA512;
-    const C on_ink_dim = night ? 0x5B0C : 0xB574, ink_lift = night ? 0xD677 : 0x31C8;
-    Palette p{};
-    p.bg = bg; p.bg2 = bg2; p.rule = rule; p.ink = ink; p.ink2 = ink2; p.ink3 = ink3;
-    p.on_ink = bg; p.on_ink_dim = on_ink_dim; p.ink_lift = ink_lift;
-    p.stale = night ? 0x31A7 : 0xD698; p.stale_ink = ink2;
-    p.volt = kSpotVolt; p.volt_d = kSpotVoltD; p.amp = kSpotAmp; p.amp_d = kSpotAmpD;
-    p.ok = kSpotOk; p.warn = kSpotWarn; p.err = kSpotErr; p.err_d = kSpotErrD;
-    p.ok_t = night ? 0x19A4 : 0xD77A; p.warn_t = night ? 0x4941 : 0xFF17; p.err_t = night ? 0x48A2 : 0xF699;
-    p.spot_ink = kInkGround; p.err_ink = kPaperGround;
-    p.focus = ink; p.on_focus = bg; p.on_focus_dim = on_ink_dim; p.focus_bar = 0;
-    p.accent = ink; p.cap = ink; p.on_cap = bg; p.ticket = ink; p.on_ticket = bg; p.ticket_frame = 0;
-    p.chip = ink; p.on_chip = bg; p.watt = ink; p.watt_ink = bg; p.watt_d = ink_lift; p.watt_dim = on_ink_dim;
-    p.qr_lt = kPaperGround; p.qr_dk = kInkGround;
-    p.pass = kSpotOk; p.on_pass = kInkGround; p.part = kSpotWarn; p.on_part = kInkGround;
-    // legacy: surfaces and tints are bg2, the masthead has no fill, the unit hues are ink, focus is the accent ink
-    p.surface = bg2; p.surface2 = bg2; p.bar = bg;
-    p.l_volt = ink; p.l_amp = ink; p.l_watt = ink; p.l_energy = ink; p.l_charge = ink; p.l_ohm = ink;
-    p.l_dplus = ink; p.l_dminus = ink; p.l_flow = ink; p.l_stale = ink2; p.l_focus = ink;
-    p.l_volt_t = bg2; p.l_amp_t = bg2; p.l_watt_t = bg2; p.l_energy_t = bg2; p.l_charge_t = bg2; p.l_focus_t = bg2;
-    p.l_dim_t = bg2; p.l_dplus_t = bg2; p.l_dminus_t = bg2; p.l_faint_t = bg2;
-    p.l_volt_l = ink3; p.l_amp_l = ink3; p.l_watt_l = ink3; p.l_panel_hi = ink; p.l_panel_line = rule;
-    return p;
-}
 
 constexpr Palette classic() {
     Palette p{};
@@ -97,27 +55,7 @@ constexpr Palette classic() {
     return p;
 }
 
-inline constexpr Palette kNight = paper_or_night(true);
-inline constexpr Palette kPaper = paper_or_night(false);
-inline constexpr Palette kClassic = classic();
-
-constexpr const Palette &table(Id t) { return t == Id::Paper ? kPaper : t == Id::Classic ? kClassic : kNight; }
-
-// The palette in force. Constant-initialised to the default theme, so host tests and code that runs before boot's
-// apply() read Night.
-inline Palette pal = kNight;
-inline Id active_id = Id::Night;
-inline Id chosen_id = Id::Night;   // what the setting holds now: differs from active_id until the next boot
-
-// Boot only, before the first paint: puts theme `t` in force.
-inline void apply(Id t) {
-    pal = table(t);
-    active_id = chosen_id = t;
-}
-inline Id active() { return active_id; }
-// K2 > Theme: the theme the next boot applies (the caller stores it in uiprefs). Nothing is repainted.
-inline void choose(Id t) { chosen_id = t; }
-inline Id chosen() { return chosen_id; }
-inline bool reboot_pending() { return chosen_id != active_id; }
+// The palette in force: a constant, so every token is a compile-time value.
+inline constexpr Palette pal = classic();
 
 }  // namespace k2::theme

@@ -175,25 +175,19 @@ void test_home_hero_bits() {
     CHECK_EQ(uiprefs::decode(uiprefs::encode(Prefs{.home_hero = 1})).idle_wake, 0);
 }
 
-// The theme lives in bits 4..5 of the smoothing byte: 0 Night (a fresh device and every older record), 1 Paper,
-// 2 Classic. The smoothing preset in the low nibble is unaffected, so the two travel together.
-void test_theme_bits() {
+// Bits 4..5 of the smoothing byte held a theme (1 Paper, 2 Classic, 0 Night) for a few builds. Classic is the only palette
+// now: a record that stores one of them loads as Classic with its smoothing intact, and nothing is written there.
+void test_retired_theme_bits() {
     using uiprefs::Prefs;
-    CHECK_EQ(Prefs{}.theme, 0);
-    CHECK_EQ(uiprefs::encode(Prefs{}) == uiprefs::encode(Prefs{.theme = 0}), 1);   // Night adds nothing to the file
-    const auto paper = uiprefs::encode(Prefs{.theme = 1});
-    CHECK_EQ(paper[6], 0x10);
-    CHECK_EQ(uiprefs::decode(paper).theme, 1);
-    CHECK_EQ(uiprefs::decode(paper).smoothing == smoothing::kDefault, 1);
-    const std::array<std::uint8_t, 8> classic_low{'K', '2', 'U', 'P', 0, 0xFF, 0x22, 0};   // Classic + preset index 1
-    CHECK_EQ(uiprefs::decode(classic_low).theme, 2);
-    CHECK_EQ(uiprefs::decode(classic_low).smoothing == smoothing::preset_from_index(1), 1);
-    const std::array<std::uint8_t, 8> unknown{'K', '2', 'U', 'P', 0, 0xFF, 0x30, 0};   // 3 is no theme: Night
-    CHECK_EQ(uiprefs::decode(unknown).theme, 0);
-    for (std::uint8_t t = 0; t < 3; t++) {
-        const Prefs in{.smoothing = smoothing::preset_from_index(3), .rotation = 1, .home_hero = 2, .theme = t};
-        CHECK_EQ(uiprefs::decode(uiprefs::encode(in)) == in, 1);
+    CHECK_EQ(uiprefs::encode(Prefs{.smoothing = smoothing::preset_from_index(2)})[6] & 0x30, 0);   // written 0
+    for (std::uint8_t b : {0x00, 0x10, 0x20, 0x30}) {   // Night, Paper, Classic, unknown: all just the preset
+        const std::array<std::uint8_t, 8> r{'K', '2', 'U', 'P', 0, 0xFF, static_cast<std::uint8_t>(b | 2), 0};   // preset index 1
+        const Prefs p = uiprefs::decode(r);
+        CHECK_EQ(p.smoothing == smoothing::preset_from_index(1), 1);
+        CHECK_EQ(p == Prefs{.smoothing = smoothing::preset_from_index(1)}, 1);
     }
+    const std::array<std::uint8_t, 8> paper{'K', '2', 'U', 'P', 0, 0xFF, 0x10, 0};   // Paper, default smoothing
+    CHECK_EQ(uiprefs::decode(paper) == Prefs{}, 1);
 }
 
 void test_legacy_page_is_outside_the_volume() {
@@ -213,7 +207,7 @@ int main() {
     test_orientation_byte();
     test_idle_wake_bit();
     test_home_hero_bits();
-    test_theme_bits();
+    test_retired_theme_bits();
     test_legacy_page_is_outside_the_volume();
     return test_report("test_uiprefs");
 }

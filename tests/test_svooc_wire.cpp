@@ -369,6 +369,171 @@ void test_params_vbus_and_escape_clock() {
     CHECK_EQ(f.w.pair(48).word, svooc::closed_loop_reply(8400, 9000));
 }
 
+// The glue reuses one Wire for every run and stops it at each release: begin() (the next start, then its wake) gives the
+// next run a live wire with an empty log, and keeps the operator's parameters.
+void test_begin_after_stop_is_a_fresh_wire() {
+    svooc::Params p;
+    p.i86_first = 0x00A;
+    Feed f;
+    f.w.set_params(p);
+    Synth s;
+    s.edge(s.t, true, false);
+    s.command(s.t + 5000 * kUs, 0xA8);
+    s.clock(s.t + 14000 * kUs);
+    f.all(s.words);
+    CHECK_EQ(f.w.log().commands, 1u);
+    f.w.stop();
+    CHECK(f.w.stopped());
+    f.w.begin(edges::pack(s.words.back() + 1000 * kUs, false, true));
+    CHECK(!f.w.stopped());
+    CHECK(!f.w.driving());
+    CHECK_EQ(f.w.log().commands, 0u);
+    CHECK_EQ(f.w.log().n, 0u);
+    CHECK_EQ(f.w.log().pairs_total, 0u);
+    CHECK_EQ(f.w.responder().params().i86_first, 0x00A);
+}
+
+// The wire's own count of the edge words the ISR handed it, and when the last one came (ms since begin): the status
+// tells "the adapter went quiet" (the last edge right after the last pair) from "edges kept coming and were not decoded"
+// (hardware 2026-11-12: every run stopped logging after ~72 pairs).
+void test_edge_count_and_last_edge() {
+    Synth s;
+    s.edge(s.t, true, false);   // begins the wire
+    std::uint32_t at = s.t + 5000 * kUs;
+    for (int i = 0; i < 2; ++i) {
+        s.command(at, 0xA8);
+        s.clock(at + 9000 * kUs);
+        at += 44000 * kUs;
+    }
+    const std::size_t framed = s.words.size() - 1;
+    s.edge(s.t + 200000 * kUs, true, true);   // a lone D- move 200 ms after the wire began
+    s.edge(s.t + 250000 * kUs, true, false);
+    Feed f;
+    f.all(s.words);
+    CHECK_EQ(f.w.log().commands, 2u);
+    CHECK_EQ(f.w.log().edges, std::uint32_t(framed + 2));
+    CHECK_EQ(f.w.log().last_edge_ms, 250u);
+    f.w.begin(edges::pack(s.t + 300000 * kUs, false, true));
+    CHECK_EQ(f.w.log().edges, 0u);
+    CHECK_EQ(f.w.log().last_edge_ms, 0u);
+}
+
+// A whole 20 s run as the hardware runs it: ident, handshake, ramp, then 0x82 polls every 44 ms, the main loop ticking
+// every ms. The wire decodes and answers every pair far past the ~72 pairs (~4,096 edges, the Black Box recorder's
+// capacity) where the hardware runs of 2026-11-12 stopped logging: that stop is not in the bit layer.
+void test_long_run_answers_every_pair() {
+    Synth s;
+    s.edge(s.t, true, false);
+    std::vector<std::uint8_t> cmds{svooc::kIdent};
+    for (const auto& st : svooc::kScript) cmds.push_back(st.cmd);
+    cmds.push_back(0x94);
+    for (int i = 0; i < 8; ++i) cmds.push_back(0x84);
+    cmds.push_back(0x86);
+    while (cmds.size() < 434) cmds.push_back(0x82);   // to ~19 s after the wake
+    std::uint32_t at = s.t + 5000 * kUs;
+    for (const std::uint8_t c : cmds) {
+        s.command(at, c);
+        s.clock(at + 9000 * kUs);
+        at += 44000 * kUs;
+    }
+    Feed f;
+    std::uint32_t tick = s.words.front() & ~63u;
+    for (const std::uint32_t x : s.words) {
+        for (; std::int32_t((x & ~63u) - tick) > 0; tick += 1000 * kUs) f.count(f.w.tick(tick));
+        f.count(f.w.edge(x));
+    }
+    for (int i = 0; i < 5; ++i, tick += 1000 * kUs) f.count(f.w.tick(tick));
+    CHECK(f.w.log().edges > 4096u);
+    CHECK_EQ(f.w.log().commands, cmds.size());
+    CHECK_EQ(f.w.log().replies, cmds.size());
+    CHECK_EQ(f.w.log().missed, 0u);
+    CHECK_EQ(f.w.log().cut, 0u);
+    CHECK_EQ(f.w.log().partials, 0u);
+    CHECK(!f.w.stopped());
+    CHECK_EQ(f.w.log().n, cmds.size());
+    CHECK_EQ(f.w.pair(cmds.size() - 1).cmd, 0x82);
+    CHECK_EQ(f.w.pair(cmds.size() - 1).word, svooc::kSteadyWord);
+    CHECK_EQ(f.takes, int(cmds.size()));
+    CHECK_EQ(f.releases, int(cmds.size()));
+}
+
+// The wire's own clock: deadline() is the cycle time tick() next has work at (the hold after a reply, a cut slot, a frame
+// gone quiet, a slot that never came), nothing when it has none. An interrupt timer armed for it and nothing else drives
+// tick(): no main loop at all, so a stalled one cannot hold D- past the hold. The same 20 s run as above answers every
+// pair, and D- goes exactly kHoldUs after each reply's last rise.
+void test_deadline_alone_drives_the_wire() {
+    Synth s;
+    s.edge(s.t, true, false);
+    std::vector<std::uint8_t> cmds{svooc::kIdent};
+    for (const auto& st : svooc::kScript) cmds.push_back(st.cmd);
+    while (cmds.size() < 434) cmds.push_back(0x82);
+    std::uint32_t at = s.t + 5000 * kUs;
+    std::vector<std::uint32_t> last_rises;
+    for (const std::uint8_t c : cmds) {
+        s.command(at, c);
+        last_rises.push_back((s.clock(at + 9000 * kUs) - 460 * kUs + 30 * kUs) & ~63u);   // as the edge word stamps it
+        at += 44000 * kUs;
+    }
+    Feed f;
+    CHECK(!f.w.deadline().has_value());   // no wire yet
+    std::vector<std::uint32_t> release_at;
+    auto timer = [&](std::uint32_t until) {   // the timer fires at each deadline before `until`
+        while (const auto d = f.w.deadline()) {
+            if (std::int32_t(*d - until) >= 0) return;
+            const svooc::Action a = f.w.tick(*d);
+            if (a.kind == Kind::Release) release_at.push_back(*d);
+            f.count(a);
+        }
+    };
+    for (const std::uint32_t x : s.words) {
+        timer(x & ~63u);
+        f.count(f.w.edge(x));
+    }
+    timer(at + 100000 * kUs);
+    CHECK(!f.w.deadline().has_value());   // all done: the last frame closed, nothing driven, nothing pending
+    CHECK_EQ(f.w.log().commands, cmds.size());
+    CHECK_EQ(f.w.log().replies, cmds.size());
+    CHECK_EQ(f.w.log().missed, 0u);
+    CHECK_EQ(f.w.log().cut, 0u);
+    CHECK_EQ(f.releases, int(cmds.size()));
+    CHECK_EQ(release_at.size(), last_rises.size());
+    for (std::size_t i = 0; i < release_at.size() && i < last_rises.size(); ++i)
+        CHECK_EQ(release_at[i], last_rises[i] + svooc::kHoldUs * kUs);
+}
+
+// A clock that stops mid-reply and a command whose slot never comes are the timer's work too: the cut slot lets go
+// kCutUs after its last edge, the missed slot is counted kReplyWaitUs after its command, both with no main loop.
+void test_deadline_cut_and_missed() {
+    Synth s;
+    s.edge(s.t, true, false);
+    s.command(s.t + 5000 * kUs, 0xA8);
+    const std::uint32_t end = s.clock(s.t + 14000 * kUs, 3);
+    const std::uint32_t last_rise = (end - 460 * kUs + 30 * kUs) & ~63u;   // as the edge word stamps it
+    Feed f;
+    f.all(s.words);
+    CHECK(f.w.driving());
+    auto d = f.w.deadline();
+    CHECK(d.has_value());
+    if (d) CHECK_EQ(*d, last_rise + svooc::kCutUs * kUs);
+    if (d) CHECK_EQ(f.w.tick(*d).kind, Kind::Release);
+    d = f.w.deadline();   // then the quiet slot frame closes
+    CHECK(d.has_value());
+    if (d) f.w.tick(*d);
+    CHECK_EQ(f.w.log().cut, 1u);
+    CHECK(!f.w.deadline().has_value());
+
+    Synth m;   // a lone command: its frame closes once quiet, then the slot it waits for runs out
+    m.edge(m.t, true, false);
+    m.command(m.t + 5000 * kUs, 0xA8);
+    Feed g;
+    g.all(m.words);
+    for (int i = 0; i < 4; ++i)
+        if (const auto e = g.w.deadline()) g.w.tick(*e);
+    CHECK_EQ(g.w.log().commands, 1u);
+    CHECK_EQ(g.w.log().missed, 1u);
+    CHECK(!g.w.deadline().has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -381,5 +546,10 @@ int main() {
     test_log_capacity_and_stamps();
     test_ten_pulses_are_no_command();
     test_abort_and_stop();
+    test_begin_after_stop_is_a_fresh_wire();
+    test_edge_count_and_last_edge();
+    test_long_run_answers_every_pair();
+    test_deadline_alone_drives_the_wire();
+    test_deadline_cut_and_missed();
     return test_report("test_svooc_wire");
 }

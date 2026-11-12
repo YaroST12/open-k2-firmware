@@ -1134,8 +1134,8 @@ public:
     void invalidate() override { ctx_.rows.invalidate(); foot_.invalidate(); id_.invalidate(); }
     ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
-    static constexpr int kRows = 9;
-    static constexpr int kSystemRow = 7, kBootRow = 8;
+    static constexpr int kRows = 8;
+    static constexpr int kSystemRow = 6, kBootRow = 7;
     static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache
