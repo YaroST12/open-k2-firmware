@@ -281,10 +281,49 @@ pd::Sop sop_from_token(std::uint8_t token) {
 // Send `m` as an SOP message: token stream SOP1 SOP1 SOP1 SOP2 (0x12 0x12 0x12 0x13; SOP1 SOP1 SOP3 SOP3 is SOP', the cable), PACKSYM|len, header, objects,
 // JAM_CRC, EOP, TXOFF, then TX_START. True when INTERRUPTA reports TXSENT (the chip checked the
 // partner's GoodCRC itself, with the CONTROL3 auto retries); false on RETRYFAIL or no answer.
-// Set by every transmit(): the last TX ended without TXSENT or RETRYFAIL. That is ambiguous, the message may have been
-// delivered (UGREEN X865: GoodCRC 118 ms after TX_START, past the loop below, its answer 3 ms later), so a caller that
-// waits for an answer anyway (the re-read) treats it as sent.
+// Set by every transmit(): the last TX ended without TXSENT or RETRYFAIL and no GoodCRC of ours turned up in the RX FIFO
+// either. That is ambiguous, the message may have been delivered, so a caller that waits for an answer anyway (the
+// re-read) treats it as sent.
 bool g_tx_timed_out = false;
+
+// A frame transmit() read out of the RX FIFO while looking for its GoodCRC that was not that GoodCRC. service() delivers
+// it before it reads the FIFO again, so the order holds; flush_rx() drops it with the FIFO.
+struct HeldRx {
+    bool valid = false;
+    std::array<std::uint8_t, 3> pre{};    // token, PD header
+    std::array<std::uint8_t, 36> body{};  // data objects + 4 CRC bytes
+};
+HeldRx g_rx_held;
+
+// transmit()'s second acknowledgement. Some messages come back GoodCRC'd, the GoodCRC sits in the RX FIFO with the sent
+// MessageID, and the FUSB302 raises neither TXSENT nor RETRYFAIL: Get_Source_Cap_Extended on every charger traced up to
+// 2026-11-12 (Anker, NOVOO, UGREEN, CUKTECH, OnePlus, ASUS, TOPADRE), which the Diag row then called "K2 send failed".
+// Reads the FIFO's first frame: true when it is the SOP GoodCRC of `sent_id`; anything else is held for service() and
+// `peek` goes false, since nothing behind a held frame may be read before it.
+bool rx_ack_peek(std::uint8_t sent_id, bool& peek) {
+    std::uint8_t status1;
+    if (!rd(kStatus1, status1) || (status1 & kRxEmpty)) return false;
+    peek = false;
+    HeldRx f;
+    if (!fifo_read(f.pre)) { flush_rx(); return false; }   // a half-read frame leaves the FIFO misaligned
+    const unsigned tok = f.pre[0] & 0xE0;
+    if (tok != 0xE0 && tok != 0xC0 && tok != 0xA0) {
+        pdtrace::rx_bad(f.pre[0], f.pre[1], f.pre[2]);
+        flush_rx();
+        return false;
+    }
+    const std::uint16_t header = std::uint16_t(f.pre[1] | (f.pre[2] << 8));
+    const unsigned num_do = (header >> 12) & 7;
+    if (!fifo_read({f.body.data(), num_do * 4 + 4})) { flush_rx(); return false; }
+    if (tok == 0xE0 && num_do == 0 && !(header & 0x8000) && (header & 0x1F) == pd::kCtlGoodCrc &&
+        ((header >> 9) & 7) == sent_id) {
+        pdtrace::rx(f.pre[0], header, {f.body.data(), 4});
+        return true;
+    }
+    f.valid = true;
+    g_rx_held = f;
+    return false;
+}
 
 bool transmit(const pd::TxMsg& m) {
     g_tx_timed_out = false;
@@ -326,6 +365,8 @@ bool transmit(const pd::TxMsg& m) {
     pdtrace::TxResult res = pdtrace::TxResult::Timeout;
     std::uint8_t last_ia = 0;
     int waited = 0;
+    const std::uint8_t sent_id = std::uint8_t((header >> 9) & 7);
+    bool peek = !g_rx_held.valid;   // a frame already held stays first: nothing is read past it
     for (int t = 0; t < 40; t++) {  // 40 passes of 1 ms plus the ~1.9 ms bit-banged read each (~117 ms on the Black Box); the chip's 3 retries end far sooner
         delay_ms(1);
         waited = t + 1;
@@ -336,6 +377,9 @@ bool transmit(const pd::TxMsg& m) {
         if (ia & kIntTxSent) { ok = true; res = pdtrace::TxResult::TxSent; break; }
         if (ia & kIntRetryFail) { res = pdtrace::TxResult::RetryFail; break; }
         if (ia & kIntHardRst) break;   // the source is power-cycling: nothing will GoodCRC this, service() resets the engine next
+        // No TXSENT on the first read: look for the GoodCRC in the RX FIFO. Passes 2..8 (~25 ms) cover the chip's retries;
+        // past them a GoodCRC no longer comes, and each look costs a STATUS1 read.
+        if (peek && t >= 1 && t < 8 && rx_ack_peek(sent_id, peek)) { ok = true; res = pdtrace::TxResult::RxGoodCrc; break; }
     }
     g_tx_timed_out = res == pdtrace::TxResult::Timeout;
     pdtrace::tx_result(res, std::uint32_t(waited), last_ia);
@@ -436,7 +480,7 @@ void write_sw1() {
     wr(kSwitches1, phy::sw1(g_active_cc, g_crc_on));
     wr(kControl1, ctl1());   // SOP' receive follows Auto-CRC (except while the spoof is armed)
 }
-void flush_rx() { wr(kControl1, ctl1()); }
+void flush_rx() { wr(kControl1, ctl1()); g_rx_held.valid = false; }
 
 // Back to the passive profile after init and every detach: nothing ACKs, nothing transmits.
 void apply_rd();
@@ -2585,8 +2629,10 @@ void service() {
 
         g_rx_empty = true;
         for (int pkt = 0; pkt < 4; pkt++) {
+            // A frame transmit() took out of the FIFO comes first (rx_ack_peek), then the FIFO.
+            const bool held = g_rx_held.valid;
             std::uint8_t status1;
-            if (!rd(kStatus1, status1) || (status1 & kRxEmpty)) break;
+            if (!held && (!rd(kStatus1, status1) || (status1 & kRxEmpty))) break;
             g_rx_empty = false;
             g_last_rx_ms = systick::millis();
             std::uint32_t edge_us = 0;
@@ -2596,7 +2642,12 @@ void service() {
             }
 
             std::array<std::uint8_t, 3> pre;  // token, PD header
-            if (!fifo_read(pre)) break;
+            std::array<std::uint8_t, 36> body;  // data objects + 4 CRC bytes
+            if (held) {
+                pre = g_rx_held.pre;
+                body = g_rx_held.body;
+                g_rx_held.valid = false;
+            } else if (!fifo_read(pre)) break;
             const unsigned tok = pre[0] & 0xE0;
             if (tok != 0xE0 && tok != 0xC0 && tok != 0xA0) {  // not SOP, SOP' or SOP''
                 pdtrace::rx_bad(pre[0], pre[1], pre[2]);
@@ -2606,8 +2657,7 @@ void service() {
             const std::uint16_t header = pre[1] | (pre[2] << 8);
             const unsigned num_do = (header >> 12) & 7;
 
-            std::array<std::uint8_t, 36> body;  // data objects + 4 CRC bytes
-            if (!fifo_read({body.data(), num_do * 4 + 4})) break;
+            if (!held && !fifo_read({body.data(), num_do * 4 + 4})) break;
             pdtrace::rx(pre[0], header, {body.data(), num_do * 4 + 4});
             if (num_do == 0 && !(header & 0x8000) && (header & 0x1F) == pd::kCtlSoftReset) pdtrace::reset(pdtrace::ResetKind::SoftRx);
             clear_irqs();

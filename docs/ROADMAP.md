@@ -80,6 +80,15 @@ Everything is C++23; there are no C files left in `src/` (TinyUSB and lwIP under
 
 Open defects, newest first. A row leaves this list when its fix is merged and seen on hardware.
 
+- **Diag "K2 send failed" on every charger after a re-read** (2026-11-12, Anker IQ4 on 1.0.0-668; pre-existing): the
+  FUSB302 raised neither TXSENT nor RETRYFAIL for Get_Source_Cap_Extended although the source's GoodCRC with our
+  MessageID sat in the RX FIFO (all 12 traced sends, 7 chargers), so the trace logged a TX timeout and the Diag row a
+  send failure. Fixed on k2/integ-fable, host-tested (`test_tx_takes_the_goodcrc_in_the_rx_fifo_as_sent`,
+  `test_tx_holds_another_frame_from_the_rx_fifo_for_service`, `test_goodcrc_from_the_rx_fifo_is_no_tx_fail`):
+  `transmit()` reads that GoodCRC as the acknowledgement (CHARGER_QUIRKS `goodcrc-without-txsent`). Validate
+  (hardware): `pd-reread` on the IQ4 with a log,trace recording shows `GoodCRC in the RX FIFO` (or TXSENT) for
+  Get_Source_Cap_Extended, the caps-ext step answered or refused, and no "K2 send failed" on the Diag row.
+
 - **The D+/D- passive idle put QC chargers into HVDCP and let VBUS jump to 12 V** (2026-11-11, CUKTECH 10 GaN 120W
   USB-A; fixed in 872baa31, host-tested; `tests/test_dpdm.cpp`, `tests/test_fastcharge_classify.cpp`
   `test_floating_short_needs_the_active_check`): the idle drove both lines to 0.6 V, the HVDCP entry level and the QC2

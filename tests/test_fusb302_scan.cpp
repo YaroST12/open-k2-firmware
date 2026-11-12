@@ -47,6 +47,9 @@ std::uint32_t g_vconn_since;           // ms when VCONN started flowing (0 = not
 std::vector<std::string> g_usb;
 std::uint16_t g_mark;                  // the pin mark (backup register DR21): survives the "warm resets" the tests simulate
 bool g_i2c_fail;                       // every chip register access fails (the bus is dead)
+// The source's answer to an SOP frame (a PD message from transmit()) when the chip raises no TXSENT: its GoodCRC with the
+// sent MessageID lands in the RX FIFO (hardware 2026-11-12, Get_Source_Cap_Extended), or `lead` lands there instead.
+struct SrcAck { bool gcrc_rx = false; bool lead_only = false; std::uint16_t lead = 0; int acks = 0; } g_src;
 
 // The CC nets as the ADC sees them (what adc::latest_cc returns): a physical model for the silent-cable-chip probe. The
 // PLUS-coupling bias on CC2, the chip's VCONN switch (SWITCHES0 bit4 = CC1, bit5 = CC2) and a cable chip's Ra (~1 kohm)
@@ -109,6 +112,13 @@ void push_frame(std::uint8_t token, std::uint16_t header, const std::vector<std:
 
 // What the cable does when TX_START is written.
 void tx_start() {
+    if ((g_src.gcrc_rx || g_src.lead_only) && g_txfifo.size() >= 7 && g_txfifo[0] == 0x12 && g_txfifo[3] == 0x13) {
+        const unsigned id = (g_txfifo[6] >> 1) & 7u;   // header bits 11..9
+        if (g_src.lead_only) push_frame(0xE0, g_src.lead, {});
+        else push_frame(0xE0, std::uint16_t(0x0001 | (2u << 6) | (id << 9)), {});   // GoodCRC, src/dfp
+        ++g_src.acks;
+        return;
+    }
     ++g_cable.tx_seen;
     const bool is_di = g_txfifo.size() == 14 && g_txfifo[10] == 0xFF && g_txfifo[9] == 0x00 && (g_txfifo[8] & 0x1F) == 0 &&
                        g_txfifo[7] == 0x01;   // the VDM header 0xFF00xx01: Discover Identity
@@ -271,6 +281,7 @@ void reset_world() {
     g_cable = Cable{};
     g_adc = AdcWorld{};
     g_i2c_fail = false;
+    g_src = SrcAck{};
     g_reg[0x02] = 0x03;                                      // PDWN1|PDWN2 (Rd), nothing measured
     g_reg[0x03] = 0x20;                                      // passive: SPECREV=01, Auto-CRC off
 }
@@ -1402,6 +1413,56 @@ void test_reread_step_survives_a_tx_timeout_when_the_answer_arrives() {
     for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
     CHECK_EQ(int(fusb302::reread_status().ok_mask & pd::kRereadCapsExt), int(pd::kRereadCapsExt));
     CHECK_EQ(int(fusb302::reread_status().skipped_mask & pd::kRereadCapsExt), 0);
+    fusb302::reread_abort();
+    for (int i = 0; i < 200; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    end_start_test();
+}
+
+// Hardware 2026-11-12: Get_Source_Cap_Extended came back GoodCRC'd on every charger (the GoodCRC in the RX FIFO with our
+// MessageID) while the FUSB302 raised neither TXSENT nor RETRYFAIL, and the Diag row called it "K2 send failed". transmit()
+// takes that GoodCRC as the acknowledgement: sent, no timeout.
+bool tx_logged(const char* type, const char* result) {
+    for (const auto& u : g_usb)
+        if (u.find(type) != std::string::npos && u.find(result) != std::string::npos) return true;
+    return false;
+}
+void test_tx_takes_the_goodcrc_in_the_rx_fifo_as_sent() {
+    (void)reread_attach_to_ready();
+    g_txfifo.clear();
+    g_usb.clear();
+    g_src.gcrc_rx = true;
+    for (int i = 0; i < 600 && !request_on_the_wire(); i++) { g_ms += 5; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(request_on_the_wire(), true);                   // Get_Source_Cap_Extended is out
+    CHECK_EQ(g_src.acks, 1);
+    CHECK_EQ(g_rx.empty(), true);                            // transmit() read the GoodCRC itself
+    CHECK_EQ(tx_logged("TX type 17 ", ": GoodCRC"), true);
+    CHECK_EQ(tx_logged("TX type 17 ", "no GoodCRC"), false);
+    g_src.gcrc_rx = false;
+    push_frame(0xE0, std::uint16_t(0x8000 | (7u << 12) | (2u << 6) | 1u), {0x00000019u, 0, 0, 0, 0, 0, 0});   // ext header: 25 B, chunk 0
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(int(fusb302::reread_status().ok_mask & pd::kRereadCapsExt), int(pd::kRereadCapsExt));
+    fusb302::reread_abort();
+    for (int i = 0; i < 200; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    end_start_test();
+}
+
+// The frame transmit() finds in the RX FIFO is not its GoodCRC (here the source's Not_Supported, the GoodCRC lost): it is held
+// and service() hands it on once, in order, and the TX stays a timeout.
+void test_tx_holds_another_frame_from_the_rx_fifo_for_service() {
+    (void)reread_attach_to_ready();
+    g_txfifo.clear();
+    g_usb.clear();
+    g_src.lead_only = true;
+    g_src.lead = std::uint16_t(0x0010 | (2u << 6) | (4u << 9));   // Not_Supported, id 4
+    for (int i = 0; i < 600 && !request_on_the_wire(); i++) {
+        g_ms += 5; fusb302::poll(); fusb302::service();
+        if (g_src.acks) g_src.lead_only = false;                 // one frame, for the first TX only
+    }
+    CHECK_EQ(request_on_the_wire(), true);
+    CHECK_EQ(g_src.acks, 1);
+    CHECK_EQ(tx_logged("TX type 17 ", "no GoodCRC"), true);
+    for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(int(fusb302::reread_status().notsup_mask & pd::kRereadCapsExt), int(pd::kRereadCapsExt));
     fusb302::reread_abort();
     for (int i = 0; i < 200; i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     end_start_test();
@@ -5203,6 +5264,8 @@ int main() {
     test_reread_abort_inside_the_linger_releases_at_once();
     test_reread_release_leaves_a_held_contract_alone();
     test_reread_step_survives_a_tx_timeout_when_the_answer_arrives();
+    test_tx_takes_the_goodcrc_in_the_rx_fifo_as_sent();
+    test_tx_holds_another_frame_from_the_rx_fifo_for_service();
     test_ra_mode_holds_pc13_high_with_rd_on_cc2_only();
     test_ra_mode_refusals_and_explicit_off();
     test_unit_detach_drops_rd_with_the_spoof_armed();

@@ -44,7 +44,8 @@ TYPE_NAMES = {T_RX: "RX", T_RXBAD: "RX_BAD", T_TX: "TX", T_TXRESULT: "TX_RESULT"
 HEADER = 6
 EPR_CHUNK_BYTES = 26   # data bytes of one extended-message chunk
 FLAG_LOST, FLAG_FROZEN, FLAG_RESET = 1, 2, 4
-TX_RESULTS = ["TXSENT (GoodCRC)", "RETRYFAIL (no GoodCRC)", "timeout (no TXSENT / RETRYFAIL)"]
+TX_RESULTS = ["TXSENT (GoodCRC)", "RETRYFAIL (no GoodCRC)", "timeout (no TXSENT / RETRYFAIL)",
+              "GoodCRC in the RX FIFO (no TXSENT)"]
 RESET_KINDS = ["Hard Reset received", "Hard Reset sent", "Soft_Reset received", "Soft_Reset sent"]
 CC_EVENTS = ["detach", "attach"]
 MARKS = {1: "caps-seen", 2: "start-request", 3: "trace-start", 4: "start-wait", 5: "reread", 6: "qc3-batch", 7: "vconn", 8: "hunt-refusal"}

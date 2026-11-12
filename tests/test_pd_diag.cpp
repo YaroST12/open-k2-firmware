@@ -1162,6 +1162,19 @@ void test_tx_fail_and_rx_bad() {
     EXPECT_CODE(run, Code::RxBad, Sev::Warn);
 }
 
+// The GoodCRC found in the RX FIFO without a TXSENT (TxResult::RxGoodCrc, fusb302.cpp rx_ack_peek) is a delivered message,
+// not "K2 send failed" (hardware 2026-11-12: every Get_Source_Cap_Extended).
+void test_goodcrc_from_the_rx_fifo_is_no_tx_fail() {
+    Trace t;
+    t.cc(true);
+    t.rx(true, false, Source_Cap, kHubCaps);
+    t.tx(false, false, Request, {rdo(1, 1000, 3000)});
+    t.tx_result(3);
+    Run run;
+    run.go(t);
+    EXPECT_NO(run, Code::TxFail);
+}
+
 // ---- roles and modes ----
 
 // The laptop's left port (source, DFP) rejects the hub's PR_Swap: it stays the 5 V source.
@@ -1599,6 +1612,7 @@ int main() {
     test_contract_unseen_without_vbus();
     test_no_goodcrc_and_retries();
     test_tx_fail_and_rx_bad();
+    test_goodcrc_from_the_rx_fifo_is_no_tx_fail();
     test_pr_swap_refused_by_source();
     test_pr_swap_accepted_is_quiet();
     test_swap_unanswered();

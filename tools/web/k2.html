@@ -1488,7 +1488,7 @@ var K2Proto = (function () {
   var PD_DATA = ["", "Source_Capabilities", "Request", "BIST", "Sink_Capabilities", "Battery_Status", "Alert", "Get_Country_Info", "Enter_USB",
     "EPR_Request", "EPR_Mode", "Source_Info", "Revision"];
   var BB_RESETS = ["hard reset rx", "hard reset tx", "soft reset rx", "soft reset tx"];
-  var BB_TX_RESULTS = ["sent", "no GoodCRC (retries)", "timeout"];
+  var BB_TX_RESULTS = ["sent", "no GoodCRC (retries)", "timeout", "sent (GoodCRC in RX FIFO)"];
   function pdMessageName(hdr) {
     var type = hdr & 0x1F, n = (hdr >> 12) & 7;
     if (hdr & 0x8000) return "Ext" + type;

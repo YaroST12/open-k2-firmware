@@ -15,7 +15,7 @@
 //     Rx         token(1) header(2) objects(4 * n) crc(4)     n = header bits 14:12, crc as read
 //     RxBad      token(1) b1(1) b2(1)                          unknown FIFO token, FIFO flushed
 //     Tx         header(2) objects(4 * n)                      as written to the TX FIFO (MessageID in)
-//     TxResult   result(1) elapsed_ms(1) interrupta(1)         result: TxSent / RetryFail / Timeout
+//     TxResult   result(1) elapsed_ms(1) interrupta(1)         result: TxSent / RetryFail / Timeout / RxGoodCrc
 //     Reset      kind(1)                                       ResetKind
 //     Cc         event(1) cc(1) status0(1)                     CcEvent; cc 0 none, 1, 2; STATUS0 raw
 //     Reg        reg(1) value(1)                               bit 7 of reg set = the I2C write failed
@@ -46,7 +46,8 @@ namespace k2::pdtrace {
 enum class Type : std::uint8_t {
     Rx = 1, RxBad, Tx, TxResult, Reset, Cc, Reg, Status0, Irq, Link, Sink, Vbus, Poll, Mark, Edges, RxRepeat,
 };
-enum class TxResult : std::uint8_t { TxSent = 0, RetryFail = 1, Timeout = 2 };
+// RxGoodCrc: no TXSENT, but the partner's GoodCRC with our MessageID came out of the RX FIFO (fusb302.cpp rx_ack_peek): sent.
+enum class TxResult : std::uint8_t { TxSent = 0, RetryFail = 1, Timeout = 2, RxGoodCrc = 3 };
 enum class ResetKind : std::uint8_t { HardRx = 0, HardTx = 1, SoftRx = 2, SoftTx = 3 };
 enum class CcEvent : std::uint8_t { Detach = 0, Attach = 1 };
 // Mark codes

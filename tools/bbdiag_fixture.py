@@ -185,7 +185,7 @@ def other(kind, rest):
         return T_LINK, bytes([(1 if "inline=yes" in rest else 0) | (2 if "auto_sink=yes" in rest else 0)])
     if kind == "TX_RESULT":
         m = re.match(r"(\w+) after (\d+) ms", rest)
-        res = {"TxSent": 0, "RetryFail": 1, "Timeout": 2}.get(m[1], 0) if m else 0
+        res = {"TxSent": 0, "RetryFail": 1, "Timeout": 2, "RxGoodCrc": 3}.get(m[1], 0) if m else 0
         return T_TXRESULT, bytes([res, int(m[2]) if m else 0, 0])
     if kind == "RX_REPEAT":
         m = re.match(r"(\d+) more identical Source_Capabilities over (\d+) ms", rest)

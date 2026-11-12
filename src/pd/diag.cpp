@@ -452,7 +452,8 @@ void Analyzer::feed_record(std::uint8_t type, std::uint32_t ts_us, std::span<con
         return;
     }
     case Type::TxResult:
-        if (s.open && p.size() >= 1 && p[0] != 0) inc(s.tx_fail);
+        if (s.open && p.size() >= 1 && (p[0] == std::uint8_t(pdtrace::TxResult::RetryFail) || p[0] == std::uint8_t(pdtrace::TxResult::Timeout)))
+            inc(s.tx_fail);   // TxSent and RxGoodCrc were delivered
         return;
     case Type::Reset:
         if (p.size() < 1 || p[0] > 1) return;   // soft resets count from the Soft_Reset messages (SOP only)

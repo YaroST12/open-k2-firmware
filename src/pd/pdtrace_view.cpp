@@ -61,7 +61,7 @@ bool row_of(const std::uint8_t* r, Row& out) {
         dir = '>';
         break;
     case Type::TxResult:
-        if (len < kHeader + 1 || p[0] == std::uint8_t(TxResult::TxSent)) return false;
+        if (len < kHeader + 1 || p[0] == std::uint8_t(TxResult::TxSent) || p[0] == std::uint8_t(TxResult::RxGoodCrc)) return false;
         name = p[0] == std::uint8_t(TxResult::RetryFail) ? "TX nocrc" : "TX timeout";
         break;
     case Type::Reset:
