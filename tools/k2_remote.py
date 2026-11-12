@@ -2486,6 +2486,12 @@ SVOOC_SUMMARY_EXT_BYTES = 45
 SVOOC_SUMMARY_DIAG = 45         # 45..53, read when the firmware sends them: edges(2) last_edge_ms(2) poll_gap_max_ms(2) rec_edges(2) rec_end
 SVOOC_SUMMARY_DIAG_BYTES = 54
 SVOOC_REC_ENDS = ["recording", "full", "idle", "detach", "timeout", "cancelled", "storm"]   # edges::End
+SVOOC_TIMING_BYTES = 15         # status page 1: stall_us(4) at_ms(2) stage(1) ticked_ms(2) rel_timer rel_loop rel_edge (2 each)
+SVOOC_MASKED_MS = 5             # a stage this much longer than the ms clock moved ran with interrupts masked
+STAGE_NAMES = ["none", "idle", "usb", "shell", "msc", "remote", "capture", "fctrig", "transcap", "service", "buttons",
+               "fusb302", "power", "psource", "dpsniff", "pdtrace", "diaglive", "adc", "loopguard", "accel", "fastcharge",
+               "boottrace", "session", "rdcomeback", "handback", "rescan", "survey", "bbpersist", "reportcard",
+               "bootscreen", "ui", "stack", "heartbeat"]   # k2::stage::Id (include/k2/core/stage_meter.hpp)
 SVOOC_START_EXT = 10            # the start request with the responder parameters (op 5 / 1 / flags / cap / 6 bytes)
 SVOOC_I86_DEFAULT, SVOOC_I86_MIN, SVOOC_I86_MAX = 0x005, 1, 0x023   # the 0x86 answer, a count of about 100 mA
 SVOOC_R82_DEFAULT, SVOOC_R82_MAX = 0x051, 0x07E                    # the steady 0x82 answer (0x07F is the escape word)
@@ -2604,8 +2610,23 @@ def svooc_log(link, start=0, count=None):
     return kept, (rows if count is None else rows[:count])
 
 
+def decode_svooc_timing(p):
+    """Status page 1 (src/core/remote_proto.cpp encode_svooc_timing)."""
+    u16 = lambda o: p[o] | p[o + 1] << 8
+    stage = STAGE_NAMES[p[6]] if p[6] < len(STAGE_NAMES) else str(p[6])
+    return {"stall_us": int.from_bytes(p[0:4], "little"), "stall_at_ms": u16(4), "stall_stage": stage,
+            "stall_ticked_ms": u16(7), "rel_timer": u16(9), "rel_loop": u16(11), "rel_edge": u16(13)}
+
+
 def _svooc_read(link):
     s = decode_svooc_summary(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 0])).payload)
+    try:   # page 1, the timing diagnostics (a firmware without it answers BadArg)
+        p = link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 1])).payload
+        if len(p) >= SVOOC_TIMING_BYTES:
+            s["timing"] = decode_svooc_timing(p)
+    except RemoteError as e:
+        if e.status != STATUS_BAD_ARG:
+            raise
     kept, s["pairs"] = svooc_log(link, 0, SVOOC_SHOWN_PAIRS) if s["pairs_kept"] else (0, [])
     s["pairs_kept"] = kept   # the summary's count saturates at 255
     return s
@@ -2684,6 +2705,13 @@ def render_svooc(s):
         lines.append(f"  diag: {d['edges']} edges to the wire, the last at {d['last_edge_ms']} ms after the wake; "
                      f"longest main-loop gap {d['poll_gap_max_ms']} ms; Black Box recording {d['rec_edges']} edges, "
                      f"ended {d['rec_end']}")
+    t = s.get("timing")
+    if t:
+        masked = t["stall_us"] // 1000 - t["stall_ticked_ms"]
+        clock = f"ms clock +{t['stall_ticked_ms']}" + (f": interrupts masked ~{masked} ms" if masked > SVOOC_MASKED_MS else "")
+        lines.append(f"  timing: longest main-loop stage {t['stall_stage']} {t['stall_us'] / 1000:.1f} ms at "
+                     f"{t['stall_at_ms']} ms after the wake ({clock}); D- let go by the timer {t['rel_timer']}, "
+                     f"the main loop {t['rel_loop']}, the next frame {t['rel_edge']}")
     if s["usb_a_waiver"]:
         lines.append("  far-sink / inline check waived (USB-A): the operator's waiver, no PD anywhere at the start")
     if s["inline_cause"] != "none":

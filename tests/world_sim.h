@@ -62,6 +62,10 @@ struct Timing {
     double lcd_call_us = 2.0;       // per stream_* call
     double lcd_window_us = 8.0;     // per window (CASET/RASET/RAMWR)
     double px_cpu_us = 0.0;         // CPU per streamed pixel (rendering), calibrated on the 421.4 s Home repaint
+    // Flash cost (src/drivers/flash.cpp ram_store_op: each erase and each half-word program runs from RAM with PRIMASK set, so
+    // the main loop AND every interrupt wait it out). 0 = free, the replay's default (its expectations predate the model).
+    double flash_erase_ms = 0.0;    // one 2 KB sector erase, interrupts masked (inferred: "tens of ms" in flash.cpp)
+    double flash_halfword_us = 0.0; // one half-word program, interrupts masked (inferred: "~50 us" in flash.cpp)
 };
 
 // One run: the world from world_t0 (recording ms) on; the firmware's clock starts at 0 there.
@@ -70,6 +74,27 @@ double world_ms();          // current recording time
 double fw_ms();             // the firmware's clock
 void spend_us(double us);   // advance the clock (processes world events on the way)
 void wfi();                 // sleep to the next SysTick (1 ms boundary)
+
+// ---- Interrupts: one source (the SuperVOOC world, tests/world_svooc.cpp: the D+/D- EXTI and the one-shot timer) ----
+// spend_us() runs the source's handler at the firmware time it is due, unless the firmware masks interrupts (k2::Critical
+// counts k2::host::irq_masked; spend_masked_us below) or a handler is already running (one priority: no nesting). A handler
+// due while masked runs when the mask clears. Time a handler spends is added to the interrupted code's time.
+struct IrqSource {
+    virtual ~IrqSource() = default;
+    virtual double next_us() = 0;   // firmware us of the earliest pending or due interrupt, or of the source's next world event
+                                    // (a line that may change: the handler then runs at that moment); < 0: none
+    virtual void fire() = 0;        // run the handler due now, if any (firmware code; may spend time)
+    virtual void world_to(double fw_us) = 0;   // the source's world up to that firmware time (masked or not; no firmware code)
+};
+void set_irq_source(IrqSource* s);
+bool in_isr();
+// Time with interrupts masked (a flash erase or program). SysTick waits too: millis() / micros() stand still meanwhile and keep
+// only one of the ticks the stretch spans, so the ms clock falls behind the cycle counter (k2::dpdm::cycles()) for good.
+void spend_masked_us(double us);
+// VBUS of the world from a model instead of the scenario's points (null: the points).
+void set_vbus_model(double (*mv_at)(double world_ms));
+struct FlashStats { unsigned erases = 0, halfwords = 0; double masked_ms = 0, longest_op_ms = 0, longest_at_fw_ms = 0; };
+const FlashStats& flash_stats();
 
 struct FrameFate {
     int index;                 // into Scenario::frames

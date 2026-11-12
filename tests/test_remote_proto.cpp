@@ -1160,7 +1160,7 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 5, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x32, 6, {5, 9}), r), 1);
     check_header(r, 0x32, 6, Status::BadArg, 0);
-    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 1}), r), 1);             // the status has one page; pairs are op 3
+    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 2}), r), 1);             // the status has two pages; pairs are op 3
     check_header(r, 0x32, 7, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x32, 42, {5, 3, 0}), r), 1);
     check_header(r, 0x32, 42, Status::BadLength, 0);
@@ -1253,6 +1253,17 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 53, Status::Ok, 54);
     check_bytes(r, kRspHeader + 45, {0xFF, 0xFF, 0x17, 0x0D, 0xD4, 0x00, 0x00, 0x10, 1});
     lg.edges = 0; lg.last_edge_ms = 0; rep.poll_gap_max_ms = 0; f.svooc_snap.rec_edges = 0; f.svooc_snap.rec_end = 0;
+    // Status page 1, the timing diagnostics (15 bytes): the main loop's worst stage since the wake, stall_us(u32)
+    // at_ms(u16) stage(u8, k2::stage::Id) ticked_ms(u16), then who let D- go after the replies: timer loop edge (u16 each).
+    f.svooc_snap.stall = {k2::stage::Id::UiTick, 169123, 3405, 168};
+    f.svooc_snap.rel_timer = 70; f.svooc_snap.rel_loop = 1; f.svooc_snap.rel_edge = 70000;
+    CHECK_EQ(run(f, request(0x32, 54, {5, 0, 1}), r), 1);
+    check_header(r, 0x32, 54, Status::Ok, 15);
+    check_bytes(r, kRspHeader, {0xA3, 0x94, 0x02, 0x00, 0x4D, 0x0D, static_cast<uint8_t>(k2::stage::Id::UiTick), 0xA8, 0x00,
+                                70, 0, 1, 0, 0xFF, 0xFF});
+    f.svooc_snap.stall = {}; f.svooc_snap.rel_timer = f.svooc_snap.rel_loop = f.svooc_snap.rel_edge = 0;
+    CHECK_EQ(run(f, request(0x32, 55, {5, 0, 2}), r), 1);             // no third page
+    check_header(r, 0x32, 55, Status::BadArg, 0);
     // Log pages [5, 3, from_lo, from_hi]: kept(2) from(2) n(1) { cmd word(2) t_ms(2) vbus_mv(2) } x n, 7 per page.
     CHECK_EQ(run(f, request(0x32, 11, {5, 3, 0, 0}), r), 1);
     check_header(r, 0x32, 11, Status::Ok, 5 + 7 * 7);

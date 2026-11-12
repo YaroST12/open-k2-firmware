@@ -7,9 +7,11 @@
 
 #include "k2/core/critical.hpp"
 #include "k2/core/log.hpp"
+#include "k2/core/stage_meter.hpp"
 #include "k2/drivers/dpdm.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/mode_ram.hpp"
+#include "k2/drivers/oneshot.hpp"
 #include "k2/drivers/power_monitor.hpp"
 #include "k2/drivers/systick.hpp"
 #include "k2/drivers/usb.hpp"
@@ -66,7 +68,40 @@ void apply(const Action& a) {
     }
 }
 
-void on_edge(std::uint32_t word) { apply(g_wire.edge(word)); }
+// The wire's own clock (Wire::deadline): a one-shot timer interrupt runs tick() at each deadline, so D- goes kHoldUs after a
+// reply's last rise however long the main loop is away (a full repaint, a flash write). The timer and the EXTI edge ISR share
+// the default NVIC priority: neither preempts the other. g_timer_live keeps a late shot off the lines once release() has
+// given them back. The main loop still ticks too (service()): a second caller of an idempotent tick, the fallback if the
+// timer ever did not fire. Who let D- go after a reply is counted for the diag line.
+volatile bool g_timer_live = false;
+volatile std::uint32_t g_rel_timer = 0, g_rel_loop = 0, g_rel_edge = 0;
+
+void on_timer();
+
+void arm_timer() {   // interrupt context or interrupts masked
+    if (!g_timer_live) return;
+    const auto d = g_wire.deadline();
+    if (!d) return;
+    const std::int32_t left = std::int32_t(*d - dpdm::cycles());
+    oneshot::arm_us(left <= 0 ? 0u : (std::uint32_t(left) + svooc::kCyclesPerUs - 1) / svooc::kCyclesPerUs, &on_timer);
+}
+
+void on_timer() {
+    if (!g_timer_live) return;
+    const Action a = g_wire.tick(dpdm::cycles());
+    if (a.kind == Action::Kind::Release) g_rel_timer = g_rel_timer + 1;
+    apply(a);
+    arm_timer();
+}
+
+void on_edge(std::uint32_t word) {
+    const Action a = g_wire.edge(word);
+    if (a.kind == Action::Kind::Release) g_rel_edge = g_rel_edge + 1;   // the next frame's first edge came first
+    apply(a);
+    arm_timer();   // every edge may move the deadline
+}
+
+stage::Worst g_stall;   // the main loop's worst stage from the wake to the release (k2/core/stage_meter.hpp)
 
 // A line not at the passive idle, or one of the other D+/D- users running. The passive VOOC monitor is not one of them: it
 // only listens, so start() stops it (dpsniff::monitor_yield) once the other checks pass. A Black Box arm or stream is: it
@@ -131,6 +166,11 @@ Live live() {
 }
 
 void wake() {
+    {
+        Critical cs;   // the last wake's wire gets no more shots: the burst drives D+ itself
+        g_timer_live = false;
+        oneshot::cancel();
+    }
     dpsniff::hook_mute();
     dpdm::set_dm(dpdm::Drive::HiZ);
     dpdm::play(kBurst);
@@ -140,6 +180,9 @@ void wake() {
         Critical cs;
         g_wire.begin(dpsniff::line_word());
         g_pair_vbus_n = 0;   // the list restarts with the wire
+        g_timer_live = true;
+        g_rel_timer = g_rel_loop = g_rel_edge = 0;
+        stage::meter.reset(dpdm::cycles(), systick::millis());   // the stall diag counts from the wake
     }
     dpsniff::hook_listen(&on_edge);
     K2LOG("[SVOOC] wake %u\n", unsigned(g_run.report().tries));
@@ -149,6 +192,8 @@ void release() {
     dpsniff::hook_end();   // the ISR no longer calls the wire; the recording is stored
     {
         Critical cs;
+        g_timer_live = false;   // no shot touches the lines after this
+        oneshot::cancel();
         g_wire.stop();
     }
     stamp_pair_vbus();
@@ -162,6 +207,10 @@ void release() {
     const dpsniff::Status rec = dpsniff::status();
     K2LOG("[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n", unsigned(lg.edges),
           unsigned(lg.last_edge_ms), unsigned(r.poll_gap_max_ms), unsigned(rec.edges), unsigned(rec.reason));
+    g_stall = stage::meter.worst();
+    K2LOG("[SVOOC] stall: %ums at=%ums stage=%s ticked=%ums release timer=%u loop=%u edge=%u shots=%u\n",
+          unsigned(g_stall.us / 1000), unsigned(g_stall.at_ms), stage::name(g_stall.id), unsigned(g_stall.ticked_ms),
+          unsigned(g_rel_timer), unsigned(g_rel_loop), unsigned(g_rel_edge), unsigned(oneshot::fired()));
 }
 
 void act(Next s) {
@@ -237,7 +286,10 @@ void stop() { act(g_run.stop(svooc::Abort::Stopped, systick::millis())); }
 void service() {
     if (!g_run.lines_held()) return;
     Critical cs;
-    apply(g_wire.tick(dpdm::cycles()));
+    const Action a = g_wire.tick(dpdm::cycles());
+    if (a.kind == Action::Kind::Release) g_rel_loop = g_rel_loop + 1;
+    apply(a);
+    arm_timer();
 }
 
 void poll() {
@@ -295,6 +347,10 @@ Snapshot snapshot() {
     const dpsniff::Status rec = dpsniff::status();
     s.rec_edges = rec.edges;
     s.rec_end = static_cast<std::uint8_t>(rec.reason);
+    s.stall = g_run.lines_held() ? stage::meter.worst() : g_stall;   // frozen at the release
+    s.rel_timer = g_rel_timer;
+    s.rel_loop = g_rel_loop;
+    s.rel_edge = g_rel_edge;
     return s;
 }
 

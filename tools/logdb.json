@@ -620,6 +620,7 @@
   "623": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n",
   "624": "[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
   "625": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us\n",
-  "626": "[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n"
+  "626": "[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n",
+  "627": "[SVOOC] stall: %ums at=%ums stage=%s ticked=%ums release timer=%u loop=%u edge=%u shots=%u\n"
  }
 }
