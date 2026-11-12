@@ -6,10 +6,10 @@
 namespace k2 {
 
 namespace {
-// The theme's ground, and the scroll lane: a thumb in ink2 on the ground (Fieldbook has no track; Classic keeps its panel grey).
-const uint16_t &kBg = theme::pal.bg;
-const uint16_t &kTrack = theme::pal.bg;
-const uint16_t &kThumb = theme::pal.ink2;
+// The ground, and the scroll lane: a thumb in ink2 on the ground (no track).
+constexpr uint16_t kBg = theme::pal.bg;
+constexpr uint16_t kTrack = theme::pal.bg;
+constexpr uint16_t kThumb = theme::pal.ink2;
 }
 
 void ListView::init(const Surface &s, int16_t x, int16_t y, uint8_t chars, int16_t row_h, int rows,

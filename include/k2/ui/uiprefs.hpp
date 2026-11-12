@@ -7,8 +7,8 @@
 // Smoothing byte: 0 = the default preset (Medium), else 1 + the smoothing::Preset index (1 Off, 2 Low, 3 Medium,
 // 4 High); an unknown value reads as the default. Records written before the preset existed have 0 there, and
 // the default preset is written as 0 too, so old and new firmware read each other's file. Bits 4..5 of the same byte
-// are the theme (K2 > Theme: 0 Night, the default; 1 Paper; 2 Classic; 3 reads as Night); firmware from before the
-// themes reads a non-zero theme as an unknown preset, i.e. the default smoothing.
+// were a theme (Night, Paper, Classic) for a few builds; the Classic palette is the only one now, so they are ignored
+// on read (a stored Night or Paper loads as Classic) and written 0.
 // Orientation byte (the last byte, written 0 by older firmware and never checked by its decode, so the file reads
 // both ways): bit0..1 manual rotation 0..3 (x 90 deg), bit2 manual (0 = automatic, the default), bit3 rotate
 // buttons (Settings > Rotate buttons, default off), bit4 wake sleeping port (Settings > Wake sleeping port, default
@@ -40,7 +40,6 @@ struct Prefs {
     bool rotate_buttons = false;       // Settings > Rotate buttons: the +/- keys follow the displayed strip
     bool idle_wake = false;            // Settings > Wake sleeping port: an idle K2 holds its Rd on a standby-signature line (off = no Rd at idle)
     std::uint8_t home_hero = 0;        // Home's hero quantity (home::qty_from): 0 W, 1 V, 2 A
-    std::uint8_t theme = 0;            // K2 > Theme (theme::id_from): 0 Night, the default; 1 Paper; 2 Classic. Applied at boot
     bool operator==(const Prefs&) const = default;
 };
 
@@ -50,8 +49,7 @@ inline bool screenshot_enabled = true;
 
 constexpr std::array<std::uint8_t, 8> encode(Prefs p) {
     const std::uint8_t f = static_cast<std::uint8_t>((p.qc_after_pd ? 1 : 0) | (p.screenshot ? 0 : 2));
-    const std::uint8_t s = static_cast<std::uint8_t>(
-        (p.smoothing == smoothing::kDefault ? 0 : 1 + static_cast<unsigned>(p.smoothing)) | ((p.theme < 3 ? p.theme : 0) << 4));
+    const std::uint8_t s = static_cast<std::uint8_t>(p.smoothing == smoothing::kDefault ? 0 : 1 + static_cast<unsigned>(p.smoothing));
     const std::uint8_t o = static_cast<std::uint8_t>((p.rotation & 3) | (p.rotation_manual ? 4 : 0) | (p.rotate_buttons ? 8 : 0) | (p.idle_wake ? 16 : 0) |
                                                  ((p.home_hero < 3 ? p.home_hero : 0) << 5));
     return {kMagic[0], kMagic[1], kMagic[2], kMagic[3], f, static_cast<std::uint8_t>(~f), s, o};
@@ -60,10 +58,10 @@ constexpr std::array<std::uint8_t, 8> encode(Prefs p) {
 constexpr Prefs decode(const std::array<std::uint8_t, 8>& r) {
     for (std::size_t i = 0; i < kMagic.size(); i++) if (r[i] != kMagic[i]) return {};
     if (static_cast<std::uint8_t>(r[4] ^ r[5]) != 0xFF || (r[4] & ~3u)) return {};
-    const unsigned preset = r[6] & 0x0Fu, theme = (r[6] >> 4) & 3u;
+    const unsigned preset = r[6] & 0x0Fu;   // bits 4..5: the retired theme, ignored
     const smoothing::Preset sm = preset == 0 ? smoothing::kDefault : smoothing::preset_from_index(preset - 1u);
     return {(r[4] & 1) != 0, (r[4] & 2) == 0, sm, (r[7] & 4) != 0, static_cast<std::uint8_t>(r[7] & 3), (r[7] & 8) != 0, (r[7] & 16) != 0,
-            static_cast<std::uint8_t>(((r[7] >> 5) & 3) == 3 ? 0 : (r[7] >> 5) & 3), static_cast<std::uint8_t>(theme == 3 ? 0 : theme)};
+            static_cast<std::uint8_t>(((r[7] >> 5) & 3) == 3 ? 0 : (r[7] >> 5) & 3)};
 }
 
 inline Prefs load(fs::Fs& f) {

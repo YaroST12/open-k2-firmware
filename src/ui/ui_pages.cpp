@@ -2031,8 +2031,8 @@ bool SettingsPage::share_boot_info() {
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
     static constexpr const char *kTitles[kRows] = {"USB Link", "Autorotate", "Rotate buttons", "Screenshot", "Smoothing",
-                                                   "Wake sleeping port", "Theme", "System state", "Boot info"};
-    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug, Icon::Info,
+                                                   "Wake sleeping port", "System state", "Boot info"};
+    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug,
                                            Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
@@ -2084,17 +2084,10 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.chevron = true;
         out.note = "meter, USB, FUSB302, MCU";
         break;
-    case kBootRow:
+    default:   // kBootRow
         out.chevron = true;
         out.note = "this boot's record as a QR code";
         break;
-    default: {   // the theme the next boot applies; a change waits for the reboot (no run-time repaint path)
-        static constexpr const char *kNotes[theme::kCount] = {"light ink on a dark ground", "dark ink on paper",
-                                                              "the first firmware colours"};
-        out.tail = theme::name(theme::chosen());
-        out.note = theme::reboot_pending() ? "reboot to apply" : kNotes[static_cast<int>(theme::chosen())];
-        break;
-    }
     }
 }
 
@@ -2103,17 +2096,12 @@ void SettingsPage::update(uint32_t) {
     paint_identity();
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now);
-    static constexpr const char *kReboot[theme::kCount] = {"Reboot to apply: Night", "Reboot to apply: Paper",
-                                                           "Reboot to apply: Classic"};
-    if (theme::reboot_pending())
-        draw_footer_cached(ctx_.content, FooterTone::Caution, kReboot[static_cast<int>(theme::chosen())], foot_);
-    else
-        draw_footer_cached(ctx_.content, FooterTone::Info,
-                           sel_ == kSystemRow ? "Checks of every subsystem"
-                           : sel_ == kBootRow ? "Shared as QR codes"
-                           : sel_ >= 2        ? "Remembered across boots"
-                                              : "Opens a settings page",
-                           foot_);
+    draw_footer_cached(ctx_.content, FooterTone::Info,
+                       sel_ == kSystemRow ? "Checks of every subsystem"
+                       : sel_ == kBootRow ? "Shared as QR codes"
+                       : sel_ >= 2        ? "Remembered across boots"
+                                          : "Opens a settings page",
+                       foot_);
 }
 
 bool SettingsPage::on_event(Event e) {
@@ -2128,13 +2116,6 @@ bool SettingsPage::on_event(Event e) {
             p.smoothing = smoothing::preset_from_index((static_cast<unsigned>(power::smoothing_preset()) + 1) % smoothing::kPresetCount);
             uiprefs::set(p);
             power::set_smoothing(p.smoothing);
-            update(ctx_.now);
-        } else if (sel_ == 6) {   // Night -> Paper -> Classic -> Night; remembered, in force from the next boot
-            uiprefs::Prefs p = uiprefs::stored();
-            const auto next = theme::id_from((static_cast<unsigned>(theme::chosen()) + 1) % theme::kCount);
-            p.theme = static_cast<uint8_t>(next);
-            uiprefs::set(p);
-            theme::choose(next);
             update(ctx_.now);
         } else if (sel_ == 5) {   // remembered in the same record, applied at once (off drops a running hold)
             uiprefs::Prefs p = uiprefs::stored();
@@ -2165,7 +2146,7 @@ bool SettingsPage::on_event(Event e) {
 
 PanelLabels SettingsPage::labels() const {
     const bool opens = sel_ < 2 || sel_ >= kSystemRow;
-    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : sel_ == 4 || sel_ == 6 ? "Cycle" : "Toggle");
+    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : sel_ == 4 ? "Cycle" : "Toggle");
     labels.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};
     return labels;
 }

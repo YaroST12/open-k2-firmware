@@ -6,7 +6,6 @@
 #include <cstdlib>
 #include <memory>
 #include <string_view>
-#include "k2/ui/theme.hpp"
 #include "ramdisk.hpp"
 #include "ramflash.hpp"
 #include "k2/core/fs.hpp"
@@ -41,17 +40,6 @@ StubState g_stub;
 namespace k2 {
 
 extern const char kGitHash[] = "v1-test-3-gabc1234";
-
-// The host UI tests run in the theme K2_THEME names (night, paper, classic); Classic by default, the palette whose
-// tokens are all distinct, so a test can tell a value's colour from its label's. A test of one theme applies it itself.
-namespace {
-const bool g_theme_picked = [] {
-    const char *t = std::getenv("K2_THEME");
-    const std::string_view v = t ? t : "classic";
-    theme::apply(v == "night" ? theme::Id::Night : v == "paper" ? theme::Id::Paper : theme::Id::Classic);
-    return true;
-}();
-}  // namespace
 
 // K2_WORLD_STUBS: the world-replay test (tests/test_world_replay.cpp) links the real FUSB302 and power-monitor drivers and
 // its own clock, ADC and USB log (tests/world_sim.cpp), so those stand-ins are left out of its copy of this file.

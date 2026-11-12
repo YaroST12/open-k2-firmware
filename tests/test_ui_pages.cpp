@@ -1679,7 +1679,7 @@ static void test_home_stale() {
     ui.tick(84500);
     CHECK_EQ(ui.context().stale() ? 1 : 0, 0);
     CHECK_EQ(count(0, 0, 224, 240, kStale), 0);
-    CHECK_EQ(count(150, 1, 222, 18, kBg2) > 100, 1);    // the NO VBUS pill
+    CHECK_EQ(count(150, 1, 222, 18, kSurface) > 100, 1);   // the NO VBUS pill
     g_stub.pm = {};
 }
 
