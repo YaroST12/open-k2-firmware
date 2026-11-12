@@ -217,6 +217,9 @@ protected:
     // Right end of the top chrome bar: the compact V x A readout, the LAST pill when stale,
     // empty on Home (its hero carries the values).
     void title_badge(bool last);
+    // The Meter faces (Numbers, Lines) carry a pager there instead: Flow, Numbers, Lines, `current` solid.
+    void title_pager(int current);
+    bool meter_face() const { return id_ == Page::Detail || id_ == Page::Lines; }
     // Short BACK goes to the previous page (nothing on the first page).
     bool back_event(Event e);
     // Short [+] / [-] scroll `lv` down / up one row; declined when the list does not overflow.
@@ -697,14 +700,15 @@ private:
 // energy, timer, flow). Pure rows are home_*/detail_* above; this class only paints them.
 class DetailPage final : public PageBase {
 public:
-    explicit DetailPage(UiContext &c) : PageBase(c, Page::Detail, "Detail", Icon::Chip) {}
+    explicit DetailPage(UiContext &c) : PageBase(c, Page::Detail, "Numbers", Icon::Meter) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override { return back_event(e); }
     PanelLabels labels() const override { return base_labels(); }
     void invalidate() override;
 private:
-    static constexpr int kFields = 16;   // 8 rows x 2 columns (k2-micro-gui phase 1 grid)
+    void paint_flow(bool live, power::Flow flow);
+    static constexpr int kFields = 19;   // V, A, W, then 8 rows x 2 receipt cells (Flow paints itself)
     Field f_[kFields];
     uint8_t flow_sig_ = 0xFF;
 };
@@ -921,7 +925,7 @@ private:
 // decoded result in pills, the Rp advertisement and the MCU temperature, and a footer sentence.
 class LinesPage final : public PageBase {
 public:
-    explicit LinesPage(UiContext &c) : PageBase(c, Page::Lines, "Lines", Icon::Cable) {}
+    explicit LinesPage(UiContext &c) : PageBase(c, Page::Lines, "Lines", Icon::Meter) {}
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
@@ -934,7 +938,7 @@ private:
     void paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms);
     Field v_[4];
     int px_[4] = {-1, -1, -1, -1};
-    Field pv_[2];                // Rp, MCU values
+    Field pv_[1];                // the Rp value
     uint32_t vsig_ = 0;          // verdict row content last painted
     Elem foot_;
     bool painted_ = false;

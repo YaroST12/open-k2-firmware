@@ -183,10 +183,12 @@ static bool footer_painted() {
     return count_colours(0, 222, 224, 240, {k2::kBg}) < 224 * 18;
 }
 // Stale Home is grey end to end: no measurement colour in the readouts, the strips or the energy row;
-// the status bar below y 18 is untouched by this check.
+// the status bar below y 18 is untouched by this check, and so is the accent rule over the session block (y194..195),
+// which stays in every state (Classic draws it in the A cyan).
 static void check_home_all_grey(const char *what) {
-    const int n = count_colours(0, 20, 224, 222, {k2::kVolt, k2::kAmp, k2::kWatt, k2::kVoltT, k2::kAmpT, k2::kWattT,
-                                                  k2::kEnergy, k2::kCharge});
+    const std::initializer_list<uint16_t> cols = {k2::kVolt, k2::kAmp, k2::kWatt, k2::kVoltT, k2::kAmpT, k2::kWattT,
+                                                  k2::kEnergy, k2::kCharge};
+    const int n = count_colours(0, 20, 224, 194, cols) + count_colours(0, 196, 224, 222, cols);
     printf("%s: %d measurement-colour pixels on the stale Home\n", what, n);
     CHECK_EQ(n, 0);
 }
@@ -1451,23 +1453,28 @@ int main() {
         g_stub.fc = fastcharge::Protocol::Dcp5V;
         ui.goto_page(static_cast<uint8_t>(Page::Lines), 26000);
         test_screen(ui, "lines_dcp", 26100);
-        // Lines list rows at 24 + i*26, bar track x96..208 (kLinesBarW 112), ticks at +13/+67.
-        CHECK_EQ(g_panel[34 * 240 + 110], k2::kDPlus);        // D+ bar filled to 20 px (x96..116)
-        CHECK_EQ(g_panel[34 * 240 + 140], k2::kBg);           // empty part of the track
-        CHECK_EQ(g_panel[34 * 240 + 109], k2::kDim);          // 0.4 V tick
-        CHECK_EQ(g_panel[60 * 240 + 110], k2::kDMinus);
-        CHECK_EQ(g_panel[86 * 240 + 150], k2::kVolt);         // CC1 1.68 V reaches 57 px (x96..153)
-        CHECK_EQ(g_panel[86 * 240 + 163], k2::kDim);          // 2.0 V tick over the track
-        CHECK_EQ(g_panel[112 * 240 + 150], k2::kBg);          // CC2 0 V: empty
-        CHECK_EQ(g_panel[152 * 240 + 12], k2::kOk);           // DCP short pill (solid ok, verdict row y140)
+        // Fieldbook Lines: rows at 26 + i*24, ink bars on a bg2 track x100..211 (kLinesBarW 112) at row + 7..16, the
+        // 0.4 V / 2.0 V dashed lines at x113 / x167 (2 px dash from an even row, 2 px gap).
+        CHECK_EQ(g_panel[38 * 240 + 110], k2::kInk);          // D+ bar filled to 20 px (x100..119)
+        CHECK_EQ(g_panel[38 * 240 + 140], k2::kBg2);          // the empty track
+        CHECK_EQ(g_panel[36 * 240 + 113], k2::kInk);          // the fill covers the 0.4 V line
+        CHECK_EQ(g_panel[28 * 240 + 113], k2::kInk3);         // above the bar: a dash ...
+        CHECK_EQ(g_panel[30 * 240 + 113], k2::kBg);           // ... and a gap
+        CHECK_EQ(g_panel[62 * 240 + 110], k2::kInk);          // D-
+        CHECK_EQ(g_panel[86 * 240 + 150], k2::kInk);          // CC1 1.68 V reaches 57 px (x100..156)
+        CHECK_EQ(g_panel[84 * 240 + 167], k2::kInk3);         // the 2.0 V line shows through the track
+        CHECK_EQ(g_panel[86 * 240 + 167], k2::kBg2);
+        CHECK_EQ(g_panel[110 * 240 + 150], k2::kBg2);         // CC2 0 V: empty
+        CHECK_EQ(g_panel[146 * 240 + 8], k2::kInk);           // the DCP short chip: solid ink (verdict row y146)
         g_stub.adc->dp_mv = 3300; g_stub.adc->dm_mv = 0;      // QC 9 V pattern: D+ full, D- empty
         g_stub.fc = fastcharge::Protocol::Qc2_9V;
         test_screen(ui, "lines_qc9", 27000);
-        CHECK_EQ(g_panel[34 * 240 + 200], k2::kDPlus);        // D+ full: bar x96..208
-        CHECK_EQ(g_panel[60 * 240 + 110], k2::kBg);
+        CHECK_EQ(g_panel[38 * 240 + 200], k2::kInk);          // D+ full: bar x100..211
+        CHECK_EQ(g_panel[62 * 240 + 110], k2::kBg2);
+        CHECK_EQ(count_colours(0, 146, 224, 160, {k2::kSpotVolt}) > 40, true);   // the "9V" chip in the volt spot
         g_stub.adc.reset();                                   // no reading: dashes, empty bars
         test_screen(ui, "lines_none", 28000);
-        CHECK_EQ(g_panel[34 * 240 + 110], k2::kBg);
+        CHECK_EQ(g_panel[38 * 240 + 110], k2::kBg2);
     }
     {   // Diag list: state dots at x6..13 of each group's first row (rows at 24 + i*22)
         g_stub.pm_online = true;

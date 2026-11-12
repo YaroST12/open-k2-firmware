@@ -460,6 +460,19 @@ void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view vol
     });
 }
 
+void draw_top_pager(const Surface &s, int count, int current) {
+    draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) {
+        const int r = row.y - kPagerY;
+        if (r < 0 || r >= kPagerBox) return;
+        const bool edge = r == 0 || r == kPagerBox - 1;
+        for (int i = 0; i < count; i++) {
+            const int x = kPagerRight - (count - i) * kPagerPitch + (kPagerPitch - kPagerBox);
+            if (i == current || edge) row.fill(x, kPagerBox, kInk);
+            else { row.fill(x, 1, kInk); row.fill(x + kPagerBox - 1, 1, kInk); }
+        }
+    });
+}
+
 namespace {
 // The text itself, or its start plus "..." (the cut only; callers say whether the gate counts it).
 std::string_view cut_end(const Font &f, std::string_view text, int max_px, char (&buf)[kFitBuf]) {

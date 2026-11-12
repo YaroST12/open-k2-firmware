@@ -250,22 +250,26 @@ static void test_live_home() {
     live_pd(false, 20010, 1520);
     run(ui, 40);
     dump("2c", "live_pd");
-    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kWatt) > 60);   // W hero digits
-    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[0], 120, 30, kVolt) > 40);   // V in ledger row 1
-    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[1], 120, 30, kAmp) > 40);    // A in ledger row 2
-    CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWatt) == 4 * kHeroH);    // the hero's status edge is live
-    CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kWatt) > 0);               // W bar fill against the 100 W contract
-    CHECK_TRUE(ink_logical(ui, 6, 190, 128, 3, kAmp) > 0);                // A bar fill in row 2
-    CHECK_EQ(ink_logical(ui, 6, 132, 128, 3, kVolt), 0);                  // no bar for V
-    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[0], kCardW, 58, kWatt) > 10);   // PEAK in the upper card
-    CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, kStale), 0);                 // live is never grey
+    // Fieldbook: each live quantity is a block of its spot colour with ink digits (W the inverse block).
+    CHECK_TRUE(ink_logical(ui, 0, 0, 224, kHeroH, kWattFill) > 224 * kHeroH / 2);        // the W field
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kSpotVolt) > 140 * 58 / 2);       // the V field
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kSpotAmp) > 140 * 57 / 2);        // the A field
+    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kWattInk) > 60);   // W hero digits
+    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[0], 120, 30, kSpotInk) > 40);   // V in ledger row 1
+    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[1], 120, 30, kSpotInk) > 40);   // A in ledger row 2
+    CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kWattD) > 0);              // W bar: the track in the darker shade ...
+    CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kWattInk) > 0);            // ... the fill in ink, against the 100 W contract
+    CHECK_TRUE(ink_logical(ui, 6, 190, 128, 3, kSpotAmpD) > 0);           // A bar in row 2
+    CHECK_EQ(ink_logical(ui, 6, 132, 110, 3, kSpotInk), 0);               // no bar for V
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[0], kCardW, 58, kText) > 10);   // PEAK in the upper card, ink
+    CHECK_EQ(ink_logical(ui, 0, 0, 140, 194, kStaleFill), 0);             // live fields are never grey
     CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);                 // no alarm, no pill
-    CHECK_TRUE(ink_logical(ui, 160, 3, 60, 12, kDim) > 8);                // dim "max 100W"
-    CHECK_TRUE(ink_logical(ui, 90, kRowTop[0] + 3, 46, 12, kDim) > 8);    // dim "max 20V"
-    CHECK_TRUE(ink_logical(ui, 90, kRowTop[1] + 3, 46, 12, kDim) > 8);    // dim "max 5A"
-    CHECK_TRUE(ink_logical(ui, 46, 3, 30, 12, kFaint) > 3);               // the "10s" window label after POWER
-    CHECK_TRUE(ink_logical(ui, 4, 201, 40, 16, kDim) > 8);                // USB tag
-    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);               // protocol row
+    CHECK_TRUE(ink_logical(ui, 160, 3, 60, 12, kWattInk) > 8);            // "max 100W" in the field's ink
+    CHECK_TRUE(ink_logical(ui, 90, kRowTop[0] + 3, 46, 12, kSpotInk) > 8);   // "max 20V"
+    CHECK_TRUE(ink_logical(ui, 90, kRowTop[1] + 3, 46, 12, kSpotInk) > 8);   // "max 5A"
+    CHECK_TRUE(ink_logical(ui, 46, 3, 30, 12, kWattInk) > 3);             // the "10s" window label after POWER
+    CHECK_TRUE(ink_logical(ui, 4, 201, 40, 16, kChip) > 8);               // session row 1: the protocol chip
+    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);               // session row 2: the diagnosis
 }
 
 // Long Back cycles the hero W -> V -> A -> W: each quantity moves to the hero cell, the setting is stored, and a new Ui
@@ -281,17 +285,17 @@ static void test_hero_cycle() {
     dump("2c", "hero_v");
     CHECK_EQ(int(ui.context().keep.home_hero), int(hm::Qty::V));
     CHECK_EQ(int(uiprefs::stored().home_hero), 1);
-    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kVolt) > 60);
-    CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kVolt) == 4 * kHeroH);
-    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[0], 120, 30, kWatt) > 40);   // W moves to row 1
-    CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kVolt), 0);                  // the V hero has no bar
+    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kSpotInk) > 60);
+    CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kSpotVolt) == 4 * kHeroH);   // the hero field is the V block
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kWattFill) > 140 * 58 / 2);   // W moves to row 1
+    CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kSpotInk), 0);               // the V hero has no bar
     ui.on_button(Button::Back, ButtonEvent::Long, g_t);
     run(ui, 20);
     dump("2c", "hero_a");
     CHECK_EQ(int(uiprefs::stored().home_hero), 2);
-    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kAmp) > 60);
-    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[1], 120, 30, kVolt) > 40);   // V in row 2
-    CHECK_TRUE(ink_logical(ui, 8, 33, 22, 22, kFlow) > 40);               // the hero's flow arrow, left of the digits
+    CHECK_TRUE(ink_logical(ui, 0, 0, 224, kHeroH, kSpotAmp) > 224 * kHeroH / 2);
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kSpotVolt) > 140 * 57 / 2);   // V in row 2
+    CHECK_TRUE(ink_logical(ui, 8, 33, 22, 22, kSpotInk) > 40);            // the hero's flow arrow, left of the digits, in ink
     // A reboot restores the stored hero (main.cpp: restore_home_hero before init). fresh_ui() resets the stub store too.
     const uint8_t kept = uiprefs::stored().home_hero;
     Ui &again = fresh_ui();
@@ -350,10 +354,10 @@ static void test_protocol_states() {
         g_stub.contract.pos = 2; g_stub.contract.mv = 9100; g_stub.contract.op_ma = 2000; g_stub.contract.max_ma = 3000;
         run(ui, 40);
         dump("2c", "pps");
-        CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWatt) == 4 * kHeroH);
-        CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // protocol row
-        CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kWatt) > 0);         // 33 W bar (the APDO's 11 V x 3 A)
-        CHECK_TRUE(ink_logical(ui, 6, 190, 128, 3, kAmp) > 0);          // 3 A limit bar
+        CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWattFill) == 4 * kHeroH);
+        CHECK_TRUE(ink_logical(ui, 4, 201, 220, 16, kText) > 8);        // protocol row
+        CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kWattInk) > 0);      // 33 W bar (the APDO's 11 V x 3 A)
+        CHECK_TRUE(ink_logical(ui, 6, 190, 128, 3, kSpotAmpD) > 0);     // 3 A limit bar
     }
     {
         Ui &ui = home_ui();
@@ -362,10 +366,10 @@ static void test_protocol_states() {
         g_stub.fc = fastcharge::Protocol::Qc2_9V;
         run(ui, 40);
         dump("2c", "qc");
-        CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWatt) == 4 * kHeroH);
-        CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kWatt) > 60);
-        CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // "QC2 9V"-style row
-        CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kWatt), 0);            // no current rating: no W bar
+        CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kWattFill) == 4 * kHeroH);
+        CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kWattInk) > 60);
+        CHECK_TRUE(ink_logical(ui, 4, 201, 220, 16, kText) > 8);        // "QC2 9V"-style row
+        CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kWattInk), 0);         // no current rating: no W bar
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no limit known: no alarm
     }
     {   // inline VOOC monitor: a live session, no PD; the row is "SVOOC 9.0V3.6A" from the readings, and the measured
@@ -379,9 +383,9 @@ static void test_protocol_states() {
         dump("2c", "svooc_inline");
         CHECK_EQ(int(ui.proto_now().kind), int(home::ProtoKind::Svooc));
         CHECK_EQ(int(ui.proto_now().ma), 0);
-        CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 8);         // protocol row
-        CHECK_EQ(ink_logical(ui, 6, 190, 128, 3, kAmp), 0);             // no limit bar
-        CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kWatt), 0);
+        CHECK_TRUE(ink_logical(ui, 4, 201, 220, 16, kText) > 8);        // protocol row
+        CHECK_EQ(ink_logical(ui, 6, 190, 128, 3, kSpotInk), 0);         // no limit bar
+        CHECK_EQ(ink_logical(ui, 10, 68, 205, 3, kWattInk), 0);
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, kError), 0);           // no alarm
         g_stub.vooc = {};
     }
@@ -407,14 +411,14 @@ static void test_protocol_states() {
 static void test_sweep() {
     Ui &ui = home_ui();
     run(ui, 4);
-    CHECK_EQ(ink_logical(ui, 4, 2, 220, 70, kWattL), 0);                // idle: no sweep
+    CHECK_EQ(ink_logical(ui, 4, 2, 220, 70, kWattD), 0);                // idle: no sweep
     live_pd(false, 20010, 1520);
     run(ui, 60);
-    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 70, kWattL) > 10);            // the hero's
-    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kVoltL) > 10);   // and both ledger rows', over the same span
-    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kAmpL) > 10);
-    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kVoltL) + ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kAmpL), 0);   // never under the cards
-    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 66, kRule) > 0);              // the cursor line
+    // The trend is the darker shade of the field's spot colour (the cursor is a 1 px gap of the field in it).
+    CHECK_TRUE(ink_logical(ui, 4, 2, 220, 70, kWattD) > 10);            // the hero's
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[0], 140, 58, kSpotVoltD) > 10);   // and both ledger rows', over the same span
+    CHECK_TRUE(ink_logical(ui, 0, kRowTop[1], 140, 57, kSpotAmpD) > 10);
+    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kSpotVoltD) + ink_logical(ui, kCardX, kRowTop[0], kCardW, 118, kSpotAmpD), 0);   // never under the cards
 }
 
 // Every repaint strip of the moving sweep must leave the panel exactly as a full-frame render of the same state would.
@@ -474,7 +478,7 @@ static void test_window_cycle() {
     Ui &ui = home_ui();
     live_pd(false, 20010, 1520);
     run(ui, 10);
-    const int a = ink_logical(ui, 46, 3, 30, 12, kFaint);
+    const int a = ink_logical(ui, 46, 3, 30, 12, kWattInk);   // the window label, in the W field's ink
     CHECK_TRUE(a > 3);
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
@@ -484,7 +488,7 @@ static void test_window_cycle() {
     dump("2c", "window_10m");
     ui.on_button(Button::Ok, ButtonEvent::Short, g_t);
     run(ui, 10);
-    for (int r = 0; r < 2; r++) CHECK_EQ(ink_logical(ui, 30, kRowTop[r] + 3, 50, 12, kFaint), 0);   // never in a ledger row
+    for (int r = 0; r < 2; r++) CHECK_EQ(ink_logical(ui, 30, kRowTop[r] + 3, 18, 12, kSpotInk), 0);   // never in a ledger row
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].shrt, "Zoom");
     CHECK_STR(ui.labels().b[static_cast<int>(Button::Ok)].lng, "Reset");
 }
@@ -517,13 +521,13 @@ static void test_idle_home() {
     unplug();
     run(ui, 20);
     dump("2c", "idle");
-    CHECK_TRUE(ink_logical(ui, 190, 1, 30, 17, kSurface) > 100);        // the NO VBUS pill fill
-    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kWatt), 0);
-    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kFaint), 4 * kHeroH);
-    for (uint16_t c : {kVolt, kAmp, kWatt, kEnergy, kCharge})            // no live colours at all
-        CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, c), 0);
-    CHECK_TRUE(ink_logical(ui, 52, 223, 120, 16, kDim) > 8);            // "No source"
-    CHECK_EQ(ink_logical(ui, 50, 146, 13, 13, kFlow), 0);               // no arrow
+    CHECK_TRUE(ink_logical(ui, 190, 1, 30, 17, kBg2) > 100);            // the NO VBUS chip fill
+    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kWattFill), 4 * kHeroH);   // the field drops to the ground: a 4 px key
+    CHECK_EQ(ink_logical(ui, 0, kRowTop[0], 4, 58, kSpotVolt), 4 * 58);
+    for (uint16_t c : {kWattFill, kSpotVolt, kSpotAmp})                  // no live block anywhere right of the keys
+        CHECK_EQ(ink_logical(ui, 4, 0, 220, 194, c), 0);
+    CHECK_TRUE(ink_logical(ui, 52, 201, 120, 16, kDim) > 8);            // "No source" (session row 1)
+    CHECK_EQ(ink_logical(ui, 50, 146, 13, 13, kInk3), 0);               // no arrow
     CHECK_EQ(ink_logical(ui, 10, 66, 205, 7, kRule), 0);                // no bars
     CHECK_EQ(ink_logical(ui, 6, 188, 128, 5, kRule), 0);
 }
@@ -576,11 +580,11 @@ static void test_stale_home() {
     g_stub.pm.vbus_mv = 0;
     run(ui, 20);
     dump("2c", "stale");
-    CHECK_TRUE(ink_logical(ui, 150, 1, 70, 17, kStale) > 100);          // the LAST pill fill
-    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kStale), 4 * kHeroH);
-    for (uint16_t c : {kVolt, kAmp, kWatt, kEnergy, kCharge})            // grey everywhere
-        CHECK_EQ(ink_logical(ui, 0, 0, 224, 240, c), 0);
-    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kStale) > 60);   // the frozen digits
+    CHECK_TRUE(ink_logical(ui, 150, 1, 70, 17, kStaleInk) > 100);       // the LAST chip fill (light on the grey field)
+    CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kStaleFill), 4 * kHeroH);   // the fields turn grey
+    for (uint16_t c : {kWattFill, kSpotVolt, kSpotAmp})                  // no live block anywhere
+        CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, c), 0);
+    CHECK_TRUE(ink_logical(ui, kHeroDigits[0], kHeroDigits[1], kHeroDigits[2], kHeroDigits[3], kStaleInk) > 60);   // the frozen digits
     CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[0], kCardW, 58, kStale) > 10);   // PEAK stays, grey, above Wh / Ah
     CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kStale) > 10);
 }
@@ -592,10 +596,11 @@ static void test_alarms() {
     live_pd(false, 20010, 4700);                                        // 94 W of 100 W, 4.7 A of 5 A
     run(ui, 20);
     dump("2c", "near");
-    CHECK_TRUE(ink_logical(ui, 0, 0, 4, kHeroH, kCaution) == 4 * kHeroH);
-    CHECK_TRUE(ink_logical(ui, 10, 0, 200, 18, kCaution) > 20);         // the warn triangle and "94% OF 100W"
-    CHECK_TRUE(ink_logical(ui, 4, kRowTop[1], 130, 18, kCaution) > 10); // row 2: the triangle and "94%"
-    CHECK_TRUE(ink_logical(ui, 8, kRowDigitY[1], 120, 30, kCaution) > 40);
+    CHECK_TRUE(ink_logical(ui, 0, 0, 224, kHeroH, kWattFill) > 224 * kHeroH / 2);   // near keeps the field ...
+    CHECK_TRUE(ink_logical(ui, 10, 0, 200, 18, kCaution) > 20);         // ... with the orange "94% OF 100W" chip
+    CHECK_TRUE(ink_logical(ui, 4, kRowTop[1], 130, 18, kCaution) > 10); // row 2: the "94%" chip
+    CHECK_TRUE(ink_logical(ui, 10, 68, 205, 3, kCaution) > 0);          // and the bars turn orange
+    CHECK_TRUE(ink_logical(ui, 6, 190, 128, 3, kCaution) > 0);
     CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, kError), 0);
     CHECK_EQ(ink_logical(ui, 0, kRowTop[0], 140, 58, kCaution), 0);     // V never alarms
     live_pd(false, 20010, 5400);                                        // 108 %
@@ -616,8 +621,8 @@ static void test_nometer_home() {
     g_stub.pm_online = false;
     run(ui, 20);
     dump("2c", "nometer");
-    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kError) > 20);
-    for (uint16_t c : {kVolt, kAmp, kWatt}) CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, c), 0);
+    CHECK_TRUE(ink_logical(ui, 4, 201, 220, 16, kError) > 20);          // Fieldbook: the message sits on row 1
+    for (uint16_t c : {kVolt, kAmp, kWatt}) CHECK_EQ(ink_logical(ui, 4, 0, 220, 194, c), 0);   // x0..3: the idle keys
 }
 
 // The first seconds of a boot: the meter is still being found, so the row says "starting" in the neutral colour and only a meter
@@ -633,11 +638,11 @@ static void test_nometer_grace() {
     Ui &ui = home_ui();
     g_stub.pm_online = false;
     run(ui, 10);                                                        // 2 s of uptime
-    CHECK_EQ(ink_logical(ui, 4, 223, 220, 16, kError), 0);              // no red yet
-    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kDim) > 20);            // "Power meter starting"
+    CHECK_EQ(ink_logical(ui, 4, 201, 220, 16, kError), 0);              // no red yet
+    CHECK_TRUE(ink_logical(ui, 4, 201, 220, 16, kDim) > 20);            // "Power meter starting"
     g_t = hm::kMeterGraceMs + 100;
     run(ui, 4);
-    CHECK_TRUE(ink_logical(ui, 4, 223, 220, 16, kError) > 20);          // the grace is over: the error
+    CHECK_TRUE(ink_logical(ui, 4, 201, 220, 16, kError) > 20);          // the grace is over: the error
     g_t = saved;
 }
 
@@ -682,19 +687,19 @@ static void test_flow_arrow() {
         Ui &ui = home_ui(r);
         live_pd(false, 20010, 1520);
         run(ui, 20);
-        expect_points(arrow_ink(ui, kFlow), r);
+        expect_points(arrow_ink(ui, kSpotInk), r);         // Fieldbook: the arrow takes the A field's ink
         const char rot_name[2] = {static_cast<char>('0' + r), 0};
         dump("2c_flow_rot", rot_name);
 
         live_pd(true, 20010, 1520);                       // reverse: toward the physical bottom
         run(ui, 20);
-        expect_points(arrow_ink(ui, kFlow), (r + 2) & 3);
+        expect_points(arrow_ink(ui, kSpotInk), (r + 2) & 3);
 
-        live_pd(false, 20010, 0);                          // deadband: a short faint dash
+        live_pd(false, 20010, 0);                          // deadband: a short dash in the field's darker shade
         g_stub.pm.flow = power::Flow::Idle; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;
         run(ui, 20);
-        CHECK_EQ(ink_logical(ui, kAx, kAy, kAs, kAs, kFlow), 0);
-        const int dash = ink_logical(ui, kAx, kAy, kAs, kAs, kFaint);
+        CHECK_EQ(ink_logical(ui, kAx, kAy, kAs, kAs, kSpotInk), 0);
+        const int dash = ink_logical(ui, kAx, kAy, kAs, kAs, kSpotAmpD);
         CHECK_EQ(dash >= 3 && dash <= 40, 1);
 
         live_pd(false, 20010, 1520);
@@ -702,7 +707,7 @@ static void test_flow_arrow() {
         g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;   // unplugged: the last direction, grey
         g_stub.pm.flow = power::Flow::Idle;
         run(ui, 20);
-        CHECK_EQ(ink_logical(ui, kAx, kAy, kAs, kAs, kFlow), 0);
+        CHECK_EQ(ink_logical(ui, kAx, kAy, kAs, kAs, kSpotAmp), 0);     // the live field is gone
         expect_points(arrow_ink(ui, kStale), r);
         // A steady screen does not repaint the arrow: wipe it, run more frames, it stays blank. (Stale, so no sweep strip
         // passes over the arrow's columns: a live strip repaints them, arrow included, by design.)
@@ -714,8 +719,9 @@ static void test_flow_arrow() {
         Ui &none = home_ui(r);                             // nothing seen: no arrow at all
         g_stub.pm = {};
         run(none, 20);
-        CHECK_EQ(ink_logical(none, kAx, kAy, kAs, kAs, kFlow), 0);
-        CHECK_EQ(ink_logical(none, kAx, kAy, kAs, kAs, kFaint), 0);
+        CHECK_EQ(ink_logical(none, kAx, kAy, kAs, kAs, kSpotAmpD), 0);
+        CHECK_EQ(ink_logical(none, kAx, kAy, kAs, kAs, kStale), 0);
+        CHECK_EQ(ink_logical(none, kAx, kAy, kAs, kAs, kInk3), 0);
     }
 }
 
@@ -748,16 +754,15 @@ static void test_cards_on_the_page() {
     run(ui, 10);                                                        // 1 s live
     CHECK_EQ(int(ui.context().keep.cards.top()), int(hm::Card::Peak));
     CHECK_EQ(int(ui.context().keep.cards.bottom()), int(hm::Card::Energy));
-    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kEnergy) > 10);   // Wh
-    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kCharge) > 10);   // Ah
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kText) > 40);     // Wh over Ah (Fieldbook: values in the ink)
     CHECK_EQ(ui.context().extremes.peak_mw(), 30400u);
     // A swap of the lower cell leaves the upper one alone: wipe it, cross the half dwell, it stays blank.
     wipe_logical(ui, kCardX + 1, kRowTop[0] + 1, kCardW - 2, 50);
     run(ui, 16);                                                        // 2.6 s live: the lower cell's first step
     CHECK_TRUE(int(ui.context().keep.cards.bottom()) != int(hm::Card::Energy));
     dump("2c", "card_lower_step");
-    CHECK_EQ(ink_logical(ui, kCardX + 1, kRowTop[0] + 1, kCardW - 2, 50, kWatt), 0);   // PEAK not repainted (same value)
-    CHECK_EQ(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kEnergy), 0);              // the lower cell changed
+    CHECK_EQ(ink_logical(ui, kCardX + 1, kRowTop[0] + 1, kCardW - 2, 50, kText), 0);   // PEAK not repainted (same value)
+    CHECK_TRUE(ink_logical(ui, kCardX, kRowTop[1], kCardW, 58, kText) > 20);           // the lower cell repainted
     // A bigger load raises the peak; long OK resets the peaks and the cycle.
     live_pd(false, 20010, 3000);
     run(ui, 10);

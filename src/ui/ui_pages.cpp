@@ -174,7 +174,7 @@ void model_row_text(power::Chip chip, StrBuf<24> &s) {
 // ---------------------------------------------------------------------------------------
 
 // Short bar names (8 cells at most) of the rotation pages, in Page order.
-static constexpr const char *kBarNames[] = {"Home", "Detail", "Charger", "Lines", "Tools", "Settings"};
+static constexpr const char *kBarNames[] = {"Home", "Numbers", "Charger", "Lines", "Tools", "Settings"};
 static_assert(sizeof kBarNames / sizeof *kBarNames == static_cast<size_t>(Page::Count), "one bar name per rotation page");
 
 void PageBase::title_bar() {
@@ -191,7 +191,15 @@ void PageBase::title_bar() {
                                  : role_badge(fusb302::pin_rd(), badge);
     if (role == "PAS") role = {};   // Fieldbook: the masthead carries a role only as an exception (a held Rd pin, a sink)
     // The readout area is the page's update() job (title_badge, always called first thing and always repainting after this).
-    draw_status_left(ctx_.content, menu && has_icon_, icon_, name, 132, role, true);
+    draw_status_left(ctx_.content, (menu || meter_face()) && has_icon_, icon_, name, 132, role, true);
+}
+
+void PageBase::title_pager(int current) {
+    const uint32_t sig = 0x9A6E0000u | static_cast<uint32_t>(current);
+    if (bar_valid_ && sig == bar_sig_) return;
+    bar_valid_ = true;
+    bar_sig_ = sig;
+    draw_top_pager(ctx_.content, 3, current);
 }
 
 // Right end of the top chrome bar: the compact fmt3(V) x fmt3(A) readout, swapped for the stale-grey
@@ -703,25 +711,45 @@ void DiagPage::invalidate() {
 // ---------------------------------------------------------------------------------------
 
 namespace {
-// Lines list (k2-micro-gui): four 26 px line rows under the chrome bar (tag pill, value, bar),
-// then the verdict area as plain hairline rows: pills, Rp, MCU.
-constexpr int16_t kLnRowY0 = 24, kLnRowPitch = 26;
+// Meter > Lines (Fieldbook): four 24 px line rows under the masthead (an ink chip as the tag, the value, an ink bar on a bg2
+// track), dashed threshold lines at 0.4 V and 2.0 V down through the rows to their axis labels, then the verdict chips and
+// the Rp receipt row. The MCU temperature lives on Numbers.
+constexpr int16_t kLnRowY0 = 26, kLnRowPitch = 24;
 constexpr int16_t kLnRowY(int i) { return static_cast<int16_t>(kLnRowY0 + i * kLnRowPitch); }
-constexpr int16_t kLnBarX = 96, kLnBarH = 12;
-constexpr int16_t kVerdictY = 140;                     // first hairline of the verdict rows
-const uint16_t *const kLnColor[4] = {&kDPlus, &kDMinus, &kVolt, &kVolt};
+constexpr int16_t kLnChipX = 6, kLnChipW = 30, kLnChipDy = 5;
+constexpr int16_t kLnValX = 44, kLnValChars = 5, kLnValDy = 4;
+constexpr int16_t kLnBarX = 100, kLnBarH = 10, kLnBarDy = 7;
+constexpr int16_t kLnAxisY = kLnRowY0 + 4 * kLnRowPitch;   // 122: the dashes stop here, their labels under it
+constexpr int16_t kLnAxisTextY = kLnAxisY + 3, kKeyAxisX = 6;
+constexpr int16_t kVerdictY = 144;                          // the verdict chips
+constexpr int16_t kLnDash = 2;                              // the threshold lines: 2 px dash, 2 px gap
+static_assert(kLnBarX + kLinesBarW <= 222, "the bars end inside the content");
 constexpr const char *kLnTag[4] = {"D+", "D-", "CC1", "CC2"};
-constexpr kit::KvLayout kLnKv{kVerdictY + 26, 26, 6, &kLabelFont, nullptr, 40, 16, Align::Left};   // Rp and MCU rows
+constexpr int32_t kLnFaintMv = 100;                         // a line under 0.1 V reads as nothing on it
+// The Rp receipt row: key font 16 at x 6, a dot leader, "3.0A on CC1" right-aligned to x 218.
+constexpr kit::KvLayout kLnKv{168, 26, 6, nullptr, nullptr, static_cast<int16_t>(218 - 12 * 8), 12, Align::Right};
 
-struct ToneStyle { uint16_t color, tint; bool solid; };
-ToneStyle tone_style(Tone t) {
+int16_t tick_x(int32_t mv) { return static_cast<int16_t>(kLnBarX + lines_tick_px(mv)); }
+// One threshold column between y0 and y1 (exclusive): dash pixels in ink3, the gaps in the ground, phase anchored to y 0 so the
+// pieces line up across the rows and the bars.
+void dash_column(const Surface &c, int16_t x, int16_t y0, int16_t y1) {
+    for (int16_t y = y0; y < y1;) {
+        const bool on = (y / kLnDash) % 2 == 0;
+        const int16_t end = std::min<int16_t>(y1, static_cast<int16_t>((y / kLnDash + 1) * kLnDash));
+        gfx_fill(c, x, y, 1, static_cast<int16_t>(end - y), on ? kInk3 : kBg);
+        y = end;
+    }
+}
+
+struct ChipStyle { uint16_t fill, ink; };
+ChipStyle tone_chip(Tone t) {
     switch (t) {
-    case Tone::Ok:      return {kOk, kOkT, true};
-    case Tone::Info:    return {kAmp, kAmpT, true};
-    case Tone::Caution: return {kCaution, kCautionT, true};
+    case Tone::Ok:
+    case Tone::Info:    return {kInk, kBg};          // a decoded result: the solid ink chip
+    case Tone::Caution: return {kCaution, kSpotInk};
     case Tone::Dim:     break;
     }
-    return {kDim, kDimT, false};
+    return {kBg2, kInk2};
 }
 }  // namespace
 
@@ -729,61 +757,79 @@ ToneStyle tone_style(Tone t) {
 // the box stays ground). Run when the page opens over a live screen, so it covers every content pixel with no erase pass.
 void LinesPage::lay_ground() {
     const Surface &c = ctx_.content;
-    for (int i = 0; i < 4; i++) {
-        const int16_t y = kLnRowY(i);
-        kit::Box h[6];
-        int n = 0;
-        h[n++] = {static_cast<int16_t>(kLnBarX - 4 * kSmall.adv), static_cast<int16_t>(y + 5), static_cast<int16_t>(4 * kSmall.adv), kSmall.height};
-        h[n++] = {kLnBarX, static_cast<int16_t>(y + 7), kLinesBarW, kLnBarH};
-        for (int32_t t : {kLinesTickLowMv, kLinesTickHighMv}) {   // a tick is 18 px tall: its ends stick out of the bar
-            const int16_t tx = static_cast<int16_t>(kLnBarX + lines_tick_px(t));
-            h[n++] = {tx, static_cast<int16_t>(y + 4), 1, 3};
-            h[n++] = {tx, static_cast<int16_t>(y + 19), 1, 3};
+    const int16_t lo = tick_x(kLinesTickLowMv), hi = tick_x(kLinesTickHighMv);
+    {   // the line rows, from under the masthead: everything but the chips, the values, the bars and the threshold columns
+        const int16_t y0 = kit::kBelowBar;
+        for (int i = 0; i < 4; i++) {
+            const int16_t y = kLnRowY(i), top = i ? y : y0, h = static_cast<int16_t>(y + kLnRowPitch - top);
+            const kit::Box holes[5] = {
+                {kLnChipX, static_cast<int16_t>(y + kLnChipDy), kLnChipW, kit::kChipH},
+                {kLnValX, static_cast<int16_t>(y + kLnValDy), static_cast<int16_t>(kLnValChars * kSmall.adv), kSmall.height},
+                {kLnBarX, static_cast<int16_t>(y + kLnBarDy), kLinesBarW, kLnBarH},
+                {lo, top, 1, h}, {hi, top, 1, h}};
+            kit::fill_except(c, {0, top, c.w, h}, holes, 5, kBg);
         }
-        kit::fill_except(c, {0, static_cast<int16_t>(y + 1), c.w, kLnRowPitch - 1}, h, n, kBg);
     }
-    const kit::Box tags[2] = {
-        {static_cast<int16_t>(kLnBarX + lines_tick_px(kLinesTickLowMv) - 6), 130, static_cast<int16_t>(text_width(kLabelFont, "0.4")), kLabelFont.height},
-        {static_cast<int16_t>(kLnBarX + lines_tick_px(kLinesTickHighMv) - 6), 130, static_cast<int16_t>(text_width(kLabelFont, "2.0")), kLabelFont.height}};
-    kit::fill_except(c, {0, static_cast<int16_t>(kLnRowY(4) + 1), c.w, static_cast<int16_t>(kVerdictY - kLnRowY(4) - 1)}, tags, 2, kBg);
-    static const char *const kKeys[2] = {"Rp", "MCU"};
-    kit::kv_ground(c, kLnKv, kKeys, 2);
-    const int16_t below = static_cast<int16_t>(kit::kv_row_y(kLnKv, 2) + 1);
-    gfx_fill(c, 0, below, c.w, static_cast<int16_t>(kit::kListBottom - below), kBg);   // the verdict pills row paints itself
+    {   // the axis labels, then the verdict row around its chip line (paint_verdict owns that line edge to edge)
+        const kit::Box tags[3] = {
+            {kKeyAxisX, kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "volts")), kLabelFont.height},
+            {static_cast<int16_t>(lo - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "0.4")), kLabelFont.height},
+            {static_cast<int16_t>(hi - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "2.0")), kLabelFont.height}};
+        const int16_t chips = kVerdictY + 2;
+        kit::fill_except(c, {0, kLnAxisY, c.w, static_cast<int16_t>(chips - kLnAxisY)}, tags, 3, kBg);
+        gfx_fill(c, 0, static_cast<int16_t>(chips + kit::kChipH), c.w, static_cast<int16_t>(kLnKv.y0 - chips - kit::kChipH), kBg);
+    }
+    static const char *const kKeys[1] = {"Rp"};
+    kit::kv_ground(c, kLnKv, kKeys, 1);
+    const int16_t below = static_cast<int16_t>(kit::kv_row_y(kLnKv, 1) + 1);
+    gfx_fill(c, 0, below, c.w, static_cast<int16_t>(kit::kListBottom - below), kBg);
 }
 
 void LinesPage::draw_static() {
     title_bar();
     const Surface &c = ctx_.content;
     if (!ctx_.blank) lay_ground();
-    for (int i = 0; i <= 4; i++) gfx_fill(c, 0, kLnRowY(i), c.w, 1, kRule);
+    const int16_t lo = tick_x(kLinesTickLowMv), hi = tick_x(kLinesTickHighMv);
     for (int i = 0; i < 4; i++) {
-        draw_pill(c, 6, static_cast<int16_t>(kLnRowY(i) + 5), kLnTag[i], *kLnColor[i], 0, true);
-        v_[i].init(c, kSmall, static_cast<int16_t>(kLnBarX - 4 * kSmall.adv), static_cast<int16_t>(kLnRowY(i) + 5), 4, Align::Right, kText, kBg);
+        const int16_t y = kLnRowY(i);
+        kit::draw_chip(c, kLnChipX, static_cast<int16_t>(y + kLnChipDy), kLnTag[i], kInk, kBg, kLnChipW);
+        v_[i].init(c, kSmall, kLnValX, static_cast<int16_t>(y + kLnValDy), kLnValChars, Align::Right, kText, kBg);
         px_[i] = -1;
+        for (int16_t x : {lo, hi}) {   // the threshold columns around the bar (the bar paints its own part)
+            dash_column(c, x, i ? y : kit::kBelowBar, static_cast<int16_t>(y + kLnBarDy));
+            dash_column(c, x, static_cast<int16_t>(y + kLnBarDy + kLnBarH), static_cast<int16_t>(y + kLnRowPitch));
+        }
     }
-    gfx_text(c, kLabelFont, static_cast<int16_t>(kLnBarX + lines_tick_px(kLinesTickLowMv) - 6), 130, "0.4", kDim, kBg);
-    gfx_text(c, kLabelFont, static_cast<int16_t>(kLnBarX + lines_tick_px(kLinesTickHighMv) - 6), 130, "2.0", kDim, kBg);
-    // Verdict rows: the pills row, then Rp and MCU as a kit KvTable.
-    gfx_fill(c, 0, kVerdictY, c.w, 1, kRule);
-    static const char *const kLabels[2] = {"Rp", "MCU"};
-    kit::kv_static(c, kLnKv, kLabels, 2);
-    kit::kv_cells(c, kLnKv, pv_, 2);
+    gfx_text(c, kLabelFont, kKeyAxisX, kLnAxisTextY, "volts", kFaint, kBg);
+    gfx_text(c, kLabelFont, static_cast<int16_t>(lo - 9), kLnAxisTextY, "0.4", kDim, kBg);
+    gfx_text(c, kLabelFont, static_cast<int16_t>(hi - 9), kLnAxisTextY, "2.0", kDim, kBg);
+    static const char *const kLabels[1] = {"Rp"};
+    kit::kv_static(c, kLnKv, kLabels, 1);
+    kit::kv_cells(c, kLnKv, pv_, 1);
     painted_ = false;
     vsig_ = 0;
     foot_.invalidate();
 }
 
+// The bar: ink fill on the bg2 track; the threshold dashes show through the track, the fill covers them.
 void LinesPage::paint_bar(int i, int32_t mv, bool have) {
     const int px = have ? lines_bar_px(mv) : 0;
     if (px == px_[i]) return;
     px_[i] = px;
     const Surface &c = ctx_.content;
-    const int16_t y = static_cast<int16_t>(kLnRowY(i) + 7);
-    gfx_fill(c, kLnBarX, y, kLinesBarW, kLnBarH, kBg);
-    if (px > 0) gfx_fill(c, kLnBarX, y, static_cast<int16_t>(px), kLnBarH, *kLnColor[i]);
-    for (int32_t t : {kLinesTickLowMv, kLinesTickHighMv})   // the ticks sit over the bar
-        gfx_fill(c, static_cast<int16_t>(kLnBarX + lines_tick_px(t)), static_cast<int16_t>(kLnRowY(i) + 4), 1, 18, kDim);
+    const int16_t y = static_cast<int16_t>(kLnRowY(i) + kLnBarDy);
+    if (px > 0) gfx_fill(c, kLnBarX, y, static_cast<int16_t>(px), kLnBarH, kInk);
+    int16_t x = static_cast<int16_t>(kLnBarX + px);
+    for (int32_t t : {kLinesTickLowMv, kLinesTickHighMv}) {
+        const int16_t tx = tick_x(t);
+        if (tx < x) continue;
+        if (tx > x) gfx_fill(c, x, y, static_cast<int16_t>(tx - x), kLnBarH, kBg2);
+        for (int16_t r = 0; r < kLnBarH; r++)
+            gfx_fill(c, tx, static_cast<int16_t>(y + r), 1, 1, ((y + r) / kLnDash) % 2 == 0 ? kInk3 : kBg2);
+        x = static_cast<int16_t>(tx + 1);
+    }
+    const int16_t end = static_cast<int16_t>(kLnBarX + kLinesBarW);
+    if (x < end) gfx_fill(c, x, y, static_cast<int16_t>(end - x), kLnBarH, kBg2);
 }
 
 void LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms) {
@@ -797,35 +843,40 @@ void LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         const ai::Banner b = ai::recognise(fp, caps, now_ms);
         if (b.source == ai::Source::Pd) v.extra.put(b.line1.view());
     }
-    StrBuf<24> rp, mcu;
+    StrBuf<24> rp;
     rp_text(rp, r.has_value(), fusb302::active_cc(), r ? r->cc1_mv : 0, r ? r->cc2_mv : 0);
-    mcu_text(mcu, r && r->mcu.valid, r ? r->mcu.deci_c : 0);
     uint32_t sig = mix(mix(2166136261u, v.main.view()), v.extra.view());
     sig = sig * 31 + static_cast<uint32_t>(v.tone) + 1;
-    if (!painted_ || sig != vsig_) {   // the pills row; the Rp and MCU cells below repaint on their own char diff
+    if (!painted_ || sig != vsig_) {   // the chips row; the Rp cell below repaints on its own char diff
         vsig_ = sig;
-        const ToneStyle ts = tone_style(v.tone);
-        gfx_fill(c, 0, static_cast<int16_t>(kVerdictY + 1), c.w, 25, kBg);   // clear the row: a shorter pill must not leave the old one's tail
-        const int w = draw_pill(c, 6, static_cast<int16_t>(kVerdictY + 5), v.main.view(), ts.color, ts.tint, ts.solid);
-        if (!v.extra.view().empty())
-            draw_pill(c, static_cast<int16_t>(6 + w + 6), static_cast<int16_t>(kVerdictY + 5), v.extra.view(), kAmp, kAmpT, false);
+        const ChipStyle ts = tone_chip(v.tone);
+        const int16_t y = static_cast<int16_t>(kVerdictY + 2);
+        gfx_fill(c, 0, y, 6, kit::kChipH, kBg);
+        int16_t x = static_cast<int16_t>(6 + kit::draw_chip(c, 6, y, v.main.view(), ts.fill, ts.ink));
+        const std::string_view ex = v.extra.view();
+        if (!ex.empty()) {   // the detail: a voltage takes the volt spot, anything else the quiet bg2 chip
+            const bool volts = ex.back() == 'V';
+            gfx_fill(c, x, y, 6, kit::kChipH, kBg);
+            x = static_cast<int16_t>(x + 6 + kit::draw_chip(c, static_cast<int16_t>(x + 6), y, ex, volts ? kSpotVolt : kBg2,
+                                                            volts ? kSpotInk : kInk));
+        }
+        if (x < c.w) gfx_fill(c, x, y, static_cast<int16_t>(c.w - x), kit::kChipH, kBg);   // a shorter row must not leave the old tail
         painted_ = true;
     }
-    pv_[0].set_colors(kText, kBg);
-    pv_[1].set_colors(kDim, kBg);
+    pv_[0].set_colors(r ? kText : kFaint, kBg);
     pv_[0].draw(rp.view());
-    pv_[1].draw(mcu.view());
     draw_footer_cached(c, v.tone == Tone::Ok ? FooterTone::Ok : v.tone == Tone::Caution ? FooterTone::Caution : FooterTone::Info,
                        v.footer.view(), foot_);   // Info and Dim are neutral
 }
 
 void LinesPage::update(uint32_t now_ms) {
-    title_badge(false);
+    title_pager(2);
     const std::optional<adc::Reading> &r = ctx_.analog;
     const int32_t mv[4] = {r ? r->dp_mv : 0, r ? r->dm_mv : 0, r ? r->cc1_mv : 0, r ? r->cc2_mv : 0};
     for (int i = 0; i < 4; i++) {
         StrBuf<8> s;
-        if (r) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2); else s.put("-.--");
+        if (r) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
+        v_[i].set_colors(r && mv[i] >= kLnFaintMv ? kText : kFaint, kBg);   // a line with nothing on it reads faint
         v_[i].draw(s.view());
         paint_bar(i, mv[i], r.has_value());
     }

@@ -122,8 +122,8 @@ static void test_icon() {
     CHECK_EQ(px(5 + 8, 7 + 4), 0xFFFF);
     CHECK_EQ(px(5 + 9, 7 + 4), 0xFFFF);
     CHECK_EQ(px(5 + 12, 7 + 4), 0x0001);  // outside the box: the clear colour
-    CHECK_EQ(kIconCount, 26);
-    CHECK_EQ(static_cast<int>(Icon::Info) + 1, kIconCount);   // Info is the last icon
+    CHECK_EQ(kIconCount, 27);
+    CHECK_EQ(static_cast<int>(Icon::Meter) + 1, kIconCount);   // Meter is the last icon
 }
 
 // The fact line's tone table (Fieldbook): Info = the ground with a rule on top and ink2 text; Ok / Caution = the tint with

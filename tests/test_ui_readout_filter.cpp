@@ -42,7 +42,7 @@ struct Rig {
         g_stub.pm_online = true;
         ui.init(now);
         ui.set_rotation(0, now);
-        ui.goto_page(static_cast<uint8_t>(Page::Detail), now);   // a page with the V x A readout in the bar (Home has none)
+        ui.goto_page(static_cast<uint8_t>(Page::Tools), now);   // a page with the V x A readout in the bar (Home and the Meter faces have none)
         settle();
     }
     void settle() { for (int i = 0; i < 4; i++) tick(); }

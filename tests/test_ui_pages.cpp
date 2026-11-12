@@ -598,7 +598,7 @@ static void test_home_gauges_and_footer() {
     g_stub.pm_online = false;
     ui.tick(70400);
     CHECK_EQ(count(4, 224, kError) > 10, 1);
-    CHECK_EQ(count(0, 224, kVolt), 0);
+    CHECK_EQ(count(4, 224, kVolt), 0);   // x0..3: the idle field's colour key
     g_stub.pm_online = true;
     g_stub.pm = {};
     g_stub.caps = {};
@@ -1567,7 +1567,7 @@ static void test_home_stale() {
     ui.tick(84500);
     CHECK_EQ(ui.context().stale() ? 1 : 0, 0);
     CHECK_EQ(count(0, 0, 224, 240, kStale), 0);
-    CHECK_EQ(count(150, 1, 222, 18, kSurface) > 100, 1);
+    CHECK_EQ(count(150, 1, 222, 18, kBg2) > 100, 1);    // the NO VBUS pill
     g_stub.pm = {};
 }
 
@@ -1606,13 +1606,14 @@ static void test_detail_is_live_while_home_holds_last() {
         return h;
     };
     CHECK_EQ(count(0, 0, 224, 240, kStale), 0);                         // no frozen grey, no LAST pill
-    const uint32_t cc_before = hash(36, 96, 109, 121), dm_before = hash(148, 96, 221, 121);
-    a.cc1_mv = 3300; a.cc2_mv = 0; a.dp_mv = 600; a.dm_mv = 600;        // a charger's Rp appears: Detail follows at once
+    // Numbers: CC1 and CC2 are the left cells of rows 5 and 6 (y 170..213), D+ and D- the right cells of rows 3 and 4 (y 126..169).
+    const uint32_t cc_before = hash(4, 170, 101, 214), dm_before = hash(106, 126, 223, 170);
+    a.cc1_mv = 3300; a.cc2_mv = 0; a.dp_mv = 600; a.dm_mv = 600;        // a charger's Rp appears: Numbers follows at once
     g_stub.adc = a;
     ui.tick(83000);
     ui.tick(83200);
-    CHECK_EQ(hash(36, 96, 109, 121) != cc_before ? 1 : 0, 1);           // CC1/CC2 cell moved
-    CHECK_EQ(hash(148, 96, 221, 121) != dm_before ? 1 : 0, 1);          // D+/D- cell moved
+    CHECK_EQ(hash(4, 170, 101, 214) != cc_before ? 1 : 0, 1);           // CC1/CC2 cells moved
+    CHECK_EQ(hash(106, 126, 223, 170) != dm_before ? 1 : 0, 1);         // D+/D- cells moved
     CHECK_EQ(count(0, 0, 224, 240, kStale), 0);
     // Home keeps its snapshot: back on Home the LAST pill is still there.
     ui.goto_page(uint8_t(Page::Home), 83300);

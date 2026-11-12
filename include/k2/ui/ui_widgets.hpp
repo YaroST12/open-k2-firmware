@@ -246,6 +246,11 @@ void draw_last_pill(const Surface &s, std::string_view text);
 void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps,
                       Arrow flow = Arrow::Idle, uint8_t rotation = 0, std::string_view last_text = "LAST");
 
+// The Meter faces' pager in place of the readout: `count` 7 x 7 squares right-aligned to x 219, the current one solid ink,
+// the others a 1 px ink outline. Repaints the band rows of the right half (x 140..223), like draw_top_readout.
+constexpr int kPagerBox = 7, kPagerPitch = 11, kPagerRight = 220, kPagerY = 7;
+void draw_top_pager(const Surface &s, int count, int current);
+
 // 8 x 8 party markers of the PD match strip (the fonts have no such glyphs): 0 source (bolt),
 // 1 cable (diameter sign), 2 sink / device (rectangle).
 inline constexpr int kPartyGlyphs = 3, kPartySize = 8;

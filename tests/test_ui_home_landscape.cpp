@@ -122,21 +122,22 @@ static int count_ink(const PRect &r) { return count_not(r, kBg); }
 // The frame (2c): the 2 px rules under the hero and over the info block, the ledger / card divider and the 1 px rule
 // between the rows. Every pixel of each mapped rect must be kRule, and
 // each must keep at least one physical row / column (a 1 px line must not be squeezed away by the mapping).
+// Fieldbook: the gaps between the fields are white space (the ground) and the rule over the session block is the accent.
 static int frame_damage(Ui &ui, const char *what) {
-    struct Line { const char *name; int x, y, w, h; };
+    struct Line { const char *name; int x, y, w, h; uint16_t color; };
     const Line lines[] = {
-        {"rule1", 0, hm::kRule1Y, hm::kW, 2},
-        {"rule3", 0, hm::kRule3Y, hm::kW, 2},
-        {"vrule", hm::kVRuleX, hm::kRowY0[0], 1, hm::kRowY1[1] - hm::kRowY0[0] + 1},
-        {"rowrule", 0, hm::kRowRuleY, hm::kW, 1},
+        {"rule1", 0, hm::kRule1Y, hm::kW, 2, kBg},
+        {"rule3", 0, hm::kRule3Y, hm::kW, 2, kAccent},
+        {"vrule", hm::kVRuleX, hm::kRowY0[0], 1, hm::kRowY1[1] - hm::kRowY0[0] + 1, kBg},
+        {"rowrule", 0, hm::kRowRuleY, hm::kW, 1, kBg},
     };
     int bad = 0;
     for (const Line &l : lines) {
         const PRect r = panel_of(ui, l.x, l.y, l.w, l.h);
         const int area = (r.x1 - r.x0) * (r.y1 - r.y0);
-        const int wrong = area > 0 ? count_not(r, kRule) : 1;
+        const int wrong = area > 0 ? count_not(r, l.color) : 1;
         if (wrong) {
-            std::printf("frame damage: %s rot %d %s: %d of %d px not kRule\n", l.name, int(ui.rotation()), what, wrong, area);
+            std::printf("frame damage: %s rot %d %s: %d of %d px not the frame colour\n", l.name, int(ui.rotation()), what, wrong, area);
             bad++;
         }
     }
