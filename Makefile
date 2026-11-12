@@ -185,6 +185,21 @@ STACK_PARAMS = --param=large-stack-frame=256 --param=large-stack-frame-growth=10
 CFLAGS += $(STACK_PARAMS)
 LDFLAGS += $(STACK_PARAMS)
 
+# Size flags, measured one by one and combined on the integration tip (text 564392 B, `make gate` stack
+# numbers unchanged within 72 B; runs/size/exp_results.txt, tools/size_report.py for the per-function view):
+#   -flto-partition=one       -3180 B  ltrans in one partition: cross-partition duplicates merge, one LTO
+#                                      link process instead of parallel ones (the link is single-threaded)
+#   -fno-schedule-insns2      -1432 B  the post-RA scheduler lengthens live ranges and costs spills; on the
+#                                      in-order M4 pipeline it buys next to nothing
+#   -fno-partial-inlining      -804 B  no hot/cold function splitting (.part.N clones that -Os rarely pays back)
+# Together -5440 B (-1.0 %) with main-loop depth 4872 -> 4816. Tried and rejected: every global inline limit
+# (max-inline-insns-single/auto, inline-unit-growth, -finline-limit) and -fno-inline-small-functions grow the
+# text; -fno-inline-functions-called-once is +1.3 KB but cuts the main-loop worst case by 340 B and the fault
+# path by 150 B (the option to take if the stack budget gets tight).
+SIZE_FLAGS = -fno-schedule-insns2 -fno-partial-inlining
+CFLAGS += $(SIZE_FLAGS)
+LDFLAGS += $(SIZE_FLAGS) -flto-partition=one
+
 DOCKER_IMG = open-k2-builder:latest
 
 .PHONY: all clean flash probe reboot nav-headers docker-build docker-flash test web web-sync webhid gate smoke stack-report
