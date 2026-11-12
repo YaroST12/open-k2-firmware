@@ -122,7 +122,7 @@ public:
     remote::SniffInfo lab_sniff(uint8_t sub);
     // --- vooc-monitor (k2/vooc-detect) ---
     remote::VoocSnapshot vooc_monitor(uint8_t set);           // inline VOOC monitor: 0 off, 1 on, 2 keep; never drives
-    svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a);    // guarded no-load SuperVOOC trigger (FC op 5), remote only; usb_a = far-sink waiver
+    svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a, const svooc::Params &params);    // guarded no-load SuperVOOC trigger (FC op 5), remote only; usb_a = far-sink waiver; params = responder knobs
     void svooc_stop();
     remote::SvoocSnapshot svooc_info();
     size_t svooc_pairs(uint16_t from, std::span<svooc::PairRow> out);   // the run's command>reply pairs (FC op 5 / 3)

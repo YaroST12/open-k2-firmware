@@ -460,6 +460,11 @@ size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v) {
     w.u16(u16c(r.vbus_exit_mv)); w.u16(u16c(r.ibus_max_ma));
     w.u8(static_cast<uint8_t>(r.contract_start)); w.u8(static_cast<uint8_t>(r.contract_end));
     w.u8(static_cast<uint8_t>(r.inline_cause));
+    // 36..44: the effective responder parameters and the escape outcome
+    const svooc::Params &pm = v.params;
+    w.u8(static_cast<uint8_t>(pm.i86_first)); w.u8(static_cast<uint8_t>(pm.i86_esc)); w.u8(static_cast<uint8_t>(pm.r82));
+    w.u16(pm.vtarget_mv); w.u8(static_cast<uint8_t>(pm.esc_at_s));
+    w.u8(static_cast<uint8_t>(v.escape)); w.u16(u16c(v.escape_t_ms));
     return w.size();
 }
 

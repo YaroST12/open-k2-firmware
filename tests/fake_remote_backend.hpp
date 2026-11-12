@@ -242,8 +242,9 @@ struct Fake {
     SvoocSnapshot svooc_snap{};
     bool svooc_usb_a = false;           // the waiver flag the last start carried
     std::array<k2::svooc::PairRow, k2::svooc::kLogPairs> svooc_rows{};   // the pair list svooc_pairs serves (svooc_snap.log.n of them)
-    k2::svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a) {
-        calls++; svooc_starts++; svooc_cap = cap_s; svooc_usb_a = usb_a;
+    k2::svooc::Params svooc_params{};    // the responder parameters the last start carried (as sent: the firmware clamps)
+    k2::svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a, const k2::svooc::Params &p) {
+        calls++; svooc_starts++; svooc_cap = cap_s; svooc_usb_a = usb_a; svooc_params = p;
         svooc_snap.report.refusal = svooc_refusal;
         svooc_snap.report.usb_a = usb_a;
         if (svooc_refusal == k2::svooc::Refusal::None) svooc_snap.stage = k2::svooc::Stage::Wake;

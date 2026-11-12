@@ -27,6 +27,12 @@ def summary(stage=0, refusal=0, abort=0, accepted=False, exit_ok=False, kept=0, 
     return bytes(p)
 
 
+def ext_summary(i86_first=5, i86_esc=5, r82=0x51, vtarget=0, esc_at=0, escape=0, esc_t=0, **kw):
+    """The 45-byte summary: the base 36 bytes (cause byte included) and the responder parameters."""
+    return summary(cause=0, **kw) + bytes([i86_first, i86_esc, r82]) + vtarget.to_bytes(2, "little") + bytes([esc_at, escape]) + \
+        esc_t.to_bytes(2, "little")
+
+
 def log_page(rows, first):
     """What the firmware answers to [5, 3, first]: kept(2) from(2) n(1) and up to 7 rows of cmd word t_ms vbus_mv."""
     page = rows[first:first + 7]
@@ -117,6 +123,58 @@ class SvoocTrigger(unittest.TestCase):
             kr.cmd_fc_svooc(link, args("svooc-trigger", "--usb-a"), sleep=lambda s: None)
         self.assertEqual(link.sent, [])
 
+    def test_defaults_send_the_four_byte_start(self):
+        link = Link([summary(stage=6)])
+        kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm"), sleep=lambda s: None)
+        self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 1, 1, 0])))
+
+    def test_parameters_send_the_ten_byte_start(self):
+        link = Link([ext_summary(stage=6, i86_first=0x0F, i86_esc=0x23, vtarget=9000, esc_at=4, escape=3, esc_t=4012)])
+        a = args("svooc-trigger", "--confirm", "--cap", "9", "--i86-first", "0xF", "--i86", "35",
+                 "--vtarget", "9000", "--i86-at", "4")
+        r = kr.cmd_fc_svooc(link, a, sleep=lambda s: None)
+        # confirm, cap 9, i86_first 0x0F, i86_esc 0x23, r82 default 0x51, vtarget 9000 = 0x2328 little endian, escape at 4 s
+        self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 1, 1, 9, 0x0F, 0x23, 0x51, 0x28, 0x23, 4])))
+        s = r["svooc"]
+        self.assertEqual(s["params"], {"i86_first": "0x00F", "i86_esc": "0x023", "r82": "0x051", "vtarget_mv": 9000,
+                                       "esc_at_s": 4})
+        self.assertEqual((s["escape"], s["escape_t_ms"]), ("got 86", 4012))
+        text = kr.render("fc", r)
+        self.assertIn("closed loop to 9000 mV", text)
+        self.assertIn("escape at 4 s (0x07F at 4012 ms), then 0x86 answered 0x023: got 86", text)
+
+    def test_single_parameter_fills_the_rest_with_defaults(self):
+        link = Link([summary(stage=6)])
+        kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--r82", "0x40"), sleep=lambda s: None)
+        self.assertEqual(link.sent[0][1], bytes([5, 1, 1, 0, 5, 5, 0x40, 0, 0, 0]))
+
+    def test_parameter_ranges_and_conflicts(self):
+        for bad in (("--i86-first", "0"), ("--i86-first", "36"), ("--i86", "0x24"), ("--r82", "0x7F"),
+                    ("--vtarget", "11001"), ("--i86-at", "0"), ("--i86-at", "21")):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                args("svooc-trigger", "--confirm", *bad)
+        for argv in (("--i86", "9"), ("--vtarget", "9000", "--r82", "0x40")):   # nothing is sent
+            link = Link([summary()])
+            with self.subTest(argv=argv), self.assertRaises(kr.FcRefused):
+                kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", *argv), sleep=lambda s: None)
+            self.assertEqual(link.sent, [])
+
+    def test_older_summary_has_no_parameters(self):
+        s = kr.decode_svooc_summary(summary(stage=6))
+        self.assertNotIn("params", s)
+        s["pairs"], s["pairs_kept"] = [], 0
+        self.assertNotIn("responder:", kr.render_svooc(s))
+
+    def test_log_header_shows_the_parameters_and_escape(self):
+        rows = [(0x82, 0x051, 100, 9000), (0x82, 0x07F, 143, 9100), (0x86, 0x005, 186, 9200)]
+        link = Link([ext_summary(stage=6, r82=0x30, esc_at=2, escape=4, esc_t=143)], rows=rows)
+        r = kr.cmd_fc_svooc(link, args("svooc-log"))
+        self.assertEqual(r["svooc_log"]["escape"], "no 86")
+        text = kr.render("fc", r)
+        self.assertIn("constant 0x030", text)
+        self.assertIn(": no 86", text)
+        self.assertIn("    1    143 ms  9.10 V  82>07F", text)
+
     def test_waiver_refused_with_pd_names_the_reason(self):
         link = Link([summary()], start_status=kr.STATUS_BUSY, start_payload=summary(refusal=11))
         with self.assertRaises(kr.FcRefused) as cm:
@@ -149,7 +207,7 @@ class SvoocTrigger(unittest.TestCase):
         log = r["svooc_log"]
         self.assertEqual((log["kept"], log["start"], len(log["pairs"])), (100, 0, 100))
         self.assertEqual(log["pairs"][99], {"i": 99, "t_ms": 2475, "vbus_mv": 5099, "cmd": "0x63", "word": "0x063"})
-        self.assertEqual(len(link.sent), 15)   # ceil(100 / 7) pages
+        self.assertEqual(len(link.sent), 16)   # ceil(100 / 7) pages, then one status read for the header
         self.assertEqual(link.sent[0][1], bytes([5, 3, 0, 0]))
         self.assertEqual(link.sent[1][1], bytes([5, 3, 7, 0]))
         self.assertIn("   99   2475 ms  5.10 V  63>063", kr.render("fc", r))
@@ -163,7 +221,7 @@ class SvoocTrigger(unittest.TestCase):
         link = Link([summary()], rows=rows[:5])
         r = kr.cmd_fc_svooc(link, args("svooc-log", "--start", "9"))   # past the end: empty, not an error
         self.assertEqual((r["svooc_log"]["kept"], r["svooc_log"]["pairs"]), (5, []))
-        self.assertEqual(len(link.sent), 1)
+        self.assertEqual(len(link.sent), 2)   # the page, then the status for the header
 
     def test_exit_still_high_is_reported(self):
         link = Link([summary(stage=6, abort=10, vmax=9000, vexit=9000, exit_ok=False)])

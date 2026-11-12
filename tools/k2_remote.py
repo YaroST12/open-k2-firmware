@@ -2481,6 +2481,13 @@ SVOOC_STATUS, SVOOC_START, SVOOC_STOP, SVOOC_LOG = 0, 1, 2, 3
 SVOOC_USB_A = 4                 # start flags bit 2: waive the far-sink refusal (legacy A port, no PD anywhere)
 SVOOC_SUMMARY_BYTES = 35        # the base layout; a 36th byte (inline cause) is read when the firmware sends it
 SVOOC_SUMMARY_CAUSE = 35
+SVOOC_SUMMARY_EXT = 36          # 36..44, read when the firmware sends them: i86_first i86_esc r82 vtarget(2) esc_at_s escape esc_t(2)
+SVOOC_SUMMARY_EXT_BYTES = 45
+SVOOC_START_EXT = 10            # the start request with the responder parameters (op 5 / 1 / flags / cap / 6 bytes)
+SVOOC_I86_DEFAULT, SVOOC_I86_MIN, SVOOC_I86_MAX = 0x005, 1, 0x023   # the 0x86 answer, a count of about 100 mA
+SVOOC_R82_DEFAULT, SVOOC_R82_MAX = 0x051, 0x07E                    # the steady 0x82 answer (0x07F is the escape word)
+SVOOC_VTARGET_MAX_MV = 11000
+SVOOC_ESCAPES = ["off", "armed", "sent", "got 86", "no 86"]
 SVOOC_LOG_HEADER = 5            # kept(2) from(2) n(1), then n rows of cmd(1) word(2) t_ms(2) vbus_mv(2)
 SVOOC_LOG_ROW = 7
 SVOOC_SHOWN_PAIRS = 40          # svooc-trigger / svooc-status print the first pairs; `svooc-log` reads the whole list
@@ -2508,6 +2515,35 @@ def _svooc_cap(text):
     return n
 
 
+def _svooc_ranged(lo, hi, what):
+    """argparse type: an integer (decimal or 0x hex) in lo..hi."""
+    def parse(text):
+        try:
+            n = int(text, 0)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+        if not lo <= n <= hi:
+            raise argparse.ArgumentTypeError(f"{what} {n} is outside {lo}..{hi}")
+        return n
+    return parse
+
+
+def svooc_start_payload(a):
+    """The start request: the 4-byte original when every responder parameter is at its default (an older firmware keeps
+    working), else the 10-byte extended one."""
+    flags = FC_CONFIRM | (SVOOC_USB_A if a.usb_a else 0)
+    first = getattr(a, "i86_first", None)
+    esc = getattr(a, "i86", None)
+    r82, vtarget, at = getattr(a, "r82", None), getattr(a, "vtarget", None), getattr(a, "i86_at", None)
+    if all(v is None for v in (first, esc, r82, vtarget, at)):
+        return bytes([FC_OP_SVOOC, SVOOC_START, flags, a.cap])
+    first = SVOOC_I86_DEFAULT if first is None else first
+    esc = SVOOC_I86_DEFAULT if esc is None else esc
+    r82 = SVOOC_R82_DEFAULT if r82 is None else r82
+    vtarget, at = vtarget or 0, at or 0
+    return bytes([FC_OP_SVOOC, SVOOC_START, flags, a.cap, first, esc, r82, vtarget & 255, vtarget >> 8, at])
+
+
 def decode_svooc_summary(p):
     _need(p, SVOOC_SUMMARY_BYTES, "svooc")
     u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
@@ -2518,7 +2554,13 @@ def decode_svooc_summary(p):
         refusal += f" (cause: {cause})"
     if cause != "none" and p[2] == SVOOC_INLINE_ABORT:
         abort += f" (cause: {cause})"
-    return {"stage": name(SVOOC_STAGES, p[0]), "refusal": refusal, "abort": abort, "inline_cause": cause,
+    ext = {}
+    if len(p) >= SVOOC_SUMMARY_EXT_BYTES:   # a firmware that reports its responder parameters and the escape outcome
+        o = SVOOC_SUMMARY_EXT
+        ext = {"params": {"i86_first": f"0x{p[o]:03X}", "i86_esc": f"0x{p[o + 1]:03X}", "r82": f"0x{p[o + 2]:03X}",
+                          "vtarget_mv": u16(o + 3), "esc_at_s": p[o + 5]},
+               "escape": name(SVOOC_ESCAPES, p[o + 6]), "escape_t_ms": u16(o + 7)}
+    return {**ext, "stage": name(SVOOC_STAGES, p[0]), "refusal": refusal, "abort": abort, "inline_cause": cause,
             "wakes": p[3], "accepted": bool(p[4] & 1), "exit_checked": bool(p[4] & 2), "exit_ok": bool(p[4] & 4),
             "driving": bool(p[4] & 8), "usb_a_waiver": bool(p[4] & 16), "phase": name(SVOOC_PHASES, p[5]), "off_run": p[6],
             "last_cmd": f"0x{p[7]:02X}",
@@ -2567,15 +2609,24 @@ def cmd_fc_svooc(link, a, sleep=time.sleep, poll_s=0.25):
         return {"svooc": _svooc_read(link)}
     if a.fc_cmd == "svooc-log":
         kept, pairs = svooc_log(link, a.start, a.count)
-        return {"svooc_log": {"kept": kept, "start": a.start, "pairs": pairs}}
+        head = decode_svooc_summary(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 0])).payload)   # for the header
+        out = {"kept": kept, "start": a.start, "pairs": pairs}
+        for k in ("params", "escape", "escape_t_ms"):
+            if k in head:
+                out[k] = head[k]
+        return {"svooc_log": out}
     if a.fc_cmd == "svooc-stop":
         link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STOP]))
         return {"svooc": _svooc_read(link)}
     if not a.confirm:
         raise FcRefused("the SuperVOOC trigger answers the adapter on D- and the adapter may raise VBUS (up to the 12 V "
                         "guard): add --confirm (SUPERVOOC adapter alone, NO load, nothing else on the K2)")
+    if getattr(a, "i86", None) is not None and not getattr(a, "i86_at", None):
+        raise FcRefused("--i86 answers the 0x86 that follows the escape: add --i86-at S (--i86-first sets the post-handshake answer)")
+    if getattr(a, "vtarget", None) and getattr(a, "r82", None) is not None:
+        raise FcRefused("--vtarget (closed loop) replaces --r82 (constant): give one of them")
     try:
-        link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_START, FC_CONFIRM | (SVOOC_USB_A if a.usb_a else 0), a.cap]))
+        link.call(CMD_FC, svooc_start_payload(a))
     except RemoteError as e:
         if e.status == STATUS_BUSY and len(e.payload) >= SVOOC_SUMMARY_BYTES:
             raise FcRefused(f"svooc trigger refused: {decode_svooc_summary(e.payload)['refusal']}") from e
@@ -2596,6 +2647,20 @@ def cmd_fc_svooc(link, a, sleep=time.sleep, poll_s=0.25):
     return {"svooc": _svooc_read(link)}
 
 
+def _svooc_params_lines(s):
+    """The responder's operator parameters and the escape outcome, when the firmware reported them."""
+    pm = s.get("params")
+    if not pm:
+        return []
+    r82 = (f"closed loop to {pm['vtarget_mv']} mV (0x82 word from the measured VBUS)" if pm["vtarget_mv"]
+           else f"constant {pm['r82']}")
+    lines = [f"  responder: 0x86 answer {pm['i86_first']} after the handshake, 0x82 answer {r82}"]
+    if pm["esc_at_s"]:
+        when = f" at {s['escape_t_ms']} ms" if s["escape_t_ms"] else ""
+        lines.append(f"  escape at {pm['esc_at_s']} s (0x07F{when}), then 0x86 answered {pm['i86_esc']}: {s['escape']}")
+    return lines
+
+
 def render_svooc(s):
     lines = [f"svooc trigger {s['stage']}: " + (f"ended by {s['abort']}" if s["abort"] != "none" else "running")
              + f" after {s['elapsed_ms'] / 1000:.1f} s (cap {s['cap_ms'] / 1000:.0f} s), wakes {s['wakes']}"]
@@ -2606,6 +2671,7 @@ def render_svooc(s):
     lines.append(f"  VBUS start {s['vbus_start_mv']} mV, max {s['vbus_max_mv']} mV, exit {exit_txt}; "
                  f"max |I| {s['ibus_max_ma']} mA")
     lines.append(f"  PD contract: start {s['contract_start']}, end {s['contract_end']}")
+    lines += _svooc_params_lines(s)
     if s["usb_a_waiver"]:
         lines.append("  far-sink / inline check waived (USB-A): the operator's waiver, no PD anywhere at the start")
     if s["inline_cause"] != "none":
@@ -2621,6 +2687,7 @@ def render_svooc(s):
 def render_svooc_log(r):
     lines = [f"svooc pairs: {len(r['pairs'])} shown of {r['kept']} kept (from {r['start']}); t = ms after the wake, "
              "VBUS when the pair closed, cmd>reply, --- = not answered"]
+    lines += _svooc_params_lines(r)
     for p in r["pairs"]:
         vbus = f"{p['vbus_mv'] / 1000:5.2f} V" if p["vbus_mv"] else "   -   "
         lines.append(f"  {p['i']:4d} {p['t_ms']:6d} ms {vbus}  {p['cmd'][2:]}>{p['word'][2:] if p['word'] else '---'}")
@@ -4278,6 +4345,21 @@ def build_parser():
                       "for an A-to-C cable into the K2's bottom port; refused if any PD contract exists. Every other guard "
                       "stays (|I| 50 mA, VBUS 4.5-5.5 V at start, 12 V ceiling, off-script, host loss, cap). The report says "
                       "'far-sink check waived (USB-A)'")
+    sfsv.add_argument("--i86-first", dest="i86_first", type=_svooc_ranged(SVOOC_I86_MIN, SVOOC_I86_MAX, "0x86 answer"),
+                      default=None, metavar="N", help="the answer to the 0x86 poll after the handshake (a count of about "
+                      f"100 mA), {SVOOC_I86_MIN}..0x{SVOOC_I86_MAX:X}; default 0x{SVOOC_I86_DEFAULT:03X}")
+    sfsv.add_argument("--i86", dest="i86", type=_svooc_ranged(SVOOC_I86_MIN, SVOOC_I86_MAX, "0x86 answer"), default=None,
+                      metavar="N", help="the answer to the 0x86 the charger sends after the escape (needs --i86-at); "
+                      f"{SVOOC_I86_MIN}..0x{SVOOC_I86_MAX:X}; default 0x{SVOOC_I86_DEFAULT:03X}")
+    sfsv.add_argument("--r82", dest="r82", type=_svooc_ranged(0, SVOOC_R82_MAX, "0x82 answer"), default=None, metavar="N",
+                      help=f"constant answer to every 0x82 poll, 0..0x{SVOOC_R82_MAX:X} (default 0x{SVOOC_R82_DEFAULT:03X}); "
+                      "VBUS settles near 20.35 mV * N + 6.9 V at 3.6 A")
+    sfsv.add_argument("--vtarget", dest="vtarget", type=_svooc_ranged(0, SVOOC_VTARGET_MAX_MV, "VBUS target"), default=None,
+                      metavar="MV", help="closed loop: compute each 0x82 answer from the measured VBUS so it settles at "
+                      f"MV (at most {SVOOC_VTARGET_MAX_MV}); replaces --r82")
+    sfsv.add_argument("--i86-at", dest="i86_at", type=_svooc_ranged(1, SVOOC_CAP_MAX_S, "escape time"), default=None,
+                      metavar="S", help="after S seconds answer one 0x82 poll with 0x07F so the charger sends a fresh "
+                      "0x86, answer it with --i86 and report whether it did")
     sfs.add_parser("svooc-status", help="the SuperVOOC trigger's last report and the first logged command/reply pairs")
     sfl = sfs.add_parser("svooc-log", help="the run's full command>reply list (up to 512 pairs of the latest wake), paged "
                          "from the device: index, ms since the wake, VBUS, command and reply words (--json for tools)")

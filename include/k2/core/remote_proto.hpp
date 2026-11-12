@@ -360,15 +360,26 @@
 //                                                            other bits BadArg; cap_s 0 = 20 s, 1..20 (more: BadArg);
 //                                                            a refused start answers Busy with the summary (its
 //                                                            refusal byte says why); an accepted one arms the lease;
+//                                      [5, 1, flags, cap_s, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s]
+//                                                            the same start with the responder's operator parameters
+//                                                            (svooc_script.hpp Params; the 4-byte request is this one
+//                                                            with i86 5 / 5, r82 0x51, vtarget 0, esc_at 0). Any other
+//                                                            length: BadLength. Values are clamped by the firmware, not
+//                                                            refused: i86 1..0x23, r82 0..0x7E, vtarget_mv 0 (off) or
+//                                                            at most 11000, esc_at_s at most 20 (0 = no escape);
 //                                      [5, 2]                stop (reason "stopped"), then the summary;
 //                                      [5, 3, from_lo, from_hi]  the run's command>reply pairs from index `from`.
-//                                      Summary (36 bytes): stage refusal abort tries flags(bit0 accepted, bit1 exit
+//                                      Summary (45 bytes; the first 36 are the original summary): stage refusal abort tries flags(bit0 accepted, bit1 exit
 //                                      checked, bit2 exit ok, bit3 D- driven now, bit4 USB-A waiver in use) phase
 //                                      off_run last_cmd (u8 each) commands replies missed cut partials pairs_total
 //                                      (u16 each) pairs_kept(1, saturates at 255: the log reply has the real count)
 //                                      cap_ms elapsed_ms vbus_start_mv vbus_max_mv vbus_exit_mv ibus_max_ma (u16 each),
 //                                      contract_start contract_end (u8 each, svooc::Contract), inline_cause (u8,
 //                                      pd::InlineCause behind a refusal "inline mode" or an abort "sink appeared").
+//                                      Appended (36..44): i86_first(1) i86_esc(1) r82(1) vtarget_mv(2) esc_at_s(1), the
+//                                      effective (clamped) responder parameters, then escape(1, svooc::Escape: 0 off,
+//                                      1 armed, 2 sent, 3 adapter sent 0x86 next, 4 it did not) and escape_t_ms(2, when
+//                                      the 0x07F went out, ms since the wake).
 //                                      Log reply: kept(2) from(2) n(1) { cmd(1) word(2) t_ms(2) vbus_mv(2) } x n, at
 //                                      most 7 rows per page; kept is the pair count of the latest wake (up to 512);
 //                                      word 0xFFFF = not answered; t_ms = the command's start, ms since that wake;
@@ -572,7 +583,9 @@ constexpr uint8_t kSvoocCapMaxS = svooc::kCapMs / 1000;   // 20
 constexpr size_t kSvoocRowsPerPage = 7;
 constexpr size_t kSvoocRowBytes = 7;
 constexpr size_t kSvoocLogHeader = 5;
-constexpr size_t kSvoocSummaryBytes = 36;
+constexpr size_t kSvoocSummaryBase = 36;      // the summary's original part
+constexpr size_t kSvoocSummaryBytes = 45;     // base + the operator parameters and the escape outcome (9 bytes)
+constexpr size_t kSvoocStartExtBytes = 10;    // the extended start request, op 5 / 1 with the responder parameters
 static_assert(kSvoocSummaryBytes <= kMaxRspPayload && kSvoocLogHeader + kSvoocRowBytes * kSvoocRowsPerPage <= kMaxRspPayload);
 static_assert(svooc::kLogPairs <= 0xFFFF);
 struct SvoocSnapshot {
@@ -582,6 +595,9 @@ struct SvoocSnapshot {
     uint8_t off_run = 0;
     bool driving = false;
     svooc::Log log{};
+    svooc::Params params{};                         // the effective (clamped) responder parameters
+    svooc::Escape escape = svooc::Escape::Off;
+    uint32_t escape_t_ms = 0;
 };
 // --- end svooc-trigger ---
 
@@ -1245,7 +1261,7 @@ concept Backend = requires(B &b, uint8_t u8, uint16_t u16, bool on) {
     { b.fc_cmd(u8, u8, u16, u8) } -> std::same_as<Status>;   // op, proto, mV, flags (kFcConfirm | kFcAllowInline)
     { b.fc_info() } -> std::same_as<FcInfo>;
     { b.vooc_monitor(u8) } -> std::same_as<VoocSnapshot>;   // vooc-monitor: 0 off, 1 on, 2 keep; then the summary
-    { b.svooc_start(u8, on) } -> std::same_as<svooc::Refusal>;   // svooc-trigger: cap seconds (0 = 20), USB-A waiver; the confirm is checked first
+    { b.svooc_start(u8, on, std::declval<const svooc::Params &>()) } -> std::same_as<svooc::Refusal>;   // svooc-trigger: cap seconds (0 = 20), USB-A waiver, responder parameters (unclamped); the confirm is checked first
     { b.svooc_stop() } -> std::same_as<void>;
     { b.svooc_info() } -> std::same_as<SvoocSnapshot>;
     { b.svooc_pairs(u16, std::declval<std::span<svooc::PairRow>>()) } -> std::same_as<size_t>;   // pair rows from an index; returns the count written
@@ -1713,10 +1729,16 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
                 if (p[2] != 0) return reply(Status::BadArg);
                 return reply_n(encode_svooc(buf, backend.svooc_info()));
             case kSvoocStart: {
-                if (p.size() != 4) return reply(Status::BadLength);
+                // 4 bytes: the original request (every operator parameter at its default); 10: the extended one.
+                if (p.size() != 4 && p.size() != kSvoocStartExtBytes) return reply(Status::BadLength);
                 if ((p[2] & ~kSvoocStartMask) || p[3] > kSvoocCapMaxS) return reply(Status::BadArg);
                 if (!(p[2] & kFcConfirm)) return reply(Status::NeedConfirm);
-                const svooc::Refusal r = backend.svooc_start(p[3], (p[2] & kSvoocUsbA) != 0);
+                svooc::Params sp;
+                if (p.size() == kSvoocStartExtBytes) {
+                    sp.i86_first = p[4]; sp.i86_esc = p[5]; sp.r82 = p[6];
+                    sp.vtarget_mv = static_cast<uint16_t>(p[7] | (p[8] << 8)); sp.esc_at_s = p[9];
+                }
+                const svooc::Refusal r = backend.svooc_start(p[3], (p[2] & kSvoocUsbA) != 0, sp);
                 const size_t n = encode_svooc(buf, backend.svooc_info());
                 if (r != svooc::Refusal::None) return reply(Status::Busy, std::span<const uint8_t>(buf.data(), n));
                 backend.lease_arm();   // the adapter may raise VBUS: the dead-man lease holds from now

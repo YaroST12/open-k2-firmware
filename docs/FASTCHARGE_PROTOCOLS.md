@@ -256,7 +256,8 @@ Approved by the operator on 2026-11-12 under the guards below. The K2 stands in 
 answers each command on D- with the word a OnePlus 15 sent, and lets the adapter raise VBUS while nothing draws
 current. Remote only, no UI entry:
 
-    python3 tools/k2_remote.py fc svooc-trigger --confirm [--cap SECONDS] [--usb-a]   # polls until the run ends, Ctrl-C = stop
+    python3 tools/k2_remote.py fc svooc-trigger --confirm [--cap SECONDS] [--usb-a] [--i86-first N] [--r82 N | --vtarget MV]
+                                                [--i86-at S [--i86 N]]   # polls until the run ends, Ctrl-C = stop
     python3 tools/k2_remote.py fc svooc-status                             # the last report and the first 40 pairs
     python3 tools/k2_remote.py [--json] fc svooc-log [--start N] [--count N]   # the whole command>reply list
     python3 tools/k2_remote.py fc svooc-stop
@@ -289,6 +290,35 @@ current. Remote only, no UI entry:
   `{"svooc_log": {"kept", "start", "pairs": [{"i", "t_ms", "vbus_mv", "cmd", "word"}]}}`. `svooc-trigger` and
   `svooc-status` print the first 40 pairs of it.
 
+- Operator parameters of the responder (`svooc::Params` in `svooc_script.hpp`; none of them touches a guard, the 50 mA,
+  12 V, cap, exit watch and waivers stay as they are). Values are clamped, not refused, by the firmware; the report,
+  `svooc-status`, the `svooc-log` header and the `[SVOOC] start` log line show the effective ones.
+  - `--i86-first N` (0x001..0x023, default 0x005): the answer to every 0x86 after the handshake. The 0x86 reply is about
+    100 mA per count (hardware, inferred), so 0x005 asks for about 0.5 A.
+  - `--r82 N` (0x000..0x07E, default 0x051): a constant answer to every 0x82 poll. At a steady 3.6 A the charger's VBUS
+    followed `VBUS_mV = 20.35 * N + 6918` (fit of the notes, inferred).
+  - `--vtarget MV` (at most 11000 mV; 0 = off, replaces `--r82`): closed loop. At every 0x82 poll the reply is computed
+    from the latest measured VBUS, `reply = n(VBUS) + k`, clamped to 0..0x07E, with `n(v) = round((v - 6918) / 20.35)`
+    (the fit above, a phone's own word at 3.6 A) and `k = max(0, 0x07E - n(target))`. The word never reads below the
+    phone's and reaches the top of the scale (0x07E, "battery high") exactly when VBUS reaches the target; a target
+    above 9482 mV, which the scale cannot say, gives the phone's own word. The pair log keeps the VBUS of every pair, so
+    the reply per pair and the reading it came from can be compared. With no VBUS reading yet the constant word goes
+    out. An inferred rule, not a known adapter behaviour.
+  - `--i86-at S [--i86 N]` (S 1..20 s after the wake): the first 0x82 poll at or after S answers 0x07F (the escape word:
+    the charger then sends a fresh 0x86 instead of the next 0x82); that 0x86 is answered with N (default 0x005, range as
+    above); every later 0x86 too. The outcome is `armed` (not reached), `sent`, `got 86` (the charger's next command
+    was 0x86) or `no 86`, with the time of the 0x07F in ms since the wake.
+  - Remote protocol (append-only, length-gated): the start request is `[5, 1, flags, cap]` (every parameter at its
+    default) or ten bytes `[5, 1, flags, cap, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s]`; any other
+    length is BadLength. The summary grew from 36 to 45 bytes (36..44: the effective i86_first, i86_esc, r82, vtarget
+    u16, esc_at_s, the escape state and its time u16), so a decoder takes the base from a 36-byte payload and the rest
+    when 45 arrive (`tools/k2_remote.py` does).
+- Decode errors on the USB-C run 3 (0x98 read as 0x9C, 0x8E as 0x82; 2026-11-12): not reproducible on the host. Every
+  captured session replays clean through the wire, and both misreads are a single D- level at one bit position (0x98 vs
+  0x9C differ in bit 2, 0x8E vs 0x82 in bits 2 and 3), so a wrong D- level at the pad is the likely cause (the pin
+  floating after the reply, a weak or slow charger drive on the USB-C path), not the framing. Unproven until the
+  D+/D- edges of a faulty run are read back with `lab sniff` and `tools/vooc_edges.py`; no wire change was made.
+
 Three pure parts (host-tested) and one glue file:
 
 - Responder (`include/k2/fastcharge/svooc_script.hpp`). Replies keyed by (command, occurrence), replayed from the
@@ -296,8 +326,9 @@ Three pure parts (host-tested) and one glue file:
   fixtures; the init script is identical in all four). Ident 0xA8 > 0x00D (up to 3 times), then
   98>073 98>023 9E>010 80>010 94>010 98>010 8A>028 98>010 8E>010 9A>030 82>074 82>00B 84>071 84>031 86>06B 86>03A
   88>05D 88>042 8A>048 8A>052 8C>046 8C>066 88>04D (accepted). After that (inferred from the accepted sessions, meaning
-  unknown): 94 silent, 84 > 010 seven times then 030 once, 86 > 023 / 00F alternately, 82 > 0x051 every poll (one fixed
-  word, the lowest of the USB-C session; the phone's word rose slowly). Anything else is off-script and answered
+  unknown): 94 silent, 84 > 010 seven times then 030 once, 86 > 0x005 (operator parameter), 82 > 0x051 every poll (a
+  default of the operator parameters below, the lowest word of the USB-C session; the phone's word rose slowly; the
+  earlier fixed 86 > 023 / 00F alternation is gone). Anything else is off-script and answered
   silent; the third off-script command in a row stops the responder. `tests/test_svooc_script.cpp` feeds every
   capture's commands through it and matches the phone's words.
 - Bit layer (`include/k2/fastcharge/svooc_wire.hpp`). Eats the dpsniff edge words. A command frame is 9 D+ low pulses;

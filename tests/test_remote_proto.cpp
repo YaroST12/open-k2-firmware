@@ -1169,23 +1169,52 @@ static void test_fc_svooc_trigger() {
     // Refused for the RAM: Busy, the summary carries the reason, no lease.
     f.svooc_refusal = k2::svooc::Refusal::NoRam;
     CHECK_EQ(run(f, request(0x32, 8, {5, 1, 1, 0}), r), 1);
-    check_header(r, 0x32, 8, Status::Busy, 36);
+    check_header(r, 0x32, 8, Status::Busy, 45);
     CHECK_EQ(r[kRspHeader + 1], static_cast<uint8_t>(k2::svooc::Refusal::NoRam));
     CHECK_EQ(f.lease_arms, 0);
     // Accepted with a 12 s cap: Ok, the lease armed once.
     f.svooc_refusal = k2::svooc::Refusal::None;
     CHECK_EQ(run(f, request(0x32, 9, {5, 1, 1, 12}), r), 1);
-    check_header(r, 0x32, 9, Status::Ok, 36);
+    check_header(r, 0x32, 9, Status::Ok, 45);
     CHECK_EQ(f.svooc_cap, 12);
     CHECK(!f.svooc_usb_a);
+    // The 4-byte request is the old one: every operator parameter at its default (0x86 target 0x005, 0x82 word 0x051, no
+    // closed loop, no escape).
+    CHECK_EQ(f.svooc_params.i86_first, 0x005);
+    CHECK_EQ(f.svooc_params.i86_esc, 0x005);
+    CHECK_EQ(f.svooc_params.r82, 0x051);
+    CHECK_EQ(f.svooc_params.vtarget_mv, 0);
+    CHECK_EQ(f.svooc_params.esc_at_s, 0);
     CHECK_EQ(f.lease_arms, 1);
     CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(k2::svooc::Stage::Wake));
     // The USB-A waiver rides the start flags (bit 2) beside the confirm and reaches the backend.
     CHECK_EQ(run(f, request(0x32, 43, {5, 1, 5, 0}), r), 1);
-    check_header(r, 0x32, 43, Status::Ok, 36);
+    check_header(r, 0x32, 43, Status::Ok, 45);
     CHECK(f.svooc_usb_a);
     CHECK_EQ(r[kRspHeader + 4] & 0x10, 0x10);                         // summary flags bit 4: waiver in use
     f.svooc_snap.report.usb_a = false; f.svooc_usb_a = false;
+    // The extended start [5, 1, flags, cap_s, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s] (10 bytes) hands
+    // the parameters to the backend as sent (the firmware clamps); the lengths in between are BadLength.
+    CHECK_EQ(run(f, request(0x32, 47, {5, 1, 1, 9, 0x0F, 0x23, 0x60, 0xF8, 0x2A, 4}), r), 1);   // vtarget 0x2AF8 = 11000
+    check_header(r, 0x32, 47, Status::Ok, 45);
+    CHECK_EQ(f.svooc_cap, 9);
+    CHECK_EQ(f.svooc_params.i86_first, 0x00F);
+    CHECK_EQ(f.svooc_params.i86_esc, 0x023);
+    CHECK_EQ(f.svooc_params.r82, 0x060);
+    CHECK_EQ(f.svooc_params.vtarget_mv, 11000);
+    CHECK_EQ(f.svooc_params.esc_at_s, 4);
+    CHECK_EQ(f.lease_arms, 3);
+    CHECK_EQ(run(f, request(0x32, 48, {5, 1, 1, 0, 5}), r), 1);                             // 5 bytes
+    check_header(r, 0x32, 48, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 49, {5, 1, 1, 0, 5, 5, 0x51, 0, 0}), r), 1);              // 9 bytes: no esc_at_s
+    check_header(r, 0x32, 49, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 51, {5, 1, 1, 0, 5, 5, 0x51, 0, 0, 0, 0}), r), 1);        // 11 bytes
+    check_header(r, 0x32, 51, Status::BadLength, 0);
+    CHECK_EQ(run(f, request(0x32, 50, {5, 1, 1, 21, 5, 5, 0x51, 0, 0, 0}), r), 1);          // the cap check still holds
+    check_header(r, 0x32, 50, Status::BadArg, 0);
+    CHECK_EQ(f.svooc_starts, 4);
+    f.lease_arms = 2;
+    f.svooc_params = {};
     // The summary in the documented order.
     k2::svooc::Report &rep = f.svooc_snap.report;
     f.svooc_snap.stage = k2::svooc::Stage::Exit;
@@ -1201,11 +1230,22 @@ static void test_fc_svooc_trigger() {
     for (unsigned i = 0; i < 18; i++) f.svooc_rows[i] = {static_cast<uint8_t>(0x80 + i), static_cast<uint16_t>(0x100 + i),
                                                          static_cast<uint16_t>(500 + 25 * i), static_cast<uint16_t>(5000 + i)};
     CHECK_EQ(run(f, request(0x32, 10, {5, 0, 0}), r), 1);
-    check_header(r, 0x32, 10, Status::Ok, 36);
+    check_header(r, 0x32, 10, Status::Ok, 45);
     check_bytes(r, kRspHeader, {static_cast<uint8_t>(k2::svooc::Stage::Exit), 0, static_cast<uint8_t>(k2::svooc::Abort::Overvoltage),
                                 1, 0x0B, static_cast<uint8_t>(k2::svooc::Phase::Ramp), 1, 0x82,
                                 30, 0, 29, 0, 1, 0, 0, 0, 2, 0, 31, 0, 18,
-                                0x20, 0x4E, 0x80, 0x0D, 0xEC, 0x13, 0xE1, 0x2E, 0x28, 0x23, 7, 0, 1, 2, 5});
+                                0x20, 0x4E, 0x80, 0x0D, 0xEC, 0x13, 0xE1, 0x2E, 0x28, 0x23, 7, 0, 1, 2, 5,
+                                // appended (36..44): the effective parameters i86_first i86_esc r82 vtarget(2) esc_at_s,
+                                // the escape state, when it was sent (u16): defaults and "off" here
+                                0x05, 0x05, 0x51, 0, 0, 0, 0, 0, 0});
+    // Parameters and escape outcome in the appended bytes.
+    f.svooc_snap.params.i86_first = 0x00F; f.svooc_snap.params.i86_esc = 0x023; f.svooc_snap.params.r82 = 0x060;
+    f.svooc_snap.params.vtarget_mv = 9000; f.svooc_snap.params.esc_at_s = 3;
+    f.svooc_snap.escape = k2::svooc::Escape::Got86; f.svooc_snap.escape_t_ms = 3044;
+    CHECK_EQ(run(f, request(0x32, 52, {5, 0, 0}), r), 1);
+    check_header(r, 0x32, 52, Status::Ok, 45);
+    check_bytes(r, kRspHeader + 36, {0x0F, 0x23, 0x60, 0x28, 0x23, 3, 3, 0xE4, 0x0B});
+    f.svooc_snap.params = {}; f.svooc_snap.escape = k2::svooc::Escape::Off; f.svooc_snap.escape_t_ms = 0;
     // Log pages [5, 3, from_lo, from_hi]: kept(2) from(2) n(1) { cmd word(2) t_ms(2) vbus_mv(2) } x n, 7 per page.
     CHECK_EQ(run(f, request(0x32, 11, {5, 3, 0, 0}), r), 1);
     check_header(r, 0x32, 11, Status::Ok, 5 + 7 * 7);
@@ -1232,7 +1272,7 @@ static void test_fc_svooc_trigger() {
     lg.n = 18; lg.pairs_total = 31;
     // Stop.
     CHECK_EQ(run(f, request(0x32, 14, {5, 2}), r), 1);
-    check_header(r, 0x32, 14, Status::Ok, 36);
+    check_header(r, 0x32, 14, Status::Ok, 45);
     CHECK_EQ(f.svooc_stops, 1);
     CHECK_EQ(r[kRspHeader + 2], static_cast<uint8_t>(k2::svooc::Abort::Stopped));
     CHECK_EQ(f.lease_arms, 2);   // the plain start and the USB-A start armed it once each; the reads and the stop did not
