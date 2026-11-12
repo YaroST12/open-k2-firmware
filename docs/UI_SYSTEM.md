@@ -757,6 +757,7 @@ Scope: every interactive page takes the unified design; the read-only instrument
    - long OK still shares (QR).
    `K2_WHOS_ATTACHED=1` brings the tabbed page back behind the three rows; the host tests build with it and switch the
    single tools on with `Ui::set_single_tools`. Renders: `runs/ui-split/sheet.png`.
+   Rows stay 20 px in the single tools too (user, 2026-11-12): nine results and one action row show before scrolling.
 
 ## 8 Code against renders, labs and the old skill
 
