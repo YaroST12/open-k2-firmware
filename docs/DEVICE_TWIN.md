@@ -68,7 +68,7 @@ A twin is learned from one of two observations. The record keeps only what is ne
 | Identify, device **alone** on the K2 | screen: Tools > Device twins > Learn row; shell `twin learn identify [dry] [name]`; host `k2_remote.py twin learn identify` | the device is attached to the K2 with no charger. Identify (`identify-device`, `pd::IdState`, `include/k2/pd/pd_identify.hpp`) asks it for identity, SVIDs, modes and its Sink_Capabilities. |
 | A Request the K2 **sniffed** inline | shell `twin learn sniff [dry] [name]`; host `twin learn sniff` | a real charger and the real device, the K2 between them sending nothing. The sniffed Request (the contract the device really asked for) is stored next to the sink PDOs. |
 
-`dry` shows what would be learned and saves nothing. Learning the same device again merges into its twin (same VID and PID): the library says `updated` or `unchanged`. The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is "<vendor> <product type>". A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
+`dry` shows what would be learned and saves nothing. Learning the same device again merges into its twin (same VID and PID): the library says `updated` or `unchanged`. The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"), with " 2", " 3" on repeats. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
 
 ### Record format
 
@@ -89,16 +89,23 @@ PIXEL_REQ (60 B) 4b3254010501d118e14ea0010203506978656c2039000000000000000000000
 
 ### On the screen
 
-Tools > Device twins: one row per twin. The row shows the predicted wattage and a verdict cell, the focused row shows what limits it. The footer says how many twins would get all they need on this charger ("3 of 5 full on charger"), or "No twin yet. Learn one", or "No charger: no predictions".
+Tools > Device twins (layout and wording: `docs/UI_SYSTEM.md` section 9). Two views on one page.
+
+**List.** One row per twin, its full name, with a 12 px shape marker for the prediction against this charger: solid = full power, half = limited, hollow = 5 V only (half and hollow in caution ink). Once a live proof ran on this charger the marker is a verdict cell. The focused row opens a note: "gets 33W, full", "gets 36 of 55W, cable", "5V only, device", or the proof result ("proved 33W", "charger refused 11V"). The last row is "Learn from device". Footer: the charger's top offer and the count ("PD 20V3A: 2 of 5 full"), after proofs "1 of 2 proved", or "No twin yet. Learn one", "No charger: no predictions".
+
+**Detail** (OK on a twin). TopBar "Twin"; the name; "gets" against "wants" in watts with a bar, the contract and what limits it ("limit: cable (3A)"); InfoBlock Wants / Offer / USB; then the actions Prove live, Re-learn from device, Delete twin. The page scrolls by whole lines so the focused action stays on screen.
 
 | Action | Effect |
 | :--- | :--- |
-| +/- | move |
-| OK on a twin | first OK: the live proof is requested; if the charger will be asked, the row arms ("Asks the charger. Confirm"). Second OK within 5 s starts it with confirmation. A cursor move or the window expiring disarms. |
-| BACK while running | reads "Stop", cancels (5 V back) |
+| +/- | move (list cursor, or the detail's action) |
+| OK on a twin | opens its detail |
+| OK on Prove live | arms the kit ActionCell (CONFIRM, 5 s drain, footer "Asks the charger for 12V"); a second OK starts the proof, which shows Asked / VBUS in the same box. A move or the window expiring disarms. |
+| OK on Delete twin | arms ("Deletes this twin for good"); a second OK deletes it and returns to the list ("Twin deleted") |
+| OK on Re-learn | as the Learn row; a different device is saved as another twin ("Saved as another twin") |
+| BACK | stops a read or a proof (5 V back), disarms, closes the detail, then leaves the page |
 | OK on the Learn row ("Learn from device") | a device alone on the K2 (a dual-role phone: VBUS dark, no source caps, its Rp toggling) is read first: the page starts the Sink-tab Identify, shows "Reading the device" (Back stops it), and learns when it ends ("Device did not answer" when it never did). Anything else learns from the last Identify. Footers: "Twin learned", "Twin updated", "Already known", "Plug a device in alone", "Nothing to learn from", "Library full" |
 
-The proof refuses up front, with a footer, when the live proof cannot be run: a tool or test is running, a device is inline, the power monitor is not ready, there is no charger to run against. The page has no on-device delete (use the shell or the host tool).
+The proof refuses up front, with a footer, when the live proof cannot be run: a tool or test is running, a device is inline, the power monitor is not ready, there is no charger to run against. Renaming stays off the device (shell or host tool).
 
 ### From the shell
 
