@@ -12,11 +12,83 @@ The design language of the K2 screen, measured from the charger test.
 
 All coordinates are logical content pixels: x 0..223, y 0..239.
 
+## 0 Fieldbook (2026-11-12)
+
+The Fieldbook rework (concept `runs/ui-rework-fable/CONCEPT.md`, branch `k2/fieldbook`) replaced the paging hub with a
+Meter and a Bench of six places. Where this section and a later one differ, this section is current; the later sections
+keep the measured geometry of the parts that did not change.
+
+### 0.1 Themes
+
+Paper, Night and Classic are const palettes (`include/k2/ui/theme.hpp`), picked at boot; Night is the default. A theme
+change asks for a reboot (Settings row `Theme`, footer `Reboot to apply: <name>`). Classic keeps cyan for amps and focus
+and the four trend shades.
+
+### 0.2 Navigation
+
+```
+Meter (Home)  Up/Dn flip the faces: Flow, Numbers, Lines.  OK -> Bench
+  Bench       Meter, Charger, Cable, Device, Log, K2. Each row: rail node (solid = known, hollow = nothing), name, status line
+    Charger   place page: Source identity + fact table + Test charger, Request voltage, Fast charge, Report cards
+    Cable     place page: e-marker identity + fact table + Read e-marker, Save cable, Saved cables, Spoof as..., Resistance, Loop probe
+    Device    place page: request identity + fact table + Ask device, Twins
+    Log       PD diagnosis: verdict stamp, findings, Black Box row
+    K2        settings: firmware identity, USB Link .. Theme, System state, Boot info
+```
+
+- The device boots into Flow. OK on a face opens the Bench; BACK on the Bench returns to the face it came from.
+- A place page sits over the Bench (`Ui::open_place`): Charger, Cable and Device are the Connection page locked to one tab
+  (`ConnectionPage::lock`), Log is `DiagnosisPage::as_place`, K2 is `SettingsPage`. BACK from a place lands on the Bench
+  with that place focused (`keep.bench_sel`). Each place remembers its last action row (`keep.place_sel`).
+- The remote page names are unchanged (`tools` = the Bench).
+
+### 0.3 Place page (Charger, Cable, Device)
+
+| part | geometry |
+|---|---|
+| Identity | y22..67, fixed: headline font 24 at (8, 24), chips (14 px, font 12) beside it while they fit before x216, one line font 12 at y52, a dashed line (4 on, 2 off) at y66 |
+| List | from y68, 7 slots of 20 px; whole-row scroll; a 4 px thumb lane at x220..223 |
+| Fact rows | the tool's own rows (offers, contract, e-marker fields, request) in ground, no hairlines |
+| Perforation | a dashed line between the fact rows and the actions, only when fact rows precede them |
+| Action rows | text x8; focus = inverse fill (Classic: the 3 px bar); a blocked tool `kInk3` with its tail word right-aligned to x216; a drill chevron when ready |
+| Keys | reading mode (no row focused): Dn/Up scroll by 6 rows, Dn takes the first action once it is on screen; OK runs the place's own read. With a row focused: Up/Dn move, Up past the first row lets go |
+| Fact line | the focused action's blocker in its tone, or its hint |
+
+The empty state is the identity in dim (`No charger`, its line) over the action rows. No Details page: the fact table is
+on the place page.
+
+### 0.4 Log place and K2 place
+
+- **Log**: the PD diagnosis list under a 36 px stamp (y22..57): the verdict's fill (fail red, warn orange, a healthy link
+  green, else `kSurface`), its 12 px glyph in a 20 px cell at x4, the word (`screen::word`, at most 16 chars) in font 24
+  from x30. The findings follow from y60; the last row is `Black Box` (chevron, note `N captures kept`), the only row
+  OK opens.
+- **K2**: the version in font 16 at (8, 25), `up 1h05m  USB HID on` in font 12 at y46, a dashed line at y63, the settings
+  list from y66, then `System state` (the Diag page) and `Boot info` (this boot's K2B1 record shared as QR codes).
+- A RowList that starts below an identity block or a stamp ends above y220; the page fills that gap once
+  (`kit::fill_list_gap`).
+
+### 0.5 Changed parts
+
+| part | Fieldbook |
+|---|---|
+| Running verdict cell | 2 px `kAccent` outline along the cell's edge, no dot (5.9) |
+| Reboot HoldCard | square orange (`kCaution`) card x10..213, y70..153, 2 px `kInk` frame, `Reboot in N` font 24 and `release to cancel` font 12 in `kSpotInk`, a 10 px `kSpotInk` bar filling along the bottom |
+| Chips | `kit::draw_chip` (solid) and `kit::draw_chip_frame` (1 px outline), width `kit::chip_w` = 6 px a char + 8 |
+| Dashed line | `kit::draw_dashed` (4 on, 2 off) |
+
+### 0.6 Not done yet
+
+- QR page tiers (concept 6.1: framed up to a 180 px box, cleared up to 224, bare above). Every code is still the
+  full-panel bare page.
+- Empty-state words are still upper case in the tabbed Who's attached page (`include/k2/ui/text/connection.hpp`); the place
+  pages show the same words.
+
 ## 1 Principles
 
 1. **One language.** A page states what it shows. The kit draws it. No page draws its own variant of a kit part.
 2. **Edge to edge.** Full-width rows, 1 px hairlines, 2 px rules between sections. No cards, no shadows, no
-   rounded boxes. The only rounded shapes are a tail pill and the reboot HoldCard.
+   rounded boxes. The only rounded shape is a tail pill (the reboot HoldCard is square since Fieldbook, 0.5).
 3. **One line, and it fits.** Text is never cut and never wraps. A row that needs more opens a second line.
 4. **Colour is an exception.** Unit colours name quantities. Amber and red mean an abnormal state. Green means a
    state that is good. Every state also has a shape or a word.
@@ -346,7 +418,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | verdict | fill | ink | shape with no label | extra with a label |
 |---|---|---|---|---|
 | Pending | none | `kFaint` | 2 x 2 dot | |
-| Running | none | `kFaint` | 5 x 5 `kFocus` dot | 5 x 5 `kFocus` dot in the top-right corner, steady |
+| Running | none | `kFaint` | hollow `kAccent` square (the glyph box, 2 px deep) | 2 px `kAccent` outline along the cell's edge, steady, no dot (Fieldbook, user 2026-11-12) |
 | Pass | `kOkT` | `kOk` | check | |
 | Fail | `kError` solid | black | cross | |
 | Partial | `kCautionT` | `kCaution` | tilde | 2 px `kCaution` bar on the bottom edge |
@@ -357,8 +429,10 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 - Glyph size: the cell's short side minus 4, at most 12.
 - Sizes in use: 12 x 12 (row marker, Results counters), 14 x 14 (Waiting checklist), 20 x 20 (verdict band),
   grid cells.
-- Repaints: one cell. The running dot moves alone: 25 px to erase, 25 px to paint.
-- Seen in: `flight_step15.png` (pass, fail, pending, running dot), `ufcs_cuktech_running.png` (partial, skip),
+- Repaints: one cell. The running outline moves alone: its rim (`kit::run_mark_px(w, h)`, 2t(w + h) - 4t^2 with
+  t = `kRunFrame` = 2) to erase on the old cell, the new cell's rim to paint. The rim never touches a grid label
+  (`kit::mark_hits_label`; a cell where it would repaints its row instead).
+- Seen in: `flight_step15.png` (pass, fail, pending, running outline), `ufcs_cuktech_running.png` (partial, skip),
   `b_ct_results.png` (none, skip strike).
 
 ### 5.10 ResultGrid: `kit::ResultGrid`, `draw_result_row`
@@ -375,7 +449,7 @@ It is drawn by the page today (`paint_detail`). It belongs in the kit beside Ale
 | Focus (Results) | the label strip turns `kFocusT` with the 3 px bar; label and bracket text turn `kFocus` |
 | Scroll | by pixels, whole rows only, up to 8 rows on screen |
 | Follow (Running) | the window's bottom sits on the row of the step in flight (`anchor_bottom`). PLUS and MINUS scroll by hand; the follow resumes after 5 s or on the next step |
-| Repaints | a row when its shape changes; single cells when only verdicts change; the dot alone |
+| Repaints | a row when its shape changes; single cells when only verdicts change; the running outline alone (`sync_dots`) |
 | Seen in | `flight_step15.png`, `flight_deep_scrolled.png`, `results_end.png`, `results_scrolled2.png` |
 
 ### 5.11 ProgressBar: `kit::ProgressBar`
@@ -640,6 +714,8 @@ Renders: `mock_pd_source.png`, `mock_pd_sink.png`, `mock_pd_cable.png`, `mock_pd
 
 ### 7.4 Tools
 
+Superseded by the Bench and the place pages (0.2, 0.3); the hub list below no longer exists.
+
 Renders: `mock_tools.png`, `mock_tools_end.png`.
 
 | diverges | proposal |
@@ -705,7 +781,9 @@ walk-by screen with its own grid.
 
 ### 7.10 Settings, USB Link, Autorotate
 
-Renders: `mock_settings.png`, `mock_settings_end.png`, `mock_usblink.png`, `mock_autorotate.png`.
+Settings is the K2 place since Fieldbook (0.4): identity block on top, System state and Boot info rows at the end.
+
+Renders: `mock_settings.png`, `mock_settings_end.png`, `mock_usblink.png`, `mock_autorotate.png`, `mock_place_k2.png`.
 
 | diverges | proposal |
 |---|---|
@@ -715,7 +793,10 @@ Renders: `mock_settings.png`, `mock_settings_end.png`, `mock_usblink.png`, `mock
 
 ### 7.11 Diag and PD diagnosis
 
-Renders: `mock_diag.png`, `mock_diagnosis_case1.png`, `mock_diagnosis_case1_r3.png`, `mock_diagnosis_empty.png`.
+The PD diagnosis is the Log place since Fieldbook (0.4); Diag is K2 > System state.
+
+Renders: `mock_diag.png`, `mock_diagnosis_case1.png`, `mock_diagnosis_case1_r3.png`, `mock_diagnosis_empty.png`,
+`mock_place_log.png`, `mock_place_log_case1.png`, `mock_place_log_ramp.png`.
 
 | page | diverges | proposal |
 |---|---|---|
