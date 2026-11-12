@@ -92,11 +92,22 @@ class GenFont(unittest.TestCase):
             self.assertRegex(text, r"\.zmax = (?:[1-9]|1[0-5]),")
             self.assertNotIn(".bpp", text)
             adv = int(re.search(r"\.adv = (\d+)", text).group(1))
-            glyphs = re.findall(r"\{ (\d+), (\d+), (\d+), (-?\d+), (-?\d+), (\d+) \}", text)
+            glyphs = re.findall(r"\{ (\d+), (\d+), (\d+), (-?\d+), (-?\d+) \}", text)
             self.assertGreater(len(glyphs), 10)
-            for _off, w, _h, left, _top, a in glyphs:
-                self.assertEqual(int(a), adv)
+            for _off, w, _h, left, _top in glyphs:
                 self.assertTrue(int(w) == 0 or 0 <= int(left) and int(left) + int(w) <= adv, (role, w, left))
+            # the code point table covers exactly the glyphs after the dense 0x20.. run
+            dense = int(re.search(r"\.dense = (\d+)", text).group(1))
+            cps = re.search(r"codepoints\[(\d+)\]", text)
+            self.assertEqual(int(cps.group(1)) if cps else 0, len(glyphs) - dense)
+
+    def test_dense_run_is_the_leading_ascii_block(self):
+        glyph = lambda cp: dict(cp=cp)
+        run = lambda cps: gen_font.dense_run(dict(glyphs=[glyph(c) for c in cps]))
+        self.assertEqual(run([0x20, 0x21, 0x22, 0x41, 0xB0]), 3)
+        self.assertEqual(run([0x20, 0x2D, 0x2E]), 1)
+        self.assertEqual(run([0x30, 0x31]), 0)
+        self.assertEqual(run([]), 0)
 
 
 if __name__ == "__main__":

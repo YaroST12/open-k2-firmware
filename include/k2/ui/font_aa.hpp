@@ -28,14 +28,17 @@ struct Glyph {
     uint16_t offset;
     uint8_t  w, h;
     int8_t   left, top;
-    uint8_t  adv;
 };
 
+// Glyph lookup: glyphs[0 .. dense-1] are the code points 0x20 .. 0x20+dense-1 in order, found by
+// index with no table; glyphs[dense .. count-1] carry the sorted code points in `codepoints`
+// (count - dense entries, entry i belongs to glyphs[dense + i]).
 struct Font {
     const uint8_t  *bitmap;
-    const uint16_t *codepoints;  // sorted ascending, `count` entries
-    const Glyph    *glyphs;      // parallel to codepoints
+    const uint16_t *codepoints;  // sorted ascending, the glyphs after the dense run
+    const Glyph    *glyphs;      // `count` entries
     uint16_t count;
+    uint8_t  dense;    // leading glyphs that are 0x20, 0x21, ... with no codepoints entry
     uint8_t  adv;      // advance of every glyph (monospace)
     uint8_t  ascent;   // tallest glyph above the baseline
     uint8_t  descent;  // deepest glyph below the baseline

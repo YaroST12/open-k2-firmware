@@ -328,9 +328,11 @@ absence; remote commands use the resident owners.
 
 **Fonts.** All text is anti-aliased monospace (Atkinson Hyperlegible Mono, SIL OFL 1.1; the four arrows come
 from JetBrains Mono), drawn row by row through one 240-pixel line buffer (`gfx.hpp`); `text.hpp` does UTF-8
-and layout, `blend.hpp` the 4-bit alpha blend. There is no framebuffer. The glyph tables are 4 bits per pixel
-(`Font::bpp`): the nibble is the blend LUT index, so the edge pixels blend against the bg of the cell the
-text is drawn on (`render_row` fills `lut[0]` over the whole width). Cell sizes and line boxes are the layout
+and layout, `blend.hpp` the 4-bit alpha blend. There is no framebuffer. The glyph pixels are 4-bit
+coverage levels, run-length coded as nibbles in 8-row groups (token format in `font_aa.hpp`): the level is the
+blend LUT index, so the edge pixels blend against the bg of the cell the text is drawn on (`render_row` fills
+`lut[0]` over the whole width). A glyph table entry is 6 B; the leading 0x20.. block of each font is found by
+index (`Font::dense`), only the rest carries a sorted code point table. Cell sizes and line boxes are the layout
 contract: advance 6/8/12/24 px, line box 12/16/24/30 rows. Do not edit `include/k2/ui/font_aa.hpp` or `src/ui/fonts/*`
 by hand: change `tools/gen_font.py` and regenerate (needs `freetype-py` and `fonttools` in a venv;
 `--check` without them only compares the input stamp). `--source spleen` regenerates the old 1 bpp
