@@ -201,8 +201,9 @@ void test_reply_slot_and_hold() {
     CHECK_EQ(f.w.tick(last_rise + svooc::kHoldUs * kUs).kind, Kind::Release);
     CHECK(!f.w.driving());
     CHECK_EQ(f.w.log().n, 1u);
-    CHECK_EQ(f.w.log().pairs[0].cmd, 0xA8);
-    CHECK_EQ(f.w.log().pairs[0].word, 0x00D);
+    CHECK_EQ(f.w.pair(0).cmd, 0xA8);
+    CHECK_EQ(f.w.pair(0).word, 0x00D);
+    CHECK_EQ(f.w.pair(0).t_ms, 5u);   // the command's frame began 5 ms after the wire began
 }
 
 // The adapter's next command comes before the hold ran out: the wire lets go at that command's first fall.
@@ -248,7 +249,26 @@ void test_missed_slot() {
     CHECK_EQ(f.takes, 0);
     CHECK_EQ(f.w.log().missed, 1u);
     CHECK_EQ(f.w.log().n, 1u);
-    CHECK_EQ(f.w.log().pairs[0].word, svooc::kNoWord);
+    CHECK_EQ(f.w.pair(0).word, svooc::kNoWord);
+    CHECK_EQ(f.w.pair(0).t_ms, 5u);   // a missed slot is stamped with its command's start
+}
+
+// The log keeps every pair of a long run up to kLogPairs, each stamped in ms since the wire began (the command's start);
+// pairs beyond the store are still counted.
+void test_log_capacity_and_stamps() {
+    CHECK(svooc::kLogPairs >= 512);
+    Synth s;
+    s.edge(s.t, true, false);
+    const int n = int(svooc::kLogPairs) + 20;
+    for (int i = 0; i < n + 1; ++i) s.command(s.t + (5000 + 25000 * i) * kUs, 0xA8);   // no slot comes: each one is missed
+    Feed f;
+    f.all(s.words);
+    CHECK_EQ(f.w.log().n, svooc::kLogPairs);
+    CHECK(f.w.log().pairs_total > svooc::kLogPairs);
+    for (std::size_t i : {std::size_t(0), std::size_t(1), svooc::kLogPairs / 2, svooc::kLogPairs - 1}) {
+        CHECK_EQ(f.w.pair(i).t_ms, 5u + 25u * unsigned(i));
+        CHECK_EQ(f.w.pair(i).word, svooc::kNoWord);
+    }
 }
 
 // Ten pulses are no command (the wake burst is longer still); nor are eight.
@@ -282,10 +302,10 @@ void test_abort_and_stop() {
     CHECK_EQ(f.takes, 2);
     CHECK_EQ(f.w.log().replies, 2u);
     CHECK_EQ(f.w.log().n, 4u);
-    CHECK_EQ(f.w.log().pairs[0].word, svooc::kSilent);
-    CHECK_EQ(f.w.log().pairs[1].word, svooc::kSilent);
-    CHECK_EQ(f.w.log().pairs[2].word, svooc::kNoWord);
-    CHECK_EQ(f.w.log().pairs[3].word, svooc::kNoWord);
+    CHECK_EQ(f.w.pair(0).word, svooc::kSilent);
+    CHECK_EQ(f.w.pair(1).word, svooc::kSilent);
+    CHECK_EQ(f.w.pair(2).word, svooc::kNoWord);
+    CHECK_EQ(f.w.pair(3).word, svooc::kNoWord);
     Feed g;
     Synth u;
     u.edge(u.t, true, false);
@@ -306,6 +326,7 @@ int main() {
     test_next_command_releases();
     test_clock_stops_mid_reply();
     test_missed_slot();
+    test_log_capacity_and_stamps();
     test_ten_pulses_are_no_command();
     test_abort_and_stop();
     return test_report("test_svooc_wire");

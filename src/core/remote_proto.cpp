@@ -443,30 +443,30 @@ size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page) 
 // --- end vooc-monitor ---
 
 // --- svooc-trigger: FC op 5 pages, layout in remote_proto.hpp ---
-size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v, uint8_t page) {
+size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v) {
     Writer w(out);
     const svooc::Report &r = v.report;
     const svooc::Log &lg = v.log;
     const auto u16c = [](std::int64_t x) { return static_cast<uint16_t>(x < 0 ? 0 : x > 0xFFFF ? 0xFFFF : x); };
-    if (page == 0) {
-        w.u8(static_cast<uint8_t>(v.stage)); w.u8(static_cast<uint8_t>(r.refusal)); w.u8(static_cast<uint8_t>(r.abort));
-        w.u8(r.tries);
-        w.u8(static_cast<uint8_t>((r.accepted ? 1 : 0) | (r.exit_checked ? 2 : 0) | (r.exit_ok ? 4 : 0) | (v.driving ? 8 : 0)));
-        w.u8(static_cast<uint8_t>(v.phase)); w.u8(v.off_run); w.u8(lg.last_cmd);
-        w.u16(u16c(lg.commands)); w.u16(u16c(lg.replies)); w.u16(u16c(lg.missed)); w.u16(u16c(lg.cut));
-        w.u16(u16c(lg.partials)); w.u16(u16c(lg.pairs_total)); w.u8(static_cast<uint8_t>(lg.n));
-        w.u16(u16c(r.cap_ms)); w.u16(u16c(r.elapsed_ms)); w.u16(u16c(r.vbus_start_mv)); w.u16(u16c(r.vbus_max_mv));
-        w.u16(u16c(r.vbus_exit_mv)); w.u16(u16c(r.ibus_max_ma));
-        w.u8(static_cast<uint8_t>(r.contract_start)); w.u8(static_cast<uint8_t>(r.contract_end));
-        return w.size();
-    }
-    const size_t from = (page - 1u) * kSvoocPairsPerPage;
-    const size_t have = std::min<size_t>(lg.n, lg.pairs.size());
-    const size_t n = have > from ? std::min(kSvoocPairsPerPage, have - from) : 0;
-    w.u8(page); w.u8(static_cast<uint8_t>(have)); w.u8(static_cast<uint8_t>(n));
+    w.u8(static_cast<uint8_t>(v.stage)); w.u8(static_cast<uint8_t>(r.refusal)); w.u8(static_cast<uint8_t>(r.abort));
+    w.u8(r.tries);
+    w.u8(static_cast<uint8_t>((r.accepted ? 1 : 0) | (r.exit_checked ? 2 : 0) | (r.exit_ok ? 4 : 0) | (v.driving ? 8 : 0) |
+                              (r.usb_a ? 16 : 0)));
+    w.u8(static_cast<uint8_t>(v.phase)); w.u8(v.off_run); w.u8(lg.last_cmd);
+    w.u16(u16c(lg.commands)); w.u16(u16c(lg.replies)); w.u16(u16c(lg.missed)); w.u16(u16c(lg.cut));
+    w.u16(u16c(lg.partials)); w.u16(u16c(lg.pairs_total)); w.u8(static_cast<uint8_t>(std::min<unsigned>(lg.n, 255u)));
+    w.u16(u16c(r.cap_ms)); w.u16(u16c(r.elapsed_ms)); w.u16(u16c(r.vbus_start_mv)); w.u16(u16c(r.vbus_max_mv));
+    w.u16(u16c(r.vbus_exit_mv)); w.u16(u16c(r.ibus_max_ma));
+    w.u8(static_cast<uint8_t>(r.contract_start)); w.u8(static_cast<uint8_t>(r.contract_end));
+    return w.size();
+}
+
+size_t encode_svooc_log(std::span<uint8_t> out, uint16_t kept, uint16_t from, std::span<const svooc::PairRow> rows) {
+    Writer w(out);
+    const size_t n = std::min(rows.size(), kSvoocRowsPerPage);
+    w.u16(kept); w.u16(from); w.u8(static_cast<uint8_t>(n));
     for (size_t i = 0; i < n; i++) {
-        w.u8(lg.pairs[from + i].cmd);
-        w.u16(lg.pairs[from + i].word);
+        w.u8(rows[i].cmd); w.u16(rows[i].word); w.u16(rows[i].t_ms); w.u16(rows[i].vbus_mv);
     }
     return w.size();
 }

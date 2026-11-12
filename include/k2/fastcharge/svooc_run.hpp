@@ -9,7 +9,10 @@
 //   - the remote confirmed it, and the host link is up (the dead-man lease needs the host);
 //   - D+/D- are free (no trigger, scan, charger test or sniffer of another owner);
 //   - the power monitor reads VBUS and current;
-//   - no sink is on the bottom port (Rd on CC) and the link is not inline (a device behind the K2);
+//   - no sink is on the bottom port (Rd on CC) and the link is not inline (a device behind the K2). The operator may waive
+//     the far-sink check only (`--usb-a`, StartFacts::usb_a): a legacy A-to-C cable brings VBUS in through that port with no
+//     pull-down on CC, which reads as a sink. It is refused (UsbAWithPd) while PD is active anywhere (Contract != None); the
+//     50 mA limit, the VBUS window, the inline check and every in-run guard but the far-sink abort stay in force;
 //   - no PD contract, except the K2's own: it holds it as the sink, a fixed PDO at or under 5.0 V (position 1, Ready,
 //     not EPR, not inline, no far sink). A USB-C adapter such as the OnePlus SUPERVOOC port keeps VBUS at 0 V until it
 //     sees Rd, so the K2 always has that contract, and the real phone does too before SuperVOOC takes over on D+/D-;
@@ -53,6 +56,7 @@ enum class Refusal : std::uint8_t {
     Current,        // |I| > kCurrentMaxMa
     NotFiveVolts,   // VBUS outside kFiveMinMv .. kFiveMaxMv
     NoRam,          // the mode RAM is lent out (the USB drive is on)
+    UsbAWithPd,     // --usb-a asked while PD is active anywhere (the waiver is for a PD-less legacy A port only)
 };
 
 enum class Abort : std::uint8_t {
@@ -126,6 +130,7 @@ struct StartFacts {
     bool inline_mode = false;
     Contract contract = Contract::None;
     bool ram_free = false;
+    bool usb_a = false;           // the operator's waiver of the far-sink refusal (a legacy A-to-C cable on the bottom port)
 };
 
 struct Sample {
@@ -159,6 +164,7 @@ struct Report {
     std::int32_t vbus_exit_mv = 0;   // the reading that ended the exit watch
     Contract contract_start = Contract::None;   // the contract at the start
     Contract contract_end = Contract::None;     // the latest sample's contract (the end of the run, the exit watch included)
+    bool usb_a = false;              // the run started with the far-sink check waived (USB-A)
 };
 
 // Log and report names (tools/k2_remote.py keeps the same lists, in the same order).
@@ -175,6 +181,7 @@ constexpr const char* name(Refusal r) {
     case Refusal::Current: return "current over 50 mA";
     case Refusal::NotFiveVolts: return "VBUS not 5 V";
     case Refusal::NoRam: return "no RAM: USB drive enabled";
+    case Refusal::UsbAWithPd: return "USB-A waiver but PD is active";
     }
     return "?";
 }
@@ -215,7 +222,9 @@ constexpr Refusal refusal(const StartFacts& f) {
     if (f.ports_busy) return Refusal::Busy;
     if (!f.host_ok) return Refusal::NoHost;
     if (!f.vbus_known || !f.current_known) return Refusal::NoMonitor;
-    if (f.far_sink) return Refusal::Sink;
+    // The waiver is for a PD-less legacy A port: any PD (a contract of ours or another, traffic on CC) refuses the flag itself.
+    if (f.usb_a && f.contract != Contract::None) return Refusal::UsbAWithPd;
+    if (f.far_sink && !f.usb_a) return Refusal::Sink;
     if (f.inline_mode) return Refusal::Inline;
     if (f.contract == Contract::Other) return Refusal::PdContract;
     if (magnitude(f.ibus_ma) > kCurrentMaxMa) return Refusal::Current;
@@ -236,6 +245,7 @@ public:
         report_.vbus_start_mv = report_.vbus_max_mv = f.vbus_mv;
         report_.ibus_max_ma = magnitude(f.ibus_ma);
         report_.contract_start = report_.contract_end = start_contract_ = f.contract;
+        report_.usb_a = usb_a_ = f.usb_a;
         start_t_ = now_ms;
         stage_ = Stage::Wake;
         return Refusal::None;
@@ -289,7 +299,7 @@ private:
         if (!s.vbus_known || !s.current_known) return Abort::NoMonitor;
         if (s.vbus_mv > kVbusMaxMv) return Abort::Overvoltage;
         if (magnitude(s.ibus_ma) > kCurrentMaxMa) return Abort::Current;
-        if (s.far_sink || s.inline_mode) return Abort::Sink;
+        if ((s.far_sink && !usb_a_) || s.inline_mode) return Abort::Sink;
         if (s.contract != start_contract_) {
             if (start_contract_ != Contract::Own5V) return Abort::PdContract;   // none at the start: one appeared
             return s.contract == Contract::None ? Abort::ContractLost : Abort::ContractChanged;
@@ -328,6 +338,7 @@ private:
 
     Stage stage_ = Stage::Idle;
     Contract start_contract_ = Contract::None;
+    bool usb_a_ = false;
     Report report_;
     std::uint32_t start_t_ = 0, stage_t_ = 0;
     std::int32_t last_vbus_ = 0;

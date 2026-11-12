@@ -454,6 +454,13 @@ void monitor_poll(bool wanted, bool lines_free) {
 }
 
 bool monitoring() { return g_mon; }
+
+bool monitor_yield() {
+    if (!g_mon) return false;
+    monitor_stop(true);   // the trigger takes the lines next: the passive idle is its start state
+    return true;
+}
+
 void monitor_enable(bool on) { g_mon_enabled = on; }
 bool monitor_enabled() { return g_mon_enabled; }
 

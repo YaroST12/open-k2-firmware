@@ -1149,9 +1149,11 @@ remote::VoocSnapshot Remote::vooc_monitor(uint8_t set) {
 
 // --- svooc-trigger: the guarded no-load SuperVOOC trigger (k2/fastcharge/svooc_trig.hpp). The dispatcher checked the
 // confirm flag and arms the lease on an accepted start; a charger test, PD Stress or twin run owns the ports here. ---
-svooc::Refusal Remote::svooc_start(uint8_t cap_s) {
-    return svooc_trig::start(true, ui_.ports_busy() || ui_.twin_live_busy(), cap_s);
+svooc::Refusal Remote::svooc_start(uint8_t cap_s, bool usb_a) {
+    return svooc_trig::start(true, ui_.ports_busy() || ui_.twin_live_busy(), cap_s, usb_a);
 }
+
+size_t Remote::svooc_pairs(uint16_t from, std::span<svooc::PairRow> out) { return svooc_trig::read_pairs(from, out); }
 
 void Remote::svooc_stop() { svooc_trig::stop(); }
 

@@ -1147,6 +1147,10 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 1, Status::NeedConfirm, 0);
     CHECK_EQ(run(f, request(0x32, 2, {5, 1, 3, 0}), r), 1);          // an unknown flag (allow-inline) is no confirm
     check_header(r, 0x32, 2, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 40, {5, 1, 8, 0}), r), 1);         // an unknown bit beside the confirm
+    check_header(r, 0x32, 40, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 41, {5, 1, 4, 0}), r), 1);         // the USB-A waiver alone is no confirm either
+    check_header(r, 0x32, 41, Status::NeedConfirm, 0);
     CHECK_EQ(run(f, request(0x32, 3, {5, 1, 1, 21}), r), 1);         // cap above 20 s
     check_header(r, 0x32, 3, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x32, 4, {5, 1, 1}), r), 1);
@@ -1155,8 +1159,10 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 5, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x32, 6, {5, 9}), r), 1);
     check_header(r, 0x32, 6, Status::BadArg, 0);
-    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 4}), r), 1);             // pages 0..3
+    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 1}), r), 1);             // the status has one page; pairs are op 3
     check_header(r, 0x32, 7, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 42, {5, 3, 0}), r), 1);
+    check_header(r, 0x32, 42, Status::BadLength, 0);
     CHECK_EQ(f.calls, calls);
     CHECK_EQ(f.svooc_starts, 0);
     // Refused for the RAM: Busy, the summary carries the reason, no lease.
@@ -1170,8 +1176,15 @@ static void test_fc_svooc_trigger() {
     CHECK_EQ(run(f, request(0x32, 9, {5, 1, 1, 12}), r), 1);
     check_header(r, 0x32, 9, Status::Ok, 35);
     CHECK_EQ(f.svooc_cap, 12);
+    CHECK(!f.svooc_usb_a);
     CHECK_EQ(f.lease_arms, 1);
     CHECK_EQ(r[kRspHeader], static_cast<uint8_t>(k2::svooc::Stage::Wake));
+    // The USB-A waiver rides the start flags (bit 2) beside the confirm and reaches the backend.
+    CHECK_EQ(run(f, request(0x32, 43, {5, 1, 5, 0}), r), 1);
+    check_header(r, 0x32, 43, Status::Ok, 35);
+    CHECK(f.svooc_usb_a);
+    CHECK_EQ(r[kRspHeader + 4] & 0x10, 0x10);                         // summary flags bit 4: waiver in use
+    f.svooc_snap.report.usb_a = false; f.svooc_usb_a = false;
     // The summary in the documented order.
     k2::svooc::Report &rep = f.svooc_snap.report;
     f.svooc_snap.stage = k2::svooc::Stage::Exit;
@@ -1182,29 +1195,45 @@ static void test_fc_svooc_trigger() {
     f.svooc_snap.phase = k2::svooc::Phase::Ramp; f.svooc_snap.off_run = 1; f.svooc_snap.driving = true;
     k2::svooc::Log &lg = f.svooc_snap.log;
     lg.commands = 30; lg.replies = 29; lg.missed = 1; lg.cut = 0; lg.partials = 2; lg.pairs_total = 31; lg.last_cmd = 0x82;
-    for (unsigned i = 0; i < 18; i++) lg.pairs[i] = {static_cast<uint8_t>(0x80 + i), static_cast<uint16_t>(0x100 + i)};
     lg.n = 18;
+    for (unsigned i = 0; i < 18; i++) f.svooc_rows[i] = {static_cast<uint8_t>(0x80 + i), static_cast<uint16_t>(0x100 + i),
+                                                         static_cast<uint16_t>(500 + 25 * i), static_cast<uint16_t>(5000 + i)};
     CHECK_EQ(run(f, request(0x32, 10, {5, 0, 0}), r), 1);
     check_header(r, 0x32, 10, Status::Ok, 35);
     check_bytes(r, kRspHeader, {static_cast<uint8_t>(k2::svooc::Stage::Exit), 0, static_cast<uint8_t>(k2::svooc::Abort::Overvoltage),
                                 1, 0x0B, static_cast<uint8_t>(k2::svooc::Phase::Ramp), 1, 0x82,
                                 30, 0, 29, 0, 1, 0, 0, 0, 2, 0, 31, 0, 18,
                                 0x20, 0x4E, 0x80, 0x0D, 0xEC, 0x13, 0xE1, 0x2E, 0x28, 0x23, 7, 0, 1, 2});
-    // Pair pages: 16 on page 1, the last 2 on page 2, none on page 3.
-    CHECK_EQ(run(f, request(0x32, 11, {5, 0, 1}), r), 1);
-    check_header(r, 0x32, 11, Status::Ok, 3 + 3 * 16);
-    check_bytes(r, kRspHeader, {1, 18, 16, 0x80, 0x00, 0x01, 0x81, 0x01, 0x01});
-    CHECK_EQ(run(f, request(0x32, 12, {5, 0, 2}), r), 1);
-    check_header(r, 0x32, 12, Status::Ok, 3 + 3 * 2);
-    check_bytes(r, kRspHeader, {2, 18, 2, 0x90, 0x10, 0x01, 0x91, 0x11, 0x01});
-    CHECK_EQ(run(f, request(0x32, 13, {5, 0, 3}), r), 1);
-    check_header(r, 0x32, 13, Status::Ok, 3);
+    // Log pages [5, 3, from_lo, from_hi]: kept(2) from(2) n(1) { cmd word(2) t_ms(2) vbus_mv(2) } x n, 7 per page.
+    CHECK_EQ(run(f, request(0x32, 11, {5, 3, 0, 0}), r), 1);
+    check_header(r, 0x32, 11, Status::Ok, 5 + 7 * 7);
+    check_bytes(r, kRspHeader, {18, 0, 0, 0, 7,
+                                0x80, 0x00, 0x01, 0xF4, 0x01, 0x88, 0x13,     // cmd 80 word 100 t 500 ms vbus 5000
+                                0x81, 0x01, 0x01, 0x0D, 0x02, 0x89, 0x13});   // cmd 81 word 101 t 525 ms vbus 5001
+    CHECK_EQ(run(f, request(0x32, 12, {5, 3, 14, 0}), r), 1);                 // from 14: the last 4
+    check_header(r, 0x32, 12, Status::Ok, 5 + 7 * 4);
+    check_bytes(r, kRspHeader, {18, 0, 14, 0, 4, 0x8E, 0x0E, 0x01});
+    CHECK_EQ(run(f, request(0x32, 13, {5, 3, 18, 0}), r), 1);                 // at the end: an empty page, not an error
+    check_header(r, 0x32, 13, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {18, 0, 18, 0, 0});
+    CHECK_EQ(run(f, request(0x32, 44, {5, 3, 0x00, 0x02}), r), 1);            // from 512 > kept
+    check_header(r, 0x32, 44, Status::Ok, 5);
+    check_bytes(r, kRspHeader, {18, 0, 0, 2, 0});
+    // A long run: kept 512 (the summary saturates its u8 count at 255), the last page holds the last 1 pair.
+    lg.n = 512; lg.pairs_total = 700;
+    for (unsigned i = 0; i < 512; i++) f.svooc_rows[i] = {static_cast<uint8_t>(i), static_cast<uint16_t>(i), static_cast<uint16_t>(i), 5000};
+    CHECK_EQ(run(f, request(0x32, 45, {5, 0, 0}), r), 1);
+    CHECK_EQ(r[kRspHeader + 20], 255);
+    CHECK_EQ(run(f, request(0x32, 46, {5, 3, 0xFF, 0x01}), r), 1);            // from 511
+    check_header(r, 0x32, 46, Status::Ok, 5 + 7);
+    check_bytes(r, kRspHeader, {0x00, 0x02, 0xFF, 0x01, 1, 0xFF});
+    lg.n = 18; lg.pairs_total = 31;
     // Stop.
     CHECK_EQ(run(f, request(0x32, 14, {5, 2}), r), 1);
     check_header(r, 0x32, 14, Status::Ok, 35);
     CHECK_EQ(f.svooc_stops, 1);
     CHECK_EQ(r[kRspHeader + 2], static_cast<uint8_t>(k2::svooc::Abort::Stopped));
-    CHECK_EQ(f.lease_arms, 1);
+    CHECK_EQ(f.lease_arms, 2);   // the plain start and the USB-A start armed it once each; the reads and the stop did not
 }
 
 // While the SuperVOOC trigger holds D+/D- (backend.lines_locked()), every remote op that drives or claims D+/D-, the

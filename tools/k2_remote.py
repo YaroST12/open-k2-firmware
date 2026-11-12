@@ -2473,15 +2473,18 @@ def render_vooc(v):
 # refuses or aborts on its own guards (k2/fastcharge/svooc_run.hpp); this side only starts it, keeps the lease alive by
 # polling, sends `stop` on Ctrl-C and prints the report. The name lists follow svooc_run.hpp / svooc_script.hpp in order.
 FC_OP_SVOOC = 5
-SVOOC_STATUS, SVOOC_START, SVOOC_STOP = 0, 1, 2
+SVOOC_STATUS, SVOOC_START, SVOOC_STOP, SVOOC_LOG = 0, 1, 2, 3
+SVOOC_USB_A = 4                 # start flags bit 2: waive the far-sink refusal (legacy A port, no PD anywhere)
 SVOOC_SUMMARY_BYTES = 35
-SVOOC_PAIRS_PER_PAGE = 16
-SVOOC_PAGES = 4                 # summary + 3 pair pages
+SVOOC_LOG_HEADER = 5            # kept(2) from(2) n(1), then n rows of cmd(1) word(2) t_ms(2) vbus_mv(2)
+SVOOC_LOG_ROW = 7
+SVOOC_SHOWN_PAIRS = 40          # svooc-trigger / svooc-status print the first pairs; `svooc-log` reads the whole list
 SVOOC_CAP_MAX_S = 20
 SVOOC_NO_WORD = 0xFFFF
 SVOOC_STAGES = ["idle", "wake", "listen", "rest", "answer", "exit", "done"]
 SVOOC_REFUSALS = ["none", "not confirmed", "D+/D- busy", "no host link", "no power monitor", "sink on the bottom port",
-                  "inline mode", "PD contract not own 5 V", "current over 50 mA", "VBUS not 5 V", "no RAM: USB drive enabled"]
+                  "inline mode", "PD contract not own 5 V", "current over 50 mA", "VBUS not 5 V", "no RAM: USB drive enabled",
+                  "USB-A waiver but PD is active"]
 SVOOC_ABORTS = ["none", "VBUS over 12 V", "current over 50 mA", "charger off-script", "host gone", "power monitor lost",
                 "sink appeared", "PD contract appeared", "D+/D- edge storm", "no adapter answer", "time cap", "stopped", "PD contract lost", "PD contract changed"]
 SVOOC_CONTRACTS = ["none", "own 5 V", "other"]
@@ -2504,38 +2507,54 @@ def decode_svooc_summary(p):
     name = lambda names, i: names[i] if i < len(names) else str(i)
     return {"stage": name(SVOOC_STAGES, p[0]), "refusal": name(SVOOC_REFUSALS, p[1]), "abort": name(SVOOC_ABORTS, p[2]),
             "wakes": p[3], "accepted": bool(p[4] & 1), "exit_checked": bool(p[4] & 2), "exit_ok": bool(p[4] & 4),
-            "driving": bool(p[4] & 8), "phase": name(SVOOC_PHASES, p[5]), "off_run": p[6], "last_cmd": f"0x{p[7]:02X}",
+            "driving": bool(p[4] & 8), "usb_a_waiver": bool(p[4] & 16), "phase": name(SVOOC_PHASES, p[5]), "off_run": p[6],
+            "last_cmd": f"0x{p[7]:02X}",
             "commands": u16(8), "replies": u16(10), "missed": u16(12), "cut": u16(14), "partials": u16(16),
             "pairs_total": u16(18), "pairs_kept": p[20], "cap_ms": u16(21), "elapsed_ms": u16(23),
             "vbus_start_mv": u16(25), "vbus_max_mv": u16(27), "vbus_exit_mv": u16(29), "ibus_max_ma": u16(31),
             "contract_start": name(SVOOC_CONTRACTS, p[33]), "contract_end": name(SVOOC_CONTRACTS, p[34])}
 
 
-def decode_svooc_pairs(p):
-    _need(p, 3, "svooc pairs")
-    n = p[2]
-    _need(p, 3 + 3 * n, "svooc pairs")
-    pairs = []
+def decode_svooc_log(p):
+    """One log page -> (kept, from, rows); each row is the pair's index, wake-relative time, VBUS and the two words."""
+    _need(p, SVOOC_LOG_HEADER, "svooc log")
+    kept, first, n = int.from_bytes(p[0:2], "little"), int.from_bytes(p[2:4], "little"), p[4]
+    _need(p, SVOOC_LOG_HEADER + SVOOC_LOG_ROW * n, "svooc log")
+    rows = []
     for i in range(n):
-        cmd, word = p[3 + 3 * i], int.from_bytes(p[4 + 3 * i:6 + 3 * i], "little")
-        pairs.append({"cmd": f"0x{cmd:02X}", "word": None if word == SVOOC_NO_WORD else f"0x{word:03X}"})
-    return pairs
+        o = SVOOC_LOG_HEADER + SVOOC_LOG_ROW * i
+        word = int.from_bytes(p[o + 1:o + 3], "little")
+        rows.append({"i": first + i, "t_ms": int.from_bytes(p[o + 3:o + 5], "little"),
+                     "vbus_mv": int.from_bytes(p[o + 5:o + 7], "little"), "cmd": f"0x{p[o]:02X}",
+                     "word": None if word == SVOOC_NO_WORD else f"0x{word:03X}"})
+    return kept, first, rows
+
+
+def svooc_log(link, start=0, count=None):
+    """The run's command>reply pairs from index `start` (at most `count`), paged 7 rows per request."""
+    kept, rows, i = 0, [], start
+    while True:
+        kept, first, page = decode_svooc_log(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_LOG, i & 255, i >> 8])).payload)
+        rows += page
+        i = first + len(page)
+        if not page or i >= kept or (count is not None and len(rows) >= count):
+            break
+    return kept, (rows if count is None else rows[:count])
 
 
 def _svooc_read(link):
     s = decode_svooc_summary(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 0])).payload)
-    pairs = []
-    for page in range(1, SVOOC_PAGES):
-        if len(pairs) >= s["pairs_kept"]:
-            break
-        pairs += decode_svooc_pairs(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, page])).payload)
-    s["pairs"] = pairs
+    kept, s["pairs"] = svooc_log(link, 0, SVOOC_SHOWN_PAIRS) if s["pairs_kept"] else (0, [])
+    s["pairs_kept"] = kept   # the summary's count saturates at 255
     return s
 
 
 def cmd_fc_svooc(link, a, sleep=time.sleep, poll_s=0.25):
     if a.fc_cmd == "svooc-status":
         return {"svooc": _svooc_read(link)}
+    if a.fc_cmd == "svooc-log":
+        kept, pairs = svooc_log(link, a.start, a.count)
+        return {"svooc_log": {"kept": kept, "start": a.start, "pairs": pairs}}
     if a.fc_cmd == "svooc-stop":
         link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STOP]))
         return {"svooc": _svooc_read(link)}
@@ -2543,7 +2562,7 @@ def cmd_fc_svooc(link, a, sleep=time.sleep, poll_s=0.25):
         raise FcRefused("the SuperVOOC trigger answers the adapter on D- and the adapter may raise VBUS (up to the 12 V "
                         "guard): add --confirm (SUPERVOOC adapter alone, NO load, nothing else on the K2)")
     try:
-        link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_START, FC_CONFIRM, a.cap]))
+        link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_START, FC_CONFIRM | (SVOOC_USB_A if a.usb_a else 0), a.cap]))
     except RemoteError as e:
         if e.status == STATUS_BUSY and len(e.payload) >= SVOOC_SUMMARY_BYTES:
             raise FcRefused(f"svooc trigger refused: {decode_svooc_summary(e.payload)['refusal']}") from e
@@ -2574,10 +2593,22 @@ def render_svooc(s):
     lines.append(f"  VBUS start {s['vbus_start_mv']} mV, max {s['vbus_max_mv']} mV, exit {exit_txt}; "
                  f"max |I| {s['ibus_max_ma']} mA")
     lines.append(f"  PD contract: start {s['contract_start']}, end {s['contract_end']}")
+    if s["usb_a_waiver"]:
+        lines.append("  far-sink check waived (USB-A): the operator's waiver, no PD anywhere at the start")
     if s["pairs"]:
         words = [f"{p['cmd'][2:]}>{p['word'][2:] if p['word'] else '---'}" for p in s["pairs"]]
-        lines.append(f"  pairs ({len(words)} of {s['pairs_total']}, cmd>reply, --- = not answered):")
+        more = "; the whole list: `fc svooc-log`" if s["pairs_kept"] > len(words) else ""
+        lines.append(f"  pairs ({len(words)} of {s['pairs_total']}, cmd>reply, --- = not answered{more}):")
         lines += ["    " + " ".join(words[i:i + 8]) for i in range(0, len(words), 8)]
+    return "\n".join(lines)
+
+
+def render_svooc_log(r):
+    lines = [f"svooc pairs: {len(r['pairs'])} shown of {r['kept']} kept (from {r['start']}); t = ms after the wake, "
+             "VBUS when the pair closed, cmd>reply, --- = not answered"]
+    for p in r["pairs"]:
+        vbus = f"{p['vbus_mv'] / 1000:5.2f} V" if p["vbus_mv"] else "   -   "
+        lines.append(f"  {p['i']:4d} {p['t_ms']:6d} ms {vbus}  {p['cmd'][2:]}>{p['word'][2:] if p['word'] else '---'}")
     return "\n".join(lines)
 # --- end svooc-trigger ---
 
@@ -3927,6 +3958,8 @@ def _render(name, r):
             return render_vooc(r["vooc"])
         if "svooc" in r:   # svooc-trigger
             return render_svooc(r["svooc"])
+        if "svooc_log" in r:
+            return render_svooc_log(r["svooc_log"])
         s = r["scan"]
         lines = [f"fc {r['state']} {r['proto']} target {r['target_mv']} mV, VBUS {r['vbus_mv']} mV"
                  + (f" ({r['fail']})" if r["fail"] != "none" else "")]
@@ -4225,7 +4258,16 @@ def build_parser():
     sfsv.add_argument("--confirm", action="store_true", help="required: the adapter may raise VBUS (up to the 12 V guard)")
     sfsv.add_argument("--cap", type=_svooc_cap, default=0, metavar="SECONDS",
                       help=f"run-time cap 1..{SVOOC_CAP_MAX_S} s (0 or omitted = {SVOOC_CAP_MAX_S} s)")
-    sfs.add_parser("svooc-status", help="the SuperVOOC trigger's last report and logged command/reply pairs")
+    sfsv.add_argument("--usb-a", dest="usb_a", action="store_true",
+                      help="operator waiver for a legacy A port: skips ONLY the far-sink refusal (start and in-run abort), "
+                      "for an A-to-C cable into the K2's bottom port; refused if any PD contract exists. Every other guard "
+                      "stays (|I| 50 mA, VBUS 4.5-5.5 V at start, 12 V ceiling, off-script, host loss, cap). The report says "
+                      "'far-sink check waived (USB-A)'")
+    sfs.add_parser("svooc-status", help="the SuperVOOC trigger's last report and the first logged command/reply pairs")
+    sfl = sfs.add_parser("svooc-log", help="the run's full command>reply list (up to 512 pairs of the latest wake), paged "
+                         "from the device: index, ms since the wake, VBUS, command and reply words (--json for tools)")
+    sfl.add_argument("--start", type=int, default=0, metavar="N", help="first pair index (default 0)")
+    sfl.add_argument("--count", type=int, default=None, metavar="N", help="at most N pairs (default: all)")
     sfs.add_parser("svooc-stop", help="stop the SuperVOOC trigger: stop answering, lines to passive idle")
     sst = sub.add_parser("store", help="flash store behind the USB drive (writes only when asked)")
     sss = sst.add_subparsers(dest="store_cmd", required=True)

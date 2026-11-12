@@ -68,11 +68,30 @@ void apply(const Action& a) {
 
 void on_edge(std::uint32_t word) { apply(g_wire.edge(word)); }
 
-// A line not at the passive idle, or one of the other D+/D- users running.
+// A line not at the passive idle, or one of the other D+/D- users running. The passive VOOC monitor is not one of them: it
+// only listens, so start() stops it (dpsniff::monitor_yield) once the other checks pass. A Black Box arm or stream is: it
+// keeps its recording, so the start refuses.
 bool lines_taken() {
     return fctrig::status().state != fc::State::Idle || fctrig::scan_running() || fctrig::ufcs_probe_running() ||
            dpdm::reset_busy() || dpdm::mismatch(dpdm::drive()) != 0 || dpsniff::armed() || dpsniff::streaming() ||
-           dpsniff::monitoring() || dpsniff::hooked();
+           dpsniff::hooked();
+}
+
+// VBUS (monitor sample) when each logged pair closed, parallel to the wire's pair list; 0 = no sample. The wire counts
+// pairs in the ISR, so the main loop stamps the new ones on its next pass (poll, and once more at the release).
+std::array<std::uint16_t, svooc::kLogPairs> g_pair_vbus{};
+std::size_t g_pair_vbus_n = 0;
+
+void stamp_pair_vbus() {
+    std::size_t n;
+    {
+        Critical cs;
+        n = g_wire.log().n;
+    }
+    if (g_pair_vbus_n >= n) return;
+    const auto v = power::vbus_fast_mv();
+    const std::uint16_t mv = v && *v > 0 ? std::uint16_t(*v > 0xFFFF ? 0xFFFF : *v) : std::uint16_t(0);
+    while (g_pair_vbus_n < n && g_pair_vbus_n < g_pair_vbus.size()) g_pair_vbus[g_pair_vbus_n++] = mv;
 }
 
 struct Live {
@@ -115,6 +134,7 @@ void wake() {
     {
         Critical cs;
         g_wire.begin(dpsniff::line_word());
+        g_pair_vbus_n = 0;   // the list restarts with the wire
     }
     dpsniff::hook_listen(&on_edge);
     K2LOG("[SVOOC] wake %u\n", unsigned(g_run.report().tries));
@@ -126,6 +146,7 @@ void release() {
         Critical cs;
         g_wire.stop();
     }
+    stamp_pair_vbus();
     dpdm::idle();          // both lines to the passive idle
     const svooc::Report& r = g_run.report();
     const svooc::Log& lg = g_wire.log();
@@ -146,11 +167,12 @@ void act(Next s) {
 
 }  // namespace
 
-svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s) {
+svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool usb_a) {
     if (g_run.running()) return svooc::Refusal::Busy;
     const Live l = live();
     svooc::StartFacts f;
     f.confirmed = confirmed;
+    f.usb_a = usb_a;
     f.ports_busy = ports_busy || lines_taken();
     f.host_ok = l.host_ok;
     f.vbus_known = l.vbus_known;
@@ -164,6 +186,9 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s) {
     f.ram_free = owner == mode_ram::Tenant::None || owner == mode_ram::Tenant::Sniff;
     bool claimed = false;
     if (svooc::refusal(f) == svooc::Refusal::None) {   // everything else holds: take the RAM and the ISR now
+        // The passive monitor listens on the same lines (and hook_claim refuses while it runs): the trigger takes over. It
+        // cannot re-arm while the hook is claimed, and fastcharge::poll keeps lines_free false while running().
+        dpsniff::monitor_yield();
         switch (dpsniff::hook_claim()) {
         case dpsniff::ArmResult::Ok: claimed = true; break;
         case dpsniff::ArmResult::NoRam: f.ram_free = false; break;
@@ -174,14 +199,14 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s) {
     const svooc::Refusal r = g_run.start(f, systick::millis(), cap_ms);
     if (r != svooc::Refusal::None) {
         if (claimed) dpsniff::hook_end();
-        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s\n", svooc::name(r), int(f.vbus_mv), int(f.ibus_ma),
-              svooc::name(f.contract));
+        K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s%s\n", svooc::name(r), int(f.vbus_mv), int(f.ibus_ma),
+              svooc::name(f.contract), usb_a ? " (USB-A waiver asked)" : "");
         return r;
     }
     g_exit_logged = false;
     own_vbus(true);
-    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s\n", unsigned(g_run.report().cap_ms),
-          int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract));
+    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s%s\n", unsigned(g_run.report().cap_ms),
+          int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract), usb_a ? " far-sink check waived (USB-A)" : "");
     return r;
 }
 
@@ -200,6 +225,7 @@ void poll() {
         return;
     }
     service();
+    stamp_pair_vbus();
     const Live l = live();
     svooc::Sample s;
     s.now_ms = systick::millis();
@@ -239,6 +265,17 @@ Snapshot snapshot() {
     s.driving = g_wire.driving();
     s.log = g_wire.log();
     return s;
+}
+
+std::size_t read_pairs(std::uint16_t from, std::span<svooc::PairRow> out) {
+    Critical cs;
+    const std::size_t n = g_wire.log().n;
+    std::size_t k = 0;
+    for (; k < out.size() && from + k < n; ++k) {
+        const svooc::LogPair& p = g_wire.pair(from + k);
+        out[k] = {p.cmd, p.word, p.t_ms, from + k < g_pair_vbus_n ? g_pair_vbus[from + k] : std::uint16_t(0)};
+    }
+    return k;
 }
 
 }  // namespace k2::svooc_trig

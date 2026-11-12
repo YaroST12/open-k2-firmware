@@ -239,14 +239,23 @@ struct Fake {
     int svooc_starts = 0, svooc_stops = 0, svooc_cap = -1;
     k2::svooc::Refusal svooc_refusal = k2::svooc::Refusal::None;   // what the next start answers
     SvoocSnapshot svooc_snap{};
-    k2::svooc::Refusal svooc_start(uint8_t cap_s) {
-        calls++; svooc_starts++; svooc_cap = cap_s;
+    bool svooc_usb_a = false;           // the waiver flag the last start carried
+    std::array<k2::svooc::PairRow, k2::svooc::kLogPairs> svooc_rows{};   // the pair list svooc_pairs serves (svooc_snap.log.n of them)
+    k2::svooc::Refusal svooc_start(uint8_t cap_s, bool usb_a) {
+        calls++; svooc_starts++; svooc_cap = cap_s; svooc_usb_a = usb_a;
         svooc_snap.report.refusal = svooc_refusal;
+        svooc_snap.report.usb_a = usb_a;
         if (svooc_refusal == k2::svooc::Refusal::None) svooc_snap.stage = k2::svooc::Stage::Wake;
         return svooc_refusal;
     }
     void svooc_stop() { calls++; svooc_stops++; svooc_snap.report.abort = k2::svooc::Abort::Stopped; }
     SvoocSnapshot svooc_info() { calls++; return svooc_snap; }
+    size_t svooc_pairs(uint16_t from, std::span<k2::svooc::PairRow> out) {
+        calls++;
+        size_t n = 0;
+        while (n < out.size() && from + n < svooc_snap.log.n) { out[n] = svooc_rows[from + n]; n++; }
+        return n;
+    }
     bool locked = false;                // D+/D- locked by a running trigger
     bool lines_locked() { return locked; }
     // --- end svooc-trigger ---

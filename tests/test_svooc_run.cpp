@@ -351,6 +351,73 @@ void test_own_contract_runs_and_aborts() {
     CHECK_EQ(o.report().abort, Abort::Overvoltage);
 }
 
+// The operator's USB-A waiver (`--usb-a`): a legacy A-to-C cable brings VBUS through the bottom port with no pull-down on
+// CC, which reads as a far sink. The waiver drops ONLY that far-sink refusal / abort, and only with no PD anywhere.
+void test_usb_a_waiver() {
+    using svooc::Contract;
+    svooc::StartFacts f = ok_start();
+    f.far_sink = true;
+    CHECK_EQ(svooc::refusal(f), Refusal::Sink);                    // without the flag: refused as before
+    f.usb_a = true;
+    CHECK_EQ(svooc::refusal(f), Refusal::None);                    // waived: no PD, no contract
+    f.contract = Contract::Own5V;                                  // PD active anywhere: the flag itself is refused
+    CHECK_EQ(svooc::refusal(f), Refusal::UsbAWithPd);
+    f.contract = Contract::Other;
+    CHECK_EQ(svooc::refusal(f), Refusal::UsbAWithPd);
+    f.far_sink = false;                                            // also when there is no far sink to waive
+    CHECK_EQ(svooc::refusal(f), Refusal::UsbAWithPd);
+    f.contract = Contract::None;
+    CHECK_EQ(svooc::refusal(f), Refusal::None);
+    // every other guard stays
+    struct Case { void (*edit)(svooc::StartFacts&); Refusal want; };
+    const Case cases[] = {
+        {[](svooc::StartFacts& f) { f.confirmed = false; }, Refusal::NotConfirmed},
+        {[](svooc::StartFacts& f) { f.ports_busy = true; }, Refusal::Busy},
+        {[](svooc::StartFacts& f) { f.host_ok = false; }, Refusal::NoHost},
+        {[](svooc::StartFacts& f) { f.vbus_known = false; }, Refusal::NoMonitor},
+        {[](svooc::StartFacts& f) { f.inline_mode = true; }, Refusal::Inline},
+        {[](svooc::StartFacts& f) { f.ibus_ma = 51; }, Refusal::Current},
+        {[](svooc::StartFacts& f) { f.ibus_ma = -51; }, Refusal::Current},
+        {[](svooc::StartFacts& f) { f.vbus_mv = 5501; }, Refusal::NotFiveVolts},
+        {[](svooc::StartFacts& f) { f.vbus_mv = 4499; }, Refusal::NotFiveVolts},
+        {[](svooc::StartFacts& f) { f.ram_free = false; }, Refusal::NoRam},
+    };
+    for (const Case& c : cases) {
+        svooc::StartFacts g = ok_start();
+        g.far_sink = g.usb_a = true;
+        c.edit(g);
+        CHECK_EQ(svooc::refusal(g), c.want);
+    }
+    // the report says it
+    svooc::Run r;
+    f.far_sink = true;
+    CHECK_EQ(r.start(f, 0), Refusal::None);
+    CHECK(r.report().usb_a);
+    svooc::Run plain;
+    CHECK_EQ(plain.start(ok_start(), 0), Refusal::None);
+    CHECK(!plain.report().usb_a);
+    // running: the far-sink reading no longer aborts, and nothing else is waived
+    const auto after = [](void (*edit)(svooc::Sample&), bool usb_a) {
+        svooc::Run run;
+        svooc::StartFacts sf = ok_start();
+        sf.far_sink = sf.usb_a = usb_a;
+        run.start(sf, 0);
+        run.poll(ok_sample(0));
+        svooc::Sample s = ok_sample(10);
+        s.far_sink = true;
+        edit(s);
+        run.poll(s);
+        return run.report().abort;
+    };
+    CHECK_EQ(after([](svooc::Sample&) {}, true), Abort::None);
+    CHECK_EQ(after([](svooc::Sample&) {}, false), Abort::Sink);
+    CHECK_EQ(after([](svooc::Sample& s) { s.inline_mode = true; }, true), Abort::Sink);
+    CHECK_EQ(after([](svooc::Sample& s) { s.ibus_ma = 51; }, true), Abort::Current);
+    CHECK_EQ(after([](svooc::Sample& s) { s.vbus_mv = 12001; }, true), Abort::Overvoltage);
+    CHECK_EQ(after([](svooc::Sample& s) { s.contract = Contract::Own5V; }, true), Abort::PdContract);   // PD showed up
+    CHECK_EQ(after([](svooc::Sample& s) { s.host_ok = false; }, true), Abort::HostGone);
+}
+
 // Every reason has its own name (the log and tools/k2_remote.py print them).
 void test_names() {
     for (int i = 0; i <= int(Refusal::NoRam); ++i) CHECK(svooc::name(Refusal(i))[0] != '?');
@@ -370,6 +437,7 @@ int main() {
     test_contract_classification();
     test_own_contract_start();
     test_own_contract_runs_and_aborts();
+    test_usb_a_waiver();
     test_names();
     return test_report("test_svooc_run");
 }

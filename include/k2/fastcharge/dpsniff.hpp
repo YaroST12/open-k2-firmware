@@ -79,6 +79,10 @@ std::size_t read_record(std::size_t from, std::span<std::uint8_t> out, std::size
 // monitor still owns the floating lines).
 void monitor_poll(bool wanted, bool lines_free);
 bool monitoring();
+// The SuperVOOC trigger takes over from the monitor: stops it (the decoder's session is closed and logged, the lines go to
+// the passive idle) and returns true if it was running. It does not re-arm while the trigger's hook is claimed
+// (monitor_poll); once the run is over and fastcharge::poll() sees the lines free, monitor_poll starts it again as usual.
+bool monitor_yield();
 void monitor_enable(bool on);     // the operator's switch (RAM only, on at boot)
 bool monitor_enabled();
 struct MonitorInfo {

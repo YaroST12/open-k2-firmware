@@ -256,9 +256,30 @@ Approved by the operator on 2026-11-12 under the guards below. The K2 stands in 
 answers each command on D- with the word a OnePlus 15 sent, and lets the adapter raise VBUS while nothing draws
 current. Remote only, no UI entry:
 
-    python3 tools/k2_remote.py fc svooc-trigger --confirm [--cap SECONDS]   # polls until the run ends, Ctrl-C = stop
-    python3 tools/k2_remote.py fc svooc-status                             # the last report and the logged pairs
+    python3 tools/k2_remote.py fc svooc-trigger --confirm [--cap SECONDS] [--usb-a]   # polls until the run ends, Ctrl-C = stop
+    python3 tools/k2_remote.py fc svooc-status                             # the last report and the first 40 pairs
+    python3 tools/k2_remote.py [--json] fc svooc-log [--start N] [--count N]   # the whole command>reply list
     python3 tools/k2_remote.py fc svooc-stop
+
+- Monitor handoff (2026-11-12): the passive VOOC monitor is no obstacle to a start. Once every other check passes, the
+  trigger stops it (`dpsniff::monitor_yield`: the decoder's session is closed and logged, the lines go to the passive idle)
+  and claims the lines. The monitor cannot re-arm while the trigger's hook is claimed or `fctrig::svooc_running()`
+  (fastcharge::poll's `lines_free`), and resumes by itself after the run when its normal conditions hold. A Black Box arm
+  or stream still refuses the start, and a Black Box arm / stream during the run is refused (`SniffRefusal::Svooc`).
+- Legacy A port waiver (`--usb-a`, start flags bit 2, `svooc::StartFacts::usb_a`): for a charger's USB-A port wired
+  through an A-to-C cable into the K2's bottom (female) port, nothing on the other port. The K2 then sees a far sink (the
+  adapter side looks like a load) and would refuse. The operator's flag waives ONLY that far-sink refusal, at the start and
+  as the in-run abort "sink appeared", and only while no PD is active anywhere (link `pd_active` false and no contract,
+  `Contract::None`); with PD active the start is refused as "USB-A waiver but PD is active". Every other guard stays:
+  |I| <= 50 mA, VBUS 4.5-5.5 V at the start, the 12 V ceiling, off-script, host loss, the cap, the exit watch, and the
+  inline / PD-appears aborts. The report (`usb_a_waiver`, summary flags bit 4) and the `[SVOOC] start` log line say
+  "far-sink check waived (USB-A)".
+- Full pair list (`fc svooc-log`, FC op 5 sub-op 3 `[5, 3, from_lo, from_hi]`): the wire keeps up to 512 command>reply
+  pairs of the latest wake (6 B each in RAM, plus 2 B of VBUS), each with the command's start in ms since that wake
+  (u16, saturating) and the monitor's VBUS when the pair closed (0 = none); 7 rows (49 B) per reply page, so a whole
+  list is at most 74 requests. The list stays readable after the run until the next wake. `--json` prints
+  `{"svooc_log": {"kept", "start", "pairs": [{"i", "t_ms", "vbus_mv", "cmd", "word"}]}}`. `svooc-trigger` and
+  `svooc-status` print the first 40 pairs of it.
 
 Three pure parts (host-tested) and one glue file:
 
@@ -278,7 +299,7 @@ Three pure parts (host-tested) and one glue file:
   next frame's first edge, then is released (floating, the line idles high). A slot whose clock stops is released 1 ms
   after its last edge. `tests/test_svooc_wire.cpp` replays the captured edge files through it.
 - Guards and session (`include/k2/fastcharge/svooc_run.hpp`, `tests/test_svooc_run.cpp`). Refuses to start without
-  the confirm flag, while D+/D- are owned (engine, scan, probe, charger test, sniffer, monitor, a line not at idle),
+  the confirm flag, while D+/D- are owned (engine, scan, probe, charger test, Black Box arm / stream, a line not at idle),
   without the host link or the power monitor, with a sink on the bottom port (Rd on CC) or inline mode, with a PD
   contract other than the K2's own 5 V one (see below), with |I| > 50 mA, with VBUS outside 4.5-5.5 V, or when the shared RAM belongs to the USB drive (reported as
   "no RAM: USB drive enabled", not "busy"). While running, every main-loop pass aborts on: host gone, monitor lost,
@@ -298,7 +319,7 @@ Three pure parts (host-tested) and one glue file:
   rest, 3 tries), "no adapter answer" after that.
 - Exit, always: stop answering, release D-, both lines to the passive idle; then watch VBUS for 5 s. Back at or under
   5.5 V is reported as such, still higher as "STILL ABOVE 5.5 V" with the reading. Report: highest VBUS, highest |I|,
-  commands / replies / missed / cut, the first 40 command > reply pairs, the abort or refusal reason. Log lines
+  commands / replies / missed / cut, the command > reply pairs (the first 40 in the report, all through `svooc-log`), the abort or refusal reason. Log lines
   `[SVOOC] start / wake / release / exit`.
 - Glue (`src/fastcharge/svooc_trig.cpp`). The dpsniff ISR (EXTI7 D+ / EXTI2 D-) calls the wire through a hook; the
   ISR busy-waits from the edge's own cycle stamp to rise + 50 us (never longer) and sets D- through `dpdm::set_dm`.
