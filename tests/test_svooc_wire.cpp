@@ -457,6 +457,83 @@ void test_long_run_answers_every_pair() {
     CHECK_EQ(f.releases, int(cmds.size()));
 }
 
+// The wire's own clock: deadline() is the cycle time tick() next has work at (the hold after a reply, a cut slot, a frame
+// gone quiet, a slot that never came), nothing when it has none. An interrupt timer armed for it and nothing else drives
+// tick(): no main loop at all, so a stalled one cannot hold D- past the hold. The same 20 s run as above answers every
+// pair, and D- goes exactly kHoldUs after each reply's last rise.
+void test_deadline_alone_drives_the_wire() {
+    Synth s;
+    s.edge(s.t, true, false);
+    std::vector<std::uint8_t> cmds{svooc::kIdent};
+    for (const auto& st : svooc::kScript) cmds.push_back(st.cmd);
+    while (cmds.size() < 434) cmds.push_back(0x82);
+    std::uint32_t at = s.t + 5000 * kUs;
+    std::vector<std::uint32_t> last_rises;
+    for (const std::uint8_t c : cmds) {
+        s.command(at, c);
+        last_rises.push_back((s.clock(at + 9000 * kUs) - 460 * kUs + 30 * kUs) & ~63u);   // as the edge word stamps it
+        at += 44000 * kUs;
+    }
+    Feed f;
+    CHECK(!f.w.deadline().has_value());   // no wire yet
+    std::vector<std::uint32_t> release_at;
+    auto timer = [&](std::uint32_t until) {   // the timer fires at each deadline before `until`
+        while (const auto d = f.w.deadline()) {
+            if (std::int32_t(*d - until) >= 0) return;
+            const svooc::Action a = f.w.tick(*d);
+            if (a.kind == Kind::Release) release_at.push_back(*d);
+            f.count(a);
+        }
+    };
+    for (const std::uint32_t x : s.words) {
+        timer(x & ~63u);
+        f.count(f.w.edge(x));
+    }
+    timer(at + 100000 * kUs);
+    CHECK(!f.w.deadline().has_value());   // all done: the last frame closed, nothing driven, nothing pending
+    CHECK_EQ(f.w.log().commands, cmds.size());
+    CHECK_EQ(f.w.log().replies, cmds.size());
+    CHECK_EQ(f.w.log().missed, 0u);
+    CHECK_EQ(f.w.log().cut, 0u);
+    CHECK_EQ(f.releases, int(cmds.size()));
+    CHECK_EQ(release_at.size(), last_rises.size());
+    for (std::size_t i = 0; i < release_at.size() && i < last_rises.size(); ++i)
+        CHECK_EQ(release_at[i], last_rises[i] + svooc::kHoldUs * kUs);
+}
+
+// A clock that stops mid-reply and a command whose slot never comes are the timer's work too: the cut slot lets go
+// kCutUs after its last edge, the missed slot is counted kReplyWaitUs after its command, both with no main loop.
+void test_deadline_cut_and_missed() {
+    Synth s;
+    s.edge(s.t, true, false);
+    s.command(s.t + 5000 * kUs, 0xA8);
+    const std::uint32_t end = s.clock(s.t + 14000 * kUs, 3);
+    const std::uint32_t last_rise = (end - 460 * kUs + 30 * kUs) & ~63u;   // as the edge word stamps it
+    Feed f;
+    f.all(s.words);
+    CHECK(f.w.driving());
+    auto d = f.w.deadline();
+    CHECK(d.has_value());
+    if (d) CHECK_EQ(*d, last_rise + svooc::kCutUs * kUs);
+    if (d) CHECK_EQ(f.w.tick(*d).kind, Kind::Release);
+    d = f.w.deadline();   // then the quiet slot frame closes
+    CHECK(d.has_value());
+    if (d) f.w.tick(*d);
+    CHECK_EQ(f.w.log().cut, 1u);
+    CHECK(!f.w.deadline().has_value());
+
+    Synth m;   // a lone command: its frame closes once quiet, then the slot it waits for runs out
+    m.edge(m.t, true, false);
+    m.command(m.t + 5000 * kUs, 0xA8);
+    Feed g;
+    g.all(m.words);
+    for (int i = 0; i < 4; ++i)
+        if (const auto e = g.w.deadline()) g.w.tick(*e);
+    CHECK_EQ(g.w.log().commands, 1u);
+    CHECK_EQ(g.w.log().missed, 1u);
+    CHECK(!g.w.deadline().has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -472,5 +549,7 @@ int main() {
     test_begin_after_stop_is_a_fresh_wire();
     test_edge_count_and_last_edge();
     test_long_run_answers_every_pair();
+    test_deadline_alone_drives_the_wire();
+    test_deadline_cut_and_missed();
     return test_report("test_svooc_wire");
 }

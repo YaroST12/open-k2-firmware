@@ -30,6 +30,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 #include "k2/fastcharge/svooc_script.hpp"
 #include "k2/fastcharge/vooc.hpp"
@@ -158,6 +159,21 @@ public:
         if (pend_ && now - pend_t_ > us(kReplyWaitUs)) miss();
         if (driving_ && now - drive_t_ >= us(done_ ? kHoldUs : kCutUs)) return release(now);
         return {};
+    }
+
+    // The cycle time at which tick() next has work, nothing if it has none: D- to let go (kHoldUs after a reply's last
+    // rise, kCutUs after a stopped slot's), a frame whose clock went quiet (kGroupGapUs after its last rise, D+ high), a
+    // command whose slot did not come (kReplyWaitUs after its start). Every edge and every tick may move it; the glue arms
+    // an interrupt timer for it after each, so the wire's timing never waits for the main loop.
+    std::optional<std::uint32_t> deadline() const {
+        std::optional<std::uint32_t> d;
+        auto take = [&](std::uint32_t t) {
+            if (!d || std::int32_t(t - *d) < 0) d = t;
+        };
+        if (in_frame_ && !low()) take(last_rise_ + us(kGroupGapUs) + 1);   // tick: now - last_rise_ > gap
+        if (pend_) take(pend_t_ + us(kReplyWaitUs) + 1);                    // tick: now - pend_t_ > wait
+        if (driving_) take(drive_t_ + us(done_ ? kHoldUs : kCutUs));        // tick: now - drive_t_ >= hold / cut
+        return d;
     }
 
     // The trigger ends: no slot is taken again; D- goes if it is held.
