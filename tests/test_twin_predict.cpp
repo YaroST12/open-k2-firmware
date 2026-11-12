@@ -243,6 +243,39 @@ static void test_want_mw() {
     CHECK_EQ(want_mw(Twin{}), 0);
 }
 
+// The grade of a prediction: power it gets against the power it wants. Full at 100 % and over, Partial from 60 %, else Poor;
+// no contract and 5 V only are Poor whatever the numbers say.
+static void test_grade() {
+    Outcome o;
+    o.kind = Kind::Fixed;
+    o.mw = 33000;
+    CHECK_EQ(int(grade(o, 33000)), int(Grade::Full));     // exactly 100 %
+    o.mw = 36000;
+    CHECK_EQ(int(grade(o, 33000)), int(Grade::Full));     // more than it wants
+    o.mw = 19800;
+    CHECK_EQ(int(grade(o, 33000)), int(Grade::Partial));  // exactly 60 %
+    o.mw = 32999;
+    CHECK_EQ(int(grade(o, 33000)), int(Grade::Partial));  // just under 100 %
+    o.mw = 599;
+    CHECK_EQ(int(grade(o, 1000)), int(Grade::Poor));      // 59.9 %
+    o.mw = 600;
+    CHECK_EQ(int(grade(o, 1000)), int(Grade::Partial));   // 60.0 %
+    o.mw = 0;
+    CHECK_EQ(int(grade(o, 33000)), int(Grade::Poor));
+    o.mw = 15000;
+    CHECK_EQ(int(grade(o, 0)), int(Grade::Full));         // it wants nothing: nothing is missing
+    o.kind = Kind::FiveV;
+    o.mw = 15000;
+    CHECK_EQ(int(grade(o, 15000)), int(Grade::Poor));     // 5 V only is Poor even at 100 %
+    o.kind = Kind::None;
+    o.mw = 33000;
+    CHECK_EQ(int(grade(o, 33000)), int(Grade::Poor));     // no contract
+    // The real pairs: the 5 A cable identity lifts the OP15 from 36 W (65 %, Partial) to its 55 W
+    CHECK_EQ(int(grade(predict(kOp15, caps_arr(kC1_3a), {}), want_mw(kOp15))), int(Grade::Partial));
+    CHECK_EQ(int(grade(predict(kOp15, caps_arr(kC1_5a), {}), want_mw(kOp15))), int(Grade::Full));
+    CHECK_EQ(int(grade(predict(kLaptop, caps_arr(kC1_3a), {}), want_mw(kLaptop))), int(Grade::Poor));
+}
+
 // The Request the live proof sends: the position and the voltage and current this prediction chose.
 static void test_to_choice() {
     const Outcome o = predict(kOp15, caps_arr(kC1_5a), {});
@@ -284,6 +317,7 @@ int main() {
     test_rule8_advertised_and_cable_limits();
     test_rule9_limiter();
     test_want_mw();
+    test_grade();
     test_to_choice();
     test_real_matrix();
     return test_report("test_twin_predict");

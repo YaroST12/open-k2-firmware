@@ -10,7 +10,8 @@
 //    cell and the note reads the result ("proved 36W", "charger refused 12V"). Footer: the charger's top offer and the count
 //    ("PD 20V3A: 2 of 5 full"). OK on a twin opens its detail; OK on Learn reads a device alone on the K2.
 //  Detail: TopBar "Twin"; the name; the gets / wants block (font 24 watts, a bar of what it gets against what it wants, the
-//    contract and what limits it); InfoBlock lines Wants / Offer / USB; then action rows Prove live, Re-learn from device,
+//    contract and what limits it, numbers graded green / amber / red); a header "Source" | name and a 1 px hairline split the
+//    block: the charger's facts left, the device's right (fixed levels, PPS ranges, USB); then action rows Prove live, Re-learn from device,
 //    Delete twin. The page scrolls by whole lines so the focused action is on screen. Prove live and Delete arm a kit
 //    ActionCell (CONFIRM, 5 s drain) like the charger test's START; the proof then shows Asked / VBUS in that box.
 // The page keeps a small cache of the library (name + prediction per twin, 12 at most) and repredicts only when the library
@@ -81,7 +82,7 @@ private:
     void paint_line(int i, int16_t y);
     void layout_detail();                                    // first_ and the action box for the focused action
     void paint_detail(uint32_t now_ms);
-    void build_info();                                       // Wants / Offer / USB texts of the open twin
+    void build_info();                                       // the charger (left) and device (right) fact columns of the open twin
     int rows() const { return detail_ ? kActions : n_ + 1; }   // twins + the Learn row
     bool running() const;
     const Entry *entry_by_seq(uint8_t seq) const;
@@ -118,9 +119,9 @@ private:
     int first_ = 0;                                          // body lines scrolled off the top
     int16_t box_y_ = kit::kListBottom;                       // top of the action box (rows, the armed cell, the proof)
     uint32_t det_sig_ = 0;                                   // what the body was last painted from (0 = repaint)
-    int info_n_ = 0;                                         // InfoBlock lines: 3..5
-    std::array<const char *, 5> info_tag_{};
-    std::array<StrBuf<24>, 5> info_val_{};
+    int info_n_ = 0;                                         // InfoBlock lines: 2..3 (fixed levels, PPS ranges, USB)
+    std::array<StrBuf<24>, 3> info_l_{};                     // the charger's facts, left column
+    std::array<StrBuf<24>, 3> info_r_{};                     // the device's facts, right column
     kit::ActionCell cell_;
     StrBuf<12> vbus_shown_;                                  // the proof box's VBUS text as painted
     uint32_t vbus_next_ = 0;

@@ -48,7 +48,7 @@ constexpr const char *kNotes[] = {
     "wakes the charger first", "waking the charger", "charger has not offered",
 };
 constexpr int kNoteWakes = 15, kNoteWaking = 16, kNoteSilent = 17;
-constexpr const char *kLimit[] = {"full power", "limit: device max", "limit: charger", "limit: cable (5A)"};
+constexpr const char *kLimit[] = {"full power", "limit: device max", "limit: charger", "limit: cable 5A"};
 static_assert(all_fit(kFooters, kSmallAdvPx, kFooterCells * static_cast<int>(kSmallAdvPx)), "a Device twins footer is wider than the footer line");
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Device twins note is wider than the note box");
 static_assert(all_fit(kActionText, kSmallAdvPx, 224 - ListView::kBarW - kit::kTextX), "a Device twins action runs into the scroll lane");
@@ -73,7 +73,9 @@ constexpr int16_t kNameH = 20, kGetsH = 26, kBarLineH = 6, kContractH = 20, kRul
 constexpr int16_t kLeft = 6, kRight = 218;
 constexpr const char *kSourceWord = "Source";   // over the charger's side of the header
 constexpr int16_t kCellY = 156, kCellH = 64;     // the armed ActionCell / the proof box (the charger test's START box)
-constexpr int kInfoChars = (224 - kit::kInfoValueX - 4) / static_cast<int>(kSmallAdvPx);   // 21
+// The source / device split: one 1 px hairline at kSplitX from the "gets" line down. Left of it the charger's facts (left-aligned,
+// x6..100), right of it the device's (right-aligned to x218, x110..218). A fact too wide for its half drops to font 12.
+constexpr int16_t kSplitX = 104, kLeftRoom = kSplitX - 4 - kLeft, kRightX = kSplitX + 6, kRightRoom = kRight - kRightX;
 
 template <size_t N>
 void put_level(StrBuf<N> &b, uint32_t milli, char unit) {
@@ -106,6 +108,35 @@ void put_top_offer(StrBuf<N> &b, const pd::SourceCaps &caps) {
     b.put(best->max_mv > 20000 ? "EPR " : "PD ");
     put_level(b, best->max_mv, 'V');
     put_level(b, best->max_ma, 'A');
+}
+
+// One facts row of the InfoBlock (20 px): the charger's fact left-aligned, the device's right-aligned. Both take font 16, or both
+// font 12 when either is wider than its half, so a row never mixes sizes. "--" (nothing known) is faint.
+void paint_pair(const Surface &s, int16_t y, std::string_view l, std::string_view r) {
+    const bool big = text_width(kSmall, l) <= kLeftRoom && text_width(kSmall, r) <= kRightRoom;
+    const Font &f = big ? kSmall : kLabelFont;
+    const int16_t ty = static_cast<int16_t>(y + (kit::kInfoPitch - f.height) / 2);
+    char lb[kFitBuf], rb[kFitBuf];
+    if (!l.empty()) {
+        const std::string_view t = fit_data(f, l, kLeftRoom, lb);
+        gfx_text(s, f, kLeft, ty, t, l == "--" ? kFaint : kText, kBg);
+    }
+    if (!r.empty()) {
+        const std::string_view t = fit_data(f, r, kRightRoom, rb);
+        gfx_text(s, f, static_cast<int16_t>(kRight - text_width(f, t)), ty, t, r == "--" ? kFaint : kText, kBg);
+    }
+}
+
+void paint_split(const Surface &s, int16_t y, int16_t h) { gfx_fill(s, kSplitX, y, 1, h, kRule); }
+
+// The ink of a prediction's grade: green gets >= wants, amber from 60 %, red below (and no contract, 5 V only).
+uint16_t grade_ink(const twin::Outcome &o, uint32_t want) {
+    switch (twin::grade(o, want)) {
+    case twin::Grade::Full: return kOk;
+    case twin::Grade::Partial: return kCaution;
+    case twin::Grade::Poor: break;
+    }
+    return kError;
 }
 
 }  // namespace
@@ -534,30 +565,18 @@ void TwinPage::delete_twin() {
 
 // ---- detail layout ----------------------------------------------------------------------------------------------------------
 
-// The InfoBlock texts of the open twin: Wants (its fixed levels and its PPS range), Offer (the charger's fixed span and its
-// PPS range), USB (what it declared). A pair joins on one line when it fits ("5V 9V, PPS 3.3-11V 3A"), else the range takes
-// a second line without a tag.
+// The InfoBlock texts of the open twin, two columns under the Source / device header: the charger's offer on the left (its
+// fixed span, then its PPS range), the device's wants on the right (its fixed levels, then its PPS range), and what the device
+// declared on USB as the last right-hand fact. Rows: fixed levels, PPS ranges (only when either side lists one), USB.
 void TwinPage::build_info() {
     info_n_ = 0;
-    auto add = [&](const char *tag, const StrBuf<24> &a, const StrBuf<24> &b) {
-        if (info_n_ >= 5) return;
-        auto &v = info_val_[static_cast<std::size_t>(info_n_)];
-        v.clear();
-        info_tag_[static_cast<std::size_t>(info_n_)] = tag;
-        if (a.view().empty() && b.view().empty()) {
-            v.put("--");
-        } else if (a.view().empty() || b.view().empty()) {
-            v.put(a.view()).put(b.view());
-        } else if (a.view().size() + 2 + b.view().size() <= static_cast<std::size_t>(kInfoChars)) {
-            v.put(a.view()).put(", ").put(b.view());
-        } else {
-            v.put(a.view());
-            info_n_++;
-            if (info_n_ >= 5) return;
-            info_tag_[static_cast<std::size_t>(info_n_)] = "";
-            info_val_[static_cast<std::size_t>(info_n_)].clear();
-            info_val_[static_cast<std::size_t>(info_n_)].put(b.view());
-        }
+    auto add = [&](const StrBuf<24> &l, const StrBuf<24> &r) {
+        auto &lv = info_l_[static_cast<std::size_t>(info_n_)];
+        auto &rv = info_r_[static_cast<std::size_t>(info_n_)];
+        lv.clear();
+        rv.clear();
+        lv.put(l.view());
+        rv.put(r.view());
         info_n_++;
     };
     auto range = [](StrBuf<24> &b, const char *tag, uint32_t lo, uint32_t hi, uint32_t ma) {
@@ -567,21 +586,18 @@ void TwinPage::build_info() {
         b.put_char(' ');
         put_level(b, ma, 'A');
     };
-    // Wants: the device's sink PDOs.
-    StrBuf<24> fixed, pps;
+    // Right column, wants: the device's sink PDOs.
+    StrBuf<24> wfixed, wpps, fixed, pps;
     for (std::size_t i = 0; i < det_.num_pdos && i < det_.pdos.size(); i++) {
         const pd::Pdo p = pd::decode_pdo(det_.pdos[i]);
         if (p.type == pd::PdoType::Fixed) {
-            if (fixed.view().size()) fixed.put_char(' ');
-            put_level(fixed, p.max_mv, 'V');
-        } else if (p.type == pd::PdoType::Pps && pps.view().empty()) {
-            range(pps, "PPS ", p.min_mv, p.max_mv, p.max_ma);
+            if (wfixed.view().size()) wfixed.put_char(' ');
+            put_level(wfixed, p.max_mv, 'V');
+        } else if (p.type == pd::PdoType::Pps && wpps.view().empty()) {
+            range(wpps, "PPS ", p.min_mv, p.max_mv, p.max_ma);
         }
     }
-    add("Wants", fixed, pps);
-    // Offer: the charger's list now.
-    fixed.clear();
-    pps.clear();
+    // Left column, offer: the charger's list now.
     const pd::SourceCaps &caps = pd::active_caps();
     uint32_t lo = 0, hi = 0, ma = 0, plo = 0, phi = 0, pma = 0;
     for (std::size_t i = 0; caps.valid && i < caps.num_pdos && i < caps.pdos.size(); i++) {
@@ -603,16 +619,19 @@ void TwinPage::build_info() {
         }
     }
     if (phi) range(pps, "PPS ", plo, phi, pma);
-    add("Offer", fixed, pps);
-    // USB: what it declared while alone ("2.0 480M").
+    if (fixed.view().empty()) fixed.put("--");    // nothing known: a faint "--" on its side
+    if (wfixed.view().empty()) wfixed.put("--");
+    add(fixed, wfixed);
+    if (!pps.view().empty() || !wpps.view().empty()) add(pps, wpps);
+    // USB, a device fact: what it declared while alone ("USB 2.0 480M").
     char u[40];
     twin::declared_text(det_.id_hi, det_.decl, u);
     std::string_view uv(u);
     if (uv.substr(0, 4) == "USB ") uv.remove_prefix(4);
     fixed.clear();
-    pps.clear();
-    if (uv != "-") fixed.put(uv);
-    add("USB", fixed, pps);
+    wpps.clear();
+    wpps.put("USB ").put(uv != "-" ? uv : "--");
+    add(fixed, wpps);
 }
 
 int16_t TwinPage::line_h(int i) const {
@@ -665,7 +684,11 @@ void TwinPage::paint_line(int i, int16_t y) {
     }
     case 1: {   // "gets 36W" ... "wants 55W": font 12 words on the font 24 values' baseline
         const bool proved = e && !hide_proof_ && twin_hw::live().slot(e->seq).verdict == live::Verdict::Granted;
-        const uint16_t ink = have && twin::perfect_match(det_, e->out) ? kOk : kWatt;   // the device's best level, exactly
+        // Both numbers wear the prediction's grade (gets against wants: full, 60 % and over, below); with no prediction yet
+        // gets is a faint "--" and wants stays neutral. No contract and 5 V only grade red.
+        uint16_t ink = kFaint, want_ink = kText;
+        if (e && e->have) ink = want_ink = grade_ink(e->out, twin::want_mw(det_));
+        paint_split(s, y, kGetsH);
         const char *word = proved ? "proved" : "gets";
         const int16_t vy = static_cast<int16_t>(y + 1);
         const int16_t wy = static_cast<int16_t>(vy + kMid.height - kLabelFont.height - 2);
@@ -674,24 +697,26 @@ void TwinPage::paint_line(int i, int16_t y) {
         StrBuf<8> v;
         if (have) put_w(v, e->out.mw);
         else v.put("--");
-        gfx_text(s, kMid, gx, vy, v.view(), have ? ink : kFaint, kBg);
+        gfx_text(s, kMid, gx, vy, v.view(), ink, kBg);
         v.clear();
         put_w(v, twin::want_mw(det_));
         const int16_t vx = static_cast<int16_t>(kRight - text_width(kMid, v.view()));
-        gfx_text(s, kMid, vx, vy, v.view(), ink, kBg);
+        gfx_text(s, kMid, vx, vy, v.view(), want_ink, kBg);
         gfx_text(s, kLabelFont, static_cast<int16_t>(vx - 4 - text_width(kLabelFont, "wants")), wy, "wants", kDim, kBg);
         return;
     }
     case 2: {   // the bar: track = what it wants, fill = what it gets
         const int16_t w = static_cast<int16_t>(kRight - kLeft);
+        paint_split(s, y, kBarLineH);   // the bar crosses the hairline
         const uint32_t want = twin::want_mw(det_);
         int16_t fill = 0;
         if (have && want) fill = static_cast<int16_t>(std::min<uint32_t>(w, static_cast<uint32_t>(w) * e->out.mw / want));
-        if (fill) gfx_fill(s, kLeft, static_cast<int16_t>(y + 1), fill, 3, kWatt);
+        if (fill) gfx_fill(s, kLeft, static_cast<int16_t>(y + 1), fill, 3, grade_ink(e->out, want));   // the fill wears the grade
         if (fill < w) gfx_fill(s, static_cast<int16_t>(kLeft + fill), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - fill), 3, kRule);
         return;
     }
     case 3: {   // "12V3A" (volts, amps in their colours) and what limits it
+        paint_split(s, y, kContractH);
         if (!have) {
             gfx_text(s, kSmall, kLeft, static_cast<int16_t>(y + 2), "--", kFaint, kBg);
             return;
@@ -706,7 +731,7 @@ void TwinPage::paint_line(int i, int16_t y) {
         case twin::Limiter::None: lim.put(kLimit[0]); break;
         case twin::Limiter::Device: lim.put(kLimit[1]); break;
         case twin::Limiter::Charger: lim.put(kLimit[2]); break;
-        case twin::Limiter::Cable: lim.put("limit: cable ("); put_level(lim, e->out.ma, 'A'); lim.put_char(')'); break;
+        case twin::Limiter::Cable: lim.put("limit: cable "); put_level(lim, e->out.ma, 'A'); break;   // 18 characters at most: clear of the hairline
         }
         gfx_text(s, kLabelFont, static_cast<int16_t>(kRight - text_width(kLabelFont, lim.view())), static_cast<int16_t>(y + 5),
                  lim.view(), kDim, kBg);
@@ -717,7 +742,9 @@ void TwinPage::paint_line(int i, int16_t y) {
         return;
     default: {
         const std::size_t k = static_cast<std::size_t>(i - 5);
-        if (k < info_val_.size()) kit::draw_info_row(s, y, info_tag_[k], info_val_[k].view());
+        if (k >= info_l_.size()) return;
+        paint_split(s, y, kit::kInfoPitch);
+        paint_pair(s, y, info_l_[k].view(), info_r_[k].view());
         return;
     }
     }

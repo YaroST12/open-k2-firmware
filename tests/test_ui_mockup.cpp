@@ -187,6 +187,16 @@ int main() {
     key(Button::Ok);
     render(ui, t, "twin_long");                                          // a 24-character name on its body row
     key(Button::Back);
+    key(Button::Minus, 2);
+    key(Button::Ok);
+    render(ui, t, "twin_detail_5v");                                     // Lenovo 5V: sits on 5 V, red numbers
+    const auto kept_caps = g_stub.caps;
+    g_stub.caps = {};
+    t += 400; ui.tick(t);
+    render(ui, t, "twin_detail_nocharger");                              // no prediction: faint "--", neutral wants
+    g_stub.caps = kept_caps;
+    t += 400; ui.tick(t);
+    key(Button::Back);
     key(Button::Minus, 3);
     key(Button::Ok);                                                     // Google's detail
     key(Button::Ok);

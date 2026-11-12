@@ -858,53 +858,80 @@ Strip: `Back`, `Up`, `Open` (a twin) or `Learn` (the last row), `Dn`.
 
 ```
 y0   +--------------------------------------------------------+
-     | OnePlus 15              | PAS        > 5.00V x 0.00A   |  TopBar = twin name
+     | Twin                    | PAS        > 5.00V x 0.00A   |  TopBar
 y20  +--------------------------------------------------------+
-y24  | gets 36 W                                  wants 55 W  |  font 24 values, font 12 words
-y48  | ####################################...............    |  bar, 3 px, x6..217
-y52  | 12 V 3 A                           limit: cable (3 A)  |  font 16, limit font 12 dim
-y68  +========================================================+  2 px rule
-y70  | Wants 5V 9V                                            |  InfoBlock, 20 px rows
-y90  |       PPS 3.3-11V 5A                                   |  only when needed
-y110 | Offer 5-20V 3A                                         |
-y130 |       PPS 5-21V 3A                                     |  only when needed
-y150 | USB   2.0 480M                                         |
-y170 +--------------------------------------------------------+
+y24  | Source                                  OnePlus 15     |  header: dim "Source" left, the name right (font 16)
+y44  | gets 36W                   |             wants 55W     |  font 24 values, font 12 words, grade ink
+y70  | ###########################+#########..............    |  bar, 3 px, x6..217; the hairline runs under it
+y76  | 12V3A                      |    limit: cable 3A        |  font 16, limit font 12 dim
+y96  +========================================================+  2 px rule
+y100 | 5-20V 3A                   |         5V 9V 12V         |  facts: charger left, device right (20 px rows)
+y120 | PPS 5-21V 3A               |      PPS 3.3-11V 5A       |  only when either side lists a range
+y140 |                            |             USB 2.0 480M  |  device only
+y160 +--------------------------------------------------------+
      |= Prove live                                            |  RowList, focused row
-     |=   asks the charger for 12V 3A                         |
-     |                                                     [] |  scroll thumb: 2 more rows
+     |=   asks the charger for 12V3A                          |
 y222 | Basis: its sink caps                                   |  Footer, Info
 y239 +--------------------------------------------------------+
 ```
+
+**The split.** Under the header the block has two sides and one 1 px `kRule` hairline at x104 between them, from the
+gets line down through the bar (the bar crosses it) and the contract line to the end of the facts rows. Everything
+left of the hairline is the charger's (the header word `Source`), everything right of it is the device's (the header
+carries its name):
+
+| side | content |
+|---|---|
+| left, left-aligned from x6 (room x6..100) | `gets`, the contract `12V3A`, the offer: fixed span `5-20V 3A`, then `PPS 5-21V 3A` |
+| right, right-aligned to x218 (room x110..218) | `wants`, the limit text, the device's fixed levels `5V 9V 12V`, then `PPS 3.3-11V 5A`, then `USB 2.0 480M` |
+
+- There are no tags in the facts rows: the header is the tag. A pair of cells in one row takes font 16 when both fit
+  their halves (11 and 13 characters), else both drop to font 12, so a row never mixes sizes.
+- The limit text is the longest right-hand string, `limit: cable 3.25A` (108 px at font 12): it stops 6 px right
+  of the hairline. Cable limits carry no parentheses.
+- Header: the name takes font 16 right-aligned; one that does not fit beside `Source` drops to font 12 on the same
+  baseline (24 characters fit at font 12), then `fit_data`.
 
 Gets and wants block:
 
 | y | part | spec |
 |---|---|---|
-| 24..47 | gets | word `gets` font 12 `kDim` at x6, top y34 (on the value's baseline). Value font 24 `kWatt` at x34: the watts, 3 px, `W` |
-| 24..47 | wants | value font 24 `kWatt` right-aligned to x218. Word `wants` font 12 `kDim`, right-aligned 4 px left of the value |
-| 48..50 | bar | 3 px, x6, 212 px. Track `kRule` = what it wants. Fill `kWatt` = what it gets. Kit ProgressBar with a fill colour argument **(system default: the kit bar's span and height)** |
-| 52..67 | contract | font 16 at x6: volts in `kVolt`, amps in `kAmp`: `12 V 3 A` |
-| 52..67 | limit | font 12 `kDim`, right-aligned to x218, top y57: `limit: cable (3 A)`, `limit: device max`, `limit: charger` |
-| 68..69 | rule | 2 px `kRule` |
+| 44..69 | gets | word `gets` (`proved` after a live proof) font 12 `kDim` at x6, on the value's baseline. Value font 24 at x6 + word + 4: the watts, packed `36W` |
+| 44..69 | wants | value font 24 right-aligned to x218. Word `wants` font 12 `kDim`, right-aligned 4 px left of the value |
+| 70..75 | bar | 3 px at y71, x6, 212 px. Track `kRule` = what it wants. Fill = what it gets, in the grade ink. Kit ProgressBar with a fill colour argument **(system default: the kit bar's span and height)** |
+| 76..95 | contract | font 16 at x6: volts in `kVolt`, amps in `kAmp`: `12V3A` |
+| 76..95 | limit | font 12 `kDim`, right-aligned to x218, top y81: `limit: cable 3A`, `limit: device max`, `limit: charger` |
+| 96..99 | rule | 2 px `kRule` |
 
-- Both values at font 24 fit one line: `gets 100 W` ends at x85 and `wants 240 W` starts at x133
-  **(system default: the words are font-12 labels, the values font 24, because a close-up primary value is at
+**Grade ink.** Both numbers (`gets` and `wants`) and the bar fill take one colour, the grade of the prediction
+(`twin::grade`, `predict.hpp`): the power it gets (`out.mw`) against the power it wants (`twin::want_mw`):
+
+| grade | rule | ink |
+|---|---|---|
+| Full | gets at least 100 % of wants | `kOk` |
+| Partial | gets at least 60 % | `kCaution` |
+| Poor | below 60 %, no contract, or 5 V only (whatever the numbers say) | `kError` |
+
+- No prediction yet (no charger on the plug): `gets --` stays `kFaint` and `wants` is neutral `kText`, never red.
+- The grade is a second cue, not the only one: the contract, the limit text and the list note say the same in words.
+- While a proof runs, these lines hold still (section 9.4); the grade repaints once, when it ends.
+- Both values at font 24 fit their halves: `proved 100W` ends at x94 (the hairline is at x104) and `wants 240W` starts at
+  x136 **(system default: the words are font-12 labels, the values font 24, because a close-up primary value is at
   least 24 px)**.
 - No charger: `gets --` in `kFaint`, an empty bar, contract `--`, no limit text **(system default)**.
 
-InfoBlock lines (tag x4, value x52, 20 px rows, from y70):
+Facts rows (20 px, from y100): two to three rows.
 
-| tag | value | second line |
+| row | charger (left) | device (right) |
 |---|---|---|
-| `Wants` | the device's fixed levels: `5V 9V` | `PPS 3.3-11V 5A` when the device lists a range |
-| `Offer` | the charger's fixed span: `5-20V 3A` | `PPS 5-21V 3A` when the charger lists a range |
-| `USB` | `2.0 480M` | none |
+| fixed levels | `5-20V 3A` | `5V 9V 12V` |
+| PPS range, only when either side lists one | `PPS 5-21V 3A` | `PPS 3.3-11V 5A` |
+| USB | none | `USB 2.0 480M` |
 
-- Three to five lines. The second lines have no tag.
-- No charger: `Offer --` **(system default)**. USB not read: `USB --`.
+- No charger: the left fixed cell is a faint `--` **(system default)**. USB not read: `USB --`.
+- The action list starts at y140 or y160 for two or three rows.
 
-Action rows: a kit RowList right under the last InfoBlock line.
+Action rows: a kit RowList right under the last facts row.
 
 | row | note on focus | strip verb | marker |
 |---|---|---|---|
@@ -912,7 +939,8 @@ Action rows: a kit RowList right under the last InfoBlock line.
 | `Re-learn from device` | `reads the device alone on the K2` | `Learn` | none |
 | `Delete twin` | `removes it from the K2` | `Delete` | none |
 
-- The list starts at y130, y150 or y170 for three, four or five InfoBlock lines. It shows three, two or one row;
+- The list starts at y140 or y160 for two or three facts rows. It shows three, two or one row (the page also
+  scrolls whole lines off the top so the focused action fits);
   the kit thumb appears when rows are hidden **(system default: a RowList windows and scrolls; section 9.8,
   question 2)**.
 - `Prove live` with nothing to prove (no charger, or 5 V only) is in `kDim` and OK answers in the footer:
@@ -925,8 +953,8 @@ Footer, Info tone **(system default)**: the basis of the prediction. `Basis: its
 
 Strip: `Back`, `Up`, the row's verb, `Dn`.
 
-TopBar: the twin's name, no icon, so the title box is 16 characters. A longer name is fitted with `fit_data`
-**(system default; section 9.8, question 1)**.
+TopBar: `Twin`. The name sits in the first body line, right of the `Source` word (see 9.8, question 1); a longer name is
+fitted with `fit_data` **(system default)**.
 
 ### 9.3 Prove live: armed
 
@@ -1042,7 +1070,7 @@ These override the defaults above where they differ.
 2. **Actions.** The whole detail page scrolls (PLUS/MINUS walk the action rows, the page follows the focus);
    the info stays above the actions.
 3. **Units are packed everywhere on the twins pages**, as in the protocol rows: `gets 36W`, `wants 55W`,
-   `12V3A`, `5V only, device`, `proved 36W`, `limit: cable (3A)`.
+   `12V3A`, `5V only, device`, `proved 36W`, `limit: cable 3A`.
 4. **Marker ink.** Solid (full) in `kText`; half-filled (limited) and hollow (5 V only) in `kCaution`, a second
    cue next to the shape.
 
