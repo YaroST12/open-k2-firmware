@@ -803,8 +803,9 @@ void twin_print(std::uint8_t seq, const twin::Twin& t, bool predict_it) {
 
 const char* twin_status() {
     const twin::live::Runner& r = twin_hw::live();
-    tput("twin %s %u/%u current=%u reason=%s%s\r\n", twin_hw::live_running() ? "running" : "idle", unsigned(r.done_count()),
-         unsigned(r.count()), unsigned(r.current()), twin::live::name(r.reason()), r.restoring() ? " restoring" : "");
+    tput("twin %s %u/%u current=%u reason=%s%s%s\r\n", twin_hw::live_running() ? "running" : "idle", unsigned(r.done_count()),
+         unsigned(r.count()), unsigned(r.current()), twin::live::name(r.reason()), r.restoring() ? " restoring" : "",
+         r.waking() ? " waking" : "");
     for (std::uint8_t seq = 1; seq <= twin::kCapacity; seq++) {
         const twin::live::Slot& s = r.slot(seq);
         twin::Twin t;

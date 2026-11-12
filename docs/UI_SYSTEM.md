@@ -1044,3 +1044,21 @@ These override the defaults above where they differ.
    `12V3A`, `5V only, device`, `proved 36W`, `limit: cable (3A)`.
 4. **Marker ink.** Solid (full) in `kText`; half-filled (limited) and hollow (5 V only) in `kCaution`, a second
    cue next to the shape.
+
+### 9.9 Wake on prove (user, 2026-11-12)
+
+`Prove live` (page) and `twin run ... confirm` (shell, remote) work against a charger that has not offered yet: the
+run presents Rd itself, wakes the charger, reads its caps at 5 V, predicts, then proves as before. Opening the page
+or arming presents nothing: Rd goes on only at the confirm.
+
+| when | what |
+|---|---|
+| Wakeable | a charger waits on the plug (`WaitKind::ChargerWaiting`), or VBUS is up (1 V or more) with no caps; never a device inline, never a `DualRolePort` (a phone toggling its Rp). Anything else keeps `No charger to run against` |
+| Before the confirm | list footer, detail footer and the list note read `Charger has not offered` / `charger has not offered`; the Prove row is not dimmed and its note reads `wakes the charger first`; armed, the footer reads `Wakes the charger. Confirm` |
+| Waking | footer `Waking charger`, note `waking the charger`, proof box `Step` / `Waking charger` (nothing is asked of the charger yet); `Back` reads `Stop` |
+| Caps arrive | the runner takes the charger's 5 V contract (never more before the proof), the page repredicts and the proof runs as in 9.4 |
+| No offer | after 8 s (`kWakeMs`) the slot is `NoCaps`, the run ends with reason `no offer`, Rd goes back at once, footer `Charger did not offer` (Caution) |
+| `Back` while waking | the wake ends, Rd goes back, footer `Stopped. Charger released` |
+| Rd afterwards | the page keeps the woken Rd after a finished proof (without it the caps vanish and the verdicts would hide) and gives it back in `leave()`; a run the shell started releases it at its end |
+
+All footers are 27 characters at most and checked by `static_assert`; none names a key.

@@ -92,6 +92,7 @@ private:
     int full_ = 0;
     bool have_caps_ = false;
     bool loaded_ = false;
+    bool wake_ok_ = false;                                   // no list, a charger waits on the plug: Prove live may wake it (twin_hw::can_wake)
     bool hide_proof_ = false;                                // another charger since the last run: its verdicts no longer apply
     bool learn_wait_ = false;                                // this page started an Identify and learns when it ends
     uint32_t learn_wait_until_ = 0;

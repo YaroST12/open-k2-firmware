@@ -46,10 +46,42 @@ public:
               unsigned(s.skip));
     }
 
+    // A silent charger is woken with the K2's own Rd (rd_for_run): the START path then takes its 5 V contract on the first caps,
+    // the run owns the line like a charger-test unit. False when a sink is inline.
+    bool wake() override {
+        if (!fusb302::rd_for_run(true)) return false;
+        woke_ = true;
+        K2LOG("[TWIN] wake: Rd presented to a silent charger\n");
+        return true;
+    }
+    void unwake() override {
+        if (!woke_) return;
+        woke_ = false;
+        fusb302::rd_for_run(false);
+        K2LOG("[TWIN] wake: Rd released\n");
+    }
+
     void finished(twin::live::Reason why) override {
         fusb302::set_run_owner(false);   // the sleeping-port wake may act again
         K2LOG("[TWIN] live end %s\n", twin::live::name(why));
+        if (!woke_) return;   // no Rd of ours (never woken, or unwake() gave it back already)
+        woke_ = false;
+        if (keep_wake_ && (why == twin::live::Reason::Done || why == twin::live::Reason::Cancelled)) {
+            held_ = true;   // the page keeps the list on screen until wake_release()
+            return;
+        }
+        fusb302::rd_for_run(false);
+        K2LOG("[TWIN] wake: Rd released\n");
     }
+
+    void keep_wake(bool keep) { keep_wake_ = keep; }
+    bool held() const { return held_; }
+    void drop_held() { held_ = false; }
+
+private:
+    bool woke_ = false;        // this run presented the Rd and has not given it back
+    bool keep_wake_ = false;   // the starter (the page) takes the Rd over when the run ends
+    bool held_ = false;        // the run ended and left the Rd to the page
 };
 
 HwEnv g_env;
@@ -67,6 +99,7 @@ twin::live::Input make_input(const LiveCtx& c) {
     in.self_powered = fusb302::self_powered() || power_source::bus_powered();   // as the charger test judges it
     in.busy = c.busy || loopguard::locked();   // the HID-cable loop 5 V lock: refused to start (Busy), a run is cancelled to 5 V
     in.inline_link = c.inline_link;
+    in.wakeable = !pd::is_fake() && twin::live::may_wake(fusb302::wait_kind(), c.vbus_fast_mv, c.inline_link);
     return in;
 }
 
@@ -129,9 +162,21 @@ void log_predict(std::uint8_t seq, const twin::Outcome& o) {
           unsigned(o.ma), unsigned(o.want_mw), unsigned(o.limiter), unsigned(o.observed));
 }
 
-twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx) {
+bool can_wake(const LiveCtx& ctx) {
+    return !fusb302::caps().valid && make_input(ctx).wakeable;
+}
+
+void wake_release() {
+    if (!g_env.held()) return;
+    g_env.drop_held();
+    fusb302::rd_for_run(false);
+    K2LOG("[TWIN] wake: Rd released\n");
+}
+
+twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirmed, const LiveCtx& ctx, bool keep_wake) {
     if (pd::is_fake()) return twin::live::Refusal::NoSource;   // a fake list has no charger behind it
     fusb302::set_run_owner(true);
+    g_env.keep_wake(keep_wake);
     const twin::live::Refusal r = g_run.start(g_env, seqs, make_input(ctx), confirmed);
     K2LOG("[TWIN] live start n=%u -> %s\n", unsigned(seqs.size()), twin::live::name(r));
     if (r != twin::live::Refusal::None) fusb302::set_run_owner(false);   // a started run that already ended cleared it itself

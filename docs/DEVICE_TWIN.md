@@ -112,7 +112,7 @@ The proof refuses up front, with a footer, when the live proof cannot be run: a 
 ```
 twin list                          the library
 twin predict [n|all]               what this charger gives each twin, no transmission
-twin run [n|all] confirm           the live proof (needs a PD source already attached)
+twin run [n|all] confirm           the live proof (wakes a charger that has not offered)
 twin status | twin cancel
 twin learn identify|sniff [dry] [name]
 twin rename n name | twin delete n confirm
@@ -143,7 +143,7 @@ Print format of `twin predict` (identical text on the screen, the shell and the 
 
 ### The live proof
 
-`Runner` (`include/k2/twin/live.hpp`) refuses in this order: already running (Busy), no twin saved, a tool/test busy, a device inline, no power monitor, no source (`NoSource`: VBUS under 1 V or no valid source capabilities), and a missing confirmation (`NeedConfirm`). So **`twin run` needs an active sink first**: `k2_remote.py pd attach` presents Rd and returns (no request), the capabilities arrive, a second `pd attach` requests 5 V. The twin runner does not call `pd attach` itself: it re-attaches afresh with the twin's sink capabilities. A started run arms the host lease (it holds the output above 5 V); the lease settles by itself once the run has released and VBUS is back at 5 V.
+`Runner` (`include/k2/twin/live.hpp`) refuses in this order: already running (Busy), no twin saved, a tool/test busy, a device inline, no power monitor, no source (`NoSource`: VBUS under 1 V or no valid source capabilities), and a missing confirmation (`NeedConfirm`). With no list yet, the runner **wakes the charger itself** (UI_SYSTEM.md 9.9): when a charger waits on the plug (`WaitKind::ChargerWaiting`) or VBUS is up without caps, a confirmed `twin run` (or the page's Prove live) presents Rd through `fusb302::rd_for_run(true)`, waits up to 8 s for the list (the 5 V contract is taken by that same Rd path, never more before the proof), predicts on it and goes on. No offer ends the run with reason `no offer` and Rd goes back at once; a device inline or a dual-role port (a phone toggling its Rp) is never woken and still gets `NoSource`/`Inline`. `twin status` shows `waking` during the wake. The explicit route still works: `k2_remote.py pd attach` presents Rd and returns (no request), the capabilities arrive, a second `pd attach` requests 5 V. The twin runner does not call `pd attach` itself: it re-attaches afresh with the twin's sink capabilities. A started run arms the host lease (it holds the output above 5 V); the lease settles by itself once the run has released and VBUS is back at 5 V.
 
 Then per twin, in six steps (`live.hpp` header): plan (predict on the list the charger shows now; nothing usable, or a level above the monitor ceiling, ends the twin as Skipped before anything is touched), **attach afresh** with the Get_Sink_Cap answer pointed at the twin's PDOs (Rd off until VBUS is dark, then Rd on; a self-powered K2 does a Soft_Reset instead and keeps its Rd), wait for the charger's list and predict again on **that** list (a charger may list other levels for another sink; the second prediction is the one requested), send the Request (built by `pd::plan_request`, never more current than advertised), hold, release to 5 V. After the last twin the K2's own sink capabilities come back and it attaches once more, so the charger's picture of the sink is the K2's again. A cancel skips that last attach: it asks for 5 V and clears the override, and the charger keeps the twin's words until the next attach of any kind. The checks:
 
@@ -250,7 +250,7 @@ For the main session; the K2 is on PC power, USB HID enabled, left port with a C
 2. `python3 tools/k2_remote.py twin predict`. Expected on the C1 with a 3 A cable for a Pixel-class twin: `#N Pixel  33W PPS  the device takes no more  pos 6 11000mV 3000mA`; for an OP15-class twin: `36W of 55W  limited by the cable  pos 3 12000mV 3000mA`. On the NOVOO: PPS pos 5.
 3. `python3 tools/k2_remote.py twin run --confirm --wait 60`. Expect each twin `Granted` with `ok 11.0V` (within the band), the contract back at 5 V after, and `twin status` listing `#N <name>  33W PPS ok 11.0V`.
 4. Check mid-run: `ping` uptime against wall-clock (a reboot means stop and investigate).
-5. `twin run 1 --confirm` before the first `pd attach` (charger alone, passive boot, VBUS 0 V) must return `NoSource`; with a device inline it must return `Inline`.
+5. `twin run 1 --confirm` with a charger alone on the plug (passive boot, VBUS 0 V, Rp steady) wakes it: `twin status` shows `waking`, then the proof runs. With nothing on the plug or a dual-role phone it must return `NoSource`; with a device inline it must return `Inline`.
 6. Screen: `k2_remote.py page twin`, `screenshot --scale 2`; compare with the mock set in `runs/ui-twin/` of the main checkout.
 7. Never request above 36 V; a 48 V prediction must show `Skipped` with its reason.
 
