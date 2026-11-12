@@ -235,6 +235,25 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   as before; (4) the Black Box saves again (`[BB] saves=` counts up after a VBUS cut, `entries>0`); (5) a factory wipe
   (0x33) leaves the kept pages untouched: `k2_flasher.py backup` before and after, the bytes of 0x080E3800 and
   0x080FF800 match, and the volume comes back at 145 blocks.
+  **The space, part two: report cards and Black Box captures move to ring logs** (2026-11-12, `k2/ring-log`, built and
+  host-tested only). littlefs keeps 111 blocks (settings, prefs, usbcfg, emk, twins, the charger and PD Stress journals,
+  transcap, log snapshot: 98 blocks at every cap, 11 free); the rest of the run holds a 14-sector card ring at
+  0x080EE800 and a 20-sector Black Box ring at 0x080F5800 (ARCHITECTURE "Ring logs"). No save erases; ring maintenance
+  erases one sector at a time only with no charger test, PD Stress run or port owner and 1 s without PD traffic; a save
+  with no room is refused and logged. A 145-block unit (this K2 since 1.0.0-617) moves into the layout once at boot, in
+  place: cards and captures are dropped, everything else is kept (`tests/test_fs_migrate.cpp`, a cut every 7th of ~480
+  operations plus second cuts; `K2_FULL_SWEEP=1` cuts at every one). Export the cards first (`k2_remote.py cards export`).
+  Validate (hardware): (1) the first boot logs `[FS] ring layout move done: ... err=ok` with `passes=1` or `2`, then
+  `[FS] mounted blocks=111` and `[RING] cards: live=0 blank=14 dirty=0  bb: live=0 blank=20 dirty=0` (the move
+  erases the ring range; only a power cut right after the shrink leaves dirty sectors, erased later while idle); later boots log no move line and `[FS] mounted blocks=111`;
+  (2) `usb.cfg`, prefs, orientation, the saved cables (`emarker` library list) and twins are unchanged against a
+  `--json` dump taken before the update; (3) a charger test saves its card (`[CARD] save #1 ...`), `cards list` shows it
+  after a reboot; delete it and reboot: gone; (4) the Black Box saves after a VBUS cut (`[BB] saves=` counts up), and
+  after a reboot the capture is listed as saved; (5) during a charger test no `[CARD] ring maintenance` or `[BB] ring
+  erase` line appears between START and the end of Releasing, and the loop survey shows no erase stall in that window;
+  (6) a factory wipe (0x33) erases both rings (`[RING] ... live=0` after it) and leaves 0x080E3800 and 0x080FF800
+  byte-identical (`k2_flasher.py backup` before and after); (7) a unit whose kept files do not fit 111 blocks logs
+  `deferred` and keeps working at 145 blocks with no cards or captures stored (host-tested only; no such unit on hand).
 - **PD Stress did not release Rd at its end** (open since before 2026-11-11; fixed on `k2/small-fixes`, hardware check
   pending): the run ended with the K2's Rd still on CC, the one a pd-reread presented and the run took over. Every end of a
   run (done, cancelled, a stop that skips the 5 V release, the reboot budget spent) now ends in `PdStressSession::on_finish`

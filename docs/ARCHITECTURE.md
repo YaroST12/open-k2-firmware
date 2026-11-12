@@ -60,10 +60,10 @@ checked against the code or hardware when this was written.
    `sample_boot_mode` (buttons: PLUS / OK held at reset select the self-powered boot modes), `crm::init`,
    `systick::init`, `i2c::init`, optional `fusb302::self_power_early`, `boottrace::init`, `lcd::init`,
    buttons, `dpdm::init`, `load::init`, `fault::init`, `board::init`, `fs::init` (mount or format the
-   littlefs volume), `usbcfg::init`, `usb::init` only when a link mode is enabled (USB is off by
+   littlefs volume; a 145-block volume moves into the ring layout here, once), `usbcfg::init`, `usb::init` only when a link mode is enabled (USB is off by
    default), `msc::init` (drive), `shell_hw::init`, `http_server::init` (Net, K2_NET=1 builds), a 50 ms delay, the `[BOOT]` /
-   `[RST]` lines, `fusb302::init`, `boottrace::report_previous`, `session::init`, `bbpersist::init`,
-   `uiprefs::stored` + `fs::wipe_legacy`, `adc::log_raw`, `fastcharge::init`, `Ui::init`,
+   `[RST]` lines, `fusb302::init`, `boottrace::report_previous`, `session::init`,
+   `uiprefs::stored` + `fs::wipe_legacy` + `fs::grow` (scans the rings), `bbpersist::init`, `adc::log_raw`, `fastcharge::init`, `Ui::init`,
    accelerometer init, then the LCD idle hook and the loop. The PD half of this (the Rd decision of a reset, the
    self-powered comeback, the bring-up loop) is `bootpd::early(keys, warm)` right after `i2c::init` and
    `bootpd::late(early)` where `fusb302::init` runs (`src/core/boot_pd.cpp`), so the host world replay boots its
@@ -114,34 +114,61 @@ ISRs (vector table in `src/drivers/startup.cpp`): SysTick (`systick::tick` and h
 | 0x080B3000..0x080E0000 | 180 KB | littlefs volume, blocks 0..89 of 2 KB (`flash::kFsBase`..`kFsEnd`); always erasable and programmable |
 | 0x080E0000..0x080E4000 | 16 KB | data that was on the unit before this firmware (settings 0x080E0000, e-marker records 0x080E3000, the kept record page 0x080E3800): never erased, never programmed, only read |
 | 0x080E3800 | 2 KB | kept page (`flash::kKeptPages[0]`): refused by every erase and program, whatever it holds |
-| 0x080E4000..0x080FF800 | 110 KB | the run (`flash::kFsRunBase`..`kFsRunEnd`, 55 pages): first the legacy raw stores of earlier firmware (USB config 0x080E6000, UI prefs, cards, Black Box ring, journal, e-marker library), imported once and erased by `fs::wipe_legacy()` page by page only if the page carries one of our old store signatures (`include/k2/core/legacy_proof.hpp`); then, once every page of the run reads blank, littlefs blocks 90..144 (`fs::grow()`, below). Writable for the volume only after that proof (`flash::open_fs_run()`) |
+| 0x080E4000..0x080FF800 | 110 KB | the run (`flash::kFsRunBase`..`kFsRunEnd`, 55 pages): first the legacy raw stores of earlier firmware (USB config 0x080E6000, UI prefs, cards, Black Box ring, journal, e-marker library), imported once and erased by `fs::wipe_legacy()` page by page only if the page carries one of our old store signatures (`include/k2/core/legacy_proof.hpp`); then, once every page of the run reads blank, the ring layout below (`fs::grow()`). Writable only after that proof (`flash::open_fs_run()`) |
+| 0x080E4000..0x080EE800 | 42 KB | in the run: littlefs blocks 90..110 (`flash::kFsVolumeBlocks` = 111) |
+| 0x080EE800..0x080F5800 | 28 KB | in the run: report-card ring, 14 sectors (`flash::kCardRingBase`, section "Ring logs" below) |
+| 0x080F5800..0x080FF800 | 40 KB | in the run: Black Box ring, 20 sectors (`flash::kBbRingBase`) |
 | 0x080FF800..0x08100000 | 2 KB | kept top page, unknown owner (`flash::kKeptPages[1]`): refused by every erase and program, even with one of our old signatures on it |
 
 `k2::flash` refuses every erase/program outside these rules before a register is touched: the two kept
 pages are refused first, always; a program is accepted only inside the volume (blocks 0..89, plus the run
-once it is open), an erase only there or on a legacy page that `legacy::ours()` proves to be ours (magic
-and, for the journal, record CRCs; a blank page is never ours). The run flag is set only by the blank proof
-or by a mount that finds a 145-block superblock, and stays set until reset. The block map is
+once it is open: volume blocks 90..110 and both rings), an erase only there or on a legacy page that
+`legacy::ours()` proves to be ours (magic and, for the journal, record CRCs; a blank page is never ours).
+The run flag is set only by the blank proof or by a mount that finds a 111- or 145-block superblock, and
+stays set until reset. The block map is
 `flash::fs_block_addr()` (constexpr, static_asserted): block i < 90 sits at `kFsBase + i * 2 KB`, block
 90 + j at `kFsRunBase + j * 2 KB`, so the volume jumps over the native pages 0x080E0000..0x080E4000.
 The DFU marker word has its own allow-list. The factory-wipe command (0x33) follows the same rule and
-covers the run's blocks when the volume is grown. A volume of an older firmware (96 blocks, ending at
+covers all 55 run sectors when the run is open (volume blocks 90..110 and both rings). A volume of an older firmware (96 blocks, ending at
 0x080E3000) fails the mount by block count and is reformatted with a log line (`[FS] new volume ...
 formatted`); there is no migration. The part of such an old volume that lies in 0x080E0000..0x080E3000
 is not provably ours and stays.
 
 Growing the volume (`include/k2/core/fs_grow.hpp`, called from `fs::grow()` after `fs::wipe_legacy()`
-at boot): the mount tries 90 blocks, then 145; any other count formats. A grow needs `/.legacy` (the
-legacy imports and the wipe are done, and the imports never run again), then the proof that every word of
-the 55 run pages reads 0xFFFFFFFF. It writes the intent file `/.grow` inside the 90 blocks, opens the run,
-runs `lfs_fs_grow` (one superblock commit) and removes `/.grow`. A power cut leaves either the 90-block
-superblock (the next boot finds `/.grow`, skips the blank proof over its own leftovers and grows again) or
-the 145-block one, never a format. Logs: `[FS] grown 90 -> 145 blocks used=N` (with "(resumed after a
-cut)" when `/.grow` was found), `[FS] grow skipped: 0x080XXXXX not blank` (the first page that is not
-blank; the volume stays at 90 blocks and the line repeats every boot), `[FS] grow skipped: legacy wipe
-pending`, `[FS] grow failed: <err> (stays at 90 blocks, retried next boot)`. A fresh format (no volume,
-or a foreign one) takes 145 blocks only when the run is proven blank, and then writes `/.legacy` at once;
-otherwise it takes 90 and the grow decides on the next boots.
+at boot): the mount tries 90 blocks, then 111, then 145 (the layout before the rings); any other count
+formats. A grow needs `/.legacy` (the legacy imports and the wipe are done, and the imports never run
+again), then the proof that every word of the 55 run pages reads 0xFFFFFFFF. It writes the intent file
+`/.grow` inside the 90 blocks, opens the run, runs `lfs_fs_grow` to 111 (one superblock commit) and
+removes `/.grow`. A power cut leaves either the 90-block superblock (the next boot finds `/.grow`, skips
+the blank proof over its own leftovers and grows again) or the 111-block one, never a format. Logs:
+`[FS] grown 90 -> 111 blocks used=N` (with "(resumed after a cut)" when `/.grow` was found), `[FS] grow
+skipped: 0x080XXXXX not blank` (the first page that is not blank; the volume stays at 90 blocks, the
+rings stay off and the line repeats every boot), `[FS] grow skipped: legacy wipe pending`, `[FS] grow
+failed: <err> (stays at 90 blocks, retried next boot)`. A fresh format (no volume, or a foreign one)
+takes 111 blocks only when the run is proven blank, and then writes `/.legacy` at once; otherwise it
+takes 90 and the grow decides on the next boots. After the grow (or a mount at 111) `fs::grow()` scans
+both rings: `[RING] cards: live=N blank=N dirty=N  bb: live=N blank=N dirty=N`. On a volume of 90
+blocks the rings are not scanned and every save to them fails.
+
+Moving a 145-block volume into the ring layout (`include/k2/core/fs_migrate.hpp`, run by `fs::init()`
+before any store reads the volume): units that grew before the rings existed have littlefs blocks spread
+over the whole run, and littlefs shrinks a volume only when its top blocks are unused. So the volume is
+emptied in place: `Fs::fence(111)` makes every program or erase at block 111 or above answer as a bad
+block (littlefs writes the data elsewhere); `/cards` and `/bb` are deleted (the rings start empty); if
+the rest does not fit 111 blocks with 8 to spare, `/tcap` and `/log.txt` go too, and if it still does
+not fit the move is Deferred (the volume stays at 145, the rings stay off, the journals are never
+dropped). Then every file larger than an inline record is copied to `<name>~` and renamed over the
+original, and every metadata pair is compacted twice (`Fs::compact()`); a second pass copies every file.
+Once nothing at or above block 111 is in use, `lfs_fs_grow(111)` shrinks the superblock (one atomic
+commit, `LFS_SHRINKNONRELOCATING`) and the non-blank ring sectors are erased. Blocks still in use after
+two passes: Stuck, tried again next boot. Every step is one littlefs commit and can run again, so a
+power cut leaves the 145-block volume with every kept file (the next boot settles a leftover `<name>~`
+and moves again) or the 111-block one, whose leftover littlefs blocks in the ring range the rings read
+as dirty sectors and erase. No directory is renamed: a rename across directories leaves a pending move
+in littlefs's global state, and a cut there hides an entry until littlefs repairs it. Log:
+`[FS] ring layout move done|deferred|stuck|failed: used=N above=N passes=N files=N erased=N
+[tcap+log dropped] err=...`. Host test: `tests/test_fs_migrate.cpp` (a power cut every 7th of ~480
+operations plus a second cut during the next boot; `K2_FULL_SWEEP=1` cuts at every operation).
 `include/k2/drivers/flash_map.hpp` lists every region and `static_assert`s that they are sector aligned, ordered,
 disjoint and that the pre-existing device storage stays out of every writable range (`tests/test_flash_map.cpp`).
 File layout of the littlefs volume: section "Flash map" below.
@@ -358,10 +385,10 @@ Spleen tables (`tools/font_overrides.py` holds its hand-drawn fill-ins).
    +-- pd_probe at the start: Discover Identity etc. on SOP in the 5 V contract (evidence for the card)
    v
  Done / Stopped / Unsafe
-   |-- report_card::build(steps, evidence, ...) -> report_card::hw::put()  ->  /cards/<fp>.card
+   |-- report_card::build(steps, evidence, ...) -> report_card::hw::put()  ->  card ring record
    |-- report_card::delta(previous card, new card)  -> "what changed" lines on the Results view
    '-- remote: CHARGER_TEST 0x0B (read-only RAM view)  ->  k2_remote.py charger-test status|results|view
-       USB drive: CARDS.JSON (generated from /cards on read)
+       USB drive: CARDS.JSON (generated from the card ring on read)
 ```
 
 The runner is pure (no hardware globals, no heap) and is driven only by `poll()`; rendering never advances it.
@@ -760,7 +787,7 @@ A recorder for the PD link, read-only with respect to it. `pdtrace` writes fixed
 
 **Multiplexed debug stream** (`stream on [log|trace|power[=Hz]|run|all] [old]` / `stream off`; `trace stream` is an alias of `stream on trace`; `python3 tools/k2_stream.py record`, full description and the inventory of every device-side source in `docs/DEBUG_STREAMING.md`). The same frame (`0xA6, kind, len, payload, crc16`) carries more kinds: Hello (firmware hash, start time), Boot (boot id and reset flags, so a recording shows where a reboot split it), boot Text, Log (binary K2LOG entries from `usb::log_bin_ring()`, decoded on the host with the `logdb.json` of the Hello's commit), Power (VBUS, IBUS, CC1, CC2, D+, D- at 1..100 Hz, folded into min/max windows when the FIFO is full), Run (charger-test events, `k2/chargertest/run_events.hpp`, emitted by `ui_charger_test.cpp` from the main loop into a 16-event ring), Gap (what a ring overwrote, per source), Beat (heartbeat plus the device's own counters). `k2/core/dbg_stream.hpp` is pure code over rings and a `Probe` seam (host test `tests/test_dbg_stream.cpp`): it owns cursors and counters only, builds a frame on the caller's stack and the ring is the queue, so a slow host costs nothing. `src/core/dbg_stream_hw.cpp` is the probe (power monitor, ADC, D+/D- levels, stack watermarks) and `shell_hw.cpp::poll` calls `service()` once per main-loop pass with the free room of the CDC FIFO: at most 2 frames per kind and 8 per pass, only while a worst-case frame fits, never blocking, nothing in an ISR. Priority: control, run, stale power, trace and log alternating, Beat, power; trace, log and run are never dropped without a Lost/Gap frame, power is decimated first. No compression (domain encoding, repeat collapsing and windowed power instead; LZ4 stays for batch records).
 
-Captures persist: `bbstore` (pure layout) and `bbpersist` (writer) keep them LZ4-compressed as one file each in /bb on the littlefs volume (32 files at most, oldest evicted first). A write happens only after the link has been quiet for 300 ms, and not after 10 minutes without PD traffic. The newest three entries are loaded back into RAM at boot. A charger-test run holds most saves back until it ends (`bbpersist::hold_run`, see "Flash writes during a charger test"): the per-row kinds (Contract, VBUS dip, Edges) always wait, the rare kinds (hard reset, detach, refusal) go at once up to `kRareBudget` (2) per run, and a capture that waits is kept in its RAM slot (`pdtrace::keep_capture`, `Captures::Slot::keep`: a new capture takes another slot, only when all three wait is the oldest overwritten). The overwrites are counted (`Status::dropped`, `drop=` in the `[BB]` line, with `defer=` for the rare captures the budget held back); after the run the waiting captures are written one per `poll()`. The device viewer is Tools > Black Box (`ui_blackbox`, text from `pdtrace_view`).
+Captures persist: `bbstore` (pure layout) and `bbpersist` (writer) keep them LZ4-compressed as one record each in the Black Box ring log (20 raw sectors, see "Ring logs"; the newest 32 are listed, the oldest sector is erased when room is needed and erasing is fine). A write happens only after the link has been quiet for 300 ms, and not after 10 minutes without PD traffic. The newest three entries are loaded back into RAM at boot. A charger-test run holds most saves back until it ends (`bbpersist::hold_run`, see "Flash writes during a charger test"): the per-row kinds (Contract, VBUS dip, Edges) always wait, the rare kinds (hard reset, detach, refusal) go at once up to `kRareBudget` (2) per run, and a capture that waits is kept in its RAM slot (`pdtrace::keep_capture`, `Captures::Slot::keep`: a new capture takes another slot, only when all three wait is the oldest overwritten). The overwrites are counted (`Status::dropped`, `drop=` in the `[BB]` line, with `defer=` for the rare captures the budget held back); after the run the waiting captures are written one per `poll()`. The device viewer is Tools > Black Box (`ui_blackbox`, text from `pdtrace_view`).
 
 ## Transition capture
 
@@ -795,7 +822,7 @@ Because the layout is rebuilt after a save or erase (`storage::generation()` -> 
 
 ### Flash map
 
-All app-owned persistent data lives in one littlefs volume (v2.11.0, vendored in `third_party/littlefs`, options in `include/k2/core/lfs_cfg.h`: no malloc, no asserts, 256 B cache, 16 B lookahead, 2 KB blocks). `k2::fs` (`k2/core/fs.hpp`) is the thin wrapper (atomic whole-file write = tmp file + rename, append, list, read, remove, mkdir); `k2/drivers/fs_flash.hpp` binds it to the real flash and mounts it at boot (a mount failure formats the volume, logs `[FS] mounted (formatted)` and carries on). `k2::flash` guards every erase and program: the volume's first 90 blocks are erasable and programmable; the run 0x080E4000..0x080FF800 joins them only once `fs::grow()` has proven it blank (or the mount found a grown volume); before that a legacy-range page is erasable only when `legacy::ours()` proves it carries one of our old store signatures, and is never programmed; the kept pages 0x080E3800 and 0x080FF800 and everything else (bootloader, info page 0x08003000, application, the native pages 0x080E0000..0x080E4000) are refused before a register is touched. The DFU marker allow-list is separate and unchanged.
+App-owned persistent data lives in one littlefs volume (v2.11.0, vendored in `third_party/littlefs`, options in `include/k2/core/lfs_cfg.h`: no malloc, no asserts, 256 B cache, 16 B lookahead, 2 KB blocks, `LFS_SHRINKNONRELOCATING`) and two append-only ring logs on raw sectors, one for the report cards and one for the Black Box captures ("Ring logs" below). `k2::fs` (`k2/core/fs.hpp`) is the thin wrapper (atomic whole-file write = tmp file + rename, append, list, read, remove, mkdir); `k2/drivers/fs_flash.hpp` binds it to the real flash and mounts it at boot (a mount failure formats the volume, logs `[FS] mounted (formatted)` and carries on). `k2::flash` guards every erase and program: the volume's first 90 blocks are erasable and programmable; the run 0x080E4000..0x080FF800 (volume blocks 90..110 and both rings) joins them only once `fs::grow()` has proven it blank (or the mount found a grown volume); before that a legacy-range page is erasable only when `legacy::ours()` proves it carries one of our old store signatures, and is never programmed; the kept pages 0x080E3800 and 0x080FF800 and everything else (bootloader, info page 0x08003000, application, the native pages 0x080E0000..0x080E4000) are refused before a register is touched. The DFU marker allow-list is separate and unchanged.
 
 | Address | Size | Use |
 | :--- | :--- | :--- |
@@ -805,7 +832,10 @@ All app-owned persistent data lives in one littlefs volume (v2.11.0, vendored in
 | 0x080E0000..0x080E3000 | 12 KB | native user settings and related pages (read-only, never erased or written) |
 | 0x080E3000 | 2 KB | native single copied-e-marker slot (read-only, never erased or written) |
 | 0x080E3800 | 2 KB | native 10-slot e-marker library, a kept page (read-only; shown as `NATIVE/LIBRARY.BIN` and `LIBRARY.TXT` on the drive) |
-| 0x080E4000..0x080FF800 | 110 KB | the run: legacy raw stores of earlier firmware (`flash::kStoreBase` up): read for the one-time import of the USB link and UI preference pages, then each page whose own old signature is proven is erased by `fs::wipe_legacy()` (marker `/.legacy`); once all 55 pages read blank, littlefs blocks 90..144 (`fs::grow()`, section 2.3) |
+| 0x080E4000..0x080FF800 | 110 KB | the run: legacy raw stores of earlier firmware (`flash::kStoreBase` up): read for the one-time import of the USB link and UI preference pages, then each page whose own old signature is proven is erased by `fs::wipe_legacy()` (marker `/.legacy`); once all 55 pages read blank, the ring layout (`fs::grow()`, section 2.3): |
+| 0x080E4000..0x080EE800 | 42 KB | littlefs blocks 90..110 (`flash::kFsVolumeBlocks` = 111) |
+| 0x080EE800..0x080F5800 | 28 KB | report-card ring, 14 sectors, kind 'C' (`flash::kCardRingBase`) |
+| 0x080F5800..0x080FF800 | 40 KB | Black Box ring, 20 sectors, kind 'B' (`flash::kBbRingBase`) |
 | 0x080FF800..0x08100000 | 2 KB | kept top page, unknown owner: never erased or written |
 
 Files on the volume (compact binary records, each starts with a magic that carries the format version; the drive turns them into JSON/Markdown only when read):
@@ -817,16 +847,28 @@ Files on the volume (compact binary records, each starts with a magic that carri
 | `/prefs.cfg` | `uiprefs` | "K2UP" + flags (Try QC after PD, Screenshot) + complement + smoothing byte (0 = Medium default, else 1 + preset index) + orientation byte (bit0..1 manual rotation, bit2 manual, bit3 rotate buttons, bit4 Wake sleeping port; 0 = automatic, keys as printed, no idle Rd) |
 | `/emk/NNNN.emk` | `emlib` | one saved cable, 98 B ("K2E1", number, version, 24-char name, 66-byte e-marker record); lowest free number is reused; up to 140 |
 | `/log.txt` | `storage` | the log snapshot (newest 512 B of the log ring, `kLogKeep`), RAM mirror for the drive |
-| `/cards/<fp>.card` | `report_card_store` | one charger report card, 264 B for format 10 ("K2C1", stamp, 256-byte record; older files of 158 to 228 B, formats 3 to 9, still load and are rewritten as format 10; a repeat of the stored result is folded into it, see `docs/CHARGER_TEST_FLOW.md` "Repeated runs"), `<fp>` = 8 hex digits of the fingerprint; 64 cards at most, the lowest stamp is dropped for a new charger |
 | `/jr/*.rec` | `charger_journal` | the running charger test: `h.rec` (header, written last), `sNNN.rec` (step results, replaced in place), `ph.rec` (phase), `rs.rec` (resume count), `mt.rec` (run meta: unit order, `unattended` flag = self-supplied run: key-mode boot or `power_source::bus_powered()`, cable identity kind and seq), `at.rec` (power losses of the unit the marker names; the record key is the unit number), `fin.rec`; each one CRC-framed record (0xA5, type, length, 0, payload, CRC-16), at most about 104 files of 36 B. Power-loss policy: a reboot always resumes, in every power mode, once VBUS has been steady 500 ms; BACK held at power-up drops the run. A unit may cost `kRebootBudget` (3) losses: losses 1 and 2 ask the same row again, the 3rd skips the unit's remaining rows ("rebooted 3x", `Reason::RebootLimit`) and the next unit runs; after 16 resumes a run is not offered again. The card carries the resume count (cable block byte 14, shown as "resumed N" in the card footer) |
-| `/bb/NNNNNNNN.bbe` | `bbstore` | one Black Box capture, "K2B1" header of 20 B + LZ4 body, at most 2044 B; 32 files, the oldest is evicted first (also on a full volume) |
 | `/rd.rec` | `rdintent` / `rdcomeback` | the persistent Rd intent marker (`k2/core/rd_intent.hpp`, pure record code; `k2/core/rd_comeback.hpp` is the boot glue): a session record (a self-powered or pinned run) or a planned re-attach record (written by `begin_reattach` before the charger test's one deliberate Rd glitch, read back and checked for pin 2). A boot that finds it keeps Rd from the first instruction and raises PC13 (Ra on CC1); the judge releases it after 500 ms with no Rp and gives up after 1500 ms |
 | `/.legacy` | `fs` | marker: the legacy raw pages were wiped; the legacy imports never run again and the volume may grow |
-| `/.grow` | `fsgrow` | intent: the run was proven blank and the grow to 145 blocks is under way; present only across a power cut in the grow |
+| `/.grow` | `fsgrow` | intent: the run was proven blank and the grow to 111 blocks is under way; present only across a power cut in the grow |
+| `<name>~` | `fsmigrate` | a file's copy during the one-time move of a 145-block volume into the ring layout; present only across a power cut in that move (the next boot removes it) |
+
+The report cards (`/cards`) and the Black Box captures (`/bb`) were files on the volume until the ring layout; the move deletes them (the rings start empty).
+
+#### Ring logs
+
+`k2::ringlog` (`k2/core/ringlog.hpp`, pure code over a three-call seam: view, half-word program, sector erase; host test `tests/test_ringlog.cpp` with a power cut at every call) keeps records in a run of 2 KB sectors. Sector header (12 B): magic 0x4C52, kind byte ('C' cards, 'B' Black Box), version, u32 sequence number, CRC-16 of the header. Record: magic 0x4352, type, len and ~len, u32 sequence number, payload padded to even, CRC-16/CCITT. The boot scan sorts the sectors into live (a valid header of this ring's kind, ordered by sequence), blank (all 0xFF) and dirty (anything else: a header torn by a cut, an erase cut short, old littlefs blocks after the move). Inside a live sector a len/~len mismatch closes the sector, a CRC mismatch is a torn record skipped by its length. `append()` writes into the head or opens a blank sector and never erases; with no room it fails, the owner logs it. Erasing is the owner's `maintain()`, one sector per call, only when the main loop says erasing is fine (`may_erase` in `main_loop.cpp`: no charger test, PD Stress run or other port owner, `!Ui::ports_busy()`, and no PD traffic or VBUS change for 1 s, `pdtrace::since_activity_ms()`). Both rings are run sectors: written only once the run is open on proof, wiped by the factory wipe with the volume, never the kept pages.
+
+| Ring | Sectors | Records | Room | Maintenance |
+| :--- | :--- | :--- | :--- | :--- |
+| report cards (`report_card_store`) | 14 at 0x080EE800 | `kRecCard`: stamp u32 + the framed card (260 B, 274 B with the ring framing, 7 per sector); `kRecGone`: fingerprint u32 (a delete, tombstone). The latest record per fingerprint wins; a save, re-test, repeat or rename appends | 64 live cards take 10 sectors when compact; the index keeps the 64 highest stamps; a new charger past 64 appends the card and a tombstone for the lowest stamp | erase a dirty sector, or, with fewer than 3 blank (`kSpare`), carry the live cards of one sector (the oldest, or the cheapest) to the head and erase it; 2 blank sectors are a reserve only maintenance writes into (`kRingReserve`). Only cards within the newest 64 are carried. Two cuts in a row inside carries of a full ring can leave no room: saves then fail (`Err::Full`, logged) until a factory wipe |
+| Black Box (`bbstore`, `bbpersist`) | 20 at 0x080F5800 | `kRecCapture`: 12 B header (raw length, trigger, pre-trigger bytes, boot, seconds) + LZ4 data, at most 2010 B, never split across sectors | about 2 captures per sector at a typical 0.9 KB, 19-20 at the incompressible worst case; the newest 32 (`kMaxEntries`) are listed and reloaded | erase a dirty sector, or the oldest live one (its captures are gone) while fewer than 1 is blank (`kSpare`); `make_room()` at charger-test START finishes that before Rd goes on, so the run's rare captures find a blank sector |
+
+Logs: `[RING] cards: live=N blank=N dirty=N  bb: live=N blank=N dirty=N` at boot; `[CARD] ring maintenance: ...` per card maintenance pass and `[CARD] write refused: ring full, waits for maintenance` for a save with no room; `[BB] ring erase: dropped=N erases=N ...` per Black Box erase, a refused capture counts in `errors=` of the `[BB]` line, `[BB] made room: ...` at START. A volume that is not in the ring layout (90 blocks, run not proven blank; or 145 blocks with the move Deferred or Stuck) leaves both rings off: no card or capture is stored.
 
 #### Volume budget
 
-What each store costs at its cap, in 2 KB blocks, measured by `tests/test_volume_budget.cpp` (every store filled alone on a large RAM disk; the test fails when a store grows past its row, so this table and the test move together). littlefs wear-levels dynamically over all blocks of the volume, 90 or, once grown, 145.
+What each littlefs store costs at its cap, in 2 KB blocks, measured by `tests/test_volume_budget.cpp` (every store filled alone on a large RAM disk; the test fails when a store grows past its row, so this table and the test move together). littlefs wear-levels dynamically over all blocks of the volume, 90 or, once grown, 111. The cards and the Black Box are not on the volume (their rings have budgets of their own, below).
 
 | Store | At its cap | Blocks |
 | :--- | :--- | ---: |
@@ -839,32 +881,31 @@ What each store costs at its cap, in 2 KB blocks, measured by `tests/test_volume
 | `/tcap` | 4 transition captures + 1 in flight (a save writes before it prunes), .tcd taken as 6 KB, .tci 212 B | 24 |
 | `/emk` | 140 cables of 98 B (no quirk block) | 54 |
 | `/emk`, worst case | 140 cables of 517 B (every quirk block full) | 152 |
-| `/cards` | 64 cards of 264 B, after 100 re-tests | 70 |
-| `/jr` | the largest plan (`kMaxSteps` rows over all five sections, every small record written) | 7, inside the reserve |
-| journal reserve | `bbstore::kJournalReserveBlocks`: the Black Box leaves this many free for the next charger test | 20 |
-| `/bb` | 32 captures of one block each | 34 |
-| **Sum** | 2 + 159 (typical emk) + 20 + 34 | **215 of 90 (145 grown)** |
+| `/jr` | the largest plan (`kMaxSteps` rows over all five sections, every small record written) | 7 |
+| **Sum** | 2 + 96 (typical emk) | **98 of 111** |
 
-The caps do not fit the volume. Measured by the test on both sizes:
+Measured by the test: every store at its cap at once, in device order, fits 111 blocks with 11 free (the test asks for at least 8, the margin the move into the ring layout keeps); on 90 blocks it runs out at `/jr` with 1 free. The worst-case e-marker library (every quirk block full, 152 blocks) does not fit either size; on a 145-block unit that holds one, the move into the ring layout drops `/tcap` and `/log.txt` and, if the rest still does not fit, waits (Deferred).
 
-| Picture | 90 blocks | 145 blocks (grown) |
+Ring budgets (same test, on the RAM flash):
+
+| Ring | Picture | Result |
 | :--- | :--- | :--- |
-| every store at its cap, device order | runs out at `/cards`, 1 free, Black Box 0 of 32 | runs out at `/cards`, 0 free, Black Box 0 of 32 |
-| 64 cards alone, then the Black Box | 18 free (under the 20-block reserve), Black Box 0 of 32 | 73 free, Black Box 32 of 32 |
-
-On 90 blocks the cards by themselves starve the Black Box (the device reached this state with 61 cards, 5 blocks free). The grown volume gives the 64 cards, the journal reserve and all 32 captures room; every store at its cap at once still does not fit (the stores alone want 2 + 159 = 161 blocks before the reserve and the Black Box). Open: the card format or the caps still have to change for that (decision pending); until then `bbstore::Ring::append` refuses a capture before it compresses it and `fs::Fs::used_blocks` answers from memory between writes, so a full volume costs no loop time.
+| cards, 14 sectors | 64 cards, then 400 re-tests with maintenance between saves | no save refused, 64 cards listed, 10 sectors when compact, at least 3 blank after maintenance (173 erases for 464 saves) |
+| Black Box, 20 sectors | typical 1500 B captures | 38 held, the newest 32 listed |
+| Black Box, 20 sectors | incompressible 1980 B captures | 19 held (one per sector, one sector kept blank) |
 
 Rules for a new store or record:
 
-- A small record stays at or below `fs::kInlineMax` (256 B, `include/k2/core/fs.hpp`) and says so with a static_assert (the test holds the ones for twins, `.tci`, `/rd.rec` and the e-marker file). One byte over takes a whole 2 KB data block per file: the format-10 card file is 264 B, 8 B over.
+- A small record stays at or below `fs::kInlineMax` (256 B, `include/k2/core/fs.hpp`) and says so with a static_assert (the test holds the ones for twins, `.tci`, `/rd.rec` and the e-marker file). One byte over takes a whole 2 KB data block per file: the format-10 card file was 264 B, 8 B over, one reason the cards moved to a ring.
 - Inline is cheaper than a block but not free. A littlefs metadata pair is two blocks and splits once its live data passes about half a block (1 KB), and splits never merge back; `write_file` also puts a `.tmp` beside the target. N inline files of S bytes cost about 4 x N x S bytes of blocks, more after churn (64 cards of 256 B: 40-46 blocks fresh, 54-74 after re-tests, measured on the RAM disk).
-- A new store adds a row here and a filler to `tests/test_volume_budget.cpp`, and the sum is compared against 90 and 145.
+- A new store adds a row here and a filler to `tests/test_volume_budget.cpp`, and the sum is compared against 90 and 111.
+- Many small append-mostly records that may be lost to a factory wipe belong in a ring log, not in littlefs.
 
 RAM: littlefs state and its 256 B caches are static (`bss` +1.5 KB with the 2 KB Black Box read buffer), no heap. Stack: the deepest littlefs path (rename, orphaning commit, relocating commit, compact, traverse) uses about 0.9 KB, the largest caller frame (`emlib::Library::save`) about 0.7 KB.
 
 The legacy ranges are described in `include/k2/drivers/flash_map.hpp`, which static_asserts at compile time that the regions are sector aligned, in ascending order, disjoint, that the erasable ones lie inside the volume or the legacy range and that the native pages stay outside both, plus the run and the two kept pages next to that table and their tie to `flash::fs_block_addr()` (checked again by `tests/test_flash_map.cpp`).
 
-Black Box persistence (`k2/core/bbpersist.hpp`): a finished capture is written once, only when the link has been quiet for 300 ms (a program or erase stalls the main loop for up to a few tens of ms), and not at all after 10 minutes without PD traffic or VBUS change (`pdtrace::idle()`). At boot the newest three entries are reloaded into the RAM capture slots (shown as "saved" in the list); older ones stay in flash and count toward the used/free figure in the list footer. Nothing wipes the ring from the UI or remote.
+Black Box persistence (`k2/core/bbpersist.hpp`): a finished capture is written once into the Black Box ring, only when the link has been quiet for 300 ms (a program stalls the main loop for a few ms), and not at all after 10 minutes without PD traffic or VBUS change (`pdtrace::idle()`). A save never erases; the ring's maintenance erases one sector at most per pause, only when erasing is fine (see "Ring logs"). At boot the newest three entries are reloaded into the RAM capture slots (shown as "saved" in the list); older ones stay in flash and count toward the used/free figure in the list footer. Nothing wipes the ring from the UI or remote (the factory wipe does).
 
 #### Flash writes during a charger test
 
@@ -876,10 +917,10 @@ A littlefs erase runs from RAM with interrupts off and takes tens of ms per 2 KB
 | Journal phase marker (`ph.rec`) | before every above-5 V PD request (`Phase::Request`) and before a Legacy detach (`Handover`) | 1 erase, 53 programs over 17 markers (one small inline commit each, 12-17 ms, a compaction 130-210 ms) | Yes: it is the only record that a power loss during a request belongs to that row | Unchanged |
 | Journal row records (`/jr/<section>`) | a final verdict (`record()` marks the section dirty, `journal_pump` writes one file per tick on a link quiet for 80 ms, waits at most 400 ms) | 13 erases, 11.6k half-words (a section over 256 B is rewritten into a fresh data block: one erase per verdict) | Needed for resume, not needed per row: see "Journal options" below | Unchanged here: list of options |
 | Journal `mt.rec`, `at.rec`, `rs.rec`, `fin.rec` | unit loss counter, run meta, resume count, finish | small inline records, 0-1 erases | Yes (loss budget, closing the run) | Unchanged |
-| Black Box captures | trigger-frozen, written once the link is quiet 300 ms | before: 20 saves, 21 erases, 9.2k half-words (2.6 s) inside the run; now 2 saves, 2 erases (0.17 s) inside the run, the 3 kept captures after it | No: RAM holds them (power loss loses them, as it always did for the one in flight) | Per-row kinds held, rare kinds budgeted (`kRareBudget` 2), waiting captures kept in their slots, overflow counted (`dropped`), one write per idle `poll()` after the run |
+| Black Box captures | trigger-frozen, written once the link is quiet 300 ms | before: 20 saves, 21 erases, 9.2k half-words (2.6 s) inside the run; with the hold, 2 saves, 2 erases (0.17 s); on the ring, 2 saves, 0 erases, 290 half-words (about 60 ms) inside the run, the kept captures after it (0 erases there too: maintenance erases later, while idle) | No: RAM holds them (power loss loses them, as it always did for the one in flight) | Per-row kinds held, rare kinds budgeted (`kRareBudget` 2), waiting captures kept in their slots, overflow counted (`dropped`), one write per idle `poll()` after the run |
 | Transition capture (`/tcap`) | one save per failed row that froze a capture, 300 ms after it or at 2 s | a delta-coded stream over 256 B (data-block erases, `kWriteChunk` 512 B programs), plus the index | Not needed mid-run | Unchanged; the stream is the 15 KB overlay ring, so parking it in RAM for the whole run is not possible without the ring; open option |
 | Rd-intent marker (`/rd.rec`) | only when the follower's intent changes (a planned re-attach, a Rescan) | 1-3 small inline commits per run | Yes: the self-powered comeback reads it | Unchanged |
-| Report card | the Done transition (`save_card`) | one 200-230 B card file | Not mid-run | Out of scope here: planned as an ask-on-finish save |
+| Report card | the Done transition (`save_card`) | one 274 B ring record (programs only; a full ring refuses it, logged) | Not mid-run | Ring maintenance erases only after the run, while idle; planned as an ask-on-finish save |
 | Settings, logs, loop probe | explicit user or remote actions only | none during a run | n/a | n/a |
 
 Journal options (not changed; the journal's reboot-bridging role is the reason it writes mid-run): (a) write a row's verdict as a tiny per-row append record that stays inline (about 12 ms) and fold the section into one data file at a unit boundary (journal format change, the per-row erase goes away, a resume replays the records); (b) write the section files only at unit boundaries and keep the in-flight unit's rows in the loss counter (a power cut inside a unit then repeats the whole unit, `kRebootBudget` stays the guard); (c) pre-erase spare blocks while the link is idle between runs so a section rewrite is a program only (needs a block allocator under littlefs, outside `flash.cpp`'s current contract); (d) an append-only file does not help: appending to a file over the 256 B inline limit copies its last block, an erase every time.
@@ -890,7 +931,7 @@ Wear: flash is written only by explicit remote commands (`store save-emarker | s
 
 Every Done charger-test run is saved as a card (a fixed-size record, format version in `report_card.hpp`) keyed by the charger's fingerprint: FNV-1a 32 over the little-endian raw PDO list plus the spec revision byte (`k2/chargertest/report_card.hpp`). While the charger sits in its 5 V contract the runner asks it once who it is (`k2/pd/pd_probe.hpp`, driven by `fusb302::probe_start`): Discover Identity, Get_Manufacturer_Info and Get_Source_Cap_Extended on SOP, one try each, 250 ms per answer, 900 ms in total (the runner waits at most `kProbeMaxMs` = 1000 ms); a NAK, Not_Supported or silence just skips that question, nothing is retried and no hard reset is sent. The card keeps VID/PID (Identify, else Manufacturer_Info or Source_Cap_Extended) and `pdp_w` (the Source_Cap_Extended PDP, else the largest PDO in watts). Format 2 stores `pdp_w` at payload byte 54 and a flags byte at 55 (bit0 name_auto) in the two bytes after the 20 name characters, so the record stays 150 B; older cards decode with both 0. A card without a user name gets `<Brand> <PDP>W` (`report_card::auto_name`: the small verified VID table, else the Manufacturer_Info text, else `VID xxxx`); a name set with rename is never replaced, an automatic name is replaced by a newer automatic one. The card holds per-group verdicts with reason codes, up to four PD/PPS ranges (100 mV units, max measured V), and (v4) per-EPR-level verdicts for the 28/36/48 V fixed supplies, the handover outcome and PD give-up time (100 ms units), final state, firmware token, boot count, uptime, run count and a 20 character name.
 
-Storage (`k2/chargertest/report_card_store.hpp`): one file per charger, `/cards/<fingerprint>.card`, a fixed-size record (see "Flash map"); a save replaces the file atomically, a power cut leaves the old or the new card. Capacity 64 cards; a new charger beyond that drops the card with the lowest save stamp. The host test (`tests/test_report_card_store.cpp`) cuts power at every operation and holds 40+ cards.
+Storage (`k2/chargertest/report_card_store.hpp`): records in the report-card ring log (see "Ring logs"): a save appends the card under its fingerprint, the latest record wins, a delete appends a tombstone; a power cut leaves the old or the new card. Capacity 64 cards; a new charger beyond that drops the card with the lowest save stamp. A save never erases; with no room it is refused and logged until the ring's maintenance (while idle) makes room. The host test (`tests/test_report_card_store.cpp`) cuts power at every operation, holds 64 cards and re-tests them on a full ring.
 
 Delta (`k2/chargertest/report_card_delta.hpp`): group verdict changes, PPS range failure voltage and max voltage changes between the new run and the charger's earlier card; the charger-test results page shows them on a "Since last card" page. Identity is captured at run start (and at resume), because the source caps go stale after a handover. Chargers without PD source caps cannot be keyed and get no card.
 
