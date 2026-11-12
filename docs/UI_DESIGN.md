@@ -462,6 +462,21 @@ Source: `k2/chargertest/report_card_hw.hpp` (`list` newest first, `remove`); pag
 
 Buttons: the BACK slot reads `Back/Del` in the list and `List/Del` on a card (long press deletes; the full word does not fit the slot).
 
+### 4.5 PD Stress (Tools > PD Stress)
+
+User decisions 2026-11-12. Source: `include/k2/ui/ui_pdstress_page.hpp`, `src/ui/ui_pdstress_page.cpp` (`Menu::PdStress`, remote page `pdstress`). The run lives in `PdStressSession` (resident in `Ui`), so closing the page never stops it; reopening the page during a run lands on Running. Host tests `tests/test_ui_pdstress_page.cpp`, the four-rotation walk in `tests/test_ui_no_truncation.cpp`; renders with `K2_DUMP=<dir> ./host-build/test_ui_pdstress_page`.
+
+| Stage | Content |
+|---|---|
+| 1/2 Sequences | Wizard title with the two-segment progress rule. A RowList of P1..P12 with checkboxes (default: all but P9 EPR); the focused row opens to 40 px and shows the sequence's note. Then `Cycles` (25 / 50 / 100 / 200 %), `Pace` (per sequence / all Settled / all Ready), `Done`, then the saved results (`Result #N`, newest first, the stored score). OK toggles a box or steps a value; `Done` goes to Review. Footer `N of 12 picked`. |
+| 2/2 Review | KvTable: Tests, Cycles, Pace, Charger (`PD 20V5A PPS 21V`: the highest fixed level and the PPS top), Output (the live current). Then the START ActionCell: first OK arms it (amber, 5 s draining bar), the second starts. Footer `Keep the output empty` (Caution); a refusal from the session (`No PD source`, inline, no power monitor, a busy port, nothing picked) replaces it for a moment, Caution tone. A load that appears during the run stops it (`Stopped: load on output` in the Results footer). |
+| Running | ProgressBar with `seq n/N` on the left and the elapsed time on the right; the sequence name on its own row; VBUS at 48 px (level 1, 4 Hz); a two-column KvTable of counts (Transitions, Hard resets, Soft resets / Rej / Wait, Out of band, Reboots, capped at 9999). Stop is a strip action (BACK, then the footer reads `Stopping: back to 5V`); the footer reads `Running: keep output empty`, or `Resuming after K2 reboot`. |
+| Results | `Score NN provisional, 0 = ideal` (the digit size of a level-2 primary value), then the counters `N clean`, `N issues`, `N skip`, each a number beside a verdict cell (clean = Pass tint, issues = Partial bar, skip = struck), so no glyph next to a number reads as a sign. A ResultGrid with one row per picked sequence (labels of at most 8 characters: `P1 Fixed` .. `P12 Mism`): `clean` (Pass), `N issues` (Partial; `K2 reboots` when the run gave up after K2 reboots with no event counted), `not run` (Skip, struck: the run stopped before it), a not-applicable reason (`no AVS`, `no EPR 28V`: None, dim and not struck, since the charger never offered it). A live result adds the `Save result` / `Discard` rows; nothing is written to flash until Save, and the store keeps the newest 8. OK on a sequence opens Detail. |
+| Detail | The row label as the title; a KvTable of the sequence's event counters in two pages of seven rows; -/+ turn the page, BACK returns to Results. Footer: the verdict and `Page n of 2`. |
+
+Paint: the Running tick stays within `PdStressPage::kRunBudgetPx` (6000 px) after the layout, plus the TopBar readout and the footer (`kChromePx`); the host test measures the maximum (4694 px over 4000 ticks).
+RAM: the page lives in the page arena (1184 B on the target, below `LoopProbePage`, so `kPageArenaBytes` did not grow). The result blob (1376 B) is decoded into the scratch lease (`pdstress` tag) only while a result loads; the page keeps a 4-byte summary per sequence.
+
 ## 5 Navigation map
 ```
           long +  ─────────────────────────────────────►   (no wrap; the end -/+ label is dim)

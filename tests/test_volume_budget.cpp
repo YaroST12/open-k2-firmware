@@ -6,7 +6,7 @@
 // in the order the device fills it, and the Black Box gets what is left above the journal reserve.
 //
 // Files of stores whose records need a whole subsystem to build (e-marker library, twins, transition captures, loop probe,
-// PD stress journal, the small settings files, the log snapshot) are written at their real paths with their real sizes
+// PD stress journal and saved results, the small settings files, the log snapshot) are written at their real paths with their real sizes
 // through the same Fs::write_file the stores use: littlefs's cost depends on the path, the size and the count only.
 // The cards, the charger journal and the Black Box are filled through their own classes.
 #include <array>
@@ -23,6 +23,7 @@
 #include "k2/pd/emlib.hpp"
 #include "k2/pd/transcap_store.hpp"
 #include "k2/pdstress/journal.hpp"
+#include "k2/pdstress/pdstress_store.hpp"
 #include "k2/twin/library.hpp"
 #include "ramdisk.hpp"
 #include "test_util.h"
@@ -76,6 +77,18 @@ bool fill_settings(fs::Fs& f) {
 bool fill_log(fs::Fs& f) { return put_file(f, "/log.txt", 512, 6) == fs::Err::Ok; }   // storage.cpp kLogKeep
 bool fill_lp(fs::Fs& f) { return f.mkdir("/lp") == fs::Err::Ok && put_file(f, "/lp/last.rec", loopprobe::kFileBytes, 7) == fs::Err::Ok; }
 bool fill_ps(fs::Fs& f) { return f.mkdir("/ps") == fs::Err::Ok && put_file(f, "/ps/run.rec", pdstress::journal::kMaxBytes, 8) == fs::Err::Ok; }
+// PD Stress saved results: kMaxSaved blobs plus the one in flight (a save writes the new result before it drops the oldest).
+// The directory is the journal's, so it may already be there on the shared volume.
+bool fill_psr(fs::Fs& f) {
+    const fs::Err d = f.mkdir(pdstress::store::kDir);
+    if (d != fs::Err::Ok && d != fs::Err::Exists) return false;
+    for (std::uint16_t id = 1; id <= pdstress::store::kMaxSaved + 1; ++id) {
+        std::array<char, pdstress::store::kPathLen> p{};
+        pdstress::store::path_of(id, p);
+        if (put_file(f, p.data(), pdstress::store::kFileBytes, std::uint8_t(id)) != fs::Err::Ok) return false;
+    }
+    return true;
+}
 bool fill_twin(fs::Fs& f) {
     if (f.mkdir(twin::kDir) != fs::Err::Ok) return false;
     for (unsigned i = 1; i <= twin::kCapacity; ++i) {
@@ -184,6 +197,7 @@ const Row kRows[] = {
     {"/log.txt", fill_log, 1},
     {"/lp/last.rec", fill_lp, 3},
     {"/ps/run.rec", fill_ps, 3},
+    {"/ps results (8 x 1376 B + 1 in flight)", fill_psr, 11},
     {"/twin (12 x 129 B)", fill_twin, 4},
     {"/tcap (4 + 1 in flight)", fill_tcap, 24},
     {"/emk (140 x 98 B)", fill_emk, 54},

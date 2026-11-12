@@ -1028,6 +1028,22 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
 - WebHID dashboard in Chrome (Linux hidraw path tested with the Python tools only).
 - OPPO VOOC / SVOOC: no handshake seen yet (CHARGER_QUIRKS).
 - The HID-cable loop probe (Tools > Loop probe): built and host-tested only; the test plan is in `LOOP_PROBE.md`.
+- **PD Stress page** (Tools > PD Stress, k2/pdstress-ui, built and host-tested only; `docs/UI_DESIGN.md` 4.5). Setup
+  1/2 (P1..P12 checklist, Cycles, Pace, saved results), Review 2/2 (KvTable + two-press START), Running (48 px VBUS,
+  counts, BACK stops), Results (score, clean / issues / skip, one row per sequence, Detail), Save result / Discard into
+  the newest-8 store (`/ps/xxxx.psr`). Validate (hardware, output empty, a PD charger on the bottom port, active sink via
+  `k2_remote pd-reread`): (1) `k2_remote page pdstress`, screenshot: `1/2 Sequences`, 11 of 12 picked (P9 EPR off),
+  footer `11 of 12 picked`; (2) pick only P1 Fixed, Cycles 25 %, Done -> Review shows the charger's top fixed level and
+  PPS top (`PD 20V5A PPS 21V` style) and the live Output; (3) OK arms (amber, 5 s bar), wait 5 s -> disarms; OK, OK ->
+  Running: `seq 1/1`, the clock counts, VBUS hero follows the steps, `k2_remote ping` uptime grows through the run (no
+  reboot), heartbeat `stack_free` not lower than before the run; (4) the run ends on Results, `Score` shown, P1 row
+  `clean` or `N issues`; OK on it opens Detail, -/+ turn the two pages; (5) Save result -> footer `Result saved`, Setup
+  lists `Result #1`; OK on it reopens the same score; (6) run again, BACK during Running -> `Stopping: back to 5V`,
+  VBUS back at 5 V, Results with the remaining rows `not run`, Discard -> nothing new in the saved list; (7) close the
+  page during a run and reopen it -> Running, not Setup; (8) on a passive K2 (no contract, charger
+  waiting for a sink) START is refused in the footer (`No PD source`, Caution tone) and nothing changes on CC; (9)
+  screenshots in all four rotations show no clipped text. Not built: `k2_remote pd-stress saved` (the saved list over the
+  remote needs new remote ops; the page is the only reader today).
 - The reboot-resume of a charger run after an unplanned VBUS loss on a self-powered K2 (the comeback marker of
   1e3b67b); a host-powered K2 waited forever for stable 5 V on 2026-11-07.
 - **HID-cable loop 5 V lock** (k2/loop-lock, built and host-tested only; ARCHITECTURE "HID-cable loop guard"). Certain at
