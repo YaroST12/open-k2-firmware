@@ -225,14 +225,14 @@ LDFLAGS += $(SIZE_FLAGS) -flto-partition=one
 
 # Hot acquisition / DSP / power-conversion objects compile at speed levels while UI pages stay at -Os
 # to preserve Flash budget: battery/dpsniff stay at -O2 (-O3 bloats dpsniff +9 KB), small integer hot
-# paths take -O3 (+748 B total), and power_monitor (OneEuro float smoothing) takes -Ofast (+1,090 B).
+# paths take -O3 (+748 B total). power_monitor.o gets no speed flag: the One Euro filter it was meant to speed up is an
+# inline function of ui/smoothing.hpp that is emitted once, at -Os, and is not inlined across objects built with different
+# flags, so -Ofast there changed nothing measurable (see the commit that removed it).
 HOT_MATH_O2_OBJS = $(BUILD_DIR)/battery/battery.o $(BUILD_DIR)/fastcharge/dpsniff.o
 HOT_MATH_O3_OBJS = $(BUILD_DIR)/drivers/adc_calc.o $(BUILD_DIR)/drivers/power_calc.o \
                    $(BUILD_DIR)/fastcharge/fastcharge_classify.o
-HOT_MATH_OFAST_OBJS = $(BUILD_DIR)/drivers/power_monitor.o
 $(HOT_MATH_O2_OBJS): CFLAGS += -O2
 $(HOT_MATH_O3_OBJS): CFLAGS += -O3
-$(HOT_MATH_OFAST_OBJS): CFLAGS += -Ofast
 
 DOCKER_IMG = open-k2-builder:latest
 
@@ -269,7 +269,7 @@ $(LOGDB_HDR): $(CXX_SRCS) $(wildcard $(INC_DIR)/*.hpp $(INC_DIR)/k2/*.hpp $(INC_
 # and linker setting (tools, CFLAGS, CXXFLAGS, LDFLAGS, -Werror, LTO); any flag edit or K2_WERROR /
 # EXTRA_*FLAGS change gives a new stamp, which deletes the old one and rebuilds and relinks everything.
 # Defined after the last global flag edit above; target-specific flags (version.o) are not part of it.
-CFG_FLAGS := $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS) | $(HOT_MATH_OFAST_OBJS)
+CFG_FLAGS := $(CC) | $(CXX) | $(CFLAGS) | $(CXXFLAGS) | $(LDFLAGS) | $(OWN_WERROR) | $(LTO) | $(NOLTO_OBJS) | $(HOT_MATH_O2_OBJS) | $(HOT_MATH_O3_OBJS)
 CFG_STAMP := $(BUILD_DIR)/.cfg-$(word 1,$(shell printf '%s' '$(subst ','"'"',$(CFG_FLAGS))' | md5sum))
 # A missing stamp must rebuild (.SECONDARY would otherwise treat it as an intermediate and skip it).
 .NOTINTERMEDIATE: $(CFG_STAMP)
