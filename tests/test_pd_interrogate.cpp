@@ -660,6 +660,29 @@ int main() {
         CHECK_COND(l.iq.status().why != IqWhy::SourceRestarts);
     }
 
+    // ---- the same renegotiation after the DEVICE began a conversation of its own is theirs, not ours (laptop on the bench,
+    //      2026-11-13: after our Discover SVIDs it sent its own Discover Identity, VCONN_Swap and a Soft_Reset, and the
+    //      charger's Source_Capabilities followed 38 ms after our question): the run goes on ----
+    {
+        std::vector<std::uint8_t> caps, di;
+        for (std::uint32_t w : kCaps) put32(caps, w);
+        put32(di, 0xFF00A001u);
+        for (int kind = 0; kind < 3; kind++) {
+            Rig r;
+            r.contract();
+            r.start();
+            r.next();                                       // Get_Sink_Cap
+            r.now += 10;
+            if (kind == 0) r.dev_ctl(11);                   // VCONN_Swap
+            else if (kind == 1) r.dev_ctl(kCtlSoftReset);   // Soft_Reset to the charger
+            else r.iq.on_message(Sop::Sop, hdr(kMsgVendorDefined, 1, 2, kSnk, r.dev_id++), di, r.now);   // its own Discover Identity
+            r.now += 28;
+            r.rx(hdr(1, 6, 2, kSrc, 0), caps);
+            CHECK_EQ(bool(r.iq.running()), true);
+            CHECK_COND(r.iq.status().why != IqWhy::SourceRestarts);
+        }
+    }
+
     // ---- an answer counts only when it matches the question: the device's NAK of the charger's own Discover Identity is not a
     //      refusal of our Get_Sink_Cap, and a Revision nobody asked for is kept but is no answer ----
     {

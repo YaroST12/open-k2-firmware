@@ -658,7 +658,9 @@ void Interrogate::on_source(std::uint16_t h, std::span<const std::uint8_t> paylo
         // bench re-offered its capabilities ~130 ms after every question and its Request/Accept/PS_RDY followed. Anything the
         // device says from here on belongs to that negotiation or to the charger's own questions, not to ours. Stop at once:
         // the renegotiation is the resync, asking again only makes the source restart again.
-        if (st_.phase == IqPhase::Ask && dirty_ && !soft_since_tx_ && std::uint32_t(now_ - tx_at_) <= kIqRenegBlameMs) {
+        // Not when the device began a conversation of its own meanwhile (its VCONN_Swap, Soft_Reset, Discover Identity): the
+        // renegotiation is then the two of them, and the ordinary path (wait for the new contract, ask again) applies.
+        if (st_.phase == IqPhase::Ask && dirty_ && !soft_since_tx_ && !peer_spoke_since_tx_ && std::uint32_t(now_ - tx_at_) <= kIqRenegBlameMs) {
             close(IqResult::SourceRestart);
             dirty_ = false;
             awaiting_ = tx_pending_ = false;
@@ -763,7 +765,10 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
     if (!((vh >> 15) & 1)) return;   // unstructured: not an answer
     const std::uint16_t svid = std::uint16_t(vh >> 16);
     const std::uint8_t cmd = std::uint8_t(vh & 0x1F), ctype = std::uint8_t((vh >> 6) & 3);
-    if (ctype == 0) return;   // a question of the device's own
+    if (ctype == 0) {   // a question of the device's own: it is talking to the charger, whatever follows is theirs
+        if (st_.phase == IqPhase::Ask && dirty_) peer_spoke_since_tx_ = true;
+        return;
+    }
     IqStep s;
     if (svid == kSvidPd && cmd == kVdmIdentity) s = IqStep::Identity;
     else if (svid == kSvidPd && cmd == kVdmSvids) s = IqStep::Svids;
