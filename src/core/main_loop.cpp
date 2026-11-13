@@ -239,7 +239,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
 constexpr uint32_t kStackLowBytes = 1024;
 uint32_t g_stack_lowest = kStackLowBytes;
 
-[[gnu::noinline]] void watch_stack(uint32_t &lowest) {
+[[gnu::noinline]] K2_HOT void watch_stack(uint32_t &lowest) {
     const uint32_t free_bytes = k2_stack_free_bytes();
     if (free_bytes >= lowest) return;
     lowest = free_bytes;

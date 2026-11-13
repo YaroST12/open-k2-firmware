@@ -7,6 +7,7 @@
 #include <cstring>
 #include <new>
 
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/storage.hpp"
@@ -302,7 +303,7 @@ pd::IqRefusal inline_start_cable(std::string_view name, bool save, bool confirme
     return inline_start_with(name, save, confirmed, ctx, &rec, &quirks);
 }
 
-[[gnu::noinline]] void inline_poll() {
+[[gnu::noinline]] K2_HOT void inline_poll() {
     if (g_inline_spoof && !fusb302::interrogate_running()) {   // the run is over (done, cancelled, aborted or detached)
         emk_spoof::disarm();
         g_inline_spoof = false;

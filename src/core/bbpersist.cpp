@@ -4,6 +4,7 @@
 #include "k2/core/log.hpp"
 #include "k2/core/bbpersist.hpp"
 
+#include "k2/core/hot.h"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/usb.hpp"
 
@@ -19,7 +20,7 @@ void init() {
           static_cast<unsigned>(s.free_bytes));
 }
 // One line per save or refusal, with how long the main loop stood still: a save runs flash programs with interrupts off.
-void poll(bool may_erase) {
+K2_HOT void poll(bool may_erase) {
     const Status a = g_p.status();
     g_p.poll();
     const Status b = g_p.status();

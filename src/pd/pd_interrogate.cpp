@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "k2/core/hot.h"
 #include "k2/pd/pd_ext.hpp"
 
 namespace k2::pd {
@@ -285,7 +286,7 @@ void Interrogate::mark_ok(IqStep s) {
 
 // ---- the spoof window ----
 
-bool Interrogate::sopp_window(std::uint32_t now) const {
+K2_HOT bool Interrogate::sopp_window(std::uint32_t now) const {
     if (!st_.spoof || !running()) return false;
     switch (st_.phase) {   // our questions go out with Auto-CRC off, and a reset is no time for acknowledgements
         case IqPhase::Sniff1:
@@ -330,7 +331,7 @@ void Interrogate::on_sopp_reply(std::uint32_t now) {
 }
 
 // The line is quiet long enough after PS_RDY and no spoof window is open.
-bool Interrogate::settled(std::uint32_t now) const {
+K2_HOT bool Interrogate::settled(std::uint32_t now) const {
     return due(now, watch_.psrdy_at() + kIqSettleMs) && due(now, watch_.last_frame_at() + kIqQuietMs) && !sopp_window(now);
 }
 

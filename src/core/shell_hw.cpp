@@ -15,6 +15,7 @@
 #include "k2/fastcharge/fastcharge.hpp"
 #include "k2/fastcharge/fctrig.hpp"
 #include "k2/core/fmt.hpp"
+#include "k2/core/hot.h"
 #include "k2/core/loop_guard.hpp"
 #include "k2/drivers/fusb302.hpp"
 #include "k2/drivers/lcd.hpp"
@@ -1139,7 +1140,7 @@ void init(Remote& remote, Ui& ui) {
     usb::set_log_tap(tap);
 }
 
-void poll() {
+K2_HOT void poll() {
     if (!g_remote) return;
     const bool up = session_up();
     if (!up) {

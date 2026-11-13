@@ -5,6 +5,8 @@
 
 #include <cstdint>
 
+#include "k2/core/hot.h"
+
 namespace k2::fmt {
 
 namespace {
@@ -14,12 +16,12 @@ struct Out {
     std::span<char> buf;
     std::size_t len = 0;
 
-    void put(char c) { if (len + 1 < buf.size()) buf[len++] = c; }
+    K2_HOT void put(char c) { if (len + 1 < buf.size()) buf[len++] = c; }
     void pad(char c, int n) { while (n-- > 0) put(c); }
 };
 
 // Integer conversion with optional sign, zero or space padding to `width`.
-void put_number(Out& out, std::uint32_t mag, bool negative, unsigned base, int width, bool zero) {
+K2_HOT void put_number(Out& out, std::uint32_t mag, bool negative, unsigned base, int width, bool zero) {
     char digits[10];  // 4294967295 is the longest
     int n = 0;
     do {
@@ -37,7 +39,7 @@ void put_number(Out& out, std::uint32_t mag, bool negative, unsigned base, int w
 
 }  // namespace
 
-std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap) {
+K2_HOT std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap) {
     if (buf.empty()) return 0;
     Out out{buf};
     for (const char* p = fmt; *p; p++) {
@@ -73,7 +75,7 @@ std::size_t vformat(std::span<char> buf, const char* fmt, std::va_list ap) {
     return out.len;
 }
 
-std::size_t format(std::span<char> out, const char* fmt, ...) {
+K2_HOT std::size_t format(std::span<char> out, const char* fmt, ...) {
     std::va_list ap;
     va_start(ap, fmt);
     const std::size_t n = vformat(out, fmt, ap);

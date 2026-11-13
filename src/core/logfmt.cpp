@@ -3,6 +3,7 @@
 // Compact log line encoder, see k2/core/log.hpp and k2/core/logfmt.hpp.
 #include "k2/core/logfmt.hpp"
 
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 
 namespace k2::logfmt {
@@ -12,14 +13,14 @@ namespace {
 struct Out {
     std::span<char> buf;
     std::size_t len = 0;
-    void put(char c) { if (len + 2 < buf.size()) buf[len++] = c; }   // keeps room for '\n' and NUL
+    K2_HOT void put(char c) { if (len + 2 < buf.size()) buf[len++] = c; }   // keeps room for '\n' and NUL
     void hex(std::uint32_t v) {
         char d[8];
         int n = 0;
         do { d[n++] = "0123456789ABCDEF"[v & 15]; v >>= 4; } while (v);
         while (n) put(d[--n]);
     }
-    void dec(std::uint32_t v) {
+    K2_HOT void dec(std::uint32_t v) {
         char d[10];
         int n = 0;
         do { d[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v);

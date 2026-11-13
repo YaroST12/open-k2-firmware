@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "k2/core/bbstore.hpp"
+#include "k2/core/hot.h"
 
 namespace k2::loopprobe {
 
@@ -395,7 +396,7 @@ void Runner::hold_cc(std::uint32_t now) {
     finish(now);
 }
 
-void Runner::poll(std::uint32_t now) {
+K2_HOT void Runner::poll(std::uint32_t now) {
     switch (phase_) {
     case Phase::Idle:
     case Phase::Cc:

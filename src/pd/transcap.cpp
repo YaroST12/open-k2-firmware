@@ -4,6 +4,7 @@
 #include "k2/core/log.hpp"
 #include "k2/pd/transcap.hpp"
 
+#include "k2/core/hot.h"
 #include "k2/drivers/adc.hpp"
 #include "k2/drivers/fs_flash.hpp"
 #include "k2/drivers/mode_ram.hpp"
@@ -196,7 +197,7 @@ void poll_once() {
 
 }  // namespace
 
-void poll() {
+K2_HOT void poll() {
     if (!g_held || g_in_poll) return;
     g_in_poll = true;
     poll_once();

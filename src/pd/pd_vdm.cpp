@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "k2/core/hot.h"
 #include "k2/pd/pd.hpp"
 
 namespace k2::pd {
@@ -69,7 +70,7 @@ const char* find(const std::array<Named, N>& t, std::uint16_t id) {
     return it == t.end() ? nullptr : it->name;
 }
 
-void on_identity(VdmInfo& info, std::span<const std::uint32_t> v) {
+K2_HOT void on_identity(VdmInfo& info, std::span<const std::uint32_t> v) {
     if (v.size() < 2) return;
     Identity id;
     id.valid = true;
@@ -87,7 +88,7 @@ void on_identity(VdmInfo& info, std::span<const std::uint32_t> v) {
     info.identity = id;
 }
 
-void on_svids(VdmInfo& info, std::span<const std::uint32_t> v) {
+K2_HOT void on_svids(VdmInfo& info, std::span<const std::uint32_t> v) {
     info.num_svids = 0;
     for (std::size_t i = 1; i < v.size(); i++) {
         for (const std::uint16_t s : {std::uint16_t(v[i] >> 16), std::uint16_t(v[i] & 0xFFFF)}) {
@@ -109,7 +110,7 @@ const char* apple_model(std::uint16_t pid) {
     return find(kApple, pid);
 }
 
-void parse_vdm(VdmInfo& info, std::span<const std::uint8_t> payload) {
+K2_HOT void parse_vdm(VdmInfo& info, std::span<const std::uint8_t> payload) {
     if (payload.size() < 4) return;
     std::array<std::uint32_t, 7> v{};
     const std::size_t n = std::min(payload.size() / 4, v.size());

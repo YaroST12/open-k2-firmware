@@ -34,7 +34,7 @@ math selftest (arch=m4f opt=Os math_errno=off):
   [PASS] scale_div    sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] adc_calc     sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] power_calc   sum=0xXXXXXXXX  cyc=... zw=1
-  [PASS] math_opt     sum=0xXXXXXXXX  cyc=... zw=0
+  [PASS] math_opt     sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] readout_fmt  sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] fpu_sqrt     sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] one_euro     sum=0xXXXXXXXX  cyc=... zw=1
@@ -43,9 +43,9 @@ math selftest (arch=m4f opt=Os math_errno=off):
   [PASS] text_big     sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] gfx_fill     sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] mem_ops      sum=0xXXXXXXXX  cyc=... zw=1
-  [PASS] fmt_line     sum=0xXXXXXXXX  cyc=... zw=0
-  [PASS] pd_codec     sum=0xXXXXXXXX  cyc=... zw=?
-  [PASS] pd_sink      sum=0xXXXXXXXX  cyc=... zw=?
+  [PASS] fmt_line     sum=0xXXXXXXXX  cyc=... zw=1
+  [PASS] pd_codec     sum=0xXXXXXXXX  cyc=... zw=1
+  [PASS] pd_sink      sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] pdtrace_ring sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] tu_fifo      sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] ws_fast      sum=0xXXXXXXXX  cyc=... zw=1
@@ -81,7 +81,7 @@ The `zw` values above are what the placement is expected to give, not measuremen
 ## Known gaps
 
 - Not covered: the Sink state machine (it needs a live FUSB302 or a full fake wire; the `Fake`-env tests cover it on the host) and `pdtrace::Captures` (flash-backed).
-- Not `K2_HOT` or pinned, so `zw` may read 0 for the checks that touch them: `fmt::format`, the codec in `pd.cpp` / `pd_vdm.cpp`, `plan_request` / `rdo_*` / `make_skedb` in `pd_sink.cpp`, and `math::div_u64_u32_slow` (inline + noinline, so a COMDAT that no section pattern pins). The `zw` flag exists to show exactly this.
+- Pinned into the hot block (K2_HOT, or a section-name pattern in `link.ld` for header-inline code): `fmt::format` and its helpers, the codec in `pd.cpp` / `pd_vdm.cpp`, `plan_request` / `rdo_*` / `make_skedb` in `pd_sink.cpp`, and all of `k2::math` (`.text._ZN2k24math*`, including `div_u64_u32_slow`). `zw` is expected to read 1 for every check; a `zw=0` after a later change means a production function has slipped out of the block. `ws_slow` reads 0 on purpose. `systick::delay_*` stays unpinned: its timing is calibrated against flash speed.
 - Goldens come from the host. A mismatch on the device is a finding about host versus target, not a flaw of the check.
 
 ## A/B Comparison Workflow

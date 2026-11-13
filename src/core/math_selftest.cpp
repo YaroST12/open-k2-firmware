@@ -289,7 +289,11 @@ K2_HOT bool check_math_opt(Out& o) {
     acc = fnv_step(acc, math::mw_of(keep(85000u), keep(54000u)));
     acc = fnv_step(acc, static_cast<std::uint32_t>(math::mul_div_i32(keep(-2'000'000'000), 5, 7)));
 
-    touch(o, &math::div_u64_u32_slow);   // header-inline and not pinned: expect zw=0 (side issue)
+    touch(o, &math::div_u64_u32_slow);   // header-inline: pinned by its section name in link.ld (`.text._ZN2k24math*`)
+    touch(o, &math::mul_div_u32);
+    touch(o, &math::mw_of);
+    touch(o, &math::div_i64_to_i32);
+    touch(o, &math::mul_div_i32);
     o.crc = acc;
     return ok;
 }
@@ -955,7 +959,7 @@ K2_HOT bool check_pd_sink(Out& o) {
         for (const std::uint8_t byte : s) acc = fnv_step(acc, byte);
     }
 
-    touch(o, &pd::plan_request);   // not K2_HOT: zw may be 0 (side issue)
+    touch(o, &pd::plan_request);
     touch(o, &pd::lookup_held);
     touch(o, &pd::rdo_fixed);
     touch(o, &pd::rdo_pps);

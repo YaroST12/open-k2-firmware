@@ -5,9 +5,11 @@
 
 #include <algorithm>
 
+#include "k2/core/hot.h"
+
 namespace k2::pd {
 
-Rdo decode_rdo(std::uint32_t raw, const Pdo* pdo) {
+K2_HOT Rdo decode_rdo(std::uint32_t raw, const Pdo* pdo) {
     Rdo r;
     r.pos = std::uint8_t(raw >> 28);
     if (raw & (1u << 27)) r.flags |= kRdoFGiveBack;
@@ -96,7 +98,7 @@ const char* termination_name(std::uint8_t t) {
 
 }  // namespace
 
-Pdo decode_pdo(std::uint32_t raw) {
+K2_HOT Pdo decode_pdo(std::uint32_t raw) {
     Pdo p;
     p.raw = raw;
     if (raw == 0) return p;  // unused slot (EPR messages zero the unused SPR positions)
@@ -153,7 +155,7 @@ Pdo decode_pdo(std::uint32_t raw) {
     return p;
 }
 
-std::uint16_t current_limit_ma(const Pdo& p, std::uint16_t mv) {
+K2_HOT std::uint16_t current_limit_ma(const Pdo& p, std::uint16_t mv) {
     if (p.type == PdoType::Avs && (p.raw >> 28) == 0xE)
         return static_cast<std::uint16_t>((mv <= 15000 ? (p.raw >> 10) & 0x3FF : p.raw & 0x3FF) * 10);
     return p.max_ma;
@@ -164,7 +166,7 @@ const char* wire_revision_name(std::uint8_t rev) {
     return rev < 4 ? names[rev] : "unknown";
 }
 
-CableLimits cable_limits(const Emarker& e) {
+K2_HOT CableLimits cable_limits(const Emarker& e) {
     CableLimits out;
     if (!e.valid || e.num_vdos < 5 || (e.spec_rev != 1 && e.spec_rev != 2)) return out;
     out.observed = true;
@@ -190,7 +192,7 @@ CableLimits cable_limits(const Emarker& e) {
     return out;
 }
 
-void decode_source_caps(SourceCaps& caps, std::uint16_t header, std::span<const std::uint8_t> payload,
+K2_HOT void decode_source_caps(SourceCaps& caps, std::uint16_t header, std::span<const std::uint8_t> payload,
                         std::uint8_t active_cc) {
     const std::size_t n = std::min<std::size_t>((header >> 12) & 7, kMaxPdos);
     caps.valid = true;
@@ -206,7 +208,7 @@ void decode_source_caps(SourceCaps& caps, std::uint16_t header, std::span<const 
         caps.pdos[i] = decode_pdo(le32(&payload[4 * i]));
 }
 
-Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do) {
+K2_HOT Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do) {
     Emarker e;
     e.valid = true;
     e.max_current_a = 3;

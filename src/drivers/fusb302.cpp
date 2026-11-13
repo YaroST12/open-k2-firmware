@@ -229,7 +229,7 @@ pd::Interrogate& iq() {
 bool ident_running() { return g_ident_inited && ident().running(); }
 bool probe_running() { return g_probe_inited && probe().running(); }
 bool reread_running() { return g_reread_inited && reread().running(); }
-bool iq_running() { return g_iq_inited && iq().running(); }
+K2_HOT bool iq_running() { return g_iq_inited && iq().running(); }
 // The re-read's attach ownership is these two flags plus the release timer below. Every other owner of the link clears the flags
 // (reread_take_over: sink_request, a PD Stress / twin run start; rd_for_run, unit_*, cc_detach): the attach is then theirs and the
 // timer never fires on it. Only an attach nobody took over is released here; `pd-reread --abort` adopts a lab-held Rd again.
@@ -924,7 +924,7 @@ void line_fallback_move() {
 
 // ---- Source_Capabilities logging ----
 
-void log_pdo(int n, const pd::Pdo& p) {
+K2_HOT void log_pdo(int n, const pd::Pdo& p) {
     const int v = p.max_mv, vmin = p.min_mv, a = p.max_ma, w = int(p.max_mw / 1000);
     using T = pd::PdoType;
     switch (p.type) {
@@ -952,7 +952,7 @@ void log_pdo(int n, const pd::Pdo& p) {
 }
 
 // The outcome of an SPR-mode EPR_Get_Source_Cap (no EPR entry): the proof for "EPR available, needs an EPR cable".
-void log_epr_info(pd::EprInfo s) {
+K2_HOT void log_epr_info(pd::EprInfo s) {
     switch (s) {
         case pd::EprInfo::Got:
             K2LOG("[PD] EPR caps info: list received (%d PDOs)\n", g_engine.epr_info.num_pdos);
@@ -966,7 +966,7 @@ void log_epr_info(pd::EprInfo s) {
     }
 }
 
-void log_ext(unsigned type) {
+K2_HOT void log_ext(unsigned type) {
     const pd::ExtInfo& x = g_engine.ext;
     switch (type) {
         case pd::kExtSourceCapsExt:
@@ -1019,7 +1019,7 @@ void log_vdm(std::uint16_t header, std::span<const std::uint8_t> payload) {
 }
 
 // One received frame (SOP token stripped): the engine decodes it, we log what it produced.
-void log_cable(const pd::Emarker& e) {
+K2_HOT void log_cable(const pd::Emarker& e) {
     K2LOG("[EMARK] SOP%s PD%s, VDO v%d, latency %s, %s%s, EPR=%d\n", e.sop == 1 ? "'" : "''",
                 e.spec_rev == 1 ? "2.0" : "3.x", e.vdo_version, e.latency_str, e.termination_str,
                 e.type_c_plug ? ", Type-C plug" : "", e.epr_capable);
@@ -2659,7 +2659,7 @@ static bool idle_owner_free() {
 
 namespace {
 // The unattached scan, when pd::ScanPace says so; from poll() and, during long redraws, from scan_service().
-void scan_if_due() {
+K2_HOT void scan_if_due() {
     const std::uint32_t now = systick::millis();
     if (g_active_cc == 0 && g_scan_pace.due(now) && !g_rd_hold.held(now) && !g_idle_wake.reading(now)) {
         detect_cc_orientation();

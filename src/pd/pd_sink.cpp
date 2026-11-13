@@ -36,7 +36,7 @@ static TxMsg vdm_txmsg(const AppleVdm& v, std::uint8_t rev) {
 }
 
 // PDO1 (the 5 V fixed supply) of a PD 3.x source carries "EPR Mode Capable" in bit 23 (reserved in PD 2.0).
-bool source_offers_epr(const SourceCaps& c) {
+K2_HOT bool source_offers_epr(const SourceCaps& c) {
     return c.valid && c.spec_rev == 2 && c.num_pdos && c.pdos[0].type == PdoType::Fixed && (c.pdos[0].raw & (1u << 23));
 }
 
@@ -63,17 +63,17 @@ const char* epr_fail_name(std::uint8_t code) {
     return "invalid reason";
 }
 
-std::uint32_t rdo_fixed(std::uint8_t pos, std::uint16_t op_ma, std::uint16_t max_ma, bool epr) {
+K2_HOT std::uint32_t rdo_fixed(std::uint8_t pos, std::uint16_t op_ma, std::uint16_t max_ma, bool epr) {
     return pos_bits(pos) | kRdoNoSuspend | (epr ? kRdoEpr : 0u) |
            (std::uint32_t(std::min<unsigned>(op_ma / 10u, 1023u)) << 10) | std::min<unsigned>(max_ma / 10u, 1023u);
 }
 
-std::uint32_t rdo_pps(std::uint8_t pos, std::uint16_t mv, std::uint16_t ma, bool epr) {
+K2_HOT std::uint32_t rdo_pps(std::uint8_t pos, std::uint16_t mv, std::uint16_t ma, bool epr) {
     return pos_bits(pos) | kRdoNoSuspend | (epr ? kRdoEpr : 0u) | (std::uint32_t((mv / 20u) & 0xFFF) << 9) |
            std::min<unsigned>(ma / 50u, 127u);
 }
 
-std::uint32_t rdo_avs(std::uint8_t pos, std::uint16_t mv, std::uint16_t ma, bool epr) {
+K2_HOT std::uint32_t rdo_avs(std::uint8_t pos, std::uint16_t mv, std::uint16_t ma, bool epr) {
     const unsigned units = (mv / 100u) * 4u;  // 25 mV units, 100 mV steps
     return pos_bits(pos) | kRdoNoSuspend | (epr ? kRdoEpr : 0u) | (std::uint32_t(units & 0xFFF) << 9) |
            std::min<unsigned>(ma / 50u, 127u);
@@ -125,12 +125,12 @@ const char* result_name(SinkResult r) {
     return "?";
 }
 
-std::uint32_t request_cap_mv(std::int32_t max_request_mv, std::int32_t max_vbus_mv) {
+K2_HOT std::uint32_t request_cap_mv(std::int32_t max_request_mv, std::int32_t max_vbus_mv) {
     if (max_request_mv <= 0 || max_vbus_mv <= 0) return kVsafe5vMv;
     return std::uint32_t(std::max<std::int32_t>(std::min(max_request_mv, max_vbus_mv), std::int32_t(kVsafe5vMv)));
 }
 
-Plan plan_request(const SourceCaps& caps, Choice c, std::uint32_t cap_mv, bool epr_mode) {
+K2_HOT Plan plan_request(const SourceCaps& caps, Choice c, std::uint32_t cap_mv, bool epr_mode) {
     Plan p;
     if (cap_mv < kVsafe5vMv) cap_mv = kVsafe5vMv;
     if (!caps.valid || caps.num_pdos == 0) return p;  // err = NoCaps
@@ -181,7 +181,7 @@ Plan plan_request(const SourceCaps& caps, Choice c, std::uint32_t cap_mv, bool e
     return p;
 }
 
-Choice lookup_held(const SourceCaps& caps, std::uint16_t mv, std::uint16_t ma, PdoType type) {
+K2_HOT Choice lookup_held(const SourceCaps& caps, std::uint16_t mv, std::uint16_t ma, PdoType type) {
     Choice c;
     if (!caps.valid || !mv) return c;
     const std::size_t n = std::min<std::size_t>(caps.num_pdos, caps.pdos.size());
@@ -196,7 +196,7 @@ Choice lookup_held(const SourceCaps& caps, std::uint16_t mv, std::uint16_t ma, P
     return c;   // pos 0: the list no longer offers the held level
 }
 
-std::array<std::uint8_t, 24> make_skedb() {
+K2_HOT std::array<std::uint8_t, 24> make_skedb() {
     std::array<std::uint8_t, 24> s{};
     s[0] = 0x16; s[1] = 0x07;   // VID 0x0716
     s[2] = 0x60; s[3] = 0x50;   // PID 0x5060

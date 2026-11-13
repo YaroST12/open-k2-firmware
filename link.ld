@@ -92,6 +92,13 @@ SECTIONS
     *(.text._ZN2k29smoothing*)
     /* pdtrace ring / collapse / capture templates (include/k2/pd/pdtrace.hpp): same COMDAT case, on the PD path */
     *(.text._ZNK2k27pdtrace4Ring* .text._ZN2k27pdtrace4Ring* .text._ZN2k27pdtrace8Collapse* .text._ZN2k27pdtrace8Captures*)
+    /* 64-bit division slow path (include/k2/core/math_opt.hpp): inline + noinline, so a COMDAT section that cannot carry K2_HOT */
+    *(.text._ZN2k24math*)
+    /* Other header-inline helpers that run per PD message or per paint (caps_log_gate.hpp, pd_interrogate.hpp, lcd.hpp,
+     * lcd.cpp PaintTimer) and the TinyUSB FIFO copy loops the hidd/cdcd transfer path calls */
+    *(.text._ZN2k22pd18caps_content_hash* .text._ZNK2k22pd11Interrogate7running*)
+    *(.text._ZN2k23lcd12clip_to_band* .text._ZN2k23lcd12_GLOBAL__N_110PaintTimer*)
+    *(.text.tu_hwfifo_write .text.tu_hwfifo_write.* .text.tu_hwfifo_read .text.tu_hwfifo_read.*)
     *libc.a:libc_a-memcpy.o(.text .text.*)
     *libc.a:libc_a-memmove.o(.text .text.*)
     *libc.a:libc_a-memset.o(.text .text.*)
