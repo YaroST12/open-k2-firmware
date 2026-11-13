@@ -302,7 +302,9 @@ void TwinPage::entry_note(const Entry &e, bool running_this, StrBuf<40> &out) co
     } else if (o.kind == twin::Kind::FiveV) {
         out.put("5V only, ").put(limiter_word(o.limiter));
     } else {
-        out.put(o.observed ? "asked " : "gets ");   // observed: from the device's own Request, what it asked for
+        // observed: from the device's own Request, what it asked for. A predicted PPS contract is a range, so it says "up to":
+        // the device picks its own voltage inside the overlap, the K2 does not claim one.
+        out.put(o.observed ? "asked " : o.kind == twin::Kind::Pps ? "PPS up to " : "gets ");
         const uint32_t got = (o.mw + 500) / 1000, want = (o.want_mw + 500) / 1000;
         if (want > got) out.put_u32(got).put(" of ").put_u32(want).put("W, ").put(limiter_word(o.limiter));
         else out.put_u32(got).put(o.limiter == twin::Limiter::Device ? "W, device max" : "W, full");
@@ -374,8 +376,8 @@ void TwinPage::build_action_row(int index, bool focused, kit::RowSpec &out) {
         } else if (out.marker == kit::Marker::Verdict) {
             entry_note(*e, false, row_note_);
         } else if (provable) {
-            if (e->out.kind == twin::Kind::Pps) {
-                row_note_.put("asks for PPS ");
+            if (e->out.kind == twin::Kind::Pps) {   // a range: the proof asks for its top, the device would pick lower
+                row_note_.put("asks for PPS up to ");
                 put_level(row_note_, e->out.mv, 'V');
             } else {
                 row_note_.put("asks the charger for ");
@@ -432,7 +434,7 @@ void TwinPage::compose_footer() {
         foot_tone_ = FooterTone::Caution;
         const Entry *e = det_entry();
         if (e && e->have) {
-            foot_text_.put(e->out.kind == twin::Kind::Pps ? "Asks for PPS " : "Asks the charger for ");
+            foot_text_.put(e->out.kind == twin::Kind::Pps ? "Asks for PPS up to " : "Asks the charger for ");
             put_level(foot_text_, e->out.mv, 'V');
         } else {
             foot_text_.put(wake_ok_ ? kFooters[kFootWakeArm] : kFooters[0]);

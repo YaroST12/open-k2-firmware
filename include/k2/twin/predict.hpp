@@ -10,14 +10,17 @@
 //     sink PDO, the current the device says it needs there (USB PD 3.1 6.4.1.3.1). Never more than the charger advertises.
 //  3. A programmable (PPS) source PDO is usable against each PPS APDO of the twin whose voltage range overlaps it; the voltage is
 //     the top of the overlap, the current min(source, twin) as in rule 2, the power voltage x current.
-//  4. The highest power wins. On a tie a PPS level above 5 V beats fixed (the device then holds the level with fine voltage
-//     control; a PPS "level" at 5 V is just the always-present 5 V PDO, which stays the answer), and otherwise the higher
-//     voltage wins (less current in the cable); after that the lower position.
+//  4. Kind first, then power. A PPS level above 5 V beats every fixed level whatever the power: a device that lists a PPS APDO
+//     takes it (direct charge), so a PPS range that overlaps the twin's wins even against a fixed level of more watts. Inside a
+//     kind the highest power wins, then the higher voltage (less current in the cable), then the lower position. A PPS answer is
+//     a RANGE, not an operating point: its voltage is the top of the overlap and its power the most the device could be given
+//     ("PPS, up to 33W"); the device picks its own voltage inside the range (a direct-charge phone runs ~8-9 V). The live proof
+//     asks for that top. A PPS range that tops out at 5 V is no step up and ranks with the 5 V level.
 //  5. Nothing above 5 V usable: the contract is the 5 V PDO (Kind::FiveV). The RDO then carries Capability Mismatch when the
 //     twin's sink PDO 1 has Higher Capability set: the device said it needs more than vSafe5V.
 //  6. No usable result (no valid source list, no sink PDOs and no sniffed Request, a first sink PDO that is not 5 V): Kind::None.
 //     A twin made from a sniffed Request alone (no sink PDOs) answers by rule 7 only.
-//  7. A sniffed Request wins over rules 4-5 when the new list has a PDO of the same shape as the one the device asked from
+//  7. A sniffed Request wins over rules 4, 5 and 11 when the new list has a PDO of the same shape as the one the device asked from
 //     (fixed: the same voltage; PPS: a range that contains the voltage it asked for), flagged `observed`. Its current is what the
 //     device asked for when it asked for LESS than that PDO then offered (that is its real need); when it asked for everything
 //     (it took all it was given) the current is the larger of the Request and the sink PDO, so a weak first charger does not
@@ -32,12 +35,19 @@
 //     ("full") when it advertises no more. Otherwise `Cable` when a known cable clipped the contract or the offer looks held down by
 //     the cable the charger read (rdintent::offer_held_by_cable: its own power claim, else the 20 V / 3.00 A signature), else
 //     `Charger`.
+// 11. A learned kind preference (Twin::pref) replaces rule 4's default: a twin whose last sniff saw it take a fixed level above 5 V
+//     while a PPS range was offered ranks fixed above 5 V before PPS (it still falls back to the other kind when its own has no
+//     usable level); a twin that took PPS with fixed levels on offer, and a twin never seen choosing, rank PPS first. It applies to
+//     any charger, not only an exact-shape match; rule 7's exact-shape Request still wins when it applies.
 //
 // WHERE THIS DEVIATES FROM THE SPEC. USB PD lets a sink Request any source PDO that meets its needs, and real sinks do not
 // stay inside their own Sink_Capabilities (a phone with a PPS APDO may take a 9 V fixed level it did not list; a laptop may
 // request below its listed current). The policy above is the conservative reading of what the device declared; rule 7 is the
-// correction from what it actually did. Not modelled: Variable and Battery PDOs (the twin's or the charger's), SPR AVS and EPR
-// levels (a twin holds SPR words only), and anything a vendor protocol adds (Xiaomi 6 A, SuperVOOC, Apple's own steps).
+// correction from what it actually did. Two more deviations are deliberate: rule 4 puts PPS before power (the OnePlus 15, with a
+// PPS APDO among its sink PDOs, always takes PPS even when a fixed level offers more watts), and a PPS prediction is "up to" its
+// top-of-overlap power, not the point the device settles on. Rule 11 is the per-device correction from a sniff that saw it choose.
+// Not modelled: Variable and Battery PDOs (the twin's or the charger's), SPR AVS and EPR levels (a twin holds SPR words only),
+// and anything a vendor protocol adds (Xiaomi 6 A, SuperVOOC, Apple's own steps).
 #pragma once
 #include <algorithm>
 #include <cstddef>
@@ -90,12 +100,17 @@ constexpr Kind kind_at(const pd::Pdo& p, std::uint16_t mv) {
     return p.type == pd::PdoType::Pps ? Kind::Pps : (mv == pd::kVsafe5vMv ? Kind::FiveV : Kind::Fixed);
 }
 
-// Rule 4 order: more power, then PPS, then the higher voltage; an equal candidate keeps the earlier position.
-constexpr bool better(const Cand& a, const Cand& b) {
+// Rules 4 and 11 order: the preferred kind above 5 V (PPS unless the twin's pref says fixed), then the other kind above 5 V, then
+// the rest (5 V levels); inside a group more power, then the higher voltage; an equal candidate keeps the earlier position.
+constexpr int group(const Cand& c, bool fixed_first) {
+    if (c.mv <= pd::kVsafe5vMv) return 0;
+    return (c.kind == Kind::Pps) != fixed_first ? 2 : 1;
+}
+constexpr bool better(const Cand& a, const Cand& b, bool fixed_first) {
     if (b.kind == Kind::None) return true;
+    const int ga = group(a, fixed_first), gb = group(b, fixed_first);
+    if (ga != gb) return ga > gb;
     if (a.mw != b.mw) return a.mw > b.mw;
-    const bool pa = a.kind == Kind::Pps && a.mv > pd::kVsafe5vMv, pb = b.kind == Kind::Pps && b.mv > pd::kVsafe5vMv;
-    if (pa != pb) return pa;
     return a.mv > b.mv;
 }
 
@@ -219,7 +234,7 @@ inline Outcome predict(const Twin& t, const pd::SourceCaps& caps, const Facts& f
         for (std::size_t i = 0; i < n; ++i) {
             for (std::size_t j = 0; j < ns; ++j) {
                 detail::Cand c;
-                if (detail::candidate(caps.pdos[i], std::uint8_t(i + 1), sink[j], f, c) && detail::better(c, best)) best = c;
+                if (detail::candidate(caps.pdos[i], std::uint8_t(i + 1), sink[j], f, c) && detail::better(c, best, t.pref == KindPref::Fixed)) best = c;
             }
         }
     }

@@ -29,7 +29,10 @@
 // without them stays a byte-identical version 1 or 2 record):
 //     flags b3: the Revision data object, u32                                                 4 bytes
 //     flags b4: the Sink_Capabilities_Extended block: len u8 (1..24), then len bytes          2 .. 25 bytes
-//     A flag bit above b4 is damage, and so is b3 or b4 in a version 1 or 2 record. A record still never exceeds 129 bytes
+//     flags b5 / b6: the kind preference (k2/twin/twin.hpp KindPref): b5 = it took PPS, b6 = it took a fixed level, when both were
+//         offered. No bytes follow: the preference lives in the flag byte alone, so it never changes a record's size. Both bits
+//         at once is damage. A record without either bit loads as "no preference".
+//     A flag bit above b6 is damage, and so is b3 to b6 in a version 1 or 2 record. A record still never exceeds 129 bytes
 //     (kMaxFileBytes, the volume budget): the writer leaves the extended block out, then the Revision, when they would not fit.
 //     Only a twin that also carries a full declared and observed block loses them; a phone with three sink PDOs and a Request keeps both (89 bytes).
 // A record whose version byte is newer than this build knows is refused, never guessed at (and never overwritten by a
@@ -63,6 +66,7 @@ inline constexpr std::size_t kHeaderBytes = kOffName + kNameMax;                
 inline constexpr std::size_t kMaxV1Bytes = kHeaderBytes + kMaxSinkPdos * 4 + 8 + 2;     // 76
 inline constexpr std::size_t kMinFileBytes = kHeaderBytes + 2;
 inline constexpr std::uint8_t kFlagRequest = 1, kFlagDeclared = 2, kFlagObserved = 4, kFlagRevision = 8, kFlagSinkExt = 16;
+inline constexpr std::uint8_t kFlagPrefPps = 32, kFlagPrefFixed = 64;   // version 3: the kind preference, flag byte only
 inline constexpr std::size_t kDeclHeader = 3;   // [n_pt, n_svids, n_modes]
 inline constexpr std::size_t kObsBytes = 18;
 inline constexpr std::size_t kRevBytes = 4;
@@ -94,7 +98,7 @@ inline std::size_t encode(const Twin& t, std::uint8_t seq, std::span<std::uint8_
     if (t.num_pdos > kMaxSinkPdos) return 0;
     if (t.decl.n_pt > kMaxProductVdos || t.decl.n_svids > kMaxDeclSvids || t.decl.n_modes > kMaxDeclModes) return 0;
     if (t.sink_ext_len > kSinkExtBytes) return 0;
-    const bool req = t.has_request(), decl = t.decl.any(), obs = t.obs.valid;
+    const bool req = t.has_request(), decl = t.decl.any(), obs = t.obs.valid, pref = t.pref != KindPref::None;
     const std::size_t base = kHeaderBytes + std::size_t(t.num_pdos) * 4 + (req ? 8 : 0) +
                              (decl ? decl_bytes(t.decl.n_pt, t.decl.n_svids, t.decl.n_modes) : 0) + (obs ? kObsBytes : 0) + 2;
     // the version 3 blocks only while the record stays within kMaxFileBytes: the Revision first, then the extended block
@@ -104,10 +108,11 @@ inline std::size_t encode(const Twin& t, std::uint8_t seq, std::span<std::uint8_
     const std::size_t len = with_rev + (ext ? 1 + std::size_t(t.sink_ext_len) : 0);
     if (out.size() < len) return 0;
     std::uint8_t* b = out.data();
-    b[0] = 'K'; b[1] = '2'; b[2] = 'T'; b[3] = (rev || ext) ? kVersion3 : (decl || obs) ? kVersion2 : kVersion1;
+    b[0] = 'K'; b[1] = '2'; b[2] = 'T'; b[3] = (rev || ext || pref) ? kVersion3 : (decl || obs) ? kVersion2 : kVersion1;
     b[kOffSeq] = seq;
     b[kOffFlags] = std::uint8_t((req ? kFlagRequest : 0) | (decl ? kFlagDeclared : 0) | (obs ? kFlagObserved : 0) |
-                                (rev ? kFlagRevision : 0) | (ext ? kFlagSinkExt : 0));
+                                (rev ? kFlagRevision : 0) | (ext ? kFlagSinkExt : 0) |
+                                (t.pref == KindPref::Pps ? kFlagPrefPps : 0) | (t.pref == KindPref::Fixed ? kFlagPrefFixed : 0));
     detail::put16(&b[6], t.vid);
     detail::put16(&b[8], t.pid);
     detail::put16(&b[10], t.id_hi);
@@ -166,8 +171,10 @@ inline Dec decode(std::span<const std::uint8_t> in, std::uint8_t& seq, Twin& out
     if (in.size() < kMinFileBytes) return Dec::Short;
     const std::uint8_t known = b[3] == kVersion1   ? kFlagRequest
                                : b[3] == kVersion2 ? std::uint8_t(kFlagRequest | kFlagDeclared | kFlagObserved)
-                                                   : std::uint8_t(kFlagRequest | kFlagDeclared | kFlagObserved | kFlagRevision | kFlagSinkExt);
+                                                   : std::uint8_t(kFlagRequest | kFlagDeclared | kFlagObserved | kFlagRevision | kFlagSinkExt |
+                                                                  kFlagPrefPps | kFlagPrefFixed);
     if ((b[kOffFlags] & ~known) != 0 || b[kOffNumPdos] > kMaxSinkPdos) return Dec::Invalid;
+    if ((b[kOffFlags] & (kFlagPrefPps | kFlagPrefFixed)) == (kFlagPrefPps | kFlagPrefFixed)) return Dec::Invalid;
     const bool req = (b[kOffFlags] & kFlagRequest) != 0, decl = (b[kOffFlags] & kFlagDeclared) != 0,
                obs = (b[kOffFlags] & kFlagObserved) != 0, rev = (b[kOffFlags] & kFlagRevision) != 0,
                ext = (b[kOffFlags] & kFlagSinkExt) != 0;
@@ -198,6 +205,7 @@ inline Dec decode(std::span<const std::uint8_t> in, std::uint8_t& seq, Twin& out
     t.pid = detail::get16(&b[8]);
     t.id_hi = detail::get16(&b[10]);
     t.pd_rev = b[12];
+    t.pref = (b[kOffFlags] & kFlagPrefPps) ? KindPref::Pps : (b[kOffFlags] & kFlagPrefFixed) ? KindPref::Fixed : KindPref::None;
     t.num_pdos = b[kOffNumPdos];
     std::size_t at = kHeaderBytes;
     for (std::size_t i = 0; i < t.num_pdos; ++i, at += 4) t.pdos[i] = detail::get32(&b[at]);

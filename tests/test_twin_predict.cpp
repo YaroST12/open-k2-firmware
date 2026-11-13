@@ -108,18 +108,32 @@ static void test_rule3_pps_overlap() {
     EXPECT(o, Kind::FiveV, 1, 5000, 3000, Limiter::Device, false);
 }
 
-// Rule 4: the highest power wins; on a tie PPS beats fixed, and between fixed levels the higher voltage wins.
-static void test_rule4_highest_power_and_ties() {
+// Rule 4: a PPS level above 5 V beats every fixed level whatever the power; within a kind the highest power wins, then the higher voltage.
+static void test_rule4_pps_first_then_power() {
     const Twin t = twin_of({fx(5000, 3000), fx(9000, 3000), pps(5000, 11000, 3000)});
     // 9 V fixed 27 W vs PPS 11 V 3 A 33 W
     EXPECT(predict(t, caps_of({fx(5000, 3000), fx(9000, 3000), pps(3300, 11000, 3000)}), {}), Kind::Pps, 3, 11000, 3000, Limiter::None, false);   // 33 W, the best the charger has
     // PPS capped to 9 V by the source: 27 W tie with the 9 V fixed level -> PPS
     EXPECT(predict(t, caps_of({fx(5000, 3000), fx(9000, 3000), pps(3300, 9000, 3000)}), {}), Kind::Pps, 3, 9000, 3000, Limiter::Charger, false);
-    // fixed ties: 12 V 2 A = 24 W = 24 W from 6 V 4 A is not expressible, use 9 V 2 A (18 W) vs 18 V 1 A (18 W): higher voltage
+    // fixed ties inside the fixed kind: 9 V 2 A (18 W) vs 18 V 1 A (18 W): higher voltage
     const Twin f = twin_of({fx(5000, 3000), fx(9000, 2000), fx(18000, 1000)});
     EXPECT(predict(f, caps_of({fx(5000, 3000), fx(9000, 2000), fx(18000, 1000)}), {}), Kind::Fixed, 3, 18000, 1000, Limiter::None, false);
-    // a PPS that would be worse than a fixed level loses
-    EXPECT(predict(t, caps_of({fx(5000, 3000), fx(9000, 3000), pps(3300, 6000, 3000)}), {}), Kind::Fixed, 2, 9000, 3000, Limiter::Charger, false);
+    // a PPS that offers LESS power than a fixed level still wins: 6 V 3 A = 18 W against 9 V 3 A = 27 W
+    Outcome o = predict(t, caps_of({fx(5000, 3000), fx(9000, 3000), pps(3300, 6000, 3000)}), {});
+    EXPECT(o, Kind::Pps, 3, 6000, 3000, Limiter::Charger, false);
+    CHECK_EQ(o.mw, 18000);
+    // the OP15 (5/9/12 V 3 A, PPS 5-11 V 5 A) on a charger with fixed up to 12 V and PPS 5-11 V 3 A: PPS, up to 33 W (not 12 V 3 A = 36 W)
+    o = predict(kOp15, caps_of({fx(5000, 3000), fx(9000, 3000), fx(12000, 3000), pps(3300, 11000, 3000)}), {});
+    EXPECT(o, Kind::Pps, 4, 11000, 3000, Limiter::Charger, true);
+    CHECK_EQ(o.mw, 33000);
+    // a big fixed level (20 V 5 A, 100 W) does not beat a small PPS the twin can use
+    EXPECT(predict(twin_of({fx(5000, 3000), fx(20000, 5000), pps(5000, 11000, 3000)}), caps_of({fx(5000, 3000), fx(20000, 5000), pps(3300, 11000, 3000)}), {}),
+           Kind::Pps, 3, 11000, 3000, Limiter::Charger, false);   // 33 W of the 100 W it wants
+    // a PPS that tops out at 5 V is no step up: the fixed level above it wins
+    EXPECT(predict(twin_of({fx(5000, 3000), fx(9000, 3000), pps(3300, 5000, 3000)}), caps_of({fx(5000, 3000), fx(9000, 3000), pps(3300, 5000, 3000)}), {}),
+           Kind::Fixed, 2, 9000, 3000, Limiter::None, false);
+    // the PPS the twin cannot use (no overlap) leaves the fixed levels
+    EXPECT(predict(t, caps_of({fx(5000, 3000), fx(9000, 3000), pps(12000, 21000, 3000)}), {}), Kind::Fixed, 2, 9000, 3000, Limiter::Charger, false);
 }
 
 // Rule 5: nothing above 5 V usable -> the 5 V PDO; Capability Mismatch when the twin's Higher Capability bit says it needs more.
@@ -235,6 +249,37 @@ static void test_rule9_limiter() {
     EXPECT(predict(laptop, caps_of({fx(5000, 3000), fx(20000, 5000)}), {}), Kind::Fixed, 2, 20000, 4800, Limiter::Device, false);
 }
 
+// Rule 11: the kind the device last chose while both were offered (Twin::pref, set by a sniff) replaces rule 4's default on any charger.
+static void test_rule11_kind_preference() {
+    const auto src = caps_of({fx(5000, 3000), fx(9000, 3000), fx(12000, 3000), pps(3300, 11000, 3000)});
+    Twin t = kOp15;
+    CHECK_EQ(int(t.pref), int(KindPref::None));
+    EXPECT(predict(t, src, {}), Kind::Pps, 4, 11000, 3000, Limiter::Charger, true);   // no preference: rule 4
+    t.pref = KindPref::Pps;
+    EXPECT(predict(t, src, {}), Kind::Pps, 4, 11000, 3000, Limiter::Charger, true);
+    t.pref = KindPref::Fixed;                                                          // it took fixed 12 V with PPS on offer
+    Outcome o = predict(t, src, {});
+    EXPECT(o, Kind::Fixed, 3, 12000, 3000, Limiter::Charger, false);
+    CHECK_EQ(o.mw, 36000);
+    CHECK_EQ(o.observed, 0);
+    // on a charger of another shape: the preference still applies (the best fixed level there)
+    EXPECT(predict(t, caps_of({fx(5000, 3000), fx(9000, 2000), pps(3300, 21000, 5000)}), {}), Kind::Fixed, 2, 9000, 2000, Limiter::Charger, true);
+    // no usable fixed level above 5 V: the PPS is what it gets
+    EXPECT(predict(t, caps_of({fx(5000, 3000), fx(20000, 3000), pps(3300, 11000, 3000)}), {}), Kind::Pps, 3, 11000, 3000, Limiter::Cable, true);   // 20 V 3 A: the cable signature
+    // a charger with no PPS: fixed either way
+    EXPECT(predict(t, caps_of({fx(5000, 3000), fx(9000, 3000)}), {}), Kind::Fixed, 2, 9000, 3000, Limiter::Charger, false);
+    // a preference for PPS when the charger has none: the fixed levels
+    t.pref = KindPref::Pps;
+    EXPECT(predict(t, caps_of({fx(5000, 3000), fx(9000, 3000)}), {}), Kind::Fixed, 2, 9000, 3000, Limiter::Charger, false);
+    // rule 7 wins: an exact-shape Request applies whatever the preference says
+    t.pref = KindPref::Fixed;
+    t.rdo = 2u << 28 | (8600u / 20) << 9 | 3000u / 50;
+    t.rdo_pdo = pps(3300, 11000, 3000);
+    o = predict(t, src, {});
+    EXPECT(o, Kind::Pps, 4, 8600, 3000, Limiter::Charger, true);   // it asked 3 A from a 3 A offer: the OP15 needs 5
+    CHECK_EQ(o.observed, 1);
+}
+
 // The twin's wish: the best power any of its sink PDOs says it can take.
 static void test_want_mw() {
     CHECK_EQ(want_mw(kPixel), 33000);
@@ -289,6 +334,12 @@ static void test_to_choice() {
     CHECK_EQ(c.ma, 5000);
     CHECK_EQ(int(c.hunt), 0);
     CHECK_EQ(to_choice(Outcome{}).pos, 0);
+    // a PPS prediction up to 33 W: the proof asks the PPS position at the top of the overlap (11 V, in range of the PPS APDO), not 12 V fixed
+    const Outcome p = predict(kOp15, caps_arr(kC1_3a), {});
+    const pd::Choice pc = to_choice(p);
+    CHECK_EQ(pc.pos, 6);
+    CHECK_EQ(pc.mv, 11000);
+    CHECK_EQ(pc.ma, 3000);
 }
 
 // The real data: Pixel / OP15 / Laptop x the five bench chargers. The values are worked out by hand from the PDO words.
@@ -300,8 +351,8 @@ static void test_real_matrix() {
     EXPECT(predict(kPixel, asus, {}), Kind::Pps, 6, 11000, 3000, Limiter::None, false);
     EXPECT(predict(kPixel, n3, {}), Kind::Pps, 5, 11000, 3000, Limiter::Device, false);
     EXPECT(predict(kPixel, n5, {}), Kind::Pps, 5, 11000, 3000, Limiter::Device, false);
-    // OP15: 55 W needs the PPS at 5 A; the 3 A cable holds C1 and NOVOO at 36 W / 33 W, the 5 A identity lifts both
-    EXPECT(predict(kOp15, c1_3, {}), Kind::Fixed, 3, 12000, 3000, Limiter::Cable, false);
+    // OP15: 55 W needs the PPS at 5 A; the 3 A cable holds C1 and NOVOO at 33 W, the 5 A identity lifts both
+    EXPECT(predict(kOp15, c1_3, {}), Kind::Pps, 6, 11000, 3000, Limiter::Cable, true);   // PPS up to 33 W, not the 12 V 36 W level (rule 4)
     EXPECT(predict(kOp15, c1_5, {}), Kind::Pps, 6, 11000, 5000, Limiter::Device, false);
     EXPECT(predict(kOp15, asus, {}), Kind::Pps, 6, 11000, 3000, Limiter::Charger, true);
     EXPECT(predict(kOp15, n3, {}), Kind::Pps, 5, 11000, 3000, Limiter::Cable, true);
@@ -314,12 +365,13 @@ int main() {
     test_rule1_fixed_needs_a_sink_pdo_at_that_voltage();
     test_rule2_current_is_the_minimum();
     test_rule3_pps_overlap();
-    test_rule4_highest_power_and_ties();
+    test_rule4_pps_first_then_power();
     test_rule5_five_volts_and_mismatch();
     test_rule6_none();
     test_rule7_observed_request();
     test_rule8_advertised_and_cable_limits();
     test_rule9_limiter();
+    test_rule11_kind_preference();
     test_want_mw();
     test_grade();
     test_to_choice();

@@ -129,9 +129,10 @@ void test_rows_and_footer() {
     s = plain_of(ui, 2);                              // OP15, held back by the cable: half, amber
     CHECK_EQ(int(s.state), 1);
     CHECK_EQ(int(s.marker_color), int(kCaution));
-    CHECK_STR(note_of(ui, 0).c_str(), "gets 33W, device max");   // the charger offers more than the Pixel wants
+    CHECK_STR(note_of(ui, 0).c_str(), "PPS up to 33W, device max");   // a PPS range, said as one: the ceiling, no operating point
     CHECK_STR(note_of(ui, 1).c_str(), "5V only, device");
-    CHECK_STR(note_of(ui, 2).c_str(), "gets 36 of 55W, cable");
+    // the OP15 lists 5 / 9 / 12 V 3 A and PPS 5-11 V 5 A: PPS beats the 12 V level (rule 4), 33 W of the 55 W it wants
+    CHECK_STR(note_of(ui, 2).c_str(), "PPS up to 33 of 55W, cable");
     CHECK_STR(text_of(ui, 3).c_str(), "Learn from device");
     CHECK_STR(footer_of(ui).c_str(), "PD 20V3A: 1 of 3 full");
     CHECK_STR(label(ui, Button::Ok), "Open");
@@ -187,7 +188,7 @@ void test_repredict_on_new_charger() {
     reset();
     add_three();
     Ui &ui = open_page();
-    CHECK_STR(note_of(ui, 0).c_str(), "gets 33W, device max");
+    CHECK_STR(note_of(ui, 0).c_str(), "PPS up to 33W, device max");
     g_stub.caps = {};                            // another charger: 5 V and 9 V, 3 A
     g_stub.caps.valid = true;
     g_stub.caps.spec_rev = 2;
@@ -207,7 +208,7 @@ void test_detail_opens_and_closes() {
     CHECK_STR(text_of(ui, 0).c_str(), "Prove live");
     CHECK_STR(text_of(ui, 1).c_str(), "Re-learn from device");
     CHECK_STR(text_of(ui, 2).c_str(), "Delete twin");
-    CHECK_STR(note_of(ui, 0).c_str(), "asks the charger for 12V3A");
+    CHECK_STR(note_of(ui, 0).c_str(), "asks for PPS up to 11V3A");   // OP15 on a 3 A PPS charger: PPS, not the 12 V level
     CHECK_STR(label(ui, Button::Ok), "Run");
     CHECK_STR(footer_of(ui).c_str(), "Basis: its sink caps");
     press(ui, Button::Plus);
@@ -233,7 +234,7 @@ void test_arm_confirm_run() {
     CHECK_EQ(g_stub.twin_starts, 0);
     CHECK_EQ(ui.twin_page().armed() ? 1 : 0, 1);
     CHECK_STR(label(ui, Button::Ok), "Confirm");
-    CHECK_STR(footer_of(ui).c_str(), "Asks for PPS 11V");
+    CHECK_STR(footer_of(ui).c_str(), "Asks for PPS up to 11V");
     press(ui, Button::Ok);                       // second press starts, confirmed
     CHECK_EQ(g_stub.twin_starts, 1);
     CHECK_EQ(g_stub.twin_start_confirmed ? 1 : 0, 1);

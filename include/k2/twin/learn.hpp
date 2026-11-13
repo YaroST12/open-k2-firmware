@@ -104,6 +104,22 @@ inline bool from_identify(const pd::Identity& id, const pd::IdStatus& st, std::u
     return from_identify(id, st, pd_rev, std::span<const std::uint16_t>{}, out);
 }
 
+// Which kind the device took at position `pos` when the charger offered both a fixed level above 5 V and a PPS range above 5 V.
+// Taking the 5 V level, or an offer of one kind only, is no choice: None.
+inline KindPref kind_choice(std::uint8_t pos, const pd::SourceCaps& caps) {
+    bool fixed = false, pps = false;
+    for (std::size_t i = 0; i < caps.num_pdos && i < caps.pdos.size(); ++i) {
+        const pd::Pdo& p = caps.pdos[i];
+        if (p.max_mv <= pd::kVsafe5vMv) continue;
+        if (p.type == pd::PdoType::Pps) pps = true;
+        else if (p.type == pd::PdoType::Fixed) fixed = true;
+    }
+    if (!fixed || !pps || pos == 0 || pos > caps.num_pdos) return KindPref::None;
+    const pd::Pdo& took = caps.pdos[pos - 1];
+    if (took.max_mv <= pd::kVsafe5vMv) return KindPref::None;
+    return took.type == pd::PdoType::Pps ? KindPref::Pps : took.type == pd::PdoType::Fixed ? KindPref::Fixed : KindPref::None;
+}
+
 // A twin from what the K2 saw on the wire between a device and its own charger: the Request the charger accepted (PS_RDY
 // seen) and the source PDO it pointed at, the device's identity when its Discover Identity was seen, and the device's own
 // Sink_Capabilities when the charger asked for them while the K2 watched. False without a ready contract on a position
@@ -115,6 +131,7 @@ inline bool from_sniffed(const pd::Contract& c, const pd::SourceCaps& caps, cons
     out.rdo = c.rdo;
     out.rdo_pdo = caps.pdos[c.pos - 1].raw;
     if (out.rdo_pdo == 0) return false;
+    out.pref = kind_choice(c.pos, caps);
     if (vdm.identity.valid) {
         out.vid = vdm.identity.vid;
         out.pid = vdm.identity.pid;
@@ -215,6 +232,7 @@ inline void merge(Twin& saved, const Twin& in) {
         saved.rdo = in.rdo;
         saved.rdo_pdo = in.rdo_pdo;
     }
+    if (in.pref != KindPref::None) saved.pref = in.pref;   // the latest choice between the kinds wins; none seen keeps the old one
     if (in.decl.any()) saved.decl = in.decl;   // a device that answered no USB words leaves the saved block alone
     if (in.obs.valid) saved.obs = in.obs;
     if (in.revision != 0) saved.revision = in.revision;

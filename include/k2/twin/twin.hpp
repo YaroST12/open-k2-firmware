@@ -52,6 +52,10 @@ struct Observed {
     std::uint32_t tbt_enter = 0;      // the Thunderbolt Enter_Mode VDO (flag kObsTbtEnter)
 };
 
+// Which KIND of source level the device chose the last time a sniff saw it choose while both a fixed level above 5 V and a PPS
+// range were offered (k2/twin/learn.hpp from_sniffed). None = never seen choosing between them (the policy's default applies).
+enum class KindPref : std::uint8_t { None, Pps, Fixed };
+
 struct Twin {
     std::array<char, kNameMax + 1> name{};
     std::uint16_t vid = 0, pid = 0;  // 0 = not read
@@ -63,6 +67,7 @@ struct Twin {
     std::uint32_t rdo = 0, rdo_pdo = 0;
     Declared decl;   // USB data, declared (device alone)
     Observed obs;    // USB data, observed (sniffed inline)
+    KindPref pref = KindPref::None;   // the kind it chose when it had both (flag bits of the record, k2/twin/library.hpp)
     // PD 3 answers read by an inline interrogation (k2/pd/pd_interrogate.hpp), raw: the Revision data object (0 = not read)
     // and the Sink_Capabilities_Extended data block (sink_ext_len bytes, 0 = not read).
     std::uint32_t revision = 0;

@@ -330,11 +330,14 @@ def volts(mv):
 
 
 def summary(o):
-    """What the device would get: "27W PPS", "36W 12V", "60W of 96W", "5V only", "no contract"."""
+    """What the device would get: "PPS up to 27W" (a predicted range), "27W PPS" (a seen Request), "36W 12V", "60W of 96W",
+    "5V only", "no contract"."""
     if o["kind"] == "none":
         return "no contract"
     if o["kind"] == "five_v":
         return "5V only"
+    if o["kind"] == "pps" and not o.get("observed"):
+        return f"PPS up to {_whole_w(o['mw'])}W"   # a predicted range: the ceiling, never an operating point
     s = f"{_whole_w(o['mw'])}W"
     if _whole_w(o["want_mw"]) > _whole_w(o["mw"]):
         return f"{s} of {_whole_w(o['want_mw'])}W"
@@ -347,8 +350,10 @@ def note(limiter):
 
 
 def proof(verdict, measured_mv, o):
-    """The live verdict line: "27W PPS ok 9.0V", "refused", "out of band 7.4V"."""
+    """The live verdict line: "PPS ok 9.0V", "36W 12V ok 12.0V", "refused", "out of band 7.4V"."""
     if verdict == "granted":
+        if o["kind"] == "pps" and not o.get("observed"):
+            return f"PPS ok {volts(measured_mv)}"
         return f"{summary(o)} ok {volts(measured_mv)}"
     if verdict == "out of band" and measured_mv:
         return f"{verdict} {volts(measured_mv)}"

@@ -480,6 +480,27 @@ static void test_from_sniffed() {
     CHECK_EQ(from_sniffed(unready, caps, vdm, pd::SinkCapsSeen{}, t) ? 1 : 0, 0);
 }
 
+// The kind preference: which kind the device chose when both a fixed level above 5 V and a PPS range were on offer.
+static void test_from_sniffed_kind_pref() {
+    const pd::SourceCaps both = source_with({0x0A01912C, 0x0002D12C, 0xC8DC323C});   // 5 V, 9 V 3 A, PPS 3.3-11 V 3 A
+    pd::VdmInfo vdm;
+    const std::uint32_t pps_rdo = (3u << 28) | (430u << 9) | 60u;    // PPS at 8.6 V 3 A
+    const std::uint32_t fix_rdo = (2u << 28) | (300u << 10) | 300u;   // 9 V 3 A
+    Twin t;
+    CHECK_EQ(from_sniffed(contract_at(3, pps_rdo), both, vdm, pd::SinkCapsSeen{}, t) ? 1 : 0, 1);
+    CHECK_EQ(int(t.pref), int(KindPref::Pps));      // took PPS while 9 V was listed
+    CHECK_EQ(from_sniffed(contract_at(2, fix_rdo), both, vdm, pd::SinkCapsSeen{}, t) ? 1 : 0, 1);
+    CHECK_EQ(int(t.pref), int(KindPref::Fixed));    // took fixed 9 V while PPS was listed
+    // one kind only on offer: the device had no choice, nothing is learned
+    CHECK_EQ(from_sniffed(contract_at(2, fix_rdo), source_with({0x0A01912C, 0x0002D12C}), vdm, pd::SinkCapsSeen{}, t) ? 1 : 0, 1);
+    CHECK_EQ(int(t.pref), int(KindPref::None));
+    CHECK_EQ(from_sniffed(contract_at(2, pps_rdo), source_with({0x0A01912C, 0xC8DC323C}), vdm, pd::SinkCapsSeen{}, t) ? 1 : 0, 1);
+    CHECK_EQ(int(t.pref), int(KindPref::None));     // a 5 V level beside a PPS is no choice either
+    // taking the 5 V level while both were on offer says nothing about the kind
+    CHECK_EQ(from_sniffed(contract_at(1, (1u << 28) | (300u << 10) | 300u), both, vdm, pd::SinkCapsSeen{}, t) ? 1 : 0, 1);
+    CHECK_EQ(int(t.pref), int(KindPref::None));
+}
+
 static void test_learn_sniffed_attaches() {
     Vol v;
     Library l(v.f);
@@ -732,6 +753,59 @@ static void test_codec_v3() {
     CHECK_EQ(int(saved.sink_ext_len), 21);
 }
 
+// The kind preference rides in two flag bits of a version 3 record (b5 PPS, b6 fixed): no byte added, and a record without them
+// reads as "no preference".
+static void test_kind_pref_record() {
+    std::array<std::uint8_t, kMaxFileBytes> b{};
+    std::uint8_t seq = 0;
+    Twin p = pixel("Pixel");
+    p.rdo = 0x4344B12Cu;
+    p.rdo_pdo = 0x0004B12Cu;
+    const std::size_t plain = encode(p, 1, b);
+    CHECK_EQ(b[3], kVersion1);                      // no preference: byte-identical to the old record
+    Twin u;
+    CHECK_EQ(int(decode({b.data(), plain}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(int(u.pref), int(KindPref::None));
+    p.pref = KindPref::Pps;
+    std::size_t n = encode(p, 1, b);
+    CHECK_EQ(n, plain);                             // same size
+    CHECK_EQ(b[3], kVersion3);
+    CHECK_EQ(b[kOffFlags], kFlagRequest | kFlagPrefPps);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(int(u.pref), int(KindPref::Pps));
+    p.pref = KindPref::Fixed;
+    n = encode(p, 1, b);
+    CHECK_EQ(b[kOffFlags], kFlagRequest | kFlagPrefFixed);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Ok));
+    CHECK_EQ(int(u.pref), int(KindPref::Fixed));
+    // both bits, or a bit in a version 1 / 2 record, is damage
+    auto recrc = [](std::array<std::uint8_t, kMaxFileBytes>& r, std::size_t len) {
+        detail::put16(&r[len - 2], bbstore::crc16(0xFFFF, {r.data(), len - 2}));
+    };
+    b[kOffFlags] = kFlagRequest | kFlagPrefPps | kFlagPrefFixed;
+    recrc(b, n);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Invalid));
+    b[kOffFlags] = kFlagRequest | kFlagPrefFixed;
+    b[3] = kVersion2;
+    recrc(b, n);
+    CHECK_EQ(int(decode({b.data(), n}, seq, u)), int(Dec::Invalid));
+    // the full record (every block) still fits kMaxFileBytes with a preference: the bits take no room
+    Twin big = pixel("Big");
+    big.rdo = 0x4344B12Cu;
+    big.rdo_pdo = 0x0004B12Cu;
+    big.pref = KindPref::Fixed;
+    CHECK_EQ(encode(big, 2, b) <= kMaxFileBytes ? 1 : 0, 1);
+    // merge: a sniff that saw a choice replaces the preference, one that did not leaves it
+    Twin saved = pixel("Saved");
+    saved.pref = KindPref::Pps;
+    Twin in = pixel("");
+    merge(saved, in);
+    CHECK_EQ(int(saved.pref), int(KindPref::Pps));
+    in.pref = KindPref::Fixed;
+    merge(saved, in);
+    CHECK_EQ(int(saved.pref), int(KindPref::Fixed));
+}
+
 // An inline interrogation's answers as a twin: identity, sink PDOs, the PD 3 answers, the USB words, and the contract it
 // sniffed before asking (the Canon on its own charger, runs/clone-canon).
 static void test_from_interrogated() {
@@ -838,6 +912,8 @@ int main() {
     test_from_identify();
     test_learn_names_and_rename_wins();
     test_from_sniffed();
+    test_from_sniffed_kind_pref();
+    test_kind_pref_record();
     test_learn_sniffed_attaches();
     return test_report("test_twin_lib");
 }
