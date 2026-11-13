@@ -234,7 +234,8 @@ void TwinPage::leave() {
 
 // The library and the prediction per twin against the charger's list now. One flash read per twin, only when the library or the
 // charger changed (update() compares the stamps), never while a row paints.
-void TwinPage::reload() {
+// Out of line: the seq list and a Twin copy would otherwise be inlined into Ui::tick's frame (stack budget, FRAME_MAX).
+[[gnu::noinline]] void TwinPage::reload() {
     std::array<uint8_t, twin::kCapacity> seqs{};
     const unsigned found = storage::twin_list(seqs);
     n_ = 0;
