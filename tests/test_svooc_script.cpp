@@ -429,11 +429,11 @@ void test_probe_ladder_and_ceiling() {
     for (std::size_t i = 0; i < 4; ++i) CHECK_EQ(r.asks()[i].word, want[i]);
     // Four 82 polls after an ask on the script = the session went on with that ceiling: accepted. The last ask has none yet.
     CHECK_EQ(r.ceiling_word(), 0x03F);
-    CHECK(!k2::chargertest::svooc_ceiling::ladder_judged(r.asks()));   // the charger test's stage waits for the last rung
+    CHECK(!k2::svooc_ceiling::ladder_judged(r.asks()));   // the charger test's stage waits for the last rung
     for (int i = 0; i < 4; ++i) { r.on_command(0x82, t); t += 43; }
     CHECK_EQ(r.ceiling_word(), 0x06D);
-    CHECK(k2::chargertest::svooc_ceiling::ladder_judged(r.asks()));    // all four rungs asked, the top one stood: judged
-    CHECK_EQ(r.asks().size(), k2::chargertest::svooc_ceiling::kLadder);
+    CHECK(k2::svooc_ceiling::ladder_judged(r.asks()));    // all four rungs asked, the top one stood: judged
+    CHECK_EQ(r.asks().size(), k2::svooc_ceiling::kLadder);
 }
 
 void test_ceiling_decode() {
