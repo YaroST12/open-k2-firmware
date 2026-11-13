@@ -54,6 +54,44 @@ SECTIONS
   {
     . = ALIGN(4);
     KEEP(*(.fwid))          /* 48-byte "K2FW" version record at 0x08004404 (src/core/version.cpp) */
+
+    /* Hot block: the curated set that must run with zero flash wait states. The AT32F403A flash is zero-wait
+     * only below 0x08040000 (first 256 KB); the application is larger, so what lands there would otherwise be
+     * decided by link order. Functions marked K2_HOT / tables marked K2_HOT_DATA (include/k2/core/hot.h)
+     * come first, then the libc string helpers the hot paths call. `__hot_end` must stay <= 0x08040000;
+     * tools/gate.py (step "hot") reports the size and the headroom and the ASSERT below stops the link. */
+    __hot_start = .;
+    *(.text.hot .text.hot.*)
+    /* TinyUSB is third-party C that cannot carry K2_HOT: pin its USB interrupt and transfer path by the
+     * per-function section name (-ffunction-sections; clones keep the name plus a .constprop/.isra suffix). */
+    *(.text.dcd_int_handler .text.dcd_int_handler.*)
+    *(.text.dcd_event_handler .text.dcd_event_handler.*)
+    *(.text.dcd_transmit_packet .text.dcd_transmit_packet.*)
+    *(.text.handle_bus_reset .text.handle_bus_reset.*)
+    *(.text.edpt_xfer .text.edpt_xfer.*)
+    *(.text.usbd_edpt_xfer .text.usbd_edpt_xfer.*)
+    *(.text.usbd_edpt_claim .text.usbd_edpt_claim.*)
+    *(.text.tud_task_ext .text.tud_task_ext.*)
+    *(.text.hidd_xfer_cb .text.hidd_xfer_cb.*)
+    *(.text.hidd_control_xfer_cb .text.hidd_control_xfer_cb.*)
+    *(.text.cdcd_xfer_cb .text.cdcd_xfer_cb.*)
+    *(.text.cdcd_control_xfer_cb .text.cdcd_control_xfer_cb.*)
+    *(.text.tud_control_xfer .text.tud_control_xfer.*)
+    *(.text.tud_control_status .text.tud_control_status.*)
+    *(.text.tu_fifo_read_n_access_mode .text.tu_fifo_read_n_access_mode.*)
+    *(.text.tu_fifo_write_n_access_mode .text.tu_fifo_write_n_access_mode.*)
+    *(.text.tu_edpt_stream_write .text.tu_edpt_stream_write.*)
+    *(.text.tu_edpt_stream_write_xfer .text.tu_edpt_stream_write_xfer.*)
+    *(.text.tu_edpt_stream_read_xfer .text.tu_edpt_stream_read_xfer.*)
+    *(.text.tu_edpt_stream_write_available .text.tu_edpt_stream_write_available.*)
+    *libc.a:libc_a-memcpy.o(.text .text.*)
+    *libc.a:libc_a-memmove.o(.text .text.*)
+    *libc.a:libc_a-memset.o(.text .text.*)
+    *libc.a:libc_a-strlen.o(.text .text.*)
+    *(.rodata.hot .rodata.hot.*)
+    . = ALIGN(4);
+    __hot_end = .;
+
     *(.text)
     *(.text*)
     *(.rodata)
@@ -199,6 +237,7 @@ SECTIONS
     *(.ARM.extab*)
   }
 
+  ASSERT(__hot_end <= 0x08040000, "hot block (K2_HOT) overflows the zero-wait flash window (0x08000000..0x0803FFFF)")
   ASSERT(_eguard <= _psp_top, "RAM overflow: .bss reaches the application stack")
   ASSERT(_psp_top + _msp_size == _estack, "MSP stack does not end at _estack")
 }

@@ -156,6 +156,27 @@ def parse_size(text):
     raise GateError("cannot parse arm-none-eabi-size output")
 
 
+FAST_FLASH_END = 0x08040000   # the AT32F403A flash is zero-wait only below this (first 256 KB)
+
+
+def check_hot(nm_text):
+    """The hot block (link.ld `__hot_start`..`__hot_end`: K2_HOT code and K2_HOT_DATA tables, include/k2/core/hot.h)
+    must end inside the zero-wait flash window. Returns (info lines, errors) from `nm` output."""
+    sym = {}
+    for line in nm_text.splitlines():
+        f = line.split()
+        if len(f) == 3 and f[2] in ("__hot_start", "__hot_end"):
+            sym[f[2]] = int(f[0], 16)
+    if len(sym) != 2:
+        return [], ["__hot_start / __hot_end missing from the ELF (link.ld hot block)"]
+    size, room = sym["__hot_end"] - sym["__hot_start"], FAST_FLASH_END - sym["__hot_end"]
+    info = [f"  hot block {size} B (0x{sym['__hot_start']:08x}..0x{sym['__hot_end']:08x}), "
+            f"{room} B left in the zero-wait window (ends 0x{FAST_FLASH_END:08x})"]
+    errs = [f"hot block ends at 0x{sym['__hot_end']:08x}, past the zero-wait flash window "
+            f"(0x{FAST_FLASH_END:08x}): trim the K2_HOT set"] if room < 0 else []
+    return info, errs
+
+
 def parse_baseline(text):
     d = dict(re.findall(r"(text|data|bss)=(\d+)", text))
     if set(d) != {"text", "data", "bss"}:
@@ -290,6 +311,13 @@ def step_map(build="build"):
         raise GateError("heap or C++ runtime linked into the firmware:\n  " + "\n  ".join(errs))
 
 
+def step_hot():
+    info, errs = check_hot(docker_tool("arm-none-eabi-nm", ELF))
+    print("\n".join(info))
+    if errs:
+        raise GateError("hot block:\n  " + "\n  ".join(errs))
+
+
 def step_ids():
     r = run([sys.executable, "tools/check_cmd_ids.py"])
     if r.returncode:
@@ -362,7 +390,7 @@ WEB = os.environ.get("K2_WEB") == "1"   # the web parts (Makefile K2_WEB): off b
 
 STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invariants", step_invariants),
          ("stack budget", step_stack), ("map: no malloc / operator new / __cxa_ / 64-bit divmod", step_map),
-         ("remote command ids", step_ids), ("64-bit integer guard", step_64bit),
+         ("hot block inside the zero-wait flash window", step_hot), ("remote command ids", step_ids), ("64-bit integer guard", step_64bit),
          ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests), ("size report", step_size)] + (
          [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant)] if WEB else [])
 

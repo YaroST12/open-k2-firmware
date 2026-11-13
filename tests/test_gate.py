@@ -224,5 +224,28 @@ class SanitizeLog(unittest.TestCase):
         self.assertIn("test_x", errs[1])
 
 
+NM_HOT = """08003800 R g_pfnVectors
+08004434 T __hot_start
+0801694c T __hot_end
+0803ffe0 t some_cold_function
+"""
+
+
+class HotBlock(unittest.TestCase):
+    def test_reports_size_and_headroom(self):
+        info, errs = g.check_hot(NM_HOT)
+        self.assertEqual(errs, [])
+        self.assertIn("75032", info[0])          # 0x0801694c - 0x08004434
+        self.assertIn("169652", info[0])         # 0x08040000 - 0x0801694c
+
+    def test_block_past_the_fast_window_fails(self):
+        errs = g.check_hot(NM_HOT.replace("0801694c T __hot_end", "08040004 T __hot_end"))[1]
+        self.assertEqual(len(errs), 1)
+        self.assertIn("0x08040004", errs[0])
+
+    def test_missing_symbols_fail(self):
+        self.assertEqual(len(g.check_hot("08003800 R g_pfnVectors\n")[1]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
