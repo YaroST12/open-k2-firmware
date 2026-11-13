@@ -57,6 +57,13 @@ class DecoderIsolation(unittest.TestCase):
                 self.assertEqual(sorted(includes(text) - allowed), [])
                 self.assertEqual(sorted(set(m.group(1) for m in FORBIDDEN.finditer(code(text)))), [])
 
+    def test_charger_test_ceiling_stage_logic_is_pure(self):
+        # The charger test's ceiling stage decides when the trigger is done and how its result reads; it drives nothing.
+        allowed = {"cstddef", "cstdint", "span", "k2/fastcharge/svooc_run.hpp", "k2/fastcharge/svooc_script.hpp"}
+        text = (ROOT / "include/k2/chargertest/svooc_ceiling.hpp").read_text()
+        self.assertEqual(sorted(includes(text) - allowed), [])
+        self.assertEqual(sorted(set(m.group(1) for m in FORBIDDEN.finditer(code(text)))), [])
+
     def test_the_check_catches_a_driver(self):
         bad = '#include "k2/drivers/dpdm.hpp"\nvoid f() { k2::dpdm::set_dp(k2::dpdm::Drive::V0); }\n'
         self.assertEqual(violations(bad), ["k2/drivers/dpdm.hpp", "dpdm", "set_dp"])
