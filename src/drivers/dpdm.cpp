@@ -4,6 +4,7 @@
 
 #include <initializer_list>
 
+#include "k2/core/hot.h"
 #include "k2/fastcharge/fc_seq.hpp"
 #include "k2/drivers/pins.hpp"
 #include "k2/fastcharge/vooc.hpp"
@@ -29,7 +30,7 @@ bool g_resetting;
 std::uint32_t g_reset_start_ms;
 Pair g_drive = kIdle;   // what set_dp / set_dm last applied
 
-inline std::uint32_t cyc() { return *reinterpret_cast<volatile std::uint32_t*>(kDwtCyccnt); }
+K2_HOT inline std::uint32_t cyc() { return *reinterpret_cast<volatile std::uint32_t*>(kDwtCyccnt); }
 
 void dwt_init() {
     *reinterpret_cast<volatile std::uint32_t*>(kDemcr) |= 1u << 24;   // TRCENA
@@ -41,7 +42,7 @@ void dwt_init() {
 
 using Irq = Critical;   // masks interrupts for the lifetime of the object
 
-void apply(const Pin& a, const Pin& b, PinPair pp) {
+K2_HOT void apply(const Pin& a, const Pin& b, PinPair pp) {
     switch (pp.kind) {
     case Kind::Analog:
         a.mode(Mode::Analog);
@@ -97,7 +98,7 @@ void init() {
     g_resetting = false;
 }
 
-Levels read() {
+K2_HOT Levels read() {
     return {p::sw_pa7.read(), p::sw_pb0.read(), p::dp_dm_sw1.read(), p::dp_dm_sw2.read()};
 }
 
@@ -118,12 +119,12 @@ const char* name(Drive d) {
 namespace { bool g_clk_pb0; }
 void set_clock_pin(ClockPin c) { g_clk_pb0 = c == ClockPin::Pb0; }
 ClockPin clock_pin() { return g_clk_pb0 ? ClockPin::Pb0 : ClockPin::Pa7; }
-void set_dp(Drive d) {
+K2_HOT void set_dp(Drive d) {
     if (d == Drive::Listen && g_clk_pb0) d = Drive::Sniff;   // both D+ pins floating digital inputs
     apply(p::sw_pa7, p::sw_pb0, dp_pins(d));
     g_drive.dp = d;
 }
-void set_dm(Drive d) {
+K2_HOT void set_dm(Drive d) {
     apply(p::dp_dm_sw1, p::dp_dm_sw2, dm_pins(d));
     g_drive.dm = d;
 }
@@ -135,7 +136,7 @@ void idle() {
     set_dm(kIdle.dm);
 }
 
-void play(std::span<const Step> steps) {
+K2_HOT void play(std::span<const Step> steps) {
     const std::uint32_t total = fc::total_us(steps);
     if (total > kMaskedLimitUs || !g_dwt) {     // long lists run with interrupts on
         HwIo io{g_dwt ? cyc() : 0};
@@ -151,9 +152,9 @@ void play(std::span<const Step> steps) {
     for (std::uint32_t i = 1; i < total / 1000; i++) systick::tick();
 }
 
-std::uint32_t cycles() { return cyc(); }
+K2_HOT std::uint32_t cycles() { return cyc(); }
 
-void delay_us(std::uint32_t us) {
+K2_HOT void delay_us(std::uint32_t us) {
     if (!g_dwt) {
         systick::delay_us(us);
         return;
@@ -162,9 +163,9 @@ void delay_us(std::uint32_t us) {
     while (cyc() - t0 < n) {}
 }
 
-bool read_dm_bit() { return p::dp_dm_sw2.read(); }
+K2_HOT bool read_dm_bit() { return p::dp_dm_sw2.read(); }
 
-int wait_dm(bool level, std::uint32_t timeout_us) {
+K2_HOT int wait_dm(bool level, std::uint32_t timeout_us) {
     if (!g_dwt) return -1;
     Irq mask;
     const std::uint32_t t0 = cyc(), limit = timeout_us * kCyclesPerUs;
@@ -174,7 +175,7 @@ int wait_dm(bool level, std::uint32_t timeout_us) {
     return static_cast<int>((cyc() - t0) / kCyclesPerUs);
 }
 
-int wait_dp(bool level, std::uint32_t timeout_us) {
+K2_HOT int wait_dp(bool level, std::uint32_t timeout_us) {
     if (!g_dwt) return -1;
     Irq mask;
     const std::uint32_t t0 = cyc(), limit = timeout_us * kCyclesPerUs;
@@ -185,7 +186,7 @@ int wait_dp(bool level, std::uint32_t timeout_us) {
 }
 
 namespace {
-inline bool clk() { return g_clk_pb0 ? p::sw_pb0.read() : p::sw_pa7.read(); }
+K2_HOT inline bool clk() { return g_clk_pb0 ? p::sw_pb0.read() : p::sw_pa7.read(); }
 
 // The vooc::Hw seam over the real pins. Every wait is bounded by the DWT cycle counter.
 struct SlaveHw {
@@ -233,21 +234,21 @@ struct MaskedSpan {
 };
 }  // namespace
 
-int rx_command(std::uint32_t first_timeout_us) {
+K2_HOT int rx_command(std::uint32_t first_timeout_us) {
     if (!g_dwt) return -1;
     MaskedSpan m;
     SlaveHw hw;
     return vooc::rx_command(hw, first_timeout_us);
 }
 
-bool tx_reply(std::uint16_t word) {
+K2_HOT bool tx_reply(std::uint16_t word) {
     if (!g_dwt) return false;
     MaskedSpan m;
     SlaveHw hw;
     return vooc::tx_reply(hw, word);
 }
 
-EdgeCount count_dp_edges(std::uint32_t window_us) {
+K2_HOT EdgeCount count_dp_edges(std::uint32_t window_us) {
     EdgeCount c{0, 0};
     if (!g_dwt) return c;
     MaskedSpan m;

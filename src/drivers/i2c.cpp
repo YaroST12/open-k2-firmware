@@ -4,6 +4,7 @@
 // board routes both buses to pins without a hardware I2C function.
 #include "k2/drivers/i2c.hpp"
 
+#include "k2/core/hot.h"
 #include "k2/drivers/pins.hpp"
 #include "k2/drivers/regs.hpp"
 #include "k2/drivers/systick.hpp"
@@ -26,7 +27,7 @@ constexpr Lines kLines[] = {
 constexpr const Lines& lines(Bus b) { return kLines[static_cast<unsigned>(b)]; }
 
 // Half-bit delay. Ina: SysTick-timed 2 us (~200 kHz). Fusb: ~30 nops, about 400 ns.
-void half_bit(Bus bus) {
+K2_HOT void half_bit(Bus bus) {
     if (bus == Bus::Ina) {
         const std::uint32_t start = systick::ticks();
         constexpr std::uint32_t kHalfBitTicks = 2 * (systick::kSysclkHz / 1'000'000);
@@ -36,7 +37,7 @@ void half_bit(Bus bus) {
     for (volatile int i = 0; i < 30; i++) __asm volatile("nop");
 }
 
-void scl_high_stretch(Bus bus) {
+K2_HOT void scl_high_stretch(Bus bus) {
     const Lines& l = lines(bus);
     l.scl.set();
     if (!l.open_drain) return;  // push-pull SCL cannot be stretched
@@ -46,16 +47,16 @@ void scl_high_stretch(Bus bus) {
 // Ina only: SDA is a push-pull output; to read or to receive an ACK it becomes an input with
 // pull-up (ODR=1 selects it, set first so the line never glitches low). Back to output keeps
 // ODR=1, so the line stays high.
-void sda_to_input(Bus bus) {
+K2_HOT void sda_to_input(Bus bus) {
     if (bus != Bus::Ina) return;
     lines(bus).sda.pull_up();
 }
-void sda_to_output(Bus bus) {
+K2_HOT void sda_to_output(Bus bus) {
     if (bus != Bus::Ina) return;
     lines(bus).sda.mode(Mode::OutPp50);
 }
 
-void start(Bus bus) {
+K2_HOT void start(Bus bus) {
     const Lines& l = lines(bus);
     l.sda.set();
     scl_high_stretch(bus);
@@ -66,7 +67,7 @@ void start(Bus bus) {
     half_bit(bus);
 }
 
-void stop(Bus bus) {
+K2_HOT void stop(Bus bus) {
     const Lines& l = lines(bus);
     l.sda.clear();
     half_bit(bus);
@@ -77,7 +78,7 @@ void stop(Bus bus) {
 }
 
 // Clock one byte out MSB first; returns true when the slave ACKs.
-bool write_byte(Bus bus, std::uint8_t byte) {
+K2_HOT bool write_byte(Bus bus, std::uint8_t byte) {
     const Lines& l = lines(bus);
     for (int i = 7; i >= 0; i--) {
         l.sda.write(byte & (1 << i));
@@ -98,7 +99,7 @@ bool write_byte(Bus bus, std::uint8_t byte) {
     return ack;
 }
 
-std::uint8_t read_byte(Bus bus, bool ack) {
+K2_HOT std::uint8_t read_byte(Bus bus, bool ack) {
     const Lines& l = lines(bus);
     std::uint8_t byte = 0;
     l.sda.set();
@@ -122,7 +123,7 @@ std::uint8_t read_byte(Bus bus, bool ack) {
 }
 
 // Send "addr+W, reg" after a START. Caller issues STOP on failure.
-bool select_register(Bus bus, std::uint8_t dev, std::uint8_t reg) {
+K2_HOT bool select_register(Bus bus, std::uint8_t dev, std::uint8_t reg) {
     start(bus);
     return write_byte(bus, dev << 1) && write_byte(bus, reg);
 }
@@ -165,14 +166,14 @@ void init() {
     recover(Bus::Ina);
 }
 
-bool write(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<const std::uint8_t> data) {
+K2_HOT bool write(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<const std::uint8_t> data) {
     bool ok = select_register(bus, dev, reg);
     for (std::size_t i = 0; ok && i < data.size(); i++) ok = write_byte(bus, data[i]);
     stop(bus);
     return ok;
 }
 
-bool read(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<std::uint8_t> out) {
+K2_HOT bool read(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<std::uint8_t> out) {
     bool ok = select_register(bus, dev, reg);
     if (ok) {
         start(bus);  // repeated start

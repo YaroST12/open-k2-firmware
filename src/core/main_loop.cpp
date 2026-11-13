@@ -15,6 +15,7 @@
 #include "k2/core/fault.hpp"
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/handback.hpp"
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/loop_stats.hpp"
@@ -99,14 +100,14 @@ inline bool raw_down(Button b) {
     return false;
 }
 
-void push_btn(Button b, ButtonEvent ev, uint32_t now, bool remote) {
+K2_HOT void push_btn(Button b, ButtonEvent ev, uint32_t now, bool remote) {
     if (ev == ButtonEvent::None || g_btn_count >= kBtnQueueCap) return;
     g_btn_q[g_btn_tail] = {b, ev, now, remote};
     g_btn_tail = static_cast<uint8_t>((g_btn_tail + 1) % kBtnQueueCap);
     g_btn_count++;
 }
 
-bool pop_btn(QueuedButton &out) {
+K2_HOT bool pop_btn(QueuedButton &out) {
     if (g_btn_count == 0) return false;
     out = g_btn_q[g_btn_head];
     g_btn_head = static_cast<uint8_t>((g_btn_head + 1) % kBtnQueueCap);
@@ -116,7 +117,7 @@ bool pop_btn(QueuedButton &out) {
 
 // Sample physical and remote buttons at 1 ms resolution so presses shorter than a UI paint or driver wait
 // are debounced and queued without invoking Ui inside the idle/wait hook (ARCH_REWORK E3).
-bool sample_buttons(uint32_t now) {
+K2_HOT bool sample_buttons(uint32_t now) {
     Context *const c = g_ctx;
     if (!c || now == g_last_btn_ms) return false;
     g_last_btn_ms = now;
@@ -140,7 +141,7 @@ bool sample_buttons(uint32_t now) {
     return true;
 }
 
-void wait_hook() {
+K2_HOT void wait_hook() {
     k2::transcap::poll();
     sample_buttons(k2::systick::millis());
 }
@@ -170,7 +171,7 @@ constexpr uint32_t kEraseQuietMs = 1000;
 
 // The periodic bodies of the main loop are their own functions: their locals (power readings, log arguments)
 // are popped before the loop goes on, instead of widening main's frame, which sits under every call.
-[[gnu::noinline]] void slow_tasks(uint32_t now) {
+[[gnu::noinline]] K2_HOT void slow_tasks(uint32_t now) {
     Context& c = *g_ctx;
     mark(Stage::Fusb302);
     k2::fusb302::poll();
@@ -276,7 +277,7 @@ uint32_t g_stack_lowest = kStackLowBytes;
 
 }  // namespace
 
-void idle_hook() {   // drain PD frames during long draws (tSenderResponse ~30 ms)
+K2_HOT void idle_hook() {   // drain PD frames during long draws (tSenderResponse ~30 ms)
     static uint32_t last;
     const uint32_t t = k2::systick::millis();
     if (t != last) {
@@ -314,7 +315,7 @@ void begin(Context& ctx) {
     g_last_heartbeat_ms = g_last_ms;
 }
 
-void pass() {
+[[gnu::noinline]] K2_HOT void pass() {   // noinline: main() would otherwise swallow it into its cold boot-time body
     Context& c = *g_ctx;
     const uint32_t pass_t0_us = k2::systick::micros();          // instrumentation (k2/core/loop_stats.hpp): this pass's length
     const uint64_t pass_px0 = k2::paint::meter.px_count();      // and the pixels it sent

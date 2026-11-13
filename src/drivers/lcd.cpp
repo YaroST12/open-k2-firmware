@@ -5,6 +5,7 @@
 // wiring is in k2/drivers/pins.hpp.
 #include "k2/drivers/lcd.hpp"
 #include "k2/drivers/lcd_timing.hpp"
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/core/paint_meter.hpp"
 
@@ -84,10 +85,10 @@ const Sink* g_sink;  // non-null while a screenshot is being rendered
 constexpr std::uint32_t kSpiSpins = 20000;
 std::uint32_t g_spi_timeouts;
 
-void spi_timeout(const char* where) {
+K2_HOT void spi_timeout(const char* where) {
     if (g_spi_timeouts++ == 0) K2LOG("[LCD] FAULT SPI3 %s timeout STS=%04x\n", where, unsigned(spi3().STS));
 }
-void spi_write8(std::uint8_t byte) {
+K2_HOT void spi_write8(std::uint8_t byte) {
     Spi& spi = spi3();
     for (std::uint32_t n = kSpiSpins; !(spi.STS & Spi::STS_TDBE);)
         if (--n == 0) { spi_timeout("TDBE"); return; }
@@ -95,13 +96,13 @@ void spi_write8(std::uint8_t byte) {
 }
 // 16-bit data frame (DSIZE=1): one store shifts out both bytes of a pixel, MSB first -- the
 // same wire order as the old two 8-bit writes, with half the TDBE spin-waits and bus frames.
-void spi_write16(std::uint16_t word) {
+K2_HOT void spi_write16(std::uint16_t word) {
     Spi& spi = spi3();
     for (std::uint32_t n = kSpiSpins; !(spi.STS & Spi::STS_TDBE);)
         if (--n == 0) { spi_timeout("TDBE"); return; }
     *reinterpret_cast<volatile std::uint16_t*>(&spi.DT) = word;
 }
-void spi_wait_idle() {
+K2_HOT void spi_wait_idle() {
     for (std::uint32_t n = kSpiSpins; spi3().STS & Spi::STS_BF;)
         if (--n == 0) { spi_timeout("BF"); return; }
 }
@@ -109,7 +110,7 @@ void spi_wait_idle() {
 // ST7789 command frames must stay 8-bit, so a pixel stream flips DSIZE on for its duration and
 // back off afterwards. DSIZE is only changed while the bus is idle (BF clear, CS high) and with
 // SPE cleared, as the AT32F403A requires; the switch happens once per stream, never per pixel.
-void spi_frame_16bit(bool on) {
+K2_HOT void spi_frame_16bit(bool on) {
     Spi& spi = spi3();
     spi_wait_idle();
     spi.CTRL1 = g_ctrl1 & ~Spi::CTRL1_SPIEN;  // SPE=0 while DSIZE changes
@@ -120,7 +121,7 @@ void dma_wait();     // below: finishes an in-flight pixel transfer, serving PD/
 void close_frame();  // below: dma_wait, then ends a pixel stream's frame left open by stream_end (CS high, 8-bit frames)
 
 // One chip-select frame: DC low for a command byte, then (separately framed) DC high data.
-void command(Cmd cmd) {
+K2_HOT void command(Cmd cmd) {
     close_frame();
     p::lcd_dc.clear();
     p::lcd_cs.clear();
@@ -128,7 +129,7 @@ void command(Cmd cmd) {
     spi_wait_idle();
     p::lcd_cs.set();
 }
-void data(std::span<const std::uint8_t> bytes) {
+K2_HOT void data(std::span<const std::uint8_t> bytes) {
     close_frame();
     p::lcd_dc.set();
     p::lcd_cs.clear();
@@ -136,16 +137,16 @@ void data(std::span<const std::uint8_t> bytes) {
     spi_wait_idle();
     p::lcd_cs.set();
 }
-void command(Cmd cmd, std::span<const std::uint8_t> args) {
+K2_HOT void command(Cmd cmd, std::span<const std::uint8_t> args) {
     command(cmd);
     data(args);
 }
-void command(Cmd cmd, std::uint8_t arg) { command(cmd, {&arg, 1}); }
+K2_HOT void command(Cmd cmd, std::uint8_t arg) { command(cmd, {&arg, 1}); }
 
 // CASET / RASET take big-endian start and end, RAMWR then opens the pixel stream. All three go
 // out under ONE chip-select assertion (CS low once) instead of three frames with a CS toggle +
 // idle wait each; CS stays low and DC ends high so the pixel stream continues the same frame.
-void set_window(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
+K2_HOT void set_window(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     x0 += g_x_off; x1 += g_x_off;
     y0 += g_y_off; y1 += g_y_off;
     const std::uint8_t cols[4] = {std::uint8_t(x0 >> 8), std::uint8_t(x0), std::uint8_t(x1 >> 8), std::uint8_t(x1)};
@@ -177,7 +178,7 @@ void (*g_idle_hook)() = nullptr;  // set_idle_hook(): time-critical work during 
 constexpr std::uint32_t kServiceTicks = kServiceUs * (systick::kSysclkHz / 1'000'000u);
 ServicePacer g_pacer{kServiceTicks};
 
-void run_round() {
+K2_HOT void run_round() {
     usb::service();
     if (g_idle_hook) g_idle_hook();
     g_pacer.finish(systick::ticks());
@@ -185,11 +186,11 @@ void run_round() {
 
 // One usb::service() + idle-hook round when kServiceUs has passed since the last one ended. Never nested: a stream call
 // reached from inside the round (the hook, usb::service) finds the round open and returns.
-void stream_service() {
+K2_HOT void stream_service() {
     if (g_pacer.start(systick::ticks())) run_round();
 }
 
-void push_pixel(std::uint16_t c) { spi_write16(c); }
+K2_HOT void push_pixel(std::uint16_t c) { spi_write16(c); }
 
 // ---- DMA pixel transfer ----------------------------------------------------------------------
 // One transfer is in flight at most, and every one is left running when the stream call returns, so the caller's CPU work
@@ -216,7 +217,7 @@ bool g_dma_ok = kLcdDma;          // cleared for good by a stalled transfer
 bool g_dma_proven;                // first completed transfer logged
 std::uint32_t g_dma_done, g_dma_stalls;   // completed / abandoned transfers since boot (dma_info)
 
-void dma_start(const std::uint16_t* src, std::uint32_t n) {
+K2_HOT void dma_start(const std::uint16_t* src, std::uint32_t n) {
     DmaRegs& d = dma2();
     DmaChannel& ch = d.ch[kDmaCh];
     ch.CTRL = 0;
@@ -234,7 +235,7 @@ void dma_start(const std::uint16_t* src, std::uint32_t n) {
 }
 
 // A stalled channel: stop it, send what is left polled, and keep DMA off from now on.
-void dma_abandon(std::uint32_t left) {
+K2_HOT void dma_abandon(std::uint32_t left) {
     dma2().ch[kDmaCh].CTRL = 0;
     spi3().CTRL2 = spi3().CTRL2 & ~Spi::CTRL2_TXDMAEN;
     g_dma_ok = false;
@@ -244,7 +245,7 @@ void dma_abandon(std::uint32_t left) {
     for (std::uint32_t i = g_dma_n - left; i < g_dma_n; i++) push_pixel(g_dma_src ? g_dma_src[i] : g_fill_word);
 }
 
-void dma_wait() {
+K2_HOT void dma_wait() {
     if (!g_dma_busy) return;
     DmaChannel& ch = dma2().ch[kDmaCh];
     const std::uint32_t total = g_dma_n;
@@ -274,7 +275,7 @@ void dma_wait() {
 }
 
 // A fill of `count` g_fill_word units through DMA in <=65535-unit pieces; the last piece stays in flight.
-void dma_fill(std::uint32_t count) {
+K2_HOT void dma_fill(std::uint32_t count) {
     while (count) {
         dma_wait();
         if (!g_dma_ok) {   // a piece stalled and DMA is off: finish the rest polled
@@ -289,7 +290,7 @@ void dma_fill(std::uint32_t count) {
 
 // A pixel run through the ping-pong buffers: each piece is copied while the previous transfer is still on the wire, then
 // started; the last piece stays in flight.
-void dma_pixels(const std::uint16_t* src, std::uint32_t count) {
+K2_HOT void dma_pixels(const std::uint16_t* src, std::uint32_t count) {
     while (count) {
         const std::uint32_t n = count < kPingPx ? count : kPingPx;
         std::uint16_t* buf = g_ping[g_ping_next];
@@ -306,7 +307,7 @@ void dma_pixels(const std::uint16_t* src, std::uint32_t count) {
     }
 }
 
-void close_frame() {
+K2_HOT void close_frame() {
     dma_wait();
     if (!g_frame_open) return;
     spi_wait_idle();     // BF clear: the last frame has left the shift register before CS rises
@@ -316,7 +317,7 @@ void close_frame() {
 }
 
 // The recorded window goes on the wire (closing the previous frame first) and the pixel frames start.
-void open_window() {
+K2_HOT void open_window() {
     if (!g_win_pending) return;
     g_win_pending = false;
     set_window(g_win[0], g_win[1], g_win[2], g_win[3]);   // closes the previous frame; leaves CS low, DC high
@@ -385,14 +386,14 @@ void set_rotation(std::uint8_t rotation) {
 
 void set_sink(const Sink* sink) { g_sink = sink; }
 const Sink* get_sink() { return g_sink; }
-bool sink_band(std::uint16_t& first, std::uint16_t& last) {
+K2_HOT bool sink_band(std::uint16_t& first, std::uint16_t& last) {
     if (!g_sink || !g_sink->band) return false;
     g_sink->band(&first, &last);
     return true;
 }
 void set_idle_hook(void (*hook)()) { g_idle_hook = hook; }
 
-void pump() {
+K2_HOT void pump() {
     if (g_pacer.force()) run_round();
 }
 
@@ -442,7 +443,7 @@ private:
 
 }  // namespace
 
-void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
+K2_HOT void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     if (g_sink) return g_sink->begin(x0, y0, x1, y1);
     // Recorded only: the first pixels or fill send it (open_window), so the previous stream's last transfer keeps the wire
     // while the caller composes this one's first run.
@@ -451,7 +452,7 @@ void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uin
     g_stream_open = true;   // the service cadence carries on from the previous window (elapsed time, not reset here)
 }
 
-void stream_pixels(std::span<const std::uint16_t> px) {
+K2_HOT void stream_pixels(std::span<const std::uint16_t> px) {
     if (g_sink) return g_sink->pixels(px.data(), px.size());
     const PaintTimer timer(static_cast<std::uint32_t>(px.size()));
     if (g_erase) return stream_fill(0, static_cast<std::uint32_t>(px.size()));
@@ -466,7 +467,7 @@ void stream_pixels(std::span<const std::uint16_t> px) {
     stream_service();
 }
 
-void stream_fill(std::uint16_t color, std::uint32_t count) {
+K2_HOT void stream_fill(std::uint16_t color, std::uint32_t count) {
     if (g_sink) return g_sink->fill(color, count);
     const PaintTimer timer(count);
     if (g_erase) color = 0;
@@ -487,7 +488,7 @@ void stream_fill(std::uint16_t color, std::uint32_t count) {
     }
 }
 
-void stream_end() {
+K2_HOT void stream_end() {
     if (g_sink) return;  // the panel CS was never asserted
     // A window that got no pixels never went on the wire; otherwise the frame stays open, its last transfer running, until
     // the next window or command closes it (close_frame).
@@ -495,12 +496,12 @@ void stream_end() {
     g_stream_open = false;
 }
 
-void flush() {
+K2_HOT void flush() {
     if (g_sink) return;
     close_frame();
 }
 
-void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color) {
+K2_HOT void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color) {
     if (x >= kWidth || y >= kHeight || w == 0 || h == 0) return;
     if (x + w > kWidth) w = kWidth - x;
     if (y + h > kHeight) h = kHeight - y;

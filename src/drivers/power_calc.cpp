@@ -3,6 +3,8 @@
 // Power monitor conversions, see k2/drivers/power_calc.hpp.
 #include "k2/drivers/power_calc.hpp"
 
+#include "k2/core/hot.h"
+
 namespace k2::power {
 
 namespace {
@@ -10,7 +12,7 @@ namespace {
 // Raw counts at 10.0 V and at 2.0 A per chip, and the current clamp in mA.
 struct Scale { std::int32_t counts_10v, counts_2a, clamp_ma; };
 
-constexpr Scale scale(Chip chip) {
+K2_HOT constexpr Scale scale(Chip chip) {
     switch (chip) {
     case Chip::Ina228: return {204800, 307200, 54000};
     case Chip::Ina226: return {1024000, 307200, 26660};
@@ -20,6 +22,7 @@ constexpr Scale scale(Chip chip) {
 }
 
 // Exact x / d for any 64-bit x and 1 <= d <= 65535 using 32-bit UDIV/reciprocal only.
+K2_HOT
 std::uint64_t udiv64_by_u16(std::uint64_t x, std::uint16_t d) {
     const std::uint32_t hi = static_cast<std::uint32_t>(x >> 32);
     const std::uint32_t lo = static_cast<std::uint32_t>(x);
@@ -63,7 +66,7 @@ std::int32_t max_request_mv(Chip chip) {
     }
 }
 
-std::int32_t implied_shunt_uohm(Chip chip) {
+K2_HOT std::int32_t implied_shunt_uohm(Chip chip) {
     // Shunt-voltage LSB after the raw-count alignment shift, in pV * 1000:
     //   INA228 / INA226: 19,531,250 -> 19,531,250 / (1000 * 2 * 1,000,000) = 5 / 512.
     //   INA237:           9,765,625 ->  9,765,625 / (1000 * 2 * 1,000,000) = 5 / 1024.
@@ -98,7 +101,7 @@ const char* format_model(std::span<char> out, Chip chip, unsigned version) {
 
 int reg_bytes(Chip chip) { return chip == Chip::Ina228 ? 3 : 2; }
 
-std::int32_t align_shunt(Chip chip, std::uint32_t reg) {
+K2_HOT std::int32_t align_shunt(Chip chip, std::uint32_t reg) {
     if (chip == Chip::Ina228) {
         // 20-bit two's complement in bits 23..4; the result is that value times 4.
         return static_cast<std::int32_t>((reg & 0x00FFFFF0u) << 8) >> 10;
@@ -106,12 +109,12 @@ std::int32_t align_shunt(Chip chip, std::uint32_t reg) {
     return static_cast<std::int16_t>(reg) * 128;
 }
 
-std::int32_t align_vbus(Chip chip, std::uint32_t reg) {
+K2_HOT std::int32_t align_vbus(Chip chip, std::uint32_t reg) {
     if (chip == Chip::Ina228) return static_cast<std::int32_t>((reg >> 2) & 0x003FFFFCu);
     return static_cast<std::int32_t>((reg & 0xFFFFu) * 128u);
 }
 
-std::int32_t raw_to_mv(Chip chip, std::int32_t raw_v) {
+K2_HOT std::int32_t raw_to_mv(Chip chip, std::int32_t raw_v) {
     // Reduced 10000 / counts_10v: INA228 = 25/512, INA226 = 5/512, INA237 = 25/1024 (all power-of-two denominators).
     std::uint32_t mul = 0;
     unsigned shift = 0;
@@ -126,7 +129,7 @@ std::int32_t raw_to_mv(Chip chip, std::int32_t raw_v) {
     return raw_v < 0 ? -static_cast<std::int32_t>(mv) : static_cast<std::int32_t>(mv);
 }
 
-std::int32_t raw_to_ma(Chip chip, std::int32_t raw_i) {
+K2_HOT std::int32_t raw_to_ma(Chip chip, std::int32_t raw_i) {
     const Scale s = scale(chip);
     if (s.counts_2a == 0) return 0;
     const std::uint32_t mag = magnitude(raw_i);
@@ -143,32 +146,32 @@ std::int32_t raw_to_ma(Chip chip, std::int32_t raw_i) {
     return raw_i < 0 ? -ma : ma;
 }
 
-std::int32_t mw(std::int32_t vbus_mv, std::int32_t current_ma) {
+K2_HOT std::int32_t mw(std::int32_t vbus_mv, std::int32_t current_ma) {
     const std::uint64_t prod = std::uint64_t{magnitude(vbus_mv)} * magnitude(current_ma);
     const std::int32_t mag = static_cast<std::int32_t>(udiv64_by_u16(prod, 1000u));
     return (vbus_mv < 0) != (current_ma < 0) ? -mag : mag;
 }
 
-std::int32_t apply_deadband(std::int32_t current_ma) {
+K2_HOT std::int32_t apply_deadband(std::int32_t current_ma) {
     return magnitude(current_ma) < static_cast<std::uint32_t>(kDeadbandMa) ? 0 : current_ma;
 }
 
-Flow flow_of(std::int32_t current_ma) {
+K2_HOT Flow flow_of(std::int32_t current_ma) {
     const std::int32_t i = apply_deadband(current_ma);
     return i > 0 ? Flow::Forward : i < 0 ? Flow::Reverse : Flow::Idle;
 }
 
-std::uint32_t magnitude(std::int32_t v) {
+K2_HOT std::uint32_t magnitude(std::int32_t v) {
     return v < 0 ? 0u - static_cast<std::uint32_t>(v) : static_cast<std::uint32_t>(v);
 }
 
-void Average::push(std::int32_t v) {
+K2_HOT void Average::push(std::int32_t v) {
     buf_[head_] = v;
     head_ = (head_ + 1) % kAvgLen;
     if (count_ < kAvgLen) count_++;
 }
 
-std::int32_t Average::mean() const {
+K2_HOT std::int32_t Average::mean() const {
     if (count_ == 0) return 0;
     std::int64_t sum = 0;
     for (std::size_t i = 0; i < count_; i++) sum += buf_[i];

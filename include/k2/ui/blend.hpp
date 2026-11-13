@@ -4,9 +4,11 @@
 #pragma once
 #include <cstdint>
 
+#include "k2/core/hot.h"
+
 namespace k2 {
 
-constexpr uint16_t blend565(uint16_t fg, uint16_t bg, unsigned a) {
+K2_HOT constexpr uint16_t blend565(uint16_t fg, uint16_t bg, unsigned a) {
     auto mix = [a](unsigned f, unsigned b) {
         const unsigned x = f * a + b * (15u - a) + 7u;
         return (x * 4369u + 4368u) >> 16;   // exact x / 15 for all 0..999 without UDIV
@@ -17,7 +19,7 @@ constexpr uint16_t blend565(uint16_t fg, uint16_t bg, unsigned a) {
     return static_cast<uint16_t>((r << 11) | (g << 5) | b);
 }
 
-constexpr void make_blend_lut(uint16_t fg, uint16_t bg, uint16_t (&lut)[16]) {
+K2_HOT constexpr void make_blend_lut(uint16_t fg, uint16_t bg, uint16_t (&lut)[16]) {
     for (unsigned a = 0; a < 16; a++) lut[a] = blend565(fg, bg, a);
 }
 

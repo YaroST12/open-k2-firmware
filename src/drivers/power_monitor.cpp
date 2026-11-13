@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // Power monitor driver, see k2/drivers/power_monitor.hpp.
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/drivers/power_monitor.hpp"
 
@@ -38,20 +39,20 @@ std::uint32_t g_last_probe_ms;
 std::uint32_t g_init_ms;
 bool g_fast;   // transition capture's fast VBUS mode is on (INA226: 0x0007 instead of 0x4407)
 
-bool read16(std::uint8_t reg, std::uint16_t& out) {
+K2_HOT bool read16(std::uint8_t reg, std::uint16_t& out) {
     std::uint8_t b[2];
     if (!i2c::read(i2c::Bus::Ina, kI2cAddr, reg, b)) return false;
     out = static_cast<std::uint16_t>(b[0] << 8 | b[1]);
     return true;
 }
 
-bool write16(std::uint8_t reg, std::uint16_t val) {
+K2_HOT bool write16(std::uint8_t reg, std::uint16_t val) {
     const std::uint8_t b[2] = {std::uint8_t(val >> 8), std::uint8_t(val)};
     return i2c::write(i2c::Bus::Ina, kI2cAddr, reg, b);
 }
 
 // Big-endian 2- or 3-byte register.
-bool read_reg(Chip chip, std::uint8_t reg, std::uint32_t& out) {
+K2_HOT bool read_reg(Chip chip, std::uint8_t reg, std::uint32_t& out) {
     std::uint8_t b[3];
     const std::size_t n = static_cast<std::size_t>(reg_bytes(chip));
     if (!i2c::read(i2c::Bus::Ina, kI2cAddr, reg, {b, n})) return false;
@@ -110,11 +111,11 @@ bool init() {
     return false;
 }
 
-Chip chip() { return g_chip; }
+K2_HOT Chip chip() { return g_chip; }
 
-std::int32_t max_vbus_mv() { return max_vbus_mv(g_chip); }
+K2_HOT std::int32_t max_vbus_mv() { return max_vbus_mv(g_chip); }
 
-void poll() {
+K2_HOT void poll() {
     if (g_chip == Chip::None) {
         const std::uint32_t now = systick::millis();
         if (now - g_last_probe_ms >= probe_period_ms(now - g_init_ms)) {
@@ -136,7 +137,7 @@ void poll() {
     g_fast_valid = true;
 }
 
-std::optional<Metrics> sample_now() {
+K2_HOT std::optional<Metrics> sample_now() {
     if (g_chip == Chip::None) return std::nullopt;
     const bool ina226 = g_chip == Chip::Ina226;
     std::uint32_t reg_i, reg_v;
@@ -152,14 +153,14 @@ std::optional<Metrics> sample_now() {
     return m;
 }
 
-bool fast_begin() {
+K2_HOT bool fast_begin() {
     if (g_chip == Chip::None) return false;
     if (g_chip == Chip::Ina226 && !g_fast && !write16(kConfig, kIna226Fast)) return false;
     g_fast = true;
     return true;
 }
 
-void fast_end() {
+K2_HOT void fast_end() {
     if (!g_fast) return;
     g_fast = false;
     if (g_chip == Chip::Ina226) write16(kConfig, kIna226Normal);
@@ -167,7 +168,7 @@ void fast_end() {
 
 bool fast_active() { return g_fast; }
 
-bool fast_vbus_mv(std::int32_t& mv) {
+K2_HOT bool fast_vbus_mv(std::int32_t& mv) {
     if (g_chip == Chip::None) return false;
     std::uint32_t reg_v;
     if (!read_reg(g_chip, g_chip == Chip::Ina226 ? kIna226Bus : kVbus, reg_v)) return false;
@@ -175,7 +176,7 @@ bool fast_vbus_mv(std::int32_t& mv) {
     return true;
 }
 
-void restart_average() {
+K2_HOT void restart_average() {
     if (g_chip == Chip::None) return;
     const bool ina226 = g_chip == Chip::Ina226;
     std::uint32_t reg_i, reg_v;
@@ -191,12 +192,12 @@ void restart_average() {
     g_fast_valid = true;
 }
 
-std::optional<std::int32_t> vbus_fast_mv() {
+K2_HOT std::optional<std::int32_t> vbus_fast_mv() {
     if (g_chip == Chip::None || !g_fast_valid) return std::nullopt;
     return raw_to_mv(g_chip, g_fast_raw);
 }
 
-std::optional<Metrics> read() {
+K2_HOT std::optional<Metrics> read() {
     if (g_chip == Chip::None || g_avg_v.count() == 0) return std::nullopt;
     Metrics m;
     m.die_id = g_die_id;
@@ -208,7 +209,7 @@ std::optional<Metrics> read() {
 }
 
 namespace {
-Metrics metrics_of(std::int32_t vbus_mv, std::int32_t forward_current_ma) {
+K2_HOT Metrics metrics_of(std::int32_t vbus_mv, std::int32_t forward_current_ma) {
     Metrics m;
     m.die_id = g_die_id;
     m.vbus_mv = vbus_mv;
@@ -219,17 +220,17 @@ Metrics metrics_of(std::int32_t vbus_mv, std::int32_t forward_current_ma) {
 }
 }  // namespace
 
-std::optional<Metrics> read_display() {
+K2_HOT std::optional<Metrics> read_display() {
     if (g_chip == Chip::None || !g_fast_valid) return std::nullopt;
     return metrics_of(g_disp.vbus_mv(), g_disp.current_ma());
 }
 
-std::optional<Metrics> read_raw() {
+K2_HOT std::optional<Metrics> read_raw() {
     if (g_chip == Chip::None || !g_fast_valid) return std::nullopt;
     return metrics_of(raw_to_mv(g_chip, g_fast_raw), g_raw_ma);
 }
 
-void set_smoothing(smoothing::Preset preset) { g_disp.set(preset); }
+K2_HOT void set_smoothing(smoothing::Preset preset) { g_disp.set(preset); }
 
 smoothing::Preset smoothing_preset() { return g_disp.preset(); }
 

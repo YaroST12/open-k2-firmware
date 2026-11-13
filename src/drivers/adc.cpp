@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // ADC1 + DMA1 channel 1 driver, see k2/drivers/adc.hpp. Register layout is the STM32F1 one at the Artery
 // addresses (ADC1 0x40012400, DMA1 0x40020000). Channel roles: k2/drivers/adc_calc.hpp.
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/drivers/adc.hpp"
 
@@ -158,7 +159,7 @@ void reclaim_dpdm_pins() {
     if (g_ready) start_scan();
 }
 
-void poll() {
+K2_HOT void poll() {
     if (!g_ready || g_released) return;
     // 100 sweeps x 8 slots x 252 cycles / 15 MHz = 13.4 ms until the ring has been filled once.
     if (systick::millis() - g_start_ms < 15) return;
@@ -168,9 +169,9 @@ void poll() {
     g_reading = make_reading(avg);
 }
 
-std::optional<Reading> read() { return g_reading; }
+K2_HOT std::optional<Reading> read() { return g_reading; }
 
-bool latest_cc(std::uint16_t& cc1_raw, std::uint16_t& cc2_raw) {
+K2_HOT bool latest_cc(std::uint16_t& cc1_raw, std::uint16_t& cc2_raw) {
     if (!g_ready || g_released || systick::millis() - g_start_ms < 15) return false;
     const std::uint32_t left = dma1().ch[0].DTCNT;          // transfers still to go in this lap of the ring
     if (left == 0 || left > kScanSweeps * kSlots) return false;
@@ -182,7 +183,7 @@ bool latest_cc(std::uint16_t& cc1_raw, std::uint16_t& cc2_raw) {
     return true;
 }
 
-bool latest_dpdm(std::int32_t& dp_mv, std::int32_t& dm_mv) {
+K2_HOT bool latest_dpdm(std::int32_t& dp_mv, std::int32_t& dm_mv) {
     if (!g_ready || g_released || systick::millis() - g_start_ms < 15) return false;
     const std::uint32_t left = dma1().ch[0].DTCNT;
     if (left == 0 || left > kScanSweeps * kSlots) return false;

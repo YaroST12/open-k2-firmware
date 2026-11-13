@@ -2,9 +2,11 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/drivers/buttons.hpp"
 
+#include "k2/core/hot.h"
+
 namespace k2 {
 
-ButtonEvent ButtonDetector::update(bool down, uint32_t now) {
+K2_HOT ButtonEvent ButtonDetector::update(bool down, uint32_t now) {
     if (down != raw_) {
         raw_ = down;
         raw_since_ = now;

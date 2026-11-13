@@ -18,6 +18,8 @@
 #pragma once
 #include <cstdint>
 
+#include "k2/core/hot.h"
+
 namespace k2::smoothing {
 
 // Settings > Smoothing. The numeric values are the stored index (k2/ui/uiprefs.hpp), do not reorder.
@@ -39,7 +41,7 @@ struct Params {
 //     Low     min 2.0 Hz, beta 100, d 1.0 Hz   noise 65 %   step 97 / 100 %
 //     Medium  min 0.5 Hz, beta  20, d 1.0 Hz   noise 43 %   step 88 /  99 %
 //     High    min 0.3 Hz, beta  10, d 1.0 Hz   noise 35 %   step 78 /  96 %
-constexpr Params params(Preset p) {
+K2_HOT constexpr Params params(Preset p) {
     switch (p) {
     case Preset::Low:    return {2.0f, 100.0f, 1.0f};
     case Preset::Medium: return {0.5f, 20.0f, 1.0f};
@@ -66,7 +68,7 @@ public:
     void reset() { primed_ = false; }
 
     // Filter one sample taken at now_ms. The first sample after reset() seeds the filter and passes through.
-    float update(float x, std::uint32_t now_ms) {
+    K2_HOT float update(float x, std::uint32_t now_ms) {
         if (p_.min_cutoff_hz <= 0.0f) { primed_ = false; return x; }   // Off: identity, no state
         if (!primed_) {
             primed_ = true;
@@ -103,7 +105,7 @@ class Readout {
 public:
     Preset preset() const { return preset_; }
 
-    void set(Preset p) {
+    K2_HOT void set(Preset p) {
         if (p == preset_) return;
         preset_ = p;
         v_.configure(params(p));
@@ -113,7 +115,7 @@ public:
 
     void reset() { v_.reset(); i_.reset(); }
 
-    void push(std::int32_t vbus_mv, std::int32_t current_ma, std::uint32_t now_ms) {
+    K2_HOT void push(std::int32_t vbus_mv, std::int32_t current_ma, std::uint32_t now_ms) {
         vbus_mv_ = round_to_int(v_.update(static_cast<float>(vbus_mv) * 0.001f, now_ms) * 1000.0f);
         current_ma_ = round_to_int(i_.update(static_cast<float>(current_ma) * 0.001f, now_ms) * 1000.0f);
     }

@@ -10,6 +10,7 @@
 #include <span>
 
 #include "k2/core/fmt.hpp"
+#include "k2/core/hot.h"
 #include "k2/drivers/adc_calc.hpp"
 #include "k2/drivers/power_calc.hpp"
 #include "k2/ui/blend.hpp"
@@ -19,7 +20,7 @@
 namespace k2::selftest {
 namespace {
 
-inline std::uint32_t fnv_step(std::uint32_t h, std::uint32_t v) {
+K2_HOT inline std::uint32_t fnv_step(std::uint32_t h, std::uint32_t v) {
     for (int i = 0; i < 4; ++i) {
         h ^= (v & 0xFFu);
         h *= 16777619u;
@@ -28,7 +29,7 @@ inline std::uint32_t fnv_step(std::uint32_t h, std::uint32_t v) {
     return h;
 }
 
-inline std::uint32_t fnv_str(std::uint32_t h, const char* s) {
+K2_HOT inline std::uint32_t fnv_str(std::uint32_t h, const char* s) {
     while (*s) {
         h ^= static_cast<std::uint8_t>(*s++);
         h *= 16777619u;
@@ -65,7 +66,7 @@ inline std::uint32_t read_cycles() {
 #endif
 }
 
-bool check_scale_div(std::uint32_t& crc_out) {
+K2_HOT bool check_scale_div(std::uint32_t& crc_out) {
     bool ok = true;
     char buf[20];
     // Verify exact arithmetic across readout::power_half (32-bit and high-power cases) & fmt3.
@@ -88,7 +89,7 @@ bool check_scale_div(std::uint32_t& crc_out) {
     return ok && acc != 0u;
 }
 
-bool check_adc(std::uint32_t& crc_out) {
+K2_HOT bool check_adc(std::uint32_t& crc_out) {
     bool ok = true;
     ok = ok && adc::to_mv(2048u, 2400u) == 1024;
     ok = ok && adc::vdd_mv(1489u) == 3300;
@@ -117,7 +118,7 @@ bool check_adc(std::uint32_t& crc_out) {
     return ok;
 }
 
-bool check_power(std::uint32_t& crc_out) {
+K2_HOT bool check_power(std::uint32_t& crc_out) {
     bool ok = true;
     ok = ok && power::implied_shunt_uohm(power::Chip::Ina226) == power::kShuntUohm;
     ok = ok && power::implied_shunt_uohm(power::Chip::Ina228) == power::kShuntUohm;
@@ -142,7 +143,7 @@ bool check_power(std::uint32_t& crc_out) {
     return ok;
 }
 
-bool check_readout_fmt(std::uint32_t& crc_out) {
+K2_HOT bool check_readout_fmt(std::uint32_t& crc_out) {
     bool ok = true;
     char buf[16];
     ok = ok && readout::fmt3(buf, 15000, 'V') == 5 && std::strcmp(buf, "15.0V") == 0;
@@ -162,7 +163,7 @@ bool check_readout_fmt(std::uint32_t& crc_out) {
     return ok;
 }
 
-bool check_fpu_sqrt(std::uint32_t& crc_out) {
+K2_HOT bool check_fpu_sqrt(std::uint32_t& crc_out) {
     auto close = [](float a, float b) { return std::fabs(a - b) <= 1e-4f; };
     bool ok = true;
     ok = ok && close(std::sqrt(keep(3.0f) * 3.0f + keep(4.0f) * 4.0f), 5.0f);
@@ -182,7 +183,7 @@ bool check_fpu_sqrt(std::uint32_t& crc_out) {
     return ok;
 }
 
-bool check_one_euro(std::uint32_t& crc_out) {
+K2_HOT bool check_one_euro(std::uint32_t& crc_out) {
     smoothing::Readout ro;
     ro.set(smoothing::Preset::Low);
     std::uint32_t acc = 2166136261u;
@@ -198,7 +199,7 @@ bool check_one_euro(std::uint32_t& crc_out) {
     return ok;
 }
 
-bool check_blend565(std::uint32_t& crc_out) {
+K2_HOT bool check_blend565(std::uint32_t& crc_out) {
     constexpr std::uint16_t kColors[6] = {0x0000u, 0xFFFFu, 0xF800u, 0x07E0u, 0x001Fu, 0x52AAu};
     bool ok = true;
     auto ref_ch = [](unsigned f, unsigned b, unsigned a) { return (f * a + b * (15u - a) + 7u) / 15u; };
@@ -224,7 +225,7 @@ bool check_blend565(std::uint32_t& crc_out) {
 
 }  // namespace
 
-bool run_math(WriteFn write, void* ctx, Summary* out) {
+K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
     enable_dwt();
 
     struct Case {

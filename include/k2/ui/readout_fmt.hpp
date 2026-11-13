@@ -11,6 +11,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/hot.h"
 #include "k2/core/math_opt.hpp"
 
 namespace k2::readout {
@@ -21,7 +22,7 @@ struct Out {
     std::size_t n = 0;
     constexpr void put(char c) { if (n + 1 < s.size()) s[n++] = c; }
     constexpr void put(std::string_view v) { for (char c : v) put(c); }
-    constexpr void digits(uint32_t v, int width) {   // zero padded to `width`
+    K2_HOT constexpr void digits(uint32_t v, int width) {   // zero padded to `width`
         char t[10];
         int k = 0;
         do { t[k++] = static_cast<char>('0' + v % 10); v /= 10; } while (v);
@@ -35,6 +36,7 @@ struct Out {
 // |milli| (thousandths of a unit) as three total digits plus `unit` (0 = none). Returns the length;
 // the text is truncated to the buffer and NUL terminated. Rounds half up; a carry (9.995 -> 10.0)
 // moves to the next, coarser format so the digit count stays three.
+K2_HOT   // own line: tools/check_64bit_allow.txt matches the declaration line below
 constexpr std::size_t fmt3(std::span<char> out, long long milli, char unit) {
     detail::Out o{out};
     uint64_t v = static_cast<uint64_t>(milli < 0 ? -milli : milli);
@@ -52,6 +54,7 @@ constexpr std::size_t fmt3(std::span<char> out, long long milli, char unit) {
 }
 
 // "19.1V" "x" "2.04A" "=" "39.0W": the status-bar formula; x is U+00D7 (in the 12 and 16 px fonts).
+K2_HOT
 constexpr std::size_t formula(std::span<char> out, long long mv, long long ma, long long mw) {
     char a[12], b[12], c[12];
     fmt3(a, mv, 'V'); fmt3(b, ma, 'A'); fmt3(c, mw, 'W');
@@ -61,7 +64,7 @@ constexpr std::size_t formula(std::span<char> out, long long mv, long long ma, l
 }
 
 // Rated power in whole watts ("100W", "45W"), for the negotiated row's power half.
-constexpr std::size_t rated_watts(std::span<char> out, uint32_t mw) {
+K2_HOT constexpr std::size_t rated_watts(std::span<char> out, uint32_t mw) {
     detail::Out o{out};
     o.digits((mw + 500) / 1000, 1);
     o.put('W');
@@ -73,7 +76,7 @@ enum class PowerKind : uint8_t { None, Pd, Legacy, Plain };
 // Power half of the negotiated row. Pd: contract mv x ma -> "PD 100W". Legacy: detected fast-charge
 // protocol `name` at the measured `mv` -> "QC3 9V". Plain: no PD and no protocol, the Rp current
 // advertised on CC (ma, 0 = unknown) -> "5V 15W" / "5V". None: empty (shown as "?").
-constexpr std::size_t power_half(std::span<char> out, PowerKind kind, uint32_t mv, uint32_t ma, std::string_view name) {
+K2_HOT constexpr std::size_t power_half(std::span<char> out, PowerKind kind, uint32_t mv, uint32_t ma, std::string_view name) {
     detail::Out o{out};
     char w[8];
     switch (kind) {

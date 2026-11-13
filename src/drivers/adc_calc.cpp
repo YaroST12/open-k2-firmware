@@ -3,19 +3,21 @@
 // ADC front-end conversions, see k2/drivers/adc_calc.hpp.
 #include "k2/drivers/adc_calc.hpp"
 
+#include "k2/core/hot.h"
+
 namespace k2::adc {
 
 namespace {
 
 // 10k / B3950 NTC resistance in ohms, -20 .. 120 C in 5 C steps. R = 10k * exp(3950 * (1/T - 1/298.15)).
-constexpr std::array<std::uint32_t, 29> kNtcOhm = {
+K2_HOT_DATA constexpr std::array<std::uint32_t, 29> kNtcOhm = {
     105385, 77898, 58246, 44026, 33621, 25925, 20175, 15837, 12535, 10000, 8037, 6506, 5301, 4348, 3588, 2978, 2486, 2086, 1760, 1492, 1270, 1087, 934, 805, 698, 606, 529, 463, 407};
 constexpr int kNtcFirstC = -20, kNtcStepC = 5;
 constexpr std::uint32_t kPullUpOhm = 10000;
 
 }  // namespace
 
-void average_sweeps(std::span<const std::uint16_t> dma, Raw& out) {
+K2_HOT void average_sweeps(std::span<const std::uint16_t> dma, Raw& out) {
     out.fill(0);
     const std::size_t sweeps = dma.size() / kSlots;
     if (sweeps == 0) return;
@@ -25,17 +27,17 @@ void average_sweeps(std::span<const std::uint16_t> dma, Raw& out) {
         out[s] = static_cast<std::uint16_t>((sum[s] + sweeps / 2) / sweeps);
 }
 
-std::int32_t to_mv(std::uint16_t raw, std::uint16_t vref_raw) {
+K2_HOT std::int32_t to_mv(std::uint16_t raw, std::uint16_t vref_raw) {
     if (vref_raw == 0) return 0;
     return static_cast<std::int32_t>((std::uint32_t{raw} * kVrefMv + vref_raw / 2u) / vref_raw);
 }
 
-std::int32_t vdd_mv(std::uint16_t vref_raw) {
+K2_HOT std::int32_t vdd_mv(std::uint16_t vref_raw) {
     if (vref_raw == 0) return 0;
     return static_cast<std::int32_t>((kFullScale * kVrefMv + vref_raw / 2u) / vref_raw);
 }
 
-Temp ntc_temp(std::uint16_t raw) {
+K2_HOT Temp ntc_temp(std::uint16_t raw) {
     Temp t;
     // Within 1 % of either rail the divider is shorted or open, not measuring.
     if (raw < 41 || raw > kFullScale - 41) return t;
@@ -54,7 +56,7 @@ Temp ntc_temp(std::uint16_t raw) {
     return t;
 }
 
-Temp mcu_temp(std::uint16_t raw, std::uint16_t vref_raw) {
+K2_HOT Temp mcu_temp(std::uint16_t raw, std::uint16_t vref_raw) {
     Temp t;
     if (vref_raw == 0) return t;
     // deci-degrees above 25 C = (Vsense - V25) [mV] * 10000 / |slope| [uV/C] (the slope is negative
@@ -71,7 +73,7 @@ Temp mcu_temp(std::uint16_t raw, std::uint16_t vref_raw) {
     return t;
 }
 
-Reading make_reading(const Raw& avg) {
+K2_HOT Reading make_reading(const Raw& avg) {
     Reading r;
     r.raw = avg;
     r.vref_raw = avg[Vref];
@@ -88,7 +90,7 @@ Reading make_reading(const Raw& avg) {
     return r;
 }
 
-std::uint32_t sample_period_ns(std::uint8_t code, std::uint32_t adc_hz) {
+K2_HOT std::uint32_t sample_period_ns(std::uint8_t code, std::uint32_t adc_hz) {
     // Sample cycles x 2 (1.5, 7.5, 13.5, 28.5, 41.5, 55.5, 71.5, 239.5) so they stay integers.
     constexpr std::array<std::uint32_t, 8> kHalfCycles = {3, 15, 27, 57, 83, 111, 143, 479};
     if (adc_hz == 0) return 0;
