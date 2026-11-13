@@ -1,0 +1,6 @@
+# clang -fsanitize-ignorelist for the sanitizer gate step (tools/static_check.sh sanitize).
+# Third-party and system-header code is not ours to fix, so the one opt-in check that is not clean there is switched off
+# for it. Everything else (ASan, UBSan, bounds, float casts) still covers it: a report anywhere fails the gate.
+[implicit-integer-sign-change]
+src:*third_party/*
+src:/usr/*

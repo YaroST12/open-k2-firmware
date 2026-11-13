@@ -4,13 +4,22 @@
 # Static analysis over the firmware sources (src/, include/; never third_party). Report only:
 # it always exits 0 unless a tool itself fails to start, so it can run as a non-blocking step.
 #
-#   tools/static_check.sh [tidy|gcc|cppcheck|sanitize|all]     (default: all)
+#   tools/static_check.sh [tidy|gcc|cppcheck|sanitize|all]     (default: all = tidy, gcc, cppcheck)
 #
 # Results land in build/static/: tidy.log, gcc.log (ARM g++ -fanalyzer + extra warnings, run in
-# the open-k2-builder image), cppcheck.log (cppcheck installed into a throwaway container), and a
-# sanitize.log (every host test built with
-# -fsanitize=address,undefined into host-asan/), and summary.txt with counts per tool. Needs build/gen (run `make docker-build` once first).
-# Checks and suppressions: .clang-tidy, tools/cppcheck.supp.
+# the open-k2-builder image), cppcheck.log (cppcheck installed into a throwaway container), and summary.txt with counts
+# per tool. Needs build/gen (run `make docker-build` once first). Checks and suppressions: .clang-tidy, tools/cppcheck.supp.
+#
+# `sanitize` is the one mode that is also a default step of `make gate` (tools/gate.py step_sanitize): every host test
+# built and run under sanitizers in the open-k2-builder image (as the host uid), once with g++ and once with clang, each
+# in its own build directory (build/san-gcc, build/san-clang; incremental, so a warm run only rebuilds what changed) with
+# its own log (build/static/sanitize-gcc.log, sanitize-clang.log). The sets:
+#   g++    address, undefined, float-divide-by-zero, float-cast-overflow (leak detection is on)
+#   clang  the same plus local-bounds and implicit-integer-sign-change (a negative value reaching an unsigned type).
+#          Left out on purpose: unsigned-integer-overflow (the firmware wraps millisecond counters and hashes on
+#          purpose: thousands of reports) and implicit-conversion's truncation checks (every narrow ++ and masked store
+#          reports). third_party and system headers are exempt from sign-change through tools/sanitize_ignorelist.txt.
+# Every check is fatal (-fno-sanitize-recover=all): a report aborts its test, which fails the gate.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/static"
@@ -46,11 +55,29 @@ run_cppcheck() {
         >"$out/cppcheck.log" 2>&1
 }
 
+# One sanitizer pass: $1 = name (build dir and log), $2 = C++ compiler command, $3 = C compiler command, $4 = flags.
+sanitize_pass() {
+    local flags="$4 -fno-sanitize-recover=all -fno-omit-frame-pointer"
+    # make does not see a change of flags or of compiler: stamp both in the build directory and start clean on a change.
+    local dir="$root/build/san-$1" stamp
+    stamp="$2 $3 $flags $(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null)"
+    [ "$(cat "$dir/.stamp" 2>/dev/null)" = "$stamp" ] || rm -rf "$dir"
+    mkdir -p "$dir" && printf '%s' "$stamp" >"$dir/.stamp"
+    docker run --rm --user "$(id -u):$(id -g)" -e UBSAN_OPTIONS=print_stacktrace=1 -v "$root":/workspace -w /workspace "$img" \
+        make -k -j"$(nproc)" test-run HOST_DIR="build/san-$1" HOST_CXX="$2 $flags" HOST_CC="$3 $flags" \
+        >"$out/sanitize-$1.log" 2>&1
+    local rc=$?
+    # The closing line the gate reads: an incremental run re-runs only the changed tests, so the log alone cannot say that
+    # the whole suite passed; the per-test stamps (one per passed binary) can.
+    echo "[sanitize] $1: docker exit $rc, $(find "$dir/run" -name '*.ok' 2>/dev/null | wc -l) tests passed" >>"$out/sanitize-$1.log"
+}
+
 run_sanitize() {
-    # lwIP's misaligned-pbuf reports are host-only (MEM_ALIGNMENT 4 with 8-byte pointers): ignored.
-    (cd "$root" && make -k -j "$(nproc)" test-run HOST_DIR=host-asan \
-        HOST_CXX="g++ -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer" \
-        HOST_CC="gcc -fsanitize=address,undefined -fno-omit-frame-pointer") >"$out/sanitize.log" 2>&1
+    local base="-fsanitize=address,undefined,float-divide-by-zero,float-cast-overflow"
+    sanitize_pass gcc g++ gcc "$base" &
+    sanitize_pass clang clang++ clang \
+        "$base,local-bounds,implicit-integer-sign-change -fsanitize-ignorelist=tools/sanitize_ignorelist.txt" &
+    wait
 }
 
 case "$what" in
@@ -58,7 +85,7 @@ case "$what" in
     gcc) run_gcc ;;
     cppcheck) run_cppcheck ;;
     sanitize) run_sanitize ;;
-    all) run_tidy & run_gcc & run_cppcheck & run_sanitize & wait ;;
+    all) run_tidy & run_gcc & run_cppcheck & wait ;;
     *) echo "usage: $0 [tidy|gcc|cppcheck|sanitize|all]" >&2; exit 2 ;;
 esac
 
@@ -68,10 +95,11 @@ esac
         printf '%-9s %5d warnings\n' "$f" "$(grep -cE ': (warning|error|style|performance|portability):' "$out/$f.log")"
         grep -oE '\[[-A-Za-z0-9.=,]+\]$' "$out/$f.log" | sort | uniq -c | sort -rn | head -15 | sed 's/^/          /'
     done
-    if [ -f "$out/sanitize.log" ]; then
-        printf '%-9s %5d src/ reports, %d failed tests\n' sanitize \
-            "$(grep -E 'runtime error|AddressSanitizer' "$out/sanitize.log" | grep -vc third_party)" \
-            "$(grep -c '^make: \*\*\*' "$out/sanitize.log")"
-    fi
+    for f in gcc clang; do
+        [ -f "$out/sanitize-$f.log" ] || continue
+        printf '%-9s %5d reports outside third_party, %d failed tests\n' "sanitize-$f" \
+            "$(grep -E 'runtime error|AddressSanitizer' "$out/sanitize-$f.log" | grep -vc third_party)" \
+            "$(grep -c '^make: \*\*\*' "$out/sanitize-$f.log")"
+    done
 } | tee "$out/summary.txt"
 exit 0

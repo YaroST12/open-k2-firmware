@@ -223,6 +223,101 @@ class SanitizeLog(unittest.TestCase):
         self.assertIn("src/ui/ui.cpp", errs[0])
         self.assertIn("test_x", errs[1])
 
+    def test_address_and_leak_reports_fail(self):
+        log = ("==12==ERROR: AddressSanitizer: global-buffer-overflow on address 0x1\n"
+               "==13==ERROR: LeakSanitizer: detected memory leaks\n")
+        self.assertEqual(len(g.sanitize_errors(log)), 2)
+
+
+class SanitizeStep(unittest.TestCase):
+    @staticmethod
+    def done(name, rc=0, n=262):
+        """The closing line tools/static_check.sh appends to a pass's log."""
+        return f"[sanitize] {name}: docker exit {rc}, {n} tests passed\n"
+
+    @classmethod
+    def clean(cls, name):
+        # A warm incremental run prints no per-test result, so the closing line is all the log carries.
+        return cls.done(name)
+
+    def test_verdict_tags_the_pass_and_needs_the_closing_line(self):
+        self.assertEqual(g.sanitize_verdict("gcc", self.clean("gcc")), [])
+        errs = g.sanitize_verdict("clang", "src/x.cpp:1:2: runtime error: shift\n" + self.clean("clang"))
+        self.assertEqual(len(errs), 1)
+        self.assertTrue(errs[0].startswith("[clang] "))
+        # a log without the closing line (docker never ran, the script died) is a failure, not a pass
+        empty = g.sanitize_verdict("gcc", "docker: command not found\n")
+        self.assertEqual(len(empty), 1)
+        self.assertIn("did not finish", empty[0])
+        # the closing line of the other pass does not count
+        self.assertIn("did not finish", g.sanitize_verdict("gcc", self.clean("clang"))[0])
+
+    def test_verdict_fails_when_no_test_passed(self):
+        errs = g.sanitize_verdict("clang", self.done("clang", 0, 0))
+        self.assertEqual(len(errs), 1)
+        self.assertIn("no test passed", errs[0])
+
+    def test_verdict_fails_on_a_docker_exit_without_a_report(self):
+        errs = g.sanitize_verdict("gcc", self.done("gcc", 2, 262))
+        self.assertEqual(len(errs), 1)
+        self.assertIn("docker run exited 2 without a report", errs[0])
+        # with a report in the log the report is the finding, not the exit code
+        errs = g.sanitize_verdict("gcc", "src/x.cpp:1:2: runtime error: shift\n" + self.done("gcc", 2, 262))
+        self.assertEqual(len(errs), 1)
+        self.assertIn("runtime error", errs[0])
+
+    def test_gate_runs_both_compilers_by_default(self):
+        names = [fn.__name__ for _, fn in g.STEPS]
+        self.assertIn("step_sanitize", names)
+        self.assertLess(names.index("step_tests"), names.index("step_sanitize"))
+        self.assertLess(names.index("step_sanitize"), names.index("step_size"))
+        self.assertNotIn("step_static", names)          # --static is the slow report-only set
+        self.assertEqual(g.SANITIZE_PASSES, ("gcc", "clang"))
+
+    def _step(self, logs):
+        """step_sanitize with static_check.sh faked: `logs` maps pass name -> log text (None: no log written)."""
+        import tempfile, types
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "build/static").mkdir(parents=True)
+            for name, text in logs.items():
+                if text is not None:
+                    (root / f"build/static/sanitize-{name}.log").write_text(text)
+            old = g.ROOT, g.run
+            g.ROOT, g.run = root, lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            try:
+                g.step_sanitize()
+            finally:
+                g.ROOT, g.run = old
+
+    def test_step_passes_when_both_logs_are_clean(self):
+        self._step({"gcc": self.clean("gcc"), "clang": self.clean("clang")})
+
+    def test_step_fails_on_a_clang_only_report(self):
+        with self.assertRaises(g.GateError) as cm:
+            self._step({"gcc": self.clean("gcc"),
+                        "clang": "tests/t.cpp:5:1: runtime error: implicit conversion\n" + self.clean("clang")})
+        self.assertIn("[clang]", str(cm.exception))
+        self.assertNotIn("[gcc]", str(cm.exception))
+
+    def test_step_fails_when_a_log_is_missing(self):
+        with self.assertRaises(g.GateError) as cm:
+            self._step({"gcc": self.clean("gcc"), "clang": None})
+        self.assertIn("[clang]", str(cm.exception))
+
+    def test_script_runs_both_compilers_in_docker_and_all_leaves_sanitizers_out(self):
+        text = (Path(g.__file__).resolve().parent / "static_check.sh").read_text()
+        self.assertIn("docker run --rm --user", text)
+        self.assertIn("sanitize_pass gcc g++ gcc", text)
+        self.assertIn("sanitize_pass clang clang++ clang", text)
+        self.assertIn("-fsanitize-ignorelist=tools/sanitize_ignorelist.txt", text)
+        self.assertNotIn("host-asan", text)
+        # the closing line the verdict reads, in the exact form sanitize_verdict matches
+        self.assertIn('echo "[sanitize] $1: docker exit $rc, ', text)
+        self.assertIn(" tests passed\" >>", text)
+        all_line = next(l for l in text.splitlines() if l.strip().startswith("all)"))
+        self.assertNotIn("sanitize", all_line)
+
 
 if __name__ == "__main__":
     unittest.main()

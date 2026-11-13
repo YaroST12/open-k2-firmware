@@ -11,12 +11,15 @@
   4 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
   4b 64bit  no unallowlisted 64-bit integer types in src/ or include/k2/ (tools/check_64bit.py)
   5 tests   make test (C++, Python, node)
+  5b sanitizers  tools/static_check.sh sanitize: every host test under ASan + UBSan in the builder image, once with
+            g++ and once with clang (extras: float casts, local bounds, sign change); any report from our code or any
+            failed test fails; incremental in build/san-gcc and build/san-clang
   6 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
   6b net    the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map;
             only with K2_WEB=1 (env or `make K2_WEB=1 gate`), which also puts the web tests back into step 5
 
-  7 static  (opt-in, --static) tools/static_check.sh sanitize: every host test under ASan+UBSan, zero
-            src/ reports and zero failed tests
+  7 static  (opt-in, --static) tools/static_check.sh all: clang-tidy, ARM g++ -fanalyzer and cppcheck, counts printed
+            (report only, never a failure)
 
 `python3 tools/gate.py --update-baseline` rewrites the baseline from the current build."""
 import os
@@ -324,19 +327,52 @@ def step_size():
 
 
 def sanitize_errors(log):
-    """Sanitizer reports outside third_party, plus failed test targets, from build/static/sanitize.log."""
+    """Sanitizer reports outside third_party, plus failed test targets, from one build/static/sanitize-*.log."""
     lines = log.splitlines()
-    return ([l for l in lines if re.search(r"runtime error|AddressSanitizer", l) and "third_party" not in l]
+    return ([l for l in lines if re.search(r"runtime error|AddressSanitizer|LeakSanitizer", l) and "third_party" not in l]
             + [l for l in lines if l.startswith("make: ***")])
 
 
-def step_static():
+def sanitize_verdict(name, log):
+    """The errors of one sanitizer pass, each tagged with the pass name. The pass must end with the line
+    tools/static_check.sh writes ("[sanitize] <name>: docker exit 0, N tests passed", N > 0): a log without it means the
+    container never ran (no docker, no image), and that fails too, never passes silently. An incremental run re-runs
+    only what changed, so the closing line, not the test output, is what proves the suite ran."""
+    errs = sanitize_errors(log)
+    done = re.search(rf"^\[sanitize\] {re.escape(name)}: docker exit (\d+), (\d+) tests passed$", log, re.M)
+    if not done:
+        errs.append("the pass did not finish (no closing line; did the docker run start?)")
+    elif int(done.group(2)) == 0:
+        errs.append("no test passed")
+    elif int(done.group(1)) != 0 and not errs:
+        errs.append(f"docker run exited {done.group(1)} without a report")
+    return [f"[{name}] {e}" for e in errs]
+
+
+SANITIZE_PASSES = ("gcc", "clang")      # tools/static_check.sh sanitize: one log per host compiler
+
+
+def step_sanitize():
+    """Every host test under ASan + UBSan (+ extras) in the builder image, with g++ and with clang: any report from
+    our code or any failed test fails the gate. Incremental (build/san-gcc, build/san-clang)."""
     r = run(["bash", "tools/static_check.sh", "sanitize"])
     if r.returncode:
         raise GateError("tools/static_check.sh sanitize did not run:\n  " + (r.stdout + r.stderr).strip())
-    errs = sanitize_errors((ROOT / "build/static/sanitize.log").read_text())
+    errs = []
+    for name in SANITIZE_PASSES:
+        log = ROOT / f"build/static/sanitize-{name}.log"
+        errs += sanitize_verdict(name, log.read_text(errors="replace") if log.exists() else "")
     if errs:
-        raise GateError("ASan/UBSan host tests (full log build/static/sanitize.log):\n  " + "\n  ".join(errs[:15]))
+        raise GateError("sanitizer host tests (full logs build/static/sanitize-gcc.log, sanitize-clang.log):\n  "
+                        + "\n  ".join(errs[:15]))
+
+
+def step_static():
+    """The slower report-only analysers (clang-tidy, ARM g++ -fanalyzer, cppcheck): the counts are printed, never a failure."""
+    r = run(["bash", "tools/static_check.sh", "all"])
+    if r.returncode:
+        raise GateError("tools/static_check.sh did not run:\n  " + (r.stdout + r.stderr).strip())
+    print("  " + r.stdout.strip().replace("\n", "\n  "))
 
 
 NET_BUILD = "build-net"       # the K2_NET=1 variant's own build directory (the default build is K2_NET=0)
@@ -363,12 +399,13 @@ WEB = os.environ.get("K2_WEB") == "1"   # the web parts (Makefile K2_WEB): off b
 STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invariants", step_invariants),
          ("stack budget", step_stack), ("map: no malloc / operator new / __cxa_ / 64-bit divmod", step_map),
          ("remote command ids", step_ids), ("64-bit integer guard", step_64bit),
-         ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests), ("size report", step_size)] + (
+         ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests),
+         ("sanitizers: host tests under ASan/UBSan, g++ and clang (docker)", step_sanitize), ("size report", step_size)] + (
          [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant)] if WEB else [])
 
 
 def main():
-    steps = STEPS + ([("static: ASan/UBSan host tests", step_static)] if "--static" in sys.argv else [])
+    steps = STEPS + ([("static analysers (report only: tidy, -fanalyzer, cppcheck)", step_static)] if "--static" in sys.argv else [])
     for i, (name, fn) in enumerate(steps, 1):
         print(f"== gate {i}/{len(steps)}: {name}", flush=True)
         try:
