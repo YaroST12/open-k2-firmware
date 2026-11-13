@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
-// Self-contained math/FPU/architecture selftest & DWT cycle micro-benchmark, callable from the USB shell.
-// Depends only on pre-existing pure project headers so the exact same files run in pre- and post-optimization builds.
+// On-device selftest and DWT cycle benchmark of the hot paths (math, formatting, text and fill, mem*, PD codec and planner,
+// PD trace ring, TinyUSB FIFO, flash placement), callable from the USB shell. See docs/MATH_SELFTEST.md.
+// Every check runs the production function on deterministic input, validates it, and compares its sum with a golden harvested
+// on the host (float checks use a tolerance); drawing goes to a RAM sink, never to the panel.
 #pragma once
 #include <cstdint>
 #include <string_view>
@@ -17,7 +19,8 @@ struct Summary {
 };
 
 // Runs all deterministic correctness + timing kernels, streaming results via `write`.
-// Returns true iff every check passed.
+// Returns true iff every check passed. Call from the main loop only (the drawing checks borrow the scratch arena and the
+// lcd sink); with the arena held, the checks that need it report FAIL rather than touch it.
 bool run_math(WriteFn write, void* ctx, Summary* out = nullptr);
 
 }  // namespace k2::selftest
