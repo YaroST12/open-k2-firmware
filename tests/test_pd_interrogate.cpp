@@ -475,6 +475,47 @@ int main() {
         CHECK_EQ(bool(d.next(2000)), false);
     }
 
+    // ---- the device and the charger talk to each other after our question (laptop on the bench, 2026-11-13: its VCONN_Swap
+    //      came 125 ms after our Get_Sink_Cap, then the charger's Not_Supported, Soft_Resets and a Hard Reset): that reset
+    //      follows their exchange, it is not "charger resets when asked". The run resyncs and asks again within the budget. ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();                                           // Get_Sink_Cap
+        r.now += 125;
+        r.dev_ctl(11);                                      // the device's VCONN_Swap to the charger
+        r.now += 12;
+        r.iq.on_hard_reset(r.now);
+        const IqStatus& s = r.iq.status();
+        CHECK_COND(s.why != IqWhy::SourceResets);
+        CHECK_EQ(bool(r.iq.running()), true);
+        CHECK_EQ(int(s.resets_seen), 1);
+        CHECK_EQ(int(s.resets_sent), 0);
+        r.contract();                                       // the renegotiation after it
+        CHECK_EQ(bool(r.next(8000)), true);                 // asked again
+        CHECK_EQ(r.last_type(), 8u);
+
+        // The same reset with nothing said by the device is still the question's doing (the rule above stays).
+        Rig q;
+        q.contract();
+        q.start();
+        q.next();
+        q.now += 125;
+        q.iq.on_hard_reset(q.now);
+        CHECK_EQ(int(q.iq.status().why), int(IqWhy::SourceResets));
+
+        // An exchange before the question does not excuse a reset after it.
+        Rig p;
+        p.contract();
+        p.start();
+        p.dev_ctl(11);
+        p.next();
+        p.now += 5;
+        p.iq.on_hard_reset(p.now);
+        CHECK_EQ(int(p.iq.status().why), int(IqWhy::SourceResets));
+    }
+
     // ---- the charger Soft_Resets the device mid-run (an answer it did not expect): wait for their new contract, go on, and
     //      the final reset is still owed ----
     {

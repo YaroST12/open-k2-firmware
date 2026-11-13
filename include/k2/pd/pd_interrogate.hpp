@@ -280,6 +280,7 @@ private:
     bool awaiting_ = false, acked_ = false, tx_pending_ = false;
     bool dirty_ = false;                     // a question went out since the last reset: the final reset is owed
     bool soft_since_tx_ = false;             // the charger sent a Soft_Reset since our last question
+    bool peer_spoke_since_tx_ = false;       // the device began a conversation of its own (VCONN_Swap...) since our last question
     std::uint8_t foreign_mask_ = 0;          // bit per VDM command (Identity, SVIDs, Modes) the charger asked and the device owes
     std::array<std::uint32_t, 3> foreign_at_{};
     IqWhy why_pending_ = IqWhy::None;        // a stop that waits for the final reset

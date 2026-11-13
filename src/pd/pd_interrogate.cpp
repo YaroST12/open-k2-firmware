@@ -175,6 +175,7 @@ IqRefusal Interrogate::start(IqFacts f, std::uint32_t now) {
     attempts_ = mode_idx_ = order_idx_ = 0;
     foreign_mask_ = 0;
     soft_since_tx_ = false;
+    peer_spoke_since_tx_ = false;
     st_.step = kIqAskOrder[0];
     q_open_ = false;
     awaiting_ = acked_ = tx_pending_ = dirty_ = false;
@@ -555,6 +556,7 @@ bool Interrogate::take_tx(TxMsg& out) {
     sent_id_ = id_of(out.header);
     tx_at_ = now_;
     soft_since_tx_ = false;
+    peer_spoke_since_tx_ = false;
     cur_ = IqQuestion{};
     cur_.step = st_.step;
     cur_.id = sent_id_;
@@ -596,8 +598,9 @@ void Interrogate::on_hard_reset(std::uint32_t now) {
     }
     // A Hard Reset right after our question is the question's doing (a source that takes a message from a "source" for a role
     // clash): stop at once. No final reset (theirs resynced the link), no resync wait, no further question: asking again
-    // only puts the source into a reset loop.
-    if (st_.phase == IqPhase::Ask && dirty_ && std::uint32_t(now - tx_at_) <= kIqBlameMs) {
+    // only puts the source into a reset loop. Not when the device spoke to the charger on its own after our question (a
+    // VCONN_Swap, a Soft_Reset): then the reset is theirs, and the ordinary budgeted path below applies.
+    if (st_.phase == IqPhase::Ask && dirty_ && !peer_spoke_since_tx_ && std::uint32_t(now - tx_at_) <= kIqBlameMs) {
         close(IqResult::SourceReset);
         st_.resets_seen++;
         dirty_ = false;
@@ -714,6 +717,10 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
             }
             return;
         }
+        // A control message that is not a refusal of ours (VCONN_Swap, Soft_Reset...) is the device talking to the charger
+        // on its own: a reset that follows is the two of them, not our question.
+        if (st_.phase == IqPhase::Ask && dirty_ && t != kCtlNotSupported && t != kCtlReject && t != kCtlWait)
+            peer_spoke_since_tx_ = true;
         if (st_.phase != IqPhase::Ask || !awaiting_) return;
         if (t == kCtlNotSupported || t == kCtlReject) { got_answer(); refused(); }
         else if (t == kCtlWait) { got_answer(); attempt_failed(); }
