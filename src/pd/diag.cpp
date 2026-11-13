@@ -87,9 +87,14 @@ std::uint32_t mul_div_u32(std::uint32_t a, std::uint32_t k, std::uint32_t b) {
     return q * k + rem_q;
 }
 
-// sum += prod / 1000, carrying the remainder (milli-units of the product, so u32 sums last for days).
-void acc(std::uint32_t& sum, std::uint16_t& frac, std::uint64_t prod) {
-    sum += std::uint32_t(udivmod64_by_1000(prod + frac, frac));
+// sum += prod / 1000, carrying the remainder (milli-units of the product). The sum is 64 bit: it only grows by addition.
+void acc(std::uint64_t& sum, std::uint16_t& frac, std::uint64_t prod) {
+    sum += udivmod64_by_1000(prod + frac, frac);
+}
+
+// The mean per second of a 64-bit sum over `ms` milliseconds: sum * 1000 / ms (no 64-bit division: udiv64 shifts).
+std::uint32_t mean_of(std::uint64_t sum, std::uint32_t ms) {
+    return ms ? std::uint32_t(udiv64(sum * 1000u, ms)) : 0;
 }
 
 // The best PDO of a set: its power, voltage and current, plus the highest voltage in the set.
@@ -865,7 +870,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     const bool host = s.snk_host || (s.snk_idh >> 31 & 1) || (twin && twin->host);
     r.snk_noun = s.active ? "K2" : host && r.need_mw >= 45000 ? "Laptop" : host ? "Host" : "Device";
     r.src_noun = src_noun(s.src_idh, s.src_host);
-    const std::uint32_t mean_mv = s.obs_ms ? mul_div_u32(s.mv_s, 1000u, s.obs_ms) : 0;
+    const std::uint32_t mean_mv = mean_of(s.mv_s, s.obs_ms);
     r.vbus_mv = std::uint16_t(mean_mv);
     r.peak_ma = s.peak_ma;
 
@@ -912,7 +917,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
             std::uint64_t(s.pin_ms) * 100 >= std::uint64_t(s.cobs_ms) * kPinSharePct)
             add(r, Sev::Warn, Group::Power, Code::Pinned, at(s.contract_ms), s.c_ma, std::int32_t(s.pin_ms * 100 / s.cobs_ms),
                 std::int32_t(s.cobs_ms));
-        const std::int32_t mw = s.cobs_ms ? std::int32_t(mul_div_u32(s.cmj, 1000u, s.cobs_ms)) : 0;
+        const std::int32_t mw = std::int32_t(mean_of(s.cmj, s.cobs_ms));
         if (s.cobs_ms > 0)
             add(r, Sev::Info, Group::Power, Code::Draw, at(s.contract_ms), s.c_mv, s.c_ma, mw, std::int32_t(s.cobs_ms));
         // a 5 V contract while the device declares more and the offer has more
@@ -929,7 +934,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
             add(r, Sev::Info, Group::Power, Code::ContractUnseen, 0, s.up_mv ? s.up_mv : std::int32_t(mean_mv),
                 s.up_mv || s.obs_ms ? 1 : 0);
         if (s.obs_ms && mean_mv >= kLostMv)   // (no VBUS: a charger waiting for a sink, nothing to draw)
-            add(r, Sev::Info, Group::Power, Code::Draw, 0, 0, 0, std::int32_t(mul_div_u32(s.mj, 1000u, s.obs_ms)),
+            add(r, Sev::Info, Group::Power, Code::Draw, 0, 0, 0, std::int32_t(mean_of(s.mj, s.obs_ms)),
                 std::int32_t(s.obs_ms));
     }
     // input cut-outs: the device's draw falls to nothing inside a window while VBUS holds in band (the source kept

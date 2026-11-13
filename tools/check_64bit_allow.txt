@@ -112,7 +112,9 @@ src/pd/diag.cpp                 return (std::uint64_t(q_hi) << 32) | (std::uint6
 src/pd/diag.cpp                 std::uint64_t udiv64(std::uint64_t num, std::uint64_t den) {
 src/pd/diag.cpp                 std::uint64_t q = 0;
 src/pd/diag.cpp                 : std::uint32_t(udiv64(std::uint64_t(r) * k, b));
-src/pd/diag.cpp                 void acc(std::uint32_t& sum, std::uint16_t& frac, std::uint64_t prod) {
+src/pd/diag.cpp                 void acc(std::uint64_t& sum, std::uint16_t& frac, std::uint64_t prod) {
+src/pd/diag.cpp                 std::uint32_t mean_of(std::uint64_t sum, std::uint32_t ms) {
+include/k2/pd/diag.hpp          std::uint64_t mj = 0, mv_s = 0, cmj = 0;
 src/pd/diag.cpp                 acc(s.mj, mj_frac_, std::uint64_t(mw) * dt);
 src/pd/diag.cpp                 acc(s.mv_s, mv_frac_, std::uint64_t(v_mv_) * dt);
 src/pd/diag.cpp                 acc(s.cmj, cmj_frac_, std::uint64_t(mw) * dt);
