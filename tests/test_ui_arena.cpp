@@ -75,6 +75,55 @@ static void fill_record(Ui &ui, std::size_t n) {
     for (std::size_t i = 0; i < n; i++) ui.share_buffer()[i] = static_cast<std::uint8_t>(i * 7 + 3);
 }
 
+// Every rotation page under every menu chain the UI can open (goto_page / open_connection / the Connection place tools push
+// them over whatever page is current). A refused push is never silent, so each step must succeed here.
+static void test_every_base_fits_every_reachable_chain() {
+    const Page bases[] = {Page::Home, Page::Detail, Page::ChargerTest, Page::Lines, Page::Tools, Page::Settings};
+    std::uint32_t t = 2000;
+    for (const Page base : bases) {
+        const Menu tools[] = {Menu::Twin, Menu::LoopProbe, Menu::Emarker, Menu::Cards, Menu::PdStress, Menu::Spoof, Menu::CableR};
+        for (const Menu tool : tools) {
+            for (const bool share : {false, true}) {
+                if (share && tool != Menu::LoopProbe && tool != Menu::Emarker && tool != Menu::Cards) continue;
+                Ui &ui = fresh();
+                ui.goto_page(static_cast<uint8_t>(base), t += 100);
+                CHECK(ui.push_menu(Menu::Connection, t += 100));
+                CHECK(ui.push_menu(tool, t += 100));
+                if (share) {
+                    fill_record(ui, 120);
+                    CHECK(ui.open_share(qs::Type::Card, 1, "Deep", 120, t += 100));
+                    CHECK(ui.menu() == Menu::Share);
+                    CHECK_EQ(int(ui.menu_depth()), 3);
+                }
+                CHECK(ui.notice() == nullptr);   // nothing was refused
+            }
+        }
+        Ui &ui = fresh();   // Trigger > Emarker > Connection
+        ui.goto_page(static_cast<uint8_t>(base), t += 100);
+        CHECK(ui.push_menu(Menu::Trigger, t += 100));
+        CHECK(ui.push_menu(Menu::Emarker, t += 100));
+        CHECK(ui.push_menu(Menu::Connection, t += 100));
+        CHECK(ui.notice() == nullptr);
+    }
+}
+
+// A menu that cannot open says so: the log line is in the stub log, the page that stays shows a notice, and the notice ends.
+static void test_a_refused_menu_is_not_silent() {
+    Ui &ui = fresh();
+    std::uint32_t t = 3000;
+    ui.goto_page(static_cast<uint8_t>(Page::Tools), t += 100);
+    CHECK(ui.push_menu(Menu::Connection, t += 100));
+    CHECK(ui.push_menu(Menu::Emarker, t += 100));
+    fill_record(ui, 64);
+    CHECK(ui.open_share(qs::Type::Card, 1, "Full", 64, t += 100));
+    CHECK(ui.notice() == nullptr);
+    CHECK(!ui.push_menu(Menu::Cards, t += 100));   // the stack is full: depth
+    CHECK(ui.notice() != nullptr);
+    CHECK(ui.menu() == Menu::Share);               // nothing moved
+    for (int i = 0; i < 200 && ui.notice(); i++) ui.tick(t += 20);
+    CHECK(ui.notice() == nullptr);                 // the notice timed out
+}
+
 static void settle(Ui &ui, std::uint32_t &t) {
     while (ui.painting()) ui.tick(t += 20);
 }
@@ -169,6 +218,8 @@ static void test_a_menu_reenters_on_its_default() {
 int main() {
     test_only_the_visible_pages_exist();
     test_the_deepest_chain_fits();
+    test_every_base_fits_every_reachable_chain();
+    test_a_refused_menu_is_not_silent();
     test_a_page_is_built_fresh_and_the_share_record_survives();
     test_remembered_state_survives_leaving_the_page();
     test_a_menu_reenters_on_its_default();

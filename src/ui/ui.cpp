@@ -222,6 +222,7 @@ void Ui::configure_rotation(bool automatic, uint8_t rotation) {
     rotation_lock_ = !automatic;
     rotation_steps_ = 0;
     rotation_notice_until_ = 0;
+    notice_ = nullptr;
     rotation_notice_drawn_ = false;
     requested_rotation_ = automatic ? gravity_.rotation() : static_cast<uint8_t>(rotation & 3);
     K2LOG("[ROT] settings=%s degrees=%u\n", automatic ? "auto" : "manual", unsigned(requested_rotation_) * 90);
@@ -238,6 +239,7 @@ void Ui::rotation_gesture(uint32_t now_ms) {
         rotation_lock_ = false;
         set_rotation(gravity_.rotation(), now_ms);
     }
+    notice_ = nullptr;
     rotation_notice_until_ = now_ms + 5000;
     rotation_notice_drawn_ = false;
     draw_rotation_notice(now_ms);
@@ -250,9 +252,10 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
         static_cast<int32_t>(now_ms - rotation_notice_until_) >= 0) return;
     ContentViewport viewport(layout_.content);
     StrBuf<24> notice;
-    if (rotation_lock_) notice.put("Manual ").put_u32(rotation() * 90).put(" deg");
+    if (notice_) notice.put(notice_);   // a refusal note (refuse_menu) shares the strip and its timer
+    else if (rotation_lock_) notice.put("Manual ").put_u32(rotation() * 90).put(" deg");
     else notice.put("Autorotate: Auto");
-    draw_footer(ctx_.content, FooterTone::Info, notice.view());
+    draw_footer(ctx_.content, notice_ ? FooterTone::Error : FooterTone::Info, notice.view());
     rotation_notice_drawn_ = true;
 }
 
@@ -644,17 +647,34 @@ void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
     pump_paint(now_ms);
 }
 
+// A menu that could not open (stack depth or arena full) is never silent: a log line and a footer notice on the page that stays.
+void Ui::refuse_menu(Menu m, const char *why, uint32_t now_ms) {
+    K2LOG("[UI] menu %u refused: %s (depth %u, arena %u/%u B)\n", unsigned(m), why, depth_, unsigned(pages_.used()),
+          unsigned(kPageArenaBytes));
+    notice_ = "Can't open that here";
+    rotation_notice_until_ = now_ms + 3000;
+    rotation_notice_drawn_ = false;
+    draw_rotation_notice(now_ms);
+}
+
 bool Ui::push_menu(Menu m, uint32_t now_ms) {
     // The PD Stress page opens over its own run (a run the remote started shows there, and its BACK stops it); it only reads the session.
     if (ports_busy() && !(m == Menu::PdStress && pdstress_active())) {
         K2LOG("[TEST] menu refused: test/release in progress\n");
         return false;
     }
-    if (m >= Menu::Count || depth_ >= 3) return false;
+    if (m >= Menu::Count) return false;
+    if (depth_ >= kMaxMenuDepth) {
+        refuse_menu(m, "depth", now_ms);
+        return false;
+    }
     const uint32_t t0 = now_us();
     PageIf *const outgoing = &current();   // stays alive under the new menu
     PageIf *const page = build_menu(m);
-    if (!page) return false;               // the arena is full (the static_asserts in ui.hpp keep this unreachable)
+    if (!page) {                           // the arena is full (the static_asserts in ui.hpp keep this unreachable)
+        refuse_menu(m, "arena", now_ms);
+        return false;
+    }
     stack_[depth_++] = m;
     page->enter();
     const bool blank = clear_for_incoming(now_ms, *outgoing, menu_opaque(m));
@@ -1487,6 +1507,7 @@ K2_HOT UiAction Ui::tick(uint32_t now_ms) {
             pump_paint(now_ms);
             if (!paint_pending_ && rotation_notice_until_ && static_cast<int32_t>(now_ms - rotation_notice_until_) >= 0) {
                 rotation_notice_until_ = 0;
+                notice_ = nullptr;
                 current().invalidate();
                 paint_pending_ = true;
                 pump_paint(now_ms);

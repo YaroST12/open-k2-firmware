@@ -1307,7 +1307,7 @@ void check_back_to_boot(const AttachState& boot) {
     CHECK_EQ(int(g_reg[0x03] & 0x04), 0);                    // Auto-CRC off again
     CHECK_EQ(usb_fmt_has("[PD] Auto-CRC off (passive)\n"), true);   // row B item 6 (red): fixed text in the format, not a %s
     CHECK_EQ(int(g_reg[0x02] & 0x03), int(boot.sw0 & 0x03)); // Rd as at boot
-    CHECK_EQ(int(g_reg[0x03] & ~0x03), int(boot.ctl3 & ~0x03));   // SPECREV / Auto-CRC / retries as at boot (the TX line select stays)
+    CHECK_EQ(int(g_reg[0x03] & ~0x03), int(boot.ctl3 & ~0x03u));   // SPECREV / Auto-CRC / retries as at boot (the TX line select stays)
     CHECK_EQ(usb_has("[REREAD] attach released"), true);
 }
 
@@ -1974,7 +1974,7 @@ void reread_attach_then_finished() {
 void attach_after_reread(std::uint8_t pos, std::uint32_t mv) {
     fusb302::sink_set_cap(20000);
     settle_ms(3000);
-    CHECK_EQ(int(fusb302::sink_request({pos, mv, 3000}, true)), int(pd::Err::Ok));
+    CHECK_EQ(int(fusb302::sink_request({pos, std::uint16_t(mv), 3000}, true)), int(pd::Err::Ok));
     CHECK_EQ(fusb302::sink_status().held, true);
     for (int i = 0; i < 10; i++) { g_ms += 1; fusb302::service(); }
     push_frame(0xE0, ctl_msg(3, 3), {});

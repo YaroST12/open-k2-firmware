@@ -644,7 +644,7 @@ void test_frames_all_pass_their_crc_and_fit_the_budget() {
     const auto fr = r.frames(&bad);
     CHECK_EQ(bad, 0);
     for (auto& f : fr) CHECK_EQ(3 + f.pl.size() + 2 <= dbg::kFrameMax, true);
-    bool kinds[11] = {};
+    bool kinds[Boot + 1] = {};   // indexed by frame kind: Boot (11) is the highest, so 12 slots, not 11
     for (auto& f : fr) kinds[f.kind] = true;
     for (int k = 1; k <= 10; k++)
         if (k != Lost && k != Gap) CHECK_EQ(kinds[k], true);              // every kind was produced (Lost/Gap only on loss)

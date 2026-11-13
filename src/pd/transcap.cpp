@@ -182,13 +182,12 @@ void poll_once() {
         return;
     }
     if (st == State::Frozen) {
-        if (g_keep && g_saved_seq == 0) {
-            const std::uint32_t waited = systick::millis() - g_frozen_ms;
-            if (pdtrace::since_activity_ms() >= kQuietMs || waited >= kPersistMaxWaitMs) {
-                const std::uint32_t seq = save_frozen(g_keep_run, g_keep_step);
-                g_keep = false;
-                if (seq != 0) hold_release();   // the flash holds it now; the overlay is free again
-            }
+        // Deferred while a scratch lease is held (this poll can run inside a paint or delay_ms under a lease).
+        if (persist_due(g_keep, g_saved_seq, systick::millis() - g_frozen_ms, pdtrace::since_activity_ms(), kQuietMs,
+                        kPersistMaxWaitMs, scratch::held())) {
+            const std::uint32_t seq = save_frozen(g_keep_run, g_keep_step);
+            g_keep = false;
+            if (seq != 0) hold_release();   // the flash holds it now; the overlay is free again
         }
         // The fast mode has no job once frozen.
         if (g_held && power::fast_active()) power::fast_end();

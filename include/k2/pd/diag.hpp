@@ -104,8 +104,12 @@ struct VdmKey {
 inline constexpr std::size_t kVdmKeys = 3;
 
 // The evidence of one attach session (what evaluate() reads). Times are ms on the analyser's unwrapped clock.
-// Fields are grouped by width (32, 16, then 8 bit) so the struct carries no padding: two of them live in RAM.
+// Fields are grouped by width (64, 32, 16, then 8 bit) so the struct carries no padding: two of them live in RAM.
 struct Session {
+    // ---- 64 bit ----
+    // The energy sums (mJ, mV x s): means over obs_ms / cobs_ms. 32 bits wrapped after 4.1 h (mJ at 288 W) and 25 h
+    // (mV x s at 48 V); these only ever grow by addition, never divided here (the means divide in evaluate()).
+    std::uint64_t mj = 0, mv_s = 0, cmj = 0;
     // ---- 32 bit ----
     std::uint32_t start_ms = 0, end_ms = 0, detach_ms = 0;
     std::uint32_t start_us = 0;            // trace time of the first record (device uptime on the host tool)
@@ -128,7 +132,6 @@ struct Session {
     // power (sample-and-hold, time-weighted)
     std::uint32_t obs_ms = 0, cobs_ms = 0, pin_ms = 0, over_ms = 0;
     std::uint32_t over_first_ms = 0;       // the first sample above over_limit_ma(c_ma)
-    std::uint32_t mj = 0, mv_s = 0, cmj = 0;   // energy (mJ) and mV x s: means over obs_ms / cobs_ms
     std::uint32_t low_ms = 0, high_ms = 0;
     std::uint32_t lost_ms = 0;
     std::uint32_t drop_ms = 0;

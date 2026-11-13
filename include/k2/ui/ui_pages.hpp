@@ -5,6 +5,7 @@
 // buttons do right now. Pages are plain static objects owned by Ui.
 #pragma once
 #include "k2/ui/ui_fc_release.hpp"
+#include "k2/core/build_config.h"
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -415,6 +416,14 @@ private:
     const char* fc_words_ = nullptr;    // the footer words of the handshake the last start() opened (null: that protocol has none)
     charger_test::Runner runner_;
     report_card::Identity card_id_{};
+    // The live inputs of the Results grid that are not part of the runner's stored result: the Xiaomi SVID seen on the wire, the
+    // Mi auth state and the monitor ceiling. Frozen when the run ends (freeze_facts), so the grid built on every later entry of
+    // Results is the one of the run, whatever the charger does afterwards (an unplugged source must not change its rows).
+    struct ResultFacts {
+        unsigned cap_mv = 0;
+        bool xiaomi_seen = false, mi_auth = false, frozen = false;
+    } facts_;
+    void freeze_facts();       // snapshot the live inputs; a run's start clears it (capture_identity)
     report_card::Card card_{};   // the run's card while save_card builds and stores it; a member, not a stack copy (the save path is stack-gated, tools/stack_depth.py)
     std::array<report_card::DeltaLine, 8> delta_{};
     size_t delta_n_ = 0;
@@ -546,8 +555,6 @@ public:
     static constexpr uint32_t kHeroMs = 250;     // the hero and the needle repaint at most this often in flight (~4 Hz)
     static constexpr uint32_t kFollowResumeMs = 5000;   // a manual scroll of the grid holds this long, or until the step changes
 private:
-    struct GridScratch;
-    struct GridScope;
     ChargerTestSession& s_;
     // Session operations a press or a painter asks for.
     charger_test::Input input(uint32_t now) const { return s_.input(now); }
@@ -585,14 +592,19 @@ private:
     [[gnu::noinline]] void paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color);
     void list_row(int, bool, kit::RowSpec&);   // row_fn's body (fills the page's shared text buffers, consumed at once)
     void grid_row(int, kit::ResultRowSpec&);
-    [[gnu::noinline]] void fill_grid_scratch(GridScratch& out, bool running_grid, bool note_cuts = false);
+    // Build the grid's layout and lines into layout_ / lines_. Results: once per entry of the stage, from the stored run and
+    // the frozen facts. Running: the light layout of the plan, only when the runner's revision or step changed (grid_key_).
+    [[gnu::noinline]] void build_grid(bool running_grid, bool note_cuts = false);
     [[gnu::noinline]] void draw_capture(const k2::transcap::Meta&);   // VBUS thumbnail of the step's stored transition capture
     int last_row() const;          // the last row the cursor may rest on
     int row_count() const;
     void build_results();      // chips layout of the stored run (k2/chargertest/result_layout.hpp), wrapped into display lines
     // The summary line of Results: the best passing mode per protocol family of the stored run ("PD 20V 3A  QC3 12V").
     void compose_best();
-    GridScratch* grid_sc_ = nullptr;       // bound only while a scratch::Lease holds GridScratch
+    // The verdict grid's layout and its display lines live in the page, never in scratch: painting streams to the LCD, whose idle
+    // hook runs other work, and a scratch lease must not span that (src/core/scratch.hpp). The page arena is sized for it.
+    result_layout::Layout layout_;
+    std::array<result_layout::Line, result_layout::kMaxLines> lines_{};
     StrBuf<32> best_;
     size_t line_n_ = 0;
     int results_row_ = 0;      // selected line to restore when BACK leaves the step list
@@ -1135,8 +1147,11 @@ public:
     void invalidate() override { static_step_ = 0; ctx_.rows.invalidate(); foot_.invalidate(); id_.invalidate(); }
     ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
-    static constexpr int kRows = 8;
-    static constexpr int kSystemRow = 6, kBootRow = 7;
+    // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
+    // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
+    static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
+    static constexpr int kRows = 7 + kScreenshotRows;
+    static constexpr int kSystemRow = 5 + kScreenshotRows, kBootRow = 6 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache

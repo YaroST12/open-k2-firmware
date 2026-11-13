@@ -533,6 +533,26 @@ void test_window_acc() {
 
 const std::vector<std::uint32_t> kRgCaps{fixed(5000, 3000), fixed(9000, 3000), fixed(20000, 3500)};
 
+// The energy sums (mJ, mV x s) of a long session must not wrap: 24 h at 48 V 6 A is 2.5e10 mJ and 4.1e9 mV x s, past a
+// u32 after 4.1 h and 25 h at that load. The means (what the verdict shows) stay the steady 288 W and 48 V.
+void test_energy_sums_survive_24h_at_48v_6a() {
+    Trace t;
+    t.cc(true);
+    t.contract({fixed(5000, 3000), fixed(48000, 6000)}, rdo(2, 6000, 6000));
+    for (unsigned minute = 0; minute < 24 * 60; minute++) { t.vbus(48000, 6000); t.wait(60'000); }
+    t.vbus(48000, 6000);
+    Run run;
+    run.go(t);
+    const Session& s = run.a.shown();
+    CHECK_COND(s.mj > 0xFFFFFFFFull);                    // the sum really is past 32 bits
+    CHECK_COND(s.cmj > 0xFFFFFFFFull);
+    CHECK_COND(s.mv_s > 4'000'000'000ull);
+    CHECK_EQ(run.r.vbus_mv, 48000u);                     // the mean voltage over the day
+    const Finding* d = run.find(Code::Draw);
+    CHECK_COND(d != nullptr);
+    if (d) CHECK_EQ(d->c, 288000);                       // the mean power while in contract, mW
+}
+
 // The device's input drops to 0 inside windows while VBUS holds: the device lets go, the source does not. The ring
 // records (rate limited) only ever saw the mean.
 void test_windows_input_cuts() {
@@ -1317,9 +1337,10 @@ void test_lines_fit_and_codes_named() {
 
 void test_ram_budget() {
     std::printf("sizeof Analyzer=%zu Session=%zu Report=%zu\n", sizeof(Analyzer), sizeof(Session), sizeof(Report));
-    // two Sessions (the running one and the last finished one) are most of it; the window input added 8 B + state
-    CHECK_COND(sizeof(Session) <= 324);
-    CHECK_COND(sizeof(Analyzer) <= 800);
+    // two Sessions (the running one and the last finished one) are most of it; the window input added 8 B + state; the
+    // 64-bit energy sums added 12 B per Session (the host build has the same layout as the K2 for these fields)
+    CHECK_COND(sizeof(Session) <= 336);
+    CHECK_COND(sizeof(Analyzer) <= 824);
 }
 
 // ---- the K2 screen's compact form (k2/pd/diag_screen.hpp) ----
@@ -1557,6 +1578,7 @@ void test_wire_encode() {
 
 int main() {
     test_case1_fixture();
+    test_energy_sums_survive_24h_at_48v_6a();
     test_case1_no_twin();
     test_fixture_splitter();
     test_fixture_laptop_hub_idle();

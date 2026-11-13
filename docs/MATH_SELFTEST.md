@@ -88,4 +88,4 @@ The `zw` values above are what the placement is expected to give, not measuremen
 
 1. Flash the baseline build and run `selftest`: record `math_errno`, per-kernel `cyc`, `zw`, `total_cyc`.
 2. Flash the build under test and run `selftest`: confirm `PASS n/n checks` (the goldens must match without edits), then compare per-kernel `cyc` and `total_cyc`. A check that appears only on one side is new coverage, not a regression.
-3. Only `src/core/math_selftest.cpp` itself compiles with the global flags (`-Os`); speed-tiered translation units (`adc_calc.o`, `power_calc.o`, `fastcharge_classify.o` at `-O3`; `battery.o`, `dpsniff.o` at `-O2`; `power_monitor.o` at `-Ofast`) run inside the corresponding calls.
+3. Only `src/core/math_selftest.cpp` itself compiles with the global flags (`-Os`); speed-tiered translation units (`adc_calc.o`, `power_calc.o`, `fastcharge_classify.o` at `-O3`; `battery.o`, `dpsniff.o` at `-O2`; `power_monitor.o` stays at `-Os`: its -Ofast was removed because the One Euro filter is one shared out-of-line copy built at `-Os`) run inside the corresponding calls.

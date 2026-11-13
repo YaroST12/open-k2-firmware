@@ -726,7 +726,7 @@ static std::string kelvin_text(int i, bool online, int v, int a, const std::opti
 // Glyph count of a UTF-8 string (the Omega is two bytes, one 16 px cell).
 static size_t glyphs(const std::string &s) {
     size_t n = 0;
-    for (unsigned char c : s) n += (c & 0xC0) != 0x80;
+    for (const char ch : s) n += (static_cast<unsigned char>(ch) & 0xC0) != 0x80;
     return n;
 }
 

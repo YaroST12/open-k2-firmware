@@ -121,6 +121,17 @@ bool g_in_spend;
 bool g_in_life;                 // this process is a firmware life (the run's process never runs firmware code in the reboot world)
 double g_adc_init_us = -1;      // this life's first adc::init()
 std::span<std::uint8_t> g_noinit;
+// The .noinit section as bytes. Under AddressSanitizer the section is larger than the objects in it (a redzone follows each
+// global), so these walk it unchecked with volatile accesses (no memcpy: its interceptor checks the range too). The bytes of
+// a redzone are never read back as data by the firmware. (clang ignores the [[gnu::no_sanitize("address")]] spelling.)
+__attribute__((no_sanitize("address"))) void noinit_save(std::uint8_t* dst, std::size_t n) {
+    const volatile std::uint8_t* s = g_noinit.data();
+    for (std::size_t i = 0; i < n; i++) dst[i] = s[i];
+}
+__attribute__((no_sanitize("address"))) void noinit_put(const std::uint8_t* src, std::size_t n) {
+    volatile std::uint8_t* d = g_noinit.data();
+    for (std::size_t i = 0; i < n; i++) d[i] = src[i];
+}
 struct Queued { int frame; std::size_t left; };   // a replay frame in the RX FIFO: bytes not yet popped
 std::deque<Queued> g_rxq;
 std::map<std::pair<unsigned, unsigned>, bool> g_pins;
@@ -435,7 +446,7 @@ void apply_event(const RebootEvent& e) {
 }
 
 [[noreturn]] void die() {
-    if (S->noinit_n) std::memcpy(S->noinit, g_noinit.data(), S->noinit_n);
+    if (S->noinit_n) noinit_save(S->noinit, S->noinit_n);
     S->died = true;
     S->dark_from = S->pt;
     wlog("[WORLD] brown-out: rail %.0f mV, life %d ends", S->rail, S->life);
@@ -885,13 +896,15 @@ void life_begin() {
         S->pin_mark = 0;
     }
     if (S->died && S->noinit_n) {
-        if (sram_kept) std::memcpy(g_noinit.data(), S->noinit, S->noinit_n);
+        if (sram_kept) noinit_put(S->noinit, S->noinit_n);
         else {
+            std::uint8_t junk[kNoinitMax];
             std::uint32_t x = 0x9E3779B9u;
             for (std::uint32_t i = 0; i < S->noinit_n; i++) {
                 x ^= x << 13; x ^= x >> 17; x ^= x << 5;   // xorshift32: unlike the probe's pattern, so the count is not a coincidence
-                g_noinit[i] = std::uint8_t(x);
+                junk[i] = std::uint8_t(x);
             }
+            noinit_put(junk, S->noinit_n);
         }
     }
     wlog("[WORLD] life %d: power-on reset at rail %.0f mV, VBUS %.0f mV, dark %.0f ms, backup registers %s, .noinit %s", S->life, S->rail,

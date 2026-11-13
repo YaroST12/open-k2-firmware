@@ -1181,6 +1181,27 @@ static void finished_results(Ui& ui, uint32_t& t) {
     ui.tick(t); t += 200; ui.tick(t); t += 200;
     settle(ui, t);
 }
+// The Results grid is the run's: what the live link says after the run ended (the Xiaomi SVID gone, the Mi auth lost, a source
+// unplugged) must not change its lines, its cursor bounds or the Steps a press opens.
+static void test_results_grid_is_frozen_at_run_end() {
+    six_pdo_fixture(); Ui plain; uint32_t t;
+    finished_results(plain, t);
+    const int plain_lines = plain.list_state().count;
+    six_pdo_fixture(); g_stub.vdm.xiaomi = true; g_stub.sink.xiaomi_authed = true;
+    Ui ui;
+    finished_results(ui, t);
+    const int xiaomi_lines = ui.list_state().count;
+    CHECK_EQ(xiaomi_lines != plain_lines, true);   // the facts do change the grid, or the checks below prove nothing
+    g_stub.vdm.xiaomi = false; g_stub.sink.xiaomi_authed = false;   // the charger goes away
+    ui.tick(t + 100); t += 200;
+    CHECK_EQ(ui.list_state().count, xiaomi_lines);
+    press(ui, Button::Ok, t); t += 200; ui.tick(t);     // opens the unit's Steps (a rebuild of the grid on the way back)
+    CHECK_EQ(ui.charger_test_stage(), 7);
+    press(ui, Button::Back, t); t += 200; ui.tick(t);
+    CHECK_EQ(ui.charger_test_stage(), 6);
+    settle(ui, t);
+    CHECK_EQ(ui.list_state().count, xiaomi_lines);
+}
 // The Results grid (kit ResultGrid from y 72): the focused unit lights the 60 px label strip (3 px rail + tint) and its first
 // verdict cell is a flat pass fill; a footer explains the focused unit (it follows the selection).
 static void test_results_grid_rows_rail_and_footer() {
@@ -4264,6 +4285,7 @@ int main() {
     test_step_label_gallery();
     test_ufcs_results_and_detail_show_the_mode_current();
     test_results_best_line_names_the_best_modes();
+    test_results_grid_is_frozen_at_run_end();
     test_review_start_is_only_row();
     test_vsafe5_review();
     test_preflight_refusal_is_logged();
