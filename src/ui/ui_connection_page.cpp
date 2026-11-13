@@ -344,7 +344,10 @@ void ConnectionPage::activate(const conn::Item &it, uint32_t now_ms) {
     if (!it.enabled) return;   // the status bar names the reason while the greyed item is selected
     switch (it.act) {
     case conn::Act::Refresh:
-        if (ctx_.ui->run_action(Action::PdRescan, now_ms)) set_op("Rescanning...", now_ms, 1500);
+        // Inline the K2 only listens (a re-read asks nothing of the charger or the device): say so, instead of a rescan that
+        // shows nothing. "Ask device" is what asks.
+        if (ctx_.ui->run_action(Action::PdRescan, now_ms))
+            set_op(ctx_.ui->link().inline_mode() || ctx_.inline_mode ? "Inline: listens only" : "Rescanning...", now_ms, 2500);
         else set_op("Busy, retry", now_ms, 1500);   // a negotiation in flight: the refresh waits for it
         break;
     case conn::Act::Details:

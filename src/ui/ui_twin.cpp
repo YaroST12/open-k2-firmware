@@ -43,10 +43,12 @@ constexpr const char *kFooters[] = {
     // Learning a device inline: the K2 resets the link and asks the device itself (docs/DEVICE_TWIN.md section 9).
     "Resets the link. Confirm", "Resetting the link", "Asking the device", "Stopped. Link reset", "Learned. Contract changed",
     "K2 runs on this VBUS", "K2 holds the contract", "No power: add a charger",
+    // The source Hard Resets on the first question: asking through this charger is not possible (docs/DEVICE_TWIN.md 9.1).
+    "Charger resets when asked",
 };
 constexpr int kFootWakeArm = 24, kFootWaking = 25, kFootSilent = 26, kFootNoOffer = 27, kFootWakeStop = 28;
 constexpr int kFootIqArm = 29, kFootIqReset = 30, kFootIqAsk = 31, kFootIqStop = 32, kFootIqDiffers = 33, kFootIqSelf = 34,
-              kFootIqOwn = 35, kFootNoPower = 36;
+              kFootIqOwn = 35, kFootNoPower = 36, kFootIqResets = 37;
 constexpr const char *kNotes[] = {
     "no charger to predict from", "reads a device alone on the K2", "live proof running", "removes it from the K2",
     "no contract, charger", "stopped", "charger sent no caps", "unsafe VBUS, stopped", "gets 100 of 240W, charger",
@@ -94,6 +96,7 @@ template <size_t N>
 void put_w(StrBuf<N> &b, uint32_t mw) {
     b.put_u32((mw + 500) / 1000).put_char('W');
 }
+constexpr uint32_t kNoDraw = 0xFFFFFFFFu;   // no power monitor: the live draw is unknown
 const char *limiter_word(twin::Limiter l) {
     switch (l) {
     case twin::Limiter::Charger: return "charger";
@@ -163,6 +166,7 @@ void TwinPage::draw_static() {
     if (detail_) {
         gfx_fill(ctx_.content, 0, kit::kBelowBar, ctx_.content.w, static_cast<int16_t>(kFooterY - kit::kBelowBar), kBg);
         det_sig_ = 0;
+        draw_next_ = 0;   // sample the live draw at once
         cell_.invalidate();
         vbus_shown_.clear();
     } else {
@@ -298,7 +302,7 @@ void TwinPage::entry_note(const Entry &e, bool running_this, StrBuf<40> &out) co
     } else if (o.kind == twin::Kind::FiveV) {
         out.put("5V only, ").put(limiter_word(o.limiter));
     } else {
-        out.put("gets ");
+        out.put(o.observed ? "asked " : "gets ");   // observed: from the device's own Request, what it asked for
         const uint32_t got = (o.mw + 500) / 1000, want = (o.want_mw + 500) / 1000;
         if (want > got) out.put_u32(got).put(" of ").put_u32(want).put("W, ").put(limiter_word(o.limiter));
         else out.put_u32(got).put(o.limiter == twin::Limiter::Device ? "W, device max" : "W, full");
@@ -554,12 +558,14 @@ void TwinPage::learn_inline() {
 void TwinPage::learn_inline_end() {
     iq_wait_ = false;
     const twin_hw::InlineLearn &l = twin_hw::inline_learn();
+    // A source that Hard Resets on the first question is the cause to name, not a device that stayed silent.
+    const bool resets = twin_hw::inline_status().why == pd::IqWhy::SourceResets;
     if (!l.done) {
-        say(kFooters[15], kCaution);
+        say(kFooters[resets ? kFootIqResets : 15], kCaution);
         return;
     }
     if (l.result.how == twin_hw::Learn::NoContract) {   // nothing answered, nothing sniffed
-        say(kFooters[15], kCaution);
+        say(kFooters[resets ? kFootIqResets : 15], kCaution);
         return;
     }
     learned(l.result, twin_hw::inline_status().match == pd::IqMatch::Differs);
@@ -760,9 +766,14 @@ void TwinPage::paint_line(int i, int16_t y) {
         // Both numbers wear the prediction's grade (gets against wants: full, 60 % and over, below); with no prediction yet
         // gets is a faint "--" and wants stays neutral. No contract and 5 V only grade red.
         uint16_t ink = kFaint, want_ink = kText;
-        if (e && e->have) ink = want_ink = grade_ink(e->out, twin::want_mw(det_));
+        if (e && e->have) {
+            ink = grade_ink(e->out, det_.num_pdos ? twin::want_mw(det_) : e->out.want_mw);   // a Request-only twin: against what it asked
+            want_ink = det_.num_pdos ? ink : kText;
+        }
         paint_split(s, y, kGetsH);
-        const char *word = proved ? "proved" : "gets";
+        // A prediction built from the device's own Request is what it asked for (its contract's power), not what it draws.
+        const bool asked = e && e->have && e->out.observed;
+        const char *word = proved ? "proved" : asked ? "asked" : "gets";
         const int16_t vy = static_cast<int16_t>(y + 1);
         const int16_t wy = static_cast<int16_t>(vy + kMid.height - kLabelFont.height - 2);
         gfx_text(s, kLabelFont, kLeft, wy, word, kDim, kBg);
@@ -772,10 +783,16 @@ void TwinPage::paint_line(int i, int16_t y) {
         else v.put("--");
         gfx_text(s, kMid, gx, vy, v.view(), ink, kBg);
         v.clear();
-        put_w(v, twin::want_mw(det_));
+        // No sink PDOs learned: what the device wants is unknown, never "0W". Its live draw stands there instead.
+        const bool unknown = det_.num_pdos == 0;
+        if (!unknown) put_w(v, twin::want_mw(det_));
+        else if (draw_mw_ == kNoDraw) v.put("--");
+        else if (draw_mw_ < 10000) v.put_fixed(static_cast<int32_t>(draw_mw_), 1).put_char('W');
+        else put_w(v, draw_mw_);
+        const char *rword = unknown ? "draws" : "wants";
         const int16_t vx = static_cast<int16_t>(kRight - text_width(kMid, v.view()));
         gfx_text(s, kMid, vx, vy, v.view(), want_ink, kBg);
-        gfx_text(s, kLabelFont, static_cast<int16_t>(vx - 4 - text_width(kLabelFont, "wants")), wy, "wants", kDim, kBg);
+        gfx_text(s, kLabelFont, static_cast<int16_t>(vx - 4 - text_width(kLabelFont, rword)), wy, rword, kDim, kBg);
         return;
     }
     case 2: {   // the bar: track = what it wants, fill = what it gets
@@ -837,6 +854,17 @@ void TwinPage::paint_detail(uint32_t now_ms) {
         sig = mix_u32(sig, (static_cast<uint32_t>(hide_proof_) << 1) | static_cast<uint32_t>(wake_ok_));
         sig = mix_u32(sig, gen_ ^ (stamp_ << 1));
         if (e) sig = mix_u32(sig, static_cast<uint32_t>(twin_hw::live().slot(e->seq).verdict) + 1);
+        // A twin with no sink PDOs shows the live draw instead of "wants": sampled once a second, in 0.1 W steps, so the body
+        // repaints only when the figure moves.
+        if (e && det_.num_pdos == 0) {
+            if (draw_next_ == 0 || static_cast<int32_t>(now_ms - draw_next_) >= 0) {
+                draw_next_ = now_ms + 1000;
+                if (draw_next_ == 0) draw_next_ = 1;
+                const int32_t p = ctx_.pm.power_mw < 0 ? -ctx_.pm.power_mw : ctx_.pm.power_mw;
+                draw_mw_ = ctx_.pm_online ? static_cast<uint32_t>((p + 50) / 100) * 100u : kNoDraw;
+            }
+            sig = mix_u32(sig, draw_mw_ + 7u);
+        }
     }
     if (sig == 0) sig = 1;
     const Surface &s = ctx_.content;

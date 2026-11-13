@@ -147,6 +147,26 @@ void test_rows_and_footer() {
     CHECK_EQ(ui.twin_page().cursor(), 2);
 }
 
+// A twin made from a sniffed Request alone (no sink PDOs): the note says what it asked for, never "gets" (the figure is the
+// contract's power, not what the device draws). The detail opens and paints with "wants" unknown.
+void test_request_only_twin_says_asked() {
+    reset();
+    twin::Twin t;
+    const char name[] = "Canon";
+    for (std::size_t i = 0; name[i] != 0; i++) t.name[i] = name[i];
+    t.rdo = 4u << 28 | (3000u / 10) << 10 | 3000u / 10;   // PDO 4, 3 A
+    t.rdo_pdo = 0x0004B12Cu;                              // 15 V 3 A
+    g_stub.twins.emplace_back(uint8_t(1), t);
+    g_stub.twin_gen++;
+    Ui &ui = open_page();
+    charger_c1();   // the previous case's detach clears the list on the first tick: the charger offers again
+    step(ui, 100);
+    CHECK_STR(note_of(ui, 0).c_str(), "asked 45W, device max");
+    open_twin(ui, 0);
+    step(ui, 1200);   // the body paints; the live draw is sampled once a second
+    CHECK_EQ(int(ui.twin_page().in_detail()), 1);
+}
+
 void test_no_charger_and_empty() {
     reset();
     add_three();
@@ -544,6 +564,17 @@ void test_learn_inline_results() {
     g_stub.twin_iq_status.phase = pd::IqPhase::Aborted;
     step(ui, 100);
     CHECK_STR(footer_of(ui).c_str(), "Device did not answer");
+    // A charger that Hard Resets on the first question: the cause is named, not "did not answer".
+    step(ui, 3000);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Sniff1;
+    g_stub.twin_iq_status.why = pd::IqWhy::None;
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.twin_iq_starts, 3);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Aborted;
+    g_stub.twin_iq_status.why = pd::IqWhy::SourceResets;
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Charger resets when asked");
     unplug_inline(ui);
 }
 
@@ -760,6 +791,7 @@ void test_wake_leaving_releases() {
 
 int main() {
     test_rows_and_footer();
+    test_request_only_twin_says_asked();
     test_no_charger_and_empty();
     test_repredict_on_new_charger();
     test_detail_opens_and_closes();
