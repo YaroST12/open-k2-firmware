@@ -72,7 +72,7 @@ static std::vector<Vector> vectors() {
 // Glyph cells of a UTF-8 string (the panel fonts are monospace: one cell per code point).
 static unsigned cells(const std::string& s) {
     unsigned n = 0;
-    for (const unsigned char c : s) n += (c & 0xC0) != 0x80;
+    for (const char ch : s) n += (static_cast<unsigned char>(ch) & 0xC0) != 0x80;
     return n;
 }
 
