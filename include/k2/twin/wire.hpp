@@ -222,24 +222,41 @@ inline std::size_t encode_slot(std::uint8_t seq, const live::Slot& s, std::span<
 // ---- INLINE: the interrogation of a device inline (twin_hw::inline_*, k2/pd/pd_interrogate.hpp) ------------------------------
 // [11, sub, ...]:
 //   STATUS  [11, 0]                       -> kIqStatusBytes, below
-//   START   [11, 1, flags, name...]       flags bit0 dry (learn, do not save), bit1 confirm -> [err, 1, refusal]
+//   START   [11, 1, flags, name...]       flags bit0 dry (learn, do not save), bit1 confirm, bit2 spoof -> [err, 1, refusal]
 //                                         err 0 = started, kErrIqRefused = refused: refusal = pd::IqRefusal
+//           with the spoof bit: [11, 1, flags, kind, id u16, name...]: the cable identity the K2 shows the charger during the run,
+//           kind 0 = a built-in record (id = its index), 1 = a saved one (id = its library seq); a record that is not there or not
+//           valid refuses with BadSpoof (the dispatcher checks the lengths, remote.cpp resolves the record)
 //   ABORT   [11, 2]                       -> [0, 2, was_running]
 //   ANSWERS [11, 3, part]                 -> [0, 3, part, ...] what the device answered:
 //                                         part 0 sink PDOs [n, u32 * 7], 1 Sink_Capabilities_Extended [n, bytes * 24],
-//                                         2 Discover Identity [valid, n, u32 * 6], 3 [n_svids, u16 * 12, n_modes, (u16 svid, u32 vdo) * 2]
+//                                         2 Discover Identity [valid, n, u32 * 6], 3 [n_svids, u16 * 12, n_modes, (u16 svid, u32 vdo) * 2],
+//                                         4 EPR sink PDOs [n, partial, u32 * 13] (n = 0: none; partial: only the first of the two
+//                                         26-byte chunks was read, so the PDOs past it are missing)
 // STATUS: [err 0, sub 0, running, pending, done, phase, step, why, match, rev, asked, ok, refused, silent, sent, dev_acks,
 //          resets_sent, resets_seen, skipped_first_reset, vid u16, pid u16, n_svids, n_modes, n_sink_pdos, sink_ext_len,
 //          revision u32, first ready, first pos, first rdo u32, second ready, second pos, second rdo u32,
-//          learn how, store err, store seq, existed, unchanged, ms u16]
+//          learn how, store err, store seq, existed, unchanged, ms u16, late mask, flags (bit0 spoof, bit1 EPR partial),
+//          SOP' queries, spoof replies, n_epr_pdos]
 //   pending: started, not learned from yet; done: the last run was learned from (learn how / store say what it stored);
-//   masks are pd::iq_bit per IqStep; ms: the run's length once it ended (ended_at - started_at, capped), else 0.
+//   masks are pd::iq_bit per IqStep (late: answered after the step had been given up as silent, also set in ok);
+//   ms: the run's length once it ended (ended_at - started_at, capped), else 0.
 inline constexpr std::uint8_t kInlineStatus = 0, kInlineStart = 1, kInlineAbort = 2, kInlineAnswers = 3;
-inline constexpr std::uint8_t kInlineDry = 1, kInlineConfirm = 2;
-inline constexpr std::uint8_t kInlineParts = 4;
+inline constexpr std::uint8_t kInlineDry = 1, kInlineConfirm = 2, kInlineSpoof = 4;
+inline constexpr std::uint8_t kInlineSpoofBuiltin = 0, kInlineSpoofSaved = 1;
+inline constexpr std::uint8_t kInlineParts = 5;
 inline constexpr std::uint8_t kErrIqRefused = 10;
-inline constexpr std::size_t kIqStatusBytes = 50;
+inline constexpr std::size_t kIqStatusBytes = 55;
+inline constexpr std::size_t kInlineSpoofHead = 6;   // [11, 1, flags, kind, id u16]
 static_assert(kIqStatusBytes <= kMaxRsp && 4 + 1 + 2 * pd::kMaxSvids + 1 + 6 * pd::kIdModeSvids <= kMaxRsp);
+static_assert(3 + 2 + 4 * pd::kIqEprMaxPdos <= kMaxRsp);
+
+// The cable identity of a spoofed run, as the START op carries it (pure: remote.cpp resolves it to a record).
+struct InlineSpoof {
+    bool on = false;
+    std::uint8_t kind = kInlineSpoofBuiltin;
+    std::uint16_t id = 0;
+};
 
 inline std::size_t encode_iq_status(bool running, const twin_hw::InlineLearn& l, const pd::IqStatus& s, std::span<std::uint8_t> out) {
     if (out.size() < kIqStatusBytes) return 0;
@@ -283,6 +300,11 @@ inline std::size_t encode_iq_status(bool running, const twin_hw::InlineLearn& l,
     b[47] = l.result.store.unchanged ? 1 : 0;
     const std::uint32_t ms = pd::iq_finished(s.phase) && s.ended_at >= s.started_at ? s.ended_at - s.started_at : 0;
     detail::le16(&b[48], std::uint16_t(std::min<std::uint32_t>(ms, 0xFFFFu)));
+    b[50] = s.late_mask;
+    b[51] = std::uint8_t((s.spoof ? 1 : 0) | (s.epr_partial ? 2 : 0));
+    b[52] = s.sopp_queries;
+    b[53] = s.sopp_replies;
+    b[54] = s.num_epr_pdos;
     return kIqStatusBytes;
 }
 
@@ -326,6 +348,13 @@ inline std::size_t encode_iq_answers(const pd::IqStatus& s, std::uint8_t part, s
             }
             return n;
         }
+        case 4: {
+            const std::size_t k = std::min<std::size_t>(s.num_epr_pdos, s.epr_pdos.size());
+            b[n++] = std::uint8_t(k);
+            b[n++] = s.epr_partial ? 1 : 0;
+            for (std::size_t i = 0; i < k; ++i, n += 4) detail::le32(&b[n], s.epr_pdos[i]);
+            return n;
+        }
         default:
             b[0] = std::uint8_t(Err::Invalid);
             return 1;
@@ -348,7 +377,7 @@ inline constexpr std::uint8_t kOpList = 0, kOpGet = 1, kOpPredict = 2, kOpLearn 
 //   Err rename(std::uint8_t, std::string_view)    Err remove(std::uint8_t)
 //   live::Refusal run(std::span<const std::uint8_t> seqs, bool confirmed)
 //   const live::Runner& runner() const    bool running() const    void cancel()
-//   pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed)    void inline_cancel()
+//   pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const InlineSpoof&)    void inline_cancel()
 //   bool inline_running() const    const twin_hw::InlineLearn& inline_learn() const    const pd::IqStatus& inline_status() const
 template <class Api>
 std::size_t handle(Api& api, std::span<const std::uint8_t> p, std::span<std::uint8_t> out) {
@@ -434,8 +463,12 @@ std::size_t handle(Api& api, std::span<const std::uint8_t> p, std::span<std::uin
                 case kInlineStatus:
                     return encode_iq_status(api.inline_running(), api.inline_learn(), api.inline_status(), out);
                 case kInlineStart: {
-                    if (!need(3) || (p[2] & ~(kInlineDry | kInlineConfirm)) != 0) return err1(std::uint8_t(Err::Invalid));
-                    const pd::IqRefusal r = api.inline_start(text(3), (p[2] & kInlineDry) == 0, (p[2] & kInlineConfirm) != 0);
+                    if (!need(3) || (p[2] & ~(kInlineDry | kInlineConfirm | kInlineSpoof)) != 0) return err1(std::uint8_t(Err::Invalid));
+                    const bool spoof = (p[2] & kInlineSpoof) != 0;
+                    if (spoof && (!need(kInlineSpoofHead) || p[3] > kInlineSpoofSaved)) return err1(std::uint8_t(Err::Invalid));
+                    const InlineSpoof sp = spoof ? InlineSpoof{true, p[3], std::uint16_t(p[4] | (p[5] << 8))} : InlineSpoof{};
+                    const pd::IqRefusal r =
+                        api.inline_start(text(spoof ? kInlineSpoofHead : 3), (p[2] & kInlineDry) == 0, (p[2] & kInlineConfirm) != 0, sp);
                     out[0] = r == pd::IqRefusal::None ? 0 : kErrIqRefused;
                     out[1] = kInlineStart;
                     out[2] = std::uint8_t(r);

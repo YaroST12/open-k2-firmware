@@ -574,10 +574,15 @@ static void test_twin_dispatch() {
     seq = 70;
     const struct { std::vector<uint8_t> p; Status st; } iq[] = {
         {{11}, Status::BadLength},             {{11, 0}, Status::Ok},          {{11, 0, 0}, Status::BadLength},
-        {{11, 2}, Status::Ok},                 {{11, 3, 3}, Status::Ok},       {{11, 3, 4}, Status::BadArg},
+        {{11, 2}, Status::Ok},                 {{11, 3, 3}, Status::Ok},       {{11, 3, 4}, Status::Ok},
         {{11, 3}, Status::BadLength},          {{11, 4}, Status::BadArg},      {{11, 1, 0}, Status::NeedConfirm},
-        {{11, 1, 1}, Status::NeedConfirm},     {{11, 1, 4}, Status::BadArg},   {{11, 1}, Status::BadLength},
+        {{11, 1, 1}, Status::NeedConfirm},     {{11, 1, 8}, Status::BadArg},   {{11, 1}, Status::BadLength},
         {{11, 1, 2}, Status::Ok},              {{11, 1, 3, 'C', 'a'}, Status::Ok},
+        // the spoof bit (4): [11, 1, flags, kind, id u16, name...], kind 0 built-in / 1 saved, confirm still needed
+        {{11, 3, 5}, Status::BadArg},          {{11, 1, 6, 0, 3, 0}, Status::Ok},
+        {{11, 1, 7, 1, 5, 0, 'a'}, Status::Ok}, {{11, 1, 4, 0, 3, 0}, Status::NeedConfirm},
+        {{11, 1, 6, 2, 3, 0}, Status::BadArg}, {{11, 1, 6, 0, 3}, Status::BadLength},
+        {{11, 1, 6}, Status::BadLength},
     };
     int reached = 0;
     for (const auto& c : iq) {
@@ -590,6 +595,15 @@ static void test_twin_dispatch() {
     std::vector<uint8_t> iq_long(3 + kTwNameMax + 1, 'a');
     iq_long[0] = 11; iq_long[1] = 1; iq_long[2] = 2;
     CHECK_EQ(run(f, request(seq, iq_long), r), 1);
+    check_header(r, 0x63, seq, Status::BadLength, 0);
+    seq++;
+    std::vector<uint8_t> sp_name(kTwIqSpoofHead + kTwNameMax, 'a');   // with the spoof bit the name starts at byte 6
+    sp_name[0] = 11; sp_name[1] = 1; sp_name[2] = 6; sp_name[3] = 0; sp_name[4] = 3; sp_name[5] = 0;
+    CHECK_EQ(run(f, request(seq, sp_name), r), 1);
+    check_header(r, 0x63, seq, Status::Ok, 2);
+    seq++;
+    sp_name.push_back('a');
+    CHECK_EQ(run(f, request(seq, sp_name), r), 1);
     check_header(r, 0x63, seq, Status::BadLength, 0);
     seq++;
     f.ports_busy_value = true;                           // start is refused while the ports are owned; the reads stay open

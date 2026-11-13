@@ -1353,8 +1353,21 @@ struct TwinApi {
     const twin::live::Runner& runner() const { return twin_hw::live(); }
     bool running() const { return twin_hw::live_running() || twin_hw::inline_running(); }
     void cancel() { ui.cancel_twin(); }
-    pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed) {
-        return twin_hw::inline_start(name, save, confirmed, ui.twin_ctx(systick::millis()));
+    pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const twin::wire::InlineSpoof& spoof) {
+        if (!spoof.on) return twin_hw::inline_start(name, save, confirmed, ui.twin_ctx(systick::millis()));
+        // The cable identity the K2 shows the charger during the run: a built-in or a saved record (`emarker spoof` takes both).
+        emlib::Entry ent;
+        emk_quirk::Quirks quirks;
+        emrec::Record rec;
+        if (spoof.kind == twin::wire::kInlineSpoofSaved) {
+            if (!storage::lib_get(spoof.id, ent, quirks)) return pd::IqRefusal::BadSpoof;
+            rec = ent.rec;
+        } else {
+            if (spoof.id >= emrec::kBuiltinCount) return pd::IqRefusal::BadSpoof;
+            rec = emrec::builtin_cable(spoof.id);
+            quirks = emk_quirk::builtin_quirks(spoof.id);
+        }
+        return twin_hw::inline_start_spoof(name, save, confirmed, ui.twin_ctx(systick::millis()), rec, quirks);
     }
     void inline_cancel() { twin_hw::inline_cancel(); }
     bool inline_running() const { return twin_hw::inline_running(); }
@@ -1370,6 +1383,7 @@ static_assert(remote::kTwList == twin::wire::kOpList && remote::kTwGet == twin::
 static_assert(remote::kTwIqStatus == twin::wire::kInlineStatus && remote::kTwIqStart == twin::wire::kInlineStart &&
               remote::kTwIqAbort == twin::wire::kInlineAbort && remote::kTwIqAnswers == twin::wire::kInlineAnswers &&
               remote::kTwIqDry == twin::wire::kInlineDry && remote::kTwIqConfirm == twin::wire::kInlineConfirm &&
+              remote::kTwIqSpoof == twin::wire::kInlineSpoof && remote::kTwIqSpoofHead == twin::wire::kInlineSpoofHead &&
               remote::kTwIqParts == twin::wire::kInlineParts);
 static_assert(remote::kTwErrBusy == twin::wire::kErrBusy && remote::kTwNameMax == twin::kNameMax &&
               remote::kTwMax == twin::kCapacity && remote::kTwParts == twin::wire::kMaxParts &&

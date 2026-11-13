@@ -10,6 +10,7 @@
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/storage.hpp"
 #include "k2/drivers/fusb302.hpp"
+#include "k2/pd/emk_spoof.hpp"
 #include "k2/pd/pd_source.hpp"
 #include "k2/pd/power_source.hpp"
 #include "k2/twin/usbdata.hpp"
@@ -234,25 +235,47 @@ namespace {
 InlineLearn g_inline;
 std::array<char, twin::kNameMax + 1> g_inline_name{};
 std::size_t g_inline_name_n = 0;
-}  // namespace
+bool g_inline_spoof = false;   // the run's own spoof is armed (disarmed by inline_poll once the run is over)
 
-pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx) {
+pd::IqRefusal inline_start_with(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx, const emrec::Record* rec,
+                                const emk_quirk::Quirks* quirks) {
     pd::IqFacts f;
     f.confirmed = confirmed;
     f.busy = ctx.busy || ctx.owners_busy || g_run.running() || loopguard::locked();
     f.self_powered = power_source::bus_powered();   // the driver adds its own pinned-Rd self power
+    f.spoof = rec != nullptr;
+    if (rec != nullptr && (!emk_spoof::usable(*rec, *quirks) || emk_spoof::active())) {   // a spoof somebody else armed stays theirs
+        K2LOG("[TWIN] learn inline start refused: spoof %s\n", emk_spoof::active() ? "busy" : "not usable");
+        return pd::IqRefusal::BadSpoof;
+    }
     const pd::IqRefusal r = fusb302::interrogate_start(f);
-    K2LOG("[TWIN] learn inline start save=%u -> %s\n", unsigned(save), pd::iq_refusal_name(r));
+    K2LOG("[TWIN] learn inline start save=%u spoof=%u -> %s\n", unsigned(save), unsigned(f.spoof), pd::iq_refusal_name(r));
     if (r != pd::IqRefusal::None) return r;
     g_inline = InlineLearn{};
     g_inline.pending = true;
     g_inline.save = save;
     g_inline_name_n = std::min<std::size_t>(name.size(), twin::kNameMax);
     std::memcpy(g_inline_name.data(), name.data(), g_inline_name_n);
+    // Armed after the start succeeded (the driver refuses a start while any spoof is armed). The record was checked above.
+    if (rec != nullptr) g_inline_spoof = emk_spoof::arm_run(*rec, *quirks) == emk_spoof::Err::Ok;
     return r;
+}
+}  // namespace
+
+pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx) {
+    return inline_start_with(name, save, confirmed, ctx, nullptr, nullptr);
+}
+
+pd::IqRefusal inline_start_spoof(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx, const emrec::Record& rec,
+                                 const emk_quirk::Quirks& quirks) {
+    return inline_start_with(name, save, confirmed, ctx, &rec, &quirks);
 }
 
 void inline_poll() {
+    if (g_inline_spoof && !fusb302::interrogate_running()) {   // the run is over (done, cancelled, aborted or detached)
+        emk_spoof::disarm();
+        g_inline_spoof = false;
+    }
     if (!g_inline.pending || fusb302::interrogate_running()) return;
     g_inline.pending = false;
     g_inline.done = true;

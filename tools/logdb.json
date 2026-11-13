@@ -640,6 +640,11 @@
   "643": "[IQ] the charger renegotiates when it is asked: asking this charger is not possible, stopped at the first restart\n",
   "644": "[IQ] end %s (%s)\n",
   "645": "[IQ] contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X\n",
-  "646": "[IQ] counts: %u sent, %u device GoodCRC, resets %u sent %u seen\n"
+  "646": "[IQ] counts: %u sent, %u device GoodCRC, resets %u sent %u seen\n",
+  "647": "[IQ] late 0x%02X, %u EPR sink PDOs%s\n",
+  "648": "[IQ] spoof: charger queried SOP' %u times, %u replies\n",
+  "649": "[SPOOF] armed%s: Discover Identity from the saved record, %u extra response rows\n",
+  "650": "[TWIN] learn inline start refused: spoof %s\n",
+  "651": "[TWIN] learn inline start save=%u spoof=%u -> %s\n"
  }
 }

@@ -10,6 +10,8 @@
 #include <span>
 #include <string_view>
 
+#include "k2/pd/emk_quirk.hpp"
+#include "k2/pd/emrec.hpp"
 #include "k2/twin/learn.hpp"
 #include "k2/twin/library.hpp"
 #include "k2/twin/live.hpp"
@@ -91,6 +93,12 @@ struct InlineLearn {
     Learned result{};       // how = NoContract when the run read nothing to learn from
 };
 pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx);
+// The same with the e-marker spoof armed for the run (the remote's `twin learn inline --spoof`): the charger sees a cable identity
+// while it renegotiates and the questions are asked. Refusals: BadSpoof (the record or quirk table is not valid, or a spoof is
+// armed already), and every one inline_start has. The spoof is armed after the run started and disarmed by inline_poll when the run
+// is over (also after a cancel, an abort or a detach).
+pd::IqRefusal inline_start_spoof(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx, const emrec::Record& rec,
+                                 const emk_quirk::Quirks& quirks);
 void inline_poll();
 void inline_cancel();        // BACK / `stop`: the run ends (its final reset still goes out); nothing is learned from it
 bool inline_running();       // the run, or its learning, is not over

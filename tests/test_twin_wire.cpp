@@ -313,10 +313,12 @@ struct FakeApi {
     char iq_name[32]{};
     twin_hw::InlineLearn iq_learn{};
     pd::IqStatus iq{};
-    pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed) {
+    wire::InlineSpoof iq_spoof{};
+    pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const wire::InlineSpoof& spoof) {
         ++iq_starts;
         iq_save = save;
         iq_confirmed = confirmed;
+        iq_spoof = spoof;
         std::memset(iq_name, 0, sizeof iq_name);
         std::memcpy(iq_name, name.data(), std::min(name.size(), sizeof iq_name - 1));
         if (iq_refusal == pd::IqRefusal::None) iq_running = true;
@@ -465,9 +467,37 @@ void test_handler_inline() {
     CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm}, out), 3u);
     CHECK_EQ(int(out[0]), int(wire::kErrIqRefused));
     CHECK_EQ(int(out[2]), int(pd::IqRefusal::OwnContract));
-    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, 4}, out), 1u);   // an unknown flag bit
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, 8}, out), 1u);   // an unknown flag bit
     CHECK_EQ(int(out[0]), int(Err::Invalid));
     CHECK_EQ(a.iq_starts, 3);
+    CHECK_EQ(a.iq_spoof.on, false);                                         // no spoof bit, no spoof
+
+    // START with the spoof bit: kind, id and then the name; a short head or an unknown kind is invalid
+    a.iq_refusal = pd::IqRefusal::None;
+    a.iq_running = false;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm | wire::kInlineSpoof, 1, 0x34, 0x12, 'X', 'y'}, out), 3u);
+    CHECK_EQ(int(out[0]), 0);
+    CHECK_EQ(a.iq_spoof.on, true);
+    CHECK_EQ(int(a.iq_spoof.kind), int(wire::kInlineSpoofSaved));
+    CHECK_EQ(int(a.iq_spoof.id), 0x1234);
+    CHECK_STR(a.iq_name, "Xy");                                             // the name starts after the 6-byte head
+    CHECK_EQ(a.iq_confirmed, true);
+    a.iq_running = false;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm | wire::kInlineSpoof, 0, 3, 0}, out), 3u);   // built-in 3, no name
+    CHECK_EQ(int(a.iq_spoof.kind), int(wire::kInlineSpoofBuiltin));
+    CHECK_EQ(int(a.iq_spoof.id), 3);
+    CHECK_EQ(a.iq_name[0], 0);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm | wire::kInlineSpoof, 0, 3}, out), 1u);   // head too short
+    CHECK_EQ(int(out[0]), int(Err::Invalid));
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm | wire::kInlineSpoof, 2, 3, 0}, out), 1u);   // unknown kind
+    CHECK_EQ(int(out[0]), int(Err::Invalid));
+    a.iq_refusal = pd::IqRefusal::BadSpoof;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineStart, wire::kInlineConfirm | wire::kInlineSpoof, 0, 3, 0}, out), 3u);
+    CHECK_EQ(int(out[0]), int(wire::kErrIqRefused));
+    CHECK_EQ(int(out[2]), int(pd::IqRefusal::BadSpoof));
+    a.iq_refusal = pd::IqRefusal::None;
+    a.iq_spoof = {};
+    a.iq_starts = 3;
 
     // STATUS: the run, the masks, the identity, both contracts and what was learned
     a.iq_running = true;
@@ -492,6 +522,12 @@ void test_handler_inline() {
     a.iq.revision = 0x32100000u;
     a.iq.first = {true, 4, 2, 0x4344B12Cu, 0x0004B12Cu};
     a.iq.second = {true, 1, 2, 0x1304B12Cu, 0x0001912Cu};
+    a.iq.late_mask = 0x08;
+    a.iq.spoof = true;
+    a.iq.epr_partial = true;
+    a.iq.sopp_queries = 3;
+    a.iq.sopp_replies = 2;
+    a.iq.num_epr_pdos = 9;
     a.iq.started_at = 1000;
     a.iq.ended_at = 4500;
     a.iq_learn.result.how = twin_hw::Learn::Ok;
@@ -518,6 +554,11 @@ void test_handler_inline() {
     CHECK_EQ(int(out[45]), 3);
     CHECK_EQ(int(out[46]), 1);
     CHECK_EQ(int(out[48] | out[49] << 8), 3500);
+    CHECK_EQ(int(out[50]), 0x08);                      // late mask
+    CHECK_EQ(int(out[51]), 3);                         // spoof | EPR partial
+    CHECK_EQ(int(out[52]), 3);                         // SOP' queries
+    CHECK_EQ(int(out[53]), 2);                         // spoof replies
+    CHECK_EQ(int(out[54]), 9);                         // EPR sink PDOs
 
     // ANSWERS: the sink PDOs, the extended caps bytes, the identity VDOs, the SVIDs and modes; part 4 does not exist
     a.iq.sink_pdos[0] = 0x2601912Cu;
@@ -543,7 +584,21 @@ void test_handler_inline() {
     CHECK_EQ(int(out[4] | out[5] << 8), 0xFF01);
     CHECK_EQ(int(out[6]), 1);
     CHECK_EQ(int(out[9]), 0x05);
-    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 4}, out), 1u);
+    // part 4: the EPR sink PDOs [n, partial, u32 * n]; part 5 does not exist
+    for (std::size_t i = 0; i < 9; ++i) a.iq.epr_pdos[i] = 0xA0000000u + std::uint32_t(i);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 4}, out), 3u + 2u + 9u * 4u);
+    CHECK_EQ(int(out[0]), 0);
+    CHECK_EQ(int(out[3]), 9);
+    CHECK_EQ(int(out[4]), 1);                          // partial
+    CHECK_EQ(int(out[5]), 0x00);
+    CHECK_EQ(int(out[8]), 0xA0);
+    CHECK_EQ(int(out[5 + 8 * 4]), 0x08);               // the ninth PDO
+    a.iq.num_epr_pdos = 13;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 4}, out), 3u + 2u + 13u * 4u);   // the most the 58-byte frame holds
+    a.iq.num_epr_pdos = 0;
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 4}, out), 5u);                    // none
+    CHECK_EQ(int(out[3]), 0);
+    CHECK_EQ(call(a, {wire::kOpInline, wire::kInlineAnswers, 5}, out), 1u);
     CHECK_EQ(int(out[0]), int(Err::Invalid));
 
     // ABORT: says whether a run was going

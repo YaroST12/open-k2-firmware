@@ -713,7 +713,8 @@ constexpr size_t kEmNameMax = 24;
 constexpr uint8_t kTwList = 0, kTwGet = 1, kTwPredict = 2, kTwLearn = 3, kTwRename = 4, kTwDelete = 5, kTwRun = 6, kTwStatus = 7,
                   kTwResult = 8, kTwUsb = 9, kTwCancel = 10, kTwInline = 11;
 constexpr uint8_t kTwIqStatus = 0, kTwIqStart = 1, kTwIqAbort = 2, kTwIqAnswers = 3;
-constexpr uint8_t kTwIqDry = 1, kTwIqConfirm = 2, kTwIqParts = 4;
+constexpr uint8_t kTwIqDry = 1, kTwIqConfirm = 2, kTwIqSpoof = 4, kTwIqParts = 5;
+constexpr size_t kTwIqSpoofHead = 6;   // [kTwInline, kTwIqStart, flags, kind, id u16]: with the spoof bit the name starts here
 constexpr uint8_t kTwErrBusy = 7;     // twin::wire::kErrBusy
 constexpr uint8_t kTwRunConfirm = 1, kTwLearnDry = 1;
 constexpr size_t kTwNameMax = 24;     // twin::kNameMax (static_asserted in remote.cpp)
@@ -2172,8 +2173,12 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
                 if (p.size() != 2) return reply(Status::BadLength);
                 break;
             case kTwIqStart:
-                if (p.size() < 3 || p.size() > 3 + kTwNameMax) return reply(Status::BadLength);
-                if ((p[2] & ~(kTwIqDry | kTwIqConfirm)) != 0) return reply(Status::BadArg);
+                if (p.size() < 3) return reply(Status::BadLength);
+                if ((p[2] & ~(kTwIqDry | kTwIqConfirm | kTwIqSpoof)) != 0) return reply(Status::BadArg);
+                if (p.size() > ((p[2] & kTwIqSpoof) != 0 ? kTwIqSpoofHead : 3) + kTwNameMax ||
+                    ((p[2] & kTwIqSpoof) != 0 && p.size() < kTwIqSpoofHead))
+                    return reply(Status::BadLength);
+                if ((p[2] & kTwIqSpoof) != 0 && p[3] > 1) return reply(Status::BadArg);   // kind: 0 built-in, 1 saved
                 if ((p[2] & kTwIqConfirm) == 0) return reply(Status::NeedConfirm);   // two Hard Resets: VBUS drops
                 break;
             case kTwIqAnswers:
