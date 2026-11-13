@@ -22,6 +22,7 @@
 #include "k2/drivers/fusb302.hpp"
 
 #include <array>
+#include <new>
 #include <span>
 
 #include "k2/drivers/i2c.hpp"
@@ -75,7 +76,9 @@ std::uint8_t g_device_id, g_active_cc;
 // they happen to catch is kept here for service() (Baseus 140W, Black Box 2026-11-04: it fell in the read after the caps,
 // was lost, and the Request that followed went out on a link the source had already torn down).
 bool g_hr_latched = false;
-std::uint8_t g_cc_mask = 3; // CC analog switches closed outside VCONN scans: bit0 = PC14, bit1 = PC15
+std::uint8_t g_cc_mask_x;   // stored XOR 3 so .bss zero means PC14|PC15 closed outside VCONN scans
+std::uint8_t cc_mask() { return g_cc_mask_x ^ 3u; }
+void set_cc_mask(std::uint8_t m) { g_cc_mask_x = m ^ 3u; }
 pd::DetachTracker g_detach;
 std::uint32_t g_requests_base = 0;
 std::uint32_t g_req_seen = 0;       // contract.requests at the last Request handled
@@ -86,7 +89,15 @@ bool g_pd_traffic = false;           // any PD message (any SOP) seen since atta
 bool g_pd_seen_attach = false;       // the same, but only a new attach clears it (a unit hold / start-up does not)
 // The Rd seek (k2/pd/pd_rdseek.hpp): the line was picked by a scan that had no Rd on any line, so our later Rd on it may be on the wrong
 // one. `g_seek_passive` marks such an attach; a move to the other line keeps it, a fresh attach (scan, window re-check) decides again.
-pd::RdSeek g_rdseek;
+alignas(pd::RdSeek) std::uint8_t g_rdseek_raw[sizeof(pd::RdSeek)];
+bool g_rdseek_inited;
+pd::RdSeek& rdseek() {
+    if (!g_rdseek_inited) {
+        new (g_rdseek_raw) pd::RdSeek();
+        g_rdseek_inited = true;
+    }
+    return *std::launder(reinterpret_cast<pd::RdSeek*>(g_rdseek_raw));
+}
 bool g_seek_passive = false;
 pd::LineFallback g_linefb;   // direct plug (Rp on both lines), no VBUS on the picked line: the single Rd tries the other line (pd_rdseek.hpp)
 pd::IdleWake g_idle_wake;   // the idle/no-source Rd hold on a standby-signature line (pattern slow-rp-wake, idle path)
@@ -161,16 +172,63 @@ pd::CableLimits g_scanned_cable;   // the VCONN scan before a run start (no sour
 bool g_scanned_valid = false;
 emk_variant::Answered g_answered;   // orientation and attempt-table row of the last VCONN scan that found the cable
 emk_attached::ReadInfo g_read_info; // mode (alone / attached) and acknowledged variants of the last VCONN scan of this attach
-raclass::PullDown g_pull_down = raclass::PullDown::NotProbed;   // the Ra probe's verdict on the last alone scan that found nothing
+raclass::PullDown g_pull_down{};   // the Ra probe's verdict on the last alone scan that found nothing
 VbusFn g_vbus_source = nullptr;     // the power monitor, for the Ra probe's VBUS guard (set_vbus_source)
-pd::Sink g_sink;    // transmit-side state machines are pure too; this file only sends their messages
-pd::Identify g_ident;
-bool g_probe_logged = true;
-pd::Probe g_probe;   // report-card source probe: never retries, ends within kProbeTotalMs
-bool g_reread_logged = true;
-pd::Reread g_reread;   // source-cap re-read (after-contract conversation); never retries, ends within kRereadTotalMs
-pd::Interrogate g_iq;  // inline interrogation: the only inline transmitter, ends within pd::kIqTotalMs plus its resets
-pd::IqPhase g_iq_phase = pd::IqPhase::Idle;   // the phase last logged / marked
+alignas(pd::Sink) std::uint8_t g_sink_raw[sizeof(pd::Sink)];    // transmit-side state machines are pure too; this file only sends their messages
+bool g_sink_inited;
+alignas(pd::Identify) std::uint8_t g_ident_raw[sizeof(pd::Identify)];
+bool g_ident_inited;
+bool g_probe_log_pending;
+alignas(pd::Probe) std::uint8_t g_probe_raw[sizeof(pd::Probe)];   // report-card source probe: never retries, ends within kProbeTotalMs
+bool g_probe_inited;
+bool g_reread_log_pending;
+alignas(pd::Reread) std::uint8_t g_reread_raw[sizeof(pd::Reread)];   // source-cap re-read (after-contract conversation); never retries, ends within kRereadTotalMs
+bool g_reread_inited;
+alignas(pd::Interrogate) std::uint8_t g_iq_raw[sizeof(pd::Interrogate)];  // inline interrogation: the only inline transmitter, ends within pd::kIqTotalMs plus its resets
+bool g_iq_inited;
+pd::IqPhase g_iq_phase{};   // the phase last logged / marked
+pd::IqStep g_iq_step{};
+
+pd::Sink& sink() {
+    if (!g_sink_inited) {
+        new (g_sink_raw) pd::Sink();
+        g_sink_inited = true;
+    }
+    return *std::launder(reinterpret_cast<pd::Sink*>(g_sink_raw));
+}
+pd::Identify& ident() {
+    if (!g_ident_inited) {
+        new (g_ident_raw) pd::Identify();
+        g_ident_inited = true;
+    }
+    return *std::launder(reinterpret_cast<pd::Identify*>(g_ident_raw));
+}
+pd::Probe& probe() {
+    if (!g_probe_inited) {
+        new (g_probe_raw) pd::Probe();
+        g_probe_inited = true;
+    }
+    return *std::launder(reinterpret_cast<pd::Probe*>(g_probe_raw));
+}
+pd::Reread& reread() {
+    if (!g_reread_inited) {
+        new (g_reread_raw) pd::Reread();
+        g_reread_inited = true;
+    }
+    return *std::launder(reinterpret_cast<pd::Reread*>(g_reread_raw));
+}
+pd::Interrogate& iq() {
+    if (!g_iq_inited) {
+        new (g_iq_raw) pd::Interrogate();
+        g_iq_step = pd::IqStep::SinkCap;
+        g_iq_inited = true;
+    }
+    return *std::launder(reinterpret_cast<pd::Interrogate*>(g_iq_raw));
+}
+bool ident_running() { return g_ident_inited && ident().running(); }
+bool probe_running() { return g_probe_inited && probe().running(); }
+bool reread_running() { return g_reread_inited && reread().running(); }
+bool iq_running() { return g_iq_inited && iq().running(); }
 // The re-read's attach ownership is these two flags plus the release timer below. Every other owner of the link clears the flags
 // (reread_take_over: sink_request, a PD Stress / twin run start; rd_for_run, unit_*, cc_detach): the attach is then theirs and the
 // timer never fires on it. Only an attach nobody took over is released here; `pd-reread --abort` adopts a lab-held Rd again.
@@ -187,10 +245,10 @@ bool g_ra = false;                // Ra mode (k2/pd/emk_ra.hpp): PC13 high = Ra 
 emkra::Refuse g_ra_refused = emkra::Refuse::None;   // why the last ra_set(true) said no (None when it did not)
 bool g_ra_run = false;            // a charger-test run owns the Ra mode: its units detach and re-attach, the mode survives them
 std::uint32_t g_vconn_on_ms = 0;  // when it went on; the settled reading is logged ~5 ms later
-bool g_vconn_logged = true;
+bool g_vconn_log_pending;
 std::uint8_t g_msg_id;            // MessageID of the next message we send (3 bits)
 std::uint32_t g_last_rx_ms;       // last frame heard: the line counts as idle ~50 ms later
-bool g_rx_empty = true;
+bool g_rx_nonempty;
 bool g_getcap_force = false;      // the Get_Source_Cap was asked for, not just a rescan fallback
 bool g_getcap_armed = false;      // send one Get_Source_Cap when due (on request)
 std::uint32_t g_getcap_at;
@@ -228,7 +286,7 @@ bool wr(Reg r, std::uint8_t v) {
     if (r == kSwitches0) {
         // Any Rd of ours going on or off changes what the CC nets read, and the ADC levels reach sink_cc() a tick late: the
         // open-level feed (pd::RdSeek::feed_open) stays blind until they have settled (idle-wake-2, bench 2026-11-10).
-        if (ok && ((v ^ g_sw0) & (kPdwn1 | kPdwn2)) != 0) g_rdseek.rd_changed(systick::millis());
+        if (ok && ((v ^ g_sw0) & (kPdwn1 | kPdwn2)) != 0) rdseek().rd_changed(systick::millis());
         if (ok) g_sw0 = v;
         boot_note(0, v);
     }
@@ -634,14 +692,14 @@ void apply_rd() {
 // `seek_move`: the Rd seek's move to the other line (pd_rdseek.hpp): the Rd the policy gives follows the line like a pinned one
 // (one line only, apply_rd), and the seek's budget and "picked passively" mark carry over instead of starting again.
 void apply_cc_choice(const pd::CcChoice& c, bool pinned, std::uint8_t rd_both, bool seek_move = false) {
-    g_cc_mask = pd::self_power_mask(c.mask, pinned);   // pinned: both closed, the Rd must reach the connector
-    cc_switches(false, g_cc_mask);
+    set_cc_mask(pd::self_power_mask(c.mask, pinned));   // pinned: both closed, the Rd must reach the connector
+    cc_switches(false, cc_mask());
     const int i = c.line - 1;
     g_active_cc = std::uint8_t(c.line);
     const bool by_wake = g_idle_wake.line() != 0;   // the scan read this line under the wake's own Rd
     g_idle_wake.on_attach(c.line);   // an attach during an idle Rd hold: the no-Rp detach stays off inside the dwell window
     if (!seek_move) {
-        g_rdseek.reset(g_idle_wake.enabled());   // setting off: the open readings go with the attach, as before the idle wake
+        rdseek().reset(g_idle_wake.enabled());   // setting off: the open readings go with the attach, as before the idle wake
         g_linefb.reset();                        // a fresh attach: the direct-plug schedule starts again (a fallback move keeps it)
         g_seek_passive = !pinned && (rd_both & (kPdwn1 | kPdwn2)) == 0;   // no Rd on any line while the scan read: the pick is unverified
     }
@@ -783,8 +841,8 @@ void detect_cc_orientation() {
         return;
     }
     g_active_cc = 0;  // nothing attached yet: keep both Rd pull-downs, both switches closed
-    g_cc_mask = 3;
-    cc_switches(false, g_cc_mask);
+    set_cc_mask(3);
+    cc_switches(false, cc_mask());
     wr(kSwitches0, rd_both);
 }
 
@@ -796,7 +854,7 @@ void detect_cc_orientation() {
 // choices and are never overridden; PD traffic already decoded on the attached line ends the re-check.
 void cc_window_recheck() {
     if (g_active_cc == 0 || g_pd_traffic || g_force_cc != 0 || g_pin_rd != 0) return;
-    if (g_rdseek.moves() != 0) return;   // the Rd seek found the line by the Rp itself: the ADC levels do not overrule that
+    if (rdseek().moves() != 0) return;   // the Rd seek found the line by the Rp itself: the ADC levels do not overrule that
     if (g_linefb.moves() != 0) return;   // a direct plug: both lines read high by design, the fallback chose the line
     const std::uint32_t now = systick::millis();
     if (std::int32_t(now - g_cc_recheck_at) < std::int32_t(kCcRecheckMinMs)) return;
@@ -811,13 +869,13 @@ void cc_window_recheck() {
         rd(kSwitches0, sw0);
         wr(kMeasure, kMdac210mV);
         std::array<pd::CcSample, 2> mini{};
-        cc_switches(false, g_cc_mask);
+        cc_switches(false, cc_mask());
         for (int line = 1; line <= 2; line++) {
             wr(kSwitches0, std::uint8_t(idle_rd() | (line == 1 ? kMeasCc1 : kMeasCc2)));
             delay_ms(2);
             std::uint8_t status0 = 0;
             rd(kStatus0, status0);
-            mini[line - 1] = {g_cc_mask, std::uint8_t(line), (status0 & kComp) != 0, std::uint8_t(status0 & 3)};
+            mini[line - 1] = {cc_mask(), std::uint8_t(line), (status0 & kComp) != 0, std::uint8_t(status0 & 3)};
         }
         alt = pd::choose_cc_forced(mini, rd_line);
         if (!alt.found) { wr(kSwitches0, sw0); return; }   // the line is not there: leave the chip as it was
@@ -837,10 +895,10 @@ bool rd_seek_wanted() {
 void rd_seek_move() {
     const std::uint8_t to = g_active_cc == 1 ? 2 : 1;
     // the dwell that just ran: the slow one on a standby-signature line (pattern slow-rp-wake), the ordinary one otherwise
-    const std::uint32_t dwell = g_rdseek.standby(g_active_cc) ? pd::kSlowWakeDwellMs : pd::kRdSeekDwellMs;
+    const std::uint32_t dwell = rdseek().standby(g_active_cc) ? pd::kSlowWakeDwellMs : pd::kRdSeekDwellMs;
     K2LOG("[FUSB302] Rd seek: no Rp on CC%u over our Rd for %u ms, Rd moves to CC%u (move %u of %u)\n", unsigned(g_active_cc),
-          unsigned(dwell), unsigned(to), unsigned(g_rdseek.moves()), unsigned(pd::kRdSeekMoves));
-    apply_cc_choice({true, g_cc_mask, to}, false, 0, true);
+          unsigned(dwell), unsigned(to), unsigned(rdseek().moves()), unsigned(pd::kRdSeekMoves));
+    apply_cc_choice({true, cc_mask(), to}, false, 0, true);
 }
 
 // The direct-plug line fallback (pd::LineFallback, pattern direct-plug-one-line-wake): our Rd sits on a line that shows the Rp,
@@ -860,7 +918,7 @@ void line_fallback_move() {
     const std::uint8_t from = g_active_cc, to = from == 1 ? 2 : 1;
     K2LOG("[PD] Rd CC%u -> CC%u: no VBUS after %u ms on a direct plug (try %u)\n", unsigned(from), unsigned(to),
           unsigned(g_linefb.ran_ms()), unsigned(g_linefb.moves()));
-    apply_cc_choice({true, g_cc_mask, to}, false, 0, true);
+    apply_cc_choice({true, cc_mask(), to}, false, 0, true);
 }
 
 // ---- Source_Capabilities logging ----
@@ -974,7 +1032,7 @@ void log_cable(const pd::Emarker& e) {
 // Sink engine state changes go to the black box; called after every place the engine can move.
 void trace_sink() {
     static std::uint8_t last[5] = {0xFF, 0, 0, 0, 0};
-    const pd::SinkStatus& s = g_sink.status();
+    const pd::SinkStatus& s = sink().status();
     const std::uint8_t cur[5] = {std::uint8_t(s.state), std::uint8_t(s.result), std::uint8_t(s.held),
                                  std::uint8_t(s.epr_mode), s.pos};
     for (int i = 0; i < 5; i++) {
@@ -992,7 +1050,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
     g_pd_seen_attach = true;
     // Every wire frame, also with no run going: the watch keeps the sniffed contract and the source's MessageID, so a run on a
     // fresh contract can skip its first reset.
-    if (wire) g_iq.on_message(sop, header, payload, systick::millis());
+    if (wire) iq().on_message(sop, header, payload, systick::millis());
     // First capabilities after a re-attach: drop the previous charger's data so two sources never mix.
     if (g_new_source && sop == pd::Sop::Sop &&
         ((!ext && msg_type == 0x01 && num_do > 0) || (ext && msg_type == pd::kExtEprSourceCaps))) {
@@ -1000,7 +1058,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
         g_new_source = false;
     }
     if (sop == pd::Sop::Sop && !ext && msg_type == 0x01 && num_do > 0)
-        pdtrace::mark(pdtrace::kMarkCaps, std::uint16_t(inline_now() ? 2 : 0), std::uint16_t(g_sink.status().state));
+        pdtrace::mark(pdtrace::kMarkCaps, std::uint16_t(inline_now() ? 2 : 0), std::uint16_t(sink().status().state));
     if (sop == pd::Sop::Sop && !ext && msg_type == 0x01 && num_do > 0) {
         g_caps_count++;
         g_caps_acked = g_crc_on;
@@ -1024,7 +1082,7 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             K2LOG("[PD] RX EPR_Mode action %u\n", action);
     }
     const auto cable_acks = g_engine.cable_acks;
-    const pd::EprInfo info_before = g_sink.status().epr_info;
+    const pd::EprInfo info_before = sink().status().epr_info;
     g_engine.epr_info_only = info_before == pd::EprInfo::Pending;   // the answer to our SPR-mode query is not the live list
     g_engine.on_message(sop, header, payload, g_active_cc);
     {   // the Request period feeds the PPS keep-alive label on the home footer (no caps on record)
@@ -1045,19 +1103,19 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
         // Get_Sink_Cap is answered only by a live Pd-mode sink: never in the PD-silent legacy session, never inline, never
         // while another sink's Request was seen. The identity / VDM and Soft_Reset replies follow the same inline rule
         // (set before this frame is handed to the sink: a far sink's Request precedes its first VDM).
-        g_sink.set_gives_sink_cap(!g_legacy_only && sole_sink() && g_active_cc != 0);
-        g_sink.set_answers_sop(sole_sink());
-        g_sink.set_never_hard_reset(g_pin_rd != 0);   // see sync_hard_reset_policy()
-        const unsigned swaps_before = g_sink.swaps_rx(pd::SwapKind::Dr) + g_sink.swaps_rx(pd::SwapKind::Pr) + g_sink.swaps_rx(pd::SwapKind::Fr);
-        g_sink.on_message(sop, header, payload, now);
-        if (swaps_before != unsigned(g_sink.swaps_rx(pd::SwapKind::Dr)) + g_sink.swaps_rx(pd::SwapKind::Pr) + g_sink.swaps_rx(pd::SwapKind::Fr)) {
+        sink().set_gives_sink_cap(!g_legacy_only && sole_sink() && g_active_cc != 0);
+        sink().set_answers_sop(sole_sink());
+        sink().set_never_hard_reset(g_pin_rd != 0);   // see sync_hard_reset_policy()
+        const unsigned swaps_before = sink().swaps_rx(pd::SwapKind::Dr) + sink().swaps_rx(pd::SwapKind::Pr) + sink().swaps_rx(pd::SwapKind::Fr);
+        sink().on_message(sop, header, payload, now);
+        if (swaps_before != unsigned(sink().swaps_rx(pd::SwapKind::Dr)) + sink().swaps_rx(pd::SwapKind::Pr) + sink().swaps_rx(pd::SwapKind::Fr)) {
             // Role swap asked by the partner (the sink answered it; see Sink::swaps_rx)
             const pd::SwapKind k = msg_type == pd::kCtlDrSwap ? pd::SwapKind::Dr : msg_type == pd::kCtlPrSwap ? pd::SwapKind::Pr : pd::SwapKind::Fr;
-            const std::uint8_t reply = pd::Sink::swap_reply(k, g_sink.rev());
+            const std::uint8_t reply = pd::Sink::swap_reply(k, sink().rev());
             K2LOG("[PD] swap rx %s -> %s\n", k == pd::SwapKind::Dr ? "DR_Swap" : k == pd::SwapKind::Pr ? "PR_Swap" : "FR_Swap",
                   reply == pd::kCtlReject ? "Reject" : reply == pd::kCtlNotSupported ? "Not_Supported" : "none");
         }
-        if (g_sink.status().epr_info != info_before) log_epr_info(g_sink.status().epr_info);
+        if (sink().status().epr_info != info_before) log_epr_info(sink().status().epr_info);
         // VCONN_Swap and its answers are the sole sink's business: inline the message is the device's talk with the charger and
         // the VCONN handler would answer it as a second sink (hardware 2026-11-13).
         if (sop == pd::Sop::Sop && !ext && num_do == 0 && sole_sink()) {
@@ -1069,20 +1127,20 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             }
         }
         bool requested_now = false;   // one of the branches below already asked for PDO 1 in this frame
-        if (sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap && g_sink.take_resume() && !downstream_now() && g_active_cc != 0 &&
+        if (sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap && sink().take_resume() && !downstream_now() && g_active_cc != 0 &&
             !g_legacy_only) {
             // After a source hard reset the contract is gone: ask for PDO 1 (5 V) again on our own.
-            const pd::Err e = g_sink.answer_5v({1, 0, 0}, now);
+            const pd::Err e = sink().answer_5v({1, 0, 0}, now);
             requested_now = true;
             K2LOG("[PD] auto re-request after hard reset: err=%u\n", unsigned(e));
         }
         // A run start is a sink while it waits: PDO 1 (5 V) once, so the source gets its GoodCRC and a Request
         // and brings VBUS up (the C135 ramps ~2 V/s and gives up when its caps go unanswered, hardware 2026-11-03).
         if (g_rd_start && sop == pd::Sop::Sop && !ext && num_do > 0 && msg_type == pd::kDataSourceCap) {
-            const std::uint8_t why = pd::start_request_blockers(inline_now(), g_active_cc, g_sink.status().state == pd::SinkState::Idle, g_start_requested, g_legacy_only);
+            const std::uint8_t why = pd::start_request_blockers(inline_now(), g_active_cc, sink().status().state == pd::SinkState::Idle, g_start_requested, g_legacy_only);
             if (why == 0) {
                 g_start_requested = true;
-                const pd::Err e = g_sink.answer_5v({1, 0, 0}, now);
+                const pd::Err e = sink().answer_5v({1, 0, 0}, now);
                 requested_now = true;
                 pdtrace::mark(pdtrace::kMarkAutoReq, std::uint16_t(e));   // the black box has no K2LOG: it shows the decision
                 K2LOG("[PD] run start: request PDO 1 err=%u (auto-crc %s)\n", unsigned(e), g_crc_on ? "on" : "OFF");
@@ -1099,25 +1157,25 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
             // A self-powered K2 (pinned Rd) asks for 5 V at a modest current and never lets a failed attempt leave the source
             // without a Request: Failed counts as idle there, so the next re-announce is asked again (nothing sends a Hard Reset).
             const bool hold = !g_rd_start && pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only);
-            const pd::SinkState st = g_sink.status().state;
+            const pd::SinkState st = sink().status().state;
             const bool sink_idle = st == pd::SinkState::Idle || (hold && st == pd::SinkState::Failed);
             // After an alone-Identify handed the line back, a late caps message must not re-hold a contract (and the Rd).
             if (!g_ident_alone_hold &&
                 pd::acked_caps_need_request(g_caps_acked, downstream_now(), g_active_cc, g_legacy_only, sink_idle, g_prep.active(),
                                             requested_now)) {
-                const pd::Err e = g_sink.answer_5v({1, 0, hold ? pd::kSelfHoldMa : std::uint16_t(0)}, now);
+                const pd::Err e = sink().answer_5v({1, 0, hold ? pd::kSelfHoldMa : std::uint16_t(0)}, now);
                 pdtrace::mark(pdtrace::kMarkAutoReq, std::uint16_t((hold ? 0x300 : 0x200) | unsigned(e)));
                 K2LOG("[PD] acked caps: request PDO 1 err=%u\n", unsigned(e));
                 if (hold) K2LOG("[PD] self-power hold: 5 V contract asked at %u mA\n", unsigned(pd::kSelfHoldMa));
             }
         }
-        g_ident.on_message(sop, header, payload, now);
-        g_probe.on_message(sop, header, payload, now);
-        g_reread.on_message(sop, header, payload, now);
+        ident().on_message(sop, header, payload, now);
+        probe().on_message(sop, header, payload, now);
+        reread().on_message(sop, header, payload, now);
     }
     // Inline, the spoof answers only inside the run's window and only a frame the chip acknowledged (Auto-CRC on): the first
     // query arrives unacknowledged (the window opens on it), and an answer to a message the charger counts as lost would confuse it.
-    if (sop != pd::Sop::Sop && g_sop_prime_hook && (!inline_now() || (g_crc_on && g_iq.sopp_window(systick::millis()))))
+    if (sop != pd::Sop::Sop && g_sop_prime_hook && (!inline_now() || (g_crc_on && iq().sopp_window(systick::millis()))))
         g_sop_prime_hook(sop == pd::Sop::SopP ? 1 : 2, header, payload);
     if (sop != pd::Sop::Sop) {  // passive SOP'/SOP'' traffic: report, never answer
         K2LOG("[PD] SOP%s %s 0x%04X, %d objects\n", sop == pd::Sop::SopP ? "'" : "''",
@@ -1199,8 +1257,8 @@ void self_power_early(bootmode::Mode mode, bool warm) {
     g_rd_inherited = mode == bootmode::Mode::Plain && g_pin_rd != 0;
     set_boot_pin(g_pin_rd);     // a run's detach takes the pin over and restores it afterwards; the mark follows it
     wr(kSwitches0, g_pin_rd);   // a plain boot writes 0 as well: no Rd, the passive state
-    g_cc_mask = bootmode::cc_mask(mode);
-    cc_switches(false, g_cc_mask);
+    set_cc_mask(bootmode::cc_mask(mode));
+    cc_switches(false, cc_mask());
 }
 
 // A planned re-attach's comeback: PC13 (Ra on CC1) high from the same first moments as the Rd, so the charger's first look at the
@@ -1209,7 +1267,7 @@ void self_power_early_ra() {
     if (g_pin_rd != kPdwn2) return;
     g_ra_early = true;
     pins::cc_vconn_gnd.write(true);
-    boot_note(1, std::uint8_t((g_cc_mask & 3) | 4));
+    boot_note(1, std::uint8_t((cc_mask() & 3) | 4));
 }
 
 // Give a comeback's Rd back for good, whatever made it (a key mode, a marker): the pin and its mark, the early Ra and the chip's
@@ -1325,12 +1383,12 @@ bool init() {
     g_physical_session = 0;
     g_read_info = {};
     g_pull_down = raclass::PullDown::NotProbed;
-    g_sink.bind(&g_engine.caps);
-    g_sink.bind_epr_info(&g_engine.epr_info);
+    sink().bind(&g_engine.caps);
+    sink().bind_epr_info(&g_engine.epr_info);
     g_msg_id = 0;
     g_rd_op = false;
-    g_rdseek.clear();      // a boot: no open reading is known yet (sink_cc notes them once the UI feeds levels)
-    g_rdseek.rd_changed(systick::millis());   // the chip came up with Rd on both lines (its power-on SWITCHES0): the nets settle first
+    rdseek().clear();      // a boot: no open reading is known yet (sink_cc notes them once the UI feeds levels)
+    rdseek().rd_changed(systick::millis());   // the chip came up with Rd on both lines (its power-on SWITCHES0): the nets settle first
     g_idle_wake.reset();
     g_run_owner = false;
     g_wake_attach = false;
@@ -1340,8 +1398,8 @@ bool init() {
     reg::crm().APB2EN |= reg::Crm::APB2EN_GPIOC;
 #endif
     for (const auto& p : {pins::cc_vconn_gnd, pins::cc1_switch, pins::cc2_switch}) p.mode(reg::Mode::OutPp50);
-    cc_switches(false, g_cc_mask);   // 3 unless a self-powered boot mode routed them already
-    K2LOG("[FUSB302] Hardware CC switches enabled (mask %d)\n", g_cc_mask);
+    cc_switches(false, cc_mask());   // 3 unless a self-powered boot mode routed them already
+    K2LOG("[FUSB302] Hardware CC switches enabled (mask %d)\n", cc_mask());
 
     if (!rd(kDeviceId, g_device_id)) {
         K2LOG("[FUSB302] ERROR: Failed to read DEVICE_ID\n");
@@ -1379,12 +1437,12 @@ void legacy_only(bool on) {
     g_prep.abort();
     // Not release(): that leaves a Ready sink behind, which answers the source's next Source_Capabilities with a Request
     // and puts the contract back (the C135 keeps D+/D- dead while it holds one).
-    g_sink.detach();
+    sink().detach();
     if (!inline_now()) {   // a real sink on the other port: never open the lines
         pins::cc1_switch.clear();
         pins::cc2_switch.clear();
         delay_ms(300);   // the source sees a detach and falls back to legacy on re-attach
-        cc_switches(false, g_cc_mask);
+        cc_switches(false, cc_mask());
     }
     g_detach.reset();
     g_engine.reset_source();
@@ -1408,7 +1466,7 @@ void rescan() {
     for (const pd::Op& op : pd::rescan_plan(false)) {
         switch (op.kind) {
             case pd::OpKind::CcSwitches:
-                if (op.value) { cc_switches(false, g_cc_mask); }
+                if (op.value) { cc_switches(false, cc_mask()); }
                 else { pins::cc1_switch.clear(); pins::cc2_switch.clear(); }
                 break;
             case pd::OpKind::Delay: delay_ms(op.value); break;
@@ -1425,7 +1483,7 @@ bool cc_open(std::uint32_t ms) {
     pins::cc1_switch.clear();
     pins::cc2_switch.clear();
     delay_ms(ms);
-    cc_switches(false, g_cc_mask);
+    cc_switches(false, cc_mask());
     g_detach.reset();   // the open time is not a detach
     g_new_source = true;
     return true;
@@ -1440,7 +1498,7 @@ static void alone_handback() {
     // The 5 V contract the acked caps made (a held trigger contract) would keep the Rd gate on for good, and a plain
     // release would still linger kSinkIdleLingerMs: forget it here, no TX - the Rd drop below is the detach the phone sees
     // (Pixel alone, hardware 2026-11-10: "line released" but VBUS stayed 5.05 V with Rd on).
-    g_sink.detach();
+    sink().detach();
     K2LOG("[ID] alone: line released\n");
 }
 
@@ -1451,7 +1509,7 @@ static void ident_wait_refuse() {
     if (!g_ident_wait) return;
     g_ident_wait = false;
     K2LOG("[ID] alone: no Ready contract within %u ms, Identify not sent (sink state %d)\n",
-          unsigned(systick::millis() - g_ident_wait_at), int(g_sink.status().state));
+          unsigned(systick::millis() - g_ident_wait_at), int(sink().status().state));
     if (g_ident_alone) alone_handback();
 }
 
@@ -1505,7 +1563,7 @@ bool set_rd_for_run(bool on, bool keep_scan) {
     g_rd_start = on;
     if (!on && !keep_scan) g_scanned_valid = false;
     if (on) g_start_requested = false;
-    else if (g_start_requested) { g_start_requested = false; g_sink.release(systick::millis()); }   // back to the 5 V we asked for
+    else if (g_start_requested) { g_start_requested = false; sink().release(systick::millis()); }   // back to the 5 V we asked for
     apply_rd();
     usb::log(on ? "[PD] Run start: Rd presented\n" : keep_scan ? "[PD] Run start: Rd paused\n" : "[PD] Run start over: Rd off\n");
     return true;
@@ -1518,7 +1576,7 @@ bool set_rd_for_run(bool on, bool keep_scan) {
 void unit_detach() {
     g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
-    g_reread.abort();
+    reread().abort();
     g_prep.abort();
     self_power_leave();          // pinned boot-mode Rd would keep the charger attached: drop the pin too
     set_rd_for_run(false, true);
@@ -1526,7 +1584,7 @@ void unit_detach() {
     g_rd_gate.reset();
     g_contract_linger.reset();
     apply_rd();
-    g_sink.detach();
+    sink().detach();
     g_legacy_only = false;
     g_detach.reset();
     g_engine.reset_source();
@@ -1542,7 +1600,7 @@ void unit_attach(bool legacy) {
     g_reread_made_contract = false;
     g_legacy_only = legacy;
     self_power_restore();        // back to the boot-mode pin before presenting Rd for the unit
-    g_sink.detach();
+    sink().detach();
     g_detach.reset();
     g_engine.reset_source();
     g_new_source = true;
@@ -1560,11 +1618,11 @@ void unit_attach(bool legacy) {
 void unit_hold(bool legacy) {
     g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
-    g_reread.abort();
+    reread().abort();
     g_prep.abort();
     g_legacy_only = legacy;      // PD-silent: Auto-CRC drops with the run-start demand, caps are heard and never answered
-    g_sink.detach();             // forget the contract; sends nothing
-    if (!legacy) g_sink.soft_reset(systick::millis());   // the source re-announces its caps; the acked-caps path requests PDO 1
+    sink().detach();             // forget the contract; sends nothing
+    if (!legacy) sink().soft_reset(systick::millis());   // the source re-announces its caps; the acked-caps path requests PDO 1
     g_detach.reset();
     g_engine.reset_source();
     g_new_source = true;
@@ -1584,7 +1642,7 @@ bool rd_for_run(bool on) {   // a run start takes the Rd and the contract over f
 void rd_for_run_pause() { g_reread_owns_rd = false; g_ident_owns_rd = false; g_reread_made_contract = false; set_rd_for_run(false, true); }
 bool rd_for_run_on() { return g_rd_start; }
 std::uint8_t idle_wake_line() { return g_idle_wake.line(); }
-std::int32_t open_cc_mv(std::uint8_t line) { return g_rdseek.open_mv(line); }   // the settled open (no-Rd) reading of a line, -1 = none
+std::int32_t open_cc_mv(std::uint8_t line) { return rdseek().open_mv(line); }   // the settled open (no-Rd) reading of a line, -1 = none
 
 std::uint32_t cable_seq() { return g_engine.cable_acks; }
 std::uint32_t session() { return g_session.id(); }
@@ -1741,13 +1799,13 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     facts.sw0 = pre.sw0;
     facts.vbus_mv = g_vbus_mv;
     facts.caps_valid = g_engine.caps.valid;
-    facts.sink_busy = g_sink.status().state != pd::SinkState::Idle;
+    facts.sink_busy = sink().status().state != pd::SinkState::Idle;
     const emk_attached::Plan plan = emk_attached::plan(emk_attached::attached(facts), g_active_cc);
     g_read_info = {plan.attached ? emk_attached::Mode::Attached : emk_attached::Mode::Alone, 0};
     if (rd_up)
         K2LOG("[EMK] scan mode %s: active_cc=%d vbus_mv=%d caps=%d sink=%d (diag vbus_ok=%d contract=%d)\n",
               emk_attached::mode_text(g_read_info.mode).data(), int(g_active_cc), int(g_vbus_mv), int(g_engine.caps.valid),
-              int(g_sink.status().state), int((st0 & ccprobe::kStatus0VbusOk) != 0), int(g_engine.contract.valid));
+              int(sink().status().state), int((st0 & ccprobe::kStatus0VbusOk) != 0), int(g_engine.contract.valid));
     cc_switches(plan.pc13);
     g_cable_read = true;   // every flush below writes CONTROL1 with SOP' and SOP'' receive on
 
@@ -1783,7 +1841,7 @@ bool read_emarker_impl(bool confirmed, pd::EmarkerMode mode, CableBody body, voi
     // Back to the pre-scan state, whatever happened above: VCONN off, then the registers the scan
     // touched are written back from the snapshot taken before it (Rd, measure line, BMC routing,
     // Auto-CRC, SOP' receive enables). A failed scan must leave nothing behind.
-    cc_switches(false, g_cc_mask);
+    cc_switches(false, cc_mask());
     wr(kPower, pre.power);
     wr(kSwitches0, pre.sw0);
     wr(kSwitches1, std::uint8_t((pre.sw1 & ~kAutoCrc) | (g_crc_on ? kAutoCrc : 0)));  // Auto-CRC as before the scan
@@ -1833,14 +1891,14 @@ bool cable_exchange(const emk_learn::Request& req, emk_learn::Reply& rep, std::u
 
 // ---- active operations, run from poll() ----
 
-bool line_idle(std::uint32_t now) { return g_rx_empty && now - g_last_rx_ms >= kIdleQuietMs; }
+bool line_idle(std::uint32_t now) { return !g_rx_nonempty && now - g_last_rx_ms >= kIdleQuietMs; }
 
 // One step of the trigger prepare: cycle the CC lines so the source re-announces to an ACKing chip,
 // then fire the stored Request 5 ms after its caps.
 // What was asked and what goes on the wire: the choice's 0 means "PDO maximum", the plan holds the
 // effective mV / mA and the RDO.
 void log_trigger(const pd::Choice& c, pd::Err e) {
-    const pd::Plan& p = g_sink.plan();
+    const pd::Plan& p = sink().plan();
     if (e == pd::Err::Ok)
         K2LOG("[PD] t=%u Trigger pos %d (asked %d mV %d mA) -> %d mV %d mA RDO 0x%08X session %u: ok\n",
                     unsigned(systick::millis()), c.pos, c.mv, c.ma, p.mv, p.ma, unsigned(p.rdo),
@@ -1858,7 +1916,7 @@ void prep_tick(std::uint32_t now) {
             pins::cc2_switch.clear();
             break;
         case pd::TriggerPrep::Act::CloseCc:
-            cc_switches(false, g_cc_mask);
+            cc_switches(false, cc_mask());
             g_msg_id = 0;
             g_new_source = true;
             g_detach.reset();  // the 150 ms the line was open is not a detach
@@ -1870,7 +1928,7 @@ void prep_tick(std::uint32_t now) {
                             unsigned(now), unsigned(g_session.id()));
                 break;
             }
-            const pd::Err e = g_sink.trigger(g_prep_choice, now);
+            const pd::Err e = sink().trigger(g_prep_choice, now);
             log_trigger(g_prep_choice, e);
             break;
         }
@@ -1878,7 +1936,7 @@ void prep_tick(std::uint32_t now) {
 }
 
 pd::RereadLink reread_link() {
-    return {.contract = g_sink.status().state == pd::SinkState::Ready,
+    return {.contract = sink().status().state == pd::SinkState::Ready,
             .pdos = std::uint8_t(g_engine.caps.valid ? g_engine.caps.num_pdos : 0),
             .rev = std::uint8_t(g_engine.caps.valid ? g_engine.caps.spec_rev : 0),
             .svids = std::span<const std::uint16_t>(g_engine.vdm.svids.data(), g_engine.vdm.num_svids)};
@@ -1890,9 +1948,9 @@ pd::RereadLink reread_link() {
 // that was already there, or one a START / trigger / PD Stress / twin / unit took over (reread_take_over clears the ownership),
 // is never touched, and nothing is released while a run owns the line (the linger starts over when it ends).
 void reread_housekeeping(std::uint32_t now) {
-    if (!g_reread.running() && !g_reread_logged) {
-        g_reread_logged = true;
-        const pd::RereadStatus& rs = g_reread.status();
+    if (!reread_running() && g_reread_log_pending) {
+        g_reread_log_pending = false;
+        const pd::RereadStatus& rs = reread().status();
         const unsigned held = g_engine.caps.valid ? g_engine.caps.num_pdos : 0;
         pdtrace::mark(pdtrace::kMarkReread, std::uint16_t(0x8000 | (rs.skipped_mask << 8) | rs.ok_mask),
                       std::uint16_t((rs.avs_seen ? 0x8000 : 0) | (rs.caps_rx << 8) | rs.pdos_last));
@@ -1909,13 +1967,13 @@ void reread_housekeeping(std::uint32_t now) {
         g_reread_release_at = now + kRereadLingerMs;
         return;
     }
-    if ((g_reread_owns_rd || g_reread_made_contract) && !g_reread.running() && g_reread_logged &&
+    if ((g_reread_owns_rd || g_reread_made_contract) && !reread_running() && !g_reread_log_pending &&
         std::int32_t(now - g_reread_release_at) >= 0) {
-        const pd::SinkStatus& ss = g_sink.status();
+        const pd::SinkStatus& ss = sink().status();
         const bool quiet = ss.state == pd::SinkState::Idle || ss.state == pd::SinkState::Ready || ss.state == pd::SinkState::Failed;
         if (!quiet) return;   // an exchange in flight finishes first
         if (ss.state == pd::SinkState::Ready && ss.pos != 1) {   // back to the 5 V default first
-            g_sink.release(now);
+            sink().release(now);
             return;
         }
         K2LOG("[REREAD] attach released: contract %d, Rd %d\n", int(g_reread_made_contract), int(g_reread_owns_rd));
@@ -1923,7 +1981,7 @@ void reread_housekeeping(std::uint32_t now) {
         g_reread_owns_rd = false; g_ident_owns_rd = false;
         g_reread_made_contract = false;
         g_legacy_only = false;
-        g_sink.detach();
+        sink().detach();
     }
 }
 
@@ -1932,15 +1990,15 @@ void reread_housekeeping(std::uint32_t now) {
 // engaged again and starts a new linger. Otherwise the contract is forgotten, so the source sees the sink gone: Rd is off,
 // and it drops VBUS and re-announces on its own. Never touches a held trigger, a run's own Rd or an operation in flight.
 void contract_expired(std::uint32_t now) {
-    const pd::SinkStatus& ss = g_sink.status();
+    const pd::SinkStatus& ss = sink().status();
     if (ss.state != pd::SinkState::Ready || ss.held) return;
     if (ss.pos != 1 || ss.epr_mode) {
         K2LOG("[PD] Contract unused for %u s: back to 5 V\n", unsigned(pd::kSinkIdleLingerMs / 1000));
-        g_sink.release(now);
+        sink().release(now);
         return;
     }
     K2LOG("[PD] Contract released: Rd off, unused for %u s\n", unsigned(pd::kSinkIdleLingerMs / 1000));
-    g_sink.detach();
+    sink().detach();
 }
 
 // CC1 / CC2 net in mV from the ADC's newest sweep (raw * 3.3 V / 4096; the pins have no divider, so a 5 V VCONN reads at the rail).
@@ -1990,14 +2048,14 @@ void vconn_sync(std::uint32_t now) {
         g_vconn_applied = true;
         apply_rd();
         g_vconn_on_ms = now;
-        g_vconn_logged = false;
+        g_vconn_log_pending = true;
         K2LOG("[VCONN] on: active cc%u, VCONN on cc%u (before: %u mV)\n", unsigned(g_active_cc), g_active_cc == 1 ? 2u : 1u, unsigned(other));
         vconn_mark();
     } else if (!want && g_vconn_applied) {
         vconn_force_off(g_vconn.why());   // the engine already gave the role up (partner's PS_RDY, timeout)
     }
-    if (g_vconn_applied && !g_vconn_logged && static_cast<std::int32_t>(now - g_vconn_on_ms) >= 5) {
-        g_vconn_logged = true;
+    if (g_vconn_applied && g_vconn_log_pending && static_cast<std::int32_t>(now - g_vconn_on_ms) >= 5) {
+        g_vconn_log_pending = false;
         std::uint16_t c1 = 0, c2 = 0;
         cc_net_mv(c1, c2);
         K2LOG("[VCONN] settled: cc1 %u mV, cc2 %u mV\n", unsigned(c1), unsigned(c2));
@@ -2006,14 +2064,14 @@ void vconn_sync(std::uint32_t now) {
 
 // A pinned Rd means the source feeds the K2: a Hard Reset of our own would cut VBUS and kill it, so the sink engine only fails
 // (it never transmits one). The explicit sink_hard_reset() tool is not covered.
-void sync_hard_reset_policy() { g_sink.set_never_hard_reset(g_pin_rd != 0); }
+void sync_hard_reset_policy() { sink().set_never_hard_reset(g_pin_rd != 0); }
 
 // A sink behind the K2 became known (the inline latch, or another sink's Request on the line): whatever the K2 had started as the
 // device stops here. The sink engine drops its contract (no Request, no Soft Reset, no re-request) and the pin's Rd comes off.
 static void downstream_edge() {
     const bool down = downstream_now();
     if (down && !g_down_prev) {
-        if (g_sink.status().state != pd::SinkState::Idle) g_sink.detach();
+        if (sink().status().state != pd::SinkState::Idle) sink().detach();
         apply_rd();
         K2LOG("[PD] Sink downstream (inline=%d far request=%d): Rd off, no Request, no VDM answers\n", g_inline ? 1 : 0,
               far_sink_seen() ? 1 : 0);
@@ -2022,10 +2080,10 @@ static void downstream_edge() {
 }
 
 // The inline interrogation's progress: a Black Box mark and a log line per phase or step change, a summary at the end.
-pd::IqStep g_iq_step = pd::IqStep::SinkCap;
 std::uint8_t g_iq_closed = 0;   // questions already logged
 void iq_report() {
-    const pd::IqStatus& s = g_iq.status();
+    if (!g_iq_inited) return;
+    const pd::IqStatus& s = iq().status();
     if (s.closed != g_iq_closed) {   // what the wire showed after the question: who answered, who only GoodCRC'd
         g_iq_closed = s.closed;
         K2LOG("[IQ] t=%u Q %s id %u try %u: %s (device msgs %u, GoodCRC %u, charger msgs %u)\n", unsigned(systick::millis()),
@@ -2068,9 +2126,9 @@ void active_tick() {
     downstream_edge();
     sync_hard_reset_policy();
     prep_tick(now);
-    const pd::EprInfo info_was = g_sink.status().epr_info;
-    g_sink.tick(now);
-    if (g_sink.status().epr_info != info_was) log_epr_info(g_sink.status().epr_info);
+    const pd::EprInfo info_was = sink().status().epr_info;
+    sink().tick(now);
+    if (sink().status().epr_info != info_was) log_epr_info(sink().status().epr_info);
     g_vconn.tick(now);
     if (g_vconn_give && g_vconn.state() == pd::VconnState::On && g_vconn.tx_idle()) {   // lab round trip: the role is ours (not driven), hand it back
         g_vconn_give = false;
@@ -2083,17 +2141,17 @@ void active_tick() {
     vconn_sync(now);
     {   // Fully active for the whole contract: a running or held trigger, Identify, a pending
         // Get_Source_Cap or the prepare. Passive again only after release / detach (plus the linger).
-        const pd::SinkStatus& ss0 = g_sink.status();
+        const pd::SinkStatus& ss0 = sink().status();
         const bool ready = ss0.state == pd::SinkState::Ready;
         const bool in_flight = ss0.state != pd::SinkState::Idle && ss0.state != pd::SinkState::Failed && !ready;
         pd::CrcDemand d{.sink_active = false,
                         .sink_held = ss0.held,
-                        .ident = g_ident.running() || g_ident_wait || g_probe.running() || g_reread.running(),
+                        .ident = ident_running() || g_ident_wait || probe_running() || reread_running(),
                         .getcap = g_getcap_armed || g_vconn.state() != pd::VconnState::Off,   // a VCONN swap needs our GoodCRC
                         .prep = g_prep.crc_wanted(),
                         .run_start = g_rd_start && !inline_now() && !g_legacy_only,   // legacy-only: no GoodCRC for the source's caps
                         // the armed spoof needs our GoodCRC on SOP', no Rd; inline only while the run's window is open
-                        .spoof = g_sop_prime_hook != nullptr && (!inline_now() || g_iq.sopp_window(now)),
+                        .spoof = g_sop_prime_hook != nullptr && (!inline_now() || iq().sopp_window(now)),
                         .self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only)};   // pinned Rd: the brick feeds us, keep its PD alive
         // A Ready contract nobody holds counts only for kSinkIdleLingerMs after the last thing that used it.
         const bool engaged = in_flight || pd::rd_demand(d);
@@ -2106,84 +2164,84 @@ void active_tick() {
         // The TX choke point's input: the same demand that drives Auto-CRC (plus the explicit hard-reset tool).
         // transmit() refuses everything while this is false, so a passive K2 can never put a frame on CC.
         // A running inline interrogation may transmit too, without Auto-CRC (it is no part of the CRC demand).
-        g_tx_allowed = pd::crc_demand(d) || g_hr_tool_armed || g_iq.running();
+        g_tx_allowed = pd::crc_demand(d) || g_hr_tool_armed || iq_running();
         if (ready && !counts) contract_expired(now);
     }
     pd::TxMsg m;
     bool sent = false;
-    if (g_sink.take_tx(m)) {
+    if (sink().take_tx(m)) {
         if (m.hard_reset) g_hr_tool_armed = false;   // the tool's one Hard Reset went out (or was refused)
         const bool tx_ok = transmit(m);
-        g_sink.set_stamp_us(g_tx_start_us);
-        g_sink.on_tx_result(tx_ok, now);
+        sink().set_stamp_us(g_tx_start_us);
+        sink().on_tx_result(tx_ok, now);
         sent = true;
-    } else if (g_vconn.take_tx(m, g_sink.rev())) {
+    } else if (g_vconn.take_tx(m, sink().rev())) {
         // A frame queued before the K2 knew it sat inline is dropped, never sent: inline only the run transmits.
         const bool ok = sole_sink() && transmit(m);
         K2LOG("[VCONN] TX type %u: %s\n", unsigned(m.header & 0x1F), !sole_sink() ? "dropped inline" : ok ? "GoodCRC" : "no GoodCRC");
         vconn_mark();
         sent = sole_sink();
     }
-    if (g_iq.running()) {   // the run keeps its own quiet gap and deadlines: ticked before the idle gate
-        if (!inline_now()) g_iq.abort(pd::IqWhy::NotInline, now);
-        g_iq.tick(now);
-        if (!sent && g_iq.take_tx(m)) {
+    if (iq_running()) {   // the run keeps its own quiet gap and deadlines: ticked before the idle gate
+        if (!inline_now()) iq().abort(pd::IqWhy::NotInline, now);
+        iq().tick(now);
+        if (!sent && iq().take_tx(m)) {
             const bool hr = m.hard_reset;
             const bool ok = transmit(m);
-            if (!hr) g_iq.on_tx_result(ok, now);
+            if (!hr) iq().on_tx_result(ok, now);
             sent = true;
         }
     }
     trace_sink();
-    const pd::SinkState ss = g_sink.status().state;
+    const pd::SinkState ss = sink().status().state;
     const bool sink_quiet = ss == pd::SinkState::Idle || ss == pd::SinkState::Ready || ss == pd::SinkState::Failed;
-    if (g_ident.running() && (!sink_quiet || !line_idle(now))) {   // [ID] probe: why Identify is not transmitting
+    if (ident_running() && (!sink_quiet || !line_idle(now))) {   // [ID] probe: why Identify is not transmitting
         static std::uint32_t last_log;
         if (now - last_log >= 1000) {
             last_log = now;
             K2LOG("[ID] blocked: sink_quiet=%d rx_empty=%d quiet_ms=%u inline=%d step=%d\n", int(sink_quiet),
-                        int(g_rx_empty), unsigned(now - g_last_rx_ms), int(inline_now()), int(g_ident.status().step));
+                        int(!g_rx_nonempty), unsigned(now - g_last_rx_ms), int(inline_now()), int(ident().status().step));
         }
     }
-    if (g_probe.running()) {   // ticked before the idle gate so its deadline holds on a busy line
+    if (probe_running()) {   // ticked before the idle gate so its deadline holds on a busy line
         const bool idle = !sent && sink_quiet && line_idle(now);
-        g_probe.tick(now, idle);
-        const bool tx = idle && g_probe.take_tx(m);
-        if (tx) g_probe.on_tx_result(transmit(m), now);
-        if (!g_probe.running() && !g_probe_logged) {
-            g_probe_logged = true;
-            const pd::ProbeStatus& ps = g_probe.status();
+        probe().tick(now, idle);
+        const bool tx = idle && probe().take_tx(m);
+        if (tx) probe().on_tx_result(transmit(m), now);
+        if (!probe_running() && g_probe_log_pending) {
+            g_probe_log_pending = false;
+            const pd::ProbeStatus& ps = probe().status();
             K2LOG("[PROBE] done ok=%u skipped=%u\n", unsigned(ps.ok_mask), unsigned(ps.skipped_mask));
         }
         if (tx) return;
     }
-    if (g_reread.running() || !g_reread_logged) {   // same shape as the probe: ticked before the idle gate
+    if (reread_running() || g_reread_log_pending) {   // same shape as the probe: ticked before the idle gate
         const bool idle = !sent && sink_quiet && line_idle(now);
-        g_reread.tick(now, idle, reread_link());
-        const bool tx = idle && g_reread.take_tx(m);
-        if (tx) g_reread.on_tx_result(transmit(m) || g_tx_timed_out, now);   // a timeout may still have been delivered: wait for the answer
+        reread().tick(now, idle, reread_link());
+        const bool tx = idle && reread().take_tx(m);
+        if (tx) reread().on_tx_result(transmit(m) || g_tx_timed_out, now);   // a timeout may still have been delivered: wait for the answer
         if (tx) return;
     }
     if (sent || !sink_quiet || !line_idle(now)) return;
 
     // Not while the Xiaomi auth chain runs: a Get_Source_Cap of ours in the middle of it kills the chain; it stays armed.
-    if (g_getcap_armed && std::int32_t(now - g_getcap_at) >= 0 && !g_sink.xiaomi_chain_active(now)) {
+    if (g_getcap_armed && std::int32_t(now - g_getcap_at) >= 0 && !sink().xiaomi_chain_active(now)) {
         g_getcap_armed = false;
         if (g_getcap_force || !g_engine.caps.valid) {  // forced, or nothing arrived by itself
             g_getcap_force = false;
             pd::TxMsg gc;
-            gc.header = pd::make_header(pd::kCtlGetSourceCap, 0, g_sink.rev());
+            gc.header = pd::make_header(pd::kCtlGetSourceCap, 0, sink().rev());
             K2LOG("[PD] No Source_Capabilities yet: sending Get_Source_Cap\n");
             transmit(gc);
             return;
         }
     }
-    if (g_ident.running()) {
+    if (ident_running()) {
         // Inline, the SVIDs worth a Discover Modes are the sink's when it listed any; else the charger's.
         const pd::VdmInfo& iv = inline_now() && g_engine.sink_vdm.num_svids ? g_engine.sink_vdm : g_engine.vdm;
         std::array<std::uint16_t, pd::kMaxSvids> sv = iv.svids;
-        g_ident.tick(now, true, {sv.data(), iv.num_svids});
-        if (g_ident.take_tx(m)) g_ident.on_tx_result(transmit(m), now);
+        ident().tick(now, true, {sv.data(), iv.num_svids});
+        if (ident().take_tx(m)) ident().on_tx_result(transmit(m), now);
     }
 }
 
@@ -2213,7 +2271,7 @@ static void detach_reset(std::uint8_t status0) {
     pins::cc_vconn_gnd.write(g_ra);   // VCONN off before anything else changes (the Ra mode keeps PC13 high)
     g_vconn_applied = false;
     g_vconn.reset(pd::VconnWhy::Abort);
-    if (g_iq.running()) g_iq.abort(pd::IqWhy::Detached, systick::millis());   // nobody left to ask or to reset
+    if (iq_running()) iq().abort(pd::IqWhy::Detached, systick::millis());   // nobody left to ask or to reset
     // No SW_RES, on a plain or a pinned boot alike: it restores the chip's power-on SWITCHES0 (0x03, Rd on both
     // lines) until the next write - through the closed CC switches a pinned boot's source would see the Debug
     // Accessory pair for ~0.13 ms, and on a plain boot a host and a dock negotiating through the K2 can see it.
@@ -2239,19 +2297,19 @@ static void detach_reset(std::uint8_t status0) {
     g_cc_sink_mv = -1;
     g_active_cc = 0;
     g_bc_max = 0;
-    g_cc_mask = 3;  // the next scan tries every routing again
+    set_cc_mask(3);  // the next scan tries every routing again
     g_vbus_mv = -1;
-    g_rdseek.reset(g_idle_wake.enabled());   // the next attach decides again whether its line was picked without Rd (the open readings stay only while the idle wake needs them)
+    rdseek().reset(g_idle_wake.enabled());   // the next attach decides again whether its line was picked without Rd (the open readings stay only while the idle wake needs them)
     g_idle_wake.reset();   // back to idle: the wake re-decides from the fresh open readings
     g_linefb.reset();      // a detach ends the direct-plug schedule with the attach it belonged to
     g_seek_passive = false;
     g_detach.reset();
-    g_sink.detach();
+    sink().detach();
     g_prep.abort();
     ident_wait_refuse();   // an armed alone-Identify wait dies with the attach: refuse, hand the line back
-    g_ident.abort(pd::IdWhy::Detached);
-    g_probe.abort();
-    g_reread.abort();
+    ident().abort(pd::IdWhy::Detached);
+    probe().abort();
+    reread().abort();
     g_getcap_armed = false;
     g_getcap_force = false;
     g_msg_id = 0;
@@ -2337,10 +2395,10 @@ ccprobe::Refusal cc_probe(const ccprobe::Args &a, VbusFn vbus_mv, ccprobe::Resul
 
     ccprobe::Ctx c;
     c.attached = g_active_cc != 0 || g_inline;
-    const pd::SinkState ss = g_sink.status().state;
+    const pd::SinkState ss = sink().status().state;
     c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
     c.rd = g_rd_op || g_rd_start || g_ra || g_pin_rd != 0 || (sw0 & (kPdwn1 | kPdwn2)) != 0;   // the Ra mode is an active attach
-    c.engine_running = g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
+    c.engine_running = ident_running() || probe_running() || reread_running() || g_prep.active();
     c.vconn_on = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;
     c.vbus_mv = vbus_mv ? vbus_mv() : -1;
     ccprobe::Refusal why = ccprobe::refusal(c);
@@ -2424,9 +2482,9 @@ loopprobe::CcRefusal loop_cc_hold(std::span<const std::uint8_t> plan, std::uint1
     if (!rd(kSwitches0, sw0)) return refuse(CcRefusal::Bus);
     out.sw0 = sw0;
     out.pc = probe_levels();
-    const pd::SinkState ss = g_sink.status().state;
+    const pd::SinkState ss = sink().status().state;
     if (ss != pd::SinkState::Idle && ss != pd::SinkState::Failed) return refuse(CcRefusal::Contract);
-    if (g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active() || g_rd_op || g_rd_start || g_ra)
+    if (ident_running() || probe_running() || reread_running() || g_prep.active() || g_rd_op || g_rd_start || g_ra)
         return refuse(CcRefusal::Engine);
     if (g_vconn_applied || g_vconn.state() != pd::VconnState::Off || (sw0 & (kVconnCc1 | kVconnCc2)) != 0)
         return refuse(CcRefusal::Vconn);
@@ -2489,11 +2547,11 @@ raprobe::Refusal ra_probe(const raprobe::Args &a, VbusFn vbus_mv, raprobe::Resul
     // The state that must be idle. Not g_active_cc: an empty port latches active_cc = 2 on its CC2 bias (docs/K2_PORTS_SPEC.md).
     raprobe::Ctx c;
     c.inline_sink = g_inline;
-    const pd::SinkState ss = g_sink.status().state;
+    const pd::SinkState ss = sink().status().state;
     c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
     c.rd = g_rd_op || g_rd_start || g_pin_rd != 0 || (sw0 & (kPdwn1 | kPdwn2)) != 0;
     c.ra_mode = g_ra;
-    c.engine_running = g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
+    c.engine_running = ident_running() || probe_running() || reread_running() || g_prep.active();
     c.vconn_on = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;
     c.vbus_flag = (st0 & raprobe::kStatus0VbusOk) != 0;   // the chip sees VBUS even when the monitor does not
     c.vbus_mv = vbus_mv ? vbus_mv() : -1;
@@ -2595,7 +2653,7 @@ raprobe::Refusal ra_probe(const raprobe::Args &a, VbusFn vbus_mv, raprobe::Resul
 // the link (identify, probe, re-read, trigger prep) owns it too: a dark moment inside its window is not a dark port.
 static bool idle_owner_free() {
     return g_pin_rd == 0 && !g_rd_start && !g_rd_op && !g_ra && g_force_cc == 0 && !downstream_now() && !g_run_owner &&
-           !g_ident.running() && !g_probe.running() && !g_reread.running() && !g_prep.active();
+           !ident_running() && !probe_running() && !reread_running() && !g_prep.active();
 }
 
 namespace {
@@ -2630,12 +2688,12 @@ void poll() {
     if (g_active_cc == 0 && idle_owner_free() && !g_rd_hold.held(systick::millis()) && g_vbus_mv < pd::kDarkVbusMv) {
         const std::uint8_t was = g_idle_wake.line();
         const std::uint32_t was_since = g_idle_wake.since();
-        const std::uint8_t held = g_idle_wake.update(systick::millis(), g_rdseek.open_mv(1), g_rdseek.open_mv(2));
+        const std::uint8_t held = g_idle_wake.update(systick::millis(), rdseek().open_mv(1), rdseek().open_mv(2));
         // Two dwells on one line with no Rp: that pick is doubtful (a spike noted as the signature, a flipped cable). Rd comes
         // off for kIdleReadMs, the stale open readings are dropped, and the next stable pair decides again - the same line is
         // not re-armed for ever.
         if (g_idle_wake.take_reread()) {
-            g_rdseek.invalidate_open();
+            rdseek().invalidate_open();
             wr(kSwitches0, idle_rd());
             K2LOG("[FUSB302] Idle wake: no Rp on CC%u after %u dwells, Rd released for %u ms to re-read the open levels (now cc1=%d cc2=%d mV)\n",
                   unsigned(was), unsigned(pd::kIdleUnansweredDwells), unsigned(pd::kIdleReadMs), int(g_cc1_mv), int(g_cc2_mv));
@@ -2647,7 +2705,7 @@ void poll() {
             std::uint8_t back = 0;
             rd(kSwitches0, back);
             K2LOG("[FUSB302] Idle wake: Rd on CC%u for %u ms (open cc1=%d cc2=%d mV, now cc1=%d cc2=%d mV, sw0=0x%02X)\n",
-                  unsigned(held), unsigned(pd::kSlowWakeDwellMs), int(g_rdseek.open_mv(1)), int(g_rdseek.open_mv(2)), int(g_cc1_mv),
+                  unsigned(held), unsigned(pd::kSlowWakeDwellMs), int(rdseek().open_mv(1)), int(rdseek().open_mv(2)), int(g_cc1_mv),
                   int(g_cc2_mv), unsigned(back));
         }
     }
@@ -2665,7 +2723,7 @@ void poll() {
         static std::uint8_t last_status0 = 0xFF;
         const bool got = rd(kStatus0, status0);
         if (got && (status0 & 3) > g_bc_max) g_bc_max = std::uint8_t(status0 & 3);
-        if (got) g_sink.on_rp(std::uint8_t(status0 & 3), systick::millis());   // SinkTxOK / SinkTxNG for the sink's own messages
+        if (got) sink().on_rp(std::uint8_t(status0 & 3), systick::millis());   // SinkTxOK / SinkTxNG for the sink's own messages
         if (got && status0 != last_status0) { last_status0 = status0; pdtrace::status0(status0); }
         const bool sink_ok = !inline_now() || pd::sink_present(g_cc_sink_mv);
         // Only a known reading inside the sink band proves a sink is on the line; the sink-left timer
@@ -2688,13 +2746,13 @@ void poll() {
             K2LOG("[FUSB302] Detach: dark attach (VBUS %d mV, no PD for %u ms): the idle wake takes the line (cc=%d mV)\n",
                   int(g_vbus_mv), unsigned(systick::millis() - quiet_since), int(g_cc_sink_mv));
             detach_reset(status0);
-        } else if (got && g_rdseek.update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
+        } else if (got && rdseek().update(systick::millis(), g_active_cc, rd_seek_wanted(), (status0 & kComp) != 0)) rd_seek_move();
         else if (got && g_linefb.update(now_ms, line_fallback_eligible(), (status0 & kComp) != 0, g_vbus_mv < pd::kDarkVbusMv,
                                         line_fallback_other_rp()))
             line_fallback_move();
-        else if (got && g_detach.update(systick::millis(), g_iq.resetting() ? -1 : g_vbus_mv,   // an interrogation's reset drops VBUS on purpose
-                                        (status0 & kComp) != 0 || g_rdseek.holding_slow(systick::millis(), g_active_cc) ||
-                                            g_idle_wake.holding_slow(systick::millis(), g_active_cc, g_rdseek.open_mv(g_active_cc)),
+        else if (got && g_detach.update(systick::millis(), (g_iq_inited && iq().resetting()) ? -1 : g_vbus_mv,   // an interrogation's reset drops VBUS on purpose
+                                        (status0 & kComp) != 0 || rdseek().holding_slow(systick::millis(), g_active_cc) ||
+                                            g_idle_wake.holding_slow(systick::millis(), g_active_cc, rdseek().open_mv(g_active_cc)),
                                         sink_ok)) {
             K2LOG("[FUSB302] Detach: %s (cc=%d mV, inline=%d)\n", pd::detach_reason_name(g_detach.reason()),
                          int(g_cc_sink_mv), int(inline_now()));
@@ -2737,20 +2795,20 @@ void service() {
             flush_fifos();
             g_msg_id = 0;
             g_new_source = true;
-            g_sink.on_hard_reset_rx(systick::millis());
-            g_ident.abort(pd::IdWhy::HardReset);
-            g_probe.abort();
-            g_reread.on_link_reset();   // an attach still waiting for its contract goes on: the sink re-requests after a hard reset
-            g_iq.on_hard_reset(systick::millis());   // the charger's or the device's: a run sniffs the renegotiation and goes on
+            sink().on_hard_reset_rx(systick::millis());
+            ident().abort(pd::IdWhy::HardReset);
+            probe().abort();
+            reread().on_link_reset();   // an attach still waiting for its contract goes on: the sink re-requests after a hard reset
+            iq().on_hard_reset(systick::millis());   // the charger's or the device's: a run sniffs the renegotiation and goes on
         }
 
-        g_rx_empty = true;
+        g_rx_nonempty = false;
         for (int pkt = 0; pkt < 4; pkt++) {
             // A frame transmit() took out of the FIFO comes first (rx_ack_peek), then the FIFO.
             const bool held = g_rx_held.valid;
             std::uint8_t status1;
             if (!held && (!rd(kStatus1, status1) || (status1 & kRxEmpty))) break;
-            g_rx_empty = false;
+            g_rx_nonempty = true;
             g_last_rx_ms = systick::millis();
             std::uint32_t edge_us = 0;
             if (pkt == 0) {
@@ -2782,14 +2840,14 @@ void service() {
             // answered in time). Drop it; the next pass resets the engine and the FIFO.
             if (g_hr_latched) break;
 
-            g_sink.set_stamp_us(edge_us);   // consumed by the sink's on_message if this frame reaches it
+            sink().set_stamp_us(edge_us);   // consumed by the sink's on_message if this frame reaches it
             handle_frame(sop_from_token(pre[0]), header, {body.data(), num_do * 4});
-            g_sink.set_stamp_us(0);
+            sink().set_stamp_us(0);
         }
-        if (!g_irq && g_rx_empty) break;
+        if (!g_irq && !g_rx_nonempty) break;
     }
     if (g_active_cc != 0) active_tick();
-    else if (g_reread.running()) g_reread.tick(systick::millis(), false, reread_link());   // an attach whose source has not shown yet: its wait still ends
+    else if (reread_running()) reread().tick(systick::millis(), false, reread_link());   // an attach whose source has not shown yet: its wait still ends
     iq_report();   // also after a detach ended a run
     reread_housekeeping(systick::millis());
     ident_result_gate(systick::millis());
@@ -2802,23 +2860,23 @@ void service() {
         // Not the wait verdict: identify_start checked DualRolePort, and the verdict leaves DualRolePort as soon as
         // the phone sources VBUS, which is exactly when the contract goes Ready (hw: OP15 timed out on a Ready line).
         const bool ready = !inline_now()
-                           && g_sink.status().state == pd::SinkState::Ready && g_session.fresh() && g_active_cc != 0;
+                           && sink().status().state == pd::SinkState::Ready && g_session.fresh() && g_active_cc != 0;
         if (ready && g_ident_ready_at == 0) g_ident_ready_at = now2;   // a plain stamp: `now | 1` wraps the settle when now is even
         if (ready && now2 - g_ident_ready_at >= kIdentSettleMs) {
             g_ident_wait = false;
             g_ident_session = g_session.id();
             g_ident_result_valid = true;
             g_ident_alone_hold = false;
-            g_ident.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, now2);
+            ident().start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, now2);
             g_ident_was_running = true;
             K2LOG("[ID] alone: Ready contract after %u ms, Identify started\n", unsigned(g_ident_ready_at - g_ident_wait_at));
         } else if (now2 - g_ident_wait_at >= kIdentWaitTimeoutMs) {
             ident_wait_refuse();
         }
     }
-    if (g_ident_was_running && !g_ident.running()) {
+    if (g_ident_was_running && !ident_running()) {
         g_ident_was_running = false;
-        const pd::IdStatus& st = g_ident.status();
+        const pd::IdStatus& st = ident().status();
         g_ident_identity = g_engine.vdm.identity.valid ? g_engine.vdm.identity : g_engine.sink_vdm.identity;
         K2LOG("[ID] result: state %d ok 0x%02X skipped 0x%02X retries %u why %d\n", int(st.state), unsigned(st.ok_mask),
               unsigned(st.skipped_mask), unsigned(st.retries), int(st.why));
@@ -2826,7 +2884,7 @@ void service() {
     }
     // The alone-Identify's own Rd (it presented Rd because the dark VBUS had detached the line): give it back
     // once the sequencer is over (or the wait gave up), so the phone sees a detach and stops sourcing VBUS into the K2.
-    if (g_ident_owns_rd && !g_ident.running() && !g_ident_wait) {
+    if (g_ident_owns_rd && !ident_running() && !g_ident_wait) {
         g_ident_owns_rd = false;
         if (g_rd_start) {
             set_rd_for_run(false, false);
@@ -2875,13 +2933,13 @@ pd::Err request_inner(const pd::Choice& c, bool over_load) {
         K2LOG("[PD] trigger over-load: far sink attached, no far PD message this attach (lab only)\n");
     }
     if (g_active_cc == 0) return pd::Err::NoCaps;
-    if (g_sink.hv_lock() && c.pos > 1) {
+    if (sink().hv_lock() && c.pos > 1) {
         // The HID-cable loop 5 V lock (k2/core/loop_guard.hpp): only PDO 1 (vSafe5V) may be asked for. Checked before the
         // un-ACKed-caps preparation below, which would otherwise answer Ok and refuse later; pd::Sink::trigger holds the same rule.
         K2LOG("[LOOP] request pos %d %d mV refused: 5V lock\n", c.pos, c.mv);
         return pd::Err::OverCap;
     }
-    if (g_ident.running() || g_probe.running() || g_prep.active()) return pd::Err::Busy;
+    if (ident_running() || probe_running() || g_prep.active()) return pd::Err::Busy;
     if (!g_session.fresh()) {   // never a Request that answers nothing: the offers must be from this attach
         K2LOG("[PD] Trigger refused: no Source_Capabilities in this attach (session %u)\n",
                     unsigned(g_session.id()));
@@ -2894,7 +2952,7 @@ pd::Err request_inner(const pd::Choice& c, bool over_load) {
         K2LOG("[PD] Trigger pos %d %d mV %d mA: preparing (last caps not ACKed)\n", c.pos, c.mv, c.ma);
         return pd::Err::Ok;
     }
-    const pd::Err e = g_sink.trigger(c, systick::millis());
+    const pd::Err e = sink().trigger(c, systick::millis());
     log_trigger(c, e);
     trace_sink();
     return e;
@@ -2911,7 +2969,7 @@ pd::Err sink_request(const pd::Choice& c, bool confirmed, bool over_load) {
 }
 void sink_release() {
     g_prep.abort();
-    g_sink.release(systick::millis());
+    sink().release(systick::millis());
 }
 bool sink_hard_reset(bool lab_inline) {
     if ((inline_now() && !lab_inline) || g_active_cc == 0) {
@@ -2919,18 +2977,18 @@ bool sink_hard_reset(bool lab_inline) {
         return false;
     }
     g_hr_tool_armed = true;   // the explicit tool is an active feature: its one Hard Reset may go out even from idle
-    g_sink.hard_reset(systick::millis());
+    sink().hard_reset(systick::millis());
     return true;
 }
-void sink_set_cap(std::uint32_t mv) { g_sink.set_cap_mv(mv); }
+void sink_set_cap(std::uint32_t mv) { sink().set_cap_mv(mv); }
 void sink_set_hv_lock(bool on) {
-    if (on == g_sink.hv_lock()) return;
+    if (on == sink().hv_lock()) return;
     if (on) g_prep.abort();   // a re-announce prepared for a raise must not send it
-    g_sink.set_hv_lock(on, systick::millis());
+    sink().set_hv_lock(on, systick::millis());
     trace_sink();
 }
-void sink_set_vbus_external(bool on) { g_sink.set_vbus_external(on, systick::millis()); }
-void sink_cap_override(const std::uint32_t* pdos, std::uint8_t n) { g_sink.set_sink_cap_override(pdos, n); }
+void sink_set_vbus_external(bool on) { sink().set_vbus_external(on, systick::millis()); }
+void sink_cap_override(const std::uint32_t* pdos, std::uint8_t n) { sink().set_sink_cap_override(pdos, n); }
 void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     g_cc1_mv = cc1_mv;   // kept for the attach scan's ADC cross-check (pd::rd_window_line) and its re-run on fresh levels
     g_cc2_mv = cc2_mv;
@@ -2939,7 +2997,7 @@ void sink_cc(std::int32_t cc1_mv, std::int32_t cc2_mv) {
     // level is our own divider and says nothing, so nothing is noted while any Rd is presented. These levels also arrive
     // one tick late: the feed ignores the first kOpenSettleMs after any Rd change (the old Rd's tail) and takes a level
     // only when two samples agree (CC2's measurement-pulse spike is no standby signature).
-    g_rdseek.feed_open(systick::millis(), (g_sw0 & (kPdwn1 | kPdwn2)) != 0, cc1_mv, cc2_mv);
+    rdseek().feed_open(systick::millis(), (g_sw0 & (kPdwn1 | kPdwn2)) != 0, cc1_mv, cc2_mv);
     cc_window_recheck();   // fresh levels while attached with no PD decoded yet: re-run the Rd-window cross-check
     g_scan_pace.feed_window_line(pd::rd_window_line(cc1_mv, cc2_mv));   // a new live net kicks the unattached scan
     // The CC line closest to 1.5 V; the other one is the unused line of the cable.
@@ -2958,32 +3016,32 @@ void scan_service(std::int32_t vbus_mv) {
 void sink_vbus(std::int32_t mv) {
     g_vbus_mv = mv;
     g_scan_pace.feed_vbus(mv);   // VBUS rising through 3.5 V kicks the unattached scan
-    g_sink.on_vbus(mv, systick::millis());
+    sink().on_vbus(mv, systick::millis());
 }
-const pd::SinkStatus& sink_status() { return g_sink.status(); }
-const pd::XiaomiTrace& xiaomi_trace() { return g_sink.xiaomi_trace(); }
-pd::Err epr_info_request(bool force) { return g_sink.request_epr_info(systick::millis(), force); }
+const pd::SinkStatus& sink_status() { return sink().status(); }
+const pd::XiaomiTrace& xiaomi_trace() { return sink().xiaomi_trace(); }
+pd::Err epr_info_request(bool force) { return sink().request_epr_info(systick::millis(), force); }
 const pd::SourceCaps& epr_info_list() { return g_engine.epr_info; }
-pd::Err apple_read_start() { return g_sink.arm_apple_read(systick::millis()); }
-const pd::AppleInfo& apple_info() { return g_sink.apple_info(); }
-bool apple_armed() { return g_sink.apple_armed(); }
-bool answers_sop() { return g_sink.answers_sop(); }
+pd::Err apple_read_start() { return sink().arm_apple_read(systick::millis()); }
+const pd::AppleInfo& apple_info() { return sink().apple_info(); }
+bool apple_armed() { return sink().apple_armed(); }
+bool answers_sop() { return sink().answers_sop(); }
 
 // Refresh on a live contract: the sink's own Get_Source_Cap (its single message gate decides Busy). The engine owners that talk on
 // the line themselves (identify, probe, re-read, trigger prepare) and the PD-silent / inline / detached states refuse.
 pd::Err refresh_source_caps() {
     if (g_active_cc == 0 || inline_now() || g_legacy_only) return pd::Err::Busy;
-    if (g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active()) return pd::Err::Busy;
-    return g_sink.request_source_caps(systick::millis());
+    if (ident_running() || probe_running() || reread_running() || g_prep.active()) return pd::Err::Busy;
+    return sink().request_source_caps(systick::millis());
 }
 // A Soft_Reset on a live contract (PD Stress, the legal-but-risky probe). The sink does what the unit hold does without the wire work: the
 // contract is dropped, the MessageID counters restart, and the caps the source answers with get PDO 1 at 5 V from the acked-caps path. The
 // same refusals as the Refresh, plus: only from a settled contract, never on top of a transition in flight.
 bool sink_soft_reset() {
     if (g_active_cc == 0 || inline_now() || g_legacy_only) return false;
-    if (g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active()) return false;
-    if (g_sink.status().state != pd::SinkState::Ready) return false;
-    g_sink.soft_reset(systick::millis());
+    if (ident_running() || probe_running() || reread_running() || g_prep.active()) return false;
+    if (sink().status().state != pd::SinkState::Ready) return false;
+    sink().soft_reset(systick::millis());
     trace_sink();
     K2LOG("[PD] Soft_Reset sent on a live contract\n");
     return true;
@@ -3052,22 +3110,22 @@ bool identify_start(bool confirmed) {
         g_ident_alone_hold = false;
         return true;
     }
-    const pd::SinkState ss = g_sink.status().state;
+    const pd::SinkState ss = sink().status().state;
     if (ss != pd::SinkState::Idle && ss != pd::SinkState::Ready && ss != pd::SinkState::Failed) return false;
     g_ident_session = g_session.id();
     g_ident_result_valid = true;
     g_ident_alone_hold = false;
-    g_ident.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, systick::millis());
+    ident().start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, systick::millis());
     g_ident_was_running = true;
     K2LOG("[ID] Identify started\n");
     return true;
 }
 bool probe_start() {
-    if (g_active_cc == 0 || inline_now() || g_ident.running() || g_prep.active()) return false;
-    const pd::SinkState ss = g_sink.status().state;
+    if (g_active_cc == 0 || inline_now() || ident_running() || g_prep.active()) return false;
+    const pd::SinkState ss = sink().status().state;
     if (ss != pd::SinkState::Idle && ss != pd::SinkState::Ready && ss != pd::SinkState::Failed) return false;
-    g_probe_logged = false;
-    g_probe.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, systick::millis());
+    g_probe_log_pending = true;
+    probe().start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, systick::millis());
     K2LOG("[PROBE] started\n");
     return true;
 }
@@ -3077,8 +3135,8 @@ bool probe_start() {
 // PDO 1, which re-announces the caps with Auto-CRC on when the last ones went un-ACKed (a PD-silent boot). The run then
 // waits for the contract (kRereadAttachMs), settles, and runs the steps.
 bool reread_start(std::uint8_t mask) {
-    if (inline_now() || g_legacy_only || g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active()) return false;
-    const pd::SinkState ss = g_sink.status().state;
+    if (inline_now() || g_legacy_only || ident_running() || probe_running() || reread_running() || g_prep.active()) return false;
+    const pd::SinkState ss = sink().status().state;
     const bool have_contract = ss == pd::SinkState::Ready;
     if (!have_contract && ss != pd::SinkState::Idle && ss != pd::SinkState::Failed) return false;
     if (have_contract && g_active_cc == 0) return false;
@@ -3090,10 +3148,10 @@ bool reread_start(std::uint8_t mask) {
         K2LOG("[REREAD] forced line CC%u\n", unsigned(g_force_cc));
     }
     const unsigned held = g_engine.caps.valid ? g_engine.caps.num_pdos : 0;
-    g_reread_logged = false;
-    g_reread.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, mask, std::uint8_t(held), systick::millis(), true);
-    pdtrace::mark(pdtrace::kMarkReread, g_reread.status().mask, std::uint16_t(held));
-    K2LOG("[REREAD] started mask=0x%02X with %u PDOs held, contract %d\n", unsigned(g_reread.status().mask), held, int(have_contract));
+    g_reread_log_pending = true;
+    reread().start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, mask, std::uint8_t(held), systick::millis(), true);
+    pdtrace::mark(pdtrace::kMarkReread, reread().status().mask, std::uint16_t(held));
+    K2LOG("[REREAD] started mask=0x%02X with %u PDOs held, contract %d\n", unsigned(reread().status().mask), held, int(have_contract));
     if (!have_contract) {
         if (g_active_cc == 0) {
             if (!g_rd_start && set_rd_for_run(true, false)) g_reread_owns_rd = g_reread_made_contract = true;   // the START path's Request makes the contract
@@ -3109,21 +3167,21 @@ bool reread_start(std::uint8_t mask) {
 // The survey's wire run: reread_start without the attach. It rides a Ready contract only and never touches Rd, the CC line
 // or the sink's contract flags, so the housekeeping above has nothing to release when it ends.
 bool survey_wire_start(std::uint8_t mask) {
-    if (inline_now() || g_legacy_only || g_active_cc == 0 || g_ident.running() || g_probe.running() || g_reread.running() ||
-        g_prep.active() || g_sink.status().state != pd::SinkState::Ready || !g_reread_logged)
+    if (inline_now() || g_legacy_only || g_active_cc == 0 || ident_running() || probe_running() || reread_running() ||
+        g_prep.active() || sink().status().state != pd::SinkState::Ready || g_reread_log_pending)
         return false;
     const unsigned held = g_engine.caps.valid ? g_engine.caps.num_pdos : 0;
-    g_reread_logged = false;
+    g_reread_log_pending = true;
     pd::RereadOpts opts;
     opts.survey_order = true;
     opts.pace_ms = pd::kSurveyPaceMs;
     opts.total_ms = pd::kSurveyWireMs;
-    g_reread.start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, mask, std::uint8_t(held), systick::millis(), false, opts);
-    pdtrace::mark(pdtrace::kMarkReread, g_reread.status().mask, std::uint16_t(held));
-    K2LOG("[SURVEY] wire started mask=0x%02X, %u PDOs held\n", unsigned(g_reread.status().mask), held);
+    reread().start(g_engine.caps.valid ? g_engine.caps.spec_rev : 2, mask, std::uint8_t(held), systick::millis(), false, opts);
+    pdtrace::mark(pdtrace::kMarkReread, reread().status().mask, std::uint16_t(held));
+    K2LOG("[SURVEY] wire started mask=0x%02X, %u PDOs held\n", unsigned(reread().status().mask), held);
     return true;
 }
-bool xiaomi_chain_active() { return g_sink.xiaomi_chain_active(systick::millis()); }
+bool xiaomi_chain_active() { return sink().xiaomi_chain_active(systick::millis()); }
 void set_force_line(std::uint8_t line) {
     g_force_cc = line <= 2 ? line : 0;
     K2LOG("[PD] CC scan forced line %u\n", unsigned(g_force_cc));
@@ -3161,15 +3219,15 @@ bool ra_set(bool on) {
         K2LOG("[EMKRA] off\n");
         return true;
     }
-    const pd::SinkState ss = g_sink.status().state;
+    const pd::SinkState ss = sink().status().state;
     emkra::Ctx c;
     c.inline_sink = inline_now();
     c.contract = ss != pd::SinkState::Idle && ss != pd::SinkState::Failed;
     // The self-hold, the re-read's own leftover PDO 1 contract inside its linger, or the driver's own settled PDO 1 answer: all
     // the K2's own attach, take-over-able by a run / spoof, not a foreign contract.
     c.self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only) || reread_own_hold() ||
-                  pd::auto_own_hold(g_sink.status());
-    c.busy =g_ident.running() || g_probe.running() || g_reread.running() || g_prep.active();
+                  pd::auto_own_hold(sink().status());
+    c.busy =ident_running() || probe_running() || reread_running() || g_prep.active();
     c.pinned_rd = g_pin_rd;
     c.vconn = g_vconn_applied || g_vconn.state() != pd::VconnState::Off;
     const emkra::Refuse why = emkra::check(c);
@@ -3184,7 +3242,7 @@ bool ra_set(bool on) {
     g_ra = true;
     g_ra_early = false;   // ra_set owns PC13 now
     g_force_cc = emkra::kLine;
-    cc_switches(false, g_cc_mask);   // PC13 high now, ahead of Rd
+    cc_switches(false, cc_mask());   // PC13 high now, ahead of Rd
     if (g_active_cc == 0) wr(kSwitches0, idle_rd());   // a run start that already presents Rd keeps it on CC2 alone
     K2LOG("[EMKRA] on: PC13 high (Ra on CC1), Rd on CC2 only, attach scan forced to CC%u\n", unsigned(g_force_cc));
     return true;
@@ -3200,7 +3258,7 @@ bool cc_detach() {
     if (inline_now() || g_pin_rd != 0) return false;
     g_reread_owns_rd = false; g_ident_owns_rd = false;
     g_reread_made_contract = false;
-    g_reread.abort();
+    reread().abort();
     g_force_cc = 0;
     g_rd_op = false;             // no Rd write below may put the sink's Rd back for an instant
     g_rd_gate.reset();
@@ -3220,20 +3278,20 @@ bool reread_abort() {
     if (inline_now() || g_run_owner) return false;
     g_force_cc = 0;
     ra_set(false);
-    g_reread.abort();
+    reread().abort();
     const std::uint32_t now = systick::millis();
     if (g_reread_owns_rd || g_reread_made_contract) {
         g_reread_release_at = now;   // housekeeping ends the attach on its next pass
-    } else if (g_rd_start && g_pin_rd == 0 && !g_ident.running() && !g_probe.running()) {
+    } else if (g_rd_start && g_pin_rd == 0 && !ident_running() && !probe_running()) {
         K2LOG("[REREAD] abort: lab-held attach adopted, Rd and contract released\n");
         g_reread_owns_rd = true;
-        g_reread_made_contract = g_sink.status().state != pd::SinkState::Idle;
+        g_reread_made_contract = sink().status().state != pd::SinkState::Idle;
         g_reread_release_at = now;
     }
     return true;
 }
-const pd::RereadStatus& reread_status() { return g_reread.status(); }
-bool reread_own_hold() { return pd::reread_own_hold(g_sink.status(), g_reread_made_contract); }
+const pd::RereadStatus& reread_status() { return reread().status(); }
+bool reread_own_hold() { return pd::reread_own_hold(sink().status(), g_reread_made_contract); }
 void reread_take_over() {
     if (!g_reread_owns_rd && !g_reread_made_contract) return;   // nothing of a re-read to take over (the common case)
     K2LOG("[REREAD] attach taken over: Rd %d, contract %d stay with the new owner\n", int(g_reread_owns_rd), int(g_reread_made_contract));
@@ -3241,15 +3299,15 @@ void reread_take_over() {
     g_reread_made_contract = false;
 }
 void set_sink_cap_ext_mode(pd::SinkCapExtMode m) {
-    g_sink.set_sink_cap_ext_mode(m);
+    sink().set_sink_cap_ext_mode(m);
     K2LOG("[PD] Get_Sink_Cap_Extended answer mode %u\n", unsigned(m));
 }
-void set_proactive_discover(bool on) { g_sink.set_proactive_discover(on); }
-void probe_abort() { g_probe.abort(); }
-const pd::ProbeStatus& probe_status() { return g_probe.status(); }
-void identify_abort() { g_ident.abort(pd::IdWhy::Stopped); }
-const pd::IdStatus& identify_status() { return g_ident.status(); }
-bool identify_busy() { return g_ident_wait || g_ident.running(); }
+void set_proactive_discover(bool on) { sink().set_proactive_discover(on); }
+void probe_abort() { probe().abort(); }
+const pd::ProbeStatus& probe_status() { return probe().status(); }
+void identify_abort() { ident().abort(pd::IdWhy::Stopped); }
+const pd::IdStatus& identify_status() { return ident().status(); }
+bool identify_busy() { return g_ident_wait || ident_running(); }
 bool identify_current() {
     if (g_ident_session == 0 || !g_ident_result_valid) return false;
     // After an alone-Identify's release the session has moved on (the phone's VBUS went dark): the result is
@@ -3262,28 +3320,28 @@ pd::IqRefusal interrogate_start(const pd::IqFacts& outside) {
     pd::IqFacts f = outside;
     f.cc = g_active_cc != 0;
     f.inline_link = inline_now();
-    f.busy = f.busy || g_ident.running() || g_ident_wait || g_probe.running() || g_reread.running() || g_prep.active() ||
+    f.busy = f.busy || ident_running() || g_ident_wait || probe_running() || reread_running() || g_prep.active() ||
              g_vconn.state() != pd::VconnState::Off || g_getcap_armed || g_sop_prime_hook != nullptr;
-    const pd::SinkStatus& ss = g_sink.status();
+    const pd::SinkStatus& ss = sink().status();
     f.own_contract = f.own_contract || ss.held || (ss.state != pd::SinkState::Idle && ss.state != pd::SinkState::Failed);
     f.self_powered = f.self_powered || self_powered();
     const std::uint32_t now = systick::millis();
-    const pd::IqRefusal r = g_iq.start(f, now);
+    const pd::IqRefusal r = iq().start(f, now);
     if (r == pd::IqRefusal::None) {
         g_iq_phase = pd::IqPhase::Idle;   // the start is reported even when the previous run ended in the same phase
         g_iq_closed = 0;
-        K2LOG("[IQ] t=%u started (contract sniffed: %u, source id %u)\n", unsigned(now), unsigned(g_iq.watch().contract().ready),
-              unsigned(g_iq.watch().next_id()));
+        K2LOG("[IQ] t=%u started (contract sniffed: %u, source id %u)\n", unsigned(now), unsigned(iq().watch().contract().ready),
+              unsigned(iq().watch().next_id()));
     } else {
         K2LOG("[IQ] refused: %s\n", pd::iq_refusal_name(r));
     }
     return r;
 }
 void interrogate_abort() {
-    if (g_iq.running()) g_iq.abort(pd::IqWhy::Stopped, systick::millis());
+    if (iq_running()) iq().abort(pd::IqWhy::Stopped, systick::millis());
 }
-bool interrogate_running() { return g_iq.running(); }
-const pd::IqStatus& interrogate_status() { return g_iq.status(); }
+bool interrogate_running() { return iq_running(); }
+const pd::IqStatus& interrogate_status() { return iq().status(); }
 
 void feed(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> payload) {
     handle_frame(sop == 1 ? pd::Sop::SopP : sop == 2 ? pd::Sop::SopPP : pd::Sop::Sop, header, payload, false);
@@ -3322,8 +3380,8 @@ void set_sop_prime_hook(SopPrimeHook hook) {
 }
 
 bool vconn_request() {
-    if (g_active_cc == 0 || inline_now() || g_legacy_only || g_sink.status().state != pd::SinkState::Ready || !emkra::vconn_switch_allowed(g_ra)) {
-        K2LOG("[VCONN] request refused: cc=%u inline=%d sink state %u\n", unsigned(g_active_cc), int(inline_now()), unsigned(g_sink.status().state));
+    if (g_active_cc == 0 || inline_now() || g_legacy_only || sink().status().state != pd::SinkState::Ready || !emkra::vconn_switch_allowed(g_ra)) {
+        K2LOG("[VCONN] request refused: cc=%u inline=%d sink state %u\n", unsigned(g_active_cc), int(inline_now()), unsigned(sink().status().state));
         return false;
     }
     const bool ok = g_vconn.request(systick::millis());
@@ -3336,8 +3394,8 @@ bool vconn_request() {
 // back at once: the source turns VCONN on, now with the Ra mode's resistor present, and as the new VCONN source it may run the
 // cable discovery it skipped at an attach that had no Ra (`cable-look-at-attach`, docs/CHARGER_QUIRKS.md). Needs a Ready contract.
 bool vconn_roundtrip() {
-    if (g_active_cc == 0 || inline_now() || g_legacy_only || g_sink.status().state != pd::SinkState::Ready) {
-        K2LOG("[VCONN] round trip refused: cc=%u inline=%d sink state %u\n", unsigned(g_active_cc), int(inline_now()), unsigned(g_sink.status().state));
+    if (g_active_cc == 0 || inline_now() || g_legacy_only || sink().status().state != pd::SinkState::Ready) {
+        K2LOG("[VCONN] round trip refused: cc=%u inline=%d sink state %u\n", unsigned(g_active_cc), int(inline_now()), unsigned(sink().status().state));
         return false;
     }
     const bool ok = g_vconn.request(systick::millis(), true);
@@ -3350,7 +3408,7 @@ bool vconn_roundtrip() {
 // Lab: send Data_Reset (control 14, PD 3.1): the VCONN source power-cycles VCONN, which resets the cable plug; a DFP may then
 // run the cable discovery again. Needs a Ready contract; the answer (Accept / Not_Supported, Data_Reset_Complete) is in the trace.
 bool data_reset() {
-    if (g_active_cc == 0 || inline_now() || g_sink.status().state != pd::SinkState::Ready) return false;
+    if (g_active_cc == 0 || inline_now() || sink().status().state != pd::SinkState::Ready) return false;
     const bool ok = g_vconn.send_raw(14);
     K2LOG("[VCONN] Data_Reset %s\n", ok ? "queued" : "refused: TX slot busy");
     return ok;
@@ -3367,7 +3425,7 @@ void rd_glitch_begin() {
 }
 
 void rd_glitch_end() {
-    g_sink.detach();
+    sink().detach();
     g_engine.reset_source();
     g_new_source = true;
     apply_rd();
@@ -3403,7 +3461,7 @@ bool send_sop_prime_frame(std::span<const std::uint8_t> tokens) {
     }
     if (!fifo_write_tx(header, objs, tokens)) return false;
     if (!wr(kControl0, kTxStart)) return false;
-    if (inline_now()) g_iq.on_sopp_reply(systick::millis());   // the run's window shortens: the charger's next frame is its ACK
+    if (inline_now()) iq().on_sopp_reply(systick::millis());   // the run's window shortens: the charger's next frame is its ACK
     return true;
 }
 

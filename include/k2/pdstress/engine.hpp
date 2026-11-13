@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 
+#include "k2/core/math_opt.hpp"
 #include "k2/pd/pd_sink.hpp"
 #include "k2/pd/pd_spec_timing.hpp"
 #include "k2/pdstress/dist.hpp"
@@ -700,13 +701,15 @@ inline void Engine::complete(std::uint32_t now, const Snapshot& s) {
         if (acc_us < 0 && s.accept_at && s.accept_at >= issue_ms_) acc_us = std::int64_t(s.accept_at - issue_ms_) * 1000;
         if (rdy_us < 0 && s.accept_at && s.ps_rdy_at && s.ps_rdy_at >= s.accept_at) rdy_us = std::int64_t(s.ps_rdy_at - s.accept_at) * 1000;
         if (acc_us >= 0) {
-            add_sample(r, Metric::Accept, std::uint32_t(acc_us / 100));
-            if (acc_us > std::int64_t(pd::spec::kAcceptLimitMs) * 1000) event(Event::AcceptLate, std::uint32_t(acc_us / 100));
+            const std::uint32_t acc_t = math::div_u64_to_u32(static_cast<std::uint64_t>(acc_us), 100u);
+            add_sample(r, Metric::Accept, acc_t);
+            if (acc_us > std::int64_t(pd::spec::kAcceptLimitMs) * 1000) event(Event::AcceptLate, acc_t);
         }
         if (rdy_us >= 0 && !s.ps_rdy_inferred) {
-            add_sample(r, Metric::PsRdy, std::uint32_t(rdy_us / 100));
+            const std::uint32_t rdy_t = math::div_u64_to_u32(static_cast<std::uint64_t>(rdy_us), 100u);
+            add_sample(r, Metric::PsRdy, rdy_t);
             const std::uint32_t lim = s.epr_mode ? pd::spec::kPsTransitionEprMaxMs : pd::spec::kPsTransitionMaxMs;
-            if (rdy_us > std::int64_t(lim) * 1000) event(Event::PsRdyLate, std::uint32_t(rdy_us / 100));
+            if (rdy_us > std::int64_t(lim) * 1000) event(Event::PsRdyLate, rdy_t);
         }
         if (target_ && !in_band(s.vbus_mv, target_)) event(Event::PsRdyOutOfBand, std::uint32_t(s.vbus_mv));
         band_metric_ = target_ && std::abs(std::int32_t(prev_mv_) - std::int32_t(target_)) > std::int32_t(pd::spec::band_mv(target_));

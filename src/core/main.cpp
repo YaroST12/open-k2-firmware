@@ -3,8 +3,11 @@
 // Open-K2 firmware entry: hardware bring-up, button sampling, and the periodic service loop.
 #include <cstdint>
 #include "k2/battery/battery_hw.hpp"
+#include "k2/core/build_config.h"
 #include "k2/drivers/buttons.hpp"
+#if K2_SCREENSHOT
 #include "k2/ui/capture.hpp"
+#endif
 #include "k2/core/gap_meter.hpp"
 #include "k2/core/log.hpp"
 #include "k2/core/main_loop.hpp"
@@ -178,7 +181,9 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     k2::session::init();                    // backup registers: what the previous boot was doing (PD session record)
     {
         const k2::uiprefs::Prefs prefs = k2::uiprefs::stored();   // imports the old raw preferences page (usbcfg did the same above) ...
+#if K2_SCREENSHOT
         k2::uiprefs::screenshot_enabled = prefs.screenshot;
+#endif
         k2::power::set_smoothing(prefs.smoothing);
         k2::fusb302::set_idle_wake(prefs.idle_wake);   // Settings > Wake sleeping port: default off, no Rd at idle
         k2::fusb302::set_vbus_source(&cable_probe_vbus_mv);   // the Ra probe at the end of a silent alone cable read
@@ -218,12 +223,16 @@ k2::mainloop::Context g_loop{g_ui, g_remote, g_bootscreen, g_accelerometer, rebo
     k2::shell_hw::init(g_remote, g_ui);
 #if K2_NET
     if (k2::usbcfg::current.net) {
+#if K2_SCREENSHOT
         // The web dashboard's screenshot pulls the screen one strip at a time (capture.hpp).
         static const k2::http_server::Shot shot = {
             [] { return k2::capture_begin(g_ui); },
             [](int i) { return k2::capture_strip(g_ui, i, k2::systick::millis()); },
             [] { k2::capture_end(g_ui, k2::systick::millis()); },
         };
+#else
+        static const k2::http_server::Shot shot = {};
+#endif
         k2::http_server::init(g_remote, shot);
     }
 #endif

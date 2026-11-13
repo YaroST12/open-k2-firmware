@@ -47,23 +47,13 @@ inline constexpr uint32_t kPageTickMs = 100;
 
 // The page arena: the rotation page on screen and the menus opened above it are built in one buffer (index 0 = the rotation
 // page, index n = the menu at stack position n - 1) and exist only while they are shown. The buffer holds every base page with
-// the largest menu on it, and the longest menu chains the UI opens. A chain that does not fit is refused by the arena (the
-// menu is not opened), never overrun; these asserts keep that safety net unreachable.
+// the actually reachable base + menu chains the UI opens. A chain that does not fit is refused by the arena (the menu is
+// not opened), never overrun; these asserts keep that safety net unreachable.
 inline constexpr std::size_t kPageArenaDepth = 4;   // a rotation page and up to three menus
-inline constexpr std::size_t kLargestBase = std::max({arena_bytes<HomePage>(), arena_bytes<DetailPage>(), arena_bytes<ChargerTestPage>(),
-                                                      arena_bytes<LinesPage>(), arena_bytes<ToolsPage>(), arena_bytes<SettingsPage>()});
-inline constexpr std::size_t kLargestMenu = std::max({arena_bytes<TriggerPage>(), arena_bytes<EmarkerPage>(), arena_bytes<PdTriggerPage>(),
-                                                      arena_bytes<CableRPage>(), arena_bytes<BlackBoxPage>(), arena_bytes<SpoofPage>(),
-                                                      arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>(), arena_bytes<CardsPage>(),
-                                                      arena_bytes<SharePage>(), arena_bytes<ConnectionPage>(), arena_bytes<DiagPage>(),
-                                                      arena_bytes<TwinPage>(), arena_bytes<LoopProbePage>(),
-#if K2_PDSTRESS
-                                                      arena_bytes<PdStressPage>(),
-#endif
-                                                      arena_bytes<DiagnosisPage>(), arena_bytes<BatteryPage>()});
-// Bench > Cable > Saved cables > Share, and the other menu chains: a place page (Connection) under each tool of its place
+// Bench > Cable > Saved cables > Share, and the other reachable chains: a place page (Connection) under each tool of its place
 // (Charger: Request voltage, Fast charge, Report cards > Share, Stress test; Cable: Spoof, Resistance, Loop probe > Share;
-// Device: Twins), Black box > Share, the charger test's card, Battery > Share.
+// Device: Twins), Black box > Share, the charger test's card, Battery > Share, Settings > Diag > Share, QrTest over Tools,
+// plus the ChargerTest + BlackBox and Home + Trigger + Emarker + Connection test chains.
 inline constexpr std::size_t kLongestChain =
     std::max({arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, SpoofPage>(),
               arena_bytes<ToolsPage, ConnectionPage, PdTriggerPage>(), arena_bytes<ToolsPage, ConnectionPage, TriggerPage>(),
@@ -73,17 +63,16 @@ inline constexpr std::size_t kLongestChain =
               arena_bytes<ToolsPage, ConnectionPage, PdStressPage>(),
 #endif
               arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, DiagnosisPage, BlackBoxPage, SharePage>(),
-              arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ToolsPage, LoopProbePage, SharePage>(),
-              arena_bytes<ToolsPage, BatteryPage, SharePage>(),
-              arena_bytes<SettingsPage, DiagPage, SharePage>()});
-inline constexpr std::size_t kPageArenaBytes = std::max(kLargestBase + kLargestMenu, kLongestChain);
-static_assert(kPageArenaBytes >= kLargestBase + kLargestMenu, "any rotation page takes any one menu");
+              arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ChargerTestPage, BlackBoxPage>(),
+              arena_bytes<DetailPage, TwinPage>(), arena_bytes<HomePage, TriggerPage, EmarkerPage, ConnectionPage>(),
+              arena_bytes<ToolsPage, LoopProbePage, SharePage>(), arena_bytes<ToolsPage, BatteryPage, SharePage>(),
+              arena_bytes<ToolsPage, QrTestPage>(), arena_bytes<SettingsPage, DiagPage, SharePage>()});
+inline constexpr std::size_t kPageArenaBytes = kLongestChain;
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest menu chain fits");
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, SharePage>(), "the charger test shares its card");
+static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, BlackBoxPage>(), "black box opens over charger test");
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, LoopProbePage, SharePage>(), "the loop probe shares its result");
-// The QR scan-test page carries its encode workspace as a member, so it is opened only over a base page small
-// enough for both (qrtest::show lands on Tools first when the current base is too big); it never takes a menu on top.
-static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page with its workspace fits over the Tools base");
+static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page fits over Tools");
 
 class Ui {
 public:
@@ -380,32 +369,15 @@ private:
     void draw_slot(unsigned slot);
     void log_timing(uint32_t now_ms);
 
-    Orientation orient_ = kDefaultOrientation;
     orientation::Tracker gravity_;
-    bool rotation_lock_ = false;
-    bool rotation_chord_ = false;
-    bool rotate_buttons_ = false;
-    bool suppress_rotated_press_[4] = {};
-    uint8_t rotation_steps_ = 0;
-    uint8_t requested_rotation_ = 0xFF;
     uint32_t rotation_notice_until_ = 0;
-    bool rotation_notice_drawn_ = false;
     void rotation_gesture(uint32_t now_ms);
     void store_orientation(uint8_t rotation);   // writes the orientation fields into /prefs.cfg when they changed
     void draw_rotation_notice(uint32_t now_ms);
     Layout layout_{};
     Surface panel_{};
-    Page page_ = Page::Home;
-    Menu stack_[3] = {Menu::Count, Menu::Count, Menu::Count};
     void refresh_action_views(uint32_t now_ms);
     unsigned depth_ = 0;
-    bool single_tools_ = !K2_WHOS_ATTACHED;
-    int8_t conn_lock_ = -1;   // open_connection -> build_menu: the tab a single tool locks to, -1 = the tabbed page
-    bool place_next_ = false; // open_place -> build_menu: the PD diagnosis opens as the Log place
-    bool pressed_[4] = {};          // lit, indexed by Button
-    bool down_[4] = {};             // physically down
-    bool remote_down_[4] = {};      // a remote +/- is held, indexed by the physical key it lights
-    uint8_t remote_key_[4] = {0xFF, 0xFF, 0xFF, 0xFF};   // by logical button: the physical key lit at press
     void update_lit(int k, bool was_held, uint32_t now_ms);
     bool held(int k) const { return down_[k] || remote_down_[k]; }
     UiAction finish_button(UiAction action, uint32_t now_ms);
@@ -413,13 +385,10 @@ private:
     // The reboot gesture (OK + Back, ui_calc.hpp RebootChord): fed on every key edge, physical or remote. While it is
     // active the single-key OK / Back events are dropped, each until that key is pressed afresh.
     RebootChord chord_;
-    bool suppress_chord_[4] = {};
     void feed_chord(uint32_t now_ms);
-    bool hold_shown_ = false;       // the reboot HoldCard is on screen
     int hold_px_ = -1;              // progress fill drawn so far
     int hold_left_ = -1;            // countdown drawn so far
     uint32_t hold_ms_ = 0;          // chord held time at the last card draw
-    bool extremes_live_ = false;    // VBUS was live at the last tick: a rising edge resets the Home peaks and cards
     UiContext::Frozen snap_prev_{}; // the live reading one snapshot window ago (note_last compares the next one with it)
     uint32_t snap_ms_ = 0;          // when snap_prev_ was taken
     uint32_t sag_level_ms_ = 0;     // last refresh of ctx_.sag_level_mv
@@ -435,15 +404,11 @@ private:
 #if K2_PDSTRESS
     PdStressSession pdstress_;      // after the charger test: it borrows that session's sweep buffer for its record
 #endif
-    bool pdstress_note_ = false;    // a footer note (the PD Stress run's line or the loop lock) was on screen last tick
-    bool batt_dot_ = false;         // a battery run was in progress last tick (its dot on screen, draw_release_notice)
     trig::Release fc_release_;
     ShareRecord share_rec_;         // the record the Share view shows: filled by the opener before the page exists
     StackArena<PageIf, kPageArenaBytes, kPageArenaDepth> pages_;
 
     uint32_t last_update_ms_ = 0;
-    raguard::CrossKind cross_seen_ = raguard::CrossKind::None;   // the crossed-CC verdict last logged ([LINK] cc cross=...)
-    pd::PdVerdict pd_verdict_seen_ = pd::PdVerdict::Pending;     // the PD verdict last logged ([LINK] pd verdict=...)
     uint32_t cable_seq_seen_ = 0;   // fusb302::cable_seq() last folded into the link state
     pd::Link link_;
     uint32_t trig_until_ = 0;
@@ -452,7 +417,6 @@ private:
     // Timing for the [UI] log: static draw time and the slowest update after a page change.
     uint32_t full_us_ = 0, field_max_us_ = 0, page_since_ms_ = 0;
     uint32_t full_px_ = 0;   // pixels the current page's last full paint sent: what replaying it to erase it would cost
-    bool timing_pending_ = false;
 
     // Progressive slice-paint state (keeps each call under the 20 ms pass ceiling).
     struct BudgetScope {
@@ -480,21 +444,46 @@ private:
     void start_full_clear();
     void reset_paint_pipeline();
     void pump_paint(uint32_t now_ms);
-    bool booting_ = false;
     uint32_t (*paint_clock_)() = nullptr;
+    uint32_t paint_t0_us_ = 0;
+    uint64_t paint_px0_ = 0;
+    int16_t clear_y_ = 0;
+    int16_t clear_y1_ = 0;
+    Orientation orient_ = kDefaultOrientation;
+    Page page_ = Page::Home;
+    Menu stack_[3] = {Menu::Count, Menu::Count, Menu::Count};
+    raguard::CrossKind cross_seen_ = raguard::CrossKind::None;   // the crossed-CC verdict last logged ([LINK] cc cross=...)
+    pd::PdVerdict pd_verdict_seen_ = pd::PdVerdict::Pending;     // the PD verdict last logged ([LINK] pd verdict=...)
+    bool rotation_lock_ = false;
+    bool rotation_chord_ = false;
+    bool rotate_buttons_ = false;
+    bool suppress_rotated_press_[4] = {};
+    uint8_t rotation_steps_ = 0;
+    uint8_t requested_rotation_ = 0xFF;
+    bool rotation_notice_drawn_ = false;
+    bool single_tools_ = !K2_WHOS_ATTACHED;
+    int8_t conn_lock_ = -1;   // open_connection -> build_menu: the tab a single tool locks to, -1 = the tabbed page
+    bool place_next_ = false; // open_place -> build_menu: the PD diagnosis opens as the Log place
+    bool pressed_[4] = {};          // lit, indexed by Button
+    bool down_[4] = {};             // physically down
+    bool remote_down_[4] = {};      // a remote +/- is held, indexed by the physical key it lights
+    uint8_t remote_key_[4] = {0xFF, 0xFF, 0xFF, 0xFF};   // by logical button: the physical key lit at press
+    bool suppress_chord_[4] = {};
+    bool hold_shown_ = false;       // the reboot HoldCard is on screen
+    bool extremes_live_ = false;    // VBUS was live at the last tick: a rising edge resets the Home peaks and cards
+    bool pdstress_note_ = false;    // a footer note (the PD Stress run's line or the loop lock) was on screen last tick
+    bool batt_dot_ = false;         // a battery run was in progress last tick (its dot on screen, draw_release_notice)
+    bool timing_pending_ = false;
+    bool booting_ = false;
     bool paint_pending_ = false;
     bool paint_blank_ = false;
     bool clear_pending_ = false;
     bool clear_full_lcd_ = false;
-    int16_t clear_y_ = 0;
-    int16_t clear_y1_ = 0;
     bool chrome_gaps_pending_ = false;
     bool static_pending_ = false;
     bool panel_pending_ = false;
     bool timing_in_flight_ = false;
     uint8_t panel_mask_ = 0;
-    uint32_t paint_t0_us_ = 0;
-    uint64_t paint_px0_ = 0;
 };
 
 }  // namespace k2

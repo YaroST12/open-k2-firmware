@@ -7,8 +7,9 @@
   2 invariants  section addresses and the four unmangled symbols the bootloader needs
   2b stack  link layout + worst call depth (tools/stack_depth.py: main loop incl. the deepest page path, ISRs,
             the [FAULT] handler) must fit the PSP / MSP stacks with margin; no interrupt priorities set
-  3 map     no malloc / operator new / __cxa_ linked
+  3 map     no malloc / operator new / __cxa_ / 64-bit divmod linked
   4 ids     remote command ids unique across remote_proto.hpp, k2_remote.py, k2proto.js
+  4b 64bit  no unallowlisted 64-bit integer types in src/ or include/k2/ (tools/check_64bit.py)
   5 tests   make test (C++, Python, node)
   6 size    report against tools/size_baseline.txt; over +5 % text is a WARNING, not a failure
   6b net    the K2_NET=1 variant (off by default) in build-net/: -Werror build, layout invariants, stack budget, map;
@@ -41,7 +42,10 @@ REQUIRED_SECTIONS = {".isr_vector": 0x08003800, ".meta_version": 0x08004000, ".m
                      ".meta_commit": 0x08004400, ".text": 0x08004404}
 REQUIRED_SYMBOLS = ("Reset_Handler", "USB_LP_CAN1_RX0_IRQHandler", "g_pfnVectors", "k2_model_signature")
 FORBIDDEN_MAP = (("malloc", re.compile(r"(?<![A-Za-z0-9_])malloc\b|_malloc_r\b|a-mallocr")), ("operator new", re.compile(r"_Zn[aw][jm]|operator new")),
-                 ("__cxa_", re.compile(r"__cxa_")))
+                 ("__cxa_", re.compile(r"__cxa_")),
+                 ("_udivmoddi4", re.compile(r"\b_?_udivmoddi4\b")),
+                 ("__aeabi_ldivmod", re.compile(r"\b__aeabi_ldivmod\b|_aeabi_ldivmod\.o")),
+                 ("__aeabi_uldivmod", re.compile(r"\b__aeabi_uldivmod\b|_aeabi_uldivmod\.o")))
 
 
 class GateError(Exception):
@@ -292,6 +296,12 @@ def step_ids():
         raise GateError("remote command ids collide:\n  " + r.stderr.strip().replace("\n", "\n  "))
 
 
+def step_64bit():
+    r = run([sys.executable, "tools/check_64bit.py", "--mode", "block"])
+    if r.returncode:
+        raise GateError("unallowlisted 64-bit integer types:\n  " + (r.stderr or r.stdout).strip().replace("\n", "\n  "))
+
+
 def step_tests():
     r = run(["make", f"-j{os.cpu_count() or 4}", "-Otarget", "test"])
     if r.returncode:
@@ -351,7 +361,8 @@ def parse_size_line(text):
 WEB = os.environ.get("K2_WEB") == "1"   # the web parts (Makefile K2_WEB): off by default
 
 STEPS = [("build (-Werror, docker as host uid)", step_build), ("bootloader invariants", step_invariants),
-         ("stack budget", step_stack), ("map: no malloc / operator new / __cxa_", step_map), ("remote command ids", step_ids),
+         ("stack budget", step_stack), ("map: no malloc / operator new / __cxa_ / 64-bit divmod", step_map),
+         ("remote command ids", step_ids), ("64-bit integer guard", step_64bit),
          ("tests (C++, Python" + (", node)" if WEB else "; web off)"), step_tests), ("size report", step_size)] + (
          [("K2_NET=1 variant (-Werror, layout, stack, map)", step_net_variant)] if WEB else [])
 

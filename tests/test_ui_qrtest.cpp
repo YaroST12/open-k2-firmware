@@ -271,12 +271,15 @@ static void test_page() {
     CHECK_EQ(g_panel[0], 0xFFFF);                     // outside the box the fill left white
     CHECK_EQ(g_panel[p.y0 * 240 + p.x0], 0xFFFF);     // top-left quiet corner inside the box
     CHECK_EQ(g_panel[(p.box - 1) * 240 + p.x0 + p.box - 1], 0xFFFF);   // bottom-right quiet corner
-    // Read the drawn code back (v13 is past the test reader's version 12, so compare module centres instead).
+    // Read the drawn code back (v13 is past the test reader's version 12, so re-encode into a local buffer and compare).
+    static qrtest::Workspace w_chk;
+    std::memcpy(w_chk.temp, link.data(), link.size());
+    CHECK_EQ(qr::encode_placed(w_chk.code, w_chk.temp, link.size(), 13), 69);
     bool same = true;
     for (int my = 0; my < 69 && same; my++)
         for (int mx = 0; mx < 69 && same; mx++) {
             const int px = p.x0 + (mx + 4) * 3 + 1, py = p.y0 + (my + 4) * 3 + 1;
-            same = (g_panel[py * 240 + px] == 0x0000) == qr::dark_code(pg.code(), mx, my);
+            same = (g_panel[py * 240 + px] == 0x0000) == qr::dark_code(w_chk.code, mx, my);
         }
     CHECK(same);
     // The chrome is hidden: the button strip's edge pixels are the box's quiet zone, not a label.
@@ -313,12 +316,14 @@ static void test_page() {
     });
     CHECK(r.ok);
     CHECK(r.text == want);
-    // Over a big base page the arena would not fit it: push_menu refuses (the remote's show lands on Tools first,
-    // the static_assert in ui.hpp pins that pair); over the small Tools base it fits.
+    // With the encode workspace leased from the scratch arena during paint(), QrTestPage is tiny and fits over both
+    // ChargerTest and Tools.
     ui.on_button(Button::Back, ButtonEvent::Short, 1600);
     ui.goto_page(static_cast<std::uint8_t>(Page::ChargerTest), 1700);
     ui.context().qrtest = {13, 3, 4};
-    CHECK(!ui.push_menu(Menu::QrTest, 1800));         // 3072 B base + ~3.5 KB page > the arena
+    CHECK(ui.push_menu(Menu::QrTest, 1800));
+    CHECK_EQ(int(ui.menu()), int(Menu::QrTest));
+    ui.on_button(Button::Back, ButtonEvent::Short, 1850);
     CHECK_EQ(int(ui.menu()), int(Menu::Count));
     ui.goto_page(static_cast<std::uint8_t>(Page::Tools), 1900);
     CHECK(ui.push_menu(Menu::QrTest, 2000));

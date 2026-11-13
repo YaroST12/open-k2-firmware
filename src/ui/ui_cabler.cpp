@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_cabler.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/drivers/power_calc.hpp"
 
 #include <span>
@@ -99,7 +100,8 @@ CrView cr_view(bool online, int32_t vbus_mv, int32_t ibus_ma, cable_r::Mode mode
         v.grade = cable_r::grade(est);
         v.grade_pill = cr_grade_pill(v.grade);
         const int32_t drop = est->idle_mv - est->load_mv;
-        const int32_t mw = static_cast<int32_t>((int64_t(drop) * est->load_ma + 500) / 1000);   // mV * mA = uW; /1000 = mW
+        const int64_t num = int64_t(drop) * est->load_ma + 500;
+        const int32_t mw = math::div_i64_to_i32(drop < 0 ? int64_t(drop) * est->load_ma - 500 : num, 1000);   // mV * mA = uW; /1000 = mW
         v.detail.put_fixed(drop, 2).put("V drop, ").put_fixed((mw + 50) / 100 * 100, 1).put("W lost");
         v.foot.put("Passive two-point");
     } else {

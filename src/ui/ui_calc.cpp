@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_calc.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/drivers/power_calc.hpp"
 
 namespace k2 {
@@ -22,8 +23,8 @@ void EnergyMeter::update(uint32_t now_ms, int32_t power_mw, int32_t current_ma) 
     if (current_ma < 0) current_ma = 0;
     if (primed_) {
         uint32_t dt = now_ms - last_ms_;  // wrap-safe
-        uj_ += (static_cast<int64_t>(last_mw_) + power_mw) * dt / 2;
-        uc_ += (static_cast<int64_t>(last_ma_) + current_ma) * dt / 2;
+        uj_ += (static_cast<uint64_t>(last_mw_) + static_cast<uint64_t>(power_mw)) * dt >> 1;
+        uc_ += (static_cast<uint64_t>(last_ma_) + static_cast<uint64_t>(current_ma)) * dt >> 1;
     }
     primed_ = true;
     last_ms_ = now_ms;
@@ -53,7 +54,7 @@ void WattHistory::scaled(uint8_t *out, int h) const {
     if (range < 1000) { lo = lo - (1000 - range) / 2; range = 1000; if (lo < 0) lo = 0; }
     for (int i = 0; i < n_; i++) {   // i = 0 is the oldest kept sample
         const int32_t v = mw_[(head_ - n_ + i + 2 * kLen) % kLen];
-        int64_t lv = static_cast<int64_t>(v - lo) * (h - 1) / range;
+        int32_t lv = math::mul_div_i32(v - lo, h - 1, range);
         if (lv < 0) lv = 0;
         if (lv > h - 1) lv = h - 1;
         out[kLen - n_ + i] = static_cast<uint8_t>(lv);
@@ -162,9 +163,9 @@ int fmt_age(std::span<char> out, uint32_t secs) {
 int fmt_ohms(std::span<char> out, int32_t vbus_mv, int32_t current_ma) {
     const int32_t i = k2::power::abs_sat(current_ma);
     if (i < 50) return emit(out, "  --", 4);
-    const int64_t milli_ohm = static_cast<int64_t>(vbus_mv) * 1000 / i;   // mV / mA = ohm, x1000
+    const int32_t milli_ohm = math::mul_div_i32(vbus_mv, 1000, i);   // mV / mA = ohm, x1000
     if (milli_ohm > 9'999'999) return emit(out, "  --", 4);
-    return fmt_fit(out, static_cast<int32_t>(milli_ohm), 4, 2);
+    return fmt_fit(out, milli_ohm, 4, 2);
 }
 
 void StrBufRef::put(std::string_view s) {

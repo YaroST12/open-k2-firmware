@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <span>
 
+#include "k2/core/math_opt.hpp"
+
 namespace k2::transcap {
 
 inline constexpr std::size_t kSamples = 1920;      // ring: 1.92 s at 1 kHz
@@ -227,7 +229,7 @@ constexpr std::uint8_t column_of(std::uint32_t t, std::uint32_t t0, std::uint32_
     if (std::int32_t(t - t0) <= 0) return 0;
     const std::uint32_t span = t1 - t0;
     if (span == 0 || std::int32_t(t - t1) >= 0) return std::uint8_t(kThumbCols - 1);
-    return std::uint8_t((std::uint64_t(t - t0) * kThumbCols) / (span + 1));
+    return std::uint8_t(math::mul_div_u32(t - t0, kThumbCols, span + 1));
 }
 
 // Min/max decimation by time (not by index, so a gap in sampling shows as an empty column that is filled from

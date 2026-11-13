@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/kit.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_viewport.hpp"
 #include <algorithm>
@@ -1244,8 +1245,8 @@ void gauge_cols(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t lo, i
 
 int draw_pass_band(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t value, int32_t target, int32_t full, int prev_px) {
     if (full <= 0) full = 1;
-    auto at = [&](int64_t v) { return static_cast<int16_t>(x + (static_cast<int64_t>(w) * v) / full); };
-    int16_t lo = at(static_cast<int64_t>(target) * 95 / 100), hi = at(static_cast<int64_t>(target) * 105 / 100);
+    auto at = [&](int32_t v) { return static_cast<int16_t>(x + math::mul_div_i32(w, v, full)); };
+    int16_t lo = at(math::mul_div_i32(target, 95, 100)), hi = at(math::mul_div_i32(target, 105, 100));
     if (hi - lo < kPassBandMinW - 1) {   // a low target on a wide scale: keep the window visible, centred on the target
         const int16_t mid = at(target);
         lo = static_cast<int16_t>(mid - (kPassBandMinW - 1) / 2);
@@ -1268,7 +1269,7 @@ int draw_pass_band(const Surface &s, int16_t x, int16_t y, int16_t w, int32_t va
 // ---- RangeGauge ----------------------------------------------------------------------------------------------------------
 RangeGeom range_geom(int16_t x, int16_t w, int32_t value, int32_t set, int32_t lo, int32_t hi, int32_t full) {
     if (full <= 0) full = 1;
-    auto at = [&](int32_t v) { return static_cast<int16_t>(x + (static_cast<int64_t>(w) * std::max<int32_t>(v, 0)) / full); };
+    auto at = [&](int32_t v) { return static_cast<int16_t>(x + math::mul_div_i32(w, std::max<int32_t>(v, 0), full)); };
     RangeGeom g;
     g.lo = std::clamp<int16_t>(at(lo), x, static_cast<int16_t>(x + w - 2));
     g.hi = std::clamp<int16_t>(at(hi), static_cast<int16_t>(g.lo + 1), static_cast<int16_t>(x + w - 1));

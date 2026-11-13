@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Yaraslau Furman
 // The Bench (Fieldbook, CONCEPT 7): seven places on one page, each a row with what is known about it, and a place's actions on
 // the same page. The tables and the row texts are pure (bench:: in ui_tools.cpp); this file reads the drivers and paints.
-#include <cstdlib>
 #include <cstring>
 #include <string_view>
 #include "k2/battery/battery_hw.hpp"

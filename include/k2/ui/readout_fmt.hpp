@@ -11,6 +11,8 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/math_opt.hpp"
+
 namespace k2::readout {
 
 namespace detail {
@@ -37,13 +39,13 @@ constexpr std::size_t fmt3(std::span<char> out, long long milli, char unit) {
     detail::Out o{out};
     uint64_t v = static_cast<uint64_t>(milli < 0 ? -milli : milli);
     if (v < 9995) {                                   // d.dd
-        const uint32_t c = static_cast<uint32_t>((v + 5) / 10);
+        const uint32_t c = (static_cast<uint32_t>(v) + 5u) / 10u;
         o.digits(c / 100, 1); o.put('.'); o.digits(c % 100, 2);
     } else if (v < 99950) {                           // dd.d
-        const uint32_t d = static_cast<uint32_t>((v + 50) / 100);
+        const uint32_t d = (static_cast<uint32_t>(v) + 50u) / 100u;
         o.digits(d / 10, 1); o.put('.'); o.digits(d % 10, 1);
     } else {                                          // ddd (and wider, never expected)
-        o.digits(static_cast<uint32_t>((v + 500) / 1000), 1);
+        o.digits(math::div_u64_to_u32(v + 500u, 1000u), 1);
     }
     if (unit) o.put(unit);
     return o.end();
@@ -76,7 +78,7 @@ constexpr std::size_t power_half(std::span<char> out, PowerKind kind, uint32_t m
     char w[8];
     switch (kind) {
     case PowerKind::Pd:
-        rated_watts(w, static_cast<uint32_t>(static_cast<uint64_t>(mv) * ma / 1000));
+        rated_watts(w, math::mw_of(mv, ma));
         o.put("PD "); o.put(w);
         break;
     case PowerKind::Legacy:
@@ -84,7 +86,7 @@ constexpr std::size_t power_half(std::span<char> out, PowerKind kind, uint32_t m
         break;
     case PowerKind::Plain:
         o.digits((mv + 500) / 1000, 1); o.put('V');
-        if (ma) { rated_watts(w, static_cast<uint32_t>(static_cast<uint64_t>(mv) * ma / 1000)); o.put(' '); o.put(w); }
+        if (ma) { rated_watts(w, math::mw_of(mv, ma)); o.put(' '); o.put(w); }
         break;
     case PowerKind::None: break;
     }

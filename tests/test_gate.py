@@ -142,7 +142,23 @@ class MapCheck(unittest.TestCase):
         self.assertEqual(len(g.check_map("libc.a(libc_a-mallocr.o)\n")), 1)
 
     def test_discarded_section_ignored(self):
-        text = "Discarded input sections\n .text.malloc\nLinker script and memory map\n .text.main\n"
+        text = "Discarded input sections\n .text.malloc\n .text.__aeabi_uldivmod\nLinker script and memory map\n .text.main\n"
+        self.assertEqual(g.check_map(text), [])
+
+    def test_forbidden_64bit_divmod_helpers(self):
+        text = (
+            "libgcc.a(_udivmoddi4.o)\n"
+            " .text.__aeabi_ldivmod\n"
+            "               0x08001234        __aeabi_uldivmod\n"
+        )
+        errs = g.check_map(text)
+        self.assertEqual(len(errs), 3)
+        self.assertTrue(any("_udivmoddi4" in e for e in errs), errs)
+        self.assertTrue(any("__aeabi_ldivmod" in e for e in errs), errs)
+        self.assertTrue(any("__aeabi_uldivmod" in e for e in errs), errs)
+
+    def test_64bit_divmod_identifiers_do_not_false_positive(self):
+        text = " .text.my_udivmoddi4_test\n .text.custom__aeabi_ldivmod_stub\n"
         self.assertEqual(g.check_map(text), [])
 
 

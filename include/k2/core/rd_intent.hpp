@@ -33,6 +33,7 @@
 #include "k2/chargertest/ct_cable.hpp"
 #include "k2/core/bootmode.hpp"
 #include "k2/core/fs.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/pd/pd.hpp"
 
 namespace k2::rdintent {
@@ -132,7 +133,7 @@ inline constexpr std::uint32_t kClaimMarginW = 10;
 inline constexpr std::uint16_t kCableCeilingMa = 3000;
 
 constexpr std::uint32_t pdo_power_w(const pd::Pdo& p) {
-    return static_cast<std::uint32_t>(static_cast<std::uint64_t>(p.max_mv) * p.max_ma / 1000000u);
+    return math::mul_div_u32(p.max_mv, p.max_ma, 1000000u);
 }
 // The best whole-watt power any listed PDO offers (0 for no list).
 constexpr std::uint32_t best_power_w(const pd::SourceCaps& caps) {

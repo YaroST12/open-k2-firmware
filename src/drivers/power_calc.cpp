@@ -19,10 +19,19 @@ constexpr Scale scale(Chip chip) {
     }
 }
 
-// raw * num / den, rounded half away from zero.
-constexpr std::int64_t scale_round(std::int64_t raw, std::int64_t num, std::int64_t den) {
-    const std::int64_t p = raw * num;
-    return (p >= 0 ? p + den / 2 : p - den / 2) / den;
+// Exact x / d for any 64-bit x and 1 <= d <= 65535 using 32-bit UDIV/reciprocal only.
+std::uint64_t udiv64_by_u16(std::uint64_t x, std::uint16_t d) {
+    const std::uint32_t hi = static_cast<std::uint32_t>(x >> 32);
+    const std::uint32_t lo = static_cast<std::uint32_t>(x);
+    if (hi == 0) return lo / d;
+    const std::uint32_t q_hi = hi / d;
+    std::uint32_t rem = hi % d;
+    const std::uint32_t t1 = (rem << 16) | (lo >> 16);
+    const std::uint32_t q1 = t1 / d;
+    rem = t1 % d;
+    const std::uint32_t t2 = (rem << 16) | (lo & 0xFFFFu);
+    const std::uint32_t q2 = t2 / d;
+    return (static_cast<std::uint64_t>(q_hi) << 32) | (q1 << 16) | q2;
 }
 
 }  // namespace
@@ -56,17 +65,15 @@ std::int32_t max_request_mv(Chip chip) {
 
 std::int32_t implied_shunt_uohm(Chip chip) {
     // Shunt-voltage LSB after the raw-count alignment shift, in pV * 1000:
-    //   INA228 78.125 nV << 2 = 19.53125 nV, INA237 1.25 uV >> ... / 128 = 9.765625 nV,
-    //   INA226 2.5 uV / 128 = 19.53125 nV.
-    std::int64_t lsb_pv_x1000 = 0;
+    //   INA228 / INA226: 19,531,250 -> 19,531,250 / (1000 * 2 * 1,000,000) = 5 / 512.
+    //   INA237:           9,765,625 ->  9,765,625 / (1000 * 2 * 1,000,000) = 5 / 1024.
+    const std::int32_t c = scale(chip).counts_2a;
     switch (chip) {
-    case Chip::Ina228: lsb_pv_x1000 = 19531250; break;
-    case Chip::Ina237: lsb_pv_x1000 = 9765625; break;
-    case Chip::Ina226: lsb_pv_x1000 = 19531250; break;
-    default: return 0;
+    case Chip::Ina228:
+    case Chip::Ina226: return (c * 5) >> 9;
+    case Chip::Ina237: return (c * 5) >> 10;
+    default:           return 0;
     }
-    // R = (counts_2a * LSB) / 2 A; pV / A = pOhm; /1e6 -> uOhm.
-    return static_cast<std::int32_t>(std::int64_t{scale(chip).counts_2a} * lsb_pv_x1000 / (1000 * 2 * 1000000));
 }
 
 char model_badge(Chip chip) {
@@ -105,20 +112,41 @@ std::int32_t align_vbus(Chip chip, std::uint32_t reg) {
 }
 
 std::int32_t raw_to_mv(Chip chip, std::int32_t raw_v) {
-    const std::int32_t den = scale(chip).counts_10v;
-    return den == 0 ? 0 : static_cast<std::int32_t>(scale_round(raw_v, 10000, den));
+    // Reduced 10000 / counts_10v: INA228 = 25/512, INA226 = 5/512, INA237 = 25/1024 (all power-of-two denominators).
+    std::uint32_t mul = 0;
+    unsigned shift = 0;
+    switch (chip) {
+    case Chip::Ina228: mul = 25; shift = 9; break;
+    case Chip::Ina226: mul = 5;  shift = 9; break;
+    case Chip::Ina237: mul = 25; shift = 10; break;
+    default:           return 0;
+    }
+    const std::uint32_t mag = magnitude(raw_v);
+    const std::uint32_t mv = static_cast<std::uint32_t>((std::uint64_t{mag} * mul + (1u << (shift - 1))) >> shift);
+    return raw_v < 0 ? -static_cast<std::int32_t>(mv) : static_cast<std::int32_t>(mv);
 }
 
 std::int32_t raw_to_ma(Chip chip, std::int32_t raw_i) {
     const Scale s = scale(chip);
     if (s.counts_2a == 0) return 0;
-    const std::int64_t ma = scale_round(raw_i, 2000, s.counts_2a);
-    const std::int64_t lim = s.clamp_ma;
-    return static_cast<std::int32_t>(ma > lim ? lim : ma < -lim ? -lim : ma);
+    const std::uint32_t mag = magnitude(raw_i);
+    // Reduced 2000 / counts_2a: 5/768 (INA228/INA226) or 5/1536 (INA237).
+    // Any |raw_i| >= 20,000,000 gives >= 65,104 mA, exceeding the 54,000 mA max clamp.
+    std::int32_t ma;
+    if (mag >= 20'000'000u) {
+        ma = s.clamp_ma;
+    } else {
+        const std::uint32_t den = (chip == Chip::Ina237) ? 1536u : 768u;
+        const std::uint32_t rounded = (mag * 5u + den / 2u) / den;
+        ma = rounded > static_cast<std::uint32_t>(s.clamp_ma) ? s.clamp_ma : static_cast<std::int32_t>(rounded);
+    }
+    return raw_i < 0 ? -ma : ma;
 }
 
 std::int32_t mw(std::int32_t vbus_mv, std::int32_t current_ma) {
-    return static_cast<std::int32_t>(std::int64_t{vbus_mv} * current_ma / 1000);
+    const std::uint64_t prod = std::uint64_t{magnitude(vbus_mv)} * magnitude(current_ma);
+    const std::int32_t mag = static_cast<std::int32_t>(udiv64_by_u16(prod, 1000u));
+    return (vbus_mv < 0) != (current_ma < 0) ? -mag : mag;
 }
 
 std::int32_t apply_deadband(std::int32_t current_ma) {
@@ -144,7 +172,9 @@ std::int32_t Average::mean() const {
     if (count_ == 0) return 0;
     std::int64_t sum = 0;
     for (std::size_t i = 0; i < count_; i++) sum += buf_[i];
-    return static_cast<std::int32_t>(sum / static_cast<std::int64_t>(count_));
+    const std::uint64_t mag = sum < 0 ? static_cast<std::uint64_t>(-sum) : static_cast<std::uint64_t>(sum);
+    const std::uint64_t q = (count_ == kAvgLen) ? (mag >> 7) : udiv64_by_u16(mag, static_cast<std::uint16_t>(count_));
+    return sum < 0 ? -static_cast<std::int32_t>(q) : static_cast<std::int32_t>(q);
 }
 
 }  // namespace k2::power

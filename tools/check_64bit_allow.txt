@@ -1,0 +1,164 @@
+# Allowlisted 64-bit integer type lines in src/ and include/k2/.
+# Format: <relpath> <normalized_code>
+# Comments (#) and blank lines are ignored. Normalization strips C/C++ comments and collapses whitespace.
+# New 64-bit uses should prefer 32-bit arithmetic or include/k2/core/math_opt.hpp (div_u64_u32 / div_i64_to_i32)
+# so libgcc 64-bit divmod helpers (_udivmoddi4, __aeabi_ldivmod, __aeabi_uldivmod) are never linked.
+
+# Battery energy/charge accumulators (uJ, uC, uWh, uAh) and shift-subtract 64-bit division helpers
+include/k2/battery/battery.hpp  std::uint64_t uj_fwd = 0, uj_rev = 0, uc_fwd = 0, uc_rev = 0;
+include/k2/battery/battery.hpp  std::int64_t acc_mv_ms = 0, acc_ma_ms = 0;
+include/k2/battery/battery.hpp  std::uint64_t uj_in = 0, uj_out = 0, uc_in = 0, uc_out = 0;
+include/k2/battery/battery.hpp  struct Sums { std::uint64_t uwh_in = 0, uwh_out = 0, uah_in = 0, uah_out = 0; std::uint32_t secs = 0; };
+include/k2/battery/battery.hpp  std::uint16_t ratio_permille(std::uint64_t out, std::uint64_t in);
+src/battery/battery.cpp         std::uint64_t udiv64_by_u16(std::uint64_t x, std::uint16_t d) {
+src/battery/battery.cpp         return (std::uint64_t(q_hi) << 32) | (std::uint64_t(q2) << 16) | (w1 / d);
+src/battery/battery.cpp         std::uint64_t udiv64(std::uint64_t num, std::uint64_t den) {
+src/battery/battery.cpp         std::uint64_t q = 0;
+src/battery/battery.cpp         std::int64_t sdiv64_by_u16(std::int64_t num, std::uint16_t den) {
+src/battery/battery.cpp         const std::uint64_t mag = neg ? std::uint64_t(-(num + 1)) + 1u : std::uint64_t(num);
+src/battery/battery.cpp         const std::uint64_t q = udiv64_by_u16(mag, den);
+src/battery/battery.cpp         return neg ? -std::int64_t(q) : std::int64_t(q);
+src/battery/battery.cpp         std::int64_t sdiv64_by_u32(std::int64_t num, std::uint32_t den) {
+src/battery/battery.cpp         const std::uint64_t q = udiv64(mag, den);
+src/battery/battery.cpp         void split(std::int64_t a, std::int64_t b, std::int64_t dt, std::uint64_t &pos, std::uint64_t &neg) {
+src/battery/battery.cpp         if (a >= 0 && b >= 0) { pos += std::uint64_t((a + b) * dt) >> 1; return; }
+src/battery/battery.cpp         if (a <= 0 && b <= 0) { neg += std::uint64_t(-(a + b) * dt) >> 1; return; }
+src/battery/battery.cpp         const std::int64_t span = a > b ? a - b : b - a;
+src/battery/battery.cpp         const std::int64_t up = a > 0 ? a : b, down = a > 0 ? -b : -a;
+src/battery/battery.cpp         const std::uint64_t den = std::uint64_t(span) * 2u;
+src/battery/battery.cpp         pos += udiv64(std::uint64_t(up * up) * std::uint64_t(dt), den);
+src/battery/battery.cpp         neg += udiv64(std::uint64_t(down * down) * std::uint64_t(dt), den);
+src/battery/battery.cpp         const std::int64_t p0 = sdiv64_by_u16(std::int64_t(mv0) * ma0, 1000u);
+src/battery/battery.cpp         const std::int64_t p1 = sdiv64_by_u16(std::int64_t(mv1) * ma1, 1000u);
+src/battery/battery.cpp         acc_mv_ms += std::int64_t(mv) * dt_ms;
+src/battery/battery.cpp         acc_ma_ms += std::int64_t(ma) * dt_ms;
+src/battery/battery.cpp         ph_[i] = Phase{q.kind, q.end, q.gaps, q.secs * 1000u, std::uint64_t(q.uwh_in) * 3600u, std::uint64_t(q.uwh_out) * 3600u,
+src/battery/battery.cpp         std::uint64_t(q.uah_in) * 3600u, std::uint64_t(q.uah_out) * 3600u};
+src/battery/battery.cpp         std::uint16_t ratio_permille(std::uint64_t out, std::uint64_t in) {
+src/battery/battery.cpp         const std::uint64_t p = udiv64(out * 1000u + (in >> 1), in);
+
+# Report card 45-bit / 48-bit packed bitfields
+include/k2/chargertest/report_card.hpp  const uint64_t v = uint64_t(std::min<unsigned>(w.worst_dv, 511u)) | uint64_t(std::min<unsigned>(w.peak_dv, 511u)) << 9 |
+include/k2/chargertest/report_card.hpp  uint64_t(std::min<unsigned>(w.peak_at_dv, 511u)) << 18 | uint64_t(std::min<unsigned>(w.fold_dv, 511u)) << 27 |
+include/k2/chargertest/report_card.hpp  uint64_t(std::min<unsigned>(w.fold_from_dv, 511u)) << 36;
+include/k2/chargertest/report_card.hpp  uint64_t v = 0;
+include/k2/chargertest/report_card.hpp  for (unsigned k = 0; k < 6; ++k) v |= uint64_t(q[3 + k]) << (8 * k);
+
+# Core: 64-bit sector wipe bitmask, libgcc-free divmod helpers, pixel meter, bounds checks, ringlog offset
+include/k2/core/factory_wipe.hpp  std::uint64_t mine = 0;
+include/k2/core/factory_wipe.hpp  mine |= std::uint64_t{1} << i;
+include/k2/core/math_opt.hpp      inline std::uint64_t div_u64_u32_slow(std::uint64_t num, std::uint32_t den) {
+include/k2/core/math_opt.hpp      std::uint64_t probe = den;
+include/k2/core/math_opt.hpp      std::uint64_t q = 0;
+include/k2/core/math_opt.hpp      std::uint64_t div = std::uint64_t{den} << shift;
+include/k2/core/math_opt.hpp      constexpr std::uint64_t div_u64_u32(std::uint64_t num, std::uint32_t den) {
+include/k2/core/math_opt.hpp      constexpr std::uint32_t div_u64_to_u32(std::uint64_t num, std::uint32_t den) {
+include/k2/core/math_opt.hpp      return div_u64_to_u32(std::uint64_t{a} * b, den);
+include/k2/core/math_opt.hpp      constexpr std::int32_t div_i64_to_i32(std::int64_t num, std::int32_t den) {
+include/k2/core/math_opt.hpp      const std::uint64_t mag = neg ? static_cast<std::uint64_t>(-num) : static_cast<std::uint64_t>(num);
+include/k2/core/math_opt.hpp      return div_i64_to_i32(std::int64_t{a} * b, den);
+include/k2/core/paint_meter.hpp   constexpr std::uint32_t sat32(std::uint64_t v) { return v > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<std::uint32_t>(v); }
+include/k2/core/paint_meter.hpp   constexpr std::uint32_t ms_of(std::uint64_t cycles) { return sat32(math::div_u64_u32(cycles, kCyclesPerMs)); }
+include/k2/core/paint_meter.hpp   std::uint64_t px_count() const { return cur_.px; }
+include/k2/core/paint_meter.hpp   std::uint64_t px = 0, lcd = 0, fs = 0;
+include/k2/core/remote_proto.hpp  if (n == 0 || n > kFlashDumpMax || addr < kFlashDumpBase || uint64_t{addr} + n > kFlashDumpEnd) return reply(Status::BadArg);
+include/k2/core/ringlog.hpp       void scan(std::uint64_t skip = 0);
+src/core/main_loop.cpp            const uint64_t pass_px0 = k2::paint::meter.px_count();
+src/core/math_selftest.cpp        const long long v = keep(static_cast<std::uint32_t>(350u + i * 4321u));
+src/core/remote_proto.cpp         const auto u16c = [](std::int64_t x) { return static_cast<uint16_t>(x < 0 ? 0 : x > 0xFFFF ? 0xFFFF : x); };
+src/core/ringlog.cpp              void Ring::scan(std::uint64_t skip) {
+
+# Drivers: compile-time LCD timing math and power_calc shunt/running-average arithmetic
+include/k2/drivers/lcd_timing.hpp  return static_cast<std::uint32_t>(std::uint64_t{px} * 16u * static_cast<unsigned>(div) * 1'000'000u /
+include/k2/drivers/lcd_timing.hpp  (std::uint64_t{kApb1Hz}));
+src/drivers/power_calc.cpp         std::uint64_t udiv64_by_u16(std::uint64_t x, std::uint16_t d) {
+src/drivers/power_calc.cpp         return (static_cast<std::uint64_t>(q_hi) << 32) | (q1 << 16) | q2;
+src/drivers/power_calc.cpp         const std::uint32_t mv = static_cast<std::uint32_t>((std::uint64_t{mag} * mul + (1u << (shift - 1))) >> shift);
+src/drivers/power_calc.cpp         const std::uint64_t prod = std::uint64_t{magnitude(vbus_mv)} * magnitude(current_ma);
+src/drivers/power_calc.cpp         std::int64_t sum = 0;
+src/drivers/power_calc.cpp         const std::uint64_t mag = sum < 0 ? static_cast<std::uint64_t>(-sum) : static_cast<std::uint64_t>(sum);
+src/drivers/power_calc.cpp         const std::uint64_t q = (count_ == kAvgLen) ? (mag >> 7) : udiv64_by_u16(mag, static_cast<std::uint16_t>(count_));
+
+# Fastcharge: 64-bit varint edge encoding and UFCS 64-bit wire frame
+include/k2/fastcharge/edges.hpp  std::uint64_t v = (std::uint64_t(d) << 2) | state(words[i]);
+include/k2/fastcharge/edges.hpp  for (std::uint64_t t = v >> 7; t; t >>= 7) need++;
+include/k2/fastcharge/edges.hpp  std::uint64_t v = 0;
+include/k2/fastcharge/edges.hpp  v |= std::uint64_t(b & 0x7f) << sh;
+include/k2/fastcharge/ufcs.hpp   constexpr std::uint64_t request_word(int pos, int mv, int ma) {
+include/k2/fastcharge/ufcs.hpp   return (static_cast<std::uint64_t>(pos & 0xF) << 60) | (static_cast<std::uint64_t>(mv / kUnitMv & 0xFFFF) << 16) |
+include/k2/fastcharge/ufcs.hpp   static_cast<std::uint64_t>(ma / kUnitMa & 0xFFFF);
+include/k2/fastcharge/ufcs.hpp   const std::uint64_t w = request_word(pos, mv, ma);
+include/k2/fastcharge/ufcs.hpp   std::uint64_t w = 0;
+
+# HTTP JSON integer formatting/parsing (K2_NET=1)
+include/k2/net/http_api.hpp  std::uint64_t v = 0;
+include/k2/net/http_api.hpp  void num(std::int64_t v) {
+include/k2/net/http_api.hpp  std::uint64_t u = v < 0 ? 0 - static_cast<std::uint64_t>(v) : static_cast<std::uint64_t>(v);
+include/k2/net/http_api.hpp  void field(std::string_view k, std::int64_t v) { key(k); num(v); }
+include/k2/net/http_api.hpp  j.num(static_cast<std::int64_t>(content_length));
+
+# PD diagnostics & PD stress timing/energy math (using math_opt / shift-subtract udiv64)
+include/k2/pdstress/engine.hpp  std::int64_t acc_us = -1, rdy_us = -1;
+include/k2/pdstress/engine.hpp  if (acc_us >= 0 && acc_us < std::int64_t(kSuspectAcceptUs)) { ++suspect_; acc_us = -1; }
+include/k2/pdstress/engine.hpp  if (acc_us < 0 && s.accept_at && s.accept_at >= issue_ms_) acc_us = std::int64_t(s.accept_at - issue_ms_) * 1000;
+include/k2/pdstress/engine.hpp  if (rdy_us < 0 && s.accept_at && s.ps_rdy_at && s.ps_rdy_at >= s.accept_at) rdy_us = std::int64_t(s.ps_rdy_at - s.accept_at) * 1000;
+include/k2/pdstress/engine.hpp  const std::uint32_t acc_t = math::div_u64_to_u32(static_cast<std::uint64_t>(acc_us), 100u);
+include/k2/pdstress/engine.hpp  if (acc_us > std::int64_t(pd::spec::kAcceptLimitMs) * 1000) event(Event::AcceptLate, acc_t);
+include/k2/pdstress/engine.hpp  const std::uint32_t rdy_t = math::div_u64_to_u32(static_cast<std::uint64_t>(rdy_us), 100u);
+include/k2/pdstress/engine.hpp  if (rdy_us > std::int64_t(lim) * 1000) event(Event::PsRdyLate, rdy_t);
+include/k2/pdstress/score.hpp   const std::uint64_t cp = math::div_u64_u32(std::uint64_t(penalty_points(c)) * 10000u, t);
+src/pd/diag.cpp                 std::uint64_t udivmod64_by_1000(std::uint64_t x, std::uint16_t& rem_out) {
+src/pd/diag.cpp                 return (std::uint64_t(q_hi) << 32) | (std::uint64_t(q2) << 16) | q1;
+src/pd/diag.cpp                 std::uint64_t udiv64(std::uint64_t num, std::uint64_t den) {
+src/pd/diag.cpp                 std::uint64_t q = 0;
+src/pd/diag.cpp                 : std::uint32_t(udiv64(std::uint64_t(r) * k, b));
+src/pd/diag.cpp                 void acc(std::uint32_t& sum, std::uint16_t& frac, std::uint64_t prod) {
+src/pd/diag.cpp                 acc(s.mj, mj_frac_, std::uint64_t(mw) * dt);
+src/pd/diag.cpp                 acc(s.mv_s, mv_frac_, std::uint64_t(v_mv_) * dt);
+src/pd/diag.cpp                 acc(s.cmj, cmj_frac_, std::uint64_t(mw) * dt);
+src/pd/diag.cpp                 static std::uint32_t sat_add(std::uint32_t a, std::uint64_t b) {
+src/pd/diag.cpp                 const std::uint64_t s = std::uint64_t(a) + b;
+src/pd/diag.cpp                 blk_over_mas_ = sat_add(blk_over_mas_, std::uint64_t(ma) * dt);
+src/pd/diag.cpp                 if (std::uint64_t(blk_over_ms_) * 100 >= std::uint64_t(blk_ms_) * kSustainPct) {
+src/pd/diag.cpp                 std::uint64_t(s.over_ms) * 100 >= std::uint64_t(s.cobs_ms) * kOverSharePct) ||
+src/pd/diag.cpp                 std::uint64_t(s.pin_ms) * 100 >= std::uint64_t(s.cobs_ms) * kPinSharePct)
+
+# Digital twin overflow-safe mV*mA / mW comparisons
+include/k2/twin/learn.hpp    std::uint64_t best = 0;
+include/k2/twin/learn.hpp    if (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps) best = std::max<std::uint64_t>(best, std::uint64_t(s.max_mv) * s.max_ma);
+include/k2/twin/predict.hpp  if (static_cast<std::uint64_t>(o.mw) * 100u >= static_cast<std::uint64_t>(want) * 60u) return Grade::Partial;
+
+# UI: EnergyMeter accumulators, battery/readout formatting, overflow-safe scaling, accelerometer norm, QR bitpacker
+include/k2/ui/battery_view.hpp  Num wh(uint64_t uwh);
+include/k2/ui/battery_view.hpp  Num mah(uint64_t uah);
+include/k2/ui/home_model.hpp    return static_cast<uint64_t>(abs_ma) * 10 >= static_cast<uint64_t>(max_ma) * 9 ? Alarm::Near : Alarm::None;
+include/k2/ui/home_model.hpp    return max_ma == 0 ? 0 : math::div_u64_to_u32(static_cast<uint64_t>(abs_ma) * 100u + max_ma / 2u, max_ma);
+include/k2/ui/home_model.hpp    const uint64_t n = static_cast<uint64_t>(abs) * static_cast<uint32_t>(b.x1 - b.x0);
+include/k2/ui/home_model.hpp    const uint64_t num = static_cast<uint64_t>(v) * static_cast<uint32_t>(span);
+include/k2/ui/readout_fmt.hpp   constexpr std::size_t fmt3(std::span<char> out, long long milli, char unit) {
+include/k2/ui/readout_fmt.hpp   uint64_t v = static_cast<uint64_t>(milli < 0 ? -milli : milli);
+include/k2/ui/readout_fmt.hpp   constexpr std::size_t formula(std::span<char> out, long long mv, long long ma, long long mw) {
+include/k2/ui/ui.hpp            uint64_t paint_px0_ = 0;
+include/k2/ui/ui_calc.hpp       int64_t microcoulombs() const { return uc_; }
+include/k2/ui/ui_calc.hpp       int64_t microjoules() const { return uj_; }
+include/k2/ui/ui_calc.hpp       int64_t uj_ = 0;
+include/k2/ui/ui_calc.hpp       int64_t uc_ = 0;
+src/ui/battery_view.cpp         uint32_t milli(uint64_t micro) {
+src/ui/battery_view.cpp         const uint64_t m = math::div_u64_u32(micro, 1000u);
+src/ui/battery_view.cpp         Num wh(uint64_t uwh) {
+src/ui/battery_view.cpp         Num mah(uint64_t uah) {
+src/ui/battery_view.cpp         const uint64_t e = s.mode == Mode::Discharge ? s.sum.uwh_out : s.sum.uwh_in;
+src/ui/home_cards.cpp           uint32_t mag(int32_t v) { return v < 0 ? static_cast<uint32_t>(-static_cast<int64_t>(v)) : static_cast<uint32_t>(v); }
+src/ui/home_cards.cpp           const uint32_t bp = math::div_u64_to_u32(static_cast<uint64_t>(dip) * 10000u + level_mv / 2u, level_mv);
+src/ui/home_cards.cpp           const int64_t di = static_cast<int64_t>(mag(ibus_ma)) - idle_ma;
+src/ui/home_cards.cpp           constexpr int32_t fold(int32_t avg256, int32_t x) { return avg256 + math::div_i64_to_i32((int64_t{x} * 256 - avg256) * 3, 100); }
+src/ui/home_model.cpp           const int64_t a = prev_mv < 0 ? -int64_t(prev_mv) : prev_mv, b = cur_mv < 0 ? -int64_t(cur_mv) : cur_mv;
+src/ui/home_model.cpp           const int64_t d = a > b ? a - b : b - a, hi = a > b ? a : b;
+src/ui/orientation.cpp          const int64_t norm = static_cast<int64_t>(x) * x + static_cast<int64_t>(y) * y +
+src/ui/orientation.cpp          static_cast<int64_t>(z) * z;
+src/ui/qrshare_records.cpp      acc_ |= std::uint64_t(v & mask) << nbits_;
+src/ui/qrshare_records.cpp      std::uint64_t acc_ = 0;
+src/ui/ui_cabler.cpp            const int64_t num = int64_t(drop) * est->load_ma + 500;
+src/ui/ui_cabler.cpp            const int32_t mw = math::div_i64_to_i32(drop < 0 ? int64_t(drop) * est->load_ma - 500 : num, 1000);
+src/ui/ui_calc.cpp              uj_ += (static_cast<uint64_t>(last_mw_) + static_cast<uint64_t>(power_mw)) * dt >> 1;
+src/ui/ui_calc.cpp              uc_ += (static_cast<uint64_t>(last_ma_) + static_cast<uint64_t>(current_ma)) * dt >> 1;

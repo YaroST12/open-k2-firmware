@@ -7,6 +7,8 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/math_opt.hpp"
+
 namespace k2 {
 
 // Integrates forward power over time (trapezoid rule) in microjoules. Negative (reverse) power
@@ -19,9 +21,9 @@ public:
     // Also integrates the forward current (mA * ms = uC, 1 mAh = 3.6e6 uC); reverse counts as 0.
     void update(uint32_t now_ms, int32_t power_mw, int32_t current_ma);
     int64_t microcoulombs() const { return uc_; }
-    int32_t mah() const { return static_cast<int32_t>(uc_ / 3'600'000); }
+    int32_t mah() const { return math::div_i64_to_i32(uc_, 3'600'000); }
     int64_t microjoules() const { return uj_; }
-    int32_t mwh() const { return static_cast<int32_t>(uj_ / 3'600'000); }  // 1 mWh = 3.6e6 uJ
+    int32_t mwh() const { return math::div_i64_to_i32(uj_, 3'600'000); }  // 1 mWh = 3.6e6 uJ
     uint32_t elapsed_s(uint32_t now_ms) const { return (now_ms - start_ms_) / 1000u; }
 
 private:
@@ -40,7 +42,7 @@ constexpr int hold_secs_left(uint32_t held_ms, uint32_t total_ms) {
     return held_ms >= total_ms ? 0 : static_cast<int>((total_ms - held_ms + 999) / 1000);
 }
 constexpr int hold_fill_px(uint32_t held_ms, uint32_t total_ms, int track_px) {
-    return held_ms >= total_ms ? track_px : static_cast<int>(static_cast<uint64_t>(held_ms) * static_cast<uint32_t>(track_px) / total_ms);
+    return held_ms >= total_ms ? track_px : static_cast<int>(math::mul_div_u32(held_ms, static_cast<uint32_t>(track_px), total_ms));
 }
 
 // The reboot gesture: OK and Back held together for kChordRebootMs, on every page and menu. The HoldCard shows from

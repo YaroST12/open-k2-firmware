@@ -1600,6 +1600,7 @@ void Remote::stream_ripple(uint8_t seq) {
     }
 }
 
+#if K2_SCREENSHOT
 bool Remote::screenshot_enabled() { return uiprefs::screenshot_enabled; }
 
 remote::Status Remote::screenshot() {
@@ -1607,6 +1608,11 @@ remote::Status Remote::screenshot() {
     shot_pending_ = true;
     return remote::Status::Ok;
 }
+#else
+bool Remote::screenshot_enabled() { return false; }
+
+remote::Status Remote::screenshot() { return remote::Status::UnknownCmd; }
+#endif
 
 remote::ScreenInfo Remote::screen_info() { return {}; }
 

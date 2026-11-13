@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include "k2/core/math_opt.hpp"
 #include "k2/pd/diag.hpp"
 #include "k2/ui/ui_calc.hpp"
 
@@ -59,7 +60,7 @@ constexpr Alarm alarm_of(uint32_t abs_ma, uint32_t max_ma) {
     return static_cast<uint64_t>(abs_ma) * 10 >= static_cast<uint64_t>(max_ma) * 9 ? Alarm::Near : Alarm::None;
 }
 constexpr uint32_t pct_of(uint32_t abs_ma, uint32_t max_ma) {
-    return max_ma == 0 ? 0 : static_cast<uint32_t>((static_cast<uint64_t>(abs_ma) * 100 + max_ma / 2) / max_ma);
+    return max_ma == 0 ? 0 : math::div_u64_to_u32(static_cast<uint64_t>(abs_ma) * 100u + max_ma / 2u, max_ma);
 }
 
 // ---- limit bar ---------------------------------------------------------------------------------
@@ -68,7 +69,9 @@ constexpr int bar_track(BarGeom b) { return b.x1 - b.x0 + 1; }
 constexpr int bar_fill_w(uint32_t abs, uint32_t max, BarGeom b) {
     if (max == 0 || abs == 0) return 0;
     const uint64_t n = static_cast<uint64_t>(abs) * static_cast<uint32_t>(b.x1 - b.x0);
-    const int w = static_cast<int>((n * 2 + max) / (2ull * max)) + 1;   // round((x1 - x0) f) + 1
+    const uint32_t den = max <= 0x7FFFFFFFu ? 2u * max : max;
+    const int w = static_cast<int>(max <= 0x7FFFFFFFu ? math::div_u64_to_u32(n * 2u + max, den)
+                                                     : math::div_u64_to_u32(n + max / 2u, max)) + 1;   // round((x1 - x0) f) + 1
     return w > bar_track(b) ? bar_track(b) : w;
 }
 // x of the 90 % tick.
@@ -80,13 +83,16 @@ constexpr int16_t bar_tick_x(BarGeom b) {
 // Full scale of a cell in 10 mV / 10 mA / 10 mW units: the contract maximum x 1.15 (20 V / 5 A / 60 W when unknown).
 constexpr uint32_t scale_v10(uint32_t max_mv) { return (max_mv ? max_mv : 20000u) * 115u / 1000u; }
 constexpr uint32_t scale_a10(uint32_t max_ma) { return (max_ma ? max_ma : 5000u) * 115u / 1000u; }
-constexpr uint32_t scale_w10(uint32_t max_mw) { return static_cast<uint32_t>(static_cast<uint64_t>(max_mw ? max_mw : 60000u) * 115u / 1000u); }
+constexpr uint32_t scale_w10(uint32_t max_mw) { return math::mul_div_u32(max_mw ? max_mw : 60000u, 115u, 1000u); }
 // Rows covered by a sample, counted from the cell bottom of the sweep area: 0 = no column,
 // else 1 .. span+1 (the top row of the column is its level line).
 constexpr int sweep_rows(uint32_t v10, uint32_t scale10, int span) {
     if (v10 <= 1 || v10 == 0xFFFF || scale10 == 0) return 0;
     const uint32_t v = v10 > scale10 ? scale10 : v10;
-    return static_cast<int>((static_cast<uint64_t>(v) * static_cast<uint32_t>(span) * 2 + scale10) / (2ull * scale10)) + 1;
+    const uint64_t num = static_cast<uint64_t>(v) * static_cast<uint32_t>(span);
+    const uint32_t q = scale10 <= 0x7FFFFFFFu ? math::div_u64_to_u32(num * 2u + scale10, 2u * scale10)
+                                             : math::div_u64_to_u32(num + scale10 / 2u, scale10);
+    return static_cast<int>(q) + 1;
 }
 constexpr int col_of_x(int x) { return (x - kColX0) / 2; }              // valid for x in 4..223
 constexpr int16_t x_of_col(int col) { return static_cast<int16_t>(kColX0 + col * 2); }

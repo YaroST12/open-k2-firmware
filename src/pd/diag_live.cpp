@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <new>
 
 #include "k2/core/storage.hpp"
 #include "k2/drivers/power_monitor.hpp"
@@ -17,17 +18,27 @@ namespace k2::pd::diag::live {
 
 namespace {
 
-Analyzer g_an;
+alignas(Analyzer) std::uint8_t g_an_raw[sizeof(Analyzer)];
+bool g_an_inited;
 WindowAcc g_acc;
-Report g_report;
+alignas(Report) std::uint8_t g_report_raw[sizeof(Report)];
 std::uint32_t g_eval_ms;
 bool g_evaluated;
+
+Analyzer& an() {
+    if (!g_an_inited) {
+        new (g_an_raw) Analyzer();
+        g_an_inited = true;
+    }
+    return *std::launder(reinterpret_cast<Analyzer*>(g_an_raw));
+}
 
 // The device twin matched to the shown session's sink identity, looked up once per (session, identity).
 twin::Twin g_twin;
 TwinHint g_hint;
 bool g_hint_ok;
-std::uint16_t g_twin_key_n = 0xFFFF, g_twin_vid, g_twin_pid;
+bool g_twin_key_valid;
+std::uint16_t g_twin_key_n, g_twin_vid, g_twin_pid;
 
 std::uint32_t g_cursor;
 bool g_have_cursor;
@@ -41,7 +52,7 @@ void drain_ring() {
     for (unsigned guard = 0; guard < 64 && g_cursor != ring.head(); guard++) {
         const auto r = ring.read(g_cursor, buf);
         if (r.bytes == 0 && r.next == g_cursor) break;
-        g_an.feed({buf.data(), r.bytes});
+        an().feed({buf.data(), r.bytes});
         g_cursor = r.next;
     }
 }
@@ -51,9 +62,11 @@ std::int16_t clamp_s16(std::int32_t v) { return std::int16_t(std::clamp<std::int
 
 const TwinHint* match_twin(const Session& s) {
     if (s.snk_vid == 0) return nullptr;
-    if (g_twin_key_n == g_an.finished() && g_twin_vid == s.snk_vid && g_twin_pid == s.snk_pid)
+    const std::uint16_t finished = an().finished();
+    if (g_twin_key_valid && g_twin_key_n == finished && g_twin_vid == s.snk_vid && g_twin_pid == s.snk_pid)
         return g_hint_ok ? &g_hint : nullptr;
-    g_twin_key_n = g_an.finished();
+    g_twin_key_valid = true;
+    g_twin_key_n = finished;
     g_twin_vid = s.snk_vid;
     g_twin_pid = s.snk_pid;
     g_hint_ok = false;
@@ -80,33 +93,40 @@ void poll(std::uint32_t now_ms) {
     const std::uint32_t us = systick::micros();
     if (const auto m = power::read_raw()) {
         Window w;
-        if (g_acc.add(now_ms, clamp16(m->vbus_mv), clamp_s16(m->current_ma), w)) g_an.power_window(us, w);
+        if (g_acc.add(now_ms, clamp16(m->vbus_mv), clamp_s16(m->current_ma), w)) an().power_window(us, w);
     }
-    g_an.advance(us);
+    an().advance(us);
 }
 
 const Report& report() {
     const std::uint32_t now = systick::millis();
     if (!g_evaluated || now - g_eval_ms >= kRefreshMs) {
-        const Session& s = g_an.shown();
-        g_report = evaluate(s, match_twin(s), g_an.now_ms());
+        const Session& s = an().shown();
+        const TwinHint* hint = match_twin(s);
+        if (!g_evaluated) {
+            new (g_report_raw) Report(evaluate(s, hint, an().now_ms()));
+            g_evaluated = true;
+        } else {
+            *std::launder(reinterpret_cast<Report*>(g_report_raw)) = evaluate(s, hint, an().now_ms());
+        }
         g_eval_ms = now;
-        g_evaluated = true;
     }
-    return g_report;
+    return *std::launder(reinterpret_cast<const Report*>(g_report_raw));
 }
 
 State state() {
-    if (g_an.current().open) return State::Open;
-    return g_an.has_last() ? State::Last : State::None;
+    if (!g_an_inited) return State::None;
+    if (an().current().open) return State::Open;
+    return an().has_last() ? State::Last : State::None;
 }
 
-std::uint16_t sessions() { return g_an.finished(); }
+std::uint16_t sessions() { return g_an_inited ? an().finished() : 0; }
 
 std::uint32_t session_ms() {
-    const Session& s = g_an.shown();
-    if (!s.open && !g_an.has_last()) return 0;
-    return (s.open ? g_an.now_ms() : s.end_ms) - s.start_ms;
+    if (!g_an_inited) return 0;
+    const Session& s = an().shown();
+    if (!s.open && !an().has_last()) return 0;
+    return (s.open ? an().now_ms() : s.end_ms) - s.start_ms;
 }
 
 void verdict_text(std::span<char> out) {

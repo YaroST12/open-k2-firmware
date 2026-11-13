@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "k2/core/math_opt.hpp"
+
 namespace k2::pdstress {
 
 // Everything the scorer counts. Order is the wire / journal order: append only.
@@ -95,8 +97,8 @@ constexpr std::uint32_t event_points(const Counts& c, Event e) {
 
 // The score in hundredths of a point: penalty per 100 transitions, x100 (1234 = 12.34). 0 = ideal.
 constexpr std::uint32_t score_cp(const Counts& c) {
-    const std::uint64_t t = c.transitions < kMinTransitions ? kMinTransitions : c.transitions;
-    const std::uint64_t cp = std::uint64_t(penalty_points(c)) * 100u * 100u / t;
+    const std::uint32_t t = c.transitions < kMinTransitions ? kMinTransitions : c.transitions;
+    const std::uint64_t cp = math::div_u64_u32(std::uint64_t(penalty_points(c)) * 10000u, t);
     return cp > 0xFFFFFFFFull ? 0xFFFFFFFFu : std::uint32_t(cp);
 }
 

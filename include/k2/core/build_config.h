@@ -16,7 +16,13 @@
 /* K2_WHOS_ATTACHED  1 = Tools > Charger ID / Cable read / Device ID open the old tabbed "Who's attached" page on that tab
  *                     (tab strip, Tab+/Tab-, the action pop-up).
  *                   0 = each opens its own single tool: one tab, no strip, OK runs the tool's action, the other actions are
- *                       rows under the result (the default since 2026-11-12: the tabbed page did not work well). */
+ *                       rows under the result (the default since 2026-11-12: the tabbed page did not work well).
+ *
+ * K2_SCREENSHOT  1 = screenshot capture (src/ui/capture.cpp, src/ui/rle565.cpp), remote Screenshot (0x0A), HTTP
+ *                    /api/screenshot.bmp and Settings > Screenshot are built in.
+ *                0 = none of it (the default: saves the 1920 B strip buffer and ~3 KB Flash). Remote answers UnknownCmd
+ *                    and screenshot_enabled() returns false. The host tests pass -DK2_SCREENSHOT=1 explicitly;
+ *                    `make K2_SCREENSHOT=1` builds screenshot capture back in. */
 #ifndef K2_BUILD_CONFIG_H_
 #define K2_BUILD_CONFIG_H_
 
@@ -30,6 +36,10 @@
 
 #ifndef K2_WHOS_ATTACHED
 #define K2_WHOS_ATTACHED 0
+#endif
+
+#ifndef K2_SCREENSHOT
+#define K2_SCREENSHOT 0
 #endif
 
 #endif /* K2_BUILD_CONFIG_H_ */

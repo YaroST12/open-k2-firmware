@@ -8,6 +8,7 @@
 #pragma once
 #include <cstdint>
 
+#include "k2/core/math_opt.hpp"
 #include "k2/drivers/systick.hpp"
 
 namespace k2::paint {
@@ -15,7 +16,7 @@ namespace k2::paint {
 inline constexpr std::uint32_t kCyclesPerMs = systick::kSysclkHz / 1000;
 
 constexpr std::uint32_t sat32(std::uint64_t v) { return v > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<std::uint32_t>(v); }
-constexpr std::uint32_t ms_of(std::uint64_t cycles) { return sat32(cycles / kCyclesPerMs); }
+constexpr std::uint32_t ms_of(std::uint64_t cycles) { return sat32(math::div_u64_u32(cycles, kCyclesPerMs)); }
 
 struct Reading {
     std::uint32_t px = 0, paint_ms = 0, fs_ms = 0;

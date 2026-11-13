@@ -45,9 +45,12 @@
 #include "k2/pd/pdtrace.hpp"
 #include "k2/pd/power_source.hpp"
 #include "k2/pd/transcap.hpp"
+#include "k2/core/build_config.h"
 #include "k2/ui/bootscreen.hpp"
 #include "k2/ui/bootscreen_hw.hpp"
+#if K2_SCREENSHOT
 #include "k2/ui/capture.hpp"
+#endif
 #include "k2/ui/ui.hpp"
 #if K2_NET
 #include "k2/net/http_server.hpp"
@@ -331,9 +334,12 @@ void pass() {
     switch (c.remote.poll()) {
     case k2::RemoteEvent::Reboot:     c.reboot(); break;
     case k2::RemoteEvent::Screenshot:
+#if K2_SCREENSHOT
         mark(Stage::Capture);
         if (c.bootscreen.active()) end_boot_screen(k2::systick::millis());   // a capture repaints the UI's fields over the code
-        k2::capture_screen(c.ui, c.remote.screenshot_seq(), k2::systick::millis()); break;
+        k2::capture_screen(c.ui, c.remote.screenshot_seq(), k2::systick::millis());
+#endif
+        break;
     case k2::RemoteEvent::Dfu:        c.dfu(); break;
     case k2::RemoteEvent::Fault:      k2::fault::trigger(c.remote.fault_kind()); break;
     case k2::RemoteEvent::None:       break;

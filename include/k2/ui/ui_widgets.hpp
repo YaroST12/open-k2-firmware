@@ -7,6 +7,7 @@
 #pragma once
 #include <cstdint>
 #include <string_view>
+#include "k2/core/math_opt.hpp"
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/ui_elem.hpp"
 #include "k2/ui/ui_icons.hpp"
@@ -40,7 +41,7 @@ constexpr int pill_width(int chars) { return chars * static_cast<int>(kLabelAdv)
 constexpr int gauge_fill_px(int w, int32_t value, int32_t full) {
     if (value <= 0 || full <= 0) return 0;
     if (value >= full) return w;
-    const int px = static_cast<int>(static_cast<int64_t>(w) * value / full);
+    const int px = static_cast<int>(math::mul_div_i32(w, value, full));
     return px < 2 ? 2 : px;
 }
 

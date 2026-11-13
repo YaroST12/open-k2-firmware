@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/chargertest/result_layout.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/chargertest/step_label.hpp"
@@ -630,7 +631,7 @@ size_t summarize(std::span<const ct::Step> steps, std::span<SummaryLine> out) {
         const bool unproven = !pd && !x.hunt && (x.detail == uint8_t(fc::Fail::NoVoltage) || x.detail == uint8_t(fc::Fail::Detected));
         const unsigned mv = unproven ? 0 : x.mv;
         if (!unproven && !mv) continue;
-        const unsigned mw = static_cast<unsigned>(uint64_t(mv) * ma / 1000);
+        const unsigned mw = math::mw_of(mv, ma);
         Best& b = best[unsigned(f)];
         // On a tie the later (more capable) protocol of the family wins.
         if (!b.have || mw > b.mw || (mw == b.mw && mv > b.mv) || (mw == b.mw && mv == b.mv && x.algorithm >= b.step->algorithm))

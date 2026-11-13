@@ -19,6 +19,7 @@
 #include <span>
 #include <string_view>
 
+#include "k2/core/math_opt.hpp"
 #include "k2/core/remote_proto.hpp"
 
 namespace k2::http {
@@ -200,7 +201,13 @@ struct Json {
         char t[21];
         int i = 0;
         std::uint64_t u = v < 0 ? 0 - static_cast<std::uint64_t>(v) : static_cast<std::uint64_t>(v);
-        do { t[i++] = static_cast<char>('0' + u % 10); u /= 10; } while (u);
+        while (u > 0xFFFFFFFFull) {
+            const std::uint32_t q_rem = static_cast<std::uint32_t>(u - math::div_u64_u32(u, 10u) * 10u);
+            t[i++] = static_cast<char>('0' + q_rem);
+            u = math::div_u64_u32(u, 10u);
+        }
+        std::uint32_t u32 = static_cast<std::uint32_t>(u);
+        do { t[i++] = static_cast<char>('0' + u32 % 10u); u32 /= 10u; } while (u32);
         if (v < 0) put('-');
         while (i) put(t[--i]);
         comma = true;

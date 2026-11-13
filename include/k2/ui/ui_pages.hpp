@@ -66,44 +66,24 @@ struct UiContext {
     Ui *ui = nullptr;
     Surface content{};
     Surface screen{};            // the same content area in panel pixels (224 x 240 or 240 x 224 by rotation): what a page draws on unscaled
-    uint8_t rotation = 0;        // physical LCD rotation, supplied by Ui
     uint32_t now = 0;            // time of the event being dispatched
     PaintBudget *budget = nullptr;   // active per-pass slice budget; nullptr during atomic screenshots/boot
     power::Metrics pm{};             // what the screen shows: One Euro smoothed (Settings > Smoothing)
     power::Metrics pm_avg{};         // the 128-sample average: the charger test's current, link detection, cable resistance
-    bool pm_online = false;
-    // True while the Ui paints a whole page onto a screen it knows is kBg everywhere (after the full clear or the erase pass:
-    // Ui::paint_incoming, render_for_capture). A page's first paint may then skip a body wipe, since the pixels are already
-    // kBg. Never true in the erase replay, a resync or a refresh: those paint over live ink.
-    // False while an OPAQUE page paints (Ui::page_opaque / menu_opaque): the switch skipped the erase pass, the old page's ink
-    // is still there, and the page must write every pixel of the content itself, the gaps between its cells included
-    // (kit::fill_except / kv_ground lay the ground in the same pass, so no pixel is streamed twice).
-    bool blank = false;
     std::int32_t vbus_fast_mv = 0;   // VBUS without the 2.5 s average: every judgement of a VBUS transition reads this, pm is display
     EnergyMeter meter;
     WattHistory watts;           // Big sparklines, one sample per second: forward power (mW)
     trend::Trend trend;          // Home v3 strips: V / A / W at 100 ms, 1 s and 10 s resolution
     WattHistory volts, amps;     // ... VBUS (mV) and |current| (mA)
-    bool em_scanned = false;
-    bool em_scanning = false;
     uint32_t em_listen_until = 0;   // passive listen window after a sniff that heard nothing (0 = none)
-    bool em_quiet = false;          // the last listen window ended without a cable reply
-    bool inline_mode = false;    // a live sink is attached: active operations are gated (refused, no confirm)
     std::optional<adc::Reading> analog;                          // averaged ADC sweep, once available
-    bool plus_key = false;       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
-    fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
     vooc::Live vooc{};           // inline VOOC monitor: a proven session now + the last raw 0x82 reply (fastcharge::vooc_live)
-    bool trig_armed = false;     // trigger above 5 V: first OK given, waiting for the second
     uint32_t cap_mv = 5000;      // highest voltage a request may ask for (power monitor limits)
     cable_r::Meter cable;                                        // passive two-point cable resistance
     // Home's PEAK and SAG cards: peaks and the worst dip since attach (or the last long OK on Home), fed from the raw sample
     // in Ui::tick against `sag_level_mv`, the level in force (home::sag_level_mv, refreshed every 100 ms while live).
     home::Extremes extremes;
     uint32_t sag_level_mv = 0;
-    cable_r::Mode cable_mode = cable_r::Mode::Passive;           // Cable R submenu: passive meter or Kelvin 8-wire
-    // The pending QR scan-test request (remote Cmd::QrTest op 1, k2/ui/ui_qrtest.hpp): the (version, px, quiet) of
-    // the next show, consumed by QrTestPage::enter(). The page itself lives in the page arena.
-    struct QrTestReq { std::uint8_t version = 0, px = 0, quiet = 0; } qrtest;
     std::optional<cable_r::Kelvin> kelvin;                       // Kelvin mode: latest valid sense reading
     // Stale lifecycle (design 6.6): when VBUS goes away the screens keep the last live reading.
     LiveTracker live;                                            // when VBUS was last present
@@ -113,7 +93,6 @@ struct UiContext {
         uint32_t elapsed_s = 0;
         home::ProtoInfo proto{};                                 // the protocol row of that reading
     } last;   // the last steady live snapshot (Ui::note_last: a falling VBUS or a released contract never lands here)
-    bool id_no_device = false;   // Identify was refused: nothing on CC, VBUS low (clears itself once something appears)
     // The one cable-identity list: its selection (what the next charger-test START presents), its saved-clone cache and its
     // armed marker. The wizard's Cable step and Tools -> Spoof both read and change this, so they always agree.
     CableIdentityList cables;
@@ -127,19 +106,40 @@ struct UiContext {
         home::Qty home_hero = home::Qty::W;               // Home: the hero quantity Long Back cycles (uiprefs, restored at boot)
         home::CardCycler cards;                           // Home: the right-column cards (reset on attach and long OK)
         home::Attention attention;                        // Home: what is changing now, for the upper card and its dot
-        uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Numbers, 2 Lines)
         int bench_sel = 1;                               // Bench: the focused place (Charger first: the Meter row only goes back)
-        std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
         int settings_sel = 0;                             // Settings: the highlighted row
         trig::Model trigger;                              // FC trigger: the draft (protocol, target) survives cancel()
         struct PdStress {                                 // Tools > PD Stress: the setup the next START uses
             std::uint16_t mask = pdstress::kDefaultSeqMask;   // picked sequences (bit = pdstress::Seq)
+            std::uint16_t closed_run = 0;                 // PdStressSession::run_no() of the result last saved or discarded
             std::uint8_t cycles = 2;                      // index into PdStressPage::kCyclesPct (25 / 50 / 100 / 200 %)
             std::uint8_t pace = 0;                        // pdstress::Options::pace
             std::uint8_t sel = 0;                         // the Setup list's cursor
-            std::uint16_t closed_run = 0;                 // PdStressSession::run_no() of the result last saved or discarded
         } pdstress;
+        std::array<uint8_t, bench::kPlaces> place_sel{};  // each place's last action: repeating a job is OK, OK, OK
+        uint8_t face = 0;                                 // Meter: the face last shown (0 Flow, 1 Numbers, 2 Lines)
     } keep;
+    // The pending QR scan-test request (remote Cmd::QrTest op 1, k2/ui/ui_qrtest.hpp): the (version, px, quiet) of
+    // the next show, consumed by QrTestPage::enter(). The page itself lives in the page arena.
+    struct QrTestReq { std::uint8_t version = 0, px = 0, quiet = 0; } qrtest;
+    uint8_t rotation = 0;        // physical LCD rotation, supplied by Ui
+    bool pm_online = false;
+    // True while the Ui paints a whole page onto a screen it knows is kBg everywhere (after the full clear or the erase pass:
+    // Ui::paint_incoming, render_for_capture). A page's first paint may then skip a body wipe, since the pixels are already
+    // kBg. Never true in the erase replay, a resync or a refresh: those paint over live ink.
+    // False while an OPAQUE page paints (Ui::page_opaque / menu_opaque): the switch skipped the erase pass, the old page's ink
+    // is still there, and the page must write every pixel of the content itself, the gaps between its cells included
+    // (kit::fill_except / kv_ground lay the ground in the same pass, so no pixel is streamed twice).
+    bool blank = false;
+    bool em_scanned = false;
+    bool em_scanning = false;
+    bool em_quiet = false;          // the last listen window ended without a cable reply
+    bool inline_mode = false;    // a live sink is attached: active operations are gated (refused, no confirm)
+    bool plus_key = false;       // the physical + key is down right now (Waiting watches it: it is wired to the CC pins)
+    fastcharge::Protocol fc = fastcharge::Protocol::Pending;     // passive D+/D- verdict
+    bool trig_armed = false;     // trigger above 5 V: first OK given, waiting for the second
+    cable_r::Mode cable_mode = cable_r::Mode::Passive;           // Cable R submenu: passive meter or Kelvin 8-wire
+    bool id_no_device = false;   // Identify was refused: nothing on CC, VBUS low (clears itself once something appears)
     // The pure precheck over the live readings (unknown = -1): is there a device to ask at all?
     bool no_device() const {
         return pd::identify_no_device(analog ? analog->cc1_mv : -1, analog ? analog->cc2_mv : -1,
@@ -414,57 +414,32 @@ private:
     ChargerTestPage* view_ = nullptr;   // the painted half while it exists
     const char* fc_words_ = nullptr;    // the footer words of the handshake the last start() opened (null: that protocol has none)
     charger_test::Runner runner_;
-    char card_name_[24] = {};  // saved card name of this run, the Results heading
     report_card::Identity card_id_{};
     report_card::Card card_{};   // the run's card while save_card builds and stores it; a member, not a stack copy (the save path is stack-gated, tools/stack_depth.py)
-    char mfr_[13] = {};   // Manufacturer_Info name from the source probe, only used to name the card
     std::array<report_card::DeltaLine, 8> delta_{};
     size_t delta_n_ = 0;
-    uint16_t card_no_ = 0, delta_runs_ = 0;   // saved card number (0 = none), runs before this one
     charger_journal::ResumeGate gate_;
-    bool journal_active_ = false, resume_pending_ = false;
-    bool journal_closed_ = false;   // closing() already wrote this run's Finish (poll() need not write it again)
-    bool capture_kept_ = false;          // the frozen transition capture already belongs to a failed row: a later failure (another unit) must not take it over
     // Journal writes a row in flight must not do (Runner::quiet()): the section files that hold a decided row or a replanned
     // plan are noted dirty in the journal itself. A write holds the main loop (and the PD engine) for 5 to 250 ms, so none is done
     // in one go: journal_pump() does ONE file per tick behind the row, and only while the PD link has been quiet (see record()).
     uint32_t jr_wait_ms_ = 0;               // when the pending records began to wait for a quiet link (0 = nothing waiting)
-    // The run's journal is armed (its whole plan written, header last) in pieces too, one write per tick on a quiet link, while the
-    // Runner is held in its first Baseline: arm_ 1 = rows and header, 2 = the run's meta record (one more write), 3 = the planned
-    // re-attach's marker and Rd gap (one more write), 4 = the source's own claim is awaited before the blink is decided (no flash
-    // write, bounded by kClaimWaitMs), 0 = done.
-    uint8_t arm_ = 0;
     uint32_t arm_t0_ = 0;
-    bool reattach_ask_ = false;             // the run's static conditions hold: the source's claim decides the blink (arm_ 4)
-    bool claim_asked_ = false;              // the claim wait started its probe (Get_Source_Cap_Extended and the rest of the quick probe)
     void claim_step(uint32_t now);
     void decide_reattach();
     charger_journal::RunMeta arm_meta_{};
     void journal_pump(uint32_t now);        // one file at most per call; there is no drain
     void arm_step(uint32_t now);
     void arm_abort();
-    bool self_run_ = false;              // the charger under test powers this K2 (a key-mode boot): the run keeps VBUS up, its card says so
-    bool auto_resume_ = false;          // the journaled run was unattended (charger-powered K2): resume without the OK press
     ctcable::Choice resume_cable_{};     // the journaled identity of that run, re-armed by reapply_cable()
-    bool resume_rd_ = false;             // the resume presented the Rd (host-powered K2): wait_ carries the wait for the charger
-    bool resume_hold_ = false;           // BACK, or the identity could not be armed: no Rd is presented until OK asks again
-    bool resume_refused_ = false;        // the Ra guard says the charger is behind a cable: the journaled identity cannot be armed
     uint32_t resume_judged_ = 0;         // when the guard last judged (and logged) for the resume
     charger_test::Options options_;
     charger_test::Summary summary_;
     uint32_t run_t0_ = 0;                  // when the run entered Running (the m:ss on screen)
-    uint8_t run_guard_ = 0;                // the Ra guard's reading of the run in flight, journal / card encoding (RunMeta::guard)
     StrBuf<32> message_;
-    Stage stage_ = Stage::Algorithms;
     int selection_ = 0, family_ = 0, result_family_ = -1, detail_index_ = 0, detail_row_ = 0;
     // The identity the next START presents lives in ctx_.cables (the list Tools -> Spoof shares), not here.
     ctcable::Choice run_cable_{};        // the identity of the current / last run
     ctcable::Facts run_facts_{};         // its VID / PID / limits, for the report card
-    char run_cable_name_[ctcable::kNameLen] = {};
-    bool dialog_spoof_ = false;          // the run presents the spoof (release_run lets go of it)
-    bool spoof_user_ = false;            // ... but the user had armed that very identity in Tools first: release_run leaves it armed
-    bool dialog_ra_ = false;             // the dialog turned the Ra mode on (release_run turns it off)
-    bool follow_ = true, confirming_ = false;
     // Running: the verdict grid follows the step under test (follow_), anchored to the bottom: the running row ends the window
     // (ResultGrid::anchor_bottom), the finished rows stay above. PLUS / MINUS scroll it by hand (follow_ = false, the
     // line the user chose in scroll_line_); the follow resumes kFollowResumeMs after the last press or when the step changes.
@@ -476,10 +451,42 @@ private:
     uint32_t wait_slow_ = 0;             // the last attach scan (every pd::kStartWaitSlowMs)
     waitplus::PlusWatch plus_watch_;     // paces the [WAKE] lines while + is held in Waiting (and 2 s after)
     uint32_t wait_pause_until_ = 0;      // the 1 s Rd-off between the two attempts ends here
-    bool wait_retry_ = false, wait_paused_ = false;   // the second attempt is running / the Rd is off between the two
     raguard::PeakWindow guard_;          // CC peaks over the last ~0.8 s while Cable / Review is open (a PLUS press sags CC2)
     uint32_t guard_t_ = 0;               // when the last sample went into guard_
+    uint32_t reattach_t0_ = 0;
+    void reattach_begin(uint32_t now);
+    void reattach_step(uint32_t now);
+    void reattach_drop();
+    uint32_t confirm_until_ = 0;
+    Proposal confirm_proposal_{};
+    uint16_t card_no_ = 0, delta_runs_ = 0;   // saved card number (0 = none), runs before this one
+    char card_name_[24] = {};  // saved card name of this run, the Results heading
+    char mfr_[13] = {};   // Manufacturer_Info name from the source probe, only used to name the card
+    char run_cable_name_[ctcable::kNameLen] = {};
+    Stage stage_ = Stage::Algorithms;
     raguard::Topology topology_ = raguard::Topology::Unknown;   // the guard's last reading (the Warning screen, the run's journal)
+    // The run's journal is armed (its whole plan written, header last) in pieces too, one write per tick on a quiet link, while the
+    // Runner is held in its first Baseline: arm_ 1 = rows and header, 2 = the run's meta record (one more write), 3 = the planned
+    // re-attach's marker and Rd gap (one more write), 4 = the source's own claim is awaited before the blink is decided (no flash
+    // write, bounded by kClaimWaitMs), 0 = done.
+    uint8_t arm_ = 0;
+    uint8_t run_guard_ = 0;                // the Ra guard's reading of the run in flight, journal / card encoding (RunMeta::guard)
+    uint8_t reattach_ = 0;
+    bool journal_active_ = false, resume_pending_ = false;
+    bool journal_closed_ = false;   // closing() already wrote this run's Finish (poll() need not write it again)
+    bool capture_kept_ = false;          // the frozen transition capture already belongs to a failed row: a later failure (another unit) must not take it over
+    bool reattach_ask_ = false;             // the run's static conditions hold: the source's claim decides the blink (arm_ 4)
+    bool claim_asked_ = false;              // the claim wait started its probe (Get_Source_Cap_Extended and the rest of the quick probe)
+    bool self_run_ = false;              // the charger under test powers this K2 (a key-mode boot): the run keeps VBUS up, its card says so
+    bool auto_resume_ = false;          // the journaled run was unattended (charger-powered K2): resume without the OK press
+    bool resume_rd_ = false;             // the resume presented the Rd (host-powered K2): wait_ carries the wait for the charger
+    bool resume_hold_ = false;           // BACK, or the identity could not be armed: no Rd is presented until OK asks again
+    bool resume_refused_ = false;        // the Ra guard says the charger is behind a cable: the journaled identity cannot be armed
+    bool dialog_spoof_ = false;          // the run presents the spoof (release_run lets go of it)
+    bool spoof_user_ = false;            // ... but the user had armed that very identity in Tools first: release_run leaves it armed
+    bool dialog_ra_ = false;             // the dialog turned the Ra mode on (release_run turns it off)
+    bool follow_ = true, confirming_ = false;
+    bool wait_retry_ = false, wait_paused_ = false;   // the second attempt is running / the Rd is off between the two
     bool guard_bypass_ = false;           // "Start anyway": the guard's reading is recorded, the spoof runs regardless
     bool skip_spoof_run_ = false;         // "Start, skip spoof" on the Refuse stage: this run carries no identity, the stored pick stays
     // The planned re-attach (rdintent::plan_reattach): a self-powered START with a 6 A identity against a source whose offer the
@@ -489,13 +496,6 @@ private:
     // back and the charger's new contract is awaited (the Runner stays held in its Baseline until then or until the K2 died).
     bool confirm_reattach_ = false;
     bool reattach_plan_ = false;
-    uint8_t reattach_ = 0;
-    uint32_t reattach_t0_ = 0;
-    void reattach_begin(uint32_t now);
-    void reattach_step(uint32_t now);
-    void reattach_drop();
-    uint32_t confirm_until_ = 0;
-    Proposal confirm_proposal_{};
     bool entering_ = false;       // enter() is switching the stage: nothing of this page is on screen yet
 };
 
@@ -546,40 +546,9 @@ public:
     static constexpr uint32_t kHeroMs = 250;     // the hero and the needle repaint at most this often in flight (~4 Hz)
     static constexpr uint32_t kFollowResumeMs = 5000;   // a manual scroll of the grid holds this long, or until the step changes
 private:
+    struct GridScratch;
+    struct GridScope;
     ChargerTestSession& s_;
-    // The session's state this view reads (and the few flags a press moves), under the names the painters use.
-    charger_test::Runner& runner_ = s_.runner_;
-    charger_test::Options& options_ = s_.options_;
-    charger_test::Summary& summary_ = s_.summary_;
-    Stage& stage_ = s_.stage_;
-    int& selection_ = s_.selection_;
-    int& family_ = s_.family_;
-    int& result_family_ = s_.result_family_;
-    int& detail_index_ = s_.detail_index_;
-    int& detail_row_ = s_.detail_row_;
-    size_t& delta_n_ = s_.delta_n_;
-    std::array<report_card::DeltaLine, 8>& delta_ = s_.delta_;
-    uint16_t& delta_runs_ = s_.delta_runs_;
-    uint16_t& card_no_ = s_.card_no_;
-    char (&card_name_)[24] = s_.card_name_;
-    report_card::Identity& card_id_ = s_.card_id_;
-    StrBuf<32>& message_ = s_.message_;
-    bool& confirming_ = s_.confirming_;
-    uint32_t& confirm_until_ = s_.confirm_until_;
-    Proposal& confirm_proposal_ = s_.confirm_proposal_;
-    bool& follow_ = s_.follow_;
-    int& scroll_line_ = s_.scroll_line_;
-    uint32_t& scroll_ms_ = s_.scroll_ms_;
-    size_t& scroll_step_ = s_.scroll_step_;
-    bool& guard_bypass_ = s_.guard_bypass_;
-    bool& skip_spoof_run_ = s_.skip_spoof_run_;
-    bool& confirm_reattach_ = s_.confirm_reattach_;
-    bool& auto_resume_ = s_.auto_resume_;
-    bool& resume_hold_ = s_.resume_hold_;
-    pd::VbusWait& wait_ = s_.wait_;
-    uint32_t& wait_t0_ = s_.wait_t0_;
-    bool& wait_paused_ = s_.wait_paused_;
-    uint32_t& run_t0_ = s_.run_t0_;
     // Session operations a press or a painter asks for.
     charger_test::Input input(uint32_t now) const { return s_.input(now); }
     Proposal proposal(charger_test::Input in) const { return s_.proposal(in); }
@@ -616,16 +585,15 @@ private:
     [[gnu::noinline]] void paint_hero(bool full, int16_t x, int16_t y, uint8_t chars, int32_t vbus_mv, uint16_t color);
     void list_row(int, bool, kit::RowSpec&);   // row_fn's body (fills the page's shared text buffers, consumed at once)
     void grid_row(int, kit::ResultRowSpec&);
-    void build_running_grid();                      // the Running verdict grid: the light layout, with the step in flight marked
+    [[gnu::noinline]] void fill_grid_scratch(GridScratch& out, bool running_grid, bool note_cuts = false);
     [[gnu::noinline]] void draw_capture(const k2::transcap::Meta&);   // VBUS thumbnail of the step's stored transition capture
     int last_row() const;          // the last row the cursor may rest on
     int row_count() const;
     void build_results();      // chips layout of the stored run (k2/chargertest/result_layout.hpp), wrapped into display lines
     // The summary line of Results: the best passing mode per protocol family of the stored run ("PD 20V 3A  QC3 12V").
     void compose_best();
+    GridScratch* grid_sc_ = nullptr;       // bound only while a scratch::Lease holds GridScratch
     StrBuf<32> best_;
-    result_layout::Layout layout_;
-    std::array<result_layout::Line, result_layout::kMaxLines> lines_{};
     size_t line_n_ = 0;
     int results_row_ = 0;      // selected line to restore when BACK leaves the step list
     kit::ActionCell action_;               // Review: START / CONFIRM
@@ -637,19 +605,19 @@ private:
     uint32_t cell_sig_[12] = {};           // dense stages: per-line caches (Waiting lines, Running texts); 0 = not drawn
     uint32_t grid_key_ = 0;                // Running: the runner revision / step the grid was built for
     uint32_t hero_ms_ = 0;                 // when the hero last painted (Running while quiet: 2 Hz)
-    uint8_t bar_key_ = 0;                  // the top bar drawn for this stage + 1 (0 = not drawn)
     CableIdentityList::Row row_;           // the Cable list's row being painted (RowSpec points into it)
     StrBuf<40> row_text_;                  // shared row-text buffers: row specs are consumed at once (docs/UI_DESIGN.md)
     StrBuf<16> row_tail_;
     StrBuf<48> row_note_;
-    char cell_txt_[kit::kResultMaxCells][2][12] = {};   // the verdict grid's cells: volts and current text
-    char cell_lbl_[10] = {};               // ... and the unit label of the row
     int needle_px_ = -1;                   // the gauge's needle column, -1 = the strip is not drawn
     int mark_px_ = -1;                     // a sweep row's gauge: the setpoint marker's column, -1 = not drawn (needle_px_ is its needle)
     uint32_t foot_sig_ = 0;                // Running: the footer (tone + text) last painted; 0 = not drawn
     uint32_t hero_sig_ = 0;                // Waiting: the cached VBUS + color signature; 0 = not drawn
     uint16_t hero_color_ = 0;
     int16_t clear_y_ = kFooterY;           // progressive stage-transition wipe cursor (< kFooterY = clearing)
+    char cell_txt_[kit::kResultMaxCells][2][12] = {};   // the verdict grid's cells: volts and current text
+    char cell_lbl_[10] = {};               // ... and the unit label of the row
+    uint8_t bar_key_ = 0;                  // the top bar drawn for this stage + 1 (0 = not drawn)
     uint8_t detail_step_ = 0;
     bool laid_ = false;                   // the stage's static part is on screen
 };
@@ -1219,7 +1187,7 @@ private:
 // whole 240x240 panel (the button strip included: chrome and caption hidden while it is shown) at the requested
 // (version, px, quiet), filled with the max-length kind-'t' link of that version, so a phone scan reads
 // "QR scan test v<NN> <N>px". The code is drawn in update(), after the panel, so it covers the strip. BACK pops the
-// page (the Ui does it). The encode workspace is a member, so it lives in the page arena, not in .bss.
+// page (the Ui does it). The encode workspace is leased from the scratch arena during paint().
 class QrTestPage final : public PageBase {
 public:
     explicit QrTestPage(UiContext &c) : PageBase(c, Page::Count, "QrTest") {}
@@ -1236,15 +1204,13 @@ public:
     int quiet() const { return quiet_; }
     int modules() const { return n_; }                    // modules per side of the code drawn, 0 = none
     std::size_t link_len() const { return link_len_; }    // the link length the code carries
-    // Rebuilds the link text (the generator uses ws_.temp as working storage, so the text is not kept there).
+    // Rebuilds the link text cleanly (the encode workspace is transient in scratch during paint()).
     std::size_t link_text(std::span<char> out) const { return qrtest::build_link(version_, px_, out); }
-    const std::uint8_t* code() const { return ws_.code; } // the packed symbol (for host tests)
 
 private:
     void paint();
-    qrtest::Workspace ws_;        // the v25-sized encode workspace (member: page arena)
-    int version_ = 0, px_ = 0, quiet_ = 0, n_ = 0;
     std::size_t link_len_ = 0;
+    int version_ = 0, px_ = 0, quiet_ = 0, n_ = 0;
     bool painted_ = false;
 };
 

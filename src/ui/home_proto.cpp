@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/home_proto.hpp"
+#include "k2/core/math_opt.hpp"
 
 namespace k2::home {
 namespace {
@@ -54,7 +55,7 @@ ProtoInfo from_pd(const ProtoSource &s) {
         p.lo_mv = o.min_mv; p.hi_mv = o.max_mv; p.mw = o.max_mw;
         const uint32_t ref = s.ctr.mv ? s.ctr.mv : o.max_mv;
         if (o.max_ma) p.ma = o.max_ma;
-        else if (o.max_mw && ref) { const uint32_t a = static_cast<uint32_t>(static_cast<uint64_t>(o.max_mw) * 1000 / ref); p.ma = a > kCableMaxMa ? kCableMaxMa : a; }
+        else if (o.max_mw && ref) { const uint32_t a = math::mul_div_u32(o.max_mw, 1000u, ref); p.ma = a > kCableMaxMa ? kCableMaxMa : a; }
         break;
     }
     default:

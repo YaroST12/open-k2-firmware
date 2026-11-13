@@ -4,6 +4,8 @@
 #include "k2/core/log.hpp"
 #include "k2/fastcharge/dpsniff.hpp"
 
+#include <new>
+
 #include "k2/core/critical.hpp"
 #include "k2/drivers/dpdm.hpp"
 #include "k2/drivers/mode_ram.hpp"
@@ -25,7 +27,7 @@ edges::Recorder g_rec;
 edges::StreamRing g_ring;
 volatile bool g_stream;
 bool g_synth;
-std::uint32_t g_synth_rate, g_synth_next, g_synth_lcg = 12345;
+std::uint32_t g_synth_rate, g_synth_next, g_synth_lcg;
 std::uint8_t g_stream_idx;
 std::uint32_t g_stream_bytes;
 edges::Session g_sess;
@@ -35,11 +37,20 @@ volatile bool g_live;     // the ISR records only while set
 
 // Inline VOOC monitor: the decoder runs in the ISR (no edge buffer); the main loop ticks it and copies the summary with
 // interrupts masked. g_mon_ev collects the decoder's events between two monitor_poll() calls.
-vooc::Decoder g_dec;
+alignas(vooc::Decoder) std::uint8_t g_dec_raw[sizeof(vooc::Decoder)];
+bool g_dec_inited;
 volatile bool g_mon;
 volatile bool g_mon_paused;   // data-traffic back-off: the ISR does not feed the decoder
 volatile unsigned g_mon_ev;
-bool g_mon_enabled = true;
+bool g_mon_disabled;
+
+vooc::Decoder& dec() {
+    if (!g_dec_inited) {
+        new (g_dec_raw) vooc::Decoder();
+        g_dec_inited = true;
+    }
+    return *std::launder(reinterpret_cast<vooc::Decoder*>(g_dec_raw));
+}
 
 // Edge-storm guard (k2/fastcharge/edge_guard.hpp), shared by every user of the ISR. The ISR masks its lines and sets
 // g_storm on a trip; the main loop (storm_service) ends a sniff session, pauses the monitor and logs.
@@ -75,7 +86,7 @@ void isr_body() {
     if (!g_live && !g_mon && !hook) return;
     const std::uint32_t w = edges::pack(c, pins::dp_dm_sw2.read(), pins::sw_pa7.read());
     if (hook) hook(w);   // the trigger first: its bit timing runs from the edge (it may wait up to 50 us here)
-    if (g_mon && !g_mon_paused) g_mon_ev = g_mon_ev | g_dec.push(w);
+    if (g_mon && !g_mon_paused) g_mon_ev = g_mon_ev | dec().push(w);
     if (!g_live) return;
     if (g_stream) g_ring.push(w);
     else g_rec.push(w);
@@ -136,10 +147,11 @@ void finish(edges::End why) {
         const std::size_t kept = pdtrace::edges_store(w, g_arm_cycles, g_arm_us);
         g_status.stored = true;
         const std::uint32_t span_us = edges::word_us(w[w.size() - 1], g_arm_cycles, g_arm_us) - edges::word_us(w[0], g_arm_cycles, g_arm_us);
+        static_assert(kCapacity <= 4294);
         K2LOG("[SNIFF] end=%u kept=%u total=%u overflow=%u slot=%u first_to_last_us=%u rate=%u/s\n", unsigned(why),
                      unsigned(w.size()), unsigned(g_rec.total()), unsigned(g_rec.overflowed()), unsigned(kept),
                      static_cast<unsigned>(span_us),
-                     static_cast<unsigned>(span_us ? std::uint64_t(w.size()) * 1000000u / span_us : 0));
+                     static_cast<unsigned>(span_us ? std::uint32_t(w.size()) * 1000000u / span_us : 0));
     } else {
         K2LOG("[SNIFF] end=%u no edges\n", unsigned(why));
     }
@@ -198,6 +210,7 @@ ArmResult arm_synth(std::uint32_t rate) {
     g_stream_bytes = 0;
     g_stream = true;
     g_synth = true;
+    if (g_synth_lcg == 0) g_synth_lcg = 12345;
     g_synth_rate = rate < 1 ? 1 : rate > 100000 ? 100000 : rate;
     g_synth_next = dpdm::cycles();
     g_sess.arm(systick::millis());
@@ -380,9 +393,9 @@ void storm_service(std::uint32_t now_ms) {
             {
                 Critical cs;
                 g_mon_paused = true;
-                ev = g_mon_ev | g_dec.end(dpdm::cycles());
+                ev = g_mon_ev | dec().end(dpdm::cycles());
                 g_mon_ev = 0;
-                s = g_dec.summary();
+                s = dec().summary();
             }
             monitor_log(ev, s);
             const unsigned wait = g_back.trip(now_ms);
@@ -402,7 +415,7 @@ void storm_service(std::uint32_t now_ms) {
 void monitor_start() {
     {
         Critical cs;
-        g_dec.reset();
+        dec().reset();
         g_mon_ev = 0;
         g_mon_paused = false;
     }
@@ -421,9 +434,9 @@ void monitor_stop(bool lines_free) {
         Critical cs;
         g_mon = false;
         g_mon_paused = false;
-        ev = g_mon_ev | g_dec.end(dpdm::cycles());   // closes the open session
+        ev = g_mon_ev | dec().end(dpdm::cycles());   // closes the open session
         g_mon_ev = 0;
-        s = g_dec.summary();
+        s = dec().summary();
     }
     g_back.reset();   // a new device starts from the 1 s step
     monitor_log(ev, s);
@@ -446,9 +459,9 @@ void monitor_poll(bool wanted, bool lines_free) {
     vooc::Summary s;
     {
         Critical cs;
-        ev = g_mon_ev | g_dec.tick(dpdm::cycles());
+        ev = g_mon_ev | dec().tick(dpdm::cycles());
         g_mon_ev = 0;
-        if (ev) s = g_dec.summary();
+        if (ev) s = dec().summary();
     }
     if (ev) monitor_log(ev, s);
 }
@@ -461,12 +474,12 @@ bool monitor_yield() {
     return true;
 }
 
-void monitor_enable(bool on) { g_mon_enabled = on; }
-bool monitor_enabled() { return g_mon_enabled; }
+void monitor_enable(bool on) { g_mon_disabled = !on; }
+bool monitor_enabled() { return !g_mon_disabled; }
 
 MonitorInfo monitor_info() {
     MonitorInfo m;
-    m.enabled = g_mon_enabled;
+    m.enabled = !g_mon_disabled;
     m.guard.paused = g_mon && g_back.paused();
     m.guard.storms = g_storms;
     m.guard.edges = std::uint16_t(g_last_storm.edges > 0xFFFF ? 0xFFFF : g_last_storm.edges);
@@ -475,13 +488,13 @@ MonitorInfo monitor_info() {
     m.guard.retry_ms = g_back.retry_in(systick::millis());
     Critical cs;
     m.running = g_mon;
-    m.s = g_dec.summary();
+    m.s = dec().summary();
     return m;
 }
 
 vooc::Live monitor_live() {
     Critical cs;
-    return vooc::live_of(g_mon && !g_mon_paused, g_dec.summary());
+    return vooc::live_of(g_mon && !g_mon_paused, dec().summary());
 }
 
 }  // namespace k2::dpsniff

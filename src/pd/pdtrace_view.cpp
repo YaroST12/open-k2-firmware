@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <string_view>
+#include "k2/core/math_opt.hpp"
 #include "k2/pd/pdtrace.hpp"
 #include "k2/pd/pdtrace_link.hpp"
 #include "k2/pd/pd.hpp"
@@ -352,7 +353,7 @@ Strip vbus_strip(std::span<const std::uint8_t> records, std::span<std::uint8_t> 
         // Timestamps need not rise (restored captures, edge-stamped records): clamp to the strip.
         const std::uint32_t ts = rd32(r + 2);
         const std::uint32_t dt = std::int32_t(ts - first) < 0 ? 0 : std::min(ts - first, span);
-        const std::size_t c = std::size_t(std::uint64_t(dt) * (w - 1) / span);
+        const std::size_t c = math::mul_div_u32(dt, static_cast<std::uint32_t>(w - 1), span);
         heights[c] = std::uint8_t(std::uint32_t(mv - s.mv_min) * h / (s.mv_max - s.mv_min));
     });
     // hold the last known value across columns without a sample
@@ -368,7 +369,7 @@ std::size_t column_of(const Strip& s, std::uint32_t t_us, std::size_t w) {
     const std::uint32_t span = s.t1_us - s.t0_us;
     if (!span || t_us <= s.t0_us) return 0;
     if (t_us - s.t0_us >= span) return w - 1;
-    return std::size_t(std::uint64_t(t_us - s.t0_us) * (w - 1) / span);
+    return math::mul_div_u32(t_us - s.t0_us, static_cast<std::uint32_t>(w - 1), span);
 }
 
 std::uint32_t time_at(std::span<const std::uint8_t> records, std::size_t bytes) {

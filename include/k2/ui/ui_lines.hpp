@@ -4,6 +4,7 @@
 // CC and the verdict pills for each D+/D- classifier result. No drawing here.
 #pragma once
 #include <cstdint>
+#include "k2/core/math_opt.hpp"
 #include "k2/fastcharge/fastcharge_classify.hpp"
 #include "k2/ui/ui_calc.hpp"
 #include "k2/ui/ui_widgets.hpp"
@@ -14,7 +15,7 @@ constexpr int kLinesBarW = 112;          // track width, 0 .. 3.3 V
 constexpr int32_t kLinesFullMv = 3300;
 constexpr int lines_bar_px(int32_t mv) { return gauge_fill_px(kLinesBarW, mv, kLinesFullMv); }
 // Tick offset inside the track (0.4 V BC1.2 detect level, 2.0 V upper QC level).
-constexpr int lines_tick_px(int32_t mv) { return static_cast<int>(static_cast<int64_t>(kLinesBarW) * mv / kLinesFullMv); }
+constexpr int lines_tick_px(int32_t mv) { return static_cast<int>(math::mul_div_i32(kLinesBarW, mv, kLinesFullMv)); }
 constexpr int32_t kLinesTickLowMv = 400, kLinesTickHighMv = 2000;
 
 // "3.0A on CC1" (the page draws the "Rp" label once, at the left): the source's current advertisement as a CC pin voltage window (USB-C vRd).

@@ -8,21 +8,69 @@
 namespace k2::battery {
 
 namespace {
+std::uint64_t udiv64_by_u16(std::uint64_t x, std::uint16_t d) {
+    const std::uint32_t hi = std::uint32_t(x >> 32);
+    if (hi == 0) return std::uint32_t(x) / d;
+    const std::uint32_t q_hi = hi / d;
+    std::uint32_t rem = hi % d;
+    const std::uint32_t lo = std::uint32_t(x);
+    const std::uint32_t w2 = (rem << 16) | (lo >> 16);
+    const std::uint32_t q2 = w2 / d;
+    rem = w2 % d;
+    const std::uint32_t w1 = (rem << 16) | (lo & 0xFFFFu);
+    return (std::uint64_t(q_hi) << 32) | (std::uint64_t(q2) << 16) | (w1 / d);
+}
+
+std::uint64_t udiv64(std::uint64_t num, std::uint64_t den) {
+    if (den == 0 || num < den) return 0;
+    if ((num >> 32) == 0 && (den >> 32) == 0) {
+        return std::uint32_t(num) / std::uint32_t(den);
+    }
+    int shift = __builtin_clzll(den) - __builtin_clzll(num);
+    den <<= shift;
+    std::uint64_t q = 0;
+    for (; shift >= 0; --shift) {
+        q <<= 1;
+        if (num >= den) {
+            num -= den;
+            q |= 1;
+        }
+        den >>= 1;
+    }
+    return q;
+}
+
+std::int64_t sdiv64_by_u16(std::int64_t num, std::uint16_t den) {
+    const bool neg = num < 0;
+    const std::uint64_t mag = neg ? std::uint64_t(-(num + 1)) + 1u : std::uint64_t(num);
+    const std::uint64_t q = udiv64_by_u16(mag, den);
+    return neg ? -std::int64_t(q) : std::int64_t(q);
+}
+
+std::int64_t sdiv64_by_u32(std::int64_t num, std::uint32_t den) {
+    const bool neg = num < 0;
+    const std::uint64_t mag = neg ? std::uint64_t(-(num + 1)) + 1u : std::uint64_t(num);
+    const std::uint64_t q = udiv64(mag, den);
+    return neg ? -std::int64_t(q) : std::int64_t(q);
+}
+
 // The area of one trapezoid of a and b over dt (in their unit x ms), the part above zero to `pos` and the part below to
 // `neg`; a step that changes sign is split where the line crosses zero, so the two parts are the two triangles.
 void split(std::int64_t a, std::int64_t b, std::int64_t dt, std::uint64_t &pos, std::uint64_t &neg) {
-    if (a >= 0 && b >= 0) { pos += std::uint64_t((a + b) * dt / 2); return; }
-    if (a <= 0 && b <= 0) { neg += std::uint64_t(-(a + b) * dt / 2); return; }
+    if (a >= 0 && b >= 0) { pos += std::uint64_t((a + b) * dt) >> 1; return; }
+    if (a <= 0 && b <= 0) { neg += std::uint64_t(-(a + b) * dt) >> 1; return; }
     const std::int64_t span = a > b ? a - b : b - a;   // |a| + |b|
     const std::int64_t up = a > 0 ? a : b, down = a > 0 ? -b : -a;
-    pos += std::uint64_t(up * up * dt / (2 * span));
-    neg += std::uint64_t(down * down * dt / (2 * span));
+    const std::uint64_t den = std::uint64_t(span) * 2u;
+    pos += udiv64(std::uint64_t(up * up) * std::uint64_t(dt), den);
+    neg += udiv64(std::uint64_t(down * down) * std::uint64_t(dt), den);
 }
 }  // namespace
 
 void integrate(Flow &f, std::int32_t mv0, std::int32_t ma0, std::int32_t mv1, std::int32_t ma1, std::uint32_t dt_ms) {
     // mW = mV x mA / 1000; the power changes sign with the current (VBUS is never negative).
-    const std::int64_t p0 = std::int64_t(mv0) * ma0 / 1000, p1 = std::int64_t(mv1) * ma1 / 1000;
+    const std::int64_t p0 = sdiv64_by_u16(std::int64_t(mv0) * ma0, 1000u);
+    const std::int64_t p1 = sdiv64_by_u16(std::int64_t(mv1) * ma1, 1000u);
     split(p0, p1, dt_ms, f.uj_fwd, f.uj_rev);
     split(ma0, ma1, dt_ms, f.uc_fwd, f.uc_rev);
 }
@@ -69,7 +117,8 @@ void Curve::add(std::uint32_t dt_ms, std::int32_t mv, std::int32_t ma) {
         interval_s = std::uint16_t(interval_s * 2);
         if (acc_ms < std::uint32_t(interval_s) * 1000u) return;   // the open point now runs to the new interval
     }
-    pack(&pts[std::size_t(n) * 3], std::int32_t(acc_mv_ms / acc_ms), std::int32_t(acc_ma_ms / acc_ms));
+    pack(&pts[std::size_t(n) * 3], std::int32_t(sdiv64_by_u32(acc_mv_ms, acc_ms)),
+         std::int32_t(sdiv64_by_u32(acc_ma_ms, acc_ms)));
     n++;
     acc_mv_ms = acc_ma_ms = 0;
     acc_ms = 0;
@@ -210,8 +259,9 @@ void Recorder::to_record(Record &r) const {
     r.split = curve_.split;
     for (int i = 0; i < phases_; i++) {
         const Phase &p = ph_[i];
-        r.ph[i] = PhaseRec{p.kind, p.end, p.gaps, p.ms / 1000u, std::uint32_t(p.uj_in / 3600u), std::uint32_t(p.uj_out / 3600u),
-                           std::uint32_t(p.uc_in / 3600u), std::uint32_t(p.uc_out / 3600u)};
+        r.ph[i] = PhaseRec{p.kind, p.end, p.gaps, p.ms / 1000u,
+                           std::uint32_t(udiv64_by_u16(p.uj_in, 3600u)), std::uint32_t(udiv64_by_u16(p.uj_out, 3600u)),
+                           std::uint32_t(udiv64_by_u16(p.uc_in, 3600u)), std::uint32_t(udiv64_by_u16(p.uc_out, 3600u))};
     }
     r.pts = curve_.pts;
 }
@@ -333,7 +383,7 @@ Sums sums(const Record &r) {
 
 std::uint16_t ratio_permille(std::uint64_t out, std::uint64_t in) {
     if (in == 0) return kNoRatio;
-    const std::uint64_t p = (out * 1000u + in / 2) / in;
+    const std::uint64_t p = udiv64(out * 1000u + (in >> 1), in);
     return p >= kNoRatio ? kNoRatio - 1 : std::uint16_t(p);
 }
 

@@ -56,7 +56,7 @@ struct Action {
 
 struct LogPair {
     std::uint8_t cmd = 0;
-    std::uint16_t word = kNoWord;
+    std::uint16_t word = 0;   // populated by record() for entries < log().n
     std::uint16_t t_ms = 0;   // the command's frame start, ms since the wire began (saturates at 65 s)
 };
 

@@ -6,6 +6,7 @@
 // one reply is produced at a time: a 2 KB JSON buffer, the header+BMP-prefix buffer, and for the
 // screenshot the capture module's 1.9 KB strip buffer. Replies are closed with FIN
 // (Connection: close), so there is no keep-alive state.
+#include "k2/core/build_config.h"
 #include "k2/core/log.hpp"
 #include "k2/net/http_server.hpp"
 
@@ -33,8 +34,10 @@ constexpr int kConns = 3;
 constexpr std::uint16_t kPort = 80;
 constexpr std::uint32_t kHeadTimeoutMs = 5000;   // request not complete
 constexpr std::uint32_t kSendTimeoutMs = 10000;  // no progress while sending
+#if K2_SCREENSHOT
 constexpr int kStrips = 60;
 constexpr std::size_t kStripBytes = 240 * 4 * 2;
+#endif
 
 enum class St : std::uint8_t { Free, Reading, Pending, Sending };
 
@@ -52,7 +55,9 @@ struct Counters {
 constinit Counters ctr{};
 constinit std::array<Conn, kConns> conns{};
 constinit Remote* g_remote = nullptr;
+#if K2_SCREENSHOT
 constinit Shot g_shot{};
+#endif
 
 // The one reply in flight.
 struct Reply {
@@ -70,7 +75,9 @@ constinit std::array<char, 2048> g_json{};
 
 void release(Conn& c) {
     if (g_reply.conn == &c) {
+#if K2_SCREENSHOT
         if (g_reply.shot) g_shot.end();
+#endif
         g_reply = {};
     }
     c = Conn{};
@@ -160,6 +167,7 @@ void start(Conn& c) {
         g_reply.body_left = content = a.len;
         gzip = a.gzip;
     } else if (r.body == http::Body::Bmp) {
+#if K2_SCREENSHOT
         if (g_shot.begin()) {
             ctr.shots++;
             g_reply.shot = true;
@@ -168,6 +176,10 @@ void start(Conn& c) {
             put_error(409, "screen capture busy", r);
             content = r.len;
         }
+#else
+        put_error(503, "screenshot disabled in build", r);
+        content = r.len;
+#endif
     }
     if (r.body == http::Body::Json) {
         g_reply.body = reinterpret_cast<const std::uint8_t*>(g_json.data());
@@ -206,10 +218,12 @@ void pump(Conn& c) {
                 src = rp.prefix.data() + rp.prefix_off;
                 n = rp.prefix_len - rp.prefix_off;
             } else {
+#if K2_SCREENSHOT
                 if (rp.body_left == 0 && rp.shot && rp.strip < kStrips) {
                     rp.body = reinterpret_cast<const std::uint8_t*>(g_shot.strip(rp.strip++));
                     rp.body_left = kStripBytes;
                 }
+#endif
                 if (rp.body_left == 0) { rp.closing = true; break; }
                 src = rp.body;
                 n = rp.body_left;
@@ -242,7 +256,11 @@ void pump(Conn& c) {
 
 void init(Remote& remote, const Shot& shot) {
     g_remote = &remote;
+#if K2_SCREENSHOT
     g_shot = shot;
+#else
+    (void)shot;
+#endif
     tcp_pcb* l = tcp_new();
     if (l && tcp_bind(l, IP_ADDR_ANY, kPort) == ERR_OK) {
         l = tcp_listen(l);

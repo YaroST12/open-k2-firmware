@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/home_cards.hpp"
+#include "k2/core/math_opt.hpp"
 
 namespace k2::home {
 namespace {
@@ -64,13 +65,13 @@ uint32_t contract_mw(const ProtoInfo &p) {
     if (p.measured) return 0;
     switch (p.kind) {
     case ProtoKind::PdFixed: case ProtoKind::PdEpr:
-        return static_cast<uint32_t>(static_cast<uint64_t>(p.mv) * p.ma / 1000);
+        return math::mw_of(p.mv, p.ma);
     case ProtoKind::Pps:
-        return static_cast<uint32_t>(static_cast<uint64_t>(p.hi_mv) * p.ma / 1000);
+        return math::mw_of(p.hi_mv, p.ma);
     case ProtoKind::Avs:
         return p.mw;
     case ProtoKind::TypeC:
-        return static_cast<uint32_t>(5000ull * p.ma / 1000);
+        return 5u * p.ma;
     default:
         return 0;
     }
@@ -97,7 +98,7 @@ void Extremes::sample(int32_t vbus_mv, int32_t ibus_ma, int32_t power_mw, uint32
     if (a <= kSagMinMa || level_mv == 0) return;
     const uint32_t v = vbus_mv < 0 ? 0 : static_cast<uint32_t>(vbus_mv);
     const uint32_t dip = v < level_mv ? level_mv - v : 0;
-    const uint32_t bp = static_cast<uint32_t>((static_cast<uint64_t>(dip) * 10000 + level_mv / 2) / level_mv);
+    const uint32_t bp = math::div_u64_to_u32(static_cast<uint64_t>(dip) * 10000u + level_mv / 2u, level_mv);
     if (!has_sag_ || bp > sag_bp_) {
         has_sag_ = true;
         sag_bp_ = bp;
@@ -199,7 +200,7 @@ constexpr int32_t off(int32_t x, int32_t avg256) {
     return d < 0 ? -d : d;
 }
 // avg += (x - avg) * 3 %, in 1/256 mV
-constexpr int32_t fold(int32_t avg256, int32_t x) { return avg256 + static_cast<int32_t>((int64_t{x} * 256 - avg256) * 3 / 100); }
+constexpr int32_t fold(int32_t avg256, int32_t x) { return avg256 + math::div_i64_to_i32((int64_t{x} * 256 - avg256) * 3, 100); }
 }  // namespace
 
 void Attention::prime(uint32_t now_ms, int32_t vbus_mv, int32_t cc1_mv, int32_t cc2_mv, uint32_t peak_mw) {

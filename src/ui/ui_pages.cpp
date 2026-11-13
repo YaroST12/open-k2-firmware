@@ -10,10 +10,10 @@
 #include "k2/ui/text/tools.hpp"
 #include "k2/ui/ui_emarker.hpp"
 #include "k2/ui/ui_orientation.hpp"
+#include "k2/core/build_config.h"
 #include "k2/core/log.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/pd/pd_emarker_plan.hpp"
-#include <cstdio>
-#include <cstdlib>
 #include <algorithm>
 #include <cstring>
 #include <string_view>
@@ -1150,7 +1150,7 @@ void PdTriggerPage::paint_value() {
     const uint32_t cl = wiz_.current_limit(*caps_, cap);
     const uint32_t hi = volt ? d.max_mv : cl;
     const uint32_t mw_v = !volt && d.type == pd::PdoType::Fixed ? d.max_mv : wiz_.mv;   // the voltage the current is drawn at
-    const uint32_t mw = static_cast<uint32_t>(static_cast<uint64_t>(mw_v) * (volt ? cl : wiz_.ma) / 1000);
+    const uint32_t mw = math::mw_of(mw_v, volt ? cl : wiz_.ma);
     const bool can_dn = [&] { Wizard t = wiz_; return t.nudge(*caps_, -1, false, cap); }();
     const bool can_up = [&] { Wizard t = wiz_; return t.nudge(*caps_, +1, false, cap); }();
     const uint16_t col = volt ? kVolt : kAmp;
@@ -2033,11 +2033,32 @@ PanelLabels setting_labels(PanelLabels labels, const char *action) {
     labels.b[static_cast<int>(Button::Ok)] = {action, "", "", false};
     return labels;
 }
+
+enum class SettingRow : uint8_t {
+    UsbLink,
+    Autorotate,
+    RotateButtons,
+#if K2_SCREENSHOT
+    Screenshot,
+#endif
+    Smoothing,
+    IdleWake,
+    SystemState,
+    BootInfo,
+    Count
+};
+constexpr int kSettingsRows = static_cast<int>(SettingRow::Count);
+#if K2_SCREENSHOT
+static_assert(kSettingsRows == SettingsPage::kRows);
+static_assert(static_cast<int>(SettingRow::SystemState) == SettingsPage::kSystemRow);
+static_assert(static_cast<int>(SettingRow::BootInfo) == SettingsPage::kBootRow);
+#endif
 }
 
 void SettingsPage::enter() {
+    sel_ = std::clamp(sel_, 0, kSettingsRows - 1);
     ctx_.rows.init(ctx_.content, kListY, row_fn, this);
-    ctx_.rows.set_count(kRows);
+    ctx_.rows.set_count(kSettingsRows);
     ctx_.rows.select(sel_);
     ctx_.rows.invalidate();
     static_step_ = 0;
@@ -2049,7 +2070,7 @@ void SettingsPage::draw_static() {
         if (bg && !bg->admit(140 * kBarH, true)) return;
         title_bar();
         ctx_.rows.init(ctx_.content, kListY, row_fn, this);
-        ctx_.rows.set_count(kRows);
+        ctx_.rows.set_count(kSettingsRows);
         ctx_.rows.select(sel_);
         foot_.invalidate();
         id_.invalidate();
@@ -2104,18 +2125,26 @@ bool SettingsPage::share_boot_info() {
 // opens a page) and, on the focused row, one dim line saying what the value means. Everything is read live from the
 // settings, so the rows keep no value text of their own.
 void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
-    static constexpr const char *kTitles[kRows] = {"USB Link", "Autorotate", "Rotate buttons", "Screenshot", "Smoothing",
-                                                   "Wake sleeping port", "System state", "Boot info"};
-    static constexpr Icon kIcons[kRows] = {Icon::Usb, Icon::Rotate, Icon::Keys, Icon::Camera, Icon::Wave, Icon::Plug,
-                                           Icon::Chip, Icon::Report};
+    static constexpr const char *kTitles[kSettingsRows] = {
+        "USB Link", "Autorotate", "Rotate buttons",
+#if K2_SCREENSHOT
+        "Screenshot",
+#endif
+        "Smoothing", "Wake sleeping port", "System state", "Boot info"};
+    static constexpr Icon kIcons[kSettingsRows] = {
+        Icon::Usb, Icon::Rotate, Icon::Keys,
+#if K2_SCREENSHOT
+        Icon::Camera,
+#endif
+        Icon::Wave, Icon::Plug, Icon::Chip, Icon::Report};
     static constexpr const char *kPresets[smoothing::kPresetCount] = {"Off", "Low", "Medium", "High"};
     static constexpr const char *kPresetNotes[smoothing::kPresetCount] = {"Raw readings", "Light calming", "Balanced", "Steady, slower"};
     const auto *self = static_cast<const SettingsPage *>(ctx);
     out.marker = kit::Marker::Icon;
     out.icon = kIcons[i];
     out.text = kTitles[i];
-    switch (i) {
-    case 0:
+    switch (static_cast<SettingRow>(i)) {
+    case SettingRow::UsbLink:
         out.chevron = true;
 #if K2_NET
         out.note = "HID, drive and network";
@@ -2123,42 +2152,44 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
         out.note = "HID and drive";   // this build has no Network row (kUlRows below)
 #endif
         break;
-    case 1:
+    case SettingRow::Autorotate:
         out.tail = self->ctx_.ui->rotation_locked() ? "Locked" : "Auto";
         out.note = self->ctx_.ui->rotation_locked() ? "Fixed orientation" : "Follows gravity";
         break;
-    case 2: {
+    case SettingRow::RotateButtons: {
         const bool on = self->ctx_.ui->rotate_buttons();
         out.tail = on ? "ON" : "OFF";
         out.tail_color = on ? kOk : kDim;
         out.note = on ? "Follow the display" : "Physical keys";
         break;
     }
-    case 3: {
+#if K2_SCREENSHOT
+    case SettingRow::Screenshot: {
         const bool on = uiprefs::screenshot_enabled;
         out.tail = on ? "ON" : "OFF";
         out.tail_color = on ? kOk : kDim;
         out.note = on ? "Remote and web capture" : "No capture";
         break;
     }
-    case 4: {
+#endif
+    case SettingRow::Smoothing: {
         const auto p = static_cast<unsigned>(power::smoothing_preset());
         out.tail = kPresets[p < smoothing::kPresetCount ? p : 0];
         out.note = kPresetNotes[p < smoothing::kPresetCount ? p : 0];
         break;
     }
-    case 5: {   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
+    case SettingRow::IdleWake: {   // the opt-in exception to "no Rd at idle": a sleeping source's port is asked with our Rd
         const bool on = fusb302::idle_wake();
         out.tail = on ? "ON" : "OFF";
         out.tail_color = on ? kOk : kDim;
         out.note = on ? "Idle Rd on a sleeping port" : "Idle stays passive";
         break;
     }
-    case kSystemRow:
+    case SettingRow::SystemState:
         out.chevron = true;
         out.note = "meter, USB, FUSB302, MCU";
         break;
-    default:   // kBootRow
+    default:   // SettingRow::BootInfo
         out.chevron = true;
         out.note = "this boot's record as a QR code";
         break;
@@ -2174,48 +2205,64 @@ void SettingsPage::update(uint32_t) {
     ctx_.rows.select(sel_);
     ctx_.rows.draw(ctx_.now, bg);
     if (bg && bg->more) return;
+    const auto row = static_cast<SettingRow>(sel_);
     draw_footer_budgeted(ctx_.content, FooterTone::Info,
-                         sel_ == kSystemRow ? "Checks of every subsystem"
-                         : sel_ == kBootRow ? "Shared as QR codes"
-                         : sel_ >= 2        ? "Remembered across boots"
-                                            : "Opens a settings page",
+                         row == SettingRow::SystemState      ? "Checks of every subsystem"
+                         : row == SettingRow::BootInfo       ? "Shared as QR codes"
+                         : row >= SettingRow::RotateButtons  ? "Remembered across boots"
+                                                             : "Opens a settings page",
                          foot_, bg);
 }
 
 bool SettingsPage::on_event(Event e) {
     if (e.press == Press::Short && (e.button == Button::Plus || e.button == Button::Minus)) {
-        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, kRows - 1);
+        sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, kSettingsRows - 1);
         update(ctx_.now);
         return true;
     }
     if (e.press == Press::Short && e.button == Button::Ok) {
-        if (sel_ == 4) {   // Off -> Low -> Medium -> High -> Off; remembered, applied at once
+        switch (static_cast<SettingRow>(sel_)) {
+        case SettingRow::Smoothing: {   // Off -> Low -> Medium -> High -> Off; remembered, applied at once
             uiprefs::Prefs p = uiprefs::stored();
             p.smoothing = smoothing::preset_from_index((static_cast<unsigned>(power::smoothing_preset()) + 1) % smoothing::kPresetCount);
             uiprefs::set(p);
             power::set_smoothing(p.smoothing);
             update(ctx_.now);
-        } else if (sel_ == 5) {   // remembered in the same record, applied at once (off drops a running hold)
+            break;
+        }
+        case SettingRow::IdleWake: {   // remembered in the same record, applied at once (off drops a running hold)
             uiprefs::Prefs p = uiprefs::stored();
             p.idle_wake = !fusb302::idle_wake();
             uiprefs::set(p);
             fusb302::set_idle_wake(p.idle_wake);
             update(ctx_.now);
-        } else if (sel_ == 2) {
+            break;
+        }
+        case SettingRow::RotateButtons:
             ctx_.ui->set_rotate_buttons(!ctx_.ui->rotate_buttons());
             update(ctx_.now);
-        } else if (sel_ == 3) {
+            break;
+#if K2_SCREENSHOT
+        case SettingRow::Screenshot: {
             uiprefs::Prefs p = uiprefs::stored();
             p.screenshot = !uiprefs::screenshot_enabled;
             uiprefs::set(p);
             uiprefs::screenshot_enabled = p.screenshot;
             update(ctx_.now);
-        } else if (sel_ == kSystemRow) {
+            break;
+        }
+#endif
+        case SettingRow::SystemState:
             ctx_.ui->push_menu(Menu::Diag, ctx_.now);
-        } else if (sel_ == kBootRow) {
+            break;
+        case SettingRow::BootInfo:
             share_boot_info();
-        } else {
+            break;
+        case SettingRow::UsbLink:
+        case SettingRow::Autorotate:
+        default:
             ctx_.ui->push_menu(sel_ == 0 ? Menu::UsbLink : Menu::Autorotate, ctx_.now);
+            break;
         }
         return true;
     }
@@ -2223,8 +2270,9 @@ bool SettingsPage::on_event(Event e) {
 }
 
 PanelLabels SettingsPage::labels() const {
-    const bool opens = sel_ < 2 || sel_ >= kSystemRow;
-    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : sel_ == 4 ? "Cycle" : "Toggle");
+    const auto row = static_cast<SettingRow>(sel_);
+    const bool opens = row < SettingRow::RotateButtons || row >= SettingRow::SystemState;
+    PanelLabels labels = setting_labels(base_labels(), opens ? "Open" : row == SettingRow::Smoothing ? "Cycle" : "Toggle");
     labels.b[static_cast<int>(Button::Plus)] = {"Dn", "", "", false};
     return labels;
 }
@@ -2380,16 +2428,23 @@ void QrTestPage::update(uint32_t) {
 
 void QrTestPage::paint() {
     ContentViewport::Pause unscaled;   // the code is drawn in panel pixels over the whole 240x240
-    struct LineWork { std::uint16_t line[qrview::kPanelPx]; };
-    scratch::Lease lease("qrtest");   // only the pixel line is leased; the workspace is the page's own member
-    auto &lw = scratch::as<LineWork>();
-    link_len_ = qrtest::build_link(version_, px_, std::span<char>(reinterpret_cast<char*>(ws_.temp), qrtest::kWsBufLen));
+    struct PaintWork {
+        union {
+            std::uint8_t temp[qrtest::kWsBufLen];
+            std::uint16_t line[qrview::kPanelPx];
+        };
+        std::uint8_t code[qrtest::kWsBufLen];
+    };
+    static_assert(sizeof(PaintWork) <= scratch::kSize, "qrtest paint fits the scratch arena");
+    scratch::Lease lease("qrtest");
+    auto &pw = scratch::as<PaintWork>();
+    link_len_ = qrtest::build_link(version_, px_, std::span<char>(reinterpret_cast<char*>(pw.temp), qrtest::kWsBufLen));
     n_ = link_len_ != 0 && version_ >= qrtest::kVersionMin && version_ <= qrtest::kMaxShownVersion
-             ? qr::encode_placed(ws_.code, ws_.temp, link_len_, version_)
+             ? qr::encode_placed(pw.code, pw.temp, link_len_, version_)
              : 0;
     lcd::fill(qrview::kWhite);   // the whole panel, button strip included (erase pass: to the background)
     if (n_ != 0)
-        qrview::draw_code_raw_in(qrview::Area{}, ws_.code, n_, 0, px_, lw.line, quiet_, px_);
+        qrview::draw_code_raw_in(qrview::Area{}, pw.code, n_, 0, px_, pw.line, quiet_, px_);
     painted_ = true;
 }
 

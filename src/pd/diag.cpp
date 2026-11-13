@@ -38,11 +38,58 @@ void inc(T& v) {
     if (v < T(~T(0))) v++;
 }
 
+std::uint64_t udivmod64_by_1000(std::uint64_t x, std::uint16_t& rem_out) {
+    const std::uint32_t hi = std::uint32_t(x >> 32);
+    if (hi == 0) {
+        const std::uint32_t lo = std::uint32_t(x);
+        rem_out = std::uint16_t(lo % 1000u);
+        return lo / 1000u;
+    }
+    const std::uint32_t q_hi = hi / 1000u;
+    std::uint32_t rem = hi % 1000u;
+    const std::uint32_t lo = std::uint32_t(x);
+    const std::uint32_t w2 = (rem << 16) | (lo >> 16);
+    const std::uint32_t q2 = w2 / 1000u;
+    rem = w2 % 1000u;
+    const std::uint32_t w1 = (rem << 16) | (lo & 0xFFFFu);
+    const std::uint32_t q1 = w1 / 1000u;
+    rem_out = std::uint16_t(w1 % 1000u);
+    return (std::uint64_t(q_hi) << 32) | (std::uint64_t(q2) << 16) | q1;
+}
+
+std::uint64_t udiv64(std::uint64_t num, std::uint64_t den) {
+    if (den == 0 || num < den) return 0;
+    if ((num >> 32) == 0 && (den >> 32) == 0) {
+        return std::uint32_t(num) / std::uint32_t(den);
+    }
+    int shift = __builtin_clzll(den) - __builtin_clzll(num);
+    den <<= shift;
+    std::uint64_t q = 0;
+    for (; shift >= 0; --shift) {
+        q <<= 1;
+        if (num >= den) {
+            num -= den;
+            q |= 1;
+        }
+        den >>= 1;
+    }
+    return q;
+}
+
+std::uint32_t mul_div_u32(std::uint32_t a, std::uint32_t k, std::uint32_t b) {
+    if (b == 0) return 0;
+    if (a <= 0xFFFFFFFFu / k) return (a * k) / b;
+    const std::uint32_t q = a / b;
+    const std::uint32_t r = a % b;
+    const std::uint32_t rem_q = (r <= 0xFFFFFFFFu / k)
+                                    ? (r * k) / b
+                                    : std::uint32_t(udiv64(std::uint64_t(r) * k, b));
+    return q * k + rem_q;
+}
+
 // sum += prod / 1000, carrying the remainder (milli-units of the product, so u32 sums last for days).
 void acc(std::uint32_t& sum, std::uint16_t& frac, std::uint64_t prod) {
-    const std::uint64_t t = prod + frac;
-    sum += std::uint32_t(t / 1000);
-    frac = std::uint16_t(t % 1000);
+    sum += std::uint32_t(udivmod64_by_1000(prod + frac, frac));
 }
 
 // The best PDO of a set: its power, voltage and current, plus the highest voltage in the set.
@@ -146,13 +193,13 @@ void Analyzer::hold_to(std::uint32_t ms) {
     const std::uint32_t dt = ms - v_ms_;
     v_ms_ = ms;
     const std::uint32_t ma = i_ma_ > 0 ? std::uint32_t(i_ma_) : 0;
-    const std::uint64_t mw = std::uint64_t(v_mv_) * ma / 1000;
+    const std::uint32_t mw = (std::uint32_t(v_mv_) * ma) / 1000u;
     s.obs_ms += dt;
-    acc(s.mj, mj_frac_, mw * dt);
+    acc(s.mj, mj_frac_, std::uint64_t(mw) * dt);
     acc(s.mv_s, mv_frac_, std::uint64_t(v_mv_) * dt);
     if (s.contract && ms - s.contract_ms > kSettleMs) {
         s.cobs_ms += dt;
-        acc(s.cmj, cmj_frac_, mw * dt);
+        acc(s.cmj, cmj_frac_, std::uint64_t(mw) * dt);
         if (s.c_ma && ma * 1000 >= std::uint32_t(s.c_ma) * kPinPermille) s.pin_ms += dt;
         if (s.c_ma && ma > over_limit_ma(s.c_ma)) s.over_ms += dt;
         sustain(dt, ma);
@@ -818,7 +865,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
     const bool host = s.snk_host || (s.snk_idh >> 31 & 1) || (twin && twin->host);
     r.snk_noun = s.active ? "K2" : host && r.need_mw >= 45000 ? "Laptop" : host ? "Host" : "Device";
     r.src_noun = src_noun(s.src_idh, s.src_host);
-    const std::uint32_t mean_mv = s.obs_ms ? std::uint32_t(std::uint64_t(s.mv_s) * 1000 / s.obs_ms) : 0;
+    const std::uint32_t mean_mv = s.obs_ms ? mul_div_u32(s.mv_s, 1000u, s.obs_ms) : 0;
     r.vbus_mv = std::uint16_t(mean_mv);
     r.peak_ma = s.peak_ma;
 
@@ -843,7 +890,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
             // c: share % | bursts << 8 | offer at the peak (10 mA) << 16
             // d: VBUS fell / hard reset bits | shortest burst (0.1 s) << 2 | longest << 12 | above the offer << 22
             const auto ds = [](std::uint32_t ms) { return std::uint32_t(ms / 100 > 999 ? 999 : ms / 100); };
-            const std::uint32_t share = s.cobs_ms ? std::uint32_t(std::uint64_t(s.over_ms) * 100 / s.cobs_ms) : 0;
+            const std::uint32_t share = s.cobs_ms ? mul_div_u32(s.over_ms, 100u, s.cobs_ms) : 0;
             add(r, s.over_fault ? Sev::Fail : Sev::Warn, Group::Power, Code::OverDraw, at(s.over_first_ms), s.over_peak_ma,
                 s.over_c_ma,
                 std::int32_t((share > 100 ? 100 : share) | std::uint32_t(s.bursts) << 8 |
@@ -854,8 +901,8 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
         // kSustainMs blocks mostly above the contract: a Fail when the level is above the offer too, or with VBUS
         // falling / a reset. a: the mean while above, c: offer | share % << 16, d: the blocks' time (ms)
         if (s.sus_ms && s.sus_over_ms) {
-            const std::uint32_t lvl = std::uint32_t(std::uint64_t(s.sus_mas) * 1000 / s.sus_over_ms);
-            const std::uint32_t share = std::uint32_t(std::uint64_t(s.sus_over_ms) * 100 / s.sus_ms);
+            const std::uint32_t lvl = mul_div_u32(s.sus_mas, 1000u, s.sus_over_ms);
+            const std::uint32_t share = mul_div_u32(s.sus_over_ms, 100u, s.sus_ms);
             const bool far = s.sus_off_ma && lvl > over_limit_ma(s.sus_off_ma);
             add(r, far || (s.over_fault & 3) ? Sev::Fail : Sev::Warn, Group::Power, Code::OverSustained,
                 at(s.sus_first_ms), std::int32_t(lvl), s.sus_c_ma, std::int32_t(s.sus_off_ma | share << 16),
@@ -865,7 +912,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
             std::uint64_t(s.pin_ms) * 100 >= std::uint64_t(s.cobs_ms) * kPinSharePct)
             add(r, Sev::Warn, Group::Power, Code::Pinned, at(s.contract_ms), s.c_ma, std::int32_t(s.pin_ms * 100 / s.cobs_ms),
                 std::int32_t(s.cobs_ms));
-        const std::int32_t mw = s.cobs_ms ? std::int32_t(std::uint64_t(s.cmj) * 1000 / s.cobs_ms) : 0;
+        const std::int32_t mw = s.cobs_ms ? std::int32_t(mul_div_u32(s.cmj, 1000u, s.cobs_ms)) : 0;
         if (s.cobs_ms > 0)
             add(r, Sev::Info, Group::Power, Code::Draw, at(s.contract_ms), s.c_mv, s.c_ma, mw, std::int32_t(s.cobs_ms));
         // a 5 V contract while the device declares more and the offer has more
@@ -882,7 +929,7 @@ Report evaluate(const Session& s, const TwinHint* twin, std::uint32_t now_ms) {
             add(r, Sev::Info, Group::Power, Code::ContractUnseen, 0, s.up_mv ? s.up_mv : std::int32_t(mean_mv),
                 s.up_mv || s.obs_ms ? 1 : 0);
         if (s.obs_ms && mean_mv >= kLostMv)   // (no VBUS: a charger waiting for a sink, nothing to draw)
-            add(r, Sev::Info, Group::Power, Code::Draw, 0, 0, 0, std::int32_t(std::uint64_t(s.mj) * 1000 / s.obs_ms),
+            add(r, Sev::Info, Group::Power, Code::Draw, 0, 0, 0, std::int32_t(mul_div_u32(s.mj, 1000u, s.obs_ms)),
                 std::int32_t(s.obs_ms));
     }
     // input cut-outs: the device's draw falls to nothing inside a window while VBUS holds in band (the source kept

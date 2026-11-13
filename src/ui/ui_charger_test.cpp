@@ -4,6 +4,7 @@
 #include "k2/ui/ui.hpp"
 #include "k2/ui/ui_setup_page.hpp"
 #include "k2/core/loop_guard.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/core/bbpersist.hpp"
@@ -1273,6 +1274,23 @@ void ChargerTestSession::set_stage(Stage s, int selection) {
 }
 // A stage owns the whole body: wipe the old one (a (re)draw of the page needs no wipe: the screen is clean or being erased),
 // then every element of the new stage paints once. ctx_.rows is shared with the other pages, so it starts afresh too.
+struct ChargerTestPage::GridScratch {
+    result_layout::Layout layout;
+    std::array<result_layout::Line, result_layout::kMaxLines> lines;
+};
+
+struct ChargerTestPage::GridScope {
+    ChargerTestPage& page;
+    scratch::Lease lease;
+    GridScratch& data;
+    GridScope(ChargerTestPage& p, bool running_grid, bool note_cuts = false)
+        : page(p), lease("ct.grid"), data(scratch::make<GridScratch>()) {
+        p.fill_grid_scratch(data, running_grid, note_cuts);
+        p.grid_sc_ = &data;
+    }
+    ~GridScope() { page.grid_sc_ = nullptr; }
+};
+
 ChargerTestPage::ChargerTestPage(UiContext& c, ChargerTestSession& s) : PageBase(c, Page::ChargerTest, "Charger test"), s_(s) {
     s_.bind_view(this);
 }
@@ -1284,22 +1302,31 @@ void ChargerTestPage::on_stage(bool entering) {
 }
 void ChargerTestPage::on_confirmation_dropped() { foot_.invalidate(); action_.invalidate(); }
 void ChargerTestPage::on_cable_changed() { update(ctx_.now); }
-void ChargerTestPage::build_results() {
+void ChargerTestPage::fill_grid_scratch(GridScratch& out, bool running_grid, bool note_cuts) {
+    static_assert(sizeof(GridScratch) <= scratch::kSize, "charger-test grid layout fits scratch");
+    result_layout::OemNotes oem;
+    if (running_grid) {
+        oem.headers = false;   // the rows are the plan's steps, in the order the runner walks them
+        oem.fold = false;      // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
+        oem.monitor_mv = ctx_.cap_mv;
+        result_layout::build(out.layout, s_.runner_.steps(), oem, s_.runner_.sweep_view());
+        line_n_ = result_layout::wrap(out.layout, kGridMetrics, out.lines);
+        return;
+    }
     // Passive labels from the identity and the advertised APDOs (the same facts as the card), shown in
     // the OEM-over-PD section: the QC4+/QC5 label, a VID-driven vendor name, the Mi Turbo auth state.
-    const auto card = report_card::build(runner_.steps(), runner_.evidence(), runner_.handover(), card_id_, {}, runner_.state(),
-                                         runner_.reason(), {}, 0, runner_.sweep_view());
-    result_layout::OemNotes oem;
+    const auto card = report_card::build(s_.runner_.steps(), s_.runner_.evidence(), s_.runner_.handover(), s_.card_id_, {}, s_.runner_.state(),
+                                         s_.runner_.reason(), {}, 0, s_.runner_.sweep_view());
     oem.headers = false;   // the grid is units only: no separator rows between the sections
-    oem.vendor = result_layout::vendor_oem_name(card_id_.vid);
+    oem.vendor = result_layout::vendor_oem_name(s_.card_id_.vid);
     if (!oem.vendor && fusb302::vdm().xiaomi) oem.vendor = "Xiaomi";   // SVID 0x2717 seen on the wire even without a VID
     oem.mi_auth = fusb302::sink_status().xiaomi_authed;
     oem.oppo_svid = report_card::oppo_note(card) != nullptr;
-    oem.rebalanced = runner_.evidence().rebalanced;   // the source re-split its budget mid-run this many times
+    oem.rebalanced = s_.runner_.evidence().rebalanced;   // the source re-split its budget mid-run this many times
     char scp_note[24] = {};   // "SCP cap 20V 6A": the row's label is the first two words
     if (report_card::scp_note(card, scp_note, sizeof scp_note)) oem.scp_cap = scp_note + 8;
     char svooc_note[24] = {};   // "6.3 A asked": the SuperVOOC ceiling stage's result (nothing when the stage did not run)
-    const auto& ev = runner_.evidence();
+    const auto& ev = s_.runner_.evidence();
     if (ev.svooc_end != 0) {
         svooc_ceiling::format_cap(ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end), svooc_note);
         oem.svooc_cap = svooc_note;
@@ -1311,10 +1338,13 @@ void ChargerTestPage::build_results() {
         oem.qc_why = justification;   // build() copies the words into tokens inside this scope
     }
     oem.monitor_mv = ctx_.cap_mv;
-    result_layout::build(layout_, runner_.steps(), oem, runner_.sweep_view());
+    result_layout::build(out.layout, s_.runner_.steps(), oem, s_.runner_.sweep_view());
     // build() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
-    if (layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);
-    line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
+    if (note_cuts && out.layout.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", out.layout.cuts);
+    line_n_ = result_layout::wrap(out.layout, kGridMetrics, out.lines);
+}
+void ChargerTestPage::build_results() {
+    GridScope sc(*this, false, true);
     compose_best();
 }
 // The best passing mode per protocol family as one line. Families are dropped from the end (lowest watts first) when the
@@ -1322,7 +1352,7 @@ void ChargerTestPage::build_results() {
 __attribute__((noinline)) void ChargerTestPage::compose_best() {
     best_.clear();
     std::array<result_layout::SummaryLine, 3> best{};
-    const size_t n = result_layout::summarize(runner_.steps(), best);
+    const size_t n = result_layout::summarize(s_.runner_.steps(), best);
     for (size_t i = 0; i < n; ++i) {
         const size_t len = std::strlen(best[i].text);
         if (best_.view().size() + (i ? 2 : 0) + len > size_t(kBestChars)) break;
@@ -1440,20 +1470,20 @@ void ChargerTestPage::describe(ChargerTestSession::View& v) {
 }
 
 int ChargerTestPage::row_count() const {
-    switch (stage_) {
-    case Stage::Algorithms: return kViewRow + (runner_.run_id() ? 1 : 0);
+    switch (s_.stage_) {
+    case Stage::Algorithms: return kViewRow + (s_.runner_.run_id() ? 1 : 0);
     case Stage::Custom: return kFamilyCount + 1;   // the families, then "Done"
     case Stage::Group: {
-        if (family_ != kFamPd) return static_cast<int>(selected(kFamilies[family_]));
+        if (s_.family_ != kFamPd) return static_cast<int>(selected(kFamilies[s_.family_]));
         const unsigned pps_pts = s_.sweep_points(), avs_pts = s_.avs_sweep_points();
         return 2 + (pps_pts ? 1 : 0) + (avs_pts ? 1 : 0);
     }
     case Stage::Cable: return ctx_.cables.count();
     case Stage::Review: return 1;
-    case Stage::Running: return static_cast<int>(runner_.steps().size());
-    case Stage::Results: return static_cast<int>(line_n_) + (delta_n_ ? 1 : 0);
-    case Stage::Changes: return static_cast<int>(delta_n_);
-    case Stage::Steps: return static_cast<int>(counts(runner_, result_family_).total);
+    case Stage::Running: return static_cast<int>(s_.runner_.steps().size());
+    case Stage::Results: return static_cast<int>(line_n_) + (s_.delta_n_ ? 1 : 0);
+    case Stage::Changes: return static_cast<int>(s_.delta_n_);
+    case Stage::Steps: return static_cast<int>(counts(s_.runner_, s_.result_family_).total);
     case Stage::Detail: return 0;
     case Stage::Resume: return 3;
     case Stage::Identity: case Stage::Ask: return 0;   // retired, never entered
@@ -1463,7 +1493,7 @@ int ChargerTestPage::row_count() const {
     return 0;
 }
 ListState ChargerTestPage::list_state() const {
-    if (stage_ == Stage::Results) return {row_count(), grid_.visible(), grid_.first()};   // the grid scrolls by pixel height, not by row slots
+    if (s_.stage_ == Stage::Results) return {row_count(), grid_.visible(), grid_.first()};   // the grid scrolls by pixel height, not by row slots
     return {row_count(), ctx_.rows.visible(), ctx_.rows.state().offset};
 }
 
@@ -1585,7 +1615,7 @@ void unit_progress(const ct::Runner &runner, size_t at, unsigned &i, unsigned &n
 void ChargerTestPage::bar() {
     StrBuf<24> t;
     int step = 0;
-    switch (stage_) {
+    switch (s_.stage_) {
     case Stage::Algorithms: t.put("Tests"); step = 1; break;
     case Stage::Custom: t.put("Custom"); step = 1; break;
     case Stage::Group: t.put("Entries"); step = 1; break;
@@ -1595,14 +1625,17 @@ void ChargerTestPage::bar() {
     case Stage::Changes: t.put("Changes"); break;
     case Stage::Detail: t.put("Step detail"); break;
     case Stage::Steps:
-        if (results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) t.put(layout_.rows[lines_[results_row_].row].label).put_char(' ');
+        if (results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) {
+            GridScope sc(*this, false);
+            t.put(sc.data.layout.rows[sc.data.lines[results_row_].row].label).put_char(' ');
+        }
         t.put("steps");
         break;
     default: t.put("Charger test"); break;
     }
     kit::draw_top_bar(ctx_.content, t.view(), step, fusb302::self_powered() ? "SNK" : "PAS", true);   // title_badge follows in update
     bar_valid_ = false;   // the band repaint erased the V x A readout: title_badge paints it again
-    bar_key_ = static_cast<uint8_t>(static_cast<uint8_t>(stage_) + 1);
+    bar_key_ = static_cast<uint8_t>(static_cast<uint8_t>(s_.stage_) + 1);
 }
 
 bool ChargerTestPage::foot(FooterTone tone, std::string_view text) {
@@ -1616,7 +1649,7 @@ static uint32_t footer_sig(FooterTone tone, std::string_view text) {
 // A handshake window is about to open (ChargerTestSession::request_fc, before fctrig::start): paint the footer line that says
 // why the screen will be still, and remember it as painted so the page does not repaint it from inside the window.
 void ChargerTestPage::announce(const char* words) {
-    if (stage_ != Stage::Running || !laid_) return;
+    if (s_.stage_ != Stage::Running || !laid_) return;
     const std::string_view text(words);
     const uint32_t sig = footer_sig(FooterTone::Info, text);
     if (sig == foot_sig_) return;
@@ -1628,19 +1661,19 @@ void ChargerTestPage::announce(const char* words) {
 
 // The footer of the stage (no key names: the strip says what the keys do). Returns its tone; a message takes it on every stage.
 [[gnu::noinline]] FooterTone ChargerTestPage::footer_line(StrBuf<32> &f) {
-    if (!message_.view().empty()) {
-        f.put(message_.view().substr(0, kFooterCells));
+    if (!s_.message_.view().empty()) {
+        f.put(s_.message_.view().substr(0, kFooterCells));
         return FooterTone::Caution;
     }
-    switch (stage_) {
+    switch (s_.stage_) {
     case Stage::Algorithms: {
-        const int pr = preset_row_of(options_.selected);
+        const int pr = preset_row_of(s_.options_.selected);
         f.put("Picked: ").put(pr ? kPresetNames[pr - 1] : "custom set");
         return FooterTone::Info;
     }
     case Stage::Custom: {
         unsigned on = 0;
-        for (int n = 0; n < kFamilyCount; ++n) on += family_state(options_.selected, n) != 0;
+        for (int n = 0; n < kFamilyCount; ++n) on += family_state(s_.options_.selected, n) != 0;
         f.put_u32(on).put(" of ").put_u32(kFamilyCount).put(" families on");
         return FooterTone::Info;
     }
@@ -1648,12 +1681,12 @@ void ChargerTestPage::announce(const char* words) {
         unsigned on = 0;
         const int n = row_count();
         for (int i = 0; i < n; ++i) {
-            if (sweep_row_shown(family_, i, s_.sweep_points(), s_.avs_sweep_points())) {
-                on += sweep_kind_at(i, s_.sweep_points(), s_.avs_sweep_points()) == 1 ? options_.avs_sweep : options_.pps_sweep;
+            if (sweep_row_shown(s_.family_, i, s_.sweep_points(), s_.avs_sweep_points())) {
+                on += sweep_kind_at(i, s_.sweep_points(), s_.avs_sweep_points()) == 1 ? s_.options_.avs_sweep : s_.options_.pps_sweep;
                 continue;
             }
-            const uint32_t m = group_mask(family_, i, algorithm_at(i));
-            on += (options_.selected & m) == m;
+            const uint32_t m = group_mask(s_.family_, i, algorithm_at(i));
+            on += (s_.options_.selected & m) == m;
         }
         f.put_u32(on).put(" of ").put_u32(static_cast<unsigned>(n)).put(" entries on");
         return FooterTone::Info;
@@ -1670,14 +1703,14 @@ void ChargerTestPage::announce(const char* words) {
     }
     case Stage::Review: {
         const auto in = input(ctx_.now);
-        if (summary_.refusal != ct::Reason::None) {
-            review_refusal(summary_.refusal, ctx_.ui->busy_reason(),
-                           summary_.refusal_mv ? int(summary_.refusal_mv) : in.vbus_mv, f);
+        if (s_.summary_.refusal != ct::Reason::None) {
+            review_refusal(s_.summary_.refusal, ctx_.ui->busy_reason(),
+                           s_.summary_.refusal_mv ? int(s_.summary_.refusal_mv) : in.vbus_mv, f);
             return FooterTone::Caution;
         }
-        if (!summary_.runnable) { f.put("Nothing to run: all skip"); return FooterTone::Caution; }
-        if (confirming_) { f.put(confirm_reattach_ ? kReattachConfirm : "Press again to start"); return FooterTone::Caution; }
-        if (in.cable_mv == 20000 && summary_.max_mv == 21000) { f.put("PPS: 21V on 20V wire"); return FooterTone::Info; }
+        if (!s_.summary_.runnable) { f.put("Nothing to run: all skip"); return FooterTone::Caution; }
+        if (s_.confirming_) { f.put(s_.confirm_reattach_ ? kReattachConfirm : "Press again to start"); return FooterTone::Caution; }
+        if (in.cable_mv == 20000 && s_.summary_.max_mv == 21000) { f.put("PPS: 21V on 20V wire"); return FooterTone::Info; }
         if (self_supplied()) { f.put("Self-powered: VBUS stays up"); return FooterTone::Info; }
         f.put("Runs without a load");
         return FooterTone::Info;
@@ -1686,32 +1719,33 @@ void ChargerTestPage::announce(const char* words) {
     case Stage::Waiting: {
         const int cc1 = ctx_.analog ? ctx_.analog->cc1_mv : -1, cc2 = ctx_.analog ? ctx_.analog->cc2_mv : -1;
         const fusb302::LineTrial lt = fusb302::line_trial();   // the direct-plug fallback's own fact: the line our Rd is on while it is live
-        const auto line = waitplus::footer(wait_.state() == pd::VbusWait::State::Ready, cc1, cc2, ctx_.vbus_fast_mv,
-                                           static_cast<uint32_t>(std::max<int32_t>(0, static_cast<int32_t>(ctx_.now - wait_t0_))),
+        const auto line = waitplus::footer(s_.wait_.state() == pd::VbusWait::State::Ready, cc1, cc2, ctx_.vbus_fast_mv,
+                                           static_cast<uint32_t>(std::max<int32_t>(0, static_cast<int32_t>(ctx_.now - s_.wait_t0_))),
                                            lt.live ? lt.line : uint8_t(0), lt.moves);
         f.put(line.text);
         return line.tone == waitplus::Tone::Ok ? FooterTone::Ok : line.tone == waitplus::Tone::Caution ? FooterTone::Caution : FooterTone::Info;
     }
     case Stage::Running: {
-        const auto &steps = runner_.steps();
-        if (runner_.state() == ct::State::Unsafe) { f.put("Unplug; verify measured 5V"); return FooterTone::Error; }
-        if (runner_.reason() != ct::Reason::None) { f.put(ct::refusal_words(runner_.reason())); return FooterTone::Caution; }
+        const auto &steps = s_.runner_.steps();
+        if (s_.runner_.state() == ct::State::Unsafe) { f.put("Unplug; verify measured 5V"); return FooterTone::Error; }
+        if (s_.runner_.reason() != ct::Reason::None) { f.put(ct::refusal_words(s_.runner_.reason())); return FooterTone::Caution; }
         if (steps.empty()) { f.put("Starting"); return FooterTone::Info; }
         if (s_.fc_words_ && fctrig::paint_critical()) { f.put(s_.fc_words_); return FooterTone::Info; }   // the window the screen sits out
         unsigned i, n;
         const char *unit;
-        unit_progress(runner_, std::min(runner_.index(), steps.size() - 1), i, n, unit);
+        unit_progress(s_.runner_, std::min(s_.runner_.index(), steps.size() - 1), i, n, unit);
         f.put(unit).put(": step ").put_u32(i).put(" of ").put_u32(n);
         return FooterTone::Info;
     }
     case Stage::Results: {
-        if (selection_ >= static_cast<int>(line_n_)) { f.put("Compare with the last card"); return FooterTone::Info; }
-        const auto &row = layout_.rows[lines_[selection_].row];
+        if (s_.selection_ >= static_cast<int>(line_n_)) { f.put("Compare with the last card"); return FooterTone::Info; }
+        GridScope sc(*this, false);
+        const auto &row = sc.data.layout.rows[sc.data.lines[s_.selection_].row];
         f.put(row.label).put(": ");
         if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
         if (row.sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
             f.put(row.label).put(": ");
-            if (const auto* rw = runner_.sweep_view().find(uint8_t(row.algorithm), row.pos); rw && rw->sum.points) {
+            if (const auto* rw = s_.runner_.sweep_view().find(uint8_t(row.algorithm), row.pos); rw && rw->sum.points) {
                 char v[12] = {};
                 f.put("peak ");
                 f.put(std::string_view(v, ctsweep::format_mv(rw->sum.peak_mv, v))).put("V@");
@@ -1725,14 +1759,14 @@ void ChargerTestPage::announce(const char* words) {
             return FooterTone::Info;
         }
         if (!row.probe && (ct::kPpsAlgorithms & ct::bit(row.algorithm))) {   // a range says how far the source got, not a count
-            const auto rc = result_layout::reach(runner_.steps(), row.algorithm, row.pos);   // one row per APDO: its own reach
+            const auto rc = result_layout::reach(s_.runner_.steps(), row.algorithm, row.pos);   // one row per APDO: its own reach
             f.put(result_layout::reach_footer(rc).c_str());
             using result_layout::Tone;
             return rc.tone == Tone::Pass ? FooterTone::Ok : rc.tone == Tone::Partial || rc.tone == Tone::Fail ? FooterTone::Caution
                                                                                                                 : FooterTone::Info;
         }
         unsigned pass = 0, fail = 0, other = 0;
-        for (const auto &s : runner_.steps()) {
+        for (const auto &s : s_.runner_.steps()) {
             if (!result_layout::row_has(row, s)) continue;
             pass += s.verdict == ct::Verdict::Pass;
             fail += s.verdict == ct::Verdict::Fail;
@@ -1746,12 +1780,12 @@ void ChargerTestPage::announce(const char* words) {
         return fail ? FooterTone::Caution : pass ? FooterTone::Ok : FooterTone::Info;
     }
     case Stage::Steps: {
-        const auto c = counts(runner_, result_family_);
+        const auto c = counts(s_.runner_, s_.result_family_);
         f.put_u32(c.total).put(" steps, ").put_u32(c.fail).put(" failed");
         return c.fail ? FooterTone::Caution : FooterTone::Info;
     }
     case Stage::Detail: f.put("Kept until the next start"); return FooterTone::Info;
-    case Stage::Changes: f.put_u32(delta_n_).put(" changed, was run ").put_u32(delta_runs_); return FooterTone::Info;
+    case Stage::Changes: f.put_u32(s_.delta_n_).put(" changed, was run ").put_u32(s_.delta_runs_); return FooterTone::Info;
     case Stage::Resume: {
         const auto w = resume_words(ctx_.now);
         f.put(resumetext::footer(w));
@@ -1771,17 +1805,17 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     row_text_.clear();
     row_tail_.clear();
     row_note_.clear();
-    switch (stage_) {
+    switch (s_.stage_) {
     case Stage::Algorithms:
         if (index < kPresets) {
             out.marker = kit::Marker::Radio;
-            out.state = index + 1 == preset_row_of(options_.selected);
+            out.state = index + 1 == preset_row_of(s_.options_.selected);
             out.text = kPresetNames[index];
             row_tail_.put_u32(entries(kPresetMasks[index]));
             out.tail = row_tail_.view();
             if (focused) out.note = kPresetNotes[index];
         } else if (index == kCustomRow) {
-            const bool custom = preset_row_of(options_.selected) == 0;
+            const bool custom = preset_row_of(s_.options_.selected) == 0;
             out.marker = kit::Marker::Radio;
             out.state = custom;
             out.text = "Custom...";
@@ -1801,34 +1835,34 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
             break;
         }
         out.marker = kit::Marker::Box3;
-        out.state = family_state(options_.selected, index);
+        out.state = family_state(s_.options_.selected, index);
         out.text = kFamilyNames[index];
         if (index == kFamXiaomi) {
             out.text_color = kDim;
             out.tail = "PD";
             if (focused) out.note = kNoteXiaomi;
         } else {
-            row_tail_.put_u32(entries(options_.selected & kFamilies[index])).put_char('/').put_u32(entries(kFamilies[index]));
+            row_tail_.put_u32(entries(s_.options_.selected & kFamilies[index])).put_char('/').put_u32(entries(kFamilies[index]));
             out.tail = row_tail_.view();
             if (focused) out.note = kNoteFamily;
         }
         break;
     case Stage::Group: {
         const A a = algorithm_at(index);
-        const uint32_t m = group_mask(family_, index, a);
+        const uint32_t m = group_mask(s_.family_, index, a);
         out.marker = kit::Marker::Check;
-        if (sweep_row_shown(family_, index, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line, with its point count
+        if (sweep_row_shown(s_.family_, index, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line, with its point count
             const bool avs = sweep_kind_at(index, s_.sweep_points(), s_.avs_sweep_points()) == 1;
-            out.state = avs ? options_.avs_sweep : options_.pps_sweep;
+            out.state = avs ? s_.options_.avs_sweep : s_.options_.pps_sweep;
             out.text = avs ? "AVS sweep" : "PPS sweep";
             row_tail_.put_u32(avs ? s_.avs_sweep_points() : s_.sweep_points()).put(" pts");
             out.tail = row_tail_.view();
             if (focused) out.note = kNoteSweep;
             break;
         }
-        out.state = (options_.selected & m) == m;
-        out.text = family_ == kFamPd ? (index == 0 ? "PD fixed" : "PPS") : ct::name(a);
-        if (focused) out.note = group_note(family_, index, a);
+        out.state = (s_.options_.selected & m) == m;
+        out.text = s_.family_ == kFamPd ? (index == 0 ? "PD fixed" : "PPS") : ct::name(a);
+        if (focused) out.note = group_note(s_.family_, index, a);
         break;
     }
     case Stage::Cable: case Stage::Identity: case Stage::Ask:
@@ -1842,11 +1876,11 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         break;
     case Stage::Resume:
         if (index == 0) {
-            const auto c = counts(runner_);
-            row_text_.put("Run ").put_u32(runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip).put_char('/').put_u32(c.total).put(" done");
+            const auto c = counts(s_.runner_);
+            row_text_.put("Run ").put_u32(s_.runner_.run_id()).put(": ").put_u32(c.pass + c.fail + c.skip).put_char('/').put_u32(c.total).put(" done");
             out.text = row_text_.view();
         } else if (index == 1) {
-            out.text = ct::refusal_words(runner_.reason());
+            out.text = ct::refusal_words(s_.runner_.reason());
             out.text_color = kCaution;
             out.data = true;
         } else {
@@ -1857,7 +1891,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
         }
         break;
     case Stage::Changes: {
-        const auto &d = delta_[static_cast<size_t>(index)];
+        const auto &d = s_.delta_[static_cast<size_t>(index)];
         using DL = report_card::DeltaLine;
         if (d.kind == DL::Group) {
             out.text = report_card::detail::group_label(d.index);
@@ -1884,7 +1918,7 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
     case Stage::Steps: {
         const int si = step_index(index);
         if (si < 0) { out.text = "No selected steps"; out.text_color = kDim; break; }
-        const auto &steps = runner_.steps();
+        const auto &steps = s_.runner_.steps();
         const auto &s = steps[static_cast<size_t>(si)];
         out.marker = kit::Marker::Verdict;
         out.state = static_cast<uint8_t>(vmap(s));
@@ -1914,14 +1948,14 @@ void ChargerTestPage::list_row(int index, bool focused, kit::RowSpec &out) {
 // RowList stages: bind the list on first paint after an invalidate, then apply count and selection (the window follows).
 void ChargerTestPage::paint_list() {
     if (!laid_) {
-        const int16_t y = stage_ == Stage::Resume ? 56 : stage_ == Stage::Refuse ? 110 : kit::kBodyY;
+        const int16_t y = s_.stage_ == Stage::Resume ? 56 : s_.stage_ == Stage::Refuse ? 110 : kit::kBodyY;
         ctx_.rows.init(ctx_.content, y, &ChargerTestPage::row_fn, this);
         ctx_.rows.restart();
         ctx_.rows.invalidate();
         laid_ = true;
     }
     ctx_.rows.set_count(row_count());
-    ctx_.rows.select(selection_);
+    ctx_.rows.select(s_.selection_);
     ctx_.rows.draw(ctx_.now, ctx_.budget);
 }
 
@@ -2088,8 +2122,8 @@ void ChargerTestPage::paint_review() {
         return true;
     };
     StrBuf<32> t;
-    t.put_u32(summary_.runnable).put(" run, ").put_u32(summary_.skipped).put(" skip");
-    if (!kv(0, "Tests", t.view(), summary_.runnable ? kText : kCaution)) return;
+    t.put_u32(s_.summary_.runnable).put(" run, ").put_u32(s_.summary_.skipped).put(" skip");
+    if (!kv(0, "Tests", t.view(), s_.summary_.runnable ? kText : kCaution)) return;
 
     StrBuf<32> pk;
     const pd::Pdo *best = nullptr;
@@ -2102,8 +2136,8 @@ void ChargerTestPage::paint_review() {
         put_volts_trim(pk, best->max_ma);
         pk.put_char('A');
         if (best->max_mw) pk.put_char(' ').put_u32(best->max_mw / 1000).put_char('W');
-    } else if (summary_.max_mv) {
-        put_volts_trim(pk, static_cast<int32_t>(summary_.max_mv));
+    } else if (s_.summary_.max_mv) {
+        put_volts_trim(pk, static_cast<int32_t>(s_.summary_.max_mv));
         pk.put_char('V');
     } else {
         pk.put("--");
@@ -2126,8 +2160,8 @@ void ChargerTestPage::paint_review() {
     if (!kv(3, "Header", hd.view(), caps.valid ? kText : kDim)) return;
     if (!kv(4, "Power", self_supplied() ? "From the charger" : "K2 on USB", kText)) return;
 
-    if (confirming_) {
-        const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(confirm_until_ - ctx_.now));
+    if (s_.confirming_) {
+        const int32_t left = std::max<int32_t>(0, static_cast<int32_t>(s_.confirm_until_ - ctx_.now));
         const int permille = std::clamp<int>(left * 1000 / static_cast<int32_t>(Ui::kConfirmWindowMs), 0, 1000);
         StrBuf<24> sub;
         sub.put("closes in ").put_u32(static_cast<uint32_t>((left + 999) / 1000)).put_char('s');
@@ -2197,9 +2231,9 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
 
     // The give-up clock: a 2 px bar that drains over the wait (the whole wait of the first attempt; a retry reads empty).
     const uint32_t total = ChargerTestSession::wait_total_ms();
-    const uint32_t spent = now - wait_t0_;
-    const uint32_t left = (wait_paused_ || spent >= total) ? 0 : total - spent;
-    const int px = static_cast<int>(static_cast<uint64_t>(left) * static_cast<uint32_t>(c.w) / total);
+    const uint32_t spent = now - s_.wait_t0_;
+    const uint32_t left = (s_.wait_paused_ || spent >= total) ? 0 : total - spent;
+    const int px = static_cast<int>(math::mul_div_u32(left, static_cast<uint32_t>(c.w), total));
     const uint32_t bsig = mix_u32(mix_init(), static_cast<uint32_t>(px)) | 1u;
     if (bsig != cell_sig_[4] && bg.admit(c.w * 2)) {
         cell_sig_[4] = bsig;
@@ -2225,16 +2259,6 @@ void ChargerTestPage::paint_waiting(uint32_t now) {
     }
 }
 
-// The Running verdict grid: the light layout of the plan (no card), wrapped the way Results wraps it.
-void ChargerTestPage::build_running_grid() {
-    result_layout::OemNotes oem;
-    oem.headers = false;   // the rows are the plan's steps, in the order the runner walks them
-    oem.fold = false;  // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
-    oem.monitor_mv = ctx_.cap_mv;
-    result_layout::build(layout_, runner_.steps(), oem, runner_.sweep_view());
-    line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
-}
-
 // The Running gauge's full scale: one scale for the whole run, so the pass band slides with each target (5 V near the left,
 // 20 V near the right) and the needle shows the travel between steps. 10 % above the highest target in the plan, rounded up
 // to a whole volt, at least 6 V. A per-target scale (target x 1.5) put every band at the same 2/3 point and never moved.
@@ -2249,14 +2273,14 @@ static int32_t gauge_full_mv(std::span<const ct::Step> steps, int32_t sweep_hi_m
 
 void ChargerTestPage::paint_running(uint32_t now) {
     const Surface &c = ctx_.content;
-    const auto &steps = runner_.steps();
+    const auto &steps = s_.runner_.steps();
     // While a step is in flight (Runner::quiet()) every item below goes through one pixel budget (kFlightPx); an item that does
     // not fit stays dirty and paints on a later tick. update() has already returned if the engine is in a window the idle hook
     // does not serve (Runner::paint_blocked), so nothing here runs inside a handshake. Between steps the cap is off.
     PaintBudget *const pbg = ctx_.budget;
-    const bool flight = runner_.quiet() && laid_;
+    const bool flight = s_.runner_.quiet() && laid_;
     Budget bg{pbg, flight ? kFlightPx : (1 << 30)};
-    const size_t at = steps.empty() ? 0 : std::min(runner_.index(), steps.size() - 1);
+    const size_t at = steps.empty() ? 0 : std::min(s_.runner_.index(), steps.size() - 1);
     const ct::Step *st = steps.empty() ? nullptr : &steps[at];
     if (!laid_) {
         if (!bg.admit(c.w * (kit::kPassBandH + 2))) return;
@@ -2270,7 +2294,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     const int32_t target = st ? st->mv : 0;
     // A deep-sweep row (one per APDO) has no single target: its strip shows the swept range as a dotted band, the setpoint as a
     // marker that moves point by point, and the needle; its text line reads the last point. Every other row keeps the pass band.
-    const ctsweep::Live live = runner_.sweep_live();
+    const ctsweep::Live live = s_.runner_.sweep_live();
     const bool sweeping = live.active;
     const int32_t full = gauge_full_mv(steps, sweeping ? live.hi_mv : 0);
     const int32_t vbus_g = std::max<int32_t>(vbus, 0);
@@ -2296,11 +2320,9 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     // 1b. the step outline, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the
     // outline from the cell that was under test to the one that is (two cell rims, never gated). The rows repaint at item 6.
-    const uint32_t key = mix_u32(mix_u32(mix_init(), runner_.revision()), static_cast<uint32_t>(runner_.index())) | 1u;
-    if (key != grid_key_) {
-        grid_key_ = key;
-        build_running_grid();
-    }
+    GridScope sc(*this, true);
+    const uint32_t key = mix_u32(mix_u32(mix_init(), s_.runner_.revision()), static_cast<uint32_t>(s_.runner_.index())) | 1u;
+    if (key != grid_key_) grid_key_ = key;
     // 5. the footer (the unit and its step), one cached band: evaluated before sync_dots/hero/clock/header so a
     // handshake-window end or step change is never starved behind dot sync or 250 ms/1 s redraws.
     {
@@ -2328,7 +2350,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     // 2. elapsed m:ss at the right edge (one text per second): evaluated before hero so the 5200 px hero never defers a 1 s tick
     {
-        const uint32_t secs = (now - run_t0_) / 1000;
+        const uint32_t secs = (now - s_.run_t0_) / 1000;
         StrBuf<12> e;
         e.put_u32(secs / 60).put_char(':');
         if (secs % 60 < 10) e.put_char('0');
@@ -2349,7 +2371,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     // 4. the step header: counter, progress bar, protocol, step name, target. A step change is visible within a tick or two.
     {
-        const auto all = counts(runner_);
+        const auto all = counts(s_.runner_);
         StrBuf<16> n;
         n.put_u32(st ? static_cast<uint32_t>(at + 1) : 0).put_char('/').put_u32(static_cast<uint32_t>(steps.size())).put(" steps");
         put_line(c, kSmall, 6, 25, n.view(), kText, 12, cell_sig_[0], false, false, &bg);
@@ -2391,10 +2413,10 @@ void ChargerTestPage::paint_running(uint32_t now) {
     // 6. the verdict grid follows the step under test (the layout was rebuilt at 1b). The window scrolls to the running line (a
     // manual scroll holds kFollowResumeMs, or until the step changes); rows paint top-to-bottom so finished rows above the running
     // row always update before the running row below them. Scroll and repaint may lag the dot.
-    if (!follow_ && (now - scroll_ms_ >= kFollowResumeMs || runner_.index() != scroll_step_)) follow_ = true;
-    const int want = follow_ ? follow_line(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), steps, runner_.index())
-                             : std::clamp(scroll_line_, 0, std::max(0, static_cast<int>(line_n_) - 1));
-    if (follow_) grid_.anchor_bottom(want);   // finished rows stay above, the row under test ends the window
+    if (!s_.follow_ && (now - s_.scroll_ms_ >= kFollowResumeMs || s_.runner_.index() != s_.scroll_step_)) s_.follow_ = true;
+    const int want = s_.follow_ ? follow_line(sc.data.layout, std::span<const result_layout::Line>(sc.data.lines.data(), line_n_), steps, s_.runner_.index())
+                             : std::clamp(s_.scroll_line_, 0, std::max(0, static_cast<int>(line_n_) - 1));
+    if (s_.follow_) grid_.anchor_bottom(want);   // finished rows stay above, the row under test ends the window
     else grid_.set_first(want);
     // an idle tick lets the grid have a whole row; otherwise it gets what the other items left, never more
     const int room = pbg ? (pbg->spent == 0 ? kFlightRowPx : pbg->left())
@@ -2415,29 +2437,29 @@ void ChargerTestPage::result_row_fn(void *p, int index, kit::ResultRowSpec &out)
 // Row `index` of the verdict grid (a layout line, or the Changes pseudo-row after them). The text lives in the page's cell buffers.
 void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
     out = {};
-    const bool results = stage_ == Stage::Results;
+    const bool results = s_.stage_ == Stage::Results;
     if (index >= static_cast<int>(line_n_)) {
         StrBuf<12> t;
-        t.put_u32(static_cast<uint32_t>(delta_n_)).put(" changed");
+        t.put_u32(static_cast<uint32_t>(s_.delta_n_)).put(" changed");
         put_clip(cell_txt_[0][0], t.view());
         out.label = "Changes";
         out.cells[0] = {kit::Verdict::None, cell_txt_[0][0], {}};
         out.n = 1;
-        out.focus = results && selection_ == index;
+        out.focus = results && s_.selection_ == index;
         return;
     }
-    const auto &ln = lines_[static_cast<size_t>(index)];
-    const auto &row = layout_.rows[ln.row];
+    const auto &ln = grid_sc_->lines[static_cast<size_t>(index)];
+    const auto &row = grid_sc_->layout.rows[ln.row];
     if (ln.head) {
         std::memset(cell_lbl_, 0, sizeof cell_lbl_);
         std::memcpy(cell_lbl_, row.label, std::min<size_t>(std::strlen(row.label), sizeof cell_lbl_ - 1));
         out.label = cell_lbl_;
     }
-    const int running = results ? -1 : running_token(layout_, runner_, ln.row);
+    const int running = results ? -1 : running_token(grid_sc_->layout, s_.runner_, ln.row);
     int n = 0;
     for (int k = 0; k < ln.count && n < kit::kResultMaxCells; ++k) {
         const size_t ti = static_cast<size_t>(ln.first + k);
-        const auto &tk = layout_.tokens[ti];
+        const auto &tk = grid_sc_->layout.tokens[ti];
         if (tk.glue) continue;
         std::string_view volts = tk.text, cur;
         if (tk.chip) {
@@ -2454,15 +2476,15 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         ++n;
     }
     out.n = static_cast<uint8_t>(n);
-    out.focus = results && selection_ >= 0 && selection_ < static_cast<int>(line_n_) && lines_[static_cast<size_t>(selection_)].row == ln.row;
-    out.section = section_break(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), static_cast<size_t>(index));
+    out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) && grid_sc_->lines[static_cast<size_t>(s_.selection_)].row == ln.row;
+    out.section = section_break(grid_sc_->layout, std::span<const result_layout::Line>(grid_sc_->lines.data(), line_n_), static_cast<size_t>(index));
 }
 
 void ChargerTestPage::paint_results() {
     const Surface &c = ctx_.content;
     PaintBudget *const pbg = ctx_.budget;
     Budget bg{pbg, (1 << 30)};
-    const auto all = counts(runner_);
+    const auto all = counts(s_.runner_);
     if (!laid_) {
         if (!bg.admit(1600)) return;
         const kit::Verdict kinds[3] = {kit::Verdict::Pass, kit::Verdict::Fail, kit::Verdict::Skip};
@@ -2488,8 +2510,9 @@ void ChargerTestPage::paint_results() {
     put_line(c, kSmall, 6, 51, best_.view().empty() ? std::string_view("No passing mode") : best_.view(), best_.view().empty() ? kDim : kText,
              kBestChars, cell_sig_[3], false, true, &bg);
     if (pbg && pbg->more) return;
-    grid_.set_count(static_cast<int>(line_n_) + (delta_n_ ? 1 : 0));
-    grid_.show(selection_, 1);
+    GridScope sc(*this, false);
+    grid_.set_count(static_cast<int>(line_n_) + (s_.delta_n_ ? 1 : 0));
+    grid_.show(s_.selection_, 1);
     const int room = pbg ? (pbg->spent == 0 ? kFlightRowPx : pbg->left()) : (1 << 30);
     const int drawn = grid_.draw_some(room, -1, pbg && pbg->spent != 0);
     if (pbg) {
@@ -2516,15 +2539,15 @@ void ChargerTestPage::draw_capture(const transcap::Meta &m) {
 // VBUS trace; a refused 6 A hunt row shows its evidence where the header rows would be.
 void ChargerTestPage::paint_detail() {
     if (laid_) return;
-    const auto &steps = runner_.steps();
-    if (detail_index_ < 0 || static_cast<size_t>(detail_index_) >= steps.size()) { laid_ = true; return; }
+    const auto &steps = s_.runner_.steps();
+    if (s_.detail_index_ < 0 || static_cast<size_t>(s_.detail_index_) >= steps.size()) { laid_ = true; return; }
     PaintBudget *const pbg = ctx_.budget;
     const Surface &c = ctx_.content;
-    const auto &s = steps[static_cast<size_t>(detail_index_)];
-    const auto &e = runner_.evidence();
+    const auto &s = steps[static_cast<size_t>(s_.detail_index_)];
+    const auto &e = s_.runner_.evidence();
     transcap::Meta cap;
-    const bool has_cap = transcap::find_stored(runner_.run_id(), static_cast<uint16_t>(detail_index_), cap);
-    const ct::HuntEvidence *hunt = runner_.hunt_evidence_for(static_cast<size_t>(detail_index_));
+    const bool has_cap = transcap::find_stored(s_.runner_.run_id(), static_cast<uint16_t>(s_.detail_index_), cap);
+    const ct::HuntEvidence *hunt = s_.runner_.hunt_evidence_for(static_cast<size_t>(s_.detail_index_));
 
     if (detail_step_ == 0) {
         if (pbg && !pbg->admit(static_cast<int>(c.w) * 36, true)) return;
@@ -2543,7 +2566,7 @@ void ChargerTestPage::paint_detail() {
         }
         gfx_text(c, kMid, 32, 28, word, vs.ink, fill);
         StrBuf<32> nm;
-        nm.put(step_label::label(s, detail_index_ > 0 ? &steps[static_cast<size_t>(detail_index_) - 1] : nullptr).view());
+        nm.put(step_label::label(s, s_.detail_index_ > 0 ? &steps[static_cast<size_t>(s_.detail_index_) - 1] : nullptr).view());
         char buf[kFitBuf];
         const std::string_view name = fit_data(kSmall, nm.view(), 96, buf);
         const uint16_t name_ink = vs.ink == kDim || vs.ink == kFaint ? kText : vs.ink;
@@ -2652,20 +2675,20 @@ void ChargerTestPage::paint_resume() {
 
 void ChargerTestPage::sync_proposal(uint32_t now) {
     const auto in = input(now);
-    if (confirming_ && (static_cast<int32_t>(now - confirm_until_) >= 0 || proposal(in) != confirm_proposal_)) invalidate_confirmation();
+    if (s_.confirming_ && (static_cast<int32_t>(now - s_.confirm_until_) >= 0 || proposal(in) != s_.confirm_proposal_)) invalidate_confirmation();
     s_.update_summary(in);
 }
 
 void ChargerTestPage::share_card() {
     report_card::Card card;
-    if (!report_card::hw::get(card_no_, card)) return;
+    if (!report_card::hw::get(s_.card_no_, card)) return;
     const std::size_t len = qrshare::records::card(card, ctx_.ui->share_buffer());
-    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, card_name_[0] ? card_name_ : "Card", len, ctx_.now);
+    ctx_.ui->open_share(qrshare::Type::Card, qrshare::kSchemaCard, s_.card_name_[0] ? s_.card_name_ : "Card", len, ctx_.now);
 }
 
 void ChargerTestPage::draw_static() {
     invalidate();
-    if (!ctx_.blank && stage_ != Stage::Algorithms) clear_y_ = kit::kBelowBar;
+    if (!ctx_.blank && s_.stage_ != Stage::Algorithms) clear_y_ = kit::kBelowBar;
     if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(ctx_.content.w) * kit::kBelowBar, true)) return;
     bar();
 }
@@ -2674,16 +2697,16 @@ void ChargerTestPage::draw_static() {
 void ChargerTestPage::update(uint32_t now) {
     ctx_.cables.sync();   // the library changed: the list is read again (a chosen clone that is gone falls back to Off)
     sync_proposal(now);
-    selection_ = std::clamp(selection_, 0, last_row());
+    s_.selection_ = std::clamp(s_.selection_, 0, last_row());
     fill_cable_names();
     // A step in flight inside an engine window the idle hook does not serve (the handshake pulses, the VOOC receive slices,
     // the UFCS/VIVO windows): nothing paints. The tick is dropped, the next one repaints what is dirty. Every tick tells the
     // blocked-paint meter whether it was sat out: its longest window is the `[CT] gap ... blocked=` of the row.
-    const bool blocked = stage_ == Stage::Running && laid_ && runner_.paint_blocked(fctrig::paint_critical());
+    const bool blocked = s_.stage_ == Stage::Running && laid_ && s_.runner_.paint_blocked(fctrig::paint_critical());
     gap::blocked.note(now, blocked);
     if (blocked) return;
     PaintBudget *const pbg = ctx_.budget;
-    if (bar_key_ != static_cast<uint8_t>(static_cast<uint8_t>(stage_) + 1)) {
+    if (bar_key_ != static_cast<uint8_t>(static_cast<uint8_t>(s_.stage_) + 1)) {
         if (pbg && !pbg->admit(static_cast<int>(ctx_.content.w) * kit::kBelowBar, true)) return;
         bar();
     }
@@ -2695,7 +2718,7 @@ void ChargerTestPage::update(uint32_t now) {
         gfx_fill(ctx_.content, 0, clear_y_, ctx_.content.w, h, kBg);
         clear_y_ = static_cast<int16_t>(clear_y_ + h);
     }
-    switch (stage_) {
+    switch (s_.stage_) {
     case Stage::Review: paint_review(); break;
     case Stage::Refuse: paint_warning(); break;
     case Stage::Waiting: paint_waiting(now); break;
@@ -2705,7 +2728,7 @@ void ChargerTestPage::update(uint32_t now) {
     case Stage::Resume: paint_resume(); break;
     default: paint_list(); break;
     }
-    if (stage_ == Stage::Running) return;   // its footer is one of paint_running's budgeted items
+    if (s_.stage_ == Stage::Running) return;   // its footer is one of paint_running's budgeted items
     if (pbg && pbg->more) return;
     StrBuf<32> f;
     const FooterTone tone = footer_line(f);
@@ -2716,53 +2739,53 @@ bool ChargerTestPage::on_event(Event e) {
     // Waiting: + and - do nothing in any press length. The + key is wired to the CC pins (holding it wakes a sleeping charger),
     // so a press of it must never be navigation; the paging lock in dispatch() lets the long ones reach this far.
     // BACK and OK (cancel) are untouched.
-    if (stage_ == Stage::Waiting && (e.button == Button::Plus || e.button == Button::Minus)) return true;
+    if (s_.stage_ == Stage::Waiting && (e.button == Button::Plus || e.button == Button::Minus)) return true;
     const bool long_ok = e.press == Press::Long && e.button == Button::Ok;
     // Long OK on the Results / Detail is Share: the run's report card as QR (a card exists once the run is saved).
-    if (long_ok && (stage_ == Stage::Results || stage_ == Stage::Detail) && !runner_.busy() && card_no_ != 0) {
+    if (long_ok && (s_.stage_ == Stage::Results || s_.stage_ == Stage::Detail) && !s_.runner_.busy() && s_.card_no_ != 0) {
         share_card();
         return true;
     }
     // Long OK on a Custom family opens its entries; on an entries page it toggles the whole group.
-    const bool open_group = long_ok && stage_ == Stage::Custom && selection_ < kFamilyCount && selection_ != kFamXiaomi;
-    const bool toggle_group = long_ok && stage_ == Stage::Group;
+    const bool open_group = long_ok && s_.stage_ == Stage::Custom && s_.selection_ < kFamilyCount && s_.selection_ != kFamXiaomi;
+    const bool toggle_group = long_ok && s_.stage_ == Stage::Group;
     if (e.press != Press::Short && !open_group && !toggle_group && !(e.press == Press::Long && e.button == Button::Back)) return false;
     // A long BACK stops first (a run, a resume offer, an armed START, the wait); with nothing to stop it goes to the Meter (the Ui).
-    if (e.press == Press::Long && e.button == Button::Back && stage_ != Stage::Resume && stage_ != Stage::Waiting && !runner_.busy() &&
-        !confirming_)
+    if (e.press == Press::Long && e.button == Button::Back && s_.stage_ != Stage::Resume && s_.stage_ != Stage::Waiting && !s_.runner_.busy() &&
+        !s_.confirming_)
         return false;
     if (open_group) {
-        family_ = selection_;
+        s_.family_ = s_.selection_;
         set_stage(Stage::Group, 0);
         update(ctx_.now);
         return true;
     }
     if (toggle_group) {
-        const uint32_t group = kFamilies[family_];
-        options_.selected = (options_.selected & group) == group ? options_.selected & ~group : options_.selected | group;
+        const uint32_t group = kFamilies[s_.family_];
+        s_.options_.selected = (s_.options_.selected & group) == group ? s_.options_.selected & ~group : s_.options_.selected | group;
         invalidate_confirmation();
         update(ctx_.now);
         return true;
     }
     if (e.button == Button::Back) {
-        if (stage_ == Stage::Resume) { abandon_run(); update(ctx_.now); return true; }
-        if (runner_.busy()) { cancel(); update(ctx_.now); return true; }
-        if (confirming_) { invalidate_confirmation(); update(ctx_.now); return true; }   // Back out of the confirm window: nothing was touched
-        switch (stage_) {
+        if (s_.stage_ == Stage::Resume) { abandon_run(); update(ctx_.now); return true; }
+        if (s_.runner_.busy()) { cancel(); update(ctx_.now); return true; }
+        if (s_.confirming_) { invalidate_confirmation(); update(ctx_.now); return true; }   // Back out of the confirm window: nothing was touched
+        switch (s_.stage_) {
         case Stage::Refuse: set_stage(Stage::Review, kStartRow); break;   // Back returns to Review: nothing was touched
         case Stage::Waiting: wait_abort(); break;                          // Cancel: Rd back, nothing started
         case Stage::Algorithms: return back_event(e);
-        case Stage::Group: set_stage(Stage::Custom, family_); break;
+        case Stage::Group: set_stage(Stage::Custom, s_.family_); break;
         case Stage::Custom: set_stage(Stage::Algorithms, kCustomRow); break;
         case Stage::Cable: {
-            const int pr = preset_row_of(options_.selected);
+            const int pr = preset_row_of(s_.options_.selected);
             set_stage(Stage::Algorithms, pr ? pr - 1 : kCustomRow);
             break;
         }
         case Stage::Review: set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected())); break;
         case Stage::Identity: case Stage::Ask: set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected())); break;   // retired, never entered
         case Stage::Steps: set_stage(Stage::Results, results_row_); break;
-        case Stage::Detail: set_stage(Stage::Steps, detail_row_); break;
+        case Stage::Detail: set_stage(Stage::Steps, s_.detail_row_); break;
         case Stage::Changes: set_stage(Stage::Results, static_cast<int>(line_n_)); break;
         default: set_stage(Stage::Algorithms); break;
         }
@@ -2770,26 +2793,29 @@ bool ChargerTestPage::on_event(Event e) {
         return true;
     }
     if (e.button == Button::Plus || e.button == Button::Minus) {
-        if (stage_ == Stage::Detail) return true;
+        if (s_.stage_ == Stage::Detail) return true;
         const int dir = e.button == Button::Plus ? 1 : -1;
-        if (stage_ == Stage::Running) {   // scroll the verdict grid by hand; following resumes (paint_running) after kFollowResumeMs or at the next step
-            scroll_line_ = std::clamp(grid_.first() + dir, 0, std::max(0, static_cast<int>(line_n_) - 1));
-            scroll_ms_ = ctx_.now;
-            scroll_step_ = runner_.index();
-            follow_ = false;
+        if (s_.stage_ == Stage::Running) {   // scroll the verdict grid by hand; following resumes (paint_running) after kFollowResumeMs or at the next step
+            s_.scroll_line_ = std::clamp(grid_.first() + dir, 0, std::max(0, static_cast<int>(line_n_) - 1));
+            s_.scroll_ms_ = ctx_.now;
+            s_.scroll_step_ = s_.runner_.index();
+            s_.follow_ = false;
             update(ctx_.now);
             return true;
         }
-        if (stage_ == Stage::Results) {   // the cursor steps unit by unit: a wrapped row's later lines are skipped
-            int i = selection_ + dir;
-            while (i >= 0 && i < static_cast<int>(line_n_) && !lines_[static_cast<size_t>(i)].head) i += dir;
-            selection_ = std::clamp(i, 0, last_row());
+        if (s_.stage_ == Stage::Results) {   // the cursor steps unit by unit: a wrapped row's later lines are skipped
+            int i = s_.selection_ + dir;
+            {
+                GridScope sc(*this, false);
+                while (i >= 0 && i < static_cast<int>(line_n_) && !sc.data.lines[static_cast<size_t>(i)].head) i += dir;
+            }
+            s_.selection_ = std::clamp(i, 0, last_row());
         } else {
-            selection_ = std::clamp(selection_ + dir, 0, last_row());
+            s_.selection_ = std::clamp(s_.selection_ + dir, 0, last_row());
         }
-        follow_ = false;
+        s_.follow_ = false;
         invalidate_confirmation();
-        message_.clear();
+        s_.message_.clear();
         update(ctx_.now);
         return true;
     }
@@ -2799,47 +2825,47 @@ bool ChargerTestPage::on_event(Event e) {
 }
 
 __attribute__((noinline)) void ChargerTestPage::ok_event() {
-    if (stage_ == Stage::Resume) {
-        if (resume_hold_) { resume_hold_ = false; auto_resume_ = true; }   // the identity / Rd that could not go on: try again, on OK's say
+    if (s_.stage_ == Stage::Resume) {
+        if (s_.resume_hold_) { s_.resume_hold_ = false; s_.auto_resume_ = true; }   // the identity / Rd that could not go on: try again, on OK's say
         resume_run(ctx_.now);
         update(ctx_.now);
         return;
     }
-    if (runner_.busy()) return;   // BACK reads Stop while a run is live (UI_SYSTEM.md 7.13.1); OK is free
-    switch (stage_) {
+    if (s_.runner_.busy()) return;   // BACK reads Stop while a run is live (UI_SYSTEM.md 7.13.1); OK is free
+    switch (s_.stage_) {
     case Stage::Algorithms:   // a preset picks and advances; "Custom..." opens the per-family list
-        if (selection_ < kPresets) {
-            options_.selected = kPresetMasks[selection_];
+        if (s_.selection_ < kPresets) {
+            s_.options_.selected = kPresetMasks[s_.selection_];
             invalidate_confirmation();
             set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
-        } else if (selection_ == kCustomRow) {
+        } else if (s_.selection_ == kCustomRow) {
             set_stage(Stage::Custom, 0);
         } else {
             set_stage(Stage::Results);
         }
         break;
     case Stage::Custom:
-        if (selection_ >= kFamilyCount) {   // Done
+        if (s_.selection_ >= kFamilyCount) {   // Done
             set_stage(Stage::Cable, ctx_.cables.index_of(ctx_.cables.selected()));
-        } else if (selection_ != kFamXiaomi) {   // Mi 6A rides the PD unit: nothing to toggle
-            const uint32_t mask = kFamilies[selection_];
-            options_.selected = (options_.selected & mask) == mask ? options_.selected & ~mask : options_.selected | mask;
+        } else if (s_.selection_ != kFamXiaomi) {   // Mi 6A rides the PD unit: nothing to toggle
+            const uint32_t mask = kFamilies[s_.selection_];
+            s_.options_.selected = (s_.options_.selected & mask) == mask ? s_.options_.selected & ~mask : s_.options_.selected | mask;
             invalidate_confirmation();
         }
         break;
     case Stage::Group:
-        if (sweep_row_shown(family_, selection_, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line: an Options flag, not an algorithm bit
-            if (sweep_kind_at(selection_, s_.sweep_points(), s_.avs_sweep_points()) == 1) options_.avs_sweep = !options_.avs_sweep;
-            else options_.pps_sweep = !options_.pps_sweep;
+        if (sweep_row_shown(s_.family_, s_.selection_, s_.sweep_points(), s_.avs_sweep_points())) {   // a deep sweep's own line: an Options flag, not an algorithm bit
+            if (sweep_kind_at(s_.selection_, s_.sweep_points(), s_.avs_sweep_points()) == 1) s_.options_.avs_sweep = !s_.options_.avs_sweep;
+            else s_.options_.pps_sweep = !s_.options_.pps_sweep;
             invalidate_confirmation();
-        } else if (const A a = algorithm_at(selection_); a != A::Count) {
-            const uint32_t mask = group_mask(family_, selection_, a);
-            options_.selected ^= (options_.selected & mask) == mask ? mask : mask & ~options_.selected;
+        } else if (const A a = algorithm_at(s_.selection_); a != A::Count) {
+            const uint32_t mask = group_mask(s_.family_, s_.selection_, a);
+            s_.options_.selected ^= (s_.options_.selected & mask) == mask ? mask : mask & ~s_.options_.selected;
             invalidate_confirmation();
         }
         break;
     case Stage::Cable:   // a pick selects and advances: nothing is armed until START
-        ctx_.cables.select(ctx_.cables.choice_at(selection_));
+        ctx_.cables.select(ctx_.cables.choice_at(s_.selection_));
         invalidate_confirmation();
         set_stage(Stage::Review, kStartRow);
         break;
@@ -2850,11 +2876,11 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
     case Stage::Waiting: break;   // BACK stops the wait (it reads Stop); OK is free
     case Stage::Identity: case Stage::Ask: break;   // retired, never entered
     case Stage::Refuse:
-        if (selection_ == 0) {   // Start anyway: the identity runs armed, the guard's reading goes to the journal
-            guard_bypass_ = true;
+        if (s_.selection_ == 0) {   // Start anyway: the identity runs armed, the guard's reading goes to the journal
+            s_.guard_bypass_ = true;
             confirmed_start();
         } else {                 // Start, skip spoof: this run without the identity; the stored pick (/cable.cfg) is NOT changed
-            skip_spoof_run_ = true;
+            s_.skip_spoof_run_ = true;
             invalidate_confirmation();
             set_stage(Stage::Review, kStartRow);
             confirmed_start();
@@ -2862,23 +2888,32 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         break;
     case Stage::Changes: set_stage(Stage::Results, static_cast<int>(line_n_)); break;
     case Stage::Results:
-        if (selection_ >= static_cast<int>(line_n_)) {
-            if (delta_n_) set_stage(Stage::Changes);
-        } else if (!layout_.rows[lines_[static_cast<size_t>(selection_)].row].header) {   // section headers are not openable
-            const auto &row = layout_.rows[lines_[static_cast<size_t>(selection_)].row];
-            results_row_ = selection_;
-            result_family_ = row.algorithm != A::Count ? family(row.algorithm) : row.probe ? kFamXiaomi : -1;   // the Mi 6A probes
-            set_stage(Stage::Steps);
+        if (s_.selection_ >= static_cast<int>(line_n_)) {
+            if (s_.delta_n_) set_stage(Stage::Changes);
+        } else {
+            int fam = -2;
+            {
+                GridScope sc(*this, false);
+                const auto &row = sc.data.layout.rows[sc.data.lines[static_cast<size_t>(s_.selection_)].row];
+                if (!row.header) {   // section headers are not openable
+                    fam = row.algorithm != A::Count ? family(row.algorithm) : row.probe ? kFamXiaomi : -1;   // the Mi 6A probes
+                }
+            }
+            if (fam != -2) {
+                results_row_ = s_.selection_;
+                s_.result_family_ = fam;
+                set_stage(Stage::Steps);
+            }
         }
         break;
     case Stage::Steps:
-        if (const int index = step_index(selection_); index >= 0) {
-            detail_index_ = index;
-            detail_row_ = selection_;
+        if (const int index = step_index(s_.selection_); index >= 0) {
+            s_.detail_index_ = index;
+            s_.detail_row_ = s_.selection_;
             set_stage(Stage::Detail);
         }
         break;
-    case Stage::Detail: set_stage(Stage::Steps, detail_row_); break;
+    case Stage::Detail: set_stage(Stage::Steps, s_.detail_row_); break;
     case Stage::Running: set_stage(Stage::Results); break;
     case Stage::Resume: break;
     }
@@ -2888,38 +2923,38 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
 PanelLabels ChargerTestPage::labels() const {
     const char *ok = "";
     const char *ok_long = "";
-    if (runner_.busy()) {
+    if (s_.runner_.busy()) {
         ok = "";   // BACK reads Stop (UI_SYSTEM.md 7.13.1)
     } else {
-        switch (stage_) {
-        case Stage::Algorithms: ok = selection_ < kPresets ? "Pick" : "Open"; break;
+        switch (s_.stage_) {
+        case Stage::Algorithms: ok = s_.selection_ < kPresets ? "Pick" : "Open"; break;
         case Stage::Custom:
-            ok = selection_ >= kFamilyCount ? "Next" : selection_ == kFamXiaomi ? "" : "Toggle";
-            if (selection_ < kFamilyCount && selection_ != kFamXiaomi) ok_long = "Open";
+            ok = s_.selection_ >= kFamilyCount ? "Next" : s_.selection_ == kFamXiaomi ? "" : "Toggle";
+            if (s_.selection_ < kFamilyCount && s_.selection_ != kFamXiaomi) ok_long = "Open";
             break;
         case Stage::Group: ok = "Set"; ok_long = "Grp"; break;
         case Stage::Cable: ok = "Pick"; break;
-        case Stage::Review: ok = confirming_ ? "Confirm" : "Start"; break;
+        case Stage::Review: ok = s_.confirming_ ? "Confirm" : "Start"; break;
         case Stage::Refuse: ok = "Start"; break;
         case Stage::Waiting: ok = ""; break;   // BACK reads Stop
         case Stage::Results:
-            ok = selection_ >= static_cast<int>(line_n_) ? "Diff" : "Steps";
-            if (card_no_ != 0) ok_long = "Share";
+            ok = s_.selection_ >= static_cast<int>(line_n_) ? "Diff" : "Steps";
+            if (s_.card_no_ != 0) ok_long = "Share";
             break;
         case Stage::Changes: ok = "View"; break;
         case Stage::Steps: ok = "Open"; break;
-        case Stage::Detail: ok = "Steps"; if (card_no_ != 0) ok_long = "Share"; break;
+        case Stage::Detail: ok = "Steps"; if (s_.card_no_ != 0) ok_long = "Share"; break;
         case Stage::Resume: ok = "Resume"; break;
         case Stage::Running: ok = "View"; break;
         default: break;   // Identity / Ask are retired
         }
     }
-    PanelLabels l = setup::labels(base_labels(), tests_stage(stage_) ? setup::Step::Tests : setup::Step::Cable, ok, ok_long);
-    if (stage_ == Stage::Detail || stage_ == Stage::Review || stage_ == Stage::Waiting) {   // nothing to move the cursor over
+    PanelLabels l = setup::labels(base_labels(), tests_stage(s_.stage_) ? setup::Step::Tests : setup::Step::Cable, ok, ok_long);
+    if (s_.stage_ == Stage::Detail || s_.stage_ == Stage::Review || s_.stage_ == Stage::Waiting) {   // nothing to move the cursor over
         l.b[static_cast<int>(Button::Minus)].shrt = "";
         l.b[static_cast<int>(Button::Plus)].shrt = "";
     }
-    if (runner_.busy() || stage_ == Stage::Waiting) l.b[static_cast<int>(Button::Back)].shrt = "Stop";
+    if (s_.runner_.busy() || s_.stage_ == Stage::Waiting) l.b[static_cast<int>(Button::Back)].shrt = "Stop";
     return l;
 }
 

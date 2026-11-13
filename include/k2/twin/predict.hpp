@@ -57,6 +57,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "k2/core/math_opt.hpp"
 #include "k2/core/rd_intent.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_sink.hpp"
@@ -87,7 +88,7 @@ struct Outcome {
 
 namespace detail {
 
-constexpr std::uint32_t mw_of(std::uint32_t mv, std::uint32_t ma) { return std::uint32_t(std::uint64_t(mv) * ma / 1000u); }
+constexpr std::uint32_t mw_of(std::uint32_t mv, std::uint32_t ma) { return math::mw_of(mv, ma); }
 
 struct Cand {
     Kind kind = Kind::None;

@@ -192,6 +192,13 @@ SECTIONS
     . = . + _msp_size;
   } > RAM
 
+  /* -fno-exceptions: discard ARM unwind tables that libgcc/newlib objects may emit. */
+  /DISCARD/ :
+  {
+    *(.ARM.exidx*)
+    *(.ARM.extab*)
+  }
+
   ASSERT(_eguard <= _psp_top, "RAM overflow: .bss reaches the application stack")
   ASSERT(_psp_top + _msp_size == _estack, "MSP stack does not end at _estack")
 }

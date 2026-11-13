@@ -9,6 +9,7 @@
 #include "k2/ui/ui_viewport.hpp"
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace k2 {
 
@@ -247,8 +248,7 @@ void draw_mark(const Surface &s, int16_t x, int16_t y, int size, bool check, uin
                 const float d2 = ex * ex + ey * ey;
                 if (d2 < best) best = d2;
             }
-            float d = best, g = d;   // sqrt by two Newton steps from d
-            if (d > 0) { g = d < 1 ? 1.0f : d; for (int i = 0; i < 6; i++) g = 0.5f * (g + d / g); } else g = 0;
+            const float g = best > 0.0f ? std::sqrt(best) : 0.0f;
             const float a = half - g;
             const int q = a <= 0 ? 0 : a >= 1 ? 15 : static_cast<int>(a * 15.0f + 0.5f);
             line[c] = lut[q];

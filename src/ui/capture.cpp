@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/capture.hpp"
+#if K2_SCREENSHOT
 #include "k2/core/log.hpp"
 #include "k2/drivers/lcd.hpp"
 #include "k2/drivers/systick.hpp"
@@ -107,3 +108,4 @@ bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms) {
 }
 
 }  // namespace k2
+#endif  // K2_SCREENSHOT

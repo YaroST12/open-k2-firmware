@@ -84,8 +84,8 @@ std::size_t list_chunk(std::uint16_t off, std::span<std::uint8_t> out);
 // 0 when `out` is too small or the version is out of range.
 std::size_t build_link(int version, int px, std::span<char> out);
 
-// The qrtest encode workspace: sized for kMaxShownVersion (two buffers of qr::buf_len_for(25) = 1713 B). Owned as a
-// member of QrTestPage, so it lives in the page arena, not in .bss and not in the scratch arena.
+// The qrtest encode workspace: sized for kMaxShownVersion (two buffers of qr::buf_len_for(25) = 1713 B). QrTestPage
+// leases equivalent transient storage from the scratch arena during paint(); tests/tools still instantiate this helper.
 inline constexpr std::size_t kWsBufLen = qr::buf_len_for(kMaxShownVersion);
 struct Workspace {
     std::uint8_t code[kWsBufLen];   // the finished symbol

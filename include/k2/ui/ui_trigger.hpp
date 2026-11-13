@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 
+#include "k2/core/math_opt.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/fastcharge/fc_scan.hpp"
 #include "k2/ui/ui_calc.hpp"
@@ -349,7 +350,7 @@ inline constexpr int kScaleMv = 20000;   // cover QC2 and Class-B QC3 targets wi
 inline int volt_fill_px(int mv, int w) {
     if (mv <= 0) return 0;
     if (mv >= kScaleMv) return w;
-    return static_cast<int>(static_cast<int64_t>(mv) * w / kScaleMv);
+    return static_cast<int>(math::mul_div_i32(mv, w, kScaleMv));
 }
 
 // Trace sample height 0..h-1 for a voltage on the same scale.

@@ -28,10 +28,10 @@
 
 namespace k2::scratch {
 
-// >= the largest user: the charger-journal replay (about 2790 B on the device, 2808 on a 64-bit host; it grows with
-// charger_test::kMaxSteps; boot_restore), then bbpersist (lz::bound(2048) = 2072). It is leased only inside
-// boot_restore, so it never overlaps the others.
-inline constexpr std::size_t kSize = 2816;
+// >= the largest user: QrTestPage::paint() (3428 B: v25 code[1713] + union(temp[1713], line[240])), then the charger-journal
+// replay (about 2790 B on the device, 2808 on a 64-bit host; boot_restore), then ChargerTestPage result_layout (~2456 B), then
+// bbpersist (lz::bound(2048) = 2072). It is leased only for one call, so users never overlap.
+inline constexpr std::size_t kSize = 3432;
 inline constexpr std::size_t kAlign = 8;
 
 // Why a lease was refused. The default handler logs and traps; a test handler may return, after which

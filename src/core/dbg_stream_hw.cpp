@@ -3,6 +3,7 @@
 #include "k2/core/dbg_stream_hw.hpp"
 
 #include <algorithm>
+#include <new>
 #include <optional>
 #include <string_view>
 
@@ -24,10 +25,19 @@ extern "C" std::uint32_t k2_msp_free_bytes();
 namespace k2::dbg_hw {
 namespace {
 
-dbg::Mux g_mux;
+alignas(dbg::Mux) std::uint8_t g_mux_raw[sizeof(dbg::Mux)];
+bool g_mux_inited;
 Remote* g_remote = nullptr;
 Ui* g_ui = nullptr;
 std::uint16_t g_boot_len = 0;
+
+dbg::Mux& mux() {
+    if (!g_mux_inited) {
+        new (g_mux_raw) dbg::Mux();
+        g_mux_inited = true;
+    }
+    return *std::launder(reinterpret_cast<dbg::Mux*>(g_mux_raw));
+}
 
 std::uint16_t clamp16(std::int32_t v) { return static_cast<std::uint16_t>(std::clamp<std::int32_t>(v, 0, 0xFFFE)); }
 
@@ -79,21 +89,22 @@ void init(Remote& remote, Ui& ui) {
 
 void start(std::uint8_t mask, std::uint16_t hz, bool history) {
     g_boot_len = g_remote ? g_remote->boot_text(true) : 0;
-    g_mux.start(mask, hz, history, pdtrace::live_ring(), usb::log_bin_ring(), runev::live(), systick::millis());
+    mux().start(mask, hz, history, pdtrace::live_ring(), usb::log_bin_ring(), runev::live(), systick::millis());
 }
 
 dbg::Stats stop() {
-    g_mux.stop();
-    return g_mux.stats();
+    mux().stop();
+    return mux().stats();
 }
 
-bool running() { return g_mux.running(); }
-std::uint8_t stream_mask() { return g_mux.mask(); }
-dbg::Stats stats() { return g_mux.stats(); }
+bool running() { return g_mux_inited && mux().running(); }
+std::uint8_t stream_mask() { return g_mux_inited ? mux().mask() : 0; }
+dbg::Stats stats() { return mux().stats(); }
 
 unsigned service(std::size_t room, void (*write)(std::span<const std::uint8_t>)) {
+    if (!g_mux_inited) return 0;
     HwProbe p;
-    return g_mux.service(pdtrace::live_ring(), usb::log_bin_ring(), runev::live(), p, room,
+    return mux().service(pdtrace::live_ring(), usb::log_bin_ring(), runev::live(), p, room,
                          [write](std::span<const std::uint8_t> f) { write(f); });
 }
 

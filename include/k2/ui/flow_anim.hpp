@@ -24,10 +24,10 @@ constexpr int tier_index(int max_w) {
 
 // |power| as permille of the allowed maximum, clamped 0..1000; max_w <= 0 means the 15 W default.
 constexpr int load_permille(int32_t power_mw, int max_w) {
-    const int64_t mag = power_mw < 0 ? -static_cast<int64_t>(power_mw) : power_mw;
-    const int64_t den = static_cast<int64_t>(max_w > 0 ? max_w : kDefaultMaxW) * 1000;
-    const int64_t pm = mag * 1000 / den;
-    return pm > 1000 ? 1000 : static_cast<int>(pm);
+    const uint32_t mag = power_mw < 0 ? 0u - static_cast<uint32_t>(power_mw) : static_cast<uint32_t>(power_mw);
+    const uint32_t mw_w = static_cast<uint32_t>(max_w > 0 ? max_w : kDefaultMaxW);
+    const uint32_t pm = mag / mw_w;   // (mag * 1000) / (mw_w * 1000) == mag / mw_w
+    return pm > 1000u ? 1000 : static_cast<int>(pm);
 }
 
 // Density and speed for a load. Speed runs from 2 chevrons/s to a ceiling of 6 + tier chevrons/s linearly

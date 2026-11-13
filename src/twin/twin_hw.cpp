@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <new>
 
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
@@ -86,7 +87,16 @@ private:
 };
 
 HwEnv g_env;
-twin::live::Runner g_run;
+alignas(twin::live::Runner) std::uint8_t g_run_raw[sizeof(twin::live::Runner)];
+bool g_run_inited;
+
+twin::live::Runner& run_obj() {
+    if (!g_run_inited) {
+        new (g_run_raw) twin::live::Runner();
+        g_run_inited = true;
+    }
+    return *std::launder(reinterpret_cast<twin::live::Runner*>(g_run_raw));
+}
 
 twin::live::Input make_input(const LiveCtx& c) {
     twin::live::Input in;
@@ -178,7 +188,7 @@ twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirme
     if (pd::is_fake()) return twin::live::Refusal::NoSource;   // a fake list has no charger behind it
     fusb302::set_run_owner(true);
     g_env.keep_wake(keep_wake);
-    const twin::live::Refusal r = g_run.start(g_env, seqs, make_input(ctx), confirmed);
+    const twin::live::Refusal r = run_obj().start(g_env, seqs, make_input(ctx), confirmed);
     K2LOG("[TWIN] live start n=%u -> %s\n", unsigned(seqs.size()), twin::live::name(r));
     if (r != twin::live::Refusal::None) fusb302::set_run_owner(false);   // a started run that already ended cleared it itself
     else fusb302::reread_take_over();   // the run owns the link: a pd-reread attach is the run's, its release timer must not fire
@@ -186,17 +196,17 @@ twin::live::Refusal live_start(std::span<const std::uint8_t> seqs, bool confirme
 }
 
 void live_poll(const LiveCtx& ctx) {
-    if (!g_run.running()) return;
-    g_run.poll(make_input(ctx));
+    if (!g_run_inited || !run_obj().running()) return;
+    run_obj().poll(make_input(ctx));
 }
 
 void live_cancel() {
-    if (g_run.running()) g_run.cancel();
+    if (g_run_inited && run_obj().running()) run_obj().cancel();
 }
 
-bool live_running() { return g_run.running(); }
+bool live_running() { return g_run_inited && run_obj().running(); }
 
-const twin::live::Runner& live() { return g_run; }
+const twin::live::Runner& live() { return run_obj(); }
 
 // The three learners hold a whole Twin (and by-value copies of it); out of line so they never inline into Ui::tick's frame (FRAME_MAX).
 [[gnu::noinline]] Learned learn_from_identify(std::string_view name, bool save) {
@@ -233,16 +243,25 @@ const twin::live::Runner& live() { return g_run; }
 }
 
 namespace {
-InlineLearn g_inline;
+alignas(InlineLearn) std::uint8_t g_inline_raw[sizeof(InlineLearn)];
+bool g_inline_inited;
 std::array<char, twin::kNameMax + 1> g_inline_name{};
 std::size_t g_inline_name_n = 0;
 bool g_inline_spoof = false;   // the run's own spoof is armed (disarmed by inline_poll once the run is over)
+
+InlineLearn& inline_obj() {
+    if (!g_inline_inited) {
+        new (g_inline_raw) InlineLearn();
+        g_inline_inited = true;
+    }
+    return *std::launder(reinterpret_cast<InlineLearn*>(g_inline_raw));
+}
 
 pd::IqRefusal inline_start_with(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx, const emrec::Record* rec,
                                 const emk_quirk::Quirks* quirks) {
     pd::IqFacts f;
     f.confirmed = confirmed;
-    f.busy = ctx.busy || ctx.owners_busy || g_run.running() || loopguard::locked();
+    f.busy = ctx.busy || ctx.owners_busy || live_running() || loopguard::locked();
     f.self_powered = power_source::bus_powered();   // the driver adds its own pinned-Rd self power
     f.spoof = rec != nullptr;
     if (rec != nullptr && (!emk_spoof::usable(*rec, *quirks) || emk_spoof::active())) {   // a spoof somebody else armed stays theirs
@@ -252,9 +271,10 @@ pd::IqRefusal inline_start_with(std::string_view name, bool save, bool confirmed
     const pd::IqRefusal r = fusb302::interrogate_start(f);
     K2LOG("[TWIN] learn inline start save=%u spoof=%u -> %s\n", unsigned(save), unsigned(f.spoof), pd::iq_refusal_name(r));
     if (r != pd::IqRefusal::None) return r;
-    g_inline = InlineLearn{};
-    g_inline.pending = true;
-    g_inline.save = save;
+    InlineLearn& inl = inline_obj();
+    inl = InlineLearn{};
+    inl.pending = true;
+    inl.save = save;
     g_inline_name_n = std::min<std::size_t>(name.size(), twin::kNameMax);
     std::memcpy(g_inline_name.data(), name.data(), g_inline_name_n);
     // Armed after the start succeeded (the driver refuses a start while any spoof is armed). The record was checked above.
@@ -287,28 +307,31 @@ pd::IqRefusal inline_start_cable(std::string_view name, bool save, bool confirme
         emk_spoof::disarm();
         g_inline_spoof = false;
     }
-    if (!g_inline.pending || fusb302::interrogate_running()) return;
-    g_inline.pending = false;
-    g_inline.done = true;
+    if (!g_inline_inited) return;
+    InlineLearn& inl = inline_obj();
+    if (!inl.pending || fusb302::interrogate_running()) return;
+    inl.pending = false;
+    inl.done = true;
     Learned out;
     out.how = Learn::NoContract;
     const pd::IqStatus& st = fusb302::interrogate_status();
     if (twin::from_interrogated(st, out.twin))
-        out = save_learned(out, std::string_view(g_inline_name.data(), g_inline_name_n), g_inline.save);
-    g_inline.result = out;
+        out = save_learned(out, std::string_view(g_inline_name.data(), g_inline_name_n), inl.save);
+    inl.result = out;
     K2LOG("[TWIN] learn inline -> %u vid=%04x pdos=%u req=%u rev=%08x ext=%u\n", unsigned(out.how), unsigned(out.twin.vid),
           unsigned(out.twin.num_pdos), unsigned(out.twin.has_request()), unsigned(out.twin.revision), unsigned(out.twin.sink_ext_len));
 }
 
 void inline_cancel() {
-    if (!g_inline.pending && !fusb302::interrogate_running()) return;
-    g_inline.pending = false;   // a stopped run teaches nothing
+    const bool pending = g_inline_inited && inline_obj().pending;
+    if (!pending && !fusb302::interrogate_running()) return;
+    if (g_inline_inited) inline_obj().pending = false;   // a stopped run teaches nothing
     fusb302::interrogate_abort();
 }
 
-bool inline_running() { return g_inline.pending || fusb302::interrogate_running(); }
+bool inline_running() { return (g_inline_inited && inline_obj().pending) || fusb302::interrogate_running(); }
 
-const InlineLearn& inline_learn() { return g_inline; }
+const InlineLearn& inline_learn() { return inline_obj(); }
 
 const pd::IqStatus& inline_status() { return fusb302::interrogate_status(); }
 

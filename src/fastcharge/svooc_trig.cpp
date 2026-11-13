@@ -4,6 +4,7 @@
 #include "k2/fastcharge/svooc_trig.hpp"
 
 #include <array>
+#include <new>
 
 #include "k2/core/critical.hpp"
 #include "k2/core/log.hpp"
@@ -27,10 +28,28 @@ using svooc::Action;
 using svooc::Stage;
 using svooc::Next;
 
-svooc::Run g_run;
-svooc::Wire g_wire;      // fed by the ISR; the main loop reaches it with interrupts masked
-bool g_exit_logged = true;
-bool g_vbus_owned = false;   // the sink is told this run owns VBUS (fusb302::sink_set_vbus_external)
+alignas(svooc::Run) std::uint8_t g_run_raw[sizeof(svooc::Run)];
+bool g_run_inited;
+alignas(svooc::Wire) std::uint8_t g_wire_raw[sizeof(svooc::Wire)];   // fed by the ISR; main loop reaches it with interrupts masked
+bool g_wire_inited;
+bool g_exit_pending;
+bool g_vbus_owned;   // the sink is told this run owns VBUS (fusb302::sink_set_vbus_external)
+
+svooc::Run& run_obj() {
+    if (!g_run_inited) {
+        new (g_run_raw) svooc::Run();
+        g_run_inited = true;
+    }
+    return *std::launder(reinterpret_cast<svooc::Run*>(g_run_raw));
+}
+
+svooc::Wire& wire() {
+    if (!g_wire_inited) {
+        new (g_wire_raw) svooc::Wire();
+        g_wire_inited = true;
+    }
+    return *std::launder(reinterpret_cast<svooc::Wire*>(g_wire_raw));
+}
 
 // The run owns VBUS: the adapter raises it outside PD while the K2 keeps its own 5 V contract silent, as a phone does. The sink
 // must not abort that contract because VBUS rose; the run has its own 12 V ceiling. Handed back once the run is over.
@@ -80,7 +99,7 @@ void on_timer();
 
 void arm_timer() {   // interrupt context or interrupts masked
     if (!g_timer_live) return;
-    const auto d = g_wire.deadline();
+    const auto d = wire().deadline();
     if (!d) return;
     const std::int32_t left = std::int32_t(*d - dpdm::cycles());
     oneshot::arm_us(left <= 0 ? 0u : (std::uint32_t(left) + svooc::kCyclesPerUs - 1) / svooc::kCyclesPerUs, &on_timer);
@@ -88,14 +107,14 @@ void arm_timer() {   // interrupt context or interrupts masked
 
 void on_timer() {
     if (!g_timer_live) return;
-    const Action a = g_wire.tick(dpdm::cycles());
+    const Action a = wire().tick(dpdm::cycles());
     if (a.kind == Action::Kind::Release) g_rel_timer = g_rel_timer + 1;
     apply(a);
     arm_timer();
 }
 
 void on_edge(std::uint32_t word) {
-    const Action a = g_wire.edge(word);
+    const Action a = wire().edge(word);
     if (a.kind == Action::Kind::Release) g_rel_edge = g_rel_edge + 1;   // the next frame's first edge came first
     apply(a);
     arm_timer();   // every edge may move the deadline
@@ -121,10 +140,11 @@ std::array<std::uint16_t, svooc::kLogPairs> g_pair_vbus{};
 std::size_t g_pair_vbus_n = 0;
 
 void stamp_pair_vbus() {
+    if (!g_wire_inited) return;
     std::size_t n;
     {
         Critical cs;
-        n = g_wire.log().n;
+        n = wire().log().n;
     }
     if (g_pair_vbus_n >= n) return;
     const auto v = power::vbus_fast_mv();
@@ -178,14 +198,14 @@ void wake() {
     dpdm::set_dm(dpdm::Drive::Sniff);
     {
         Critical cs;
-        g_wire.begin(dpsniff::line_word());
+        wire().begin(dpsniff::line_word());
         g_pair_vbus_n = 0;   // the list restarts with the wire
         g_timer_live = true;
         g_rel_timer = g_rel_loop = g_rel_edge = 0;
         stage::meter.reset(dpdm::cycles(), systick::millis());   // the stall diag counts from the wake
     }
     dpsniff::hook_listen(&on_edge);
-    K2LOG("[SVOOC] wake %u\n", unsigned(g_run.report().tries));
+    K2LOG("[SVOOC] wake %u\n", unsigned(run_obj().report().tries));
 }
 
 void release() {
@@ -194,21 +214,21 @@ void release() {
         Critical cs;
         g_timer_live = false;   // no shot touches the lines after this
         oneshot::cancel();
-        g_wire.stop();
+        wire().stop();
     }
     stamp_pair_vbus();
     dpdm::idle();          // both lines to the passive idle
-    const svooc::Report& r = g_run.report();
-    const svooc::Log& lg = g_wire.log();
+    const svooc::Report& r = run_obj().report();
+    const svooc::Log& lg = wire().log();
     K2LOG("[SVOOC] release: %s t=%ums cmds=%u replies=%u missed=%u cut=%u accepted=%u vmax=%dmV imax=%dmA contract=%s>%s inline=%s esc=%s\n",
           svooc::name(r.abort), unsigned(r.elapsed_ms), unsigned(lg.commands), unsigned(lg.replies), unsigned(lg.missed),
           unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma), svooc::name(r.contract_start),
-          svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause), svooc::name(g_wire.responder().escape()));
-    for (const svooc::Responder::Ask& a : g_wire.responder().asks())
+          svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause), svooc::name(wire().responder().escape()));
+    for (const svooc::Responder::Ask& a : wire().responder().asks())
         K2LOG("[SVOOC] ask 86>%03X (%dmA) at %ums, %u polls kept\n", unsigned(a.word), int(svooc::ask_ma(a.word)),
               unsigned(a.t_ms), unsigned(a.after));
-    K2LOG("[SVOOC] ceiling %03X (%dmA asked, session kept)\n", unsigned(g_wire.responder().ceiling_word()),
-          int(svooc::ask_ma(g_wire.responder().ceiling_word())));
+    K2LOG("[SVOOC] ceiling %03X (%dmA asked, session kept)\n", unsigned(wire().responder().ceiling_word()),
+          int(svooc::ask_ma(wire().responder().ceiling_word())));
     const dpsniff::Status rec = dpsniff::status();
     K2LOG("[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n", unsigned(lg.edges),
           unsigned(lg.last_edge_ms), unsigned(r.poll_gap_max_ms), unsigned(rec.edges), unsigned(rec.reason));
@@ -221,7 +241,7 @@ void release() {
 void act(Next s) {
     switch (s) {
     case Next::Wake: wake(); break;
-    case Next::Rest: K2LOG("[SVOOC] no command after wake %u\n", unsigned(g_run.report().tries)); break;
+    case Next::Rest: K2LOG("[SVOOC] no command after wake %u\n", unsigned(run_obj().report().tries)); break;
     case Next::Release: release(); break;
     case Next::None: break;
     }
@@ -230,7 +250,7 @@ void act(Next s) {
 }  // namespace
 
 svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool usb_a, const svooc::Params& params) {
-    if (g_run.running()) return svooc::Refusal::Busy;
+    if (running()) return svooc::Refusal::Busy;
     const Live l = live();
     svooc::StartFacts f;
     f.confirmed = confirmed;
@@ -259,7 +279,7 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
         }
     }
     const std::uint32_t cap_ms = cap_s == 0 || cap_s * 1000u > svooc::kCapMs ? svooc::kCapMs : cap_s * 1000u;
-    const svooc::Refusal r = g_run.start(f, systick::millis(), cap_ms);
+    const svooc::Refusal r = run_obj().start(f, systick::millis(), cap_ms);
     if (r != svooc::Refusal::None) {
         if (claimed) dpsniff::hook_end();
         K2LOG("[SVOOC] refused: %s vbus=%dmV ibus=%dmA contract=%s inline=%s%s\n", svooc::name(r), int(f.vbus_mv),
@@ -267,39 +287,46 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
               usb_a ? " (USB-A waiver asked)" : "");
         return r;
     }
-    g_exit_logged = false;
+    g_exit_pending = true;
     own_vbus(true);
     {
         Critical cs;
         // The last run's wire is stopped (release() stops it) and holds its log: a fresh one now, so the status shows
         // nothing of it before the wake re-begins the wire (svooc::Run ignores the wire's facts until then too).
-        g_wire.begin(dpsniff::line_word());
+        wire().begin(dpsniff::line_word());
         g_pair_vbus_n = 0;
-        g_wire.set_params(params);   // the ISR is not listening yet (wake() starts it); begin() keeps them
-        g_wire.set_vbus_mv(0);
+        wire().set_params(params);   // the ISR is not listening yet (wake() starts it); begin() keeps them
+        wire().set_vbus_mv(0);
     }
-    const svooc::Params& ep = g_wire.responder().params();
+    const svooc::Params& ep = wire().responder().params();
     K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us profile=%s\n",
-          unsigned(g_run.report().cap_ms), int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract),
+          unsigned(run_obj().report().cap_ms), int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract),
           pd::inline_cause_name(f.inline_cause), usb_a ? " far-sink / inline check waived (USB-A)" : "",
           unsigned(ep.i86_first), unsigned(ep.i86_esc), unsigned(ep.r82), unsigned(ep.vtarget_mv), unsigned(ep.esc_at_s),
           svooc::name(ep.profile));
     return r;
 }
 
-void stop() { act(g_run.stop(svooc::Abort::Stopped, systick::millis())); }
+void stop() {
+    if (!g_run_inited) return;
+    act(run_obj().stop(svooc::Abort::Stopped, systick::millis()));
+}
 
 void service() {
-    if (!g_run.lines_held()) return;
+    if (!lines_held()) return;
     Critical cs;
-    const Action a = g_wire.tick(dpdm::cycles());
+    const Action a = wire().tick(dpdm::cycles());
     if (a.kind == Action::Kind::Release) g_rel_loop = g_rel_loop + 1;
     apply(a);
     arm_timer();
 }
 
 void poll() {
-    const Stage st = g_run.stage();
+    if (!g_run_inited) {
+        own_vbus(false);
+        return;
+    }
+    const Stage st = run_obj().stage();
     if (st == Stage::Idle || st == Stage::Done) {
         own_vbus(false);   // every exit path ends in Done (or never left Idle): the sink judges VBUS again
         return;
@@ -308,7 +335,7 @@ void poll() {
     stamp_pair_vbus();
     const Live l = live();
     // The closed-loop 0x82 word follows the latest sample: 0 = no reading (the wire then answers the constant word).
-    g_wire.set_vbus_mv(l.vbus_known && l.vbus_mv > 0 ? std::uint16_t(l.vbus_mv > 0xFFFF ? 0xFFFF : l.vbus_mv) : std::uint16_t(0));
+    wire().set_vbus_mv(l.vbus_known && l.vbus_mv > 0 ? std::uint16_t(l.vbus_mv > 0xFFFF ? 0xFFFF : l.vbus_mv) : std::uint16_t(0));
     svooc::Sample s;
     s.now_ms = systick::millis();
     s.host_ok = l.host_ok;
@@ -323,41 +350,41 @@ void poll() {
     s.storm = dpsniff::hook_storm();
     {
         Critical cs;
-        s.off_script = g_wire.stopped();
-        s.commands = g_wire.log().commands;
-        s.accepted = g_wire.responder().accepted();
+        s.off_script = wire().stopped();
+        s.commands = wire().log().commands;
+        s.accepted = wire().responder().accepted();
     }
-    act(g_run.poll(s));
-    if (g_run.stage() == Stage::Done && !g_exit_logged) {
-        g_exit_logged = true;
-        const svooc::Report& r = g_run.report();
+    act(run_obj().poll(s));
+    if (run_obj().stage() == Stage::Done && g_exit_pending) {
+        g_exit_pending = false;
+        const svooc::Report& r = run_obj().report();
         K2LOG("[SVOOC] exit vbus=%dmV %s\n", int(r.vbus_exit_mv), r.exit_ok ? "back at 5 V" : "STILL HIGH");
     }
 }
 
-bool running() { return g_run.running(); }
-bool lines_held() { return g_run.lines_held(); }
+bool running() { return g_run_inited && run_obj().running(); }
+bool lines_held() { return g_run_inited && run_obj().lines_held(); }
 
 Snapshot snapshot() {
     Snapshot s;
-    s.stage = g_run.stage();
-    s.report = g_run.report();
+    s.stage = run_obj().stage();
+    s.report = run_obj().report();
     Critical cs;
-    s.phase = g_wire.responder().phase();
-    s.off_run = g_wire.responder().off_run();
-    s.driving = g_wire.driving();
-    s.log = g_wire.log();
-    s.params = g_wire.responder().params();
-    s.escape = g_wire.responder().escape();
-    s.escape_t_ms = g_wire.responder().escape_t_ms();
-    const std::span<const svooc::Responder::Ask> asks = g_wire.responder().asks();
+    s.phase = wire().responder().phase();
+    s.off_run = wire().responder().off_run();
+    s.driving = wire().driving();
+    s.log = wire().log();
+    s.params = wire().responder().params();
+    s.escape = wire().responder().escape();
+    s.escape_t_ms = wire().responder().escape_t_ms();
+    const std::span<const svooc::Responder::Ask> asks = wire().responder().asks();
     s.n_asks = static_cast<std::uint8_t>(asks.size());
     for (std::size_t i = 0; i < asks.size(); ++i) s.asks[i] = asks[i];
-    s.ceiling_word = g_wire.responder().ceiling_word();
+    s.ceiling_word = wire().responder().ceiling_word();
     const dpsniff::Status rec = dpsniff::status();
     s.rec_edges = rec.edges;
     s.rec_end = static_cast<std::uint8_t>(rec.reason);
-    s.stall = g_run.lines_held() ? stage::meter.worst() : g_stall;   // frozen at the release
+    s.stall = lines_held() ? stage::meter.worst() : g_stall;   // frozen at the release
     s.rel_timer = g_rel_timer;
     s.rel_loop = g_rel_loop;
     s.rel_edge = g_rel_edge;
@@ -365,11 +392,12 @@ Snapshot snapshot() {
 }
 
 std::size_t read_pairs(std::uint16_t from, std::span<svooc::PairRow> out) {
+    if (!g_wire_inited) return 0;
     Critical cs;
-    const std::size_t n = g_wire.log().n;
+    const std::size_t n = wire().log().n;
     std::size_t k = 0;
     for (; k < out.size() && from + k < n; ++k) {
-        const svooc::LogPair& p = g_wire.pair(from + k);
+        const svooc::LogPair& p = wire().pair(from + k);
         out[k] = {p.cmd, p.word, p.t_ms, from + k < g_pair_vbus_n ? g_pair_vbus[from + k] : std::uint16_t(0)};
     }
     return k;

@@ -5,6 +5,7 @@
 #include <array>
 #include <span>
 #include "k2/chargertest/svooc_ceiling.hpp"
+#include "k2/core/math_opt.hpp"
 #include "k2/chargertest/sweep.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/pd/pd_ccmode.hpp"
@@ -525,8 +526,9 @@ public:
     // dt_ms: time since the previous sample. The first sample after clear() seeds the mean.
     void add(int mv, uint32_t dt_ms) {
         if (q8_ < 0) { q8_ = mv * 256; return; }
-        const int64_t diff = int64_t(mv) * 256 - q8_;
-        q8_ += int32_t(diff * std::min(dt_ms, kBandTauMs) / int64_t(kBandTauMs));
+        const int32_t diff = static_cast<int32_t>(mv) * 256 - q8_;
+        const uint32_t dt = std::min(dt_ms, kBandTauMs);
+        q8_ += math::mul_div_i32(diff, static_cast<int32_t>(dt), static_cast<int32_t>(kBandTauMs));
     }
     int mean() const { return q8_ < 0 ? -1 : (q8_ + 128) >> 8; }   // mV, -1 when there is no sample
 private:
@@ -562,9 +564,9 @@ public:
     // ripple). `fallback` (the latest sample) when the window is empty.
     int mean(int fallback) const {
         if (!n_) return fallback;
-        int64_t sum = 0;
+        int32_t sum = 0;
         for (unsigned i = 0; i < n_; ++i) sum += v_[i];
-        return int((sum + int64_t(n_) / 2) / int64_t(n_));
+        return static_cast<int>((sum + static_cast<int32_t>(n_) / 2) / static_cast<int32_t>(n_));
     }
 private:
     static constexpr unsigned kCap = 20;   // 300 ms of samples at the 15 ms worst-case poll cadence

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <span>
 
+#include "k2/core/math_opt.hpp"
 #include "k2/pd/pd.hpp"
 #include "k2/pd/pd_engine.hpp"
 #include "k2/pd/pd_identify.hpp"
@@ -67,7 +68,7 @@ inline std::uint32_t legacy_want_w(const Twin& t) {
         const pd::Pdo s = pd::decode_pdo(t.pdos[i]);
         if (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps) best = std::max<std::uint64_t>(best, std::uint64_t(s.max_mv) * s.max_ma);
     }
-    return std::uint32_t((best + 500000u) / 1000000u);
+    return math::div_u64_to_u32(best + 500000u, 1000000u);
 }
 // True when `t.name` is the auto name of `t` by the old watts figure: "<vendor> <W>W", then nothing or " <digits>".
 inline bool name_is_legacy_auto(const Twin& t) {

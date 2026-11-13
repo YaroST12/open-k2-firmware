@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Yaraslau Furman
 // The Battery place, pure half: see k2/ui/battery_view.hpp.
 #include "k2/ui/battery_view.hpp"
+#include "k2/core/math_opt.hpp"
 
 namespace k2::battery::view {
 
@@ -21,7 +22,7 @@ void app_u(Num &x, uint32_t v, int width = 0) {
 
 namespace {
 uint32_t milli(uint64_t micro) {
-    const uint64_t m = micro / 1000u;
+    const uint64_t m = math::div_u64_u32(micro, 1000u);
     return m > 99'999'999u ? 99'999'999u : static_cast<uint32_t>(m);
 }
 }  // namespace
