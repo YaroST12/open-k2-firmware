@@ -26,7 +26,8 @@ USB_WHICH = ["declared", "observed"]
 IQ_PHASES = ["idle", "reset", "sniff", "settle", "ask", "reset back", "sniff back", "done", "aborted"]   # pd::IqPhase
 IQ_STEPS = ["Discover Identity", "Get_Sink_Cap", "Get_Sink_Cap_Extended", "Get_Revision", "Discover SVIDs",
             "Discover Modes"]                                                                          # pd::IqStep (bit n)
-IQ_WHY = ["none", "stopped", "detached", "inline link lost", "no renegotiation", "too many resets", "time limit"]   # pd::IqWhy
+IQ_WHY = ["none", "stopped", "detached", "inline link lost", "no renegotiation", "too many resets", "time limit",
+          "charger resets when asked"]                                                                 # pd::IqWhy
 IQ_MATCH = ["unknown", "same contract", "contract changed", "no contract after the reset"]                     # pd::IqMatch
 IQ_REFUSALS = ["started", "another PD tool is running", "no CC line attached", "no device inline",
                "a test or trigger owns the ports", "the K2 holds its own contract", "the K2 runs on this VBUS",

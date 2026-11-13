@@ -62,6 +62,20 @@ const char* iq_why_name(IqWhy w) {
         case IqWhy::NoContract: return "no renegotiation";
         case IqWhy::Resets: return "too many resets";
         case IqWhy::Timeout: return "time limit";
+        case IqWhy::SourceResets: return "charger resets when asked";
+    }
+    return "?";
+}
+
+const char* iq_result_name(IqResult r) {
+    switch (r) {
+        case IqResult::Pending: return "pending";
+        case IqResult::Answered: return "device answered";
+        case IqResult::Refused: return "device refused";
+        case IqResult::ChargerOnly: return "only the charger spoke";
+        case IqResult::GoodCrcOnly: return "device GoodCRC only";
+        case IqResult::Nothing: return "nothing";
+        case IqResult::SourceReset: return "charger Hard Reset";
     }
     return "?";
 }
@@ -154,7 +168,9 @@ IqRefusal Interrogate::start(IqFacts f, std::uint32_t now) {
     st_ = IqStatus{};
     st_.started_at = now;
     now_ = now;
-    attempts_ = mode_idx_ = 0;
+    attempts_ = mode_idx_ = order_idx_ = 0;
+    st_.step = kIqAskOrder[0];
+    q_open_ = false;
     awaiting_ = acked_ = tx_pending_ = dirty_ = false;
     why_pending_ = IqWhy::None;
     if (watch_.contract().ready && watch_.src_known()) {
@@ -240,15 +256,25 @@ bool Interrogate::wanted(IqStep s) const {
     return false;
 }
 
+void Interrogate::close(IqResult r) {
+    if (!q_open_) return;
+    q_open_ = false;
+    cur_.result = r;
+    st_.q = cur_;
+    st_.closed++;
+}
+
 void Interrogate::next_step() {
+    close(IqResult::Answered);   // a no-op after refused() or a timeout
     awaiting_ = false;
     attempts_ = 0;
-    if (st_.step != IqStep::Done) st_.step = IqStep(unsigned(st_.step) + 1);
+    if (order_idx_ < kIqAskOrder.size()) order_idx_++;
+    st_.step = order_idx_ < kIqAskOrder.size() ? kIqAskOrder[order_idx_] : IqStep::Done;
 }
 
 // One Discover Modes SVID is over (answered, refused or silent): the next one, or the step ends.
 void Interrogate::modes_next(bool got) {
-    (void)got;
+    if (got) close(IqResult::Answered);
     awaiting_ = false;
     attempts_ = 0;
     mode_idx_++;
@@ -259,12 +285,18 @@ void Interrogate::modes_next(bool got) {
 }
 
 void Interrogate::refused() {
+    close(IqResult::Refused);
     if (st_.step == IqStep::Modes) { modes_next(false); return; }
     st_.refused_mask |= iq_bit(st_.step);
     next_step();
 }
 
 void Interrogate::attempt_failed() {
+    // A Wait or a BUSY comes here too: the device did speak, it only said not now.
+    close(cur_.dev_msgs > 0       ? IqResult::Refused
+          : cur_.src_msgs > 0     ? IqResult::ChargerOnly
+          : cur_.dev_goodcrc      ? IqResult::GoodCrcOnly
+                                  : IqResult::Nothing);
     awaiting_ = false;
     if (++attempts_ < kIqAttempts) return;   // asked again with a fresh MessageID once the line is quiet
     if (st_.step == IqStep::Modes) {
@@ -396,6 +428,12 @@ bool Interrogate::take_tx(TxMsg& out) {
     st_.asked_mask |= iq_bit(st_.step);
     watch_.on_own_tx(out.header);
     sent_id_ = id_of(out.header);
+    tx_at_ = now_;
+    cur_ = IqQuestion{};
+    cur_.step = st_.step;
+    cur_.id = sent_id_;
+    cur_.attempt = std::uint8_t(attempts_ + 1);
+    q_open_ = true;
     dirty_ = true;
     awaiting_ = true;
     acked_ = false;
@@ -429,9 +467,20 @@ void Interrogate::on_hard_reset(std::uint32_t now) {
         default:
             break;
     }
+    // A Hard Reset right after our question is the question's doing (a source that takes a message from a "source" for a role
+    // clash): stop at once. No final reset (theirs resynced the link), no resync wait, no further question: asking again
+    // only puts the source into a reset loop.
+    if (st_.phase == IqPhase::Ask && dirty_ && std::uint32_t(now - tx_at_) <= kIqBlameMs) {
+        close(IqResult::SourceReset);
+        st_.resets_seen++;
+        dirty_ = false;
+        end(IqPhase::Aborted, IqWhy::SourceResets);
+        return;
+    }
     dirty_ = false;   // the reset left nothing of ours behind
     awaiting_ = tx_pending_ = false;
     attempts_ = 0;
+    close(IqResult::SourceReset);
     if (++st_.resets_seen > kIqMaxResets) {
         end(IqPhase::Aborted, IqWhy::Resets);
         return;
@@ -443,7 +492,13 @@ void Interrogate::on_hard_reset(std::uint32_t now) {
 void Interrogate::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
     now_ = now;
     watch_.on_message(sop, header, payload, now);
-    if (!running() || sop != Sop::Sop || from_source(header)) return;   // the charger's own messages: the watch is enough
+    if (!running() || sop != Sop::Sop) return;
+    const bool goodcrc = ndo_of(header) == 0 && !ext_of(header) && type_of(header) == kCtlGoodCrc;
+    if (awaiting_ && q_open_ && !goodcrc) {   // who spoke inside the answer window
+        std::uint8_t& n = from_source(header) ? cur_.src_msgs : cur_.dev_msgs;
+        if (n < 255) n++;
+    }
+    if (from_source(header)) return;   // the charger's own messages: the watch is enough
     on_device(header, payload);
 }
 
@@ -456,6 +511,7 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
         if (t == kCtlGoodCrc) {
             if (awaiting_ && !acked_ && id_of(h) == sent_id_) {
                 acked_ = true;
+                cur_.dev_goodcrc = true;
                 st_.dev_acks++;
             }
             return;

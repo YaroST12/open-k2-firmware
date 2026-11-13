@@ -137,11 +137,10 @@ int main() {
         CHECK_COND(r.now - t0 >= kIqSettleMs);
         CHECK_EQ(bool(r.last().hard_reset), false);
         CHECK_EQ(bool(r.last().inline_tx), true);
-        CHECK_EQ(int(r.last().header & 0x1F), int(kMsgVendorDefined));
         CHECK_EQ(int(r.last().header & 0x0120), int(kSrc));    // source, DFP
         CHECK_EQ(int((r.last().header >> 6) & 3), 2);          // PD 3.x, the contract's revision
         CHECK_EQ(r.last_id(), 3u);                             // PS_RDY was id 2
-        CHECK_EQ(word(r.last()), 0xFF00A001u);                 // Discover Identity, SVDM 2.0
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));     // the plain questions first: a VDM is the one a source may resent
         CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Ask));
     }
 
@@ -150,23 +149,24 @@ int main() {
         Rig r;
         r.contract();
         r.start();
-        CHECK_EQ(bool(r.next()), true);                     // Discover Identity, id 3
+        CHECK_EQ(bool(r.next()), true);                     // Get_Sink_Cap, id 3
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
         r.dev_goodcrc(3);
-        r.identity_ack(0x04A9, 0x1234);                     // not modal: no SVIDs, no Modes
+        r.dev(kDataSinkCap, {kSinkPdo1, kSinkPdo2});
         CHECK_EQ(int(r.iq.status().dev_acks), 1);
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCapExt));
         CHECK_EQ(r.last_id(), 4u);
         CHECK_EQ(int(r.last().header & 0x0120), int(kSrc));
-        r.dev(kDataSinkCap, {kSinkPdo1, kSinkPdo2});
-        CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCapExt));
-        CHECK_EQ(r.last_id(), 5u);
         r.sink_ext_ack();
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(r.last_type(), unsigned(kCtlGetRevision));
-        CHECK_EQ(r.last_id(), 6u);
+        CHECK_EQ(r.last_id(), 5u);
         r.dev_ctl(kCtlNotSupported);                        // a PD 3.0 device: no Revision message
+        CHECK_EQ(bool(r.next()), true);                     // the VDM last: Discover Identity, id 6
+        CHECK_EQ(word(r.last()), 0xFF00A001u);              // SVDM 2.0
+        CHECK_EQ(r.last_id(), 6u);
+        r.identity_ack(0x04A9, 0x1234);                     // not modal: no SVIDs, no Modes
         CHECK_EQ(bool(r.next()), true);                     // nothing left to ask: the final Hard Reset
         CHECK_EQ(bool(r.last().hard_reset), true);
         CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff2));
@@ -199,21 +199,28 @@ int main() {
         r.start();
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(r.last_id(), 0u);                          // 7 + 1 wraps
-        r.identity_ack(0x18D1, 0x4EE1);
+        r.dev(kDataSinkCap, {kSinkPdo1});
         // The charger starts something of its own (a Discover Identity request, id 1) before our next question.
         std::vector<std::uint8_t> di;
         put32(di, 0xFF00A001u);
         r.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 1), di);
         CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCapExt));
         CHECK_EQ(r.last_id(), 2u);
-        // The charger answering our question itself (a source-role ACK) is no answer: Get_Sink_Cap times out and is asked again.
-        std::vector<std::uint8_t> sc;
-        put32(sc, kSinkPdo1);
-        r.rx(hdr(kDataSinkCap, 1, 2, kSrc, 3), sc);
-        CHECK_EQ(int(r.iq.status().num_sink_pdos), 0);
+        r.dev_ctl(kCtlNotSupported);
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
-        CHECK_EQ(r.last_id(), 4u);                          // fresh id: after the charger's 3
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetRevision));
+        CHECK_EQ(r.last_id(), 3u);
+        // The charger answering our question itself (a source-role Revision, as on the bench) is no answer: Get_Revision
+        // times out and is asked again.
+        std::vector<std::uint8_t> rv;
+        put32(rv, 0x30000000u);
+        r.rx(hdr(kDataRevision, 1, 2, kSrc, 4), rv);
+        CHECK_EQ(r.iq.status().revision, 0u);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetRevision));
+        CHECK_EQ(r.last_id(), 5u);                          // fresh id: after the charger's 4
+        CHECK_EQ(int(r.iq.status().q.result), int(IqResult::ChargerOnly));
     }
 
     // ---- silence: one retry with a fresh id, then the step is marked silent and the next one is asked ----
@@ -225,15 +232,48 @@ int main() {
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(r.last_id(), 3u);
         const std::uint32_t t0 = r.now;
-        CHECK_EQ(bool(r.next()), true);                     // Discover Identity again
+        CHECK_EQ(bool(r.next()), true);                     // Get_Sink_Cap again
         CHECK_COND(r.now - t0 >= kIqRespMs);
-        CHECK_EQ(word(r.last()), 0xFF00A001u);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
         CHECK_EQ(r.last_id(), 4u);
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCapExt));
         CHECK_EQ(r.last_id(), 5u);
-        CHECK_EQ(int(r.iq.status().silent_mask), int(iq_bit(IqStep::Identity)));
-        CHECK_EQ(int(r.iq.status().asked_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap)));
+        CHECK_EQ(int(r.iq.status().silent_mask), int(iq_bit(IqStep::SinkCap)));
+        CHECK_EQ(int(r.iq.status().asked_mask), int(iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt)));
+    }
+
+    // ---- what came back after each question: the sink's answer, the charger's, a bare GoodCRC, or nothing ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();                                           // Get_Sink_Cap, id 3
+        CHECK_EQ(int(r.iq.status().closed), 0);
+        r.dev(kDataSinkCap, {kSinkPdo1});
+        const IqQuestion& q = r.iq.status().q;
+        CHECK_EQ(int(r.iq.status().closed), 1);
+        CHECK_EQ(int(q.result), int(IqResult::Answered));
+        CHECK_EQ(int(q.step), int(IqStep::SinkCap));
+        CHECK_EQ(int(q.id), 3);
+        CHECK_EQ(int(q.attempt), 1);
+        CHECK_EQ(int(q.dev_msgs), 1);
+        r.next();                                           // Get_Sink_Cap_Extended, id 4: the device only GoodCRCs
+        r.dev_goodcrc(4);
+        r.next();                                           // asked again after the window
+        CHECK_EQ(int(r.iq.status().closed), 2);
+        CHECK_EQ(int(q.result), int(IqResult::GoodCrcOnly));
+        CHECK_EQ(int(q.step), int(IqStep::SinkCapExt));
+        CHECK_EQ(int(q.dev_msgs), 0);
+        CHECK_EQ(bool(q.dev_goodcrc), true);
+        r.next();                                           // the second attempt got nothing at all; Get_Revision, id 6
+        CHECK_EQ(int(r.iq.status().closed), 3);
+        CHECK_EQ(int(q.result), int(IqResult::Nothing));
+        CHECK_EQ(int(q.attempt), 2);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetRevision));
+        r.dev_ctl(kCtlNotSupported);
+        CHECK_EQ(int(q.result), int(IqResult::Refused));
+        CHECK_EQ(int(r.iq.status().closed), 4);
     }
 
     // ---- no fresh contract: the first Hard Reset, the renegotiation sniffed, then the questions ----
@@ -248,7 +288,7 @@ int main() {
         r.now += 1100;                                      // the charger drops VBUS and comes back (bench: ~1 s)
         r.contract();
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(word(r.last()), 0xFF00A001u);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
         CHECK_EQ(r.last_id(), 3u);
         CHECK_EQ(int(r.iq.status().first.pos), 4);
         CHECK_EQ(int(r.iq.status().resets_sent), 1);
@@ -272,12 +312,13 @@ int main() {
         r.contract(0, 1);
         r.start();
         CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(int((r.last().header >> 6) & 3), 1);
+        r.dev(kDataSinkCap, {kSinkPdo1}, 1);
+        CHECK_EQ(bool(r.next()), true);                     // no Ext, no Revision: straight to the VDM
         CHECK_EQ(word(r.last()), 0xFF008001u);
         CHECK_EQ(int((r.last().header >> 6) & 3), 1);
         r.dev_ctl(kCtlNotSupported);                        // whatever the device says to a VDM it does not do
-        CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
-        r.dev(kDataSinkCap, {kSinkPdo1}, 1);
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(bool(r.last().hard_reset), true);
         CHECK_EQ(int(r.iq.status().rev), 1);
@@ -289,13 +330,14 @@ int main() {
         r.contract();
         r.start();
         r.next();
-        r.identity_ack(0x05AC, 0x7513, true);
-        r.next();
         r.dev(kDataSinkCap, {kSinkPdo1});
         r.next();
         r.dev_ctl(kCtlNotSupported);   // no Sink_Capabilities_Extended
         r.next();
         r.dev_ctl(kCtlNotSupported);   // no Revision
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF00A001u);   // the VDMs last: Discover Identity
+        r.identity_ack(0x05AC, 0x7513, true);
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(word(r.last()), 0xFF00A002u);
         r.dev(kMsgVendorDefined, {0xFF00A042u, 0x05ACFF01u});
@@ -327,30 +369,81 @@ int main() {
         r.identity_ack(0x2B01, 0x0001);
         CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Settle));
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));  // Identity known already
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
         CHECK_EQ(r.last_id(), 4u);
-        CHECK_EQ(int(r.iq.status().asked_mask), int(iq_bit(IqStep::SinkCap)));
+        // Identity is known already: it is never asked, whatever the order.
+        r.dev(kDataSinkCap, {kSinkPdo1});
+        r.next();
+        r.dev_ctl(kCtlNotSupported);
+        r.next();
+        r.dev_ctl(kCtlNotSupported);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        CHECK_EQ(int(r.iq.status().asked_mask), int(iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) | iq_bit(IqStep::Revision)));
     }
 
-    // ---- a Hard Reset from the charger mid-run: re-sniff and go on; a third one ends the run ----
+    // ---- a Hard Reset from the charger that comes long after our last question: re-sniff and go on; a third one ends the run ----
     {
         Rig r;
         r.contract();
         r.start();
         r.next();
+        r.now += kIqBlameMs + 500;                          // nothing to do with our question
         r.iq.on_hard_reset(r.now);
         CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff1));
         r.contract();
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(word(r.last()), 0xFF00A001u);              // the question that was cut is asked again
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));  // the question that was cut is asked again
         CHECK_EQ(r.last_id(), 3u);
+        r.now += kIqBlameMs + 500;
         r.iq.on_hard_reset(r.now);
         r.contract();
         r.next();
+        r.now += kIqBlameMs + 500;
         r.iq.on_hard_reset(r.now);
         CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Aborted));
         CHECK_EQ(int(r.iq.status().why), int(IqWhy::Resets));
         CHECK_EQ(int(r.iq.status().resets_seen), 3);
+    }
+
+    // ---- a source that Hard Resets right after our question (a laptop port on the bench: within 3 ms of the Discover Identity,
+    //      then again, every ~650 ms): the first one ends the run. No second question, no final reset of ours, no resync loop. ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();
+        r.dev(kDataSinkCap, {kSinkPdo1});                   // what the device did say is kept
+        r.next();                                           // Get_Sink_Cap_Extended
+        r.now += 3;
+        r.iq.on_hard_reset(r.now);
+        const IqStatus& s = r.iq.status();
+        CHECK_EQ(int(s.phase), int(IqPhase::Aborted));
+        CHECK_EQ(int(s.why), int(IqWhy::SourceResets));
+        CHECK_EQ(int(s.resets_seen), 1);
+        CHECK_EQ(int(s.resets_sent), 0);
+        CHECK_EQ(int(s.num_sink_pdos), 1);
+        CHECK_EQ(int(s.q.result), int(IqResult::SourceReset));
+        CHECK_EQ(int(s.q.step), int(IqStep::SinkCapExt));
+        CHECK_EQ(bool(r.iq.running()), false);
+        const std::size_t n = r.sent.size();
+        r.contract();                                       // the renegotiation after it, and the escalation 7.5 ms later
+        r.iq.on_hard_reset(r.now + 8);
+        CHECK_EQ(bool(r.next(8000)), false);
+        CHECK_EQ(r.sent.size(), n);
+        CHECK_EQ(int(r.iq.status().why), int(IqWhy::SourceResets));
+        CHECK_EQ(int(r.iq.status().resets_seen), 1);
+
+        // The very first question already provokes it.
+        Rig d;
+        d.contract();
+        d.start();
+        d.next();
+        d.now += 1;
+        d.iq.on_hard_reset(d.now);
+        CHECK_EQ(int(d.iq.status().why), int(IqWhy::SourceResets));
+        CHECK_EQ(int(d.iq.status().resets_sent), 0);
+        CHECK_EQ(bool(d.next(2000)), false);
     }
 
     // ---- the charger Soft_Resets the device mid-run (an answer it did not expect): wait for their new contract, go on, and
@@ -360,19 +453,19 @@ int main() {
         r.contract();
         r.start();
         r.next();
-        r.identity_ack(0x04A9, 0x1234);
+        r.dev_ctl(kCtlNotSupported);                        // Get_Sink_Cap refused
         r.rx(hdr(kCtlSoftReset, 0, 2, kSrc, 0));
         r.dev_ctl(kCtlAccept);
         r.step();
         CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff1));
         r.contract();
         CHECK_EQ(bool(r.next()), true);
-        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCapExt));
         CHECK_EQ(r.last_id(), 3u);
-        r.dev(kDataSinkCap, {kSinkPdo1});
-        r.next();
         r.dev_ctl(kCtlNotSupported);
         r.next();
+        r.dev_ctl(kCtlNotSupported);
+        r.next();                                           // Discover Identity
         r.dev_ctl(kCtlNotSupported);
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(bool(r.last().hard_reset), true);

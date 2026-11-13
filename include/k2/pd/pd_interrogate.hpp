@@ -7,8 +7,12 @@
 //   Sniff1   the renegotiation, sniffed: Source_Capabilities, the device's Request, Accept, PS_RDY (kIqRenegMs at most)
 //   Settle   kIqSettleMs after PS_RDY and kIqQuietMs of a quiet line: the source's own post-contract messages (its Discover
 //            Identity, a Get_Sink_Cap) go first, and whatever the device answers THEM is kept like an answer to us
-//   Ask      Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended and Get_Revision (PD 3.x), Discover SVIDs and Discover
-//            Modes (only when the Identity ACK says modal operation); a step the device already answered is not asked
+//   Ask      Get_Sink_Cap, Get_Sink_Cap_Extended and Get_Revision (PD 3.x), then the VDMs: Discover Identity, Discover SVIDs and
+//            Discover Modes (only when the Identity ACK says modal operation); a step the device already answered is not
+//            asked. The VDMs go last because a DFP-capable source (a laptop port) may take our DFP-role VDM for a role clash
+//            and Hard Reset; whatever the plain questions got is kept by then. A Hard Reset within kIqBlameMs of a question
+//            ends the run at once (IqWhy::SourceResets): no final reset, no resync, no second try, so a source that resets
+//            when asked is never put into a reset loop.
 //   Reset2   a second Hard Reset: the charger's MessageID bookkeeping and the answers it overheard are left behind
 //   Sniff2   the renegotiated contract, compared with the first one (IqMatch)
 //
@@ -18,7 +22,9 @@
 // takes a fresh ID. A question is answered only by a message with the sink power role (the charger may answer too: ignored).
 // A step is retried once (kIqAttempts) when nothing came back in kIqRespMs; NAK, Not_Supported and Reject end it. The
 // transmit result does not count: the device and the charger both GoodCRC our message, the two GoodCRCs collide, and the
-// device answers anyway. A Hard Reset from the charger or the device mid-run re-sniffs the contract and goes on (kIqMaxResets).
+// device answers anyway. A Hard Reset from the charger or the device mid-run, not right after a question, re-sniffs the
+// contract and goes on (kIqMaxResets). IqStatus::q records, per closed question, what the wire showed: the device's answer,
+// the charger's, a bare GoodCRC or nothing.
 // Asking stops at kIqTotalMs; the final reset always goes out once anything was sent.
 // The driver owns the wire: it feeds every frame (on_message) and every Hard Reset it receives in, transmits take_tx() with
 // Auto-CRC OFF (the K2 never GoodCRCs: the charger already does for the device) and the MessageID as given (TxMsg::inline_tx).
@@ -43,11 +49,26 @@ inline constexpr std::uint32_t kIqRespMs = 200;       // an answer window (the d
 inline constexpr std::uint8_t kIqAttempts = 2;
 inline constexpr std::uint32_t kIqTotalMs = 20000;    // from start: no further question after this; the final reset still goes
 inline constexpr std::uint8_t kIqMaxResets = 2;       // Hard Resets from the charger or the device tolerated mid-run
+inline constexpr std::uint32_t kIqBlameMs = 150;      // a Hard Reset this soon after our last question is the question's doing
 
 enum class IqPhase : std::uint8_t { Idle, Reset1, Sniff1, Settle, Ask, Reset2, Sniff2, Done, Aborted };
+// The values are bit positions on the wire (iq_bit, the twin protocol): never reorder, append only. The ask order is
+// separate (kIqAskOrder): the plain control messages first, the VDMs last.
 enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svids, Modes, Done };
-// Why a run ended early (with Aborted, or with Done after the final reset of a stopped run).
-enum class IqWhy : std::uint8_t { None, Stopped, Detached, NotInline, NoContract, Resets, Timeout };
+inline constexpr std::array<IqStep, 6> kIqAskOrder = {IqStep::SinkCap, IqStep::SinkCapExt, IqStep::Revision,
+                                                      IqStep::Identity, IqStep::Svids,       IqStep::Modes};
+// Why a run ended early (with Aborted, or with Done after the final reset of a stopped run). Append only (wire values).
+enum class IqWhy : std::uint8_t { None, Stopped, Detached, NotInline, NoContract, Resets, Timeout, SourceResets };
+// What came back after one question (one attempt).
+enum class IqResult : std::uint8_t {
+    Pending,      // in flight
+    Answered,     // the device (sink power role) answered
+    Refused,      // NAK, Not_Supported or Reject
+    ChargerOnly,  // nothing from the device, but the charger (source power role) spoke inside the window
+    GoodCrcOnly,  // only the device's GoodCRC
+    Nothing,      // not even a GoodCRC
+    SourceReset   // the source Hard Reset right after it
+};
 enum class IqMatch : std::uint8_t { Unknown, Same, Differs, NoSecond };
 enum class IqRefusal : std::uint8_t { None, Running, NoCc, NotInline, Busy, OwnContract, SelfPowered, NeedConfirm };
 
@@ -56,6 +77,7 @@ const char* iq_step_name(IqStep s);
 const char* iq_why_name(IqWhy w);
 const char* iq_refusal_name(IqRefusal r);
 const char* iq_match_name(IqMatch m);
+const char* iq_result_name(IqResult r);
 constexpr std::uint8_t iq_bit(IqStep s) { return std::uint8_t(1u << unsigned(s)); }
 
 // What the driver and the caller know when a run is asked for.
@@ -123,9 +145,20 @@ private:
 
 inline constexpr std::size_t kIqSinkExtBytes = 24;   // Sink_Capabilities_Extended data block
 
+// The latest question that closed (answered, refused, timed out or cut by a reset): what the wire showed in its window.
+struct IqQuestion {
+    IqStep step = IqStep::Identity;
+    IqResult result = IqResult::Pending;
+    std::uint8_t id = 0;         // its MessageID
+    std::uint8_t attempt = 0;    // 1-based
+    std::uint8_t dev_msgs = 0;   // messages from the device (sink power role, no GoodCRC) in the window
+    std::uint8_t src_msgs = 0;   // messages from the charger (source power role, no GoodCRC) in the window
+    bool dev_goodcrc = false;    // the device GoodCRC'd it
+};
+
 struct IqStatus {
     IqPhase phase = IqPhase::Idle;
-    IqStep step = IqStep::Identity;
+    IqStep step = IqStep::SinkCap;   // the question in flight; the first of kIqAskOrder
     IqWhy why = IqWhy::None;
     IqMatch match = IqMatch::Unknown;
     std::uint8_t rev = 0;           // the revision the questions were asked in (1 PD 2.0, 2 PD 3.x)
@@ -138,6 +171,8 @@ struct IqStatus {
     std::uint8_t resets_sent = 0;   // our Hard Resets
     std::uint8_t resets_seen = 0;   // Hard Resets from the charger or the device mid-run
     bool skipped_first_reset = false;
+    IqQuestion q{};                 // the latest closed question
+    std::uint8_t closed = 0;        // questions closed so far (wraps): the driver logs `q` when this moves
     IqContract first{}, second{};
     // The answers.
     Identity id{};
@@ -187,6 +222,7 @@ private:
     void modes_next(bool got);
     void refused();
     void attempt_failed();
+    void close(IqResult r);                  // the question in flight is over: it becomes IqStatus::q
     void build();
     void on_device(std::uint16_t header, std::span<const std::uint8_t> payload);
     bool asking(IqStep s, std::uint16_t svid = 0) const;   // the question in flight is this one
@@ -197,6 +233,10 @@ private:
     std::uint32_t now_ = 0;                  // the latest time any entry point was given
     std::uint32_t phase_at_ = 0;
     std::uint32_t deadline_ = 0;
+    std::uint32_t tx_at_ = 0;                // when the last question left
+    IqQuestion cur_{};                       // the question in flight and what the wire showed since
+    bool q_open_ = false;
+    std::uint8_t order_idx_ = 0;             // position in kIqAskOrder
     std::uint8_t attempts_ = 0, mode_idx_ = 0, sent_id_ = 0;
     std::uint16_t cur_svid_ = 0;
     bool awaiting_ = false, acked_ = false, tx_pending_ = false;
