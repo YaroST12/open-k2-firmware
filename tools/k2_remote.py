@@ -37,6 +37,7 @@ CMD_CHARGER_CABLE = 0x0D  # [kind, seq(2)] the cable identity of the next START 
 CMD_CHARGER_HUNT = 0x0E   # [slot] read-only: the evidence of one refused 6 A hunt row
 CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset)
 CMD_CHARGER_AVS_SWEEP = 0x54  # [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset)
+CMD_CHARGER_SVOOC_CAP = 0x59  # [mode(1)] SuperVOOC ceiling stage of the next charger run; no payload reads mode + result
 CMD_GET_IDENTITY = 0x24  # source identity: VID/PID/bcd, SVIDs, vendor, Apple model
 CMD_DEBUG_LINK = 0x25     # debug: 1 hold the link attached, 0 detached (until the next rescan)
 CMD_DEBUG_PD_MSG = 0x23   # debug: feed one PD message (sop, header, data objects) to the parser
@@ -1433,6 +1434,36 @@ def charger_avs_sweep(link, on):
     p = link.call(CMD_CHARGER_AVS_SWEEP, bytes([1 if on else 0])).payload
     _need(p, 1, "charger avs sweep")
     return bool(p[0])
+
+
+SVOOC_CAP_MODES = ["off", "on", "usb-a"]
+SVOOC_CAP_ENDS = ["not run", "refused", "no adapter", "aborted", "cap", "judged", "cancelled"]
+SVOOC_CAP_NOTE = ("the highest 0x86 word the K2 asked for while the adapter kept the session going (100 mA per count): "
+                  "the charger's accepted ceiling from the protocol, not a drawn current")
+
+
+def charger_svooc_cap(link, mode=None):
+    """Firmware command 0x59: read (mode None) or set the SuperVOOC ceiling stage of the NEXT charger run, and read the latest
+    run's result. Reply [mode, end, why, asks, word(2)]. Setting the mode changes nothing on the wire; the stage runs only
+    after a detected VOOC-family pass and never loads the charger (the 50 mA guard stays)."""
+    payload = b"" if mode is None else bytes([SVOOC_CAP_MODES.index(mode)])
+    p = link.call(CMD_CHARGER_SVOOC_CAP, payload).payload
+    _need(p, 6, "charger svooc cap")
+    name = lambda table, i: table[i] if i < len(table) else str(i)
+    end = name(SVOOC_CAP_ENDS, p[1])
+    why = None
+    if end == "refused":
+        why = name(SVOOC_REFUSALS, p[2])
+    elif end == "aborted":
+        why = name(SVOOC_ABORTS, p[2])
+    word = int.from_bytes(p[4:6], "little")
+    ceiling = {"word": word, "ma": word * SVOOC_MA_PER_COUNT, "text": svooc_amps(word) + " asked"} if word else None
+    return {"mode": name(SVOOC_CAP_MODES, p[0]), "end": end, "why": why, "asks": p[3], "ceiling": ceiling,
+            "note": SVOOC_CAP_NOTE}
+
+
+def cmd_charger_svooc_cap(link, a):
+    return charger_svooc_cap(link, a.mode)
 
 
 def cmd_charger_sweep(link, a):
@@ -4410,7 +4441,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
-            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards,
+            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
             "twin": cmd_twin}
 
 
@@ -4454,6 +4485,10 @@ def build_parser():
         cs = sub.add_parser(name, help=f"turn the {what} deep sweep of the NEXT charger run on or off "
                             "(opt-in: every 100 mV across each APDO, 1 A; never in a preset)")
         cs.add_argument("state", choices=["on", "off"])
+    sv = sub.add_parser("charger-svooc-cap", help="SuperVOOC ceiling stage of the NEXT charger run (no argument: read the mode and "
+                        "the latest result). on = needs the guards to pass; usb-a = USB-A charger, top port empty (waiver). "
+                        "The ceiling is read from the 0x86 protocol words, never tested by load")
+    sv.add_argument("mode", nargs="?", choices=SVOOC_CAP_MODES)
     sub.add_parser("pdos", help="decoded source capabilities")
     se = sub.add_parser("emarker", help="cable e-marker data; list/save/delete/rename/spoof manage saved cables")
     es = se.add_subparsers(dest="em_cmd")

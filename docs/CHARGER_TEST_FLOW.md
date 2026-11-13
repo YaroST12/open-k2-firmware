@@ -132,6 +132,22 @@ aborts with `Overvoltage` and releases the lines), and the card and Results show
   decides the others: "detected" passes them, "needs load" (never clocked, 3 wakes) or "no response" (frames, no ident)
   skips them with that reason. They keep their names and run no session. Cost on a charger that does not speak VOOC:
   one session of 3 wakes (about 10.5 s plus the 500 ms hold), instead of three.
+- **SuperVOOC ceiling stage (opt-in, `Options::svooc_cap`, `State::Ceiling`).** After a VOOC-family pass the Runner may
+  run one more step at 5 V: the guarded SuperVOOC trigger (`svooc_trig`, Probe profile, 12 s cap) answers the adapter's
+  0x82 polls like a phone and walks a 4-rung 0x86 ladder (100 mA per count: 0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A,
+  0x06D 10.9 A). The **measured ceiling** is the highest 0x86 word the adapter kept the session going under, shown in the
+  Results tab as `SV cap` ("10.9 A asked"). It is the K2's own ask that the charger did not abort, read from the protocol;
+  it is **not a drawn current**, and the K2 never loads the charger (the trigger's 50 mA guard and 12 V abort stay).
+  Modes: `off` (default), `on` (the trigger's start guards must pass), `usb-a` (waiver for a USB-A charger on the bottom
+  port with the top port empty; never with a phone on the other port). A refusal, a missing adapter answer or an abort
+  ends the stage with its reason; the ceiling stays what had been accepted before. The stage is not journaled (a resumed
+  run skips it) and does not change the card format; the text is in the Results row, in the `--json` readout
+  (`k2_remote.py charger-svooc-cap`) and in the log. A plain VOOC charger yields "no adapter" because the family
+  detection cannot tell VOOC from SuperVOOC. `quiet()` covers the stage: no flash writes while the wire is held.
+  Shell: `k2_remote.py charger-svooc-cap [off|on|usb-a]`, `ct_start.py --svooc-cap on|usb-a`.
+  Host tests: `test_svooc_ceiling`, `test_charger_test` (ceiling stage cases), `test_result_layout`
+  (`test_svooc_ceiling_note_row`), `test_remote_proto` (`test_charger_svooc_cap`), `tests/test_k2_remote.py`
+  (`ChargerSvoocCapCli`).
 - **AFC, FCP, SCP:** an unacknowledged first exchange (`Unsupported`) skips the unit's other rows.
 - **UFCS:** no answer to the opening exchange (`NoResponse`) skips the unit's other rows.
 - **VIVO:** a first VIVO row with no frame in its entry window (`NoResponse`) skips the other VIVO rows.
