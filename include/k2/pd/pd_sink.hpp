@@ -37,7 +37,7 @@ inline constexpr std::uint8_t kDataSourceCap = 1, kDataRequest = 2, kDataSinkCap
                               kDataEprRequest = 9, kDataEprMode = 10;  // kDataRevision: pd_ext.hpp
 inline constexpr std::uint8_t kExtStatusMsg = 2, kExtSinkCapsExt = 15, kExtControl = 0x10;  // kExtEprSourceCaps: pd_engine.hpp
 inline constexpr std::uint8_t kEprEnter = 1, kEprAck = 2, kEprSucceeded = 3, kEprFailed = 4, kEprExit = 5;
-inline constexpr std::uint8_t kEprGetSourceCap = 1, kEprKeepAlive = 3;
+inline constexpr std::uint8_t kEprGetSourceCap = 1, kEprGetSinkCap = 2, kEprKeepAlive = 3;   // Extended_Control types (ECDB byte 0)
 // EPR_Mode Enter, Data field (bits 23..16) = "EPR Sink Operational PDP" in watts (USB PD 3.2 table 6.28). The sink does not know the
 // source's rated EPR PDP before it has entered (Source_Capabilities_Extended is optional and is not read first), and the K2 is a
 // tester that takes whatever the source offers, so it states 140 W (28 V at 5 A), the 5 A step of the EPR range.

@@ -55,12 +55,22 @@ inline constexpr std::uint32_t kIqTotalMs = 20000;    // from start: no further 
 inline constexpr std::uint8_t kIqMaxResets = 2;       // Hard Resets from the charger or the device tolerated mid-run
 inline constexpr std::uint32_t kIqBlameMs = 150;      // a Hard Reset this soon after our last question is the question's doing
 inline constexpr std::uint32_t kIqRenegBlameMs = 400; // ... and so is a renegotiation (laptop port: Source_Capabilities ~130 ms after it)
+// The e-marker spoof window (IqFacts::spoof). The K2 normally never GoodCRCs inline (the charger's own Auto-CRC is the device's);
+// a charger's SOP' query (the cable's identity) is seen passively first, and only then does the driver turn Auto-CRC on for a
+// bounded window so the charger's retry gets a GoodCRC and the spoofed reply. Closed in Reset and Ask, and by a fresh
+// Source_Capabilities: the questions are asked with Auto-CRC off.
+inline constexpr std::uint32_t kIqSoppWindowMs = 300; // a SOP' query opens (and each retry re-opens) the window this long
+inline constexpr std::uint32_t kIqSoppReplyMs = 60;   // after our reply: the charger's next frame is its acknowledgement
+inline constexpr std::uint32_t kIqSoppMaxMs = 1500;   // from the first query: a charger that keeps asking cannot hold the run
+inline constexpr std::size_t kIqEprMaxBytes = 52;     // EPR_Sink_Capabilities kept: two chunks, 13 objects
+inline constexpr std::size_t kIqEprMaxPdos = kIqEprMaxBytes / 4;
 
 enum class IqPhase : std::uint8_t { Idle, Reset1, Sniff1, Settle, Ask, Reset2, Sniff2, Done, Aborted };
 // The values are bit positions on the wire (iq_bit, the twin protocol): never reorder, append only. The ask order is
 // separate (kIqAskOrder): the plain control messages first, the VDMs last.
-enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svids, Modes, Done };
-inline constexpr std::array<IqStep, 6> kIqAskOrder = {IqStep::SinkCap, IqStep::SinkCapExt, IqStep::Revision,
+// Done (6) is a sentinel that is also written raw on the wire, so EprSinkCap (PD 3.x EPR_Get_Sink_Cap) is appended after it.
+enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svids, Modes, Done, EprSinkCap };
+inline constexpr std::array<IqStep, 7> kIqAskOrder = {IqStep::SinkCap, IqStep::SinkCapExt, IqStep::Revision, IqStep::EprSinkCap,
                                                       IqStep::Identity, IqStep::Svids,       IqStep::Modes};
 // Why a run ended early (with Aborted, or with Done after the final reset of a stopped run). Append only (wire values).
 enum class IqWhy : std::uint8_t { None, Stopped, Detached, NotInline, NoContract, Resets, Timeout, SourceResets, SourceRestarts };
@@ -76,7 +86,8 @@ enum class IqResult : std::uint8_t {
     SourceRestart // the source started a fresh negotiation (Source_Capabilities) right after it
 };
 enum class IqMatch : std::uint8_t { Unknown, Same, Differs, NoSecond };
-enum class IqRefusal : std::uint8_t { None, Running, NoCc, NotInline, Busy, OwnContract, SelfPowered, NeedConfirm };
+// Append only (wire values). BadSpoof: the spoof target did not resolve (the caller's check, before the run).
+enum class IqRefusal : std::uint8_t { None, Running, NoCc, NotInline, Busy, OwnContract, SelfPowered, NeedConfirm, BadSpoof };
 
 const char* iq_phase_name(IqPhase p);
 const char* iq_step_name(IqStep s);
@@ -95,6 +106,7 @@ struct IqFacts {
     bool own_contract = false;   // the K2's own sink holds or makes a contract, or presents Rd for a run
     bool self_powered = false;   // the K2 lives on this VBUS: the reset would cut its own supply
     bool confirmed = false;
+    bool spoof = false;          // the e-marker spoof is armed for this run: the first Hard Reset is never skipped (see sopp_window)
 };
 // The first refusal in this order; None = it may start.
 constexpr IqRefusal iq_refusal(const IqFacts& f) {
@@ -171,8 +183,9 @@ struct IqStatus {
     std::uint8_t asked_mask = 0;    // iq_bit per step that went on the wire at least once
     std::uint8_t ok_mask = 0;       // answered (by us asking, or to the source's own question)
     std::uint8_t refused_mask = 0;  // NAK, Not_Supported or Reject
-    std::uint8_t silent_mask = 0;   // asked kIqAttempts times, nothing came back
-    std::uint8_t sent = 0;          // questions transmitted (every attempt)
+    std::uint8_t silent_mask = 0;   // asked kIqAttempts times, nothing came back (never together with ok_mask: see late_mask)
+    std::uint8_t late_mask = 0;     // answered, but only after the step was given up as silent (a late answer: in ok_mask too)
+    std::uint8_t sent = 0;         // questions transmitted (every attempt)
     std::uint8_t dev_acks = 0;      // GoodCRCs the device sent for them (the collision may hide some)
     std::uint8_t resets_sent = 0;   // our Hard Resets
     std::uint8_t resets_seen = 0;   // Hard Resets from the charger or the device mid-run
@@ -192,6 +205,13 @@ struct IqStatus {
     std::uint8_t sink_ext_len = 0;  // 0 = none, else the bytes kept (the data size, at most kIqSinkExtBytes)
     std::array<std::uint8_t, kIqSinkExtBytes> sink_ext{};
     std::uint32_t revision = 0;     // Revision data object (0 = none)
+    std::uint8_t num_epr_pdos = 0;  // EPR_Sink_Capabilities objects kept (SPR 1..7 first, the EPR ones after)
+    std::array<std::uint32_t, kIqEprMaxPdos> epr_pdos{};
+    bool epr_partial = false;       // only the first chunk arrived (or the data size beyond kIqEprMaxBytes was cut)
+    // The e-marker spoof of this run (IqFacts::spoof): what the charger asked of the cable and what we answered.
+    bool spoof = false;
+    std::uint8_t sopp_queries = 0;  // Discover Identity requests the charger sent on SOP' (retries included), saturating
+    std::uint8_t sopp_replies = 0;  // spoofed SOP' replies that went out
     std::uint32_t started_at = 0, ended_at = 0;
 };
 constexpr bool iq_finished(IqPhase p) { return p == IqPhase::Done || p == IqPhase::Aborted; }
@@ -217,8 +237,17 @@ public:
     void on_tx_result(bool acked, std::uint32_t now);
     const IqStatus& status() const { return st_; }
     const IqWatch& watch() const { return watch_; }
+    // The spoof window: true while Auto-CRC may be on so the charger's SOP' query gets its GoodCRC and our reply (only in
+    // Sniff1, Settle and Sniff2 of a run with IqFacts::spoof). The driver reports each spoofed reply it sent.
+    bool sopp_window(std::uint32_t now) const;
+    void on_sopp_reply(std::uint32_t now);
 
 private:
+    void on_sopp(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now);
+    void mark_ok(IqStep s);                  // answered: a step already given up as silent becomes a late answer instead
+    void on_epr_chunk(std::span<const std::uint8_t> payload);
+    void build_chunk_request();
+    bool settled(std::uint32_t now) const;
     void enter_reset(IqPhase ph);
     void to_settle(std::uint32_t now);
     void stop(IqWhy why);                    // the final reset when anything was asked, else the end
@@ -255,6 +284,12 @@ private:
     std::array<std::uint32_t, 3> foreign_at_{};
     IqWhy why_pending_ = IqWhy::None;        // a stop that waits for the final reset
     TxMsg tx_{};
+    bool tx_chunk_ = false;                  // tx_ is a chunk request of the question in flight, not a new question
+    bool chunk_pending_ = false;             // the first EPR chunk said more follows: the request for it is due
+    std::array<std::uint8_t, kIqEprMaxBytes> epr_raw_{};
+    std::uint16_t epr_size_ = 0, epr_have_ = 0;   // the data size the device announced, the bytes kept so far
+    std::uint32_t sopp_until_ = 0, sopp_first_ = 0;   // the spoof window end; the first query since the last Hard Reset (its budget)
+    bool sopp_started_ = false;                       // a query came since the last Hard Reset (sopp_first_ is valid)
 };
 
 }  // namespace k2::pd

@@ -4,6 +4,7 @@
 // (runs/clone-canon/reneg_pdtrace.txt: OnePlus 120 W charger, Canon dual-battery charger as the device, K2 inline): after a
 // Hard Reset the charger lists 6 PDOs (id 0, PD 3.x, src/dfp), the Canon asks for PDO 4 (RDO 0x4344B12C, id 0, PD 3.x),
 // Accept (id 1), PS_RDY (id 2), every message GoodCRC'd by the other side with a PD 2.0 header.
+#include <string>
 #include <vector>
 
 #include "k2/pd/pd_interrogate.hpp"
@@ -110,6 +111,25 @@ struct Rig {
         iq.on_message(Sop::Sop, hdr(kExtSinkCapsExt, 7, 2, kSnk, dev_id++, true), p, now);
         now += 1;
     }
+    // One chunk of an EPR_Sink_Capabilities answer: ext header (total `size`, chunk number) + `data`, padded to whole objects.
+    void epr_chunk(unsigned chunk, unsigned size, const std::vector<std::uint8_t>& data) {
+        std::vector<std::uint8_t> p;
+        const std::uint16_t eh = std::uint16_t(size | (chunk << 11) | 0x8000u);
+        p.push_back(std::uint8_t(eh));
+        p.push_back(std::uint8_t(eh >> 8));
+        p.insert(p.end(), data.begin(), data.end());
+        while (p.size() % 4) p.push_back(0);
+        rx(hdr(1, 0, 1, kSrc, dev_id));   // the charger's GoodCRC
+        iq.on_message(Sop::Sop, hdr(kExtEprSinkCaps, std::uint8_t(p.size() / 4), 2, kSnk, dev_id++, true), p, now);
+        now += 1;
+    }
+    // The charger's SOP' frame: a Discover Identity request to the cable (structured SVDM request, command 1).
+    void sopp_query() {
+        std::vector<std::uint8_t> p;
+        put32(p, 0xFF00A001u);
+        iq.on_message(Sop::SopP, hdr(kMsgVendorDefined, 1, 2, kSrc, 0), p, now);
+        now += 1;
+    }
     // Run until the run is over (or `limit_ms`), answering nothing.
     void drain(unsigned limit_ms = 20000) {
         for (unsigned t = 0; t < limit_ms && iq.running(); t += 5) step();
@@ -163,9 +183,13 @@ int main() {
         CHECK_EQ(r.last_type(), unsigned(kCtlGetRevision));
         CHECK_EQ(r.last_id(), 5u);
         r.dev_ctl(kCtlNotSupported);                        // a PD 3.0 device: no Revision message
-        CHECK_EQ(bool(r.next()), true);                     // the VDM last: Discover Identity, id 6
-        CHECK_EQ(word(r.last()), 0xFF00A001u);              // SVDM 2.0
+        CHECK_EQ(bool(r.next()), true);                     // EPR_Get_Sink_Cap (a plain question), id 6
+        CHECK_EQ(r.last_type(), unsigned(kExtControl));
         CHECK_EQ(r.last_id(), 6u);
+        r.dev_ctl(kCtlNotSupported);                        // not an EPR sink
+        CHECK_EQ(bool(r.next()), true);                     // the VDM last: Discover Identity, id 7
+        CHECK_EQ(word(r.last()), 0xFF00A001u);              // SVDM 2.0
+        CHECK_EQ(r.last_id(), 7u);
         r.identity_ack(0x04A9, 0x1234);                     // not modal: no SVIDs, no Modes
         CHECK_EQ(bool(r.next()), true);                     // nothing left to ask: the final Hard Reset
         CHECK_EQ(bool(r.last().hard_reset), true);
@@ -176,10 +200,10 @@ int main() {
         CHECK_EQ(int(s.phase), int(IqPhase::Done));
         CHECK_EQ(int(s.why), int(IqWhy::None));
         CHECK_EQ(int(s.match), int(IqMatch::Same));
-        CHECK_EQ(int(s.sent), 4);
+        CHECK_EQ(int(s.sent), 5);
         CHECK_EQ(int(s.resets_sent), 1);
         CHECK_EQ(int(s.ok_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt)));
-        CHECK_EQ(int(s.refused_mask), int(iq_bit(IqStep::Revision)));
+        CHECK_EQ(int(s.refused_mask), int(iq_bit(IqStep::Revision) | iq_bit(IqStep::EprSinkCap)));
         CHECK_EQ(bool(s.id.valid), true);
         CHECK_EQ(int(s.id.vid), 0x04A9);
         CHECK_EQ(int(s.id.pid), 0x1234);
@@ -335,6 +359,8 @@ int main() {
         r.dev_ctl(kCtlNotSupported);   // no Sink_Capabilities_Extended
         r.next();
         r.dev_ctl(kCtlNotSupported);   // no Revision
+        r.next();
+        r.dev_ctl(kCtlNotSupported);   // no EPR sink
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(word(r.last()), 0xFF00A001u);   // the VDMs last: Discover Identity
         r.identity_ack(0x05AC, 0x7513, true);
@@ -377,9 +403,12 @@ int main() {
         r.dev_ctl(kCtlNotSupported);
         r.next();
         r.dev_ctl(kCtlNotSupported);
+        r.next();
+        r.dev_ctl(kCtlNotSupported);   // no EPR sink
         CHECK_EQ(bool(r.next()), true);
         CHECK_EQ(bool(r.last().hard_reset), true);
-        CHECK_EQ(int(r.iq.status().asked_mask), int(iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) | iq_bit(IqStep::Revision)));
+        CHECK_EQ(int(r.iq.status().asked_mask),
+                 int(iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) | iq_bit(IqStep::Revision) | iq_bit(IqStep::EprSinkCap)));
     }
 
     // ---- a Hard Reset from the charger that comes long after our last question: re-sniff and go on; a third one ends the run ----
@@ -465,6 +494,8 @@ int main() {
         r.dev_ctl(kCtlNotSupported);
         r.next();
         r.dev_ctl(kCtlNotSupported);
+        r.next();                                           // EPR_Get_Sink_Cap
+        r.dev_ctl(kCtlNotSupported);
         r.next();                                           // Discover Identity
         r.dev_ctl(kCtlNotSupported);
         CHECK_EQ(bool(r.next()), true);
@@ -505,7 +536,7 @@ int main() {
         r.start();
         r.next();
         r.dev_ctl(kCtlNotSupported);
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             r.next();
             r.dev_ctl(kCtlNotSupported);
         }
@@ -534,7 +565,7 @@ int main() {
         const IqStatus& s = r.iq.status();
         CHECK_EQ(int(s.phase), int(IqPhase::Done));           // every step asked twice, all silent: done, nothing learned
         CHECK_EQ(int(s.silent_mask), int(iq_bit(IqStep::Identity) | iq_bit(IqStep::SinkCap) | iq_bit(IqStep::SinkCapExt) |
-                                          iq_bit(IqStep::Revision)));
+                                          iq_bit(IqStep::Revision) | iq_bit(IqStep::EprSinkCap)));
         CHECK_EQ(int(s.resets_sent), 1);
         CHECK_COND(s.ended_at - s.started_at <= kIqTotalMs + kIqRenegMs + 10);
     }
@@ -623,6 +654,8 @@ int main() {
         d.dev_ctl(kCtlNotSupported);
         d.next();
         d.dev_ctl(kCtlNotSupported);
+        d.next();
+        d.dev_ctl(kCtlNotSupported);                        // EPR_Get_Sink_Cap
         CHECK_EQ(bool(d.next()), true);                     // Discover Identity
         CHECK_EQ(d.last_type(), unsigned(kMsgVendorDefined));
         d.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 4), di);    // the charger asks the same
@@ -633,6 +666,288 @@ int main() {
         CHECK_EQ(int(d.iq.status().ok_mask & iq_bit(IqStep::Identity)), int(iq_bit(IqStep::Identity)));
         CHECK_EQ(int(d.iq.status().q.result), int(IqResult::Answered));
         CHECK_EQ(int(d.iq.status().q.step), int(IqStep::Identity));
+    }
+
+    // ---- EPR_Get_Sink_Cap (PD 3.x only): an Extended_Control question after the plain ones, the answer in two chunks ----
+    {
+        auto to_epr = [](Rig& r) {   // Get_Sink_Cap answered, Sink_Capabilities_Extended and Get_Revision refused
+            r.next();
+            r.dev(kDataSinkCap, {kSinkPdo1});
+            r.next();
+            r.dev_ctl(kCtlNotSupported);
+            r.next();
+            r.dev_ctl(kCtlNotSupported);
+        };
+        // 13 objects: SPR 5 V 3 A .. then EPR 28 V 5 A (0xC1A4323C-style words); object 7 straddles the two chunks.
+        std::vector<std::uint8_t> all;
+        for (unsigned i = 0; i < 13; i++) put32(all, 0xA0000000u + i);
+        const std::vector<std::uint8_t> c0(all.begin(), all.begin() + 26), c1(all.begin() + 26, all.end());
+
+        Rig r;
+        r.contract();
+        r.start();
+        to_epr(r);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kExtControl));
+        CHECK_EQ(int((r.last().header >> 15) & 1), 1);        // extended
+        CHECK_EQ(int((r.last().header >> 12) & 7), 1);        // one data object: the ext header and the ECDB
+        CHECK_EQ(int(r.last().header & 0x0120), int(kSrc));
+        CHECK_EQ(int((r.last().header >> 6) & 3), 2);
+        CHECK_EQ(r.last_id(), 6u);
+        CHECK_EQ(int(r.last().len), 4);
+        CHECK_EQ(int(r.last().data[0]), 0x02);                // ext header 0x8002: chunked, 2 bytes
+        CHECK_EQ(int(r.last().data[1]), 0x80);
+        CHECK_EQ(int(r.last().data[2]), int(kEprGetSinkCap)); // ECDB type 2
+        CHECK_EQ(int(r.last().data[3]), 0);
+        CHECK_EQ(int(r.iq.status().step), int(IqStep::EprSinkCap));
+        r.epr_chunk(0, 52, c0);
+        CHECK_EQ(int(r.iq.status().num_epr_pdos), 6);         // the first chunk is already kept
+        CHECK_EQ(bool(r.iq.status().epr_partial), true);
+        CHECK_EQ(int(r.iq.status().closed), 3);               // the question stays open until the last chunk
+        CHECK_EQ(bool(r.next()), true);                       // the chunk request
+        CHECK_EQ(r.last_type(), unsigned(kExtEprSinkCaps));
+        CHECK_EQ(int((r.last().header >> 15) & 1), 1);
+        CHECK_EQ(int(r.last().len), 4);
+        CHECK_EQ(int(r.last().data[0]), 0x00);                // request, chunk 1: 0x8C00
+        CHECK_EQ(int(r.last().data[1]), 0x8C);
+        CHECK_EQ(int(r.last().header & 0x0120), int(kSrc));
+        CHECK_EQ(r.last_id(), 7u);
+        CHECK_EQ(int(r.iq.status().sent), 4);                 // the chunk request is no new question
+        r.epr_chunk(1, 52, c1);
+        const IqStatus& s = r.iq.status();
+        CHECK_EQ(int(s.num_epr_pdos), 13);
+        CHECK_EQ(bool(s.epr_partial), false);
+        CHECK_EQ(s.epr_pdos[0], 0xA0000000u);
+        CHECK_EQ(s.epr_pdos[6], 0xA0000006u);                 // the straddling one
+        CHECK_EQ(s.epr_pdos[12], 0xA000000Cu);
+        CHECK_COND(s.ok_mask & iq_bit(IqStep::EprSinkCap));
+        CHECK_EQ(int(s.closed), 4);
+        CHECK_EQ(int(s.q.step), int(IqStep::EprSinkCap));
+        CHECK_EQ(int(s.q.result), int(IqResult::Answered));
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF00A001u);                // then the VDMs
+        CHECK_EQ(int(r.iq.status().late_mask), 0);
+
+        // One chunk is the whole answer (24 bytes): no chunk request.
+        Rig o;
+        o.contract();
+        o.start();
+        to_epr(o);
+        o.next();
+        o.epr_chunk(0, 24, std::vector<std::uint8_t>(all.begin(), all.begin() + 24));
+        CHECK_EQ(int(o.iq.status().num_epr_pdos), 6);
+        CHECK_EQ(bool(o.iq.status().epr_partial), false);
+        CHECK_EQ(bool(o.next()), true);
+        CHECK_EQ(word(o.last()), 0xFF00A001u);
+
+        // The second chunk never comes: the first is kept and the step counts as answered, marked partial, never asked twice.
+        Rig p;
+        p.contract();
+        p.start();
+        to_epr(p);
+        p.next();
+        p.epr_chunk(0, 52, c0);
+        CHECK_EQ(bool(p.next()), true);                       // the chunk request
+        CHECK_EQ(p.last_type(), unsigned(kExtEprSinkCaps));
+        CHECK_EQ(bool(p.next()), true);                       // after the window: the VDM, not a second EPR question
+        CHECK_EQ(word(p.last()), 0xFF00A001u);
+        CHECK_EQ(int(p.iq.status().num_epr_pdos), 6);
+        CHECK_EQ(bool(p.iq.status().epr_partial), true);
+        CHECK_COND(p.iq.status().ok_mask & iq_bit(IqStep::EprSinkCap));
+        CHECK_EQ(int(p.iq.status().silent_mask & iq_bit(IqStep::EprSinkCap)), 0);
+
+        // Not_Supported: refused (PD 3.0 devices without EPR), and nothing is stored.
+        Rig n;
+        n.contract();
+        n.start();
+        to_epr(n);
+        n.next();
+        CHECK_EQ(n.last_type(), unsigned(kExtControl));
+        n.dev_ctl(kCtlNotSupported);
+        CHECK_EQ(int(n.iq.status().refused_mask & iq_bit(IqStep::EprSinkCap)), int(iq_bit(IqStep::EprSinkCap)));
+        CHECK_EQ(int(n.iq.status().ok_mask & iq_bit(IqStep::EprSinkCap)), 0);
+        CHECK_EQ(int(n.iq.status().num_epr_pdos), 0);
+        CHECK_EQ(int(n.iq.status().q.result), int(IqResult::Refused));
+
+        // Only a matching answer counts: the charger's own EPR_Sink_Capabilities (source role) is nothing, and the device's
+        // answer to something else does not close the question in flight.
+        Rig m;
+        m.contract();
+        m.start();
+        m.next();                                             // Get_Sink_Cap in flight
+        std::vector<std::uint8_t> sp = {24, 0x80};
+        for (int i = 0; i < 26; i++) sp.push_back(1);
+        m.rx(hdr(kExtEprSinkCaps, 7, 2, kSrc, 2, true), sp);
+        CHECK_EQ(int(m.iq.status().num_epr_pdos), 0);
+        m.epr_chunk(0, 24, std::vector<std::uint8_t>(all.begin(), all.begin() + 24));
+        CHECK_EQ(int(m.iq.status().closed), 0);               // kept, but Get_Sink_Cap is still open
+        CHECK_COND(m.iq.status().ok_mask & iq_bit(IqStep::EprSinkCap));
+        CHECK_EQ(int(m.iq.status().step), int(IqStep::SinkCap));
+
+        // A PD 2.0 device is never asked.
+        Rig v;
+        v.contract(0, 1);
+        v.start();
+        v.next();
+        v.dev(kDataSinkCap, {kSinkPdo1}, 1);
+        v.next();
+        v.drain();
+        CHECK_EQ(int(v.iq.status().asked_mask & iq_bit(IqStep::EprSinkCap)), 0);
+    }
+
+    // ---- a late answer is an answer: Discover Identity asked twice with no reply, the ACK arrives during the final renegotiation ----
+    {
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();
+        r.dev(kDataSinkCap, {kSinkPdo1});
+        for (int i = 0; i < 3; i++) {                         // Ext, Revision, EPR: refused
+            r.next();
+            r.dev_ctl(kCtlNotSupported);
+        }
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF00A001u);                // Discover Identity, attempt 1
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(word(r.last()), 0xFF00A001u);                // attempt 2
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        CHECK_EQ(int(r.iq.status().silent_mask), int(iq_bit(IqStep::Identity)));
+        r.now += 1260 - 1;                                    // bench: the identity came 1.26 s later
+        r.identity_ack(0x04A9, 0x1234);
+        const IqStatus& s = r.iq.status();
+        CHECK_EQ(int(s.ok_mask & iq_bit(IqStep::Identity)), int(iq_bit(IqStep::Identity)));
+        CHECK_EQ(int(s.late_mask), int(iq_bit(IqStep::Identity)));
+        CHECK_EQ(int(s.silent_mask & iq_bit(IqStep::Identity)), 0);   // not "silent" any more
+        CHECK_EQ(bool(s.id.valid), true);
+        CHECK_EQ(int(s.id.vid), 0x04A9);
+        r.contract();
+        r.step();
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Done));
+        CHECK_EQ(int(r.iq.status().late_mask), int(iq_bit(IqStep::Identity)));
+    }
+
+    // ---- the e-marker spoof run (IqFacts::spoof): the first Hard Reset is never skipped, SOP' queries open a bounded window ----
+    {
+        auto sp_start = [](Rig& r) {
+            IqFacts f;
+            f.cc = f.inline_link = f.confirmed = f.spoof = true;
+            return r.iq.start(f, r.now);
+        };
+        Rig r;
+        r.contract();                                         // a fresh contract: a plain run would skip the reset
+        CHECK_EQ(int(sp_start(r)), int(IqRefusal::None));
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Reset1));
+        CHECK_EQ(bool(r.iq.status().skipped_first_reset), false);
+        CHECK_EQ(bool(r.iq.status().spoof), true);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);
+        CHECK_EQ(bool(r.iq.sopp_window(r.now)), false);       // nothing is asked of Auto-CRC before a query was seen
+        r.now += 1100;
+        r.contract();
+        r.iq.tick(r.now);
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Settle));
+        CHECK_EQ(bool(r.iq.sopp_window(r.now)), false);
+
+        // A SOP' query opens the window; our reply shortens it; the questions wait for it to close.
+        r.sopp_query();
+        CHECK_EQ(int(r.iq.status().sopp_queries), 1);
+        CHECK_EQ(bool(r.iq.sopp_window(r.now)), true);
+        const std::uint32_t tq = r.now;
+        r.now += 5;
+        r.iq.on_sopp_reply(r.now);
+        CHECK_EQ(int(r.iq.status().sopp_replies), 1);
+        CHECK_EQ(bool(r.iq.sopp_window(tq + 60)), true);
+        CHECK_EQ(bool(r.iq.sopp_window(tq + 5 + kIqSoppReplyMs + 1)), false);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_COND(r.now - tq >= 5 + kIqSoppReplyMs);         // the question did not go out on top of the window
+        CHECK_EQ(bool(r.iq.sopp_window(r.now)), false);       // Ask: Auto-CRC off
+        r.sopp_query();                                       // a late query in Ask still counts, but opens nothing
+        CHECK_EQ(int(r.iq.status().sopp_queries), 2);
+        CHECK_EQ(bool(r.iq.sopp_window(r.now)), false);
+
+        // Without a reply the window is kIqSoppWindowMs; a retry re-opens it but never past kIqSoppMaxMs from the first query.
+        Rig w;
+        w.contract();
+        sp_start(w);
+        w.next();
+        w.now += 1100;
+        w.contract();
+        w.iq.tick(w.now);
+        w.sopp_query();
+        const std::uint32_t t0 = w.now;
+        CHECK_EQ(bool(w.iq.sopp_window(t0 + kIqSoppWindowMs - 5)), true);
+        CHECK_EQ(bool(w.iq.sopp_window(t0 + kIqSoppWindowMs + 5)), false);
+        for (int i = 0; i < 20; i++) {
+            w.now += 100;
+            w.sopp_query();
+        }
+        CHECK_EQ(int(w.iq.status().sopp_queries), 21);
+        CHECK_EQ(bool(w.iq.sopp_window(w.now + kIqSoppWindowMs - 5)), false);   // 2 s since the first: capped
+        CHECK_COND(w.now - t0 > kIqSoppMaxMs);
+
+        // Source_Capabilities (a fresh negotiation) closes it.
+        Rig c;
+        c.contract();
+        sp_start(c);
+        c.next();
+        c.now += 1100;
+        c.contract();
+        c.iq.tick(c.now);
+        c.sopp_query();
+        CHECK_EQ(bool(c.iq.sopp_window(c.now)), true);
+        std::vector<std::uint8_t> caps;
+        for (std::uint32_t wd : kCaps) put32(caps, wd);
+        c.rx(hdr(1, 6, 2, kSrc, 0), caps);
+        CHECK_EQ(bool(c.iq.sopp_window(c.now)), false);
+
+        // A run without the spoof sees SOP' frames as nothing.
+        Rig n;
+        n.contract();
+        n.start();
+        n.sopp_query();
+        CHECK_EQ(int(n.iq.status().sopp_queries), 0);
+        CHECK_EQ(bool(n.iq.sopp_window(n.now)), false);
+        Rig idle;
+        idle.sopp_query();
+        CHECK_EQ(bool(idle.iq.sopp_window(idle.now)), false);
+    }
+
+    // ---- spoof run, after the final reset: the contract is taken after the settle, so the charger's second negotiation (it
+    //      re-lists once it knows the cable) is the one compared ----
+    {
+        Rig r;
+        r.contract();
+        IqFacts f;
+        f.cc = f.inline_link = f.confirmed = f.spoof = true;
+        r.iq.start(f, r.now);
+        r.next();                                             // Hard Reset 1
+        r.now += 1100;
+        r.contract();
+        r.next();
+        r.dev(kDataSinkCap, {kSinkPdo1});
+        for (int i = 0; i < 3; i++) {
+            r.next();
+            r.dev_ctl(kCtlNotSupported);
+        }
+        r.next();
+        r.identity_ack(0x04A9, 0x1234);
+        CHECK_EQ(bool(r.next()), true);
+        CHECK_EQ(bool(r.last().hard_reset), true);            // Hard Reset 2
+        r.now += 1100;
+        r.contract();                                         // PS_RDY of the first renegotiation
+        r.step();
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Sniff2));   // not over yet: the cable query may follow
+        r.now += 20;
+        r.contract(0, 2, 0x2304B12Cu);                        // the charger re-lists (5 A cable known) and the device re-requests
+        for (int i = 0; i < 400 && r.iq.running(); i++) r.step();
+        CHECK_EQ(int(r.iq.status().phase), int(IqPhase::Done));
+        CHECK_EQ(int(r.iq.status().match), int(IqMatch::Differs));
+        CHECK_EQ(r.iq.status().second.rdo, 0x2304B12Cu);
+
+        CHECK_COND(std::string(iq_refusal_name(IqRefusal::BadSpoof)) != "?");
+        CHECK_COND(std::string(iq_step_name(IqStep::EprSinkCap)) != "?");
     }
 
     // ---- refusals, in order ----

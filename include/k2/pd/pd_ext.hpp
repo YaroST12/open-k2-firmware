@@ -16,6 +16,7 @@ inline constexpr std::uint8_t kExtStatus = 0x02;
 inline constexpr std::uint8_t kExtBatteryCaps = 0x05;
 inline constexpr std::uint8_t kExtManufacturerInfo = 0x07;
 inline constexpr std::uint8_t kExtPpsStatus = 0x0C;
+inline constexpr std::uint8_t kExtEprSinkCaps = 0x12;  // EPR_Sink_Capabilities (kExtEprSourceCaps is 0x11: pd_engine.hpp)
 inline constexpr std::uint8_t kDataRevision = 0x0C;  // data message, not extended
 
 struct SourceCapsExt {  // SCEDB, 24 bytes (25 with the PD 3.1 EPR rating)

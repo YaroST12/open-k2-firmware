@@ -49,6 +49,7 @@ const char* iq_step_name(IqStep s) {
         case IqStep::Svids: return "Discover SVIDs";
         case IqStep::Modes: return "Discover Modes";
         case IqStep::Done: return "done";
+        case IqStep::EprSinkCap: return "EPR_Get_Sink_Cap";
     }
     return "?";
 }
@@ -92,6 +93,7 @@ const char* iq_refusal_name(IqRefusal r) {
         case IqRefusal::OwnContract: return "the K2 holds its own contract";
         case IqRefusal::SelfPowered: return "the K2 runs on this VBUS";
         case IqRefusal::NeedConfirm: return "needs the confirm";
+        case IqRefusal::BadSpoof: return "the spoof target is unknown";
     }
     return "?";
 }
@@ -177,7 +179,15 @@ IqRefusal Interrogate::start(IqFacts f, std::uint32_t now) {
     q_open_ = false;
     awaiting_ = acked_ = tx_pending_ = dirty_ = false;
     why_pending_ = IqWhy::None;
-    if (watch_.contract().ready && watch_.src_known()) {
+    st_.spoof = f.spoof;
+    tx_chunk_ = chunk_pending_ = false;
+    epr_raw_ = {};
+    epr_size_ = epr_have_ = 0;
+    sopp_until_ = sopp_first_ = 0;
+    sopp_started_ = false;
+    // With the spoof the first Hard Reset always goes: the charger has to ask the cable again (after a reset it does) while the
+    // spoof answers, and a fresh contract sniffed earlier says nothing about that.
+    if (!f.spoof && watch_.contract().ready && watch_.src_known()) {
         st_.skipped_first_reset = true;
         st_.first = watch_.contract();
         to_settle(now);
@@ -191,6 +201,7 @@ void Interrogate::enter_reset(IqPhase ph) {
     st_.phase = ph;
     phase_at_ = now_;
     awaiting_ = false;
+    tx_chunk_ = chunk_pending_ = false;
     tx_ = TxMsg{};
     tx_.hard_reset = true;
     tx_pending_ = true;
@@ -252,12 +263,59 @@ bool Interrogate::wanted(IqStep s) const {
         case IqStep::Identity:
         case IqStep::SinkCap: return true;
         case IqStep::SinkCapExt:
-        case IqStep::Revision: return st_.rev >= 2;   // PD 2.0 has neither message
+        case IqStep::Revision:
+        case IqStep::EprSinkCap: return st_.rev >= 2;   // PD 2.0 has none of these messages (EPR is PD 3.1)
         case IqStep::Svids: return st_.id.valid && ((st_.id.id_header >> 26) & 1) != 0;   // ID Header: modal operation supported
         case IqStep::Modes: return mode_idx_ < modes_wanted();
         case IqStep::Done: return false;
     }
     return false;
+}
+
+// An answer is in: a step already given up as silent becomes a late answer (it shows as answered, not as silent).
+void Interrogate::mark_ok(IqStep s) {
+    const std::uint8_t b = iq_bit(s);
+    st_.ok_mask |= b;
+    if (st_.silent_mask & b) {
+        st_.silent_mask = std::uint8_t(st_.silent_mask & ~b);
+        st_.late_mask |= b;
+    }
+}
+
+// ---- the spoof window ----
+
+bool Interrogate::sopp_window(std::uint32_t now) const {
+    if (!st_.spoof || !running()) return false;
+    switch (st_.phase) {   // our questions go out with Auto-CRC off, and a reset is no time for acknowledgements
+        case IqPhase::Sniff1:
+        case IqPhase::Settle:
+        case IqPhase::Sniff2: break;
+        default: return false;
+    }
+    return std::int32_t(sopp_until_ - now) > 0;
+}
+
+// The charger's SOP' frame (the driver sees it with Auto-CRC off the first time: only a Discover Identity request counts).
+void Interrogate::on_sopp(std::uint16_t h, std::span<const std::uint8_t> payload, std::uint32_t now) {
+    if (!st_.spoof || ext_of(h) || ndo_of(h) == 0 || type_of(h) != kMsgVendorDefined || payload.size() < 4) return;
+    const std::uint32_t vh = le32(payload.data());
+    if (!((vh >> 15) & 1) || ((vh >> 6) & 3) != 0 || (vh & 0x1F) != kVdmIdentity) return;
+    if (st_.sopp_queries < 255) st_.sopp_queries++;
+    if (!sopp_started_) {
+        sopp_started_ = true;
+        sopp_first_ = now;
+    }
+    if (std::uint32_t(now - sopp_first_) <= kIqSoppMaxMs) sopp_until_ = now + kIqSoppWindowMs;   // a retry re-opens it, within the budget
+}
+
+void Interrogate::on_sopp_reply(std::uint32_t now) {
+    if (st_.sopp_replies < 255) st_.sopp_replies++;
+    if (std::int32_t(sopp_until_ - (now + kIqSoppReplyMs)) > 0) sopp_until_ = now + kIqSoppReplyMs;   // the next frame is the ACK
+}
+
+// The line is quiet long enough after PS_RDY and no spoof window is open.
+bool Interrogate::settled(std::uint32_t now) const {
+    return due(now, watch_.psrdy_at() + kIqSettleMs) && due(now, watch_.last_frame_at() + kIqQuietMs) && !sopp_window(now);
 }
 
 void Interrogate::close(IqResult r) {
@@ -283,7 +341,7 @@ void Interrogate::modes_next(bool got) {
     attempts_ = 0;
     mode_idx_++;
     if (mode_idx_ < modes_wanted()) return;
-    if (st_.num_modes > 0) st_.ok_mask |= iq_bit(IqStep::Modes);
+    if (st_.num_modes > 0) mark_ok(IqStep::Modes);
     else st_.refused_mask |= iq_bit(IqStep::Modes);
     next_step();
 }
@@ -354,10 +412,37 @@ void Interrogate::build() {
         case IqStep::SinkCap: m.header = make_header(kCtlGetSinkCap, 0, rev); break;
         case IqStep::SinkCapExt: m.header = make_header(kCtlGetSinkCapExt, 0, rev); break;
         case IqStep::Revision: m.header = make_header(kCtlGetRevision, 0, rev); break;
+        case IqStep::EprSinkCap:   // Extended_Control, chunked form (as the sink's own EPR control messages): ext header 0x8002, ECDB type
+            m.header = make_header(kExtControl, 1, rev, true);
+            m.len = 4;
+            m.data[0] = 0x02;
+            m.data[1] = 0x80;
+            m.data[2] = kEprGetSinkCap;
+            epr_raw_ = {};
+            epr_size_ = epr_have_ = 0;
+            chunk_pending_ = false;
+            break;
         case IqStep::Done: return;
     }
     m.header = with_msg_id(std::uint16_t(m.header | watch_.src_roles()), watch_.next_id());
     tx_ = m;
+    tx_chunk_ = false;
+    tx_pending_ = true;
+}
+
+// The next chunk of EPR_Sink_Capabilities (only chunk 1 is ever asked: kIqEprMaxBytes holds two). The 4-byte padded form of the
+// request, as the sink's own chunk requests send it.
+void Interrogate::build_chunk_request() {
+    TxMsg m;
+    m.inline_tx = true;
+    m.header = make_header(kExtEprSinkCaps, 1, st_.rev, true);
+    m.len = 4;
+    const std::uint16_t req = std::uint16_t((1u << 15) | (1u << 10) | (1u << 11));
+    m.data[0] = std::uint8_t(req);
+    m.data[1] = std::uint8_t(req >> 8);
+    m.header = with_msg_id(std::uint16_t(m.header | watch_.src_roles()), watch_.next_id());
+    tx_ = m;
+    tx_chunk_ = true;
     tx_pending_ = true;
 }
 
@@ -378,6 +463,9 @@ void Interrogate::tick(std::uint32_t now) {
                     if (!st_.first.ready) st_.first = c;
                     to_settle(now);
                 } else {
+                    // With the spoof the charger may still ask the cable and list again (a 5 A cable known): the contract
+                    // that counts is the one after the settle, kIqSettleMaxMs at most.
+                    if (st_.spoof && !settled(now) && !due(now, watch_.psrdy_at() + kIqSettleMaxMs)) return;
                     st_.second = c;
                     st_.match = same_contract(st_.first, c) ? IqMatch::Same : IqMatch::Differs;
                     end(why_pending_ == IqWhy::None ? IqPhase::Done : IqPhase::Aborted, why_pending_);
@@ -395,8 +483,8 @@ void Interrogate::tick(std::uint32_t now) {
         }
         case IqPhase::Settle: {
             if (due(now, st_.started_at + kIqTotalMs)) { stop(IqWhy::Timeout); return; }
-            const bool settled = due(now, watch_.psrdy_at() + kIqSettleMs) && due(now, watch_.last_frame_at() + kIqQuietMs);
-            if (!settled && !due(now, phase_at_ + kIqSettleMaxMs)) return;
+            if (sopp_window(now)) return;   // the spoof answers the charger's cable query first (bounded by kIqSoppMaxMs)
+            if (!settled(now) && !due(now, phase_at_ + kIqSettleMaxMs)) return;
             st_.phase = IqPhase::Ask;
             phase_at_ = now;
             attempts_ = 0;
@@ -407,9 +495,17 @@ void Interrogate::tick(std::uint32_t now) {
     }
     // Ask.
     if (tx_pending_) return;
+    if (awaiting_ && chunk_pending_) {   // the first EPR chunk said more follows: ask for it once the line is quiet
+        if (!due(now, watch_.last_frame_at() + kIqTxQuietMs)) return;
+        chunk_pending_ = false;
+        build_chunk_request();
+        return;
+    }
     if (awaiting_) {
         if (!due(now, deadline_)) return;
-        attempt_failed();   // silence: a collision, a deaf device, or our question dropped
+        // The first EPR chunk arrived but not the second: what is kept is the answer (marked partial), no second question.
+        if (st_.step == IqStep::EprSinkCap && (st_.ok_mask & iq_bit(IqStep::EprSinkCap))) next_step();
+        else attempt_failed();   // silence: a collision, a deaf device, or our question dropped
     }
     if (!watch_.contract().ready) {   // a Soft_Reset between the charger and the device: wait for their new contract first
         st_.phase = IqPhase::Sniff1;
@@ -437,9 +533,20 @@ bool Interrogate::take_tx(TxMsg& out) {
     if (out.hard_reset) {
         st_.resets_sent++;
         watch_.reset();
+        sopp_started_ = false;   // each negotiation gets its own SOP' window budget
+        sopp_until_ = 0;
         dirty_ = false;
         st_.phase = st_.phase == IqPhase::Reset1 ? IqPhase::Sniff1 : IqPhase::Sniff2;
         phase_at_ = now_;
+        return true;
+    }
+    if (tx_chunk_) {   // a chunk request of the question in flight: not a new question, the same window goes on
+        tx_chunk_ = false;
+        watch_.on_own_tx(out.header);
+        sent_id_ = id_of(out.header);
+        tx_at_ = now_;
+        acked_ = false;
+        deadline_ = now_ + kIqRespMs;
         return true;
     }
     st_.sent++;
@@ -499,6 +606,7 @@ void Interrogate::on_hard_reset(std::uint32_t now) {
     }
     dirty_ = false;   // the reset left nothing of ours behind
     awaiting_ = tx_pending_ = false;
+    tx_chunk_ = chunk_pending_ = false;
     attempts_ = 0;
     close(IqResult::SourceReset);
     if (++st_.resets_seen > kIqMaxResets) {
@@ -512,7 +620,12 @@ void Interrogate::on_hard_reset(std::uint32_t now) {
 void Interrogate::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
     now_ = now;
     watch_.on_message(sop, header, payload, now);
-    if (!running() || sop != Sop::Sop) return;
+    if (!running()) return;
+    if (sop == Sop::SopP) {
+        on_sopp(header, payload, now);
+        return;
+    }
+    if (sop != Sop::Sop) return;
     const bool goodcrc = ndo_of(header) == 0 && !ext_of(header) && type_of(header) == kCtlGoodCrc;
     if (from_source(header)) {
         if (goodcrc) return;
@@ -533,6 +646,7 @@ void Interrogate::on_source(std::uint16_t h, std::span<const std::uint8_t> paylo
         return;
     }
     if (t == kDataSourceCap) {
+        sopp_until_ = 0;   // a fresh negotiation: whatever the cable query left open is over
         // A fresh negotiation right after our question (without a Soft_Reset first) is the question's doing: the laptop on the
         // bench re-offered its capabilities ~130 ms after every question and its Request/Accept/PS_RDY followed. Anything the
         // device says from here on belongs to that negotiation or to the charger's own questions, not to ours. Stop at once:
@@ -555,6 +669,37 @@ void Interrogate::on_source(std::uint16_t h, std::span<const std::uint8_t> paylo
     }
 }
 
+// A chunk of EPR_Sink_Capabilities (extended, sink role). Chunk 0 is already an answer (kept, marked partial while the rest is
+// outstanding); chunk 1 completes it. A third chunk is never asked: kIqEprMaxBytes holds the two.
+void Interrogate::on_epr_chunk(std::span<const std::uint8_t> payload) {
+    const ExtHeader x = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));
+    if (x.request || x.chunk_number > 1) return;
+    const std::size_t size = x.data_size;
+    const std::size_t base = std::size_t(x.chunk_number) * kChunkBytes;
+    if (x.chunk_number == 1 && (!(st_.ok_mask & iq_bit(IqStep::EprSinkCap)) || epr_have_ != kChunkBytes || size != epr_size_)) return;
+    if (size <= base) return;
+    const std::size_t take = std::min<std::size_t>({size - base, kChunkBytes, payload.size() - 2, kIqEprMaxBytes - base});
+    if (take == 0) return;
+    if (x.chunk_number == 0) {
+        epr_raw_ = {};
+        epr_size_ = std::uint16_t(size);
+    }
+    std::copy_n(payload.begin() + 2, take, epr_raw_.begin() + base);
+    epr_have_ = std::uint16_t(base + take);
+    st_.num_epr_pdos = std::uint8_t(epr_have_ / 4);
+    for (unsigned i = 0; i < st_.num_epr_pdos; i++) st_.epr_pdos[i] = le32(&epr_raw_[4 * i]);
+    st_.epr_partial = epr_have_ < epr_size_;
+    mark_ok(IqStep::EprSinkCap);
+    if (!asking(IqStep::EprSinkCap)) return;
+    // More announced and room for it: the second chunk is asked for. Otherwise this is all there will be.
+    if (x.chunk_number == 0 && epr_size_ > kChunkBytes && kIqEprMaxBytes > kChunkBytes) {
+        chunk_pending_ = true;
+        return;
+    }
+    got_answer();
+    next_step();
+}
+
 // A message from the device (the sink power role): an answer to us, or to the charger's own question. Either way it is kept.
 void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> payload) {
     const std::uint8_t t = type_of(h);
@@ -575,7 +720,9 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
         return;
     }
     if (ext) {
-        if (t != kExtSinkCapsExt || payload.size() < 2) return;
+        if (payload.size() < 2) return;
+        if (t == kExtEprSinkCaps) { on_epr_chunk(payload); return; }
+        if (t != kExtSinkCapsExt) return;
         const ExtHeader x = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));
         if (x.request || x.chunk_number != 0) return;
         const std::size_t len = std::min<std::size_t>({std::size_t(x.data_size), payload.size() - 2, kIqSinkExtBytes});
@@ -583,20 +730,20 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
         st_.sink_ext = {};
         std::copy_n(payload.begin() + 2, len, st_.sink_ext.begin());
         st_.sink_ext_len = std::uint8_t(len);
-        st_.ok_mask |= iq_bit(IqStep::SinkCapExt);
+        mark_ok(IqStep::SinkCapExt);
         if (asking(IqStep::SinkCapExt)) { got_answer(); next_step(); }
         return;
     }
     if (t == kDataSinkCap) {
         st_.num_sink_pdos = std::uint8_t(std::min<std::size_t>(std::min<unsigned>(n, 7), payload.size() / 4));
         for (unsigned i = 0; i < st_.num_sink_pdos; i++) st_.sink_pdos[i] = le32(&payload[4 * i]);
-        st_.ok_mask |= iq_bit(IqStep::SinkCap);
+        mark_ok(IqStep::SinkCap);
         if (asking(IqStep::SinkCap)) { got_answer(); next_step(); }
         return;
     }
     if (t == kDataRevision && payload.size() >= 4) {
         st_.revision = le32(payload.data());
-        st_.ok_mask |= iq_bit(IqStep::Revision);
+        mark_ok(IqStep::Revision);
         if (asking(IqStep::Revision)) { got_answer(); next_step(); }
         return;
     }
@@ -631,7 +778,7 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
             id.num_vdos = std::uint8_t(std::min<std::size_t>(nw, id.vdos.size()));
             for (std::size_t i = 0; i < id.num_vdos; i++) id.vdos[i] = le32(&payload[4 * i]);
             st_.id = id;
-            st_.ok_mask |= iq_bit(IqStep::Identity);
+            mark_ok(IqStep::Identity);
             if (ours) { got_answer(); next_step(); }
         } else if (s == IqStep::Svids) {
             st_.num_svids = 0;
@@ -644,7 +791,7 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
                 }
                 if (end_of_list) break;
             }
-            st_.ok_mask |= iq_bit(IqStep::Svids);
+            mark_ok(IqStep::Svids);
             if (ours) { got_answer(); next_step(); }
         } else if (s == IqStep::Modes) {
             bool have = false;
@@ -653,6 +800,7 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
                 st_.mode_svid[st_.num_modes] = svid;
                 st_.mode_vdo[st_.num_modes++] = nw >= 2 ? le32(&payload[4]) : 0;
             }
+            if (st_.silent_mask & iq_bit(IqStep::Modes)) mark_ok(IqStep::Modes);   // a late one
             if (ours) { got_answer(); modes_next(true); }
         }
         return;

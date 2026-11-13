@@ -548,6 +548,7 @@ void TwinPage::learn_inline() {
         note_until_ = 0;
         break;
     case pd::IqRefusal::Running:
+    case pd::IqRefusal::BadSpoof:   // the page never asks for a spoof (shell and host only)
     case pd::IqRefusal::Busy: say(kFooters[2], kCaution); break;
     case pd::IqRefusal::SelfPowered: say(kFooters[kFootIqSelf], kCaution); break;
     case pd::IqRefusal::OwnContract: say(kFooters[kFootIqOwn], kCaution); break;
