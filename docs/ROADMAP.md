@@ -1100,6 +1100,13 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   `ct_start.py --svooc-cap`). The ceiling is the K2's own ask read from the protocol, never a drawn current. Hardware check:
   OnePlus 120 W charger on USB-A, top port empty, HID enabled; confirm the guards accept the start from a charger-test
   legacy session and read the heartbeat `stack_free`.
+  **Parked 2026-11-13 after the hardware check (1.0.1-98-ba258ee7, OnePlus 120 W on USB-A):** the Probe trigger still
+  ends at ~3.3 s after the wake (70 pairs) and reached only two asks (1.5 A, 4.0 A), so its "ceiling" is the last ask
+  before that stop, not a charger verdict. Every no-load run stops there whatever the replies, while the OP15 draws
+  1.2 A by ~2.7 s: most likely the charger ends a session that draws no current (unprovable under the 50 mA guard).
+  Open if resumed: the charger-test preflight refuses on USB-A ("load attached, latched by far rd": the A-to-C cable
+  latches `InlineCause::FarRd`, which `svooc_run` waives for usb_a but the preflight does not), so the stage never ran;
+  the trigger report header still prints "0x86 answer 0x005 / 0x82 constant 0x051" for the Phone and Probe profiles.
 - **Inline interrogation** (k2/inline-interrogate, built and host-tested only; `docs/DEVICE_TWIN.md` 9.1, the one inline
   TX exception, `CONNECTION_MATRIX.md` X11). With a device inline behind its charger the K2 hard-resets the link (unless
   a fresh contract was sniffed), asks the device as its source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended,
