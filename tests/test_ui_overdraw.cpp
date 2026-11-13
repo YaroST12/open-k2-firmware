@@ -72,7 +72,7 @@ Row g_sw[kN][kN];   // [from][to]
 int g_diff[kN][kN]; // pixels that differ from a clean paint of the destination
 
 uint32_t g_now = 1000;
-void settle(Ui &ui) { for (int i = 0; i < 4; ++i) { g_now += 120; ui.tick(g_now); } }
+void settle(Ui &ui) { for (int i = 0; i < 40 && ui.painting(); ++i) ui.tick(g_now); }
 
 uint8_t g_rotation = 0;
 
@@ -127,6 +127,7 @@ void walk() {
         lcd::fill(0);   // kBg: the repaint of an opaque page alone does not clear
         lcd_meter_reset();
         ui.repaint(g_now += 10);
+        settle(ui);
         g_full[i] = meter();
         dump_panel("full", kDests[i].name);
         print_rows(kDests[i].name);
@@ -141,11 +142,13 @@ void walk() {
             settle(ui);
             lcd_meter_reset();
             ui.goto_page(kDests[b].index, g_now += 10);
+            settle(ui);
             g_sw[a][b] = meter();
             // Pixel-exact: the switch must leave what a clean paint of B leaves (same instant, same data).
             const std::vector<uint16_t> got(g_panel, g_panel + size_t(LCD_WIDTH) * LCD_HEIGHT);
             lcd::fill(0);   // kBg, as above
             ui.repaint(g_now);
+            settle(ui);
             int diff = 0, first = -1;
             for (size_t i = 0; i < got.size(); ++i)
                 if (got[i] != g_panel[i]) { ++diff; if (first < 0) first = int(i); }

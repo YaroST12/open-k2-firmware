@@ -926,13 +926,13 @@ struct EprInfoSnapshot {
 // LCD DMA state (DebugLcd): flags bit0 build option on, bit1 DMA still trusted (no stalled transfer). Behind it the paint
 // totals since boot (k2/core/paint_meter.hpp): pixels sent to the panel, ms inside the lcd stream calls (wire wait and the
 // service rounds served inside them included), ms inside the file-system flash writes; then the SPI3 clock divider
-// (8 at every boot, 4 after the lab switch `lcd spi 4`); last the longest time the charger-test page sat blocked from
+// (4 at every boot, 8 or 2 after the lab switch `lcd spi <n>`); last the longest time the charger-test page sat blocked from
 // painting in the current or last run (k2/core/gap_meter.hpp BlockMeter), u16 ms, 0 = never.
 struct LcdSnapshot {
     uint8_t flags = 0;
     uint32_t transfers = 0, stalls = 0;
     uint32_t paint_px = 0, paint_ms = 0, fs_ms = 0;
-    uint8_t spi_div = 8;
+    uint8_t spi_div = 4;
     uint16_t blocked_ms = 0;
 };
 // Main-loop stall counters (DebugLcd op 1, k2/core/loop_stats.hpp) since boot or the last reset: elapsed ms, the gap between

@@ -271,7 +271,7 @@ void BatteryPage::update(uint32_t now_ms) {
     sel_ = std::clamp(sel_, 0, count() - 1);
     ctx_.rows.set_count(count());
     ctx_.rows.select(sel_);
-    ctx_.rows.draw(now_ms);
+    ctx_.rows.draw(now_ms, ctx_.budget);
     // the footer: a refusal, an armed hand end, else the state
     StrBuf<28> f;
     FooterTone tone = FooterTone::Info;

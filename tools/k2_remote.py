@@ -3592,7 +3592,7 @@ def decode_epr_info(p):
 def decode_lcd(p):
     """DebugLcd reply: [flags (bit0 DMA built in, bit1 DMA trusted), transfers u32, stalls u32], then (newer firmware)
     paint totals since boot: [pixels sent to the panel u32, ms inside lcd stream calls u32, ms inside fs flash writes u32],
-    then the LCD SPI3 clock divider u8 (8 at every boot, 4 after the lab switch `lcd spi 4`), then the longest time the
+    then the LCD SPI3 clock divider u8 (4 at every boot since 2026-11-12, 8 on older firmware; 8 or 2 after the lab switch `lcd spi <n>`), then the longest time the
     charger-test page sat blocked from painting in the current or last run, u16 ms (0 = never; the key is absent on an
     older firmware)."""
     _need(p, 9, "lcd")

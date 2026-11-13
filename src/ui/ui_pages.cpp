@@ -199,6 +199,8 @@ void PageBase::title_bar() {
 void PageBase::title_pager(int current) {
     const uint32_t sig = 0x9A6E0000u | static_cast<uint32_t>(current);
     if (bar_valid_ && sig == bar_sig_) return;
+    const int cost = static_cast<int>(ctx_.content.w > 140 ? ctx_.content.w - 140 : 84) * (kBarH - 1);
+    if (ctx_.budget && !ctx_.budget->admit(cost, true)) return;
     bar_valid_ = true;
     bar_sig_ = sig;
     draw_top_pager(ctx_.content, 3, current);
@@ -232,9 +234,12 @@ void PageBase::title_badge(bool last) {
     sig = (sig ^ static_cast<uint32_t>(flow)) * 16777619u;
     sig = (sig ^ static_cast<uint32_t>(ctx_.rotation & 3u)) * 16777619u;
     if (bar_valid_ && sig == bar_sig_) return;
+    const int full_cost = static_cast<int>(ctx_.content.w > 140 ? ctx_.content.w - 140 : 84) * (kBarH - 1);
+    if (ctx_.budget && !ctx_.budget->admit(bar_valid_ ? 600 : full_cost, true)) return;
+    if (!bar_valid_) readout_shown_.valid = false;
     bar_valid_ = true;
     bar_sig_ = sig;
-    draw_top_readout(ctx_.content, mode, vs, as, flow, ctx_.rotation);
+    draw_top_readout(ctx_.content, mode, vs, as, flow, ctx_.rotation, readout_shown_);
 }
 
 bool PageBase::back_event(Event e) {
@@ -262,7 +267,7 @@ bool PageBase::scroll_event(ListView &lv, Event e, uint32_t now_ms) {
     if (e.press != Press::Short) return false;
     if (e.button != Button::Plus && e.button != Button::Minus) return false;
     if (!lv.state().overflows()) return false;
-    lv.scroll(e.button == Button::Plus ? 1 : -1, now_ms);
+    lv.scroll(e.button == Button::Plus ? 1 : -1, now_ms, ctx_.budget);
     return true;
 }
 
@@ -459,7 +464,7 @@ void EmarkerPage::update(uint32_t now_ms) {
     if (menu_.view == EmView::List) {
         ctx_.rows.set_count(n > 0 ? n : 1);
         ctx_.rows.select(n > 0 ? idx : 0);
-        ctx_.rows.draw(now_ms);
+        ctx_.rows.draw(now_ms, ctx_.budget);
     } else {
         const bool confirm = menu_.view == EmView::Confirm;
         uint32_t sg = mix_u32(mix_init(), vsig) + static_cast<uint32_t>(have_cur_) * 3u;
@@ -629,18 +634,33 @@ const char *const kDgLabel[DiagPage::kRows] = {"Link", "RST/ISR", "TX/drop", "FU
 }  // namespace
 
 void DiagPage::draw_static() {
-    title_bar();
     const Surface &c = ctx_.content;
-    if (!ctx_.blank) kit::kv_ground(c, kDgLayout, kDgLabel, kRows, kDgValueChars, 1u << 0 | 1u << 3 | 1u << 6);   // the marker rows
-    kit::kv_static(c, kDgLayout, kDgLabel, kRows);
-    kit::kv_cells(c, kDgLayout, val_, kRows, kDgValueChars);
-    marks_ = 0xFF;
-    foot_.invalidate();
+    PaintBudget *const bg = ctx_.budget;
+    if (static_step_ == 0) {
+        if (bg && !bg->admit(140 * kBarH, true)) return;
+        title_bar();
+        kit::kv_cells(c, kDgLayout, val_, kRows, kDgValueChars);
+        marks_ = 0xFF;
+        foot_.invalidate();
+        for (Field &f : val_) f.invalidate();
+        static_step_ = 1;
+    }
+    constexpr uint32_t kMarksMask = (1u << 0) | (1u << 3) | (1u << 6);
+    while (static_step_ <= kRows) {
+        const int i = static_step_ - 1;
+        const int row_h = kDgLayout.pitch + (i + 1 == kRows ? 1 : 0);
+        const int cost = ctx_.blank ? 900 : static_cast<int>(c.w) * row_h;
+        if (bg && !bg->admit(cost, true)) return;
+        if (!ctx_.blank) kit::kv_ground_row(c, kDgLayout, kDgLabel[i], i, kDgValueChars, kMarksMask);
+        kit::kv_static_row(c, kDgLayout, kDgLabel[i], i, i + 1 == kRows);
+        static_step_++;
+    }
 }
 
 void DiagPage::paint_marks(bool usb_ok, bool fusb_ok, bool meter_ok, bool meter_wait) {
     const uint8_t sig = static_cast<uint8_t>(usb_ok | (fusb_ok << 1) | (meter_ok << 2) | (meter_wait << 3));
     if (sig == marks_) return;
+    if (ctx_.budget && !ctx_.budget->admit(3 * kit::kMarkSize * kit::kMarkSize, true)) return;
     marks_ = sig;
     const bool ok[3] = {usb_ok, fusb_ok, meter_ok};
     for (int g = 0; g < 3; g++) {
@@ -653,7 +673,9 @@ void DiagPage::paint_marks(bool usb_ok, bool fusb_ok, bool meter_ok, bool meter_
 }
 
 void DiagPage::update(uint32_t now_ms) {
+    PaintBudget *const bg = ctx_.budget;
     title_badge(false);
+    if (bg && bg->more) return;
     const bool on = ctx_.pm_online;
     const bool meter_wait = home::meter_starting(on, now_ms);   // still being found: not yet an error
     const uint8_t fusb_id = fusb302::device_id();
@@ -669,6 +691,7 @@ void DiagPage::update(uint32_t now_ms) {
     t[7].put_hms(now_ms / 1000);
     model_row_text(power::chip(), t[8]);
     for (int i = 0; i < kRows; i++) {
+        if (bg && !val_[i].valid() && !bg->admit(val_[i].box_px(), true)) return;
         uint16_t col = kText;
         // Amber means "log lines were dropped"; a saturated count is a garbage cue, so it stays neutral.
         if (i == 2 && live_.log_dropped > 0 && !count_overflowed(live_.log_dropped) &&
@@ -679,12 +702,13 @@ void DiagPage::update(uint32_t now_ms) {
         val_[i].draw(t[i].view());
     }
     paint_marks(live_.configured, fusb_id != 0, on, meter_wait);
+    if (bg && bg->more) return;
     const bool usb_ok = live_.configured, fusb_ok = fusb_id != 0;
     const int state = !on ? (meter_wait ? 4 : 1) : !usb_ok ? 2 : !fusb_ok ? 3 : 0;
     static const char *const msg[5] = {"All subsystems up", "Power meter not found", "USB not configured", "FUSB302 not answering",
                                        "Power meter starting"};
-    draw_footer_cached(ctx_.content, state == 0 ? FooterTone::Ok : state == 4 ? FooterTone::Info : state == 2 ? FooterTone::Caution : FooterTone::Error,
-                       msg[state], foot_);
+    draw_footer_budgeted(ctx_.content, state == 0 ? FooterTone::Ok : state == 4 ? FooterTone::Info : state == 2 ? FooterTone::Caution : FooterTone::Error,
+                         msg[state], foot_, bg);
 }
 
 bool DiagPage::on_event(Event e) {
@@ -718,6 +742,7 @@ void DiagPage::sample() {
 }
 
 void DiagPage::invalidate() {
+    static_step_ = 0;
     marks_ = 0xFF;
     foot_.invalidate();
     for (Field &f : val_) f.invalidate();
@@ -771,14 +796,31 @@ ChipStyle tone_chip(Tone t) {
 }  // namespace
 
 // The ground of the page around what its cells and bars paint (the pills paint over their box: their corners are rounded, so
-// the box stays ground). Run when the page opens over a live screen, so it covers every content pixel with no erase pass.
-void LinesPage::lay_ground() {
+void LinesPage::draw_static() {
     const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     const int16_t lo = tick_x(kLinesTickLowMv), hi = tick_x(kLinesTickHighMv);
-    {   // the line rows, from under the masthead: everything but the chips, the values, the bars and the threshold columns
-        const int16_t y0 = kit::kBelowBar;
+    if (static_step_ == 0) {
+        if (bg && !bg->admit(140 * kBarH, true)) return;
+        title_bar();
         for (int i = 0; i < 4; i++) {
-            const int16_t y = kLnRowY(i), top = i ? y : y0, h = static_cast<int16_t>(y + kLnRowPitch - top);
+            const int16_t y = kLnRowY(i);
+            v_[i].init(c, kSmall, kLnValX, static_cast<int16_t>(y + kLnValDy), kLnValChars, Align::Right, kText, kBg);
+            px_[i] = -1;
+        }
+        kit::kv_cells(c, kLnKv, pv_, 1);
+        painted_ = false;
+        vsig_ = 0;
+        foot_.invalidate();
+        static_step_ = 1;
+    }
+    while (static_step_ <= 4) {
+        const int i = static_step_ - 1;
+        const int16_t y = kLnRowY(i), top = i ? y : kit::kBelowBar;
+        const int16_t h = static_cast<int16_t>(y + kLnRowPitch - top);
+        const int cost = ctx_.blank ? 1000 : 3800;
+        if (bg && !bg->admit(cost, true)) return;
+        if (!ctx_.blank) {
             const kit::Box holes[5] = {
                 {kLnChipX, static_cast<int16_t>(y + kLnChipDy), kLnChipW, kit::kChipH},
                 {kLnValX, static_cast<int16_t>(y + kLnValDy), static_cast<int16_t>(kLnValChars * kSmall.adv), kSmall.height},
@@ -786,52 +828,54 @@ void LinesPage::lay_ground() {
                 {lo, top, 1, h}, {hi, top, 1, h}};
             kit::fill_except(c, {0, top, c.w, h}, holes, 5, kBg);
         }
-    }
-    {   // the axis labels, then the verdict row around its chip line (paint_verdict owns that line edge to edge)
-        const kit::Box tags[3] = {
-            {kKeyAxisX, kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "volts")), kLabelFont.height},
-            {static_cast<int16_t>(lo - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "0.4")), kLabelFont.height},
-            {static_cast<int16_t>(hi - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "2.0")), kLabelFont.height}};
-        const int16_t chips = kVerdictY + 2;
-        kit::fill_except(c, {0, kLnAxisY, c.w, static_cast<int16_t>(chips - kLnAxisY)}, tags, 3, kBg);
-        gfx_fill(c, 0, static_cast<int16_t>(chips + kit::kChipH), c.w, static_cast<int16_t>(kLnKv.y0 - chips - kit::kChipH), kBg);
-    }
-    static const char *const kKeys[1] = {"Rp"};
-    kit::kv_ground(c, kLnKv, kKeys, 1);
-    const int16_t below = static_cast<int16_t>(kit::kv_row_y(kLnKv, 1) + 1);
-    gfx_fill(c, 0, below, c.w, static_cast<int16_t>(kit::kListBottom - below), kBg);
-}
-
-void LinesPage::draw_static() {
-    title_bar();
-    const Surface &c = ctx_.content;
-    if (!ctx_.blank) lay_ground();
-    const int16_t lo = tick_x(kLinesTickLowMv), hi = tick_x(kLinesTickHighMv);
-    for (int i = 0; i < 4; i++) {
-        const int16_t y = kLnRowY(i);
         kit::draw_chip(c, kLnChipX, static_cast<int16_t>(y + kLnChipDy), kLnTag[i], kInk, kBg, kLnChipW);
-        v_[i].init(c, kSmall, kLnValX, static_cast<int16_t>(y + kLnValDy), kLnValChars, Align::Right, kText, kBg);
-        px_[i] = -1;
         for (int16_t x : {lo, hi}) {   // the threshold columns around the bar (the bar paints its own part)
-            dash_column(c, x, i ? y : kit::kBelowBar, static_cast<int16_t>(y + kLnBarDy));
+            dash_column(c, x, top, static_cast<int16_t>(y + kLnBarDy));
             dash_column(c, x, static_cast<int16_t>(y + kLnBarDy + kLnBarH), static_cast<int16_t>(y + kLnRowPitch));
         }
+        static_step_++;
     }
-    gfx_text(c, kLabelFont, kKeyAxisX, kLnAxisTextY, "volts", kFaint, kBg);
-    gfx_text(c, kLabelFont, static_cast<int16_t>(lo - 9), kLnAxisTextY, "0.4", kDim, kBg);
-    gfx_text(c, kLabelFont, static_cast<int16_t>(hi - 9), kLnAxisTextY, "2.0", kDim, kBg);
-    static const char *const kLabels[1] = {"Rp"};
-    kit::kv_static(c, kLnKv, kLabels, 1);
-    kit::kv_cells(c, kLnKv, pv_, 1);
-    painted_ = false;
-    vsig_ = 0;
-    foot_.invalidate();
+    if (static_step_ == 5) {
+        const int cost = ctx_.blank ? 600 : 5200;
+        if (bg && !bg->admit(cost, true)) return;
+        if (!ctx_.blank) {
+            const kit::Box tags[3] = {
+                {kKeyAxisX, kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "volts")), kLabelFont.height},
+                {static_cast<int16_t>(lo - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "0.4")), kLabelFont.height},
+                {static_cast<int16_t>(hi - 9), kLnAxisTextY, static_cast<int16_t>(text_width(kLabelFont, "2.0")), kLabelFont.height}};
+            const int16_t chips = kVerdictY + 2;
+            kit::fill_except(c, {0, kLnAxisY, c.w, static_cast<int16_t>(chips - kLnAxisY)}, tags, 3, kBg);
+            gfx_fill(c, 0, static_cast<int16_t>(chips + kit::kChipH), c.w, static_cast<int16_t>(kLnKv.y0 - chips - kit::kChipH), kBg);
+        }
+        gfx_text(c, kLabelFont, kKeyAxisX, kLnAxisTextY, "volts", kFaint, kBg);
+        gfx_text(c, kLabelFont, static_cast<int16_t>(lo - 9), kLnAxisTextY, "0.4", kDim, kBg);
+        gfx_text(c, kLabelFont, static_cast<int16_t>(hi - 9), kLnAxisTextY, "2.0", kDim, kBg);
+        static_step_ = 6;
+    }
+    static const char *const kRpLabel = "Rp";
+    if (static_step_ == 6) {
+        const int cost = ctx_.blank ? 600 : 3800;
+        if (bg && !bg->admit(cost, true)) return;
+        if (!ctx_.blank) kit::kv_ground_row(c, kLnKv, kRpLabel, 0, nullptr, 0);
+        kit::kv_static_row(c, kLnKv, kRpLabel, 0, true);
+        static_step_ = 7;
+    }
+    if (static_step_ == 7) {
+        const int16_t below = static_cast<int16_t>(kit::kv_row_y(kLnKv, 1) + 1);
+        if (!ctx_.blank && below < kit::kListBottom) {
+            const int cost = static_cast<int>(c.w) * (kit::kListBottom - below);
+            if (bg && !bg->admit(cost, true)) return;
+            gfx_fill(c, 0, below, c.w, static_cast<int16_t>(kit::kListBottom - below), kBg);
+        }
+        static_step_ = 8;
+    }
 }
 
 // The bar: ink fill on the bg2 track; the threshold dashes show through the track, the fill covers them.
 void LinesPage::paint_bar(int i, int32_t mv, bool have) {
     const int px = have ? lines_bar_px(mv) : 0;
     if (px == px_[i]) return;
+    if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(kLinesBarW) * kLnBarH, true)) return;
     px_[i] = px;
     const Surface &c = ctx_.content;
     const int16_t y = static_cast<int16_t>(kLnRowY(i) + kLnBarDy);
@@ -849,8 +893,9 @@ void LinesPage::paint_bar(int i, int32_t mv, bool have) {
     if (x < end) gfx_fill(c, x, y, static_cast<int16_t>(end - x), kLnBarH, kBg2);
 }
 
-void LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms) {
+bool LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms) {
     const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     const fastcharge::Protocol fp = ctx_.fc;
     const pd::SourceCaps &caps = pd::active_caps();
     // The green PD chip follows a decoded PD message (a contract or source caps), not just the line levels.
@@ -865,6 +910,7 @@ void LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
     uint32_t sig = mix(mix(2166136261u, v.main.view()), v.extra.view());
     sig = sig * 31 + static_cast<uint32_t>(v.tone) + 1;
     if (!painted_ || sig != vsig_) {   // the chips row; the Rp cell below repaints on its own char diff
+        if (bg && !bg->admit(static_cast<int>(c.w) * kit::kChipH, true)) return false;
         vsig_ = sig;
         const ChipStyle ts = tone_chip(v.tone);
         const int16_t y = static_cast<int16_t>(kVerdictY + 2);
@@ -880,22 +926,27 @@ void LinesPage::paint_verdict(const std::optional<adc::Reading> &r, uint32_t now
         if (x < c.w) gfx_fill(c, x, y, static_cast<int16_t>(c.w - x), kit::kChipH, kBg);   // a shorter row must not leave the old tail
         painted_ = true;
     }
+    if (bg && !pv_[0].valid() && !bg->admit(pv_[0].box_px(), true)) return false;
     pv_[0].set_colors(r ? kText : kFaint, kBg);
     pv_[0].draw(rp.view());
-    draw_footer_cached(c, v.tone == Tone::Ok ? FooterTone::Ok : v.tone == Tone::Caution ? FooterTone::Caution : FooterTone::Info,
-                       v.footer.view(), foot_);   // Info and Dim are neutral
+    return draw_footer_budgeted(c, v.tone == Tone::Ok ? FooterTone::Ok : v.tone == Tone::Caution ? FooterTone::Caution : FooterTone::Info,
+                                v.footer.view(), foot_, bg);   // Info and Dim are neutral
 }
 
 void LinesPage::update(uint32_t now_ms) {
+    PaintBudget *const bg = ctx_.budget;
     title_pager(2);
+    if (bg && bg->more) return;
     const std::optional<adc::Reading> &r = ctx_.analog;
     const int32_t mv[4] = {r ? r->dp_mv : 0, r ? r->dm_mv : 0, r ? r->cc1_mv : 0, r ? r->cc2_mv : 0};
     for (int i = 0; i < 4; i++) {
         StrBuf<8> s;
         if (r) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
+        if (bg && !v_[i].valid() && !bg->admit(v_[i].box_px(), true)) return;
         v_[i].set_colors(r && mv[i] >= kLnFaintMv ? kText : kFaint, kBg);   // a line with nothing on it reads faint
         v_[i].draw(s.view());
         paint_bar(i, mv[i], r.has_value());
+        if (bg && bg->more) return;
     }
     paint_verdict(r, now_ms);
 }
@@ -909,6 +960,7 @@ PanelLabels LinesPage::labels() const {
 }
 
 void LinesPage::invalidate() {
+    static_step_ = 0;
     painted_ = false;
     vsig_ = 0;
     foot_.invalidate();
@@ -1082,7 +1134,7 @@ void PdTriggerPage::paint_offer(uint32_t now_ms) {
     }
     ctx_.rows.set_count(caps_->num_pdos);
     ctx_.rows.select(wiz_.cursor);
-    ctx_.rows.draw(now_ms);
+    ctx_.rows.draw(now_ms, ctx_.budget);
 }
 
 // VOLTAGE and CURRENT: the offer, its limit and the resulting power as a three-row table, the big value between two step
@@ -1715,7 +1767,7 @@ void TriggerPage::paint_main(uint32_t now_ms) {
         }
         ctx_.rows.set_count(trig::kEntries);
         ctx_.rows.select(model_.sel());
-        ctx_.rows.draw(now_ms);
+        ctx_.rows.draw(now_ms, ctx_.budget);
     } else {
         // The key/value table: Edit and Review show the protocol, what it offers, the measured VBUS and the held voltage
         // (retarget) or the monitor cap; Live shows the state, the protocol, the request and the measurement.
@@ -1983,14 +2035,35 @@ PanelLabels setting_labels(PanelLabels labels, const char *action) {
 }
 }
 
-void SettingsPage::draw_static() {
-    title_bar();
+void SettingsPage::enter() {
     ctx_.rows.init(ctx_.content, kListY, row_fn, this);
     ctx_.rows.set_count(kRows);
     ctx_.rows.select(sel_);
-    kit::fill_list_gap(ctx_.content, kListY);
-    foot_.invalidate();
-    id_.invalidate();
+    ctx_.rows.invalidate();
+    static_step_ = 0;
+}
+
+void SettingsPage::draw_static() {
+    PaintBudget *const bg = ctx_.budget;
+    if (static_step_ == 0) {
+        if (bg && !bg->admit(140 * kBarH, true)) return;
+        title_bar();
+        ctx_.rows.init(ctx_.content, kListY, row_fn, this);
+        ctx_.rows.set_count(kRows);
+        ctx_.rows.select(sel_);
+        foot_.invalidate();
+        id_.invalidate();
+        static_step_ = 1;
+    }
+    if (static_step_ == 1) {
+        const int16_t end = kit::list_end(kListY);
+        if (!ctx_.blank && end < kit::kListBottom) {
+            const int cost = static_cast<int>(ctx_.content.w) * (kit::kListBottom - end);
+            if (bg && !bg->admit(cost, true)) return;
+            kit::fill_list_gap(ctx_.content, kListY);
+        }
+        static_step_ = 2;
+    }
 }
 
 // The K2's identity: the version in font 16, then "up 1h05m  HID on" in font 12 (minutes, so it repaints once a minute),
@@ -1998,7 +2071,8 @@ void SettingsPage::draw_static() {
 void SettingsPage::paint_identity() {
     const uint32_t up_min = ctx_.now / 60000u;
     const bool hid = usbcfg::current.hid;
-    id_.paint(mix_u32(mix_u32(mix_init(), up_min), hid), [&] {
+    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), up_min), hid), ctx_.budget,
+                        static_cast<int>(ctx_.content.w) * (kListY - kit::kBelowBar), [&] {
         const Surface &c = ctx_.content;
         StrBuf<32> line;
         line.put("up ");
@@ -2092,16 +2166,20 @@ void SettingsPage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 }
 
 void SettingsPage::update(uint32_t) {
+    PaintBudget *const bg = ctx_.budget;
     title_badge(false);
+    if (bg && bg->more) return;
     paint_identity();
+    if (bg && bg->more) return;
     ctx_.rows.select(sel_);
-    ctx_.rows.draw(ctx_.now);
-    draw_footer_cached(ctx_.content, FooterTone::Info,
-                       sel_ == kSystemRow ? "Checks of every subsystem"
-                       : sel_ == kBootRow ? "Shared as QR codes"
-                       : sel_ >= 2        ? "Remembered across boots"
-                                          : "Opens a settings page",
-                       foot_);
+    ctx_.rows.draw(ctx_.now, bg);
+    if (bg && bg->more) return;
+    draw_footer_budgeted(ctx_.content, FooterTone::Info,
+                         sel_ == kSystemRow ? "Checks of every subsystem"
+                         : sel_ == kBootRow ? "Shared as QR codes"
+                         : sel_ >= 2        ? "Remembered across boots"
+                                            : "Opens a settings page",
+                         foot_, bg);
 }
 
 bool SettingsPage::on_event(Event e) {
@@ -2176,7 +2254,7 @@ void AutorotatePage::row_fn(void *ctx, int i, bool, kit::RowSpec &out) {
 void AutorotatePage::update(uint32_t) {
     title_badge(false);
     ctx_.rows.select(sel_);
-    ctx_.rows.draw(ctx_.now);
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
     draw_footer_cached(ctx_.content, FooterTone::Info, "Applies now. Remembered", foot_);
 }
 
@@ -2240,7 +2318,7 @@ void UsbLinkPage::update(uint32_t) {
     const bool differs = pending_.hid != usbcfg::current.hid || pending_.drive != usbcfg::current.drive ||
                          pending_.net != usbcfg::current.net;
     ctx_.rows.select(sel_);
-    ctx_.rows.draw(ctx_.now);
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
     if (differs) {
         draw_footer_cached(ctx_.content, FooterTone::Caution, "Replug to apply", foot_);
     } else if (!usbcfg::any(pending_)) {

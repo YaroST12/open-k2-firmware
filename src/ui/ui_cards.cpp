@@ -602,7 +602,6 @@ void CardsPage::update(uint32_t now_ms) {
     if (csig != content_sig_) {
         content_sig_ = csig;
         sig_ = msig;
-        painted_ = true;
         if (!ctx_.blank && !(mode_ == Mode::List && n_ == 0)) clear_body();   // a blank screen is kBg; the empty list paints its own ground
         switch (mode_) {
         case Mode::List:    n_ ? paint_list(true) : paint_empty(); break;
@@ -610,13 +609,16 @@ void CardsPage::update(uint32_t now_ms) {
         case Mode::Group:   paint_group(); break;
         case Mode::Confirm: paint_confirm(); break;
         }
+        painted_ = !(ctx_.budget && ctx_.budget->more);
         return;
     }
     if (painted_ && msig == sig_) return;
     sig_ = msig;
-    // Navigation-only change: no body wipe; the list writes only the rows that changed, the card moves its focus bar.
+    // Navigation-only change (or continuing a sliced list draw): no body wipe; the list writes only the rows that changed,
+    // the card moves its focus bar.
     if (mode_ == Mode::List) { if (n_ > 0) paint_list(false); }
     else if (mode_ == Mode::Detail) move_focus();
+    painted_ = !(ctx_.budget && ctx_.budget->more);
 }
 
 void CardsPage::paint_empty() {
@@ -664,7 +666,7 @@ void CardsPage::paint_list(bool rebuild) {
     }
     ctx_.rows.set_count(n_);
     ctx_.rows.select(idx_);
-    ctx_.rows.draw(ctx_.now);
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
     StrBuf<24> st;
     if (note_.view().size()) st.put(note_.view());
     else st.put_u32(uint32_t(idx_ + 1)).put_char('/').put_u32(uint32_t(n_)).put(n_ == 1 ? " charger" : " chargers");

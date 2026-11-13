@@ -133,6 +133,7 @@ void render_home_page(uint8_t rotation) {
     ui.configure_rotation(false, rotation);
     uint32_t t = 1000;
     for (int i = 0; i < 8; ++i) { ui.tick(t); t += 200; }   // the display throttle lapses: hero digits repaint
+    while (ui.painting()) { ui.tick(t); t += 50; }
     CHECK_EQ(ui.rotation(), rotation);
 }
 

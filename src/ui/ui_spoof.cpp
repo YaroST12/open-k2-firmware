@@ -141,7 +141,7 @@ void SpoofPage::update(uint32_t now_ms) {
     // The list repaints only the rows whose text, mark or highlight changed, an idle tick nothing.
     ctx_.rows.set_count(count);
     ctx_.rows.select(sel_);
-    ctx_.rows.draw(now_ms);
+    ctx_.rows.draw(now_ms, ctx_.budget);
     StrBuf<27> st;
     FooterTone tone = FooterTone::Info;   // neutral by default; Ok only while spoofing is active
     if (note_.view().size()) { tone = footer_tone_of(note_color_); st.put(note_.view()); }

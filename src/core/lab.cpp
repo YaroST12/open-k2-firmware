@@ -73,7 +73,7 @@ constexpr Entry kTable[] = {
     {"pd", "softreset", "pd.softreset", Id::PdSoftReset, "", Raise::Never},
     {"pd", "raw", "pd.raw", Id::PdRaw, "x", Raise::Always},
     {"lcd", "show", "lcd.show", Id::LcdShow, "", Raise::Never},
-    {"lcd", "spi", "lcd.spi", Id::LcdSpi, "n", Raise::Never},   // LCD SPI clock divider 4 or 8: RAM only, never touches VBUS
+    {"lcd", "spi", "lcd.spi", Id::LcdSpi, "n", Raise::Never},   // LCD SPI clock divider 2, 4 or 8: RAM only, never touches VBUS
     // PD Stress (k2/pdstress): start renegotiates the charger's PDOs hard, so it needs confirm; the rest only reads or stops
     {"pdstress", "start", "pdstress.start", Id::PdStressStart, "", Raise::Always},
     {"pdstress", "status", "pdstress.status", Id::PdStressStatus, "", Raise::Never},
@@ -274,7 +274,7 @@ const char* parse(const std::string_view* t, std::size_t n, Cmd& out) {
         break;
     case Id::LcdSpi: {
         lcd::SpiDiv d;
-        if (!lcd::lab_spi_div(out.a[0], d)) return "divider is 4 (30 MHz) or 8 (15 MHz, the default)";
+        if (!lcd::lab_spi_div(out.a[0], d)) return "divider is 4 (30 MHz, the default), 8 (15 MHz) or 2 (60 MHz, visual check)";
         break;
     }
     case Id::UfcsSet: {   // a[0] = value, a[1] = ufcs::Field index; the range is the field's own

@@ -35,7 +35,10 @@ static Ui &home_ui(uint8_t rot) {
     ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
     return ui;
 }
-static void run(Ui &ui, int n) { for (int i = 0; i < n; i++) { g_t += 100; ui.tick(g_t); } }
+static void run(Ui &ui, int n) {
+    for (int i = 0; i < n; i++) { g_t += 100; ui.tick(g_t); }
+    for (int i = 0; i < 40 && ui.painting(); i++) { g_t += 50; ui.tick(g_t); }
+}
 
 static void dump(const char *state, int rot) {
     const char *dir = std::getenv("K2_DUMP");

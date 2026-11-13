@@ -249,7 +249,7 @@ void BlackBoxPage::paint_list() {
     }
     ctx_.rows.set_count(nrows_ + 1);                  // the groups and captures, then the live row
     ctx_.rows.select(sel_row());
-    ctx_.rows.draw(ctx_.now);
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
     const bbpersist::Status fl = bbpersist::status();
     StrBuf<32> f;
     if (empty) {
@@ -398,7 +398,7 @@ void BlackBoxPage::update(uint32_t) {
     }
     if (strip_dirty_) { draw_strip(); strip_dirty_ = false; }
     list_.set_count(int(view::count_rows(data())));
-    list_.draw(ctx_.now);
+    list_.draw(ctx_.now, ctx_.budget);
     const ListState &st = list_.state();
     StrBuf<30> f;
     char sm[32];

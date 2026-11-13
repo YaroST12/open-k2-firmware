@@ -127,6 +127,7 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
     panel_ = surface_of(layout_.panel);
     ctx_.meter.reset(now_ms);
 
+    booting_ = true;
     lcd::fill(kBg);
     set_page(Page::Home, now_ms);
     ctx_.cables.load();   // the remembered cable selection, before boot_restore's boot-time arming reads it
@@ -134,6 +135,7 @@ void Ui::init(uint32_t now_ms, bool cancel_resume) {
 #if K2_PDSTRESS
     else pdstress_.boot_restore(cancel_resume, now_ms);   // a PD Stress journal resumes by itself once VBUS is steady
 #endif
+    booting_ = false;
     // A loop probe record still marked in progress: the K2 restarted inside its CC step. Close it (CC Interrupted / Rebooted);
     // Tools -> Loop probe and `k2_remote loop-probe` report it. The probe itself never resumes.
     if (const auto step = loopprobe::boot_check(loopprobe::hw::store()))
@@ -159,8 +161,9 @@ void Ui::set_rotation(uint8_t rotation, uint32_t now_ms) {
     ctx_.content = {0, 0, 224, 240};
     ctx_.screen = surface_of(layout_.content);
     panel_ = surface_of(layout_.panel);
+    BudgetScope scope(*this);
     lcd::set_rotation(rotation);
-    lcd::fill(kBg);
+    start_full_clear();
     hold_shown_ = false;
     redraw(now_ms);
     K2LOG("[ROT] rotation=%u mode=%s\n", unsigned(rotation), rotation_lock_ ? "lock" : "auto");
@@ -201,7 +204,8 @@ void Ui::store_orientation(uint8_t rotation) {
 void Ui::set_home_hero(home::Qty q) {
     ctx_.keep.home_hero = q;
     K2LOG("[UI] home hero=%u\n", unsigned(home::qty_byte(q)));
-    current().invalidate();   // Home paints its new layout on the next update
+    current().invalidate();   // Home paints its new layout progressively via tick()
+    paint_pending_ = true;
     uiprefs::Prefs p = uiprefs::stored();
     const uiprefs::Prefs before = p;
     p.home_hero = home::qty_byte(q);
@@ -254,10 +258,11 @@ void Ui::draw_rotation_notice(uint32_t now_ms) {
 // Opaque pages: the full paint (draw_static + update with ctx_.blank false) writes every content pixel, panel strip aside
 // (draw_panel owns it). A page that is not listed is erased before it paints. The pixel-exact walk of every switch in
 // tests/test_ui_capture.cpp proves each entry: it compares the switch against a clean paint, in all four rotations.
-bool Ui::page_opaque(Page p) {
+bool Ui::page_opaque(Page p, bool entering) const {
     switch (p) {
     case Page::Home: case Page::Detail: case Page::Lines: case Page::Tools: case Page::Settings: return true;
-    default: return false;   // ChargerTest: the stage decides what its paint covers
+    case Page::ChargerTest: return charger_test_.paints_opaque(entering);   // the stage decides what its paint covers
+    default: return false;
     }
 }
 
@@ -290,10 +295,10 @@ void Ui::set_page(Page p, uint32_t now_ms) {
     if (changed) pages_.at(0)->leave();
     page_ = p;
     if (const int f = face_of(p); f >= 0) ctx_.keep.face = static_cast<uint8_t>(f);   // the Bench returns to the face last shown
-    const bool blank = clear_for_incoming(now_ms, *outgoing, page_opaque(p));   // the outgoing pages are still alive for a replay
+    const bool blank = clear_for_incoming(now_ms, *outgoing, page_opaque(p, true));   // the outgoing pages are still alive for a replay
     pages_.pop_to(changed ? 0 : 1);        // the menus go; so does the rotation page unless it is the one asked for
     if (changed) build_base(p);
-    if (p == Page::ChargerTest) pages_.at(0)->enter();
+    if (p == Page::ChargerTest || p == Page::Settings) pages_.at(0)->enter();
     paint_incoming(now_ms, t0, blank);
 }
 
@@ -478,17 +483,49 @@ void Ui::erase_outgoing(uint32_t now_ms, PageIf &outgoing) {
     lcd::set_erase(false);
 }
 
+void Ui::reset_paint_pipeline() {
+    // Only invalidate the row cache here: set_rotation/repaint call start_full_clear() on the
+    // same live page and must keep ctx_.rows's ctx_ binding and scroll offset intact.
+    ctx_.rows.invalidate();
+    paint_pending_ = false;
+    paint_blank_ = false;
+    clear_pending_ = false;
+    clear_full_lcd_ = false;
+    clear_y_ = clear_y1_ = 0;
+    chrome_gaps_pending_ = false;
+    static_pending_ = false;
+    panel_pending_ = false;
+    timing_in_flight_ = false;
+    panel_mask_ = 0;
+}
+
+void Ui::start_full_clear() {
+    reset_paint_pipeline();
+    clear_pending_ = true;
+    clear_full_lcd_ = true;
+    clear_y_ = 0;
+    clear_y1_ = static_cast<int16_t>(lcd::kHeight);
+}
+
 // Clears what the incoming page must not find under it; false = nothing was cleared and the page paints over live ink.
-bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opaque) {
+bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opaque, bool detach_rows) {
     constexpr uint32_t kContentPx = 224u * 240u;
+    reset_paint_pipeline();
     if (!incoming_opaque) {
-        if (full_px_ < kContentPx) {
-            erase_outgoing(now_ms, outgoing);   // a replay writes what the outgoing paint wrote: cheaper than a plain fill
+        if (full_px_ < kContentPx && (!ctx_.budget || full_px_ <= static_cast<uint32_t>(PaintBudget::kDefaultPx))) {
+            PaintBudget *const saved_budget = ctx_.budget;
+            ctx_.budget = nullptr;   // small outgoing erase replays completely without slicing
+            erase_outgoing(now_ms, outgoing);
+            ctx_.budget = saved_budget;
+            if (ctx_.budget) ctx_.budget->spent += static_cast<int>(full_px_);
         } else {
-            ContentViewport viewport(layout_.content);
-            gfx_fill(ctx_.content, 0, 0, ctx_.content.w, ctx_.content.h, kBg);
+            clear_pending_ = true;
+            clear_full_lcd_ = false;
+            clear_y_ = 0;
+            clear_y1_ = ctx_.content.h;
         }
     }
+    if (detach_rows) ctx_.rows.detach();
     // Whatever the card and the notice drew is gone now (wiped, or painted over by the opaque page): redraw them on demand.
     rotation_notice_drawn_ = false;
     hold_shown_ = false;
@@ -496,31 +533,98 @@ bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opa
     return !incoming_opaque;
 }
 
-void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
+void Ui::pump_paint(uint32_t now_ms) {
+    PaintBudget *const bg = ctx_.budget;
+    if (clear_pending_) {
+        if (clear_full_lcd_) {
+            ContentViewport::Pause pause;
+            while (clear_y_ < clear_y1_) {
+                const int rows = std::min<int>(PaintBudget::kStripRows, clear_y1_ - clear_y_);
+                const int cost = static_cast<int>(lcd::kWidth) * rows;
+                if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+                lcd::clear_strip(static_cast<uint16_t>(clear_y_), static_cast<uint16_t>(rows), kBg);
+                clear_y_ = static_cast<int16_t>(clear_y_ + rows);
+            }
+        } else {
+            ContentViewport viewport(layout_.content);
+            while (clear_y_ < clear_y1_) {
+                const int rows = std::min<int>(PaintBudget::kStripRows, clear_y1_ - clear_y_);
+                const int cost = static_cast<int>(ctx_.content.w) * rows;
+                if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+                gfx_fill(ctx_.content, 0, clear_y_, ctx_.content.w, static_cast<int16_t>(rows), kBg);
+                clear_y_ = static_cast<int16_t>(clear_y_ + rows);
+            }
+        }
+        clear_pending_ = false;
+        clear_full_lcd_ = false;
+    }
+
     ContentViewport viewport(layout_.content);
-    const std::uint64_t px0 = paint::meter.px_count();
+    ctx_.blank = paint_blank_;
+    if (chrome_gaps_pending_) {
+        const int h1 = kit::kBodyY - kBarH;
+        const int h2 = kFooterY - kit::kListBottom;
+        const int cost = static_cast<int>(ctx_.content.w) * (h1 + h2);
+        if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+        gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, static_cast<int16_t>(h1), kBg);
+        gfx_fill(ctx_.content, 0, kit::kListBottom, ctx_.content.w, static_cast<int16_t>(h2), kBg);
+        chrome_gaps_pending_ = false;
+    }
+    if (static_pending_) {
+        current().draw_static();
+        if (bg && bg->more) { paint_pending_ = true; return; }
+        static_pending_ = false;
+    }
+    if (panel_pending_) {
+        for (unsigned i = 0; i < 4; i++) {
+            if (!(panel_mask_ & (1u << i))) continue;
+            if (!current().hides_strip() && layout_.slot[i].w > 0 && layout_.slot[i].h > 0) {
+                const int cost = static_cast<int>(layout_.slot[i].w) * layout_.slot[i].h;
+                if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+            }
+            draw_slot(i);
+            panel_mask_ &= static_cast<uint8_t>(~(1u << i));
+        }
+        panel_pending_ = false;
+    }
+    current().update(now_ms);
+    if (bg && bg->more) { paint_pending_ = true; return; }
+
+    ctx_.blank = false;
+    paint_blank_ = false;
+    paint_pending_ = false;
+    draw_release_notice();
+    draw_rotation_notice(now_ms);
+    sync_panel();
+    if (timing_in_flight_) {
+        timing_in_flight_ = false;
+        full_px_ = static_cast<uint32_t>(paint::meter.px_count() - paint_px0_);
+        full_us_ = now_us() - paint_t0_us_;
+        field_max_us_ = 0;
+        page_since_ms_ = now_ms;
+        timing_pending_ = true;
+    }
+}
+
+void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
+    BudgetScope scope(*this);
+    last_update_ms_ = now_ms;
     current().invalidate();   // the erase pass erased everything the field caches remember; a built page has drawn nothing
     current().sample();
-    ctx_.blank = blank;       // true: the screen is kBg under the whole content (a fill or the erase pass ran); false: opaque page
+    paint_blank_ = blank;
     // No page paints the rows between its top bar's hairline and the body (kBarH..kBodyY; the wizard rule also leaves a gap
     // pixel between its segments) nor the two rows between a list's bottom and the footer: an opaque page lays that ground
     // first (5 rows, 1,120 px), the page's own paint goes over it. Home has neither bar nor footer.
-    if (!blank && !(depth_ == 0 && page_ == Page::Home)) {
-        gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, static_cast<int16_t>(kit::kBodyY - kBarH), kBg);
-        gfx_fill(ctx_.content, 0, kit::kListBottom, ctx_.content.w, static_cast<int16_t>(kFooterY - kit::kListBottom), kBg);
-    }
-    current().draw_static();
-    draw_panel();
-    current().update(now_ms);
-    ctx_.blank = false;
-    draw_release_notice();
-    draw_rotation_notice(now_ms);
-    full_px_ = static_cast<uint32_t>(paint::meter.px_count() - px0);
-    last_update_ms_ = now_ms;
-    full_us_ = now_us() - t0;
-    field_max_us_ = 0;
-    page_since_ms_ = now_ms;
-    timing_pending_ = true;
+    chrome_gaps_pending_ = !blank && !(depth_ == 0 && page_ == Page::Home);
+    static_pending_ = true;
+    panel_pending_ = true;
+    panel_mask_ = 0x0Fu;
+    paint_t0_us_ = t0;
+    paint_px0_ = paint::meter.px_count();
+    full_px_ = 224u * 240u;
+    timing_in_flight_ = true;
+    paint_pending_ = true;
+    pump_paint(now_ms);
 }
 
 bool Ui::push_menu(Menu m, uint32_t now_ms) {
@@ -661,7 +765,7 @@ void Ui::update_hold_card(uint32_t now_ms, RebootChord::Step step) {
         if (hold_shown_) {   // cancelled: wipe the card (an opaque page just paints over it) and repaint the page
             const uint32_t t0 = now_us();
             const bool opaque = depth_ > 0 ? menu_opaque(menu()) : page_opaque(page_);
-            const bool blank = clear_for_incoming(now_ms, current(), opaque);   // the replay sees hold_shown_ still set
+            const bool blank = clear_for_incoming(now_ms, current(), opaque, false);   // the replay sees hold_shown_ still set
             paint_incoming(now_ms, t0, blank);
         }
         return;
@@ -713,6 +817,7 @@ void Ui::show_rebooting() {
 // ---------------------------------------------------------------------------------------
 
 UiAction Ui::on_button(Button b, ButtonEvent ev, uint32_t now_ms) {
+    BudgetScope scope(*this);
     const auto event = to_event(b, ev);
     if (!event) return UiAction::None;
     const bool both = down_[static_cast<int>(Button::Minus)] && down_[static_cast<int>(Button::Plus)];
@@ -730,6 +835,7 @@ UiAction Ui::on_button(Button b, ButtonEvent ev, uint32_t now_ms) {
 }
 
 UiAction Ui::on_remote_button(Button logical, ButtonEvent ev, uint32_t now_ms) {
+    BudgetScope scope(*this);
     const auto event = to_event(logical, ev);
     if (!event) return UiAction::None;
     // Logical key: no orientation mapping, no rotation chord (a remote has no physical key pair to hold). OK and Back
@@ -759,10 +865,17 @@ UiAction Ui::dispatch_button(Event event, uint32_t now_ms) {
     if (event.button == Button::Back && event.press == Press::Hold && !depth_ && page_ == Page::ChargerTest)
         charger_test_.cancel();
     // A submenu sees everything first and a short BACK it declines pops it; a long BACK nobody takes goes to the Meter.
+    const bool prep_was_pending = clear_pending_ || static_pending_;
     const Dispatch d = depth_ ? dispatch_modal(event, current()) : dispatch(event, current());
     if (d.route == Route::Pop) pop_menu(now_ms);
     else if (d.global == Global::ToMeter) to_meter(now_ms);
-    else sync_panel();
+    else {
+        if (prep_was_pending && (clear_pending_ || static_pending_)) {
+            current().invalidate();
+            paint_pending_ = true;
+        }
+        sync_panel();
+    }
     return UiAction::None;
 }
 
@@ -777,6 +890,7 @@ void Ui::flip_face(int dir, uint32_t now_ms) {
 void Ui::show_face(uint32_t now_ms) { set_page(kFaces[ctx_.keep.face < kFaceCount ? ctx_.keep.face : 0], now_ms); }
 
 void Ui::open_place(bench::Place p, uint32_t now_ms) {
+    BudgetScope scope(*this);
     const bool conn_place = p == bench::Place::Charger || p == bench::Place::Cable || p == bench::Place::Device;
     const bool log_place = p == bench::Place::Log;
     const bool batt_place = p == bench::Place::Battery;
@@ -803,14 +917,13 @@ void Ui::open_place(bench::Place p, uint32_t now_ms) {
                         : ctx_.keep.bench_sel == static_cast<int>(bench::Place::Cable) ? conn::Tab::Cable : conn::Tab::Sink;
     conn_lock_ = static_cast<int8_t>(tab);
     if (!push_menu(Menu::Connection, now_ms)) { conn_lock_ = -1; return; }
-    ContentViewport viewport(layout_.content);
-    top_as<ConnectionPage>().update(now_ms);
-    sync_panel();   // the OK verb follows the rows the first update built
+    pump_paint(now_ms);
 }
 
 void Ui::to_meter(uint32_t now_ms) { set_page(Page::Home, now_ms); }
 
 bool Ui::run_action(Action a, uint32_t now_ms, bool confirm) {
+    BudgetScope scope(*this);
     ContentViewport viewport(layout_.content);
     // The confirm flag overrides no refusal: inline, every active TX (Identify, the VCONN cable read) is refused
     // outright - an inline K2 has no PD role of its own (2026-11-10). It is only the remote's "yes" for an action that
@@ -1027,6 +1140,7 @@ Ui::IdResult Ui::identify(uint32_t now_ms) {
 }
 
 void Ui::debug_fake_pdos(uint8_t n, uint32_t now_ms) {
+    BudgetScope scope(*this);
     ContentViewport viewport(layout_.content);
     pd::set_fake(n);
     if (n == 0) {
@@ -1038,6 +1152,7 @@ void Ui::debug_fake_pdos(uint8_t n, uint32_t now_ms) {
 }
 
 void Ui::debug_link(bool attached, uint32_t now_ms) {
+    BudgetScope scope(*this);
     ContentViewport viewport(layout_.content);
     if (attached) link_.force_attached(now_ms);
     else link_.force_detached(now_ms);
@@ -1060,11 +1175,12 @@ void Ui::refresh_action_views(uint32_t now_ms) {
 }
 
 bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
+    BudgetScope scope(*this);
     if (menu() == Menu::Connection && !spoof && (!single_tools_ || connection_page().tab() == tab)) {   // already there: switch the tab
         ContentViewport viewport(layout_.content);
         ConnectionPage &conn = top_as<ConnectionPage>();
         conn.open_tab(tab);
-        conn.update(now_ms);
+        pump_paint(now_ms);
         return true;
     }
     if (depth_ > 0) set_page(page_, now_ms);   // a single Connection on the Tools page, whatever was open
@@ -1074,22 +1190,22 @@ bool Ui::open_connection(conn::Tab tab, bool spoof, uint32_t now_ms) {
     ConnectionPage &conn = top_as<ConnectionPage>();   // just built: the Connection page is on top
     if (!single_tools_) conn.open_tab(tab);
     if (spoof) return push_menu(Menu::Spoof, now_ms);
-    ContentViewport viewport(layout_.content);
-    conn.update(now_ms);
-    sync_panel();   // the OK verb follows the rows the first update built
+    pump_paint(now_ms);
     return true;
 }
 
 bool Ui::land_rescanned(uint32_t now_ms) {
+    BudgetScope scope(*this);
     if (!open_connection(conn::Tab::Source, false, now_ms)) return false;
     ContentViewport viewport(layout_.content);
     ConnectionPage &conn = top_as<ConnectionPage>();
     conn.say("Rescanned (rebooted)", now_ms);
-    conn.update(now_ms);
+    pump_paint(now_ms);
     return true;
 }
 
 bool Ui::goto_page(uint8_t page, uint32_t now_ms) {
+    BudgetScope scope(*this);
     if (page < static_cast<uint8_t>(Page::Count)) {
         set_page(static_cast<Page>(page), now_ms);
         return true;
@@ -1107,6 +1223,9 @@ bool Ui::goto_page(uint8_t page, uint32_t now_ms) {
 }
 
 void Ui::render_for_capture(uint32_t now_ms) {
+    PaintBudget *const saved_budget = ctx_.budget;
+    ctx_.budget = nullptr;   // captures always render the complete frame atomically
+    ctx_.rows.set_budget(nullptr);
     ctx_.now = now_ms;
     ContentViewport viewport(layout_.content);
     rotation_notice_drawn_ = false;
@@ -1120,27 +1239,32 @@ void Ui::render_for_capture(uint32_t now_ms) {
     draw_release_notice();
     if (hold_shown_) { hold_shown_ = false; draw_hold_card(hold_ms_); }   // the card is part of the screen
     if (!hold_shown_) draw_rotation_notice(now_ms);
+    ctx_.budget = saved_budget;
+    ctx_.rows.set_budget(saved_budget);
 }
 
 void Ui::resync(uint32_t now_ms) {
+    PaintBudget *const saved_budget = ctx_.budget;
+    ctx_.budget = nullptr;
+    ctx_.rows.set_budget(nullptr);
     ctx_.now = now_ms;
     ContentViewport viewport(layout_.content);
     rotation_notice_drawn_ = false;
     current().invalidate();
-    current().update(now_ms);
-    draw_release_notice();
-    draw_rotation_notice(now_ms);
+    pump_paint(now_ms);
+    ctx_.budget = saved_budget;
+    ctx_.rows.set_budget(saved_budget);
 }
 
 void Ui::refresh(uint32_t now_ms) {
+    BudgetScope scope(*this);
     ctx_.now = now_ms;
     ContentViewport viewport(layout_.content);
-    current().update(now_ms);
-    draw_release_notice();
-    draw_rotation_notice(now_ms);
+    pump_paint(now_ms);
 }
 
 void Ui::repaint(uint32_t now_ms) {
+    BudgetScope scope(*this);
     hold_shown_ = false;
     // An opaque page paints every pixel of the content and the strip every pixel of its slots (the switch into one skips the
     // erase for the same reason, test_ui_capture checks both pixel for pixel): the full-screen clear would only be overdraw.
@@ -1149,11 +1273,12 @@ void Ui::repaint(uint32_t now_ms) {
         paint_incoming(now_ms, now_us(), false);
         return;
     }
-    lcd::fill(kBg);
+    start_full_clear();
     redraw(now_ms);
 }
 
 UiAction Ui::tick(uint32_t now_ms) {
+    BudgetScope scope(*this);
     gap::ui.note(now_ms);
     if (requested_rotation_ < 4) {
         const uint8_t target = requested_rotation_;
@@ -1181,8 +1306,17 @@ UiAction Ui::tick(uint32_t now_ms) {
          (sk.state == pd::SinkState::Ready && sk.mv == 5000));
     fc_release_.poll(now_ms, ctx_.pm_online ? ctx_.vbus_fast_mv : -1, released);
     if (previous_release != fc_release_.state() &&
-        (fc_release_.state() == trig::Release::State::Safe || fc_release_.state() == trig::Release::State::Unsafe))
+        (fc_release_.state() == trig::Release::State::Safe || fc_release_.state() == trig::Release::State::Unsafe)) {
         current().invalidate();
+        paint_pending_ = true;
+    }
+    const bool live_now = ctx_.pm_online && ctx_.pm.vbus_mv >= 1000;
+    if (live_now && !extremes_live_) {   // an attach: Home's peaks, sag and card cycle start over (they stay frozen while stale)
+        ctx_.extremes.reset();
+        ctx_.keep.cards.reset();
+        ctx_.keep.attention.reset();
+        sag_settle_.reset();
+    }
     if (ctx_.pm_online) {
         // energy: the unfiltered sample, so smoothing never changes the Wh total
         const power::Metrics raw = power::read_raw().value_or(ctx_.pm);
@@ -1218,12 +1352,6 @@ UiAction Ui::tick(uint32_t now_ms) {
                 snap_ms_ = now_ms;
             }
             ctx_.last.elapsed_s = ctx_.meter.elapsed_s(now_ms);   // the session's length runs to its last live tick
-        }
-        if (live && !extremes_live_) {   // an attach: Home's peaks, sag and card cycle start over (they stay frozen while stale)
-            ctx_.extremes.reset();
-            ctx_.keep.cards.reset();
-            ctx_.keep.attention.reset();
-            sag_settle_.reset();
         }
         extremes_live_ = live;
         if (live && now_ms - sag_level_ms_ >= 100) {   // the level a sag is measured against (home::sag_level_mv), settled
@@ -1315,7 +1443,7 @@ UiAction Ui::tick(uint32_t now_ms) {
 #else
     const bool stress_note = loopguard::locked();
 #endif
-    if (pdstress_note_ && !stress_note) current().invalidate();   // the note goes: the page repaints its own footer
+    if (pdstress_note_ && !stress_note) { current().invalidate(); paint_pending_ = true; }   // the note goes: the page repaints its own footer
     pdstress_note_ = stress_note;
     // The battery recorder's running dot (draw_release_notice): when the run stops, the page repaints whole once, so whatever
     // the dot covered (a bar, a hero) comes back.
@@ -1325,23 +1453,32 @@ UiAction Ui::tick(uint32_t now_ms) {
     if (ctx_.trig_armed && now_ms >= trig_until_) ctx_.trig_armed = false;
 
     const RebootChord::Step chord = chord_.step(now_ms);
-    update_hold_card(now_ms, chord);
     if (chord == RebootChord::Step::Reboot) return UiAction::Reboot;
-    if (!hold_shown_ && now_ms - last_update_ms_ >= kPageTickMs) {
-        last_update_ms_ = now_ms;
-        uint32_t t0 = now_us();
-        current().sample();
-        current().update(now_ms);
-        draw_release_notice();
-        if (rotation_notice_until_ && static_cast<int32_t>(now_ms - rotation_notice_until_) >= 0) {
-            rotation_notice_until_ = 0;
-            current().invalidate();
-            current().update(now_ms);
-        } else draw_rotation_notice(now_ms);
-        sync_panel();
-        uint32_t dt = now_us() - t0;
-        if (dt > field_max_us_) field_max_us_ = dt;
+    // If the hold card was active and the chord was released, dismiss and restart paint now. While a sliced paint is still
+    // pending (e.g. a page switch while the chord stays held), finish pump_paint so ui.painting() always drains cleanly,
+    // and redraw the hold card on top afterward so no background slice punches a hole through it.
+    if (hold_shown_ && chord == RebootChord::Step::None) update_hold_card(now_ms, chord);
+    if (!hold_shown_ || paint_pending_) {
+        const bool period = !hold_shown_ && (now_ms - last_update_ms_ >= kPageTickMs);
+        if (period || paint_pending_) {
+            const uint32_t t0 = now_us();
+            if (period) {
+                last_update_ms_ = now_ms;
+                current().sample();
+            }
+            pump_paint(now_ms);
+            if (!paint_pending_ && rotation_notice_until_ && static_cast<int32_t>(now_ms - rotation_notice_until_) >= 0) {
+                rotation_notice_until_ = 0;
+                current().invalidate();
+                paint_pending_ = true;
+                pump_paint(now_ms);
+            }
+            if (hold_shown_) hold_shown_ = false;
+            const uint32_t dt = now_us() - t0;
+            if (dt > field_max_us_) field_max_us_ = dt;
+        }
     }
+    if (chord != RebootChord::Step::None) update_hold_card(now_ms, chord);
     if (timing_pending_) log_timing(now_ms);
     return UiAction::None;
 }

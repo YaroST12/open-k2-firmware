@@ -193,6 +193,10 @@ void TwinPage::enter() {
     has_icon_ = true;
     reload();
     invalidate();
+    ctx_.rows.init(ctx_.content, kit::kBodyY, &TwinPage::row_fn, this);
+    ctx_.rows.set_count(rows());
+    ctx_.rows.select(sel_);
+    compose_footer();
 }
 
 // Paged away or popped while this page's own proof is running: ask 5 V back and end it (a run the remote started is left alone).
@@ -821,7 +825,7 @@ void TwinPage::paint_detail(uint32_t now_ms) {
     } else {
         ctx_.rows.set_count(kActions);
         ctx_.rows.select(act_);
-        ctx_.rows.draw(now_ms);
+        ctx_.rows.draw(now_ms, ctx_.budget);
     }
 }
 
@@ -938,7 +942,7 @@ void TwinPage::update(uint32_t now_ms) {
         sel_ = std::clamp(sel_, 0, n_);
         ctx_.rows.set_count(rows());
         ctx_.rows.select(sel_);
-        ctx_.rows.draw(now_ms);
+        ctx_.rows.draw(now_ms, ctx_.budget);
     }
     compose_footer();
     draw_footer_cached(ctx_.content, foot_tone_, foot_text_.view(), foot_);

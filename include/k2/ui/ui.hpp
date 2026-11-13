@@ -219,6 +219,8 @@ public:
     // Clears the panel and draws the current page from scratch: for the caller that drew over the whole screen itself
     // (the boot-info QR screen) and now hands it back.
     void repaint(uint32_t now_ms);
+    // True while a multi-pass page switch, clear, or sliced field repaint still has slices queued for subsequent ticks.
+    bool painting() const { return paint_pending_; }
     Page page() const { return page_; }
     int32_t energy_mwh() const { return ctx_.meter.mwh(); }
     const UiContext &context() const { return ctx_; }   // read-only view for tests and diagnostics
@@ -346,9 +348,10 @@ private:
     //    sent), else fills the content with kBg; both leave ctx_.blank true.
     // The outgoing page must still be alive for the replay; paint_incoming() runs after the arena change. `t0` starts the
     // [UI] timing.
-    static bool page_opaque(Page p);
+    // `entering`: the page is about to be (re)entered (set_page), so its paint is the entry stage's, not the one on screen.
+    bool page_opaque(Page p, bool entering = false) const;
     static bool menu_opaque(Menu m);
-    bool clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opaque);   // returns ctx_.blank for the paint
+    bool clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opaque, bool detach_rows = true);   // returns ctx_.blank for the paint
     void erase_outgoing(uint32_t now_ms, PageIf &outgoing);
     void paint_incoming(uint32_t now_ms, uint32_t t0, bool blank);
     // Full repaint of the current page after a real lcd::fill (init, rotation change), where the screen is already blank.
@@ -436,6 +439,46 @@ private:
     uint32_t full_us_ = 0, field_max_us_ = 0, page_since_ms_ = 0;
     uint32_t full_px_ = 0;   // pixels the current page's last full paint sent: what replaying it to erase it would cost
     bool timing_pending_ = false;
+
+    // Progressive slice-paint state (keeps each call under the 20 ms pass ceiling).
+    struct BudgetScope {
+        Ui &ui;
+        PaintBudget owned{};
+        PaintBudget *prev = nullptr;
+        bool active = false;
+        explicit BudgetScope(Ui &u) : ui(u), prev(u.ctx_.budget) {
+            if (!u.booting_ && prev == nullptr) {
+                u.ctx_.budget = &owned;
+                u.ctx_.rows.set_budget(&owned);
+                active = true;
+            }
+        }
+        ~BudgetScope() {
+            if (active) {
+                if (owned.more) ui.paint_pending_ = true;
+                ui.ctx_.budget = prev;
+                ui.ctx_.rows.set_budget(prev);
+            }
+        }
+        bool more() const { return ui.ctx_.budget && ui.ctx_.budget->more; }
+    };
+    void start_full_clear();
+    void reset_paint_pipeline();
+    void pump_paint(uint32_t now_ms);
+    bool booting_ = false;
+    bool paint_pending_ = false;
+    bool paint_blank_ = false;
+    bool clear_pending_ = false;
+    bool clear_full_lcd_ = false;
+    int16_t clear_y_ = 0;
+    int16_t clear_y1_ = 0;
+    bool chrome_gaps_pending_ = false;
+    bool static_pending_ = false;
+    bool panel_pending_ = false;
+    bool timing_in_flight_ = false;
+    uint8_t panel_mask_ = 0;
+    uint32_t paint_t0_us_ = 0;
+    uint64_t paint_px0_ = 0;
 };
 
 }  // namespace k2

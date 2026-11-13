@@ -71,7 +71,8 @@ void DiagnosisPage::paint_stamp() {
     screen::Row top{};
     if (skip()) screen::row(r, 0, top);
     const std::string_view sub(top.note.data());
-    stamp_.paint(mix_u32(mix(mix(mix_init(), word), sub), static_cast<uint32_t>(v)), [&] {
+    stamp_.paint_budgeted(mix_u32(mix(mix(mix_init(), word), sub), static_cast<uint32_t>(v)),
+                          ctx_.budget, static_cast<int>(ctx_.content.w) * (kStampH + 2), [&] {
         const Surface &c = ctx_.content;
         const kit::VerdictStyle st = kit::verdict_style(v);
         const uint16_t fill = st.filled ? st.fill : kSurface, ink = st.filled ? st.ink : kText;
@@ -107,15 +108,33 @@ int DiagnosisPage::rows() const {
 }
 
 void DiagnosisPage::draw_static() {
-    title_bar();
-    ctx_.rows.init(ctx_.content, place_ ? kPlaceListY : kit::kBodyY, &DiagnosisPage::row_fn, this);
-    ctx_.rows.set_count(list_rows());
-    ctx_.rows.select(sel_);
-    if (place_) kit::fill_list_gap(ctx_.content, kPlaceListY);
-    invalidate();
+    PaintBudget *const bg = ctx_.budget;
+    if (static_step_ == 0) {
+        if (bg && !bg->admit(140 * kBarH, true)) return;
+        title_bar();
+        ctx_.rows.init(ctx_.content, place_ ? kPlaceListY : kit::kBodyY, &DiagnosisPage::row_fn, this);
+        ctx_.rows.set_count(list_rows());
+        ctx_.rows.select(sel_);
+        foot_.invalidate();
+        stamp_.invalidate();
+        ctx_.rows.invalidate();
+        static_step_ = 1;
+    }
+    if (static_step_ == 1) {
+        if (place_) {
+            const int16_t end = kit::list_end(kPlaceListY);
+            if (end < kit::kListBottom) {
+                const int cost = static_cast<int>(ctx_.content.w) * (kit::kListBottom - end);
+                if (bg && !bg->admit(cost, true)) return;
+                kit::fill_list_gap(ctx_.content, kPlaceListY);
+            }
+        }
+        static_step_ = 2;
+    }
 }
 
 void DiagnosisPage::invalidate() {
+    static_step_ = 0;
     foot_.invalidate();
     stamp_.invalidate();
     ctx_.rows.invalidate();
@@ -165,16 +184,22 @@ void DiagnosisPage::row_fn(void *self, int index, bool focused, kit::RowSpec &ou
 }
 
 void DiagnosisPage::update(uint32_t now_ms) {
+    PaintBudget *const bg = ctx_.budget;
     const diag::Report &r = live::report();
     title_badge(live::state() == live::State::Last);
-    if (place_) paint_stamp();
+    if (bg && bg->more) return;
+    if (place_) {
+        paint_stamp();
+        if (bg && bg->more) return;
+    }
     sel_ = std::clamp(sel_, 0, list_rows() - 1);
     ctx_.rows.set_count(list_rows());
     ctx_.rows.select(sel_);
-    ctx_.rows.draw(now_ms);
+    ctx_.rows.draw(now_ms, bg);
+    if (bg && bg->more) return;
     char v[screen::kVerdictChars + 8];
     screen::verdict(r, v);
-    draw_footer_cached(ctx_.content, tone_of(r), v, foot_);
+    draw_footer_budgeted(ctx_.content, tone_of(r), v, foot_, bg);
 }
 
 FooterTone DiagnosisPage::tone_of(const diag::Report &r) {

@@ -529,7 +529,7 @@ void PdStressPage::paint_setup() {
     if (k.sel >= setup_count()) k.sel = static_cast<uint8_t>(setup_count() - 1);
     ctx_.rows.set_count(setup_count());
     ctx_.rows.select(k.sel);
-    ctx_.rows.draw(ctx_.now);
+    ctx_.rows.draw(ctx_.now, ctx_.budget);
 }
 
 void PdStressPage::paint_review(uint32_t now_ms) {

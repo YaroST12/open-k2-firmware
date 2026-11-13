@@ -26,12 +26,22 @@ inline uint32_t mix(uint32_t h, std::string_view s) {
 struct Elem {
     uint32_t sig = 0;
     bool valid = false;
+    bool needs(uint32_t s) const { return !valid || s != sig; }
     template <typename Fn>
     void paint(uint32_t s, Fn &&fn) {
         if (valid && s == sig) return;
         sig = s;
         valid = true;
         fn();
+    }
+    template <typename Bg, typename Fn>
+    bool paint_budgeted(uint32_t s, Bg *bg, int cost, Fn &&fn) {
+        if (valid && s == sig) return true;
+        if (bg && !bg->admit(cost, true)) return false;
+        sig = s;
+        valid = true;
+        fn();
+        return true;
     }
     void invalidate() { valid = false; }
 };

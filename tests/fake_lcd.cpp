@@ -97,8 +97,16 @@ void t_dma_wait() {
     t_stream_service();
 }
 void t_dma_start(std::uint32_t n) { g_tdma = {true, g_lcd_timing->now_us(), n}; }
+bool g_twin_pending;   // lcd.cpp g_win_pending: the window goes on the wire with the stream's first run
+void t_open() {        // lcd.cpp open_window()
+    if (!g_twin_pending) return;
+    g_twin_pending = false;
+    t_dma_wait();
+    t_spend(g_lcd_timing->window_us);
+}
 void t_fill(std::uint32_t n) {   // lcd.cpp stream_fill() on the panel
     t_spend(g_lcd_timing->call_us);
+    t_open();
     t_dma_wait();
     if (k2::lcd::use_dma(n)) { t_dma_start(n); return; }   // left in flight
     while (n) {
@@ -112,8 +120,13 @@ void t_pixels(std::uint32_t n, bool erase) {   // lcd.cpp stream_pixels() on the
     t_spend(n * g_lcd_timing->px_cpu_us);
     if (erase) return t_fill(n);
     t_spend(g_lcd_timing->call_us);
+    t_open();
     t_dma_wait();
-    if (k2::lcd::use_dma(n)) { t_dma_start(n); t_dma_wait(); return; }
+    if (k2::lcd::use_dma(n)) {   // copied into the free ping-pong buffer, left in flight (serial: waited for)
+        t_dma_start(n);
+        if (g_lcd_timing->serial) t_dma_wait();
+        return;
+    }
     t_spend(n * g_lcd_timing->px_us);
     t_stream_service();
 }
@@ -135,7 +148,10 @@ bool sink_band(std::uint16_t& first, std::uint16_t& last) {
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     g_lcd_windows++;
     if (g_sink) { g_sink_work.begins++; g_sink->begin(x0, y0, x1, y1); return; }
-    if (g_lcd_timing) { t_dma_wait(); t_spend(g_lcd_timing->call_us + g_lcd_timing->window_us); }
+    if (g_lcd_timing) {
+        if (g_lcd_timing->serial) { t_dma_wait(); t_spend(g_lcd_timing->call_us + g_lcd_timing->window_us); }
+        else g_twin_pending = true;   // recorded only, as lcd.cpp does
+    }
     ensure_panel();
     g_panel_sink.window(x0, y0, x1, y1);
     g_wx0 = g_cx = x0; g_wy0 = g_cy = y0; g_wx1 = x1; g_wy1 = y1;
@@ -177,8 +193,13 @@ void stream_fill(std::uint16_t color, std::uint32_t count) {
 
 void stream_end() {
     if (g_sink || !g_lcd_timing) return;
+    if (!g_lcd_timing->serial) { g_twin_pending = false; return; }   // the frame stays open, its last transfer running
     t_spend(g_lcd_timing->call_us);
     t_dma_wait();   // the last fill may still be on the wire
+}
+
+void flush() {
+    if (!g_sink && g_lcd_timing) t_dma_wait();
 }
 
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color) {
@@ -194,6 +215,11 @@ void fill(std::uint16_t color) {
     fill_rect(0, 0, kWidth, kHeight, color);
     g_clearing = false;
 }
+void clear_strip(std::uint16_t y, std::uint16_t h, std::uint16_t color) {
+    g_clearing = true;
+    fill_rect(0, y, kWidth, h, color);
+    g_clearing = false;
+}
 void set_rotation(std::uint8_t) {}
 void set_idle_hook(void (*hook)()) { g_idle_hook = hook; }
 void pump() {
@@ -207,7 +233,7 @@ void pump() {
 void set_erase(bool erase) { g_erase = erase; }
 bool get_erase() { return g_erase; }
 DmaInfo dma_info() { return {}; }
-static unsigned g_spi_div = 8;
+static unsigned g_spi_div = static_cast<unsigned>(kBootSpiDiv);
 unsigned spi_div() { return g_spi_div; }
 bool set_spi_div(unsigned divider) {
     SpiDiv d;

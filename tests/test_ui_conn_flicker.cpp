@@ -102,7 +102,9 @@ static void test_steady_link_zero_body_passes() {
     for (uint8_t tab = 0; tab < 3; tab++) {
         uint32_t t = 22000 + tab * 30000;
         ui.goto_page(kConnTabAlias + tab, t);
-        for (int i = 0; i < 15; i++) ui.tick(t += 100);   // settle: page painted, debounce primed
+        for (int i = 0; i < 15; i++) ui.tick(t += 100);
+        while (ui.painting()) ui.tick(t += 20);   // settle: page painted, debounce primed
+        while (ui.painting()) ui.tick(t += 20);
         lcd::set_sink(&bh::sink);
         bh::reset();
         const uint32_t passes0 = g_conn_body_passes, ml0 = g_match_live_calls;
@@ -130,6 +132,7 @@ static void test_steady_link_zero_body_passes() {
         uint32_t t = 22000 + 3 * 30000;
         ui.goto_page(kConnTabAlias + 0, t);
         for (int i = 0; i < 15; i++) ui.tick(t += 100);
+        while (ui.painting()) ui.tick(t += 20);
         g_stub.fc = fastcharge::Protocol::Qc2_5V;
         g_stub.ul.mbps = 5000; g_stub.ul.family = usblink::Family::Usb32;
         g_stub.ul.conf = usblink::Confidence::Negotiated;   // the settled row read "--" (unknown)
@@ -186,6 +189,7 @@ static void test_row_count_change_paints_slots_only() {
     g_stub.fc = fastcharge::Protocol::Pending;
     ui.goto_page(kConnTabAlias + 0, t += 100);
     for (int i = 0; i < 15; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     const int rows6 = body_hairlines();               // ID, PD "none", Type-C, USB + the closing rule
     CHECK(rows6 >= 4);
     // Drop one row (a PD-speaking source whose caps were missed: the Type-C row goes).
@@ -194,6 +198,7 @@ static void test_row_count_change_paints_slots_only() {
     const uint32_t p0 = g_conn_body_passes;
     g_stub.pd_traffic = true;
     ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     const unsigned drop_px = bh::total;
     const uint32_t drop_passes = g_conn_body_passes - p0;
     lcd::set_sink(nullptr);
@@ -208,6 +213,7 @@ static void test_row_count_change_paints_slots_only() {
     bh::reset();
     g_stub.pd_traffic = false;
     ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     const unsigned back_px = bh::total;
     lcd::set_sink(nullptr);
     const int rows6b = body_hairlines();
@@ -215,10 +221,13 @@ static void test_row_count_change_paints_slots_only() {
     CHECK_EQ(rows6b, rows6);
     CHECK(back_px <= 20000u);
     for (int i = 0; i < 5; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     // The incremental result equals a forced full redraw (resync): flip the rotation twice.
     std::vector<uint16_t> before(g_panel, g_panel + LCD_WIDTH * LCD_HEIGHT);
     ui.set_rotation(1, t);
+    while (ui.painting()) ui.tick(t += 20);
     ui.set_rotation(0, t);
+    while (ui.painting()) ui.tick(t += 20);
     unsigned diff = 0;
     for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) diff += before[i] != g_panel[i];
     std::printf("after 6->5->6: incremental vs forced resync diff=%u\n", diff);

@@ -170,12 +170,14 @@ static void test_two_parts(uint8_t rotation) {
     ui.init(1000);
     ui.set_rotation(rotation, 1000);
     ui.tick(1100);
+    auto settle = [](Ui& u, uint32_t t) { while (u.painting()) u.tick(t += 2); };
     fill_record(ui, 510);
     std::array<std::uint8_t, 510> want;
     for (std::size_t i = 0; i < want.size(); i++) want[i] = ui.share_buffer()[i];
 
     ui.tick(2000);
     CHECK(ui.open_share(qs::Type::Log, 1, "Test cable", 510, 2000));   // the log has no link form: only the frames, two parts
+    settle(ui, 2000);
     CHECK(ui.menu() == Menu::Share);
     CHECK_EQ(int(ui.menu_depth()), 1);
     CHECK_EQ(int(ui.page_index()), int(kMenuPageBase) + int(Menu::Share));
@@ -204,6 +206,7 @@ static void test_two_parts(uint8_t rotation) {
 
     // The next part comes up by itself, once.
     ui.tick(2000 + SharePage::kCycleMs + 100);
+    while (ui.painting()) ui.tick(2000 + SharePage::kCycleMs + 102);
     CHECK_EQ(int(ui.share().index()), 1);
     CHECK_EQ(int(ui.share().encodes()), int(enc) + 1);
     CHECK_EQ(int(ui.share().paints()), int(pnt) + 1);
@@ -235,6 +238,7 @@ static void test_two_parts(uint8_t rotation) {
     // A repaint (capture strip, resync) draws the same part again (it encodes it once more: the workspace is not kept).
     const unsigned enc3 = ui.share().encodes();
     ui.resync(15000);
+    for (uint32_t ts = 15002; ui.painting(); ts += 2) ui.tick(ts);
     CHECK_EQ(int(ui.share().encodes()), int(enc3) + 1);
     qs::Assembler third(got);
     CHECK(feed(ui, third) == qs::Assembler::Result::Accepted);
@@ -267,6 +271,7 @@ static void test_one_part_and_refusals() {
 
     fill_record(ui, 300);
     CHECK(ui.open_share(qs::Type::Log, 1, "A very long card name that does not fit the line", 300, 1300));   // no link form (the log): just one code
+    for (uint32_t ts = 1302; ui.painting(); ts += 2) ui.tick(ts);
     CHECK_EQ(int(ui.share().parts()), 1);
     CHECK(!ui.share().has_link_form());
     CHECK(!ui.share().link());
@@ -416,6 +421,7 @@ static void test_cards_opener() {
     ui.tick(1350);
     CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
     ui.on_button(Button::Ok, ButtonEvent::Long, 1400);
+    for (uint32_t ts = 1402; ui.painting(); ts += 2) ui.tick(ts);
     CHECK(ui.menu() == Menu::Share);
     CHECK(ui.share().type() == qs::Type::Card);
     CHECK_EQ(int(ui.share().parts()), 1);
@@ -457,18 +463,19 @@ static void test_pd_opener() {
     g_stub.caps.raw_header = 0x51A1;
     const std::uint32_t w[5] = {0x0801912C, 0x0002D12C, 0x0003C12C, 0x0004B12C, 0xC1DC0 | (0x3u << 30)};
     for (unsigned i = 0; i < 5; i++) g_stub.caps.pdos[i].raw = w[i];
+    std::array<std::uint8_t, rec::kMaxPdCaps> want{};
+    const std::size_t wl = rec::pdcaps(g_stub.caps, want);
+    CHECK_EQ(int(wl), 6 + 4 * 5);
     static Ui ui;
     ui.init(1000); ui.tick(1000);
     ui.goto_page(kPdPage, 1050);
     ui.tick(1200);
     CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
     ui.on_button(Button::Ok, ButtonEvent::Long, 1300);
+    for (uint32_t ts = 1302; ui.painting(); ts += 2) ui.tick(ts);
     CHECK(ui.menu() == Menu::Share);
     CHECK(ui.share().type() == qs::Type::PdCaps);
     CHECK_EQ(int(ui.share().parts()), 1);
-    std::array<std::uint8_t, rec::kMaxPdCaps> want{};
-    const std::size_t wl = rec::pdcaps(g_stub.caps, want);
-    CHECK_EQ(int(wl), 6 + 4 * 5);
     std::array<std::uint8_t, 600> got{};
     CHECK(ui.share().link());                                // the source's PDOs open as a link: the page shows the table
     CHECK_EQ(int(read_link(ui, got)), int(wl));
@@ -524,6 +531,7 @@ static void test_charger_results_opener() {
     CHECK_EQ(ui.charger_test_stage(), 6);          // Results
     CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
     ui.on_button(Button::Ok, ButtonEvent::Long, 700000);
+    for (uint32_t ts = 700002; ui.painting(); ts += 2) ui.tick(ts);
     CHECK(ui.menu() == Menu::Share);
     CHECK(ui.share().type() == qs::Type::Card);
     CHECK_EQ(int(ui.share().parts()), 1);
@@ -602,6 +610,7 @@ static void test_log_opener() {
     CHECK_STR(ui.labels().b[int(Button::Ok)].lng, "Share");
     CHECK_STR(ui.labels().b[int(Button::Ok)].shrt, "");
     ui.on_button(Button::Ok, ButtonEvent::Long, 1300);
+    for (uint32_t ts = 1302; ui.painting(); ts += 2) ui.tick(ts);
     CHECK(ui.menu() == Menu::Share);
     CHECK(ui.share().type() == qs::Type::Log);
     std::array<std::uint8_t, 600> got{};
@@ -644,6 +653,7 @@ static void test_link_form(uint8_t rotation) {
         CHECK_EQ(int(ui.share().packed()), int(packs));
         CHECK(!ui.share().cycling());
         ui.tick(2100);
+        for (uint32_t ts = 2102; ui.painting(); ts += 2) ui.tick(ts);
         std::array<std::uint8_t, 600> got{};
         CHECK_EQ(int(read_link(ui, got)), 184);
         CHECK(std::memcmp(got.data(), want.data(), 184) == 0);
@@ -717,6 +727,7 @@ static void test_link_kinds() {
         CHECK(ui.share().link());
         CHECK(!ui.share().cycling());
         ui.tick(t + 100);
+        for (uint32_t ts = t + 102; ui.painting(); ts += 2) ui.tick(ts);
         std::array<std::uint8_t, 600> got{};
         CHECK_EQ(int(read_link(ui, got)), int(c.len));
         CHECK(std::memcmp(got.data(), want.data(), c.len) == 0);
@@ -744,6 +755,7 @@ static void test_link_kinds() {
     CHECK(ui.share().packed());
     CHECK(ui.share().link());
     ui.tick(t + 100);
+    for (uint32_t ts = t + 102; ui.painting(); ts += 2) ui.tick(ts);
     std::array<std::uint8_t, 600> got{};
     CHECK_EQ(int(read_link(ui, got)), 400);
     CHECK_EQ(int(link_kind), int('E'));
@@ -757,6 +769,7 @@ static void test_link_kinds() {
     CHECK(!ui.share().has_link_form());
     CHECK(!ui.share().link());
     ui.tick(t + 100);
+    for (uint32_t ts = t + 102; ui.painting(); ts += 2) ui.tick(ts);
     CHECK_STR(label(ui, Button::Ok).c_str(), ui.share().parts() > 1 ? "Hold" : "");
     ui.on_button(Button::Ok, ButtonEvent::Short, t + 200);   // OK never makes a link out of it
     ui.tick(t + 300);
@@ -783,6 +796,7 @@ static void test_link_kinds() {
             CHECK(ui.open_share(r.type, 1, r.name, n, t));
             CHECK(ui.share().has_link_form());
             ui.tick(t + 100);
+            for (uint32_t ts = t + 102; ui.painting(); ts += 2) ui.tick(ts);
             std::array<std::uint8_t, 600> got2{};
             std::array<std::uint8_t, rec::kMaxEmarker> exp2{};
             const std::size_t en = link_payload(ui, bytes.data(), n, exp2);
@@ -826,6 +840,7 @@ static void test_full_screen_centred(uint8_t rotation) {
         for (std::size_t i = 0; i < len; i++) want[i] = ui.share_buffer()[i];
         CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", len, t));
         ui.tick(t + 100);
+        for (uint32_t ts = t + 102; ui.painting(); ts += 2) ui.tick(ts);
         const int n = ui.share().modules();
         const int v = qrview::version_of(n);
         const qrview::Look lo = qrview::look_for(v);
@@ -898,6 +913,7 @@ static void test_info_view() {
     fill_record(ui, 180);   // a 290 character link: version 11, the caption fits the margin
     CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", 180, 2000));
     ui.tick(2100);
+    for (uint32_t ts = 2102; ui.painting(); ts += 2) ui.tick(ts);
     CHECK_EQ(qrview::version_of(ui.share().modules()), 11);
     CHECK(ui.share().caption_shown());
     ui.on_button(Button::Back, ButtonEvent::Short, 2200);
@@ -906,6 +922,7 @@ static void test_info_view() {
     fill_record(ui, 210);   // 330 characters: version 12, box 219 px, the caption does not fit
     CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", 210, 3000));
     ui.tick(3100);
+    for (uint32_t ts = 3102; ui.painting(); ts += 2) ui.tick(ts);
     CHECK_EQ(qrview::version_of(ui.share().modules()), 12);
     CHECK(!ui.share().caption_shown());
     CHECK(!ui.share().info());
@@ -968,6 +985,7 @@ static void test_busy_and_erase() {
     g_pump_snap_armed = true;
     const unsigned pumps = g_lcd_pumps;
     CHECK(ui.open_share(qs::Type::Emarker, 1, "Cable", 510, 3000));
+    for (uint32_t ts = 3002; ui.painting(); ts += 2) ui.tick(ts);
     CHECK_EQ(qrview::version_of(ui.share().modules()), 19);
     CHECK_EQ(int(ui.share().busy_shown()), 1);
     CHECK(g_lcd_pumps - pumps >= 8);

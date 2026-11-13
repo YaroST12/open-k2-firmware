@@ -155,24 +155,29 @@ void ToolsPage::paint_row(int i, bool known, bool focus) {
 // A row repaints whole only when its node or its focus changes; a live status (the Meter's readings, the watts a device gets)
 // rewrites just the characters that changed.
 void ToolsPage::paint_bench() {
+    PaintBudget *const bg = ctx_.budget;
     const bench::Facts f = facts();
     const int sel = selected();
     for (int i = 0; i < bench::kPlaces; i++) {
         const bench::Row r = bench::row(static_cast<Place>(i), f);
         const uint32_t h = mix(mix(2166136261u, static_cast<uint32_t>(r.known) | (i == sel ? 2u : 0u)), ctx_.rotation & 3u) | 1u;
         if (h != sig_[i]) {   // 0 means "repaint"
+            if (bg && !bg->admit(static_cast<int>(ctx_.content.w) * kRowPitch, true)) return;
             sig_[i] = h;
             paint_row(i, r.known, i == sel);
+        } else if (bg && !status_[i].valid() && !bg->admit(status_[i].box_px(), true)) {
+            return;
         }
         status_[i].draw(r.status.view());
     }
     if (!tail_) {   // the strip between the last row and the one the Ui lays above the footer
+        if (bg && !bg->admit(static_cast<int>(ctx_.content.w) * (kit::kListBottom - kBenchEnd), true)) return;
         gfx_fill(ctx_.content, 0, kBenchEnd, ctx_.content.w, static_cast<int16_t>(kit::kListBottom - kBenchEnd), kBg);
         tail_ = true;
     }
     StrBuf<28> line;
     bench::fact(f, line);
-    draw_footer_cached(ctx_.content, FooterTone::Info, line.view(), foot_);
+    draw_footer_budgeted(ctx_.content, FooterTone::Info, line.view(), foot_, bg);
 }
 
 void ToolsPage::update(uint32_t) {

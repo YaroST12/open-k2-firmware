@@ -46,7 +46,10 @@ static void check_text(Ui &ui, int x, int y, int right, int bottom, const Font &
     }
 }
 
+static void settle(Ui &ui, uint32_t now) { while (ui.painting()) ui.tick(now); }
+
 static void parity(Ui &ui, uint32_t now) {
+    settle(ui, now);
     std::array<uint16_t, LCD_WIDTH * LCD_HEIGHT> panel;
     std::copy_n(g_panel, panel.size(), panel.begin());
     CHECK_EQ(capture_begin(ui), true);
@@ -123,6 +126,7 @@ static void test_diag_counters() {
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
+        settle(ui, 1300);
         // Diag kit KvTable rows: value right-aligned to x218 in one 17 char box (x82), kSmall at row_y+4, rows at 24 + i*22.
         // Rows 1/2 print compact counts (10K, 999M, ">999M": at most 5 chars each), so the worst case
         // ">999M / >999M" is 13 chars, clear of the labels (S12 at x28).
@@ -138,11 +142,13 @@ static void test_diag_counters() {
     usb::stats.log_sent = 5000; usb::stats.log_dropped = 12;
     ui.set_rotation(0, 1400);
     ui.tick(1400);
+    settle(ui, 1400);
     check_text(ui, 146, 72, 218, 91, kSmall, "5000 / 12", kCaution, kBg);
     usb::stats = {};
     g_stub.caps.rx_count = 0;
     ui.set_rotation(0, 1500);   // right edge: logical == physical, exact pixel match
     ui.tick(1500);
+    settle(ui, 1500);
     check_text(ui, 178, 50, 218, 69, kSmall, "0 / 0", kText, kBg);
     parity(ui, 1500);
 }
@@ -159,6 +165,7 @@ static void test_emarker_unpowered_setup() {
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
+        settle(ui, 1300);
         const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters,
                                         kSlotLens, kPanelThickness).content;
         const int top = box.y + 22 * box.h / 240, bottom = box.y + 94 * box.h / 240;
@@ -182,6 +189,7 @@ static void test_pd_tabs_text() {
     // Source tab: the ID row is first (y 42), the PD summary row second (value column x 64, row y 62).
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
+        settle(ui, 1300);
         check_text(ui, 6, 67, 50, 82, kLabelFont, "PD", kDim, kBg);   // key at x 6, row_y+5
         parity(ui, 1300);
     }
@@ -190,6 +198,7 @@ static void test_pd_tabs_text() {
     ui.tick(1700);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1700);
+        settle(ui, 1700);
         check_text(ui, 32, 48, 220, 78, kMid, "NO CABLE READ", kText, kSurface);   // the verdict band (UI_SYSTEM 5.8)
         parity(ui, 1700);
     }
@@ -207,6 +216,7 @@ static void test_source_fixed_rows_wrap() {
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
+        settle(ui, 1300);
         // rows: ID (y 42), PD (62), Fixed (82), Fixed (102); value column x 64, text 3 px below the row top
         check_text(ui, 64, 85, 220, 104, kSmall, "5/9/12/15/18/20V", kVolt, kBg);
         check_text(ui, 64 + 16 * kSmall.adv, 85, 220, 104, kSmall, " 3A", kAmp, kBg);
@@ -256,6 +266,7 @@ static void test_trigger_ranges() {
     ui.tick(1300);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1300);
+        settle(ui, 1300);
         // The widest AVS row: text from x28, the power at the right edge (x182..214), on the focused row (y24..50).
         check_text(ui, 28, 30, 214, 49, kSmall, "AVS 25.5-51.1V 5A", kText, kFocusT);
         check_text(ui, 182, 30, 214, 49, kSmall, "255W", kWatt, kFocusT);
@@ -278,6 +289,7 @@ static void test_trigger_edit_caption() {
     ui.on_button(Button::Ok, ButtonEvent::Short, 1400);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 1400);
+        settle(ui, 1400);
         // VOLTAGE: the offer (the amps round to one decimal so the row fits) and its exact current limit in the table.
         check_text(ui, 72, 27, 224, 45, kSmall, "PPS 3.3-25.5V 6.4A", kText, kBg);
         check_text(ui, 72, 47, 224, 65, kSmall, "6.35A", kAmp, kBg);
@@ -321,6 +333,7 @@ static void test_live_measurements() {
                          : value.ma == 123450 ? "123A" : "OVR";
         for (uint8_t r = 0; r < 4; ++r) {
             ui.set_rotation(r, now);
+            settle(ui, now);
             check_text(ui, 84, value.y, 224, 151, *value.font, value.text, kAmp, kBg);   // the measured-A cell of the LIVE table
             check_menu_mini(ui, mini);
             parity(ui, now);
@@ -332,6 +345,7 @@ static void test_live_measurements() {
     ui.tick(now += 200);
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, now);
+        settle(ui, now);
         check_text(ui, 84, 91, 224, 111, kSmall, "2147483.65V", kVolt, kBg);
         check_menu_mini(ui, "10.0A");   // amps slot: 10000 mA fits, no OVR
         check_menu_mini(ui, "OVR", true);   // volts slot: INT32_MAX overflows

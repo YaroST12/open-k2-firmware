@@ -174,19 +174,21 @@ public:
     // The list sits at (0, y) and shows as many rows as fit above the footer with the open row counted. A different `ctx` than
     // the last bind (another page) restarts the window at the top; the same one keeps count and offset (repaint passes).
     void init(const Surface &s, int16_t y, RowFn fn, void *ctx);
-    void set_count(int n) { count_ = n < 0 ? 0 : n; }
-    void select(int index) { sel_ = index; }
+    void set_count(int n) { count_ = n < 0 ? 0 : n; list_.set_count(count_, false); }
+    void select(int index) { sel_ = index; list_.set_highlight(sel_); }
     int selected() const { return sel_; }
     int count() const { return count_; }
     int visible() const { return list_.state().visible; }
     const ListState &state() const { return list_.state(); }
+    void set_budget(PaintBudget *bg) { list_.set_budget(bg); }
     // Applies count and selection (the window follows the selection), repaints what changed. An idle call writes nothing.
-    void draw(uint32_t now_ms);
+    void draw(uint32_t now_ms, PaintBudget *bg = nullptr);
     void invalidate();   // after an erase, a capture pass or a page repaint
     void restart() { list_.set_offset(0); }   // a page with several lists on one binding (the wizard's stages): a new list starts on top
     // Clears the body around a default list (one at kBodyY): the strips above and below it. The list repaints every row it
     // owns (opaque rows, the tail strip), so a body fill under it would write those pixels twice.
     static void clear_body_around(const Surface &s);
+    void detach() { fn_ = nullptr; ctx_ = nullptr; count_ = 0; extra_ = -1; list_.invalidate(); }
 
 private:
     static void draw_row_cb(void *ctx, int index, const Rect &r, bool highlighted, Field &f);
@@ -217,6 +219,10 @@ constexpr int16_t kv_row_y(const KvLayout &l, int i) { return static_cast<int16_
 // The static part (Fieldbook receipt): keys in ink2, a dot leader from each key to the value column, white space
 // between the rows (the row lines stay owned, in the ground colour). `labels` holds n strings.
 void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, int n);
+// Single-row version for progressive drawing; draws trailing 1 px bottom line under row `i` when `trailing_line` is true.
+void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i, bool trailing_line);
+// Same as kv_ground for a single row `i`.
+void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i, const uint8_t *chars, uint32_t marks);
 // A receipt's dot leader: 2 x 2 px ink3 dots every kLeaderPitch px between x0 and x1 (the dot's top row is y).
 constexpr int16_t kLeaderPitch = 6, kLeaderDot = 2;
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y);
@@ -255,7 +261,7 @@ struct Ident {
 };
 static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside a place list's scroll lane");
 // Paints the band when its content hash moved from `sig` (or `full`); sig is updated.
-void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig);
+bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig, PaintBudget *bg = nullptr);
 // Initialises n value cells (white on kBg) at the layout's value box of each row.
 // `chars` (optional, n entries) narrows each cell to its own worst-case width; a right-aligned cell keeps the layout's right
 // edge (value_x + value_chars * advance), so a repaint never reaches a long key to its left.
@@ -289,9 +295,9 @@ class ActionCell {
 public:
     static constexpr int16_t kBarH = 4;
     void init(const Surface &s, int16_t y, int16_t h) { surf_ = s; y_ = y; h_ = h; invalidate(); }
-    void draw_idle(std::string_view verb, std::string_view hint);
+    bool draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg = nullptr);
     // `left_permille` 1000..0: the share of the window still left; `sub` is the line under the word.
-    void draw_armed(std::string_view word, std::string_view sub, int left_permille);
+    bool draw_armed(std::string_view word, std::string_view sub, int left_permille, PaintBudget *bg = nullptr);
     void invalidate() { e_.invalidate(); bar_px_ = -1; }
 
 private:

@@ -251,6 +251,7 @@ static void test_page() {
     // Open v13 at 3 px quiet 4 (the dispatcher validated it before calling the backend).
     ui.context().qrtest = {13, 3, 4};
     CHECK(ui.push_menu(Menu::QrTest, 1100));
+    for (uint32_t t = 1102; ui.painting(); t += 2) ui.tick(t);
     CHECK_EQ(int(ui.menu()), int(Menu::QrTest));
     CHECK_EQ(ui.page_index(), kMenuPageBase + static_cast<int>(Menu::QrTest));
     const QrTestPage &pg = ui.qrtest_page();
@@ -287,6 +288,7 @@ static void test_page() {
     // Re-show at another geometry: v25 at 2 px quiet 1 (the largest the panel can show).
     ui.context().qrtest = {25, 2, 1};
     CHECK(ui.push_menu(Menu::QrTest, 1300));
+    for (uint32_t t = 1302; ui.painting(); t += 2) ui.tick(t);
     const QrTestPage &pg2 = ui.qrtest_page();
     CHECK_EQ(pg2.modules(), 117);
     CHECK_EQ(int(pg2.link_len()), 1273);
@@ -297,6 +299,7 @@ static void test_page() {
     // A v11 show reads back through the independent reader as the link text.
     ui.context().qrtest = {11, 3, 4};
     CHECK(ui.push_menu(Menu::QrTest, 1500));
+    for (uint32_t t = 1502; ui.painting(); t += 2) ui.tick(t);
     const QrTestPage &pg3 = ui.qrtest_page();
     CHECK_EQ(pg3.modules(), 61);
     CHECK_EQ(int(pg3.link_len()), 321);
@@ -332,6 +335,7 @@ static void test_strip_stays_hidden_and_code_centred() {
         ui.tick(1000);
         ui.context().qrtest = {18, 2, 4};
         CHECK(ui.push_menu(Menu::QrTest, 1100));
+        for (uint32_t ts = 1102; ui.painting(); ts += 2) ui.tick(ts);
         const QrTestPage &pg = ui.qrtest_page();
         CHECK_EQ(pg.modules(), 89);
         const qrview::Plan p = qrview::plan_in(qrview::Area{}, 89, 0, 2, 4, 2);

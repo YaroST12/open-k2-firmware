@@ -260,6 +260,7 @@ static void check_against_oracle(Ui &ui, const char *name, uint32_t now_ms) {
 // Captures whatever is showing (page or submenu) and compares the stream with the LCD.
 static void test_screen(Ui &ui, const char *name, uint32_t now_ms) {
     ui.tick(now_ms);                                 // fills the dynamic fields from the stubs
+    while (ui.painting()) ui.tick(now_ms);
     std::vector<uint16_t> direct(g_panel, g_panel + 240 * 240);
     g_stub.reports.clear();
     g_sink_work = {};
@@ -715,15 +716,20 @@ static void test_emarker_menu_scenes() {
 namespace {
 uint32_t g_walk_t = 100000;
 
-void walk_settle(Ui &ui) { for (int i = 0; i < 4; ++i) ui.tick(g_walk_t += 120); }
+void walk_settle(Ui &ui) {
+    for (int i = 0; i < 4; ++i) ui.tick(g_walk_t += 120);
+    while (ui.painting()) ui.tick(g_walk_t);
+}
 
 // Goes to destination `b` and returns how many pixels differ from a clean paint of it at the same instant (a clear, then a
 // repaint: the repaint of an opaque page alone paints over what is there).
 int walk_switch_diff(Ui &ui, unsigned b) {
     ui.goto_page(kWalkDests[b].index, g_walk_t += 10);
+    while (ui.painting()) ui.tick(g_walk_t);
     const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
     k2::lcd::fill(kBg);
     ui.repaint(g_walk_t);
+    while (ui.painting()) ui.tick(g_walk_t);
     int diff = 0;
     for (size_t i = 0; i < got.size(); ++i) diff += got[i] != g_panel[i];
     return diff;
@@ -777,9 +783,11 @@ void test_switch_exact() {
                 ui.open_place(back ? place : k2::bench::Place::Meter, g_walk_t += 10);
                 walk_settle(ui);
                 ui.open_place(back ? k2::bench::Place::Meter : place, g_walk_t += 10);
+                while (ui.painting()) ui.tick(g_walk_t);
                 const std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
                 k2::lcd::fill(kBg);
                 ui.repaint(g_walk_t);
+                while (ui.painting()) ui.tick(g_walk_t);
                 int d = 0, x0 = 240, y0 = 240, x1 = -1, y1 = -1;
                 for (size_t i = 0; i < got.size(); ++i)
                     if (got[i] != g_panel[i]) {
@@ -874,10 +882,12 @@ void test_repaint_opaque() {
             k2::lcd::fill(kSentinel);
             const unsigned px0 = g_lcd_pixels, sent0 = g_meter_sent;
             ui.repaint(g_walk_t += 10);
+            while (ui.painting()) ui.tick(g_walk_t);
             const unsigned cleared = (g_lcd_pixels - px0) - (g_meter_sent - sent0);   // lcd::fill() pixels are not metered
             const std::vector<uint16_t> got(g_panel, g_panel + kScreen);
             k2::lcd::fill(kBg);
             ui.repaint(g_walk_t);
+            while (ui.painting()) ui.tick(g_walk_t);
             int diff = 0;
             for (size_t i = 0; i < got.size(); ++i) diff += got[i] != g_panel[i];
             const unsigned want_cleared = kWalkDests[b].opaque ? 0u : kScreen;

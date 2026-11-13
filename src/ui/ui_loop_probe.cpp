@@ -61,6 +61,8 @@ void LoopProbePage::enter() {
     note_.clear();
     note_until_ = 0;
     reload();
+    compose_steps();
+    compose_footer(ctx_.now);
 }
 
 // Paged away, popped or replaced while a run is live: end it (the runner restores every line and saves the record).

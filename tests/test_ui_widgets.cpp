@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <string.h>
 #include <string>
+#include <vector>
 
 using namespace k2;
 
@@ -434,6 +435,55 @@ static void test_status_bar_flow() {
     }
 }
 
+// The live readout through ReadoutShown repaints only the cells that changed: volts cells at kVoltX + 6i, amps at
+// kAmpX + 6i (right-aligned), chevron slot x 140..149. The pixels end equal to a whole repaint of the new reading.
+static void test_readout_delta() {
+    ReadoutShown a, b;
+    ReadoutShown::set(a.volts, "20.0V"); ReadoutShown::set(a.amps, "1.52A");
+    b = a;
+    CHECK_EQ(readout_delta(a, b).n, 0);                    // the same reading: nothing to send
+    ReadoutShown::set(b.volts, "20.1V");                   // one digit: cell 3 of the volts slot, kVoltX+18..+24
+    ReadoutDelta d = readout_delta(a, b);
+    CHECK_EQ(d.n, 1);
+    CHECK_EQ(d.span[0].x0, ReadoutShown::kVoltX + 18); CHECK_EQ(d.span[0].x1, ReadoutShown::kVoltX + 24);
+    ReadoutShown::set(b.amps, "1.6A");                     // shorter (right-aligned): cells 0..3 ("1.52A" -> " 1.6A")
+    b.flow = Arrow::Up;
+    d = readout_delta(a, b);
+    CHECK_EQ(d.n, 3);
+    CHECK_EQ(d.span[0].x0, ReadoutShown::kChevX); CHECK_EQ(d.span[0].x1, ReadoutShown::kChevX + 10);
+    CHECK_EQ(d.span[2].x0, ReadoutShown::kAmpX); CHECK_EQ(d.span[2].x1, ReadoutShown::kAmpX + 24);
+    CHECK_EQ(ReadoutShown::set(b.volts, "123456"), false);       // does not fit 5 cells
+    CHECK_EQ(ReadoutShown::set(b.volts, "\xC3\x97"), false);     // a multi-byte character
+
+    // Pixels: whole paint of reading 1, delta to reading 2 == whole paint of reading 2; only the changed cells were sent.
+    for (uint8_t r = 0; r < 4; ++r) {
+        clear(0x0004);
+        draw_status_left(kScr, false, Icon::Bolt, "X");
+        ReadoutShown shown;
+        draw_top_readout(kScr, StatusReadout::Live, "20.0V", "1.52A", Arrow::Idle, r, shown);
+        CHECK_EQ(shown.valid, true);
+        const unsigned before = g_lcd_pixels;
+        draw_top_readout(kScr, StatusReadout::Live, "20.1V", "1.6A", Arrow::Down, r, shown);
+        CHECK_EQ(g_lcd_pixels - before, (10u + 6u + 24u) * 12u);   // three spans, the 12 glyph rows only
+        std::vector<uint16_t> got(g_panel, g_panel + 240 * 240);
+        clear(0x0004);
+        draw_status_left(kScr, false, Icon::Bolt, "X");
+        draw_top_readout(kScr, StatusReadout::Live, "20.1V", "1.6A", Arrow::Down, r);
+        int diff = 0;
+        for (int i = 0; i < 240 * 240; i++) diff += got[i] != g_panel[i];
+        CHECK_EQ(diff, 0);
+    }
+    // Not live, or another rotation: the whole band (kChevX..kScr.w x (kBarH - 1), rows above the hairline).
+    ReadoutShown shown;
+    draw_top_readout(kScr, StatusReadout::Live, "20.0V", "1.52A", Arrow::Idle, 0, shown);
+    unsigned before = g_lcd_pixels;
+    draw_top_readout(kScr, StatusReadout::Live, "20.0V", "1.52A", Arrow::Idle, 1, shown);
+    CHECK_EQ(g_lcd_pixels - before, static_cast<unsigned>((kScr.w - ReadoutShown::kChevX) * (kBarH - 1)));
+    before = g_lcd_pixels;
+    draw_top_readout(kScr, StatusReadout::Stale, "20.0V", "1.52A", Arrow::Idle, 1, shown);
+    CHECK_EQ(g_lcd_pixels - before, static_cast<unsigned>((kScr.w - ReadoutShown::kChevX) * (kBarH - 1)));
+}
+
 // Tool template: the flow diagram column and the checklist card (geometry, then pixels).
 static void test_tool_widgets() {
     // Geometry of the 72 px diagram: ports 5 px inside the card, roles beside them, the line between.
@@ -547,6 +597,7 @@ int main() {
     test_role_badge();
     test_status_bar();
     test_status_bar_flow();
+    test_readout_delta();
     test_footer();
     test_footer_fit();
     test_geometry();

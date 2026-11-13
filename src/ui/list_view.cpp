@@ -44,17 +44,20 @@ void ListView::set_count(int n, bool redraw) {
     if (redraw) draw();
 }
 
-bool ListView::scroll(int delta, uint32_t now_ms) {
+bool ListView::scroll(int delta, uint32_t now_ms, PaintBudget *bg) {
     if (!st_.scroll(delta)) return false;
-    draw(now_ms);
+    draw(now_ms, bg);
     return true;
 }
 
-void ListView::draw(uint32_t now_ms) {
+void ListView::draw(uint32_t now_ms, PaintBudget *bg) {
+    PaintBudget *const b = bg ? bg : budget_;
     // Full-lane rows ran under the lane while the list did not overflow; a list that just started to overflow
     // paints its thumb over them (draw_bar), one that stopped must give the lane back to every row.
-    if (full_lane_ && bar_drawn_ && !st_.overflows())
+    if (full_lane_ && bar_drawn_ && !st_.overflows()) {
         for (int slot = 0; slot < st_.visible; slot++) state_[slot] = -1;
+        bar_drawn_ = false;
+    }
     // Rows span the surface (minus the lane while a thumb needs it); the focus expansion shifts the rows below it.
     const int16_t rw = static_cast<int16_t>(surf_.w - (full_lane_ && !st_.overflows() ? 0 : ListView::kBarW));
     const int hi_slot = highlight_ >= st_.first() && highlight_ < st_.count && highlight_ < st_.first() + st_.visible
@@ -69,6 +72,8 @@ void ListView::draw(uint32_t now_ms) {
         const bool same_row = state_[slot] == (hi ? 1 : 0) && last_index_[slot] == shown && slot_y_[slot] == sy;
         if (same_row && sig_[slot] == sig)
             continue;   // this slot already shows exactly this state: nothing to repaint
+        const int cost = static_cast<int>(rw) * (shown < 0 ? row_h_ : sh);
+        if (b && !b->admit(cost, true)) return;
         slot_y_[slot] = sy;
         if (shown < 0) {
             // Became empty: wipe the whole row once, the previous content must not stay. While
@@ -108,18 +113,24 @@ void ListView::draw(uint32_t now_ms) {
         // nobody and are wiped once (the rows themselves tile the rest).
         const int16_t used = static_cast<int16_t>(st_.visible * row_h_ + (hi_slot >= 0 ? extra_ : 0));
         if (used != tail_used_) {
-            if (hi_slot < 0) gfx_fill(surf_, 0, static_cast<int16_t>(y_ + used), rw, extra_, kBg);
+            if (hi_slot < 0) {
+                if (b && !b->admit(static_cast<int>(rw) * extra_, true)) return;
+                gfx_fill(surf_, 0, static_cast<int16_t>(y_ + used), rw, extra_, kBg);
+            }
             tail_used_ = used;
         }
     }
-    draw_bar(now_ms);
+    draw_bar(now_ms, b);
 }
 
-void ListView::draw_bar(uint32_t now_ms) {
+void ListView::draw_bar(uint32_t now_ms, PaintBudget *b) {
     const int16_t bx = static_cast<int16_t>(surf_.w - ListView::kBarW);
     const int16_t track_h = static_cast<int16_t>(st_.visible * row_h_ + extra_);
     if (!st_.overflows()) {
-        if (!full_lane_ && (bar_drawn_ || bar_count_ < 0)) gfx_fill(surf_, bx, y_, ListView::kBarW, track_h, kBg);
+        if (!full_lane_ && (bar_drawn_ || bar_count_ < 0)) {
+            if (b && !b->admit(ListView::kBarW * track_h, true)) return;
+            gfx_fill(surf_, bx, y_, ListView::kBarW, track_h, kBg);
+        }
         bar_drawn_ = false; bar_count_ = st_.count; bar_offset_ = st_.offset;
         bar_pos_ = bar_target_ = bar_drawn_pos_ = -1; bar_anim_start_ = 0;
         return;
@@ -147,8 +158,9 @@ void ListView::draw_bar(uint32_t now_ms) {
                                      static_cast<int>(kThumbAnimMs);
     }
     if (bar_drawn_ && bar_count_ == st_.count && bar_offset_ == st_.offset &&
-        bar_pos_ == bar_drawn_pos_ && !bar_anim_start_)
-        return;   // settled and unchanged: the thumb is already on screen
+        bar_pos_ == bar_drawn_pos_)
+        return;   // the thumb on screen is already at this position
+    if (b && !b->admit(ListView::kBarW * track_h, true)) return;
     gfx_fill(surf_, bx, y_, ListView::kBarW, track_h, kTrack);
     gfx_fill(surf_, bx, static_cast<int16_t>(y_ + bar_pos_), ListView::kBarW, static_cast<int16_t>(len), kThumb);
     bar_drawn_ = true; bar_count_ = st_.count; bar_offset_ = st_.offset; bar_drawn_pos_ = bar_pos_;

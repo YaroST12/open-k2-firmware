@@ -275,14 +275,18 @@ static void test_render() {
 static void test_repaint() {
     g_stub = {};
     static Ui ui;
-    ui.init(1000);
-    ui.tick(1100);
-    ui.repaint(1200);
+    std::uint32_t t = 1000;
+    ui.init(t);
+    while (ui.painting()) ui.tick(t += 20);
+    ui.tick(t += 100);
+    ui.repaint(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     static std::uint16_t before[240 * 240];
     std::memcpy(before, g_panel, sizeof before);
     bootscreen::draw(plus_boot(), 1);
     CHECK(std::memcmp(before, g_panel, sizeof before) != 0);
-    ui.repaint(1300);
+    ui.repaint(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     CHECK(std::memcmp(before, g_panel, sizeof before) == 0);
 }
 
