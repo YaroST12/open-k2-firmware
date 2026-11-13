@@ -636,6 +636,10 @@
   "639": "[TWIN] learn inline -> %u vid=%04x pdos=%u req=%u rev=%08x ext=%u\n",
   "640": "[IQ] t=%u TX type %u id %u rev %u: %s (%u us)\n",
   "641": "[IQ] t=%u Q %s id %u try %u: %s (device msgs %u, GoodCRC %u, charger msgs %u)\n",
-  "642": "[IQ] the charger Hard Resets when it is asked: asking this charger is not possible, stopped after the first reset\n"
+  "642": "[IQ] the charger Hard Resets when it is asked: asking this charger is not possible, stopped after the first reset\n",
+  "643": "[IQ] the charger renegotiates when it is asked: asking this charger is not possible, stopped at the first restart\n",
+  "644": "[IQ] end %s (%s)\n",
+  "645": "[IQ] contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X\n",
+  "646": "[IQ] counts: %u sent, %u device GoodCRC, resets %u sent %u seen\n"
  }
 }

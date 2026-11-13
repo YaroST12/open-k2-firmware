@@ -359,10 +359,12 @@ bool transmit_inline(const pd::TxMsg& m) {
     bool ok = false;
     pdtrace::TxResult res = pdtrace::TxResult::Timeout;
     std::uint8_t last_ia = 0;
-    int waited = 0;
-    for (int t = 0; t < 4; t++) {   // a 30-byte frame takes ~1.2 ms on the wire; the answer comes tens of ms later
-        delay_ms(1);
-        waited = t + 1;
+    // A 30-byte frame takes ~1.2 ms on the wire; the answer comes tens of ms later. The wait is timed on the microsecond
+    // clock: delay_ms(1) lasts ~2.7 ms (delay_us is a deliberately long nop loop), so a loop of four of them blocked the
+    // main loop for ~11.8 ms while the log said 4 ms (laptop recording 2026-11-13). Polls are 250 nominal us apart.
+    constexpr std::uint32_t kWaitUs = 4000;
+    while (std::uint32_t(systick::micros() - g_tx_start_us) < kWaitUs) {
+        systick::delay_us(250);
         std::uint8_t ia = 0;
         if (!rd(kInterruptA, ia)) continue;
         last_ia |= ia;
@@ -372,7 +374,7 @@ bool transmit_inline(const pd::TxMsg& m) {
     }
     wr(kControl3, kRetries3Auto);
     g_tx_timed_out = res == pdtrace::TxResult::Timeout;
-    pdtrace::tx_result(res, std::uint32_t(waited), last_ia);
+    pdtrace::tx_result(res, (std::uint32_t(systick::micros() - g_tx_start_us) + 500u) / 1000u, last_ia);
     K2LOG("[IQ] t=%u TX type %u id %u rev %u: %s (%u us)\n", unsigned(systick::millis()), unsigned(m.header & 0x1F),
           unsigned((m.header >> 9) & 7), unsigned((m.header >> 6) & 3), ok ? "sent" : "no TXSENT",
           unsigned(systick::micros() - g_tx_start_us));
@@ -2036,11 +2038,15 @@ void iq_report() {
     if (s.why == pd::IqWhy::SourceResets) {
         K2LOG("[IQ] the charger Hard Resets when it is asked: asking this charger is not possible, stopped after the first reset\n");
     }
-    K2LOG("[IQ] end %s (%s), contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X, %u sent, %u device GoodCRC, "
-          "resets %u sent %u seen\n",
-          pd::iq_phase_name(s.phase), pd::iq_why_name(s.why), pd::iq_match_name(s.match), unsigned(s.asked_mask), unsigned(s.ok_mask),
-          unsigned(s.refused_mask), unsigned(s.silent_mask), unsigned(s.sent), unsigned(s.dev_acks), unsigned(s.resets_sent),
-          unsigned(s.resets_seen));
+    if (s.why == pd::IqWhy::SourceRestarts) {
+        K2LOG("[IQ] the charger renegotiates when it is asked: asking this charger is not possible, stopped at the first restart\n");
+    }
+    // Three lines: a binary log entry holds 63 bytes, and the longest why and match words are 27 characters each.
+    K2LOG("[IQ] end %s (%s)\n", pd::iq_phase_name(s.phase), pd::iq_why_name(s.why));
+    K2LOG("[IQ] contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X\n", pd::iq_match_name(s.match),
+          unsigned(s.asked_mask), unsigned(s.ok_mask), unsigned(s.refused_mask), unsigned(s.silent_mask));
+    K2LOG("[IQ] counts: %u sent, %u device GoodCRC, resets %u sent %u seen\n", unsigned(s.sent), unsigned(s.dev_acks),
+          unsigned(s.resets_sent), unsigned(s.resets_seen));
     K2LOG("[IQ] contracts: first pos %u RDO 0x%08X PDO 0x%08X, second pos %u RDO 0x%08X PDO 0x%08X\n", unsigned(s.first.pos),
           unsigned(s.first.rdo), unsigned(s.first.src_pdo), unsigned(s.second.pos), unsigned(s.second.rdo), unsigned(s.second.src_pdo));
     K2LOG("[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n", unsigned(s.id.vid),

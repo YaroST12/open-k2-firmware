@@ -30,6 +30,7 @@ namespace {
 std::vector<std::string> g_log;        // ordered: GPIO and chip register events
 std::vector<std::string> g_usb_fmt;    // the raw K2LOG format strings (usb::log_fmt), for fixed-text-in-format checks
 std::uint32_t g_ms = 1000;
+unsigned g_delay_ms_calls = 0;   // systick::delay_ms() calls (it lasts ~2.7 ms on the chip: a timed wait must not use it)
 bool g_pin[3];                          // PC13, PC14, PC15
 std::uint8_t g_reg[256];
 int g_line_mv = 1600;   // level of the measured line when STATUS0.COMP is armed (a source Rp over a sink Rd)
@@ -233,7 +234,7 @@ bool read(Bus, std::uint8_t, std::uint8_t reg, std::span<std::uint8_t> out) {
 namespace systick {
 std::uint32_t millis() { return g_ms; }
 std::uint32_t micros() { return g_ms * 1000u; }
-void delay_ms(std::uint32_t ms) { g_ms += ms; }
+void delay_ms(std::uint32_t ms) { g_delay_ms_calls++; g_ms += ms; }
 void delay_us(std::uint32_t us) { g_ms += (us + 999u) / 1000u; }
 }  // namespace systick
 
@@ -5497,9 +5498,11 @@ void test_inline_interrogation_asks_once_per_question_without_auto_crc() {
     CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::None));
     CHECK_EQ(fusb302::interrogate_running(), true);
     CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::Running));   // one at a time
+    const unsigned delays_before = g_delay_ms_calls;
     for (int i = 0; i < 600 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
     std::vector<unsigned> h = tx_headers();
     CHECK_EQ(h.size(), 1u);
+    CHECK_EQ(g_delay_ms_calls, delays_before);                             // the wait after the frame is timed on micros(), not on delay_ms()
     CHECK_EQ(hard_reset_written(), false);                                 // a fresh contract: no first reset
     CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 3u);                        // the source's next MessageID
     CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 8u);                            // Get_Sink_Cap first: the VDMs go last (a source can reset on one)
