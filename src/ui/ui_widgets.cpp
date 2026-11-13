@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_widgets.hpp"
+#include "k2/core/hot.h"
 #include "k2/ui/ui_types.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/text.hpp"
@@ -18,7 +19,7 @@ namespace {
 constexpr int kMaxW = kScreenW;
 constexpr int kReadoutX = 140;   // the top bar's right-hand readout area starts here (draw_top_readout)
 
-bool fits(const Surface &s, int x, int y, int w, int h) {
+K2_HOT bool fits(const Surface &s, int x, int y, int w, int h) {
     return x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= s.w && y + h <= s.h;
 }
 
@@ -26,20 +27,20 @@ struct BandRow {
     uint16_t pixels[kScreenW];
     int origin, width, y;
 
-    void fill(int x, int w, uint16_t color) {
+    K2_HOT void fill(int x, int w, uint16_t color) {
         const int first = std::max(x - origin, 0);
         const int last = std::min(x + w - origin, width);
         for (int i = first; i < last; i++) pixels[i] = color;
     }
 
-    void text(const Font &font, int x, int top, std::string_view value, uint16_t fg, uint16_t bg) {
+    K2_HOT void text(const Font &font, int x, int top, std::string_view value, uint16_t fg, uint16_t bg) {
         if (y < top || y >= top + font.height || x < origin || x >= origin + width) return;
         uint16_t lut[16];
         make_blend_lut(fg, bg, lut);
         render_row(font, value, y - top, lut, pixels + x - origin, origin + width - x);
     }
 
-    void icon(int x, int top, Icon icon, uint16_t fg, uint16_t bg) {
+    K2_HOT void icon(int x, int top, Icon icon, uint16_t fg, uint16_t bg) {
         if (y < top || y >= top + kIconSize) return;
         const uint16_t bits = kIconBits[static_cast<int>(icon)][y - top];
         for (int c = 0; c < kIconSize; c++)
@@ -47,7 +48,7 @@ struct BandRow {
     }
 
     // One row of the physical chevron whose top-left is (x, top); a no-op outside its rows.
-    void chevron(int x, int top, bool toward_top, unsigned rotation, uint16_t color) {
+    K2_HOT void chevron(int x, int top, bool toward_top, unsigned rotation, uint16_t color) {
         const int r = y - top;
         if (r < 0 || r >= physical_chevron_h(rotation)) return;
         const unsigned bits = physical_chevron_row(toward_top, rotation, r);
@@ -55,7 +56,7 @@ struct BandRow {
             if (bits >> c & 1) fill(x + c, 1, color);
     }
 
-    void last_pill(std::string_view value) {
+    K2_HOT void last_pill(std::string_view value) {
         const TextBounds tb = badge_text_bounds(kLabelFont, value);
         const int w = tb.w + 8;
         const int x = 222 - w;
@@ -75,7 +76,7 @@ struct BandClip {
 };
 
 template <class Paint>
-void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = kScreenW, BandClip clip = {}) {
+K2_HOT void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = kScreenW, BandClip clip = {}) {
     const int width = std::min<int>(s.w - x, std::min<int>(kScreenW, max_w));
     h = std::min<int>(h, s.h - y);
     if (x < 0 || y < 0 || width <= 0 || h <= 0) return;
@@ -103,7 +104,7 @@ void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = k
 }
 
 // Fill row `i` of a rounded rectangle, merging runs of rows that share an inset into one fill.
-void span(const Surface &s, int x, int y, int w, int h, int r, uint16_t color, int i0, int i1) {
+K2_HOT void span(const Surface &s, int x, int y, int w, int h, int r, uint16_t color, int i0, int i1) {
     int i = i0;
     while (i < i1) {
         const int in = round_row_inset(r, h, i);
@@ -117,7 +118,7 @@ void span(const Surface &s, int x, int y, int w, int h, int r, uint16_t color, i
 
 }  // namespace
 
-void fill_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, uint16_t color) {
+K2_HOT void fill_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, uint16_t color) {
     span(s, x, y, w, h, r, color, 0, h);
 }
 
@@ -140,7 +141,7 @@ void fill_round_hole(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t 
     }
 }
 
-void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, int t, uint16_t color) {
+K2_HOT void frame_round(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int r, int t, uint16_t color) {
     if (w <= 2 * t || h <= 2 * t) { fill_round(s, x, y, w, h, r, color); return; }
     const int ro = (r * 2 > h) ? h / 2 : r;
     const int ri = ro > t ? ro - t : 0;
@@ -171,7 +172,7 @@ void draw_bar_label(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
     }
 }
 
-void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg) {
+K2_HOT void draw_icon(const Surface &s, int16_t x, int16_t y, Icon icon, uint16_t fg, uint16_t bg) {
     if (!fits(s, x, y, kIconSize, kIconSize)) return;
     const uint16_t *rows = kIconBits[static_cast<int>(icon)];
     uint16_t line[kIconSize];
@@ -355,7 +356,7 @@ void draw_port_female(const Surface &s, int16_t x, int16_t y, uint16_t color) {
     gfx_fill(s, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 3), 10, 2, color);
 }
 
-void draw_sparkline(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *samples,
+K2_HOT void draw_sparkline(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *samples,
                     uint16_t color, uint16_t tint, uint16_t bg) {
     if (!fits(s, x, y, w, h) || w > kMaxW) return;
     uint16_t line[kMaxW];
@@ -380,7 +381,7 @@ void draw_sparkline(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h
     lcd::stream_end();
 }
 
-void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, int xs, int16_t h, const uint8_t *lo,
+K2_HOT void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, int xs, int16_t h, const uint8_t *lo,
                       const uint8_t *hi, uint8_t mark_a, uint16_t ca, uint8_t mark_b, uint16_t cb, uint16_t color,
                       uint16_t bg) {
     const int w = cols * xs;
@@ -400,7 +401,7 @@ void draw_range_trace(const Surface &s, int16_t x, int16_t y, int cols, int xs, 
     lcd::stream_end();
 }
 
-void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {
+K2_HOT void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DEF) {
     const int16_t fy = static_cast<int16_t>(s.h - 18);   // the footer hugs the content bottom (kFooterY on a full-height surface)
     const FooterStyle st = footer_style(tone);
     char buf[kFitBuf];                                  // a footer that would run off the surface ends in "..."
@@ -433,7 +434,7 @@ void IconCell::draw(Icon icon, uint16_t fg, uint16_t bg) {
 // Fieldbook masthead: no fill (the band is the ground), the 12 px icon at x8, the title in font 16 at x8 (x26 behind
 // the icon) or, when that would not fit before the badge or the readout, in font 12; an exception badge (a held Rd pin)
 // right-aligned to `right` behind a 1 px rule; the accent rule under it (row kBarH-1; draw_top_bar adds the second row).
-void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_view title, int16_t right,
+K2_HOT void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_view title, int16_t right,
                       std::string_view badge, bool readout_follows) {
     char buf[kFitBuf];
     const int badge_w = static_cast<int>(badge.size() * kLabelAdv);
@@ -460,9 +461,9 @@ void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_vi
 // capture passes (which redraw once per strip) leave different pixels behind than a plain tick.
 namespace {
 constexpr int kSlotPx = ReadoutShown::kCells * kLabelAdv;
-std::string_view slot_text(std::string_view value) { return text_width(kLabelFont, value) > kSlotPx ? "OVR" : value; }
+K2_HOT std::string_view slot_text(std::string_view value) { return text_width(kLabelFont, value) > kSlotPx ? "OVR" : value; }
 
-void readout_row(BandRow &row, StatusReadout mode, std::string_view v, std::string_view a, Arrow flow, uint8_t rotation,
+K2_HOT void readout_row(BandRow &row, StatusReadout mode, std::string_view v, std::string_view a, Arrow flow, uint8_t rotation,
                  std::string_view last_text) {
     if (mode == StatusReadout::Live) {
         if (flow != Arrow::Idle) {   // slot x 140..149, centred on the 12 px text rows
@@ -485,7 +486,7 @@ void readout_row(BandRow &row, StatusReadout mode, std::string_view v, std::stri
 }
 }  // namespace
 
-void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps,
+K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps,
                       Arrow flow, uint8_t rotation, std::string_view last_text) {
     const std::string_view v = slot_text(volts), a = slot_text(amps);
     if (mode == StatusReadout::Live) {
@@ -495,7 +496,7 @@ void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view vol
     draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) { readout_row(row, mode, v, a, flow, rotation, last_text); });
 }
 
-void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps, Arrow flow,
+K2_HOT void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps, Arrow flow,
                       uint8_t rotation, ReadoutShown &shown) {
     ReadoutShown now;
     now.mode = mode;

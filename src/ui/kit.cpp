@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/kit.hpp"
+#include "k2/core/hot.h"
 #include "k2/core/math_opt.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_viewport.hpp"
@@ -22,7 +23,7 @@ void outline(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int16
 }
 
 // Text centred in a box (x, w) on the line whose top is `y`.
-void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t y, std::string_view text, uint16_t fg, uint16_t bg) {
+K2_HOT void centred_text(const Surface &s, const Font &f, int16_t x, int16_t w, int16_t y, std::string_view text, uint16_t fg, uint16_t bg) {
     char buf[kFitBuf];
     const std::string_view t = fit_text(f, text, w, buf);
     gfx_text(s, f, static_cast<int16_t>(x + (w - text_width(f, t)) / 2), y, t, fg, bg);
@@ -32,7 +33,7 @@ constexpr int kMaxHoles = 6;
 }  // namespace
 
 // The comment in kit.hpp. Holes are clipped to `r` and may touch; the bands between their edges are filled left to right.
-void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color) {
+K2_HOT void fill_except(const Surface &s, Box r, const Box *holes, int n, uint16_t color) {
     // A scaled page: a glyph keeps its native size, so it covers only the native w x h from its hole's mapped corner, not the
     // whole stretched hole. Each hole shrinks to the part whose mapping stays inside that native box (whatever paints the hole
     // covers at least that much); the rest of the hole gets the ground and the painter goes over it.
@@ -159,7 +160,7 @@ void draw_key_slot(const Surface &s, bool column, TextDir dir, unsigned slot, co
     }
 }
 
-void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint16_t bg) {
+K2_HOT void paint_texts(const Surface &s, Box ground, const TextRun *runs, int n, uint16_t bg) {
     Box holes[kMaxHoles];
     int m = 0;
     for (int i = 0; i < n && m < kMaxHoles; i++)
@@ -175,7 +176,7 @@ struct LabelLayout {
     std::string_view text;
     Box hole;
 };
-LabelLayout label_layout(int16_t x, int16_t y, int16_t w, int16_t h, std::string_view label, char (&buf)[kFitBuf]) {
+K2_HOT LabelLayout label_layout(int16_t x, int16_t y, int16_t w, int16_t h, std::string_view label, char (&buf)[kFitBuf]) {
     const Font &f = h >= 22 ? kSmall : kLabelFont;
     const std::string_view t = fit_text(f, label, w, buf);
     const int16_t tw = static_cast<int16_t>(text_width(f, t));
@@ -184,7 +185,7 @@ LabelLayout label_layout(int16_t x, int16_t y, int16_t w, int16_t h, std::string
 
 // The strike of a struck text drawn with font `f` at (tx, ty) and tw wide: one pixel row through the middle of the x-height, the
 // text width plus 1 px each side, clipped to the columns [cx, cx + cw). It is painted over the text, after it.
-Box strike_line(const Font &f, int16_t tx, int16_t ty, int16_t tw, int16_t cx, int16_t cw) {
+K2_HOT Box strike_line(const Font &f, int16_t tx, int16_t ty, int16_t tw, int16_t cx, int16_t cw) {
     const Glyph *gx = find_glyph(f, 'x');
     const int xh = gx ? gx->top : f.ascent * 2 / 3;
     int16_t x0 = static_cast<int16_t>(tx - 1), x1 = static_cast<int16_t>(tx + tw + 1);
@@ -211,7 +212,7 @@ void draw_struck_text(const Surface &s, const Font &f, int16_t x, int16_t y, std
 // ---- VerdictCell --------------------------------------------------------------------------------------------------------
 namespace {
 // A t px frame of the box in `ink`: top and bottom full width, the sides between them (each pixel once).
-void frame_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int16_t t, uint16_t ink) {
+K2_HOT void frame_box(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, int16_t t, uint16_t ink) {
     if (w <= 2 * t || h <= 2 * t) { gfx_fill(s, x, y, w, h, ink); return; }
     gfx_fill(s, x, y, w, t, ink);
     gfx_fill(s, x, static_cast<int16_t>(y + h - t), w, t, ink);
@@ -304,7 +305,7 @@ void draw_progress_rule(const Surface &s, int step, int segs) {
     }
 }
 
-void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge, bool readout_follows, int segs) {
+K2_HOT void draw_top_bar(const Surface &s, std::string_view title, int step, std::string_view badge, bool readout_follows, int segs) {
     char buf[40];
     size_t n = 0;
     if (step >= 1 && step <= segs) {
@@ -416,7 +417,7 @@ void RowList::clear_body_around(const Surface &s) {
     gfx_fill(s, 0, kListBottom, s.w, static_cast<int16_t>(kFooterY - kListBottom), kBg);
 }
 
-uint32_t RowList::row_sig_cb(void *ctx, int index) {
+K2_HOT uint32_t RowList::row_sig_cb(void *ctx, int index) {
     auto *self = static_cast<RowList *>(ctx);
     RowSpec r;
     const bool focused = index == self->sel_;
@@ -434,7 +435,7 @@ uint32_t RowList::row_sig_cb(void *ctx, int index) {
     return h;
 }
 
-void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &) {
+K2_HOT void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &) {
     auto *self = static_cast<RowList *>(ctx);
     const Surface &s = self->surf_;
     RowSpec sp;
@@ -522,7 +523,7 @@ void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &)
     if (!note_v.empty()) gfx_text(s, kLabelFont, kTextX, static_cast<int16_t>(y + kNoteDy), note_v, dim, bg);
 }
 
-void RowList::draw(uint32_t now_ms, PaintBudget *bg) {
+K2_HOT void RowList::draw(uint32_t now_ms, PaintBudget *bg) {
     if (!fn_) { if (bg) bg->defer(); return; }
     list_.set_count(count_, false);
     list_.set_highlight(sel_);
@@ -554,7 +555,7 @@ void RowList::draw(uint32_t now_ms, PaintBudget *bg) {
 }
 
 // ---- KvTable -------------------------------------------------------------------------------------------------------------
-void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i, bool trailing_line) {
+K2_HOT void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i, bool trailing_line) {
     const Font &f = font_or_small(l.label_font);
     const int16_t y = kv_row_y(l, i);
     gfx_fill(s, 0, y, s.w, 1, kBg);   // Fieldbook receipt: white space, no hairline (the row stays owned)
@@ -618,7 +619,7 @@ int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view tex
     return w;
 }
 
-void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t ink, uint16_t bg) {
+K2_HOT void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t ink, uint16_t bg) {
     for (int16_t x = x0; x < x1; x = static_cast<int16_t>(x + kDashOn + kDashOff)) {
         const int16_t on = static_cast<int16_t>(std::min<int>(kDashOn, x1 - x));
         gfx_fill(s, x, y, on, 1, ink);
@@ -683,7 +684,7 @@ void fill_list_gap(const Surface &s, int16_t y) {
     if (end < kListBottom) gfx_fill(s, 0, end, s.w, static_cast<int16_t>(kListBottom - end), kBg);
 }
 
-void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {
+K2_HOT void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const uint8_t *chars) {
     const Font &f = font_or_small(l.value_font);
     for (int i = 0; i < n; i++) {
         const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
@@ -692,7 +693,7 @@ void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const ui
     }
 }
 
-void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i, const uint8_t *chars, uint32_t marks) {
+K2_HOT void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i, const uint8_t *chars, uint32_t marks) {
     const Font &kf = font_or_small(l.label_font), &vf = font_or_small(l.value_font);
     const int16_t y = kv_row_y(l, i);
     const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
@@ -710,7 +711,7 @@ void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, i
     for (int i = 0; i < n; i++) kv_ground_row(s, l, labels[i], i, chars, marks);
 }
 
-void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
+K2_HOT void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
             bool ours K2_TRUNC_DEF) {
     const Font &kf = font_or_small(l.label_font), &vf = font_or_small(l.value_font);
     char buf[kFitBuf];

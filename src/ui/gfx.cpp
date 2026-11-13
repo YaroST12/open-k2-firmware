@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/gfx.hpp"
+#include "k2/core/hot.h"
 #include "k2/ui/blend.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/ui/ui_viewport.hpp"
@@ -11,7 +12,7 @@ namespace k2 {
 
 namespace { constexpr int kMaxLineH = 32; }
 
-void gfx_fill(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+K2_HOT void gfx_fill(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     if (x < 0) { w = static_cast<int16_t>(w + x); x = 0; }
     if (y < 0) { h = static_cast<int16_t>(h + y); y = 0; }
     if (x + w > s.w) w = static_cast<int16_t>(s.w - x);
@@ -21,7 +22,7 @@ void gfx_fill(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint
                      static_cast<uint16_t>(w), static_cast<uint16_t>(h), color);
 }
 
-Rect gfx_native_rect(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h) {
+K2_HOT Rect gfx_native_rect(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h) {
     if (x < 0 || y < 0) return {0, 0, 0, 0};
     if (x + w > s.w) w = static_cast<int16_t>(s.w - x);
     if (y + h > s.h) h = static_cast<int16_t>(s.h - y);
@@ -30,18 +31,18 @@ Rect gfx_native_rect(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t 
         {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, h});
 }
 
-void gfx_fill_panel(const Rect &r, uint16_t color) {
+K2_HOT void gfx_fill_panel(const Rect &r, uint16_t color) {
     if (r.w <= 0 || r.h <= 0) return;
     ContentViewport::Pause unscaled;   // the box is already in panel pixels: draw it directly
     lcd::fill_rect(static_cast<uint16_t>(r.x), static_cast<uint16_t>(r.y),
                    static_cast<uint16_t>(r.w), static_cast<uint16_t>(r.h), color);
 }
 
-void gfx_fill_native(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+K2_HOT void gfx_fill_native(const Surface &s, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     gfx_fill_panel(gfx_native_rect(s, x, y, w, h), color);
 }
 
-void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
+K2_HOT void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
               uint16_t fg, uint16_t bg, int16_t cell_offset K2_TRUNC_DEF) {
     if (x < 0 || y < 0 || x >= s.w || y >= s.h || text.empty()) return;
     int px = text_width(f, text);
@@ -82,7 +83,7 @@ void gfx_text(const Surface &s, const Font &f, int16_t x, int16_t y, std::string
     lcd::stream_end();
 }
 
-void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
+K2_HOT void gfx_text_rot(const Surface &s, const Font &f, int16_t x, int16_t y, std::string_view text,
                   uint16_t fg, uint16_t bg, TextDir dir K2_TRUNC_DEF) {
     const int tw = text_width(f, text);
     if (text.empty()) return;
@@ -115,13 +116,13 @@ void Field::init(const Surface &s, const Font &f, int16_t x, int16_t y, uint8_t 
     valid_ = false;
 }
 
-void Field::set_colors(uint16_t fg, uint16_t bg) {
+K2_HOT void Field::set_colors(uint16_t fg, uint16_t bg) {
     if (fg != fg_ || bg != bg_) valid_ = false;
     fg_ = fg;
     bg_ = bg;
 }
 
-void Field::draw(std::string_view text K2_TRUNC_DEF) {
+K2_HOT void Field::draw(std::string_view text K2_TRUNC_DEF) {
     char next[kMaxChars + 1];
     if (text.size() > chars_) K2_TRUNC_NOTE(trunc::Kind::Cut, text, width_px());   // a field never wraps or grows
     size_t len = text.size() < chars_ ? text.size() : chars_;

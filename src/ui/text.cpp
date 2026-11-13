@@ -2,9 +2,11 @@
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/text.hpp"
 
+#include "k2/core/hot.h"
+
 namespace k2 {
 
-uint32_t next_codepoint(std::string_view s, size_t &i) {
+K2_HOT uint32_t next_codepoint(std::string_view s, size_t &i) {
     const auto b0 = static_cast<uint8_t>(s[i++]);
     if (b0 < 0x80) return b0;
     int extra;
@@ -20,7 +22,7 @@ uint32_t next_codepoint(std::string_view s, size_t &i) {
     return cp;
 }
 
-static const Glyph *lookup(const Font &f, uint32_t cp) {
+K2_HOT static const Glyph *lookup(const Font &f, uint32_t cp) {
     if (cp > 0xFFFF) return nullptr;
     if (cp - 0x20 < f.dense) return &f.glyphs[cp - 0x20];       // the leading run is indexed directly
     const size_t sparse = f.count - f.dense;
@@ -47,24 +49,24 @@ struct Pix {
     uint8_t lvl = 0;     // level of the current run
     uint8_t left = 0;    // pixels of the current run not handed out yet
 
-    uint8_t nibble() {
+    K2_HOT uint8_t nibble() {
         if (!lo) { lo = true; return *p >> 4; }
         lo = false;
         return *p++ & 0x0F;
     }
-    void token() {
+    K2_HOT void token() {
         const uint8_t t = nibble();
         if (t) { lvl = t; left = 1; return; }
         const uint8_t n = nibble();
         if (n < zmax) { lvl = 0; left = n + 1; }
         else { lvl = 15; left = n - zmax + 3; }
     }
-    uint8_t next() {
+    K2_HOT uint8_t next() {
         if (!left) token();
         left--;
         return lvl;
     }
-    void skip(int n) {
+    K2_HOT void skip(int n) {
         while (n > 0) {
             if (!left) token();
             const int t = left < n ? left : n;
@@ -76,7 +78,7 @@ struct Pix {
 
 // A reader placed on pixel (gx, gy) of a glyph: add up the lengths of the 8-row groups above gy, then
 // scan the tokens of the rows of its group that precede it (at most 7 rows plus gx pixels).
-Pix open_at(const Font &f, const Glyph &g, int gx, int gy) {
+K2_HOT Pix open_at(const Font &f, const Glyph &g, int gx, int gy) {
     const uint8_t *len = f.bitmap + g.offset;
     const uint8_t *group = len + ((g.h + 7) >> 3) - 1;   // the length bytes come first
     for (int k = gy >> 3; k > 0; k--) group += *len++;
@@ -87,20 +89,20 @@ Pix open_at(const Font &f, const Glyph &g, int gx, int gy) {
 
 }  // namespace
 
-const Glyph *find_glyph(const Font &f, uint32_t cp) {
+K2_HOT const Glyph *find_glyph(const Font &f, uint32_t cp) {
     const Glyph *g = lookup(f, cp);
     if (g) return g;
     g_missing_glyphs++;
     return lookup(f, '?');
 }
 
-int text_width(const Font &f, std::string_view s) {
+K2_HOT int text_width(const Font &f, std::string_view s) {
     int n = 0;
     for (size_t i = 0; i < s.size();) { next_codepoint(s, i); n++; }
     return n * f.adv;
 }
 
-TextBounds badge_text_bounds(const Font &f, std::string_view s) {
+K2_HOT TextBounds badge_text_bounds(const Font &f, std::string_view s) {
     const Glyph *cap = lookup(f, 'H');
     const int cap_y0 = cap ? f.ascent - cap->top : 0;
     const int cap_h = cap ? cap->h : f.height;
@@ -123,7 +125,7 @@ TextBounds badge_text_bounds(const Font &f, std::string_view s) {
     return {min_x, max_x - min_x, has_cap ? cap_y0 : min_y, has_cap ? cap_h : (max_y - min_y)};
 }
 
-int render_row_span(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
+K2_HOT int render_row_span(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
                     uint16_t *out, int x0, int count) {
     const int width = text_width(f, s);
     const int x1 = x0 + count < width ? x0 + count : width;   // one past the last column served
@@ -155,12 +157,12 @@ int render_row_span(const Font &f, std::string_view s, int row, const uint16_t (
     return n;
 }
 
-int render_row(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
+K2_HOT int render_row(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
                uint16_t *out, int max_px) {
     return render_row_span(f, s, row, lut, out, 0, max_px);
 }
 
-int render_column(const Font &f, std::string_view s, int col, const uint16_t (&lut)[16], uint16_t *out) {
+K2_HOT int render_column(const Font &f, std::string_view s, int col, const uint16_t (&lut)[16], uint16_t *out) {
     for (int y = 0; y < f.height; y++) out[y] = lut[0];
     if (col < 0) return f.height;
     size_t i = 0;
@@ -188,7 +190,7 @@ int render_column(const Font &f, std::string_view s, int col, const uint16_t (&l
     }
 }
 
-void render_rotated_row(const Font &f, std::string_view s, TextDir d, int sy, const uint16_t (&lut)[16],
+K2_HOT void render_rotated_row(const Font &f, std::string_view s, TextDir d, int sy, const uint16_t (&lut)[16],
                         uint16_t *out) {
     const int text_w = text_width(f, s);
     // Window row sy shows source column sx-independent: Ccw -> column text_w-1-sy read top-down,

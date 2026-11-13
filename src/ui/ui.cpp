@@ -3,6 +3,7 @@
 #include "k2/ui/ui.hpp"
 #include "k2/battery/battery_hw.hpp"
 #include "k2/core/gap_meter.hpp"
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/core/loop_guard.hpp"
 #include "k2/core/paint_meter.hpp"
@@ -537,7 +538,7 @@ bool Ui::clear_for_incoming(uint32_t now_ms, PageIf &outgoing, bool incoming_opa
     return !incoming_opaque;
 }
 
-void Ui::pump_paint(uint32_t now_ms) {
+K2_HOT void Ui::pump_paint(uint32_t now_ms) {
     PaintBudget *const bg = ctx_.budget;
     if (clear_pending_) {
         if (clear_full_lcd_) {
@@ -689,7 +690,7 @@ bool Ui::pop_menu(uint32_t now_ms) {
 // Button label panel
 // ---------------------------------------------------------------------------------------
 
-void Ui::draw_slot(unsigned slot) {
+K2_HOT void Ui::draw_slot(unsigned slot) {
     ContentViewport::Pause unscaled_labels;
     const Button b = slot_button(orient_, slot);
     const Button action = oriented_button(b, orient_.rotation, rotate_buttons_);
@@ -709,7 +710,7 @@ void Ui::draw_panel() {
 }
 
 // FNV-1a over the label texts and the dim flag of what the current page shows in this slot.
-uint32_t Ui::slot_sig(unsigned slot) {
+K2_HOT uint32_t Ui::slot_sig(unsigned slot) {
     const Button physical = slot_button(orient_, slot);
     const SlotLabel lab = current().labels().b[static_cast<int>(oriented_button(physical, orient_.rotation, rotate_buttons_))];
     uint32_t h = 2166136261u;
@@ -1279,7 +1280,7 @@ void Ui::refresh(uint32_t now_ms) {
     pump_paint(now_ms);
 }
 
-void Ui::repaint(uint32_t now_ms) {
+K2_HOT void Ui::repaint(uint32_t now_ms) {
     BudgetScope scope(*this);
     hold_shown_ = false;
     // An opaque page paints every pixel of the content and the strip every pixel of its slots (the switch into one skips the
@@ -1293,7 +1294,7 @@ void Ui::repaint(uint32_t now_ms) {
     redraw(now_ms);
 }
 
-UiAction Ui::tick(uint32_t now_ms) {
+K2_HOT UiAction Ui::tick(uint32_t now_ms) {
     BudgetScope scope(*this);
     gap::ui.note(now_ms);
     if (requested_rotation_ < 4) {
