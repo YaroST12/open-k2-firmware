@@ -247,6 +247,42 @@ static void test_sop_pp_is_ignored() {
     emk_spoof::disarm();
 }
 
+// The run-scoped arm (the interrogation's spoof): it works while the link is inline, the generic arm still refuses there, and
+// both disarm the same way.
+static void test_run_scoped_arm() {
+    sent.clear();
+    send_ok = true;
+    inline_mode = true;
+    const std::uint8_t di[4] = {0x01, 0xA0, 0x00, 0xFF};
+    const emrec::Record a = sample(2);
+    auto invalid = a; invalid[0] ^= 1;
+    CHECK_EQ(emk_spoof::usable(a, emk_quirk::Quirks{}), true);
+    CHECK_EQ(emk_spoof::usable(invalid, emk_quirk::Quirks{}), false);
+    emk_quirk::Quirks bad;
+    bad.flags = 0x80;
+    CHECK_EQ(emk_spoof::usable(a, bad), false);
+    CHECK_EQ(emk_spoof::arm_run(invalid, emk_quirk::Quirks{}), emk_spoof::Err::Invalid);
+    CHECK_EQ(emk_spoof::active(), false);
+    CHECK_EQ(emk_spoof::arm(a), emk_spoof::Err::Inline);                 // the generic arm keeps refusing inline
+    CHECK_EQ(emk_spoof::arm_run(a, emk_quirk::Quirks{}), emk_spoof::Err::Ok);
+    CHECK_EQ(emk_spoof::active(), true);
+    CHECK_EQ(hook3 != nullptr, true);
+    hook(0x108F, {di, 4});                                               // inline, and still answered: the run owns the window
+    CHECK_EQ(sent.size(), 1); CHECK_EQ(emk_spoof::replies(), 1); CHECK_EQ(emk_spoof::requests(), 1);
+    emk_spoof::disarm();
+    CHECK_EQ(emk_spoof::active(), false); CHECK_EQ(hook3 == nullptr, true);
+    CHECK_EQ(emk_spoof::arm(a), emk_spoof::Err::Inline);                 // a finished run leaves no inline permission behind
+    CHECK_EQ(emk_spoof::arm_run(a, emk_quirk::Quirks{}), emk_spoof::Err::Ok);
+    emk_spoof::disarm();
+    inline_mode = false;
+    CHECK_EQ(emk_spoof::arm(a), emk_spoof::Err::Ok);
+    inline_mode = true;
+    hook(0x108F, {di, 4});                                               // a generic arm is not run-scoped: inline stays silent
+    CHECK_EQ(sent.size(), 1);
+    emk_spoof::disarm();
+    inline_mode = false;
+}
+
 int main() {
     test_match();
     test_reply();
@@ -256,5 +292,6 @@ int main() {
     test_hook_rows_counter_and_unmatched_log();   // the statics leak between cases: new ones go last
     test_hook_policy_and_msg_id_echo();
     test_sop_pp_is_ignored();
+    test_run_scoped_arm();
     return test_report("test_emk_spoof");
 }

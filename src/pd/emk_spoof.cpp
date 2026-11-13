@@ -12,6 +12,7 @@ emrec::Record g_rec;
 emk_quirk::Quirks g_quirks;
 emk_quirk::SeenLog g_seen;
 bool g_active = false;
+bool g_run_scoped = false;   // armed by the interrogation: it answers inline too (inside the driver's window)
 std::uint8_t g_msg_id = 0;
 std::uint32_t g_replies = 0;
 std::uint32_t g_requests = 0;
@@ -26,7 +27,7 @@ std::uint32_t word(std::span<const std::uint8_t> p, unsigned i) {
 // Called by fusb302 for every received SOP' / SOP'' message while armed. Only SOP' is answered: the SOP'' answer
 // (quirk flag kQSopPP) is not wired, and a SOP'' request must never get the cable plug's reply.
 void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::uint8_t> payload) {
-    if (sop != 1 || !g_active || fusb302::inline_mode()) return;
+    if (sop != 1 || !g_active || (fusb302::inline_mode() && !g_run_scoped)) return;
     if (is_soft_reset(header)) {   // the cable resets its MessageID counter and Accepts with id 0
         g_msg_id = 0;
         const bool ok = fusb302::send_sop_prime_frame(build_accept(g_rec, g_msg_id));
@@ -52,10 +53,11 @@ void on_sop_prime(std::uint8_t sop, std::uint16_t header, std::span<const std::u
 }
 }  // namespace
 
-Err arm(const emrec::Record& rec, const emk_quirk::Quirks& quirks) {
-    if (!emrec::valid(rec)) return Err::Invalid;
-    if (quirks.count > emk_quirk::kMaxRows || (quirks.flags & ~emk_quirk::kQFlagsKnown) != 0) return Err::Invalid;
-    if (fusb302::inline_mode()) return Err::Inline;
+namespace {
+Err arm_checked(const emrec::Record& rec, const emk_quirk::Quirks& quirks, bool run_scoped) {
+    if (!usable(rec, quirks)) return Err::Invalid;
+    if (fusb302::inline_mode() && !run_scoped) return Err::Inline;
+    g_run_scoped = run_scoped;
     g_rec = rec;
     g_quirks = quirks;
     g_seen.clear();
@@ -66,13 +68,19 @@ Err arm(const emrec::Record& rec, const emk_quirk::Quirks& quirks) {
     g_active = true;
     ++g_generation;
     fusb302::set_sop_prime_hook(&on_sop_prime);
-    K2LOG("[SPOOF] armed: Discover Identity from the saved record, %u extra response rows\n", static_cast<unsigned>(quirks.count));
+    K2LOG("[SPOOF] armed%s: Discover Identity from the saved record, %u extra response rows\n", run_scoped ? " for the run" : "",
+          static_cast<unsigned>(quirks.count));
     return Err::Ok;
 }
+}  // namespace
+
+Err arm(const emrec::Record& rec, const emk_quirk::Quirks& quirks) { return arm_checked(rec, quirks, false); }
+Err arm_run(const emrec::Record& rec, const emk_quirk::Quirks& quirks) { return arm_checked(rec, quirks, true); }
 
 void disarm() {
     if (!g_active) return;
     g_active = false;
+    g_run_scoped = false;
     ++g_generation;
     fusb302::set_sop_prime_hook(nullptr);
     K2LOG("[SPOOF] off: %u requests, %u replies, %u unmatched\n", static_cast<unsigned>(g_requests), static_cast<unsigned>(g_replies),

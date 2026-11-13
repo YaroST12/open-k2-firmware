@@ -106,8 +106,15 @@ Outcome respond(const emrec::Record& rec, const emk_quirk::Quirks& quirks, std::
 
 enum class Err : std::uint8_t { Ok, Invalid, Inline };
 
+// A record and quirk table arm() / arm_run() accept (what Err::Invalid means).
+inline bool usable(const emrec::Record& rec, const emk_quirk::Quirks& quirks) {
+    return emrec::valid(rec) && quirks.count <= emk_quirk::kMaxRows && (quirks.flags & ~emk_quirk::kQFlagsKnown) == 0;
+}
 // Invalid: not a valid record or quirk table; Inline: a live sink is attached
 Err arm(const emrec::Record& rec, const emk_quirk::Quirks& quirks = {});
+// The same, for the inline interrogation only (twin_hw::inline_start_spoof): works with a device inline, where the answers
+// are the run's own window (fusb302 opens it around the charger's cable query). The run disarms it with disarm() when it ends.
+Err arm_run(const emrec::Record& rec, const emk_quirk::Quirks& quirks = {});
 void disarm();
 bool active();
 bool matches(const emrec::Record&, const emk_quirk::Quirks& = {});   // actual armed identity, not a page/remote's remembered selection
