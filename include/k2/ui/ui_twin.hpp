@@ -16,6 +16,10 @@
 //    block: the charger's facts left, the device's right (fixed levels, PPS ranges, USB); then action rows Prove live, Re-learn from device,
 //    Delete twin. The page scrolls by whole lines so the focused action is on screen. Prove live and Delete arm a kit
 //    ActionCell (CONFIRM, 5 s drain) like the charger test's START; the proof then shows Asked / VBUS in that box.
+// A device inline behind a charger that listed nothing (the K2 joined after the contract): the list gets a last row, "Ask charger
+//  again". OK arms (the Hard Reset drops VBUS), the second OK sends the one inline Hard Reset (the lab override of `pd reset
+//  --inline --confirm`); the footer says "Asking the charger again", then "Charger offered again" (the predictions fill in) or
+//  "Charger did not offer" after kRenegWaitMs.
 // The page keeps a small cache of the library (name + prediction per twin, 12 at most) and repredicts only when the library
 // or the charger's list (twin_hw::predict_stamp) changed; painting never reads flash. The detail's twin is read once when it
 // opens (and again after the library changes).
@@ -49,6 +53,7 @@ public:
     int first_line() const { return first_; }      // detail lines scrolled off the top
     bool armed() const { return arm_ != Arm::None; }
     bool reading() const { return learn_wait_; }
+    bool asking_again() const { return renego_wait_; }   // this page's inline Hard Reset was sent; the charger has not listed yet
     bool asking() const { return iq_wait_; }       // this page's inline interrogation is running
     std::string_view footer() const { return foot_text_.view(); }   // what the footer shows now (tests, remote screenshots)
     // The detail's facts rows (0 fixed levels, 1 PPS ranges when listed, then USB): the charger's text on the left, the device's on the right.
@@ -58,6 +63,7 @@ public:
     void peek(int index, bool focused, kit::RowSpec &out) { build_row(index, focused, out); }
 
     static constexpr int kActions = 3;
+    static constexpr uint32_t kRenegWaitMs = 10000;   // after the Hard Reset: VBUS back and the charger's Source_Capabilities
 
 private:
     struct Entry {
@@ -66,7 +72,7 @@ private:
         twin::Outcome out{};
         std::array<char, twin::kNameMax + 1> name{};
     };
-    enum class Arm : uint8_t { None, Prove, Delete, Learn };   // Learn: an inline interrogation (it resets the link twice)
+    enum class Arm : uint8_t { None, Prove, Delete, Learn, Renego };   // Learn: an inline interrogation (it resets the link twice); Renego: one inline Hard Reset
     static void row_fn(void *self, int index, bool focused, kit::RowSpec &out);
     void build_row(int index, bool focused, kit::RowSpec &out);
     void build_list_row(int index, bool focused, kit::RowSpec &out);
@@ -81,6 +87,7 @@ private:
     void learn_wait_end();
     void learn_inline();                                     // OK on Learn with a device inline: arm, then interrogate it
     void learn_inline_end();                                 // the interrogation this page started is over: say what it learned
+    void renegotiate();                                      // OK on "Ask charger again": arm, then one inline Hard Reset; the charger relists
     void run_entry(const Entry &e);
     void open_detail();
     void close_detail();
@@ -93,7 +100,8 @@ private:
     void layout_detail();                                    // first_ and the action box for the focused action
     void paint_detail(uint32_t now_ms);
     void build_info();                                       // the charger (left) and device (right) fact columns of the open twin
-    int rows() const { return detail_ ? kActions : n_ + 1; }   // twins + the Learn row
+    int rows() const { return detail_ ? kActions : n_ + 1 + (renego_ok_ ? 1 : 0); }   // twins + the Learn row (+ "Ask charger again")
+    int list_last() const { return n_ + (renego_ok_ ? 1 : 0); }                         // the last list row
     bool running() const;
     const Entry *entry_by_seq(uint8_t seq) const;
     const Entry *det_entry() const { return entry_by_seq(det_seq_); }
@@ -108,6 +116,9 @@ private:
     bool learn_wait_ = false;                                // this page started an Identify and learns when it ends
     uint32_t learn_wait_until_ = 0;
     bool iq_wait_ = false;                                   // this page started an inline interrogation (twin_hw::inline_*)
+    bool renego_ok_ = false;                                 // a device is inline and the charger listed nothing: the "Ask charger again" row shows
+    bool renego_wait_ = false;                               // this page sent the Hard Reset and waits for the charger's list
+    uint32_t renego_until_ = 0;
     bool started_ = false;                                   // this page started the run in flight (leave() stops only that one)
     uint32_t gen_ = 0, stamp_ = 0;
     int sel_ = 0;                                            // list cursor

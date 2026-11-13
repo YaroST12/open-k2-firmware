@@ -248,6 +248,19 @@ int main() {
     render(ui, t, "twin_learn");                                         // the Learn row
     key(Button::Ok);
     render(ui, t, "twin_learn_refused");                                 // nothing identified: the footer says so
+    g_stub.caps = {};                                                    // a device inline behind a charger that listed nothing
+    g_stub.pm.vbus_mv = 15000; g_stub.pm.current_ma = 1500; g_stub.pm.power_mw = 22500;
+    for (int i = 0; i < 6; i++) { t += 100; ui.tick(t); }
+    CHECK_EQ(ui.link().inline_mode(), true);
+    t += 3000; ui.tick(t);                                               // the refusal note times out
+    key(Button::Plus);
+    render(ui, t, "twin_ask_again");                                     // the extra row after Learn, "No charger: no predictions"
+    key(Button::Ok);
+    render(ui, t, "twin_ask_again_confirm");                             // armed: "Resets the link. Confirm"
+    key(Button::Ok);
+    render(ui, t, "twin_ask_again_wait");                                // the Hard Reset went out: "Asking the charger again"
+    g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;   // the device is gone: the row goes with it
+    for (uint32_t i = 0; i < k2::pd::kInlineHoldMs / 100 + 80; ++i) { t += 100; ui.tick(t); }
     g_stub.caps = {};
     stub_twin_reset();
     ui.tick(t); t += 400; ui.tick(t);

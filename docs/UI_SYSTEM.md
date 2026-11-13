@@ -958,6 +958,7 @@ Footer, Info tone:
 |---|---|
 | charger on the port | `<top offer>: <full> of <n> full`, for example `PD 20V3A: 2 of 5 full` |
 | no charger | `No charger: no predictions` |
+| no charger list, a device inline | the list gets a last row `Ask charger again` (rotate icon, note `resets the link, it relists`, OK label `Ask`). Armed: `Resets the link. Confirm` (Caution); sent: `Asking the charger again`; then for 2.5 s `Charger offered again` (Ok) or `Charger did not offer` / `Reset not sent` / `Tool or test running` (Caution) |
 | empty library | `No twin yet. Learn one` |
 | learning | `Reading the device`, then for 2.5 s `Twin learned`, `Twin updated`, `Already known`, `Plug a device in alone`, `Device did not answer`, `Library full` |
 | learning inline (a device behind its charger) | armed: `Resets the link. Confirm` (Caution, OK label `Confirm`); running: `Resetting the link` / `Asking the device` (Back label `Stop`); then for 2.5 s `Twin learned`, `Learned. Contract changed` (Caution), `Device did not answer`, `Stopped. Link reset`; refusals `Tool or test running`, `K2 holds the contract`, `K2 runs on this VBUS` |

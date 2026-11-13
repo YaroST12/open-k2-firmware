@@ -667,6 +667,78 @@ void test_learn_without_power() {
     CHECK_STR(footer_of(ui).c_str(), "No power: add a charger");
 }
 
+// ---- a device inline, no charger list: "Ask charger again" forces the renegotiation (the inline Hard Reset, after a confirm) ----
+void test_ask_charger_again() {
+    reset();
+    add_three();
+    g_stub.caps.valid = false;
+    Ui &ui = open_page();
+    CHECK_EQ(ui.twin_page().list_state().count, 4);        // no device inline: three twins and Learn, no extra row
+    make_inline(ui);
+    step(ui, 100);
+    CHECK_EQ(ui.twin_page().list_state().count, 5);        // the new row sits after Learn
+    CHECK_STR(text_of(ui, 3).c_str(), "Learn from device");
+    CHECK_STR(text_of(ui, 4).c_str(), "Ask charger again");
+    CHECK_STR(footer_of(ui).c_str(), "No charger: no predictions");
+    for (int i = 0; i < 4; i++) press(ui, Button::Plus);
+    CHECK_STR(label(ui, Button::Ok), "Ask");
+    press(ui, Button::Ok);                                  // the first OK only arms: the reset drops VBUS
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_STR(footer_of(ui).c_str(), "Resets the link. Confirm");
+    CHECK_STR(label(ui, Button::Ok), "Confirm");
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_EQ(g_stub.lab_hard_resets, 1);                   // the inline override, exactly as `pd reset --inline --confirm`
+    CHECK_EQ(g_stub.twin_iq_starts, 0);                    // not an interrogation
+    CHECK_STR(footer_of(ui).c_str(), "Asking the charger again");
+    step(ui, 2000);
+    CHECK_STR(footer_of(ui).c_str(), "Asking the charger again");
+    press(ui, Button::Ok);                                  // a second OK while it waits sends nothing
+    CHECK_EQ(g_stub.hard_resets, 1);
+    charger_c1();                                           // the charger lists again: the predictions fill in
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Charger offered again");
+    CHECK_STR(note_of(ui, 0).c_str(), "PPS up to 33W, device max");
+    CHECK_EQ(ui.twin_page().list_state().count, 4);        // the row is gone: the list is there now
+    step(ui, 3000);
+    CHECK_STR(footer_of(ui).c_str(), "PD 20V3A: 1 of 3 full");
+    unplug_inline(ui);
+}
+
+void test_ask_charger_again_unanswered_stop_and_refusals() {
+    reset();
+    add_three();
+    g_stub.caps.valid = false;
+    Ui &ui = open_page();
+    make_inline(ui);
+    step(ui, 100);
+    for (int i = 0; i < 4; i++) press(ui, Button::Plus);
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    step(ui, 12000);                                        // nobody lists: said, the row is back to ask again
+    CHECK_STR(footer_of(ui).c_str(), "Charger did not offer");
+    step(ui, 3000);
+    CHECK_STR(footer_of(ui).c_str(), "No charger: no predictions");
+    CHECK_EQ(ui.twin_page().list_state().count, 5);
+
+    press(ui, Button::Ok);                                  // arm, then BACK disarms
+    CHECK_STR(footer_of(ui).c_str(), "Resets the link. Confirm");
+    press(ui, Button::Back);
+    CHECK_EQ(ui.twin_page().armed() ? 1 : 0, 0);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    press(ui, Button::Ok);                                  // armed, the window runs out
+    step(ui, Ui::kConfirmWindowMs + 100);
+    press(ui, Button::Ok);                                  // so this press only arms
+    CHECK_EQ(g_stub.hard_resets, 1);
+
+    g_stub.hard_reset_refuses = true;                       // the driver says no (no CC): said, nothing waits
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_STR(footer_of(ui).c_str(), "Reset not sent");
+    unplug_inline(ui);
+}
+
 void test_footer_note_times_out() {
     reset();
     Ui &ui = open_page();
@@ -853,6 +925,8 @@ int main() {
     test_learn_inline_results();
     test_learn_inline_stop_and_refusals();
     test_learn_without_power();
+    test_ask_charger_again();
+    test_ask_charger_again_unanswered_stop_and_refusals();
     test_footer_note_times_out();
     test_wake_not_before_confirm();
     test_wake_then_prove();

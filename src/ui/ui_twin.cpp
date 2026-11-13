@@ -29,6 +29,8 @@ namespace present = twin::present;
 // The fixed texts. Footers are one line of at most kFooterCells (font 16), notes one line of kNoteMaxPx (font 12); a text
 // that does not fit fails the build, it is never cut.
 constexpr const char kLearnText[] = "Learn from device";
+constexpr const char kAskAgainText[] = "Ask charger again";
+constexpr const char kAskAgainNote[] = "resets the link, it relists";
 constexpr const char *kActionText[] = {"Prove live", "Re-learn from device", "Delete twin"};
 constexpr const char *kFooters[] = {
     "Asks the charger. Confirm", "Stopped. 5 V back", "Tool or test running", "Device inline: unplug it",
@@ -45,10 +47,13 @@ constexpr const char *kFooters[] = {
     "K2 runs on this VBUS", "K2 holds the contract", "No power: add a charger",
     // The source Hard Resets on the first question: asking through this charger is not possible (docs/DEVICE_TWIN.md 9.1).
     "Charger resets when asked",
+    // A device inline, no charger list: the Hard Reset makes the charger list again (docs/DEVICE_TWIN.md section 5).
+    "Asking the charger again", "Charger offered again", "Reset not sent",
 };
 constexpr int kFootWakeArm = 24, kFootWaking = 25, kFootSilent = 26, kFootNoOffer = 27, kFootWakeStop = 28;
 constexpr int kFootIqArm = 29, kFootIqReset = 30, kFootIqAsk = 31, kFootIqStop = 32, kFootIqDiffers = 33, kFootIqSelf = 34,
               kFootIqOwn = 35, kFootNoPower = 36, kFootIqResets = 37;
+constexpr int kFootAskAgain = 38, kFootOfferedAgain = 39, kFootResetNot = 40;
 constexpr const char *kNotes[] = {
     "no charger to predict from", "reads a device alone on the K2", "live proof running", "removes it from the K2",
     "no contract, charger", "stopped", "charger sent no caps", "unsafe VBUS, stopped", "gets 100 of 240W, charger",
@@ -62,6 +67,8 @@ static_assert(all_fit(kFooters, kSmallAdvPx, kFooterCells * static_cast<int>(kSm
 static_assert(all_fit(kNotes, kLabelAdv, kit::kNoteMaxPx), "a Device twins note is wider than the note box");
 static_assert(all_fit(kActionText, kSmallAdvPx, 224 - ListView::kBarW - kit::kTextX), "a Device twins action runs into the scroll lane");
 static_assert(fits_px(kSmallAdvPx, kLearnText, 224 - ListView::kBarW - kit::kTextX), "the Learn row text runs into the scroll lane");
+static_assert(fits_px(kSmallAdvPx, kAskAgainText, 224 - ListView::kBarW - kit::kTextX), "the Ask charger again row text runs into the scroll lane");
+static_assert(fits_px(kLabelAdv, kAskAgainNote, kit::kNoteMaxPx), "the Ask charger again note is wider than the note box");
 
 // The runner's verdict as the kit's verdict cell shows it: a charger that said no or never answered is a fail, a run the
 // user stopped is dim. A twin the K2 skipped (nothing sent) keeps its prediction shape: None here.
@@ -199,6 +206,8 @@ void TwinPage::enter() {
     hide_proof_ = false;
     started_ = false;
     iq_wait_ = false;
+    renego_wait_ = false;
+    renego_ok_ = false;
     detail_ = false;
     wake_ok_ = false;
     title_ = "Device twins";
@@ -216,6 +225,7 @@ void TwinPage::leave() {
     learn_wait_ = false;
     if (iq_wait_) twin_hw::inline_cancel();       // the interrogation this page started: its final reset goes out, nothing is learned
     iq_wait_ = false;
+    renego_wait_ = false;                         // the Hard Reset is already out; the charger relists without this page
     started_ = false;
     detail_ = false;
     title_ = "Device twins";
@@ -249,7 +259,7 @@ void TwinPage::reload() {
     gen_ = storage::generation();
     stamp_ = twin_hw::predict_stamp();
     loaded_ = true;
-    sel_ = std::clamp(sel_, 0, n_);
+    sel_ = std::clamp(sel_, 0, list_last());
     if (detail_) build_info();
     det_sig_ = 0;
 }
@@ -319,11 +329,18 @@ void TwinPage::build_row(int index, bool focused, kit::RowSpec &out) {
 // What a list row shows: the shape marker (or the verdict cell after a proof) and the full name; the note when focused.
 void TwinPage::build_list_row(int index, bool focused, kit::RowSpec &out) {
     out = kit::RowSpec{};
-    if (index >= n_) {   // "Learn from device"
+    if (index == n_) {   // "Learn from device"
         out.marker = kit::Marker::Icon;
         out.icon = Icon::Chip;
         out.text = kLearnText;
         if (focused) out.note = kNotes[1];
+        return;
+    }
+    if (index == n_ + 1) {   // "Ask charger again": only while a device is inline and the charger listed nothing
+        out.marker = kit::Marker::Icon;
+        out.icon = Icon::Rotate;
+        out.text = kAskAgainText;
+        if (focused) out.note = kAskAgainNote;
         return;
     }
     const Entry &e = list_[static_cast<std::size_t>(index)];
@@ -417,6 +434,10 @@ void TwinPage::compose_footer() {
         foot_text_.put(kFooters[resetting ? kFootIqReset : kFootIqAsk]);
         return;
     }
+    if (renego_wait_) {
+        foot_text_.put(kFooters[kFootAskAgain]);
+        return;
+    }
     if (running()) {
         if (detail_) {
             foot_text_.put(twin_hw::live().waking() ? kFooters[kFootWaking] : kFooters[23]);
@@ -441,9 +462,9 @@ void TwinPage::compose_footer() {
         }
         return;
     }
-    if (arm_ == Arm::Delete || arm_ == Arm::Learn) {
+    if (arm_ == Arm::Delete || arm_ == Arm::Learn || arm_ == Arm::Renego) {
         foot_tone_ = FooterTone::Caution;
-        foot_text_.put(kFooters[arm_ == Arm::Delete ? 16 : kFootIqArm]);
+        foot_text_.put(kFooters[arm_ == Arm::Delete ? 16 : kFootIqArm]);   // Learn and Renego both reset the link
         return;
     }
     if (detail_) {
@@ -556,6 +577,35 @@ void TwinPage::learn_inline() {
     }
 }
 
+// OK on "Ask charger again" (a device inline, the charger listed nothing). Same shape as the interrogation: the first OK arms
+// (the Hard Reset drops VBUS under the device), a real refusal is said at once, the second OK within kConfirmWindowMs sends the
+// one inline Hard Reset (the lab override of `pd reset --inline --confirm`: it makes the charger send its list again, which the
+// K2 sniffs). update() then waits for the list.
+void TwinPage::renegotiate() {
+    const bool confirm = arm_ == Arm::Renego && static_cast<int32_t>(ctx_.now - armed_until_) < 0;
+    arm_ = Arm::None;
+    const twin_hw::LiveCtx c = ctx_.ui->twin_ctx(ctx_.now);
+    if (c.busy || c.owners_busy || running()) {
+        say(kFooters[2], kCaution);
+        return;
+    }
+    if (!confirm) {
+        arm_ = Arm::Renego;
+        armed_until_ = ctx_.now + Ui::kConfirmWindowMs;
+        note_.clear();
+        note_until_ = 0;
+        return;
+    }
+    if (!ctx_.ui->trigger_hard_reset(ctx_.now, true)) {   // the driver refused (no CC): nothing went out
+        say(kFooters[kFootResetNot], kCaution);
+        return;
+    }
+    renego_wait_ = true;
+    renego_until_ = ctx_.now + kRenegWaitMs;
+    note_.clear();
+    note_until_ = 0;
+}
+
 // The interrogation is over: what it learned (twin_hw::inline_poll learned and saved it), else the device never answered.
 void TwinPage::learn_inline_end() {
     iq_wait_ = false;
@@ -627,7 +677,7 @@ void TwinPage::close_detail() {
     detail_ = false;
     arm_ = Arm::None;
     if (const Entry *e = entry_by_seq(det_seq_)) sel_ = static_cast<int>(e - list_.data());
-    sel_ = std::clamp(sel_, 0, n_);
+    sel_ = std::clamp(sel_, 0, list_last());
     ctx_.rows.restart();
     repaint();
 }
@@ -983,13 +1033,14 @@ bool TwinPage::on_event(Event e) {
         if (running() || learn_wait_ || iq_wait_) return true;
         arm_ = Arm::None;                             // a cursor move disarms
         if (detail_) act_ = std::clamp(act_ + (e.button == Button::Plus ? 1 : -1), 0, kActions - 1);
-        else sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, n_);
+        else sel_ = std::clamp(sel_ + (e.button == Button::Plus ? 1 : -1), 0, list_last());
         update(ctx_.now);
         return true;
     case Button::Ok:
-        if (running() || learn_wait_ || iq_wait_) return true;
+        if (running() || learn_wait_ || iq_wait_ || renego_wait_) return true;
         if (!detail_) {
-            if (sel_ >= n_) learn_row(ctx_.now);
+            if (sel_ > n_) renegotiate();
+            else if (sel_ == n_) learn_row(ctx_.now);
             else open_detail();
         } else if (arm_ == Arm::Delete) {
             if (static_cast<int32_t>(ctx_.now - armed_until_) < 0) {
@@ -1021,7 +1072,7 @@ PanelLabels TwinPage::labels() const {
     } else if (arm_ != Arm::None) {
         ok = "Confirm";
     } else if (!detail_) {
-        ok = sel_ >= n_ ? "Learn" : "Open";
+        ok = sel_ > n_ ? "Ask" : sel_ == n_ ? "Learn" : "Open";
     } else {
         ok = act_ == 0 ? "Run" : act_ == 1 ? "Learn" : "Delete";
     }
@@ -1048,6 +1099,22 @@ void TwinPage::update(uint32_t now_ms) {
     }
     if (learn_wait_ && (!fusb302::identify_busy() || static_cast<int32_t>(now_ms - learn_wait_until_) >= 0)) learn_wait_end();
     if (iq_wait_ && !twin_hw::inline_running()) learn_inline_end();   // the sequencer bounds its own time (pd::kIqTotalMs)
+    if (renego_wait_) {   // the Hard Reset is out: the charger lists again, or it does not
+        if (pd::active_caps().valid) {
+            renego_wait_ = false;
+            say(kFooters[kFootOfferedAgain], kOk);
+        } else if (static_cast<int32_t>(now_ms - renego_until_) >= 0) {
+            renego_wait_ = false;
+            say(kFooters[kFootNoOffer], kCaution);
+        }
+    }
+    // The "Ask charger again" row: a device inline behind a charger that listed nothing (and nothing else owns the link).
+    const bool renego_ok = (ctx_.ui->link().inline_mode() || ctx_.inline_mode) && !pd::active_caps().valid && !running() &&
+                           !learn_wait_ && !iq_wait_;
+    if (renego_ok != renego_ok_) {
+        renego_ok_ = renego_ok;
+        ctx_.rows.invalidate();
+    }
     if (!loaded_ || gen_ != storage::generation() || stamp_ != twin_hw::predict_stamp()) {
         const bool charger_changed = loaded_ && stamp_ != twin_hw::predict_stamp();
         reload();
@@ -1061,7 +1128,7 @@ void TwinPage::update(uint32_t now_ms) {
     if (detail_) {
         paint_detail(now_ms);
     } else {
-        sel_ = std::clamp(sel_, 0, n_);
+        sel_ = std::clamp(sel_, 0, list_last());
         ctx_.rows.set_count(rows());
         ctx_.rows.select(sel_);
         ctx_.rows.draw(now_ms);

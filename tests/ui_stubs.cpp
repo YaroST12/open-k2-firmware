@@ -201,7 +201,12 @@ void sink_release() {
         g_stub.sink.pos = 1; g_stub.sink.mv = 5000; g_stub.sink.held = false;
     }
 }
-bool sink_hard_reset(bool) { g_stub.hard_resets++; return true; }
+bool sink_hard_reset(bool lab_inline) {
+    if (g_stub.hard_reset_refuses) return false;
+    g_stub.hard_resets++;
+    if (lab_inline) g_stub.lab_hard_resets++;
+    return true;
+}
 bool sink_soft_reset() { g_stub.ps_soft_resets++; return g_stub.ps_soft_reset_ok; }
 void sink_set_cap(std::uint32_t mv) { g_stub.sink_cap = mv; }
 void sink_vbus(std::int32_t mv) { g_stub.sink_vbus = mv; }
