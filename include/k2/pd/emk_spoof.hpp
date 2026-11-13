@@ -112,7 +112,7 @@ inline bool usable(const emrec::Record& rec, const emk_quirk::Quirks& quirks) {
 }
 // Invalid: not a valid record or quirk table; Inline: a live sink is attached
 Err arm(const emrec::Record& rec, const emk_quirk::Quirks& quirks = {});
-// The same, for the inline interrogation only (twin_hw::inline_start_spoof): works with a device inline, where the answers
+// The same, for the inline interrogation only (twin_hw::inline_start_cable): works with a device inline, where the answers
 // are the run's own window (fusb302 opens it around the charger's cable query). The run disarms it with disarm() when it ends.
 Err arm_run(const emrec::Record& rec, const emk_quirk::Quirks& quirks = {});
 void disarm();

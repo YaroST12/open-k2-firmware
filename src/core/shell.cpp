@@ -233,7 +233,8 @@ bool twin_name(const Tokens& k, std::size_t first, std::string_view& name) {
 void cmd_twin(Backend& b, const Tokens& k) {
     constexpr const char* kUsage =
         "usage: twin list | predict [n|all] | run [n|all] confirm | status | cancel | learn identify|sniff [dry] [name] | "
-        "learn inline confirm [dry] [name] | rename n name | delete n confirm";
+        "learn inline confirm [spoof lib|builtin n] [dry] [name] | rename n name | delete n confirm";
+    constexpr const char* kInlineUsage = "usage: twin learn inline confirm [spoof lib|builtin <n>] [dry] [name]";
     if (k.n < 2) return err(b, kUsage);
     const std::string_view s = k.t[1];
     TwinCmd c;
@@ -270,6 +271,16 @@ void cmd_twin(Backend& b, const Tokens& k) {
                 return err(b, "an inline interrogation hard-resets the link twice: twin learn inline confirm [dry] [name]");
             c.confirm = true;
             i++;
+            if (k.n > i && same(k.t[i], "spoof")) {
+                std::uint32_t id;
+                if (k.n < i + 3 || !number(k.t[i + 2], id) || id > 0xFFFFu || (same(k.t[i + 1], "lib") && id == 0))
+                    return err(b, kInlineUsage);
+                if (same(k.t[i + 1], "lib")) c.spoof_kind = 1;
+                else if (!same(k.t[i + 1], "builtin")) return err(b, kInlineUsage);
+                c.spoof = true;
+                c.spoof_id = static_cast<std::uint16_t>(id);
+                i += 3;
+            }
         } else return err(b, "usage: twin learn identify|sniff|inline [confirm] [dry] [name]");
         if (k.n > i && same(k.t[i], "dry")) { c.dry = true; i++; }
         if (k.n > i && !twin_name(k, i, c.name)) return err(b, "name is at most 24 characters");

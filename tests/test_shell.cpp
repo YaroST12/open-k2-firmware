@@ -45,7 +45,8 @@ struct Fake : shell::Backend {
     }
     const char* twin(const shell::TwinCmd& c) override {
         calls += "twin" + std::to_string(int(c.op)) + "," + std::to_string(c.seq) + (c.all ? ",all" : "") + (c.confirm ? ",c" : "") +
-                 (c.dry ? ",dry" : "") + ",'" + std::string(c.name) + "';";
+                 (c.dry ? ",dry" : "") + (c.spoof ? ",spoof" + std::to_string(int(c.spoof_kind)) + ":" + std::to_string(c.spoof_id) : "") +
+                 ",'" + std::string(c.name) + "';";
         return fail;
     }
     const char* diag() override { calls += "diag;"; return fail; }
@@ -223,6 +224,16 @@ int main() {
     CHECK_STR((run(f, "twin learn inline confirm")).c_str(), "twin9,0,c,'';");
     CHECK_STR((run(f, "twin learn inline confirm dry Canon R5")).c_str(), "twin9,0,c,dry,'Canon R5';");
     CHECK_STR((run(f, "twin learn inline dry confirm")).c_str(), "");
+    // the cable spoof for the interrogation only: a saved library number (`spoof lib N`) or a built-in (`spoof builtin N`)
+    CHECK_STR((run(f, "twin learn inline confirm spoof lib 3")).c_str(), "twin9,0,c,spoof1:3,'';");
+    CHECK_STR((run(f, "twin learn inline confirm spoof builtin 2 dry Canon R5")).c_str(), "twin9,0,c,dry,spoof0:2,'Canon R5';");
+    CHECK_STR((run(f, "twin learn inline spoof lib 3 confirm")).c_str(), "");           // confirm stays first
+    CHECK_STR((run(f, "twin learn inline confirm spoof")).c_str(), "");
+    CHECK_EQ(said(f, "err: usage: twin learn inline"), true);
+    CHECK_STR((run(f, "twin learn inline confirm spoof lib")).c_str(), "");
+    CHECK_STR((run(f, "twin learn inline confirm spoof lib 0")).c_str(), "");
+    CHECK_STR((run(f, "twin learn inline confirm spoof nope 1")).c_str(), "");
+    CHECK_STR((run(f, "twin learn identify spoof lib 3")).c_str(), "twin4,0,'spoof lib 3';");   // only the inline run takes it (a name here)
     CHECK_STR((run(f, "twin learn frob")).c_str(), "");
     CHECK_STR((run(f, "twin learn identify 0123456789012345678901234")).c_str(), "");   // 25 characters
     CHECK_EQ(said(f, "err: name"), true);

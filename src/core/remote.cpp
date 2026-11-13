@@ -1356,18 +1356,8 @@ struct TwinApi {
     pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, const twin::wire::InlineSpoof& spoof) {
         if (!spoof.on) return twin_hw::inline_start(name, save, confirmed, ui.twin_ctx(systick::millis()));
         // The cable identity the K2 shows the charger during the run: a built-in or a saved record (`emarker spoof` takes both).
-        emlib::Entry ent;
-        emk_quirk::Quirks quirks;
-        emrec::Record rec;
-        if (spoof.kind == twin::wire::kInlineSpoofSaved) {
-            if (!storage::lib_get(spoof.id, ent, quirks)) return pd::IqRefusal::BadSpoof;
-            rec = ent.rec;
-        } else {
-            if (spoof.id >= emrec::kBuiltinCount) return pd::IqRefusal::BadSpoof;
-            rec = emrec::builtin_cable(spoof.id);
-            quirks = emk_quirk::builtin_quirks(spoof.id);
-        }
-        return twin_hw::inline_start_spoof(name, save, confirmed, ui.twin_ctx(systick::millis()), rec, quirks);
+        return twin_hw::inline_start_cable(name, save, confirmed, ui.twin_ctx(systick::millis()),
+                                           spoof.kind == twin::wire::kInlineSpoofSaved, spoof.id);
     }
     void inline_cancel() { twin_hw::inline_cancel(); }
     bool inline_running() const { return twin_hw::inline_running(); }

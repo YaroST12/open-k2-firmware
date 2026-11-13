@@ -36,6 +36,9 @@ struct TwinCmd {
     bool all = false;
     bool confirm = false;   // a run and a delete reach the backend only with it
     bool dry = false;       // learn: show what would be saved, save nothing
+    bool spoof = false;     // learn inline: show the charger this cable identity for the run only
+    std::uint8_t spoof_kind = 0;   // 0 = built-in index, 1 = saved library number (twin::wire::kInlineSpoofBuiltin / Saved)
+    std::uint16_t spoof_id = 0;
     std::string_view name;
 };
 

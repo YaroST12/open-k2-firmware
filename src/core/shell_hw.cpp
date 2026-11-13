@@ -826,6 +826,16 @@ const char* twin_status() {
         tput("inline asked=%02x answered=%02x refused=%02x silent=%02x sent=%u resets=%u/%u\r\n", unsigned(q.asked_mask),
              unsigned(q.ok_mask), unsigned(q.refused_mask), unsigned(q.silent_mask), unsigned(q.sent), unsigned(q.resets_sent),
              unsigned(q.resets_seen));
+        // late: bit n = answered only after the step was given up; EPR sink PDOs (the SPR ones first) and the cable spoof's counts.
+        if (q.late_mask != 0 || q.num_epr_pdos != 0)
+            tput("inline late=%02x epr_pdos=%u%s\r\n", unsigned(q.late_mask), unsigned(q.num_epr_pdos), q.epr_partial ? " partial" : "");
+        for (unsigned i = 0; i < q.num_epr_pdos; i++) tput("inline epr pdo%u %08X\r\n", i + 1, unsigned(q.epr_pdos[i]));
+        if (q.spoof)
+            tput("inline spoof: charger queried SOP' %u times, %u replies\r\n", unsigned(q.sopp_queries), unsigned(q.sopp_replies));
+        if (q.first.ready || q.second.ready)
+            tput("inline contract before pos=%u rdo=%08X after pos=%u rdo=%08X %s\r\n", unsigned(q.first.pos),
+                 unsigned(q.first.rdo), unsigned(q.second.pos), unsigned(q.second.rdo),
+                 pd::same_contract(q.first, q.second) ? "same" : "changed");
         if (l.done)
             tput("inline learn %s #%u%s%s\r\n", twin_hw::name(l.result.how), unsigned(l.result.store.seq),
                  l.result.store.existed ? " updated" : "", l.save ? "" : " (dry, not saved)");
@@ -882,9 +892,12 @@ const char* twin_command(const shell::TwinCmd& c) {
         return nullptr;
     }
     case TwinOp::LearnInline: {
-        const pd::IqRefusal r = twin_hw::inline_start(c.name, !c.dry, c.confirm, g_ui->twin_ctx(systick::millis()));
+        const twin_hw::LiveCtx ctx = g_ui->twin_ctx(systick::millis());
+        const pd::IqRefusal r = c.spoof ? twin_hw::inline_start_cable(c.name, !c.dry, c.confirm, ctx, c.spoof_kind == 1, c.spoof_id)
+                                        : twin_hw::inline_start(c.name, !c.dry, c.confirm, ctx);
         if (r != pd::IqRefusal::None) return pd::iq_refusal_name(r);
-        tput("twin inline started%s (twin status follows it, twin cancel stops it)\r\n", c.dry ? " dry" : "");
+        tput("twin inline started%s%s (twin status follows it, twin cancel stops it)\r\n", c.dry ? " dry" : "",
+             c.spoof ? " with a cable spoof" : "");
         return nullptr;
     }
     case TwinOp::Rename: {

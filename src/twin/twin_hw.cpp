@@ -266,8 +266,18 @@ pd::IqRefusal inline_start(std::string_view name, bool save, bool confirmed, con
     return inline_start_with(name, save, confirmed, ctx, nullptr, nullptr);
 }
 
-pd::IqRefusal inline_start_spoof(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx, const emrec::Record& rec,
-                                 const emk_quirk::Quirks& quirks) {
+pd::IqRefusal inline_start_cable(std::string_view name, bool save, bool confirmed, const LiveCtx& ctx, bool saved, std::uint16_t id) {
+    emlib::Entry ent;
+    emk_quirk::Quirks quirks;
+    emrec::Record rec;
+    if (saved) {
+        if (!storage::lib_get(id, ent, quirks)) return pd::IqRefusal::BadSpoof;
+        rec = ent.rec;
+    } else {
+        if (id >= emrec::kBuiltinCount) return pd::IqRefusal::BadSpoof;
+        rec = emrec::builtin_cable(id);
+        quirks = emk_quirk::builtin_quirks(id);
+    }
     return inline_start_with(name, save, confirmed, ctx, &rec, &quirks);
 }
 
