@@ -5,6 +5,7 @@
 #include "k2/pd/pdtrace.hpp"
 
 #include "k2/core/bbstore.hpp"
+#include "k2/core/hot.h"
 #include "k2/fastcharge/edges.hpp"
 
 #include <initializer_list>
@@ -31,7 +32,7 @@ std::size_t g_edge_slot;
 Collapse<kRingBytes> g_collapse;
 
 // One record into the ring and the capture slots still filling (Collapse decides which records get here).
-bool emit(Type t, std::uint32_t ts, std::span<const std::uint8_t> p) {
+K2_HOT bool emit(Type t, std::uint32_t ts, std::span<const std::uint8_t> p) {
     const std::uint32_t h0 = g_ring.head();
     if (!g_ring.push(t, ts, p)) return false;
     std::array<std::uint8_t, kMaxRecord> r;   // the record just written, for the slots still filling
@@ -41,7 +42,7 @@ bool emit(Type t, std::uint32_t ts, std::span<const std::uint8_t> p) {
 }
 std::uint32_t g_stamp_us, g_last_ts_us;   // the frame's INT_N edge (stamp_rx), the newest record's timestamp
 bool g_have_stamp;
-void push(Type t, std::span<const std::uint8_t> p) {
+K2_HOT void push(Type t, std::span<const std::uint8_t> p) {
     if (!g_ring.frozen() && (t == Type::Rx || t == Type::Tx || t == Type::Vbus)) g_idle.touch(systick::millis());   // a collapsed frame is activity too
     std::uint32_t ts = g_have_stamp && (t == Type::Rx || t == Type::RxBad || t == Type::Poll) ? g_stamp_us : systick::micros();
     if (std::int32_t(ts - g_last_ts_us) < 0) ts = g_last_ts_us;   // the ring's time stays monotone (the host unwraps by comparing)
@@ -49,10 +50,10 @@ void push(Type t, std::span<const std::uint8_t> p) {
     g_collapse.record(g_ring, t, ts, p, emit);
 }
 // What Collapse holds back (a run of repeated frames, a Poll) goes into the ring before it is read, frozen or copied to a capture.
-void flush() { g_collapse.flush(emit); }
-void rec(Type t, std::initializer_list<std::uint8_t> p) { push(t, {p.begin(), p.size()}); }
-void rec_buf(Type t, std::uint8_t* p, std::size_t n) { push(t, {p, n}); }
-void trigger(Trigger t) { flush(); g_caps.start(t, systick::millis(), g_ring); }
+K2_HOT void flush() { g_collapse.flush(emit); }
+K2_HOT void rec(Type t, std::initializer_list<std::uint8_t> p) { push(t, {p.begin(), p.size()}); }
+K2_HOT void rec_buf(Type t, std::uint8_t* p, std::size_t n) { push(t, {p, n}); }
+K2_HOT void trigger(Trigger t) { flush(); g_caps.start(t, systick::millis(), g_ring); }
 std::uint8_t lo(unsigned v) { return std::uint8_t(v); }
 std::uint8_t hi(unsigned v) { return std::uint8_t(v >> 8); }
 
@@ -137,7 +138,7 @@ std::uint32_t first_object(std::span<const std::uint8_t> p) {
 }  // namespace
 void set_event_sink(EventSink s) { g_sink = s; }
 
-void rx(std::uint8_t token, std::uint16_t header, std::span<const std::uint8_t> objs_and_crc) {
+K2_HOT void rx(std::uint8_t token, std::uint16_t header, std::span<const std::uint8_t> objs_and_crc) {
     std::array<std::uint8_t, 3 + 7 * 4 + 4> b;
     std::size_t n = 0;
     b[n++] = token; b[n++] = lo(header); b[n++] = hi(header);
@@ -147,9 +148,9 @@ void rx(std::uint8_t token, std::uint16_t header, std::span<const std::uint8_t> 
     g_have_stamp = false;
     if (g_sink) g_sink(kEvRx, header, n >= 3 + 4 + 4 ? first_object({b.data() + 3, n - 3}) : 0);
 }
-void rx_bad(std::uint8_t token, std::uint8_t b1, std::uint8_t b2) { rec(Type::RxBad, {token, b1, b2}); g_have_stamp = false; }
-void stamp_rx(std::uint32_t us) { g_stamp_us = us; g_have_stamp = true; }
-void tx(std::uint16_t header, std::span<const std::uint8_t> objs, std::uint8_t sop_token) {
+K2_HOT void rx_bad(std::uint8_t token, std::uint8_t b1, std::uint8_t b2) { rec(Type::RxBad, {token, b1, b2}); g_have_stamp = false; }
+K2_HOT void stamp_rx(std::uint32_t us) { g_stamp_us = us; g_have_stamp = true; }
+K2_HOT void tx(std::uint16_t header, std::span<const std::uint8_t> objs, std::uint8_t sop_token) {
     std::array<std::uint8_t, 3 + 7 * 4> b;   // header, up to 7 objects, trailing SOP token
     std::size_t n = 0;
     b[n++] = lo(header); b[n++] = hi(header);
@@ -159,24 +160,24 @@ void tx(std::uint16_t header, std::span<const std::uint8_t> objs, std::uint8_t s
     rec_buf(Type::Tx, b.data(), n);
     if (g_sink) g_sink(kEvTx, header, first_object(objs));
 }
-void tx_result(TxResult r, std::uint32_t elapsed_ms, std::uint8_t interrupta) {
+K2_HOT void tx_result(TxResult r, std::uint32_t elapsed_ms, std::uint8_t interrupta) {
     rec(Type::TxResult, {std::uint8_t(r), std::uint8_t(elapsed_ms > 255 ? 255 : elapsed_ms), interrupta});
 }
-void reset(ResetKind k) {
+K2_HOT void reset(ResetKind k) {
     rec(Type::Reset, {std::uint8_t(k)});
     if (g_sink) g_sink(kEvReset, std::uint16_t(k), 0);
     if (k == ResetKind::HardRx || k == ResetKind::HardTx) { trigger(Trigger::HardReset); g_link.reset(); }
 }
-void cc(CcEvent e, std::uint8_t cc_line, std::uint8_t s0) {
+K2_HOT void cc(CcEvent e, std::uint8_t cc_line, std::uint8_t s0) {
     rec(Type::Cc, {std::uint8_t(e), cc_line, s0});
     if (g_sink) g_sink(kEvCc, std::uint16_t(e), cc_line);
     if (e == CcEvent::Detach) { trigger(Trigger::Detach); g_last_pos = 0; g_link.reset(); }
 }
-void reg_write(std::uint8_t reg, std::uint8_t value, bool ok) {
+K2_HOT void reg_write(std::uint8_t reg, std::uint8_t value, bool ok) {
     rec(Type::Reg, {std::uint8_t(ok ? reg : reg | 0x80), value});
 }
-void status0(std::uint8_t v) { rec(Type::Status0, {v}); }
-void irq(std::uint8_t a, std::uint8_t b, std::uint8_t i) {
+K2_HOT void status0(std::uint8_t v) { rec(Type::Status0, {v}); }
+K2_HOT void irq(std::uint8_t a, std::uint8_t b, std::uint8_t i) {
     if (a | b | i) rec(Type::Irq, {a, b, i});
 }
 void link(bool inline_mode, bool auto_sink) {
@@ -191,7 +192,7 @@ void sink(std::uint8_t state, std::uint8_t result, bool held, bool epr, std::uin
     }
     g_last_pos = pos;
 }
-void vbus_sample(std::int32_t mv, std::int32_t ma) {
+K2_HOT void vbus_sample(std::int32_t mv, std::int32_t ma) {
     const std::uint32_t now = systick::millis();
     g_caps.tick(now);
     // a deliberate voltage change is not a dip: the Contract capture covers it
@@ -203,13 +204,13 @@ void vbus_sample(std::int32_t mv, std::int32_t ma) {
     if (!g_gate.due(now, mv, ma)) return;
     rec(Type::Vbus, {lo(unsigned(mv)), hi(unsigned(mv)), lo(unsigned(ma)), hi(unsigned(ma))});
 }
-void service_called() {
+K2_HOT void service_called() {
     g_have_stamp = false;   // a stamp the last call did not spend (a frame that failed to read) is stale
     g_have_prev = g_entry_us != 0;
     g_prev_entry_us = g_entry_us;
     g_entry_us = systick::micros() | 1;   // never 0: 0 means "no call yet"
 }
-void poll_gap() {
+K2_HOT void poll_gap() {
     const std::uint32_t now = systick::micros();
     const std::uint32_t gap = g_have_prev ? now - g_prev_entry_us : 0;
     rec(Type::Poll, {lo(gap), lo(gap >> 8), lo(gap >> 16), lo(gap >> 24)});

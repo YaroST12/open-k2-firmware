@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #include "k2/core/critical.hpp"
+#include "k2/core/hot.h"
 #include "k2/drivers/regs.hpp"
 
 namespace k2::oneshot {
@@ -80,7 +81,7 @@ void cancel() {
 
 std::uint32_t fired() { return g_fired; }
 
-void isr_body() {
+K2_HOT void isr_body() {
     Tmr& t = tmr7();
     if (!(t.ISTS & Tmr::ISTS_OVFIF)) return;
     t.ISTS = 0;
@@ -91,4 +92,4 @@ void isr_body() {
 
 }  // namespace k2::oneshot
 
-extern "C" void TMR7_GLOBAL_IRQHandler() { k2::oneshot::isr_body(); }
+extern "C" K2_HOT void TMR7_GLOBAL_IRQHandler() { k2::oneshot::isr_body(); }

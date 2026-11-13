@@ -18,6 +18,7 @@
 // only gates the active tools: they refuse, or need a confirm. It does not touch the chip: the
 // passive profile never ACKs anyway.
 // The auto fast-charge detector is owned by the fast-charge work (docs/FASTCHARGE_PROTOCOLS.md), not by this driver.
+#include "k2/core/hot.h"
 #include "k2/core/log.hpp"
 #include "k2/drivers/fusb302.hpp"
 
@@ -91,7 +92,7 @@ bool g_pd_seen_attach = false;       // the same, but only a new attach clears i
 // one. `g_seek_passive` marks such an attach; a move to the other line keeps it, a fresh attach (scan, window re-check) decides again.
 alignas(pd::RdSeek) std::uint8_t g_rdseek_raw[sizeof(pd::RdSeek)];
 bool g_rdseek_inited;
-pd::RdSeek& rdseek() {
+K2_HOT pd::RdSeek& rdseek() {
     if (!g_rdseek_inited) {
         new (g_rdseek_raw) pd::RdSeek();
         g_rdseek_inited = true;
@@ -189,7 +190,7 @@ bool g_iq_inited;
 pd::IqPhase g_iq_phase{};   // the phase last logged / marked
 pd::IqStep g_iq_step{};
 
-pd::Sink& sink() {
+K2_HOT pd::Sink& sink() {
     if (!g_sink_inited) {
         new (g_sink_raw) pd::Sink();
         g_sink_inited = true;
@@ -271,7 +272,7 @@ std::uint8_t g_initial_pin_rd = 0;   // the Rd bits self_power_early() wrote fir
 bool g_ra_early = false;             // PC13 high from the boot's first moments (a planned re-attach's comeback); ra_set() takes over
 bool g_mark_read = false;            // the pin mark was consulted (plain boot after a warm reset)
 std::uint16_t g_mark_raw = 0;
-void boot_note(std::uint8_t kind, std::uint8_t val) {
+K2_HOT void boot_note(std::uint8_t kind, std::uint8_t val) {
     const std::uint32_t t = systick::millis();
     if (t >= kBootNoteSpanMs) return;
     if (g_boot_note_n > 0 && g_boot_notes[g_boot_note_n - 1].kind == kind && g_boot_notes[g_boot_note_n - 1].val == val) return;
@@ -280,7 +281,7 @@ void boot_note(std::uint8_t kind, std::uint8_t val) {
 }
 
 // Every register write goes to the black box (k2/pd/pdtrace.hpp) with its value and bus result.
-bool wr(Reg r, std::uint8_t v) {
+K2_HOT bool wr(Reg r, std::uint8_t v) {
     const bool ok = i2c::write_reg(Bus::Fusb, kAddr, r, v);
     pdtrace::reg_write(r, v, ok);
     if (r == kSwitches0) {
@@ -292,25 +293,25 @@ bool wr(Reg r, std::uint8_t v) {
     }
     return ok;
 }
-bool rd(Reg r, std::uint8_t& v) { return i2c::read_reg(Bus::Fusb, kAddr, r, v); }
-bool fifo_read(std::span<std::uint8_t> out) { return i2c::read(Bus::Fusb, kAddr, kFifos, out); }
+K2_HOT bool rd(Reg r, std::uint8_t& v) { return i2c::read_reg(Bus::Fusb, kAddr, r, v); }
+K2_HOT bool fifo_read(std::span<std::uint8_t> out) { return i2c::read(Bus::Fusb, kAddr, kFifos, out); }
 // The only path that loads the TX FIFO (transmit() and scan_orientation()): the black box records
 // the PD header and data objects given here, then the token stream goes to the chip.
 // SOP kind for the trace record, from the leading FIFO tokens: 0x12 0x12 0x12 0x13 = SOP,
 // 0x12 0x12 0x1B 0x1B = SOP' (the e-marker reads and the spoof replies). RX-style token values,
 // the same encoding the records of received frames carry (0xE0 SOP, 0xC0 SOP').
-std::uint8_t tx_sop_token(std::span<const std::uint8_t> stream) {
+K2_HOT std::uint8_t tx_sop_token(std::span<const std::uint8_t> stream) {
     if (stream.size() >= 4 && stream[2] == 0x1B && stream[3] == 0x1B) return 0xC0;
     return 0xE0;
 }
-bool fifo_write_tx(std::uint16_t header, std::span<const std::uint8_t> objs, std::span<const std::uint8_t> stream) {
+K2_HOT bool fifo_write_tx(std::uint16_t header, std::span<const std::uint8_t> objs, std::span<const std::uint8_t> stream) {
     pdtrace::tx(header, objs, tx_sop_token(stream));
     return i2c::write(Bus::Fusb, kAddr, kFifos, stream);
 }
 
 void flush_rx();  // after g_crc_on
-void flush_fifos() { wr(kControl0, kTxFlush); flush_rx(); }
-void clear_irqs() {
+K2_HOT void flush_fifos() { wr(kControl0, kTxFlush); flush_rx(); }
+K2_HOT void clear_irqs() {
     std::uint8_t i = 0, a = 0, b = 0;
     rd(kInterrupt, i); rd(kInterruptA, a); rd(kInterruptB, b);
     if (a & kIntHardRst) g_hr_latched = true;   // service() acts on it
@@ -319,7 +320,7 @@ void clear_irqs() {
 
 // CC analog switches (high = closed). PC13 high puts an Ra (~1 kohm to ground) on CC1 (hardware 2026-11-06); `vconn` is the
 // experimental VCONN role, and the Ra mode (g_ra) holds it high whatever the caller asks, so no routing change drops it.
-void cc_switches(bool vconn, std::uint8_t mask = 3) {
+K2_HOT void cc_switches(bool vconn, std::uint8_t mask = 3) {
     pins::cc1_switch.write(mask & 1);
     pins::cc2_switch.write(mask & 2);
     const bool pc13 = emkra::pc13_high(vconn, g_ra) || g_ra_early;
@@ -329,7 +330,7 @@ void cc_switches(bool vconn, std::uint8_t mask = 3) {
 
 // FIFO token to SOP kind: 0xE0 SOP, 0xC0 SOP', 0xA0 SOP''. Anything else (debug SOPs) counts as
 // SOP so the caller drops it with the source traffic.
-pd::Sop sop_from_token(std::uint8_t token) {
+K2_HOT pd::Sop sop_from_token(std::uint8_t token) {
     switch (token & 0xE0) {
         case 0xC0: return pd::Sop::SopP;
         case 0xA0: return pd::Sop::SopPP;
@@ -361,7 +362,7 @@ HeldRx g_rx_held;
 // 2026-11-12 (Anker, NOVOO, UGREEN, CUKTECH, OnePlus, ASUS, TOPADRE), which the Diag row then called "K2 send failed".
 // Reads the FIFO's first frame: true when it is the SOP GoodCRC of `sent_id`; anything else is held for service() and
 // `peek` goes false, since nothing behind a held frame may be read before it.
-bool rx_ack_peek(std::uint8_t sent_id, bool& peek) {
+K2_HOT bool rx_ack_peek(std::uint8_t sent_id, bool& peek) {
     std::uint8_t status1;
     if (!rd(kStatus1, status1) || (status1 & kRxEmpty)) return false;
     peek = false;
@@ -388,7 +389,7 @@ bool rx_ack_peek(std::uint8_t sent_id, bool& peek) {
 
 // A SOP frame as FIFO tokens: SOP1 SOP1 SOP1 SOP2, PACKSYM | length, the header, the data, JAM_CRC, EOP, TXOFF.
 using TxFrame = std::array<std::uint8_t, 4 + 1 + 2 + 28 + 3>;
-unsigned tx_frame(std::uint16_t header, const pd::TxMsg& m, TxFrame& buf) {
+K2_HOT unsigned tx_frame(std::uint16_t header, const pd::TxMsg& m, TxFrame& buf) {
     unsigned n = 0;
     for (std::uint8_t b : {0x12, 0x12, 0x12, 0x13}) buf[n++] = b;
     buf[n++] = std::uint8_t(0x80 | (2 + m.len));
@@ -406,7 +407,7 @@ unsigned tx_frame(std::uint16_t header, const pd::TxMsg& m, TxFrame& buf) {
 // answers), and the device's and the charger's PHYs both GoodCRC this frame at once, so the chip sends it exactly once (no
 // auto retry: a retry would land on the device's answer). Nothing is peeked: the GoodCRCs and the answer reach handle_frame()
 // through the normal receive path. The result only says that the frame left (TXSENT); the run never relies on it.
-bool transmit_inline(const pd::TxMsg& m) {
+K2_HOT bool transmit_inline(const pd::TxMsg& m) {
     TxFrame buf;
     const unsigned n = tx_frame(m.header, m, buf);
     clear_irqs();
@@ -439,7 +440,7 @@ bool transmit_inline(const pd::TxMsg& m) {
     return ok;
 }
 
-bool transmit(const pd::TxMsg& m) {
+K2_HOT bool transmit(const pd::TxMsg& m) {
     g_tx_timed_out = false;
     if (!g_tx_allowed) {
         // Passive mode: no frame ever goes on CC - no GoodCRC, no Reject/Accept/Soft_Reset answer, not even a Hard
@@ -587,7 +588,7 @@ void write_sw1() {
     wr(kSwitches1, phy::sw1(g_active_cc, g_crc_on));
     wr(kControl1, ctl1());   // SOP' receive follows Auto-CRC (except while the spoof is armed)
 }
-void flush_rx() { wr(kControl1, ctl1()); g_rx_held.valid = false; }
+K2_HOT void flush_rx() { wr(kControl1, ctl1()); g_rx_held.valid = false; }
 
 // Back to the passive profile after init and every detach: nothing ACKs, nothing transmits.
 void apply_rd();
@@ -1030,7 +1031,7 @@ void log_cable(const pd::Emarker& e) {
 }
 
 // Sink engine state changes go to the black box; called after every place the engine can move.
-void trace_sink() {
+K2_HOT void trace_sink() {
     static std::uint8_t last[5] = {0xFF, 0, 0, 0, 0};
     const pd::SinkStatus& s = sink().status();
     const std::uint8_t cur[5] = {std::uint8_t(s.state), std::uint8_t(s.result), std::uint8_t(s.held),
@@ -1043,7 +1044,7 @@ void trace_sink() {
     }
 }
 
-void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, bool wire = true) {
+K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, bool wire = true) {
     const bool ext = (header >> 15) & 1;
     const unsigned msg_type = header & 0x1F, num_do = (header >> 12) & 7;
     g_pd_traffic = true;
@@ -1907,7 +1908,7 @@ void log_trigger(const pd::Choice& c, pd::Err e) {
         K2LOG("[PD] Trigger pos %d (asked %d mV %d mA): %s\n", c.pos, c.mv, c.ma, pd::err_name(e));
 }
 
-void prep_tick(std::uint32_t now) {
+K2_HOT void prep_tick(std::uint32_t now) {
     switch (g_prep.tick(now, g_caps_count)) {
         case pd::TriggerPrep::Act::None: break;
         case pd::TriggerPrep::Act::OpenCc:
@@ -1989,7 +1990,7 @@ void reread_housekeeping(std::uint32_t now) {
 // by now). A contract sitting at another voltage, or in EPR mode, first goes back to the 5 V default: that Request is
 // engaged again and starts a new linger. Otherwise the contract is forgotten, so the source sees the sink gone: Rd is off,
 // and it drops VBUS and re-announces on its own. Never touches a held trigger, a run's own Rd or an operation in flight.
-void contract_expired(std::uint32_t now) {
+K2_HOT void contract_expired(std::uint32_t now) {
     const pd::SinkStatus& ss = sink().status();
     if (ss.state != pd::SinkState::Ready || ss.held) return;
     if (ss.pos != 1 || ss.epr_mode) {
@@ -2033,7 +2034,7 @@ void vconn_force_off(pd::VconnWhy why) {
 
 // Follows g_vconn: switches VCONN on / off. It goes only onto the line opposite the active one (the captive plug's other CC),
 // only with a contract-less-safe line state: the other net must read like an Rp (above 2.0 V), not an Rd / Ra, and no sink inline.
-void vconn_sync(std::uint32_t now) {
+K2_HOT void vconn_sync(std::uint32_t now) {
     const bool want = g_vconn.want_on();
     if (want && !g_vconn_applied) {
         std::uint16_t c1 = 0, c2 = 0;
@@ -2121,7 +2122,7 @@ void iq_report() {
               unsigned(s.sopp_replies), unsigned(s.sopp_real));
 }
 
-void active_tick() {
+K2_HOT void active_tick() {
     const std::uint32_t now = systick::millis();
     downstream_edge();
     sync_hard_reset_policy();
@@ -2245,7 +2246,7 @@ void active_tick() {
     }
 }
 
-void on_int_n() {
+K2_HOT void on_int_n() {
     g_rxstamp.edge(systick::micros());   // ISR-safe, one timestamp: all the ISR adds (the budget is checked in the gate's stack report)
     g_irq = true;
 }
@@ -2667,7 +2668,7 @@ void scan_if_due() {
 }
 }  // namespace
 
-void poll() {
+K2_HOT void poll() {
     static bool notes_logged = false;
     boot_readback_service();
     if (!notes_logged && g_readback_n == kBootReadbacks) {   // the 3 s readback closes the record
@@ -2770,7 +2771,7 @@ void poll() {
 
 // Receive and answer: hard reset, FIFO drain, transmit engines. Cheap when idle (two register
 // reads), so the main loop runs it every millisecond to meet tSenderResponse (~30 ms).
-void service() {
+K2_HOT void service() {
     pdtrace::service_called();
     // Legacy-only: a source that kept announcing during its give-up cycle refilled the caps; once it has
     // been quiet they are stale and would make the inline guard refuse every legacy trigger (PdContract).
@@ -3468,7 +3469,7 @@ bool send_sop_prime_frame(std::span<const std::uint8_t> tokens) {
 }  // namespace k2::fusb302
 
 // EXTI lines 10..15 share this vector; only line 12 is enabled.
-extern "C" void EXTI15_10_IRQHandler() {
+extern "C" K2_HOT void EXTI15_10_IRQHandler() {
 #ifndef K2_HOST_PINS
     k2::reg::exti().PR = 1u << 12;
 #endif

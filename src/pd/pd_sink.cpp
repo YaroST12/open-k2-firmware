@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "k2/core/hot.h"
 #include "k2/pd/pd_link.hpp"
 
 namespace k2::pd {
@@ -212,12 +213,12 @@ void Sink::update_rev() {
     if (caps_ && caps_->valid) rev_ = caps_->spec_rev == 2 ? 2 : 1;
 }
 
-void Sink::queue(const TxMsg& m) {
+K2_HOT void Sink::queue(const TxMsg& m) {
     tx_ = m;
     tx_pending_ = true;
 }
 
-bool Sink::take_tx(TxMsg& out) {
+K2_HOT bool Sink::take_tx(TxMsg& out) {
     if (sink_cap_pending_ && !(tx_pending_ && tx_.hard_reset)) {   // tSenderResponse: the answer goes first
         sink_cap_pending_ = false;
         update_rev();
@@ -262,7 +263,7 @@ bool Sink::take_tx(TxMsg& out) {
     return true;
 }
 
-void Sink::fail(SinkResult r, SinkState to) {
+K2_HOT void Sink::fail(SinkResult r, SinkState to) {
     st_.result = r;
     st_.held = false;
     st_.auto_hold = false;
@@ -276,14 +277,14 @@ void Sink::fail(SinkResult r, SinkState to) {
 }
 
 // The attempt a release waited behind failed (Reject, Wait exhausted): the release is still wanted, so it survives fail().
-void Sink::fail_keep_release(SinkResult r, SinkState to, std::uint32_t now) {
+K2_HOT void Sink::fail_keep_release(SinkResult r, SinkState to, std::uint32_t now) {
     const bool rp = release_pending_;
     fail(r, to);
     release_pending_ = rp;
     settle_release(now);
 }
 
-void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
+K2_HOT void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
     // A self-powered K2 lives on the source's VBUS: its own timeouts, aborts and over-cap guards end the attempt but never put
     // a Hard Reset on the wire (the source cuts VBUS for ~650 ms and the K2 dies). Only the explicit tool (`forced`) does.
     const bool wire = forced || !never_hard_reset_;
@@ -321,7 +322,7 @@ void Sink::do_hard_reset(SinkResult r, SinkState to, bool forced) {
 
 void Sink::hard_reset(std::uint32_t) { do_hard_reset(SinkResult::HardReset, SinkState::Idle, true); }
 
-void Sink::on_hard_reset_rx(std::uint32_t) {
+K2_HOT void Sink::on_hard_reset_rx(std::uint32_t) {
     // Only a K2 that owned a contract or was negotiating one asks for it back. A passive K2 that never requested anything (the
     // idle Home page on a charger, a Hard Reset because a tester downstream started its own test, hardware 2026-11-07) has
     // nothing to resume: its next Request would present Rd, turn Auto-CRC on and take the line from the real sink.
@@ -387,7 +388,7 @@ void Sink::detach() {
     fail(SinkResult::None, SinkState::Idle);
 }
 
-void Sink::soft_reset(std::uint32_t now) {
+K2_HOT void Sink::soft_reset(std::uint32_t now) {
     sink_cap_pending_ = false;
     sink_cap_ext_pending_ = false;
     swap_reply_ = 0;
@@ -425,7 +426,7 @@ void Sink::note_xiaomi_svid(std::uint32_t now) {
     chain_at_ = now;
 }
 
-void Sink::send_request(std::uint32_t now, bool may_defer) {
+K2_HOT void Sink::send_request(std::uint32_t now, bool may_defer) {
     // A sink-initiated Request waits for the Xiaomi chain to end and for the source's SinkTxOK (tick() sends it when both clear; the
     // Accept timer starts then). Answers to the source's own messages and the release / abort paths call this without may_defer.
     const bool chain = may_defer && xiaomi_chain_active(now);
@@ -499,7 +500,7 @@ Err Sink::request_epr_info(std::uint32_t now, bool force) {
     return Err::Ok;
 }
 
-Err Sink::request_source_caps(std::uint32_t now) {
+K2_HOT Err Sink::request_source_caps(std::uint32_t now) {
     if (!caps_) return Err::NoCaps;
     // One negotiation in flight: Ready only (no Request, Accept wait or PS_RDY outstanding), nothing of ours queued or being
     // retransmitted, no release / abort / VBUS check hanging on a Request, no Xiaomi chain (it holds our own Request back too), and
@@ -595,7 +596,7 @@ void Sink::set_hv_lock(bool on, std::uint32_t now) {
     if (entering || (high && (contract_ || st_.state != SinkState::Idle))) release(now);
 }
 
-void Sink::proceed_after_epr_caps(std::uint32_t now) {
+K2_HOT void Sink::proceed_after_epr_caps(std::uint32_t now) {
     if (want_.pos == 0) {  // only the list was wanted
         st_.result = SinkResult::Ok;
         st_.held = false;
@@ -658,7 +659,7 @@ void Sink::arm_verify(std::uint32_t now) {
     vref_set_ = false;
 }
 
-void Sink::verify_vbus(std::uint32_t now) {
+K2_HOT void Sink::verify_vbus(std::uint32_t now) {
     if (now - vbus_at_ > kVerifyFreshMs) { verify_ = false; st_.verifying = false; return; }   // the feed stopped: cannot judge
     if (vbus_mv_ <= kVSafe5MaxMv) { verify_ = false; st_.verifying = false; return; }
     const std::uint32_t elapsed = now - verify_at_;
@@ -673,7 +674,7 @@ void Sink::verify_vbus(std::uint32_t now) {
     do_hard_reset(SinkResult::Aborted, SinkState::Failed);   // bounded: a Hard Reset on the wire unless never_hard_reset
 }
 
-void Sink::release(std::uint32_t now) {
+K2_HOT void Sink::release(std::uint32_t now) {
     resume_ = false;   // the user let go: a Hard Reset's pending "ask for 5 V again" goes with the hold
     if (st_.state == SinkState::Aborting) return;
     if (st_.state == SinkState::EprEntering || st_.state == SinkState::EprWaitCaps) {
@@ -704,7 +705,7 @@ void Sink::release(std::uint32_t now) {
     begin_abort(SinkResult::Ok, now);
 }
 
-void Sink::after_ps_rdy(std::uint32_t now) {
+K2_HOT void Sink::after_ps_rdy(std::uint32_t now) {
     const std::int32_t drop_mv = contract_ ? std::int32_t(st_.mv) - std::int32_t(plan_.mv) : 0;   // the step down, for the descent window
     contract_ = true;
     st_.pos = plan_.pos;
@@ -731,7 +732,7 @@ void Sink::after_ps_rdy(std::uint32_t now) {
     settle_release(now);   // a release that waited behind this Request goes out now (not for the abort's own PS_RDY)
 }
 
-void Sink::request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload) {
+K2_HOT void Sink::request_chunk(std::uint16_t header, std::span<const std::uint8_t> payload) {
     (void)header;
     if (payload.size() < 2) return;
     const ExtHeader eh = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));
@@ -749,7 +750,7 @@ void Sink::request_chunk(std::uint16_t header, std::span<const std::uint8_t> pay
     queue(m);
 }
 
-void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
+K2_HOT void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
     const std::uint32_t edge_us = stamp_us_;   // this frame's RX edge, if the driver had one
     stamp_us_ = 0;
     if (sop != Sop::Sop) return;
@@ -970,7 +971,7 @@ void Sink::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_
     }
 }
 
-void Sink::on_tx_result(bool ok, std::uint32_t now) {
+K2_HOT void Sink::on_tx_result(bool ok, std::uint32_t now) {
     const std::uint32_t start_us = stamp_us_;   // TX_START of the message this result is for
     stamp_us_ = 0;
     if (last_tx_.hard_reset) return;
@@ -1011,7 +1012,7 @@ void Sink::set_vbus_external(bool on, std::uint32_t now) {
     if (st_.epr_mode) next_epr_ka_ = now + kEprKeepAliveMs;
 }
 
-void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
+K2_HOT void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
     vbus_mv_ = mv; vbus_at_ = now; vbus_seen_ = true;
     // An external VBUS owner (set_vbus_external): the sample is kept, nothing is judged. This also skips the owner-covered
     // over-cap abort: the owner (the SuperVOOC trigger) has its own, tighter 12 V ceiling and drops the session itself.
@@ -1052,7 +1053,7 @@ void Sink::on_vbus(std::int32_t mv, std::uint32_t now) {
     if (!falling) begin_abort(SinkResult::Aborted, now);
 }
 
-void Sink::tick(std::uint32_t now) {
+K2_HOT void Sink::tick(std::uint32_t now) {
     if (retx_pending_ && now >= retx_at_ && !tx_pending_) {
         retx_pending_ = false;
         queue(last_tx_);
@@ -1161,7 +1162,7 @@ void Sink::tick(std::uint32_t now) {
 
 // ---- Xiaomi Mi Turbo Charge authentication (SVID 0x2717) ----
 
-void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
+K2_HOT void Sink::on_vdm(std::uint16_t header, std::span<const std::uint8_t> payload, std::uint32_t now) {
     (void)now;  // may be unused
     const unsigned num_do = (header >> 12) & 7;
     if (payload.size() < 4 || num_do == 0) return;

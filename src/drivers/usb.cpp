@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // USB glue, see k2/drivers/usb.hpp.
+#include "k2/core/hot.h"
 #include "k2/core/tx_queue.hpp"
 #include "k2/core/log.hpp"
 #include "k2/drivers/usb.hpp"
@@ -40,7 +41,7 @@ bool g_hid_quiet = false;   // a trace push session owns the IN endpoint (set_hi
 
 }  // namespace
 
-void flush() {
+K2_HOT void flush() {
     while (const std::uint8_t *r = g_queue.front()) {
         if (!tud_hid_ready() || !tud_hid_report(0, r, kSlotSize)) break;
         g_queue.pop();
@@ -213,7 +214,7 @@ void dp_pullup_restore() {
     g_pull = {};
 }
 
-void poll() {
+K2_HOT void poll() {
     if (!g_started) return;            // USB link off (k2/drivers/usbcfg.hpp): the core was never started
     static std::uint32_t last_ms;
     static bool first = true;
@@ -229,13 +230,13 @@ void poll() {
     flush();
 }
 
-void pump() {
+K2_HOT void pump() {
     if (!g_started) return;
     tud_int_handler(0);
     poll();
 }
 
-void service() {
+K2_HOT void service() {
     static bool busy;
     if (!g_started || busy) return;
     busy = true;
@@ -244,7 +245,7 @@ void service() {
 }
 
 // Copy one 64-byte report into the queue. Log lines never evict queued frames (tx_queue.hpp).
-static void push(std::span<const std::uint8_t, kSlotSize> report, bool is_log) {
+K2_HOT static void push(std::span<const std::uint8_t, kSlotSize> report, bool is_log) {
     if (is_log) g_queue.push_log(report);
     else g_queue.push_report(report);
     stats.log_dropped = g_queue.dropped();
@@ -266,7 +267,7 @@ std::size_t log_bin(std::span<std::uint8_t> out, std::uint32_t& base_ms, bool& o
 }
 std::array<std::string_view, 2> log_view() { return g_ring.view(); }
 
-void log(std::string_view msg) {
+K2_HOT void log(std::string_view msg) {
     g_ring.push(msg.substr(0, kSlotSize - 1));   // what the HID line would carry
     if (g_tap) g_tap(msg.substr(0, kSlotSize - 1));
     if (!g_log_on || g_hid_quiet) return;
@@ -275,7 +276,7 @@ void log(std::string_view msg) {
     push(slot, true);
 }
 
-void send_report(const std::uint8_t* report) { push(std::span<const std::uint8_t, kSlotSize>(report, kSlotSize), false); }
+K2_HOT void send_report(const std::uint8_t* report) { push(std::span<const std::uint8_t, kSlotSize>(report, kSlotSize), false); }
 
 std::uint8_t tx_free() { return g_queue.free(); }
 
@@ -284,19 +285,19 @@ bool log_enabled() { return g_log_on; }
 void set_hid_quiet(bool on) { g_hid_quiet = on; }
 bool hid_quiet() { return g_hid_quiet; }
 
-void vlog_fmt(const char* fmt, std::va_list ap) {
+K2_HOT void vlog_fmt(const char* fmt, std::va_list ap) {
     char buf[kSlotSize];
     log({buf, fmt::vformat(buf, fmt, ap)});
 }
 
-void log_fmt(const char* fmt, ...) {
+K2_HOT void log_fmt(const char* fmt, ...) {
     std::va_list ap;
     va_start(ap, fmt);
     vlog_fmt(fmt, ap);
     va_end(ap);
 }
 
-void log_packed(std::uint16_t id, std::uint32_t sig, ...) {
+K2_HOT void log_packed(std::uint16_t id, std::uint32_t sig, ...) {
     char buf[kSlotSize];
     std::va_list ap, bin;
     va_start(ap, sig);
@@ -325,23 +326,23 @@ void log_stats() {
 extern "C" {
 
 // TinyUSB needs a millisecond clock when there is no RTOS.
-std::uint32_t tusb_time_millis_api(void) { return k2::systick::millis(); }
+K2_HOT std::uint32_t tusb_time_millis_api(void) { return k2::systick::millis(); }
 
 // Shared USB/CAN vectors. The USB core raises the low-priority interrupt for everything
 // except double-buffered/isochronous CTR (high-priority vector); TinyUSB services both.
-void USB_LP_CAN1_RX0_IRQHandler(void) {
+K2_HOT void USB_LP_CAN1_RX0_IRQHandler(void) {
     k2::usb::stats.isrs++;
     if (k2::reg::usb_istr() & k2::reg::kUsbIstrReset) k2::usb::stats.resets++;
     tud_int_handler(0);
 }
 
-void USB_HP_CAN1_TX_IRQHandler(void) { tud_int_handler(0); }
+K2_HOT void USB_HP_CAN1_TX_IRQHandler(void) { tud_int_handler(0); }
 
 // TinyUSB enables the wake-up vector; nothing routes EXTI18 to it here, but a handler
 // must exist because the default one spins forever.
 void USBWakeUp_IRQHandler(void) {}
 
-void tud_hid_report_complete_cb(std::uint8_t, const std::uint8_t*, std::uint16_t) { k2::usb::flush(); }
+K2_HOT void tud_hid_report_complete_cb(std::uint8_t, const std::uint8_t*, std::uint16_t) { k2::usb::flush(); }
 
 std::uint16_t tud_hid_get_report_cb(std::uint8_t, std::uint8_t, hid_report_type_t, std::uint8_t*, std::uint16_t) {
     return 0;

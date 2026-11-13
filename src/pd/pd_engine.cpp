@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "k2/core/hot.h"
+
 namespace k2::pd {
 
 namespace {
@@ -32,7 +34,7 @@ ExtHeader decode_ext_header(std::uint16_t raw) {
     return h;
 }
 
-void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload,
+K2_HOT void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload,
                         std::uint8_t cc) {
     usb.on_message(static_cast<usblink::Sop>(sop), header, payload);
     if (sop != Sop::Sop) {
@@ -75,7 +77,7 @@ void Engine::on_message(Sop sop, std::uint16_t header, std::span<const std::uint
 // VDM records swap with them. Reject / Wait cancel it, a PS_RDY without Accept does not complete it.
 // Any control message from a sink (power-role bit clear: its GoodCRC, Get_Source_Cap, Soft_Reset) is
 // PD traffic from a far sink behind the K2 and sets sink_ctl_seen (the passive-load gate feeds on it).
-void Engine::on_sop_control(std::uint8_t type, bool from_sink) {
+K2_HOT void Engine::on_sop_control(std::uint8_t type, bool from_sink) {
     if (from_sink) sink_ctl_seen = true;
     if (type == 0x0A) {  // PR_Swap
         pr_swap_pending_ = true;
@@ -101,7 +103,7 @@ void Engine::on_sop_control(std::uint8_t type, bool from_sink) {
     }
 }
 
-void Engine::reset_source() {
+K2_HOT void Engine::reset_source() {
     const std::uint32_t rx = caps.rx_count, req = contract.requests;
     caps = {};
     epr_info = {};
@@ -119,7 +121,7 @@ void Engine::reset_source() {
 }
 
 // A Request (type 2, or EPR_Request type 9 with the RDO first) from a sink: power role bit 8 clear.
-void Engine::on_request(std::uint16_t header, std::span<const std::uint8_t> payload) {
+K2_HOT void Engine::on_request(std::uint16_t header, std::span<const std::uint8_t> payload) {
     if (((header >> 8) & 1) || payload.size() < 4) return;
     const std::uint32_t rdo = le32(payload.data());
     const unsigned pos = rdo >> 28;
@@ -134,7 +136,7 @@ void Engine::on_request(std::uint16_t header, std::span<const std::uint8_t> payl
     apply_rdo(rdo, pos);
 }
 
-void Engine::apply_rdo(std::uint32_t rdo, unsigned pos) {
+K2_HOT void Engine::apply_rdo(std::uint32_t rdo, unsigned pos) {
     const Pdo* p = (caps.valid && pos >= 1 && pos <= caps.num_pdos) ? &caps.pdos[pos - 1] : nullptr;
     const Rdo d = decode_rdo(rdo, p);
     contract.flags = d.flags;   // the flag bits are layout-independent, always kept
@@ -159,7 +161,7 @@ bool Engine::cable_thunderbolt() const {
 
 // SOP' / SOP'' traffic: only VDM ACKs are kept (a cable never sends anything else we decode,
 // and the source's REQs to the cable are not ours to answer).
-void Engine::on_cable_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload) {
+K2_HOT void Engine::on_cable_message(Sop sop, std::uint16_t header, std::span<const std::uint8_t> payload) {
     if (((header >> 15) & 1) || (header & 0x1F) != kMsgVendorDefined) return;
     const unsigned ndo = std::min<std::size_t>((header >> 12) & 7, payload.size() / 4);
     if (ndo == 0) return;
@@ -191,7 +193,7 @@ void Engine::on_cable_message(Sop sop, std::uint16_t header, std::span<const std
 
 // Small extended messages: only the first chunk is decoded (a block longer than one chunk,
 // such as a full Manufacturer_Info, is decoded from what chunk 0 carries).
-void Engine::on_ext_message(std::uint8_t type, std::span<const std::uint8_t> payload) {
+K2_HOT void Engine::on_ext_message(std::uint8_t type, std::span<const std::uint8_t> payload) {
     if (payload.size() < 2) return;
     const ExtHeader eh = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));
     if (eh.request || (eh.chunked && eh.chunk_number != 0)) return;
@@ -209,7 +211,7 @@ void Engine::on_ext_message(std::uint8_t type, std::span<const std::uint8_t> pay
 // EPR_Source_Capabilities is a stream of up to 11 PDOs split into 26-byte chunks; chunk 0
 // holds PDOs 1..6 and half of the 7th. Chunk 0 starts a message, later chunks are placed
 // by number and only counted when a message is in progress.
-void Engine::on_epr_caps_chunk(std::uint16_t header, std::span<const std::uint8_t> payload,
+K2_HOT void Engine::on_epr_caps_chunk(std::uint16_t header, std::span<const std::uint8_t> payload,
                                std::uint8_t cc) {
     if (payload.size() < 2) return;
     const ExtHeader eh = decode_ext_header(std::uint16_t(payload[0] | (payload[1] << 8)));

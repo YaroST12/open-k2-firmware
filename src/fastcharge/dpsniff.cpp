@@ -7,6 +7,7 @@
 #include <new>
 
 #include "k2/core/critical.hpp"
+#include "k2/core/hot.h"
 #include "k2/drivers/dpdm.hpp"
 #include "k2/drivers/mode_ram.hpp"
 #include "k2/pd/pdtrace.hpp"
@@ -71,7 +72,7 @@ constexpr std::uint32_t kLines = (1u << 7) | (1u << 2);   // EXTI7 = PA7 (D+), E
 
 }  // namespace
 
-void isr_body() {
+K2_HOT void isr_body() {
     const std::uint32_t c = dpdm::cycles();
     auto& ex = reg::exti();
     ex.PR = kLines;
@@ -499,5 +500,5 @@ vooc::Live monitor_live() {
 
 }  // namespace k2::dpsniff
 
-extern "C" void EXTI2_IRQHandler() { k2::dpsniff::isr_body(); }
-extern "C" void EXTI9_5_IRQHandler() { k2::dpsniff::isr_body(); }
+extern "C" K2_HOT void EXTI2_IRQHandler() { k2::dpsniff::isr_body(); }
+extern "C" K2_HOT void EXTI9_5_IRQHandler() { k2::dpsniff::isr_body(); }
