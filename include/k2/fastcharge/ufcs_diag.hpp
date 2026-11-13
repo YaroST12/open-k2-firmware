@@ -9,8 +9,8 @@
 
 namespace k2::ufcs {
 
-// Bytes per log line: the binary log keeps at most binlog kStrMax = 12 characters of a string argument, so a
-// line carries 6 bytes (12 hex characters). 16 lost bytes 7..16 of every chunk (seen as 6-byte [UART2] lines).
+// Bytes per log line: 6 bytes (12 hex characters). The binary log used to keep only 12 characters of a string argument
+// (binlog kStrMax, 28 now) and 16 lost bytes 7..16 of every chunk (seen as 6-byte [UART2] lines); the line length stays.
 inline constexpr std::size_t kHexChunk = 6;
 
 constexpr std::size_t chunk_count(std::size_t bytes) { return (bytes + kHexChunk - 1) / kHexChunk; }

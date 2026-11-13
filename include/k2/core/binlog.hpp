@@ -8,7 +8,8 @@
 // K2LOG message id (tools/logdb.json) and the values follow the format's argument kinds (k2/core/log.hpp): a signed argument
 // is a zigzag varint, an unsigned one a varint, a string a length byte and up to kStrMax bytes. The host knows each id's
 // argument kinds from the version's logdb map, so the entry carries no types. Varints are 7 bits per byte, low group first,
-// bit 7 set on every byte but the last. An entry whose arguments would pass kEntryMax stops at the last one that fits.
+// bit 7 set on every byte but the last. An entry whose arguments would pass kEntryMax stops at the last one that fits; an
+// argument takes the room it needs (a varint at most 5 bytes, a string its length up to kStrMax), not a worst case.
 //
 // The ring drops whole oldest entries when full and keeps the time of the entry it dropped last (base_ms), so the time of
 // any entry is base_ms plus the dt of every entry up to and including it.
@@ -32,8 +33,8 @@ struct BinLogSnapshot {
 template <std::size_t N>
 class BinLog {
 public:
-    static constexpr std::size_t kEntryMax = 48;   // body bytes
-    static constexpr std::size_t kStrMax = 12;
+    static constexpr std::size_t kEntryMax = 63;   // body bytes: len + body is one 64-byte debug-stream chunk at most
+    static constexpr std::size_t kStrMax = 28;     // the longest interrogation words are 27 characters
 
     void push(std::uint32_t now_ms, std::uint16_t id, std::uint32_t sig, std::va_list ap) {
         std::uint8_t e[kEntryMax + 1];
@@ -44,21 +45,22 @@ public:
         };
         varint(now_ms - last_ms_);
         varint(id);
-        for (; sig && n + 1 + kStrMax <= sizeof e; sig >>= 2) {
-            switch (sig & 3) {
-            case logfmt::kSigned: {
-                const int v = va_arg(ap, int);
-                varint((static_cast<std::uint32_t>(v) << 1) ^ static_cast<std::uint32_t>(v >> 31));
-                break;
-            }
-            case logfmt::kUnsigned: varint(va_arg(ap, std::uint32_t)); break;
-            default: {
+        for (; sig; sig >>= 2) {
+            if ((sig & 3) == logfmt::kString) {
                 const char *s = va_arg(ap, const char *);
-                const std::size_t at = n++;
-                for (; s && *s && n - at <= kStrMax; s++) e[n++] = static_cast<std::uint8_t>(*s);
-                e[at] = static_cast<std::uint8_t>(n - at - 1);
-                break;
-            }
+                std::size_t len = 0;
+                while (s && s[len] && len < kStrMax) len++;
+                if (n + 1 + len > sizeof e) break;   // the rest does not fit: the entry stops at the last argument that did
+                e[n++] = static_cast<std::uint8_t>(len);
+                for (std::size_t i = 0; i < len; i++) e[n++] = static_cast<std::uint8_t>(s[i]);
+            } else {
+                if (n + 5 > sizeof e) break;   // a varint takes up to 5 bytes
+                if ((sig & 3) == logfmt::kSigned) {
+                    const int v = va_arg(ap, int);
+                    varint((static_cast<std::uint32_t>(v) << 1) ^ static_cast<std::uint32_t>(v >> 31));
+                } else {
+                    varint(va_arg(ap, std::uint32_t));
+                }
             }
         }
         e[0] = static_cast<std::uint8_t>(n - 1);

@@ -74,12 +74,42 @@ void test_value_edges() {
 
 void test_long_string_is_cut_and_null_is_empty() {
     BinLog<256> log;
-    push(log, 1, 2, sig({kString, kString}), "0123456789ABCDEFGHIJ", nullptr);
+    const char *s = "0123456789ABCDEFGHIJ0123456789ABCDEFGHIJ";   // 40 characters: longer than any kStrMax
+    push(log, 1, 2, sig({kString, kString}), s, nullptr);
     const auto got = snap(log, 256);
     CHECK_EQ(got[2], 2u);                                  // id
     CHECK_EQ(got[3], static_cast<unsigned>(BinLog<256>::kStrMax));
-    CHECK_EQ(std::memcmp(&got[4], "0123456789AB", 12), 0);
-    CHECK_EQ(got[4 + 12], 0u);                             // the null string is a zero-length one
+    CHECK_EQ(std::memcmp(&got[4], s, BinLog<256>::kStrMax), 0);
+    CHECK_EQ(got[4 + BinLog<256>::kStrMax], 0u);           // the null string is a zero-length one
+}
+
+// The words of the inline interrogation lines (pd::iq_*_name) must come through whole: the longest name is 27 characters.
+void test_the_longest_interrogation_words_are_not_cut() {
+    const char *a = "charger restarts when asked";        // 27: IqWhy
+    const char *b = "no contract after the reset";        // 27: IqMatch
+    const char *c = "Get_Sink_Cap_Extended";              // 21: IqStep
+    CHECK_COND(BinLog<256>::kStrMax >= 28);
+    for (const char *want : {a, b, c}) {
+        BinLog<256> log;
+        push(log, 1, 2, sig({kString}), want);
+        const auto got = snap(log, 256);
+        CHECK_EQ(got[3], std::strlen(want));
+        CHECK_EQ(std::memcmp(&got[4], want, std::strlen(want)), 0);
+        CHECK_EQ(got.size(), 4u + std::strlen(want));      // nothing else, nothing missing
+    }
+}
+
+// Every argument of a line that fits the entry limit is kept: a string takes what it needs, not a worst case.
+void test_every_argument_of_a_fitting_line_is_kept() {
+    BinLog<256> log;
+    // "[IQ] t=%u Q %s id %u try %u: %s (device msgs %u, GoodCRC %u, charger msgs %u)" with a 5-byte time and long words
+    push(log, 1, 2, sig({kUnsigned, kString, kUnsigned, kUnsigned, kString, kUnsigned, kUnsigned, kUnsigned}), 0xFFFFFFFu,
+         "Get_Sink_Cap_Extended", 7u, 2u, "only the charger spoke", 1u, 1u, 3u);
+    const auto got = snap(log, 256);
+    CHECK_EQ(got[0], got.size() - 1);
+    CHECK_EQ(got.back(), 3u);                              // the last argument is there
+    CHECK_EQ(got[got.size() - 2], 1u);
+    CHECK_EQ(got[got.size() - 3], 1u);
 }
 
 void test_entry_is_capped() {
@@ -197,6 +227,8 @@ int main() {
     test_live_read_survives_wrap_and_reports_drops();
     test_clear_keeps_the_counters_monotonic();
     test_entry_layout();
+    test_the_longest_interrogation_words_are_not_cut();
+    test_every_argument_of_a_fitting_line_is_kept();
     test_value_edges();
     test_long_string_is_cut_and_null_is_empty();
     test_entry_is_capped();

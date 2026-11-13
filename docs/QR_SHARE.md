@@ -108,12 +108,12 @@ so the map of a firmware version is that file at its git commit. `usb::log_packe
 
     len u8 | dt varint | id varint | args...
 
-- `len`: bytes after it (at most 48).
+- `len`: bytes after it (at most 63).
 - `dt`: ms since the previous entry (32 bit wrap safe); `base_ms` in the record head plus the sum of the `dt`s is the uptime.
 - `id`: the message id.
 - args, in the order of the format string, by the argument's kind (2 bits per argument in the call signature, which the host
   reads from the format string of that id): signed = zigzag varint, unsigned (`%u`, `%x`) = varint, string = length byte plus up
-  to 12 bytes.
+  to 28 bytes. An argument takes the room it needs; when the next one does not fit the 63 bytes, the entry stops before it.
 
 The ring drops whole oldest entries; the record carries the newest ones that fit 510 bytes, oldest first, and `older` says
 whether anything before them was left out. A typical entry is 6 to 12 bytes, against about 60 for the text line.

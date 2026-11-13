@@ -54,7 +54,7 @@ enum class Src : std::uint8_t { Log = 2, Run = 3 };
 inline constexpr std::size_t kFrameMax = 96;                 // the largest frame the multiplexer builds or reserves room for
 inline constexpr unsigned kMaxFramesPerPass = 8;             // bounds the work of one main-loop pass
 inline constexpr unsigned kKindFramesPerPass = 2;            // per kind: a busy source cannot starve the others
-inline constexpr std::size_t kLogChunk = 64;                 // BinLog bytes per Log frame (an entry is at most 49)
+inline constexpr std::size_t kLogChunk = 64;                 // BinLog bytes per Log frame (an entry is at most 64: len + BinLog::kEntryMax)
 inline constexpr std::size_t kTextChunk = 56;
 inline constexpr std::size_t kHashMax = 24;
 inline constexpr std::uint16_t kPowerHzMin = 1, kPowerHzMax = 100, kPowerHzDefault = 20;
