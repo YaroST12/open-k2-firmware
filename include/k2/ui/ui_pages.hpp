@@ -299,6 +299,9 @@ public:
     void set_sweep(bool on) { options_.pps_sweep = on; }
     bool avs_sweep_on() const { return options_.avs_sweep; }
     void set_avs_sweep(bool on) { options_.avs_sweep = on; }
+    // The SVOOC ceiling stage (opt-in, Cmd::ChargerSvoocCap): Off, On (the far-sink check stays) or UsbA (waived: a legacy A port).
+    svooc_ceiling::Mode svooc_cap() const { return options_.svooc_cap; }
+    void set_svooc_cap(svooc_ceiling::Mode m) { options_.svooc_cap = m; }
     // The unit order of the next run (Cmd::ChargerUnits); empty = the default order. False for an unknown or repeated unit.
     bool set_units(std::span<const uint8_t> units);
     // The identity the next START presents (Cmd::ChargerCable); false for a malformed choice or a clone not in the library.
@@ -371,6 +374,8 @@ private:
     pd::Err request_pd(pd::Choice) override;
     fc::Fail request_fc(fc::Proto, int, bool, int) override;
     void release(bool) override;
+    uint8_t ceiling_start(bool usb_a) override;   // svooc_trig::start with the Probe profile; 0 = running, else svooc::Refusal
+    void ceiling_stop() override;
     void legacy_only(bool) override;
     void pd_rescan() override;
     void detach() override;

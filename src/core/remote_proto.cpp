@@ -178,6 +178,13 @@ size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView& v
     return w.size();
 }
 
+size_t encode_charger_svooc_cap(std::span<uint8_t> out, const ChargerSvoocCap &c) {
+    if (out.size() < kChargerSvoocCapLen) return 0;
+    Writer w(out);
+    w.u8(c.mode); w.u8(c.end); w.u8(c.why); w.u8(c.asks); w.u16(c.word);
+    return w.size();
+}
+
 size_t encode_state(std::span<uint8_t> out, const StateInfo &s) {
     Writer w(out);
     w.u8(s.page); w.u8(s.active_cc); w.u8(s.spec_rev); w.u8(s.num_pdos);
@@ -476,6 +483,14 @@ size_t encode_svooc_timing(std::span<uint8_t> out, const SvoocSnapshot &v) {
     const auto u16c = [](std::uint32_t x) { return static_cast<uint16_t>(x > 0xFFFF ? 0xFFFF : x); };
     w.u32(v.stall.us); w.u16(u16c(v.stall.at_ms)); w.u8(static_cast<uint8_t>(v.stall.id)); w.u16(u16c(v.stall.ticked_ms));
     w.u16(u16c(v.rel_timer)); w.u16(u16c(v.rel_loop)); w.u16(u16c(v.rel_edge));
+    return w.size();
+}
+
+size_t encode_svooc_asks(std::span<uint8_t> out, const SvoocSnapshot &v) {
+    Writer w(out);
+    const size_t n = std::min<size_t>(v.n_asks, svooc::kAsksMax);
+    w.u8(static_cast<uint8_t>(v.params.profile)); w.u16(v.ceiling_word); w.u8(static_cast<uint8_t>(n));
+    for (size_t i = 0; i < n; i++) { w.u16(v.asks[i].t_ms); w.u16(v.asks[i].word); w.u8(v.asks[i].after); }
     return w.size();
 }
 

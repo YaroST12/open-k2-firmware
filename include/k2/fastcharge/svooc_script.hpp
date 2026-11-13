@@ -27,12 +27,25 @@
 //   escape (Params::esc_at_s): the phone asks for a fresh 0x86 by answering a 0x82 poll with kEscapeWord (0x07F, seen
 //          6 of 6 times); the adapter then sends 0x86 on its next command. After esc_at_s seconds (since the wake) one
 //          0x82 poll of the ramp is answered with it, and the 0x86 that follows is answered Params::i86_esc.
+//   phone profile (Params::profile Phone / Probe): the words of a OnePlus 15 session after the accept, from its own passive
+//          capture (reverse-engineered; the phone is never cut off by the adapter, the fixed profile above was at 72 pairs):
+//          0x84 > 0x020 x4 then 0x030, 0x86 > 0x06D at the ramp end, then 0x82 polls of a slowly moving word (phone_word:
+//          0x025 x11, 0x026 x10, 0x029 x12, 0x028 x11, ... up to 0x057, the battery telemetry), the first escape on the
+//          12th 82 poll (0.52 s after the ramp-end 0x86) answered 0x86 > 0x00F, the next one every 34 polls (1.5 s)
+//          answered by the ladder (Phone: 0x06D, the phone's own second ask; Probe: 0x028, 0x03F, 0x06D, upward from a
+//          0x00F first ask, so the highest level the adapter keeps polling under shows). Every 0x86 answered after the
+//          handshake is recorded (asks(): time, word, and the 82 polls that followed it).
+//          The 0x86 word is the CURRENT LIMIT the sink asks for, 100 mA per count (confirmed against measured current:
+//          0x00F 1.5 A, 0x028 4.0 A, 0x03F 6.3 A, 0x06D 10.9 A). It is the K2's own word: what the responder can say about
+//          an adapter is the highest ask under which the session went on (ceiling_word()), never a measured limit.
 // Anything else is off-script: answered with kSilent (D- low for the frame, what a phone that does not answer leaves on
 // the line) and counted; more than kOffScriptMax off-script commands in a row make abort() true. An on-script command
 // ends the run.
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace k2::svooc {
 
@@ -57,21 +70,67 @@ inline constexpr std::uint16_t kR82Max = 0x07E, kEscapeWord = 0x07F;
 inline constexpr std::uint16_t kVtargetMaxMv = 11000;
 inline constexpr std::uint8_t kEscapeAtMaxS = 20;       // the run's cap
 
+// The phone profile's words (the OnePlus 15 capture): the 0x84 ramp, the 0x86 asks and the escape schedule, in 82 polls.
+inline constexpr int kPhoneRampSteps = 4;
+inline constexpr std::uint16_t kPhoneRampStep = 0x020;
+inline constexpr std::uint16_t kI86PhoneMax = 0x06D;    // the phone's top ask, 10.9 A (the protocol's word, no load drawn)
+inline constexpr std::uint16_t kPhoneFirstAsk = 0x06D;  // 0x86 at the ramp end (Phone)
+inline constexpr std::uint16_t kPhoneEscAsk = 0x00F;    // 0x86 after the first escape
+inline constexpr int kEscFirstPoll = 11;                // the escape is the 12th 82 poll after the ramp end ...
+inline constexpr int kEscGapPolls = 34;                 // ... and then every 34th (43.5 ms each: 0.52 s, then 1.5 s)
+inline constexpr int kAcceptPolls = 4;                  // 82 polls the adapter kept on the script after an ask: accepted
+inline constexpr std::size_t kAsksMax = 8;
+
+// How the responder answers after the accept. Fixed = the operator's constants (the original, a OnePlus session survives
+// about 72 pairs of it); Phone = the OnePlus 15's own words and escapes; Probe = Phone's ramp and 0x82 words with an
+// ascending 0x86 ladder (0x00F, 0x028, 0x03F, 0x06D).
+enum class Profile : std::uint8_t { Fixed, Phone, Probe };
+constexpr const char* name(Profile p) {
+    switch (p) {
+    case Profile::Fixed: return "fixed";
+    case Profile::Phone: return "phone";
+    case Profile::Probe: return "probe";
+    }
+    return "?";
+}
+
+// The current limit an 0x86 word asks for, in mA (100 mA per count).
+constexpr std::int32_t ask_ma(std::uint16_t word) { return std::int32_t(word) * 100; }
+
+// The phone's 0x82 word after the n-th word poll (escape polls not counted), the capture's runs of the same word: the
+// battery telemetry, a few counts up in the first seconds, then holding at its last word.
+inline constexpr std::array<std::array<std::uint8_t, 2>, 23> kPhoneRuns{{
+    {0x25, 11}, {0x26, 10}, {0x29, 12}, {0x28, 11}, {0x28, 10}, {0x27, 11}, {0x2C, 13}, {0x30, 10}, {0x34, 13},
+    {0x39, 10}, {0x3C, 14}, {0x41, 9}, {0x43, 2}, {0x44, 12}, {0x47, 9}, {0x49, 3}, {0x4A, 11}, {0x4E, 9},
+    {0x50, 3}, {0x51, 12}, {0x53, 8}, {0x55, 3}, {0x56, 12},
+}};
+inline constexpr std::uint16_t kPhoneHold = 0x057;
+constexpr std::uint16_t phone_word(std::uint32_t n) {
+    for (const auto& r : kPhoneRuns) {
+        if (n < r[1]) return r[0];
+        n -= r[1];
+    }
+    return kPhoneHold;
+}
+
 struct Params {
-    std::uint16_t i86_first = kI86Default;   // 0x86 answers until an escape was answered
-    std::uint16_t i86_esc = kI86Default;     // 0x86 answers from the escape's 0x86 on
-    std::uint16_t r82 = kSteadyWord;         // constant 0x82 word (ignored while vtarget_mv != 0 and VBUS is known)
+    std::uint16_t i86_first = kI86Default;   // 0x86 answers until an escape was answered (Fixed)
+    std::uint16_t i86_esc = kI86Default;     // 0x86 answers from the escape's 0x86 on (Fixed); the last ask of Phone's ladder
+    std::uint16_t r82 = kSteadyWord;         // constant 0x82 word (ignored while vtarget_mv != 0 and VBUS is known; Fixed)
     std::uint16_t vtarget_mv = 0;            // closed loop on 0x82: the VBUS at which the word says "battery high"; 0 = off
-    std::uint8_t esc_at_s = 0;               // seconds after the wake: one 0x82 poll gets the escape; 0 = never
+    std::uint8_t esc_at_s = 0;               // seconds after the wake: one 0x82 poll gets the escape; 0 = never (Fixed)
+    Profile profile = Profile::Fixed;
 
     constexpr Params clamped() const {
         Params p = *this;
         const auto cl = [](std::uint16_t v, std::uint16_t lo, std::uint16_t hi) { return v < lo ? lo : v > hi ? hi : v; };
-        p.i86_first = cl(i86_first, kI86Min, kI86Max);
-        p.i86_esc = cl(i86_esc, kI86Min, kI86Max);
+        const std::uint16_t top = profile == Profile::Fixed ? kI86Max : kI86PhoneMax;
+        p.i86_first = cl(i86_first, kI86Min, top);
+        p.i86_esc = cl(i86_esc, kI86Min, top);
         p.r82 = cl(r82, 0, kR82Max);
         p.vtarget_mv = vtarget_mv > kVtargetMaxMv ? kVtargetMaxMv : vtarget_mv;
         p.esc_at_s = esc_at_s > kEscapeAtMaxS ? kEscapeAtMaxS : esc_at_s;
+        if (profile != Profile::Phone && profile != Profile::Probe) p.profile = Profile::Fixed;
         return p;
     }
 };
@@ -132,8 +191,29 @@ public:
     // Sets the operator's parameters (clamped). Before the run: the script state is not touched, only the escape is re-armed.
     void configure(const Params& p) {
         p_ = p.clamped();
-        esc_ = p_.esc_at_s ? Escape::Armed : Escape::Off;
+        esc_ = (p_.esc_at_s || ladder()) ? Escape::Armed : Escape::Off;
         esc_t_ms_ = 0;
+        esc_n_ = 0;
+        n82_ = 0;
+        nw_ = 0;
+        next_esc_ = kEscFirstPoll;
+        ask_ = ladder() ? ladder_word(0) : 0;
+        n_asks_ = 0;
+    }
+    // Every 0x86 answered after the handshake: when (ms since the wake, 16 bits), the word, and how many 82 polls the
+    // adapter kept on the script while it stood.
+    struct Ask {
+        std::uint16_t t_ms = 0;
+        std::uint16_t word = 0;
+        std::uint8_t after = 0;
+    };
+    std::span<const Ask> asks() const { return {asks_.data(), n_asks_}; }
+    // The highest ask the adapter went on under (at least kAcceptPolls 82 polls on the script after it), 0 = none yet. This
+    // is what the session shows of the adapter's current ceiling: the K2 asked it, nothing was drawn.
+    std::uint16_t ceiling_word() const {
+        std::uint16_t best = 0;
+        for (const Ask& a : asks()) if (a.after >= kAcceptPolls && a.word > best) best = a.word;
+        return best;
     }
     // t_ms: milliseconds since the wake (the escape's clock); vbus_mv: the latest VBUS reading, 0 = unknown (the closed
     // loop then falls back to the constant word).
@@ -177,24 +257,57 @@ private:
         // The command after the escape tells whether the adapter asked for 0x86 as expected.
         const bool after_escape = esc_ == Escape::Sent;
         if (after_escape) esc_ = cmd == 0x86 ? Escape::Got86 : Escape::NoGet86;
+        const int steps = ladder() ? kPhoneRampSteps : kRampSteps;
         switch (cmd) {
         case 0x94: return {kSilent, true};
         case 0x84:
-            if (ramp_ > kRampSteps) return off();   // the ramp was ended already
-            return {ramp_++ < kRampSteps ? kRampStep : kRampEnd, true};
-        case 0x86:
-            // From the escape on (the 0x86 that followed it, or a late one) the new target stands.
-            return {esc_ == Escape::Got86 || esc_ == Escape::NoGet86 ? p_.i86_esc : p_.i86_first, true};
-        case 0x82:
-            if (esc_ == Escape::Armed && t_ms >= std::uint32_t(p_.esc_at_s) * 1000u) {
+            if (ramp_ > steps) return off();   // the ramp was ended already
+            return {ramp_++ < steps ? (ladder() ? kPhoneRampStep : kRampStep) : kRampEnd, true};
+        case 0x86: {
+            // Fixed: from the escape on (the 0x86 that followed it, or a late one) the new target stands. Phone / Probe:
+            // the ladder's current rung, set when its escape went out.
+            const std::uint16_t w = ladder() ? ask_
+                                    : (esc_ == Escape::Got86 || esc_ == Escape::NoGet86 ? p_.i86_esc : p_.i86_first);
+            record_ask(t_ms, w);
+            return {w, true};
+        }
+        case 0x82: {
+            const bool due = ladder() ? (esc_n_ + 1 < ladder_len() && int(n82_) >= next_esc_ && esc_ != Escape::Sent)
+                                      : (esc_ == Escape::Armed && t_ms >= std::uint32_t(p_.esc_at_s) * 1000u);
+            if (n_asks_ && asks_[n_asks_ - 1].after < 0xFF) ++asks_[n_asks_ - 1].after;
+            if (n82_ < 0xFFFF) ++n82_;
+            if (due) {
                 esc_ = Escape::Sent;
                 esc_t_ms_ = t_ms;
+                if (ladder()) {
+                    ask_ = ladder_word(++esc_n_);
+                    next_esc_ = int(n82_) - 1 + kEscGapPolls;
+                }
                 return {kEscapeWord, true};
             }
+            if (ladder()) return {phone_word(nw_++), true};
             if (p_.vtarget_mv && vbus_mv) return {closed_loop_reply(vbus_mv, p_.vtarget_mv), true};
             return {p_.r82, true};
+        }
         default: return off();
         }
+    }
+
+    bool ladder() const { return p_.profile != Profile::Fixed; }
+    // The ladder's asks: k = 0 at the ramp end, k = n after the n-th escape. Phone: 06D, 00F, then i86_esc (the phone's
+    // own second ask); Probe: 00F, 028, 03F, 06D (every level the phone asked, upward).
+    std::uint16_t ladder_word(int k) const {
+        if (p_.profile == Profile::Probe) {
+            constexpr std::uint16_t kProbe[] = {0x00F, 0x028, 0x03F, 0x06D};
+            return kProbe[k < 4 ? k : 3];
+        }
+        return k == 0 ? kPhoneFirstAsk : k == 1 ? kPhoneEscAsk : p_.i86_esc;
+    }
+    int ladder_len() const { return p_.profile == Profile::Probe ? 4 : 3; }
+    void record_ask(std::uint32_t t_ms, std::uint16_t w) {
+        const std::uint16_t t = t_ms > 0xFFFF ? 0xFFFF : std::uint16_t(t_ms);
+        const std::size_t i = n_asks_ < kAsksMax ? n_asks_++ : kAsksMax - 1;   // full: the last slot follows the latest
+        asks_[i] = Ask{t, w, 0};
     }
 
     Phase phase_ = Phase::Ident;
@@ -205,6 +318,13 @@ private:
     Params p_ = Params{}.clamped();
     Escape esc_ = Escape::Off;
     std::uint32_t esc_t_ms_ = 0;
+    int esc_n_ = 0;               // escapes sent (the ladder's rung)
+    std::uint16_t n82_ = 0;       // 82 polls answered after the handshake, escapes included
+    std::uint32_t nw_ = 0;        // the phone's word polls answered (escapes not counted)
+    int next_esc_ = kEscFirstPoll;   // the n82_ at which the next escape goes out
+    std::uint16_t ask_ = 0;       // the ladder's current 0x86 word
+    std::array<Ask, kAsksMax> asks_{};
+    std::size_t n_asks_ = 0;
 };
 
 }  // namespace k2::svooc

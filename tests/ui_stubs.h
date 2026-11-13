@@ -161,6 +161,16 @@ struct StubState {
     bool ident_wait = false;      // identify_busy(): an alone-Identify still waiting for its contract
     bool ident_current = false;   // identify_current(): the stored Identify answers belong to this attach
     int fc_stops = 0, fc_scans = 0;
+    // The SuperVOOC trigger glue (svooc_trig, stubbed outside the SuperVOOC world): what the charger test's ceiling stage asked.
+    int svooc_starts = 0, svooc_stops = 0;
+    uint8_t svooc_refusal = 0;        // svooc::Refusal the next start returns (0 = none: it runs)
+    bool svooc_usb_a = false;         // the usb_a flag of the last start
+    uint8_t svooc_profile = 0;        // svooc::Profile of the last start
+    bool svooc_run = false;           // running()
+    uint8_t svooc_n_asks = 0;         // the snapshot's asks (100 mA words below) and ceiling word
+    uint16_t svooc_ceiling = 0;
+    uint16_t svooc_asks[8] = {};
+    uint8_t svooc_after = 0;          // polls the last ask stood for
     int fc_starts = 0, fc_inline_ok = 0;   // fctrig::start calls, and those carrying the override
     int fc_start_mv = 0;
     bool fc_confirmed = false;

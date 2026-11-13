@@ -317,6 +317,13 @@ class UnitsOption(unittest.TestCase):
         self.assertEqual(ct_start.main(["--units", "qc2,qc2"]), 4)
 
 
+class SvoocCapOption(unittest.TestCase):
+    def test_only_on_and_usb_a_are_accepted(self):
+        for bad in ("bogus", "off", ""):
+            with self.assertRaises(SystemExit):
+                ct_start.main(["--svooc-cap", bad])
+
+
 class CableOption(unittest.TestCase):
     def test_bad_cable_is_refused_before_any_device_access(self):
         self.assertEqual(ct_start.main(["--cable", "bogus"]), 4)

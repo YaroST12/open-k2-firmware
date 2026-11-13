@@ -97,7 +97,7 @@ void Runner::note_preflight_refusal(Reason r, int vbus_mv, const char* detail) {
     }
 }
 const char* name(State s) {
-    static constexpr const char* names[] = {"Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing..."};
+    static constexpr const char* names[] = {"Setup", "Verify 5V", "Negotiating", "Hold", "Return to 5V", "Complete", "Stopped", "UNSAFE: unplug source", "Detach charger", "Initializing...", "SVOOC ceiling"};
     return names[static_cast<unsigned>(s)];
 }
 const char* name(Unit u) {
@@ -1263,6 +1263,7 @@ Reason Runner::start(const pd::SourceCaps& caps, Options o, Input in, bool confi
     selfpwr_ = in.self_powered; suspended_ = adopt_ = held_ = false; jwait_ms_ = 0;
     session_ = in.session; resets_ = link_resets(in.pd);
     handover_ = {}; unit_ = Unit::Count; mode_ = Mode::Pd;
+    ceiling_pending_ = ceiling_done_ = ceil_stopping_ = false; ceil_ms_ = ceil_stop_ms_ = 0;
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = never_dark_ = dipped_ = dark_ = false; attach_try_ = 0;
     rp_restart_ = false; contract_wrong_ = false; attach_max_mv_ = 0;
     pre_ms_ = 0;
@@ -1533,6 +1534,8 @@ void Runner::finish(Input in, Verdict v, Reason r, uint8_t detail) {
             o.detail = detail; o.tries = s.tries; o.measured_mv = s.measured_mv;
             env_.record(o);
         }
+    // The SVOOC ceiling stage (svooc_ceiling.hpp) follows a detected family once, after its session is released.
+    if (family(s.group) && v == Verdict::Pass && why == fc::Fail::Detected && ceiling_wanted()) ceiling_pending_ = true;
     if (v == Verdict::Pass) replan_fc(in);
     // pattern qc3-20v-without-qc2-20v: QC3 Class B just reached 20 V, so an earlier "Class A only" QC2 Class B 20 V row was a real miss.
     if (v == Verdict::Pass && s.algorithm == Algorithm::Qc3ClassB && s.mv == 20000)
@@ -1689,6 +1692,8 @@ size_t Runner::pick() const {
 // The run's one scheduler: the unit in progress goes on with its next row; when it has none left it ends with its detach, and
 // the next detached state starts the next unit (docs/CHARGER_TEST_FLOW.md).
 void Runner::next(Input in) {
+    // The SVOOC ceiling stage runs once the VOOC family's session is let go: D+/D- free, VBUS back at 5 V, nothing drawn.
+    if (ceiling_pending_ && attached_ && !ending_ && !pd_owned_ && !fc_owned_ && safe5(in.vbus_mv) && begin_ceiling(in)) return;
     const size_t i = pick();
     if (i != SIZE_MAX && attached_ && !ending_ && unit_of(steps_[i]) == unit_) { index_ = i; request(in); return; }
     // Restart rules, rule 4 (end-of-unit sweep): before the PD unit closes, re-check the Withdrawn rows ONCE against the
@@ -2000,11 +2005,69 @@ void Runner::poll_attach(Input in, const pd::SourceCaps& caps, uint32_t gap) {  
     }
     state_ = State::Baseline; stable_ = false; phase_ms_ = in.now;   // the usual 500 ms of vSafe5V, then the first row
 }
+// The SVOOC ceiling stage (svooc_ceiling.hpp). One stage per run, queued by finish() once the VOOC family was detected and the
+// plan holds an SVOOC row. NO LOAD: the guarded trigger asks the adapter for 1.5 / 4 / 6.3 / 10.9 A in protocol words only, and
+// the highest ask the adapter went on under is the result. It runs at 5 V with the family session already released.
+bool Runner::ceiling_wanted() const {
+    if (opts_.svooc_cap == svooc_ceiling::Mode::Off || ceiling_done_) return false;
+    for (size_t n = 0; n < count_; ++n)
+        if (steps_[n].group == Group::SuperVooc || steps_[n].group == Group::SuperVooc65) return true;
+    return false;
+}
+bool Runner::begin_ceiling(Input in) {
+    ceiling_pending_ = false; ceiling_done_ = true;
+    evidence_.svooc_word = 0; evidence_.svooc_why = 0; evidence_.svooc_asks = 0;
+    const uint8_t refused = env_.ceiling_start(opts_.svooc_cap == svooc_ceiling::Mode::UsbA);
+    if (refused) {
+        evidence_.svooc_end = static_cast<uint8_t>(svooc_ceiling::End::Refused); evidence_.svooc_why = refused;
+        K2LOG("[CT] svooc_cap refused why=%u\n", unsigned(refused));
+        return false;
+    }
+    evidence_.svooc_end = static_cast<uint8_t>(svooc_ceiling::End::None);
+    state_ = State::Ceiling; ceil_ms_ = in.now; ceil_stopping_ = false; ceil_end_ = svooc_ceiling::End::None; stable_ = false;
+    K2LOG("[CT] svooc_cap start usb_a=%u\n", unsigned(opts_.svooc_cap == svooc_ceiling::Mode::UsbA));
+    return true;
+}
+// What the trigger has shown so far goes to the evidence (the word only ever rises: the highest ask accepted).
+void Runner::note_ceiling(const Input& in, svooc_ceiling::End e) {
+    evidence_.svooc_end = static_cast<uint8_t>(e);
+    evidence_.svooc_word = std::max(evidence_.svooc_word, in.svooc_word);
+    evidence_.svooc_asks = std::max(evidence_.svooc_asks, in.svooc_asks);
+    evidence_.svooc_why = e == svooc_ceiling::End::Aborted ? in.svooc.abort : uint8_t(0);
+    K2LOG("[CT] svooc_cap end=%u word=%u asks=%u why=%u\n", unsigned(evidence_.svooc_end), unsigned(evidence_.svooc_word),
+          unsigned(evidence_.svooc_asks), unsigned(evidence_.svooc_why));
+}
+void Runner::end_ceiling(Input in, svooc_ceiling::End e) {
+    note_ceiling(in, e);
+    ceil_stopping_ = false;
+    release(in, false);   // nothing is owned and VBUS is at 5 V: the run goes straight on
+}
+void Runner::poll_ceiling(Input in) {
+    if (!ceil_stopping_) {
+        const Reason fault = in.vbus_mv < 0 || in.cap_mv < 5000 ? Reason::NoMonitor : in.loop_lock ? Reason::Loop :
+            in.inline_load ? Reason::Inline : in.fake ? Reason::Fake : Reason::None;
+        const auto e = fault != Reason::None ? svooc_ceiling::End::Aborted : svooc_ceiling::end_of(in.svooc, in.now - ceil_ms_);
+        if (e == svooc_ceiling::End::None) return;
+        if (in.svooc.running || fault != Reason::None) {   // judged, capped or faulted: ask the trigger to stop, its exit watch follows
+            env_.ceiling_stop(); ceil_stopping_ = true; ceil_stop_ms_ = in.now; ceil_end_ = e;
+            return;
+        }
+        end_ceiling(in, e);
+        return;
+    }
+    if (!in.svooc.running || in.now - ceil_stop_ms_ >= svooc_ceiling::kExitGraceMs) end_ceiling(in, ceil_end_);
+}
 void Runner::cancel(Input in) {
     if (!busy() || state_ == State::Unsafe || (state_ == State::Releasing && stopping_)) return;
     end_probe();
     ++revision_;
     reason_ = Reason::Cancelled;
+    if (state_ == State::Ceiling) {   // the trigger's exit watch brings the lines back to 5 V while the run is Releasing
+        note_ceiling(in, svooc_ceiling::End::Cancelled);
+        env_.ceiling_stop(); ceil_stopping_ = false;
+        release(in, true);
+        return;
+    }
     if (state_ == State::Releasing) { stopping_ = true; skip_pending(reason_); return; }
     if (state_ == State::Detach || state_ == State::Attach) { skip_pending(reason_); end_legacy(); state_ = State::Stopped; return; }
     if (index_ < count_ && steps_[index_].verdict == Verdict::Running) {
@@ -2025,6 +2088,7 @@ void Runner::restore(const Options& o, const Evidence& e, uint32_t run_id, std::
     attached_ = detached_ = ending_ = silent_ = legacy_active_ = dark_ = false; pd_skips_recorded_ = true;
     pd_owned_ = fc_owned_ = stopping_ = stable_ = recover_ = hot_ = false; probe_ = Probe::Off; pd_retry_ = cut_index_ = SIZE_MAX;
     selfpwr_ = suspended_ = adopt_ = false;
+    ceiling_pending_ = ceil_stopping_ = false; ceiling_done_ = true;   // a resumed run never repeats the stage (it is not journaled)
     for (auto& s : std::span<Step>(steps_.data(), count_)) if (s.verdict == Verdict::Running) s.verdict = Verdict::Pending;
     // The EPR proof (the source accepted EPR entry: it checked the cable itself) is not journaled as such, but its trace is: the EPR
     // list was heard (EprTable), or EPR rows were planned (a plan only holds them for a 50 V / 5 A cable). A cable the K2 reads live
@@ -2202,6 +2266,7 @@ void Runner::poll_impl(Input in, const pd::SourceCaps& caps) {
         if (state_ == State::Detach) poll_detach(in); else poll_attach(in, caps, gap);
         return;
     }
+    if (state_ == State::Ceiling) { poll_ceiling(in); return; }
     bool offers_changed = false, legacy_pending = false, tail_seen = false, tail_wait = false;
     // A source whose output is dark (VBUS gone) announces nothing: that is "source lost", not "offers changed". The grace for the
     // list to come back restarts when VBUS does. Lenovo C135, 2026-11-03: the output drained 20 V -> 0 in 9 s after a Hard Reset.

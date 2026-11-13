@@ -1093,6 +1093,13 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   a sense fixture on CC1, CC2 and D-.
 - WebHID dashboard in Chrome (Linux hidraw path tested with the Python tools only).
 - OPPO VOOC / SVOOC: no handshake seen yet (CHARGER_QUIRKS).
+- **SuperVOOC phone responder and the charger-test ceiling stage** (k2/svooc-responder, built and host-tested only).
+  The trigger's Phone and Probe profiles answer like a OnePlus 15 (escape timing, moving 0x82 word, every 0x86 reply
+  recorded, session past 72 pairs); the charger test can run a `State::Ceiling` step after a VOOC-family pass and show the
+  highest 0x86 ceiling the charger kept going under as `SV cap` in Results (`k2_remote.py charger-svooc-cap`,
+  `ct_start.py --svooc-cap`). The ceiling is the K2's own ask read from the protocol, never a drawn current. Hardware check:
+  OnePlus 120 W charger on USB-A, top port empty, HID enabled; confirm the guards accept the start from a charger-test
+  legacy session and read the heartbeat `stack_free`.
 - **Inline interrogation** (k2/inline-interrogate, built and host-tested only; `docs/DEVICE_TWIN.md` 9.1, the one inline
   TX exception, `CONNECTION_MATRIX.md` X11). With a device inline behind its charger the K2 hard-resets the link (unless
   a fresh contract was sniffed), asks the device as its source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended,

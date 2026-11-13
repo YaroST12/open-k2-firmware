@@ -34,6 +34,7 @@
 #include "k2/core/storage.hpp"
 #include "k2/ui/uiprefs.hpp"
 #include "k2/drivers/usb.hpp"
+#include "k2/fastcharge/svooc_trig.hpp"
 #include <algorithm>
 #include <bit>
 #include <cstring>
@@ -214,6 +215,15 @@ charger_test::Input ChargerTestSession::input(uint32_t now) const {
     in.fc_adapter_mv = fs.adapter_mv;
     in.pd_quiet_ms = fusb302::pd_quiet_ms();
     in.probe_done = fusb302::probe_status().state != pd::ProbeState::Running;
+    // The SVOOC ceiling stage's view of the trigger (the snapshot is a copy: only while that stage is the state).
+    if (runner_.state() == ct::State::Ceiling) {
+        const auto sv = svooc_trig::snapshot();
+        in.svooc.running = svooc_trig::running();
+        in.svooc.judged = svooc_ceiling::ladder_judged(std::span<const svooc::Responder::Ask>(sv.asks.data(), sv.n_asks));
+        in.svooc.abort = static_cast<uint8_t>(sv.report.abort);
+        in.svooc.commands = static_cast<uint8_t>(std::min<uint32_t>(sv.report.commands, 255u));
+        in.svooc_word = sv.ceiling_word; in.svooc_asks = sv.n_asks;
+    }
     return in;
 }
 // The transition capture records every request that moves the rail off the 5 V default (a PPS / AVS step, a fixed
@@ -289,6 +299,15 @@ void ChargerTestSession::release(bool pd) {
     if (pd) fusb302::sink_release();
     else fctrig::stop();
 }
+// The SVOOC ceiling stage (docs/CHARGER_TEST_FLOW.md): the no-load trigger with the Probe responder (the 0x86 ladder asked
+// of the adapter, never answered with a draw). `ports_busy` is false: this session is the owner and has released the family
+// session before it asks. The trigger's own guards (50 mA, 5 V, the far-sink check unless USB-A, no PD) refuse by themselves.
+uint8_t ChargerTestSession::ceiling_start(bool usb_a) {
+    svooc::Params p;
+    p.profile = svooc::Profile::Probe;
+    return static_cast<uint8_t>(svooc_trig::start(true, false, svooc_ceiling::kCapS, usb_a, p));
+}
+void ChargerTestSession::ceiling_stop() { svooc_trig::stop(); }
 void ChargerTestSession::record(const ct::Step& s) {
     const auto idx = static_cast<size_t>(&s - runner_.steps().data());
     // The record is a flash write (a section file: an erase and some programs, with interrupts masked): never while a row is in
@@ -937,6 +956,7 @@ void ChargerTestSession::poll(uint32_t now) {
         case ct::State::Unsafe:     K2LOG("[TEST] UNSAFE: unplug source %s\n", reason_name); break;
         case ct::State::Detach:     K2LOG("[TEST] Detach charger %s\n", reason_name); break;
         case ct::State::Attach:     K2LOG("[TEST] Initializing... %s\n", reason_name); break;
+        case ct::State::Ceiling:    K2LOG("[TEST] SVOOC ceiling %s\n", reason_name); break;
         }
         if (runner_.state() == ct::State::Done) save_card();
         if (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped) {
@@ -1278,6 +1298,12 @@ void ChargerTestPage::build_results() {
     oem.rebalanced = runner_.evidence().rebalanced;   // the source re-split its budget mid-run this many times
     char scp_note[24] = {};   // "SCP cap 20V 6A": the row's label is the first two words
     if (report_card::scp_note(card, scp_note, sizeof scp_note)) oem.scp_cap = scp_note + 8;
+    char svooc_note[24] = {};   // "6.3 A asked": the SuperVOOC ceiling stage's result (nothing when the stage did not run)
+    const auto& ev = runner_.evidence();
+    if (ev.svooc_end != 0) {
+        svooc_ceiling::format_cap(ev.svooc_word, static_cast<svooc_ceiling::End>(ev.svooc_end), svooc_note);
+        oem.svooc_cap = svooc_note;
+    }
     char justification[48] = {};
     if (const auto label = report_card::qc_label(card); label != report_card::QcLabel::None) {
         report_card::qc_label_justification(card, justification, sizeof justification);

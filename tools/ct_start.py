@@ -210,6 +210,9 @@ def main(argv=None):
                     help="also run the PPS deep sweep (opt-in: every 100 mV across each PPS APDO, 1 A; never in a preset)")
     ap.add_argument("--avs-sweep", action="store_true",
                     help="also run the AVS deep sweep (opt-in: every 100 mV across each AVS APDO, 1 A; never in a preset)")
+    ap.add_argument("--svooc-cap", choices=["on", "usb-a"],
+                    help="also run the SuperVOOC ceiling stage when a SuperVOOC charger is detected (opt-in; reads the 0x86 "
+                         "ceiling from the protocol, never loads the charger). usb-a = USB-A charger, top port empty")
     ap.add_argument("--units", default="",
                     help="run only these test units, in this order, e.g. qc2,qc3 or pd,qc2 (names: " + ", ".join(kr.TEST_UNITS) +
                          "); default = the full order: vendor modes, PD, QC/UFCS")
@@ -252,6 +255,9 @@ def main(argv=None):
         if a.avs_sweep:
             kr.charger_avs_sweep(link, True)
             print("AVS deep sweep: on (every 100 mV per AVS APDO, 1 A)", file=sys.stderr)
+        if a.svooc_cap:
+            kr.charger_svooc_cap(link, a.svooc_cap)
+            print(f"SuperVOOC ceiling stage: {a.svooc_cap} (protocol read, no load)", file=sys.stderr)
         if units:
             try:    # the list serves the next START only; the firmware refuses it while a run is active
                 kr.charger_units(link, units)

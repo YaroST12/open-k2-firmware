@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <span>
+#include "k2/chargertest/svooc_ceiling.hpp"
 #include "k2/chargertest/sweep.hpp"
 #include "k2/fastcharge/fc_engine.hpp"
 #include "k2/pd/pd_ccmode.hpp"
@@ -99,7 +100,9 @@ inline constexpr unsigned kRebootBudget = 3;
 // Boot policy: every interrupted run resumes by itself once the gate is ready (VBUS steady at 5 V); BACK held at boot cancels it.
 constexpr bool resume_wanted(bool back_held, bool gate_ready) { return !back_held && gate_ready; }
 // Detach / Attach are the two ends of every unit (see Unit below); they replace the old Handover / Reattach states in the same numbering.
-enum class State : uint8_t { Idle, Baseline, Requesting, Holding, Releasing, Done, Stopped, Unsafe, Detach, Attach };
+// Ceiling = the SVOOC ceiling stage (svooc_ceiling.hpp): the guarded trigger runs in a Legacy unit after the VOOC family's
+// session was released, at 5 V, nothing drawn. Appended last so the earlier numbers (the wire, the journal) stay.
+enum class State : uint8_t { Idle, Baseline, Requesting, Holding, Releasing, Done, Stopped, Unsafe, Detach, Attach, Ceiling };
 // Journal phase markers, reported through Env::phase() BEFORE the action they name. Handover = a Legacy attach begins (index of
 // the unit's first pending row): a power loss there is charged to the unit like one in a Request (kRebootBudget, then RebootLimit).
 enum class Phase : uint8_t { None, Request, Handover };
@@ -191,6 +194,10 @@ struct Options {
     bool pps_sweep = false;
     // The AVS deep sweep (ROADMAP "AVS deep sweep"): same opt-in shape, its own flag next to the PPS one.
     bool avs_sweep = false;
+    // The SVOOC ceiling stage (svooc_ceiling.hpp): opt-in like the sweeps, never in a preset. On = after a detected VOOC family
+    // the guarded trigger asks the adapter 1.5 / 4 / 6.3 / 10.9 A (a protocol word, no load) and the highest ask it went on
+    // under is the result; UsbA also waives the trigger's far-sink refusal (a legacy A port, the top port empty).
+    svooc_ceiling::Mode svooc_cap = svooc_ceiling::Mode::Off;
     bool contains(Algorithm a) const { return selected & bit(a); }
 };
 struct Step {
@@ -266,6 +273,10 @@ struct Input {
     // run's own unit ran: START plans without it (the engine may still hold an earlier charger's list), and the rows still to run
     // are planned again once the unit's first row has read it.
     const fc::Caps* fc_caps = nullptr;
+    // The guarded SVOOC trigger of the ceiling stage (svooc_trig::snapshot()), meaningful while the stage runs.
+    svooc_ceiling::Live svooc{};
+    uint16_t svooc_word = 0;   // the highest ask the adapter went on under so far (svooc_trig Snapshot::ceiling_word)
+    uint8_t svooc_asks = 0;    // the asks answered so far
 };
 // The runner waits for the source probe at most this long, so a charger that ignores it costs the run under 1 s.
 inline constexpr uint32_t kProbeMaxMs = 1000;
@@ -313,6 +324,11 @@ struct Evidence {
     uint8_t timing = 0;       // TimingFlag bits seen on any PD row of this run (not journaled, not on the card)
     uint8_t ps_rdy_max = 0;   // the worst Accept -> PS_RDY time of the run in 20 ms units, saturating at 255; 0 = none measured
     uint8_t rebalanced = 0;   // how often the source re-announced its list mid-run and the PD rows were re-planned per row (budget-reannounce-mid-run)
+    // The SVOOC ceiling stage (svooc_ceiling.hpp; not journaled, not on the card): the highest 0x86 word the adapter went on under
+    // (100 mA per count; 0 = none accepted), how the stage ended (svooc_ceiling::End; 0 = not run), why (the trigger's
+    // svooc::Refusal for Refused, svooc::Abort for Aborted), how many asks were made. A protocol readout: the K2 never drew.
+    uint16_t svooc_word = 0;
+    uint8_t svooc_end = 0, svooc_why = 0, svooc_asks = 0;
     pd::Revision reported{};
 };
 struct Summary {
@@ -465,6 +481,12 @@ struct Env {
     // A hunt row the source refused: the evidence snapshot is final (called once per row, right before record()). The page logs it,
     // marks the Black Box and freezes a capture; nothing here changes the row's verdict.
     virtual void hunt_evidence(const Step&, const HuntEvidence&) {}
+    // The SVOOC ceiling stage (svooc_ceiling.hpp). ceiling_start starts the guarded trigger with the Probe profile and the
+    // stage's cap: 0 = started, else the trigger's svooc::Refusal (never 0 for a refusal), 255 = no trigger on this build.
+    // `usb_a` is the operator's waiver (Options::svooc_cap == UsbA). ceiling_stop ends it (idempotent, the exit watch follows).
+    // The stage reads the rest from Input::svooc.
+    virtual uint8_t ceiling_start(bool usb_a) { (void)usb_a; return 255; }
+    virtual void ceiling_stop() {}
 protected:
     ~Env() = default;
 };
@@ -593,7 +615,7 @@ public:
     Reason resume(Input, bool confirmed);
     uint8_t resumed() const { return resumed_; }
     uint8_t reattach_count() const { return reattach_; }   // how many times the run went through the planned re-attach
-    bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach; }
+    bool busy() const { return (state_ >= State::Baseline && state_ <= State::Releasing) || state_ == State::Unsafe || state_ == State::Detach || state_ == State::Attach || state_ == State::Ceiling; }
     // The page scans for the source's Rp while a unit attaches (the main loop's own scan is too slow for a fast announcer).
     bool attaching() const { return state_ == State::Attach; }
     State state() const { return state_; }
@@ -601,7 +623,8 @@ public:
     // loop also serves the protocol engines (a QC pulse train, a UFCS Accept, a PD transition), so the page paints and journals
     // nothing heavy then (a full LCD redraw is 100-200 ms, a littlefs erase masks interrupts). Baseline, Releasing, the unit
     // attach / detach states and the end of the run are the gaps in which that work is done. Derived from the state: no storage.
-    bool quiet() const { return state_ == State::Requesting || state_ == State::Holding; }
+    // The SVOOC ceiling stage counts: its wire is timed in the main loop too, and a littlefs erase masks interrupts.
+    bool quiet() const { return state_ == State::Requesting || state_ == State::Holding || state_ == State::Ceiling; }
     // Nothing may paint at all: a row is in flight AND the fast-charge engine is inside a window that only the main loop serves
     // (`engine_window` = fctrig::paint_critical(): the HVDCP handshake pulses, the VOOC receive slices, the UFCS handshake, the
     // vivo UART frames; the LCD idle hook serves the PD engine, the UFCS Ping..Keep exchange and the transition capture, so those
@@ -703,6 +726,16 @@ private:
     void retry_pd_row(Input in);
     void poll_impl(Input, const pd::SourceCaps&);
     uint32_t hold_ms() const;
+    // The SVOOC ceiling stage: queued by finish() when the VOOC family was detected and the options asked for it, begun by next()
+    // once the family session is released (D+/D- free, 5 V), ended by poll_ceiling(). One stage per run.
+    bool ceiling_wanted() const;
+    bool begin_ceiling(Input);   // false = the stage did not start (refused): the run goes on
+    void poll_ceiling(Input);
+    void end_ceiling(Input, svooc_ceiling::End);
+    void note_ceiling(const Input&, svooc_ceiling::End);
+    svooc_ceiling::End ceil_end_ = svooc_ceiling::End::None;
+    bool ceiling_pending_ = false, ceiling_done_ = false, ceil_stopping_ = false;
+    uint32_t ceil_ms_ = 0, ceil_stop_ms_ = 0;
     Env& env_;
     Evidence evidence_;
     std::array<Step, kMaxSteps> steps_{};

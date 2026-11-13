@@ -37,6 +37,7 @@ CMD_CHARGER_CABLE = 0x0D  # [kind, seq(2)] the cable identity of the next START 
 CMD_CHARGER_HUNT = 0x0E   # [slot] read-only: the evidence of one refused 6 A hunt row
 CMD_CHARGER_SWEEP = 0x0F  # [on(1)] the PPS deep sweep of the next charger run (opt-in, never in a preset)
 CMD_CHARGER_AVS_SWEEP = 0x54  # [on(1)] the AVS deep sweep of the next charger run (opt-in, never in a preset)
+CMD_CHARGER_SVOOC_CAP = 0x59  # [mode(1)] SuperVOOC ceiling stage of the next charger run; no payload reads mode + result
 CMD_GET_IDENTITY = 0x24  # source identity: VID/PID/bcd, SVIDs, vendor, Apple model
 CMD_DEBUG_LINK = 0x25     # debug: 1 hold the link attached, 0 detached (until the next rescan)
 CMD_DEBUG_PD_MSG = 0x23   # debug: feed one PD message (sop, header, data objects) to the parser
@@ -1435,6 +1436,36 @@ def charger_avs_sweep(link, on):
     return bool(p[0])
 
 
+SVOOC_CAP_MODES = ["off", "on", "usb-a"]
+SVOOC_CAP_ENDS = ["not run", "refused", "no adapter", "aborted", "cap", "judged", "cancelled"]
+SVOOC_CAP_NOTE = ("the highest 0x86 word the K2 asked for while the adapter kept the session going (100 mA per count): "
+                  "the charger's accepted ceiling from the protocol, not a drawn current")
+
+
+def charger_svooc_cap(link, mode=None):
+    """Firmware command 0x59: read (mode None) or set the SuperVOOC ceiling stage of the NEXT charger run, and read the latest
+    run's result. Reply [mode, end, why, asks, word(2)]. Setting the mode changes nothing on the wire; the stage runs only
+    after a detected VOOC-family pass and never loads the charger (the 50 mA guard stays)."""
+    payload = b"" if mode is None else bytes([SVOOC_CAP_MODES.index(mode)])
+    p = link.call(CMD_CHARGER_SVOOC_CAP, payload).payload
+    _need(p, 6, "charger svooc cap")
+    name = lambda table, i: table[i] if i < len(table) else str(i)
+    end = name(SVOOC_CAP_ENDS, p[1])
+    why = None
+    if end == "refused":
+        why = name(SVOOC_REFUSALS, p[2])
+    elif end == "aborted":
+        why = name(SVOOC_ABORTS, p[2])
+    word = int.from_bytes(p[4:6], "little")
+    ceiling = {"word": word, "ma": word * SVOOC_MA_PER_COUNT, "text": svooc_amps(word) + " asked"} if word else None
+    return {"mode": name(SVOOC_CAP_MODES, p[0]), "end": end, "why": why, "asks": p[3], "ceiling": ceiling,
+            "note": SVOOC_CAP_NOTE}
+
+
+def cmd_charger_svooc_cap(link, a):
+    return charger_svooc_cap(link, a.mode)
+
+
 def cmd_charger_sweep(link, a):
     return {"pps_sweep": charger_sweep(link, a.state == "on")}
 
@@ -2597,6 +2628,11 @@ def render_vooc(v):
 FC_OP_SVOOC = 5
 SVOOC_STATUS, SVOOC_START, SVOOC_STOP, SVOOC_LOG = 0, 1, 2, 3
 SVOOC_USB_A = 4                 # start flags bit 2: waive the far-sink refusal (legacy A port, no PD anywhere)
+SVOOC_PHONE = 8                 # start flags bit 3: answer like a phone (ramp, escapes, moving 0x82 word)
+SVOOC_PROBE = 16                # start flags bit 4: the ceiling probe (0x86 ladder); not with the phone profile
+SVOOC_PROFILES = ["fixed", "phone", "probe"]   # svooc::Profile (include/k2/fastcharge/svooc_script.hpp)
+SVOOC_ASKS_HEADER, SVOOC_ASK_BYTES = 4, 5      # status page 2: profile(1) ceiling_word(2) n(1), then n x t_ms(2) word(2) polls_after(1)
+SVOOC_MA_PER_COUNT = 100        # a 0x86 word counts 100 mA
 SVOOC_SUMMARY_BYTES = 35        # the base layout; a 36th byte (inline cause) is read when the firmware sends it
 SVOOC_SUMMARY_CAUSE = 35
 SVOOC_SUMMARY_EXT = 36          # 36..44, read when the firmware sends them: i86_first i86_esc r82 vtarget(2) esc_at_s escape esc_t(2)
@@ -2658,7 +2694,8 @@ def _svooc_ranged(lo, hi, what):
 def svooc_start_payload(a):
     """The start request: the 4-byte original when every responder parameter is at its default (an older firmware keeps
     working), else the 10-byte extended one."""
-    flags = FC_CONFIRM | (SVOOC_USB_A if a.usb_a else 0)
+    flags = (FC_CONFIRM | (SVOOC_USB_A if a.usb_a else 0) | (SVOOC_PHONE if getattr(a, "phone", False) else 0) |
+             (SVOOC_PROBE if getattr(a, "probe", False) else 0))
     first = getattr(a, "i86_first", None)
     esc = getattr(a, "i86", None)
     r82, vtarget, at = getattr(a, "r82", None), getattr(a, "vtarget", None), getattr(a, "i86_at", None)
@@ -2736,12 +2773,38 @@ def decode_svooc_timing(p):
             "stall_ticked_ms": u16(7), "rel_timer": u16(9), "rel_loop": u16(11), "rel_edge": u16(13)}
 
 
+def svooc_amps(word):
+    """A 0x86 word as amps text: 100 mA per count, e.g. 0x03F -> '6.3 A'."""
+    return f"{word * SVOOC_MA_PER_COUNT / 1000:.1f} A"
+
+
+def decode_svooc_asks(p):
+    """Status page 2 (src/core/remote_proto.cpp encode_svooc_asks): the 0x86 asks and the ceiling. The ceiling is the
+    highest ask the adapter kept the session going under: the K2's own word, never a measured or a drawn current."""
+    _need(p, SVOOC_ASKS_HEADER, "svooc asks")
+    u16 = lambda o: int.from_bytes(p[o:o + 2], "little")
+    n = p[3]
+    _need(p, SVOOC_ASKS_HEADER + SVOOC_ASK_BYTES * n, "svooc asks")
+    asks = []
+    for i in range(n):
+        o = SVOOC_ASKS_HEADER + SVOOC_ASK_BYTES * i
+        asks.append({"t_ms": u16(o), "word": f"0x{u16(o + 2):03X}", "ma": u16(o + 2) * SVOOC_MA_PER_COUNT, "polls_after": p[o + 4]})
+    word = u16(1)
+    return {"profile": SVOOC_PROFILES[p[0]] if p[0] < len(SVOOC_PROFILES) else str(p[0]),
+            "ceiling": {"word": word, "ma": word * SVOOC_MA_PER_COUNT} if word else None, "asks": asks}
+
+
 def _svooc_read(link):
     s = decode_svooc_summary(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 0])).payload)
     try:   # page 1, the timing diagnostics (a firmware without it answers BadArg)
         p = link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 1])).payload
         if len(p) >= SVOOC_TIMING_BYTES:
             s["timing"] = decode_svooc_timing(p)
+    except RemoteError as e:
+        if e.status != STATUS_BAD_ARG:
+            raise
+    try:   # page 2, the 0x86 asks and the ceiling (a firmware without it answers BadArg)
+        s.update(decode_svooc_asks(link.call(CMD_FC, bytes([FC_OP_SVOOC, SVOOC_STATUS, 2])).payload))
     except RemoteError as e:
         if e.status != STATUS_BAD_ARG:
             raise
@@ -2807,6 +2870,24 @@ def _svooc_params_lines(s):
     return lines
 
 
+def _svooc_ceiling_lines(s):
+    """The 0x86 asks and the ceiling (status page 2), when the firmware reported them. The words are the K2's own."""
+    if "asks" not in s:
+        return []
+    if s["ceiling"]:
+        v = s["vbus_max_mv"]
+        volts = f", VBUS peaked {v / 1000:.1f} V" if v > 5500 else ""
+        head = (f"  ceiling {svooc_amps(s['ceiling']['word'])} (0x{s['ceiling']['word']:03X}) of the {s['profile']} profile{volts}: "
+                "the highest 0x86 ask the charger kept the session going under, not a drawn current")
+    else:
+        head = f"  no ceiling: the charger did not keep the {s['profile']} profile's session going past any 0x86 ask"
+    lines = [head]
+    if s["asks"]:
+        lines.append("  0x86 asks (t ms after the wake, word, 82 polls kept after it): " +
+                     "; ".join(f"{a['t_ms']} {a['word']} {a['polls_after']}" for a in s["asks"]))
+    return lines
+
+
 def render_svooc(s):
     lines = [f"svooc trigger {s['stage']}: " + (f"ended by {s['abort']}" if s["abort"] != "none" else "running")
              + f" after {s['elapsed_ms'] / 1000:.1f} s (cap {s['cap_ms'] / 1000:.0f} s), wakes {s['wakes']}"]
@@ -2818,6 +2899,7 @@ def render_svooc(s):
                  f"max |I| {s['ibus_max_ma']} mA")
     lines.append(f"  PD contract: start {s['contract_start']}, end {s['contract_end']}")
     lines += _svooc_params_lines(s)
+    lines += _svooc_ceiling_lines(s)
     d = s.get("diag")
     if d:
         lines.append(f"  diag: {d['edges']} edges to the wire, the last at {d['last_edge_ms']} ms after the wake; "
@@ -4359,7 +4441,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
             "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
-            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "cards": cmd_cards,
+            "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
             "twin": cmd_twin}
 
 
@@ -4403,6 +4485,10 @@ def build_parser():
         cs = sub.add_parser(name, help=f"turn the {what} deep sweep of the NEXT charger run on or off "
                             "(opt-in: every 100 mV across each APDO, 1 A; never in a preset)")
         cs.add_argument("state", choices=["on", "off"])
+    sv = sub.add_parser("charger-svooc-cap", help="SuperVOOC ceiling stage of the NEXT charger run (no argument: read the mode and "
+                        "the latest result). on = needs the guards to pass; usb-a = USB-A charger, top port empty (waiver). "
+                        "The ceiling is read from the 0x86 protocol words, never tested by load")
+    sv.add_argument("mode", nargs="?", choices=SVOOC_CAP_MODES)
     sub.add_parser("pdos", help="decoded source capabilities")
     se = sub.add_parser("emarker", help="cable e-marker data; list/save/delete/rename/spoof manage saved cables")
     es = se.add_subparsers(dest="em_cmd")
@@ -4613,6 +4699,13 @@ def build_parser():
                       "for an A-to-C cable into the K2's bottom port; refused if any PD contract exists. Every other guard "
                       "stays (|I| 50 mA, VBUS 4.5-5.5 V at start, 12 V ceiling, off-script, host loss, cap). The report says "
                       "'far-sink check waived (USB-A)'")
+    sfprof = sfsv.add_mutually_exclusive_group()
+    sfprof.add_argument("--phone", action="store_true",
+                        help="answer like a OnePlus 15 phone (the captured ramp, the escape 0x07F at the phone's poll counts, a "
+                        "moving 0x82 word); the 0x86 asks and the ceiling are reported. Nothing is drawn")
+    sfprof.add_argument("--probe", action="store_true",
+                        help="ceiling probe: after each escape ask a higher 0x86 (0x00F, 0x028, 0x03F, 0x06D = 1.5, 4.0, 6.3, "
+                        "10.9 A) and report the highest one the charger kept the session going under. Nothing is drawn")
     sfsv.add_argument("--i86-first", dest="i86_first", type=_svooc_ranged(SVOOC_I86_MIN, SVOOC_I86_MAX, "0x86 answer"),
                       default=None, metavar="N", help="the answer to the 0x86 poll after the handshake (a count of about "
                       f"100 mA), {SVOOC_I86_MIN}..0x{SVOOC_I86_MAX:X}; default 0x{SVOOC_I86_DEFAULT:03X}")

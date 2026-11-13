@@ -210,6 +210,19 @@ remote::Status Remote::charger_avs_sweep(bool on) {
     return remote::Status::Ok;
 }
 
+remote::ChargerSvoocCapReply Remote::charger_svooc_cap(const uint8_t* set) {
+    remote::ChargerSvoocCapReply r;
+    if (set) {
+        if (ui_.charger_test_busy()) { r.status = remote::Status::Busy; return r; }
+        if (!ui_.charger_test_set_svooc_cap(*set)) { r.status = remote::Status::BadArg; return r; }
+        K2LOG("[TEST] svooc ceiling stage mode=%u\n", unsigned(*set));
+    }
+    const auto& ev = ui_.charger_test_results().evidence();
+    r.info.mode = ui_.charger_test_svooc_cap();
+    r.info.end = ev.svooc_end; r.info.why = ev.svooc_why; r.info.asks = ev.svooc_asks; r.info.word = ev.svooc_word;
+    return r;
+}
+
 remote::ChargerCableReply Remote::charger_cable(const ctcable::Choice* set) {
     remote::ChargerCableReply r;
     if (set) {
@@ -1167,6 +1180,7 @@ remote::SvoocSnapshot Remote::svooc_info() {
     remote::SvoocSnapshot v;
     v.stage = s.stage; v.report = s.report; v.phase = s.phase; v.off_run = s.off_run; v.driving = s.driving; v.log = s.log;
     v.params = s.params; v.escape = s.escape; v.escape_t_ms = s.escape_t_ms;
+    v.asks = s.asks; v.n_asks = s.n_asks; v.ceiling_word = s.ceiling_word;
     v.rec_edges = s.rec_edges; v.rec_end = s.rec_end;
     v.stall = s.stall; v.rel_timer = s.rel_timer; v.rel_loop = s.rel_loop; v.rel_edge = s.rel_edge;
     return v;

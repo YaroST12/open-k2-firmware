@@ -316,6 +316,34 @@ struct Fake final : ct::Env {
         if (pd && release_auto_hold) { in.pd.held = in.pd.auto_hold = true; in.pd.pos = 1; }
         else in.fc_state = fc::State::Idle;
     }
+    // The SVOOC ceiling stage: ceiling_start's answer (0 = the trigger started) and a scripted guarded trigger. t = ms since the
+    // start. The ladder is judged at ceil_judged_ms (0 = never; word 0x06D, 4 asks); ceil_partial_word is what the adapter went on
+    // under from ceil_partial_ms; the trigger ends by itself with ceil_abort at ceil_end_ms (0 = it runs until stopped). After
+    // ceiling_stop it still runs ceil_exit_ms (its exit watch), then reports Stopped.
+    uint8_t ceil_refuse = 0, ceil_abort = 0, ceil_commands = 9;
+    int ceil_starts = 0, ceil_stops = 0; bool ceil_usb_a_seen = false, ceil_on = false;
+    uint32_t ceil_judged_ms = 0, ceil_partial_ms = 0, ceil_end_ms = 0, ceil_exit_ms = 1000, ceil_t0 = 0, ceil_stop_t = 0;
+    uint16_t ceil_partial_word = 0;
+    uint8_t ceiling_start(bool usb_a) override {
+        ++ceil_starts; ceil_usb_a_seen = usb_a;
+        if (ceil_refuse) return ceil_refuse;
+        ceil_on = true; ceil_t0 = in.now; ceil_stop_t = 0;
+        return 0;
+    }
+    void ceiling_stop() override { ++ceil_stops; if (ceil_on && !ceil_stop_t) ceil_stop_t = in.now; }
+    void ceil_tick() {
+        if (!ceil_on) return;
+        const uint32_t t = in.now - ceil_t0;
+        const bool judged = ceil_judged_ms && t >= ceil_judged_ms;
+        in.svooc.judged = judged; in.svooc.commands = ceil_commands;
+        in.svooc_word = judged ? 0x06D : (ceil_partial_ms && t >= ceil_partial_ms) ? ceil_partial_word : 0;
+        in.svooc_asks = judged ? 4 : in.svooc_word ? 2 : 0;
+        if (ceil_stop_t) {
+            in.svooc.running = in.now - ceil_stop_t < ceil_exit_ms;
+            in.svooc.abort = in.svooc.running ? 0 : uint8_t(svooc::Abort::Stopped);
+        } else if (ceil_end_ms && t >= ceil_end_ms) { in.svooc.running = false; in.svooc.abort = ceil_abort; }
+        else { in.svooc.running = true; in.svooc.abort = 0; }
+    }
     // Journal hooks: what the UI Env does, so a test can cut the run anywhere and reboot into the journal.
     cj::Journal* jr = nullptr;
     const ct::Runner* rn = nullptr;
@@ -560,6 +588,7 @@ struct Fake final : ct::Env {
             int bump = 0;
             if (noise_mv && before > 1000) bump = (((in.now / 100) % 2) != 0) != (noise_flip && (pd_requests & 1)) ? noise_mv : -noise_mv;
             in.vbus_mv += bump;
+            ceil_tick();
             r.poll(in, caps);
             if (bump && in.vbus_mv == before + bump) in.vbus_mv = before;
             min_vbus = std::min(min_vbus, in.vbus_mv);
@@ -2102,6 +2131,113 @@ static void test_vooc_family_shares_one_session() {
     CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
     CHECK_EQ(f.fc_requests, 1);
     for (const auto& s : r.steps()) { CHECK_EQ(s.verdict, ct::Verdict::Pass); CHECK_EQ(int(s.detail), int(fc::Fail::Detected)); }
+}
+// The SVOOC ceiling stage (svooc_ceiling.hpp): opt-in, after a detected VOOC family, no load. The guarded trigger asks the
+// adapter 1.5 / 4 / 6.3 / 10.9 A and the highest ask it went on under is the result (Evidence::svooc_*).
+namespace sc = k2::svooc_ceiling;
+static void ceiling_run(Fake& f, ct::Runner& r, sc::Mode mode, bool detected = true) {
+    r.start(f.caps, {.selected = ct::bit(A::SuperVooc), .svooc_cap = mode}, f.in, true);
+    run_until(f, r, [&] { return f.fc_requests >= 1; });
+    f.in.fc_state = fc::State::Failed; f.in.fc_fail = detected ? fc::Fail::Detected : fc::Fail::NeedsLoad; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
+}
+static void test_ceiling_off_runs_no_stage() {
+    Fake f; f.caps = {};
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::Off);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(f.ceil_starts, 0); CHECK_EQ(f.ceil_stops, 0);
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::None)); CHECK_EQ(int(r.evidence().svooc_word), 0);
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+}
+static void test_ceiling_judged_ladder_is_the_result() {
+    for (const bool usb_a : {false, true}) {
+        Fake f; f.caps = {}; f.ceil_judged_ms = 3000;
+        ct::Runner r(f);
+        ceiling_run(f, r, usb_a ? sc::Mode::UsbA : sc::Mode::On);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
+        CHECK_EQ(r.busy(), true);                       // the stage is part of the run
+        CHECK_EQ(r.quiet(), true);                      // the trigger's wire is timed: no journal flash write, no heavy paint
+        CHECK_EQ(f.ceil_starts, 1); CHECK_EQ(f.ceil_usb_a_seen, usb_a);
+        CHECK_EQ(f.ceil_stops, 0);                      // nothing stops it before it is judged
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        CHECK_EQ(f.ceil_stops, 1);                      // the judged ladder asks the trigger to stop, once
+        CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Judged));
+        CHECK_EQ(int(r.evidence().svooc_word), 0x06D);
+        CHECK_EQ(int(r.evidence().svooc_asks), 4);
+        CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);   // the stage changes no row
+        CHECK_EQ(int(r.steps()[0].detail), int(fc::Fail::Detected));
+    }
+}
+static void test_ceiling_refusal_is_recorded_and_the_run_goes_on() {
+    Fake f; f.caps = {}; f.ceil_refuse = 9;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(f.ceil_starts, 1); CHECK_EQ(f.ceil_stops, 0);
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Refused)); CHECK_EQ(int(r.evidence().svooc_why), 9);
+    CHECK_EQ(int(r.evidence().svooc_word), 0);
+    CHECK_EQ(r.steps()[0].verdict, ct::Verdict::Pass);
+}
+static void test_ceiling_no_adapter_and_early_abort() {
+    {   // the adapter never spoke to the wake: no word at all
+        Fake f; f.caps = {}; f.ceil_end_ms = 1500; f.ceil_abort = uint8_t(svooc::Abort::NoAdapter); f.ceil_commands = 0;
+        ct::Runner r(f);
+        ceiling_run(f, r, sc::Mode::On);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::NoAdapter)); CHECK_EQ(int(r.evidence().svooc_word), 0);
+        CHECK_EQ(f.ceil_stops, 0);                      // it was over by itself
+    }
+    {   // a guard ends it after the 4.0 A ask: the partial ceiling stays
+        Fake f; f.caps = {}; f.ceil_partial_ms = 2000; f.ceil_partial_word = 0x028; f.ceil_end_ms = 4000;
+        f.ceil_abort = uint8_t(svooc::Abort::OffScript);
+        ct::Runner r(f);
+        ceiling_run(f, r, sc::Mode::On);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Aborted));
+        CHECK_EQ(int(r.evidence().svooc_why), int(svooc::Abort::OffScript));
+        CHECK_EQ(int(r.evidence().svooc_word), 0x028); CHECK_EQ(int(r.evidence().svooc_asks), 2);
+    }
+}
+static void test_ceiling_cap_stops_a_session_that_is_never_judged() {
+    Fake f; f.caps = {}; f.ceil_partial_ms = 2000; f.ceil_partial_word = 0x03F;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
+    const uint32_t t0 = f.in.now;
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+    CHECK_EQ(f.in.now - t0 >= sc::kCapMs, true);        // the stage is bounded by the cap, not earlier
+    CHECK_EQ(f.ceil_stops, 1);
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Cap)); CHECK_EQ(int(r.evidence().svooc_word), 0x03F);
+}
+static void test_ceiling_cancel_stops_the_trigger() {
+    Fake f; f.caps = {}; f.ceil_partial_ms = 1000; f.ceil_partial_word = 0x00F;
+    ct::Runner r(f);
+    ceiling_run(f, r, sc::Mode::On);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
+    f.tick(r, 2000);
+    r.cancel(f.in);
+    CHECK_EQ(f.ceil_stops, 1);
+    CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Stopped; }, 60000), true);
+    CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::Cancelled)); CHECK_EQ(int(r.evidence().svooc_word), 0x00F);
+    CHECK_EQ(f.ceil_stops, 1);                          // idempotent: the cancel is the only stop
+}
+static void test_ceiling_needs_a_detected_svooc_family() {
+    {   // the family heard nothing: no adapter to ask
+        Fake f; f.caps = {};
+        ct::Runner r(f);
+        ceiling_run(f, r, sc::Mode::On, false);
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        CHECK_EQ(f.ceil_starts, 0); CHECK_EQ(int(r.evidence().svooc_end), int(sc::End::None));
+    }
+    {   // the plain VOOC unit alone is not an SVOOC test
+        Fake f; f.caps = {};
+        ct::Runner r(f);
+        r.start(f.caps, {.selected = ct::bit(A::Vooc), .svooc_cap = sc::Mode::On}, f.in, true);
+        run_until(f, r, [&] { return f.fc_requests >= 1; });
+        f.in.fc_state = fc::State::Failed; f.in.fc_fail = fc::Fail::Detected; f.in.fc_tries = 1; f.in.vbus_mv = 5000;
+        CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);
+        CHECK_EQ(f.ceil_starts, 0);
+    }
 }
 // A VIVO charger that never answered its first row (no frame in the entry window) speaks nothing the other levels could
 // prove: they are skipped with that reason and get no session, as AFC / FCP / SCP / UFCS do.
@@ -6870,7 +7006,7 @@ int main() {
     test_hunt_evidence_marks_a_silent_source_as_a_timeout(); test_hunt_evidence_without_a_trace_is_unexplained();
     test_hunt_evidence_only_for_refused_rows(); test_classify_hunt_precedence();
     test_plan_and_run(); test_an_auto_hold_counts_as_released(); test_quiet_is_exactly_the_row_in_flight(); test_paint_blocked_needs_flight_and_an_engine_window(); test_refusals(); test_hold_keeps_the_baseline_until_released(); test_safe5_baseline();test_cancel_and_failed_release(); test_release_waits_for_the_sink_verification_and_its_hard_reset();
-    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
+    test_faults(); test_loop_lock_refuses_and_aborts(); test_timeouts_and_skips(); test_one_second_holds(); test_qc2_settles_within_two_percent(); test_qc2_5v_accepts_vsafe5_reading(); test_legacy_5v_accepts_vsafe5_reading(); test_qc3_rows_use_an_asymmetric_band(); test_legacy_rows_use_a_five_percent_band(); test_legacy_5v_row_uses_the_vsafe5_window(); test_scp_4v5_row_judges_the_adapter_readback(); test_qc3plus_without_response_is_a_distinct_skip(); test_unsupported_protocol_skips_its_other_rows(); test_silent_source_fails_every_handshake_row(); test_answered_handshake_passes_the_5v_row(); test_svooc_row_follows_the_adapter_ramp(); test_svooc_detected_is_a_pass(); test_vooc_family_shares_one_session(); test_ceiling_off_runs_no_stage(); test_ceiling_judged_ladder_is_the_result(); test_ceiling_refusal_is_recorded_and_the_run_goes_on(); test_ceiling_no_adapter_and_early_abort(); test_ceiling_cap_stops_a_session_that_is_never_judged(); test_ceiling_cancel_stops_the_trigger(); test_ceiling_needs_a_detected_svooc_family(); test_vivo_no_response_skips_the_other_vivo_rows(); test_pps_min_step_accepts_unloaded_floor(); test_pps_up_step_uses_the_tight_band();
     test_missing_samples_and_wrap();
     test_fixed_band_judges_a_burst_mode_ripple_on_its_mean(); test_fixed_band_still_fails_a_steady_low_or_high_level(); test_fixed_band_keeps_the_per_sample_overvoltage_guards();
     test_pps_renewal();

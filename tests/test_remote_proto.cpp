@@ -1259,7 +1259,7 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 1, Status::NeedConfirm, 0);
     CHECK_EQ(run(f, request(0x32, 2, {5, 1, 3, 0}), r), 1);          // an unknown flag (allow-inline) is no confirm
     check_header(r, 0x32, 2, Status::BadArg, 0);
-    CHECK_EQ(run(f, request(0x32, 40, {5, 1, 8, 0}), r), 1);         // an unknown bit beside the confirm
+    CHECK_EQ(run(f, request(0x32, 40, {5, 1, 0x21, 0}), r), 1);      // an unknown bit beside the confirm
     check_header(r, 0x32, 40, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x32, 41, {5, 1, 4, 0}), r), 1);         // the USB-A waiver alone is no confirm either
     check_header(r, 0x32, 41, Status::NeedConfirm, 0);
@@ -1271,7 +1271,7 @@ static void test_fc_svooc_trigger() {
     check_header(r, 0x32, 5, Status::BadLength, 0);
     CHECK_EQ(run(f, request(0x32, 6, {5, 9}), r), 1);
     check_header(r, 0x32, 6, Status::BadArg, 0);
-    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 2}), r), 1);             // the status has two pages; pairs are op 3
+    CHECK_EQ(run(f, request(0x32, 7, {5, 0, 3}), r), 1);             // the status has three pages; pairs are op 3
     check_header(r, 0x32, 7, Status::BadArg, 0);
     CHECK_EQ(run(f, request(0x32, 42, {5, 3, 0}), r), 1);
     check_header(r, 0x32, 42, Status::BadLength, 0);
@@ -1373,8 +1373,39 @@ static void test_fc_svooc_trigger() {
     check_bytes(r, kRspHeader, {0xA3, 0x94, 0x02, 0x00, 0x4D, 0x0D, static_cast<uint8_t>(k2::stage::Id::UiTick), 0xA8, 0x00,
                                 70, 0, 1, 0, 0xFF, 0xFF});
     f.svooc_snap.stall = {}; f.svooc_snap.rel_timer = f.svooc_snap.rel_loop = f.svooc_snap.rel_edge = 0;
-    CHECK_EQ(run(f, request(0x32, 55, {5, 0, 2}), r), 1);             // no third page
+    CHECK_EQ(run(f, request(0x32, 55, {5, 0, 3}), r), 1);             // no fourth page
     check_header(r, 0x32, 55, Status::BadArg, 0);
+    // The phone and probe profiles ride the start flags (bit 3 and bit 4 of the byte, beside the confirm); both together
+    // are BadArg. They reach the backend in Params::profile; the extended request still carries the numbers.
+    CHECK_EQ(run(f, request(0x32, 56, {5, 1, 0x09, 0}), r), 1);
+    check_header(r, 0x32, 56, Status::Ok, 54);
+    CHECK(f.svooc_params.profile == k2::svooc::Profile::Phone);
+    CHECK_EQ(run(f, request(0x32, 57, {5, 1, 0x11, 0}), r), 1);
+    check_header(r, 0x32, 57, Status::Ok, 54);
+    CHECK(f.svooc_params.profile == k2::svooc::Profile::Probe);
+    CHECK_EQ(run(f, request(0x32, 58, {5, 1, 0x19, 0}), r), 1);
+    check_header(r, 0x32, 58, Status::BadArg, 0);
+    CHECK_EQ(run(f, request(0x32, 59, {5, 1, 0x09, 7, 0x6D, 0x3F, 0x51, 0, 0, 0}), r), 1);
+    check_header(r, 0x32, 59, Status::Ok, 54);
+    CHECK(f.svooc_params.profile == k2::svooc::Profile::Phone);
+    CHECK_EQ(f.svooc_params.i86_esc, 0x03F);
+    CHECK_EQ(run(f, request(0x32, 60, {5, 1, 0x01, 0}), r), 1);                  // no profile flag: the fixed one again
+    check_header(r, 0x32, 60, Status::Ok, 54);
+    CHECK(f.svooc_params.profile == k2::svooc::Profile::Fixed);
+    f.lease_arms = 2; f.svooc_params = {};                                       // as before this block: the closing check counts two
+    // Status page 2, the 0x86 asks: profile(1) ceiling_word(2) n(1) { t_ms(2) word(2) polls_after(1) } x n.
+    f.svooc_snap.params.profile = k2::svooc::Profile::Probe;
+    f.svooc_snap.ceiling_word = 0x03F;
+    f.svooc_snap.n_asks = 2;
+    f.svooc_snap.asks[0] = {1771, 0x00F, 40};
+    f.svooc_snap.asks[1] = {3850, 0x028, 255};
+    CHECK_EQ(run(f, request(0x32, 61, {5, 0, 2}), r), 1);
+    check_header(r, 0x32, 61, Status::Ok, 4 + 2 * 5);
+    check_bytes(r, kRspHeader, {2, 0x3F, 0x00, 2, 0xEB, 0x06, 0x0F, 0x00, 40, 0x0A, 0x0F, 0x28, 0x00, 255});
+    f.svooc_snap.params.profile = k2::svooc::Profile::Fixed; f.svooc_snap.ceiling_word = 0; f.svooc_snap.n_asks = 0;
+    CHECK_EQ(run(f, request(0x32, 62, {5, 0, 2}), r), 1);
+    check_header(r, 0x32, 62, Status::Ok, 4);
+    check_bytes(r, kRspHeader, {0, 0, 0, 0});
     // Log pages [5, 3, from_lo, from_hi]: kept(2) from(2) n(1) { cmd word(2) t_ms(2) vbus_mv(2) } x n, 7 per page.
     CHECK_EQ(run(f, request(0x32, 11, {5, 3, 0, 0}), r), 1);
     check_header(r, 0x32, 11, Status::Ok, 5 + 7 * 7);
@@ -2649,6 +2680,28 @@ static void test_charger_avs_sweep() {
     CHECK_EQ(run(f, request(0x54, 5, {1}), r), 1); check_header(r, 0x54, 5, Status::Busy, 0);
 }
 
+// Cmd::ChargerSvoocCap (0x59): no payload reads, [mode(1)] sets the ceiling stage of the next run (0 off, 1 on, 2 USB-A); the
+// reply is always [mode, end, why, asks, word(2)] (the stage's result of the latest run). Busy while a run is active.
+static void test_charger_svooc_cap() {
+    Fake f; Frame r;
+    f.svooc_cap_info = {0, 5, 0, 4, 0x06D};
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x59, 1, {}), r), 1);                    // a read moves nothing
+    check_header(r, 0x59, 1, Status::Ok, 6); check_bytes(r, kRspHeader, {0, 5, 0, 4, 0x6D, 0x00});
+    CHECK_EQ(f.svooc_cap_sets, 0); CHECK_EQ(f.calls, calls + 1);
+    CHECK_EQ(run(f, request(0x59, 2, {2}), r), 1);
+    check_header(r, 0x59, 2, Status::Ok, 6); check_bytes(r, kRspHeader, {2, 5, 0, 4, 0x6D, 0x00});
+    CHECK_EQ(f.svooc_cap_set, 2); CHECK_EQ(f.svooc_cap_sets, 1);
+    f.svooc_cap_info.word = 0x1FF;
+    CHECK_EQ(run(f, request(0x59, 3, {}), r), 1); check_bytes(r, kRspHeader + 4, {0xFF, 0x01});   // the word is 16-bit little endian
+    const int sets = f.svooc_cap_sets;
+    CHECK_EQ(run(f, request(0x59, 4, {3}), r), 1); check_header(r, 0x59, 4, Status::BadArg, 0);   // an unknown mode never reaches the setter
+    CHECK_EQ(run(f, request(0x59, 5, {1, 1}), r), 1); check_header(r, 0x59, 5, Status::BadLength, 0);
+    CHECK_EQ(f.svooc_cap_sets, sets);
+    f.svooc_cap_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x59, 6, {1}), r), 1); check_header(r, 0x59, 6, Status::Busy, 0);
+}
+
 static void test_charger_cable() {
     namespace cc = k2::ctcable;
     Fake f; Frame r;
@@ -3011,6 +3064,7 @@ int main() {
     test_charger_cable();
     test_charger_units();
     test_charger_avs_sweep();
+    test_charger_svooc_cap();
     test_charger_test_wire(); test_charger_test_view_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();

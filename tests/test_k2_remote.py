@@ -1682,6 +1682,53 @@ class ChargerSweepCli(unittest.TestCase):
             kr.build_parser().parse_args(["charger-avs-sweep", "maybe"])
 
 
+class ChargerSvoocCapCli(unittest.TestCase):
+    """`charger-svooc-cap [off|on|usb-a]`: the SuperVOOC ceiling stage of the NEXT charger run (firmware command 0x59), and
+    the latest run's result read back. The reply is [mode, end, why, asks, word(2)]; the word is 100 mA per count, what the K2
+    asked for (never a drawn current)."""
+
+    Link = ChargerSweepCli.Link
+
+    def invoke(self, argv, replies):
+        link = self.Link(replies)
+        a = kr.build_parser().parse_args(argv)
+        return kr.COMMANDS[a.command](link, a), link
+
+    def test_read_sends_no_payload_and_decodes_the_ceiling(self):
+        r, link = self.invoke(["charger-svooc-cap"], [bytes([1, 5, 0, 4, 0x6D, 0])])
+        self.assertEqual(link.sent, [(kr.CMD_CHARGER_SVOOC_CAP, b"")])
+        self.assertEqual(r["mode"], "on")
+        self.assertEqual(r["end"], "judged")
+        self.assertEqual(r["asks"], 4)
+        self.assertEqual(r["ceiling"], {"word": 0x6D, "ma": 10900, "text": "10.9 A asked"})
+        self.assertIn("not a drawn current", r["note"])
+
+    def test_set_sends_the_mode_byte(self):
+        for name, byte in (("off", 0), ("on", 1), ("usb-a", 2)):
+            r, link = self.invoke(["charger-svooc-cap", name], [bytes([byte, 0, 0, 0, 0, 0])])
+            self.assertEqual(link.sent, [(kr.CMD_CHARGER_SVOOC_CAP, bytes([byte]))])
+            self.assertEqual(r["mode"], name)
+            self.assertEqual(r["end"], "not run")
+            self.assertIsNone(r["ceiling"])
+
+    def test_refusal_and_abort_are_named(self):
+        r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 1, 5, 0, 0, 0])])
+        self.assertEqual((r["end"], r["why"]), ("refused", "sink on the bottom port"))
+        r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 3, 3, 2, 0x28, 0])])
+        self.assertEqual((r["end"], r["why"]), ("aborted", "charger off-script"))
+        self.assertEqual(r["ceiling"]["text"], "4.0 A asked")
+        r, _ = self.invoke(["charger-svooc-cap"], [bytes([1, 2, 0, 0, 0, 0])])
+        self.assertEqual((r["end"], r["ceiling"]), ("no adapter", None))
+
+    def test_a_short_reply_is_a_frame_error(self):
+        with self.assertRaises(kr.FrameError):
+            self.invoke(["charger-svooc-cap"], [bytes([1, 5])])
+
+    def test_bad_mode_is_rejected_by_the_parser(self):
+        with self.assertRaises(SystemExit):
+            kr.build_parser().parse_args(["charger-svooc-cap", "maybe"])
+
+
 class Scripts(unittest.TestCase):
     """Back-to-back presses and long actions (hardware check items 3 and 4)."""
 
