@@ -130,6 +130,13 @@ struct Rig {
         iq.on_message(Sop::SopP, hdr(kMsgVendorDefined, 1, 2, kSrc, 0), p, now);
         now += 1;
     }
+    // A real e-marker chip in the charger's cable answers the query: Discover Identity ACK on SOP'.
+    void sopp_real_answer() {
+        std::vector<std::uint8_t> p;
+        put32(p, 0xFF00A041u);
+        iq.on_message(Sop::SopP, hdr(kMsgVendorDefined, 1, 2, kSrc, 1), p, now);
+        now += 1;
+    }
     // Run until the run is over (or `limit_ms`), answering nothing.
     void drain(unsigned limit_ms = 20000) {
         for (unsigned t = 0; t < limit_ms && iq.running(); t += 5) step();
@@ -953,6 +960,28 @@ int main() {
         Rig idle;
         idle.sopp_query();
         CHECK_EQ(bool(idle.iq.sopp_window(idle.now)), false);
+
+        // A real e-marked cable on the charger side answers the query itself (hardware 2026-11-13): the spoof stays silent and
+        // the status says a real chip answered, so "0 replies" is not read as "the charger never got an answer".
+        Rig real;
+        real.contract();
+        sp_start(real);
+        real.next();
+        real.now += 1100;
+        real.contract();
+        real.iq.tick(real.now);
+        CHECK_EQ(bool(real.iq.status().sopp_real), false);
+        real.sopp_query();
+        CHECK_EQ(bool(real.iq.status().sopp_real), false);
+        real.sopp_real_answer();
+        CHECK_EQ(bool(real.iq.status().sopp_real), true);
+        CHECK_EQ(int(real.iq.status().sopp_queries), 1);      // the answer is no query
+        CHECK_EQ(int(real.iq.status().sopp_replies), 0);
+        Rig nospoof;
+        nospoof.contract();
+        nospoof.start();
+        nospoof.sopp_real_answer();
+        CHECK_EQ(bool(nospoof.iq.status().sopp_real), false);   // only a spoof run watches the cable
     }
 
     // ---- spoof run, after the final reset: the contract is taken after the settle, so the charger's second negotiation (it

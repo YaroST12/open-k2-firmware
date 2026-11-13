@@ -2031,7 +2031,10 @@ def _render_learn_inline(r):
     def contract(c):
         return f"PDO {c['pos']} RDO 0x{c['rdo']:08X}" if c["ready"] else "none"
     lines.append(f"  contract before: {contract(s['first'])}; after: {contract(s['second'])} ({s['match']})")
-    if s["spoof"]:
+    if s["spoof"] and s.get("sopp_real"):
+        lines.append("  cable spoof: a real e-marked cable answered the charger; the spoof cannot reach it, use a cable without a chip"
+                     f" (the charger queried SOP' {s['sopp_queries']} times, our spoof sent {s['sopp_replies']} replies)")
+    elif s["spoof"]:
         lines.append(f"  cable spoof: the charger queried SOP' {s['sopp_queries']} times, {s['sopp_replies']} replies"
                      if s["sopp_queries"] else
                      "  cable spoof: the charger never queried the cable (no reply was due; the Ra is not driven inline)")

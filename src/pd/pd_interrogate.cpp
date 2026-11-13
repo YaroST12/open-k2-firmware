@@ -300,7 +300,11 @@ bool Interrogate::sopp_window(std::uint32_t now) const {
 void Interrogate::on_sopp(std::uint16_t h, std::span<const std::uint8_t> payload, std::uint32_t now) {
     if (!st_.spoof || ext_of(h) || ndo_of(h) == 0 || type_of(h) != kMsgVendorDefined || payload.size() < 4) return;
     const std::uint32_t vh = le32(payload.data());
-    if (!((vh >> 15) & 1) || ((vh >> 6) & 3) != 0 || (vh & 0x1F) != kVdmIdentity) return;
+    if (!((vh >> 15) & 1) || (vh & 0x1F) != kVdmIdentity) return;
+    if (((vh >> 6) & 3) != 0) {   // an answer on SOP' is never ours (our reply goes out, not in): a real chip in the cable
+        st_.sopp_real = true;
+        return;
+    }
     if (st_.sopp_queries < 255) st_.sopp_queries++;
     if (!sopp_started_) {
         sopp_started_ = true;

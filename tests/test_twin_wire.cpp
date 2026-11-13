@@ -525,6 +525,7 @@ void test_handler_inline() {
     a.iq.late_mask = 0x08;
     a.iq.spoof = true;
     a.iq.epr_partial = true;
+    a.iq.sopp_real = true;
     a.iq.sopp_queries = 3;
     a.iq.sopp_replies = 2;
     a.iq.num_epr_pdos = 9;
@@ -555,7 +556,7 @@ void test_handler_inline() {
     CHECK_EQ(int(out[46]), 1);
     CHECK_EQ(int(out[48] | out[49] << 8), 3500);
     CHECK_EQ(int(out[50]), 0x08);                      // late mask
-    CHECK_EQ(int(out[51]), 3);                         // spoof | EPR partial
+    CHECK_EQ(int(out[51]), 7);                         // spoof | EPR partial | a real cable chip answered
     CHECK_EQ(int(out[52]), 3);                         // SOP' queries
     CHECK_EQ(int(out[53]), 2);                         // spoof replies
     CHECK_EQ(int(out[54]), 9);                         // EPR sink PDOs

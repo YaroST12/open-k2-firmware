@@ -438,6 +438,15 @@ class Command(unittest.TestCase):
                        [bytes([0, 1, 0]), iq_status(done=1, phase=7, flags=1, first=(1, 1, 5), second=(1, 1, 5))] + answers[:4]
                        + [bytes([0, 3, 4, 0, 0])])
         self.assertIn("charger never queried the cable", kr.render("twin", r))
+        # a real e-marked cable answered the charger itself (hardware 2026-11-13): said plainly, not as "0 replies"
+        r, _ = run_cli(["twin", "learn", "inline", "--confirm", "--spoof", "oneplus"],
+                       [bytes([0, 1, 0]), iq_status(done=1, phase=7, flags=1 | 4, queries=2, replies=0,
+                                                    first=(1, 1, 5), second=(1, 1, 5))] + answers[:4] + [bytes([0, 3, 4, 0, 0])])
+        self.assertTrue(r["inline"]["sopp_real"])
+        text = kr.render("twin", r)
+        self.assertIn("a real e-marked cable answered the charger; the spoof cannot reach it, use a cable without a chip", text)
+        self.assertNotIn("charger never queried", text)
+        json.dumps(r)
 
     def test_pd_interrogate_is_a_dry_learn(self):
         done = iq_status(done=1, phase=8, why=4, how=3)

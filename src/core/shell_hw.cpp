@@ -831,7 +831,8 @@ const char* twin_status() {
             tput("inline late=%02x epr_pdos=%u%s\r\n", unsigned(q.late_mask), unsigned(q.num_epr_pdos), q.epr_partial ? " partial" : "");
         for (unsigned i = 0; i < q.num_epr_pdos; i++) tput("inline epr pdo%u %08X\r\n", i + 1, unsigned(q.epr_pdos[i]));
         if (q.spoof)
-            tput("inline spoof: charger queried SOP' %u times, %u replies\r\n", unsigned(q.sopp_queries), unsigned(q.sopp_replies));
+            tput("inline spoof: charger queried SOP' %u times, %u replies%s\r\n", unsigned(q.sopp_queries), unsigned(q.sopp_replies),
+                 q.sopp_real ? "; a real e-marked cable answered, the spoof cannot reach it (use a cable without a chip)" : "");
         if (q.first.ready || q.second.ready)
             tput("inline contract before pos=%u rdo=%08X after pos=%u rdo=%08X %s\r\n", unsigned(q.first.pos),
                  unsigned(q.first.rdo), unsigned(q.second.pos), unsigned(q.second.rdo),

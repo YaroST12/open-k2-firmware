@@ -645,6 +645,7 @@
   "648": "[IQ] spoof: charger queried SOP' %u times, %u replies\n",
   "649": "[SPOOF] armed%s: Discover Identity from the saved record, %u extra response rows\n",
   "650": "[TWIN] learn inline start refused: spoof %s\n",
-  "651": "[TWIN] learn inline start save=%u spoof=%u -> %s\n"
+  "651": "[TWIN] learn inline start save=%u spoof=%u -> %s\n",
+  "652": "[IQ] spoof: charger queried SOP' %u times, %u replies, real cable answered %u\n"
  }
 }

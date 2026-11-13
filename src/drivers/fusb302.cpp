@@ -2058,7 +2058,9 @@ void iq_report() {
           unsigned(s.id.pid), unsigned(s.num_sink_pdos), unsigned(s.sink_ext_len), unsigned(s.revision), unsigned(s.num_svids),
           unsigned(s.num_modes));
     K2LOG("[IQ] late 0x%02X, %u EPR sink PDOs%s\n", unsigned(s.late_mask), unsigned(s.num_epr_pdos), s.epr_partial ? " (first chunk only)" : "");
-    if (s.spoof) K2LOG("[IQ] spoof: charger queried SOP' %u times, %u replies\n", unsigned(s.sopp_queries), unsigned(s.sopp_replies));
+    if (s.spoof)
+        K2LOG("[IQ] spoof: charger queried SOP' %u times, %u replies, real cable answered %u\n", unsigned(s.sopp_queries),
+              unsigned(s.sopp_replies), unsigned(s.sopp_real));
 }
 
 void active_tick() {

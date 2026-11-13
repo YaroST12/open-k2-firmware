@@ -285,6 +285,7 @@ def decode_iq_status(p):
                   "existed": bool(p[46]), "unchanged": bool(p[47])},
         "ms": _u16(p, 48),
         "late": _steps(p[50]), "spoof": bool(p[51] & 1), "epr_partial": bool(p[51] & 2),
+        "sopp_real": bool(p[51] & 4),
         "sopp_queries": p[52], "sopp_replies": p[53], "num_epr_pdos": p[54],
     }
 

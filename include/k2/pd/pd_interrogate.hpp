@@ -212,6 +212,7 @@ struct IqStatus {
     bool spoof = false;
     std::uint8_t sopp_queries = 0;  // Discover Identity requests the charger sent on SOP' (retries included), saturating
     std::uint8_t sopp_replies = 0;  // spoofed SOP' replies that went out
+    bool sopp_real = false;         // a real e-marker chip (the charger-side cable's own) answered a SOP' Discover Identity
     std::uint32_t started_at = 0, ended_at = 0;
 };
 constexpr bool iq_finished(IqPhase p) { return p == IqPhase::Done || p == IqPhase::Aborted; }
