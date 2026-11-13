@@ -107,6 +107,11 @@ SECTIONS
     *(.glue_7)
     *(.glue_7t)
     *(.eh_frame)
+    /* Placement canary (src/core/math_selftest.cpp, ws_slow): one function pinned at the far end of .text so it
+     * always runs from the wait-state region; the ASSERT below keeps it past the zero-wait window. */
+    . = ALIGN(4);
+    __cold_probe_start = .;
+    KEEP(*(.cold_probe))
     . = ALIGN(4);
     _etext = .;
   } > FLASH
@@ -246,6 +251,7 @@ SECTIONS
   }
 
   ASSERT(__hot_end <= 0x08040000, "hot block (K2_HOT) overflows the zero-wait flash window (0x08000000..0x0803FFFF)")
+  ASSERT(__cold_probe_start >= 0x08040000, "cold probe (.cold_probe) landed inside the zero-wait window: the placement canary would measure nothing")
   ASSERT(_eguard <= _psp_top, "RAM overflow: .bss reaches the application stack")
   ASSERT(_psp_top + _msp_size == _estack, "MSP stack does not end at _estack")
 }
