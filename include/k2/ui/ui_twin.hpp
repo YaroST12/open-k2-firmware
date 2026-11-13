@@ -87,7 +87,8 @@ private:
     void learn_wait_end();
     void learn_inline();                                     // OK on Learn with a device inline: arm, then interrogate it
     void learn_inline_end();                                 // the interrogation this page started is over: say what it learned
-    void renegotiate();                                      // OK on "Ask charger again": arm, then one inline Hard Reset; the charger relists
+    void renego_poll(uint32_t now_ms);                       // each tick: the wait for the list, and the row's visibility
+    void renegotiate();                                    // OK on "Ask charger again": arm, then one inline Hard Reset; the charger relists
     void run_entry(const Entry &e);
     void open_detail();
     void close_detail();

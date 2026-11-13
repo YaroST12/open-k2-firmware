@@ -606,6 +606,26 @@ void TwinPage::renegotiate() {
     note_until_ = 0;
 }
 
+// Every tick: the wait for the charger's list after the Hard Reset, and whether the "Ask charger again" row shows (a device
+// inline behind a charger that listed nothing, and nothing else owns the link). Not inlined: Ui::tick's frame is near its limit.
+[[gnu::noinline]] void TwinPage::renego_poll(uint32_t now_ms) {
+    if (renego_wait_) {   // the Hard Reset is out: the charger lists again, or it does not
+        if (pd::active_caps().valid) {
+            renego_wait_ = false;
+            say(kFooters[kFootOfferedAgain], kOk);
+        } else if (static_cast<int32_t>(now_ms - renego_until_) >= 0) {
+            renego_wait_ = false;
+            say(kFooters[kFootNoOffer], kCaution);
+        }
+    }
+    const bool renego_ok = (ctx_.ui->link().inline_mode() || ctx_.inline_mode) && !pd::active_caps().valid && !running() &&
+                           !learn_wait_ && !iq_wait_;
+    if (renego_ok != renego_ok_) {
+        renego_ok_ = renego_ok;
+        ctx_.rows.invalidate();
+    }
+}
+
 // The interrogation is over: what it learned (twin_hw::inline_poll learned and saved it), else the device never answered.
 void TwinPage::learn_inline_end() {
     iq_wait_ = false;
@@ -1099,22 +1119,7 @@ void TwinPage::update(uint32_t now_ms) {
     }
     if (learn_wait_ && (!fusb302::identify_busy() || static_cast<int32_t>(now_ms - learn_wait_until_) >= 0)) learn_wait_end();
     if (iq_wait_ && !twin_hw::inline_running()) learn_inline_end();   // the sequencer bounds its own time (pd::kIqTotalMs)
-    if (renego_wait_) {   // the Hard Reset is out: the charger lists again, or it does not
-        if (pd::active_caps().valid) {
-            renego_wait_ = false;
-            say(kFooters[kFootOfferedAgain], kOk);
-        } else if (static_cast<int32_t>(now_ms - renego_until_) >= 0) {
-            renego_wait_ = false;
-            say(kFooters[kFootNoOffer], kCaution);
-        }
-    }
-    // The "Ask charger again" row: a device inline behind a charger that listed nothing (and nothing else owns the link).
-    const bool renego_ok = (ctx_.ui->link().inline_mode() || ctx_.inline_mode) && !pd::active_caps().valid && !running() &&
-                           !learn_wait_ && !iq_wait_;
-    if (renego_ok != renego_ok_) {
-        renego_ok_ = renego_ok;
-        ctx_.rows.invalidate();
-    }
+    renego_poll(now_ms);
     if (!loaded_ || gen_ != storage::generation() || stamp_ != twin_hw::predict_stamp()) {
         const bool charger_changed = loaded_ && stamp_ != twin_hw::predict_stamp();
         reload();
