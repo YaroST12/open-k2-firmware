@@ -46,33 +46,51 @@ namespace k2 {
 inline constexpr uint32_t kPageTickMs = 100;
 
 // The page arena: the rotation page on screen and the menus opened above it are built in one buffer (index 0 = the rotation
-// page, index n = the menu at stack position n - 1) and exist only while they are shown. The buffer holds every base page with
-// the actually reachable base + menu chains the UI opens. A chain that does not fit is refused by the arena (the menu is
-// not opened), never overrun; these asserts keep that safety net unreachable.
+// page, index n = the menu at stack position n - 1) and exist only while they are shown.
+//
+// Any rotation page can sit under any menu chain: goto_page / open_connection / land_rescanned (the remote, a rescan after a
+// reboot) and the Connection place tools push a chain over whatever page is current, and the menus themselves open further
+// menus (Share over Emarker / Cards / Loop probe / Black box ...). The buffer is therefore sized as the largest rotation
+// page plus the largest menu chain, and the asserts below prove it for every pair of the lists. A chain that still did not
+// fit would be refused by the arena and push_menu() says so on the log and on screen (never silently).
 inline constexpr std::size_t kPageArenaDepth = 4;   // a rotation page and up to three menus
-// Bench > Cable > Saved cables > Share, and the other reachable chains: a place page (Connection) under each tool of its place
-// (Charger: Request voltage, Fast charge, Report cards > Share, Stress test; Cable: Spoof, Resistance, Loop probe > Share;
-// Device: Twins), Black box > Share, the charger test's card, Battery > Share, Settings > Diag > Share, QrTest over Tools,
-// plus the ChargerTest + BlackBox and Home + Trigger + Emarker + Connection test chains.
-inline constexpr std::size_t kLongestChain =
-    std::max({arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, SpoofPage>(),
-              arena_bytes<ToolsPage, ConnectionPage, PdTriggerPage>(), arena_bytes<ToolsPage, ConnectionPage, TriggerPage>(),
-              arena_bytes<ToolsPage, ConnectionPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, CableRPage>(),
-              arena_bytes<ToolsPage, ConnectionPage, LoopProbePage, SharePage>(), arena_bytes<ToolsPage, ConnectionPage, TwinPage>(),
+inline constexpr std::size_t kMaxMenuDepth = kPageArenaDepth - 1;
+// Every rotation page (Page enum; build_page in ui.cpp).
+inline constexpr std::size_t kLargestBase =
+    std::max({arena_bytes<HomePage>(), arena_bytes<DetailPage>(), arena_bytes<ChargerTestPage>(), arena_bytes<LinesPage>(),
+              arena_bytes<ToolsPage>(), arena_bytes<SettingsPage>()});
+// Every menu chain the UI can open (top of the list = nearest the rotation page), each at most kMaxMenuDepth deep. Place pages
+// (Connection) under each tool of their place (Charger: Request voltage, Fast charge, Report cards > Share, Stress test;
+// Cable: Spoof, Resistance, Loop probe > Share; Device: Twins) and Connection's own Share rows, Black box > Share, Diagnosis >
+// Black box > Share, Battery > Share, Settings > Diag > Share, Settings > Share (boot info), the Settings sub-pages, QrTest,
+// and the Trigger > Emarker > Connection chain.
+inline constexpr std::size_t kLongestMenuChain =
+    std::max({arena_bytes<ConnectionPage, EmarkerPage, SharePage>(), arena_bytes<ConnectionPage, SpoofPage>(),
+              arena_bytes<ConnectionPage, PdTriggerPage>(), arena_bytes<ConnectionPage, TriggerPage>(),
+              arena_bytes<ConnectionPage, CardsPage, SharePage>(), arena_bytes<ConnectionPage, CableRPage>(),
+              arena_bytes<ConnectionPage, LoopProbePage, SharePage>(), arena_bytes<ConnectionPage, TwinPage>(),
+              arena_bytes<ConnectionPage, SharePage>(),
 #if K2_PDSTRESS
-              arena_bytes<ToolsPage, ConnectionPage, PdStressPage>(),
+              arena_bytes<ConnectionPage, PdStressPage>(),
 #endif
-              arena_bytes<ToolsPage, CardsPage, SharePage>(), arena_bytes<ToolsPage, DiagnosisPage, BlackBoxPage, SharePage>(),
-              arena_bytes<ChargerTestPage, SharePage>(), arena_bytes<ChargerTestPage, BlackBoxPage>(),
-              arena_bytes<DetailPage, TwinPage>(), arena_bytes<HomePage, TriggerPage, EmarkerPage, ConnectionPage>(),
-              arena_bytes<ToolsPage, LoopProbePage, SharePage>(), arena_bytes<ToolsPage, BatteryPage, SharePage>(),
-              arena_bytes<ToolsPage, QrTestPage>(), arena_bytes<SettingsPage, DiagPage, SharePage>()});
+              arena_bytes<TriggerPage, EmarkerPage, ConnectionPage>(), arena_bytes<CardsPage, SharePage>(),
+              arena_bytes<DiagnosisPage, BlackBoxPage, SharePage>(), arena_bytes<BlackBoxPage, SharePage>(),
+              arena_bytes<LoopProbePage, SharePage>(), arena_bytes<BatteryPage, SharePage>(), arena_bytes<QrTestPage>(),
+              arena_bytes<DiagPage, SharePage>(), arena_bytes<UsbLinkPage>(), arena_bytes<AutorotatePage>()});
+inline constexpr std::size_t kLongestChain = kLargestBase + kLongestMenuChain;   // the deepest rotation page + the deepest menus
 inline constexpr std::size_t kPageArenaBytes = kLongestChain;
-static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest menu chain fits");
-static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, SharePage>(), "the charger test shares its card");
+// The named worst cases (each rotation page that has one, the review's reachable chains) hold by construction; spelled out so
+// a page that grows or a new chain shows up in the diff of this file, not as a refused menu on a device.
+static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, ConnectionPage, LoopProbePage, SharePage>(), "charger test + loop probe card");
+static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, ConnectionPage, TwinPage>(), "charger test + twins");
+static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, TwinPage>(), "detail + twins");
+static_assert(kPageArenaBytes >= arena_bytes<DetailPage, ConnectionPage, LoopProbePage>(), "detail + loop probe");
+static_assert(kPageArenaBytes >= arena_bytes<HomePage, ConnectionPage, LoopProbePage, SharePage>(), "home + loop probe card");
+static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, ConnectionPage, EmarkerPage, SharePage>(), "the deepest Tools chain fits");
 static_assert(kPageArenaBytes >= arena_bytes<ChargerTestPage, BlackBoxPage>(), "black box opens over charger test");
-static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, LoopProbePage, SharePage>(), "the loop probe shares its result");
 static_assert(kPageArenaBytes >= arena_bytes<ToolsPage, QrTestPage>(), "the qrtest page fits over Tools");
+static_assert(kPageArenaBytes >= arena_bytes<SettingsPage, DiagPage, SharePage>(), "settings > diag > share fits");
+static_assert(kMaxMenuDepth == 3, "the chain lists above are at most three menus deep");
 
 class Ui {
 public:
@@ -161,6 +179,7 @@ public:
     bool push_menu(Menu m, uint32_t now_ms);
     bool pop_menu(uint32_t now_ms);
     unsigned menu_depth() const { return depth_; }
+    const char *notice() const { return notice_; }   // the refusal note on the notice strip, or null
     // Share action (long OK on the cable, the source caps, a report card, the charger test results): the opener builds its
     // record into share_buffer() (k2/ui/qrshare_records.hpp), then open_share() names it and pushes the share view. False
     // (nothing pushed) when the record has no part or push_menu refuses.
@@ -371,6 +390,8 @@ private:
 
     orientation::Tracker gravity_;
     uint32_t rotation_notice_until_ = 0;
+    const char *notice_ = nullptr;   // a literal shown on the notice strip instead of the rotation text (refuse_menu)
+    void refuse_menu(Menu m, const char *why, uint32_t now_ms);
     void rotation_gesture(uint32_t now_ms);
     void store_orientation(uint8_t rotation);   // writes the orientation fields into /prefs.cfg when they changed
     void draw_rotation_notice(uint32_t now_ms);

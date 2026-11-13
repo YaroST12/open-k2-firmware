@@ -655,6 +655,7 @@
   "658": "[CT] svooc_cap start usb_a=%u\n",
   "659": "[CT] svooc_cap end=%u word=%u asks=%u why=%u\n",
   "660": "[TEST] SVOOC ceiling %s\n",
-  "661": "[TEST] svooc ceiling stage mode=%u\n"
+  "661": "[TEST] svooc ceiling stage mode=%u\n",
+  "662": "[UI] menu %u refused: %s (depth %u, arena %u/%u B)\n"
  }
 }
