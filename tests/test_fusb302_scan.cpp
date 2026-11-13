@@ -4293,6 +4293,7 @@ void test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_gu
 void test_request_period_is_tracked_and_reset_with_the_attach();
 void test_inline_interrogation_asks_once_per_question_without_auto_crc();
 void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();
+void test_inline_interrogation_never_answers_a_device_vconn_swap();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5416,6 +5417,7 @@ int main() {
     test_the_verdict_is_not_probed_when_it_cannot_or_need_not_be_taken();    // last: ends with an attached source
     test_inline_interrogation_asks_once_per_question_without_auto_crc();     // starts from attach_inline, ends with a detach
     test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();   // the same, with the spoof armed
+    test_inline_interrogation_never_answers_a_device_vconn_swap();
     return test_report("test_fusb302_scan");
 }
 
@@ -5589,6 +5591,36 @@ void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_windo
     CHECK_EQ(g_spoof_hook_n, 1);
     fusb302::interrogate_abort();
     fusb302::set_sop_prime_hook(nullptr);
+    for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    end_inline_case();
+}
+
+// Hardware 2026-11-13 (laptop behind a 6-PDO charger): 125 ms after our Get_Sink_Cap the laptop sent VCONN_Swap to the charger and
+// 3.7 ms later the K2 itself transmitted Not_Supported as the sink (the VCONN handler answers every VCONN_Swap it is fed). The
+// charger got a second answer, reset, and the run blamed its own question. Inline the K2 transmits only the run's questions,
+// resets and SOP' spoof replies: the device's own conversation with the charger gets no answer from us. Red first: the sink-role
+// Not_Supported (type 16, power role sink) went out.
+void test_inline_interrogation_never_answers_a_device_vconn_swap() {
+    attach_inline();
+    pd::IqFacts f;
+    f.confirmed = true;
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(2);
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::None));
+    for (int i = 0; i < 600 && tx_headers().empty(); i++) { g_ms += 1; fusb302::service(); }
+    CHECK_EQ(tx_headers().size(), 1u);              // Get_Sink_Cap, as the source
+    service_ms(100);
+    push_frame(0xE0, hdr(11, 0, false, 0), {});     // the laptop's VCONN_Swap to the charger (sink / UFP)
+    service_ms(30);
+    unsigned sink_role_tx = 0;
+    for (unsigned h : tx_headers()) sink_role_tx += ((h >> 8) & 1) == 0;
+    CHECK_EQ(sink_role_tx, 0u);                     // never a frame as the sink
+    CHECK_EQ(usb_has("[VCONN] TX"), false);
+    fusb302::interrogate_abort();
     for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     end_inline_case();
 }

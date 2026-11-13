@@ -1058,7 +1058,9 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
                   reply == pd::kCtlReject ? "Reject" : reply == pd::kCtlNotSupported ? "Not_Supported" : "none");
         }
         if (g_sink.status().epr_info != info_before) log_epr_info(g_sink.status().epr_info);
-        if (sop == pd::Sop::Sop && !ext && num_do == 0) {
+        // VCONN_Swap and its answers are the sole sink's business: inline the message is the device's talk with the charger and
+        // the VCONN handler would answer it as a second sink (hardware 2026-11-13).
+        if (sop == pd::Sop::Sop && !ext && num_do == 0 && sole_sink()) {
             const pd::VconnState vs = g_vconn.state();
             g_vconn.on_control(std::uint8_t(msg_type), now);
             if (vs != g_vconn.state() || msg_type == pd::kCtlVconnSwap) {
@@ -2114,10 +2116,11 @@ void active_tick() {
         g_sink.on_tx_result(tx_ok, now);
         sent = true;
     } else if (g_vconn.take_tx(m, g_sink.rev())) {
-        const bool ok = transmit(m);
-        K2LOG("[VCONN] TX type %u: %s\n", unsigned(m.header & 0x1F), ok ? "GoodCRC" : "no GoodCRC");
+        // A frame queued before the K2 knew it sat inline is dropped, never sent: inline only the run transmits.
+        const bool ok = sole_sink() && transmit(m);
+        K2LOG("[VCONN] TX type %u: %s\n", unsigned(m.header & 0x1F), !sole_sink() ? "dropped inline" : ok ? "GoodCRC" : "no GoodCRC");
         vconn_mark();
-        sent = true;
+        sent = sole_sink();
     }
     if (g_iq.running()) {   // the run keeps its own quiet gap and deadlines: ticked before the idle gate
         if (!inline_now()) g_iq.abort(pd::IqWhy::NotInline, now);
