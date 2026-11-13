@@ -56,8 +56,9 @@ inline constexpr std::uint8_t kIqMaxResets = 2;       // Hard Resets from the ch
 inline constexpr std::uint32_t kIqBlameMs = 150;      // a Hard Reset this soon after our last question is the question's doing
 inline constexpr std::uint32_t kIqRenegBlameMs = 400; // ... and so is a renegotiation (laptop port: Source_Capabilities ~130 ms after it)
 // The e-marker spoof window (IqFacts::spoof). The K2 normally never GoodCRCs inline (the charger's own Auto-CRC is the device's);
-// a charger's SOP' query (the cable's identity) is seen passively first, and only then does the driver turn Auto-CRC on for a
-// bounded window so the charger's retry gets a GoodCRC and the spoofed reply. Closed in Reset and Ask, and by a fresh
+// a SOP' cable query (Discover Identity or the Soft_Reset before it, from the charger or from the device as VCONN source: the
+// CC wire is shared) is seen passively first, and only then does the driver turn Auto-CRC on for a
+// bounded window so the retry gets a GoodCRC and the spoofed reply. Closed in Reset and Ask, and by a fresh
 // Source_Capabilities: the questions are asked with Auto-CRC off.
 inline constexpr std::uint32_t kIqSoppWindowMs = 300; // a SOP' query opens (and each retry re-opens) the window this long
 inline constexpr std::uint32_t kIqSoppReplyMs = 60;   // after our reply: the charger's next frame is its acknowledgement

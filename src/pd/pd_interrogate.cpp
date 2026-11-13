@@ -298,7 +298,22 @@ bool Interrogate::sopp_window(std::uint32_t now) const {
 
 // The charger's SOP' frame (the driver sees it with Auto-CRC off the first time: only a Discover Identity request counts).
 void Interrogate::on_sopp(std::uint16_t h, std::span<const std::uint8_t> payload, std::uint32_t now) {
-    if (!st_.spoof || ext_of(h) || ndo_of(h) == 0 || type_of(h) != kMsgVendorDefined || payload.size() < 4) return;
+    if (!st_.spoof || ext_of(h)) return;
+    // Whoever asks the cable (the charger, or the device as the VCONN source: the CC wire is shared and the frames look alike)
+    // starts with a Soft_Reset on SOP' (the laptop on the bench sent three) and goes on with Discover Identity. A real cable
+    // Accepts the reset, so it opens the window too (the spoof's Accept goes to the retry); it is no query.
+    const auto open = [&] {
+        if (!sopp_started_) {
+            sopp_started_ = true;
+            sopp_first_ = now;
+        }
+        if (std::uint32_t(now - sopp_first_) <= kIqSoppMaxMs) sopp_until_ = now + kIqSoppWindowMs;   // a retry re-opens it, within the budget
+    };
+    if (ndo_of(h) == 0) {
+        if (type_of(h) == kCtlSoftReset) open();
+        return;
+    }
+    if (type_of(h) != kMsgVendorDefined || payload.size() < 4) return;
     const std::uint32_t vh = le32(payload.data());
     if (!((vh >> 15) & 1) || (vh & 0x1F) != kVdmIdentity) return;
     if (((vh >> 6) & 3) != 0) {   // an answer on SOP' is never ours (our reply goes out, not in): a real chip in the cable
@@ -306,11 +321,7 @@ void Interrogate::on_sopp(std::uint16_t h, std::span<const std::uint8_t> payload
         return;
     }
     if (st_.sopp_queries < 255) st_.sopp_queries++;
-    if (!sopp_started_) {
-        sopp_started_ = true;
-        sopp_first_ = now;
-    }
-    if (std::uint32_t(now - sopp_first_) <= kIqSoppMaxMs) sopp_until_ = now + kIqSoppWindowMs;   // a retry re-opens it, within the budget
+    open();
 }
 
 void Interrogate::on_sopp_reply(std::uint32_t now) {

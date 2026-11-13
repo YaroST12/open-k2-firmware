@@ -2059,7 +2059,7 @@ void iq_report() {
           unsigned(s.num_modes));
     K2LOG("[IQ] late 0x%02X, %u EPR sink PDOs%s\n", unsigned(s.late_mask), unsigned(s.num_epr_pdos), s.epr_partial ? " (first chunk only)" : "");
     if (s.spoof)
-        K2LOG("[IQ] spoof: charger queried SOP' %u times, %u replies, real cable answered %u\n", unsigned(s.sopp_queries),
+        K2LOG("[IQ] spoof: SOP' cable queried %u times (charger or device), %u replies, real cable answered %u\n", unsigned(s.sopp_queries),
               unsigned(s.sopp_replies), unsigned(s.sopp_real));
 }
 

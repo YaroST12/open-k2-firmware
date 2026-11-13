@@ -4294,6 +4294,7 @@ void test_request_period_is_tracked_and_reset_with_the_attach();
 void test_inline_interrogation_asks_once_per_question_without_auto_crc();
 void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();
 void test_inline_interrogation_never_answers_a_device_vconn_swap();
+void test_inline_interrogation_spoof_answers_the_devices_cable_query();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5418,6 +5419,7 @@ int main() {
     test_inline_interrogation_asks_once_per_question_without_auto_crc();     // starts from attach_inline, ends with a detach
     test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();   // the same, with the spoof armed
     test_inline_interrogation_never_answers_a_device_vconn_swap();
+    test_inline_interrogation_spoof_answers_the_devices_cable_query();
     return test_report("test_fusb302_scan");
 }
 
@@ -5621,6 +5623,53 @@ void test_inline_interrogation_never_answers_a_device_vconn_swap() {
     CHECK_EQ(sink_role_tx, 0u);                     // never a frame as the sink
     CHECK_EQ(usb_has("[VCONN] TX"), false);
     fusb302::interrogate_abort();
+    for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
+    end_inline_case();
+}
+
+// Hardware 2026-11-13 (chipless cable charger -> K2, K2 top plug into a laptop): after its own VCONN_Swap the laptop, as the VCONN
+// source, queried the cable on SOP' (three Soft_Resets, then Discover Identity with id 1..6, each frame sent three times) and nobody
+// answered. The CC wire is shared, so a query from the device side looks like the charger's: it opens the same window. The
+// Soft_Reset opens it (the spoof Accepts the retry), the Discover Identity that follows is answered, and the K2 sends nothing on
+// SOP without the window. Red first: only a Discover Identity opened the window, so the Soft_Reset retry went unanswered.
+void test_inline_interrogation_spoof_answers_the_devices_cable_query() {
+    attach_inline();
+    pd::IqFacts f;
+    f.confirmed = true;
+    f.spoof = true;
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(2);
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::None));
+    fusb302::set_sop_prime_hook(&spoof_run_hook);
+    g_spoof_hook_n = 0;
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::Running));
+    for (int i = 0; i < 200 && !hard_reset_written(); i++) service_ms(1);
+    CHECK_EQ(hard_reset_written(), true);
+    const std::size_t sop_tx = tx_headers().size();
+    // the laptop (DFP, VCONN source): Soft_Reset on SOP', id 0 (the first frame is unacknowledged and opens the window)
+    push_frame(0xC0, 0x00AD, {});
+    service_ms(1);
+    CHECK_EQ(g_spoof_hook_n, 0);
+    CHECK_EQ(int(fusb302::interrogate_status().sopp_queries), 0);   // a reset is no Discover Identity
+    for (int i = 0; i < 5; i++) { g_ms += 1; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(auto_crc(), true);
+    push_frame(0xC0, 0x00AD, {});                                    // its retry: acknowledged, answered with the cable's Accept
+    service_ms(2);
+    CHECK_EQ(g_spoof_hook_n, 1);
+    // its Discover Identity (id 1, DFP) comes ~50 ms later: the window is still open, so the first frame is already answered
+    service_ms(20);
+    push_frame(0xC0, 0x12AF, {0xFF008001u});
+    service_ms(2);
+    CHECK_EQ(int(fusb302::interrogate_status().sopp_queries), 1);
+    CHECK_EQ(g_spoof_hook_n, 2);
+    CHECK_EQ(int(fusb302::interrogate_status().sopp_replies), 2);
+    CHECK_EQ(tx_headers().size(), sop_tx);                           // nothing went out on SOP: only SOP' frames, from the spoof
+    fusb302::interrogate_abort();
+    fusb302::set_sop_prime_hook(nullptr);
     for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     end_inline_case();
 }

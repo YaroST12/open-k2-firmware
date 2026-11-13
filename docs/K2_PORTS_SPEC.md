@@ -392,7 +392,7 @@ source, file:line given), **[measured]** (a hardware number from the 2026-11-11 
 | QC2/QC3/AFC/FCP/SCP/VOOC on D+/D- | yes | yes | `dpdm` switch network |
 | VBUS/current measure | yes | yes | INA226 (36 V ceiling) / INA228/237 (48 V) |
 | Test load | yes | yes | PA8 PWM, device-wide |
-| Present Ra to a charger (provoke SOP', act as e-marker uninvited) | yes (PC13 = Ra on CC1, Rd on CC2) | untested | Superseded: the old "no firmware path" is disproven by the working Ra mode and the top-plug spoof (2026-11-06); see `CONNECTION_MATRIX.md` rows H3, H4, H21 and exception X7 |
+| Present Ra to a charger (provoke SOP', act as e-marker uninvited) | yes (PC13 = Ra on CC1, Rd on CC2) | untested; **inline (charger on this port, a device on the other): no**, the Ra would sit across the live CC wire or on a VCONN net a chipless cable does not carry (the interrogation spoof only answers a query, it cannot provoke one) | Superseded: the old "no firmware path" is disproven by the working Ra mode and the top-plug spoof (2026-11-06); see `CONNECTION_MATRIX.md` rows H3, H4, H21 and exception X7 |
 | Present Rp | no | no | FUSB302 pull-up path not used |
 
 ## Known port-specific quirk

@@ -1000,6 +1000,35 @@ int main() {
         CHECK_EQ(bool(real.iq.status().sopp_real), true);
         CHECK_EQ(int(real.iq.status().sopp_queries), 1);      // the answer is no query
         CHECK_EQ(int(real.iq.status().sopp_replies), 0);
+        // The laptop as VCONN source starts its cable query with a Soft_Reset on SOP' (hardware 2026-11-13: three of them, then
+        // Discover Identity). A real cable Accepts it, so it opens the window too (the spoof's Accept goes to the retry), but
+        // it is no Discover Identity: not counted as a query.
+        Rig sr;
+        sr.contract();
+        sp_start(sr);
+        sr.next();
+        sr.now += 1100;
+        sr.contract();
+        sr.iq.tick(sr.now);
+        CHECK_EQ(bool(sr.iq.sopp_window(sr.now)), false);
+        sr.iq.on_message(Sop::SopP, hdr(kCtlSoftReset, 0, 2, kSrc, 0), {}, sr.now);
+        CHECK_EQ(bool(sr.iq.sopp_window(sr.now + 1)), true);
+        CHECK_EQ(int(sr.iq.status().sopp_queries), 0);
+        sr.now += 50;
+        sr.sopp_query();                                      // its Discover Identity follows: counted, window stays
+        CHECK_EQ(int(sr.iq.status().sopp_queries), 1);
+        CHECK_EQ(bool(sr.iq.sopp_window(sr.now + 1)), true);
+        // a SOP' control message that is no reset (a cable's GoodCRC...) opens nothing
+        Rig gc;
+        gc.contract();
+        sp_start(gc);
+        gc.next();
+        gc.now += 1100;
+        gc.contract();
+        gc.iq.tick(gc.now);
+        gc.iq.on_message(Sop::SopP, hdr(kCtlGoodCrc, 0, 2, kSrc, 0), {}, gc.now);
+        CHECK_EQ(bool(gc.iq.sopp_window(gc.now + 1)), false);
+
         Rig nospoof;
         nospoof.contract();
         nospoof.start();

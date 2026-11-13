@@ -2033,11 +2033,13 @@ def _render_learn_inline(r):
     lines.append(f"  contract before: {contract(s['first'])}; after: {contract(s['second'])} ({s['match']})")
     if s["spoof"] and s.get("sopp_real"):
         lines.append("  cable spoof: a real e-marked cable answered the charger; the spoof cannot reach it, use a cable without a chip"
-                     f" (the charger queried SOP' {s['sopp_queries']} times, our spoof sent {s['sopp_replies']} replies)")
+                     f" (SOP' was queried {s['sopp_queries']} times, our spoof sent {s['sopp_replies']} replies)")
     elif s["spoof"]:
-        lines.append(f"  cable spoof: the charger queried SOP' {s['sopp_queries']} times, {s['sopp_replies']} replies"
+        lines.append(f"  cable spoof: SOP' cable queried {s['sopp_queries']} times (the charger's or the device's), "
+                     f"{s['sopp_replies']} replies"
                      if s["sopp_queries"] else
-                     "  cable spoof: the charger never queried the cable (no reply was due; the Ra is not driven inline)")
+                     "  cable spoof: nobody queried the cable (no reply was due; the K2 cannot present an Ra toward the charger "
+                     "inline, so a charger that reads the cable by Ra does not ask)")
     if s["vid"] or s["pid"]:
         lines.append(f"  identity: {s['vid']:04X}:{s['pid']:04X}" + (f", VDOs {' '.join(f'0x{v:08X}' for v in x['identity_vdos'])}"
                                                                     if x.get("identity_vdos") else ""))

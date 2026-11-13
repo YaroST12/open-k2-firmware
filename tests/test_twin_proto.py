@@ -430,14 +430,14 @@ class Command(unittest.TestCase):
         self.assertTrue(x["epr_partial"])
         text = kr.render("twin", r)
         for want in ("late: Get_Sink_Cap_Extended", "EPR sink PDO 1:", "EPR sink PDO 2:", "raw=0xC1C8E1F4", "only the first chunk",
-                     "cable spoof: the charger queried SOP' 3 times, 2 replies", "same contract"):
+                     "cable spoof: SOP' cable queried 3 times (the charger's or the device's), 2 replies", "same contract"):
             self.assertIn(want, text)
         json.dumps(r)
-        # a spoof run the charger never queried says so (the Ra is not driven inline)
+        # a spoof run nobody queried says so (the Ra is not driven inline)
         r, _ = run_cli(["twin", "learn", "inline", "--confirm", "--spoof", "oneplus"],
                        [bytes([0, 1, 0]), iq_status(done=1, phase=7, flags=1, first=(1, 1, 5), second=(1, 1, 5))] + answers[:4]
                        + [bytes([0, 3, 4, 0, 0])])
-        self.assertIn("charger never queried the cable", kr.render("twin", r))
+        self.assertIn("nobody queried the cable", kr.render("twin", r))
         # a real e-marked cable answered the charger itself (hardware 2026-11-13): said plainly, not as "0 replies"
         r, _ = run_cli(["twin", "learn", "inline", "--confirm", "--spoof", "oneplus"],
                        [bytes([0, 1, 0]), iq_status(done=1, phase=7, flags=1 | 4, queries=2, replies=0,
@@ -445,7 +445,7 @@ class Command(unittest.TestCase):
         self.assertTrue(r["inline"]["sopp_real"])
         text = kr.render("twin", r)
         self.assertIn("a real e-marked cable answered the charger; the spoof cannot reach it, use a cable without a chip", text)
-        self.assertNotIn("charger never queried", text)
+        self.assertNotIn("nobody queried", text)
         json.dumps(r)
 
     def test_pd_interrogate_is_a_dry_learn(self):
