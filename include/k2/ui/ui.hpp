@@ -246,6 +246,13 @@ public:
     }
     void charger_test_set_sweep(bool on) { charger_test_.set_sweep(on); }
     void charger_test_set_avs_sweep(bool on) { charger_test_.set_avs_sweep(on); }
+    // The SVOOC ceiling stage of the next run (Off / On / UsbA, svooc_ceiling::Mode as a byte; false for an unknown mode).
+    bool charger_test_set_svooc_cap(uint8_t mode) {
+        if (mode >= svooc_ceiling::kModeCount) return false;
+        charger_test_.set_svooc_cap(static_cast<svooc_ceiling::Mode>(mode));
+        return true;
+    }
+    uint8_t charger_test_svooc_cap() const { return static_cast<uint8_t>(charger_test_.svooc_cap()); }
     uint8_t charger_test_cursor() const { return static_cast<uint8_t>(charger_test_.cursor()); }
     uint8_t charger_test_stage() const { return static_cast<uint8_t>(charger_test_.stage()); }
     bool charger_test_set_units(std::span<const uint8_t> units) { return charger_test_.set_units(units); }

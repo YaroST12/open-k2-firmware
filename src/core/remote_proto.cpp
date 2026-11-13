@@ -178,6 +178,13 @@ size_t encode_charger_test_view(std::span<uint8_t> out, const ChargerTestView& v
     return w.size();
 }
 
+size_t encode_charger_svooc_cap(std::span<uint8_t> out, const ChargerSvoocCap &c) {
+    if (out.size() < kChargerSvoocCapLen) return 0;
+    Writer w(out);
+    w.u8(c.mode); w.u8(c.end); w.u8(c.why); w.u8(c.asks); w.u16(c.word);
+    return w.size();
+}
+
 size_t encode_state(std::span<uint8_t> out, const StateInfo &s) {
     Writer w(out);
     w.u8(s.page); w.u8(s.active_cc); w.u8(s.spec_rev); w.u8(s.num_pdos);

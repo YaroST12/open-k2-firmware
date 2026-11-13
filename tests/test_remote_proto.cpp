@@ -2680,6 +2680,28 @@ static void test_charger_avs_sweep() {
     CHECK_EQ(run(f, request(0x54, 5, {1}), r), 1); check_header(r, 0x54, 5, Status::Busy, 0);
 }
 
+// Cmd::ChargerSvoocCap (0x59): no payload reads, [mode(1)] sets the ceiling stage of the next run (0 off, 1 on, 2 USB-A); the
+// reply is always [mode, end, why, asks, word(2)] (the stage's result of the latest run). Busy while a run is active.
+static void test_charger_svooc_cap() {
+    Fake f; Frame r;
+    f.svooc_cap_info = {0, 5, 0, 4, 0x06D};
+    const int calls = f.calls;
+    CHECK_EQ(run(f, request(0x59, 1, {}), r), 1);                    // a read moves nothing
+    check_header(r, 0x59, 1, Status::Ok, 6); check_bytes(r, kRspHeader, {0, 5, 0, 4, 0x6D, 0x00});
+    CHECK_EQ(f.svooc_cap_sets, 0); CHECK_EQ(f.calls, calls + 1);
+    CHECK_EQ(run(f, request(0x59, 2, {2}), r), 1);
+    check_header(r, 0x59, 2, Status::Ok, 6); check_bytes(r, kRspHeader, {2, 5, 0, 4, 0x6D, 0x00});
+    CHECK_EQ(f.svooc_cap_set, 2); CHECK_EQ(f.svooc_cap_sets, 1);
+    f.svooc_cap_info.word = 0x1FF;
+    CHECK_EQ(run(f, request(0x59, 3, {}), r), 1); check_bytes(r, kRspHeader + 4, {0xFF, 0x01});   // the word is 16-bit little endian
+    const int sets = f.svooc_cap_sets;
+    CHECK_EQ(run(f, request(0x59, 4, {3}), r), 1); check_header(r, 0x59, 4, Status::BadArg, 0);   // an unknown mode never reaches the setter
+    CHECK_EQ(run(f, request(0x59, 5, {1, 1}), r), 1); check_header(r, 0x59, 5, Status::BadLength, 0);
+    CHECK_EQ(f.svooc_cap_sets, sets);
+    f.svooc_cap_status = Status::Busy;
+    CHECK_EQ(run(f, request(0x59, 6, {1}), r), 1); check_header(r, 0x59, 6, Status::Busy, 0);
+}
+
 static void test_charger_cable() {
     namespace cc = k2::ctcable;
     Fake f; Frame r;
@@ -3042,6 +3064,7 @@ int main() {
     test_charger_cable();
     test_charger_units();
     test_charger_avs_sweep();
+    test_charger_svooc_cap();
     test_charger_test_wire(); test_charger_test_view_wire(); test_sweep_row_wire_carries_points(); test_sweep_row_that_never_ran_carries_zero_points();
     test_identify_refusal_wire_mapping();
     test_pd_attach_wire();

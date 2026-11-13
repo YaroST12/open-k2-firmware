@@ -210,6 +210,19 @@ remote::Status Remote::charger_avs_sweep(bool on) {
     return remote::Status::Ok;
 }
 
+remote::ChargerSvoocCapReply Remote::charger_svooc_cap(const uint8_t* set) {
+    remote::ChargerSvoocCapReply r;
+    if (set) {
+        if (ui_.charger_test_busy()) { r.status = remote::Status::Busy; return r; }
+        if (!ui_.charger_test_set_svooc_cap(*set)) { r.status = remote::Status::BadArg; return r; }
+        K2LOG("[TEST] svooc ceiling stage mode=%u\n", unsigned(*set));
+    }
+    const auto& ev = ui_.charger_test_results().evidence();
+    r.info.mode = ui_.charger_test_svooc_cap();
+    r.info.end = ev.svooc_end; r.info.why = ev.svooc_why; r.info.asks = ev.svooc_asks; r.info.word = ev.svooc_word;
+    return r;
+}
+
 remote::ChargerCableReply Remote::charger_cable(const ctcable::Choice* set) {
     remote::ChargerCableReply r;
     if (set) {
