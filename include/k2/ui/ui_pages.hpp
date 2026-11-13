@@ -5,6 +5,7 @@
 // buttons do right now. Pages are plain static objects owned by Ui.
 #pragma once
 #include "k2/ui/ui_fc_release.hpp"
+#include "k2/core/build_config.h"
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -1146,8 +1147,11 @@ public:
     void invalidate() override { static_step_ = 0; ctx_.rows.invalidate(); foot_.invalidate(); id_.invalidate(); }
     ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
-    static constexpr int kRows = 8;
-    static constexpr int kSystemRow = 6, kBootRow = 7;
+    // The row count follows the build: the Screenshot row exists only with K2_SCREENSHOT=1 (the default is 0). ui_pages.cpp
+    // static_asserts these against its SettingRow enum, and test_settings_rows0 pins the K2_SCREENSHOT=0 values.
+    static constexpr int kScreenshotRows = K2_SCREENSHOT ? 1 : 0;
+    static constexpr int kRows = 7 + kScreenshotRows;
+    static constexpr int kSystemRow = 5 + kScreenshotRows, kBootRow = 6 + kScreenshotRows;
     static constexpr int16_t kIdHeadY = 25, kIdLineY = 46, kIdDashY = 63, kListY = 66;   // identity y22..65, the list under it
 private:
     static void row_fn(void *ctx, int index, bool focused, kit::RowSpec &out);   // reads the live settings: no value cache

@@ -2048,11 +2048,10 @@ enum class SettingRow : uint8_t {
     Count
 };
 constexpr int kSettingsRows = static_cast<int>(SettingRow::Count);
-#if K2_SCREENSHOT
+// Checked in both builds (K2_SCREENSHOT 0 and 1): the page's public constants must follow the enum.
 static_assert(kSettingsRows == SettingsPage::kRows);
 static_assert(static_cast<int>(SettingRow::SystemState) == SettingsPage::kSystemRow);
 static_assert(static_cast<int>(SettingRow::BootInfo) == SettingsPage::kBootRow);
-#endif
 }
 
 void SettingsPage::enter() {
