@@ -623,7 +623,8 @@ public:
     // loop also serves the protocol engines (a QC pulse train, a UFCS Accept, a PD transition), so the page paints and journals
     // nothing heavy then (a full LCD redraw is 100-200 ms, a littlefs erase masks interrupts). Baseline, Releasing, the unit
     // attach / detach states and the end of the run are the gaps in which that work is done. Derived from the state: no storage.
-    bool quiet() const { return state_ == State::Requesting || state_ == State::Holding; }
+    // The SVOOC ceiling stage counts: its wire is timed in the main loop too, and a littlefs erase masks interrupts.
+    bool quiet() const { return state_ == State::Requesting || state_ == State::Holding || state_ == State::Ceiling; }
     // Nothing may paint at all: a row is in flight AND the fast-charge engine is inside a window that only the main loop serves
     // (`engine_window` = fctrig::paint_critical(): the HVDCP handshake pulses, the VOOC receive slices, the UFCS handshake, the
     // vivo UART frames; the LCD idle hook serves the PD engine, the UFCS Ping..Keep exchange and the transition capture, so those

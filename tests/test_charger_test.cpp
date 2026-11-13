@@ -2156,6 +2156,7 @@ static void test_ceiling_judged_ladder_is_the_result() {
         ceiling_run(f, r, usb_a ? sc::Mode::UsbA : sc::Mode::On);
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Ceiling; }, 20000), true);
         CHECK_EQ(r.busy(), true);                       // the stage is part of the run
+        CHECK_EQ(r.quiet(), true);                      // the trigger's wire is timed: no journal flash write, no heavy paint
         CHECK_EQ(f.ceil_starts, 1); CHECK_EQ(f.ceil_usb_a_seen, usb_a);
         CHECK_EQ(f.ceil_stops, 0);                      // nothing stops it before it is judged
         CHECK_EQ(run_until(f, r, [&] { return r.state() == ct::State::Done; }, 120000), true);

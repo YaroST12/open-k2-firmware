@@ -14,6 +14,7 @@
 #include "k2/core/loop_guard.hpp"
 #include "k2/chargertest/charger_journal_hw.hpp"
 #include "k2/fastcharge/fctrig.hpp"
+#include "k2/fastcharge/svooc_trig.hpp"
 #include "k2/pd/link.hpp"
 #include "k2/pd/power_source.hpp"
 #include "k2/chargertest/report_card_hw.hpp"
@@ -889,6 +890,32 @@ Status status() {
 }
 const fc::Caps& caps() { return g_stub.fc_caps; }
 }  // namespace k2::fctrig
+
+#ifndef K2_WORLD_SVOOC   // the SuperVOOC world links the real glue
+namespace k2::svooc_trig {
+svooc::Refusal start(bool, bool, std::uint32_t, bool usb_a, const svooc::Params& p) {
+    g_stub.svooc_starts++; g_stub.svooc_usb_a = usb_a; g_stub.svooc_profile = static_cast<uint8_t>(p.profile);
+    const auto r = static_cast<svooc::Refusal>(g_stub.svooc_refusal);
+    g_stub.svooc_run = r == svooc::Refusal::None;
+    return r;
+}
+void stop() { g_stub.svooc_stops++; g_stub.svooc_run = false; }
+void poll() {}
+void service() {}
+bool running() { return g_stub.svooc_run; }
+bool lines_held() { return g_stub.svooc_run; }
+Snapshot snapshot() {
+    Snapshot s;
+    s.n_asks = g_stub.svooc_n_asks; s.ceiling_word = g_stub.svooc_ceiling;
+    for (unsigned i = 0; i < g_stub.svooc_n_asks && i < s.asks.size(); i++) {
+        s.asks[i].word = g_stub.svooc_asks[i];
+        s.asks[i].after = i + 1 == g_stub.svooc_n_asks ? g_stub.svooc_after : svooc::kAcceptPolls;
+    }
+    return s;
+}
+std::size_t read_pairs(std::uint16_t, std::span<svooc::PairRow>) { return 0; }
+}  // namespace k2::svooc_trig
+#endif
 
 namespace k2::usbcfg {
 void init() { current = g_stub.usb_stored; }

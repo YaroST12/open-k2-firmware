@@ -668,6 +668,30 @@ static void test_scp_capability_note_row() {
     rl::build(dense, baseus(), notes);
     CHECK_EQ(find(dense, "SCP cap") != nullptr, true);
 }
+// The SuperVOOC ceiling stage's result is a passive fact row of the same section: the highest 0x86 ask the session went on
+// under ("6.3 A asked", the charger's accepted ceiling, never a drawn current), the words of svooc_ceiling::format_cap.
+static void test_svooc_ceiling_note_row() {
+    rl::Layout none;
+    rl::build(none, baseus());
+    CHECK_EQ(find(none, "SV cap") == nullptr, true);
+    rl::OemNotes notes;
+    notes.svooc_cap = "6.3 A asked";
+    rl::Layout l;
+    rl::build(l, baseus(), notes);
+    const rl::Row* r = find(l, "SV cap");
+    CHECK_EQ(r != nullptr, true);
+    CHECK_STR(chips(l, row_of(l, "SV cap")).c_str(), "6.3 A asked");
+    CHECK_EQ(int(r->algorithm), int(A::Count));
+    notes.scp_cap = "20V 6A";
+    rl::Layout both;
+    rl::build(both, baseus(), notes);
+    CHECK_EQ(find(both, "SV cap") != nullptr && find(both, "SCP cap") != nullptr, true);
+    notes.headers = false;
+    rl::Layout dense;
+    rl::build(dense, baseus(), notes);
+    CHECK_EQ(find(dense, "SV cap") != nullptr, true);
+    CHECK_EQ(dense.cuts, 0u);
+}
 // A passive label longer than the 8-character row label and the 15-character token is split into words, never cut
 // (2026-11-08: "Samsung" read "via PPS 5-2" on the K2). The first word is the row label; the rest wraps in the grid.
 static void test_long_passive_labels_split_into_words_and_never_cut() {
@@ -1038,6 +1062,7 @@ int main() {
     test_section_of_and_vendor_names();
     test_oppo_svid_note_row();
     test_scp_capability_note_row();
+    test_svooc_ceiling_note_row();
     test_long_passive_labels_split_into_words_and_never_cut();
     test_wrap_emits_each_header_as_its_own_line();
     test_note_row_is_appended_as_plain_words();
