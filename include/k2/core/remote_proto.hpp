@@ -1202,7 +1202,13 @@ using StopInfo = k2::stop::Report;
 // LEASE reply: the host dead-man lease (k2/core/lease.hpp): armed, seconds left (rounded up), the length, why the last one ended.
 using LeaseInfo = k2::lease::Info;
 
-struct ScreenInfo { uint16_t width = 240, height = 240; uint8_t strip_rows = 4; uint8_t num_strips = 60; };
+// Screenshot request option byte (optional payload) and the transport byte the reply carries after the format: with
+// kShotOptCdc the host asks for the stream on the CDC bulk pipe (it must have the port open), the reply says which one the
+// device will use. Without the option, or when the port is not open, the stream is HID reports as before.
+constexpr uint8_t kShotOptCdc = 1;
+constexpr uint8_t kShotViaHid = 0, kShotViaCdc = 1;
+
+struct ScreenInfo { uint16_t width = 240, height = 240; uint8_t strip_rows = 4; uint8_t num_strips = 60; uint8_t transport = kShotViaHid; };
 
 // Writes one stream frame of a screenshot into `out` (zero padded).
 size_t build_stream_frame(std::span<uint8_t, kFrameSize> out, uint8_t seq, uint8_t strip, uint8_t flags,
@@ -1609,7 +1615,8 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
         backend.debug_fault(p[4]);
         return reply_n(0);
     case Cmd::Screenshot: {
-        if (!p.empty()) return reply(Status::BadLength);
+        if (p.size() > 1) return reply(Status::BadLength);
+        if constexpr (requires { backend.screenshot_opts(uint8_t{}); }) backend.screenshot_opts(p.empty() ? uint8_t{0} : p[0]);
         const Status st = backend.screenshot();
         if (st != Status::Ok) return reply(st);
         return reply_n(encode_screen_info(buf, backend.screen_info()));

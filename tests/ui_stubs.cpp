@@ -708,6 +708,12 @@ std::size_t log_bin(std::span<std::uint8_t> out, std::uint32_t& base_ms, bool& o
     return n;
 }
 std::uint8_t tx_free() { return 16; }
+bool cdc_ready() { return false; }
+std::uint32_t cdc_free() { return 0; }
+std::uint32_t cdc_write(const std::uint8_t*, std::uint32_t n) { return n; }
+void cdc_flush() {}
+void set_cdc_hold(bool) {}
+bool cdc_hold() { return false; }
 // Like the firmware, every report handed to the IN endpoint moves the TX counter the Diag page shows.
 void send_report(const std::uint8_t* r) {
     g_stub.reports.emplace_back(r, r + 64);

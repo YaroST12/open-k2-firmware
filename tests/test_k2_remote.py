@@ -5,9 +5,11 @@
 The byte vectors are the same literals as tests/test_remote_proto.cpp, so both ends of the
 protocol are pinned to the layout documented in include/k2/core/remote_proto.hpp.
 """
+import os
 import contextlib
 import io
 import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -605,6 +607,44 @@ def rle_runs(px):
 
 
 class Screenshot(unittest.TestCase):
+    def setUp(self):
+        # a K2 on this desk must not turn the fake-transport tests into CDC ones
+        self._port = kr.find_cdc_port
+        kr.find_cdc_port = lambda: None
+        self.addCleanup(setattr, kr, "find_cdc_port", self._port)
+
+    def test_old_firmware_rejects_the_cdc_option(self):
+        # BadLength to the option byte: ask again without it and stream over HID
+        calls = []
+
+        class Link:
+            tap = None
+
+            def call(self, cmd, payload=b""):
+                calls.append(payload)
+                if payload:
+                    raise kr.RemoteError(kr.STATUS_BAD_LENGTH, cmd)
+                return kr.Response(cmd, 1, 0, bytes([240, 0, 240, 0, 4, 60, 1]))
+
+            def read_stream(self, seq):
+                raise kr.RemoteTimeout("end of test")
+        cdc = kr.CdcStream.__new__(kr.CdcStream)
+        with self.assertRaises(kr.RemoteTimeout):
+            kr._receive_screenshot(Link(), types.SimpleNamespace(debug=False), print, cdc)
+        self.assertEqual(calls, [bytes([kr.SHOT_OPT_CDC]), b""])
+
+    def test_cdc_stream_resyncs_on_text_and_false_magic(self):
+        r, w = os.pipe()
+        cdc = kr.CdcStream.__new__(kr.CdcStream)
+        cdc.fd, cdc.buf = r, bytearray()
+        good = rsp(kr.CMD_SCREEN_DATA, 3, 0, bytes([1, 1, 7, 8]))
+        os.write(w, b"shell text\r\n" + kr.RSP_MAGIC + b"\xff" + b"junk" + good + good)
+        self.assertEqual(cdc.read_frame(0.5), good)
+        self.assertEqual(cdc.read_frame(0.5), good)
+        self.assertIsNone(cdc.read_frame(0.05))
+        os.close(r)
+        os.close(w)
+
     def test_decode_runs_and_literals(self):
         data = bytes([0x02, 0x34, 0x12, 0x81, 0x01, 0x00, 0x02, 0x00])
         self.assertEqual(kr.rle565_decode(data, 5), [0x1234] * 3 + [1, 2])
@@ -623,7 +663,8 @@ class Screenshot(unittest.TestCase):
 
     def test_screen_info(self):
         info = kr.decode_screen_info(bytes([240, 0, 240, 0, 16, 15, 1]))
-        self.assertEqual(info, {"width": 240, "height": 240, "strip_rows": 16, "num_strips": 15})
+        self.assertEqual(info, {"width": 240, "height": 240, "strip_rows": 16, "num_strips": 15, "transport": 0})
+        self.assertEqual(kr.decode_screen_info(bytes([240, 0, 240, 0, 16, 15, 1, 1]))["transport"], kr.SHOT_VIA_CDC)
         with self.assertRaises(kr.FrameError):
             kr.decode_screen_info(bytes([240, 0, 240, 0, 16, 14, 1]))
         with self.assertRaises(kr.FrameError):

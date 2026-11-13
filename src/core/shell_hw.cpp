@@ -77,7 +77,7 @@ void put(std::string_view s) {
 
 // usb::log tap: one chip log line to the terminal; dropped when the FIFO has no room.
 void tap(std::string_view line) {
-    if (!g_log_on || !g_session) return;
+    if (!g_log_on || !g_session || usb::cdc_hold()) return;   // a screenshot owns the pipe
     while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.remove_suffix(1);
     if (tud_cdc_write_available() < line.size() + 2) return;
     tud_cdc_write(line.data(), static_cast<std::uint32_t>(line.size()));

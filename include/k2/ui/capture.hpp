@@ -15,9 +15,10 @@ constexpr int kCaptureStrips = 60;
 constexpr int kCaptureStripPixels = 240 * 4;
 
 #if K2_SCREENSHOT
-// Streams the screen as stream frames carrying `seq` (see remote_proto.hpp, SCREENSHOT).
+// Streams the screen as stream frames carrying `seq` (see remote_proto.hpp, SCREENSHOT), over the HID IN endpoint or,
+// with `cdc`, the CDC bulk pipe (the host asked and has the port open).
 // Returns false when the host stopped reading and the capture was aborted.
-bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms);
+bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms, bool cdc = false);
 
 // Strip-at-a-time access for the HTTP screenshot (BMP): begin, then capture_strip() for strips
 // 0..kCaptureStrips-1 in order, then end. The pointer is valid until the next call. One session at
@@ -26,7 +27,7 @@ bool capture_begin(Ui &ui);
 const uint16_t *capture_strip(Ui &ui, int strip, uint32_t now_ms);
 void capture_end(Ui &ui, uint32_t now_ms);
 #else
-inline bool capture_screen(Ui &, uint8_t, uint32_t) { return false; }
+inline bool capture_screen(Ui &, uint8_t, uint32_t, bool = false) { return false; }
 inline bool capture_begin(Ui &) { return false; }
 inline const uint16_t *capture_strip(Ui &, int, uint32_t) { return nullptr; }
 inline void capture_end(Ui &, uint32_t) {}

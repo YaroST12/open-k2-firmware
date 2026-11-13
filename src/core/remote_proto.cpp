@@ -534,7 +534,7 @@ size_t encode_charger_hunt(std::span<uint8_t> out, const ChargerHuntReply &r, bo
 
 size_t encode_screen_info(std::span<uint8_t> out, const ScreenInfo &i) {
     Writer w(out);
-    w.u16(i.width); w.u16(i.height); w.u8(i.strip_rows); w.u8(i.num_strips); w.u8(kShotFormatRle565);
+    w.u16(i.width); w.u16(i.height); w.u8(i.strip_rows); w.u8(i.num_strips); w.u8(kShotFormatRle565); w.u8(i.transport);
     return w.size();
 }
 

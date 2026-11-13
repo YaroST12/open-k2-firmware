@@ -135,6 +135,17 @@ void send_report(const std::uint8_t* report);
 // burst sender (screenshot) waits for room with poll() first.
 std::uint8_t tx_free();
 
+// CDC-ACM bulk IN as a fast byte pipe for the screenshot stream (HID moves one 64-byte report per 1.5-2 ms, bulk moves
+// a whole FIFO per completion). cdc_ready(): the host has the port open (DTR). cdc_write() queues what fits and
+// returns the byte count; cdc_flush() starts the transfer. While cdc_hold() is set the shell must not write to the
+// port (log tap), so its text cannot land inside the stream. Everything is a no-op in a mode without the shell.
+bool cdc_ready();
+std::uint32_t cdc_free();
+std::uint32_t cdc_write(const std::uint8_t* data, std::uint32_t len);
+void cdc_flush();
+void set_cdc_hold(bool on);
+bool cdc_hold();
+
 // Implemented by src/core/remote.cpp: receives each 64-byte HID OUT report (EP1 OUT / SET_REPORT).
 // Must only queue the data; it runs from tud_task() inside poll(), never from the ISR.
 void on_remote_report(const std::uint8_t* buffer, std::uint16_t length);

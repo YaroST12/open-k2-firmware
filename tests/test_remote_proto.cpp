@@ -1880,15 +1880,18 @@ static void test_build_response_pads_and_cuts() {
 static void test_screenshot() {
     Fake f; Frame r;
     CHECK_EQ(run(f, request(0x0A, 5, {}), r), 1);
-    check_header(r, 0x0A, 5, Status::Ok, 7);
-    const uint8_t want[7] = {240, 0, 240, 0, 4, 60, 1};
-    CHECK_EQ(memcmp(&r[6], want, 7), 0);
+    check_header(r, 0x0A, 5, Status::Ok, 8);
+    const uint8_t want[8] = {240, 0, 240, 0, 4, 60, 1, 0};   // ... format RLE565, transport HID
+    CHECK_EQ(memcmp(&r[6], want, 8), 0);
     CHECK_EQ(f.shots, 1);
     f.shot_status = Status::Busy;
     CHECK_EQ(run(f, request(0x0A, 6, {}), r), 1);
     check_header(r, 0x0A, 6, Status::Busy, 0);
-    CHECK_EQ(run(f, request(0x0A, 7, {1}), r), 1);
-    check_header(r, 0x0A, 7, Status::BadLength, 0);
+    f.shot_status = Status::Ok;
+    CHECK_EQ(run(f, request(0x0A, 7, {1}), r), 1);        // the optional CDC-transport byte
+    check_header(r, 0x0A, 7, Status::Ok, 8);
+    CHECK_EQ(run(f, request(0x0A, 8, {1, 0}), r), 1);
+    check_header(r, 0x0A, 8, Status::BadLength, 0);
 }
 
 static void test_debug_pd_msg() {

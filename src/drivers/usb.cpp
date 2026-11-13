@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 // USB glue, see k2/drivers/usb.hpp.
+#include "k2/core/build_config.h"
 #include "k2/core/hot.h"
 #include "k2/core/tx_queue.hpp"
 #include "k2/core/log.hpp"
@@ -37,6 +38,9 @@ constexpr std::size_t kSlotSize = 64;  // one HID report
 TxQueue<kQueueSize, kSlotSize> g_queue;
 volatile bool g_started;
 bool g_log_on = true;
+#if K2_SCREENSHOT
+bool g_cdc_hold = false;    // a screenshot owns the CDC bulk pipe (set_cdc_hold)
+#endif
 bool g_hid_quiet = false;   // a trace push session owns the IN endpoint (set_hid_quiet)
 
 }  // namespace
@@ -279,6 +283,18 @@ K2_HOT void log(std::string_view msg) {
 K2_HOT void send_report(const std::uint8_t* report) { push(std::span<const std::uint8_t, kSlotSize>(report, kSlotSize), false); }
 
 std::uint8_t tx_free() { return g_queue.free(); }
+
+bool cdc_ready() { return g_started && tud_mounted() && !tud_suspended() && tud_cdc_connected(); }
+std::uint32_t cdc_free() { return tud_cdc_write_available(); }
+std::uint32_t cdc_write(const std::uint8_t* data, std::uint32_t len) { return tud_cdc_write(data, len); }
+void cdc_flush() { tud_cdc_write_flush(); }
+#if K2_SCREENSHOT
+void set_cdc_hold(bool on) { g_cdc_hold = on; }
+bool cdc_hold() { return g_cdc_hold; }
+#else
+void set_cdc_hold(bool) {}
+bool cdc_hold() { return false; }
+#endif
 
 void log_enable(bool on) { g_log_on = on; }
 bool log_enabled() { return g_log_on; }

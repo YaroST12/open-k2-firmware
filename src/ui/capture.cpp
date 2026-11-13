@@ -37,17 +37,31 @@ const lcd::Sink kSink = {sink_begin, sink_pixels, sink_fill, sink_band};
 static_assert(remote::ScreenInfo{}.strip_rows == kStripRows && remote::ScreenInfo{}.num_strips == kStrips,
               "ScreenInfo defaults must match the capture geometry");
 
-// Queues one stream frame once the IN queue has room; false after the timeout. The wait serves the idle hook as well as
-// USB (lcd::pump), so PD, UFCS and the transition capture keep their ~1 ms service while the host drains the endpoint.
-bool send_frame(uint8_t seq, uint8_t strip, uint8_t flags, const uint8_t *data, size_t len) {
+// Queues one stream frame once the IN queue (HID) or the CDC FIFO has room; false after the timeout. The wait serves the
+// idle hook as well as USB (lcd::pump), so PD, UFCS and the transition capture keep their ~1 ms service while the host
+// drains the endpoint. The CDC frames are the same 64 bytes as the HID reports (the host resyncs on the response magic).
+bool send_frame(bool cdc, uint8_t seq, uint8_t strip, uint8_t flags, const uint8_t *data, size_t len) {
     const uint32_t t0 = systick::millis();
-    while (usb::tx_free() < kMinFree) {
-        lcd::pump();
-        if (systick::millis() - t0 > kSendTimeoutMs) return false;
+    if (cdc) {
+        while (usb::cdc_free() < remote::kFrameSize) {
+            usb::cdc_flush();
+            lcd::pump();
+            if (systick::millis() - t0 > kSendTimeoutMs) return false;
+        }
+    } else {
+        while (usb::tx_free() < kMinFree) {
+            lcd::pump();
+            if (systick::millis() - t0 > kSendTimeoutMs) return false;
+        }
     }
     std::array<uint8_t, remote::kFrameSize> frame;
     remote::build_stream_frame(frame, seq, strip, flags, std::span<const uint8_t>(data, len));
-    usb::send_report(frame.data());
+    if (cdc) {
+        usb::cdc_write(frame.data(), static_cast<uint32_t>(frame.size()));
+        usb::cdc_flush();
+    } else {
+        usb::send_report(frame.data());
+    }
     return true;
 }
 
@@ -76,8 +90,9 @@ void capture_end(Ui &ui, uint32_t now_ms) {
     g_busy = false;
 }
 
-bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms) {
+bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms, bool cdc) {
     if (!capture_begin(ui)) return false;
+    if (cdc) usb::set_cdc_hold(true);   // no shell text inside the stream
     const uint32_t t0 = systick::millis();
     uint32_t total = 0;
     bool ok = true;
@@ -94,13 +109,14 @@ bool capture_screen(Ui &ui, uint8_t seq, uint32_t now_ms) {
         enc.reset(g_strip, static_cast<size_t>(kScreenW) * kStripRows);
         while (!enc.done()) {
             const size_t n = enc.next(chunk, sizeof chunk);
-            ok = send_frame(seq, static_cast<uint8_t>(strip), enc.done() ? remote::kShotFlagLast : 0, chunk, n);
+            ok = send_frame(cdc, seq, static_cast<uint8_t>(strip), enc.done() ? remote::kShotFlagLast : 0, chunk, n);
             if (!ok) break;
             total += static_cast<uint32_t>(n);
         }
     }
-    if (!ok) send_frame(seq, 0, remote::kShotFlagAbort, chunk, 0);
+    if (!ok) send_frame(cdc, seq, 0, remote::kShotFlagAbort, chunk, 0);
 
+    if (cdc) usb::set_cdc_hold(false);
     capture_end(ui, now_ms);
     K2LOG("[RMT] screenshot %s: %d bytes in %d ms\n", ok ? "done" : "aborted",
                 static_cast<int>(total), static_cast<int>(systick::millis() - t0));

@@ -8,6 +8,7 @@ Device discovery and the HID transport come from tools/k2_flasher.py.
 """
 import argparse
 import json
+import os
 import struct
 import sys
 import time
@@ -2371,6 +2372,11 @@ def rle565_decode(data, expected):
     return out
 
 
+SHOT_OPT_CDC = 1                # request option: stream over the CDC bulk pipe (firmware kShotOptCdc)
+SHOT_VIA_HID, SHOT_VIA_CDC = 0, 1
+CDC_STALL_S = 1.0               # no byte from the CDC pipe for this long: give up and use HID
+
+
 def decode_screen_info(p):
     _need(p, 7, "screen info")
     w, h, rows, strips, fmt = struct.unpack("<HHBBB", p[:7])
@@ -2378,7 +2384,8 @@ def decode_screen_info(p):
         raise FrameError(f"unsupported screenshot format {fmt}")
     if rows * strips != h:
         raise FrameError(f"strips {strips} x {rows} rows do not cover height {h}")
-    return {"width": w, "height": h, "strip_rows": rows, "num_strips": strips}
+    return {"width": w, "height": h, "strip_rows": rows, "num_strips": strips,
+            "transport": p[7] if len(p) > 7 else SHOT_VIA_HID}
 
 
 def rgb565_to_rgb888(px):
@@ -2422,13 +2429,124 @@ def assemble_screenshot(info, strips):
     return px
 
 
+class CdcStream:
+    """The K2's CDC-ACM port as a raw byte pipe (no pyserial): the screenshot stream goes over its bulk IN endpoint,
+    which moves a whole FIFO per completion where HID moves one 64-byte report per 1.5-2 ms. The device writes the
+    same 64-byte stream frames as on HID; shell text and noise around them are skipped by magic and header checks."""
+
+    def __init__(self, path):
+        import termios
+        self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)    # DTR rises: the device sees the session
+        try:
+            attr = termios.tcgetattr(self.fd)
+            attr[0] = attr[1] = attr[3] = 0
+            attr[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+            attr[6][termios.VMIN], attr[6][termios.VTIME] = 0, 0
+            termios.tcsetattr(self.fd, termios.TCSANOW, attr)
+            termios.tcflush(self.fd, termios.TCIFLUSH)
+        except Exception:
+            os.close(self.fd)
+            raise
+        self.buf = bytearray()
+
+    def close(self):
+        os.close(self.fd)
+
+    def _fill(self, timeout_s):
+        import select
+        if not select.select([self.fd], [], [], max(0.0, timeout_s))[0]:
+            return False
+        try:
+            chunk = os.read(self.fd, 4096)
+        except BlockingIOError:
+            return False
+        self.buf += chunk
+        return bool(chunk)
+
+    def read_frame(self, timeout_s):
+        """Next whole 64-byte response-magic frame, or None on timeout."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            i = self.buf.find(RSP_MAGIC)
+            if i < 0:
+                del self.buf[:max(0, len(self.buf) - 1)]      # keep a trailing half magic
+            else:
+                del self.buf[:i]
+                if len(self.buf) >= FRAME_SIZE:
+                    raw = bytes(self.buf[:FRAME_SIZE])
+                    if raw[5] <= FRAME_SIZE - RSP_HEADER and raw[2] == CMD_SCREEN_DATA:
+                        del self.buf[:FRAME_SIZE]
+                        return raw
+                    del self.buf[:1]                         # magic bytes inside text: resync
+                    continue
+            left = deadline - time.monotonic()
+            if left <= 0 or (not self._fill(left) and time.monotonic() >= deadline):
+                return None
+
+
+def find_cdc_port():
+    """The K2 shell's tty on Linux: the /dev/serial/by-id entry of the Open-K2 Logger, else None."""
+    import glob
+    hits = sorted(glob.glob("/dev/serial/by-id/usb-WITRN_Open-K2_Logger_*-if*"))
+    return hits[0] if hits else None
+
+
+def open_cdc(a):
+    """A CdcStream, or None when the host has no usable port or the user passed --no-cdc."""
+    if getattr(a, "no_cdc", False):
+        return None
+    port = find_cdc_port()
+    if port is None:
+        return None
+    try:
+        return CdcStream(port)
+    except (OSError, ImportError):
+        return None
+
+
 def receive_screenshot(link, a, out):
-    rsp = link.call(CMD_SCREENSHOT)
+    """One screenshot. The stream goes over the CDC bulk pipe when the port opens (about 4x faster than HID reports),
+    else, or when that pipe stalls, over HID. The pixels are identical either way."""
+    cdc = open_cdc(a)
+    if cdc is not None:
+        try:
+            return _receive_screenshot(link, a, out, cdc)
+        except RemoteTimeout:
+            pass                                     # the pipe stalled: take the screenshot again over HID
+        finally:
+            cdc.close()
+    return _receive_screenshot(link, a, out, None)
+
+
+def _next_stream_frame(link, seq, cdc):
+    if cdc is None:
+        return link.read_stream(seq)
+    while True:
+        raw = cdc.read_frame(CDC_STALL_S)
+        if raw is None:
+            raise RemoteTimeout("screenshot CDC stream stalled")
+        if link.tap:
+            link.tap(raw)
+        rsp = parse_response(raw)
+        if rsp.seq == seq:
+            return rsp
+
+
+def _receive_screenshot(link, a, out, cdc):
+    try:
+        rsp = link.call(CMD_SCREENSHOT, bytes([SHOT_OPT_CDC]) if cdc is not None else b"")
+    except RemoteError as e:
+        if cdc is None or e.status != STATUS_BAD_LENGTH:
+            raise
+        cdc = None                                   # a firmware from before the option: plain request, HID stream
+        rsp = link.call(CMD_SCREENSHOT)
     info = decode_screen_info(rsp.payload)
+    if info["transport"] != SHOT_VIA_CDC:
+        cdc = None                                   # the device did not take the offer
     per_strip = info["width"] * info["strip_rows"]
     strips, buf, total, stats = {}, {}, 0, []
     while len(strips) < info["num_strips"]:
-        f = link.read_stream(rsp.seq)
+        f = _next_stream_frame(link, rsp.seq, cdc)
         if len(f.payload) < 2:
             raise FrameError("short stream frame")
         idx, flags, data = f.payload[0], f.payload[1], f.payload[2:]
@@ -4759,6 +4877,7 @@ def build_parser():
     ss.add_argument("out", help="output .png path")
     ss.add_argument("--scale", type=int, default=1, choices=range(1, 9), help="integer upscale")
     ss.add_argument("--debug", action="store_true", help="print pixel and colour counts per strip")
+    ss.add_argument("--no-cdc", action="store_true", help="stream over HID reports only (default: CDC bulk when the port opens)")
     ss.add_argument("--dump-raw", metavar="FILE", help="save every received frame (64 B each) to FILE")
     sd = sub.add_parser("debug", help="debug helpers (firmware built with them)")
     sds = sd.add_subparsers(dest="debug_cmd", required=True)

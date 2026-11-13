@@ -1606,6 +1606,7 @@ bool Remote::screenshot_enabled() { return uiprefs::screenshot_enabled; }
 remote::Status Remote::screenshot() {
     if (!screenshot_enabled()) return remote::Status::Busy;
     shot_pending_ = true;
+    shot_cdc_ = shot_want_cdc_ && usb::cdc_ready();
     return remote::Status::Ok;
 }
 #else
@@ -1614,7 +1615,11 @@ bool Remote::screenshot_enabled() { return false; }
 remote::Status Remote::screenshot() { return remote::Status::UnknownCmd; }
 #endif
 
-remote::ScreenInfo Remote::screen_info() { return {}; }
+remote::ScreenInfo Remote::screen_info() {
+    remote::ScreenInfo i;
+    i.transport = shot_cdc_ ? remote::kShotViaCdc : remote::kShotViaHid;
+    return i;
+}
 
 bool Remote::log_enabled() { return usb::log_enabled(); }
 
