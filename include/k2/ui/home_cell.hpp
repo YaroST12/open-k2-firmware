@@ -26,8 +26,8 @@ constexpr uint8_t kDashV = 4, kDashH = 5;   // Arrow `aux` values beyond the fou
 struct Item {
     ItemKind kind = ItemKind::Fill;
     uint8_t aux = 0;              // Arrow: 0 up, 1 left, 2 down, 3 right (screen), kDashV / kDashH for the idle dash
-    int16_t x = 0, y = 0;         // Fill: top-left; Text: pen x and line-box top; Arrow/Warn: top-left of the box
-    int16_t w = 0, h = 0;         // Fill size; Arrow: box size in w (0 = kArrowBox), the 22 px mask scaled to it
+    int16_t x = 0, y = 0;         // Fill: top-left; Text: pen x and line-box top (or badge box when w,h > 0)
+    int16_t w = 0, h = 0;         // Fill size; Text: >0 centers ink inside badge box (x,y,w,h); Arrow: box size in w
     uint16_t color = 0;           // Fill colour, Text foreground, Arrow colour, Warn triangle colour
     uint16_t ink = 0;             // Warn: the exclamation mark
     const Font *font = nullptr;
@@ -42,6 +42,11 @@ constexpr Item fill(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) 
 constexpr Item text(const Font &f, int16_t x, int16_t top, std::string_view s, uint16_t color) {
     Item i;
     i.kind = ItemKind::Text; i.x = x; i.y = top; i.font = &f; i.text = s; i.color = color;
+    return i;
+}
+constexpr Item badge_text(const Font &f, int16_t bx, int16_t by, int16_t bw, int16_t bh, std::string_view s, uint16_t color) {
+    Item i;
+    i.kind = ItemKind::Text; i.x = bx; i.y = by; i.w = bw; i.h = bh; i.font = &f; i.text = s; i.color = color;
     return i;
 }
 constexpr Item arrow(int16_t x, int16_t y, uint8_t aux, uint16_t color, int16_t size = 0) {

@@ -24,11 +24,13 @@ bool up_hit(int x, int y) {
 
 void put_text_row(const Item &it, int y, int x0, int x1, uint16_t *out) {
     const Font &f = *it.font;
-    const int ty = y - it.y;
+    TextOrigin orig{it.x, it.y};
+    if (it.w > 0 && it.h > 0) orig = center_in_box({it.x, it.y, it.w, it.h}, badge_text_bounds(f, it.text));
+    const int ty = y - orig.y;
     if (ty < 0 || ty >= f.height) return;
     uint16_t cov[64];
     for (size_t k = 0; k < it.text.size(); k++) {
-        const int cx = it.x + static_cast<int>(k) * f.adv;
+        const int cx = orig.x + static_cast<int>(k) * f.adv;
         if (cx > x1 || cx + f.adv - 1 < x0) continue;
         if (it.text[k] == ' ') continue;
         const int n = render_row(f, it.text.substr(k, 1), ty, kCoverage, cov, f.adv);
@@ -146,16 +148,26 @@ void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *ro
         if (it.kind != ItemKind::Text || !it.font || nb == kMaxTextBoxes) continue;
         const Font &f = *it.font;
         const int tw = text_width(f, it.text);
-        const Rect full = ContentViewport::native_rect({it.x, it.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)});
+        const bool badge = it.w > 0 && it.h > 0;
+        Rect full;
+        if (badge) {
+            const Rect box = ContentViewport::mapped_rect({it.x, it.y, it.w, it.h});
+            const TextOrigin p = center_in_box(box, badge_text_bounds(f, it.text));
+            full = {p.x, p.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)};
+        } else {
+            full = ContentViewport::native_rect({it.x, it.y, static_cast<int16_t>(tw), static_cast<int16_t>(f.height)});
+        }
         if (full.w <= 0 || full.h <= 0) continue;
         boxes[nb++] = {&it, full};
         // The part of this glyph box inside the logical rect lands at native size from the mapped box origin.
-        const int ix0 = it.x > x0 ? it.x : x0, ix1 = it.x + tw - 1 < x1 ? it.x + tw - 1 : x1;
-        const int iy0 = it.y > y0 ? it.y : y0, iy1 = it.y + f.height - 1 < y1 ? it.y + f.height - 1 : y1;
+        const int bw = badge ? it.w : tw, bh = badge ? it.h : f.height;
+        const int ix0 = it.x > x0 ? it.x : x0, ix1 = it.x + bw - 1 < x1 ? it.x + bw - 1 : x1;
+        const int iy0 = it.y > y0 ? it.y : y0, iy1 = it.y + bh - 1 < y1 ? it.y + bh - 1 : y1;
         if (ix0 > ix1 || iy0 > iy1) continue;
-        const int nx = full.x + (ix0 - it.x), ny = full.y + (iy0 - it.y);
-        const int nx1 = nx + (ix1 - ix0) < full.x + full.w - 1 ? nx + (ix1 - ix0) : full.x + full.w - 1;
-        const int ny1 = ny + (iy1 - iy0) < full.y + full.h - 1 ? ny + (iy1 - iy0) : full.y + full.h - 1;
+        const int nx = badge ? full.x : full.x + (ix0 - it.x);
+        const int ny = badge ? full.y : full.y + (iy0 - it.y);
+        const int nx1 = badge ? full.x + full.w - 1 : (nx + (ix1 - ix0) < full.x + full.w - 1 ? nx + (ix1 - ix0) : full.x + full.w - 1);
+        const int ny1 = badge ? full.y + full.h - 1 : (ny + (iy1 - iy0) < full.y + full.h - 1 ? ny + (iy1 - iy0) : full.y + full.h - 1);
         if (nx > nx1 || ny > ny1) continue;
         if (nx < rx0) rx0 = nx;
         if (ny < ry0) ry0 = ny;
@@ -198,6 +210,8 @@ void paint_stretched(const Cell &c, int x0, int y0, int x1, int y1, uint16_t *ro
                 Item glyphs = *boxes[b].it;
                 glyphs.x = r.x;
                 glyphs.y = r.y;
+                glyphs.w = 0;
+                glyphs.h = 0;
                 put_text_row(glyphs, py, cx0, r.x + r.w - 1 < cx1 ? r.x + r.w - 1 : cx1, row);
             }
             lcd::stream_pixels({row, static_cast<size_t>(cw)});

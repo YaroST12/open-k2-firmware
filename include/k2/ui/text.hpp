@@ -27,6 +27,25 @@ const Glyph *find_glyph(const Font &f, uint32_t cp);
 // Width in pixels of the string (monospace: code points x advance).
 int text_width(const Font &f, std::string_view s);
 
+struct TextBounds {
+    int x0, w, y0, h;
+};
+
+struct TextOrigin {
+    int16_t x, y;
+};
+
+// Tight ink bounds relative to the (0, 0) line box for centering short badge labels.
+// Horizontal spans first..last inked glyph pixels; vertical uses the font's cap box when any
+// glyph reaches cap height (so descenders do not shift mixed-case labels), or tight y otherwise.
+TextBounds badge_text_bounds(const Font &f, std::string_view s);
+
+// Pen origin (top-left of the line box) that centers `tb` inside `box`.
+constexpr TextOrigin center_in_box(Rect box, TextBounds tb) {
+    return {static_cast<int16_t>(box.x + (box.w - tb.w) / 2 - tb.x0),
+            static_cast<int16_t>(box.y + (box.h - tb.h) / 2 - tb.y0)};
+}
+
 // Render pixel row `row` (0 = top of the line box, f.height rows) of the string into out,
 // blending between lut[0] (background) and lut[15] (foreground). Writes min(width, max_px)
 // pixels and returns that count.

@@ -574,26 +574,46 @@ void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
 }
 
 int draw_chip(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t fill, uint16_t ink, int16_t min_w) {
+    const TextBounds tb = badge_text_bounds(kLabelFont, text);
     const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, text));
-    const int16_t w = std::max<int16_t>(static_cast<int16_t>(tw + 8), min_w);
-    const int16_t tx = static_cast<int16_t>(x + (w - tw) / 2);
-    const Box hole{tx, static_cast<int16_t>(y + 1), tw, static_cast<int16_t>(kLabelFont.height)};
-    fill_except(s, {x, y, w, kChipH}, &hole, 1, fill);
-    gfx_text(s, kLabelFont, tx, static_cast<int16_t>(y + 1), text, ink, fill);
+    const int16_t w = std::max<int16_t>(static_cast<int16_t>(tb.w + 8), min_w);
+    if (ContentViewport::scaled()) {
+        gfx_fill(s, x, y, w, kChipH, fill);
+        const Rect mb = ContentViewport::mapped_rect(
+            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, kChipH});
+        const TextOrigin p = center_in_box(mb, tb);
+        ContentViewport::Pause unscaled;
+        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, ink, fill);
+    } else {
+        const TextOrigin p = center_in_box({x, y, w, kChipH}, tb);
+        const Box hole{p.x, p.y, tw, static_cast<int16_t>(kLabelFont.height)};
+        fill_except(s, {x, y, w, kChipH}, &hole, 1, fill);
+        gfx_text(s, kLabelFont, p.x, p.y, text, ink, fill);
+    }
     return w;
 }
 
 int draw_chip_frame(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t frame, uint16_t ink, uint16_t bg) {
+    const TextBounds tb = badge_text_bounds(kLabelFont, text);
     const int16_t tw = static_cast<int16_t>(text_width(kLabelFont, text));
-    const int16_t w = static_cast<int16_t>(tw + 8);
+    const int16_t w = static_cast<int16_t>(tb.w + 8);
     gfx_fill(s, x, y, w, 1, frame);
     gfx_fill(s, x, static_cast<int16_t>(y + kChipH - 1), w, 1, frame);
     gfx_fill(s, x, static_cast<int16_t>(y + 1), 1, kChipH - 2, frame);
     gfx_fill(s, static_cast<int16_t>(x + w - 1), static_cast<int16_t>(y + 1), 1, kChipH - 2, frame);
-    const int16_t tx = static_cast<int16_t>(x + 4);
-    const Box hole{tx, static_cast<int16_t>(y + 1), tw, static_cast<int16_t>(kLabelFont.height)};
-    fill_except(s, {static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2), kChipH - 2}, &hole, 1, bg);
-    gfx_text(s, kLabelFont, tx, static_cast<int16_t>(y + 1), text, ink, bg);
+    if (ContentViewport::scaled()) {
+        gfx_fill(s, static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2), kChipH - 2, bg);
+        const Rect mb = ContentViewport::mapped_rect(
+            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), w, kChipH});
+        const TextOrigin p = center_in_box(mb, tb);
+        ContentViewport::Pause unscaled;
+        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, ink, bg);
+    } else {
+        const TextOrigin p = center_in_box({x, y, w, kChipH}, tb);
+        const Box hole{p.x, p.y, tw, static_cast<int16_t>(kLabelFont.height)};
+        fill_except(s, {static_cast<int16_t>(x + 1), static_cast<int16_t>(y + 1), static_cast<int16_t>(w - 2), kChipH - 2}, &hole, 1, bg);
+        gfx_text(s, kLabelFont, p.x, p.y, text, ink, bg);
+    }
     return w;
 }
 

@@ -100,6 +100,29 @@ int text_width(const Font &f, std::string_view s) {
     return n * f.adv;
 }
 
+TextBounds badge_text_bounds(const Font &f, std::string_view s) {
+    const Glyph *cap = lookup(f, 'H');
+    const int cap_y0 = cap ? f.ascent - cap->top : 0;
+    const int cap_h = cap ? cap->h : f.height;
+    int pen = 0;
+    int min_x = 0, max_x = -1, min_y = 0, max_y = -1;
+    for (size_t i = 0; i < s.size();) {
+        const Glyph *g = find_glyph(f, next_codepoint(s, i));
+        if (g && g->w > 0 && g->h > 0) {
+            const int x0 = pen + g->left, x1 = x0 + g->w;
+            const int y0 = f.ascent - g->top, y1 = y0 + g->h;
+            if (max_x < 0 || x0 < min_x) min_x = x0;
+            if (max_x < 0 || x1 > max_x) max_x = x1;
+            if (max_y < 0 || y0 < min_y) min_y = y0;
+            if (max_y < 0 || y1 > max_y) max_y = y1;
+        }
+        pen += f.adv;
+    }
+    if (max_x < 0) return {0, pen, cap_y0, cap_h};
+    const bool has_cap = cap && min_y <= cap_y0 + 1;
+    return {min_x, max_x - min_x, has_cap ? cap_y0 : min_y, has_cap ? cap_h : (max_y - min_y)};
+}
+
 int render_row_span(const Font &f, std::string_view s, int row, const uint16_t (&lut)[16],
                     uint16_t *out, int x0, int count) {
     const int width = text_width(f, s);

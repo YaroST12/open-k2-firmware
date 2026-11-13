@@ -536,8 +536,10 @@ static void test_idle_home() {
     CHECK_TRUE(ink_logical(ui, 190, 1, 30, 17, kSurface) > 100);        // the NO VBUS pill fill
     CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kWatt), 0);
     CHECK_EQ(ink_logical(ui, 0, 0, 4, kHeroH, kFaint), 4 * kHeroH);
-    for (uint16_t c : {kVolt, kAmp, kWatt, kEnergy, kCharge})            // no live colours above the session rule (y194 is cyan)
+    for (uint16_t c : {kVolt, kAmp, kWatt, kEnergy, kCharge})            // no live colours above the session rule (y194 is rule, not cyan)
         CHECK_EQ(ink_logical(ui, 0, 0, 224, 194, c), 0);
+    CHECK_EQ(ink_logical(ui, 0, hm::kRule3Y, hm::kW, 2, kAccent), 0);
+    CHECK_EQ(ink_logical(ui, 0, hm::kRule3Y, hm::kW, 2, kRule), hm::kW * 2);
     CHECK_TRUE(ink_logical(ui, 52, 201, 120, 16, kDim) > 8);            // "No source" (session row 1)
     CHECK_EQ(ink_logical(ui, 50, 146, 13, 13, kFlow), 0);               // no arrow
     CHECK_EQ(ink_logical(ui, 10, 66, 205, 7, kRule), 0);                // no bars
@@ -817,6 +819,105 @@ static void test_drop_and_sag_cards() {
     CHECK_TRUE(ink_logical(ui, 218, kRowTop[0] + 1, 5, 5, kFocus) == 25);   // the attention dot
 }
 
+static void check_badge_centered(Ui &ui, int lx0, int ly0, int lx1, int ly1, uint16_t fill, const char *name) {
+    const Rect box = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters, kSlotLens,
+                                    kPanelThickness).content;
+    const int sx0 = box.x + lx0 * box.w / 224, sy0 = box.y + ly0 * box.h / 240;
+    const int sx1 = box.x + (lx1 + 1) * box.w / 224 - 1, sy1 = box.y + (ly1 + 1) * box.h / 240 - 1;
+    int bx0 = 240, bx1 = -1, by0 = 240, by1 = -1;
+    for (int y = sy0; y <= sy1; y++)
+        for (int x = sx0; x <= sx1; x++)
+            if (g_panel[y * 240 + x] == fill) {
+                bx0 = std::min(bx0, x); bx1 = std::max(bx1, x);
+                by0 = std::min(by0, y); by1 = std::max(by1, y);
+            }
+    CHECK_TRUE(bx1 > bx0 && by1 > by0);
+    int ix0 = 240, ix1 = -1, iy0 = 240, iy1 = -1;
+    for (int y = by0; y <= by1; y++)
+        for (int x = bx0; x <= bx1; x++)
+            if (g_panel[y * 240 + x] != fill) {
+                ix0 = std::min(ix0, x); ix1 = std::max(ix1, x);
+                iy0 = std::min(iy0, y); iy1 = std::max(iy1, y);
+            }
+    const int pad_l = ix0 - bx0, pad_r = bx1 - ix1, pad_t = iy0 - by0, pad_b = by1 - iy1;
+    if (std::abs(pad_l - pad_r) > 1 || std::abs(pad_t - pad_b) > 1)
+        std::printf("badge '%s' rot %d off-center: L=%d R=%d T=%d B=%d\n", name, int(ui.rotation()), pad_l, pad_r, pad_t, pad_b);
+    CHECK_TRUE(std::abs(pad_l - pad_r) <= 1);
+    CHECK_TRUE(std::abs(pad_t - pad_b) <= 1);
+}
+
+// Null / 0 values for DROP and SAG must keep Card::Drop out of rotation, and Card::Energy has a title while Card::Lines
+// stays clear of rule3 in both portrait and landscape rotations.
+static void test_rework_guards_energy_lines_and_badges() {
+    // 1. DROP + SAG zero/null guard: NeedLoad or 0 mV drop + 0.0% sag -> Card::Drop skipped cleanly.
+    {
+        unplug();
+        Ui &ui = home_ui();
+        run(ui, 2);
+        live_pd(false, 20000, 100);
+        run(ui, 30);                                            // idle_mv = 20000, idle_ma = 100, has_sag=1 with sag_bp=0
+        CHECK_EQ(ui.context().extremes.has_sag() ? 1 : 0, 1);
+        CHECK_EQ(ui.context().extremes.sag_bp(), 0u);
+        live_pd(false, 20000, 1200);                            // has_sag=1 with sag_bp=0, and Drop=Value(0 mV) / NeedLoad
+        run(ui, 120);
+        CHECK_EQ(ui.context().extremes.has_sag() ? 1 : 0, 1);
+        CHECK_EQ(ui.context().extremes.sag_bp(), 0u);
+        for (int i = 0; i < 6; i++) {
+            run(ui, 25);
+            CHECK_TRUE(ui.context().keep.cards.top() != hm::Card::Drop);
+            CHECK_TRUE(ui.context().keep.cards.bottom() != hm::Card::Drop);
+        }
+    }
+
+    // 2. ENERGY label + Card::Lines clears rule3 cleanly in portrait and landscape; no cyan on rule3.
+    for (uint8_t rot : {uint8_t(0), uint8_t(1)}) {
+        Ui &ui = home_ui(rot);
+        live_pd(false, 20010, 1520);
+        run(ui, 10);
+        CHECK_EQ(int(ui.context().keep.cards.bottom()), int(hm::Card::Energy));
+        CHECK_TRUE(ink_logical(ui, 145, kRowTop[1] + 2, 42, 12, kDim) > 15);   // ENERGY title
+        ui.context().keep.attention.reset();
+        while (ui.context().keep.cards.bottom() != hm::Card::Lines) run(ui, 25);
+        const Rect cbox = compute_layout(orientation_for(ui.rotation()).edge, kSlotCenters, kSlotLens,
+                                         kPanelThickness).content;
+        const int r3y0 = hm::kRule3Y * cbox.h / 240, r3y1 = (hm::kRule3Y + 2) * cbox.h / 240;
+        const int r3_area = cbox.w * (r3y1 - r3y0);
+        CHECK_EQ(ink_logical(ui, 0, hm::kRule3Y, hm::kW, 2, kAccent), 0);
+        CHECK_EQ(ink_logical(ui, 0, hm::kRule3Y, hm::kW, 2, kRule), r3_area);
+        // Portrait/landscape D- row must leave the rule3 pixels untouched and stay clear below its ink.
+        check_badge_centered(ui, 2, 199, 30, 218, kChip, "PD");
+    }
+
+    // 3. Badge centering across idle, stale, held-pin, near-alarm in portrait (rot 0) and landscape (rot 1).
+    for (uint8_t rot : {uint8_t(0), uint8_t(1)}) {
+        Ui &idle = home_ui(rot);
+        unplug();
+        run(idle, 20);
+        check_badge_centered(idle, 140, 0, 223, 19, kSurface, "NO VBUS");
+        check_badge_centered(idle, 2, 199, 30, 218, kBg2, "--");
+
+        Ui &pinned = home_ui(rot);
+        unplug();
+        g_stub.pin = 2;
+        run(pinned, 6);
+        g_stub.pin = 0;
+        check_badge_centered(pinned, 120, 0, 223, 19, kCaution, "Rd pin CC2");
+
+        Ui &stale = home_ui(rot);
+        live_pd(false, 20010, 1520);
+        run(stale, 10);
+        g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;
+        run(stale, 5);
+        check_badge_centered(stale, 130, 0, 223, 19, kStale, "LAST");
+
+        Ui &near_ui = home_ui(rot);
+        live_pd(false, 20010, 4700);
+        run(near_ui, 20);
+        check_badge_centered(near_ui, 120, 0, 223, 16, kCaution, "94% OF 100W");
+        check_badge_centered(near_ui, 95, kRowTop[1], 139, kRowTop[1] + 16, kCaution, "94%");
+    }
+}
+
 int main() {
     test_contract_text();
     test_cable_and_cc_text();
@@ -843,5 +944,6 @@ int main() {
     test_hero_cycle();
     test_cards_on_the_page();
     test_drop_and_sag_cards();
+    test_rework_guards_energy_lines_and_badges();
     return test_report("test_ui_home");
 }

@@ -36,7 +36,7 @@ constexpr int16_t kLedDigitX = 8, kLedUnitX = 129;    // 48 px digits right-alig
 constexpr int16_t kLedBase[2] = {129, 186};
 constexpr int16_t kLedRows = 30;                      // font_48 line height
 constexpr int kDigitChars = 5;
-constexpr int16_t kPillX = 211, kPillY = 1, kPillBoxH = 17;
+constexpr int16_t kPillRight = 222, kPillY = 1, kPillBoxH = 17;
 constexpr int16_t kHeroArrowX = 8, kHeroArrowY = 33;  // A as the hero: the 22 px arrow left of the digits
 constexpr int16_t kLedArrowX = 50, kLedArrowDy = 9, kLedArrowBox = 13;
 constexpr int16_t kHeroLabelX = 10, kLedLabelX = 6;
@@ -343,10 +343,12 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
             it[n++] = hm::text(kLabelFont, static_cast<int16_t>(lx + (lab.size() + 1) * kLabelFont.adv), ly, trend::label(window_), kFaint);
         if (near_) {   // "93% OF 100W" (hero) or "92%" (ledger) as an orange chip at the right end of the label line
             hm::alarm_text(al, static_cast<uint32_t>(q == hm::Qty::W ? w_mw_ : a_ma_), shown_max, atxt, uc, !hero);
-            const int16_t tw = static_cast<int16_t>(atxt.view().size() * kLabelFont.adv);
-            const int16_t cx = static_cast<int16_t>(right_x + 1 - tw - 4);
-            it[n++] = hm::fill(static_cast<int16_t>(cx - 4), static_cast<int16_t>(s.top + 1), static_cast<int16_t>(tw + 8), 14, kCaution);
-            it[n++] = hm::text(kLabelFont, cx, ly, atxt.view(), kSpotInk);
+            const TextBounds tb = badge_text_bounds(kLabelFont, atxt.view());
+            const int16_t bw = static_cast<int16_t>(tb.w + 8);
+            const int16_t bx = static_cast<int16_t>(right_x + 1 - bw);
+            const int16_t by = static_cast<int16_t>(s.top + 2);
+            it[n++] = hm::fill(bx, by, bw, 13, kCaution);
+            it[n++] = hm::badge_text(kLabelFont, bx, by, bw, 13, atxt.view(), kSpotInk);
         }
     }
     hm::Pill pill = hm::Pill::None;
@@ -362,10 +364,11 @@ uint32_t HomePage::qty_head(int si, hm::Qty q, const Frame &f, QtyHead &h, hm::I
         if (pill != hm::Pill::None) {   // chips: LAST grey, NO VBUS on the surface, a held pin orange
             const uint16_t fillc = pill == hm::Pill::NoVbus ? kSurface : pill == hm::Pill::Pin ? kCaution : kStale;
             const uint16_t inkc = pill == hm::Pill::NoVbus ? kDim : kBg;
-            const int16_t pn = static_cast<int16_t>(ptxt.view().size());
-            const int16_t x0 = static_cast<int16_t>(kPillX - 8 * pn);
-            it[n++] = hm::fill(x0, kPillY, static_cast<int16_t>(8 * pn + 11), kPillBoxH, fillc);
-            it[n++] = hm::text(kSmall, static_cast<int16_t>(x0 + 5), 2, ptxt.view(), inkc);
+            const TextBounds tb = badge_text_bounds(kSmall, ptxt.view());
+            const int16_t bw = static_cast<int16_t>(tb.w + 10);
+            const int16_t x0 = static_cast<int16_t>(kPillRight - bw);
+            it[n++] = hm::fill(x0, kPillY, bw, kPillBoxH, fillc);
+            it[n++] = hm::badge_text(kSmall, x0, kPillY, bw, kPillBoxH, ptxt.view(), inkc);
         }
     }
     if (pill == hm::Pill::None && al == hm::Alarm::None && hm::max_text(m, shown_max, uc, mtxt)) {
@@ -602,7 +605,8 @@ void HomePage::paint_card(int ci, const Frame &f) {
     StrBuf<8> s0, s1, lines[4];
     StrBuf<12> sp, speed;
     switch (card) {
-    case hm::Card::Energy: {   // Wh over Ah, decimal-aligned on x182
+    case hm::Card::Energy: {   // ENERGY title, then Wh over Ah, decimal-aligned on x182
+        label("ENERGY", 3);
         hm::DecSplit d[2] = {{"--", {}}, {"--", {}}};
         if (m != hm::Mode::NoMeter) {
             const int nw = hm::fmt_energy(b0, ctx_.meter.mwh());
@@ -612,9 +616,11 @@ void HomePage::paint_card(int ci, const Frame &f) {
         }
         const uint16_t col[2] = {tone(m, kInk), tone(m, kInk)};   // Fieldbook: card values are ink, never a hue
         const std::string_view unit[2] = {"Wh", "Ah"};
-        const int16_t base[2] = {25, 51};
+        const int16_t base[2] = {29, 51};
+        const int16_t za[2] = {16, 37};
+        const int16_t zb[2] = {36, -1};
         for (int r = 0; r < 2; r++) {
-            zone(static_cast<int16_t>(base[r] - 15), static_cast<int16_t>(base[r] + 6));
+            zone(za[r], zb[r]);
             const int16_t top = static_cast<int16_t>(y0 + base[r] - kSmall.ascent);
             add(hm::text(kSmall, static_cast<int16_t>(kDecX - static_cast<int>(d[r].int_part.size()) * kSmall.adv), top, d[r].int_part, col[r]));
             add(hm::text(kSmall, kDecX, top, d[r].rest, col[r]));
@@ -624,58 +630,54 @@ void HomePage::paint_card(int ci, const Frame &f) {
     }
     case hm::Card::Peak: {
         label("PEAK", 3);
-        zone(15, 35);
+        zone(16, 36);
         if (card_.peak_mw > 0) {
             const int k = hm::fmt_watts(b0, static_cast<int32_t>(card_.peak_mw));
             b0[k] = 'W';
-            right(kSmall, 30, {b0, static_cast<size_t>(k + 1)}, tone(m, kInk));
+            right(kSmall, 29, {b0, static_cast<size_t>(k + 1)}, tone(m, kInk));
         } else {
-            right(kSmall, 30, "--", kFaint);
+            right(kSmall, 29, "--", kFaint);
         }
-        zone(38, -1);
+        zone(37, -1);
         if (card_.peak_ma > 0) {
             const int k = hm::fmt_hero(b1, static_cast<int32_t>(card_.peak_ma));
             b1[k] = 'A';
-            right(kSmall, 56, {b1, static_cast<size_t>(k + 1)}, tone(m, kInk));
+            right(kSmall, 51, {b1, static_cast<size_t>(k + 1)}, tone(m, kInk));
         } else {
-            right(kSmall, 56, "--", kFaint);
+            right(kSmall, 51, "--", kFaint);
         }
         break;
     }
     case hm::Card::Drop: {
         label("DROP", 3);
-        zone(15, 35);
-        switch (card_.drop.state) {
-        case hm::DropState::Value: {
+        zone(15, 31);
+        if (card_.drop.state == hm::DropState::Value && card_.drop.mv > 0) {
             const int k = hm::fmt_drop(b0, card_.drop.mv);
-            right(kSmall, 30, {b0, static_cast<size_t>(k)}, tone(m, kInk));
-            break;
-        }
-        case hm::DropState::NoIdle: right(kLabelFont, 30, "no idle", kDim); break;
-        case hm::DropState::NeedLoad: right(kLabelFont, 30, "need 1A", kDim); break;
-        case hm::DropState::None: right(kLabelFont, 30, "--", kDim); break;
-        }
-        zone(36, -1);
-        label("SAG", 36);
-        if (card_.has_sag && card_.sag_level_mv > 0) {
-            const int k = hm::fmt_sag(b1, card_.sag_bp, card_.sag_level_mv);
-            right(kSmall, 56, {b1, static_cast<size_t>(k)}, tone(m, kInk));
+            right(kSmall, 27, {b0, static_cast<size_t>(k)}, tone(m, kInk));
         } else {
-            right(kSmall, 56, "--", kFaint);
+            right(kSmall, 27, "--", kFaint);
+        }
+        zone(32, -1);
+        label("SAG", 32);
+        if (card_.has_sag && card_.sag_bp > 0 && card_.sag_level_mv > 0) {
+            const int k = hm::fmt_sag(b1, card_.sag_bp, card_.sag_level_mv);
+            right(kSmall, 53, {b1, static_cast<size_t>(k)}, tone(m, kInk));
+        } else {
+            right(kSmall, 53, "--", kFaint);
         }
         break;
     }
     case hm::Card::Cable: {
         const pd::Emarker &em = fusb302::emarker();
         label("CABLE", 3);
-        zone(15, 35);
+        zone(16, 36);
         if (em.valid) {
             emarker_amps_text(em, s0);
             emarker_volts_text(em, s1);
             sp.put(s0.view()).put_char(' ').put(s1.view());
         }
-        right(kSmall, 30, em.valid ? sp.view() : std::string_view("--"), em.valid ? tone(m, kText) : kFaint);
-        zone(38, -1);
+        right(kSmall, 29, em.valid ? sp.view() : std::string_view("--"), em.valid ? tone(m, kText) : kFaint);
+        zone(37, -1);
         if (em.valid) emarker_speed_pill(em, speed);
         right(kLabelFont, 50, speed.view(), kDim);
         break;
@@ -683,8 +685,8 @@ void HomePage::paint_card(int ci, const Frame &f) {
     case hm::Card::Lines: {
         static constexpr std::string_view kName[4] = {"CC1", "CC2", "D+", "D-"};
         for (int r = 0; r < 4; r++) {
-            const int16_t base = static_cast<int16_t>(15 + 14 * r);
-            zone(static_cast<int16_t>(base - 11), static_cast<int16_t>(base + 2));
+            const int16_t base = static_cast<int16_t>(11 + 13 * r);
+            zone(r == 0 ? 0 : static_cast<int16_t>(base - 10), r == 3 ? -1 : static_cast<int16_t>(base + 2));
             label(kName[r], static_cast<int16_t>(base - kLabelFont.ascent));
             const int32_t mv = card_.lines[r];
             if (mv < 0 || !live) {
@@ -803,15 +805,16 @@ void HomePage::paint_info(const Frame &f) {
         if (item.kind == hm::ItemKind::Text && item.text.empty()) return;
         it[n++] = item;
     };
-    add(hm::fill(0, hm::kRule3Y, hm::kW, 2, kAccent));
+    add(hm::fill(0, hm::kRule3Y, hm::kW, 2, kRule));
     zone_start[0] = n;
-    if (!pt.tag.view().empty()) {   // the chip: font 12 with 4 px padding, 14 px high; grey with the rest of a stale page
-        const int16_t cw = static_cast<int16_t>(pt.tag.view().size() * kLabelFont.adv + 8);
+    if (!pt.tag.view().empty()) {   // the chip: font 12 centered inside 13 px box; grey with the rest of a stale page
+        const TextBounds tb = badge_text_bounds(kLabelFont, pt.tag.view());
+        const int16_t cw = static_cast<int16_t>(std::max(tb.w + 8, 20));
         const uint16_t chip = !known ? kBg2 : stale ? kStaleInk : kChip;
         const uint16_t chip_ink = !known ? tcol : stale ? kStaleFill : kOnChip;
-        add(hm::fill(hm::kInfoTagX, static_cast<int16_t>(kRowTop[0] + 1), cw, 14, chip));
-        add(hm::text(kLabelFont, static_cast<int16_t>(hm::kInfoTagX + 4), static_cast<int16_t>(kRowTop[0] + 2), pt.tag.view(),
-                     chip_ink));
+        const int16_t cy = static_cast<int16_t>(kRowTop[0] + 1);
+        add(hm::fill(hm::kInfoTagX, cy, cw, 13, chip));
+        add(hm::badge_text(kLabelFont, hm::kInfoTagX, cy, cw, 13, pt.tag.view(), chip_ink));
     }
     add(hm::text(kSmall, hm::kInfoValX, kRowTop[0], pt.value.view(), vcol));
     zone_start[1] = n;
@@ -900,18 +903,24 @@ void HomePage::update(uint32_t now_ms) {
     }
     sample_values(f, now_ms);
     if (!statics_ok_) paint_statics();
-    // The cards: what has data right now, then one cycler step (the clock runs while live only).
+    // The cards: what has real non-zero data right now, then one cycler step (the clock runs while live only).
     const bool live = f.mode == hm::Mode::Live;
-    // PEAK and LINES always have something to say while live (the peak is at least the reading on screen); without PEAK
-    // here the attach tick, whose peak is still 0, would push the deck's head out of the upper cell for a whole dwell.
-    hm::CardMask ok = hm::card_bit(hm::Card::Lines) | hm::card_bit(hm::Card::Peak);
-    if (live && (ctx_.cable.has_idle() || ctx_.extremes.has_sag())) ok |= hm::card_bit(hm::Card::Drop);
+    const hm::Drop drop = hm::drop_of(live, ctx_.cable.has_idle(), ctx_.cable.idle_mv(), ctx_.cable.idle_ma(),
+                                      abs32(ctx_.pm.vbus_mv), abs32(ctx_.pm.current_ma));
+    const bool has_drop = drop.state == hm::DropState::Value && drop.mv > 0;
+    const bool has_sag = ctx_.extremes.has_sag() && ctx_.extremes.sag_bp() > 0 && ctx_.extremes.sag_level_mv() > 0;
+    const bool has_peak = ctx_.extremes.peak_mw() > 0 || ctx_.extremes.peak_ma() > 0;
+    const std::optional<adc::Reading> &an = ctx_.analog;
+    const bool has_lines = an && (an->cc1_mv >= 0 || an->cc2_mv >= 0 || an->dp_mv >= 0 || an->dm_mv >= 0);
+    hm::CardMask ok = 0;
+    if (has_peak) ok |= hm::card_bit(hm::Card::Peak);
+    if (live && (has_drop || has_sag)) ok |= hm::card_bit(hm::Card::Drop);
     if (fusb302::emarker().valid) ok |= hm::card_bit(hm::Card::Cable);
+    if (has_lines) ok |= hm::card_bit(hm::Card::Lines);
     ctx_.keep.cards.tick(now_ms, live, ok);
     {   // Attention: a card whose signal is moving right now takes the upper cell, with the dot (home_cards.hpp)
         // While a card wants the cell it is forced every tick (it may have gained its data since); the release goes
         // to the cycler once, when the attention ends.
-        const std::optional<adc::Reading> &an = ctx_.analog;
         hm::Attention &att = ctx_.keep.attention;
         const hm::Card was = att.want();
         const hm::Card want = att.update(now_ms, live, ctx_.pm.vbus_mv, an ? an->cc1_mv : -1, an ? an->cc2_mv : -1,

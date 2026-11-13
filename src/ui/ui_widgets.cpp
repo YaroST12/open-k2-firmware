@@ -55,13 +55,15 @@ struct BandRow {
     }
 
     void last_pill(std::string_view value) {
-        const int w = static_cast<int>(value.size() * kLabelAdv + 4);
+        const TextBounds tb = badge_text_bounds(kLabelFont, value);
+        const int w = tb.w + 8;
         const int x = 222 - w;
         if (y >= 2 && y < 16) {
             const int inset = round_row_inset(3, 14, y - 2);
             fill(x + inset, w - 2 * inset, kStale);
         }
-        text(kLabelFont, x + 2, 3, value, kBg, kStale);
+        const TextOrigin p = center_in_box({static_cast<int16_t>(x), 2, static_cast<int16_t>(w), 14}, tb);
+        text(kLabelFont, p.x, p.y, value, kBg, kStale);
     }
 };
 
@@ -286,16 +288,25 @@ int draw_marked_text(const Surface &s, const Font &f, int16_t x, int16_t y, std:
 
 int draw_pill(const Surface &s, int16_t x, int16_t y, std::string_view text, uint16_t color, uint16_t tint,
               bool solid) {
+    const TextBounds tb = badge_text_bounds(kLabelFont, text);
     const int w = pill_width(static_cast<int>(text.size()));
     const uint16_t fill = solid ? color : tint;
+    const uint16_t fg = solid ? kBg : color;
     // The pill's ground goes round the text's box, which the glyphs paint themselves: every pixel is streamed once (a scaled
-    // page keeps the whole fill, there a glyph box does not match the logical hole).
-    if (ContentViewport::scaled())
+    // page keeps the whole fill, there a glyph box does not match the logical hole, and centers the native glyphs in it).
+    if (ContentViewport::scaled()) {
         fill_round(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill);
-    else
-        fill_round_hole(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 1),
+        const Rect mb = ContentViewport::mapped_rect(
+            {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y), static_cast<int16_t>(w), kPillH});
+        const TextOrigin p = center_in_box(mb, tb);
+        ContentViewport::Pause unscaled;
+        gfx_text({0, 0, kScreenW, kScreenW}, kLabelFont, p.x, p.y, text, fg, fill);
+    } else {
+        const TextOrigin p = center_in_box({x, y, static_cast<int16_t>(w), kPillH}, tb);
+        fill_round_hole(s, x, y, static_cast<int16_t>(w), kPillH, 3, fill, p.x, p.y,
                         static_cast<int16_t>(text_width(kLabelFont, text)), static_cast<int16_t>(kLabelFont.height));
-    gfx_text(s, kLabelFont, static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 1), text, solid ? kBg : color, fill);
+        gfx_text(s, kLabelFont, p.x, p.y, text, fg, fill);
+    }
     return w;
 }
 
@@ -586,10 +597,12 @@ std::string_view fit_text_mid(const Font &f, std::string_view text, int max_px, 
 }
 
 void draw_last_pill(const Surface &s, std::string_view text) {
-    const int16_t w = static_cast<int16_t>(text.size() * kLabelAdv + 4);
+    const TextBounds tb = badge_text_bounds(kLabelFont, text);
+    const int16_t w = static_cast<int16_t>(tb.w + 8);
     const int16_t x = static_cast<int16_t>(222 - w);
     fill_round(s, x, 2, w, 14, 3, kStale);
-    gfx_text(s, kLabelFont, static_cast<int16_t>(x + 2), 3, text, kBg, kStale);
+    const TextOrigin p = center_in_box({x, 2, w, 14}, tb);
+    gfx_text(s, kLabelFont, p.x, p.y, text, kBg, kStale);
 }
 
 void draw_party_glyph(const Surface &s, int16_t x, int16_t y, int party, uint16_t color) {
