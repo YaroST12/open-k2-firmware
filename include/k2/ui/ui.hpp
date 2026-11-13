@@ -221,6 +221,13 @@ public:
     void repaint(uint32_t now_ms);
     // True while a multi-pass page switch, clear, or sliced field repaint still has slices queued for subsequent ticks.
     bool painting() const { return paint_pending_; }
+    // Runs the next slice of a pending paint (the main loop calls it on every pass that is not the 20 ms tick, so slices follow
+    // each other at the pass rate instead of waiting for the next tick). Does only the paint: no sampling, no polls. False and
+    // untouched when nothing is pending, or while the OK + Back hold card owns the panel (tick() sequences that one).
+    bool paint_more(uint32_t now_ms);
+    // The microsecond clock that arms every pass's budget (PaintBudget::arm): a slice then also stops on measured time
+    // (PaintBudget::kPassUs). Unset, a slice stops on its pixel cap only (the host tests' default).
+    void set_paint_clock(uint32_t (*clock_us)()) { paint_clock_ = clock_us; }
     Page page() const { return page_; }
     int32_t energy_mwh() const { return ctx_.meter.mwh(); }
     const UiContext &context() const { return ctx_; }   // read-only view for tests and diagnostics
@@ -448,6 +455,7 @@ private:
         bool active = false;
         explicit BudgetScope(Ui &u) : ui(u), prev(u.ctx_.budget) {
             if (!u.booting_ && prev == nullptr) {
+                if (u.paint_clock_) owned.arm(u.paint_clock_, PaintBudget::kPassUs);
                 u.ctx_.budget = &owned;
                 u.ctx_.rows.set_budget(&owned);
                 active = true;
@@ -466,6 +474,7 @@ private:
     void reset_paint_pipeline();
     void pump_paint(uint32_t now_ms);
     bool booting_ = false;
+    uint32_t (*paint_clock_)() = nullptr;
     bool paint_pending_ = false;
     bool paint_blank_ = false;
     bool clear_pending_ = false;

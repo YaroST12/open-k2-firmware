@@ -301,6 +301,7 @@ void install_hooks() {
 
 void begin(Context& ctx) {
     g_ctx = &ctx;
+    ctx.ui.set_paint_clock(k2::systick::micros);   // every paint slice also stops on measured time (PaintBudget::kPassUs)
     for (auto &d : g_det) d = {};
     for (auto &d : g_vdet) d = {};
     g_btn_head = g_btn_tail = g_btn_count = 0;
@@ -379,6 +380,12 @@ void pass() {
         slow_tasks(now);
         mark(Stage::Stack);
         watch_stack(g_stack_lowest);
+    } else if (c.ui.painting() && !c.bootscreen.showing()) {
+        // A sliced paint goes on at the pass rate: waiting for the next 20 ms tick between slices would stretch a page
+        // switch to 20 ms per slice. One slice is bounded by the paint budget (about 8 ms), the pass work above is the
+        // same as on any pass, and the button, PD and USB services keep their 1 ms rhythm between slices.
+        mark(Stage::UiTick);
+        c.ui.paint_more(now);
     }
 
     if (now - g_last_heartbeat_ms >= kHeartbeatMs) {

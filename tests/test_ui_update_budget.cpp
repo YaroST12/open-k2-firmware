@@ -29,9 +29,17 @@ int main() {
 
     CHECK_EQ(ui.goto_page(kPdPage, 1800), true);
     ui.tick(2100);
+    // Let the page switch finish its sliced paint first: what is measured is the numeric update, not a leftover slice of the
+    // switch (a slice is a budget's worth of work and grows with what the budget admits).
+    uint32_t now = 2100;
+    for (int i = 0; i < 200 && ui.painting(); i++) { now += 20; ui.tick(now); }
+    CHECK_EQ(ui.painting(), false);
+    now += 100;
+    ui.tick(now);
     g_lcd_pixels = 0;
     g_stub.pm.vbus_mv += 10;
-    ui.tick(2200);
+    now += 100;
+    ui.tick(now);
     CHECK_EQ(g_lcd_pixels > 0, true);
     CHECK_EQ(g_lcd_pixels <= 6000, true);
     std::printf("Reader numeric update: %u pixels (budget 6000)\n", g_lcd_pixels);

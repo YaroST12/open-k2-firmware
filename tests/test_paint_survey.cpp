@@ -40,6 +40,7 @@ double g_hook_last = 0;     // the last idle-hook round inside the call being me
 double g_hook_gap = 0;      // the longest stretch without one
 void spend(double us) { g_us += us; }
 double now_us() { return g_us; }
+uint32_t paint_clock() { return static_cast<uint32_t>(static_cast<uint64_t>(g_us)); }   // what main_loop.cpp arms the budget with
 void hook() {
     if (g_us - g_hook_last > g_hook_gap) g_hook_gap = g_us - g_hook_last;
     g_hook_last = g_us;
@@ -128,6 +129,7 @@ const PageCase kPages[] = {
 void survey_page(const PageCase& pc, const char* state, bool live) {
     live ? live_fixture() : idle_fixture();
     Ui ui;
+    ui.set_paint_clock(paint_clock);
     uint32_t now = 1000;
     ui.init(now);
     ui.set_rotation(0, now);
@@ -157,6 +159,7 @@ void survey_charger_run() {
     g_stub.caps.pdos[5] = pd::decode_pdo(0xc0000000 | (110u << 17) | (33u << 8) | 100);
     g_stub.caps.raw_header = 0x1181;
     Ui ui;
+    ui.set_paint_clock(paint_clock);
     uint32_t now = 1000;
     ui.init(now);
     ui.set_rotation(0, now);

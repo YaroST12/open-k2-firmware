@@ -545,7 +545,7 @@ void Ui::pump_paint(uint32_t now_ms) {
             while (clear_y_ < clear_y1_) {
                 const int rows = std::min<int>(PaintBudget::kStripRows, clear_y1_ - clear_y_);
                 const int cost = static_cast<int>(lcd::kWidth) * rows;
-                if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+                if (bg && !bg->admit(cost, true, true)) { paint_pending_ = true; return; }   // a solid fill: wire time only
                 lcd::clear_strip(static_cast<uint16_t>(clear_y_), static_cast<uint16_t>(rows), kBg);
                 clear_y_ = static_cast<int16_t>(clear_y_ + rows);
             }
@@ -554,7 +554,7 @@ void Ui::pump_paint(uint32_t now_ms) {
             while (clear_y_ < clear_y1_) {
                 const int rows = std::min<int>(PaintBudget::kStripRows, clear_y1_ - clear_y_);
                 const int cost = static_cast<int>(ctx_.content.w) * rows;
-                if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+                if (bg && !bg->admit(cost, true, true)) { paint_pending_ = true; return; }
                 gfx_fill(ctx_.content, 0, clear_y_, ctx_.content.w, static_cast<int16_t>(rows), kBg);
                 clear_y_ = static_cast<int16_t>(clear_y_ + rows);
             }
@@ -569,7 +569,7 @@ void Ui::pump_paint(uint32_t now_ms) {
         const int h1 = kit::kBodyY - kBarH;
         const int h2 = kFooterY - kit::kListBottom;
         const int cost = static_cast<int>(ctx_.content.w) * (h1 + h2);
-        if (bg && !bg->admit(cost, true)) { paint_pending_ = true; return; }
+        if (bg && !bg->admit(cost, true, true)) { paint_pending_ = true; return; }
         gfx_fill(ctx_.content, 0, kBarH, ctx_.content.w, static_cast<int16_t>(h1), kBg);
         gfx_fill(ctx_.content, 0, kit::kListBottom, ctx_.content.w, static_cast<int16_t>(h2), kBg);
         chrome_gaps_pending_ = false;
@@ -608,6 +608,18 @@ void Ui::pump_paint(uint32_t now_ms) {
         page_since_ms_ = now_ms;
         timing_pending_ = true;
     }
+}
+
+bool Ui::paint_more(uint32_t now_ms) {
+    if (!paint_pending_ || hold_shown_) return false;
+    BudgetScope scope(*this);
+    const uint32_t t0 = now_us();
+    ctx_.now = now_ms;
+    pump_paint(now_ms);
+    const uint32_t dt = now_us() - t0;
+    if (dt > field_max_us_) field_max_us_ = dt;
+    if (timing_pending_) log_timing(now_ms);
+    return true;
 }
 
 void Ui::paint_incoming(uint32_t now_ms, uint32_t t0, bool blank) {
