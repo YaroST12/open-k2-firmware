@@ -271,9 +271,16 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
     std::uint32_t total_cycles = 0;
     for (const Case& c : kCases) {
         std::uint32_t crc = 0;
+#if defined(__arm__)
+        std::uint32_t primask;
+        __asm volatile("mrs %0, primask\n cpsid i" : "=r"(primask)::"memory");
+#endif
         const std::uint32_t t0 = read_cycles();
         const bool ok = c.fn(crc);
         const std::uint32_t cyc = read_cycles() - t0;
+#if defined(__arm__)
+        __asm volatile("msr primask, %0" ::"r"(primask) : "memory");
+#endif
         total_cycles += cyc;
         if (ok) ++passed;
         char name_pad[12];
