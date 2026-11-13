@@ -373,8 +373,9 @@ bool transmit_inline(const pd::TxMsg& m) {
     wr(kControl3, kRetries3Auto);
     g_tx_timed_out = res == pdtrace::TxResult::Timeout;
     pdtrace::tx_result(res, std::uint32_t(waited), last_ia);
-    K2LOG("[IQ] t=%u TX type %u id %u rev %u: %s (%d ms)\n", unsigned(systick::millis()), unsigned(m.header & 0x1F),
-          unsigned((m.header >> 9) & 7), unsigned((m.header >> 6) & 3), ok ? "sent" : "no TXSENT", waited);
+    K2LOG("[IQ] t=%u TX type %u id %u rev %u: %s (%u us)\n", unsigned(systick::millis()), unsigned(m.header & 0x1F),
+          unsigned((m.header >> 9) & 7), unsigned((m.header >> 6) & 3), ok ? "sent" : "no TXSENT",
+          unsigned(systick::micros() - g_tx_start_us));
     return ok;
 }
 
@@ -2014,9 +2015,16 @@ static void downstream_edge() {
 }
 
 // The inline interrogation's progress: a Black Box mark and a log line per phase or step change, a summary at the end.
-pd::IqStep g_iq_step = pd::IqStep::Identity;
+pd::IqStep g_iq_step = pd::IqStep::SinkCap;
+std::uint8_t g_iq_closed = 0;   // questions already logged
 void iq_report() {
     const pd::IqStatus& s = g_iq.status();
+    if (s.closed != g_iq_closed) {   // what the wire showed after the question: who answered, who only GoodCRC'd
+        g_iq_closed = s.closed;
+        K2LOG("[IQ] t=%u Q %s id %u try %u: %s (device msgs %u, GoodCRC %u, charger msgs %u)\n", unsigned(systick::millis()),
+              pd::iq_step_name(s.q.step), unsigned(s.q.id), unsigned(s.q.attempt), pd::iq_result_name(s.q.result),
+              unsigned(s.q.dev_msgs), unsigned(s.q.dev_goodcrc), unsigned(s.q.src_msgs));
+    }
     if (s.phase == g_iq_phase && s.step == g_iq_step) return;
     g_iq_phase = s.phase;
     g_iq_step = s.step;
@@ -2025,6 +2033,9 @@ void iq_report() {
                   std::uint16_t(s.asked_mask | s.ok_mask << 8));
     K2LOG("[IQ] t=%u %s, step %s\n", unsigned(systick::millis()), pd::iq_phase_name(s.phase), pd::iq_step_name(s.step));
     if (!pd::iq_finished(s.phase)) return;
+    if (s.why == pd::IqWhy::SourceResets) {
+        K2LOG("[IQ] the charger Hard Resets when it is asked: asking this charger is not possible, stopped after the first reset\n");
+    }
     K2LOG("[IQ] end %s (%s), contract %s: asked 0x%02X answered 0x%02X refused 0x%02X silent 0x%02X, %u sent, %u device GoodCRC, "
           "resets %u sent %u seen\n",
           pd::iq_phase_name(s.phase), pd::iq_why_name(s.why), pd::iq_match_name(s.match), unsigned(s.asked_mask), unsigned(s.ok_mask),
@@ -3240,6 +3251,7 @@ pd::IqRefusal interrogate_start(const pd::IqFacts& outside) {
     const pd::IqRefusal r = g_iq.start(f, now);
     if (r == pd::IqRefusal::None) {
         g_iq_phase = pd::IqPhase::Idle;   // the start is reported even when the previous run ended in the same phase
+        g_iq_closed = 0;
         K2LOG("[IQ] t=%u started (contract sniffed: %u, source id %u)\n", unsigned(now), unsigned(g_iq.watch().contract().ready),
               unsigned(g_iq.watch().next_id()));
     } else {

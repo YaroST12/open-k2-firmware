@@ -5502,23 +5502,23 @@ void test_inline_interrogation_asks_once_per_question_without_auto_crc() {
     CHECK_EQ(h.size(), 1u);
     CHECK_EQ(hard_reset_written(), false);                                 // a fresh contract: no first reset
     CHECK_EQ(h.empty() ? 0u : (h[0] >> 9) & 7, 3u);                        // the source's next MessageID
-    CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 15u);                           // Vendor_Defined: Discover Identity
+    CHECK_EQ(h.empty() ? 0u : h[0] & 0x1F, 8u);                            // Get_Sink_Cap first: the VDMs go last (a source can reset on one)
     CHECK_EQ(h.empty() ? 0u : (h[0] >> 8) & 1, 1u);                        // as the source
     const int ctl3_off = find_from("W 09=00");
     CHECK_EQ(ctl3_off >= 0, true);                                         // chip retries off for this frame
     CHECK_EQ(find_from("W 09=07", std::size_t(ctl3_off < 0 ? 0 : ctl3_off)) > ctl3_off, true);   // and back after it
     for (const std::string& s : g_log)                                     // Auto-CRC (SWITCHES1 bit 2) never on
         if (s.rfind("W 03=", 0) == 0) CHECK_EQ((std::stoul(s.substr(5), nullptr, 16) & 0x04u), 0u);
-    // the device answers (sink role): the identity, then the next question goes out with the next id
+    // the device answers (sink role): its Sink_Capabilities, then the next question goes out with the next id
     push_frame(0xE0, hdr(1, 0, false, 3), {});                             // its GoodCRC
-    push_frame(0xE0, std::uint16_t(hdr(15, 4, false, 1)), {0xFF00A041u, (2u << 27) | 0x04A9u, 0, 0x30010100u});
+    push_frame(0xE0, std::uint16_t(hdr(4, 1, false, 1)), {0x0001912Cu});
     for (int i = 0; i < 400 && tx_headers().size() < 2; i++) { g_ms += 1; fusb302::service(); }
     h = tx_headers();
     CHECK_EQ(h.size(), 2u);
     CHECK_EQ(h.size() < 2 ? 0u : (h[1] >> 9) & 7, 4u);
-    CHECK_EQ(h.size() < 2 ? 0u : h[1] & 0x1F, 8u);                         // Get_Sink_Cap
-    CHECK_EQ(fusb302::interrogate_status().id.valid, true);
-    CHECK_EQ(int(fusb302::interrogate_status().id.vid), 0x04A9);
+    CHECK_EQ(h.size() < 2 ? 0u : h[1] & 0x1F, 22u);                        // Get_Sink_Cap_Extended
+    CHECK_EQ(fusb302::interrogate_status().num_sink_pdos, 1u);
+    CHECK_EQ(fusb302::interrogate_status().sink_pdos[0], 0x0001912Cu);
     // a stop owes the final Hard Reset (a question went out)
     fusb302::sink_vbus(5000);
     fusb302::poll();                                                       // the detach rule has seen VBUS up

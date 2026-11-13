@@ -1105,6 +1105,10 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   (4) `twin learn inline --confirm --name X` saves a twin with the identity and sink PDOs; (5) the screen path:
   Learn row -> "Resets the link. Confirm" -> OK -> "Resetting the link" / "Asking the device" -> "Twin learned".
   Open: whether a device with a strict MessageID filter drops the charger's next message after our question.
+  Hardware 2026-11-13 (runs/clone-canon2): the Canon behind a PD charger answered no question (cause not proven; the
+  vendor messages now go last and every question logs `[IQ] ... Q <step> ...: <who answered>`); behind a laptop the
+  source Hard Reset within 3 ms of our first question, so a reset within 150 ms of a question now ends the run at once
+  ("Charger resets when asked", no loop). Re-run both setups and read the `Q` lines.
 - The HID-cable loop probe (Tools > Loop probe): built and host-tested only; the test plan is in `LOOP_PROBE.md`.
 - **PD Stress page** (Tools > PD Stress, k2/pdstress-ui, built and host-tested only; `docs/UI_DESIGN.md` 4.5). Setup
   1/2 (P1..P12 checklist, Cycles, Pace, saved results), Review 2/2 (KvTable + two-press START), Running (48 px VBUS,
