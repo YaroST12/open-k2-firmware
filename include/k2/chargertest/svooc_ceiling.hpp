@@ -16,7 +16,7 @@
 #include "k2/fastcharge/svooc_run.hpp"
 #include "k2/fastcharge/svooc_script.hpp"
 
-namespace k2::chargertest::svooc_ceiling {
+namespace k2::svooc_ceiling {
 
 // Opt-in per run (never in a preset): Off = no stage; On = the trigger's guards all stay active; UsbA = the operator
 // states a legacy USB-A port with the top port empty, so the far-sink refusal is waived (svooc_run.hpp Params usb_a).
@@ -109,4 +109,4 @@ inline std::size_t format_cap(std::uint16_t word, End end, std::span<char> out) 
     return n;
 }
 
-}  // namespace k2::chargertest::svooc_ceiling
+}  // namespace k2::svooc_ceiling

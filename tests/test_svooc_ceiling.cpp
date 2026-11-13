@@ -13,7 +13,7 @@
 #include "test_util.h"
 
 using namespace k2;
-namespace sc = k2::chargertest::svooc_ceiling;
+namespace sc = k2::svooc_ceiling;
 using sc::End;
 
 #define CHECK(c) CHECK_EQ(!!(c), 1)

@@ -937,6 +937,7 @@ void ChargerTestSession::poll(uint32_t now) {
         case ct::State::Unsafe:     K2LOG("[TEST] UNSAFE: unplug source %s\n", reason_name); break;
         case ct::State::Detach:     K2LOG("[TEST] Detach charger %s\n", reason_name); break;
         case ct::State::Attach:     K2LOG("[TEST] Initializing... %s\n", reason_name); break;
+        case ct::State::Ceiling:    K2LOG("[TEST] SVOOC ceiling %s\n", reason_name); break;
         }
         if (runner_.state() == ct::State::Done) save_card();
         if (runner_.state() == ct::State::Done || runner_.state() == ct::State::Stopped) {

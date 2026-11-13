@@ -650,6 +650,10 @@
   "653": "[IQ] spoof: SOP' cable queried %u times (charger or device), %u replies, real cable answered %u\n",
   "654": "[SVOOC] ask 86>%03X (%dmA) at %ums, %u polls kept\n",
   "655": "[SVOOC] ceiling %03X (%dmA asked, session kept)\n",
-  "656": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us profile=%s\n"
+  "656": "[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us profile=%s\n",
+  "657": "[CT] svooc_cap refused why=%u\n",
+  "658": "[CT] svooc_cap start usb_a=%u\n",
+  "659": "[CT] svooc_cap end=%u word=%u asks=%u why=%u\n",
+  "660": "[TEST] SVOOC ceiling %s\n"
  }
 }
