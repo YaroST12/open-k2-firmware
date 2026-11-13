@@ -25,17 +25,18 @@ USB_WHICH = ["declared", "observed"]
 # The inline interrogation (k2/pd/pd_interrogate.hpp, the *_name() texts of src/pd/pd_interrogate.cpp).
 IQ_PHASES = ["idle", "reset", "sniff", "settle", "ask", "reset back", "sniff back", "done", "aborted"]   # pd::IqPhase
 IQ_STEPS = ["Discover Identity", "Get_Sink_Cap", "Get_Sink_Cap_Extended", "Get_Revision", "Discover SVIDs",
-            "Discover Modes"]                                                                          # pd::IqStep (bit n)
+            "Discover Modes", "done", "EPR_Get_Sink_Cap"]   # pd::IqStep (wire value = bit n of a mask; 6 is the "done" sentinel)
 IQ_WHY = ["none", "stopped", "detached", "inline link lost", "no renegotiation", "too many resets", "time limit",
           "charger resets when asked", "charger restarts when asked"]                                  # pd::IqWhy
 IQ_MATCH = ["unknown", "same contract", "contract changed", "no contract after the reset"]                     # pd::IqMatch
 IQ_REFUSALS = ["started", "another PD tool is running", "no CC line attached", "no device inline",
                "a test or trigger owns the ports", "the K2 holds its own contract", "the K2 runs on this VBUS",
-               "needs the confirm"]                                                                    # pd::IqRefusal
+               "needs the confirm", "the spoof target is unknown"]                                     # pd::IqRefusal
 IQ_STATUS, IQ_START, IQ_ABORT, IQ_ANSWERS = 0, 1, 2, 3     # twin::wire::kInline*
-IQ_DRY, IQ_CONFIRM, IQ_PARTS = 1, 2, 4
+IQ_DRY, IQ_CONFIRM, IQ_SPOOF, IQ_PARTS = 1, 2, 4, 5
+IQ_SPOOF_BUILTIN, IQ_SPOOF_SAVED = 0, 1                    # the spoof target kinds of the START op
 ERR_IQ_REFUSED = 10
-IQ_STATUS_BYTES = 50
+IQ_STATUS_BYTES = 55
 
 KAPACITY = 12
 NAME_MAX = 24
@@ -249,7 +250,15 @@ def _name(names, i):
 
 
 def _steps(mask):
-    return [s for i, s in enumerate(IQ_STEPS) if mask & (1 << i)]
+    return [s for i, s in enumerate(IQ_STEPS) if mask & (1 << i) and s != "done"]
+
+
+def encode_iq_start(dry, name=b"", spoof=None):
+    """The START request: [11, 1, flags, (kind, id u16 with a spoof,) name]. `spoof` is (kind, id) or None; the confirm is
+    always set (the caller checked it)."""
+    flags = IQ_CONFIRM | (IQ_DRY if dry else 0) | (IQ_SPOOF if spoof else 0)
+    head = [flags] + ([spoof[0], spoof[1] & 255, spoof[1] >> 8] if spoof else [])
+    return bytes([11, IQ_START] + head) + bytes(name)
 
 
 def decode_iq_start(p):
@@ -266,7 +275,7 @@ def decode_iq_status(p):
     contract = lambda o: {"ready": bool(p[o]), "pos": p[o + 1], "rdo": _u32(p, o + 2)}   # noqa: E731
     return {
         "running": bool(p[2]), "pending": bool(p[3]), "done": bool(p[4]),
-        "phase": _name(IQ_PHASES, p[5]), "step": _name(IQ_STEPS + ["done"], p[6]), "why": _name(IQ_WHY, p[7]),
+        "phase": _name(IQ_PHASES, p[5]), "step": _name(IQ_STEPS, p[6]), "why": _name(IQ_WHY, p[7]),
         "match": _name(IQ_MATCH, p[8]), "rev": p[9],
         "asked": _steps(p[10]), "answered": _steps(p[11]), "refused": _steps(p[12]), "silent": _steps(p[13]),
         "sent": p[14], "dev_acks": p[15], "resets_sent": p[16], "resets_seen": p[17], "skipped_first_reset": bool(p[18]),
@@ -275,11 +284,14 @@ def decode_iq_status(p):
         "learn": {"how": _name(LEARN_NAMES, p[43]), "store_err": ERR_NAMES.get(p[44], f"error {p[44]}"), "seq": p[45],
                   "existed": bool(p[46]), "unchanged": bool(p[47])},
         "ms": _u16(p, 48),
+        "late": _steps(p[50]), "spoof": bool(p[51] & 1), "epr_partial": bool(p[51] & 2),
+        "sopp_queries": p[52], "sopp_replies": p[53], "num_epr_pdos": p[54],
     }
 
 
 def decode_iq_answers(p):
-    """One ANSWERS part: 0 sink PDOs, 1 Sink_Capabilities_Extended bytes, 2 Discover Identity VDOs, 3 SVIDs and modes."""
+    """One ANSWERS part: 0 sink PDOs, 1 Sink_Capabilities_Extended bytes, 2 Discover Identity VDOs, 3 SVIDs and modes,
+    4 EPR sink PDOs (SPR objects first, the EPR ones after; `epr_partial`: only the first chunk was read)."""
     _ok(p, 4, "inline answers")
     part, b = p[2], p[3:]
     if part == 0:
@@ -307,6 +319,10 @@ def decode_iq_answers(p):
             raise TwinError("twin inline answers: modes shorter than they say")
         modes = [{"svid": _u16(b, o + 1 + 6 * i), "vdo": _u32(b, o + 3 + 6 * i)} for i in range(m)]
         return {"part": 3, "svids": svids, "modes": modes}
+    if part == 4:
+        if len(b) < 2 or len(b) < 2 + 4 * b[0]:
+            raise TwinError("twin inline answers: EPR sink PDOs shorter than they say")
+        return {"part": 4, "epr_pdos": [_u32(b, 2 + 4 * i) for i in range(b[0])], "epr_partial": bool(b[1])}
     raise TwinError(f"twin inline answers: unknown part {part}")
 
 

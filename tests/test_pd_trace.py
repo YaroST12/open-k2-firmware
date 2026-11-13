@@ -154,6 +154,31 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual(lines[1], "PDO8 fixed 28 V 5 A")
         self.assertEqual([p["kind"] for p in tl.md.caps][6:], ["empty", "fixed"])
 
+    def test_epr_get_sink_cap_and_the_answer_are_named_and_decoded(self):
+        # The inline interrogation asks EPR_Get_Sink_Cap (Extended_Control, ECDB type 2); the answer is EPR_Sink_Capabilities
+        # (ext type 18), 8 PDOs = 32 B in two chunks. The sink PDOs must not become the offer that Requests are decoded against.
+        payload = struct.pack("<H", 0x8000 | 2) + bytes([2, 0])
+        hdr = 0x8000 | (1 << 12) | (2 << 6) | 16
+        tl = pt.Timeline()
+        ev = tl.event(pt.T_TX, 0, bytes([hdr & 0xFF, hdr >> 8]) + payload)   # a transmitted frame carries no SOP token
+        self.assertEqual(ev["msg"]["name"], "Extended_Control")
+        self.assertIn("EPR_Get_Sink_Cap", ev["detail"])
+        self.assertEqual(ev["msg"]["ext_control"], "EPR_Get_Sink_Cap")
+        words = [0x2601912C, 0x0002D12C, 0, 0, 0, 0, 0, 0x0008C1F4]
+        data = le32(*words)
+
+        def chunk(n, pdu):
+            p = struct.pack("<H", 0x8000 | n << 11 | 32) + pdu
+            p += bytes(-len(p) % 4)
+            return rx(0x8000 | (len(p) // 4) << 12 | (2 << 6) | 18, p)
+        e0 = tl.event(pt.T_RX, 1000, chunk(0, data[:26]))
+        self.assertEqual(e0["msg"]["name"], "EPR_Sink_Capabilities")
+        self.assertTrue(any(x.startswith("PDO2 ") for x in e0["detail"]))
+        e1 = tl.event(pt.T_RX, 2000, chunk(1, data[26:]))
+        lines = [x for x in e1["detail"] if x.startswith("PDO")]
+        self.assertEqual(lines[-1], "PDO8 fixed 28 V 5 A")
+        self.assertEqual(tl.md.caps, [])
+
     def test_ext_header(self):
         e = pt.decode_ext_header(0x8000 | 24)
         self.assertEqual((e["chunked"], e["data_size"], e["chunk"]), (True, 24, 0))

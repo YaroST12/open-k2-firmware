@@ -35,12 +35,13 @@ def predict_payload(seq=1, kind=2, limiter=0, flags=0, pos=6, mv=11000, ma=3000,
 
 def iq_status(running=0, pending=0, done=0, phase=0, step=6, why=0, match=0, rev=2, asked=0, ok=0, refused=0, silent=0, sent=0,
               acks=0, resets=0, seen=0, skipped=0, vid=0, pid=0, n_svids=0, n_modes=0, n_pdos=0, ext=0, revision=0,
-              first=(0, 0, 0), second=(0, 0, 0), how=0, err=0, seq=0, existed=0, unchanged=0, ms=0):
+              first=(0, 0, 0), second=(0, 0, 0), how=0, err=0, seq=0, existed=0, unchanged=0, ms=0, late=0, flags=0,
+              queries=0, replies=0, n_epr=0):
     """The INLINE STATUS response, byte for byte as twin::wire::encode_iq_status lays it out (tests/test_twin_wire.cpp)."""
     p = (bytes([0, 0, running, pending, done, phase, step, why, match, rev, asked, ok, refused, silent, sent, acks, resets, seen,
                 skipped]) + le16(vid) + le16(pid) + bytes([n_svids, n_modes, n_pdos, ext]) + le32(revision)
          + bytes(first[:2]) + le32(first[2]) + bytes(second[:2]) + le32(second[2])
-         + bytes([how, err, seq, existed, unchanged]) + le16(ms))
+         + bytes([how, err, seq, existed, unchanged]) + le16(ms) + bytes([late, flags, queries, replies, n_epr]))
     assert len(p) == tp.IQ_STATUS_BYTES
     return p
 
@@ -368,20 +369,21 @@ class Command(unittest.TestCase):
 
     def test_learn_inline_polls_then_reads_the_answers(self):
         running = iq_status(running=1, pending=1, phase=4)
-        done = iq_status(done=1, phase=7, match=2, asked=0x3F, ok=0x1B, refused=0x04, silent=0x20, sent=7, acks=6, resets=2,
+        done = iq_status(done=1, phase=7, match=2, asked=0xBF, ok=0x1B, refused=0x04, silent=0x20, sent=7, acks=6, resets=2,
                          vid=0x04A9, pid=0x3254, n_pdos=2, ext=24, revision=0x32100000, first=(1, 4, 0x4344B12C),
                          second=(1, 1, 0x1304B12C), seq=3, ms=3500)
         answers = [bytes([0, 3, 0, 2]) + le32(0x2601912C) + le32(0x0002D12C),
                    bytes([0, 3, 1, 24]) + bytes(range(1, 25)),
                    bytes([0, 3, 2, 1, 2]) + le32(0xFF00A841) + le32(0x18000000),
-                   bytes([0, 3, 3, 1]) + le16(0xFF01) + bytes([1]) + le16(0xFF01) + le32(0x405)]
+                   bytes([0, 3, 3, 1]) + le16(0xFF01) + bytes([1]) + le16(0xFF01) + le32(0x405),
+                   bytes([0, 3, 4, 0, 0])]
         r, link = run_cli(["twin", "learn", "inline", "--confirm", "--name", "Canon"], [bytes([0, 1, 0]), running, done] + answers)
         self.assertEqual(link.sent[0], (0x63, bytes([11, 1, 2]) + b"Canon"))
         self.assertEqual(link.sent[1], (0x63, bytes([11, 0])))
-        self.assertEqual([s[1] for s in link.sent[3:]], [bytes([11, 3, k]) for k in range(4)])
+        self.assertEqual([s[1] for s in link.sent[3:]], [bytes([11, 3, k]) for k in range(5)])
         s = r["inline"]
         self.assertEqual((s["phase"], s["match"], s["vid"], s["pid"], s["ms"]), ("done", "contract changed", 0x04A9, 0x3254, 3500))
-        self.assertEqual(s["asked"], tp.IQ_STEPS)
+        self.assertEqual(s["asked"], [n for n in tp.IQ_STEPS if n != "done"])   # six questions and EPR_Get_Sink_Cap
         self.assertEqual(s["answered"], ["Discover Identity", "Get_Sink_Cap", "Get_Revision", "Discover SVIDs"])
         self.assertEqual((s["refused"], s["silent"]), (["Get_Sink_Cap_Extended"], ["Discover Modes"]))
         self.assertEqual(s["first"], {"ready": True, "pos": 4, "rdo": 0x4344B12C})
@@ -395,9 +397,46 @@ class Command(unittest.TestCase):
             self.assertIn(want, text)
         json.dumps(r)
 
+    def test_learn_inline_spoof_start_payload(self):
+        # --spoof takes what `emarker spoof` takes: a built-in spelling, builtin:<id|name>, or a saved library id
+        for target, kind, ident in (("oneplus", 0, 4), ("builtin:cuktech-6a", 0, 2), ("builtin:1", 0, 1), ("7", 1, 7),
+                                    ("300", 1, 300)):
+            r, link = run_cli(["twin", "learn", "inline", "--confirm", "--spoof", target, "--name", "X"],
+                              [bytes([0, 1, 0]), iq_status(done=1, phase=7)] + [bytes([0, 3, k, 0, 0][:4 + (k > 1)]) for k in range(5)])
+            self.assertEqual(link.sent[0], (0x63, bytes([11, 1, 2 | 4, kind, ident & 255, ident >> 8]) + b"X"), target)
+        for bad in ("nonsense", "builtin:9", "0", "70000"):
+            with self.assertRaises(kr.FcRefused):
+                run_cli(["twin", "learn", "inline", "--confirm", "--spoof", bad], [])
+        with self.assertRaises(kr.FcRefused):   # the spoof is the interrogation's: nothing for identify or sniff
+            run_cli(["twin", "learn", "identify", "--spoof", "oneplus"], [])
+        with self.assertRaisesRegex(kr.TwinFailed, "spoof target is unknown"):
+            run_cli(["twin", "learn", "inline", "--confirm", "--spoof", "9"], [bytes([10, 1, 8])])
+
+    def test_learn_inline_reports_epr_late_spoof_and_the_contract(self):
+        done = iq_status(done=1, phase=7, match=1, asked=0xBF, ok=0x9F, refused=0, silent=0, late=0x04, flags=1 | 2, queries=3,
+                         replies=2, n_epr=2, first=(1, 1, 0x1304B12C), second=(1, 1, 0x1304B12C), sent=7, ms=21000)
+        answers = [bytes([0, 3, 0, 0]), bytes([0, 3, 1, 0]), bytes([0, 3, 2, 0, 0]), bytes([0, 3, 3, 0, 0]),
+                   bytes([0, 3, 4, 2, 1]) + le32(0x2601912C) + le32(0xC1C8E1F4)]
+        r, link = run_cli(["twin", "learn", "inline", "--confirm", "--spoof", "oneplus"], [bytes([0, 1, 0]), done] + answers)
+        s, x = r["inline"], r["answers"]
+        self.assertEqual((s["late"], s["spoof"], s["sopp_queries"], s["sopp_replies"], s["epr_partial"], s["num_epr_pdos"]),
+                         (["Get_Sink_Cap_Extended"], True, 3, 2, True, 2))
+        self.assertEqual(x["epr_pdos"], [0x2601912C, 0xC1C8E1F4])
+        self.assertTrue(x["epr_partial"])
+        text = kr.render("twin", r)
+        for want in ("late: Get_Sink_Cap_Extended", "EPR sink PDO 1:", "EPR sink PDO 2:", "raw=0xC1C8E1F4", "only the first chunk",
+                     "cable spoof: the charger queried SOP' 3 times, 2 replies", "same contract"):
+            self.assertIn(want, text)
+        json.dumps(r)
+        # a spoof run the charger never queried says so (the Ra is not driven inline)
+        r, _ = run_cli(["twin", "learn", "inline", "--confirm", "--spoof", "oneplus"],
+                       [bytes([0, 1, 0]), iq_status(done=1, phase=7, flags=1, first=(1, 1, 5), second=(1, 1, 5))] + answers[:4]
+                       + [bytes([0, 3, 4, 0, 0])])
+        self.assertIn("charger never queried the cable", kr.render("twin", r))
+
     def test_pd_interrogate_is_a_dry_learn(self):
         done = iq_status(done=1, phase=8, why=4, how=3)
-        answers = [bytes([0, 3, 0, 0]), bytes([0, 3, 1, 0]), bytes([0, 3, 2, 0, 0]), bytes([0, 3, 3, 0, 0])]
+        answers = [bytes([0, 3, 0, 0]), bytes([0, 3, 1, 0]), bytes([0, 3, 2, 0, 0]), bytes([0, 3, 3, 0, 0]), bytes([0, 3, 4, 0, 0])]
         r, link = run_cli(["pd", "interrogate", "--inline", "--confirm"], [bytes([0, 1, 0]), done] + answers)
         self.assertEqual(link.sent[0], (0x63, bytes([11, 1, 3])))   # confirm + dry
         text = kr.render("pd", r)

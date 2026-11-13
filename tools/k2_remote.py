@@ -1352,6 +1352,24 @@ def parse_builtin(text):
     return int(t) if t.isdigit() and int(t) in BUILTIN_LABELS else None
 
 
+def spoof_target(t, what):
+    """A cable the K2 can show as its e-marker, the way `emarker spoof` and `twin learn inline --spoof` name it: a built-in
+    spelling or builtin:<id|name>, or a saved library id. Returns (kind, id): kind twin_proto.IQ_SPOOF_BUILTIN / IQ_SPOOF_SAVED."""
+    t = t.strip().lower()
+    if t in BUILTIN_NAMES or t.startswith(("builtin:", "built-in:")):
+        bid = parse_builtin(t.partition(":")[2]) if ":" in t else BUILTIN_NAMES[t]
+        if bid is None:
+            raise FcRefused("built-in cable: builtin:0..4 or " + ", ".join(BUILTIN_NAMES))
+        return twin_proto.IQ_SPOOF_BUILTIN, bid
+    try:
+        q = int(t)
+    except ValueError:
+        raise FcRefused(f"{what} takes a saved-cable id, builtin:<id|name> (" + ", ".join(BUILTIN_NAMES) + ")") from None
+    if not 0 < q <= 0xFFFF:
+        raise FcRefused(f"{what}: a saved-cable id is 1..65535")
+    return twin_proto.IQ_SPOOF_SAVED, q
+
+
 def parse_cable(text):
     """'off' -> (0, 0); 'builtin' (the default built-in, EPR 50V 5A), 'builtin:N' or 'builtin:<name>' -> (1, id);
     'saved:3' (a library id; 'clone:3' too) -> (2, 3). 'off' is the no-spoof default. Built-in ids 1, 2 and 4 are the dialog's rows (3 is the retired spelling of 4)."""
@@ -1958,20 +1976,22 @@ def _twin_run(link, a):
 IQ_HINTS = {"no device inline": " (the device must draw from its charger THROUGH the K2)",
             "the K2 holds its own contract": " (`pd release` first: the K2 must not be the sink)",
             "the K2 runs on this VBUS": " (power the K2 from its HID port, not from the measured line)",
-            "a test or trigger owns the ports": " (`stop`, or wait for the run to end)"}
+            "a test or trigger owns the ports": " (`stop`, or wait for the run to end)",
+            "the spoof target is unknown": " (no such saved cable or built-in, or a spoof is armed already: `emarker spoof off`)"}
 
 
 def _twin_learn_inline(link, a, sleep=time.sleep, clock=time.monotonic):
     """Interrogate the device inline: the K2 hard-resets the link (unless a fresh contract was sniffed), asks the device as its
-    source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended, Get_Revision, SVIDs, Modes), hard-resets again, and learns a
-    twin from the answers (saved unless --dry). Polls the status until the K2 says it is over; Ctrl-C stops it (the final
-    reset still goes out)."""
+    source (Discover Identity, Get_Sink_Cap, Get_Sink_Cap_Extended, Get_Revision, EPR_Get_Sink_Cap of a PD 3.x device, SVIDs,
+    Modes), hard-resets again, and learns a twin from the answers (saved unless --dry). With --spoof the K2 shows the charger a
+    cable identity for the run only. Polls the status until the K2 says it is over; Ctrl-C stops it (the final reset still goes
+    out)."""
     if not a.confirm:
         raise FcRefused("an inline interrogation hard-resets the link twice (VBUS drops to 0 V and comes back, the device "
                         "renegotiates): add --confirm")
-    name = list(_twin_name(a.name)) if a.name else []
-    flags = twin_proto.IQ_CONFIRM | (twin_proto.IQ_DRY if a.dry else 0)
-    r = twin_proto.decode_iq_start(_twin(link, [TW_INLINE, twin_proto.IQ_START, flags] + name))
+    name = _twin_name(a.name) if a.name else b""
+    spoof = spoof_target(a.spoof, "--spoof") if getattr(a, "spoof", None) else None
+    r = twin_proto.decode_iq_start(_twin(link, twin_proto.encode_iq_start(a.dry, name, spoof)))
     if not r["started"]:
         raise TwinFailed(f"twin learn inline: {r['refusal']}{IQ_HINTS.get(r['refusal'], '')}")
     wait = getattr(a, "wait", TW_IQ_WAIT_S)
@@ -2005,14 +2025,23 @@ def _render_learn_inline(r):
              + (" (first reset skipped: a fresh contract was sniffed)" if s["skipped_first_reset"] else "")]
     for k in ("asked", "answered", "refused", "silent"):
         lines.append(f"  {k}: {', '.join(s[k]) or 'none'}")
+    if s["late"]:   # also counted as answered: the reply came after the step had been given up as silent
+        lines.append(f"  late: {', '.join(s['late'])} (answered after the step was given up)")
 
     def contract(c):
         return f"PDO {c['pos']} RDO 0x{c['rdo']:08X}" if c["ready"] else "none"
     lines.append(f"  contract before: {contract(s['first'])}; after: {contract(s['second'])} ({s['match']})")
+    if s["spoof"]:
+        lines.append(f"  cable spoof: the charger queried SOP' {s['sopp_queries']} times, {s['sopp_replies']} replies"
+                     if s["sopp_queries"] else
+                     "  cable spoof: the charger never queried the cable (no reply was due; the Ra is not driven inline)")
     if s["vid"] or s["pid"]:
         lines.append(f"  identity: {s['vid']:04X}:{s['pid']:04X}" + (f", VDOs {' '.join(f'0x{v:08X}' for v in x['identity_vdos'])}"
                                                                     if x.get("identity_vdos") else ""))
     lines += [f"  sink PDO {i + 1}: {twin_proto.pdo_text(p)}  raw=0x{p:08X}" for i, p in enumerate(x.get("sink_pdos", []))]
+    lines += [f"  EPR sink PDO {i + 1}: {twin_proto.pdo_text(p)}  raw=0x{p:08X}" for i, p in enumerate(x.get("epr_pdos", []))]
+    if x.get("epr_pdos") and x.get("epr_partial"):
+        lines.append("  (only the first chunk of the EPR_Sink_Capabilities was read: the PDOs past it are missing)")
     if x.get("sink_ext"):
         lines.append(f"  Sink_Capabilities_Extended: {x['sink_ext']}")
     if s["revision"]:
@@ -2061,6 +2090,8 @@ def cmd_twin(link, a):
     if c == "learn" and a.source == "inline":
         return _twin_learn_inline(link, a)
     if c == "learn":
+        if getattr(a, "spoof", None):
+            raise FcRefused("--spoof belongs to the inline interrogation (`twin learn inline --confirm --spoof TARGET`)")
         name = _twin_name(a.name) if a.name else b""
         how = 0 if a.source == "identify" else 1
         r = twin_proto.decode_learn(_twin(link, [TW_LEARN, how, TW_LEARN_DRY if a.dry else 0] + list(name)))
@@ -2257,18 +2288,9 @@ def cmd_emlib(link, a):
             _need(p, 1, "emarker spoof")
         elif t == "off":
             p = _emlib(link, [5, 2], "spoof")
-        elif t in BUILTIN_NAMES or t.startswith(("builtin:", "built-in:")):
-            bid = parse_builtin(t.partition(":")[2]) if ":" in t else BUILTIN_NAMES[t]
-            if bid is None:
-                raise FcRefused("built-in cable: builtin:0..4 or " + ", ".join(BUILTIN_NAMES))
-            p = _emlib(link, [5, 3, bid], "spoof")
         else:
-            try:
-                q = int(t)
-            except ValueError:
-                raise FcRefused("spoof takes a saved-cable id, builtin:<id|name> (" + ", ".join(BUILTIN_NAMES) +
-                                "), off or status") from None
-            p = _emlib(link, [5, 1, q & 255, q >> 8], "spoof")
+            kind, ident = spoof_target(t, "spoof")
+            p = _emlib(link, [5, 3, ident] if kind == twin_proto.IQ_SPOOF_BUILTIN else [5, 1, ident & 255, ident >> 8], "spoof")
         return {"emlib": "spoof", **_em_status(p)}
     raise FcRefused(f"unknown emarker command {c}")
 
@@ -4429,6 +4451,8 @@ def build_parser():
     sx.add_argument("--dry", action="store_true", help="show what would be learned, save nothing")
     sx.add_argument("--confirm", action="store_true", help="inline: required, the K2 hard-resets the link before and after asking")
     sx.add_argument("--wait", type=float, default=TW_IQ_WAIT_S, help=f"inline: seconds to follow the run (default {TW_IQ_WAIT_S})")
+    sx.add_argument("--spoof", metavar="TARGET", help="inline: show the charger this cable identity during the run only "
+                    "(saved-cable id or builtin:<id|name>, as `emarker spoof` takes it); disarmed when the run ends")
     sx = sws.add_parser("rename", help="rename a twin")
     sx.add_argument("id", type=int)
     sx.add_argument("name")
@@ -4496,6 +4520,8 @@ def build_parser():
     si.add_argument("--save", action="store_true", help="learn a twin from the answers and save it")
     si.add_argument("--name", help="twin name with --save, 1..24 characters")
     si.add_argument("--wait", type=float, default=TW_IQ_WAIT_S, help=f"seconds to follow the run (default {TW_IQ_WAIT_S})")
+    si.add_argument("--spoof", metavar="TARGET", help="show the charger this cable identity during the run only "
+                    "(saved-cable id or builtin:<id|name>, as `emarker spoof` takes it)")
     spds.add_parser("release", help="back to 5 V (Request PDO 1)")
     sa = spds.add_parser("attach", help="attach as PD sink and request the target voltage (default 5000 mV; above 5 V needs "
                                          "--confirm; refused inline and during a charger test, with no Rd and nothing sent)")

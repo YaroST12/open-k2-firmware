@@ -141,6 +141,8 @@ EXTENDED = {1: "Source_Capabilities_Extended", 2: "Status", 3: "Get_Battery_Cap"
             9: "Security_Response", 10: "Firmware_Update_Request", 11: "Firmware_Update_Response", 12: "PPS_Status",
             13: "Country_Info", 14: "Country_Codes", 15: "Sink_Capabilities_Extended", 16: "Extended_Control",
             17: "EPR_Source_Capabilities", 18: "EPR_Sink_Capabilities", 30: "Vendor_Defined_Extended"}
+# Extended_Control data block (ECDB) type, first data byte of an Extended_Control message.
+EXT_CONTROL = {1: "EPR_Get_Source_Cap", 2: "EPR_Get_Sink_Cap", 3: "EPR_KeepAlive", 4: "EPR_KeepAlive_Ack"}
 SPEC = {0: "unknown", 1: "PD2.0", 2: "PD3.x", 3: "reserved"}
 SOPS = {0xE0: "SOP", 0xC0: "SOP'", 0xA0: "SOP''", 0x80: "SOP'_Debug", 0x60: "SOP''_Debug"}
 EPR_MODE_ACTIONS = {1: "Enter", 2: "Enter_Acknowledged", 3: "Enter_Succeeded", 4: "Enter_Failed", 5: "Exit"}
@@ -302,10 +304,12 @@ class MessageDecoder:
     def __init__(self):
         self.caps = []          # decoded PDO dicts of the last Source_Capabilities (EPR chunks append)
         self.epr_buf, self.epr_total = bytearray(), 0
+        self.snk_buf, self.snk_total, self.snk_n = bytearray(), 0, 0   # EPR_Sink_Capabilities reassembly, never the offer
 
     def reset(self):
         self.caps = []
         self.epr_buf, self.epr_total = bytearray(), 0
+        self.snk_buf, self.snk_total, self.snk_n = bytearray(), 0, 0
 
     def decode(self, sop, header, payload, direction):
         """-> (name, text, detail dict). payload = data bytes without token / CRC."""
@@ -327,6 +331,12 @@ class MessageDecoder:
                 text += f", ext: {eh['data_size']} B chunk {eh['chunk']}" + (" request" if eh["request_chunk"] else "")
             if f["type"] == 17 and len(payload) > 2:   # EPR_Source_Capabilities chunk: PDOs after the 2-byte ext header
                 self.caps_extend(payload, detail["ext_header"], detail, extra)
+            elif f["type"] == 18 and len(payload) > 2:   # EPR_Sink_Capabilities chunk: same layout, kept apart from the offer
+                self.sink_caps_extend(payload, detail["ext_header"], detail, extra)
+            elif f["type"] == 16 and len(payload) > 2 and not detail["ext_header"]["request_chunk"]:
+                ecdb = EXT_CONTROL.get(payload[2], f"ECDB type {payload[2]}")
+                detail["ext_control"] = ecdb
+                extra.append(ecdb)
             elif len(payload) > 2 and not detail["ext_header"]["request_chunk"] and detail["ext_header"]["chunk"] == 0:
                 data = payload[2:2 + detail["ext_header"]["data_size"]]   # first chunk, without the pad bytes
                 detail["ext_payload"] = data.hex()
@@ -397,6 +407,24 @@ class MessageDecoder:
             pdos.append(d)
             self.caps.append(d)
             extra.append(f"PDO{len(self.caps)} {t}")
+        detail["pdos"] = pdos
+
+    def sink_caps_extend(self, payload, eh, detail, extra):
+        """One EPR_Sink_Capabilities chunk (the answer to EPR_Get_Sink_Cap): reassembled like the source side, but the PDOs go
+        to detail only, so a later Request is still decoded against the last Source_Capabilities."""
+        if eh["request_chunk"]:
+            return
+        if eh["chunk"] == 0:
+            self.snk_buf, self.snk_total, self.snk_n = bytearray(), eh["data_size"], 0
+        if len(self.snk_buf) != eh["chunk"] * EPR_CHUNK_BYTES:
+            return
+        self.snk_buf += payload[2:2 + max(0, min(EPR_CHUNK_BYTES, self.snk_total - len(self.snk_buf)))]
+        pdos = []
+        while 4 * (self.snk_n + 1) <= len(self.snk_buf):
+            d, t = decode_pdo(struct.unpack_from("<I", self.snk_buf, 4 * self.snk_n)[0])
+            pdos.append(d)
+            self.snk_n += 1
+            extra.append(f"PDO{self.snk_n} {t}")
         detail["pdos"] = pdos
 
 
