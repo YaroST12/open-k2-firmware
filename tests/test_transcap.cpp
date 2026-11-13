@@ -411,6 +411,26 @@ static void test_pacer_first_poll_after_reset_samples_at_once() {
     CHECK_EQ(p.take(5000 + kSampleGapUs), true);
 }
 
+// The kept capture is saved through a scratch lease. poll() also runs from the LCD idle hook and delay_ms(),
+// i.e. inside a page paint or a storage call that may hold the lease: the save must wait, never trap.
+static void test_persist_due_defers_while_scratch_is_held() {
+    constexpr std::uint32_t kQuiet = 300, kMax = 2000;
+    // args: keep, saved_seq, waited_ms, since_activity_ms, quiet, max_wait, scratch_busy
+    // quiet link, nothing holds scratch: save now
+    CHECK_COND(persist_due(true, 0, 400, 400, kQuiet, kMax, false));
+    // the same moment with the lease held: wait (even past the maximum wait)
+    CHECK_COND(!persist_due(true, 0, 400, 400, kQuiet, kMax, true));
+    CHECK_COND(!persist_due(true, 0, 5000, 100, kQuiet, kMax, true));
+    // retried at the next poll once the lease is free
+    CHECK_COND(persist_due(true, 0, 5000, 100, kQuiet, kMax, false));
+    // busy link before the maximum wait: not yet; at the maximum: yes
+    CHECK_COND(!persist_due(true, 0, 1000, 100, kQuiet, kMax, false));
+    CHECK_COND(persist_due(true, 0, 2000, 100, kQuiet, kMax, false));
+    // nothing to keep, or already saved: never
+    CHECK_COND(!persist_due(false, 0, 5000, 5000, kQuiet, kMax, false));
+    CHECK_COND(!persist_due(true, 7, 5000, 5000, kQuiet, kMax, false));
+}
+
 int main() {
     dump_for_python();
     test_clear_zeroes_everything();
@@ -438,5 +458,6 @@ int main() {
     test_pacer_samples_every_millisecond_pass();
     test_pacer_keeps_the_minimum_gap_and_survives_the_clock_wrap();
     test_pacer_first_poll_after_reset_samples_at_once();
+    test_persist_due_defers_while_scratch_is_held();
     return test_report("test_transcap");
 }

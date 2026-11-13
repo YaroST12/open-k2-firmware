@@ -468,6 +468,15 @@ inline bool decode(std::span<const std::uint8_t> in, std::span<Sample> sm, std::
     return true;
 }
 
+// Is a kept capture due for the flash write now? Quiet link (or the maximum wait elapsed) as before, but never while
+// the scratch arena is leased: poll() also runs from the LCD idle hook and from delay_ms(), i.e. inside a page paint
+// or a storage call that may hold the lease, and the save takes its own lease. It simply retries at the next poll.
+constexpr bool persist_due(bool keep, std::uint32_t saved_seq, std::uint32_t waited_ms, std::uint32_t since_activity_ms,
+                           std::uint32_t quiet_ms, std::uint32_t max_wait_ms, bool scratch_busy) {
+    if (!keep || saved_seq != 0 || scratch_busy) return false;
+    return since_activity_ms >= quiet_ms || waited_ms >= max_wait_ms;
+}
+
 // A decoded capture as a Recorder-shaped view (for make_thumb / the host plot code paths).
 struct View {
     std::span<const Sample> s;
