@@ -39,7 +39,8 @@ Seen read_all(ringlog::Ring& r) {
         s.lens.push_back(rec.len);
         s.seqs.push_back(rec.seq);
         const auto want = payload(rec.len, rec.type);
-        if (std::memcmp(rec.data, want.data(), rec.len) != 0) s.bad = true;
+        // an empty record has no bytes to compare (and an empty vector's data() is null, which memcmp must not get)
+        if (rec.len && std::memcmp(rec.data, want.data(), rec.len) != 0) s.bad = true;
         return true;
     });
     return s;
