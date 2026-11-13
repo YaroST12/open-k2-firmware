@@ -3,17 +3,20 @@
 // The device twin's one-line texts, pure: the screen, the CDC shell and the host tool's table print exactly these.
 //
 //   summary   what the device would get, in the Home protocol-row style:
-//             "27W PPS"  "36W 12V"  (the contract meets what the device wants)
+//             "PPS up to 27W"       (a predicted PPS range: the ceiling, never an operating point)
+//             "27W PPS"             (the Request the K2 saw, repeated: a fact)
+//             "36W 12V"             (the contract meets what the device wants)
 //             "60W of 96W"          (it gets less than it wants)
 //             "5V only"             (the device would sit on the 5 V level)
 //             "no contract"         (the charger offers it nothing, or the list is unusable)
 //   note      what limits it: "full", "limited by the cable", "limited by this charger", "the device takes no more"
-//   proof     the live verdict: "27W PPS ok 9.0V", "refused", "out of band 7.4V"
+//   proof     the live verdict: "PPS ok 9.0V", "36W 12V ok 12.0V", "refused", "out of band 7.4V"
 //
 // Every function writes into the caller's span, never beyond it, always terminated; the return value is the length.
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 #include "k2/twin/live.hpp"
@@ -59,6 +62,12 @@ inline int summary(const Outcome& o, std::span<char> out) {
         w.str("no contract");
     } else if (o.kind == Kind::FiveV) {
         w.str("5V only");
+    } else if (o.kind == Kind::Pps && !o.observed) {
+        // A predicted PPS contract is a range: the device picks its own voltage inside it (a direct-charge phone runs near 8-9 V),
+        // so the text gives the ceiling, not an operating point. What the device would still want is the note's job.
+        w.str("PPS up to ");
+        w.num(detail::whole_w(o.mw));
+        w.str("W");
     } else {
         w.num(detail::whole_w(o.mw));
         w.str("W");
@@ -117,8 +126,11 @@ inline int proof(live::Verdict v, std::uint16_t measured_mv, const Outcome& o, s
     detail::Out w(out);
     if (v == live::Verdict::Granted) {
         char s[16];
-        const int n = summary(o, s);
-        (void)n;
+        if (o.kind == Kind::Pps && !o.observed) {
+            std::memcpy(s, "PPS", 4);   // the range was predicted, so the proof states what was measured: "PPS ok 9.0V"
+        } else {
+            summary(o, s);
+        }
         w.str(s);
         w.str(" ok ");
         w.volts(measured_mv);

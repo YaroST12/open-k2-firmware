@@ -27,16 +27,17 @@ Status: built and host-tested (`tests/test_twin_*.cpp`, `tests/test_ui_twin.cpp`
 
 The rules as built (`predict.hpp`, pinned by `tests/test_twin_predict.cpp`, one test per rule):
 
-1. A fixed offer needs a sink fixed PDO **at the same voltage**.
+1. A fixed offer needs a sink fixed PDO **at the same voltage**, or a sink **Variable** or **Battery** PDO whose voltage range contains it (a laptop that lists a 5 V level and a 5-20 V 3.25 A Variable entry takes a 20 V level; a Battery entry gives the current as its power over the level's voltage). Both, a PPS range and the sniffed Request count toward **what the device wants**: that laptop wants 65 W, not 15 W, and against a 20 V 3 A charger gets 60 W of 65 W. Variable and Battery entries on the *charger's* side are not modelled.
 2. The current is `min(what the source offers after the cable, what the sink PDO says)`.
 3. A PPS offer needs a sink PPS range that overlaps; the voltage is the top of the overlap.
-4. The **highest power wins**. A PPS above 5 V wins a tie; at 5 V the fixed PDO wins; then the higher voltage; then the lower position.
+4. **Kind first, then power.** A PPS level above 5 V beats every fixed level whatever the power: a device that lists a PPS range takes it (direct charge), so a PPS offer that overlaps the twin's range wins even against a fixed level of more watts (the OnePlus 15 on a 3 A charger with PPS 5-11 V is PPS, not 12 V 3 A). Inside a kind the highest power wins, then the higher voltage, then the lower position. A PPS range that tops out at 5 V is no step up and ranks with the 5 V level. A PPS answer is a **range**, not an operating point: it reads "PPS up to 33W" (the top of the overlap), because the device picks its own voltage inside it (a direct-charge phone runs near 8-9 V). The live proof asks for that top, which is always inside the charger's APDO and the twin's range.
 5. A sink whose PDO1 carries the **Higher Capability** bit and whose own PDO1 is 5 V gets `FiveV` with *mismatch*: the K2 never claims more than the device announced it can take.
 6. **None** when the source caps are invalid, the twin has no sink PDOs (and no sniffed Request), or PDO1 is not 5 V.
-7. A **sniffed Request** (what the device itself asked for on a real charger) wins when the same shape (same kind and voltage) exists on this charger.
+7. A **sniffed Request** (what the device itself asked for on a real charger) wins over rules 4, 5 and 11 when the same shape (same kind and voltage) exists on this charger.
 8. Never above what the charger advertises. A cable that clips the current gives `Limiter::Cable`. The monitor ceiling (INA226 reads up to 36 V) is the live runner's business, not the prediction's: it is a `Skipped` verdict, never a changed prediction.
 9. **Mismatch** is set when the source current after the cable is below the twin's need, or by rule 5.
 10. **Limiter**: if the device gets what it needs, `Device` when the charger offers more (the device is the limit), else `None` ("full"); if it falls short, `Cable` when the cable clipped the offer (or the cable alone holds a bigger offer back), else `Charger`.
+11. A **learned kind preference** replaces rule 4's default order. When a sniff sees the device choose while a charger offers both a fixed level above 5 V and a PPS range above 5 V, the twin stores which kind it took (`Twin::pref`, `KindPref`). A twin that took a fixed level ranks fixed above 5 V before PPS (it still falls back to the other kind when its own has no usable level); a twin that took PPS, and a twin never seen choosing, rank PPS first. The preference applies to any charger, not only one with an exact-shape match; rule 7 still wins when it applies. Taking the 5 V level, or a charger that offers one kind only, teaches nothing and leaves the stored preference alone. The preference lives in two flag bits of the record (section 5), so it adds no bytes; the interrogation path does not learn it (it has no source list to compare against).
 
 `Facts` carries what the K2 knows about this link: the charger's claimed power (`claim_w`, from Get_Source_Cap_Extended) and the physical cable's current and voltage rating from its e-marker (`cable_ma`, `cable_mv`; zero means "not read", never the 3 A / 20 V default). The "held by the cable" test of rule 10 is `rdintent::offer_held_by_cable(caps, claim_w)` (`include/k2/core/rd_intent.hpp`, which wraps `cable_limited(caps, claim_w)`): the charger's own claim when there is one, else the 20 V / 3.00 A signature.
 
@@ -47,10 +48,10 @@ Three stored devices against five bench chargers (`test_real_matrix` in `tests/t
 | Device | CUKTECH C1, 3 A cable | C1, 5 A cable | ASUS 30 W | NOVOO RG100, 3 A | NOVOO, 5 A |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | Pixel | PPS pos 6, 11 V 3 A (33 W), device | same | PPS pos 6, 11 V 3 A, full | PPS pos 5, 11 V 3 A, device | same |
-| OP15 | Fixed pos 3, 12 V 3 A (36 W), cable | PPS pos 6, 11 V 5 A (55 W), device | PPS pos 6, 11 V 3 A, charger, mismatch | PPS pos 5, 11 V 3 A, cable, mismatch | PPS pos 5, 11 V 5 A, device |
+| OP15 | PPS up to 11 V 3 A (33 W) pos 6, cable, mismatch | PPS pos 6, 11 V 5 A (55 W), device | PPS pos 6, 11 V 3 A, charger, mismatch | PPS pos 5, 11 V 3 A, cable, mismatch | PPS pos 5, 11 V 5 A, device |
 | Laptop | 5 V 3 A pos 1, device, mismatch | same | same | same | same |
 
-Reading it: the Pixel is happy everywhere a PPS reaches 11 V. The OP15 needs a 5 A path: the 3 A cable holds both bricks down; the 5 A identity lifts them to the full 55 W; the ASUS 30 W brick is the limit. The Laptop's single sink PDO is 5 V 3 A with the Higher Capability bit, so it gets 5 V with a capability mismatch on every charger.
+Reading it: the Pixel is happy everywhere a PPS reaches 11 V. Every PPS cell is a range ("PPS up to 33 W"): the position and 11 V are the top of the overlap the live proof asks for, not the voltage the phone will run. The OP15 lists a 12 V level too, but rule 4 puts its PPS range first, so on the 3 A C1 it is PPS (33 W of the 55 W it wants), not 12 V 3 A. The OP15 needs a 5 A path: the 3 A cable holds both bricks down; the 5 A identity lifts them to the full 55 W; the ASUS 30 W brick is the limit. The Laptop's single sink PDO is 5 V 3 A with the Higher Capability bit, so it gets 5 V with a capability mismatch on every charger.
 
 ## 3. What a twin cannot predict
 
@@ -82,7 +83,7 @@ A twin is learned from one of three observations. The record keeps only what is 
 
 What the new observation knows replaces the saved value, what it does not know leaves the saved value alone, and the saved name stays.
 
-The library holds 12 twins The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"), with " 2", " 3" on repeats. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
+The library holds 12 twins The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"; the figure is `want_mw`, so Variable and Battery sink PDOs and the sniffed Request count), with " 2", " 3" on repeats. A saved name still in the old auto form (the watts before those counted, e.g. "Lenovo 15W" for a 65 W laptop) is corrected the next time that device is saved (any learn of it); a name the user typed never changes. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
 
 ### Record format
 
@@ -91,6 +92,7 @@ Magic "K2T", CRC16 CCITT, three versions:
 - **v1**: 40 to 76 bytes: identity, sink PDOs, optionally the sniffed Request pair (flag bit 0).
 - **v2**: v1 plus a **declared block** of 3 to 35 bytes (flag bit 1) and an **observed block** of 18 bytes (flag bit 2). A record without USB data is written as v1, byte-identical to what a firmware without the USB properties wrote, and old records stay readable. Any other flag bit, or flag bit 1 or 2 in a v1 record, is damage.
 - **v3**: v2 plus the PD 3 answers of an inline interrogation: the **Revision** data object, 4 bytes (flag bit 3), and the **Sink_Capabilities_Extended** block, a length byte (1 to 24) and that many bytes (flag bit 4). Written only when one of them is present, so every older record stays byte-identical; flag bit 3 or 4 in a v1 or v2 record is damage.
+- **v3, kind preference**: flag bit 5 = the device took PPS, flag bit 6 = it took a fixed level, when both kinds were offered (rule 11). The bits carry the whole fact, no bytes follow, so a record never grows. A twin with a preference is written as v3; a record without either bit loads as "no preference". Both bits at once, or either in a v1 or v2 record, is damage; flag bit 7 stays unused.
 - Largest record 76 + 35 + 18 = 129 bytes, for every version: twelve of them are what the volume budget holds for `/twin` (one byte more each spills the directory into another metadata pair). The v3 blocks go in only while the record stays within 129 bytes, the extended block left out first, then the Revision; only a twin that also carries full USB blocks loses them. The typical phone (three sink PDOs) is 52 bytes, 89 with a Request and both v3 blocks.
 
 Cross-check vectors (also in `tests/test_twin_lib.cpp` and `tests/test_twin_proto.py`):
@@ -118,6 +120,7 @@ Tools > Device twins (layout and wording: `docs/UI_SYSTEM.md` section 9). Two vi
 | OK on Prove live | arms the kit ActionCell (CONFIRM, 5 s drain, footer "Asks the charger for 12V"); a second OK starts the proof, which shows Asked / VBUS in the same box. A move or the window expiring disarms. |
 | OK on Delete twin | arms ("Deletes this twin for good"); a second OK deletes it and returns to the list ("Twin deleted") |
 | OK on Re-learn | as the Learn row; a different device is saved as another twin ("Saved as another twin") |
+| OK on "Ask charger again" (the list's last row, shown only while a device is inline and the charger listed nothing: the K2 joined after the contract, so no Source_Capabilities were sniffed and every twin reads "No charger: no predictions") | forces the renegotiation: the first OK arms ("Resets the link. Confirm"), the second sends the one inline Hard Reset, the same lab override as `pd reset --inline --confirm` (refused while a test or tool runs: "Tool or test running"; "Reset not sent" when the driver has no CC). The charger restarts and lists again, the K2 sniffs the list. Footer: "Asking the charger again", then "Charger offered again" and the predictions fill in, or "Charger did not offer" after 10 s. It is not an interrogation: nothing is asked of the device and nothing is learned. The device's charging stops for the reset |
 | BACK | stops a read or a proof (5 V back), disarms, closes the detail, then leaves the page |
 | OK on the Learn row ("Learn from device") | a device alone on the K2 (a dual-role phone: VBUS dark, no source caps, its Rp toggling) is read first: the page starts the Sink-tab Identify, shows "Reading the device" (Back stops it), and learns when it ends ("Device did not answer" when it never did). A device **inline** behind its charger is interrogated: the first OK arms ("Resets the link. Confirm", or the refusal: "Tool or test running", "K2 holds the contract", "K2 runs on this VBUS"), the second starts it; the footer follows it ("Resetting the link", "Asking the device"), Back stops it ("Stopped. Link reset", the final reset still goes out), the end learns ("Twin learned", "Learned. Contract changed" in amber when the device asked differently after the reset, "Device did not answer"). VBUS dark with no charger listing and nothing of the above: "No power: add a charger". Anything else learns from the last Identify. Footers: "Twin learned", "Twin updated", "Already known", "Plug a device in alone", "Nothing to learn from", "Library full" |
 
@@ -155,11 +158,11 @@ python3 tools/k2_remote.py twin export --out twins.json
 Print format of `twin predict` (identical text on the screen, the shell and the table of the host tool):
 
 ```
-#1 Pixel 9  33W PPS  the device takes no more  pos 6 11000mV 3000mA
-#2 OP15  36W of 55W  limited by the cable  pos 3 12000mV 3000mA mismatch
+#1 Pixel 9  PPS up to 33W  the device takes no more  pos 6 11000mV 3000mA
+#2 OP15  PPS up to 33W  limited by the cable  pos 6 11000mV 3000mA mismatch
 ```
 
-`present::summary` writes `NNW PPS`, `NNW NV` (fixed), `NNW of MMW` (it gets less than it wants), `5V only`, or `no contract`.
+`present::summary` writes `PPS up to NNW` (a predicted PPS range: the ceiling, never an operating point), `NNW PPS` (the Request the K2 saw, repeated: a fact), `NNW NV` (fixed), `NNW of MMW` (it gets less than it wants), `5V only`, or `no contract`.
 
 ### The live proof
 
@@ -302,8 +305,8 @@ For the main session; the K2 is on PC power, USB HID enabled, left port with a C
 **B. Predict, then prove, on NOVOO RG100 and CUKTECH C1** (K2 on PC power, charger on the bottom port, no load)
 
 1. Attach the charger in two calls. The first `python3 tools/k2_remote.py pd attach` (5 V default) only presents Rd when there is no capability list yet and returns without a request (no lease armed); wait until `pd status` shows the source capabilities. A second `pd attach` then selects the 5 V PDO and requests it (a 5 V attach never arms the lease either). Wait for the 5 V contract (`pd status`).
-2. `python3 tools/k2_remote.py twin predict`. Expected on the C1 with a 3 A cable for a Pixel-class twin: `#N Pixel  33W PPS  the device takes no more  pos 6 11000mV 3000mA`; for an OP15-class twin: `36W of 55W  limited by the cable  pos 3 12000mV 3000mA`. On the NOVOO: PPS pos 5.
-3. `python3 tools/k2_remote.py twin run --confirm --wait 60`. Expect each twin `Granted` with `ok 11.0V` (within the band), the contract back at 5 V after, and `twin status` listing `#N <name>  33W PPS ok 11.0V`.
+2. `python3 tools/k2_remote.py twin predict`. Expected on the C1 with a 3 A cable for a Pixel-class twin: `#N Pixel  PPS up to 33W  the device takes no more  pos 6 11000mV 3000mA`; for an OP15-class twin: `PPS up to 33W  limited by the cable  pos 6 11000mV 3000mA`. On the NOVOO: PPS pos 5.
+3. `python3 tools/k2_remote.py twin run --confirm --wait 60`. Expect each twin `Granted` with `ok 11.0V` (within the band), the contract back at 5 V after, and `twin status` listing `#N <name>  PPS ok 11.0V`.
 4. Check mid-run: `ping` uptime against wall-clock (a reboot means stop and investigate).
 5. `twin run 1 --confirm` with a charger alone on the plug (passive boot, VBUS 0 V, Rp steady) wakes it: `twin status` shows `waking`, then the proof runs. With nothing on the plug or a dual-role phone it must return `NoSource`; with a device inline it must return `Inline`.
 6. Screen: `k2_remote.py page twin`, `screenshot --scale 2`; compare with the mock set in `runs/ui-twin/` of the main checkout.

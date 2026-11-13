@@ -198,7 +198,8 @@ bool live_running() { return g_run.running(); }
 
 const twin::live::Runner& live() { return g_run; }
 
-Learned learn_from_identify(std::string_view name, bool save) {
+// The three learners hold a whole Twin (and by-value copies of it); out of line so they never inline into Ui::tick's frame (FRAME_MAX).
+[[gnu::noinline]] Learned learn_from_identify(std::string_view name, bool save) {
     Learned out;
     const pd::IdStatus& st = fusb302::identify_status();
     if (st.state != pd::IdState::Done || !fusb302::identify_current()) return out;   // how = NotReady
@@ -214,7 +215,7 @@ Learned learn_from_identify(std::string_view name, bool save) {
     return out;
 }
 
-Learned learn_from_sniff(std::string_view name, bool save) {
+[[gnu::noinline]] Learned learn_from_sniff(std::string_view name, bool save) {
     Learned out;
     if (!(fusb302::inline_mode() || fusb302::far_sink_seen())) {
         out.how = Learn::NotInline;
@@ -281,7 +282,7 @@ pd::IqRefusal inline_start_cable(std::string_view name, bool save, bool confirme
     return inline_start_with(name, save, confirmed, ctx, &rec, &quirks);
 }
 
-void inline_poll() {
+[[gnu::noinline]] void inline_poll() {
     if (g_inline_spoof && !fusb302::interrogate_running()) {   // the run is over (done, cancelled, aborted or detached)
         emk_spoof::disarm();
         g_inline_spoof = false;

@@ -35,10 +35,19 @@ Outcome pps(std::uint16_t mv, std::uint16_t ma, std::uint32_t want_w, Limiter l)
 }
 
 void test_summary() {
-    CHECK_STR(sum(pps(9000, 3000, 27, Limiter::None)), "27W PPS");
-    // Not a whole number of watts: rounded to the nearest.
-    CHECK_STR(sum(pps(11000, 3000, 33, Limiter::Device)), "33W PPS");
-    CHECK_STR(sum(pps(5000, 3000, 33, Limiter::Charger)), "15W of 33W");
+    // A predicted PPS contract is a range: "up to" the top of what the two overlap on, never an operating point (the device
+    // picks its own voltage inside it). Whether the device wants more does not change the words; the note says why.
+    CHECK_STR(sum(pps(9000, 3000, 27, Limiter::None)), "PPS up to 27W");
+    CHECK_STR(sum(pps(11000, 3000, 33, Limiter::Device)), "PPS up to 33W");
+    CHECK_STR(sum(pps(5000, 3000, 33, Limiter::Charger)), "PPS up to 15W");
+    CHECK_STR(sum(pps(11000, 3000, 55, Limiter::Charger)), "PPS up to 33W");
+    // A Request the K2 saw on the wire and the charger can repeat is a fact, not a range: the old words.
+    Outcome seen = pps(9000, 3000, 27, Limiter::None);
+    seen.observed = true;
+    CHECK_STR(sum(seen), "27W PPS");
+    Outcome seen_short = pps(5000, 3000, 33, Limiter::Charger);
+    seen_short.observed = true;
+    CHECK_STR(sum(seen_short), "15W of 33W");
     Outcome f;
     f.kind = Kind::Fixed;
     f.pos = 3;
@@ -66,10 +75,15 @@ void test_summary_fits() {
     Outcome o = pps(21000, 5000, 240, Limiter::Charger);
     o.mw = 105000;
     o.want_mw = 240000;
+    o.observed = true;   // a Request the K2 saw keeps the shortfall words
     std::array<char, 24> b{};
-    const int n = present::summary(o, b);
+    int n = present::summary(o, b);
     CHECK_STR(b.data(), "105W of 240W");
-    CHECK_COND(n <= 12);
+    CHECK_COND(n <= 14);
+    o.observed = false;   // the predicted range is the longest text: "PPS up to 105W"
+    n = present::summary(o, b);
+    CHECK_STR(b.data(), "PPS up to 105W");
+    CHECK_COND(n <= 14);
     // A buffer that is too small is cut, never overrun, and stays terminated.
     std::array<char, 6> s{};
     const int m = present::summary(o, s);
@@ -89,7 +103,11 @@ void test_verdict_line() {
     std::array<char, 24> b{};
     Outcome o = pps(9000, 3000, 27, Limiter::None);
     present::proof(Verdict::Granted, 9012, o, b);
+    CHECK_STR(b.data(), "PPS ok 9.0V");   // a range was predicted: the proof states the voltage it measured, not a watt figure
+    o.observed = true;
+    present::proof(Verdict::Granted, 9012, o, b);
     CHECK_STR(b.data(), "27W PPS ok 9.0V");
+    o.observed = false;
     present::proof(Verdict::Refused, 0, o, b);
     CHECK_STR(b.data(), "refused");
     present::proof(Verdict::OutOfBand, 7400, o, b);

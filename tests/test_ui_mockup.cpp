@@ -224,6 +224,12 @@ int main() {
     g_stub.caps = {};
     t += 400; ui.tick(t);
     render(ui, t, "twin_detail_nocharger");                              // no prediction: faint "--", neutral wants
+    g_stub.caps = {};                                                    // an Apple brick: fixed levels only, 15 V 2 A, 20 V 1.5 A
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2;
+    for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0004B0C8u, 0x00064096u})
+        g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);
+    t += 400; ui.tick(t);
+    render(ui, t, "twin_detail_apple");                                  // Source column: "5 9 15 20V", never "5-20V 3A"
     g_stub.caps = kept_caps;
     t += 400; ui.tick(t);
     key(Button::Back);
@@ -242,6 +248,19 @@ int main() {
     render(ui, t, "twin_learn");                                         // the Learn row
     key(Button::Ok);
     render(ui, t, "twin_learn_refused");                                 // nothing identified: the footer says so
+    g_stub.caps = {};                                                    // a device inline behind a charger that listed nothing
+    g_stub.pm.vbus_mv = 15000; g_stub.pm.current_ma = 1500; g_stub.pm.power_mw = 22500;
+    for (int i = 0; i < 6; i++) { t += 100; ui.tick(t); }
+    CHECK_EQ(ui.link().inline_mode(), true);
+    t += 3000; ui.tick(t);                                               // the refusal note times out
+    key(Button::Plus);
+    render(ui, t, "twin_ask_again");                                     // the extra row after Learn, "No charger: no predictions"
+    key(Button::Ok);
+    render(ui, t, "twin_ask_again_confirm");                             // armed: "Resets the link. Confirm"
+    key(Button::Ok);
+    render(ui, t, "twin_ask_again_wait");                                // the Hard Reset went out: "Asking the charger again"
+    g_stub.pm.vbus_mv = 5000; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0;   // the device is gone: the row goes with it
+    for (uint32_t i = 0; i < k2::pd::kInlineHoldMs / 100 + 80; ++i) { t += 100; ui.tick(t); }
     g_stub.caps = {};
     stub_twin_reset();
     ui.tick(t); t += 400; ui.tick(t);

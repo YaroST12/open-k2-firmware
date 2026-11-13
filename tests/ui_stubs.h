@@ -148,6 +148,8 @@ struct StubState {
     k2::pd::Choice last_choice{};
     bool last_confirmed = false, last_over_load = false;
     int requests = 0, releases = 0, hard_resets = 0, getcaps = 0, identifies = 0;
+    int lab_hard_resets = 0;              // of those, sent with the lab-inline override (sink_hard_reset(true))
+    bool hard_reset_refuses = false;      // sink_hard_reset() refuses (no CC): nothing goes out
     k2::pd::TriggerRefusal trig_refusal = k2::pd::TriggerRefusal::None;   // fusb302::trigger_refusal(): a sink sits behind the K2
     uint32_t sink_cap = 0;
     int32_t sink_vbus = 0;

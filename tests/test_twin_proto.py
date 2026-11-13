@@ -197,14 +197,18 @@ class Texts(unittest.TestCase):
         return {"kind": kind, "mv": mv, "ma": ma, "mw": mv * ma // 1000 if mw is None else mw, "want_mw": want_w * 1000, "limiter": limiter}
 
     def test_summary(self):
-        self.assertEqual(tp.summary(self.out("pps", 9000, 3000, 27)), "27W PPS")
-        self.assertEqual(tp.summary(self.out("pps", 11000, 3000, 33, "device")), "33W PPS")
-        self.assertEqual(tp.summary(self.out("pps", 5000, 3000, 33, "charger")), "15W of 33W")
+        self.assertEqual(tp.summary(self.out("pps", 9000, 3000, 27)), "PPS up to 27W")
+        self.assertEqual(tp.summary(self.out("pps", 11000, 3000, 33, "device")), "PPS up to 33W")
+        self.assertEqual(tp.summary(self.out("pps", 5000, 3000, 33, "charger")), "PPS up to 15W")
+        seen = dict(self.out("pps", 9000, 3000, 27), observed=True)   # a Request the K2 saw: a fact, the old words
+        self.assertEqual(tp.summary(seen), "27W PPS")
+        self.assertEqual(tp.summary(dict(self.out("pps", 5000, 3000, 33, "charger"), observed=True)), "15W of 33W")
         self.assertEqual(tp.summary(self.out("fixed", 12000, 3000, 55, "cable")), "36W of 55W")
         self.assertEqual(tp.summary(self.out("fixed", 12000, 3000, 36)), "36W 12V")
         self.assertEqual(tp.summary(self.out("five_v", 5000, 3000, 15)), "5V only")
         self.assertEqual(tp.summary(self.out("none", 0, 0, 0)), "no contract")
-        self.assertEqual(tp.summary(self.out("pps", 21000, 5000, 240, "charger", mw=105000)), "105W of 240W")
+        self.assertEqual(tp.summary(dict(self.out("pps", 21000, 5000, 240, "charger", mw=105000), observed=True)), "105W of 240W")
+        self.assertEqual(tp.summary(self.out("pps", 21000, 5000, 240, "charger", mw=105000)), "PPS up to 105W")
 
     def test_note(self):
         self.assertEqual([tp.note(x) for x in ("none", "device", "charger", "cable")],
@@ -212,7 +216,8 @@ class Texts(unittest.TestCase):
 
     def test_proof(self):
         o = self.out("pps", 9000, 3000, 27)
-        self.assertEqual(tp.proof("granted", 9012, o), "27W PPS ok 9.0V")
+        self.assertEqual(tp.proof("granted", 9012, o), "PPS ok 9.0V")
+        self.assertEqual(tp.proof("granted", 9012, dict(o, observed=True)), "27W PPS ok 9.0V")
         self.assertEqual(tp.proof("refused", 0, o), "refused")
         self.assertEqual(tp.proof("out of band", 7400, o), "out of band 7.4V")
         self.assertEqual(tp.proof("not run", 0, o), "not run")
@@ -287,10 +292,10 @@ class Command(unittest.TestCase):
         replies = [bytes([0, 1, 3])] + chunks_of(PIXEL, 3) + [predict_payload(seq=3, kind=2, limiter=1, flags=0, mw=33000, want=33000)]
         r, link = run_cli(["twin", "predict"], replies)
         self.assertEqual(link.sent[-1], (0x63, bytes([2, 3])))
-        self.assertEqual(r["rows"][0]["summary"], "33W PPS")
+        self.assertEqual(r["rows"][0]["summary"], "PPS up to 33W")
         text = kr.render("twin", r)
         self.assertIn("Pixel 9", text)
-        self.assertIn("33W PPS", text)
+        self.assertIn("PPS up to 33W", text)
         self.assertIn("the device takes no more", text)
         # --json output stays one document with the numbers
         json.dumps(r)
@@ -315,7 +320,7 @@ class Command(unittest.TestCase):
                    + [predict_payload(seq=3, kind=2, limiter=0, flags=0, mw=27000, mv=9000, ma=3000, want=27000)])
         r, link = run_cli(["twin", "run", "--confirm"], replies)
         self.assertEqual(link.sent[1], (0x63, bytes([6, 1, 1, 3])))
-        self.assertEqual(r["rows"][0]["proof"], "27W PPS ok 9.0V")
+        self.assertEqual(r["rows"][0]["proof"], "PPS ok 9.0V")
         self.assertEqual(r["run"]["reason"], "done")
         self.assertIn("granted", json.dumps(r))
 

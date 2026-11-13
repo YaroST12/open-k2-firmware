@@ -958,6 +958,7 @@ Footer, Info tone:
 |---|---|
 | charger on the port | `<top offer>: <full> of <n> full`, for example `PD 20V3A: 2 of 5 full` |
 | no charger | `No charger: no predictions` |
+| no charger list, a device inline | the list gets a last row `Ask charger again` (rotate icon, note `resets the link, it relists`, OK label `Ask`). Armed: `Resets the link. Confirm` (Caution); sent: `Asking the charger again`; then for 2.5 s `Charger offered again` (Ok) or `Charger did not offer` / `Reset not sent` / `Tool or test running` (Caution) |
 | empty library | `No twin yet. Learn one` |
 | learning | `Reading the device`, then for 2.5 s `Twin learned`, `Twin updated`, `Already known`, `Plug a device in alone`, `Device did not answer`, `Library full` |
 | learning inline (a device behind its charger) | armed: `Resets the link. Confirm` (Caution, OK label `Confirm`); running: `Resetting the link` / `Asking the device` (Back label `Stop`); then for 2.5 s `Twin learned`, `Learned. Contract changed` (Caution), `Device did not answer`, `Stopped. Link reset`; refusals `Tool or test running`, `K2 holds the contract`, `K2 runs on this VBUS` |
@@ -982,7 +983,7 @@ y44  | gets 36W                   |             wants 55W     |  font 24 values,
 y70  | ###########################+#########..............    |  bar, 3 px, x6..217; the hairline runs under it
 y76  | 12V3A                      |    limit: cable 3A        |  font 16, limit font 12 dim
 y96  +========================================================+  2 px rule
-y100 | 5-20V 3A                   |         5V 9V 12V         |  facts: charger left, device right (20 px rows)
+y100 | 5 9 15 20V                 |         5V 9V 12V         |  facts: charger left (fixed voltages; over the column a span "5-48V 144W", never a current), device right (20 px rows)
 y120 | PPS 5-21V 3A               |      PPS 3.3-11V 5A       |  only when either side lists a range
 y140 |                            |             USB 2.0 480M  |  device only
 y160 +--------------------------------------------------------+

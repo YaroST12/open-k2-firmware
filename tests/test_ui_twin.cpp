@@ -129,9 +129,10 @@ void test_rows_and_footer() {
     s = plain_of(ui, 2);                              // OP15, held back by the cable: half, amber
     CHECK_EQ(int(s.state), 1);
     CHECK_EQ(int(s.marker_color), int(kCaution));
-    CHECK_STR(note_of(ui, 0).c_str(), "gets 33W, device max");   // the charger offers more than the Pixel wants
+    CHECK_STR(note_of(ui, 0).c_str(), "PPS up to 33W, device max");   // a PPS range, said as one: the ceiling, no operating point
     CHECK_STR(note_of(ui, 1).c_str(), "5V only, device");
-    CHECK_STR(note_of(ui, 2).c_str(), "gets 36 of 55W, cable");
+    // the OP15 lists 5 / 9 / 12 V 3 A and PPS 5-11 V 5 A: PPS beats the 12 V level (rule 4), 33 W of the 55 W it wants
+    CHECK_STR(note_of(ui, 2).c_str(), "PPS up to 33 of 55W, cable");
     CHECK_STR(text_of(ui, 3).c_str(), "Learn from device");
     CHECK_STR(footer_of(ui).c_str(), "PD 20V3A: 1 of 3 full");
     CHECK_STR(label(ui, Button::Ok), "Open");
@@ -187,7 +188,7 @@ void test_repredict_on_new_charger() {
     reset();
     add_three();
     Ui &ui = open_page();
-    CHECK_STR(note_of(ui, 0).c_str(), "gets 33W, device max");
+    CHECK_STR(note_of(ui, 0).c_str(), "PPS up to 33W, device max");
     g_stub.caps = {};                            // another charger: 5 V and 9 V, 3 A
     g_stub.caps.valid = true;
     g_stub.caps.spec_rev = 2;
@@ -207,7 +208,7 @@ void test_detail_opens_and_closes() {
     CHECK_STR(text_of(ui, 0).c_str(), "Prove live");
     CHECK_STR(text_of(ui, 1).c_str(), "Re-learn from device");
     CHECK_STR(text_of(ui, 2).c_str(), "Delete twin");
-    CHECK_STR(note_of(ui, 0).c_str(), "asks the charger for 12V3A");
+    CHECK_STR(note_of(ui, 0).c_str(), "asks for PPS up to 11V3A");   // OP15 on a 3 A PPS charger: PPS, not the 12 V level
     CHECK_STR(label(ui, Button::Ok), "Run");
     CHECK_STR(footer_of(ui).c_str(), "Basis: its sink caps");
     press(ui, Button::Plus);
@@ -224,6 +225,48 @@ void test_detail_opens_and_closes() {
     CHECK_EQ(ui.twin_page().cursor(), 2);
 }
 
+// The Source column lists the charger's fixed voltages, like the device column; it never shows a max current that only one level
+// carries (an Apple brick with 5 V 3 A ... 20 V 1.5 A once read "5-20V 3A", which looks like a PPS range).
+void apple_charger() {
+    g_stub.caps = {};
+    g_stub.caps.valid = true;
+    g_stub.caps.spec_rev = 2;
+    for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0004B0C8u, 0x00064096u})   // 5 V 3 A, 9 V 3 A, 15 V 2 A, 20 V 1.5 A
+        g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);
+}
+
+void test_source_column_lists_fixed_levels() {
+    reset();
+    add_three();
+    apple_charger();
+    Ui &ui = open_page();
+    open_twin(ui, 0);                            // Pixel 9: 5 V, 9 V, PPS
+    CHECK_EQ(ui.twin_page().in_detail() ? 1 : 0, 1);
+    CHECK_STR(std::string(ui.twin_page().info_left(0)).c_str(), "5 9 15 20V");
+    press(ui, Button::Back);
+    // Too many levels for the column: a span with the best power, never a current.
+    reset();
+    add_three();
+    g_stub.caps = {};
+    g_stub.caps.valid = true;
+    g_stub.caps.spec_rev = 3;
+    for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0003C12Cu, 0x0004B12Cu, 0x0006412Cu, 0x0008C12Cu, 0x000B412Cu, 0x000F012Cu})
+        g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);   // 5 9 12 15 20 28 36 48 V, 3 A each
+    Ui &ui2 = open_page();
+    open_twin(ui2, 0);
+    CHECK_STR(std::string(ui2.twin_page().info_left(0)).c_str(), "5-48V 144W");
+    press(ui2, Button::Back);
+    // One level: the level and its current.
+    reset();
+    add_three();
+    g_stub.caps = {};
+    g_stub.caps.valid = true;
+    g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(0x0A01912Cu);
+    Ui &ui3 = open_page();
+    open_twin(ui3, 0);
+    CHECK_STR(std::string(ui3.twin_page().info_left(0)).c_str(), "5V3A");
+}
+
 void test_arm_confirm_run() {
     reset();
     add_three();
@@ -233,7 +276,7 @@ void test_arm_confirm_run() {
     CHECK_EQ(g_stub.twin_starts, 0);
     CHECK_EQ(ui.twin_page().armed() ? 1 : 0, 1);
     CHECK_STR(label(ui, Button::Ok), "Confirm");
-    CHECK_STR(footer_of(ui).c_str(), "Asks for PPS 11V");
+    CHECK_STR(footer_of(ui).c_str(), "Asks for PPS up to 11V");
     press(ui, Button::Ok);                       // second press starts, confirmed
     CHECK_EQ(g_stub.twin_starts, 1);
     CHECK_EQ(g_stub.twin_start_confirmed ? 1 : 0, 1);
@@ -635,6 +678,78 @@ void test_learn_without_power() {
     CHECK_STR(footer_of(ui).c_str(), "No power: add a charger");
 }
 
+// ---- a device inline, no charger list: "Ask charger again" forces the renegotiation (the inline Hard Reset, after a confirm) ----
+void test_ask_charger_again() {
+    reset();
+    add_three();
+    g_stub.caps.valid = false;
+    Ui &ui = open_page();
+    CHECK_EQ(ui.twin_page().list_state().count, 4);        // no device inline: three twins and Learn, no extra row
+    make_inline(ui);
+    step(ui, 100);
+    CHECK_EQ(ui.twin_page().list_state().count, 5);        // the new row sits after Learn
+    CHECK_STR(text_of(ui, 3).c_str(), "Learn from device");
+    CHECK_STR(text_of(ui, 4).c_str(), "Ask charger again");
+    CHECK_STR(footer_of(ui).c_str(), "No charger: no predictions");
+    for (int i = 0; i < 4; i++) press(ui, Button::Plus);
+    CHECK_STR(label(ui, Button::Ok), "Ask");
+    press(ui, Button::Ok);                                  // the first OK only arms: the reset drops VBUS
+    CHECK_EQ(g_stub.hard_resets, 0);
+    CHECK_STR(footer_of(ui).c_str(), "Resets the link. Confirm");
+    CHECK_STR(label(ui, Button::Ok), "Confirm");
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_EQ(g_stub.lab_hard_resets, 1);                   // the inline override, exactly as `pd reset --inline --confirm`
+    CHECK_EQ(g_stub.twin_iq_starts, 0);                    // not an interrogation
+    CHECK_STR(footer_of(ui).c_str(), "Asking the charger again");
+    step(ui, 2000);
+    CHECK_STR(footer_of(ui).c_str(), "Asking the charger again");
+    press(ui, Button::Ok);                                  // a second OK while it waits sends nothing
+    CHECK_EQ(g_stub.hard_resets, 1);
+    charger_c1();                                           // the charger lists again: the predictions fill in
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Charger offered again");
+    CHECK_STR(note_of(ui, 0).c_str(), "PPS up to 33W, device max");
+    CHECK_EQ(ui.twin_page().list_state().count, 4);        // the row is gone: the list is there now
+    step(ui, 3000);
+    CHECK_STR(footer_of(ui).c_str(), "PD 20V3A: 1 of 3 full");
+    unplug_inline(ui);
+}
+
+void test_ask_charger_again_unanswered_stop_and_refusals() {
+    reset();
+    add_three();
+    g_stub.caps.valid = false;
+    Ui &ui = open_page();
+    make_inline(ui);
+    step(ui, 100);
+    for (int i = 0; i < 4; i++) press(ui, Button::Plus);
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    step(ui, 12000);                                        // nobody lists: said, the row is back to ask again
+    CHECK_STR(footer_of(ui).c_str(), "Charger did not offer");
+    step(ui, 3000);
+    CHECK_STR(footer_of(ui).c_str(), "No charger: no predictions");
+    CHECK_EQ(ui.twin_page().list_state().count, 5);
+
+    press(ui, Button::Ok);                                  // arm, then BACK disarms
+    CHECK_STR(footer_of(ui).c_str(), "Resets the link. Confirm");
+    press(ui, Button::Back);
+    CHECK_EQ(ui.twin_page().armed() ? 1 : 0, 0);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    press(ui, Button::Ok);                                  // armed, the window runs out
+    step(ui, Ui::kConfirmWindowMs + 100);
+    press(ui, Button::Ok);                                  // so this press only arms
+    CHECK_EQ(g_stub.hard_resets, 1);
+
+    g_stub.hard_reset_refuses = true;                       // the driver says no (no CC): said, nothing waits
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.hard_resets, 1);
+    CHECK_STR(footer_of(ui).c_str(), "Reset not sent");
+    unplug_inline(ui);
+}
+
 void test_footer_note_times_out() {
     reset();
     Ui &ui = open_page();
@@ -807,6 +922,7 @@ int main() {
     test_repredict_on_new_charger();
     test_detail_opens_and_closes();
     test_delete_confirm();
+    test_source_column_lists_fixed_levels();
     test_arm_confirm_run();
     test_reject_is_a_fail();
     test_arm_expires_and_moves();
@@ -820,6 +936,8 @@ int main() {
     test_learn_inline_results();
     test_learn_inline_stop_and_refusals();
     test_learn_without_power();
+    test_ask_charger_again();
+    test_ask_charger_again_unanswered_stop_and_refusals();
     test_footer_note_times_out();
     test_wake_not_before_confirm();
     test_wake_then_prove();
