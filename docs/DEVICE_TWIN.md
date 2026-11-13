@@ -27,7 +27,7 @@ Status: built and host-tested (`tests/test_twin_*.cpp`, `tests/test_ui_twin.cpp`
 
 The rules as built (`predict.hpp`, pinned by `tests/test_twin_predict.cpp`, one test per rule):
 
-1. A fixed offer needs a sink fixed PDO **at the same voltage**.
+1. A fixed offer needs a sink fixed PDO **at the same voltage**, or a sink **Variable** or **Battery** PDO whose voltage range contains it (a laptop that lists a 5 V level and a 5-20 V 3.25 A Variable entry takes a 20 V level; a Battery entry gives the current as its power over the level's voltage). Both, a PPS range and the sniffed Request count toward **what the device wants**: that laptop wants 65 W, not 15 W, and against a 20 V 3 A charger gets 60 W of 65 W. Variable and Battery entries on the *charger's* side are not modelled.
 2. The current is `min(what the source offers after the cable, what the sink PDO says)`.
 3. A PPS offer needs a sink PPS range that overlaps; the voltage is the top of the overlap.
 4. **Kind first, then power.** A PPS level above 5 V beats every fixed level whatever the power: a device that lists a PPS range takes it (direct charge), so a PPS offer that overlaps the twin's range wins even against a fixed level of more watts (the OnePlus 15 on a 3 A charger with PPS 5-11 V is PPS, not 12 V 3 A). Inside a kind the highest power wins, then the higher voltage, then the lower position. A PPS range that tops out at 5 V is no step up and ranks with the 5 V level. A PPS answer is a **range**, not an operating point: it reads "PPS up to 33W" (the top of the overlap), because the device picks its own voltage inside it (a direct-charge phone runs near 8-9 V). The live proof asks for that top, which is always inside the charger's APDO and the twin's range.
@@ -83,7 +83,7 @@ A twin is learned from one of three observations. The record keeps only what is 
 
 What the new observation knows replaces the saved value, what it does not know leaves the saved value alone, and the saved name stays.
 
-The library holds 12 twins The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"), with " 2", " 3" on repeats. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
+The library holds 12 twins The library holds 12 twins, in flash files `/twin/NN.twn`, names are 1 to 24 characters, an auto name is the vendor plus the most the device asks for in whole watts ("Google 33W", "VID 1234 33W", "Device 33W"; the figure is `want_mw`, so Variable and Battery sink PDOs and the sniffed Request count), with " 2", " 3" on repeats. A saved name still in the old auto form (the watts before those counted, e.g. "Lenovo 15W" for a 65 W laptop) is corrected the next time that device is saved (any learn of it); a name the user typed never changes. A twin file written by a newer firmware is refused and never overwritten, and a damaged file is never replaced automatically.
 
 ### Record format
 

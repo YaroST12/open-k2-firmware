@@ -281,6 +281,89 @@ static void test_rule11_kind_preference() {
 }
 
 // The twin's wish: the best power any of its sink PDOs says it can take.
+// Rule 1b: a Variable sink PDO is a voltage range the device runs on; a Battery sink PDO the same range at a power. A fixed source
+// level inside the range is usable (current min(source, twin), the Battery's current = its power / the level's voltage), and both
+// count toward what the device wants. (The Lenovo 15W laptop: 5 V 3 A fixed, Variable 5-20 V 3.25 A, took 20 V 3 A on the wire.)
+constexpr std::uint32_t var(unsigned lo_mv, unsigned hi_mv, unsigned ma) { return 0x80000000u | (hi_mv / 50u) << 20 | (lo_mv / 50u) << 10 | ma / 10u; }
+constexpr std::uint32_t bat(unsigned lo_mv, unsigned hi_mv, unsigned mw) { return 0x40000000u | (hi_mv / 50u) << 20 | (lo_mv / 50u) << 10 | mw / 250u; }
+
+static Twin lenovo15(bool with_request) {
+    Twin t = twin_of({0x3601912C, 0x99019145}, "Lenovo 15W");   // 5 V 3 A fixed, Variable 5-20 V 3.25 A
+    if (with_request) {
+        t.rdo = 0x5384B12C;       // PDO 5, op 3 A, max 3 A
+        t.rdo_pdo = 0x0006412C;   // 20 V 3 A fixed
+    }
+    return t;
+}
+
+static void test_rule1b_variable_and_battery_sink_pdos() {
+    // the exact word decodes as a Variable PDO, 5-20 V, 3.25 A
+    const pd::Pdo v = pd::decode_pdo(0x99019145);
+    CHECK_EQ(int(v.type), int(pd::PdoType::Variable));
+    CHECK_EQ(v.min_mv, 5000);
+    CHECK_EQ(v.max_mv, 20000);
+    CHECK_EQ(v.max_ma, 3250);
+    CHECK_EQ(want_mw(lenovo15(false)), 65000);                   // not the 5 V level's 15 W
+    CHECK_EQ(want_mw(lenovo15(true)), 65000);
+    // a 20 V 3 A charger: 60 W of the 65 W it wants, short of its need (3 A against 3.25 A). The limiter says Cable: a 20 V 3.00 A
+    // list with no power claim is the signature of an offer held down by a cable (rule 10), and the K2 cannot tell it from a 60 W brick.
+    const auto c20 = caps_of({fx(5000, 3000), fx(9000, 3000), fx(15000, 3000), fx(20000, 3000)});
+    Outcome o = predict(lenovo15(false), c20, {});
+    EXPECT(o, Kind::Fixed, 4, 20000, 3000, Limiter::Cable, true);
+    CHECK_EQ(o.mw, 60000);
+    CHECK_EQ(o.want_mw, 65000);
+    CHECK_EQ(o.observed, 0);
+    o = predict(lenovo15(true), c20, {});                         // the sniffed Request points the same way
+    EXPECT(o, Kind::Fixed, 4, 20000, 3000, Limiter::Cable, true);
+    CHECK_EQ(o.mw, 60000);
+    CHECK_EQ(o.want_mw, 65000);
+    CHECK_EQ(o.observed, 1);
+    // the Apple list (5 V 3 A, 9 V 3 A, 15 V 2 A, 20 V 1.5 A): 15 V and 20 V both give 30 W; the higher voltage wins the tie (rule 4:
+    // less current in the cable), with or without the sniffed Request
+    const auto apple = caps_of({fx(5000, 3000), fx(9000, 3000), fx(15000, 2000), fx(20000, 1500)});
+    o = predict(lenovo15(false), apple, {});
+    EXPECT(o, Kind::Fixed, 4, 20000, 1500, Limiter::Charger, true);
+    CHECK_EQ(o.mw, 30000);
+    CHECK_EQ(o.want_mw, 65000);
+    o = predict(lenovo15(true), apple, {});
+    EXPECT(o, Kind::Fixed, 4, 20000, 1500, Limiter::Charger, true);
+    CHECK_EQ(o.observed, 1);
+    // a level outside the range is not usable: 12 V sink range, 15 V and 20 V on offer
+    const Twin narrow = twin_of({fx(5000, 3000), var(5000, 12000, 3000)});
+    o = predict(narrow, caps_of({fx(5000, 3000), fx(9000, 3000), fx(15000, 3000), fx(20000, 2000)}), {});
+    EXPECT(o, Kind::Fixed, 2, 9000, 3000, Limiter::Charger, false);   // 27 W of the 36 W its 12 V level would take
+    CHECK_EQ(want_mw(narrow), 36000);
+    // a Variable range is no PPS APDO: a PPS source level gives it nothing
+    o = predict(lenovo15(false), caps_of({fx(5000, 3000), fx(20000, 3000), pps(3300, 11000, 3000)}), {});
+    CHECK_EQ(int(o.kind), int(Kind::Fixed));
+    // a Battery sink PDO: 5-21 V at 60 W -> 3 A at 20 V, 4 A at 15 V; the charger's lower current caps it
+    const Twin batt = twin_of({fx(5000, 3000), bat(5000, 21000, 60000)}, "Batt");
+    CHECK_EQ(want_mw(batt), 60000);
+    o = predict(batt, c20, {});
+    EXPECT(o, Kind::Fixed, 4, 20000, 3000, Limiter::None, false);
+    CHECK_EQ(o.mw, 60000);
+    o = predict(batt, caps_of({fx(5000, 3000), fx(20000, 2000)}), {});
+    EXPECT(o, Kind::Fixed, 2, 20000, 2000, Limiter::Charger, true);
+    // a cable that cannot carry 20 V clips the range candidate like a fixed one
+    Facts f;
+    f.cable_mv = 15000;
+    o = predict(lenovo15(false), c20, f);
+    EXPECT(o, Kind::Fixed, 3, 15000, 3000, Limiter::Cable, true);
+}
+
+static void test_request_counts_toward_want() {
+    // a device that takes more than its sink PDOs list: the Request is what it wants
+    Twin t = twin_of({fx(5000, 1500)}, "Odd");
+    t.rdo_pdo = fx(20000, 3000);
+    t.rdo = 5u << 28 | (3000u / 10) << 10 | 3000u / 10;
+    CHECK_EQ(want_mw(t), 60000);
+    // a twin made from a Request alone has no PDO power: want stays 0 (the outcome carries what it asked)
+    Twin r;
+    r.rdo = t.rdo;
+    r.rdo_pdo = t.rdo_pdo;
+    CHECK_EQ(want_mw(r), 0);
+}
+
 static void test_want_mw() {
     CHECK_EQ(want_mw(kPixel), 33000);
     CHECK_EQ(want_mw(kOp15), 55000);
@@ -372,6 +455,8 @@ int main() {
     test_rule8_advertised_and_cable_limits();
     test_rule9_limiter();
     test_rule11_kind_preference();
+    test_rule1b_variable_and_battery_sink_pdos();
+    test_request_counts_toward_want();
     test_want_mw();
     test_grade();
     test_to_choice();

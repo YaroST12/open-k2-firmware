@@ -379,6 +379,62 @@ static void test_from_identify() {
     CHECK_EQ(t.num_pdos, 3);
 }
 
+// A Variable sink PDO counts toward the auto name's watts (Lenovo: 5 V 3 A fixed, Variable 5-20 V 3.25 A = 65 W, not 15 W); a saved
+// name still in the old auto form is corrected when the device is saved again, a typed name or a still-right auto name stays.
+static Twin lenovo(const char* name = "") {
+    Twin t;
+    std::strncpy(t.name.data(), name, kNameMax);
+    t.vid = 0x17EF;
+    t.pid = 0xA5B2;
+    t.pd_rev = 2;
+    t.num_pdos = 2;
+    t.pdos = {0x3601912C, 0x99019145};
+    t.rdo = 0x5384B12C;
+    t.rdo_pdo = 0x0006412C;
+    return t;
+}
+
+static void test_auto_name_counts_variable_pdos() {
+    CHECK_EQ(want_w(lenovo()), 65u);
+    CHECK_EQ(legacy_want_w(lenovo()), 15u);
+    CHECK_STR(auto_name(lenovo()).data(), "Lenovo 65W");
+    CHECK_EQ(name_is_legacy_auto(lenovo("Lenovo 15W")) ? 1 : 0, 1);
+    CHECK_EQ(name_is_legacy_auto(lenovo("Lenovo 15W 2")) ? 1 : 0, 1);
+    CHECK_EQ(name_is_legacy_auto(lenovo("Lenovo 65W")) ? 1 : 0, 0);
+    CHECK_EQ(name_is_legacy_auto(lenovo("Lenovo 15W X")) ? 1 : 0, 0);
+    CHECK_EQ(name_is_legacy_auto(lenovo("My laptop")) ? 1 : 0, 0);
+    // a new twin takes the corrected name
+    Vol v;
+    Library l(v.f);
+    Result r = l.save(lenovo());
+    CHECK_EQ(int(r.err), int(Err::Ok));
+    CHECK_STR(name_of(l, r.seq).c_str(), "Lenovo 65W");
+    // a stored twin with the old auto name: saved again (any learn of that device), it gets the right watts
+    Vol v2;
+    Library l2(v2.f);
+    r = l2.save(lenovo("Lenovo 15W"));
+    CHECK_STR(name_of(l2, r.seq).c_str(), "Lenovo 15W");               // a new twin keeps the name it comes with
+    r = l2.save(lenovo());
+    CHECK_EQ(r.existed ? 1 : 0, 1);
+    CHECK_EQ(r.unchanged ? 1 : 0, 0);
+    CHECK_STR(name_of(l2, 1).c_str(), "Lenovo 65W");
+    r = l2.save(lenovo());                                             // now nothing left to change
+    CHECK_EQ(r.unchanged ? 1 : 0, 1);
+    // a name the user typed stays
+    Vol v3;
+    Library l3(v3.f);
+    l3.save(lenovo("My laptop"));
+    l3.save(lenovo());
+    CHECK_STR(name_of(l3, 1).c_str(), "My laptop");
+    // a twin with fixed levels only keeps its auto name (the formulas agree)
+    Vol v4;
+    Library l4(v4.f);
+    l4.save(pixel("Google 33W"));
+    r = l4.save(pixel());
+    CHECK_EQ(r.unchanged ? 1 : 0, 1);
+    CHECK_STR(name_of(l4, 1).c_str(), "Google 33W");
+}
+
 static void test_learn_names_and_rename_wins() {
     Vol v;
     Library l(v.f);
@@ -909,6 +965,7 @@ int main() {
     test_library_damaged_and_foreign();
     test_library_power_loss();
     test_auto_name();
+    test_auto_name_counts_variable_pdos();
     test_from_identify();
     test_learn_names_and_rename_wins();
     test_from_sniffed();

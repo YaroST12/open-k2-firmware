@@ -5,7 +5,11 @@
 //
 // SELECTION POLICY. Each rule has a test of the same number in tests/test_twin_predict.cpp.
 //  1. A fixed source PDO is usable when the twin has a fixed sink PDO at the same voltage. (A sink's Sink_Capabilities list the
-//     voltages it can run on; the K2 does not guess that a device with a 5 V and a PPS entry would also take 9 V.)
+//     voltages it can run on; the K2 does not guess that a device with a 5 V and a PPS entry would also take 9 V.) A Variable or
+//     Battery sink PDO declares a voltage RANGE the device runs on: a fixed source level inside it is usable too, the current
+//     being the PDO's operational current (Variable) or its power over the level's voltage (Battery). Both, a PPS APDO and the
+//     sniffed Request count toward what the device wants (want_mw: the laptop with a 5 V 3 A level and a 5-20 V 3.25 A Variable
+//     entry wants 65 W, not 15 W).
 //  2. Its current is min(the source PDO's maximum, the twin's operational current at that voltage): the 10 mA field of the
 //     sink PDO, the current the device says it needs there (USB PD 3.1 6.4.1.3.1). Never more than the charger advertises.
 //  3. A programmable (PPS) source PDO is usable against each PPS APDO of the twin whose voltage range overlaps it; the voltage is
@@ -46,7 +50,7 @@
 // correction from what it actually did. Two more deviations are deliberate: rule 4 puts PPS before power (the OnePlus 15, with a
 // PPS APDO among its sink PDOs, always takes PPS even when a fixed level offers more watts), and a PPS prediction is "up to" its
 // top-of-overlap power, not the point the device settles on. Rule 11 is the per-device correction from a sniff that saw it choose.
-// Not modelled: Variable and Battery PDOs (the twin's or the charger's), SPR AVS and EPR levels (a twin holds SPR words only),
+// Not modelled: Variable and Battery PDOs on the CHARGER's side (the twin's are, rule 1), SPR AVS and EPR levels (a twin holds SPR words only),
 // and anything a vendor protocol adds (Xiaomi 6 A, SuperVOOC, Apple's own steps).
 #pragma once
 #include <algorithm>
@@ -116,17 +120,30 @@ constexpr bool better(const Cand& a, const Cand& b, bool fixed_first) {
 
 inline std::uint16_t clip_ma(std::uint16_t src_ma, const Facts& f) { return f.cable_ma != 0 ? std::min(src_ma, f.cable_ma) : src_ma; }
 
+// Rule 1b. A fixed sink PDO takes its own voltage only; a Variable or Battery sink PDO takes any voltage inside its range.
+constexpr bool sink_takes(const pd::Pdo& s, std::uint16_t mv) {
+    if (s.type == pd::PdoType::Fixed) return s.max_mv == mv;
+    if (s.type == pd::PdoType::Variable || s.type == pd::PdoType::Battery) return mv != 0 && mv >= s.min_mv && mv <= s.max_mv;
+    return false;
+}
+// The current a sink PDO says the device needs at `mv` (sink_takes): its operational current; a Battery PDO's power over the voltage.
+constexpr std::uint16_t sink_ma_at(const pd::Pdo& s, std::uint16_t mv) {
+    if (s.type != pd::PdoType::Battery) return s.max_ma;
+    const std::uint32_t ma = mv != 0 ? s.max_mw * 1000u / mv : 0;
+    return std::uint16_t(ma > 0xFFFFu ? 0xFFFFu : ma);
+}
+
 // Fills `c` for source PDO `p` at position `pos` against sink PDO `s` (a decoded fixed or PPS word); false when unusable (rules 1-3, 8).
 inline bool candidate(const pd::Pdo& p, std::uint8_t pos, const pd::Pdo& s, const Facts& f, Cand& c) {
     c = Cand{};
     c.pos = pos;
-    if (p.type == pd::PdoType::Fixed && s.type == pd::PdoType::Fixed) {
-        if (p.max_mv != s.max_mv) return false;
+    if (p.type == pd::PdoType::Fixed && (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Variable || s.type == pd::PdoType::Battery)) {
+        if (!sink_takes(s, p.max_mv)) return false;
         if (f.cable_mv != 0 && p.max_mv > f.cable_mv) return false;
         c.mv = p.max_mv;
-        c.need_ma = s.max_ma;
+        c.need_ma = sink_ma_at(s, p.max_mv);
         c.lim_ma = clip_ma(p.max_ma, f);
-        c.cable_clip = c.lim_ma < std::min(p.max_ma, s.max_ma);
+        c.cable_clip = c.lim_ma < std::min(p.max_ma, c.need_ma);
     } else if (p.type == pd::PdoType::Pps && s.type == pd::PdoType::Pps) {
         const std::uint16_t lo = std::max(p.min_mv, s.min_mv);
         std::uint16_t hi = std::min(p.max_mv, s.max_mv);
@@ -153,12 +170,14 @@ inline bool observed_candidate(const Twin& t, const pd::SourceCaps& caps, const 
     const pd::Pdo sp = pd::decode_pdo(t.rdo_pdo);
     const pd::Rdo r = pd::decode_rdo(t.rdo, &sp);
     if (r.op_ma == 0 || (sp.type != pd::PdoType::Fixed && sp.type != pd::PdoType::Pps)) return false;
-    std::uint16_t sink_ma = 0;   // the twin's own figure for that voltage, when it listed one
+    std::uint16_t sink_ma = 0;   // the twin's own figure for that voltage, when it listed one (a Variable / Battery range counts, rule 1b)
     for (std::size_t i = 0; i < n_sink; ++i) {
         const pd::Pdo& s = sink[i];
-        if (s.type != sp.type) continue;
-        const bool same = sp.type == pd::PdoType::Fixed ? s.max_mv == sp.max_mv : (r.mv >= s.min_mv && r.mv <= s.max_mv);
-        if (same) sink_ma = std::max(sink_ma, s.max_ma);
+        if (sp.type == pd::PdoType::Fixed) {
+            if (sink_takes(s, sp.max_mv)) sink_ma = std::max(sink_ma, sink_ma_at(s, sp.max_mv));
+        } else if (s.type == pd::PdoType::Pps && r.mv >= s.min_mv && r.mv <= s.max_mv) {
+            sink_ma = std::max(sink_ma, s.max_ma);
+        }
     }
     const std::uint16_t need = r.op_ma < sp.max_ma ? r.op_ma : std::max(r.op_ma, sink_ma);
     const std::size_t n = std::min<std::size_t>(caps.num_pdos, caps.pdos.size());
@@ -192,12 +211,20 @@ inline bool observed_candidate(const Twin& t, const pd::SourceCaps& caps, const 
 
 }  // namespace detail
 
-// The best power any of the twin's sink PDOs says it can take: fixed V x I, PPS top voltage x current (0 for an empty twin).
+// The best power the twin says it can take: any sink PDO (fixed V x I, PPS and Variable top voltage x current, Battery its power),
+// and, when it has sink PDOs, its sniffed Request (the voltage it asked at x the operating current it asked for: a device may take
+// more than it lists). 0 for an empty twin; a twin made from a Request alone stays 0 (the outcome carries what it asked).
 inline std::uint32_t want_mw(const Twin& t) {
     std::uint32_t best = 0;
     for (std::size_t i = 0; i < t.num_pdos && i < t.pdos.size(); ++i) {
         const pd::Pdo s = pd::decode_pdo(t.pdos[i]);
-        if (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps) best = std::max(best, detail::mw_of(s.max_mv, s.max_ma));
+        if (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps || s.type == pd::PdoType::Variable) best = std::max(best, detail::mw_of(s.max_mv, s.max_ma));
+        else if (s.type == pd::PdoType::Battery) best = std::max(best, s.max_mw);
+    }
+    if (best != 0 && t.has_request()) {
+        const pd::Pdo sp = pd::decode_pdo(t.rdo_pdo);
+        const pd::Rdo r = pd::decode_rdo(t.rdo, &sp);
+        if (sp.type == pd::PdoType::Fixed || sp.type == pd::PdoType::Pps) best = std::max(best, detail::mw_of(r.mv, r.op_ma));
     }
     return best;
 }

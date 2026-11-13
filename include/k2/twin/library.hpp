@@ -333,6 +333,9 @@ public:
                 r.existed = true;
                 Twin merged = cur;
                 merge(merged, in);
+                // A name still in the auto form of the days Variable / Battery sink PDOs did not count ("Lenovo 15W" for a
+                // 65 W laptop) takes the corrected watts; a name the user typed, or an auto name that is still right, stays.
+                if (want_w(cur) != legacy_want_w(cur) && name_is_legacy_auto(cur)) merged.name = unique_name(auto_name(merged), all, n);
                 std::array<std::uint8_t, kMaxFileBytes> a{}, b{};
                 const std::size_t la = encode(cur, r.seq, a), lb = encode(merged, r.seq, b);
                 if (la == lb && std::memcmp(a.data(), b.data(), la) == 0) { r.unchanged = true; return r; }

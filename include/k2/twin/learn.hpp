@@ -16,6 +16,7 @@
 #include "k2/pd/pd_identify.hpp"
 #include "k2/pd/pd_interrogate.hpp"
 #include "k2/pd/pd_vdm.hpp"
+#include "k2/twin/predict.hpp"
 #include "k2/twin/twin.hpp"
 
 namespace k2::twin {
@@ -54,17 +55,32 @@ inline std::array<char, kNameMax + 1> auto_name(std::uint16_t vid, std::uint32_t
     out[n] = 0;
     return out;
 }
-// The most watts any of the twin's sink PDOs takes (fixed V x I, PPS top voltage x current), rounded to whole watts.
-inline std::uint32_t want_w(const Twin& t) {
+// What the twin wants (twin::want_mw: every sink PDO incl. Variable and Battery, and its sniffed Request), whole watts.
+inline std::uint32_t want_w(const Twin& t) { return (want_mw(t) + 500u) / 1000u; }
+inline std::array<char, kNameMax + 1> auto_name(const Twin& t) { return auto_name(t.vid, want_w(t)); }
+
+// The watts the auto name carried before Variable / Battery sink PDOs and the Request counted (fixed and PPS levels only): a saved
+// name that is this auto name (alone or with the library's " 2", " 3" suffix) was never changed by the user.
+inline std::uint32_t legacy_want_w(const Twin& t) {
     std::uint64_t best = 0;
     for (std::size_t i = 0; i < t.num_pdos && i < t.pdos.size(); ++i) {
         const pd::Pdo s = pd::decode_pdo(t.pdos[i]);
-        if (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps)
-            best = std::max<std::uint64_t>(best, std::uint64_t(s.max_mv) * s.max_ma);
+        if (s.type == pd::PdoType::Fixed || s.type == pd::PdoType::Pps) best = std::max<std::uint64_t>(best, std::uint64_t(s.max_mv) * s.max_ma);
     }
     return std::uint32_t((best + 500000u) / 1000000u);
 }
-inline std::array<char, kNameMax + 1> auto_name(const Twin& t) { return auto_name(t.vid, want_w(t)); }
+// True when `t.name` is the auto name of `t` by the old watts figure: "<vendor> <W>W", then nothing or " <digits>".
+inline bool name_is_legacy_auto(const Twin& t) {
+    const auto old = auto_name(t.vid, legacy_want_w(t));
+    const std::size_t n = std::strlen(old.data());
+    if (n == 0 || std::strncmp(t.name.data(), old.data(), n) != 0) return false;
+    const char* rest = t.name.data() + n;
+    if (*rest == 0) return true;
+    if (*rest != ' ' || rest[1] == 0) return false;
+    for (const char* p = rest + 1; *p != 0; ++p)
+        if (*p < '0' || *p > '9') return false;
+    return true;
+}
 
 // A twin from a finished Identify of a device that sat alone on the K2: its identity, its Sink_Capabilities, the wire
 // revision. False when the run did not finish or learned no sink PDOs (nothing to predict from). A missing identity still
