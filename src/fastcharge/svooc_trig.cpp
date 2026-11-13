@@ -204,6 +204,11 @@ void release() {
           svooc::name(r.abort), unsigned(r.elapsed_ms), unsigned(lg.commands), unsigned(lg.replies), unsigned(lg.missed),
           unsigned(lg.cut), r.accepted ? 1u : 0u, int(r.vbus_max_mv), int(r.ibus_max_ma), svooc::name(r.contract_start),
           svooc::name(r.contract_end), pd::inline_cause_name(r.inline_cause), svooc::name(g_wire.responder().escape()));
+    for (const svooc::Responder::Ask& a : g_wire.responder().asks())
+        K2LOG("[SVOOC] ask 86>%03X (%dmA) at %ums, %u polls kept\n", unsigned(a.word), int(svooc::ask_ma(a.word)),
+              unsigned(a.t_ms), unsigned(a.after));
+    K2LOG("[SVOOC] ceiling %03X (%dmA asked, session kept)\n", unsigned(g_wire.responder().ceiling_word()),
+          int(svooc::ask_ma(g_wire.responder().ceiling_word())));
     const dpsniff::Status rec = dpsniff::status();
     K2LOG("[SVOOC] diag: edges=%u last_edge=%ums poll_gap_max=%ums rec=%u end=%u\n", unsigned(lg.edges),
           unsigned(lg.last_edge_ms), unsigned(r.poll_gap_max_ms), unsigned(rec.edges), unsigned(rec.reason));
@@ -274,10 +279,11 @@ svooc::Refusal start(bool confirmed, bool ports_busy, std::uint32_t cap_s, bool 
         g_wire.set_vbus_mv(0);
     }
     const svooc::Params& ep = g_wire.responder().params();
-    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us\n",
+    K2LOG("[SVOOC] start (no load) cap=%ums vbus=%dmV ibus=%dmA contract=%s inline=%s%s i86=%03X/%03X r82=%03X vtarget=%umV esc=%us profile=%s\n",
           unsigned(g_run.report().cap_ms), int(f.vbus_mv), int(f.ibus_ma), svooc::name(f.contract),
           pd::inline_cause_name(f.inline_cause), usb_a ? " far-sink / inline check waived (USB-A)" : "",
-          unsigned(ep.i86_first), unsigned(ep.i86_esc), unsigned(ep.r82), unsigned(ep.vtarget_mv), unsigned(ep.esc_at_s));
+          unsigned(ep.i86_first), unsigned(ep.i86_esc), unsigned(ep.r82), unsigned(ep.vtarget_mv), unsigned(ep.esc_at_s),
+          svooc::name(ep.profile));
     return r;
 }
 
@@ -344,6 +350,10 @@ Snapshot snapshot() {
     s.params = g_wire.responder().params();
     s.escape = g_wire.responder().escape();
     s.escape_t_ms = g_wire.responder().escape_t_ms();
+    const std::span<const svooc::Responder::Ask> asks = g_wire.responder().asks();
+    s.n_asks = static_cast<std::uint8_t>(asks.size());
+    for (std::size_t i = 0; i < asks.size(); ++i) s.asks[i] = asks[i];
+    s.ceiling_word = g_wire.responder().ceiling_word();
     const dpsniff::Status rec = dpsniff::status();
     s.rec_edges = rec.edges;
     s.rec_end = static_cast<std::uint8_t>(rec.reason);

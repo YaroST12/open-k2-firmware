@@ -389,16 +389,26 @@
 //                                                            below stall_us / 1000 = interrupts were masked), then
 //                                                            who let D- go after the replies since the wake:
 //                                                            rel_timer rel_loop rel_edge (u16 each, saturate);
+//                                      [5, 0, 2]             status page 2, the 0x86 asks (4 + 5 n bytes, n at most 8):
+//                                                            profile(1, svooc::Profile: 0 fixed, 1 phone, 2 probe)
+//                                                            ceiling_word(2, the highest 0x86 word the adapter went on
+//                                                            under; 100 mA per count, 0 = none; the K2's own ask, not a
+//                                                            measured or drawn current) n(1), then n x { t_ms(2, ms since
+//                                                            the wake) word(2) polls_after(1, saturates at 255: the 82
+//                                                            polls on the script after the ask) };
 //                                                            other pages BadArg;
 //                                      [5, 1, flags, cap_s]  start: flags carry kFcConfirm (none: NeedConfirm) and
 //                                                            may carry kSvoocUsbA (bit 2: the operator waives the
-//                                                            far-sink refusal for a legacy A port, svooc_run.hpp);
+//                                                            far-sink refusal for a legacy A port, svooc_run.hpp),
+//                                                            kSvoocPhone (bit 3: the phone profile) or kSvoocProbe
+//                                                            (bit 4: the ceiling-probe profile), never both;
 //                                                            other bits BadArg; cap_s 0 = 20 s, 1..20 (more: BadArg);
 //                                                            a refused start answers Busy with the summary (its
 //                                                            refusal byte says why); an accepted one arms the lease;
 //                                      [5, 1, flags, cap_s, i86_first, i86_esc, r82, vtarget_lo, vtarget_hi, esc_at_s]
 //                                                            the same start with the responder's operator parameters
-//                                                            (svooc_script.hpp Params; the 4-byte request is this one
+//                                                            (svooc_script.hpp Params; the profile flags above apply; the
+//                                                            4-byte request is this one
 //                                                            with i86 5 / 5, r82 0x51, vtarget 0, esc_at 0). Any other
 //                                                            length: BadLength. Values are clamped by the firmware, not
 //                                                            refused: i86 1..0x23, r82 0..0x7E, vtarget_mv 0 (off) or
@@ -426,7 +436,7 @@
 //                                      word 0xFFFF = not answered; t_ms = the command's start, ms since that wake;
 //                                      vbus_mv = the monitor sample when the pair closed (0 = none). `from` at or past
 //                                      kept answers an empty page (n = 0), not an error. Wrong length BadLength,
-//                                      unknown sub-op or status page BadArg.
+//                                      unknown sub-op or status page BadArg (pages 0..2 exist).
 //                                    --- end svooc-trigger ---
 //   0x21 ADC_RAW     req -            rsp ok(1) all(10 x u16) scan(7 x u16)
 //                                    all = one-shot raw counts of ADC channels 0..7, 16, 17;
@@ -623,7 +633,9 @@ struct VoocSnapshot {
 constexpr uint8_t kFcSvooc = 5;
 constexpr uint8_t kSvoocStatus = 0, kSvoocStart = 1, kSvoocStop = 2, kSvoocLog = 3;
 constexpr uint8_t kSvoocUsbA = 4;             // start flags bit2: waive the far-sink refusal (legacy A port, no PD anywhere)
-constexpr uint8_t kSvoocStartMask = kFcConfirm | kSvoocUsbA;
+constexpr uint8_t kSvoocPhone = 8;            // start flags bit3: answer like a phone (svooc::Profile::Phone: ramp, escapes, moving 0x82)
+constexpr uint8_t kSvoocProbe = 16;           // start flags bit4: the ceiling probe (svooc::Profile::Probe: 0x86 ladder); not with bit3
+constexpr uint8_t kSvoocStartMask = kFcConfirm | kSvoocUsbA | kSvoocPhone | kSvoocProbe;
 constexpr uint8_t kSvoocCapMaxS = svooc::kCapMs / 1000;   // 20
 constexpr size_t kSvoocRowsPerPage = 7;
 constexpr size_t kSvoocRowBytes = 7;
@@ -643,12 +655,17 @@ struct SvoocSnapshot {
     svooc::Params params{};                         // the effective (clamped) responder parameters
     svooc::Escape escape = svooc::Escape::Off;
     uint32_t escape_t_ms = 0;
+    std::array<svooc::Responder::Ask, svooc::kAsksMax> asks{};   // status page 2: every 0x86 the responder answered
+    uint8_t n_asks = 0;
+    uint16_t ceiling_word = 0;                      // the highest ask the adapter went on under (100 mA per count; 0 = none)
     uint16_t rec_edges = 0;                         // the run's Black Box edge recording: edges kept (dpsniff::Status)
     uint8_t rec_end = 0;                            // and how it ended (edges::End; 0 = still recording)
     stage::Worst stall{};                           // status page 1: the main loop's worst stage since the wake
     uint32_t rel_timer = 0, rel_loop = 0, rel_edge = 0;   // and who let D- go after the replies
 };
 constexpr size_t kSvoocTimingBytes = 15;      // status page 1
+constexpr size_t kSvoocAskBytes = 5, kSvoocAsksHeader = 4;   // status page 2: header + n x ask
+static_assert(kSvoocAsksHeader + kSvoocAskBytes * svooc::kAsksMax <= kMaxRspPayload);
 // --- end svooc-trigger ---
 
 // Store op codes (first payload byte of Cmd::Store). The request is [op] for list / save-emarker /
@@ -1230,6 +1247,7 @@ size_t encode_sniff(std::span<uint8_t> out, const SniffInfo &r);
 size_t encode_vooc(std::span<uint8_t> out, const VoocSnapshot &v, uint8_t page);   // vooc-monitor: FC op 4, one page
 size_t encode_svooc(std::span<uint8_t> out, const SvoocSnapshot &v);   // svooc-trigger: FC op 5, the summary
 size_t encode_svooc_timing(std::span<uint8_t> out, const SvoocSnapshot &v);   // op 5 / 0 page 1: stall and D- release counts
+size_t encode_svooc_asks(std::span<uint8_t> out, const SvoocSnapshot &v);     // op 5 / 0 page 2: the 0x86 asks and the ceiling
 size_t encode_svooc_log(std::span<uint8_t> out, uint16_t kept, uint16_t from, std::span<const svooc::PairRow> rows);   // op 5 / 3
 size_t encode_ufcs(std::span<uint8_t> out, const UfcsInfo &i);   // status block: state verdict class start blob_len(2) nfields
 // One tuner field: field(1) value(4) lo(4) hi(4) default(4); lo / hi / default come from ufcs::kFields.
@@ -1790,14 +1808,18 @@ bool handle_request(std::span<const uint8_t> raw, B &backend, std::span<uint8_t,
             switch (p[1]) {
             case kSvoocStatus:
                 if (p.size() != 3) return reply(Status::BadLength);
-                if (p[2] > 1) return reply(Status::BadArg);
-                return reply_n(p[2] == 0 ? encode_svooc(buf, backend.svooc_info()) : encode_svooc_timing(buf, backend.svooc_info()));
+                if (p[2] > 2) return reply(Status::BadArg);
+                if (p[2] == 0) return reply_n(encode_svooc(buf, backend.svooc_info()));
+                if (p[2] == 1) return reply_n(encode_svooc_timing(buf, backend.svooc_info()));
+                return reply_n(encode_svooc_asks(buf, backend.svooc_info()));
             case kSvoocStart: {
                 // 4 bytes: the original request (every operator parameter at its default); 10: the extended one.
                 if (p.size() != 4 && p.size() != kSvoocStartExtBytes) return reply(Status::BadLength);
                 if ((p[2] & ~kSvoocStartMask) || p[3] > kSvoocCapMaxS) return reply(Status::BadArg);
                 if (!(p[2] & kFcConfirm)) return reply(Status::NeedConfirm);
+                if ((p[2] & kSvoocPhone) && (p[2] & kSvoocProbe)) return reply(Status::BadArg);   // one profile at most
                 svooc::Params sp;
+                sp.profile = (p[2] & kSvoocPhone) ? svooc::Profile::Phone : (p[2] & kSvoocProbe) ? svooc::Profile::Probe : svooc::Profile::Fixed;
                 if (p.size() == kSvoocStartExtBytes) {
                     sp.i86_first = p[4]; sp.i86_esc = p[5]; sp.r82 = p[6];
                     sp.vtarget_mv = static_cast<uint16_t>(p[7] | (p[8] << 8)); sp.esc_at_s = p[9];

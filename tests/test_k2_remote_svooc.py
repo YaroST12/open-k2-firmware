@@ -42,13 +42,22 @@ def log_page(rows, first):
     return bytes(out)
 
 
+def asks_page(profile, ceiling, asks):
+    """What the firmware answers to [5, 0, 2]: profile(1) ceiling_word(2) n(1) and n x { t_ms(2) word(2) polls_after(1) }."""
+    out = bytearray([profile]) + ceiling.to_bytes(2, "little") + bytes([len(asks)])
+    for t_ms, word, after in asks:
+        out += t_ms.to_bytes(2, "little") + word.to_bytes(2, "little") + bytes([after])
+    return bytes(out)
+
+
 class Link:
     """Answers op 5 from a script of status summaries and a list of pair rows; records every request."""
 
-    def __init__(self, statuses, start_status=kr.STATUS_OK, start_payload=None, rows=None, timing=None):
+    def __init__(self, statuses, start_status=kr.STATUS_OK, start_payload=None, rows=None, timing=None, asks=None):
         self.sent, self.statuses, self.rows = [], list(statuses), rows or []
         self.start_status, self.start_payload = start_status, start_payload
         self.timing = timing   # status page 1; None = a firmware without it (BadArg)
+        self.asks = asks       # status page 2 (asks_page(...)); None = a firmware without it (BadArg)
 
     def call(self, cmd, payload=b""):
         self.sent.append((cmd, bytes(payload)))
@@ -61,7 +70,11 @@ class Link:
             return kr.Response(cmd, 1, 0, summary(stage=5, abort=11))
         if payload[1] == kr.SVOOC_LOG:
             return kr.Response(cmd, 1, 0, log_page(self.rows, payload[2] | payload[3] << 8))
-        assert payload[1] == kr.SVOOC_STATUS and payload[2] in (0, 1)
+        assert payload[1] == kr.SVOOC_STATUS and payload[2] in (0, 1, 2)
+        if payload[2] == 2:
+            if self.asks is None:
+                raise kr.RemoteError(kr.STATUS_BAD_ARG, cmd, b"")
+            return kr.Response(cmd, 1, 0, self.asks)
         if payload[2] == 1:
             if self.timing is None:
                 raise kr.RemoteError(kr.STATUS_BAD_ARG, cmd, b"")
@@ -277,7 +290,7 @@ class SvoocTrigger(unittest.TestCase):
             (70).to_bytes(2, "little") + (1).to_bytes(2, "little") + (0).to_bytes(2, "little")
         link = Link([summary(stage=6)], timing=page)
         s = kr.cmd_fc_svooc(link, args("svooc-status"))["svooc"]
-        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, 0])), (kr.CMD_FC, bytes([5, 0, 1]))])
+        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, p])) for p in (0, 1, 2)])
         self.assertEqual(s["timing"], {"stall_us": 169123, "stall_at_ms": 3405, "stall_stage": "ui", "stall_ticked_ms": 168,
                                        "rel_timer": 70, "rel_loop": 1, "rel_edge": 0})
         text = kr.render_svooc(s)
@@ -299,10 +312,58 @@ class SvoocTrigger(unittest.TestCase):
     def test_status_and_stop_commands(self):
         link = Link([summary(stage=6)])
         kr.cmd_fc_svooc(link, args("svooc-status"))
-        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, 0])), (kr.CMD_FC, bytes([5, 0, 1]))])
+        self.assertEqual(link.sent, [(kr.CMD_FC, bytes([5, 0, p])) for p in (0, 1, 2)])
         link = Link([summary(stage=6)])
         kr.cmd_fc_svooc(link, args("svooc-stop"))
         self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 2])))
+
+
+class SvoocProfiles(unittest.TestCase):
+    def test_profile_flags(self):
+        for flag, want in (("--phone", 0x09), ("--probe", 0x11)):
+            link = Link([summary(stage=6)])
+            kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", flag, "--cap", "20"), sleep=lambda s: None)
+            self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 1, want, 20])))
+        link = Link([summary(stage=6)])
+        kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--usb-a", "--phone"), sleep=lambda s: None)
+        self.assertEqual(link.sent[0], (kr.CMD_FC, bytes([5, 1, 0x0D, 0])))   # confirm | usb-a | phone
+        link = Link([summary(stage=6)])   # a profile beside a responder number rides the extended request
+        kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--phone", "--i86", "0x23", "--i86-at", "3"), sleep=lambda s: None)
+        self.assertEqual(link.sent[0][1], bytes([5, 1, 9, 0, 5, 0x23, 0x51, 0, 0, 3]))
+        with self.assertRaises(SystemExit):   # one profile at most
+            args("svooc-trigger", "--confirm", "--phone", "--probe")
+
+    def test_asks_and_ceiling_are_decoded(self):
+        asks = asks_page(2, 0x03F, [(1771, 0x00F, 40), (3850, 0x028, 255), (5300, 0x03F, 12), (6900, 0x06D, 1)])
+        link = Link([summary(stage=6, abort=10, accepted=True, vmax=9100)], asks=asks)
+        r = kr.cmd_fc_svooc(link, args("svooc-trigger", "--confirm", "--probe"), sleep=lambda s: None)
+        s = r["svooc"]
+        self.assertEqual(s["profile"], "probe")
+        self.assertEqual(s["ceiling"], {"word": 0x03F, "ma": 6300})
+        self.assertEqual(s["asks"][0], {"t_ms": 1771, "word": "0x00F", "ma": 1500, "polls_after": 40})
+        self.assertEqual(len(s["asks"]), 4)
+        text = kr.render("fc", r)
+        self.assertIn("ceiling 6.3 A", text)
+        self.assertIn("not a drawn current", text)
+        self.assertIn("0x00F", text)
+
+    def test_no_ceiling_is_said_plainly(self):
+        link = Link([summary(stage=6)], asks=asks_page(0, 0, []))
+        r = kr.cmd_fc_svooc(link, args("svooc-status"))
+        self.assertEqual(r["svooc"]["ceiling"], None)
+        self.assertEqual(r["svooc"]["asks"], [])
+        self.assertIn("no ceiling", kr.render("fc", r))
+
+    def test_older_firmware_without_page_two(self):
+        link = Link([summary(stage=6)])   # page 2 answers BadArg
+        r = kr.cmd_fc_svooc(link, args("svooc-status"))
+        self.assertNotIn("asks", r["svooc"])
+        self.assertNotIn("ceiling", r["svooc"])
+
+    def test_profile_names_follow_the_firmware(self):
+        text = (ROOT / "include/k2/fastcharge/svooc_script.hpp").read_text()
+        body = re.search(r"constexpr const char\* name\(Profile p\) \{(.*?)\n\}", text, re.S).group(1)
+        self.assertEqual(re.findall(r'return "([^"]*)";', body)[:-1], kr.SVOOC_PROFILES)
 
 
 class NamesMatchFirmware(unittest.TestCase):

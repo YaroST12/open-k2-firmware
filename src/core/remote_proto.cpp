@@ -479,6 +479,14 @@ size_t encode_svooc_timing(std::span<uint8_t> out, const SvoocSnapshot &v) {
     return w.size();
 }
 
+size_t encode_svooc_asks(std::span<uint8_t> out, const SvoocSnapshot &v) {
+    Writer w(out);
+    const size_t n = std::min<size_t>(v.n_asks, svooc::kAsksMax);
+    w.u8(static_cast<uint8_t>(v.params.profile)); w.u16(v.ceiling_word); w.u8(static_cast<uint8_t>(n));
+    for (size_t i = 0; i < n; i++) { w.u16(v.asks[i].t_ms); w.u16(v.asks[i].word); w.u8(v.asks[i].after); }
+    return w.size();
+}
+
 size_t encode_svooc_log(std::span<uint8_t> out, uint16_t kept, uint16_t from, std::span<const svooc::PairRow> rows) {
     Writer w(out);
     const size_t n = std::min(rows.size(), kSvoocRowsPerPage);

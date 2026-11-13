@@ -322,9 +322,164 @@ void test_escape_over_closed_loop() {
     CHECK_EQ(r.on_command(0x82, 1588, 8200).word, svooc::closed_loop_reply(8200, 9000));
 }
 
+// --- the phone profile (Params::profile = Phone): the post-accept words of a OnePlus 15 session, from its own passive
+// capture (reverse-engineered, 2026-11-12, 10 % battery): 94 silent, 84 > 020 x4 then 030, 86 > 06D at the ramp end, 82
+// polls of a slowly moving word (0x025 x11, 0x026 x10, 0x029 x12, 0x028 x11, ...), the first escape on the 12th 82 poll
+// (about 0.52 s after the ramp-end 86) and answered 86 > 00F, the second 34 polls later (about 1.5 s) answered 86 > 06D.
+
+// A responder past the handshake with the profile set; the ramp itself is run by the caller.
+svooc::Responder handshaken(svooc::Profile pr, std::uint16_t esc = 0x06D) {
+    svooc::Params p;
+    p.profile = pr;
+    p.i86_esc = esc;
+    svooc::Responder r;
+    r.configure(p);
+    for (const Pair& q : kUsbc) { r.on_command(q.cmd); if (r.accepted()) break; }
+    return r;
+}
+
+void test_phone_ramp_words() {
+    svooc::Responder r = handshaken(svooc::Profile::Phone);
+    CHECK(r.accepted());
+    CHECK_EQ(r.on_command(0x94, 1517).word, 0x000);
+    for (int i = 0; i < 4; ++i) CHECK_EQ(r.on_command(0x84, 1600 + 34 * i).word, 0x020);
+    CHECK_EQ(r.on_command(0x84, 1728).word, 0x030);
+    CHECK(!r.on_command(0x84, 1800).on_script);       // the ramp ended
+    const svooc::Answer a = r.on_command(0x86, 1771);
+    CHECK(a.on_script);
+    CHECK_EQ(a.word, 0x06D);                          // the phone asks its top, 10.9 A, at the ramp end
+    CHECK_EQ(r.asks().size(), 1u);
+    CHECK_EQ(r.asks()[0].word, 0x06D);
+    CHECK_EQ(r.asks()[0].t_ms, 1771);
+}
+
+// The 0x82 words of the phone's capture (10 % battery, runs of the same word, the escape polls not counted), the first
+// five runs: 0x025 x11, 0x026 x10, 0x029 x12, 0x028 x11 around the escapes.
+void test_phone_82_sequence_and_escapes() {
+    svooc::Responder r = handshaken(svooc::Profile::Phone);
+    r.on_command(0x94);
+    for (int i = 0; i < 4; ++i) r.on_command(0x84);
+    r.on_command(0x84);
+    r.on_command(0x86, 1771);
+    std::uint32_t t = 1814;
+    const auto poll = [&] { const svooc::Answer a = r.on_command(0x82, t); t += 43; return a.word; };
+    for (int i = 0; i < 11; ++i) CHECK_EQ(poll(), 0x025);
+    CHECK_EQ(poll(), svooc::kEscapeWord);             // the 12th poll, 0.52 s after the ramp-end 86
+    CHECK(r.escape() == svooc::Escape::Sent);
+    CHECK_EQ(r.on_command(0x86, t).word, 0x00F);      // the phone's first re-ask
+    CHECK(r.escape() == svooc::Escape::Got86);
+    t += 43;
+    for (int i = 0; i < 10; ++i) CHECK_EQ(poll(), 0x026);
+    for (int i = 0; i < 12; ++i) CHECK_EQ(poll(), 0x029);
+    // 11 + 1 + 10 + 12 = 34 polls so far: 11 more normal polls (0x028) and the second escape is the 34th after the first.
+    for (int i = 0; i < 11; ++i) CHECK_EQ(poll(), 0x028);
+    CHECK_EQ(poll(), svooc::kEscapeWord);
+    CHECK_EQ(r.on_command(0x86, t).word, 0x06D);      // the second ask goes back up to the top
+    CHECK_EQ(r.asks().size(), 3u);
+    CHECK_EQ(r.asks()[1].word, 0x00F);
+    CHECK_EQ(r.asks()[2].word, 0x06D);
+    CHECK(!r.abort());
+}
+
+// Past the table the word holds; the session never leaves the script however long it runs (the fixed profile was cut
+// at 72 pairs).
+void test_phone_session_runs_long() {
+    svooc::Responder r = handshaken(svooc::Profile::Phone);
+    r.on_command(0x94);
+    for (int i = 0; i < 5; ++i) r.on_command(0x84);
+    r.on_command(0x86, 1771);
+    std::uint32_t t = 1814;
+    std::uint16_t prev = 0;
+    int escapes = 0;
+    for (int i = 0; i < 700; ++i, t += 43) {
+        const svooc::Answer a = r.on_command(0x82, t);
+        CHECK(a.on_script);
+        if (a.word == svooc::kEscapeWord) {
+            ++escapes;
+            CHECK(r.on_command(0x86, t + 9).on_script);
+            continue;
+        }
+        CHECK(a.word <= svooc::kR82Max);
+        prev = a.word;
+    }
+    CHECK(!r.abort());
+    CHECK_EQ(escapes, 2);                             // the ladder is two asks long; nothing escapes after that
+    CHECK(prev >= 0x056);
+}
+
+// The Probe profile asks upward after the phone's own steps so the highest accepted level shows: 00F at the ramp end,
+// then 028, 03F, 06D, each on its own escape.
+void test_probe_ladder_and_ceiling() {
+    svooc::Responder r = handshaken(svooc::Profile::Probe);
+    r.on_command(0x94);
+    for (int i = 0; i < 5; ++i) r.on_command(0x84);
+    CHECK_EQ(r.on_command(0x86, 1771).word, 0x00F);
+    std::uint32_t t = 1814;
+    int escapes = 0;
+    for (int i = 0; i < 400 && escapes < 3; ++i, t += 43) {
+        if (r.on_command(0x82, t).word == svooc::kEscapeWord) {
+            ++escapes;
+            r.on_command(0x86, t + 9);
+        }
+    }
+    CHECK_EQ(escapes, 3);
+    CHECK_EQ(r.asks().size(), 4u);
+    const std::uint16_t want[] = {0x00F, 0x028, 0x03F, 0x06D};
+    for (std::size_t i = 0; i < 4; ++i) CHECK_EQ(r.asks()[i].word, want[i]);
+    // Four 82 polls after an ask on the script = the session went on with that ceiling: accepted. The last ask has none yet.
+    CHECK_EQ(r.ceiling_word(), 0x03F);
+    for (int i = 0; i < 4; ++i) { r.on_command(0x82, t); t += 43; }
+    CHECK_EQ(r.ceiling_word(), 0x06D);
+}
+
+void test_ceiling_decode() {
+    CHECK_EQ(svooc::ask_ma(0x00F), 1500);             // 100 mA per count, confirmed on measured current
+    CHECK_EQ(svooc::ask_ma(0x028), 4000);
+    CHECK_EQ(svooc::ask_ma(0x03F), 6300);
+    CHECK_EQ(svooc::ask_ma(0x06D), 10900);
+    CHECK_EQ(svooc::ask_ma(0), 0);
+    // The fixed profile keeps its old words and clamp, and records its asks too.
+    svooc::Params p;
+    p.i86_first = 0x06D;
+    CHECK_EQ(p.clamped().i86_first, 0x023);
+    svooc::Responder r = ramped();
+    r.on_command(0x86, 1771);
+    CHECK_EQ(r.asks().size(), 1u);
+    CHECK_EQ(r.asks()[0].word, 0x005);
+    CHECK_EQ(r.ceiling_word(), 0);                    // nothing followed it yet
+}
+
+// The phone profiles lift the 0x86 clamp to the phone's top (0x06D); anything above is held there.
+void test_profile_clamp() {
+    svooc::Params p;
+    p.profile = svooc::Profile::Phone;
+    p.i86_first = 0x1FF;
+    p.i86_esc = 0x050;
+    CHECK_EQ(p.clamped().i86_first, 0x06D);
+    CHECK_EQ(p.clamped().i86_esc, 0x050);
+    svooc::Responder r = handshaken(svooc::Profile::Phone, 0x03F);
+    r.on_command(0x94);
+    for (int i = 0; i < 5; ++i) r.on_command(0x84);
+    r.on_command(0x86, 1771);
+    std::uint32_t t = 1814;
+    int n = 0;
+    while (n < 2 && t < 20000) {
+        if (r.on_command(0x82, t).word == svooc::kEscapeWord) { r.on_command(0x86, t + 9); ++n; }
+        t += 43;
+    }
+    CHECK_EQ(r.asks().size(), 3u);
+    CHECK_EQ(r.asks()[2].word, 0x03F);                // the configurable ceiling ask
+}
+
 }  // namespace
 
 int main() {
+    test_phone_ramp_words();
+    test_phone_82_sequence_and_escapes();
+    test_phone_session_runs_long();
+    test_probe_ladder_and_ceiling();
+    test_ceiling_decode();
+    test_profile_clamp();
     test_i86_parameter_and_clamp();
     test_r82_parameter_and_clamp();
     test_closed_loop_rule();

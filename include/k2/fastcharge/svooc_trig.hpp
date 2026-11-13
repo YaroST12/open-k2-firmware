@@ -27,6 +27,7 @@
 // shows the longest gap it had, Snapshot::stall which stage it was and when (k2/core/stage_meter.hpp), and the
 // rel_* counters who let D- go after each reply.
 #pragma once
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -63,6 +64,11 @@ struct Snapshot {
     svooc::Params params{};                          // the effective (clamped) responder parameters
     svooc::Escape escape = svooc::Escape::Off;       // what came of the escape (Params::esc_at_s)
     std::uint32_t escape_t_ms = 0;                   // when its 0x07F was sent, ms since the wake
+    // Every 0x86 the responder answered after the handshake (what the K2 asked for, 100 mA per count) and the highest of
+    // them the adapter kept the session going under (ceiling_word, 0 = none: nothing is measured, nothing was drawn).
+    std::array<svooc::Responder::Ask, svooc::kAsksMax> asks{};
+    std::uint8_t n_asks = 0;
+    std::uint16_t ceiling_word = 0;
     std::uint16_t rec_edges = 0;                     // the run's Black Box edge recording (dpsniff::status()): edges kept
     std::uint8_t rec_end = 0;                        // and how it ended (edges::End; 0 = still recording)
     stage::Worst stall{};                            // the main loop's longest stage since the wake (frozen at the release)
