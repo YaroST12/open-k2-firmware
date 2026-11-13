@@ -1109,6 +1109,9 @@ Measured draw on the HID port at 5 V (inline meter, 2026-11-09):
   vendor messages now go last and every question logs `[IQ] ... Q <step> ...: <who answered>`); behind a laptop the
   source Hard Reset within 3 ms of our first question, so a reset within 150 ms of a question now ends the run at once
   ("Charger resets when asked", no loop). Re-run both setups and read the `Q` lines.
+  Laptop recording clone-canon3 (built and host-tested only): the laptop re-sent its capabilities 130 ms after
+  Get_Sink_Cap, which now ends the run ("Charger restarts when asked"); only an answer that matches its question
+  counts; the TX wait is timed on micros() (was ~11.8 ms blocked); `[IQ]` log words are no longer cut at 12 characters.
 - The HID-cable loop probe (Tools > Loop probe): built and host-tested only; the test plan is in `LOOP_PROBE.md`.
 - **PD Stress page** (Tools > PD Stress, k2/pdstress-ui, built and host-tested only; `docs/UI_DESIGN.md` 4.5). Setup
   1/2 (P1..P12 checklist, Cycles, Pace, saved results), Review 2/2 (KvTable + two-press START), Running (48 px VBUS,
