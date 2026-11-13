@@ -1113,7 +1113,10 @@ void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std::uint8_
         g_probe.on_message(sop, header, payload, now);
         g_reread.on_message(sop, header, payload, now);
     }
-    if (sop != pd::Sop::Sop && g_sop_prime_hook) g_sop_prime_hook(sop == pd::Sop::SopP ? 1 : 2, header, payload);
+    // Inline, the spoof answers only inside the run's window and only a frame the chip acknowledged (Auto-CRC on): the first
+    // query arrives unacknowledged (the window opens on it), and an answer to a message the charger counts as lost would confuse it.
+    if (sop != pd::Sop::Sop && g_sop_prime_hook && (!inline_now() || (g_crc_on && g_iq.sopp_window(systick::millis()))))
+        g_sop_prime_hook(sop == pd::Sop::SopP ? 1 : 2, header, payload);
     if (sop != pd::Sop::Sop) {  // passive SOP'/SOP'' traffic: report, never answer
         K2LOG("[PD] SOP%s %s 0x%04X, %d objects\n", sop == pd::Sop::SopP ? "'" : "''",
                     msg_type == pd::kMsgVendorDefined ? "VDM" : "msg", header, num_do);
@@ -2052,6 +2055,8 @@ void iq_report() {
     K2LOG("[IQ] answers: id %04X:%04X, %u sink PDOs, ext %u bytes, revision 0x%08X, %u SVIDs, %u modes\n", unsigned(s.id.vid),
           unsigned(s.id.pid), unsigned(s.num_sink_pdos), unsigned(s.sink_ext_len), unsigned(s.revision), unsigned(s.num_svids),
           unsigned(s.num_modes));
+    K2LOG("[IQ] late 0x%02X, %u EPR sink PDOs%s\n", unsigned(s.late_mask), unsigned(s.num_epr_pdos), s.epr_partial ? " (first chunk only)" : "");
+    if (s.spoof) K2LOG("[IQ] spoof: charger queried SOP' %u times, %u replies\n", unsigned(s.sopp_queries), unsigned(s.sopp_replies));
 }
 
 void active_tick() {
@@ -2083,12 +2088,16 @@ void active_tick() {
                         .getcap = g_getcap_armed || g_vconn.state() != pd::VconnState::Off,   // a VCONN swap needs our GoodCRC
                         .prep = g_prep.crc_wanted(),
                         .run_start = g_rd_start && !inline_now() && !g_legacy_only,   // legacy-only: no GoodCRC for the source's caps
-                        .spoof = g_sop_prime_hook != nullptr,   // the armed spoof needs our GoodCRC on SOP', no Rd
+                        // the armed spoof needs our GoodCRC on SOP', no Rd; inline only while the run's window is open
+                        .spoof = g_sop_prime_hook != nullptr && (!inline_now() || g_iq.sopp_window(now)),
                         .self_hold = pd::self_hold_wanted(g_pin_rd, downstream_now(), g_legacy_only)};   // pinned Rd: the brick feeds us, keep its PD alive
         // A Ready contract nobody holds counts only for kSinkIdleLingerMs after the last thing that used it.
         const bool engaged = in_flight || pd::rd_demand(d);
         const bool counts = g_contract_linger.update(now, engaged);
         d.sink_active = in_flight || (ready && counts);
+        // Inline the run's spoof window must close at once when it is over: the 300 ms linger would GoodCRC the charger's
+        // and the device's frames and the questions would collide with it.
+        if (inline_now() && g_sop_prime_hook != nullptr && !pd::crc_demand(d)) g_crc.reset();
         update_crc(pd::crc_demand(d), pd::rd_demand(d));
         // The TX choke point's input: the same demand that drives Auto-CRC (plus the explicit hard-reset tool).
         // transmit() refuses everything while this is false, so a passive K2 can never put a frame on CC.
@@ -3388,7 +3397,9 @@ bool send_sop_prime_frame(std::span<const std::uint8_t> tokens) {
         objs = tokens.subspan(7, tokens.size() - 10);
     }
     if (!fifo_write_tx(header, objs, tokens)) return false;
-    return wr(kControl0, kTxStart);
+    if (!wr(kControl0, kTxStart)) return false;
+    if (inline_now()) g_iq.on_sopp_reply(systick::millis());   // the run's window shortens: the charger's next frame is its ACK
+    return true;
 }
 
 }  // namespace k2::fusb302

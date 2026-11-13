@@ -4292,6 +4292,7 @@ void test_inline_vdm_probe_refused() {
 void test_sniffed_caps_while_inline_are_stored_and_a_capless_request_is_never_guessed();
 void test_request_period_is_tracked_and_reset_with_the_attach();
 void test_inline_interrogation_asks_once_per_question_without_auto_crc();
+void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();
 // ---- Settings > Wake sleeping port (pattern slow-rp-wake, idle path): opt-in, default off ----
 // A sleeping source's port reads ~3.3 V open on one line (CC2 here), nothing on the other, VBUS dark. With the setting off the
 // idle K2 stays exactly what the invariants say (I1/H2: no Rd at idle, a waiting charger stays passive); only with it on does it
@@ -5414,6 +5415,7 @@ int main() {
     test_a_chipless_cable_and_an_empty_port_get_none_and_a_held_key_is_unclear();
     test_the_verdict_is_not_probed_when_it_cannot_or_need_not_be_taken();    // last: ends with an attached source
     test_inline_interrogation_asks_once_per_question_without_auto_crc();     // starts from attach_inline, ends with a detach
+    test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window();   // the same, with the spoof armed
     return test_report("test_fusb302_scan");
 }
 
@@ -5537,5 +5539,56 @@ void test_inline_interrogation_asks_once_per_question_without_auto_crc() {
     for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     CHECK_EQ(fusb302::interrogate_running(), false);
     CHECK_EQ(usb_has("[IQ] end "), true);
+    end_inline_case();
+}
+
+// With a spoof run the first Hard Reset is never skipped, the charger's SOP' Discover Identity (seen with Auto-CRC off, no answer
+// yet) opens a short window in which Auto-CRC goes on and the hook answers the retry, and the window closes at once after the answer
+// (no 300 ms linger). Outside the window the hook never hears SOP' inline. Red first: inline the hook was never called at all and the
+// armed spoof held Auto-CRC on for the whole run.
+static int g_spoof_hook_n = 0;
+void spoof_run_hook(std::uint8_t sop, std::uint16_t, std::span<const std::uint8_t>) {
+    if (sop != 1) return;
+    g_spoof_hook_n++;
+    const std::array<std::uint8_t, 10> accept = {0x12, 0x12, 0x1B, 0x1B, 0x82, 0x43, 0x01, 0xFF, 0x14, 0xFE};
+    fusb302::send_sop_prime_frame(accept);
+}
+void test_inline_interrogation_spoof_answers_only_inside_the_charger_query_window() {
+    attach_inline();
+    pd::IqFacts f;
+    f.confirmed = true;
+    f.spoof = true;
+    push_frame(0xE0, hdr(1, 2, true, 0), {0x0A01912Cu, 0x0004B12Cu});
+    push_frame(0xE0, hdr(2, 1, false, 0), {0x2204B12Cu});
+    push_frame(0xE0, hdr(3, 0, true, 1), {});
+    push_frame(0xE0, hdr(6, 0, true, 2), {});
+    service_ms(2);
+    g_log.clear(); g_usb.clear();
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::None));
+    fusb302::set_sop_prime_hook(&spoof_run_hook);   // the run's own arm (twin_hw) comes after a successful start
+    g_spoof_hook_n = 0;
+    CHECK_EQ(int(fusb302::interrogate_start(f)), int(pd::IqRefusal::Running));
+    for (int i = 0; i < 200 && !hard_reset_written(); i++) service_ms(1);
+    CHECK_EQ(hard_reset_written(), true);           // a fresh contract was sniffed, the spoof run resets anyway
+    CHECK_EQ(auto_crc(), false);                    // no window yet: the armed hook holds nothing on
+    // the charger asks the cable, a Discover Identity request on SOP' (VDM header 0xFF008001): not acknowledged, not answered
+    push_frame(0xC0, 0x118F, {0xFF008001u});
+    service_ms(1);
+    CHECK_EQ(int(fusb302::interrogate_status().sopp_queries), 1);
+    CHECK_EQ(g_spoof_hook_n, 0);
+    for (int i = 0; i < 5; i++) { g_ms += 1; fusb302::poll(); fusb302::service(); }
+    CHECK_EQ(auto_crc(), true);                     // the window is open: the chip acknowledges the retry
+    push_frame(0xC0, 0x118F, {0xFF008001u});        // the retry
+    service_ms(2);
+    CHECK_EQ(g_spoof_hook_n, 1);
+    CHECK_EQ(int(fusb302::interrogate_status().sopp_replies), 1);
+    for (int i = 0; i < 40; i++) { g_ms += 5; fusb302::poll(); fusb302::service(); }   // 200 ms: the 60 ms window after the answer is over
+    CHECK_EQ(auto_crc(), false);                    // closed at once, not after the 300 ms linger
+    push_frame(0xC0, 0x118F, {0xFF008001u});        // a query outside any window: counted, never answered
+    service_ms(2);
+    CHECK_EQ(g_spoof_hook_n, 1);
+    fusb302::interrogate_abort();
+    fusb302::set_sop_prime_hook(nullptr);
+    for (int i = 0; i < 400 && fusb302::interrogate_running(); i++) { g_ms += 20; fusb302::poll(); fusb302::service(); }
     end_inline_case();
 }
