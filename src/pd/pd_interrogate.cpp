@@ -63,6 +63,7 @@ const char* iq_why_name(IqWhy w) {
         case IqWhy::Resets: return "too many resets";
         case IqWhy::Timeout: return "time limit";
         case IqWhy::SourceResets: return "charger resets when asked";
+        case IqWhy::SourceRestarts: return "charger restarts when asked";
     }
     return "?";
 }
@@ -76,6 +77,7 @@ const char* iq_result_name(IqResult r) {
         case IqResult::GoodCrcOnly: return "device GoodCRC only";
         case IqResult::Nothing: return "nothing";
         case IqResult::SourceReset: return "charger Hard Reset";
+        case IqResult::SourceRestart: return "charger restarted";
     }
     return "?";
 }
@@ -169,6 +171,8 @@ IqRefusal Interrogate::start(IqFacts f, std::uint32_t now) {
     st_.started_at = now;
     now_ = now;
     attempts_ = mode_idx_ = order_idx_ = 0;
+    foreign_mask_ = 0;
+    soft_since_tx_ = false;
     st_.step = kIqAskOrder[0];
     q_open_ = false;
     awaiting_ = acked_ = tx_pending_ = dirty_ = false;
@@ -308,8 +312,22 @@ void Interrogate::attempt_failed() {
         modes_next(false);
         return;
     }
-    st_.silent_mask |= iq_bit(st_.step);
+    if (!(st_.ok_mask & iq_bit(st_.step))) st_.silent_mask |= iq_bit(st_.step);   // answered meanwhile (to the charger): not silent
     next_step();
+}
+
+// A message of the device that matches the question in flight: the only kind that counts as its answer.
+void Interrogate::got_answer() {
+    if (awaiting_ && q_open_ && cur_.dev_msgs < 255) cur_.dev_msgs++;
+}
+
+// A device's structured VDM response to a request the CHARGER made a moment ago answers the charger, not us.
+bool Interrogate::take_foreign(std::uint8_t cmd) {
+    if (cmd < kVdmIdentity || cmd > kVdmModes) return false;
+    const unsigned i = cmd - kVdmIdentity;
+    const bool hit = (foreign_mask_ & (1u << i)) != 0 && std::uint32_t(now_ - foreign_at_[i]) <= kIqRespMs;
+    foreign_mask_ = std::uint8_t(foreign_mask_ & ~(1u << i));
+    return hit;
 }
 
 bool Interrogate::asking(IqStep s, std::uint16_t svid) const {
@@ -429,6 +447,7 @@ bool Interrogate::take_tx(TxMsg& out) {
     watch_.on_own_tx(out.header);
     sent_id_ = id_of(out.header);
     tx_at_ = now_;
+    soft_since_tx_ = false;
     cur_ = IqQuestion{};
     cur_.step = st_.step;
     cur_.id = sent_id_;
@@ -451,6 +470,7 @@ void Interrogate::on_tx_result(bool acked, std::uint32_t now) {
 void Interrogate::on_hard_reset(std::uint32_t now) {
     now_ = now;
     watch_.reset();
+    foreign_mask_ = 0;
     if (!running()) return;
     switch (st_.phase) {
         case IqPhase::Reset1:
@@ -494,12 +514,45 @@ void Interrogate::on_message(Sop sop, std::uint16_t header, std::span<const std:
     watch_.on_message(sop, header, payload, now);
     if (!running() || sop != Sop::Sop) return;
     const bool goodcrc = ndo_of(header) == 0 && !ext_of(header) && type_of(header) == kCtlGoodCrc;
-    if (awaiting_ && q_open_ && !goodcrc) {   // who spoke inside the answer window
-        std::uint8_t& n = from_source(header) ? cur_.src_msgs : cur_.dev_msgs;
-        if (n < 255) n++;
+    if (from_source(header)) {
+        if (goodcrc) return;
+        if (awaiting_ && q_open_ && cur_.src_msgs < 255) cur_.src_msgs++;   // the charger spoke inside the answer window
+        on_source(header, payload);
+        return;
     }
-    if (from_source(header)) return;   // the charger's own messages: the watch is enough
-    on_device(header, payload);
+    on_device(header, payload);   // dev_msgs counts only what matches the question (got_answer), not whatever the device said
+}
+
+// A message from the charger (the source power role). The watch has it already; this is what it means for the run.
+void Interrogate::on_source(std::uint16_t h, std::span<const std::uint8_t> payload) {
+    const std::uint8_t t = type_of(h);
+    const unsigned n = ndo_of(h);
+    if (ext_of(h)) return;
+    if (n == 0) {
+        if (t == kCtlSoftReset && dirty_) soft_since_tx_ = true;   // the charger's way of recovering: its new contract is not a restart
+        return;
+    }
+    if (t == kDataSourceCap) {
+        // A fresh negotiation right after our question (without a Soft_Reset first) is the question's doing: the laptop on the
+        // bench re-offered its capabilities ~130 ms after every question and its Request/Accept/PS_RDY followed. Anything the
+        // device says from here on belongs to that negotiation or to the charger's own questions, not to ours. Stop at once:
+        // the renegotiation is the resync, asking again only makes the source restart again.
+        if (st_.phase == IqPhase::Ask && dirty_ && !soft_since_tx_ && std::uint32_t(now_ - tx_at_) <= kIqRenegBlameMs) {
+            close(IqResult::SourceRestart);
+            dirty_ = false;
+            awaiting_ = tx_pending_ = false;
+            end(IqPhase::Aborted, IqWhy::SourceRestarts);
+        }
+        return;
+    }
+    if (t == kMsgVendorDefined && payload.size() >= 4) {   // the charger's own structured request: the device's reply to it is
+        const std::uint32_t vh = le32(payload.data());
+        const std::uint8_t cmd = std::uint8_t(vh & 0x1F);
+        if (((vh >> 15) & 1) && ((vh >> 6) & 3) == 0 && cmd >= kVdmIdentity && cmd <= kVdmModes) {
+            foreign_mask_ = std::uint8_t(foreign_mask_ | (1u << (cmd - kVdmIdentity)));
+            foreign_at_[cmd - kVdmIdentity] = now_;
+        }
+    }
 }
 
 // A message from the device (the sink power role): an answer to us, or to the charger's own question. Either way it is kept.
@@ -517,8 +570,8 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
             return;
         }
         if (st_.phase != IqPhase::Ask || !awaiting_) return;
-        if (t == kCtlNotSupported || t == kCtlReject) refused();
-        else if (t == kCtlWait) attempt_failed();
+        if (t == kCtlNotSupported || t == kCtlReject) { got_answer(); refused(); }
+        else if (t == kCtlWait) { got_answer(); attempt_failed(); }
         return;
     }
     if (ext) {
@@ -531,20 +584,20 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
         std::copy_n(payload.begin() + 2, len, st_.sink_ext.begin());
         st_.sink_ext_len = std::uint8_t(len);
         st_.ok_mask |= iq_bit(IqStep::SinkCapExt);
-        if (asking(IqStep::SinkCapExt)) next_step();
+        if (asking(IqStep::SinkCapExt)) { got_answer(); next_step(); }
         return;
     }
     if (t == kDataSinkCap) {
         st_.num_sink_pdos = std::uint8_t(std::min<std::size_t>(std::min<unsigned>(n, 7), payload.size() / 4));
         for (unsigned i = 0; i < st_.num_sink_pdos; i++) st_.sink_pdos[i] = le32(&payload[4 * i]);
         st_.ok_mask |= iq_bit(IqStep::SinkCap);
-        if (asking(IqStep::SinkCap)) next_step();
+        if (asking(IqStep::SinkCap)) { got_answer(); next_step(); }
         return;
     }
     if (t == kDataRevision && payload.size() >= 4) {
         st_.revision = le32(payload.data());
         st_.ok_mask |= iq_bit(IqStep::Revision);
-        if (asking(IqStep::Revision)) next_step();
+        if (asking(IqStep::Revision)) { got_answer(); next_step(); }
         return;
     }
     if (t != kMsgVendorDefined || payload.size() < 4) return;
@@ -558,6 +611,9 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
     else if (svid == kSvidPd && cmd == kVdmSvids) s = IqStep::Svids;
     else if (cmd == kVdmModes) s = IqStep::Modes;
     else return;
+    // Command and SVID match ours, and the charger did not ask the same a moment ago: only then it answers us.
+    const bool foreign = take_foreign(cmd);
+    const bool ours = !foreign && asking(s, svid);
     const std::size_t nw = std::min<std::size_t>(payload.size() / 4, 7);
     if (ctype == 1) {   // ACK: keep it whoever asked
         if (s == IqStep::Identity && nw >= 2) {
@@ -576,7 +632,7 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
             for (std::size_t i = 0; i < id.num_vdos; i++) id.vdos[i] = le32(&payload[4 * i]);
             st_.id = id;
             st_.ok_mask |= iq_bit(IqStep::Identity);
-            if (asking(IqStep::Identity)) next_step();
+            if (ours) { got_answer(); next_step(); }
         } else if (s == IqStep::Svids) {
             st_.num_svids = 0;
             for (std::size_t i = 1; i < nw; i++) {
@@ -589,7 +645,7 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
                 if (end_of_list) break;
             }
             st_.ok_mask |= iq_bit(IqStep::Svids);
-            if (asking(IqStep::Svids)) next_step();
+            if (ours) { got_answer(); next_step(); }
         } else if (s == IqStep::Modes) {
             bool have = false;
             for (std::size_t i = 0; i < st_.num_modes; i++) have = have || st_.mode_svid[i] == svid;
@@ -597,12 +653,12 @@ void Interrogate::on_device(std::uint16_t h, std::span<const std::uint8_t> paylo
                 st_.mode_svid[st_.num_modes] = svid;
                 st_.mode_vdo[st_.num_modes++] = nw >= 2 ? le32(&payload[4]) : 0;
             }
-            if (asking(IqStep::Modes, svid)) modes_next(true);
+            if (ours) { got_answer(); modes_next(true); }
         }
         return;
     }
-    const bool ours = asking(s, svid);
     if (!ours) return;
+    got_answer();
     if (ctype == 2) refused();   // NAK
     else attempt_failed();       // BUSY
 }

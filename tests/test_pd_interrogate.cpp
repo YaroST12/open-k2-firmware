@@ -539,6 +539,102 @@ int main() {
         CHECK_COND(s.ended_at - s.started_at <= kIqTotalMs + kIqRenegMs + 10);
     }
 
+    // ---- a source that renegotiates after our question (laptop port, bench 2026-11-13: nobody GoodCRCs the question, ~130 ms
+    //      later Source_Capabilities id 0 and a fresh Request/Accept/PS_RDY; then the laptop's own Discover Identity, which the
+    //      Canon NAKs): the run ends at once, and the NAK is not blamed on our question ----
+    {
+        std::vector<std::uint8_t> caps, di, nak;
+        for (std::uint32_t w : kCaps) put32(caps, w);
+        put32(di, 0xFF00A001u);
+        put32(nak, 0xFF00A081u);
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();                                           // Get_Sink_Cap, id 3: no GoodCRC, no answer
+        r.now += 130;
+        r.rx(hdr(1, 6, 2, kSrc, 0), caps);
+        const IqStatus& s = r.iq.status();
+        CHECK_EQ(int(s.phase), int(IqPhase::Aborted));
+        CHECK_EQ(int(s.why), int(IqWhy::SourceRestarts));
+        CHECK_EQ(int(s.q.result), int(IqResult::SourceRestart));
+        CHECK_EQ(int(s.q.step), int(IqStep::SinkCap));
+        CHECK_EQ(int(s.q.dev_msgs), 0);
+        CHECK_EQ(int(s.resets_sent), 0);
+        CHECK_EQ(int(s.resets_seen), 0);                    // a restart is not a Hard Reset
+        CHECK_EQ(bool(r.iq.running()), false);
+        r.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 1), di);    // the laptop's own question ...
+        r.iq.on_message(Sop::Sop, hdr(kMsgVendorDefined, 1, 2, kSnk, 0), nak, r.now);   // ... and the Canon's NAK of it
+        CHECK_EQ(int(r.iq.status().refused_mask), 0);
+        CHECK_EQ(int(r.iq.status().why), int(IqWhy::SourceRestarts));
+        const std::size_t n = r.sent.size();
+        CHECK_EQ(bool(r.next(3000)), false);                // no second try, no final reset
+        CHECK_EQ(r.sent.size(), n);
+
+        // Later than the blame window it is the source's own business: the run goes on once the contract is back.
+        Rig l;
+        l.contract();
+        l.start();
+        l.next();
+        l.now += kIqRenegBlameMs + 100;
+        l.rx(hdr(1, 6, 2, kSrc, 0), caps);
+        CHECK_EQ(bool(l.iq.running()), true);
+        CHECK_COND(l.iq.status().why != IqWhy::SourceRestarts);
+    }
+
+    // ---- an answer counts only when it matches the question: the device's NAK of the charger's own Discover Identity is not a
+    //      refusal of our Get_Sink_Cap, and a Revision nobody asked for is kept but is no answer ----
+    {
+        std::vector<std::uint8_t> di, nak;
+        put32(di, 0xFF00A001u);
+        put32(nak, 0xFF00A081u);
+        Rig r;
+        r.contract();
+        r.start();
+        r.next();                                           // Get_Sink_Cap, id 3
+        r.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 1), di);
+        r.iq.on_message(Sop::Sop, hdr(kMsgVendorDefined, 1, 2, kSnk, 0), nak, r.now);
+        r.next();                                           // the window ends: asked again
+        CHECK_EQ(r.last_type(), unsigned(kCtlGetSinkCap));
+        CHECK_EQ(int(r.iq.status().closed), 1);
+        CHECK_EQ(int(r.iq.status().q.step), int(IqStep::SinkCap));
+        CHECK_EQ(int(r.iq.status().q.dev_msgs), 0);
+        CHECK_EQ(int(r.iq.status().q.result), int(IqResult::ChargerOnly));   // only the charger's question was heard
+        CHECK_EQ(int(r.iq.status().refused_mask), 0);
+
+        Rig s;
+        s.contract();
+        s.start();
+        s.next();                                           // Get_Sink_Cap, id 3
+        s.dev(kDataRevision, {0x30000000u});                // not what was asked
+        CHECK_EQ(int(s.iq.status().ok_mask), int(iq_bit(IqStep::Revision)));   // kept
+        CHECK_EQ(int(s.iq.status().closed), 0);             // the question is still open
+        s.next();
+        CHECK_EQ(int(s.iq.status().q.dev_msgs), 0);
+        CHECK_EQ(int(s.iq.status().q.result), int(IqResult::Nothing));
+
+        // The device's NAK of the charger's request that arrives while we ask the same thing: the charger's, not ours; the
+        // ACK after it answers us.
+        Rig d;
+        d.contract();
+        d.start();
+        d.next();
+        d.dev(kDataSinkCap, {kSinkPdo1});
+        d.next();
+        d.dev_ctl(kCtlNotSupported);
+        d.next();
+        d.dev_ctl(kCtlNotSupported);
+        CHECK_EQ(bool(d.next()), true);                     // Discover Identity
+        CHECK_EQ(d.last_type(), unsigned(kMsgVendorDefined));
+        d.rx(hdr(kMsgVendorDefined, 1, 2, kSrc, 4), di);    // the charger asks the same
+        d.iq.on_message(Sop::Sop, hdr(kMsgVendorDefined, 1, 2, kSnk, 0), nak, d.now);   // the device NAKs the charger
+        CHECK_EQ(int(d.iq.status().refused_mask & iq_bit(IqStep::Identity)), 0);
+        CHECK_EQ(int(d.iq.status().ok_mask & iq_bit(IqStep::Identity)), 0);
+        d.identity_ack(0x04A9, 0x1234);                     // the answer to ours
+        CHECK_EQ(int(d.iq.status().ok_mask & iq_bit(IqStep::Identity)), int(iq_bit(IqStep::Identity)));
+        CHECK_EQ(int(d.iq.status().q.result), int(IqResult::Answered));
+        CHECK_EQ(int(d.iq.status().q.step), int(IqStep::Identity));
+    }
+
     // ---- refusals, in order ----
     {
         IqFacts f;

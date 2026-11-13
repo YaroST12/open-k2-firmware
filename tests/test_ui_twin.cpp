@@ -575,6 +575,17 @@ void test_learn_inline_results() {
     g_stub.twin_iq_status.why = pd::IqWhy::SourceResets;
     step(ui, 100);
     CHECK_STR(footer_of(ui).c_str(), "Charger resets when asked");
+    // A charger that renegotiates when asked (a laptop port): the same, in its own words.
+    step(ui, 3000);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Sniff1;
+    g_stub.twin_iq_status.why = pd::IqWhy::None;
+    press(ui, Button::Ok);
+    press(ui, Button::Ok);
+    CHECK_EQ(g_stub.twin_iq_starts, 4);
+    g_stub.twin_iq_status.phase = pd::IqPhase::Aborted;
+    g_stub.twin_iq_status.why = pd::IqWhy::SourceRestarts;
+    step(ui, 100);
+    CHECK_STR(footer_of(ui).c_str(), "Charger restarts when asked");
     unplug_inline(ui);
 }
 

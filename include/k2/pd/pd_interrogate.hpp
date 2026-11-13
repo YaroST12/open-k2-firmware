@@ -12,14 +12,18 @@
 //            asked. The VDMs go last because a DFP-capable source (a laptop port) may take our DFP-role VDM for a role clash
 //            and Hard Reset; whatever the plain questions got is kept by then. A Hard Reset within kIqBlameMs of a question
 //            ends the run at once (IqWhy::SourceResets): no final reset, no resync, no second try, so a source that resets
-//            when asked is never put into a reset loop.
+//            when asked is never put into a reset loop. So does a fresh negotiation within kIqRenegBlameMs of a question
+//            (the source re-sends Source_Capabilities without a Soft_Reset: IqWhy::SourceRestarts), the laptop-port case.
 //   Reset2   a second Hard Reset: the charger's MessageID bookkeeping and the answers it overheard are left behind
 //   Sniff2   the renegotiated contract, compared with the first one (IqMatch)
 //
 // Messages carry the source's power and data role bits and the contract's revision (the lower of the device's Request and the
 // source's last header). MessageID rule: the next ID after the newest non-GoodCRC SOP message with the source power role on the
 // wire (the source's own or ours), so the device's duplicate filter never drops a question as a retransmission. Every attempt
-// takes a fresh ID. A question is answered only by a message with the sink power role (the charger may answer too: ignored).
+// takes a fresh ID. A question is answered only by a message with the sink power role (the charger may answer too: ignored)
+// that matches it: Sink_Capabilities / Sink_Capabilities_Extended / Revision for the control questions, a structured VDM
+// response with the same command and SVID for the VDMs (unless the charger asked the same command just before: that reply is
+// the charger's), Not_Supported / Reject / Wait for any. Everything else the device says is kept but is no answer.
 // A step is retried once (kIqAttempts) when nothing came back in kIqRespMs; NAK, Not_Supported and Reject end it. The
 // transmit result does not count: the device and the charger both GoodCRC our message, the two GoodCRCs collide, and the
 // device answers anyway. A Hard Reset from the charger or the device mid-run, not right after a question, re-sniffs the
@@ -50,6 +54,7 @@ inline constexpr std::uint8_t kIqAttempts = 2;
 inline constexpr std::uint32_t kIqTotalMs = 20000;    // from start: no further question after this; the final reset still goes
 inline constexpr std::uint8_t kIqMaxResets = 2;       // Hard Resets from the charger or the device tolerated mid-run
 inline constexpr std::uint32_t kIqBlameMs = 150;      // a Hard Reset this soon after our last question is the question's doing
+inline constexpr std::uint32_t kIqRenegBlameMs = 400; // ... and so is a renegotiation (laptop port: Source_Capabilities ~130 ms after it)
 
 enum class IqPhase : std::uint8_t { Idle, Reset1, Sniff1, Settle, Ask, Reset2, Sniff2, Done, Aborted };
 // The values are bit positions on the wire (iq_bit, the twin protocol): never reorder, append only. The ask order is
@@ -58,7 +63,7 @@ enum class IqStep : std::uint8_t { Identity, SinkCap, SinkCapExt, Revision, Svid
 inline constexpr std::array<IqStep, 6> kIqAskOrder = {IqStep::SinkCap, IqStep::SinkCapExt, IqStep::Revision,
                                                       IqStep::Identity, IqStep::Svids,       IqStep::Modes};
 // Why a run ended early (with Aborted, or with Done after the final reset of a stopped run). Append only (wire values).
-enum class IqWhy : std::uint8_t { None, Stopped, Detached, NotInline, NoContract, Resets, Timeout, SourceResets };
+enum class IqWhy : std::uint8_t { None, Stopped, Detached, NotInline, NoContract, Resets, Timeout, SourceResets, SourceRestarts };
 // What came back after one question (one attempt).
 enum class IqResult : std::uint8_t {
     Pending,      // in flight
@@ -67,7 +72,8 @@ enum class IqResult : std::uint8_t {
     ChargerOnly,  // nothing from the device, but the charger (source power role) spoke inside the window
     GoodCrcOnly,  // only the device's GoodCRC
     Nothing,      // not even a GoodCRC
-    SourceReset   // the source Hard Reset right after it
+    SourceReset,  // the source Hard Reset right after it
+    SourceRestart // the source started a fresh negotiation (Source_Capabilities) right after it
 };
 enum class IqMatch : std::uint8_t { Unknown, Same, Differs, NoSecond };
 enum class IqRefusal : std::uint8_t { None, Running, NoCc, NotInline, Busy, OwnContract, SelfPowered, NeedConfirm };
@@ -225,6 +231,9 @@ private:
     void close(IqResult r);                  // the question in flight is over: it becomes IqStatus::q
     void build();
     void on_device(std::uint16_t header, std::span<const std::uint8_t> payload);
+    void on_source(std::uint16_t header, std::span<const std::uint8_t> payload);
+    void got_answer();                       // the device's message matches the question in flight
+    bool take_foreign(std::uint8_t cmd);     // the charger asked this VDM command a moment ago: the reply is its own
     bool asking(IqStep s, std::uint16_t svid = 0) const;   // the question in flight is this one
     std::uint8_t modes_wanted() const;
 
@@ -241,6 +250,9 @@ private:
     std::uint16_t cur_svid_ = 0;
     bool awaiting_ = false, acked_ = false, tx_pending_ = false;
     bool dirty_ = false;                     // a question went out since the last reset: the final reset is owed
+    bool soft_since_tx_ = false;             // the charger sent a Soft_Reset since our last question
+    std::uint8_t foreign_mask_ = 0;          // bit per VDM command (Identity, SVIDs, Modes) the charger asked and the device owes
+    std::array<std::uint32_t, 3> foreign_at_{};
     IqWhy why_pending_ = IqWhy::None;        // a stop that waits for the final reset
     TxMsg tx_{};
 };

@@ -111,9 +111,9 @@ private:
     Arm arm_ = Arm::None;
     uint32_t armed_until_ = 0;
     StrBuf<16> offer_;                                       // the charger's top offer ("PD 20V3A"), empty without a list
-    StrBuf<27> foot_text_;
+    StrBuf<28> foot_text_;   // kFooterCells (27) characters and the NUL
     FooterTone foot_tone_ = FooterTone::Info;
-    StrBuf<27> note_;                                        // refusal / result line, shown for a moment
+    StrBuf<28> note_;                                        // refusal / result line (a footer text: up to 27 characters)
     uint16_t note_color_ = 0;
     uint32_t note_until_ = 0;
     StrBuf<40> row_note_;                                    // the row row_fn is building (RowSpec views point into it)

@@ -45,10 +45,12 @@ constexpr const char *kFooters[] = {
     "K2 runs on this VBUS", "K2 holds the contract", "No power: add a charger",
     // The source Hard Resets on the first question: asking through this charger is not possible (docs/DEVICE_TWIN.md 9.1).
     "Charger resets when asked",
+    // The same through a source that re-negotiates after the first question (a laptop port).
+    "Charger restarts when asked",
 };
 constexpr int kFootWakeArm = 24, kFootWaking = 25, kFootSilent = 26, kFootNoOffer = 27, kFootWakeStop = 28;
 constexpr int kFootIqArm = 29, kFootIqReset = 30, kFootIqAsk = 31, kFootIqStop = 32, kFootIqDiffers = 33, kFootIqSelf = 34,
-              kFootIqOwn = 35, kFootNoPower = 36, kFootIqResets = 37;
+              kFootIqOwn = 35, kFootNoPower = 36, kFootIqResets = 37, kFootIqRestarts = 38;
 constexpr const char *kNotes[] = {
     "no charger to predict from", "reads a device alone on the K2", "live proof running", "removes it from the K2",
     "no contract, charger", "stopped", "charger sent no caps", "unsafe VBUS, stopped", "gets 100 of 240W, charger",
@@ -558,14 +560,15 @@ void TwinPage::learn_inline() {
 void TwinPage::learn_inline_end() {
     iq_wait_ = false;
     const twin_hw::InlineLearn &l = twin_hw::inline_learn();
-    // A source that Hard Resets on the first question is the cause to name, not a device that stayed silent.
-    const bool resets = twin_hw::inline_status().why == pd::IqWhy::SourceResets;
+    // A source that Hard Resets or renegotiates on the first question is the cause to name, not a device that stayed silent.
+    const pd::IqWhy why = twin_hw::inline_status().why;
+    const int silent = why == pd::IqWhy::SourceResets ? kFootIqResets : why == pd::IqWhy::SourceRestarts ? kFootIqRestarts : 15;
     if (!l.done) {
-        say(kFooters[resets ? kFootIqResets : 15], kCaution);
+        say(kFooters[silent], kCaution);
         return;
     }
     if (l.result.how == twin_hw::Learn::NoContract) {   // nothing answered, nothing sniffed
-        say(kFooters[resets ? kFootIqResets : 15], kCaution);
+        say(kFooters[silent], kCaution);
         return;
     }
     learned(l.result, twin_hw::inline_status().match == pd::IqMatch::Differs);

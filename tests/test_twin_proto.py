@@ -405,6 +405,11 @@ class Command(unittest.TestCase):
         self.assertIn("learned nothing: the device answered nothing to learn from", text)
         r, _ = run_cli(["pd", "interrogate", "--inline", "--confirm"], [bytes([0, 1, 0]), iq_status(phase=7, why=1)] + answers)
         self.assertIn("learned nothing (stopped)", kr.render("pd", r))
+        # A source that Hard Resets (7) or renegotiates (8) when asked is named, not shown as a number.
+        for why, words in ((7, "charger resets when asked"), (8, "charger restarts when asked")):
+            r, _ = run_cli(["pd", "interrogate", "--inline", "--confirm"],
+                           [bytes([0, 1, 0]), iq_status(done=1, phase=8, why=why, how=3)] + answers)
+            self.assertIn("aborted (" + words + ")", kr.render("pd", r))
 
     def test_export_writes_decoded_records_with_raw_hex(self):
         import tempfile
