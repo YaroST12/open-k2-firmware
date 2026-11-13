@@ -45,7 +45,7 @@ volatile bool g_mon_paused;   // data-traffic back-off: the ISR does not feed th
 volatile unsigned g_mon_ev;
 bool g_mon_disabled;
 
-vooc::Decoder& dec() {
+K2_HOT vooc::Decoder& dec() {   // called from the edge ISR
     if (!g_dec_inited) {
         new (g_dec_raw) vooc::Decoder();
         g_dec_inited = true;

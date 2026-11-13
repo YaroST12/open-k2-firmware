@@ -84,6 +84,14 @@ SECTIONS
     *(.text.tu_edpt_stream_write_xfer .text.tu_edpt_stream_write_xfer.*)
     *(.text.tu_edpt_stream_read_xfer .text.tu_edpt_stream_read_xfer.*)
     *(.text.tu_edpt_stream_write_available .text.tu_edpt_stream_write_available.*)
+    /* Header-inline hot helpers (include/k2/ui/blend.hpp, readout_fmt.hpp, smoothing.hpp): under LTO the
+     * K2_HOT section attribute is dropped from an inline (COMDAT) function that is emitted out of line,
+     * so these are pinned by their mangled -ffunction-sections names instead. */
+    *(.text._ZN2k28blend565E* .text._ZN2k214make_blend_lutE*)
+    *(.text._ZN2k27readout*)
+    *(.text._ZN2k29smoothing*)
+    /* pdtrace ring / collapse / capture templates (include/k2/pd/pdtrace.hpp): same COMDAT case, on the PD path */
+    *(.text._ZNK2k27pdtrace4Ring* .text._ZN2k27pdtrace4Ring* .text._ZN2k27pdtrace8Collapse* .text._ZN2k27pdtrace8Captures*)
     *libc.a:libc_a-memcpy.o(.text .text.*)
     *libc.a:libc_a-memmove.o(.text .text.*)
     *libc.a:libc_a-memset.o(.text .text.*)
