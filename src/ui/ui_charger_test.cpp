@@ -696,10 +696,12 @@ void ChargerTestSession::abandon_run() {
     resume_pending_ = false; journal_active_ = false; auto_resume_ = false;
     arm_ = 0;
     if (fusb302::rd_inherited()) fusb302::self_power_release();
+    freeze_facts();
     set_stage(Stage::Results);
 }
 void ChargerTestSession::capture_identity() {
     card_id_ = {}; card_no_ = 0; delta_n_ = 0; mfr_[0] = 0; card_name_[0] = 0;
+    facts_ = {};   // a new run: its facts freeze when it ends
     const auto& caps = fusb302::caps();
     if (!caps.valid || caps.num_pdos == 0) return;   // no PD source caps: nothing to recognise the charger by
     std::array<uint32_t, pd::kMaxPdos> raw{};
@@ -964,6 +966,7 @@ void ChargerTestSession::poll(uint32_t now) {
             emit_end(now);
             release_run();   // the run is over: passive again (Ra mode and the dialog's spoof end with it)
             transcap::disarm_if_armed();
+            freeze_facts();   // the Results grid is the run's, whatever the source does after this
             set_stage(Stage::Results);
         }
     }
@@ -1274,22 +1277,12 @@ void ChargerTestSession::set_stage(Stage s, int selection) {
 }
 // A stage owns the whole body: wipe the old one (a (re)draw of the page needs no wipe: the screen is clean or being erased),
 // then every element of the new stage paints once. ctx_.rows is shared with the other pages, so it starts afresh too.
-struct ChargerTestPage::GridScratch {
-    result_layout::Layout layout;
-    std::array<result_layout::Line, result_layout::kMaxLines> lines;
-};
-
-struct ChargerTestPage::GridScope {
-    ChargerTestPage& page;
-    scratch::Lease lease;
-    GridScratch& data;
-    GridScope(ChargerTestPage& p, bool running_grid, bool note_cuts = false)
-        : page(p), lease("ct.grid"), data(scratch::make<GridScratch>()) {
-        p.fill_grid_scratch(data, running_grid, note_cuts);
-        p.grid_sc_ = &data;
-    }
-    ~GridScope() { page.grid_sc_ = nullptr; }
-};
+void ChargerTestSession::freeze_facts() {
+    facts_.cap_mv = ctx_.cap_mv;
+    facts_.xiaomi_seen = fusb302::vdm().xiaomi;
+    facts_.mi_auth = fusb302::sink_status().xiaomi_authed;
+    facts_.frozen = true;
+}
 
 ChargerTestPage::ChargerTestPage(UiContext& c, ChargerTestSession& s) : PageBase(c, Page::ChargerTest, "Charger test"), s_(s) {
     s_.bind_view(this);
@@ -1302,25 +1295,28 @@ void ChargerTestPage::on_stage(bool entering) {
 }
 void ChargerTestPage::on_confirmation_dropped() { foot_.invalidate(); action_.invalidate(); }
 void ChargerTestPage::on_cable_changed() { update(ctx_.now); }
-void ChargerTestPage::fill_grid_scratch(GridScratch& out, bool running_grid, bool note_cuts) {
-    static_assert(sizeof(GridScratch) <= scratch::kSize, "charger-test grid layout fits scratch");
+void ChargerTestPage::build_grid(bool running_grid, bool note_cuts) {
     result_layout::OemNotes oem;
     if (running_grid) {
         oem.headers = false;   // the rows are the plan's steps, in the order the runner walks them
         oem.fold = false;      // a unit keeps its row when it fails or is skipped: the finished rows stay above the running one
         oem.monitor_mv = ctx_.cap_mv;
-        result_layout::build(out.layout, s_.runner_.steps(), oem, s_.runner_.sweep_view());
-        line_n_ = result_layout::wrap(out.layout, kGridMetrics, out.lines);
+        result_layout::build(layout_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
+        line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
         return;
     }
+    // The live inputs come from the snapshot taken when the run ended; a page entered with none (a run this boot never saw end)
+    // freezes them now.
+    if (!s_.facts_.frozen) s_.freeze_facts();
+    const auto& facts = s_.facts_;
     // Passive labels from the identity and the advertised APDOs (the same facts as the card), shown in
     // the OEM-over-PD section: the QC4+/QC5 label, a VID-driven vendor name, the Mi Turbo auth state.
     const auto card = report_card::build(s_.runner_.steps(), s_.runner_.evidence(), s_.runner_.handover(), s_.card_id_, {}, s_.runner_.state(),
                                          s_.runner_.reason(), {}, 0, s_.runner_.sweep_view());
     oem.headers = false;   // the grid is units only: no separator rows between the sections
     oem.vendor = result_layout::vendor_oem_name(s_.card_id_.vid);
-    if (!oem.vendor && fusb302::vdm().xiaomi) oem.vendor = "Xiaomi";   // SVID 0x2717 seen on the wire even without a VID
-    oem.mi_auth = fusb302::sink_status().xiaomi_authed;
+    if (!oem.vendor && facts.xiaomi_seen) oem.vendor = "Xiaomi";   // SVID 0x2717 seen on the wire even without a VID
+    oem.mi_auth = facts.mi_auth;
     oem.oppo_svid = report_card::oppo_note(card) != nullptr;
     oem.rebalanced = s_.runner_.evidence().rebalanced;   // the source re-split its budget mid-run this many times
     char scp_note[24] = {};   // "SCP cap 20V 6A": the row's label is the first two words
@@ -1337,14 +1333,14 @@ void ChargerTestPage::fill_grid_scratch(GridScratch& out, bool running_grid, boo
         oem.qc_label = report_card::qc_label_name(label);
         oem.qc_why = justification;   // build() copies the words into tokens inside this scope
     }
-    oem.monitor_mv = ctx_.cap_mv;
-    result_layout::build(out.layout, s_.runner_.steps(), oem, s_.runner_.sweep_view());
+    oem.monitor_mv = facts.cap_mv;
+    result_layout::build(layout_, s_.runner_.steps(), oem, s_.runner_.sweep_view());
     // build() counts a row label or word it had to shorten: the gate fails on it like on any other cut.
-    if (note_cuts && out.layout.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", out.layout.cuts);
-    line_n_ = result_layout::wrap(out.layout, kGridMetrics, out.lines);
+    if (note_cuts && layout_.cuts) K2_TRUNC_NOTE_HERE(trunc::Kind::Cut, "results grid label or word", layout_.cuts);
+    line_n_ = result_layout::wrap(layout_, kGridMetrics, lines_);
 }
 void ChargerTestPage::build_results() {
-    GridScope sc(*this, false, true);
+    build_grid(false, true);
     compose_best();
 }
 // The best passing mode per protocol family as one line. Families are dropped from the end (lowest watts first) when the
@@ -1625,10 +1621,7 @@ void ChargerTestPage::bar() {
     case Stage::Changes: t.put("Changes"); break;
     case Stage::Detail: t.put("Step detail"); break;
     case Stage::Steps:
-        if (results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) {
-            GridScope sc(*this, false);
-            t.put(sc.data.layout.rows[sc.data.lines[results_row_].row].label).put_char(' ');
-        }
+        if (results_row_ >= 0 && static_cast<size_t>(results_row_) < line_n_) t.put(layout_.rows[lines_[results_row_].row].label).put_char(' ');
         t.put("steps");
         break;
     default: t.put("Charger test"); break;
@@ -1739,8 +1732,7 @@ void ChargerTestPage::announce(const char* words) {
     }
     case Stage::Results: {
         if (s_.selection_ >= static_cast<int>(line_n_)) { f.put("Compare with the last card"); return FooterTone::Info; }
-        GridScope sc(*this, false);
-        const auto &row = sc.data.layout.rows[sc.data.lines[s_.selection_].row];
+        const auto &row = layout_.rows[lines_[s_.selection_].row];
         f.put(row.label).put(": ");
         if (row.algorithm == A::Count && !row.probe) { f.put("see steps"); return FooterTone::Info; }
         if (row.sweep) {   // the deep sweep's strip row: the footer names the peak (the full summary is the [SWEEP] log line)
@@ -2320,9 +2312,11 @@ void ChargerTestPage::paint_running(uint32_t now) {
     }
     // 1b. the step outline, in the same tick as the gauge band: the layout follows the runner now, and the grid moves the
     // outline from the cell that was under test to the one that is (two cell rims, never gated). The rows repaint at item 6.
-    GridScope sc(*this, true);
     const uint32_t key = mix_u32(mix_u32(mix_init(), s_.runner_.revision()), static_cast<uint32_t>(s_.runner_.index())) | 1u;
-    if (key != grid_key_) grid_key_ = key;
+    if (key != grid_key_) {   // rebuilt only when the runner's revision or step moved, never on a plain tick
+        grid_key_ = key;
+        build_grid(true);
+    }
     // 5. the footer (the unit and its step), one cached band: evaluated before sync_dots/hero/clock/header so a
     // handshake-window end or step change is never starved behind dot sync or 250 ms/1 s redraws.
     {
@@ -2414,7 +2408,7 @@ void ChargerTestPage::paint_running(uint32_t now) {
     // manual scroll holds kFollowResumeMs, or until the step changes); rows paint top-to-bottom so finished rows above the running
     // row always update before the running row below them. Scroll and repaint may lag the dot.
     if (!s_.follow_ && (now - s_.scroll_ms_ >= kFollowResumeMs || s_.runner_.index() != s_.scroll_step_)) s_.follow_ = true;
-    const int want = s_.follow_ ? follow_line(sc.data.layout, std::span<const result_layout::Line>(sc.data.lines.data(), line_n_), steps, s_.runner_.index())
+    const int want = s_.follow_ ? follow_line(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), steps, s_.runner_.index())
                              : std::clamp(s_.scroll_line_, 0, std::max(0, static_cast<int>(line_n_) - 1));
     if (s_.follow_) grid_.anchor_bottom(want);   // finished rows stay above, the row under test ends the window
     else grid_.set_first(want);
@@ -2448,18 +2442,18 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         out.focus = results && s_.selection_ == index;
         return;
     }
-    const auto &ln = grid_sc_->lines[static_cast<size_t>(index)];
-    const auto &row = grid_sc_->layout.rows[ln.row];
+    const auto &ln = lines_[static_cast<size_t>(index)];
+    const auto &row = layout_.rows[ln.row];
     if (ln.head) {
         std::memset(cell_lbl_, 0, sizeof cell_lbl_);
         std::memcpy(cell_lbl_, row.label, std::min<size_t>(std::strlen(row.label), sizeof cell_lbl_ - 1));
         out.label = cell_lbl_;
     }
-    const int running = results ? -1 : running_token(grid_sc_->layout, s_.runner_, ln.row);
+    const int running = results ? -1 : running_token(layout_, s_.runner_, ln.row);
     int n = 0;
     for (int k = 0; k < ln.count && n < kit::kResultMaxCells; ++k) {
         const size_t ti = static_cast<size_t>(ln.first + k);
-        const auto &tk = grid_sc_->layout.tokens[ti];
+        const auto &tk = layout_.tokens[ti];
         if (tk.glue) continue;
         std::string_view volts = tk.text, cur;
         if (tk.chip) {
@@ -2476,8 +2470,8 @@ void ChargerTestPage::grid_row(int index, kit::ResultRowSpec &out) {
         ++n;
     }
     out.n = static_cast<uint8_t>(n);
-    out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) && grid_sc_->lines[static_cast<size_t>(s_.selection_)].row == ln.row;
-    out.section = section_break(grid_sc_->layout, std::span<const result_layout::Line>(grid_sc_->lines.data(), line_n_), static_cast<size_t>(index));
+    out.focus = results && s_.selection_ >= 0 && s_.selection_ < static_cast<int>(line_n_) && lines_[static_cast<size_t>(s_.selection_)].row == ln.row;
+    out.section = section_break(layout_, std::span<const result_layout::Line>(lines_.data(), line_n_), static_cast<size_t>(index));
 }
 
 void ChargerTestPage::paint_results() {
@@ -2510,7 +2504,6 @@ void ChargerTestPage::paint_results() {
     put_line(c, kSmall, 6, 51, best_.view().empty() ? std::string_view("No passing mode") : best_.view(), best_.view().empty() ? kDim : kText,
              kBestChars, cell_sig_[3], false, true, &bg);
     if (pbg && pbg->more) return;
-    GridScope sc(*this, false);
     grid_.set_count(static_cast<int>(line_n_) + (s_.delta_n_ ? 1 : 0));
     grid_.show(s_.selection_, 1);
     const int room = pbg ? (pbg->spent == 0 ? kFlightRowPx : pbg->left()) : (1 << 30);
@@ -2805,10 +2798,7 @@ bool ChargerTestPage::on_event(Event e) {
         }
         if (s_.stage_ == Stage::Results) {   // the cursor steps unit by unit: a wrapped row's later lines are skipped
             int i = s_.selection_ + dir;
-            {
-                GridScope sc(*this, false);
-                while (i >= 0 && i < static_cast<int>(line_n_) && !sc.data.lines[static_cast<size_t>(i)].head) i += dir;
-            }
+            while (i >= 0 && i < static_cast<int>(line_n_) && !lines_[static_cast<size_t>(i)].head) i += dir;
             s_.selection_ = std::clamp(i, 0, last_row());
         } else {
             s_.selection_ = std::clamp(s_.selection_ + dir, 0, last_row());
@@ -2892,12 +2882,9 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
             if (s_.delta_n_) set_stage(Stage::Changes);
         } else {
             int fam = -2;
-            {
-                GridScope sc(*this, false);
-                const auto &row = sc.data.layout.rows[sc.data.lines[static_cast<size_t>(s_.selection_)].row];
-                if (!row.header) {   // section headers are not openable
-                    fam = row.algorithm != A::Count ? family(row.algorithm) : row.probe ? kFamXiaomi : -1;   // the Mi 6A probes
-                }
+            const auto &row = layout_.rows[lines_[static_cast<size_t>(s_.selection_)].row];
+            if (!row.header) {   // section headers are not openable
+                fam = row.algorithm != A::Count ? family(row.algorithm) : row.probe ? kFamXiaomi : -1;   // the Mi 6A probes
             }
             if (fam != -2) {
                 results_row_ = s_.selection_;
@@ -2914,7 +2901,7 @@ __attribute__((noinline)) void ChargerTestPage::ok_event() {
         }
         break;
     case Stage::Detail: set_stage(Stage::Steps, s_.detail_row_); break;
-    case Stage::Running: set_stage(Stage::Results); break;
+    case Stage::Running: s_.freeze_facts(); set_stage(Stage::Results); break;
     case Stage::Resume: break;
     }
     update(ctx_.now);
