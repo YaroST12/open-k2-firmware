@@ -62,7 +62,7 @@ constexpr std::int32_t div_i64_to_i32(std::int64_t num, std::int32_t den) {
     }
     if (num >= INT32_MIN && num <= INT32_MAX) return static_cast<std::int32_t>(num) / den;
     const bool neg = num < 0;
-    const std::uint64_t mag = neg ? static_cast<std::uint64_t>(-num) : static_cast<std::uint64_t>(num);
+    const std::uint64_t mag = neg ? 0 - static_cast<std::uint64_t>(num) : static_cast<std::uint64_t>(num);
     const std::uint32_t q = static_cast<std::uint32_t>(div_u64_u32_slow(mag, static_cast<std::uint32_t>(den)));
     return neg ? static_cast<std::int32_t>(0u - q) : static_cast<std::int32_t>(q);
 }

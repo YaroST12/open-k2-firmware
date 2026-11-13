@@ -55,7 +55,7 @@ include/k2/core/math_opt.hpp      constexpr std::uint64_t div_u64_u32(std::uint6
 include/k2/core/math_opt.hpp      constexpr std::uint32_t div_u64_to_u32(std::uint64_t num, std::uint32_t den) {
 include/k2/core/math_opt.hpp      return div_u64_to_u32(std::uint64_t{a} * b, den);
 include/k2/core/math_opt.hpp      constexpr std::int32_t div_i64_to_i32(std::int64_t num, std::int32_t den) {
-include/k2/core/math_opt.hpp      const std::uint64_t mag = neg ? static_cast<std::uint64_t>(-num) : static_cast<std::uint64_t>(num);
+include/k2/core/math_opt.hpp      const std::uint64_t mag = neg ? 0 - static_cast<std::uint64_t>(num) : static_cast<std::uint64_t>(num);
 include/k2/core/math_opt.hpp      return div_i64_to_i32(std::int64_t{a} * b, den);
 include/k2/core/paint_meter.hpp   constexpr std::uint32_t sat32(std::uint64_t v) { return v > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<std::uint32_t>(v); }
 include/k2/core/paint_meter.hpp   constexpr std::uint32_t ms_of(std::uint64_t cycles) { return sat32(math::div_u64_u32(cycles, kCyclesPerMs)); }
