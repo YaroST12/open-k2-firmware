@@ -37,6 +37,7 @@ Ui &open_page() {
     ui.push_menu(Menu::LoopProbe, g_t + 100);
     g_t += 150;
     ui.tick(g_t);
+    while (ui.painting()) { g_t += 2; ui.tick(g_t); }
     return ui;
 }
 
@@ -150,6 +151,7 @@ void test_full_run_ends_in_the_share_view() {
     press(ui, Button::Back);
     CHECK_EQ(int(ui.menu()), int(Menu::LoopProbe));
     step(ui, 50);
+    while (ui.painting()) step(ui, 2);
     CHECK_STR(footer(ui).c_str(), "Done. Result saved");
     CHECK_STR(cell(ui, 0).substr(0, 5).c_str(), "done ");
     CHECK_STR(ok_long(ui).c_str(), "Share");

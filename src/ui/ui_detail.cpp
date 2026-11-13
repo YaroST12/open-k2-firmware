@@ -77,75 +77,105 @@ constexpr const char *kChipLetter[3] = {"V", "A", "W"};
 
 // The ground around what the page paints, each pixel once, so Numbers covers the whole content when it opens over a live
 // page (no erase pass). A value's hole is its field box; a rule's hole is the rule.
-void lay_ground(const Surface &c) {
-    {   // the values band, from under the masthead to the underline
-        kit::Box h[6];
-        int n = 0;
-        for (int q = 0; q < 3; q++) {
-            const Pos p = pos_of(q);
-            h[n++] = {p.x, p.y, static_cast<int16_t>(p.chars * kMid.adv), kMid.height};
-            h[n++] = {static_cast<int16_t>(p.x + kChipX), kChipY, kChipW, kChipH};
-        }
-        kit::fill_except(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kUnderY - kit::kBelowBar)}, h, n, kBg);
-        kit::Box u[3];
-        for (int q = 0; q < 3; q++) u[q] = {static_cast<int16_t>(q * kValPitch), kUnderY, kUnderW, kUnderH};
-        kit::fill_except(c, {0, kUnderY, c.w, static_cast<int16_t>(kGridY0 - kUnderY)}, u, 3, kBg);
+void lay_values_ground(const Surface &c) {
+    kit::Box h[6];
+    int n = 0;
+    for (int q = 0; q < 3; q++) {
+        const Pos p = pos_of(q);
+        h[n++] = {p.x, p.y, static_cast<int16_t>(p.chars * kMid.adv), kMid.height};
+        h[n++] = {static_cast<int16_t>(p.x + kChipX), kChipY, kChipW, kChipH};
     }
-    for (int r = 0; r < kRows; r++) {
-        kit::Box h[4];
-        int n = 0;
-        for (int col = 0; col < 2; col++) {
-            const int slot = kFirstCell + 2 * r + col;
-            const Pos p = pos_of(slot);
-            h[n++] = {p.x, p.y, static_cast<int16_t>(p.chars * kSmall.adv), kSmall.height};
-            h[n++] = {key_x(slot), static_cast<int16_t>(row_top(r) + kKeyDy),
-                      static_cast<int16_t>(text_width(kLabelFont, kCells[slot - kFirstCell].key)), kLabelFont.height};
-        }
-        const bool ruled = r < kRows - 1;
-        kit::fill_except(c, {0, row_top(r), c.w, ruled ? kRuleDy : kRowPitch}, h, n, kBg);
-        if (ruled) {   // the rule row: the ground in the three gaps between the two rules (exact on a scaled page too)
-            const int16_t y = static_cast<int16_t>(row_top(r) + kRuleDy);
-            gfx_fill(c, 0, y, kKeyL, 1, kBg);
-            gfx_fill(c, kValRtL, y, static_cast<int16_t>(kKeyR - kValRtL), 1, kBg);
-            gfx_fill(c, kValRtR, y, static_cast<int16_t>(c.w - kValRtR), 1, kBg);
-        }
+    kit::fill_except(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kUnderY - kit::kBelowBar)}, h, n, kBg);
+    kit::Box u[3];
+    for (int q = 0; q < 3; q++) u[q] = {static_cast<int16_t>(q * kValPitch), kUnderY, kUnderW, kUnderH};
+    kit::fill_except(c, {0, kUnderY, c.w, static_cast<int16_t>(kGridY0 - kUnderY)}, u, 3, kBg);
+}
+
+void lay_row_ground(const Surface &c, int r) {
+    kit::Box h[4];
+    int n = 0;
+    for (int col = 0; col < 2; col++) {
+        const int slot = kFirstCell + 2 * r + col;
+        const Pos p = pos_of(slot);
+        h[n++] = {p.x, p.y, static_cast<int16_t>(p.chars * kSmall.adv), kSmall.height};
+        h[n++] = {key_x(slot), static_cast<int16_t>(row_top(r) + kKeyDy),
+                  static_cast<int16_t>(text_width(kLabelFont, kCells[slot - kFirstCell].key)), kLabelFont.height};
     }
-    const int16_t below = row_top(kRows);
-    if (below < c.h) gfx_fill(c, 0, below, c.w, static_cast<int16_t>(c.h - below), kBg);
+    const bool ruled = r < kRows - 1;
+    kit::fill_except(c, {0, row_top(r), c.w, ruled ? kRuleDy : kRowPitch}, h, n, kBg);
+    if (ruled) {   // the rule row: the ground in the three gaps between the two rules (exact on a scaled page too)
+        const int16_t y = static_cast<int16_t>(row_top(r) + kRuleDy);
+        gfx_fill(c, 0, y, kKeyL, 1, kBg);
+        gfx_fill(c, kValRtL, y, static_cast<int16_t>(kKeyR - kValRtL), 1, kBg);
+        gfx_fill(c, kValRtR, y, static_cast<int16_t>(c.w - kValRtR), 1, kBg);
+    }
 }
 
 }  // namespace
 
-void DetailPage::draw_static() {
-    const Surface &c = ctx_.content;
-    title_bar();
-    if (!ctx_.blank) lay_ground(c);   // a blank screen is kBg already
-    for (int q = 0; q < 3; q++) {
-        const int16_t x = static_cast<int16_t>(q * kValPitch);
-        gfx_fill(c, static_cast<int16_t>(x + kChipX), kChipY, kChipW, kChipH, chip_fill(q));
-        gfx_text(c, kLabelFont, static_cast<int16_t>(x + kChipX + 3), static_cast<int16_t>(kChipY + 2), kChipLetter[q], chip_ink(q),
-                 chip_fill(q));
-        gfx_fill(c, x, kUnderY, kUnderW, kUnderH, chip_fill(q));
-    }
-    for (int r = 0; r < kRows - 1; r++) {
-        gfx_fill(c, kKeyL, static_cast<int16_t>(row_top(r) + kRuleDy), kValRtL - kKeyL, 1, kRule);
-        gfx_fill(c, kKeyR, static_cast<int16_t>(row_top(r) + kRuleDy), kValRtR - kKeyR, 1, kRule);
-    }
-    for (int s = kFirstCell; s < SCount; s++)
-        gfx_text(c, kLabelFont, key_x(s), static_cast<int16_t>(row_top((s - kFirstCell) / 2) + kKeyDy), kCells[s - kFirstCell].key,
-                 kDim, kBg);
-    for (int i = 0; i < SCount; i++) {
-        const Pos p = pos_of(i);
-        if (i == SFlow) continue;   // painted whole by paint_flow (its arrow is a multi-byte glyph)
-        f_[i].init(c, i < kFirstCell ? kMid : kSmall, p.x, p.y, p.chars, Align::Right, kText, kBg);
-    }
-    invalidate();
-}
-
-void DetailPage::invalidate() {
+void DetailPage::reset_cells() {
     bar_valid_ = false;
     flow_sig_ = 0xFF;
     for (int i = 0; i < SCount; i++) f_[i].invalidate();
+}
+
+void DetailPage::draw_static() {
+    const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
+    if (static_step_ == 0) {
+        if (bg && !bg->admit(140 * kBarH, true)) return;
+        title_bar();
+        for (int i = 0; i < SCount; i++) {
+            const Pos p = pos_of(i);
+            if (i == SFlow) continue;   // painted whole by paint_flow (its arrow is a multi-byte glyph)
+            f_[i].init(c, i < kFirstCell ? kMid : kSmall, p.x, p.y, p.chars, Align::Right, kText, kBg);
+        }
+        reset_cells();
+        static_step_ = 1;
+    }
+    if (static_step_ == 1) {
+        const int cost = ctx_.blank ? 1800 : 4800;
+        if (bg && !bg->admit(cost, true)) return;
+        if (!ctx_.blank) lay_values_ground(c);   // a blank screen is kBg already
+        for (int q = 0; q < 3; q++) {
+            const int16_t x = static_cast<int16_t>(q * kValPitch);
+            gfx_fill(c, static_cast<int16_t>(x + kChipX), kChipY, kChipW, kChipH, chip_fill(q));
+            gfx_text(c, kLabelFont, static_cast<int16_t>(x + kChipX + 3), static_cast<int16_t>(kChipY + 2), kChipLetter[q], chip_ink(q),
+                     chip_fill(q));
+            gfx_fill(c, x, kUnderY, kUnderW, kUnderH, chip_fill(q));
+        }
+        static_step_ = 2;
+    }
+    while (static_step_ < 2 + kRows) {
+        const int r = static_step_ - 2;
+        const int cost = ctx_.blank ? 1200 : 3800;
+        if (bg && !bg->admit(cost, true)) return;
+        if (!ctx_.blank) lay_row_ground(c, r);
+        if (r < kRows - 1) {
+            gfx_fill(c, kKeyL, static_cast<int16_t>(row_top(r) + kRuleDy), kValRtL - kKeyL, 1, kRule);
+            gfx_fill(c, kKeyR, static_cast<int16_t>(row_top(r) + kRuleDy), kValRtR - kKeyR, 1, kRule);
+        }
+        for (int col = 0; col < 2; col++) {
+            const int s = kFirstCell + 2 * r + col;
+            gfx_text(c, kLabelFont, key_x(s), static_cast<int16_t>(row_top(r) + kKeyDy), kCells[s - kFirstCell].key,
+                     kDim, kBg);
+        }
+        static_step_++;
+    }
+    if (static_step_ == 2 + kRows) {
+        const int16_t below = row_top(kRows);
+        if (!ctx_.blank && below < c.h) {
+            const int cost = static_cast<int>(c.w) * (c.h - below);
+            if (bg && !bg->admit(cost, true)) return;
+            gfx_fill(c, 0, below, c.w, static_cast<int16_t>(c.h - below), kBg);
+        }
+        static_step_++;
+    }
+}
+
+void DetailPage::invalidate() {
+    static_step_ = 0;
+    reset_cells();
 }
 
 // The Flow cell: the physical arrow and where the current goes ("→ to top", "← bottom"), or a dim dash in the deadband or
@@ -155,6 +185,8 @@ void DetailPage::paint_flow(bool live, power::Flow flow) {
     const uint8_t sig = !live || flow == power::Flow::Idle ? 0x80
                       : static_cast<uint8_t>((flow == power::Flow::Forward ? 0x40 : 0) | (ctx_.rotation & 3u));
     if (sig == flow_sig_) return;
+    const Pos p = pos_of(SFlow);
+    if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(p.chars) * kSmall.adv * kSmall.height, true)) return;
     flow_sig_ = sig;
     static constexpr const char *kArrow[4] = {"\xE2\x86\x91", "\xE2\x86\x90", "\xE2\x86\x93", "\xE2\x86\x92"};   // up left down right
     char buf[16];
@@ -167,7 +199,6 @@ void DetailPage::paint_flow(bool live, power::Flow flow) {
         for (size_t i = 0; i < v.size() && i < sizeof buf; i++) buf[i] = v[i];
         s = {buf, v.size() < sizeof buf ? v.size() : sizeof buf};
     }
-    const Pos p = pos_of(SFlow);
     const int16_t w = static_cast<int16_t>(text_width(kSmall, s));
     const int16_t box = static_cast<int16_t>(p.chars * kSmall.adv);
     if (box > w) gfx_fill(ctx_.content, p.x, p.y, static_cast<int16_t>(box - w), kSmall.height, kBg);
@@ -177,25 +208,29 @@ void DetailPage::paint_flow(bool live, power::Flow flow) {
 void DetailPage::update(uint32_t now_ms) {
     // Numbers is a live instrument: it never shows Flow's frozen LAST snapshot (ctx_.last), so an unplugged source reads
     // 0.00 V and the lines keep moving. Only Flow holds the last state.
+    PaintBudget *const bg = ctx_.budget;
     title_pager(1);
+    if (bg && bg->more) return;
     const bool online = ctx_.pm_online;
     const power::Metrics &pm = ctx_.pm;
     const std::optional<adc::Reading> &an = ctx_.analog;
     const bool vbus = online && pm.vbus_mv >= 1000;
     const bool live = vbus;
     auto col = [&](uint16_t on) { return live ? on : kFaint; };
-    auto put = [&](int slot, std::string_view s, uint16_t color) {
+    auto put = [&](int slot, std::string_view s, uint16_t color) -> bool {
+        if (bg && !f_[slot].valid() && !bg->admit(f_[slot].box_px(), true)) return false;
         f_[slot].set_colors(color, kBg);
         f_[slot].draw(s);
+        return true;
     };
 
     if (online) {
-        StrBuf<12> v; v.put_fixed(pm.vbus_mv, 2); put(SV, v.view(), col(kText));
-        StrBuf<12> a; a.put_abs_fixed(pm.current_ma, 3); put(SA, a.view(), col(kText));
+        StrBuf<12> v; v.put_fixed(pm.vbus_mv, 2); if (!put(SV, v.view(), col(kText))) return;
+        StrBuf<12> a; a.put_abs_fixed(pm.current_ma, 3); if (!put(SA, a.view(), col(kText))) return;
         // Five cells: "99.99" is the last two-decimal reading, from 100 W on one decimal ("180.0").
-        StrBuf<12> w; w.put_abs_fixed(pm.power_mw, pm.power_mw >= 99995 ? 1 : 2); put(SW, w.view(), col(kText));
+        StrBuf<12> w; w.put_abs_fixed(pm.power_mw, pm.power_mw >= 99995 ? 1 : 2); if (!put(SW, w.view(), col(kText))) return;
     } else {
-        put(SV, "--.--", kFaint); put(SA, "-.---", kFaint); put(SW, "--.--", kFaint);
+        if (!put(SV, "--.--", kFaint) || !put(SA, "-.---", kFaint) || !put(SW, "--.--", kFaint)) return;
     }
 
     // PDO: the negotiated contract ("20V 5A", PPS "5.4V 2.2A").
@@ -204,7 +239,7 @@ void DetailPage::update(uint32_t now_ms) {
         StrBuf<13> ct;
         home_contract_short(ctr, ctx_.fc, vbus ? pm.vbus_mv : 0, ct);
         const bool none = ct.view().empty();
-        put(SContract, none ? "--" : ct.view(), none ? kFaint : col(kText));
+        if (!put(SContract, none ? "--" : ct.view(), none ? kFaint : col(kText))) return;
     }
 
     // Max: the largest offer of the attached source ("100W").
@@ -214,9 +249,9 @@ void DetailPage::update(uint32_t now_ms) {
         for (int i = 0; i < caps.num_pdos && caps.valid; i++) mw = caps.pdos[i].max_mw > mw ? caps.pdos[i].max_mw : mw;
         if (caps.valid && mw >= 1000) {
             StrBuf<8> m; m.put_u32((mw + 500) / 1000).put("W");
-            put(SMaxW, m.view(), col(kText));
+            if (!put(SMaxW, m.view(), col(kText))) return;
         } else {
-            put(SMaxW, "--", kFaint);
+            if (!put(SMaxW, "--", kFaint)) return;
         }
     }
 
@@ -230,7 +265,7 @@ void DetailPage::update(uint32_t now_ms) {
         } else {
             cb.put("--");
         }
-        put(SCable, cb.view(), em.valid ? col(kText) : kFaint);
+        if (!put(SCable, cb.view(), em.valid ? col(kText) : kFaint)) return;
     }
 
     {   // The lines, one cell each. They are measured whether or not VBUS is up (a waiting charger shows its Rp with VBUS dark).
@@ -239,7 +274,7 @@ void DetailPage::update(uint32_t now_ms) {
         for (int i = 0; i < 4; i++) {
             StrBuf<8> s;
             if (an) s.put_fixed(mv[i] < 0 ? 0 : mv[i], 2).put_char('V'); else s.put("--");
-            put(slot[i], s.view(), an ? kText : kFaint);
+            if (!put(slot[i], s.view(), an ? kText : kFaint)) return;
         }
     }
 
@@ -247,10 +282,10 @@ void DetailPage::update(uint32_t now_ms) {
         const usblink::Link ul = fusb302::usb_link(an ? an->dp_mv : -1, an ? an->dm_mv : -1);
         std::array<char, usblink::kUiMaxChars + 1> ub{}, ab{};
         usblink::format_speed(ul, ub);
-        put(SUsb, ub.data(), ul.conf == usblink::Confidence::Negotiated ? kText
-                             : ul.conf == usblink::Confidence::Advertised ? kDim : kFaint);
+        if (!put(SUsb, ub.data(), ul.conf == usblink::Confidence::Negotiated ? kText
+                                : ul.conf == usblink::Confidence::Advertised ? kDim : kFaint)) return;
         const usblink::AltState as = usblink::format_alt(ul, ab, false);
-        put(SAlt, ab.data(), as == usblink::AltState::Entered ? kText : as == usblink::AltState::Advertised ? kDim : kFaint);
+        if (!put(SAlt, ab.data(), as == usblink::AltState::Entered ? kText : as == usblink::AltState::Advertised ? kDim : kFaint)) return;
     }
 
     {   // Energy and charge, each with its unit.
@@ -260,20 +295,20 @@ void DetailPage::update(uint32_t now_ms) {
         StrBuf<10> wh, ah;
         wh.put(trim(whb)).put("Wh");
         ah.put(trim(ahb)).put("Ah");
-        put(SWh, wh.view(), kText);
-        put(SAh, ah.view(), kText);
+        if (!put(SWh, wh.view(), kText)) return;
+        if (!put(SAh, ah.view(), kText)) return;
     }
 
     {
         StrBuf<10> el;
         el.put_hms(ctx_.meter.elapsed_s(now_ms));
-        put(STime, el.view(), kText);
+        if (!put(STime, el.view(), kText)) return;
         StrBuf<8> tmp;
         temp_short_text(an, tmp);
         std::string_view ts = tmp.view();
         if (ts.substr(0, 3) == "MCU") ts.remove_prefix(3);
         const bool none = ts.empty() || ts == " --" || ts == "--";
-        put(STemp, none ? "--" : ts, none ? kFaint : kText);
+        if (!put(STemp, none ? "--" : ts, none ? kFaint : kText)) return;
     }
 
     {   // Fast chg: the passive D+/D- verdict; R: the load resistance ("--" without a load).
@@ -282,7 +317,7 @@ void DetailPage::update(uint32_t now_ms) {
             ctx_.fc != fastcharge::Protocol::Pending)
             fp.put(fastcharge::short_name(ctx_.fc));
         const bool none = fp.view().empty();
-        put(SFc, none ? "--" : fp.view(), none || !live ? kFaint : kText);
+        if (!put(SFc, none ? "--" : fp.view(), none || !live ? kFaint : kText)) return;
         if (live && pm.current_ma) {
             char r[16];
             const int n = fmt_ohms(r, pm.vbus_mv, pm.current_ma);
@@ -291,9 +326,9 @@ void DetailPage::update(uint32_t now_ms) {
             while (!rv.empty() && rv.front() == ' ') rv.remove_prefix(1);
             rs.put(rv);
             if (rv != "--") rs.put_char('R');
-            put(SOhm, rs.view(), rv == "--" ? kFaint : kText);
+            if (!put(SOhm, rs.view(), rv == "--" ? kFaint : kText)) return;
         } else {
-            put(SOhm, "--", kFaint);
+            if (!put(SOhm, "--", kFaint)) return;
         }
     }
 

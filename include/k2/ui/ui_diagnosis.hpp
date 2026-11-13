@@ -60,6 +60,7 @@ private:
     pd::diag::screen::Row row_{};         // the row row_fn is building (the RowSpec views point into it)
     StrBuf<24> bb_note_;                  // the Black Box row's note
     Elem foot_;                           // footer element cache (draw_footer_cached)
+    uint8_t static_step_ = 0;
 };
 
 }  // namespace k2

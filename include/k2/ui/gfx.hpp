@@ -62,8 +62,10 @@ public:
               uint16_t fg, uint16_t bg);
     void set_colors(uint16_t fg, uint16_t bg);   // takes effect with the next invalidate()/draw
     void invalidate() { valid_ = false; }        // next draw repaints the whole box
+    bool valid() const { return valid_; }
     void draw(std::string_view text K2_TRUNC_DECL);
     int16_t width_px() const { return static_cast<int16_t>(chars_ * font_->adv); }
+    int box_px() const { return font_ ? static_cast<int>(chars_) * font_->adv * font_->height : 0; }
 
 private:
     Surface surf_{};

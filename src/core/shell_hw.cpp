@@ -663,12 +663,13 @@ const char* lab_pd(const lab::Cmd& c) {
     return ok ? nullptr : "refused (no CC, or inline: an inline K2 never transmits)";
 }
 
-// LCD SPI clock lab switch: `lcd show` reads the divider and the paint totals, `lcd spi <4|8>` sets it (RAM only, /8 at
-// every boot) and repaints the whole screen. It never touches VBUS or the lines, so it needs no lab_guard: it also works
+// LCD SPI clock lab switch: `lcd show` reads the divider and the paint totals, `lcd spi <2|4|8>` sets it (RAM only, /4 at
+// every boot; /2 = 60 MHz is near the ST7789 write-clock limit, judged by the user's visual check only) and repaints the
+// whole screen. It never touches VBUS or the lines, so it needs no lab_guard: it also works
 // during a charger test, where a lighter wire time is what is being measured.
 const char* lab_lcd(const lab::Cmd& c) {
     if (c.id == lab::Id::LcdSpi) {
-        if (!lcd::set_spi_div(c.a[0])) return "divider not changed (4 or 8 only, and not while a screenshot or stream is open)";
+        if (!lcd::set_spi_div(c.a[0])) return "divider not changed (2, 4 or 8 only, and not while a screenshot or stream is open)";
         g_ui->repaint(systick::millis());
     }
     const unsigned div = lcd::spi_div();

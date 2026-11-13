@@ -94,21 +94,30 @@ static void test_service_pacer() {
     CHECK_EQ(w.start(240000u - 0x100u), true);    // exactly 1 ms
 }
 
-static void test_lab_divider() {   // the runtime switch offers 4 and 8 only
+static void test_lab_divider() {   // the runtime switch offers 2, 4 and 8
     SpiDiv d = SpiDiv::Div8;
     CHECK_EQ(lab_spi_div(4, d), true);
     CHECK_EQ(d, SpiDiv::Div4);
     CHECK_EQ(lab_spi_div(8, d), true);
     CHECK_EQ(d, SpiDiv::Div8);
-    CHECK_EQ(lab_spi_div(2, d), false);   // 60 MHz is not offered
+    CHECK_EQ(lab_spi_div(2, d), true);    // 60 MHz: a RAM-only lab value for a visual check
+    CHECK_EQ(d, SpiDiv::Div2);
+    d = SpiDiv::Div8;
     CHECK_EQ(lab_spi_div(0, d), false);
+    CHECK_EQ(lab_spi_div(1, d), false);
+    CHECK_EQ(lab_spi_div(3, d), false);
     CHECK_EQ(lab_spi_div(16, d), false);
     CHECK_EQ(d, SpiDiv::Div8);            // a refusal leaves the value alone
+}
+
+static void test_boot_divider() {   // /4 (30 MHz) at every boot since 2026-11-12
+    CHECK_EQ(kBootSpiDiv, SpiDiv::Div4);
 }
 
 int main() {
     test_service_pacer();
     test_lab_divider();
+    test_boot_divider();
     test_wire_time();
     test_divider_field();
     test_dma_chunks();

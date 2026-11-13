@@ -27,18 +27,24 @@ void set_backlight(bool on);
 void set_rotation(std::uint8_t rotation);
 
 void fill(std::uint16_t color);
+// Clear one horizontal strip [y .. y+h-1] across the full panel width. Like fill(), excluded from test overdraw metering.
+void clear_strip(std::uint16_t y, std::uint16_t h, std::uint16_t color);
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color);
 
 // Streamed write into the window (x0,y0)-(x1,y1) inclusive. usb::service() and the idle hook run once 1 ms has passed
 // since their last round (lcd_timing.hpp kServiceUs, elapsed time across windows, checked after every call's pixels and
-// inside DMA waits), so that a paint cannot starve the USB stack or PD. Runs of 32+ pixels go out by DMA (SPI3 TX):
-// stream_fill returns with its last piece still on the wire, and the next lcd call (the next
-// stream_*, stream_end, a command) waits for it; stream_pixels returns with its buffer consumed.
+// inside DMA waits), so that a paint cannot starve the USB stack or PD. Runs of 32+ pixels go out by DMA (SPI3 TX), and
+// every call returns with its last transfer still on the wire so the caller's next CPU work overlaps it: stream_pixels
+// copies the run into a driver buffer first (the caller's buffer is free on return), stream_begin only records the window
+// (the first pixels or fill send it), stream_end leaves the frame open. The next call that needs the wire waits for it.
 // -DK2_LCD_DMA=0 builds the polled-only driver.
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1);
 void stream_pixels(std::span<const std::uint16_t> px);
 void stream_fill(std::uint16_t color, std::uint32_t count);
 void stream_end();
+// Waits until everything streamed so far is on the panel and the frame is closed (CS high). Nothing needs it for
+// correctness (every command closes the frame first); it is for timing a paint to its last pixel.
+void flush();
 
 // Divert the stream_* calls (every fill, rect and text goes through them) to a sink instead of
 // the panel, e.g. a RAM strip for screenshots. nullptr restores the panel. The sink is a plain
@@ -89,9 +95,10 @@ struct DmaInfo {
 };
 DmaInfo dma_info();
 
-// SPI3 clock divider (lab switch): /8 = 15 MHz at every boot, /4 = 30 MHz after `lcd spi 4`. RAM only, never persisted.
+// SPI3 clock divider (lab switch): /4 = 30 MHz at every boot, /8 = 15 MHz after `lcd spi 8`, /2 = 60 MHz after
+// `lcd spi 2` (near the ST7789 write-clock limit, a visual check by the user only). RAM only, never persisted.
 // set_spi_div() waits for the wire to go idle, reprograms SPI3 (SPE off while BR changes) and returns true; it returns
-// false and changes nothing for anything but 4 and 8, or while a pixel stream is open. The caller forces a full redraw
+// false and changes nothing for anything but 2, 4 and 8, or while a pixel stream is open. The caller forces a full redraw
 // afterwards (a clock the board cannot carry shows as garbage on the panel). The stream service intervals follow it.
 bool set_spi_div(unsigned divider);
 unsigned spi_div();

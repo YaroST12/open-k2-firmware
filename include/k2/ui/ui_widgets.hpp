@@ -186,11 +186,15 @@ inline FooterTone footer_tone_of(uint16_t color) {
          : color == kError ? FooterTone::Error : FooterTone::Info;
 }
 
+struct PaintBudget;
+
 void draw_footer(const Surface &s, FooterTone tone, std::string_view text K2_TRUNC_DECL);
 // Same as draw_footer, but paints through the element's cache: skips the repaint when the
 // (tone, text) signature is unchanged since the last call with this `e` slot.
 // e.invalidate() forces a repaint.
 void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text, Elem &e K2_TRUNC_DECL);
+// Budget-gated version of draw_footer_cached: returns false and leaves `e` invalid/old if `bg` refuses.
+bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view text, Elem &e, PaintBudget *bg K2_TRUNC_DECL);
 
 // ---- top chrome bar (micro-GUI phase 1): 20 px band + 1 px hairline at y kBarH-1 -----------------
 // Page name left; on every page except Home the right side carries the compact fmt3(V) x fmt3(A)
@@ -245,6 +249,52 @@ void draw_last_pill(const Surface &s, std::string_view text);
 // The call repaints the band rows of the right half (x 140..223); the hairline row is the title's.
 void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps,
                       Arrow flow = Arrow::Idle, uint8_t rotation = 0, std::string_view last_text = "LAST");
+
+// What the live readout shows, kept by its caller so the next live tick repaints only the character cells that changed
+// (a reading that drifts by one digit sends ~2 x 72 px instead of the 84 x 20 band). The slots are 5 cells of kLabelAdv,
+// right-aligned to match the masthead's fixed-edge digits; the 3 px colour keys sit outside the value slots.
+struct ReadoutShown {
+    static constexpr int kCells = 5, kChevX = 140, kVoltX = kMastVoltX, kAmpX = kMastAmpX;
+    bool valid = false;   // false: unknown (a band repaint, a capture), the next draw repaints the whole band
+    StatusReadout mode = StatusReadout::None;
+    Arrow flow = Arrow::Idle;
+    uint8_t rotation = 0;
+    char volts[kCells] = {}, amps[kCells] = {};
+    // Sets the slot right-aligned from the drawn text; false when it does not fit 5 single-byte cells.
+    static constexpr bool set(char (&slot)[kCells], std::string_view text) {
+        bool ok = text.size() <= kCells;
+        const int n = static_cast<int>(text.size());
+        const int pad = kCells - (n < kCells ? n : kCells);
+        for (int i = 0; i < kCells; i++) {
+            const char c = i >= pad && (i - pad) < n ? text[static_cast<std::size_t>(i - pad)] : ' ';
+            if (static_cast<unsigned char>(c) >= 0x80) ok = false;
+            slot[i] = c;
+        }
+        return ok;
+    }
+};
+// One logical x range [x0, x1) of the readout band to repaint.
+struct ReadoutSpan { int16_t x0 = 0, x1 = 0; };
+// The spans that differ between `was` and `now`, both live in the same rotation: the chevron slot when the flow changed,
+// then the changed cells of each slot (first to last differing cell). n = 0: nothing to send.
+struct ReadoutDelta { ReadoutSpan span[3]; int n = 0; };
+constexpr ReadoutDelta readout_delta(const ReadoutShown &was, const ReadoutShown &now) {
+    ReadoutDelta d;
+    if (was.flow != now.flow) d.span[d.n++] = {ReadoutShown::kChevX, static_cast<int16_t>(ReadoutShown::kChevX + kChevW)};
+    const auto cells = [&](const char (&a)[ReadoutShown::kCells], const char (&b)[ReadoutShown::kCells], int x) {
+        int first = 0, last = ReadoutShown::kCells - 1;
+        while (first <= last && a[first] == b[first]) first++;
+        while (last >= first && a[last] == b[last]) last--;
+        if (first <= last)
+            d.span[d.n++] = {static_cast<int16_t>(x + first * static_cast<int>(kLabelAdv)),
+                             static_cast<int16_t>(x + (last + 1) * static_cast<int>(kLabelAdv))};
+    };
+    cells(was.volts, now.volts, ReadoutShown::kVoltX);
+    cells(was.amps, now.amps, ReadoutShown::kAmpX);
+    return d;
+}
+void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps, Arrow flow,
+                      uint8_t rotation, ReadoutShown &shown);
 
 // The Meter faces' pager in place of the readout: `count` 7 x 7 squares right-aligned to x 219, the current one solid ink,
 // the others a 1 px ink outline. Repaints the band rows of the right half (x 140..223), like draw_top_readout.

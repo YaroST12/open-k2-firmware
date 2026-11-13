@@ -67,8 +67,10 @@ static void test_page_case1() {
     g_stub.diag_state = 1;
     Ui &ui = fresh_ui();
     ui.tick(1000);
-    CHECK(ui.push_menu(Menu::Diagnosis, 1100));
-    ui.tick(1200);
+    std::uint32_t t = 1100;
+    CHECK(ui.push_menu(Menu::Diagnosis, t));
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     CHECK_EQ(int(ui.menu()), int(Menu::Diagnosis));
     CHECK_EQ(ui.page_index(), kMenuPageBase + static_cast<int>(Menu::Diagnosis));
     const unsigned rows = diag::screen::row_count(case1);
@@ -95,8 +97,10 @@ static void test_page_empty() {
     g_stub.diag_state = 0;
     Ui &ui = fresh_ui();
     ui.tick(1000);
-    CHECK(ui.push_menu(Menu::Diagnosis, 1100));
-    ui.tick(1200);
+    std::uint32_t t = 1100;
+    CHECK(ui.push_menu(Menu::Diagnosis, t));
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     CHECK_EQ(ui.diagnosis_page().list_state().count, 1);   // the waiting row
     CHECK_EQ(count_px(kErrorT), 0);
     CHECK_EQ(count_px(kCautionT), 0);
@@ -116,8 +120,10 @@ static void test_place_stamp_replaces_top() {
     g_stub.diag_state = 1;
     Ui &ui = fresh_ui();
     ui.tick(1000);
-    ui.open_place(bench::Place::Log, 1100);
-    ui.tick(1200);
+    std::uint32_t t = 1100;
+    ui.open_place(bench::Place::Log, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     const unsigned rows = diag::screen::row_count(case1);
     CHECK_EQ(ui.diagnosis_page().list_state().count, int(rows));   // the screen rows less the stamped one, plus the Black Box row
     // the stamp's sub-line (y = stamp + 31 .. 43) carries ink: the top finding's note
@@ -133,10 +139,11 @@ static void test_place_stamp_replaces_top() {
     healthy.quiet_contract = healthy.quiet_link = true;
     CHECK(!diag::screen::names_top_finding(healthy));
     g_stub.diag_report = healthy;
-    ui.tick(1400);
-    ui.tick(1600);
+    ui.tick(t += 100);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
     CHECK_EQ(ui.diagnosis_page().list_state().count, int(diag::screen::row_count(healthy)) + 1);
-    ui.on_button(Button::Back, ButtonEvent::Short, 1700);
+    ui.on_button(Button::Back, ButtonEvent::Short, t + 100);
 }
 
 int main() {

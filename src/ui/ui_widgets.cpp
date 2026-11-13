@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Yaraslau Furman
 #include "k2/ui/ui_widgets.hpp"
+#include "k2/ui/ui_types.hpp"
 #include "k2/ui/ui_style.hpp"
 #include "k2/ui/text.hpp"
 #include "k2/drivers/lcd.hpp"
@@ -64,8 +65,14 @@ struct BandRow {
     }
 };
 
+// The part of a band that goes to the panel, in band pixels from its top-left (columns c0..c1-1, rows r0..r1-1). The rows
+// are still composed whole (cheap), only the window is narrowed: a repaint of the cells that changed sends just those.
+struct BandClip {
+    int c0 = 0, c1 = kScreenW, r0 = 0, r1 = kScreenW;
+};
+
 template <class Paint>
-void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = kScreenW) {
+void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = kScreenW, BandClip clip = {}) {
     const int width = std::min<int>(s.w - x, std::min<int>(kScreenW, max_w));
     h = std::min<int>(h, s.h - y);
     if (x < 0 || y < 0 || width <= 0 || h <= 0) return;
@@ -73,18 +80,21 @@ void draw_band(const Surface &s, int x, int y, int h, Paint paint, int max_w = k
         {static_cast<int16_t>(s.x + x), static_cast<int16_t>(s.y + y),
          static_cast<int16_t>(width), static_cast<int16_t>(h)});
     ContentViewport::Pause unscaled_band;
+    const int c0 = std::max(clip.c0, 0), c1 = std::min<int>(clip.c1, band.w);
+    const int r0 = std::max(clip.r0, 0), r1 = std::min<int>(clip.r1, band.h);
+    if (c0 >= c1 || r0 >= r1) return;
     {   // a band wholly outside the capture strip has nothing to compose
-        uint16_t by = static_cast<uint16_t>(band.y), bh = static_cast<uint16_t>(band.h);
-        if (band.h <= 0 || !lcd::clip_to_band(by, bh)) return;
+        uint16_t by = static_cast<uint16_t>(band.y + r0), bh = static_cast<uint16_t>(r1 - r0);
+        if (!lcd::clip_to_band(by, bh)) return;
     }
     BandRow row{{}, x, band.w, y};
-    lcd::stream_begin(static_cast<uint16_t>(band.x), static_cast<uint16_t>(band.y),
-                      static_cast<uint16_t>(band.x + band.w - 1), static_cast<uint16_t>(band.y + band.h - 1));
-    for (int r = 0; r < band.h; r++) {
+    lcd::stream_begin(static_cast<uint16_t>(band.x + c0), static_cast<uint16_t>(band.y + r0),
+                      static_cast<uint16_t>(band.x + c1 - 1), static_cast<uint16_t>(band.y + r1 - 1));
+    for (int r = r0; r < r1; r++) {
         row.y = y + r;
         row.fill(x, band.w, kBar);
         paint(row);
-        lcd::stream_pixels({row.pixels, static_cast<std::size_t>(band.w)});
+        lcd::stream_pixels({row.pixels + c0, static_cast<std::size_t>(c1 - c0)});
     }
     lcd::stream_end();
 }
@@ -398,6 +408,12 @@ void draw_footer_cached(const Surface &s, FooterTone tone, std::string_view text
     e.paint(sg, [&] { draw_footer(s, tone, text K2_TRUNC_ARG); });
 }
 
+bool draw_footer_budgeted(const Surface &s, FooterTone tone, std::string_view text, Elem &e, PaintBudget *bg K2_TRUNC_DEF) {
+    uint32_t sg = mix_u32(mix_init(), static_cast<uint32_t>(tone) * 31u + 1u);
+    sg = mix(sg, text);
+    return e.paint_budgeted(sg, bg, static_cast<int>(s.w) * 18, [&] { draw_footer(s, tone, text K2_TRUNC_ARG); });
+}
+
 void IconCell::draw(Icon icon, uint16_t fg, uint16_t bg) {
     const uint32_t sg = mix_u32(mix_init(), static_cast<uint32_t>(icon) * 31u + fg * 7u + bg * 131u);
     e.paint(sg, [&] { draw_icon(surf, x, y, icon, fg, bg); });
@@ -431,33 +447,65 @@ void draw_status_left(const Surface &s, bool has_icon, Icon icon, std::string_vi
 // The call repaints the band rows 0..kBarH-2 over x 140..223; the hairline row (kBarH-1) is never
 // touched here: it belongs to title_bar()'s full-band repaint, and touching it here would make the
 // capture passes (which redraw once per strip) leave different pixels behind than a plain tick.
+namespace {
+constexpr int kSlotPx = ReadoutShown::kCells * kLabelAdv;
+std::string_view slot_text(std::string_view value) { return text_width(kLabelFont, value) > kSlotPx ? "OVR" : value; }
+
+void readout_row(BandRow &row, StatusReadout mode, std::string_view v, std::string_view a, Arrow flow, uint8_t rotation,
+                 std::string_view last_text) {
+    if (mode == StatusReadout::Live) {
+        if (flow != Arrow::Idle) {   // slot x 140..149, centred on the 12 px text rows
+            const unsigned rot = rotation & 3u;
+            row.chevron(ReadoutShown::kChevX + (kChevW - physical_chevron_w(rot)) / 2,
+                        kBarTextY + (static_cast<int>(kLabelFont.height) - physical_chevron_h(rot)) / 2,
+                        flow == Arrow::Up, rot, kInk);
+        }
+        // Fixed slots right-aligned so the digits never jitter horizontally, each led by a 3 px colour key (the
+        // quantity's spot colour: the text itself is ink). Values too wide for their slot show "OVR".
+        if (row.y >= kMastKeyY && row.y < kMastKeyY + kMastKeyH) {
+            row.fill(kMastVoltKeyX, kMastKeyW, kSpotVolt);
+            row.fill(kMastAmpKeyX, kMastKeyW, kSpotAmp);
+        }
+        row.text(kLabelFont, ReadoutShown::kVoltX + kSlotPx - text_width(kLabelFont, v), kBarTextY, v, kInk, kBar);
+        row.text(kLabelFont, ReadoutShown::kAmpX + kSlotPx - text_width(kLabelFont, a), kBarTextY, a, kInk, kBar);
+    } else if (mode == StatusReadout::Stale) {
+        row.last_pill(last_text);   // BandRow-native: no nested stream inside the band write
+    }
+}
+}  // namespace
+
 void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps,
                       Arrow flow, uint8_t rotation, std::string_view last_text) {
-    draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) {
-        if (mode == StatusReadout::Live) {
-            if (flow != Arrow::Idle) {   // slot x 140..149, centred on the 12 px text rows
-                const unsigned rot = rotation & 3u;
-                row.chevron(140 + (kChevW - physical_chevron_w(rot)) / 2,
-                            kBarTextY + (static_cast<int>(kLabelFont.height) - physical_chevron_h(rot)) / 2,
-                            flow == Arrow::Up, rot, kInk);
-            }
-            // Fixed slots right-aligned so the digits never jitter horizontally, each led by a 3 px colour key (the
-            // quantity's spot colour: the text itself is ink). Values too wide for their slot show "OVR".
-            constexpr int kSlotPx = 5 * kLabelAdv;
-            const std::string_view v = text_width(kLabelFont, volts) > kSlotPx ? "OVR" : volts;
-            const std::string_view a = text_width(kLabelFont, amps) > kSlotPx ? "OVR" : amps;
-            if (v.data() != volts.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, volts, kSlotPx);   // a measurement, not copy
-            if (a.data() != amps.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, amps, kSlotPx);
-            if (row.y >= kMastKeyY && row.y < kMastKeyY + kMastKeyH) {
-                row.fill(kMastVoltKeyX, kMastKeyW, kSpotVolt);
-                row.fill(kMastAmpKeyX, kMastKeyW, kSpotAmp);
-            }
-            row.text(kLabelFont, kMastVoltX + kSlotPx - text_width(kLabelFont, v), kBarTextY, v, kInk, kBar);
-            row.text(kLabelFont, kMastAmpX + kSlotPx - text_width(kLabelFont, a), kBarTextY, a, kInk, kBar);
-        } else if (mode == StatusReadout::Stale) {
-            row.last_pill(last_text);   // BandRow-native: no nested stream inside the band write
-        }
-    });
+    const std::string_view v = slot_text(volts), a = slot_text(amps);
+    if (mode == StatusReadout::Live) {
+        if (v.data() != volts.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, volts, kSlotPx);   // a measurement, not copy
+        if (a.data() != amps.data()) K2_TRUNC_NOTE_HERE(trunc::Kind::Data, amps, kSlotPx);
+    }
+    draw_band(s, kReadoutX, 0, kBarH - 1, [&](BandRow &row) { readout_row(row, mode, v, a, flow, rotation, last_text); });
+}
+
+void draw_top_readout(const Surface &s, StatusReadout mode, std::string_view volts, std::string_view amps, Arrow flow,
+                      uint8_t rotation, ReadoutShown &shown) {
+    ReadoutShown now;
+    now.mode = mode;
+    now.flow = mode == StatusReadout::Live ? flow : Arrow::Idle;
+    now.rotation = rotation;
+    const std::string_view v = slot_text(volts), a = slot_text(amps);
+    const bool cells = ReadoutShown::set(now.volts, v) & ReadoutShown::set(now.amps, a);
+    const bool delta = cells && shown.valid && mode == StatusReadout::Live && shown.mode == StatusReadout::Live &&
+                       shown.rotation == rotation;
+    if (!delta) {
+        draw_top_readout(s, mode, volts, amps, flow, rotation);
+    } else {
+        const ReadoutDelta d = readout_delta(shown, now);
+        for (int i = 0; i < d.n; i++)
+            draw_band(s, kReadoutX, 0, kBarH - 1,
+                      [&](BandRow &row) { readout_row(row, mode, v, a, flow, rotation, {}); }, kScreenW,
+                      BandClip{d.span[i].x0 - kReadoutX, d.span[i].x1 - kReadoutX, kBarTextY,
+                               kBarTextY + static_cast<int>(kLabelFont.height)});
+    }
+    now.valid = cells;
+    shown = now;
 }
 
 void draw_top_pager(const Surface &s, int count, int current) {

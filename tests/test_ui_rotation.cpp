@@ -131,6 +131,7 @@ static void test_captures_and_keys() {
         for (uint8_t p = 0; p < pages + static_cast<uint8_t>(Menu::Count); ++p) {
             CHECK_EQ(ui.goto_page(p < pages ? p : static_cast<uint8_t>(Page::Tools), 6000), true);
             if (p >= pages) CHECK_EQ(ui.push_menu(static_cast<Menu>(p - pages), 6000), true);
+            while (ui.painting()) ui.tick(6000);
             // The QR scan-test and share screens cover the whole panel, button strip included (chrome hidden while
             // shown), so the slot pixels are the code's there, not the panel's: skip only that check for them.
             const bool qrtest = p >= pages && (static_cast<Menu>(p - pages) == Menu::QrTest ||
@@ -360,6 +361,7 @@ static void test_settings_rotation_modes() {
     CHECK_EQ(ui.menu_depth(), 0);
     ui.on_button(Button::Plus, ButtonEvent::Short, 6500);
     ui.on_button(Button::Ok, ButtonEvent::Short, 6600);
+    while (ui.painting()) ui.tick(6600);
     CHECK_EQ(ui.menu() == Menu::Autorotate, true);
     CHECK_EQ(ui.list_state().count, 5);
     CHECK_EQ(g_panel[30 * 240 + 1], kFocus);   // selection bar x0..2
@@ -370,6 +372,7 @@ static void test_settings_rotation_modes() {
     uint32_t now = 7000;
     for (uint8_t rotation = 0; rotation < 4; ++rotation) {
         ui.on_button(Button::Plus, ButtonEvent::Short, now);
+        while (ui.painting()) ui.tick(now);
         if (rotation == 0) {
             CHECK_EQ(g_panel[30 * 240 + 1] == kFocus, false);
             CHECK_EQ(g_panel[(30 + 26) * 240 + 1], kFocus);   // rows are 26 px pitch now
@@ -384,6 +387,7 @@ static void test_settings_rotation_modes() {
         CHECK_EQ(ui.menu() == Menu::Autorotate, true);
         for (uint32_t t = now + 200; t <= now + 600; t += 50)
             ui.feed_gravity(orientation::Gravity{0, -1000, 0}, t);
+        while (ui.painting()) ui.tick(now + 600);
         CHECK_EQ(ui.rotation(), rotation);
         std::array<uint16_t, 240 * 240> expected;
         std::copy(std::begin(g_panel), std::end(g_panel), expected.begin());
@@ -475,6 +479,7 @@ static void test_rotation_prefs_persist() {
         for (uint32_t t = 2000; t <= 2400; t += 50) ui.feed_gravity(orientation::Gravity{0, 1000, 0}, t);
         CHECK_EQ(ui.rotation(), 2);   // locked: gravity does not move it
         ui.tick(5000);
+        while (ui.painting()) ui.tick(5000);
         std::array<uint16_t, 240 * 240> booted;   // what the restored boot drew ...
         std::copy(std::begin(g_panel), std::end(g_panel), booted.begin());
         Ui reference;                             // ... is what a plain boot rotated to 180 deg draws
@@ -482,6 +487,7 @@ static void test_rotation_prefs_persist() {
         reference.set_rotate_buttons(true);       // the strip labels follow the setting too
         reference.set_rotation(2, 100);
         reference.tick(5000);
+        while (reference.painting()) reference.tick(5000);
         CHECK_EQ(std::equal(booted.begin(), booted.end(), std::begin(g_panel)), true);
     }
     {   // boot with the defaults (an old record): automatic, buttons as printed, rotation 0
@@ -531,6 +537,7 @@ static void test_optional_rotated_buttons() {
     for (uint8_t r = 0; r < 4; ++r) {
         ui.set_rotation(r, 2000 + r * 1000);
         ui.goto_page(static_cast<uint8_t>(Page::Tools), 2100 + r * 1000);
+        while (ui.painting()) ui.tick(2100 + r * 1000);
         const auto orient = orientation_for(r);
         for (unsigned slot = 0; slot < 4; ++slot) {
             const Button physical = slot_button(orient, slot);
@@ -644,6 +651,7 @@ static void test_fc_stages_in_four_rotations() {
         CHECK_EQ(ui.push_menu(Menu::Trigger, now), true);
         auto key = [&](Button b, ButtonEvent p = ButtonEvent::Short) { ui.on_button(b, p, now += 100); };
         auto snapshot = [&]() {
+            while (ui.painting()) ui.tick(now);
             std::array<uint16_t, 240 * 240> expected;
             std::copy(std::begin(g_panel), std::end(g_panel), expected.begin());
             CHECK_EQ(capture_begin(ui), true);

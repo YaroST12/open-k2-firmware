@@ -40,6 +40,11 @@ static Ui &fresh_ui() {
     return ui;
 }
 
+static uint32_t settle(Ui &ui, uint32_t t) {
+    while (ui.painting()) ui.tick(t += 2);
+    return t;
+}
+
 static const char *label(Ui &ui, Button b) {
     static char buf[24];
     label_text(buf, ui.labels().b[static_cast<int>(b)], label_max_chars(b));
@@ -361,6 +366,7 @@ static void test_cable_tab_not_found_greys_save() {
     g_stub.em.spec_rev = 2;
     g_stub.em.raw_vdos = {0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)};
     ui.tick(20300);
+    settle(ui, 20300);
     ui.on_button(Button::Ok, ButtonEvent::Short, 20400);   // the pop-up is still open on Save cable
     CHECK_EQ(g_stub.lib_saves, 1);
     g_stub = StubState();
@@ -611,6 +617,7 @@ static void test_home_gauges_and_footer() {
     g_stub.pm.flow = power::Flow::Forward;
     ui.tick(70000);
     ui.tick(70200);
+    settle(ui, 70200);
     auto px = [](int x, int y) { return g_panel[y * 240 + x]; };
     // Home v3: the readout digits and the three strips carry the measurement colours.
     auto inkc = [&](int x0, int y0, int w, int h, uint16_t c) {
@@ -630,6 +637,7 @@ static void test_home_gauges_and_footer() {
     CHECK_EQ(count(0, 224, kError), 0);
     g_stub.pm_online = false;
     ui.tick(70400);
+    settle(ui, 70400);
     CHECK_EQ(count(4, 224, kError) > 10, 1);
     CHECK_EQ(count(4, 224, kVolt), 0);   // x0..3: the idle field's colour key
     g_stub.pm_online = true;
@@ -1543,15 +1551,16 @@ static void test_log_place() {
     Ui &ui = fresh_ui();
     pdtrace::init();
     ui.open_place(bench::Place::Log, kT0);
+    const uint32_t t_open = settle(ui, kT0);
     CHECK_EQ(ui.menu() == Menu::Diagnosis, 1);
     CHECK_EQ(ui.diagnosis_page().place(), true);
     CHECK_EQ(ui.context().keep.bench_sel, static_cast<int>(bench::Place::Log));
     CHECK_EQ(g_panel[(kit::kBelowBar + 2) * LCD_WIDTH + 100], kSurface);   // the stamp's ground (no verdict yet)
     CHECK_STR(label(ui, Button::Ok), "");                                   // a finding opens nothing
-    for (int i = 0; i < 12; i++) press(ui, Button::Plus, ButtonEvent::Short, kT0 + 10 + i);
+    for (int i = 0; i < 12; i++) press(ui, Button::Plus, ButtonEvent::Short, t_open + 10 + i);
     CHECK_EQ(ui.diagnosis_page().selected(), act_row(bench::Place::Log, 7));
     CHECK_STR(label(ui, Button::Ok), "Open");
-    press(ui, Button::Ok, ButtonEvent::Short, kT0 + 40);
+    press(ui, Button::Ok, ButtonEvent::Short, t_open + 40);
     CHECK_EQ(ui.menu() == Menu::BlackBox, 1);
     // the stamp's verdict: nothing seen, none; a healthy link that had its power, pass
     pd::diag::Report r{};
@@ -1596,6 +1605,7 @@ static void test_home_flow_arrow() {
     g_stub.pm.flow = power::Flow::Forward;
     ui.tick(68000);
     ui.tick(68250);
+    settle(ui, 68250);
     // The hero readout is painted once (mode change) and holds with no repaint requests.
     auto ink = [&](uint16_t col, int x0, int y0, int w, int h) {
         int n = 0;
@@ -1610,10 +1620,12 @@ static void test_home_flow_arrow() {
     CHECK_EQ(hero_ink(kVolt) + hero_ink(kAmp), 0);   // V and A live in the ledger below
     g_stub.pm.current_ma = -2000; g_stub.pm.power_mw = -40000; g_stub.pm.flow = power::Flow::Reverse;
     ui.tick(68500);
+    settle(ui, 68500);
     CHECK_EQ(amps_ink(kAmp) > 60, 1);   // reversed: still cyan (magnitudes, never a sign)
     CHECK_EQ(hero_ink(kWatt) > 60, 1);
     g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0; g_stub.pm.flow = power::Flow::Idle;
     ui.tick(69000);
+    settle(ui, 69000);
     g_stub.pm = {};
 }
 
@@ -1624,11 +1636,13 @@ static void test_home_animation() {
     g_stub.pm.vbus_mv = 20000; g_stub.pm.current_ma = 2000; g_stub.pm.power_mw = 40000;
     g_stub.pm.flow = power::Flow::Forward;
     ui.tick(70000);   // later than every other test: the link engine keeps its clock across init()
+    settle(ui, 70000);
 
     // Digit filter: a value change inside 250 ms of the last one waits (the W hero, Home 2c).
     g_stub.pm.vbus_mv = 20000; g_stub.pm.current_ma = 2000; g_stub.pm.power_mw = 40000; g_stub.pm.flow = power::Flow::Forward;
     g_stub.pm.power_mw = 39600;
     ui.tick(71000);
+    settle(ui, 71000);
     auto region = [&]() {
         std::vector<uint16_t> r;
         for (int y = 25; y < 25 + 39; y++)
@@ -1638,8 +1652,10 @@ static void test_home_animation() {
     const auto before = region();
     g_stub.pm.power_mw = 39800;
     ui.tick(71100);
+    settle(ui, 71100);
     CHECK_EQ(region() == before ? 1 : 0, 1);           // 100 ms after the last change: held back
     ui.tick(71260);
+    settle(ui, 71260);
     CHECK_EQ(region() == before ? 1 : 0, 0);           // allowed now
     g_stub.pm = {};
 }
@@ -1653,6 +1669,7 @@ static void test_home_stale() {
     g_stub.pm.flow = power::Flow::Forward;
     ui.tick(80000);
     ui.tick(80200);
+    settle(ui, 80200);
     auto count = [&](int x0, int y0, int x1, int y1, uint16_t col) {
         int n = 0;
         for (int y = y0; y < y1; y++)
@@ -1665,6 +1682,7 @@ static void test_home_stale() {
     g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0; g_stub.pm.flow = power::Flow::Idle;
     ui.tick(82000);
     ui.tick(82200);
+    settle(ui, 82200);
     CHECK_EQ(ui.context().stale() ? 1 : 0, 1);
     CHECK_EQ(count(38, 25, 198, 64, kStale) > 50, 1);   // the last power, frozen in grey
     CHECK_EQ(count(38, 25, 198, 64, kWatt), 0);
@@ -1673,10 +1691,12 @@ static void test_home_stale() {
     CHECK_EQ(count(150, 1, 222, 18, kStale) > 100, 1);   // the LAST pill: a kStale plate in the hero cell's corner
     ui.tick(84200);
     ui.tick(84300);
+    settle(ui, 84300);
     CHECK_EQ(count(150, 1, 222, 18, kStale) > 100, 1);   // it counts the age but stays a plate
     // Long OK on Home drops the frozen state: back to the NO VBUS plate.
     ui.on_button(Button::Ok, ButtonEvent::Long, 84400);
     ui.tick(84500);
+    settle(ui, 84500);
     CHECK_EQ(ui.context().stale() ? 1 : 0, 0);
     CHECK_EQ(count(0, 0, 224, 240, kStale), 0);
     CHECK_EQ(count(150, 1, 222, 18, kSurface) > 100, 1);   // the NO VBUS pill
@@ -1696,15 +1716,18 @@ static void test_detail_is_live_while_home_holds_last() {
     g_stub.adc = a;
     ui.tick(80000);
     ui.tick(80200);
+    settle(ui, 80200);
     g_stub.pm.vbus_mv = 0; g_stub.pm.current_ma = 0; g_stub.pm.power_mw = 0; g_stub.pm.flow = power::Flow::Idle;
     a.cc1_mv = 2000; a.cc2_mv = 1100; a.dp_mv = 120; a.dm_mv = 90;      // the lines as they read once unplugged
     g_stub.adc = a;
     ui.tick(82000);
     ui.tick(82200);
+    settle(ui, 82200);
     CHECK_EQ(ui.context().stale() ? 1 : 0, 1);                          // Home would be on LAST here
     ui.goto_page(uint8_t(Page::Detail), 82300);
     ui.tick(82400);
     ui.tick(82600);
+    settle(ui, 82600);
     auto count = [&](int x0, int y0, int x1, int y1, uint16_t col) {
         int n = 0;
         for (int y = y0; y < y1; y++)
@@ -1724,6 +1747,7 @@ static void test_detail_is_live_while_home_holds_last() {
     g_stub.adc = a;
     ui.tick(83000);
     ui.tick(83200);
+    settle(ui, 83200);
     CHECK_EQ(hash(4, 170, 101, 214) != cc_before ? 1 : 0, 1);           // CC1/CC2 cells moved
     CHECK_EQ(hash(106, 126, 223, 170) != dm_before ? 1 : 0, 1);         // D+/D- cells moved
     CHECK_EQ(count(0, 0, 224, 240, kStale), 0);
@@ -1731,6 +1755,7 @@ static void test_detail_is_live_while_home_holds_last() {
     ui.goto_page(uint8_t(Page::Home), 83300);
     ui.tick(83400);
     ui.tick(83600);
+    settle(ui, 83600);
     CHECK_EQ(count(150, 1, 222, 18, kStale) > 100 ? 1 : 0, 1);
     g_stub.pm = {};
     g_stub.adc.reset();

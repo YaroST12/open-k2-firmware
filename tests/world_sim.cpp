@@ -124,6 +124,8 @@ std::span<std::uint8_t> g_noinit;
 struct Queued { int frame; std::size_t left; };   // a replay frame in the RX FIFO: bytes not yet popped
 std::deque<Queued> g_rxq;
 std::map<std::pair<unsigned, unsigned>, bool> g_pins;
+struct KeyPulse { std::uint8_t port, n; double down_ms, up_ms; };
+std::vector<KeyPulse> g_key_pulses;
 
 double world_now() { return S->t0 + S->us / 1000.0; }
 
@@ -705,6 +707,7 @@ void common_start(const Timing& t) {
     g_rxq.clear();
     g_mv_per_count = k2::power::raw_to_mv(k2::power::Chip::Ina226, k2::power::align_vbus(k2::power::Chip::Ina226, 10000)) / 10000.0;
     g_pins.clear();
+    g_key_pulses.clear();
     for (const auto& p : {k2::pins::key_plus, k2::pins::key_minus, k2::pins::key_ok, k2::pins::key_back})
         g_pins[{unsigned(p.port), p.n}] = true;   // released (active low)
     g_stub.on_log = on_log;
@@ -1050,7 +1053,13 @@ bool read(Bus bus, std::uint8_t dev, std::uint8_t reg, std::span<std::uint8_t> o
 
 namespace reg {
 bool host_pin(Port p, std::uint8_t n, HostPin op, unsigned) {
-    if (op == HostPin::Read && p == pins::key_plus.port && n == pins::key_plus.n && world::S->reboot) return !world::plus_held();
+    if (op == HostPin::Read) {
+        if (p == pins::key_plus.port && n == pins::key_plus.n && world::S->reboot) return !world::plus_held();
+        const double ms = world::fw_ms();
+        for (const world::KeyPulse& kp : world::g_key_pulses) {
+            if (kp.port == static_cast<std::uint8_t>(p) && kp.n == n && ms >= kp.down_ms && ms < kp.up_ms) return false;
+        }
+    }
     bool& v = world::g_pins[{unsigned(p), n}];
     if (op == HostPin::Set) v = true;
     else if (op == HostPin::Clear) v = false;
@@ -1178,6 +1187,12 @@ namespace bbpersist { void poll(bool) {} }
 namespace transcap { void poll() {} }
 
 }  // namespace k2
+
+namespace world {
+void schedule_plus_pulse(double down_fw_ms, double up_fw_ms) {
+    g_key_pulses.push_back({static_cast<std::uint8_t>(k2::pins::key_plus.port), k2::pins::key_plus.n, down_fw_ms, up_fw_ms});
+}
+}  // namespace world
 
 extern "C" std::uint32_t k2_stack_free_bytes() { return 4096; }
 extern "C" std::uint32_t k2_msp_free_bytes() { return 1024; }

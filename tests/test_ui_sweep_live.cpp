@@ -132,6 +132,10 @@ int32_t full_scale(const ct::Runner& r) {
     return std::max<int32_t>((topmv * 110 / 100 + 999) / 1000 * 1000, 6000);
 }
 
+void settle(Ui& ui, uint32_t& t) {
+    for (int i = 0; i < 40 && ui.painting(); ++i) { t += 10; ui.tick(t); }
+}
+
 // One scene at rotation 0, pixel-checked: the badge, the gauge, the per-point line.
 void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_band, const char* name) {
     Ui ui; uint32_t t;
@@ -139,7 +143,7 @@ void check_scene(bool avs, int ceiling_mv, unsigned points, bool expect_out_of_b
     const bool reached = run_to_point(ui, t, points);
     CHECK_EQ(reached, true);
     if (!reached) return;
-    t += 600; ui.tick(t);
+    t += 600; ui.tick(t); settle(ui, t);
     const auto& r = ui.charger_test_results();
     const auto live = r.sweep_live();
     CHECK_EQ(live.active, true);
@@ -204,7 +208,7 @@ int main() {
         const bool found = run_to_plan_row(ui, t);
         CHECK_EQ(found, true);
         if (!found) return test_report("test_ui_sweep_live");
-        t += 600; ui.tick(t);
+        t += 600; ui.tick(t); settle(ui, t);
         const auto& r = ui.charger_test_results();
         const auto& st = r.steps()[r.index()];
         CHECK_EQ(r.sweep_live().active, false);
@@ -231,7 +235,7 @@ int main() {
             Ui ui; uint32_t t;
             start_sweep(ui, t, avs, rot, 36000);
             CHECK_EQ(run_to_point(ui, t, 40), true);
-            t += 600; ui.tick(t);
+            t += 600; ui.tick(t); settle(ui, t);
             char name[48];
             std::snprintf(name, sizeof name, "sweep_%s_rot%u", avs ? "avs" : "pps", unsigned(rot));
             dump_panel(name);

@@ -67,8 +67,20 @@ constexpr uint32_t kIdleLogEvery = 5;       // every 10 s
 Context* g_ctx = nullptr;
 ButtonDetector g_det[4];                  // indexed by Button: Back, Minus, Ok, Plus
 ButtonDetector g_vdet[4];                 // the remote's keys (logical, separate from the physical pins)
+struct QueuedButton {
+    Button button = Button::Back;
+    ButtonEvent ev = ButtonEvent::None;
+    uint32_t now = 0;
+    bool remote = false;
+};
+constexpr int kBtnQueueCap = 16;
+QueuedButton g_btn_q[kBtnQueueCap]{};
+uint8_t g_btn_head = 0;
+uint8_t g_btn_tail = 0;
+uint8_t g_btn_count = 0;
 uint32_t g_press_count = 0;
 uint32_t g_last_ms = 0;
+uint32_t g_last_btn_ms = 0;
 uint32_t g_last_loop_ms = 0;
 uint32_t g_last_heartbeat_ms = 0;
 uint32_t g_heartbeats = 0;
@@ -82,6 +94,52 @@ inline bool raw_down(Button b) {
     case Button::Back:  return !k2::pins::key_back.read();
     }
     return false;
+}
+
+void push_btn(Button b, ButtonEvent ev, uint32_t now, bool remote) {
+    if (ev == ButtonEvent::None || g_btn_count >= kBtnQueueCap) return;
+    g_btn_q[g_btn_tail] = {b, ev, now, remote};
+    g_btn_tail = static_cast<uint8_t>((g_btn_tail + 1) % kBtnQueueCap);
+    g_btn_count++;
+}
+
+bool pop_btn(QueuedButton &out) {
+    if (g_btn_count == 0) return false;
+    out = g_btn_q[g_btn_head];
+    g_btn_head = static_cast<uint8_t>((g_btn_head + 1) % kBtnQueueCap);
+    g_btn_count--;
+    return true;
+}
+
+// Sample physical and remote buttons at 1 ms resolution so presses shorter than a UI paint or driver wait
+// are debounced and queued without invoking Ui inside the idle/wait hook (ARCH_REWORK E3).
+bool sample_buttons(uint32_t now) {
+    Context *const c = g_ctx;
+    if (!c || now == g_last_btn_ms) return false;
+    g_last_btn_ms = now;
+    for (int i = 0; i < 4; i++) {
+        const Button b = static_cast<Button>(i);
+        // A remote press is a logical key with its own debouncer: it never mixes into the physical pin level,
+        // so the UI does not remap it by the rotation and it cannot join the +/- rotation gesture.
+        const bool vdown = c->remote.button_down(b, now);
+        const ButtonEvent vev = g_vdet[i].update(vdown, now);
+        const bool down = raw_down(b);
+        const ButtonEvent ev = g_det[i].update(down, now);
+        if (vev != ButtonEvent::None) push_btn(b, vev, now, true);
+        // The key that chose the boot mode is still down (its Long / Hold would reach the UI, and it could be one half of
+        // the OK + Back reboot chord): its events are the boot's, not the user's, until it is up. Other keys work at once.
+        if (c->boot_key_swallow && b == c->boot_key) {
+            if (!down && !g_det[i].pressed()) c->boot_key_swallow = false;
+            continue;
+        }
+        if (ev != ButtonEvent::None) push_btn(b, ev, now, false);
+    }
+    return true;
+}
+
+void wait_hook() {
+    k2::transcap::poll();
+    sample_buttons(k2::systick::millis());
 }
 
 // The boot-info QR screen (k2/ui/bootscreen.hpp): one frame every 500 ms while the key that chose the boot mode is held, the last
@@ -223,6 +281,7 @@ void idle_hook() {   // drain PD frames during long draws (tSenderResponse ~30 m
         k2::loopstat::stats.service.note(t);   // instrumentation: the PD service cadence inside a paint
         k2::fusb302::service(); k2::fctrig::service_ufcs(); k2::fctrig::service_hs();
     }
+    sample_buttons(t);   // capture 1 ms button edges even across long draws (E3)
     // Unattached, poll() does not run during a long redraw (a Home repaint as VBUS appears is ~150 ms): read VBUS here and
     // let a rise kick the CC scan, or the source's offers ~130 ms after its VBUS go by unrouted (fusb302.hpp scan_service).
     static uint32_t last_scan;
@@ -236,13 +295,17 @@ void idle_hook() {   // drain PD frames during long draws (tSenderResponse ~30 m
 }
 
 void install_hooks() {
-    k2::systick::set_wait_hook(k2::transcap::poll);   // delay_ms() waits (FUSB302 CC scan, 2 Hz) keep the capture sampling
+    k2::systick::set_wait_hook(wait_hook);   // delay_ms() waits keep transition capture & 1 ms button polling active
     k2::lcd::set_idle_hook(idle_hook);
 }
 
 void begin(Context& ctx) {
     g_ctx = &ctx;
+    for (auto &d : g_det) d = {};
+    for (auto &d : g_vdet) d = {};
+    g_btn_head = g_btn_tail = g_btn_count = 0;
     g_last_ms = k2::systick::millis();
+    g_last_btn_ms = g_last_ms;
     g_last_loop_ms = g_last_ms;
     g_last_heartbeat_ms = g_last_ms;
 }
@@ -282,40 +345,32 @@ void pass() {
     k2::transcap::poll();                       // transition capture: one VBUS/CC sample when due (no-op unless armed)
 
     const uint32_t now = k2::systick::millis();
-    if (now != g_last_ms) {                     // sample buttons once per millisecond
+    if (now != g_last_ms) {                     // PD service once per millisecond
         g_last_ms = now;
         k2::loopstat::stats.service.note(now);
         mark(Stage::Service);
         k2::fusb302::service();
+    }
+    const bool sampled = sample_buttons(now);
+    if (sampled || g_btn_count > 0) {
         mark(Stage::Buttons);
-        for (int i = 0; i < 4; i++) {
-            const Button b = static_cast<Button>(i);
-            // A remote press is a logical key with its own debouncer: it never mixes into the physical pin level,
-            // so the UI does not remap it by the rotation and it cannot join the +/- rotation gesture.
-            const bool vdown = c.remote.button_down(b, now);
-            const ButtonEvent vev = g_vdet[i].update(vdown, now);
-            const bool down = raw_down(b);
-            const ButtonEvent ev = g_det[i].update(down, now);
+        if (!c.bootscreen.showing()) {
+            for (int i = 0; i < 4; i++) {
+                const Button b = static_cast<Button>(i);
+                c.ui.set_remote_pressed(b, g_vdet[i].pressed(), now);
+                if (!c.boot_key_swallow || b != c.boot_key) c.ui.set_pressed(b, g_det[i].pressed(), now);
+            }
+        }
+        QueuedButton qb;
+        while (pop_btn(qb)) {
             if (c.bootscreen.showing()) {   // the QR screen takes no input but the early close
-                if (b == Button::Back && (ev == ButtonEvent::Short || vev == ButtonEvent::Short)) end_boot_screen(now);
+                if (qb.button == Button::Back && qb.ev == ButtonEvent::Short) end_boot_screen(qb.now);
                 continue;
             }
-            c.ui.set_remote_pressed(b, g_vdet[i].pressed(), now);
-            if (vev != ButtonEvent::None) {
-                g_press_count++;
-                if (c.ui.on_remote_button(b, vev, now) == k2::UiAction::Reboot) c.reboot();
-            }
-            // The key that chose the boot mode is still down (its Long / Hold would reach the UI, and it could be one half of
-            // the OK + Back reboot chord): its events are the boot's, not the user's, until it is up. Other keys work at once.
-            if (c.boot_key_swallow && b == c.boot_key) {
-                if (!down && !g_det[i].pressed()) c.boot_key_swallow = false;
-                continue;
-            }
-            c.ui.set_pressed(b, g_det[i].pressed(), now);
-            if (ev != ButtonEvent::None) {
-                g_press_count++;
-                if (c.ui.on_button(b, ev, now) == k2::UiAction::Reboot) c.reboot();
-            }
+            g_press_count++;
+            const k2::UiAction act = qb.remote ? c.ui.on_remote_button(qb.button, qb.ev, qb.now)
+                                               : c.ui.on_button(qb.button, qb.ev, qb.now);
+            if (act == k2::UiAction::Reboot) c.reboot();
         }
     }
 

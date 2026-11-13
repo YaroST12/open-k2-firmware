@@ -18,7 +18,7 @@ struct WalkDest {
 };
 
 constexpr WalkDest kWalkDests[] = {
-    {"Home", 0, true}, {"Detail", 1, true}, {"Charger", 2, false}, {"Lines", 3, true}, {"Tools", 4, true}, {"Settings", 5, true},
+    {"Home", 0, true}, {"Detail", 1, true}, {"Charger", 2, true}, {"Lines", 3, true}, {"Tools", 4, true}, {"Settings", 5, true},
     {"Connection", kPdPage, false}, {"Diag", kDiagPage, true},
     {"Trigger", kMenuPageBase + static_cast<uint8_t>(Menu::Trigger), false},
     {"PdTrigger", kMenuPageBase + static_cast<uint8_t>(Menu::PdTrigger), false},

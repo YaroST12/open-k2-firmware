@@ -8,6 +8,7 @@
 #include "k2/core/log.hpp"
 #include "k2/core/paint_meter.hpp"
 
+#include <algorithm>
 #include <cstddef>
 
 #include "k2/drivers/pins.hpp"
@@ -30,10 +31,10 @@ enum class Cmd : std::uint8_t {
 
 constexpr std::uint8_t kMadctl[4] = {0x00, 0x60, 0xC0, 0xA0};
 constexpr std::uint16_t kRamOffset = 80;  // 240x240 window inside the 240x320 controller RAM
-// SPI3 clock divider off APB1 (120 MHz): DIV8 (15 MHz) is the boot value and ships; DIV4 (30 MHz) is a lab switch
-// (set_spi_div, not persisted). The service cadence during a paint is elapsed time (lcd_timing.hpp kServiceUs), so it
-// does not depend on the divider.
-constexpr SpiDiv kBootSpiDiv = SpiDiv::Div8;
+// SPI3 clock divider off APB1 (120 MHz): kBootSpiDiv (lcd_timing.hpp, DIV4 = 30 MHz, panel checked by the user
+// 2026-11-12) is the boot value and ships; DIV8 (15 MHz) and DIV2 (60 MHz, near the ST7789 write-clock limit, visual
+// check only) are lab values (set_spi_div, not persisted). The service cadence during a paint is elapsed time
+// (lcd_timing.hpp kServiceUs), so it does not depend on the divider.
 constexpr std::uint16_t ctrl1_for(SpiDiv div) { return (Spi::CTRL1_LCD & ~Spi::CTRL1_BR_MASK) | br_field(div); }
 SpiDiv g_div = kBootSpiDiv;
 std::uint16_t g_ctrl1 = ctrl1_for(kBootSpiDiv);
@@ -115,11 +116,12 @@ void spi_frame_16bit(bool on) {
     spi.CTRL1 = on ? (g_ctrl1 | Spi::CTRL1_DSIZE) : g_ctrl1;
 }
 
-void dma_wait();  // below: finishes an in-flight pixel transfer, serving PD/USB meanwhile
+void dma_wait();     // below: finishes an in-flight pixel transfer, serving PD/USB meanwhile
+void close_frame();  // below: dma_wait, then ends a pixel stream's frame left open by stream_end (CS high, 8-bit frames)
 
 // One chip-select frame: DC low for a command byte, then (separately framed) DC high data.
 void command(Cmd cmd) {
-    dma_wait();
+    close_frame();
     p::lcd_dc.clear();
     p::lcd_cs.clear();
     spi_write8(static_cast<std::uint8_t>(cmd));
@@ -127,7 +129,7 @@ void command(Cmd cmd) {
     p::lcd_cs.set();
 }
 void data(std::span<const std::uint8_t> bytes) {
-    dma_wait();
+    close_frame();
     p::lcd_dc.set();
     p::lcd_cs.clear();
     for (std::uint8_t b : bytes) spi_write8(b);
@@ -148,7 +150,7 @@ void set_window(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint1
     y0 += g_y_off; y1 += g_y_off;
     const std::uint8_t cols[4] = {std::uint8_t(x0 >> 8), std::uint8_t(x0), std::uint8_t(x1 >> 8), std::uint8_t(x1)};
     const std::uint8_t rows[4] = {std::uint8_t(y0 >> 8), std::uint8_t(y0), std::uint8_t(y1 >> 8), std::uint8_t(y1)};
-    dma_wait();
+    close_frame();
     p::lcd_cs.clear();
     p::lcd_dc.clear();
     spi_write8(static_cast<std::uint8_t>(Cmd::CASET));
@@ -190,10 +192,22 @@ void stream_service() {
 void push_pixel(std::uint16_t c) { spi_write16(c); }
 
 // ---- DMA pixel transfer ----------------------------------------------------------------------
-// One transfer is in flight at most. stream_fill starts it and returns (the source is the static
-// g_fill_word, so the caller's CPU work overlaps the wire time); stream_pixels waits for its own
-// transfer because the caller's buffer may live on the stack. Everything that touches SPI3, DC or
-// CS first calls dma_wait(), which is also where usb::service() and the idle hook keep running.
+// One transfer is in flight at most, and every one is left running when the stream call returns, so the caller's CPU work
+// (rendering the next run of glyph pixels, laying out the next box) overlaps the wire time:
+//  - stream_fill sends the static g_fill_word;
+//  - stream_pixels copies the caller's run (it may live on the stack) into one of two driver buffers (ping-pong): the copy
+//    goes into the buffer that is NOT on the wire, then the call waits for the previous transfer and starts its own;
+//  - stream_begin only records the window; the first pixels or fill of the stream send CASET / RASET / RAMWR (open_window),
+//    so the window's own setup and the caller's first run are composed while the previous stream is still on the wire;
+//  - stream_end leaves the frame open (CS low, 16-bit frames, the last transfer running); whatever touches SPI3, DC or CS
+//    next closes it first (close_frame: dma_wait, BF clear, CS high, 8-bit frames).
+// dma_wait() is where usb::service() and the idle hook keep running while the CPU has nothing else to do.
+constexpr std::uint32_t kPingPx = 256;   // a text chunk is 80 px, a band row at most 240: one copy per call
+std::uint16_t g_ping[2][kPingPx];
+unsigned g_ping_next;                    // the buffer the next run is copied into (the other one may be on the wire)
+bool g_win_pending;                      // stream_begin recorded a window that is not on the wire yet
+std::uint16_t g_win[4];
+bool g_frame_open;                       // a pixel stream's frame is still open on the wire (stream_end left it)
 volatile std::uint16_t g_fill_word;
 const std::uint16_t* g_dma_src;   // nullptr: fixed source word (fill)
 std::uint32_t g_dma_n;            // units in the in-flight transfer
@@ -259,20 +273,55 @@ void dma_wait() {
     stream_service();
 }
 
-// Runs the whole count through DMA in <=65535-unit pieces. src == nullptr is a fill of
-// g_fill_word (the last piece stays in flight); a pixel buffer is waited for piece by piece.
-void dma_send(const std::uint16_t* src, std::uint32_t count) {
+// A fill of `count` g_fill_word units through DMA in <=65535-unit pieces; the last piece stays in flight.
+void dma_fill(std::uint32_t count) {
     while (count) {
         dma_wait();
         if (!g_dma_ok) {   // a piece stalled and DMA is off: finish the rest polled
-            for (std::uint32_t i = 0; i < count; i++) push_pixel(src ? src[i] : g_fill_word);
+            for (std::uint32_t i = 0; i < count; i++) push_pixel(g_fill_word);
             return;
         }
         const std::uint32_t n = dma_chunk(count);
-        dma_start(src, n);
+        dma_start(nullptr, n);
         count -= n;
-        if (src) { src += n; dma_wait(); }
     }
+}
+
+// A pixel run through the ping-pong buffers: each piece is copied while the previous transfer is still on the wire, then
+// started; the last piece stays in flight.
+void dma_pixels(const std::uint16_t* src, std::uint32_t count) {
+    while (count) {
+        const std::uint32_t n = count < kPingPx ? count : kPingPx;
+        std::uint16_t* buf = g_ping[g_ping_next];
+        g_ping_next ^= 1u;
+        std::copy(src, src + n, buf);   // never the buffer on the wire: one transfer in flight, the other buffer's
+        dma_wait();
+        if (!g_dma_ok) {   // stalled (now or before): the rest goes out polled
+            for (std::uint32_t i = 0; i < count; i++) push_pixel(src[i]);
+            return;
+        }
+        dma_start(buf, n);
+        src += n;
+        count -= n;
+    }
+}
+
+void close_frame() {
+    dma_wait();
+    if (!g_frame_open) return;
+    spi_wait_idle();     // BF clear: the last frame has left the shift register before CS rises
+    p::lcd_cs.set();
+    spi_frame_16bit(false);  // back to 8-bit frames for commands
+    g_frame_open = false;
+}
+
+// The recorded window goes on the wire (closing the previous frame first) and the pixel frames start.
+void open_window() {
+    if (!g_win_pending) return;
+    g_win_pending = false;
+    set_window(g_win[0], g_win[1], g_win[2], g_win[3]);   // closes the previous frame; leaves CS low, DC high
+    spi_frame_16bit(true);   // 16-bit pixel frames until the frame is closed
+    g_frame_open = true;
 }
 
 }  // namespace
@@ -354,7 +403,7 @@ unsigned spi_div() { return static_cast<unsigned>(g_div); }
 bool set_spi_div(unsigned divider) {
     SpiDiv d;
     if (!lab_spi_div(divider, d) || g_stream_open || g_sink) return false;
-    dma_wait();         // an in-flight fill still owns the wire
+    close_frame();      // an in-flight transfer and the last stream's open frame still own the wire
     spi_wait_idle();
     g_div = d;
     g_ctrl1 = ctrl1_for(d);
@@ -395,9 +444,10 @@ private:
 
 void stream_begin(std::uint16_t x0, std::uint16_t y0, std::uint16_t x1, std::uint16_t y1) {
     if (g_sink) return g_sink->begin(x0, y0, x1, y1);
-    const PaintTimer timer(0);
-    set_window(x0, y0, x1, y1);  // leaves CS low, DC high: the pixel stream continues the frame
-    spi_frame_16bit(true);  // 16-bit pixel frames from here until stream_end()
+    // Recorded only: the first pixels or fill send it (open_window), so the previous stream's last transfer keeps the wire
+    // while the caller composes this one's first run.
+    g_win[0] = x0; g_win[1] = y0; g_win[2] = x1; g_win[3] = y1;
+    g_win_pending = true;
     g_stream_open = true;   // the service cadence carries on from the previous window (elapsed time, not reset here)
 }
 
@@ -405,11 +455,13 @@ void stream_pixels(std::span<const std::uint16_t> px) {
     if (g_sink) return g_sink->pixels(px.data(), px.size());
     const PaintTimer timer(static_cast<std::uint32_t>(px.size()));
     if (g_erase) return stream_fill(0, static_cast<std::uint32_t>(px.size()));
+    if (px.empty()) return;
+    open_window();
     if (kLcdDma && g_dma_ok && use_dma(static_cast<std::uint32_t>(px.size()))) {
-        dma_send(px.data(), static_cast<std::uint32_t>(px.size()));   // services inside its waits
+        dma_pixels(px.data(), static_cast<std::uint32_t>(px.size()));   // left in flight; services inside its waits
         return;
     }
-    dma_wait();   // a fill started by the caller may still be on the wire
+    dma_wait();   // the previous run or fill may still be on the wire
     for (std::uint16_t c : px) push_pixel(c);
     stream_service();
 }
@@ -418,10 +470,12 @@ void stream_fill(std::uint16_t color, std::uint32_t count) {
     if (g_sink) return g_sink->fill(color, count);
     const PaintTimer timer(count);
     if (g_erase) color = 0;
+    if (count == 0) return;
+    open_window();
     if (kLcdDma && g_dma_ok && use_dma(count)) {
         dma_wait();                 // the source word is shared: the previous fill must be done
         g_fill_word = color;
-        dma_send(nullptr, count);   // the last piece is left running; stream_end or the next call waits
+        dma_fill(count);            // the last piece is left running; the next call or close_frame waits
         return;
     }
     dma_wait();
@@ -435,12 +489,15 @@ void stream_fill(std::uint16_t color, std::uint32_t count) {
 
 void stream_end() {
     if (g_sink) return;  // the panel CS was never asserted
-    const PaintTimer timer(0);
-    dma_wait();         // the last fill piece may still be running
-    spi_wait_idle();     // BF clear: the last frame has left the shift register before CS rises
-    p::lcd_cs.set();
-    spi_frame_16bit(false);  // back to 8-bit frames for commands
+    // A window that got no pixels never went on the wire; otherwise the frame stays open, its last transfer running, until
+    // the next window or command closes it (close_frame).
+    g_win_pending = false;
     g_stream_open = false;
+}
+
+void flush() {
+    if (g_sink) return;
+    close_frame();
 }
 
 void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t h, std::uint16_t color) {
@@ -454,5 +511,6 @@ void fill_rect(std::uint16_t x, std::uint16_t y, std::uint16_t w, std::uint16_t 
 }
 
 void fill(std::uint16_t color) { fill_rect(0, 0, kWidth, kHeight, color); }
+void clear_strip(std::uint16_t y, std::uint16_t h, std::uint16_t color) { fill_rect(0, y, kWidth, h, color); }
 
 }  // namespace k2::lcd

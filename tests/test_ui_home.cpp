@@ -128,6 +128,7 @@ static uint32_t g_t = 100000;
 
 static void settle(Ui &ui) {
     for (int i = 0; i < 4; i++) { g_t += 300; ui.tick(g_t); }
+    while (ui.painting()) { g_t += 20; ui.tick(g_t); }
 }
 
 static void live_pd(bool reverse, int mv, int ma) {
@@ -189,12 +190,14 @@ static Ui &home_ui(uint8_t rot = 0) {
     Ui &ui = fresh_ui();
     ui.set_rotation(rot, g_t);
     ui.goto_page(static_cast<uint8_t>(Page::Home), g_t);
+    while (ui.painting()) { g_t += 20; ui.tick(g_t); }
     return ui;
 }
 
 // Run `n` frames 100 ms apart (the display filter lets digits change 4x a second).
 static void run(Ui &ui, int n) {
     for (int i = 0; i < n; i++) { g_t += 100; ui.tick(g_t); }
+    while (ui.painting()) { g_t += 20; ui.tick(g_t); }
 }
 
 static void unplug() {

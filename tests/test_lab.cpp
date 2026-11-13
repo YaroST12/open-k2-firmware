@@ -129,11 +129,12 @@ int main() {
     CHECK_EQ(ok("ufcs probe 5000"), false);
     CHECK_STR(std::string(lab::name(lab::Id::UfcsSet)).c_str(), "ufcs.set");
     CHECK_STR(std::string(lab::name(lab::Id::UfcsProbe)).c_str(), "ufcs.probe");
-    // lcd: the SPI clock switch (4 or 8, never raises VBUS, no confirm)
+    // lcd: the SPI clock switch (2, 4 or 8, never raises VBUS, no confirm)
     CHECK_EQ(P("lcd show", c) == nullptr && c.id == lab::Id::LcdShow && c.na == 0, true);
     CHECK_EQ(P("lcd spi 4", c) == nullptr && c.id == lab::Id::LcdSpi && c.a[0] == 4 && c.na == 1, true);
     CHECK_EQ(P("lcd spi 8 --json", c) == nullptr && c.a[0] == 8 && c.o.json, true);
-    CHECK_EQ(ok("lcd spi 2"), false);                              // 60 MHz is not offered
+    CHECK_EQ(P("lcd spi 2", c) == nullptr && c.a[0] == 2, true);   // 60 MHz: RAM-only lab value, visual check
+    CHECK_EQ(ok("lcd spi 3"), false);
     CHECK_EQ(ok("lcd spi 0"), false);
     CHECK_EQ(ok("lcd spi 16"), false);
     CHECK_EQ(ok("lcd spi"), false);                                // divider missing

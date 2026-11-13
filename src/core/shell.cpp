@@ -26,7 +26,7 @@ constexpr std::string_view kHelp =
     "stream on [log|trace|power[=Hz]|run|all] [old] | stream off   everything, one binary stream (tools/k2_stream.py)\r\n"
     "lab: accp|qc2|qc3|qc3+|afc|fcp|scp|vooc|ufcs|vivo|dpdm|vbus|cc rp|rd|pd caps|request|... see docs/PROTOCOL_LAB.md\r\n"
     "ufcs show|set <field> <v>|reset|probe|result   UFCS frame/timing tuner (RAM) and the 5 V probe, no confirm\r\n"
-    "lcd show | lcd spi <4|8>    LCD SPI clock divider (RAM only, /8 at boot) and paint totals, no confirm\r\n"
+    "lcd show | lcd spi <2|4|8>    LCD SPI clock divider (RAM only, /4 = 30 MHz at boot, /2 = 60 MHz visual check) and paint totals, no confirm\r\n"
     "twin list|predict [n]|status|cancel|learn identify|sniff [dry] [name]|rename n name   device twins (docs/DEVICE_TWIN.md)\r\n"
     "twin run [n|all] confirm | twin delete n confirm   the live proof negotiates with the charger as the twin\r\n"
 #if K2_PDSTRESS

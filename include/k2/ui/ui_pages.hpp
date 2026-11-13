@@ -68,6 +68,7 @@ struct UiContext {
     Surface screen{};            // the same content area in panel pixels (224 x 240 or 240 x 224 by rotation): what a page draws on unscaled
     uint8_t rotation = 0;        // physical LCD rotation, supplied by Ui
     uint32_t now = 0;            // time of the event being dispatched
+    PaintBudget *budget = nullptr;   // active per-pass slice budget; nullptr during atomic screenshots/boot
     power::Metrics pm{};             // what the screen shows: One Euro smoothed (Settings > Smoothing)
     power::Metrics pm_avg{};         // the 128-sample average: the charger test's current, link detection, cable resistance
     bool pm_online = false;
@@ -234,7 +235,7 @@ protected:
     // Settings to the K2 place. A submenu takes none of it (the Ui pops it on BACK).
     bool back_event(Event e);
     // Short [+] / [-] scroll `lv` down / up one row; declined when the list does not overflow.
-    static bool scroll_event(ListView &lv, Event e, uint32_t now_ms = 0);
+    bool scroll_event(ListView &lv, Event e, uint32_t now_ms = 0);
     PanelLabels base_labels() const;
 
     UiContext &ctx_;
@@ -245,6 +246,7 @@ protected:
     bool bar_icon_ = false;    // a rotation page that shows its icon and title_ in the bar (a Bench place)
     bool bar_valid_ = false;   // the right half of the chrome bar matches bar_sig_
     uint32_t bar_sig_ = 0;
+    ReadoutShown readout_shown_;   // what the right half shows, for a repaint of the changed cells only (title_badge)
 };
 
 class ChargerTestPage;
@@ -273,6 +275,10 @@ public:
     using Proposal = std::array<uint32_t, pd::kMaxPdos + 24>;
     explicit ChargerTestSession(UiContext& c) : ctx_(c), runner_(*this) {}
     void enter();                  // the page is (re)entered: the wizard starts at Algorithms, or at Resume for a journaled run
+    // The page's paint writes every content pixel (Ui::page_opaque): only the Algorithms list (rows from kBodyY, the empty
+    // tail slots wiped, bar and footer whole) is proven so (tests/test_ui_capture.cpp walk). `entering` = enter() runs
+    // before the paint, so the stage it paints is the one enter() picks, not the one held now.
+    bool paints_opaque(bool entering) const { return entering ? !resume_pending_ : stage_ == Stage::Algorithms; }
     void leave();                  // the page is left: a run that is not a resume's Rd is stopped (= cancel())
     void poll(uint32_t);
     // Load an interrupted run from the journal; true = open the page in Resume. `cancel` = BACK was held at power-up: the
@@ -592,7 +598,7 @@ private:
     static void row_fn(void*, int, bool, kit::RowSpec&);        // the RowList stages
     static void result_row_fn(void*, int, kit::ResultRowSpec&); // the Running / Results grid
     void bar();                                     // top bar: the wizard progress or the plain title
-    void foot(FooterTone, std::string_view);        // the footer through the page's one cache
+    bool foot(FooterTone, std::string_view);        // the footer through the page's one cache
     [[gnu::noinline]] FooterTone footer_line(StrBuf<32> &);   // the stage's footer text; returns its tone
     [[gnu::noinline]] void paint_list();            // RowList stages: bind once, then selection and rows
     [[gnu::noinline]] void paint_review();
@@ -636,7 +642,10 @@ private:
     int needle_px_ = -1;                   // the gauge's needle column, -1 = the strip is not drawn
     int mark_px_ = -1;                     // a sweep row's gauge: the setpoint marker's column, -1 = not drawn (needle_px_ is its needle)
     uint32_t foot_sig_ = 0;                // Running: the footer (tone + text) last painted; 0 = not drawn
+    uint32_t hero_sig_ = 0;                // Waiting: the cached VBUS + color signature; 0 = not drawn
     uint16_t hero_color_ = 0;
+    int16_t clear_y_ = kFooterY;           // progressive stage-transition wipe cursor (< kFooterY = clearing)
+    uint8_t detail_step_ = 0;
     bool laid_ = false;                   // the stage's static part is on screen
 };
 
@@ -674,6 +683,8 @@ private:
     [[gnu::noinline]] uint32_t qty_head(int slot, home::Qty q, const Frame &f, QtyHead &h, home::Item *it, int &n);
     void paint_card(int cell, const Frame &f);   // 0 upper, 1 lower right-column card
     void paint_info(const Frame &f);      // the info block: one compositor cell, three repaint zones
+    bool paint_cell_sliced(int slot_id, uint32_t base_sig, const home::Cell &cell,
+                           int16_t x0, int16_t y0, int16_t x1, int16_t y1);
     // Display filter: V, A, W digits and the card values change at most 4 times a second (one throttle, one set).
     Throttle thr_{250};
     int32_t v_mv_ = 0, a_ma_ = 0, w_mw_ = 0;         // |values| as shown
@@ -704,6 +715,15 @@ private:
     uint32_t card_base_[2] = {};                      // per card cell: card, mode, dot
     uint32_t card_sig_[2][4] = {};                    // per card cell: one signature per text row
     bool card_valid_[2] = {false, false};
+    // Row cursor & base signature per sliced compositor cell (0..2 qty, 3..4 cards, 5 info).
+    int16_t slice_y_[6] = {-1, -1, -1, -1, -1, -1};
+    uint32_t slice_sig_[6] = {};
+    int8_t painted_cursor_[3] = {-1, -1, -1};
+    uint8_t slice_dirty_ = 0;
+    uint8_t rr_slot_ = 0;                             // round-robin cursor across 6 home surfaces (prevents starvation)
+    uint32_t slice_parts_[3][3] = {};                 // head, arrow, bar signatures when qty slice started
+    uint32_t slice_card_[2][4] = {};                  // zone signatures when card slice started
+    uint32_t slice_info_[3] = {};                     // zone signatures when info slice started
 };
 
 // Detail page: every measured value as small text (D+/D-, CC1/CC2, contract, cable, protocol, R, temperature,
@@ -717,10 +737,12 @@ public:
     PanelLabels labels() const override { return base_labels(); }
     void invalidate() override;
 private:
+    void reset_cells();
     void paint_flow(bool live, power::Flow flow);
     static constexpr int kFields = 19;   // V, A, W, then 8 rows x 2 receipt cells (Flow paints itself)
     Field f_[kFields];
     uint8_t flow_sig_ = 0xFF;
+    uint8_t static_step_ = 0;
 };
 
 // The live verdict the PD page and the remote PD_MATCH command both show (passive reads only).
@@ -793,11 +815,8 @@ private:
     void share_caps(uint32_t now_ms);
     void share_cable(uint32_t now_ms);
     void paint_status(uint32_t now_ms);
-    // `redraw` = the body area was wiped or never drawn (a new paint pass, tab, pop-up or empty state): paint it all.
-    // Otherwise only the rows whose text, colour or key changed are repainted.
-    void paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
-    // The no-PD body (ROADMAP 2026-11-10, Row C): one short message plus the 2-3 measured rows.
-    void paint_no_pd_body(const MatchResult &r, bool redraw);
+    bool paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink, bool redraw);
+    bool paint_no_pd_body(const MatchResult &r, bool redraw);
     // The no-PD gate (ROADMAP 2026-11-10, Row C): the Sink tab on any no-PD verdict with a device on the line, the Source tab
     // only when the source never offered PD. The Cable tab and the Details page never.
     bool no_pd_body() const {
@@ -805,8 +824,8 @@ private:
                (tab_ == conn::Tab::Sink ? (facts_.inline_sink || facts_.sink_seen)
                                         : tab_ == conn::Tab::Source && none_why_ == pd::PdNoneWhy::SourceNeverOffered);
     }
-    void paint_tab_indicator();
-    void paint_empty(bool redraw);
+    bool paint_tab_indicator();
+    bool paint_empty(bool redraw);
     void paint_popup(uint32_t now_ms);
     int16_t row_y0() const;                // where the body starts: under the tab strip, or at kBodyY for a single tool
     uint32_t actions_sig() const;          // the single tool's action rows: focus and enabled states
@@ -838,6 +857,8 @@ private:
     uint32_t op_until_ = 0;
     uint32_t sig_ = 0;
     bool sig_valid_ = false;
+    bool body_pending_ = false;            // a sliced paint_empty/paint_body did not finish on the last tick
+    bool match_valid_ = false;             // cached g_last_match matches cheap_sig_ across resumed body slices
     uint32_t cheap_sig_ = 0;               // scalar pre-check signature; only meaningful while sig_valid_
     bool defaulted_ = false;               // the tab was chosen by default_tab() on enter, not by the user
     // What the body area shows, so a changed row repaints alone: the kind, its tab, its row count and one hash per
@@ -847,6 +868,11 @@ private:
     Body body_ = Body::None;
     conn::Tab body_tab_ = conn::Tab::Source;
     uint8_t body_n_ = 0;
+    uint8_t tab_sig_ = 0;
+    bool band_done_ = false;
+    bool tail_cleared_ = false;
+    bool close_done_ = false;
+    int16_t body_clear_y_ = kFooterY;
     uint32_t nopd_msg_sig_ = 0;            // the no-PD message block's hash (painted only when it moved)
     std::array<uint32_t, kBodyRows> row_sig_{};
     // Row D (page flicker): debounced volatile inputs. A value must hold kHoldMs before it reaches a row
@@ -936,6 +962,7 @@ private:
     Live live_;
     Field val_[kRows];
     uint8_t marks_ = 0xFF;       // group markers last painted (2 bits per group), 0xFF = none yet
+    uint8_t static_step_ = 0;
     Elem foot_;
 };
 
@@ -951,15 +978,15 @@ public:
     void invalidate() override;
     ListState list_state() const { return ListState{}; }   // fixed layout: nothing scrolls
 private:
-    void lay_ground();
     void paint_bar(int i, int32_t mv, bool have);
-    void paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms);
+    bool paint_verdict(const std::optional<adc::Reading> &r, uint32_t now_ms);
     Field v_[4];
     int px_[4] = {-1, -1, -1, -1};
     Field pv_[1];                // the Rp value
     uint32_t vsig_ = 0;          // verdict row content last painted
     Elem foot_;
     bool painted_ = false;
+    uint8_t static_step_ = 0;
 };
 
 // Tools hub: a list of tools, each opens its own submenu. Short [+] / [-] select, OK opens.
@@ -1127,11 +1154,12 @@ public:
     // The K2 place (Bench > K2): the firmware's identity (version, then uptime and the USB link) over the settings, then
     // System state and Boot info.
     explicit SettingsPage(UiContext &c) : PageBase(c, Page::Settings, "K2", Icon::Chip) { bar_icon_ = true; }
+    void enter() override;
     void draw_static() override;
     void update(uint32_t now_ms) override;
     bool on_event(Event e) override;
     PanelLabels labels() const override;
-    void invalidate() override { ctx_.rows.invalidate(); foot_.invalidate(); id_.invalidate(); }
+    void invalidate() override { static_step_ = 0; ctx_.rows.invalidate(); foot_.invalidate(); id_.invalidate(); }
     ListState list_state() const { return ctx_.rows.state(); }
     int selected() const { return sel_; }
     static constexpr int kRows = 8;
@@ -1143,6 +1171,7 @@ private:
     bool share_boot_info();
     int &sel_ = ctx_.keep.settings_sel;   // remembered across page switches
     Elem foot_, id_;
+    uint8_t static_step_ = 0;
 };
 
 class AutorotatePage final : public PageBase {

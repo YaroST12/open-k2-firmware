@@ -37,4 +37,26 @@ inline constexpr uint8_t kSessionIdNoDevice = 1 << 5;     // Identify was refuse
 // Ui::Session::sub: the Connection page's tab (bits 1:0, conn::Tab), its pop-up (bit 2) and its details page (bit 3).
 inline constexpr uint8_t kSubTabMask = 3, kSubPopup = 1 << 2, kSubDetails = 1 << 3;
 
+// Per-pass LCD pixel budget to keep each main-loop UI call under the 20 ms scheduling ceiling.
+// Nullptr on UiContext::budget (e.g. render_for_capture) renders atomically without slicing.
+struct PaintBudget {
+    static constexpr int kDefaultPx = 4500;   // ~12 ms worst-case at /8 SPI + CPU; ~6 ms on /4 hardware
+    static constexpr int kStripRows = 16;     // <= 3840 px per strip clear in both 224 and 240 orientations
+    int cap = kDefaultPx;
+    int spent = 0;
+    bool more = false;
+
+    bool admit(int px, bool force_first = true) {
+        if (px <= 0) return true;
+        if (spent + px <= cap || (force_first && spent == 0)) {
+            spent += px;
+            return true;
+        }
+        more = true;
+        return false;
+    }
+    int left() const { return cap > spent ? cap - spent : 0; }
+    void defer() { more = true; }
+};
+
 }  // namespace k2

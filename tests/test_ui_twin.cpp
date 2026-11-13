@@ -50,6 +50,7 @@ Ui &open_page() {
     ui.push_menu(Menu::Twin, g_t + 100);
     g_t += 150;
     ui.tick(g_t);
+    while (ui.painting()) { g_t += 2; ui.tick(g_t); }
     return ui;
 }
 
@@ -108,6 +109,7 @@ void open_twin(Ui &ui, int index) {
     for (int i = 0; i < index; i++) press(ui, Button::Plus);
     press(ui, Button::Ok);
     step(ui, 50);
+    while (ui.painting()) step(ui, 2);
 }
 
 void test_rows_and_footer() {

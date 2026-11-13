@@ -521,7 +521,8 @@ void RowList::draw_row_cb(void *ctx, int index, const Rect &r, bool hi, Field &)
     if (!note_v.empty()) gfx_text(s, kLabelFont, kTextX, static_cast<int16_t>(y + kNoteDy), note_v, dim, bg);
 }
 
-void RowList::draw(uint32_t now_ms) {
+void RowList::draw(uint32_t now_ms, PaintBudget *bg) {
+    if (!fn_) { if (bg) bg->defer(); return; }
     list_.set_count(count_, false);
     list_.set_highlight(sel_);
     const ListState &st = list_.state();
@@ -540,6 +541,7 @@ void RowList::draw(uint32_t now_ms) {
     }
     if (want != extra_) {
         const bool known = extra_ >= 0;
+        if (want < kFocusExtra && bg && !bg->admit(static_cast<int>(surf_.w) * (kFocusExtra - want), true)) return;
         list_.set_focus_extra(want);
         if (known) list_.invalidate();
         if (want < kFocusExtra)   // the strip the open row used to cover belongs to nobody now
@@ -547,21 +549,23 @@ void RowList::draw(uint32_t now_ms) {
                      static_cast<int16_t>(kFocusExtra - want), kBg);
         extra_ = want;
     }
-    list_.draw(now_ms);
+    list_.draw(now_ms, bg);
 }
 
 // ---- KvTable -------------------------------------------------------------------------------------------------------------
-void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, int n) {
+void kv_static_row(const Surface &s, const KvLayout &l, const char *label, int i, bool trailing_line) {
     const Font &f = font_or_small(l.label_font);
-    for (int i = 0; i < n; i++) {
-        const int16_t y = kv_row_y(l, i);
-        gfx_fill(s, 0, y, s.w, 1, kBg);   // Fieldbook receipt: white space, no hairline (the row stays owned)
-        const int16_t ty = static_cast<int16_t>(y + row_text_y(l.pitch, f.height));
-        gfx_text(s, f, l.label_x, ty, labels[i], kInk2, kBg);
-        draw_leader(s, static_cast<int16_t>(l.label_x + text_width(f, labels[i]) + 5), static_cast<int16_t>(l.value_x - 4),
-                    static_cast<int16_t>(ty + f.ascent - 2));
-    }
-    gfx_fill(s, 0, kv_row_y(l, n), s.w, 1, kBg);
+    const int16_t y = kv_row_y(l, i);
+    gfx_fill(s, 0, y, s.w, 1, kBg);   // Fieldbook receipt: white space, no hairline (the row stays owned)
+    const int16_t ty = static_cast<int16_t>(y + row_text_y(l.pitch, f.height));
+    gfx_text(s, f, l.label_x, ty, label, kInk2, kBg);
+    draw_leader(s, static_cast<int16_t>(l.label_x + text_width(f, label) + 5), static_cast<int16_t>(l.value_x - 4),
+                static_cast<int16_t>(ty + f.ascent - 2));
+    if (trailing_line) gfx_fill(s, 0, kv_row_y(l, i + 1), s.w, 1, kBg);
+}
+
+void kv_static(const Surface &s, const KvLayout &l, const char *const *labels, int n) {
+    for (int i = 0; i < n; i++) kv_static_row(s, l, labels[i], i, i + 1 == n);
 }
 
 void draw_leader(const Surface &s, int16_t x0, int16_t x1, int16_t y) {
@@ -604,7 +608,7 @@ void draw_dashed(const Surface &s, int16_t x0, int16_t x1, int16_t y, uint16_t i
 
 static_assert(8 + 35 * 6 <= 224 - 4, "the identity line's 35 cells of font 12 fit beside the lane");
 
-void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig) {
+bool paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig, PaintBudget *bg) {
     const auto fnv = [](uint32_t h, uint32_t v) { return (h ^ v) * 16777619u; };
     uint32_t h = fnv(2166136261u, uint32_t(id.dim) | uint32_t(id.n) << 1);
     for (char ch : id.head.view()) h = fnv(h, uint8_t(ch));
@@ -615,7 +619,8 @@ void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig)
     h = fnv(h, 0x200u);
     for (char ch : id.line.view()) h = fnv(h, uint8_t(ch));
     h |= 1u;
-    if (!full && h == sig) return;
+    if (!full && h == sig) return true;
+    if (bg && !bg->admit(static_cast<int>(c.w) * (kPlaceListY - kIdY), true)) return false;
     sig = h;
     const int16_t hw = static_cast<int16_t>(text_width(kMid, id.head.view()));
     const int16_t chip_y = static_cast<int16_t>(kIdHeadY + (kMid.height - kChipH) / 2);
@@ -649,6 +654,7 @@ void paint_identity(const Surface &c, const Ident &id, bool full, uint32_t &sig)
     draw_dashed(c, 8, static_cast<int16_t>(c.w - 8), kIdDashY, kInk3, kBg);
     gfx_fill(c, static_cast<int16_t>(c.w - 8), kIdDashY, 8, 1, kBg);
     gfx_fill(c, 0, static_cast<int16_t>(kIdDashY + 1), c.w, static_cast<int16_t>(kPlaceListY - kIdDashY - 1), kBg);
+    return true;
 }
 
 void fill_list_gap(const Surface &s, int16_t y) {
@@ -665,20 +671,22 @@ void kv_cells(const Surface &s, const KvLayout &l, Field *cells, int n, const ui
     }
 }
 
-void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, int n, const uint8_t *chars, uint32_t marks) {
+void kv_ground_row(const Surface &s, const KvLayout &l, const char *label, int i, const uint8_t *chars, uint32_t marks) {
     const Font &kf = font_or_small(l.label_font), &vf = font_or_small(l.value_font);
-    for (int i = 0; i < n; i++) {
-        const int16_t y = kv_row_y(l, i);
-        const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
-        const int16_t vx = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * vf.adv) : l.value_x;
-        Box holes[3];
-        int h = 0;
-        if (marks >> i & 1u)
-            holes[h++] = {kMarkX, static_cast<int16_t>(y + 1 + (l.pitch - 1 - kMarkSize) / 2), kMarkSize, kMarkSize};
-        holes[h++] = {l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), static_cast<int16_t>(text_width(kf, labels[i])), kf.height};
-        holes[h++] = {vx, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)), static_cast<int16_t>(w * vf.adv), vf.height};
-        fill_except(s, {0, static_cast<int16_t>(y + 1), s.w, static_cast<int16_t>(l.pitch - 1)}, holes, h, kBg);
-    }
+    const int16_t y = kv_row_y(l, i);
+    const uint8_t w = chars && chars[i] < l.value_chars ? chars[i] : l.value_chars;
+    const int16_t vx = l.align == Align::Right ? static_cast<int16_t>(l.value_x + (l.value_chars - w) * vf.adv) : l.value_x;
+    Box holes[3];
+    int h = 0;
+    if (marks >> i & 1u)
+        holes[h++] = {kMarkX, static_cast<int16_t>(y + 1 + (l.pitch - 1 - kMarkSize) / 2), kMarkSize, kMarkSize};
+    holes[h++] = {l.label_x, static_cast<int16_t>(y + row_text_y(l.pitch, kf.height)), static_cast<int16_t>(text_width(kf, label)), kf.height};
+    holes[h++] = {vx, static_cast<int16_t>(y + row_text_y(l.pitch, vf.height)), static_cast<int16_t>(w * vf.adv), vf.height};
+    fill_except(s, {0, static_cast<int16_t>(y + 1), s.w, static_cast<int16_t>(l.pitch - 1)}, holes, h, kBg);
+}
+
+void kv_ground(const Surface &s, const KvLayout &l, const char *const *labels, int n, const uint8_t *chars, uint32_t marks) {
+    for (int i = 0; i < n; i++) kv_ground_row(s, l, labels[i], i, chars, marks);
 }
 
 void kv_row(const Surface &s, const KvLayout &l, int16_t y, std::string_view key, std::string_view value, uint16_t value_color,
@@ -726,10 +734,10 @@ void draw_alert_band(const Surface &s, int16_t y, bool error, std::string_view w
 }
 
 // ---- ActionCell ----------------------------------------------------------------------------------------------------------
-void ActionCell::draw_idle(std::string_view verb, std::string_view hint) {
+bool ActionCell::draw_idle(std::string_view verb, std::string_view hint, PaintBudget *bg) {
     uint32_t sig = mix_u32(mix_init(), 0);
     sig = mix(mix(sig, verb), hint);
-    e_.paint(sig, [&] {
+    return e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
         bar_px_ = -1;
         // The ticket: an ink block inset by the side gutters (Classic: its tint with the 2 px cyan frame).
         const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
@@ -752,11 +760,11 @@ void ActionCell::draw_idle(std::string_view verb, std::string_view hint) {
     });
 }
 
-void ActionCell::draw_armed(std::string_view word, std::string_view sub, int left_permille) {
+bool ActionCell::draw_armed(std::string_view word, std::string_view sub, int left_permille, PaintBudget *bg) {
     uint32_t sig = mix_u32(mix_init(), 1);
     sig = mix(mix(sig, word), sub);
     const int16_t w = static_cast<int16_t>(surf_.w - 2 * kTicketInset);
-    e_.paint(sig, [&] {
+    if (!e_.paint_budgeted(sig, bg, static_cast<int>(surf_.w) * h_, [&] {
         bar_px_ = -1;
         gfx_fill(surf_, 0, y_, kTicketInset, h_, kBg);
         gfx_fill(surf_, static_cast<int16_t>(kTicketInset + w), y_, kTicketInset, h_, kBg);
@@ -765,18 +773,19 @@ void ActionCell::draw_armed(std::string_view word, std::string_view sub, int lef
         const int16_t top = static_cast<int16_t>(y_ + (h_ - kBarH - content) / 2);
         centred_text(surf_, kMid, 4, static_cast<int16_t>(surf_.w - 8), top, word, kSpotInk, kCaution);
         centred_text(surf_, kLabelFont, 4, static_cast<int16_t>(surf_.w - 8), static_cast<int16_t>(top + kMid.height + 4), sub, kSpotInk, kCaution);
-    });
+    })) return false;
     if (left_permille < 0) left_permille = 0;
     if (left_permille > 1000) left_permille = 1000;
     const int16_t span = static_cast<int16_t>(w - 1);
     const int16_t px = static_cast<int16_t>((span * left_permille + 500) / 1000);
-    if (px == bar_px_) return;
+    if (px == bar_px_) return true;
     const int16_t by = static_cast<int16_t>(y_ + h_ - kBarH);
     const int16_t x0 = kTicketInset;
     if (bar_px_ < 0) gfx_fill(surf_, x0, by, px, kBarH, kSpotInk);
     else if (px < bar_px_) gfx_fill(surf_, static_cast<int16_t>(x0 + px), by, static_cast<int16_t>(bar_px_ - px), kBarH, kCaution);
     else gfx_fill(surf_, static_cast<int16_t>(x0 + bar_px_), by, static_cast<int16_t>(px - bar_px_), kBarH, kSpotInk);
     bar_px_ = px;
+    return true;
 }
 
 // ---- ProgressBar ---------------------------------------------------------------------------------------------------------

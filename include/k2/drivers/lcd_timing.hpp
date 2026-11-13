@@ -7,9 +7,12 @@
 
 namespace k2::lcd {
 
-// SPI3 clock divider off APB1 (120 MHz): /8 = 15 MHz ships; /4 = 30 MHz is a runtime lab switch (`lcd spi 4`, not
-// persisted); /2 = 60 MHz is for a hardware signal-integrity check on a specific board only.
+// SPI3 clock divider off APB1 (120 MHz): /4 = 30 MHz is the boot value and ships (the user checked the panel at 30 MHz
+// on 2026-11-12: clean); /8 = 15 MHz and /2 = 60 MHz are runtime lab values (`lcd spi <n>`, RAM only, never persisted).
+// 60 MHz sits near the ST7789 write-clock limit: it is only ever judged by a visual check of the panel by the user.
 enum class SpiDiv : std::uint8_t { Div2 = 2, Div4 = 4, Div8 = 8 };
+
+inline constexpr SpiDiv kBootSpiDiv = SpiDiv::Div4;
 
 inline constexpr std::uint32_t kApb1Hz = 120'000'000;
 
@@ -68,8 +71,10 @@ private:
     bool open_ = false;
 };
 
-// The runtime lab switch (`lcd spi <n>`) offers /8 (shipped) and /4 only; /2 stays a compile-time experiment.
+// The runtime lab switch (`lcd spi <n>`) offers /4 (shipped), /8 (the old default) and /2 (60 MHz, near the ST7789
+// write-clock limit: a visual check by the user only). RAM only; every boot comes up at kBootSpiDiv.
 constexpr bool lab_spi_div(unsigned value, SpiDiv& out) {
+    if (value == 2) { out = SpiDiv::Div2; return true; }
     if (value == 4) { out = SpiDiv::Div4; return true; }
     if (value == 8) { out = SpiDiv::Div8; return true; }
     return false;

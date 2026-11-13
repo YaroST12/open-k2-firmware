@@ -78,6 +78,7 @@ const OfferBook &sync_book(const pd::Link &link) {
 
 uint32_t g_match_live_calls = 0;
 uint32_t g_conn_body_passes = 0;
+static MatchResult g_last_match{};
 
 MatchResult match_live(const pd::Link &link) {
     g_match_live_calls++;
@@ -108,12 +109,15 @@ void ConnectionPage::enter() {
     op_until_ = 0;
     id_asked_ = false;
     sig_valid_ = false;
+    match_valid_ = false;
     act_sel_ = -1;
     first_ = 0;
     id_sig_ = thumb_sig_ = 0;
     sense(ctx_.now);                   // facts only; the topology window starts with this one sample
     if (locked_) {                     // a place keeps its tab and comes back on the row it was left on (update clamps it)
+        build_items();
         act_sel_ = ctx_.keep.place_sel[static_cast<int>(conn::place_of(tab_))];
+        if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
         return;
     }
     tab_ = conn::default_tab(facts_);   // Sink if a device is inline or was seen on CC, else Source if a charger is seen, else Cable if a cable is held
@@ -163,16 +167,25 @@ void ConnectionPage::leave() {
 }
 
 void ConnectionPage::draw_static() {
+    if (ctx_.budget && !ctx_.budget->admit(140 * kBarH, true)) return;
     title_bar();
-    sig_valid_ = false;
-    popup_drawn_ = false;   // the pop-up re-binds and repaints the shared RowList
-    id_sig_ = thumb_sig_ = 0;
-    status_.invalidate();
+    invalidate();
 }
 
 void ConnectionPage::invalidate() {
     sig_valid_ = false;
+    body_pending_ = false;
+    match_valid_ = false;
     popup_drawn_ = false;
+    body_ = Body::None;
+    body_n_ = 0;
+    tab_sig_ = 0;
+    band_done_ = false;
+    tail_cleared_ = false;
+    close_done_ = false;
+    body_clear_y_ = kFooterY;
+    nopd_msg_sig_ = 0;
+    row_sig_.fill(0);
     id_sig_ = thumb_sig_ = 0;
     status_.invalidate();
 }
@@ -912,11 +925,15 @@ uint32_t survey_sig(bool more) {
 // Painting
 // ---------------------------------------------------------------------------------------
 
-void ConnectionPage::paint_tab_indicator() {
+bool ConnectionPage::paint_tab_indicator() {
     // Three cells of the bar's rule pitch, the name centred (S12): the active tab filled kFocusT, its name kFocus over a 2 px
     // kFocus rule (UI_SYSTEM 7.13.4); the others kDim on the ground over a kRule one.
-    if (locked_) return;   // a single tool has no strip
+    if (locked_) return true;   // a single tool has no strip
+    const uint8_t want = static_cast<uint8_t>(static_cast<uint8_t>(tab_) + 1);
+    if (tab_sig_ == want) return true;
     const Surface &c = ctx_.content;
+    if (ctx_.budget && !ctx_.budget->admit(static_cast<int>(c.w) * kTabH, true)) return false;
+    tab_sig_ = want;
     for (int t = 0; t < conn::kTabs; t++) {
         const bool on = t == static_cast<int>(tab_);
         const std::string_view name = conn::tab_name(static_cast<conn::Tab>(t));
@@ -928,6 +945,7 @@ void ConnectionPage::paint_tab_indicator() {
         gfx_fill(c, x, static_cast<int16_t>(kTabY + kTabH - 2), w, 2, on ? kFocus : kRule);
         if (kit::kProgPitch > w) gfx_fill(c, static_cast<int16_t>(x + w), kTabY, static_cast<int16_t>(kit::kProgPitch - w), kTabH, kBg);   // the gap between cells
     }
+    return true;
 }
 
 // The verdict band (UI_SYSTEM 5.8): kSurface, a 20 px dash at x6 (a state with no verdict colour), the word in S24 at x32.
@@ -971,15 +989,20 @@ static_assert(kValX + kValCells * 8 <= 224 - kLane, "the value column ends befor
 // perforation - and keeps the lane at the right edge for its scroll thumb. An action row: its label (x10, or x8 on a place
 // page), focused = kFocusT ground and the 3 px kFocus bar, or on a place page the inverted focus block, a tail word or the
 // chevron. Returns the rows painted.
-int paint_list(const Surface &c, const Rows &R, int16_t y0, bool full, bool dim, bool blank,
-               std::array<uint32_t, kVisRows> &sig_io, uint8_t &n_io, bool place = false) {
+struct ListDrawState {
+    bool &tail_cleared;
+    bool &close_done;
+    int16_t &clear_y;
+    PaintBudget *bg = nullptr;
+};
+
+bool paint_list(const Surface &c, const Rows &R, int16_t y0, bool dim, bool blank,
+                std::array<uint32_t, kVisRows> &sig_io, uint8_t &n_io, ListDrawState &st, int &painted_out, bool place = false) {
     const int slots = std::min(kVisRows, (kFooterY - y0) / kRowPitch);
     const int n = std::clamp(R.n, 0, slots);
     const int16_t w = place ? static_cast<int16_t>(c.w - kLane) : c.w;
     const int close = place ? 0 : 1;   // the closing hairline's row
     constexpr int16_t kKeyDy = kit::row_text_y(kRowPitch, 12), kValDy = kit::row_text_y(kRowPitch, 16);
-    const bool count_moved = !full && n_io != n;
-    const int clear_from = y0 + std::min<int>(n_io, n) * kRowPitch;   // first slot that may be stale
     std::array<uint32_t, kVisRows> sigs{};
     for (int i = 0; i < n; i++) {
         const Rows::R &row = R.r[i];
@@ -990,22 +1013,50 @@ int paint_list(const Surface &c, const Rows &R, int16_t y0, bool full, bool dim,
         h = fnv(h, 0x100u);   // key / value separator
         for (char ch : row.v.view()) h = fnv(h, uint8_t(ch));
         for (const char *k = row.tail; *k; k++) h = fnv(h, uint8_t(*k));
-        sigs[static_cast<std::size_t>(i)] = h;
+        sigs[static_cast<std::size_t>(i)] = h | 1u;
     }
-    if (full) {
-        const int tail = y0 + n * kRowPitch + (n < slots ? close : 0);   // under the closing hairline
-        if (!blank && kFooterY > tail) gfx_fill(c, 0, static_cast<int16_t>(tail), w, static_cast<int16_t>(kFooterY - tail), kBg);
-    } else if (count_moved && n_io > n) {
-        const int clear_to = y0 + n_io * kRowPitch + close;
-        gfx_fill(c, 0, static_cast<int16_t>(clear_from), w, static_cast<int16_t>(clear_to - clear_from), kBg);
+    if (!st.tail_cleared) {
+        const int16_t tail = static_cast<int16_t>(y0 + n * kRowPitch + (n < slots ? close : 0));   // under the closing hairline
+        if (!blank && kFooterY > tail) {
+            if (st.clear_y < tail || st.clear_y >= kFooterY) st.clear_y = tail;
+            while (st.clear_y < kFooterY) {
+                const int16_t h = std::min<int16_t>(PaintBudget::kStripRows, static_cast<int16_t>(kFooterY - st.clear_y));
+                if (st.bg && !st.bg->admit(static_cast<int>(w) * h, true)) return false;
+                gfx_fill(c, 0, st.clear_y, w, h, kBg);
+                st.clear_y = static_cast<int16_t>(st.clear_y + h);
+            }
+        }
+        st.clear_y = kFooterY;
+        st.tail_cleared = true;
+    }
+    if (n_io > n) {
+        const int16_t clear_from = static_cast<int16_t>(y0 + n * kRowPitch);
+        const int16_t clear_to = static_cast<int16_t>(y0 + n_io * kRowPitch + close);
+        while (clear_from < clear_to && n_io > n) {
+            if (st.clear_y < clear_from || st.clear_y >= clear_to) st.clear_y = clear_from;
+            while (st.clear_y < clear_to) {
+                const int16_t h = std::min<int16_t>(PaintBudget::kStripRows, static_cast<int16_t>(clear_to - st.clear_y));
+                if (st.bg && !st.bg->admit(static_cast<int>(w) * h, true)) return false;
+                gfx_fill(c, 0, st.clear_y, w, h, kBg);
+                st.clear_y = static_cast<int16_t>(st.clear_y + h);
+            }
+            st.clear_y = kFooterY;
+            break;
+        }
+        for (int i = n; i < n_io && i < kVisRows; i++) sig_io[static_cast<std::size_t>(i)] = 0;
+        n_io = static_cast<uint8_t>(n);
+        st.close_done = false;
+    } else if (n > n_io) {
+        st.close_done = false;
     }
     char buf[kFitBuf];
-    int painted = 0;
+    painted_out = 0;
     for (int i = 0; i < n; i++) {
         const int16_t y = static_cast<int16_t>(y0 + i * kRowPitch);
-        const bool in_cleared = count_moved && y >= clear_from;
-        if (!full && !in_cleared && sigs[static_cast<std::size_t>(i)] == sig_io[static_cast<std::size_t>(i)]) continue;
-        painted++;
+        if (sigs[static_cast<std::size_t>(i)] == sig_io[static_cast<std::size_t>(i)]) continue;
+        if (st.bg && !st.bg->admit(static_cast<int>(c.w) * kRowPitch, true)) return false;
+        painted_out++;
+        sig_io[static_cast<std::size_t>(i)] = sigs[static_cast<std::size_t>(i)];
         const Rows::R &row = R.r[i];
         if (!place) gfx_fill(c, 0, y, c.w, 1, kRule);
         else if (row.perf) kit::draw_dashed(c, 0, w, y, kInk3, kBg);   // the perforation above the actions
@@ -1051,11 +1102,13 @@ int paint_list(const Surface &c, const Rows &R, int16_t y0, bool full, bool dim,
         }
         kit::paint_texts(c, body, runs, nr, kBg);
     }
-    if (!place && (full || count_moved) && n < slots)
+    if (!place && !st.close_done && n < slots) {
+        if (st.bg && !st.bg->admit(c.w, true)) return false;
         gfx_fill(c, 0, static_cast<int16_t>(y0 + n * kRowPitch), c.w, 1, kRule);   // closes the table (moved with the count)
-    sig_io = sigs;
+        st.close_done = true;
+    }
     n_io = static_cast<uint8_t>(n);
-    return painted;
+    return true;
 }
 
 // A place page's window: the focused action row stays on screen with the least scroll; with no row focused the window stays
@@ -1070,13 +1123,14 @@ int place_first(int first, int focus_row, int total) {
 
 // The scroll thumb in the lane (x220..223 of the list band): a 3 px kInk3 bar for the window's share of the list, only when the
 // list is longer than the window; the lane's ground otherwise. Painted when (first, total) moved.
-void paint_thumb(const Surface &c, int first, int total, bool full, uint32_t &sig) {
+bool paint_thumb(const Surface &c, int first, int total, bool full, uint32_t &sig, PaintBudget *bg) {
     const uint32_t h = (uint32_t(first) << 8 | uint32_t(total)) + 1u;
-    if (!full && h == sig) return;
-    sig = h;
+    if (!full && h == sig) return true;
     const int16_t x = static_cast<int16_t>(c.w - kLane), band = static_cast<int16_t>(kFooterY - kPlaceListY);
+    if (bg && !bg->admit(static_cast<int>(kLane) * band, true)) return false;
+    sig = h;
     gfx_fill(c, x, kPlaceListY, 1, band, kBg);
-    if (total <= kPlaceSlots) { gfx_fill(c, static_cast<int16_t>(x + 1), kPlaceListY, kLane - 1, band, kBg); return; }
+    if (total <= kPlaceSlots) { gfx_fill(c, static_cast<int16_t>(x + 1), kPlaceListY, kLane - 1, band, kBg); return true; }
     const int track = kPlaceSlots * kRowPitch;
     const int16_t ty = static_cast<int16_t>(kPlaceListY + first * track / total);
     const int16_t th = static_cast<int16_t>(std::max(6, kPlaceSlots * track / total));
@@ -1084,6 +1138,7 @@ void paint_thumb(const Surface &c, int first, int total, bool full, uint32_t &si
     gfx_fill(c, tx, kPlaceListY, kLane - 1, static_cast<int16_t>(ty - kPlaceListY), kBg);
     gfx_fill(c, tx, ty, kLane - 1, th, kInk3);
     gfx_fill(c, tx, static_cast<int16_t>(ty + th), kLane - 1, static_cast<int16_t>(kFooterY - ty - th), kBg);
+    return true;
 }
 
 // A place page's identity block: the kit's (kit::Ident, kit::paint_identity), shared with the Battery place.
@@ -1194,9 +1249,10 @@ struct PlaceList {
     uint32_t &thumb_sig;
     std::array<uint32_t, kVisRows> &sig;
     uint8_t &n_io;
+    ListDrawState &st;
 };
 template <class Build>
-void paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items, int act_sel, bool full,
+bool paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxItems> &items, int n_items, int act_sel, bool full,
                       bool dim, PlaceList s, Build &&build) {
     Rows R;
     R.reset(Rows::kCountOnly);
@@ -1210,44 +1266,65 @@ void paint_place_list(const Surface &c, const std::array<conn::Item, conn::kMaxI
     R.reset(s.first);
     build(R);
     add_extras(R, items, n_items, act_sel);
-    paint_list(c, R, kPlaceListY, full, dim, false, s.sig, s.n_io, true);
-    paint_thumb(c, s.first, total, full, s.thumb_sig);
+    int painted = 0;
+    if (!paint_list(c, R, kPlaceListY, dim, false, s.sig, s.n_io, s.st, painted, true)) return false;
+    return paint_thumb(c, s.first, total, full, s.thumb_sig, s.st.bg);
 }
 }  // namespace
 
 // An empty tab: the band and its one line (the port-aware text of conn::empty_state); a place page: the dim headline and
 // that line in its identity block, then its action rows.
-void ConnectionPage::paint_empty(bool redraw) {
+bool ConnectionPage::paint_empty(bool) {
     const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     const conn::Empty e = conn::empty_state(tab_, facts_);
     if (locked_) {
-        const bool full = redraw || body_ == Body::None || body_ == Body::Popup;
+        const bool full = body_ != Body::Empty || body_tab_ != tab_;
+        if (full) {
+            body_ = Body::Empty; body_tab_ = tab_;
+            row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
+            body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
+        }
         Ident id;
         id.head.put(e.title);
         id.dim = true;
         id.line.put(e.hint);
-        paint_identity(c, id, full, id_sig_);
-        paint_place_list(c, items_, n_items_, act_sel_, full, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_},
-                         [](Rows &) {});
-        body_ = Body::Empty;
-        body_tab_ = tab_;
-        return;
+        if (!paint_identity(c, id, false, id_sig_, bg)) return false;
+        ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+        return paint_place_list(c, items_, n_items_, act_sel_, false, false,
+                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, [](Rows &) {});
     }
-    paint_tab_indicator();   // the strip owns kBodyY .. kRowY0
-    body_ = Body::Empty;
+    const bool full = body_ != Body::Empty || body_tab_ != tab_;
+    if (full) {
+        body_ = Body::Empty; body_tab_ = tab_;
+        row_sig_.fill(0); body_n_ = 0; band_done_ = false;
+        tail_cleared_ = false; close_done_ = false; body_clear_y_ = kFooterY;
+        nopd_msg_sig_ = 0;
+    }
+    if (!paint_tab_indicator()) return false;   // the strip owns kBodyY .. kRowY0
     const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
-    paint_band(c, y0, e.title);
-    const kit::TextRun line{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, e.hint, kDim};
-    kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &line, 1, kBg);
+    if (!band_done_) {
+        if (bg && !bg->admit(static_cast<int>(c.w) * kBandH, true)) return false;
+        paint_band(c, y0, e.title);
+        band_done_ = true;
+    }
+    const uint32_t hsig = mix(mix_u32(mix_init(), static_cast<uint32_t>(tab_)), e.hint) | 1u;
+    if (hsig != nopd_msg_sig_) {
+        if (bg && !bg->admit(static_cast<int>(c.w) * (list_y - y0 - kBandH), true)) return false;
+        const kit::TextRun line{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, e.hint, kDim};
+        kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &line, 1, kBg);
+        nopd_msg_sig_ = hsig;
+    }
     Rows R;
-    body_n_ = 0;
-    paint_list(c, R, list_y, true, false, false, row_sig_, body_n_);
+    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+    int painted = 0;
+    return paint_list(c, R, list_y, false, ctx_.blank, row_sig_, body_n_, st, painted);
 }
 
-void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
+bool ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps, std::span<const uint32_t> sink,
                                 bool redraw) {
-    g_conn_body_passes++;
     const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     const pd::Link &link = ctx_.ui->link();
     TabData d;
     d.r = &r; d.caps = &caps; d.sink = sink;
@@ -1265,26 +1342,31 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     // never offered PD at all (an offered-but-unanswered source still shows its caps). The Cable tab and
     // the Details page are untouched, and the empty states (NO DEVICE) are decided before this.
     if (no_pd_body()) {
-        paint_no_pd_body(r, redraw);
-        return;
+        const bool done = paint_no_pd_body(r, redraw);
+        if (done) g_conn_body_passes++;
+        return done;
     }
     const bool dim = tab_ == conn::Tab::Cable && link.cable_stale();
     if (locked_) {   // a place page: the identity block, then the full fact table (the Source tab's survey rows included)
-        const bool full = redraw || body_ == Body::None || body_ == Body::Popup;
+        const bool full = body_ != Body::Rows || body_tab_ != tab_;
+        if (full) {
+            body_ = Body::Rows; body_tab_ = tab_;
+            row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
+            body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
+        }
         Ident id;
         place_ident(id, tab_, d, dim);
-        paint_identity(c, id, full, id_sig_);
-        paint_place_list(c, items_, n_items_, act_sel_, full, dim, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_},
-                         [&](Rows &R) {
-                             switch (tab_) {
-                             case conn::Tab::Source: source_rows(R, d); if (!d.waiting) details_rows(R); break;
-                             case conn::Tab::Cable: cable_rows(R, d); break;
-                             case conn::Tab::Sink: sink_rows(R, d); break;
-                             }
-                         });
-        body_ = Body::Rows;
-        body_tab_ = tab_;
-        return;
+        if (!paint_identity(c, id, false, id_sig_, bg)) return false;
+        ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+        return paint_place_list(c, items_, n_items_, act_sel_, false, dim,
+                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st},
+                                [&](Rows &R) {
+                                    switch (tab_) {
+                                    case conn::Tab::Source: source_rows(R, d); if (!d.waiting) details_rows(R); break;
+                                    case conn::Tab::Cable: cable_rows(R, d); break;
+                                    case conn::Tab::Sink: sink_rows(R, d); break;
+                                    }
+                                });
     }
     Rows R;
     switch (tab_) {
@@ -1296,19 +1378,29 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
     // Fixed row slots (Row D): a whole-body pass only when the area was wiped or never drawn here (new tab,
     // pop-up closed, empty state left). A row-count change no longer wipes: the vacated slots are cleared and
     // the closing hairline moves; every other row keeps its slot and repaints alone when its hash changed.
-    const bool full = redraw || body_ != Body::Rows || body_tab_ != tab_;
-    if (full) paint_tab_indicator();
-    const int painted = paint_list(c, R, y0, full, dim, ctx_.blank, row_sig_, body_n_);   // the tabbed page never scrolls
-    body_ = Body::Rows;
-    body_tab_ = tab_;
-    K2LOG("[CONN] body full=%d rows=%d\n", full ? 1 : 0, painted);
+    const bool full = body_ != Body::Rows || body_tab_ != tab_;
+    if (full) {
+        body_ = Body::Rows; body_tab_ = tab_;
+        row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
+        body_clear_y_ = kFooterY;
+    }
+    if (!paint_tab_indicator()) return false;
+    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+    int painted = 0;
+    const bool done = paint_list(c, R, y0, dim, ctx_.blank, row_sig_, body_n_, st, painted);   // the tabbed page never scrolls
+    if (done) {
+        g_conn_body_passes++;
+        K2LOG("[CONN] body full=%d rows=%d\n", full ? 1 : 0, painted);
+    }
+    return done;
 }
 
 // The no-PD body (ROADMAP 2026-11-10, Row C): the verdict band (NO PD) and the one line of its case, then only the rows
 // that are actually measured - the Type-C advertisement (Rp level + VBUS), the draw on the Sink tab, a legacy fast-charge
 // answer on the Source tab - and a single tool's action rows. paint_body only calls this when the paint signature moved.
-[[gnu::noinline]] void ConnectionPage::paint_no_pd_body(const MatchResult &r, bool redraw) {
+[[gnu::noinline]] bool ConnectionPage::paint_no_pd_body(const MatchResult &r, bool) {
     const Surface &c = ctx_.content;
+    PaintBudget *const bg = ctx_.budget;
     const bool sink_tab = tab_ == conn::Tab::Sink;
     const char *line = conn::no_pd_line(tab_, none_why_);
     // The measured rows (at most three). The Type-C row uses the match's Rp reading (the active CC line driven into the
@@ -1330,39 +1422,52 @@ void ConnectionPage::paint_body(const MatchResult &r, const pd::SourceCaps &caps
         }
     };
     if (locked_) {   // a place page: "No PD" as the dim headline, its case on the line, then the measured rows and the actions
-        const bool full = redraw || body_ == Body::None || body_ == Body::Popup;
+        const bool full = body_ != Body::NoPd || body_tab_ != tab_;
+        if (full) {
+            body_ = Body::NoPd; body_tab_ = tab_;
+            row_sig_.fill(0); body_n_ = 0; tail_cleared_ = ctx_.blank; close_done_ = false;
+            body_clear_y_ = kFooterY; id_sig_ = thumb_sig_ = 0;
+        }
         Ident id;
         id.head.put(text::conn::kNoPd);
         id.dim = true;
         id.line.put(line);
-        paint_identity(c, id, full, id_sig_);
-        paint_place_list(c, items_, n_items_, act_sel_, full, false, {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_}, build);
-        body_ = Body::NoPd;
-        body_tab_ = tab_;
-        return;
+        if (!paint_identity(c, id, false, id_sig_, bg)) return false;
+        ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+        return paint_place_list(c, items_, n_items_, act_sel_, false, false,
+                                {first_, res_n_, tot_n_, thumb_sig_, row_sig_, body_n_, st}, build);
     }
     Rows R;
     build(R);
     const int16_t y0 = row_y0(), list_y = static_cast<int16_t>(y0 + kListDy);
-    const bool full = redraw || body_ != Body::NoPd || body_tab_ != tab_;
+    const bool full = body_ != Body::NoPd || body_tab_ != tab_;
     if (full) {
-        gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);
-        paint_tab_indicator();
-        body_n_ = 0;
+        body_ = Body::NoPd; body_tab_ = tab_;
+        row_sig_.fill(0); body_n_ = 0; band_done_ = false;
+        tail_cleared_ = ctx_.blank; close_done_ = false;
+        body_clear_y_ = kFooterY; nopd_msg_sig_ = 0;
     }
+    if (!paint_tab_indicator()) return false;
     // The verdict band and its one line, painted only when the line moved (a live draw must not repaint them).
     uint32_t mh = fnv(2166136261u, uint32_t(tab_) | uint32_t(none_why_) << 4);
     for (const char *p = line; *p; p++) mh = fnv(mh, uint8_t(*p));
-    if (full || mh != nopd_msg_sig_) {
-        paint_band(c, y0, text::conn::kNoPd);
+    mh |= 1u;
+    if (mh != nopd_msg_sig_) {
+        if (!band_done_) {
+            if (bg && !bg->admit(static_cast<int>(c.w) * kBandH, true)) return false;
+            paint_band(c, y0, text::conn::kNoPd);
+            band_done_ = true;
+        }
+        if (bg && !bg->admit(static_cast<int>(c.w) * (list_y - y0 - kBandH), true)) return false;
         const kit::TextRun lr{kKeyX, static_cast<int16_t>(y0 + kLineDy), &kSmall, line, kDim};
         kit::paint_texts(c, {0, static_cast<int16_t>(y0 + kBandH), c.w, static_cast<int16_t>(list_y - y0 - kBandH)}, &lr, 1, kBg);
         nopd_msg_sig_ = mh;
     }
-    paint_list(c, R, list_y, full, false, true, row_sig_, body_n_);
-    body_ = Body::NoPd;
-    body_tab_ = tab_;
+    ListDrawState st{tail_cleared_, close_done_, body_clear_y_, bg};
+    int painted = 0;
+    const bool done = paint_list(c, R, list_y, false, ctx_.blank, row_sig_, body_n_, st, painted);
     K2LOG("[CONN] body nopd rows=%d\n", R.n);
+    return done;
 }
 
 void ConnectionPage::popup_row(void *self, int index, bool, kit::RowSpec &out) {
@@ -1373,19 +1478,29 @@ void ConnectionPage::popup_row(void *self, int index, bool, kit::RowSpec &out) {
 }
 
 void ConnectionPage::paint_popup(uint32_t now_ms) {
+    PaintBudget *const bg = ctx_.budget;
     build_items();
     if (!popup_drawn_) {
         const Surface &c = ctx_.content;
-        gfx_fill(c, 0, kit::kBodyY, c.w, kFooterY - kit::kBodyY, kBg);
-        paint_tab_indicator();
+        if (body_ != Body::Popup) {
+            body_ = Body::Popup;
+            body_clear_y_ = locked_ ? kit::kBodyY : kRowY0;
+            if (ctx_.blank) body_clear_y_ = kFooterY;
+        }
+        if (!paint_tab_indicator()) return;
+        while (body_clear_y_ < kFooterY) {
+            const int16_t h = std::min<int16_t>(PaintBudget::kStripRows, static_cast<int16_t>(kFooterY - body_clear_y_));
+            if (bg && !bg->admit(static_cast<int>(c.w) * h, true)) return;
+            gfx_fill(c, 0, body_clear_y_, c.w, h, kBg);
+            body_clear_y_ = static_cast<int16_t>(body_clear_y_ + h);
+        }
         ctx_.rows.init(c, kRowY0, popup_row, this);
         ctx_.rows.invalidate();
         popup_drawn_ = true;
-        body_ = Body::Popup;
     }
     ctx_.rows.set_count(n_items_);
     ctx_.rows.select(popup_sel_);
-    ctx_.rows.draw(now_ms);
+    ctx_.rows.draw(now_ms, bg);
 }
 
 // The bottom bar: what the last action says, else the state of the shown tab and the topology word. It goes
@@ -1447,18 +1562,21 @@ void ConnectionPage::paint_status(uint32_t now_ms) {
         else if (diag_on && txt.view() == s.diag) tone = DiagnosisPage::tone_of(dr);
     }
     status_txt_ = txt;
-    draw_footer_cached(ctx_.content, tone, txt.view(), status_);
+    draw_footer_budgeted(ctx_.content, tone, txt.view(), status_, ctx_.budget);
 }
 
 void ConnectionPage::update(uint32_t now_ms) {
+    PaintBudget *const bg = ctx_.budget;
     const pd::Link &link = ctx_.ui->link();
     title_badge(false);
+    if (bg && bg->more) return;
     sense(now_ms);
     if (locked_) {
         build_items();   // the action rows and the OK verb follow the live state
         if (act_sel_ + 1 >= n_items_) act_sel_ = n_items_ - 2;
     }
     paint_status(now_ms);
+    if (bg && bg->more) return;
     if (popup_) {
         paint_popup(now_ms);
         return;
@@ -1544,37 +1662,46 @@ void ConnectionPage::update(uint32_t now_ms) {
     c = fnv(c, svs);
     const uint32_t asig = actions_sig();
     c = fnv(c, asig);
-    if (sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
+    if (!body_pending_ && sig_valid_ && c == cheap_sig_) return;   // nothing changed: skip match_live + the full sig
+    const bool inputs_changed = !match_valid_ || c != cheap_sig_;
     cheap_sig_ = c;
 
     const bool empty = conn::tab_empty(tab_, facts_) && !(tab_ == conn::Tab::Sink && fusb302::self_powered());
     if (empty) {
+        match_valid_ = false;
         uint32_t h = fnv(2166136261u, uint32_t(tab_) | uint32_t(facts_.topo) << 4 | 1u << 8 | uint32_t(facts_.inline_sink) << 9
                                      | uint32_t(facts_.wait) << 10 | uint32_t(facts_.open_cc_mv) << 12
                                      | uint32_t(facts_.wake_port_off) << 24
                                      | uint32_t(facts_.vbus_mv >= raguard::kVbusAttachedMv) << 25);
         h = fnv(h, uint32_t(facts_.cable_fact));
         h = fnv(h, asig);
-        if (sig_valid_ && h == sig_) return;
+        if (!body_pending_ && sig_valid_ && h == sig_) return;
         const bool redraw = !sig_valid_;
-        sig_ = h;
-        sig_valid_ = true;
-        paint_empty(redraw);
+        body_pending_ = true;
+        if (paint_empty(redraw)) {
+            sig_ = h;
+            sig_valid_ = true;
+            body_pending_ = false;
+        }
         return;
     }
 
-    MatchResult r = match_live(link);
-    // The Rp advertisement of an attached source exists even when the chip's gated typec_ma() reads 0
-    // (a default-USB Rp, a load inline, before its 3 s mark): the active CC line driven into the Rp
-    // window says so, and its divider level gives the current.
-    if (!r.caps_seen && !pd::is_fake() && link.attached() && !fusb302::pd_traffic()) {
-        const uint8_t acc = fusb302::active_cc();
-        const int32_t cc_mv = acc == 2 ? cc2_ : acc == 1 ? cc1_ : -1;   // the debounced line level (Row D)
-        if (cc_line_has_rp(cc_mv)) {
-            r.typec_rp = true;
-            if (!r.typec_ma) r.typec_ma = typec_ma_from_cc_mv(cc_mv);
+    if (inputs_changed) {
+        g_last_match = match_live(link);
+        // The Rp advertisement of an attached source exists even when the chip's gated typec_ma() reads 0
+        // (a default-USB Rp, a load inline, before its 3 s mark): the active CC line driven into the Rp
+        // window says so, and its divider level gives the current.
+        if (!g_last_match.caps_seen && !pd::is_fake() && link.attached() && !fusb302::pd_traffic()) {
+            const uint8_t acc = fusb302::active_cc();
+            const int32_t cc_mv = acc == 2 ? cc2_ : acc == 1 ? cc1_ : -1;   // the debounced line level (Row D)
+            if (cc_line_has_rp(cc_mv)) {
+                g_last_match.typec_rp = true;
+                if (!g_last_match.typec_ma) g_last_match.typec_ma = typec_ma_from_cc_mv(cc_mv);
+            }
         }
+        match_valid_ = true;
     }
+    const MatchResult &r = g_last_match;
     const pd::SourceCaps *caps = &g_book.caps;   // filled by match_live above
     const WantsList wl = wants_now();
     const std::span<const uint32_t> sink = wl.pdos;
@@ -1616,11 +1743,14 @@ void ConnectionPage::update(uint32_t now_ms) {
         h = fnv(h, fc_ | uint32_t(fusb302::self_powered()) << 8 | uint32_t(fusb302::pin_rd() == 1) << 9);
         h = fnv(h, vooc_);   // the Sink tab's raw VOOC note (sampled every kVoocNoteMs)
     }
-    if (sig_valid_ && h == sig_) return;
+    if (!body_pending_ && sig_valid_ && h == sig_) return;
     const bool redraw = !sig_valid_;   // invalidated (page entered, tab, pop-up closed, repaint pass): the area is stale
-    sig_ = h;
-    sig_valid_ = true;
-    paint_body(r, *caps, sink, redraw);
+    body_pending_ = true;
+    if (paint_body(r, *caps, sink, redraw)) {
+        sig_ = h;
+        sig_valid_ = true;
+        body_pending_ = false;
+    }
 }
 
 }  // namespace k2

@@ -107,6 +107,8 @@ const std::vector<FrameFate>& fates();
 struct LogLine { double world_ms; std::string text; int life = 0; };
 const std::vector<LogLine>& logs();
 unsigned tx_starts();      // TX_START writes (an inline sniffer must never transmit)
+// Active-low PLUS key pulse over [down_fw_ms, up_fw_ms) on firmware clock; reset by start().
+void schedule_plus_pulse(double down_fw_ms, double up_fw_ms);
 
 // ---- The reboot world: power loss, cold boot and a charger that serves a valid Rd ----
 // The K2 lives on the charger's VBUS. Each firmware life is a fork of the test's run process: when the K2's rail falls below

@@ -42,6 +42,9 @@ struct LcdTiming {
     double call_us;                // CPU per stream_* call (the driver's own bookkeeping)
     double window_us;              // per stream_begin: CASET / RASET / RAMWR in 8-bit frames
     double px_cpu_us;              // CPU per stream_pixels pixel: rendering the run the call pushes
+    // True = serial DMA (stream_pixels waits for its own transfer, stream_begin sends CASET/RASET/RAMWR on entry,
+    // stream_end waits for the last fill: pre-ping-pong driver); false = overlapped ping-pong + lazy windows (lcd.cpp).
+    bool serial = false;
 };
 extern const LcdTiming *g_lcd_timing;
 using LcdIdleHook = void (*)();

@@ -60,6 +60,7 @@ static void set_cc(int cc1, int cc2) {
 static uint32_t open_and_settle(Ui &ui, uint8_t page, uint32_t t) {
     ui.goto_page(page, t);
     for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
     return t;
 }
 
@@ -295,6 +296,7 @@ static std::vector<uint16_t> frame() { return std::vector<uint16_t>(g_panel, g_p
 static std::vector<uint16_t> show(Ui &ui, uint8_t tab, uint32_t &t) {
     ui.goto_page(static_cast<uint8_t>(kConnTabAlias + tab), t += 100);
     for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
     if (const char *dir = std::getenv("K2_DUMP")) {
         static int n = 0;
         char path[256];
@@ -895,7 +897,10 @@ static void attach_charger(Ui &ui, uint32_t &t) {
     CHECK_EQ(int(ui.link().attached()), 1);
 }
 
-static void settle(Ui &ui, uint32_t &t) { for (int i = 0; i < 12; i++) ui.tick(t += 100); }
+static void settle(Ui &ui, uint32_t &t) {
+    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
+}
 
 // Opening the page, switching tabs and opening Details never ask the charger anything: only Refresh does.
 static void test_survey_nothing_active_before_refresh() {
@@ -1146,7 +1151,7 @@ static void test_sink_tab_no_pd_offered_unanswered() {
     CHECK_EQ(int(ui.link().pd_verdict()), int(pd::PdVerdict::None));
     CHECK_EQ(int(ui.link().pd_none_why()), int(pd::PdNoneWhy::SinkSilentSourceOffered));
     ui.goto_page(kConnTabAlias + 2, t += 100);             // Sink tab
-    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    settle(ui, t);
     CHECK_EQ(int(cp(ui).tab()), int(conn::Tab::Sink));
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
     CHECK_EQ(int(cp(ui).pd_none_why()), int(pd::PdNoneWhy::SinkSilentSourceOffered));
@@ -1187,7 +1192,7 @@ static void test_source_tab_no_pd_never_offered_all_rotations() {
     for (int r = 0; r < 4; r++) {
         ui.set_rotation(r, t += 100);
         ui.goto_page(kConnTabAlias, t += 100);             // Source tab
-        for (int i = 0; i < 12; i++) ui.tick(t += 100);
+        settle(ui, t);
         CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
         CHECK_EQ(int(cp(ui).pd_none_why()), int(pd::PdNoneWhy::SourceNeverOffered));
         char name[64];
@@ -1243,17 +1248,19 @@ static void test_sink_tab_no_pd_shows_the_raw_vooc_note() {
     for (int i = 0; i < 4; i++) { g_stub.caps.rx_count++; ui.tick(t += 100); }
     for (int i = 0; i < 14; i++) ui.tick(t += 100);
     ui.goto_page(kConnTabAlias + 2, t += 100);
-    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    settle(ui, t);
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::None));
     CHECK(ink_in(149, 167) == 0);                          // two rows only: Type-C, Draw
     g_stub.vooc.seen = true;
     g_stub.vooc.r82 = 0x6B;
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
     dump_panel("k2_nopd_sink_vooc");
     CHECK(rule_span(148) >= LCD_WIDTH - 20);
     CHECK(ink_in(149, 167) > 50);                          // the VOOC note
     g_stub.vooc = {};
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
     CHECK(ink_in(149, 167) == 0);
     g_stub.vooc = {};
 }
@@ -1281,17 +1288,19 @@ static void test_sink_tab_pd_body_shows_the_raw_vooc_note() {
     uint32_t t = 60000;
     for (int i = 0; i < 20; i++) ui.tick(t += 100);
     ui.goto_page(kConnTabAlias + 2, t += 100);
-    for (int i = 0; i < 12; i++) ui.tick(t += 100);
+    settle(ui, t);
     CHECK_EQ(int(cp(ui).pd_verdict()), int(pd::PdVerdict::Present));
     const int before = slots_with_ink();
     CHECK(before >= 3 && before <= 8);                     // room for one more row
     g_stub.vooc.seen = true;
     g_stub.vooc.r82 = 0x6F;
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
     dump_panel("k2_pd_sink_vooc");
     CHECK_EQ(slots_with_ink(), before + 1);                // the VOOC row
     g_stub.vooc = {};
     for (int i = 0; i < 6; i++) ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 2);
     CHECK_EQ(slots_with_ink(), before);                    // the session ended: the row is gone at once
     g_stub.vooc = {};
 }

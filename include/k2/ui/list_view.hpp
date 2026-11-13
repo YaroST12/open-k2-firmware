@@ -10,6 +10,7 @@
 #pragma once
 #include <cstdint>
 #include "k2/ui/gfx.hpp"
+#include "k2/ui/ui_types.hpp"
 
 namespace k2 {
 
@@ -110,17 +111,18 @@ public:
     void set_count(int n, bool redraw = true);
     // Scrolls by `delta` rows and redraws the rows. False (and no drawing) when clamped.
     // `now_ms` (0 = none) drives the scrollbar thumb easing.
-    bool scroll(int delta, uint32_t now_ms = 0);
+    bool scroll(int delta, uint32_t now_ms = 0, PaintBudget *bg = nullptr);
     void set_highlight(int index) { highlight_ = index; }
+    void set_budget(PaintBudget *bg) { budget_ = bg; }
     // Draws every visible row (unchanged characters are skipped) and the scrollbar.
-    void draw(uint32_t now_ms = 0);
+    void draw(uint32_t now_ms = 0, PaintBudget *bg = nullptr);
     // Forget what is on screen (after a capture pass or a repaint of the surrounding page).
     void invalidate();
 
     const ListState &state() const { return st_; }
 
 private:
-    void draw_bar(uint32_t now_ms);
+    void draw_bar(uint32_t now_ms, PaintBudget *bg);
 
     Surface surf_{};
     int16_t x_ = 0, y_ = 0, row_h_ = 0;
@@ -153,6 +155,7 @@ private:
     int bar_pos_ = -1, bar_target_ = -1, bar_drawn_pos_ = -1, bar_anim_from_ = 0;
     uint32_t bar_anim_start_ = 0;
     static constexpr uint32_t kThumbAnimMs = 160;
+    PaintBudget *budget_ = nullptr;
     uint8_t chars_ = 0;
     int16_t text_dy_ = 0;
 };

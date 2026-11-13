@@ -241,7 +241,7 @@ void SharePage::update(uint32_t now_ms) {
 
 bool SharePage::on_event(Event e) {
     if (e.button == Button::Ok && e.press == Press::Long) {   // the text view and back
-        if (n_ == 0 && !info_) return true;                   // no code, nothing to describe
+        if (parts() == 0 && !info_) return true;               // no code, nothing to describe
         info_ = !info_;
         painted_ = false;
         update(ctx_.now);

@@ -177,6 +177,13 @@ static void press(Ui &ui, Button b, std::uint32_t &t) {
     ui.on_button(b, ButtonEvent::Short, t);
     t += 100;
     ui.tick(t);
+    while (ui.painting()) ui.tick(t += 20);
+}
+
+static void open_settled(Ui &ui, bench::Place pl, std::uint32_t &t) {
+    ui.open_place(pl, t);
+    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
 }
 
 static void test_page() {
@@ -186,8 +193,7 @@ static void test_page() {
     // the Bench row
     bench::Facts f;
     CHECK(eq(bench::row(bench::Place::Battery, f).status.view(), "No run"));
-    ui.open_place(bench::Place::Battery, t);
-    ui.tick(t += 100);
+    open_settled(ui, bench::Place::Battery, t);
     CHECK_EQ(int(ui.menu()), int(Menu::Battery));
     const BatteryPage *p = ui.battery_page();
     CHECK(p != nullptr);
@@ -200,12 +206,11 @@ static void test_page() {
     // the running dot on another page
     ui.on_button(Button::Back, ButtonEvent::Short, t);   // pops the place
     ui.tick(t += 100);
-    ui.open_place(bench::Place::Meter, t);
-    ui.tick(t += 100);
+    while (ui.painting()) ui.tick(t += 20);
+    open_settled(ui, bench::Place::Meter, t);
     CHECK(count_px(kFocus, 216, 0, 224, 8) >= 20);   // rotation 0: content x = panel x, the strip is x224..239
     // finish by hand: End charge needs a second OK
-    ui.open_place(bench::Place::Battery, t);
-    ui.tick(t += 100);
+    open_settled(ui, bench::Place::Battery, t);
     p = ui.battery_page();
     if (!p) return;
     while (p->selected() < p->list_state().count - 1 && p->act() != view::Act::EndPhase) press(ui, Button::Plus, t);
@@ -236,8 +241,7 @@ static void test_classic() {
     ui.tick(t);
     bt::hw::service().start(bt::Mode::RoundTrip, bt::Wiring::SamePort, true);
     for (int i = 0; i < 30; i++) bt::hw::poll(t += 1000, true);
-    ui.open_place(bench::Place::Battery, t);
-    ui.tick(t += 100);
+    open_settled(ui, bench::Place::Battery, t);
     CHECK(count_px(kInk3, 8, 66, 216, 67) > 100);   // the perforation under the identity block (y kIdDashY)
     CHECK(count_px(kBg, 0, 22, 224, 220) > 224 * 100);
 }

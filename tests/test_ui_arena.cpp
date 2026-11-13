@@ -75,22 +75,29 @@ static void fill_record(Ui &ui, std::size_t n) {
     for (std::size_t i = 0; i < n; i++) ui.share_buffer()[i] = static_cast<std::uint8_t>(i * 7 + 3);
 }
 
+static void settle(Ui &ui, std::uint32_t &t) {
+    while (ui.painting()) ui.tick(t += 20);
+}
+
 // Leave and enter again builds the page afresh (its counters restart), and the record it shows is not in the page.
 static void test_a_page_is_built_fresh_and_the_share_record_survives() {
     Ui &ui = fresh();
     fill_record(ui, 184);
-    CHECK(ui.open_share(qs::Type::Card, 1, "Kept", 184, 2000));
+    std::uint32_t t = 2000;
+    CHECK(ui.open_share(qs::Type::Card, 1, "Kept", 184, t));
     CHECK(ui.menu() == Menu::Share);
-    ui.tick(2100);
+    ui.tick(t += 100);
+    settle(ui, t);
     const unsigned first_paints = ui.share().paints();
     CHECK(first_paints > 0);
-    press(ui, Button::Back, 2200);
+    press(ui, Button::Back, t += 100);
     CHECK(ui.menu() == Menu::Count);
     CHECK_EQ(int(ui.live_pages()), 1);
-    CHECK(ui.push_menu(Menu::Share, 2300));            // no opener, no new record: the page shows the one kept
+    CHECK(ui.push_menu(Menu::Share, t += 100));            // no opener, no new record: the page shows the one kept
     CHECK(ui.share().title() == "Kept");
     CHECK_EQ(int(ui.share().parts()), 1);
-    ui.tick(2400);
+    ui.tick(t += 100);
+    settle(ui, t);
     CHECK_EQ(int(ui.share().paints()), int(first_paints));   // a new page: counted from zero, not on top of the old
     CHECK_EQ(int(ui.share().index()), 0);
 }
@@ -117,6 +124,7 @@ static void test_remembered_state_survives_leaving_the_page() {
     press(ui, Button::Minus, 1810);                    // the rebuilt page steps on from where the cursor was
     CHECK_EQ(ui.context().keep.bench_sel, 2);
     press(ui, Button::Ok, 1820);                       // a place remembers its own action
+    { std::uint32_t tt = 1820; settle(ui, tt); }
     press(ui, Button::Plus, 1830);
     CHECK_EQ(int(ui.context().keep.place_sel[static_cast<int>(bench::Place::Cable)]), 1);
     ui.goto_page(static_cast<uint8_t>(Page::Home), 1840);

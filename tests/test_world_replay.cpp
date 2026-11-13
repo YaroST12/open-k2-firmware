@@ -97,7 +97,9 @@ void note_boot_look() {
 // through the same calls main.cpp makes (src/core/boot_pd.cpp: the Rd intent marker, the Rd decision, the comeback's early PD
 // service, the self-power bring-up), the power monitor, the volume, the UI, the hooks. The rest of the slow init (LCD, USB) takes
 // no part. With nothing held and no marker (the replay) the chip-default Rd goes and the FUSB302 comes up passive.
-void boot(int page) {
+k2::Ui* g_ui = nullptr;
+
+k2::Ui* boot(int page) {
     const std::uint8_t held = world::plus_held() ? k2::bootmode::kPlus : 0;
     const k2::bootmode::Mode keys = k2::bootmode::decide(held);
     const k2::bootpd::Early pd_boot = k2::bootpd::early(keys, false);
@@ -128,6 +130,8 @@ void boot(int page) {
     accel.init(k2::systick::millis());
     k2::mainloop::install_hooks();
     k2::mainloop::begin(ctx);
+    g_ui = &ui;
+    return g_ui;
 }
 
 struct Result {
@@ -534,6 +538,45 @@ std::vector<std::string> split(const std::string& s, char c) {
 
 }  // namespace
 
+void test_button_capture_during_repaint(const world::Scenario& sc) {
+    const pid_t pid = fork();
+    if (pid == 0) {
+        world::start(sc, sc.episodes.front().t0 - kSettleMs, timing());
+        k2::Ui* ui = boot(0);
+        k2::mainloop::pass();
+        // Press PLUS for 30 ms completely inside a ~57 ms LCD fill (idle_hook path; +20 ms release debounce = +53 ms).
+        const double t0 = world::fw_ms();
+        world::schedule_plus_pulse(t0 + 3.0, t0 + 33.0);
+        k2::lcd::fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, 0);
+        k2::lcd::flush();
+        const double after_fill_ms = world::fw_ms();
+        const unsigned p_during_fill = ui->page_index();
+        const bool stayed_inside_fill = after_fill_ms >= t0 + 54.0 && p_during_fill == 0;
+        k2::mainloop::pass();
+        const unsigned p1 = ui->page_index();
+        const bool moved_to_1 = stayed_inside_fill && p1 == 1;
+        // Second 30 ms press completely inside systick::delay_ms(60) (wait_hook path).
+        const double t1 = world::fw_ms();
+        world::schedule_plus_pulse(t1 + 3.0, t1 + 33.0);
+        k2::systick::delay_ms(60);
+        const double after_wait_ms = world::fw_ms();
+        const unsigned p_during_wait = ui->page_index();
+        const bool stayed_inside_wait = p_during_wait == p1;
+        k2::mainloop::pass();
+        const unsigned p2 = ui->page_index();
+        const bool moved_to_2 = stayed_inside_wait && p2 == 3;
+        if (!(moved_to_1 && moved_to_2)) {
+            std::fprintf(stderr, "E3 debug: t0=%.1f dfill=%.1f pfill=%u p1=%u dt1=%.1f dwait=%.1f pwait=%u p2=%u\n",
+                         t0, after_fill_ms - t0, p_during_fill, p1, t1 - after_fill_ms, after_wait_ms - t1, p_during_wait, p2);
+            for (const world::LogLine& l : world::logs()) std::fprintf(stderr, "  %.1f %s", l.world_ms, l.text.c_str());
+        }
+        std::_Exit((moved_to_1 && moved_to_2) ? 0 : 1);
+    }
+    int st = 0;
+    const pid_t w = waitpid(pid, &st, 0);
+    CHECK_COND(w == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+}
+
 int main() {
     const char* sdir = std::getenv("K2_WORLD_SCENARIOS");
     const std::string dir = sdir ? sdir : "tests/scenarios";
@@ -546,6 +589,7 @@ int main() {
         else scs.push_back(std::move(s));
     }
     CHECK_COND(!scs.empty());
+    test_button_capture_during_repaint(scs.front());
     const char* only_env = std::getenv("K2_WORLD_ONLY");
     const std::vector<std::string> only = only_env ? split(only_env, ':') : std::vector<std::string>{};
     auto picked = [&](std::size_t i, const std::string& v) { return only.size() <= i || only[i] == v; };

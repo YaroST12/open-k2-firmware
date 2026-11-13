@@ -65,7 +65,9 @@ void test_settings_has_no_theme_row() {
     ui->init(1000);
     ui->set_rotation(0, 1000);
     ui->tick(1100);
-    ui->goto_page(static_cast<uint8_t>(Page::Settings), 1200);
+    std::uint32_t t = 1200;
+    ui->goto_page(static_cast<uint8_t>(Page::Settings), t);
+    while (ui->painting()) ui->tick(t += 20);
     CHECK_EQ(SettingsPage::kRows, 8);
     CHECK_EQ(ui->list_state().count, 8);
     for (int i = 0; i < 20; i++) ui->on_button(Button::Plus, ButtonEvent::Short, 1300 + i * 10);
