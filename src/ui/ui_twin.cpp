@@ -680,23 +680,38 @@ void TwinPage::build_info() {
     }
     // Left column, offer: the charger's list now.
     const pd::SourceCaps &caps = pd::active_caps();
-    uint32_t lo = 0, hi = 0, ma = 0, plo = 0, phi = 0, pma = 0;
+    uint32_t lo = 0, hi = 0, ma = 0, mw = 0, plo = 0, phi = 0, pma = 0, nfixed = 0;
+    StrBuf<40> levels;                                       // the fixed voltages, "5 9 15 20V" (V once, on the last)
     for (std::size_t i = 0; caps.valid && i < caps.num_pdos && i < caps.pdos.size(); i++) {
         const pd::Pdo &p = caps.pdos[i];
         if (p.type == pd::PdoType::Fixed) {
             lo = lo ? std::min<uint32_t>(lo, p.max_mv) : p.max_mv;
             hi = std::max<uint32_t>(hi, p.max_mv);
             ma = std::max<uint32_t>(ma, p.max_ma);
+            mw = std::max<uint32_t>(mw, p.max_mw);
+            nfixed++;
+            char t[12];
+            const int n = home::fmt_level(t, p.max_mv);
+            if (levels.view().size()) levels.put_char(' ');
+            levels.put(std::string_view(t, static_cast<std::size_t>(n)));
         } else if (p.type == pd::PdoType::Pps && static_cast<uint32_t>(p.max_mv - p.min_mv) > phi - plo) {
             plo = p.min_mv, phi = p.max_mv, pma = p.max_ma;
         }
     }
-    if (hi) {
-        if (lo == hi) {
-            put_level(fixed, hi, 'V');
-            put_level(fixed, ma, 'A');
+    if (nfixed == 1) {                                       // one level: it and its own current
+        put_level(fixed, hi, 'V');
+        put_level(fixed, ma, 'A');
+    } else if (nfixed > 1) {
+        levels.put_char('V');
+        // The list when it fits the column (font 12 at worst); else a span with the best power. Never the largest current: no
+        // single level need carry it, and "5-20V 3A" reads as a PPS range.
+        if (text_width(kLabelFont, levels.view()) <= kLeftRoom) {   // at most 15 characters: fits the 23 of the buffer
+            fixed.put(levels.view());
         } else {
-            range(fixed, "", lo, hi, ma);
+            put_level(fixed, lo, '-');
+            put_level(fixed, hi, 'V');
+            fixed.put_char(' ');
+            put_w(fixed, mw);
         }
     }
     if (phi) range(pps, "PPS ", plo, phi, pma);

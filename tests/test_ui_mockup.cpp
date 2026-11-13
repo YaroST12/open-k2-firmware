@@ -224,6 +224,12 @@ int main() {
     g_stub.caps = {};
     t += 400; ui.tick(t);
     render(ui, t, "twin_detail_nocharger");                              // no prediction: faint "--", neutral wants
+    g_stub.caps = {};                                                    // an Apple brick: fixed levels only, 15 V 2 A, 20 V 1.5 A
+    g_stub.caps.valid = true; g_stub.caps.spec_rev = 2;
+    for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0004B0C8u, 0x00064096u})
+        g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);
+    t += 400; ui.tick(t);
+    render(ui, t, "twin_detail_apple");                                  // Source column: "5 9 15 20V", never "5-20V 3A"
     g_stub.caps = kept_caps;
     t += 400; ui.tick(t);
     key(Button::Back);

@@ -225,6 +225,48 @@ void test_detail_opens_and_closes() {
     CHECK_EQ(ui.twin_page().cursor(), 2);
 }
 
+// The Source column lists the charger's fixed voltages, like the device column; it never shows a max current that only one level
+// carries (an Apple brick with 5 V 3 A ... 20 V 1.5 A once read "5-20V 3A", which looks like a PPS range).
+void apple_charger() {
+    g_stub.caps = {};
+    g_stub.caps.valid = true;
+    g_stub.caps.spec_rev = 2;
+    for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0004B0C8u, 0x00064096u})   // 5 V 3 A, 9 V 3 A, 15 V 2 A, 20 V 1.5 A
+        g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);
+}
+
+void test_source_column_lists_fixed_levels() {
+    reset();
+    add_three();
+    apple_charger();
+    Ui &ui = open_page();
+    open_twin(ui, 0);                            // Pixel 9: 5 V, 9 V, PPS
+    CHECK_EQ(ui.twin_page().in_detail() ? 1 : 0, 1);
+    CHECK_STR(std::string(ui.twin_page().info_left(0)).c_str(), "5 9 15 20V");
+    press(ui, Button::Back);
+    // Too many levels for the column: a span with the best power, never a current.
+    reset();
+    add_three();
+    g_stub.caps = {};
+    g_stub.caps.valid = true;
+    g_stub.caps.spec_rev = 3;
+    for (uint32_t w : {0x0A01912Cu, 0x0002D12Cu, 0x0003C12Cu, 0x0004B12Cu, 0x0006412Cu, 0x0008C12Cu, 0x000B412Cu, 0x000F012Cu})
+        g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(w);   // 5 9 12 15 20 28 36 48 V, 3 A each
+    Ui &ui2 = open_page();
+    open_twin(ui2, 0);
+    CHECK_STR(std::string(ui2.twin_page().info_left(0)).c_str(), "5-48V 144W");
+    press(ui2, Button::Back);
+    // One level: the level and its current.
+    reset();
+    add_three();
+    g_stub.caps = {};
+    g_stub.caps.valid = true;
+    g_stub.caps.pdos[g_stub.caps.num_pdos++] = pd::decode_pdo(0x0A01912Cu);
+    Ui &ui3 = open_page();
+    open_twin(ui3, 0);
+    CHECK_STR(std::string(ui3.twin_page().info_left(0)).c_str(), "5V3A");
+}
+
 void test_arm_confirm_run() {
     reset();
     add_three();
@@ -797,6 +839,7 @@ int main() {
     test_repredict_on_new_charger();
     test_detail_opens_and_closes();
     test_delete_confirm();
+    test_source_column_lists_fixed_levels();
     test_arm_confirm_run();
     test_reject_is_a_fail();
     test_arm_expires_and_moves();

@@ -51,6 +51,9 @@ public:
     bool reading() const { return learn_wait_; }
     bool asking() const { return iq_wait_; }       // this page's inline interrogation is running
     std::string_view footer() const { return foot_text_.view(); }   // what the footer shows now (tests, remote screenshots)
+    // The detail's facts rows (0 fixed levels, 1 PPS ranges when listed, then USB): the charger's text on the left, the device's on the right.
+    std::string_view info_left(int i) const { return info_l_[static_cast<std::size_t>(i)].view(); }
+    std::string_view info_right(int i) const { return info_r_[static_cast<std::size_t>(i)].view(); }
     // Row `index` as the list (or the detail's action list) paints it (views stay valid until the next call into the page).
     void peek(int index, bool focused, kit::RowSpec &out) { build_row(index, focused, out); }
 

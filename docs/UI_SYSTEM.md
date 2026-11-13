@@ -982,7 +982,7 @@ y44  | gets 36W                   |             wants 55W     |  font 24 values,
 y70  | ###########################+#########..............    |  bar, 3 px, x6..217; the hairline runs under it
 y76  | 12V3A                      |    limit: cable 3A        |  font 16, limit font 12 dim
 y96  +========================================================+  2 px rule
-y100 | 5-20V 3A                   |         5V 9V 12V         |  facts: charger left, device right (20 px rows)
+y100 | 5 9 15 20V                 |         5V 9V 12V         |  facts: charger left (fixed voltages; over the column a span "5-48V 144W", never a current), device right (20 px rows)
 y120 | PPS 5-21V 3A               |      PPS 3.3-11V 5A       |  only when either side lists a range
 y140 |                            |             USB 2.0 480M  |  device only
 y160 +--------------------------------------------------------+
