@@ -732,7 +732,9 @@ private:
     void end_probe();
     void end_sag_recovery(const Input& in);
     void retry_pd_row(Input in);
-    void poll_impl(Input, const pd::SourceCaps&);
+    // noinline: LTO folded poll_impl into the single Runner::poll call site (ChargerTestSession::runner_tick), next to the
+    // caller's Input copies: 1048 B of frame against FRAME_MAX 1024.
+    [[gnu::noinline]] void poll_impl(Input, const pd::SourceCaps&);
     uint32_t hold_ms() const;
     // The SVOOC ceiling stage: queued by finish() when the VOOC family was detected and the options asked for it, begun by next()
     // once the family session is released (D+/D- free, 5 V), ended by poll_ceiling(). One stage per run.
