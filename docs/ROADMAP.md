@@ -117,7 +117,7 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   build, which first needs the frame fix below): the softreset sequence on the Xiaomi 20K bank keeps VBUS, and the Black
   Box shows the Soft_Reset TX and the new caps.
 
-- **The D+/D- passive idle put QC chargers into HVDCP and let VBUS jump to 12 V** (2026-11-11, CUKTECH 10 GaN 120W
+- ~~**The D+/D- passive idle put QC chargers into HVDCP and let VBUS jump to 12 V**~~ closed 2026-11-14 (2026-11-11, CUKTECH 10 GaN 120W
   USB-A; fixed in 872baa31, host-tested; `tests/test_dpdm.cpp`, `tests/test_fastcharge_classify.cpp`
   `test_floating_short_needs_the_active_check`): the idle drove both lines to 0.6 V, the HVDCP entry level and the QC2
   12 V code; a shell `dm 0`, 200 ms, `dm 0.6 confirm` took VBUS 5.1 -> 11.75 V, and after a charger-test run VBUS sat
@@ -131,8 +131,10 @@ Open defects, newest first. A row leaves this list when its fix is merged and se
   (`APPLE 2.4A`).
   **Hardware 2026-11-14, 1.0.2-3-8fbf3624, OnePlus SVOOC charger** (`runs/dpdm-svooc/RESULT.md`): `[FC] idle dp=hiz
   dm=hiz mismatch=0x0` logged (every 10 s); `dm 0`, 200 ms, `dm hiz` kept VBUS at 5.02 V; VBUS 5.024-5.025 V for
-  3 min (18 polls); the released pair reads D+ 34 mV, D- 32 mV on this charger. Still open: the QC-charger rerun only
-  (IQ4 or CUKTECH: a QC2/QC3 run, then VBUS back at 5 V).
+  3 min (18 polls); the released pair reads D+ 34 mV, D- 32 mV on this charger.
+  **Hardware 2026-11-14, Anker IQ4** (`runs/dpdm-svooc/iq4-qc.txt`): QC2 5/9/12 V and QC3 5→12→5 V pass (10 pass,
+  0 fail), D+/D- at hiz throughout, VBUS back at 5 V; the full default run on 1.0.2-19-bb1a3234 passes QC2/QC3 again
+  (`runs/ct-merge/ct-iq4.log`). Closed.
   Evidence `runs/2026-11-11-idle-dpdm-hw/` (integ worktree).
 
 - **`[LINK]` verdict undercounts the caps during a long repaint** (2026-11-11, found by the host world replay on
