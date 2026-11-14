@@ -272,6 +272,25 @@ class RealEnvState(unittest.TestCase):
         self.assertEqual(env.state(), "bootloader")
         self.assertEqual(len(pings), 1)
 
+    def test_a_host_setup_error_is_named_not_called_a_hang(self):
+        # K2_TRANSPORT=usb without pyusb, or a firmware without the vendor interface: the app is fine, the host cannot reach it
+        import k2_usb
+        for cause in ("K2_TRANSPORT=usb: the vendor transport needs pyusb and libusb (pip install pyusb)",
+                      "K2_TRANSPORT=usb: no WITRN K2 with a vendor (WebUSB) interface"):
+            env, _ = self.make([APP], ping=k2_usb.UsbSetupError(cause))
+            self.assertEqual(env.state(), "unreachable")
+            env.request_fn = lambda: self.fail("no DFU_ENTER may be sent")
+            with self.assertRaises(kf.DfuEntryError) as cm:
+                kf.ensure_dfu(env)
+            msg = str(cm.exception)
+            self.assertIn(cause, msg)
+            self.assertNotIn("hung", msg)
+
+    def test_a_setup_error_after_the_request_is_silence_not_a_new_cause(self):
+        # mid-detach the stale app enumeration may have lost its vendor pipe: that is the detach, not a host problem
+        d = FakeDevice(["app", "unreachable", "none", "bootloader"])
+        self.assertEqual(kf.ensure_dfu(d, 2.0, 0.1, 0.0), "entered-dfu")
+
     def test_ensure_dfu_survives_the_stale_write_timeout(self):
         seq = [[APP], [], [BOOT]]
         env = kf.RealDfuEnv(enumerate_fn=lambda: seq.pop(0) if len(seq) > 1 else seq[0],

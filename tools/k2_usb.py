@@ -37,6 +37,15 @@ class UsbTransportError(RuntimeError):
     """Raised for what k2_flasher.ProtocolError is on the HID side (the callers catch both as errors of the link)."""
 
 
+class UsbSetupError(UsbTransportError):
+    """The vendor pipe cannot be opened at all from this host: pyusb / libusb missing, or no K2 with the vendor interface
+    (a firmware built without K2_WEBUSB, or WebUSB off in its USB link). A cause on the host side, not a silent device."""
+
+
+def _forced_hint():
+    return " (K2_TRANSPORT=usb forces this pipe; K2_TRANSPORT=hid or unset uses HID)" if preference() == "usb" else ""
+
+
 def _load_pyusb():
     """(usb.core, usb.util), or raises ImportError. A seam: tests put a fake in its place."""
     import usb.core
@@ -160,14 +169,15 @@ class UsbVendorTransport:
         try:
             core, util = _load_pyusb()
         except ImportError as e:
-            raise UsbTransportError("the vendor transport needs pyusb and libusb (pip install pyusb)") from e
+            raise UsbSetupError("the vendor transport needs pyusb and libusb (pip install pyusb)" + _forced_hint()) from e
         dev = self._pick(core, path)
         deadline = time.monotonic() + wait_sec
         while dev is None and time.monotonic() < deadline:
             time.sleep(0.1)
             dev = self._pick(core, path)
         if dev is None:
-            raise UsbTransportError("No WITRN K2 with a vendor (WebUSB) interface detected (VID 0x0716, PID 0x5060).")
+            raise UsbSetupError("No WITRN K2 with a vendor (WebUSB) interface detected (VID 0x0716, PID 0x5060): a firmware "
+                                "built without K2_WEBUSB, or WebUSB off in its USB link" + _forced_hint() + ".")
         self._util = util
         self._core = core
         try:

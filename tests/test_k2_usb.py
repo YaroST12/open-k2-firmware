@@ -266,6 +266,21 @@ class Transport(Base):
                 k2_usb.UsbVendorTransport()
         self.assertIn("pyusb", str(cm.exception))
 
+    def test_setup_errors_are_their_own_kind_and_name_a_forced_transport(self):
+        # the flasher tells these from a silent device (k2_flasher RealDfuEnv "unreachable")
+        def missing():
+            raise ImportError("no usb")
+        with mock.patch.dict(os.environ, {"K2_TRANSPORT": "usb"}):
+            with mock.patch.object(k2_usb, "_load_pyusb", missing):
+                with self.assertRaises(k2_usb.UsbSetupError) as cm:
+                    k2_usb.UsbVendorTransport()
+            self.assertIn("K2_TRANSPORT=usb", str(cm.exception))
+            patch, _ = install([])   # a firmware without the vendor interface
+            with patch, self.assertRaises(k2_usb.UsbSetupError) as cm:
+                k2_usb.UsbVendorTransport()
+            self.assertIn("K2_WEBUSB", str(cm.exception))
+            self.assertIn("K2_TRANSPORT=usb", str(cm.exception))
+
 
 class Pick(Base):
     def test_auto_prefers_vendor_when_the_interface_is_there(self):

@@ -839,6 +839,7 @@ def ensure_dfu(env, timeout_s=10.0, poll_s=0.1, settle_s=0.5):
     """App -> bootloader state machine over an env with state()/request_dfu()/sleep()/now().
 
     state() is "app" (remote ping answers), "hung" (enumerated as the app but silent),
+    "unreachable" (enumerated as the app, but this host cannot open its remote channel: env.cause says why),
     "bootloader" or "none" (nothing enumerated).
     After DFU_ENTER the app detaches from USB and resets: the old device must DISAPPEAR and a new
     one appear, then `settle_s` passes before the caller sends the first frame. A bootloader that
@@ -849,6 +850,9 @@ def ensure_dfu(env, timeout_s=10.0, poll_s=0.1, settle_s=0.5):
     st = env.state()
     if st == "bootloader":
         return "already-dfu"
+    if st == "unreachable":
+        raise DfuEntryError(f"the K2 enumerates as the app but this host cannot open its remote channel: "
+                            f"{getattr(env, 'cause', '') or 'unknown cause'}")
     if st == "hung":
         raise DfuEntryError(f"the K2 enumerates as the app but does not answer: it is hung; {REPLUG_HINT}")
     if st != "app":
@@ -860,6 +864,8 @@ def ensure_dfu(env, timeout_s=10.0, poll_s=0.1, settle_s=0.5):
     while env.now() < deadline:
         env.sleep(poll_s)
         last = env.state()
+        if last == "unreachable":   # after DFU_ENTER a lost vendor pipe is the detach going on: silence, not a host cause
+            last = "hung"
         if last == "none":
             gone = True
         elif last == "bootloader":
@@ -928,6 +934,7 @@ class RealDfuEnv:
     def __init__(self, path=None, ping_timeout_s=0.6, reset="sys",
                  enumerate_fn=None, ping_fn=None, request_fn=None):
         self.path, self.ping_timeout_s, self.reset = path, ping_timeout_s, reset
+        self.cause = ""   # why the last state() was "unreachable"
         self.enumerate_fn = enumerate_fn or enumerate_all
         self.ping_fn = ping_fn or self._ping
         self.request_fn = request_fn or self._request
@@ -965,6 +972,11 @@ class RealDfuEnv:
             return "app"
         except (k2_remote.RemoteError, k2_remote.FrameError):
             return "app"
+        except k2_usb.UsbSetupError as e:   # K2_TRANSPORT=usb without pyusb, or no vendor interface: not a hang
+            if kind != "app":
+                return "bootloader"
+            self.cause = str(e)
+            return "unreachable"
         except Exception:   # BootloaderDetected, RemoteTimeout, ProtocolError, OSError, ...
             # a device that enumerates as the app and stays silent is hung, not a bootloader
             return "hung" if kind == "app" else "bootloader"
