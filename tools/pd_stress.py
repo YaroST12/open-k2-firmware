@@ -150,7 +150,7 @@ def _device():
 def cmd_status(a):
     k2_lock, kr = _device()
     with k2_lock.hold():
-        link = kr.RemoteLink(kr.LinuxHidTransport(a.path), 1.0)
+        link = kr.RemoteLink(kr.open_transport(a.path), 1.0)
         print(kr.render_pdstress({"pdstress": kr.pdstress_status(link)}))
     return 0
 
@@ -158,7 +158,7 @@ def cmd_status(a):
 def cmd_stop(a):
     k2_lock, kr = _device()
     with k2_lock.hold():
-        link = kr.RemoteLink(kr.LinuxHidTransport(a.path), 1.0)
+        link = kr.RemoteLink(kr.open_transport(a.path), 1.0)
         print(kr.render_pdstress({"pdstress": kr.pdstress_stop(link)}))
     return 0
 
@@ -186,7 +186,7 @@ def cmd_run(a):
     frames, flaky = [], 0
     try:
         with k2_lock.hold():
-            link = kr.RemoteLink(kr.LinuxHidTransport(a.path), 1.0)
+            link = kr.RemoteLink(kr.open_transport(a.path), 1.0)
             st = kr.pdstress_status(link)
             if st["state"] in ("running", "resuming"):
                 print("a run is already in progress; `pd_stress.py stop` ends it", file=sys.stderr)

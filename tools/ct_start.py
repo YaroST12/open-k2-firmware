@@ -231,7 +231,7 @@ def main(argv=None):
         print(f"bad --cable: {e}", file=sys.stderr)
         return 4
     with k2_lock.hold():
-        link = kr.RemoteLink(kr.LinuxHidTransport(a.path), 1.0)
+        link = kr.RemoteLink(kr.open_transport(a.path), 1.0)
         link.call(kr.CMD_SET_PAGE, bytes([2]))
         w = Walk(link)
         for _ in range(3):      # leave the results screen of a finished run
@@ -292,7 +292,8 @@ def main(argv=None):
     # held for the whole run. Each poll below takes it again, for that one exchange only, so other HID
     # tools (k2_remote state, pd_trace dump, ...) can use the K2 between the polls.
     k2_lock.release()   # balance the transport's own acquire (LinuxHidTransport.__init__): lock depth 1 -> 0,
-                        # so the flock is really dropped here; the HID fd stays open and usable
+                        # so the flock is really dropped here; the HID fd stays open and usable (a vendor/WebUSB
+                        # transport keeps its claimed interface, which is exclusive: other tools wait for exit)
     deadline = time.monotonic() + a.wait
     while time.monotonic() < deadline:
         with k2_lock.hold():

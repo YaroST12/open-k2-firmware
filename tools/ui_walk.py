@@ -128,7 +128,7 @@ def main(argv=None):
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     with k2_lock.hold():
-        link = kr.RemoteLink(kr.LinuxHidTransport(a.path), a.timeout)
+        link = kr.RemoteLink(kr.open_transport(a.path), a.timeout)
         link.call(kr.CMD_SET_PAGE, bytes([2]))                          # Charger test page
         w = Walk(link)
         good = 0
