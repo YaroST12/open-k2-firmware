@@ -378,6 +378,9 @@ private:
     [[gnu::noinline]] bool present_rd(uint32_t now);   // e-marker scan on a dead line, Rd on, a fresh VbusWait: START's and the resume's common part
     void wait_done(uint32_t now);     // the wait is over (charger up, or given up): the preflight, then the run starts by itself
     void wait_abort();                // BACK / OK / leaving the page: Rd released, back to Review
+    // One Runner tick (runner_.poll with the Input it reads). Kept out of poll(): inlined there with its Input copy, the Runner's
+    // own frame pushed poll() to 1056 B in the K2_PDSTRESS=1 build (over FRAME_MAX).
+    [[gnu::noinline]] void runner_tick(uint32_t now);
     bool request_pending() const;     // the sink engine is still settling the start's own Request
     void ok_event();               // a short OK on the current stage (split from on_event: its frame sits under share_card on the stack's worst path)
     void open_confirmation();      // the first START press: the preview and the confirm window; nothing is touched

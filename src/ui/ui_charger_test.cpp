@@ -870,6 +870,7 @@ void ChargerTestSession::wait_abort() {
     release_run();
     set_stage(Stage::Review, kStartRow);
 }
+void ChargerTestSession::runner_tick(uint32_t now) { runner_.poll(input(now), fusb302::caps()); }
 void ChargerTestSession::poll(uint32_t now) {
     // The run owns the line in every phase, the unit cycle's Rd-off / VBUS-dark gaps included: the idle wake (a sleeping-port
     // helper) must never read them as a sleeping port (bench 2026-11-10: every PD row "no PD after re-attach" with the setting on).
@@ -915,7 +916,7 @@ void ChargerTestSession::poll(uint32_t now) {
     // The journal's own plan write (still arming) goes before the Runner: it is held in Baseline until the header is on flash.
     if (arm_) arm_step(now);
     if (reattach_) reattach_step(now);
-    runner_.poll(input(now), fusb302::caps());
+    runner_tick(now);
     // A live run: the Black Box writes nothing but the rare-event captures (hard reset, detach, refusal) until the run is over;
     // every save stalls the main loop 100-250 ms. Renewed each tick, it also covers the arm.
     if (journal_active_ && !journal_closed_) bbpersist::hold_run();
