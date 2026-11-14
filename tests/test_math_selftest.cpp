@@ -53,7 +53,8 @@ constexpr const char* kNames[] = {
     "math_opt",
 #endif
     "readout_fmt", "fpu_sqrt", "one_euro", "blend565",
-    "text_aa", "text_big", "gfx_fill", "mem_ops", "fmt_line", "pd_codec", "pd_sink", "pdtrace_ring", "ws_fast", "ws_slow",
+    "text_aa", "text_big", "gfx_fill", "mem_ops", "fmt_line", "pd_codec", "pd_sink", "pdtrace_ring",
+    "qr_encode", "lz_pack", "sweep_sum", "rd_fast", "rd_slow", "ws_fast", "ws_slow",
 };
 
 // The line of a check: "  [PASS] name ... sum=0xXXXXXXXX  cyc=N zw=Z". Returns the text after the tag, or "" when absent.
@@ -117,6 +118,8 @@ int main() {
         {"readout_fmt", "2E7FF5D7"}, {"blend565", "2B0E04E3"}, {"text_aa", "447FE66E"},    {"text_big", "3C2A04BF"},
         {"gfx_fill", "041E7430"},    {"mem_ops", "8B0882C5"},  {"fmt_line", "0F171019"},   {"pd_codec", "DBF8DC4D"},
         {"pd_sink", "5FEDCFA6"},     {"pdtrace_ring", "D2BDBEB5"}, {"ws_fast", "7B1CE946"}, {"ws_slow", "7B1CE946"},
+        {"qr_encode", "E5CB2E43"},   {"lz_pack", "F2BAA2E3"},  {"sweep_sum", "487AC9D5"},  {"rd_fast", "79D02B1D"},
+        {"rd_slow", "79D02B1D"},
     };
     for (const Gold& g : kGold) CHECK_COND(sum_of(line_of(report, g.name)) == g.sum);
     {
@@ -134,6 +137,12 @@ int main() {
     CHECK_COND(report.find("(1 skipped)") != std::string::npos);
 #endif
 
+    // The data-read canary reads the same table from two places in flash: identical results.
+    {
+        const std::string fast = sum_of(line_of(report, "rd_fast")), slow = sum_of(line_of(report, "rd_slow"));
+        CHECK_COND(fast.size() == 8);
+        CHECK_COND(fast == slow);
+    }
     // The placement canary runs the same loop twice, from two places in flash: identical results.
     const std::string fast = sum_of(line_of(report, "ws_fast")), slow = sum_of(line_of(report, "ws_slow"));
     CHECK_COND(fast.size() == 8);

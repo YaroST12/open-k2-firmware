@@ -48,12 +48,17 @@ math selftest (arch=m4f opt=Os math_errno=off hot=1 fw=1.0.1-105-aaaa1111):
   [PASS] pd_sink      sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] pdtrace_ring sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] tu_fifo      sum=0xXXXXXXXX  cyc=... zw=1
+  [PASS] qr_encode    sum=0xXXXXXXXX  cyc=... zw=?
+  [PASS] lz_pack      sum=0xXXXXXXXX  cyc=... zw=?
+  [PASS] sweep_sum    sum=0xXXXXXXXX  cyc=... zw=?
+  [PASS] rd_fast      sum=0xXXXXXXXX  cyc=... zw=1
+  [PASS] rd_slow      sum=0xXXXXXXXX  cyc=... zw=0
   [PASS] ws_fast      sum=0xXXXXXXXX  cyc=... zw=1
   [PASS] ws_slow      sum=0xXXXXXXXX  cyc=... zw=0
-PASS 19/19 checks, total_cyc=...
+PASS 24/24 checks, total_cyc=...
 ```
 
-The `zw` values above are what the placement is expected to give, not measurements. The header prints `arch` (`m4f` / `host`), TU optimization macro (`Os` / `O2+` / `O0`), `math_errno` (`off` when compiled with `-fno-math-errno`, `on` otherwise), `hot` (`1` when the hot block is linked in, `0` for a `K2_HOT_BLOCK=0` image) and `fw` (the firmware version of the running image; the shell has no version command, so the perf gate and the bench tools identify the build from this field). A check the build cannot run prints `  [SKIP] name` (for example `math_opt` on a tree older than `math_opt.hpp`) and the summary reads `PASS 18/18 checks (1 skipped), total_cyc=...`.
+The `zw` values above are what the placement is expected to give, not measurements (`?`: the fast-flash candidates report where link order put them; they are not pinned unless a row below says so). The header prints `arch` (`m4f` / `host`), TU optimization macro (`Os` / `O2+` / `O0`), `math_errno` (`off` when compiled with `-fno-math-errno`, `on` otherwise), `hot` (`1` when the hot block is linked in, `0` for a `K2_HOT_BLOCK=0` image) and `fw` (the firmware version of the running image; the shell has no version command, so the perf gate and the bench tools identify the build from this field). A check the build cannot run prints `  [SKIP] name` (for example `math_opt` on a tree older than `math_opt.hpp`) and the summary reads `PASS 18/18 checks (1 skipped), total_cyc=...`.
 
 ## Kernel Coverage
 
@@ -76,6 +81,10 @@ The `zw` values above are what the placement is expected to give, not measuremen
 | `pd_sink` | `plan_request` over 17 rows (Fixed, PPS, SPR and EPR AVS, over-cap, bad position, hunt clamps, mismatch, no caps), `lookup_held`, `request_cap_mv`, `rdo_fixed` / `rdo_pps` / `rdo_avs` against the bit layout, `make_skedb` bytes | Request planning |
 | `pdtrace_ring` | A wrapped `Ring<1024>` (150 records, 102 resident, order and payload), `Collapse` folding six Source_Capabilities rounds into one record plus a repeat count, `flush`, `cursor_for_last`, on a local ring | Black Box push and collapse |
 | `tu_fifo` (device only) | TinyUSB `tu_fifo_config`, wrap-around `tu_fifo_write_n` / `tu_fifo_read_n`, overflow refused | HID log / CDC FIFO |
+| `qr_encode` | `qr::encode_placed` (the share page's encoder and the vendored generator under it, all eight mask candidates) on a 14-byte text: a version 1 symbol, finder corners checked. Called through a volatile pointer so the out-of-line production code is timed. A share link (version 13..21) costs about 10..25x this | Fast-flash candidate |
+| `lz_pack` | `lz::compress` (the share record packer) on 512 bytes of 16-byte record-shaped entries | Fast-flash candidate |
+| `sweep_sum` | `ctsweep::summarize` + `format_summary` over a 178-point 3.3-21 V sweep with the FH22 fold-back | Fast-flash candidate |
+| `rd_fast` / `rd_slow` | The same 1 KB table read byte by byte, 4 passes, once from the hot block (`K2_HOT_DATA`) and once from `.cold_probe.data` past `0x08040000`. Sums are identical; the `cyc` ratio is what a data read from wait-state flash costs (font bitmaps and other `K2_HOT_DATA` candidates). The check fails if either table is not where it should be | Data placement canary |
 | `ws_fast` / `ws_slow` | The same integer loop, once in the hot block and once in `.cold_probe` at the end of `.text` (above `0x08040000`; `link.ld` asserts it). Sums are identical; the `cyc` ratio is the wait-state cost. The check fails if either function is not where it should be | Placement canary |
 
 ## Known gaps

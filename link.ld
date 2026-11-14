@@ -125,6 +125,7 @@ SECTIONS
     . = ALIGN(4);
     __cold_probe_start = .;
     KEEP(*(.cold_probe))
+    KEEP(*(.cold_probe.data))   /* the data-read canary's table (math_selftest.cpp, rd_slow) */
     . = ALIGN(4);
     _etext = .;
   } > FLASH

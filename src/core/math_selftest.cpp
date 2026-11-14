@@ -20,8 +20,10 @@
 #include <span>
 #include <string_view>
 
+#include "k2/chargertest/sweep.hpp"
 #include "k2/core/fmt.hpp"
 #include "k2/core/hot.h"
+#include "k2/core/lz.hpp"
 #include "k2/core/scratch.hpp"
 #include "k2/core/version.hpp"
 #include "k2/drivers/adc_calc.hpp"
@@ -36,6 +38,7 @@
 #include "k2/ui/gfx.hpp"
 #include "k2/ui/kit.hpp"
 #include "k2/ui/pixel_sink.hpp"
+#include "k2/ui/qr.hpp"
 #include "k2/ui/readout_fmt.hpp"
 #include "k2/ui/smoothing.hpp"
 #include "k2/ui/text.hpp"
@@ -59,8 +62,12 @@
 // The cold-probe section sits at the very end of .text (link.ld), above the 256 KB zero-wait window.
 #if defined(__arm__)
 #define K2_COLD_PROBE [[gnu::section(".cold_probe")]]
+// A table at the far end of flash (link.ld KEEPs .cold_probe.* next to .cold_probe): a function and an object cannot share one
+// section name in a translation unit (section type conflict), so the data canary has its own.
+#define K2_COLD_DATA [[gnu::section(".cold_probe.data")]]
 #else
 #define K2_COLD_PROBE
+#define K2_COLD_DATA
 #endif
 
 namespace k2::selftest {
@@ -1146,6 +1153,131 @@ K2_HOT bool check_tu_fifo(Out& o) {
 #endif
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Fast-flash candidates (docs/MATH_SELFTEST.md, "Fast-flash candidates"): heavy optional modules, measured where they are
+// linked today. Each calls the production function through a volatile pointer, so link-time optimisation cannot fold a copy
+// of it into this (hot) check: the cycles and zw are those of the out-of-line production code.
+
+template <class F>
+F* opaque(F* f) {
+    F* volatile p = f;
+    return p;
+}
+
+// qr_encode: the share page's encoder (qr::encode_placed, with the vendored generator under it, every one of its eight mask
+// candidates) on a 14-byte text: a version 1 symbol (21 modules), the smallest full pass, so the IRQ-masked window stays
+// short. The work grows with the module count: a share link (version 13..21, 69..101 modules) costs about 10..25 times this.
+K2_HOT bool check_qr_encode(Out& o) {
+    if (scratch::held()) return false;
+    const scratch::Lease lease("selftest");
+    constexpr std::size_t kLen = qr::buf_len_for(21);   // the share link's buffers (version 21): each must hold that version
+    static_assert(2 * kLen <= scratch::kSize, "the code and the temp buffer of a version 21 symbol fit the arena");
+    std::uint8_t* const code = scratch::arena();
+    std::uint8_t* const temp = code + kLen;
+    constexpr char kText[] = "K2 qr bench 01";            // 14 bytes, byte mode: version 1 at level L (17 bytes at most)
+    std::memcpy(temp, kText, sizeof kText - 1);
+    const int n = opaque(&qr::encode_placed)(code, temp, keep(sizeof kText - 1), 21);
+    touch(o, &qr::encode_placed);
+    std::uint32_t h = fnv_step(kFnvBasis, static_cast<std::uint32_t>(n));
+    for (std::size_t i = 0; i < qr::buf_len_for(1); ++i) h = fnv_step(h, code[i]);
+    o.crc = h;
+    // The finder pattern of a QR symbol: dark border (0,0), light ring (1,1), dark core (3,3), the top-right finder's corner.
+    return n == 21 && qr::dark_code(code, 0, 0) && !qr::dark_code(code, 1, 1) && qr::dark_code(code, 3, 3) &&
+           qr::dark_code(code, 20, 0);
+}
+
+// lz_pack: the share record packer (lz::compress, qrshare.cpp) on 512 bytes shaped like a record (16-byte entries, a
+// running timestamp, a few kinds, repeated words): the size of the largest share records.
+K2_HOT bool check_lz_pack(Out& o) {
+    if (scratch::held()) return false;
+    const scratch::Lease lease("selftest");
+    constexpr std::size_t kIn = 512;
+    static_assert(kIn + lz::bound(kIn) <= scratch::kSize, "input and output fit the arena");
+    std::uint8_t* const in = scratch::arena();
+    std::uint8_t* const out = in + kIn;
+    std::uint32_t ts = 1000;
+    for (std::size_t r = 0; r < kIn / 16; ++r) {
+        std::uint8_t* const e = in + 16 * r;
+        ts += 37 + (r % 5) * 11;
+        std::memcpy(e, &ts, 4);
+        e[4] = static_cast<std::uint8_t>(r % 6);
+        e[5] = 12;
+        const std::uint32_t w = 0x2C91012Cu + static_cast<std::uint32_t>((r % 3) << 10);
+        for (unsigned k = 0; k < 2; ++k) std::memcpy(e + 6 + 4 * k, &w, 4);
+        e[14] = e[15] = static_cast<std::uint8_t>(r & 1);
+    }
+    const std::size_t n = opaque(&lz::compress)(std::span<const std::uint8_t>(in, kIn), std::span<std::uint8_t>(out, lz::bound(kIn)));
+    touch(o, &lz::compress);
+    std::uint32_t h = fnv_step(kFnvBasis, static_cast<std::uint32_t>(n));
+    for (std::size_t i = 0; i < n; ++i) h = fnv_step(h, out[i]);
+    o.crc = h;
+    return n > 0 && n < kIn;
+}
+
+// sweep_sum: the deep-sweep summary of a 3.3-21 V PPS APDO (178 points, ctsweep::summarize) and its result line
+// (format_summary), the FH22 shape: tracks -150 mV, peaks at 19.9 V, folds back to 19.42 V from 20.0 V.
+K2_HOT bool check_sweep_sum(Out& o) {
+    constexpr unsigned kLo = 3300, kN = 178;
+    std::array<std::int16_t, kN> err{};
+    for (unsigned i = 0; i < kN; ++i) {
+        const unsigned set = kLo + i * ctsweep::kStepMv;
+        err[i] = static_cast<std::int16_t>(set >= 20000 ? 19420 - int(set) : -150 + int(i % 7) * 3);
+    }
+    const ctsweep::Summary s = opaque(&ctsweep::summarize)(std::span<const std::int16_t>(err.data(), keep(kN)), kLo);
+    char line[64];
+    const std::size_t n = opaque(&ctsweep::format_summary)(s, std::span<char>(line, sizeof line));
+    touch(o, &ctsweep::summarize);
+    touch(o, &ctsweep::format_summary);
+    std::uint32_t h = fnv_step(kFnvBasis, s.points);
+    h = fnv_step(h, static_cast<std::uint16_t>(s.min_err));
+    h = fnv_step(h, static_cast<std::uint16_t>(s.max_err));
+    h = fnv_step(h, static_cast<std::uint16_t>(s.worst_err));
+    h = fnv_step(h, s.worst_mv);
+    h = fnv_step(h, s.peak_mv);
+    h = fnv_step(h, s.peak_at_mv);
+    h = fnv_step(h, s.fold_mv);
+    h = fnv_step(h, s.fold_from_mv);
+    for (std::size_t i = 0; i < n; ++i) h = fnv_step(h, static_cast<std::uint8_t>(line[i]));
+    o.crc = h;
+    return s.points == kN && s.peak_at_mv == 19900 && s.fold_from_mv == 20000 && s.fold_mv == 19420 && n > 0;
+}
+
+// Data-read canary: the same 1 KB table read byte by byte (the way a glyph decode reads a font bitmap) from the zero-wait
+// window (K2_HOT_DATA) and from the far end of flash. Identical sums; the cycle ratio is what a data read from slow flash
+// costs, the question for font tables and other K2_HOT_DATA candidates.
+constexpr std::array<std::uint8_t, 1024> make_rd_table() {
+    std::array<std::uint8_t, 1024> t{};
+    std::uint32_t x = 0x9E3779B9u;
+    for (auto& b : t) {
+        x = x * 1664525u + 1013904223u;
+        b = static_cast<std::uint8_t>(x >> 24);
+    }
+    return t;
+}
+K2_HOT_DATA const std::array<std::uint8_t, 1024> kRdHot = make_rd_table();
+K2_COLD_DATA const std::array<std::uint8_t, 1024> kRdCold = make_rd_table();
+
+K2_HOT [[gnu::noinline]] std::uint32_t rd_sum(const std::uint8_t* t, std::uint32_t passes) {
+    std::uint32_t h = kFnvBasis;
+    for (std::uint32_t p = 0; p < passes; ++p)
+        for (std::size_t i = 0; i < 1024; ++i) h = (h ^ t[i]) * 16777619u;
+    return h;
+}
+
+bool data_placed_ok(bool fast, std::uintptr_t addr);
+
+K2_HOT bool check_rd_fast(Out& o) {
+    o.crc = rd_sum(keep(kRdHot.data()), keep(4u));
+    touch(o, kRdHot.data());
+    return data_placed_ok(true, reinterpret_cast<std::uintptr_t>(kRdHot.data()));
+}
+
+K2_HOT bool check_rd_slow(Out& o) {
+    o.crc = rd_sum(keep(kRdCold.data()), keep(4u));
+    touch(o, kRdCold.data());
+    return data_placed_ok(false, reinterpret_cast<std::uintptr_t>(kRdCold.data()));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Placement canary: the same integer loop run from the zero-wait window and from the far end of flash (link.ld puts
 // .cold_probe past 0x08040000). Identical sums; the cycle counts show what the wait states cost.
 
@@ -1173,6 +1305,8 @@ bool placed_ok(bool fast, std::uintptr_t addr) {
     return true;
 #endif
 }
+
+bool data_placed_ok(bool fast, std::uintptr_t addr) { return placed_ok(fast, addr); }
 
 K2_HOT bool check_ws_fast(Out& o) {
     o.crc = ws_fast_fn(keep(4096u));
@@ -1219,6 +1353,11 @@ K2_HOT bool run_math(WriteFn write, void* ctx, Summary* out) {
         {"pd_codec", check_pd_codec, 0xDBF8DC4Du, false},
         {"pd_sink", check_pd_sink, 0x5FEDCFA6u, false},
         {"pdtrace_ring", check_pdtrace_ring, 0xD2BDBEB5u, false},
+        {"qr_encode", check_qr_encode, 0xE5CB2E43u, false},
+        {"lz_pack", check_lz_pack, 0xF2BAA2E3u, false},
+        {"sweep_sum", check_sweep_sum, 0x487AC9D5u, false},
+        {"rd_fast", check_rd_fast, 0x79D02B1Du, false},
+        {"rd_slow", check_rd_slow, 0x79D02B1Du, false},
 #if K2_SELFTEST_TUFIFO
         {"tu_fifo", check_tu_fifo, 0x100A6715u, false},   // device only: computed from the pattern, not run on the host
 #endif
