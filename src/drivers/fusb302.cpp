@@ -1184,7 +1184,9 @@ K2_HOT void handle_frame(pd::Sop sop, std::uint16_t header, std::span<const std:
         ident().on_message(sop, header, payload, now);
         probe().on_message(sop, header, payload, now);
         reread().on_message(sop, header, payload, now);
+#if K2_HOST_REPORT
         if (g_lh && wire && sop == pd::Sop::Sop) g_lh->on_message(header, payload, now);
+#endif
     }
     // Inline, the spoof answers only inside the run's window and only a frame the chip acknowledged (Auto-CRC on): the first
     // query arrives unacknowledged (the window opens on it), and an answer to a message the charger counts as lost would confuse it.
