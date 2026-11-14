@@ -115,7 +115,7 @@ RA_PROBE_ARG_ERRORS = ["", "vconn_pc above 7", "vconn_pc has PC13 set (an Ra on 
 RA_PROBE_PHASES = ["idle", "vconn_cc1", "vconn_cc2"]
 RA_PROBE_SAMPLE_MS = [2, 10, 100]      # k2::raprobe::kSampleMs, per phase
 RA_PROBE_TIMEOUT_S = 3.0               # the K2 blocks for the ~330 ms plan
-# ---- PD Stress (docs/PD_STRESS.md): constants ----
+# ---- PD Stress (docs/PD_SPEC_CHECK.md): constants ----
 CMD_PD_STRESS = 0x55      # PD Stress: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_stress.py)
 PDS_STATUS, PDS_START, PDS_READ, PDS_STOP = 0, 1, 2, 3
 PDS_CHUNK = 48
@@ -128,6 +128,19 @@ PDS_STOPS = ["running", "done", "cancelled", "run time cap", "transition cap", "
              "VBUS over the limit", "load on the output", "no recovery without a replug", "step stuck", "no PD contract",
              "link inline", "too many K2 reboots"]
 # ---- end PD Stress constants ----
+# ---- PD Spec Check (docs/PD_SPEC_CHECK.md): constants ----
+CMD_PD_SPEC = 0x5A        # PD Spec Check: status / start / result (chunked) / stop (k2/core/remote_proto.hpp, tools/pd_spec.py)
+PSC_STATUS, PSC_START, PSC_READ, PSC_STOP = 0, 1, 2, 3
+PSC_CHUNK = 48
+PSC_FLAG_CONFIRM = 1 << 0
+PSC_FAMILY_MASK = 0x3F    # a bit per k2::pdspec::Family; 0 = all
+PSC_STATES = ["idle", "running", "finished"]
+# Same order as k2::pdspec::StartResult / Stop / Family (include/k2/pdspec/engine.hpp); tests/test_pd_spec.py checks the sync.
+PSC_STARTS = ["ok", "ports busy", "no PD source", "link inline", "K2 powered by the charger", "no power monitor", "already running"]
+PSC_STOPS = ["running", "done", "cancelled", "VBUS over the limit", "load on the output", "source did not come back", "step stuck",
+             "no PD contract", "link inline", "run time cap"]
+PSC_FAMILIES = ["Transitions", "PPS steps", "PPS timeout", "EPR timeout", "Hard Reset", "Detach"]
+# ---- end PD Spec Check constants ----
 # ---- Loop probe (docs/LOOP_PROBE.md): constants ----
 CMD_LOOP_PROBE = 0x57     # loop probe: the stored result file /lp/last.rec, chunked read only (k2/loopprobe/loop_probe_hw.hpp)
 LOOP_CHUNK = 48           # remote::kLoopProbeChunk
@@ -166,7 +179,7 @@ ACTIONS_NEED_CONFIRM = ("fc-scan",)
 SOPS = {"sop": 0, "sop1": 1, "sop2": 2}
 # Rotation pages (settable with `page`), then Tools/Settings submenus: the state reports a
 # showing submenu as 6 + its index. Connection and Diag can also be opened remotely.
-PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory"]
+PAGES = ["home", "detail", "chargertest", "lines", "tools", "settings", "graphs", "trigger", "emarker", "pdtrigger", "cabler", "blackbox", "spoof", "usblink", "autorotate", "cards", "share", "connection", "diag", "qrtest", "twin", "loopprobe", "pdstress", "diagnosis", "battery", "memory", "pdspec"]
 ROTATION_PAGES = 7
 # Names the old numbering used, still accepted by `page`: they open Connection on the matching tab. The firmware
 # reads kConnTabAlias + tab (include/k2/ui/ui_types.hpp) as "open Connection on that tab"; the state itself reports a
@@ -515,7 +528,7 @@ def decode_state(p):
 # GET_STATE part 1 (the session block): the enums follow include/k2/ui/ui_types.hpp, fc_proto.hpp, home.hpp and conn.hpp.
 SESSION_PROTO_KINDS = ["none", "pd-fixed", "pd-epr", "pps", "avs", "qc2", "qc3", "fcp", "scp", "ufcs", "svooc",
                        "typec", "dcp", "unknown", "detecting"]
-SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress", "loop-probe"]
+SESSION_BUSY = ["none", "test-running", "fc-release", "qc-trigger", "pd-hold", "epr", "pd-request", "em-scan", "identify", "twin-run", "pd-stress", "loop-probe", "pd-spec"]
 SESSION_TOPOLOGY = ["unknown", "no-source", "cable-single-cc", "direct-receptacle"]
 SESSION_WAIT_KIND = ["unknown", "no-source", "charger-waiting", "dual-role-port"]
 SESSION_PD_NONE_WHY = ["none", "sink-silent-source-offered", "source-never-offered"]
@@ -3481,7 +3494,7 @@ def cmd_ufcs(link, a):
     raise SystemExit("unknown ufcs command")
 
 
-# ---- PD Stress (docs/PD_STRESS.md): CMD_PD_STRESS 0x55 ----
+# ---- PD Stress (docs/PD_SPEC_CHECK.md): CMD_PD_STRESS 0x55 ----
 def decode_pdstress_status(p):
     """19-byte status block: state stop start seq_idx seq_total seq_cur reboots (u8), transitions u16, elapsed_ms u32,
     score_cp u32 (hundredths of a point per 100 transitions), blob_len u16."""
@@ -3550,6 +3563,110 @@ def cmd_pd_stress(link, a):
         return {"pdstress_result": pdstress_blob.decode_blob(pdstress_read_blob(link))}
     raise SystemExit("unknown pd-stress command")
 # ---- end PD Stress ----
+
+
+# ---- PD Spec Check (docs/PD_SPEC_CHECK.md): CMD_PD_SPEC 0x5A ----
+def decode_pdspec_status(p):
+    """17-byte status block: state stop start family item items families fails passes skips flags (u8), score u16 (penalty points,
+    0 = ideal), elapsed_s u16, blob_len u16. flags bit0: the end-of-run return to 5 V was not confirmed."""
+    _need(p, 17, "pd-spec status")
+    u16 = lambda o: p[o] | p[o + 1] << 8
+    fam = p[3]
+    return {"state": _name_of(PSC_STATES, p[0]), "stop": _name_of(PSC_STOPS, p[1]), "start": _name_of(PSC_STARTS, p[2]),
+            "family": _name_of(PSC_FAMILIES, fam), "item": p[4], "items": p[5], "families": p[6],
+            "families_text": ", ".join(f for i, f in enumerate(PSC_FAMILIES) if p[6] >> i & 1) or "none",
+            "fails": p[7], "passes": p[8], "skips": p[9], "release_unconfirmed": bool(p[10] & 1),
+            "score": u16(11), "elapsed_s": u16(13), "blob_len": u16(15)}
+
+
+def parse_families(text):
+    """A family mask from "all", a number (0x3f) or a comma list of names or indices (transitions,pps,hard-reset)."""
+    if text is None or text == "all":
+        return 0
+    try:
+        v = int(text, 0)
+    except ValueError:
+        v = None
+    if v is not None:
+        if v & ~PSC_FAMILY_MASK:
+            raise SystemExit(f"--families: 0x{v:x} has bits beyond the six families (0x{PSC_FAMILY_MASK:x})")
+        return v
+    keys = [f.lower().replace(" ", "-") for f in PSC_FAMILIES]
+    mask = 0
+    for part in text.split(","):
+        k = part.strip().lower().replace(" ", "-").replace("_", "-")
+        if k not in keys:
+            raise SystemExit(f"--families: unknown family {part!r}; families: " + ", ".join(keys))
+        mask |= 1 << keys.index(k)
+    return mask
+
+
+def pdspec_status(link):
+    return decode_pdspec_status(link.call(CMD_PD_SPEC, bytes([PSC_STATUS])).payload)
+
+
+def pdspec_start(link, families=0, confirm=False):
+    """Start a run over the families in the mask (0 = all). The charger is stepped through its levels, Hard Reset and detached
+    (inside the PD rules, no load), so it needs `confirm`."""
+    if not confirm:
+        raise SystemExit("pd-spec start steps the charger through its levels, Hard Resets it and detaches (no load): add --confirm")
+    if families & ~PSC_FAMILY_MASK:
+        raise SystemExit(f"pd-spec start: family mask 0x{families:x} out of range")
+    return decode_pdspec_status(link.call(CMD_PD_SPEC, bytes([PSC_START, families, PSC_FLAG_CONFIRM])).payload)
+
+
+def pdspec_stop(link):
+    return decode_pdspec_status(link.call(CMD_PD_SPEC, bytes([PSC_STOP])).payload)
+
+
+def pdspec_read_blob(link):
+    """The result blob, read in PSC_CHUNK pieces (layout: include/k2/pdspec/result.hpp)."""
+    out = bytearray()
+    total = None
+    while total is None or len(out) < total:
+        p = link.call(CMD_PD_SPEC, bytes([PSC_READ]) + len(out).to_bytes(2, "little")).payload
+        _need(p, 5, "pd-spec read")
+        total = p[2] | p[3] << 8
+        n = p[4]
+        _need(p, 5 + n, "pd-spec read")
+        if n == 0:
+            break
+        out += p[5:5 + n]
+    return bytes(out)
+
+
+def render_pdspec(r):
+    if "pdspec" in r:
+        s = r["pdspec"]
+        head = f"pd-spec {s['state']}"
+        if s["state"] == "running":
+            head += f", {s['family']} {s['item']}/{s['items']}"
+        elif s["state"] == "finished":
+            head += f", stop: {s['stop']}"
+        if s["start"] != "ok":
+            head += f", last start refused: {s['start']}"
+        out = (head + f"; families {s['families_text']}; pass {s['passes']} fail {s['fails']} skip {s['skips']}, "
+               f"score {s['score']} (0 = ideal), {s['elapsed_s']} s")
+        if s["release_unconfirmed"]:
+            out += "\nWARNING: the return to 5 V was not confirmed: unplug the charger"
+        return out
+    import pdspec_blob
+    return pdspec_blob.render_text(r["pdspec_result"])
+
+
+def cmd_pd_spec(link, a):
+    c = a.pdspec_cmd
+    if c == "status":
+        return {"pdspec": pdspec_status(link)}
+    if c == "start":
+        return {"pdspec": pdspec_start(link, parse_families(a.families), a.confirm)}
+    if c == "stop":
+        return {"pdspec": pdspec_stop(link)}
+    if c == "result":
+        import pdspec_blob
+        return {"pdspec_result": pdspec_blob.decode_blob(pdspec_read_blob(link))}
+    raise SystemExit("unknown pd-spec command")
+# ---- end PD Spec Check ----
 
 
 # ---- Loop probe (docs/LOOP_PROBE.md): CMD_LOOP_PROBE 0x57 ----
@@ -4747,6 +4864,8 @@ def _render(name, r):
         return "\n".join(lines)
     if name == "pd-stress":    # PD Stress
         return render_pdstress(r)
+    if name == "pd-spec":      # PD Spec Check
+        return render_pdspec(r)
     if name == "loop-probe":   # Loop probe
         return render_loop_probe(r)
     if name == "battery":      # Battery efficiency recorder
@@ -4804,7 +4923,7 @@ COMMANDS = {"ping": cmd_ping, "press": cmd_press, "state": cmd_state, "pdos": cm
             "adc-raw": cmd_adc_raw, "ripple": cmd_ripple, "fc": cmd_fc,
             "pd": cmd_pd, "identify-device": cmd_identify_device, "pd-reread": cmd_pd_reread, "apple-read": cmd_apple_read,
             "stop": cmd_stop, "lease": cmd_lease, "store": cmd_store, "blackbox": cmd_blackbox, "transcap": cmd_transcap,
-            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
+            "diagnose": cmd_diagnose, "cable-r": cmd_cable_r, "ufcs": cmd_ufcs, "pd-stress": cmd_pd_stress, "pd-spec": cmd_pd_spec, "loop-probe": cmd_loop_probe, "battery": cmd_battery, "lab": cmd_lab, "qrtest": cmd_qrtest, "charger-test": cmd_charger_test, "charger-units": cmd_charger_units,
             "charger-cable": cmd_charger_cable, "charger-sweep": cmd_charger_sweep, "charger-avs-sweep": cmd_charger_avs_sweep, "charger-svooc-cap": cmd_charger_svooc_cap, "cards": cmd_cards,
             "twin": cmd_twin}
 
@@ -5219,7 +5338,7 @@ def build_parser():
     sus.add_parser("probe", help="start the probe (5 V only, refused inline or off 5 V); read it with `ufcs result`")
     sus.add_parser("stop", help="abort a running probe and release the lines")
     sus.add_parser("result", help="the last probe: handshake timings, UART errors, every TX frame and RX byte")
-    # ---- PD Stress (docs/PD_STRESS.md): parser ----
+    # ---- PD Stress (docs/PD_SPEC_CHECK.md): parser ----
     sps = sub.add_parser("pd-stress", help="PD Stress: renegotiation stress run on the attached charger (inside the PD rules, "
                          "no load); score 0 = ideal. Start, watch, read the raw result, stop; tools/pd_stress.py records and rescored runs")
     spss = sps.add_subparsers(dest="pdstress_cmd", required=True)
@@ -5234,6 +5353,20 @@ def build_parser():
     spss.add_parser("result", help="the raw result: per-sequence counters and distributions, per-event points, the score")
     spss.add_parser("stop", help="stop the run (never refused)")
     # ---- end PD Stress parser ----
+    # ---- PD Spec Check (docs/PD_SPEC_CHECK.md): parser ----
+    spc = sub.add_parser("pd-spec", help="PD Spec Check: no-load conformance run on the attached charger (level steps up and down, "
+                         "PPS 20 mV steps, keep-alive timeouts, Hard Reset and detach recovery); pass/fail/skip per check, score "
+                         "0 = ideal. tools/pd_spec.py records a run with its report")
+    spcs = spc.add_subparsers(dest="pdspec_cmd", required=True)
+    spcst = spcs.add_parser("start", help="start a run (needs --confirm)")
+    spcst.add_argument("--confirm", action="store_true", help="required: the charger is stepped, Hard Reset and detached; "
+                       "nothing is on the output")
+    spcst.add_argument("--families", default="all", help="all (default), a mask (0x3f) or a comma list: transitions, pps-steps, "
+                       "pps-timeout, epr-timeout, hard-reset, detach")
+    spcs.add_parser("status", help="state, family and item, pass/fail/skip so far, score")
+    spcs.add_parser("result", help="the result: every check with its worst value and limit, the timers, transitions, PPS points")
+    spcs.add_parser("stop", help="stop the run; the charger goes back to 5 V (never refused)")
+    # ---- end PD Spec Check parser ----
     slp = sub.add_parser("loop-probe", help="the last HID-cable loop probe result stored on the K2 (read only; the probe "
                          "starts on the K2, Tools > Loop probe); raw values with --json")
     slp.add_argument("--host", action="store_true", help="the Host report instead (/lp/host.rec, K2_HOST_REPORT=1 builds)")

@@ -113,9 +113,10 @@ class SessionDecode(unittest.TestCase):
     def test_every_enum_has_a_name(self):
         # The widest value the firmware sends for each enum (include/k2/ui/ui_types.hpp and friends).
         self.assertEqual(len(kr.SESSION_PROTO_KINDS), 15)
-        self.assertEqual(len(kr.SESSION_BUSY), 12)   # BusyWhy::LoopProbe = 11 is the last (TwinRun = 9, PdStress = 10 stay)
+        self.assertEqual(len(kr.SESSION_BUSY), 13)   # BusyWhy::PdSpec = 12 is the last (TwinRun = 9, PdStress = 10, LoopProbe = 11 stay)
         self.assertEqual(kr.SESSION_BUSY[9], "twin-run")
         self.assertEqual(kr.SESSION_BUSY[11], "loop-probe")
+        self.assertEqual(kr.SESSION_BUSY[12], "pd-spec")
         self.assertEqual(len(kr.SESSION_TOPOLOGY), 4)
         self.assertEqual(len(kr.SESSION_WAIT_KIND), 4)
         self.assertEqual(len(kr.SESSION_PD_NONE_WHY), 3)
