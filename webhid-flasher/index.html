@@ -217,6 +217,15 @@
     log("not a K2: product=" + dev.productName + " serial=" + dev.serialNumber, "err");
   }
 
+  // A bootloader that something else wrote an app frame to (a K2 dashboard tab opens every K2 it was allowed before)
+  // refuses every later write until the USB link resets. tools/k2_flasher.py resets the port itself; WebHID cannot.
+  function deafHint(e) {
+    var m = (e && e.message) || String(e);
+    if (S.mode !== "bootloader" || !/Failed to write|Timed out/.test(m)) return;
+    log("the bootloader does not take frames: close any other page or program that has the K2 open (the K2 dashboard), " +
+        "then unplug the K2 and plug it in again (it stays in DFU) and Connect again", "warn");
+  }
+
   function fail(e) {
     setStatus("error", "bad");
     log("error: " + (e && e.message ? e.message : e), "err");
@@ -388,6 +397,7 @@
       setStatus("flash failed", "bad");
       log("flash failed: " + (e && e.message ? e.message : e), "err");
       if (e && e.backupStep) log("the backup comes first and it failed, so nothing was erased or written", "warn");
+      else deafHint(e);
     } finally {
       S.busy = false;
       $("flash").disabled = !S.fw || !S.mode;
@@ -441,6 +451,7 @@
     } catch (e) {
       setStatus("backup failed", "bad");
       log("backup failed: " + (e && e.message ? e.message : e), "err");
+      deafHint(e);
       e.backupStep = true;
       throw e;
     }

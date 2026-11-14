@@ -226,3 +226,17 @@ test("a K2_BACKUP ZIP picked as the firmware flashes the recovery container insi
   await pick(page2, { name: "junk.zip", bytes: B.makeZip([{ name: "flash.bin", data: u8(1) }]) });
   assert.match(page2.logText(), /cannot use junk\.zip: no K2_RECOVERY/);
 });
+
+// 2026-11-14: a page or program that wrote an app frame to the bootloader (an open K2 dashboard tab) leaves it refusing
+// every write until the USB link resets. WebHID cannot reset the port the way tools/k2_flasher.py does, so the page
+// says what to do.
+test("a bootloader that refuses every write gets the close-the-other-page-and-replug hint", async () => {
+  const dev = fakeDevice(makeFlash());
+  const page = await connected(dev);
+  dev.sendReport = async () => { throw new Error("Failed to write the report."); };
+  await pick(page, k2File());
+  page.els.flash.onclick();
+  await until(() => /flash failed/.test(page.logText()), "the failure");
+  assert.match(page.logText(), /does not take frames/);
+  assert.match(page.logText(), /unplug the K2 and plug it in again/);
+});
