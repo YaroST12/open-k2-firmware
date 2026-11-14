@@ -2091,7 +2091,8 @@ void SettingsPage::draw_static() {
 void SettingsPage::paint_identity() {
     const uint32_t up_min = ctx_.now / 60000u;
     const bool hid = usbcfg::current.hid;
-    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), up_min), hid), ctx_.budget,
+    const bool webusb = usbcfg::current.webusb;
+    id_.paint_budgeted(mix_u32(mix_u32(mix_init(), up_min), hid + 2u * webusb), ctx_.budget,
                         static_cast<int>(ctx_.content.w) * (kListY - kit::kBelowBar), [&] {
         const Surface &c = ctx_.content;
         StrBuf<32> line;
@@ -2101,7 +2102,7 @@ void SettingsPage::paint_identity() {
             if (up_min % 60 < 10) line.put_char('0');
         }
         line.put_u32(up_min % 60).put_char('m');
-        line.put(hid ? "  USB HID on" : "  USB HID off");
+        line.put(hid ? "  USB HID on" : webusb ? "  USB WebUSB on" : "  USB HID off");
         const kit::TextRun runs[2] = {{8, kIdHeadY, &kSmall, std::string_view(kFwVersion), kText},
                                       {8, kIdLineY, &kLabelFont, line.view(), kDim}};
         kit::paint_texts(c, {0, kit::kBelowBar, c.w, static_cast<int16_t>(kIdDashY - kit::kBelowBar)}, runs, 2, kBg);

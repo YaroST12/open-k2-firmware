@@ -237,6 +237,9 @@ static void test_bench_rows() {
     CHECK_EQ(brow(Place::Device, f) == "Asks 20V 3A, gets 37W", true);
     CHECK_EQ(brow(Place::Log, f) == "Healthy, 1 capture", true);
     CHECK_EQ(brow(Place::K2, f) == "1.0.1-6, HID on", true);
+    f.hid = false; f.webusb = true;
+    CHECK_EQ(brow(Place::K2, f) == "1.0.1-6, WebUSB on", true);
+    f.hid = true; f.webusb = false;
     f.ctr_mv = 9000; f.ctr_ma = 2220;
     CHECK_EQ(brow(Place::Device, f) == "Asks 9V 2.22A, gets 37W", true);
     for (int p = 0; p < kPlaces; p++) CHECK_EQ(row(static_cast<Place>(p), f).known, true);

@@ -25,6 +25,9 @@
 #include "k2/net/net.hpp"
 #endif
 #include "k2/drivers/usbcfg.hpp"
+#if K2_WEBUSB
+#include "k2/core/frame_rx.hpp"
+#endif
 
 namespace k2::usb {
 
@@ -42,8 +45,18 @@ bool g_log_on = true;
 bool g_cdc_hold = false;    // a screenshot owns the CDC bulk pipe (set_cdc_hold)
 #endif
 bool g_hid_quiet = false;   // a trace push session owns the IN endpoint (set_hid_quiet)
+bool g_hid_on = true;       // the build's mode has the HID function (init() copies usbcfg::current.hid)
+Route g_route = Route::Hid; // where remote frames go (set_reply_route)
+#if K2_WEBUSB
+remote::FrameAssembler g_assembler;   // bulk OUT byte stream -> 64-byte request frames
+bool g_vendor_was_mounted = false;
+bool g_vendor_pending = false;        // frames written to the TX FIFO and not yet handed to the endpoint
+#endif
 
 }  // namespace
+
+void set_reply_route(Route r) { g_route = r; }
+Route reply_route() { return g_route; }
 
 K2_HOT void flush() {
     while (const std::uint8_t *r = g_queue.front()) {
@@ -51,6 +64,12 @@ K2_HOT void flush() {
         g_queue.pop();
         stats.log_sent++;
     }
+#if K2_WEBUSB
+    if (g_vendor_pending) {
+        tud_vendor_write_flush();
+        g_vendor_pending = false;
+    }
+#endif
 }
 
 namespace {
@@ -136,6 +155,8 @@ void init() {
 #if K2_NET
     if (usbcfg::current.net) net::init();
 #endif
+    g_hid_on = usbcfg::current.hid;
+    g_route = g_hid_on ? Route::Hid : Route::Vendor;
     g_started = true;
 }
 
@@ -218,6 +239,41 @@ void dp_pullup_restore() {
     g_pull = {};
 }
 
+#if K2_WEBUSB
+namespace {
+// Move bytes from the vendor RX FIFO into the frame assembler, as many as the remote request queue can take: when the
+// main loop is busy the FIFO fills, the endpoint NAKs and the host waits, instead of requests being dropped. The byte
+// budget is whole frames minus what the assembler already holds, so a read never completes more frames than there are
+// free slots.
+K2_HOT void vendor_rx(std::uint32_t now) {
+    if (!tud_vendor_mounted()) {
+        if (g_vendor_was_mounted) {
+            g_vendor_was_mounted = false;
+            g_assembler.reset();
+            g_vendor_pending = false;
+        }
+        return;
+    }
+    g_vendor_was_mounted = true;
+    while (tud_vendor_available() != 0) {
+        const std::size_t room = remote_free();
+        if (room == 0) {
+            g_assembler.hold(now);     // our backpressure, not a stalled host: the partial frame keeps its clock
+            return;
+        }
+        std::uint8_t chunk[kSlotSize];
+        const std::size_t budget = room * kSlotSize - g_assembler.pending();
+        const std::size_t want = std::min<std::size_t>({sizeof chunk, budget, tud_vendor_available()});
+        const std::size_t n = tud_vendor_read(chunk, static_cast<std::uint32_t>(want));
+        if (n == 0) return;
+        g_assembler.feed(std::span<const std::uint8_t>(chunk, n), now, [](std::span<const std::uint8_t, remote::kFrameSize> f) {
+            on_remote_report(f.data(), static_cast<std::uint16_t>(f.size()), Route::Vendor);
+        });
+    }
+}
+}  // namespace
+#endif
+
 K2_HOT void poll() {
     if (!g_started) return;            // USB link off (k2/drivers/usbcfg.hpp): the core was never started
     static std::uint32_t last_ms;
@@ -228,6 +284,9 @@ K2_HOT void poll() {
     last_ms = now;
 
     tud_task();
+#if K2_WEBUSB
+    vendor_rx(now);
+#endif
 #if K2_NET
     if (usbcfg::current.net) net::poll();
 #endif
@@ -274,15 +333,34 @@ std::array<std::string_view, 2> log_view() { return g_ring.view(); }
 K2_HOT void log(std::string_view msg) {
     g_ring.push(msg.substr(0, kSlotSize - 1));   // what the HID line would carry
     if (g_tap) g_tap(msg.substr(0, kSlotSize - 1));
-    if (!g_log_on || g_hid_quiet) return;
+    // Log text is HID-only: no HID function (WebUSB modes) or the remote talking over the vendor pipe means no queue.
+    if (!g_log_on || g_hid_quiet || !g_hid_on || g_route == Route::Vendor) return;
     std::array<std::uint8_t, kSlotSize> slot{};
     std::copy_n(msg.begin(), std::min(msg.size(), kSlotSize - 1), slot.begin());
     push(slot, true);
 }
 
-K2_HOT void send_report(const std::uint8_t* report) { push(std::span<const std::uint8_t, kSlotSize>(report, kSlotSize), false); }
+K2_HOT void send_report(const std::uint8_t* report) {
+#if K2_WEBUSB
+    if (g_route == Route::Vendor) {
+        // Straight into the TX FIFO: it holds whole frames, so a frame either fits or is dropped (streamers wait on tx_free()).
+        if (tud_vendor_write_available() >= kSlotSize && tud_vendor_write(report, kSlotSize) == kSlotSize) {
+            g_vendor_pending = true;
+            stats.log_sent++;
+            flush();
+        }
+        return;
+    }
+#endif
+    push(std::span<const std::uint8_t, kSlotSize>(report, kSlotSize), false);
+}
 
-std::uint8_t tx_free() { return g_queue.free(); }
+std::uint8_t tx_free() {
+#if K2_WEBUSB
+    if (g_route == Route::Vendor) return static_cast<std::uint8_t>(std::min<std::uint32_t>(tud_vendor_write_available() / kSlotSize, 255));
+#endif
+    return g_queue.free();
+}
 
 bool cdc_ready() { return g_started && tud_mounted() && !tud_suspended() && tud_cdc_connected(); }
 std::uint32_t cdc_free() { return tud_cdc_write_available(); }
@@ -368,7 +446,7 @@ std::uint16_t tud_hid_get_report_cb(std::uint8_t, std::uint8_t, hid_report_type_
 // queues them; they are parsed in the main loop. Runs inside tud_task(), not in the ISR.
 void tud_hid_set_report_cb(std::uint8_t, std::uint8_t, hid_report_type_t, const std::uint8_t* buffer,
                            std::uint16_t bufsize) {
-    k2::usb::on_remote_report(buffer, bufsize);
+    k2::usb::on_remote_report(buffer, bufsize, k2::usb::Route::Hid);
 }
 
 }  // extern "C"

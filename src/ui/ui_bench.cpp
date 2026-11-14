@@ -97,6 +97,7 @@ bench::Facts ToolsPage::facts() const {
         f.captures = static_cast<uint8_t>(f.captures + (pdtrace::capture_info(i).trigger != pdtrace::Trigger::None));
     f.version = kFwVersion;
     f.hid = usbcfg::current.hid;
+    f.webusb = usbcfg::current.webusb;
     const battery::Recorder &rec = battery::hw::service().rec();
     if (rec.state() != battery::State::Idle) {
         battery::Record r;

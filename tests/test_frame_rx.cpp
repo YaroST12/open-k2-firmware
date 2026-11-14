@@ -132,6 +132,19 @@ void test_reset_and_timeout() {
     CHECK_EQ(u.got[0] == f, 1);
 }
 
+void test_hold() {
+    // hold(): the reader could not take bytes (backpressure), so the partial frame keeps its clock instead of timing out.
+    const Frame f = make_frame(4, 4);
+    FrameAssembler a;
+    Sink s;
+    a.feed(std::span<const std::uint8_t>(f.data(), 20), 1000, s);
+    a.hold(1000 + FrameAssembler::kPartialTimeoutMs);
+    a.hold(1000 + 2 * FrameAssembler::kPartialTimeoutMs);
+    a.feed(std::span<const std::uint8_t>(f.data() + 20, 44), 1000 + 2 * FrameAssembler::kPartialTimeoutMs + 10, s);
+    CHECK_EQ(s.got.size(), 1u);
+    CHECK_EQ(s.got[0] == f, 1);
+}
+
 }  // namespace
 
 int main() {
@@ -140,5 +153,6 @@ int main() {
     test_two_in_one_feed();
     test_garbage_prefix();
     test_reset_and_timeout();
+    test_hold();
     return test_report("test_frame_rx");
 }

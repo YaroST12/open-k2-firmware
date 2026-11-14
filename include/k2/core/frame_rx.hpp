@@ -7,6 +7,7 @@
 //  - once the magic is seen, 64 bytes make a frame, handed to the callback;
 //  - a partial frame that has been waiting longer than kPartialTimeoutMs is dropped, so a lost tail costs one frame, not
 //    the one after it (the host sends whole frames back to back, so a gap means the tail is not coming);
+//  - hold(now) pauses that clock while the consumer is the bottleneck;
 //  - reset() starts clean (the host re-enumerated or the configuration changed).
 // Pure code, no hardware: tests/test_frame_rx.cpp.
 #pragma once
@@ -45,6 +46,9 @@ public:
         }
     }
 
+    // The reader could not take bytes at `now_ms` (its queue was full): a partial frame keeps its clock, so waiting on
+    // our own backpressure never counts as the host stalling.
+    void hold(std::uint32_t now_ms) { last_ms_ = now_ms; }
     void reset() { len_ = 0; }
     std::size_t pending() const { return len_; }
 
