@@ -4,6 +4,7 @@
 // values, the capture stream round trip (encode -> decode -> analyze, the path a recorded fixture takes) and the live Hard Reset / detach
 // tracker. Recorded captures from the hardware go under tests/fixtures/pdspec/ and are read by the fixture cases at the end.
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -144,7 +145,7 @@ void edges_from_markers() {
 }
 
 // A PPS step of 20 mV: VBUS 5000 mV, moves to 5020 mV 12 ms after the Accept with +-2 mV of noise; the final level is the mean of the
-// last 50 ms, the settle time the first sample from which VBUS stays within 10 mV of it.
+// last 50 ms, the settle time the first sample from which the mean of the last four stays within 10 mV of it.
 void pps_step() {
     Trace t;
     t.fill(-20, 300, [](int ms) {
@@ -155,7 +156,34 @@ void pps_step() {
     CHECK_COND(o.valid);
     CHECK_EQ(o.final_mv, 5020);
     CHECK_COND(o.settled);
-    CHECK_EQ(o.settle.us, 12000u);   // 22 ms: the first sample at 5018..5022 with all later ones within 10 mV
+    CHECK_EQ(o.settle.us, 13000u);   // 23 ms: 5002, 4998, 5020, 5022 average 5010 (22 ms: 5000, 5002, 4998, 5020 = 5005, out)
+}
+
+// A recorded PPS step (Anker IQ4, APDO 3.3-11 V, 7000 -> 7020 mV, transition capture of 2026-11-14, cut to the engine's window of
+// 300 ms after the Request). The level arrives 4.8 ms after the Accept (the first sample at the new level). The monitor's samples
+// scatter by sd ~3.5 mV around it, single ones by up to 12.6 mV (7039 mV at 262 ms): judged sample by sample against +-10 mV the
+// step "settled" at 263.7 ms, the last noise spike. The settle is judged on a short moving mean, which sees the source, not the noise.
+void pps_step_recorded() {
+    std::FILE* f = std::fopen("tests/fixtures/pdspec/iq4_pps_7000_7020.csv", "r");
+    CHECK_COND(f != nullptr);
+    if (!f) return;
+    Trace t;
+    char line[128];
+    constexpr double kRequestMs = -198.457, kAcceptMs = -191.292, kWindowMs = 300.0;
+    auto us = [](double ms) { return std::uint32_t(std::int64_t(kT0) + std::llround((ms - kRequestMs) * 1000.0)); };
+    while (std::fgets(line, sizeof line, f)) {
+        double ms = 0;
+        int mv = 0;
+        if (std::sscanf(line, "%lf,%d,", &ms, &mv) != 2 || mv <= 0) continue;   // the header and the marker rows
+        if (ms > kRequestMs + kWindowMs) break;
+        t.s.push_back({us(ms), std::uint16_t(mv), 0, 0});
+    }
+    std::fclose(f);
+    const StepOut o = analyze_step(t.view(), us(kAcceptMs));
+    CHECK_COND(o.valid);
+    CHECK_COND(o.final_mv >= 7020 && o.final_mv <= 7032);
+    CHECK_COND(o.settled);
+    CHECK_COND(o.settle.us >= 4800 && o.settle.us <= 10000);
 }
 
 // The Hard Reset path, fed live at poll resolution: VBUS 20 V falls under vSafe0V 400 ms after the reset, stays dark until 1200 ms, is
@@ -219,6 +247,7 @@ int main() {
     no_ps_rdy();
     edges_from_markers();
     pps_step();
+    pps_step_recorded();
     reset_track();
     stream_round_trip();
     return test_report("test_pdspec_analyze");

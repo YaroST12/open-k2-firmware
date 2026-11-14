@@ -107,7 +107,7 @@ class Tables(unittest.TestCase):
         self.assertEqual(t["skips"][0], "-")
         self.assertEqual(t["skips"][-1], "not selected")
         self.assertEqual(t["verdicts"], ["pending", "pass", "fail", "skip", "unverified"])
-        self.assertEqual([c["key"] for c in t["checks"] if c["inferred"]], ["detach_safe0v", "reattach"])
+        self.assertEqual([c["key"] for c in t["checks"] if c["inferred"]], ["pps_settle", "detach_safe0v", "reattach"])
 
     @unittest.skipUnless(HAVE_GXX, "needs a host g++")
     def test_tables_match_the_compiled_firmware(self):

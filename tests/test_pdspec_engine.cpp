@@ -390,7 +390,8 @@ void clean_source_scores_zero() {
     CHECK_EQ(int(e.pps().size()), 3);
     CHECK_EQ(int(e.agg(Check::PpsAccuracy).n), 30);
     CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
-    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Pass);
+    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Unverified);   // an inferred limit: reported, never judged
+    CHECK_EQ(int(e.agg(Check::PpsSettle).fails), 0);
     CHECK_EQ(int(e.pps()[1].set_mv), 7940);
     CHECK_EQ(int(e.pps()[1].steps), 10);
     // The timers.
@@ -454,7 +455,8 @@ void pps_offset_and_slow_settle() {
     CHECK_EQ(int(e.agg(Check::PpsAccuracy).fails), 10);
     CHECK_EQ(int(e.pps()[0].acc_fails), 10);
     CHECK_EQ(int(e.pps()[0].worst_err_mv), 300);
-    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Fail);
+    CHECK_COND(verdict(e, Check::PpsSettle) == Verdict::Unverified);   // slow, but the limit is inferred: no fail, no penalty
+    CHECK_COND(e.agg(Check::PpsSettle).fails > 0);                     // the count over it is kept
     CHECK_COND(verdict(e, Check::PpsMonotonic) == Verdict::Pass);
     CHECK_COND(verdict(e, Check::Accuracy) == Verdict::Pass);   // the fixed levels are not touched
 }

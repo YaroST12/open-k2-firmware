@@ -45,7 +45,7 @@ out reads "not selected"; every family ends back at a 5 V contract.
 ### Limits
 
 Every limit is a named figure of the USB PD R3.2 (or Type-C) specification, or a sum of named figures ("derived"), or a K2 figure where
-the specification names none ("inferred"). A check whose whole limit is inferred (`detach_safe0v`, `reattach`; `inferred` in
+the specification names none ("inferred"). A check whose whole limit is inferred (`pps_settle`, `detach_safe0v`, `reattach`; `inferred` in
 `kDefs`) is measured and reported but never judged: its verdict reads **unverified**, with the value and the count over the inferred
 limit, and it adds nothing to the score. The numbers live in `pd_spec_timing.hpp`; the reference point is always one of the K2's own
 edges: the Request's TX start, the Accept's or the PS_RDY's RX edge, or the VBUS sample.
@@ -62,7 +62,7 @@ edges: the Request's TX start, the Accept's or the PS_RDY's RX edge, or the VBUS
 | `accuracy` | the settled fixed level | inside vSrcNew (+-5 %) |
 | `pps_monotonic` | each 20 mV PPS step | moves the requested way or not at all; 8 mV the wrong way is allowed (monitor noise, inferred) |
 | `pps_accuracy` | each PPS level | inside vPpsNew (requested +-5 %) |
-| `pps_settle` | Accept to the settled PPS level | tPpsSrcTransSmall (25 ms), taken from the Accept (inferred: the table names the set-point time only) |
+| `pps_settle` | Accept to the settled PPS level: the first sample from which the mean of the last four samples stays within 10 mV of the final level | tPpsSrcTransSmall (25 ms), taken from the Accept (inferred: the table names the set-point time only): unverified |
 | `pps_keepalive` | the last PPS Request to the source's Hard Reset | tPPSTimeout, 12 to 15 s; no Hard Reset by 20 s fails ("not seen") |
 | `epr_keepalive` | the last EPR_KeepAlive to the source's Hard Reset | tSourceEPRKeepAlive, 750 to 1000 ms; no Hard Reset by 3 s fails |
 | `hr_safe0v` | the K2's Hard Reset to VBUS under vSafe0V (0.8 V) | tPSHardReset + tSafe0V: 685 ms (derived) |
@@ -87,7 +87,7 @@ applies once its limit has a source). The weights are **provisional** (`kDefs` i
 
 | Weight | Checks |
 |---|---|
-| 1 | `accept_time` `src_start` `pps_settle` |
+| 1 | `accept_time` `src_start` `pps_settle` (unverified for now: 0) |
 | 2 | `ps_rdy_time` `rise_time` `fall_time` `pps_accuracy` `hr_caps` |
 | 3 | `ps_rdy_early` `ps_rdy_low` `overshoot` `accuracy` `pps_monotonic` `hr_recover` `hr_turn_on` |
 | 5 | `pps_keepalive` `epr_keepalive` `hr_safe0v` `detach_safe0v` (unverified for now: 0) |
@@ -101,6 +101,12 @@ triggers it at the Request with a post window (1.5 s for a fixed step, 300 ms fo
 ring. When the capture is held by someone else, the run goes on without it: the times come from the sink's edge stamps and live VBUS
 polling, each widened by the monitor's sample age (5 ms) and the poll spacing, and the checks that need the waveform read "capture
 busy". A run overwrites the last transition capture (`pd_trace.py transition`).
+
+The PPS settle time is a measurement-floor case. A 20 mV step is two of the monitor's noise widths: single INA226 samples at 1 kHz
+scatter by about 3.5 mV (sd) around a steady level and single ones by up to 13 mV. Judged sample by sample against +-10 mV, a step
+"settled" at the last noise spike of its 300 ms window: the Anker IQ4 read 183-268 ms for a level that arrived 5 ms after the Accept
+(`tests/fixtures/pdspec/iq4_pps_7000_7020.csv`). The settle is therefore judged on the mean of the last four samples (about 2 ms of
+lag), and the check stays unverified while its limit is inferred.
 
 ## Safety
 

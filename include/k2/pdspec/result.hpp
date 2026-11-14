@@ -70,7 +70,7 @@ inline constexpr std::array<CheckDef, kChecks> kDefs{{
     {"accuracy", "Accuracy", Kind::Range, Unit::Mv, 3},
     {"pps_monotonic", "PPS monotonic", Kind::Min, Unit::Mv, 3},
     {"pps_accuracy", "PPS accuracy", Kind::Range, Unit::Mv, 2},
-    {"pps_settle", "PPS settle", Kind::Max, Unit::Us, 1},
+    {"pps_settle", "PPS settle", Kind::Max, Unit::Us, 1, true},          // tPpsSrcTransSmall from the Accept: inferred
     {"pps_keepalive", "PPS timeout", Kind::Range, Unit::Ms, 5},
     {"epr_keepalive", "EPR timeout", Kind::Range, Unit::Ms, 5},
     {"hr_safe0v", "HR to 0 V", Kind::Max, Unit::Ms, 5},

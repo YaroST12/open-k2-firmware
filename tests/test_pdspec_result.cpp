@@ -58,6 +58,7 @@ void score_is_weight_times_fails() {
 void inferred_limits_are_unverified() {
     CHECK_COND(def(Check::DetachSafe0V).inferred);
     CHECK_COND(def(Check::Reattach).inferred);
+    CHECK_COND(def(Check::PpsSettle).inferred);   // tPpsSrcTransSmall taken from the Accept: the table names the set-point time only
     CHECK_COND(!def(Check::PsRdyTime).inferred);
     CHECK_COND(!def(Check::HrRecover).inferred);
     CHECK_COND(std::string_view(verdict_name(Verdict::Unverified)) == "unverified");

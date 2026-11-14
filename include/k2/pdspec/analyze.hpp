@@ -59,7 +59,11 @@ struct StepOut {
 inline constexpr std::int32_t kDepartMinMv = 100;
 inline constexpr std::uint32_t kPreUs = 20000;       // the old level: mean of the 20 ms before the Accept
 inline constexpr std::uint32_t kTailUs = 50000;      // the final level: mean of the window's last 50 ms
-inline constexpr std::int32_t kSettleTolMv = 10;     // a PPS step has settled within half a 20 mV step of its final level
+inline constexpr std::int32_t kSettleTolMv = 10;     // a PPS step has settled within half a 20 mV step of its final level ...
+// ... judged on the mean of the last kSettleMeanN samples after the Accept: single INA226 samples at 1 kHz scatter by sd ~3.5 mV and up
+// to +-13 mV, so a raw sample against +-10 mV timed the last noise spike of the window, not the source (Anker IQ4, 2026-11-14:
+// 250-270 ms for a level that arrived 5 ms after the Accept). The mean of four cuts the scatter by half and lags by ~2 samples.
+inline constexpr std::size_t kSettleMeanN = 4;
 
 constexpr std::int32_t band_lo(std::int32_t mv) { return mv - mv * std::int32_t(pd::spec::kVSrcNewPermille) / 1000; }
 constexpr std::int32_t band_hi(std::int32_t mv) { return mv + mv * std::int32_t(pd::spec::kVSrcNewPermille) / 1000; }
@@ -179,13 +183,22 @@ StepOut analyze_step(const Rec& r, std::uint32_t accept_us) {
     o.final_mv = std::int32_t(sum / cnt);
     bool have = false, have_prev = false;
     std::uint32_t prev_t = 0;
+    std::int32_t win[kSettleMeanN] = {};   // the last kSettleMeanN samples after the Accept (fewer at its start)
+    std::size_t wn = 0;
+    std::int32_t wsum = 0;
     for (std::size_t i = 0; i < n; ++i) {
         const transcap::Sample s = r.sample(i);
         const std::uint32_t gap = have_prev ? s.t_us - prev_t : 0;
         prev_t = s.t_us;
         have_prev = true;
         if (!detail::after(s.t_us, accept_us)) continue;
-        if (std::abs(std::int32_t(s.vbus_mv) - o.final_mv) <= kSettleTolMv) {
+        std::int32_t& slot = win[wn % kSettleMeanN];
+        if (wn >= kSettleMeanN) wsum -= slot;
+        slot = s.vbus_mv;
+        wsum += slot;
+        ++wn;
+        const std::int32_t mean = wsum / std::int32_t(wn < kSettleMeanN ? wn : kSettleMeanN);
+        if (std::abs(mean - o.final_mv) <= kSettleTolMv) {
             if (!have) { o.settle = {s.t_us - accept_us, gap, true}; have = true; }
         } else {
             have = false;
