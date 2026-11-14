@@ -894,5 +894,14 @@ class ChargerTestStartTest(unittest.TestCase):
         self.assertEqual(link.sent, [(0x0B, bytes([5]))])
 
 
+    def test_cancel_and_start_replies_render_as_text(self):
+        # the plain (non-JSON) output used to index run_id in the cancel reply: KeyError 'run_id'
+        for stopped in kr.CT_STOPPED:
+            text = kr.render("charger-test", {"stopped": stopped})
+            self.assertEqual(text, "nothing to stop" if stopped == "nothing" else f"stopped the {stopped}")
+        self.assertEqual(kr.render("charger-test", {"started": True, "run_id": 8, "previous_run_id": 7}),
+                         "run 8 started (previous run 7)")
+
+
 if __name__ == "__main__":
     unittest.main()

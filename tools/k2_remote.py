@@ -4480,6 +4480,10 @@ def _hunt_line(h):
 def _render(name, r):
     if name == "charger-test" and r.pop("_summary", False):
         return charger_summary.summarize(r)
+    if name == "charger-test" and "stopped" in r:   # `charger-test cancel`
+        return "nothing to stop" if r["stopped"] == "nothing" else f"stopped the {r['stopped']}"
+    if name == "charger-test" and "started" in r:   # `charger-test start`
+        return f"run {r['run_id']} started (previous run {r['previous_run_id']})"
     if name == "charger-test" and "on_screen" in r:   # `charger-test view`
         pv, w = r["preview"], r["wait"]
         lines = [f"{r['stage']} (cursor {r['cursor']}/{r['rows']}{'' if r['on_screen'] else ', page not on screen'}): "
