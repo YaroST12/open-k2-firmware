@@ -61,7 +61,8 @@ const char* vendor_name(std::uint16_t vid) {
 
 namespace {
 
-// Cable VDO 1 bits 2:0. Intel's 0x8087 cables with 10G or more are Thunderbolt.
+// Cable VDO 1 bits 2:0, already held to the layout's highest valid code. Intel's 0x8087 cables with 10G or more are
+// Thunderbolt (a label only).
 const char* speed_name(std::uint8_t bits, std::uint16_t vid) {
     if (vid == 0x8087 && bits >= 2) return "Thunderbolt (40G)";
     switch (bits) {
@@ -73,7 +74,16 @@ const char* speed_name(std::uint8_t bits, std::uint16_t vid) {
     }
 }
 
-const char* latency_name(std::uint8_t code) {
+// Cable VDO 1 bits 16:13. 1000b is "> 70 ns" on a passive cable; an active cable goes on to 1000 / 2000 / 3000 ns.
+const char* latency_name(std::uint8_t code, bool active) {
+    if (active) {
+        switch (code) {
+            case 8: return "1000 ns (~100 m)";
+            case 9: return "2000 ns (~200 m)";
+            case 10: return "3000 ns (~300 m)";
+            default: break;
+        }
+    }
     switch (code) {
         case 1: return "<10 ns (~1 m)";
         case 2: return "10-20 ns (~2 m)";
@@ -171,23 +181,9 @@ K2_HOT CableLimits cable_limits(const Emarker& e) {
     if (!e.valid || e.num_vdos < 5 || (e.spec_rev != 1 && e.spec_rev != 2)) return out;
     out.observed = true;
     out.max_ma = e.max_current_a == 5 ? 5000 : 3000;
-    const auto vdm = e.raw_vdos[0], id = e.raw_vdos[1], cable = e.raw_vdos[4];
-    const auto connector = (cable >> 18) & 3, latency = (cable >> 13) & 15;
-    const auto termination = (cable >> 11) & 3, current = (cable >> 5) & 3;
-    constexpr std::uint32_t reserved = (1u << 20) | (1u << 17) | (3u << 7) | (3u << 3);
-    // Trust 30 V only from a well-formed PD3 passive-cable identity.
-    const bool passive30 = e.spec_rev == 2 && !e.is_active && e.vdo_version == 0 &&
-        e.max_voltage_v == 30 && (vdm >> 16) == 0xff00 && (vdm & (1u << 15)) &&
-        ((vdm >> 6) & 3) == 1 && (vdm & 31) == 1 && ((id >> 27) & 7) == 3 &&
-        ((cable >> 21) & 7) == 0 && connector >= 2 && latency >= 1 && latency <= 8 &&
-        termination <= 1 && !(cable & reserved) && ((cable >> 9) & 3) == 1 &&
-        ((current == 1 && e.max_current_a == 3) || (current == 2 && e.max_current_a == 5));
-    if (passive30) out.max_mv = 30000;
-    // A passive PD3.1 EPR cable carries VDO version 1.0 (000b) and the EPR Mode Capable bit 17 beside 50 V / 5 A
-    // (bit layout from memory of PD 3.1 "Passive Cable VDO": unverified). The VDO version 2 form is kept as before.
-    const bool epr_bit = e.raw_vdos[4] >> 17 & 1;
-    const bool epr_cable = (e.vdo_version == 2 && e.epr_capable) || (e.vdo_version == 0 && !e.is_active && epr_bit);
-    if (e.spec_rev == 2 && epr_cable && e.max_voltage_v == 50 && out.max_ma == 5000 && (!e.is_active || e.vdo2_valid))
+    // Above 20 V only for an EPR cable (parse_emarker: the EPR Capable bit beside 50 V and 5 A) answering in PD 3.x; an
+    // active one also has to carry its VDO 2.
+    if (e.spec_rev == 2 && e.epr_capable && e.max_voltage_v == 50 && out.max_ma == 5000 && (!e.is_active || e.vdo2_valid))
         out.max_mv = 50000;
     return out;
 }
@@ -217,16 +213,22 @@ K2_HOT Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do
     e.usb_lanes = 1;
     e.vendor_str = "Unknown";
     e.speed_str = speed_name(0, 0);
-    e.latency_str = latency_name(0);
+    e.latency_str = latency_name(0, false);
     e.termination_str = termination_name(0);
     e.num_vdos = std::uint8_t(std::min<unsigned>({num_do, 6u, unsigned(body.size() / 4)}));
     for (unsigned i = 0; i < e.num_vdos; i++) e.raw_vdos[i] = le32(&body[4 * i]);
     const auto& v = e.raw_vdos;
 
     // VDO 0 is the VDM header; VDO 1 the ID header (VID, product type).
+    // The layout of the cable VDOs follows the answer's Structured VDM version (VDM header bits 14:13): 00b is SVDM 1.0
+    // (and PD 2.0), whose cable VDO has no Max VBUS field at 10:9 and no EPR Capable bit; 01b, and the invalid 10b / 11b
+    // that a receiver reads as 01b, is SVDM 2.x.
+    const bool svdm2 = num_do >= 1 && ((v[0] >> 13) & 3) != 0;
+    std::uint8_t product = 0;   // ID header bits 29:27 on SOP': 3 passive cable, 4 active cable, 6 VPD
     if (num_do >= 2) {
         e.vid = v[1] & 0xFFFF;
-        e.is_active = ((v[1] >> 27) & 7) == 4;
+        product = (v[1] >> 27) & 7;
+        e.is_active = product == 4;
         e.vendor_str = vendor_name(e.vid);
     }
     if (num_do >= 3) e.xid = v[2];  // cert stat
@@ -235,34 +237,46 @@ K2_HOT Emarker parse_emarker(std::span<const std::uint8_t> body, unsigned num_do
         e.hw_rev = (v[3] >> 8) & 0xFF;
         e.fw_rev = v[3] & 0xFF;
     }
-    if (num_do >= 5) {  // cable VDO 1
+    // Cable VDO 1, passive and active cables only: a VPD VDO (product type 6) carries impedances where a cable VDO has its
+    // rating, so it keeps the defaults.
+    if (num_do >= 5 && (product == 3 || product == 4)) {
         const std::uint32_t c = v[4];
-        constexpr std::uint8_t kVolts[4] = {20, 30, 40, 50};
-        e.max_voltage_v = kVolts[(c >> 9) & 3];
+        // Max VBUS: 11b = 50 V; 00b = 20 V; 01b / 10b are deprecated and read as 20 V. The legacy layouts are 20 V.
+        e.max_voltage_v = svdm2 && ((c >> 9) & 3) == 3 ? 50 : 20;
         e.max_current_a = ((c >> 5) & 3) == 2 ? 5 : 3;
         const bool a5 = e.max_current_a >= 5;
-        e.epr_capable = a5 && e.max_voltage_v >= 50;
-        e.max_power_w = a5 ? (e.max_voltage_v >= 48 ? 240 : e.max_voltage_v >= 40 ? 200 : 100) : 60;
-        e.speed_str = speed_name(c & 7, e.vid);
+        e.max_power_w = a5 ? (e.max_voltage_v >= 48 ? 240 : 100) : 60;
+        e.vdo_version = svdm2 ? (c >> 21) & 7 : 0;   // SVDM 1.0 keeps Max VBUS in 23:21
+        // EPR Capable (bit 17) exists in the passive VDO version 1.0 and the active VDO1 version 1.3, the active one with
+        // VBUS through the cable (bit 4). An EPR cable is that bit with 50 V and 5 A.
+        const bool epr_bit = svdm2 && ((c >> 17) & 1) &&
+                             (e.is_active ? e.vdo_version == 3 && ((c >> 4) & 1) : e.vdo_version == 0);
+        e.epr_capable = epr_bit && a5 && e.max_voltage_v == 50;
+        // USB Highest Speed: a code above the layout's highest valid one counts as that one (Gen4 in SVDM 2.x; Gen2 in
+        // SVDM 1.0 and in the active VDO1 before version 1.3).
+        const std::uint8_t top = svdm2 && (!e.is_active || e.vdo_version >= 3) ? 4 : 2;
+        e.speed_str = speed_name(std::min<std::uint8_t>(c & 7, top), e.vid);
         e.cable_hw = (c >> 28) & 0xF;
         e.cable_fw = (c >> 24) & 0xF;
-        e.vdo_version = (c >> 21) & 7;
         e.type_c_plug = ((c >> 18) & 3) == 2;
         e.latency_code = (c >> 13) & 0xF;
-        e.latency_str = latency_name(e.latency_code);
+        e.latency_str = latency_name(e.latency_code, e.is_active);
         e.termination = (c >> 11) & 3;
         e.termination_str = termination_name(e.termination);
         e.vconn_required = e.termination != 0;
     }
     if (num_do >= 6 && e.is_active) {  // active cable VDO 2
         const std::uint32_t c = v[5];
+        // Before VDO1 version 1.3, bits 10:8 and 2 are reserved (no USB4 Supported, no Optically Isolated) and bits 1:0
+        // are the SuperSpeed signalling (01b = Gen 2 or higher), whose bit 0 is the later USB Gen bit.
+        const bool v13 = e.vdo_version >= 3;
         e.vdo2_valid = true;
         e.max_temp_c = (c >> 24) & 0xFF;
         e.shutdown_temp_c = (c >> 16) & 0xFF;
         e.u3_power = (c >> 12) & 7;
-        e.usb4_supported = !((c >> 8) & 1);
+        e.usb4_supported = v13 && !((c >> 8) & 1);   // active low
         e.usb_lanes = ((c >> 3) & 1) ? 2 : 1;
-        e.optical_isolated = (c >> 2) & 1;
+        e.optical_isolated = v13 && ((c >> 2) & 1);
         e.usb_gen2 = c & 1;
     }
     return e;

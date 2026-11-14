@@ -16,8 +16,9 @@ static emlib::Entry entry(const char* name) {
     e.seq = 3;
     e.version = 2;
     std::strncpy(e.name.data(), name, emlib::kNameMax);
-    // passive cable, Apple VID, cert 0x1234, PID 0x1234 hw 1 fw 1; cable VDO: USB4 Gen3, 5 A, 50 V, latency code 2
-    const std::array<std::uint32_t, 5> v = {0xFF00A041, 0x180005AC, 0x00001234, 0x12340101, 0x00004643};
+    // passive cable, Apple VID, cert 0x1234, PID 0x1234 hw 1 fw 1; cable VDO: USB4 Gen3, 5 A, 50 V, EPR Capable (bit 17),
+    // latency code 2
+    const std::array<std::uint32_t, 5> v = {0xFF00A041, 0x180005AC, 0x00001234, 0x12340101, 0x00024643};
     e.rec = emrec::make(v, 2, "Apple-USB4G3-240W");
     return e;
 }
@@ -55,7 +56,7 @@ static void test_exact() {
         "    \"vconn_required\": false,\n"
         "    \"epr\": true,\n"
         "    \"pd_rev\": 2,\n"
-        "    \"vdos\": [\"0xFF00A041\", \"0x180005AC\", \"0x00001234\", \"0x12340101\", \"0x00004643\"]\n"
+        "    \"vdos\": [\"0xFF00A041\", \"0x180005AC\", \"0x00001234\", \"0x12340101\", \"0x00024643\"]\n"
         "  }\n"
         "}\n";
     CHECK_STR(got.c_str(), want.c_str());

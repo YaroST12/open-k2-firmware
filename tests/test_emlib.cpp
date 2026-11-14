@@ -48,7 +48,7 @@ static void test_name() {
     CHECK_STR(name(0x05AC, 3 | (2u << 5) | (3u << 9)).c_str(), "Apple-USB4G3-240W");
     CHECK_STR(name(0x1037, 0).c_str(), "Anker-USB2-60W");
     CHECK_STR(name(0x1037, 1 | (2u << 5)).c_str(), "Anker-USB3.2G1-100W");
-    CHECK_STR(name(0x1037, 2 | (2u << 5) | (2u << 9)).c_str(), "Anker-USB3.2G2-200W");
+    CHECK_STR(name(0x1037, 2 | (2u << 5) | (2u << 9)).c_str(), "Anker-USB3.2G2-100W");   // 10:9 = 10b is deprecated: 20 V
     CHECK_STR(name(0x8087, 3 | (2u << 5)).c_str(), "Intel-TBT3-100W");
     CHECK_STR(name(0x2B1D, 1 | (1u << 5)).c_str(), "0x2B1D-USB3.2G1-60W");
     CHECK_STR(name(0x05AC, 0, 2).c_str(), "Apple-USB2-60W-2");
@@ -125,8 +125,8 @@ static void test_save_list_get() {
     CHECK_EQ(r.existed ? 1 : 0, 0);
     emlib::Entry e;
     CHECK_EQ(l.get(1, e) ? 1 : 0, 1);
-    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-200W");
-    CHECK_STR(reinterpret_cast<const char*>(e.rec.data()), "0x2B1D-USB4G3-200W");
+    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-100W");
+    CHECK_STR(reinterpret_cast<const char*>(e.rec.data()), "0x2B1D-USB4G3-100W");
     CHECK_EQ(emrec::valid(e.rec) ? 1 : 0, 1);
     CHECK_EQ(emrec::vdo(e.rec, 3), 0x40510001u);
     CHECK_EQ(l.save(cable(2)).seq, 2);
@@ -264,7 +264,7 @@ static void test_quirks_roundtrip() {
     CHECK_EQ(sz, emlib::kFileSize + emk_quirk::block_size(1));
     emlib::Entry e;
     CHECK_EQ(l.get(1, e) ? 1 : 0, 1);
-    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-200W");
+    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-100W");
     CHECK_EQ(emrec::vdo(e.rec, 3), 0x40510001u);
     emk_quirk::Quirks back;
     CHECK_EQ(l.get_quirks(1, back) ? 1 : 0, 1);
@@ -291,7 +291,7 @@ static void test_quirks_dedup_rename_migration() {
     CHECK_EQ(with.existed ? 1 : 0, 0);
     emlib::Entry e;
     CHECK_EQ(l.get(2, e) ? 1 : 0, 1);
-    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-200W-2");
+    CHECK_STR(e.name.data(), "0x2B1D-USB4G3-100W-2");
     // the same pair again: nothing written
     v.d.reset_counters();
     const emlib::Result again = l.save(cable(1), q);

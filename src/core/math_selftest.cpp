@@ -883,7 +883,7 @@ K2_HOT bool check_pd_codec(Out& o) {
     // An e-marker: a 5 A / 50 V passive cable.
     {
         std::uint8_t b[20];
-        put32(b, (0xFF00u << 16) | (1u << 15) | (1u << 6) | 1u);
+        put32(b, (0xFF00u << 16) | (1u << 15) | (1u << 13) | (1u << 6) | 1u);   // SVDM 2.0 ACK: the cable VDO with the EPR bit
         put32(b + 4, (3u << 27) | 0x2E87u);
         put32(b + 8, 0u);
         put32(b + 12, 0u);

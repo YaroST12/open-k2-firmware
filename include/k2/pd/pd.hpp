@@ -37,8 +37,9 @@ struct SourceCaps {
 };
 
 // Cable identity from the Discover Identity ACK (VDM header, ID header, cert stat, product,
-// cable VDO 1 [, active cable VDO 2]). Missing VDOs leave the defaults: 3 A / 20 V / 60 W,
-// USB 2.0. Field layout: USB PD 3.1 6.4.4.3.1 (cable VDO 1) and 6.4.4.3.2 (active VDO 2).
+// cable VDO 1 [, active cable VDO 2]). Missing VDOs, and a VPD or non-cable product type, leave the defaults:
+// 3 A / 20 V / 60 W, USB 2.0. Field layouts: docs/PD_EMARKER_SPEC_REFERENCE.md 2.4 (passive), 2.5 (active), current and
+// legacy (SVDM 1.0 / PD 2.0, chosen by the answer's VDM header version).
 struct Emarker {
     bool valid = false;
     bool is_active = false;  // ID header product type 4 (active cable)
@@ -54,14 +55,14 @@ struct Emarker {
 
     // Cable VDO 1 detail.
     std::uint8_t cable_hw = 0, cable_fw = 0;  // bits 31:28, 27:24
-    std::uint8_t vdo_version = 0;             // bits 23:21
+    std::uint8_t vdo_version = 0;             // bits 23:21 (0 for an SVDM 1.0 answer: Max VBUS sits there)
     bool type_c_plug = false;                 // bits 19:18 == 2
     std::uint8_t latency_code = 0;            // bits 16:13
     const char* latency_str = nullptr;
     std::uint8_t termination = 0;             // bits 12:11
     const char* termination_str = nullptr;
     bool vconn_required = false;              // termination 01, and active cables (10, 11)
-    bool epr_capable = false;                 // 5 A and 50 V
+    bool epr_capable = false;                 // EPR Capable bit 17 (passive v1.0, active v1.3) with 5 A and 50 V
 
     // Active cable VDO 2 (product type 4 only).
     bool vdo2_valid = false;

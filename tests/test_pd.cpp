@@ -33,15 +33,15 @@ static void test_physical_cable_limits() {
     CHECK_EQ(cable_limits(e).max_mv, 20000);
     CHECK_EQ(cable_limits(e).observed, false);
     e.valid = true; e.num_vdos = 5; e.spec_rev = 2;
-    e.max_current_a = 5; e.max_voltage_v = 50; e.epr_capable = true; e.vdo_version = 2;
+    e.max_current_a = 5; e.max_voltage_v = 50; e.epr_capable = true;
     CHECK_EQ(cable_limits(e).max_mv, 50000);
     CHECK_EQ(cable_limits(e).max_ma, 5000);
     CHECK_EQ(cable_limits(e).observed, true);
     e.spec_rev = 1;
     CHECK_EQ(cable_limits(e).max_mv, 20000);
-    e.spec_rev = 2; e.vdo_version = 0;
+    e.spec_rev = 2; e.epr_capable = false;    /* 50 V and 5 A without the EPR Capable bit */
     CHECK_EQ(cable_limits(e).max_mv, 20000);
-    e.vdo_version = 2;
+    e.epr_capable = true;
     e.is_active = true;
     CHECK_EQ(cable_limits(e).max_mv, 20000);  // incomplete active-cable identity
     e.vdo2_valid = true;
@@ -53,8 +53,8 @@ static void test_physical_cable_limits() {
     CHECK_EQ(cable_limits(e).observed, false);
 }
 static void test_passive_50v_epr_cable_limits() {
-    // Baseus-bundled 240 W cable, VID 0x315C: passive, VDO version 1.0 (000b), EPR Mode Capable (bit 17),
-    // 50 V (10:9 = 11b), 5 A (6:5 = 10b). Layout from USB PD 3.1 table "Passive Cable VDO" (from memory: unverified).
+    // Baseus-bundled 240 W cable, VID 0x315C: passive, VDO version 1.0 (000b), EPR Capable (bit 17),
+    // 50 V (10:9 = 11b), 5 A (6:5 = 10b). Passive Cable VDO layout: docs/PD_EMARKER_SPEC_REFERENCE.md 2.4 A (verified).
     const uint32_t identity[5] = {0xff00a041, 0x1800315c, 0, 0x11960000, 0x600a2e40};
     uint8_t bytes[sizeof(identity)];
     for (unsigned n = 0; n < 5; ++n) put_le32(bytes + n * 4, identity[n]);
@@ -63,34 +63,24 @@ static void test_passive_50v_epr_cable_limits() {
     CHECK_EQ(e.max_voltage_v, 50);
     CHECK_EQ(cable_limits(e).max_mv, 50000);
     CHECK_EQ(cable_limits(e).max_ma, 5000);
-    Emarker no_bit = e;
-    no_bit.raw_vdos[4] &= ~(1u << 17);   // 50 V claimed without the EPR capable bit: not trusted
+    put_le32(bytes + 16, identity[4] & ~(1u << 17));   // 50 V claimed without the EPR capable bit: not trusted
+    Emarker no_bit = parse_emarker(bytes, 5);
+    no_bit.spec_rev = 2;
+    CHECK_EQ(no_bit.epr_capable, false);
     CHECK_EQ(cable_limits(no_bit).max_mv, 20000);
 }
+// A well-formed passive identity with the old 30 V code (10:9 = 01b): deprecated, the receiver reads 20 V, so the cable
+// is a 5 A / 20 V one (docs/PD_EMARKER_SPEC_REFERENCE.md 2.4 A, verified).
 static void test_passive_30v_cable_limits() {
     const uint32_t identity[5] = {0xff00a041, 0x180022d9, 0, 0x11960000, 0x60082a40};
     uint8_t bytes[sizeof(identity)];
     for (unsigned n = 0; n < 5; ++n) put_le32(bytes + n * 4, identity[n]);
     Emarker e = parse_emarker(bytes, 5);
     e.spec_rev = 2;
-    CHECK_EQ(e.max_voltage_v, 30);
+    CHECK_EQ(e.max_voltage_v, 20);
     CHECK_EQ(e.max_current_a, 5);
-    CHECK_EQ(cable_limits(e).max_mv, 30000);
+    CHECK_EQ(cable_limits(e).max_mv, 20000);
     CHECK_EQ(cable_limits(e).max_ma, 5000);
-    for (unsigned mode = 0; mode < 10; ++mode) {
-        Emarker bad = e;
-        if (mode == 0) bad.raw_vdos[0] ^= 1u << 16;
-        if (mode == 1) bad.raw_vdos[1] &= ~(7u << 27);
-        if (mode == 2) bad.raw_vdos[4] |= 1u << 21;
-        if (mode == 3) bad.raw_vdos[4] |= 1u << 7;
-        if (mode == 4) bad.raw_vdos[4] |= 1u << 5;
-        if (mode == 5) bad.raw_vdos[4] &= ~(3u << 18);
-        if (mode == 6) bad.spec_rev = 1;
-        if (mode == 7) bad.raw_vdos[4] &= ~(15u << 13);
-        if (mode == 8) bad.raw_vdos[4] |= 3u << 11;
-        if (mode == 9) bad.num_vdos = 4;
-        CHECK_EQ(cable_limits(bad).max_mv, 20000);
-    }
 }
 
 static void test_source_caps() {
@@ -215,29 +205,29 @@ static void test_emarker() {
     CHECK_EQ(e.max_power_w, 240);
     CHECK_STR(e.speed_str, "USB 3.2 Gen2 (10G)");
 
-    /* Active cable (product type 4), Intel, 3 A, 40 V; VDO 2 carries temperatures and flags and
-       must not change the rating (the old "EPR bit" in VDO 2 was not in the PD spec). */
+    /* Active cable (product type 4), Intel, 3 A, the deprecated 40 V code (read as 20 V); VDO 2 carries temperatures and
+       flags and must not change the rating (the old "EPR bit" in VDO 2 was not in the PD spec). */
     uint32_t b[6] = { 0xFF00A041u, (4u << 27) | 0x8087u, 0, 0x00020101u,
                       (2u << 9) | (1u << 5) | 3u, 1u << 20 };
     emarker(b, 6, &e);
     CHECK_EQ(e.is_active, true);
     CHECK_STR(e.vendor_str, "Intel");
-    CHECK_EQ(e.max_voltage_v, 40);
+    CHECK_EQ(e.max_voltage_v, 20);
     CHECK_EQ(e.max_current_a, 3);
     CHECK_EQ(e.max_power_w, 60);
     CHECK_EQ(e.epr_capable, false);
     CHECK_STR(e.speed_str, "Thunderbolt (40G)");  /* Intel VID with speed >= 2 */
 
-    /* 5 A cables: 40 V -> 200 W, 30 V -> 100 W, 20 V -> 100 W */
-    uint32_t c[5] = { 0, 0x1234u, 0, 0, (2u << 9) | (2u << 5) | 4u };
+    /* 5 A passive cables: the deprecated 40 V and 30 V codes and 20 V are all 20 V -> 100 W */
+    uint32_t c[5] = { 0xFF00A041u, (3u << 27) | 0x1234u, 0, 0, (2u << 9) | (2u << 5) | 4u };
     emarker(c, 5, &e);
     CHECK_STR(e.vendor_str, "Unknown");
-    CHECK_EQ(e.max_voltage_v, 40);
-    CHECK_EQ(e.max_power_w, 200);
+    CHECK_EQ(e.max_voltage_v, 20);
+    CHECK_EQ(e.max_power_w, 100);
     CHECK_STR(e.speed_str, "USB4 Gen4 (80G)");
     c[4] = (1u << 9) | (2u << 5);
     emarker(c, 5, &e);
-    CHECK_EQ(e.max_voltage_v, 30);
+    CHECK_EQ(e.max_voltage_v, 20);
     CHECK_EQ(e.max_power_w, 100);
     CHECK_STR(e.speed_str, "USB 2.0 (480M)");
     c[4] = (2u << 5) | 1u;
@@ -275,15 +265,15 @@ static void test_emarker() {
 /* Cable VDO 1 / VDO 2 fields (USB PD 3.1 6.4.4.3.1 and 6.4.4.3.2). */
 static void test_cable_vdo_fields() {
     Emarker e;
-    /* Passive, HW 3 / FW 4, VDO version 3, Type-C plug, latency 0010 (~2 m), termination 01
+    /* Passive, HW 3 / FW 4, VDO version 1.0, Type-C plug, EPR Capable, latency 0010 (~2 m), termination 01
        (VCONN required), 50 V, 5 A, Gen2 */
     uint32_t a[5] = { 0xFF00A041u, (3u << 27) | 0x05ACu, 0, 0,
-                      (3u << 28) | (4u << 24) | (3u << 21) | (2u << 18) | (2u << 13) | (1u << 11) |
+                      (3u << 28) | (4u << 24) | (2u << 18) | (1u << 17) | (2u << 13) | (1u << 11) |
                       (3u << 9) | (2u << 5) | 2u };
     emarker(a, 5, &e);
     CHECK_EQ(e.cable_hw, 3);
     CHECK_EQ(e.cable_fw, 4);
-    CHECK_EQ(e.vdo_version, 3);
+    CHECK_EQ(e.vdo_version, 0);
     CHECK_EQ(e.type_c_plug, true);
     CHECK_EQ(e.latency_code, 2);
     CHECK_STR(e.latency_str, "10-20 ns (~2 m)");
@@ -309,14 +299,15 @@ static void test_cable_vdo_fields() {
     emarker(a, 5, &e);
     CHECK_EQ(e.epr_capable, false);
 
-    /* Active cable: termination 10 (one end), latency 1000, VDO 2: 60/70 C, U3 power 2, USB4
-       supported (bit 8 clear), two lanes, Gen2+, optically isolated */
-    uint32_t b[6] = { 0xFF00A041u, (4u << 27) | 0x8087u, 0, 0, (2u << 11) | (8u << 13) | (3u << 9) | (2u << 5) | 3u,
+    /* Active cable, VDO1 version 1.3, EPR Capable with VBUS through the cable: termination 10 (one end), latency 1000
+       (1000 ns), VDO 2: 60/70 C, U3 power 2, USB4 supported (bit 8 clear), two lanes, Gen2+, optically isolated */
+    uint32_t b[6] = { 0xFF00A041u, (4u << 27) | 0x8087u, 0, 0,
+                      (3u << 21) | (1u << 17) | (2u << 11) | (8u << 13) | (3u << 9) | (2u << 5) | (1u << 4) | 3u,
                       (60u << 24) | (70u << 16) | (2u << 12) | (1u << 3) | (1u << 2) | 1u };
     emarker(b, 6, &e);
     CHECK_EQ(e.termination, 2);
     CHECK_STR(e.termination_str, "Active, one end");
-    CHECK_STR(e.latency_str, ">70 ns");
+    CHECK_STR(e.latency_str, "1000 ns (~100 m)");
     CHECK_EQ(e.vdo2_valid, true);
     CHECK_EQ(e.max_temp_c, 60);
     CHECK_EQ(e.shutdown_temp_c, 70);
@@ -335,6 +326,139 @@ static void test_cable_vdo_fields() {
     uint32_t c[6] = { 0xFF00A041u, (3u << 27) | 0x1234u, 0, 0, 0, 0xFFFFFFFFu };
     emarker(c, 6, &e);
     CHECK_EQ(e.vdo2_valid, false);
+}
+
+/* Spec rows (docs/PD_EMARKER_SPEC_REFERENCE.md, verified): the vectors are built field by field from the cable VDO
+   tables, not from the decoder. */
+static uint32_t passive_vdo(unsigned vbus_code, unsigned amps_code, bool epr_bit, unsigned speed) {
+    return (2u << 18) | (epr_bit ? 1u << 17 : 0u) | (1u << 13) | (vbus_code << 9) | (amps_code << 5) | speed;
+}
+
+/* Max VBUS 01b / 10b are deprecated: the receiver assumes 20 V (passive and active VDO1, bits 10:9). */
+static void test_emarker_deprecated_vbus_codes() {
+    Emarker e;
+    /* OnePlus 100 W C-to-C (real identity): 10:9 = 01b, 5 A, VCONN required */
+    uint32_t a[5] = { 0xFF00A041u, 0x180022D9u, 0, 0x61160000u, 0x80082A40u };
+    emarker(a, 5, &e);
+    e.spec_rev = 2;
+    CHECK_EQ(e.max_voltage_v, 20);
+    CHECK_EQ(e.max_current_a, 5);
+    CHECK_EQ(e.max_power_w, 100);
+    CHECK_EQ(e.epr_capable, false);
+    CHECK_EQ(cable_limits(e).max_mv, 20000);
+    a[4] = passive_vdo(2, 2, false, 0);   /* 10b */
+    emarker(a, 5, &e);
+    CHECK_EQ(e.max_voltage_v, 20);
+    CHECK_EQ(e.max_power_w, 100);
+}
+
+/* SVDM 1.0 / PD 2.0 answers (VDM header bits 14:13 = 00b) use the legacy cable VDO: no Max VBUS field at 10:9 (PD 2.0
+   has the SuperSpeed directionality bits there, SVDM 1.0 keeps Max VBUS at 23:21, where every code reads as 20 V) and
+   no EPR Capable bit. */
+static void test_emarker_legacy_layout() {
+    Emarker e;
+    uint32_t a[5] = { 0xFF008041u, (3u << 27) | 0x05ACu, 0, 0, passive_vdo(3, 2, true, 2) | (1u << 21) };
+    emarker(a, 5, &e);
+    e.spec_rev = 2;
+    CHECK_EQ(e.max_voltage_v, 20);
+    CHECK_EQ(e.max_current_a, 5);
+    CHECK_EQ(e.max_power_w, 100);
+    CHECK_EQ(e.epr_capable, false);
+    CHECK_EQ(e.vdo_version, 0);            /* bits 23:21 are Max VBUS in SVDM 1.0, not a VDO version */
+    CHECK_EQ(cable_limits(e).max_mv, 20000);
+    a[4] = passive_vdo(0, 1, false, 3);    /* 011b is invalid in SVDM 1.0: the highest valid speed, Gen2 */
+    emarker(a, 5, &e);
+    CHECK_STR(e.speed_str, "USB 3.2 Gen2 (10G)");
+}
+
+/* EPR Capable (bit 17) is part of the EPR cable rule: 5 A, 50 V and the bit (USB-C R2.5 2.4). The bit exists only in the
+   passive VDO version 1.0 and the active VDO1 version 1.3 (with VBUS through the cable). */
+static void test_emarker_epr_bit() {
+    Emarker e;
+    uint32_t a[5] = { 0xFF00A041u, (3u << 27) | 0x05ACu, 0, 0, passive_vdo(3, 2, false, 0) };
+    emarker(a, 5, &e);
+    e.spec_rev = 2;
+    CHECK_EQ(e.max_voltage_v, 50);
+    CHECK_EQ(e.max_current_a, 5);
+    CHECK_EQ(e.epr_capable, false);        /* 50 V 5 A without the bit */
+    CHECK_EQ(cable_limits(e).max_mv, 20000);
+    a[4] = passive_vdo(3, 2, true, 0);
+    emarker(a, 5, &e);
+    e.spec_rev = 2;
+    CHECK_EQ(e.epr_capable, true);
+    CHECK_EQ(cable_limits(e).max_mv, 50000);
+    a[4] = passive_vdo(3, 1, true, 0);     /* the bit with 3 A is no EPR cable */
+    emarker(a, 5, &e);
+    CHECK_EQ(e.epr_capable, false);
+
+    /* Active VDO1 v1.3 (011b): bit 17, 50 V, 5 A, VBUS through cable (bit 4) */
+    const uint32_t v13 = (3u << 21) | passive_vdo(3, 2, true, 3) | (2u << 11) | (1u << 4);
+    uint32_t b[6] = { 0xFF00A841u, (4u << 27) | 0x8087u, 0, 0, v13, 0 };
+    emarker(b, 6, &e);
+    e.spec_rev = 2;
+    CHECK_EQ(e.epr_capable, true);
+    CHECK_EQ(cable_limits(e).max_mv, 50000);
+    b[4] = v13 & ~(1u << 4);               /* no VBUS through the cable */
+    emarker(b, 6, &e);
+    CHECK_EQ(e.epr_capable, false);
+    b[4] = (v13 & ~(7u << 21)) | (2u << 21);   /* v1.2 (010b): bit 17 is reserved there */
+    emarker(b, 6, &e);
+    e.spec_rev = 2;
+    CHECK_EQ(e.epr_capable, false);
+    CHECK_EQ(cable_limits(e).max_mv, 20000);
+}
+
+/* Active cable latency 1000b..1010b are 1000 / 2000 / 3000 ns; passive 1000b is > 70 ns. Speed codes above the highest
+   valid one count as that one (the DFP rule): Gen4 in SVDM 2.x. */
+static void test_emarker_latency_and_speed_codes() {
+    Emarker e;
+    const uint32_t act = (3u << 21) | (2u << 18) | (2u << 11) | (1u << 5) | (1u << 4);
+    uint32_t b[6] = { 0xFF00A841u, (4u << 27) | 0x1234u, 0, 0, act | (8u << 13), 0 };
+    emarker(b, 6, &e);
+    CHECK_STR(e.latency_str, "1000 ns (~100 m)");
+    b[4] = act | (9u << 13);
+    emarker(b, 6, &e);
+    CHECK_STR(e.latency_str, "2000 ns (~200 m)");
+    b[4] = act | (10u << 13);
+    emarker(b, 6, &e);
+    CHECK_STR(e.latency_str, "3000 ns (~300 m)");
+    uint32_t a[5] = { 0xFF00A041u, (3u << 27) | 0x1234u, 0, 0, (2u << 18) | (8u << 13) | (1u << 5) | 5u };
+    emarker(a, 5, &e);
+    CHECK_STR(e.latency_str, ">70 ns");
+    CHECK_STR(e.speed_str, "USB4 Gen4 (80G)");
+    a[4] = (2u << 18) | (9u << 13) | (1u << 5);   /* 1001b is invalid for a passive cable */
+    emarker(a, 5, &e);
+    CHECK_STR(e.latency_str, "n/a");
+}
+
+/* Active VDO2 of a v1.2 cable (VDO1 23:21 = 010b): bits 10:8 and 2 are reserved, so a clear bit 8 is not "USB4 supported";
+   bits 1:0 are SuperSpeed signalling (01b = Gen 2 or higher). */
+static void test_emarker_legacy_vdo2() {
+    Emarker e;
+    uint32_t b[6] = { 0xFF00A041u, (4u << 27) | 0x1234u, 0, 0, (2u << 21) | (2u << 18) | (2u << 11) | (1u << 5) | 2u,
+                      (60u << 24) | (70u << 16) | 1u };
+    emarker(b, 6, &e);
+    CHECK_EQ(e.vdo2_valid, true);
+    CHECK_EQ(e.usb4_supported, false);
+    CHECK_EQ(e.optical_isolated, false);
+    CHECK_EQ(e.usb_gen2, true);
+    b[4] = (b[4] & ~(7u << 21)) | (3u << 21);   /* v1.3: bit 8 clear = USB4 supported */
+    emarker(b, 6, &e);
+    CHECK_EQ(e.usb4_supported, true);
+}
+
+/* A VCONN-powered USB device (product type 110b) answers with a VPD VDO, not a cable VDO: its bits 10:9, 6:5 and 2:0 are
+   impedances and the charge-through flag, never a rating. */
+static void test_emarker_vpd_is_no_cable() {
+    Emarker e;
+    uint32_t a[5] = { 0xFF00A041u, (6u << 27) | 0x1234u, 0, 0, (3u << 9) | (2u << 5) | (3u << 1) | 1u };
+    emarker(a, 5, &e);
+    e.spec_rev = 2;
+    CHECK_EQ(e.max_voltage_v, 20);
+    CHECK_EQ(e.max_current_a, 3);
+    CHECK_EQ(e.max_power_w, 60);
+    CHECK_EQ(e.epr_capable, false);
+    CHECK_STR(e.speed_str, "USB 2.0 (480M)");
 }
 
 static void test_control_name() {
@@ -382,5 +506,11 @@ int main() {
     test_cable_vdo_fields();
     test_control_name();
     test_decode_rdo();
+    test_emarker_deprecated_vbus_codes();
+    test_emarker_legacy_layout();
+    test_emarker_epr_bit();
+    test_emarker_latency_and_speed_codes();
+    test_emarker_legacy_vdo2();
+    test_emarker_vpd_is_no_cable();
     return test_report("test_pd");
 }

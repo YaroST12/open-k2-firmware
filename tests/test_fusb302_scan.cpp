@@ -945,14 +945,14 @@ void test_passive_30v_physical_identity() {
     push_frame(0xC0, 0x518F, identity);
     fusb302::service();
     CHECK_EQ(fusb302::physical_cable().observed, true);
-    CHECK_EQ(fusb302::physical_cable().max_mv, 30000);
+    CHECK_EQ(fusb302::physical_cable().max_mv, 20000);   // Max VBUS 01b (the old 30 V) is deprecated: 20 V
     CHECK_EQ(fusb302::physical_cable().max_ma, 5000);
     fusb302::set_sop_prime_hook(+[](std::uint8_t, std::uint16_t, std::span<const std::uint8_t>) {});
     auto other = identity;
     other[4] |= 2u << 9;
     push_frame(0xC0, 0x518F, other);
     fusb302::service();
-    CHECK_EQ(fusb302::physical_cable().max_mv, 30000);
+    CHECK_EQ(fusb302::physical_cable().max_mv, 20000);
     fusb302::set_sop_prime_hook(nullptr);
     g_reg[0x40] = 0;
     for (unsigned i = 0; i < 40; ++i) { g_ms += 20; fusb302::poll(); }
@@ -969,7 +969,7 @@ void test_passive_physical_identity_and_source_revision_provenance() {
     CHECK_EQ(fusb302::caps().spec_rev, 2);
     CHECK_EQ(fusb302::physical_cable().observed, false);
     const std::vector<std::uint32_t> identity{
-        0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (2u << 21) | (3u << 9) | (2u << 5)
+        0xFF00A041, (3u << 27) | 0x05ACu, 0, 0x12340005, (1u << 17) | (3u << 9) | (2u << 5)   // EPR: bit 17, 50 V, 5 A
     };
     std::vector<std::uint8_t> body;
     for (auto word : identity) for (unsigned n = 0; n < 4; ++n) body.push_back(word >> (n * 8));
