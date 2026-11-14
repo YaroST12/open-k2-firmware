@@ -122,7 +122,7 @@ public:
         ns_ = nm_ = 0;
         reason_ = Reason::None;
         trig_us_ = 0;
-        post_us_ = kPostUs;
+        post_us_ = 0;
         state_ = State::Armed;
     }
     void stop() { state_ = State::Off; ns_ = nm_ = 0; reason_ = Reason::None; }
@@ -133,7 +133,7 @@ public:
         mrk_.fill({});
         ns_ = nm_ = 0;
         trig_us_ = 0;
-        post_us_ = kPostUs;
+        post_us_ = 0;
         state_ = State::Off;
         reason_ = Reason::None;
     }
@@ -144,7 +144,7 @@ public:
         if (state_ != State::Armed && state_ != State::Post) return false;
         smp_[ns_ % NS] = s;
         ++ns_;
-        if (state_ == State::Post && std::int32_t(s.t_us - trig_us_) >= std::int32_t(post_us_)) {
+        if (state_ == State::Post && std::int32_t(s.t_us - trig_us_) >= std::int32_t(post_us_ ? post_us_ : kPostUs)) {
             state_ = State::Frozen;
             return true;
         }
@@ -181,7 +181,7 @@ private:
     std::array<Marker, NM> mrk_{};
     std::size_t ns_ = 0, nm_ = 0;
     std::uint32_t trig_us_ = 0;
-    std::uint32_t post_us_ = kPostUs;
+    std::uint32_t post_us_ = 0;   // 0 = kPostUs: the recorder lives in zero-initialised mode RAM (.bss.mode_trans)
     State state_ = State::Off;
     Reason reason_ = Reason::None;
 };
