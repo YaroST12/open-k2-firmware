@@ -234,7 +234,7 @@ var K2Kit = (function () {
   var ROUTE_ALIAS = { triggers: "pd" };
   var TITLES = { live: "Live", test: "Charger test", pd: "PD", fc: "Fast charge", spec: "PD Spec Check", cables: "Cables", device: "Device" };
   function routeFor(hash) {
-    var h = String(hash || "").replace(/^#/, "");
+    var h = String(hash || "").replace(/^#\/?/, "");
     if (ROUTE_ALIAS[h]) h = ROUTE_ALIAS[h];
     return ROUTES.indexOf(h) >= 0 ? h : "live";
   }

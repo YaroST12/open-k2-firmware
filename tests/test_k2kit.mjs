@@ -487,6 +487,8 @@ test("routes: the page list, the #triggers alias and the titles", () => {
   assert.deepEqual(K.ROUTES, ["live", "test", "pd", "fc", "spec", "cables", "device"]);
   assert.equal(K.routeFor("#pd"), "pd");
   assert.equal(K.routeFor("cables"), "cables");
+  assert.equal(K.routeFor("#/test"), "test", "the slash form the Charger test opens with");
+  assert.equal(K.routeFor("#/triggers"), "pd");
   assert.equal(K.routeFor("#triggers"), "pd", "the old Triggers address opens PD");
   assert.equal(K.routeFor("#nope"), "live");
   assert.equal(K.routeFor(""), "live");
