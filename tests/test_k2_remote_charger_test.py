@@ -161,7 +161,7 @@ class ChargerTest(unittest.TestCase):
         for p in (b"", HEADER[:14], HEADER + b"\0", good[:-1], good + b"\0"):
             with self.assertRaises(kr.FrameError):
                 kr.decode_charger_test(p)
-        for offset, value in ((0, 2), (9, 10), (10, 20), (11, 96), (12, 4), (13, 4), (14, 3),
+        for offset, value in ((0, 2), (9, 11), (10, 20),   # state 10 = the SVOOC ceiling stage, 11 is past the enum (11, 96), (12, 4), (13, 4), (14, 3),
                               (15, 10), (17, 0x80), (24, 5), (25, 20)):
             bad = bytearray(good); bad[offset] = value
             with self.subTest(offset=offset), self.assertRaises(kr.FrameError):
@@ -879,8 +879,10 @@ class ChargerTestStartTest(unittest.TestCase):
 
     def test_busy_and_old_firmware(self):
         link = ScriptLink(op=[kr.RemoteError(kr.STATUS_BUSY, 0x0B)], status=[meta2(7)])
-        with self.assertRaises(kr.RemoteError):
+        with self.assertRaises(kr.FcRefused) as cm:   # not the results table's "RAM results changed" Busy
             self.run_start(link)
+        self.assertIn("already", str(cm.exception))
+        self.assertNotIn("RAM results", str(cm.exception))
         for status in (kr.STATUS_BAD_LENGTH, kr.STATUS_BAD_ARG):
             with self.assertRaises(kr.FrameError) as cm:
                 kr.charger_test_start(ScriptLink(op=[kr.RemoteError(status, 0x0B)]))

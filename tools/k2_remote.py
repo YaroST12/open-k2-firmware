@@ -249,7 +249,8 @@ TEST_STAGES = ["algorithms", "group", "cable", "identity", "review", "running", 
 TEST_ALL = (1 << len(TEST_ALGORITHMS)) - 1
 TEST_SWEEP_BIT = 1 << 31   # draft_selected bit 31 = the PPS deep sweep on (remote_proto.hpp)
 TEST_AVS_SWEEP_BIT = 1 << 30   # draft_selected bit 30 = the AVS deep sweep on (remote_proto.hpp)
-TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing..."]
+TEST_STATES = ["idle", "baseline", "requesting", "holding", "releasing", "done", "stopped", "unsafe", "detach charger", "initializing...",
+               "svooc ceiling"]
 TEST_RESULTS = ["pending", "running", "pass", "fail", "skip"]
 # charger_test::Unit in enum order (include/k2/chargertest/charger_test.hpp): Pd, the legacy protocols, then the low PPS/AVS rows
 TEST_UNITS = ["pd", "qc2", "qc3", "qc3+", "afc", "fcp", "scp", "vooc", "svooc", "svooc65", "ufcs", "vivo", "pd-low"]
@@ -1565,6 +1566,9 @@ def charger_test_start(link, all_tests=True):
     try:
         p = link.call(CMD_CHARGER_TEST, bytes([CT_START_REQ, flags])).payload
     except RemoteError as e:
+        if e.status == STATUS_BUSY:
+            raise FcRefused("START refused: a run, a wait, a resume prompt or a confirmation already holds the test "
+                            "(charger-test cancel stops it)") from None
         if e.status not in (STATUS_BAD_LENGTH, STATUS_BAD_ARG):
             raise
         raise FrameError("this firmware has no remote charger-test START (older than the web-ct build); "
