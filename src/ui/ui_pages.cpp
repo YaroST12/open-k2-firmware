@@ -341,7 +341,7 @@ void home_cable_text(const pd::Emarker &em, StrBuf<12> &out) {
 void detail_cable_text(const pd::Emarker &em, StrBuf<28> &out) {
     if (!em.valid) { out.put("no e-marker"); return; }
     out.put_u32(em.max_current_a).put("A ").put_u32(em.max_power_w).put("W ").put_u32(em.max_voltage_v).put_char('V');
-    if (em.max_voltage_v >= 48) out.put(" EPR");
+    if (em.epr_capable) out.put(" EPR");
     if (em.is_active) out.put(" active");
 }
 

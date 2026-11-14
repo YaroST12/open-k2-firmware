@@ -6,8 +6,8 @@
 //   version:      cable VDO 1 bits 2:0: USB2, USB3.2G1, USB3.2G2, USB4G3, USB4G4; TBT3 for an Intel
 //                 (0x8087) cable of 10G or more (the record keeps no SVID list, so that is the
 //                 same Thunderbolt test the e-marker page uses)
-//   wattage:      max voltage x max current from the cable VDO, as pd::parse_emarker: 60W, 100W,
-//                 200W (40 V) or 240W (48 V and up)
+//   wattage:      max voltage x max current from the cable VDO, as pd::parse_emarker: 60W (3 A),
+//                 100W (5 A, 20 V) or 240W (5 A, 50 V); the deprecated 30 V / 40 V codes read as 20 V
 // The name is at most kMaxLen characters (the NUL is extra): a long manufacturer is cut, never the rest.
 // `ordinal` >= 2 appends "-2", "-3", ... for a second and later cable that would get the same name.
 #pragma once

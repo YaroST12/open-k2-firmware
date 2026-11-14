@@ -27,7 +27,7 @@ generated on read by `k2::emjson::render()` (`src/pd/emjson.cpp`, host test `tes
     "vconn_required": false,
     "epr": true,
     "pd_rev": 2,
-    "vdos": ["0xFF00A041", "0x180005AC", "0x00001234", "0x12340101", "0x00004643"]
+    "vdos": ["0xFF00A041", "0x180005AC", "0x00001234", "0x12340101", "0x00024643"]
   }
 }
 ```
@@ -38,15 +38,15 @@ generated on read by `k2::emjson::render()` (`src/pd/emjson.cpp`, host test `tes
 | `id` | the cable's number in the library, 1..9999, stable through renames; the sequence the K2 has (it has no clock, so there is no timestamp) |
 | `revision` | 1 for a new cable, +1 for every rename |
 | `name` | the user's name: 1..24 characters from `[A-Za-z0-9 -_.]`; defaults to `auto_name` (with `-2`, `-3` on a collision). It is also the file name. |
-| `auto_name` | `<maker>-<USB version>-<watts>` computed from the record (`k2/pd/emname.hpp`): maker by VID (hex when unlisted), `USB2`, `USB3.2G1`, `USB3.2G2`, `USB4G3`, `USB4G4` or `TBT3`, `60W`/`100W`/`200W`/`240W` |
+| `auto_name` | `<maker>-<USB version>-<watts>` computed from the record (`k2/pd/emname.hpp`): maker by VID (hex when unlisted), `USB2`, `USB3.2G1`, `USB3.2G2`, `USB4G3`, `USB4G4` or `TBT3`, `60W`/`100W`/`240W` |
 | `record` | the raw 66-byte record as upper-case hex: name[20], PD spec rev, five VDOs (VDM header, ID header, cert stat, product, cable VDO 1), reserved, checksum (`include/k2/pd/emrec.hpp`). This is the source of truth; every field below is decoded from it. |
 | `cable.vid`, `vendor` | ID header bits 15:0 and the vendor name from the firmware's table (`Unknown` when not listed) |
 | `cable.pid`, `xid` | product VDO bits 31:16, cert stat VDO |
 | `cable.type` | `passive` or `active` (ID header product type 3 or 4, as the e-marker page) |
 | `cable.speed` | cable VDO 1 bits 2:0 |
-| `cable.current_a`, `max_v`, `max_w` | cable VDO 1 bits 6:5 and 10:9; watts are 60, 100, 200 or 240 |
+| `cable.current_a`, `max_v`, `max_w` | cable VDO 1 bits 6:5 and 10:9 (SVDM 2.x answers only; the deprecated 30 V and 40 V codes and every SVDM 1.0 answer read as 20 V); watts are 60 (3 A), 100 (5 A, 20 V) or 240 (5 A, 50 V) |
 | `cable.latency` | cable VDO 1 bits 16:13 |
-| `cable.vconn_required`, `epr` | termination bits 12:11 nonzero; 5 A and 50 V |
+| `cable.vconn_required`, `epr` | termination bits 12:11 nonzero; EPR Capable bit 17 (passive VDO v1.0, active VDO1 v1.3 with VBUS through) together with 5 A and 50 V |
 | `cable.pd_rev` | the record's PD spec revision byte (1 = 2.0, 2 = 3.0) |
 | `cable.vdos` | the five stored VDOs, `0x` + 8 hex digits |
 

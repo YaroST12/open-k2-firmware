@@ -67,9 +67,13 @@ static void test_cable_and_cc_text() {
     detail_cable_text(em, d1);
     CHECK_STR(d1.view().data(), "3A 60W 20V");
     StrBuf<28> d2;
-    em.max_current_a = 5; em.max_power_w = 240; em.max_voltage_v = 48; em.is_active = true;
+    em.max_current_a = 5; em.max_power_w = 240; em.max_voltage_v = 50; em.is_active = true; em.epr_capable = true;
     detail_cable_text(em, d2);
-    CHECK_STR(d2.view().data(), "5A 240W 48V EPR active");
+    CHECK_STR(d2.view().data(), "5A 240W 50V EPR active");
+    StrBuf<28> d4;   // 50 V and 5 A without the EPR Capable bit: the cable is not EPR (the label follows the flag)
+    em.epr_capable = false; em.is_active = false;
+    detail_cable_text(em, d4);
+    CHECK_STR(d4.view().data(), "5A 240W 50V");
     StrBuf<28> d3;
     detail_cable_text(pd::Emarker{}, d3);
     CHECK_STR(d3.view().data(), "no e-marker");
