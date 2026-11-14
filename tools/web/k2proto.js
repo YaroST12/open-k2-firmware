@@ -1408,7 +1408,123 @@ var K2Proto = (function () {
     return t;
   }
 
+  // ---- WebHID transport: one report per frame, report ID 0 ------------------------------------------
+  // dev is a WebHID HIDDevice (already opened). attach() hooks the input reports to the link.
+  function hidTransport(dev) {
+    return {
+      device: dev, kind: "hid",
+      send: function (f) { return dev.sendReport(0, f); },
+      attach: function (link) {
+        dev.oninputreport = function (ev) { link.feed(new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength)); };
+      },
+      close: function () { dev.oninputreport = null; return dev.close(); }
+    };
+  }
+
+  // ---- WebUSB transport: the vendor interface (class 0xFF) with one bulk IN and one bulk OUT endpoint -----
+  // Firmware K2_WEBUSB builds carry the same 64-byte frames as the HID reports, minus the report ID, on that
+  // pair: one frame per bulk OUT transfer, answers and streams on bulk IN (a zero-length packet follows a
+  // transfer that is a multiple of 64 bytes, so empty reads are skipped and the byte stream is cut into
+  // frames here, like the firmware does on its side). Works in Chrome on Android and the desktop; the
+  // page must be served from https or localhost, and Windows binds WinUSB from the device's own descriptors.
+
+  // {configuration, iface, alt, epIn, epOut, packetSize} of the vendor interface, or null.
+  function usbVendorInterface(device) {
+    var cfg = device.configuration || (device.configurations && device.configurations[0]);
+    if (!cfg) return null;
+    for (var i = 0; i < cfg.interfaces.length; i++) {
+      var itf = cfg.interfaces[i];
+      for (var a = 0; a < itf.alternates.length; a++) {
+        var alt = itf.alternates[a];
+        if (alt.alternateSetting !== 0 || alt.interfaceClass !== 0xFF) continue;
+        var epIn = null, epOut = null, size = 0;
+        for (var e = 0; e < alt.endpoints.length; e++) {
+          var ep = alt.endpoints[e];
+          if (ep.type !== "bulk") continue;
+          if (ep.direction === "in" && epIn === null) { epIn = ep.endpointNumber; size = ep.packetSize; }
+          else if (ep.direction === "out" && epOut === null) epOut = ep.endpointNumber;
+        }
+        if (epIn !== null && epOut !== null) {
+          return { configuration: cfg.configurationValue, iface: itf.interfaceNumber, alt: 0, epIn: epIn, epOut: epOut, packetSize: size || FRAME_SIZE };
+        }
+      }
+    }
+    return null;
+  }
+
+  // device is a WebUSB USBDevice. open() claims the interface; attach() (called by Link) starts the read
+  // loop. onClose(err) fires once when the loop ends on its own (unplug), not after close().
+  function webusbTransport(device) {
+    var t = { device: device, kind: "usb", info: null, link: null, closed: false, onClose: null };
+    var rx = new Uint8Array(0);
+
+    t.open = async function () {
+      var info = usbVendorInterface(device);
+      if (!info) throw new Error("this device has no vendor interface (the firmware is built without WebUSB, or runs HID only)");
+      if (!device.opened) await device.open();
+      if (!device.configuration || device.configuration.configurationValue !== info.configuration) await device.selectConfiguration(info.configuration);
+      await device.claimInterface(info.iface);
+      t.info = info;
+      return t;
+    };
+
+    t.send = async function (frame) {
+      if (!t.info || t.closed) throw new Error("USB link is closed");
+      var r = await device.transferOut(t.info.epOut, frame);
+      if (r.status !== "ok" || r.bytesWritten !== frame.length) {
+        if (r.status === "stall") { try { await device.clearHalt("out", t.info.epOut); } catch (e) { /* the next write reports it */ } }
+        throw new Error("USB write failed (" + r.status + ")");
+      }
+    };
+
+    function frames(chunk) {
+      var cat = new Uint8Array(rx.length + chunk.length);
+      cat.set(rx); cat.set(chunk, rx.length);
+      var off = 0;
+      while (cat.length - off >= FRAME_SIZE) {
+        if (t.link) t.link.feed(cat.slice(off, off + FRAME_SIZE));
+        off += FRAME_SIZE;
+      }
+      rx = cat.slice(off);
+    }
+
+    async function pump() {
+      while (!t.closed) {
+        var r;
+        try { r = await device.transferIn(t.info.epIn, FRAME_SIZE); }
+        catch (e) {
+          if (!t.closed) {
+            t.closed = true;
+            if (t.link && t.link.abort) t.link.abort(e);
+            if (t.onClose) t.onClose(e);
+          }
+          return;
+        }
+        if (t.closed) return;
+        if (r.status === "stall") {
+          try { await device.clearHalt("in", t.info.epIn); } catch (e) { /* the next read reports it */ }
+          continue;
+        }
+        if (r.status !== "ok" || !r.data || r.data.byteLength === 0) continue;      // babble or a ZLP
+        frames(new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength));
+      }
+    }
+
+    t.attach = function (link) {
+      t.link = link;
+      if (t.info && !t.pumping) { t.pumping = true; pump(); }
+    };
+
+    t.close = async function () {
+      t.closed = true;
+      if (t.info) { try { await device.releaseInterface(t.info.iface); } catch (e) { /* unplugged */ } }
+      try { await device.close(); } catch (e) { /* unplugged */ }
+    };
+    return t;
+  }
+
   return {
+    hidTransport: hidTransport, webusbTransport: webusbTransport, usbVendorInterface: usbVendorInterface,
     FRAME_SIZE: FRAME_SIZE, CMD: CMD, DFU_MAGIC: DFU_MAGIC, FACTORY_WIPE_MAGIC: FACTORY_WIPE_MAGIC, STATUS: STATUS, BUTTONS: BUTTONS, ACTIONS: ACTIONS, PAGES: PAGES, MENUS: MENUS, pageName: pageName,
     SHORT_PRESS_MS: SHORT_PRESS_MS, LONG_PRESS_MS: LONG_PRESS_MS,
     FrameError: FrameError, RemoteError: RemoteError, RemoteTimeout: RemoteTimeout, BootloaderDetected: BootloaderDetected,
