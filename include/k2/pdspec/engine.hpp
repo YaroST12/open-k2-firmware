@@ -539,7 +539,7 @@ inline void Engine::measure_begin(std::uint32_t now) {
     // Pairs that touch a refused level are left out (each counted once, as refused).
     while (item_ + 1 < walk_.len && ((bad_ >> walk_.node[item_] & 1) || (bad_ >> walk_.node[item_ + 1] & 1))) {
         ++item_;
-        env_->on_item(fam_, item_, items_);
+        if (item_ < items_) env_->on_item(fam_, item_, items_);   // past the last item there is nothing to announce
     }
     if (item_ + 1 >= walk_.len) { restore(now); return; }
     const std::uint8_t from = node(item_), to = node(item_ + 1);
@@ -743,7 +743,7 @@ inline void Engine::judge_step(const StepOut& o, const Edges& e) {
 inline void Engine::pps_point_end(std::uint32_t now) {
     if (n_pp_ < pp_.size()) ++n_pp_;
     ++item_;
-    env_->on_item(fam_, item_, items_);
+    if (item_ < items_) env_->on_item(fam_, item_, items_);   // the next point's number; none after the last
     if (++point_ < pts_.n) { go(L_.pps[apdo_], pts_.mv[point_], After::PpsSteps, now); return; }
     point_ = 0;
     while (++apdo_ < L_.n_pps) {
@@ -756,8 +756,8 @@ inline void Engine::pps_point_end(std::uint32_t now) {
 inline void Engine::next_item(std::uint32_t now) {
     if (fam_ != Family::Transitions) return;
     ++item_;
-    env_->on_item(fam_, item_, items_);
     if (item_ >= items_) { restore(now); return; }
+    env_->on_item(fam_, item_, items_);
     measure_begin(now);
 }
 

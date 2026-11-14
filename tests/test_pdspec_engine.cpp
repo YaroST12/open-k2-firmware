@@ -313,6 +313,14 @@ struct Sim final : Env {
     void capture_stop() override { cap_on = false; }
     void on_note(const char*) override { ++notes; }
     void on_finish(Stop st) override { finished = true; stop = st; }
+    // The item counter as the firmware logs it ("item <family> idx+1/total"): never past its total.
+    int items_over = 0;
+    std::array<int, kFamilies> item_last{}, item_total{};
+    void on_item(Family f, std::uint8_t idx, std::uint8_t total) override {
+        if (idx >= total) ++items_over;
+        item_last[std::size_t(f)] = idx + 1;
+        item_total[std::size_t(f)] = total;
+    }
 };
 
 void typical(Sim& m) { m.list({fixed(5000), fixed(9000), fixed(15000), fixed(20000), pps(3300, 11000)}); }
@@ -585,6 +593,25 @@ void refused_level_is_left_out() {
     CHECK_EQ(int(e.score()), 0);
 }
 
+// The item log of every family ends at its total ("Transitions 12/12", "PPS steps 3/3"), never one past it, also when refused levels
+// leave the walk's last pairs out.
+void item_counter_never_passes_its_total() {
+    for (const std::uint8_t reject : {std::uint8_t(0), std::uint8_t(4)}) {
+        Sim m;
+        typical(m);
+        m.reject_pos = reject;   // 0: none; 4: 20 V, the walk's last pairs skipped
+        Engine e(m);
+        CHECK_COND(e.start(0) == StartResult::Ok);
+        drive(m, e);
+        check_safe_end(m, e);
+        CHECK_EQ(m.items_over, 0);
+        CHECK_EQ(m.item_total[std::size_t(Family::Transitions)], 12);
+        CHECK_EQ(m.item_last[std::size_t(Family::Transitions)], 12);
+        CHECK_EQ(m.item_total[std::size_t(Family::Pps)], 3);
+        CHECK_EQ(m.item_last[std::size_t(Family::Pps)], 3);
+    }
+}
+
 void ceiling_keeps_levels_out() {
     Sim m;
     typical(m);
@@ -827,5 +854,6 @@ int main() {
     start_refusals();
     cancel_anywhere_ends_safe();
     slow_detach_is_unverified_not_failed();
+    item_counter_never_passes_its_total();
     return test_report("test_pdspec_engine");
 }
